@@ -1,5 +1,5 @@
 # META
-source_lines=3583
+source_lines=3836
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted resolve stage — Stage 2 port of `lib/resolve.ml` (single-file
@@ -3201,9 +3201,15 @@ stampBindingIds decls =
 -- diagnostic, and this map merely says which declaration the head would name if it
 -- is legal.  Diagnosing the ambiguity is the NEXT PR's job, not this map's.
 tyOriginScope : List (String, String) -> OrdMap (List (String, String)) -> String -> List Decl -> OrdMap TyConOrigin
+--
+-- ⚠️ #1110 PR C: THIS MAP NOW HOLDS TWO NAMESPACES, and they are kept apart by a
+-- KEY TAG, not by being two maps — a type under its bare name, an interface under
+-- `iface:<Name>` (see `ifaceKey` for why the tag rather than a second parameter).
+-- The precedence argument below applies to each namespace independently, because
+-- the keys are disjoint by construction.
 tyOriginScope coreTypes known mid prog =
   omFromPairs
-    (map (ownTyOrigin mid) (dataRecordNames prog))
+    (map (ownTyOrigin mid) (dataRecordNames prog) ++ map (ownIfaceOrigin mid) (interfaceNamesOf prog))
     (omFromPairs
       (map
         importedTyOrigin
@@ -3241,8 +3247,14 @@ builtinTyOrigin n = (n, OriginBuiltin)
 -- the definer is already gone, and no amount of care at the read site recovers it.
 -- Here a re-export carries the ORIGINAL definer through, so a chain of
 -- `export import` never re-attributes a type to its last re-exporter.
+--
+-- ⚠️ #1110 PR C: also carries this module's public INTERFACES, tagged `iface:` (see
+-- `ifaceKey`).  The `pubUsePaths` half needs no change — a re-exported interface
+-- arrives already tagged, so a chain of `export import` attributes it to its
+-- DEFINER exactly as it does for a type.
 typeOriginExports : OrdMap (List (String, String)) -> String -> List Decl -> List (String, String)
 typeOriginExports known mid prog = map (typeDeclaredIn mid) (expTypesDirect prog)
+  ++ map (ifaceDeclaredIn mid) (expInterfacesDirect prog)
   ++ flatMap (importedTypeOrigins known) (pubUsePaths prog)
 
 typeDeclaredIn : String -> String -> (String, String)
@@ -3285,8 +3297,19 @@ keepTypeOrigins src bindings =
   let definers = omFromPairs src omEmpty
   flatMap (bindTypeOrigin definers) bindings
 
+-- ⚠️ TWO LOOKUPS, ONE PER NAMESPACE (#1110 PR C).  `import m.{Speak}` names a
+-- surface spelling with no indication of which namespace it comes from, and `m` may
+-- legally export BOTH a type `Speak` and an interface `Speak` — so the untagged
+-- member name is checked against the bare key AND against `ifaceKey`, and whichever
+-- the source module actually exports is what comes through.  A single lookup on the
+-- bare name would silently bind no interface at all: every `iface:` row would miss,
+-- and the whole imported-interface layer would be quietly empty.
 bindTypeOrigin : OrdMap String -> (String, String) -> List (String, String)
-bindTypeOrigin definers (origin, local) = match omLookup origin definers
+bindTypeOrigin definers (origin, local) = bindOneOrigin definers origin local
+  ++ bindOneOrigin definers (ifaceKey origin) (ifaceKey local)
+
+bindOneOrigin : OrdMap String -> String -> String -> List (String, String)
+bindOneOrigin definers key local = match omLookup key definers
   Some definer => [(local, definer)]
   None => []
 
@@ -3299,8 +3322,15 @@ bindTypeOrigin definers (origin, local) = match omLookup origin definers
 export stampTyOrigins : OrdMap TyConOrigin -> List Decl -> List Decl
 stampTyOrigins scope decls = map (stampDeclTyOrigins scope) decls
 
+-- ⚠️ ONE WALK, BOTH OCCURRENCE LAYERS (#1110 PR C).  `mapOriginsInDecl` takes the
+-- Ty-position callback AND the interface-occurrence callback, so the type heads and
+-- the four interface-occurrence carriers are stamped in a single rebuild of the
+-- decl.  A second `mapTyInDecl` pass would have cost a full extra AST rebuild per
+-- decl per module in a stage `compiler/AGENTS.md` calls GC-bound, and would have
+-- let the agreement probe drive a different traversal from this one.
 stampDeclTyOrigins : OrdMap TyConOrigin -> Decl -> Decl
-stampDeclTyOrigins scope d = fst (mapTyInDecl (stampTyHead scope) d)
+stampDeclTyOrigins scope d =
+  mapOriginsInDecl (stampTyHead scope) (fillIfaceOccOrigin scope) d
 
 -- ⚠️ The three arms are enumerated rather than wildcarded ON PURPOSE: a fourth
 -- `TyConOrigin` inhabitant should be MADE TO SHOW UP here rather than falling
@@ -3417,6 +3447,206 @@ fillDeclOrigin mid OriginUnresolved =
 fillDeclOrigin _ OriginBuiltin = OriginBuiltin
 fillDeclOrigin _ (o@(OriginModule _)) = o
 
+-- ── the INTERFACE-OCCURRENCE layer (#1110 PR C) ──────────────────────────────
+-- The two layers above are about TYPE names.  This one is about INTERFACE names,
+-- and the distinction is not a nicety: Medaka keeps the two in SEPARATE
+-- NAMESPACES.  A single file declaring both `data Foo = Foo` and `interface Foo a
+-- where …` checks clean — verified on the binary this was written against, not
+-- assumed — so an interface `Foo` and a type `Foo` are two different declarations
+-- that happen to share a spelling, and nothing may key them together.  That is why
+-- this layer gets its own scope map rather than an entry in `tyOriginScope`, and
+-- why the agreement probe reports these rows under an `iface:` prefix.
+--
+-- Four occurrence positions, each carrying a `TyConOrigin` since PR #1235:
+--
+--   `Constraint`   a `=>` predicate — anywhere a `Ty` can be written, at any
+--                  nesting depth, including inside an `EAnnot` in a body.
+--   `Super`        `interface Sub a requires Sup a` — the SUPERinterface.
+--   `Require`      `impl I (T a) requires Eq a`.
+--   `DImpl.iface`  the interface an `impl` is an impl OF.  An `impl` is a USE of
+--                  an interface, not a declaration of one, which is why this is an
+--                  occurrence carrier and why `declHeadOf` (the agreement probe)
+--                  has no `DImpl` arm.
+--
+-- ⚠️ NOTHING READS THESE FIELDS YET, and this PR changes no acceptance.  The
+-- R-series `AmbiguousInterface` diagnostic and the re-keying of the bare-name
+-- dispatch tables (#1047) are later units of Stage A-1.  What lands here is the
+-- FACT, plus the grading that makes the fact observable (`=== ORIGIN AGREEMENT
+-- ===`'s `iface:` rows) — an unobserved carrier is the precondition for every
+-- defect this arc exists to catch.
+--
+-- The immunity rule and the under/over-supply asymmetry are inherited verbatim
+-- from the type layer: `fillIfaceOccOrigin` fills in ONLY a still-unresolved
+-- origin, so an occurrence that already carries identity is never re-stamped, and
+-- a wrong first stamp could never be corrected.  That is why the flat path claims
+-- strictly less than the graph path rather than guessing.
+
+-- ONE traversal that rewrites BOTH identity layers of a decl: `fTy` is the
+-- Ty-position callback `mapTyInDecl` already takes (the type-occurrence layer),
+-- `fIface carrier name origin` returns the origin an interface occurrence should
+-- carry.
+--
+-- `carrier` is the AST FIELD NAME the occurrence was read from — one of
+-- `"constraintOrigin"` / `"superOrigin"` / `"requireOrigin"` / `"implOrigin"`.  The
+-- stamper ignores it (identity does not depend on which syntactic position spelled
+-- the interface).  It is here for the AGREEMENT PROBE, which uses it to assert on
+-- each of the four carriers SEPARATELY: without it a probe driving this shared
+-- traversal reads all four by position and names none of them, so the
+-- carrier-completeness ratchet in `test/typecheck_compiler_source.sh` — which
+-- verifies GRADED status by looking for each field NAME in the probe — could not
+-- tell "graded through a shared walk" from "not graded at all".  A tag that makes a
+-- pin verifiable is worth one string argument.
+--
+-- 🚨 IT TAKES BOTH CALLBACKS RATHER THAN BEING A SECOND PASS, and that is a design
+-- decision with two reasons, neither cosmetic:
+--
+--   * COST.  `mapTyInDecl` is a total rebuild of every `Ty` position in a decl,
+--     including the ones inside expression bodies.  Running it twice per decl per
+--     module is a measurable constant-factor addition to a stage `compiler/
+--     AGENTS.md` calls GC-bound, and `diff_compiler_perf_scaling` grades a RATIO,
+--     so nothing in CI would report it.
+--   * DRIFT.  Two passes means two dispatches over the same node set, and the
+--     agreement probe would drive one of them while the stamper drove the other —
+--     so the probe could silently observe a SMALLER set of positions than the
+--     stamper wrote, which is the one property that makes that gate worth having.
+--     With one function, a new occurrence position reaches both at once.
+--
+-- Both consumers pass a real pair: the stamper passes `stampTyHead` +
+-- `fillIfaceOccOrigin`, the probe passes its two recorders.
+--
+-- ⚠️ WHY THIS LIVES HERE AND NOT BESIDE `mapTyInDecl` IN `frontend/ast.mdk`, where
+-- cohesion would put it.  `test/typecheck_compiler_source.sh` pins the NUMBER of
+-- `TyConOrigin` mentions in `ast.mdk` outside a leading comment — the
+-- form-INDEPENDENT half of the carrier ratchet, and the only half that can see a
+-- future POSITIONAL carrier (`Variant String ConPayload TyConOrigin`, no field name
+-- for the name-set pin to match).  Every helper signature below names
+-- `TyConOrigin` twice, so hosting the walk there would need a ~+10 bump whose delta
+-- is traversal plumbing rather than carriers — and that ratchet's own comment
+-- argues, correctly, that slack of that size is the masking path: a real positional
+-- carrier (+1) landing alongside a deleted helper (-1) would keep the count on its
+-- pinned value with both pins silent.  Nothing is lost by hosting it here: both
+-- consumers already import this module.
+export mapOriginsInDecl : (Ty -> (Ty, Bool)) -> (String -> String -> TyConOrigin -> TyConOrigin) -> Decl -> Decl
+mapOriginsInDecl fTy fIface d =
+  mapIfaceOccDeclLocal fIface (fst (mapTyInDecl (mapOriginsInTy fTy fIface) d))
+
+-- `Constraint` is the ONE interface occurrence that lives inside a `Ty`, and
+-- `TyConstrained` is itself a `Ty` node — so `mapTyInDecl`'s existing total
+-- Ty-position walk already reaches every one of them, including the ones nested in
+-- an interface method signature or an `EAnnot` inside a function body.  Rolling a
+-- second `Ty` walk here would have to be kept in lockstep with `Ty`'s constructor
+-- set AND with `mapTyInExpr`, which is exactly how the two drift.
+--
+-- The constraint rewrite runs BEFORE `fTy` sees the node, so a `fTy` that inspects
+-- a `TyConstrained` observes the already-stamped constraints rather than a
+-- half-rewritten node.  Nothing in the tree does that today; the order is fixed
+-- here so it does not have to be rediscovered.
+mapOriginsInTy : (Ty -> (Ty, Bool)) -> (String -> String -> TyConOrigin -> TyConOrigin) -> Ty -> (Ty, Bool)
+mapOriginsInTy fTy fIface (TyConstrained cs t) =
+  fTy (TyConstrained (map (mapConstraintOcc fIface) cs) t)
+mapOriginsInTy fTy _ t = fTy t
+
+-- ⚠️ Record UPDATE on a `c@` binding throughout this group, never re-construction
+-- and never `constraintUnresolved`/`requireUnresolved`/`superUnresolved`: a rebuild
+-- from projected fields resets an acquired identity, and the immunity rule makes
+-- that reset permanent.  `test/typecheck_compiler_source.sh` pins the file set
+-- allowed to call those mint helpers, and this file is deliberately not in it.
+mapConstraintOcc : (String -> String -> TyConOrigin -> TyConOrigin) -> Constraint -> Constraint
+mapConstraintOcc f (c@(Constraint { constraintHead = n, constraintOrigin = o })) = Constraint { c | constraintOrigin = f "constraintOrigin" n o }
+
+mapSuperOcc : (String -> String -> TyConOrigin -> TyConOrigin) -> Super -> Super
+mapSuperOcc f (s@(Super { superHead = n, superOrigin = o })) =
+  Super { s | superOrigin = f "superOrigin" n o }
+
+mapRequireOcc : (String -> String -> TyConOrigin -> TyConOrigin) -> Require -> Require
+mapRequireOcc f (r@(Require { requireHead = n, requireOrigin = o })) =
+  Require { r | requireOrigin = f "requireOrigin" n o }
+
+-- The three occurrences that are DECL FIELDS rather than `Ty` positions, so no
+-- `Ty`-callback can reach them: `DInterface.supers`, `DImpl.reqs`, `DImpl.iface`.
+--
+-- 🚨 Every arm names a label NO SIBLING CONSTRUCTOR HAS (`ifaceOrigin` for
+-- `DInterface`, `implOrigin` for `DImpl`) — a record pattern matches by LABEL SET
+-- with the constructor DISCARDED under the interpreter, so an arm keyed on the
+-- shared `methods` would take `DImpl` values into the `DInterface` arm on `run`
+-- while the built binary compared correctly.  See `frontend/ast.mdk`'s `Decl`
+-- comment for the measured run≠build table.
+--
+-- ⚠️ The `DAttrib` arm is load-bearing for the same reason `stampDeclOrigin`'s is:
+-- `@deprecated`/`@inline` WRAP the decl they annotate, so a `@must_use impl …`
+-- would otherwise never be stamped at all.
+mapIfaceOccDeclLocal : (String -> String -> TyConOrigin -> TyConOrigin) -> Decl -> Decl
+mapIfaceOccDeclLocal f (d@(DInterface { ifaceOrigin = _, supers })) =
+  DInterface { d | supers = map (mapSuperOcc f) supers }
+mapIfaceOccDeclLocal f (d@(DImpl { implOrigin = o, iface = n, reqs })) = DImpl { d | implOrigin = f "implOrigin" n o, reqs = map (mapRequireOcc f) reqs }
+mapIfaceOccDeclLocal f (DAttrib attrs d) =
+  DAttrib attrs (mapIfaceOccDeclLocal f d)
+mapIfaceOccDeclLocal _ d = d
+
+-- The interface peer of `stampHeadWith`/`fillDeclOrigin`: fill in ONLY a
+-- still-unresolved origin.  The `carrier` tag is IGNORED here on purpose — which
+-- syntactic position spelled an interface name has no bearing on which module
+-- declared it, and a stamper that behaved differently per position would be a bug.
+-- Only the probe reads the tag.
+--
+-- An interface name in no scope keeps `OriginUnresolved`
+-- — there is no module to attribute it to, and resolve's `checkConstraint` chain
+-- has already reported it (`UnknownInterface`; errors accumulate, so the tree still
+-- reaches typecheck).
+--
+-- ⚠️ The lookup is on `ifaceKey n`, NOT on `n`.  `tyOriginScope` is ONE map holding
+-- BOTH namespaces, and that is the point of the tag — see `ifaceKey`.
+--
+-- ⚠️ The three arms are enumerated rather than wildcarded so a fourth
+-- `TyConOrigin` inhabitant is MADE TO SHOW UP here.  Do not overstate it: a
+-- non-exhaustive match in this language is a WARNING at exit 0, so this is a review
+-- aid, not a build gate.  `OriginBuiltin` is unreachable for an interface — the
+-- language provides no built-in interfaces, `Eq`/`Ord`/`Debug` are declarations in
+-- `stdlib/core.mdk` — and the arm exists so that stays a stated fact.
+fillIfaceOccOrigin : OrdMap TyConOrigin -> String -> String -> TyConOrigin -> TyConOrigin
+fillIfaceOccOrigin scope _ n OriginUnresolved =
+  fromOption OriginUnresolved (omLookup (ifaceKey n) scope)
+fillIfaceOccOrigin _ _ _ OriginBuiltin = OriginBuiltin
+fillIfaceOccOrigin _ _ _ (o@(OriginModule _)) = o
+
+-- 🚨 THE NAMESPACE TAG.  Type names and interface names are DIFFERENT NAMESPACES in
+-- this language — one file may declare both `data Foo = Foo` and `interface Foo a
+-- where …` and check clean — so the two populations must never meet on one key.
+-- Every table in this section that mixes them (`tyOriginScope` and its layers, the
+-- `known` export map threaded through `stampModulesGo`) stores an interface under
+-- `iface:<Name>` and a type under the bare name.
+--
+-- ⚠️ ONE TAGGED MAP RATHER THAN TWO MAPS IS DELIBERATE, and it is what keeps the
+-- change ADDITIVE for `test/selfproc_goldens/legA/frontend.resolve.golden`: a second
+-- map would have to be threaded as a new parameter through `stampOneModule` /
+-- `stampModulesGo` / `tyOriginScope`, changing three PINNED signatures for plumbing.
+-- The tag gets the same separation with no signature movement — and it is the same
+-- shape `insertIfaceParamKinds`'s `<iface>@<slot>` key already uses in
+-- `types/typecheck.mdk` for exactly this reason.
+--
+-- `:` cannot occur in a Medaka identifier, so a tagged key can never collide with a
+-- bare one, and a bare-name lookup can never accidentally hit an interface row.
+ifaceKey : String -> String
+ifaceKey n = "iface:\{n}"
+
+-- The interface peers of `typeDeclaredIn` / `ownTyOrigin`, tagging as they pair.
+ifaceDeclaredIn : String -> String -> (String, String)
+ifaceDeclaredIn mid n = (ifaceKey n, mid)
+
+ownIfaceOrigin : String -> String -> (String, TyConOrigin)
+ownIfaceOrigin mid n = (ifaceKey n, OriginModule mid)
+
+-- ALL interfaces a decl list declares, public or not — a module's own private
+-- interface is in its own scope.  The `DAttrib` arm is why this is not
+-- `map fst (interfaceList prog)`: `interfaceList` has no such arm, so it misses an
+-- `@attr`-wrapped interface.
+interfaceNamesOf : List Decl -> List String
+interfaceNamesOf [] = []
+interfaceNamesOf ((DInterface { name = n, ifaceOrigin = _ })::rest) =
+  n :: interfaceNamesOf rest
+interfaceNamesOf ((DAttrib _ d)::rest) = interfaceNamesOf (d::rest)
+interfaceNamesOf (_::rest) = interfaceNamesOf rest
+
 -- ── the resolve → typecheck channel ─────────────────────────────────────────
 -- Resolve's other entries return `List ResError` and nothing else, so the drivers
 -- have always typechecked the ORIGINAL tree; there was no channel for resolve to
@@ -3438,15 +3668,16 @@ fillDeclOrigin _ (o@(OriginModule _)) = o
 -- `ModuleExports`.  Returns the stamped prelude and the stamped modules.
 export stampGraphTyOrigins : List Decl -> List (String, List Decl) -> (List Decl, List (String, List Decl))
 stampGraphTyOrigins coreDecls modules =
-  let coreTypes = map (typeDeclaredIn "core") (dataRecordNames coreDecls)
+  let coreTypes = map (typeDeclaredIn "core") (dataRecordNames coreDecls) ++ map (ifaceDeclaredIn "core") (interfaceNamesOf coreDecls)
   let coreS = stampOneModule coreTypes omEmpty "core" coreDecls
   (coreS, stampModulesGo coreTypes omEmpty modules)
 
 -- Both identity layers for ONE module, in one place so the prelude pass above and
 -- the per-module walk below cannot drift apart — the `evalModules`/`cevalModules`
--- lockstep hazard, in miniature.  Declarations first, then the occurrence heads:
--- the two are independent (the occurrence scope is built from `dataRecordNames`,
--- which reads names, not origins), so the order is for readability only.
+-- lockstep hazard, in miniature.  Declarations first, then the occurrence heads
+-- (type AND interface, one walk): the two are independent (the occurrence scope is
+-- built from `dataRecordNames`/`interfaceNamesOf`, which read names, not origins),
+-- so the order is for readability only.
 stampOneModule : List (String, String) -> OrdMap (List (String, String)) -> String -> List Decl -> List Decl
 stampOneModule coreTypes known mid prog =
   stampTyOrigins
@@ -3523,18 +3754,40 @@ stampModulesGo coreTypes known ((mid, prog)::rest) =
 -- eliminated.  The subset property holds only while every caller passes the real
 -- prelude as `coreDecls`; that is a fact about the CALL SITES, re-verify it there,
 -- do not assume it from this signature.
+--
+-- ⚠️ #1110 PR C ADDED THE INTERFACE-OCCURRENCE LAYER HERE, ON EXACTLY THE SAME
+-- TERMS AND WITH NO NEW MACHINERY: `flatTyOriginScope` now also carries the
+-- PRELUDE's own interfaces (tagged `iface:<Name>`), and nothing else.  No
+-- `interfaceNamesOf prog` term (the buffer has no module id), no `usePathsOf prog`
+-- term (there is no `known` map to resolve an import against).  So the flat arm's
+-- interface claims are a strict SUBSET of the graph arm's and agree with it on that
+-- subset — the graph path stamps the prelude's own interfaces `core` too.
+--
+-- ⚠️ The one shape that could break the subset property is a buffer that
+-- RE-DECLARES a prelude interface name: flat would say `core` where graph says the
+-- buffer's module.  It is unreachable in an accepted program — resolve rejects it
+-- outright (`Duplicate interface: Eq`, verified on the binary this was written
+-- against; the type layer is identical, `Duplicate type: Option`) — so the only way
+-- to reach it is a program that is already being rejected on other grounds.  Stated
+-- rather than silently relied on, because it is that property, and not the
+-- diagnostic's wording, that the subset claim rests on.
 export stampFlatTyOrigins : List Decl -> List Decl -> List Decl
 stampFlatTyOrigins coreDecls prog =
   stampTyOrigins (flatTyOriginScope coreDecls) prog
 
--- Builtins, plus the prelude's own types when the caller told us where it is.  No
--- `dataRecordNames prog` term: see `stampFlatTyOrigins`, that omission is the point.
+-- Builtins, plus the prelude's own types AND interfaces when the caller told us
+-- where the prelude is.  No `dataRecordNames prog` / `interfaceNamesOf prog` term:
+-- see `stampFlatTyOrigins`, that omission is the point.  There is no builtins term
+-- for the interface namespace and its absence is a fact rather than an oversight —
+-- an interface is always DECLARED by some module, so §8 I6.2's "one program-global
+-- identity for a language-provided head" has no interface instance; `Eq`/`Ord`/
+-- `Debug` are `stdlib/core.mdk` declarations and arrive as `mod:core`.
 flatTyOriginScope : List Decl -> OrdMap TyConOrigin
 flatTyOriginScope coreDecls =
   omFromPairs
     (map
       importedTyOrigin
-      (map (typeDeclaredIn "core") (dataRecordNames coreDecls)))
+      (map (typeDeclaredIn "core") (dataRecordNames coreDecls) ++ map (ifaceDeclaredIn "core") (interfaceNamesOf coreDecls)))
     (omFromPairs builtinTyOrigins omEmpty)
 
 -- ── the AGREEMENT TAP (#1110) ────────────────────────────────────────────────
@@ -4634,7 +4887,7 @@ takeOriginTrace _ =
 (DTypeSig true "stampBindingIds" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))))))
 (DFunDef false "stampBindingIds" ((PVar "decls")) (EBlock (DoLet false false (PVar "top") (EApp (EApp (EVar "numberFrom") (ELit (LInt 1))) (EApp (EVar "dedup") (EApp (EVar "topBinderNames") (EVar "decls"))))) (DoExpr (ETuple (EApp (EApp (EVar "map") (EApp (EVar "stampDecl") (EApp (EApp (EVar "omFromPairs") (EVar "top")) (EVar "omEmpty")))) (EVar "decls")) (EVar "top")))))
 (DTypeSig false "tyOriginScope" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "OrdMap") (TyCon "TyConOrigin")))))))
-(DFunDef false "tyOriginScope" ((PVar "coreTypes") (PVar "known") (PVar "mid") (PVar "prog")) (EApp (EApp (EVar "omFromPairs") (EApp (EApp (EVar "map") (EApp (EVar "ownTyOrigin") (EVar "mid"))) (EApp (EVar "dataRecordNames") (EVar "prog")))) (EApp (EApp (EVar "omFromPairs") (EApp (EApp (EVar "map") (EVar "importedTyOrigin")) (EApp (EApp (EVar "flatMap") (EApp (EVar "importedTypeOrigins") (EVar "known"))) (EApp (EVar "usePathsOf") (EVar "prog"))))) (EApp (EApp (EVar "omFromPairs") (EApp (EApp (EVar "map") (EVar "importedTyOrigin")) (EVar "coreTypes"))) (EApp (EApp (EVar "omFromPairs") (EVar "builtinTyOrigins")) (EVar "omEmpty"))))))
+(DFunDef false "tyOriginScope" ((PVar "coreTypes") (PVar "known") (PVar "mid") (PVar "prog")) (EApp (EApp (EVar "omFromPairs") (EBinOp "++" (EApp (EApp (EVar "map") (EApp (EVar "ownTyOrigin") (EVar "mid"))) (EApp (EVar "dataRecordNames") (EVar "prog"))) (EApp (EApp (EVar "map") (EApp (EVar "ownIfaceOrigin") (EVar "mid"))) (EApp (EVar "interfaceNamesOf") (EVar "prog"))))) (EApp (EApp (EVar "omFromPairs") (EApp (EApp (EVar "map") (EVar "importedTyOrigin")) (EApp (EApp (EVar "flatMap") (EApp (EVar "importedTypeOrigins") (EVar "known"))) (EApp (EVar "usePathsOf") (EVar "prog"))))) (EApp (EApp (EVar "omFromPairs") (EApp (EApp (EVar "map") (EVar "importedTyOrigin")) (EVar "coreTypes"))) (EApp (EApp (EVar "omFromPairs") (EVar "builtinTyOrigins")) (EVar "omEmpty"))))))
 (DTypeSig false "ownTyOrigin" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyTuple (TyCon "String") (TyCon "TyConOrigin")))))
 (DFunDef false "ownTyOrigin" ((PVar "mid") (PVar "n")) (ETuple (EVar "n") (EApp (EVar "OriginModule") (EVar "mid"))))
 (DTypeSig false "importedTyOrigin" (TyFun (TyTuple (TyCon "String") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "TyConOrigin"))))
@@ -4644,7 +4897,7 @@ takeOriginTrace _ =
 (DTypeSig false "builtinTyOrigin" (TyFun (TyCon "String") (TyTuple (TyCon "String") (TyCon "TyConOrigin"))))
 (DFunDef false "builtinTyOrigin" ((PVar "n")) (ETuple (EVar "n") (EVar "OriginBuiltin")))
 (DTypeSig false "typeOriginExports" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))))
-(DFunDef false "typeOriginExports" ((PVar "known") (PVar "mid") (PVar "prog")) (EBinOp "++" (EApp (EApp (EVar "map") (EApp (EVar "typeDeclaredIn") (EVar "mid"))) (EApp (EVar "expTypesDirect") (EVar "prog"))) (EApp (EApp (EVar "flatMap") (EApp (EVar "importedTypeOrigins") (EVar "known"))) (EApp (EVar "pubUsePaths") (EVar "prog")))))
+(DFunDef false "typeOriginExports" ((PVar "known") (PVar "mid") (PVar "prog")) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "map") (EApp (EVar "typeDeclaredIn") (EVar "mid"))) (EApp (EVar "expTypesDirect") (EVar "prog"))) (EApp (EApp (EVar "map") (EApp (EVar "ifaceDeclaredIn") (EVar "mid"))) (EApp (EVar "expInterfacesDirect") (EVar "prog")))) (EApp (EApp (EVar "flatMap") (EApp (EVar "importedTypeOrigins") (EVar "known"))) (EApp (EVar "pubUsePaths") (EVar "prog")))))
 (DTypeSig false "typeDeclaredIn" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyTuple (TyCon "String") (TyCon "String")))))
 (DFunDef false "typeDeclaredIn" ((PVar "mid") (PVar "n")) (ETuple (EVar "n") (EVar "mid")))
 (DTypeSig false "importedTypeOrigins" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (TyFun (TyCon "UsePath") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
@@ -4659,11 +4912,13 @@ takeOriginTrace _ =
 (DTypeSig false "keepTypeOrigins" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
 (DFunDef false "keepTypeOrigins" ((PVar "src") (PVar "bindings")) (EBlock (DoLet false false (PVar "definers") (EApp (EApp (EVar "omFromPairs") (EVar "src")) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EVar "flatMap") (EApp (EVar "bindTypeOrigin") (EVar "definers"))) (EVar "bindings")))))
 (DTypeSig false "bindTypeOrigin" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
-(DFunDef false "bindTypeOrigin" ((PVar "definers") (PTuple (PVar "origin") (PVar "local"))) (EMatch (EApp (EApp (EVar "omLookup") (EVar "origin")) (EVar "definers")) (arm (PCon "Some" (PVar "definer")) () (EListLit (ETuple (EVar "local") (EVar "definer")))) (arm (PCon "None") () (EListLit))))
+(DFunDef false "bindTypeOrigin" ((PVar "definers") (PTuple (PVar "origin") (PVar "local"))) (EBinOp "++" (EApp (EApp (EApp (EVar "bindOneOrigin") (EVar "definers")) (EVar "origin")) (EVar "local")) (EApp (EApp (EApp (EVar "bindOneOrigin") (EVar "definers")) (EApp (EVar "ifaceKey") (EVar "origin"))) (EApp (EVar "ifaceKey") (EVar "local")))))
+(DTypeSig false "bindOneOrigin" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))))
+(DFunDef false "bindOneOrigin" ((PVar "definers") (PVar "key") (PVar "local")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "key")) (EVar "definers")) (arm (PCon "Some" (PVar "definer")) () (EListLit (ETuple (EVar "local") (EVar "definer")))) (arm (PCon "None") () (EListLit))))
 (DTypeSig true "stampTyOrigins" (TyFun (TyApp (TyCon "OrdMap") (TyCon "TyConOrigin")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")))))
 (DFunDef false "stampTyOrigins" ((PVar "scope") (PVar "decls")) (EApp (EApp (EVar "map") (EApp (EVar "stampDeclTyOrigins") (EVar "scope"))) (EVar "decls")))
 (DTypeSig false "stampDeclTyOrigins" (TyFun (TyApp (TyCon "OrdMap") (TyCon "TyConOrigin")) (TyFun (TyCon "Decl") (TyCon "Decl"))))
-(DFunDef false "stampDeclTyOrigins" ((PVar "scope") (PVar "d")) (EApp (EVar "fst") (EApp (EApp (EVar "mapTyInDecl") (EApp (EVar "stampTyHead") (EVar "scope"))) (EVar "d"))))
+(DFunDef false "stampDeclTyOrigins" ((PVar "scope") (PVar "d")) (EApp (EApp (EApp (EVar "mapOriginsInDecl") (EApp (EVar "stampTyHead") (EVar "scope"))) (EApp (EVar "fillIfaceOccOrigin") (EVar "scope"))) (EVar "d")))
 (DTypeSig false "stampTyHead" (TyFun (TyApp (TyCon "OrdMap") (TyCon "TyConOrigin")) (TyFun (TyCon "Ty") (TyTuple (TyCon "Ty") (TyCon "Bool")))))
 (DFunDef false "stampTyHead" ((PVar "scope") (PAs "t" (PRec "TyCon" ((rf "tyConName" (PVar "n")) (rf "tyConOrigin" (PVar "o"))) false))) (EMatch (EVar "o") (arm (PCon "OriginUnresolved") () (EApp (EApp (EVar "stampHeadWith") (EVar "t")) (EApp (EApp (EVar "originOfTyName") (EVar "scope")) (EVar "n")))) (arm (PCon "OriginBuiltin") () (ETuple (EVar "t") (EVar "False"))) (arm (PCon "OriginModule" PWild) () (ETuple (EVar "t") (EVar "False")))))
 (DFunDef false "stampTyHead" (PWild (PVar "t")) (ETuple (EVar "t") (EVar "False")))
@@ -4685,8 +4940,39 @@ takeOriginTrace _ =
 (DFunDef false "fillDeclOrigin" ((PVar "mid") (PCon "OriginUnresolved")) (EIf (EBinOp "==" (EVar "mid") (ELit (LString ""))) (EVar "OriginUnresolved") (EApp (EVar "OriginModule") (EVar "mid"))))
 (DFunDef false "fillDeclOrigin" (PWild (PCon "OriginBuiltin")) (EVar "OriginBuiltin"))
 (DFunDef false "fillDeclOrigin" (PWild (PAs "o" (PCon "OriginModule" PWild))) (EVar "o"))
+(DTypeSig true "mapOriginsInDecl" (TyFun (TyFun (TyCon "Ty") (TyTuple (TyCon "Ty") (TyCon "Bool"))) (TyFun (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyCon "TyConOrigin")))) (TyFun (TyCon "Decl") (TyCon "Decl")))))
+(DFunDef false "mapOriginsInDecl" ((PVar "fTy") (PVar "fIface") (PVar "d")) (EApp (EApp (EVar "mapIfaceOccDeclLocal") (EVar "fIface")) (EApp (EVar "fst") (EApp (EApp (EVar "mapTyInDecl") (EApp (EApp (EVar "mapOriginsInTy") (EVar "fTy")) (EVar "fIface"))) (EVar "d")))))
+(DTypeSig false "mapOriginsInTy" (TyFun (TyFun (TyCon "Ty") (TyTuple (TyCon "Ty") (TyCon "Bool"))) (TyFun (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyCon "TyConOrigin")))) (TyFun (TyCon "Ty") (TyTuple (TyCon "Ty") (TyCon "Bool"))))))
+(DFunDef false "mapOriginsInTy" ((PVar "fTy") (PVar "fIface") (PCon "TyConstrained" (PVar "cs") (PVar "t"))) (EApp (EVar "fTy") (EApp (EApp (EVar "TyConstrained") (EApp (EApp (EVar "map") (EApp (EVar "mapConstraintOcc") (EVar "fIface"))) (EVar "cs"))) (EVar "t"))))
+(DFunDef false "mapOriginsInTy" ((PVar "fTy") PWild (PVar "t")) (EApp (EVar "fTy") (EVar "t")))
+(DTypeSig false "mapConstraintOcc" (TyFun (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyCon "TyConOrigin")))) (TyFun (TyCon "Constraint") (TyCon "Constraint"))))
+(DFunDef false "mapConstraintOcc" ((PVar "f") (PAs "c" (PRec "Constraint" ((rf "constraintHead" (PVar "n")) (rf "constraintOrigin" (PVar "o"))) false))) (EVariantUpdate "Constraint" (EVar "c") ((fa "constraintOrigin" (EApp (EApp (EApp (EVar "f") (ELit (LString "constraintOrigin"))) (EVar "n")) (EVar "o"))))))
+(DTypeSig false "mapSuperOcc" (TyFun (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyCon "TyConOrigin")))) (TyFun (TyCon "Super") (TyCon "Super"))))
+(DFunDef false "mapSuperOcc" ((PVar "f") (PAs "s" (PRec "Super" ((rf "superHead" (PVar "n")) (rf "superOrigin" (PVar "o"))) false))) (EVariantUpdate "Super" (EVar "s") ((fa "superOrigin" (EApp (EApp (EApp (EVar "f") (ELit (LString "superOrigin"))) (EVar "n")) (EVar "o"))))))
+(DTypeSig false "mapRequireOcc" (TyFun (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyCon "TyConOrigin")))) (TyFun (TyCon "Require") (TyCon "Require"))))
+(DFunDef false "mapRequireOcc" ((PVar "f") (PAs "r" (PRec "Require" ((rf "requireHead" (PVar "n")) (rf "requireOrigin" (PVar "o"))) false))) (EVariantUpdate "Require" (EVar "r") ((fa "requireOrigin" (EApp (EApp (EApp (EVar "f") (ELit (LString "requireOrigin"))) (EVar "n")) (EVar "o"))))))
+(DTypeSig false "mapIfaceOccDeclLocal" (TyFun (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyCon "TyConOrigin")))) (TyFun (TyCon "Decl") (TyCon "Decl"))))
+(DFunDef false "mapIfaceOccDeclLocal" ((PVar "f") (PAs "d" (PRec "DInterface" ((rf "ifaceOrigin" PWild) (rf "supers" None)) false))) (EVariantUpdate "DInterface" (EVar "d") ((fa "supers" (EApp (EApp (EVar "map") (EApp (EVar "mapSuperOcc") (EVar "f"))) (EVar "supers"))))))
+(DFunDef false "mapIfaceOccDeclLocal" ((PVar "f") (PAs "d" (PRec "DImpl" ((rf "implOrigin" (PVar "o")) (rf "iface" (PVar "n")) (rf "reqs" None)) false))) (EVariantUpdate "DImpl" (EVar "d") ((fa "implOrigin" (EApp (EApp (EApp (EVar "f") (ELit (LString "implOrigin"))) (EVar "n")) (EVar "o"))) (fa "reqs" (EApp (EApp (EVar "map") (EApp (EVar "mapRequireOcc") (EVar "f"))) (EVar "reqs"))))))
+(DFunDef false "mapIfaceOccDeclLocal" ((PVar "f") (PCon "DAttrib" (PVar "attrs") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "attrs")) (EApp (EApp (EVar "mapIfaceOccDeclLocal") (EVar "f")) (EVar "d"))))
+(DFunDef false "mapIfaceOccDeclLocal" (PWild (PVar "d")) (EVar "d"))
+(DTypeSig false "fillIfaceOccOrigin" (TyFun (TyApp (TyCon "OrdMap") (TyCon "TyConOrigin")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyCon "TyConOrigin"))))))
+(DFunDef false "fillIfaceOccOrigin" ((PVar "scope") PWild (PVar "n") (PCon "OriginUnresolved")) (EApp (EApp (EVar "fromOption") (EVar "OriginUnresolved")) (EApp (EApp (EVar "omLookup") (EApp (EVar "ifaceKey") (EVar "n"))) (EVar "scope"))))
+(DFunDef false "fillIfaceOccOrigin" (PWild PWild PWild (PCon "OriginBuiltin")) (EVar "OriginBuiltin"))
+(DFunDef false "fillIfaceOccOrigin" (PWild PWild PWild (PAs "o" (PCon "OriginModule" PWild))) (EVar "o"))
+(DTypeSig false "ifaceKey" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "ifaceKey" ((PVar "n")) (EBinOp "++" (EBinOp "++" (ELit (LString "iface:")) (EApp (EVar "display") (EVar "n"))) (ELit (LString ""))))
+(DTypeSig false "ifaceDeclaredIn" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyTuple (TyCon "String") (TyCon "String")))))
+(DFunDef false "ifaceDeclaredIn" ((PVar "mid") (PVar "n")) (ETuple (EApp (EVar "ifaceKey") (EVar "n")) (EVar "mid")))
+(DTypeSig false "ownIfaceOrigin" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyTuple (TyCon "String") (TyCon "TyConOrigin")))))
+(DFunDef false "ownIfaceOrigin" ((PVar "mid") (PVar "n")) (ETuple (EApp (EVar "ifaceKey") (EVar "n")) (EApp (EVar "OriginModule") (EVar "mid"))))
+(DTypeSig false "interfaceNamesOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "interfaceNamesOf" ((PList)) (EListLit))
+(DFunDef false "interfaceNamesOf" ((PCons (PRec "DInterface" ((rf "name" (PVar "n")) (rf "ifaceOrigin" PWild)) false) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "interfaceNamesOf") (EVar "rest"))))
+(DFunDef false "interfaceNamesOf" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EVar "interfaceNamesOf") (EBinOp "::" (EVar "d") (EVar "rest"))))
+(DFunDef false "interfaceNamesOf" ((PCons PWild (PVar "rest"))) (EApp (EVar "interfaceNamesOf") (EVar "rest")))
 (DTypeSig true "stampGraphTyOrigins" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))))
-(DFunDef false "stampGraphTyOrigins" ((PVar "coreDecls") (PVar "modules")) (EBlock (DoLet false false (PVar "coreTypes") (EApp (EApp (EVar "map") (EApp (EVar "typeDeclaredIn") (ELit (LString "core")))) (EApp (EVar "dataRecordNames") (EVar "coreDecls")))) (DoLet false false (PVar "coreS") (EApp (EApp (EApp (EApp (EVar "stampOneModule") (EVar "coreTypes")) (EVar "omEmpty")) (ELit (LString "core"))) (EVar "coreDecls"))) (DoExpr (ETuple (EVar "coreS") (EApp (EApp (EApp (EVar "stampModulesGo") (EVar "coreTypes")) (EVar "omEmpty")) (EVar "modules"))))))
+(DFunDef false "stampGraphTyOrigins" ((PVar "coreDecls") (PVar "modules")) (EBlock (DoLet false false (PVar "coreTypes") (EBinOp "++" (EApp (EApp (EVar "map") (EApp (EVar "typeDeclaredIn") (ELit (LString "core")))) (EApp (EVar "dataRecordNames") (EVar "coreDecls"))) (EApp (EApp (EVar "map") (EApp (EVar "ifaceDeclaredIn") (ELit (LString "core")))) (EApp (EVar "interfaceNamesOf") (EVar "coreDecls"))))) (DoLet false false (PVar "coreS") (EApp (EApp (EApp (EApp (EVar "stampOneModule") (EVar "coreTypes")) (EVar "omEmpty")) (ELit (LString "core"))) (EVar "coreDecls"))) (DoExpr (ETuple (EVar "coreS") (EApp (EApp (EApp (EVar "stampModulesGo") (EVar "coreTypes")) (EVar "omEmpty")) (EVar "modules"))))))
 (DTypeSig false "stampOneModule" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")))))))
 (DFunDef false "stampOneModule" ((PVar "coreTypes") (PVar "known") (PVar "mid") (PVar "prog")) (EApp (EApp (EVar "stampTyOrigins") (EApp (EApp (EApp (EApp (EVar "tyOriginScope") (EVar "coreTypes")) (EVar "known")) (EVar "mid")) (EVar "prog"))) (EApp (EApp (EVar "stampDeclOrigins") (EVar "mid")) (EVar "prog"))))
 (DTypeSig false "stampModulesGo" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))))
@@ -4695,7 +4981,7 @@ takeOriginTrace _ =
 (DTypeSig true "stampFlatTyOrigins" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")))))
 (DFunDef false "stampFlatTyOrigins" ((PVar "coreDecls") (PVar "prog")) (EApp (EApp (EVar "stampTyOrigins") (EApp (EVar "flatTyOriginScope") (EVar "coreDecls"))) (EVar "prog")))
 (DTypeSig false "flatTyOriginScope" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "OrdMap") (TyCon "TyConOrigin"))))
-(DFunDef false "flatTyOriginScope" ((PVar "coreDecls")) (EApp (EApp (EVar "omFromPairs") (EApp (EApp (EVar "map") (EVar "importedTyOrigin")) (EApp (EApp (EVar "map") (EApp (EVar "typeDeclaredIn") (ELit (LString "core")))) (EApp (EVar "dataRecordNames") (EVar "coreDecls"))))) (EApp (EApp (EVar "omFromPairs") (EVar "builtinTyOrigins")) (EVar "omEmpty"))))
+(DFunDef false "flatTyOriginScope" ((PVar "coreDecls")) (EApp (EApp (EVar "omFromPairs") (EApp (EApp (EVar "map") (EVar "importedTyOrigin")) (EBinOp "++" (EApp (EApp (EVar "map") (EApp (EVar "typeDeclaredIn") (ELit (LString "core")))) (EApp (EVar "dataRecordNames") (EVar "coreDecls"))) (EApp (EApp (EVar "map") (EApp (EVar "ifaceDeclaredIn") (ELit (LString "core")))) (EApp (EVar "interfaceNamesOf") (EVar "coreDecls")))))) (EApp (EApp (EVar "omFromPairs") (EVar "builtinTyOrigins")) (EVar "omEmpty"))))
 (DTypeSig false "originTraceEnabled" (TyApp (TyCon "Ref") (TyCon "Bool")))
 (DFunDef false "originTraceEnabled" () (EApp (EVar "Ref") (EVar "False")))
 (DTypeSig false "originTraceLog" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))
@@ -5755,7 +6041,7 @@ takeOriginTrace _ =
 (DTypeSig true "stampBindingIds" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))))))
 (DFunDef false "stampBindingIds" ((PVar "decls")) (EBlock (DoLet false false (PVar "top") (EApp (EApp (EVar "numberFrom") (ELit (LInt 1))) (EApp (EVar "dedup") (EApp (EVar "topBinderNames") (EVar "decls"))))) (DoExpr (ETuple (EApp (EApp (EMethodRef "map") (EApp (EVar "stampDecl") (EApp (EApp (EVar "omFromPairs") (EVar "top")) (EVar "omEmpty")))) (EVar "decls")) (EVar "top")))))
 (DTypeSig false "tyOriginScope" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "OrdMap") (TyCon "TyConOrigin")))))))
-(DFunDef false "tyOriginScope" ((PVar "coreTypes") (PVar "known") (PVar "mid") (PVar "prog")) (EApp (EApp (EVar "omFromPairs") (EApp (EApp (EMethodRef "map") (EApp (EVar "ownTyOrigin") (EVar "mid"))) (EApp (EVar "dataRecordNames") (EVar "prog")))) (EApp (EApp (EVar "omFromPairs") (EApp (EApp (EMethodRef "map") (EVar "importedTyOrigin")) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "importedTypeOrigins") (EVar "known"))) (EApp (EVar "usePathsOf") (EVar "prog"))))) (EApp (EApp (EVar "omFromPairs") (EApp (EApp (EMethodRef "map") (EVar "importedTyOrigin")) (EVar "coreTypes"))) (EApp (EApp (EVar "omFromPairs") (EVar "builtinTyOrigins")) (EVar "omEmpty"))))))
+(DFunDef false "tyOriginScope" ((PVar "coreTypes") (PVar "known") (PVar "mid") (PVar "prog")) (EApp (EApp (EVar "omFromPairs") (EBinOp "++" (EApp (EApp (EMethodRef "map") (EApp (EVar "ownTyOrigin") (EVar "mid"))) (EApp (EVar "dataRecordNames") (EVar "prog"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "ownIfaceOrigin") (EVar "mid"))) (EApp (EVar "interfaceNamesOf") (EVar "prog"))))) (EApp (EApp (EVar "omFromPairs") (EApp (EApp (EMethodRef "map") (EVar "importedTyOrigin")) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "importedTypeOrigins") (EVar "known"))) (EApp (EVar "usePathsOf") (EVar "prog"))))) (EApp (EApp (EVar "omFromPairs") (EApp (EApp (EMethodRef "map") (EVar "importedTyOrigin")) (EVar "coreTypes"))) (EApp (EApp (EVar "omFromPairs") (EVar "builtinTyOrigins")) (EVar "omEmpty"))))))
 (DTypeSig false "ownTyOrigin" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyTuple (TyCon "String") (TyCon "TyConOrigin")))))
 (DFunDef false "ownTyOrigin" ((PVar "mid") (PVar "n")) (ETuple (EVar "n") (EApp (EVar "OriginModule") (EVar "mid"))))
 (DTypeSig false "importedTyOrigin" (TyFun (TyTuple (TyCon "String") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "TyConOrigin"))))
@@ -5765,7 +6051,7 @@ takeOriginTrace _ =
 (DTypeSig false "builtinTyOrigin" (TyFun (TyCon "String") (TyTuple (TyCon "String") (TyCon "TyConOrigin"))))
 (DFunDef false "builtinTyOrigin" ((PVar "n")) (ETuple (EVar "n") (EVar "OriginBuiltin")))
 (DTypeSig false "typeOriginExports" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))))
-(DFunDef false "typeOriginExports" ((PVar "known") (PVar "mid") (PVar "prog")) (EBinOp "++" (EApp (EApp (EMethodRef "map") (EApp (EVar "typeDeclaredIn") (EVar "mid"))) (EApp (EVar "expTypesDirect") (EVar "prog"))) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "importedTypeOrigins") (EVar "known"))) (EApp (EVar "pubUsePaths") (EVar "prog")))))
+(DFunDef false "typeOriginExports" ((PVar "known") (PVar "mid") (PVar "prog")) (EBinOp "++" (EBinOp "++" (EApp (EApp (EMethodRef "map") (EApp (EVar "typeDeclaredIn") (EVar "mid"))) (EApp (EVar "expTypesDirect") (EVar "prog"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "ifaceDeclaredIn") (EVar "mid"))) (EApp (EVar "expInterfacesDirect") (EVar "prog")))) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "importedTypeOrigins") (EVar "known"))) (EApp (EVar "pubUsePaths") (EVar "prog")))))
 (DTypeSig false "typeDeclaredIn" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyTuple (TyCon "String") (TyCon "String")))))
 (DFunDef false "typeDeclaredIn" ((PVar "mid") (PVar "n")) (ETuple (EVar "n") (EVar "mid")))
 (DTypeSig false "importedTypeOrigins" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (TyFun (TyCon "UsePath") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
@@ -5780,11 +6066,13 @@ takeOriginTrace _ =
 (DTypeSig false "keepTypeOrigins" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
 (DFunDef false "keepTypeOrigins" ((PVar "src") (PVar "bindings")) (EBlock (DoLet false false (PVar "definers") (EApp (EApp (EVar "omFromPairs") (EVar "src")) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EDictApp "flatMap") (EApp (EVar "bindTypeOrigin") (EVar "definers"))) (EVar "bindings")))))
 (DTypeSig false "bindTypeOrigin" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
-(DFunDef false "bindTypeOrigin" ((PVar "definers") (PTuple (PVar "origin") (PVar "local"))) (EMatch (EApp (EApp (EVar "omLookup") (EVar "origin")) (EVar "definers")) (arm (PCon "Some" (PVar "definer")) () (EListLit (ETuple (EVar "local") (EVar "definer")))) (arm (PCon "None") () (EListLit))))
+(DFunDef false "bindTypeOrigin" ((PVar "definers") (PTuple (PVar "origin") (PVar "local"))) (EBinOp "++" (EApp (EApp (EApp (EVar "bindOneOrigin") (EVar "definers")) (EVar "origin")) (EVar "local")) (EApp (EApp (EApp (EVar "bindOneOrigin") (EVar "definers")) (EApp (EVar "ifaceKey") (EVar "origin"))) (EApp (EVar "ifaceKey") (EVar "local")))))
+(DTypeSig false "bindOneOrigin" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))))
+(DFunDef false "bindOneOrigin" ((PVar "definers") (PVar "key") (PVar "local")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "key")) (EVar "definers")) (arm (PCon "Some" (PVar "definer")) () (EListLit (ETuple (EVar "local") (EVar "definer")))) (arm (PCon "None") () (EListLit))))
 (DTypeSig true "stampTyOrigins" (TyFun (TyApp (TyCon "OrdMap") (TyCon "TyConOrigin")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")))))
 (DFunDef false "stampTyOrigins" ((PVar "scope") (PVar "decls")) (EApp (EApp (EMethodRef "map") (EApp (EVar "stampDeclTyOrigins") (EVar "scope"))) (EVar "decls")))
 (DTypeSig false "stampDeclTyOrigins" (TyFun (TyApp (TyCon "OrdMap") (TyCon "TyConOrigin")) (TyFun (TyCon "Decl") (TyCon "Decl"))))
-(DFunDef false "stampDeclTyOrigins" ((PVar "scope") (PVar "d")) (EApp (EVar "fst") (EApp (EApp (EVar "mapTyInDecl") (EApp (EVar "stampTyHead") (EVar "scope"))) (EVar "d"))))
+(DFunDef false "stampDeclTyOrigins" ((PVar "scope") (PVar "d")) (EApp (EApp (EApp (EVar "mapOriginsInDecl") (EApp (EVar "stampTyHead") (EVar "scope"))) (EApp (EVar "fillIfaceOccOrigin") (EVar "scope"))) (EVar "d")))
 (DTypeSig false "stampTyHead" (TyFun (TyApp (TyCon "OrdMap") (TyCon "TyConOrigin")) (TyFun (TyCon "Ty") (TyTuple (TyCon "Ty") (TyCon "Bool")))))
 (DFunDef false "stampTyHead" ((PVar "scope") (PAs "t" (PRec "TyCon" ((rf "tyConName" (PVar "n")) (rf "tyConOrigin" (PVar "o"))) false))) (EMatch (EVar "o") (arm (PCon "OriginUnresolved") () (EApp (EApp (EVar "stampHeadWith") (EVar "t")) (EApp (EApp (EVar "originOfTyName") (EVar "scope")) (EVar "n")))) (arm (PCon "OriginBuiltin") () (ETuple (EVar "t") (EVar "False"))) (arm (PCon "OriginModule" PWild) () (ETuple (EVar "t") (EVar "False")))))
 (DFunDef false "stampTyHead" (PWild (PVar "t")) (ETuple (EVar "t") (EVar "False")))
@@ -5806,8 +6094,39 @@ takeOriginTrace _ =
 (DFunDef false "fillDeclOrigin" ((PVar "mid") (PCon "OriginUnresolved")) (EIf (EBinOp "==" (EVar "mid") (ELit (LString ""))) (EVar "OriginUnresolved") (EApp (EVar "OriginModule") (EVar "mid"))))
 (DFunDef false "fillDeclOrigin" (PWild (PCon "OriginBuiltin")) (EVar "OriginBuiltin"))
 (DFunDef false "fillDeclOrigin" (PWild (PAs "o" (PCon "OriginModule" PWild))) (EVar "o"))
+(DTypeSig true "mapOriginsInDecl" (TyFun (TyFun (TyCon "Ty") (TyTuple (TyCon "Ty") (TyCon "Bool"))) (TyFun (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyCon "TyConOrigin")))) (TyFun (TyCon "Decl") (TyCon "Decl")))))
+(DFunDef false "mapOriginsInDecl" ((PVar "fTy") (PVar "fIface") (PVar "d")) (EApp (EApp (EVar "mapIfaceOccDeclLocal") (EVar "fIface")) (EApp (EVar "fst") (EApp (EApp (EVar "mapTyInDecl") (EApp (EApp (EVar "mapOriginsInTy") (EVar "fTy")) (EVar "fIface"))) (EVar "d")))))
+(DTypeSig false "mapOriginsInTy" (TyFun (TyFun (TyCon "Ty") (TyTuple (TyCon "Ty") (TyCon "Bool"))) (TyFun (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyCon "TyConOrigin")))) (TyFun (TyCon "Ty") (TyTuple (TyCon "Ty") (TyCon "Bool"))))))
+(DFunDef false "mapOriginsInTy" ((PVar "fTy") (PVar "fIface") (PCon "TyConstrained" (PVar "cs") (PVar "t"))) (EApp (EVar "fTy") (EApp (EApp (EVar "TyConstrained") (EApp (EApp (EMethodRef "map") (EApp (EVar "mapConstraintOcc") (EVar "fIface"))) (EVar "cs"))) (EVar "t"))))
+(DFunDef false "mapOriginsInTy" ((PVar "fTy") PWild (PVar "t")) (EApp (EVar "fTy") (EVar "t")))
+(DTypeSig false "mapConstraintOcc" (TyFun (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyCon "TyConOrigin")))) (TyFun (TyCon "Constraint") (TyCon "Constraint"))))
+(DFunDef false "mapConstraintOcc" ((PVar "f") (PAs "c" (PRec "Constraint" ((rf "constraintHead" (PVar "n")) (rf "constraintOrigin" (PVar "o"))) false))) (EVariantUpdate "Constraint" (EVar "c") ((fa "constraintOrigin" (EApp (EApp (EApp (EVar "f") (ELit (LString "constraintOrigin"))) (EVar "n")) (EVar "o"))))))
+(DTypeSig false "mapSuperOcc" (TyFun (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyCon "TyConOrigin")))) (TyFun (TyCon "Super") (TyCon "Super"))))
+(DFunDef false "mapSuperOcc" ((PVar "f") (PAs "s" (PRec "Super" ((rf "superHead" (PVar "n")) (rf "superOrigin" (PVar "o"))) false))) (EVariantUpdate "Super" (EVar "s") ((fa "superOrigin" (EApp (EApp (EApp (EVar "f") (ELit (LString "superOrigin"))) (EVar "n")) (EVar "o"))))))
+(DTypeSig false "mapRequireOcc" (TyFun (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyCon "TyConOrigin")))) (TyFun (TyCon "Require") (TyCon "Require"))))
+(DFunDef false "mapRequireOcc" ((PVar "f") (PAs "r" (PRec "Require" ((rf "requireHead" (PVar "n")) (rf "requireOrigin" (PVar "o"))) false))) (EVariantUpdate "Require" (EVar "r") ((fa "requireOrigin" (EApp (EApp (EApp (EVar "f") (ELit (LString "requireOrigin"))) (EVar "n")) (EVar "o"))))))
+(DTypeSig false "mapIfaceOccDeclLocal" (TyFun (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyCon "TyConOrigin")))) (TyFun (TyCon "Decl") (TyCon "Decl"))))
+(DFunDef false "mapIfaceOccDeclLocal" ((PVar "f") (PAs "d" (PRec "DInterface" ((rf "ifaceOrigin" PWild) (rf "supers" None)) false))) (EVariantUpdate "DInterface" (EVar "d") ((fa "supers" (EApp (EApp (EMethodRef "map") (EApp (EVar "mapSuperOcc") (EVar "f"))) (EVar "supers"))))))
+(DFunDef false "mapIfaceOccDeclLocal" ((PVar "f") (PAs "d" (PRec "DImpl" ((rf "implOrigin" (PVar "o")) (rf "iface" (PVar "n")) (rf "reqs" None)) false))) (EVariantUpdate "DImpl" (EVar "d") ((fa "implOrigin" (EApp (EApp (EApp (EVar "f") (ELit (LString "implOrigin"))) (EVar "n")) (EVar "o"))) (fa "reqs" (EApp (EApp (EMethodRef "map") (EApp (EVar "mapRequireOcc") (EVar "f"))) (EVar "reqs"))))))
+(DFunDef false "mapIfaceOccDeclLocal" ((PVar "f") (PCon "DAttrib" (PVar "attrs") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "attrs")) (EApp (EApp (EVar "mapIfaceOccDeclLocal") (EVar "f")) (EVar "d"))))
+(DFunDef false "mapIfaceOccDeclLocal" (PWild (PVar "d")) (EVar "d"))
+(DTypeSig false "fillIfaceOccOrigin" (TyFun (TyApp (TyCon "OrdMap") (TyCon "TyConOrigin")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyCon "TyConOrigin"))))))
+(DFunDef false "fillIfaceOccOrigin" ((PVar "scope") PWild (PVar "n") (PCon "OriginUnresolved")) (EApp (EApp (EVar "fromOption") (EVar "OriginUnresolved")) (EApp (EApp (EVar "omLookup") (EApp (EVar "ifaceKey") (EVar "n"))) (EVar "scope"))))
+(DFunDef false "fillIfaceOccOrigin" (PWild PWild PWild (PCon "OriginBuiltin")) (EVar "OriginBuiltin"))
+(DFunDef false "fillIfaceOccOrigin" (PWild PWild PWild (PAs "o" (PCon "OriginModule" PWild))) (EVar "o"))
+(DTypeSig false "ifaceKey" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "ifaceKey" ((PVar "n")) (EBinOp "++" (EBinOp "++" (ELit (LString "iface:")) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString ""))))
+(DTypeSig false "ifaceDeclaredIn" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyTuple (TyCon "String") (TyCon "String")))))
+(DFunDef false "ifaceDeclaredIn" ((PVar "mid") (PVar "n")) (ETuple (EApp (EVar "ifaceKey") (EVar "n")) (EVar "mid")))
+(DTypeSig false "ownIfaceOrigin" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyTuple (TyCon "String") (TyCon "TyConOrigin")))))
+(DFunDef false "ownIfaceOrigin" ((PVar "mid") (PVar "n")) (ETuple (EApp (EVar "ifaceKey") (EVar "n")) (EApp (EVar "OriginModule") (EVar "mid"))))
+(DTypeSig false "interfaceNamesOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "interfaceNamesOf" ((PList)) (EListLit))
+(DFunDef false "interfaceNamesOf" ((PCons (PRec "DInterface" ((rf "name" (PVar "n")) (rf "ifaceOrigin" PWild)) false) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "interfaceNamesOf") (EVar "rest"))))
+(DFunDef false "interfaceNamesOf" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EVar "interfaceNamesOf") (EBinOp "::" (EVar "d") (EVar "rest"))))
+(DFunDef false "interfaceNamesOf" ((PCons PWild (PVar "rest"))) (EApp (EVar "interfaceNamesOf") (EVar "rest")))
 (DTypeSig true "stampGraphTyOrigins" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))))
-(DFunDef false "stampGraphTyOrigins" ((PVar "coreDecls") (PVar "modules")) (EBlock (DoLet false false (PVar "coreTypes") (EApp (EApp (EMethodRef "map") (EApp (EVar "typeDeclaredIn") (ELit (LString "core")))) (EApp (EVar "dataRecordNames") (EVar "coreDecls")))) (DoLet false false (PVar "coreS") (EApp (EApp (EApp (EApp (EVar "stampOneModule") (EVar "coreTypes")) (EVar "omEmpty")) (ELit (LString "core"))) (EVar "coreDecls"))) (DoExpr (ETuple (EVar "coreS") (EApp (EApp (EApp (EVar "stampModulesGo") (EVar "coreTypes")) (EVar "omEmpty")) (EVar "modules"))))))
+(DFunDef false "stampGraphTyOrigins" ((PVar "coreDecls") (PVar "modules")) (EBlock (DoLet false false (PVar "coreTypes") (EBinOp "++" (EApp (EApp (EMethodRef "map") (EApp (EVar "typeDeclaredIn") (ELit (LString "core")))) (EApp (EVar "dataRecordNames") (EVar "coreDecls"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "ifaceDeclaredIn") (ELit (LString "core")))) (EApp (EVar "interfaceNamesOf") (EVar "coreDecls"))))) (DoLet false false (PVar "coreS") (EApp (EApp (EApp (EApp (EVar "stampOneModule") (EVar "coreTypes")) (EVar "omEmpty")) (ELit (LString "core"))) (EVar "coreDecls"))) (DoExpr (ETuple (EVar "coreS") (EApp (EApp (EApp (EVar "stampModulesGo") (EVar "coreTypes")) (EVar "omEmpty")) (EVar "modules"))))))
 (DTypeSig false "stampOneModule" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")))))))
 (DFunDef false "stampOneModule" ((PVar "coreTypes") (PVar "known") (PVar "mid") (PVar "prog")) (EApp (EApp (EVar "stampTyOrigins") (EApp (EApp (EApp (EApp (EVar "tyOriginScope") (EVar "coreTypes")) (EVar "known")) (EVar "mid")) (EVar "prog"))) (EApp (EApp (EVar "stampDeclOrigins") (EVar "mid")) (EVar "prog"))))
 (DTypeSig false "stampModulesGo" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))))
@@ -5816,7 +6135,7 @@ takeOriginTrace _ =
 (DTypeSig true "stampFlatTyOrigins" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")))))
 (DFunDef false "stampFlatTyOrigins" ((PVar "coreDecls") (PVar "prog")) (EApp (EApp (EVar "stampTyOrigins") (EApp (EVar "flatTyOriginScope") (EVar "coreDecls"))) (EVar "prog")))
 (DTypeSig false "flatTyOriginScope" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "OrdMap") (TyCon "TyConOrigin"))))
-(DFunDef false "flatTyOriginScope" ((PVar "coreDecls")) (EApp (EApp (EVar "omFromPairs") (EApp (EApp (EMethodRef "map") (EVar "importedTyOrigin")) (EApp (EApp (EMethodRef "map") (EApp (EVar "typeDeclaredIn") (ELit (LString "core")))) (EApp (EVar "dataRecordNames") (EVar "coreDecls"))))) (EApp (EApp (EVar "omFromPairs") (EVar "builtinTyOrigins")) (EVar "omEmpty"))))
+(DFunDef false "flatTyOriginScope" ((PVar "coreDecls")) (EApp (EApp (EVar "omFromPairs") (EApp (EApp (EMethodRef "map") (EVar "importedTyOrigin")) (EBinOp "++" (EApp (EApp (EMethodRef "map") (EApp (EVar "typeDeclaredIn") (ELit (LString "core")))) (EApp (EVar "dataRecordNames") (EVar "coreDecls"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "ifaceDeclaredIn") (ELit (LString "core")))) (EApp (EVar "interfaceNamesOf") (EVar "coreDecls")))))) (EApp (EApp (EVar "omFromPairs") (EVar "builtinTyOrigins")) (EVar "omEmpty"))))
 (DTypeSig false "originTraceEnabled" (TyApp (TyCon "Ref") (TyCon "Bool")))
 (DFunDef false "originTraceEnabled" () (EApp (EVar "Ref") (EVar "False")))
 (DTypeSig false "originTraceLog" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))

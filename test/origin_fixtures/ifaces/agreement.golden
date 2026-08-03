@@ -1,5 +1,33 @@
 === ORIGIN AGREEMENT (#1110) ===
 # <slot> <head> <flat~graph> <single~graph> <flat~single>
+alpha Cat R-ONLY CONFLICT R-ONLY
+alpha Ghost R-ONLY CONFLICT R-ONLY
+alpha Int AGREE AGREE AGREE
+alpha String AGREE AGREE AGREE
+alpha decl:Boxed R-ONLY CONFLICT R-ONLY
+alpha decl:Cat R-ONLY CONFLICT R-ONLY
+alpha decl:Echo R-ONLY CONFLICT R-ONLY
+alpha decl:Ghost R-ONLY CONFLICT R-ONLY
+alpha decl:Loud R-ONLY CONFLICT R-ONLY
+alpha decl:Plain R-ONLY CONFLICT R-ONLY
+alpha decl:Quiet R-ONLY CONFLICT R-ONLY
+alpha decl:Speak R-ONLY CONFLICT R-ONLY
+alpha decl:Sub R-ONLY CONFLICT R-ONLY
+alpha decl:Tagged R-ONLY CONFLICT R-ONLY
+alpha iface:Boxed R-ONLY CONFLICT R-ONLY
+alpha iface:Loud R-ONLY CONFLICT R-ONLY
+alpha iface:Plain R-ONLY CONFLICT R-ONLY
+alpha iface:Quiet R-ONLY CONFLICT R-ONLY
+alpha iface:Speak R-ONLY CONFLICT R-ONLY
+alpha iface:Tagged R-ONLY CONFLICT R-ONLY
+beta Dog R-ONLY CONFLICT R-ONLY
+beta Kennel R-ONLY CONFLICT R-ONLY
+beta String AGREE AGREE AGREE
+beta decl:Dog R-ONLY CONFLICT R-ONLY
+beta decl:Echo R-ONLY CONFLICT R-ONLY
+beta decl:Kennel R-ONLY CONFLICT R-ONLY
+beta decl:Speak R-ONLY CONFLICT R-ONLY
+beta iface:Speak R-ONLY CONFLICT R-ONLY
 core Array AGREE AGREE AGREE
 core Bool AGREE AGREE AGREE
 core Char AGREE AGREE AGREE
@@ -64,10 +92,11 @@ core iface:Semigroup AGREE AGREE AGREE
 core iface:Slice AGREE AGREE AGREE
 core iface:Thenable AGREE AGREE AGREE
 core iface:Traversable AGREE AGREE AGREE
-main_unresolved Int AGREE AGREE AGREE
-main_unresolved Missing NEITHER NEITHER NEITHER
-main_unresolved Parcel R-ONLY CONFLICT R-ONLY
-main_unresolved decl:Parcel R-ONLY CONFLICT R-ONLY
+main_ifaces Pair R-ONLY CONFLICT R-ONLY
+main_ifaces String AGREE AGREE AGREE
+main_ifaces decl:Pair R-ONLY CONFLICT R-ONLY
+main_ifaces iface:Echo R-ONLY R-ONLY NEITHER
+main_ifaces iface:Speak R-ONLY R-ONLY NEITHER
 === CONFLICTS ===
 # PINNED, #1223 (medaka test <dir>: one declaration, two module ids, one process).
 # ⚠️ THESE ROWS DRAIN BY REVIEW, NOT MECHANICALLY. The `single` arm's "__user__" is
@@ -75,27 +104,82 @@ main_unresolved decl:Parcel R-ONLY CONFLICT R-ONLY
 # so unifying the drivers will NOT flip these rows on its own. Whoever fixes #1223
 # must delete them here by hand. (Sourcing the id from the driver would make it
 # mechanical; that is a change to test_cmd.mdk and is deliberately not in this PR.)
-main_unresolved Parcel flat=- single=mod:__user__ graph=mod:main_unresolved
-main_unresolved decl:Parcel flat=- single=mod:__user__ graph=mod:main_unresolved
+alpha Cat flat=- single=mod:__user__ graph=mod:alpha
+alpha Ghost flat=- single=mod:__user__ graph=mod:alpha
+alpha decl:Boxed flat=- single=mod:__user__ graph=mod:alpha
+alpha decl:Cat flat=- single=mod:__user__ graph=mod:alpha
+alpha decl:Echo flat=- single=mod:__user__ graph=mod:alpha
+alpha decl:Ghost flat=- single=mod:__user__ graph=mod:alpha
+alpha decl:Loud flat=- single=mod:__user__ graph=mod:alpha
+alpha decl:Plain flat=- single=mod:__user__ graph=mod:alpha
+alpha decl:Quiet flat=- single=mod:__user__ graph=mod:alpha
+alpha decl:Speak flat=- single=mod:__user__ graph=mod:alpha
+alpha decl:Sub flat=- single=mod:__user__ graph=mod:alpha
+alpha decl:Tagged flat=- single=mod:__user__ graph=mod:alpha
+alpha iface:Boxed flat=- single=mod:__user__ graph=mod:alpha
+alpha iface:Loud flat=- single=mod:__user__ graph=mod:alpha
+alpha iface:Plain flat=- single=mod:__user__ graph=mod:alpha
+alpha iface:Quiet flat=- single=mod:__user__ graph=mod:alpha
+alpha iface:Speak flat=- single=mod:__user__ graph=mod:alpha
+alpha iface:Tagged flat=- single=mod:__user__ graph=mod:alpha
+beta Dog flat=- single=mod:__user__ graph=mod:beta
+beta Kennel flat=- single=mod:__user__ graph=mod:beta
+beta decl:Dog flat=- single=mod:__user__ graph=mod:beta
+beta decl:Echo flat=- single=mod:__user__ graph=mod:beta
+beta decl:Kennel flat=- single=mod:__user__ graph=mod:beta
+beta decl:Speak flat=- single=mod:__user__ graph=mod:beta
+beta iface:Speak flat=- single=mod:__user__ graph=mod:beta
+main_ifaces Pair flat=- single=mod:__user__ graph=mod:main_ifaces
+main_ifaces decl:Pair flat=- single=mod:__user__ graph=mod:main_ifaces
 === RESIDUAL ===
 # <arm> <slot> <head> — an `OriginUnresolved` head that SURVIVED stamping.
 # NOT necessarily a defect; NOT necessarily empty. Read the section comment.
-flat main_unresolved Missing
-flat main_unresolved Parcel
-flat main_unresolved decl:Parcel
-graph main_unresolved Missing
-single main_unresolved Missing
+flat alpha Cat
+flat alpha Ghost
+flat alpha decl:Boxed
+flat alpha decl:Cat
+flat alpha decl:Echo
+flat alpha decl:Ghost
+flat alpha decl:Loud
+flat alpha decl:Plain
+flat alpha decl:Quiet
+flat alpha decl:Speak
+flat alpha decl:Sub
+flat alpha decl:Tagged
+flat alpha iface:Boxed
+flat alpha iface:Loud
+flat alpha iface:Plain
+flat alpha iface:Quiet
+flat alpha iface:Speak
+flat alpha iface:Tagged
+flat beta Dog
+flat beta Kennel
+flat beta decl:Dog
+flat beta decl:Echo
+flat beta decl:Kennel
+flat beta decl:Speak
+flat beta iface:Speak
+flat main_ifaces Pair
+flat main_ifaces decl:Pair
+flat main_ifaces iface:Echo
+flat main_ifaces iface:Speak
+single main_ifaces iface:Echo
+single main_ifaces iface:Speak
 === HEAD SPREAD ===
 # <head> <distinct graph-arm origins across ALL slots> <the origins themselves>
 Array 1 builtin
 Bool 1 builtin
+Cat 1 mod:alpha
 Char 1 builtin
+Dog 1 mod:beta
 Float 1 builtin
+Ghost 1 mod:alpha
 Int 1 builtin
+Kennel 1 mod:beta
 List 1 builtin
 Option 1 mod:core
 Ordering 1 mod:core
-Parcel 1 mod:main_unresolved
+Pair 1 mod:main_ifaces
 RField 1 mod:core
 Rep 1 mod:core
 Result 1 mod:core
@@ -107,28 +191,40 @@ decl:Applicative 1 mod:core
 decl:Arbitrary 1 mod:core
 decl:Bimappable 1 mod:core
 decl:Bounded 1 mod:core
+decl:Boxed 1 mod:alpha
+decl:Cat 1 mod:alpha
 decl:Debug 1 mod:core
 decl:Display 1 mod:core
+decl:Dog 1 mod:beta
+decl:Echo 2 mod:alpha|mod:beta
 decl:Eq 1 mod:core
 decl:Filterable 1 mod:core
 decl:Foldable 1 mod:core
 decl:FromEntries 1 mod:core
 decl:Generic 1 mod:core
+decl:Ghost 1 mod:alpha
 decl:Hashable 1 mod:core
 decl:Index 1 mod:core
 decl:IndexMut 1 mod:core
+decl:Kennel 1 mod:beta
+decl:Loud 1 mod:alpha
 decl:Mappable 1 mod:core
 decl:Monoid 1 mod:core
 decl:Num 1 mod:core
 decl:Option 1 mod:core
 decl:Ord 1 mod:core
 decl:Ordering 1 mod:core
-decl:Parcel 1 mod:main_unresolved
+decl:Pair 1 mod:main_ifaces
+decl:Plain 1 mod:alpha
+decl:Quiet 1 mod:alpha
 decl:RField 1 mod:core
 decl:Rep 1 mod:core
 decl:Result 1 mod:core
 decl:Semigroup 1 mod:core
 decl:Slice 1 mod:core
+decl:Speak 2 mod:alpha|mod:beta
+decl:Sub 1 mod:alpha
+decl:Tagged 1 mod:alpha
 decl:Thenable 1 mod:core
 decl:Traversable 1 mod:core
 iface:Alternative 1 mod:core
@@ -136,8 +232,10 @@ iface:Applicative 1 mod:core
 iface:Arbitrary 1 mod:core
 iface:Bimappable 1 mod:core
 iface:Bounded 1 mod:core
+iface:Boxed 1 mod:alpha
 iface:Debug 1 mod:core
 iface:Display 1 mod:core
+iface:Echo 1 mod:beta
 iface:Eq 1 mod:core
 iface:Filterable 1 mod:core
 iface:Foldable 1 mod:core
@@ -145,24 +243,29 @@ iface:Generic 1 mod:core
 iface:Hashable 1 mod:core
 iface:Index 1 mod:core
 iface:IndexMut 1 mod:core
+iface:Loud 1 mod:alpha
 iface:Mappable 1 mod:core
 iface:Monoid 1 mod:core
 iface:Num 1 mod:core
 iface:Ord 1 mod:core
+iface:Plain 1 mod:alpha
+iface:Quiet 1 mod:alpha
 iface:Semigroup 1 mod:core
 iface:Slice 1 mod:core
+iface:Speak 2 mod:alpha|mod:beta
+iface:Tagged 1 mod:alpha
 iface:Thenable 1 mod:core
 iface:Traversable 1 mod:core
 === SUMMARY ===
-modules 1
-graph-modules 1
-flat-segments 2
-decl-heads 29
-iface-occs-constraintOrigin 43
-iface-occs-superOrigin 10
-iface-occs-requireOrigin 93
-iface-occs-implOrigin 117
-heads 68
-claims 204
-residual 5
-conflicts 2
+modules 3
+graph-modules 3
+flat-segments 6
+decl-heads 43
+iface-occs-constraintOrigin 47
+iface-occs-superOrigin 12
+iface-occs-requireOrigin 96
+iface-occs-implOrigin 123
+heads 97
+claims 291
+residual 31
+conflicts 27
