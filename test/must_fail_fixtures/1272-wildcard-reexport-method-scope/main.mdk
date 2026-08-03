@@ -1,0 +1,21 @@
+-- issue #1272: `mth` reaches this file ONLY through mid.mdk's re-export of
+-- ifaceb's, so this occurrence unambiguously means `IB.mth` -- and `Blob` has no
+-- `IB` impl at all, only an `IA` one. This must be rejected with
+-- `No impl of IB for Blob`. It is not: check/run/build are all clean and the
+-- binary prints `1`, IA's impl body.
+--
+-- The ONE variable versus the sibling shapes A-2.5 (#1092) fixed is the import
+-- FORM on line 12: `import mid.{IB, mth}` (selective, see control.mdk) rejects
+-- correctly, and so does `import ifaceb.*` (wildcard, but of the DECLARING
+-- module). Only wildcard-of-a-RE-EXPORTER satisfies neither witness in
+-- `usePathWitnesses` (compiler/types/typecheck.mdk), so the scope override
+-- declines and the bare-name last-write-wins entry stands.
+import mid.*
+import ifacea.{IA}
+
+public export data Blob = Blob
+
+export impl IA Blob where
+  mth b = 1
+
+main = println (mth Blob)

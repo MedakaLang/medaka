@@ -1,0 +1,18 @@
+-- CONTROL for #1272. This harness grades a control on its EXIT CODE ONLY and a
+-- control must exit 0, so it cannot be the "correctly rejects" cell (exit 1) --
+-- the same constraint #1092's own claim.txt recorded.
+--
+-- So this control exercises the SAME call shape through the SAME re-exporter
+-- honestly: a SELECTIVE re-export import (which A-2.5 does resolve), with `Blob`
+-- implementing `IB` -- the interface the occurrence actually names. It is a valid
+-- program and must print 7. If it breaks, module re-export / interface
+-- resolution broke, not #1272.
+import mid.{IB, mth}
+import ifacea.{IA}
+
+public export data Blob = Blob
+
+export impl IB Blob where
+  mth b = 7
+
+main = println (mth Blob)
