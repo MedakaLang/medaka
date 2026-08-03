@@ -484,10 +484,17 @@ checkRecPat cur env name fields = recPatHead cur env name
 recPatHead : Option Loc -> Env -> String -> List ResError
 recPatHead cur env name =
   if omHasKey name env.types || omHasKey name env.ctors then
-    -- #1110: a record PATTERN head names a type, and `checkPat` routes `PRec`
-    -- here rather than through its `PCon` arm — so without this line the ctor
-    -- peer never sees it and an ambiguous record head is silent in patterns
-    -- while flagged in signatures.
+    -- #1110: a record PATTERN head names a TYPE **or one of its CONSTRUCTORS** —
+    -- which is what the `|| omHasKey name env.ctors` on the line above is for
+    -- (`data T = MkT { fx : Int }` gives the head `MkT`, a ctor spelling with no
+    -- type of that name).  `checkPat` routes `PRec` here rather than through its
+    -- `PCon` arm, so neither ambiguity peer sees this position by default.
+    --
+    -- ⚠️ THIS LINE COVERS THE TYPE SPELLING ONLY.  `typeAmbiguous` is keyed by
+    -- type names, so for a ctor-only head it does nothing and the head stays
+    -- silent — an open S0 (#1253), whose fix belongs at this site and
+    -- `recCreateHead` but needs the CTOR peer (`isCtorAmbiguous`), not this one.
+    -- Deliberately not fixed here: out of unit E/F's brief, and untouched by it.
     ambiguousTypeErrors env name cur
   else
     [UnknownType name cur (suggestType env name)]
@@ -756,6 +763,15 @@ typeAmbigMods env n = match lookupAssoc n env.typeAmbiguous
 -- `tyOriginScope`'s `ifaceKey` tag exists to prevent.  Two tables get the same
 -- separation with no key encoding at all, because nothing here is threaded through
 -- a signature the way that map is.
+--
+-- ⚠️ THAT SEPARATION HAS A WITNESS ALREADY IN THE TREE, and it is a better one than
+-- anything #1110 added: `test/references_fixtures/iface_ty_collide/main.mdk`
+-- (#1044) does `import a.{Foo, mfoo}` then `import b.{Foo}` where a's `Foo` is an
+-- INTERFACE and b's is a `data`.  Under one shared bare-name table that is two
+-- provenances for `Foo` and a spurious ambiguity error on a file that is correct;
+-- under two tables each set sees exactly one and it checks clean — measured, exit
+-- 0.  That fixture predates this change and would go red if the tables were ever
+-- merged, which is precisely what makes it the regression test for this decision.
 isIfaceAmbiguous : Env -> String -> Bool
 isIfaceAmbiguous env n = match lookupAssoc n env.ifaceAmbiguous
   Some _ => True
@@ -1241,7 +1257,8 @@ checkRecordCreate cur env scope name fs = recCreateHead cur env name fs
 
 recCreateHead : Option Loc -> Env -> String -> List FieldAssign -> List ResError
 recCreateHead cur env name fs
-  -- #1110: the expression-position peer of `recPatHead` — same head, same set.
+  -- #1110: the expression-position peer of `recPatHead` — same head, same set,
+  -- and the same ctor-spelling gap (#1253); see that site's comment.
   | omHasKey name env.types || omHasKey name env.imported || omHasKey name env.ctors = ambiguousTypeErrors env name cur
     ++ flatMap (recCreateField cur env name) fs
   | otherwise = [UnknownType name cur (suggestType env name)]

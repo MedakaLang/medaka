@@ -14,10 +14,17 @@
 -- impls.  They do not — that is exactly the open S0 #1047, pinned as still
 -- reproducing in test/must_fail_fixtures/1047-cross-module-iface-name-collision/ —
 -- and PR C does not fix it, because nothing in the compiler READS these origins
--- yet.  `main_ifaces.mdk` compiles and runs at exit 0 with no diagnostic; the
--- silent merge is visible in the source, not in this gate.  What the golden asserts
--- is that RESOLVE now tells the two apart, which is the fact the eventual re-keying
--- consumes.
+-- yet.  The silent merge is visible in the source, not in this gate.  What the
+-- golden asserts is that RESOLVE now tells the two apart, which is the fact the
+-- eventual re-keying consumes.
+--
+-- ⚠️ CORRECTED BY #1110 UNIT E/F.  This paragraph used to add "`main_ifaces.mdk`
+-- compiles and runs at exit 0 with no diagnostic".  It no longer does: every
+-- `Speak`/`Echo` occurrence there is now reported `R-AMBIGUOUS-INTERFACE`.  That
+-- changes nothing about the sentence it was supporting — the diagnostic fires on a
+-- SCOPE collision (two import provenances in `main_ifaces`' own scope) and #1047 is
+-- a TABLE collision between modules that never meet in one scope, so #1047 remains
+-- open and its pin still reproduces.  See `main_ifaces.mdk`'s header.
 
 export interface Speak a where
   speak : a -> String

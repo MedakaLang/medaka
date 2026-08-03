@@ -1,7 +1,14 @@
 -- TYPE occurrence 2/3: a record PATTERN head (`recPatHead`).  `checkPat` routes
--- `PRec` here and NOT through its `PCon` arm, so the constructor peer never sees
--- this position — without its own guard it is silent while a signature is flagged.
--- No signature on `sizeOf`, so `Crate` occurs exactly once.
+-- `PRec` here and NOT through its `PCon` arm, so neither ambiguity peer sees this
+-- position by default — without its own guard it is silent while a signature is
+-- flagged.  No signature on `sizeOf`, so `Crate` occurs exactly once.
+--
+-- ⚠️ `Crate` is used here because it is the TYPE spelling of the head, which is
+-- what `typeAmbiguous` is keyed by.  A record head may equally be a CTOR-ONLY
+-- spelling (`data T = MkT { fx : Int }` → head `MkT`), and that case is still
+-- silent — an open S0, #1253, whose fix needs the ctor peer rather than this one.
+-- This fixture pins the half unit E/F actually covers; do not read it as covering
+-- record heads in general.
 import ta.{Crate}
 import tb.{Crate}
 
