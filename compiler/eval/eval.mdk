@@ -1029,7 +1029,8 @@ pickByTag env method vs tag = match filterList (hasTag tag) vs
 -- a general instance nor a default exists do we leave the VMulti for arg-tag
 -- fallback.
 --
--- #1047: the default tier is where two same-named interfaces collide.  `vs` holds
+-- #1047: the default tier is where two interfaces sharing a METHOD name collide —
+-- their own NAMES are irrelevant and may differ freely.  `vs` holds
 -- EVERY untagged default installed under this bare method name — one per declaring
 -- interface — so with more than one candidate the arg-tag punt below simply took
 -- whichever module the loader processed first.  `ownDefault` re-asks the question
@@ -1037,6 +1038,17 @@ pickByTag env method vs tag = match filterList (hasTag tag) vs
 -- declared a default for [method]?  Exactly one answer ⇒ use it; zero or several
 -- (or no identity at all, on a loader-less driver) ⇒ the pre-#1047 result, so no
 -- collision-free program's dispatch moves.
+--
+-- ⚠️ RESIDUAL, STILL OPEN: #1265.  "SEVERAL" is not a rare corner — it is the whole
+-- surviving bug.  When ONE type implements TWO interfaces that share a method name,
+-- `ifaceIdsAtTagE tag` names BOTH, `defaultCellOf` finds a cell under each, `oneOnly`
+-- on a 2-list is None, and the caller returns `VMulti cands` for the arg-tag punt to
+-- take the head of — exactly the pre-#1047 answer, at exit 0, with no diagnostic.
+-- The LLVM and Wasm emitters fail the same way at the same condition (LOCKSTEP: see
+-- `narrowDefaults` / `narrowDefaultsW`).  Not fixable in this filter: eval's default
+-- cell and the emitters' `mdk_default_<method>_<tag>` symbol are both keyed
+-- (method, tag), so two interfaces' default bodies have one name between them.
+-- Pinned at test/must_fail_fixtures/1265-two-ifaces-same-method-one-type-default-collapse/.
 pickTagFallback : EvalEnv (Value e) -> String -> List (Value e) -> String -> <e> Value e
 pickTagFallback env method vs tag = match filterList (hasTag noneHeadTag) vs
   [] => pickDefaultCand env method vs tag
@@ -1997,7 +2009,8 @@ headTyconHead (t::_) = headTycon t
 -- interface defaults install untagged (a VClosure) so they act as a fallback.
 --
 -- #1047: and ALSO under the identity-qualified `defaultCellName` so the fallback
--- tier can tell two same-named interfaces' defaults apart.  The bare-name entry is
+-- tier can tell two interfaces' defaults apart when they share a METHOD name (the
+-- interfaces' own names are irrelevant and may differ).  The bare-name entry is
 -- unchanged and still the one every collision-free program dispatches through; the
 -- qualified one is a SECOND binding of the SAME value, never a replacement.
 defaultEntry : EvalEnv (Value e) -> String -> List String -> IfaceMethod -> List (String, (Int, Value e))

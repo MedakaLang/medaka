@@ -1,0 +1,28 @@
+-- #1265 CONTROL — the BOUNDARY of the defect, flipping exactly ONE dimension.
+--
+-- The two interfaces still have DIFFERENT names and still share the METHOD name
+-- `speak`; both impls are still METHOD-LESS and still cross-module.  The ONE thing
+-- that changes is that they are implemented on TWO types (`KDog`, `KCat`) instead of
+-- one, so the two defaults land at two different dispatch TAGS.
+--
+-- That is precisely the condition #1264's narrowing can handle: `ifaceIdsAtTag "KDog"`
+-- returns one identity, `narrowDefaults` has exactly one survivor, and the right body
+-- is selected.  So this control proves the defect is the SHARED TAG, not the shared
+-- method name and not method-less impls in general — and it must stay GREEN under any
+-- fix for #1265.
+--
+-- Per #1144 this harness grades a control on its EXIT CODE ONLY, and a
+-- wrong-value-at-exit-0 bug cannot be discriminated by an exit code unless the program
+-- puts the value INTO the exit code.  So `main` ASSERTS the correct string and panics
+-- otherwise, rather than printing it — a control that merely printed would exit 0
+-- either way and could never fail.
+import da.{KDog(..), sayKA}
+import db.{KCat(..), sayKB}
+
+main : <IO> Unit
+main =
+  let r = sayKA KDog ++ "|" ++ sayKB KCat
+  if r == "A-default|B-default" then
+    println "control-ok:A-default|B-default"
+  else
+    panic "control regressed: with the two interfaces on SEPARATE types the defaults no longer resolve to A-default|B-default"

@@ -1,0 +1,12 @@
+-- #1265: A's implementor.  `impl Speak Dog` is METHOD-LESS, so Dog inherits ifa's
+-- default body ("A-default").  `sayA` calls `speak` in a module where ONLY `Speak`
+-- is in scope, so name resolution is unambiguous -- this is NOT #1182's
+-- candidate-set deformation; the front end picks the right interface and the Core
+-- IR default registry then picks the wrong BODY.
+import ifa.{Speak(..), speak}
+import dog.{Dog(..)}
+
+impl Speak Dog where
+
+export sayA : Dog -> String
+sayA d = speak d

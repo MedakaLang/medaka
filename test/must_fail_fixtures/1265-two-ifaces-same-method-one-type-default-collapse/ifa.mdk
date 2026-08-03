@@ -1,0 +1,9 @@
+-- #1265, interface A: declares `Speak` with the default "A-default".  It has NO
+-- import relationship with ifb.mdk, and their interface NAMES differ (`Speak` vs
+-- `Greet`) -- the ONLY thing they share is the METHOD name `speak`.  That is the
+-- discriminating variable: #1264 keyed the untagged-default registry by interface
+-- IDENTITY, which separates two same-named interfaces but NOT two differently-named
+-- ones sharing a method name at one dispatch tag.
+export interface Speak x where
+  speak : x -> String
+  speak _ = "A-default"

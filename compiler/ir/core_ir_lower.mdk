@@ -1203,7 +1203,8 @@ lowerImpls prog =
 -- ⚠️ It is a strict WIDENING of the row, not a re-keying: `ifaceImplRouteKeys` /
 -- `ifaceDeclHeadUnique` still match on the bare `iface` name exactly as before, so
 -- every route key and collision verdict — and therefore every byte of emitted IR
--- on a program with no interface-name collision — is unchanged.
+-- on a program with no METHOD-name collision — is unchanged.  (⚠️ METHOD, not
+-- interface: the colliding interfaces' own names are irrelevant and may differ.)
 -- one row per DECLARED impl: (iface identity, iface, head tag, canonical impl key).
 ifaceImplHeadsRef : Ref (List (String, String, String, String))
 ifaceImplHeadsRef = Ref []
@@ -1222,14 +1223,21 @@ ifaceImplHeadEntries _ = []
 
 -- #1047: the interface IDENTITIES of every declared impl whose head tag OR
 -- canonical key is [tag] — the reverse of `ifaceImplRouteKeys`.  The emitters'
--- `defaultFor`/`defaultForW` use it to decide WHICH same-named interface's default
--- body a `@mdk_default_<method>_<tag>` wrapper must hold; see their own comments
--- for why the answer is only consulted when two defaults share a method name.
+-- `defaultFor`/`defaultForW` use it to decide WHICH interface's default body a
+-- `@mdk_default_<method>_<tag>` wrapper must hold; see their own comments for why
+-- the answer is only consulted when two defaults share a METHOD name (the
+-- interfaces' own names are irrelevant and may differ freely).
 --
 -- ⚠️ A tag is NOT a function to one interface — one type routinely implements
 -- several (`impl Eq Dog` and `impl Debug Dog` both head at "Dog") — so this
 -- returns a LIST and the caller must intersect it with the candidate defaults'
 -- identities rather than taking the head.
+--
+-- ⚠️ AND THE INTERSECTION IS NOT ENOUGH, which is #1265 (still open).  When ONE type
+-- implements TWO interfaces that share a method name, this list contains BOTH
+-- identities, so BOTH candidate defaults survive the intersection and every caller
+-- falls back to first-match.  Not fixable here: `mdk_default_<method>_<tag>` has no
+-- interface component, so the two default bodies have one symbol between them.
 export ifaceIdsAtTag : String -> List String
 ifaceIdsAtTag tag = ifaceIdsAtTagGo tag ifaceImplHeadsRef.value
 
