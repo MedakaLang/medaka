@@ -1,10 +1,19 @@
 -- #1110 PR C corpus — the DEFINER end of the declare-and-re-export chain.
 --
--- `Relay` is declared here and re-exported by `mid.mdk`, which ALSO declares a
--- `Relay` of its own.  See mid.mdk for what that pins (#1245).  Nothing in this
--- module ever writes a `Relay` occurrence, so `deep` contributes a `decl:Relay` row
--- and no `iface:Relay` one — which is what makes the single `iface:Relay` row in
--- the golden unambiguously attributable to `main_ifaces`.
+-- `Relay` (interface) and `Baton` (type) are both declared here and both
+-- re-exported by `mid.mdk`, which ALSO declares one of each under the same name.
+-- See mid.mdk for what that pins (#1245, FIXED).  Nothing in this module ever
+-- writes a `Relay` or `Baton` occurrence, so `deep` contributes `decl:` rows and no
+-- occurrence rows — which is what makes the single `iface:Relay` / `Baton`
+-- occurrence rows in the golden unambiguously attributable to `main_ifaces`.
+--
+-- ⚠️ TWO NAMESPACES ON PURPOSE.  `typeOriginExports` decides the declare-and-
+-- re-export collision for types and interfaces in ONE concatenation, so a witness
+-- in only one namespace would leave the other's answer asserted rather than
+-- observed — and this gate is the only thing in the tree that can observe an
+-- origin at all.
 
 export interface Relay a where
   via : a -> Int
+
+export data Baton = DeepBaton
