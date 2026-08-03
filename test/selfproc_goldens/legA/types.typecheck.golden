@@ -54,7 +54,7 @@ anyRootMatch : Int -> List (Mono, Loc) -> Bool
 anyRowSlotArg : List (String, Ref Effvar) -> List (String, Mono) -> List Ty -> Bool
 anySlotIsRow : Int -> List (List Ty, List String) -> Bool
 appArgLoc : Expr -> Option Loc
-appFallback : List (String, Ref Effvar) -> List (String, Mono) -> String -> List Ty -> Mono
+appFallback : List (String, Ref Effvar) -> List (String, Mono) -> TyConOrigin -> String -> List Ty -> Mono
 appSpineArgCount : Expr -> Int
 appSpineName : Expr -> Option String
 appendDataUniverse : List Decl -> Unit
@@ -565,7 +565,7 @@ freshTvMap : List String -> List (String, Mono)
 freshVar : Unit -> Mono
 freshVars : Int -> List Mono
 fromAstType : List (String, Mono) -> Ty -> Mono
-fromAstTypeApp : List (String, Ref Effvar) -> List (String, Mono) -> String -> List Ty -> Mono
+fromAstTypeApp : List (String, Ref Effvar) -> List (String, Mono) -> TyConOrigin -> String -> List Ty -> Mono
 fromAstTypeE : List (String, Ref Effvar) -> List (String, Mono) -> Ty -> Mono
 fromAstTypeVarApp : List (String, Ref Effvar) -> List (String, Mono) -> String -> List Ty -> Ty -> Ty -> Mono
 funArity : Mono -> Int
@@ -1164,15 +1164,15 @@ registerMethodDictSlots : String -> Int -> List Int -> List (Int, Mono) -> Unit
 registerMethodIfaceParamsAll : List Decl -> Unit
 registerMethodIfaceParamsDecl : Decl -> Unit
 registerMethodIfaceParamsMethods : String -> List String -> List (String, List Kind) -> List IfaceMethod -> Unit
-registerNamedFieldVariants : String -> List String -> List Variant -> Unit
+registerNamedFieldVariants : TyConOrigin -> String -> List String -> List Variant -> Unit
 registerOneAmbiguous : String -> List String -> Ty -> Mono -> Option Loc -> Int -> List Int -> List Int -> Unit
 registerOneMethodDict : String -> Int -> Int -> List (Int, Mono) -> Unit
 registerOpaqueParamKinds : List Decl -> Unit
 registerPredGiven : String -> List Mono -> String -> Unit
-registerRecordInfoKeyed : String -> String -> List String -> List Field -> Unit
+registerRecordInfoKeyed : TyConOrigin -> String -> String -> List String -> List Field -> Unit
 registerReqSlots : String -> List (String, Mono) -> Int -> List Require -> Unit
 registerSchemeObligations : Map String Int -> List (String, Ty, List (String, Mono)) -> List (String, List Mono, Option Loc) -> List (String, List String, Ty, Mono, Option Loc) -> List (String, Scheme) -> Unit
-registerVariants : TcEnv -> String -> List String -> List Variant -> TcEnv
+registerVariants : TyConOrigin -> TcEnv -> String -> List String -> List Variant -> TcEnv
 registersElementDict : String -> List String -> Bool
 rejectCyclicAliases : Unit -> Unit
 removeAllS : List String -> List String -> List String
@@ -1373,6 +1373,10 @@ tcHelp : TcDiag -> Option String
 tcLoc : TcDiag -> Option Loc
 tcMsg : TcDiag -> String
 tcSeverity : TcDiag -> Int
+tconBuiltin : String -> Mono
+tconFrom : TyConOrigin -> String -> Mono
+tconTupleHead : Int -> Mono
+tconUnresolved : String -> Mono
 toggles : Ref Toggles
 topRouteV : List Decl -> Map String (List ImplEntry) -> Map String (List KeyEntry) -> String -> Mono -> List Mono -> Route
 transitiveImporterDecls : String -> List (String, List Decl) -> List Decl

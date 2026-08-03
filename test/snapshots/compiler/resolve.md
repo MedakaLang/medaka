@@ -1,5 +1,5 @@
 # META
-source_lines=3910
+source_lines=3914
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted resolve stage — Stage 2 port of `lib/resolve.ml` (single-file
@@ -3431,12 +3431,14 @@ stampHeadWith t o = (TyCon { t | tyConOrigin = o }, True)
 --
 -- ⚠️ WHY THE OCCURRENCE LAYER IS NOT ENOUGH, i.e. why this is the blocker rather
 -- than a convenience.  `registerVariants` (`types/typecheck.mdk`) mints the head
--- `Mono` for every user data type out of the `DData` ALONE — `applyParams (TCon
--- name) paramReprs` — and that mono becomes each constructor's scheme return type,
--- hence the head every dispatch GOAL is read from.  There is no `Ty` in that path
--- to inherit an origin from, so until the declaration carries one the goal side of
--- the dispatch key cannot acquire identity at all (the impl side already has it
--- via `headTyconTy`).  The same declaration is also where interface identity
+-- `Mono` for every user data type out of the `DData` ALONE — and that mono becomes
+-- each constructor's scheme return type, hence the head every dispatch GOAL is read
+-- from.  There is no `Ty` in that path to inherit an origin from, so until the
+-- declaration carries one the goal side of the dispatch key cannot acquire identity
+-- at all (the impl side already has it via `headTyconTy`).  #1110 unit D closed
+-- that: `registerVariants` now takes `dataOrigin`/`newtypeOrigin` and mints the head
+-- through `tconFrom` (`types/typecheck.mdk`), which is exactly the consumer this
+-- carrier was landed for.  The same declaration is also where interface identity
 -- (#1047) and constructor identity (#1070) have to come from: interface names live
 -- on `DInterface`, constructor names in `DData`'s variants.
 --
@@ -3875,9 +3877,11 @@ flatTyOriginScope coreDecls =
 --
 -- The GRAPH drivers need no tap: `elaborateModules` RETURNS the stamped trees, so a
 -- probe reads them straight out of its own call.  The FLAT driver
--- (`checkProgramSeededSplit`) returns SCHEMES, and a `Mono.TCon` carries no origin
--- (that layer is blocked one level down — see #1110's scoping comment), so the trees
--- it stamped are otherwise unobservable from outside.  Hence this, and only this.
+-- (`checkProgramSeededSplit`) returns SCHEMES, not decl trees, so the trees it
+-- stamped are otherwise unobservable from outside.  Hence this, and only this.
+-- (`Mono.TCon` has carried an origin since #1110 unit D, so the schemes are no
+-- longer origin-free — but they only cover heads reaching a top-level binding's
+-- type, which is a strictly smaller set than the decls this tap retains.)
 --
 -- Shape is the established probe-flag idiom: `setFaithfulRoutes`
 -- (ir/core_ir_sexp.mdk), `gapRecordEnabled` (backend/llvm_emit.mdk).  OFF by
