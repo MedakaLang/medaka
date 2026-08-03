@@ -231,10 +231,15 @@ compiler/frontend/parser.mdk"
 # OriginUnresolved` and its two callers. `Mono` has no stamping pass and therefore no
 # immunity rule to make a wrong first write permanent, so the hazard the paragraph
 # above describes does not transfer -- what transfers is the weaker requirement that
-# a site claiming "no identity available" be deliberate and few. The Mono-layer
-# ratchet immediately below is what actually pins those, by LINE TEXT rather than by
-# filename, so this entry does not soften anything: it only stops a filename-grained
-# check from firing on a layer it cannot see.
+# a site claiming "no identity available" be deliberate and few.
+#
+# 🚨 BUT A FILENAME ENTRY EXEMPTS THE WHOLE 20k-LINE FILE, INCLUDING ANY FUTURE
+# `Ty`-LAYER `TyCon { …, tyConOrigin = OriginUnresolved }` LITERAL IN IT -- which is
+# precisely the bypass this ratchet's FAIL message exists to catch. Nothing is masked
+# today, and rather than accept the forward-looking softening the exemption is made
+# LINE-GRAINED by the companion check just below: the `OriginUnresolved`-bearing lines
+# of typecheck.mdk are pinned by text, so a `Ty`-layer literal added there fails even
+# though the filename is allow-listed.
 originun_allowed="compiler/entries/origin_agreement_main.mdk
 compiler/frontend/ast.mdk
 compiler/frontend/resolve.mdk
@@ -364,6 +369,30 @@ if [ "$originun_actual" != "$originun_allowed" ]; then
 fi
 echo "  ok: $(printf '%s\n' "$originun_actual" | grep -c .) OriginUnresolved constructor site(s)"
 
+# The LINE-GRAINED half of the typecheck.mdk entry above (see its comment). The
+# filename allow-list cannot tell the `Mono` layer from the `Ty` layer inside one
+# 20k-line file; this pins the exact lines, so a `Ty`-layer
+# `TyCon { …, tyConOrigin = OriginUnresolved }` literal added to typecheck.mdk fails
+# here even though the file is allow-listed.
+tc_originun_allowed="tconUnresolved n = TCon n OriginUnresolved"
+tc_originun_actual=$(grep -w 'OriginUnresolved' "$ROOT/compiler/types/typecheck.mdk" \
+  | sed 's/^[[:space:]]*//' \
+  | grep -vE '^--' \
+  | LC_ALL=C sort)
+if [ "$tc_originun_actual" != "$tc_originun_allowed" ]; then
+  echo "FAIL: the OriginUnresolved lines of compiler/types/typecheck.mdk changed."
+  echo "  allowed (the Mono-layer mint, and nothing else):"
+  printf '%s\n' "$tc_originun_allowed" | sed 's/^/    /'
+  echo "  actual:"
+  printf '%s\n' "$tc_originun_actual" | sed 's/^/    /'
+  echo "  typecheck.mdk is on \`originun_allowed\` for its \`Mono\`-layer mint ONLY."
+  echo "  A \`Ty\`-layer literal here bypasses \`tyConUnresolved\` and its ratchet; a"
+  echo "  NEW Mono-layer sentinel site needs the same justification the two existing"
+  echo "  callers carry at the call. Route it, or add the line here and say why."
+  exit 1
+fi
+echo "  ok: 1 Mono-layer OriginUnresolved line in typecheck.mdk, no Ty-layer literal"
+
 # ── #1110 unit D: the `Mono.TCon` MINT SET ──────────────────────────────────
 # `Mono.TCon` (compiler/types/typecheck.mdk) carries a `TyConOrigin` — the GOAL side
 # of a dispatch key, the peer of the impl side's `headTyconTy`. Unlike the `Ty` layer
@@ -378,9 +407,38 @@ echo "  ok: $(printf '%s\n' "$originun_actual" | grep -c .) OriginUnresolved con
 # than re-deriving what a bare third argument meant at ~90 sites.
 #
 # HOW IT TELLS A CONSTRUCTION FROM A PATTERN: nothing reads the origin field yet, so
-# every PATTERN leaves its origin slot `_`. A line mentioning `TCon` whose origin slot
+# every PATTERN leaves its origin slot `_`. An occurrence of `TCon` whose origin slot
 # is anything else is therefore a construction (or a pattern that binds the origin —
 # see the remedy).
+#
+# 🚨 IT FILTERS PER OCCURRENCE, NOT PER LINE, AND THE DIFFERENCE IS A PROVEN HOLE.
+# The first cut of this ratchet dropped any LINE matching the pattern shape, so a line
+# carrying BOTH a pattern and a construction vanished whole. Measured against the head
+# blob at the time:
+#   baseline                                        -> 5 lines (decl + 4 mints)
+#   + `rogue (TCon a _) = TCon a OriginBuiltin`      -> 5 lines, IDENTICAL: invisible
+#   + `rogue2 x = TCon x OriginBuiltin` (own line)   -> 6 lines, caught
+# 35 lines in the file already match the pattern shape and could host one — including
+# `unifyN (ta@(TCon a _)) (tb@(TCon b _))` and `cohGoR _ (TCon a _) (TCon b _)`, i.e.
+# exactly where the next unit edits. So patterns are ERASED IN PLACE (`sed …//g`) and
+# whatever `TCon` survives is reported. ⚠️ A reported line therefore shows GAPS where
+# a pattern stood — probe B below reports `rogueA () = TCon a OriginBuiltin` — and
+# that is the erasure, not a corrupted source line.
+#
+# The trailing-comment strip in front of it closes the false positive that WAS this
+# ratchet's masking path: a side comment mentioning `TCon` survives the `^--` filter,
+# fails the gate, and cannot sensibly be "added to the list of mints" — so the only
+# available response would have been the one thing the remedy below forbids.
+#
+# 🔬 POSITIVE CONTROL — append each to compiler/types/typecheck.mdk, rerun this gate,
+# restore. Re-run ALL FOUR if you touch the filter; a green here means nothing unless
+# B and C both fail and D does not.
+#   A  (unmodified)                                  -> ok, 4 mints
+#   B  rogueA (TCon a _) = TCon a OriginBuiltin      -> FAIL   (construction sharing a
+#                                                       line with a pattern: the hole)
+#   C  rogueB x = TCon x OriginBuiltin               -> FAIL   (own line)
+#   D  rogueC : Int -> Int  -- a note about TCon     -> ok     (side comment, not a
+#                                                       construction: no false positive)
 #
 # 🚨 REMEDY WHEN THIS FIRES: add the offending LINE to `mono_tcon_allowed` and justify
 # it in the PR — never widen the regex. Widening is the masking path: the filter's
@@ -396,7 +454,9 @@ tconUnresolved n = TCon n OriginUnresolved"
 mono_tcon_actual=$(grep -wE 'TCon' "$ROOT/compiler/types/typecheck.mdk" \
   | sed 's/^[[:space:]]*//' \
   | grep -vE '^--' \
-  | grep -vE 'TCon (_|[A-Za-z0-9_]+|"[A-Za-z0-9_]+") _' \
+  | sed -E 's/[[:space:]]--[[:space:]].*$//' \
+  | sed -E 's/TCon (_|[A-Za-z0-9_]+|"[A-Za-z0-9_]+") _//g' \
+  | grep -wE 'TCon' \
   | LC_ALL=C sort)
 mono_tcon_expected=$(printf '%s\n' "$mono_tcon_allowed" | LC_ALL=C sort)
 if [ "$mono_tcon_actual" != "$mono_tcon_expected" ]; then
@@ -418,14 +478,39 @@ fi
 echo "  ok: $(($(printf '%s\n' "$mono_tcon_expected" | grep -c .) - 1)) Mono.TCon mint(s), no other construction site"
 
 # The names `tconBuiltin` claims as language-provided must be exactly that, and the
-# authority is resolve's own `primitiveTypes` -- the SAME list `builtinTyOrigins`
-# answers the `Ty` layer from. Reading one list from both layers is what makes it
-# impossible for them to disagree about a builtin; a second hand-kept list here would
-# be a second place to get it wrong.
+# authority is resolve's own `primitiveTypes` rather than a second hand-kept list here.
+#
+# ⚠️ WHAT THIS CHECK ACTUALLY BUYS, stated because the first cut claimed something
+# stronger and false ("one list read by both layers, so they cannot disagree"). The
+# `Ty` layer does NOT answer *from* `primitiveTypes`: `tyOriginScope`
+# (compiler/frontend/resolve.mdk) is a LAST-WINS fold whose builtin layer has the
+# LOWEST precedence, under prelude, imports and the module's own declarations. What
+# closes the gap is a different fact -- `primitiveTypes` is ALSO the duplicate-type
+# seed (`duplicateErrors`'s `typeSeed = primitiveTypes ++ …`, unconditional), so no
+# module can declare one of these names at all and the higher layers are empty at
+# them. Measured: `data List a = …` -> `Duplicate type: List`.
+#
+# 🚨 THEREFORE THIS CHECK IS MEMBERSHIP, NOT AGREEMENT, AND CANNOT SEE THE DAY THAT
+# CHANGES. If duplicate-type rejection is ever relaxed -- resolve's own comment
+# contemplates "a future prelude `data List`" -- an occurrence would carry
+# `OriginModule "core"` while `tconBuiltin "List"` still hands out `OriginBuiltin`,
+# and this gate would stay GREEN. Whoever relaxes it owes both sites.
 prim_block=$(sed -n '/^primitiveTypes : List String$/,/^$/p' "$ROOT/compiler/frontend/resolve.mdk")
+prim_names=$(grep -oE 'tconBuiltin "[A-Za-z0-9_]+"' "$ROOT/compiler/types/typecheck.mdk" \
+             | sed 's/.*"\(.*\)"/\1/' | LC_ALL=C sort -u)
+# ⚠️ COUNTED, not just checked: an empty `prim_names` would walk zero iterations and
+# print the same `ok` line as a full pass -- the "a validator that checked nothing
+# reads exactly like one that passed" shape the anti-vacuity guards elsewhere in this
+# suite exist for. The four ratchets above all print counts; this one now does too.
+prim_n=$(printf '%s\n' "$prim_names" | grep -c .)
+if [ "$prim_n" -eq 0 ]; then
+  echo "FAIL: no \`tconBuiltin \"<name>\"\` call sites found in typecheck.mdk at all."
+  echo "  This check just asserted nothing. Either the mint was renamed (update the"
+  echo "  grep) or every builtin head moved to another mint (say which, and why)."
+  exit 1
+fi
 prim_bad=""
-for n in $(grep -oE 'tconBuiltin "[A-Za-z0-9_]+"' "$ROOT/compiler/types/typecheck.mdk" \
-           | sed 's/.*"\(.*\)"/\1/' | LC_ALL=C sort -u); do
+for n in $prim_names; do
   case "$prim_block" in
     *"\"$n\""*) ;;
     *) prim_bad="$prim_bad $n" ;;
@@ -435,12 +520,13 @@ if [ -n "$prim_bad" ]; then
   echo "FAIL: \`tconBuiltin\` is claiming §8 I6.2(a)'s program-global identity for"
   echo "  head(s) that are NOT in compiler/frontend/resolve.mdk's \`primitiveTypes\`:"
   printf '    %s\n' $prim_bad
-  echo "  A head some module DECLARES is not builtin -- the two layers would then"
-  echo "  disagree about it. Use \`tconFrom\` with the acquired origin, or"
-  echo "  \`tconUnresolved\` if this site genuinely has no source for one."
+  echo "  A name outside that list CAN be declared by a module (it is the same list"
+  echo "  duplicate-type rejection seeds from), so the Ty layer would attribute it to"
+  echo "  that module while this mint calls it builtin. Use \`tconFrom\` with the"
+  echo "  acquired origin, or \`tconUnresolved\` if this site genuinely has none."
   exit 1
 fi
-echo "  ok: every tconBuiltin head is in resolve's primitiveTypes"
+echo "  ok: $prim_n distinct tconBuiltin head(s), all in resolve's primitiveTypes"
 
 # ── #1110/#1226 carrier-completeness ratchet ────────────────────────────────
 # `declHeadOf` (compiler/entries/origin_agreement_main.mdk) has a wildcard fallback

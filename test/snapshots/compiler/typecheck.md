@@ -1,5 +1,5 @@
 # META
-source_lines=20191
+source_lines=20210
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted typecheck stage — port of lib/typecheck.ml's HM core.  SLICE 1:
@@ -221,9 +221,28 @@ public export data Tyvar =
 -- A head the LANGUAGE provides, written here as a string literal.  §8 I6.2(a):
 -- ONE program-global identity, NOT the identity of whichever module wrote it,
 -- or two modules' `(Int, Int)` stop being the same type — silently.  Every name
--- passed here must be in `frontend/resolve.mdk`'s `primitiveTypes`, which is the
--- list the `Ty` layer answers from too, so the two layers cannot disagree about
--- a builtin by construction.  Pinned by the gate.
+-- passed here must be in `frontend/resolve.mdk`'s `primitiveTypes`; the gate
+-- pins that.
+--
+-- ⚠️ WHY THAT MEMBERSHIP IS ENOUGH — and it is NOT "the `Ty` layer answers from
+-- the same list", which is what this comment said first and is false.  The `Ty`
+-- layer answers from `tyOriginScope`, a LAST-WINS fold in which the builtin layer
+-- has the LOWEST precedence (`frontend/resolve.mdk`) — so membership alone would
+-- not stop an own/prelude/import layer from overriding a name this mint still
+-- calls builtin.  What actually closes it is that `primitiveTypes` is ALSO the
+-- duplicate-type seed: `duplicateErrors`'s `typeSeed = primitiveTypes ++ …`
+-- (unconditionally, `programIsCore` gates only the prelude term), so NO module —
+-- not even `stdlib/core.mdk` — can declare one.  Measured: `data List a = …`,
+-- `data Int = Foo`, `data Ref a = …` each give `Duplicate type: <N>`.  The higher
+-- layers are therefore empty at these names, which is exactly what resolve's own
+-- comment means by *"the prelude beats builtins only vacuously (they are disjoint
+-- today)"*.
+--
+-- 🚨 SO THE PROPERTY IS CONDITIONAL ON THAT REJECTION.  Relax duplicate-type
+-- rejection — resolve's comment already contemplates *"a future prelude `data
+-- List`"* — and an occurrence of `List` carries `OriginModule "core"` while this
+-- mint still hands out `OriginBuiltin`.  The gate stays GREEN, because it checks
+-- MEMBERSHIP, not AGREEMENT.  Whoever relaxes it owes this site.
 tconBuiltin : String -> Mono
 tconBuiltin n = TCon n OriginBuiltin
 
