@@ -42,6 +42,28 @@ core decl:Semigroup AGREE AGREE AGREE
 core decl:Slice AGREE AGREE AGREE
 core decl:Thenable AGREE AGREE AGREE
 core decl:Traversable AGREE AGREE AGREE
+core iface:Alternative AGREE AGREE AGREE
+core iface:Applicative AGREE AGREE AGREE
+core iface:Arbitrary AGREE AGREE AGREE
+core iface:Bimappable AGREE AGREE AGREE
+core iface:Bounded AGREE AGREE AGREE
+core iface:Debug AGREE AGREE AGREE
+core iface:Display AGREE AGREE AGREE
+core iface:Eq AGREE AGREE AGREE
+core iface:Filterable AGREE AGREE AGREE
+core iface:Foldable AGREE AGREE AGREE
+core iface:Generic AGREE AGREE AGREE
+core iface:Hashable AGREE AGREE AGREE
+core iface:Index AGREE AGREE AGREE
+core iface:IndexMut AGREE AGREE AGREE
+core iface:Mappable AGREE AGREE AGREE
+core iface:Monoid AGREE AGREE AGREE
+core iface:Num AGREE AGREE AGREE
+core iface:Ord AGREE AGREE AGREE
+core iface:Semigroup AGREE AGREE AGREE
+core iface:Slice AGREE AGREE AGREE
+core iface:Thenable AGREE AGREE AGREE
+core iface:Traversable AGREE AGREE AGREE
 main_unresolved Int AGREE AGREE AGREE
 main_unresolved Missing NEITHER NEITHER NEITHER
 main_unresolved Parcel R-ONLY CONFLICT R-ONLY
@@ -109,12 +131,38 @@ decl:Semigroup 1 mod:core
 decl:Slice 1 mod:core
 decl:Thenable 1 mod:core
 decl:Traversable 1 mod:core
+iface:Alternative 1 mod:core
+iface:Applicative 1 mod:core
+iface:Arbitrary 1 mod:core
+iface:Bimappable 1 mod:core
+iface:Bounded 1 mod:core
+iface:Debug 1 mod:core
+iface:Display 1 mod:core
+iface:Eq 1 mod:core
+iface:Filterable 1 mod:core
+iface:Foldable 1 mod:core
+iface:Generic 1 mod:core
+iface:Hashable 1 mod:core
+iface:Index 1 mod:core
+iface:IndexMut 1 mod:core
+iface:Mappable 1 mod:core
+iface:Monoid 1 mod:core
+iface:Num 1 mod:core
+iface:Ord 1 mod:core
+iface:Semigroup 1 mod:core
+iface:Slice 1 mod:core
+iface:Thenable 1 mod:core
+iface:Traversable 1 mod:core
 === SUMMARY ===
 modules 1
 graph-modules 1
 flat-segments 2
 decl-heads 29
-heads 46
-claims 138
+iface-occs-constraintOrigin 43
+iface-occs-superOrigin 10
+iface-occs-requireOrigin 93
+iface-occs-implOrigin 117
+heads 68
+claims 204
 residual 5
 conflicts 2

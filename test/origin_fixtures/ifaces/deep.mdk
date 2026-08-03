@@ -1,0 +1,10 @@
+-- #1110 PR C corpus — the DEFINER end of the declare-and-re-export chain.
+--
+-- `Relay` is declared here and re-exported by `mid.mdk`, which ALSO declares a
+-- `Relay` of its own.  See mid.mdk for what that pins (#1245).  Nothing in this
+-- module ever writes a `Relay` occurrence, so `deep` contributes a `decl:Relay` row
+-- and no `iface:Relay` one — which is what makes the single `iface:Relay` row in
+-- the golden unambiguously attributable to `main_ifaces`.
+
+export interface Relay a where
+  via : a -> Int

@@ -77,10 +77,11 @@
 # for the stampers ("a probe that hand-picks its arguments re-encodes the assumption
 # it exists to test"), turned on one of its own arms; naming it is the minimum.
 #
-# ── TWO LAYERS: `<Name>` is an OCCURRENCE, `decl:<Name>` is a DECLARATION ─────
-# The two are stamped by DIFFERENT functions on DIFFERENT paths — `stampTyOrigins`
-# walks every `Ty` position, `stampDeclOrigins` fills the decl nodes' own carriers —
-# so they are reported in separate namespaces (`:` cannot occur in a Medaka type
+# ── THREE LAYERS: `<Name>` occurrence, `decl:<Name>` declaration, `iface:<Name>` ─
+# They are stamped by DIFFERENT functions on DIFFERENT paths — `stampTyOrigins`
+# walks every `Ty` position, `stampDeclOrigins` fills the decl nodes' own carriers,
+# `fillIfaceOccOrigin` fills the four interface-OCCURRENCE carriers — so they are
+# reported in separate namespaces (`:` cannot occur in a Medaka type or interface
 # name). Until this gate was widened, `noteHead` matched `TyCon` only, and since it
 # is driven through `mapTyInDecl` — a `Ty`-POSITION rewrite — no callback it is
 # handed could ever reach a decl-node field. The whole decl layer was therefore
@@ -89,6 +90,15 @@
 # is never a `TyCon` (it is a constraint predicate, not a type constructor), so
 # before this widening `interface Weighable` had no representation in this gate at
 # all, and `#1047`'s interface-identity carrier was ungraded by construction.
+#
+# 🚨 THE `iface:` PREFIX IS A CORRECTNESS REQUIREMENT, NOT A LABEL. Medaka keeps
+# type names and interface names in SEPARATE NAMESPACES — one file may declare both
+# `data Foo = Foo` and `interface Foo a where …` and check clean — so an interface
+# occurrence pushed in under the BARE name would share a key with a type occurrence
+# and be graded against it. Both sides are typed `TyConOrigin`, so that comparison
+# is type-correct and therefore invisible; within one arm and slot it reads as
+# `ArmMulti`, i.e. a CONFLICT manufactured by this gate's own keying. Do not
+# "simplify" the prefix away.
 #
 # ⚠️ The flat arm is silent for the USER half of the decl layer, by design, and
 # that is not a defect to fix: `checkProgramSeededSplit` (types/typecheck.mdk)
@@ -178,6 +188,26 @@
 #                        UPDATE would do it), every `decl:` row vanishes at once.
 #                        Rows vanishing en masse is a shape a golden diff shows but
 #                        does not INTERPRET, and the interpretation is the point.
+#   iface-occs-*   > 0   the same guard for the INTERFACE-occurrence layer, which is
+#                        equally unreachable from a `Ty` callback: a `=>` predicate's
+#                        origin lives on a `Constraint`, and `Super`/`Require`/
+#                        `DImpl.iface` are decl FIELDS. FOUR counts, one per carrier,
+#                        deliberately: a merged total stays healthily large while the
+#                        smallest population (`superOrigin`) goes entirely dead.
+#
+#                        ⚠️ IT COUNTS POSITIONS VISITED, NOT ORIGINS ACQUIRED. The
+#                        probe's `bumpCarrier` ignores the origin value entirely, so
+#                        this guard catches the carrier becoming UNREACHABLE — the
+#                        field disappearing from the AST, `mapOriginsInDecl` losing
+#                        an arm, `elaborateModules` dropping decls, or the tag
+#                        string diverging between resolve.mdk's call sites and the
+#                        probe's `ifaceCarriers` list. It does NOT catch a stamp
+#                        that ran and produced nothing: a rebuild through
+#                        constraintUnresolved / requireUnresolved / superUnresolved /
+#                        dImplUnresolved leaves the position count UNCHANGED and this
+#                        guard GREEN. That failure surfaces in the GOLDEN DIFF, as
+#                        `iface:` rows moving out of the table into RESIDUAL — see
+#                        the moved-row list at the bottom of this header.
 #   fixtures       > 0   the corpus glob matched something
 #
 # ── OWED, not built here (#1222) ────────────────────────────────────────────
@@ -255,6 +285,35 @@ for dir in "$FIXDIR"/*/; do
   heads="$(printf '%s\n' "$summary" | awk '$1 == "heads" { print $2 }')"
   segs="$(printf '%s\n' "$summary" | awk '$1 == "flat-segments" { print $2 }')"
   declheads="$(printf '%s\n' "$summary" | awk '$1 == "decl-heads" { print $2 }')"
+  # One count PER interface-occurrence carrier, never a merged total: `superOrigin`
+  # is the smallest population in every corpus here, so a merged number would stay
+  # healthily large with that carrier entirely dead.
+  #
+  # ⚠️ TWO PASSES, and they catch OPPOSITE mistakes. The hardcoded list catches a
+  # carrier that STOPPED being reported (its line is gone, so the lookup is empty).
+  # It is blind to the reverse: a FIFTH carrier wired into the probe's
+  # `ifaceCarriers` prints an `iface-occs-<new>` line that this loop never names, so
+  # it would land in the golden graded by nothing — the exact "populated and read by
+  # no one" state the #1110 ratchets exist to refuse. The derived pass below reads
+  # whatever the probe actually emitted and guards every line, named or not.
+  ifaceoccs=""
+  iface_bad=""
+  for c in constraintOrigin superOrigin requireOrigin implOrigin; do
+    n="$(printf '%s\n' "$summary" | awk -v k="iface-occs-$c" '$1 == k { print $2 }')"
+    is_count "$n" || iface_bad="$iface_bad $c=${n:-<missing>}"
+    ifaceoccs="$ifaceoccs $c=${n:-?}"
+  done
+  # Derived: every `iface-occs-*` line the probe emitted must be a positive count,
+  # including one this script has never heard of.
+  emitted_carriers="$(printf '%s\n' "$summary" | awk '/^iface-occs-/ { print $1 "=" $2 }')"
+  for kv in $emitted_carriers; do
+    ck="${kv%%=*}"
+    cv="${kv#*=}"
+    is_count "$cv" || iface_bad="$iface_bad ${ck#iface-occs-}=${cv:-<missing>}"
+  done
+  if [ -z "$emitted_carriers" ]; then
+    iface_bad="$iface_bad <no iface-occs-* line emitted at all>"
+  fi
   nconf="$(printf '%s\n' "$summary" | awk '$1 == "conflicts" { print $2 }')"
   nresid="$(printf '%s\n' "$summary" | awk '$1 == "residual" { print $2 }')"
 
@@ -285,6 +344,23 @@ for dir in "$FIXDIR"/*/; do
     fail=$((fail + 1))
     continue
   fi
+  if [ -n "$iface_bad" ]; then
+    echo "FAIL $name: interface-occurrence carrier(s) with no observations:$iface_bad"
+    echo "     The graph arm never VISITED that carrier's positions, so every"
+    echo "     'iface:' row it contributes to the golden is asserting nothing."
+    echo "     This counts positions visited, NOT origins acquired, so the causes are:"
+    echo "       - the field is gone from Constraint/Super/Require/DImpl in ast.mdk;"
+    echo "       - resolve's mapOriginsInDecl / mapIfaceOccDeclLocal lost an arm;"
+    echo "       - elaborateModules stopped returning those decls;"
+    echo "       - the carrier tag string diverged between resolve.mdk's call sites"
+    echo "         and the probe's ifaceCarriers list (a typo on either side)."
+    echo "     NOT a cause: a rebuild through constraintUnresolved / requireUnresolved"
+    echo "     / superUnresolved / dImplUnresolved. That still VISITS every position,"
+    echo "     so it leaves these counts unchanged; it shows up in the golden diff as"
+    echo "     'iface:' rows moving from the table into RESIDUAL instead."
+    fail=$((fail + 1))
+    continue
+  fi
   # ⚠️ `residual` is deliberately NOT guarded as > 0 or == 0. Its correct value is a
   # property of the CORPUS, not an invariant (see the residual notes in the header),
   # so the golden is the only assertion. It is read here purely to be reported.
@@ -294,8 +370,8 @@ for dir in "$FIXDIR"/*/; do
 
   if [ "${CAPTURE:-0}" = "1" ]; then
     printf '%s' "$out" > "$golden"
-    printf 'blessed %s (%s heads incl. %s decl-layer, %s conflicting, %s residual)\n' \
-      "$name" "$heads" "$declheads" "${nconf:-?}" "$nresid"
+    printf 'blessed %s (%s heads incl. %s decl-layer, iface-occ:%s, %s conflicting, %s residual)\n' \
+      "$name" "$heads" "$declheads" "$ifaceoccs" "${nconf:-?}" "$nresid"
     pass=$((pass + 1))
     continue
   fi
@@ -307,8 +383,8 @@ for dir in "$FIXDIR"/*/; do
   fi
 
   if printf '%s' "$out" | diff -u "$golden" - > /dev/null 2>&1; then
-    printf 'ok   %s (%s heads incl. %s decl-layer, %s conflicting, %s residual, tap fired %s times)\n' \
-      "$name" "$heads" "$declheads" "${nconf:-?}" "$nresid" "$segs"
+    printf 'ok   %s (%s heads incl. %s decl-layer, iface-occ:%s, %s conflicting, %s residual, tap fired %s times)\n' \
+      "$name" "$heads" "$declheads" "$ifaceoccs" "${nconf:-?}" "$nresid" "$segs"
     pass=$((pass + 1))
   else
     printf 'FAIL %s — the agreement table MOVED:\n' "$name"
@@ -325,6 +401,13 @@ for dir in "$FIXDIR"/*/; do
     echo "                           because the immunity rule makes a first stamp final."
     echo "    every 'decl:' row gone  the decl-layer carriers stopped reaching the"
     echo "                           returned trees. See the decl-heads guard above."
+    echo "    'iface:' rows -> RESIDUAL en masse   an interface occurrence is being"
+    echo "                           REBUILT rather than record-UPDATEd — the"
+    echo "                           constraintUnresolved / requireUnresolved /"
+    echo "                           superUnresolved / dImplUnresolved shape. The"
+    echo "                           iface-occs-* guards CANNOT see this (they count"
+    echo "                           positions visited, not origins acquired), so this"
+    echo "                           diff is the only place it shows."
     fail=$((fail + 1))
   fi
 done
