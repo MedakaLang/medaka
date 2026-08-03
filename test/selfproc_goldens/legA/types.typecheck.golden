@@ -131,7 +131,7 @@ bucketKeyEntriesFrom : Int -> List KeyEntry -> Map String (List KeyEntry) -> Map
 bucketOf : String -> Map String (List a) -> List a
 bucketRecvMatch : List (List Ty, List Require) -> Mono -> Bool
 buildAdj : List String -> Map String Unit -> Map String (List (List Pat, Expr)) -> Map String (List String) -> Map String (List String)
-buildAliasGraphEntry : List String -> (String, (List String, Ty)) -> (String, List String)
+buildAliasGraphEntry : List String -> (TabKey, (List String, Ty)) -> (String, List String)
 buildDefinerShadows : List Decl -> List Decl -> List String
 buildImplTable : List Decl -> Map String (List ImplEntry)
 buildImplUniverse : List Decl -> ImplUniverse
@@ -167,7 +167,7 @@ checkEffectParamsTy : Ty -> Unit
 checkEffectParamsTys : List Ty -> Unit
 checkErrorsWithRuntime : List Decl -> List Decl -> List Decl -> Bool
 checkGradedImplHead : String -> Ty -> List Kind -> Unit
-checkGradedImplHeadCon : String -> String -> Option Loc -> Int -> List Kind -> Unit
+checkGradedImplHeadCon : String -> TyConOrigin -> String -> Option Loc -> Int -> List Kind -> Unit
 checkGradedImplHeadDecl : Decl -> Unit
 checkGradedImplHeadKinds : String -> String -> Option Loc -> Int -> List Kind -> List Kind -> Unit
 checkGradedImplHeads : List Decl -> Unit
@@ -606,7 +606,7 @@ headAnnotTy : Ty -> Mono
 headCollides : Map String (List KeyEntry) -> String -> String -> Bool
 headCollidesByIface : Map String (List KeyEntry) -> String -> String -> Bool
 headL : List String -> String
-headRemainingKinds : String -> Int -> Option (List Kind)
+headRemainingKinds : TyConOrigin -> String -> Int -> Option (List Kind)
 headSubstWithParams : Ty -> List Ty -> Mono -> List Mono -> Option (List (String, Mono))
 headTyconMono : Mono -> Option String
 headTyconTy : Ty -> Option String
@@ -835,7 +835,7 @@ kindsEq : List Kind -> List Kind -> Bool
 kpLcp : String -> String -> KP
 krowArgVarNames : List Kind -> List Ty -> List String
 krowEtbl : List String -> List Kind -> List Mono -> List (String, Ref Effvar)
-krowSlotOccs : Bool -> String -> List Ty -> List (String, List Atom)
+krowSlotOccs : Bool -> TyConOrigin -> String -> List Ty -> List (String, List Atom)
 ktypeTvs : List String -> List Kind -> List Mono -> List (String, Mono)
 lamUnderLoc : Expr -> Option (Option Loc, List Pat, Expr)
 lastComponent : List String -> String
@@ -965,6 +965,7 @@ noImplAdvice : String -> String -> String
 noImplFoundMsg : String -> List Mono -> String
 noImplFoundMsgHinted : String -> List Mono -> (String, Option String)
 noImplHint : String -> List Mono -> Option String
+noImplHintFor : String -> String -> Option String
 noMinimumClause : Int -> String
 nonExhaustiveMatchWarning : String
 nonExhaustiveMsg : Mono -> List (List Pat) -> (String, Option String)
@@ -1123,7 +1124,7 @@ recordMethodLevelSlotObls : List (String, String) -> List (String, Mono) -> Unit
 recordMethodObligationGuarded : TcEnv -> String -> Scheme -> Mono -> Mono
 recordNumlitLoc : Mono -> Unit
 recordObl : Predicate -> Int -> Provenance -> Option Loc -> Unit
-recordParamKinds : String -> List Kind -> Unit
+recordParamKinds : TyConOrigin -> String -> List Kind -> Unit
 recordPinnedLocals : String -> Option Loc -> List Int -> List (Int, String) -> Mono -> Bool
 recordPinnedLocalsGeneric : String -> Option Loc -> List Int -> List Int -> Mono -> Bool
 recordRLocalSite : TcEnv -> String -> Ref Route -> Mono -> Unit
@@ -1249,7 +1250,7 @@ routesOfMonos : Map String (List ImplEntry) -> Map String (List KeyEntry) -> Lis
 routesOfMonosTop : List Decl -> Map String (List ImplEntry) -> Map String (List KeyEntry) -> List Mono -> List String -> List Route
 routesOfMonosTopV : List Decl -> Map String (List ImplEntry) -> Map String (List KeyEntry) -> List Mono -> List String -> List (List Mono) -> List Route
 rowArgNames : Ty -> List String
-rowArgNamesApp : List (String, List Kind) -> String -> List Ty -> List String -> List String
+rowArgNamesApp : List (String, List Kind) -> TyConOrigin -> String -> List Ty -> List String -> List String
 rowArgNamesIn : List (String, List Kind) -> Ty -> List String
 rowArgNamesVarApp : List (String, List Kind) -> String -> List Ty -> List String -> List String
 rowArgOf : List (String, Ref Effvar) -> Ty -> EffRow
@@ -1406,6 +1407,7 @@ tyStrictlyMoreSpecificV : List Ty -> List Ty -> Bool
 tyStructEq : Ty -> Ty -> Bool
 tyStructEqList : List Ty -> List Ty -> Bool
 tySubsumesV : List Ty -> List Ty -> Bool
+tyTabKey : TyConOrigin -> String -> TabKey
 tyVarArgNames : List Ty -> List String
 tyVarNames : Ty -> List String
 tyVarNamesWithConstraints : Ty -> List String
