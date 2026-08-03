@@ -1,0 +1,11 @@
+-- #1111 A-2.3 BYSTANDER: half one of the SAME-NAME COLLISION the entry never
+-- names.  `Dup` (a KRow slot 0) and `Shared` (an alias to Int) are both also
+-- declared by `dupz.mdk`, at the same arity, with different meanings.  The entry
+-- imports only `da` from here, so the collision is present IN THE GRAPH and
+-- absent from everything the golden asserts about.
+public export data Dup e a = MkDupA (Unit -> <e> a)
+
+export type Shared = Int
+
+export da : Int -> Int
+da n = n
