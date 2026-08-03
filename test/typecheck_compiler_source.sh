@@ -487,8 +487,13 @@ echo "  ok: $(($(printf '%s\n' "$mono_tcon_expected" | grep -c .) - 1)) Mono.TCo
 # LOWEST precedence, under prelude, imports and the module's own declarations. What
 # closes the gap is a different fact -- `primitiveTypes` is ALSO the duplicate-type
 # seed (`duplicateErrors`'s `typeSeed = primitiveTypes ++ …`, unconditional), so no
-# module can declare one of these names at all and the higher layers are empty at
-# them. Measured: `data List a = …` -> `Duplicate type: List`.
+# module can declare a TYPE of one of these names and the higher layers are empty at
+# those keys. Measured: `data List a = …` -> `Duplicate type: List`.
+#
+# ⚠️ Only the TYPE namespace: `primitiveTypes` does not seed `ifaceSeed`, so
+# `interface Int a where …` is accepted (measured, exit 0). It cannot collide here
+# because interfaces are keyed `iface:<Name>` while the builtin layer holds the bare
+# name -- witness `test/references_fixtures/iface_ty_collide/`.
 #
 # 🚨 THEREFORE THIS CHECK IS MEMBERSHIP, NOT AGREEMENT, AND CANNOT SEE THE DAY THAT
 # CHANGES. If duplicate-type rejection is ever relaxed -- resolve's own comment

@@ -1,5 +1,5 @@
 # META
-source_lines=20210
+source_lines=20218
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted typecheck stage — port of lib/typecheck.ml's HM core.  SLICE 1:
@@ -232,11 +232,19 @@ public export data Tyvar =
 -- calls builtin.  What actually closes it is that `primitiveTypes` is ALSO the
 -- duplicate-type seed: `duplicateErrors`'s `typeSeed = primitiveTypes ++ …`
 -- (unconditionally, `programIsCore` gates only the prelude term), so NO module —
--- not even `stdlib/core.mdk` — can declare one.  Measured: `data List a = …`,
--- `data Int = Foo`, `data Ref a = …` each give `Duplicate type: <N>`.  The higher
--- layers are therefore empty at these names, which is exactly what resolve's own
--- comment means by *"the prelude beats builtins only vacuously (they are disjoint
--- today)"*.
+-- not even `stdlib/core.mdk` — can declare a TYPE of that name.  Measured:
+-- `data List a = …`, `data Int = Foo`, `data Ref a = …` each give `Duplicate
+-- type: <N>`.  The higher layers are therefore empty at these keys, which is
+-- exactly what resolve's own comment means by *"the prelude beats builtins only
+-- vacuously (they are disjoint today)"*.
+--
+-- ⚠️ "A TYPE of that name" is the load-bearing narrowing, and it needs a SECOND
+-- leg.  `primitiveTypes` seeds only `typeSeed`, not `ifaceSeed` — so an
+-- `interface Int a where …` is ACCEPTED (measured: exit 0, no diagnostic).  It
+-- cannot reach this key anyway, because interfaces are keyed `iface:<Name>`
+-- (`ifaceKey`/`ownIfaceOrigin`) while the builtin layer holds the BARE name, and
+-- the two namespaces are disjoint by construction.  In-tree witness:
+-- `test/references_fixtures/iface_ty_collide/`.
 --
 -- 🚨 SO THE PROPERTY IS CONDITIONAL ON THAT REJECTION.  Relax duplicate-type
 -- rejection — resolve's comment already contemplates *"a future prelude `data
