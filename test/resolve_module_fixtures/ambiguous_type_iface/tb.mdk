@@ -1,0 +1,10 @@
+-- The other declarer.  Same three names, no relationship to `ta` whatsoever.
+-- `speak` is spelled the same in both interfaces on purpose, so an `impl Speak …`
+-- below is method-valid whichever of the two the resolver happens to bind — the
+-- fixture then asserts the AMBIGUITY and not a downstream MethodNotInInterface.
+public export data Widget = MkB Int
+
+public export data Crate = Crate { crateSz : Int }
+
+export interface Speak a where
+  speak : a -> String

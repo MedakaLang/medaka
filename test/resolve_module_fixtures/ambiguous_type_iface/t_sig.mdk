@@ -1,0 +1,11 @@
+-- TYPE occurrence 1/3: a type name written in a SIGNATURE (`checkType`'s `TyCon`
+-- arm).  Exactly ONE occurrence of an ambiguous name in this module, because this
+-- gate's oracle parses UNLOCATED (every `Loc` is 0:0) and resolve dedups by
+-- message+location — so two occurrences of one name in one module collapse to one
+-- row and stop being independently observable.  One position per module is what
+-- makes each golden line trace back to a single arm of resolve.
+import ta.{Widget}
+import tb.{Widget}
+
+widen : Widget -> Int
+widen _ = 1

@@ -1,0 +1,10 @@
+-- INTERFACE occurrence 1/4: a `=>` predicate (`Constraint`, via `checkConstraint`).
+-- Its row is LOCATED (the oracle's dummy 0:0, a real span under the loader) because
+-- `checkType`'s `TyConstrained` arm widens `cur` with the constrained type's own
+-- first span — `Constraint` carries no `Loc` of its own, and without that widening a
+-- predicate written at decl level had no span anywhere in the AST.
+import ta.{Speak}
+import tb.{Speak}
+
+shout : Speak a => a -> Int
+shout _ = 1
