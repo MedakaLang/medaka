@@ -192,10 +192,12 @@ deriving (Eq, Ord, Debug)
 -- `identOriginOf` returns `None` there and no `Ident` can be built.  A-2's
 -- re-keying is therefore **Module-path-only**: the flat path keeps its
 -- bare-name tables until #1115 (E-1) gives it module ids.  That residual is
--- real and must not be overstated — what it does NOT cost is the S0s A-2
--- exists to drain (#1047 / #1069 / #1092 / #1090 / #1256 / #1257 / #1258 /
--- #1259), every one of which is a MULTI-MODULE shape and therefore on the
--- module path.  A-1 deferred this type saying it "needs the distinct
+-- real and must not be overstated — what it does NOT cost is the eight
+-- tracked defects A-2 exists to drain (S0: #1047, #1069, #1092, #1256;
+-- S1: #1257, #1258, #1259; S2: #1090 — read off the tracker 2026-08-03, not
+-- all "S0" as an earlier draft of this line said).  Every one of the eight
+-- is a TWO-UNRELATED-MODULES collision, i.e. a multi-module shape, and
+-- therefore on the module path.  A-1 deferred this type saying it "needs the distinct
 -- pre-resolve type §8 I6.3 really asks for (A-1's option 1), which is not
 -- reachable from a byte-identical PR"; A-2's bar is explicitly not
 -- byte-identical, so A-2 is where it belongs.
