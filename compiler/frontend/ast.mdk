@@ -105,38 +105,161 @@ public export data TyConOrigin =
 -- `Ns` + `Ident` generalize `TyConOrigin` from "which module declared this
 -- TYPE head" to "which module declared this declaration, IN WHICH
 -- NAMESPACE" — the substrate the Stage A-2 table-conversion units (each its
--- own PR) re-key their `universe*`/method/record/kind tables onto. See
--- `compiler/types/registry.mdk`, which hosts the `Registry`/`MultiRegistry`/
--- `SetRegistry` combinators built on top of `Ident` (kept out of THIS file
--- because those combinators need `support/ordmap.mdk`, and `ast.mdk` — a
--- ~26-gate import surface — should not gain that dependency for a handful of
--- map-shaped helper functions; `Ns`/`Ident` themselves are plain data with no
--- such dependency, so they belong beside the `TyConOrigin` they wrap).
+-- own PR) re-key their `universe*`/method/record/kind tables onto.  The
+-- `Registry`/`MultiRegistry`/`SetRegistry` combinators built on top of
+-- `Ident` live in `compiler/types/registry.mdk`: they need
+-- `support/ordmap.mdk`, a dependency this file has no other reason to gain.
+-- `Ns`/`IdentOrigin`/`Ident` are plain data with no such dependency, so they
+-- sit beside the `TyConOrigin` they are derived from.
+--
+-- ── Gate cost of that split — MEASURED 2026-08-03 ──────────────────────────
+-- ⚠️ DERIVE, do not trust these three numbers.  One command per path:
+--   PREFLIGHT_DRY=1 PREFLIGHT_CHANGED_FILE=<file naming ONE path> sh test/preflight.sh
+-- As measured on this tree: `compiler/frontend/ast.mdk` selects **16** gates;
+-- `compiler/types/registry.mdk` selects **25** — the byte-identical set that
+-- `compiler/types/typecheck.mdk` selects, so the new module costs a later
+-- A-2 unit NOTHING (each such unit edits `typecheck.mdk` anyway).
+-- `compiler/support/util.mdk` selects **103** (`test/preflight.sh`'s
+-- `mark_full` blast-radius arm), which is the actual reason the combinators
+-- are not in `compiler/support/`.
+-- 🚨 An earlier draft of this comment called `ast.mdk` a "~26-gate import
+-- surface" and `types/registry.mdk` "narrower".  Both numbers were invented
+-- and the COMPARISON WAS INVERTED — `ast.mdk` is the narrower of the two
+-- (16 < 25).  The split is therefore justified by the `support/` figure
+-- above and by the dependency direction, NOT by ast-vs-registry gate counts.
 --
 -- SIX namespaces, matching the six declaration kinds #1070 catalogs as
 -- distinct collision surfaces: a type name, an interface name, an interface
 -- method name, a data/newtype constructor name, a record field name, and an
 -- ordinary top-level value name are six independent spellings-may-collide
--- domains — `data Cfg = MkCfg { size : Int }` and `interface Sizeable where
--- size : a -> Int` collide on `size` in TWO different namespaces (method vs.
--- field) without colliding as declarations. ONE `Ns`-tagged `Ident` type
--- rather than six parallel identity types is deliberate: it means one
--- comparator, one collision-free key renderer (`identKey`,
--- `types/registry.mdk`), and one place a namespace tag can be forgotten —
--- the same lesson `resolve.mdk` already paid for at 2-namespace scale, where
--- the TYPE and IFACE namespaces share one `OrdMap TyConOrigin` separated by
--- an `"iface:<Name>"` string tag (`ownTyOrigin` / `ownIfaceOrigin`,
--- `resolve.mdk:3494-3497,3962-3965`) with its own regression fixture
--- (`test/references_fixtures/iface_ty_collide/`, `resolve.mdk:767-774`).
-public export data Ns = NsType | NsIface | NsMethod | NsCtor | NsField | NsValue
+-- domains.  MEASURED 2026-08-03, exit 0: `data Cfg = MkCfg { size : Int }`
+-- plus `interface Sizeable a where size : a -> Int` in one file checks
+-- clean — `size` names two different declarations, in the FIELD and METHOD
+-- namespaces, without colliding as declarations.  ONE `Ns`-tagged `Ident`
+-- type rather than six parallel identity types is deliberate: it means one
+-- comparator (`deriving (Eq, Ord, Debug)` below — ONE derivation, not six),
+-- one collision-free key renderer (`identKey`, `types/registry.mdk`), and
+-- one place a namespace tag can be forgotten.
+--
+-- `resolve.mdk` already pays for this at 2-namespace scale: the TYPE and
+-- IFACE namespaces share ONE `OrdMap TyConOrigin` separated by an
+-- `"iface:<Name>"` string tag (`ifaceKey` / `ownTyOrigin` / `ownIfaceOrigin`,
+-- `compiler/frontend/resolve.mdk:3936-3963`), and that comment states the
+-- witness itself — one file may declare both `data Foo = Foo` and
+-- `interface Foo a where …` and check clean, so the two populations must
+-- never meet on one key.
+-- ⚠️ `test/references_fixtures/iface_ty_collide/` is NOT the regression
+-- fixture for that tag, and an earlier draft of this comment cited it as if
+-- it were.  `resolve.mdk:758-774` says what it actually witnesses: that
+-- `typeAmbiguous` and `ifaceAmbiguous` are TWO SEPARATE TABLES — a design it
+-- explicitly CONTRASTS with the tag (*"Two tables get the same separation
+-- with no key encoding at all"*).  It pins the separation, not the encoding.
+public export data Ns =
+  | NsType
+  | NsIface
+  | NsMethod
+  | NsCtor
+  | NsField
+  | NsValue
+deriving (Eq, Ord, Debug)
 
--- `(namespace, origin, name)` — the full identity of a declaration or an
--- occurrence naming one.  Carries a `TyConOrigin` (not a bare module String)
--- so `OriginUnresolved`/`OriginBuiltin` stay distinguishable from a real
--- module the same way they already are for a bare type-constructor origin —
--- see the `TyConOrigin` doc-comment above for why those three inhabitants
--- are NOT interchangeable with an `Option String`.
-public export data Ident = Ident Ns TyConOrigin String
+-- ── The origin half of an identity: NO "unresolved" inhabitant (§8 I6.3) ───
+-- `TyConOrigin` has THREE inhabitants and one of them, `OriginUnresolved`,
+-- is a PIPELINE-STAGE MARKER rather than an identity (see its doc-comment
+-- above).  `IdentOrigin` is the same fact minus that marker, and the absence
+-- is the whole point: `docs/spec/DICT-SEMANTICS.md` §8 I6.3 requires that an
+-- implementation of I4 "make the absent case **unrepresentable**", and
+-- `resolve.mdk`'s consumer rule — *"NO predicate may compare two
+-- `OriginUnresolved` heads equal, or treat one as matching anything"* — is
+-- exactly what a key-rendering identity type would violate: an
+-- `OriginUnresolved` renders to a CONSTANT, so every unresolved declaration
+-- would collide with every other one in any table keyed by it.
+--
+-- ⚠️ This is NOT the `Option`-shaped origin §8 I6.3 forbids.  The forbidden
+-- shape puts the optionality INSIDE the identity (`origin : Option String`),
+-- so every cross-module predicate must decide per call site what `None`
+-- means.  Here the origin field of an `Ident` is TOTAL — an `Ident` always
+-- names a real module or the language — and the `Option` sits on the
+-- CONVERSION (`identOriginOf`), i.e. on the question "can this
+-- `TyConOrigin` become an identity at all?".  That question is answered once,
+-- at the boundary, and a site holding an `OriginUnresolved` cannot construct
+-- an `Ident` to smuggle past it.
+--
+-- ⚠️ CONSEQUENCE FOR STAGE A-2, stated because it bounds what the arc
+-- delivers: on the FLAT / single-file driver path every user declaration
+-- still carries `OriginUnresolved` (`stampDeclOrigins`' comment below; the
+-- RESIDUAL section of `test/origin_fixtures/graph/agreement.golden`), so
+-- `identOriginOf` returns `None` there and no `Ident` can be built.  A-2's
+-- re-keying is therefore **Module-path-only**: the flat path keeps its
+-- bare-name tables until #1115 (E-1) gives it module ids.  That residual is
+-- real and must not be overstated — what it does NOT cost is the S0s A-2
+-- exists to drain (#1047 / #1069 / #1092 / #1090 / #1256 / #1257 / #1258 /
+-- #1259), every one of which is a MULTI-MODULE shape and therefore on the
+-- module path.  A-1 deferred this type saying it "needs the distinct
+-- pre-resolve type §8 I6.3 really asks for (A-1's option 1), which is not
+-- reachable from a byte-identical PR"; A-2's bar is explicitly not
+-- byte-identical, so A-2 is where it belongs.
+--
+-- `IdentBuiltin` mirrors `OriginBuiltin`: the reserved origin of something
+-- the LANGUAGE provides rather than a module (§8 I6.2 (a)).  `IdentModule
+-- mid` is meant to carry a NON-EMPTY module id — I6.3's other half, "an
+-- identity whose module component is empty is not well-formed".
+--
+-- ⚠️ BE PRECISE ABOUT WHERE THAT SECOND HALF IS ENFORCED.  Dropping the
+-- "unresolved" inhabitant is a fact about the TYPE: no `IdentOrigin` exists
+-- for it, full stop.  Non-emptiness is NOT — the constructors are
+-- `public export` (later units must pattern-match an `Ident` to render one),
+-- so `IdentModule ""` is spellable by hand.  What holds is that
+-- `identOriginOf` is the only MINT from a `TyConOrigin` and it returns
+-- `None` for `""`, and that `identKey` (`types/registry.mdk`) keeps a
+-- hand-built `IdentModule ""` on a DIFFERENT key from `IdentBuiltin`
+-- anyway — pinned by a doctest there, added after mutation testing showed
+-- the origin tag was otherwise untested.  Making non-emptiness structural
+-- too would mean hiding the constructors behind accessors in this file; that
+-- is a bigger change than A-2.0 needs and is not claimed here.
+public export data IdentOrigin =
+  | IdentBuiltin
+  | IdentModule String
+deriving (Eq, Ord, Debug)
+
+-- `(namespace, origin, name)` — the full identity of a declaration, or of an
+-- occurrence naming one.
+--
+-- ⚠️ NO `Display` derivation, deliberately.  A derived `Display` would print
+-- the constructor spelling, and the moment a diagnostic interpolated an
+-- `Ident` that spelling would become user-facing text nobody chose.  How an
+-- identity is RENDERED to a user (module-qualified? bare? which of the six
+-- namespaces named?) is A-2.8's decision, made when the first diagnostic
+-- needs it.  `Debug` is derived because `debug` is already understood to be
+-- developer output, and it is what makes an `Ident` printable in a probe.
+public export data Ident = Ident Ns IdentOrigin String deriving (Eq, Ord, Debug)
+
+-- The ONE total conversion from the pipeline-stage-marked `TyConOrigin` to an
+-- identity origin.  `None` means "this thing has no identity yet" and the
+-- caller MUST handle it — that is the visibility §8 I6.3 asks for, in place
+-- of a silent collision inside a key renderer.
+--
+-- Two `None` cases, both honest absence:
+--   * `OriginUnresolved` — no identity was acquired (unbound name, or a flat
+--     driver with no module graph).  See `TyConOrigin` above.
+--   * `OriginModule ""` — I6.3: `""` is a sentinel meaning "origin not
+--     recorded", never an identity.  Refusing it here means no `Ident` can
+--     carry it, so no later unit has to re-litigate the empty-id question at
+--     its own call site.
+export identOriginOf : TyConOrigin -> Option IdentOrigin
+identOriginOf OriginUnresolved = None
+identOriginOf OriginBuiltin = Some IdentBuiltin
+identOriginOf (OriginModule mid) =
+  if mid == "" then
+    None
+  else
+    Some (IdentModule mid)
+
+-- The convenience form every conversion site will actually want: build an
+-- identity from the `(namespace, TyConOrigin, name)` triple a table's writer
+-- already has in hand, or `None` if that origin is not an identity.
+export mkIdent : Ns -> TyConOrigin -> String -> Option Ident
+mkIdent ns origin name = map (io => Ident ns io name) (identOriginOf origin)
 
 public export data Ty =
   -- `tyConOrigin` is the #1110 identity carrier described above; it is stripped
