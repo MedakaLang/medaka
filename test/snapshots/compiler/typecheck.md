@@ -1,5 +1,5 @@
 # META
-source_lines=20794
+source_lines=20795
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted typecheck stage — port of lib/typecheck.ml's HM core.  SLICE 1:
@@ -9060,8 +9060,9 @@ registerIfaceParamKindsGo o iface i (p::ps) methods =
   --   (b) FALSE.  `checkGradedImplTys` is `Some want if anyKRow want => …` / `_ =>
   --       ()`: an all-KType row FAILS `anyKRow` and falls into `_`, and a miss is
   --       `None` and falls into `_`.  The two are indistinguishable to the only
-  --       reader — `grep -n lookupReg compiler/types/typecheck.mdk` gives exactly
-  --       one call site, plus the import and two comments.
+  --       reader — `grep -rn lookupReg compiler/` outside `types/registry.mdk`
+  --       gives exactly ONE call site; every other hit is the import list or a
+  --       comment (this one included, which is why the count is not written down).
   --
   -- So recording every slot is dead weight on BOTH arms.  It is kept because
   -- removing it is a separate behaviour-preserving change with its own goldens, not
