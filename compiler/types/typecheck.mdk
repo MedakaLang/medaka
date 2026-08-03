@@ -1750,9 +1750,9 @@ declaredEffects _ = []
 public export data RecordInfo =
   | RecordInfo (List Int) Mono (List (String, Mono)) (OrdMap Mono)
 
--- Keyed indices over `recordsRef` — so the hot per-field-access read paths never walk the
--- full registry (issue #149).  #415 item 3: the lockstep is structural, not an obligation.
--- `registerRecordInfoKeyed` is the SOLE registration writer of all three; they are cleared
+-- Keyed indices — so the hot per-field-access read paths never walk a linear registry
+-- (issue #149).  #415 item 3: the lockstep is structural, not an obligation.
+-- `registerRecordInfoKeyed` is the SOLE registration writer of both; they are cleared
 -- together by resetState; and the cross-module universe copy goes through the single
 -- loadDataUniverse/storeDataUniverse inverse pair.
 --   recordByNameRef : registry KEY → RecordInfo.  omInsert is last-write-wins and
@@ -1781,7 +1781,7 @@ public export data Kind = KType | KRow
 -- deliberately NOT cleared by resetState — it is whole-program metadata, not a
 -- per-module accumulator.  An abstract export brings the type NAME into scope but
 -- never registers its fields (publicDataDecls drops VisAbstract decls, so they never
--- reach recordsRef in an importer — its PARAM KINDS do travel, since #804/#1028, via
+-- reach the record registry in an importer — its PARAM KINDS do travel, since #804/#1028, via
 -- registerOpaqueParamKinds, but a kind is not a field).  A dot-access on
 -- such a type therefore lands at resolveFieldRecord's `head known but no record
 -- info` branch with the type name still recoverable as the receiver's head tycon;
@@ -2055,10 +2055,10 @@ routeLocalSym _ = ""
 -- checkBodyImpl's Module arm used to `registerAllData initialEnv (accData ++ prog0)`,
 -- RE-REGISTERING every earlier module's public data (and RE-MINTING its tyvars) once per
 -- module — the dominant remaining O(N²) the perf `modules` shape charts.  `registerData` /
--- `registerVariants` / `registerRecordInfoKeyed` side-effect FIVE tables wiped by resetState
--- (records / recordByName / fieldOwners / dataParamKinds / aliasTable) PLUS the ctor ENV; an
--- env-only accumulator would silently drop the 5-table side effects and the compiler would
--- fail to self-typecheck, so all SIX persist.  Seeded by the core pass (also Module mode),
+-- `registerVariants` / `registerRecordInfoKeyed` side-effect FOUR tables wiped by resetState
+-- (recordByName / fieldOwners / dataParamKinds / aliasTable) PLUS the ctor ENV; an
+-- env-only accumulator would silently drop the 4-table side effects and the compiler would
+-- fail to self-typecheck, so all FIVE persist.  Seeded by the core pass (also Module mode),
 -- grown ONE module at a time by `appendDataUniverse prog0` AFTER the module
 -- (so module k sees pub 1..k-1, never its own pub twice), copied into the resetState-wiped
 -- working refs and OVERLAID with prog0 at the `dataEnv` binding.  First-wins order preserved:
@@ -2686,7 +2686,6 @@ data CrossRun = CrossRun {
     universeMethodIfaceParamsRef : Ref (OrdMap (String, List String, Ty, List (String, List Kind))),
     universeRegisteredIfacesRef : Ref (OrdMap Unit),
     universeMethodDispatchIdxRef : Ref (List (String, Int)),
-    universeRecords : Ref (List (String, RecordInfo)),
     universeRecordByName : Ref (OrdMap RecordInfo),
     universeFieldOwners : Ref (OrdMap (List String)),
     universeDataParamKinds : Ref (List (String, List Kind)),
@@ -2748,7 +2747,6 @@ freshCrossRun env = CrossRun {
   universeMethodIfaceParamsRef = Ref omEmpty,
   universeRegisteredIfacesRef = Ref omEmpty,
   universeMethodDispatchIdxRef = Ref [],
-  universeRecords = Ref [],
   universeRecordByName = Ref omEmpty,
   universeFieldOwners = Ref omEmpty,
   universeDataParamKinds = Ref [],
@@ -3396,9 +3394,8 @@ data PerRun = PerRun {
     inRigidityBodyRef : Ref Bool,  -- True while an IMPL or DEFAULT method body is being inferred — the scope
     effvarCounter : Ref Int,  -- in which registerLocalScheme records obligations (see its comment)
     curEffect : Ref EffRow,  -- names GENERALIZED inside the top-level body currently being inferred
-    recordsRef : Ref (List (String, RecordInfo)),  -- (local `let`/`where` helpers), reset at each body start: an occurrence
-    recordByNameRef : Ref (OrdMap RecordInfo),  -- resolving to one is a LOCAL shadow, never a method occurrence, so no
-    fieldOwnersRef : Ref (OrdMap (List String)),  -- method obligation is recorded for it (round-2 adversarial break 3).
+    recordByNameRef : Ref (OrdMap RecordInfo),  -- (local `let`/`where` helpers), reset at each body start: an occurrence resolving
+    fieldOwnersRef : Ref (OrdMap (List String)),  -- to one is a LOCAL shadow, never a method occurrence, so no method obligation is recorded for it (round-2 adversarial break 3).
     dataParamKindsRef : Ref (List (String, List Kind)),  -- A tyvar-id watermark was tried first and is UNSAFE: freshness-skipping
     aliasTableRef : Ref (List (String, (List String, Ty))),  -- broke a top-level literal's fromInt obligation and surfaced a phantom
     pendingSites : Ref (List PendingEntry),  -- `Num a =>` on an unrelated scheme (types/numlit_bidir).
@@ -3474,7 +3471,6 @@ freshPerRun _ = PerRun {
   inRigidityBodyRef = Ref False,
   effvarCounter = Ref 0,
   curEffect = Ref (EffRow [] None),
-  recordsRef = Ref [],
   recordByNameRef = Ref omEmpty,
   fieldOwnersRef = Ref omEmpty,
   dataParamKindsRef = Ref [],
@@ -5865,7 +5861,7 @@ resolveFieldRecord te fname = match headTyconMono te
 
 -- Mangle-aware record lookup for the emit path.  `backend/private_mangle.mdk`
 -- renames a record's DECL name (a record's name IS its constructor) to
--- `<mid>__<name>`, so `recordsRef` is keyed by the mangled name — but a TYPE
+-- `<mid>__<name>`, so `recordByNameRef` is keyed by the mangled name — but a TYPE
 -- reference like `r : Rule` is NOT mangled, so the receiver's head tycon stays
 -- `Rule` and the exact `lookupRecordByName` above misses.  Recover by finding the
 -- registry entry whose key suffix-matches `__<head>` AND owns `fname`; only when
@@ -8555,7 +8551,6 @@ registerRecordInfoKeyed o key typeName params fields =
   let result = applyParams (tconFrom o typeName) paramVars
   let fieldMonos = map (recFieldMono tvs) fields
   let ri = RecordInfo (map monoTyvarId paramVars) result fieldMonos (omFromPairs (reverseL fieldMonos) omEmpty)
-  let _ = setRef perRun.value.recordsRef ((key, ri)::perRun.value.recordsRef.value)
   let _ = setRef perRun.value.recordByNameRef (omInsert key ri perRun.value.recordByNameRef.value)
   setRef
     perRun.value.fieldOwnersRef
@@ -14176,7 +14171,7 @@ checkBodyImpl seed mode prog0 =
     Module _ _ _ => []
   -- registerAllData universe (#154 PR-A): the Module path no longer builds `accData ++ prog0`
   -- here — prior modules' public data lives in the persistent DATA-universe accumulators
-  -- (universeRecords/…/universeDataEnv), copied+overlaid at the `dataEnv` binding below.
+  -- (universeRecordByName/…/universeDataEnv), copied+overlaid at the `dataEnv` binding below.
   -- groundMultiParamObligations universe: Flat grounds over prog; Module over implDecls.
   let groundUniverse = match mode
     Flat _ => prog
@@ -18453,17 +18448,15 @@ appendUniverseAccums prog =
 -- has no meaning as a blind copy.
 loadDataUniverse : Unit -> Unit
 loadDataUniverse _ =
-  let _ = setRef perRun.value.recordsRef crossRun.value.universeRecords.value
   let _ = setRef perRun.value.recordByNameRef crossRun.value.universeRecordByName.value
   let _ = setRef perRun.value.fieldOwnersRef crossRun.value.universeFieldOwners.value
   let _ = setRef perRun.value.dataParamKindsRef crossRun.value.universeDataParamKinds.value
   let _ = setRef perRun.value.ifaceParamKindsRef crossRun.value.universeIfaceParamKinds.value
   setRef perRun.value.aliasTableRef crossRun.value.universeAliasTable.value
 
--- the exact inverse of loadDataUniverse (same six tables, same order).
+-- the exact inverse of loadDataUniverse (same five tables, same order).
 storeDataUniverse : Unit -> Unit
 storeDataUniverse _ =
-  let _ = setRef crossRun.value.universeRecords perRun.value.recordsRef.value
   let _ = setRef crossRun.value.universeRecordByName perRun.value.recordByNameRef.value
   let _ = setRef crossRun.value.universeFieldOwners perRun.value.fieldOwnersRef.value
   let _ = setRef crossRun.value.universeDataParamKinds perRun.value.dataParamKindsRef.value
@@ -18515,7 +18508,7 @@ appendDataUniverse prog0 =
 --
 -- A KIND IS NOT A FIELD.  "Slot 0 of `Async` has kind Row" says nothing about `Done` or
 -- `Suspend`; the abstraction `export` buys is intact.  So this registers the kinds and
--- deliberately NOT `registerVariants` — no ctor schemes, no `recordsRef`/`fieldOwnersRef`
+-- deliberately NOT `registerVariants` — no ctor schemes, no `fieldOwnersRef`
 -- entries, no named-field registration.  Promoting the decl to `VisPublic` in
 -- `publicDataDecls` would have been a one-line "fix" that leaks the constructors.
 --
