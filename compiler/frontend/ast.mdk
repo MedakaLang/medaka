@@ -1064,13 +1064,28 @@ public export data Decl =
   -- ── the four TYPE-DECLARATION forms carry module identity (#1110) ────────
   -- `DData`/`DNewtype`/`DTypeAlias`/`DInterface` each gained a `…Origin` field,
   -- stamped by resolve (`stampGraphTyOrigins`, `frontend/resolve.mdk`) with the
-  -- module the declaration was written in.  NOTHING READS IT YET — this PR is
-  -- deliberately byte-identical, exactly as #1211 (the `Ty.TyCon` carrier) and
-  -- #1219 (its stamper) were.  What it unblocks is enumerated in #1110's
-  -- scoping comment: `registerVariants` mints the head `Mono` for every user
-  -- data type from the `DData` alone, so the dispatch GOAL side cannot acquire
-  -- identity until the declaration has one; interface identity (#1047) needs
-  -- `DInterface`'s; constructor identity (#1070) needs `DData`'s variants'.
+  -- module the declaration was written in.
+  --
+  -- ⚠️ THESE FIELDS ARE READ, AND THE WORK THIS COMMENT LISTED AS FUTURE HAS
+  -- LANDED.  It said "NOTHING READS IT YET — this PR is deliberately
+  -- byte-identical", true when #1110 Stage A-1 wrote it and false since Stage
+  -- A-2: `DData.dataOrigin` reaches `registerVariants o` (`types/typecheck.mdk`),
+  -- so the dispatch GOAL side now DOES acquire identity from the declaration;
+  -- `DInterface.ifaceOrigin` is the write side of A-2.4's interface-namespace key
+  -- (`ifaceTabKey o name`, reached from `registerData` / `insertIfaceRequired` /
+  -- `insertMethodIdents` / `ownMethodIdent`) and of `lowerDeclImpl`'s
+  -- default-method identity (`ir/core_ir_lower.mdk`).  Derive the readers rather
+  -- than reading a list here:
+  --
+  --     grep -rn --include=*.mdk 'dataOrigin|ifaceOrigin|newtypeOrigin|tyAliasOrigin' \
+  --       compiler/types compiler/ir compiler/tools
+  --
+  -- ⚠️ FOUND BY GREPPING FOR THE OTHER SPELLINGS OF A CLAIM CORRECTED
+  -- ELSEWHERE (#1111 A-2.10's review), and that is the whole lesson: a "nothing
+  -- reads this" sentence is a NEGATIVE ABOUT THE WHOLE TREE, it expires the moment
+  -- any unit adds a reader, and no gate notices.  `types/typecheck.mdk`'s `Mono`
+  -- comment and `frontend/resolve.mdk`'s stamper comment carried the same sentence
+  -- about different fields and each had to be corrected separately.
   --
   -- 🚨 The three positional forms became NAMED-FIELD RECORDS in the same step,
   -- and the two halves are not separable: a positional widening re-churns every

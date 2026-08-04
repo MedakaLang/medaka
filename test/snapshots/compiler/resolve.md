@@ -1,5 +1,5 @@
 # META
-source_lines=4208
+source_lines=4225
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted resolve stage — Stage 2 port of `lib/resolve.ml` (single-file
@@ -3743,8 +3743,16 @@ stampHeadWith t o = (TyCon { t | tyConOrigin = o }, True)
 -- That is the exact wrongness class #1219 removed from the flat path.  Identity is
 -- acquired HERE, where the module id is a fact, and travels with the tree.
 --
--- ⚠️ NOTHING READS THESE FIELDS YET.  Deliberately: the PR is byte-identical, so
--- the widening is mechanically verifiable, exactly as #1211 and #1219 were.
+-- ⚠️ THESE FIELDS ARE READ.  This said "NOTHING READS THESE FIELDS YET.
+-- Deliberately: the PR is byte-identical", true at #1110 Stage A-1 and false
+-- since Stage A-2 — `DData.dataOrigin` reaches `registerVariants o` and
+-- `DInterface.ifaceOrigin` is the write side of A-2.4's `ifaceTabKey o name`
+-- (both `types/typecheck.mdk`), plus `lowerDeclImpl`'s default-method identity
+-- (`ir/core_ir_lower.mdk`).  The carrier's own comment in `frontend/ast.mdk`
+-- holds the derivation and the grep; do not restate the reader set here.
+-- (Corrected during #1111 A-2.10's review, by grepping the tree for the OTHER
+-- spellings of a claim being narrowed one file over — which is the procedure a
+-- "nothing reads this" negative always needs, because nothing else expires it.)
 --
 -- ⚠️ #1227 NARROWED THIS: it used to read "FLAT (loader-less) DRIVERS GET NOTHING
 -- HERE" outright.  That is no longer true for the ONE flat call site that has a
@@ -3831,9 +3839,18 @@ fillDeclOrigin _ (o@(OriginModule _)) = o
 --                  occurrence carrier and why `declHeadOf` (the agreement probe)
 --                  has no `DImpl` arm.
 --
--- ⚠️ NOTHING READS THESE FIELDS YET, and this PR changes no acceptance.  The
--- R-series `AmbiguousInterface` diagnostic and the re-keying of the bare-name
--- dispatch tables (#1047) are later units of Stage A-1.  What lands here is the
+-- ⚠️ NOTHING READS THESE FIELDS YET — RE-VERIFIED 2026-08-04, and stated with the
+-- command because a negative about the whole tree has no other expiry:
+--
+--     grep -rn --include=*.mdk 'superOrigin|requireOrigin|constraintOrigin|implOrigin' compiler
+--
+-- prints only `frontend/ast.mdk` (the declarations + the `OriginUnresolved`
+-- literals) and this file's own stamper.  ⚠️ The DECL-layer sentence above
+-- (`stampGraphTyOrigins`' fields) said the same thing and had gone FALSE — Stage
+-- A-2 reads `dataOrigin`/`ifaceOrigin` — so re-run this grep before reusing the
+-- claim; these are the interface-OCCURRENCE carriers, a different set.
+-- The R-series `AmbiguousInterface` diagnostic and the re-keying of the bare-name
+-- dispatch tables (#1047) are later units.  What lands here is the
 -- FACT, plus the grading that makes the fact observable (`=== ORIGIN AGREEMENT
 -- ===`'s `iface:` rows) — an unobserved carrier is the precondition for every
 -- defect this arc exists to catch.
