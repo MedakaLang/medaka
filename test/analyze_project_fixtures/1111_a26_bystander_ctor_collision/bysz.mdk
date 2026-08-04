@@ -1,0 +1,6 @@
+-- The collision: an unrelated type whose constructor shares the bare name `Mark`,
+-- plus the unrelated function the entry actually imports from here.
+public export data Other = Mark String
+
+export zid : Int -> Int
+zid n = n

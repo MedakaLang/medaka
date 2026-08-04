@@ -1,0 +1,6 @@
+-- `T` here is a CONSTRUCTOR of `Wrap`, not a type.  That is the whole fixture:
+-- `import pmod.{T, pf}` reads like a type-only member and is not one.
+public export data Wrap = T Int
+
+export pf : Int -> Int
+pf n = n

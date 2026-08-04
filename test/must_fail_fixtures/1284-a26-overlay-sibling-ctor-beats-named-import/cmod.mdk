@@ -1,0 +1,8 @@
+-- #1284: `main.mdk` imports `CtorOnly` from here and NOTHING ELSE of `Wrap`.
+-- `Sib : Int -> Wrap` is the SIBLING that rides along on the overlay of the whole
+-- decl and hijacks the `Sib` the program actually imported from `zmod`.
+public export data Wrap = CtorOnly Int | Sib Int
+
+export unw : Wrap -> Int
+unw (CtorOnly i) = i
+unw (Sib i) = i

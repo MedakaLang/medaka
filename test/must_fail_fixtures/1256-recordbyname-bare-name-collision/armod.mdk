@@ -1,2 +1,0 @@
--- issue #1256: sibling module for the SHADOWED (correct) `Cfg` -- field `fld : Int`.
-public export data Cfg = { fld : Int }

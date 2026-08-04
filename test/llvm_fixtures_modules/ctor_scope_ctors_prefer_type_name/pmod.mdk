@@ -1,0 +1,8 @@
+-- The decl ORDER is the trigger and must not be "tidied": `Wrap` (whose sole
+-- constructor is spelled `T`) is declared BEFORE the type `T`, so a first-match
+-- pool scan that accepts a constructor-name hit reaches `Wrap` first.
+public export data Wrap = T Int
+
+public export data T =
+  | A
+  | B

@@ -1,0 +1,42 @@
+-- #1111 A-2.6 REGRESSION GUARD: the import-scoped constructor overlay must NOT
+-- outrank this module's OWN declarations.
+--
+-- `import emod.{Ext, Other}` names a constructor (`Other`), so the overlay
+-- contributes emod's whole `Ext` decl — including the sibling `Tag`, which this
+-- file never imports.  This file also DECLARES `Tag`, as a constructor of its own
+-- `Loc`.  A module's own top-level declaration is that module's name
+-- (SHADOW-SEMANTICS §1, "A name written at top level in a module is that module's
+-- name"), so `Tag 7` here is `Loc`'s `Tag` and nothing about emod is reachable by
+-- that spelling.
+--
+-- Expected output, derived by hand BEFORE any capture and independently of any
+-- engine: `unloc (Tag 7)` is `7` (local `Loc`), and `unExt oth` is `0` (`Other` IS
+-- imported by name, still means `emod`'s, and `unExt Other = 0`).  So `7` then `0`.
+--
+-- ⚠️ THE FAILURE THIS PINS, measured on the first cut of A-2.6 (PR #1282 as first
+-- pushed, binary built from f6c2d391): the overlay was registered AFTER this
+-- module's `prog0`, so emod's `Tag` won the bare-name tie-break over the local one
+-- and the file was REJECTED — `Type mismatch: Ext vs Loc`, exit 1, three
+-- diagnostics.  On pristine `main` (26585d3c) the same file exits 0 and prints
+-- `7`/`0`, so that was a REGRESSION, not a pre-existing gap.
+--
+-- ⚠️ It is NOT a narrow spelling.  Any selective import that names a constructor
+-- drags that decl's other constructors in, and the same shape reaches the stdlib:
+-- `import json.{Json, JNull}` + a local `data Tok = JString String` was rejected
+-- `Type mismatch: Json vs Tok`.  That leg is pinned separately, WITH the prelude,
+-- as `test/engine_fixtures/ctor_scope_local_ctor_beats_stdlib_import.mdk` — this
+-- corpus is prelude-free and cannot import `json`.
+import emod.{Ext, Other, unExt}
+
+data Loc = Tag Int
+
+unloc : Loc -> Int
+unloc (Tag n) = n
+
+oth : Ext
+oth = Other
+
+main : <IO> Unit
+main =
+  let _ = putStrLn (intToString (unloc (Tag 7)))
+  putStrLn (intToString (unExt oth))

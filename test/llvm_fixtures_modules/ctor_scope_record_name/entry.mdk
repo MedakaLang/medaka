@@ -1,0 +1,34 @@
+-- #1111 A-2.6, drains #1256 (S0, 3-engine divergence): two unrelated modules each
+-- declare a RECORD TYPE spelled `Cfg`, and this unit imports ONLY `armod`'s (whose
+-- `fld` is an `Int`) plus `zrmod`'s unrelated `zrf`.  The program is honestly well
+-- typed and the answer is fixed by import scope alone.
+--
+-- Expected output, derived by hand BEFORE capture and independently of any engine:
+-- `Cfg` at the literal head can only mean `armod.Cfg`, the sole `Cfg` this file
+-- brings into scope, so `fld : Int`, `v.fld` is `7` and `v.fld + 1` is `8`.
+--
+-- Pre-fix (verified first-hand on a binary built from 40756bea): `check` exited 0
+-- with ZERO diagnostics, `medaka run` printed `7.0` and the built binary printed `7`
+-- — eval read `recordByNameRef`, a program-global table keyed by the BARE record
+-- name whose `omInsert` is last-write-wins, so `zrmod` (loaded second) won the lookup
+-- for a unit that never imported it.
+--
+-- ⚠️ This corpus is PRELUDE-FREE, which sharpens the assertion rather than weakening
+-- it: with no `Display` there is no `7` vs `7.0` formatting difference to observe, so
+-- `intToString v.fld` makes the wrong record a TYPE ERROR (`intToString : Int ->
+-- String` cannot take zrmod's `Float`).  The fixture therefore fails LOUDLY, at emit,
+-- if the overlay ever picks the other module again.
+--
+-- ⚠️ Why the 3-ENGINE corpus and not an eval-only one: the defect's signature was
+-- that the engines DISAGREED, so a single-engine fixture could have gone green on
+-- whichever engine was already right.  Here all three must agree.
+import armod.{Cfg}
+import zrmod.{zrf}
+
+v : Cfg
+v = Cfg { fld = 7 }
+
+main : <IO> Unit
+main =
+  let _ = putStrLn (intToString v.fld)
+  putStrLn (intToString (v.fld + zrf 1))

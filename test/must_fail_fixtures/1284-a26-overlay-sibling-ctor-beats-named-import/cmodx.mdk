@@ -1,0 +1,9 @@
+-- #1284 CONTROL half.  Exactly `cmod.mdk` with ONE variable flipped: `Sib` is moved
+-- OUT of the decl the unit names into one it never names.  `CtorOnly` now owns
+-- `Other`; `Sib` lives in `Wrap2`, which no import mentions.
+public export data Other = CtorOnly Int
+
+public export data Wrap2 = Sib Int | Wother
+
+export unwx : Other -> Int
+unwx (CtorOnly i) = i

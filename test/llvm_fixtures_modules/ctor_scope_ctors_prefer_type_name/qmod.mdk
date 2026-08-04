@@ -1,0 +1,10 @@
+-- The universe collision.  `entry.mdk` imports only `qf` from here — never this
+-- `A` — but a public data decl reaches the whole-graph data universe regardless.
+-- It is what the overlay has to beat: with no overlay for `T`, the bare name `A`
+-- falls through to the universe's load-order winner and lands here.
+public export data Other =
+  | A
+  | C
+
+export qf : Int -> Int
+qf n = n

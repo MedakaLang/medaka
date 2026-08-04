@@ -45,10 +45,21 @@ removing it:
   one-slot-per-name property `nsMethod` had, so an imported *type* sharing the interface's name
   now steals the slot (#1044). #1070's audit calls this out by name: *"relocating the lookup is
   not a fix."*
-- **#674's fix covered only ONE import spelling.** `import amod.{A1(..)}` resolves correctly;
-  `import amod.{A1, Dup}` still gets the wrong type, because the patch matched
-  `ctorMemberTypeName` against the `(..)` import flag rather than fixing the underlying bare-name
-  keying (#1070).
+- **#674's fix covered only ONE import spelling, and widening it moved the boundary rather
+  than removing it.** The original patch matched the member's spelling against the `(..)`
+  import flag instead of fixing the underlying bare-name keying, so `import amod.{A1(..)}`
+  resolved correctly while `import amod.{A1, Dup}` got the wrong type (#1070). #1111 A-2.6
+  widened the rule to any member that *names a constructor* (`memberOverlayDecl`) and scoped
+  the pool lookup by declaration identity (`declOwnedBy`), which genuinely drained #1256 and
+  #1259 — **and the same shape immediately reappeared one hop out**, through a re-export
+  (`export import armod.{Cfg}`), where the decl's origin names the *declaring* module and the
+  import path names the *re-exporter*, so the identity test misses (#1283). Widening a
+  spelling-matched rule is still not the same as keying the table correctly.
+  ⚠️ A-2.6 also shows the cost of getting the *layering* wrong while the keying is right: its
+  first cut registered the import overlay **after** the module's own `prog0`, so an imported
+  decl's constructors out-ranked locally-declared ones and `import json.{Json, JNull}` plus a
+  local `data Tok = JString String` was rejected. Ask of any per-module overlay not only
+  *"is the key scoped?"* but *"what does it out-rank, and should it?"*.
 - **The P0-9 cross-module constructor fix patched `compiler/eval/eval.mdk` and left its parallel
   driver `compiler/ir/core_ir_eval.mdk` broken for months** — documented in `AGENTS.md`'s
   `evalModules`/`cevalModules` trap.

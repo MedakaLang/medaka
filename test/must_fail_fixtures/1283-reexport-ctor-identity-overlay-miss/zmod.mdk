@@ -1,0 +1,6 @@
+public export data Z1 =
+  | Dup
+  | Other
+
+export zf : Int -> Int
+zf x = x
