@@ -1001,5 +1001,240 @@ else
   fail=$((fail+1)); printf 'FAIL A-2.10/accept-runs-and-dispatches (exit %d, got [%s], want 7)\n' "$a210_run_code" "$a210_run_out"
 fi
 
+# ── #1111 A-2.10: ONE PHYSICAL FILE MUST HAVE ONE IDENTITY ────────────────────
+#
+# THE ONLY NON-FLAT PROJECT IN ANY OF THESE CORPORA, AND THAT IS THE POINT.  Every
+# directory under test/check_module_fixtures/ and test/eval_modules_fixtures/ is
+# FLAT (`find <dir> -mindepth 2 -type d` is empty in all of them), so entry-dir ==
+# project-root there and `entrySearchRoots` can only ever produce ONE search root.
+# The defect below needs TWO, so no fixture in either corpus can express it and no
+# amount of coverage there would have found it.  This gate synthesizes its projects,
+# so it can — and it is the gate that already owns the other A-2.10 legs.
+#
+# The shape: a `medaka.toml` at the project root and the entry BELOW it, which is the
+# layout `src/main.mdk` gives you.  `entrySearchRoots` then returns [src/, projroot],
+# so `src/util.mdk` is reachable as BOTH `util` (from the entry, via src/) and
+# `src.util` (from a non-sibling module, via the project root) — and the loader used
+# to canonicalize ONLY imports resolving under a declared DEPENDENCY root, so the two
+# spellings became two modIds for one file, i.e. two `OriginModule` ids for every
+# declaration in it.
+#
+# ⚠️ THAT WAS A LIVE REGRESSION IN A-2.10's FIRST CUT, not a hypothetical: A-2.10
+# makes comparisons READ those ids, so the entry's `Config` and `lib/thing.mdk`'s
+# `Config` — the same declaration, in the same file — became two different types and
+# an ordinary project went `exit 0` -> `exit 1` with `Type mismatch: Config vs Config`.
+# The comparison was right; `canonicalModId` (compiler/driver/loader.mdk) was the
+# wrong supply, and its own doc-comment had claimed the general fix for months while
+# implementing only the dep-root half.
+mkdir -p "$TMP/nest/src" "$TMP/nest/lib"
+cat > "$TMP/nest/medaka.toml" <<'EOF'
+name = "nest"
+EOF
+cat > "$TMP/nest/src/util.mdk" <<'EOF'
+public export data Config = MkConfig Int
+
+export interface Describe a where
+  describe : a -> Int
+
+export impl Describe Config where
+  describe (MkConfig n) = n * 2
+
+export unwrap : Config -> Int
+unwrap (MkConfig n) = n
+EOF
+# NOT a sibling of the entry, so it must spell the import from the PROJECT root.
+cat > "$TMP/nest/lib/thing.mdk" <<'EOF'
+import src.util.{Config, MkConfig, unwrap}
+
+export bump : Config -> Config
+bump c = MkConfig (unwrap c + 1)
+EOF
+# The entry IS a sibling, so it spells the same file the other way.
+cat > "$TMP/nest/src/main.mdk" <<'EOF'
+import util.{Config, MkConfig, unwrap}
+import lib.thing.{bump}
+
+main = println (unwrap (bump (MkConfig 41)))
+EOF
+nest_chk="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check "$TMP/nest/src/main.mdk" 2>&1)"
+nest_chk_code=$?
+case "$nest_chk" in
+  *"Type mismatch"*) fail=$((fail+1)); printf 'FAIL A-2.10/nested-project-check (one file, two modIds, two identities: [%s])\n' "$nest_chk" ;;
+  *) if [ "$nest_chk_code" -eq 0 ]; then pass=$((pass+1)); printf 'ok   A-2.10/nested-project-check (src/ entry under a medaka.toml: one file, one identity)\n'
+     else fail=$((fail+1)); printf 'FAIL A-2.10/nested-project-check (exit %d: [%s])\n' "$nest_chk_code" "$nest_chk"; fi ;;
+esac
+nest_run="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" run "$TMP/nest/src/main.mdk" 2>&1)"
+nest_run_code=$?
+if [ "$nest_run_code" -eq 0 ] && [ "$nest_run" = "42" ]; then
+  pass=$((pass+1)); printf 'ok   A-2.10/nested-project-run (42)\n'
+else
+  fail=$((fail+1)); printf 'FAIL A-2.10/nested-project-run (exit %d, got [%s], want 42)\n' "$nest_run_code" "$nest_run"
+fi
+# build AGREEMENT.  Not decoration: the canonical modId is also the per-module MANGLING
+# PREFIX (`<mid>__<name>`, compiler/backend/private_mangle.mdk), so a canonicalization
+# that check accepts and the emitter disagrees with is a run≠build miscompile rather
+# than a diagnostic.  The binary must print 42 too.
+if MEDAKA_ROOT="$ROOT" MEDAKA="$MEDAKA" bound "$MEDAKA" build "$TMP/nest/src/main.mdk" -o "$TMP/nest.bin" >/dev/null 2>&1 && [ -x "$TMP/nest.bin" ]; then
+  nest_bld="$("$TMP/nest.bin" 2>/dev/null | head -1)"
+  if [ "$nest_bld" = "42" ]; then pass=$((pass+1)); printf 'ok   A-2.10/nested-project-build (mangling agrees: binary prints 42)\n'
+  else fail=$((fail+1)); printf 'FAIL A-2.10/nested-project-build (got [%s], want 42)\n' "$nest_bld"; fi
+else
+  fail=$((fail+1)); printf 'FAIL A-2.10/nested-project-build (native build failed)\n'
+fi
+# The IMPL half of the same defect, and it is the one that was already broken BEFORE
+# any comparison read an identity: two modIds for one file double-count its `export
+# impl`, so `impl Describe Config` was reported as `Conflicting 'impl Describe'.
+# Defined in util and src.util` — a false reject of a one-impl program, on `main`,
+# today.  A-2.10 silently DRAINED that (the two copies stopped overlapping, because
+# their heads had become different types) — a NOTHING -> SOMETHING transition that no
+# pre-existing fixture could fail, which is exactly why it is pinned here.  It must
+# now be accepted for the RIGHT reason: one module, one impl.  84 = describe (42).
+cat > "$TMP/nest/src/impls.mdk" <<'EOF'
+import util.{Config, MkConfig, Describe(..), describe}
+import lib.thing.{bump}
+
+main = println (describe (bump (MkConfig 41)))
+EOF
+nest_imp="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check "$TMP/nest/src/impls.mdk" 2>&1)"
+nest_imp_code=$?
+case "$nest_imp" in
+  *Conflicting*) fail=$((fail+1)); printf 'FAIL A-2.10/nested-project-impl (one file counted twice: [%s])\n' "$nest_imp" ;;
+  *) if [ "$nest_imp_code" -eq 0 ]; then pass=$((pass+1)); printf 'ok   A-2.10/nested-project-impl (a single export impl is not double-counted)\n'
+     else fail=$((fail+1)); printf 'FAIL A-2.10/nested-project-impl (exit %d: [%s])\n' "$nest_imp_code" "$nest_imp"; fi ;;
+esac
+nest_imp_run="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" run "$TMP/nest/src/impls.mdk" 2>&1)"
+nest_imp_run_code=$?
+if [ "$nest_imp_run_code" -eq 0 ] && [ "$nest_imp_run" = "84" ]; then
+  pass=$((pass+1)); printf 'ok   A-2.10/nested-project-impl-run (84)\n'
+else
+  fail=$((fail+1)); printf 'FAIL A-2.10/nested-project-impl-run (exit %d, got [%s], want 84)\n' "$nest_imp_run_code" "$nest_imp_run"
+fi
+# 🚨 THE DISCRIMINATING NEGATIVE, and the accept legs above need it because NONE of
+# them is one.  Measured on a binary carrying A-2.10 but NOT the loader fix: the
+# `nested-project-impl` pair above stays GREEN there (two modIds gave the file's two
+# copies DIFFERENT heads, so they stopped overlapping and the pre-existing false
+# reject drained by accident), and so does an obvious "add a second impl in lib/"
+# variant (both of ITS impls reach the shared type through the SAME spelling, so they
+# conflict either way — that version was written, run, and discarded).
+#
+# What discriminates is a second impl reached through the OTHER SPELLING: `src/u.mdk`
+# declares the type and the interface but NO impl; `src/other.mdk` (a sibling of the
+# entry) writes `impl Desc Cfg` having imported it as `u`; `lib/t.mdk` (not a sibling)
+# writes a SECOND `impl Desc Cfg` having imported the same file as `src.u`.  One
+# modId ⇒ one `Cfg` ⇒ genuine overlap ⇒ REJECT naming both modules.
+#
+# ⚠️ AND THE PRE-FIX BEHAVIOUR IS WORSE THAN AN ACCEPT — measured, exit 0, `run`
+# prints **2**.  The honest arithmetic for two live impls would be 1 + 2 = 3; one of
+# the two calls reaches the OTHER module's impl.  So the two-modIds defect is not
+# only "a valid program is rejected" (the `Config vs Config` leg) but also "an
+# invalid program is silently miscompiled", which is why this leg pins a REJECT and
+# not merely a diagnostic.
+mkdir -p "$TMP/nest3/src" "$TMP/nest3/lib"
+cat > "$TMP/nest3/medaka.toml" <<'EOF'
+name = "nest3"
+EOF
+cat > "$TMP/nest3/src/u.mdk" <<'EOF'
+public export data Cfg = MkCfg Int
+
+export interface Desc a where
+  desc : a -> Int
+EOF
+cat > "$TMP/nest3/src/other.mdk" <<'EOF'
+import u.{Cfg, MkCfg, Desc(..), desc}
+
+export impl Desc Cfg where
+  desc (MkCfg n) = n
+
+export viaSibling : Int
+viaSibling = desc (MkCfg 1)
+EOF
+cat > "$TMP/nest3/lib/t.mdk" <<'EOF'
+import src.u.{Cfg, MkCfg, Desc(..), desc}
+
+export impl Desc Cfg where
+  desc (MkCfg n) = n + 1
+
+export viaProjRoot : Int
+viaProjRoot = desc (MkCfg 1)
+EOF
+cat > "$TMP/nest3/src/m.mdk" <<'EOF'
+import other.{viaSibling}
+import lib.t.{viaProjRoot}
+
+main = println (viaSibling + viaProjRoot)
+EOF
+n3_out="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check "$TMP/nest3/src/m.mdk" 2>&1)"
+n3_code=$?
+case "$n3_out" in
+  *Conflicting*)
+    case "$n3_out" in *other*) n3a=yes ;; *) n3a=no ;; esac
+    case "$n3_out" in *lib.t*) n3b=yes ;; *) n3b=no ;; esac
+    if [ "$n3_code" -eq 1 ] && [ "$n3a" = yes ] && [ "$n3b" = yes ]; then
+      pass=$((pass+1)); printf 'ok   A-2.10/nested-project-real-conflict (two spellings are ONE module: cross-spelling overlap rejected)\n'
+    else
+      fail=$((fail+1)); printf 'FAIL A-2.10/nested-project-real-conflict (exit %d other=%s lib.t=%s: [%s])\n' "$n3_code" "$n3a" "$n3b" "$n3_out"
+    fi ;;
+  *) fail=$((fail+1)); printf 'FAIL A-2.10/nested-project-real-conflict (two impls for ONE type accepted — the file still has two modIds: exit %d [%s])\n' "$n3_code" "$n3_out" ;;
+esac
+
+# ── #1111 A-2.10: TWO MODULES' SAME-NAMED TYPES MAY EACH CARRY THEIR OWN IMPL ──
+#
+# The NEW ACCEPTANCE this unit ships, and it had no fixture.  `impl Shower Twain` in
+# two unrelated modules used to OVERLAP — coherence compared the two heads by NAME —
+# so a program importing both was rejected with `Conflicting 'impl Shower'. Defined
+# in a210_sha and a210_shz`.  They are different types, so that was always a false
+# reject; `cohGoR`/`cohStep`/`cohEqR` reading identity is what ends it.
+#
+# ⚠️ THE PIN IS THE DISPATCH, NOT THE EXIT CODE.  Accepting two overlapping-by-name
+# impls is only correct if each receiver reaches ITS OWN — an accept that then
+# dispatched both calls to one impl would be a silent wrong answer, i.e. strictly
+# worse than the false reject it replaced.  So both values are printed and both are
+# graded, on `run` AND on the built binary (dispatch is OUTLINED in the emitter, so
+# the two engines can disagree here and only a build leg sees it).
+cat > "$TMP/a210_sha.mdk" <<'EOF'
+public export data Twain = MkA Int
+export interface Shower a where
+  shows : a -> Int
+export impl Shower Twain where
+  shows (MkA n) = n
+export mkA : Twain
+mkA = MkA 1
+EOF
+cat > "$TMP/a210_shz.mdk" <<'EOF'
+import a210_sha.{Shower(..), shows}
+public export data Twain = MkZ Int
+export impl Shower Twain where
+  shows (MkZ n) = n
+export mkZ : Twain
+mkZ = MkZ 100
+EOF
+cat > "$TMP/a210_shmain.mdk" <<'EOF'
+import a210_sha.{Shower(..), shows, mkA}
+import a210_shz.{mkZ}
+main =
+  println (shows mkA)
+  println (shows mkZ)
+EOF
+sh_chk="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check "$TMP/a210_shmain.mdk" 2>&1)"
+sh_chk_code=$?
+case "$sh_chk" in
+  *Conflicting*) fail=$((fail+1)); printf 'FAIL A-2.10/samename-impls-check (false overlap on two DIFFERENT types: [%s])\n' "$sh_chk" ;;
+  *) if [ "$sh_chk_code" -eq 0 ]; then pass=$((pass+1)); printf 'ok   A-2.10/samename-impls-check (same-named types no longer overlap)\n'
+     else fail=$((fail+1)); printf 'FAIL A-2.10/samename-impls-check (exit %d: [%s])\n' "$sh_chk_code" "$sh_chk"; fi ;;
+esac
+sh_run="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" run "$TMP/a210_shmain.mdk" 2>/dev/null | tr '\n' ',')"
+if [ "$sh_run" = "1,100," ]; then
+  pass=$((pass+1)); printf 'ok   A-2.10/samename-impls-run (each receiver reaches ITS OWN impl: 1,100)\n'
+else
+  fail=$((fail+1)); printf 'FAIL A-2.10/samename-impls-run (got [%s], want [1,100,])\n' "$sh_run"
+fi
+if MEDAKA_ROOT="$ROOT" MEDAKA="$MEDAKA" bound "$MEDAKA" build "$TMP/a210_shmain.mdk" -o "$TMP/a210_sh.bin" >/dev/null 2>&1 && [ -x "$TMP/a210_sh.bin" ]; then
+  sh_bld="$("$TMP/a210_sh.bin" 2>/dev/null | head -2 | tr '\n' ',')"
+  if [ "$sh_bld" = "1,100," ]; then pass=$((pass+1)); printf 'ok   A-2.10/samename-impls-build (native dispatch agrees: 1,100)\n'
+  else fail=$((fail+1)); printf 'FAIL A-2.10/samename-impls-build (got [%s], want [1,100,])\n' "$sh_bld"; fi
+else
+  fail=$((fail+1)); printf 'FAIL A-2.10/samename-impls-build (native build failed)\n'
+fi
+
 printf '\n%d ok, %d failing\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

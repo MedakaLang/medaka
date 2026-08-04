@@ -360,6 +360,16 @@ mkIdent ns origin name = map (io => Ident ns io name) (identOriginOf origin)
 -- measured on this tree before the rule was written, `stringLength "xy" < 2`
 -- reaches `unifyN` as `Int`(no identity, extern-sourced) ~ `Int`(`OriginBuiltin`).
 --
+-- ⚠️ THE CANONICAL STATEMENT OF THE CONSUMER RULE LIVES IN `frontend/resolve.mdk`
+-- (the `RESIDUAL INHABITANT` block, which this file's carrier comment cites as its
+-- authority), AND THIS UNIT FALSIFIED THE VERSION WRITTEN THERE.  It read "NO
+-- predicate may compare two `OriginUnresolved` heads equal, or treat one as
+-- matching anything" — `tyConIdsConflict` below does BOTH, correctly.  That
+-- statement has been split there by decision class (lookup vs acceptance) rather
+-- than patched here; reconciling one site and leaving the twin standing is the
+-- exact defect this unit fixed in `types/typecheck.mdk`'s `Mono` comment, so both
+-- are now reconciled.  Change either half in ONE place: this one.
+--
 -- SO: an ABSENT origin makes NO CLAIM, and two heads CONFLICT only when both
 -- carry an identity and the identities differ.  Stated honestly: within the
 -- identity-less population this is operationally a wildcard, and §8 I6.3 is
@@ -382,26 +392,49 @@ mkIdent ns origin name = map (io => Ident ns io name) (identOriginOf origin)
 -- predicate becomes strict equality on that population automatically.  At total
 -- supply it IS strict equality, which is I6.3's target state.
 --
--- ⚠️ WHY ABSENCE CANNOT TODAY BRIDGE TWO DISTINCT IDENTITIES.  Unification
--- LINKS, so `a ~ T@absent` then `a ~ T@pa` then `a ~ T@main` would accept a
--- pairing neither direct comparison would.  That needs one name carried by an
--- absent head AND by two DIFFERENT present identities.  Population (b)'s type
--- names are exactly `{Array, Bool, Char, Float, Int, List, Ref, String, Unit}`
--- — which IS `primitiveTypes`, so `OriginBuiltin` is their only present origin —
--- plus `{Option, Ordering, Result}` declared by `stdlib/core.mdk` (only ever
--- `OriginModule "core"`).  ⚠️ Re-derive that set rather than trusting it; a new
--- extern naming a fourth prelude type moves it, and the command is
+-- 🚨 ABSENCE **CAN** BRIDGE TWO DISTINCT IDENTITIES — #1279, MEASURED, OPEN.
+-- Unification LINKS, so `a ~ T@absent` then `a ~ T@core` then `a ~ T@evil`
+-- accepts a pairing the DIRECT comparison refuses.  Both halves are measured on
+-- this tree:
+--   * the DIRECT form is CLOSED — `unwrapEvil (Some 1)`, where `unwrapEvil` takes
+--     another module's own `Option`, is rejected with a `T-TYPE-MISMATCH` naming
+--     both modules;
+--   * the INDIRECT form is NOT.  `mid = stringIndexOf "zz" "a"` gives an
+--     `Option Int` head with NO origin (population (b)); `isSome mid` links it to
+--     `Option@core`, `unwrapEvil mid` links it to `Option@evil`, and `check`
+--     exits 0 with ZERO diagnostics.  `run` prints `False`, then dies with
+--     `E-NONEXHAUSTIVE-MATCH`.  Pinned: `test/must_fail_fixtures/1279-…`.
+--
+-- ⚠️ THIS PARAGRAPH USED TO ASSERT THE OPPOSITE, AND THE ARGUMENT WAS AN
+-- ENUMERATION.  It read: population (b)'s type names are `primitiveTypes` plus
+-- `{Option, Ordering, Result}` from `stdlib/core.mdk`, and `duplicateErrors`'
+-- `typeSeed = primitiveTypes ++ whenL seed (dataRecordNames preludeDecls)` makes
+-- every one of those UNDECLARABLE elsewhere — so no name has a SECOND present
+-- identity to bridge to.  The enumeration of the NAMES was right.  What it missed
+-- is that `seed` is not a constant: `seed = not (programIsCore prog)`, and
+-- `programIsCore` (`frontend/resolve.mdk`) is a purely SYNTACTIC SELF-TEST —
+-- `hasOrdering prog && hasFoldable prog`.  A module that declares `data Ordering`
+-- AND `interface Foldable` therefore collapses its OWN `typeSeed` to
+-- `primitiveTypes` alone and may declare its own `Option`.  The guard was read as
+-- a property of the prelude when it is a property of the DECL SHAPES in front of
+-- it, and any module can write those.
+--
+-- ⚠️ NOT A REGRESSION FROM THIS UNIT, and the fix is not owed here.  Pre-A-2.10
+-- `unifyN`'s `TCon`/`TCon` arm was `a == b`, so both forms were accepted; this
+-- unit closed one of them.  What IS owed here is not asserting the other is
+-- impossible.  Closing #1279 needs identity SUPPLY at the extern signatures
+-- (population (b), already owed) or a `programIsCore` that is decided by the
+-- driver rather than by decl shapes — neither is a change to this predicate,
+-- which is the same "closing the supply gap strengthens this rule with no
+-- further edit" property stated above.
+--
+-- ⚠️ Re-derive population (b)'s name set rather than trusting any list; a new
+-- extern naming a further prelude type moves it, and the command is
 --   grep -E '^extern ' stdlib/runtime.mdk | sed -E 's/--.*$//; s/<[^>]*>//g' \
 --     | grep -oE '\b[A-Z][A-Za-z0-9_]*' | sort -u
--- `duplicateErrors`' `typeSeed = primitiveTypes ++ whenL seed
--- (dataRecordNames preludeDecls)` makes every one of those names
--- UNDECLARABLE by any other module — so each has exactly ONE reachable present
--- identity and there is no second one to bridge to.  In population (a) nothing
--- in the user module has an identity at all, and its one present peer (the
--- prelude, `core`) is name-disjoint from it by the same rejection.  This is a
--- fact about the CURRENT producers; a new extern naming a user-declarable type
--- would break it, which is a further reason (b) is owed a fix rather than a
--- workaround.
+-- In population (a) nothing in the user module has an identity at all, so it
+-- supplies no second identity of its own; it inherits #1279 through the prelude
+-- exactly as (b) does.
 --
 -- ⚠️ `TRigid` is deliberately NOT routed here and needs no arm: it carries no
 -- origin by construction (§8 I6.1 ∧ I6.3's corollary), so the cross-population

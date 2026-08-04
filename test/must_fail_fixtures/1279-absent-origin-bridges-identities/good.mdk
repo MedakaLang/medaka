@@ -1,0 +1,23 @@
+-- CONTROL half: BYTE-IDENTICAL to evil.mdk (same seed flip, same redeclared
+-- `Option`, same `unwrap*`) plus one honest caller.  Every ingredient of #1279 is
+-- present here EXCEPT the one under test: the argument is built with this
+-- module's OWN constructor and never crosses the extern's identity-less
+-- `Option`, so no bridge is asked for.
+--
+-- ⚠️ A control that removed the `Ordering`/`Foldable` pair instead was tried and
+-- REJECTED: the seed flip also drops the prelude from `buildEnv`'s scope
+-- (`pTypes`/`pCtors` are `whenL seed ...`), so such a module cannot SEE `Option`,
+-- `Some` or `None` at all -- `Unknown type: Option`, measured.  Flipping the seed
+-- is therefore not a variable this fixture can isolate; the BRIDGE is.
+public export data Ordering = MyLT | MyEQ | MyGT
+
+export interface Foldable f where
+  myfold : f a -> Int
+
+public export data Option a = MyJust a
+
+export unwrapGood : Option Int -> Int
+unwrapGood (MyJust n) = n + 1000
+
+export honest : Int
+honest = unwrapGood (MyJust 5)

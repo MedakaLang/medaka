@@ -471,7 +471,14 @@ echo "checking #1110 Mono.TCon mint set ..."
 # it. That is exactly the false positive the remedy predicts — "a pattern that
 # legitimately BINDS the origin is the expected first false positive; list it, and
 # the list stays the audit" — so they are listed rather than the filter widened.
-# NONE of the seven CONSTRUCTS a `TCon`.
+# NONE OF THEM CONSTRUCTS A `TCon` — that is the property, and it is checked by the
+# exact-set comparison, not by counting.
+#
+# ⚠️ THIS LINE SAID "NONE of the seven" AND THEN ENUMERATED EIGHT FUNCTIONS, two
+# lines below the sentence forbidding exactly that. Do not replace it with a
+# corrected number: the enumeration below is the set, and the gate's own label
+# derives the arithmetic from the allowlist (`$mono_tcon_pats origin-binding
+# pattern(s)`) — run the gate if you want a count.
 #
 #   `TCon n o => Some (headKeyOfCon o n)`  — `headTyconMono`, #1111 A-2.2: the first
 #     site in the file to READ an origin, projecting the head into a `HeadKey`.
@@ -486,9 +493,10 @@ echo "checking #1110 Mono.TCon mint set ..."
 #     READER, not a decider — nothing about acceptance goes through it.
 #
 # 🚨 THIS LIST IS THE ONLY PLACE THE COMPARISON SET IS ENUMERATED MECHANICALLY.
-# A seventh comparison added without listing it here FAILS this gate, which is the
+# ANY further comparison added without listing it here FAILS this gate, which is the
 # point: the set is what a reviewer has to grade, and `AGENTS.md`'s wildcard-arm
-# hazard says to audit it as a SET rather than one member.
+# hazard says to audit it as a SET rather than one member.  (This sentence said "a
+# seventh" while the list already held more than that — an ordinal is a count.)
 mono_tcon_allowed="| TCon String TyConOrigin
 TCon n o => Some (headKeyOfCon o n)
 (TCon n1 o1, TCon n2 o2) =>

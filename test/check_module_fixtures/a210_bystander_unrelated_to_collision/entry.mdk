@@ -23,13 +23,28 @@
 -- than hidden, and it is the CORRECT result for a bystander: its job is to fail
 -- when the mechanism BREAKS UNRELATED CODE, and a fixture that also moved when
 -- the mechanism was removed would be a feature test wearing a bystander's
--- header.  What it IS sensitive to, verified by construction rather than by
--- assertion: every binding below names a head that must acquire an identity —
--- `own`'s types by import, the prelude's by prepending, the builtins by their
--- own mint — so any of them acquiring the WRONG one (or acquiring one that
--- conflicts with the identity its DEFINER's own body uses) removes the binding
--- from this golden.  The collision two modules over is what makes that a live
--- risk rather than a hypothetical.
+-- header.
+--
+-- ⚠️ WHAT THAT COUNTERFACTUAL DOES AND DOES NOT ESTABLISH — narrowed 2026-08-04,
+-- because the first wording claimed more than the experiment it cited.  Reverting
+-- `unifyN` REMOVES THE READER, which trivially greens everything downstream of it;
+-- that is a sound test of "this is not a feature test", and nothing more.  It is
+-- NOT a test of a WRONG SUPPLY: no arm of it hands a head the wrong identity, so
+-- it cannot tell a correct supply from a broken one.
+--
+-- The header used to say the fixture was sensitive to wrong supply "by
+-- construction rather than by assertion" — that was an assertion.  The bound
+-- that IS honest: every binding below names a head that must acquire an identity
+-- (`own`'s types by import, the prelude's by prepending, the builtins by their
+-- own mint), so a supply defect REACHING ONE OF THESE HEADS drops its binding
+-- from the golden.  Whether any given supply defect reaches them is not
+-- something this fixture measures, and one that provably does not is the
+-- loader's dual-spelling defect — an entry BELOW its project root gets two
+-- `OriginModule` ids for one file, which this flat fixture directory cannot
+-- express at all (that leg lives in
+-- `test/diff_compiler_check_cli_modules.sh`'s `A-2.10/nested-project-*`).  The
+-- collision two modules over is what makes a wrong supply a live risk here
+-- rather than a hypothetical; it is not proof that this golden would catch one.
 import own.{Parcel(..), unParcel, Weigh(..), weigh, Sack}
 import pa.{pa1} -- ONLY the function; never pa's Twin
 import pz.{pz1} -- ONLY the function; never pz's Twin

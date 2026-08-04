@@ -22,10 +22,16 @@ what: well-typed -- only `armod`'s `Cfg` is in scope -- so the new behaviour is 
 what: FALSE REJECT of a valid program. Its severity moved S0 (silent wrong value,
 what: three-engine divergence) -> S1 (loud wrong rejection), which is the direction
 what: AGENTS.md's ladder calls progress, and it is now the SAME SHAPE as #1259
-what: (`universeDataEnv`, bare constructor key) and #1257 (`ifaceSlotKey`): a
-what: bare-name-keyed registry supplying the wrong identity, made visible by a
-what: comparison that reads identity. It drains when the RECORD namespace is
-what: re-keyed, not before.
+what: (`universeDataEnv`, bare constructor key): a bare-name-keyed registry
+what: supplying the wrong identity, made visible by a comparison that reads
+what: identity. It drains when the RECORD namespace is re-keyed, not before.
+what: ⚠️ This line also named #1257 (`ifaceSlotKey`) until 2026-08-04. That was
+what: WRONG twice over: `ifaceSlotKey` stores KINDS, not type heads, so no wrong
+what: head can flow out of it; and it was re-keyed by #1111 unit A-2.4 and CLOSED
+what: (2026-08-04 02:23Z) an hour before A-2.10 opened -- `ifaceSlotKey o iface i
+what: = regKeyTabAt (ifaceTabKey o iface) i` is identity-keyed. DERIVE the member
+what: set from the rule (keyed by a BARE NAME **and** stores a head, or a scheme
+what: containing one); do not copy a list, including this one.
 cmd: check-json entry.mdk
 exit: 1
 diag-code: T-TYPE-MISMATCH 9:16-9:17

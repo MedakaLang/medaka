@@ -3394,10 +3394,24 @@ stampBindingIds decls =
 -- is immune to re-stamping under any scope, on any path, however often a driver
 -- re-runs the pass.
 --
--- ⚠️ NOTHING READS `tyConOrigin` YET.  This PR is deliberately byte-identical: it
--- makes the fact AVAILABLE.  Re-keying the bare-name-keyed tables onto it (#1069,
--- #1070, #1090, #1092, #1208, #1209) and emitting use-site ambiguity diagnostics
--- are the NEXT A-1 PRs — they change acceptance and need their own review.
+-- ⚠️ `tyConOrigin` IS READ, AND IT DECIDES ACCEPTANCE.  This paragraph said
+-- "NOTHING READS `tyConOrigin` YET … re-keying the bare-name-keyed tables onto it
+-- (#1069, #1070, #1090, #1092, #1208, #1209) … are the NEXT A-1 PRs" until
+-- 2026-08-04; #1111 Stage A-2 unit A-2.10 landed the last two of that list, so
+-- the sentence describes a tree that no longer exists.  Six comparisons in
+-- `types/typecheck.mdk` — `unifyN`, `cohGoR`, `cohStep`, `cohEqR`, `matchStep`,
+-- `monoSameGiven` — now read the field, all through one seam, `sameTyConHead`
+-- (`frontend/ast.mdk`), whose doc-comment owns the rule and its derivation.  Two
+-- modules' same-named types no longer unify.
+--
+-- ⚠️ THE LESSON OUTLIVES THE CORRECTION, and it is why this was worth a paragraph
+-- rather than a deletion: a "nothing reads this" claim is a NEGATIVE ABOUT THE
+-- WHOLE TREE, it expires the moment ANY unit adds a reader, and no gate notices.
+-- The identical sentence stood in `types/typecheck.mdk`'s `Mono` comment
+-- ("CARRIER ONLY — NOTHING READS IT YET"), was already false there from A-2.2
+-- onward, and a reviewer traced a shipped S0 to someone believing it.  A-2.10
+-- fixed that twin and left THIS one standing for a further PR.  So: when you
+-- narrow a claim, GREP THE TREE FOR ITS OTHER SPELLINGS before you call it done.
 --
 -- ⚠️ RESIDUAL INHABITANT (§8 I6.3 drain).  `OriginUnresolved` survives this pass,
 -- and it means exactly one thing: **NO IDENTITY WAS AVAILABLE HERE**.  Two ways to
@@ -3415,9 +3429,35 @@ stampBindingIds decls =
 -- module, which is not absence but WRONGNESS.  The equivalence is not repaired
 -- here, it is RETIRED: do not reason from `OriginUnresolved` to "unbound".
 --
--- The consumer rule that makes the residual safe is unchanged and is the only one:
--- NO predicate may compare two `OriginUnresolved` heads equal, or treat one as
--- matching anything.  Draining it entirely needs the distinct pre-resolve type §8
+-- 🚨 THE CONSUMER RULE IS NOT ONE RULE, AND THIS IS WHERE THAT WAS DISCOVERED.
+-- It read: "NO predicate may compare two `OriginUnresolved` heads equal, or treat
+-- one as matching anything."  #1111 A-2.10's `tyConIdsConflict`
+-- (`frontend/ast.mdk`) does BOTH — its `_ => False` arm makes two absent heads
+-- non-conflicting AND makes an absent head non-conflicting with any present one —
+-- and it is CORRECT, so the rule as written was falsified by the first consumer
+-- that had to answer an acceptance question.  The rule splits by WHAT THE
+-- PREDICATE DECIDES, because "conservative" means opposite things on the two:
+--
+--   * a LOOKUP ("which row does this key select?") — a miss is loud and safe
+--     (`No impl of …`, `Unknown type …`), a false hit is silent wrongness.  There
+--     absence must never match, not even itself.  `ifaceIdMatches` and `tabKeyEq`
+--     are written that way, and the sentence above is still exactly right FOR
+--     THEM.
+--   * an ACCEPTANCE ("may this program be typed?") — a false REJECT refuses a
+--     valid program.  There absence must make NO CLAIM: two heads conflict only
+--     when both carry an identity and the identities differ.  Copying the lookup
+--     shape here rejects the compiler's own prelude (measured: an extern-sourced
+--     `Int` carries no identity and must still meet the `OriginBuiltin` one).
+--
+-- `sameTyConHead`'s doc-comment (`frontend/ast.mdk`) is the canonical derivation
+-- and the place to change either half; this is the pointer to it, not a second
+-- statement of it.  ⚠️ Absence-makes-no-claim on the acceptance side is a
+-- TRANSITIONAL shape, not the target: within the identity-less population it is
+-- operationally a wildcard, and #1279 is the measured bridge it permits.  It
+-- closes itself as supply completes — at total supply the predicate IS strict
+-- equality, which is §8 I6.3's target state.
+--
+-- Draining `OriginUnresolved` entirely needs the distinct pre-resolve type §8
 -- I6.3 really asks for (A-1's option 1), which is not reachable from a
 -- byte-identical PR.  The producer set is pinned by
 -- `test/typecheck_compiler_source.sh` (the `soundness` job).

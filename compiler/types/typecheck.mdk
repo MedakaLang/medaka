@@ -198,13 +198,25 @@ public export data Mono =
   -- each named after the identity class it claims, and
   -- `test/typecheck_compiler_source.sh` pins the set.  Everything else that
   -- mentions `TCon` in this file is a PATTERN — most with `_` in the origin
-  -- slot, and (since A-2.10) SEVEN that BIND it: `headTyconMono` plus the six
-  -- comparisons above.  The ratchet's own remedy predicted exactly that ("a
-  -- pattern that legitimately BINDS the origin is the expected first false
-  -- positive; list it, and the list stays the audit"), so those seven are
-  -- enumerated there and the enumeration is the audit — do not re-describe the
-  -- population with a `_`-shaped rule of thumb, which is what this paragraph
-  -- did until the seventh reader landed.
+  -- slot, and (since A-2.10) a set of them that BIND it.  The ratchet's own
+  -- remedy predicted exactly that ("a pattern that legitimately BINDS the origin
+  -- is the expected first false positive; list it, and the list stays the
+  -- audit"), so THE BINDING SET IS ENUMERATED THERE AND THE ENUMERATION IS THE
+  -- AUDIT.  Derive it, do not read it here:
+  --
+  --   sh test/typecheck_compiler_source.sh   # prints "N Mono.TCon mint(s) +
+  --                                          # M origin-binding pattern(s)"
+  --   grep -n 'mono_tcon_allowed' -A20 test/typecheck_compiler_source.sh
+  --
+  -- ⚠️ THIS PARAGRAPH SAID "SEVEN that BIND it: `headTyconMono` plus the six
+  -- comparisons above" AND WAS WRONG BY ONE ON ITS FIRST DAY — it omitted
+  -- `firstIdConflict` (the diagnostic-side reader that pairs the two conflicting
+  -- identities so `Type mismatch: T vs T` can name both modules), which binds
+  -- BOTH origins.  A count of the binding sites is an encoded fact with no
+  -- derivation, and the number of PATTERN LINES is not even the number of
+  -- FUNCTIONS (`cohStep` and `monoSameGiven` contribute two lines each), so the
+  -- reader has to pick which is meant.  Do not re-describe this population with a
+  -- rule of thumb — `_`-shaped or numeric.
   --
   -- ⚠️ AND NOTHING REBUILDS ONE FROM ITS NAME.  `substMono`/`substMonoP` (reached
   -- from `instantiate`, i.e. every use of every imported binding) used to answer
