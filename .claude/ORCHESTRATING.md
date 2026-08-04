@@ -1486,3 +1486,55 @@ green. A false claim is exactly what the *next* agent inherits and builds on, so
 silently instead of failing loudly. Add this to every review brief, as a question separate from
 "is the code correct": **is every claim in this diff's comments and PR body supported by what was
 actually run, or does it merely describe what the author expected to be true?**
+
+---
+
+## Stage A-2 of the typecheck arc, 2026-08-03/05 — three role lessons, none about the code
+
+- 🚨 **"Landing is serialized" is an instruction about ARMING, not a prediction about
+  ordering.** Arming two PRs that both touch one file puts both in the merge queue, and the
+  queue builds a temp branch of *your PR merged onto `main` plus everything queued ahead of
+  you* — so two PRs that each merge cleanly onto `main` can still conflict with **each
+  other**, and GitHub gives no signal for it: both read `mergeable: MERGEABLE`,
+  `mergeStateStatus: CLEAN`, because each is evaluated against `main` alone, never against
+  its queue siblings. Measured: two units collided in 4 files, two of them **goldens** — and
+  goldens are re-cut, never text-merged (see the ledger entry above), so a queue auto-merge
+  would have spliced two independent re-cuts. The check GitHub does not run for you, before
+  arming a second PR that shares a file with one already armed:
+  ```sh
+  git merge-tree --write-tree --name-only origin/<branch-a> origin/<branch-b> | tail -20
+  ```
+  And a related trap in the same arming step: `gh pr merge --disable-auto` does **NOT**
+  dequeue an already-queued PR — it returns *"already queued to merge"* and
+  `isInMergeQueue` stays `true`. The GraphQL mutation is the only thing that pulls one
+  back out:
+  ```sh
+  ID=$(gh api graphql -f query='{repository(owner:"MedakaLang",name:"medaka"){pullRequest(number:N){id}}}' --jq '.data.repository.pullRequest.id')
+  gh api graphql -f query="mutation{dequeuePullRequest(input:{id:\"$ID\"}){mergeQueueEntry{id}}}"
+  ```
+- ⚠️ **A review finding relayed into a fix brief becomes a CONSTRAINT, not a claim.** When
+  you hand an implementer *"the reviewer found X, therefore do Y,"* Y arrives as an
+  instruction — pushing back on it costs the implementer credibility rather than earning it.
+  Four times this session an agent had to contradict a brief of mine that had laundered a
+  reviewer's *observation* into my own *inference*; each time they were right, and each time
+  they had to run a control I had not. **Mark the epistemic status explicitly** — *"the
+  reviewer OBSERVED X; whether that means Y is UNVERIFIED, check it"* — and say plainly that
+  the agent may contradict it. A finding you did not reproduce yourself is a hypothesis with
+  a reviewer's name attached to it, not a fact.
+- ⭐ **Budget for the review yield; it does not decay.** Every behaviour-changing unit that
+  entered adversarial review this arc came back with a real finding, all 12/12 green
+  beforehand — including **two S0s introduced by the fix for another S0**, and one
+  **quadratic that `make preflight` structurally cannot see** (it never selects
+  `diff_compiler_perf_scaling.sh` on its own). One unit took **four** rounds; most took one
+  or two. Rounds are not churn when each attacks a dimension the last did not — track *what
+  dimension* each round covered, and stop when a round would only re-cover one already
+  closed, not when the round count merely feels high. Split every review brief into two
+  graded deliverables: *"is the code correct"* and *"is every claim in the comments, fixture
+  headers, and PR body supported by what was actually run"* — grading the second can ride on
+  the first once it is done.
+
+  ⚠️ Prefer a fact with a **derivation** over a bare assertion — but **run any command you
+  write, verbatim, and read its actual output** before trusting the derivation: this same
+  arc shipped a `grep` with an un-escaped `|` in a BRE (no `-E`), which matched only its own
+  comment text and "re-verified" a false claim. A command that cannot fail carries more
+  authority than a wrong number does.
