@@ -1,0 +1,7 @@
+-- issue #1275: half one of the bare-METHOD-NAME collision. Never re-exported by
+-- mid.mdk; main.mdk imports only the TYPE `MA` from here. The bare `import bys`
+-- is what puts the BYSTANDER in the loaded graph without main.mdk ever naming it.
+import bys
+
+export interface MA a where
+  mth : a -> Int

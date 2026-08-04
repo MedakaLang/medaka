@@ -2150,11 +2150,21 @@ routeLocalSym _ = ""
 -- exactly as PR1 copies universeKeyBucketsRef into shadowKeyTableRef.  The Flat path still
 -- rebuilds those two refs over its whole `prog`, so it never touches these accumulators.
 --   • interface-method NAME → (iface name, iface typarams, declared method Ty).  Method
---     names are globally unique (coherence), so last-write-wins omInsert accumulates to the
---     same map the per-module `fullUniverse` rebuild produced.  EVERY reader is a by-method-
---     NAME omLookup (singleTyparamIfaceMethod / ifaceParamMonos / shadowVarHeadMethodScheme /
---     inferAppExpr / …), never an iteration or an emptiness test, so an extra prior-module
---     entry that this module never names is never queried — byte-identical output.--   • the SET of interface names with ≥1 method registered.  Read only by ifaceRegistered's
+--     🚨 #1111 A-2.5 (#1092): this bullet used to read "Method names are globally unique
+--     (coherence), so last-write-wins omInsert accumulates to the same map the per-module
+--     `fullUniverse` rebuild produced.  EVERY reader is a by-method-NAME omLookup … so an
+--     extra prior-module entry that this module never names is never queried — byte-
+--     identical output."  BOTH halves are FALSE.  Method names are NOT globally unique —
+--     two unrelated interfaces may each declare `mth` — and the final clause is the one
+--     that mattered: on such a collision the entry a prior module wrote IS queried, by
+--     every by-method-NAME omLookup reader (singleTyparamIfaceMethod / ifaceParamMonos /
+--     shadowVarHeadMethodScheme / inferAppExpr / …), which then takes the WRONG INTERFACE
+--     out of it.  That is #1092 (S0).  The per-module rebuild agreed only because it made
+--     the identical wrong choice, which is why nothing caught it.  What is true post-A-2.5:
+--     the Module arm OVERLAYS this map, for the (normally zero) COLLIDED names only, with
+--     what each name resolves to in THIS module's scope (applyMethodScopeOverrides); every
+--     other name still takes the shared map unchanged.  Spellings the overlay does not
+--     reach are open and derived, not a closed set — #1272 / #1275 / #1276.--   • the SET of interface names with ≥1 method registered.  Read only by ifaceRegistered's
 --     omHasKey existence check (core's Num/Eq/Ord are seeded on both paths, so identical).
 -- #154 PR3 (sites #6/#7): the PERSISTENT keyed impl universe for the obligation
 -- checkers (checkImplObligations / checkCallObligations).  The Module arm used to
@@ -2232,10 +2242,24 @@ routeLocalSym _ = ""
 -- `argDispatchIndices a ++ argDispatchIndices b`.  Grow this list ONE module at a time in
 -- `appendUniverseAccums` (BEFORE the Module arm reads it, so module k sees interfaces
 -- 1..k INCLUDING its own — the same membership `accAll ++ prog` gave), copy it into the
--- resetState-wiped methodDispatchIdxRef in the Module arm.  Byte-identical: method names
--- are globally unique and the sole reader is methodDispatchIdx's `lookupAssoc` (first-wins),
--- so the accumulated list carries exactly the entries the per-module rebuild produced, in
--- the same core-first left-to-right order.  Survives per-module `resetState`; cleared per
+-- resetState-wiped methodDispatchIdxRef in the Module arm.  Byte-identical to the old
+-- per-module rebuild — but NOT for the reason this comment used to give.  It said "method
+-- names are globally unique and the sole reader is methodDispatchIdx's `lookupAssoc`
+-- (first-wins)".  🚨 #1111 A-2.5 (#1092): method names are NOT globally unique.  The
+-- equality survives WITHOUT that premise: `argDispatchIndices` is a pure concatenation and
+-- `lookupAssoc` is first-wins on BOTH sides, so accumulator and rebuild hold the same
+-- entries in the same core-first left-to-right order and therefore make the SAME pick,
+-- whatever it is.  What uniqueness was silently doing is making that pick UNAMBIGUOUS;
+-- without it, WHICH of two same-named methods' dispatch indices wins is decided by
+-- registration order.
+-- ⚠️ Whether that order-decided pick is ever OBSERVABLY wrong is UNVERIFIED, and this row
+-- must not be recorded as fixed on the strength of A-2.5: A-2.5 overlays
+-- methodIfaceParamsRef, NOT this list, so it does not touch this table at all.  Two probes
+-- built to expose the pick (one method name at two different dispatch ARG POSITIONS across
+-- two modules, both registration orders) returned the CORRECT value on the A-2.5 binary and
+-- on main alike — i.e. they discriminate nothing, so they are evidence of neither verdict.
+-- Unowned; umbrella #1070 / #1111.
+-- Survives per-module `resetState`; cleared per
 -- RUN by `resetCrossModuleState`; seeded by the core pass (also Module mode).
 -- FLAT-PATH SHADOW FIX (facet 1): interface-method names that a USER top-level fn
 -- shadows on the single-file flat check path.  processSCC drops a scheme with one
@@ -11794,10 +11818,28 @@ insertIfaceMethodsAcc iface typarams scope ((IfaceMethod mname mty _)::rest) (mp
 -- ⚠️ MODULE-PATH-ONLY, exactly as `IdentOrigin`'s doc-comment in `frontend/ast.mdk`
 -- bounds the whole of Stage A-2: a flat/single-file declaration carries
 -- `OriginUnresolved`, `mkIdent` refuses it, and no candidate is recorded.  The flat
--- writer (`registerMethodIfaceParamsMethods`) is deliberately untouched — a flat program
--- has exactly one user module, so a name it declares cannot collide ACROSS modules, and
--- its own-declaration-wins answer is already the scoped one.  #1115 (E-1) is what would
--- give the flat path real module ids.
+-- writer (`registerMethodIfaceParamsMethods`) is deliberately untouched.
+--
+-- 🚨 The REASON for that carve-out, corrected.  It used to read "a flat program has exactly
+-- one user module, so a name it declares cannot collide ACROSS modules, and its
+-- own-declaration-wins answer is already the scoped one."  The second clause is FALSE and
+-- was measured to be: in ONE file declaring two interfaces that share a method name there
+-- is no single OWN declaration — both are own — so there is nothing for a ladder whose top
+-- rung is "own declarations win" to select.  The flat answer is last-declared-wins.
+-- MEASURED (identical on this build and on main, so nothing here regressed): one file with
+-- `interface FA`/`interface FB` both declaring `mth`, `data Blob`, and `impl FA Blob` only —
+-- with FA declared FIRST the program is REJECTED `No impl of FB for Blob`, and with the two
+-- interface declarations SWAPPED (nothing else changed) it is ACCEPTED at exit 0 and prints
+-- FA's body.  The obligation goes to the LAST-declared interface either way; an
+-- interface-declaration reordering that changes no program meaning changes the verdict.
+-- The carve-out itself still stands, on the FIRST clause plus a mechanism argument: this
+-- unit's discriminator is the importing module's IMPORT SCOPE, and a single file has none
+-- — every candidate is own, so no rung of `scopedMethodEntry` can separate them.  ⚠️ Nor
+-- would #1115 (E-1)'s real module ids supply one: both declarations would carry the SAME
+-- module id.  The flat path therefore has a live defect of this class whose fix needs a
+-- WITHIN-module discriminator (or an ambiguity diagnostic at the occurrence) that neither
+-- A-2.5 nor E-1 provides — it is owed a derivation, not covered.  Nearest tracked relative:
+-- #1182 (same one-file two-interface collision, decided by impl-block order at dispatch).
 --
 -- A SEPARATE decl walk from `insertMethodIfaceParams` rather than a widened accumulator:
 -- the pair-threading signature above is pinned by the selfproc LEG A scheme golden, and
@@ -11946,10 +11988,20 @@ usePathWitnesses path n (ident, (iface, _, _, _)) =
     && (mkIdent NsMethod (OriginModule dep) n == Some ident || usePathNamesMember path iface)
 
 -- `None` from importedBindings is the WILDCARD form (`import m.*`), which binds every
--- name the dependency exports — so it witnesses any name.  `UseAlias` yields `Some []`
--- (a module alias binds no bare names) and therefore witnesses nothing, which is right:
--- a method reached as `M.mth` is renamed to its origin spelling by renameAliasedMethods
--- before this table is ever consulted.
+-- name the dependency exports — so it witnesses any name.
+--
+-- 🚨 `UseAlias` yields `Some []` (a module alias binds no bare names) and therefore
+-- witnesses NOTHING.  That is a KNOWN DEFECT, not a safe case.  This comment used to end
+-- "which is right: a method reached as `M.mth` is renamed to its origin spelling by
+-- renameAliasedMethods before this table is ever consulted."  The rename is precisely what
+-- DESTROYS the discriminator: the alias was the only syntactic evidence of which module the
+-- occurrence meant, so afterwards it is a bare `mth` with no provenance, no candidate is
+-- witnessed, and applyMethodScopeOverrides declines to the last-write-wins floor — #1092's
+-- S0, unfixed, for that spelling.  MEASURED: `import ifacea as A` as the only provider of
+-- `mth`, `Blob` implementing `IB` only, `println (A.mth Blob)` prints `2` at exit 0 where
+-- `No impl of IA for Blob` is correct — on this build AND on main, so not a regression.
+-- Filed as #1276.  An alias binds no NAMES but does carry a MODULE ID; recovering it (here
+-- or by not erasing it in renameAliasedMethods) is the fix — see #1276 for both shapes.
 usePathBindsName : UsePath -> String -> Bool
 usePathBindsName path n = match importedBindings path
   None => True

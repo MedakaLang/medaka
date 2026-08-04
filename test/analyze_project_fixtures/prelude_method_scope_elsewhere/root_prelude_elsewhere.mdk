@@ -1,0 +1,38 @@
+-- #1111 A-2.5 (#1092): the PRELUDE-RUNG cell -- a wrong -> correct move this unit
+-- makes and did NOT claim.  AGENTS.md flags exactly this shape as untested by
+-- construction: every pre-existing fixture covered the case that RETURNED
+-- something (a diagnostic), so no existing golden could fail on a path that
+-- newly returns NOTHING.  This file is the missing positive control.
+--
+-- This module names no user interface at all.  It calls the PRELUDE's `debug`
+-- (core's `Debug`) on an `Int`, for which core has an impl.  The program is well
+-- typed; EVERY file in this graph must bucket to zero diagnostics.
+--
+-- It did not.  A user interface elsewhere in the graph (`pdiface.UDbg`) also
+-- declares a method named `debug`; the cross-module method table is keyed by the
+-- BARE method name and is last-write-wins; the user interface registers AFTER
+-- core.  So the impl obligation for this occurrence was recorded against `UDbg`
+-- -- an interface this file never imports and never names -- and a valid program
+-- was rejected.  MEASURED first-hand on a cold `make medaka` of e572da09
+-- (pre-A-2.5), on this exact directory:
+--
+--   No impl of UDbg for Int   (at the `debug` occurrence in `main`, below --
+--   deliberately quoted WITHOUT a line:col, so a later comment edit here cannot
+--   silently falsify it)
+--
+-- What makes it pass is `preludeMethodEntry`, the LAST rung of
+-- `scopedMethodEntry` (compiler/types/typecheck.mdk): the implicit prelude is in
+-- scope in every module without a `DUse`, so a module that witnesses no import
+-- for a collided name resolves it to core's declaration rather than to whichever
+-- user interface happened to register last.
+--
+-- ⚠️ `exit 1 -> exit 0`, i.e. the severity-INCREASE direction if it is wrong, so
+-- the expected value was derived from the language and not read off the tool:
+-- `bump 1` is 2, and core's `impl Debug Int` is `debug n = intToString n`, so
+-- `debug (bump 1)` is "2" and the program is well typed.  Its mirror -- the same
+-- overlay machinery having to KEEP rejecting a genuinely missing impl -- is
+-- `method_missing_impl_no_collision` in this same corpus.
+import pdbridge.{bump}
+
+main : <IO> Unit
+main = putStrLn (debug (bump 1))

@@ -1,0 +1,8 @@
+-- #1111 A-2.5 (#1092): the BRIDGE.  A bare `import pdiface` binds NO names, but
+-- it does put that module in the loaded graph -- which is what makes `debug` a
+-- COLLIDED method name for the whole program.  The entry imports only `bump`
+-- from here, so it never names `UDbg` and never imports anything re-exporting it.
+import pdiface
+
+export bump : Int -> Int
+bump n = n + 1

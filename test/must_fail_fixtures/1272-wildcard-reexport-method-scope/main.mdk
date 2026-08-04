@@ -5,11 +5,11 @@
 -- binary prints `1`, IA's impl body.
 --
 -- The ONE variable versus the sibling shapes A-2.5 (#1092) fixed is the import
--- FORM on line 12: `import mid.{IB, mth}` (selective, see control.mdk) rejects
+-- FORM on line 13: `import mid.{IB, mth}` (selective, see control.mdk) rejects
 -- correctly, and so does `import ifaceb.*` (wildcard, but of the DECLARING
--- module). Only wildcard-of-a-RE-EXPORTER satisfies neither witness in
--- `usePathWitnesses` (compiler/types/typecheck.mdk), so the scope override
--- declines and the bare-name last-write-wins entry stands.
+-- module). This form satisfies neither witness in `usePathWitnesses`
+-- (compiler/types/typecheck.mdk), so the scope override declines and the
+-- bare-name last-write-wins entry stands. NOT the only such form: see claim.txt.
 import mid.*
 import ifacea.{IA}
 

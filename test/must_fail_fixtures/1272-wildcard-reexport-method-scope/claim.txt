@@ -51,12 +51,37 @@ why-control: constraint #1092's and #1209's claim.txt both record. What it
 why-control: isolates is that SELECTIVE re-export import + method obligation is
 why-control: fine; if it breaks, module re-export / interface resolution broke,
 why-control: not #1272.
-why-note: NOT a duplicate of #1092, which A-2.5 drained. Every cell in #1092's
-why-note: 24-cell matrix imports the method DIRECTLY from the declaring module,
-why-note: and all of them now reject correctly -- as do `import ifaceb.*`
-why-note: (wildcard of the DECLARING module) and `import mid.{IB, mth}`
-why-note: (SELECTIVE re-export). Wildcard-of-a-RE-EXPORTER is the single
-why-note: surviving combination.
+why-note: NOT a duplicate of #1092, which A-2.5 drained FOR THE SHAPES IT
+why-note: REACHES. Every cell in #1092's 24-cell matrix imports the method
+why-note: DIRECTLY from the declaring module, and all of them now reject
+why-note: correctly -- as do `import ifaceb.*` (wildcard of the DECLARING
+why-note: module) and `import mid.{IB, mth}` (SELECTIVE re-export).
+why-note: 🚨 THE RESIDUAL SET IS OPEN AND DERIVED, NOT CLOSED. This file said
+why-note: "Wildcard-of-a-RE-EXPORTER is the single surviving combination" until
+why-note: 2026-08-04. That was FALSE. Adversarial review of PR #1271 measured
+why-note: three MORE surviving spellings on the same binary; none is a
+why-note: regression (each reproduces on main @ e572da09 identically):
+why-note:   * #1275 -- a SELECTIVE re-export import (the very form this
+why-note:     fixture's control uses) goes wrong again as soon as ANY module in
+why-note:     the graph declares a same-named interface carrying the same method
+why-note:     name, because `usePathWitnesses`' second witness compares a bare
+why-note:     interface NAME string rather than an identity. The importing
+why-note:     module need not import or mention that module at all.
+why-note:   * #1276 -- an ALIAS-qualified occurrence (`import m as A`, `A.mth`).
+why-note:     `renameAliasedMethods` erases the provenance before this table is
+why-note:     consulted, so `usePathBindsName` witnesses nothing, ever.
+why-note:   * a SELECTIVE import from a re-exporter that re-exports only the
+why-note:     METHOD (`export import ifaceb.{mth}` then `import mid2.{mth}`):
+why-note:     the member list names no interface, so witness (b) misses for the
+why-note:     same reason a wildcard does. Measured cell recorded as a comment
+why-note:     on THIS issue.
+why-note: DERIVE the set; do not read it off this file. Enumerate the import
+why-note: forms that reach `usePathWitnesses` (compiler/types/typecheck.mdk)
+why-note: and ask which satisfy NEITHER witness. Two successive statements of
+why-note: this residual have now been wrong, so treat any count here as stale.
+why-note: 🚨 CONSEQUENCE: #1092's CLASS MUST NOT BE CLOSED WHEN THIS ROW DRAINS.
+why-note: This row pins ONE spelling. #1275 and #1276 are open and are NOT
+why-note: pinned by it.
 why-note: ⚠️ A SEPARATE, PRE-EXISTING wildcard defect sits next to this one and
 why-note: is NOT what this row pins: naming a WILDCARD-IMPORTED interface in an
 why-note: `impl` head (`import ifaceb.*` then `export impl IB Blob`) is rejected
