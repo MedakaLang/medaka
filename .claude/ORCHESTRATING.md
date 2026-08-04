@@ -1506,8 +1506,12 @@ actually run, or does it merely describe what the author expected to be true?**
   ```
   And a related trap in the same arming step: `gh pr merge --disable-auto` does **NOT**
   dequeue an already-queued PR — it returns *"already queued to merge"* and
-  `isInMergeQueue` stays `true`. Use the GraphQL `dequeuePullRequest` mutation to actually
-  pull one back out.
+  `isInMergeQueue` stays `true`. The GraphQL mutation is the only thing that pulls one
+  back out:
+  ```sh
+  ID=$(gh api graphql -f query='{repository(owner:"MedakaLang",name:"medaka"){pullRequest(number:N){id}}}' --jq '.data.repository.pullRequest.id')
+  gh api graphql -f query="mutation{dequeuePullRequest(input:{id:\"$ID\"}){mergeQueueEntry{id}}}"
+  ```
 - ⚠️ **A review finding relayed into a fix brief becomes a CONSTRAINT, not a claim.** When
   you hand an implementer *"the reviewer found X, therefore do Y,"* Y arrives as an
   instruction — pushing back on it costs the implementer credibility rather than earning it.
