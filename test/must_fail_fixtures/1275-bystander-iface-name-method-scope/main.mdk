@@ -1,0 +1,18 @@
+-- issue #1275: `mth` reaches this file ONLY through mid.mdk's SELECTIVE
+-- re-export of ifaceb's, so this occurrence unambiguously means `MB.mth` -- and
+-- `Blob` has no `MB` impl at all, only an `MA` one. This must be rejected with
+-- `No impl of MB for Blob`. It is not: check/run are clean and it prints `1`,
+-- MA's impl body.
+--
+-- This is the import form A-2.5 (#1092) DOES fix; see bys.mdk for the one
+-- variable that breaks it again. Not a regression -- main @ e572da09 prints `1`
+-- here too.
+import mid.{MB, mth}
+import ifacea.{MA}
+
+public export data Blob = Blob
+
+export impl MA Blob where
+  mth b = 1
+
+main = println (mth Blob)

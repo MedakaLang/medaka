@@ -1,0 +1,5 @@
+-- issue #1275: half two. `MB.mth` is what main.mdk's occurrence actually means --
+-- it reaches main.mdk through mid.mdk's SELECTIVE re-export, the import form
+-- A-2.5 (#1092) does resolve correctly when no bystander is present.
+export interface MB a where
+  mth : a -> Int

@@ -1,0 +1,25 @@
+-- #1111 A-2.5 SEVERITY-LADDER MIRROR — the `exit 1 must STAY exit 1` half.
+--
+-- A-2.5's user-visible win is that a valid program stops being rejected
+-- (`1092_method_scope_named_b`'s sibling in test/llvm_fixtures_modules/
+-- method_scope_valid_under_collision, an `exit 1 → exit 0` change).  The failure
+-- mode of getting that wrong is that impl obligations stop being RECORDED at all,
+-- which turns every missing impl into silence — a strictly worse S0 than the one
+-- being fixed, and one that NO drained repro can see, because every drained repro
+-- contains a name collision and this file contains none.
+--
+-- So: one interface, one method name, no collision anywhere in the graph, and no
+-- `impl MOnly Blob`.  `check` must report exactly one error:
+--
+--   No impl of MOnly for Blob; write an 'impl MOnly Blob'.
+--
+-- This is the path A-2.5 leaves entirely alone (the method table's collided-name
+-- list is EMPTY here, so `applyMethodScopeOverrides` returns the floor map
+-- untouched) — which is exactly why it is worth pinning: "the overlay is a no-op
+-- when nothing collides" is an assertion, not an observation, until something
+-- grades it.
+import mone.{MOnly, solo}
+
+public export data Blob = Blob
+
+main = println (solo Blob)

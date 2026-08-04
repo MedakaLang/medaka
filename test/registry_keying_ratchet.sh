@@ -108,8 +108,10 @@ CIE="$ROOT/compiler/ir/core_ir_eval.mdk"
 # substring `setRef crossRun.value.` on its own MISSES the split form outright
 # -- verified against this file: the naive single-line grep the #1111 brief
 # itself suggests undercounts CrossRun's writer set by one field
-# (universeIfaceRequiredRef, written via the split form at what is currently
-# typecheck.mdk:18411-18413) and DriverState's by two (effectDomains,
+# (universeIfaceRequiredRef, written via the split form -- find it with
+# `grep -n 'universeIfaceRequiredRef' compiler/types/typecheck.mdk`, the site
+# whose `setRef` sits alone at the end of its line) and DriverState's by two
+# (effectDomains,
 # abstractRecordTypesRef). This helper joins a bare trailing `setRef` line
 # with the line that follows it -- as an EXTRA synthesized line emitted ahead
 # of the untouched original stream, so nothing is dropped and the single-line
@@ -150,27 +152,31 @@ body_of() {
 # CHECK 1 — CrossRun / DriverState FIELD allowlist
 # ═══════════════════════════════════════════════════════════════════════════
 # Seeded with TODAY's full field set (derived below, not assumed) -- this
-# check asserts nothing about the existing 43 fields' correctness, only that
+# check asserts nothing about the existing 44 fields' correctness, only that
 # no NEW field is added to either bundle without a reviewer adding a row here
 # with its own one-line reason. As each later A-2 unit re-keys a table, its
 # row here is the place that PR touches (a rename, or two bare/qualified
 # mirror fields consolidating into one qualified field), so the allowlist
 # shrinking over the arc is the mechanically visible progress signal.
 #
-# ⚠️ DERIVED, NOT TRUSTED: CrossRun's own comments (typecheck.mdk:2671, :2709,
-# :2775, :2789) say "22" or "23" cross-module accumulators. Extracting the
-# record's actual field block gives 25 -- the comments are stale by two or
-# three fields apiece. Trust the extraction; the comments are prose, not a
-# gate. (DriverState's own "~18 RESIDUAL survivor Refs" comment at :2204-2214
-# DOES match its actual field count of 18.)
+# ⚠️ DERIVED, NOT TRUSTED: CrossRun's own comments -- `grep -n 'cross-module
+# accumulators\|field-Refs fresh' compiler/types/typecheck.mdk` finds all four
+# -- say "22" or "23" cross-module accumulators. Extracting the record's actual
+# field block gives 26 (re-derived after A-2.5 added universeMethodIdentsRef /
+# universeMethodCollidedRef) -- the comments are stale by three or four fields
+# apiece. Trust the extraction; the comments are prose, not a gate.
+# (DriverState's own "~18 RESIDUAL survivor Refs" comment DOES match its actual
+# field count of 18.)
 echo "checking #1111 CrossRun / DriverState field allowlist ..."
 
 cross_allowed='universeIfaceMethodsRef -- accumulated interface-method NAME set across all modules (definer-shadow checks)
 universeFunNamesRef -- accumulated top-level fn NAME set across all modules (importer-shadow checks)
 universeKeyBucketsRef -- accumulated impl-existence key buckets (implExistsForHead)
 universeIfaceRequiredRef -- accumulated iface -> required-method-names map (impl completeness); IDENTITY-KEYED since A-2.4 (a Registry keyed by regKeyOfTab (ifaceTabKey <ifaceOrigin/implOrigin> name); drained #1258. Flat/single-file rows key TkBare until #1115 -- but this table is READ only on the Module arm)
-universeMethodIfaceParamsRef -- accumulated method -> iface param map (#822 kind universe, iface half)
-universeRegisteredIfacesRef -- accumulated registered-iface set, paired with the map above. STILL BARE-NAME, DELIBERATELY, and A-2.4 examined it and declined: the value is Unit, so a collapse selects no row; all three readers (recordIfaceObligation / inferNumLit / checkOneCallObligation, via ifaceRegistered) pass a LITERAL prelude name with no TyConOrigin to key from; and what it gates is the obligation channel, which is itself "<iface>|<tag>"-keyed and belongs to A-2.2. Full derivation on ifaceRegistered in typecheck.mdk. Revisit WITH obUniv*, not before
+universeMethodIfaceParamsRef -- accumulated method -> iface param map (#822 kind universe, iface half); still BARE-NAME-keyed and last-write-wins, but since A-2.5 it is only the FLOOR: the Module arm installs it OVERLAID per module by applyMethodScopeOverrides, so a name two interfaces both declare is decided by the importing module scope, not by registration order (#1092)
+universeMethodIdentsRef -- A-2.5: the IDENTITY-KEYED companion of the line above -- every (declaring module, method name) declaration of each method name, so a bare-name collision keeps BOTH rows instead of losing one to last-write-wins. Module-path-only: a flat/unstamped declaration mints no Ident (#1115 / E-1)
+universeMethodCollidedRef -- A-2.5: the method NAMES universeMethodIdentsRef holds >=2 distinct identities for. Normally EMPTY; it is what keeps the per-module overlay O(collisions) instead of O(all methods)
+universeRegisteredIfacesRef -- accumulated registered-iface set, paired with universeMethodIfaceParamsRef above. STILL BARE-NAME, DELIBERATELY, and A-2.4 examined it and declined: the value is Unit, so a collapse selects no row; all three readers (recordIfaceObligation / inferNumLit / checkOneCallObligation, via ifaceRegistered) pass a LITERAL prelude name with no TyConOrigin to key from; and what it gates is the obligation channel, which is itself "<iface>|<tag>"-keyed and belongs to A-2.2. Full derivation on ifaceRegistered in typecheck.mdk. Revisit WITH obUniv*, not before
 universeMethodDispatchIdxRef -- accumulated interface dispatch-index list
 universeRecordByName -- accumulated record name -> RecordInfo map
 universeFieldOwners -- accumulated field-name -> owning-record(s) map
