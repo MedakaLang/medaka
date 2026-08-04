@@ -13604,13 +13604,22 @@ headCollides table name hd = countHead table name hd > 1
 -- the BARE HEAD WORD instead of the winner's canonical key, while
 -- `core_ir_lower.declRouteKey` derives the impl's own word from a spelling-based
 -- uniqueness test.  That is a dict-word skew — by `keyForSite`'s own #1128 note,
--- "invisible on the direct-call path … and live on the RDict path".  Today the only
--- shape that reaches it is #1277, whose own S0 swamps the difference (a
--- spelling-keyed variant emits byte-identical IR on that program), so it is LATENT;
--- it goes live the moment #1277 is fixed, at which point the code looks correct and
--- nothing in the corpus is watching.  Enrolment rule, from `dispHeadTab`: if a
--- site's answer would CHANGE when the head half becomes an identity, it goes
--- through that function.
+-- "invisible on the direct-call path … and live on the RDict path".  It is LATENT
+-- today because the one shape known to reach it, #1277's, is itself an open S0
+-- that swamps the difference — and it goes live the moment #1277 is fixed, at
+-- which point the code looks correct and nothing in the corpus is watching.
+--
+-- ⚠️ "THE ONE SHAPE KNOWN TO REACH IT" IS A WITNESS, NOT A CENSUS.  What was
+-- actually run: this file rebuilt with the retest reverted to the identity form
+-- and a panic on disagreement, which fired `answer=1 spell=2 at ff` on #1277's
+-- `main.mdk` and stayed SILENT on `main = println "hi"` and on #1277's own
+-- control (same program, head spelled `G`) — so the instrument discriminates.
+-- Nobody has run that build over the whole fixture corpus.  If you need more
+-- than "latent as far as anyone looked", derive it: revert the retest, rebuild,
+-- and run the gates under the panicking binary.
+--
+-- Enrolment rule, from `dispHeadTab`: if a site's answer would CHANGE when the
+-- head half becomes an identity, it goes through that function.
 countHead : KeyBuckets -> String -> Option HeadKey -> Int
 countHead buckets name hd =
   -- goal-side key projected ONCE, here — see `headTabOf`.
