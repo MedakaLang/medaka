@@ -128,6 +128,12 @@ ifaceIdentity OriginBuiltin _ = ""
 -- compare EQUAL, which is exactly the cross-module confusion the carrier exists
 -- to prevent (and which the flat/loader-less drivers would hit immediately,
 -- since they deliberately stamp nothing — see `stampFlatTyOrigins`).
+--
+-- ⚠️ `sameTyConHead` BELOW IS THE OPPOSITE RULE ON THE SAME ABSENCE, and the
+-- two are meant to be read together: this one answers a LOOKUP (a miss is
+-- loud, a false hit is silent), that one answers ACCEPTANCE (a false reject
+-- refuses a valid program).  Neither shape may be copied to the other site;
+-- the derivation is written at `sameTyConHead`.
 export ifaceIdMatches : String -> String -> Bool
 ifaceIdMatches a b = a != "" && a == b
 
@@ -329,6 +335,148 @@ identOriginOf (OriginModule mid) =
 -- already has in hand, or `None` if that origin is not an identity.
 export mkIdent : Ns -> TyConOrigin -> String -> Option Ident
 mkIdent ns origin name = map (io => Ident ns io name) (identOriginOf origin)
+
+-- ── the TYPE-HEAD comparison seam (#1111 Stage A-2 unit A-2.10) ─────────────
+-- The ONE rule every "are these two type heads the SAME TYPE?" test in
+-- `types/typecheck.mdk` is written against — `unifyN`, `cohGoR`, `cohStep`,
+-- `cohEqR`, `matchStep`, `monoSameGiven`.  Stage A-1 landed the identity
+-- CARRIER on `Ty.TyCon`/`Mono.TCon`; until this unit every one of those sites
+-- bound the origin to `_` and compared the NAME alone, which is what made
+-- #1208/#1209 (two modules' unrelated same-named types unify, silently, exit 0)
+-- and what made a key computed from that field not a function of the type at
+-- all — which is why the dispatch-key half of A-2 had to ship spelling-keyed.
+--
+-- 🚨 THE RULE IS THE EXACT INVERSE OF `ifaceIdMatches` / `tabKeyEq`, AND THAT
+-- IS DERIVED, NOT AN OVERSIGHT.  Those two answer a LOOKUP question ("which
+-- row does this key select?"), where a MISS is loud and safe (`No impl of …`,
+-- `Unknown type …`) and a false HIT is silent wrongness — so absence must never
+-- match, not even itself (`tabKeyEq _ _ = False` across the two `TabKey`
+-- constructors, in BOTH directions).  This one answers an ACCEPTANCE question
+-- ("may this program be typed?"), where the safe direction INVERTS: a false
+-- REJECT refuses a valid program — loud, and a severity INCREASE by AGENTS.md's
+-- ladder — while a false ACCEPT is the status quo the arc is draining.  Absence
+-- must therefore be conservative in both, and "conservative" means opposite
+-- things.  Copying `tabKeyEq`'s shape here rejects the compiler's own prelude:
+-- measured on this tree before the rule was written, `stringLength "xy" < 2`
+-- reaches `unifyN` as `Int`(no identity, extern-sourced) ~ `Int`(`OriginBuiltin`).
+--
+-- ⚠️ THE CANONICAL STATEMENT OF THE CONSUMER RULE LIVES IN `frontend/resolve.mdk`
+-- (the `RESIDUAL INHABITANT` block, which this file's carrier comment cites as its
+-- authority), AND THIS UNIT FALSIFIED THE VERSION WRITTEN THERE.  It read "NO
+-- predicate may compare two `OriginUnresolved` heads equal, or treat one as
+-- matching anything" — `tyConIdsConflict` below does BOTH, correctly.  That
+-- statement has been split there by decision class (lookup vs acceptance) rather
+-- than patched here; reconciling one site and leaving the twin standing is the
+-- exact defect this unit fixed in `types/typecheck.mdk`'s `Mono` comment, so both
+-- are now reconciled.  Change either half in ONE place: this one.
+--
+-- SO: an ABSENT origin makes NO CLAIM, and two heads CONFLICT only when both
+-- carry an identity and the identities differ.  Stated honestly: within the
+-- identity-less population this is operationally a wildcard, and §8 I6.3 is
+-- right that that is not a resting place.  What it is NOT, and what I6.3's
+-- prohibition is actually about, is a wildcard IDENTITY: this predicate mints
+-- no `Ident`, selects no row, names no bucket, and is only ever consulted AFTER
+-- the name has already matched.  `identOriginOf` is still the sole gate to an
+-- `Ident` and still refuses — including for `OriginModule ""`, which is why
+-- this routes through it instead of hand-rolling a `TyConOrigin` equality that
+-- would compare the I6.3 empty id as a value.
+--
+-- ⚠️ THE RESIDUAL IS A SUPPLY GAP, AND CLOSING IT STRENGTHENS THIS RULE WITH NO
+-- FURTHER EDIT — that is the property that makes the transitional shape
+-- acceptable rather than a second sentinel.  Two populations have no identity
+-- today: (a) the FLAT/loader-less driver's own user module (#1115 / E-1 —
+-- `stampFlatTyOrigins` deliberately claims nothing there), and (b)
+-- `stdlib/runtime.mdk`'s EXTERN signatures, which never pass through the
+-- stamping walk (`externSchemes`) on either arm.  When a producer starts
+-- supplying an origin, `identOriginOf` stops answering `None` for it and this
+-- predicate becomes strict equality on that population automatically.  At total
+-- supply it IS strict equality, which is I6.3's target state.
+--
+-- 🚨 ABSENCE **CAN** BRIDGE TWO DISTINCT IDENTITIES — #1279, MEASURED, OPEN.
+-- Unification LINKS, so `a ~ T@absent` then `a ~ T@core` then `a ~ T@evil`
+-- accepts a pairing the DIRECT comparison refuses.  Both halves are measured on
+-- this tree:
+--   * the DIRECT form is CLOSED — `unwrapEvil (Some 1)`, where `unwrapEvil` takes
+--     another module's own `Option`, is rejected with a `T-TYPE-MISMATCH` naming
+--     both modules;
+--   * the INDIRECT form is NOT.  `mid = stringIndexOf "zz" "a"` gives an
+--     `Option Int` head with NO origin (population (b)); `isSome mid` links it to
+--     `Option@core`, `unwrapEvil mid` links it to `Option@evil`, and `check`
+--     exits 0 with ZERO diagnostics.  `run` prints `False`, then dies with
+--     `E-NONEXHAUSTIVE-MATCH`.  Pinned: `test/must_fail_fixtures/1279-…`.
+--
+-- ⚠️ THIS PARAGRAPH USED TO ASSERT THE OPPOSITE, AND THE ARGUMENT WAS AN
+-- ENUMERATION.  It read: population (b)'s type names are `primitiveTypes` plus
+-- `{Option, Ordering, Result}` from `stdlib/core.mdk`, and `duplicateErrors`'
+-- `typeSeed = primitiveTypes ++ whenL seed (dataRecordNames preludeDecls)` makes
+-- every one of those UNDECLARABLE elsewhere — so no name has a SECOND present
+-- identity to bridge to.  The enumeration of the NAMES was right.  What it missed
+-- is that `seed` is not a constant: `seed = not (programIsCore prog)`, and
+-- `programIsCore` (`frontend/resolve.mdk`) is a purely SYNTACTIC SELF-TEST —
+-- `hasOrdering prog && hasFoldable prog`.  A module that declares `data Ordering`
+-- AND `interface Foldable` therefore collapses its OWN `typeSeed` to
+-- `primitiveTypes` alone and may declare its own `Option`.  The guard was read as
+-- a property of the prelude when it is a property of the DECL SHAPES in front of
+-- it, and any module can write those.
+--
+-- ⚠️ NOT A REGRESSION FROM THIS UNIT, and the fix is not owed here.  Pre-A-2.10
+-- `unifyN`'s `TCon`/`TCon` arm was `a == b`, so both forms were accepted; this
+-- unit closed one of them.  What IS owed here is not asserting the other is
+-- impossible.  Closing #1279 needs identity SUPPLY at the extern signatures
+-- (population (b), already owed) or a `programIsCore` that is decided by the
+-- driver rather than by decl shapes — neither is a change to this predicate,
+-- which is the same "closing the supply gap strengthens this rule with no
+-- further edit" property stated above.
+--
+-- ⚠️ Re-derive population (b)'s name set rather than trusting any list; a new
+-- extern naming a further prelude type moves it, and the command is
+--   grep -E '^extern ' stdlib/runtime.mdk | sed -E 's/--.*$//; s/<[^>]*>//g' \
+--     | grep -oE '\b[A-Z][A-Za-z0-9_]*' | sort -u
+-- In population (a) nothing in the user module has an identity at all, so it
+-- supplies no second identity of its own; it inherits #1279 through the prelude
+-- exactly as (b) does.
+--
+-- ⚠️ `TRigid` is deliberately NOT routed here and needs no arm: it carries no
+-- origin by construction (§8 I6.1 ∧ I6.3's corollary), so the cross-population
+-- `TCon`/`TRigid` arms would compute "no conflict" and answer exactly what
+-- their present name-only test answers.  Their preserved forgery is #1243, a
+-- different clause, and this unit leaves it exactly where it was.
+--
+-- 🚨 THIS RULE IS ONLY AS CORRECT AS THE IDENTITY SUPPLY AT EACH PRODUCER, AND
+-- A WRONG SUPPLY BECOMES A FALSE REJECT.  Measured, not predicted: #1256's
+-- fixture is a valid program that this unit turned from `exit 0` into `Type
+-- mismatch: Cfg vs Cfg`.  Nothing about the comparison is wrong there — the
+-- *supply* is.  `recordByNameRef` (`types/typecheck.mdk`) is keyed by BARE
+-- record-type name and `omInsert` is last-write-wins across the whole import
+-- graph, so `lookupRecordByName "Cfg"` hands back a `RecordInfo` whose head is
+-- a perfectly well-formed identity BELONGING TO ANOTHER MODULE.  While nothing
+-- read the field, the two `Cfg`s were interchangeable and the program merely
+-- computed with the wrong field types; now the wrong identity is visible and
+-- the program is refused.
+--
+-- The class, stated so the next site is recognised rather than rediscovered:
+-- **a table keyed by a BARE NAME that STORES a type head is an identity-supply
+-- defect, and this rule converts each one from a silent wrong answer (S0) into
+-- a loud wrong rejection (S1).**  That is the direction `AGENTS.md`'s severity
+-- ladder calls progress, and it is NOT a fix — the fixture stays pinned, with
+-- its observable re-cut.  ⚠️ DERIVE the member set, do not read a list here: a
+-- member is a table that is keyed by a BARE NAME **and** stores a type head or a
+-- scheme containing one, which excludes the bare-name tables holding kinds or
+-- mere name-membership.  Two are known: #1256 (`recordByNameRef`, measured above)
+-- and #1259 (`universeDataEnv`, constructor schemes — already a false reject
+-- BEFORE this unit, which is why nothing about it moved here).  Whoever re-keys
+-- one drains a row in `test/must_fail_fixtures/` as well as fixing the table.
+export sameTyConHead : String -> TyConOrigin -> String -> TyConOrigin -> Bool
+sameTyConHead n1 o1 n2 o2 = n1 == n2 && not (tyConIdsConflict o1 o2)
+
+-- True iff BOTH origins are identities and they name DIFFERENT declarations.
+-- The `_ => False` arm is absence-makes-no-claim, derived above; it is written
+-- as an explicit pair match rather than a guard so that a reader sees the two
+-- absent cases collapse into one answer on purpose.
+tyConIdsConflict : TyConOrigin -> TyConOrigin -> Bool
+tyConIdsConflict o1 o2 = match (identOriginOf o1, identOriginOf o2)
+  (Some i1, Some i2) => i1 != i2
+  _ => False
 
 public export data Ty =
   -- `tyConOrigin` is the #1110 identity carrier described above; it is stripped
@@ -916,13 +1064,28 @@ public export data Decl =
   -- ── the four TYPE-DECLARATION forms carry module identity (#1110) ────────
   -- `DData`/`DNewtype`/`DTypeAlias`/`DInterface` each gained a `…Origin` field,
   -- stamped by resolve (`stampGraphTyOrigins`, `frontend/resolve.mdk`) with the
-  -- module the declaration was written in.  NOTHING READS IT YET — this PR is
-  -- deliberately byte-identical, exactly as #1211 (the `Ty.TyCon` carrier) and
-  -- #1219 (its stamper) were.  What it unblocks is enumerated in #1110's
-  -- scoping comment: `registerVariants` mints the head `Mono` for every user
-  -- data type from the `DData` alone, so the dispatch GOAL side cannot acquire
-  -- identity until the declaration has one; interface identity (#1047) needs
-  -- `DInterface`'s; constructor identity (#1070) needs `DData`'s variants'.
+  -- module the declaration was written in.
+  --
+  -- ⚠️ THESE FIELDS ARE READ, AND THE WORK THIS COMMENT LISTED AS FUTURE HAS
+  -- LANDED.  It said "NOTHING READS IT YET — this PR is deliberately
+  -- byte-identical", true when #1110 Stage A-1 wrote it and false since Stage
+  -- A-2: `DData.dataOrigin` reaches `registerVariants o` (`types/typecheck.mdk`),
+  -- so the dispatch GOAL side now DOES acquire identity from the declaration;
+  -- `DInterface.ifaceOrigin` is the write side of A-2.4's interface-namespace key
+  -- (`ifaceTabKey o name`, reached from `registerData` / `insertIfaceRequired` /
+  -- `insertMethodIdents` / `ownMethodIdent`) and of `lowerDeclImpl`'s
+  -- default-method identity (`ir/core_ir_lower.mdk`).  Derive the readers rather
+  -- than reading a list here:
+  --
+  --     grep -rn --include=*.mdk 'dataOrigin|ifaceOrigin|newtypeOrigin|tyAliasOrigin' \
+  --       compiler/types compiler/ir compiler/tools
+  --
+  -- ⚠️ FOUND BY GREPPING FOR THE OTHER SPELLINGS OF A CLAIM CORRECTED
+  -- ELSEWHERE (#1111 A-2.10's review), and that is the whole lesson: a "nothing
+  -- reads this" sentence is a NEGATIVE ABOUT THE WHOLE TREE, it expires the moment
+  -- any unit adds a reader, and no gate notices.  `types/typecheck.mdk`'s `Mono`
+  -- comment and `frontend/resolve.mdk`'s stamper comment carried the same sentence
+  -- about different fields and each had to be corrected separately.
   --
   -- 🚨 The three positional forms became NAMED-FIELD RECORDS in the same step,
   -- and the two halves are not separable: a positional widening re-churns every

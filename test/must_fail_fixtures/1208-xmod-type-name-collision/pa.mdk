@@ -1,4 +1,0 @@
--- issue #1208: pa's own `T`, one constructor `MkA`.
-public export data T = MkA Int
-export f : T -> Int
-f (MkA n) = n

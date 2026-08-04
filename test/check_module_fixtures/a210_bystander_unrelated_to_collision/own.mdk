@@ -1,0 +1,16 @@
+-- #1111 A-2.10 BYSTANDER: this module declares NOTHING that any other module in
+-- the graph also declares.  Every name here is unique across the whole fixture,
+-- so nothing here participates in the `Twin` collision, and the entry's golden
+-- is an assertion about THIS module's types plus the prelude's.
+public export data Parcel a = MkParcel a
+
+export interface Weigh a where
+  weigh : a -> Int
+
+export impl Weigh Int where
+  weigh n = n
+
+export unParcel : Parcel Int -> Int
+unParcel (MkParcel n) = n
+
+export type Sack = Parcel Int

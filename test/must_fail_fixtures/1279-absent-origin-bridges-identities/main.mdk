@@ -1,0 +1,17 @@
+-- issue #1279: `stringIndexOf`'s EXTERN signature (`String -> String -> Option
+-- Int`) never passes through the origin-stamping walk, so its `Option` head
+-- carries NO identity.  `sameTyConHead` is absence-makes-no-claim, and
+-- unification LINKS -- so this one absent head bridges `Option@core` (reached
+-- via the prelude's `isSome`) to `Option@evil` (reached via `unwrapEvil`), a
+-- pairing the DIRECT comparison correctly refuses.  check must reject this; it
+-- does not.
+import evil.{unwrapEvil}
+
+mid = stringIndexOf "zz" "a"
+
+usesCore : Bool
+usesCore = isSome mid
+
+main =
+  println usesCore
+  println (unwrapEvil mid)

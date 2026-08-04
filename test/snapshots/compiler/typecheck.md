@@ -1,5 +1,5 @@
 # META
-source_lines=21580
+source_lines=21687
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted typecheck stage — port of lib/typecheck.ml's HM core.  SLICE 1:
@@ -22,6 +22,11 @@ import frontend.ast.{
   Ns(..),
   Ident(..),
   mkIdent,
+  -- #1111 Stage A-2 unit A-2.10: the ONE type-head comparison every "same
+  -- type?" test below is written against.  Its doc-comment derives why an
+  -- absent origin makes no claim here while `ifaceIdMatches`/`tabKeyEq` refuse
+  -- absence outright — do not copy either shape to the other site.
+  sameTyConHead,
   tyConBuiltin,
   firstTyLoc,
   firstTyLocList,
@@ -139,6 +144,7 @@ import support.util.{
   isNonEmptyL,
   minI,
   isSome,
+  orElseOpt,
   zipL,
   dedup,
   dedupBy,
@@ -192,46 +198,51 @@ public export data Mono =
   -- fact, and a parallel ADT would buy a conversion at every seam relating a
   -- declaration to a head that spells it.
   --
-  -- ⚠️ IT IS READ, AND STILL NO ANSWER CHANGES — those are now two INDEPENDENT
-  -- facts, and this note collapsed them into "NOTHING READS IT YET" until
-  -- A-2.2b.  That wording is the belief A-2.2b's S0 shipped under: a reader who
-  -- takes it at face value concludes the origin cannot reach dispatch, and then
-  -- promotes a dispatch retest to an identity comparison as a tidy-up.
+  -- ⚠️ THIS FIELD IS READ, AND IT DECIDES ACCEPTANCE (#1111 Stage A-2 unit
+  -- A-2.10).  It said "CARRIER ONLY — NOTHING READS IT YET, and no answer
+  -- changes" until A-2.2b, then "IT IS READ, AND STILL NO ANSWER CHANGES" until
+  -- this unit.  The first was already FALSE on `main` when it was written
+  -- (`headTyconMono` read the field from A-2.2 onward), and a reviewer traced a
+  -- shipped S0 to someone believing it — the retained `hd == Some hk` guard in
+  -- `implExistsForHeadGo`, which compared an origin-carrying impl head against a
+  -- frequently-origin-less goal head inside a bucket keyed by spelling, and so
+  -- answered `False` wherever they differed.  The lesson survives both
+  -- corrections and is worth more than either: a "nothing reads this" / "no
+  -- answer changes" claim is a NEGATIVE ABOUT THE WHOLE FILE, it expires the
+  -- moment any unit adds a reader, and no gate notices.
   --
-  --   * WHAT READS IT — one clause: `headTyconMono`'s `TCon n o` arm, the only
-  --     place in this file that BINDS the origin slot instead of eliding it
-  --     (`headTyconNameMono`, the name-only residual, does not).  It hands `o` to
-  --     `headKeyOfCon`, so every goal-side `HeadKey` carries the identity.
-  --     Derive the set — this list is prose, the grep is the authority, and it
-  --     can discover a reader whatever it is called:
+  -- WHAT IS TRUE NOW, in the two halves A-2.2b separated (they are INDEPENDENT
+  -- facts and collapsing them is what the wording above kept getting wrong):
   --
-  --       grep -n TCon compiler/types/typecheck.mdk \
-  --         | grep -vE '^[0-9]+:[[:space:]]*--' | grep -vE 'TCon [^ )]+ _'
+  --   * THE COMPARISONS READ IT AND ACCEPTANCE MOVED.  The six "are these the
+  --     same type?" tests — `unifyN`, `cohGoR`, `cohStep`, `cohEqR`,
+  --     `matchStep`, `monoSameGiven` — all read the field, all through the
+  --     single seam `sameTyConHead` (`frontend/ast.mdk`), whose doc-comment owns
+  --     the absent-origin rule and its derivation.  Two modules' same-named
+  --     types no longer unify (#1208, #1209).
+  --   * THE DISPATCH KEY STILL DOES NOT.  `headTyconMono`'s `TCon n o` arm hands
+  --     `o` to `headKeyOfCon`, so every goal-side `HeadKey` CARRIES the
+  --     identity — and every consumer of that `HeadKey` then projects it BACK to
+  --     the bare spelling before comparing: `dispHeadTab` (the bucket key,
+  --     `implExistsForHeadGo`'s retest, `countHeadGo` / `countHeadByIfaceGo`,
+  --     the obligation universes) or `headKeyName` / `headKeyNameOr` (the
+  --     emitted route word).  `headTyconNameMono`, the name-only residual, still
+  --     hands out a bare name outright.  (A-2.10's draft of this paragraph also
+  --     named `monoHeadCon`; A-2.2b DELETED that projection on `main` — see its
+  --     obituary above `mainTypeIsAsync` — and the merge of the two units is
+  --     where that was caught.)  The discard is LEDGERED, not incidental:
+  --     `dispHeadTab` IS the list of sites whose answer would move the day the
+  --     goal side becomes supplied and canonical
+  --     (`grep -nw dispHeadTab compiler/types/typecheck.mdk`).
   --
-  --     Today that prints the declaration, the four mints below, and that one
-  --     read.  The read is NOT new in A-2.2b — A-2.2 introduced it, and this
-  --     note was already false on `main`; what A-2.2b added is the set of
-  --     consumers that carry it into a DISPATCH decision (`goalHeadCon`, hence
-  --     `KeyBuckets`; and `implExistsForHead`'s three receiver sites).
-  --   * WHAT STILL IGNORES IT — every COMPARISON on a `Mono`.  `unifyN`,
-  --     `cohGoR`, `cohEqR` and `matchStep` each pattern the origin as `_`, so
-  --     two modules' same-named types still unify exactly as they did; `Mono`
-  --     carries no `deriving` clause that could compare it behind their backs.
-  --   * WHY THE ANSWER STILL DOES NOT MOVE — every consumer of the resulting
-  --     `HeadKey` projects it BACK to the bare spelling before comparing:
-  --     `dispHeadTab` (the bucket key, `implExistsForHeadGo`'s retest,
-  --     `countHeadGo` / `countHeadByIfaceGo`, the obligation universes) or
-  --     `headKeyName` / `headKeyNameOr` (the emitted route word).
+  -- 🚨 SO A LEDGERED RETEST IS STILL NOT AN IDENTITY COMPARISON, AND PROMOTING
+  -- ONE AS A TIDY-UP STILL CHANGES ACCEPTANCE — that is exactly what A-2.2b did
+  -- three times before review caught it, and A-2.10 narrowing the COMPARISONS
+  -- does not license it on the DISPATCH side.  Derive the reader set rather than
+  -- trusting this prose; the grep finds a reader whatever it is called:
   --
-  -- So the field is carried, read, and then deliberately discarded — and the
-  -- discard is LEDGERED, not incidental.  `dispHeadTab` is the list of sites
-  -- whose answer WOULD change the day the goal side becomes supplied and
-  -- canonical, and its own derivation says why that day has not arrived
-  -- (`grep -nw dispHeadTab compiler/types/typecheck.mdk`).  Making the
-  -- comparisons stop ignoring the field is a LATER unit with its own fixture; a
-  -- comparison quietly added here, or a ledgered retest quietly promoted to an
-  -- identity, changes acceptance — the second of those is exactly what A-2.2b
-  -- did three times before review caught it.
+  --     grep -n TCon compiler/types/typecheck.mdk \
+  --       | grep -vE '^[0-9]+:[[:space:]]*--' | grep -vE 'TCon [^ )]+ _'
   --
   -- 🚨 THE CONSTRUCTOR IS NEVER APPLIED OUTSIDE THE FOUR MINTS BELOW
   -- (`tconBuiltin` / `tconTupleHead` / `tconFrom` / `tconUnresolved`), and that is
@@ -242,8 +253,26 @@ public export data Mono =
   -- every construction through four one-line helpers makes that four decisions,
   -- each named after the identity class it claims, and
   -- `test/typecheck_compiler_source.sh` pins the set.  Everything else that
-  -- mentions `TCon` in this file is a PATTERN, recognisable because its origin
-  -- slot is `_` — nothing reads the field yet, so nothing needs to bind it.
+  -- mentions `TCon` in this file is a PATTERN — most with `_` in the origin
+  -- slot, and (since A-2.10) a set of them that BIND it.  The ratchet's own
+  -- remedy predicted exactly that ("a pattern that legitimately BINDS the origin
+  -- is the expected first false positive; list it, and the list stays the
+  -- audit"), so THE BINDING SET IS ENUMERATED THERE AND THE ENUMERATION IS THE
+  -- AUDIT.  Derive it, do not read it here:
+  --
+  --   sh test/typecheck_compiler_source.sh   # prints "N Mono.TCon mint(s) +
+  --                                          # M origin-binding pattern(s)"
+  --   grep -n 'mono_tcon_allowed' -A20 test/typecheck_compiler_source.sh
+  --
+  -- ⚠️ THIS PARAGRAPH SAID "SEVEN that BIND it: `headTyconMono` plus the six
+  -- comparisons above" AND WAS WRONG BY ONE ON ITS FIRST DAY — it omitted
+  -- `firstIdConflict` (the diagnostic-side reader that pairs the two conflicting
+  -- identities so `Type mismatch: T vs T` can name both modules), which binds
+  -- BOTH origins.  A count of the binding sites is an encoded fact with no
+  -- derivation, and the number of PATTERN LINES is not even the number of
+  -- FUNCTIONS (`cohStep` and `monoSameGiven` contribute two lines each), so the
+  -- reader has to pick which is meant.  Do not re-describe this population with a
+  -- rule of thumb — `_`-shaped or numeric.
   --
   -- ⚠️ AND NOTHING REBUILDS ONE FROM ITS NAME.  `substMono`/`substMonoP` (reached
   -- from `instantiate`, i.e. every use of every imported binding) used to answer
@@ -4085,8 +4114,14 @@ unifyN : Mono -> Mono -> Unit
 unifyN (TVar c1) (TVar c2) = unifyVars c1 c2
 unifyN (TVar c) t = bindVar c t
 unifyN t (TVar c) = bindVar c t
-unifyN (ta@(TCon a _)) (tb@(TCon b _)) =
-  if a == b then
+-- #1111 A-2.10: the head comparison READS THE IDENTITY Stage A-1 landed.  This
+-- is the site the arc turned on — two modules' unrelated `T`s no longer unify
+-- (#1208, #1209), and the origin surviving a link is no longer an artefact of
+-- link direction, so a key computed from the field is a function of the type.
+-- `sameTyConHead` (`frontend/ast.mdk`) owns the absent-origin rule; read its
+-- derivation before changing either side of this.
+unifyN (ta@(TCon a oa)) (tb@(TCon b ob)) =
+  if sameTyConHead a oa b ob then
     ()
   else
     typeMismatch ta tb
@@ -4213,7 +4248,63 @@ typeMismatchReportRest a b = match currentDoOrigin.value
       -- → `Type mismatch: Int vs (a, b) -> (a, b)`) — append the call-syntax hint.
       Some (help, fix) =>
         pushTypeErrorHelpFixAt "T-TYPE-MISMATCH" currentLoc.value "Type mismatch: \{ppMono a} vs \{ppMono b} — \{help}" help fix
-      None => pushTypeError "T-TYPE-MISMATCH" "Type mismatch: \{ppMono a} vs \{ppMono b}"
+      None => match sameSpellingHint a b
+        -- #1111 A-2.10: the mismatch this unit MAKES REACHABLE renders with two
+        -- identical sides (`Type mismatch: T vs T`) — true, and useless without
+        -- this.  Turning a silent accept into a message a user cannot act on
+        -- would trade an S0 for an S2, which the severity ladder counts as a
+        -- fix only for the first half.
+        Some help =>
+          pushTypeErrorHelpFixAt "T-TYPE-MISMATCH" currentLoc.value "Type mismatch: \{ppMono a} vs \{ppMono b} — \{help}" help None
+        None => pushTypeError "T-TYPE-MISMATCH" "Type mismatch: \{ppMono a} vs \{ppMono b}"
+
+-- ── same-spelling mismatch hint (#1111 A-2.10) ─────────────────────────────
+-- Fires ONLY when the two sides RENDER identically and some head inside them
+-- carries two conflicting module identities — i.e. exactly the mismatch this
+-- unit newly reports.  Both conditions matter: the render test is what makes
+-- the hint appear where the message is otherwise unreadable, and the conflict
+-- search is what lets it name the two modules instead of hand-waving.
+--
+-- ⚠️ IT CANNOT MOVE AN EXISTING GOLDEN, and that is structural rather than
+-- lucky: `firstIdConflict` answers `Some` only where both origins are present
+-- and differ, and before this unit every such pair UNIFIED — so no diagnostic
+-- that exists today can reach this arm.  (The other in-tree source of two
+-- identically-rendering sides, the `__tupleN__` rigid-vs-builtin forgery at
+-- `unifyN`'s cross-population arms, is a `TRigid`: it carries no origin, so it
+-- yields `None` here and its message is untouched.  That residual is #1243.)
+sameSpellingHint : Mono -> Mono -> Option String
+sameSpellingHint a b
+  | ppMono a != ppMono b = None
+  | otherwise = map idConflictHelp (firstIdConflict a b)
+
+idConflictHelp : (String, TyConOrigin, TyConOrigin) -> String
+idConflictHelp (name, o1, o2) = "these are two DIFFERENT types that share the name '\{name}': one comes from \{originPhrase o1}, the other from \{originPhrase o2} — import the one you mean rather than declaring a second type of the same name"
+
+-- User vocabulary, never a constructor spelling (ERROR-QUALITY.md §1).  The
+-- unresolved case is unreachable from `firstIdConflict` (a conflict needs two
+-- present identities) and is answered rather than omitted so this stays total.
+originPhrase : TyConOrigin -> String
+originPhrase (OriginModule m) = "module '\{m}'"
+originPhrase OriginBuiltin = "the language itself"
+originPhrase OriginUnresolved = "an unknown module"
+
+-- The FIRST head, in a parallel structural walk of the two monos, whose name
+-- agrees while its identity does not.  Parallel and shape-guarded on purpose:
+-- the two sides render identically (the caller's precondition), so they have
+-- the same shape, and walking them together is what pairs the conflicting head
+-- with its counterpart rather than reporting some unrelated head.
+firstIdConflict : Mono -> Mono -> Option (String, TyConOrigin, TyConOrigin)
+firstIdConflict a b = match (normalize a, normalize b)
+  (TCon n1 o1, TCon n2 o2) =>
+    if n1 == n2 && not (sameTyConHead n1 o1 n2 o2) then
+      Some (n1, o1, o2)
+    else
+      None
+  (TApp f1 x1, TApp f2 x2) =>
+    orElseOpt (firstIdConflict f1 f2) (firstIdConflict x1 x2)
+  (TFun d1 _ r1, TFun d2 _ r2) =>
+    orElseOpt (firstIdConflict d1 d2) (firstIdConflict r1 r2)
+  _ => None
 
 -- a mismatch inside a do-lowered chain: if it is the monad-shape (`m b`) vs
 -- non-monad obligation, retarget to the tailored "do requires a monad" error;
@@ -11631,14 +11722,21 @@ cohGoR subst (TVar c1) (TVar c2)
   | otherwise = cohBind subst (tyvarId c1) (TVar c2)
 cohGoR subst (TVar c1) t = cohBind subst (tyvarId c1) t
 cohGoR subst t (TVar c2) = cohBind subst (tyvarId c2) t
-cohGoR _ (TCon a _) (TCon b _) = a == b
--- #1110: name equality, exactly as the shared `TCon` arm gave — INCLUDING the
--- cross-population pairs.  ⚠️ NOT SEPARATELY PROBED — armed because the pre-split
--- `TCon` arm answered these pairings with the same `a == b`, and a rigid and a
--- real head CAN share the name `__tupleN__` (see `Mono.TRigid`).  Whether a
--- coherence sweep can actually be reached with such a pair is unmeasured; the arm
--- is answer-preserving either way.  Measured instances of the same forgery are
--- `unifyN` and `matchStep` (DICT-SEMANTICS §8 I6.2(b), OWED-#1110).
+-- #1111 A-2.10: identity-aware, same rule as `unifyN` (`sameTyConHead`).  Two
+-- impl heads that merely SPELL the same type no longer overlap, so a coherence
+-- conflict is no longer reported between `impl C a.T` and `impl C b.T` — which
+-- is the correct answer: they are different types.
+cohGoR _ (TCon a oa) (TCon b ob) = sameTyConHead a oa b ob
+-- #1110: name equality, exactly as the shared `TCon` arm gave, for the
+-- cross-population pairs ONLY — A-2.10 deliberately left these two alone.  A
+-- `TRigid` carries no origin at all, so routing them through `sameTyConHead`
+-- would compute "no conflict" and answer the same thing; the preserved forgery
+-- is #1243 / §8 I6.2(b), a different clause.  ⚠️ NOT SEPARATELY PROBED — armed
+-- because the pre-split `TCon` arm answered these pairings with the same
+-- `a == b`, and a rigid and a real head CAN share the name `__tupleN__` (see
+-- `Mono.TRigid`).  Whether a coherence sweep can actually be reached with such a
+-- pair is unmeasured; the arm is answer-preserving either way.  Measured
+-- instances of the same forgery are `unifyN` and `matchStep`.
 cohGoR _ (TRigid a) (TRigid b) = a == b
 cohGoR _ (TCon a _) (TRigid b) = a == b
 cohGoR _ (TRigid a) (TCon b _) = a == b
@@ -11719,13 +11817,14 @@ cohStep g0 s0 =
   let s = normalize s0
   match g
     TVar c => MVar (tyvarId c)
-    -- #1110: the shared `TCon` constructor compared these four pairings with one
-    -- `a == b`.  ⚠️ The cross-population ones are NOT SEPARATELY PROBED — armed
-    -- because that arm answered them, and because a rigid and a real head CAN
-    -- both spell `__tupleN__` (see `Mono.TRigid`).  Answer-preserving either way.
-    -- Measured instances: `unifyN`, `matchStep` (§8 I6.2(b), OWED-#1110).
-    TCon a _ => match s
-      TCon b _ => if a == b then MOk else MFail
+    -- #1111 A-2.10 on the `TCon`/`TCon` pairing only (`sameTyConHead`); the
+    -- cross-population arms stay name-only for the reason `cohGoR` gives.
+    -- ⚠️ The cross-population ones are NOT SEPARATELY PROBED — armed
+    -- because the pre-split arm answered them, and because a rigid and a real
+    -- head CAN both spell `__tupleN__` (see `Mono.TRigid`).  Measured instances
+    -- of that forgery: `unifyN`, `matchStep` (§8 I6.2(b), OWED-#1243).
+    TCon a oa => match s
+      TCon b ob => if sameTyConHead a oa b ob then MOk else MFail
       TRigid b => if a == b then MOk else MFail
       _ => MFail
     TRigid a => match s
@@ -11751,8 +11850,9 @@ cohEqMono a b = cohEqR (normalize a) (normalize b)
 
 cohEqR : Mono -> Mono -> Bool
 cohEqR (TVar c1) (TVar c2) = tyvarId c1 == tyvarId c2
-cohEqR (TCon a _) (TCon b _) = a == b
--- #1110: same shape as the `cohGoR` arms — name equality on all four pairings.
+cohEqR (TCon a oa) (TCon b ob) = sameTyConHead a oa b ob
+-- #1110: same shape as the `cohGoR` arms — name equality on the cross-population
+-- pairings, which A-2.10 left alone for the reason given there.
 -- Cross-population pairs NOT SEPARATELY PROBED; armed because the pre-split `TCon`
 -- arm answered them.  Reached from `matchStep`'s consistency check, so it is not
 -- independent of the measured `matchStep` case.  See `Mono.TRigid`.
@@ -13935,8 +14035,14 @@ entryHeadMatches hty itys goals
 --  • TyEffect/TyConstrained wrappers on the head are transparent.
 matchStep : Ty -> Mono -> MStep String Ty Mono
 matchStep (TyVar n) _ = MVar n
-matchStep (TyCon { tyConName = n }) m = match normalize m
-  TCon n2 _ => if n == n2 then MOk else MFail
+matchStep (TyCon { tyConName = n, tyConOrigin = o }) m = match normalize m
+  -- #1111 A-2.10: the IMPL-HEAD-vs-GOAL match reads identity too, by the same
+  -- `sameTyConHead` rule `unifyN` uses.  This is the dispatch half: `impl C a.T`
+  -- no longer matches a goal whose head is `b.T`.  ⚠️ It does NOT make dispatch
+  -- identity-KEYED — `KeyBuckets`/`obUniv*` are still spelling-keyed (#1274,
+  -- `dispHeadTab`); this narrows the candidates a bucket's scan accepts, which
+  -- is why the two can be landed in either order.
+  TCon n2 o2 => if sameTyConHead n o n2 o2 then MOk else MFail
   -- #1110 ANSWER-PRESERVING, and it really does fire — the twin of `tupleSpine`'s
   -- rigid arm.  A real head is uppercase-initial OR one of the four reserved
   -- `__tupleN__` tags (`tupleCtorTyName`, `compiler/frontend/parser.mdk:2137-2141`,
@@ -17970,12 +18076,13 @@ monoSameGiven a b = match normalize a
   TVar c1 => match normalize b
     TVar c2 => tyvarId c1 == tyvarId c2
     _ => False
-  -- #1110: the shared `TCon` constructor answered all four pairings with one
-  -- `x == y`.  ⚠️ Cross-population pairs NOT SEPARATELY PROBED — armed because
-  -- that arm answered them (`__tupleN__`; see `Mono.TRigid`).  Answer-preserving
-  -- either way; measured instances are `unifyN` and `matchStep`.
-  TCon x _ => match normalize b
-    TCon y _ => x == y
+  -- #1111 A-2.10 on the `TCon`/`TCon` pairing (`sameTyConHead`): an in-scope
+  -- dict given for `C a.T` no longer answers a goal `C b.T`.  ⚠️ Cross-population
+  -- pairs left name-only and NOT SEPARATELY PROBED — armed because the pre-split
+  -- arm answered them (`__tupleN__`; see `Mono.TRigid`), and a rigid carries no
+  -- origin, so routing them through `sameTyConHead` would answer the same.
+  TCon x ox => match normalize b
+    TCon y oy => sameTyConHead x ox y oy
     TRigid y => x == y
     _ => False
   TRigid x => match normalize b
@@ -21583,7 +21690,7 @@ schemeLines : List (String, Scheme) -> List String
 schemeLines [] = []
 schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 # DESUGAR
-(DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "Ns" true) (mem "Ident" true) (mem "mkIdent" false) (mem "tyConBuiltin" false) (mem "firstTyLoc" false) (mem "firstTyLocList" false) (mem "Constraint" true) (mem "Route" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "FunClause" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "Expr" true) (mem "Loc" true) (mem "orElseLoc" false) (mem "ConPayload" true) (mem "Field" true) (mem "Variant" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "Require" true) (mem "Super" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Decl" true) (mem "PropParam" true) (mem "Section" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "useMemberAlias" false) (mem "qualifiedLocal" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "Ns" true) (mem "Ident" true) (mem "mkIdent" false) (mem "sameTyConHead" false) (mem "tyConBuiltin" false) (mem "firstTyLoc" false) (mem "firstTyLocList" false) (mem "Constraint" true) (mem "Route" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "FunClause" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "Expr" true) (mem "Loc" true) (mem "orElseLoc" false) (mem "ConPayload" true) (mem "Field" true) (mem "Variant" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "Require" true) (mem "Super" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Decl" true) (mem "PropParam" true) (mem "Section" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "useMemberAlias" false) (mem "qualifiedLocal" false))))
 (DUse false (UseGroup ("types" "registry") ((mem "TabKey" true) (mem "tabKeyOf" false) (mem "tabKeyName" false) (mem "lookupTab" false) (mem "tabHasName" false) (mem "RegKey" false) (mem "Registry" false) (mem "regKeyOfTab" false) (mem "regKeyTabAt" false) (mem "lookupReg" false) (mem "regEmpty" false) (mem "regInsertK" false) (mem "regLookupK" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "mapProg" false))))
 (DUse false (UseGroup ("frontend" "marker") ((mem "localBoundNames" false))))
@@ -21594,7 +21701,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DUse false (UseGroup ("support" "scc") ((mem "tarjanSCCs" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omKeys" false) (mem "omFromPairs" false) (mem "omMapValues" false) (mem "omSize" false))))
 (DUse false (UseGroup ("list") ((mem "replicate" false))))
-(DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "lookupAssoc" false) (mem "contains" false) (mem "endsWith" false) (mem "reverseL" false) (mem "joinWith" false) (mem "joinNl" false) (mem "joinDot" false) (mem "filterList" false) (mem "anyList" false) (mem "allList" false) (mem "initList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "minI" false) (mem "isSome" false) (mem "zipL" false) (mem "dedup" false) (mem "dedupBy" false) (mem "lenKey" false) (mem "sortUniqS" false) (mem "startsWith" false) (mem "escStr" false) (mem "editDistance" false) (mem "noneHeadTag" false))))
+(DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "lookupAssoc" false) (mem "contains" false) (mem "endsWith" false) (mem "reverseL" false) (mem "joinWith" false) (mem "joinNl" false) (mem "joinDot" false) (mem "filterList" false) (mem "anyList" false) (mem "allList" false) (mem "initList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "minI" false) (mem "isSome" false) (mem "orElseOpt" false) (mem "zipL" false) (mem "dedup" false) (mem "dedupBy" false) (mem "lenKey" false) (mem "sortUniqS" false) (mem "startsWith" false) (mem "escStr" false) (mem "editDistance" false) (mem "noneHeadTag" false))))
 (DUse false (UseGroup ("types" "registry") ((mem "HeadKey" true) (mem "headKeyOfCon" false) (mem "headKeyName" false) (mem "RegKey" false) (mem "regKeyOfTab" false) (mem "regKeyNTab" false) (mem "regKeyNTabAt" false) (mem "regKeyRender" false) (mem "dispKeyRender" false) (mem "Registry" false) (mem "regEmpty" false) (mem "regInsertK" false) (mem "regLookupK" false) (mem "MultiRegistry" false) (mem "mregEmpty" false) (mem "mregAppendK" false) (mem "mregLookupK" false) (mem "SetRegistry" false) (mem "sregEmpty" false) (mem "sregAddK" false) (mem "sregSize" false))))
 (DData Public "Mono" () ((variant "TVar" (ConPos (TyApp (TyCon "Ref") (TyCon "Tyvar")))) (variant "TCon" (ConPos (TyCon "String") (TyCon "TyConOrigin"))) (variant "TRigid" (ConPos (TyCon "String"))) (variant "TApp" (ConPos (TyCon "Mono") (TyCon "Mono"))) (variant "TFun" (ConPos (TyCon "Mono") (TyCon "EffRow") (TyCon "Mono"))) (variant "TEff" (ConPos (TyCon "EffRow")))) ())
 (DData Public "Tyvar" () ((variant "Unbound" (ConPos (TyCon "Int") (TyCon "Int"))) (variant "Link" (ConPos (TyCon "Mono")))) ())
@@ -22230,7 +22337,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "unifyN" ((PCon "TVar" (PVar "c1")) (PCon "TVar" (PVar "c2"))) (EApp (EApp (EVar "unifyVars") (EVar "c1")) (EVar "c2")))
 (DFunDef false "unifyN" ((PCon "TVar" (PVar "c")) (PVar "t")) (EApp (EApp (EVar "bindVar") (EVar "c")) (EVar "t")))
 (DFunDef false "unifyN" ((PVar "t") (PCon "TVar" (PVar "c"))) (EApp (EApp (EVar "bindVar") (EVar "c")) (EVar "t")))
-(DFunDef false "unifyN" ((PAs "ta" (PCon "TCon" (PVar "a") PWild)) (PAs "tb" (PCon "TCon" (PVar "b") PWild))) (EIf (EBinOp "==" (EVar "a") (EVar "b")) (ELit LUnit) (EApp (EApp (EVar "typeMismatch") (EVar "ta")) (EVar "tb"))))
+(DFunDef false "unifyN" ((PAs "ta" (PCon "TCon" (PVar "a") (PVar "oa"))) (PAs "tb" (PCon "TCon" (PVar "b") (PVar "ob")))) (EIf (EApp (EApp (EApp (EApp (EVar "sameTyConHead") (EVar "a")) (EVar "oa")) (EVar "b")) (EVar "ob")) (ELit LUnit) (EApp (EApp (EVar "typeMismatch") (EVar "ta")) (EVar "tb"))))
 (DFunDef false "unifyN" ((PCon "TRigid" (PVar "a")) (PCon "TRigid" (PVar "b"))) (EIf (EBinOp "==" (EVar "a") (EVar "b")) (ELit LUnit) (EApp (EApp (EVar "typeMismatch") (EApp (EVar "TRigid") (EVar "a"))) (EApp (EVar "TRigid") (EVar "b")))))
 (DFunDef false "unifyN" ((PAs "ta" (PCon "TCon" (PVar "a") PWild)) (PAs "tb" (PCon "TRigid" (PVar "b")))) (EIf (EBinOp "==" (EVar "a") (EVar "b")) (ELit LUnit) (EApp (EApp (EVar "typeMismatch") (EVar "ta")) (EVar "tb"))))
 (DFunDef false "unifyN" ((PAs "ta" (PCon "TRigid" (PVar "a"))) (PAs "tb" (PCon "TCon" (PVar "b") PWild))) (EIf (EBinOp "==" (EVar "a") (EVar "b")) (ELit LUnit) (EApp (EApp (EVar "typeMismatch") (EVar "ta")) (EVar "tb"))))
@@ -22256,7 +22363,17 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "indefiniteArticle" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "indefiniteArticle" ((PVar "name")) (EIf (EBinOp "==" (EApp (EVar "stringLength") (EVar "name")) (ELit (LInt 0))) (ELit (LString "a")) (EIf (EApp (EApp (EVar "contains") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (ELit (LInt 1))) (EVar "name"))) (EListLit (ELit (LString "A")) (ELit (LString "E")) (ELit (LString "I")) (ELit (LString "O")) (ELit (LString "U")))) (ELit (LString "an")) (EIf (EVar "otherwise") (ELit (LString "a")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "typeMismatchReportRest" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Unit"))))
-(DFunDef false "typeMismatchReportRest" ((PVar "a") (PVar "b")) (EMatch (EFieldAccess (EVar "currentDoOrigin") "value") (arm (PCon "Some" (PVar "doLoc")) () (EApp (EApp (EApp (EVar "typeMismatchInDo") (EVar "a")) (EVar "b")) (EVar "doLoc"))) (arm (PCon "None") () (EMatch (EApp (EVar "firstTupleCallHint") (EListLit (EVar "a") (EVar "b"))) (arm (PCon "Some" (PTuple (PVar "help") (PVar "fix"))) () (EApp (EApp (EApp (EApp (EApp (EVar "pushTypeErrorHelpFixAt") (ELit (LString "T-TYPE-MISMATCH"))) (EFieldAccess (EVar "currentLoc") "value")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Type mismatch: ")) (EApp (EVar "display") (EApp (EVar "ppMono") (EVar "a")))) (ELit (LString " vs "))) (EApp (EVar "display") (EApp (EVar "ppMono") (EVar "b")))) (ELit (LString " — "))) (EApp (EVar "display") (EVar "help"))) (ELit (LString "")))) (EVar "help")) (EVar "fix"))) (arm (PCon "None") () (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-TYPE-MISMATCH"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Type mismatch: ")) (EApp (EVar "display") (EApp (EVar "ppMono") (EVar "a")))) (ELit (LString " vs "))) (EApp (EVar "display") (EApp (EVar "ppMono") (EVar "b")))) (ELit (LString "")))))))))
+(DFunDef false "typeMismatchReportRest" ((PVar "a") (PVar "b")) (EMatch (EFieldAccess (EVar "currentDoOrigin") "value") (arm (PCon "Some" (PVar "doLoc")) () (EApp (EApp (EApp (EVar "typeMismatchInDo") (EVar "a")) (EVar "b")) (EVar "doLoc"))) (arm (PCon "None") () (EMatch (EApp (EVar "firstTupleCallHint") (EListLit (EVar "a") (EVar "b"))) (arm (PCon "Some" (PTuple (PVar "help") (PVar "fix"))) () (EApp (EApp (EApp (EApp (EApp (EVar "pushTypeErrorHelpFixAt") (ELit (LString "T-TYPE-MISMATCH"))) (EFieldAccess (EVar "currentLoc") "value")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Type mismatch: ")) (EApp (EVar "display") (EApp (EVar "ppMono") (EVar "a")))) (ELit (LString " vs "))) (EApp (EVar "display") (EApp (EVar "ppMono") (EVar "b")))) (ELit (LString " — "))) (EApp (EVar "display") (EVar "help"))) (ELit (LString "")))) (EVar "help")) (EVar "fix"))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "sameSpellingHint") (EVar "a")) (EVar "b")) (arm (PCon "Some" (PVar "help")) () (EApp (EApp (EApp (EApp (EApp (EVar "pushTypeErrorHelpFixAt") (ELit (LString "T-TYPE-MISMATCH"))) (EFieldAccess (EVar "currentLoc") "value")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Type mismatch: ")) (EApp (EVar "display") (EApp (EVar "ppMono") (EVar "a")))) (ELit (LString " vs "))) (EApp (EVar "display") (EApp (EVar "ppMono") (EVar "b")))) (ELit (LString " — "))) (EApp (EVar "display") (EVar "help"))) (ELit (LString "")))) (EVar "help")) (EVar "None"))) (arm (PCon "None") () (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-TYPE-MISMATCH"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Type mismatch: ")) (EApp (EVar "display") (EApp (EVar "ppMono") (EVar "a")))) (ELit (LString " vs "))) (EApp (EVar "display") (EApp (EVar "ppMono") (EVar "b")))) (ELit (LString "")))))))))))
+(DTypeSig false "sameSpellingHint" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyApp (TyCon "Option") (TyCon "String")))))
+(DFunDef false "sameSpellingHint" ((PVar "a") (PVar "b")) (EIf (EBinOp "!=" (EApp (EVar "ppMono") (EVar "a")) (EApp (EVar "ppMono") (EVar "b"))) (EVar "None") (EIf (EVar "otherwise") (EApp (EApp (EVar "map") (EVar "idConflictHelp")) (EApp (EApp (EVar "firstIdConflict") (EVar "a")) (EVar "b"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "idConflictHelp" (TyFun (TyTuple (TyCon "String") (TyCon "TyConOrigin") (TyCon "TyConOrigin")) (TyCon "String")))
+(DFunDef false "idConflictHelp" ((PTuple (PVar "name") (PVar "o1") (PVar "o2"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "these are two DIFFERENT types that share the name '")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "': one comes from "))) (EApp (EVar "display") (EApp (EVar "originPhrase") (EVar "o1")))) (ELit (LString ", the other from "))) (EApp (EVar "display") (EApp (EVar "originPhrase") (EVar "o2")))) (ELit (LString " — import the one you mean rather than declaring a second type of the same name"))))
+(DTypeSig false "originPhrase" (TyFun (TyCon "TyConOrigin") (TyCon "String")))
+(DFunDef false "originPhrase" ((PCon "OriginModule" (PVar "m"))) (EBinOp "++" (EBinOp "++" (ELit (LString "module '")) (EApp (EVar "display") (EVar "m"))) (ELit (LString "'"))))
+(DFunDef false "originPhrase" ((PCon "OriginBuiltin")) (ELit (LString "the language itself")))
+(DFunDef false "originPhrase" ((PCon "OriginUnresolved")) (ELit (LString "an unknown module")))
+(DTypeSig false "firstIdConflict" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "TyConOrigin") (TyCon "TyConOrigin"))))))
+(DFunDef false "firstIdConflict" ((PVar "a") (PVar "b")) (EMatch (ETuple (EApp (EVar "normalize") (EVar "a")) (EApp (EVar "normalize") (EVar "b"))) (arm (PTuple (PCon "TCon" (PVar "n1") (PVar "o1")) (PCon "TCon" (PVar "n2") (PVar "o2"))) () (EIf (EBinOp "&&" (EBinOp "==" (EVar "n1") (EVar "n2")) (EApp (EVar "not") (EApp (EApp (EApp (EApp (EVar "sameTyConHead") (EVar "n1")) (EVar "o1")) (EVar "n2")) (EVar "o2")))) (EApp (EVar "Some") (ETuple (EVar "n1") (EVar "o1") (EVar "o2"))) (EVar "None"))) (arm (PTuple (PCon "TApp" (PVar "f1") (PVar "x1")) (PCon "TApp" (PVar "f2") (PVar "x2"))) () (EApp (EApp (EVar "orElseOpt") (EApp (EApp (EVar "firstIdConflict") (EVar "f1")) (EVar "f2"))) (EApp (EApp (EVar "firstIdConflict") (EVar "x1")) (EVar "x2")))) (arm (PTuple (PCon "TFun" (PVar "d1") PWild (PVar "r1")) (PCon "TFun" (PVar "d2") PWild (PVar "r2"))) () (EApp (EApp (EVar "orElseOpt") (EApp (EApp (EVar "firstIdConflict") (EVar "d1")) (EVar "d2"))) (EApp (EApp (EVar "firstIdConflict") (EVar "r1")) (EVar "r2")))) (arm PWild () (EVar "None"))))
 (DTypeSig false "typeMismatchInDo" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyFun (TyCon "Loc") (TyCon "Unit")))))
 (DFunDef false "typeMismatchInDo" ((PVar "a") (PVar "b") (PVar "doLoc")) (EIf (EBinOp "!=" (EApp (EVar "monoIsApp") (EApp (EVar "normalize") (EVar "a"))) (EApp (EVar "monoIsApp") (EApp (EVar "normalize") (EVar "b")))) (EApp (EVar "recordDoMonadError") (EVar "doLoc")) (EIf (EVar "otherwise") (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-TYPE-MISMATCH"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Type mismatch: ")) (EApp (EVar "display") (EApp (EVar "ppMono") (EVar "a")))) (ELit (LString " vs "))) (EApp (EVar "display") (EApp (EVar "ppMono") (EVar "b")))) (ELit (LString "")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "recordDoMonadError" (TyFun (TyCon "Loc") (TyCon "Unit")))
@@ -23938,7 +24055,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "cohGoR" ((PVar "subst") (PCon "TVar" (PVar "c1")) (PCon "TVar" (PVar "c2"))) (EIf (EBinOp "==" (EApp (EVar "tyvarId") (EVar "c1")) (EApp (EVar "tyvarId") (EVar "c2"))) (EVar "True") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "cohBind") (EVar "subst")) (EApp (EVar "tyvarId") (EVar "c1"))) (EApp (EVar "TVar") (EVar "c2"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "cohGoR" ((PVar "subst") (PCon "TVar" (PVar "c1")) (PVar "t")) (EApp (EApp (EApp (EVar "cohBind") (EVar "subst")) (EApp (EVar "tyvarId") (EVar "c1"))) (EVar "t")))
 (DFunDef false "cohGoR" ((PVar "subst") (PVar "t") (PCon "TVar" (PVar "c2"))) (EApp (EApp (EApp (EVar "cohBind") (EVar "subst")) (EApp (EVar "tyvarId") (EVar "c2"))) (EVar "t")))
-(DFunDef false "cohGoR" (PWild (PCon "TCon" (PVar "a") PWild) (PCon "TCon" (PVar "b") PWild)) (EBinOp "==" (EVar "a") (EVar "b")))
+(DFunDef false "cohGoR" (PWild (PCon "TCon" (PVar "a") (PVar "oa")) (PCon "TCon" (PVar "b") (PVar "ob"))) (EApp (EApp (EApp (EApp (EVar "sameTyConHead") (EVar "a")) (EVar "oa")) (EVar "b")) (EVar "ob")))
 (DFunDef false "cohGoR" (PWild (PCon "TRigid" (PVar "a")) (PCon "TRigid" (PVar "b"))) (EBinOp "==" (EVar "a") (EVar "b")))
 (DFunDef false "cohGoR" (PWild (PCon "TCon" (PVar "a") PWild) (PCon "TRigid" (PVar "b"))) (EBinOp "==" (EVar "a") (EVar "b")))
 (DFunDef false "cohGoR" (PWild (PCon "TRigid" (PVar "a")) (PCon "TCon" (PVar "b") PWild)) (EBinOp "==" (EVar "a") (EVar "b")))
@@ -23958,14 +24075,14 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "cohSubsumes" (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "Bool"))))
 (DFunDef false "cohSubsumes" ((PVar "general") (PVar "specific")) (EIf (EBinOp "==" (EApp (EVar "listLen") (EVar "general")) (EApp (EVar "listLen") (EVar "specific"))) (EApp (EVar "isSome") (EApp (EApp (EApp (EApp (EApp (EVar "matchOneSided") (EVar "cohStep")) (EVar "eqInt")) (EVar "cohEqMono")) (EApp (EApp (EVar "zipL") (EVar "general")) (EVar "specific"))) (EListLit))) (EIf (EVar "otherwise") (EVar "False") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "cohStep" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyApp (TyApp (TyApp (TyCon "MStep") (TyCon "Int")) (TyCon "Mono")) (TyCon "Mono")))))
-(DFunDef false "cohStep" ((PVar "g0") (PVar "s0")) (EBlock (DoLet false false (PVar "g") (EApp (EVar "normalize") (EVar "g0"))) (DoLet false false (PVar "s") (EApp (EVar "normalize") (EVar "s0"))) (DoExpr (EMatch (EVar "g") (arm (PCon "TVar" (PVar "c")) () (EApp (EVar "MVar") (EApp (EVar "tyvarId") (EVar "c")))) (arm (PCon "TCon" (PVar "a") PWild) () (EMatch (EVar "s") (arm (PCon "TCon" (PVar "b") PWild) () (EIf (EBinOp "==" (EVar "a") (EVar "b")) (EVar "MOk") (EVar "MFail"))) (arm (PCon "TRigid" (PVar "b")) () (EIf (EBinOp "==" (EVar "a") (EVar "b")) (EVar "MOk") (EVar "MFail"))) (arm PWild () (EVar "MFail")))) (arm (PCon "TRigid" (PVar "a")) () (EMatch (EVar "s") (arm (PCon "TRigid" (PVar "b")) () (EIf (EBinOp "==" (EVar "a") (EVar "b")) (EVar "MOk") (EVar "MFail"))) (arm (PCon "TCon" (PVar "b") PWild) () (EIf (EBinOp "==" (EVar "a") (EVar "b")) (EVar "MOk") (EVar "MFail"))) (arm PWild () (EVar "MFail")))) (arm (PCon "TApp" (PVar "f1") (PVar "a1")) () (EMatch (EVar "s") (arm (PCon "TApp" (PVar "f2") (PVar "a2")) () (EApp (EVar "MKids") (EListLit (ETuple (EVar "f1") (EVar "f2")) (ETuple (EVar "a1") (EVar "a2"))))) (arm PWild () (EVar "MFail")))) (arm (PCon "TFun" (PVar "a1") PWild (PVar "b1")) () (EMatch (EVar "s") (arm (PCon "TFun" (PVar "a2") PWild (PVar "b2")) () (EApp (EVar "MKids") (EListLit (ETuple (EVar "a1") (EVar "a2")) (ETuple (EVar "b1") (EVar "b2"))))) (arm PWild () (EVar "MFail")))) (arm (PCon "TEff" PWild) () (EMatch (EVar "s") (arm (PCon "TEff" PWild) () (EVar "MOk")) (arm PWild () (EVar "MFail"))))))))
+(DFunDef false "cohStep" ((PVar "g0") (PVar "s0")) (EBlock (DoLet false false (PVar "g") (EApp (EVar "normalize") (EVar "g0"))) (DoLet false false (PVar "s") (EApp (EVar "normalize") (EVar "s0"))) (DoExpr (EMatch (EVar "g") (arm (PCon "TVar" (PVar "c")) () (EApp (EVar "MVar") (EApp (EVar "tyvarId") (EVar "c")))) (arm (PCon "TCon" (PVar "a") (PVar "oa")) () (EMatch (EVar "s") (arm (PCon "TCon" (PVar "b") (PVar "ob")) () (EIf (EApp (EApp (EApp (EApp (EVar "sameTyConHead") (EVar "a")) (EVar "oa")) (EVar "b")) (EVar "ob")) (EVar "MOk") (EVar "MFail"))) (arm (PCon "TRigid" (PVar "b")) () (EIf (EBinOp "==" (EVar "a") (EVar "b")) (EVar "MOk") (EVar "MFail"))) (arm PWild () (EVar "MFail")))) (arm (PCon "TRigid" (PVar "a")) () (EMatch (EVar "s") (arm (PCon "TRigid" (PVar "b")) () (EIf (EBinOp "==" (EVar "a") (EVar "b")) (EVar "MOk") (EVar "MFail"))) (arm (PCon "TCon" (PVar "b") PWild) () (EIf (EBinOp "==" (EVar "a") (EVar "b")) (EVar "MOk") (EVar "MFail"))) (arm PWild () (EVar "MFail")))) (arm (PCon "TApp" (PVar "f1") (PVar "a1")) () (EMatch (EVar "s") (arm (PCon "TApp" (PVar "f2") (PVar "a2")) () (EApp (EVar "MKids") (EListLit (ETuple (EVar "f1") (EVar "f2")) (ETuple (EVar "a1") (EVar "a2"))))) (arm PWild () (EVar "MFail")))) (arm (PCon "TFun" (PVar "a1") PWild (PVar "b1")) () (EMatch (EVar "s") (arm (PCon "TFun" (PVar "a2") PWild (PVar "b2")) () (EApp (EVar "MKids") (EListLit (ETuple (EVar "a1") (EVar "a2")) (ETuple (EVar "b1") (EVar "b2"))))) (arm PWild () (EVar "MFail")))) (arm (PCon "TEff" PWild) () (EMatch (EVar "s") (arm (PCon "TEff" PWild) () (EVar "MOk")) (arm PWild () (EVar "MFail"))))))))
 (DTypeSig false "eqInt" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool"))))
 (DFunDef false "eqInt" ((PVar "a") (PVar "b")) (EBinOp "==" (EVar "a") (EVar "b")))
 (DTypeSig false "cohEqMono" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Bool"))))
 (DFunDef false "cohEqMono" ((PVar "a") (PVar "b")) (EApp (EApp (EVar "cohEqR") (EApp (EVar "normalize") (EVar "a"))) (EApp (EVar "normalize") (EVar "b"))))
 (DTypeSig false "cohEqR" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Bool"))))
 (DFunDef false "cohEqR" ((PCon "TVar" (PVar "c1")) (PCon "TVar" (PVar "c2"))) (EBinOp "==" (EApp (EVar "tyvarId") (EVar "c1")) (EApp (EVar "tyvarId") (EVar "c2"))))
-(DFunDef false "cohEqR" ((PCon "TCon" (PVar "a") PWild) (PCon "TCon" (PVar "b") PWild)) (EBinOp "==" (EVar "a") (EVar "b")))
+(DFunDef false "cohEqR" ((PCon "TCon" (PVar "a") (PVar "oa")) (PCon "TCon" (PVar "b") (PVar "ob"))) (EApp (EApp (EApp (EApp (EVar "sameTyConHead") (EVar "a")) (EVar "oa")) (EVar "b")) (EVar "ob")))
 (DFunDef false "cohEqR" ((PCon "TRigid" (PVar "a")) (PCon "TRigid" (PVar "b"))) (EBinOp "==" (EVar "a") (EVar "b")))
 (DFunDef false "cohEqR" ((PCon "TCon" (PVar "a") PWild) (PCon "TRigid" (PVar "b"))) (EBinOp "==" (EVar "a") (EVar "b")))
 (DFunDef false "cohEqR" ((PCon "TRigid" (PVar "a")) (PCon "TCon" (PVar "b") PWild)) (EBinOp "==" (EVar "a") (EVar "b")))
@@ -24399,7 +24516,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "entryHeadMatches" ((PVar "hty") (PVar "itys") (PVar "goals")) (EIf (EBinOp "==" (EApp (EVar "listLen") (EVar "itys")) (EApp (EVar "listLen") (EVar "goals"))) (EApp (EVar "isSome") (EApp (EApp (EVar "matchTyMonos") (EVar "itys")) (EVar "goals"))) (EIf (EVar "otherwise") (EMatch (EVar "goals") (arm (PCons (PVar "g") PWild) () (EApp (EVar "isSome") (EApp (EApp (EVar "matchTyMono") (EVar "hty")) (EVar "g")))) (arm (PList) () (EVar "False"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "matchStep" (TyFun (TyCon "Ty") (TyFun (TyCon "Mono") (TyApp (TyApp (TyApp (TyCon "MStep") (TyCon "String")) (TyCon "Ty")) (TyCon "Mono")))))
 (DFunDef false "matchStep" ((PCon "TyVar" (PVar "n")) PWild) (EApp (EVar "MVar") (EVar "n")))
-(DFunDef false "matchStep" ((PRec "TyCon" ((rf "tyConName" (PVar "n"))) false) (PVar "m")) (EMatch (EApp (EVar "normalize") (EVar "m")) (arm (PCon "TCon" (PVar "n2") PWild) () (EIf (EBinOp "==" (EVar "n") (EVar "n2")) (EVar "MOk") (EVar "MFail"))) (arm (PCon "TRigid" (PVar "n2")) () (EIf (EBinOp "==" (EVar "n") (EVar "n2")) (EVar "MOk") (EVar "MFail"))) (arm PWild () (EVar "MFail"))))
+(DFunDef false "matchStep" ((PRec "TyCon" ((rf "tyConName" (PVar "n")) (rf "tyConOrigin" (PVar "o"))) false) (PVar "m")) (EMatch (EApp (EVar "normalize") (EVar "m")) (arm (PCon "TCon" (PVar "n2") (PVar "o2")) () (EIf (EApp (EApp (EApp (EApp (EVar "sameTyConHead") (EVar "n")) (EVar "o")) (EVar "n2")) (EVar "o2")) (EVar "MOk") (EVar "MFail"))) (arm (PCon "TRigid" (PVar "n2")) () (EIf (EBinOp "==" (EVar "n") (EVar "n2")) (EVar "MOk") (EVar "MFail"))) (arm PWild () (EVar "MFail"))))
 (DFunDef false "matchStep" ((PCon "TyApp" (PVar "a") (PVar "b")) (PVar "m")) (EMatch (EApp (EVar "normalize") (EVar "m")) (arm (PCon "TApp" (PVar "ma") (PVar "mb")) () (EApp (EVar "MKids") (EListLit (ETuple (EVar "a") (EVar "ma")) (ETuple (EVar "b") (EVar "mb"))))) (arm PWild () (EVar "MFail"))))
 (DFunDef false "matchStep" ((PCon "TyTuple" (PVar "ts")) (PVar "m")) (EMatch (EApp (EVar "tupleSpine") (EVar "m")) (arm (PCon "Some" (PVar "ms")) () (EIf (EBinOp "==" (EApp (EVar "listLen") (EVar "ts")) (EApp (EVar "listLen") (EVar "ms"))) (EApp (EVar "MKids") (EApp (EApp (EVar "zipL") (EVar "ts")) (EVar "ms"))) (EVar "MFail"))) (arm PWild () (EVar "MFail"))))
 (DFunDef false "matchStep" ((PCon "TyFun" (PVar "a") (PVar "b")) (PVar "m")) (EMatch (EApp (EVar "normalize") (EVar "m")) (arm (PCon "TFun" (PVar "ma") PWild (PVar "mb")) () (EApp (EVar "MKids") (EListLit (ETuple (EVar "a") (EVar "ma")) (ETuple (EApp (EVar "stripEff") (EVar "b")) (EVar "mb"))))) (arm PWild () (EVar "MFail"))))
@@ -25124,7 +25241,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "monoIsBareTyvar" (TyFun (TyCon "Mono") (TyCon "Bool")))
 (DFunDef false "monoIsBareTyvar" ((PVar "m")) (EMatch (EApp (EVar "normalize") (EVar "m")) (arm (PCon "TVar" PWild) () (EVar "True")) (arm PWild () (EVar "False"))))
 (DTypeSig false "monoSameGiven" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Bool"))))
-(DFunDef false "monoSameGiven" ((PVar "a") (PVar "b")) (EMatch (EApp (EVar "normalize") (EVar "a")) (arm (PCon "TVar" (PVar "c1")) () (EMatch (EApp (EVar "normalize") (EVar "b")) (arm (PCon "TVar" (PVar "c2")) () (EBinOp "==" (EApp (EVar "tyvarId") (EVar "c1")) (EApp (EVar "tyvarId") (EVar "c2")))) (arm PWild () (EVar "False")))) (arm (PCon "TCon" (PVar "x") PWild) () (EMatch (EApp (EVar "normalize") (EVar "b")) (arm (PCon "TCon" (PVar "y") PWild) () (EBinOp "==" (EVar "x") (EVar "y"))) (arm (PCon "TRigid" (PVar "y")) () (EBinOp "==" (EVar "x") (EVar "y"))) (arm PWild () (EVar "False")))) (arm (PCon "TRigid" (PVar "x")) () (EMatch (EApp (EVar "normalize") (EVar "b")) (arm (PCon "TRigid" (PVar "y")) () (EBinOp "==" (EVar "x") (EVar "y"))) (arm (PCon "TCon" (PVar "y") PWild) () (EBinOp "==" (EVar "x") (EVar "y"))) (arm PWild () (EVar "False")))) (arm (PCon "TApp" (PVar "a1") (PVar "b1")) () (EMatch (EApp (EVar "normalize") (EVar "b")) (arm (PCon "TApp" (PVar "a2") (PVar "b2")) () (EBinOp "&&" (EApp (EApp (EVar "monoSameGiven") (EVar "a1")) (EVar "a2")) (EApp (EApp (EVar "monoSameGiven") (EVar "b1")) (EVar "b2")))) (arm PWild () (EVar "False")))) (arm (PCon "TFun" (PVar "a1") PWild (PVar "b1")) () (EMatch (EApp (EVar "normalize") (EVar "b")) (arm (PCon "TFun" (PVar "a2") PWild (PVar "b2")) () (EBinOp "&&" (EApp (EApp (EVar "monoSameGiven") (EVar "a1")) (EVar "a2")) (EApp (EApp (EVar "monoSameGiven") (EVar "b1")) (EVar "b2")))) (arm PWild () (EVar "False")))) (arm PWild () (EVar "False"))))
+(DFunDef false "monoSameGiven" ((PVar "a") (PVar "b")) (EMatch (EApp (EVar "normalize") (EVar "a")) (arm (PCon "TVar" (PVar "c1")) () (EMatch (EApp (EVar "normalize") (EVar "b")) (arm (PCon "TVar" (PVar "c2")) () (EBinOp "==" (EApp (EVar "tyvarId") (EVar "c1")) (EApp (EVar "tyvarId") (EVar "c2")))) (arm PWild () (EVar "False")))) (arm (PCon "TCon" (PVar "x") (PVar "ox")) () (EMatch (EApp (EVar "normalize") (EVar "b")) (arm (PCon "TCon" (PVar "y") (PVar "oy")) () (EApp (EApp (EApp (EApp (EVar "sameTyConHead") (EVar "x")) (EVar "ox")) (EVar "y")) (EVar "oy"))) (arm (PCon "TRigid" (PVar "y")) () (EBinOp "==" (EVar "x") (EVar "y"))) (arm PWild () (EVar "False")))) (arm (PCon "TRigid" (PVar "x")) () (EMatch (EApp (EVar "normalize") (EVar "b")) (arm (PCon "TRigid" (PVar "y")) () (EBinOp "==" (EVar "x") (EVar "y"))) (arm (PCon "TCon" (PVar "y") PWild) () (EBinOp "==" (EVar "x") (EVar "y"))) (arm PWild () (EVar "False")))) (arm (PCon "TApp" (PVar "a1") (PVar "b1")) () (EMatch (EApp (EVar "normalize") (EVar "b")) (arm (PCon "TApp" (PVar "a2") (PVar "b2")) () (EBinOp "&&" (EApp (EApp (EVar "monoSameGiven") (EVar "a1")) (EVar "a2")) (EApp (EApp (EVar "monoSameGiven") (EVar "b1")) (EVar "b2")))) (arm PWild () (EVar "False")))) (arm (PCon "TFun" (PVar "a1") PWild (PVar "b1")) () (EMatch (EApp (EVar "normalize") (EVar "b")) (arm (PCon "TFun" (PVar "a2") PWild (PVar "b2")) () (EBinOp "&&" (EApp (EApp (EVar "monoSameGiven") (EVar "a1")) (EVar "a2")) (EApp (EApp (EVar "monoSameGiven") (EVar "b1")) (EVar "b2")))) (arm PWild () (EVar "False")))) (arm PWild () (EVar "False"))))
 (DTypeSig false "activeDictPredOf" (TyFun (TyCon "String") (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))))
 (DFunDef false "activeDictPredOf" ((PVar "iface") (PVar "subject") (PVar "encl")) (EBlock (DoLet false false (PVar "preds") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "activeDictPreds") "value")) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EVar "firstPredForEncl") (EVar "iface")) (EVar "subject")) (EBinOp "++" (EBinOp "++" (ELit (LString "$dict_")) (EApp (EVar "display") (EVar "encl"))) (ELit (LString "_")))) (EVar "preds")) (arm (PCon "Some" (PVar "dname")) () (EApp (EVar "Some") (EVar "dname"))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "firstPredForEncl") (EVar "iface")) (EVar "subject")) (ELit (LString ""))) (EVar "preds")))))))
 (DTypeSig false "firstPredForEncl" (TyFun (TyCon "String") (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono") (TyCon "String"))) (TyApp (TyCon "Option") (TyCon "String")))))))
@@ -25898,7 +26015,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "schemeLines" ((PList)) (EListLit))
 (DFunDef false "schemeLines" ((PCons (PTuple (PVar "n") (PVar "s")) (PVar "rest"))) (EBinOp "::" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "n"))) (ELit (LString " : "))) (EApp (EVar "display") (EApp (EApp (EVar "ppSchemeNamed") (EVar "n")) (EVar "s")))) (ELit (LString ""))) (EApp (EVar "schemeLines") (EVar "rest"))))
 # MARK
-(DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "Ns" true) (mem "Ident" true) (mem "mkIdent" false) (mem "tyConBuiltin" false) (mem "firstTyLoc" false) (mem "firstTyLocList" false) (mem "Constraint" true) (mem "Route" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "FunClause" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "Expr" true) (mem "Loc" true) (mem "orElseLoc" false) (mem "ConPayload" true) (mem "Field" true) (mem "Variant" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "Require" true) (mem "Super" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Decl" true) (mem "PropParam" true) (mem "Section" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "useMemberAlias" false) (mem "qualifiedLocal" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "Ns" true) (mem "Ident" true) (mem "mkIdent" false) (mem "sameTyConHead" false) (mem "tyConBuiltin" false) (mem "firstTyLoc" false) (mem "firstTyLocList" false) (mem "Constraint" true) (mem "Route" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "FunClause" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "Expr" true) (mem "Loc" true) (mem "orElseLoc" false) (mem "ConPayload" true) (mem "Field" true) (mem "Variant" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "Require" true) (mem "Super" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Decl" true) (mem "PropParam" true) (mem "Section" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "useMemberAlias" false) (mem "qualifiedLocal" false))))
 (DUse false (UseGroup ("types" "registry") ((mem "TabKey" true) (mem "tabKeyOf" false) (mem "tabKeyName" false) (mem "lookupTab" false) (mem "tabHasName" false) (mem "RegKey" false) (mem "Registry" false) (mem "regKeyOfTab" false) (mem "regKeyTabAt" false) (mem "lookupReg" false) (mem "regEmpty" false) (mem "regInsertK" false) (mem "regLookupK" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "mapProg" false))))
 (DUse false (UseGroup ("frontend" "marker") ((mem "localBoundNames" false))))
@@ -25909,7 +26026,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DUse false (UseGroup ("support" "scc") ((mem "tarjanSCCs" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omKeys" false) (mem "omFromPairs" false) (mem "omMapValues" false) (mem "omSize" false))))
 (DUse false (UseGroup ("list") ((mem "replicate" false))))
-(DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "lookupAssoc" false) (mem "contains" false) (mem "endsWith" false) (mem "reverseL" false) (mem "joinWith" false) (mem "joinNl" false) (mem "joinDot" false) (mem "filterList" false) (mem "anyList" false) (mem "allList" false) (mem "initList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "minI" false) (mem "isSome" false) (mem "zipL" false) (mem "dedup" false) (mem "dedupBy" false) (mem "lenKey" false) (mem "sortUniqS" false) (mem "startsWith" false) (mem "escStr" false) (mem "editDistance" false) (mem "noneHeadTag" false))))
+(DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "lookupAssoc" false) (mem "contains" false) (mem "endsWith" false) (mem "reverseL" false) (mem "joinWith" false) (mem "joinNl" false) (mem "joinDot" false) (mem "filterList" false) (mem "anyList" false) (mem "allList" false) (mem "initList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "minI" false) (mem "isSome" false) (mem "orElseOpt" false) (mem "zipL" false) (mem "dedup" false) (mem "dedupBy" false) (mem "lenKey" false) (mem "sortUniqS" false) (mem "startsWith" false) (mem "escStr" false) (mem "editDistance" false) (mem "noneHeadTag" false))))
 (DUse false (UseGroup ("types" "registry") ((mem "HeadKey" true) (mem "headKeyOfCon" false) (mem "headKeyName" false) (mem "RegKey" false) (mem "regKeyOfTab" false) (mem "regKeyNTab" false) (mem "regKeyNTabAt" false) (mem "regKeyRender" false) (mem "dispKeyRender" false) (mem "Registry" false) (mem "regEmpty" false) (mem "regInsertK" false) (mem "regLookupK" false) (mem "MultiRegistry" false) (mem "mregEmpty" false) (mem "mregAppendK" false) (mem "mregLookupK" false) (mem "SetRegistry" false) (mem "sregEmpty" false) (mem "sregAddK" false) (mem "sregSize" false))))
 (DData Public "Mono" () ((variant "TVar" (ConPos (TyApp (TyCon "Ref") (TyCon "Tyvar")))) (variant "TCon" (ConPos (TyCon "String") (TyCon "TyConOrigin"))) (variant "TRigid" (ConPos (TyCon "String"))) (variant "TApp" (ConPos (TyCon "Mono") (TyCon "Mono"))) (variant "TFun" (ConPos (TyCon "Mono") (TyCon "EffRow") (TyCon "Mono"))) (variant "TEff" (ConPos (TyCon "EffRow")))) ())
 (DData Public "Tyvar" () ((variant "Unbound" (ConPos (TyCon "Int") (TyCon "Int"))) (variant "Link" (ConPos (TyCon "Mono")))) ())
@@ -26545,7 +26662,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "unifyN" ((PCon "TVar" (PVar "c1")) (PCon "TVar" (PVar "c2"))) (EApp (EApp (EVar "unifyVars") (EVar "c1")) (EVar "c2")))
 (DFunDef false "unifyN" ((PCon "TVar" (PVar "c")) (PVar "t")) (EApp (EApp (EVar "bindVar") (EVar "c")) (EVar "t")))
 (DFunDef false "unifyN" ((PVar "t") (PCon "TVar" (PVar "c"))) (EApp (EApp (EVar "bindVar") (EVar "c")) (EVar "t")))
-(DFunDef false "unifyN" ((PAs "ta" (PCon "TCon" (PVar "a") PWild)) (PAs "tb" (PCon "TCon" (PVar "b") PWild))) (EIf (EBinOp "==" (EVar "a") (EVar "b")) (ELit LUnit) (EApp (EApp (EVar "typeMismatch") (EVar "ta")) (EVar "tb"))))
+(DFunDef false "unifyN" ((PAs "ta" (PCon "TCon" (PVar "a") (PVar "oa"))) (PAs "tb" (PCon "TCon" (PVar "b") (PVar "ob")))) (EIf (EApp (EApp (EApp (EApp (EVar "sameTyConHead") (EVar "a")) (EVar "oa")) (EVar "b")) (EVar "ob")) (ELit LUnit) (EApp (EApp (EVar "typeMismatch") (EVar "ta")) (EVar "tb"))))
 (DFunDef false "unifyN" ((PCon "TRigid" (PVar "a")) (PCon "TRigid" (PVar "b"))) (EIf (EBinOp "==" (EVar "a") (EVar "b")) (ELit LUnit) (EApp (EApp (EVar "typeMismatch") (EApp (EVar "TRigid") (EVar "a"))) (EApp (EVar "TRigid") (EVar "b")))))
 (DFunDef false "unifyN" ((PAs "ta" (PCon "TCon" (PVar "a") PWild)) (PAs "tb" (PCon "TRigid" (PVar "b")))) (EIf (EBinOp "==" (EVar "a") (EVar "b")) (ELit LUnit) (EApp (EApp (EVar "typeMismatch") (EVar "ta")) (EVar "tb"))))
 (DFunDef false "unifyN" ((PAs "ta" (PCon "TRigid" (PVar "a"))) (PAs "tb" (PCon "TCon" (PVar "b") PWild))) (EIf (EBinOp "==" (EVar "a") (EVar "b")) (ELit LUnit) (EApp (EApp (EVar "typeMismatch") (EVar "ta")) (EVar "tb"))))
@@ -26571,7 +26688,17 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "indefiniteArticle" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "indefiniteArticle" ((PVar "name")) (EIf (EBinOp "==" (EApp (EVar "stringLength") (EVar "name")) (ELit (LInt 0))) (ELit (LString "a")) (EIf (EApp (EApp (EVar "contains") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (ELit (LInt 1))) (EVar "name"))) (EListLit (ELit (LString "A")) (ELit (LString "E")) (ELit (LString "I")) (ELit (LString "O")) (ELit (LString "U")))) (ELit (LString "an")) (EIf (EVar "otherwise") (ELit (LString "a")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "typeMismatchReportRest" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Unit"))))
-(DFunDef false "typeMismatchReportRest" ((PVar "a") (PVar "b")) (EMatch (EFieldAccess (EVar "currentDoOrigin") "value") (arm (PCon "Some" (PVar "doLoc")) () (EApp (EApp (EApp (EVar "typeMismatchInDo") (EVar "a")) (EVar "b")) (EVar "doLoc"))) (arm (PCon "None") () (EMatch (EApp (EVar "firstTupleCallHint") (EListLit (EVar "a") (EVar "b"))) (arm (PCon "Some" (PTuple (PVar "help") (PVar "fix"))) () (EApp (EApp (EApp (EApp (EApp (EVar "pushTypeErrorHelpFixAt") (ELit (LString "T-TYPE-MISMATCH"))) (EFieldAccess (EVar "currentLoc") "value")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Type mismatch: ")) (EApp (EMethodRef "display") (EApp (EVar "ppMono") (EVar "a")))) (ELit (LString " vs "))) (EApp (EMethodRef "display") (EApp (EVar "ppMono") (EVar "b")))) (ELit (LString " — "))) (EApp (EMethodRef "display") (EVar "help"))) (ELit (LString "")))) (EVar "help")) (EVar "fix"))) (arm (PCon "None") () (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-TYPE-MISMATCH"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Type mismatch: ")) (EApp (EMethodRef "display") (EApp (EVar "ppMono") (EVar "a")))) (ELit (LString " vs "))) (EApp (EMethodRef "display") (EApp (EVar "ppMono") (EVar "b")))) (ELit (LString "")))))))))
+(DFunDef false "typeMismatchReportRest" ((PVar "a") (PVar "b")) (EMatch (EFieldAccess (EVar "currentDoOrigin") "value") (arm (PCon "Some" (PVar "doLoc")) () (EApp (EApp (EApp (EVar "typeMismatchInDo") (EVar "a")) (EVar "b")) (EVar "doLoc"))) (arm (PCon "None") () (EMatch (EApp (EVar "firstTupleCallHint") (EListLit (EVar "a") (EVar "b"))) (arm (PCon "Some" (PTuple (PVar "help") (PVar "fix"))) () (EApp (EApp (EApp (EApp (EApp (EVar "pushTypeErrorHelpFixAt") (ELit (LString "T-TYPE-MISMATCH"))) (EFieldAccess (EVar "currentLoc") "value")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Type mismatch: ")) (EApp (EMethodRef "display") (EApp (EVar "ppMono") (EVar "a")))) (ELit (LString " vs "))) (EApp (EMethodRef "display") (EApp (EVar "ppMono") (EVar "b")))) (ELit (LString " — "))) (EApp (EMethodRef "display") (EVar "help"))) (ELit (LString "")))) (EVar "help")) (EVar "fix"))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "sameSpellingHint") (EVar "a")) (EVar "b")) (arm (PCon "Some" (PVar "help")) () (EApp (EApp (EApp (EApp (EApp (EVar "pushTypeErrorHelpFixAt") (ELit (LString "T-TYPE-MISMATCH"))) (EFieldAccess (EVar "currentLoc") "value")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Type mismatch: ")) (EApp (EMethodRef "display") (EApp (EVar "ppMono") (EVar "a")))) (ELit (LString " vs "))) (EApp (EMethodRef "display") (EApp (EVar "ppMono") (EVar "b")))) (ELit (LString " — "))) (EApp (EMethodRef "display") (EVar "help"))) (ELit (LString "")))) (EVar "help")) (EVar "None"))) (arm (PCon "None") () (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-TYPE-MISMATCH"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Type mismatch: ")) (EApp (EMethodRef "display") (EApp (EVar "ppMono") (EVar "a")))) (ELit (LString " vs "))) (EApp (EMethodRef "display") (EApp (EVar "ppMono") (EVar "b")))) (ELit (LString "")))))))))))
+(DTypeSig false "sameSpellingHint" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyApp (TyCon "Option") (TyCon "String")))))
+(DFunDef false "sameSpellingHint" ((PVar "a") (PVar "b")) (EIf (EBinOp "!=" (EApp (EVar "ppMono") (EVar "a")) (EApp (EVar "ppMono") (EVar "b"))) (EVar "None") (EIf (EVar "otherwise") (EApp (EApp (EMethodRef "map") (EVar "idConflictHelp")) (EApp (EApp (EVar "firstIdConflict") (EVar "a")) (EVar "b"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "idConflictHelp" (TyFun (TyTuple (TyCon "String") (TyCon "TyConOrigin") (TyCon "TyConOrigin")) (TyCon "String")))
+(DFunDef false "idConflictHelp" ((PTuple (PVar "name") (PVar "o1") (PVar "o2"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "these are two DIFFERENT types that share the name '")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "': one comes from "))) (EApp (EMethodRef "display") (EApp (EVar "originPhrase") (EVar "o1")))) (ELit (LString ", the other from "))) (EApp (EMethodRef "display") (EApp (EVar "originPhrase") (EVar "o2")))) (ELit (LString " — import the one you mean rather than declaring a second type of the same name"))))
+(DTypeSig false "originPhrase" (TyFun (TyCon "TyConOrigin") (TyCon "String")))
+(DFunDef false "originPhrase" ((PCon "OriginModule" (PVar "m"))) (EBinOp "++" (EBinOp "++" (ELit (LString "module '")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "'"))))
+(DFunDef false "originPhrase" ((PCon "OriginBuiltin")) (ELit (LString "the language itself")))
+(DFunDef false "originPhrase" ((PCon "OriginUnresolved")) (ELit (LString "an unknown module")))
+(DTypeSig false "firstIdConflict" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "TyConOrigin") (TyCon "TyConOrigin"))))))
+(DFunDef false "firstIdConflict" ((PVar "a") (PVar "b")) (EMatch (ETuple (EApp (EVar "normalize") (EVar "a")) (EApp (EVar "normalize") (EVar "b"))) (arm (PTuple (PCon "TCon" (PVar "n1") (PVar "o1")) (PCon "TCon" (PVar "n2") (PVar "o2"))) () (EIf (EBinOp "&&" (EBinOp "==" (EVar "n1") (EVar "n2")) (EApp (EVar "not") (EApp (EApp (EApp (EApp (EVar "sameTyConHead") (EVar "n1")) (EVar "o1")) (EVar "n2")) (EVar "o2")))) (EApp (EVar "Some") (ETuple (EVar "n1") (EVar "o1") (EVar "o2"))) (EVar "None"))) (arm (PTuple (PCon "TApp" (PVar "f1") (PVar "x1")) (PCon "TApp" (PVar "f2") (PVar "x2"))) () (EApp (EApp (EVar "orElseOpt") (EApp (EApp (EVar "firstIdConflict") (EVar "f1")) (EVar "f2"))) (EApp (EApp (EVar "firstIdConflict") (EVar "x1")) (EVar "x2")))) (arm (PTuple (PCon "TFun" (PVar "d1") PWild (PVar "r1")) (PCon "TFun" (PVar "d2") PWild (PVar "r2"))) () (EApp (EApp (EVar "orElseOpt") (EApp (EApp (EVar "firstIdConflict") (EVar "d1")) (EVar "d2"))) (EApp (EApp (EVar "firstIdConflict") (EVar "r1")) (EVar "r2")))) (arm PWild () (EVar "None"))))
 (DTypeSig false "typeMismatchInDo" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyFun (TyCon "Loc") (TyCon "Unit")))))
 (DFunDef false "typeMismatchInDo" ((PVar "a") (PVar "b") (PVar "doLoc")) (EIf (EBinOp "!=" (EApp (EVar "monoIsApp") (EApp (EVar "normalize") (EVar "a"))) (EApp (EVar "monoIsApp") (EApp (EVar "normalize") (EVar "b")))) (EApp (EVar "recordDoMonadError") (EVar "doLoc")) (EIf (EVar "otherwise") (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-TYPE-MISMATCH"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Type mismatch: ")) (EApp (EMethodRef "display") (EApp (EVar "ppMono") (EVar "a")))) (ELit (LString " vs "))) (EApp (EMethodRef "display") (EApp (EVar "ppMono") (EVar "b")))) (ELit (LString "")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "recordDoMonadError" (TyFun (TyCon "Loc") (TyCon "Unit")))
@@ -28253,7 +28380,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "cohGoR" ((PVar "subst") (PCon "TVar" (PVar "c1")) (PCon "TVar" (PVar "c2"))) (EIf (EBinOp "==" (EApp (EVar "tyvarId") (EVar "c1")) (EApp (EVar "tyvarId") (EVar "c2"))) (EVar "True") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "cohBind") (EVar "subst")) (EApp (EVar "tyvarId") (EVar "c1"))) (EApp (EVar "TVar") (EVar "c2"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "cohGoR" ((PVar "subst") (PCon "TVar" (PVar "c1")) (PVar "t")) (EApp (EApp (EApp (EVar "cohBind") (EVar "subst")) (EApp (EVar "tyvarId") (EVar "c1"))) (EVar "t")))
 (DFunDef false "cohGoR" ((PVar "subst") (PVar "t") (PCon "TVar" (PVar "c2"))) (EApp (EApp (EApp (EVar "cohBind") (EVar "subst")) (EApp (EVar "tyvarId") (EVar "c2"))) (EVar "t")))
-(DFunDef false "cohGoR" (PWild (PCon "TCon" (PVar "a") PWild) (PCon "TCon" (PVar "b") PWild)) (EBinOp "==" (EVar "a") (EVar "b")))
+(DFunDef false "cohGoR" (PWild (PCon "TCon" (PVar "a") (PVar "oa")) (PCon "TCon" (PVar "b") (PVar "ob"))) (EApp (EApp (EApp (EApp (EVar "sameTyConHead") (EVar "a")) (EVar "oa")) (EVar "b")) (EVar "ob")))
 (DFunDef false "cohGoR" (PWild (PCon "TRigid" (PVar "a")) (PCon "TRigid" (PVar "b"))) (EBinOp "==" (EVar "a") (EVar "b")))
 (DFunDef false "cohGoR" (PWild (PCon "TCon" (PVar "a") PWild) (PCon "TRigid" (PVar "b"))) (EBinOp "==" (EVar "a") (EVar "b")))
 (DFunDef false "cohGoR" (PWild (PCon "TRigid" (PVar "a")) (PCon "TCon" (PVar "b") PWild)) (EBinOp "==" (EVar "a") (EVar "b")))
@@ -28273,14 +28400,14 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "cohSubsumes" (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "Bool"))))
 (DFunDef false "cohSubsumes" ((PVar "general") (PVar "specific")) (EIf (EBinOp "==" (EApp (EVar "listLen") (EVar "general")) (EApp (EVar "listLen") (EVar "specific"))) (EApp (EVar "isSome") (EApp (EApp (EApp (EApp (EApp (EVar "matchOneSided") (EVar "cohStep")) (EVar "eqInt")) (EVar "cohEqMono")) (EApp (EApp (EVar "zipL") (EVar "general")) (EVar "specific"))) (EListLit))) (EIf (EVar "otherwise") (EVar "False") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "cohStep" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyApp (TyApp (TyApp (TyCon "MStep") (TyCon "Int")) (TyCon "Mono")) (TyCon "Mono")))))
-(DFunDef false "cohStep" ((PVar "g0") (PVar "s0")) (EBlock (DoLet false false (PVar "g") (EApp (EVar "normalize") (EVar "g0"))) (DoLet false false (PVar "s") (EApp (EVar "normalize") (EVar "s0"))) (DoExpr (EMatch (EVar "g") (arm (PCon "TVar" (PVar "c")) () (EApp (EVar "MVar") (EApp (EVar "tyvarId") (EVar "c")))) (arm (PCon "TCon" (PVar "a") PWild) () (EMatch (EVar "s") (arm (PCon "TCon" (PVar "b") PWild) () (EIf (EBinOp "==" (EVar "a") (EVar "b")) (EVar "MOk") (EVar "MFail"))) (arm (PCon "TRigid" (PVar "b")) () (EIf (EBinOp "==" (EVar "a") (EVar "b")) (EVar "MOk") (EVar "MFail"))) (arm PWild () (EVar "MFail")))) (arm (PCon "TRigid" (PVar "a")) () (EMatch (EVar "s") (arm (PCon "TRigid" (PVar "b")) () (EIf (EBinOp "==" (EVar "a") (EVar "b")) (EVar "MOk") (EVar "MFail"))) (arm (PCon "TCon" (PVar "b") PWild) () (EIf (EBinOp "==" (EVar "a") (EVar "b")) (EVar "MOk") (EVar "MFail"))) (arm PWild () (EVar "MFail")))) (arm (PCon "TApp" (PVar "f1") (PVar "a1")) () (EMatch (EVar "s") (arm (PCon "TApp" (PVar "f2") (PVar "a2")) () (EApp (EVar "MKids") (EListLit (ETuple (EVar "f1") (EVar "f2")) (ETuple (EVar "a1") (EVar "a2"))))) (arm PWild () (EVar "MFail")))) (arm (PCon "TFun" (PVar "a1") PWild (PVar "b1")) () (EMatch (EVar "s") (arm (PCon "TFun" (PVar "a2") PWild (PVar "b2")) () (EApp (EVar "MKids") (EListLit (ETuple (EVar "a1") (EVar "a2")) (ETuple (EVar "b1") (EVar "b2"))))) (arm PWild () (EVar "MFail")))) (arm (PCon "TEff" PWild) () (EMatch (EVar "s") (arm (PCon "TEff" PWild) () (EVar "MOk")) (arm PWild () (EVar "MFail"))))))))
+(DFunDef false "cohStep" ((PVar "g0") (PVar "s0")) (EBlock (DoLet false false (PVar "g") (EApp (EVar "normalize") (EVar "g0"))) (DoLet false false (PVar "s") (EApp (EVar "normalize") (EVar "s0"))) (DoExpr (EMatch (EVar "g") (arm (PCon "TVar" (PVar "c")) () (EApp (EVar "MVar") (EApp (EVar "tyvarId") (EVar "c")))) (arm (PCon "TCon" (PVar "a") (PVar "oa")) () (EMatch (EVar "s") (arm (PCon "TCon" (PVar "b") (PVar "ob")) () (EIf (EApp (EApp (EApp (EApp (EVar "sameTyConHead") (EVar "a")) (EVar "oa")) (EVar "b")) (EVar "ob")) (EVar "MOk") (EVar "MFail"))) (arm (PCon "TRigid" (PVar "b")) () (EIf (EBinOp "==" (EVar "a") (EVar "b")) (EVar "MOk") (EVar "MFail"))) (arm PWild () (EVar "MFail")))) (arm (PCon "TRigid" (PVar "a")) () (EMatch (EVar "s") (arm (PCon "TRigid" (PVar "b")) () (EIf (EBinOp "==" (EVar "a") (EVar "b")) (EVar "MOk") (EVar "MFail"))) (arm (PCon "TCon" (PVar "b") PWild) () (EIf (EBinOp "==" (EVar "a") (EVar "b")) (EVar "MOk") (EVar "MFail"))) (arm PWild () (EVar "MFail")))) (arm (PCon "TApp" (PVar "f1") (PVar "a1")) () (EMatch (EVar "s") (arm (PCon "TApp" (PVar "f2") (PVar "a2")) () (EApp (EVar "MKids") (EListLit (ETuple (EVar "f1") (EVar "f2")) (ETuple (EVar "a1") (EVar "a2"))))) (arm PWild () (EVar "MFail")))) (arm (PCon "TFun" (PVar "a1") PWild (PVar "b1")) () (EMatch (EVar "s") (arm (PCon "TFun" (PVar "a2") PWild (PVar "b2")) () (EApp (EVar "MKids") (EListLit (ETuple (EVar "a1") (EVar "a2")) (ETuple (EVar "b1") (EVar "b2"))))) (arm PWild () (EVar "MFail")))) (arm (PCon "TEff" PWild) () (EMatch (EVar "s") (arm (PCon "TEff" PWild) () (EVar "MOk")) (arm PWild () (EVar "MFail"))))))))
 (DTypeSig false "eqInt" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool"))))
 (DFunDef false "eqInt" ((PVar "a") (PVar "b")) (EBinOp "==" (EVar "a") (EVar "b")))
 (DTypeSig false "cohEqMono" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Bool"))))
 (DFunDef false "cohEqMono" ((PVar "a") (PVar "b")) (EApp (EApp (EVar "cohEqR") (EApp (EVar "normalize") (EVar "a"))) (EApp (EVar "normalize") (EVar "b"))))
 (DTypeSig false "cohEqR" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Bool"))))
 (DFunDef false "cohEqR" ((PCon "TVar" (PVar "c1")) (PCon "TVar" (PVar "c2"))) (EBinOp "==" (EApp (EVar "tyvarId") (EVar "c1")) (EApp (EVar "tyvarId") (EVar "c2"))))
-(DFunDef false "cohEqR" ((PCon "TCon" (PVar "a") PWild) (PCon "TCon" (PVar "b") PWild)) (EBinOp "==" (EVar "a") (EVar "b")))
+(DFunDef false "cohEqR" ((PCon "TCon" (PVar "a") (PVar "oa")) (PCon "TCon" (PVar "b") (PVar "ob"))) (EApp (EApp (EApp (EApp (EVar "sameTyConHead") (EVar "a")) (EVar "oa")) (EVar "b")) (EVar "ob")))
 (DFunDef false "cohEqR" ((PCon "TRigid" (PVar "a")) (PCon "TRigid" (PVar "b"))) (EBinOp "==" (EVar "a") (EVar "b")))
 (DFunDef false "cohEqR" ((PCon "TCon" (PVar "a") PWild) (PCon "TRigid" (PVar "b"))) (EBinOp "==" (EVar "a") (EVar "b")))
 (DFunDef false "cohEqR" ((PCon "TRigid" (PVar "a")) (PCon "TCon" (PVar "b") PWild)) (EBinOp "==" (EVar "a") (EVar "b")))
@@ -28714,7 +28841,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "entryHeadMatches" ((PVar "hty") (PVar "itys") (PVar "goals")) (EIf (EBinOp "==" (EApp (EVar "listLen") (EVar "itys")) (EApp (EVar "listLen") (EVar "goals"))) (EApp (EVar "isSome") (EApp (EApp (EVar "matchTyMonos") (EVar "itys")) (EVar "goals"))) (EIf (EVar "otherwise") (EMatch (EVar "goals") (arm (PCons (PVar "g") PWild) () (EApp (EVar "isSome") (EApp (EApp (EVar "matchTyMono") (EVar "hty")) (EVar "g")))) (arm (PList) () (EVar "False"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "matchStep" (TyFun (TyCon "Ty") (TyFun (TyCon "Mono") (TyApp (TyApp (TyApp (TyCon "MStep") (TyCon "String")) (TyCon "Ty")) (TyCon "Mono")))))
 (DFunDef false "matchStep" ((PCon "TyVar" (PVar "n")) PWild) (EApp (EVar "MVar") (EVar "n")))
-(DFunDef false "matchStep" ((PRec "TyCon" ((rf "tyConName" (PVar "n"))) false) (PVar "m")) (EMatch (EApp (EVar "normalize") (EVar "m")) (arm (PCon "TCon" (PVar "n2") PWild) () (EIf (EBinOp "==" (EVar "n") (EVar "n2")) (EVar "MOk") (EVar "MFail"))) (arm (PCon "TRigid" (PVar "n2")) () (EIf (EBinOp "==" (EVar "n") (EVar "n2")) (EVar "MOk") (EVar "MFail"))) (arm PWild () (EVar "MFail"))))
+(DFunDef false "matchStep" ((PRec "TyCon" ((rf "tyConName" (PVar "n")) (rf "tyConOrigin" (PVar "o"))) false) (PVar "m")) (EMatch (EApp (EVar "normalize") (EVar "m")) (arm (PCon "TCon" (PVar "n2") (PVar "o2")) () (EIf (EApp (EApp (EApp (EApp (EVar "sameTyConHead") (EVar "n")) (EVar "o")) (EVar "n2")) (EVar "o2")) (EVar "MOk") (EVar "MFail"))) (arm (PCon "TRigid" (PVar "n2")) () (EIf (EBinOp "==" (EVar "n") (EVar "n2")) (EVar "MOk") (EVar "MFail"))) (arm PWild () (EVar "MFail"))))
 (DFunDef false "matchStep" ((PCon "TyApp" (PVar "a") (PVar "b")) (PVar "m")) (EMatch (EApp (EVar "normalize") (EVar "m")) (arm (PCon "TApp" (PVar "ma") (PVar "mb")) () (EApp (EVar "MKids") (EListLit (ETuple (EVar "a") (EVar "ma")) (ETuple (EVar "b") (EVar "mb"))))) (arm PWild () (EVar "MFail"))))
 (DFunDef false "matchStep" ((PCon "TyTuple" (PVar "ts")) (PVar "m")) (EMatch (EApp (EVar "tupleSpine") (EVar "m")) (arm (PCon "Some" (PVar "ms")) () (EIf (EBinOp "==" (EApp (EVar "listLen") (EVar "ts")) (EApp (EVar "listLen") (EVar "ms"))) (EApp (EVar "MKids") (EApp (EApp (EVar "zipL") (EVar "ts")) (EVar "ms"))) (EVar "MFail"))) (arm PWild () (EVar "MFail"))))
 (DFunDef false "matchStep" ((PCon "TyFun" (PVar "a") (PVar "b")) (PVar "m")) (EMatch (EApp (EVar "normalize") (EVar "m")) (arm (PCon "TFun" (PVar "ma") PWild (PVar "mb")) () (EApp (EVar "MKids") (EListLit (ETuple (EVar "a") (EVar "ma")) (ETuple (EApp (EVar "stripEff") (EVar "b")) (EVar "mb"))))) (arm PWild () (EVar "MFail"))))
@@ -29439,7 +29566,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "monoIsBareTyvar" (TyFun (TyCon "Mono") (TyCon "Bool")))
 (DFunDef false "monoIsBareTyvar" ((PVar "m")) (EMatch (EApp (EVar "normalize") (EVar "m")) (arm (PCon "TVar" PWild) () (EVar "True")) (arm PWild () (EVar "False"))))
 (DTypeSig false "monoSameGiven" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Bool"))))
-(DFunDef false "monoSameGiven" ((PVar "a") (PVar "b")) (EMatch (EApp (EVar "normalize") (EVar "a")) (arm (PCon "TVar" (PVar "c1")) () (EMatch (EApp (EVar "normalize") (EVar "b")) (arm (PCon "TVar" (PVar "c2")) () (EBinOp "==" (EApp (EVar "tyvarId") (EVar "c1")) (EApp (EVar "tyvarId") (EVar "c2")))) (arm PWild () (EVar "False")))) (arm (PCon "TCon" (PVar "x") PWild) () (EMatch (EApp (EVar "normalize") (EVar "b")) (arm (PCon "TCon" (PVar "y") PWild) () (EBinOp "==" (EVar "x") (EVar "y"))) (arm (PCon "TRigid" (PVar "y")) () (EBinOp "==" (EVar "x") (EVar "y"))) (arm PWild () (EVar "False")))) (arm (PCon "TRigid" (PVar "x")) () (EMatch (EApp (EVar "normalize") (EVar "b")) (arm (PCon "TRigid" (PVar "y")) () (EBinOp "==" (EVar "x") (EVar "y"))) (arm (PCon "TCon" (PVar "y") PWild) () (EBinOp "==" (EVar "x") (EVar "y"))) (arm PWild () (EVar "False")))) (arm (PCon "TApp" (PVar "a1") (PVar "b1")) () (EMatch (EApp (EVar "normalize") (EVar "b")) (arm (PCon "TApp" (PVar "a2") (PVar "b2")) () (EBinOp "&&" (EApp (EApp (EVar "monoSameGiven") (EVar "a1")) (EVar "a2")) (EApp (EApp (EVar "monoSameGiven") (EVar "b1")) (EVar "b2")))) (arm PWild () (EVar "False")))) (arm (PCon "TFun" (PVar "a1") PWild (PVar "b1")) () (EMatch (EApp (EVar "normalize") (EVar "b")) (arm (PCon "TFun" (PVar "a2") PWild (PVar "b2")) () (EBinOp "&&" (EApp (EApp (EVar "monoSameGiven") (EVar "a1")) (EVar "a2")) (EApp (EApp (EVar "monoSameGiven") (EVar "b1")) (EVar "b2")))) (arm PWild () (EVar "False")))) (arm PWild () (EVar "False"))))
+(DFunDef false "monoSameGiven" ((PVar "a") (PVar "b")) (EMatch (EApp (EVar "normalize") (EVar "a")) (arm (PCon "TVar" (PVar "c1")) () (EMatch (EApp (EVar "normalize") (EVar "b")) (arm (PCon "TVar" (PVar "c2")) () (EBinOp "==" (EApp (EVar "tyvarId") (EVar "c1")) (EApp (EVar "tyvarId") (EVar "c2")))) (arm PWild () (EVar "False")))) (arm (PCon "TCon" (PVar "x") (PVar "ox")) () (EMatch (EApp (EVar "normalize") (EVar "b")) (arm (PCon "TCon" (PVar "y") (PVar "oy")) () (EApp (EApp (EApp (EApp (EVar "sameTyConHead") (EVar "x")) (EVar "ox")) (EVar "y")) (EVar "oy"))) (arm (PCon "TRigid" (PVar "y")) () (EBinOp "==" (EVar "x") (EVar "y"))) (arm PWild () (EVar "False")))) (arm (PCon "TRigid" (PVar "x")) () (EMatch (EApp (EVar "normalize") (EVar "b")) (arm (PCon "TRigid" (PVar "y")) () (EBinOp "==" (EVar "x") (EVar "y"))) (arm (PCon "TCon" (PVar "y") PWild) () (EBinOp "==" (EVar "x") (EVar "y"))) (arm PWild () (EVar "False")))) (arm (PCon "TApp" (PVar "a1") (PVar "b1")) () (EMatch (EApp (EVar "normalize") (EVar "b")) (arm (PCon "TApp" (PVar "a2") (PVar "b2")) () (EBinOp "&&" (EApp (EApp (EVar "monoSameGiven") (EVar "a1")) (EVar "a2")) (EApp (EApp (EVar "monoSameGiven") (EVar "b1")) (EVar "b2")))) (arm PWild () (EVar "False")))) (arm (PCon "TFun" (PVar "a1") PWild (PVar "b1")) () (EMatch (EApp (EVar "normalize") (EVar "b")) (arm (PCon "TFun" (PVar "a2") PWild (PVar "b2")) () (EBinOp "&&" (EApp (EApp (EVar "monoSameGiven") (EVar "a1")) (EVar "a2")) (EApp (EApp (EVar "monoSameGiven") (EVar "b1")) (EVar "b2")))) (arm PWild () (EVar "False")))) (arm PWild () (EVar "False"))))
 (DTypeSig false "activeDictPredOf" (TyFun (TyCon "String") (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))))
 (DFunDef false "activeDictPredOf" ((PVar "iface") (PVar "subject") (PVar "encl")) (EBlock (DoLet false false (PVar "preds") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "activeDictPreds") "value")) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EVar "firstPredForEncl") (EVar "iface")) (EVar "subject")) (EBinOp "++" (EBinOp "++" (ELit (LString "$dict_")) (EApp (EMethodRef "display") (EVar "encl"))) (ELit (LString "_")))) (EVar "preds")) (arm (PCon "Some" (PVar "dname")) () (EApp (EVar "Some") (EVar "dname"))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "firstPredForEncl") (EVar "iface")) (EVar "subject")) (ELit (LString ""))) (EVar "preds")))))))
 (DTypeSig false "firstPredForEncl" (TyFun (TyCon "String") (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono") (TyCon "String"))) (TyApp (TyCon "Option") (TyCon "String")))))))

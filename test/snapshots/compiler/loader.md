@@ -1,5 +1,5 @@
 # META
-source_lines=856
+source_lines=1000
 stages=DESUGAR,MARK
 # SOURCE
 -- Port of lib/loader.ml: parse a root .mdk file's transitive imports and return
@@ -504,11 +504,9 @@ parsedModule parseFn owningRoot path src = match parseFn src
 --
 -- The canonical id is a deterministic function of the resolved file: an import
 -- resolving UNDER a declared dep's root becomes `<depName>.<relIdUnderDepRoot>`;
--- one resolving under the entry / stdlib root (or unresolved) keeps its modId
--- unchanged.  Two spellings of one file → one resolved path → one owningRoot →
--- one canonical id, so both `DUse`s rewrite to the SAME string and dedup at
--- visitModF.  Single-root loads (no `[dependencies]`) are a NO-OP: no owningRoot is
--- a dep root, so every canonical id equals the original and no DUse is touched.
+-- one resolving under a SEARCH root becomes its id under the LAST such root (see
+-- `canonRootFor`).  Two spellings of one file → one resolved path → one canonical
+-- id, so both `DUse`s rewrite to the SAME string and dedup at visitModF.
 -- (Same-spelling identity needs no realpath: the same dep root string threads as
 -- `owningRoot` to both spellings.  The remaining two-NAMES corner — one physical
 -- dir declared under two dep names, e.g. entry `pc = "../parsec"` + a transitive
@@ -516,6 +514,23 @@ parsedModule parseFn owningRoot path src = match parseFn src
 -- strings — is closed by realpath-canonicalizing the owning root + file path before
 -- the dep-name reverse-lookup and the rel-segment computation: one physical file →
 -- one canonical id regardless of the dep-name spelling.  See revLookupRoot/canonicalModId.)
+--
+-- ⚠️ THE NON-DEP HALF WAS MISSING UNTIL 2026-08-04, AND THIS COMMENT CLAIMED IT
+-- ANYWAY — which is why nobody looked.  `canonicalModId` canonicalized only when
+-- the owning root was a declared DEP root and returned the raw import SPELLING
+-- otherwise, so the paragraph's own headline case ("a physical file reachable
+-- under two import SPELLINGS") went unhandled for the commonest layout there is:
+-- `entrySearchRoots` returns TWO roots whenever the entry sits BELOW its project
+-- root (`src/main.mdk` under a `medaka.toml`), and every file under the entry's
+-- own dir is then reachable as both `util` (via the entry dir) and `src.util`
+-- (via the project root).  Result: one file loaded TWICE under two modIds.  That
+-- was already observable before anything read type identity — the two copies'
+-- `export impl`s double-count into `Conflicting 'impl C'. Defined in util and
+-- src.util` — and #1111 A-2.10 made it far louder, because two `OriginModule`
+-- ids for one declaration are two DIFFERENT types to every comparison in
+-- `types/typecheck.mdk`: a valid `src/`-layout project went `exit 0` → `exit 1`
+-- with `Type mismatch: Config vs Config`.  The comparison was right; the SUPPLY
+-- was wrong, and the supply is this function.
 
 splitDot : String -> List String
 splitDot s = splitOnChar "." s
@@ -537,20 +552,149 @@ revLookupRoot cr ((n, dr)::rest) =
   else
     revLookupRoot cr rest
 
+-- The SEARCH root a file's canonical id is measured from: the LAST entry of
+-- `roots` that physically contains it (realpath-compared, with the trailing `/`
+-- so `<r>/test` never claims `<r>/test.mdk`).  `None` = no root contains it, in
+-- which case the caller keeps the raw spelling rather than inventing an id from
+-- an absolute path.
+--
+-- ⚠️ LAST, NOT FIRST, NOT DEEPEST — and the choice is forced, not stylistic.
+-- `roots` is ordered narrowest-project-scope-first with the stdlib LAST.  The
+-- CHECK/run path builds `entrySearchRoots entryDir ++ [stdlibDir]` = [entryDir,
+-- projRoot, stdlibDir]; the BUILD/emit path builds `inputRoots ++ [compilerDir,
+-- stdlibDir]` (`driver/build_cmd.mdk`, both the LLVM and the WasmGC arm) — FOUR
+-- entries, and stating the invariant over the three-root list alone would assert
+-- it about a list the emitter never receives.  It holds for both: stdlibDir is
+-- last either way, and `compilerDir` can only outrank `projRoot` when `projRoot`
+-- is an ancestor of `<root>/compiler`, where measuring the id from `compilerDir`
+-- is the answer you want anyway (that is how the compiler's own `driver.loader`
+-- ids are spelled).  So taking the last containing root:
+--   * picks projRoot over entryDir for a file under both → the DOTTED spelling
+--     (`src.util`) is canonical, so today's dotted ids are the ones that survive
+--     and only the bare sibling spelling is rewritten INTO them.  `first` would
+--     invert that and rename every `driver.loader`-style id in this very tree;
+--   * still picks stdlibDir over projRoot when the stdlib lives INSIDE the
+--     project tree, because it is last — `list` stays `list` and never becomes
+--     `stdlib.list`.  "Deepest root wins" gets that one right and the first one
+--     wrong; "shallowest" gets it backwards.  Only list order gets both.
+--
+-- ⚠️ THE BLAST RADIUS IS DERIVABLE, SO DERIVE IT — do not trust a count here.
+-- An id changes for exactly one shape: an entry BELOW its `medaka.toml` root
+-- whose import resolves under the entry's OWN dir while the project root also
+-- contains the file.  Enumerating that over the tree is a directory walk plus
+-- the two-line rule above, i.e. cheaper than reading this paragraph:
+--
+--   for every `<entry>.mdk` whose dir != findProjectRoot(dir):
+--     for every `import <mid>`: resolve <mid> against [entryDir, projRoot,
+--     stdlibDir] first-hit; if the LAST of those roots containing the resolved
+--     file is not the one that resolved it, the id changes.  (Mirror
+--     `canonicalModId` faithfully, INCLUDING the round-trip guard — it can only
+--     shrink the answer, and running the walk both ways is the check that it did
+--     not.)
+--
+-- Run 2026-08-04 over 160 such entry files, WITH the guard and again WITHOUT it —
+-- the same answer both ways, so the guard declines nothing here: TWO changed ids,
+-- each re-resolving to its own file, both in the
+-- un-gated ad-hoc `sqlite/findings/*` repro directories (`import lib.a` and
+-- `import lib.t` gain their `findings.…` prefix), and both still behave
+-- identically — the id is longer, nothing else moves, because neither file was
+-- ever reached under a SECOND spelling.  Zero in `compiler/`, `stdlib/`,
+-- `sqlite/{lib,test}` or any fixture corpus.  ⚠️ An earlier draft of this
+-- change's commit message said "none"; that was written before the walk was
+-- run, and the walk is the reason the number is two.
+canonRootFor : List String -> String -> <IO> Option String
+canonRootFor roots cPath = canonRootGo roots cPath None
+
+canonRootGo : List String -> String -> Option String -> <IO> Option String
+canonRootGo [] _ best = best
+canonRootGo (r::rs) cPath best =
+  let cr = canonicalizePath r
+  if startsWith (stringConcat [cr, "/"]) cPath then
+    canonRootGo rs cPath (Some cr)
+  else
+    canonRootGo rs cPath best
+
+-- 🚨 THE ROUND-TRIP GUARD.  A manufactured id that does not resolve BACK to the
+-- file it was derived from is not a canonicalization — it is a redirect to some
+-- other file, and the caller cannot tell the difference.
+--
+-- `moduleIdOfPath` is a LOSSY path→id map (`slashToDot` cannot distinguish a `.`
+-- that came from a directory NAME from one that means "separator"), and the id it
+-- mints is handed straight back to `findModuleFile` by the caller (`rewriteDecl` →
+-- `directImports prog2` → `visitModF`, all on the SAME `cdeps`/`croots` — see
+-- visitModF, which is why re-resolving here with `deps`/`roots` models the
+-- consumer exactly).  That second reading happens in a DIFFERENT namespace:
+-- `findModuleFile` consults declared dependency NAMES first (`resolveDepFile`),
+-- and every dot is a directory separator.  Three reachable divergences, each
+-- measured on THREE binaries (`origin/main`, this branch without the loader hunk,
+-- this branch) — and all three are NEW TO THIS UNIT rather than latent: before the
+-- loader fix the non-dep arm returned `m` unchanged, so no id was ever minted on
+-- this path and none of these shapes could exist.  `main` answers 42 to all three:
+--
+--   * DEP-NAME CAPTURE.  Root `[dependencies] src = "./other"`, entry
+--     `src/main.mdk` with `import util` — `util` resolves at entryDir, mints
+--     `src.util`, and re-resolution hits the DECLARED DEP `src` first, so
+--     `other/util.mdk` is loaded.  Silent wrong FILE at exit 0 (42 → 99).
+--   * DOTTED DIRECTORY, shadowed.  Entry `a.b/main.mdk`, `import helper` mints
+--     `a.b.helper`, which re-reads as `a/b/helper.mdk`.  Silent wrong file, exit 0.
+--   * DOTTED DIRECTORY, unshadowed.  Same, with no `a/b/` — `unknown module:
+--     a.b.helper`, exit 1.  A hard break on a program that compiled.
+--
+-- So the mint is only accepted when it round-trips, and otherwise we keep `m`.
+-- Falling back to `m` restores EXACTLY `main`'s behaviour for those layouts: the
+-- only thing lost is the dual-spelling MERGE, which is the safe direction — the
+-- worst case is the two-modIds defect this function exists to fix, not a wrong
+-- file.  (`c == m` round-trips trivially: the outer `findModuleFile` just resolved
+-- `m` to this very path.  And the guard is a NO-OP on this tree: the blast-radius
+-- walk on `canonRootFor` above, re-run with and without it, yields the same two
+-- ids — it only ever declines a mint that was already broken.)
+canonRoundTrips : List (String, String) -> List String -> String -> String -> <IO> Bool
+canonRoundTrips deps roots c cPath = match findModuleFile deps roots c
+  None => False
+  Some (p2, _) => canonicalizePath p2 == cPath
+
 -- the canonical modId for an import string `m`, resolved against (deps, roots).
 -- Under a declared dep's root → prefix the dep name onto the module's path-
--- relative id; otherwise (entry / stdlib root, or unresolved) leave `m` as-is.
+-- relative id; under a search root → its id under `canonRootFor`'s root, ACCEPTED
+-- ONLY IF it round-trips (see `canonRoundTrips`);
+-- unresolved (or under no root at all) → leave `m` as-is.
 -- Both the owning root and the resolved file path are realpath-canonicalized
 -- before the dep-name reverse-lookup and the relative-segment computation, so a
--- physical file reached under two dep-NAME spellings yields ONE canonical id.
+-- physical file reached under two dep-NAME spellings — or under two SEARCH-root
+-- spellings — yields ONE canonical id.
+--
+-- ⚠️ The ENTRY module's own id is NOT computed here (`loadProgramFilesE` uses
+-- `moduleIdOfPath roots entry`, i.e. FIRST containing root), so an entry that is
+-- itself imported by a module in its own graph under the dotted spelling is a
+-- REMAINING instance of the two-ids defect.  Left alone deliberately: changing
+-- the entry id changes the mangled symbol prefix of the entry unit on the emit
+-- path, and no measured shape reaches it (importing the entry is a cycle in
+-- every layout we have).  Pinned nowhere; stated here so it is not mistaken for
+-- covered ground.
+--
+-- ⚠️ A SECOND RESIDUAL, and it is NOT new: the DEP arm below mints
+-- `<depName>.<relId>` through the same lossy `moduleIdOfPath`, so a dependency
+-- package containing a DOTTED directory (`../parsec/a.b/x.mdk` → `pc.a.b.x` →
+-- re-reads as `../parsec/a/b/x.mdk`) has the same shape as the second witness
+-- above.  It is unguarded here deliberately rather than by oversight: that arm
+-- is unchanged by this unit and behaves identically on `main`, so guarding it
+-- would widen a reviewed fix onto a pre-existing path with its own gates.  The
+-- guard generalizes to it verbatim (`canonRoundTrips deps roots c cPath`) if the
+-- shape is ever measured.
 canonicalModId : List (String, String) -> List String -> String -> <IO> String
 canonicalModId deps roots m = match findModuleFile deps roots m
   None => m
   Some (path, owningRoot) =>
     let cOwn = canonicalizePath owningRoot
     match revLookupRoot cOwn deps
-      None => m
       Some depName => stringConcat [depName, ".", moduleIdOfPath [cOwn] (canonicalizePath path)]
+      None =>
+        let cPath = canonicalizePath path
+        match canonRootFor roots cPath
+          None => m
+          Some cr =>
+            let c = moduleIdOfPath [cr] cPath
+            if canonRoundTrips deps roots c cPath then c else m
 
 -- rewrite a UsePath so its `importModId` yields the canonical id `c`, preserving
 -- the imported member list / wildcard / alias / single name.  (For UseName the
@@ -968,8 +1112,15 @@ loadProgramFilesLocatedCachedE parseCacheRef read entry roots =
 (DTypeSig false "revLookupRoot" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String"))))))
 (DFunDef false "revLookupRoot" (PWild (PList)) (EVar "None"))
 (DFunDef false "revLookupRoot" ((PVar "cr") (PCons (PTuple (PVar "n") (PVar "dr")) (PVar "rest"))) (EIf (EBinOp "==" (EApp (EVar "canonicalizePath") (EVar "dr")) (EVar "cr")) (EApp (EVar "Some") (EVar "n")) (EApp (EApp (EVar "revLookupRoot") (EVar "cr")) (EVar "rest"))))
+(DTypeSig false "canonRootFor" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String"))))))
+(DFunDef false "canonRootFor" ((PVar "roots") (PVar "cPath")) (EApp (EApp (EApp (EVar "canonRootGo") (EVar "roots")) (EVar "cPath")) (EVar "None")))
+(DTypeSig false "canonRootGo" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))))))
+(DFunDef false "canonRootGo" ((PList) PWild (PVar "best")) (EVar "best"))
+(DFunDef false "canonRootGo" ((PCons (PVar "r") (PVar "rs")) (PVar "cPath") (PVar "best")) (EBlock (DoLet false false (PVar "cr") (EApp (EVar "canonicalizePath") (EVar "r"))) (DoExpr (EIf (EApp (EApp (EVar "startsWith") (EApp (EVar "stringConcat") (EListLit (EVar "cr") (ELit (LString "/"))))) (EVar "cPath")) (EApp (EApp (EApp (EVar "canonRootGo") (EVar "rs")) (EVar "cPath")) (EApp (EVar "Some") (EVar "cr"))) (EApp (EApp (EApp (EVar "canonRootGo") (EVar "rs")) (EVar "cPath")) (EVar "best"))))))
+(DTypeSig false "canonRoundTrips" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Bool")))))))
+(DFunDef false "canonRoundTrips" ((PVar "deps") (PVar "roots") (PVar "c") (PVar "cPath")) (EMatch (EApp (EApp (EApp (EVar "findModuleFile") (EVar "deps")) (EVar "roots")) (EVar "c")) (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" (PTuple (PVar "p2") PWild)) () (EBinOp "==" (EApp (EVar "canonicalizePath") (EVar "p2")) (EVar "cPath")))))
 (DTypeSig false "canonicalModId" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "String"))))))
-(DFunDef false "canonicalModId" ((PVar "deps") (PVar "roots") (PVar "m")) (EMatch (EApp (EApp (EApp (EVar "findModuleFile") (EVar "deps")) (EVar "roots")) (EVar "m")) (arm (PCon "None") () (EVar "m")) (arm (PCon "Some" (PTuple (PVar "path") (PVar "owningRoot"))) () (EBlock (DoLet false false (PVar "cOwn") (EApp (EVar "canonicalizePath") (EVar "owningRoot"))) (DoExpr (EMatch (EApp (EApp (EVar "revLookupRoot") (EVar "cOwn")) (EVar "deps")) (arm (PCon "None") () (EVar "m")) (arm (PCon "Some" (PVar "depName")) () (EApp (EVar "stringConcat") (EListLit (EVar "depName") (ELit (LString ".")) (EApp (EApp (EVar "moduleIdOfPath") (EListLit (EVar "cOwn"))) (EApp (EVar "canonicalizePath") (EVar "path"))))))))))))
+(DFunDef false "canonicalModId" ((PVar "deps") (PVar "roots") (PVar "m")) (EMatch (EApp (EApp (EApp (EVar "findModuleFile") (EVar "deps")) (EVar "roots")) (EVar "m")) (arm (PCon "None") () (EVar "m")) (arm (PCon "Some" (PTuple (PVar "path") (PVar "owningRoot"))) () (EBlock (DoLet false false (PVar "cOwn") (EApp (EVar "canonicalizePath") (EVar "owningRoot"))) (DoExpr (EMatch (EApp (EApp (EVar "revLookupRoot") (EVar "cOwn")) (EVar "deps")) (arm (PCon "Some" (PVar "depName")) () (EApp (EVar "stringConcat") (EListLit (EVar "depName") (ELit (LString ".")) (EApp (EApp (EVar "moduleIdOfPath") (EListLit (EVar "cOwn"))) (EApp (EVar "canonicalizePath") (EVar "path")))))) (arm (PCon "None") () (EBlock (DoLet false false (PVar "cPath") (EApp (EVar "canonicalizePath") (EVar "path"))) (DoExpr (EMatch (EApp (EApp (EVar "canonRootFor") (EVar "roots")) (EVar "cPath")) (arm (PCon "None") () (EVar "m")) (arm (PCon "Some" (PVar "cr")) () (EBlock (DoLet false false (PVar "c") (EApp (EApp (EVar "moduleIdOfPath") (EListLit (EVar "cr"))) (EVar "cPath"))) (DoExpr (EIf (EApp (EApp (EApp (EApp (EVar "canonRoundTrips") (EVar "deps")) (EVar "roots")) (EVar "c")) (EVar "cPath")) (EVar "c") (EVar "m")))))))))))))))
 (DTypeSig false "rewriteUsePath" (TyFun (TyCon "String") (TyFun (TyCon "UsePath") (TyCon "UsePath"))))
 (DFunDef false "rewriteUsePath" ((PVar "c") (PCon "UseName" (PVar "ns"))) (EApp (EVar "UseName") (EBinOp "++" (EApp (EVar "splitDot") (EVar "c")) (EListLit (EApp (EApp (EVar "lastOr") (ELit (LString ""))) (EVar "ns"))))))
 (DFunDef false "rewriteUsePath" ((PVar "c") (PCon "UseGroup" PWild (PVar "ms"))) (EApp (EApp (EVar "UseGroup") (EApp (EVar "splitDot") (EVar "c"))) (EVar "ms")))
@@ -1138,8 +1289,15 @@ loadProgramFilesLocatedCachedE parseCacheRef read entry roots =
 (DTypeSig false "revLookupRoot" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String"))))))
 (DFunDef false "revLookupRoot" (PWild (PList)) (EVar "None"))
 (DFunDef false "revLookupRoot" ((PVar "cr") (PCons (PTuple (PVar "n") (PVar "dr")) (PVar "rest"))) (EIf (EBinOp "==" (EApp (EVar "canonicalizePath") (EVar "dr")) (EVar "cr")) (EApp (EVar "Some") (EVar "n")) (EApp (EApp (EVar "revLookupRoot") (EVar "cr")) (EVar "rest"))))
+(DTypeSig false "canonRootFor" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String"))))))
+(DFunDef false "canonRootFor" ((PVar "roots") (PVar "cPath")) (EApp (EApp (EApp (EVar "canonRootGo") (EVar "roots")) (EVar "cPath")) (EVar "None")))
+(DTypeSig false "canonRootGo" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))))))
+(DFunDef false "canonRootGo" ((PList) PWild (PVar "best")) (EVar "best"))
+(DFunDef false "canonRootGo" ((PCons (PVar "r") (PVar "rs")) (PVar "cPath") (PVar "best")) (EBlock (DoLet false false (PVar "cr") (EApp (EVar "canonicalizePath") (EVar "r"))) (DoExpr (EIf (EApp (EApp (EVar "startsWith") (EApp (EVar "stringConcat") (EListLit (EVar "cr") (ELit (LString "/"))))) (EVar "cPath")) (EApp (EApp (EApp (EVar "canonRootGo") (EVar "rs")) (EVar "cPath")) (EApp (EVar "Some") (EVar "cr"))) (EApp (EApp (EApp (EVar "canonRootGo") (EVar "rs")) (EVar "cPath")) (EVar "best"))))))
+(DTypeSig false "canonRoundTrips" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Bool")))))))
+(DFunDef false "canonRoundTrips" ((PVar "deps") (PVar "roots") (PVar "c") (PVar "cPath")) (EMatch (EApp (EApp (EApp (EVar "findModuleFile") (EVar "deps")) (EVar "roots")) (EVar "c")) (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" (PTuple (PVar "p2") PWild)) () (EBinOp "==" (EApp (EVar "canonicalizePath") (EVar "p2")) (EVar "cPath")))))
 (DTypeSig false "canonicalModId" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "String"))))))
-(DFunDef false "canonicalModId" ((PVar "deps") (PVar "roots") (PVar "m")) (EMatch (EApp (EApp (EApp (EVar "findModuleFile") (EVar "deps")) (EVar "roots")) (EVar "m")) (arm (PCon "None") () (EVar "m")) (arm (PCon "Some" (PTuple (PVar "path") (PVar "owningRoot"))) () (EBlock (DoLet false false (PVar "cOwn") (EApp (EVar "canonicalizePath") (EVar "owningRoot"))) (DoExpr (EMatch (EApp (EApp (EVar "revLookupRoot") (EVar "cOwn")) (EVar "deps")) (arm (PCon "None") () (EVar "m")) (arm (PCon "Some" (PVar "depName")) () (EApp (EVar "stringConcat") (EListLit (EVar "depName") (ELit (LString ".")) (EApp (EApp (EVar "moduleIdOfPath") (EListLit (EVar "cOwn"))) (EApp (EVar "canonicalizePath") (EVar "path"))))))))))))
+(DFunDef false "canonicalModId" ((PVar "deps") (PVar "roots") (PVar "m")) (EMatch (EApp (EApp (EApp (EVar "findModuleFile") (EVar "deps")) (EVar "roots")) (EVar "m")) (arm (PCon "None") () (EVar "m")) (arm (PCon "Some" (PTuple (PVar "path") (PVar "owningRoot"))) () (EBlock (DoLet false false (PVar "cOwn") (EApp (EVar "canonicalizePath") (EVar "owningRoot"))) (DoExpr (EMatch (EApp (EApp (EVar "revLookupRoot") (EVar "cOwn")) (EVar "deps")) (arm (PCon "Some" (PVar "depName")) () (EApp (EVar "stringConcat") (EListLit (EVar "depName") (ELit (LString ".")) (EApp (EApp (EVar "moduleIdOfPath") (EListLit (EVar "cOwn"))) (EApp (EVar "canonicalizePath") (EVar "path")))))) (arm (PCon "None") () (EBlock (DoLet false false (PVar "cPath") (EApp (EVar "canonicalizePath") (EVar "path"))) (DoExpr (EMatch (EApp (EApp (EVar "canonRootFor") (EVar "roots")) (EVar "cPath")) (arm (PCon "None") () (EVar "m")) (arm (PCon "Some" (PVar "cr")) () (EBlock (DoLet false false (PVar "c") (EApp (EApp (EVar "moduleIdOfPath") (EListLit (EVar "cr"))) (EVar "cPath"))) (DoExpr (EIf (EApp (EApp (EApp (EApp (EVar "canonRoundTrips") (EVar "deps")) (EVar "roots")) (EVar "c")) (EVar "cPath")) (EVar "c") (EVar "m")))))))))))))))
 (DTypeSig false "rewriteUsePath" (TyFun (TyCon "String") (TyFun (TyCon "UsePath") (TyCon "UsePath"))))
 (DFunDef false "rewriteUsePath" ((PVar "c") (PCon "UseName" (PVar "ns"))) (EApp (EVar "UseName") (EBinOp "++" (EApp (EVar "splitDot") (EVar "c")) (EListLit (EApp (EApp (EVar "lastOr") (ELit (LString ""))) (EVar "ns"))))))
 (DFunDef false "rewriteUsePath" ((PVar "c") (PCon "UseGroup" PWild (PVar "ms"))) (EApp (EApp (EVar "UseGroup") (EApp (EVar "splitDot") (EVar "c"))) (EVar "ms")))

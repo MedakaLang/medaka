@@ -1,9 +1,0 @@
--- issue #1209: main.mdk never imports amod's Box -- it declares its OWN `data Box`,
--- with a DIFFERENT constructor name (MkBoxB, not MkBoxA). `impl Wrap Int` returns a
--- main.Box where the interface declares amod.Box. check should reject this -- it
--- does not.
-import amod.{Wrap(..), wrap, unBoxA}
-public export data Box = MkBoxB String
-export impl Wrap Int where
-  wrap n = MkBoxB "wrong"
-main = println (unBoxA (wrap 1))
