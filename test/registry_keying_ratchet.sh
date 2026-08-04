@@ -171,12 +171,12 @@ echo "checking #1111 CrossRun / DriverState field allowlist ..."
 
 cross_allowed='universeIfaceMethodsRef -- accumulated interface-method NAME set across all modules (definer-shadow checks)
 universeFunNamesRef -- accumulated top-level fn NAME set across all modules (importer-shadow checks)
-universeKeyBucketsRef -- accumulated impl-existence key buckets (implExistsForHead)
+universeKeyBucketsRef -- accumulated impl-existence key buckets (implExistsForHead); A-2.2b moved it onto the RegKey substrate (headBucketRender): absence is now an EMPTY IDENTITY BLOCK, not the noneHeadTag NAME, so a head that spells the sentinel can no longer forge the headless bucket. The head COMPONENT is still keyed by spelling (dispHeadTab) -- blocked on goal-side Mono.TCon origin, derived there
 universeIfaceRequiredRef -- accumulated iface -> required-method-names map (impl completeness); IDENTITY-KEYED since A-2.4 (a Registry keyed by regKeyOfTab (ifaceTabKey <ifaceOrigin/implOrigin> name); drained #1258. Flat/single-file rows key TkBare until #1115 -- but this table is READ only on the Module arm)
 universeMethodIfaceParamsRef -- accumulated method -> iface param map (#822 kind universe, iface half); still BARE-NAME-keyed and last-write-wins, but since A-2.5 it is only the FLOOR: the Module arm installs it OVERLAID per module by applyMethodScopeOverrides, so a name two interfaces both declare is decided by the importing module scope, not by registration order (#1092)
 universeMethodIdentsRef -- A-2.5: the IDENTITY-KEYED companion of the line above -- every (declaring module, method name) declaration of each method name, so a bare-name collision keeps BOTH rows instead of losing one to last-write-wins. Module-path-only: a flat/unstamped declaration mints no Ident (#1115 / E-1)
 universeMethodCollidedRef -- A-2.5: the method NAMES universeMethodIdentsRef holds >=2 distinct identities for. Normally EMPTY; it is what keeps the per-module overlay O(collisions) instead of O(all methods)
-universeRegisteredIfacesRef -- accumulated registered-iface set, paired with universeMethodIfaceParamsRef above. STILL BARE-NAME, DELIBERATELY, and A-2.4 examined it and declined: the value is Unit, so a collapse selects no row; all three readers (recordIfaceObligation / inferNumLit / checkOneCallObligation, via ifaceRegistered) pass a LITERAL prelude name with no TyConOrigin to key from; and what it gates is the obligation channel, which is itself "<iface>|<tag>"-keyed and belongs to A-2.2. Full derivation on ifaceRegistered in typecheck.mdk. Revisit WITH obUniv*, not before
+universeRegisteredIfacesRef -- accumulated registered-iface set, paired with universeMethodIfaceParamsRef above. STILL BARE-NAME, DELIBERATELY: A-2.4 examined it and declined, A-2.2b re-derived the same answer. The value is Unit, so a collapse selects no row; all three readers (recordIfaceObligation / inferNumLit / checkOneCallObligation, via ifaceRegistered) pass a LITERAL prelude name with no TyConOrigin to key from -- an identity key would answer False everywhere and silently switch every operator obligation off; and what it gates is the obligation channel, whose iface half is a bare TkBare NsIface (A-2.2b replaced the "<iface>|<tag>" splice with a RegKey but did NOT make that half an identity -- oblIfaceKey). Full derivation on ifaceRegistered in typecheck.mdk. Revisit WITH the obligation channel, not before
 universeMethodDispatchIdxRef -- accumulated interface dispatch-index list
 universeRecordByName -- accumulated record name -> RecordInfo map
 universeFieldOwners -- accumulated field-name -> owning-record(s) map
@@ -185,9 +185,9 @@ universeIfaceParamKinds -- accumulated interface param-kind list (#822, iface ha
 universeAliasTable -- accumulated type-alias table; IDENTITY-KEYED since A-2.3 (TabKey; flat/single-file table holds BOTH populations -- prelude rows key TkIdent via stampDeclOrigins "core", flat USER rows have no identity and stay TkBare until #1115)
 universeDataEnv -- accumulated ctor environment (bare-name, last-write-wins -- the thing #674 works around)
 universeDataDecls -- accumulated PUBLIC data decls (#674: recovers per-module ctor identity universeDataEnv loses)
-obUnivConcreteRef -- accumulated concrete-instance obligation-impl universe bucket
-obUnivHeadlessRef -- accumulated headless obligation-impl universe bucket
-obUnivIfaceTagsRef -- accumulated iface-tag obligation-impl universe bucket
+obUnivConcreteRef -- accumulated concrete-instance obligation-impl universe bucket; A-2.2b: MultiRegistry (explicitly commutative, mregAppendK so the first-match order findMatchingImplReqsU depends on is kept), keyed by the structured (NsIface, NsType) RegKey pair that replaced the "<iface>|<tag>" string splice. Both halves BARE: iface by derivation (Predicate carries no origin), head by derivation (dispHeadTab)
+obUnivHeadlessRef -- accumulated headless obligation-impl universe bucket; A-2.2b: MultiRegistry keyed by the bare NsIface RegKey, same derivation as the row above
+obUnivIfaceTagsRef -- accumulated iface-tag obligation-impl universe bucket; A-2.2b: Registry SetRegistry (implCountForIfaceU is sregSize, the combinator A-2.0 added for it), outer key bare NsIface, inner key bare NsType
 crossModuleFunConstraintsRef -- cross-module fn constraint-arity snapshot, bare name
 crossModuleFunConstraintsQualRef -- cross-module fn constraint-arity snapshot, module-qualified mirror
 crossModuleFunConstraintIfacesRef -- cross-module fn constraint-iface snapshot, bare name
