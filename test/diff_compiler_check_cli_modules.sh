@@ -1236,5 +1236,68 @@ else
   fail=$((fail+1)); printf 'FAIL A-2.10/samename-impls-build (native build failed)\n'
 fi
 
+# ── #1277, DRAINED BY A-2.10 — re-pointed here rather than deleted ────────────
+#
+# `test/must_fail_fixtures/1277-xmod-head-spelling-collision-across-ifaces/` pinned
+# this as a REPRODUCING S0 (it shipped with A-2.2b, #1274, which deliberately did
+# NOT touch the comparisons).  A-2.10 drains it, and a drained must-fail leaves no
+# regression test behind — so its assertion moves here, exactly as the #1208/#1209
+# legs above did.
+#
+# The shape is NOT a duplicate of `A-2.10/samename-impls-*`: there the two same-named
+# types carry impls of the SAME interface, so the question is only which impl.  Here
+# the two interfaces are DIFFERENT (`Fa`, `Fb`) and merely share a method NAME, so a
+# head-spelling collision reached the wrong impl AND the wrong interface — `B.ff
+# (B.mkB 0)`, whose receiver is `b.H` and whose only `Fb` impl answers 2, printed 1.
+# Measured before: `(1, 1)` at exit 0 on eval AND native, zero diagnostics.  Both
+# engines are graded because both were wrong.
+cat > "$TMP/x1277_a.mdk" <<'EOF'
+public export data H = MkA Int
+
+export interface Fa x where
+  ff : x -> Int
+
+impl Fa H where
+  ff _ = 1
+
+export mkA : Int -> H
+mkA n = MkA n
+EOF
+cat > "$TMP/x1277_b.mdk" <<'EOF'
+public export data H = MkB Int
+
+export interface Fb x where
+  ff : x -> Int
+
+impl Fb H where
+  ff _ = 2
+
+export mkB : Int -> H
+mkB n = MkB n
+EOF
+cat > "$TMP/x1277_main.mdk" <<'EOF'
+import x1277_a as A
+import x1277_b as B
+
+main =
+  let x = A.ff (A.mkA 0)
+  let y = B.ff (B.mkB 0)
+  println (x, y)
+EOF
+x1277_run="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" run "$TMP/x1277_main.mdk" 2>&1)"
+x1277_run_code=$?
+if [ "$x1277_run_code" -eq 0 ] && [ "$x1277_run" = "(1, 2)" ]; then
+  pass=$((pass+1)); printf 'ok   A-2.10/1277-xmod-head-spelling-run (right impl AND right interface: (1, 2))\n'
+else
+  fail=$((fail+1)); printf 'FAIL A-2.10/1277-xmod-head-spelling-run (exit %d, got [%s], want (1, 2))\n' "$x1277_run_code" "$x1277_run"
+fi
+if MEDAKA_ROOT="$ROOT" MEDAKA="$MEDAKA" bound "$MEDAKA" build "$TMP/x1277_main.mdk" -o "$TMP/x1277.bin" >/dev/null 2>&1 && [ -x "$TMP/x1277.bin" ]; then
+  x1277_bld="$("$TMP/x1277.bin" 2>/dev/null | head -1)"
+  if [ "$x1277_bld" = "(1, 2)" ]; then pass=$((pass+1)); printf 'ok   A-2.10/1277-xmod-head-spelling-build (native agrees: (1, 2))\n'
+  else fail=$((fail+1)); printf 'FAIL A-2.10/1277-xmod-head-spelling-build (got [%s], want (1, 2))\n' "$x1277_bld"; fi
+else
+  fail=$((fail+1)); printf 'FAIL A-2.10/1277-xmod-head-spelling-build (native build failed)\n'
+fi
+
 printf '\n%d ok, %d failing\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
