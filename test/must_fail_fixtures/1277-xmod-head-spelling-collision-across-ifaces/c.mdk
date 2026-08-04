@@ -1,0 +1,14 @@
+-- issue #1277 control provider: byte-for-byte b.mdk with the ONE variable
+-- changed — the head type is spelled `G`, not `H`, so it cannot collide with
+-- a.mdk's.  Everything else (a separate interface, the same method name `ff`,
+-- the same answer 2, the same alias-qualified access) is held constant.
+public export data G = MkC Int
+
+export interface Fc x where
+  ff : x -> Int
+
+impl Fc G where
+  ff _ = 2
+
+export mkC : Int -> G
+mkC n = MkC n

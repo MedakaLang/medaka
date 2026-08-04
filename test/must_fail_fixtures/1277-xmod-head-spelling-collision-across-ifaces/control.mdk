@@ -1,0 +1,20 @@
+-- issue #1277 control: main.mdk with the head-spelling collision REMOVED and
+-- nothing else changed — c.mdk is b.mdk with `H` renamed `G`.
+--
+-- ⚠️ IT ASSERTS THE VALUE, not merely exit 0.  This harness grades a control on
+-- its exit code alone (and diagnostic-freeness for check-json), which for a
+-- WRONG-ANSWER bug would make a control that just prints its tuple worthless:
+-- it would stay green whatever it printed.  `panic` converts the value
+-- assertion into an exit code the harness can see, so this control goes
+-- CONTROL-BROKE — not DRAINED — if cross-module dispatch breaks for any reason
+-- other than #1277's collision.
+import a as A
+import c as C
+
+main =
+  let x = A.ff (A.mkA 0)
+  let y = C.ff (C.mkC 0)
+  if x == 1 && y == 2 then
+    println "control ok"
+  else
+    panic "control: two aliased modules with distinct head spellings must give (1, 2)"

@@ -1,0 +1,33 @@
+-- SHADOW-SEMANTICS cell I11: an importer shadow of a PRELUDE method (i4's
+-- shape) whose live-impl receiver is EXTERN-SOURCED.
+--
+-- 🚨 THE POINT OF THIS CELL IS THE RECEIVER'S PROVENANCE, NOT ITS TYPE, and
+-- that is this gate's own ⭐ rule ("vary the receiver's PROVENANCE — literal /
+-- grounded / dict-bound — that axis is where every silent bug in this arc has
+-- lived").  Lines 2 and 3 below have the SAME receiver type, `Int`, reached two
+-- different ways: an annotated literal, and the result of an `extern`.  Every
+-- other fixture in this corpus uses an annotated or literal receiver, so the
+-- corpus graded 36/36 over the break this cell pins.
+--
+-- WHAT IT PINS.  `stdlib/runtime.mdk`'s extern signatures never pass through
+-- resolve's head-stamping walk, so a mono flowing out of one carries no
+-- `TyConOrigin`.  The importer rule (Fork 1) is "a live impl at the receiver's
+-- head dispatches, else the standalone", and the head here is `Int` on both
+-- lines — so all four answers are fixed by the head TYPE alone and provenance
+-- must not enter into it.  A dispatch site that compares the goal head's
+-- IDENTITY against the impl head's answers False for lines 3 and 4 only, and
+-- silently reroutes them to the imported standalone `display : Tok -> String`
+-- (`implExistsForHeadGo`, `compiler/types/typecheck.mdk`).
+--
+-- HAND-DERIVED, not captured:
+--   `display (Tok 0)`             Tok has NO Display impl  -> the standalone -> tok
+--   `display (3 : Int)`           live prelude Display Int -> the METHOD     -> 3
+--   `display (stringLength "xy")` same head, same impl                       -> 2
+--   `display (charCode 'a')`      same head, same impl                       -> 97
+import prov.{Tok(..), display}
+
+main =
+  println (display (Tok 0))
+  println (display (3 : Int))
+  println (display (stringLength "xy"))
+  println (display (charCode 'a'))

@@ -1,0 +1,11 @@
+-- issue #1277: `B.ff (B.mkB 0)` has receiver type b.H and the only impl of Fb
+-- is b's own, whose body is `ff _ = 2`.  It prints 1 — a's `impl Fa H` — so the
+-- occurrence reached the wrong impl AND the wrong interface, at exit 0, with no
+-- diagnostic.  Correct output is `(1, 2)`.
+import a as A
+import b as B
+
+main =
+  let x = A.ff (A.mkA 0)
+  let y = B.ff (B.mkB 0)
+  println (x, y)
