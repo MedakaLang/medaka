@@ -1,0 +1,22 @@
+-- #1284 CONTROL.  `main.mdk`'s exact topology and exact import ORDER, with ONE
+-- variable flipped: the colliding `Sib` is no longer a SIBLING of the constructor
+-- this unit imports (`cmodx` puts `CtorOnly` in `Other` and `Sib` in the unnamed
+-- `Wrap2`).  That single flip is the whole difference between the bug and correct
+-- behaviour, which is what makes this the right control.
+--
+-- It must stay diagnostic-free.  A break here means the A-2.6 overlay or
+-- cross-module constructor resolution regressed BROADLY — NOT that #1284 was fixed.
+--
+-- ⚠️ This control is ALSO the discriminator that dates the bug: on pristine `main`
+-- 26585d3c this program is REJECTED with the same two diagnostics `main.mdk` gets
+-- (measured on `diagnostics_project_main` built from main's `typecheck.mdk` in one
+-- worktree with one emitter).  #1111 A-2.6 repaired exactly this case and left the
+-- sibling one — so this file going red would ALSO be an A-2.6 regression, and this
+-- note is the only place that says so.
+import zmod.{ZZ, Sib, unz}
+import cmodx.{CtorOnly, unwx}
+
+v : ZZ
+v = Sib "s"
+
+main = println (unz v)

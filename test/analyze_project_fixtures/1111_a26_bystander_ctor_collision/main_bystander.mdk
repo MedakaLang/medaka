@@ -38,12 +38,21 @@
 --   * the `unMark (Mark 1)` line — a DRAIN, red on `main`, green with A-2.6.
 -- Do not cite this fixture as evidence that removing the feature changes nothing.
 --
--- ⚠️ WHAT THIS FIXTURE CANNOT SEE — corrected, because the earlier claim here was
--- measured FALSE and it mattered.  This header used to say it was sensitive to "an
--- overlay that registers MORE decls than the unit binds".  It is not, and it
--- STRUCTURALLY CANNOT BE: the overlay is per-module and built from the module's own
--- `DUse` list, so a module that imports nothing — which is exactly what makes `bysc`
--- a bystander — has no overlay to over-register.  The proof is not hypothetical: the
+-- ⚠️ WHAT THIS FIXTURE CANNOT SEE — and the reason is EMPIRICAL, not structural.
+-- This header used to say it was sensitive to "an overlay that registers MORE decls
+-- than the unit binds"; that was measured FALSE.  The correction that replaced it then
+-- over-reached in the other direction, claiming the fixture "STRUCTURALLY CANNOT BE"
+-- sensitive because a module that imports nothing has no overlay to over-register.
+-- That argument is about `bysc` — but the ASSERTIONS RUN IN THIS FILE, and this file
+-- has THREE import clauses (`bysa.{Tagged, Mark, unMark}`, `bysz.{zid}`,
+-- `bysc.{Color(..), shade, widen}`), every one of them constructor-naming.  It builds
+-- an overlay, so nothing structural exempts it.
+--
+-- What actually makes it blind is narrower and is the operative reason given below:
+-- an over-registration is only OBSERVABLE where the over-registered name COLLIDES with
+-- a name the unit really declares or really imports at a different type, and no name
+-- in this graph does.  That is a property of these four files, not of bystanders in
+-- general — change the fixture and it can change.  The proof is not hypothetical: the
 -- first cut of A-2.6 shipped TWO over-registration defects (the overlay out-ranking
 -- the importing module's own `prog0`, and a within-module first-match picking a
 -- sibling decl by constructor name) and THIS FIXTURE STAYED GREEN through both —

@@ -1,0 +1,20 @@
+-- #1284 THE ORDER WITNESS, kept as a sibling file rather than as the `control:`
+-- field, because it is not a control: it is the SAME program with the two import
+-- lines swapped, and it is the half that proves the answer is decided by SOURCE
+-- ORDER rather than by anything about the program.
+--
+-- Hand-run on the binary at the SHA this fixture was added:
+--   medaka run main_swapped.mdk  ->  `s`, exit 0
+--   medaka run main.mdk          ->  exit 1, two `Type mismatch` diagnostics
+--
+-- The harness grades exactly ONE command per fixture, so "prints `s` here and
+-- rejects there" cannot itself be the pin (it needs two commands).  `main.mdk`'s
+-- REJECTION is the pinned observable; this file is the evidence that the rejection
+-- is order-decided and not a genuine type error.
+import cmod.{CtorOnly, unw}
+import zmod.{ZZ, Sib, unz}
+
+v : ZZ
+v = Sib "s"
+
+main = println (unz v)

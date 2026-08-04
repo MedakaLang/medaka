@@ -1,0 +1,71 @@
+issue: 1284
+what: an overlaid SIBLING constructor out-ranks a constructor the unit imports BY
+what: NAME from an EARLIER import clause, so a valid program is rejected with a
+what: `Type mismatch` naming a type it never mentions -- and swapping the two
+what: import lines makes it compile and run.
+what: main.mdk imports `Sib` explicitly from `zmod` (`Sib : String -> ZZ`) in its
+what: FIRST clause, then `CtorOnly` from `cmod` in its second. `cmod`'s decl is
+what: `data Wrap = CtorOnly Int | Sib Int`, so the A-2.6 overlay -- whose unit is
+what: the whole DECL, while the import's unit is the NAME -- registers `Wrap`'s
+what: sibling `Sib : Int -> Wrap` too, something main.mdk never asked for. Overlay
+what: entries are registered in SOURCE ORDER and are last-wins among themselves,
+what: so the LATER clause's ride-along beats the EARLIER clause's explicit member.
+what: `medaka check main.mdk` exits 1 with `Type mismatch: Int vs String` and
+what: `Type mismatch: ZZ vs Wrap`; `Wrap` appears nowhere in main.mdk.
+what: main_swapped.mdk is byte-identical apart from the two import lines being
+what: swapped and `medaka run main_swapped.mdk` prints `s`, exit 0.
+what: This is the second live spelling of #1259's class. #1259's own spelling and
+what: #1256's both drain with #1111 A-2.6; this one does not. #1283 is the
+what: RE-EXPORT spelling, #733 item 1c is wildcards -- neither covers this.
+cmd: check-json main.mdk
+exit: 1
+diag: T-TYPE-MISMATCH 19:8-19:11 Type mismatch: Int vs String
+diag: T-TYPE-MISMATCH 19:8-19:11 Type mismatch: ZZ vs Wrap
+control: check-json control.mdk
+why-fixture: the observable is the REJECTION of a valid program, so `check --json`
+why-fixture: is the right verb: it grades exit 1 plus the exact diagnostic set with
+why-fixture: NO absolute path in the compared bytes (render_diags emits code, range
+why-fixture: and message only), so the pin does not encode this machine's layout.
+why-fixture: `diag:` is used rather than `diag-code:` deliberately -- here the
+why-fixture: MESSAGE IS THE DEFECT. "Type mismatch: ZZ vs Wrap" naming `Wrap`, a
+why-fixture: type the program never mentions, is the whole observable; a code+range
+why-fixture: pin would still pass if the compiler started blaming some other type.
+why-fixture: ⚠️ THIS FIXTURE'S LINE COUNT IS LOAD-BEARING: 19:8-19:11 is main.mdk's
+why-fixture: `v = Sib "s"`, whose line number is set by main.mdk's own comment
+why-fixture: header. Keep edits to that header line-count-neutral or re-derive the
+why-fixture: two `diag:` rows.
+why-fixture: the ORDER half of the bug (same program, opposite answer) cannot be
+why-fixture: the pin -- this harness grades exactly ONE command per fixture and
+why-fixture: that observation needs two. main_swapped.mdk is kept as a sibling with
+why-fixture: its hand-run output in its own header instead.
+why-control: control.mdk is main.mdk's exact topology AND exact import order with
+why-control: ONE variable flipped: cmodx.mdk moves the colliding `Sib` OUT of the
+why-control: decl the unit names (`CtorOnly` now owns `Other`; `Sib` lives in
+why-control: `Wrap2`, which no import mentions), so the collision is no longer a
+why-control: SIBLING one. It must stay diagnostic-free. A break there means the
+why-control: A-2.6 overlay or cross-module constructor resolution regressed
+why-control: broadly, NOT that #1284 was fixed.
+why-control: it is also the discriminator that DATES the bug: on pristine `main`
+why-control: 26585d3c control.mdk is REJECTED with the same two diagnostics
+why-control: main.mdk gets. #1111 A-2.6 repaired exactly that case and left the
+why-control: sibling one, so a red control is ALSO an A-2.6 regression.
+why-verify: verified BOTH directions first-hand, not by positive control alone.
+why-verify: The full matrix was measured on `diagnostics_project_main` built from
+why-verify: each `compiler/types/typecheck.mdk` in ONE worktree with ONE
+why-verify: medaka_emitter, so the two arms differ only in that file:
+why-verify:   sibling + zmod-clause-first  -- main: REJECT(2)   A-2.6: REJECT(2)
+why-verify:   sibling + cmod-clause-first  -- main: accept(0)   A-2.6: accept(0)
+why-verify:   NON-sibling, zmod-first      -- main: REJECT(2)   A-2.6: accept(0)
+why-verify: i.e. the bug is PRE-EXISTING on main and A-2.6 narrowed it to exactly
+why-verify: the sibling case. The DRAIN direction -- that a real fix flips
+why-verify: main.mdk to exit 0 printing `s` -- is not independently verified, since
+why-verify: verifying it needs the fix to exist; but the target answer is not
+why-verify: hypothetical: main_swapped.mdk and control.mdk both produce it today.
+why-note: fix territory per the issue: overlay only the VARIANTS a member actually
+why-note: names (keeping whole-decl overlay for `(..)`); or make the overlay list
+why-note: first-wins in source order so an earlier clause's explicit member
+why-note: outranks a later clause's ride-along (this moves `(..)` precedence too
+why-note: and needs its own pinning); or reject as R-AMBIGUOUS-CTOR when two
+why-note: clauses contribute the same constructor spelling at different types
+why-note: (#733's second clause). Close #1284 and delete this fixture when a fix
+why-note: makes `check main.mdk` exit 0.

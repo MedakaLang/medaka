@@ -1,5 +1,5 @@
 # META
-source_lines=21902
+source_lines=21910
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted typecheck stage — port of lib/typecheck.ml's HM core.  SLICE 1:
@@ -20613,11 +20613,19 @@ importSeed (_::rest) depEnv = importSeed rest depEnv
 -- That contribution is harmless BECAUSE of the layering at the registration site
 -- (`dataEnv`, `Module` arm): the overlay sits BELOW this module's own `prog0`, so a
 -- sibling decl riding along can never clobber a locally-declared constructor.  What it
--- can still do is out-rank a ctor the unit names from a DIFFERENT module in a later
+-- can still do is out-rank a ctor the unit names from a DIFFERENT module in an EARLIER
 -- import clause, decided by source order — the residual this note used to claim was
 -- prevented outright.  It is the pre-existing `(..)` hazard (#674's remainder) now also
--- reachable via (b), it is order-dependent on `main` too, and it is tracked, not fixed
--- here.
+-- reachable via (b), and it is order-dependent on `main` too.
+--
+-- 🚨 IT IS **#1284**, and that number is the point of this paragraph.  The note used to
+-- end "it is tracked, not fixed here" while NOTHING tracked it — #1283 is the RE-EXPORT
+-- spelling, #733 item 1a is marked FIXED and item 1c is wildcards only.  A declared-
+-- but-unfiled residual is indistinguishable from an unnoticed one.  Pinned self-
+-- drainingly by `test/must_fail_fixtures/1284-a26-overlay-sibling-ctor-beats-named-
+-- import/`, whose CONTROL is the discriminator that dates it: the NON-sibling case is
+-- rejected on `main` and accepted here, so A-2.6 repairs that one and leaves exactly
+-- the sibling one.
 --
 -- 🚨 The pool lookup is IDENTITY-scoped, not bare-name.  The pool is the WHOLE
 -- universe, so two modules declaring the same TYPE name (#1256's two `Cfg`s) made the
