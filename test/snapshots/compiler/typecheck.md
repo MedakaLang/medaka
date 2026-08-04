@@ -1,5 +1,5 @@
 # META
-source_lines=21635
+source_lines=21639
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted typecheck stage — port of lib/typecheck.ml's HM core.  SLICE 1:
@@ -20459,8 +20459,12 @@ importSeed (_::rest) depEnv = importSeed rest depEnv
 -- 🚨 The pool lookup is IDENTITY-scoped, not bare-name.  The pool is the WHOLE
 -- universe, so two modules declaring the same TYPE name (#1256's two `Cfg`s) made the
 -- old bare-name first-match a LOAD-ORDER coin flip inside the very overlay that exists
--- to defeat load order — it happened to pick right only when the wanted module sorted
--- first.  `declOwnedBy` compares the decl's own declaration identity against
+-- to defeat load order.  The pool is appended in LOAD order and searched FIRST-match
+-- while the tables it overlays are `omInsert` LAST-write-wins, so the two orders are
+-- OPPOSITE: an unscoped lookup picks right only when the wanted module is loaded
+-- FIRST, and `test/eval_typed_modules_fixtures/ctor_scope_load_order/` is the measured
+-- counterexample (stubbing `declOwnedBy` to `True` regresses it to `7.0`, an answer
+-- pristine `main` gets right).  `declOwnedBy` compares the decl's own identity against
 -- `OriginModule <this import's module id>`; `usePathModuleId` yields exactly the loader
 -- mid that `stampDeclOrigins` stamped with (see `aliasDictNamesOfPath`'s note, which
 -- states the same equality for the qual tables).
