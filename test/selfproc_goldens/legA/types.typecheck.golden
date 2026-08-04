@@ -132,6 +132,7 @@ bucketImplEntries : List ImplEntry -> Map String (List ImplEntry) -> Map String 
 bucketKeyEntries : List KeyEntry -> Map String (List KeyEntry) -> Map String (List KeyEntry)
 bucketKeyEntriesFrom : Int -> List KeyEntry -> Map String (List KeyEntry) -> Map String (List KeyEntry)
 bucketOf : String -> Map String (List a) -> List a
+bucketOfHead : Option HeadKey -> Map String (List KeyEntry) -> List KeyEntry
 bucketRecvMatch : List (List Ty, List Require) -> Mono -> Bool
 buildAdj : List String -> Map String Unit -> Map String (List (List Pat, Expr)) -> Map String (List String) -> Map String (List String)
 buildAliasGraphEntry : List String -> (TabKey, (List String, Ty)) -> (String, List String)
@@ -144,7 +145,7 @@ buildTupleCallHint : String -> List Expr -> Expr -> Expr -> (String, Option (Loc
 callArgVecs : List (List Mono) -> List Int -> List (Int, Mono) -> List (List Mono)
 callOblMonoIds : (String, List Mono, Option Loc) -> List (Int, String)
 callOblsWindow : Int -> List (String, List Mono, Option Loc)
-candidateBucket : Map String (List KeyEntry) -> String -> List KeyEntry
+candidateBucket : Map String (List KeyEntry) -> HeadKey -> List KeyEntry
 candsOneIface : List KeyEntry -> Option String
 censusSuperClose : List Decl -> List (String, Int) -> List (String, Int)
 censusSuperCloseFix : List Decl -> List (String, Int) -> List (String, Int) -> List (String, Int)
@@ -330,10 +331,10 @@ containerParamScalarArg : Mono -> Mono -> Option String
 containsI : Int -> List Int -> Bool
 containsPair : (String, Int) -> List (String, Int) -> Bool
 containsVecObl : (String, List Int) -> List (String, List Int) -> Bool
-countHead : Map String (List KeyEntry) -> String -> String -> Int
-countHeadByIface : Map String (List KeyEntry) -> String -> String -> Int
-countHeadByIfaceGo : List KeyEntry -> String -> String -> Int
-countHeadGo : List KeyEntry -> String -> String -> Int
+countHead : Map String (List KeyEntry) -> String -> Option HeadKey -> Int
+countHeadByIface : Map String (List KeyEntry) -> String -> Option HeadKey -> Int
+countHeadByIfaceGo : List KeyEntry -> String -> Option TabKey -> Int
+countHeadGo : List KeyEntry -> String -> Option TabKey -> Int
 countInSubst : List Int -> List (Int, Mono) -> Int
 crossRun : Ref CrossRun
 ctorHeadIsUpper : String -> Bool
@@ -414,6 +415,7 @@ discoverNextJoint : List Decl -> List Decl -> List String -> List String -> List
 discoverPromoted : List Decl -> List Decl -> List String -> List String
 discoverPromotedJoint : List Decl -> List Decl -> List String -> List String -> List String -> List String
 discoverPromotedModules : List Decl -> List Decl -> List (String, List Decl) -> List String -> List String -> List String
+dispHeadTab : HeadKey -> TabKey
 dispatchMonosOf : List String -> Ty -> Mono -> List Mono
 dispatchTyparams : List String -> List String
 djoin : Param -> Param -> Param
@@ -583,7 +585,7 @@ genRestricted : Bool -> Mono -> Scheme
 generalize : Mono -> Scheme
 generalizeGroup : TcEnv -> List Int -> List (Int, String) -> List (LetBind, (String, Scheme)) -> TcEnv
 globalCoherenceConflict : List (String, List Decl) -> (Option String, Option String)
-goalHeadCon : List Mono -> Option String
+goalHeadCon : List Mono -> Option HeadKey
 goalSiteLoc : Ref (Option Loc)
 goalsClosed : List Mono -> Bool
 groundMultiParamObligations : List Decl -> List (String, List String, Ty, Mono, Option Loc) -> Unit
@@ -607,18 +609,23 @@ hasImportDefiner : String -> Bool
 hasKeySL2 : String -> List (String, List Int) -> Bool
 hasMethodLevelConstraint : List String -> Ty -> Bool
 headAnnotTy : Ty -> Mono
-headCollides : Map String (List KeyEntry) -> String -> String -> Bool
-headCollidesByIface : Map String (List KeyEntry) -> String -> String -> Bool
+headBucketRender : Option HeadKey -> String
+headCollides : Map String (List KeyEntry) -> String -> Option HeadKey -> Bool
+headCollidesByIface : Map String (List KeyEntry) -> String -> Option HeadKey -> Bool
 headKeyNameOr : String -> Option HeadKey -> String
 headL : List String -> String
 headMonoNode : Mono -> Mono
 headRemainingKinds : TyConOrigin -> String -> Int -> Option (List Kind)
 headSubstWithParams : Ty -> List Ty -> Mono -> List Mono -> Option (List (String, Mono))
+headTabEq : Option HeadKey -> Option TabKey -> Bool
+headTabIs : Option HeadKey -> TabKey -> Bool
+headTabOf : Option HeadKey -> Option TabKey
 headTyNode : Ty -> Ty
 headTyconMono : Mono -> Option HeadKey
 headTyconNameMono : Mono -> Option String
 headTyconNameTy : Ty -> Option String
 headTyconTy : Ty -> Option HeadKey
+headlessBucketKey : RegKey
 holeFillParam : String -> List (String, Expr) -> Option Expr -> Param
 idsForIfaceSlots : List String -> List Int
 idsForIfaceSlotsGo : Int -> List String -> List Int
@@ -660,8 +667,8 @@ implDictPassMethods : Int -> List ImplMethod -> List ImplMethod
 implDictRoutesForFull : Map String (List ImplEntry) -> Map String (List KeyEntry) -> String -> String -> String -> Mono -> List Mono -> List Route
 implEntryFromTys : String -> List Ty -> List Require -> List ImplMethod -> List ImplEntry
 implEntryOf : Decl -> List ImplEntry
-implExistsForHead : Map String (List KeyEntry) -> String -> String -> Bool
-implExistsForHeadGo : List KeyEntry -> String -> String -> Bool
+implExistsForHead : Map String (List KeyEntry) -> String -> HeadKey -> Bool
+implExistsForHeadGo : List KeyEntry -> String -> TabKey -> Bool
 implHeadGround : Decl -> Bool
 implHeadKindClause : String -> Int -> List Kind -> String
 implHeadLabel : String -> KeyEntry -> String
@@ -956,7 +963,6 @@ moduleAliasEntry : String -> String -> ((String, String), List a) -> List (Strin
 moduleDictNames : List Decl -> List Decl -> List (String, List Decl) -> List String
 moduleUserFnNames : List (String, List Decl) -> List String
 monoArgUnboundIds : Mono -> List Int
-monoHeadCon : Mono -> Option String
 monoIdsWithIface : (Mono, String) -> List (Int, String)
 monoIsApp : Mono -> Bool
 monoIsBareTyvar : Mono -> Bool
@@ -1006,7 +1012,10 @@ numlitMismatchHint : Option Loc -> List Mono -> String
 numlitMismatchMsg : Option Loc -> List Mono -> String
 numlitReframeLoc : Option Loc -> Bool
 oblAsTuple : UObligation -> (String, List Mono, Option Loc)
+oblDedupKey : String -> List Mono -> String
 oblDispatchMonos : (String, List String, Ty, Mono, Option Loc) -> List Mono
+oblIfaceKey : String -> TabKey
+oblKeyParts : Int -> List (Option HeadKey) -> (List TabKey, List Int)
 occursAdjust : Int -> Int -> Mono -> Unit
 occursAdjustUnbound : Int -> Int -> Ref Tyvar -> Int -> Int -> Unit
 occursAdjustVar : Int -> Int -> Ref Tyvar -> Unit
