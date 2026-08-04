@@ -1,0 +1,40 @@
+-- #1111 A-2.4 MIRROR PROBE (FLAT / single-file arm), impl-completeness half.
+--
+-- A-2.4 re-keys the impl-completeness table (`universeIfaceRequiredRef`) from a bare
+-- interface name to a module-qualified identity, which turns TWO exit-1 rejections
+-- into exit-0 acceptances (#1257, #1258).  Per AGENTS.md a fix that turns "returned
+-- NOTHING" into "returns SOMETHING" leaves the new something untested BY
+-- CONSTRUCTION -- so this fixture asserts the OTHER direction: a GENUINELY incomplete
+-- impl, with NO same-name interface anywhere, must STILL be rejected.
+--
+-- ⚠️ WHAT THIS FIXTURE DOES **NOT** WITNESS -- the header here claimed the opposite
+-- until adversarial review, so the correction is recorded rather than the claim
+-- quietly deleted.  It said `Alpha` and the impl's occurrence of it "BOTH key
+-- `TkBare`", and that dropping that half would make this rejection disappear.  FALSE:
+-- this fixture never reaches the re-keyed table.  `checkBodyImpl`'s completeness
+-- switch routes the FLAT arm to `checkImplCompleteness fullUniverse prog`, i.e. the
+-- bare-name linear scan `ifaceRequiredMethods` -- no `Registry`, no `TabKey`, no
+-- `regLookupK`.  Only the `Module` arm reads `universeIfaceRequiredRef`, exactly as
+-- `test/registry_keying_ratchet.sh`'s allowlist row for that field already said.
+--
+-- WHAT IT DOES WITNESS, and this is the whole of it: that A-2.4 did not reroute the
+-- FLAT arm through the Map path.  COUNTERFACTUAL, RUN, not reasoned: flipping that
+-- `Flat _` arm to `checkImplCompletenessMap crossRun.value.universeIfaceRequiredRef
+-- .value prog` and rebuilding makes this file check CLEAN, exit 0 -- the flat pass
+-- populates no such registry -- so the rejection below is precisely the signal that
+-- the flat arm still owns its own check.  The complementary counterfactual, also run:
+-- deleting `insertIfaceRequired`'s `DInterface` arm (killing the registry for every
+-- module) leaves this fixture rejecting BYTE-IDENTICALLY while the module-arm mirror
+-- probe (`test/analyze_project_fixtures/1111_a24_genuine_iface_rejects/`) loses its
+-- `missing method 'abar'` -- which is what proves the two arms are disjoint.
+--
+-- The flat arm's genuine `TkBare` witness is the OTHER flat mirror probe,
+-- `graded_head_wrong_kind_flat.mdk`: `ifaceParamKindsRef` IS read on both arms.
+interface Alpha a where
+  afoo : a -> Int
+  abar : a -> Int
+
+data ET = MkET
+
+impl Alpha ET where
+  afoo e = 1

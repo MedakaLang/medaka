@@ -704,6 +704,44 @@ for f in $changed; do
   esac
 done
 
+# ── the IN-LANGUAGE suite (`make test`) is NOT a gate, so nothing above can reach it ──
+#
+# `$gates` is a set of `test/*.sh` scripts run through run_gates.sh. `make test` is a
+# different animal: it invokes `./medaka test <file>` directly on a handful of .mdk
+# modules, and it is a REQUIRED check of its own (`inlang`). So every arm above can
+# fire, every gate can pass, and the doctests of the very file you edited never run.
+#
+# That is not hypothetical — it is why this block exists. PR #1270 changed
+# compiler/types/registry.mdk; `make preflight` was run TWICE, including on the merged
+# tree, and could not see that the file's own doctests were red. The gate set it derives
+# (25 gates) is correct and none of them run a doctest. The break was a merge artifact
+# between two branches that were each green alone, so no pre-merge signal existed
+# anywhere except `make test` — the one thing the loop did not call.
+#
+# The file list is DERIVED from the Makefile's `test:` recipe, never re-listed here.
+# That matters more than the saved keystrokes: the Makefile's own comment instructs
+# "Add a line here for every call-site-free compiler module", so this list is expected
+# to GROW, and a copy here would silently stop covering whatever was added. Scoped to
+# the `./medaka test` lines only — the recipe's `sh test/diff_compiler_ported.sh` line
+# is a gate and already has arms in the table above.
+#
+# Cost: measured 0.5s for compiler/types/registry.mdk (144 doctests) on the dev box,
+# against a preflight that spends ~1m41s building ./medaka before it runs anything. It
+# adds ZERO gates — it is a separate step, like need_fixpoint — so the `would run N
+# gate(s)` count is unchanged by design.
+inlang_files=$(awk '/^test: medaka$/{f=1;next} f&&/^\t/{print} f&&!/^\t/{exit}' "$ROOT/Makefile" \
+  | sed -n 's|^	\./medaka test ||p')
+inlang_run=""
+for f in $changed; do
+  for _if in $inlang_files; do
+    [ "$f" = "$_if" ] || continue
+    # Only if it still exists — a DELETED module cannot be doctested, and `changed`
+    # lists deletions (same reasoning as the gate-self-run arm above, #337).
+    [ -f "$ROOT/$f" ] || continue
+    case " $inlang_run " in *" $f "*) ;; *) inlang_run="$inlang_run $f" ;; esac
+  done
+done
+
 # ── resolve gates → the ORACLES they actually need ───────────────────────────
 #
 # ⚠️ A PATTERN THAT MATCHES ZERO GATES IS AN ERROR, NOT AN EMPTY SET.
@@ -777,6 +815,14 @@ if [ -n "${PREFLIGHT_DRY:-}" ]; then
     for r in $full_reasons; do printf '  FULL      %s\n' "$r"; done
     printf '  (locally that means the 85 diff_compiler_* gates; in CI it means the whole suite.)\n'
   fi
+  if [ -n "$inlang_run" ]; then
+    # SURFACED IN DRY ON PURPOSE. AGENTS.md records that PREFLIGHT_DRY does NOT
+    # surface the forced fixpoint (that flag is read after this exit), and calls the
+    # resulting short gate list misleading. Do not repeat that here: a step the real
+    # run will perform must appear in the dry-run's account of the real run.
+    printf '── would also run the IN-LANGUAGE suite (`make test`; the `inlang` check) ─────\n'
+    for _if in $inlang_run; do printf '  INLANG    ./medaka test %s\n' "$_if"; done
+  fi
   if [ -n "$unmapped" ]; then
     printf '── %s path(s) the change→gate map has NO OPINION about ─────\n' \
       "$(printf '%s\n' $unmapped | grep -c .)"
@@ -785,7 +831,12 @@ if [ -n "${PREFLIGHT_DRY:-}" ]; then
   exit 0
 fi
 
-[ -n "$pats" ] || { echo "preflight: no gates map to these changes (docs/config only?) — nothing to run."; exit 0; }
+# ⚠️ `$inlang_run` is part of the "is there anything to do?" test, not just `$pats`.
+# A diff touching ONLY a module named in the Makefile's `test:` recipe derives no
+# gate pattern from some future arm layout, and exiting here would skip the one check
+# that can see it — reinstating, in this script, exactly the blind spot the block that
+# builds `$inlang_run` exists to close.
+[ -n "$pats" ] || [ -n "$inlang_run" ] || { echo "preflight: no gates map to these changes (docs/config only?) — nothing to run."; exit 0; }
 
 # ── LOCAL_SKIP: what THIS BOX declines to pay for. Not what the diff misses. ──
 #
@@ -939,17 +990,37 @@ make -C "$ROOT" medaka >/dev/null 2>&1 || { echo "preflight: make medaka FAILED"
 # of them knew the rule. So now there is one: build_oracles.sh --for is the single source
 # of truth for "which oracles does this gate set need", and preflight calls it. Same
 # derivation, one implementation, cannot drift again.
-printf '── building the oracles these gates read ─────\n'
-if ! sh "$ROOT/test/build_oracles.sh" --for $pats; then
-  echo "preflight: oracle build FAILED"
-  exit 1
+rc=0
+
+# ⚠️ BOTH of these are guarded on `$pats` being NON-EMPTY, and that guard is not
+# defensive tidiness. `build_oracles.sh --for` with no pattern builds ALL 54 oracles
+# and `run_gates.sh` with no pattern runs ALL 84 gates — i.e. word-splitting an empty
+# `$pats` turns the narrowest possible diff into the two commands AGENTS.md most
+# explicitly forbids. That path became reachable the moment `$inlang_run` alone could
+# get us past the "nothing to run" exit above.
+if [ -n "$pats" ]; then
+  printf '── building the oracles these gates read ─────\n'
+  if ! sh "$ROOT/test/build_oracles.sh" --for $pats; then
+    echo "preflight: oracle build FAILED"
+    exit 1
+  fi
+
+  # ── run the targeted gates ─────────────────────────────────────────────────
+  echo
+  echo "── gates ─────────────────────────────────────────────────────"
+  sh "$ROOT/test/run_gates.sh" $pats || rc=$?
 fi
 
-# ── run the targeted gates ───────────────────────────────────────────────────
-echo
-echo "── gates ─────────────────────────────────────────────────────"
-rc=0
-sh "$ROOT/test/run_gates.sh" $pats || rc=$?
+# ── the in-language suite, for the modules `make test` names ─────────────────
+# Needs no oracle and no golden — `./medaka test` typechecks the file and runs its
+# doctests against the ./medaka just built above.
+if [ -n "$inlang_run" ]; then
+  echo
+  echo "── in-language suite (\`make test\` names these; the \`inlang\` required check) ──"
+  for _if in $inlang_run; do
+    "$ROOT/medaka" test "$ROOT/$_if" || rc=1
+  done
+fi
 
 # ── the fixpoint, for backend changes only ───────────────────────────────────
 if [ "$need_fixpoint" -eq 1 ]; then
@@ -1025,6 +1096,12 @@ cat <<EOF
 ── NOT RUN LOCALLY ───────────────────────────────────────────────
 $engines_line
 $([ "$need_fixpoint" -eq 1 ] || echo "  selfcompile_fixpoint       (not a backend change) — the \`soundness\` check runs it on every event; it is never narrowed.")
+$([ -n "$inlang_run" ] && echo "  make test                  PARTIAL — ran only the modules THIS diff touched ($(echo $inlang_run)).
+                             The \`inlang\` check runs the whole recipe, doctests of every
+                             module it names plus diff_compiler_ported." \
+                       || echo "  make test                  the in-language suite (doctests/props). No module this diff
+                             touches is named in the Makefile's \`test:\` recipe, so nothing
+                             here would run it; the \`inlang\` check runs it in full.")
   the other $remaining of $total_gates gates
 
   This preflight is a FILTER, not an authority. A green run here means the gates
