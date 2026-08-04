@@ -1,5 +1,5 @@
 # META
-source_lines=21814
+source_lines=21902
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted typecheck stage — port of lib/typecheck.ml's HM core.  SLICE 1:
@@ -15540,10 +15540,31 @@ checkBodyImpl seed mode prog0 =
       -- `test/llvm_fixtures_modules/ctor_scope_local_decl_wins/` (`{Ext, Other}` plus
       -- a local decl, prelude-free).
       --
-      -- Both structures agree under this order: the decl LIST is consed, so it reads
-      -- [prog0, overlay, pub_{k-1}..pub_1] and its `lookupAssoc` is FIRST-wins → prog0;
-      -- the OrdMaps are `omInsert` LAST-write-wins over the same three registrations in
-      -- the opposite order → prog0.  Getting them to disagree is #674's root cause.
+      -- 🚨 THE SET OF ORDER-OBSERVABLE STRUCTURES — enumerate it, because #674's root
+      -- cause was exactly two of them disagreeing, and a FUTURE edit re-creates that by
+      -- moving ONE.  This note used to name a PAIR ("both structures agree"), and the
+      -- pair it named was the one that cannot disagree — while omitting the one that can.
+      --
+      -- Registration order here is  universe < overlay < prog0.  Under it:
+      --   * the `TcEnv` ctor scheme map (`addCtor` → `omInsert`, BARE ctor name) —
+      --     LAST-write-wins → prog0.  BARE-keyed, so two modules genuinely collide here;
+      --     this is #1259's table and the one the overlay exists for.
+      --   * `recordByNameRef` (`registerRecordInfoKeyed` → `omInsert`, BARE ctor name) —
+      --     LAST-write-wins → prog0.  #1256's table, same keying, same hazard.
+      --   * `dataParamKindsRef` (`recordParamKinds`, a consed list read FIRST-match) —
+      --     prepend order [prog0, overlay, universe] → prog0.  ⚠️ This one is
+      --     IDENTITY-keyed since A-2.3 (`tyTabKey o name`), so two modules' same-named
+      --     types get DIFFERENT keys and registration order cannot decide between them
+      --     at all.  It is order-observable only for a decl registered twice, where it
+      --     agrees.  It is NOT evidence about the bare-keyed tables above.
+      --   * the exhaust ctor ORACLE — and it is built at a DIFFERENT CALL SITE
+      --     (`checkModuleFullDiags`: `seedCheckRun (prog ++ importedCtorTypeDecls prog …
+      --     ++ accData)`), from a LIST, with `oracleMap` = `omFromPairs (reverseL …)`,
+      --     i.e. FIRST-wins on that list → prog0 > overlay > universe.  Same verdict,
+      --     opposite mechanism, and reached through none of the code on this line.
+      --     THIS is the one a future edit can silently flip, so check it too.
+      -- All four land on prog0 > overlay > universe.  Getting any two to disagree is
+      -- #674's root cause.
       let base = registerAllData crossRun.value.universeDataEnv.value
                    (importedCtorTypeDecls prog0 crossRun.value.universeDataDecls.value)
       registerAllData base prog0
@@ -20611,12 +20632,29 @@ importSeed (_::rest) depEnv = importSeed rest depEnv
 -- mid that `stampDeclOrigins` stamped with (see `aliasDictNamesOfPath`'s note, which
 -- states the same equality for the qual tables).
 --
--- ⚠️ PERF (issue #154): bounded by the MODULE'S OWN import count, NOT the universe
--- size — a per-module VIEW/overlay, never a per-module rebuild of the global universe.
--- A module importing no constructors overlays NOTHING and stays byte-identical.
--- A bare `import mod` (UseName) and a wildcard `import mod.*` (UseWild) contribute no
--- overlay: the bare form binds no ctors at all, and a wildcard cannot name its owning
--- type here, so it takes the same universe-fallback the value seed's wildcard does.
+-- ⚠️ PERF (issue #154) — THE REAL BOUND, stated for the WORK and not just the RESULT.
+-- The RESULT is import-count bounded: at most one overlay decl per UseGroup member, a
+-- per-module VIEW, never a per-module rebuild of the global universe.  A module
+-- importing no constructors overlays NOTHING and stays byte-identical.  A bare
+-- `import mod` (UseName) and a wildcard `import mod.*` (UseWild) contribute no overlay:
+-- the bare form binds no ctors at all, and a wildcard cannot name its owning type here,
+-- so it takes the same universe-fallback the value seed's wildcard does.
+--
+-- The WORK is NOT import-count bounded, and saying it is has already shipped a
+-- regression.  `pool` is the WHOLE accumulated universe and it is SCANNED — so the cost
+-- is O(members x |pool|) per module, i.e. O(modules x universe) across a run, the same
+-- shape `main` has paid since #674 for its `(..)` members.  What keeps that acceptable
+-- is entirely the CONSTANT, and the constant has exactly two load-bearing parts, both
+-- enforced downstream and both measured:
+--   * ONE traversal per member, not three (see `findOverlayDecl`/`overlayScan`); and
+--   * ZERO allocation per visited decl (see `overlayNote` — name tests before the
+--     identity mint).
+-- Break either and the perf gate's `modules` shape goes superlinear: this comment
+-- previously asserted the universe-independence outright, the first cut of A-2.6 broke
+-- both parts, and the gate read typecheck TIME r2=3.24 (hard threshold 3.0) with net
+-- allocation 306/744/2013 MB against `main`'s 242/491/1010.  A cheaper bound is
+-- available if it is ever needed — index `pool` by owning module id, which would make
+-- the owned passes O(log n) — but it does not exist today, so do not cite one.
 importedCtorTypeDecls : List Decl -> List Decl -> List Decl
 importedCtorTypeDecls unitDecls pool =
   flatMap (importOverlayDecls pool) unitDecls
@@ -20632,10 +20670,12 @@ importOverlayDecls _ _ = []
 -- match — a RE-EXPORTED type's decl names the ORIGINAL module, not the re-exporter
 -- this import path names.  The (b) spellings are new, so they get no fallback: an
 -- unscoped guess there would be the load-order coin flip this unit is removing.
+-- (The fallback is not a second pass over `pool` — `overlayScan` collects it in the
+-- same walk as the two identity-scoped candidates; see `findOverlayDecl`.)
 memberOverlayDecl : List Decl -> String -> UseMember -> List Decl
 memberOverlayDecl pool mid (UseMember n ctors _ _) = match findOverlayDecl mid n ctors pool
   Some d => [d]
-  None => if ctors then dataDeclForType pool n else []
+  None => []
 
 -- The pool decl DECLARED BY `mid` that this member names.
 --
@@ -20654,31 +20694,91 @@ memberOverlayDecl pool mid (UseMember n ctors _ _) = match findOverlayDecl mid n
 --
 -- The constructor pass is still the fallback for `(..)`, not dead: `import m.{C(..)}`
 -- where `C` is a constructor and not a type name of `m` keeps its pre-A-2.6 meaning.
+--
+-- 🚨 THE THREE PASSES SHARE ONE TRAVERSAL, and that is a MEASURED PERF CONTRACT.
+-- `pool` is the WHOLE accumulated universe and this runs once per UseGroup member of
+-- every module, so each independent pass over it is an O(modules x universe) term.
+-- The first cut of A-2.6 ran three (type-owned, then ctor-owned, then the bare
+-- fallback) where `main` ran ONE, and that alone put the perf gate's `modules` shape
+-- at typecheck TIME r2=3.24 — over the hard 3.0 threshold.  `overlayScan` collects all
+-- three candidates in a SINGLE walk (their predicates are independent, so first-wins
+-- per candidate is unchanged) and stops the instant the DECIDING candidate is found,
+-- which is the early exit the three-pass form had.  See `overlayScan`.
 findOverlayDecl : String -> String -> Bool -> List Decl -> Option Decl
-findOverlayDecl mid n ctors pool =
-  if ctors then match findOwnedDecl mid (declTypeNamed n) pool
-    Some d => Some d
-    None => findOwnedDecl mid (declCtorNamed n) pool
-  else findOwnedDecl mid (declCtorNamed n) pool
+findOverlayDecl mid n ctors pool = match overlayScan mid n ctors (None, None, None) pool
+  (ownedType, ownedCtor, bareType) =>
+    if ctors then
+      orElseOpt (orElseOpt ownedType ownedCtor) bareType
+    else
+      ownedCtor
 
--- First pool decl whose DECLARATION identity names `mid` and which satisfies `p`.
-findOwnedDecl : String -> (Decl -> Bool) -> List Decl -> Option Decl
-findOwnedDecl _ _ [] = None
-findOwnedDecl mid p ((DAttrib _ d)::rest) = match findOwnedDecl mid p [d]
-  Some x => Some x
-  None => findOwnedDecl mid p rest
-findOwnedDecl mid p ((d@(DData { dataName = tn, dataOrigin = o }))::rest)
-  | declOwnedBy mid tn o && p d = Some d
-  | otherwise = findOwnedDecl mid p rest
-findOwnedDecl mid p ((d@(DNewtype { newtypeName = tn, newtypeOrigin = o }))::rest)
-  | declOwnedBy mid tn o && p d = Some d
-  | otherwise = findOwnedDecl mid p rest
-findOwnedDecl mid p (_::rest) = findOwnedDecl mid p rest
+-- ONE walk of the pool, THREE first-wins candidates, in the precedence order
+-- `findOverlayDecl` applies:
+--
+--   ownedType — first decl DECLARED BY `mid` whose TYPE name is `n`   (the `(..)` rule)
+--   ownedCtor — first decl DECLARED BY `mid` with a CONSTRUCTOR named `n`  (rule (b))
+--   bareType  — first decl of ANY owner whose TYPE name is `n`  (the `(..)` fallback,
+--               `dataDeclForType`'s old job: a RE-EXPORTED type's decl names the
+--               ORIGINAL module, so no identity-scoped pass can ever match it)
+--
+-- Each is recorded independently and FIRST-wins, which is exactly what three separate
+-- first-match passes computed; a decl can legitimately fill two of them at once (a
+-- record's sole variant carries the type's own name), so they are collected with
+-- INDEPENDENT tests and never with an `else`.
+--
+-- ⚠️ THE EARLY EXIT IS `ctors`-DEPENDENT AND MUST STAY THAT WAY.  With `(..)` the
+-- deciding candidate is `ownedType` (it outranks both others), so finding it ends the
+-- walk; WITHOUT `(..)` only `ownedCtor` is ever read, so exiting on `ownedType` would
+-- abandon the walk before the answer was found.  Exiting on "all three filled" is
+-- likewise wrong for the second case.
+overlayScan : String -> String -> Bool -> (Option Decl, Option Decl, Option Decl) -> List Decl -> (Option Decl, Option Decl, Option Decl)
+overlayScan _ _ _ acc [] = acc
+overlayScan mid n ctors acc (d::rest) =
+  let acc2 = overlayScanOne mid n acc d
+  if overlayDecided ctors acc2 then acc2 else overlayScan mid n ctors acc2 rest
 
-declTypeNamed : String -> Decl -> Bool
-declTypeNamed n (DData { dataName = tn }) = tn == n
-declTypeNamed n (DNewtype { newtypeName = tn }) = tn == n
-declTypeNamed _ _ = False
+overlayDecided : Bool -> (Option Decl, Option Decl, Option Decl) -> Bool
+overlayDecided ctors (ownedType, ownedCtor, _) =
+  if ctors then
+    isSome ownedType
+  else
+    isSome ownedCtor
+
+overlayScanOne : String -> String -> (Option Decl, Option Decl, Option Decl) -> Decl -> (Option Decl, Option Decl, Option Decl)
+overlayScanOne mid n acc (DAttrib _ d) = overlayScanOne mid n acc d
+overlayScanOne mid n acc (d@(DData { dataName = tn, dataOrigin = o })) =
+  overlayNote mid n tn o d acc
+overlayScanOne mid n acc (d@(DNewtype { newtypeName = tn, newtypeOrigin = o })) = overlayNote mid n tn o d acc
+overlayScanOne _ _ acc _ = acc
+
+-- 🚨 NAME TESTS FIRST, IDENTITY SECOND — a MEASURED perf contract, not style.
+-- `tn == n` / `declCtorNamed` are string compares over fields already in hand and
+-- ALLOCATE NOTHING; `declOwnedBy` MINTS an identity on both sides (`OriginModule`,
+-- `IdentModule`, the `map` closure, the `Ident`, the `Some` — five objects per call).
+-- This runs ONCE PER POOL DECL, i.e. over the whole universe per member per module, so
+-- minting unconditionally is O(modules x universe) ALLOCATION — `compiler/AGENTS.md`'s
+-- named exception ("when the KEY PROJECTION allocates"), and it re-created the #154
+-- quadratic that `modules` was promoted out of `KNOWN_SUPERLINEAR` for.  Measured on
+-- the gate's own `modules` shape (N=100/200/400, K=8, one worktree, one emitter,
+-- interleaved): mint-first 306/744/2013 MB net (r2=2.71) vs name-first 242/491/1010 MB
+-- (r2=2.06), which is `main`'s figure to 0.1 MB.  A name test matches at most the
+-- handful of pool decls sharing that spelling, so the mint is O(1) per member.
+--
+-- The unchanged `acc` is returned BY IDENTITY when neither name matches — the common
+-- case — so the walk allocates nothing at all until it actually finds something.
+overlayNote : String -> String -> String -> TyConOrigin -> Decl -> (Option Decl, Option Decl, Option Decl) -> (Option Decl, Option Decl, Option Decl)
+overlayNote mid n tn o d acc = match acc
+  (ownedType, ownedCtor, bareType) =>
+    let hitType = tn == n
+    let hitCtor = declCtorNamed n d
+    if hitType || hitCtor then
+      let owned = declOwnedBy mid tn o
+      (
+        if hitType && owned then orElseOpt ownedType (Some d) else ownedType,
+        if hitCtor && owned then orElseOpt ownedCtor (Some d) else ownedCtor,
+        if hitType then orElseOpt bareType (Some d) else bareType,
+      )
+    else acc
 
 declCtorNamed : String -> Decl -> Bool
 declCtorNamed n (DData { dataCtors = vs }) = variantNamed n vs
@@ -20700,31 +20800,6 @@ declOwnedBy : String -> String -> TyConOrigin -> Bool
 declOwnedBy mid tyName o = match mkIdent NsType (OriginModule mid) tyName
   Some want => mkIdent NsType o tyName == Some want
   None => False
-
--- The pre-#1111 A-2.6 bare-name pool lookup, now reached ONLY as `memberOverlayDecl`'s
--- `(..)` fallback (see its note).  First match per type name; a type absent from the
--- pool contributes nothing, so the universe fallback stands.
-dataDeclForType : List Decl -> String -> List Decl
-dataDeclForType pool name = match findDataDeclNamed name pool
-  Some d => [d]
-  None => []
-
-findDataDeclNamed : String -> List Decl -> Option Decl
-findDataDeclNamed _ [] = None
-findDataDeclNamed name ((DAttrib _ d)::rest) = match findDataDeclNamed name [d]
-  Some x => Some x
-  None => findDataDeclNamed name rest
-findDataDeclNamed name ((d@(DData { dataName = n }))::rest) =
-  if n == name then
-    Some d
-  else
-    findDataDeclNamed name rest
-findDataDeclNamed name ((d@(DNewtype { newtypeName = n }))::rest) =
-  if n == name then
-    Some d
-  else
-    findDataDeclNamed name rest
-findDataDeclNamed name (_::rest) = findDataDeclNamed name rest
 
 importDefinersOf : List Decl -> List (String, String)
 importDefinersOf [] = []
@@ -20955,13 +21030,26 @@ checkModuleFullDiags mid seedVars accData accAll prog =
   -- the WRONG arity/type for this module's own `Bin` in a match and false-warns
   -- W-NONEXHAUSTIVE.  buildOracle is duplicate-tolerant, and accData still
   -- supplies prelude Option/Result ctors (this module never redefines them).
-  -- #674: the types THIS module imports with `(..)` are prepended BEFORE accData so
-  -- their ctors win the oracle's first-wins bare-name tables over any same-named
-  -- ctor a non-imported module contributes by load order — the exhaustiveness peer
-  -- of the typecheck-scheme overlay.  Import-count bounded (no O(N²)); own-module
-  -- `prog` still wins first, and a module with no `T(..)` import is byte-identical.
-  -- The overlay decls come from the persistent universe (same source the dataEnv
-  -- overlay uses), which equals accData here but keeps the two overlays in lockstep.
+  -- #674 / #1111 A-2.6: the decls whose CONSTRUCTORS this module binds by name are
+  -- prepended BEFORE accData so their ctors win the oracle's first-wins bare-name
+  -- tables over any same-named ctor a non-imported module contributes by load order —
+  -- the exhaustiveness peer of the typecheck-scheme overlay.  Own-module `prog` still
+  -- wins first.  The overlay decls come from the persistent universe (same source the
+  -- dataEnv overlay uses), which equals accData here but keeps the two overlays in
+  -- lockstep.
+  --
+  -- ⚠️ TWO CLAIMS THAT USED TO STAND HERE ARE FALSE SINCE A-2.6's RULE (b), which is
+  -- why they are written out rather than re-pointed:
+  --   * NOT "the types this module imports with `(..)`" — EVERY selective
+  --     constructor-naming member contributes now (`import m.{T, C}`, and a record's
+  --     `import m.{Cfg}`), not only the `(..)` spelling.
+  --   * NOT "a module with no `T(..)` import is byte-identical" — only a module that
+  --     names no constructor at all is.
+  -- The PERF claim is corrected at `importedCtorTypeDecls` itself (the result is
+  -- import-count bounded; the WORK is O(members x |universe|), held down by one
+  -- zero-allocation traversal per member).  Do not restate it as "no O(N²)" here: this
+  -- call site is the SECOND per-module scan of the same pool, so it doubles whatever
+  -- that constant is.
   let _ = seedCheckRun (prog ++ importedCtorTypeDecls prog crossRun.value.universeDataDecls.value ++ accData)
   -- Bug C: pass the cumulative full impl universe (core + earlier modules) as
   -- implDecls (was checkModuleFull, i.e. implDecls=[]) so buildStandaloneShadows sees
@@ -25992,19 +26080,21 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "importOverlayDecls" ((PVar "pool") (PCon "DUse" PWild (PAs "p" (PCon "UseGroup" PWild (PVar "ms"))) PWild)) (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "memberOverlayDecl") (EVar "pool")) (EApp (EVar "usePathModuleId") (EVar "p")))) (EVar "ms")))
 (DFunDef false "importOverlayDecls" (PWild PWild) (EListLit))
 (DTypeSig false "memberOverlayDecl" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyFun (TyCon "UseMember") (TyApp (TyCon "List") (TyCon "Decl"))))))
-(DFunDef false "memberOverlayDecl" ((PVar "pool") (PVar "mid") (PCon "UseMember" (PVar "n") (PVar "ctors") PWild PWild)) (EMatch (EApp (EApp (EApp (EApp (EVar "findOverlayDecl") (EVar "mid")) (EVar "n")) (EVar "ctors")) (EVar "pool")) (arm (PCon "Some" (PVar "d")) () (EListLit (EVar "d"))) (arm (PCon "None") () (EIf (EVar "ctors") (EApp (EApp (EVar "dataDeclForType") (EVar "pool")) (EVar "n")) (EListLit)))))
+(DFunDef false "memberOverlayDecl" ((PVar "pool") (PVar "mid") (PCon "UseMember" (PVar "n") (PVar "ctors") PWild PWild)) (EMatch (EApp (EApp (EApp (EApp (EVar "findOverlayDecl") (EVar "mid")) (EVar "n")) (EVar "ctors")) (EVar "pool")) (arm (PCon "Some" (PVar "d")) () (EListLit (EVar "d"))) (arm (PCon "None") () (EListLit))))
 (DTypeSig false "findOverlayDecl" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "Option") (TyCon "Decl")))))))
-(DFunDef false "findOverlayDecl" ((PVar "mid") (PVar "n") (PVar "ctors") (PVar "pool")) (EIf (EVar "ctors") (EMatch (EApp (EApp (EApp (EVar "findOwnedDecl") (EVar "mid")) (EApp (EVar "declTypeNamed") (EVar "n"))) (EVar "pool")) (arm (PCon "Some" (PVar "d")) () (EApp (EVar "Some") (EVar "d"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "findOwnedDecl") (EVar "mid")) (EApp (EVar "declCtorNamed") (EVar "n"))) (EVar "pool")))) (EApp (EApp (EApp (EVar "findOwnedDecl") (EVar "mid")) (EApp (EVar "declCtorNamed") (EVar "n"))) (EVar "pool"))))
-(DTypeSig false "findOwnedDecl" (TyFun (TyCon "String") (TyFun (TyFun (TyCon "Decl") (TyCon "Bool")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "Option") (TyCon "Decl"))))))
-(DFunDef false "findOwnedDecl" (PWild PWild (PList)) (EVar "None"))
-(DFunDef false "findOwnedDecl" ((PVar "mid") (PVar "p") (PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EMatch (EApp (EApp (EApp (EVar "findOwnedDecl") (EVar "mid")) (EVar "p")) (EListLit (EVar "d"))) (arm (PCon "Some" (PVar "x")) () (EApp (EVar "Some") (EVar "x"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "findOwnedDecl") (EVar "mid")) (EVar "p")) (EVar "rest")))))
-(DFunDef false "findOwnedDecl" ((PVar "mid") (PVar "p") (PCons (PAs "d" (PRec "DData" ((rf "dataName" (PVar "tn")) (rf "dataOrigin" (PVar "o"))) false)) (PVar "rest"))) (EIf (EBinOp "&&" (EApp (EApp (EApp (EVar "declOwnedBy") (EVar "mid")) (EVar "tn")) (EVar "o")) (EApp (EVar "p") (EVar "d"))) (EApp (EVar "Some") (EVar "d")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "findOwnedDecl") (EVar "mid")) (EVar "p")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DFunDef false "findOwnedDecl" ((PVar "mid") (PVar "p") (PCons (PAs "d" (PRec "DNewtype" ((rf "newtypeName" (PVar "tn")) (rf "newtypeOrigin" (PVar "o"))) false)) (PVar "rest"))) (EIf (EBinOp "&&" (EApp (EApp (EApp (EVar "declOwnedBy") (EVar "mid")) (EVar "tn")) (EVar "o")) (EApp (EVar "p") (EVar "d"))) (EApp (EVar "Some") (EVar "d")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "findOwnedDecl") (EVar "mid")) (EVar "p")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DFunDef false "findOwnedDecl" ((PVar "mid") (PVar "p") (PCons PWild (PVar "rest"))) (EApp (EApp (EApp (EVar "findOwnedDecl") (EVar "mid")) (EVar "p")) (EVar "rest")))
-(DTypeSig false "declTypeNamed" (TyFun (TyCon "String") (TyFun (TyCon "Decl") (TyCon "Bool"))))
-(DFunDef false "declTypeNamed" ((PVar "n") (PRec "DData" ((rf "dataName" (PVar "tn"))) false)) (EBinOp "==" (EVar "tn") (EVar "n")))
-(DFunDef false "declTypeNamed" ((PVar "n") (PRec "DNewtype" ((rf "newtypeName" (PVar "tn"))) false)) (EBinOp "==" (EVar "tn") (EVar "n")))
-(DFunDef false "declTypeNamed" (PWild PWild) (EVar "False"))
+(DFunDef false "findOverlayDecl" ((PVar "mid") (PVar "n") (PVar "ctors") (PVar "pool")) (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "overlayScan") (EVar "mid")) (EVar "n")) (EVar "ctors")) (ETuple (EVar "None") (EVar "None") (EVar "None"))) (EVar "pool")) (arm (PTuple (PVar "ownedType") (PVar "ownedCtor") (PVar "bareType")) () (EIf (EVar "ctors") (EApp (EApp (EVar "orElseOpt") (EApp (EApp (EVar "orElseOpt") (EVar "ownedType")) (EVar "ownedCtor"))) (EVar "bareType")) (EVar "ownedCtor")))))
+(DTypeSig false "overlayScan" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Bool") (TyFun (TyTuple (TyApp (TyCon "Option") (TyCon "Decl")) (TyApp (TyCon "Option") (TyCon "Decl")) (TyApp (TyCon "Option") (TyCon "Decl"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyApp (TyCon "Option") (TyCon "Decl")) (TyApp (TyCon "Option") (TyCon "Decl")) (TyApp (TyCon "Option") (TyCon "Decl")))))))))
+(DFunDef false "overlayScan" (PWild PWild PWild (PVar "acc") (PList)) (EVar "acc"))
+(DFunDef false "overlayScan" ((PVar "mid") (PVar "n") (PVar "ctors") (PVar "acc") (PCons (PVar "d") (PVar "rest"))) (EBlock (DoLet false false (PVar "acc2") (EApp (EApp (EApp (EApp (EVar "overlayScanOne") (EVar "mid")) (EVar "n")) (EVar "acc")) (EVar "d"))) (DoExpr (EIf (EApp (EApp (EVar "overlayDecided") (EVar "ctors")) (EVar "acc2")) (EVar "acc2") (EApp (EApp (EApp (EApp (EApp (EVar "overlayScan") (EVar "mid")) (EVar "n")) (EVar "ctors")) (EVar "acc2")) (EVar "rest"))))))
+(DTypeSig false "overlayDecided" (TyFun (TyCon "Bool") (TyFun (TyTuple (TyApp (TyCon "Option") (TyCon "Decl")) (TyApp (TyCon "Option") (TyCon "Decl")) (TyApp (TyCon "Option") (TyCon "Decl"))) (TyCon "Bool"))))
+(DFunDef false "overlayDecided" ((PVar "ctors") (PTuple (PVar "ownedType") (PVar "ownedCtor") PWild)) (EIf (EVar "ctors") (EApp (EVar "isSome") (EVar "ownedType")) (EApp (EVar "isSome") (EVar "ownedCtor"))))
+(DTypeSig false "overlayScanOne" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyTuple (TyApp (TyCon "Option") (TyCon "Decl")) (TyApp (TyCon "Option") (TyCon "Decl")) (TyApp (TyCon "Option") (TyCon "Decl"))) (TyFun (TyCon "Decl") (TyTuple (TyApp (TyCon "Option") (TyCon "Decl")) (TyApp (TyCon "Option") (TyCon "Decl")) (TyApp (TyCon "Option") (TyCon "Decl"))))))))
+(DFunDef false "overlayScanOne" ((PVar "mid") (PVar "n") (PVar "acc") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EApp (EApp (EVar "overlayScanOne") (EVar "mid")) (EVar "n")) (EVar "acc")) (EVar "d")))
+(DFunDef false "overlayScanOne" ((PVar "mid") (PVar "n") (PVar "acc") (PAs "d" (PRec "DData" ((rf "dataName" (PVar "tn")) (rf "dataOrigin" (PVar "o"))) false))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "overlayNote") (EVar "mid")) (EVar "n")) (EVar "tn")) (EVar "o")) (EVar "d")) (EVar "acc")))
+(DFunDef false "overlayScanOne" ((PVar "mid") (PVar "n") (PVar "acc") (PAs "d" (PRec "DNewtype" ((rf "newtypeName" (PVar "tn")) (rf "newtypeOrigin" (PVar "o"))) false))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "overlayNote") (EVar "mid")) (EVar "n")) (EVar "tn")) (EVar "o")) (EVar "d")) (EVar "acc")))
+(DFunDef false "overlayScanOne" (PWild PWild (PVar "acc") PWild) (EVar "acc"))
+(DTypeSig false "overlayNote" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "Decl") (TyFun (TyTuple (TyApp (TyCon "Option") (TyCon "Decl")) (TyApp (TyCon "Option") (TyCon "Decl")) (TyApp (TyCon "Option") (TyCon "Decl"))) (TyTuple (TyApp (TyCon "Option") (TyCon "Decl")) (TyApp (TyCon "Option") (TyCon "Decl")) (TyApp (TyCon "Option") (TyCon "Decl"))))))))))
+(DFunDef false "overlayNote" ((PVar "mid") (PVar "n") (PVar "tn") (PVar "o") (PVar "d") (PVar "acc")) (EMatch (EVar "acc") (arm (PTuple (PVar "ownedType") (PVar "ownedCtor") (PVar "bareType")) () (EBlock (DoLet false false (PVar "hitType") (EBinOp "==" (EVar "tn") (EVar "n"))) (DoLet false false (PVar "hitCtor") (EApp (EApp (EVar "declCtorNamed") (EVar "n")) (EVar "d"))) (DoExpr (EIf (EBinOp "||" (EVar "hitType") (EVar "hitCtor")) (EBlock (DoLet false false (PVar "owned") (EApp (EApp (EApp (EVar "declOwnedBy") (EVar "mid")) (EVar "tn")) (EVar "o"))) (DoExpr (ETuple (EIf (EBinOp "&&" (EVar "hitType") (EVar "owned")) (EApp (EApp (EVar "orElseOpt") (EVar "ownedType")) (EApp (EVar "Some") (EVar "d"))) (EVar "ownedType")) (EIf (EBinOp "&&" (EVar "hitCtor") (EVar "owned")) (EApp (EApp (EVar "orElseOpt") (EVar "ownedCtor")) (EApp (EVar "Some") (EVar "d"))) (EVar "ownedCtor")) (EIf (EVar "hitType") (EApp (EApp (EVar "orElseOpt") (EVar "bareType")) (EApp (EVar "Some") (EVar "d"))) (EVar "bareType"))))) (EVar "acc")))))))
 (DTypeSig false "declCtorNamed" (TyFun (TyCon "String") (TyFun (TyCon "Decl") (TyCon "Bool"))))
 (DFunDef false "declCtorNamed" ((PVar "n") (PRec "DData" ((rf "dataCtors" (PVar "vs"))) false)) (EApp (EApp (EVar "variantNamed") (EVar "n")) (EVar "vs")))
 (DFunDef false "declCtorNamed" ((PVar "n") (PRec "DNewtype" ((rf "newtypeCtor" (PVar "cn"))) false)) (EBinOp "==" (EVar "cn") (EVar "n")))
@@ -26014,14 +26104,6 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "variantNamed" ((PVar "n") (PCons (PCon "Variant" (PVar "cn") PWild) (PVar "rest"))) (EBinOp "||" (EBinOp "==" (EVar "cn") (EVar "n")) (EApp (EApp (EVar "variantNamed") (EVar "n")) (EVar "rest"))))
 (DTypeSig false "declOwnedBy" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyCon "Bool")))))
 (DFunDef false "declOwnedBy" ((PVar "mid") (PVar "tyName") (PVar "o")) (EMatch (EApp (EApp (EApp (EVar "mkIdent") (EVar "NsType")) (EApp (EVar "OriginModule") (EVar "mid"))) (EVar "tyName")) (arm (PCon "Some" (PVar "want")) () (EBinOp "==" (EApp (EApp (EApp (EVar "mkIdent") (EVar "NsType")) (EVar "o")) (EVar "tyName")) (EApp (EVar "Some") (EVar "want")))) (arm (PCon "None") () (EVar "False"))))
-(DTypeSig false "dataDeclForType" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))
-(DFunDef false "dataDeclForType" ((PVar "pool") (PVar "name")) (EMatch (EApp (EApp (EVar "findDataDeclNamed") (EVar "name")) (EVar "pool")) (arm (PCon "Some" (PVar "d")) () (EListLit (EVar "d"))) (arm (PCon "None") () (EListLit))))
-(DTypeSig false "findDataDeclNamed" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "Option") (TyCon "Decl")))))
-(DFunDef false "findDataDeclNamed" (PWild (PList)) (EVar "None"))
-(DFunDef false "findDataDeclNamed" ((PVar "name") (PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EMatch (EApp (EApp (EVar "findDataDeclNamed") (EVar "name")) (EListLit (EVar "d"))) (arm (PCon "Some" (PVar "x")) () (EApp (EVar "Some") (EVar "x"))) (arm (PCon "None") () (EApp (EApp (EVar "findDataDeclNamed") (EVar "name")) (EVar "rest")))))
-(DFunDef false "findDataDeclNamed" ((PVar "name") (PCons (PAs "d" (PRec "DData" ((rf "dataName" (PVar "n"))) false)) (PVar "rest"))) (EIf (EBinOp "==" (EVar "n") (EVar "name")) (EApp (EVar "Some") (EVar "d")) (EApp (EApp (EVar "findDataDeclNamed") (EVar "name")) (EVar "rest"))))
-(DFunDef false "findDataDeclNamed" ((PVar "name") (PCons (PAs "d" (PRec "DNewtype" ((rf "newtypeName" (PVar "n"))) false)) (PVar "rest"))) (EIf (EBinOp "==" (EVar "n") (EVar "name")) (EApp (EVar "Some") (EVar "d")) (EApp (EApp (EVar "findDataDeclNamed") (EVar "name")) (EVar "rest"))))
-(DFunDef false "findDataDeclNamed" ((PVar "name") (PCons PWild (PVar "rest"))) (EApp (EApp (EVar "findDataDeclNamed") (EVar "name")) (EVar "rest")))
 (DTypeSig false "importDefinersOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
 (DFunDef false "importDefinersOf" ((PList)) (EListLit))
 (DFunDef false "importDefinersOf" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EBinOp "++" (EApp (EVar "importDefinersOf") (EListLit (EVar "d"))) (EApp (EVar "importDefinersOf") (EVar "rest"))))
@@ -30335,19 +30417,21 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "importOverlayDecls" ((PVar "pool") (PCon "DUse" PWild (PAs "p" (PCon "UseGroup" PWild (PVar "ms"))) PWild)) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "memberOverlayDecl") (EVar "pool")) (EApp (EVar "usePathModuleId") (EVar "p")))) (EVar "ms")))
 (DFunDef false "importOverlayDecls" (PWild PWild) (EListLit))
 (DTypeSig false "memberOverlayDecl" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyFun (TyCon "UseMember") (TyApp (TyCon "List") (TyCon "Decl"))))))
-(DFunDef false "memberOverlayDecl" ((PVar "pool") (PVar "mid") (PCon "UseMember" (PVar "n") (PVar "ctors") PWild PWild)) (EMatch (EApp (EApp (EApp (EApp (EVar "findOverlayDecl") (EVar "mid")) (EVar "n")) (EVar "ctors")) (EVar "pool")) (arm (PCon "Some" (PVar "d")) () (EListLit (EVar "d"))) (arm (PCon "None") () (EIf (EVar "ctors") (EApp (EApp (EVar "dataDeclForType") (EVar "pool")) (EVar "n")) (EListLit)))))
+(DFunDef false "memberOverlayDecl" ((PVar "pool") (PVar "mid") (PCon "UseMember" (PVar "n") (PVar "ctors") PWild PWild)) (EMatch (EApp (EApp (EApp (EApp (EVar "findOverlayDecl") (EVar "mid")) (EVar "n")) (EVar "ctors")) (EVar "pool")) (arm (PCon "Some" (PVar "d")) () (EListLit (EVar "d"))) (arm (PCon "None") () (EListLit))))
 (DTypeSig false "findOverlayDecl" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "Option") (TyCon "Decl")))))))
-(DFunDef false "findOverlayDecl" ((PVar "mid") (PVar "n") (PVar "ctors") (PVar "pool")) (EIf (EVar "ctors") (EMatch (EApp (EApp (EApp (EVar "findOwnedDecl") (EVar "mid")) (EApp (EVar "declTypeNamed") (EVar "n"))) (EVar "pool")) (arm (PCon "Some" (PVar "d")) () (EApp (EVar "Some") (EVar "d"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "findOwnedDecl") (EVar "mid")) (EApp (EVar "declCtorNamed") (EVar "n"))) (EVar "pool")))) (EApp (EApp (EApp (EVar "findOwnedDecl") (EVar "mid")) (EApp (EVar "declCtorNamed") (EVar "n"))) (EVar "pool"))))
-(DTypeSig false "findOwnedDecl" (TyFun (TyCon "String") (TyFun (TyFun (TyCon "Decl") (TyCon "Bool")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "Option") (TyCon "Decl"))))))
-(DFunDef false "findOwnedDecl" (PWild PWild (PList)) (EVar "None"))
-(DFunDef false "findOwnedDecl" ((PVar "mid") (PVar "p") (PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EMatch (EApp (EApp (EApp (EVar "findOwnedDecl") (EVar "mid")) (EVar "p")) (EListLit (EVar "d"))) (arm (PCon "Some" (PVar "x")) () (EApp (EVar "Some") (EVar "x"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "findOwnedDecl") (EVar "mid")) (EVar "p")) (EVar "rest")))))
-(DFunDef false "findOwnedDecl" ((PVar "mid") (PVar "p") (PCons (PAs "d" (PRec "DData" ((rf "dataName" (PVar "tn")) (rf "dataOrigin" (PVar "o"))) false)) (PVar "rest"))) (EIf (EBinOp "&&" (EApp (EApp (EApp (EVar "declOwnedBy") (EVar "mid")) (EVar "tn")) (EVar "o")) (EApp (EVar "p") (EVar "d"))) (EApp (EVar "Some") (EVar "d")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "findOwnedDecl") (EVar "mid")) (EVar "p")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DFunDef false "findOwnedDecl" ((PVar "mid") (PVar "p") (PCons (PAs "d" (PRec "DNewtype" ((rf "newtypeName" (PVar "tn")) (rf "newtypeOrigin" (PVar "o"))) false)) (PVar "rest"))) (EIf (EBinOp "&&" (EApp (EApp (EApp (EVar "declOwnedBy") (EVar "mid")) (EVar "tn")) (EVar "o")) (EApp (EVar "p") (EVar "d"))) (EApp (EVar "Some") (EVar "d")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "findOwnedDecl") (EVar "mid")) (EVar "p")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DFunDef false "findOwnedDecl" ((PVar "mid") (PVar "p") (PCons PWild (PVar "rest"))) (EApp (EApp (EApp (EVar "findOwnedDecl") (EVar "mid")) (EVar "p")) (EVar "rest")))
-(DTypeSig false "declTypeNamed" (TyFun (TyCon "String") (TyFun (TyCon "Decl") (TyCon "Bool"))))
-(DFunDef false "declTypeNamed" ((PVar "n") (PRec "DData" ((rf "dataName" (PVar "tn"))) false)) (EBinOp "==" (EVar "tn") (EVar "n")))
-(DFunDef false "declTypeNamed" ((PVar "n") (PRec "DNewtype" ((rf "newtypeName" (PVar "tn"))) false)) (EBinOp "==" (EVar "tn") (EVar "n")))
-(DFunDef false "declTypeNamed" (PWild PWild) (EVar "False"))
+(DFunDef false "findOverlayDecl" ((PVar "mid") (PVar "n") (PVar "ctors") (PVar "pool")) (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "overlayScan") (EVar "mid")) (EVar "n")) (EVar "ctors")) (ETuple (EVar "None") (EVar "None") (EVar "None"))) (EVar "pool")) (arm (PTuple (PVar "ownedType") (PVar "ownedCtor") (PVar "bareType")) () (EIf (EVar "ctors") (EApp (EApp (EVar "orElseOpt") (EApp (EApp (EVar "orElseOpt") (EVar "ownedType")) (EVar "ownedCtor"))) (EVar "bareType")) (EVar "ownedCtor")))))
+(DTypeSig false "overlayScan" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Bool") (TyFun (TyTuple (TyApp (TyCon "Option") (TyCon "Decl")) (TyApp (TyCon "Option") (TyCon "Decl")) (TyApp (TyCon "Option") (TyCon "Decl"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyApp (TyCon "Option") (TyCon "Decl")) (TyApp (TyCon "Option") (TyCon "Decl")) (TyApp (TyCon "Option") (TyCon "Decl")))))))))
+(DFunDef false "overlayScan" (PWild PWild PWild (PVar "acc") (PList)) (EVar "acc"))
+(DFunDef false "overlayScan" ((PVar "mid") (PVar "n") (PVar "ctors") (PVar "acc") (PCons (PVar "d") (PVar "rest"))) (EBlock (DoLet false false (PVar "acc2") (EApp (EApp (EApp (EApp (EVar "overlayScanOne") (EVar "mid")) (EVar "n")) (EVar "acc")) (EVar "d"))) (DoExpr (EIf (EApp (EApp (EVar "overlayDecided") (EVar "ctors")) (EVar "acc2")) (EVar "acc2") (EApp (EApp (EApp (EApp (EApp (EVar "overlayScan") (EVar "mid")) (EVar "n")) (EVar "ctors")) (EVar "acc2")) (EVar "rest"))))))
+(DTypeSig false "overlayDecided" (TyFun (TyCon "Bool") (TyFun (TyTuple (TyApp (TyCon "Option") (TyCon "Decl")) (TyApp (TyCon "Option") (TyCon "Decl")) (TyApp (TyCon "Option") (TyCon "Decl"))) (TyCon "Bool"))))
+(DFunDef false "overlayDecided" ((PVar "ctors") (PTuple (PVar "ownedType") (PVar "ownedCtor") PWild)) (EIf (EVar "ctors") (EApp (EVar "isSome") (EVar "ownedType")) (EApp (EVar "isSome") (EVar "ownedCtor"))))
+(DTypeSig false "overlayScanOne" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyTuple (TyApp (TyCon "Option") (TyCon "Decl")) (TyApp (TyCon "Option") (TyCon "Decl")) (TyApp (TyCon "Option") (TyCon "Decl"))) (TyFun (TyCon "Decl") (TyTuple (TyApp (TyCon "Option") (TyCon "Decl")) (TyApp (TyCon "Option") (TyCon "Decl")) (TyApp (TyCon "Option") (TyCon "Decl"))))))))
+(DFunDef false "overlayScanOne" ((PVar "mid") (PVar "n") (PVar "acc") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EApp (EApp (EVar "overlayScanOne") (EVar "mid")) (EVar "n")) (EVar "acc")) (EVar "d")))
+(DFunDef false "overlayScanOne" ((PVar "mid") (PVar "n") (PVar "acc") (PAs "d" (PRec "DData" ((rf "dataName" (PVar "tn")) (rf "dataOrigin" (PVar "o"))) false))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "overlayNote") (EVar "mid")) (EVar "n")) (EVar "tn")) (EVar "o")) (EVar "d")) (EVar "acc")))
+(DFunDef false "overlayScanOne" ((PVar "mid") (PVar "n") (PVar "acc") (PAs "d" (PRec "DNewtype" ((rf "newtypeName" (PVar "tn")) (rf "newtypeOrigin" (PVar "o"))) false))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "overlayNote") (EVar "mid")) (EVar "n")) (EVar "tn")) (EVar "o")) (EVar "d")) (EVar "acc")))
+(DFunDef false "overlayScanOne" (PWild PWild (PVar "acc") PWild) (EVar "acc"))
+(DTypeSig false "overlayNote" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "Decl") (TyFun (TyTuple (TyApp (TyCon "Option") (TyCon "Decl")) (TyApp (TyCon "Option") (TyCon "Decl")) (TyApp (TyCon "Option") (TyCon "Decl"))) (TyTuple (TyApp (TyCon "Option") (TyCon "Decl")) (TyApp (TyCon "Option") (TyCon "Decl")) (TyApp (TyCon "Option") (TyCon "Decl"))))))))))
+(DFunDef false "overlayNote" ((PVar "mid") (PVar "n") (PVar "tn") (PVar "o") (PVar "d") (PVar "acc")) (EMatch (EVar "acc") (arm (PTuple (PVar "ownedType") (PVar "ownedCtor") (PVar "bareType")) () (EBlock (DoLet false false (PVar "hitType") (EBinOp "==" (EVar "tn") (EVar "n"))) (DoLet false false (PVar "hitCtor") (EApp (EApp (EVar "declCtorNamed") (EVar "n")) (EVar "d"))) (DoExpr (EIf (EBinOp "||" (EVar "hitType") (EVar "hitCtor")) (EBlock (DoLet false false (PVar "owned") (EApp (EApp (EApp (EVar "declOwnedBy") (EVar "mid")) (EVar "tn")) (EVar "o"))) (DoExpr (ETuple (EIf (EBinOp "&&" (EVar "hitType") (EVar "owned")) (EApp (EApp (EVar "orElseOpt") (EVar "ownedType")) (EApp (EVar "Some") (EVar "d"))) (EVar "ownedType")) (EIf (EBinOp "&&" (EVar "hitCtor") (EVar "owned")) (EApp (EApp (EVar "orElseOpt") (EVar "ownedCtor")) (EApp (EVar "Some") (EVar "d"))) (EVar "ownedCtor")) (EIf (EVar "hitType") (EApp (EApp (EVar "orElseOpt") (EVar "bareType")) (EApp (EVar "Some") (EVar "d"))) (EVar "bareType"))))) (EVar "acc")))))))
 (DTypeSig false "declCtorNamed" (TyFun (TyCon "String") (TyFun (TyCon "Decl") (TyCon "Bool"))))
 (DFunDef false "declCtorNamed" ((PVar "n") (PRec "DData" ((rf "dataCtors" (PVar "vs"))) false)) (EApp (EApp (EVar "variantNamed") (EVar "n")) (EVar "vs")))
 (DFunDef false "declCtorNamed" ((PVar "n") (PRec "DNewtype" ((rf "newtypeCtor" (PVar "cn"))) false)) (EBinOp "==" (EVar "cn") (EVar "n")))
@@ -30357,14 +30441,6 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "variantNamed" ((PVar "n") (PCons (PCon "Variant" (PVar "cn") PWild) (PVar "rest"))) (EBinOp "||" (EBinOp "==" (EVar "cn") (EVar "n")) (EApp (EApp (EVar "variantNamed") (EVar "n")) (EVar "rest"))))
 (DTypeSig false "declOwnedBy" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyCon "Bool")))))
 (DFunDef false "declOwnedBy" ((PVar "mid") (PVar "tyName") (PVar "o")) (EMatch (EApp (EApp (EApp (EVar "mkIdent") (EVar "NsType")) (EApp (EVar "OriginModule") (EVar "mid"))) (EVar "tyName")) (arm (PCon "Some" (PVar "want")) () (EBinOp "==" (EApp (EApp (EApp (EVar "mkIdent") (EVar "NsType")) (EVar "o")) (EVar "tyName")) (EApp (EVar "Some") (EVar "want")))) (arm (PCon "None") () (EVar "False"))))
-(DTypeSig false "dataDeclForType" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))
-(DFunDef false "dataDeclForType" ((PVar "pool") (PVar "name")) (EMatch (EApp (EApp (EVar "findDataDeclNamed") (EVar "name")) (EVar "pool")) (arm (PCon "Some" (PVar "d")) () (EListLit (EVar "d"))) (arm (PCon "None") () (EListLit))))
-(DTypeSig false "findDataDeclNamed" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "Option") (TyCon "Decl")))))
-(DFunDef false "findDataDeclNamed" (PWild (PList)) (EVar "None"))
-(DFunDef false "findDataDeclNamed" ((PVar "name") (PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EMatch (EApp (EApp (EVar "findDataDeclNamed") (EVar "name")) (EListLit (EVar "d"))) (arm (PCon "Some" (PVar "x")) () (EApp (EVar "Some") (EVar "x"))) (arm (PCon "None") () (EApp (EApp (EVar "findDataDeclNamed") (EVar "name")) (EVar "rest")))))
-(DFunDef false "findDataDeclNamed" ((PVar "name") (PCons (PAs "d" (PRec "DData" ((rf "dataName" (PVar "n"))) false)) (PVar "rest"))) (EIf (EBinOp "==" (EVar "n") (EVar "name")) (EApp (EVar "Some") (EVar "d")) (EApp (EApp (EVar "findDataDeclNamed") (EVar "name")) (EVar "rest"))))
-(DFunDef false "findDataDeclNamed" ((PVar "name") (PCons (PAs "d" (PRec "DNewtype" ((rf "newtypeName" (PVar "n"))) false)) (PVar "rest"))) (EIf (EBinOp "==" (EVar "n") (EVar "name")) (EApp (EVar "Some") (EVar "d")) (EApp (EApp (EVar "findDataDeclNamed") (EVar "name")) (EVar "rest"))))
-(DFunDef false "findDataDeclNamed" ((PVar "name") (PCons PWild (PVar "rest"))) (EApp (EApp (EVar "findDataDeclNamed") (EVar "name")) (EVar "rest")))
 (DTypeSig false "importDefinersOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
 (DFunDef false "importDefinersOf" ((PList)) (EListLit))
 (DFunDef false "importDefinersOf" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EBinOp "++" (EApp (EVar "importDefinersOf") (EListLit (EVar "d"))) (EApp (EVar "importDefinersOf") (EVar "rest"))))

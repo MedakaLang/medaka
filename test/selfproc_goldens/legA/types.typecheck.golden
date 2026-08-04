@@ -344,7 +344,6 @@ currentLocalSchemes : Unit -> List (String, Scheme)
 currentMethodMismatch : Ref (Option String)
 currentSeedSchemes : Unit -> List (String, Scheme)
 cyclicSuperIfaceMsg : List String -> String
-dataDeclForType : List Decl -> String -> List Decl
 deAliasMethodImports : List (String, List String) -> Decl -> List Decl
 deAliasMethodMember : List String -> UseMember -> UseMember
 declBodyVars : String -> List Decl -> List String
@@ -357,7 +356,6 @@ declMethodNames : List Decl -> List String
 declMethodNamesOf : Decl -> List String
 declOwnedBy : String -> String -> TyConOrigin -> Bool
 declTopFnNames : List Decl -> List String
-declTypeNamed : String -> Decl -> Bool
 declaredConstraintArgs : String -> List (List Mono)
 declaredConstraintSlots : String -> (List Int, List String)
 declaredCrossModuleObls : String -> Option (List (String, List Int))
@@ -529,13 +527,11 @@ filterImplTysFor : List Decl -> String -> String -> List (List Ty)
 filterMaybeIds : List (Option Int) -> List Int
 filterNonSelf : String -> List String -> List String
 findAtom : String -> List Atom -> Option Atom
-findDataDeclNamed : String -> List Decl -> Option Decl
 findImplEntry : Map String (List ImplEntry) -> String -> String -> Mono -> Option ImplEntry
 findImplEntryGo : List ImplEntry -> String -> String -> Mono -> Option ImplEntry
 findMatchingImplReqsU : ImplUniverse -> String -> List Mono -> Option (List (String, Mono), List Require)
 findMostSpecificEntry : List KeyEntry -> List KeyEntry -> Option KeyEntry
 findOverlayDecl : String -> String -> Bool -> List Decl -> Option Decl
-findOwnedDecl : String -> (Decl -> Bool) -> List Decl -> Option Decl
 findSigTvMap : String -> List (String, Ty, List (String, Mono)) -> Option (List (String, Mono))
 findTupleCand : String -> List (Mono, String, Option (Loc, String)) -> Option (String, Option (Loc, String))
 findTvName : Int -> List (String, Mono) -> Option String
@@ -1032,6 +1028,10 @@ openRowHint : List Atom -> String
 ordCompareOp : Mono -> Mono -> Mono
 originPhrase : TyConOrigin -> String
 overAppliedMsg : String -> Int -> Int -> String
+overlayDecided : Bool -> (Option Decl, Option Decl, Option Decl) -> Bool
+overlayNote : String -> String -> String -> TyConOrigin -> Decl -> (Option Decl, Option Decl, Option Decl) -> (Option Decl, Option Decl, Option Decl)
+overlayScan : String -> String -> Bool -> (Option Decl, Option Decl, Option Decl) -> List Decl -> (Option Decl, Option Decl, Option Decl)
+overlayScanOne : String -> String -> (Option Decl, Option Decl, Option Decl) -> Decl -> (Option Decl, Option Decl, Option Decl)
 overrideScopedMethods : List Decl -> Map String (List (Ident, (String, List String, Ty, List (String, List Kind)))) -> List String -> Map String (String, List String, Ty, List (String, List Kind)) -> Map String (String, List String, Ty, List (String, List Kind))
 ownMethodIdent : List Decl -> String -> Option Ident
 pairIface : String -> Int -> List (String, Int)
