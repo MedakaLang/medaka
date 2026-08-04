@@ -1,5 +1,5 @@
 # META
-source_lines=20851
+source_lines=21071
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted typecheck stage — port of lib/typecheck.ml's HM core.  SLICE 1:
@@ -64,7 +64,26 @@ import frontend.ast.{
 -- `TabKey`, not by a bare `String`.  See `tabKeyOf`'s doc-comment in that
 -- module for why these two tables keep the assoc list rather than becoming a
 -- `Registry`, and `tyTabKey` below for the miss policy.
-import types.registry.{TabKey(..), tabKeyOf, tabKeyName, lookupTab, tabHasName}
+-- #1111 Stage A-2 unit A-2.4: the INTERFACE-namespace re-key.
+-- `universeIfaceRequiredRef` becomes a `Registry` and `ifaceParamKindsRef` /
+-- `universeIfaceParamKinds` become `RegKey`-keyed assoc lists, both minted
+-- through `ifaceTabKey` below.  `universeRegisteredIfacesRef` is deliberately
+-- NOT re-keyed — see `ifaceRegistered`.
+import types.registry.{
+  TabKey(..),
+  tabKeyOf,
+  tabKeyName,
+  lookupTab,
+  tabHasName,
+  RegKey,
+  Registry,
+  regKeyOfTab,
+  regKeyTabAt,
+  lookupReg,
+  regEmpty,
+  regInsertK,
+  regLookupK,
+}
 import frontend.desugar.{mapProg}
 import frontend.marker.{localBoundNames}
 import frontend.resolve.{
@@ -1499,6 +1518,89 @@ argPerformableOccs _ _ = []
 tyTabKey : TyConOrigin -> String -> TabKey
 tyTabKey o n = tabKeyOf NsType o n
 
+-- ── #1111 A-2.4: the INTERFACE-namespace table key ────────────────────────
+-- `tyTabKey`'s peer for the `NsIface` namespace, and the ONE place a key for
+-- `universeIfaceRequiredRef` or `ifaceParamKindsRef` is minted — on both the
+-- write side and the read side.
+--
+-- ── The two sides, and WHY they meet ──────────────────────────────────────
+-- The WRITE side always passes a `DInterface`'s `ifaceOrigin`: the DECLARATION
+-- layer, stamped by `stampDeclOrigins mid` (`frontend/resolve.mdk`) with the
+-- module that declared it.  The READ side always passes a `DImpl`'s
+-- `implOrigin`: the OCCURRENCE layer, stamped by `stampTyOrigins` from
+-- `tyOriginScope`, which maps an interface NAME to the module that DECLARED
+-- it (own layer `ownIfaceOrigin mid`, imported layer `importedTypeOrigins`).
+-- So both sides name the DECLARING module and the two meet — that agreement,
+-- not the miss policy, is what makes this key work.  It is the same
+-- per-population stamping-agreement argument A-2.3 wrote onto `tyTabKey`,
+-- one namespace over; both layers are produced by `stampOneModule`
+-- (`resolve.mdk`), in one function, so they cannot drift apart.
+-- Checked, not assumed: `test/origin_fixtures/graph/agreement.golden` records
+-- `alpha iface:Weighable … graph=mod:alpha` for a user interface and
+-- `iface:<Name> 1 mod:core` for every prelude one.
+--
+-- ── MISS POLICY: a miss ABSTAINS.  Derivation ─────────────────────────────
+-- Both readers already abstain on a miss and this unit does not change that:
+--   * `implCompletenessMsgsOfMap`'s `None` arm is `[]` with the pre-existing
+--     comment "unknown interface (reported elsewhere) → skip".  An `impl` of
+--     an interface that is genuinely not in scope is reported by RESOLVE
+--     (`R-*`), so a second complaint here would be a worse-worded duplicate.
+--   * `checkGradedImplTys`' `_ =>` arm is `()`, and its own doc-comment
+--     already enumerates the legitimate misses (a NON-graded interface, which
+--     records an all-`KType` row and is filtered by `anyKRow`; an interface
+--     with fewer parameters than the impl has type arguments).
+-- "Miss ⇒ hard diagnostic" is therefore not available for either, and it is
+-- not a residual: with an identity key the ONLY new miss is "this impl's
+-- interface resolved to a module that declares no such interface", which
+-- cannot happen for an accepted program — resolve rejects the impl first.
+--
+-- ── THE IDENTITY-LESS PATH ────────────────────────────────────────────────
+-- 🚨 Same MODULE-PATH-ONLY bound A-2.3 recorded, and for the interface
+-- namespace it bites HARDER, because `ifaceParamKindsRef` is read on BOTH
+-- driver arms: `checkGradedImplHeads` is called from `checkBodyImpl`, which
+-- Flat and Module share.  On the FLAT path `checkProgramSeededSplit` runs
+-- `stampDeclOrigins "core" coreProgTy`, so the PRELUDE's interfaces are
+-- `TkIdent`; every flat USER interface is `OriginUnresolved` and keys
+-- `TkBare`, and so does a flat user `impl`'s `implOrigin` — the two halves
+-- still meet, because they are stamped by the same pass over the same scope.
+-- That is why `RegKey` had to grow a bare half for this unit (see its
+-- doc-comment in `types/registry.mdk`): an `Ident`-only key would have made
+-- every flat interface unregisterable, silently switching the graded
+-- instance-head kind check OFF for `medaka check` on a no-import file.
+-- Giving the flat path real identity is #1115 (E-1), not this unit.
+--
+-- ⚠️ ONE CROSS-POPULATION SHAPE EXISTS AND IT IS UNREACHABLE, NOT MERELY
+-- UNLIKELY: a FLAT program declaring `impl <prelude iface> T`.  Its
+-- `implOrigin` is stamped from `flatTyOriginScope`, which DOES carry the
+-- prelude's own interfaces as `mod:core` (`resolve.mdk`, the `ifaceDeclaredIn
+-- "core"` term), so such an impl keys `TkIdent … core` and meets the
+-- prelude's own `TkIdent … core` declaration row.  The mismatch shape would
+-- need a flat impl of a prelude interface whose occurrence was NOT in that
+-- scope, and there is no such producer: the scope is built from exactly
+-- `interfaceNamesOf coreDecls`, the same decl list `stampDeclOrigins "core"`
+-- stamps.
+--
+-- ⚠️ AND THAT ARGUMENT IS STRUCTURAL, ONLY STRUCTURAL.  This paragraph used to
+-- end "Verified behaviourally, not only by reading", citing
+-- `test/typecheck_error_fixtures/graded_head_wrong_kind_flat.mdk`.  That
+-- fixture cannot witness it: it declares its OWN `interface Graded`, so what it
+-- exercises is a `TkBare` ↔ `TkBare` meeting, not the `TkIdent … core` ↔
+-- `TkIdent … core` one this paragraph is about.  No fixture witnesses this
+-- shape, and today none CAN: the FLAT arm reads only `ifaceParamKindsRef` (the
+-- completeness table is Module-only — see the mode switch feeding
+-- `checkImplCompletenessMap`), and there a HIT on a non-graded prelude row and
+-- an outright MISS both take `checkGradedImplTys`' `_ => ()` arm.  A prelude
+-- interface would have to become GRADED for the difference to be observable at
+-- all.  None is — DERIVE that, do not trust this sentence: a single file with
+-- `impl <each higher-kinded prelude iface> Q` over `data Q a b = MkQ a b`, plus
+-- one locally-declared graded interface as a POSITIVE CONTROL, yields exactly
+-- ONE T-IMPL-KIND-MISMATCH and it names the LOCAL interface (run against this
+-- HEAD, `medaka check --json`).  So the unreachability claim above rests on
+-- reading `resolve.mdk`; the residual risk is this comment rotting, not a
+-- missing gate.
+ifaceTabKey : TyConOrigin -> String -> TabKey
+ifaceTabKey o n = tabKeyOf NsIface o n
+
 -- one ctor node: its bare row-kinded slots (if performable) + recurse the args
 krowSlotOccs : Bool -> TyConOrigin -> String -> List Ty -> List (String, List Atom)
 krowSlotOccs perf o n args = match lookupTab (tyTabKey o n) perRun.value.dataParamKindsRef.value
@@ -1587,40 +1689,57 @@ checkGradedImplHeads (d::rest) =
   let _ = checkGradedImplHeadDecl d
   checkGradedImplHeads rest
 
+-- OCCURRENCE MINT (#1110/#1111 A-2.4): `implOrigin` is the identity the
+-- interface NAME in `impl <iface> …` acquired at resolve — read off the same record
+-- pattern as the name itself so the two cannot drift apart, exactly as A-2.3 reads
+-- `tyConOrigin` beside `tyConName`.
 checkGradedImplHeadDecl : Decl -> Unit
 checkGradedImplHeadDecl (DAttrib _ d) = checkGradedImplHeadDecl d
-checkGradedImplHeadDecl (DImpl { iface, tys, ... }) =
-  checkGradedImplTys iface 0 tys
+checkGradedImplHeadDecl (DImpl { iface, tys, implOrigin = o, ... }) =
+  checkGradedImplTys o iface 0 tys
 checkGradedImplHeadDecl _ = ()
 
--- ⚠️ THE ONLY reader of `ifaceParamKindsRef`'s bare-name `<iface>@<slot>` key, and it is
--- a DIAGNOSTIC.  That is deliberate and load-bearing.  A flat table keyed by a bare
--- `String` name and populated across module boundaries is last-write-wins with a SILENT
--- loss — the root cause behind the eval-frame ctor collision, #1044, #1047, and the
--- first cut of #822 itself, where this table was ALSO keyed by the bare typaram name and
--- re-kinded every arity-matching application in the program.  Choosing a namespace that
--- is merely *less likely* to clash is not a fix: #1044 was CREATED by relocating exactly
--- this defect to a rarer namespace.
+-- ⚠️ THE ONLY reader of `ifaceParamKindsRef`, and it is a DIAGNOSTIC.
+-- 🚨 RE-DERIVED FOR A-2.4, NOT INHERITED: `grep -n 'ifaceParamKindsRef' ` this file
+-- gives the field's declaration + initializer (PerRun), the writer
+-- (`insertIfaceParamKinds`), the two whole-ref copies into/out of the cross-run
+-- universe (`checkBodyImpl`'s Module arm) and this ONE `lookupReg`.  No elaboration
+-- seam reads it — see the next paragraph for why that is load-bearing rather than
+-- incidental.
 --
--- So no ELABORATION seam reads this table.  Every seam that turns a method signature
--- into a Mono takes its scope from the DECLARATION (`declGradedScope`) or from the very
--- resolution result that produced the signature (`ifaceMethodTyResolved`, which carries
--- the scope in the same tuple as `mty` so the two cannot be resolved differently).
+-- ⚠️ THE PARAGRAPH THAT USED TO BE HERE IS NOW WRONG IN ITS CONCLUSION, so it is
+-- corrected rather than deleted — a reader who remembers it would otherwise think
+-- this table is still bare-name-keyed.  It said the key is `<iface>@<slot>` with "no
+-- module qualifier", that keying it properly "would need a resolved module identity,
+-- and typecheck.mdk carries none for an interface", and that this was "#1047's
+-- territory".  All three are now false: `DImpl` carries `implOrigin` and `DInterface`
+-- carries `ifaceOrigin` (#1110 Stage A-1), the key is a `RegKey` minted by
+-- `ifaceTabKey` + `regKeyTabAt`, and #1047 was closed by PR #1264 in the BACKEND
+-- (`CImplDefault`'s interface identity), not here.  What REMAINS true and is worth
+-- keeping: the reason no elaboration seam may read this table.  A flat table keyed by
+-- a bare `String` and populated across module boundaries is last-write-wins with a
+-- SILENT loss — the root cause behind the eval-frame ctor collision, #1044, #1047, and
+-- the first cut of #822 itself, where this table was ALSO keyed by the bare typaram
+-- name and re-kinded every arity-matching application in the program.  Choosing a
+-- namespace that is merely *less likely* to clash is not a fix: #1044 was CREATED by
+-- relocating exactly this defect to a rarer namespace.  So every seam that turns a
+-- method signature into a Mono still takes its scope from the DECLARATION
+-- (`declGradedScope`) or from the very resolution result that produced the signature
+-- (`ifaceMethodTyResolved`, which carries the scope in the same tuple as `mty` so the
+-- two cannot be resolved differently).  Identity-keying this table does not license
+-- an elaboration seam to start reading it.
 --
--- Severity tracks REACH, not rarity.  Because the only reader is this diagnostic, the
--- worst case of an `<iface>@<slot>` collision — two graded interfaces sharing a NAME
--- across modules — is a kind error judged against the wrong slot kinds, or not reported
--- at all: bounded to those two interfaces, never silent wrongness in a program's types.
--- Keying it properly would need a resolved module identity, and typecheck.mdk carries
--- none for an interface (`ifaceMethodTy` itself matches on `name == iface`). That is
--- #1047's territory, upstream of #822 — which this must not pretend to have fixed.
-checkGradedImplTys : String -> Int -> List Ty -> Unit
-checkGradedImplTys _ _ [] = ()
-checkGradedImplTys iface i (t::rest) =
-  let _ = match lookupAssoc (ifaceSlotKey iface i) perRun.value.ifaceParamKindsRef.value
+-- What the re-key DRAINS is #1257: two same-named interfaces, one graded, one not,
+-- in unrelated modules — the impl was judged against whichever registered LAST, so
+-- `impl Same P` (naming `pmod.Same`, ungraded) was rejected with T-IMPL-KIND-MISMATCH
+-- for failing `gmod.Same`'s `Row -> Type -> Type`.  Import order selected the symptom.
+checkGradedImplTys : TyConOrigin -> String -> Int -> List Ty -> Unit
+checkGradedImplTys _ _ _ [] = ()
+checkGradedImplTys o iface i (t::rest) =
+  let _ = match lookupReg (ifaceSlotKey o iface i) perRun.value.ifaceParamKindsRef.value
     Some want if anyKRow want => checkGradedImplHead iface t want
     _ => ()
-  checkGradedImplTys iface (i + 1) rest
+  checkGradedImplTys o iface (i + 1) rest
 
 -- [want] is the interface slot's kind list.
 --
@@ -2850,16 +2969,16 @@ data CrossRun = CrossRun {
     universeIfaceMethodsRef : Ref (OrdMap Unit),
     universeFunNamesRef : Ref (OrdMap Unit),
     universeKeyBucketsRef : Ref (OrdMap (List KeyEntry)),  -- = KeyBuckets, inlined: that alias is defined below this record, so it wouldn't expand in a field-type projection
-    universeIfaceRequiredRef : Ref (OrdMap (List String)),
+    universeIfaceRequiredRef : Ref (Registry (List String)),  -- #1111 A-2.4: identity-keyed (RegKey over an iface Ident), not bare name — see ifaceTabKey
     universeMethodIfaceParamsRef : Ref (OrdMap (String, List String, Ty, List (String, List Kind))),
     universeMethodIdentsRef : Ref (OrdMap (List (Ident, (String, List String, Ty, List (String, List Kind))))),  -- #1111 A-2.5 (#1092): the identity-keyed COMPANION of the line above — see methodIdentOf
     universeMethodCollidedRef : Ref (List String),  -- #1111 A-2.5: the method NAMES the line above holds ≥2 distinct identities for (normally EMPTY)
-    universeRegisteredIfacesRef : Ref (OrdMap Unit),
+    universeRegisteredIfacesRef : Ref (OrdMap Unit),  -- #1111 A-2.4: DELIBERATELY still bare-name — a Unit-valued NAME-membership set, see ifaceRegistered
     universeMethodDispatchIdxRef : Ref (List (String, Int)),
     universeRecordByName : Ref (OrdMap RecordInfo),
     universeFieldOwners : Ref (OrdMap (List String)),
     universeDataParamKinds : Ref (List (TabKey, List Kind)),  -- #1111 A-2.3: identity-keyed (TabKey), not bare name — see tyTabKey
-    universeIfaceParamKinds : Ref (List (String, List Kind)),  -- #822: the interface half of the kind universe (see registerIfaceParamKinds)
+    universeIfaceParamKinds : Ref (List (RegKey, List Kind)),  -- #822 iface half of the kind universe; #1111 A-2.4: identity×slot-keyed (RegKey), not "<iface>@<slot>" — see ifaceSlotKey
     universeAliasTable : Ref (List (TabKey, (List String, Ty))),  -- #1111 A-2.3: identity-keyed (TabKey), not bare name — see tyTabKey
     universeDataEnv : Ref TcEnv,
     universeDataDecls : Ref (List Decl),  -- #674: prior modules' PUBLIC data DECLS (universeDataEnv is a lossy bare-name ctor env) — see appendDataUniverse
@@ -2913,7 +3032,7 @@ freshCrossRun env = CrossRun {
   universeIfaceMethodsRef = Ref omEmpty,
   universeFunNamesRef = Ref omEmpty,
   universeKeyBucketsRef = Ref omEmpty,
-  universeIfaceRequiredRef = Ref omEmpty,
+  universeIfaceRequiredRef = Ref regEmpty,
   universeMethodIfaceParamsRef = Ref omEmpty,
   universeMethodIdentsRef = Ref omEmpty,
   universeMethodCollidedRef = Ref [],
@@ -3647,7 +3766,7 @@ data PerRun = PerRun {
     errorsDetected : Ref Int,  -- issue 1146: the CONTROL signal split out of it — see recordTypeError / erredDuring
     occursCheckFailed : Ref Bool,
     currentLevel : Ref Int,
-    ifaceParamKindsRef : Ref (List (String, List Kind)),  -- #822 (graded interfaces): INTERFACE type-parameter slot kinds — dataParamKindsRef's
+    ifaceParamKindsRef : Ref (List (RegKey, List Kind)),  -- #822 (graded interfaces): INTERFACE type-parameter slot kinds — dataParamKindsRef's
     pinnedLocals : Ref (List (Mono, String, String, Option Loc)),  -- sibling for an ABSTRACT head.  See registerIfaceParamKinds; read by ONE seam
   }  -- (checkGradedImplTys, a diagnostic) — the elaborators carry their scope instead.  -- declined, as (the pinned tyvar AS A MONO, binding name, the interface whose
 -- #866: one entry per LOCAL binding whose generalization dictForwardedIds
@@ -6469,6 +6588,41 @@ recordIfaceObligation iface lt
 -- decls — present once core.mdk is loaded).  #147: an O(log n) membership test on
 -- the cached registeredIfacesRef set, replacing the old full linear scan of the
 -- method table per operator/numeric-literal.
+--
+-- 🚨 #1111 A-2.4 DELIBERATELY DID NOT RE-KEY `registeredIfacesRef` /
+-- `universeRegisteredIfacesRef`, and the derivation is recorded here rather than
+-- left as a gap for a later reader to "finish".  A-2.4's brief listed this table as
+-- its third target; the table itself refuses the conversion, for three reasons in
+-- the order that decided it:
+--
+--   1. THE VALUE IS `Unit`.  Two modules declaring `Same` collapse to one entry
+--      today, and collapsing changes NOTHING OBSERVABLE — there is no row to
+--      select and no payload to get wrong.  Every other table this arc re-keys
+--      answers WHICH declaration; this one answers only WHETHER one exists.  It is
+--      the `tabHasName` / `noImplHint` shape A-2.3 established: a name-membership
+--      predicate, not a lookup.
+--   2. NO CALLER HAS AN ORIGIN TO KEY WITH.  All three call sites pass a LITERAL
+--      prelude interface name — `recordIfaceObligation` ("Num"/"Eq"/"Ord"/
+--      "Semigroup", from the operator handlers), `inferNumLit` ("Num") and
+--      `checkOneCallObligation` ("Num").  These are synthetic occurrences with no
+--      `Ty` and no decl behind them, so there is no `TyConOrigin` to read; an
+--      identity-keyed set would have to hardcode `OriginModule "core"`, which
+--      invents the very ambient module id `stampFlatTyOrigins`' own doc-comment
+--      forbids.  With a `TkBare "Num"` key instead, the lookup would MISS the
+--      prelude's `TkIdent … core` entry and `ifaceRegistered` would answer False
+--      everywhere — silently switching every operator's obligation OFF.
+--   3. THE QUESTION IT GATES IS NAME-KEYED DOWNSTREAM ANYWAY.  What it gates is
+--      `pushPendingObl (iface, …)`, and the whole obligation channel
+--      (`obUnivConcreteRef` / `obUnivHeadlessRef` / `obUnivIfaceTagsRef`) is keyed
+--      `"<iface>|<tag>"`.  Identity-keying the GATE while the PAYLOAD stays
+--      name-keyed would be incoherent.  Those three tables are unit A-2.2's scope
+--      (they need `headTyconTy`, which discards its origin at the return type);
+--      when A-2.2 lands, this gate is worth revisiting THEN, with the payload.
+--
+-- What would be needed to key it honestly is a resolved identity for a SYNTHETIC
+-- interface occurrence, which is a resolve-layer question (#1115 / A-2.2), not a
+-- typecheck-layer re-key.  Recorded on the field itself too, so a reader who greps
+-- the record does not conclude this table was simply missed.
 ifaceRegistered : String -> Bool
 ifaceRegistered iface = omHasKey iface perRun.value.registeredIfacesRef.value
 
@@ -8767,8 +8921,12 @@ registerData env (DNewtype { newtypeName = name, newtypeParams = params, newtype
 -- rather than at interface-method registration because every consumer (rowArgNames /
 -- fromAstTypeE / the impl-head kind check) must see the table BEFORE the first
 -- signature is elaborated, which is exactly registerAllData's slot.
-registerData env (DInterface { name, typarams, methods, ... }) =
-  let _ = registerIfaceParamKinds name typarams methods
+-- DECLARATION MINT (#1110/#1111 A-2.4): `ifaceOrigin` is this interface's own
+-- identity, stamped by `stampDeclOrigins` at the module that declared it — the same
+-- source, and the same must-not-be-ambient reason, as the `dataOrigin`/
+-- `newtypeOrigin`/`tyAliasOrigin` arms above.
+registerData env (DInterface { name, typarams, methods, ifaceOrigin = o, ... }) =
+  let _ = registerIfaceParamKinds o name typarams methods
   env
 registerData env _ = env
 
@@ -8907,26 +9065,57 @@ fieldTyOf (Field _ ty) = ty
 -- per-interface union matters: `gpure : a -> f e a` alone would infer slot 0 as
 -- KType, and disagreeing slot kinds across two methods of one interface would
 -- elaborate the same index to a row in one and a tyvar in the other.
-registerIfaceParamKinds : String -> List String -> List IfaceMethod -> Unit
-registerIfaceParamKinds iface typarams methods =
-  registerIfaceParamKindsGo iface 0 typarams methods
+registerIfaceParamKinds : TyConOrigin -> String -> List String -> List IfaceMethod -> Unit
+registerIfaceParamKinds o iface typarams methods =
+  registerIfaceParamKindsGo o iface 0 typarams methods
 
-registerIfaceParamKindsGo : String -> Int -> List String -> List IfaceMethod -> Unit
-registerIfaceParamKindsGo _ _ [] _ = ()
-registerIfaceParamKindsGo iface i (p::ps) methods =
-  -- ⚠️ EVERY slot is recorded, graded or not, and the non-graded ones are the whole
-  -- point (S1, review round 2).  Recording only graded slots looks like a tidy
-  -- minimisation and is a false-reject bug: `ifaceParamKindsRef` is copied into the
-  -- data universe, which is NOT import-scoped, so an ORDINARY interface that merely
-  -- shares a name with a graded one anywhere in the graph found the graded entry and
-  -- had its impl rejected with T-IMPL-KIND-MISMATCH — order-dependently, since
-  -- swapping two unrelated import lines changed which module registered first.
-  -- A module's own decls are registered as a FRONT overlay during its own pass and
-  -- `lookupAssoc` is first-match, so a local entry shadows the universe's — but only
-  -- if there IS one.  An all-KType entry is exactly that shadow; `checkGradedImplTys`
-  -- gates on `anyKRow`, so it costs nothing but the row.
-  let _ = insertIfaceParamKinds iface i p (ifaceParamKindsOf p methods)
-  registerIfaceParamKindsGo iface (i + 1) ps methods
+registerIfaceParamKindsGo : TyConOrigin -> String -> Int -> List String -> List IfaceMethod -> Unit
+registerIfaceParamKindsGo _ _ _ [] _ = ()
+registerIfaceParamKindsGo o iface i (p::ps) methods =
+  -- ⚠️ EVERY slot is recorded, graded or not.  Since #1111 A-2.4 that is VESTIGIAL,
+  -- not load-bearing — and THIS COMMENT HAS NOW BEEN WRONG TWICE about why, so it
+  -- records what was actually checked instead of offering a third rationale.
+  --
+  -- THE ORIGINAL WHY (S1, review round 2) — real at the time.  An all-KType entry
+  -- was a SHADOW: `ifaceParamKindsRef` is copied into the data universe, which is
+  -- not import-scoped, so under the old bare `"<iface>@<slot>"` key an ORDINARY
+  -- interface sharing a name with a graded one anywhere in the graph found the
+  -- GRADED row and had its impl rejected with T-IMPL-KIND-MISMATCH, order-
+  -- dependently; recording its own all-KType row as a front overlay shadowed that.
+  -- A-2.4 gives the two interfaces DIFFERENT keys, so the ordinary one never reaches
+  -- the graded row at all (#1257, drained here) — the shadow has nothing to shadow.
+  --
+  -- ⚠️ THE REPLACEMENT WHY WAS ALSO FALSE, in both of its conjuncts, and is
+  -- RETRACTED here rather than silently reworded.  It said every slot is still
+  -- needed (a) for the FLAT path, "where two same-named interfaces both key
+  -- `TkBare` — the shadow is the only defence there", and (b) because
+  -- `checkGradedImplTys` must tell an ungraded row from an absent one.  Both were
+  -- refuted by running the binary, not by reading:
+  --   (a) UNREACHABLE.  No ACCEPTED flat program holds two `TkBare` rows of one
+  --       interface name.  Declaring `interface Same` twice in one file is
+  --       `Duplicate interface: Same`, exit 1; re-declaring a prelude name is
+  --       `Duplicate interface: Eq`, exit 1 (`duplicateErrors`,
+  --       `compiler/frontend/resolve.mdk`, whose `ifaceSeed` seeds the prelude's
+  --       interface names for any non-core program).  And a flat USER interface
+  --       keys `TkBare` while a prelude one keys `TkIdent … core`, so that pair
+  --       never shares a key either.  `stampFlatTyOrigins`' own comment reaches the
+  --       same unreachability for the type layer.
+  --   (b) FALSE.  `checkGradedImplTys` is `Some want if anyKRow want => …` / `_ =>
+  --       ()`: an all-KType row FAILS `anyKRow` and falls into `_`, and a miss is
+  --       `None` and falls into `_`.  The two are indistinguishable to the only
+  --       reader — `grep -rn lookupReg compiler/` outside `types/registry.mdk`
+  --       gives exactly ONE call site; every other hit is the import list or a
+  --       comment (this one included, which is why the count is not written down).
+  --
+  -- So recording every slot is dead weight on BOTH arms.  It is kept because
+  -- removing it is a separate behaviour-preserving change with its own goldens, not
+  -- because anything reads it.  What IS still load-bearing here: a module's own
+  -- decls are registered as a FRONT overlay during its own pass and `lookupReg` is
+  -- first-match, so a local entry still shadows the universe's — which is what makes
+  -- a row re-registered from the universe (same key, same value) a no-op rather than
+  -- a second, competing answer.
+  let _ = insertIfaceParamKinds o iface i p (ifaceParamKindsOf p methods)
+  registerIfaceParamKindsGo o iface (i + 1) ps methods
 
 anyKRow : List Kind -> Bool
 anyKRow [] = False
@@ -8939,7 +9128,14 @@ kindsEq (KType::a) (KType::b) = kindsEq a b
 kindsEq (KRow::a) (KRow::b) = kindsEq a b
 kindsEq _ _ = False
 
--- ONE key shape: `<iface>@<slot>`.
+-- ONE key shape: the interface's IDENTITY plus the slot ORDINAL
+-- (`regKeyTabAt (ifaceTabKey o iface) i`, #1111 A-2.4).  It was the bare string
+-- `"\{iface}@\{i}"` until this unit, which is #1257: an ordinary interface and a
+-- graded one, same bare name, unrelated modules, one shared key.
+-- 🚨 THE SLOT IS AN ORDINAL AND STAYS ONE.  It is deliberately NOT spliced into the
+-- identity's name field — `"Same@0"` is not the name of anything, and putting it
+-- there re-creates a bare-string composite inside the very identity that exists to
+-- remove one (see `RegKey`'s doc-comment in `types/registry.mdk`).
 -- ⚠️ An earlier cut of #822 ALSO stored the bare typaram NAME, so that the
 -- elaboration seams — which see a `TyVar h` spine head carrying no interface
 -- context — could look it up.  That was an S0: `rowArgNames`/`fromAstTypeE` are the
@@ -8953,14 +9149,18 @@ kindsEq _ _ = False
 -- mislocated ones).  Poisoning could not save it: an interface-local type-parameter
 -- name is simply not a program-global key.  The scope now travels as an explicit
 -- argument instead — see declGradedScope and rowArgNamesIn.
-insertIfaceParamKinds : String -> Int -> String -> List Kind -> Unit
-insertIfaceParamKinds iface i _ kinds =
+-- (`o` is the DECLARATION's identity — `DInterface.ifaceOrigin`, threaded from
+-- `registerData`'s record pattern.  Same source, same reason, as
+-- `recordParamKinds`' `dataOrigin`: it must not come from ambient state, because
+-- `registerAllData` also runs over OTHER modules' decls.)
+insertIfaceParamKinds : TyConOrigin -> String -> Int -> String -> List Kind -> Unit
+insertIfaceParamKinds o iface i _ kinds =
   setRef
     perRun.value.ifaceParamKindsRef
-    ((ifaceSlotKey iface i, kinds)::perRun.value.ifaceParamKindsRef.value)
+    ((ifaceSlotKey o iface i, kinds)::perRun.value.ifaceParamKindsRef.value)
 
-ifaceSlotKey : String -> Int -> String
-ifaceSlotKey iface i = "\{iface}@\{intToString i}"
+ifaceSlotKey : TyConOrigin -> String -> Int -> RegKey
+ifaceSlotKey o iface i = regKeyTabAt (ifaceTabKey o iface) i
 
 -- The scope derived STRAIGHT FROM THE DECLARATION being elaborated: same inference as
 -- registerIfaceParamKinds runs, on the very methods whose signatures are about to be
@@ -11747,22 +11947,42 @@ requiredMethodNames ((IfaceMethod _ _ (Some _))::rest) =
 
 -- #154 PR1: the multi-module analogue of checkImplCompleteness — identical, but the
 -- per-impl `ifaceRequiredMethods fullUniverse iface` O(N) scan is replaced by an O(log N)
--- lookup in the persistent iface→required-methods map (universeIfaceRequiredRef).  The
--- map holds one entry per interface in the module universe (core + earlier modules +
--- this one), so a `None` here means the interface is genuinely out of scope — exactly
--- as the scan's `None` did.  Interface names are globally unique, so the map's
--- last-write-wins carries the same required-method list the scan's first-match returned.
-checkImplCompletenessMap : OrdMap (List String) -> List Decl -> Unit
+-- lookup in the persistent iface→required-methods registry (universeIfaceRequiredRef).
+-- The registry holds one entry per interface in the module universe (core + earlier
+-- modules + this one), so a `None` here means the interface is genuinely out of scope
+-- — exactly as the scan's `None` did.
+--
+-- 🚨 THE SENTENCE THAT USED TO END THIS PARAGRAPH WAS FALSE, AND IT IS WHY #1258
+-- EXISTED.  It read: "Interface names are globally unique, so the map's
+-- last-write-wins carries the same required-method list the scan's first-match
+-- returned."  Interface names are NOT globally unique — nothing in resolve or the
+-- loader enforces it across modules, only WITHIN one (`Duplicate interface: Eq`).
+-- Two unrelated modules declaring `Same` shared one bare-name key, so whichever
+-- registered LAST supplied the required-method list for BOTH, and an impl that
+-- completely implemented its own `Same` was rejected as missing the OTHER one's
+-- method.  Reproduced first-hand at #1258 before this unit changed anything:
+-- `'impl Same ET' is missing method 'bar'`, exit 1, on a program whose only `Same`
+-- in scope declares `foo` and nothing else.
+--
+-- Since #1111 A-2.4 the key is a `RegKey` carrying the interface's IDENTITY (see
+-- `ifaceTabKey`): the WRITE side takes `DInterface.ifaceOrigin` and the READ side
+-- takes the naming `DImpl`'s `implOrigin`, so the lookup answers with the required
+-- methods of the interface the impl actually names.  `Registry` is still
+-- last-write-wins and still O(log N) — what changed is only WHAT COUNTS AS THE SAME
+-- KEY, which is the entire defect.
+checkImplCompletenessMap : Registry (List String) -> List Decl -> Unit
 checkImplCompletenessMap reqMap iterDecls =
   foreachUnit
     pushIncompleteImpl
     (flatMap (implCompletenessMsgsOfMap reqMap) iterDecls)
 
-implCompletenessMsgsOfMap : OrdMap (List String) -> Decl -> List (Option Loc, String)
+-- OCCURRENCE MINT (#1110/#1111 A-2.4): `implOrigin` beside `iface` in the same
+-- record pattern, so the identity and the name it qualifies cannot drift apart.
+implCompletenessMsgsOfMap : Registry (List String) -> Decl -> List (Option Loc, String)
 implCompletenessMsgsOfMap reqMap (DAttrib _ d) =
   implCompletenessMsgsOfMap reqMap d
-implCompletenessMsgsOfMap reqMap DImpl { iface, tys, methods, ... } =
-  match omLookup iface reqMap
+implCompletenessMsgsOfMap reqMap DImpl { iface, tys, methods, implOrigin = o, ... } =
+  match regLookupK (regKeyOfTab (ifaceTabKey o iface)) reqMap
     None => []   -- unknown interface (reported elsewhere) → skip
     Some required =>
       let defined = map implMethodName methods
@@ -11772,14 +11992,14 @@ implCompletenessMsgsOfMap reqMap DImpl { iface, tys, methods, ... } =
         (filter (m => not (contains m defined)) required)
 implCompletenessMsgsOfMap _ _ = []
 
--- #154 PR1: fold each interface in [prog] into the required-methods map.  Mirrors
+-- #154 PR1: fold each interface in [prog] into the required-methods registry.  Mirrors
 -- ifaceRequiredMethods' DAttrib-unwrapping + `requiredMethodNames methods` value.
-insertIfaceRequired : List Decl -> OrdMap (List String) -> OrdMap (List String)
+-- DECLARATION MINT (#1110/#1111 A-2.4): `ifaceOrigin`, the declaring module's stamp.
+insertIfaceRequired : List Decl -> Registry (List String) -> Registry (List String)
 insertIfaceRequired [] m = m
 insertIfaceRequired ((DAttrib _ d)::rest) m =
   insertIfaceRequired rest (insertIfaceRequired [d] m)
-insertIfaceRequired ((DInterface { name, methods, ... })::rest) m =
-  insertIfaceRequired rest (omInsert name (requiredMethodNames methods) m)
+insertIfaceRequired ((DInterface { name, methods, ifaceOrigin = o, ... })::rest) m = insertIfaceRequired rest (regInsertK (regKeyOfTab (ifaceTabKey o name)) (requiredMethodNames methods) m)
 insertIfaceRequired (_::rest) m = insertIfaceRequired rest m
 
 -- #154 PR2 (site #3): fold [prog]'s interface decls into the pair of accumulators that
@@ -20855,7 +21075,7 @@ schemeLines [] = []
 schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "Ns" true) (mem "Ident" true) (mem "mkIdent" false) (mem "tyConBuiltin" false) (mem "firstTyLoc" false) (mem "firstTyLocList" false) (mem "Constraint" true) (mem "Route" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "FunClause" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "Expr" true) (mem "Loc" true) (mem "orElseLoc" false) (mem "ConPayload" true) (mem "Field" true) (mem "Variant" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "Require" true) (mem "Super" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Decl" true) (mem "PropParam" true) (mem "Section" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "useMemberAlias" false) (mem "qualifiedLocal" false))))
-(DUse false (UseGroup ("types" "registry") ((mem "TabKey" true) (mem "tabKeyOf" false) (mem "tabKeyName" false) (mem "lookupTab" false) (mem "tabHasName" false))))
+(DUse false (UseGroup ("types" "registry") ((mem "TabKey" true) (mem "tabKeyOf" false) (mem "tabKeyName" false) (mem "lookupTab" false) (mem "tabHasName" false) (mem "RegKey" false) (mem "Registry" false) (mem "regKeyOfTab" false) (mem "regKeyTabAt" false) (mem "lookupReg" false) (mem "regEmpty" false) (mem "regInsertK" false) (mem "regLookupK" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "mapProg" false))))
 (DUse false (UseGroup ("frontend" "marker") ((mem "localBoundNames" false))))
 (DUse false (UseGroup ("frontend" "resolve") ((mem "stampBindingIds" false) (mem "stampGraphTyOrigins" false) (mem "stampFlatTyOrigins" false) (mem "stampDeclOrigins" false) (mem "noteOriginTrace" false))))
@@ -21214,6 +21434,8 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "argPerformableOccs" (PWild PWild) (EListLit))
 (DTypeSig false "tyTabKey" (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyCon "TabKey"))))
 (DFunDef false "tyTabKey" ((PVar "o") (PVar "n")) (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsType")) (EVar "o")) (EVar "n")))
+(DTypeSig false "ifaceTabKey" (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyCon "TabKey"))))
+(DFunDef false "ifaceTabKey" ((PVar "o") (PVar "n")) (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsIface")) (EVar "o")) (EVar "n")))
 (DTypeSig false "krowSlotOccs" (TyFun (TyCon "Bool") (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom")))))))))
 (DFunDef false "krowSlotOccs" ((PVar "perf") (PVar "o") (PVar "n") (PVar "args")) (EMatch (EApp (EApp (EVar "lookupTab") (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "dataParamKindsRef") "value")) (arm (PCon "Some" (PVar "kinds")) ((GBool (EBinOp "==" (EApp (EVar "listLen") (EVar "kinds")) (EApp (EVar "listLen") (EVar "args"))))) (EBinOp "++" (EIf (EVar "perf") (EApp (EApp (EVar "map") (ELam ((PVar "n2")) (ETuple (EVar "n2") (EListLit)))) (EApp (EApp (EVar "krowArgVarNames") (EVar "kinds")) (EVar "args"))) (EListLit)) (EApp (EApp (EVar "flatMap") (EApp (EVar "argPerformableOccs") (EVar "perf"))) (EVar "args")))) (arm PWild () (EApp (EApp (EVar "flatMap") (EApp (EVar "argPerformableOccs") (EVar "perf"))) (EVar "args")))))
 (DTypeSig false "methodEffRetOccs" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))) (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom")))))))
@@ -21241,11 +21463,11 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "checkGradedImplHeads" ((PCons (PVar "d") (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EVar "checkGradedImplHeadDecl") (EVar "d"))) (DoExpr (EApp (EVar "checkGradedImplHeads") (EVar "rest")))))
 (DTypeSig false "checkGradedImplHeadDecl" (TyFun (TyCon "Decl") (TyCon "Unit")))
 (DFunDef false "checkGradedImplHeadDecl" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "checkGradedImplHeadDecl") (EVar "d")))
-(DFunDef false "checkGradedImplHeadDecl" ((PRec "DImpl" ((rf "iface" None) (rf "tys" None)) true)) (EApp (EApp (EApp (EVar "checkGradedImplTys") (EVar "iface")) (ELit (LInt 0))) (EVar "tys")))
+(DFunDef false "checkGradedImplHeadDecl" ((PRec "DImpl" ((rf "iface" None) (rf "tys" None) (rf "implOrigin" (PVar "o"))) true)) (EApp (EApp (EApp (EApp (EVar "checkGradedImplTys") (EVar "o")) (EVar "iface")) (ELit (LInt 0))) (EVar "tys")))
 (DFunDef false "checkGradedImplHeadDecl" (PWild) (ELit LUnit))
-(DTypeSig false "checkGradedImplTys" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyCon "Unit")))))
-(DFunDef false "checkGradedImplTys" (PWild PWild (PList)) (ELit LUnit))
-(DFunDef false "checkGradedImplTys" ((PVar "iface") (PVar "i") (PCons (PVar "t") (PVar "rest"))) (EBlock (DoLet false false PWild (EMatch (EApp (EApp (EVar "lookupAssoc") (EApp (EApp (EVar "ifaceSlotKey") (EVar "iface")) (EVar "i"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "ifaceParamKindsRef") "value")) (arm (PCon "Some" (PVar "want")) ((GBool (EApp (EVar "anyKRow") (EVar "want")))) (EApp (EApp (EApp (EVar "checkGradedImplHead") (EVar "iface")) (EVar "t")) (EVar "want"))) (arm PWild () (ELit LUnit)))) (DoExpr (EApp (EApp (EApp (EVar "checkGradedImplTys") (EVar "iface")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest")))))
+(DTypeSig false "checkGradedImplTys" (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyCon "Unit"))))))
+(DFunDef false "checkGradedImplTys" (PWild PWild PWild (PList)) (ELit LUnit))
+(DFunDef false "checkGradedImplTys" ((PVar "o") (PVar "iface") (PVar "i") (PCons (PVar "t") (PVar "rest"))) (EBlock (DoLet false false PWild (EMatch (EApp (EApp (EVar "lookupReg") (EApp (EApp (EApp (EVar "ifaceSlotKey") (EVar "o")) (EVar "iface")) (EVar "i"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "ifaceParamKindsRef") "value")) (arm (PCon "Some" (PVar "want")) ((GBool (EApp (EVar "anyKRow") (EVar "want")))) (EApp (EApp (EApp (EVar "checkGradedImplHead") (EVar "iface")) (EVar "t")) (EVar "want"))) (arm PWild () (ELit LUnit)))) (DoExpr (EApp (EApp (EApp (EApp (EVar "checkGradedImplTys") (EVar "o")) (EVar "iface")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest")))))
 (DTypeSig false "checkGradedImplHead" (TyFun (TyCon "String") (TyFun (TyCon "Ty") (TyFun (TyApp (TyCon "List") (TyCon "Kind")) (TyCon "Unit")))))
 (DFunDef false "checkGradedImplHead" ((PVar "iface") (PVar "t") (PVar "want")) (EMatch (EApp (EVar "tyAppSpine") (EVar "t")) (arm (PTuple (PRec "TyCon" ((rf "tyConName" (PVar "n")) (rf "tyConLoc" (PVar "loc")) (rf "tyConOrigin" (PVar "o"))) false) (PVar "applied")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkGradedImplHeadCon") (EVar "iface")) (EVar "o")) (EVar "n")) (EVar "loc")) (EApp (EVar "listLen") (EVar "applied"))) (EVar "want"))) (arm (PTuple (PCon "TyTuple" (PVar "ts")) PWild) () (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (ELit (LString "T-IMPL-KIND-MISMATCH"))) (EApp (EVar "firstTyLocList") (EVar "ts"))) (EApp (EApp (EApp (EVar "implTupleHeadKindMsg") (EVar "iface")) (EApp (EVar "listLen") (EVar "ts"))) (EVar "want")))) (arm PWild () (ELit LUnit))))
 (DTypeSig false "checkGradedImplHeadCon" (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Kind")) (TyCon "Unit"))))))))
@@ -21372,9 +21594,9 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "callOblsWindow" ((PVar "mark")) (EApp (EApp (EVar "map") (EVar "oblAsTuple")) (EApp (EApp (EVar "wWindow") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "obls")) (EVar "mark"))))
 (DTypeSig false "pushDictApp" (TyFun (TyTuple (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Route"))) (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Mono"))) (TyApp (TyCon "Option") (TyCon "Loc"))) (TyCon "Unit")))
 (DFunDef false "pushDictApp" ((PVar "app")) (EApp (EApp (EVar "wPush") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "dictApps")) (EVar "app")))
-(DData Private "CrossRun" () ((variant "CrossRun" (ConNamed (field "universeIfaceMethodsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (field "universeFunNamesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (field "universeKeyBucketsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "KeyEntry"))))) (field "universeIfaceRequiredRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))))) (field "universeMethodIfaceParamsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))))))) (field "universeMethodIdentsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))))))))) (field "universeMethodCollidedRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "universeRegisteredIfacesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (field "universeMethodDispatchIdxRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))))) (field "universeRecordByName" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "RecordInfo")))) (field "universeFieldOwners" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))))) (field "universeDataParamKinds" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Kind")))))) (field "universeIfaceParamKinds" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))))) (field "universeAliasTable" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty")))))) (field "universeDataEnv" (TyApp (TyCon "Ref") (TyCon "TcEnv"))) (field "universeDataDecls" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Decl")))) (field "obUnivConcreteRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "List") (TyCon "Require"))))))) (field "obUnivHeadlessRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "List") (TyCon "Require"))))))) (field "obUnivIfaceTagsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "Unit"))))) (field "crossModuleFunConstraintsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Int")))))) (field "crossModuleFunConstraintsQualRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int")))))) (field "crossModuleFunConstraintIfacesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (field "crossModuleFunConstraintIfacesQualRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))) (field "crossModuleMethodConstraintsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Int")))))) (field "crossModuleMethodConstraintsQualRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int")))))) (field "coreSchemeObligationsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Int")))))))))) ())
+(DData Private "CrossRun" () ((variant "CrossRun" (ConNamed (field "universeIfaceMethodsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (field "universeFunNamesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (field "universeKeyBucketsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "KeyEntry"))))) (field "universeIfaceRequiredRef" (TyApp (TyCon "Ref") (TyApp (TyCon "Registry") (TyApp (TyCon "List") (TyCon "String"))))) (field "universeMethodIfaceParamsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))))))) (field "universeMethodIdentsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))))))))) (field "universeMethodCollidedRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "universeRegisteredIfacesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (field "universeMethodDispatchIdxRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))))) (field "universeRecordByName" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "RecordInfo")))) (field "universeFieldOwners" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))))) (field "universeDataParamKinds" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Kind")))))) (field "universeIfaceParamKinds" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "RegKey") (TyApp (TyCon "List") (TyCon "Kind")))))) (field "universeAliasTable" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty")))))) (field "universeDataEnv" (TyApp (TyCon "Ref") (TyCon "TcEnv"))) (field "universeDataDecls" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Decl")))) (field "obUnivConcreteRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "List") (TyCon "Require"))))))) (field "obUnivHeadlessRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "List") (TyCon "Require"))))))) (field "obUnivIfaceTagsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "Unit"))))) (field "crossModuleFunConstraintsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Int")))))) (field "crossModuleFunConstraintsQualRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int")))))) (field "crossModuleFunConstraintIfacesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (field "crossModuleFunConstraintIfacesQualRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))) (field "crossModuleMethodConstraintsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Int")))))) (field "crossModuleMethodConstraintsQualRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int")))))) (field "coreSchemeObligationsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Int")))))))))) ())
 (DTypeSig false "freshCrossRun" (TyFun (TyCon "TcEnv") (TyCon "CrossRun")))
-(DFunDef false "freshCrossRun" ((PVar "env")) (ERecordCreate "CrossRun" ((fa "universeIfaceMethodsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "universeFunNamesRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "universeKeyBucketsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "universeIfaceRequiredRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "universeMethodIfaceParamsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "universeMethodIdentsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "universeMethodCollidedRef" (EApp (EVar "Ref") (EListLit))) (fa "universeRegisteredIfacesRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "universeMethodDispatchIdxRef" (EApp (EVar "Ref") (EListLit))) (fa "universeRecordByName" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "universeFieldOwners" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "universeDataParamKinds" (EApp (EVar "Ref") (EListLit))) (fa "universeIfaceParamKinds" (EApp (EVar "Ref") (EListLit))) (fa "universeAliasTable" (EApp (EVar "Ref") (EListLit))) (fa "universeDataEnv" (EApp (EVar "Ref") (EVar "env"))) (fa "universeDataDecls" (EApp (EVar "Ref") (EListLit))) (fa "obUnivConcreteRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "obUnivHeadlessRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "obUnivIfaceTagsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "crossModuleFunConstraintsRef" (EApp (EVar "Ref") (EListLit))) (fa "crossModuleFunConstraintsQualRef" (EApp (EVar "Ref") (EListLit))) (fa "crossModuleFunConstraintIfacesRef" (EApp (EVar "Ref") (EListLit))) (fa "crossModuleFunConstraintIfacesQualRef" (EApp (EVar "Ref") (EListLit))) (fa "crossModuleMethodConstraintsRef" (EApp (EVar "Ref") (EListLit))) (fa "crossModuleMethodConstraintsQualRef" (EApp (EVar "Ref") (EListLit))) (fa "coreSchemeObligationsRef" (EApp (EVar "Ref") (EVar "omEmpty"))))))
+(DFunDef false "freshCrossRun" ((PVar "env")) (ERecordCreate "CrossRun" ((fa "universeIfaceMethodsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "universeFunNamesRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "universeKeyBucketsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "universeIfaceRequiredRef" (EApp (EVar "Ref") (EVar "regEmpty"))) (fa "universeMethodIfaceParamsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "universeMethodIdentsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "universeMethodCollidedRef" (EApp (EVar "Ref") (EListLit))) (fa "universeRegisteredIfacesRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "universeMethodDispatchIdxRef" (EApp (EVar "Ref") (EListLit))) (fa "universeRecordByName" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "universeFieldOwners" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "universeDataParamKinds" (EApp (EVar "Ref") (EListLit))) (fa "universeIfaceParamKinds" (EApp (EVar "Ref") (EListLit))) (fa "universeAliasTable" (EApp (EVar "Ref") (EListLit))) (fa "universeDataEnv" (EApp (EVar "Ref") (EVar "env"))) (fa "universeDataDecls" (EApp (EVar "Ref") (EListLit))) (fa "obUnivConcreteRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "obUnivHeadlessRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "obUnivIfaceTagsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "crossModuleFunConstraintsRef" (EApp (EVar "Ref") (EListLit))) (fa "crossModuleFunConstraintsQualRef" (EApp (EVar "Ref") (EListLit))) (fa "crossModuleFunConstraintIfacesRef" (EApp (EVar "Ref") (EListLit))) (fa "crossModuleFunConstraintIfacesQualRef" (EApp (EVar "Ref") (EListLit))) (fa "crossModuleMethodConstraintsRef" (EApp (EVar "Ref") (EListLit))) (fa "crossModuleMethodConstraintsQualRef" (EApp (EVar "Ref") (EListLit))) (fa "coreSchemeObligationsRef" (EApp (EVar "Ref") (EVar "omEmpty"))))))
 (DTypeSig false "crossRun" (TyApp (TyCon "Ref") (TyCon "CrossRun")))
 (DFunDef false "crossRun" () (EApp (EVar "Ref") (EApp (EVar "freshCrossRun") (EVar "initialEnv"))))
 (DTypeSig false "resetCrossModuleState" (TyFun (TyCon "Unit") (TyCon "Unit")))
@@ -21465,7 +21687,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "mainTypeIsFloat" (PWild) (EMatch (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "mainSchemeRef") "value") (arm (PCon "Some" (PCon "Forall" PWild PWild (PVar "t"))) () (EMatch (EApp (EVar "normalize") (EVar "t")) (arm (PCon "TCon" (PLit (LString "Float")) PWild) () (EVar "True")) (arm PWild () (EVar "False")))) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig true "hadMatchWarnings" (TyFun (TyCon "Unit") (TyCon "Bool")))
 (DFunDef false "hadMatchWarnings" (PWild) (EMatch (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchWarnings") "value") (arm (PList) () (EVar "False")) (arm PWild () (EVar "True"))))
-(DData Private "PerRun" () ((variant "PerRun" (ConNamed (field "tyvarCounter" (TyApp (TyCon "Ref") (TyCon "Int"))) (field "inRigidityBodyRef" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "effvarCounter" (TyApp (TyCon "Ref") (TyCon "Int"))) (field "curEffect" (TyApp (TyCon "Ref") (TyCon "EffRow"))) (field "recordByNameRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "RecordInfo")))) (field "fieldOwnersRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))))) (field "dataParamKindsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Kind")))))) (field "aliasTableRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty")))))) (field "pendingSites" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "PendingEntry")))) (field "pendingRLocalSites" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "PendingEntry")))) (field "shadowStandaloneSchemesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))) (field "definerShadowNamesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "definerShadowSigsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))))) (field "shadowKeyTableRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "KeyEntry"))))) (field "pendingBinopSites" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "PendingEntry")))) (field "pendingUnopSites" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "PendingEntry")))) (field "pendingArithSites" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "Ref") (TyCon "Route")) (TyCon "Mono"))))) (field "methodIfaceParamsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))))))) (field "registeredIfacesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (field "implObls" (TyApp (TyCon "Windowed") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty") (TyCon "Mono") (TyApp (TyCon "Option") (TyCon "Loc"))))) (field "numlitRefs" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Mono") (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "Float"))) (TyCon "Int") (TyApp (TyCon "Ref") (TyCon "Route")))))) (field "poisonedVars" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Int")))) (field "deferrableVarIds" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Int")))) (field "tupleCallCandidates" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Mono") (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "Loc") (TyCon "String"))))))) (field "numlitVarLocs" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Mono") (TyCon "Loc"))))) (field "numlitUntainted" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Mono") (TyCon "Loc"))))) (field "numlitOpLocs" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Loc")))) (field "numlitCtxTags" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Loc") (TyCon "String"))))) (field "localBindRefs" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))))) (field "localSchemesOut" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))) (field "seedSchemesOut" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))) (field "pendingArgStamps" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "PendingEntry")))) (field "activeDictVars" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String"))))) (field "activeDictPreds" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono") (TyCon "String"))))) (field "funConstraintsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Int")))))) (field "funConstraintArgsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Mono"))))))) (field "funConstraintIfacesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (field "currentImportDefinersRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))) (field "currentImportOriginsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))) (field "dictApps" (TyApp (TyCon "Windowed") (TyTuple (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Route"))) (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Mono"))) (TyApp (TyCon "Option") (TyCon "Loc"))))) (field "obls" (TyApp (TyCon "Windowed") (TyCon "UObligation"))) (field "absorptions" (TyApp (TyCon "Windowed") (TyCon "AbsorptionEvent"))) (field "schemeObligationsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "Int")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Int")))))))) (field "schemeDefIdsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Int")))) (field "methodConstraintsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Int")))))) (field "methodConstraintPositionsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Int")))))) (field "pendingMethodDicts" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Route"))) (TyApp (TyCon "List") (TyCon "Mono")))))) (field "pendingRecDictApps" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "RecDictApp")))) (field "currentFn" (TyApp (TyCon "Ref") (TyCon "String"))) (field "currentImplBody" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "methodSiteFns" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "Mono"))))) (field "dictAppFns" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Mono")))))) (field "promotedRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "methodShadowNamesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (field "flatShadowScopingRef" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "flatCoreFnNamesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (field "flatUserShadowNamesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "groupConstraintMonosRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))))) (field "typeErrors" (TyApp (TyCon "Windowed") (TyCon "TcDiag"))) (field "errorsDetected" (TyApp (TyCon "Ref") (TyCon "Int"))) (field "occursCheckFailed" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "currentLevel" (TyApp (TyCon "Ref") (TyCon "Int"))) (field "ifaceParamKindsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))))) (field "pinnedLocals" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Mono") (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))))))))) ())
+(DData Private "PerRun" () ((variant "PerRun" (ConNamed (field "tyvarCounter" (TyApp (TyCon "Ref") (TyCon "Int"))) (field "inRigidityBodyRef" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "effvarCounter" (TyApp (TyCon "Ref") (TyCon "Int"))) (field "curEffect" (TyApp (TyCon "Ref") (TyCon "EffRow"))) (field "recordByNameRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "RecordInfo")))) (field "fieldOwnersRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))))) (field "dataParamKindsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Kind")))))) (field "aliasTableRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty")))))) (field "pendingSites" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "PendingEntry")))) (field "pendingRLocalSites" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "PendingEntry")))) (field "shadowStandaloneSchemesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))) (field "definerShadowNamesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "definerShadowSigsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))))) (field "shadowKeyTableRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "KeyEntry"))))) (field "pendingBinopSites" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "PendingEntry")))) (field "pendingUnopSites" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "PendingEntry")))) (field "pendingArithSites" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "Ref") (TyCon "Route")) (TyCon "Mono"))))) (field "methodIfaceParamsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))))))) (field "registeredIfacesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (field "implObls" (TyApp (TyCon "Windowed") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty") (TyCon "Mono") (TyApp (TyCon "Option") (TyCon "Loc"))))) (field "numlitRefs" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Mono") (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "Float"))) (TyCon "Int") (TyApp (TyCon "Ref") (TyCon "Route")))))) (field "poisonedVars" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Int")))) (field "deferrableVarIds" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Int")))) (field "tupleCallCandidates" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Mono") (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "Loc") (TyCon "String"))))))) (field "numlitVarLocs" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Mono") (TyCon "Loc"))))) (field "numlitUntainted" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Mono") (TyCon "Loc"))))) (field "numlitOpLocs" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Loc")))) (field "numlitCtxTags" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Loc") (TyCon "String"))))) (field "localBindRefs" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))))) (field "localSchemesOut" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))) (field "seedSchemesOut" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))) (field "pendingArgStamps" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "PendingEntry")))) (field "activeDictVars" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String"))))) (field "activeDictPreds" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono") (TyCon "String"))))) (field "funConstraintsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Int")))))) (field "funConstraintArgsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Mono"))))))) (field "funConstraintIfacesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (field "currentImportDefinersRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))) (field "currentImportOriginsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))) (field "dictApps" (TyApp (TyCon "Windowed") (TyTuple (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Route"))) (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Mono"))) (TyApp (TyCon "Option") (TyCon "Loc"))))) (field "obls" (TyApp (TyCon "Windowed") (TyCon "UObligation"))) (field "absorptions" (TyApp (TyCon "Windowed") (TyCon "AbsorptionEvent"))) (field "schemeObligationsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "Int")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Int")))))))) (field "schemeDefIdsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Int")))) (field "methodConstraintsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Int")))))) (field "methodConstraintPositionsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Int")))))) (field "pendingMethodDicts" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Route"))) (TyApp (TyCon "List") (TyCon "Mono")))))) (field "pendingRecDictApps" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "RecDictApp")))) (field "currentFn" (TyApp (TyCon "Ref") (TyCon "String"))) (field "currentImplBody" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "methodSiteFns" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "Mono"))))) (field "dictAppFns" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Mono")))))) (field "promotedRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "methodShadowNamesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (field "flatShadowScopingRef" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "flatCoreFnNamesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (field "flatUserShadowNamesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "groupConstraintMonosRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))))) (field "typeErrors" (TyApp (TyCon "Windowed") (TyCon "TcDiag"))) (field "errorsDetected" (TyApp (TyCon "Ref") (TyCon "Int"))) (field "occursCheckFailed" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "currentLevel" (TyApp (TyCon "Ref") (TyCon "Int"))) (field "ifaceParamKindsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "RegKey") (TyApp (TyCon "List") (TyCon "Kind")))))) (field "pinnedLocals" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Mono") (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))))))))) ())
 (DTypeSig false "freshPerRun" (TyFun (TyCon "Unit") (TyCon "PerRun")))
 (DFunDef false "freshPerRun" (PWild) (ERecordCreate "PerRun" ((fa "tyvarCounter" (EApp (EVar "Ref") (ELit (LInt 0)))) (fa "inRigidityBodyRef" (EApp (EVar "Ref") (EVar "False"))) (fa "effvarCounter" (EApp (EVar "Ref") (ELit (LInt 0)))) (fa "curEffect" (EApp (EVar "Ref") (EApp (EApp (EVar "EffRow") (EListLit)) (EVar "None")))) (fa "recordByNameRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "fieldOwnersRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "dataParamKindsRef" (EApp (EVar "Ref") (EListLit))) (fa "aliasTableRef" (EApp (EVar "Ref") (EListLit))) (fa "pendingSites" (EApp (EVar "Ref") (EListLit))) (fa "pendingRLocalSites" (EApp (EVar "Ref") (EListLit))) (fa "shadowStandaloneSchemesRef" (EApp (EVar "Ref") (EListLit))) (fa "definerShadowNamesRef" (EApp (EVar "Ref") (EListLit))) (fa "definerShadowSigsRef" (EApp (EVar "Ref") (EListLit))) (fa "shadowKeyTableRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "pendingBinopSites" (EApp (EVar "Ref") (EListLit))) (fa "pendingUnopSites" (EApp (EVar "Ref") (EListLit))) (fa "pendingArithSites" (EApp (EVar "Ref") (EListLit))) (fa "methodIfaceParamsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "registeredIfacesRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "implObls" (EApp (EVar "wNew") (ELit LUnit))) (fa "numlitRefs" (EApp (EVar "Ref") (EListLit))) (fa "poisonedVars" (EApp (EVar "Ref") (EListLit))) (fa "deferrableVarIds" (EApp (EVar "Ref") (EListLit))) (fa "tupleCallCandidates" (EApp (EVar "Ref") (EListLit))) (fa "numlitVarLocs" (EApp (EVar "Ref") (EListLit))) (fa "numlitUntainted" (EApp (EVar "Ref") (EListLit))) (fa "numlitOpLocs" (EApp (EVar "Ref") (EListLit))) (fa "numlitCtxTags" (EApp (EVar "Ref") (EListLit))) (fa "localBindRefs" (EApp (EVar "Ref") (EListLit))) (fa "localSchemesOut" (EApp (EVar "Ref") (EListLit))) (fa "seedSchemesOut" (EApp (EVar "Ref") (EListLit))) (fa "pendingArgStamps" (EApp (EVar "Ref") (EListLit))) (fa "activeDictVars" (EApp (EVar "Ref") (EListLit))) (fa "activeDictPreds" (EApp (EVar "Ref") (EListLit))) (fa "funConstraintsRef" (EApp (EVar "Ref") (EListLit))) (fa "funConstraintArgsRef" (EApp (EVar "Ref") (EListLit))) (fa "funConstraintIfacesRef" (EApp (EVar "Ref") (EListLit))) (fa "currentImportDefinersRef" (EApp (EVar "Ref") (EListLit))) (fa "currentImportOriginsRef" (EApp (EVar "Ref") (EListLit))) (fa "dictApps" (EApp (EVar "wNew") (ELit LUnit))) (fa "obls" (EApp (EVar "wNew") (ELit LUnit))) (fa "absorptions" (EApp (EVar "wNew") (ELit LUnit))) (fa "schemeObligationsRef" (EApp (EVar "Ref") (EListLit))) (fa "schemeDefIdsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "methodConstraintsRef" (EApp (EVar "Ref") (EListLit))) (fa "methodConstraintPositionsRef" (EApp (EVar "Ref") (EListLit))) (fa "pendingMethodDicts" (EApp (EVar "Ref") (EListLit))) (fa "pendingRecDictApps" (EApp (EVar "Ref") (EListLit))) (fa "currentFn" (EApp (EVar "Ref") (ELit (LString "")))) (fa "currentImplBody" (EApp (EVar "Ref") (EVar "False"))) (fa "methodSiteFns" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "dictAppFns" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "promotedRef" (EApp (EVar "Ref") (EListLit))) (fa "methodShadowNamesRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "flatShadowScopingRef" (EApp (EVar "Ref") (EVar "False"))) (fa "flatCoreFnNamesRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "flatUserShadowNamesRef" (EApp (EVar "Ref") (EListLit))) (fa "groupConstraintMonosRef" (EApp (EVar "Ref") (EListLit))) (fa "typeErrors" (EApp (EVar "wNew") (ELit LUnit))) (fa "errorsDetected" (EApp (EVar "Ref") (ELit (LInt 0)))) (fa "occursCheckFailed" (EApp (EVar "Ref") (EVar "False"))) (fa "currentLevel" (EApp (EVar "Ref") (ELit (LInt 0)))) (fa "ifaceParamKindsRef" (EApp (EVar "Ref") (EListLit))) (fa "pinnedLocals" (EApp (EVar "Ref") (EListLit))))))
 (DTypeSig false "perRun" (TyApp (TyCon "Ref") (TyCon "PerRun")))
@@ -22572,7 +22794,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "registerData" ((PVar "env") (PRec "DData" ((rf "dataName" (PVar "name")) (rf "dataParams" (PVar "params")) (rf "dataCtors" (PVar "variants")) (rf "dataOrigin" (PVar "o"))) false)) (EApp (EApp (EApp (EApp (EApp (EVar "registerVariants") (EVar "o")) (EVar "env")) (EVar "name")) (EVar "params")) (EVar "variants")))
 (DFunDef false "registerData" ((PVar "env") (PRec "DTypeAlias" ((rf "tyAliasName" (PVar "name")) (rf "tyAliasParams" (PVar "params")) (rf "tyAliasRhs" (PVar "rhs")) (rf "tyAliasOrigin" (PVar "o"))) false)) (EBlock (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "aliasTableRef")) (EBinOp "::" (ETuple (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "name")) (ETuple (EVar "params") (EVar "rhs"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "aliasTableRef") "value")))) (DoExpr (EVar "env"))))
 (DFunDef false "registerData" ((PVar "env") (PRec "DNewtype" ((rf "newtypeName" (PVar "name")) (rf "newtypeParams" (PVar "params")) (rf "newtypeCtor" (PVar "con")) (rf "newtypeFieldTy" (PVar "fty")) (rf "newtypeOrigin" (PVar "o"))) false)) (EApp (EApp (EApp (EApp (EApp (EVar "registerVariants") (EVar "o")) (EVar "env")) (EVar "name")) (EVar "params")) (EListLit (EApp (EApp (EVar "Variant") (EVar "con")) (EApp (EVar "ConPos") (EListLit (EVar "fty")))))))
-(DFunDef false "registerData" ((PVar "env") (PRec "DInterface" ((rf "name" None) (rf "typarams" None) (rf "methods" None)) true)) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "registerIfaceParamKinds") (EVar "name")) (EVar "typarams")) (EVar "methods"))) (DoExpr (EVar "env"))))
+(DFunDef false "registerData" ((PVar "env") (PRec "DInterface" ((rf "name" None) (rf "typarams" None) (rf "methods" None) (rf "ifaceOrigin" (PVar "o"))) true)) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "registerIfaceParamKinds") (EVar "o")) (EVar "name")) (EVar "typarams")) (EVar "methods"))) (DoExpr (EVar "env"))))
 (DFunDef false "registerData" ((PVar "env") PWild) (EVar "env"))
 (DTypeSig false "registerRecordInfoKeyed" (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Field")) (TyCon "Unit")))))))
 (DFunDef false "registerRecordInfoKeyed" ((PVar "o") (PVar "key") (PVar "typeName") (PVar "params") (PVar "fields")) (EBlock (DoLet false false (PVar "paramVars") (EApp (EVar "freshVars") (EApp (EVar "listLen") (EVar "params")))) (DoLet false false (PVar "tvs") (EApp (EApp (EVar "zipL") (EVar "params")) (EVar "paramVars"))) (DoLet false false (PVar "result") (EApp (EApp (EVar "applyParams") (EApp (EApp (EVar "tconFrom") (EVar "o")) (EVar "typeName"))) (EVar "paramVars"))) (DoLet false false (PVar "fieldMonos") (EApp (EApp (EVar "map") (EApp (EVar "recFieldMono") (EVar "tvs"))) (EVar "fields"))) (DoLet false false (PVar "ri") (EApp (EApp (EApp (EApp (EVar "RecordInfo") (EApp (EApp (EVar "map") (EVar "monoTyvarId")) (EVar "paramVars"))) (EVar "result")) (EVar "fieldMonos")) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EVar "fieldMonos"))) (EVar "omEmpty")))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "recordByNameRef")) (EApp (EApp (EApp (EVar "omInsert") (EVar "key")) (EVar "ri")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "recordByNameRef") "value")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "fieldOwnersRef")) (EApp (EApp (EApp (EVar "addFieldOwners") (EVar "key")) (EApp (EApp (EVar "map") (EVar "fst")) (EVar "fieldMonos"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "fieldOwnersRef") "value"))))))
@@ -22606,11 +22828,11 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "payloadAstTypes" ((PCon "ConNamed" (PVar "fields") PWild)) (EApp (EApp (EVar "map") (EVar "fieldTyOf")) (EVar "fields")))
 (DTypeSig false "fieldTyOf" (TyFun (TyCon "Field") (TyCon "Ty")))
 (DFunDef false "fieldTyOf" ((PCon "Field" PWild (PVar "ty"))) (EVar "ty"))
-(DTypeSig false "registerIfaceParamKinds" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "IfaceMethod")) (TyCon "Unit")))))
-(DFunDef false "registerIfaceParamKinds" ((PVar "iface") (PVar "typarams") (PVar "methods")) (EApp (EApp (EApp (EApp (EVar "registerIfaceParamKindsGo") (EVar "iface")) (ELit (LInt 0))) (EVar "typarams")) (EVar "methods")))
-(DTypeSig false "registerIfaceParamKindsGo" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "IfaceMethod")) (TyCon "Unit"))))))
-(DFunDef false "registerIfaceParamKindsGo" (PWild PWild (PList) PWild) (ELit LUnit))
-(DFunDef false "registerIfaceParamKindsGo" ((PVar "iface") (PVar "i") (PCons (PVar "p") (PVar "ps")) (PVar "methods")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "insertIfaceParamKinds") (EVar "iface")) (EVar "i")) (EVar "p")) (EApp (EApp (EVar "ifaceParamKindsOf") (EVar "p")) (EVar "methods")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "registerIfaceParamKindsGo") (EVar "iface")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "ps")) (EVar "methods")))))
+(DTypeSig false "registerIfaceParamKinds" (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "IfaceMethod")) (TyCon "Unit"))))))
+(DFunDef false "registerIfaceParamKinds" ((PVar "o") (PVar "iface") (PVar "typarams") (PVar "methods")) (EApp (EApp (EApp (EApp (EApp (EVar "registerIfaceParamKindsGo") (EVar "o")) (EVar "iface")) (ELit (LInt 0))) (EVar "typarams")) (EVar "methods")))
+(DTypeSig false "registerIfaceParamKindsGo" (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "IfaceMethod")) (TyCon "Unit")))))))
+(DFunDef false "registerIfaceParamKindsGo" (PWild PWild PWild (PList) PWild) (ELit LUnit))
+(DFunDef false "registerIfaceParamKindsGo" ((PVar "o") (PVar "iface") (PVar "i") (PCons (PVar "p") (PVar "ps")) (PVar "methods")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "insertIfaceParamKinds") (EVar "o")) (EVar "iface")) (EVar "i")) (EVar "p")) (EApp (EApp (EVar "ifaceParamKindsOf") (EVar "p")) (EVar "methods")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "registerIfaceParamKindsGo") (EVar "o")) (EVar "iface")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "ps")) (EVar "methods")))))
 (DTypeSig false "anyKRow" (TyFun (TyApp (TyCon "List") (TyCon "Kind")) (TyCon "Bool")))
 (DFunDef false "anyKRow" ((PList)) (EVar "False"))
 (DFunDef false "anyKRow" ((PCons (PCon "KRow") PWild)) (EVar "True"))
@@ -22620,10 +22842,10 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "kindsEq" ((PCons (PCon "KType") (PVar "a")) (PCons (PCon "KType") (PVar "b"))) (EApp (EApp (EVar "kindsEq") (EVar "a")) (EVar "b")))
 (DFunDef false "kindsEq" ((PCons (PCon "KRow") (PVar "a")) (PCons (PCon "KRow") (PVar "b"))) (EApp (EApp (EVar "kindsEq") (EVar "a")) (EVar "b")))
 (DFunDef false "kindsEq" (PWild PWild) (EVar "False"))
-(DTypeSig false "insertIfaceParamKinds" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Kind")) (TyCon "Unit"))))))
-(DFunDef false "insertIfaceParamKinds" ((PVar "iface") (PVar "i") PWild (PVar "kinds")) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "ifaceParamKindsRef")) (EBinOp "::" (ETuple (EApp (EApp (EVar "ifaceSlotKey") (EVar "iface")) (EVar "i")) (EVar "kinds")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "ifaceParamKindsRef") "value"))))
-(DTypeSig false "ifaceSlotKey" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "String"))))
-(DFunDef false "ifaceSlotKey" ((PVar "iface") (PVar "i")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "iface"))) (ELit (LString "@"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString ""))))
+(DTypeSig false "insertIfaceParamKinds" (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Kind")) (TyCon "Unit")))))))
+(DFunDef false "insertIfaceParamKinds" ((PVar "o") (PVar "iface") (PVar "i") PWild (PVar "kinds")) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "ifaceParamKindsRef")) (EBinOp "::" (ETuple (EApp (EApp (EApp (EVar "ifaceSlotKey") (EVar "o")) (EVar "iface")) (EVar "i")) (EVar "kinds")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "ifaceParamKindsRef") "value"))))
+(DTypeSig false "ifaceSlotKey" (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "RegKey")))))
+(DFunDef false "ifaceSlotKey" ((PVar "o") (PVar "iface") (PVar "i")) (EApp (EApp (EVar "regKeyTabAt") (EApp (EApp (EVar "ifaceTabKey") (EVar "o")) (EVar "iface"))) (EVar "i")))
 (DTypeSig false "declGradedScope" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "IfaceMethod")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))))))
 (DFunDef false "declGradedScope" ((PList) PWild) (EListLit))
 (DFunDef false "declGradedScope" ((PCons (PVar "p") (PVar "ps")) (PVar "methods")) (EApp (EApp (EApp (EVar "declGradedScopeAdd") (EVar "p")) (EApp (EApp (EVar "ifaceParamKindsOf") (EVar "p")) (EVar "methods"))) (EApp (EApp (EVar "declGradedScope") (EVar "ps")) (EVar "methods"))))
@@ -23318,16 +23540,16 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "requiredMethodNames" ((PList)) (EListLit))
 (DFunDef false "requiredMethodNames" ((PCons (PCon "IfaceMethod" (PVar "n") PWild (PCon "None")) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "requiredMethodNames") (EVar "rest"))))
 (DFunDef false "requiredMethodNames" ((PCons (PCon "IfaceMethod" PWild PWild (PCon "Some" PWild)) (PVar "rest"))) (EApp (EVar "requiredMethodNames") (EVar "rest")))
-(DTypeSig false "checkImplCompletenessMap" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit"))))
+(DTypeSig false "checkImplCompletenessMap" (TyFun (TyApp (TyCon "Registry") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit"))))
 (DFunDef false "checkImplCompletenessMap" ((PVar "reqMap") (PVar "iterDecls")) (EApp (EApp (EVar "foreachUnit") (EVar "pushIncompleteImpl")) (EApp (EApp (EVar "flatMap") (EApp (EVar "implCompletenessMsgsOfMap") (EVar "reqMap"))) (EVar "iterDecls"))))
-(DTypeSig false "implCompletenessMsgsOfMap" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "String"))))))
+(DTypeSig false "implCompletenessMsgsOfMap" (TyFun (TyApp (TyCon "Registry") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "String"))))))
 (DFunDef false "implCompletenessMsgsOfMap" ((PVar "reqMap") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EVar "implCompletenessMsgsOfMap") (EVar "reqMap")) (EVar "d")))
-(DFunDef false "implCompletenessMsgsOfMap" ((PVar "reqMap") (PRec "DImpl" ((rf "iface" None) (rf "tys" None) (rf "methods" None)) true)) (EMatch (EApp (EApp (EVar "omLookup") (EVar "iface")) (EVar "reqMap")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "required")) () (EBlock (DoLet false false (PVar "defined") (EApp (EApp (EVar "map") (EVar "implMethodName")) (EVar "methods"))) (DoLet false false (PVar "loc") (EApp (EVar "firstImplMethodLoc") (EVar "methods"))) (DoExpr (EApp (EApp (EVar "map") (ELam ((PVar "m")) (ETuple (EVar "loc") (EApp (EApp (EApp (EVar "missingImplMethodMsg") (EVar "iface")) (EVar "tys")) (EVar "m"))))) (EApp (EApp (EVar "filter") (ELam ((PVar "m")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "m")) (EVar "defined"))))) (EVar "required"))))))))
+(DFunDef false "implCompletenessMsgsOfMap" ((PVar "reqMap") (PRec "DImpl" ((rf "iface" None) (rf "tys" None) (rf "methods" None) (rf "implOrigin" (PVar "o"))) true)) (EMatch (EApp (EApp (EVar "regLookupK") (EApp (EVar "regKeyOfTab") (EApp (EApp (EVar "ifaceTabKey") (EVar "o")) (EVar "iface")))) (EVar "reqMap")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "required")) () (EBlock (DoLet false false (PVar "defined") (EApp (EApp (EVar "map") (EVar "implMethodName")) (EVar "methods"))) (DoLet false false (PVar "loc") (EApp (EVar "firstImplMethodLoc") (EVar "methods"))) (DoExpr (EApp (EApp (EVar "map") (ELam ((PVar "m")) (ETuple (EVar "loc") (EApp (EApp (EApp (EVar "missingImplMethodMsg") (EVar "iface")) (EVar "tys")) (EVar "m"))))) (EApp (EApp (EVar "filter") (ELam ((PVar "m")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "m")) (EVar "defined"))))) (EVar "required"))))))))
 (DFunDef false "implCompletenessMsgsOfMap" (PWild PWild) (EListLit))
-(DTypeSig false "insertIfaceRequired" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))))))
+(DTypeSig false "insertIfaceRequired" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "Registry") (TyApp (TyCon "List") (TyCon "String"))) (TyApp (TyCon "Registry") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "insertIfaceRequired" ((PList) (PVar "m")) (EVar "m"))
 (DFunDef false "insertIfaceRequired" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest")) (PVar "m")) (EApp (EApp (EVar "insertIfaceRequired") (EVar "rest")) (EApp (EApp (EVar "insertIfaceRequired") (EListLit (EVar "d"))) (EVar "m"))))
-(DFunDef false "insertIfaceRequired" ((PCons (PRec "DInterface" ((rf "name" None) (rf "methods" None)) true) (PVar "rest")) (PVar "m")) (EApp (EApp (EVar "insertIfaceRequired") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "name")) (EApp (EVar "requiredMethodNames") (EVar "methods"))) (EVar "m"))))
+(DFunDef false "insertIfaceRequired" ((PCons (PRec "DInterface" ((rf "name" None) (rf "methods" None) (rf "ifaceOrigin" (PVar "o"))) true) (PVar "rest")) (PVar "m")) (EApp (EApp (EVar "insertIfaceRequired") (EVar "rest")) (EApp (EApp (EApp (EVar "regInsertK") (EApp (EVar "regKeyOfTab") (EApp (EApp (EVar "ifaceTabKey") (EVar "o")) (EVar "name")))) (EApp (EVar "requiredMethodNames") (EVar "methods"))) (EVar "m"))))
 (DFunDef false "insertIfaceRequired" ((PCons PWild (PVar "rest")) (PVar "m")) (EApp (EApp (EVar "insertIfaceRequired") (EVar "rest")) (EVar "m")))
 (DTypeSig false "insertMethodIfaceParams" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyTuple (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))))) (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (TyTuple (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))))) (TyApp (TyCon "OrdMap") (TyCon "Unit"))))))
 (DFunDef false "insertMethodIfaceParams" ((PList) (PVar "acc")) (EVar "acc"))
@@ -25144,7 +25366,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "schemeLines" ((PCons (PTuple (PVar "n") (PVar "s")) (PVar "rest"))) (EBinOp "::" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "n"))) (ELit (LString " : "))) (EApp (EVar "display") (EApp (EApp (EVar "ppSchemeNamed") (EVar "n")) (EVar "s")))) (ELit (LString ""))) (EApp (EVar "schemeLines") (EVar "rest"))))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "Ns" true) (mem "Ident" true) (mem "mkIdent" false) (mem "tyConBuiltin" false) (mem "firstTyLoc" false) (mem "firstTyLocList" false) (mem "Constraint" true) (mem "Route" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "FunClause" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "Expr" true) (mem "Loc" true) (mem "orElseLoc" false) (mem "ConPayload" true) (mem "Field" true) (mem "Variant" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "Require" true) (mem "Super" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Decl" true) (mem "PropParam" true) (mem "Section" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "useMemberAlias" false) (mem "qualifiedLocal" false))))
-(DUse false (UseGroup ("types" "registry") ((mem "TabKey" true) (mem "tabKeyOf" false) (mem "tabKeyName" false) (mem "lookupTab" false) (mem "tabHasName" false))))
+(DUse false (UseGroup ("types" "registry") ((mem "TabKey" true) (mem "tabKeyOf" false) (mem "tabKeyName" false) (mem "lookupTab" false) (mem "tabHasName" false) (mem "RegKey" false) (mem "Registry" false) (mem "regKeyOfTab" false) (mem "regKeyTabAt" false) (mem "lookupReg" false) (mem "regEmpty" false) (mem "regInsertK" false) (mem "regLookupK" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "mapProg" false))))
 (DUse false (UseGroup ("frontend" "marker") ((mem "localBoundNames" false))))
 (DUse false (UseGroup ("frontend" "resolve") ((mem "stampBindingIds" false) (mem "stampGraphTyOrigins" false) (mem "stampFlatTyOrigins" false) (mem "stampDeclOrigins" false) (mem "noteOriginTrace" false))))
@@ -25503,6 +25725,8 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "argPerformableOccs" (PWild PWild) (EListLit))
 (DTypeSig false "tyTabKey" (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyCon "TabKey"))))
 (DFunDef false "tyTabKey" ((PVar "o") (PVar "n")) (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsType")) (EVar "o")) (EVar "n")))
+(DTypeSig false "ifaceTabKey" (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyCon "TabKey"))))
+(DFunDef false "ifaceTabKey" ((PVar "o") (PVar "n")) (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsIface")) (EVar "o")) (EVar "n")))
 (DTypeSig false "krowSlotOccs" (TyFun (TyCon "Bool") (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom")))))))))
 (DFunDef false "krowSlotOccs" ((PVar "perf") (PVar "o") (PVar "n") (PVar "args")) (EMatch (EApp (EApp (EVar "lookupTab") (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "dataParamKindsRef") "value")) (arm (PCon "Some" (PVar "kinds")) ((GBool (EBinOp "==" (EApp (EVar "listLen") (EVar "kinds")) (EApp (EVar "listLen") (EVar "args"))))) (EBinOp "++" (EIf (EVar "perf") (EApp (EApp (EMethodRef "map") (ELam ((PVar "n2")) (ETuple (EVar "n2") (EListLit)))) (EApp (EApp (EVar "krowArgVarNames") (EVar "kinds")) (EVar "args"))) (EListLit)) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "argPerformableOccs") (EVar "perf"))) (EVar "args")))) (arm PWild () (EApp (EApp (EDictApp "flatMap") (EApp (EVar "argPerformableOccs") (EVar "perf"))) (EVar "args")))))
 (DTypeSig false "methodEffRetOccs" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))) (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom")))))))
@@ -25530,11 +25754,11 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "checkGradedImplHeads" ((PCons (PVar "d") (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EVar "checkGradedImplHeadDecl") (EVar "d"))) (DoExpr (EApp (EVar "checkGradedImplHeads") (EVar "rest")))))
 (DTypeSig false "checkGradedImplHeadDecl" (TyFun (TyCon "Decl") (TyCon "Unit")))
 (DFunDef false "checkGradedImplHeadDecl" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "checkGradedImplHeadDecl") (EVar "d")))
-(DFunDef false "checkGradedImplHeadDecl" ((PRec "DImpl" ((rf "iface" None) (rf "tys" None)) true)) (EApp (EApp (EApp (EVar "checkGradedImplTys") (EVar "iface")) (ELit (LInt 0))) (EVar "tys")))
+(DFunDef false "checkGradedImplHeadDecl" ((PRec "DImpl" ((rf "iface" None) (rf "tys" None) (rf "implOrigin" (PVar "o"))) true)) (EApp (EApp (EApp (EApp (EVar "checkGradedImplTys") (EVar "o")) (EVar "iface")) (ELit (LInt 0))) (EVar "tys")))
 (DFunDef false "checkGradedImplHeadDecl" (PWild) (ELit LUnit))
-(DTypeSig false "checkGradedImplTys" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyCon "Unit")))))
-(DFunDef false "checkGradedImplTys" (PWild PWild (PList)) (ELit LUnit))
-(DFunDef false "checkGradedImplTys" ((PVar "iface") (PVar "i") (PCons (PVar "t") (PVar "rest"))) (EBlock (DoLet false false PWild (EMatch (EApp (EApp (EVar "lookupAssoc") (EApp (EApp (EVar "ifaceSlotKey") (EVar "iface")) (EVar "i"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "ifaceParamKindsRef") "value")) (arm (PCon "Some" (PVar "want")) ((GBool (EApp (EVar "anyKRow") (EVar "want")))) (EApp (EApp (EApp (EVar "checkGradedImplHead") (EVar "iface")) (EVar "t")) (EVar "want"))) (arm PWild () (ELit LUnit)))) (DoExpr (EApp (EApp (EApp (EVar "checkGradedImplTys") (EVar "iface")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest")))))
+(DTypeSig false "checkGradedImplTys" (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyCon "Unit"))))))
+(DFunDef false "checkGradedImplTys" (PWild PWild PWild (PList)) (ELit LUnit))
+(DFunDef false "checkGradedImplTys" ((PVar "o") (PVar "iface") (PVar "i") (PCons (PVar "t") (PVar "rest"))) (EBlock (DoLet false false PWild (EMatch (EApp (EApp (EVar "lookupReg") (EApp (EApp (EApp (EVar "ifaceSlotKey") (EVar "o")) (EVar "iface")) (EVar "i"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "ifaceParamKindsRef") "value")) (arm (PCon "Some" (PVar "want")) ((GBool (EApp (EVar "anyKRow") (EVar "want")))) (EApp (EApp (EApp (EVar "checkGradedImplHead") (EVar "iface")) (EVar "t")) (EVar "want"))) (arm PWild () (ELit LUnit)))) (DoExpr (EApp (EApp (EApp (EApp (EVar "checkGradedImplTys") (EVar "o")) (EVar "iface")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest")))))
 (DTypeSig false "checkGradedImplHead" (TyFun (TyCon "String") (TyFun (TyCon "Ty") (TyFun (TyApp (TyCon "List") (TyCon "Kind")) (TyCon "Unit")))))
 (DFunDef false "checkGradedImplHead" ((PVar "iface") (PVar "t") (PVar "want")) (EMatch (EApp (EVar "tyAppSpine") (EVar "t")) (arm (PTuple (PRec "TyCon" ((rf "tyConName" (PVar "n")) (rf "tyConLoc" (PVar "loc")) (rf "tyConOrigin" (PVar "o"))) false) (PVar "applied")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkGradedImplHeadCon") (EVar "iface")) (EVar "o")) (EVar "n")) (EVar "loc")) (EApp (EVar "listLen") (EVar "applied"))) (EVar "want"))) (arm (PTuple (PCon "TyTuple" (PVar "ts")) PWild) () (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (ELit (LString "T-IMPL-KIND-MISMATCH"))) (EApp (EVar "firstTyLocList") (EVar "ts"))) (EApp (EApp (EApp (EVar "implTupleHeadKindMsg") (EVar "iface")) (EApp (EVar "listLen") (EVar "ts"))) (EVar "want")))) (arm PWild () (ELit LUnit))))
 (DTypeSig false "checkGradedImplHeadCon" (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Kind")) (TyCon "Unit"))))))))
@@ -25661,9 +25885,9 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "callOblsWindow" ((PVar "mark")) (EApp (EApp (EMethodRef "map") (EVar "oblAsTuple")) (EApp (EApp (EVar "wWindow") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "obls")) (EVar "mark"))))
 (DTypeSig false "pushDictApp" (TyFun (TyTuple (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Route"))) (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Mono"))) (TyApp (TyCon "Option") (TyCon "Loc"))) (TyCon "Unit")))
 (DFunDef false "pushDictApp" ((PVar "app")) (EApp (EApp (EVar "wPush") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "dictApps")) (EVar "app")))
-(DData Private "CrossRun" () ((variant "CrossRun" (ConNamed (field "universeIfaceMethodsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (field "universeFunNamesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (field "universeKeyBucketsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "KeyEntry"))))) (field "universeIfaceRequiredRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))))) (field "universeMethodIfaceParamsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))))))) (field "universeMethodIdentsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))))))))) (field "universeMethodCollidedRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "universeRegisteredIfacesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (field "universeMethodDispatchIdxRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))))) (field "universeRecordByName" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "RecordInfo")))) (field "universeFieldOwners" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))))) (field "universeDataParamKinds" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Kind")))))) (field "universeIfaceParamKinds" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))))) (field "universeAliasTable" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty")))))) (field "universeDataEnv" (TyApp (TyCon "Ref") (TyCon "TcEnv"))) (field "universeDataDecls" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Decl")))) (field "obUnivConcreteRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "List") (TyCon "Require"))))))) (field "obUnivHeadlessRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "List") (TyCon "Require"))))))) (field "obUnivIfaceTagsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "Unit"))))) (field "crossModuleFunConstraintsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Int")))))) (field "crossModuleFunConstraintsQualRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int")))))) (field "crossModuleFunConstraintIfacesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (field "crossModuleFunConstraintIfacesQualRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))) (field "crossModuleMethodConstraintsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Int")))))) (field "crossModuleMethodConstraintsQualRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int")))))) (field "coreSchemeObligationsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Int")))))))))) ())
+(DData Private "CrossRun" () ((variant "CrossRun" (ConNamed (field "universeIfaceMethodsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (field "universeFunNamesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (field "universeKeyBucketsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "KeyEntry"))))) (field "universeIfaceRequiredRef" (TyApp (TyCon "Ref") (TyApp (TyCon "Registry") (TyApp (TyCon "List") (TyCon "String"))))) (field "universeMethodIfaceParamsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))))))) (field "universeMethodIdentsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))))))))) (field "universeMethodCollidedRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "universeRegisteredIfacesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (field "universeMethodDispatchIdxRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))))) (field "universeRecordByName" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "RecordInfo")))) (field "universeFieldOwners" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))))) (field "universeDataParamKinds" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Kind")))))) (field "universeIfaceParamKinds" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "RegKey") (TyApp (TyCon "List") (TyCon "Kind")))))) (field "universeAliasTable" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty")))))) (field "universeDataEnv" (TyApp (TyCon "Ref") (TyCon "TcEnv"))) (field "universeDataDecls" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Decl")))) (field "obUnivConcreteRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "List") (TyCon "Require"))))))) (field "obUnivHeadlessRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "List") (TyCon "Require"))))))) (field "obUnivIfaceTagsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "Unit"))))) (field "crossModuleFunConstraintsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Int")))))) (field "crossModuleFunConstraintsQualRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int")))))) (field "crossModuleFunConstraintIfacesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (field "crossModuleFunConstraintIfacesQualRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))) (field "crossModuleMethodConstraintsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Int")))))) (field "crossModuleMethodConstraintsQualRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int")))))) (field "coreSchemeObligationsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Int")))))))))) ())
 (DTypeSig false "freshCrossRun" (TyFun (TyCon "TcEnv") (TyCon "CrossRun")))
-(DFunDef false "freshCrossRun" ((PVar "env")) (ERecordCreate "CrossRun" ((fa "universeIfaceMethodsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "universeFunNamesRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "universeKeyBucketsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "universeIfaceRequiredRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "universeMethodIfaceParamsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "universeMethodIdentsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "universeMethodCollidedRef" (EApp (EVar "Ref") (EListLit))) (fa "universeRegisteredIfacesRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "universeMethodDispatchIdxRef" (EApp (EVar "Ref") (EListLit))) (fa "universeRecordByName" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "universeFieldOwners" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "universeDataParamKinds" (EApp (EVar "Ref") (EListLit))) (fa "universeIfaceParamKinds" (EApp (EVar "Ref") (EListLit))) (fa "universeAliasTable" (EApp (EVar "Ref") (EListLit))) (fa "universeDataEnv" (EApp (EVar "Ref") (EVar "env"))) (fa "universeDataDecls" (EApp (EVar "Ref") (EListLit))) (fa "obUnivConcreteRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "obUnivHeadlessRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "obUnivIfaceTagsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "crossModuleFunConstraintsRef" (EApp (EVar "Ref") (EListLit))) (fa "crossModuleFunConstraintsQualRef" (EApp (EVar "Ref") (EListLit))) (fa "crossModuleFunConstraintIfacesRef" (EApp (EVar "Ref") (EListLit))) (fa "crossModuleFunConstraintIfacesQualRef" (EApp (EVar "Ref") (EListLit))) (fa "crossModuleMethodConstraintsRef" (EApp (EVar "Ref") (EListLit))) (fa "crossModuleMethodConstraintsQualRef" (EApp (EVar "Ref") (EListLit))) (fa "coreSchemeObligationsRef" (EApp (EVar "Ref") (EVar "omEmpty"))))))
+(DFunDef false "freshCrossRun" ((PVar "env")) (ERecordCreate "CrossRun" ((fa "universeIfaceMethodsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "universeFunNamesRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "universeKeyBucketsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "universeIfaceRequiredRef" (EApp (EVar "Ref") (EVar "regEmpty"))) (fa "universeMethodIfaceParamsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "universeMethodIdentsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "universeMethodCollidedRef" (EApp (EVar "Ref") (EListLit))) (fa "universeRegisteredIfacesRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "universeMethodDispatchIdxRef" (EApp (EVar "Ref") (EListLit))) (fa "universeRecordByName" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "universeFieldOwners" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "universeDataParamKinds" (EApp (EVar "Ref") (EListLit))) (fa "universeIfaceParamKinds" (EApp (EVar "Ref") (EListLit))) (fa "universeAliasTable" (EApp (EVar "Ref") (EListLit))) (fa "universeDataEnv" (EApp (EVar "Ref") (EVar "env"))) (fa "universeDataDecls" (EApp (EVar "Ref") (EListLit))) (fa "obUnivConcreteRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "obUnivHeadlessRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "obUnivIfaceTagsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "crossModuleFunConstraintsRef" (EApp (EVar "Ref") (EListLit))) (fa "crossModuleFunConstraintsQualRef" (EApp (EVar "Ref") (EListLit))) (fa "crossModuleFunConstraintIfacesRef" (EApp (EVar "Ref") (EListLit))) (fa "crossModuleFunConstraintIfacesQualRef" (EApp (EVar "Ref") (EListLit))) (fa "crossModuleMethodConstraintsRef" (EApp (EVar "Ref") (EListLit))) (fa "crossModuleMethodConstraintsQualRef" (EApp (EVar "Ref") (EListLit))) (fa "coreSchemeObligationsRef" (EApp (EVar "Ref") (EVar "omEmpty"))))))
 (DTypeSig false "crossRun" (TyApp (TyCon "Ref") (TyCon "CrossRun")))
 (DFunDef false "crossRun" () (EApp (EVar "Ref") (EApp (EVar "freshCrossRun") (EVar "initialEnv"))))
 (DTypeSig false "resetCrossModuleState" (TyFun (TyCon "Unit") (TyCon "Unit")))
@@ -25754,7 +25978,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "mainTypeIsFloat" (PWild) (EMatch (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "mainSchemeRef") "value") (arm (PCon "Some" (PCon "Forall" PWild PWild (PVar "t"))) () (EMatch (EApp (EVar "normalize") (EVar "t")) (arm (PCon "TCon" (PLit (LString "Float")) PWild) () (EVar "True")) (arm PWild () (EVar "False")))) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig true "hadMatchWarnings" (TyFun (TyCon "Unit") (TyCon "Bool")))
 (DFunDef false "hadMatchWarnings" (PWild) (EMatch (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchWarnings") "value") (arm (PList) () (EVar "False")) (arm PWild () (EVar "True"))))
-(DData Private "PerRun" () ((variant "PerRun" (ConNamed (field "tyvarCounter" (TyApp (TyCon "Ref") (TyCon "Int"))) (field "inRigidityBodyRef" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "effvarCounter" (TyApp (TyCon "Ref") (TyCon "Int"))) (field "curEffect" (TyApp (TyCon "Ref") (TyCon "EffRow"))) (field "recordByNameRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "RecordInfo")))) (field "fieldOwnersRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))))) (field "dataParamKindsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Kind")))))) (field "aliasTableRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty")))))) (field "pendingSites" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "PendingEntry")))) (field "pendingRLocalSites" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "PendingEntry")))) (field "shadowStandaloneSchemesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))) (field "definerShadowNamesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "definerShadowSigsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))))) (field "shadowKeyTableRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "KeyEntry"))))) (field "pendingBinopSites" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "PendingEntry")))) (field "pendingUnopSites" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "PendingEntry")))) (field "pendingArithSites" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "Ref") (TyCon "Route")) (TyCon "Mono"))))) (field "methodIfaceParamsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))))))) (field "registeredIfacesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (field "implObls" (TyApp (TyCon "Windowed") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty") (TyCon "Mono") (TyApp (TyCon "Option") (TyCon "Loc"))))) (field "numlitRefs" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Mono") (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "Float"))) (TyCon "Int") (TyApp (TyCon "Ref") (TyCon "Route")))))) (field "poisonedVars" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Int")))) (field "deferrableVarIds" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Int")))) (field "tupleCallCandidates" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Mono") (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "Loc") (TyCon "String"))))))) (field "numlitVarLocs" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Mono") (TyCon "Loc"))))) (field "numlitUntainted" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Mono") (TyCon "Loc"))))) (field "numlitOpLocs" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Loc")))) (field "numlitCtxTags" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Loc") (TyCon "String"))))) (field "localBindRefs" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))))) (field "localSchemesOut" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))) (field "seedSchemesOut" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))) (field "pendingArgStamps" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "PendingEntry")))) (field "activeDictVars" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String"))))) (field "activeDictPreds" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono") (TyCon "String"))))) (field "funConstraintsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Int")))))) (field "funConstraintArgsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Mono"))))))) (field "funConstraintIfacesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (field "currentImportDefinersRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))) (field "currentImportOriginsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))) (field "dictApps" (TyApp (TyCon "Windowed") (TyTuple (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Route"))) (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Mono"))) (TyApp (TyCon "Option") (TyCon "Loc"))))) (field "obls" (TyApp (TyCon "Windowed") (TyCon "UObligation"))) (field "absorptions" (TyApp (TyCon "Windowed") (TyCon "AbsorptionEvent"))) (field "schemeObligationsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "Int")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Int")))))))) (field "schemeDefIdsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Int")))) (field "methodConstraintsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Int")))))) (field "methodConstraintPositionsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Int")))))) (field "pendingMethodDicts" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Route"))) (TyApp (TyCon "List") (TyCon "Mono")))))) (field "pendingRecDictApps" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "RecDictApp")))) (field "currentFn" (TyApp (TyCon "Ref") (TyCon "String"))) (field "currentImplBody" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "methodSiteFns" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "Mono"))))) (field "dictAppFns" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Mono")))))) (field "promotedRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "methodShadowNamesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (field "flatShadowScopingRef" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "flatCoreFnNamesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (field "flatUserShadowNamesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "groupConstraintMonosRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))))) (field "typeErrors" (TyApp (TyCon "Windowed") (TyCon "TcDiag"))) (field "errorsDetected" (TyApp (TyCon "Ref") (TyCon "Int"))) (field "occursCheckFailed" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "currentLevel" (TyApp (TyCon "Ref") (TyCon "Int"))) (field "ifaceParamKindsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))))) (field "pinnedLocals" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Mono") (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))))))))) ())
+(DData Private "PerRun" () ((variant "PerRun" (ConNamed (field "tyvarCounter" (TyApp (TyCon "Ref") (TyCon "Int"))) (field "inRigidityBodyRef" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "effvarCounter" (TyApp (TyCon "Ref") (TyCon "Int"))) (field "curEffect" (TyApp (TyCon "Ref") (TyCon "EffRow"))) (field "recordByNameRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "RecordInfo")))) (field "fieldOwnersRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))))) (field "dataParamKindsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Kind")))))) (field "aliasTableRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty")))))) (field "pendingSites" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "PendingEntry")))) (field "pendingRLocalSites" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "PendingEntry")))) (field "shadowStandaloneSchemesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))) (field "definerShadowNamesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "definerShadowSigsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))))) (field "shadowKeyTableRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "KeyEntry"))))) (field "pendingBinopSites" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "PendingEntry")))) (field "pendingUnopSites" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "PendingEntry")))) (field "pendingArithSites" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "Ref") (TyCon "Route")) (TyCon "Mono"))))) (field "methodIfaceParamsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))))))) (field "registeredIfacesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (field "implObls" (TyApp (TyCon "Windowed") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty") (TyCon "Mono") (TyApp (TyCon "Option") (TyCon "Loc"))))) (field "numlitRefs" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Mono") (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "Float"))) (TyCon "Int") (TyApp (TyCon "Ref") (TyCon "Route")))))) (field "poisonedVars" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Int")))) (field "deferrableVarIds" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Int")))) (field "tupleCallCandidates" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Mono") (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "Loc") (TyCon "String"))))))) (field "numlitVarLocs" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Mono") (TyCon "Loc"))))) (field "numlitUntainted" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Mono") (TyCon "Loc"))))) (field "numlitOpLocs" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Loc")))) (field "numlitCtxTags" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Loc") (TyCon "String"))))) (field "localBindRefs" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))))) (field "localSchemesOut" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))) (field "seedSchemesOut" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))) (field "pendingArgStamps" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "PendingEntry")))) (field "activeDictVars" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String"))))) (field "activeDictPreds" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono") (TyCon "String"))))) (field "funConstraintsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Int")))))) (field "funConstraintArgsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Mono"))))))) (field "funConstraintIfacesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (field "currentImportDefinersRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))) (field "currentImportOriginsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))) (field "dictApps" (TyApp (TyCon "Windowed") (TyTuple (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Route"))) (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Mono"))) (TyApp (TyCon "Option") (TyCon "Loc"))))) (field "obls" (TyApp (TyCon "Windowed") (TyCon "UObligation"))) (field "absorptions" (TyApp (TyCon "Windowed") (TyCon "AbsorptionEvent"))) (field "schemeObligationsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "Int")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Int")))))))) (field "schemeDefIdsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Int")))) (field "methodConstraintsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Int")))))) (field "methodConstraintPositionsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Int")))))) (field "pendingMethodDicts" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Route"))) (TyApp (TyCon "List") (TyCon "Mono")))))) (field "pendingRecDictApps" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "RecDictApp")))) (field "currentFn" (TyApp (TyCon "Ref") (TyCon "String"))) (field "currentImplBody" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "methodSiteFns" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "Mono"))))) (field "dictAppFns" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Mono")))))) (field "promotedRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "methodShadowNamesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (field "flatShadowScopingRef" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "flatCoreFnNamesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (field "flatUserShadowNamesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "groupConstraintMonosRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))))) (field "typeErrors" (TyApp (TyCon "Windowed") (TyCon "TcDiag"))) (field "errorsDetected" (TyApp (TyCon "Ref") (TyCon "Int"))) (field "occursCheckFailed" (TyApp (TyCon "Ref") (TyCon "Bool"))) (field "currentLevel" (TyApp (TyCon "Ref") (TyCon "Int"))) (field "ifaceParamKindsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "RegKey") (TyApp (TyCon "List") (TyCon "Kind")))))) (field "pinnedLocals" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Mono") (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))))))))) ())
 (DTypeSig false "freshPerRun" (TyFun (TyCon "Unit") (TyCon "PerRun")))
 (DFunDef false "freshPerRun" (PWild) (ERecordCreate "PerRun" ((fa "tyvarCounter" (EApp (EVar "Ref") (ELit (LInt 0)))) (fa "inRigidityBodyRef" (EApp (EVar "Ref") (EVar "False"))) (fa "effvarCounter" (EApp (EVar "Ref") (ELit (LInt 0)))) (fa "curEffect" (EApp (EVar "Ref") (EApp (EApp (EVar "EffRow") (EListLit)) (EVar "None")))) (fa "recordByNameRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "fieldOwnersRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "dataParamKindsRef" (EApp (EVar "Ref") (EListLit))) (fa "aliasTableRef" (EApp (EVar "Ref") (EListLit))) (fa "pendingSites" (EApp (EVar "Ref") (EListLit))) (fa "pendingRLocalSites" (EApp (EVar "Ref") (EListLit))) (fa "shadowStandaloneSchemesRef" (EApp (EVar "Ref") (EListLit))) (fa "definerShadowNamesRef" (EApp (EVar "Ref") (EListLit))) (fa "definerShadowSigsRef" (EApp (EVar "Ref") (EListLit))) (fa "shadowKeyTableRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "pendingBinopSites" (EApp (EVar "Ref") (EListLit))) (fa "pendingUnopSites" (EApp (EVar "Ref") (EListLit))) (fa "pendingArithSites" (EApp (EVar "Ref") (EListLit))) (fa "methodIfaceParamsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "registeredIfacesRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "implObls" (EApp (EVar "wNew") (ELit LUnit))) (fa "numlitRefs" (EApp (EVar "Ref") (EListLit))) (fa "poisonedVars" (EApp (EVar "Ref") (EListLit))) (fa "deferrableVarIds" (EApp (EVar "Ref") (EListLit))) (fa "tupleCallCandidates" (EApp (EVar "Ref") (EListLit))) (fa "numlitVarLocs" (EApp (EVar "Ref") (EListLit))) (fa "numlitUntainted" (EApp (EVar "Ref") (EListLit))) (fa "numlitOpLocs" (EApp (EVar "Ref") (EListLit))) (fa "numlitCtxTags" (EApp (EVar "Ref") (EListLit))) (fa "localBindRefs" (EApp (EVar "Ref") (EListLit))) (fa "localSchemesOut" (EApp (EVar "Ref") (EListLit))) (fa "seedSchemesOut" (EApp (EVar "Ref") (EListLit))) (fa "pendingArgStamps" (EApp (EVar "Ref") (EListLit))) (fa "activeDictVars" (EApp (EVar "Ref") (EListLit))) (fa "activeDictPreds" (EApp (EVar "Ref") (EListLit))) (fa "funConstraintsRef" (EApp (EVar "Ref") (EListLit))) (fa "funConstraintArgsRef" (EApp (EVar "Ref") (EListLit))) (fa "funConstraintIfacesRef" (EApp (EVar "Ref") (EListLit))) (fa "currentImportDefinersRef" (EApp (EVar "Ref") (EListLit))) (fa "currentImportOriginsRef" (EApp (EVar "Ref") (EListLit))) (fa "dictApps" (EApp (EVar "wNew") (ELit LUnit))) (fa "obls" (EApp (EVar "wNew") (ELit LUnit))) (fa "absorptions" (EApp (EVar "wNew") (ELit LUnit))) (fa "schemeObligationsRef" (EApp (EVar "Ref") (EListLit))) (fa "schemeDefIdsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "methodConstraintsRef" (EApp (EVar "Ref") (EListLit))) (fa "methodConstraintPositionsRef" (EApp (EVar "Ref") (EListLit))) (fa "pendingMethodDicts" (EApp (EVar "Ref") (EListLit))) (fa "pendingRecDictApps" (EApp (EVar "Ref") (EListLit))) (fa "currentFn" (EApp (EVar "Ref") (ELit (LString "")))) (fa "currentImplBody" (EApp (EVar "Ref") (EVar "False"))) (fa "methodSiteFns" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "dictAppFns" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "promotedRef" (EApp (EVar "Ref") (EListLit))) (fa "methodShadowNamesRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "flatShadowScopingRef" (EApp (EVar "Ref") (EVar "False"))) (fa "flatCoreFnNamesRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "flatUserShadowNamesRef" (EApp (EVar "Ref") (EListLit))) (fa "groupConstraintMonosRef" (EApp (EVar "Ref") (EListLit))) (fa "typeErrors" (EApp (EVar "wNew") (ELit LUnit))) (fa "errorsDetected" (EApp (EVar "Ref") (ELit (LInt 0)))) (fa "occursCheckFailed" (EApp (EVar "Ref") (EVar "False"))) (fa "currentLevel" (EApp (EVar "Ref") (ELit (LInt 0)))) (fa "ifaceParamKindsRef" (EApp (EVar "Ref") (EListLit))) (fa "pinnedLocals" (EApp (EVar "Ref") (EListLit))))))
 (DTypeSig false "perRun" (TyApp (TyCon "Ref") (TyCon "PerRun")))
@@ -26861,7 +27085,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "registerData" ((PVar "env") (PRec "DData" ((rf "dataName" (PVar "name")) (rf "dataParams" (PVar "params")) (rf "dataCtors" (PVar "variants")) (rf "dataOrigin" (PVar "o"))) false)) (EApp (EApp (EApp (EApp (EApp (EVar "registerVariants") (EVar "o")) (EVar "env")) (EVar "name")) (EVar "params")) (EVar "variants")))
 (DFunDef false "registerData" ((PVar "env") (PRec "DTypeAlias" ((rf "tyAliasName" (PVar "name")) (rf "tyAliasParams" (PVar "params")) (rf "tyAliasRhs" (PVar "rhs")) (rf "tyAliasOrigin" (PVar "o"))) false)) (EBlock (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "aliasTableRef")) (EBinOp "::" (ETuple (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "name")) (ETuple (EVar "params") (EVar "rhs"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "aliasTableRef") "value")))) (DoExpr (EVar "env"))))
 (DFunDef false "registerData" ((PVar "env") (PRec "DNewtype" ((rf "newtypeName" (PVar "name")) (rf "newtypeParams" (PVar "params")) (rf "newtypeCtor" (PVar "con")) (rf "newtypeFieldTy" (PVar "fty")) (rf "newtypeOrigin" (PVar "o"))) false)) (EApp (EApp (EApp (EApp (EApp (EVar "registerVariants") (EVar "o")) (EVar "env")) (EVar "name")) (EVar "params")) (EListLit (EApp (EApp (EVar "Variant") (EVar "con")) (EApp (EVar "ConPos") (EListLit (EVar "fty")))))))
-(DFunDef false "registerData" ((PVar "env") (PRec "DInterface" ((rf "name" None) (rf "typarams" None) (rf "methods" None)) true)) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "registerIfaceParamKinds") (EVar "name")) (EVar "typarams")) (EVar "methods"))) (DoExpr (EVar "env"))))
+(DFunDef false "registerData" ((PVar "env") (PRec "DInterface" ((rf "name" None) (rf "typarams" None) (rf "methods" None) (rf "ifaceOrigin" (PVar "o"))) true)) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "registerIfaceParamKinds") (EVar "o")) (EVar "name")) (EVar "typarams")) (EVar "methods"))) (DoExpr (EVar "env"))))
 (DFunDef false "registerData" ((PVar "env") PWild) (EVar "env"))
 (DTypeSig false "registerRecordInfoKeyed" (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Field")) (TyCon "Unit")))))))
 (DFunDef false "registerRecordInfoKeyed" ((PVar "o") (PVar "key") (PVar "typeName") (PVar "params") (PVar "fields")) (EBlock (DoLet false false (PVar "paramVars") (EApp (EVar "freshVars") (EApp (EVar "listLen") (EVar "params")))) (DoLet false false (PVar "tvs") (EApp (EApp (EVar "zipL") (EVar "params")) (EVar "paramVars"))) (DoLet false false (PVar "result") (EApp (EApp (EVar "applyParams") (EApp (EApp (EVar "tconFrom") (EVar "o")) (EVar "typeName"))) (EVar "paramVars"))) (DoLet false false (PVar "fieldMonos") (EApp (EApp (EMethodRef "map") (EApp (EVar "recFieldMono") (EVar "tvs"))) (EVar "fields"))) (DoLet false false (PVar "ri") (EApp (EApp (EApp (EApp (EVar "RecordInfo") (EApp (EApp (EMethodRef "map") (EVar "monoTyvarId")) (EVar "paramVars"))) (EVar "result")) (EVar "fieldMonos")) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EVar "fieldMonos"))) (EVar "omEmpty")))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "recordByNameRef")) (EApp (EApp (EApp (EVar "omInsert") (EVar "key")) (EVar "ri")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "recordByNameRef") "value")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "fieldOwnersRef")) (EApp (EApp (EApp (EVar "addFieldOwners") (EVar "key")) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "fieldMonos"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "fieldOwnersRef") "value"))))))
@@ -26895,11 +27119,11 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "payloadAstTypes" ((PCon "ConNamed" (PVar "fields") PWild)) (EApp (EApp (EMethodRef "map") (EVar "fieldTyOf")) (EVar "fields")))
 (DTypeSig false "fieldTyOf" (TyFun (TyCon "Field") (TyCon "Ty")))
 (DFunDef false "fieldTyOf" ((PCon "Field" PWild (PVar "ty"))) (EVar "ty"))
-(DTypeSig false "registerIfaceParamKinds" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "IfaceMethod")) (TyCon "Unit")))))
-(DFunDef false "registerIfaceParamKinds" ((PVar "iface") (PVar "typarams") (PVar "methods")) (EApp (EApp (EApp (EApp (EVar "registerIfaceParamKindsGo") (EVar "iface")) (ELit (LInt 0))) (EVar "typarams")) (EVar "methods")))
-(DTypeSig false "registerIfaceParamKindsGo" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "IfaceMethod")) (TyCon "Unit"))))))
-(DFunDef false "registerIfaceParamKindsGo" (PWild PWild (PList) PWild) (ELit LUnit))
-(DFunDef false "registerIfaceParamKindsGo" ((PVar "iface") (PVar "i") (PCons (PVar "p") (PVar "ps")) (PVar "methods")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "insertIfaceParamKinds") (EVar "iface")) (EVar "i")) (EVar "p")) (EApp (EApp (EVar "ifaceParamKindsOf") (EVar "p")) (EVar "methods")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "registerIfaceParamKindsGo") (EVar "iface")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "ps")) (EVar "methods")))))
+(DTypeSig false "registerIfaceParamKinds" (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "IfaceMethod")) (TyCon "Unit"))))))
+(DFunDef false "registerIfaceParamKinds" ((PVar "o") (PVar "iface") (PVar "typarams") (PVar "methods")) (EApp (EApp (EApp (EApp (EApp (EVar "registerIfaceParamKindsGo") (EVar "o")) (EVar "iface")) (ELit (LInt 0))) (EVar "typarams")) (EVar "methods")))
+(DTypeSig false "registerIfaceParamKindsGo" (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "IfaceMethod")) (TyCon "Unit")))))))
+(DFunDef false "registerIfaceParamKindsGo" (PWild PWild PWild (PList) PWild) (ELit LUnit))
+(DFunDef false "registerIfaceParamKindsGo" ((PVar "o") (PVar "iface") (PVar "i") (PCons (PVar "p") (PVar "ps")) (PVar "methods")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "insertIfaceParamKinds") (EVar "o")) (EVar "iface")) (EVar "i")) (EVar "p")) (EApp (EApp (EVar "ifaceParamKindsOf") (EVar "p")) (EVar "methods")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "registerIfaceParamKindsGo") (EVar "o")) (EVar "iface")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "ps")) (EVar "methods")))))
 (DTypeSig false "anyKRow" (TyFun (TyApp (TyCon "List") (TyCon "Kind")) (TyCon "Bool")))
 (DFunDef false "anyKRow" ((PList)) (EVar "False"))
 (DFunDef false "anyKRow" ((PCons (PCon "KRow") PWild)) (EVar "True"))
@@ -26909,10 +27133,10 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "kindsEq" ((PCons (PCon "KType") (PVar "a")) (PCons (PCon "KType") (PVar "b"))) (EApp (EApp (EVar "kindsEq") (EVar "a")) (EVar "b")))
 (DFunDef false "kindsEq" ((PCons (PCon "KRow") (PVar "a")) (PCons (PCon "KRow") (PVar "b"))) (EApp (EApp (EVar "kindsEq") (EVar "a")) (EVar "b")))
 (DFunDef false "kindsEq" (PWild PWild) (EVar "False"))
-(DTypeSig false "insertIfaceParamKinds" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Kind")) (TyCon "Unit"))))))
-(DFunDef false "insertIfaceParamKinds" ((PVar "iface") (PVar "i") PWild (PVar "kinds")) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "ifaceParamKindsRef")) (EBinOp "::" (ETuple (EApp (EApp (EVar "ifaceSlotKey") (EVar "iface")) (EVar "i")) (EVar "kinds")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "ifaceParamKindsRef") "value"))))
-(DTypeSig false "ifaceSlotKey" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "String"))))
-(DFunDef false "ifaceSlotKey" ((PVar "iface") (PVar "i")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "iface"))) (ELit (LString "@"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString ""))))
+(DTypeSig false "insertIfaceParamKinds" (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Kind")) (TyCon "Unit")))))))
+(DFunDef false "insertIfaceParamKinds" ((PVar "o") (PVar "iface") (PVar "i") PWild (PVar "kinds")) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "ifaceParamKindsRef")) (EBinOp "::" (ETuple (EApp (EApp (EApp (EVar "ifaceSlotKey") (EVar "o")) (EVar "iface")) (EVar "i")) (EVar "kinds")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "ifaceParamKindsRef") "value"))))
+(DTypeSig false "ifaceSlotKey" (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "RegKey")))))
+(DFunDef false "ifaceSlotKey" ((PVar "o") (PVar "iface") (PVar "i")) (EApp (EApp (EVar "regKeyTabAt") (EApp (EApp (EVar "ifaceTabKey") (EVar "o")) (EVar "iface"))) (EVar "i")))
 (DTypeSig false "declGradedScope" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "IfaceMethod")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))))))
 (DFunDef false "declGradedScope" ((PList) PWild) (EListLit))
 (DFunDef false "declGradedScope" ((PCons (PVar "p") (PVar "ps")) (PVar "methods")) (EApp (EApp (EApp (EVar "declGradedScopeAdd") (EVar "p")) (EApp (EApp (EVar "ifaceParamKindsOf") (EVar "p")) (EVar "methods"))) (EApp (EApp (EVar "declGradedScope") (EVar "ps")) (EVar "methods"))))
@@ -27607,16 +27831,16 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "requiredMethodNames" ((PList)) (EListLit))
 (DFunDef false "requiredMethodNames" ((PCons (PCon "IfaceMethod" (PVar "n") PWild (PCon "None")) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "requiredMethodNames") (EVar "rest"))))
 (DFunDef false "requiredMethodNames" ((PCons (PCon "IfaceMethod" PWild PWild (PCon "Some" PWild)) (PVar "rest"))) (EApp (EVar "requiredMethodNames") (EVar "rest")))
-(DTypeSig false "checkImplCompletenessMap" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit"))))
+(DTypeSig false "checkImplCompletenessMap" (TyFun (TyApp (TyCon "Registry") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit"))))
 (DFunDef false "checkImplCompletenessMap" ((PVar "reqMap") (PVar "iterDecls")) (EApp (EApp (EVar "foreachUnit") (EVar "pushIncompleteImpl")) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "implCompletenessMsgsOfMap") (EVar "reqMap"))) (EVar "iterDecls"))))
-(DTypeSig false "implCompletenessMsgsOfMap" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "String"))))))
+(DTypeSig false "implCompletenessMsgsOfMap" (TyFun (TyApp (TyCon "Registry") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "String"))))))
 (DFunDef false "implCompletenessMsgsOfMap" ((PVar "reqMap") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EVar "implCompletenessMsgsOfMap") (EVar "reqMap")) (EVar "d")))
-(DFunDef false "implCompletenessMsgsOfMap" ((PVar "reqMap") (PRec "DImpl" ((rf "iface" None) (rf "tys" None) (rf "methods" None)) true)) (EMatch (EApp (EApp (EVar "omLookup") (EVar "iface")) (EVar "reqMap")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "required")) () (EBlock (DoLet false false (PVar "defined") (EApp (EApp (EMethodRef "map") (EVar "implMethodName")) (EVar "methods"))) (DoLet false false (PVar "loc") (EApp (EVar "firstImplMethodLoc") (EVar "methods"))) (DoExpr (EApp (EApp (EMethodRef "map") (ELam ((PVar "m")) (ETuple (EVar "loc") (EApp (EApp (EApp (EVar "missingImplMethodMsg") (EVar "iface")) (EVar "tys")) (EVar "m"))))) (EApp (EApp (EMethodRef "filter") (ELam ((PVar "m")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "m")) (EVar "defined"))))) (EVar "required"))))))))
+(DFunDef false "implCompletenessMsgsOfMap" ((PVar "reqMap") (PRec "DImpl" ((rf "iface" None) (rf "tys" None) (rf "methods" None) (rf "implOrigin" (PVar "o"))) true)) (EMatch (EApp (EApp (EVar "regLookupK") (EApp (EVar "regKeyOfTab") (EApp (EApp (EVar "ifaceTabKey") (EVar "o")) (EVar "iface")))) (EVar "reqMap")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "required")) () (EBlock (DoLet false false (PVar "defined") (EApp (EApp (EMethodRef "map") (EVar "implMethodName")) (EVar "methods"))) (DoLet false false (PVar "loc") (EApp (EVar "firstImplMethodLoc") (EVar "methods"))) (DoExpr (EApp (EApp (EMethodRef "map") (ELam ((PVar "m")) (ETuple (EVar "loc") (EApp (EApp (EApp (EVar "missingImplMethodMsg") (EVar "iface")) (EVar "tys")) (EVar "m"))))) (EApp (EApp (EMethodRef "filter") (ELam ((PVar "m")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "m")) (EVar "defined"))))) (EVar "required"))))))))
 (DFunDef false "implCompletenessMsgsOfMap" (PWild PWild) (EListLit))
-(DTypeSig false "insertIfaceRequired" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))))))
+(DTypeSig false "insertIfaceRequired" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "Registry") (TyApp (TyCon "List") (TyCon "String"))) (TyApp (TyCon "Registry") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "insertIfaceRequired" ((PList) (PVar "m")) (EVar "m"))
 (DFunDef false "insertIfaceRequired" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest")) (PVar "m")) (EApp (EApp (EVar "insertIfaceRequired") (EVar "rest")) (EApp (EApp (EVar "insertIfaceRequired") (EListLit (EVar "d"))) (EVar "m"))))
-(DFunDef false "insertIfaceRequired" ((PCons (PRec "DInterface" ((rf "name" None) (rf "methods" None)) true) (PVar "rest")) (PVar "m")) (EApp (EApp (EVar "insertIfaceRequired") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "name")) (EApp (EVar "requiredMethodNames") (EVar "methods"))) (EVar "m"))))
+(DFunDef false "insertIfaceRequired" ((PCons (PRec "DInterface" ((rf "name" None) (rf "methods" None) (rf "ifaceOrigin" (PVar "o"))) true) (PVar "rest")) (PVar "m")) (EApp (EApp (EVar "insertIfaceRequired") (EVar "rest")) (EApp (EApp (EApp (EVar "regInsertK") (EApp (EVar "regKeyOfTab") (EApp (EApp (EVar "ifaceTabKey") (EVar "o")) (EVar "name")))) (EApp (EVar "requiredMethodNames") (EVar "methods"))) (EVar "m"))))
 (DFunDef false "insertIfaceRequired" ((PCons PWild (PVar "rest")) (PVar "m")) (EApp (EApp (EVar "insertIfaceRequired") (EVar "rest")) (EVar "m")))
 (DTypeSig false "insertMethodIfaceParams" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyTuple (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))))) (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (TyTuple (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))))) (TyApp (TyCon "OrdMap") (TyCon "Unit"))))))
 (DFunDef false "insertMethodIfaceParams" ((PList) (PVar "acc")) (EVar "acc"))
