@@ -1,0 +1,5 @@
+-- #1111 A-2.4 MIRROR PROBE support module: a genuinely TWO-method interface.
+-- NO other interface anywhere in this graph shares its name.
+export interface Alpha a where
+  afoo : a -> Int
+  abar : a -> Int

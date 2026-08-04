@@ -60,7 +60,26 @@ import frontend.ast.{
 -- `TabKey`, not by a bare `String`.  See `tabKeyOf`'s doc-comment in that
 -- module for why these two tables keep the assoc list rather than becoming a
 -- `Registry`, and `tyTabKey` below for the miss policy.
-import types.registry.{TabKey(..), tabKeyOf, tabKeyName, lookupTab, tabHasName}
+-- #1111 Stage A-2 unit A-2.4: the INTERFACE-namespace re-key.
+-- `universeIfaceRequiredRef` becomes a `Registry` and `ifaceParamKindsRef` /
+-- `universeIfaceParamKinds` become `RegKey`-keyed assoc lists, both minted
+-- through `ifaceTabKey` below.  `universeRegisteredIfacesRef` is deliberately
+-- NOT re-keyed — see `ifaceRegistered`.
+import types.registry.{
+  TabKey(..),
+  tabKeyOf,
+  tabKeyName,
+  lookupTab,
+  tabHasName,
+  RegKey,
+  Registry,
+  regKeyOfTab,
+  regKeyTabAt,
+  lookupReg,
+  regEmpty,
+  regInsertK,
+  regLookupK,
+}
 import frontend.desugar.{mapProg}
 import frontend.marker.{localBoundNames}
 import frontend.resolve.{
@@ -1556,6 +1575,89 @@ argPerformableOccs _ _ = []
 tyTabKey : TyConOrigin -> String -> TabKey
 tyTabKey o n = tabKeyOf NsType o n
 
+-- ── #1111 A-2.4: the INTERFACE-namespace table key ────────────────────────
+-- `tyTabKey`'s peer for the `NsIface` namespace, and the ONE place a key for
+-- `universeIfaceRequiredRef` or `ifaceParamKindsRef` is minted — on both the
+-- write side and the read side.
+--
+-- ── The two sides, and WHY they meet ──────────────────────────────────────
+-- The WRITE side always passes a `DInterface`'s `ifaceOrigin`: the DECLARATION
+-- layer, stamped by `stampDeclOrigins mid` (`frontend/resolve.mdk`) with the
+-- module that declared it.  The READ side always passes a `DImpl`'s
+-- `implOrigin`: the OCCURRENCE layer, stamped by `stampTyOrigins` from
+-- `tyOriginScope`, which maps an interface NAME to the module that DECLARED
+-- it (own layer `ownIfaceOrigin mid`, imported layer `importedTypeOrigins`).
+-- So both sides name the DECLARING module and the two meet — that agreement,
+-- not the miss policy, is what makes this key work.  It is the same
+-- per-population stamping-agreement argument A-2.3 wrote onto `tyTabKey`,
+-- one namespace over; both layers are produced by `stampOneModule`
+-- (`resolve.mdk`), in one function, so they cannot drift apart.
+-- Checked, not assumed: `test/origin_fixtures/graph/agreement.golden` records
+-- `alpha iface:Weighable … graph=mod:alpha` for a user interface and
+-- `iface:<Name> 1 mod:core` for every prelude one.
+--
+-- ── MISS POLICY: a miss ABSTAINS.  Derivation ─────────────────────────────
+-- Both readers already abstain on a miss and this unit does not change that:
+--   * `implCompletenessMsgsOfMap`'s `None` arm is `[]` with the pre-existing
+--     comment "unknown interface (reported elsewhere) → skip".  An `impl` of
+--     an interface that is genuinely not in scope is reported by RESOLVE
+--     (`R-*`), so a second complaint here would be a worse-worded duplicate.
+--   * `checkGradedImplTys`' `_ =>` arm is `()`, and its own doc-comment
+--     already enumerates the legitimate misses (a NON-graded interface, which
+--     records an all-`KType` row and is filtered by `anyKRow`; an interface
+--     with fewer parameters than the impl has type arguments).
+-- "Miss ⇒ hard diagnostic" is therefore not available for either, and it is
+-- not a residual: with an identity key the ONLY new miss is "this impl's
+-- interface resolved to a module that declares no such interface", which
+-- cannot happen for an accepted program — resolve rejects the impl first.
+--
+-- ── THE IDENTITY-LESS PATH ────────────────────────────────────────────────
+-- 🚨 Same MODULE-PATH-ONLY bound A-2.3 recorded, and for the interface
+-- namespace it bites HARDER, because `ifaceParamKindsRef` is read on BOTH
+-- driver arms: `checkGradedImplHeads` is called from `checkBodyImpl`, which
+-- Flat and Module share.  On the FLAT path `checkProgramSeededSplit` runs
+-- `stampDeclOrigins "core" coreProgTy`, so the PRELUDE's interfaces are
+-- `TkIdent`; every flat USER interface is `OriginUnresolved` and keys
+-- `TkBare`, and so does a flat user `impl`'s `implOrigin` — the two halves
+-- still meet, because they are stamped by the same pass over the same scope.
+-- That is why `RegKey` had to grow a bare half for this unit (see its
+-- doc-comment in `types/registry.mdk`): an `Ident`-only key would have made
+-- every flat interface unregisterable, silently switching the graded
+-- instance-head kind check OFF for `medaka check` on a no-import file.
+-- Giving the flat path real identity is #1115 (E-1), not this unit.
+--
+-- ⚠️ ONE CROSS-POPULATION SHAPE EXISTS AND IT IS UNREACHABLE, NOT MERELY
+-- UNLIKELY: a FLAT program declaring `impl <prelude iface> T`.  Its
+-- `implOrigin` is stamped from `flatTyOriginScope`, which DOES carry the
+-- prelude's own interfaces as `mod:core` (`resolve.mdk`, the `ifaceDeclaredIn
+-- "core"` term), so such an impl keys `TkIdent … core` and meets the
+-- prelude's own `TkIdent … core` declaration row.  The mismatch shape would
+-- need a flat impl of a prelude interface whose occurrence was NOT in that
+-- scope, and there is no such producer: the scope is built from exactly
+-- `interfaceNamesOf coreDecls`, the same decl list `stampDeclOrigins "core"`
+-- stamps.
+--
+-- ⚠️ AND THAT ARGUMENT IS STRUCTURAL, ONLY STRUCTURAL.  This paragraph used to
+-- end "Verified behaviourally, not only by reading", citing
+-- `test/typecheck_error_fixtures/graded_head_wrong_kind_flat.mdk`.  That
+-- fixture cannot witness it: it declares its OWN `interface Graded`, so what it
+-- exercises is a `TkBare` ↔ `TkBare` meeting, not the `TkIdent … core` ↔
+-- `TkIdent … core` one this paragraph is about.  No fixture witnesses this
+-- shape, and today none CAN: the FLAT arm reads only `ifaceParamKindsRef` (the
+-- completeness table is Module-only — see the mode switch feeding
+-- `checkImplCompletenessMap`), and there a HIT on a non-graded prelude row and
+-- an outright MISS both take `checkGradedImplTys`' `_ => ()` arm.  A prelude
+-- interface would have to become GRADED for the difference to be observable at
+-- all.  None is — DERIVE that, do not trust this sentence: a single file with
+-- `impl <each higher-kinded prelude iface> Q` over `data Q a b = MkQ a b`, plus
+-- one locally-declared graded interface as a POSITIVE CONTROL, yields exactly
+-- ONE T-IMPL-KIND-MISMATCH and it names the LOCAL interface (run against this
+-- HEAD, `medaka check --json`).  So the unreachability claim above rests on
+-- reading `resolve.mdk`; the residual risk is this comment rotting, not a
+-- missing gate.
+ifaceTabKey : TyConOrigin -> String -> TabKey
+ifaceTabKey o n = tabKeyOf NsIface o n
+
 -- one ctor node: its bare row-kinded slots (if performable) + recurse the args
 krowSlotOccs : Bool -> TyConOrigin -> String -> List Ty -> List (String, List Atom)
 krowSlotOccs perf o n args = match lookupTab (tyTabKey o n) perRun.value.dataParamKindsRef.value
@@ -1644,40 +1746,57 @@ checkGradedImplHeads (d::rest) =
   let _ = checkGradedImplHeadDecl d
   checkGradedImplHeads rest
 
+-- OCCURRENCE MINT (#1110/#1111 A-2.4): `implOrigin` is the identity the
+-- interface NAME in `impl <iface> …` acquired at resolve — read off the same record
+-- pattern as the name itself so the two cannot drift apart, exactly as A-2.3 reads
+-- `tyConOrigin` beside `tyConName`.
 checkGradedImplHeadDecl : Decl -> Unit
 checkGradedImplHeadDecl (DAttrib _ d) = checkGradedImplHeadDecl d
-checkGradedImplHeadDecl (DImpl { iface, tys, ... }) =
-  checkGradedImplTys iface 0 tys
+checkGradedImplHeadDecl (DImpl { iface, tys, implOrigin = o, ... }) =
+  checkGradedImplTys o iface 0 tys
 checkGradedImplHeadDecl _ = ()
 
--- ⚠️ THE ONLY reader of `ifaceParamKindsRef`'s bare-name `<iface>@<slot>` key, and it is
--- a DIAGNOSTIC.  That is deliberate and load-bearing.  A flat table keyed by a bare
--- `String` name and populated across module boundaries is last-write-wins with a SILENT
--- loss — the root cause behind the eval-frame ctor collision, #1044, #1047, and the
--- first cut of #822 itself, where this table was ALSO keyed by the bare typaram name and
--- re-kinded every arity-matching application in the program.  Choosing a namespace that
--- is merely *less likely* to clash is not a fix: #1044 was CREATED by relocating exactly
--- this defect to a rarer namespace.
+-- ⚠️ THE ONLY reader of `ifaceParamKindsRef`, and it is a DIAGNOSTIC.
+-- 🚨 RE-DERIVED FOR A-2.4, NOT INHERITED: `grep -n 'ifaceParamKindsRef' ` this file
+-- gives the field's declaration + initializer (PerRun), the writer
+-- (`insertIfaceParamKinds`), the two whole-ref copies into/out of the cross-run
+-- universe (`checkBodyImpl`'s Module arm) and this ONE `lookupReg`.  No elaboration
+-- seam reads it — see the next paragraph for why that is load-bearing rather than
+-- incidental.
 --
--- So no ELABORATION seam reads this table.  Every seam that turns a method signature
--- into a Mono takes its scope from the DECLARATION (`declGradedScope`) or from the very
--- resolution result that produced the signature (`ifaceMethodTyResolved`, which carries
--- the scope in the same tuple as `mty` so the two cannot be resolved differently).
+-- ⚠️ THE PARAGRAPH THAT USED TO BE HERE IS NOW WRONG IN ITS CONCLUSION, so it is
+-- corrected rather than deleted — a reader who remembers it would otherwise think
+-- this table is still bare-name-keyed.  It said the key is `<iface>@<slot>` with "no
+-- module qualifier", that keying it properly "would need a resolved module identity,
+-- and typecheck.mdk carries none for an interface", and that this was "#1047's
+-- territory".  All three are now false: `DImpl` carries `implOrigin` and `DInterface`
+-- carries `ifaceOrigin` (#1110 Stage A-1), the key is a `RegKey` minted by
+-- `ifaceTabKey` + `regKeyTabAt`, and #1047 was closed by PR #1264 in the BACKEND
+-- (`CImplDefault`'s interface identity), not here.  What REMAINS true and is worth
+-- keeping: the reason no elaboration seam may read this table.  A flat table keyed by
+-- a bare `String` and populated across module boundaries is last-write-wins with a
+-- SILENT loss — the root cause behind the eval-frame ctor collision, #1044, #1047, and
+-- the first cut of #822 itself, where this table was ALSO keyed by the bare typaram
+-- name and re-kinded every arity-matching application in the program.  Choosing a
+-- namespace that is merely *less likely* to clash is not a fix: #1044 was CREATED by
+-- relocating exactly this defect to a rarer namespace.  So every seam that turns a
+-- method signature into a Mono still takes its scope from the DECLARATION
+-- (`declGradedScope`) or from the very resolution result that produced the signature
+-- (`ifaceMethodTyResolved`, which carries the scope in the same tuple as `mty` so the
+-- two cannot be resolved differently).  Identity-keying this table does not license
+-- an elaboration seam to start reading it.
 --
--- Severity tracks REACH, not rarity.  Because the only reader is this diagnostic, the
--- worst case of an `<iface>@<slot>` collision — two graded interfaces sharing a NAME
--- across modules — is a kind error judged against the wrong slot kinds, or not reported
--- at all: bounded to those two interfaces, never silent wrongness in a program's types.
--- Keying it properly would need a resolved module identity, and typecheck.mdk carries
--- none for an interface (`ifaceMethodTy` itself matches on `name == iface`). That is
--- #1047's territory, upstream of #822 — which this must not pretend to have fixed.
-checkGradedImplTys : String -> Int -> List Ty -> Unit
-checkGradedImplTys _ _ [] = ()
-checkGradedImplTys iface i (t::rest) =
-  let _ = match lookupAssoc (ifaceSlotKey iface i) perRun.value.ifaceParamKindsRef.value
+-- What the re-key DRAINS is #1257: two same-named interfaces, one graded, one not,
+-- in unrelated modules — the impl was judged against whichever registered LAST, so
+-- `impl Same P` (naming `pmod.Same`, ungraded) was rejected with T-IMPL-KIND-MISMATCH
+-- for failing `gmod.Same`'s `Row -> Type -> Type`.  Import order selected the symptom.
+checkGradedImplTys : TyConOrigin -> String -> Int -> List Ty -> Unit
+checkGradedImplTys _ _ _ [] = ()
+checkGradedImplTys o iface i (t::rest) =
+  let _ = match lookupReg (ifaceSlotKey o iface i) perRun.value.ifaceParamKindsRef.value
     Some want if anyKRow want => checkGradedImplHead iface t want
     _ => ()
-  checkGradedImplTys iface (i + 1) rest
+  checkGradedImplTys o iface (i + 1) rest
 
 -- [want] is the interface slot's kind list.
 --
@@ -2915,16 +3034,16 @@ data CrossRun = CrossRun {
     universeIfaceMethodsRef : Ref (OrdMap Unit),
     universeFunNamesRef : Ref (OrdMap Unit),
     universeKeyBucketsRef : Ref (OrdMap (List KeyEntry)),  -- = KeyBuckets, inlined: that alias is defined below this record, so it wouldn't expand in a field-type projection
-    universeIfaceRequiredRef : Ref (OrdMap (List String)),
+    universeIfaceRequiredRef : Ref (Registry (List String)),  -- #1111 A-2.4: identity-keyed (RegKey over an iface Ident), not bare name — see ifaceTabKey
     universeMethodIfaceParamsRef : Ref (OrdMap (String, List String, Ty, List (String, List Kind))),
     universeMethodIdentsRef : Ref (OrdMap (List (Ident, (String, List String, Ty, List (String, List Kind))))),  -- #1111 A-2.5 (#1092): the identity-keyed COMPANION of the line above — see methodIdentOf
     universeMethodCollidedRef : Ref (List String),  -- #1111 A-2.5: the method NAMES the line above holds ≥2 distinct identities for (normally EMPTY)
-    universeRegisteredIfacesRef : Ref (OrdMap Unit),
+    universeRegisteredIfacesRef : Ref (OrdMap Unit),  -- #1111 A-2.4: DELIBERATELY still bare-name — a Unit-valued NAME-membership set, see ifaceRegistered
     universeMethodDispatchIdxRef : Ref (List (String, Int)),
     universeRecordByName : Ref (OrdMap RecordInfo),
     universeFieldOwners : Ref (OrdMap (List String)),
     universeDataParamKinds : Ref (List (TabKey, List Kind)),  -- #1111 A-2.3: identity-keyed (TabKey), not bare name — see tyTabKey
-    universeIfaceParamKinds : Ref (List (String, List Kind)),  -- #822: the interface half of the kind universe (see registerIfaceParamKinds)
+    universeIfaceParamKinds : Ref (List (RegKey, List Kind)),  -- #822 iface half of the kind universe; #1111 A-2.4: identity×slot-keyed (RegKey), not "<iface>@<slot>" — see ifaceSlotKey
     universeAliasTable : Ref (List (TabKey, (List String, Ty))),  -- #1111 A-2.3: identity-keyed (TabKey), not bare name — see tyTabKey
     universeDataEnv : Ref TcEnv,
     universeDataDecls : Ref (List Decl),  -- #674: prior modules' PUBLIC data DECLS (universeDataEnv is a lossy bare-name ctor env) — see appendDataUniverse
@@ -2978,7 +3097,7 @@ freshCrossRun env = CrossRun {
   universeIfaceMethodsRef = Ref omEmpty,
   universeFunNamesRef = Ref omEmpty,
   universeKeyBucketsRef = Ref omEmpty,
-  universeIfaceRequiredRef = Ref omEmpty,
+  universeIfaceRequiredRef = Ref regEmpty,
   universeMethodIfaceParamsRef = Ref omEmpty,
   universeMethodIdentsRef = Ref omEmpty,
   universeMethodCollidedRef = Ref [],
@@ -3750,7 +3869,7 @@ data PerRun = PerRun {
     errorsDetected : Ref Int,  -- issue 1146: the CONTROL signal split out of it — see recordTypeError / erredDuring
     occursCheckFailed : Ref Bool,
     currentLevel : Ref Int,
-    ifaceParamKindsRef : Ref (List (String, List Kind)),  -- #822 (graded interfaces): INTERFACE type-parameter slot kinds — dataParamKindsRef's
+    ifaceParamKindsRef : Ref (List (RegKey, List Kind)),  -- #822 (graded interfaces): INTERFACE type-parameter slot kinds — dataParamKindsRef's
     pinnedLocals : Ref (List (Mono, String, String, Option Loc)),  -- sibling for an ABSTRACT head.  See registerIfaceParamKinds; read by ONE seam
   }  -- (checkGradedImplTys, a diagnostic) — the elaborators carry their scope instead.  -- declined, as (the pinned tyvar AS A MONO, binding name, the interface whose
 -- #866: one entry per LOCAL binding whose generalization dictForwardedIds
@@ -6573,32 +6692,54 @@ recordIfaceObligation iface lt
 -- the cached registeredIfacesRef set, replacing the old full linear scan of the
 -- method table per operator/numeric-literal.
 --
--- 🚨 `universeRegisteredIfacesRef` (and its per-run copy, read here) STAYS
--- BARE-NAME-KEYED — A-2.2b's decision, re-derived at this HEAD rather than
--- inherited.  A-2.4 reached the same conclusion and moved the table onto A-2.2b's
--- row; this is that row's answer, and it is NOT "we ran out of time":
+-- 🚨 `registeredIfacesRef` / `universeRegisteredIfacesRef` STAY BARE-NAME-KEYED,
+-- and this is a DERIVED refusal, not a gap for a later reader to "finish".  Two
+-- units reached it independently — A-2.4, whose brief listed this table as its
+-- third target, and A-2.2b, which re-derived it rather than inheriting it — and
+-- their two write-ups are UNIONED here rather than left as two records of one
+-- fact that can drift apart.  Three reasons, in the order that decided it:
 --
---   * ITS VALUE IS `Unit`.  This is a name-MEMBERSHIP test, not a lookup, so a
---     same-name collapse across two modules selects no row and returns no value
---     — there is nothing for it to return WRONGLY.  It is the `tabHasName` /
---     `noImplHint` shape A-2.3 established, one layer up.
---   * NO READER HAS AN ORIGIN TO KEY WITH.  All three — `recordIfaceObligation`
---     (above), `inferNumLit` and `checkOneCallObligation` — pass a LITERAL
---     prelude name (`"Num"`/`"Eq"`/`"Ord"`/`"Semigroup"`) for a synthetic
---     occurrence with no `Ty` and no declaration site behind it.  Key the WRITER
---     on `DInterface.ifaceOrigin` and every one of those lookups MISSES: this
---     answers `False` everywhere, `recordIfaceObligation` records nothing, and
---     every operator's obligation silently switches off.  No golden moves,
---     because a check that stops firing moves no output — the `loud → silent`
---     regression `AGENTS.md` grades as a severity INCREASE.
---   * AND IT WOULD BE INCOHERENT WITH WHAT IT GATES.  It gates
---     `pushPendingObl (iface, …)`, and the whole obligation channel downstream is
---     keyed by the bare interface NAME for the reason derived on `oblIfaceKey`
---     (`Predicate` carries no origin).  Keying the gate while the payload stays
---     name-keyed is a half-migration.
+--   1. THE VALUE IS `Unit`.  Two modules declaring `Same` collapse to one entry
+--      today, and collapsing changes NOTHING OBSERVABLE — there is no row to
+--      select and no payload to get wrong.  Every other table this arc re-keys
+--      answers WHICH declaration; this one answers only WHETHER one exists.  It is
+--      the `tabHasName` / `noImplHint` shape A-2.3 established: a name-membership
+--      predicate, not a lookup.
+--   2. NO CALLER HAS AN ORIGIN TO KEY WITH.  All three call sites pass a LITERAL
+--      prelude interface name — `recordIfaceObligation` (above: "Num"/"Eq"/"Ord"/
+--      "Semigroup", from the operator handlers), `inferNumLit` ("Num") and
+--      `checkOneCallObligation` ("Num").  These are synthetic occurrences with no
+--      `Ty` and no decl behind them, so there is no `TyConOrigin` to read; an
+--      identity-keyed set would have to hardcode `OriginModule "core"`, which
+--      invents the very ambient module id `stampFlatTyOrigins`' own doc-comment
+--      forbids.  With a `TkBare "Num"` key instead, the lookup would MISS the
+--      prelude's `TkIdent … core` entry and `ifaceRegistered` would answer False
+--      everywhere — silently switching every operator's obligation OFF.  No golden
+--      moves, because a check that stops firing moves no output: the
+--      `loud → silent` transition `AGENTS.md` grades as a severity INCREASE.
+--   3. THE QUESTION IT GATES IS NAME-KEYED DOWNSTREAM ANYWAY.  What it gates is
+--      `pushPendingObl (iface, …)`, and the whole obligation channel
+--      (`obUnivConcreteRef` / `obUnivHeadlessRef` / `obUnivIfaceTagsRef`) still
+--      keys its interface half by the bare NAME.  ⚠️ A-2.4's own draft of this
+--      reason said that channel is keyed `"<iface>|<tag>"`, and that "when A-2.2
+--      lands, this gate is worth revisiting THEN".  BOTH are now out of date, and
+--      by A-2.2b's own doing: the string splice is gone, replaced by a structured
+--      `RegKey` whose iface half is nevertheless a bare `TkBare NsIface` for the
+--      reason derived at `oblIfaceKey`.  So the payload did move — and the gate
+--      still cannot follow it, because the payload did not become identity-keyed.
+--      Identity-keying the GATE while the PAYLOAD stays name-keyed is still a
+--      half-migration.
 --
--- What unblocks it is an interface identity on `Predicate`, which is A-2.5's
--- file, not this unit's.
+-- What would be needed to key it honestly is a resolved identity for a SYNTHETIC
+-- interface occurrence — concretely, an interface identity on `Predicate`
+-- (`data Predicate = Predicate { iface : String, args : List Mono }`, this file),
+-- which is a resolve-layer question (#1115) rather than a typecheck-layer re-key.
+-- ⚠️ Do NOT read that as "A-2.5 will do it": an earlier draft of this paragraph
+-- pointed at A-2.5 as the unblocking unit, and A-2.5 has LANDED — it re-keyed
+-- METHOD identity and left `Predicate` a bare `String`.  Verify before assuming:
+-- `grep -n 'data Predicate' compiler/types/typecheck.mdk`.  Recorded on the field
+-- itself too, so a reader who greps the record does not conclude this table was
+-- simply missed.
 ifaceRegistered : String -> Bool
 ifaceRegistered iface = omHasKey iface perRun.value.registeredIfacesRef.value
 
@@ -8897,8 +9038,12 @@ registerData env (DNewtype { newtypeName = name, newtypeParams = params, newtype
 -- rather than at interface-method registration because every consumer (rowArgNames /
 -- fromAstTypeE / the impl-head kind check) must see the table BEFORE the first
 -- signature is elaborated, which is exactly registerAllData's slot.
-registerData env (DInterface { name, typarams, methods, ... }) =
-  let _ = registerIfaceParamKinds name typarams methods
+-- DECLARATION MINT (#1110/#1111 A-2.4): `ifaceOrigin` is this interface's own
+-- identity, stamped by `stampDeclOrigins` at the module that declared it — the same
+-- source, and the same must-not-be-ambient reason, as the `dataOrigin`/
+-- `newtypeOrigin`/`tyAliasOrigin` arms above.
+registerData env (DInterface { name, typarams, methods, ifaceOrigin = o, ... }) =
+  let _ = registerIfaceParamKinds o name typarams methods
   env
 registerData env _ = env
 
@@ -9037,26 +9182,57 @@ fieldTyOf (Field _ ty) = ty
 -- per-interface union matters: `gpure : a -> f e a` alone would infer slot 0 as
 -- KType, and disagreeing slot kinds across two methods of one interface would
 -- elaborate the same index to a row in one and a tyvar in the other.
-registerIfaceParamKinds : String -> List String -> List IfaceMethod -> Unit
-registerIfaceParamKinds iface typarams methods =
-  registerIfaceParamKindsGo iface 0 typarams methods
+registerIfaceParamKinds : TyConOrigin -> String -> List String -> List IfaceMethod -> Unit
+registerIfaceParamKinds o iface typarams methods =
+  registerIfaceParamKindsGo o iface 0 typarams methods
 
-registerIfaceParamKindsGo : String -> Int -> List String -> List IfaceMethod -> Unit
-registerIfaceParamKindsGo _ _ [] _ = ()
-registerIfaceParamKindsGo iface i (p::ps) methods =
-  -- ⚠️ EVERY slot is recorded, graded or not, and the non-graded ones are the whole
-  -- point (S1, review round 2).  Recording only graded slots looks like a tidy
-  -- minimisation and is a false-reject bug: `ifaceParamKindsRef` is copied into the
-  -- data universe, which is NOT import-scoped, so an ORDINARY interface that merely
-  -- shares a name with a graded one anywhere in the graph found the graded entry and
-  -- had its impl rejected with T-IMPL-KIND-MISMATCH — order-dependently, since
-  -- swapping two unrelated import lines changed which module registered first.
-  -- A module's own decls are registered as a FRONT overlay during its own pass and
-  -- `lookupAssoc` is first-match, so a local entry shadows the universe's — but only
-  -- if there IS one.  An all-KType entry is exactly that shadow; `checkGradedImplTys`
-  -- gates on `anyKRow`, so it costs nothing but the row.
-  let _ = insertIfaceParamKinds iface i p (ifaceParamKindsOf p methods)
-  registerIfaceParamKindsGo iface (i + 1) ps methods
+registerIfaceParamKindsGo : TyConOrigin -> String -> Int -> List String -> List IfaceMethod -> Unit
+registerIfaceParamKindsGo _ _ _ [] _ = ()
+registerIfaceParamKindsGo o iface i (p::ps) methods =
+  -- ⚠️ EVERY slot is recorded, graded or not.  Since #1111 A-2.4 that is VESTIGIAL,
+  -- not load-bearing — and THIS COMMENT HAS NOW BEEN WRONG TWICE about why, so it
+  -- records what was actually checked instead of offering a third rationale.
+  --
+  -- THE ORIGINAL WHY (S1, review round 2) — real at the time.  An all-KType entry
+  -- was a SHADOW: `ifaceParamKindsRef` is copied into the data universe, which is
+  -- not import-scoped, so under the old bare `"<iface>@<slot>"` key an ORDINARY
+  -- interface sharing a name with a graded one anywhere in the graph found the
+  -- GRADED row and had its impl rejected with T-IMPL-KIND-MISMATCH, order-
+  -- dependently; recording its own all-KType row as a front overlay shadowed that.
+  -- A-2.4 gives the two interfaces DIFFERENT keys, so the ordinary one never reaches
+  -- the graded row at all (#1257, drained here) — the shadow has nothing to shadow.
+  --
+  -- ⚠️ THE REPLACEMENT WHY WAS ALSO FALSE, in both of its conjuncts, and is
+  -- RETRACTED here rather than silently reworded.  It said every slot is still
+  -- needed (a) for the FLAT path, "where two same-named interfaces both key
+  -- `TkBare` — the shadow is the only defence there", and (b) because
+  -- `checkGradedImplTys` must tell an ungraded row from an absent one.  Both were
+  -- refuted by running the binary, not by reading:
+  --   (a) UNREACHABLE.  No ACCEPTED flat program holds two `TkBare` rows of one
+  --       interface name.  Declaring `interface Same` twice in one file is
+  --       `Duplicate interface: Same`, exit 1; re-declaring a prelude name is
+  --       `Duplicate interface: Eq`, exit 1 (`duplicateErrors`,
+  --       `compiler/frontend/resolve.mdk`, whose `ifaceSeed` seeds the prelude's
+  --       interface names for any non-core program).  And a flat USER interface
+  --       keys `TkBare` while a prelude one keys `TkIdent … core`, so that pair
+  --       never shares a key either.  `stampFlatTyOrigins`' own comment reaches the
+  --       same unreachability for the type layer.
+  --   (b) FALSE.  `checkGradedImplTys` is `Some want if anyKRow want => …` / `_ =>
+  --       ()`: an all-KType row FAILS `anyKRow` and falls into `_`, and a miss is
+  --       `None` and falls into `_`.  The two are indistinguishable to the only
+  --       reader — `grep -rn lookupReg compiler/` outside `types/registry.mdk`
+  --       gives exactly ONE call site; every other hit is the import list or a
+  --       comment (this one included, which is why the count is not written down).
+  --
+  -- So recording every slot is dead weight on BOTH arms.  It is kept because
+  -- removing it is a separate behaviour-preserving change with its own goldens, not
+  -- because anything reads it.  What IS still load-bearing here: a module's own
+  -- decls are registered as a FRONT overlay during its own pass and `lookupReg` is
+  -- first-match, so a local entry still shadows the universe's — which is what makes
+  -- a row re-registered from the universe (same key, same value) a no-op rather than
+  -- a second, competing answer.
+  let _ = insertIfaceParamKinds o iface i p (ifaceParamKindsOf p methods)
+  registerIfaceParamKindsGo o iface (i + 1) ps methods
 
 anyKRow : List Kind -> Bool
 anyKRow [] = False
@@ -9069,7 +9245,14 @@ kindsEq (KType::a) (KType::b) = kindsEq a b
 kindsEq (KRow::a) (KRow::b) = kindsEq a b
 kindsEq _ _ = False
 
--- ONE key shape: `<iface>@<slot>`.
+-- ONE key shape: the interface's IDENTITY plus the slot ORDINAL
+-- (`regKeyTabAt (ifaceTabKey o iface) i`, #1111 A-2.4).  It was the bare string
+-- `"\{iface}@\{i}"` until this unit, which is #1257: an ordinary interface and a
+-- graded one, same bare name, unrelated modules, one shared key.
+-- 🚨 THE SLOT IS AN ORDINAL AND STAYS ONE.  It is deliberately NOT spliced into the
+-- identity's name field — `"Same@0"` is not the name of anything, and putting it
+-- there re-creates a bare-string composite inside the very identity that exists to
+-- remove one (see `RegKey`'s doc-comment in `types/registry.mdk`).
 -- ⚠️ An earlier cut of #822 ALSO stored the bare typaram NAME, so that the
 -- elaboration seams — which see a `TyVar h` spine head carrying no interface
 -- context — could look it up.  That was an S0: `rowArgNames`/`fromAstTypeE` are the
@@ -9083,14 +9266,18 @@ kindsEq _ _ = False
 -- mislocated ones).  Poisoning could not save it: an interface-local type-parameter
 -- name is simply not a program-global key.  The scope now travels as an explicit
 -- argument instead — see declGradedScope and rowArgNamesIn.
-insertIfaceParamKinds : String -> Int -> String -> List Kind -> Unit
-insertIfaceParamKinds iface i _ kinds =
+-- (`o` is the DECLARATION's identity — `DInterface.ifaceOrigin`, threaded from
+-- `registerData`'s record pattern.  Same source, same reason, as
+-- `recordParamKinds`' `dataOrigin`: it must not come from ambient state, because
+-- `registerAllData` also runs over OTHER modules' decls.)
+insertIfaceParamKinds : TyConOrigin -> String -> Int -> String -> List Kind -> Unit
+insertIfaceParamKinds o iface i _ kinds =
   setRef
     perRun.value.ifaceParamKindsRef
-    ((ifaceSlotKey iface i, kinds)::perRun.value.ifaceParamKindsRef.value)
+    ((ifaceSlotKey o iface i, kinds)::perRun.value.ifaceParamKindsRef.value)
 
-ifaceSlotKey : String -> Int -> String
-ifaceSlotKey iface i = "\{iface}@\{intToString i}"
+ifaceSlotKey : TyConOrigin -> String -> Int -> RegKey
+ifaceSlotKey o iface i = regKeyTabAt (ifaceTabKey o iface) i
 
 -- The scope derived STRAIGHT FROM THE DECLARATION being elaborated: same inference as
 -- registerIfaceParamKinds runs, on the very methods whose signatures are about to be
@@ -11941,22 +12128,42 @@ requiredMethodNames ((IfaceMethod _ _ (Some _))::rest) =
 
 -- #154 PR1: the multi-module analogue of checkImplCompleteness — identical, but the
 -- per-impl `ifaceRequiredMethods fullUniverse iface` O(N) scan is replaced by an O(log N)
--- lookup in the persistent iface→required-methods map (universeIfaceRequiredRef).  The
--- map holds one entry per interface in the module universe (core + earlier modules +
--- this one), so a `None` here means the interface is genuinely out of scope — exactly
--- as the scan's `None` did.  Interface names are globally unique, so the map's
--- last-write-wins carries the same required-method list the scan's first-match returned.
-checkImplCompletenessMap : OrdMap (List String) -> List Decl -> Unit
+-- lookup in the persistent iface→required-methods registry (universeIfaceRequiredRef).
+-- The registry holds one entry per interface in the module universe (core + earlier
+-- modules + this one), so a `None` here means the interface is genuinely out of scope
+-- — exactly as the scan's `None` did.
+--
+-- 🚨 THE SENTENCE THAT USED TO END THIS PARAGRAPH WAS FALSE, AND IT IS WHY #1258
+-- EXISTED.  It read: "Interface names are globally unique, so the map's
+-- last-write-wins carries the same required-method list the scan's first-match
+-- returned."  Interface names are NOT globally unique — nothing in resolve or the
+-- loader enforces it across modules, only WITHIN one (`Duplicate interface: Eq`).
+-- Two unrelated modules declaring `Same` shared one bare-name key, so whichever
+-- registered LAST supplied the required-method list for BOTH, and an impl that
+-- completely implemented its own `Same` was rejected as missing the OTHER one's
+-- method.  Reproduced first-hand at #1258 before this unit changed anything:
+-- `'impl Same ET' is missing method 'bar'`, exit 1, on a program whose only `Same`
+-- in scope declares `foo` and nothing else.
+--
+-- Since #1111 A-2.4 the key is a `RegKey` carrying the interface's IDENTITY (see
+-- `ifaceTabKey`): the WRITE side takes `DInterface.ifaceOrigin` and the READ side
+-- takes the naming `DImpl`'s `implOrigin`, so the lookup answers with the required
+-- methods of the interface the impl actually names.  `Registry` is still
+-- last-write-wins and still O(log N) — what changed is only WHAT COUNTS AS THE SAME
+-- KEY, which is the entire defect.
+checkImplCompletenessMap : Registry (List String) -> List Decl -> Unit
 checkImplCompletenessMap reqMap iterDecls =
   foreachUnit
     pushIncompleteImpl
     (flatMap (implCompletenessMsgsOfMap reqMap) iterDecls)
 
-implCompletenessMsgsOfMap : OrdMap (List String) -> Decl -> List (Option Loc, String)
+-- OCCURRENCE MINT (#1110/#1111 A-2.4): `implOrigin` beside `iface` in the same
+-- record pattern, so the identity and the name it qualifies cannot drift apart.
+implCompletenessMsgsOfMap : Registry (List String) -> Decl -> List (Option Loc, String)
 implCompletenessMsgsOfMap reqMap (DAttrib _ d) =
   implCompletenessMsgsOfMap reqMap d
-implCompletenessMsgsOfMap reqMap DImpl { iface, tys, methods, ... } =
-  match omLookup iface reqMap
+implCompletenessMsgsOfMap reqMap DImpl { iface, tys, methods, implOrigin = o, ... } =
+  match regLookupK (regKeyOfTab (ifaceTabKey o iface)) reqMap
     None => []   -- unknown interface (reported elsewhere) → skip
     Some required =>
       let defined = map implMethodName methods
@@ -11966,14 +12173,14 @@ implCompletenessMsgsOfMap reqMap DImpl { iface, tys, methods, ... } =
         (filter (m => not (contains m defined)) required)
 implCompletenessMsgsOfMap _ _ = []
 
--- #154 PR1: fold each interface in [prog] into the required-methods map.  Mirrors
+-- #154 PR1: fold each interface in [prog] into the required-methods registry.  Mirrors
 -- ifaceRequiredMethods' DAttrib-unwrapping + `requiredMethodNames methods` value.
-insertIfaceRequired : List Decl -> OrdMap (List String) -> OrdMap (List String)
+-- DECLARATION MINT (#1110/#1111 A-2.4): `ifaceOrigin`, the declaring module's stamp.
+insertIfaceRequired : List Decl -> Registry (List String) -> Registry (List String)
 insertIfaceRequired [] m = m
 insertIfaceRequired ((DAttrib _ d)::rest) m =
   insertIfaceRequired rest (insertIfaceRequired [d] m)
-insertIfaceRequired ((DInterface { name, methods, ... })::rest) m =
-  insertIfaceRequired rest (omInsert name (requiredMethodNames methods) m)
+insertIfaceRequired ((DInterface { name, methods, ifaceOrigin = o, ... })::rest) m = insertIfaceRequired rest (regInsertK (regKeyOfTab (ifaceTabKey o name)) (requiredMethodNames methods) m)
 insertIfaceRequired (_::rest) m = insertIfaceRequired rest m
 
 -- #154 PR2 (site #3): fold [prog]'s interface decls into the pair of accumulators that

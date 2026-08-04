@@ -147,18 +147,29 @@
 -- about which `Ns` the thing is in. So `RegKey` is the key type and `Ident`
 -- is its one-element case:
 --
---   | table                            | key                     | site          |
---   |----------------------------------|-------------------------|---------------|
---   | `universeIfaceParamKinds`        | Ident × Int             | typecheck.mdk |
---   | `obUnivConcreteRef`              | Ident × Ident           | typecheck.mdk |
---   | `checkCallObligationsU` dedup    | Ident × [Option Ident]  | typecheck.mdk |
---   | `methodReqCountRef`              | Ident × Ident           | eval.mdk      |
---   | `ifaceDispatchRef`               | Ident × Ident           | eval.mdk      |
+--   | table                            | key                      | site          |
+--   |----------------------------------|--------------------------|---------------|
+--   | `universeIfaceParamKinds`        | TabKey × Int  ✅ A-2.4    | typecheck.mdk |
+--   | `obUnivConcreteRef`              | Ident × Ident            | typecheck.mdk |
+--   | `checkCallObligationsU` dedup    | Ident × [Option Ident]   | typecheck.mdk |
+--   | `methodReqCountRef`              | Ident × Ident            | eval.mdk      |
+--   | `ifaceDispatchRef`               | Ident × Ident            | eval.mdk      |
 --
 -- Three of the five are pure identity tuples (`regKeyN`); one pairs an
 -- identity with a parameter SLOT, which is an ordinal and not a declaration —
 -- it has no namespace and no origin, so it is carried in `RegKey`'s second
--- component (`regKeyAt`) rather than faked as an `Ident`.
+-- component (`regKeyTabAt`) rather than faked as an `Ident`.
+--
+-- ⚠️ ROW 1 SAID `Ident × Int` UNTIL A-2.4 CONVERTED IT, AND THE CORRECTION IS
+-- NOT COSMETIC. `Ident` has no identity-less inhabitant by design, and this
+-- table is read on the FLAT driver path as well as the module path
+-- (`checkGradedImplTys` ← `checkBodyImpl`, shared by both arms), where every
+-- user declaration is `OriginUnresolved` until #1115. An `Ident`-only key
+-- would have silently stopped registering and looking up anything there — see
+-- `RegKey`'s own doc-comment for the full derivation. The remaining four rows
+-- are stated as A-2.0 sized them; the unit that converts each owes the same
+-- question ("is this table read on the flat path?") rather than inheriting
+-- this row's answer.
 --
 -- 🚨 THE FIFTH ROW IS `[Option Ident]`, NOT `[Ident]`, AND THE DIFFERENCE
 -- RE-OPENS #607. This row read `Ident × [Ident]` until round 2 of this PR's
@@ -236,14 +247,22 @@
 -- signal. It is kept for that reason, and those three doctests exist solely
 -- because no property-level test can distinguish its presence.
 --
--- ⚠️ COUNTING THE BYTE-SHAPE ASSERTIONS: there are FIVE, in two groups with
--- two different jobs, and earlier cuts of this file variously called them
--- "three" and "the ONE doctest" (in one case immediately above three of
--- them). THREE `startsWith "1:…"` lines pin the ident-COUNT prefix, described
--- in this paragraph; TWO `identKey … == "…"` lines pin the origin TAG,
--- described at their own site further down. Both groups are the documented
--- exception to the opacity contract above. Do not re-encode the number here —
--- `grep -c '^-- > \(startsWith "1:\|identKey ident.* == "\)' ` this file.
+-- ⚠️ COUNTING THE BYTE-SHAPE ASSERTIONS: they fall in two groups with two
+-- different jobs, and earlier cuts of this file variously called them "three",
+-- "the ONE doctest" (in one case immediately above three of them), and "FIVE"
+-- — that last one written by this very paragraph, in the same breath as its
+-- own instruction not to encode a count, and stale one unit later.
+-- `startsWith "1:…"` lines pin the ident-COUNT prefix, described in this
+-- paragraph; `identKey … == "…"` and `tabKeyRender (TkBare …)` lines pin the
+-- origin/bare TAG, described at their own sites further down (A-2.4 added one
+-- of each: a count-prefix line on a `TabKey`-built key, and `tabKeyRender
+-- (TkBare NsType "Foo") == "4:type4:bare0:3:Foo"`). All are the documented
+-- exception to the opacity contract above. DERIVE the count, never re-encode
+-- it — and match `TkBare`, not the wider `Tk`, which also catches the
+-- identity-arm PROPERTY line (`tabKeyRender (TkIdent …) == identKey …`) that
+-- asserts no bytes at all:
+-- `grep -c '^-- > \(startsWith "1:\|identKey ident.* == "\|tabKeyRender (TkBare\)' `
+-- this file.
 --
 -- ── `regInsert` conflict handling (decided for THIS unit only) ─────────────
 -- Per `docs/spec/DICT-SEMANTICS.md` §8 I4, declarations are never rejected —
@@ -348,8 +367,9 @@ identKey (Ident ns origin name) = lenKey (nsTag ns)
   ++ lenKey name
 
 -- The `TabKey` renderer — `TkIdent` is `identKey` verbatim, so an
--- identity-bearing key renders exactly as it did before the identity block
--- widened. The `TkBare` arm is the OTHER half of `tabKeyEq`'s "never equate a
+-- identity-bearing key renders exactly as it did before A-2.4 widened
+-- `RegKey`'s identity block. The `TkBare` arm is the OTHER half of `tabKeyEq`'s
+-- "never equate a
 -- `TkIdent` with a `TkBare`" rule, expressed in the rendering rather than in a
 -- comparator, because `Registry` compares RENDERED keys inside an `OrdMap`
 -- and would otherwise have no way to tell the two halves apart.
@@ -398,11 +418,11 @@ ordKey n = lenKey "\{n}"
 -- five tables that need this and for why an ordinal is not smuggled into an
 -- `Ident`'s name field.
 --
--- 🚨 THE IDENTITY BLOCK IS `List TabKey`, NOT `List Ident`, and the reason is a
--- composition gap between two earlier units rather than a preference. A-2.0
--- sized this type against the five composite-key target tables and used
--- `Ident`, which has no identity-less inhabitant BY DESIGN (`IdentOrigin`,
--- `frontend/ast.mdk` — that is I6.3's "the absent case must be
+-- 🚨 A-2.4 WIDENED THE IDENTITY BLOCK FROM `List Ident` TO `List TabKey`, and
+-- the reason is a composition gap between two earlier units rather than a
+-- preference. A-2.0 sized this type against the five composite-key target
+-- tables and used `Ident`, which has no identity-less inhabitant BY DESIGN
+-- (`IdentOrigin`, `frontend/ast.mdk` — that is I6.3's "the absent case must be
 -- unrepresentable"). A-2.3 then established, for the tables it converted, that
 -- a real conversion ALSO needs the identity-LESS half — `TkBare` — because on
 -- the flat/single-file driver path every USER declaration carries
@@ -410,38 +430,33 @@ ordKey n = lenKey "\{n}"
 -- must be able to key both populations. It landed that as `TabKey`, on the
 -- assoc-list side only; `RegKey` never composed with it.
 --
--- ⚠️ THIS WIDENING IS SHARED WITH A-2.4 (PR #1270), WHICH IS IN FLIGHT AGAINST
--- THIS FILE AND MAKES THE IDENTICAL CHANGE. It is spelled here with A-2.4's own
--- names and bodies (`tabKeyRender`, `tabKeys`, `regKeyOfTab`, `regKeyTabs`) so
--- the two units CONVERGE rather than fork: those four ARE byte-identical
--- between the branches. A-2.4's motivating table is `universeIfaceParamKinds`
--- (interface × parameter slot, read on BOTH driver arms). A-2.2b's is every
--- dispatch key below — `obUniv*`, `KeyBuckets`, `checkCallObligationsU`'s
--- dedup key — each of which projects a head through `headTyconTy`/
--- `headTyconMono`, and those projections answer `TkBare` on the flat path for
--- exactly the reason A-2.3 gives. Keying them by `Ident` alone is not merely
--- lossy, it is unconstructible.
+-- TWO UNITS NEEDED IT, AND BOTH MOTIVATING TABLES ARE NAMED ON PURPOSE — the
+-- widening is not one table's special case:
 --
--- 🚨 HOW TO RESOLVE THE CONFLICT, AND IT IS **NOT** "TAKE EITHER SIDE". An
--- earlier draft of this paragraph said it was, and that instruction DESTROYS
--- WORK: `git merge-tree HEAD origin/arch/a2-4-iface-namespace-rekey` puts the
--- two units' *mints* in ONE hunk — this side contributes `regKeyNTab` and
--- `regKeyNTabAt`, A-2.4's contributes `regKeyTabAt` — so taking either side
--- silently deletes the other unit's mint. It fails loudly at the next build
--- (unbound name), but the instruction is written for whoever is holding the
--- conflict, and "take either side" is the one thing they must not do.
+--   * A-2.4's `universeIfaceParamKinds` is the first table that needs BOTH at
+--     once: it is keyed by (interface × parameter slot) — so it needs the
+--     ordinal block, which only `RegKey` has — and it is read by
+--     `checkGradedImplTys`, reached from `checkBodyImpl`, which is shared by
+--     the Flat and Module arms — so it needs the bare half. Keying it by
+--     `Ident` alone would have SILENTLY DISABLED the graded instance-head kind
+--     check on the flat path (every flat user interface would fail to mint a
+--     key, so nothing would be registered and nothing looked up, and
+--     `checkGradedImplTys` abstains on a miss). That is the `loud → silent`
+--     regression `AGENTS.md` grades as a severity INCREASE, and it is invisible
+--     to every golden, because a check that stops firing moves no output that
+--     any fixture asserts.
+--   * A-2.2b's is every dispatch key below — `obUniv*`, `KeyBuckets`,
+--     `checkCallObligationsU`'s dedup key — each of which projects a head
+--     through `headTyconTy`/`headTyconMono`, and those projections answer
+--     `TkBare` on the flat path for exactly the reason A-2.3 gives. Keying them
+--     by `Ident` alone is not merely lossy, it is unconstructible.
 --
---   * the MINTS: take BOTH — union them. All three are one-line `RegKey`
---     constructions over the same widened type and none subsumes another.
---   * the DOC-COMMENT blocks (this one, and the section banner above the
---     mints): either side is genuinely fine — they say the same thing about
---     the same change from the two units' points of view. Prefer keeping both
---     motivating tables named.
---
--- Derive the hunk list rather than trusting this one:
---
---   git merge-tree --write-tree --name-only HEAD \
---     origin/arch/a2-4-iface-namespace-rekey
+-- ⚠️ THE TWO UNITS LANDED SEPARATELY AND THEIR MINTS ARE A UNION, NOT A CHOICE.
+-- A-2.4 (#1270) contributed `regKeyTabAt`; A-2.2b (#1274) contributed
+-- `regKeyNTab` and `regKeyNTabAt`; `git`'s conflict puts all three in ONE hunk,
+-- so "take either side" would have deleted a mint that has live callers. All
+-- three are below. Whoever holds the next conflict in this block owes the same
+-- discipline — union the mints, reconcile the prose.
 --
 -- The widening is answer-preserving for identity-bearing keys: `regKeyOf`,
 -- `regKeyN`, `regKeyAt` and `regKeyNAt` still take `Ident`s and wrap them in
@@ -483,7 +498,7 @@ regKeyAt ident slot = RegKey [TkIdent ident] [slot]
 export regKeyNAt : List Ident -> List Int -> RegKey
 regKeyNAt idents ords = RegKey (map TkIdent idents) ords
 
--- ── The `TabKey`-taking mints ─────────────────────────────────────────────
+-- ── The `TabKey`-taking mints (A-2.4 + A-2.2b) ────────────────────────────
 -- The four above are the `Ident`-only conveniences; these are what a
 -- conversion whose site may or may not have identity calls, having minted its
 -- key through `tabKeyOf` (the ONE total mint). A site that CAN prove it has
@@ -491,6 +506,12 @@ regKeyNAt idents ords = RegKey (map TkIdent idents) ords
 -- and `regKeyOf i` are the same key, but the latter says so in the type.
 export regKeyOfTab : TabKey -> RegKey
 regKeyOfTab key = RegKey [key] []
+
+-- `universeIfaceParamKinds`' (interface × slot) key, in the shape that keeps
+-- the slot an ORDINAL rather than text spliced into a name. This is the direct
+-- replacement for `ifaceSlotKey`'s `"\{iface}@\{i}"` (`types/typecheck.mdk`).
+export regKeyTabAt : TabKey -> Int -> RegKey
+regKeyTabAt key slot = RegKey [key] [slot]
 
 -- The `TabKey` peer of `regKeyN` — an identity TUPLE whose members may or may
 -- not carry identity. `obUnivConcreteRef`'s `(interface, receiver head)` pair
@@ -844,6 +865,40 @@ export tabHasName : String -> List (TabKey, v) -> Bool
 tabHasName _ [] = False
 tabHasName n ((k, _)::rest) = tabKeyName k == n || tabHasName n rest
 
+-- ── The COMPOSITE assoc-list half (A-2.4) ─────────────────────────────────
+-- `lookupTab`'s peer for a table whose key carries ORDINALS as well as
+-- identity, and which keeps its assoc-list representation for the two reasons
+-- `TabKey`'s doc-comment above gives (allocation: comparison here builds
+-- nothing, while `Registry` renders a fresh `String` per lookup; and
+-- enumeration order, which an assoc list preserves by construction).
+-- `universeIfaceParamKinds` is the first such table.
+--
+-- ⚠️ ORDINALS FIRST, and it is the same "least discriminating first is wrong"
+-- argument `tabKeyEq` makes for names. Every entry this scans shares the
+-- interface's namespace, and within one interface's block every entry shares
+-- the identity too — the SLOT is the component that actually decides, so
+-- comparing it first short-circuits the common non-match before touching the
+-- identity at all.
+regKeyEq : RegKey -> RegKey -> Bool
+regKeyEq (RegKey k1 o1) (RegKey k2 o2) = intsEq o1 o2 && tabKeysEq k1 k2
+
+intsEq : List Int -> List Int -> Bool
+intsEq [] [] = True
+intsEq (a::as2) (b::bs) = a == b && intsEq as2 bs
+intsEq _ _ = False
+
+tabKeysEq : List TabKey -> List TabKey -> Bool
+tabKeysEq [] [] = True
+tabKeysEq (a::as2) (b::bs) = tabKeyEq a b && tabKeysEq as2 bs
+tabKeysEq _ _ = False
+
+-- FIRST match wins, exactly as `lookupTab` and the `lookupAssoc` it replaces —
+-- so a prepend still shadows, which is the overlay ordering
+-- `registerIfaceParamKinds` relies on (a module's own decls are registered as a
+-- FRONT overlay over the accumulated universe).
+export lookupReg : RegKey -> List (RegKey, v) -> Option v
+lookupReg _ [] = None
+lookupReg k ((k2, v)::rest) = if regKeyEq k k2 then Some v else lookupReg k rest
 -- ── HeadKey: the result of projecting a type's HEAD TYPE CONSTRUCTOR ──────
 -- Stage A-2 unit A-2.2 (#1111).  `types/typecheck.mdk`'s head projections —
 -- `headTyconMono : Mono -> …` (the GOAL side of a dispatch key) and
@@ -1711,6 +1766,121 @@ tabTable = [(tabZ, 2), (tabA, 1)]
 -- False
 -- > tabHasName "Box" ([] : List (TabKey, Int))
 -- False
+
+-- ── F5: RegKey over TabKey — the COMPOSITE half of A-2.4 ──────────────────
+-- `universeIfaceParamKinds`' real key shape: an INTERFACE identity plus a
+-- parameter-SLOT ordinal. `slotGA`/`slotGB` are the same slot of two
+-- same-named interfaces declared by two unrelated modules — the #1257 shape
+-- verbatim; `slotUA` is what the flat/single-file driver mints for that same
+-- interface (no identity at all).
+ifaceG : TabKey
+ifaceG = tabKeyOf NsIface (OriginModule "gmod") "Same"
+
+ifaceP : TabKey
+ifaceP = tabKeyOf NsIface (OriginModule "pmod") "Same"
+
+-- Spelled with the CONSTRUCTOR, not `tabKeyOf NsIface OriginUnresolved "Same"`,
+-- for the reason `tabU` above gives: `test/typecheck_compiler_source.sh`'s
+-- #1110 ratchet pins the FILE SET carrying a non-comment `OriginUnresolved`
+-- mention. Nothing is lost — the mint's `OriginUnresolved` behaviour is
+-- asserted directly in F4 above, and `TkBare NsIface "Same"` is exactly what
+-- that assertion says it returns.
+ifaceU : TabKey
+ifaceU = TkBare NsIface "Same"
+
+slotGA : RegKey
+slotGA = regKeyTabAt ifaceG 0
+
+slotPA : RegKey
+slotPA = regKeyTabAt ifaceP 0
+
+slotUA : RegKey
+slotUA = regKeyTabAt ifaceU 0
+
+-- `gmod` registered LAST, so it is at the FRONT of the prepend — the table
+-- state that makes the bare-name lookup answer with the wrong module's slot
+-- kinds today (#1257).
+slotTable : List (RegKey, Int)
+slotTable = [(slotGA, 2), (slotPA, 1)]
+
+-- 🚨 THE #1257 DRAIN, in one assertion: the shadower is at the FRONT and the
+-- lookup still answers with the interface the impl actually names.
+-- > lookupReg slotPA slotTable
+-- Some 1
+-- > lookupReg slotGA slotTable
+-- Some 2
+
+-- The ORDINAL discriminates: slot 1 of the same interface is a different key.
+-- > lookupReg (regKeyTabAt ifaceP 1) slotTable
+-- None
+-- > lookupReg (regKeyTabAt ifaceP 1) ((regKeyTabAt ifaceP 1, 9) :: slotTable)
+-- Some 9
+
+-- First match wins, so a prepend still shadows under the SAME key — the
+-- front-overlay ordering `registerIfaceParamKinds` relies on.
+-- > lookupReg slotPA ((slotPA, 99) :: slotTable)
+-- Some 99
+
+-- An identity-bearing key NEVER matches a bare row and vice versa, in BOTH
+-- directions — the same structural exclusion `tabKeyEq` gives the assoc-list
+-- half, now through `RegKey`.
+-- > lookupReg slotUA slotTable
+-- None
+-- > lookupReg slotPA [(slotUA, 7)]
+-- None
+-- > lookupReg slotUA [(slotUA, 7)]
+-- Some 7
+
+-- ...and the SAME exclusion holds through the RENDERED path, which is what an
+-- `OrdMap`-backed `Registry`/`SetRegistry` actually compares. This is the
+-- assertion that would catch a `tabKeyRender` whose bare arm collided with an
+-- identity arm — `tabKeyEq` is not consulted at all down here.
+-- > regKeyRender slotUA == regKeyRender slotPA
+-- False
+-- > regSize (regInsertK slotUA 7 (regInsertK slotPA 1 (regInsertK slotGA 2 regEmpty)))
+-- 3
+-- > regLookupK slotUA (regInsertK slotUA 7 (regInsertK slotPA 1 regEmpty))
+-- Some 7
+-- > regLookupK slotPA (regInsertK slotUA 7 (regInsertK slotPA 1 regEmpty))
+-- Some 1
+
+-- `regKeyOfTab` and `regKeyOf` agree on an identity-bearing key — the widening
+-- is answer-preserving for every pre-A-2.4 caller.
+-- > regKeyOfTab (TkIdent identIfaceFooM) == regKeyOf identIfaceFooM
+-- True
+-- > regKeyRender (regKeyOfTab (TkIdent identIfaceFooM)) == regKeyRender (regKeyOf identIfaceFooM)
+-- True
+-- > regKeyTabAt (TkIdent identIfaceFooM) 3 == regKeyAt identIfaceFooM 3
+-- True
+
+-- `tabKeyRender`'s identity arm IS `identKey`, unchanged, and its bare arm is
+-- four netstrings with a `bare` tag that `originTag` cannot produce.
+-- > tabKeyRender (TkIdent identTypeFooM) == identKey identTypeFooM
+-- True
+-- > tabKeyRender (TkBare NsType "Foo")
+-- "4:type4:bare0:3:Foo"
+
+-- Namespace still discriminates on the bare half, through the render too.
+-- > regKeyRender (regKeyOfTab (TkBare NsType "Same")) == regKeyRender (regKeyOfTab (TkBare NsIface "Same"))
+-- False
+
+-- The ident-COUNT prefix is present on a `TabKey`-built key exactly as on an
+-- `Ident`-built one (see the count-prefix paragraph in the module header).
+--
+-- 🚨 THE BLANK LINE BELOW IS PART OF THE ASSERTION, NOT SPACING. A doctest's
+-- expected block runs to the next bare `--`, blank line, or `-- >` line
+-- (`splitIntoBlocks`/`extractGo`, `compiler/tools/doctest.mdk`), so an
+-- unseparated prose paragraph underneath is SWALLOWED INTO the expected text
+-- and the example fails with `expected: True <six lines of prose>` /
+-- `actual: True`. That is exactly how this line reddened `inlang` on PR #1270:
+-- A-2.4 appended this example and #1268 prepended the F5 header below it, each
+-- green alone, and git merged the two seams with no blank line between them —
+-- a conflict-free merge that no gate on either branch could have seen. Derive
+-- the whole file's exposure rather than eyeballing this one site: every
+-- example's expected block, and any with more than one line, falls out of
+-- replaying those two functions over the comment stream.
+-- > startsWith "1:1" (regKeyRender slotPA)
+-- True
 
 -- ── F5: HeadKey — the head-tycon projection's key (A-2.2) ──────────────────
 -- Fixtures mirror the `TabKey` ones above, because the declaration half of a

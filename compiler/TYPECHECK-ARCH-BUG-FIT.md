@@ -427,6 +427,32 @@ tracked as #1256 (`universeRecordByName`), #1257 (`ifaceSlotKey`), #1258
 `test/must_fail_fixtures/` pin, draining on units A-2.4 / A-2.6. The umbrella's own row
 in `test/MUST-FAIL-NOT-PINNABLE.txt` records why it now carries no fixture of its own.
 
+✅ **THE `ifaceSlotKey` (#1257) AND `universeIfaceRequiredRef` (#1258) ROWS ARE
+CONFIRMED AND DRAINED, 2026-08-03, by A-2.4** (`universeIfaceParamKinds` re-keyed to
+`RegKey` = interface identity × slot ordinal; `universeIfaceRequiredRef` re-keyed to a
+`Registry` over interface identity). Both repros go from `exit 1` to `exit 0` and print
+`1`: #1257's `impl Same P` is no longer judged against a same-named GRADED interface's
+slot kinds, and #1258's `impl Same ET` is no longer judged against a same-named
+interface's required-method list. Verified on `check`, on `run`, and on `build` + the
+native binary — noting that `run` and `build` share the front end, so on the ACCEPTANCE
+question those are ONE observation, while the printed `1` is a genuine per-engine
+observation on each. Both fixtures were deleted and **#1070 remains OPEN**; the
+remaining rows are #1256 (`universeRecordByName`) and #1259 (`universeDataEnv`),
+draining on unit A-2.6.
+
+🚨 **AND A-2.4 FALSIFIED PART OF ITS OWN BRIEF, which is recorded here because a
+future reader would otherwise re-derive it.** #1257's fixture notes (and the A-2.4
+brief) attributed the REVERSED-import-order symptom —
+`Method 'pmth' is not part of interface 'Same'` — to `universeIfaceRequiredRef`. It does
+not come from there. It is `R-METHOD-NOT-IN-INTERFACE`, raised by `checkMethodMember`
+in **`compiler/frontend/resolve.mdk`** off `Env.ifaceMethods`, a *resolve-layer* assoc
+list keyed by bare interface name and scanned first-match by `ifaceMethodsOf`. It is
+unchanged by either table A-2.4 re-keyed (re-run first-hand on the A-2.4 binary), it is
+on no A-2 unit's list, and it is now tracked as **#1269** with its own
+`test/must_fail_fixtures/1269-ifacemethods-bare-name-collision/` pin. The
+interface-name collision therefore has a THIRD table, in a file this arc does not
+touch.
+
 ⚠️ Two rows to hold to a higher bar: `universeRecordByName` and `universeDataEnv` were
 audit-verified but **not** independently re-run by #1070's author, and `universeRecordByName`
 is claimed to produce a check-vs-build divergence that no gate has ever observed. Those

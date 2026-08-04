@@ -1,0 +1,11 @@
+-- CONTROL for #1269: identical to rev.mdk minus the `import gmod.{gdummy}` line -- the
+-- ONE flipped feature. With no other `Same` in the graph, `impl Same P` must resolve and
+-- typecheck cleanly against `pmod.Same` alone and, run, print `1`.
+import pmod.{Same, pmth}
+
+data P a b = MkP a b
+
+impl Same P where
+  pmth p = 1
+
+main = println (pmth (MkP 1 2))

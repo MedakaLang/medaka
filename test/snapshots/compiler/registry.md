@@ -1,5 +1,5 @@
 # META
-source_lines=1791
+source_lines=1687
 stages=DESUGAR,MARK
 # SOURCE
 -- Identity + registry substrate — Stage A-2 unit A-2.0
@@ -151,18 +151,29 @@ stages=DESUGAR,MARK
 -- about which `Ns` the thing is in. So `RegKey` is the key type and `Ident`
 -- is its one-element case:
 --
---   | table                            | key                     | site          |
---   |----------------------------------|-------------------------|---------------|
---   | `universeIfaceParamKinds`        | Ident × Int             | typecheck.mdk |
---   | `obUnivConcreteRef`              | Ident × Ident           | typecheck.mdk |
---   | `checkCallObligationsU` dedup    | Ident × [Option Ident]  | typecheck.mdk |
---   | `methodReqCountRef`              | Ident × Ident           | eval.mdk      |
---   | `ifaceDispatchRef`               | Ident × Ident           | eval.mdk      |
+--   | table                            | key                      | site          |
+--   |----------------------------------|--------------------------|---------------|
+--   | `universeIfaceParamKinds`        | TabKey × Int  ✅ A-2.4    | typecheck.mdk |
+--   | `obUnivConcreteRef`              | Ident × Ident            | typecheck.mdk |
+--   | `checkCallObligationsU` dedup    | Ident × [Option Ident]   | typecheck.mdk |
+--   | `methodReqCountRef`              | Ident × Ident            | eval.mdk      |
+--   | `ifaceDispatchRef`               | Ident × Ident            | eval.mdk      |
 --
 -- Three of the five are pure identity tuples (`regKeyN`); one pairs an
 -- identity with a parameter SLOT, which is an ordinal and not a declaration —
 -- it has no namespace and no origin, so it is carried in `RegKey`'s second
--- component (`regKeyAt`) rather than faked as an `Ident`.
+-- component (`regKeyTabAt`) rather than faked as an `Ident`.
+--
+-- ⚠️ ROW 1 SAID `Ident × Int` UNTIL A-2.4 CONVERTED IT, AND THE CORRECTION IS
+-- NOT COSMETIC. `Ident` has no identity-less inhabitant by design, and this
+-- table is read on the FLAT driver path as well as the module path
+-- (`checkGradedImplTys` ← `checkBodyImpl`, shared by both arms), where every
+-- user declaration is `OriginUnresolved` until #1115. An `Ident`-only key
+-- would have silently stopped registering and looking up anything there — see
+-- `RegKey`'s own doc-comment for the full derivation. The remaining four rows
+-- are stated as A-2.0 sized them; the unit that converts each owes the same
+-- question ("is this table read on the flat path?") rather than inheriting
+-- this row's answer.
 --
 -- 🚨 THE FIFTH ROW IS `[Option Ident]`, NOT `[Ident]`, AND THE DIFFERENCE
 -- RE-OPENS #607. This row read `Ident × [Ident]` until round 2 of this PR's
@@ -240,14 +251,22 @@ stages=DESUGAR,MARK
 -- signal. It is kept for that reason, and those three doctests exist solely
 -- because no property-level test can distinguish its presence.
 --
--- ⚠️ COUNTING THE BYTE-SHAPE ASSERTIONS: there are FIVE, in two groups with
--- two different jobs, and earlier cuts of this file variously called them
--- "three" and "the ONE doctest" (in one case immediately above three of
--- them). THREE `startsWith "1:…"` lines pin the ident-COUNT prefix, described
--- in this paragraph; TWO `identKey … == "…"` lines pin the origin TAG,
--- described at their own site further down. Both groups are the documented
--- exception to the opacity contract above. Do not re-encode the number here —
--- `grep -c '^-- > \(startsWith "1:\|identKey ident.* == "\)' ` this file.
+-- ⚠️ COUNTING THE BYTE-SHAPE ASSERTIONS: they fall in two groups with two
+-- different jobs, and earlier cuts of this file variously called them "three",
+-- "the ONE doctest" (in one case immediately above three of them), and "FIVE"
+-- — that last one written by this very paragraph, in the same breath as its
+-- own instruction not to encode a count, and stale one unit later.
+-- `startsWith "1:…"` lines pin the ident-COUNT prefix, described in this
+-- paragraph; `identKey … == "…"` and `tabKeyRender (TkBare …)` lines pin the
+-- origin/bare TAG, described at their own sites further down (A-2.4 added one
+-- of each: a count-prefix line on a `TabKey`-built key, and `tabKeyRender
+-- (TkBare NsType "Foo") == "4:type4:bare0:3:Foo"`). All are the documented
+-- exception to the opacity contract above. DERIVE the count, never re-encode
+-- it — and match `TkBare`, not the wider `Tk`, which also catches the
+-- identity-arm PROPERTY line (`tabKeyRender (TkIdent …) == identKey …`) that
+-- asserts no bytes at all:
+-- `grep -c '^-- > \(startsWith "1:\|identKey ident.* == "\|tabKeyRender (TkBare\)' `
+-- this file.
 --
 -- ── `regInsert` conflict handling (decided for THIS unit only) ─────────────
 -- Per `docs/spec/DICT-SEMANTICS.md` §8 I4, declarations are never rejected —
@@ -352,8 +371,8 @@ identKey (Ident ns origin name) = lenKey (nsTag ns)
   ++ lenKey name
 
 -- The `TabKey` renderer — `TkIdent` is `identKey` verbatim, so an
--- identity-bearing key renders exactly as it did before the identity block
--- widened. The `TkBare` arm is the OTHER half of `tabKeyEq`'s "never equate a
+-- identity-bearing key renders exactly as it did before A-2.4 widened
+-- `RegKey`. The `TkBare` arm is the OTHER half of `tabKeyEq`'s "never equate a
 -- `TkIdent` with a `TkBare`" rule, expressed in the rendering rather than in a
 -- comparator, because `Registry` compares RENDERED keys inside an `OrdMap`
 -- and would otherwise have no way to tell the two halves apart.
@@ -362,7 +381,7 @@ identKey (Ident ns origin name) = lenKey (nsTag ns)
 -- `originTag` can never produce (`identOriginFold "builtin" (_ => "module")`
 -- is total and its two results are the only strings that arm can yield). So:
 --   * `regKeyRender`'s injectivity argument survives verbatim — every element
---     is still a fixed group of four netstrings, so the leading key-COUNT
+--     is still a fixed group of four netstrings, so the leading ident-COUNT
 --     prefix still separates the identity block from the ordinal block with
 --     no assumption about any tag or name spelling; and
 --   * no `TkBare` render can EQUAL a `TkIdent` render, because they differ in
@@ -402,11 +421,11 @@ ordKey n = lenKey "\{n}"
 -- five tables that need this and for why an ordinal is not smuggled into an
 -- `Ident`'s name field.
 --
--- 🚨 THE IDENTITY BLOCK IS `List TabKey`, NOT `List Ident`, and the reason is a
--- composition gap between two earlier units rather than a preference. A-2.0
--- sized this type against the five composite-key target tables and used
--- `Ident`, which has no identity-less inhabitant BY DESIGN (`IdentOrigin`,
--- `frontend/ast.mdk` — that is I6.3's "the absent case must be
+-- 🚨 A-2.4 WIDENED THE IDENTITY BLOCK FROM `List Ident` TO `List TabKey`, and
+-- the reason is a composition gap between two earlier units rather than a
+-- preference. A-2.0 sized this type against the five composite-key target
+-- tables and used `Ident`, which has no identity-less inhabitant BY DESIGN
+-- (`IdentOrigin`, `frontend/ast.mdk` — that is I6.3's "the absent case must be
 -- unrepresentable"). A-2.3 then established, for the tables it converted, that
 -- a real conversion ALSO needs the identity-LESS half — `TkBare` — because on
 -- the flat/single-file driver path every USER declaration carries
@@ -414,50 +433,21 @@ ordKey n = lenKey "\{n}"
 -- must be able to key both populations. It landed that as `TabKey`, on the
 -- assoc-list side only; `RegKey` never composed with it.
 --
--- ⚠️ THIS WIDENING IS SHARED WITH A-2.4 (PR #1270), WHICH IS IN FLIGHT AGAINST
--- THIS FILE AND MAKES THE IDENTICAL CHANGE. It is spelled here with A-2.4's own
--- names and bodies (`tabKeyRender`, `tabKeys`, `regKeyOfTab`, `regKeyTabs`) so
--- the two units CONVERGE rather than fork: those four ARE byte-identical
--- between the branches. A-2.4's motivating table is `universeIfaceParamKinds`
--- (interface × parameter slot, read on BOTH driver arms). A-2.2b's is every
--- dispatch key below — `obUniv*`, `KeyBuckets`, `checkCallObligationsU`'s
--- dedup key — each of which projects a head through `headTyconTy`/
--- `headTyconMono`, and those projections answer `TkBare` on the flat path for
--- exactly the reason A-2.3 gives. Keying them by `Ident` alone is not merely
--- lossy, it is unconstructible.
---
--- 🚨 HOW TO RESOLVE THE CONFLICT, AND IT IS **NOT** "TAKE EITHER SIDE". An
--- earlier draft of this paragraph said it was, and that instruction DESTROYS
--- WORK: `git merge-tree HEAD origin/arch/a2-4-iface-namespace-rekey` puts the
--- two units' *mints* in ONE hunk — this side contributes `regKeyNTab` and
--- `regKeyNTabAt`, A-2.4's contributes `regKeyTabAt` — so taking either side
--- silently deletes the other unit's mint. It fails loudly at the next build
--- (unbound name), but the instruction is written for whoever is holding the
--- conflict, and "take either side" is the one thing they must not do.
---
---   * the MINTS: take BOTH — union them. All three are one-line `RegKey`
---     constructions over the same widened type and none subsumes another.
---   * the DOC-COMMENT blocks (this one, and the section banner above the
---     mints): either side is genuinely fine — they say the same thing about
---     the same change from the two units' points of view. Prefer keeping both
---     motivating tables named.
---
--- Derive the hunk list rather than trusting this one:
---
---   git merge-tree --write-tree --name-only HEAD \
---     origin/arch/a2-4-iface-namespace-rekey
+-- A-2.4's `universeIfaceParamKinds` is the first table that needs BOTH at
+-- once: it is keyed by (interface × parameter slot) — so it needs the ordinal
+-- block, which only `RegKey` has — and it is read by `checkGradedImplTys`,
+-- reached from `checkBodyImpl`, which is shared by the Flat and Module arms —
+-- so it needs the bare half. Keying it by `Ident` alone would have SILENTLY
+-- DISABLED the graded instance-head kind check on the flat path (every flat
+-- user interface would fail to mint a key, so nothing would be registered and
+-- nothing looked up, and `checkGradedImplTys` abstains on a miss). That is the
+-- `loud → silent` regression `AGENTS.md` grades as a severity INCREASE, and it
+-- is invisible to every golden, because a check that stops firing moves no
+-- output that any fixture asserts.
 --
 -- The widening is answer-preserving for identity-bearing keys: `regKeyOf`,
 -- `regKeyN`, `regKeyAt` and `regKeyNAt` still take `Ident`s and wrap them in
 -- `TkIdent`, whose render is `identKey` unchanged.
---
--- 🚨 WHAT THE IDENTITY BLOCK MAY NOT HOLD, and it is not a style rule.
--- `HeadKey`'s `HkRigid` arm (below) is NOT a `TabKey` and must never become
--- one: `docs/spec/DICT-SEMANTICS.md` §8 I6.1 says a rigid type variable is not
--- a declaration and must not be assigned an identity, and A-2.2's whole reason
--- for splitting `HkRigid` out of `TabKey` was that folding it in would destroy
--- A-1's greppability. A dispatch key whose positions can be rigid therefore
--- carries the rigid positions OUTSIDE this type — see `dispKeyRender` below.
 public export data RegKey =
   | RegKey (List TabKey) (List Int)
 deriving (Eq, Ord, Debug)
@@ -487,7 +477,7 @@ regKeyAt ident slot = RegKey [TkIdent ident] [slot]
 export regKeyNAt : List Ident -> List Int -> RegKey
 regKeyNAt idents ords = RegKey (map TkIdent idents) ords
 
--- ── The `TabKey`-taking mints ─────────────────────────────────────────────
+-- ── The `TabKey`-taking mints (A-2.4) ──────────────────────────────────────
 -- The four above are the `Ident`-only conveniences; these are what a
 -- conversion whose site may or may not have identity calls, having minted its
 -- key through `tabKeyOf` (the ONE total mint). A site that CAN prove it has
@@ -496,22 +486,11 @@ regKeyNAt idents ords = RegKey (map TkIdent idents) ords
 export regKeyOfTab : TabKey -> RegKey
 regKeyOfTab key = RegKey [key] []
 
--- The `TabKey` peer of `regKeyN` — an identity TUPLE whose members may or may
--- not carry identity. `obUnivConcreteRef`'s `(interface, receiver head)` pair
--- is the first table that needs it: its interface half is bare by derivation
--- (`Predicate` carries no origin — see `ifaceRegistered` in
--- `types/typecheck.mdk`) while its head half is whatever `headTyconTy`
--- projected, so ONE key genuinely mixes the two populations.
-export regKeyNTab : List TabKey -> RegKey
-regKeyNTab keys = RegKey keys []
-
--- The `TabKey` peer of `regKeyNAt` — an identity TUPLE plus ordinals, which is
--- what a key over a whole ARGUMENT VECTOR needs: the ordinal block carries the
--- vector's arity and the indices of the positions the identity block came
--- from, so two vectors differing only in WHICH position is absent stay apart
--- (#607). `checkCallObligationsU`'s dedup key is the first user.
-export regKeyNTabAt : List TabKey -> List Int -> RegKey
-regKeyNTabAt keys ords = RegKey keys ords
+-- `universeIfaceParamKinds`' (interface × slot) key, in the shape that keeps
+-- the slot an ORDINAL rather than text spliced into a name. This is the direct
+-- replacement for `ifaceSlotKey`'s `"\{iface}@\{i}"` (`types/typecheck.mdk`).
+export regKeyTabAt : TabKey -> Int -> RegKey
+regKeyTabAt key slot = RegKey [key] [slot]
 
 export regKeyTabs : RegKey -> List TabKey
 regKeyTabs (RegKey keys _) = keys
@@ -519,7 +498,7 @@ regKeyTabs (RegKey keys _) = keys
 export regKeyOrdinals : RegKey -> List Int
 regKeyOrdinals (RegKey _ ords) = ords
 
--- OPAQUE, exactly as `identKey` is. The leading key-count netstring is what
+-- OPAQUE, exactly as `identKey` is. The leading ident-count netstring is what
 -- makes the identity block and the ordinal block unambiguously separable
 -- without assuming anything about tag or name spellings.
 export regKeyRender : RegKey -> String
@@ -631,42 +610,6 @@ mregAddK k v (MultiRegistry m) =
 
 export mregAdd : Ident -> v -> MultiRegistry v -> MultiRegistry v
 mregAdd ident v mr = mregAddK (regKeyOf ident) v mr
-
--- ⚠️ APPEND, not `mregAddK`'s prepend, and the difference is load-bearing for
--- ONE of the two tables that needs it. Attributing it to both
--- (`obUnivConcreteRef`/`obUnivHeadlessRef`, `types/typecheck.mdk`) overstates
--- it, so name which is which:
---
---   * `obUnivHeadlessRef` — THIS is the first-match reader.
---     `findMatchingImplReqsU` reaches it directly, on both its clauses, as
---     `firstReqMatch (univHeadless …)`, and its own doc-comment records that
---     the order is a deliberate soundness/conformance property and not an
---     order-immaterial coherence argument. A prepend here would silently
---     invert which impl's `requires` get discharged.
---   * `obUnivConcreteRef` — NOT read first-match, and not read by
---     `findMatchingImplReqsU` at all. That function's concrete arm goes through
---     `concreteReqMatchByIface` → `selectImplEntryByIface`, which reads
---     `shadowKeyTableRef` — a DIFFERENT table. `obUnivConcreteRef`'s own
---     readers are `univConcreteBucket`'s two, `implMatchesU` and
---     `implMatchesReceiverU`, and both are boolean EXISTENCE tests
---     (`bucketArgsMatch`/`bucketRecvMatch`, `||`-folded), for which bucket
---     order is immaterial.
---
--- Both writers have always spelled `bucketOf k ++ [x]`; this is that spelling,
--- once, inside the abstraction, at the same O(bucket) cost per add. Keeping the
--- concrete side on it too is deliberate — the two accumulators are written by
--- one pass and reading them as a pair is easier than reasoning about why one
--- prepends — but it is a CONSISTENCY choice, not a correctness one.
---
--- `mregAddK` stays the default: a bucket whose order genuinely does not matter
--- should pay O(1), and a caller reaching for THIS one is asserting that its
--- bucket order is semantic. Say which in the call site's comment.
-export mregAppendK : RegKey -> v -> MultiRegistry v -> MultiRegistry v
-mregAppendK k v (MultiRegistry m) =
-  let s = regKeyRender k
-  match omLookup s m
-    Some (_, vs) => MultiRegistry (omInsert s (k, vs ++ [v]) m)
-    None => MultiRegistry (omInsert s (k, [v]) m)
 
 export mregLookupK : RegKey -> MultiRegistry v -> List v
 mregLookupK k (MultiRegistry m) = match omLookup (regKeyRender k) m
@@ -848,6 +791,40 @@ export tabHasName : String -> List (TabKey, v) -> Bool
 tabHasName _ [] = False
 tabHasName n ((k, _)::rest) = tabKeyName k == n || tabHasName n rest
 
+-- ── The COMPOSITE assoc-list half (A-2.4) ─────────────────────────────────
+-- `lookupTab`'s peer for a table whose key carries ORDINALS as well as
+-- identity, and which keeps its assoc-list representation for the two reasons
+-- `TabKey`'s doc-comment above gives (allocation: comparison here builds
+-- nothing, while `Registry` renders a fresh `String` per lookup; and
+-- enumeration order, which an assoc list preserves by construction).
+-- `universeIfaceParamKinds` is the first such table.
+--
+-- ⚠️ ORDINALS FIRST, and it is the same "least discriminating first is wrong"
+-- argument `tabKeyEq` makes for names. Every entry this scans shares the
+-- interface's namespace, and within one interface's block every entry shares
+-- the identity too — the SLOT is the component that actually decides, so
+-- comparing it first short-circuits the common non-match before touching the
+-- identity at all.
+regKeyEq : RegKey -> RegKey -> Bool
+regKeyEq (RegKey k1 o1) (RegKey k2 o2) = intsEq o1 o2 && tabKeysEq k1 k2
+
+intsEq : List Int -> List Int -> Bool
+intsEq [] [] = True
+intsEq (a::as2) (b::bs) = a == b && intsEq as2 bs
+intsEq _ _ = False
+
+tabKeysEq : List TabKey -> List TabKey -> Bool
+tabKeysEq [] [] = True
+tabKeysEq (a::as2) (b::bs) = tabKeyEq a b && tabKeysEq as2 bs
+tabKeysEq _ _ = False
+
+-- FIRST match wins, exactly as `lookupTab` and the `lookupAssoc` it replaces —
+-- so a prepend still shadows, which is the overlay ordering
+-- `registerIfaceParamKinds` relies on (a module's own decls are registered as a
+-- FRONT overlay over the accumulated universe).
+export lookupReg : RegKey -> List (RegKey, v) -> Option v
+lookupReg _ [] = None
+lookupReg k ((k2, v)::rest) = if regKeyEq k k2 then Some v else lookupReg k rest
 -- ── HeadKey: the result of projecting a type's HEAD TYPE CONSTRUCTOR ──────
 -- Stage A-2 unit A-2.2 (#1111).  `types/typecheck.mdk`'s head projections —
 -- `headTyconMono : Mono -> …` (the GOAL side of a dispatch key) and
@@ -955,98 +932,6 @@ headKeyOfCon origin name = HkDecl (tabKeyOf NsType origin name)
 export headKeyName : HeadKey -> String
 headKeyName (HkDecl k) = tabKeyName k
 headKeyName (HkRigid name) = name
-
--- ── Keying a table BY a projected head — Stage A-2 unit A-2.2b (#1111) ────
--- A-2.2 widened the two head PROJECTIONS to carry identity and stopped there:
--- every consumer projected straight back to a bare name, so no table's key
--- moved. This is the layer that lets a table be keyed by the projection.
---
--- 🚨 A HEAD POSITION CARRIES ONE OF **THREE** FACTS, AND A KEY MUST KEEP ALL
--- THREE APART. `headKeyNameOr <dflt>` (`types/typecheck.mdk`) collapses them to
--- two — a name, or the placeholder — which is exactly what this replaces:
---
---   ABSENT      `None` — the type has NO head type constructor (a bare tyvar,
---               a function type, an effect row). A property of the TYPE.
---   DECLARATION `Some (HkDecl tk)` — a real head. Keyable, and the key is
---               `tk`, which already distinguishes the identity-bearing
---               (`TkIdent`) from the not-yet-identified (`TkBare`) case.
---   RIGID       `Some (HkRigid n)` — a type PARAMETER name handed out as a
---               dispatch key. §8 I6.1: NOT a declaration, and MUST NOT be
---               assigned an identity or become a table key.
---
--- The result type is `Option RegKey` and its `None` is the RIGID case — "this
--- position cannot be keyed at all", which is a different fact from the
--- ABSENT input and must not be confused with it. ABSENT is keyable, and its
--- key is `RegKey [] []`: an EMPTY identity block, which no declaration can
--- ever produce (every declaration key carries at least one `TabKey`), so the
--- headless bucket is structurally disjoint from every concrete one without a
--- reserved name like `noneHeadTag` having to be un-shadowable.
---
--- ⚠️ REFUSING TO KEY A RIGID IS ANSWER-PRESERVING HERE, not a narrowing, and
--- the derivation is about the WRITER, not about this function: the only
--- writer of a head-keyed dispatch bucket is `keyEntryOf` via `headTyconTy`,
--- whose arms are `TyCon`/`TyTuple` — it has no `TRigid` arm and structurally
--- CANNOT emit one. So a rigid GOAL head looked up a bucket that no writer
--- could have filled, and answering "no bucket" is the same empty list the
--- bare-name lookup returned. See `bucketOfHead` (`types/typecheck.mdk`).
--- The DECLARATION half of a projected head, or `None` when the projection is
--- the §8 I6.1 rigid residual. The peer of `headBucketKey` for a key that is a
--- TUPLE — `obUnivConcreteRef`'s `(interface, receiver head)` pair, and
--- `checkCallObligationsU`'s argument vector — where the head is one COMPONENT
--- of the key rather than the whole of it, so a `RegKey` is the wrong return
--- type.
-export headKeyDecl : HeadKey -> Option TabKey
-headKeyDecl (HkDecl key) = Some key
-headKeyDecl (HkRigid _) = None
-
-export headBucketKey : Option HeadKey -> Option RegKey
-headBucketKey None = Some (RegKey [] [])
-headBucketKey (Some (HkDecl key)) = Some (regKeyOfTab key)
-headBucketKey (Some (HkRigid _)) = None
-
--- ── A dispatch key over a whole ARGUMENT VECTOR ───────────────────────────
--- `checkCallObligationsU`'s dedup key (`types/typecheck.mdk`) is a vector, not
--- a single key: an interface plus one projected head PER argument, where a
--- position can be a declaration, absent, OR rigid. `RegKey` alone cannot
--- express it, and widening `RegKey` to admit a rigid is precisely what §8
--- I6.1 forbids (see `RegKey`'s own doc-comment). So the two halves are
--- rendered SEPARATELY and concatenated:
---
---   [base]   a `RegKey` whose identity block is the interface key followed by
---            the DECLARATION positions' keys, and whose ordinal block is the
---            vector's ARITY followed by those positions' indices. Every
---            position that is neither in the ordinal block nor in [rigids] is
---            absent, and the arity says how many positions there are, so the
---            classification of every position is recoverable ⇒ two vectors
---            differing only in WHICH position is absent get different keys.
---            That is #607's property, kept structurally rather than by a
---            positional `""` placeholder that a name could in principle equal.
---   [rigids] the §8 I6.1 RESIDUAL, as `(position, parameter name)` pairs in
---            ascending position order. It is a separate argument, and a
---            separate netstring group, for one reason: **deleting the residual
---            is deleting this argument**, and until then `grep -n
---            dispKeyRender` names every site that still keys on one.
---
--- ⚠️ INJECTIVITY ACROSS THE JOIN. `regKeyRender`'s output is wrapped in a
--- netstring of its own (`lenKey`) rather than concatenated raw, because the
--- ordinal block is NOT count-prefixed — an ordinal netstring and a rigid
--- position netstring are indistinguishable, so a raw join could read one as
--- the other. Wrapping fixes the boundary: `lenKey s ++ t` determines `s`
--- because a valid-UTF-8 byte-prefix of a valid-UTF-8 string is a codepoint
--- prefix, so equal codepoint counts force equal strings.
---
--- ⚠️ TWO RIGIDS OF THE SAME NAME AT THE SAME POSITION DO COMPARE EQUAL, and
--- that is deliberate: it is what the bare-name key did, and A-2.2b's bar is
--- answer-preservation. Making distinct occurrences of one rigid name
--- never-equal would need an occurrence identity that does not exist at the
--- call site, and inventing one is the I6.3 violation A-2.0's review already
--- rejected. What this rendering DOES guarantee is that a rigid never compares
--- equal to a DECLARATION of the same spelling, and never to a rigid at a
--- different position — the two conflations a bare-name vector admits.
-export dispKeyRender : RegKey -> List (Int, String) -> String
-dispKeyRender base rigids = lenKey (regKeyRender base)
-  ++ lenKey "\{listLen rigids}"
-  ++ joinWith "" (map ((i, name) => ordKey i ++ lenKey name) rigids)
 
 -- ── Deliberately NOT added, with the table each omission affects ───────────
 --   * NO `Display` for `Ident`/`RegKey` — see `Ident` in `frontend/ast.mdk`:
@@ -1179,47 +1064,6 @@ keyIxPresentOnly = regKeyN [identIfaceIxM, identTypeIntM]
 
 regIxUndet : Registry Int
 regIxUndet = regInsertK keyIxUndetInt 2 (regInsertK keyIxIntUndet 1 regEmpty)
-
--- ── A-2.2b: the RIGID position, beside the absent one ──────────────────────
--- `dispKeyRender`'s three-way discrimination, one fixture per fact at the
--- SAME position of the SAME 2-argument vector, so each doctest below isolates
--- one axis. `keyIxNoDecl` is the vector with NO declaration positions at all —
--- arity 2, nothing present — so a rigid can be placed at position 0 or 1
--- without colliding with a declaration slot.
-keyIxNoDecl : RegKey
-keyIxNoDecl = regKeyNAt [identIfaceIxM] [2]
-
--- A DECLARATION at position 0 whose name is `a` — the exact spelling a rigid
--- type parameter carries. `tabKeyOf`'s two arms are both exercised: `TkIdent`
--- here, `TkBare` in `keyIxBareAOnly` below, and NEITHER may equal the rigid.
-identTypeLowerAM : Ident
-identTypeLowerAM = identIn NsType "m" "a"
-
-keyIxDeclAOnly : RegKey
-keyIxDeclAOnly = regKeyNAt [identIfaceIxM, identTypeLowerAM] [2, 0]
-
--- The same declaration on the FLAT path — no identity acquired yet, so
--- `tabKeyOf` lands it in `TkBare`. Distinct from both the `TkIdent` row above
--- and the rigid.
-keyIxBareAOnly : RegKey
-keyIxBareAOnly = RegKey [TkIdent identIfaceIxM, TkBare NsType "a"] [2, 0]
-
--- Head-bucket fixtures: the three facts `headBucketKey` classifies.
-headDeclFoo : Option HeadKey
-headDeclFoo = Some (headKeyOfCon (OriginModule "m") "Foo")
-
--- ⚠️ Spelled with the CONSTRUCTOR, not `headKeyOfCon OriginUnresolved "Foo"`.
--- That mention would enrol this file in the #1110 `OriginUnresolved` PRODUCER
--- ratchet (`test/typecheck_compiler_source.sh`), which exists to keep
--- pre-resolve node construction inside `tyConUnresolved` — a doctest fixture is
--- not a producer, and widening that allowlist to admit one would be the masking
--- path the ratchet's own remedy forbids. `tabKeyOf`'s identity-less arm is
--- asserted directly elsewhere in this block, so nothing is lost.
-headBareFoo : Option HeadKey
-headBareFoo = Some (HkDecl (TkBare NsType "Foo"))
-
-headRigidA : Option HeadKey
-headRigidA = Some (HkRigid "a")
 
 -- One entry per namespace, all under origin `m` and name `size`: any two
 -- namespace tags collapsing into one makes this registry SMALLER than six.
@@ -1418,69 +1262,6 @@ mregOrderB = mregAdd identTypeFooM 1 (mregAdd identTypeFooM 2 mregEmpty)
 -- Some 1
 -- > regLookupK keyIxUndetInt regIxUndet
 -- Some 2
-
--- ── F3b (A-2.2b): the same property THROUGH `dispKeyRender`'s join ─────────
--- The #607 assertion above is about `regKeyRender` alone. `dispKeyRender`
--- appends a second netstring group after it, and the whole reason
--- `regKeyRender`'s output is netstring-WRAPPED there is that the ordinal
--- block is not count-prefixed — so a raw join could read a rigid position as
--- an ordinal and re-conflate exactly what F3 keeps apart. These re-assert
--- #607 on the composed renderer, with an empty residual.
--- > dispKeyRender keyIxIntUndet [] == dispKeyRender keyIxUndetInt []
--- False
--- > dispKeyRender keyIxIntUndet [] == dispKeyRender keyIxIntUndet []
--- True
-
--- ── F3c (A-2.2b): a RIGID position is none of the other two facts ──────────
--- Same vector, same position, three different facts at it. The first two are
--- the conflations a bare-name key admits: `headKeyNameOr ""` renders a rigid
--- `a` as `"a"`, which is byte-identical to what it renders a type CONSTRUCTOR
--- named `a` as — and `""` is what it renders an absent position as, which any
--- head whose name were empty would equal.
---
--- ⚠️ The declaration arm is asserted on BOTH `TabKey` halves. `TkIdent` alone
--- would leave the flat path untested, and the flat path is where every user
--- declaration currently lands (A-2 is module-path-only until #1115/E-1) — so
--- it is the arm a rigid is most likely to be confused with in practice.
--- > dispKeyRender keyIxNoDecl [(0, "a")] == dispKeyRender keyIxNoDecl []
--- False
--- > dispKeyRender keyIxDeclAOnly [] == dispKeyRender keyIxNoDecl [(0, "a")]
--- False
--- > dispKeyRender keyIxBareAOnly [] == dispKeyRender keyIxNoDecl [(0, "a")]
--- False
--- > dispKeyRender keyIxDeclAOnly [] == dispKeyRender keyIxBareAOnly []
--- False
-
--- A rigid's POSITION and NAME both discriminate...
--- > dispKeyRender keyIxNoDecl [(0, "a")] == dispKeyRender keyIxNoDecl [(1, "a")]
--- False
--- > dispKeyRender keyIxNoDecl [(0, "a")] == dispKeyRender keyIxNoDecl [(0, "b")]
--- False
--- > dispKeyRender keyIxNoDecl [(0, "a"), (1, "b")] == dispKeyRender keyIxNoDecl [(0, "b"), (1, "a")]
--- False
-
--- ...and two occurrences of the SAME rigid name at the SAME position DO
--- compare equal. That is not an oversight: it is what the bare-name key did,
--- and A-2.2b is answer-preserving by construction. See `dispKeyRender`'s
--- doc-comment for why an occurrence identity is not available (and would be
--- the I6.3 violation A-2.0's review rejected).
--- > dispKeyRender keyIxNoDecl [(0, "a")] == dispKeyRender keyIxNoDecl [(0, "a")]
--- True
-
--- ── F3d (A-2.2b): `headBucketKey`'s three-way classification ───────────────
--- A rigid head yields NO key at all — the §8 I6.1 refusal. An ABSENT head
--- does yield one (the empty identity block), and it can never equal a
--- declaration's, because every declaration key carries at least one `TabKey`.
--- > isSome (headBucketKey headRigidA)
--- False
--- > isSome (headBucketKey None)
--- True
--- > map regKeyRender (headBucketKey None) == map regKeyRender (headBucketKey headDeclFoo)
--- False
--- > map regKeyRender (headBucketKey headDeclFoo) == map regKeyRender (headBucketKey headBareFoo)
--- False
--- > map regKeyRender (headBucketKey headDeclFoo) == map regKeyRender (headBucketKey headDeclFoo)
--- True
 
 -- ...and the key the DISCARDED shape would have produced for both of them is
 -- a THIRD key, distinct from either: dropping the positions does not merely
@@ -1716,6 +1497,121 @@ tabTable = [(tabZ, 2), (tabA, 1)]
 -- > tabHasName "Box" ([] : List (TabKey, Int))
 -- False
 
+-- ── F5: RegKey over TabKey — the COMPOSITE half of A-2.4 ──────────────────
+-- `universeIfaceParamKinds`' real key shape: an INTERFACE identity plus a
+-- parameter-SLOT ordinal. `slotGA`/`slotGB` are the same slot of two
+-- same-named interfaces declared by two unrelated modules — the #1257 shape
+-- verbatim; `slotUA` is what the flat/single-file driver mints for that same
+-- interface (no identity at all).
+ifaceG : TabKey
+ifaceG = tabKeyOf NsIface (OriginModule "gmod") "Same"
+
+ifaceP : TabKey
+ifaceP = tabKeyOf NsIface (OriginModule "pmod") "Same"
+
+-- Spelled with the CONSTRUCTOR, not `tabKeyOf NsIface OriginUnresolved "Same"`,
+-- for the reason `tabU` above gives: `test/typecheck_compiler_source.sh`'s
+-- #1110 ratchet pins the FILE SET carrying a non-comment `OriginUnresolved`
+-- mention. Nothing is lost — the mint's `OriginUnresolved` behaviour is
+-- asserted directly in F4 above, and `TkBare NsIface "Same"` is exactly what
+-- that assertion says it returns.
+ifaceU : TabKey
+ifaceU = TkBare NsIface "Same"
+
+slotGA : RegKey
+slotGA = regKeyTabAt ifaceG 0
+
+slotPA : RegKey
+slotPA = regKeyTabAt ifaceP 0
+
+slotUA : RegKey
+slotUA = regKeyTabAt ifaceU 0
+
+-- `gmod` registered LAST, so it is at the FRONT of the prepend — the table
+-- state that makes the bare-name lookup answer with the wrong module's slot
+-- kinds today (#1257).
+slotTable : List (RegKey, Int)
+slotTable = [(slotGA, 2), (slotPA, 1)]
+
+-- 🚨 THE #1257 DRAIN, in one assertion: the shadower is at the FRONT and the
+-- lookup still answers with the interface the impl actually names.
+-- > lookupReg slotPA slotTable
+-- Some 1
+-- > lookupReg slotGA slotTable
+-- Some 2
+
+-- The ORDINAL discriminates: slot 1 of the same interface is a different key.
+-- > lookupReg (regKeyTabAt ifaceP 1) slotTable
+-- None
+-- > lookupReg (regKeyTabAt ifaceP 1) ((regKeyTabAt ifaceP 1, 9) :: slotTable)
+-- Some 9
+
+-- First match wins, so a prepend still shadows under the SAME key — the
+-- front-overlay ordering `registerIfaceParamKinds` relies on.
+-- > lookupReg slotPA ((slotPA, 99) :: slotTable)
+-- Some 99
+
+-- An identity-bearing key NEVER matches a bare row and vice versa, in BOTH
+-- directions — the same structural exclusion `tabKeyEq` gives the assoc-list
+-- half, now through `RegKey`.
+-- > lookupReg slotUA slotTable
+-- None
+-- > lookupReg slotPA [(slotUA, 7)]
+-- None
+-- > lookupReg slotUA [(slotUA, 7)]
+-- Some 7
+
+-- ...and the SAME exclusion holds through the RENDERED path, which is what an
+-- `OrdMap`-backed `Registry`/`SetRegistry` actually compares. This is the
+-- assertion that would catch a `tabKeyRender` whose bare arm collided with an
+-- identity arm — `tabKeyEq` is not consulted at all down here.
+-- > regKeyRender slotUA == regKeyRender slotPA
+-- False
+-- > regSize (regInsertK slotUA 7 (regInsertK slotPA 1 (regInsertK slotGA 2 regEmpty)))
+-- 3
+-- > regLookupK slotUA (regInsertK slotUA 7 (regInsertK slotPA 1 regEmpty))
+-- Some 7
+-- > regLookupK slotPA (regInsertK slotUA 7 (regInsertK slotPA 1 regEmpty))
+-- Some 1
+
+-- `regKeyOfTab` and `regKeyOf` agree on an identity-bearing key — the widening
+-- is answer-preserving for every pre-A-2.4 caller.
+-- > regKeyOfTab (TkIdent identIfaceFooM) == regKeyOf identIfaceFooM
+-- True
+-- > regKeyRender (regKeyOfTab (TkIdent identIfaceFooM)) == regKeyRender (regKeyOf identIfaceFooM)
+-- True
+-- > regKeyTabAt (TkIdent identIfaceFooM) 3 == regKeyAt identIfaceFooM 3
+-- True
+
+-- `tabKeyRender`'s identity arm IS `identKey`, unchanged, and its bare arm is
+-- four netstrings with a `bare` tag that `originTag` cannot produce.
+-- > tabKeyRender (TkIdent identTypeFooM) == identKey identTypeFooM
+-- True
+-- > tabKeyRender (TkBare NsType "Foo")
+-- "4:type4:bare0:3:Foo"
+
+-- Namespace still discriminates on the bare half, through the render too.
+-- > regKeyRender (regKeyOfTab (TkBare NsType "Same")) == regKeyRender (regKeyOfTab (TkBare NsIface "Same"))
+-- False
+
+-- The ident-COUNT prefix is present on a `TabKey`-built key exactly as on an
+-- `Ident`-built one (see the count-prefix paragraph in the module header).
+--
+-- 🚨 THE BLANK LINE BELOW IS PART OF THE ASSERTION, NOT SPACING. A doctest's
+-- expected block runs to the next bare `--`, blank line, or `-- >` line
+-- (`splitIntoBlocks`/`extractGo`, `compiler/tools/doctest.mdk`), so an
+-- unseparated prose paragraph underneath is SWALLOWED INTO the expected text
+-- and the example fails with `expected: True <six lines of prose>` /
+-- `actual: True`. That is exactly how this line reddened `inlang` on PR #1270:
+-- A-2.4 appended this example and #1268 prepended the F5 header below it, each
+-- green alone, and git merged the two seams with no blank line between them —
+-- a conflict-free merge that no gate on either branch could have seen. Derive
+-- the whole file's exposure rather than eyeballing this one site: every
+-- example's expected block, and any with more than one line, falls out of
+-- replaying those two functions over the comment stream.
+-- > startsWith "1:1" (regKeyRender slotPA)
+-- True
+
 -- ── F5: HeadKey — the head-tycon projection's key (A-2.2) ──────────────────
 -- Fixtures mirror the `TabKey` ones above, because the declaration half of a
 -- `HeadKey` IS a `TabKey`: `headA`/`headZ` are the SAME bare head name `Box`
@@ -1835,10 +1731,8 @@ headU = HkDecl (TkBare NsType "Box")
 (DFunDef false "regKeyNAt" ((PVar "idents") (PVar "ords")) (EApp (EApp (EVar "RegKey") (EApp (EApp (EVar "map") (EVar "TkIdent")) (EVar "idents"))) (EVar "ords")))
 (DTypeSig true "regKeyOfTab" (TyFun (TyCon "TabKey") (TyCon "RegKey")))
 (DFunDef false "regKeyOfTab" ((PVar "key")) (EApp (EApp (EVar "RegKey") (EListLit (EVar "key"))) (EListLit)))
-(DTypeSig true "regKeyNTab" (TyFun (TyApp (TyCon "List") (TyCon "TabKey")) (TyCon "RegKey")))
-(DFunDef false "regKeyNTab" ((PVar "keys")) (EApp (EApp (EVar "RegKey") (EVar "keys")) (EListLit)))
-(DTypeSig true "regKeyNTabAt" (TyFun (TyApp (TyCon "List") (TyCon "TabKey")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyCon "RegKey"))))
-(DFunDef false "regKeyNTabAt" ((PVar "keys") (PVar "ords")) (EApp (EApp (EVar "RegKey") (EVar "keys")) (EVar "ords")))
+(DTypeSig true "regKeyTabAt" (TyFun (TyCon "TabKey") (TyFun (TyCon "Int") (TyCon "RegKey"))))
+(DFunDef false "regKeyTabAt" ((PVar "key") (PVar "slot")) (EApp (EApp (EVar "RegKey") (EListLit (EVar "key"))) (EListLit (EVar "slot"))))
 (DTypeSig true "regKeyTabs" (TyFun (TyCon "RegKey") (TyApp (TyCon "List") (TyCon "TabKey"))))
 (DFunDef false "regKeyTabs" ((PCon "RegKey" (PVar "keys") PWild)) (EVar "keys"))
 (DTypeSig true "regKeyOrdinals" (TyFun (TyCon "RegKey") (TyApp (TyCon "List") (TyCon "Int"))))
@@ -1886,8 +1780,6 @@ headU = HkDecl (TkBare NsType "Box")
 (DFunDef false "mregAddK" ((PVar "k") (PVar "v") (PCon "MultiRegistry" (PVar "m"))) (EBlock (DoLet false false (PVar "s") (EApp (EVar "regKeyRender") (EVar "k"))) (DoExpr (EMatch (EApp (EApp (EVar "omLookup") (EVar "s")) (EVar "m")) (arm (PCon "Some" (PTuple PWild (PVar "vs"))) () (EApp (EVar "MultiRegistry") (EApp (EApp (EApp (EVar "omInsert") (EVar "s")) (ETuple (EVar "k") (EBinOp "::" (EVar "v") (EVar "vs")))) (EVar "m")))) (arm (PCon "None") () (EApp (EVar "MultiRegistry") (EApp (EApp (EApp (EVar "omInsert") (EVar "s")) (ETuple (EVar "k") (EListLit (EVar "v")))) (EVar "m"))))))))
 (DTypeSig true "mregAdd" (TyFun (TyCon "Ident") (TyFun (TyVar "v") (TyFun (TyApp (TyCon "MultiRegistry") (TyVar "v")) (TyApp (TyCon "MultiRegistry") (TyVar "v"))))))
 (DFunDef false "mregAdd" ((PVar "ident") (PVar "v") (PVar "mr")) (EApp (EApp (EApp (EVar "mregAddK") (EApp (EVar "regKeyOf") (EVar "ident"))) (EVar "v")) (EVar "mr")))
-(DTypeSig true "mregAppendK" (TyFun (TyCon "RegKey") (TyFun (TyVar "v") (TyFun (TyApp (TyCon "MultiRegistry") (TyVar "v")) (TyApp (TyCon "MultiRegistry") (TyVar "v"))))))
-(DFunDef false "mregAppendK" ((PVar "k") (PVar "v") (PCon "MultiRegistry" (PVar "m"))) (EBlock (DoLet false false (PVar "s") (EApp (EVar "regKeyRender") (EVar "k"))) (DoExpr (EMatch (EApp (EApp (EVar "omLookup") (EVar "s")) (EVar "m")) (arm (PCon "Some" (PTuple PWild (PVar "vs"))) () (EApp (EVar "MultiRegistry") (EApp (EApp (EApp (EVar "omInsert") (EVar "s")) (ETuple (EVar "k") (EBinOp "++" (EVar "vs") (EListLit (EVar "v"))))) (EVar "m")))) (arm (PCon "None") () (EApp (EVar "MultiRegistry") (EApp (EApp (EApp (EVar "omInsert") (EVar "s")) (ETuple (EVar "k") (EListLit (EVar "v")))) (EVar "m"))))))))
 (DTypeSig true "mregLookupK" (TyFun (TyCon "RegKey") (TyFun (TyApp (TyCon "MultiRegistry") (TyVar "v")) (TyApp (TyCon "List") (TyVar "v")))))
 (DFunDef false "mregLookupK" ((PVar "k") (PCon "MultiRegistry" (PVar "m"))) (EMatch (EApp (EApp (EVar "omLookup") (EApp (EVar "regKeyRender") (EVar "k"))) (EVar "m")) (arm (PCon "Some" (PTuple PWild (PVar "vs"))) () (EVar "vs")) (arm (PCon "None") () (EListLit))))
 (DTypeSig true "mregLookup" (TyFun (TyCon "Ident") (TyFun (TyApp (TyCon "MultiRegistry") (TyVar "v")) (TyApp (TyCon "List") (TyVar "v")))))
@@ -1945,6 +1837,19 @@ headU = HkDecl (TkBare NsType "Box")
 (DTypeSig true "tabHasName" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyVar "v"))) (TyCon "Bool"))))
 (DFunDef false "tabHasName" (PWild (PList)) (EVar "False"))
 (DFunDef false "tabHasName" ((PVar "n") (PCons (PTuple (PVar "k") PWild) (PVar "rest"))) (EBinOp "||" (EBinOp "==" (EApp (EVar "tabKeyName") (EVar "k")) (EVar "n")) (EApp (EApp (EVar "tabHasName") (EVar "n")) (EVar "rest"))))
+(DTypeSig false "regKeyEq" (TyFun (TyCon "RegKey") (TyFun (TyCon "RegKey") (TyCon "Bool"))))
+(DFunDef false "regKeyEq" ((PCon "RegKey" (PVar "k1") (PVar "o1")) (PCon "RegKey" (PVar "k2") (PVar "o2"))) (EBinOp "&&" (EApp (EApp (EVar "intsEq") (EVar "o1")) (EVar "o2")) (EApp (EApp (EVar "tabKeysEq") (EVar "k1")) (EVar "k2"))))
+(DTypeSig false "intsEq" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Bool"))))
+(DFunDef false "intsEq" ((PList) (PList)) (EVar "True"))
+(DFunDef false "intsEq" ((PCons (PVar "a") (PVar "as2")) (PCons (PVar "b") (PVar "bs"))) (EBinOp "&&" (EBinOp "==" (EVar "a") (EVar "b")) (EApp (EApp (EVar "intsEq") (EVar "as2")) (EVar "bs"))))
+(DFunDef false "intsEq" (PWild PWild) (EVar "False"))
+(DTypeSig false "tabKeysEq" (TyFun (TyApp (TyCon "List") (TyCon "TabKey")) (TyFun (TyApp (TyCon "List") (TyCon "TabKey")) (TyCon "Bool"))))
+(DFunDef false "tabKeysEq" ((PList) (PList)) (EVar "True"))
+(DFunDef false "tabKeysEq" ((PCons (PVar "a") (PVar "as2")) (PCons (PVar "b") (PVar "bs"))) (EBinOp "&&" (EApp (EApp (EVar "tabKeyEq") (EVar "a")) (EVar "b")) (EApp (EApp (EVar "tabKeysEq") (EVar "as2")) (EVar "bs"))))
+(DFunDef false "tabKeysEq" (PWild PWild) (EVar "False"))
+(DTypeSig true "lookupReg" (TyFun (TyCon "RegKey") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "RegKey") (TyVar "v"))) (TyApp (TyCon "Option") (TyVar "v")))))
+(DFunDef false "lookupReg" (PWild (PList)) (EVar "None"))
+(DFunDef false "lookupReg" ((PVar "k") (PCons (PTuple (PVar "k2") (PVar "v")) (PVar "rest"))) (EIf (EApp (EApp (EVar "regKeyEq") (EVar "k")) (EVar "k2")) (EApp (EVar "Some") (EVar "v")) (EApp (EApp (EVar "lookupReg") (EVar "k")) (EVar "rest"))))
 (DData Public "HeadKey" () ((variant "HkDecl" (ConPos (TyCon "TabKey"))) (variant "HkRigid" (ConPos (TyCon "String")))) ())
 (DImpl true "Eq" ((TyCon "HeadKey")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "HkDecl" (PVar "__a0")) (PCon "HkDecl" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "HkRigid" (PVar "__a0")) (PCon "HkRigid" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple PWild PWild) () (EVar "False"))))))
 (DImpl true "Ord" ((TyCon "HeadKey")) () ((im "compare" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "HkDecl" (PVar "__a0")) (PCon "HkDecl" (PVar "__b0"))) () (EApp (EApp (EVar "compare") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "HkDecl" (PVar "__a0")) (PCon "HkRigid" (PVar "__b0"))) () (EVar "Lt")) (arm (PTuple (PCon "HkRigid" (PVar "__a0")) (PCon "HkDecl" (PVar "__b0"))) () (EVar "Gt")) (arm (PTuple (PCon "HkRigid" (PVar "__a0")) (PCon "HkRigid" (PVar "__b0"))) () (EApp (EApp (EVar "compare") (EVar "__a0")) (EVar "__b0")))))))
@@ -1954,15 +1859,6 @@ headU = HkDecl (TkBare NsType "Box")
 (DTypeSig true "headKeyName" (TyFun (TyCon "HeadKey") (TyCon "String")))
 (DFunDef false "headKeyName" ((PCon "HkDecl" (PVar "k"))) (EApp (EVar "tabKeyName") (EVar "k")))
 (DFunDef false "headKeyName" ((PCon "HkRigid" (PVar "name"))) (EVar "name"))
-(DTypeSig true "headKeyDecl" (TyFun (TyCon "HeadKey") (TyApp (TyCon "Option") (TyCon "TabKey"))))
-(DFunDef false "headKeyDecl" ((PCon "HkDecl" (PVar "key"))) (EApp (EVar "Some") (EVar "key")))
-(DFunDef false "headKeyDecl" ((PCon "HkRigid" PWild)) (EVar "None"))
-(DTypeSig true "headBucketKey" (TyFun (TyApp (TyCon "Option") (TyCon "HeadKey")) (TyApp (TyCon "Option") (TyCon "RegKey"))))
-(DFunDef false "headBucketKey" ((PCon "None")) (EApp (EVar "Some") (EApp (EApp (EVar "RegKey") (EListLit)) (EListLit))))
-(DFunDef false "headBucketKey" ((PCon "Some" (PCon "HkDecl" (PVar "key")))) (EApp (EVar "Some") (EApp (EVar "regKeyOfTab") (EVar "key"))))
-(DFunDef false "headBucketKey" ((PCon "Some" (PCon "HkRigid" PWild))) (EVar "None"))
-(DTypeSig true "dispKeyRender" (TyFun (TyCon "RegKey") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String"))) (TyCon "String"))))
-(DFunDef false "dispKeyRender" ((PVar "base") (PVar "rigids")) (EBinOp "++" (EBinOp "++" (EApp (EVar "lenKey") (EApp (EVar "regKeyRender") (EVar "base"))) (EApp (EVar "lenKey") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "listLen") (EVar "rigids")))) (ELit (LString ""))))) (EApp (EApp (EVar "joinWith") (ELit (LString ""))) (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "i") (PVar "name"))) (EBinOp "++" (EApp (EVar "ordKey") (EVar "i")) (EApp (EVar "lenKey") (EVar "name"))))) (EVar "rigids")))))
 (DTypeSig false "identBuiltinFixture" (TyFun (TyCon "Ns") (TyFun (TyCon "String") (TyCon "Ident"))))
 (DFunDef false "identBuiltinFixture" ((PVar "ns") (PVar "name")) (EApp (EApp (EApp (EVar "Ident") (EVar "ns")) (EVar "identOriginBuiltin")) (EVar "name")))
 (DTypeSig false "identIn" (TyFun (TyCon "Ns") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Ident")))))
@@ -2007,20 +1903,6 @@ headU = HkDecl (TkBare NsType "Box")
 (DFunDef false "keyIxPresentOnly" () (EApp (EVar "regKeyN") (EListLit (EVar "identIfaceIxM") (EVar "identTypeIntM"))))
 (DTypeSig false "regIxUndet" (TyApp (TyCon "Registry") (TyCon "Int")))
 (DFunDef false "regIxUndet" () (EApp (EApp (EApp (EVar "regInsertK") (EVar "keyIxUndetInt")) (ELit (LInt 2))) (EApp (EApp (EApp (EVar "regInsertK") (EVar "keyIxIntUndet")) (ELit (LInt 1))) (EVar "regEmpty"))))
-(DTypeSig false "keyIxNoDecl" (TyCon "RegKey"))
-(DFunDef false "keyIxNoDecl" () (EApp (EApp (EVar "regKeyNAt") (EListLit (EVar "identIfaceIxM"))) (EListLit (ELit (LInt 2)))))
-(DTypeSig false "identTypeLowerAM" (TyCon "Ident"))
-(DFunDef false "identTypeLowerAM" () (EApp (EApp (EApp (EVar "identIn") (EVar "NsType")) (ELit (LString "m"))) (ELit (LString "a"))))
-(DTypeSig false "keyIxDeclAOnly" (TyCon "RegKey"))
-(DFunDef false "keyIxDeclAOnly" () (EApp (EApp (EVar "regKeyNAt") (EListLit (EVar "identIfaceIxM") (EVar "identTypeLowerAM"))) (EListLit (ELit (LInt 2)) (ELit (LInt 0)))))
-(DTypeSig false "keyIxBareAOnly" (TyCon "RegKey"))
-(DFunDef false "keyIxBareAOnly" () (EApp (EApp (EVar "RegKey") (EListLit (EApp (EVar "TkIdent") (EVar "identIfaceIxM")) (EApp (EApp (EVar "TkBare") (EVar "NsType")) (ELit (LString "a"))))) (EListLit (ELit (LInt 2)) (ELit (LInt 0)))))
-(DTypeSig false "headDeclFoo" (TyApp (TyCon "Option") (TyCon "HeadKey")))
-(DFunDef false "headDeclFoo" () (EApp (EVar "Some") (EApp (EApp (EVar "headKeyOfCon") (EApp (EVar "OriginModule") (ELit (LString "m")))) (ELit (LString "Foo")))))
-(DTypeSig false "headBareFoo" (TyApp (TyCon "Option") (TyCon "HeadKey")))
-(DFunDef false "headBareFoo" () (EApp (EVar "Some") (EApp (EVar "HkDecl") (EApp (EApp (EVar "TkBare") (EVar "NsType")) (ELit (LString "Foo"))))))
-(DTypeSig false "headRigidA" (TyApp (TyCon "Option") (TyCon "HeadKey")))
-(DFunDef false "headRigidA" () (EApp (EVar "Some") (EApp (EVar "HkRigid") (ELit (LString "a")))))
 (DTypeSig false "regAllNs" (TyApp (TyCon "Registry") (TyCon "Int")))
 (DFunDef false "regAllNs" () (EApp (EVar "regFromEntries") (EApp (EApp (EVar "zipNsValues") (EVar "allNsIdents")) (ELit (LInt 1)))))
 (DTypeSig false "zipNsValues" (TyFun (TyApp (TyCon "List") (TyCon "Ident")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyTuple (TyCon "RegKey") (TyCon "Int"))))))
@@ -2044,6 +1926,20 @@ headU = HkDecl (TkBare NsType "Box")
 (DFunDef false "tabIfaceA" () (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsIface")) (EApp (EVar "OriginModule") (ELit (LString "apub")))) (ELit (LString "Box"))))
 (DTypeSig false "tabTable" (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyCon "Int"))))
 (DFunDef false "tabTable" () (EListLit (ETuple (EVar "tabZ") (ELit (LInt 2))) (ETuple (EVar "tabA") (ELit (LInt 1)))))
+(DTypeSig false "ifaceG" (TyCon "TabKey"))
+(DFunDef false "ifaceG" () (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsIface")) (EApp (EVar "OriginModule") (ELit (LString "gmod")))) (ELit (LString "Same"))))
+(DTypeSig false "ifaceP" (TyCon "TabKey"))
+(DFunDef false "ifaceP" () (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsIface")) (EApp (EVar "OriginModule") (ELit (LString "pmod")))) (ELit (LString "Same"))))
+(DTypeSig false "ifaceU" (TyCon "TabKey"))
+(DFunDef false "ifaceU" () (EApp (EApp (EVar "TkBare") (EVar "NsIface")) (ELit (LString "Same"))))
+(DTypeSig false "slotGA" (TyCon "RegKey"))
+(DFunDef false "slotGA" () (EApp (EApp (EVar "regKeyTabAt") (EVar "ifaceG")) (ELit (LInt 0))))
+(DTypeSig false "slotPA" (TyCon "RegKey"))
+(DFunDef false "slotPA" () (EApp (EApp (EVar "regKeyTabAt") (EVar "ifaceP")) (ELit (LInt 0))))
+(DTypeSig false "slotUA" (TyCon "RegKey"))
+(DFunDef false "slotUA" () (EApp (EApp (EVar "regKeyTabAt") (EVar "ifaceU")) (ELit (LInt 0))))
+(DTypeSig false "slotTable" (TyApp (TyCon "List") (TyTuple (TyCon "RegKey") (TyCon "Int"))))
+(DFunDef false "slotTable" () (EListLit (ETuple (EVar "slotGA") (ELit (LInt 2))) (ETuple (EVar "slotPA") (ELit (LInt 1)))))
 (DTypeSig false "headA" (TyCon "HeadKey"))
 (DFunDef false "headA" () (EApp (EApp (EVar "headKeyOfCon") (EApp (EVar "OriginModule") (ELit (LString "apub")))) (ELit (LString "Box"))))
 (DTypeSig false "headZ" (TyCon "HeadKey"))
@@ -2092,10 +1988,8 @@ headU = HkDecl (TkBare NsType "Box")
 (DFunDef false "regKeyNAt" ((PVar "idents") (PVar "ords")) (EApp (EApp (EVar "RegKey") (EApp (EApp (EMethodRef "map") (EVar "TkIdent")) (EVar "idents"))) (EVar "ords")))
 (DTypeSig true "regKeyOfTab" (TyFun (TyCon "TabKey") (TyCon "RegKey")))
 (DFunDef false "regKeyOfTab" ((PVar "key")) (EApp (EApp (EVar "RegKey") (EListLit (EVar "key"))) (EListLit)))
-(DTypeSig true "regKeyNTab" (TyFun (TyApp (TyCon "List") (TyCon "TabKey")) (TyCon "RegKey")))
-(DFunDef false "regKeyNTab" ((PVar "keys")) (EApp (EApp (EVar "RegKey") (EVar "keys")) (EListLit)))
-(DTypeSig true "regKeyNTabAt" (TyFun (TyApp (TyCon "List") (TyCon "TabKey")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyCon "RegKey"))))
-(DFunDef false "regKeyNTabAt" ((PVar "keys") (PVar "ords")) (EApp (EApp (EVar "RegKey") (EVar "keys")) (EVar "ords")))
+(DTypeSig true "regKeyTabAt" (TyFun (TyCon "TabKey") (TyFun (TyCon "Int") (TyCon "RegKey"))))
+(DFunDef false "regKeyTabAt" ((PVar "key") (PVar "slot")) (EApp (EApp (EVar "RegKey") (EListLit (EVar "key"))) (EListLit (EVar "slot"))))
 (DTypeSig true "regKeyTabs" (TyFun (TyCon "RegKey") (TyApp (TyCon "List") (TyCon "TabKey"))))
 (DFunDef false "regKeyTabs" ((PCon "RegKey" (PVar "keys") PWild)) (EVar "keys"))
 (DTypeSig true "regKeyOrdinals" (TyFun (TyCon "RegKey") (TyApp (TyCon "List") (TyCon "Int"))))
@@ -2143,8 +2037,6 @@ headU = HkDecl (TkBare NsType "Box")
 (DFunDef false "mregAddK" ((PVar "k") (PVar "v") (PCon "MultiRegistry" (PVar "m"))) (EBlock (DoLet false false (PVar "s") (EApp (EVar "regKeyRender") (EVar "k"))) (DoExpr (EMatch (EApp (EApp (EVar "omLookup") (EVar "s")) (EVar "m")) (arm (PCon "Some" (PTuple PWild (PVar "vs"))) () (EApp (EVar "MultiRegistry") (EApp (EApp (EApp (EVar "omInsert") (EVar "s")) (ETuple (EVar "k") (EBinOp "::" (EVar "v") (EVar "vs")))) (EVar "m")))) (arm (PCon "None") () (EApp (EVar "MultiRegistry") (EApp (EApp (EApp (EVar "omInsert") (EVar "s")) (ETuple (EVar "k") (EListLit (EVar "v")))) (EVar "m"))))))))
 (DTypeSig true "mregAdd" (TyFun (TyCon "Ident") (TyFun (TyVar "v") (TyFun (TyApp (TyCon "MultiRegistry") (TyVar "v")) (TyApp (TyCon "MultiRegistry") (TyVar "v"))))))
 (DFunDef false "mregAdd" ((PVar "ident") (PVar "v") (PVar "mr")) (EApp (EApp (EApp (EVar "mregAddK") (EApp (EVar "regKeyOf") (EVar "ident"))) (EVar "v")) (EVar "mr")))
-(DTypeSig true "mregAppendK" (TyFun (TyCon "RegKey") (TyFun (TyVar "v") (TyFun (TyApp (TyCon "MultiRegistry") (TyVar "v")) (TyApp (TyCon "MultiRegistry") (TyVar "v"))))))
-(DFunDef false "mregAppendK" ((PVar "k") (PVar "v") (PCon "MultiRegistry" (PVar "m"))) (EBlock (DoLet false false (PVar "s") (EApp (EVar "regKeyRender") (EVar "k"))) (DoExpr (EMatch (EApp (EApp (EVar "omLookup") (EVar "s")) (EVar "m")) (arm (PCon "Some" (PTuple PWild (PVar "vs"))) () (EApp (EVar "MultiRegistry") (EApp (EApp (EApp (EVar "omInsert") (EVar "s")) (ETuple (EVar "k") (EBinOp "++" (EVar "vs") (EListLit (EVar "v"))))) (EVar "m")))) (arm (PCon "None") () (EApp (EVar "MultiRegistry") (EApp (EApp (EApp (EVar "omInsert") (EVar "s")) (ETuple (EVar "k") (EListLit (EVar "v")))) (EVar "m"))))))))
 (DTypeSig true "mregLookupK" (TyFun (TyCon "RegKey") (TyFun (TyApp (TyCon "MultiRegistry") (TyVar "v")) (TyApp (TyCon "List") (TyVar "v")))))
 (DFunDef false "mregLookupK" ((PVar "k") (PCon "MultiRegistry" (PVar "m"))) (EMatch (EApp (EApp (EVar "omLookup") (EApp (EVar "regKeyRender") (EVar "k"))) (EVar "m")) (arm (PCon "Some" (PTuple PWild (PVar "vs"))) () (EVar "vs")) (arm (PCon "None") () (EListLit))))
 (DTypeSig true "mregLookup" (TyFun (TyCon "Ident") (TyFun (TyApp (TyCon "MultiRegistry") (TyVar "v")) (TyApp (TyCon "List") (TyVar "v")))))
@@ -2202,6 +2094,19 @@ headU = HkDecl (TkBare NsType "Box")
 (DTypeSig true "tabHasName" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyVar "v"))) (TyCon "Bool"))))
 (DFunDef false "tabHasName" (PWild (PList)) (EVar "False"))
 (DFunDef false "tabHasName" ((PVar "n") (PCons (PTuple (PVar "k") PWild) (PVar "rest"))) (EBinOp "||" (EBinOp "==" (EApp (EVar "tabKeyName") (EVar "k")) (EVar "n")) (EApp (EApp (EVar "tabHasName") (EVar "n")) (EVar "rest"))))
+(DTypeSig false "regKeyEq" (TyFun (TyCon "RegKey") (TyFun (TyCon "RegKey") (TyCon "Bool"))))
+(DFunDef false "regKeyEq" ((PCon "RegKey" (PVar "k1") (PVar "o1")) (PCon "RegKey" (PVar "k2") (PVar "o2"))) (EBinOp "&&" (EApp (EApp (EVar "intsEq") (EVar "o1")) (EVar "o2")) (EApp (EApp (EVar "tabKeysEq") (EVar "k1")) (EVar "k2"))))
+(DTypeSig false "intsEq" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Bool"))))
+(DFunDef false "intsEq" ((PList) (PList)) (EVar "True"))
+(DFunDef false "intsEq" ((PCons (PVar "a") (PVar "as2")) (PCons (PVar "b") (PVar "bs"))) (EBinOp "&&" (EBinOp "==" (EVar "a") (EVar "b")) (EApp (EApp (EVar "intsEq") (EVar "as2")) (EVar "bs"))))
+(DFunDef false "intsEq" (PWild PWild) (EVar "False"))
+(DTypeSig false "tabKeysEq" (TyFun (TyApp (TyCon "List") (TyCon "TabKey")) (TyFun (TyApp (TyCon "List") (TyCon "TabKey")) (TyCon "Bool"))))
+(DFunDef false "tabKeysEq" ((PList) (PList)) (EVar "True"))
+(DFunDef false "tabKeysEq" ((PCons (PVar "a") (PVar "as2")) (PCons (PVar "b") (PVar "bs"))) (EBinOp "&&" (EApp (EApp (EVar "tabKeyEq") (EVar "a")) (EVar "b")) (EApp (EApp (EVar "tabKeysEq") (EVar "as2")) (EVar "bs"))))
+(DFunDef false "tabKeysEq" (PWild PWild) (EVar "False"))
+(DTypeSig true "lookupReg" (TyFun (TyCon "RegKey") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "RegKey") (TyVar "v"))) (TyApp (TyCon "Option") (TyVar "v")))))
+(DFunDef false "lookupReg" (PWild (PList)) (EVar "None"))
+(DFunDef false "lookupReg" ((PVar "k") (PCons (PTuple (PVar "k2") (PVar "v")) (PVar "rest"))) (EIf (EApp (EApp (EVar "regKeyEq") (EVar "k")) (EVar "k2")) (EApp (EVar "Some") (EVar "v")) (EApp (EApp (EVar "lookupReg") (EVar "k")) (EVar "rest"))))
 (DData Public "HeadKey" () ((variant "HkDecl" (ConPos (TyCon "TabKey"))) (variant "HkRigid" (ConPos (TyCon "String")))) ())
 (DImpl true "Eq" ((TyCon "HeadKey")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "HkDecl" (PVar "__a0")) (PCon "HkDecl" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "HkRigid" (PVar "__a0")) (PCon "HkRigid" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple PWild PWild) () (EVar "False"))))))
 (DImpl true "Ord" ((TyCon "HeadKey")) () ((im "compare" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "HkDecl" (PVar "__a0")) (PCon "HkDecl" (PVar "__b0"))) () (EApp (EApp (EMethodRef "compare") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "HkDecl" (PVar "__a0")) (PCon "HkRigid" (PVar "__b0"))) () (EVar "Lt")) (arm (PTuple (PCon "HkRigid" (PVar "__a0")) (PCon "HkDecl" (PVar "__b0"))) () (EVar "Gt")) (arm (PTuple (PCon "HkRigid" (PVar "__a0")) (PCon "HkRigid" (PVar "__b0"))) () (EApp (EApp (EMethodRef "compare") (EVar "__a0")) (EVar "__b0")))))))
@@ -2211,15 +2116,6 @@ headU = HkDecl (TkBare NsType "Box")
 (DTypeSig true "headKeyName" (TyFun (TyCon "HeadKey") (TyCon "String")))
 (DFunDef false "headKeyName" ((PCon "HkDecl" (PVar "k"))) (EApp (EVar "tabKeyName") (EVar "k")))
 (DFunDef false "headKeyName" ((PCon "HkRigid" (PVar "name"))) (EVar "name"))
-(DTypeSig true "headKeyDecl" (TyFun (TyCon "HeadKey") (TyApp (TyCon "Option") (TyCon "TabKey"))))
-(DFunDef false "headKeyDecl" ((PCon "HkDecl" (PVar "key"))) (EApp (EVar "Some") (EVar "key")))
-(DFunDef false "headKeyDecl" ((PCon "HkRigid" PWild)) (EVar "None"))
-(DTypeSig true "headBucketKey" (TyFun (TyApp (TyCon "Option") (TyCon "HeadKey")) (TyApp (TyCon "Option") (TyCon "RegKey"))))
-(DFunDef false "headBucketKey" ((PCon "None")) (EApp (EVar "Some") (EApp (EApp (EVar "RegKey") (EListLit)) (EListLit))))
-(DFunDef false "headBucketKey" ((PCon "Some" (PCon "HkDecl" (PVar "key")))) (EApp (EVar "Some") (EApp (EVar "regKeyOfTab") (EVar "key"))))
-(DFunDef false "headBucketKey" ((PCon "Some" (PCon "HkRigid" PWild))) (EVar "None"))
-(DTypeSig true "dispKeyRender" (TyFun (TyCon "RegKey") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String"))) (TyCon "String"))))
-(DFunDef false "dispKeyRender" ((PVar "base") (PVar "rigids")) (EBinOp "++" (EBinOp "++" (EApp (EVar "lenKey") (EApp (EVar "regKeyRender") (EVar "base"))) (EApp (EVar "lenKey") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "listLen") (EVar "rigids")))) (ELit (LString ""))))) (EApp (EApp (EVar "joinWith") (ELit (LString ""))) (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "i") (PVar "name"))) (EBinOp "++" (EApp (EVar "ordKey") (EVar "i")) (EApp (EVar "lenKey") (EVar "name"))))) (EVar "rigids")))))
 (DTypeSig false "identBuiltinFixture" (TyFun (TyCon "Ns") (TyFun (TyCon "String") (TyCon "Ident"))))
 (DFunDef false "identBuiltinFixture" ((PVar "ns") (PVar "name")) (EApp (EApp (EApp (EVar "Ident") (EVar "ns")) (EVar "identOriginBuiltin")) (EVar "name")))
 (DTypeSig false "identIn" (TyFun (TyCon "Ns") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Ident")))))
@@ -2264,20 +2160,6 @@ headU = HkDecl (TkBare NsType "Box")
 (DFunDef false "keyIxPresentOnly" () (EApp (EVar "regKeyN") (EListLit (EVar "identIfaceIxM") (EVar "identTypeIntM"))))
 (DTypeSig false "regIxUndet" (TyApp (TyCon "Registry") (TyCon "Int")))
 (DFunDef false "regIxUndet" () (EApp (EApp (EApp (EVar "regInsertK") (EVar "keyIxUndetInt")) (ELit (LInt 2))) (EApp (EApp (EApp (EVar "regInsertK") (EVar "keyIxIntUndet")) (ELit (LInt 1))) (EVar "regEmpty"))))
-(DTypeSig false "keyIxNoDecl" (TyCon "RegKey"))
-(DFunDef false "keyIxNoDecl" () (EApp (EApp (EVar "regKeyNAt") (EListLit (EVar "identIfaceIxM"))) (EListLit (ELit (LInt 2)))))
-(DTypeSig false "identTypeLowerAM" (TyCon "Ident"))
-(DFunDef false "identTypeLowerAM" () (EApp (EApp (EApp (EVar "identIn") (EVar "NsType")) (ELit (LString "m"))) (ELit (LString "a"))))
-(DTypeSig false "keyIxDeclAOnly" (TyCon "RegKey"))
-(DFunDef false "keyIxDeclAOnly" () (EApp (EApp (EVar "regKeyNAt") (EListLit (EVar "identIfaceIxM") (EVar "identTypeLowerAM"))) (EListLit (ELit (LInt 2)) (ELit (LInt 0)))))
-(DTypeSig false "keyIxBareAOnly" (TyCon "RegKey"))
-(DFunDef false "keyIxBareAOnly" () (EApp (EApp (EVar "RegKey") (EListLit (EApp (EVar "TkIdent") (EVar "identIfaceIxM")) (EApp (EApp (EVar "TkBare") (EVar "NsType")) (ELit (LString "a"))))) (EListLit (ELit (LInt 2)) (ELit (LInt 0)))))
-(DTypeSig false "headDeclFoo" (TyApp (TyCon "Option") (TyCon "HeadKey")))
-(DFunDef false "headDeclFoo" () (EApp (EVar "Some") (EApp (EApp (EVar "headKeyOfCon") (EApp (EVar "OriginModule") (ELit (LString "m")))) (ELit (LString "Foo")))))
-(DTypeSig false "headBareFoo" (TyApp (TyCon "Option") (TyCon "HeadKey")))
-(DFunDef false "headBareFoo" () (EApp (EVar "Some") (EApp (EVar "HkDecl") (EApp (EApp (EVar "TkBare") (EVar "NsType")) (ELit (LString "Foo"))))))
-(DTypeSig false "headRigidA" (TyApp (TyCon "Option") (TyCon "HeadKey")))
-(DFunDef false "headRigidA" () (EApp (EVar "Some") (EApp (EVar "HkRigid") (ELit (LString "a")))))
 (DTypeSig false "regAllNs" (TyApp (TyCon "Registry") (TyCon "Int")))
 (DFunDef false "regAllNs" () (EApp (EVar "regFromEntries") (EApp (EApp (EVar "zipNsValues") (EVar "allNsIdents")) (ELit (LInt 1)))))
 (DTypeSig false "zipNsValues" (TyFun (TyApp (TyCon "List") (TyCon "Ident")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyTuple (TyCon "RegKey") (TyCon "Int"))))))
@@ -2301,6 +2183,20 @@ headU = HkDecl (TkBare NsType "Box")
 (DFunDef false "tabIfaceA" () (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsIface")) (EApp (EVar "OriginModule") (ELit (LString "apub")))) (ELit (LString "Box"))))
 (DTypeSig false "tabTable" (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyCon "Int"))))
 (DFunDef false "tabTable" () (EListLit (ETuple (EVar "tabZ") (ELit (LInt 2))) (ETuple (EVar "tabA") (ELit (LInt 1)))))
+(DTypeSig false "ifaceG" (TyCon "TabKey"))
+(DFunDef false "ifaceG" () (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsIface")) (EApp (EVar "OriginModule") (ELit (LString "gmod")))) (ELit (LString "Same"))))
+(DTypeSig false "ifaceP" (TyCon "TabKey"))
+(DFunDef false "ifaceP" () (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsIface")) (EApp (EVar "OriginModule") (ELit (LString "pmod")))) (ELit (LString "Same"))))
+(DTypeSig false "ifaceU" (TyCon "TabKey"))
+(DFunDef false "ifaceU" () (EApp (EApp (EVar "TkBare") (EVar "NsIface")) (ELit (LString "Same"))))
+(DTypeSig false "slotGA" (TyCon "RegKey"))
+(DFunDef false "slotGA" () (EApp (EApp (EVar "regKeyTabAt") (EVar "ifaceG")) (ELit (LInt 0))))
+(DTypeSig false "slotPA" (TyCon "RegKey"))
+(DFunDef false "slotPA" () (EApp (EApp (EVar "regKeyTabAt") (EVar "ifaceP")) (ELit (LInt 0))))
+(DTypeSig false "slotUA" (TyCon "RegKey"))
+(DFunDef false "slotUA" () (EApp (EApp (EVar "regKeyTabAt") (EVar "ifaceU")) (ELit (LInt 0))))
+(DTypeSig false "slotTable" (TyApp (TyCon "List") (TyTuple (TyCon "RegKey") (TyCon "Int"))))
+(DFunDef false "slotTable" () (EListLit (ETuple (EVar "slotGA") (ELit (LInt 2))) (ETuple (EVar "slotPA") (ELit (LInt 1)))))
 (DTypeSig false "headA" (TyCon "HeadKey"))
 (DFunDef false "headA" () (EApp (EApp (EVar "headKeyOfCon") (EApp (EVar "OriginModule") (ELit (LString "apub")))) (ELit (LString "Box"))))
 (DTypeSig false "headZ" (TyCon "HeadKey"))
