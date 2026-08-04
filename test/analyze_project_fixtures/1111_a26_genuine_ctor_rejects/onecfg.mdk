@@ -1,0 +1,4 @@
+-- NO collision anywhere in this graph: exactly one `Cfg`, exactly one `Dup`.
+public export data Cfg = { fld : Int }
+
+public export data A1 = Dup Int

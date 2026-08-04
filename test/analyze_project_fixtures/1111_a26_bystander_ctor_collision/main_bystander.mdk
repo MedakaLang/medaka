@@ -1,0 +1,36 @@
+-- #1111 A-2.6, the BYSTANDER: "feature + UNRELATED code still behaves".
+--
+-- A-2.6 adds entries to a program-global overlay list that is registered LAST-WINS
+-- over the whole-graph constructor and record-info tables.  The failure mode that
+-- shape produces is never "my feature is broken" — it is "my feature works and
+-- something that never touched it broke", and no gate in this tree asks that
+-- question.  So: the overlay FIRES here (`bysa.{Mark}` names a constructor, and
+-- `bysz` puts a second bare `Mark` in the universe), and every assertion is about
+-- `bysc`, a module that imports neither of them and shares no name with either.
+--
+-- All four files must bucket to ZERO diagnostics.  `bysc`'s `Color`/`shade`/`widen`
+-- must resolve, typecheck and stay exhaustive exactly as if `bysa`/`bysz` were not
+-- in the graph.
+--
+-- ⚠️ COUNTERFACTUAL, run rather than assumed — and it comes out GREEN, which is the
+-- correct result for a bystander and is stated here rather than hidden.  Deleting
+-- A-2.6's mechanism (stubbing `declOwnedBy` to `True`, and separately dropping the
+-- ctor-naming rule so only `(..)` overlays) leaves this fixture PASSING, because
+-- `bysc` names nothing the overlay can reach under any of those variants.  A
+-- bystander that went red when the feature was removed would be testing the feature,
+-- not bystanding.  What it IS sensitive to is the direction this diff actually
+-- risks: an overlay that registers MORE decls than the unit binds — the type-only
+-- hijack variant — starts clobbering ctor tables for modules that named nothing, and
+-- `Color`'s two nullary constructors are exactly the shape that goes wrong first
+-- (`ctor_scope_type_only_no_hijack` pins the same decision on the value side).
+import bysa.{Tagged, Mark, unMark}
+import bysz.{zid}
+import bysc.{Color(..), shade, widen}
+
+main : <IO> Unit
+main =
+  let _ = println (shade Red)
+  let _ = println (shade Green)
+  let _ = println (widen 41)
+  let _ = println (unMark (Mark 1))
+  println (zid 2)

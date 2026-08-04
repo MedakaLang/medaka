@@ -1,0 +1,4 @@
+public export data A1 = Dup Int
+
+export unA1 : A1 -> Int
+unA1 (Dup n) = n

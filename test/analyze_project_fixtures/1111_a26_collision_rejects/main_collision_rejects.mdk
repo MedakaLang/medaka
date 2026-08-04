@@ -1,0 +1,20 @@
+-- #1111 A-2.6, the severity mirror's SHARPEST cell: #1256's exact collision graph,
+-- but with a genuinely wrong field value.
+--
+-- A-2.6 makes the overlay pick `arcol.Cfg` (`fld : Int`).  It must then REJECT
+-- `fld = "s"` — `String vs Int`.  What must NOT happen is acceptance by falling
+-- through to `zrcol.Cfg`, whose `fld : Float` is equally wrong for a String but whose
+-- presence is the whole reason the old lookup was ambiguous; nor may the two
+-- candidate records be silently unified into something that accepts both.
+--
+-- This is the cell that distinguishes "the overlay picked the right record" from
+-- "the overlay made record-literal checking permissive".  The drain fixtures cannot
+-- see the difference: they only assert that a CORRECT literal is accepted.
+import arcol.{Cfg}
+import zrcol.{zrf}
+
+bad : Cfg
+bad = Cfg { fld = "s" }
+
+main : <IO> Unit
+main = println (zrf 1)

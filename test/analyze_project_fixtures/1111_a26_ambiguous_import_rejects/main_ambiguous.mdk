@@ -1,0 +1,24 @@
+-- #1111 A-2.6, the AMBIGUITY mirror: the record literal here is genuinely
+-- undecidable, and must stay REJECTED.
+--
+-- A-2.6's whole argument is that a unit's own IMPORT SCOPE picks which module a bare
+-- record/constructor name means.  That argument has a precondition — the scope must
+-- name exactly one.  Here it names two: both `Cfg`s are imported BY NAME, so no
+-- amount of import-scoping can choose, and the correct answer is a diagnostic rather
+-- than either record.
+--
+-- ⚠️ The rejection is PRE-EXISTING and A-2.6 does not move it (verified first-hand:
+-- byte-identical diagnostics on a binary built from pristine 40756bea and on A-2.6).
+-- It is pinned here anyway because it was pinned NOWHERE — a grep of `test/` for the
+-- diagnostic's text found it only inside `must_fail_fixtures/1253-…/claim.txt`, i.e.
+-- described in a claim about a DIFFERENT open bug and asserted by no gate.  A
+-- widening of the overlay that started answering this from load order instead would
+-- have had nothing to fail.
+import arboth.{Cfg}
+import zrboth.{Cfg}
+
+v : Cfg
+v = Cfg { fld = 7 }
+
+main : <IO> Unit
+main = println v.fld

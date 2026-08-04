@@ -1,3 +1,0 @@
--- issue #1259: sibling module for the SHADOWED (correct) constructor `Dup`, attached
--- to `A1`.
-public export data A1 = Dup Int

@@ -1,0 +1,4 @@
+public export data Tagged = Mark Int
+
+export unMark : Tagged -> Int
+unMark (Mark n) = n

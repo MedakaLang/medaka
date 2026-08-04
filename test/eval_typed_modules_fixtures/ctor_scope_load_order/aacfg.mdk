@@ -1,0 +1,6 @@
+-- Loaded FIRST (it is `main.mdk`'s first import), so it is also the first `Cfg` in
+-- the data-universe decl POOL the overlay searches.
+public export data Cfg = { fld : Float }
+
+export aaf : Int -> Int
+aaf n = n

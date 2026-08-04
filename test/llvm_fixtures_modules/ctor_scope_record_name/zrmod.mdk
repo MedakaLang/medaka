@@ -1,0 +1,7 @@
+-- The COLLIDING module.  `entry.mdk` imports only `zrf` from here — never this
+-- `Cfg` — but a public data decl reaches the whole-graph data universe regardless,
+-- which is what made the bare-name record-info table hand `entry` this `Float`.
+public export data Cfg = { fld : Float }
+
+export zrf : Int -> Int
+zrf n = n

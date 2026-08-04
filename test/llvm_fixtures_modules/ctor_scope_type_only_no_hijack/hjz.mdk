@@ -1,0 +1,4 @@
+public export data HZ = Hit String
+
+export unHZ : HZ -> String
+unHZ (Hit s) = s
