@@ -13,10 +13,10 @@
 --
 -- The collision-bearing peer of the first cell (same wrong field type, but WITH
 -- #1256's two same-named `Cfg`s in the graph, which must reject identically rather
--- than fall through to the other module's `Float`) is
--- `1111_a26_bystander_ctor_collision/` — that graph has the collision AND stays
--- clean, so between them the two fixtures cover "collision present, program valid"
--- and "no collision, program invalid".
+-- than fall through to the other module's `Float`) is `1111_a26_collision_rejects/`
+-- — NOT `1111_a26_bystander_ctor_collision/`, which this note mis-cited: that is a
+-- third cell again (collision present, program VALID).  Together the three cover
+-- collision×validity.  ⚠️ This file's oracle pins LINE numbers — keep edits neutral.
 import onecfg.{Cfg, A1, Dup}
 
 bad1 : Cfg

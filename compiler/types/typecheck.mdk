@@ -15512,14 +15512,37 @@ checkBodyImpl seed mode prog0 =
     Flat _ => registerAllData initialEnv prog
     Module _ _ _ =>
       let _ = loadDataUniverse ()
-      let base = registerAllData crossRun.value.universeDataEnv.value prog0
-      -- #674: OVERLAY the ctors of the types THIS module imports with `(..)` so a
-      -- bare ctor name resolves to the module the unit imports it from, not the
-      -- universe's load-order winner.  Registers LAST → wins the omInsert tie-break.
-      -- Reads the persistent universe DECLS (not the Module `accData` field — that is
-      -- dead `[]` on the elaborate/emit path, #154 PR-C), so the overlay fires on the
-      -- run/build gate too, not just `check`.
-      registerAllData base (importedCtorTypeDecls prog0 crossRun.value.universeDataDecls.value)
+      -- #674: OVERLAY the ctors of the types THIS module imports so a bare ctor name
+      -- resolves to the module the unit imports it from, not the universe's load-order
+      -- winner.  Reads the persistent universe DECLS (not the Module `accData` field —
+      -- that is dead `[]` on the elaborate/emit path, #154 PR-C), so the overlay fires
+      -- on the run/build gate too, not just `check`.
+      --
+      -- 🚨 THREE LAYERS, and the order is the whole contract:
+      --     universe  <  imported-ctor overlay  <  this module's OWN `prog0`.
+      -- The overlay registers AFTER the universe (that is #674's requirement — it must
+      -- win the `omInsert` tie-break over the load-order winner) and BEFORE `prog0`
+      -- (this module's own declarations outrank anything it imports — ordinary
+      -- shadowing, and the SHADOW spec's S1 per-module scoping).
+      --
+      -- ⚠️ Registering the overlay LAST, over `prog0`, is a REGRESSION and shipped as
+      -- one: an imported decl's constructors then beat locally-declared ones, so
+      -- `import json.{Json, JNull}` + a local `data Tok = JString String` was rejected
+      -- `Type mismatch: Json vs Tok` — clobbered by a SIBLING constructor of `Json`
+      -- that the program never imported.  It reaches the stdlib and it is not narrow:
+      -- every selective constructor-naming import carries it.  Pinned by
+      -- `test/engine_fixtures/ctor_scope_local_ctor_beats_stdlib_import.mdk` (the
+      -- stdlib `json` shape, on all three engines) and
+      -- `test/llvm_fixtures_modules/ctor_scope_local_decl_wins/` (`{Ext, Other}` plus
+      -- a local decl, prelude-free).
+      --
+      -- Both structures agree under this order: the decl LIST is consed, so it reads
+      -- [prog0, overlay, pub_{k-1}..pub_1] and its `lookupAssoc` is FIRST-wins → prog0;
+      -- the OrdMaps are `omInsert` LAST-write-wins over the same three registrations in
+      -- the opposite order → prog0.  Getting them to disagree is #674's root cause.
+      let base = registerAllData crossRun.value.universeDataEnv.value
+                   (importedCtorTypeDecls prog0 crossRun.value.universeDataDecls.value)
+      registerAllData base prog0
   -- #784: reject under-determined return-only effect vars on interface methods.
   -- MUST run AFTER `dataEnv` above populated `dataParamKindsRef` — the kind-aware
   -- predicate (rowArgNames) reads that table to distinguish a row-kinded ctor arg
@@ -20553,11 +20576,23 @@ importSeed (_::rest) depEnv = importSeed rest depEnv
 --       `data Cfg = { … }`).  #1111 A-2.6: (b) is the half that drains #1259 (the
 --       ctor-scheme env) and #1256 (the record-info table).
 --
--- ⚠️ A member naming ONLY a TYPE (`import m.{T}` for a multi-ctor `T`) binds no
--- constructor and contributes NOTHING.  That is not an omission: the overlay is
--- registered last-wins in source order, so overlaying on a type-only member would let
--- `import m.{T}` HIJACK a ctor name the unit imports from a different module in a
--- LATER clause.  Restricting to (a)/(b) keeps the overlay to ctors the unit binds.
+-- ⚠️ Rule (b) is a CONSTRUCTOR-name test, not a "not a type name" test, and the
+-- difference is observable.  A member spelled like a TYPE contributes nothing only when
+-- no decl of `mid` happens to have a constructor of that spelling; if one does, the
+-- member matches by rule (b) and that SIBLING decl is overlaid.  Measured: `pmod` with
+-- `data Wrap = T Int`, `import pmod.{T, pf}`, and a local `data Loc = T String` —
+-- pinned as `test/llvm_fixtures_modules/ctor_scope_type_only_sibling_decl/`.
+-- (An earlier revision of this note claimed such a member "contributes NOTHING"; it was
+-- measured false and the paragraph is rewritten rather than re-pointed.)
+--
+-- That contribution is harmless BECAUSE of the layering at the registration site
+-- (`dataEnv`, `Module` arm): the overlay sits BELOW this module's own `prog0`, so a
+-- sibling decl riding along can never clobber a locally-declared constructor.  What it
+-- can still do is out-rank a ctor the unit names from a DIFFERENT module in a later
+-- import clause, decided by source order — the residual this note used to claim was
+-- prevented outright.  It is the pre-existing `(..)` hazard (#674's remainder) now also
+-- reachable via (b), it is order-dependent on `main` too, and it is tracked, not fixed
+-- here.
 --
 -- 🚨 The pool lookup is IDENTITY-scoped, not bare-name.  The pool is the WHOLE
 -- universe, so two modules declaring the same TYPE name (#1256's two `Cfg`s) made the
@@ -20598,20 +20633,53 @@ memberOverlayDecl pool mid (UseMember n ctors _ _) = match findOverlayDecl mid n
   Some d => [d]
   None => if ctors then dataDeclForType pool n else []
 
--- The first pool decl DECLARED BY `mid` that this member names: one of its
--- constructors always, its type name too when the member carries `(..)`.
+-- The pool decl DECLARED BY `mid` that this member names.
+--
+-- 🚨 TWO PASSES, not one first-match, and the order between them is the point.  A
+-- module may declare BOTH a type `T` and, in an earlier decl, a constructor spelled
+-- `T` (`data Wrap = T Int` above `data T = A | B`).  For `import m.{T(..)}` the member
+-- means the TYPE — `(..)` is what makes it a type spelling — so the type-name match
+-- must be tried over the WHOLE pool before any constructor-name match is considered.
+--
+-- ⚠️ A single first-match pass that accepted `variantNamed n vs || ctors && tn == n`
+-- shipped and was wrong: `import m.{T(..)}` selected `Wrap` (whose ctor is `T`), so
+-- `T`'s own `A`/`B` were never overlaid and a universe collision on `A` won instead —
+-- `Type mismatch: T vs Other`.  `declOwnedBy` had removed the CROSS-module first-match
+-- hazard; this WITHIN-module one is what `variantNamed` newly made reachable.  Pinned
+-- by `test/llvm_fixtures_modules/ctor_scope_ctors_prefer_type_name/`.
+--
+-- The constructor pass is still the fallback for `(..)`, not dead: `import m.{C(..)}`
+-- where `C` is a constructor and not a type name of `m` keeps its pre-A-2.6 meaning.
 findOverlayDecl : String -> String -> Bool -> List Decl -> Option Decl
-findOverlayDecl _ _ _ [] = None
-findOverlayDecl mid n ctors ((DAttrib _ d)::rest) = match findOverlayDecl mid n ctors [d]
+findOverlayDecl mid n ctors pool =
+  if ctors then match findOwnedDecl mid (declTypeNamed n) pool
+    Some d => Some d
+    None => findOwnedDecl mid (declCtorNamed n) pool
+  else findOwnedDecl mid (declCtorNamed n) pool
+
+-- First pool decl whose DECLARATION identity names `mid` and which satisfies `p`.
+findOwnedDecl : String -> (Decl -> Bool) -> List Decl -> Option Decl
+findOwnedDecl _ _ [] = None
+findOwnedDecl mid p ((DAttrib _ d)::rest) = match findOwnedDecl mid p [d]
   Some x => Some x
-  None => findOverlayDecl mid n ctors rest
-findOverlayDecl mid n ctors ((d@(DData { dataName = tn, dataCtors = vs, dataOrigin = o }))::rest)
-  | declOwnedBy mid tn o && (variantNamed n vs || ctors && tn == n) = Some d
-  | otherwise = findOverlayDecl mid n ctors rest
-findOverlayDecl mid n ctors ((d@(DNewtype { newtypeName = tn, newtypeCtor = cn, newtypeOrigin = o }))::rest)
-  | declOwnedBy mid tn o && (cn == n || ctors && tn == n) = Some d
-  | otherwise = findOverlayDecl mid n ctors rest
-findOverlayDecl mid n ctors (_::rest) = findOverlayDecl mid n ctors rest
+  None => findOwnedDecl mid p rest
+findOwnedDecl mid p ((d@(DData { dataName = tn, dataOrigin = o }))::rest)
+  | declOwnedBy mid tn o && p d = Some d
+  | otherwise = findOwnedDecl mid p rest
+findOwnedDecl mid p ((d@(DNewtype { newtypeName = tn, newtypeOrigin = o }))::rest)
+  | declOwnedBy mid tn o && p d = Some d
+  | otherwise = findOwnedDecl mid p rest
+findOwnedDecl mid p (_::rest) = findOwnedDecl mid p rest
+
+declTypeNamed : String -> Decl -> Bool
+declTypeNamed n (DData { dataName = tn }) = tn == n
+declTypeNamed n (DNewtype { newtypeName = tn }) = tn == n
+declTypeNamed _ _ = False
+
+declCtorNamed : String -> Decl -> Bool
+declCtorNamed n (DData { dataCtors = vs }) = variantNamed n vs
+declCtorNamed n (DNewtype { newtypeCtor = cn }) = cn == n
+declCtorNamed _ _ = False
 
 variantNamed : String -> List Variant -> Bool
 variantNamed _ [] = False

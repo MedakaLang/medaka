@@ -349,6 +349,7 @@ deAliasMethodImports : List (String, List String) -> Decl -> List Decl
 deAliasMethodMember : List String -> UseMember -> UseMember
 declBodyVars : String -> List Decl -> List String
 declBodyVarsOf : String -> Decl -> List String
+declCtorNamed : String -> Decl -> Bool
 declGradedScope : List String -> List IfaceMethod -> List (String, List Kind)
 declGradedScopeAdd : String -> List Kind -> List (String, List Kind) -> List (String, List Kind)
 declIfaceMethods : Decl -> List (String, Scheme)
@@ -356,6 +357,7 @@ declMethodNames : List Decl -> List String
 declMethodNamesOf : Decl -> List String
 declOwnedBy : String -> String -> TyConOrigin -> Bool
 declTopFnNames : List Decl -> List String
+declTypeNamed : String -> Decl -> Bool
 declaredConstraintArgs : String -> List (List Mono)
 declaredConstraintSlots : String -> (List Int, List String)
 declaredCrossModuleObls : String -> Option (List (String, List Int))
@@ -533,6 +535,7 @@ findImplEntryGo : List ImplEntry -> String -> String -> Mono -> Option ImplEntry
 findMatchingImplReqsU : ImplUniverse -> String -> List Mono -> Option (List (String, Mono), List Require)
 findMostSpecificEntry : List KeyEntry -> List KeyEntry -> Option KeyEntry
 findOverlayDecl : String -> String -> Bool -> List Decl -> Option Decl
+findOwnedDecl : String -> (Decl -> Bool) -> List Decl -> Option Decl
 findSigTvMap : String -> List (String, Ty, List (String, Mono)) -> Option (List (String, Mono))
 findTupleCand : String -> List (Mono, String, Option (Loc, String)) -> Option (String, Option (Loc, String))
 findTvName : Int -> List (String, Mono) -> Option String

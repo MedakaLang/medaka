@@ -1,0 +1,35 @@
+-- #1111 A-2.6 REGRESSION GUARD, the STDLIB reach of the same defect the module
+-- corpus pins as `llvm_fixtures_modules/ctor_scope_local_decl_wins/`.
+--
+-- `import json.{Json, JNull}` names a constructor (`JNull`), so the import-scoped
+-- constructor overlay contributes stdlib `json`'s whole `Json` decl — including the
+-- sibling `JString`, which this file never imports and which is a perfectly
+-- ordinary identifier a user may declare.  This file declares it, on its own `Tok`.
+-- A module's own top-level declaration is that module's name (SHADOW-SEMANTICS §1),
+-- so `JString "hi"` here is `Tok`'s.
+--
+-- Expected output, derived by hand BEFORE any capture and independently of any
+-- engine: `untok (JString "hi")` is `hi`.  Pinned absolutely in
+-- `test/engine_value_pins/engine/ctor_scope_local_ctor_beats_stdlib_import.pin`, so
+-- three agreeing-but-wrong engines cannot satisfy it.
+--
+-- ⚠️ THE FAILURE THIS PINS, measured on the first cut of A-2.6 (PR #1282 as first
+-- pushed, binary built from f6c2d391): REJECTED, `Type mismatch: Json vs Tok`, exit
+-- 1, three diagnostics — the user's own constructor clobbered by a sibling
+-- constructor of a stdlib type the program never named.  Pristine `main`
+-- (26585d3c) exits 0 and prints `hi`.
+--
+-- ⚠️ COUPLING, stated rather than discovered later: this fixture depends on
+-- `stdlib/json.mdk` declaring `Json` with a `JNull` and a `JString`.  If those are
+-- renamed, re-point the import — do not delete the fixture; the property is that a
+-- LOCAL constructor outranks an imported sibling, and the stdlib is only the
+-- sharpest available witness that the defect was not confined to test modules.
+import json.{Json, JNull}
+
+data Tok = JString String
+
+untok : Tok -> String
+untok (JString s) = s
+
+main : <IO> Unit
+main = println (untok (JString "hi"))

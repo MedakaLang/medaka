@@ -1,0 +1,36 @@
+-- #1111 A-2.6 REGRESSION GUARD: inside ONE module, `import m.{T(..)}` must select
+-- the decl whose TYPE is `T`, not a different decl of `m` that happens to have a
+-- CONSTRUCTOR spelled `T`.
+--
+-- `pmod` declares both — `data Wrap = T Int` first, then `data T = A | B`.  `(..)`
+-- is what makes the member a TYPE spelling, so `import pmod.{T(..)}` means the type
+-- `T` and brings in `A`/`B`.  `qmod` puts a second bare `A` in the universe.
+--
+-- Expected output, derived by hand BEFORE any capture and independently of any
+-- engine: `v = A` is `T`'s `A`, `sh` maps it to `1`, and `qf 0` is `0`, so `1`.
+--
+-- ⚠️ THE FAILURE THIS PINS, measured on the first cut of A-2.6 (PR #1282 as first
+-- pushed, binary built from f6c2d391): the pool scan was a SINGLE first-match pass
+-- accepting `variantNamed n vs || ctors && tn == n`, so it stopped at `Wrap` (ctor
+-- `T`), never overlaid `T`'s own `A`/`B`, and `A` fell through to `qmod` —
+-- REJECTED `Type mismatch: T vs Other`, exit 1, three diagnostics.  Pristine `main`
+-- (26585d3c) exits 0 and prints `1`, so that was a REGRESSION.
+--
+-- `declOwnedBy` had already removed the CROSS-module first-match hazard; this one
+-- is WITHIN a single module, and the constructor-name rule is what made it
+-- reachable.  Four controls, each measured to go back to `1`: declaring `T` before
+-- `Wrap`; deleting `Wrap`; spelling the import `{T, A, B}`; and giving `qmod` no
+-- colliding `A`.  All four are green on the broken binary too, which is why the
+-- fixture has to carry this exact shape.
+import pmod.{T(..)}
+import qmod.{qf}
+
+v : T
+v = A
+
+sh : T -> Int
+sh A = 1
+sh B = 2
+
+main : <IO> Unit
+main = putStrLn (intToString (sh v + qf 0))

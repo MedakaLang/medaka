@@ -1,0 +1,10 @@
+-- #1283.  Identical to control.mdk except the first import names `reamod` (which
+-- only RE-EXPORTS `A1`/`Dup`) instead of `amodd` (which declares them).
+import reamod.{A1, Dup, unA1}
+import zmod.{zf}
+
+v : A1
+v = Dup
+
+main : <IO> Unit
+main = println (unA1 v + zf 0)

@@ -1,0 +1,10 @@
+-- The IMPORTED module.  `entry.mdk` names `Ext` and `Other` — never `Tag` — but
+-- `Tag` is a SIBLING constructor of the same decl, so it rides along in whatever
+-- the import-scoped overlay registers for that member.
+public export data Ext =
+  | Tag Int
+  | Other
+
+export unExt : Ext -> Int
+unExt (Tag n) = n
+unExt Other = 0

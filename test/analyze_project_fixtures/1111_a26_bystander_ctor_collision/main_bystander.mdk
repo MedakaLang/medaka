@@ -5,24 +5,57 @@
 -- shape produces is never "my feature is broken" — it is "my feature works and
 -- something that never touched it broke", and no gate in this tree asks that
 -- question.  So: the overlay FIRES here (`bysa.{Mark}` names a constructor, and
--- `bysz` puts a second bare `Mark` in the universe), and every assertion is about
--- `bysc`, a module that imports neither of them and shares no name with either.
+-- `bysz` puts a second bare `Mark` in the universe), and the BYSTANDING assertions are
+-- about `bysc`, a module that imports neither of them and shares no name with either.
+-- (⚠️ "every assertion" was the old wording and it is wrong — see the MIXED CELL note
+-- below; line 49 asserts the feature, not a bystander.)
 --
 -- All four files must bucket to ZERO diagnostics.  `bysc`'s `Color`/`shade`/`widen`
 -- must resolve, typecheck and stay exhaustive exactly as if `bysa`/`bysz` were not
 -- in the graph.
 --
--- ⚠️ COUNTERFACTUAL, run rather than assumed — and it comes out GREEN, which is the
--- correct result for a bystander and is stated here rather than hidden.  Deleting
--- A-2.6's mechanism (stubbing `declOwnedBy` to `True`, and separately dropping the
--- ctor-naming rule so only `(..)` overlays) leaves this fixture PASSING, because
--- `bysc` names nothing the overlay can reach under any of those variants.  A
--- bystander that went red when the feature was removed would be testing the feature,
--- not bystanding.  What it IS sensitive to is the direction this diff actually
--- risks: an overlay that registers MORE decls than the unit binds — the type-only
--- hijack variant — starts clobbering ctor tables for modules that named nothing, and
--- `Color`'s two nullary constructors are exactly the shape that goes wrong first
--- (`ctor_scope_type_only_no_hijack` pins the same decision on the value side).
+-- 🚨 THIS FILE IS A MIXED CELL, NOT A PURE BYSTANDER — corrected after measurement.
+-- An earlier revision of this header claimed the counterfactual "comes out GREEN …
+-- deleting A-2.6's mechanism leaves this fixture PASSING".  THAT IS FALSE, and it was
+-- asserted rather than run.  Measured on a binary cold-bootstrapped from pristine
+-- `main` 26585d3c — which is exactly "A-2.6 removed", the branch having already merged
+-- everything else in `main` — this file is **RED**, exit 1:
+--
+--   main_bystander.mdk:<the `unMark (Mark 1)` line>: Type mismatch: Tagged vs Other
+--   main_bystander.mdk:<same line>:              Type mismatch: Int literal vs String
+--
+-- (Line NUMBERS deliberately not quoted: this header's own length sets them, so a
+--  comment edit would rot them — the trap AGENTS.md records for fixture line counts.)
+--
+-- The `unMark (Mark 1)` line below is a DRAIN assertion, not a bystanding one:
+-- `bysa.{Mark}` is a non-`(..)` member naming a constructor, which is precisely the
+-- rule A-2.6 adds, and without it `Mark` falls through to `bysz`'s `Mark String`.
+--
+-- So read this file as TWO assertions with different jobs:
+--   * the `shade`/`widen`/`zid` lines (`bysc` and the unrelated `bysz` fn) — the genuine
+--     BYSTANDER half.  Green on `main` and on every variant; they pin "unrelated code
+--     still behaves".
+--   * the `unMark (Mark 1)` line — a DRAIN, red on `main`, green with A-2.6.
+-- Do not cite this fixture as evidence that removing the feature changes nothing.
+--
+-- ⚠️ WHAT THIS FIXTURE CANNOT SEE — corrected, because the earlier claim here was
+-- measured FALSE and it mattered.  This header used to say it was sensitive to "an
+-- overlay that registers MORE decls than the unit binds".  It is not, and it
+-- STRUCTURALLY CANNOT BE: the overlay is per-module and built from the module's own
+-- `DUse` list, so a module that imports nothing — which is exactly what makes `bysc`
+-- a bystander — has no overlay to over-register.  The proof is not hypothetical: the
+-- first cut of A-2.6 shipped TWO over-registration defects (the overlay out-ranking
+-- the importing module's own `prog0`, and a within-module first-match picking a
+-- sibling decl by constructor name) and THIS FIXTURE STAYED GREEN through both —
+-- measured on a binary built from f6c2d391, exit 0, both halves passing.
+--
+-- Over-registration is caught instead by fixtures where the over-registered name
+-- collides with something the unit really declares or really imports:
+-- `test/llvm_fixtures_modules/ctor_scope_local_decl_wins/`,
+-- `.../ctor_scope_ctors_prefer_type_name/`, `.../ctor_scope_type_only_sibling_decl/`
+-- and `test/engine_fixtures/ctor_scope_local_ctor_beats_stdlib_import.mdk`.  Each of
+-- those goes RED on the broken binary; this one does not, and that is the honest
+-- division of labour: a bystander pins "unrelated code still behaves", nothing more.
 import bysa.{Tagged, Mark, unMark}
 import bysz.{zid}
 import bysc.{Color(..), shade, widen}

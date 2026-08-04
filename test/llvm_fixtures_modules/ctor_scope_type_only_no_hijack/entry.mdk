@@ -1,24 +1,31 @@
--- #1111 A-2.6: the guard on a DELIBERATE OMISSION, not on a behaviour change.
+-- #1111 A-2.6: an IMPORT-vs-IMPORT ordering guard.
 --
--- A `UseGroup` member naming ONLY a TYPE (`hja.{HA}` — no `(..)`, no ctor member)
--- binds no constructor, so `importedCtorTypeDecls` contributes NO overlay for it.
--- That omission is load-bearing: the overlay is registered LAST-WINS in source order,
--- so if a type-only member did contribute, `hja`'s decl would be registered after
--- `hjz`'s and `HA`'s `Hit` would HIJACK the `Hit` this file actually imports, one
--- clause later, from `hjz`.  `Hit "s"` would then be `Hit : Int -> HA` and the
--- program would be rejected.
+-- Two imports, in this order: `hja.{HA}` names only the TYPE `HA`; `hjz.{HZ, Hit,
+-- unHZ}` names the CONSTRUCTOR `Hit`.  The overlay is registered in SOURCE ORDER and
+-- is last-wins within itself, so if `hja` contributed a decl it would land BEFORE
+-- `hjz`'s and lose — but if the two clauses were swapped, or if `hja` matched by a
+-- route this one does not, `HA`'s `Hit : Int -> HA` would out-rank the `Hit` this
+-- file actually imports and `Hit "s"` would be rejected.
 --
 -- Expected output, derived by hand: `s`.  `Hit` is imported by name from `hjz` only,
 -- so `Hit "s" : HZ` and `unHZ v` is `"s"`.
 --
+-- ⚠️ WHY `hja.{HA}` CONTRIBUTES NOTHING HERE — state it precisely, because the
+-- general claim is FALSE.  Rule (b) of `importedCtorTypeDecls` is a CONSTRUCTOR-name
+-- test: `HA` contributes nothing because no decl of `hja` has a constructor spelled
+-- `HA` (its one variant is `Hit`), NOT because members that look like type names are
+-- inert.  Give `hja` a `data Wrapper = HA Int` and the member matches by rule (b) —
+-- `test/llvm_fixtures_modules/ctor_scope_type_only_sibling_decl/` is that shape,
+-- measured.  An earlier revision of this header asserted the general property and an
+-- unrun counterfactual for it; both are withdrawn rather than re-pointed.
+--
 -- ⚠️ HONEST SCOPE: this fixture is GREEN on pristine `main` too (verified first-hand
 -- on a binary built from 40756bea: `check` exit 0, `run` prints `s`) — main has no
--- overlay for a type-only member either, so it cannot hijack.  It therefore pins a
--- PRESERVED property, not a repaired one.  It is here because A-2.6 is the change
--- that makes the omission a CHOICE rather than an absence, and the obvious
--- "simplification" of the new rule — let any member contribute its owning decl — is
--- exactly what this file catches.  Delete the `variantNamed`/`ctors` restriction in
--- `memberOverlayDecl` and this goes red; the two drain fixtures do not.
+-- overlay for this member either.  It pins a PRESERVED property, not a repaired one,
+-- and it is NOT an over-registration detector: for those, see
+-- `ctor_scope_local_decl_wins/`, `ctor_scope_type_only_sibling_decl/` and
+-- `test/engine_fixtures/ctor_scope_local_ctor_beats_stdlib_import.mdk`, each of which
+-- goes RED when the overlay out-ranks something it should not.
 import hja.{HA}
 import hjz.{HZ, Hit, unHZ}
 
