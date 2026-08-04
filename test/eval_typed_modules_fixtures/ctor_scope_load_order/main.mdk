@@ -31,8 +31,10 @@
 -- native mangler's own bare-name ctor collision (#733 item 1's predicted
 -- typecheck↔mangler divergence; #1216 is the same emitter reading the wrong record
 -- slot).  Enrolling this shape in a native gate would pin somebody else's open bug
--- as this unit's expectation.  Filed separately; move this fixture up to the
--- 3-engine corpus when that drains.
+-- as this unit's expectation.  Filed as #1281, with the sharpening discriminator:
+-- the byte-identical graph with both records carrying `fld : Int` builds and runs
+-- correctly, so the trigger is the differing field TYPE, not the name collision.
+-- MOVE THIS FIXTURE to `test/llvm_fixtures_modules/` when #1281 drains.
 import aacfg.{aaf}
 import zzcfg.{Cfg}
 

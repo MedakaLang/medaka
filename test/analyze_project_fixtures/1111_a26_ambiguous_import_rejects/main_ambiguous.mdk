@@ -9,11 +9,16 @@
 --
 -- ⚠️ The rejection is PRE-EXISTING and A-2.6 does not move it (verified first-hand:
 -- byte-identical diagnostics on a binary built from pristine 40756bea and on A-2.6).
--- It is pinned here anyway because it was pinned NOWHERE — a grep of `test/` for the
--- diagnostic's text found it only inside `must_fail_fixtures/1253-…/claim.txt`, i.e.
--- described in a claim about a DIFFERENT open bug and asserted by no gate.  A
--- widening of the overlay that started answering this from load order instead would
--- have had nothing to fail.
+-- It is pinned here anyway because before this fixture it was pinned NOWHERE.  Derive
+-- that rather than trust it — against the base commit, so this fixture's own
+-- `oracle.json` does not answer the question it is asking:
+--
+--     git grep -l "brought into scope by both" 40756bea -- test/
+--
+-- returns exactly one path, `must_fail_fixtures/1253-…/claim.txt` — i.e. the
+-- diagnostic was described in a claim about a DIFFERENT open bug and asserted by no
+-- gate.  A widening of the overlay that started answering this from load order
+-- instead would have had nothing to fail.
 import arboth.{Cfg}
 import zrboth.{Cfg}
 
