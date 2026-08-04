@@ -1,0 +1,65 @@
+-- #1111 A-2.10 VALID-PROGRAMS BATTERY — the mirror that catches the REGRESSION,
+-- as opposed to the one that proves the feature.
+--
+-- A-2.10 makes every "are these the same type?" test read the module identity
+-- Stage A-1 put on a type head.  Making that test STRICTER turns `exit 0` into
+-- `exit 1` — which is the fix for two genuinely-distinct types (#1208/#1209) and
+-- a REGRESSION for a valid program whose identity SUPPLY is incomplete.  Unit
+-- A-2.2b hit exactly that: keying on identity naively made the compiler reject
+-- its own prelude (`No impl of Ord for Int`), because `stdlib/runtime.mdk`'s
+-- extern signatures never pass through the stamping walk and so arrive with no
+-- identity at all.  Every binding below is a shape whose two sides acquire
+-- their identity by DIFFERENT routes; each must still infer.
+--
+--   * `externCmp`    — an EXTERN-sourced `Int` (no identity, `externSchemes`)
+--                      meeting the `OriginBuiltin` `Int` the prelude's `Ord`
+--                      impl is written against.  This is A-2.2b's own minimal
+--                      discriminator, and the single most load-bearing line
+--                      here: it is the one a "compare the origins too" rule
+--                      rejects.
+--   * `externIntoUser` — the same identity-less `Int` flowing into a slot of a
+--                      cross-module USER type, so the absence has to survive a
+--                      constructor application rather than just a comparison.
+--   * `viaRelay` / `viaAlias` — a type and an alias reaching this module across
+--                      a RE-EXPORT hop, compared against the definer's own use
+--                      of them inside `base.mdk`.  A re-export attributed to
+--                      the re-exporter instead of the definer shows up here.
+--   * `dispatched`   — an interface declared in `base` with its impl also in
+--                      `base`, dispatched from here: the impl head and the goal
+--                      head must agree on identity across two hops.
+--   * `opt`/`res`/`ord` — PRELUDE types (`OriginModule "core"`), which reach a
+--                      user module by a third route again (the prelude is
+--                      prepended, not imported).
+--   * `pair`/`lst`   — BUILTIN heads (`OriginBuiltin`, §8 I6.2(a)), including
+--                      the `__tupleN__` head, which has its own mint.
+import relay.{Crate, unCrate, twice, wrap, Boxed}
+
+externCmp : String -> Bool
+externCmp s = stringLength s < 2
+
+externIntoUser : String -> Crate Int
+externIntoUser s = wrap (stringLength s)
+
+viaRelay : Int
+viaRelay = twice (wrap 4)
+
+viaAlias : Boxed -> Int
+viaAlias c = unCrate c
+
+dispatched : Int
+dispatched = unCrate (wrap 7)
+
+opt : Option Int
+opt = Some 3
+
+res : Result String Int
+res = Ok 1
+
+ord : Ordering
+ord = compare 1 2
+
+pair : (Int, String)
+pair = (1, "x")
+
+lst : List Int
+lst = [1, 2, 3]

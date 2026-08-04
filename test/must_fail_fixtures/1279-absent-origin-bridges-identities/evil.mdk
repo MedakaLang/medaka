@@ -1,0 +1,15 @@
+-- issue #1279: this module SELF-TESTS as the prelude.  `programIsCore`
+-- (compiler/frontend/resolve.mdk) is a purely SYNTACTIC test -- a program that
+-- declares `data Ordering` AND `interface Foldable` IS the prelude, as far as it
+-- is concerned -- so `duplicateErrors`' `seed = not (programIsCore prog)`
+-- collapses THIS module's duplicate-type seed to `primitiveTypes` alone, and the
+-- prelude's `Option` becomes redeclarable here.
+public export data Ordering = MyLT | MyEQ | MyGT
+
+export interface Foldable f where
+  myfold : f a -> Int
+
+public export data Option a = MyJust a
+
+export unwrapEvil : Option Int -> Int
+unwrapEvil (MyJust n) = n + 1000

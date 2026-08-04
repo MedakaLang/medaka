@@ -1,0 +1,65 @@
+issue: 1279
+what: an ABSENT type-head origin BRIDGES two distinct present identities. #1111
+what: A-2.10 made every type-head comparison read the module identity Stage A-1
+what: landed, but identity SUPPLY is incomplete: `stdlib/runtime.mdk`'s `extern`
+what: signatures never pass through the origin-stamping walk, so an extern's
+what: return type carries NO origin, and `sameTyConHead` (compiler/frontend/
+what: ast.mdk) is deliberately absence-makes-no-claim. Unification LINKS, so one
+what: identity-less head reached from BOTH sides accepts a pairing the DIRECT
+what: comparison refuses: `Option@core ~ Option@absent ~ Option@evil`.
+what: The second identity on a PRELUDE name is reachable because `programIsCore`
+what: (compiler/frontend/resolve.mdk:1547) is a purely SYNTACTIC self-test -- a
+what: module declaring `data Ordering` AND `interface Foldable` IS the prelude as
+what: far as it is concerned -- so `duplicateErrors`' `seed = not (programIsCore
+what: prog)` collapses that module's `typeSeed` to `primitiveTypes` alone and it
+what: may declare its own `Option`.
+what: `medaka check main.mdk` reports ZERO diagnostics and exits 0 -- the program
+what: is silently accepted -- while `medaka run` prints `False` and then dies with
+what: E-NONEXHAUSTIVE-MATCH on a value of the wrong runtime shape.
+cmd: check main.mdk
+exit: 0
+stdout: mid : Option Int
+stdout: usesCore : Bool
+stdout: main : Unit
+control: run control.mdk
+why-fixture: the observable is the SILENT ACCEPTANCE itself (check: zero
+why-fixture: diagnostics, exit 0), not the downstream crash -- that is the S0: a
+why-fixture: type-unsound program compiles clean. `check` (not check-json) is used
+why-fixture: because with zero diagnostics on a program this small `check`'s bare
+why-fixture: scheme dump is short, stable, and carries NO file path, so the pin
+why-fixture: does not encode this machine's directory layout. (Bare `check` prints
+why-fixture: only the user's OWN top-level bindings, so the ~120-line prelude dump
+why-fixture: is not in scope here either.) A `run main.mdk` pin was considered and
+why-fixture: rejected for the same reason the deleted 1208/1209 fixtures rejected
+why-fixture: it: BOTH the buggy program (crashes post-hoc) and a genuinely fixed
+why-fixture: one (check rejects before execution) exit 1 with the message on
+why-fixture: STDERR, which this harness does not grade (#1130 in
+why-fixture: test/MUST-FAIL-NOT-PINNABLE.txt) -- so a `run` pin would never go red
+why-fixture: on a real fix.
+why-control: control.mdk exercises the SAME cross-module call into the SAME
+why-control: seed-flipped module that redeclares `Option`, with exactly ONE
+why-control: variable removed: the argument is built with that module's own
+why-control: constructor and never crosses the extern's identity-less `Option`
+why-control: head, so no bridge is asked for. It must print 1005 at exit 0.
+why-control: ⚠️ The more obvious control -- drop the `Ordering`/`Foldable` pair so
+why-control: the seed is NOT flipped -- was written, RUN, and rejected: the flip
+why-control: also drops the prelude from `buildEnv`'s scope (`pTypes`/`pCtors` are
+why-control: `whenL seed ...`), so an un-flipped twin cannot see `Option`/`Some`/
+why-control: `None` at all (`Unknown type: Option`, measured). The seed flip is
+why-control: therefore not a variable this fixture can isolate; the BRIDGE is, and
+why-control: the bridge is what #1279 is about.
+why-note: NOT a regression from A-2.10. Pre-A-2.10 `unifyN`'s TCon/TCon arm was
+why-note: `a == b`, so `Option ~ Option` unified unconditionally and BOTH the
+why-note: direct and the bridged form were accepted. A-2.10 closed the direct form
+why-note: (measured: `unwrapEvil (Some 1)` is now rejected with a T-TYPE-MISMATCH
+why-note: naming both modules) and left this one open; it did not create it.
+why-note: fix territory per the issue, either half of which drains this row:
+why-note: (1) stamp `stdlib/runtime.mdk`'s extern signatures with an origin, so
+why-note: there is no absent head to bridge through -- `sameTyConHead` then
+why-note: becomes strict equality on that population with NO edit to the
+why-note: comparison; (2) decide `programIsCore` from the driver's own knowledge
+why-note: of which module is the prelude rather than from decl shapes, so an
+why-note: arbitrary module cannot disable its own duplicate-type checking (note
+why-note: compiler/tools/test_cmd.mdk:255 carries a second copy of the predicate).
+why-note: Either makes `check main.mdk` report a diagnostic and exit 1, draining
+why-note: this row. Close #1279 and delete this fixture when that happens.

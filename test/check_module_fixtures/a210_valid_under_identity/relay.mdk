@@ -1,0 +1,12 @@
+-- #1111 A-2.10 VALID-PROGRAMS BATTERY, module 2/3 — the RE-EXPORT HOP.
+-- The entry never imports `base` directly, so every identity it sees for
+-- `Crate` / `Boxed` / `Wrap` has been carried through this module.  Resolve's
+-- `typeOriginExports` claims to attribute a re-exported type to its ORIGINAL
+-- DEFINER rather than to the last re-exporter; before A-2.10 nothing in the
+-- tree could tell the difference, because no comparison read the field.  It
+-- can now: were `Crate` attributed to `relay` here and to `base` inside
+-- `base.mdk`'s own `unCrate`, `viaRelay` below would fail to typecheck.
+export import base.{Crate, unCrate, Wrap(..), wrap, Boxed}
+
+export twice : Crate Int -> Int
+twice c = unCrate c + unCrate c

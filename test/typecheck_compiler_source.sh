@@ -374,7 +374,19 @@ echo "  ok: $(printf '%s\n' "$originun_actual" | grep -c .) OriginUnresolved con
 # 20k-line file; this pins the exact lines, so a `Ty`-layer
 # `TyCon { …, tyConOrigin = OriginUnresolved }` literal added to typecheck.mdk fails
 # here even though the file is allow-listed.
-tc_originun_allowed="tconUnresolved n = TCon n OriginUnresolved"
+# ⚠️ ONE OF THE TWO LINES IS AN ELIMINATOR ARM, NOT A CONSTRUCTION.
+# `originPhrase OriginUnresolved = …` (#1111 A-2.10) renders an origin into the
+# user-facing text of the same-spelling type-mismatch hint. It CONSTRUCTS nothing —
+# `OriginUnresolved` is on its LEFT-hand side — and it exists to keep `originPhrase`
+# TOTAL over the three inhabitants rather than closing it with a wildcard, which is
+# the shape `stampTyHead`'s own comment argues for ("a fourth inhabitant should be
+# MADE TO SHOW UP here"). The arm is unreachable from its only caller (a conflict
+# requires two PRESENT identities, so `firstIdConflict` never hands it an absent
+# one); it is answered rather than omitted so that a future caller with a laxer
+# precondition gets prose instead of a non-exhaustive-match warning. Listed here
+# rather than the grep widened, per the remedy this ratchet's siblings state.
+tc_originun_allowed="originPhrase OriginUnresolved = \"an unknown module\"
+tconUnresolved n = TCon n OriginUnresolved"
 tc_originun_actual=$(grep -w 'OriginUnresolved' "$ROOT/compiler/types/typecheck.mdk" \
   | sed 's/^[[:space:]]*//' \
   | grep -vE '^--' \
@@ -406,10 +418,17 @@ echo "  ok: 1 Mono-layer OriginUnresolved line in typecheck.mdk, no Ty-layer lit
 # is that a reviewer grades four lines plus the choice of helper at each call, rather
 # than re-deriving what a bare third argument meant at ~90 sites.
 #
-# HOW IT TELLS A CONSTRUCTION FROM A PATTERN: nothing reads the origin field yet, so
-# every PATTERN leaves its origin slot `_`. An occurrence of `TCon` whose origin slot
-# is anything else is therefore a construction (or a pattern that binds the origin —
-# see the remedy).
+# HOW IT TELLS A CONSTRUCTION FROM A PATTERN: a pattern that does not need the origin
+# leaves its slot `_`, and an occurrence of `TCon` whose origin slot is anything else
+# is a construction OR a pattern that binds the origin. ⚠️ The second half of that
+# disjunction used to read "nothing reads the origin field yet, so every PATTERN
+# leaves its slot `_`" — that stopped being true at #1111 A-2.2 (`headTyconMono`) and
+# is thoroughly false since A-2.10, which made SIX comparisons read it. The filter is
+# unchanged and still correct; only its rationale was overstated. The allowlist below
+# is therefore the audit: four mints plus every origin-binding pattern, each listed.
+# ⚠️ Do NOT write the pattern COUNT into this prose. The list is the count, and the
+# label the gate prints derives it — an encoded number here is exactly the kind of
+# fact that was already falsified once by the next unit to touch this file.
 #
 # 🚨 IT FILTERS PER OCCURRENCE, NOT PER LINE, AND THE DIFFERENCE IS A PROVEN HOLE.
 # The first cut of this ratchet dropped any LINE matching the pattern shape, so a line
@@ -446,16 +465,49 @@ echo "  ok: 1 Mono-layer OriginUnresolved line in typecheck.mdk, no Ty-layer lit
 # the sites this exists to enumerate. A pattern that legitimately BINDS the origin is
 # the expected first false positive; list it, and the list stays the audit.
 echo "checking #1110 Mono.TCon mint set ..."
-# ⚠️ ONE OF THE LINES BELOW IS A PATTERN, NOT A MINT — `headTyconMono`'s, added by
-# #1111 Stage A-2 unit A-2.2.  It is the FIRST site in the file to READ a
-# `Mono.TCon` origin (it projects the head into a `HeadKey` that can carry the
-# identity Stage A-1 put there), so its origin slot is `o` rather than `_` and the
-# pattern-erasing filter above cannot erase it.  This is exactly the false positive
-# the remedy predicts — "a pattern that legitimately BINDS the origin is the
-# expected first false positive; list it, and the list stays the audit" — so it is
-# listed rather than the filter widened.  It CONSTRUCTS no `TCon`.
+# ⚠️ ONLY FOUR OF THE LINES BELOW ARE MINTS. The declaration line and the
+# origin-BINDING PATTERNS are listed here too, because the filter's discriminator is
+# the `_` in the origin slot and a pattern that binds the origin cannot be erased by
+# it. That is exactly the false positive the remedy predicts — "a pattern that
+# legitimately BINDS the origin is the expected first false positive; list it, and
+# the list stays the audit" — so they are listed rather than the filter widened.
+# NONE OF THEM CONSTRUCTS A `TCon` — that is the property, and it is checked by the
+# exact-set comparison, not by counting.
+#
+# ⚠️ THIS LINE SAID "NONE of the seven" AND THEN ENUMERATED EIGHT FUNCTIONS, two
+# lines below the sentence forbidding exactly that. Do not replace it with a
+# corrected number: the enumeration below is the set, and the gate's own label
+# derives the arithmetic from the allowlist (`$mono_tcon_pats origin-binding
+# pattern(s)`) — run the gate if you want a count.
+#
+#   `TCon n o => Some (headKeyOfCon o n)`  — `headTyconMono`, #1111 A-2.2: the first
+#     site in the file to READ an origin, projecting the head into a `HeadKey`.
+#   the SIX COMPARISONS — #1111 A-2.10: the "are these the same type?" tests, all
+#     routed through `sameTyConHead` (`compiler/frontend/ast.mdk`), which owns the
+#     absent-origin rule. In source order: `unifyN`, `cohGoR`, `cohStep` (two
+#     lines: the general-side match and its `TCon`/`TCon` inner arm), `cohEqR`,
+#     `matchStep`, `monoSameGiven` (two lines, same reason as `cohStep`).
+#   `(TCon n1 o1, TCon n2 o2) =>`  — `firstIdConflict`, #1111 A-2.10: the DIAGNOSTIC
+#     side of the same rule. It finds the head whose two identities conflict so the
+#     otherwise-unreadable `Type mismatch: T vs T` can name the two modules. It is a
+#     READER, not a decider — nothing about acceptance goes through it.
+#
+# 🚨 THIS LIST IS THE ONLY PLACE THE COMPARISON SET IS ENUMERATED MECHANICALLY.
+# ANY further comparison added without listing it here FAILS this gate, which is the
+# point: the set is what a reviewer has to grade, and `AGENTS.md`'s wildcard-arm
+# hazard says to audit it as a SET rather than one member.  (This sentence said "a
+# seventh" while the list already held more than that — an ordinal is a count.)
 mono_tcon_allowed="| TCon String TyConOrigin
 TCon n o => Some (headKeyOfCon o n)
+(TCon n1 o1, TCon n2 o2) =>
+unifyN (ta@(TCon a oa)) (tb@(TCon b ob)) =
+cohGoR _ (TCon a oa) (TCon b ob) = sameTyConHead a oa b ob
+TCon a oa => match s
+TCon b ob => if sameTyConHead a oa b ob then MOk else MFail
+cohEqR (TCon a oa) (TCon b ob) = sameTyConHead a oa b ob
+TCon n2 o2 => if sameTyConHead n o n2 o2 then MOk else MFail
+TCon x ox => match normalize b
+TCon y oy => sameTyConHead x ox y oy
 tconBuiltin n = TCon n OriginBuiltin
 tconFrom o n = TCon n o
 tconTupleHead n = TCon (tupleHeadTagTc n) OriginBuiltin
@@ -484,15 +536,16 @@ if [ "$mono_tcon_actual" != "$mono_tcon_expected" ]; then
   echo "  Do NOT widen the pattern-vs-construction filter above; add the line here."
   exit 1
 fi
-# ⚠️ minus TWO, not one: the declaration line AND the origin-BINDING pattern listed
-# above are both in the allowlist but neither is a mint.  A bare `- 1` here would
-# report "5 mints" for four — the label would be wrong about the tree as it stands.
-# This is a LABEL fix, not a new guarantee: `- 2` is just as hardcoded as `- 1`, so
-# a THIRD non-mint line added to the allowlist would make this label wrong again.
-# What actually prevents a silent absorption is the exact-set comparison above, not
-# this arithmetic — a new pattern or a duplicate row fails there, before this line
-# is ever reached.
-echo "  ok: $(($(printf '%s\n' "$mono_tcon_expected" | grep -c .) - 2)) Mono.TCon mint(s) + 1 origin-binding pattern, no other construction site"
+# ⚠️ DERIVED, not a hardcoded subtraction.  This label read `- 2` (declaration +
+# one bound pattern) and would have been wrong the moment A-2.10 listed six more —
+# the same "encoded fact with no derivation" `AGENTS.md` warns about, inside the
+# gate that exists to keep a set honest.  The four mints are exactly the allowlist
+# rows that CONSTRUCT (` = TCon `); everything else in it is the declaration or a
+# pattern.  What actually prevents a silent absorption is still the exact-set
+# comparison above, not this arithmetic.
+mono_tcon_mints=$(printf '%s\n' "$mono_tcon_expected" | grep -c ' = TCon ')
+mono_tcon_pats=$(($(printf '%s\n' "$mono_tcon_expected" | grep -c .) - mono_tcon_mints - 1))
+echo "  ok: $mono_tcon_mints Mono.TCon mint(s) + $mono_tcon_pats origin-binding pattern(s), no other construction site"
 
 # The names `tconBuiltin` claims as language-provided must be exactly that, and the
 # authority is resolve's own `primitiveTypes` rather than a second hand-kept list here.
@@ -606,7 +659,20 @@ carrier_owed_expected=""
 # sorts FIRST and would make this set comparison fail against a field list that can
 # never contain one.
 carrier_expected=$(printf '%s\n%s\n' "$carrier_graded_expected" "$carrier_owed_expected" | grep -v '^$' | sort)
-carrier_actual=$(grep -oE '^[[:space:]]*[A-Za-z0-9_]+[[:space:]]*:[[:space:]]*TyConOrigin' "$ROOT/compiler/frontend/ast.mdk" \
+# ⚠️ `[[:space:]]+`, NOT `[[:space:]]*`, AND THE CHANGE IS A NARROWING WITH A
+# DERIVATION — not the regex-widening the sibling ratchets forbid.  A carrier is a
+# RECORD FIELD, and a record field in this file is always INDENTED: it sits inside a
+# `Ctor { … }` block, which the offside rule cannot place at column 0.  A TOP-LEVEL
+# TYPE SIGNATURE whose FIRST parameter happens to be a `TyConOrigin` is
+# indistinguishable from a field under the old `*` form — `tyConIdsConflict :
+# TyConOrigin -> TyConOrigin -> Bool` (#1111 A-2.10) was reported as a tenth carrier
+# field, and the remedy this gate prints would have had it added to
+# `carrier_graded_expected`, i.e. a NON-FIELD listed as a carrier and then required
+# to appear in the agreement probe.  Listing it would have been the lie; requiring
+# the indentation a field always has is the fix.  (`sameTyConHead` beside it never
+# matched, because its first parameter is a `String` — which is exactly why the
+# false positive is a coincidence of parameter ORDER and would have recurred.)
+carrier_actual=$(grep -oE '^[[:space:]]+[A-Za-z0-9_]+[[:space:]]*:[[:space:]]*TyConOrigin' "$ROOT/compiler/frontend/ast.mdk" \
   | sed -E 's/^[[:space:]]*//; s/[[:space:]]*:.*$//' | sort)
 if [ "$carrier_actual" != "$carrier_expected" ]; then
   echo "FAIL: the set of \`: TyConOrigin\`-typed fields in compiler/frontend/ast.mdk changed."
@@ -725,7 +791,22 @@ echo "  ok: $(printf '%s\n' "$carrier_actual" | grep -c .) TyConOrigin carrier f
 # re-derive with
 #   grep -w 'TyConOrigin' compiler/frontend/ast.mdk | grep -cvE '^[[:space:]]*--'
 # rather than trusting this number.
-carrier_count_expected=13
+#
+# 13 -> 15 (#1111, Stage A-2 unit A-2.10): `sameTyConHead : String -> TyConOrigin ->
+# String -> TyConOrigin -> Bool` and `tyConIdsConflict : TyConOrigin -> TyConOrigin
+# -> Bool` — the seam every "are these the same type?" comparison in
+# `types/typecheck.mdk` now goes through.  Same class as both bumps above and
+# bumped for the same reason: READERS.  No field on any node, no mint, no new
+# inhabitant, so no `declHeadOf` arm and no producer-ratchet entry is owed, and the
+# carrier field set is INDEPENDENTLY still `9 graded, 0 owed`.
+#
+# ⚠️ `tyConIdsConflict` ALSO tripped the NAME-SET pin above, which the paragraph
+# there says is "correctly silent — a signature is not a named record field".  That
+# claim was true of every prior reader by ACCIDENT OF PARAMETER ORDER and false for
+# this one: its first parameter is a `TyConOrigin`, so `^[[:space:]]*NAME[[:space:]]*:
+# [[:space:]]*TyConOrigin` matched the signature.  The discriminator was narrowed to
+# require the indentation a record field always has; the derivation is at that grep.
+carrier_count_expected=15
 # Comment-filtered, matching the idiom the three sibling ratchets above already
 # use (`grep -w … | grep -qvE '^[[:space:]]*--'`). An unfiltered count reds this
 # gate on a COMMENT-ONLY diff that merely names `TyConOrigin` in prose -- someone
