@@ -1,5 +1,5 @@
 # META
-source_lines=1753
+source_lines=1791
 stages=DESUGAR,MARK
 # SOURCE
 -- Identity + registry substrate — Stage A-2 unit A-2.0
@@ -417,14 +417,35 @@ ordKey n = lenKey "\{n}"
 -- ⚠️ THIS WIDENING IS SHARED WITH A-2.4 (PR #1270), WHICH IS IN FLIGHT AGAINST
 -- THIS FILE AND MAKES THE IDENTICAL CHANGE. It is spelled here with A-2.4's own
 -- names and bodies (`tabKeyRender`, `tabKeys`, `regKeyOfTab`, `regKeyTabs`) so
--- the two units CONVERGE rather than fork: a merge conflict here resolves by
--- taking either side. A-2.4's motivating table is `universeIfaceParamKinds`
+-- the two units CONVERGE rather than fork: those four ARE byte-identical
+-- between the branches. A-2.4's motivating table is `universeIfaceParamKinds`
 -- (interface × parameter slot, read on BOTH driver arms). A-2.2b's is every
 -- dispatch key below — `obUniv*`, `KeyBuckets`, `checkCallObligationsU`'s
 -- dedup key — each of which projects a head through `headTyconTy`/
 -- `headTyconMono`, and those projections answer `TkBare` on the flat path for
 -- exactly the reason A-2.3 gives. Keying them by `Ident` alone is not merely
 -- lossy, it is unconstructible.
+--
+-- 🚨 HOW TO RESOLVE THE CONFLICT, AND IT IS **NOT** "TAKE EITHER SIDE". An
+-- earlier draft of this paragraph said it was, and that instruction DESTROYS
+-- WORK: `git merge-tree HEAD origin/arch/a2-4-iface-namespace-rekey` puts the
+-- two units' *mints* in ONE hunk — this side contributes `regKeyNTab` and
+-- `regKeyNTabAt`, A-2.4's contributes `regKeyTabAt` — so taking either side
+-- silently deletes the other unit's mint. It fails loudly at the next build
+-- (unbound name), but the instruction is written for whoever is holding the
+-- conflict, and "take either side" is the one thing they must not do.
+--
+--   * the MINTS: take BOTH — union them. All three are one-line `RegKey`
+--     constructions over the same widened type and none subsumes another.
+--   * the DOC-COMMENT blocks (this one, and the section banner above the
+--     mints): either side is genuinely fine — they say the same thing about
+--     the same change from the two units' points of view. Prefer keeping both
+--     motivating tables named.
+--
+-- Derive the hunk list rather than trusting this one:
+--
+--   git merge-tree --write-tree --name-only HEAD \
+--     origin/arch/a2-4-iface-namespace-rekey
 --
 -- The widening is answer-preserving for identity-bearing keys: `regKeyOf`,
 -- `regKeyN`, `regKeyAt` and `regKeyNAt` still take `Ident`s and wrap them in
@@ -612,13 +633,30 @@ export mregAdd : Ident -> v -> MultiRegistry v -> MultiRegistry v
 mregAdd ident v mr = mregAddK (regKeyOf ident) v mr
 
 -- ⚠️ APPEND, not `mregAddK`'s prepend, and the difference is load-bearing for
--- the first table that needs it. `obUnivConcreteRef`/`obUnivHeadlessRef`
--- (`types/typecheck.mdk`) are read FIRST-MATCH by `findMatchingImplReqsU`, whose
--- own doc-comment records that the order is a deliberate soundness/conformance
--- property and not an order-immaterial coherence argument — so a prepend would
--- silently invert which impl's `requires` get discharged. Their writer has
--- always spelled `bucketOf k ++ [x]`; this is that spelling, once, inside the
--- abstraction, at the same O(bucket) cost per add.
+-- ONE of the two tables that needs it. Attributing it to both
+-- (`obUnivConcreteRef`/`obUnivHeadlessRef`, `types/typecheck.mdk`) overstates
+-- it, so name which is which:
+--
+--   * `obUnivHeadlessRef` — THIS is the first-match reader.
+--     `findMatchingImplReqsU` reaches it directly, on both its clauses, as
+--     `firstReqMatch (univHeadless …)`, and its own doc-comment records that
+--     the order is a deliberate soundness/conformance property and not an
+--     order-immaterial coherence argument. A prepend here would silently
+--     invert which impl's `requires` get discharged.
+--   * `obUnivConcreteRef` — NOT read first-match, and not read by
+--     `findMatchingImplReqsU` at all. That function's concrete arm goes through
+--     `concreteReqMatchByIface` → `selectImplEntryByIface`, which reads
+--     `shadowKeyTableRef` — a DIFFERENT table. `obUnivConcreteRef`'s own
+--     readers are `univConcreteBucket`'s two, `implMatchesU` and
+--     `implMatchesReceiverU`, and both are boolean EXISTENCE tests
+--     (`bucketArgsMatch`/`bucketRecvMatch`, `||`-folded), for which bucket
+--     order is immaterial.
+--
+-- Both writers have always spelled `bucketOf k ++ [x]`; this is that spelling,
+-- once, inside the abstraction, at the same O(bucket) cost per add. Keeping the
+-- concrete side on it too is deliberate — the two accumulators are written by
+-- one pass and reading them as a pair is easier than reasoning about why one
+-- prepends — but it is a CONSISTENCY choice, not a correctness one.
 --
 -- `mregAddK` stays the default: a bucket whose order genuinely does not matter
 -- should pay O(1), and a caller reaching for THIS one is asserting that its

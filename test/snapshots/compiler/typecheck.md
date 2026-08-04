@@ -1,5 +1,5 @@
 # META
-source_lines=20879
+source_lines=20974
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted typecheck stage — port of lib/typecheck.ml's HM core.  SLICE 1:
@@ -3452,10 +3452,30 @@ currentMethodMismatch = Ref None
 -- back to a bare name) while `goalHeadCon` handed it a `String`.
 --
 -- A-2.2b closes that by DELETION rather than by a fourth widening:
---   * `goalHeadCon` — the one dispatch-path consumer, and the GOAL side of
---     `KeyBuckets` — now calls `headTyconMono`, which A-2.2 already widened.
---     Impl side and goal side are now the same two functions, `headTyconTy`
---     and `headTyconMono`, both `Option HeadKey`.
+--   * `goalHeadCon` — the GOAL side of `KeyBuckets` — now calls
+--     `headTyconMono`, which A-2.2 already widened.  Impl side and goal side
+--     are now the same two functions, `headTyconTy` and `headTyconMono`, both
+--     `Option HeadKey`.
+--   * ⚠️ `goalHeadCon` IS NOT THE ONLY DISPATCH-PATH CONSUMER THAT MOVED, and
+--     an earlier draft of this obituary said it was.  THREE more were re-pointed
+--     from `headTyconNameMono` to `headTyconMono` in the same commit, because
+--     `implExistsForHead`'s third parameter widened with them — audit them as a
+--     SET, they are the same decision three times:
+--       - `inferShadowApp`            (importer shadow, inference time)
+--       - `definerReceiverDispatches` (Fork-1 receiver test, inference time)
+--       - `resolveRLocalSite`         (the post-inference route stamp)
+--     Each projects a receiver `Mono` and feeds the result to NOTHING but
+--     `implExistsForHead`, so each SHOULD call `headTyconMono` — the name-only
+--     residual can no longer express that argument.  Derive the set rather than
+--     trusting this list:
+--
+--       grep -nw implExistsForHead compiler/types/typecheck.mdk \
+--         | grep -vE '^[0-9]+:[[:space:]]*--' | grep -vE '^[0-9]+:implExistsForHead'
+--
+--     What the widening does NOT yet buy them is an identity comparison: the
+--     retest inside `implExistsForHeadGo` projects both sides back through
+--     `dispHeadTab`, deliberately, because the goal side has no origin to
+--     compare with (see there, and `dispHeadTab`'s own derivation).
 --   * every other consumer wanted only the NAME or its presence
 --     (`mainTypeIsAsync`, `tagNumlitCtxIf`, `containerParamScalarArg`,
 --     `domainIsTupleOfArity`, `inferAppExpr`'s not-a-function reframe) and now
@@ -3468,10 +3488,25 @@ currentMethodMismatch = Ref None
 -- `headMonoNode t` (which IS that recursion, `normalize`-ing at each level)
 -- against `TCon`/`TRigid`/`_`.
 --
--- So there are now TWO head projections, not three, and the count is still not
--- a thing to trust from prose — derive it:
+-- 🚨 THIS IS A DELETION, NOT A CENSUS.  Three head projections became FOUR
+-- minus one, not "two" — and the derivation an earlier draft offered,
+-- `grep -nE '^(headTyconMono|headTyconTy) :'`, is a TAUTOLOGY: it hard-codes
+-- the two names it wants and structurally cannot discover a third.  Use a
+-- pattern that CAN:
 --
---   grep -nE '^(headTyconMono|headTyconTy) :' compiler/types/typecheck.mdk
+--   grep -nE '^headTycon[A-Za-z]* :' compiler/types/typecheck.mdk
+--
+-- It prints FOUR, which are two orthogonal pairs — a new projection lands in
+-- the output whatever it is called:
+--
+--   * by SIDE (the dispatch-key pair): `headTyconTy` = impl, `headTyconMono` =
+--     goal.  These two, and only these two, return `Option HeadKey` and reach a
+--     dispatch key.
+--   * by SOURCE TYPE (the same-arms pair): `headTyconMono`/`headTyconNameMono`
+--     over `Mono`, `headTyconTy`/`headTyconNameTy` over `Ty`.  Each `…Name…` is
+--     the bare-name residual of the one above it, and each pair owes the
+--     invariant that both members classify the SAME head nodes — stated at
+--     `headTyconNameMono`, which is the pair THAT comment means.
 --
 -- Stage 2 query: did the last-elaborated `main` infer to an `Async`-headed type?
 export mainTypeIsAsync : Unit -> Bool
@@ -10770,18 +10805,51 @@ paramMonoOf subst tp = fromOption (TRigid tp) (lookupAssoc tp subst)
 -- it defines and its head tycon.  Mirrors lib/typecheck.ml's impl_exists_for_head.
 implExistsForHead : KeyBuckets -> String -> HeadKey -> Bool
 implExistsForHead buckets name hk =
-  implExistsForHeadGo (bucketOfHead (Some hk) buckets) name hk
+  -- The goal-side key is projected ONCE, here, and handed to the scan: Medaka
+  -- is strict, so re-deriving it inside the per-entry arm would rebuild the
+  -- same `TabKey` for every entry in the bucket.
+  implExistsForHeadGo (bucketOfHead (Some hk) buckets) name (dispHeadTab hk)
 
--- ⚠️ The `hd == Some hk` retest is redundant under A-2.2b's identity keying —
--- every entry in `bucketOfHead (Some hk) buckets` was FILED under that same key
--- — and is kept because it now compares IDENTITIES: two same-named heads from
--- two modules are already in different buckets, and this says so at the arm
--- rather than leaving the reader to derive it from the bucketing.
-implExistsForHeadGo : List KeyEntry -> String -> HeadKey -> Bool
+-- 🚨 THE RETEST IS SPELLING-KEYED, THROUGH `dispHeadTab`, AND IT MUST BE — it
+-- has to be the SAME projection the BUCKETING applies, never a stronger one.
+-- `bucketOfHead` files and finds entries by `headBucketRender` =
+-- `regKeyRender (regKeyOfTab (dispHeadTab …))`, so a retest that compared
+-- `HeadKey`s STRUCTURALLY (`hd == Some hk`, which `deriving Eq` makes an
+-- IDENTITY comparison) would be strictly stronger than the bucket it is
+-- scanning, and would answer False wherever the two sides' ORIGINS differ.
+--
+-- That is the normal case, not a corner.  Neither projection GUARANTEES an
+-- identity — both bottom out in `tabKeyOf`, which answers `TkBare` for an
+-- origin it cannot attribute — but they are not SYMMETRIC in practice, and that
+-- was measured, not argued (#1111): the impl side (`headTyconTy`, off a
+-- `Ty.TyCon`) came back `TkIdent … IdentBuiltin` for every primitive head on
+-- both driver arms, while the goal side (`headTyconMono`) came back mixed,
+-- because `stdlib/runtime.mdk`'s EXTERN signatures never pass through resolve's
+-- head-stamping walk.  So the receiver of `debug (stringLength "xy")` projects
+-- `HkDecl (TkBare NsType "Int")` against the prelude impl's
+-- `HkDecl (TkIdent (Ident NsType IdentBuiltin "Int"))`.  A structural compare
+-- says "no impl of this method at this head", and
+-- `inferShadowApp` / `resolveRLocalSite` then silently route the call to a
+-- same-named standalone (S0: `debug (stringLength "xy")` printed the
+-- standalone's answer at exit 0, with `check` accepting).
+--
+-- This is exactly the asymmetry `dispHeadTab`'s own derivation records — the
+-- goal side is neither SUPPLIED nor CANONICAL until the follow-on semantics
+-- unit — which is why this site belongs IN that ledger and not outside it.
+-- Corpus: `test/shadow_fixtures/i11_importer_extern_receiver`.
+implExistsForHeadGo : List KeyEntry -> String -> TabKey -> Bool
 implExistsForHeadGo [] _ _ = False
-implExistsForHeadGo ((KeyEntry methods hd _ _ _ _ _ _)::rest) name hk
-  | hd == Some hk && contains name methods = True
-  | otherwise = implExistsForHeadGo rest name hk
+implExistsForHeadGo ((KeyEntry methods hd _ _ _ _ _ _)::rest) name goal
+  | headTabIs hd goal && contains name methods = True
+  | otherwise = implExistsForHeadGo rest name goal
+
+-- `None` is a headless (fully-general) entry, which lives in the headless
+-- bucket and so cannot be reached from `bucketOfHead (Some hk)` at all; False
+-- is both the unreachable answer and the pre-A-2.2b one (`noneHeadTag` never
+-- equalled a projected head name).
+headTabIs : Option HeadKey -> TabKey -> Bool
+headTabIs (Some hk) goal = dispHeadTab hk == goal
+headTabIs None _ = False
 
 -- C5: stamp RLocal on each recorded standalone-shadow arg-position site whose
 -- receiver mono now grounds to a concrete head tycon with NO impl of the method.
@@ -14370,12 +14438,20 @@ headMonoNode t = match normalize t
 -- to keep meaning exactly what it meant before ("no head type constructor at
 -- all") rather than absorbing "a head with no identity yet".
 --
--- ⚠️ IT IS NOT THE ONLY `Mono` HEAD PROJECTION — but it IS now the only one on
--- a dispatch path.  A-2.2 left a third, `monoHeadCon`, `Option String` and
--- carrying its own copy of the same I6.1 forgery; A-2.2b DELETED it, pointed
--- `goalHeadCon` (hence `KeyBuckets`' goal side) at this function, and moved its
--- name-only consumers to `headTyconNameMono` below.  So the surviving pair is
--- this and `headTyconNameMono`, which must classify the same head nodes.
+-- ⚠️ IT IS NOT THE ONLY `Mono` HEAD PROJECTION — but it IS now the only `Mono`
+-- one on a dispatch path.  A-2.2 left a third, `monoHeadCon`, `Option String`
+-- and carrying its own copy of the same I6.1 forgery; A-2.2b DELETED it,
+-- pointed `goalHeadCon` (hence `KeyBuckets`' goal side) and the three
+-- `implExistsForHead` receiver sites at this function, and moved its name-only
+-- consumers to `headTyconNameMono` below.
+--
+-- ⚠️ "THE SURVIVING PAIR" IS AMBIGUOUS AND THIS COMMENT MEANS ONE OF THEM.  The
+-- pair meant HERE is the SOURCE-TYPE pair — this and `headTyconNameMono`, the
+-- two `Mono` projections, which owe each other the invariant that they classify
+-- the same head nodes.  `monoHeadCon`'s obituary above names the other, the
+-- SIDE pair (`headTyconTy` impl / `headTyconMono` goal).  Neither is "the" pair
+-- and neither is a count of the projections in this file: that is four, and the
+-- derivation that can actually discover a fifth is in the obituary.
 --
 -- 🚨 THIS IS THE FIRST SITE IN THIS FILE THAT READS A `Mono.TCon` ORIGIN, which
 -- is why `test/typecheck_compiler_source.sh`'s `Mono.TCon` mint ratchet carries
@@ -15485,19 +15561,30 @@ oblIfaceKey iface = TkBare NsIface iface
 -- for EVERY primitive head — `Eq Int`, `Eq Char`, `Num Int`, `Ord Int`,
 -- `Semigroup String`.  Two independent reasons, and the first alone is fatal:
 --
---   1. SUPPLY.  `Mono.TCon`'s origin is filled at the four mints, and a mono
---      that reaches a dispatch goal through a signature (`fromAstTypeE`)
---      inherits whatever its `Ty` carried.  `stampTyHead`
---      (`frontend/resolve.mdk`) fills only an `OriginUnresolved` head it can
---      ATTRIBUTE, so the goal side is systematically silent where the impl side
---      is not.  The earlier units' framing ("A-2 is module-path-only until
---      #1115") does not cover this: it is not confined to the flat arm.
---   2. CANONICALITY.  `Mono`'s own doc-comment (this file, at `TCon`) states the
---      field is a CARRIER that every comparison — `unifyN` included — ignores,
---      "so two modules' same-named types still unify exactly as they did".  Two
---      `TCon "Int"` with different origins therefore unify, and which origin
---      survives the link is an artefact of link direction.  A key built on it is
---      not a function of the type.
+--   1. CANONICALITY — THE FATAL ONE.  `Mono`'s own doc-comment (this file, at
+--      `TCon`) states the field is a CARRIER that every comparison — `unifyN`
+--      included — ignores, "so two modules' same-named types still unify exactly
+--      as they did".  Two `TCon "Int"` with different origins therefore unify,
+--      and which origin survives the link is an artefact of link DIRECTION.  A
+--      key built on it is not a function of the type at all, and no amount of
+--      supply repairs that.
+--   2. SUPPLY — a gap that CAN be filled, and it now has a named starting
+--      point.  `Mono.TCon`'s origin is filled at the four mints, and a mono that
+--      reaches a dispatch goal through a signature (`fromAstTypeE`) inherits
+--      whatever its `Ty` carried.  The hole is NOT `stampTyHead`
+--      (`frontend/resolve.mdk`), whose scope does contain the primitives: it is
+--      that `stdlib/runtime.mdk`'s EXTERN signatures never pass through the
+--      stamping walk at all (`externSchemes`), so every mono flowing out of an
+--      extern's declared type is `OriginUnresolved`.  It is per-PROVENANCE
+--      silent, not systematically silent — `(1 : Int) < 2` supplies identity;
+--      `stringLength "xy" < 2` does not — and it is not confined to the flat
+--      arm, so the earlier units' framing ("A-2 is module-path-only until
+--      #1115") does not cover it.
+--
+-- ⚠️ THAT ORDER IS LOAD-BEARING AND WAS ONCE WRITTEN THE OTHER WAY ROUND HERE,
+-- while #1111's own write-up listed it as it is now — two records naming
+-- OPPOSITE causes as fatal under the identical sentence.  `#1111` is the record
+-- that stands; this note is the one that was corrected.
 --
 -- ⇒ The dispatch tables can move onto the identity SUBSTRATE now — a
 -- namespaced, injective, structurally position-aware key instead of spliced
@@ -15517,8 +15604,16 @@ oblIfaceKey iface = TkBare NsIface iface
 -- and doctests it; it stays UNUSED at these sites, and the follow-on semantics
 -- unit switches them over.
 --
--- THIS FUNCTION IS THE LEDGER.  Every dispatch key still keyed by a head's
--- SPELLING goes through it:
+-- THIS FUNCTION IS THE LEDGER — and it is the ledger for every dispatch
+-- DECISION taken on a head's spelling, not only for every dispatch KEY built
+-- from one.  That distinction is not pedantry: it is the gap the first cut of
+-- A-2.2b fell into.  `implExistsForHeadGo` builds no key at all — it RETESTS a
+-- head against the bucket it is scanning — and because it sat outside this
+-- ledger it was quietly changed to compare IDENTITIES, which made it strictly
+-- stronger than the spelling-keyed bucketing and silently rerouted every call
+-- whose receiver came from an unstamped extern signature (S0; see there).  So
+-- the enrolment rule is: if a site's answer would CHANGE when the head half
+-- becomes an identity, it goes through this function.
 --
 --   grep -nw dispHeadTab compiler/types/typecheck.mdk
 dispHeadTab : HeadKey -> TabKey
@@ -23152,10 +23247,13 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "paramMonoOf" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyFun (TyCon "String") (TyCon "Mono"))))
 (DFunDef false "paramMonoOf" ((PVar "subst") (PVar "tp")) (EApp (EApp (EVar "fromOption") (EApp (EVar "TRigid") (EVar "tp"))) (EApp (EApp (EVar "lookupAssoc") (EVar "tp")) (EVar "subst"))))
 (DTypeSig false "implExistsForHead" (TyFun (TyCon "KeyBuckets") (TyFun (TyCon "String") (TyFun (TyCon "HeadKey") (TyCon "Bool")))))
-(DFunDef false "implExistsForHead" ((PVar "buckets") (PVar "name") (PVar "hk")) (EApp (EApp (EApp (EVar "implExistsForHeadGo") (EApp (EApp (EVar "bucketOfHead") (EApp (EVar "Some") (EVar "hk"))) (EVar "buckets"))) (EVar "name")) (EVar "hk")))
-(DTypeSig false "implExistsForHeadGo" (TyFun (TyApp (TyCon "List") (TyCon "KeyEntry")) (TyFun (TyCon "String") (TyFun (TyCon "HeadKey") (TyCon "Bool")))))
+(DFunDef false "implExistsForHead" ((PVar "buckets") (PVar "name") (PVar "hk")) (EApp (EApp (EApp (EVar "implExistsForHeadGo") (EApp (EApp (EVar "bucketOfHead") (EApp (EVar "Some") (EVar "hk"))) (EVar "buckets"))) (EVar "name")) (EApp (EVar "dispHeadTab") (EVar "hk"))))
+(DTypeSig false "implExistsForHeadGo" (TyFun (TyApp (TyCon "List") (TyCon "KeyEntry")) (TyFun (TyCon "String") (TyFun (TyCon "TabKey") (TyCon "Bool")))))
 (DFunDef false "implExistsForHeadGo" ((PList) PWild PWild) (EVar "False"))
-(DFunDef false "implExistsForHeadGo" ((PCons (PCon "KeyEntry" (PVar "methods") (PVar "hd") PWild PWild PWild PWild PWild PWild) (PVar "rest")) (PVar "name") (PVar "hk")) (EIf (EBinOp "&&" (EBinOp "==" (EVar "hd") (EApp (EVar "Some") (EVar "hk"))) (EApp (EApp (EVar "contains") (EVar "name")) (EVar "methods"))) (EVar "True") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "implExistsForHeadGo") (EVar "rest")) (EVar "name")) (EVar "hk")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "implExistsForHeadGo" ((PCons (PCon "KeyEntry" (PVar "methods") (PVar "hd") PWild PWild PWild PWild PWild PWild) (PVar "rest")) (PVar "name") (PVar "goal")) (EIf (EBinOp "&&" (EApp (EApp (EVar "headTabIs") (EVar "hd")) (EVar "goal")) (EApp (EApp (EVar "contains") (EVar "name")) (EVar "methods"))) (EVar "True") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "implExistsForHeadGo") (EVar "rest")) (EVar "name")) (EVar "goal")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "headTabIs" (TyFun (TyApp (TyCon "Option") (TyCon "HeadKey")) (TyFun (TyCon "TabKey") (TyCon "Bool"))))
+(DFunDef false "headTabIs" ((PCon "Some" (PVar "hk")) (PVar "goal")) (EBinOp "==" (EApp (EVar "dispHeadTab") (EVar "hk")) (EVar "goal")))
+(DFunDef false "headTabIs" ((PCon "None") PWild) (EVar "False"))
 (DTypeSig false "resolveRLocalSites" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "ImplBuckets") (TyFun (TyCon "KeyBuckets") (TyFun (TyApp (TyCon "List") (TyCon "PendingEntry")) (TyCon "Unit"))))))
 (DFunDef false "resolveRLocalSites" (PWild PWild PWild (PList)) (EApp (EApp (EVar "setRef") (EVar "goalSiteLoc")) (EVar "None")))
 (DFunDef false "resolveRLocalSites" ((PVar "prog") (PVar "implTable") (PVar "keyTable") (PCons (PCon "PendingEntry" (PVar "name") (PVar "tagRef") (PVar "am") PWild (PVar "kind") (PVar "loc")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "setRef") (EVar "goalSiteLoc")) (EVar "loc"))) (DoLet false false PWild (EMatch (EVar "kind") (arm (PCon "SKRLocal" (PVar "sym") (PVar "forceLocal") (PVar "monos") (PVar "ifaces")) () (EIf (EVar "forceLocal") (EApp (EApp (EVar "setRef") (EVar "tagRef")) (EApp (EApp (EVar "RLocal") (EVar "sym")) (EApp (EApp (EApp (EApp (EApp (EVar "routesOfMonosTop") (EVar "prog")) (EVar "implTable")) (EVar "keyTable")) (EVar "monos")) (EVar "ifaces")))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "resolveRLocalSite") (EVar "prog")) (EVar "implTable")) (EVar "keyTable")) (EVar "name")) (EVar "tagRef")) (EVar "am")) (EVar "sym")) (EVar "monos")) (EVar "ifaces")))) (arm PWild () (ELit LUnit)))) (DoExpr (EApp (EApp (EApp (EApp (EVar "resolveRLocalSites") (EVar "prog")) (EVar "implTable")) (EVar "keyTable")) (EVar "rest")))))
@@ -27410,10 +27508,13 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "paramMonoOf" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyFun (TyCon "String") (TyCon "Mono"))))
 (DFunDef false "paramMonoOf" ((PVar "subst") (PVar "tp")) (EApp (EApp (EVar "fromOption") (EApp (EVar "TRigid") (EVar "tp"))) (EApp (EApp (EVar "lookupAssoc") (EVar "tp")) (EVar "subst"))))
 (DTypeSig false "implExistsForHead" (TyFun (TyCon "KeyBuckets") (TyFun (TyCon "String") (TyFun (TyCon "HeadKey") (TyCon "Bool")))))
-(DFunDef false "implExistsForHead" ((PVar "buckets") (PVar "name") (PVar "hk")) (EApp (EApp (EApp (EVar "implExistsForHeadGo") (EApp (EApp (EVar "bucketOfHead") (EApp (EVar "Some") (EVar "hk"))) (EVar "buckets"))) (EVar "name")) (EVar "hk")))
-(DTypeSig false "implExistsForHeadGo" (TyFun (TyApp (TyCon "List") (TyCon "KeyEntry")) (TyFun (TyCon "String") (TyFun (TyCon "HeadKey") (TyCon "Bool")))))
+(DFunDef false "implExistsForHead" ((PVar "buckets") (PVar "name") (PVar "hk")) (EApp (EApp (EApp (EVar "implExistsForHeadGo") (EApp (EApp (EVar "bucketOfHead") (EApp (EVar "Some") (EVar "hk"))) (EVar "buckets"))) (EVar "name")) (EApp (EVar "dispHeadTab") (EVar "hk"))))
+(DTypeSig false "implExistsForHeadGo" (TyFun (TyApp (TyCon "List") (TyCon "KeyEntry")) (TyFun (TyCon "String") (TyFun (TyCon "TabKey") (TyCon "Bool")))))
 (DFunDef false "implExistsForHeadGo" ((PList) PWild PWild) (EVar "False"))
-(DFunDef false "implExistsForHeadGo" ((PCons (PCon "KeyEntry" (PVar "methods") (PVar "hd") PWild PWild PWild PWild PWild PWild) (PVar "rest")) (PVar "name") (PVar "hk")) (EIf (EBinOp "&&" (EBinOp "==" (EVar "hd") (EApp (EVar "Some") (EVar "hk"))) (EApp (EApp (EVar "contains") (EVar "name")) (EVar "methods"))) (EVar "True") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "implExistsForHeadGo") (EVar "rest")) (EVar "name")) (EVar "hk")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "implExistsForHeadGo" ((PCons (PCon "KeyEntry" (PVar "methods") (PVar "hd") PWild PWild PWild PWild PWild PWild) (PVar "rest")) (PVar "name") (PVar "goal")) (EIf (EBinOp "&&" (EApp (EApp (EVar "headTabIs") (EVar "hd")) (EVar "goal")) (EApp (EApp (EVar "contains") (EVar "name")) (EVar "methods"))) (EVar "True") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "implExistsForHeadGo") (EVar "rest")) (EVar "name")) (EVar "goal")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "headTabIs" (TyFun (TyApp (TyCon "Option") (TyCon "HeadKey")) (TyFun (TyCon "TabKey") (TyCon "Bool"))))
+(DFunDef false "headTabIs" ((PCon "Some" (PVar "hk")) (PVar "goal")) (EBinOp "==" (EApp (EVar "dispHeadTab") (EVar "hk")) (EVar "goal")))
+(DFunDef false "headTabIs" ((PCon "None") PWild) (EVar "False"))
 (DTypeSig false "resolveRLocalSites" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "ImplBuckets") (TyFun (TyCon "KeyBuckets") (TyFun (TyApp (TyCon "List") (TyCon "PendingEntry")) (TyCon "Unit"))))))
 (DFunDef false "resolveRLocalSites" (PWild PWild PWild (PList)) (EApp (EApp (EVar "setRef") (EVar "goalSiteLoc")) (EVar "None")))
 (DFunDef false "resolveRLocalSites" ((PVar "prog") (PVar "implTable") (PVar "keyTable") (PCons (PCon "PendingEntry" (PVar "name") (PVar "tagRef") (PVar "am") PWild (PVar "kind") (PVar "loc")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "setRef") (EVar "goalSiteLoc")) (EVar "loc"))) (DoLet false false PWild (EMatch (EVar "kind") (arm (PCon "SKRLocal" (PVar "sym") (PVar "forceLocal") (PVar "monos") (PVar "ifaces")) () (EIf (EVar "forceLocal") (EApp (EApp (EVar "setRef") (EVar "tagRef")) (EApp (EApp (EVar "RLocal") (EVar "sym")) (EApp (EApp (EApp (EApp (EApp (EVar "routesOfMonosTop") (EVar "prog")) (EVar "implTable")) (EVar "keyTable")) (EVar "monos")) (EVar "ifaces")))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "resolveRLocalSite") (EVar "prog")) (EVar "implTable")) (EVar "keyTable")) (EVar "name")) (EVar "tagRef")) (EVar "am")) (EVar "sym")) (EVar "monos")) (EVar "ifaces")))) (arm PWild () (ELit LUnit)))) (DoExpr (EApp (EApp (EApp (EApp (EVar "resolveRLocalSites") (EVar "prog")) (EVar "implTable")) (EVar "keyTable")) (EVar "rest")))))

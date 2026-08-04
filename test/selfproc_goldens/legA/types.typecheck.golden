@@ -613,6 +613,7 @@ headL : List String -> String
 headMonoNode : Mono -> Mono
 headRemainingKinds : TyConOrigin -> String -> Int -> Option (List Kind)
 headSubstWithParams : Ty -> List Ty -> Mono -> List Mono -> Option (List (String, Mono))
+headTabIs : Option HeadKey -> TabKey -> Bool
 headTyNode : Ty -> Ty
 headTyconMono : Mono -> Option HeadKey
 headTyconNameMono : Mono -> Option String
@@ -661,7 +662,7 @@ implDictRoutesForFull : Map String (List ImplEntry) -> Map String (List KeyEntry
 implEntryFromTys : String -> List Ty -> List Require -> List ImplMethod -> List ImplEntry
 implEntryOf : Decl -> List ImplEntry
 implExistsForHead : Map String (List KeyEntry) -> String -> HeadKey -> Bool
-implExistsForHeadGo : List KeyEntry -> String -> HeadKey -> Bool
+implExistsForHeadGo : List KeyEntry -> String -> TabKey -> Bool
 implHeadGround : Decl -> Bool
 implHeadKindClause : String -> Int -> List Kind -> String
 implHeadLabel : String -> KeyEntry -> String
