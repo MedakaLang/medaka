@@ -566,6 +566,26 @@ revLookupRoot cr ((n, dr)::rest) =
 --     project tree, because it is last — `list` stays `list` and never becomes
 --     `stdlib.list`.  "Deepest root wins" gets that one right and the first one
 --     wrong; "shallowest" gets it backwards.  Only list order gets both.
+--
+-- ⚠️ THE BLAST RADIUS IS DERIVABLE, SO DERIVE IT — do not trust a count here.
+-- An id changes for exactly one shape: an entry BELOW its `medaka.toml` root
+-- whose import resolves under the entry's OWN dir while the project root also
+-- contains the file.  Enumerating that over the tree is a directory walk plus
+-- the two-line rule above, i.e. cheaper than reading this paragraph:
+--
+--   for every `<entry>.mdk` whose dir != findProjectRoot(dir):
+--     for every `import <mid>`: resolve <mid> against [entryDir, projRoot,
+--     stdlibDir] first-hit; if the LAST of those roots containing the resolved
+--     file is not the one that resolved it, the id changes.
+--
+-- Run 2026-08-04 over 160 such entry files: TWO changed ids, both in the
+-- un-gated ad-hoc `sqlite/findings/*` repro directories (`import lib.a` and
+-- `import lib.t` gain their `findings.…` prefix), and both still behave
+-- identically — the id is longer, nothing else moves, because neither file was
+-- ever reached under a SECOND spelling.  Zero in `compiler/`, `stdlib/`,
+-- `sqlite/{lib,test}` or any fixture corpus.  ⚠️ An earlier draft of this
+-- change's commit message said "none"; that was written before the walk was
+-- run, and the walk is the reason the number is two.
 canonRootFor : List String -> String -> <IO> Option String
 canonRootFor roots cPath = canonRootGo roots cPath None
 
