@@ -3,6 +3,7 @@ availableModulesHint : String -> <IO> String
 availableModulesText : String -> <IO> String
 canonRootFor : List String -> String -> <IO> Option String
 canonRootGo : List String -> String -> Option String -> <IO> Option String
+canonRoundTrips : List (String, String) -> List String -> String -> String -> <IO> Bool
 canonicalModId : List (String, String) -> List String -> String -> <IO> String
 childDeps : List (String, String) -> String -> List String -> <IO> List (String, String)
 childRoots : String -> List String -> List String
