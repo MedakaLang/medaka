@@ -17,15 +17,32 @@
 --
 --   A  skew the READER's headless bucket key (`bucketOfHead`'s `None` arm) so
 --      the general instance is filed under a key no goal asks for
---                                              → **INERT**. This file's value is
---      unchanged: `sz True` is still 999. It comes from the ENGINE's
---      general-instance fallback tier (`emitGeneralRKey` → `findByTag
---      noneHeadTag` in `llvm_emit.mdk`, `pickTagFallback` in `eval.mdk`), not
---      from the `KeyBuckets` selection this unit re-keyed — exactly what
---      `keyForSite`'s own #1128 comment warns ("a green suite here is evidence
---      about the fallback, not about the route word"). So the `sz` lines below
---      do NOT witness the headless-bucket key change. Nothing in this tree does;
---      that is recorded, not papered over.
+--                                              → **INERT while the general
+--      instance had a CONSTANT body**, and **WITNESSED once it needs a dict**.
+--      Both halves re-measured first-hand on 2026-08-04 against a binary built
+--      with `bucketOfHead None` prefixing a literal into its rendered key:
+--
+--        `impl Sz a where sz _ = 999`               (the ORIGINAL general
+--        instance) → `((True, 14, n=1, Some 'z', Gt), 999, 7, 1, 2)`, exit 0.
+--        UNCHANGED. The 999 comes from the ENGINE's general-instance fallback
+--        tier (`emitGeneralRKey` → `findByTag noneHeadTag` in `llvm_emit.mdk`,
+--        `pickTagFallback` in `eval.mdk`), not from the `KeyBuckets` selection
+--        this unit re-keyed — exactly what `keyForSite`'s own #1128 comment
+--        warns ("a green suite here is evidence about the fallback, not about
+--        the route word").
+--
+--        `impl Sz a requires Display a where sz x = stringLength (display x)`
+--        (what this file ships now) → eval: `runtime error [E-PANIC]:
+--        intToString: not an Int`, exit 1. native: `runtime error
+--        [E-FATAL-SIGNAL]: fatal memory fault (segmentation fault)`, exit 139.
+--
+--      ⚠️ AN EARLIER DRAFT OF THIS HEADER STOPPED AT THE FIRST HALF and added
+--      "Nothing in this tree does; that is recorded, not papered over" — which
+--      reads as *this key is not witnessable*, and it is not true. The fallback
+--      tier can substitute for a CONSTANT, because a constant needs nothing
+--      routed to it; it cannot substitute for an ELEMENT DICT. Adding the
+--      `requires` is the whole repair, and an honestly-labelled untestable key
+--      is still an untestable key.
 --   B  skew the READER's DECLARATION bucket key (`bucketOfHead`'s `Some` arm)
 --   C  skew the READER's `obUnivConcreteRef` key (`univConcreteBucket`)
 --                                              → **NEITHER PRODUCES A BINARY**.
@@ -46,7 +63,13 @@
 -- golden records what the engine did, not what is correct) — see `bystander`
 -- and `main`. Recorded here so the next reader does not have to re-derive it:
 --
---   ((True, 14, n=1, Some 'z', Gt), 999, 7, 1, 2)
+--   ((True, 14, n=1, Some 'z', Gt), 4, 7, 1, 2)
+--
+-- The `4` is `stringLength (display True)` = `stringLength "True"` — the
+-- general instance reached WITH its `Display Bool` element dict. (It was `999`
+-- while that instance had a constant body; counterfactual A above is why it no
+-- longer does.) The `7` is unchanged: `impl Sz (Box a)` is more specific and
+-- out-ranks the general instance at a `Box` receiver, and carries no `requires`.
 --
 -- `diff_compiler_engines.sh` diffs eval/native/wasm against each other with no
 -- golden mediating, so this comment is the only place the intended value is
@@ -57,8 +80,17 @@ interface Sz a where
 
 -- The GENERAL (headless) instance — its head is a bare type variable, so it has
 -- no head type constructor at all.
-impl Sz a where
-  sz _ = 999
+--
+-- ⚠️ THE `requires` IS WHAT MAKES THE HEADLESS BUCKET WITNESSABLE, and it is
+-- the whole of counterfactual A's repair (below).  A general instance with a
+-- CONSTANT body is invisible to the headless bucket key: whichever tier answers
+-- (the `KeyBuckets` selection this unit re-keyed, or the engines' own
+-- general-instance fallback) returns the same 999.  A general instance that
+-- must be handed its ELEMENT DICT is not — the answer now depends on a
+-- `Display` dict having been routed to it, which only the headless entry
+-- carries.
+impl Sz a requires Display a where
+  sz x = stringLength (display x)
 
 data Box a = MkBox a
 
