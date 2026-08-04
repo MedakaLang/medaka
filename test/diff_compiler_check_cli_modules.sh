@@ -891,5 +891,115 @@ for g822_order in ab ba; do
   fi
 done
 
+# ── #1111 A-2.10: TYPE-HEAD IDENTITY DECIDES ACCEPTANCE ──────────────────────
+#
+# The PERMANENT home for what `test/must_fail_fixtures/1208-…` and `1209-…` pinned
+# while they were still bugs.  Those fixtures asserted the DEFECT (silent exit 0);
+# they were deleted when A-2.10 drained them, and a drained must-fail leaves no
+# regression test behind — so the two halves are re-asserted here as the thing that
+# must now hold.  ACCEPTANCE is the only observable for both, which is what puts
+# them in this gate rather than in `check_module_fixtures` (see the note at the 822
+# block above for the same argument).
+#
+# ⚠️ BOTH MIRRORS ARE HERE ON PURPOSE, and the second is the one that catches the
+# regression this change could actually cause.  Making a comparison STRICTER turns
+# exit 0 into exit 1 — correct for two genuinely-distinct types, a REGRESSION for a
+# valid program whose identity supply is incomplete.  `A-2.10/reject-*` is the first
+# mirror; `A-2.10/accept-*` is the second, and it is not decoration: unit A-2.2b
+# built this comparison on identity naively and the compiler REJECTED ITS OWN
+# PRELUDE, because `stdlib/runtime.mdk`'s extern signatures carry no identity.
+# `accept-extern-sourced` is that exact discriminator.
+#
+# The reject rows pin the DIAGNOSTIC CODE, not just a nonzero exit: a fixture typo
+# would otherwise grade green on an unrelated rejection.
+cat > "$TMP/a210_defa.mdk" <<'EOF'
+public export data Tk = MkTkA Int
+export takeTk : Tk -> Int
+takeTk (MkTkA n) = n
+export interface Wr a where
+  wr : a -> Tk
+export unTk : Tk -> Int
+unTk (MkTkA n) = n
+export mkTk : Int -> Tk
+mkTk n = MkTkA n
+EOF
+# main declares its OWN `Tk`, with a DIFFERENT constructor name so the already-fixed
+# R-AMBIGUOUS-CTOR path (#674/#732) cannot fire and mask this.
+cat > "$TMP/a210_rej_fn.mdk" <<'EOF'
+import a210_defa.{takeTk}
+public export data Tk = MkTkB String
+mk : Tk
+mk = MkTkB "wrong"
+main = println (takeTk mk)
+EOF
+# the #1209 half: the collision is an interface METHOD's declared RETURN type,
+# reached through `methodIfaceParamsRef` rather than a plain function's parameter.
+cat > "$TMP/a210_rej_method.mdk" <<'EOF'
+import a210_defa.{Wr(..), wr, unTk}
+public export data Tk = MkTkB String
+export impl Wr Int where
+  wr n = MkTkB "wrong"
+main = println (unTk (wr 1))
+EOF
+for a210_case in fn method; do
+  a210_out="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check "$TMP/a210_rej_$a210_case.mdk" 2>&1)"
+  a210_code=$?
+  a210_json="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check --json "$TMP/a210_rej_$a210_case.mdk" 2>/dev/null)"
+  if [ "$a210_code" -ne 0 ] && printf '%s' "$a210_json" | grep -q 'T-TYPE-MISMATCH'; then
+    pass=$((pass+1)); printf 'ok   A-2.10/reject-%s (two modules'"'"' same-named types no longer unify)\n' "$a210_case"
+  else
+    fail=$((fail+1)); printf 'FAIL A-2.10/reject-%s (exit %d, no T-TYPE-MISMATCH: [%s])\n' "$a210_case" "$a210_code" "$a210_out"
+  fi
+done
+# The message would otherwise read `Type mismatch: Tk vs Tk` — both sides identical,
+# which is true and unactionable.  Asserted here because a diagnostic nobody can act
+# on trades an S0 for an S2 rather than fixing it, and no other gate looks at this
+# text: the two must-fail fixtures that reached this shape are deleted.
+a210_hint="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check "$TMP/a210_rej_fn.mdk" 2>&1)"
+if printf '%s' "$a210_hint" | grep -q "share the name 'Tk'" \
+  && printf '%s' "$a210_hint" | grep -q "a210_defa" \
+  && printf '%s' "$a210_hint" | grep -q "a210_rej_fn"; then
+  pass=$((pass+1)); printf 'ok   A-2.10/reject-names-both-modules\n'
+else
+  fail=$((fail+1)); printf 'FAIL A-2.10/reject-names-both-modules (identical-looking sides, no hint: [%s])\n' "$a210_hint"
+fi
+# ACCEPT mirror.  Every line names a head whose two sides acquire identity by
+# DIFFERENT routes and must still be one type: an extern-sourced `Int` against the
+# `OriginBuiltin` one the prelude's impls are written against; a user type whose
+# NAME arrives across a RE-EXPORT hop while its VALUES arrive from the definer
+# directly; and an exported ALIAS of that type.  The split import is the point —
+# `Tk` and `TkAlias` come from `a210_relay`, `mkTk`/`takeTk` from `a210_defa` — so
+# a re-export attributed to the RE-EXPORTER rather than to the definer makes the
+# annotation and the value disagree and this row goes red.
+cat > "$TMP/a210_relay.mdk" <<'EOF'
+export import a210_defa.{Tk, mkTk}
+export type TkAlias = Tk
+EOF
+cat > "$TMP/a210_accept.mdk" <<'EOF'
+import a210_relay.{Tk, mkTk, TkAlias}
+import a210_defa.{takeTk}
+viaAlias : TkAlias -> Int
+viaAlias t = takeTk t
+externSourced : Bool
+externSourced = stringLength "xy" < 2
+fromExtern : Tk
+fromExtern = mkTk (stringLength "hello")
+main = println (takeTk fromExtern + viaAlias (mkTk 2))
+EOF
+a210_acc_out="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check "$TMP/a210_accept.mdk" 2>&1)"
+a210_acc_code=$?
+if [ "$a210_acc_code" -eq 0 ]; then
+  pass=$((pass+1)); printf 'ok   A-2.10/accept-extern-sourced-and-reexported\n'
+else
+  fail=$((fail+1)); printf 'FAIL A-2.10/accept-extern-sourced-and-reexported (valid program rejected, exit %d: [%s])\n' "$a210_acc_code" "$a210_acc_out"
+fi
+a210_run_out="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" run "$TMP/a210_accept.mdk" 2>&1)"
+a210_run_code=$?
+if [ "$a210_run_code" -eq 0 ] && [ "$a210_run_out" = "7" ]; then
+  pass=$((pass+1)); printf 'ok   A-2.10/accept-runs-and-dispatches (7)\n'
+else
+  fail=$((fail+1)); printf 'FAIL A-2.10/accept-runs-and-dispatches (exit %d, got [%s], want 7)\n' "$a210_run_code" "$a210_run_out"
+fi
+
 printf '\n%d ok, %d failing\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

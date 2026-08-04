@@ -41,8 +41,10 @@ mkIdent : Ns -> TyConOrigin -> String -> Option Ident
 orElseLoc : Option Loc -> Option Loc -> Option Loc
 qualifiedLocal : String -> String -> String
 requireUnresolved : String -> List Ty -> Require
+sameTyConHead : String -> TyConOrigin -> String -> TyConOrigin -> Bool
 superUnresolved : String -> List String -> Super
 tyConBuiltin : String -> Option Loc -> Ty
+tyConIdsConflict : TyConOrigin -> TyConOrigin -> Bool
 tyConUnresolved : String -> Option Loc -> Ty
 useMemberAlias : UseMember -> Option String
 useMemberLocal : UseMember -> String

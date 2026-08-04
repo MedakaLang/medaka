@@ -7,17 +7,28 @@ what: `registerRecordInfoKeyed` (compiler/types/typecheck.mdk) keys the record-i
 what: registry (`recordByNameRef`) by BARE record-type name across the whole import
 what: graph, `omInsert` last-write-wins, read by `lookupRecordByName`. Whichever
 what: module registers `Cfg` LAST wins the lookup for every importer regardless of
-what: which module's `Cfg` is actually in scope at the use site. `medaka check`
-what: exits 0 with ZERO diagnostics; the interpreter (`medaka run`) reads the wrong,
-what: last-registered `Cfg`'s field type and prints the Int literal `7` as a Float
-what: `7.0`. The native backend (`medaka build` + run the binary) prints the correct
-what: `7` -- it disambiguates via mangled constructor keys on the emit path, a
-what: property the shared bare-keyed registry itself does not have. This is a genuine
-what: THREE-ENGINE DIVERGENCE (eval wrong, native/wasm right) reachable with NO
-what: diagnostic anywhere.
-cmd: run entry.mdk
-exit: 0
-stdout: 7.0
+what: which module's `Cfg` is actually in scope at the use site.
+what: ⚠️ RE-PINNED 2026-08-04 (#1111 Stage A-2 unit A-2.10). THE DEFECT IS UNCHANGED
+what: -- `recordByNameRef` is still bare-name keyed and still last-write-wins, and
+what: `lookupRecordByName` still returns ZRMOD's `Cfg` for a name that resolves to
+what: ARMOD's. What changed is the OBSERVABLE. A-2.10 made every type-head
+what: comparison read the module identity Stage A-1 landed, so the wrong `Cfg` the
+what: registry hands back no longer unifies with the `Cfg` the annotation names:
+what: `check` now REJECTS with a located `T-TYPE-MISMATCH` whose help names both
+what: modules, instead of exiting 0 and letting the interpreter print `7.0` where
+what: `7` was written.
+what: 🚨 SO THIS IS NOT A FIX AND MUST NOT BE READ AS ONE. The program is honestly
+what: well-typed -- only `armod`'s `Cfg` is in scope -- so the new behaviour is a
+what: FALSE REJECT of a valid program. Its severity moved S0 (silent wrong value,
+what: three-engine divergence) -> S1 (loud wrong rejection), which is the direction
+what: AGENTS.md's ladder calls progress, and it is now the SAME SHAPE as #1259
+what: (`universeDataEnv`, bare constructor key) and #1257 (`ifaceSlotKey`): a
+what: bare-name-keyed registry supplying the wrong identity, made visible by a
+what: comparison that reads identity. It drains when the RECORD namespace is
+what: re-keyed, not before.
+cmd: check-json entry.mdk
+exit: 1
+diag-code: T-TYPE-MISMATCH 9:16-9:17
 control: run control.mdk
 why-fixture: MULTI-MODULE PIN, and it cannot be anything else -- this bug needs two
 why-fixture: separate modules that share a record-type name, one of which is imported
@@ -26,25 +37,41 @@ why-fixture: same-directory sibling imports with no medaka.toml (same convention
 why-fixture: 1069-dataparamkinds-bare-name-collision/ and
 why-fixture: 1092-methodifaceparamsref-bare-name-collision/ in this corpus), and load
 why-fixture: only what entry.mdk/control.mdk transitively import.
-why-fixture: Pinned on `run`, not `check-json`, because the defect's OBSERVABLE payload
-why-fixture: is the wrong VALUE the interpreter produces -- `check` itself emits no
-why-fixture: diagnostic at all (that silence is part of what makes this an S0), so
-why-fixture: there is no diagnostic to pin; the wrong runtime value is the only
-why-fixture: pinnable symptom.
+why-fixture: ⚠️ THE VERB CHANGED WITH THE OBSERVABLE. It was `run entry.mdk` + `stdout:
+why-fixture: 7.0`, because the defect's payload WAS the wrong value the interpreter
+why-fixture: produced and `check` emitted no diagnostic at all. There is a diagnostic
+why-fixture: now, and it is the whole symptom, so the pin moves to `check-json` --
+why-fixture: which is also the stronger pin: an exit-1 `run` pin could not distinguish
+why-fixture: this rejection from any other failure, since the message lands on stderr
+why-fixture: and this harness does not grade stderr (#1130 in
+why-fixture: test/MUST-FAIL-NOT-PINNABLE.txt).
+why-fixture: Pinned with `diag-code` (not `diag`) per TESTING-DESIGN's default -- the
+why-fixture: exact wording is not the defect; the defect is that a mismatch fires AT
+why-fixture: ALL against a program that only ever names `armod`'s `Cfg`. Same
+why-fixture: reasoning as 1259-dataenv-ctor-bare-name-collision/, which is the same
+why-fixture: defect one namespace over and pins the same code.
 why-control: control.mdk is BYTE-IDENTICAL to entry.mdk except the `import zrmod.{zrf}`
 why-control: line and the presence of zrmod.mdk in the import graph are both removed --
 why-control: the ONE flipped feature, and exactly the issue's own stated control. With
 why-control: no other module declaring `Cfg`, `v`'s Int field must survive intact and
-why-control: print `7`.
+why-control: print `7`. Kept on `run` rather than moved to `check-json` with the cmd:
+why-control: the control's job is to prove the honest program still produces the RIGHT
+why-control: VALUE, and that is what the original defect corrupted.
 why-note: NOT the same defect as 1216-xmod-record-field-name-collision/, which pins a
 why-note: FIELD-INDEX collision (two records sharing a field name) with the OPPOSITE
 why-note: engine polarity (eval right, native wrong there). This fixture is a
-why-note: RECORD-TYPE-NAME collision in registerRecordInfoKeyed/lookupRecordByName,
-why-note: with eval wrong and the compiled backends right -- a different defect in the
-why-note: same general area of record machinery.
+why-note: RECORD-TYPE-NAME collision in registerRecordInfoKeyed/lookupRecordByName.
 why-note: fix shape per the issue: carry module identity (the TyConOrigin already
 why-note: threaded through registerRecordInfoKeyed as parameter `o`, currently used
 why-note: only to mint the result Mono via `tconFrom o typeName`) into the registry
 why-note: KEY as well, so recordByNameRef stops being a bare-name last-write-wins
-why-note: table. That flips entry.mdk's printed value to `7`, draining this row.
-why-note: Close #1256 and delete this fixture when that happens.
+why-note: table.
+why-note: ⚠️ THAT FIX IS NOW BIGGER THAN THE ISSUE ORIGINALLY IMPLIED, and whoever
+why-note: takes it should know why before starting: the KEY is only half of it.
+why-note: `lookupRecordByName : String -> Option RecordInfo` takes a bare name because
+why-note: its callers (`inferRecordCreate`, `inferPatRec`, `inferVariantUpdate`) have
+why-note: only the surface spelling from the AST -- a record LITERAL carries no
+why-note: `TyConOrigin` today. Re-keying the table without giving the OCCURRENCE an
+why-note: identity to look it up with turns every record literal into a miss.
+why-note: Close #1256 and delete this fixture when a record literal resolves to the
+why-note: `Cfg` its module actually imported -- i.e. when entry.mdk prints `7`.

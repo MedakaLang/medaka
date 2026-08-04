@@ -1,0 +1,19 @@
+-- #1111 A-2.10 VALID-PROGRAMS BATTERY, module 1/3 — the DEFINER.
+-- Everything here is declared exactly once in the graph and imported by name
+-- downstream, so every occurrence of `Crate`/`Boxed` in this fixture must
+-- acquire the SAME identity (`OriginModule "base"`) no matter how many
+-- re-export hops it travels.  If it does not, A-2.10's comparison rejects a
+-- program that is honestly well-typed — which is the regression this battery
+-- exists to catch, not the defect it exists to prove.
+public export data Crate a = MkCrate a
+
+export unCrate : Crate Int -> Int
+unCrate (MkCrate n) = n
+
+export interface Wrap a where
+  wrap : a -> Crate a
+
+export impl Wrap Int where
+  wrap n = MkCrate n
+
+export type Boxed = Crate Int

@@ -1,0 +1,56 @@
+-- #1111 A-2.10 BYSTANDER FIXTURE — "feature + UNRELATED code still behaves",
+-- which is the shape `AGENTS.md` requires of a change that alters what a
+-- PROGRAM-WIDE comparison answers, as opposed to "feature works".
+--
+-- A-2.10 makes six type comparisons read the module identity on a type head.
+-- The fixtures that prove the FEATURE are the drained #1208/#1209 repros — each
+-- asserts that two DIFFERENT types sharing a name are now REJECTED.  This one
+-- asserts the other half, which no drained repro can: that a module which
+-- shadows nothing is inferred exactly as it would be with no collision anywhere
+-- in the graph.
+--
+-- The graph DOES contain a collision: `pa.mdk` and `pz.mdk` both declare a type
+-- `Twin` at arity 1, with different payloads.  Only their unrelated FUNCTIONS
+-- are imported here, so both `Twin`s are registered into the cross-module
+-- universe and neither is nameable from this file.  NOTHING BELOW MENTIONS
+-- `Twin`.
+--
+-- 🔬 COUNTERFACTUAL RUN AGAINST THIS HEADER'S OWN CLAIM (the check `AGENTS.md`
+-- asks for, because a header that merely ASSERTS coverage is the commonest
+-- prose defect in this arc).  The claim is "this fixture is sensitive to the
+-- A-2.10 mechanism".  Deleting the mechanism — reverting `unifyN`'s arm to the
+-- name-only `if a == b` — leaves this fixture GREEN.  That is stated rather
+-- than hidden, and it is the CORRECT result for a bystander: its job is to fail
+-- when the mechanism BREAKS UNRELATED CODE, and a fixture that also moved when
+-- the mechanism was removed would be a feature test wearing a bystander's
+-- header.  What it IS sensitive to, verified by construction rather than by
+-- assertion: every binding below names a head that must acquire an identity —
+-- `own`'s types by import, the prelude's by prepending, the builtins by their
+-- own mint — so any of them acquiring the WRONG one (or acquiring one that
+-- conflicts with the identity its DEFINER's own body uses) removes the binding
+-- from this golden.  The collision two modules over is what makes that a live
+-- risk rather than a hypothetical.
+import own.{Parcel(..), unParcel, Weigh(..), weigh, Sack}
+import pa.{pa1} -- ONLY the function; never pa's Twin
+import pz.{pz1} -- ONLY the function; never pz's Twin
+
+crossModuleType : Parcel Int
+crossModuleType = MkParcel 5
+
+crossModuleAlias : Sack -> Int
+crossModuleAlias p = unParcel p
+
+crossModuleDispatch : Int
+crossModuleDispatch = weigh (unParcel crossModuleType)
+
+externSourced : Bool
+externSourced = stringLength "xy" < 2
+
+preludeTypes : Option (Result String Int)
+preludeTypes = Some (Ok 1)
+
+builtinHeads : (List Int, String)
+builtinHeads = ([1, 2], "s")
+
+throughCollidingModules : Int
+throughCollidingModules = pa1 (pz1 3)

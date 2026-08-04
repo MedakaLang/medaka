@@ -539,6 +539,7 @@ findTvarN : Mono -> Int -> Option Mono
 firstDictForEncl : Int -> String -> List (Int, String) -> Option String
 firstDispatchIdx : List String -> Int -> List Ty -> Option Int
 firstFieldName : List FieldAssign -> Option String
+firstIdConflict : Mono -> Mono -> Option (String, TyConOrigin, TyConOrigin)
 firstImplMethodLoc : List ImplMethod -> Option Loc
 firstOrZero : List Int -> Int
 firstPredForEncl : String -> Mono -> String -> List (String, Mono, String) -> Option String
@@ -620,6 +621,7 @@ headTyconNameMono : Mono -> Option String
 headTyconNameTy : Ty -> Option String
 headTyconTy : Ty -> Option HeadKey
 holeFillParam : String -> List (String, Expr) -> Option Expr -> Param
+idConflictHelp : (String, TyConOrigin, TyConOrigin) -> String
 idsForIfaceSlots : List String -> List Int
 idsForIfaceSlotsGo : Int -> List String -> List Int
 ifaceAtMonoId : Int -> List Mono -> List String -> Option String
@@ -1014,6 +1016,7 @@ opDictVarOf : Bool -> String -> Mono -> Bool -> String -> Option String
 openRow : Unit -> EffRow
 openRowHint : List Atom -> String
 ordCompareOp : Mono -> Mono -> Mono
+originPhrase : TyConOrigin -> String
 overAppliedMsg : String -> Int -> Int -> String
 overrideScopedMethods : List Decl -> Map String (List (Ident, (String, List String, Ty, List (String, List Kind)))) -> List String -> Map String (String, List String, Ty, List (String, List Kind)) -> Map String (String, List String, Ty, List (String, List Kind))
 ownMethodIdent : List Decl -> String -> Option Ident
@@ -1276,6 +1279,7 @@ rowKindMismatchMsg : List (String, Option String) -> Option String -> String
 rowSlotArgMono : List (String, Ref Effvar) -> List (String, Mono) -> Ty -> Mono
 runFinalChecks : List Decl -> List Decl -> Unit
 sameRootId : Int -> Mono -> Bool
+sameSpellingHint : Mono -> Mono -> Option String
 sccSchemes : List (String, Ty) -> Map String (List (List Pat, Expr)) -> Bool -> List (String, Mono) -> List (String, Scheme)
 schemeHasConcreteDomain : Scheme -> Bool
 schemeIds : Scheme -> List Int

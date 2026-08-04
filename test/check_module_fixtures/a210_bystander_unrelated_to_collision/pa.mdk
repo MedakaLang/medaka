@@ -1,0 +1,11 @@
+-- #1111 A-2.10 BYSTANDER: half one of the SAME-NAME COLLISION the entry never
+-- names.  `Twin` here is arity 1 over a `String` payload; `pz.mdk` declares an
+-- unrelated `Twin` at the same arity over an `Int`.  Both are registered into
+-- the cross-module universe.  The entry imports only `pa`'s unrelated function.
+public export data Twin a = MkTwinA a String
+
+export takeA : Twin Int -> Int
+takeA (MkTwinA n _) = n
+
+export pa1 : Int -> Int
+pa1 n = n + 1

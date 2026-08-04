@@ -1,0 +1,12 @@
+-- #1111 A-2.10 BYSTANDER: half two of the SAME-NAME COLLISION.  Same spelling
+-- and arity as `pa.mdk`'s `Twin`, different payload and a different constructor
+-- name (so the already-fixed R-AMBIGUOUS-CTOR path, #674/#732, cannot fire and
+-- mask this).  Sorted after `pa`, so it is the one that registers LAST and would
+-- win a bare-name last-write-wins lookup.  The entry imports only `pz1`.
+public export data Twin a = MkTwinZ a Int
+
+export takeZ : Twin Bool -> Bool
+takeZ (MkTwinZ b _) = b
+
+export pz1 : Int -> Int
+pz1 n = n * 2

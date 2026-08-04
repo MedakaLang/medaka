@@ -18,6 +18,11 @@ import frontend.ast.{
   Ns(..),
   Ident(..),
   mkIdent,
+  -- #1111 Stage A-2 unit A-2.10: the ONE type-head comparison every "same
+  -- type?" test below is written against.  Its doc-comment derives why an
+  -- absent origin makes no claim here while `ifaceIdMatches`/`tabKeyEq` refuse
+  -- absence outright — do not copy either shape to the other site.
+  sameTyConHead,
   tyConBuiltin,
   firstTyLoc,
   firstTyLocList,
@@ -116,6 +121,7 @@ import support.util.{
   isNonEmptyL,
   minI,
   isSome,
+  orElseOpt,
   zipL,
   dedup,
   dedupBy,
@@ -143,11 +149,25 @@ public export data Mono =
   -- fact, and a parallel ADT would buy a conversion at every seam relating a
   -- declaration to a head that spells it.
   --
-  -- ⚠️ CARRIER ONLY — NOTHING READS IT YET, and no answer changes.  Every
-  -- comparison below (`unifyN`, `cohGoR`, `cohEqR`, `matchStep`, `monoHeadCon`,
-  -- …) ignores the field deliberately, so two modules' same-named types still
-  -- unify exactly as they did.  Making them stop is a LATER unit with its own
-  -- fixture; a comparison quietly added here would change acceptance.
+  -- ⚠️ THIS FIELD IS READ, AND IT DECIDES ACCEPTANCE (#1111 Stage A-2 unit
+  -- A-2.10).  It said "CARRIER ONLY — NOTHING READS IT YET, and no answer
+  -- changes" until this unit; that was already FALSE on `main` before it
+  -- (`headTyconMono` read it from A-2.2 onward), and a reviewer traced a shipped
+  -- S0 to believing it — the retained `hd == Some hk` guard in
+  -- `implExistsForHeadGo`, which compared an origin-carrying impl head against a
+  -- frequently-origin-less goal head inside a bucket keyed by spelling, and so
+  -- answered `False` wherever they differed.  The lesson is worth more than the
+  -- correction: a "nothing reads this" claim is a NEGATIVE about the whole file
+  -- and expires the moment any unit adds a reader, with no gate that notices.
+  --
+  -- What is true now: the SIX "are these the same type?" tests — `unifyN`,
+  -- `cohGoR`, `cohStep`, `cohEqR`, `matchStep`, `monoSameGiven` — all read it,
+  -- all through the single seam `sameTyConHead` (`frontend/ast.mdk`), whose
+  -- doc-comment owns the absent-origin rule and its derivation.  Two modules'
+  -- same-named types no longer unify.  The head PROJECTIONS are a separate
+  -- question: `headTyconMono` carries the origin into a `HeadKey`, while
+  -- `monoHeadCon`/`headTyconNameMono` still hand out a bare name — that is the
+  -- spelling-keyed dispatch residual (#1274, `dispHeadTab`), not this rule.
   --
   -- 🚨 THE CONSTRUCTOR IS NEVER APPLIED OUTSIDE THE FOUR MINTS BELOW
   -- (`tconBuiltin` / `tconTupleHead` / `tconFrom` / `tconUnresolved`), and that is
@@ -158,8 +178,14 @@ public export data Mono =
   -- every construction through four one-line helpers makes that four decisions,
   -- each named after the identity class it claims, and
   -- `test/typecheck_compiler_source.sh` pins the set.  Everything else that
-  -- mentions `TCon` in this file is a PATTERN, recognisable because its origin
-  -- slot is `_` — nothing reads the field yet, so nothing needs to bind it.
+  -- mentions `TCon` in this file is a PATTERN — most with `_` in the origin
+  -- slot, and (since A-2.10) SEVEN that BIND it: `headTyconMono` plus the six
+  -- comparisons above.  The ratchet's own remedy predicted exactly that ("a
+  -- pattern that legitimately BINDS the origin is the expected first false
+  -- positive; list it, and the list stays the audit"), so those seven are
+  -- enumerated there and the enumeration is the audit — do not re-describe the
+  -- population with a `_`-shaped rule of thumb, which is what this paragraph
+  -- did until the seventh reader landed.
   --
   -- ⚠️ AND NOTHING REBUILDS ONE FROM ITS NAME.  `substMono`/`substMonoP` (reached
   -- from `instantiate`, i.e. every use of every imported binding) used to answer
@@ -3855,8 +3881,14 @@ unifyN : Mono -> Mono -> Unit
 unifyN (TVar c1) (TVar c2) = unifyVars c1 c2
 unifyN (TVar c) t = bindVar c t
 unifyN t (TVar c) = bindVar c t
-unifyN (ta@(TCon a _)) (tb@(TCon b _)) =
-  if a == b then
+-- #1111 A-2.10: the head comparison READS THE IDENTITY Stage A-1 landed.  This
+-- is the site the arc turned on — two modules' unrelated `T`s no longer unify
+-- (#1208, #1209), and the origin surviving a link is no longer an artefact of
+-- link direction, so a key computed from the field is a function of the type.
+-- `sameTyConHead` (`frontend/ast.mdk`) owns the absent-origin rule; read its
+-- derivation before changing either side of this.
+unifyN (ta@(TCon a oa)) (tb@(TCon b ob)) =
+  if sameTyConHead a oa b ob then
     ()
   else
     typeMismatch ta tb
@@ -3983,7 +4015,63 @@ typeMismatchReportRest a b = match currentDoOrigin.value
       -- → `Type mismatch: Int vs (a, b) -> (a, b)`) — append the call-syntax hint.
       Some (help, fix) =>
         pushTypeErrorHelpFixAt "T-TYPE-MISMATCH" currentLoc.value "Type mismatch: \{ppMono a} vs \{ppMono b} — \{help}" help fix
-      None => pushTypeError "T-TYPE-MISMATCH" "Type mismatch: \{ppMono a} vs \{ppMono b}"
+      None => match sameSpellingHint a b
+        -- #1111 A-2.10: the mismatch this unit MAKES REACHABLE renders with two
+        -- identical sides (`Type mismatch: T vs T`) — true, and useless without
+        -- this.  Turning a silent accept into a message a user cannot act on
+        -- would trade an S0 for an S2, which the severity ladder counts as a
+        -- fix only for the first half.
+        Some help =>
+          pushTypeErrorHelpFixAt "T-TYPE-MISMATCH" currentLoc.value "Type mismatch: \{ppMono a} vs \{ppMono b} — \{help}" help None
+        None => pushTypeError "T-TYPE-MISMATCH" "Type mismatch: \{ppMono a} vs \{ppMono b}"
+
+-- ── same-spelling mismatch hint (#1111 A-2.10) ─────────────────────────────
+-- Fires ONLY when the two sides RENDER identically and some head inside them
+-- carries two conflicting module identities — i.e. exactly the mismatch this
+-- unit newly reports.  Both conditions matter: the render test is what makes
+-- the hint appear where the message is otherwise unreadable, and the conflict
+-- search is what lets it name the two modules instead of hand-waving.
+--
+-- ⚠️ IT CANNOT MOVE AN EXISTING GOLDEN, and that is structural rather than
+-- lucky: `firstIdConflict` answers `Some` only where both origins are present
+-- and differ, and before this unit every such pair UNIFIED — so no diagnostic
+-- that exists today can reach this arm.  (The other in-tree source of two
+-- identically-rendering sides, the `__tupleN__` rigid-vs-builtin forgery at
+-- `unifyN`'s cross-population arms, is a `TRigid`: it carries no origin, so it
+-- yields `None` here and its message is untouched.  That residual is #1243.)
+sameSpellingHint : Mono -> Mono -> Option String
+sameSpellingHint a b
+  | ppMono a != ppMono b = None
+  | otherwise = map idConflictHelp (firstIdConflict a b)
+
+idConflictHelp : (String, TyConOrigin, TyConOrigin) -> String
+idConflictHelp (name, o1, o2) = "these are two DIFFERENT types that share the name '\{name}': one comes from \{originPhrase o1}, the other from \{originPhrase o2} — import the one you mean rather than declaring a second type of the same name"
+
+-- User vocabulary, never a constructor spelling (ERROR-QUALITY.md §1).  The
+-- unresolved case is unreachable from `firstIdConflict` (a conflict needs two
+-- present identities) and is answered rather than omitted so this stays total.
+originPhrase : TyConOrigin -> String
+originPhrase (OriginModule m) = "module '\{m}'"
+originPhrase OriginBuiltin = "the language itself"
+originPhrase OriginUnresolved = "an unknown module"
+
+-- The FIRST head, in a parallel structural walk of the two monos, whose name
+-- agrees while its identity does not.  Parallel and shape-guarded on purpose:
+-- the two sides render identically (the caller's precondition), so they have
+-- the same shape, and walking them together is what pairs the conflicting head
+-- with its counterpart rather than reporting some unrelated head.
+firstIdConflict : Mono -> Mono -> Option (String, TyConOrigin, TyConOrigin)
+firstIdConflict a b = match (normalize a, normalize b)
+  (TCon n1 o1, TCon n2 o2) =>
+    if n1 == n2 && not (sameTyConHead n1 o1 n2 o2) then
+      Some (n1, o1, o2)
+    else
+      None
+  (TApp f1 x1, TApp f2 x2) =>
+    orElseOpt (firstIdConflict f1 f2) (firstIdConflict x1 x2)
+  (TFun d1 _ r1, TFun d2 _ r2) =>
+    orElseOpt (firstIdConflict d1 d2) (firstIdConflict r1 r2)
+  _ => None
 
 -- a mismatch inside a do-lowered chain: if it is the monad-shape (`m b`) vs
 -- non-monad obligation, retarget to the tailored "do requires a monad" error;
@@ -11242,14 +11330,21 @@ cohGoR subst (TVar c1) (TVar c2)
   | otherwise = cohBind subst (tyvarId c1) (TVar c2)
 cohGoR subst (TVar c1) t = cohBind subst (tyvarId c1) t
 cohGoR subst t (TVar c2) = cohBind subst (tyvarId c2) t
-cohGoR _ (TCon a _) (TCon b _) = a == b
--- #1110: name equality, exactly as the shared `TCon` arm gave — INCLUDING the
--- cross-population pairs.  ⚠️ NOT SEPARATELY PROBED — armed because the pre-split
--- `TCon` arm answered these pairings with the same `a == b`, and a rigid and a
--- real head CAN share the name `__tupleN__` (see `Mono.TRigid`).  Whether a
--- coherence sweep can actually be reached with such a pair is unmeasured; the arm
--- is answer-preserving either way.  Measured instances of the same forgery are
--- `unifyN` and `matchStep` (DICT-SEMANTICS §8 I6.2(b), OWED-#1110).
+-- #1111 A-2.10: identity-aware, same rule as `unifyN` (`sameTyConHead`).  Two
+-- impl heads that merely SPELL the same type no longer overlap, so a coherence
+-- conflict is no longer reported between `impl C a.T` and `impl C b.T` — which
+-- is the correct answer: they are different types.
+cohGoR _ (TCon a oa) (TCon b ob) = sameTyConHead a oa b ob
+-- #1110: name equality, exactly as the shared `TCon` arm gave, for the
+-- cross-population pairs ONLY — A-2.10 deliberately left these two alone.  A
+-- `TRigid` carries no origin at all, so routing them through `sameTyConHead`
+-- would compute "no conflict" and answer the same thing; the preserved forgery
+-- is #1243 / §8 I6.2(b), a different clause.  ⚠️ NOT SEPARATELY PROBED — armed
+-- because the pre-split `TCon` arm answered these pairings with the same
+-- `a == b`, and a rigid and a real head CAN share the name `__tupleN__` (see
+-- `Mono.TRigid`).  Whether a coherence sweep can actually be reached with such a
+-- pair is unmeasured; the arm is answer-preserving either way.  Measured
+-- instances of the same forgery are `unifyN` and `matchStep`.
 cohGoR _ (TRigid a) (TRigid b) = a == b
 cohGoR _ (TCon a _) (TRigid b) = a == b
 cohGoR _ (TRigid a) (TCon b _) = a == b
@@ -11330,13 +11425,14 @@ cohStep g0 s0 =
   let s = normalize s0
   match g
     TVar c => MVar (tyvarId c)
-    -- #1110: the shared `TCon` constructor compared these four pairings with one
-    -- `a == b`.  ⚠️ The cross-population ones are NOT SEPARATELY PROBED — armed
-    -- because that arm answered them, and because a rigid and a real head CAN
-    -- both spell `__tupleN__` (see `Mono.TRigid`).  Answer-preserving either way.
-    -- Measured instances: `unifyN`, `matchStep` (§8 I6.2(b), OWED-#1110).
-    TCon a _ => match s
-      TCon b _ => if a == b then MOk else MFail
+    -- #1111 A-2.10 on the `TCon`/`TCon` pairing only (`sameTyConHead`); the
+    -- cross-population arms stay name-only for the reason `cohGoR` gives.
+    -- ⚠️ The cross-population ones are NOT SEPARATELY PROBED — armed
+    -- because the pre-split arm answered them, and because a rigid and a real
+    -- head CAN both spell `__tupleN__` (see `Mono.TRigid`).  Measured instances
+    -- of that forgery: `unifyN`, `matchStep` (§8 I6.2(b), OWED-#1243).
+    TCon a oa => match s
+      TCon b ob => if sameTyConHead a oa b ob then MOk else MFail
       TRigid b => if a == b then MOk else MFail
       _ => MFail
     TRigid a => match s
@@ -11362,8 +11458,9 @@ cohEqMono a b = cohEqR (normalize a) (normalize b)
 
 cohEqR : Mono -> Mono -> Bool
 cohEqR (TVar c1) (TVar c2) = tyvarId c1 == tyvarId c2
-cohEqR (TCon a _) (TCon b _) = a == b
--- #1110: same shape as the `cohGoR` arms — name equality on all four pairings.
+cohEqR (TCon a oa) (TCon b ob) = sameTyConHead a oa b ob
+-- #1110: same shape as the `cohGoR` arms — name equality on the cross-population
+-- pairings, which A-2.10 left alone for the reason given there.
 -- Cross-population pairs NOT SEPARATELY PROBED; armed because the pre-split `TCon`
 -- arm answered them.  Reached from `matchStep`'s consistency check, so it is not
 -- independent of the measured `matchStep` case.  See `Mono.TRigid`.
@@ -13397,8 +13494,14 @@ entryHeadMatches hty itys goals
 --  • TyEffect/TyConstrained wrappers on the head are transparent.
 matchStep : Ty -> Mono -> MStep String Ty Mono
 matchStep (TyVar n) _ = MVar n
-matchStep (TyCon { tyConName = n }) m = match normalize m
-  TCon n2 _ => if n == n2 then MOk else MFail
+matchStep (TyCon { tyConName = n, tyConOrigin = o }) m = match normalize m
+  -- #1111 A-2.10: the IMPL-HEAD-vs-GOAL match reads identity too, by the same
+  -- `sameTyConHead` rule `unifyN` uses.  This is the dispatch half: `impl C a.T`
+  -- no longer matches a goal whose head is `b.T`.  ⚠️ It does NOT make dispatch
+  -- identity-KEYED — `KeyBuckets`/`obUniv*` are still spelling-keyed (#1274,
+  -- `dispHeadTab`); this narrows the candidates a bucket's scan accepts, which
+  -- is why the two can be landed in either order.
+  TCon n2 o2 => if sameTyConHead n o n2 o2 then MOk else MFail
   -- #1110 ANSWER-PRESERVING, and it really does fire — the twin of `tupleSpine`'s
   -- rigid arm.  A real head is uppercase-initial OR one of the four reserved
   -- `__tupleN__` tags (`tupleCtorTyName`, `compiler/frontend/parser.mdk:2137-2141`,
@@ -17237,12 +17340,13 @@ monoSameGiven a b = match normalize a
   TVar c1 => match normalize b
     TVar c2 => tyvarId c1 == tyvarId c2
     _ => False
-  -- #1110: the shared `TCon` constructor answered all four pairings with one
-  -- `x == y`.  ⚠️ Cross-population pairs NOT SEPARATELY PROBED — armed because
-  -- that arm answered them (`__tupleN__`; see `Mono.TRigid`).  Answer-preserving
-  -- either way; measured instances are `unifyN` and `matchStep`.
-  TCon x _ => match normalize b
-    TCon y _ => x == y
+  -- #1111 A-2.10 on the `TCon`/`TCon` pairing (`sameTyConHead`): an in-scope
+  -- dict given for `C a.T` no longer answers a goal `C b.T`.  ⚠️ Cross-population
+  -- pairs left name-only and NOT SEPARATELY PROBED — armed because the pre-split
+  -- arm answered them (`__tupleN__`; see `Mono.TRigid`), and a rigid carries no
+  -- origin, so routing them through `sameTyConHead` would answer the same.
+  TCon x ox => match normalize b
+    TCon y oy => sameTyConHead x ox y oy
     TRigid y => x == y
     _ => False
   TRigid x => match normalize b
