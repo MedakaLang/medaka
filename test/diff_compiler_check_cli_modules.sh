@@ -1123,12 +1123,22 @@ fi
 # writes a SECOND `impl Desc Cfg` having imported the same file as `src.u`.  One
 # modId ⇒ one `Cfg` ⇒ genuine overlap ⇒ REJECT naming both modules.
 #
-# ⚠️ AND THE PRE-FIX BEHAVIOUR IS WORSE THAN AN ACCEPT — measured, exit 0, `run`
-# prints **2**.  The honest arithmetic for two live impls would be 1 + 2 = 3; one of
-# the two calls reaches the OTHER module's impl.  So the two-modIds defect is not
-# only "a valid program is rejected" (the `Config vs Config` leg) but also "an
-# invalid program is silently miscompiled", which is why this leg pins a REJECT and
-# not merely a diagnostic.
+# ⚠️ ATTRIBUTION, MEASURED ON THREE BINARIES — and it is NARROWER than an earlier
+# draft of this comment claimed.  That draft read the silent `2` as showing the
+# two-modIds loader defect is "also an invalid program is silently miscompiled".
+# It is not: on `main` (the loader defect alone, WITHOUT A-2.10) this same nest3
+# program is CORRECTLY REJECTED — `Conflicting 'impl Desc'. Defined in other and
+# lib.t`, exit 1, on both `check` and `run`.  Right answer, wrong reason (main's
+# coherence compares heads by NAME, so it rejects two heads it also believes are
+# two different types).  The silent exit-0 `2` — honest arithmetic for two live
+# impls would be 1 + 2 = 3, so one call reaches the OTHER module's impl — appears
+# ONLY on A-2.10-WITHOUT-the-loader-fix, an intermediate that never shipped.
+#
+# So: the pre-existing loader defect on `main` is a FALSE REJECT (S1, the
+# `Config vs Config` / `nested-project-impl` legs).  The S0 was A-2.10's OWN, and
+# the loader fix is what stops it shipping.  This leg pins a REJECT rather than
+# merely a diagnostic because that intermediate is reachable by anyone who lands
+# the comparison change without the supply change.
 mkdir -p "$TMP/nest3/src" "$TMP/nest3/lib"
 cat > "$TMP/nest3/medaka.toml" <<'EOF'
 name = "nest3"
@@ -1176,6 +1186,115 @@ case "$n3_out" in
     fi ;;
   *) fail=$((fail+1)); printf 'FAIL A-2.10/nested-project-real-conflict (two impls for ONE type accepted — the file still has two modIds: exit %d [%s])\n' "$n3_code" "$n3_out" ;;
 esac
+
+# ── THE CANONICALIZATION MUST ROUND-TRIP (the loader fix's own S0) ────────────
+#
+# 🚨 THESE THREE LEGS EXIST BECAUSE THE FIX ABOVE INTRODUCED A WORSE BUG THAN THE
+# ONE IT CLOSED, AND EVERY ACCEPT LEG ABOVE STAYED GREEN THROUGH IT.  `canonicalModId`
+# mints an id with `moduleIdOfPath`, which is a LOSSY path→id map (`slashToDot`), and
+# hands it straight back to `findModuleFile` — which reads it in a DIFFERENT namespace:
+# declared dependency NAMES are consulted first, and every dot is a directory
+# separator.  Measured on three binaries (`origin/main` 40756bea, PR-head-without-the-
+# loader-hunk, PR head): main answers 42 to all three; the unguarded fix answers
+# **99, 99, and `unknown module`**.  Two silent wrong FILES at exit 0 and one hard
+# break, on programs that compiled correctly before.
+#
+# ⚠️ NOTHING ELSE IN THIS CORPUS CAN SEE THEM.  They are `nested-project-*`'s exact
+# shape — an entry below its `medaka.toml`, so `entrySearchRoots` yields two roots —
+# with ONE extra ingredient each, and the ingredient is what makes the minted id
+# resolve somewhere else.  A leg that only asserts "the good layout still works"
+# is a NOTHING → SOMETHING check by construction: before the fix no id was
+# manufactured on this path at all, so no pre-existing fixture could fail.
+#
+# THE GUARD: accept the mint only if it re-resolves to the file it was derived
+# from, else keep the raw spelling (`canonRoundTrips`, compiler/driver/loader.mdk).
+# Delete the `canonRoundTrips` call and all three of these go red; the accept legs
+# above do not.
+
+# (a) DEP-NAME CAPTURE — the nastiest, because it is a silent wrong FILE at exit 0.
+#     `src` is both the entry's own directory AND a declared dependency name.  The
+#     import `util` resolves next to the entry, canonicalizes to `src.util`, and
+#     re-resolution hits `resolveDepFile` first — so the DEP's `other/util.mdk` is
+#     loaded in place of the sibling the programmer wrote.  42 -> 99, exit 0.
+mkdir -p "$TMP/rtdep/src" "$TMP/rtdep/other"
+cat > "$TMP/rtdep/medaka.toml" <<'EOF'
+name = "rtdep"
+
+[dependencies]
+src = "./other"
+EOF
+cat > "$TMP/rtdep/src/util.mdk" <<'EOF'
+export answer : Int
+answer = 42
+EOF
+cat > "$TMP/rtdep/other/util.mdk" <<'EOF'
+export answer : Int
+answer = 99
+EOF
+cat > "$TMP/rtdep/src/main.mdk" <<'EOF'
+import util.{answer}
+
+main = println answer
+EOF
+rt_a="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" run "$TMP/rtdep/src/main.mdk" 2>&1)"
+rt_a_code=$?
+if [ "$rt_a_code" -eq 0 ] && [ "$rt_a" = "42" ]; then
+  pass=$((pass+1)); printf 'ok   A-2.10/canon-roundtrip-depname (the sibling util.mdk is loaded, not the same-named dep)\n'
+else
+  fail=$((fail+1)); printf 'FAIL A-2.10/canon-roundtrip-depname (SILENT WRONG FILE: exit %d, got [%s], want 42)\n' "$rt_a_code" "$rt_a"
+fi
+
+# (b) DOTTED DIRECTORY, SHADOWED — silent wrong file at exit 0.  The entry lives in
+#     `a.b/`, so `helper` mints `a.b.helper`, which re-reads as `a/b/helper.mdk`.
+mkdir -p "$TMP/rtdot/a.b" "$TMP/rtdot/a/b"
+cat > "$TMP/rtdot/medaka.toml" <<'EOF'
+name = "rtdot"
+EOF
+cat > "$TMP/rtdot/a.b/helper.mdk" <<'EOF'
+export answer : Int
+answer = 42
+EOF
+cat > "$TMP/rtdot/a/b/helper.mdk" <<'EOF'
+export answer : Int
+answer = 99
+EOF
+cat > "$TMP/rtdot/a.b/main.mdk" <<'EOF'
+import helper.{answer}
+
+main = println answer
+EOF
+rt_b="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" run "$TMP/rtdot/a.b/main.mdk" 2>&1)"
+rt_b_code=$?
+if [ "$rt_b_code" -eq 0 ] && [ "$rt_b" = "42" ]; then
+  pass=$((pass+1)); printf 'ok   A-2.10/canon-roundtrip-dotted-dir (a `.` in a DIRECTORY name is not a separator)\n'
+else
+  fail=$((fail+1)); printf 'FAIL A-2.10/canon-roundtrip-dotted-dir (SILENT WRONG FILE: exit %d, got [%s], want 42)\n' "$rt_b_code" "$rt_b"
+fi
+
+# (c) DOTTED DIRECTORY, UNSHADOWED — the same mint with no file to land on, so it is
+#     a HARD BREAK (`unknown module: a.b.helper`) rather than a wrong answer.  Kept
+#     as its own leg: (b) and (c) differ only in whether a decoy exists, and a fix
+#     that merely reordered the roots would split them.
+mkdir -p "$TMP/rtdot2/a.b"
+cat > "$TMP/rtdot2/medaka.toml" <<'EOF'
+name = "rtdot2"
+EOF
+cat > "$TMP/rtdot2/a.b/helper.mdk" <<'EOF'
+export answer : Int
+answer = 42
+EOF
+cat > "$TMP/rtdot2/a.b/main.mdk" <<'EOF'
+import helper.{answer}
+
+main = println answer
+EOF
+rt_c="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" run "$TMP/rtdot2/a.b/main.mdk" 2>&1)"
+rt_c_code=$?
+if [ "$rt_c_code" -eq 0 ] && [ "$rt_c" = "42" ]; then
+  pass=$((pass+1)); printf 'ok   A-2.10/canon-roundtrip-dotted-dir-nofallback (an unresolvable mint is never emitted)\n'
+else
+  fail=$((fail+1)); printf 'FAIL A-2.10/canon-roundtrip-dotted-dir-nofallback (exit %d, got [%s], want 42)\n' "$rt_c_code" "$rt_c"
+fi
 
 # ── #1111 A-2.10: TWO MODULES' SAME-NAMED TYPES MAY EACH CARRY THEIR OWN IMPL ──
 #

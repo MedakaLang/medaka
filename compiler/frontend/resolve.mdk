@@ -3835,16 +3835,29 @@ fillDeclOrigin _ (o@(OriginModule _)) = o
 --                  occurrence carrier and why `declHeadOf` (the agreement probe)
 --                  has no `DImpl` arm.
 --
--- ⚠️ NOTHING READS THESE FIELDS YET — RE-VERIFIED 2026-08-04, and stated with the
--- command because a negative about the whole tree has no other expiry:
+-- ⚠️ THREE OF THE FOUR ARE UNREAD.  `implOrigin` IS READ — do not extend the
+-- negative to it.  Re-derived 2026-08-04, and stated with the command because a
+-- negative about the whole tree has no other expiry.  Note the **`-E`**: in a BRE
+-- `|` is a LITERAL, so the alternation this paragraph used to carry ran as a
+-- search for the single string `superOrigin|requireOrigin|…` and matched exactly
+-- one line — ITS OWN TEXT.  A probe that cannot fail manufactures the confidence
+-- the claim needs, which is how the `implOrigin` half of this sentence stayed
+-- "verified" while being false.
 --
---     grep -rn --include=*.mdk 'superOrigin|requireOrigin|constraintOrigin|implOrigin' compiler
+--     grep -rnE --include=*.mdk 'superOrigin|requireOrigin|constraintOrigin' compiler
+--     grep -rn  --include=*.mdk 'implOrigin' compiler
 --
--- prints only `frontend/ast.mdk` (the declarations + the `OriginUnresolved`
--- literals) and this file's own stamper.  ⚠️ The DECL-layer sentence above
--- (`stampGraphTyOrigins`' fields) said the same thing and had gone FALSE — Stage
--- A-2 reads `dataOrigin`/`ifaceOrigin` — so re-run this grep before reusing the
--- claim; these are the interface-OCCURRENCE carriers, a different set.
+-- The first prints only `frontend/ast.mdk` (the declarations + the
+-- `OriginUnresolved` literals), this file's own stamper/mappers, and
+-- `entries/origin_agreement_main.mdk` (the agreement PROBE, which grades them —
+-- no compile stage consumes them).  The second prints four genuine READS, and
+-- they landed with #1274 on `main`, so the old blanket negative was already false
+-- when it was written: `ir/core_ir_lower.mdk` and `eval/eval.mdk`
+-- (`ifaceIdentity o ifaceName` in the impl-head row builders) and
+-- `types/typecheck.mdk` twice (`checkGradedImplHeadDecl`,
+-- `implCompletenessMsgsOfMap`).  ⚠️ The DECL-layer sentence above
+-- (`stampGraphTyOrigins`' fields) went FALSE the same way — Stage A-2 reads
+-- `dataOrigin`/`ifaceOrigin` — so re-run both greps before reusing any of this.
 -- The R-series `AmbiguousInterface` diagnostic and the re-keying of the bare-name
 -- dispatch tables (#1047) are later units.  What lands here is the
 -- FACT, plus the grading that makes the fact observable (`=== ORIGIN AGREEMENT
