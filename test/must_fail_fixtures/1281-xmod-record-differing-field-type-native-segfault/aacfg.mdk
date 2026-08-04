@@ -1,0 +1,8 @@
+-- issue #1281: `aacfg` declares a record TYPE named `Cfg` whose sole field, `fld`,
+-- is a `Float`. `main.mdk` never imports `Cfg` from here -- only the unrelated `aaf`
+-- function -- but this module's `Cfg` is still visible to the native emitter's
+-- program-global record layout via the module graph.
+public export data Cfg = { fld : Float }
+
+export aaf : Int -> Int
+aaf n = n
