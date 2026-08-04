@@ -1,4 +1,0 @@
--- issue #1092: an UNRELATED interface, same bare method name `mth` as ifacea.mdk.
--- Neither interface imports the other.
-export interface IB a where
-  mth : a -> Int

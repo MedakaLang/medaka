@@ -1,0 +1,56 @@
+-- #1111 A-2.5 BYSTANDER FIXTURE — "feature + UNRELATED code still behaves",
+-- which is the shape `AGENTS.md` requires of any change that re-keys a
+-- PROGRAM-GLOBAL TABLE, as opposed to "feature works".
+--
+-- A-2.5 gives the cross-module interface-METHOD table an identity-keyed
+-- companion and, on the module path, overlays the bare-name map per module for
+-- the names two interfaces both declare.  The fixtures that prove the FEATURE
+-- are the drained #1092 repro and its two analyze_project cells — each asserts
+-- that a COLLIDING name now resolves to the interface the importing module
+-- actually named.  This fixture asserts the other half, which none of those can:
+-- that a module which collides with NOTHING is inferred exactly as it would be
+-- with no collision anywhere in the graph.
+--
+-- The graph DOES contain a collision: `mcolla.mdk` and `mcollz.mdk` both declare
+-- a method `cmth : a -> Int`, on two unrelated interfaces, so the universe's
+-- bare-name row for `cmth` is contested and `cmth` is on the collided list.
+-- Only their unrelated FUNCTIONS are imported here, so neither interface and
+-- neither `cmth` is nameable from this file.  NOTHING BELOW MENTIONS `cmth`.
+--
+-- 🚨 THE CLAIM THIS HEADER MAKES, AND THE COUNTERFACTUAL THAT WAS RUN FOR IT:
+-- the claim is "this entry's schemes are byte-identical to what they would be
+-- with the two colliding interfaces deleted from the graph".  That was executed,
+-- not argued — `check_modules_main` was run over this directory a second time
+-- with `interface CollA`/`interface CollZ` removed from the two modules (their
+-- `fa`/`fz` kept, so the imports still resolve), and the dump was identical.
+-- The fixture therefore witnesses INVARIANCE UNDER THE COLLISION, which is what
+-- a bystander is for; it does NOT witness that the collision is resolved
+-- correctly, and must not be cited for that — the analyze_project cells are.
+--
+-- What each line is here for:
+--   * `u` is a real interface-method occurrence (`Uniq.umth`) whose impl
+--     obligation must still be recorded and discharged while `cmth` sits
+--     contested in the same table.  If the per-module overlay rebuilt the map
+--     instead of overlaying it, `umth`'s row could go missing — the obligation
+--     would stop being recorded, and this scheme is the nearest thing that
+--     grades it at check time.
+--   * `n` names only ordinary cross-module functions, one from each colliding
+--     module: the collision is REACHED (both modules are loaded and registered)
+--     without anything colliding being named.
+--   * `lst` / `opt` mention no interface at all — the "what happens to a program
+--     that never touches the table" case `AGENTS.md` asks for directly.
+import mplain.{Uniq, umth, Widget(..)}
+import mcolla.{fa} -- ONLY the function; never mcolla's CollA or cmth
+import mcollz.{fz} -- ONLY the function; never mcollz's CollZ or cmth
+
+u : Int
+u = umth (MkWidget 41)
+
+n : Int
+n = fa (fz 3)
+
+lst : List Int
+lst = [1, 2, 3]
+
+opt : Option String
+opt = Some "s"

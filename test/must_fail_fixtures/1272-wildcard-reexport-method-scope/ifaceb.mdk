@@ -1,0 +1,4 @@
+-- issue #1272: half two. `IB.mth` is what main.mdk's occurrence actually means --
+-- it reaches main.mdk only through mid.mdk's re-export.
+export interface IB a where
+  mth : a -> Int
