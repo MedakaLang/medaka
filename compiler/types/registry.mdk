@@ -247,18 +247,21 @@
 -- signal. It is kept for that reason, and those three doctests exist solely
 -- because no property-level test can distinguish its presence.
 --
--- ⚠️ COUNTING THE BYTE-SHAPE ASSERTIONS: there are FIVE, in two groups with
--- two different jobs, and earlier cuts of this file variously called them
--- "three" and "the ONE doctest" (in one case immediately above three of
--- them). `startsWith "1:…"` lines pin the ident-COUNT prefix, described in
--- this paragraph; `identKey … == "…"` lines pin the origin TAG, described at
--- their own site further down; A-2.4 adds one more of each group (a
--- count-prefix line on a `TabKey`-built key, and `tabKeyRender (TkBare NsType
--- "Foo") == "4:type4:bare0:3:Foo"`, which pins the bare arm's TAG for the same
--- reason). All are the documented exception to the opacity contract above. Do
--- not re-encode a count here — earlier cuts of this paragraph said "three" and
--- "the ONE doctest" and both rotted. DERIVE it:
--- `grep -c '^-- > \(startsWith "1:\|identKey ident.* == "\|tabKeyRender (Tk\)' `
+-- ⚠️ COUNTING THE BYTE-SHAPE ASSERTIONS: they fall in two groups with two
+-- different jobs, and earlier cuts of this file variously called them "three",
+-- "the ONE doctest" (in one case immediately above three of them), and "FIVE"
+-- — that last one written by this very paragraph, in the same breath as its
+-- own instruction not to encode a count, and stale one unit later.
+-- `startsWith "1:…"` lines pin the ident-COUNT prefix, described in this
+-- paragraph; `identKey … == "…"` and `tabKeyRender (TkBare …)` lines pin the
+-- origin/bare TAG, described at their own sites further down (A-2.4 added one
+-- of each: a count-prefix line on a `TabKey`-built key, and `tabKeyRender
+-- (TkBare NsType "Foo") == "4:type4:bare0:3:Foo"`). All are the documented
+-- exception to the opacity contract above. DERIVE the count, never re-encode
+-- it — and match `TkBare`, not the wider `Tk`, which also catches the
+-- identity-arm PROPERTY line (`tabKeyRender (TkIdent …) == identKey …`) that
+-- asserts no bytes at all:
+-- `grep -c '^-- > \(startsWith "1:\|identKey ident.* == "\|tabKeyRender (TkBare\)' `
 -- this file.
 --
 -- ── `regInsert` conflict handling (decided for THIS unit only) ─────────────
@@ -1589,8 +1592,22 @@ slotTable = [(slotGA, 2), (slotPA, 1)]
 
 -- The ident-COUNT prefix is present on a `TabKey`-built key exactly as on an
 -- `Ident`-built one (see the count-prefix paragraph in the module header).
+--
+-- 🚨 THE BLANK LINE BELOW IS PART OF THE ASSERTION, NOT SPACING. A doctest's
+-- expected block runs to the next bare `--`, blank line, or `-- >` line
+-- (`splitIntoBlocks`/`extractGo`, `compiler/tools/doctest.mdk`), so an
+-- unseparated prose paragraph underneath is SWALLOWED INTO the expected text
+-- and the example fails with `expected: True <six lines of prose>` /
+-- `actual: True`. That is exactly how this line reddened `inlang` on PR #1270:
+-- A-2.4 appended this example and #1268 prepended the F5 header below it, each
+-- green alone, and git merged the two seams with no blank line between them —
+-- a conflict-free merge that no gate on either branch could have seen. Derive
+-- the whole file's exposure rather than eyeballing this one site: every
+-- example's expected block, and any with more than one line, falls out of
+-- replaying those two functions over the comment stream.
 -- > startsWith "1:1" (regKeyRender slotPA)
 -- True
+
 -- ── F5: HeadKey — the head-tycon projection's key (A-2.2) ──────────────────
 -- Fixtures mirror the `TabKey` ones above, because the declaration half of a
 -- `HeadKey` IS a `TabKey`: `headA`/`headZ` are the SAME bare head name `Box`
