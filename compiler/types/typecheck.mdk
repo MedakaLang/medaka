@@ -169,11 +169,46 @@ public export data Mono =
   -- fact, and a parallel ADT would buy a conversion at every seam relating a
   -- declaration to a head that spells it.
   --
-  -- ⚠️ CARRIER ONLY — NOTHING READS IT YET, and no answer changes.  Every
-  -- comparison below (`unifyN`, `cohGoR`, `cohEqR`, `matchStep`, `headTyconMono`,
-  -- …) ignores the field deliberately, so two modules' same-named types still
-  -- unify exactly as they did.  Making them stop is a LATER unit with its own
-  -- fixture; a comparison quietly added here would change acceptance.
+  -- ⚠️ IT IS READ, AND STILL NO ANSWER CHANGES — those are now two INDEPENDENT
+  -- facts, and this note collapsed them into "NOTHING READS IT YET" until
+  -- A-2.2b.  That wording is the belief A-2.2b's S0 shipped under: a reader who
+  -- takes it at face value concludes the origin cannot reach dispatch, and then
+  -- promotes a dispatch retest to an identity comparison as a tidy-up.
+  --
+  --   * WHAT READS IT — one clause: `headTyconMono`'s `TCon n o` arm, the only
+  --     place in this file that BINDS the origin slot instead of eliding it
+  --     (`headTyconNameMono`, the name-only residual, does not).  It hands `o` to
+  --     `headKeyOfCon`, so every goal-side `HeadKey` carries the identity.
+  --     Derive the set — this list is prose, the grep is the authority, and it
+  --     can discover a reader whatever it is called:
+  --
+  --       grep -n TCon compiler/types/typecheck.mdk \
+  --         | grep -vE '^[0-9]+:[[:space:]]*--' | grep -vE 'TCon [^ )]+ _'
+  --
+  --     Today that prints the declaration, the four mints below, and that one
+  --     read.  The read is NOT new in A-2.2b — A-2.2 introduced it, and this
+  --     note was already false on `main`; what A-2.2b added is the set of
+  --     consumers that carry it into a DISPATCH decision (`goalHeadCon`, hence
+  --     `KeyBuckets`; and `implExistsForHead`'s three receiver sites).
+  --   * WHAT STILL IGNORES IT — every COMPARISON on a `Mono`.  `unifyN`,
+  --     `cohGoR`, `cohEqR` and `matchStep` each pattern the origin as `_`, so
+  --     two modules' same-named types still unify exactly as they did; `Mono`
+  --     carries no `deriving` clause that could compare it behind their backs.
+  --   * WHY THE ANSWER STILL DOES NOT MOVE — every consumer of the resulting
+  --     `HeadKey` projects it BACK to the bare spelling before comparing:
+  --     `dispHeadTab` (the bucket key, `implExistsForHeadGo`'s retest,
+  --     `countHeadGo` / `countHeadByIfaceGo`, the obligation universes) or
+  --     `headKeyName` / `headKeyNameOr` (the emitted route word).
+  --
+  -- So the field is carried, read, and then deliberately discarded — and the
+  -- discard is LEDGERED, not incidental.  `dispHeadTab` is the list of sites
+  -- whose answer WOULD change the day the goal side becomes supplied and
+  -- canonical, and its own derivation says why that day has not arrived
+  -- (`grep -nw dispHeadTab compiler/types/typecheck.mdk`).  Making the
+  -- comparisons stop ignoring the field is a LATER unit with its own fixture; a
+  -- comparison quietly added here, or a ledgered retest quietly promoted to an
+  -- identity, changes acceptance — the second of those is exactly what A-2.2b
+  -- did three times before review caught it.
   --
   -- 🚨 THE CONSTRUCTOR IS NEVER APPLIED OUTSIDE THE FOUR MINTS BELOW
   -- (`tconBuiltin` / `tconTupleHead` / `tconFrom` / `tconUnresolved`), and that is
@@ -3513,8 +3548,16 @@ currentMethodMismatch = Ref None
 --
 --     What the widening does NOT yet buy them is an identity comparison: the
 --     retest inside `implExistsForHeadGo` projects both sides back through
---     `dispHeadTab`, deliberately, because the goal side has no origin to
---     compare with (see there, and `dispHeadTab`'s own derivation).
+--     `dispHeadTab`, deliberately.  ⚠️ NOT because the goal side "has no origin
+--     to compare with" — an earlier draft said that, and the absolute is what
+--     makes the defect unimaginable.  The goal side came back MIXED (which is
+--     how `implExistsForHeadGo`'s own note puts it, thirty lines from here):
+--     `debug (2 : Int)` SUPPLIES an origin and matched the impl side even
+--     before the fix, while `debug (stringLength "xy")` does not, because
+--     `stdlib/runtime.mdk`'s extern signatures never pass through resolve's
+--     head-stamping walk.  A retest that compares identities therefore does not
+--     fail uniformly — it fails PER PROVENANCE, which is why it looked correct.
+--     (See there, and `dispHeadTab`'s own derivation.)
 --   * every other consumer wanted only the NAME or its presence
 --     (`mainTypeIsAsync`, `tagNumlitCtxIf`, `containerParamScalarArg`,
 --     `domainIsTupleOfArity`, `inferAppExpr`'s not-a-function reframe) and now
@@ -10890,6 +10933,32 @@ headTabIs : Option HeadKey -> TabKey -> Bool
 headTabIs (Some hk) goal = dispHeadTab hk == goal
 headTabIs None _ = False
 
+-- `headTabIs` widened to a goal that may itself be HEADLESS, for the two
+-- counting scans (`countHeadGo`, `countHeadByIfaceGo`) whose goal is an
+-- `Option HeadKey` rather than the `HeadKey` `implExistsForHead` always has.
+-- Same rule, same reason: both sides go through `dispHeadTab`, so the retest is
+-- exactly the partition `bucketOfHead` filed the entries under and never a
+-- stronger one (see the 🚨 note on `implExistsForHeadGo` for what a stronger
+-- one costs, and `dispHeadTab`'s ledger for the enrolment rule).
+--
+-- The headless arm answers True on purpose: `bucketOfHead None` IS the headless
+-- bucket, every entry in it carries `None`, and pre-A-2.2b this was the literal
+-- `"__none__" == "__none__"` those entries were filed under.  The mixed arms are
+-- False, which is likewise what a name-vs-`noneHeadTag` compare answered — minus
+-- the forgery, since a head that SPELLS `__none__` can no longer reach the
+-- headless bucket at all (`headBucketRender`).
+headTabEq : Option HeadKey -> Option TabKey -> Bool
+headTabEq hd (Some goal) = headTabIs hd goal
+headTabEq None None = True
+headTabEq (Some _) None = False
+
+-- the goal-side projection, hoisted OUT of the two scans above for the reason
+-- `implExistsForHead` states: Medaka is strict, so projecting inside the
+-- per-entry arm would rebuild the same `TabKey` once per entry in the bucket.
+headTabOf : Option HeadKey -> Option TabKey
+headTabOf None = None
+headTabOf (Some hk) = Some (dispHeadTab hk)
+
 -- C5: stamp RLocal on each recorded standalone-shadow arg-position site whose
 -- receiver mono now grounds to a concrete head tycon with NO impl of the method.
 -- The receiver HAS an impl (the genuine-method case, e.g. `toList (Some 7)`) → leave
@@ -12755,9 +12824,13 @@ keyForSite table name goals = match matchedEntry table name goals
       Some key
     else
       -- A-2.2b: the ROUTE WORD, projected back to a bare name on purpose — see
-      -- `KeyEntry`.  The collision TEST above is the part that moved onto
-      -- identity; what the checker stamps into the dict cell has to keep
-      -- matching `core_ir_lower.declRouteKey` byte for byte.
+      -- `KeyEntry`.  ⚠️ The collision TEST above did NOT move onto identity, and
+      -- an earlier revision of this line claimed it did: `headCollides` is
+      -- spelling-keyed through `dispHeadTab`, deliberately (see there).  What
+      -- moved onto identity is the FIELD, not the comparison — and it has to
+      -- stay that way here for a second, independent reason: what the checker
+      -- stamps into the dict cell has to keep matching
+      -- `core_ir_lower.declRouteKey` byte for byte.
       Some (headKeyNameOr noneHeadTag hd)
   None => None
 
@@ -13306,14 +13379,42 @@ tyStructEqList _ _ = False
 headCollides : KeyBuckets -> String -> Option HeadKey -> Bool
 headCollides table name hd = countHead table name hd > 1
 
+-- 🚨 SPELLING-KEYED, THROUGH `dispHeadTab`, FOR THE SAME REASON `implExistsForHeadGo`
+-- IS — this is that site's defect a second and third time, and it is enrolled here
+-- rather than argued about.  The scan runs over `bucketOfHead hd buckets`, which
+-- files and finds entries by `headBucketRender` = `regKeyRender (regKeyOfTab
+-- (dispHeadTab …))`, i.e. by the head's SPELLING.  A-2.2b's first cut widened
+-- `KeyEntry`'s head field to an `Option HeadKey` and left the retest as `hd2 == hd`
+-- — `deriving Eq`, hence an IDENTITY comparison — which is strictly stronger than
+-- the bucket being scanned and answers False wherever the two entries' ORIGINS
+-- differ.  That is not hypothetical: on
+-- `test/must_fail_fixtures/1277-xmod-head-spelling-collision-across-ifaces` the
+-- identity form counts 1 where the spelling form (and every pre-A-2.2b binary)
+-- counts 2, measured with a build instrumented to panic when the two disagree.
+--
+-- Why it MATTERS even though no gate moved: `headCollides` / `headCollidesByIface`
+-- going False where they were True makes `keyForSite` / `keyForSiteByIface` stamp
+-- the BARE HEAD WORD instead of the winner's canonical key, while
+-- `core_ir_lower.declRouteKey` derives the impl's own word from a spelling-based
+-- uniqueness test.  That is a dict-word skew — by `keyForSite`'s own #1128 note,
+-- "invisible on the direct-call path … and live on the RDict path".  Today the only
+-- shape that reaches it is #1277, whose own S0 swamps the difference (a
+-- spelling-keyed variant emits byte-identical IR on that program), so it is LATENT;
+-- it goes live the moment #1277 is fixed, at which point the code looks correct and
+-- nothing in the corpus is watching.  Enrolment rule, from `dispHeadTab`: if a
+-- site's answer would CHANGE when the head half becomes an identity, it goes
+-- through that function.
 countHead : KeyBuckets -> String -> Option HeadKey -> Int
-countHead buckets name hd = countHeadGo (bucketOfHead hd buckets) name hd
+countHead buckets name hd =
+  -- goal-side key projected ONCE, here — see `headTabOf`.
+  countHeadGo (bucketOfHead hd buckets) name (headTabOf hd)
 
-countHeadGo : List KeyEntry -> String -> Option HeadKey -> Int
+countHeadGo : List KeyEntry -> String -> Option TabKey -> Int
 countHeadGo [] _ _ = 0
-countHeadGo ((KeyEntry methodNames hd2 _ _ _ _ _ _)::rest) name hd
-  | contains name methodNames && hd2 == hd = 1 + countHeadGo rest name hd
-  | otherwise = countHeadGo rest name hd
+countHeadGo ((KeyEntry methodNames hd2 _ _ _ _ _ _)::rest) name goal
+  | contains name methodNames && headTabEq hd2 goal =
+    1 + countHeadGo rest name goal
+  | otherwise = countHeadGo rest name goal
 
 -- ── #203: INTERFACE-keyed most-specific selector (§3 `inst` = min⊑(match)) ───
 -- The shared min⊑ selector, keyed by INTERFACE (not method name), over the ALL-impls
@@ -13369,15 +13470,19 @@ keyForSiteByIface table iface goals = match selectImplEntryByIface table iface g
 headCollidesByIface : KeyBuckets -> String -> Option HeadKey -> Bool
 headCollidesByIface table iface hd = countHeadByIface table iface hd > 1
 
+-- Spelling-keyed through `dispHeadTab`, the iface-keyed twin of `countHead` —
+-- the full derivation is there, and this site owes it identically: same bucket,
+-- same retest, same `keyForSiteByIface` consequence.
 countHeadByIface : KeyBuckets -> String -> Option HeadKey -> Int
 countHeadByIface buckets iface hd =
-  countHeadByIfaceGo (bucketOfHead hd buckets) iface hd
+  -- goal-side key projected ONCE, here — see `headTabOf`.
+  countHeadByIfaceGo (bucketOfHead hd buckets) iface (headTabOf hd)
 
-countHeadByIfaceGo : List KeyEntry -> String -> Option HeadKey -> Int
+countHeadByIfaceGo : List KeyEntry -> String -> Option TabKey -> Int
 countHeadByIfaceGo [] _ _ = 0
-countHeadByIfaceGo ((KeyEntry _ hd2 _ _ ifn _ _ _)::rest) iface hd
-  | ifn == iface && hd2 == hd = 1 + countHeadByIfaceGo rest iface hd
-  | otherwise = countHeadByIfaceGo rest iface hd
+countHeadByIfaceGo ((KeyEntry _ hd2 _ _ ifn _ _ _)::rest) iface goal
+  | ifn == iface && headTabEq hd2 goal = 1 + countHeadByIfaceGo rest iface goal
+  | otherwise = countHeadByIfaceGo rest iface goal
 
 -- the head node of an (unelaborated) AST type's left-nested `TyApp` spine.
 -- Total (every `Ty` has a head) and ALLOCATION-FREE (it returns a node that
@@ -15881,6 +15986,15 @@ oblIfaceKey iface = TkBare NsIface iface
 -- whose receiver came from an unstamped extern signature (S0; see there).  So
 -- the enrolment rule is: if a site's answer would CHANGE when the head half
 -- becomes an identity, it goes through this function.
+--
+-- ⚠️ AND `implExistsForHeadGo` WAS NOT THE ONLY UNENROLLED RETEST — it was the
+-- only one anybody had looked at.  Round-2 review found the same defect twice
+-- more, in `countHeadGo` and `countHeadByIfaceGo`, each scanning a
+-- spelling-keyed `bucketOfHead` while retesting `hd2 == hd` on `Option HeadKey`.
+-- Both are now enrolled (via `headTabEq` / `headTabOf`) and both appear in the
+-- grep below.  Treat "the fix is applied at the site the report named" as an
+-- incomplete audit for this class: the projections are duplicated per SCAN, so
+-- the question is always which scans exist, not which one was reported.
 --
 --   grep -nw dispHeadTab compiler/types/typecheck.mdk
 dispHeadTab : HeadKey -> TabKey
