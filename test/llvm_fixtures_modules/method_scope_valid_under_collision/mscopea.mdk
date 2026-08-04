@@ -1,0 +1,6 @@
+-- #1111 A-2.5 (#1092): half one of a bare-METHOD-NAME collision.  `MIA` and
+-- `MIB` (mscopeb.mdk) are unrelated interfaces that both declare a method
+-- spelled `mth`.  Loaded FIRST, so `mscopeb`'s declaration is the one that wins
+-- the last-write-wins race in the cross-module method table.
+export interface MIA a where
+  mth : a -> String

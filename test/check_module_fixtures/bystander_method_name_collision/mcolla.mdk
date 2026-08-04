@@ -1,0 +1,11 @@
+-- #1111 A-2.5 BYSTANDER: half one of the bare-METHOD-NAME collision the entry
+-- never names.  `cmth` is declared here by `CollA` and, at the same arity and
+-- with the same signature, by `mcollz.mdk`'s unrelated `CollZ`.  The entry
+-- imports only the function `fa` from here — never `CollA`, never `cmth` — so
+-- the collision is present IN THE GRAPH and absent from everything the golden
+-- asserts about.
+export interface CollA a where
+  cmth : a -> Int
+
+export fa : Int -> Int
+fa n = n + 1

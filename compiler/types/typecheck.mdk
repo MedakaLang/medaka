@@ -16,6 +16,8 @@ import frontend.ast.{
   Ty(..),
   TyConOrigin(..),
   Ns(..),
+  Ident(..),
+  mkIdent,
   tyConBuiltin,
   firstTyLoc,
   firstTyLocList,
@@ -2045,6 +2047,19 @@ public export data PendingEntry =
 -- hot per-node paths).  omInsert is last-write-wins and the register site inserts
 -- in the SAME order the old List prepended, so on a method-name collision the
 -- latest-registered entry wins — identical to the old `lookupAssoc` first-match.
+--
+-- 🚨 #1111 A-2.5 (#1092): "identical to the old first-match" is TRUE and was never the
+-- point.  BOTH forms pick by REGISTRATION ORDER, and neither picks by what the
+-- occurrence resolved to — so on a bare-name collision between two unrelated
+-- interfaces this table hands `recordImplObligation` / `ifaceParamMonos` the WRONG
+-- INTERFACE, silently, in either direction (S0).  The table stays name-keyed here (it
+-- is per-module state and a module's scope binds a bare method name to at most one
+-- declaration — resolve rejects the ambiguous case outright).  What is new is that on
+-- the MODULE path the map installed into it is the universe's map OVERLAID with this
+-- module's own scope for exactly the colliding names — see `applyMethodScopeOverrides`
+-- and the identity-keyed companion `universeMethodIdentsRef`.  The FLAT path is
+-- unchanged and still last-write-wins; a flat program has one user module, so its
+-- names cannot collide across modules (#1115 / E-1 is what would change that).
 
 -- #147: cached SET of iface names with ≥1 method registered above, so
 -- `ifaceRegistered` is an O(log n) membership test instead of a full linear scan
@@ -2161,11 +2176,21 @@ routeLocalSym _ = ""
 -- exactly as PR1 copies universeKeyBucketsRef into shadowKeyTableRef.  The Flat path still
 -- rebuilds those two refs over its whole `prog`, so it never touches these accumulators.
 --   • interface-method NAME → (iface name, iface typarams, declared method Ty).  Method
---     names are globally unique (coherence), so last-write-wins omInsert accumulates to the
---     same map the per-module `fullUniverse` rebuild produced.  EVERY reader is a by-method-
---     NAME omLookup (singleTyparamIfaceMethod / ifaceParamMonos / shadowVarHeadMethodScheme /
---     inferAppExpr / …), never an iteration or an emptiness test, so an extra prior-module
---     entry that this module never names is never queried — byte-identical output.--   • the SET of interface names with ≥1 method registered.  Read only by ifaceRegistered's
+--     🚨 #1111 A-2.5 (#1092): this bullet used to read "Method names are globally unique
+--     (coherence), so last-write-wins omInsert accumulates to the same map the per-module
+--     `fullUniverse` rebuild produced.  EVERY reader is a by-method-NAME omLookup … so an
+--     extra prior-module entry that this module never names is never queried — byte-
+--     identical output."  BOTH halves are FALSE.  Method names are NOT globally unique —
+--     two unrelated interfaces may each declare `mth` — and the final clause is the one
+--     that mattered: on such a collision the entry a prior module wrote IS queried, by
+--     every by-method-NAME omLookup reader (singleTyparamIfaceMethod / ifaceParamMonos /
+--     shadowVarHeadMethodScheme / inferAppExpr / …), which then takes the WRONG INTERFACE
+--     out of it.  That is #1092 (S0).  The per-module rebuild agreed only because it made
+--     the identical wrong choice, which is why nothing caught it.  What is true post-A-2.5:
+--     the Module arm OVERLAYS this map, for the (normally zero) COLLIDED names only, with
+--     what each name resolves to in THIS module's scope (applyMethodScopeOverrides); every
+--     other name still takes the shared map unchanged.  Spellings the overlay does not
+--     reach are open and derived, not a closed set — #1272 / #1275 / #1276.--   • the SET of interface names with ≥1 method registered.  Read only by ifaceRegistered's
 --     omHasKey existence check (core's Num/Eq/Ord are seeded on both paths, so identical).
 -- #154 PR3 (sites #6/#7): the PERSISTENT keyed impl universe for the obligation
 -- checkers (checkImplObligations / checkCallObligations).  The Module arm used to
@@ -2251,10 +2276,24 @@ routeLocalSym _ = ""
 -- `argDispatchIndices a ++ argDispatchIndices b`.  Grow this list ONE module at a time in
 -- `appendUniverseAccums` (BEFORE the Module arm reads it, so module k sees interfaces
 -- 1..k INCLUDING its own — the same membership `accAll ++ prog` gave), copy it into the
--- resetState-wiped methodDispatchIdxRef in the Module arm.  Byte-identical: method names
--- are globally unique and the sole reader is methodDispatchIdx's `lookupAssoc` (first-wins),
--- so the accumulated list carries exactly the entries the per-module rebuild produced, in
--- the same core-first left-to-right order.  Survives per-module `resetState`; cleared per
+-- resetState-wiped methodDispatchIdxRef in the Module arm.  Byte-identical to the old
+-- per-module rebuild — but NOT for the reason this comment used to give.  It said "method
+-- names are globally unique and the sole reader is methodDispatchIdx's `lookupAssoc`
+-- (first-wins)".  🚨 #1111 A-2.5 (#1092): method names are NOT globally unique.  The
+-- equality survives WITHOUT that premise: `argDispatchIndices` is a pure concatenation and
+-- `lookupAssoc` is first-wins on BOTH sides, so accumulator and rebuild hold the same
+-- entries in the same core-first left-to-right order and therefore make the SAME pick,
+-- whatever it is.  What uniqueness was silently doing is making that pick UNAMBIGUOUS;
+-- without it, WHICH of two same-named methods' dispatch indices wins is decided by
+-- registration order.
+-- ⚠️ Whether that order-decided pick is ever OBSERVABLY wrong is UNVERIFIED, and this row
+-- must not be recorded as fixed on the strength of A-2.5: A-2.5 overlays
+-- methodIfaceParamsRef, NOT this list, so it does not touch this table at all.  Two probes
+-- built to expose the pick (one method name at two different dispatch ARG POSITIONS across
+-- two modules, both registration orders) returned the CORRECT value on the A-2.5 binary and
+-- on main alike — i.e. they discriminate nothing, so they are evidence of neither verdict.
+-- Unowned; umbrella #1070 / #1111.
+-- Survives per-module `resetState`; cleared per
 -- RUN by `resetCrossModuleState`; seeded by the core pass (also Module mode).
 -- FLAT-PATH SHADOW FIX (facet 1): interface-method names that a USER top-level fn
 -- shadows on the single-file flat check path.  processSCC drops a scheme with one
@@ -2843,6 +2882,8 @@ data CrossRun = CrossRun {
     universeKeyBucketsRef : Ref (OrdMap (List KeyEntry)),  -- = KeyBuckets, inlined: that alias is defined below this record, so it wouldn't expand in a field-type projection
     universeIfaceRequiredRef : Ref (OrdMap (List String)),
     universeMethodIfaceParamsRef : Ref (OrdMap (String, List String, Ty, List (String, List Kind))),
+    universeMethodIdentsRef : Ref (OrdMap (List (Ident, (String, List String, Ty, List (String, List Kind))))),  -- #1111 A-2.5 (#1092): the identity-keyed COMPANION of the line above — see methodIdentOf
+    universeMethodCollidedRef : Ref (List String),  -- #1111 A-2.5: the method NAMES the line above holds ≥2 distinct identities for (normally EMPTY)
     universeRegisteredIfacesRef : Ref (OrdMap Unit),
     universeMethodDispatchIdxRef : Ref (List (String, Int)),
     universeRecordByName : Ref (OrdMap RecordInfo),
@@ -2904,6 +2945,8 @@ freshCrossRun env = CrossRun {
   universeKeyBucketsRef = Ref omEmpty,
   universeIfaceRequiredRef = Ref omEmpty,
   universeMethodIfaceParamsRef = Ref omEmpty,
+  universeMethodIdentsRef = Ref omEmpty,
+  universeMethodCollidedRef = Ref [],
   universeRegisteredIfacesRef = Ref omEmpty,
   universeMethodDispatchIdxRef = Ref [],
   universeRecordByName = Ref omEmpty,
@@ -11886,6 +11929,226 @@ insertIfaceMethodsAcc _ _ _ [] acc = acc
 -- see registerMethodIfaceParamsMethods for why that is the load-bearing invariant.
 insertIfaceMethodsAcc iface typarams scope ((IfaceMethod mname mty _)::rest) (mp, ifs) = insertIfaceMethodsAcc iface typarams scope rest (omInsert mname (iface, typarams, mty, scope) mp, omInsert iface () ifs)
 
+-- ── #1111 Stage A-2 unit A-2.5 (#1092): the METHOD-namespace identity companion ──
+-- The map above is keyed by the BARE method name and is last-write-wins, so when two
+-- UNRELATED interfaces each declare a method called `mth` the whole loaded program has
+-- ONE entry for `mth` and whichever interface was registered last owns it — decided by
+-- module processing order, not by anything about the occurrence.  Every read site
+-- (recordImplObligation, ifaceParamMonos, singleTyparamIfaceMethod, …) then takes the
+-- INTERFACE out of that entry, so an occurrence that unambiguously names `IB.mth` can
+-- have its impl obligation checked against `IA` — silently, in either direction (#1092).
+--
+-- This map is the collision-free half: one row per (declaring module, method name)
+-- IDENTITY, so `IA.mth` and `IB.mth` both survive.  It does NOT replace the bare-name
+-- map — that stays as the FLOOR, so no entry can be LOST by this unit (a dropped entry
+-- would silently drop an impl obligation, which is the same S0 with the sign flipped).
+-- `applyMethodScopeOverrides` overlays the floor per module, for colliding names only.
+--
+-- ⚠️ MODULE-PATH-ONLY, exactly as `IdentOrigin`'s doc-comment in `frontend/ast.mdk`
+-- bounds the whole of Stage A-2: a flat/single-file declaration carries
+-- `OriginUnresolved`, `mkIdent` refuses it, and no candidate is recorded.  The flat
+-- writer (`registerMethodIfaceParamsMethods`) is deliberately untouched.
+--
+-- 🚨 The REASON for that carve-out, corrected.  It used to read "a flat program has exactly
+-- one user module, so a name it declares cannot collide ACROSS modules, and its
+-- own-declaration-wins answer is already the scoped one."  The second clause is FALSE and
+-- was measured to be: in ONE file declaring two interfaces that share a method name there
+-- is no single OWN declaration — both are own — so there is nothing for a ladder whose top
+-- rung is "own declarations win" to select.  The flat answer is last-declared-wins.
+-- MEASURED (identical on this build and on main, so nothing here regressed): one file with
+-- `interface FA`/`interface FB` both declaring `mth`, `data Blob`, and `impl FA Blob` only —
+-- with FA declared FIRST the program is REJECTED `No impl of FB for Blob`, and with the two
+-- interface declarations SWAPPED (nothing else changed) it is ACCEPTED at exit 0 and prints
+-- FA's body.  The obligation goes to the LAST-declared interface either way; an
+-- interface-declaration reordering that changes no program meaning changes the verdict.
+-- The carve-out itself still stands, on the FIRST clause plus a mechanism argument: this
+-- unit's discriminator is the importing module's IMPORT SCOPE, and a single file has none
+-- — every candidate is own, so no rung of `scopedMethodEntry` can separate them.  ⚠️ Nor
+-- would #1115 (E-1)'s real module ids supply one: both declarations would carry the SAME
+-- module id.  The flat path therefore has a live defect of this class whose fix needs a
+-- WITHIN-module discriminator (or an ambiguity diagnostic at the occurrence) that neither
+-- A-2.5 nor E-1 provides — it is owed a derivation, not covered.  Nearest tracked relative:
+-- #1182 (same one-file two-interface collision, decided by impl-block order at dispatch).
+--
+-- A SEPARATE decl walk from `insertMethodIfaceParams` rather than a widened accumulator:
+-- the pair-threading signature above is pinned by the selfproc LEG A scheme golden, and
+-- the two walks are called from ONE place (`appendUniverseAccums`), which is what the
+-- "lockstep" the pair comment asks for actually needs.
+insertMethodIdents : List Decl -> (OrdMap (List (Ident, (String, List String, Ty, List (String, List Kind)))), List String) -> (OrdMap (List (Ident, (String, List String, Ty, List (String, List Kind)))), List String)
+insertMethodIdents [] acc = acc
+insertMethodIdents ((DAttrib _ d)::rest) acc =
+  insertMethodIdents rest (insertMethodIdents [d] acc)
+insertMethodIdents ((DInterface { name, typarams, methods, ifaceOrigin, ... })::rest) acc = insertMethodIdents rest (insertIfaceMethodIdents name typarams (declGradedScope typarams methods) ifaceOrigin methods acc)
+insertMethodIdents (_::rest) acc = insertMethodIdents rest acc
+
+insertIfaceMethodIdents : String -> List String -> List (String, List Kind) -> TyConOrigin -> List IfaceMethod -> (OrdMap (List (Ident, (String, List String, Ty, List (String, List Kind)))), List String) -> (OrdMap (List (Ident, (String, List String, Ty, List (String, List Kind)))), List String)
+insertIfaceMethodIdents _ _ _ _ [] acc = acc
+insertIfaceMethodIdents iface typarams scope origin ((IfaceMethod mname mty _)::rest) acc =
+  let acc2 = match mkIdent NsMethod origin mname
+    -- honest absence: no module id for this declaration, so it contributes NO identity
+    -- rather than a constant one every unstamped declaration would collide on (§8 I6.3).
+    None => acc
+    Some ident => addMethodIdentCand mname ident (iface, typarams, mty, scope) acc
+  insertIfaceMethodIdents iface typarams scope origin rest acc2
+
+-- Upsert BY IDENTITY (an interface re-registered by a second pass replaces its own row
+-- rather than appending a duplicate), so `listLen >= 2` means "two DISTINCT declarations
+-- of this method name" and the collided list cannot fill with self-collisions.
+addMethodIdentCand : String -> Ident -> (String, List String, Ty, List (String, List Kind)) -> (OrdMap (List (Ident, (String, List String, Ty, List (String, List Kind)))), List String) -> (OrdMap (List (Ident, (String, List String, Ty, List (String, List Kind)))), List String)
+addMethodIdentCand mname ident payload (cands, collided) =
+  let prior = dropMethodIdentCand ident (fromOption [] (omLookup mname cands))
+  let next = prior ++ [(ident, payload)]
+  (
+    omInsert mname next cands,
+    if listLen next >= 2 && not (contains mname collided) then mname::collided else collided,
+  )
+
+dropMethodIdentCand : Ident -> List (Ident, (String, List String, Ty, List (String, List Kind))) -> List (Ident, (String, List String, Ty, List (String, List Kind)))
+dropMethodIdentCand _ [] = []
+dropMethodIdentCand ident ((c@(i, _))::rest)
+  | i == ident = dropMethodIdentCand ident rest
+  | otherwise = c :: dropMethodIdentCand ident rest
+
+-- ── #1092: THIS module's scoped view of the bare-name method table ──────────
+-- Overlay [floor] (the universe's last-write-wins map) with the entry each COLLIDED
+-- method name resolves to IN THIS MODULE'S SCOPE.  Iterates the collided list — not the
+-- table — so a program with no method-name collision pays ONE `[]` match per module and
+-- shares the floor map unchanged; a name with exactly one declaration cannot need an
+-- override, because the floor already holds that one declaration's entry.
+--
+-- ⚠️ OVERLAY, never a rebuild.  Anything this cannot resolve keeps the floor's answer,
+-- which is today's behaviour: the failure mode of a rebuild would be a MISSING entry,
+-- i.e. an impl obligation silently not recorded — `exit 1 → exit 0`, a severity increase.
+applyMethodScopeOverrides : List Decl -> OrdMap (String, List String, Ty, List (String, List Kind)) -> OrdMap (String, List String, Ty, List (String, List Kind))
+applyMethodScopeOverrides prog floor =
+  overrideScopedMethods
+    prog
+    crossRun.value.universeMethodIdentsRef.value
+    crossRun.value.universeMethodCollidedRef.value
+    floor
+
+overrideScopedMethods : List Decl -> OrdMap (List (Ident, (String, List String, Ty, List (String, List Kind)))) -> List String -> OrdMap (String, List String, Ty, List (String, List Kind)) -> OrdMap (String, List String, Ty, List (String, List Kind))
+overrideScopedMethods _ _ [] floor = floor
+overrideScopedMethods prog cands (n::rest) floor =
+  let floor2 = match omLookup n cands
+    None => floor
+    Some cs => match scopedMethodEntry prog n cs
+      None => floor
+      Some payload => omInsert n payload floor
+  overrideScopedMethods prog cands rest floor2
+
+-- Which declaration of method [n] does THIS module mean?  Same precedence ladder
+-- `tyOriginScope` (`frontend/resolve.mdk`) argues for the TYPE namespace, for the same
+-- nearest-scope-wins reason: own declarations beat imports, imports beat the implicit
+-- prelude.  `None` at any rung means "this module's scope does not decide it" and the
+-- caller keeps the floor — never a guess.
+scopedMethodEntry : List Decl -> String -> List (Ident, (String, List String, Ty, List (String, List Kind))) -> Option (String, List String, Ty, List (String, List Kind))
+scopedMethodEntry prog n cs = match ownMethodIdent prog n
+  Some ident => match lookupMethodCand ident cs
+    Some payload => Some payload
+    None => importedMethodEntry prog n cs
+  None => importedMethodEntry prog n cs
+
+importedMethodEntry : List Decl -> String -> List (Ident, (String, List String, Ty, List (String, List Kind))) -> Option (String, List String, Ty, List (String, List Kind))
+importedMethodEntry prog n cs = match filterList (c => methodCandImported prog n c) cs
+  -- exactly one of this name's declarations is reachable through an import of THIS
+  -- module: that is what the occurrence names.  Two would be an ambiguous occurrence,
+  -- which resolve already rejects (`Ambiguous occurrence: 'mth' is exported by both …`),
+  -- so falling back to the floor there costs nothing an accepted program can observe.
+  [only] => Some (snd only)
+  _ => preludeMethodEntry n cs
+
+-- The implicit prelude is in scope in every module without a `DUse`, so it is the last
+-- rung rather than a missing one: a USER interface that reuses a prelude method name
+-- wins the floor (it registers later) in modules that never import it.
+preludeMethodEntry : String -> List (Ident, (String, List String, Ty, List (String, List Kind))) -> Option (String, List String, Ty, List (String, List Kind))
+preludeMethodEntry n cs = match mkIdent NsMethod (OriginModule "core") n
+  None => None
+  Some ident => lookupMethodCand ident cs
+
+-- This module's own interface declaring [n], as an identity.
+ownMethodIdent : List Decl -> String -> Option Ident
+ownMethodIdent [] _ = None
+ownMethodIdent ((DAttrib _ d)::rest) n = match ownMethodIdent [d] n
+  Some i => Some i
+  None => ownMethodIdent rest n
+ownMethodIdent ((DInterface { methods, ifaceOrigin, ... })::rest) n =
+  if contains n (ifaceMethodNames methods) then
+    mkIdent NsMethod ifaceOrigin n
+  else
+    ownMethodIdent rest n
+ownMethodIdent (_::rest) n = ownMethodIdent rest n
+
+-- Is candidate [c] the declaration of [n] that one of THIS module's imports brings in?
+-- TWO independent witnesses, because one alone is incomplete:
+--   * the import names the method AND is OF the declaring module — the direct case;
+--   * the import names the method AND EXPLICITLY names the candidate's INTERFACE —
+--     which is what carries a RE-EXPORT (`import mid.{IB, mth}` where `mid` only
+--     re-exports `ifaceb`'s `IB`, so the import's module id is `mid` and the identity's
+--     is `ifaceb`).
+-- Both require the import to bind the METHOD NAME, so an `import ifacea.{IA}` that
+-- deliberately does NOT select `mth` is not a witness for `IA.mth` — which is exactly
+-- the fact #1092's repro turns on.
+--
+-- ⚠️ The second witness demands an EXPLICIT member list, and that is not fussiness:
+-- MEASURED on this tree, letting a WILDCARD satisfy it made `import ifaceb.*` +
+-- `import ifacea.{IA}` witness BOTH candidates (a wildcard "names" every interface),
+-- so the two-matches guard below fired and the whole override silently no-op'd — the
+-- shape still printed `1`.  Under a wildcard only the module-id witness applies, which
+-- leaves `import <re-exporter>.*` as a documented residual rather than a wrong answer.
+methodCandImported : List Decl -> String -> (Ident, (String, List String, Ty, List (String, List Kind))) -> Bool
+methodCandImported prog n c = anyUsePathBinds prog n c
+
+anyUsePathBinds : List Decl -> String -> (Ident, (String, List String, Ty, List (String, List Kind))) -> Bool
+anyUsePathBinds [] _ _ = False
+anyUsePathBinds ((DAttrib _ d)::rest) n c = anyUsePathBinds [d] n c
+  || anyUsePathBinds rest n c
+anyUsePathBinds ((DUse _ path _)::rest) n c = usePathWitnesses path n c
+  || anyUsePathBinds rest n c
+anyUsePathBinds (_::rest) n c = anyUsePathBinds rest n c
+
+usePathWitnesses : UsePath -> String -> (Ident, (String, List String, Ty, List (String, List Kind))) -> Bool
+usePathWitnesses path n (ident, (iface, _, _, _)) =
+  let dep = usePathModuleId path
+  -- `core` is the implicit prelude, never an explicit provenance (importDefinersOf skips
+  -- it for the same reason); `preludeMethodEntry` is its rung.
+  dep != "core"
+    && usePathBindsName path n
+    && (mkIdent NsMethod (OriginModule dep) n == Some ident || usePathNamesMember path iface)
+
+-- `None` from importedBindings is the WILDCARD form (`import m.*`), which binds every
+-- name the dependency exports — so it witnesses any name.
+--
+-- 🚨 `UseAlias` yields `Some []` (a module alias binds no bare names) and therefore
+-- witnesses NOTHING.  That is a KNOWN DEFECT, not a safe case.  This comment used to end
+-- "which is right: a method reached as `M.mth` is renamed to its origin spelling by
+-- renameAliasedMethods before this table is ever consulted."  The rename is precisely what
+-- DESTROYS the discriminator: the alias was the only syntactic evidence of which module the
+-- occurrence meant, so afterwards it is a bare `mth` with no provenance, no candidate is
+-- witnessed, and applyMethodScopeOverrides declines to the last-write-wins floor — #1092's
+-- S0, unfixed, for that spelling.  MEASURED: `import ifacea as A` as the only provider of
+-- `mth`, `Blob` implementing `IB` only, `println (A.mth Blob)` prints `2` at exit 0 where
+-- `No impl of IA for Blob` is correct — on this build AND on main, so not a regression.
+-- Filed as #1276.  An alias binds no NAMES but does carry a MODULE ID; recovering it (here
+-- or by not erasing it in renameAliasedMethods) is the fix — see #1276 for both shapes.
+usePathBindsName : UsePath -> String -> Bool
+usePathBindsName path n = match importedBindings path
+  None => True
+  Some bs => contains n (map snd bs)
+
+-- The same question restricted to an EXPLICIT member list — a wildcard answers False
+-- here.  See `usePathWitnesses` for the measured reason the two must differ.
+usePathNamesMember : UsePath -> String -> Bool
+usePathNamesMember path n = match importedBindings path
+  None => False
+  Some bs => contains n (map snd bs)
+
+lookupMethodCand : Ident -> List (Ident, (String, List String, Ty, List (String, List Kind))) -> Option (String, List String, Ty, List (String, List Kind))
+lookupMethodCand _ [] = None
+lookupMethodCand ident ((i, p)::rest)
+  | i == ident = Some p
+  | otherwise = lookupMethodCand ident rest
+
 missingImplMethodMsg : String -> List Ty -> String -> String
 missingImplMethodMsg iface tys method = "'impl \{iface} \{joinWith " " (map ppTyAtom tys)}' is missing method '\{method}'. Every interface method without a default body must be implemented — define '\{method}' in the impl (or check for a typo in a method name)"
 
@@ -14793,13 +15056,21 @@ checkBodyImpl seed mode prog0 =
   -- O(N)); the Module path COPIES the persistent accumulators — grown one module at a
   -- time by `appendUniverseAccums prog0` above (which ran BEFORE this) and seeded by the
   -- core pass — into the two refs resetState just wiped, exactly as PR1 copies
-  -- universeKeyBucketsRef into shadowKeyTableRef.  Method/interface names are globally
-  -- unique, so the accumulated maps carry the same entries the per-module rebuild over
-  -- `fullUniverse` (= accData ++ implDecls ++ prog0) did for every name this module names.
+  -- universeKeyBucketsRef into shadowKeyTableRef.
+  -- 🚨 #1111 A-2.5: this comment used to end "Method/interface names are globally unique,
+  -- so the accumulated maps carry the same entries the per-module rebuild over
+  -- `fullUniverse` (= accData ++ implDecls ++ prog0) did for every name this module
+  -- names."  THAT PREMISE IS FALSE and it was the whole of #1092 (S0): two unrelated
+  -- interfaces may each declare a method `mth`, the accumulated map is bare-name-keyed
+  -- and last-write-wins, and the per-module rebuild over a universe containing BOTH would
+  -- have made the identical wrong choice — so the two agreed on a wrong answer, which is
+  -- why nothing caught it.  `applyMethodScopeOverrides` re-decides those (normally zero)
+  -- names from THIS module's own import scope; every other name still takes the shared
+  -- map unchanged.
   let _ = match mode
     Flat _ => registerMethodIfaceParamsAll fullUniverse
     Module _ _ _ =>
-      let _ = setRef perRun.value.methodIfaceParamsRef crossRun.value.universeMethodIfaceParamsRef.value
+      let _ = setRef perRun.value.methodIfaceParamsRef (applyMethodScopeOverrides prog crossRun.value.universeMethodIfaceParamsRef.value)
       setRef perRun.value.registeredIfacesRef crossRun.value.universeRegisteredIfacesRef.value
   -- #154 PR-A: the dominant remaining O(N²) in the multi-module typecheck.  The Module arm
   -- used to `registerAllData initialEnv (accData ++ prog0)` — re-registering (and re-minting
@@ -19159,6 +19430,11 @@ appendUniverseAccums prog =
   let acc = insertMethodIfaceParams prog (crossRun.value.universeMethodIfaceParamsRef.value, crossRun.value.universeRegisteredIfacesRef.value)
   let _ = setRef crossRun.value.universeMethodIfaceParamsRef (fst acc)
   let _ = setRef crossRun.value.universeRegisteredIfacesRef (snd acc)
+  -- #1111 A-2.5 (#1092): the identity-keyed companion of the map above, grown in the
+  -- SAME place so the two cannot see different universes.  See insertMethodIdents.
+  let identAcc = insertMethodIdents prog (crossRun.value.universeMethodIdentsRef.value, crossRun.value.universeMethodCollidedRef.value)
+  let _ = setRef crossRun.value.universeMethodIdentsRef (fst identAcc)
+  let _ = setRef crossRun.value.universeMethodCollidedRef (snd identAcc)
   -- #154 PR-B: grow the dispatch-index accumulator by THIS module's interface indices.
   -- APPEND (universe first) so the accumulated list stays in the same core-first order the
   -- old `argDispatchIndices (accAll ++ prog)` flatMap produced; the sole reader is a

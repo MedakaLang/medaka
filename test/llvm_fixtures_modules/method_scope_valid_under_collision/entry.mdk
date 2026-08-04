@@ -1,0 +1,30 @@
+-- #1111 A-2.5 (#1092): the FALSE-REJECT cell — a VALID program that the
+-- bare-name method table rejected.
+--
+-- `mth` is selected from `mscopea` ONLY (`mscopeb`'s `mth` is never brought into
+-- scope; only the type `MIB` is), so this occurrence unambiguously means
+-- `MIA.mth`, and `Blob` DOES implement `MIA`.  The program is well typed and must
+-- print `A`.
+--
+-- Before #1092 was drained it did not: the cross-module method table is keyed by
+-- the BARE method name and is last-write-wins, `mscopeb` is loaded after
+-- `mscopea`, so the impl obligation for this occurrence was recorded against
+-- `MIB` — an interface this file never names — and `check`/`run`/`build` all
+-- rejected it with `No impl of MIB for Blob`.  Verified first-hand on the
+-- pre-fix binary in that exact shape (the `falserej` cell of the unit's probe).
+--
+-- ⚠️ This is the `exit 1 → exit 0` direction, which is a severity INCREASE if it
+-- is wrong.  Its mirrors — the same graph with the impl missing, which must STILL
+-- be rejected, and a missing impl with no collision anywhere — are pinned as
+-- `test/analyze_project_fixtures/1092_method_scope_named_b` and
+-- `.../method_missing_impl_no_collision`.
+import mscopea.{MIA, mth}
+import mscopeb.{MIB}
+
+data Blob = Blob
+
+impl MIA Blob where
+  mth _ = "A"
+
+main : <IO> Unit
+main = putStrLn (mth Blob)

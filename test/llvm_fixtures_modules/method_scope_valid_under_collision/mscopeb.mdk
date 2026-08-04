@@ -1,0 +1,5 @@
+-- #1111 A-2.5 (#1092): half two of the bare-METHOD-NAME collision.  Same method
+-- spelling as `MIA`'s (mscopea.mdk), unrelated interface.  The entry imports
+-- only the TYPE `MIB` from here and never selects this module's `mth`.
+export interface MIB a where
+  mth : a -> String

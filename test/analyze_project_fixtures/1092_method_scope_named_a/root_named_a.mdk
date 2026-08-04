@@ -1,0 +1,24 @@
+-- #1111 A-2.5 (#1092) MIRROR CELL — the same defect with both halves flipped, so
+-- a fix that merely swapped which interface wins the bare-name race cannot pass
+-- both this and `1092_method_scope_named_b`.
+--
+-- `mth` is selected from `msa` ONLY, so the occurrence means `MA.mth`.  `Blob`
+-- implements `MB` and has no `MA` impl, so `check` must report exactly one error:
+--
+--   No impl of MA for Blob; write an 'impl MA Blob'.
+--
+-- 🚨 BEFORE THE FIX this checked clean, exit 0, and printed `2` — `MB`'s impl body
+-- for a call spelled `MA.mth`.  Note the import lines are in the SAME textual
+-- order as the flagship's, and only which module's `mth` is selected changes:
+-- under the old bare-name table the checked-against interface depended ONLY on
+-- module load order, so both files' verdicts moved together; under the use-site
+-- rule they move independently, which is what these two fixtures pin.
+import msa.{MA, mth}
+import msb.{MB}
+
+public export data Blob = Blob
+
+export impl MB Blob where
+  mth b = 2
+
+main = println (mth Blob)

@@ -1,0 +1,7 @@
+-- #1111 A-2.5 (#1092): the colliding USER interface.  It declares a method named
+-- `debug`, which is ALSO a prelude method name (core's `Debug`).  Nothing the
+-- entry imports mentions this module -- putting it in the loaded graph is
+-- `pdbridge`'s job -- so the collision is live program-wide while being invisible
+-- to the entry's own scope.  That separation is the whole point of the cell.
+export interface UDbg a where
+  debug : a -> String

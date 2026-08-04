@@ -1,0 +1,3 @@
+-- #1111 A-2.5 (#1092): half two of the bare-METHOD-NAME collision.
+export interface MB a where
+  mth : a -> Int
