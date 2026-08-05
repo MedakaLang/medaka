@@ -57,6 +57,7 @@ Live design docs: **OPEN** = not started, **PARTIAL** = in progress. Read before
 | [`CAPABILITY-PLATFORM.md`](design/CAPABILITY-PLATFORM.md) | The capability platform — runtime/product architecture | OPEN |
 | [`EFFECTS-CONFORMANCE-ROADMAP.md`](design/EFFECTS-CONFORMANCE-ROADMAP.md) | Effect-and-Capability Conformance Roadmap | PARTIAL |
 | [`GAP3-SLICE7-DESIGN.md`](design/GAP3-SLICE7-DESIGN.md) | Gap 3 — slice-7 arg-tag dispatch on a generic prelude free function | OPEN |
+| [`GZIP-DESIGN.md`](design/GZIP-DESIGN.md) | DEFLATE / gzip — a compression codec in pure Medaka | OPEN |
 | [`INTERFACE-CANDIDATES.md`](design/INTERFACE-CANDIDATES.md) | INTERFACE-CANDIDATES.md — which built-in constructs could generalize behind an interface | PARTIAL |
 | [`LANGUAGE-SURFACE-AUDIT.md`](design/LANGUAGE-SURFACE-AUDIT.md) | LANGUAGE-SURFACE-AUDIT.md | OPEN |
 | [`MUT-SCOPING-DESIGN.md`](design/MUT-SCOPING-DESIGN.md) | `<Mut>` scoping — effect masking for allocate→fill→freeze | CLOSED |
