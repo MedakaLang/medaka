@@ -536,7 +536,12 @@ for f in $changed; do
     compiler/tools/*test*|compiler/tools/doctest.mdk|compiler/tools/prop_runner.mdk)
       add 'diff_compiler_test'; add 'diff_compiler_ported'
       add 'diff_compiler_origin_agreement'
-      add 'diff_compiler_dict_semantics' ;;
+      add 'diff_compiler_dict_semantics'
+      # #81 Stage 4: diff_compiler_test_native.sh is the CI gate protecting the
+      # native-engine half of this arm (`medaka test --native` / `--engines`);
+      # without this line a change to test_cmd.mdk derives a gate set that omits
+      # the one gate that would catch it regressing native doctest execution.
+      add 'diff_compiler_test_native' ;;
     compiler/tools/*)              add 'diff_compiler_check*' ;;
 
     # ── the compiler's private mini-stdlib: used by every stage. ──
