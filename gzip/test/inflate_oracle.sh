@@ -7,12 +7,13 @@
 # tool, never against a golden captured from our own output. A golden records
 # what this code did; `cmp` against the original records what is CORRECT.
 #
-# Phase 2 status: STORED (BTYPE=00) and FIXED HUFFMAN (BTYPE=01) blocks both
-# decode for real now. DYNAMIC HUFFMAN (BTYPE=10) is still Phase 3 and is
-# asserted to fail cleanly with a named error — that is the honest Phase-3
-# boundary, and pinning it means the eventual implementation flips this gate
-# red and tells whoever lands it to come update this file (same trick the
-# Phase-2 boundary used against this same file, until this wave landed it).
+# Phase 3 status: STORED (BTYPE=00), FIXED HUFFMAN (BTYPE=01), and DYNAMIC
+# HUFFMAN (BTYPE=10) blocks all decode for real now. The old Phase-3
+# boundary case (`check_dynamic_fail` — assert dynamic Huffman fails
+# cleanly, naming "not yet implemented") is GONE, replaced by real
+# round-trip assertions (`check_fixed`, reused for BTYPE=2 as well — it
+# was already generic over the observed BTYPE, see below) plus the
+# design doc's self-referential case (`compiler/seed/emitter.ll.gz`).
 #
 # ⚠️ We do NOT get to choose which BTYPE the system `gzip` picks — its own
 # block-splitting heuristic decides, and the deciding factor is SYMBOL
@@ -135,57 +136,72 @@ check_stored "small stored block"        200
 check_stored "single stored block"       4000
 check_stored "multi-block stored stream" 200000   # >65535 forces several blocks
 
-# --- fixed-Huffman round trip: real gzip output must decode byte-for-byte ----
-# Asserts BTYPE really is 1 (fixed Huffman) before trusting the round trip —
-# same discipline as check_stored, since gzip's block-type choice is a
-# heuristic we don't control.
-check_fixed() {
-  desc="$1"; src="$2"; level="$3"
+# --- Huffman round trip: real gzip output must decode byte-for-byte ---------
+# Asserts BTYPE really is what `expect_bt` says (1 = fixed, 2 = dynamic)
+# before trusting the round trip — same discipline as check_stored, since
+# gzip's block-type choice is a heuristic we don't control. Generic over
+# BOTH Huffman BTYPEs (fixed and dynamic share this one function) rather
+# than forking a second near-identical copy for dynamic Huffman.
+check_huffman() {
+  desc="$1"; src="$2"; level="$3"; expect_bt="$4"; bt_name="$5"
+
   gzip -"$level" -n -c "$src" > "$TMP/fx.gz"
 
   bt=$(first_block_type "$TMP/fx.gz")
-  if [ "$bt" != "1" ]; then
-    bad "$desc (level $level) — oracle produced BTYPE=$bt, not fixed Huffman; this gate tested nothing"
+  if [ "$bt" != "$expect_bt" ]; then
+    bad "$desc (level $level) — oracle produced BTYPE=$bt, not $bt_name (expected $expect_bt); this gate tested nothing"
     return
   fi
 
   run_t 60 "$BIN" "$TMP/fx.gz" "$TMP/fx.out" >/dev/null 2>&1
   rc=$?
   if [ "$rc" -eq 142 ]; then
-    bad "$desc (level $level) — HUNG on a VALID fixed-Huffman stream"
+    bad "$desc (level $level) — HUNG on a VALID $bt_name stream"
     return
   elif [ "$rc" -ne 0 ]; then
-    bad "$desc (level $level) — inflate_demo exited $rc on a valid fixed-Huffman stream"
+    bad "$desc (level $level) — inflate_demo exited $rc on a valid $bt_name stream"
     return
   fi
   if cmp -s "$src" "$TMP/fx.out"; then
     sz=$(wc -c < "$src")
-    ok "$desc (level $level, $sz bytes, fixed Huffman, byte-for-byte)"
+    ok "$desc (level $level, $sz bytes, $bt_name, byte-for-byte)"
   else
     bad "$desc (level $level) — output DIFFERS from the original"
   fi
 }
 
-# --- dynamic-Huffman boundary: must fail cleanly, naming Phase 3 -------------
-# Asserts BTYPE really is 2 (dynamic Huffman) — a gate that "passed" because
-# gzip happened to pick a DIFFERENT block type would be testing nothing.
-check_dynamic_fail() {
-  desc="$1"; gz="$2"
+check_fixed() { check_huffman "$1" "$2" "$3" 1 "fixed Huffman"; }
+check_dynamic() { check_huffman "$1" "$2" "$3" 2 "dynamic Huffman"; }
+
+# Same shape as check_huffman, but for a pre-existing REAL .gz file (not one
+# this script compresses itself) — the self-referential case, where the
+# fixture is `compiler/seed/emitter.ll.gz` and there is no "original" to
+# re-gzip, only the file itself and its expected inflated bytes (obtained
+# from the SYSTEM `gunzip`, never from our own inflater — see the module
+# header's discipline).
+check_dynamic_file() {
+  desc="$1"; gz="$2"; expected_plain="$3"
+
   bt=$(first_block_type "$gz")
   if [ "$bt" != "2" ]; then
-    bad "$desc — oracle produced BTYPE=$bt, not dynamic Huffman; this gate tested nothing"
+    bad "$desc — oracle input is BTYPE=$bt, not dynamic Huffman; this gate tested nothing"
     return
   fi
-  out=$(run_t 30 "$BIN" "$gz" "$TMP/never.bin" 2>&1)
+
+  run_t 60 "$BIN" "$gz" "$TMP/df.out" >/dev/null 2>&1
   rc=$?
   if [ "$rc" -eq 142 ]; then
-    bad "$desc — HUNG (timed out); a decompressor must not loop on bad/unimplemented input"
-  elif [ "$rc" -eq 0 ]; then
-    bad "$desc — exited 0; expected the Phase-3 dynamic-Huffman error"
-  elif printf '%s' "$out" | grep -q "not yet implemented"; then
-    ok "$desc (exit $rc, dynamic Huffman, named the Phase-3 boundary)"
+    bad "$desc — HUNG on a VALID dynamic-Huffman stream"
+    return
+  elif [ "$rc" -ne 0 ]; then
+    bad "$desc — inflate_demo exited $rc on a valid dynamic-Huffman stream"
+    return
+  fi
+  if cmp -s "$expected_plain" "$TMP/df.out"; then
+    sz=$(wc -c < "$expected_plain")
+    ok "$desc ($sz bytes, dynamic Huffman, byte-for-byte vs system gunzip)"
   else
-    bad "$desc — failed as expected but did not name Phase 3: $out"
+    bad "$desc — output DIFFERS from system gunzip's own decompression"
   fi
 }
 
@@ -219,28 +235,63 @@ python3 -c "import sys; sys.stdout.write(('the quick brown fox ' * 200)[:2000])"
 check_fixed "gzip 2000 bytes of a repeated phrase (long back-references), level 1" "$TMP/phrase.bin" 1
 check_fixed "gzip 2000 bytes of a repeated phrase (long back-references), level 9" "$TMP/phrase.bin" 9
 
-# --- Phase 3 boundary: dynamic Huffman is pinned as NOT yet implemented ------
+# --- dynamic-Huffman round trip: real gzip output must decode byte-for-byte -
 
 # 100 KB of a repeated short string. This is the design doc's own corpus
 # entry for "the distance=1 overlap case, and the maximum-length code" — but
 # real gzip switches to DYNAMIC Huffman well before 100 KB (verified: even
 # `gzip -1` does, since its block-splitting heuristic is size-driven, not
-# just entropy-driven). So at this size the real tool hands us the Phase 3
-# shape, not Phase 2 — asserted below rather than assumed.
+# just entropy-driven). So at this size the real tool hands us the dynamic
+# shape, not fixed — asserted (via `check_dynamic`) rather than assumed.
 python3 -c "print('the quick brown fox jumps over the lazy dog. ' * 2260, end='')" > "$TMP/big_repeat.bin"
-gzip -6 -n -c "$TMP/big_repeat.bin" > "$TMP/big_repeat.gz"
-check_dynamic_fail "100 KB repeated string (Phase 3 boundary)" "$TMP/big_repeat.gz"
+check_dynamic "100 KB repeated string, multiple dynamic blocks" "$TMP/big_repeat.bin" 6
 
 # A real .mdk source file from this repo — realistic text, long matches; real
 # gzip picks dynamic Huffman at this size too.
-gzip -6 -n -c "$ROOT/compiler/frontend/parser.mdk" > "$TMP/mdk_source.gz"
-check_dynamic_fail "real .mdk source file (Phase 3 boundary)" "$TMP/mdk_source.gz"
+check_dynamic "real .mdk source file" "$ROOT/compiler/frontend/parser.mdk" 6
+
+# A full byte-value corpus (every byte 0..255 appears) at a size/diversity
+# real gzip pushes into dynamic Huffman — catches a lit/len table off-by-one
+# at the 255/256 boundary that a text-only corpus above would never exercise
+# (design doc's corpus table, "A file with every byte value 0-255"). Plain
+# `bytes(range(256))` repeated is too REGULAR — verified by hand, gzip -6
+# keeps picking fixed Huffman for it even at 10 KB (its heuristic is
+# entropy-driven, not just "is every byte value present") — so this mixes in
+# shuffled-word text ahead of three literal 0..255 sweeps to get real
+# symbol-diversity pressure while still guaranteeing full byte coverage.
+python3 -c "
+import sys, random
+random.seed(7)
+words = ['the', 'quick', 'brown', 'fox', 'jumps', 'over', 'lazy', 'dog',
+         'medaka', 'gzip', 'deflate', 'huffman', 'dynamic', 'static', 'compress']
+lines = []
+for i in range(400):
+    random.shuffle(words)
+    lines.append(' '.join(words))
+text = ('\n'.join(lines)).encode()
+data = text + bytes(range(256)) * 3
+sys.stdout.buffer.write(data)
+" > "$TMP/allbytes.bin"
+check_dynamic "every byte value 0..255 present, mixed with diverse text" "$TMP/allbytes.bin" 6
+
+# Just over the 32768-byte window boundary — catches an off-by-one in the
+# sliding-window wrap logic that a smaller corpus would never reach (design
+# doc's corpus table, "A file just over 32768 bytes").
+python3 -c "
+import sys
+data = (b'window boundary probe, ' * 2000)[:32800]
+sys.stdout.buffer.write(data)
+" > "$TMP/window_boundary.bin"
+check_dynamic "just over the 32768-byte window boundary" "$TMP/window_boundary.bin" 6
 
 # The committed seed itself: ~1.7 MB of real dynamic-Huffman data, already in
-# the repo, no fixture to add (design doc §"Self-referential").
+# the repo, no fixture to add (design doc §"Self-referential"). Decoded with
+# OUR inflater, checked against the SYSTEM `gunzip`'s own decompression of
+# the exact same bytes — never against a golden captured from our own code.
 SEED_GZ="$ROOT/compiler/seed/emitter.ll.gz"
 if [ -f "$SEED_GZ" ]; then
-  check_dynamic_fail "compiler/seed/emitter.ll.gz (real-world corpus, Phase 3 boundary)" "$SEED_GZ"
+  gunzip -c "$SEED_GZ" > "$TMP/seed_expected.bin"
+  check_dynamic_file "compiler/seed/emitter.ll.gz (self-referential, real-world corpus)" "$SEED_GZ" "$TMP/seed_expected.bin"
 else
   bad "compiler/seed/emitter.ll.gz not found at $SEED_GZ"
 fi
@@ -309,6 +360,39 @@ if [ "$(wc -c < "$TMP/isizebad.gz")" -ne "$sz" ]; then
   bad "harness bug: corrupting ISIZE changed the file LENGTH ($(wc -c < "$TMP/isizebad.gz") vs $sz)"
 else
   expect_fail "corrupted trailer ISIZE is rejected" "$TMP/isizebad.gz" "ISIZE"
+fi
+
+# --- dynamic-Huffman error paths: truncation and CRC corruption, the design
+# doc's corpus-table pair this Phase makes reachable for real (before Phase
+# 3 there was no dynamic-Huffman DECODE path to truncate/corrupt into) -----
+gzip -6 -n -c "$ROOT/compiler/frontend/parser.mdk" > "$TMP/dyn.gz"
+bt=$(first_block_type "$TMP/dyn.gz")
+if [ "$bt" != "2" ]; then
+  bad "dynamic-Huffman error-path setup — oracle produced BTYPE=$bt, not dynamic Huffman; these cases tested nothing"
+else
+  dynsz=$(wc -c < "$TMP/dyn.gz")
+
+  # Truncated well into the compressed body (past the header, mid-Huffman
+  # tables or mid-block) — must Err, not hang, not read out of bounds.
+  head -c $((dynsz / 2)) "$TMP/dyn.gz" > "$TMP/dyn_trunc_mid.gz"
+  expect_fail "dynamic Huffman: truncated mid-stream (half the file)" "$TMP/dyn_trunc_mid.gz" "end of input"
+
+  # Truncated immediately after the gzip header, inside the dynamic block's
+  # HLIT/HDIST/HCLEN/code-length-table region itself — the narrowest place
+  # this Phase's new code can read out of bounds if it's going to.
+  head -c 15 "$TMP/dyn.gz" > "$TMP/dyn_trunc_header.gz"
+  expect_fail "dynamic Huffman: truncated inside the HLIT/HDIST/HCLEN header" "$TMP/dyn_trunc_header.gz" "end of input"
+
+  # Corrupted trailer CRC-32 on a real dynamic-Huffman stream (distinct from
+  # the stored-block CRC case above, which never exercises this Phase's
+  # decode path at all).
+  corrupt_last4 "$TMP/dyn.gz" "$TMP/dyn_crcbad.gz" $((dynsz - 8))
+  tail -c 4 "$TMP/dyn.gz" >> "$TMP/dyn_crcbad.gz"
+  if [ "$(wc -c < "$TMP/dyn_crcbad.gz")" -ne "$dynsz" ]; then
+    bad "harness bug: corrupting the dynamic-Huffman CRC changed the file LENGTH"
+  else
+    expect_fail "dynamic Huffman: corrupted trailer CRC-32 is rejected" "$TMP/dyn_crcbad.gz" "CRC"
+  fi
 fi
 
 echo
