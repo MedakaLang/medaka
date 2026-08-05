@@ -209,6 +209,7 @@ shrinkValue ty v = match (ty, v)
   _ => []
 
 shrinkInt : Int -> List (Value e)
+shrinkInt 0 = []
 shrinkInt n =
   let cands = [0, n / 2, n + (if n > 0 then -1 else 1)]
   map VInt (filterList (!= n) cands)
@@ -283,9 +284,22 @@ escStrLocal s = "\"" ++ s ++ "\""
 
 -- ── greedy shrink (mirror lib/prop_runner.ml shrink_loop) ────────────────────
 
+-- Fuel cap: defense-in-depth against a future shrink arm reintroducing a
+-- non-decreasing candidate (as `shrinkInt` did before this cap existed — see
+-- #1307). A correct arm never comes close to this many steps; if one ever
+-- cycles again, shrinking now stops and reports the best candidate found so
+-- far instead of hanging forever.
+shrinkFuel : Int
+shrinkFuel = 10000
+
 shrinkLoop : List (String, Value e) -> List PropParam -> Expr -> List (String, Value e) -> <e> List (String, Value e)
-shrinkLoop evalEnv params body candidate = match tryShrinkOne evalEnv params body candidate 0
-  Some better => shrinkLoop evalEnv params body better
+shrinkLoop evalEnv params body candidate =
+  shrinkLoopFuel evalEnv params body candidate shrinkFuel
+
+shrinkLoopFuel : List (String, Value e) -> List PropParam -> Expr -> List (String, Value e) -> Int -> <e> List (String, Value e)
+shrinkLoopFuel _ _ _ candidate 0 = candidate
+shrinkLoopFuel evalEnv params body candidate fuel = match tryShrinkOne evalEnv params body candidate 0
+  Some better => shrinkLoopFuel evalEnv params body better (fuel - 1)
   None => candidate
 
 -- Try each param in order; return the first candidate where some smaller value

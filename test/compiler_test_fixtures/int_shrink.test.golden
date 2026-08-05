@@ -1,0 +1,7 @@
+running doctests in test/compiler_test_fixtures/int_shrink.mdk
+  (no doctests found)
+Testing "int_shrink: deliberately false over Int (#1307)" ... FAILED after 1 test
+  Counterexample:
+    a = 0
+
+0 passed, 1 failed

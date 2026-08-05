@@ -1,0 +1,22 @@
+-- Regression for #1307: a FAILING `prop` with an `Int` parameter used to
+-- hang forever during shrinking instead of reporting a counterexample.
+-- `shrinkInt 0` returned `[VInt 1]` (no base case at zero: the third
+-- candidate `0 + 1` survives the `!= n` filter), so the greedy shrink loop
+-- cycled 0 -> 1 -> 0 forever whenever a shrink chain reached zero -- which
+-- every Int shrink chain does, since 0 is always the first candidate tried.
+--
+-- This prop is DELIBERATELY FAILING: `medaka test` must report a
+-- counterexample and terminate, not hang. The prop RNG is a deterministic
+-- LCG (see prop_runner.mdk's header), so the reported counterexample below
+-- is stable across runs and machines -- pinning it proves shrinking both
+-- TERMINATED and CONVERGED to the true minimal counterexample (0), not just
+-- that it eventually gave up.
+--
+-- ⚠️ If this fixture ever hangs again, `test/diff_compiler_test.sh` wraps its
+-- oracle invocation in a portable per-fixture alarm timeout (see that
+-- script's `run_t` helper) so CI reports a clear timeout failure here rather
+-- than burning to the 60-minute job ceiling with no diagnostic.
+
+prop "int_shrink: deliberately false over Int (#1307)" (a : Int) = False
+
+main = println "ok"
