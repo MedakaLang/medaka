@@ -38,6 +38,7 @@ import frontend.ast.{
   useMemberLocal,
   qualifiedLocal,
   Decl(..),
+  DataVis(..),
   ifaceIdentity,
 }
 import support.util.{
@@ -3087,7 +3088,7 @@ evalModulesWith extraExterns preludeDecls modules =
   let globalNames = map fst boolSeeds ++ map fst externs ++ map fst ctors ++ implMethodNames allDecls ++ map fst preludeGroups
   let globalCells = map (n => (n, Ref VUnit)) globalNames
   let globalEnv = EvalEnv [globalCells]
-  let mods = buildModInfos globalCells [] modules
+  let mods = buildModInfos (ModExports globalCells (ctorsByTypeOf preludeDecls)) [] modules
   let implEntries = flatMap (declImplEntries globalEnv disp) preludeDecls ++ flatMap (modImplEntries disp) mods
   let _ = installConsts globalCells boolSeeds
   let _ = installConsts globalCells externs
@@ -3099,9 +3100,10 @@ evalModulesWith extraExterns preludeDecls modules =
 
 -- pass 1: allocate each module's local cells + build its env (imports resolved
 -- against already-processed modules, since loader order is dependency-first)
-buildModInfos : List (String, Ref (Value e)) -> List (String, List (String, Ref (Value e))) -> List (String, List Decl) -> List (ModInfo (Value e))
+buildModInfos : ModExports (Value e) -> List (String, ModExports (Value e)) -> List (String, List Decl) -> List (ModInfo (Value e))
 buildModInfos _ _ [] = []
-buildModInfos globalCells exportsMap ((mid, decls)::rest) =
+buildModInfos coreExports exportsMap ((mid, decls)::rest) =
+  let globalCells = modExportCells coreExports
   let grps = groupsOf decls
   -- P0-9: each module's OWN constructors ALSO live in its LOCAL frame (they stay
   -- in the shared global too — see evalModules — for by-name / `Type(..)`
@@ -3114,8 +3116,8 @@ buildModInfos globalCells exportsMap ((mid, decls)::rest) =
   let localCells = map (n => (n, Ref VUnit)) (map fst grps ++ map fst modCtors)
   let imports = importFrameOf exportsMap decls
   let menv = EvalEnv [localCells, imports, globalCells]
-  let exports = localCells ++ methodCellsOf globalCells decls ++ pubReexports globalCells exportsMap decls
-  ModInfo mid decls grps localCells menv :: buildModInfos globalCells ((mid, exports)::exportsMap) rest
+  let exports = ModExports (localCells ++ methodCellsOf globalCells decls ++ pubReexports coreExports exportsMap decls) (ctorsByTypeOf decls)
+  ModInfo mid decls grps localCells menv :: buildModInfos coreExports ((mid, exports)::exportsMap) rest
 
 -- IMPORT ALIASING: a module must ALSO export the interface/impl METHODS it declares.
 --
@@ -3204,7 +3206,7 @@ evalModulesRootEnvWith extraExterns preludeDecls modules =
   let globalNames = map fst boolSeeds ++ map fst externs ++ map fst ctors ++ implMethodNames allDecls ++ map fst preludeGroups
   let globalCells = map (n => (n, Ref VUnit)) globalNames
   let globalEnv = EvalEnv [globalCells]
-  let mods = buildModInfos globalCells [] modules
+  let mods = buildModInfos (ModExports globalCells (ctorsByTypeOf preludeDecls)) [] modules
   let implEntries = flatMap (declImplEntries globalEnv disp) preludeDecls ++ flatMap (modImplEntries disp) mods
   let _ = installConsts globalCells boolSeeds
   let _ = installConsts globalCells externs
@@ -3234,13 +3236,136 @@ groupsOf decls =
   let defs = funDefs decls
   map (mkGroup defs) (funGroupNames defs [])
 
+-- ── a module's export surface, as an import frame consumes it ───────────────
+-- ONE record rather than two slot-parallel lists (#994): expanding a `T(..)`
+-- member needs BOTH halves and they are only correct together, so every writer of
+-- the cells is a writer of the index.
+--
+-- Why the index is needed at all: a constructor cell is keyed by its OWN name, so
+-- the cell list alone cannot answer *"which constructors does type `T` own?"* —
+-- and `T(..)` names a TYPE, which has no value cell.  Without the index a `T(..)`
+-- member bound NOTHING and its constructors fell through to the bare-name global
+-- frame, which is populated from every module's decls and is last-write-wins.
+--
+-- parameterized over the value type (v := Value e), like ModInfo / EvalEnv
+public export data ModExports v =
+  | ModExports (List (String, Ref v)) (List (String, List String))
+
+export modExportCells : ModExports v -> List (String, Ref v)
+modExportCells (ModExports cells _) = cells
+
+-- type name → the constructors a `T(..)` member of an IMPORT may bind, for one
+-- module's decls.
+--
+-- 🚨 THE QUESTION IS "WHAT DOES THE FRONT END PUT IN SCOPE?", NOT "WHAT CELLS
+-- EXIST?", AND MATCHING THE WRONG PEER ALREADY SHIPPED A REGRESSION HERE.  The
+-- first cut of this index was built arm-for-arm against `collectCtors`, on the
+-- reasoning that an entry naming a cell `collectCtors` never allocated would name a
+-- cell that does not exist.  True, and NOT SUFFICIENT: `collectCtors` is
+-- deliberately unfiltered, because every constructor a module declares needs a cell
+-- whether or not anyone outside can name it.  This index answers a SCOPE question.
+--
+-- Necessary-but-not-sufficient bites hard here because the import frame OUT-RANKS
+-- `globalCells`: an over-indexed entry does not merely add a name, it SHADOWS the
+-- one that was correctly reached before.  So the test is not "does the cell exist"
+-- but "would the front end have bound this name here" — and where the answer is no,
+-- binding it turns a working program into a crash.
+--
+-- 🚨 THE INVARIANT THIS MATCHES IS **TYPECHECK'S**, NOT `expTypeCtorsDirect`'S, AND
+-- THE TWO TABLES DISAGREE ON EXACTLY ONE ARM.  Read this before "tidying" the arms
+-- into agreement with resolve — that edit re-ships the regression below.
+--
+-- A newtype's constructor is module-private BY DESIGN, and the tree says so:
+-- `types/typecheck.publicDataDecls` (`:20153`) publishes `DData VisPublic`,
+-- `DInterface pub`, `DImpl pub` and `DTypeAlias pub` to the data universe and has
+-- **no `DNewtype` arm at all**, so a newtype's constructor scheme is never published.
+-- `registerOpaqueParamKinds`'s note states the rule outright (`:20020`):
+--   "`export newtype` is in the same bucket and has no workaround at all: `public`
+--    is a parse error on `newtype`, so its constructor is unconditionally
+--    module-private."
+--
+-- `resolve` nevertheless ACCEPTS it at every step: `expCtorsDirect` (`:2834`)
+-- exports it and `expTypeCtorsDirect` (`:2842`) indexes it, both gated on
+-- `newtypePub`, which `export newtype` SETS; `expandMemberNames` (`:2288`) expands
+-- `NT(..)` to `[NT, Wrap]`; `realImport` (`:2619`) puts `Wrap` into `iaCtors`.
+-- Resolve emits NO diagnostic.  The refusal is the TYPECHECKER's — measured via
+-- `check --json`: **`T-UNBOUND`** in expression position (note the stage: `T-`, not
+-- `R-`) and `T-UNKNOWN-CTOR` in pattern position, both `"kind":"type"`.
+--
+-- The discriminator, so this is not a guess: an abstract `export data` produces a
+-- RESOLVE diagnostic (`R-NO-EXPORTED-CTORS`, *"'AT' exports no constructors from
+-- module 'absmod' (exported abstractly)"*) and a private `newtype` produces
+-- `R-PRIVATE-NAME` — but `export newtype` produces **zero resolve diagnostics**,
+-- only the type-layer one.  Different layers refusing, and only one of them here.
+--
+-- So the arms match typecheck's published surface; only the `DData` arm ALSO
+-- matches resolve's table:
+--
+--   * `DData`, `VisPublic` only.  `public export data` puts its constructors in
+--     scope; `export data` is ABSTRACT and refuses loudly at RESOLVE; a private
+--     `data` does not export the type at all.  Same gate `expTypeCtorsDirect` uses,
+--     and here table and behaviour agree.  Resolve rejects the abstract case before
+--     the engine is reached, so the gate is masked on the typed path — but a mask is
+--     not a guarantee, and `eval_modules_main` does not run resolve at all.
+--
+--   * `DNewtype` — NO ARM, deliberately, and this is the arm where this index
+--     DIVERGES FROM `expTypeCtorsDirect` ON PURPOSE, tracking `publicDataDecls`
+--     instead.  A newtype's constructor is not importable by any spelling:
+--     `{NT(..)}` and `{NT, Wrap}` both fail with `T-UNBOUND`, measured with no
+--     collision present, so it is the plain contract and not a collision artefact.
+--     Binding what typecheck will refuse is strictly worse than not binding it,
+--     because the import frame OUT-RANKS `globalCells`.
+--     ⚠️ Gating this arm on `newtypePub` LOOKS like the fix and is a NO-OP — that
+--     gate was written, built and measured, and the regression survived it.
+--     An unconditional arm made `import nmod.{NT(..)}` bind `Wrap` and SHADOW a
+--     sibling module's legitimately-resolved `Wrap`, turning a correct `1` into
+--     `E-NOT-A-FUNCTION`.  Pinned by
+--     `test/eval_modules_fixtures/ctor_type_member_newtype_not_bound/`.
+--     That resolve and typecheck disagree here is itself latent and tracked as
+--     #1305's option 2; if it is ever settled the other way, THIS arm comes back.
+--
+--   * no `DAttrib` arm, no `DTypeAlias` arm — `expTypeCtorsDirect` has neither.
+--     (An attributed decl thereby contributing nothing is #1228, pinned; this index
+--     inherits that rather than diverging from the scope layer.)
+--
+-- ⚠️ TWO ROLES, ONE FUNCTION: this also builds the PRELUDE's `coreExports` (the
+-- `buildModInfos`/`cBuildModInfos` call sites), and resolve splits that role out to a
+-- DIFFERENT, deliberately unfiltered peer — `resolve.typeCtorsAllOf` (`:2773`), whose
+-- own comment says *"ignoring visibility … the prelude has no private names"*, and
+-- which has both `DNewtype` and `DAttrib` arms.  So the engine's PRELUDE index is now
+-- STRICTER than resolve's.
+--     That is inert BY CONSTRUCTION, not by luck: every prelude constructor gets a
+-- cell in `globalCells` (`globalNames` folds in `collectCtors allDecls`), so a
+-- prelude `T(..)` member this index declines to bind still resolves — through the
+-- global frame — to the very same cell.  For the prelude, declining to bind cannot
+-- lose a binding; it can only decline to shadow a cell with itself.  Reachable at
+-- all only via `export import core.{T(..)}`, which no fixture exercises, and moot
+-- today anyway (all five `core.mdk` data decls are `public export`; the tree has
+-- zero newtype declarations).  Documented rather than split, deliberately: the
+-- divergence is provably one-directional and a second index would be new code at
+-- the end of a review round.  Split it the day the prelude grows a private type.
+--
+-- ⚠️ `backend/private_mangle.unitCtorExportEntry` is the SYMBOL-layer peer and it is
+-- NOT a safe model for this one — it differs in THREE ways: it filters on
+-- reserved-ness rather than visibility, it HAS a `DNewtype` arm, and it HAS a
+-- `DAttrib` arm.  Its newtype arm is why `medaka build` mis-binds the shape above
+-- where `run` gets it right (filed as #1305 — a pre-existing run≠build divergence,
+-- not this unit's).  Copying the emitter here would have imported that bug into the
+-- interpreters.
+export ctorsByTypeOf : List Decl -> List (String, List String)
+ctorsByTypeOf decls = flatMap ctorNamesOfDecl decls
+
+ctorNamesOfDecl : Decl -> List (String, List String)
+ctorNamesOfDecl (DData { dataVis = VisPublic, dataName = tyname, dataCtors = variants }) = [(tyname, map variantName variants)]
+ctorNamesOfDecl _ = []
+
 -- value names a DUse binds, resolved to the exporting module's exported cells
 -- (mirrors lib/eval.ml build_imports); names resolving to a ctor/global are
 -- omitted (reached via the global frame instead).
-export importFrameOf : List (String, List (String, Ref (Value e))) -> List Decl -> List (String, Ref (Value e))
+export importFrameOf : List (String, ModExports (Value e)) -> List Decl -> List (String, Ref (Value e))
 importFrameOf exportsMap decls = flatMap (useImports exportsMap) decls
 
-useImports : List (String, List (String, Ref (Value e))) -> Decl -> List (String, Ref (Value e))
+useImports : List (String, ModExports (Value e)) -> Decl -> List (String, Ref (Value e))
 useImports exportsMap (DUse _ path _) = match lookupAssoc (useModuleId path) exportsMap
   None => []
   Some exports => resolveMembers path exports
@@ -3259,14 +3384,14 @@ useImports _ _ = []
 -- ORIGIN up in this list and enters it under the LOCAL name.  With core absent from
 -- exportsMap that lookup missed, `keep` bound nothing, and only an unaliased reference
 -- survived — by falling through to the global frame, which is not binding, just luck.
-export pubReexports : List (String, Ref (Value e)) -> List (String, List (String, Ref (Value e))) -> List Decl -> List (String, Ref (Value e))
-pubReexports globalCells exportsMap decls =
-  flatMap (reexport globalCells exportsMap) decls
+export pubReexports : ModExports (Value e) -> List (String, ModExports (Value e)) -> List Decl -> List (String, Ref (Value e))
+pubReexports coreExports exportsMap decls =
+  flatMap (reexport coreExports exportsMap) decls
 
-reexport : List (String, Ref (Value e)) -> List (String, List (String, Ref (Value e))) -> Decl -> List (String, Ref (Value e))
-reexport globalCells exportsMap (DUse True path _) =
+reexport : ModExports (Value e) -> List (String, ModExports (Value e)) -> Decl -> List (String, Ref (Value e))
+reexport coreExports exportsMap (DUse True path _) =
   let src = if useModuleId path == "core" then
-    Some globalCells
+    Some coreExports
   else
     lookupAssoc (useModuleId path) exportsMap
   match src
@@ -3277,18 +3402,47 @@ reexport _ _ _ = []
 -- The cells an import binds into the importing module's frame, keyed by the LOCAL name.
 -- The origin module's cell is shared by REFERENCE, so an alias is a second name for the
 -- very same cell — never a copy.
-resolveMembers : UsePath -> List (String, Ref (Value e)) -> List (String, Ref (Value e))
-resolveMembers (UseName ns) exports =
+resolveMembers : UsePath -> ModExports (Value e) -> List (String, Ref (Value e))
+resolveMembers (UseName ns) (ModExports exports _) =
   if listLen ns > 1 then
     bindNames [selfBind (lastOfList ns)] exports
   else
     []
-resolveMembers (UseGroup _ ms) exports = bindNames (map memberBind ms) exports
-resolveMembers (UseWild _) exports = exports
+resolveMembers (UseGroup _ ms) me = flatMap (memberCells me) ms
+resolveMembers (UseWild _) (ModExports exports _) = exports
 -- `import m as A` → every export of m, under `A.name`.  This is what makes two modules
 -- exporting the SAME name importable at once: their cells land under distinct keys, so
 -- the importing frame's first-match lookup can no longer collapse them.
-resolveMembers (UseAlias _ a) exports = map (qualifyCell a) exports
+resolveMembers (UseAlias _ a) (ModExports exports _) =
+  map (qualifyCell a) exports
+
+-- ONE UseGroup member → the cells it binds.
+--
+-- `T(..)` names a TYPE, so it binds every constructor of `T` under the
+-- constructor's OWN name — one alias cannot rename N constructors, which is the
+-- rule `frontend/resolve.expandMemberNames` states and applies at the scope layer,
+-- and `backend/private_mangle.ctorMemberEntry` applies at the symbol layer.  This
+-- is the third realization of that one rule, one per engine family; the three are
+-- diffed by `test/diff_compiler_engines.sh`.
+--
+-- An index MISS keeps the plain origin→local bind, which is the pre-A-2.7 meaning
+-- of every member and still the right answer for `import m.{C(..)}` where `C` is
+-- only a CONSTRUCTOR, and for a `(..)` on a type `m` does not declare.
+--
+-- On a HIT the plain bind is deliberately NOT also emitted, and the difference from
+-- `expandMemberNames` — which does emit `(name, local)` next to the expanded ctors
+-- — is only apparent.  Its extra entry exists to bind the TYPE into type scope and
+-- to carry a member ALIAS; a type has no value cell, and a `(..)` member cannot be
+-- aliased (`import m.{Cfg(..) as U}` is refused: *"`Cfg` is a type or constructor
+-- and cannot be aliased"*, measured, not assumed).  The one case where the type's
+-- spelling IS a value — a RECORD, whose sole variant carries the type's name — the
+-- index already carries under that spelling, so the plain bind would be a duplicate
+-- naming the same cell.
+memberCells : ModExports (Value e) -> UseMember -> List (String, Ref (Value e))
+memberCells (ModExports exports ctorsByType) (m@(UseMember n True _ _)) = match lookupAssoc n ctorsByType
+  Some cs => bindNames (map selfBind cs) exports
+  None => bindNames [memberBind m] exports
+memberCells (ModExports exports _) m = bindNames [memberBind m] exports
 
 qualifyCell : String -> (String, Ref (Value e)) -> (String, Ref (Value e))
 qualifyCell a (n, cell) = (qualifiedLocal a n, cell)

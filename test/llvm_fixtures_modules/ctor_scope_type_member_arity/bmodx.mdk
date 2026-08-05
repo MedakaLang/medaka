@@ -1,0 +1,11 @@
+-- A second module in the SAME graph whose constructor is ALSO spelled `Box`, at a
+-- DIFFERENT arity.  `entry.mdk` never brings THIS `Box` into scope — it imports the
+-- type and two values — so the collision exists only in the whole-graph tables the
+-- engines build from every module's decls.
+public export data XB = Box Int Int
+
+export bxv : XB
+bxv = Box 3 4
+
+export unXB : XB -> Int
+unXB (Box a b) = b - a

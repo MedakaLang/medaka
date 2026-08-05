@@ -1,0 +1,6 @@
+-- Consumer B: `Pin` here must mean sxb's arity-2 one.  Same spelling as usea's,
+-- different declaration, and the two consumers have NO import relationship.
+import sxb.{SB(..), unSB}
+
+export rb : Int
+rb = unSB (Pin 2 3)

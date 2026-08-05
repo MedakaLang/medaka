@@ -1,0 +1,8 @@
+-- Two unrelated decls.  `entry.mdk` asks for `OT(..)` only, so `Zed` must come in
+-- and `Wid` must NOT: `Wid` belongs to a decl the member does not name.
+public export data OT = Zed Int
+
+public export data OU = Wid Int
+
+export unOT : OT -> Int
+unOT (Zed n) = n
