@@ -16,10 +16,20 @@
 -- ⚠️ THIS FIXTURE IS GREEN ON PRISTINE `main` TOO, and that is stated rather than
 -- hidden: before A-2.7 the `(..)` member bound nothing at all, so it could not
 -- over-bind.  Its counterfactual is therefore a MUTATION of the fix, not a revert —
--- `memberCells`'s `(..)` arm made to bind every constructor of the exporting
--- module.  That mutation is measured RED in the PR body.  Do not cite this fixture
--- as evidence that A-2.7 changed anything; cite it as the thing that fails if the
--- next edit widens the rule.
+-- `memberCells`'s `(..)` arm made to bind `flatMap snd ctorsByType` (every
+-- constructor of the exporting module) instead of the named type's.  MEASURED on a
+-- binary built from that mutation: RED, `REGRESS
+-- llvmM/ctor_scope_type_member_no_overbind`, eval `E-NOT-A-FUNCTION: applied
+-- non-function: Wid 1` against a native arm still printing `4|3`.  The other two
+-- A-2.7 fixtures stayed GREEN under the same mutation, so this is the only member
+-- of the set that sees it.  Do not cite this fixture as evidence that A-2.7 changed
+-- anything; cite it as the thing that fails if the next edit widens the rule.
+--
+-- IT IS ALSO THE SET'S BYSTANDER CELL.  The mechanism is present (`omodn.{OT(..)}`
+-- builds an overlay) while the second assertion is about `pmodn`, a module the
+-- mechanism must not reach — and unlike `ctor_scope_type_member_per_module/`, both
+-- sides of the counterfactual are green, so "unrelated code still behaves" is
+-- observable here rather than inferred.
 import omodn.{OT(..), unOT}
 import pmodn.{PU, Wid, unPU}
 

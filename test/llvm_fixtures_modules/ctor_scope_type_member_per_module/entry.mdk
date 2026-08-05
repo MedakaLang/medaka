@@ -9,20 +9,25 @@
 -- so "it is keyed per module" is asserted by a running program here rather than by
 -- a comment.
 --
--- The third line is a genuine BYSTANDER: `bystand.mdk` imports nothing, declares no
--- colliding name, and only supplies a number.  It is here because a frame-keying
--- change is a program-global-table change, whose signature failure is that the
--- feature works and something unrelated breaks.
---
 -- Expected output, derived by hand BEFORE any capture and independently of any
 -- engine: `ra` = `unSA (Pin 7)` = `7`; `rb` = `unSB (Pin 2 3)` = `2 * 3` = `6`;
 -- `bys` = `6 + 5` = `11`.  So `7`, `6`, `11`.
 --
 -- ⚠️ COUNTERFACTUAL, measured on a MEDAKA_STRICT=1 binary built from pristine
 -- `main` `ae39ec41` (which IS "A-2.7 removed" — this branch has merged everything
--- else in `main`): RED.  Both `Pin` spellings fell through to the one bare-name
--- global cell, so exactly one consumer got the other's constructor.  Recorded in
--- the PR body with the exact engine output.
+-- else in `main`): RED.  `diff_compiler_engines.sh` reported `REGRESS
+-- llvmM/ctor_scope_type_member_per_module`, eval `E-NONEXHAUSTIVE-MATCH` against a
+-- native arm printing the correct `7|6|11`.
+--
+-- ⚠️ THE THIRD LINE IS NOT A CLEAN BYSTANDER CELL, and saying so is the point.
+-- `bystand.mdk` genuinely touches nothing — it imports nothing, declares no
+-- colliding name, and only supplies a number — but the eval arm above DIES BEFORE
+-- REACHING IT on the pre-fix binary, so on that engine its answer is not
+-- independently observable here.  What it does witness is the NATIVE arm, which
+-- printed `7|6|11` both before and after: the unrelated module's value did not
+-- move.  The cell where the mechanism is present, unrelated code is asserted, and
+-- BOTH sides are green is `ctor_scope_type_member_no_overbind/` — read that one for
+-- the bystander claim, and this one for the scoping claim.
 import usea.{ra}
 import useb.{rb}
 import bystand.{bys}
