@@ -1,0 +1,62 @@
+issue: 1288
+what: `mid.mdk` re-exports BOTH `p.*` and `g.*` under wildcard. `p` and `g` each
+what: declare their OWN interface named `Same` with different methods (`pmth` vs
+what: `gandThen`) -- unrelated, no shared origin. `mid.mdk`'s export-table
+what: construction (`reExpInterfacesFrom`/`reExpIfaceMethodsFrom`,
+what: compiler/frontend/resolve.mdk) concatenates both onto the exported name
+what: `Same` with no dedup and no diagnostic anywhere -- not in mid.mdk, not
+what: downstream.
+what: `main.mdk` imports `mid.{Same, pmth}` and writes `impl Same P where pmth p = 1`
+what: -- `pmth` is the ONLY method this file names, references, or implements
+what: anywhere; `gandThen` never appears in it at all.
+what: Correct verdict: ACCEPT, exit 0, print 1. Observed: REJECTED at exit 1 with
+what: `'impl Same P' is missing method 'gandThen'` -- typecheck's OWN interface-
+what: identity resolution (independent of resolve's) picks the OTHER, unrelated
+what: `Same` and demands a method that never appears in the rejected file.
+what: MECHANISM (from the issue): resolve's `ifaceAmbiguousSet` only ever inspects
+what: `down.mdk`'s (here `main.mdk`'s) OWN direct imports via `usePathsOf prog` --
+what: exactly one module (`mid`), so it never sees that TWO modules merged one
+what: hop upstream, and stays silent. Downstream, `ifaceMethodsOf` (first-match)
+what: and typecheck's own `implOrigin`/`universeIfaceRequiredRef` resolution
+what: independently pick which `Same` is meant, and here they disagree with each
+what: other -- typecheck loses.
+what: `cmd: check` shape per the task brief: `check` (not `run`) wrongly REJECTS a
+what: valid program -- pinned on `run` here, matching #1302's precedent, because
+what: `check` and `run` reject IDENTICALLY (both share typecheck) and `run` is the
+what: verb that also proves the accepted case actually EXECUTES and prints the
+what: right value, not merely "typechecks".
+cmd: run main.mdk
+exit: 1
+control: run control.mdk
+why-verb: `run` rather than bare `check`: both reject identically here (the
+why-verb: rejection is typecheck's, and `run` shares the whole front end with
+why-verb: `check` up to and past typecheck), and `run` is the cheaper of the two
+why-verb: verbs that still observes the false reject (no clang, unlike `build`).
+why-verb: `run` also lets the ACCEPT case (the control) additionally prove the
+why-verb: program executes and prints the right value, not merely that it
+why-verb: typechecks -- a stronger positive than `check` alone would give.
+why-stdout: deliberately ABSENT on the main (broken) case. The observable is a
+why-stdout: NONZERO EXIT on a program that must succeed, so `exit: 1` alone
+why-stdout: discriminates: correct behaviour is exit 0 printing 1, which moves the
+why-stdout: exit code. Pinning the diagnostic TEXT would additionally couple this
+why-stdout: row to the exact method-name/interface-name wording, which is not what
+why-stdout: the issue's mechanism is about (the WRONG interface is picked at all,
+why-stdout: not which words describe it).
+why-control: control.mdk changes exactly one thing versus main.mdk -- it imports
+why-control: `midctl` (`export import p.*` only) instead of `mid` (`export import
+why-control: p.*` PLUS `export import g.*`). midctl.mdk is mid.mdk with the `g.*`
+why-control: re-export line removed, so `Same` can only ever mean `p.Same` -- no
+why-control: merge is possible. Everything else (p.mdk, the impl, the entry body)
+why-control: is byte-identical between main.mdk and control.mdk. Must print 1 at
+why-control: exit 0. If this breaks, plain re-export or ordinary `impl`
+why-control: completeness broke, not #1288 -- this is exactly the reduction the
+why-control: issue itself verifies ("drop the g.* re-export and the same file
+why-control: checks clean").
+why-note: g.mdk is a support module only reachable through mid.mdk (the main/
+why-note: broken path) -- midctl.mdk (the control path) never imports it, which is
+why-note: the point: the control's `Same` has no second interface anywhere in its
+why-note: import graph to collide with.
+why-note: Sibling of #1302 (typecheck's own private-interface-witness gap) and of
+why-note: #1269 (the FIXED import-time cross-contamination one layer downstream of
+why-note: this bug -- #1269's own fix does not reach this export-table-
+why-note: construction-time merge). Umbrella #1070 / #1111.

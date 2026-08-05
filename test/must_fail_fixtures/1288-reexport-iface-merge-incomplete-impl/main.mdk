@@ -1,0 +1,15 @@
+-- #1288: `mid.mdk` re-exports p.Same and g.Same, two unrelated interfaces, under the
+-- same bare name `Same` -- an unmarked merge with no diagnostic in mid.mdk or here.
+-- `Same` is imported by name and `pmth` is the ONLY method this file names or
+-- implements; `gandThen` never appears anywhere in this file.
+-- Correct verdict: ACCEPT, print 1. Observed: REJECTED -- typecheck's completeness
+-- check independently resolves "which Same" and picks the WRONG one, demanding
+-- `gandThen`.
+import mid.{Same, pmth}
+
+data P a = MkP a
+
+impl Same P where
+  pmth p = 1
+
+main = println (pmth (MkP 1))

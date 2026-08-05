@@ -1,0 +1,8 @@
+-- #1288: the interface `down.mdk`/`control.mdk` actually mean -- exported by `p`,
+-- re-exported by `mid`/`midctl`, and the ONLY `Same` either entry file ever names or
+-- implements a method of.
+export interface Same f where
+  pmth : f a -> Int
+
+export pdummy : Int -> Int
+pdummy n = n
