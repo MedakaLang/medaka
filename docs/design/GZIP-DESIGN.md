@@ -120,7 +120,7 @@ actually fast is an open question this project will answer.
 
 | Phase | What ships | Oracle |
 |-------|-----------|--------|
-| **1** | `BitReader` + **stored (uncompressed) blocks** + gzip container parse/emit + CRC-32 | `gzip -0` output decodes; `printf` \| `gzip` round-trip |
+| **1** | `BitReader` + **stored (uncompressed) blocks** + gzip container parse/emit + CRC-32 | incompressible input (`/dev/urandom`) at any level emits a stored block — see below; `printf` \| `gzip` round-trip |
 | **2** | **Inflate, fixed Huffman** — the RFC 1951 static code tables, length/distance decoding, sliding window | `gzip -1`..`-9` on small inputs |
 | **3** | **Inflate, dynamic Huffman** — code-length alphabet, HLIT/HDIST/HCLEN, canonical code construction | Real `.gz` corpus, including this repo's own `compiler/seed/emitter.ll.gz` |
 | **4** | **Deflate** — LZ77 hash-chain matcher + fixed-Huffman blocks + stored-block fallback | `gunzip` accepts our output and reproduces the input |
@@ -194,6 +194,20 @@ Align to byte, then `LEN` (2 bytes LE) and `NLEN` (2 bytes LE, the one's
 complement of `LEN` — validate it), then `LEN` raw bytes copied verbatim to the
 output *and into the sliding window* (a stored block can be referenced by a
 later block's back-references; forgetting this is a classic bug).
+
+⚠️ **There is no `gzip -0`** — GNU gzip 1.13 rejects it (`invalid option -- '0'`);
+the levels are `-1`..`-9`. To get a stored block from the system tool, feed it
+**incompressible** input: gzip falls back to BTYPE 00 when compressing would
+expand the data. Verified:
+
+```
+$ head -c 200 /dev/urandom > rand.bin && gzip -1 -n -c rand.bin | xxd -s 10 -l 6
+0000000a: 01c8 0037 ff                             ...7.
+```
+
+`0x01` is `BFINAL=1, BTYPE=00`; `LEN=0x00c8`=200 and `NLEN=0xff37` is its exact
+one's complement. That is the Phase 1 oracle, and it is a better one than a
+hypothetical `-0` anyway: it is the shape a real decompressor must handle.
 
 #### Fixed Huffman (BTYPE 01)
 
