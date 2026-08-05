@@ -1,5 +1,5 @@
 # META
-source_lines=4267
+source_lines=4314
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted resolve stage — Stage 2 port of `lib/resolve.ml` (single-file
@@ -4219,6 +4219,53 @@ flatTyOriginScope coreDecls =
       (map (typeDeclaredIn "core") (dataRecordNames coreDecls) ++ map (ifaceDeclaredIn "core") (interfaceNamesOf coreDecls)))
     (omFromPairs builtinTyOrigins omEmpty)
 
+-- ── #1280: the scope `stdlib/runtime.mdk`'s EXTERN signatures are stamped under ─
+-- The identity-SUPPLY gap Stage A-2 left open, CLOSED HERE: `externSchemes`
+-- (`types/typecheck.mdk`) used to turn each `DExtern`'s declared `Ty` into a
+-- `Scheme` OUTSIDE `stampTyOrigins`' walk, so every `Mono` flowing out of an
+-- extern's declared type reached its consumers `OriginUnresolved`.  MEASURED
+-- before the fix, on this tree, on BOTH driver arms (goal-side dispatch head for
+-- a user-declared interface at `Float`):
+--
+--   probeMeth x            where x : Float   ->  …:type7:builtin0:5:Float
+--   probeMeth (intToFloat 1)                 ->  …:type4:bare0:5:Float
+--
+-- 🚨 THE POPULATION IS NOT UNIFORM, AND EITHER UNIFORM ANSWER IS A FALSE REJECT.
+-- Derive the name set, do not read one here:
+--
+--   grep -E '^extern ' stdlib/runtime.mdk | sed -E 's/--.*$//; s/<[^>]*>//g' \
+--     | grep -oE '\b[A-Z][A-Za-z0-9_]*' | sort -u
+--
+-- It splits: the members of `primitiveTypes` are LANGUAGE-provided heads whose
+-- every other occurrence is stamped `OriginBuiltin` by `builtinTyOrigins`, while
+-- `Option`/`Ordering`/`Result` are ordinary `data` declarations in
+-- `stdlib/core.mdk` whose every other occurrence — and whose `Mono` mint out of
+-- `registerVariants`' `dataOrigin` — is `OriginModule "core"`.  `sameTyConHead`
+-- (`frontend/ast.mdk`) conflicts two heads exactly when BOTH carry an identity and
+-- the identities differ, so stamping this population uniformly `OriginBuiltin`
+-- refuses every prelude use of an extern returning `Option`, and stamping it
+-- uniformly `core` refuses `1 + 1`.  The only correct answer is the SAME
+-- PER-NAME scope every other occurrence of those names is already stamped under,
+-- which is what this is.
+--
+-- ⚠️ ONE scope serves BOTH arms, and that is a property of `runtime.mdk`, not a
+-- convenience: it declares NO types of its own (`grep -nE '^(data|newtype|type|
+-- interface) ' stdlib/runtime.mdk` is empty), so it has nothing to attribute to a
+-- module of its own and needs neither the graph arm's import layer
+-- (`tyOriginScope`'s `usePathsOf prog` term — `runtime.mdk` has no `import`) nor
+-- an own-declarations layer.  What is left is exactly builtins ⊎ the prelude's own
+-- names, i.e. `flatTyOriginScope` — which the GRAPH arm agrees with on this
+-- population: `tyOriginScope`'s builtin and prelude layers are the same two lists.
+-- So this is deliberately NOT `stampFlatTyOrigins`' "flat drivers claim less"
+-- asymmetry; on this population there is nothing more for the graph arm to claim.
+--
+-- ⚠️ It is a SCOPE and not a stamper because its consumer must be the ONE that
+-- also builds the schemes — see `externSchemes`, which takes this rather than a
+-- `List Decl` prelude so that no caller can hand it two `List Decl`s the wrong way
+-- round (`stampFlatTyOrigins`' own comment records that positional hazard).
+export externTyOriginScope : List Decl -> OrdMap TyConOrigin
+externTyOriginScope coreDecls = flatTyOriginScope coreDecls
+
 -- ── the AGREEMENT TAP (#1110) ────────────────────────────────────────────────
 -- ⚠️ NOTHING in the compiler reads this, and nothing may.  It exists so a GATE can
 -- observe what a driver ACTUALLY stamped — the one fact the two S0s fixed in #1219
@@ -5450,6 +5497,8 @@ takeOriginTrace _ =
 (DFunDef false "stampFlatTyOrigins" ((PVar "coreDecls") (PVar "prog")) (EApp (EApp (EVar "stampTyOrigins") (EApp (EVar "flatTyOriginScope") (EVar "coreDecls"))) (EVar "prog")))
 (DTypeSig false "flatTyOriginScope" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "OrdMap") (TyCon "TyConOrigin"))))
 (DFunDef false "flatTyOriginScope" ((PVar "coreDecls")) (EApp (EApp (EVar "omFromPairs") (EApp (EApp (EVar "map") (EVar "importedTyOrigin")) (EBinOp "++" (EApp (EApp (EVar "map") (EApp (EVar "typeDeclaredIn") (ELit (LString "core")))) (EApp (EVar "dataRecordNames") (EVar "coreDecls"))) (EApp (EApp (EVar "map") (EApp (EVar "ifaceDeclaredIn") (ELit (LString "core")))) (EApp (EVar "interfaceNamesOf") (EVar "coreDecls")))))) (EApp (EApp (EVar "omFromPairs") (EVar "builtinTyOrigins")) (EVar "omEmpty"))))
+(DTypeSig true "externTyOriginScope" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "OrdMap") (TyCon "TyConOrigin"))))
+(DFunDef false "externTyOriginScope" ((PVar "coreDecls")) (EApp (EVar "flatTyOriginScope") (EVar "coreDecls")))
 (DTypeSig false "originTraceEnabled" (TyApp (TyCon "Ref") (TyCon "Bool")))
 (DFunDef false "originTraceEnabled" () (EApp (EVar "Ref") (EVar "False")))
 (DTypeSig false "originTraceLog" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))
@@ -6641,6 +6690,8 @@ takeOriginTrace _ =
 (DFunDef false "stampFlatTyOrigins" ((PVar "coreDecls") (PVar "prog")) (EApp (EApp (EVar "stampTyOrigins") (EApp (EVar "flatTyOriginScope") (EVar "coreDecls"))) (EVar "prog")))
 (DTypeSig false "flatTyOriginScope" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "OrdMap") (TyCon "TyConOrigin"))))
 (DFunDef false "flatTyOriginScope" ((PVar "coreDecls")) (EApp (EApp (EVar "omFromPairs") (EApp (EApp (EMethodRef "map") (EVar "importedTyOrigin")) (EBinOp "++" (EApp (EApp (EMethodRef "map") (EApp (EVar "typeDeclaredIn") (ELit (LString "core")))) (EApp (EVar "dataRecordNames") (EVar "coreDecls"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "ifaceDeclaredIn") (ELit (LString "core")))) (EApp (EVar "interfaceNamesOf") (EVar "coreDecls")))))) (EApp (EApp (EVar "omFromPairs") (EVar "builtinTyOrigins")) (EVar "omEmpty"))))
+(DTypeSig true "externTyOriginScope" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "OrdMap") (TyCon "TyConOrigin"))))
+(DFunDef false "externTyOriginScope" ((PVar "coreDecls")) (EApp (EVar "flatTyOriginScope") (EVar "coreDecls")))
 (DTypeSig false "originTraceEnabled" (TyApp (TyCon "Ref") (TyCon "Bool")))
 (DFunDef false "originTraceEnabled" () (EApp (EVar "Ref") (EVar "False")))
 (DTypeSig false "originTraceLog" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))

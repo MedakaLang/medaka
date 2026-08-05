@@ -1,8 +1,0 @@
--- CONTROL: the SAME cross-module call into a seed-flipped module that redeclares
--- `Option`, with the ONE flipped variable removed -- the value never crosses the
--- extern's identity-less `Option` head, so there is nothing to bridge.  It must
--- stay green and print 1005.  If this breaks, cross-module calls or the seed flip
--- itself broke, not #1279.
-import good.{honest}
-
-main = println honest

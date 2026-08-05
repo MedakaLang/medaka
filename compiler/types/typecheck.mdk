@@ -92,6 +92,9 @@ import frontend.resolve.{
   stampGraphTyOrigins,
   stampFlatTyOrigins,
   stampDeclOrigins,
+  -- #1280: the extern-signature half of the identity supply — see `externSchemes`.
+  stampTyOrigins,
+  externTyOriginScope,
   noteOriginTrace,
 }
 -- The type-aware non-exhaustive-`match` check (`check_match` in lib/exhaust.ml)
@@ -10430,7 +10433,10 @@ elaborateDict runtimeDecls dictNames eligibleNames prog =
   -- P0-18: [] — the confirmed definer-shadow-emit path is elaborateModules; this
   -- single-file scratch elaborate stays shadow-map-free (byte-identical discovery).
   let prog2 = prePassDictArg (returnPosMethodNames prog ++ methodConstraintNames prog) allNames argNames [] prog
-  let _ = checkProgramSeeded (externSchemes runtimeDecls) prog2
+  -- #1280: prelude-FLATTENED path (`prog` already carries it), so the prelude
+  -- boundary is unknown here and the scope is builtins-only — the same answer
+  -- `checkProgramSeededSplit` gives its own `coreProg0 = []` callers.
+  let _ = checkProgramSeeded (externSchemes (externTyOriginScope []) runtimeDecls) prog2
   let _ = expandSupersTable prog2
   let implTable = buildImplTable prog2
   let keyTable = buildKeyTable prog2
@@ -10459,7 +10465,8 @@ discoverAll runtimeDecls prog dictNames _ =
 discoverPromoted : List Decl -> List Decl -> List String -> List String
 discoverPromoted runtimeDecls prog current =
   let prog1 = prePassDict (returnPosMethodNames prog ++ methodConstraintNames prog) current prog
-  let _ = checkProgramSeeded (externSchemes runtimeDecls) prog1
+  -- #1280: prelude-flattened discovery pass — builtins-only scope, see `elaborateDict`.
+  let _ = checkProgramSeeded (externSchemes (externTyOriginScope []) runtimeDecls) prog1
   discoverNext
     runtimeDecls
     prog
@@ -10590,7 +10597,8 @@ discoverPromotedModules runtimeDecls coreDecls modules rpNames argNames =
 discoverPromotedJoint : List Decl -> List Decl -> List String -> List String -> List String -> List String
 discoverPromotedJoint runtimeDecls joint rpNames argNames current =
   let prog1 = prePassDictArg (rpNames ++ methodConstraintNames joint) current argNames [] joint
-  let _ = checkProgramSeeded (externSchemes runtimeDecls) prog1
+  -- #1280: prelude-flattened discovery pass — builtins-only scope, see `elaborateDict`.
+  let _ = checkProgramSeeded (externSchemes (externTyOriginScope []) runtimeDecls) prog1
   discoverNextJoint
     runtimeDecls
     joint
@@ -15353,7 +15361,9 @@ checkProgramSchemes coreProg userProg =
 export checkProgramSchemesWithRuntime : List Decl -> List Decl -> List Decl -> List (String, Scheme)
 checkProgramSchemesWithRuntime runtimeDecls coreProg userProg =
   let _ = setRef driverState.value.implInferEnabled False
-  checkProgramSeededSplit (externSchemes runtimeDecls) coreProg userProg
+  -- #1280: `coreProg` IS the prelude boundary this entry exists to carry, so the
+  -- extern scope can attribute `Option`/`Ordering`/`Result` to `core` here.
+  checkProgramSeededSplit (externSchemes (externTyOriginScope coreProg) runtimeDecls) coreProg userProg
 
 -- [seed] are extern schemes from runtime.mdk: in scope for lookup (so core.mdk's
 -- use of putStrLn/etc. resolves) but NOT part of the output (mirrors the
@@ -15640,7 +15650,11 @@ checkBodyImpl seed mode prog0 =
   -- above has just populated.
   let _ = checkGradedImplHeads prog
   let _ = rejectCyclicAliases ()
-  let globalS = ifaceMethodSchemes prog ++ externSchemes prog
+  -- #1280: `prog` reached here through a driver's stamping walk already, and
+  -- `stampTyHead` is first-write-immune, so the builtins-only scope can only fill
+  -- a head no driver could attribute — an `extern` written in a FLAT user file,
+  -- where there is no module id and the primitive heads are all that is knowable.
+  let globalS = ifaceMethodSchemes prog ++ externSchemes (externTyOriginScope []) prog
   -- methodNames: FLAT's SECOND ifaceMethodSchemes call over prog — dedup-skipped by
   -- registerMethodConstraints so globalS's registered (first-call) ids stay authoritative.
   -- Module checks core in isolation and never needs it, so NO extra call there.
@@ -16371,18 +16385,21 @@ oblIfaceKey iface = TkBare NsIface iface
 --      and which origin survives the link is an artefact of link DIRECTION.  A
 --      key built on it is not a function of the type at all, and no amount of
 --      supply repairs that.
---   2. SUPPLY — a gap that CAN be filled, and it now has a named starting
---      point.  `Mono.TCon`'s origin is filled at the four mints, and a mono that
---      reaches a dispatch goal through a signature (`fromAstTypeE`) inherits
---      whatever its `Ty` carried.  The hole is NOT `stampTyHead`
---      (`frontend/resolve.mdk`), whose scope does contain the primitives: it is
---      that `stdlib/runtime.mdk`'s EXTERN signatures never pass through the
---      stamping walk at all (`externSchemes`), so every mono flowing out of an
---      extern's declared type is `OriginUnresolved`.  It is per-PROVENANCE
---      silent, not systematically silent — `(1 : Int) < 2` supplies identity;
---      `stringLength "xy" < 2` does not — and it is not confined to the flat
---      arm, so the earlier units' framing ("A-2 is module-path-only until
---      #1115") does not cover it.
+--   2. SUPPLY — a gap that CAN be filled, and ✅ #1280 FILLED IT.  `Mono.TCon`'s
+--      origin is filled at the four mints, and a mono that reaches a dispatch
+--      goal through a signature (`fromAstTypeE`) inherits whatever its `Ty`
+--      carried.  The hole was NOT `stampTyHead` (`frontend/resolve.mdk`), whose
+--      scope does contain the primitives: it was that `stdlib/runtime.mdk`'s
+--      EXTERN signatures never passed through the stamping walk at all, so every
+--      mono flowing out of an extern's declared type was `OriginUnresolved`.  It
+--      was per-PROVENANCE silent, not systematically silent — `(1 : Int) < 2`
+--      supplied identity; `stringLength "xy" < 2` did not — and it was not
+--      confined to the flat arm, so the earlier units' framing ("A-2 is
+--      module-path-only until #1115") never covered it.  `externSchemes` (this
+--      file) now stamps under `externTyOriginScope`; the goal-side head for an
+--      extern-sourced primitive was MEASURED before and after and moved from
+--      `TkBare NsType` to the same `TkIdent` the impl side already carried, on
+--      BOTH arms.
 --
 -- ⚠️ THAT ORDER IS LOAD-BEARING AND WAS ONCE WRITTEN THE OTHER WAY ROUND HERE,
 -- while #1111's own write-up listed it as it is now — two records naming
@@ -16395,6 +16412,41 @@ oblIfaceKey iface = TkBare NsIface iface
 -- is supplied and canonicalised.  That is a semantics change with its own
 -- fixture, not a re-key, and doing it here shipped a compiler that rejects
 -- `1 + 1`.
+--
+-- 🚨 ONE OF THOSE TWO PRECONDITIONS IS MET, NOT BOTH, AND THE DIFFERENCE IS THE
+-- WHOLE OF WHAT #1317 STILL HAS TO SOLVE.  Canonicality: met, by A-2.10.  Supply:
+-- met **for the EXTERN population only**, by #1280 — which is one of the TWO
+-- populations that had no identity, not the residual.  ⚠️ An earlier draft of this
+-- paragraph said "BOTH … ARE NOW MET"; that was written by #1280's own author and
+-- is exactly the over-claim this ledger must not make, because this comment is the
+-- anchor #1317's issue routes its implementer to (`grep -nw dispHeadTab`).
+--
+-- The population that remains is the FLAT/loader-less driver's own user module —
+-- **#1115 / E-1, OPEN**.  `stampFlatTyOrigins` (`frontend/resolve.mdk`, and see its
+-- `#1110 flat-identity` residual note) deliberately claims nothing for the user
+-- program's own declarations, because that driver has no loader-derived module id
+-- and an invented one is made PERMANENT by `stampTyHead`'s immunity rule.  So a
+-- flat user module's own `data` head reaches this projection with
+-- `OriginUnresolved`, and `tabKeyOf`'s `None => TkBare ns name` arm
+-- (`types/registry.mdk`) turns it into a `TkBare` — the *same* "goal side is mixed"
+-- condition A-2.2b measured, surviving for the other population.  ⚠️ Do not take
+-- that on trust and do not re-derive it with a probe either: it is already
+-- committed evidence.  `test/origin_fixtures/graph/agreement.golden`'s `RESIDUAL`
+-- section lists the `flat` arm's surviving `OriginUnresolved` heads by name
+-- (`flat alpha Crate`, `flat alpha Weight`, `flat beta Shipment`, …) — those are
+-- the user modules' OWN types.
+--
+-- A THIRD, smaller gap, for completeness: the prelude-FLATTENED internal passes
+-- have no prelude boundary, so they leave `Option`/`Ordering`/`Result` absent —
+-- symmetrically, since the flattened prelude's own declarations are unstamped
+-- there too (`externSchemes` carries that derivation and the call-site list).
+--
+-- ⇒ The head COMPONENT is therefore still spelling-keyed, and that is still
+-- CORRECT rather than merely deferred.  Moving it is its own unit with its own
+-- fixtures, **#1317**, which also owns retiring this ledger and `oblIfaceKey`'s
+-- bare interface half — and which must either close #1115 first or key a head
+-- whose supply it has established, not assumed.  A re-key that assumes total
+-- supply everywhere is the same mistake A-2.2b made in the other direction.
 --
 -- ⚠️ AND THE RIGID ARM IS KEYED, DELIBERATELY.  `headKeyName (HkRigid n) = n`,
 -- so a rigid parameter still hands out a bucket key — the §8 I6.1 residual
@@ -18244,11 +18296,68 @@ monoTyvarIds m = match normalize m
   _ => []
 
 -- extern declarations become top-level schemes (like interface methods)
-externSchemes : List Decl -> List (String, Scheme)
-externSchemes [] = []
-externSchemes ((DExtern _ n ty)::rest) =
-  (n, sigToScheme ty) :: externSchemes rest
-externSchemes (_::rest) = externSchemes rest
+--
+-- 🚨 #1280: THE STAMPING WALK IS PART OF THIS FUNCTION, NOT OF ITS CALLERS, AND
+-- THAT IS THE FIX.  Every other tree that reaches typecheck has already been
+-- through `stampTyOrigins` at a driver (`stampGraphTyOrigins` on the module arm,
+-- `stampFlatTyOrigins` inside `checkProgramSeededSplit` on the flat one).
+-- `runtimeDecls` was the one tree that reached a `Scheme` without ever entering
+-- that walk on EITHER arm, so every `Mono` `fromAstTypeE` built out of an extern's
+-- declared type carried `OriginUnresolved` — the SUPPLY half of the dispatch-key
+-- blocker recorded at `dispHeadTab`, and the absent head #1279 bridges two
+-- distinct identities through.
+--
+-- The scope is a parameter and not a `List Decl` prelude on purpose: two
+-- `List Decl` arguments are positionally interchangeable and `stampTyHead`'s
+-- immunity rule makes a wrong first stamp PERMANENT (`stampFlatTyOrigins`'
+-- comment in `frontend/resolve.mdk` records that hazard costing a defect once
+-- already).  Build it with `externTyOriginScope`, which owns the derivation of
+-- WHY one scope is right for this population on both arms.
+--
+-- ⚠️ `externTyOriginScope []` at a call site is not a shrug: it is the same
+-- "prelude boundary unknown" answer `checkProgramSeededSplit` gives when its
+-- `coreProg0` is `[]` — those callers have already FLATTENED the prelude into the
+-- program they check, so the prelude's own `Option`/`Ordering`/`Result`
+-- declarations are unstamped on that path too and the two sides stay symmetric.
+-- The builtin layer is still supplied there, so it is strictly more identity than
+-- before, never a claim the driver cannot justify.
+--
+-- 🚨 FILTER BEFORE STAMPING, AND THAT ORDER IS PERFORMANCE, NOT STYLE.  The first
+-- cut here was `externSchemesGo (stampTyOrigins scope decls)`, which is a no-op
+-- difference for `runtimeDecls` (every element IS a `DExtern`) and wrong-shaped at
+-- the `checkBodyImpl` call site, where `decls` is the WHOLE MODULE.  Read the
+-- chain rather than take this on trust: `stampTyOrigins` is `map
+-- (stampDeclTyOrigins scope)`, and `stampDeclTyOrigins` is `mapOriginsInDecl`,
+-- i.e. a full `mapTyInDecl` REBUILD of the decl — so that shape reconstructs every
+-- declaration in the program and then discards all but the externs, in a stage
+-- `compiler/AGENTS.md` calls GC-bound.  Filtering first makes the walk
+-- proportional to the externs, which is all this function reads.
+--
+-- ⚠️ THE MECHANISM ABOVE IS READ OFF THE SOURCE; THE MAGNITUDE WAS NOT MEASURED.
+-- No before/after allocation number was taken, so this is a shape argument, not a
+-- perf result — do not cite it as one.  It needs no number to be the right shape:
+-- rebuilding what you are about to throw away is never the cheaper branch.
+externSchemes : OrdMap TyConOrigin -> List Decl -> List (String, Scheme)
+externSchemes scope decls =
+  externSchemesGo (stampTyOrigins scope (externDecls decls))
+
+-- The `DExtern` sublist, in order.  Its own clause rather than a `filter` with a
+-- lambda predicate: `Decl` has no cheap "is an extern" projection, so the pattern
+-- match IS the predicate.
+externDecls : List Decl -> List Decl
+externDecls [] = []
+externDecls ((d@(DExtern _ _ _))::rest) = d :: externDecls rest
+externDecls (_::rest) = externDecls rest
+
+-- The pre-#1280 body, unchanged, over the ALREADY-STAMPED list.  It is split out
+-- rather than folded into the clause above so that the recursion cannot re-enter
+-- the stamping walk on its own tail — the shape that turns a one-pass `map` into a
+-- quadratic, which is the defect class `compiler/AGENTS.md` opens with.
+externSchemesGo : List Decl -> List (String, Scheme)
+externSchemesGo [] = []
+externSchemesGo ((DExtern _ n ty)::rest) =
+  (n, sigToScheme ty) :: externSchemesGo rest
+externSchemesGo (_::rest) = externSchemesGo rest
 
 -- interface method schemes: each method's declared type, free tyvars (incl. the
 -- interface param) quantified — the bare scheme the === TYPES === output shows
@@ -19715,7 +19824,8 @@ seedAndCheckSplit : List Decl -> List Decl -> List Decl -> List (String, Scheme)
 seedAndCheckSplit runtimeDecls coreProg userProg =
   let prog = coreProg ++ userProg
   let _ = seedCheckRun prog
-  let schemes = checkProgramSeededSplit (externSchemes runtimeDecls) coreProg userProg
+  -- #1280: prelude boundary in hand — see `checkProgramSchemesWithRuntime`.
+  let schemes = checkProgramSeededSplit (externSchemes (externTyOriginScope coreProg) runtimeDecls) coreProg userProg
   let _ = runFinalChecks driverState.value.coherenceUserDecls.value prog
   schemes
 
@@ -19763,7 +19873,8 @@ export checkMatchToLines : List Decl -> List Decl -> String
 checkMatchToLines runtimeDecls prog =
   let _ = setRef driverState.value.matchWarnings []
   let _ = setRef driverState.value.matchOracle (buildOracle prog)
-  let _ = checkProgramSeeded (externSchemes runtimeDecls) prog
+  -- #1280: prelude-flattened probe entry — builtins-only scope, see `elaborateDict`.
+  let _ = checkProgramSeeded (externSchemes (externTyOriginScope []) runtimeDecls) prog
   joinNl (map tcMsg (reverseL driverState.value.matchWarnings.value))
 
 -- ── diagnostics entry point (compiler/diagnostics.mdk bridge) ────────────
@@ -21166,7 +21277,10 @@ checkModulesPreamble runtimeDecls coreDecls modules =
   -- resetState no longer re-seeds, so this survives every per-module reset below.
   -- Must precede the core checkModuleFull (it runs checkEffectParams, reading these).
   let _ = populateEffectDomains (coreDecls ++ flatMap snd modules)
-  let runtimeSeed = externSchemes runtimeDecls
+  -- #1280: `coreDecls` arrives here ALREADY STAMPED (each caller's
+  -- `stampGraphTyOrigins` line above), but the scope is derived from its type
+  -- NAMES, not its origins, so it is the same map either way.
+  let runtimeSeed = externSchemes (externTyOriginScope coreDecls) runtimeDecls
   let _ = seedAbstractRecordTypes coreDecls modules
   let coreSchemes = checkModuleFull runtimeSeed [] coreDecls
   -- #673: snapshot core's OWN obligations NOW — perRun.schemeObligationsRef still holds core's
@@ -21595,7 +21709,11 @@ elaborateModules runtimeDecls coreDecls0 modulesIn =
   let dictNames0 = dedup (bareDictNames0
     ++ aliasDictNames bareDictNames0 (("core", coreDecls)::modules) modules)
   let markRpNames = dedup (rpNames ++ methodConstraintNames allDecls ++ buildStandaloneShadowsGraph allDecls (flatMap snd modules))
-  let runtimeSeed = externSchemes runtimeDecls
+  -- #1280: the EMIT arm's copy of `checkModulesPreamble`'s line — the same scope,
+  -- for the driver that does not use that preamble.  This is the seam `run` and
+  -- the separate `medaka_emitter` process share, so an extern head stamped here
+  -- and not there would be a fresh check≠build divergence.
+  let runtimeSeed = externSchemes (externTyOriginScope coreDecls) runtimeDecls
   -- FIRST SWEEP (bare-dict): the real per-module elaboration, harvesting each module's
   -- direct promotions (registerInferredConstraints → promotedRef, unioned per module by
   -- elabHarvestWorker).  On a program that promotes NOTHING — every compiler self-compile
