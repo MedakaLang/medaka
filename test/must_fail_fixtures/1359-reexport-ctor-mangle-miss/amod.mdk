@@ -1,0 +1,2 @@
+-- issue #1359: the module that DECLARES the constructor.
+public export data AT = Wid Int

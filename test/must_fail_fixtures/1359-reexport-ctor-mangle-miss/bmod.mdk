@@ -1,0 +1,3 @@
+-- issue #1359: RE-EXPORTS amod's constructor. main.mdk imports Wid from HERE,
+-- one hop removed from the declaring module -- this is the hop that drops it.
+export import amod.{Wid}
