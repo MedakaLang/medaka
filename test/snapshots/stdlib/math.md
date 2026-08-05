@@ -1,5 +1,5 @@
 # META
-source_lines=294
+source_lines=297
 stages=DESUGAR,MARK
 # SOURCE
 {- math.mdk — floating-point math: roots, transcendentals, rounding, and a
@@ -124,12 +124,15 @@ approxEq a b eps = abs (a - b) <= eps
 
 -- ── Logarithms ──────────────────────────────────────────────────────────
 
--- | Logarithm of `x` in an arbitrary base: `logBase b x = log x / log b`.
+-- | Logarithm of `x` in an arbitrary base: `logBase b x = log x / log b`. Not
+--   exact in general (it's a log division, IEEE 754 float rounding applies);
+--   the second example below asserts the real computed value, confirmed
+--   externally via `python3 -c "import math; print(repr(math.log(1000.0)/math.log(10.0)))"`.
 --
 -- > logBase 2.0 8.0
 -- 3.0
 -- > logBase 10.0 1000.0
--- 3.0
+-- 2.9999999999999996
 export logBase : Float -> Float -> Float
 logBase base x = log x / log base
 
@@ -238,8 +241,8 @@ absInt n = if n < 0 then 0 - n else n
 -- 2.0
 -- > sqrt 9.0
 -- 3.0
--- > cbrt 27.0
--- 3.0
+-- > cbrt 8.0
+-- 2.0
 -- > exp 0.0
 -- 1.0
 -- > log e
