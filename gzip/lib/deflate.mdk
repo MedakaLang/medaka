@@ -1,0 +1,787 @@
+-- | gzip.lib.deflate — Phase 4: LZ77 match finding + fixed-Huffman block
+--   encoding (RFC 1951 `BTYPE=01`) + stored-block fallback (`BTYPE=00`),
+--   and the gzip container wrapper around it.
+--
+-- OUT OF SCOPE (Phase 5, `docs/design/GZIP-DESIGN.md`): dynamic-Huffman
+-- encoding (`BTYPE=10`) — frequency counting, length-limited canonical code
+-- construction, and the code-length-alphabet header. Every block this module
+-- emits is either fixed Huffman or stored.
+--
+-- ## Correctness discipline
+--
+-- The load-bearing proof of conformance is `gzip/test/deflate_oracle.sh`:
+-- the system `gunzip` must accept our output and reproduce the input
+-- byte-for-byte. This module also carries an internal
+-- `inflate (deflate x) == x` property (below) against `lib.inflate`, our OWN
+-- decompressor — that is a cheap FAST-FAIL, not a conformance proof: this
+-- deflater and that inflater share this file tree, so a bug both sides agree
+-- on (a shared misreading of the RFC) would round-trip cleanly here while
+-- the real `gunzip` rejected the output outright. Treat a green run of this
+-- module's own tests as necessary, never sufficient.
+--
+-- ## LZ77 match finder
+--
+-- A hash-chain matcher over a 32 KB sliding window, the "classic zlib
+-- arrangement" the design doc calls for: `head[hash]` is the most recent
+-- position with that 3-byte hash, `prev[pos]` is the previous position
+-- sharing `pos`'s hash — walking `prev` backwards from `head[hash]` visits
+-- every earlier candidate, nearest first, until the chain runs out, the
+-- distance exceeds the window, or `maxChainLength` links have been walked.
+-- Both tables are flat `Array Int`, matching the design doc's "no
+-- allocation in the inner loop" requirement; positions are absolute indices
+-- into the whole input (not wrapped mod window size), since the input lives
+-- in one `Array Int` for the whole run and there is no reason to compact it.
+--
+-- Tuning constants (the "compression-level knob" the design doc allows this
+-- phase to expose):
+--
+--   - `maxChainLength = 128` — how many links of a hash chain to walk before
+--     accepting the best match found so far. 128 is zlib's own default
+--     (level 6) `max_chain` value; picked here for the same reason zlib
+--     picked it there — a reasonable middle ground between match quality and
+--     scan time, not tuned against this codebase's own corpus.
+--   - `minMatch = 3`, `maxMatch = 258` — RFC 1951's own bounds (the shortest
+--     back-reference the format can encode, and the longest a single length
+--     symbol can express).
+--   - **Lazy matching**: before committing to a match at position `p`, the
+--     matcher also searches at `p+1` (which, by the time it is searched, has
+--     ALREADY been inserted into the hash chain by `p`'s own scan step — see
+--     `deflateScan`/`insertUpTo`) — if `p+1` has a strictly longer match, `p`
+--     is emitted as a literal instead and the longer match is picked up on
+--     the next iteration. This is a genuine ratio win for a few lines of
+--     code, and the design doc calls for landing it in Phase 4 rather than
+--     deferring it.
+--
+-- ## Emitting
+--
+-- Every position is either a literal byte (encoded via the RFC 1951 §3.2.6
+-- fixed literal/length code, whose 288-symbol alphabet ALSO covers the
+-- length symbols 257–285 and the end-of-block symbol 256 — one alphabet, one
+-- `fixedLitLenCode` function) or a length/distance back-reference (a
+-- lit/len length-symbol code, its extra bits, a flat 5-bit distance code,
+-- and its extra bits). `fixedLitLenCode`/`fixedDistCode` below are the
+-- CLOSED-FORM RFC formulas for the fixed table's code VALUES — the encoder's
+-- counterpart to `huffman.mdk`'s DECODE-side `fixedLitLen`/`fixedDist`
+-- tables, built from the same code lengths but not sharing an exported
+-- representation with them (the decode tables carry `counts`/`symbols` for
+-- the counts-and-offsets decoder, not code values). Independently verified
+-- against `huffman.decodeSym` below: `prop
+-- "fixedLitLenCode round-trips…"`/`prop "fixedDistCode round-trips…"` encode
+-- every symbol in both alphabets and decode it back through the EXISTING,
+-- already-tested decoder — a wrong cell in either closed form fails the
+-- round trip rather than silently mis-encoding.
+--
+-- A whole input is ONE fixed-Huffman block (`BFINAL=1` from the first bit) —
+-- there is no per-block length limit for Huffman-coded data (unlike stored
+-- blocks, which are capped at 65535 bytes by the 16-bit `LEN` field), so
+-- there is no reason to split it in Phase 4 (block splitting is a ratio
+-- heuristic, not a correctness requirement, and belongs with dynamic Huffman
+-- in Phase 5).
+--
+-- ## Stored-block fallback (the correctness case people forget)
+--
+-- `deflate` always computes BOTH the fixed-Huffman encoding AND the
+-- stored-block encoding, and keeps whichever is smaller. This is the
+-- simplest possible version of "detect a block that would grow and fall
+-- back" — no entropy estimate, no heuristic, just two candidates and a size
+-- comparison — and it gives an exact, provable bound: the output can never
+-- exceed `deflateStored`'s size, which is `n + 5 * ceil(n / 65535)` (five
+-- bytes of per-block overhead: one byte for the 3-bit BFINAL/BTYPE header
+-- rounded up to a byte boundary, plus 2 bytes `LEN` + 2 bytes `NLEN`). That
+-- is the "must not grow" guarantee `gzip/test/deflate_oracle.sh` checks
+-- against `/dev/urandom` input.
+
+import array.{get, set, make, sliceClamped, concat, range, makeWith}
+import lib.bitio.{
+  BitWriter,
+  newBitWriter,
+  putBits,
+  putCodeMSB,
+  alignByteW,
+  putBytesAligned,
+  finishBitWriter,
+  newBitReader,
+  getBits,
+}
+import lib.huffman.{
+  lengthBase,
+  lengthExtra,
+  distBase,
+  distExtra,
+  fixedLitLen,
+  fixedDist,
+  decodeSym,
+}
+import lib.crc32.{crc32}
+import lib.container.{GzipHeader, emitGzipHeader, emitGzipTrailer}
+import lib.inflate.{inflate, gunzipMember}
+import test.{expectEqual, expectTrue, fail}
+
+-- ---------------------------------------------------------------------------
+-- Named constants (STYLE §12 — name the meaning)
+-- ---------------------------------------------------------------------------
+
+minMatch : Int
+minMatch = 3
+
+maxMatch : Int
+maxMatch = 258
+
+-- The sliding window — the largest distance RFC 1951 can encode (distance
+-- symbol 29: base 24577 + up to 8191 extra = 32768).
+windowSize : Int
+windowSize = 32768
+
+-- Hash-chain table sizing: a 15-bit hash (`hashSize = 2^15`) over 3-byte
+-- windows, the "classic zlib arrangement" the design doc names.
+hashSize : Int
+hashSize = 32768
+
+hashMask : Int
+hashMask = 32767
+
+-- `(15 + minMatch - 1) / minMatch` = `(15 + 2) / 3` = 5 — the same
+-- derivation zlib's own `HASH_SHIFT` uses (with its `HASH_BITS = 15`), so
+-- three folds of `hash << hashShift ^ byte` spread 3 bytes' worth of
+-- entropy across the 15-bit hash space.
+hashShift : Int
+hashShift = 5
+
+-- How many links of a hash chain to walk before settling for the best match
+-- found so far — the one tuning parameter this phase exposes. See the
+-- module header for why 128.
+maxChainLength : Int
+maxChainLength = 128
+
+-- Largest a single stored block's `LEN` field can express (16 bits).
+storedChunkMax : Int
+storedChunkMax = 65535
+
+mask16 : Int
+mask16 = 65535
+
+mask32 : Int
+mask32 = 4294967295
+
+btypeStored : Int
+btypeStored = 0
+
+btypeFixedHuffman : Int
+btypeFixedHuffman = 1
+
+-- The literal/length alphabet's end-of-block symbol (RFC 1951 §3.2.3) — same
+-- alphabet `fixedLitLenCode` covers, so encoding it is just
+-- `fixedLitLenCode symEndOfBlock`.
+symEndOfBlock : Int
+symEndOfBlock = 256
+
+-- ---------------------------------------------------------------------------
+-- Small monomorphic helpers — deliberately NOT the prelude's dict-passed
+-- `min`/`max` (`Ord` methods): these run once per byte/match in the hottest
+-- loop this library has, and AGENTS.md's own measured anti-pattern is
+-- exactly "delegate a hot monomorphic helper to a dict-passed prelude
+-- method". `Int` comparison needs no dictionary.
+-- ---------------------------------------------------------------------------
+
+minInt : Int -> Int -> Int
+minInt a b = if a < b then a else b  -- lint-disable-line rule-if-max-min
+
+-- Read one entry of a fixed-size `Array Int` this module's OWN construction
+-- guarantees is in range (a hash-table slot, an RFC length/distance table
+-- cell) — a violated invariant here is a bug in this module, not bad input,
+-- so it `panic`s rather than threading a `Result` nobody would ever see an
+-- `Err` from. Same discipline as `huffman.mdk`'s own private `tableAt`
+-- (unexported there, so redefined here rather than shared).
+tableAt : Array Int -> Int -> Int
+tableAt arr i = match get i arr
+  Some v => v
+  None => panic "deflate: tableAt index \{i} out of range (unreachable)"
+
+-- ---------------------------------------------------------------------------
+-- Fixed Huffman code tables (RFC 1951 §3.2.6) — the ENCODE-side closed form.
+-- ---------------------------------------------------------------------------
+
+{- | The fixed literal/length code VALUE and WIDTH for symbol `sym` (0..287:
+   0..255 are literal bytes, 256 is end-of-block, 257..287 are length codes
+   — 286/287 never occur in real data but are still part of the alphabet).
+   Closed-form from the RFC 1951 §3.2.6 table, independently verified below
+   (`prop "fixedLitLenCode round-trips…"`) against `huffman.decodeSym`.
+
+   > fixedLitLenCode 65
+   (113, 8)
+
+   > fixedLitLenCode 256
+   (0, 7)
+-}
+fixedLitLenCode : Int -> (Int, Int)
+fixedLitLenCode sym
+  | sym <= 143 = (48 + sym, 8)
+  | sym <= 255 = (400 + (sym - 144), 9)
+  | sym <= 279 = (sym - 256, 7)
+  | otherwise = (192 + (sym - 280), 8)
+
+{- | The fixed distance code: a flat 5-bit code, value == symbol (RFC 1951
+   §3.2.6). A function rather than a bare constant for symmetry with
+   `fixedLitLenCode`, and so a caller never has to remember "distance codes
+   are just themselves".
+
+   > fixedDistCode 13
+   (13, 5)
+-}
+fixedDistCode : Int -> (Int, Int)
+fixedDistCode sym = (sym, 5)
+
+-- ---------------------------------------------------------------------------
+-- Length/distance symbol lookup — the ENCODER's inverse of
+-- `huffman.lengthBase`/`lengthExtra`/`distBase`/`distExtra`, derived from
+-- the SAME arrays (not a hand-typed second copy) via a reverse linear scan:
+-- find the largest table index whose base is `<= len`/`<= dist`. Both
+-- tables are small (29 and 30 entries) and this runs once per match token,
+-- not once per byte, so a linear scan is not a hot-loop concern.
+-- ---------------------------------------------------------------------------
+
+-- `idx` is `lenSym - 257` (0..28). Terminates at 0 since `lengthBase[0] ==
+-- 3 == minMatch`, so any legal match length is `>= lengthBase[0]`.
+lengthSymbolIdx : Int -> Int -> Int
+lengthSymbolIdx len idx
+  | idx <= 0 = 0
+  | otherwise =
+    if len >= tableAt lengthBase idx then
+      idx
+    else
+      lengthSymbolIdx len (idx - 1)
+
+-- `idx` IS the distance symbol (`distBase`/`distExtra` are indexed by the
+-- bare symbol — see `huffman.mdk`'s own comment on this). Terminates at 0
+-- since `distBase[0] == 1`, so any legal distance is `>= distBase[0]`.
+distSymbolIdx : Int -> Int -> Int
+distSymbolIdx dist idx
+  | idx <= 0 = 0
+  | otherwise =
+    if dist >= tableAt distBase idx then
+      idx
+    else
+      distSymbolIdx dist (idx - 1)
+
+-- ---------------------------------------------------------------------------
+-- Emitting literals, matches, and end-of-block onto a `BitWriter`.
+-- ---------------------------------------------------------------------------
+
+encodeLiteral : Int -> BitWriter -> Unit
+encodeLiteral b w =
+  let (code, width) = fixedLitLenCode b
+  putCodeMSB code width w
+
+-- Symbol 256 shares the SAME alphabet/function as a literal byte —
+-- `fixedLitLenCode 256` is exactly the RFC's 7-bit all-zero end-of-block
+-- code (matches `huffman.mdk`'s own pinned `decodeSym fixedLitLen [|0|] ->
+-- 256` fact).
+encodeEob : BitWriter -> Unit
+encodeEob w = encodeLiteral symEndOfBlock w
+
+-- | Emit one length/distance back-reference: the lit/len length-symbol code
+--   + its extra bits, then the flat distance code + its extra bits — RFC
+--   1951 §3.2.5, using `lengthBase`/`lengthExtra`/`distBase`/`distExtra`
+--   (imported from `huffman.mdk`, ONE encoding of each table) both to find
+--   the symbol (`lengthSymbolIdx`/`distSymbolIdx` above) and its extra-bit
+--   field (`len - base`, LSB-first via `putBits` — extra-bits fields are
+--   NOT Huffman codes, so they use `putBits`, not `putCodeMSB`).
+encodeMatch : Int -> Int -> BitWriter -> Unit
+encodeMatch len dist w =
+  let lenIdx = lengthSymbolIdx len 28
+  let lenSym = 257 + lenIdx
+  let (lcode, lwidth) = fixedLitLenCode lenSym
+  let _ = putCodeMSB lcode lwidth w
+  let lbase = tableAt lengthBase lenIdx
+  let lextra = tableAt lengthExtra lenIdx
+  let _ = putBits (len - lbase) lextra w
+  let dsym = distSymbolIdx dist 29
+  let (dcode, dwidth) = fixedDistCode dsym
+  let _ = putCodeMSB dcode dwidth w
+  let dbase = tableAt distBase dsym
+  let dextra = tableAt distExtra dsym
+  putBits (dist - dbase) dextra w
+
+-- ---------------------------------------------------------------------------
+-- LZ77 hash-chain matcher
+-- ---------------------------------------------------------------------------
+
+-- `head`/`prevArr` are the two flat index arrays the design doc names.
+-- `nextInsert` is the invariant this matcher relies on for correctness: by
+-- construction (see `insertUpTo`), positions `[0, nextInsert.value)` have
+-- each been inserted into the chain EXACTLY ONCE, in increasing order — so
+-- a match search at any position `p >= nextInsert.value` only ever sees
+-- candidates strictly before `p` (never `p` itself, never a duplicate/cyclic
+-- chain entry).
+data Matcher =
+  | Matcher {
+      input : Array Int,
+      n : Int,
+      head : Array Int,
+      prevArr : Array Int,
+      nextInsert : Ref Int,
+    }
+
+newMatcher : Array Int -> Matcher
+newMatcher input =
+  let n = arrayLength input
+  Matcher {
+    input = input,
+    n = n,
+    head = make hashSize (-1),
+    prevArr = make n (-1),
+    nextInsert = Ref 0,
+  }
+
+-- A position needs a full 3-byte lookahead to hash.
+hasHash : Int -> Int -> Bool
+hasHash pos n = pos + 2 < n
+
+byteAt : Array Int -> Int -> Int
+byteAt arr i = match get i arr
+  Some v => v
+  None => panic "deflate: byteAt index \{i} out of range (unreachable)"
+
+-- The 3-byte rolling hash at `pos` (caller must have already checked
+-- `hasHash pos n`).
+hash3At : Array Int -> Int -> Int
+hash3At input pos =
+  let b0 = byteAt input pos
+  let b1 = byteAt input (pos + 1)
+  let b2 = byteAt input (pos + 2)
+  let h1 = bitAnd (bitXor (shiftLeft b0 hashShift) b1) hashMask
+  bitAnd (bitXor (shiftLeft h1 hashShift) b2) hashMask
+
+headGet : Array Int -> Int -> Int
+headGet head h = match get h head
+  Some v => v
+  None =>
+    panic "deflate: headGet index \{h} out of hash-table range (unreachable)"
+
+-- Insert position `p` (already known to have a hash) into the chain: `p`
+-- becomes the new head for its hash, chaining to whatever was head before.
+insertOne : Matcher -> Int -> Unit
+insertOne m p =
+  let h = hash3At m.input p
+  let old = headGet m.head h
+  let _ = set p old m.prevArr
+  set h p m.head
+
+{- | Insert every not-yet-inserted position strictly before `target` into the
+   chain, in increasing order, advancing `m.nextInsert` as it goes. This is
+   the ONE place positions get inserted — calling it with a monotonically
+   non-decreasing `target` (which `deflateScan` always does; `target` is
+   always some `pos + k` for the current or a later `pos`) is what keeps the
+   "inserted exactly once" invariant. A no-op if `target <= m.nextInsert.value`
+   already. -}
+insertUpTo : Matcher -> Int -> Unit
+insertUpTo m target =
+  let cur = m.nextInsert.value
+  if cur >= target then ()
+  else
+    let _ = if hasHash cur m.n then insertOne m cur else ()
+    let _ = m.nextInsert := cur + 1
+    insertUpTo m target
+
+-- Walk the chain from `candidate` backwards (via `prevArr`), keeping the
+-- longest match within the window and at least `minMatch`-worthy (the
+-- caller checks the `minMatch` floor; this just tracks the best length seen,
+-- which may be 0 if no candidate beat it), stopping at
+-- `maxChainLength` links, a window-exceeding distance, or `maxMatch` (no
+-- point walking further once the longest possible match is already found).
+findMatchChain : Matcher -> Int -> Int -> Int -> Int -> Int -> (Int, Int)
+findMatchChain m pos candidate chainLeft bestLen bestDist
+  | candidate < 0 || chainLeft <= 0 = (bestLen, bestDist)
+  | pos - candidate > windowSize = (bestLen, bestDist)
+  | otherwise =
+    let limit = minInt maxMatch (m.n - pos)
+    let len = matchLenAt m.input pos candidate limit
+    let (bestLen2, bestDist2) = if len > bestLen then
+      (len, pos - candidate)
+    else
+      (bestLen, bestDist)
+    if bestLen2 >= maxMatch then
+      (bestLen2, bestDist2)
+    else
+      findMatchChain m pos (byteAt m.prevArr candidate) (chainLeft - 1) bestLen2 bestDist2
+
+matchLenAt : Array Int -> Int -> Int -> Int -> Int
+matchLenAt input pos candidate limit = matchLenGo input pos candidate limit 0
+
+matchLenGo : Array Int -> Int -> Int -> Int -> Int -> Int
+matchLenGo input pos candidate limit acc
+  | acc >= limit = acc
+  | otherwise =
+    if byteAt input (pos + acc) == byteAt input (candidate + acc) then
+      matchLenGo input pos candidate limit (acc + 1)
+    else
+      acc
+
+-- | Best (length, distance) match at `pos`, using the chain as it stands
+--   BEFORE `pos` itself is inserted (so a match never references itself).
+--   `(0, 0)` means no candidate was found at all (empty/absent chain entry).
+findMatch : Matcher -> Int -> (Int, Int)
+findMatch m pos =
+  let h = hash3At m.input pos
+  let candidate = headGet m.head h
+  findMatchChain m pos candidate maxChainLength 0 0
+
+-- ---------------------------------------------------------------------------
+-- The scan loop: literal-vs-match decision + lazy matching.
+-- ---------------------------------------------------------------------------
+
+-- | Emit a match at `pos` (already decided), insert every position it
+--   covers, and continue scanning past it.
+deflateEmitMatch : Matcher -> Int -> Int -> Int -> BitWriter -> Unit
+deflateEmitMatch m pos len dist w =
+  let _ = encodeMatch len dist w
+  let _ = insertUpTo m (pos + len)
+  deflateScan m (pos + len) w
+
+-- | Having found a `>= minMatch` match `(len1, dist1)` at `pos` (and already
+--   inserted `pos` itself), decide whether to defer it: if `pos + 1` has a
+--   STRICTLY longer match, emit `pos` as a literal and let the next
+--   iteration pick up the longer match at `pos + 1` (which will re-search
+--   and re-find the same `(len2, dist2)` this function already computed —
+--   a deliberate, small, correctness-preserving redundancy rather than
+--   threading extra state through the recursion to avoid one repeated
+--   chain walk). Otherwise emit `(len1, dist1)` now.
+--
+--   ⚠️ `insertUpTo m (pos + 2)` (inserting `pos + 1` into the chain) must
+--   happen ONLY on the "emit now" path, never before the defer/emit
+--   decision — this was a real, caught bug: inserting `pos + 1` BEFORE the
+--   decision, unconditionally, meant that on the DEFER path the subsequent
+--   `deflateScan m (pos + 1) w` re-searched a position THAT HAD ALREADY
+--   BEEN INSERTED INTO ITS OWN HASH BUCKET, so `findMatch` could return
+--   `pos + 1` itself as a "candidate" — a self-match at distance 0, which
+--   `distSymbolIdx`/`fixedDistCode` then silently mis-encoded as a REAL
+--   distance-1 code (RLE of the wrong preceding byte) with whatever length
+--   the self-comparison trivially "matched" (comparing a byte range against
+--   itself always succeeds). Reproduced on `compiler/frontend/parser.mdk`
+--   (`gzip/test/deflate_oracle.sh`'s real-`.mdk`-source corpus entry): byte
+--   262 corrupted `` ` `` into `e` and then repeated `e` to the end of the
+--   probe input — exactly a distance-1/self-match signature. On the "emit
+--   now" path, `deflateEmitMatch`'s OWN `insertUpTo m (pos + len1)` already
+--   covers inserting `pos + 1` (and everything else the match spans) in one
+--   monotonic sweep, so no separate insertion call is needed there either.
+deflateTryLazy : Matcher -> Int -> Int -> Int -> BitWriter -> Unit
+deflateTryLazy m pos len1 dist1 w =
+  if len1 < maxMatch && pos + 1 < m.n && hasHash (pos + 1) m.n then
+    let (len2, dist2) = findMatch m (pos + 1)
+    if len2 > len1 then
+      let _ = encodeLiteral (byteAt m.input pos) w
+      deflateScan m (pos + 1) w
+    else deflateEmitMatch m pos len1 dist1 w
+  else deflateEmitMatch m pos len1 dist1 w
+
+-- | The scan loop itself: at each position, look for a match (using the
+--   chain state from all STRICTLY EARLIER positions), insert the current
+--   position, and either emit a literal (no match, or below `minMatch`) or
+--   hand off to the lazy-matching decision above.
+deflateScan : Matcher -> Int -> BitWriter -> Unit
+deflateScan m pos w
+  | pos >= m.n = ()
+  | not (hasHash pos m.n) =
+    let _ = encodeLiteral (byteAt m.input pos) w
+    deflateScan m (pos + 1) w
+  | otherwise =
+    let (len1, dist1) = findMatch m pos
+    let _ = insertUpTo m (pos + 1)
+    if len1 < minMatch then
+      let _ = encodeLiteral (byteAt m.input pos) w
+      deflateScan m (pos + 1) w
+    else deflateTryLazy m pos len1 dist1 w
+
+-- ---------------------------------------------------------------------------
+-- Block encoders
+-- ---------------------------------------------------------------------------
+
+{- | Encode `input` as ONE fixed-Huffman block (`BFINAL=1`, `BTYPE=01`),
+   raw DEFLATE bytes (no gzip framing).
+
+   Hand-derived (RFC 1951 §3.2.6, not captured from this module's own
+   output — see the module header's discipline): for input `[65]`, the
+   stream is BFINAL=1 (1 bit) + BTYPE=01 (2 bits, LSB-first: bit0=1,
+   bit1=0) + literal 65's fixed code 113=0b01110001 packed MSB-of-code-first
+   (8 bits) + end-of-block's fixed code 0 (7 zero bits) = 18 bits total,
+   packed LSB-first into bytes and zero-padded to 24 bits: byte0 =
+   0b01110011 = 115 (bits 1,1,0,0,1,1,1,0 read low-to-high), byte1 =
+   0b00000100 = 4 (the low 2 bits of the 8-bit literal code that spilled
+   into this byte, then 6 zero-padding bits from the EOB code and
+   alignment), byte2 = 0 (remaining EOB bits + final padding).
+
+   > deflateFixedBytes (arrayFromList [65])
+   [|115, 4, 0|]
+
+   The empty-input case is smaller still: just the 3-bit header + the
+   7-bit EOB code = 10 bits = 2 bytes, byte0 = 0b00000011 = 3 (BFINAL=1,
+   BTYPE-bit0=1, BTYPE-bit1=0, then 5 zero bits — the EOB code hasn't
+   started yet), byte1 = 0 (the rest of EOB's 7 zero bits + padding).
+
+   > deflateFixedBytes ([||])
+   [|3, 0|]
+-}
+deflateFixedBytes : Array Int -> Array Int
+deflateFixedBytes input =
+  let n = arrayLength input
+  let w = newBitWriter ()
+  let _ = putBits 1 1 w
+  let _ = putBits btypeFixedHuffman 2 w
+  let m = newMatcher input
+  let _ = deflateScan m 0 w
+  let _ = encodeEob w
+  finishBitWriter w
+
+emitStoredBlock : Bool -> Int -> Int -> Array Int -> BitWriter -> Unit
+emitStoredBlock isLast offset len input w =
+  let bfinal = if isLast then 1 else 0
+  let _ = putBits bfinal 1 w
+  let _ = putBits btypeStored 2 w
+  let _ = alignByteW w
+  let _ = putBits len 16 w
+  let _ = putBits (bitAnd (bitNot len) mask16) 16 w
+  putBytesAligned (sliceClamped offset (offset + len) input) w
+
+emitStoredChunks : Array Int -> Int -> Int -> BitWriter -> Unit
+emitStoredChunks input n offset w
+  | offset >= n = ()
+  | otherwise =
+    let remaining = n - offset
+    let chunkLen = minInt remaining storedChunkMax
+    let isLast = offset + chunkLen >= n
+    let _ = emitStoredBlock isLast offset chunkLen input w
+    emitStoredChunks input n (offset + chunkLen) w
+
+{- | Encode `input` as one or more stored blocks (`BTYPE=00`), chunked at
+   `storedChunkMax` (65535, the 16-bit `LEN` field's limit). An empty input
+   is a single empty stored block (`BFINAL=1`, `LEN=0`) rather than zero
+   blocks — a DEFLATE stream must end with a `BFINAL=1` block, and there
+   must be at least one.
+
+   > arrayLength (deflateStored ([||]))
+   5
+-}
+deflateStored : Array Int -> Array Int
+deflateStored input =
+  let n = arrayLength input
+  let w = newBitWriter ()
+  let _ = if n == 0 then
+    emitStoredBlock True 0 0 input w
+  else
+    emitStoredChunks input n 0 w
+  finishBitWriter w
+
+{- | Raw DEFLATE compression (no gzip/zlib framing): the fixed-Huffman
+   encoding, or the stored-block fallback if that would be smaller — see the
+   module header's "stored-block fallback" section for the exact bound this
+   guarantees. -}
+export deflate : Array Int -> Array Int
+deflate input =
+  let fixedBytes = deflateFixedBytes input
+  let storedBytes = deflateStored input
+  if arrayLength fixedBytes <= arrayLength storedBytes then
+    fixedBytes
+  else
+    storedBytes
+
+-- ---------------------------------------------------------------------------
+-- gzip container
+-- ---------------------------------------------------------------------------
+
+{- | Compress `input` into a complete gzip member: header (no FNAME/FEXTRA/
+   FCOMMENT — nothing to put in them; `mtime=0`, `os=255` "unknown", the RFC
+   1952 §2.3.1-sanctioned value for an encoder that doesn't know its host OS)
+   + `deflate input` + trailer (CRC-32 and ISIZE of the UNCOMPRESSED input,
+   via `lib.crc32`, wired through — this is the "wire it to a real CRC-32"
+   half of Phase 4's container work; the parse/emit machinery itself already
+   existed from Phase 1). -}
+export gzipCompress : Array Int -> Array Int
+gzipCompress input =
+  let hdr = GzipHeader {
+    mtime = 0,
+    name = None,
+    comment = None,
+    xfl = 0,
+    os = 255,
+  }
+  let payload = deflate input
+  let crc = crc32 input
+  let isize = bitAnd (arrayLength input) mask32
+  concat [|emitGzipHeader hdr, payload, emitGzipTrailer crc isize|]
+
+-- ---------------------------------------------------------------------------
+-- Tests — hand-derived exact bytes (`test`), and properties checked against
+-- EXISTING, already-tested decoders (`huffman.decodeSym`, `lib.inflate`) —
+-- never a golden captured from this module's own output. See the module
+-- header and `gzip/README.md` "Testing policy".
+-- ---------------------------------------------------------------------------
+
+firstBlockType : Array Int -> Int
+firstBlockType payload =
+  let r = newBitReader payload
+  match getBits 1 r
+    Err e => panic "firstBlockType: \{e}"
+    Ok _ => match getBits 2 r
+      Err e => panic "firstBlockType: \{e}"
+      Ok btype => btype
+
+test "deflateFixedBytes [|65|] matches the hand-derived RFC 1951 byte sequence" = expectEqual [|115, 4, 0|] (deflateFixedBytes (arrayFromList [65]))
+
+test "deflateFixedBytes [||] matches the hand-derived RFC 1951 byte sequence (EOB only)" = expectEqual [|3, 0|] (deflateFixedBytes [||])
+
+test "deflateStored [||] is one 5-byte empty stored block (1 header byte + LEN + NLEN)" = expectEqual 5 (arrayLength (deflateStored [||]))
+
+test "deflate [||] picks fixed Huffman (2 bytes) over stored (5 bytes)" =
+  expectEqual [|3, 0|] (deflate [||])
+
+test "deflate of an empty input has BTYPE=1 (fixed Huffman)" =
+  expectEqual 1 (firstBlockType (deflate [||]))
+
+test "inflate (deflate [|65|]) recovers the original single byte" = expectEqual
+  (Ok (arrayFromList [65]))
+  (inflate (deflate (arrayFromList [65])))
+
+-- A diverse, non-repeating 256-byte input (every byte value once): fixed
+-- Huffman's average code width is > 8 bits/byte here (144 symbols at 8 bits,
+-- 112 symbols — 144..255 — at 9 bits), so the fixed encoding is LARGER than
+-- the input; the stored fallback must win. Hand-derived expected sizes:
+-- fixed ~= ceil((3 + 144*8 + 112*9 + 7) / 8) = 272 bytes; stored =
+-- 256 + 5 = 261 bytes. 261 < 272, so `deflate` must pick BTYPE=0.
+test "deflate of all 256 distinct byte values picks the stored fallback (BTYPE=0)" =
+  let input = range 0 256
+  expectEqual 0 (firstBlockType (deflate input))
+
+test "inflate (deflate (all 256 distinct byte values)) round-trips exactly" =
+  let input = range 0 256
+  expectEqual (Ok input) (inflate (deflate input))
+
+-- 1000 repeated bytes: the whole point of `distance = 1` self-overlapping
+-- back-references (design doc, "the overlap case"). If the matcher is
+-- actually finding matches (not silently falling back to all-literal
+-- output), the compressed size must be far under 1000 bytes.
+repeatedInput : Array Int
+repeatedInput = make 1000 65
+
+test "deflate compresses 1000 repeated bytes to well under 1000 output bytes (LZ77 actually ran)" = expectTrue (arrayLength (deflate repeatedInput) < 100)
+
+test "inflate (deflate (1000 repeated bytes)) recovers the original exactly (distance=1 overlap)" = expectEqual (Ok repeatedInput) (inflate (deflate repeatedInput))
+
+-- A pseudo-random 5000-byte input forces the (single-chunk) stored
+-- fallback: `5 * ceil(5000 / 65535) + 5000` = `5 * 1 + 5000` = `5005`,
+-- derived straight from the stored-block format (RFC 1951 §3.2.4), not
+-- captured from a run of this code. Content is a Park-Miller ("MINSTD")
+-- linear-congruential generator, `state' = state * 48271 mod (2^31 - 1)` —
+-- chosen (over the simpler `(i * k + c) % 256`, tried first and REJECTED
+-- here: since 256 is a power of two, ANY linear function of `i` reduced mod
+-- 256 is periodic with period dividing 256 regardless of the multiplier,
+-- which made that version a highly-compressible 256-byte repeating pattern
+-- — LZ77 found long matches in it and `deflate` picked fixed Huffman
+-- (BTYPE=1), not stored, defeating the point of this fixture) because its
+-- modulus is PRIME, not a power of two, so the low byte of its ~2^31-period
+-- state does not inherit a short forced period the way a power-of-two
+-- modulus would. With no meaningful 3-byte repeats, the fixed encoding
+-- costs on average ~8.4 bits/byte (roughly half the literal alphabet is
+-- 9-bit) — genuinely larger than the 8-bit-per-byte stored fallback — so
+-- `deflate` must pick BTYPE=0, exercising (via the size comparison) the
+-- "must not grow" guarantee on genuinely incompressible-shaped data.
+--
+-- ⚠️ Deliberately NOT 70000+ bytes here (a real multi-chunk-stored /
+-- window-wrap-boundary size, which `gzip/test/deflate_oracle.sh` DOES cover
+-- against the native binary): `medaka test` runs this module under the
+-- TREE-WALKING INTERPRETER, which has NO tail-call optimisation and a hard
+-- ~25000-deep call-frame ceiling (`E-STACK-OVERFLOW`) — `deflateScan`'s
+-- per-position recursion is a genuine tail call (fine natively, per
+-- AGENTS.md "native DOES TCO; interpreter doesn't") but blows that ceiling
+-- under `medaka test` well before 70000 positions. Large-input coverage
+-- belongs to the shell oracle, which builds and runs the NATIVE binary.
+lcgNext : Int -> Int
+lcgNext state = (state * 48271) % 2147483647
+
+genPseudoRandom : Int -> Int -> List Int -> List Int
+genPseudoRandom state count acc
+  | count <= 0 = acc
+  | otherwise =
+    let next = lcgNext state
+    genPseudoRandom next (count - 1) (next % 256 :: acc)
+
+pseudoRandomBytes : Array Int
+pseudoRandomBytes = arrayFromList (genPseudoRandom 12345 5000 [])
+
+test "deflate of 5000 pseudo-random-looking bytes is exactly 5005 bytes (1 stored chunk, hand-derived)" = expectEqual 5005 (arrayLength (deflate pseudoRandomBytes))
+
+test "deflate of 5000 pseudo-random-looking bytes has BTYPE=0 (stored)" =
+  expectEqual 0 (firstBlockType (deflate pseudoRandomBytes))
+
+test "inflate (deflate (5000 pseudo-random-looking bytes)) round-trips exactly (stored fallback)" = expectEqual (Ok pseudoRandomBytes) (inflate (deflate pseudoRandomBytes))
+
+test "gzipCompress \"hello\" round-trips through our OWN gunzipMember (crc/isize wiring; gunzip is the real proof)" =
+  let input = arrayFromList [104, 101, 108, 108, 111]
+  expectEqual (Ok input) (gunzipMember (gzipCompress input))
+
+-- ---------------------------------------------------------------------------
+-- Properties
+-- ---------------------------------------------------------------------------
+
+-- `fixedLitLenCode`'s closed form, checked against `huffman.decodeSym` — the
+-- EXISTING, independently-tested decoder — for every symbol in the 288-entry
+-- alphabet. A wrong cell in the closed form fails to decode back to the same
+-- symbol; this is NOT a tautology of shared code, since `fixedLitLenCode`
+-- and `decodeSym`/`fixedLitLen` share no implementation.
+prop "fixedLitLenCode round-trips through huffman.decodeSym for every lit/len symbol 0..287" (symRaw : Int) =
+  let sym = abs symRaw % 288
+  let (code, width) = fixedLitLenCode sym
+  let w = newBitWriter ()
+  let _ = putCodeMSB code width w
+  let bytes = finishBitWriter w
+  decodeSym fixedLitLen (newBitReader bytes) == Ok sym
+
+prop "fixedDistCode round-trips through huffman.decodeSym for every distance symbol 0..31" (symRaw : Int) =
+  let sym = abs symRaw % 32
+  let (code, width) = fixedDistCode sym
+  let w = newBitWriter ()
+  let _ = putCodeMSB code width w
+  let bytes = finishBitWriter w
+  decodeSym fixedDist (newBitReader bytes) == Ok sym
+
+-- The encoder's length/distance symbol lookup (`lengthSymbolIdx`/
+-- `distSymbolIdx`) is the inverse of the SAME `lengthBase`/`distBase`
+-- arrays `huffman.mdk`'s decoder reads — this checks that inverse directly:
+-- for any legal length/distance, `base[idx] + (value - base[idx]) ==
+-- value`, with the extra bits actually able to express the difference
+-- (`extraBits < 2^extraWidth`). A off-by-one in the reverse scan (picking
+-- an index whose base is too high, or an extra-bit width too narrow to
+-- reach `value`) fails this directly.
+prop "lengthSymbolIdx/lengthBase/lengthExtra reconstruct the original match length, for any length 3..258" (rawLen : Int) =
+  let len = 3 + abs rawLen % 256
+  let idx = lengthSymbolIdx len 28
+  let lbase = tableAt lengthBase idx
+  let lextra = tableAt lengthExtra idx
+  let extraBits = len - lbase
+  lbase <= len
+    && extraBits >= 0
+    && extraBits < shiftLeft 1 lextra
+    && lbase + extraBits == len
+
+prop "distSymbolIdx/distBase/distExtra reconstruct the original distance, for any distance 1..32768" (rawDist : Int) =
+  let dist = 1 + abs rawDist % 32768
+  let idx = distSymbolIdx dist 29
+  let dbase = tableAt distBase idx
+  let dextra = tableAt distExtra idx
+  let extraBits = dist - dbase
+  dbase <= dist
+    && extraBits >= 0
+    && extraBits < shiftLeft 1 dextra
+    && dbase + extraBits == dist
+
+-- The real coverage: `inflate (deflate x) == x` for ARBITRARY generated byte
+-- content. Self-consistency only — see the module header — but it is the
+-- cheapest possible fast-fail before the real oracle (`gunzip`, run by
+-- `gzip/test/deflate_oracle.sh`) gets involved, and it stresses match
+-- lengths/distances/lazy-matching decisions no hand-picked fixture would
+-- reliably hit.
+prop "inflate (deflate x) == x for arbitrary byte content (SELF-CONSISTENCY ONLY — see module header)" (bytesIn : List Int) =
+  let bs = map (b => bitAnd b 255) bytesIn
+  let input = arrayFromList bs
+  match inflate (deflate input)
+    Ok out => out == input
+    Err _ => False
