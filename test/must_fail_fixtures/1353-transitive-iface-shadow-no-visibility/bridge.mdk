@@ -1,0 +1,6 @@
+-- Plain `import`, NOT `export import`; re-exports nothing, and imports only `sf`,
+-- never `Sizeable` or `size`.
+import smod.{sf}
+
+export bf : Int -> Int
+bf n = sf n
