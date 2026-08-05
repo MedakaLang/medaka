@@ -1,0 +1,4 @@
+import amodd.*
+import zmod.{zf}
+
+main = println (unA1 (Dup 1))

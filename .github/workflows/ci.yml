@@ -648,7 +648,26 @@ jobs:
             # paper) would instead be the FULL serial cost of the first and only oracle
             # that shard builds. ⚠️ Re-measure before moving it — those numbers rot; the
             # one-liner is in the `engines` entry above.
-            pattern: "'diff_compiler_eval*' 'diff_compiler_core_ir*' 'diff_compiler_dispatch_shape' 'diff_compiler_prelude_obj' 'diff_compiler_slice_oob' 'diff_compiler_ir_size' 'diff_compiler_origin_agreement' 'bootstrap_lex' 'bootstrap_resolve' 'bootstrap_typecheck' 'bootstrap_eval'"
+            #
+            # 'diff_compiler_import_order' (#1319 unit 0) is a FRONTEND/TYPES gate here
+            # for the same cost reason, fifth time over — the import-clause permutation
+            # differential, the one artefact that can observe an over-widening in
+            # constructor-name resolution (a golden records the permissive answer and
+            # then defends it). Its thematic homes are `frontend` (which owns
+            # diff_compiler_resolve*) and `types`; derived from the three merge_group
+            # runs 31022994812 / 30983572270 / 30981872310 on 2026-08-05, the shard
+            # walls were engines 324/334/473s, types 299/300/454s, tools 185/178/332s,
+            # backend 166/152/387s, frontend 223/165/299s, sqlite 108/123/199s and eval
+            # 92/83/246s — so both thematic homes are at or near the pole and this is
+            # the cheapest shard on every one of the three. It reads NO test/bin oracle;
+            # it needs only ./medaka + the emitter, which this shard already builds for
+            # dispatch_shape, prelude_obj, slice_oob and ir_size. It drives check + run +
+            # build + exec once per ORDERING — every n! ordering of each case's import
+            # clauses — and measured 25s wall on the dev box at the corpus it landed with.
+            # ⚠️ Re-measure before moving it; these numbers rot, and the count of cases is
+            # derived from the directory, never written down:
+            #   ls -d test/import_order_fixtures/*/ | wc -l
+            pattern: "'diff_compiler_eval*' 'diff_compiler_core_ir*' 'diff_compiler_dispatch_shape' 'diff_compiler_prelude_obj' 'diff_compiler_slice_oob' 'diff_compiler_ir_size' 'diff_compiler_origin_agreement' 'diff_compiler_import_order' 'bootstrap_lex' 'bootstrap_resolve' 'bootstrap_typecheck' 'bootstrap_eval'"
           - name: backend
             # 'build_cmd' (T8): THE end-to-end gate for the SHIPPING `medaka build` CLI —
             # 14 real programs built through the actual CLI, each binary's stdout diffed

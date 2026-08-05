@@ -1,0 +1,26 @@
+entry: main.mdk
+what: CONTROL — the ambiguity REJECT and its CODE are invariant even though its MESSAGE is not
+
+The same `Dup` collision as 733-ambiguous-ctor-reject-cascade-order-dependent/, with
+the type-forcing use site removed: `d = Dup 1` has no annotation and nothing consumes
+it, so whichever `Dup` wins, no type mismatch can follow. `R-AMBIGUOUS-CTOR` still
+fires at the use site, in both orders, and it is the only diagnostic in both orders.
+
+That is the point of this case. `R-AMBIGUOUS-CTOR`'s MESSAGE is deliberately
+order-sensitive — it names the two modules in the order the user wrote the clauses,
+and the provenance-based ambiguity trigger is deliberately ONE rule across all four
+namespaces, so that ordering is a presentation fact about the user's own source, not
+a resolution fact. Measured on a binary cold-bootstrapped from `main` @ 0af30a78,
+2026-08-05, on the sibling case:
+
+    amodd clause first:  "...brought into scope by both `amodd` and `zmod`. ..."
+    zmod clause first:   "...brought into scope by both `zmod` and `amodd`. ..."
+
+A criterion that diffed message text would fail on that, i.e. would report correct
+behaviour as a defect. A criterion that diffed only the exit code would pass a
+program whose extra cascading error appears in one ordering only — which is exactly
+what the sibling case does. Grading the sorted MULTISET OF DIAGNOSTIC CODES sits
+between the two, and these two cases together are what demonstrate that it does.
+
+This row is a live guard, not decoration: it FAILS if the reject itself ever becomes
+order-dependent, or if the two orderings stop rejecting under the same code set.

@@ -1,0 +1,5 @@
+public export data ZZ = Sib String | Zed
+
+export unz : ZZ -> String
+unz (Sib s) = s
+unz Zed = "z"

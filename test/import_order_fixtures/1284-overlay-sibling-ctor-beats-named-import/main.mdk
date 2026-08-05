@@ -1,0 +1,7 @@
+import zmod.{ZZ, Sib, unz}
+import cmod.{CtorOnly, unw}
+
+v : ZZ
+v = Sib "s"
+
+main = println (unz v)
