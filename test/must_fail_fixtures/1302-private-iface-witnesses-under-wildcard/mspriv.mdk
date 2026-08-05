@@ -1,0 +1,9 @@
+-- #1302: `MSIP` is deliberately NOT exported.  Only `helper` is, and `helper` is
+-- the entire reason the entry has a wildcard import of this module at all.
+-- A private interface's methods are not exported, so resolve correctly considers
+-- `mth` in the entry unambiguous -- it raises nothing.  typecheck disagrees.
+interface MSIP a where
+  mth : a -> Int
+
+export helper : Int -> Int
+helper n = n + 1

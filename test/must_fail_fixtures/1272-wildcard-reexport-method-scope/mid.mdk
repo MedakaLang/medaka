@@ -1,4 +1,0 @@
--- issue #1272: the RE-EXPORTER. It declares nothing of its own, so the module id
--- an importer sees (`mid`) is not the module id `IB.mth`'s identity carries
--- (`ifaceb`) -- which is the whole reason the direct-module witness misses.
-export import ifaceb.{IB, mth}

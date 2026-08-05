@@ -352,6 +352,8 @@ declCtorNamed : String -> Decl -> Bool
 declGradedScope : List String -> List IfaceMethod -> List (String, List Kind)
 declGradedScopeAdd : String -> List Kind -> List (String, List Kind) -> List (String, List Kind)
 declIfaceMethods : Decl -> List (String, Scheme)
+declMethodIdents : List Decl -> List (String, Ident)
+declMethodIdentsOf : Decl -> List (String, Ident)
 declMethodNames : List Decl -> List String
 declMethodNamesOf : Decl -> List String
 declOwnedBy : String -> String -> TyConOrigin -> Bool
@@ -389,6 +391,7 @@ definerShadowArgHead : Expr -> Option (String, Ref Route, Ref (List Route))
 definerShadowHeadType : TcEnv -> String -> Expr -> Mono
 definerShadowVarHead : Expr -> Option String
 definerShadowsFromSet : Map String Unit -> List Decl -> List String
+depExportsMethodIdent : String -> String -> Ident -> Bool
 depGraphMap : List String -> Map String (List (List Pat, Expr)) -> Map String (List String)
 depReaches : List String -> String -> String -> List (String, List Decl) -> Bool
 depsOf : String -> Map String Unit -> Map String (List (List Pat, Expr)) -> List String
@@ -506,6 +509,7 @@ expandSupersIfaceEntry : List Decl -> (String, List String) -> (String, List Str
 expandSupersPairs : List Decl -> List (String, Int) -> List (String, Int)
 expandSupersTable : List Decl -> Unit
 expectedParamTypes : Mono -> Int -> List Mono
+exportsIdentFor : String -> Ident -> List (String, Ident) -> Bool
 exprLoc : Expr -> Option Loc
 extendLocalVar : TcEnv -> String -> Scheme -> TcEnv
 extendLocalVars : TcEnv -> List (String, Scheme) -> TcEnv
@@ -588,6 +592,8 @@ globalCoherenceConflict : List (String, List Decl) -> (Option String, Option Str
 goalHeadCon : List Mono -> Option HeadKey
 goalSiteLoc : Ref (Option Loc)
 goalsClosed : List Mono -> Bool
+graphMethodExports : List Decl -> List (String, List Decl) -> Map String (List (String, Ident))
+graphMethodExportsGo : Map String (List (String, Ident)) -> List (String, List Decl) -> Map String (List (String, Ident))
 groundMultiParamObligations : List Decl -> List (String, List String, Ty, Mono, Option Loc) -> Unit
 groundNumVars : List (String, List String, Ty, Mono, Option Loc) -> List Int -> Unit
 groundOneObligation : List Decl -> String -> List String -> Ty -> Mono -> Unit
@@ -640,6 +646,7 @@ ifaceForConstraintId : Int -> String
 ifaceForConstraintIdGo : Int -> List (String, List String, Ty, Mono, Option Loc) -> String
 ifaceForInferredId : String -> Int -> String
 ifaceFromDictApps : Int -> List (Ref (List Route), List Mono, List String, List (List Mono), Option Loc) -> String
+ifaceMethodIdentPair : TyConOrigin -> IfaceMethod -> List (String, Ident)
 ifaceMethodName : String -> Bool
 ifaceMethodNames : List IfaceMethod -> List String
 ifaceMethodSchemes : List Decl -> List (String, Scheme)
@@ -1169,7 +1176,10 @@ recordSite : String -> Ref Route -> Ref (List Route) -> Mono -> Mono
 recordStandaloneSigObligations : String -> String -> Mono -> Unit
 recordTypeError : TcDiag -> Unit
 recordUnopSite : String -> Ref Route -> Mono -> Unit
+reexportRenamed : (String, String) -> List (String, Ident) -> List (String, Ident)
 reexportSeed : List (String, Scheme) -> List Decl -> List (String, List (String, Scheme)) -> List (String, Scheme)
+reexportedMethodIdents : Map String (List (String, Ident)) -> List Decl -> List (String, Ident)
+reexportedMethodIdentsOf : Map String (List (String, Ident)) -> Decl -> List (String, Ident)
 reexportedMethodNames : List (String, List String) -> List Decl -> List String
 reexportedMethodsOf : List (String, List String) -> Decl -> List String
 regIfaceMonosFor : String -> List (String, List (String, Mono), List (List Mono)) -> List (String, Mono)
@@ -1493,7 +1503,6 @@ useFastIfaceMethodTy : Ref Bool
 useModuleId : Decl -> List String
 usePathBindsName : UsePath -> String -> Bool
 usePathModuleId : UsePath -> String
-usePathNamesMember : UsePath -> String -> Bool
 usePathWitnesses : UsePath -> String -> (Ident, (String, List String, Ty, List (String, List Kind))) -> Bool
 usesImplDict : String -> Int -> Expr -> Bool
 varHeadApps : String -> Ty -> List (List Ty)

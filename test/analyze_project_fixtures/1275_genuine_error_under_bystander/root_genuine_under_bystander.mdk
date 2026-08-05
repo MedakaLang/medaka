@@ -1,0 +1,24 @@
+-- #1111 A-2.5b SEVERITY MIRROR — a GENUINE error, with the collision present.
+--
+-- Its partner `method_missing_impl_no_collision` is the same genuine error with NO
+-- collision anywhere.  Pinning only that one would leave the interesting half
+-- untested: a fix that widens which candidates an import witnesses can turn a
+-- collided graph's obligation into a MISSING one, and a missing obligation is
+-- silence — a strictly worse S0 than the wrong-interface one being fixed.
+--
+-- EXPECTED VALUE DERIVED BY HAND: no `impl` of anything for `Blob` exists in this
+-- graph, so the program is wrong under every reading.  The only question this
+-- fixture grades is WHICH interface the one error names, and `msmth` reaches this
+-- module only through `msmid` → `msifb`, so:
+--
+--   No impl of MSIB for Blob; write an 'impl MSIB Blob'.
+--
+-- 🚨 BEFORE A-2.5b this rejected with `No impl of MSIA for Blob` — LOUD, so not an
+-- S0, but naming an interface the call never mentions and pointing the reader at
+-- the wrong repair.  Same defect, S2 arm.
+import msmid.{MSIB, msmth}
+import msifa.{MSIA}
+
+public export data Blob = Blob
+
+main = println (msmth Blob)

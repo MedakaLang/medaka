@@ -1,0 +1,30 @@
+-- #1111 A-2.5b — THE BYSTANDER FIXTURE (AGENTS.md's required shape): the new
+-- machinery is present in the graph, and the assertion is about a module that does
+-- not use it at all.
+--
+-- The whole #1275 collision graph is LOADED here — `msmid` (bare `import`: binds no
+-- names, pulls the module and its impls in), `msifa` (interface name only), and
+-- transitively `msifb` and `msbys`.  That is three declarations of `msmth`, two of
+-- them under interfaces both spelled `MSIB`, so this module's collided-method-name
+-- list is non-empty and `applyMethodScopeOverrides` really runs for it.  What is
+-- ASSERTED comes entirely from `msplain`, whose interface name, method name and type
+-- are unique in the graph.  No occurrence in this file consumes the overlay.
+--
+-- EXPECTED VALUE DERIVED BY HAND from the language semantics, not captured from an
+-- engine: `mssize Box` is `"plain"` by `msplain`'s only impl.  The failure this
+-- grades is an export index whose key is not really scoped per module — which would
+-- let a collision in one corner of the graph reach a module with no import
+-- relationship to any of it.
+--
+-- ⚠️ COUNTERFACTUAL, stated because a green run is not evidence: this is an
+-- INVARIANCE claim, so it passes on the PRE-FIX binary too, and that is correct
+-- rather than a coverage hole.  MEASURED — `main` @ ae39ec41 also prints `plain`.
+-- Its sibling `method_scope_valid_under_bystander` and the two
+-- `analyze_project_fixtures/127*` rows are the ones that go RED without the
+-- mechanism, measured on that same pre-fix binary.
+import msmid
+import msifa.{MSIA}
+import msplain.{MSSize, mssize, Box(..)}
+
+main : <IO> Unit
+main = putStrLn (mssize Box)

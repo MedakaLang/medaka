@@ -2598,6 +2598,7 @@ toggles = Ref (freshToggles ())
 data DriverState =
   | DriverState {
       effectDomains : Ref (List (String, Param)),
+      graphMethodExportsRef : Ref (OrdMap (List (String, Ident))),
       abstractRecordTypesRef : Ref (List String),
       argDispatchIdxRef : Ref (List (String, Int)),
       dictEligibleRef : Ref (List String),
@@ -2623,6 +2624,7 @@ data DriverState =
 freshDriverState : Unit -> DriverState
 freshDriverState _ = DriverState {
   effectDomains = Ref [],
+  graphMethodExportsRef = Ref omEmpty,
   abstractRecordTypesRef = Ref [],
   argDispatchIdxRef = Ref [],
   dictEligibleRef = Ref [],
@@ -12456,22 +12458,6 @@ ownMethodIdent ((DInterface { methods, ifaceOrigin, ... })::rest) n =
 ownMethodIdent (_::rest) n = ownMethodIdent rest n
 
 -- Is candidate [c] the declaration of [n] that one of THIS module's imports brings in?
--- TWO independent witnesses, because one alone is incomplete:
---   * the import names the method AND is OF the declaring module — the direct case;
---   * the import names the method AND EXPLICITLY names the candidate's INTERFACE —
---     which is what carries a RE-EXPORT (`import mid.{IB, mth}` where `mid` only
---     re-exports `ifaceb`'s `IB`, so the import's module id is `mid` and the identity's
---     is `ifaceb`).
--- Both require the import to bind the METHOD NAME, so an `import ifacea.{IA}` that
--- deliberately does NOT select `mth` is not a witness for `IA.mth` — which is exactly
--- the fact #1092's repro turns on.
---
--- ⚠️ The second witness demands an EXPLICIT member list, and that is not fussiness:
--- MEASURED on this tree, letting a WILDCARD satisfy it made `import ifaceb.*` +
--- `import ifacea.{IA}` witness BOTH candidates (a wildcard "names" every interface),
--- so the two-matches guard below fired and the whole override silently no-op'd — the
--- shape still printed `1`.  Under a wildcard only the module-id witness applies, which
--- leaves `import <re-exporter>.*` as a documented residual rather than a wrong answer.
 methodCandImported : List Decl -> String -> (Ident, (String, List String, Ty, List (String, List Kind))) -> Bool
 methodCandImported prog n c = anyUsePathBinds prog n c
 
@@ -12483,41 +12469,120 @@ anyUsePathBinds ((DUse _ path _)::rest) n c = usePathWitnesses path n c
   || anyUsePathBinds rest n c
 anyUsePathBinds (_::rest) n c = anyUsePathBinds rest n c
 
+-- ── #1111 A-2.5b (#1272 / #1275): the witness reads IDENTITY, not spelling ──
+-- An import witnesses a candidate when TWO things hold:
+--   * the path lets the name through — `usePathBindsName`, the member filter;
+--   * the dependency's row CARRIES *that declaration* of the name — asked of
+--     `graphMethodExportsRef`, the graph's (module id → name → declaring `Ident`)
+--     index, so a re-export chain resolves transitively and by identity.
+--     ⚠️ "carries", not "exports": the row has no `pub` filter (F3, `declMethodIdentsOf`).
+--
+-- 🚨 A-2.5 shipped the second conjunct as a bare-INTERFACE-NAME comparison
+-- (`usePathNamesMember path iface`, now deleted), which reinstated the very premise
+-- A-2.4 retired: interface names are NOT globally unique.  Two S0s came out of that one
+-- string compare, both of them the second conjunct answered by spelling rather than by
+-- the export graph:
+--   #1275 — an unrelated BYSTANDER module declaring a same-named interface with the same
+--           method name was witnessed by an import that names neither it nor anything of
+--           it, so the guard saw two matches and the override declined to the floor;
+--   #1272 — a WILDCARD import of a re-exporter (`import mid.*`) named no member, so the
+--           old witness could not fire at all.  It could not simply be relaxed either:
+--           letting a wildcard satisfy a NAME test makes it "name" every interface and
+--           witness every candidate.  Under an EXPORT test that dilemma disappears —
+--           a wildcard admits every name, and the index still admits only the
+--           declarations `mid` really re-exports;
+-- L2 (`compiler/TYPECHECK-TARGET-ARCHITECTURE.md`): identity is resolved, never
+-- re-derived from spelling.  The candidate's `iface` string is no longer read here.
+--
+-- The old module-id witness (`mkIdent NsMethod (OriginModule dep) n == Some ident`) is
+-- GONE rather than kept as a disjunct: it is exactly the case where `dep` declares the
+-- method itself, and `graphMethodExports` seeds every module with its OWN declarations,
+-- so the export test subsumes it.  Keeping both would be the parallel-near-copy shape
+-- this workstream exists to remove.
+--
+-- 🚨 #1276 (the ALIAS spelling, `import m as A` … `A.mth`) is NOT fixed here, and its own
+-- remedy sketch (1) — "give usePathWitnesses a UseAlias arm" — is REFUTED.  The primary
+-- evidence is DIRECT, not inferential: that arm was written, built and probed on this
+-- branch, and left #1276's repro printing `2` at exit 0, unchanged.  That measurement
+-- alone covers every surface, and it is what the refutation rests on.
+--
+-- A SECOND, WEAKER observation bounds the `check` path specifically, and is scoped here
+-- because it does not generalise: `renameAliasedMethods` has exactly one caller,
+-- `elaborateModules` (`grep -n renameAliasedMethods compiler/types/typecheck.mdk`), so
+-- the three `check*` drivers never perform the alias rewrite and `A.mth` never becomes a
+-- bare-`mth` occurrence for this table on THAT path.  ⚠️ It says nothing about the
+-- run/elaborate path, which DOES rename and DOES emit type errors — F1 was precisely a
+-- case where `check` was clean and `run` reported one, so "check is silent" must never
+-- again be read as "no surface reports anything".  CONTROL for the check half, on a
+-- binary built from this branch: `import ifacea as A`, `data Blob`, NO impl anywhere —
+-- `medaka check` exits 0 with no diagnostic while `medaka run` panics `unbound
+-- identifier: mth`.  #1276's fix is a driver / AST-carrier change; the alias arm was
+-- removed rather than shipped inert.
+--
+-- `core` is the implicit prelude, never an explicit provenance (importDefinersOf skips it
+-- for the same reason); `preludeMethodEntry` is its rung.
+--
+-- CONVERGENCE UNDER #1280 (identity SUPPLY), stated because the direction is not
+-- obvious: a declaration with no module id mints no `Ident` and so contributes NO row
+-- (`ifaceMethodIdentPair`).  Every such gap today makes `depExportsMethodIdent` answer
+-- False, i.e. the index is an UNDER-approximation and the overlay declines more often
+-- than it should.  When #1280 makes supply total, rows appear that are missing now, so
+-- the overlay STRENGTHENS — strictly more candidates witnessed, never fewer.  A shape
+-- that silently keeps the floor today can therefore start being decided correctly then;
+-- the change is monotone in the right direction, but it IS a behaviour change and this
+-- unit's fixtures do not cover it.
 usePathWitnesses : UsePath -> String -> (Ident, (String, List String, Ty, List (String, List Kind))) -> Bool
-usePathWitnesses path n (ident, (iface, _, _, _)) =
+usePathWitnesses path n (ident, _) =
   let dep = usePathModuleId path
-  -- `core` is the implicit prelude, never an explicit provenance (importDefinersOf skips
-  -- it for the same reason); `preludeMethodEntry` is its rung.
-  dep != "core"
-    && usePathBindsName path n
-    && (mkIdent NsMethod (OriginModule dep) n == Some ident || usePathNamesMember path iface)
+  dep != "core" && usePathBindsName path n && depExportsMethodIdent dep n ident
 
 -- `None` from importedBindings is the WILDCARD form (`import m.*`), which binds every
--- name the dependency exports — so it witnesses any name.
---
--- 🚨 `UseAlias` yields `Some []` (a module alias binds no bare names) and therefore
--- witnesses NOTHING.  That is a KNOWN DEFECT, not a safe case.  This comment used to end
--- "which is right: a method reached as `M.mth` is renamed to its origin spelling by
--- renameAliasedMethods before this table is ever consulted."  The rename is precisely what
--- DESTROYS the discriminator: the alias was the only syntactic evidence of which module the
--- occurrence meant, so afterwards it is a bare `mth` with no provenance, no candidate is
--- witnessed, and applyMethodScopeOverrides declines to the last-write-wins floor — #1092's
--- S0, unfixed, for that spelling.  MEASURED: `import ifacea as A` as the only provider of
--- `mth`, `Blob` implementing `IB` only, `println (A.mth Blob)` prints `2` at exit 0 where
--- `No impl of IA for Blob` is correct — on this build AND on main, so not a regression.
--- Filed as #1276.  An alias binds no NAMES but does carry a MODULE ID; recovering it (here
--- or by not erasing it in renameAliasedMethods) is the fix — see #1276 for both shapes.
+-- name the dependency exports — and, unlike A-2.5's deleted `usePathNamesMember`, that
+-- is now safe: the export test above still admits only the declarations the dependency
+-- really provides.  `UseAlias` yields `Some []` and so witnesses nothing — see the #1276
+-- paragraph above for why that is a different defect rather than this one's residue.
 usePathBindsName : UsePath -> String -> Bool
 usePathBindsName path n = match importedBindings path
   None => True
   Some bs => contains n (map snd bs)
 
--- The same question restricted to an EXPLICIT member list — a wildcard answers False
--- here.  See `usePathWitnesses` for the measured reason the two must differ.
-usePathNamesMember : UsePath -> String -> Bool
-usePathNamesMember path n = match importedBindings path
+-- Does [dep]'s row carry a method spelled [n] whose DECLARATION is [ident]?
+--
+-- ⚠️ "Row carries", NOT "dep exports" — the row has no `pub` filter, so it also holds a
+-- PRIVATE interface's methods.  See `declMethodIdentsOf`, which owns that gap (F3).
+--
+-- 🚨 THE FAILURE DIRECTION IS DELIBERATE, BUT THE ARGUMENT THIS COMMENT USED TO GIVE FOR
+-- IT WAS FALSE TWICE, AND BOTH HALVES POINTED AWAY FROM THE F1 BUG THAT WAS REALLY HERE.
+-- It read: *"A miss answers False, which makes the candidate unwitnessed, which makes the
+-- overlay decline and keep the floor — the pre-A-2.5 answer, never a new one."*
+--   1. **The floor is not "the pre-A-2.5 answer".**  It is the pre-#1092 bare-name
+--      last-write-wins map.  A-2.5's overlay already BEAT that floor for every shape it
+--      fixed, so falling back to it is a REGRESSION for exactly the population A-2.5
+--      exists to serve — not a safe no-op.  A wholesale miss is therefore a bug of the
+--      first order, which is precisely what F1 turned out to be, and this sentence is
+--      what made it read as harmless.
+--   2. **A miss does not always decline.**  The overlay declines on 0 or ≥2 matches and
+--      OVERRIDES on exactly 1.  Dropping one of two witnesses turns "2 → floor" into
+--      "1 → override": the miss CAUSES a new answer rather than falling back to the old
+--      one.  "Never a new one" was simply wrong.
+-- What is actually true, and all that is claimed now: a *per-`dep`* miss is the honest
+-- answer to "this dependency's row does not carry that declaration", and the overlay
+-- stays an overlay rather than a rebuild (`applyMethodScopeOverrides`).  A *wholesale*
+-- miss — the index absent — is a programming error, and the property that forbids it is
+-- stated on `graphMethodExports` (the CONJUNCTION: overwritten at every driver entry AND
+-- no reset point in between).
+depExportsMethodIdent : String -> String -> Ident -> Bool
+depExportsMethodIdent dep n ident = match omLookup dep driverState.value.graphMethodExportsRef.value
   None => False
-  Some bs => contains n (map snd bs)
+  Some es => exportsIdentFor n ident es
+
+-- Monomorphic and short-circuiting on purpose (`compiler/AGENTS.md`): this runs only for
+-- a COLLIDED method name, but when it runs it walks one module's exported-method list.
+exportsIdentFor : String -> Ident -> List (String, Ident) -> Bool
+exportsIdentFor _ _ [] = False
+exportsIdentFor n ident ((en, ei)::rest)
+  | en == n && ei == ident = True
+  | otherwise = exportsIdentFor n ident rest
 
 lookupMethodCand : Ident -> List (Ident, (String, List String, Ty, List (String, List Kind))) -> Option (String, List String, Ty, List (String, List Kind))
 lookupMethodCand _ [] = None
@@ -20409,6 +20474,137 @@ reexportedMethodsOf acc (DUse True path _) = match lookupAssoc (usePathModuleId 
     Some bs => filterList (n => contains n srcMethods) (map fst bs)
 reexportedMethodsOf _ _ = []
 
+-- ── #1111 A-2.5b: the graph's method-IDENTITY index ─────────────────────────
+-- `mid → [(name the row carries this method under, the Ident of the interface
+-- declaration it means)]`, folded DEPENDENCY-FIRST so a `export import src.{…}`
+-- resolves against `src`'s already-computed row and a >1-hop re-export chain still
+-- resolves.  Same shape and the same ordering argument as `methodsPerMidGo` above,
+-- one level up: identities instead of names.
+--
+-- This is what makes `usePathWitnesses` answer *"does this import bring in THAT
+-- declaration"* rather than *"does the spelling match"* — see its comment for the two
+-- S0s the spelling question produced (#1272 / #1275).
+--
+-- 🚨 INTERIM — AND THIS TREE ALREADY COMPUTES THIS FACT TWICE ELSEWHERE.  Say it plainly
+-- rather than leaving it to the next reader to discover: `resolve.mdk` already derives
+-- module → exported method identities (`ModuleExports.expIfaceMethods` /
+-- `reExpIfaceMethods`, and `valueProvenance` / `ambiguousSet`, which reach interface
+-- methods because `publicIfaceMethodVals` folds a public interface's methods into
+-- `expValues`).  This is therefore a THIRD implementation of one fact, and #1288 is an
+-- open S1 against resolve's copy of it.  The long-term home is UPSTREAM: R / #1288's fix
+-- owns the fact and typecheck CONSUMES it.  **The absorbing stage that deletes this
+-- function is R / #1288.**  It lands now, as named scaffolding, only because two S0s
+-- (#1272 / #1275) would otherwise wait on a component that does not exist yet.
+--
+-- ── THE SAFETY PROPERTY, AND IT IS A CONJUNCTION.  Both halves, or neither. ──
+-- The result is stored in `driverState.graphMethodExportsRef`, read only by
+-- `depExportsMethodIdent`.  What makes that safe is BOTH of:
+--
+--   (a) UNCONDITIONAL WHOLE-VALUE OVERWRITE AT EVERY Module-MODE DRIVER ENTRY.  The two
+--       entries are `checkModulesPreamble` and `elaborateModules`, each doing
+--       `setRef driverState.value.graphMethodExportsRef (graphMethodExports coreDecls modules)`
+--       over THAT compile's graph.  Never `omInsert`, never a merge — so compile N's rows
+--       cannot reach compile N+1.  This half is NECESSARY: `freshDriverState` initialises
+--       the field to `omEmpty`, so a driver that omits the write reads an empty index and
+--       every candidate misses, which is F1's symptom exactly.
+--   (b) NO RESET POINT IN BETWEEN.  `DriverState` has none — its own header says
+--       `freshDriverState` is the INITIAL construction only, and no whole-bundle
+--       `setRef driverState (…)` exists in the tree.  This half is also NECESSARY: on
+--       `CrossRun` the writes in (a) were already there and correct, and F1 still
+--       happened, because `resetCrossModuleState` cleared the field between the write and
+--       the read.
+--
+-- ⚠️ Do not restate this as "who clears, not who writes", and do not restate it as the
+-- writer enumeration alone.  Each of those was written down during review, each is half
+-- the property, and F1 is what the missing half costs.  (b) is greppable; (a) is a
+-- two-site enumeration that a new driver can invalidate — which is why the precondition
+-- is spelled out at `checkModuleFullDiags` as well.
+--
+-- ⚠️ Must run on the STAMPED graph: identity comes from `DInterface.ifaceOrigin`, which
+-- `stampGraphTyOrigins` writes.  Both call sites (`checkModulesPreamble`,
+-- `elaborateModules`) sit after their driver's stamp.
+--
+-- 🚨 THERE IS NO `pub` FILTER, so "exports" is the WRONG word for a row and this comment
+-- said it for a round (F3).  `declMethodIdentsOf` takes every `DInterface`, PRIVATE ones
+-- included, which diverges from resolve's `expIfaceMethodsDirect` (that one does filter
+-- `pub = True`).  Under a WILDCARD import `usePathBindsName` is `True` for every name, so
+-- a dependency's private interface can witness a name it does not put in scope —
+-- MEASURED: the valid fixture graph plus `import mspriv.*`, where `mspriv` declares a
+-- non-`pub` `interface MSIP`, is rejected `No impl of MSIP for Blob`, naming a private
+-- interface of another module.  **PRE-EXISTING, not this unit's regression** — A-2.5's
+-- witness (a) had the identical gap, and it reproduces on `main`; filed separately, and
+-- deliberately NOT fixed here because whether a private interface's method is visible to
+-- dispatch is a LANGUAGE decision the spec should make before the code does.
+--
+-- The absence of the filter is also what lets `usePathWitnesses` drop its separate
+-- declaring-module witness: `import dep.{mth}` where `dep` declares the interface —
+-- public or not — is just the row `dep` seeds itself with.
+graphMethodExports : List Decl -> List (String, List Decl) -> OrdMap (List (String, Ident))
+graphMethodExports coreDecls modules =
+  graphMethodExportsGo
+    (omInsert "core" (declMethodIdents coreDecls) omEmpty)
+    modules
+
+graphMethodExportsGo : OrdMap (List (String, Ident)) -> List (String, List Decl) -> OrdMap (List (String, Ident))
+graphMethodExportsGo acc [] = acc
+graphMethodExportsGo acc ((mid, decls)::rest) =
+  graphMethodExportsGo
+    (omInsert
+      mid
+      (declMethodIdents decls ++ reexportedMethodIdents acc decls)
+      acc)
+    rest
+
+-- the (method name, declaring identity) pairs [decls] DECLARES.  An impl declares no
+-- method — it implements one — so only `DInterface` contributes, and a declaration with
+-- no module id contributes nothing (honest absence, §8 I6.3) exactly as
+-- `insertIfaceMethodIdents` does.
+--
+-- ⚠️ F3 LIVES HERE: the `DInterface` pattern does not bind `pub`, so a PRIVATE interface
+-- contributes too.  Pre-existing and deliberately unfixed in this unit — the full
+-- derivation, the measured repro and the reason it is a language decision are on
+-- `graphMethodExports` above.
+declMethodIdents : List Decl -> List (String, Ident)
+declMethodIdents decls = flatMap declMethodIdentsOf decls
+
+declMethodIdentsOf : Decl -> List (String, Ident)
+declMethodIdentsOf (DAttrib _ d) = declMethodIdentsOf d
+declMethodIdentsOf (DInterface { methods, ifaceOrigin, ... }) =
+  flatMap (m => ifaceMethodIdentPair ifaceOrigin m) methods
+declMethodIdentsOf _ = []
+
+ifaceMethodIdentPair : TyConOrigin -> IfaceMethod -> List (String, Ident)
+ifaceMethodIdentPair origin (IfaceMethod mname _ _) = match mkIdent NsMethod origin mname
+  None => []
+  Some i => [(mname, i)]
+
+-- the identities a module RE-EXPORTS via `export import src.{…}` (`DUse True`), taken
+-- from [acc] — the dependency's already-folded row.
+--
+-- ⚠️ `local` and `origin` are ALWAYS EQUAL here, so `reexportRenamed` never renames.
+-- This comment used to read "the exported NAME is the member's LOCAL spelling
+-- (`export import src.{a as b}` exports `b`)" — which describes a program the parser
+-- REFUSES: `compiler/frontend/parser.mdk:2369,2376` reject both `export import m as A`
+-- and `export import m.{a as b}` outright.  The generality is kept (it costs one
+-- `filterList`, and it is the shape a future `export import … as …` would need) but it
+-- is DEAD TODAY and must not be cited as behaviour.
+reexportedMethodIdents : OrdMap (List (String, Ident)) -> List Decl -> List (String, Ident)
+reexportedMethodIdents acc decls = flatMap (reexportedMethodIdentsOf acc) decls
+
+reexportedMethodIdentsOf : OrdMap (List (String, Ident)) -> Decl -> List (String, Ident)
+reexportedMethodIdentsOf acc (DAttrib _ d) = reexportedMethodIdentsOf acc d
+reexportedMethodIdentsOf acc (DUse True path _) = match omLookup (usePathModuleId path) acc
+  None => []
+  Some src => match importedBindings path
+    -- `export import src.*` re-exports every one of src's methods, under their own names
+    None => src
+    Some bs => flatMap (b => reexportRenamed b src) bs
+reexportedMethodIdentsOf _ _ = []
+
+reexportRenamed : (String, String) -> List (String, Ident) -> List (String, Ident)
+reexportRenamed (origin, local) src =
+  map (e => (local, snd e)) (filterList (e => fst e == origin) src)
+
 renameAliasedMethodsIn : List (String, List String) -> (String, List Decl) -> (String, List Decl)
 renameAliasedMethodsIn methodsPerMid (mid, prog) = match aliasMethodRenames methodsPerMid prog
   [] => (mid, prog)
@@ -20949,6 +21145,21 @@ foldModules wantData wantAll worker collect base baseSeed coreV depEnv accData a
 checkModulesPreamble : List Decl -> List Decl -> List (String, List Decl) -> (List (String, Scheme), List (String, Scheme))
 checkModulesPreamble runtimeDecls coreDecls modules =
   let _ = resetCrossModuleState ()
+  -- #1111 A-2.5b: derive the graph's method-identity index over the whole
+  -- (already-stamped) graph, before any module — including the core pass below — reads
+  -- it.  `elaborateModules` carries the identical line.
+  --
+  -- ⚠️ NOT "built once per compile": F1 falsified that phrasing.  It is derived once PER
+  -- DRIVER ENTRY, and a driver may legitimately run twice over one graph.  What matters is
+  -- not how many times it is written but that it is LIVE at every entry into the `Module`
+  -- arm — see `graphMethodExports`, which states the two-part property that carries it.
+  --
+  -- THIS LINE IS ONE HALF OF THAT PROPERTY.  `freshDriverState` initialises the field to
+  -- `omEmpty`, so a driver that does not write it reads an empty index and every candidate
+  -- misses — which IS F1's symptom.  The writer set is therefore a NECESSARY conjunct, not
+  -- "the wrong question": the two Module-mode driver entries that must carry this line are
+  -- `checkModulesPreamble` (here) and `elaborateModules`.
+  let _ = setRef driverState.value.graphMethodExportsRef (graphMethodExports coreDecls modules)
   -- #80/#201: populate effect domains ONCE over the WHOLE import graph (builtins +
   -- every `effect …` decl in core or any module), BEFORE the per-module foldModules
   -- loop, so a module using an effect declared in ANOTHER module sees its domain.
@@ -21023,6 +21234,21 @@ checkModules runtimeDecls coreDecls0 modules0 =
 -- BEFORE the first module.  Every existing caller goes through a driver that does exactly
 -- that (foldModulesDiags / checkModulesDiags via resetCrossModuleState); a future
 -- standalone caller that skips it would leak the previous run's universe into this one.
+--
+-- 🚨 THE SENTENCE ABOVE DOES NOT COVER EVERYTHING THE Module PATH READS, AND THE ONE
+-- EXCEPTION IS EXACTLY BACKWARDS FROM IT (#1111 A-2.5b).  `driverState.graphMethodExportsRef`
+-- — the method-identity index `applyMethodScopeOverrides` consults on this path — is NOT a
+-- `CrossRun` accumulator and `resetCrossModuleState` does NOT clear it, deliberately: it is
+-- derived once from the WHOLE graph and has no per-module re-seed path, so being cleared
+-- mid-run is precisely the defect that put it on `driverState` (F1 — `check` clean while
+-- `run`/`build` reported a type error).  For it the precondition is not "clear before the
+-- first module" but **"OVERWRITE with this run's graph before the first module"**:
+--     setRef driverState.value.graphMethodExportsRef (graphMethodExports coreDecls modules)
+-- which `checkModulesPreamble` and `elaborateModules` both do.  ⚠️ The failure modes differ
+-- in KIND, which is why this is worth spelling out rather than folding into the list above:
+-- skipping `resetCrossModuleState` leaks the previous run's universe; skipping THIS write
+-- leaves the previous run's INDEX in place, and a stale index can pick a wrong interface
+-- where an empty one merely declines to the floor.  A standalone caller must do BOTH.
 export checkModuleFullDiags : String -> List (String, Scheme) -> List Decl -> List Decl -> List Decl -> (List (String, Scheme), List TcDiag, List TcDiag)
 checkModuleFullDiags mid seedVars accData accAll prog =
   -- #415 item 1: same seeding preamble as the flat entry points (one body), but the
@@ -21333,6 +21559,15 @@ elaborateModules runtimeDecls coreDecls0 modulesIn =
   let (coreDecls, modules) = stampGraphTyOrigins coreDecls0 (renameAliasedMethods coreDecls0 modulesIn)
   let _ = setRef driverState.value.mainSchemeRef None
   let _ = resetCrossModuleState ()
+  -- #1111 A-2.5b: the graph's method-identity index — the identical line
+  -- `checkModulesPreamble` carries, for the one Module-mode driver that does not use
+  -- that preamble.  See `graphMethodExports`.
+  --
+  -- This driver runs the `Module` arm on TWO paths — the bare sweep below and, when
+  -- `promotionHarvestRef` is non-empty, the second sweep in the `_ =>` arm that begins
+  -- with another `resetCrossModuleState ()`.  This one write covers both ONLY because
+  -- the ref is on `driverState`, which that reset does not touch (F1).
+  let _ = setRef driverState.value.graphMethodExportsRef (graphMethodExports coreDecls modules)
   let allDecls = coreDecls ++ flatMap snd modules
   -- #80/#201: populate effect domains ONCE over the WHOLE import graph (builtins +
   -- every `effect …` decl), BEFORE any per-module resetState (discovery scratch pass

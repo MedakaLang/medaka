@@ -1,0 +1,8 @@
+-- #1111 Stage A-2 unit A-2.5b (#1275): half one of the collision, and the only route by
+-- which the BYSTANDER enters the graph.  A bare `import` binds no names but does
+-- pull the module in — which is exactly how an unrelated module got to decide the
+-- entry's verdict.
+import msbys
+
+export interface MSIA a where
+  msmth : a -> String

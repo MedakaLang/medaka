@@ -1,0 +1,7 @@
+-- #1111 Stage A-2 unit A-2.5b (#1272 / #1275): the BYSTANDER.  It declares an
+-- interface whose NAME and whose METHOD NAME both equal `msifb`'s, and the entry
+-- module neither imports it nor mentions it — it reaches the graph only through
+-- `msifa`'s bare `import msbys`.  Renaming `MSIB` to `MSIZ` here is the SINGLE
+-- byte-level variable that used to flip the entry's verdict (#1275).
+export interface MSIB a where
+  msmth : a -> Int

@@ -1,0 +1,4 @@
+-- #1111 A-2.5b (#1272/#1275): the interface the entry's `msmth` occurrence really
+-- names, reached only through the re-exporter `a25b_mid`.
+export interface MSIB a where
+  msmth : a -> Int

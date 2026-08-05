@@ -1,0 +1,54 @@
+issue: 1302
+what: `mth Blob` in main.mdk unambiguously names `IB.mth` -- `mspriv`'s same-named
+what: `mth` belongs to a PRIVATE (non-`export`) interface `MSIP`, so it is not
+what: exported and resolve correctly raises nothing about it. `impl IB Blob`
+what: exists. Correct verdict: ACCEPT, print 6. Observed: REJECTED at exit 1 with
+what: `No impl of MSIP for Blob; write an 'impl MSIP Blob'.` -- naming an
+what: interface private to another module, not in scope at the use site, and
+what: unwritable, so the diagnostic's own suggested repair cannot be performed.
+what: MECHANISM. `declMethodIdentsOf` (compiler/types/typecheck.mdk) matches
+what: `DInterface { methods, ifaceOrigin, ... }` WITHOUT binding `pub`, so a
+what: private interface's methods land in that module's row of the method-identity
+what: index. Under a WILDCARD import `usePathBindsName` answers True for every
+what: name, so the private declaration is witnessed, wins the single-match
+what: override in `importedMethodEntry`, and the obligation is recorded against
+what: it. This diverges from resolve's answer to the same question:
+what: `expIfaceMethodsDirect` (compiler/frontend/resolve.mdk) DOES filter
+what: `pub = True`. Two layers, two answers, and only one can be right.
+what: THE SHARPEST CONTROL is the EXPORTED variant, which is not this fixture:
+what: make `MSIP` `export` and keep the wildcard, and resolve reports
+what: `Ambiguous occurrence: 'mth' is exported by both \`ifb\` and \`mspriv\``
+what: -- correct, because then it genuinely IS ambiguous. The bug is that the
+what: PRIVATE case, where resolve deliberately says nothing because nothing is
+what: ambiguous, is nonetheless decided downstream by the private declaration.
+what: NOT A REGRESSION, and NOT #1296's. Measured identically on `main` @
+what: ae39ec41 and on #1296's branch. A-2.5's witness (a) had the same gap --
+what: it never consulted `pub` either -- so A-2.5b's export-graph rewrite
+what: inherits the reach rather than widening it. #1296 corrects only the
+what: WORDING around this table ("carries", not "exports") and deliberately
+what: leaves the behaviour alone.
+what: DELIBERATELY UNFIXED pending a LANGUAGE decision: whether a private
+what: interface's methods participate in dispatch for an importing module is a
+what: spec question, and it is being added to the owed identity/selection
+what: paragraph (#1107) rather than settled by a two-line patch.
+cmd: run main.mdk
+exit: 1
+control: run control.mdk
+why-verb: `run` rather than `check`: both reject identically here, and `run` is
+why-verb: the cheaper of the two that still observes the false reject (no clang,
+why-verb: unlike `build`). This is NOT a check-vs-run disagreement -- every
+why-verb: surface agrees on the wrong answer, which is why the exit code alone
+why-verb: discriminates and no stdout pin is needed.
+why-stdout: deliberately ABSENT. The observable is a NONZERO EXIT on a program
+why-stdout: that must succeed, so `exit: 1` alone discriminates: the correct
+why-stdout: behaviour is exit 0 printing 6, which moves the exit code. Pinning
+why-stdout: the diagnostic TEXT would additionally couple this row to the
+why-stdout: message wording, which is not what the issue is about.
+why-control: control.mdk changes exactly one thing -- `import mspriv.*` becomes
+why-control: `import mspriv.{helper}` -- and must print 6 at exit 0. It holds the
+why-control: private interface, the same-named method and the same impl fixed,
+why-control: so a break in it means wildcard imports or private interfaces broke,
+why-control: not #1302. It also pins the discriminator the mechanism rests on:
+why-control: only `UseWild` makes `usePathBindsName` answer True for every name.
+why-note: Sibling of #1288 (resolve's own copy of the module -> exported-method
+why-note: identity fact, open S1). Umbrella #1070 / #1111.

@@ -1,0 +1,10 @@
+-- #1111 A-2.5b: a module with NO relationship to the method-name collision next
+-- door.  Its interface name, its method name and its type are all unique in the
+-- graph, so nothing this unit added can key on them.
+export interface MSSize a where
+  mssize : a -> String
+
+public export data Box = Box
+
+impl MSSize Box where
+  mssize _ = "plain"

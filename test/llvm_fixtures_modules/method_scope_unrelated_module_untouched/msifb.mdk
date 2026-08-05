@@ -1,0 +1,6 @@
+-- #1111 Stage A-2 unit A-2.5b (#1275): half two of the bare-METHOD-NAME collision.
+-- Its `msmth` is the one the entry actually reaches, through the re-exporter
+-- `msmid`.  Method type is `String` because this corpus is PRELUDE-FREE under
+-- diff_compiler_llvm_modules.sh (empty core) — see iface_collision_bystander.
+export interface MSIB a where
+  msmth : a -> String

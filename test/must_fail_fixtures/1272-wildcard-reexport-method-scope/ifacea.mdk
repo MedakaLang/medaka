@@ -1,4 +1,0 @@
--- issue #1272: half one of the bare-METHOD-NAME collision. Never re-exported by
--- mid.mdk, and main.mdk imports only the TYPE `IA` from here.
-export interface IA a where
-  mth : a -> Int
