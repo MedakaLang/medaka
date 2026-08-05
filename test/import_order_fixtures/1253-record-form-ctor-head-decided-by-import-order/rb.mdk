@@ -1,0 +1,6 @@
+import ra.{Tag, tag}
+
+public export data TB = MkT { fx : Int }
+
+export impl Tag TB where
+  tag _ = "FROM-RB"

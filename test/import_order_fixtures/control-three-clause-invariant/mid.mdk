@@ -1,0 +1,4 @@
+export import base.{Base, Bs, unBs}
+
+export midf : Int -> Int
+midf i = unBs (Bs i) + 10

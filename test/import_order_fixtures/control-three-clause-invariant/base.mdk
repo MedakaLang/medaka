@@ -1,0 +1,4 @@
+public export data Base = Bs Int
+
+export unBs : Base -> Int
+unBs (Bs i) = i

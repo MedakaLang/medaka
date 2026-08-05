@@ -1,0 +1,5 @@
+import base.{Base, Bs, unBs}
+import mid.{midf}
+import leaf.{Leaf, Lf, unLf}
+
+main = println (unBs (Bs 1) + midf 2 + unLf (Lf 100))

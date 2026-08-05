@@ -1,0 +1,5 @@
+public export data Wrap = CtorOnly Int | Sib Int
+
+export unw : Wrap -> Int
+unw (CtorOnly i) = i
+unw (Sib i) = i

@@ -1,0 +1,24 @@
+entry: main.mdk
+what: #1253 (S0) an ambiguous RECORD-form ctor head resolves by import order, silently
+
+`MkT { fx = 1 }` names a record-form constructor declared, identically, by BOTH `ra`
+and `rb`. `recCreateHead` never consults the ctor-ambiguity set the POSITIONAL form
+routes through, so no `R-AMBIGUOUS-CTOR` fires and the winner is whichever clause the
+resolver reached last. Which `impl Tag` runs is therefore decided by import order,
+at exit 0, with no diagnostic on any verb.
+
+Observed by hand on a binary cold-bootstrapped from `main` @ 0af30a78, 2026-08-05,
+before this gate existed:
+
+    check, both orders          -> exit 0, `main : Unit`, NO diagnostic
+    run,   ra clause first      -> FROM-RB
+    run,   rb clause first      -> FROM-RA
+    build, ra clause first      -> FROM-RA
+    build, rb clause first      -> FROM-RB
+
+⚠️ The `build` rows are NOT in #1253's issue body, which records `run` only. The two
+engines pick OPPOSITE winners for the same source, so this is also a run-vs-build
+disagreement at exit 0 on top of the order dependence. Both are graded here; both are
+covered by the same ledger row, because both are the same unkeyed lookup.
+
+Ledgered in test/IMPORT-ORDER-LEDGER.txt against #1253.
