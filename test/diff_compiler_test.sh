@@ -26,6 +26,9 @@
 #     truth the native runtime actually implements; #505 un-deferred once that
 #     was confirmed on a fresh build)
 #   test/compiler_test_fixtures/mixed.mdk  passing + FAILING doctest + prop
+#   test/compiler_test_fixtures/record_prop.mdk  GH #1295: a passing/positional
+#     ADT prop plus a passing RECORD-typed prop (genVariant's ConNamed arm used
+#     to build a positional VCon and panic on first field access)
 #   test/compiler_test_fixtures/blockquote_and_valid.mdk  GH #55: a malformed
 #     example (Markdown blockquote) does not abort the file — the valid
 #     examples before AND after it still run
@@ -95,6 +98,7 @@ else
          $ROOT/stdlib/hash_set.mdk \
          $ROOT/test/compiler_test_fixtures/mixed.mdk \
          $ROOT/test/compiler_test_fixtures/sum_dict.mdk \
+         $ROOT/test/compiler_test_fixtures/record_prop.mdk \
          $ROOT/test/compiler_test_fixtures/mappable_not_foldable.mdk \
          $ROOT/test/compiler_test_fixtures/shadow_impl_tolist.mdk \
          $ROOT/test/compiler_test_fixtures/blockquote_and_valid.mdk \
