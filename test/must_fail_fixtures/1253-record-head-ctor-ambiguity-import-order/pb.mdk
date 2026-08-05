@@ -1,5 +1,0 @@
--- issue #1253: POSITIONAL-form twin of rb.mdk -- see pa.mdk.
-public export data TB2 = MkT2 Int
-import pa.{Tag2, tag2}
-export impl Tag2 TB2 where
-  tag2 _ = "FROM-PB"

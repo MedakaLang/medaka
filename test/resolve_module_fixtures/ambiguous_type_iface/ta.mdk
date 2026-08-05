@@ -1,5 +1,6 @@
 -- One of two UNRELATED modules that each independently declare a type `Widget`,
--- a record `Crate`, and an interface `Speak`.  Neither imports the other.
+-- a record `Crate`, a named-field variant `MkBox`, and an interface `Speak`.
+-- Neither imports the other.
 --
 -- Both DECLARATIONS are legal and must stay legal: ambiguity is diagnosed at the
 -- USE site (the Haskell/Rust model), never at the declaration.  This module
@@ -7,6 +8,11 @@
 public export data Widget = MkA Int
 
 public export data Crate = Crate { crateSz : Int }
+
+-- #1253: the CTOR-ONLY record spelling.  `MkBox` is a constructor and NOT a type
+-- name, which is precisely why `typeAmbiguous` (keyed by type names) is blind to it
+-- and why a record head that consults only the type peer stayed silent.
+public export data Box = MkBox { boxSz : Int }
 
 export interface Speak a where
   speak : a -> String

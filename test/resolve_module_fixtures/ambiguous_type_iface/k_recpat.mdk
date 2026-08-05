@@ -1,0 +1,15 @@
+-- CTOR occurrence 1/2 (#1253): a record PATTERN head whose spelling is a
+-- CONSTRUCTOR and not a type.  `data Box = MkBox { boxSz : Int }` declares a type
+-- `Box` and a variant `MkBox`; this head names `MkBox`, so `typeAmbiguous` — keyed
+-- by TYPE names — is structurally unable to see it, and before #1319 unit 1 this
+-- position was silent while its POSITIONAL twin (`MkBox 1`, via `checkPat`'s `PCon`
+-- arm) was rejected.  That silence was an S0: exit 0, no diagnostic, and which
+-- declaration won decided by import-clause order.
+--
+-- ⚠️ `Box` itself is never written here.  If it were, the TYPE peer would fire and
+-- this cell would pass without the constructor peer existing at all — the fixture
+-- would be green for the wrong reason.
+import ta.{Box(..)}
+import tb.{Box(..)}
+
+sizeOfBox (MkBox { boxSz = n }) = n

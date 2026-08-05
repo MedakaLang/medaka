@@ -1,0 +1,33 @@
+-- THE UNRELATED MODULE.  It takes no part in the collision it is surrounded by: it
+-- declares its OWN `Dup`, at its OWN type, and the binding asserted about (`bys`)
+-- has type `Int` — it mentions neither `CA` nor `CB` nor anything either colliding
+-- module declares.
+--
+-- It nonetheless imports colla's constructors WITH `(..)`, which is what makes this
+-- able to fail rather than green by construction: colla's `Dup` is therefore in
+-- scope AND witnessed by an import of this module, so a scope decision that omitted
+-- the own-declaration rung would find exactly ONE witnessed candidate and override
+-- this module's `Dup` to colla's `Int -> CA`.  `unPlain (Dup 5)` then does not
+-- typecheck.  (That is the A-2.6 layering regression — `import json.{Json, JNull}`
+-- clobbering a local `data Tok = JString String` — one namespace over.)
+--
+-- ⚠️ MEASURED, not reasoned: with `scopedCtorEntry`'s own-declaration rung stubbed
+-- out and nothing else changed, on a binary built from this branch, `entry.mdk`
+-- goes from `7`/`b`/`25` at exit 0 to exit 1 with `Type mismatch: CA vs Plain` at
+-- `unPlain (Dup n) = n` (bystand.mdk:24) plus two more.  This cell can fail.
+--
+-- The rest of the colla import must keep working at the same time: `ACount` is not
+-- collided anywhere and is used here, so "the local ctor wins" cannot be bought by
+-- dropping the import.
+import colla.{CA(..), unCA}
+
+public export data Plain =
+  | Dup Int
+  | Skip
+
+unPlain : Plain -> Int
+unPlain (Dup n) = n
+unPlain Skip = 0
+
+export bys : Int
+bys = unPlain (Dup 5) + unCA (ACount 2)

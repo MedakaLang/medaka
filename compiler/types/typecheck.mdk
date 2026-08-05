@@ -2602,6 +2602,7 @@ data DriverState =
   | DriverState {
       effectDomains : Ref (List (String, Param)),
       graphMethodExportsRef : Ref (OrdMap (List (String, Ident))),
+      graphCtorExportsRef : Ref (OrdMap (List (String, String, Ident))),
       abstractRecordTypesRef : Ref (List String),
       argDispatchIdxRef : Ref (List (String, Int)),
       dictEligibleRef : Ref (List String),
@@ -2628,6 +2629,7 @@ freshDriverState : Unit -> DriverState
 freshDriverState _ = DriverState {
   effectDomains = Ref [],
   graphMethodExportsRef = Ref omEmpty,
+  graphCtorExportsRef = Ref omEmpty,
   abstractRecordTypesRef = Ref [],
   argDispatchIdxRef = Ref [],
   dictEligibleRef = Ref [],
@@ -3080,6 +3082,8 @@ data CrossRun = CrossRun {
     universeIfaceParamKinds : Ref (List (RegKey, List Kind)),  -- #822 iface half of the kind universe; #1111 A-2.4: identity×slot-keyed (RegKey), not "<iface>@<slot>" — see ifaceSlotKey
     universeAliasTable : Ref (List (TabKey, (List String, Ty))),  -- #1111 A-2.3: identity-keyed (TabKey), not bare name — see tyTabKey
     universeDataEnv : Ref TcEnv,
+    universeCtorIdentsRef : Ref (OrdMap (List (Ident, String, Scheme))),  -- #1111 A-2.11 (#1319 unit 1): the identity-keyed COMPANION of universeDataEnv's ctor map — see insertCtorIdents
+    universeCtorCollidedRef : Ref (List String),  -- #1111 A-2.11: the ctor NAMES the line above holds ≥2 distinct identities for (normally EMPTY)
     universeDataDecls : Ref (List Decl),  -- #674: prior modules' PUBLIC data DECLS (universeDataEnv is a lossy bare-name ctor env) — see appendDataUniverse
     obUnivConcreteRef : Ref (MultiRegistry (List Ty, List Require)),
     obUnivHeadlessRef : Ref (MultiRegistry (List Ty, List Require)),
@@ -3093,7 +3097,10 @@ data CrossRun = CrossRun {
     coreSchemeObligationsRef : Ref (OrdMap (List (String, List Int))),  -- #673: core's OWN schemeObligationsRef, snapshotted after the core pass (see declaredCrossModuleObls)
   }
 
--- Construct all 23 field-Refs fresh (each reproduces its former top-level ref's initial).
+-- Construct every field-Ref fresh (each reproduces its former top-level ref's initial).
+-- (This line used to carry a COUNT.  It was an encoded fact with no derivation and no
+-- expiry — `grep -c ' = Ref ' `'s answer is one command away — so it is gone rather than
+-- bumped; the constructor is exhaustive, which is the property that actually matters.)
 -- ⚠️ `env` is the initial TcEnv (always `initialEnv`) and is a PARAMETER rather than a
 -- direct `initialEnv` reference on purpose — do NOT "simplify" it back to a `Unit` arg.
 -- `crossRun` below is a nullary top-level binding, i.e. a wasm value GLOBAL eagerly
@@ -3143,6 +3150,8 @@ freshCrossRun env = CrossRun {
   universeIfaceParamKinds = Ref [],
   universeAliasTable = Ref [],
   universeDataEnv = Ref env,
+  universeCtorIdentsRef = Ref omEmpty,
+  universeCtorCollidedRef = Ref [],
   universeDataDecls = Ref [],
   obUnivConcreteRef = Ref mregEmpty,
   obUnivHeadlessRef = Ref mregEmpty,
@@ -12598,6 +12607,257 @@ lookupMethodCand ident ((i, p)::rest)
   | i == ident = Some p
   | otherwise = lookupMethodCand ident rest
 
+-- ── #1111 Stage A-2 unit A-2.11 (#1319 unit 1): the CONSTRUCTOR-namespace peer ──
+--
+-- Everything from here to `graphCtorExports` is the constructor twin of the METHOD
+-- machinery immediately above (`insertMethodIdents` … `exportsIdentFor`).  It is a
+-- deliberate near-copy and it is NAMED SCAFFOLDING, not an oversight:
+--
+--   * the METHOD index is already, by its own admission, a THIRD implementation of a
+--     fact `resolve.mdk` derives, with **#1288** named as the absorbing stage that
+--     deletes it.  This makes a FOURTH.  #1288's scope names the constructor peer, so
+--     the deleter is real rather than asserted;
+--   * B2 (resolve owns the fact and typecheck consumes it) is the target-conformant
+--     answer under L2's identity-at-resolve law, and was REJECTED FOR NOW for a stated
+--     reason: resolve's only delivery channel to typecheck is the AST, so B2 implies a
+--     decl-adjacent carrier whose cost across printer / sexp / fmt / lower / mangle was
+--     never costed.  See #1319's adjudication comment.
+--
+-- ⚠️ MIRROR DISCIPLINE IS LIVE between the two families until #1288 lands: a fix to the
+-- scope ladder, the witness, or the export index on ONE side is silently absent from the
+-- other.  They are adjacent in this file on purpose.
+--
+-- ── WHAT THIS FIXES, AND WHAT IT DELIBERATELY DOES NOT ──────────────────────
+-- `universeDataEnv`'s ctor map is keyed by the BARE constructor name and is
+-- last-write-wins, so when two unrelated modules each declare a `Dup` the whole loaded
+-- program has ONE entry for `Dup` and load order picks the winner.  #1111 A-2.6 attacked
+-- that with an import-scoped DECL overlay (`importedCtorTypeDecls`), and the boundary
+-- moved one hop out twice: a member reached through a RE-EXPORT is not identity-matched
+-- (#1283), and a ride-along SIBLING constructor of an overlaid decl out-ranks a ctor the
+-- unit imports BY NAME from an earlier clause (#1284).
+--
+-- This unit keeps the overlay (unit 4 retires it) and adds the A-2.5-shaped answer on
+-- top: an identity-keyed COMPANION of the bare map, plus a per-module SCOPE DECISION for
+-- the colliding names only.  The overlay's unit is the DECL; a scope decision's unit is
+-- the NAME, which is why a ride-along sibling cannot win here.
+--
+-- 🚨 IT MUST NOT RE-DECIDE AMBIGUITY.  Constructor-name ambiguity is provenance-based
+-- (`ctorAmbiguousSet` → `keepAmbiguous` in `frontend/resolve.mdk`: ≥2 distinct DIRECTLY
+-- IMPORTED modules), and that rule is deliberately ONE rule across the value / type /
+-- interface / ctor namespaces — resolve's own note says a change there must change all
+-- four at once.  This is a different question on the same data: "which declaration does
+-- this module mean" is asked only where resolve has already ACCEPTED the program.  Two
+-- witnesses decline to the floor here rather than picking one, so a genuinely ambiguous
+-- import is still resolve's to reject and nothing here can quietly accept it.
+--
+-- ⚠️ MODULE-PATH-ONLY, exactly as A-2.5: a flat/single-file declaration carries
+-- `OriginUnresolved`, `mkIdent` refuses it, no candidate is recorded, and the override
+-- site is on the `Module` arm alone.
+--
+-- ⚠️ NO PRELUDE RUNG, unlike `preludeMethodEntry` — and that asymmetry is measured, not
+-- assumed.  A module that declares OR imports a constructor spelled like a prelude
+-- constructor is rejected outright (`Duplicate constructor: Lt`), so `core` can never be
+-- one of two candidates for one ctor name and there is no rung for it to be.
+
+-- Grow the identity-keyed companion by THIS module's PUBLIC data decls.
+--
+-- 🚨 THE SCHEME IS READ BACK OUT OF [env] RATHER THAN RE-DERIVED, and that is the whole
+-- reason this lives in `appendDataUniverse` instead of anywhere else.  [env] is the
+-- universe env immediately after `registerAllData … pubDecls`, so the companion holds
+-- THE VERY SCHEME OBJECT the bare-name map holds — the two cannot come to hold different
+-- types for one declaration, and no extra `registerVariants` call is made (which would
+-- mint fresh tyvars, re-run `recordParamKinds`, and re-write `recordByNameRef`, i.e.
+-- reach into unit 2's table from unit 1).
+--
+-- Within ONE module a constructor name is unique (a duplicate is rejected upstream), so
+-- `lookupCtor env cn` after that registration is unambiguously THIS module's `cn`.
+insertCtorIdents : TcEnv -> List Decl -> (OrdMap (List (Ident, String, Scheme)), List String) -> (OrdMap (List (Ident, String, Scheme)), List String)
+insertCtorIdents _ [] acc = acc
+insertCtorIdents env ((DAttrib _ d)::rest) acc =
+  insertCtorIdents env rest (insertCtorIdents env [d] acc)
+insertCtorIdents env ((DData { dataName, dataCtors, dataOrigin, ... })::rest) acc = insertCtorIdents env rest (insertVariantIdents env dataName dataOrigin dataCtors acc)
+insertCtorIdents env ((DNewtype { newtypeName, newtypeCtor, newtypeOrigin, ... })::rest) acc = insertCtorIdents env rest (addCtorIdentCand env newtypeName newtypeOrigin newtypeCtor acc)
+insertCtorIdents env (_::rest) acc = insertCtorIdents env rest acc
+
+insertVariantIdents : TcEnv -> String -> TyConOrigin -> List Variant -> (OrdMap (List (Ident, String, Scheme)), List String) -> (OrdMap (List (Ident, String, Scheme)), List String)
+insertVariantIdents _ _ _ [] acc = acc
+insertVariantIdents env tyName o ((Variant cn _)::rest) acc =
+  insertVariantIdents env tyName o rest (addCtorIdentCand env tyName o cn acc)
+
+-- Upsert BY IDENTITY (a decl re-registered by a second pass replaces its own row rather
+-- than appending a duplicate), so `listLen >= 2` means "two DISTINCT declarations of this
+-- constructor name" and the collided list cannot fill with self-collisions.
+--
+-- Honest absence twice over (§8 I6.3): no module id ⇒ no identity ⇒ NO candidate, rather
+-- than a constant every unstamped declaration would collide on; and no scheme in [env]
+-- (an abstract/opaque decl whose ctors were never registered) ⇒ no candidate either,
+-- because a candidate with no scheme could not be selected anyway.
+addCtorIdentCand : TcEnv -> String -> TyConOrigin -> String -> (OrdMap (List (Ident, String, Scheme)), List String) -> (OrdMap (List (Ident, String, Scheme)), List String)
+addCtorIdentCand env tyName o cn (cands, collided) = match mkIdent NsCtor o cn
+  None => (cands, collided)
+  Some ident => match lookupCtor env cn
+    None => (cands, collided)
+    Some s =>
+      let prior = dropCtorIdentCand ident (fromOption [] (omLookup cn cands))
+      let next = prior ++ [(ident, tyName, s)]
+      (
+        omInsert cn next cands,
+        if listLen next >= 2 && not (contains cn collided) then cn::collided else collided,
+      )
+
+dropCtorIdentCand : Ident -> List (Ident, String, Scheme) -> List (Ident, String, Scheme)
+dropCtorIdentCand _ [] = []
+dropCtorIdentCand ident ((c@(i, _, _))::rest)
+  | i == ident = dropCtorIdentCand ident rest
+  | otherwise = c :: dropCtorIdentCand ident rest
+
+-- ── THIS module's scoped view of the bare-name constructor env ─────────────
+-- Overlay [env] (the fully-registered `dataEnv`: universe < import overlay < prog0) with
+-- the declaration each COLLIDED constructor name resolves to IN THIS MODULE'S SCOPE.
+-- Iterates the collided list — not the table — so a program with no constructor-name
+-- collision pays ONE `[]` match per module and returns [env] itself, unchanged and
+-- unallocated.
+--
+-- ⚠️ OVERLAY, never a rebuild, for the same reason `applyMethodScopeOverrides` is one:
+-- anything this cannot resolve keeps [env]'s answer, which is today's behaviour.  It can
+-- only ever REPLACE an entry, never add or remove one — a collided name has ≥2 candidates
+-- in the universe, so it is registered in [env] by construction.
+applyCtorScopeOverrides : List Decl -> TcEnv -> TcEnv
+applyCtorScopeOverrides prog env =
+  overrideScopedCtors
+    prog
+    crossRun.value.universeCtorIdentsRef.value
+    crossRun.value.universeCtorCollidedRef.value
+    env
+
+overrideScopedCtors : List Decl -> OrdMap (List (Ident, String, Scheme)) -> List String -> TcEnv -> TcEnv
+overrideScopedCtors _ _ [] env = env
+overrideScopedCtors prog cands (n::rest) env =
+  let env2 = match omLookup n cands
+    None => env
+    Some cs => match scopedCtorEntry prog n cs
+      None => env
+      Some s => addCtor env n s
+  overrideScopedCtors prog cands rest env2
+
+-- Which declaration of constructor [n] does THIS module mean?  Same nearest-scope-wins
+-- ladder as `scopedMethodEntry` and `tyOriginScope`, with one rung fewer (see the
+-- no-prelude-rung note above).  `None` at any rung means "this module's scope does not
+-- decide it" and the caller keeps the floor — never a guess.
+--
+-- ⚠️ THE OWN-DECLARATION RUNG IS A DECLINE, NOT A LOOKUP, and the asymmetry with
+-- `scopedMethodEntry` is deliberate: the companion is grown in `appendDataUniverse`,
+-- which runs at the END of this module's own arm, so this module's declarations are not
+-- in [cs] yet.  They do not need to be — `registerAllData base prog0` registered them
+-- LAST at the call site, so the floor already holds the own-declaration answer and
+-- overriding it could only make it worse.
+scopedCtorEntry : List Decl -> String -> List (Ident, String, Scheme) -> Option Scheme
+scopedCtorEntry prog n cs =
+  if declaresCtorNamed prog n then
+    None
+  else
+    importedCtorEntry prog n cs
+
+-- Exactly one of this name's declarations is reachable through an import of THIS module:
+-- that is what the occurrence names.  Two would be an ambiguous occurrence, which resolve
+-- already rejects (`R-AMBIGUOUS-CTOR`), so declining there costs nothing an ACCEPTED
+-- program can observe — and, per the ambiguity note above, it is what keeps this from
+-- re-deciding a question resolve owns.
+importedCtorEntry : List Decl -> String -> List (Ident, String, Scheme) -> Option Scheme
+importedCtorEntry prog n cs = match filterList (c => ctorCandImported prog n c) cs
+  [only] => Some (ctorCandScheme only)
+  _ => None
+
+ctorCandScheme : (Ident, String, Scheme) -> Scheme
+ctorCandScheme (_, _, s) = s
+
+-- Does THIS module declare a constructor spelled [n]?  Monomorphic and short-circuiting
+-- on purpose (`compiler/AGENTS.md`); runs only for a COLLIDED name.
+declaresCtorNamed : List Decl -> String -> Bool
+declaresCtorNamed [] _ = False
+declaresCtorNamed ((DAttrib _ d)::rest) n = declCtorNamed n d
+  || declaresCtorNamed rest n
+declaresCtorNamed (d::rest) n = declCtorNamed n d || declaresCtorNamed rest n
+
+ctorCandImported : List Decl -> String -> (Ident, String, Scheme) -> Bool
+ctorCandImported prog n (ident, owner, _) =
+  anyUsePathBindsCtor prog n owner ident
+
+anyUsePathBindsCtor : List Decl -> String -> String -> Ident -> Bool
+anyUsePathBindsCtor [] _ _ _ = False
+anyUsePathBindsCtor ((DAttrib _ d)::rest) n owner ident = anyUsePathBindsCtor [d] n owner ident
+  || anyUsePathBindsCtor rest n owner ident
+anyUsePathBindsCtor ((DUse _ path _)::rest) n owner ident = usePathWitnessesCtor path n owner ident
+  || anyUsePathBindsCtor rest n owner ident
+anyUsePathBindsCtor (_::rest) n owner ident =
+  anyUsePathBindsCtor rest n owner ident
+
+-- An import witnesses a candidate when TWO things hold — the identical conjunction
+-- `usePathWitnesses` states for methods:
+--   * the path lets the CONSTRUCTOR through — `usePathBindsCtor`;
+--   * the dependency's row CARRIES *that declaration* of it — asked of
+--     `graphCtorExportsRef`, so a re-export chain resolves transitively and BY IDENTITY.
+--     That second conjunct is what drains #1283: the re-exporter's row carries the
+--     DECLARING module's `Ident`, so naming the re-exporter and naming the definer are
+--     the same question with the same answer.
+usePathWitnessesCtor : UsePath -> String -> String -> Ident -> Bool
+usePathWitnessesCtor path n owner ident =
+  let dep = usePathModuleId path
+  dep != "core"
+    && usePathBindsCtor path n owner
+    && depExportsCtorIdent dep n ident
+
+-- 🚨 `usePathBindsName` — A-2.5's member filter — IS NOT REUSABLE HERE, and reusing it
+-- is how this unit would have reproduced the #1272 / #1275 class one namespace over.
+-- It tests whether a member SPELLS the name; `import m.{T(..)}` binds constructor `C`
+-- without spelling it anywhere.  So the ctor filter is given the candidate's OWNING TYPE
+-- NAME alongside the ctor name, and `memberBindsCtorName` is the ONE predicate that
+-- answers "does this member bind this constructor" — shared with the re-export expansion
+-- (`rowBoundByMember`) so the two cannot drift into two rules.
+--
+-- `UseWild` (`import m.*`) binds every constructor `m` exports, and that is safe for the
+-- same reason it is safe for methods: the export test still admits only the declarations
+-- `m` really provides.  `UseName` (bare `import m`) binds NO names — it exists to bring
+-- impls into scope for dispatch (`AGENTS.md`) — and `UseAlias` binds VALUES only (an
+-- alias-qualified name in type or constructor position is a parse error), so both
+-- witness nothing.
+usePathBindsCtor : UsePath -> String -> String -> Bool
+usePathBindsCtor (UseGroup _ ms) n owner = anyMemberBindsCtor n owner ms
+usePathBindsCtor (UseWild _) _ _ = True
+usePathBindsCtor _ _ _ = False
+
+anyMemberBindsCtor : String -> String -> List UseMember -> Bool
+anyMemberBindsCtor _ _ [] = False
+anyMemberBindsCtor n owner (m::rest) = memberBindsCtorName n owner m
+  || anyMemberBindsCtor n owner rest
+
+-- The two spellings that bind a constructor: naming it, or naming its type with `(..)`.
+-- The member's ORIGIN spelling is what is compared (`useMemberOrigin`'s field), because
+-- the candidate table is keyed by the constructor's DECLARED name; an aliased member
+-- (`{C as D}`) therefore does not witness, which matches the fact that no ctor is ever
+-- registered under an alias.
+memberBindsCtorName : String -> String -> UseMember -> Bool
+memberBindsCtorName n owner (UseMember mn ctors _ _) = mn == n
+  || ctors && mn == owner
+
+-- Does [dep]'s row carry a constructor spelled [n] whose DECLARATION is [ident]?
+--
+-- A per-`dep` miss is the honest answer to "this dependency's row does not carry that
+-- declaration"; a WHOLESALE miss — the index absent — is a programming error, and the
+-- property that forbids it is the same two-part conjunction stated on
+-- `graphMethodExports` (overwritten at every Module-mode driver entry AND no reset point
+-- in between).  `graphCtorExports` carries the constructor half of that property.
+depExportsCtorIdent : String -> String -> Ident -> Bool
+depExportsCtorIdent dep n ident = match omLookup dep driverState.value.graphCtorExportsRef.value
+  None => False
+  Some es => exportsCtorIdentFor n ident es
+
+exportsCtorIdentFor : String -> Ident -> List (String, String, Ident) -> Bool
+exportsCtorIdentFor _ _ [] = False
+exportsCtorIdentFor n ident ((cn, _, ci)::rest)
+  | cn == n && ci == ident = True
+  | otherwise = exportsCtorIdentFor n ident rest
+
 missingImplMethodMsg : String -> List Ty -> String -> String
 missingImplMethodMsg iface tys method = "'impl \{iface} \{joinWith " " (map ppTyAtom tys)}' is missing method '\{method}'. Every interface method without a default body must be implemented — define '\{method}' in the impl (or check for a typo in a method name)"
 
@@ -15636,9 +15896,15 @@ checkBodyImpl seed mode prog0 =
       --     THIS is the one a future edit can silently flip, so check it too.
       -- All four land on prog0 > overlay > universe.  Getting any two to disagree is
       -- #674's root cause.
+      -- #1111 A-2.11 (#1319 unit 1): a FIFTH layer, and it is a per-NAME overlay rather
+      -- than a fifth registration — `applyCtorScopeOverrides` re-points the (normally
+      -- empty) set of COLLIDED constructor names at the declaration THIS module's import
+      -- scope selects.  It sits ABOVE prog0 and declines for any name prog0 declares, so
+      -- the ladder above is unchanged: own > import scope > import overlay > universe.
+      -- A collision-free program returns this very env unchanged and unallocated.
       let base = registerAllData crossRun.value.universeDataEnv.value
                    (importedCtorTypeDecls prog0 crossRun.value.universeDataDecls.value)
-      registerAllData base prog0
+      applyCtorScopeOverrides prog0 (registerAllData base prog0)
   -- #784: reject under-determined return-only effect vars on interface methods.
   -- MUST run AFTER `dataEnv` above populated `dataParamKindsRef` — the kind-aware
   -- predicate (rowArgNames) reads that table to distinguish a row-kinded ctor arg
@@ -20158,6 +20424,12 @@ appendDataUniverse prog0 =
   let _ = registerOpaqueParamKinds prog0
   let _ = storeDataUniverse ()
   let _ = setRef crossRun.value.universeDataEnv env2
+  -- #1111 A-2.11 (#1319 unit 1): the identity-keyed companion of `universeDataEnv`'s ctor
+  -- map, grown in the SAME place from the SAME `env2` so the two cannot come to hold
+  -- different schemes for one declaration.  See insertCtorIdents.
+  let ctorAcc = insertCtorIdents env2 pubDecls (crossRun.value.universeCtorIdentsRef.value, crossRun.value.universeCtorCollidedRef.value)
+  let _ = setRef crossRun.value.universeCtorIdentsRef (fst ctorAcc)
+  let _ = setRef crossRun.value.universeCtorCollidedRef (snd ctorAcc)
   -- #674: keep the DECLS too (universeDataEnv is a bare-name ctor env — last-write-wins,
   -- LOSSY across a duplicate ctor name — so it cannot recover a SPECIFIC module's ctor
   -- for the import-scoped overlay).  checkBodyImpl re-registers the ctors of the types
@@ -20716,6 +20988,92 @@ reexportRenamed : (String, String) -> List (String, Ident) -> List (String, Iden
 reexportRenamed (origin, local) src =
   map (e => (local, snd e)) (filterList (e => fst e == origin) src)
 
+-- ── #1111 A-2.11 (#1319 unit 1): the CONSTRUCTOR peer of graphMethodExports ──
+-- (module id → [(ctor name, owning type name, declaring `Ident`)]), folded dependency-first
+-- so a `export import` chain resolves transitively and BY IDENTITY.  Read only by
+-- `depExportsCtorIdent`.  Its SAFETY PROPERTY is the conjunction stated in full on
+-- `graphMethodExports` and it is the SAME conjunction, not a similar one:
+--   (a) unconditional whole-value overwrite at EVERY Module-mode driver entry —
+--       `checkModulesPreamble` and `elaborateModules`, each carrying the line
+--       `setRef driverState.value.graphCtorExportsRef (graphCtorExports coreDecls modules)`;
+--   (b) no reset point in between — `DriverState` has none, which is why this ref lives
+--       there and not on `CrossRun` (`resetCrossModuleState` would clear it between the
+--       write and the read: that was F1).
+-- Both halves, or neither.  An empty index makes every candidate miss, the override
+-- declines everywhere, and the unit silently does nothing.
+--
+-- ⚠️ Must run on the STAMPED graph — identity comes from `DData.dataOrigin` /
+-- `DNewtype.newtypeOrigin`, which `stampGraphTyOrigins` writes.  Both call sites sit
+-- after their driver's stamp.
+--
+-- ⚠️ THE OWNING TYPE NAME IS IN THE ROW ON PURPOSE.  It is what lets a `(..)` member be
+-- expanded on BOTH sides of the chain — `export import m.{T(..)}` re-exporting T's
+-- constructors, and `import m.{T(..)}` witnessing one — through the single shared
+-- predicate `memberBindsCtorName`.  Without it the `(..)` spelling silently binds nothing
+-- here, which is the #1272 shape.
+--
+-- ⚠️ NO `pub` FILTER, exactly as `declMethodIdentsOf` has none — but unlike the method
+-- peer this cannot become that peer's F3 gap, and the reason is structural rather than a
+-- promise: the CANDIDATES this index is matched against come from `publicDataDecls`
+-- (`appendDataUniverse`), so a private declaration's row entry can never equal a
+-- candidate's `Ident` and can never witness anything.
+graphCtorExports : List Decl -> List (String, List Decl) -> OrdMap (List (String, String, Ident))
+graphCtorExports coreDecls modules =
+  graphCtorExportsGo
+    (omInsert "core" (declCtorIdents coreDecls) omEmpty)
+    modules
+
+graphCtorExportsGo : OrdMap (List (String, String, Ident)) -> List (String, List Decl) -> OrdMap (List (String, String, Ident))
+graphCtorExportsGo acc [] = acc
+graphCtorExportsGo acc ((mid, decls)::rest) =
+  graphCtorExportsGo
+    (omInsert mid (declCtorIdents decls ++ reexportedCtorIdents acc decls) acc)
+    rest
+
+-- the (ctor name, owning type name, declaring identity) rows [decls] DECLARES.
+declCtorIdents : List Decl -> List (String, String, Ident)
+declCtorIdents decls = flatMap declCtorIdentsOf decls
+
+declCtorIdentsOf : Decl -> List (String, String, Ident)
+declCtorIdentsOf (DAttrib _ d) = declCtorIdentsOf d
+declCtorIdentsOf (DData { dataName, dataCtors, dataOrigin, ... }) =
+  flatMap (v => variantIdentRow dataName dataOrigin v) dataCtors
+declCtorIdentsOf (DNewtype { newtypeName, newtypeCtor, newtypeOrigin, ... }) =
+  ctorIdentRow newtypeName newtypeOrigin newtypeCtor
+declCtorIdentsOf _ = []
+
+variantIdentRow : String -> TyConOrigin -> Variant -> List (String, String, Ident)
+variantIdentRow tyName o (Variant cn _) = ctorIdentRow tyName o cn
+
+ctorIdentRow : String -> TyConOrigin -> String -> List (String, String, Ident)
+ctorIdentRow tyName o cn = match mkIdent NsCtor o cn
+  None => []
+  Some i => [(cn, tyName, i)]
+
+-- the constructor rows a module RE-EXPORTS via `export import src.{…}` (`DUse True`),
+-- taken from [acc] — the dependency's already-folded row.  A `(..)` member re-exports
+-- the named TYPE's constructors, which is why this cannot reuse `importedBindings`
+-- (it drops the `(..)` flag) and goes through `memberBindsCtorName` instead.
+reexportedCtorIdents : OrdMap (List (String, String, Ident)) -> List Decl -> List (String, String, Ident)
+reexportedCtorIdents acc decls = flatMap (reexportedCtorIdentsOf acc) decls
+
+reexportedCtorIdentsOf : OrdMap (List (String, String, Ident)) -> Decl -> List (String, String, Ident)
+reexportedCtorIdentsOf acc (DAttrib _ d) = reexportedCtorIdentsOf acc d
+reexportedCtorIdentsOf acc (DUse True path _) = match omLookup (usePathModuleId path) acc
+  None => []
+  Some src => match path
+    -- `export import src.*` re-exports every one of src's constructors
+    UseWild _ => src
+    UseGroup _ ms => flatMap (m => reexportCtorMember m src) ms
+    _ => []
+reexportedCtorIdentsOf _ _ = []
+
+reexportCtorMember : UseMember -> List (String, String, Ident) -> List (String, String, Ident)
+reexportCtorMember m src = filterList (r => rowBoundByMember m r) src
+
+rowBoundByMember : UseMember -> (String, String, Ident) -> Bool
+rowBoundByMember m (cn, owner, _) = memberBindsCtorName cn owner m
+
 renameAliasedMethodsIn : List (String, List String) -> (String, List Decl) -> (String, List Decl)
 renameAliasedMethodsIn methodsPerMid (mid, prog) = match aliasMethodRenames methodsPerMid prog
   [] => (mid, prog)
@@ -21271,6 +21629,9 @@ checkModulesPreamble runtimeDecls coreDecls modules =
   -- "the wrong question": the two Module-mode driver entries that must carry this line are
   -- `checkModulesPreamble` (here) and `elaborateModules`.
   let _ = setRef driverState.value.graphMethodExportsRef (graphMethodExports coreDecls modules)
+  -- #1111 A-2.11 (#1319 unit 1): the CONSTRUCTOR peer of the line above, under the
+  -- identical two-part property.  Both driver entries carry both lines or neither works.
+  let _ = setRef driverState.value.graphCtorExportsRef (graphCtorExports coreDecls modules)
   -- #80/#201: populate effect domains ONCE over the WHOLE import graph (builtins +
   -- every `effect …` decl in core or any module), BEFORE the per-module foldModules
   -- loop, so a module using an effect declared in ANOTHER module sees its domain.
@@ -21682,6 +22043,9 @@ elaborateModules runtimeDecls coreDecls0 modulesIn =
   -- with another `resetCrossModuleState ()`.  This one write covers both ONLY because
   -- the ref is on `driverState`, which that reset does not touch (F1).
   let _ = setRef driverState.value.graphMethodExportsRef (graphMethodExports coreDecls modules)
+  -- #1111 A-2.11 (#1319 unit 1): the CONSTRUCTOR peer, same placement, same reasoning —
+  -- including the two-sweep note above, which it inherits verbatim (same `driverState`).
+  let _ = setRef driverState.value.graphCtorExportsRef (graphCtorExports coreDecls modules)
   let allDecls = coreDecls ++ flatMap snd modules
   -- #80/#201: populate effect domains ONCE over the WHOLE import graph (builtins +
   -- every `effect …` decl), BEFORE any per-module resetState (discovery scratch pass
