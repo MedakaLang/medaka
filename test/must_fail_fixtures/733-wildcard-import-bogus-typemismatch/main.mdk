@@ -1,0 +1,8 @@
+-- #733 row 1c — `import amodd.*` (wildcard) alongside `import zmod.{zf}`. `Dup` is
+-- amodd's own constructor (of `A1`) and is reached ONLY through the wildcard -- zmod's
+-- `Dup` is never imported here at all (zmod exports only `zf`). `unA1 (Dup 1)` should
+-- unambiguously build an `A1` and unwrap it to `1`, exactly as control.mdk does.
+import amodd.*
+import zmod.{zf}
+
+main = println (unA1 (Dup 1))
