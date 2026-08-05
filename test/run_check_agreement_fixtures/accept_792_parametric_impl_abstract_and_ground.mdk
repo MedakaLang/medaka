@@ -1,0 +1,22 @@
+-- #1114 OVER-REJECTION GUARD for #792, and it guards BOTH halves of the ground-
+-- preserving rollback at once — which is the point, since keeping the ground
+-- obligations is only correct if the NON-ground ones are still dropped.
+--
+--  * `Bar` now derives `Debug`, so the parametric body's GROUND `Debug Bar` obligation
+--    is retained AND satisfied: retaining it must not reject a program that is fine.
+--  * `impl Foo (List a) requires Debug a` additionally records an obligation on the
+--    ABSTRACT element var `a`, which never grounds on the check path.  That is exactly
+--    the population the #781 window exists to suppress (§4.2 D2/D3): if the rollback
+--    kept it, this program would draw a spurious `Ambiguous instance for Debug`.
+--
+-- EXPECTED VALUE DERIVED BY HAND: `foo` ignores its receiver and returns `debug Bar`;
+-- the derived `Debug` rendering of a nullary constructor is its own name, so `Bar`.
+data Bar = Bar deriving (Debug)
+
+interface Foo a where
+  foo : a -> String
+
+impl Foo (List a) requires Debug a where
+  foo _ = debug Bar
+
+main = println (foo ([1] : List Int))

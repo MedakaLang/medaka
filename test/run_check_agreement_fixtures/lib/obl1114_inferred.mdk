@@ -1,0 +1,7 @@
+-- #1114 (#845): a constrained export whose `Num a =>` context is INFERRED from the
+-- body (a `where` helper using `+`), never written as a signature.  Per DICT-SEMANTICS
+-- §4.2 D6(a) an inferred context and a declared one defer identically, so an importer
+-- must discharge this at every call site whichever import spelling it uses.
+export f x = go x
+  where
+    go n = n + 1

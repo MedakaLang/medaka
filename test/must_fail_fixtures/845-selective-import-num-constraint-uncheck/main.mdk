@@ -1,2 +1,0 @@
-import helper.{f}
-main = println (f "abc")

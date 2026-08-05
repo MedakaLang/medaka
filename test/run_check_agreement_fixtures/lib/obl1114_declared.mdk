@@ -1,0 +1,5 @@
+-- #1114 (#845): the DECLARED-context sibling of obl1114_inferred.mdk — identical body,
+-- with the `Num a =>` context written out.  Paired so the fixtures can vary the
+-- constraint SOURCE independently of the import SPELLING (the 2x3 matrix in #1114).
+export g : Num a => a -> a
+g x = x + 1

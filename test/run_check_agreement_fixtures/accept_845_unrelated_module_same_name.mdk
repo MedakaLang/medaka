@@ -1,0 +1,34 @@
+-- #1114: the "feature + UNRELATED code still behaves" fixture (AGENTS.md's required
+-- shape for any new program-global table), NOT a second "the fix works" fixture.
+--
+-- #1114 adds a cross-module store of every module's scheme contexts, projected per
+-- importing module by import spelling. The question here is not whether the fix fires —
+-- five reject_845_* fixtures cover that — but whether a binding that carries NO context
+-- still behaves while the new machinery is live all around it.
+--
+-- `lib/obl1114_q.mdk` exports two unsignatured bindings: `qnum` (inferred `Num a =>`)
+-- and `rid` (no context at all). It is imported by WILDCARD, the widest of the new
+-- arms — the one that copies every entry of the named module. `lib/obl1114_p.mdk` is
+-- imported selectively alongside it and contributes an inferred `Display a =>`. The
+-- assertion is about `rid NoDisp`: `NoDisp` has no `Display` and no `Num` impl, so if
+-- either arm over-copied — module-mate `qnum`'s context onto `rid`, or P's onto
+-- anything in Q — this valid program would be REJECTED. ACCEPT is the assertion.
+--
+-- ⚠️ The two modules deliberately export DISTINCT names. Giving them a shared bare name
+-- trips a SEPARATE, pre-existing misattribution that has nothing to do with this change:
+-- measured with this PR's own lookup ablated to `None` it still rejects, and it
+-- reproduces with both bindings SIGNATURED (where the new lookup is not consulted at
+-- all). Pinning that here would make this fixture assert someone else's bug.
+--
+-- EXPECTED VALUES DERIVED BY HAND, not captured: `rid x = x` is the identity, so
+-- `rid NoDisp` is `NoDisp` and `tag` maps it to its pinned string; `pdisp x = "\{x}"`
+-- renders `Int` 5 as `"5"`; `qnum x = x + 1` at `Num Int` gives 6 + 1 = 7.
+import lib.obl1114_p.{pdisp}
+import lib.obl1114_q.*
+
+data NoDisp = NoDisp
+
+tag : NoDisp -> String
+tag _ = "unrelated code still behaves"
+
+main = println "\{tag (rid NoDisp)} / \{pdisp 5} / \{qnum 6}"

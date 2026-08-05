@@ -1,0 +1,7 @@
+-- #1114 (#845) keying probe, module Q: TWO unsignatured exports, one carrying an
+-- inferred `Num a =>` context and one carrying none at all.  Wildcard-imported, so the
+-- new store's widest arm copies both under their own names — and `rid` must come across
+-- with an EMPTY context even though its module-mate `qnum` has one.
+export qnum x = x + 1
+
+export rid x = x

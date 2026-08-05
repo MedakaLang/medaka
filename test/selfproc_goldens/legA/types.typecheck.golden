@@ -107,6 +107,8 @@ attachEntryWarnOpt : Option String -> List (String, (List TcDiag, List TcDiag)) 
 attributeMethodModuleArities : String -> List Decl -> List (String, List Int) -> List ((String, String), List Int)
 attributeModuleArities : String -> List Decl -> List (String, List Int) -> List ((String, String), List Int)
 attributeModuleArrIfaces : String -> List Decl -> List (String, List String) -> List ((String, String), List String)
+attributeModuleSchemeObls : String -> List Decl -> List ((String, Int), List (String, List Int)) -> List ((String, String), List (String, List Int))
+attributeSchemeOblsGo : String -> Map String Unit -> Map String Unit -> List ((String, Int), List (String, List Int)) -> List ((String, String), List (String, List Int))
 augmentWithParams : List (String, Mono) -> List Ty -> List Mono -> List (String, Mono)
 axisSub : List (String, Param) -> (String, Param) -> Bool
 axisUnion : List (String, Param) -> List (String, Param) -> List String
@@ -708,6 +710,7 @@ importSeed : List Decl -> List (String, List (String, Scheme)) -> List (String, 
 importedBindings : UsePath -> Option (List (String, String))
 importedCtorTypeDecls : List Decl -> List Decl -> List Decl
 importedMethodEntry : List Decl -> String -> List (Ident, (String, List String, Ty, List (String, List Kind))) -> Option (String, List String, Ty, List (String, List Kind))
+importedSchemeOblEntries : List Decl -> List ((String, String), List (String, List Int)) -> List (String, List (String, List Int))
 importerShadowDomain : String -> Option Mono
 importerShadowOnEmitPath : String -> Ref Route -> Bool
 importerStandaloneValueScheme : String -> Option Mono
@@ -937,6 +940,7 @@ memberDictName : List String -> UseMember -> List String
 memberMethodRename : List String -> UseMember -> List (String, String)
 memberOverlayDecl : List Decl -> String -> UseMember -> List Decl
 memberPeelSource : List (String, Ty) -> String -> Mono -> Option Mono
+memberSchemeOblEntry : String -> List ((String, String), List (String, List Int)) -> UseMember -> List (String, List (String, List Int))
 memberSigIsFun : List (String, Ty) -> String -> Mono -> Bool
 memberSuffix : String -> String
 mergeByDeclIdx : List KeyEntry -> List KeyEntry -> List KeyEntry
@@ -1138,6 +1142,7 @@ pushTypeErrorOnceAt : String -> Option Loc -> String -> Unit
 pushUnknownField : String -> String -> Unit
 pushUnknownFieldMaybeSuggest : String -> String -> List String -> Unit
 qualConstraintFor : String -> Option (List Int, List String)
+qualSchemeOblsFor : String -> Option (List (String, List Int))
 quoteStr : String -> String
 quotedNames : List String -> String
 rangeFromCount : Int -> Int -> List Int
@@ -1309,6 +1314,7 @@ schemeHasConcreteDomain : Scheme -> Bool
 schemeIds : Scheme -> List Int
 schemeLines : List (String, Scheme) -> List String
 schemeMono : Scheme -> Mono
+schemeOblEntriesFor : String -> UsePath -> List ((String, String), List (String, List Int)) -> List (String, List (String, List Int))
 schemeObligationOne : List Int -> String -> List String -> Ty -> Mono -> List (String, List Int)
 schemeObligationsOf : List Int -> List (String, List String, Ty, Mono, Option Loc) -> List (String, List Int)
 schemeOblsForMember : List (String, Ty, List (String, Mono)) -> List (String, List Mono, Option Loc) -> List (String, List String, Ty, Mono, Option Loc) -> String -> Scheme -> List (String, List Int)
@@ -1466,6 +1472,7 @@ typeMismatchReport : Mono -> Mono -> Unit
 typeMismatchReportRest : Mono -> Mono -> Unit
 tyvarId : Ref Tyvar -> Int
 tyvarLevel : Ref Tyvar -> Int
+uOblIsGround : UObligation -> Bool
 unboundSpineHead : Mono -> Bool
 unboundVarFresh : String -> Mono
 unboundVarMsg : String -> String
@@ -1515,11 +1522,13 @@ vectorGoal : String -> List Mono -> Option (Mono, List Mono)
 wMark : Windowed a -> Int
 wNew : Unit -> Windowed a
 wPush : Windowed a -> a -> Unit
+wPushAll : Windowed a -> List a -> Unit
 wReset : Windowed a -> Unit
 wRestore : Windowed a -> (List a, Int) -> Unit
 wSnapshot : Windowed a -> (List a, Int)
 wWindow : Windowed a -> Int -> List a
 walkDispatch : List String -> Ty -> Mono -> List (String, Mono)
+wildSchemeOblEntry : String -> ((String, String), List (String, List Int)) -> List (String, List (String, List Int))
 wrapIf : Bool -> String -> String
 zerosL : Int -> List Int
 zipUnify : List Mono -> List Mono -> Unit

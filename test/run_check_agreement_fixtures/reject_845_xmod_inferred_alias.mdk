@@ -1,0 +1,6 @@
+-- #845 (drained by #1114): the MODULE-ALIAS spelling of the same defect.  `H.f`
+-- desugars to a flat `EVar "H.f"`, so the obligation table must be keyed by the LOCAL
+-- spelling the importer writes, not by the defining module's export name alone.
+import lib.obl1114_inferred as H
+
+main = println (H.f "abc")
