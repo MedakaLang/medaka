@@ -1,0 +1,4 @@
+-- #1269 MIRROR PROBE support module: a genuinely single-method interface with NO
+-- collision anywhere in this graph -- nothing else here is named `Solo`.
+export interface Solo a where
+  rightName : a -> Int

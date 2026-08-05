@@ -1,9 +1,0 @@
--- issue #1269: sibling module declaring an interface `Same` that shares its bare name
--- with pmod.mdk's unrelated `Same`. Only `gdummy` is ever imported from this module --
--- rev.mdk never imports this `Same`. (Its method set is what matters here, not its
--- kind: `gandThen` is the method name the collided entry offers instead of `pmth`.)
-export interface Same f where
-  gandThen : f e a -> (a -> <e> f e b) -> f e b
-
-export gdummy : Int -> Int
-gdummy n = n

@@ -1,0 +1,44 @@
+-- #1269 MIRROR PROBE (resolve's `Env.ifaceMethods`, `compiler/frontend/resolve.mdk`)
+-- -- the severity-ladder half of this fix.
+--
+-- #1269's own fix turns an exit-1 rejection into an exit-0 acceptance (a correct
+-- `impl` that used to collide with an unrelated same-named interface's method set).
+-- Per AGENTS.md, "does this fix turn a path that returned NOTHING into one that
+-- returns SOMETHING? If so, the new something is UNTESTED BY CONSTRUCTION" -- every
+-- pre-existing fixture covered the rejecting case, so none of them can fail if the
+-- fix over-widens and starts accepting method names it must not.
+--
+-- So this fixture is the mirror, in TWO cells:
+--   * `impl Solo X` supplies `wrongName`, not `Solo`'s only method `rightName` --
+--     genuinely wrong, with NO same-name interface anywhere in the graph.  Must
+--     still reject with R-METHOD-NOT-IN-INTERFACE.
+--   * `impl Same2 P` supplies `gandThen2` -- a name that means NOTHING in
+--     `pmod2.Same2` (its only method is `pmth2`) but IS a real method of
+--     `gmod2.Same2`, the unrelated same-named interface that is in this graph but
+--     never imported here (only `gdummy2` is imported from `gmod2`).  This is the
+--     sharp form of the mirror: the pre-fix code's first-match bug would have
+--     resolved `Same2` to `gmod2.Same2` (imported first, in source order) and
+--     ACCEPTED `gandThen2` as a valid member -- a false ACCEPT, not merely a false
+--     reject, on a method name that has no meaning in the interface actually in
+--     scope.  The fix must resolve `Same2` to `pmod2.Same2` (the only one this file
+--     imports) and reject `gandThen2` against it.  COUNTERFACTUAL, RUN: reverting
+--     `oneImportIfaceMethods`/`filterIfaceMethods` to the pre-fix bare-name filter
+--     makes this cell's R-METHOD-NOT-IN-INTERFACE for `gandThen2` DISAPPEAR (while
+--     `Solo`'s cell is unaffected, since `Solo` has no collision) -- confirmed on
+--     this binary, not asserted.
+import gmod2.{gdummy2}
+import pmod2.{Same2, pmth2}
+import soloiface.{Solo, rightName}
+
+data X = MkX
+
+impl Solo X where
+  wrongName x = 1
+
+data P a b = MkP a b
+
+impl Same2 P where
+  gandThen2 p = gandThen2 p
+
+n : Int
+n = gdummy2 1

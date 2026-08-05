@@ -2650,26 +2650,55 @@ ownedFieldOwners exp ((f, o)::rest)
   | otherwise = ownedFieldOwners exp rest
 
 -- iface-method memberships for imported interfaces (so an `impl` of an imported
--- interface validates against its real method set — Phase 130).  Only for
--- interfaces actually in scope (baseIfaces = prelude + user + imported-by-name).
-importedIfaceMethods : OrdMap ModuleExports -> List Decl -> List String -> List (String, List String)
-importedIfaceMethods known prog baseIfaces =
-  flatMap (oneImportIfaceMethods known baseIfaces) (usePathsOf prog)
+-- interface validates against its real method set — Phase 130).
+--
+-- #1269: this used to filter each import's `expIfaceMethods` against the
+-- PROGRAM-WIDE `baseIfaces` bare-name list (prelude + user + every import's
+-- imported-by-name interfaces, flattened together).  That is the same disease
+-- `AGENTS.md` names for the `universe*` tables: a bare interface NAME has no
+-- module scope, so once ANY import in the file brought a name like `Same`
+-- into `baseIfaces`, EVERY OTHER imported module's `Same` — even one never
+-- named by this file's own imports — matched that membership test and got
+-- spliced into `impIfaceMethods` too.  `ifaceMethodsOf` (first-match) then
+-- validated an `impl`'s methods against whichever module's `Same` happened to
+-- sort first in `usePathsOf prog`, rejecting a complete, correct `impl` with
+-- `R-METHOD-NOT-IN-INTERFACE` naming a method it does implement
+-- (`test/analyze_project_fixtures/1269_ifacemethods_genuine_rejects/`).
+--
+-- The fix: scope each import path to the interface names THAT PATH ITSELF
+-- actually binds (`importIfaceNames known path` — the same per-path
+-- provenance `ifaceAmbiguousSet` already uses to decide real ambiguity)
+-- instead of the flattened whole-program set.  `import gmod.{gdummy}`
+-- contributes nothing to `impIfaceMethods` no matter what else `gmod`
+-- exports; `import pmod.{Same, pmth}` contributes exactly `pmod`'s `Same`.
+-- No import statement's contribution depends on what any OTHER import
+-- statement named — but the table underneath is still bare-name-keyed and
+-- `ifaceMethodsOf` is still first-match, so when TWO import paths genuinely
+-- bind the SAME interface name (an actually ambiguous import, not this
+-- fix's target shape) the method-membership verdict is still
+-- order-dependent. That residual is never SILENT: a genuine cross-module
+-- name collision of that shape is always also flagged by
+-- `ambiguousIfaceErrors` (`AmbiguousInterface`), which does not depend on
+-- import order, so the order-dependent diagnostic never appears alone.
+importedIfaceMethods : OrdMap ModuleExports -> List Decl -> List (String, List String)
+importedIfaceMethods known prog =
+  flatMap (oneImportIfaceMethods known) (usePathsOf prog)
 
-oneImportIfaceMethods : OrdMap ModuleExports -> List String -> UsePath -> List (String, List String)
-oneImportIfaceMethods known baseIfaces path =
+oneImportIfaceMethods : OrdMap ModuleExports -> UsePath -> List (String, List String)
+oneImportIfaceMethods known path =
   let mid = useModId path
   if mid == "core" then []
   else match findExports mid known
     None => []
-    Some exp => filterIfaceMethods baseIfaces exp.expIfaceMethods
+    Some exp =>
+      filterIfaceMethods (importIfaceNames known path) exp.expIfaceMethods
 
 filterIfaceMethods : List String -> List (String, List String) -> List (String, List String)
 filterIfaceMethods _ [] = []
-filterIfaceMethods baseIfaces ((iface, ms)::rest)
-  | contains iface baseIfaces =
-    (iface, ms) :: filterIfaceMethods baseIfaces rest
-  | otherwise = filterIfaceMethods baseIfaces rest
+filterIfaceMethods pathIfaces ((iface, ms)::rest)
+  | contains iface pathIfaces =
+    (iface, ms) :: filterIfaceMethods pathIfaces rest
+  | otherwise = filterIfaceMethods pathIfaces rest
 
 -- Install exported effect labels from all imported modules (Phase 146).
 importedEffects : OrdMap ModuleExports -> List Decl -> List String
@@ -2695,7 +2724,7 @@ buildEnvMM runtimeDecls preludeDecls known prog internalGuard =
   let uIfaces = interfaceList prog
   let adds = collectImports known prog
   let baseIfaces = map fst pIfaces ++ map fst uIfaces ++ adds.iaIfaces
-  let impIfaceMethods = importedIfaceMethods known prog baseIfaces
+  let impIfaceMethods = importedIfaceMethods known prog
   let impEffects = importedEffects known prog
   let impModValues = importedModuleValueSets known prog
   let valuesM = omFromNames (externNames runtimeDecls ++ pValues ++ userValueNames prog ++ adds.iaValues) omEmpty
