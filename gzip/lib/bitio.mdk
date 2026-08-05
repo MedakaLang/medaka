@@ -146,14 +146,27 @@ flushBytes w =
 
 -- | Append the low `n` bits of `v`, LSB-first (the same convention `getBits`
 --   reads back): bit 0 of `v` is written first and lands as the next unread
---   bit of the stream. `n` should be 0..32 (mirrors `getBits`'s range); bits
---   of `v` above position `n - 1` are masked off, not validated.
+--   bit of the stream. `n` must be 0..32, the same range `getBits` enforces
+--   — but `putBits` returns `Unit`, not `Result`, so there is no `Err`
+--   channel to report a bad width through. An out-of-range `n` is a
+--   PROGRAMMER bug (a computed width, not adversarial stream data — unlike
+--   `getBits`, which is reading a possibly-truncated file), so it `panic`s
+--   immediately rather than silently overflowing Medaka's 63-bit `Int` (a
+--   leftover few bits from a prior `putBits` plus a wide push can wrap
+--   without this guard) — a loud crash at the call site beats a silently
+--   wrong compressed stream, which is the whole point of this module's
+--   error-path discipline. Same pattern as `Array.set`/`Array.blit`/
+--   `MutArray.set` panicking on an out-of-bounds index rather than
+--   returning `Result`. Bits of `v` above position `n - 1` are masked off,
+--   not validated — only the WIDTH is a hard precondition.
 export putBits : Int -> Int -> BitWriter -> Unit
 putBits v n w =
-  let masked = bitAnd v (shiftLeft 1 n - 1)
-  let _ = w.hold := bitOr w.hold.value (shiftLeft masked w.count.value)
-  let _ = w.count := w.count.value + n
-  flushBytes w
+  if n < 0 || n > 32 then panic "putBits: width \{intToString n} out of range (must be 0..32)"
+  else
+    let masked = bitAnd v (shiftLeft 1 n - 1)
+    let _ = w.hold := bitOr w.hold.value (shiftLeft masked w.count.value)
+    let _ = w.count := w.count.value + n
+    flushBytes w
 
 -- | Emit a Huffman CODE of `width` bits, most-significant-bit-of-the-code
 --   first — the one place this module deviates from plain LSB-first, because
@@ -245,6 +258,34 @@ bytesAfterAlign =
 
 test "getBytesAligned after alignByte returns raw bytes verbatim" =
   expectEqual (Ok [|2, 3, 171|]) bytesAfterAlign
+
+-- `putCodeMSB` needs its OWN externally-derived pin, distinct from the LSB
+-- one above — the only other coverage it has is a round-trip `prop` against
+-- `readCodeMSB`, a helper written in THIS file from the same assumption
+-- about what "MSB-first" means. If both were wrong the same way, that
+-- property would round-trip cleanly and stay green forever (exactly the
+-- symmetric-error hazard this module's own header warns about).
+codeBytes : Int -> Int -> Array Int
+codeBytes v width =
+  let w = newBitWriter ()
+  let _ = putCodeMSB v width w
+  finishBitWriter w
+
+-- RFC 1951 §3.2.6: literal 65 has an 8-bit fixed-Huffman code
+-- 48 + 65 = 113 = 0b01110001. Packed MSB-of-code-first into an LSB-first
+-- stream, the code's first-emitted bit (its MSB, 0) lands at bit 0 of the
+-- output byte — a byte-aligned width-8 code comes out as the BIT REVERSAL
+-- of its value: 0b01110001 reversed is 0b10001110 = 128+8+4+2 = 142.
+test "putCodeMSB, byte-aligned width 8: literal 65's fixed code 113 (0b01110001) -> 142 (0b10001110)" = expectEqual [|142|] (codeBytes 113 8)
+
+-- A non-byte-aligned width, where the "just reverse the byte" shortcut does
+-- NOT apply and a real bug would hide: a 5-bit flat distance code, symbol 13
+-- (0b01101). Walking bit4..bit0 of 13 (0,1,1,0,1) into successive LSB stream
+-- positions places them at output bit0..bit4 respectively, i.e. this IS a
+-- 5-bit reversal (0,1,1,0,1 -> read back low-to-high as 0,1,1,0,1 => bit0=0,
+-- bit1=1, bit2=1, bit3=0, bit4=1 => value 2+4+16 = 22 = 0b10110); the
+-- unused top 3 bits of the byte are zero-padded by `finishBitWriter`.
+test "putCodeMSB, non-byte-aligned width 5: code 13 (0b01101) -> 22 (0b10110), zero-padded" = expectEqual [|22|] (codeBytes 13 5)
 
 -- ---------------------------------------------------------------------------
 -- Properties (`prop`) — the real coverage: generated data, not hand-picked
