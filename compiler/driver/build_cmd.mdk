@@ -156,7 +156,7 @@ stripTrailingUnit s =
 -- itself writes the same output path.  mktemp -d allocates the directory
 -- atomically, so uniqueness depends on nothing but the process.  The 6-X
 -- template is accepted by both GNU and BSD mktemp (dual-platform).
-makeTempDir : Unit -> <IO> Result String String
+export makeTempDir : Unit -> <IO> Result String String
 makeTempDir _ = match runCommand "mktemp" ["-d", "/tmp/medaka_build_XXXXXX"]
   Err e => Err e
   Ok (0, out, _) =>
@@ -176,7 +176,7 @@ removeEntries dir (n::rest) =
 
 -- Tear the scratch dir down so a build leaks nothing into /tmp.  Every Result is
 -- discarded on purpose: a cleanup failure must never fail an otherwise-good build.
-cleanupTempDir : String -> <IO> Unit
+export cleanupTempDir : String -> <IO> Unit
 cleanupTempDir dir = match listDir dir
   Err _ => ()
   Ok entries =>
@@ -366,8 +366,21 @@ runBuildNative root medaka cc inputAbs outPath keepIrCli = match makeTempDir ()
     let _ = cleanupTempDir tmpDir
     res
 
+-- Thin compatibility wrapper: every existing caller wants the plain P0-13 root
+-- set with nothing extra appended. Delegates to runBuildNativeRoots with
+-- extraRoots = [] — byte-identical behavior to the pre-Stage-0 function.
 runBuildNativeIn : String -> String -> String -> String -> String -> String -> Bool -> <IO> BuildResult
 runBuildNativeIn root medaka cc inputAbs outPath tmpDir keepIrCli =
+  runBuildNativeRoots root medaka cc inputAbs outPath tmpDir keepIrCli []
+
+-- Like runBuildNativeIn, but callers may supply extraRoots — additional
+-- search roots appended AFTER the P0-13 inputRoots set. Needed by a caller
+-- whose entry file lives in a mktemp -d scratch dir, where entrySearchRoots
+-- (walking up from the entry's own dir) resolves nothing useful: a future
+-- native test-execution engine builds a synthesized doctest entry there and
+-- must still see the real project's import roots.
+export runBuildNativeRoots : String -> String -> String -> String -> String -> String -> Bool -> List String -> <IO> BuildResult
+runBuildNativeRoots root medaka cc inputAbs outPath tmpDir keepIrCli extraRoots =
   let emitter = joinPath root "compiler/entries/llvm_emit_modules_main.mdk"
   let runtimeP = joinPath root "stdlib/runtime.mdk"
   let preludeP = joinPath root "stdlib/core.mdk"
@@ -381,7 +394,7 @@ runBuildNativeIn root medaka cc inputAbs outPath tmpDir keepIrCli =
   -- see the loader.mdk doc comment. A single `findProjectRoot` root here used to
   -- swallow the sibling-import case whenever a `medaka.toml` sat above the
   -- entry's own directory.
-  let inputRoots = entrySearchRoots (dirOf inputAbs)
+  let inputRoots = entrySearchRoots (dirOf inputAbs) ++ extraRoots
   -- Stage the IR inside THIS invocation's private scratch dir (makeTempDir).  It
   -- used to be /tmp/medaka_build_<output basename>.ll, which is only
   -- basename-unique in a GLOBAL directory — concurrent builds writing the same

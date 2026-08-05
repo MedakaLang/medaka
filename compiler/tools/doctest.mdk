@@ -224,7 +224,7 @@ export synthName : Int -> String
 synthName i = "__dt_" ++ intToString i ++ "__"
 
 -- Build the synthetic source line for example i.
-synthSrc : Int -> Example -> String
+export synthSrc : Int -> Example -> String
 synthSrc i ex =
   let rhs = match exampleExpected ex
     Some _ => "debug (" ++ exampleInput ex ++ ")"

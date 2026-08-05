@@ -228,7 +228,7 @@ export synthName : Int -> String
 synthName i = "__dt_" ++ intToString i ++ "__"
 
 -- Build the synthetic source line for example i.
-synthSrc : Int -> Example -> String
+export synthSrc : Int -> Example -> String
 synthSrc i ex =
   let rhs = match exampleExpected ex
     Some _ => "debug (" ++ exampleInput ex ++ ")"
@@ -408,7 +408,7 @@ isUse _ = False
 (DFunDef false "concatMapC" ((PCons (PVar "c") (PVar "rest"))) (EBinOp "++" (EIf (EApp (EVar "isBlockComment") (EVar "c")) (EApp (EVar "expandBlock") (EVar "c")) (EListLit (EVar "c"))) (EApp (EVar "concatMapC") (EVar "rest"))))
 (DTypeSig true "synthName" (TyFun (TyCon "Int") (TyCon "String")))
 (DFunDef false "synthName" ((PVar "i")) (EBinOp "++" (EBinOp "++" (ELit (LString "__dt_")) (EApp (EVar "intToString") (EVar "i"))) (ELit (LString "__"))))
-(DTypeSig false "synthSrc" (TyFun (TyCon "Int") (TyFun (TyCon "Example") (TyCon "String"))))
+(DTypeSig true "synthSrc" (TyFun (TyCon "Int") (TyFun (TyCon "Example") (TyCon "String"))))
 (DFunDef false "synthSrc" ((PVar "i") (PVar "ex")) (EBlock (DoLet false false (PVar "rhs") (EMatch (EApp (EVar "exampleExpected") (EVar "ex")) (arm (PCon "Some" PWild) () (EBinOp "++" (EBinOp "++" (ELit (LString "debug (")) (EApp (EVar "exampleInput") (EVar "ex"))) (ELit (LString ")")))) (arm (PCon "None") () (EApp (EVar "exampleInput") (EVar "ex"))))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "synthName") (EVar "i")))) (ELit (LString " = "))) (EApp (EVar "display") (EVar "rhs"))) (ELit (LString ""))))))
 (DTypeSig true "buildSynthResults" (TyFun (TyApp (TyCon "List") (TyCon "Example")) (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl"))))))
 (DFunDef false "buildSynthResults" ((PVar "examples")) (EApp (EApp (EVar "buildSynthResultsGo") (ELit (LInt 0))) (EVar "examples")))
@@ -531,7 +531,7 @@ isUse _ = False
 (DFunDef false "concatMapC" ((PCons (PVar "c") (PVar "rest"))) (EBinOp "++" (EIf (EApp (EVar "isBlockComment") (EVar "c")) (EApp (EVar "expandBlock") (EVar "c")) (EListLit (EVar "c"))) (EApp (EVar "concatMapC") (EVar "rest"))))
 (DTypeSig true "synthName" (TyFun (TyCon "Int") (TyCon "String")))
 (DFunDef false "synthName" ((PVar "i")) (EBinOp "++" (EBinOp "++" (ELit (LString "__dt_")) (EApp (EVar "intToString") (EVar "i"))) (ELit (LString "__"))))
-(DTypeSig false "synthSrc" (TyFun (TyCon "Int") (TyFun (TyCon "Example") (TyCon "String"))))
+(DTypeSig true "synthSrc" (TyFun (TyCon "Int") (TyFun (TyCon "Example") (TyCon "String"))))
 (DFunDef false "synthSrc" ((PVar "i") (PVar "ex")) (EBlock (DoLet false false (PVar "rhs") (EMatch (EApp (EVar "exampleExpected") (EVar "ex")) (arm (PCon "Some" PWild) () (EBinOp "++" (EBinOp "++" (ELit (LString "debug (")) (EApp (EVar "exampleInput") (EVar "ex"))) (ELit (LString ")")))) (arm (PCon "None") () (EApp (EVar "exampleInput") (EVar "ex"))))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "synthName") (EVar "i")))) (ELit (LString " = "))) (EApp (EMethodRef "display") (EVar "rhs"))) (ELit (LString ""))))))
 (DTypeSig true "buildSynthResults" (TyFun (TyApp (TyCon "List") (TyCon "Example")) (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl"))))))
 (DFunDef false "buildSynthResults" ((PVar "examples")) (EApp (EApp (EVar "buildSynthResultsGo") (ELit (LInt 0))) (EVar "examples")))
