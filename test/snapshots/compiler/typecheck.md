@@ -1,5 +1,5 @@
 # META
-source_lines=22239
+source_lines=22263
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted typecheck stage — port of lib/typecheck.ml's HM core.  SLICE 1:
@@ -16417,16 +16417,40 @@ oblIfaceKey iface = TkBare NsIface iface
 -- fixture, not a re-key, and doing it here shipped a compiler that rejects
 -- `1 + 1`.
 --
--- ⚠️ BOTH OF THOSE PRECONDITIONS ARE NOW MET (canonicality by A-2.10, supply by
--- #1280) AND THE HEAD COMPONENT IS STILL SPELLING-KEYED — deliberately, because
--- moving it is its own unit with its own fixtures, **#1317**, which also owns
--- retiring this ledger and `oblIfaceKey`'s bare interface half.  Do not read the
--- paragraph above as a live blocker; read it as the derivation of what #1317 has
--- to preserve.  ⚠️ And do not read "supply is filled" as universal: it is total
--- on the user-facing driver arms, while the prelude-FLATTENED internal passes
--- still leave `Option`/`Ordering`/`Result` absent (symmetrically — see
--- `externSchemes`).  A re-key that assumes total supply everywhere is the same
--- mistake A-2.2b made in the other direction.
+-- 🚨 ONE OF THOSE TWO PRECONDITIONS IS MET, NOT BOTH, AND THE DIFFERENCE IS THE
+-- WHOLE OF WHAT #1317 STILL HAS TO SOLVE.  Canonicality: met, by A-2.10.  Supply:
+-- met **for the EXTERN population only**, by #1280 — which is one of the TWO
+-- populations that had no identity, not the residual.  ⚠️ An earlier draft of this
+-- paragraph said "BOTH … ARE NOW MET"; that was written by #1280's own author and
+-- is exactly the over-claim this ledger must not make, because this comment is the
+-- anchor #1317's issue routes its implementer to (`grep -nw dispHeadTab`).
+--
+-- The population that remains is the FLAT/loader-less driver's own user module —
+-- **#1115 / E-1, OPEN**.  `stampFlatTyOrigins` (`frontend/resolve.mdk`, and see its
+-- `#1110 flat-identity` residual note) deliberately claims nothing for the user
+-- program's own declarations, because that driver has no loader-derived module id
+-- and an invented one is made PERMANENT by `stampTyHead`'s immunity rule.  So a
+-- flat user module's own `data` head reaches this projection with
+-- `OriginUnresolved`, and `tabKeyOf`'s `None => TkBare ns name` arm
+-- (`types/registry.mdk`) turns it into a `TkBare` — the *same* "goal side is mixed"
+-- condition A-2.2b measured, surviving for the other population.  ⚠️ Do not take
+-- that on trust and do not re-derive it with a probe either: it is already
+-- committed evidence.  `test/origin_fixtures/graph/agreement.golden`'s `RESIDUAL`
+-- section lists the `flat` arm's surviving `OriginUnresolved` heads by name
+-- (`flat alpha Crate`, `flat alpha Weight`, `flat beta Shipment`, …) — those are
+-- the user modules' OWN types.
+--
+-- A THIRD, smaller gap, for completeness: the prelude-FLATTENED internal passes
+-- have no prelude boundary, so they leave `Option`/`Ordering`/`Result` absent —
+-- symmetrically, since the flattened prelude's own declarations are unstamped
+-- there too (`externSchemes` carries that derivation and the call-site list).
+--
+-- ⇒ The head COMPONENT is therefore still spelling-keyed, and that is still
+-- CORRECT rather than merely deferred.  Moving it is its own unit with its own
+-- fixtures, **#1317**, which also owns retiring this ledger and `oblIfaceKey`'s
+-- bare interface half — and which must either close #1115 first or key a head
+-- whose supply it has established, not assumed.  A re-key that assumes total
+-- supply everywhere is the same mistake A-2.2b made in the other direction.
 --
 -- ⚠️ AND THE RIGID ARM IS KEYED, DELIBERATELY.  `headKeyName (HkRigid n) = n`,
 -- so a rigid parameter still hands out a bucket key — the §8 I6.1 residual
