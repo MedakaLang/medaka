@@ -10,11 +10,26 @@
 -- `buildHuffman` validates the Kraft inequality on the way in: an
 -- over-subscribed code (sum of 2^-len > 1) is always an `Err`; an
 -- incomplete code (sum < 1) is an `Err` too, EXCEPT a code with exactly one
--- used symbol — RFC 1951 §3.2.6 sanctions a single-code alphabet (real
--- encoders emit a 1-bit distance code "0" when only one distance value ever
--- occurs), and this module accepts it for any single-code table, not just a
--- distance table specifically, since `Huffman` carries no alphabet-identity
--- tag to special-case on.
+-- used symbol AT LENGTH 1 — RFC 1951 §3.2.7: "If only one distance code is
+-- used, it is encoded using one bit, not zero bits; in this case there is a
+-- single code length of one, with one unused code." Both conditions are
+-- required: `numUsed == 1` alone is NOT the exception (a lone symbol at any
+-- OTHER length, e.g. 9, is still an `Err` — zlib's `inftrees.c` encodes the
+-- same restriction via `max != 1`, `max` being the maximum code length
+-- used, not just the count of used symbols). This module accepts the
+-- exception for any single-length-1-code table, not just a distance table
+-- specifically, since `Huffman` carries no alphabet-identity tag to
+-- special-case on.
+--
+-- PHASE 3 MARKER: the RFC (and zlib's `inftrees.c`, `type == CODES`)
+-- forbids this exception OUTRIGHT for the dynamic-Huffman code-length
+-- alphabet (HCLEN), regardless of length — a single-symbol code-length
+-- table is always malformed there. `buildHuffman`/`kraftCheck` below have
+-- no alphabet-identity parameter yet, so Phase 3's code-length-alphabet
+-- caller CANNOT reuse this exception path as-is; it will need either a
+-- `kraftCheck` variant, an added flag, or its own validation wrapper
+-- before it can call `buildHuffman` safely. Left undone deliberately (no
+-- Phase 3 code exists yet to thread a flag into), not silently.
 --
 -- `decodeSym` never reads garbage on a truncated stream: every bit read
 -- goes through `bitio.getBits`, whose own `Err` on end-of-input propagates
@@ -94,14 +109,27 @@ sumUsedGo counts len acc
     Some c => sumUsedGo counts (len + 1) (acc + c)
     None => panic "sumUsed: length \{len} out of table range (unreachable)"
 
+-- The RFC 1951 §3.2.7 single-code exception is narrower than "exactly one
+-- symbol used": the one used code must ALSO have length 1 (`counts[1] ==
+-- 1`, which — given `numUsed == 1` — implies every other length's count is
+-- 0). A lone symbol at any other length (e.g. one 9-bit code) is NOT
+-- exempt: zlib's `inftrees.c` guards this with `max != 1` (`max` = the
+-- maximum code length actually used), not merely a used-symbol count.
+singleCodeIsLengthOne : Array Int -> Bool
+singleCodeIsLengthOne counts = match get 1 counts
+  Some c => c == 1
+  None => False
+
 -- Kraft inequality check: fold `left = 2*left - counts[len]` over len 1..15,
 -- starting at `left = 1` (the whole code space). `left < 0` at any step is
 -- over-subscription; `left > 0` at the end is incompleteness, forgiven only
--- when exactly one symbol is used (RFC 1951 §3.2.6 single-code exception).
+-- when the single used code has length 1 (RFC 1951 §3.2.7 exception —
+-- see `singleCodeIsLengthOne` above for why `numUsed == 1` alone is not
+-- sufficient).
 kraftCheck : Array Int -> Int -> Int -> Int -> Result String Unit
 kraftCheck counts len left numUsed
   | len > maxCodeLen =
-    if left == 0 || numUsed == 1 then
+    if left == 0 || numUsed == 1 && singleCodeIsLengthOne counts then
       Ok ()
     else
       Err "buildHuffman: incomplete Huffman code (unused code space remains)"
@@ -460,12 +488,15 @@ test "buildHuffman: single length-1 code (the RFC 1951 exception) is Ok, decodes
   Ok h => expectEqual (Ok 0) (decodeSym h (newBitReader (codeBytesFor 0 1)))
   Err msg => fail "expected Ok from buildHuffman [1] (single-code exception), got Err \{msg}"
 
--- The exception is not restricted to length 1: a single symbol at length 9
--- (numUsed=1 regardless of which length) is also accepted, and its
--- conventional code is nine zero bits.
-test "buildHuffman: single length-9 code is also Ok under the exception" = match buildHuffman [|9|]
-  Ok h => expectEqual (Ok 0) (decodeSym h (newBitReader [|0, 0|]))
-  Err msg => fail "expected Ok from buildHuffman [9] (single-code exception), got Err \{msg}"
+-- NARROWED (was "single length-9 code is also Ok under the exception"):
+-- a coordinator review caught that this pinned a broader exception than
+-- RFC 1951 §3.2.7 sanctions. `numUsed == 1` alone is NOT the exception —
+-- the one used code must also have length 1. A lone symbol at length 9 is
+-- a genuinely incomplete code (Kraft sum 2^-9, nowhere near 1) with no RFC
+-- cover, so it must now be `Err`, matching zlib's `max != 1` guard in
+-- `inftrees.c`. This assertion flipped from `Ok` to `Err` on 2026-08-05;
+-- see `kraftCheck`/`singleCodeIsLengthOne` above for the fix.
+test "buildHuffman: single length-9 code is NOT the exception (numUsed=1 alone is insufficient), Err" = expectEqual (Err "buildHuffman: incomplete Huffman code (unused code space remains)") (buildHuffman [|9|])
 
 -- Truncated input, immediate: `decodeSym` on ANY table over an empty byte
 -- array cannot even read the first bit — `Err`, not a garbage symbol.
@@ -474,15 +505,25 @@ test "decodeSym over empty input is Err, not a hang or garbage symbol" =
     (Err "getBits: unexpected end of input (need 1 bit(s), have 0 buffered)")
     (decodeSym fixedLitLen (newBitReader [||]))
 
--- Truncated input, MID-symbol: reuse the single-length-9 table above. Its
--- one code is nine zero bits, but the input supplies only ONE byte (8 zero
--- bits) — `decodeSym` consumes all 8 without a match (counts[1..8] are all
--- 0, so the "code2 - first < count" test never fires until length 9), then
--- needs a 9th bit that does not exist. This is a real mid-symbol
--- truncation: the first 8 bits parsed fine, the last one ran out.
-test "buildHuffman [9] + one-byte input: decodeSym errors exactly on the 9th bit" = match buildHuffman [|9|]
-  Ok h => expectEqual (Err "getBits: unexpected end of input (need 1 bit(s), have 0 buffered)") (decodeSym h (newBitReader [|0|]))
-  Err msg => fail "expected Ok from buildHuffman [9], got Err \{msg}"
+-- Truncated input, MID-symbol: a real mid-symbol truncation against the
+-- ACTUAL `fixedLitLen` table (the synthetic single-length-9 table used
+-- here previously is gone — see the narrowed test above). Derived by hand
+-- from the fixed table's canonical structure (RFC 1951 §3.2.6: length 7
+-- covers codes 0..23 for symbols 256-279; length 8 covers codes 48..199;
+-- length 9 covers codes 400..511 for symbols 144-255) and cross-checked
+-- against the binary before pinning: the first 7 read bits "1100100"
+-- (code value 100) exceed length 7's range (0..23) and, followed by an
+-- 8th bit "0", give a length-8 code value of 200 — past length 8's range
+-- (48..199 to make code2-first<count) — so decoding must continue to
+-- length 9, needing a bit that is not there. Physically, `getBits` is
+-- LSB-first within a byte, so stream bits [1,1,0,0,1,0,0,0] (read order)
+-- pack into the single byte value 1+2+16 = 19. Appending a second byte of
+-- 0 supplies the missing 9th bit (0) and completes to symbol 144, the
+-- first 9-bit literal (code 400) — checked as a control to confirm this
+-- is a genuine truncation, not a code that could never decode at all.
+test "decodeSym fixedLitLen, one truncating byte [|19|]: errors on the missing 9th bit" = expectEqual (Err "getBits: unexpected end of input (need 1 bit(s), have 0 buffered)") (decodeSym fixedLitLen (newBitReader [|19|]))
+
+test "decodeSym fixedLitLen, control: [|19, 0|] (9th bit supplied) decodes to symbol 144" = expectEqual (Ok 144) (decodeSym fixedLitLen (newBitReader [|19, 0|]))
 
 -- ---------------------------------------------------------------------------
 -- Table structural checks — `lengthBase`/`lengthExtra`/`distBase`/`distExtra`
