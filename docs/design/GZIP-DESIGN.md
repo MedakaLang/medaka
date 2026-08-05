@@ -81,9 +81,13 @@ Nothing needs to be added to the runtime. Verified against the current tree:
 
 ### The one new abstraction: `BitReader` / `BitWriter`
 
-`stdlib/byteparser.mdk` is byte-granular by construction — its state is a byte
-index. DEFLATE needs a bit cursor. This is a genuinely new module, not a variant
-of an existing one:
+`stdlib/byteparser.mdk` is byte-granular by construction — the position it
+threads through every combinator is a byte index. DEFLATE needs a bit cursor.
+This is a genuinely new module, not a variant of an existing one. Note also that
+byteparser threads that position **explicitly and functionally** (its own header:
+*"Position threading is EXPLICIT — there is no hidden state monad"*), whereas the
+`BitReader` below is deliberately `Ref`-based — so this is a different design, not
+a re-parameterization of the same one:
 
 ```
 -- LSB-first bit reader over an immutable byte array.
@@ -314,8 +318,13 @@ Build the 256-entry table once into an `Array Int` at module level. This is
 also the first real test in this tree of a **lazily-initialized top-level
 table** in a hot path.
 
-Adler-32 (zlib, Phase 6) is trivial by comparison: two 16-bit running sums mod
-65521.
+Adler-32 (zlib, Phase 6) is simpler, with one trap: two running sums mod 65521,
+where **`s1` initializes to 1 and `s2` to 0 — not both zero.** Carrying over
+CRC-32's start-at-zero mental model produces a checksum that is wrong for every
+input, including the empty one, whose correct Adler-32 is `0x00000001` (verified:
+`python3 -c "import zlib; print(zlib.adler32(b''))"` → `1`). This is the one
+place in this document where a reader who codes straight from the prose and
+nothing else gets a working-looking implementation that is wrong everywhere.
 
 ---
 
