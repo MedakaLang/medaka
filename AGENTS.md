@@ -580,6 +580,20 @@ for suggestion-bearing errors — a `help` string plus a machine-applicable
 programmatically, prefer `--json` and key off `code`** — it is the stable handle and doesn't
 move when wording changes.
 
+🚨 **BUT `check --json` HAS A SILENT-ACCEPT HOLE ON MULTI-MODULE PROJECTS (#1362, OPEN S0), AND
+`medaka mcp`'s `medaka_check` INHERITS IT.** On a multi-module project an internal-extern
+restriction violation is dropped entirely: **exit 0, empty diagnostics**, where the human
+`check` arm correctly rejects at exit 1. Confirmed over a real JSON-RPC call to the MCP tool
+(`isError: false`). Cause: `analyzeProject`'s `resolvePass` calls the unguarded `resolveModule`
+instead of the guarded `resolveModulesErrorsG` variant. **A green from the machine-readable arm
+is therefore not proof a project checks clean** — this is the one place the advice above bites
+you, and it is silent wrongness in the tool used to detect wrongness. Scope, derived rather
+than assumed: `env.internalGuard` has exactly one read site, so it is *this* restriction and not
+the whole diagnostic channel; a single file is unaffected (different code path); `run --json`
+does not share the omission. Pinned at `test/must_fail_fixtures/1362-*` — when that row drains,
+delete this paragraph. **Until then, corroborate an important `--json`/MCP green with human
+`check`.**
+
 **`medaka run --json` and `medaka lint --json` emit the SAME `Diag` JSON envelope** (same
 `code`/`kind`/`range`/`severity`/`message` schema as `check --json`) — so a RUNTIME panic, not
 just a compile-time error, is machine-parseable the same way.
