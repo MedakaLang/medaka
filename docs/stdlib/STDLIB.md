@@ -676,6 +676,8 @@ typechecked as if it had no declared effect, then errored on the
 - ✅ `find : (a -> Bool) -> Array a -> Option a` — first match, or `None` (array-specific short-circuiting version)
 - ✅ `findIndex : (a -> Bool) -> Array a -> Option Int` — index of the first match
 - 🟡 `elem`, `sum`, `product`, `maximum`, `minimum` — **no longer array-specific**: the generic `Foldable` versions in `core` dispatch over `impl Foldable Array` (same tight loop), so the array copies were removed as redundant
+- ✅ `foldWithIndex : (b -> Int -> a -> <e> b) -> b -> Array a -> <e> b` — left-to-right fold threading the index alongside each element; bounds-safe by construction (#1294)
+- ✅ `forEachWithIndex : (Int -> a -> <e> Unit) -> Array a -> <e> Unit` — visit every element in order for its side effect, given its index; bounds-safe replacement for hand-rolled index recursion over `get`/`arrayGetUnsafe` (#1294)
 
 ### Sorting (pure)
 

@@ -1,0 +1,8 @@
+-- #845 (drained by #1114): the WILDCARD spelling of the same defect.  Kept as its own
+-- fixture on purpose — #845 was filed as "the selective-import spelling", but measured
+-- on the pre-fix binary all THREE cross-module spellings dropped the obligation, so a
+-- rule matched to one spelling would have left this cell broken while looking fixed.
+-- A per-spelling fixture is what makes that observable (§4.2 D6(a)).
+import lib.obl1114_inferred.*
+
+main = println (f "abc")

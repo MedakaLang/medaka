@@ -1,0 +1,18 @@
+-- #845 SECOND SHAPE, found by adversarial review of the first fix (#1114): the callee is
+-- reached through an `export import` RE-EXPORT rather than named directly.
+--
+-- ⚠️ THE CORPUS HAD NO RE-EXPORT FIXTURE AT ALL before this one — 132 files, zero — and
+-- that absence is why the gap shipped. It is not a novel shape: it is the recurrence
+-- `.claude/workstreams/TYPECHECK.md` records for #1283 ("the decl's origin names the
+-- declaring module and the import path names the re-exporter, so the identity test
+-- misses") and that `renameAliasedMethods` already learned for the METHOD tables. A
+-- cross-module keying fix that is not exercised through a re-export has tested the easy
+-- half of its own rule.
+--
+-- Before the fix: `check` **0**, `run` `unknown op '+'`, `build` **0 with a binary
+-- written**, and that binary **segfaulted (139)** — verbatim #845, one hop out. The
+-- discriminator was decisive and it favoured the first fix: the same callee imported
+-- DIRECTLY (reject_845_xmod_inferred_selective.mdk) already rejected correctly.
+import lib.obl1114_reexp.{f}
+
+main = println (f "abc")
