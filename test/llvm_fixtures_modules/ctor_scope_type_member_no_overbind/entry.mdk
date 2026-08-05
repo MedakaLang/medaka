@@ -35,9 +35,12 @@
 -- member of that family past this fixture.  What this one detects is binding the
 -- WRONG TYPE'S constructors from the right module.  It is blind to binding the
 -- RIGHT type's constructor from a decl the exporting module does not EXPORT —
--- `ctor_scope_type_member_newtype_vis/` is the cell for that, and it went red on a
--- cut this fixture passed.  Over-binding is a family: "which decl?" and "is it
--- exported?" are separate gates and need separate cells.
+-- `test/eval_modules_fixtures/ctor_type_member_newtype_not_bound/` is the cell for
+-- that, and it went red on a cut this fixture passed.  Over-binding is a family:
+-- "which decl?" and "will the front end bind it at all?" are separate gates and need
+-- separate cells.  (That cell lives in the interpreter-only corpus on purpose — the
+-- native arm is wrong on its shape today, #1305 — so it is not a sibling directory
+-- here and the path is spelled in full.)
 import omodn.{OT(..), unOT}
 import pmodn.{PU, Wid, unPU}
 

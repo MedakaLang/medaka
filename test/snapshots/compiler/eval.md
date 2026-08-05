@@ -1,5 +1,5 @@
 # META
-source_lines=3789
+source_lines=3837
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted eval stage — Stage-1 capstone, port of lib/eval.ml's tree-walking
@@ -3275,39 +3275,87 @@ modExportCells (ModExports cells _) = cells
 -- but "would the front end have bound this name here" — and where the answer is no,
 -- binding it turns a working program into a crash.
 --
--- Both arms below are therefore derived from what the front end was MEASURED to do,
--- on pristine `main`, not from what a sibling table happens to contain:
+-- 🚨 THE INVARIANT THIS MATCHES IS **TYPECHECK'S**, NOT `expTypeCtorsDirect`'S, AND
+-- THE TWO TABLES DISAGREE ON EXACTLY ONE ARM.  Read this before "tidying" the arms
+-- into agreement with resolve — that edit re-ships the regression below.
+--
+-- A newtype's constructor is module-private BY DESIGN, and the tree says so:
+-- `types/typecheck.publicDataDecls` (`:20153`) publishes `DData VisPublic`,
+-- `DInterface pub`, `DImpl pub` and `DTypeAlias pub` to the data universe and has
+-- **no `DNewtype` arm at all**, so a newtype's constructor scheme is never published.
+-- `registerOpaqueParamKinds`'s note states the rule outright (`:20020`):
+--   "`export newtype` is in the same bucket and has no workaround at all: `public`
+--    is a parse error on `newtype`, so its constructor is unconditionally
+--    module-private."
+--
+-- `resolve` nevertheless ACCEPTS it at every step: `expCtorsDirect` (`:2834`)
+-- exports it and `expTypeCtorsDirect` (`:2842`) indexes it, both gated on
+-- `newtypePub`, which `export newtype` SETS; `expandMemberNames` (`:2288`) expands
+-- `NT(..)` to `[NT, Wrap]`; `realImport` (`:2619`) puts `Wrap` into `iaCtors`.
+-- Resolve emits NO diagnostic.  The refusal is the TYPECHECKER's — measured via
+-- `check --json`: **`T-UNBOUND`** in expression position (note the stage: `T-`, not
+-- `R-`) and `T-UNKNOWN-CTOR` in pattern position, both `"kind":"type"`.
+--
+-- The discriminator, so this is not a guess: an abstract `export data` produces a
+-- RESOLVE diagnostic (`R-NO-EXPORTED-CTORS`, *"'AT' exports no constructors from
+-- module 'absmod' (exported abstractly)"*) and a private `newtype` produces
+-- `R-PRIVATE-NAME` — but `export newtype` produces **zero resolve diagnostics**,
+-- only the type-layer one.  Different layers refusing, and only one of them here.
+--
+-- So the arms match typecheck's published surface; only the `DData` arm ALSO
+-- matches resolve's table:
 --
 --   * `DData`, `VisPublic` only.  `public export data` puts its constructors in
---     scope; `export data` is ABSTRACT and refuses loudly — *"'AT' exports no
---     constructors from module 'absmod' (exported abstractly)"* — and a private
---     `data` does not export the type at all.  Same gate `resolve.expTypeCtorsDirect`
---     applies.  Resolve rejects the abstract case before the engine is reached, so
---     the gate is masked on the typed path — but a mask is not a guarantee, and
---     `eval_modules_main` does not run resolve at all.
+--     scope; `export data` is ABSTRACT and refuses loudly at RESOLVE; a private
+--     `data` does not export the type at all.  Same gate `expTypeCtorsDirect` uses,
+--     and here table and behaviour agree.  Resolve rejects the abstract case before
+--     the engine is reached, so the gate is masked on the typed path — but a mask is
+--     not a guarantee, and `eval_modules_main` does not run resolve at all.
 --
---   * `DNewtype` — NO ARM, deliberately.  A newtype's constructor is not importable
---     by ANY spelling today: `import nmod.{NT(..)}` and `import nmod.{NT, Wrap}`
---     both give `Unbound variable: Wrap`, measured with no collision present, so
---     this is the plain contract and not a collision artefact.  (Note the surprise:
---     `export newtype` DOES set `newtypePub`, so gating this arm on `newtypePub`
---     looks right and changes nothing — that gate was tried and the regression
---     survived it.  The arm has to go, not be filtered.)
+--   * `DNewtype` — NO ARM, deliberately, and this is the arm where this index
+--     DIVERGES FROM `expTypeCtorsDirect` ON PURPOSE, tracking `publicDataDecls`
+--     instead.  A newtype's constructor is not importable by any spelling:
+--     `{NT(..)}` and `{NT, Wrap}` both fail with `T-UNBOUND`, measured with no
+--     collision present, so it is the plain contract and not a collision artefact.
+--     Binding what typecheck will refuse is strictly worse than not binding it,
+--     because the import frame OUT-RANKS `globalCells`.
+--     ⚠️ Gating this arm on `newtypePub` LOOKS like the fix and is a NO-OP — that
+--     gate was written, built and measured, and the regression survived it.
 --     An unconditional arm made `import nmod.{NT(..)}` bind `Wrap` and SHADOW a
 --     sibling module's legitimately-resolved `Wrap`, turning a correct `1` into
 --     `E-NOT-A-FUNCTION`.  Pinned by
 --     `test/eval_modules_fixtures/ctor_type_member_newtype_not_bound/`.
+--     That resolve and typecheck disagree here is itself latent and tracked as
+--     #1305's option 2; if it is ever settled the other way, THIS arm comes back.
 --
 --   * no `DAttrib` arm, no `DTypeAlias` arm — `expTypeCtorsDirect` has neither.
 --     (An attributed decl thereby contributing nothing is #1228, pinned; this index
 --     inherits that rather than diverging from the scope layer.)
 --
+-- ⚠️ TWO ROLES, ONE FUNCTION: this also builds the PRELUDE's `coreExports` (the
+-- `buildModInfos`/`cBuildModInfos` call sites), and resolve splits that role out to a
+-- DIFFERENT, deliberately unfiltered peer — `resolve.typeCtorsAllOf` (`:2773`), whose
+-- own comment says *"ignoring visibility … the prelude has no private names"*, and
+-- which has both `DNewtype` and `DAttrib` arms.  So the engine's PRELUDE index is now
+-- STRICTER than resolve's.
+--     That is inert BY CONSTRUCTION, not by luck: every prelude constructor gets a
+-- cell in `globalCells` (`globalNames` folds in `collectCtors allDecls`), so a
+-- prelude `T(..)` member this index declines to bind still resolves — through the
+-- global frame — to the very same cell.  For the prelude, declining to bind cannot
+-- lose a binding; it can only decline to shadow a cell with itself.  Reachable at
+-- all only via `export import core.{T(..)}`, which no fixture exercises, and moot
+-- today anyway (all five `core.mdk` data decls are `public export`; the tree has
+-- zero newtype declarations).  Documented rather than split, deliberately: the
+-- divergence is provably one-directional and a second index would be new code at
+-- the end of a review round.  Split it the day the prelude grows a private type.
+--
 -- ⚠️ `backend/private_mangle.unitCtorExportEntry` is the SYMBOL-layer peer and it is
--- NOT a safe model for this one: it filters on reserved-ness rather than scope and
--- it DOES include `DNewtype`, which is why `medaka build` mis-binds the newtype
--- shape above where `run` gets it right (filed as #1305 — a pre-existing run≠build
--- divergence, not this unit's).  Copying the emitter here would have imported that
--- bug into the interpreters.
+-- NOT a safe model for this one — it differs in THREE ways: it filters on
+-- reserved-ness rather than visibility, it HAS a `DNewtype` arm, and it HAS a
+-- `DAttrib` arm.  Its newtype arm is why `medaka build` mis-binds the shape above
+-- where `run` gets it right (filed as #1305 — a pre-existing run≠build divergence,
+-- not this unit's).  Copying the emitter here would have imported that bug into the
+-- interpreters.
 export ctorsByTypeOf : List Decl -> List (String, List String)
 ctorsByTypeOf decls = flatMap ctorNamesOfDecl decls
 
