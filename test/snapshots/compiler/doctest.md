@@ -1,5 +1,5 @@
 # META
-source_lines=396
+source_lines=411
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted doctest extraction + running — port of lib/doctest.ml.
@@ -70,6 +70,21 @@ runErrors (RunResult _ _ _ e _) = e
 
 export runDetails : RunResult -> List (Example, ExResult)
 runDetails (RunResult _ _ _ _ d) = d
+
+-- ── engine selection (#81 Stage 3) ──────────────────────────────────────────
+-- Which execution engine renders an example's actual value. `EngInterp` is
+-- today's tree-walking interpreter (compiler/eval/eval.mdk); `EngNative`
+-- compiles the module under test to a real native binary and runs it (Stage 2,
+-- `compiler/tools/native_doctest.mdk`). A `RunResult` itself doesn't carry
+-- which engine produced it — this type exists purely to SELECT the engine at a
+-- call site and to name it when reporting, so callers can derive labels/JSON
+-- fields from the engine(s) actually run instead of hardcoding a string that
+-- would start lying the day a second engine ships.
+public export data Engine = EngInterp | EngNative
+
+export engineName : Engine -> String
+engineName EngInterp = "eval"
+engineName EngNative = "native"
 
 -- ── reporting (mirrors lib/test_cmd.ml) ────────────────────────────────────
 -- The per-example `ok`/`FAIL`/`ERROR` lines and the `(F failed, E errors)`
@@ -421,6 +436,10 @@ isUse _ = False
 (DFunDef false "runErrors" ((PCon "RunResult" PWild PWild PWild (PVar "e") PWild)) (EVar "e"))
 (DTypeSig true "runDetails" (TyFun (TyCon "RunResult") (TyApp (TyCon "List") (TyTuple (TyCon "Example") (TyCon "ExResult")))))
 (DFunDef false "runDetails" ((PCon "RunResult" PWild PWild PWild PWild (PVar "d"))) (EVar "d"))
+(DData Public "Engine" () ((variant "EngInterp" (ConPos)) (variant "EngNative" (ConPos))) ())
+(DTypeSig true "engineName" (TyFun (TyCon "Engine") (TyCon "String")))
+(DFunDef false "engineName" ((PCon "EngInterp")) (ELit (LString "eval")))
+(DFunDef false "engineName" ((PCon "EngNative")) (ELit (LString "native")))
 (DTypeSig true "doctestFailSuffix" (TyFun (TyCon "RunResult") (TyCon "String")))
 (DFunDef false "doctestFailSuffix" ((PVar "result")) (EIf (EBinOp "||" (EBinOp ">" (EApp (EVar "runFailed") (EVar "result")) (ELit (LInt 0))) (EBinOp ">" (EApp (EVar "runErrors") (EVar "result")) (ELit (LInt 0)))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString " (")) (EApp (EVar "display") (EApp (EVar "intToString") (EApp (EVar "runFailed") (EVar "result"))))) (ELit (LString " failed, "))) (EApp (EVar "display") (EApp (EVar "intToString") (EApp (EVar "runErrors") (EVar "result"))))) (ELit (LString " errors)"))) (EIf (EVar "otherwise") (ELit (LString "")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "printDoctestDetails" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Example") (TyCon "ExResult"))) (TyEffect ("IO") None (TyCon "Unit")))))
@@ -561,6 +580,10 @@ isUse _ = False
 (DFunDef false "runErrors" ((PCon "RunResult" PWild PWild PWild (PVar "e") PWild)) (EVar "e"))
 (DTypeSig true "runDetails" (TyFun (TyCon "RunResult") (TyApp (TyCon "List") (TyTuple (TyCon "Example") (TyCon "ExResult")))))
 (DFunDef false "runDetails" ((PCon "RunResult" PWild PWild PWild PWild (PVar "d"))) (EVar "d"))
+(DData Public "Engine" () ((variant "EngInterp" (ConPos)) (variant "EngNative" (ConPos))) ())
+(DTypeSig true "engineName" (TyFun (TyCon "Engine") (TyCon "String")))
+(DFunDef false "engineName" ((PCon "EngInterp")) (ELit (LString "eval")))
+(DFunDef false "engineName" ((PCon "EngNative")) (ELit (LString "native")))
 (DTypeSig true "doctestFailSuffix" (TyFun (TyCon "RunResult") (TyCon "String")))
 (DFunDef false "doctestFailSuffix" ((PVar "result")) (EIf (EBinOp "||" (EBinOp ">" (EApp (EVar "runFailed") (EVar "result")) (ELit (LInt 0))) (EBinOp ">" (EApp (EVar "runErrors") (EVar "result")) (ELit (LInt 0)))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString " (")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EApp (EVar "runFailed") (EVar "result"))))) (ELit (LString " failed, "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EApp (EVar "runErrors") (EVar "result"))))) (ELit (LString " errors)"))) (EIf (EVar "otherwise") (ELit (LString "")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "printDoctestDetails" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Example") (TyCon "ExResult"))) (TyEffect ("IO") None (TyCon "Unit")))))
