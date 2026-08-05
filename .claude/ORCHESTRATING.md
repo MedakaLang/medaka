@@ -1585,3 +1585,39 @@ actually run, or does it merely describe what the author expected to be true?**
   is missing or another orchestrator's activity is plausible, **report the tree rather than
   acting on it** — an unattributable reap risks deleting a sibling's in-flight work with no
   way to undo it.
+
+## The gzip dogfood arc, 2026-08-05 — a pinned BOUNDARY, and defenses that mask
+
+A capstone dogfood (`gzip/`, DEFLATE decompressor) built end to end by Sonnet subagents.
+Five PRs merged, two enqueued, six issues filed. Three lessons generalise past the project.
+
+- ⭐ **PIN THE UNIMPLEMENTED BOUNDARY IN A GATE, NOT IN PROSE.** A staged feature always
+  has a "not yet implemented" edge. Writing it in a comment rots silently; asserting it in
+  a gate makes the *implementation* flip the gate red and name the file to update. Used
+  twice here: the Phase-2 boundary (`expect_fail … "not yet implemented"`) went red exactly
+  when fixed-Huffman landed, and was replaced by real round-trips plus a fresh Phase-3 pin.
+  Cost: one line. It converts "someone will remember to update the gate" into a mechanical
+  instruction delivered at the right moment, to the right person.
+- 🚨 **A DEFENSIVE LAYER THAT DEGRADES SILENTLY IS THE MASKING PATH FOR THE BUG IT GUARDS.**
+  The fix for a shrink-loop hang (#1307) added a fuel cap — correct — that returned
+  **silently** on exhaustion. So a future cycling arm would produce a *worse* counterexample
+  after 10000 quiet evaluations and nobody would ever learn the cycle existed. Removing a
+  hang is right; removing the *signal* with it is the loud→silent regression this repo ranks
+  as a severity increase. **For any cap/limit/fallback you add, ask what an observer sees
+  when it fires — and make it say so.** Then watch it fire (temporarily shrink the limit)
+  rather than trusting that it would.
+- ⚠️ **CHERRY-PICKING AN AGENT'S COMMIT BREAKS THE WRAP-UP WORKTREE CHECK.** Landing agents'
+  work by `git cherry-pick` onto your own branch (rather than merging their branches) means
+  their original SHAs are never ancestors of `main`, so `log origin/main..HEAD` reports
+  "unmerged" **forever** and every such tree looks unreapable. The discriminating check is
+  **content identity, not ancestry**: for each file the branch touched, compare
+  `git -C <wt> show HEAD:<f>` against `git show origin/main:<f>` — all-identical means the
+  work landed and the tree is provably redundant. That cleanly separated 5 reapable trees
+  from 3 whose work was still in flight, where ancestry alone said "hold" for all 8.
+
+⚠️ **Two of the three defects worth reporting this arc were found by MUTATION, not review.**
+Four RFC tables shipped with no assertion at all — corrupting one cell left all 13 checks
+green — and a byte-corruption helper was appending 16 literal characters, so its gate passed
+for the wrong reason. Neither is visible in a green run or in a careful read. When a change
+adds a *table* or a *byte-level helper*, perturb one cell and confirm something notices;
+budget it as a review step, not an optional extra.

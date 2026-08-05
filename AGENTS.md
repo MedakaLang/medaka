@@ -949,6 +949,36 @@ output is correct is a rubber stamp, and the gate exists to prevent exactly that
 Add cases to the gate matching the stage you changed (parser change →
 `test/diff_compiler_parse*.sh` or `diff_compiler_check*.sh`).
 
+### ⚠️ Writing the SHELL half of a gate — two traps that make it pass for the wrong reason
+
+`/bin/sh` on this box is **dash**, not bash (`readlink -f /bin/sh`), and gates are run as
+`sh test/…`. Two consequences bite specifically when a gate manipulates **bytes** or
+**time** — i.e. exactly when it is testing a binary format or a hang.
+
+- **`printf '\xNN'` DOES NOT WORK IN DASH.** It emits the *literal characters*
+  `\xde\xad\xbe\xef`, not four bytes. Measured: appending that to a 219-byte file produced
+  **235** bytes, not 223. **Use octal — `printf '\336\255\276\357'`** — which POSIX
+  `printf` does interpret.
+  🚨 The failure mode is not a broken gate, it is a **gate that passes for the wrong
+  reason**. A `gzip/` oracle case meant to corrupt a 4-byte CRC field was instead appending
+  16 junk bytes and shifting the whole trailer; it still produced a CRC error, so it read
+  green, and only surfaced when a *sibling* ISIZE case failed with a CRC message that made
+  no sense. **If a gate rewrites a fixed-width field, assert the file LENGTH is unchanged
+  afterwards** — that one line converts this from silent to loud.
+- **`timeout` is coreutils and does NOT exist on macOS.** Every build/test script here must
+  run on both platforms, and nothing enforces it (all 11 CI jobs are `ubuntu-latest`, so a
+  macOS-only break ships with every check green). Use the shim already in
+  `test/diff_compiler_engines.sh`, labelled there *"portable timeout (no coreutils on mac)"*:
+  ```sh
+  run_t() { perl -e 'alarm shift; exec @ARGV' "$@"; }
+  ```
+  ⚠️ **Not a drop-in substitution** — the shim is killed by `SIGALRM` so the shell reports
+  **142** (128+14) where `timeout` reports **124**; real exit codes pass through unchanged.
+  Move every guard with it, or the guard silently stops detecting the thing it was added
+  for. Verify both, don't assume: `run_t 1 sleep 5; echo $?`.
+
+Both are worth checking in review rather than trusting: `grep -n "printf '\\\\x\|[^a-z]timeout " <gate>`.
+
 ## Task playbooks (skills)
 
 **Skills are planning inputs, not just implementation aids.** At task triage — including
