@@ -1,0 +1,33 @@
+issue: 1121
+what: A row under a CONTRAVARIANTLY-occurring Type parameter of an ordinary IMMUTABLE
+what: datatype widens silently. `data Taker a = MkTaker (a -> Int)` puts `a` in the
+what: DOMAIN of the stored function, so `Taker` is CONTRAVARIANT in `a`. Widening
+what: `Taker (Unit -> Unit)` to `Taker (Unit -> <IO> Unit)` (`wide = pureTaker`) is
+what: accepted with zero diagnostics, yet that is the UNSAFE direction for a
+what: contravariant occurrence (EFFECTS-SEMANTICS §9): calling `runTaker wide shout`
+what: — a function whose OWN type carries no effect row at all — performs <IO>, because
+what: the pure-typed stored callback `g` is actually `shout` and applies it. No `Ref`,
+what: no `Effect`-kinded index, no mutation anywhere: NOT #1094 (the Effect-kinded index
+what: slot; that unifier is never consulted at this Type-kinded argument) and NOT #1098
+what: (write-channel framing; `Taker` has no write-back operation at all — the widening
+what: is unsound through pure contravariance alone, with no `Ref` in sight). `check`
+what: exits 0 with zero diagnostics; `medaka run` (eval) and the native build+binary
+what: both print `LAUNDERED` then `1`. Reproduced first-hand on a binary built from
+what: this session's own worktree (cold-bootstrapped from compiler/seed/emitter.ll.gz).
+cmd: run main.mdk
+exit: 0
+stdout: LAUNDERED
+stdout: 1
+control: run control.mdk
+why-control: control.mdk is the SAME wrapper shape (`data _ a = MkX (... a ...)`) but with
+why-control: `a` in the CODOMAIN (`Int -> a`) instead of the domain, so the occurrence is
+why-control: COVARIANT instead of contravariant. Widening a covariant occurrence's effect
+why-control: row is the SOUND direction (EFFECTS-SEMANTICS §9), and `Giver` is immutable
+why-control: with no write-back operation, so accepting the widening is correct — nothing
+why-control: can ever install a genuinely effectful closure into the narrower-typed
+why-control: original. It must stay green: a fix that rejected every effect-row widening
+why-control: regardless of polarity (rather than the contravariant one specifically) would
+why-control: break this control, and the harness would report CONTROL-BROKE, not "fixed".
+why-note: The pin is `run` exit 0 plus the exact two lines of stdout the laundered effect
+why-note: prints. A fix rejects the `wide = pureTaker` assignment (per-parameter variance,
+why-note: target-architecture stage D-2), which flips the exit/stdout and drains this row.

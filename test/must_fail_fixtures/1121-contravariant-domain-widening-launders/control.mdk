@@ -1,0 +1,21 @@
+-- CONTROL: the SAME wrapper shape as main.mdk (`data _ a = MkX (... a ...)`), but `a`
+-- sits in the CODOMAIN of the stored function (`Int -> a`) instead of the domain, so the
+-- occurrence is COVARIANT instead of contravariant. Widening a covariant occurrence's
+-- effect row is the SOUND direction (EFFECTS-SEMANTICS §9), and `Giver` is immutable
+-- with no write-back operation, so nothing can ever install a genuinely effectful
+-- closure into the narrower-typed original. This must stay green: if it breaks, the
+-- environment broke (effect rows, variance, the prelude), not #1121.
+data Giver a = MkGiver (Int -> a)
+
+runGiver : Giver a -> Int -> a
+runGiver (MkGiver g) x = g x
+
+pureGiver : Giver (Unit -> Unit)
+pureGiver = MkGiver (n => (u => ()))
+
+wideGiver : Giver (Unit -> <IO> Unit)
+wideGiver = pureGiver
+
+main =
+  let g = runGiver wideGiver 0
+  println (g ())
