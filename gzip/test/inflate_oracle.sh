@@ -235,6 +235,30 @@ python3 -c "import sys; sys.stdout.write(('the quick brown fox ' * 200)[:2000])"
 check_fixed "gzip 2000 bytes of a repeated phrase (long back-references), level 1" "$TMP/phrase.bin" 1
 check_fixed "gzip 2000 bytes of a repeated phrase (long back-references), level 9" "$TMP/phrase.bin" 9
 
+# The design doc's corpus table names two entries this file never covered:
+# the empty file (zero-length stream, BFINAL on an empty block) and the
+# one-byte file (degenerate Huffman alphabets). Both are checked below with
+# `check_fixed`, NOT because we assumed fixed Huffman, but because we
+# verified by hand (`gzip -N -n -c` on a genuinely 0-byte and a genuinely
+# 1-byte file, N = 1..9) that the system tool picks BTYPE=1 at every level
+# for both — its block-splitting heuristic never has enough symbol
+# diversity to justify a custom code table at this size. `check_fixed`
+# itself still asserts the observed BTYPE rather than trusting this
+# comment, so a future `gzip` that behaves differently would fail loudly
+# here instead of silently testing nothing.
+#
+# `wc -c` on each fixture below is not a stray sanity check — an "empty"
+# file that turned out to hold a stray newline would silently test the
+# one-byte case twice and the true empty case never, exactly the harness
+# bug this discipline exists to catch.
+: > "$TMP/empty.bin"
+[ "$(wc -c < "$TMP/empty.bin")" -eq 0 ] || bad "harness bug: empty.bin fixture is not actually empty"
+check_fixed "gzip empty file (zero-length stream)" "$TMP/empty.bin" 1
+
+printf 'x' > "$TMP/onebyte.bin"
+[ "$(wc -c < "$TMP/onebyte.bin")" -eq 1 ] || bad "harness bug: onebyte.bin fixture is not exactly one byte"
+check_fixed "gzip one-byte file (degenerate Huffman alphabet)" "$TMP/onebyte.bin" 1
+
 # --- dynamic-Huffman round trip: real gzip output must decode byte-for-byte -
 
 # 100 KB of a repeated short string. This is the design doc's own corpus
