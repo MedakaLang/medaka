@@ -1,0 +1,4 @@
+import ra.{TA(..), Tag, tag}
+import rb.{TB(..)}
+
+main = println (tag (MkT { fx = 1 }))

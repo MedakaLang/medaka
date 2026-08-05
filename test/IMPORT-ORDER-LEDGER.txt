@@ -1,0 +1,89 @@
+# IMPORT-ORDER-LEDGER.txt — cases in test/import_order_fixtures/ whose answer DOES
+# depend on import-clause order today, each naming the OPEN issue that owns it.
+#
+# Read by test/diff_compiler_import_order.sh (the gate) and, for the half a gate
+# cannot check, by test/must_fail_census.sh (nightly, has the GitHub API).
+#
+# ── WHAT A ROW MEANS ──────────────────────────────────────────────────────────
+#
+# A row is not a suppression. It is a signed statement, in the tree, that
+#
+#     "reordering two cosmetic import lines changes what this program does,
+#      that is a live soundness bug, and here is the issue that owns it."
+#
+# The gate is GREEN with rows present because a gate that lands red breaks `main`
+# and teaches people to ignore it. The rows are what keep the green honest.
+#
+# ── HOW A ROW DRAINS (this is the whole point) ────────────────────────────────
+#
+# The row pins EVERY DISTINCT SIGNATURE the case produces and requires there to be
+# MORE THAN ONE. So:
+#
+#   * the day a fix makes the case invariant, the row goes RED, naming the issue
+#     to close. It cannot silently absorb the fix, which is what a plain skip-list
+#     does and why this is not one;
+#   * if the divergence MOVES (different outputs, still divergent), the row goes RED
+#     too — the pinned signatures no longer match what the binary does;
+#   * a row naming a case directory that no longer exists goes RED (rot).
+#
+# When a row drains: close the issue, DELETE the row, and KEEP the fixture. Without
+# a row it is graded as invariant — i.e. it becomes the regression guard for the fix.
+#
+# ── WHAT A REVIEWER MUST DEMAND BEFORE ACCEPTING A **NEW** ROW ────────────────
+#
+# ⚠️ A tripwire's false positive is its masking path. If this file is easy to bump,
+# it stops being a ledger and becomes the slack that lets the gate be ignored. So a
+# new row is deliberately expensive, and a reviewer should refuse one that does not
+# carry all five:
+#
+#   1. AN ISSUE NUMBER, `#<digits>`, OF AN ISSUE THAT IS OPEN. The gate checks the
+#      SYNTAX offline; it cannot check OPEN-ness (it must run on a dev box with no
+#      `gh` auth and in a required CI shard where an API blip must not block a
+#      merge). test/must_fail_census.sh reports a ledgered issue that is CLOSED.
+#      A reviewer should check the issue by hand: `gh issue view <n> --json state`.
+#   2. A FIXTURE DIRECTORY NAMED `<issue-number>-...`. The gate enforces this, and
+#      it is the anti-reflexive-bump lock: you cannot quietly ledger a case that
+#      was green yesterday without RENAMING its directory, which is loud in a diff.
+#   3. THE ACTUAL OUTPUTS, TRANSCRIBED. Every pinned signature must be one the
+#      binary really produced — the gate compares the pinned set against the
+#      observed set EXACTLY, in both directions, so a guessed or copied signature
+#      fails immediately. You cannot write a row without running the case.
+#   4. A PRE-EXISTING BUG, NOT ONE THE PR INTRODUCED. Ask directly: does this row
+#      exist because the diff under review made a program order-dependent? If so
+#      the answer is to fix the diff. A row is for a bug that was already shipping.
+#   5. THE CASE'S OWN `case.txt` SAYING HOW THE EXPECTED VALUES WERE ESTABLISHED.
+#      A captured golden records what the engine did, not what is correct; a
+#      divergence pin is the honest thing to record when the engine is broken, but
+#      only if the fixture says on what evidence.
+#
+# ── FORMAT ────────────────────────────────────────────────────────────────────
+#
+#   <case-directory> | #<issue> | <signature> | <signature> [| <signature> ...]
+#
+# Fields are `|`-separated and surrounding whitespace is stripped. Blank lines and
+# lines starting with `#` are ignored. At least TWO signatures are required — a row
+# asserts a DIVERGENCE, and one signature is not a divergence.
+#
+# A signature is the gate's own one-line reduction of one ordering's behaviour:
+#
+#   check=<exit>;codes=<sorted,comma>;schemes=<scheme dump>;run=<exit>:<stdout>;build=<exit>/<exec-exit>:<stdout>
+#
+# ⚠️ Do not hand-derive that shape from this line either — the gate is the authority
+# on it and this comment can rot. `grep -n "printf 'check=" test/diff_compiler_import_order.sh`
+#
+# Program output is escaped so a signature is always exactly one line and never
+# collides with the separators: `\` -> `\\`, `|` -> `\p`, `;` -> `\s`, newline ->
+# `\n`. The gate escapes what it observes and compares escaped strings, so what you
+# paste here is exactly what the gate prints when a row fails.
+#
+# DO NOT hand-write a signature. Run the gate with the row absent (or with a
+# deliberately wrong signature); it prints every distinct signature it observed, and
+# those lines are what belongs here.
+
+1253-record-form-ctor-head-decided-by-import-order | #1253 | check=0;codes=;schemes=main : Unit\n;run=0:FROM-RA\n;build=0/0:FROM-RB\n | check=0;codes=;schemes=main : Unit\n;run=0:FROM-RB\n;build=0/0:FROM-RA\n
+
+1284-overlay-sibling-ctor-beats-named-import | #1284 | check=0;codes=;schemes=v : ZZ\nmain : Unit\n;run=0:s\n;build=0/0:s\n | check=1;codes=T-TYPE-MISMATCH,T-TYPE-MISMATCH;schemes=;run=1:;build=1/-:
+
+733-wildcard-import-ctor-falls-to-universe | #733 | check=0;codes=;schemes=main : Unit\n;run=0:1\n;build=0/0:1\n | check=1;codes=T-TYPE-MISMATCH;schemes=;run=1:;build=1/-:
+
+733-ambiguous-ctor-reject-cascade-order-dependent | #733 | check=1;codes=R-AMBIGUOUS-CTOR;schemes=;run=1:;build=1/-: | check=1;codes=R-AMBIGUOUS-CTOR,T-TYPE-MISMATCH;schemes=;run=1:;build=1/-:

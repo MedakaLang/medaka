@@ -1,0 +1,4 @@
+public export data Leaf = Lf Int
+
+export unLf : Leaf -> Int
+unLf (Lf i) = i

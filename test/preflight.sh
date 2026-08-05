@@ -402,9 +402,14 @@ for f in $changed; do
     # "plausibly").
     # #1110: resolve.mdk OWNS the two origin stampers and the agreement tap they are
     # observed through, so it is the primary subject of diff_compiler_origin_agreement.
+    # #1319 unit 0: resolve.mdk expands every import spelling into the name set it
+    # binds and attributes each to a module — the fact every import-clause ordering
+    # defect in the tracker (#733/#1253/#1284) is decided by. Goldens cannot see an
+    # over-widening there; the permutation differential can.
     compiler/frontend/resolve.mdk|compiler/frontend/marker.mdk)
       add 'diff_compiler_resolve*'; add 'diff_compiler_snapshot*'; add 'diff_compiler_check*'
       add 'diff_compiler_origin_agreement'
+      add 'diff_compiler_import_order'
       add 'diff_compiler_dict_semantics' ;;
     compiler/frontend/exhaust.mdk)
       add 'diff_compiler_exhaust'; add 'diff_compiler_check_match' ;;
@@ -435,7 +440,11 @@ for f in $changed; do
       # #1110: typecheck.mdk hosts BOTH ends of the resolve->typecheck channel
       # (checkProgramSeededSplit on the flat path, elaborateModules on the graph
       # path) — i.e. two of the three arms the agreement table compares.
-      add 'diff_compiler_origin_agreement' ;;
+      add 'diff_compiler_origin_agreement'
+      # #1319 unit 0: typecheck.mdk owns universeDataEnv, universeRecordByName and
+      # the A-2.6 import-scoped overlay — the tables whose keying decides which
+      # declaration an import clause's constructor name lands on.
+      add 'diff_compiler_import_order' ;;
 
     # ── THE THREE ENGINES ─────────────────────────────────────────────────────
     #
@@ -499,11 +508,19 @@ for f in $changed; do
       add 'diff_compiler_capability_matrix'
       add 'diff_compiler_engines'; add 'diff_compiler_tmc_parity'
       add 'diff_compiler_shadow_semantics'; add 'diff_compiler_dict_semantics'
+      # #1319 unit 0: private_mangle.mdk keeps its OWN ctor-import index — a
+      # separate order-observable structure from typecheck's, and #674's root cause
+      # was the two disagreeing. The permutation gate grades the `build` arm, so it
+      # is the one differential that can see the mangler decide by clause order.
+      add 'diff_compiler_import_order'
       need_fixpoint=1 ;;
 
     # #1131: driver/loader.mdk is a cited DICT-SEMANTICS site.
+    # #1319 unit 0: loader.mdk owns the dependency walk and topo sort — the module
+    # ORDER every table downstream is populated in.
     compiler/driver/*)
       add 'diff_compiler_check*'; add 'diff_compiler_diagnostics'; add 'diff_compiler_build'
+      add 'diff_compiler_import_order'
       add 'diff_compiler_dict_semantics' ;;
     compiler/tools/lint*.mdk)      add 'diff_compiler_lint*' ;;
     compiler/tools/fmt.mdk|compiler/tools/printer.mdk) add 'diff_compiler_fmt'; add 'diff_compiler_snapshot*' ;;
@@ -599,6 +616,14 @@ for f in $changed; do
     # Only the snapshot gates read them, and they read the tree as a whole (SNAPDIR),
     # never a per-file path — so the answer is the same for every file under it.
     test/snapshots/*)              add 'diff_compiler_snapshot*' ;;
+
+    # ── #1319 unit 0: the import-order ledger, which `_fixture_dir_for` cannot see ──
+    # It is a loose file under test/, not inside a `*fixtures*` directory, so the
+    # corpus derivation never fires for it. This arm matters more than most: the
+    # ledger is precisely the file someone edits ALONE when this gate goes red, and
+    # a preflight that derives NOTHING from a ledger edit is the masking path the
+    # ledger's own header warns about.
+    test/IMPORT-ORDER-LEDGER.txt)  add 'diff_compiler_import_order' ;;
 
     # ── sqlite: the derivation structurally CANNOT reach it ───────────────────
     # `_fixture_dir_for` only fires for a path with a `*fixtures*`/`*goldens*` ancestor

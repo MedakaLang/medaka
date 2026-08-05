@@ -1,0 +1,22 @@
+entry: main.mdk
+what: #733 item 1c a WILDCARD import's ctor still falls through to the universe pool
+
+`amodd` and `zmod` each declare a constructor spelled `Dup`, of unrelated types.
+`main` imports `amodd` with `.*` and takes only `zf` from `zmod` — so `zmod`'s `Dup`
+is not brought into scope at all and no ambiguity diagnostic is owed. The `.*`
+spelling is not covered by the A-2.6 import-scoped overlay (which matches `UseGroup`
+members), so `Dup` falls through to the flat universe pool.
+
+Observed by hand on a binary cold-bootstrapped from `main` @ 0af30a78, 2026-08-05,
+before this gate existed:
+
+    `import amodd.*` first  -> exit 1, "Type mismatch: A1 vs Z1"
+    `import zmod.{zf}` first -> exit 0, prints `1`
+
+⚠️ The scoping pass for #1319 measured this shape as a WILDCARD-vs-NAMED pair (change
+the spelling, get the opposite verdict). That is a different axis from the one this
+gate permutes. The ORDER dependence recorded above was measured separately, here, on
+the same binary: the wildcard file alone, with only its two import lines swapped.
+The named spelling is a separate case in this corpus and is INVARIANT.
+
+Ledgered in test/IMPORT-ORDER-LEDGER.txt against #733.

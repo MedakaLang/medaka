@@ -1,0 +1,17 @@
+entry: main.mdk
+what: #1284 an overlaid SIBLING ctor out-ranks a ctor imported BY NAME from an earlier clause
+
+`Sib` is imported by name from `zmod` in the FIRST clause. `cmod`'s import of the
+unrelated `CtorOnly` overlays the WHOLE of `data Wrap`, dragging in a ride-along
+sibling `Sib : Int -> Wrap` that out-ranks it.
+
+Observed by hand on a binary cold-bootstrapped from `main` @ 0af30a78, 2026-08-05,
+before this gate existed (`medaka run`, the two import lines swapped by hand):
+
+    zmod clause first  -> exit 1, "Type mismatch: Int vs String"
+                                + "Type mismatch: ZZ vs Wrap"   (`Wrap` is never
+                                  mentioned in this file)
+    cmod clause first  -> exit 0, prints `s`
+
+Ledgered in test/IMPORT-ORDER-LEDGER.txt against #1284. When #1284 is fixed this
+case must become INVARIANT, the ledger row goes red, and the row is deleted.

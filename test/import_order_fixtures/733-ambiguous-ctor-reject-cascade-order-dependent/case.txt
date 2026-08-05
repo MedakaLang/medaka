@@ -1,0 +1,43 @@
+entry: main.mdk
+what: #733 item 1 the CASCADE alongside an ambiguity reject appears in ONE import order only
+
+Both clauses bring a constructor spelled `Dup` into scope, so `R-AMBIGUOUS-CTOR`
+fires — correctly, and in BOTH orders. What is not invariant is what comes WITH it.
+
+Measured by hand with `medaka check --json`, on a binary cold-bootstrapped from
+`main` @ 0af30a78, 2026-08-05 (both orders exit 1):
+
+    amodd clause first -> R-AMBIGUOUS-CTOR  +  T-TYPE-MISMATCH "A1 vs Z1"
+    zmod  clause first -> R-AMBIGUOUS-CTOR  alone
+
+So one ordering gets a spurious extra error and the other does not, on the same
+program. The underlying resolution is the same one #733 item 1 describes: `Dup` is a
+BARE CTOR MEMBER of both clauses, so it is not covered by the A-2.6 import-scoped
+overlay and falls through to the flat universe pool, whose order the clauses decide.
+The extra diagnostic is that fallback becoming visible — with `amodd` first, `Dup`
+lands on `Z1`'s constructor while `unA1` wants `A1`.
+
+⚠️ This fixture was written as an INVARIANT control and the gate rejected it. That is
+the finding; it is kept rather than tuned green.
+
+⚠️ Two claims here marked as what they are:
+  * The CASCADE itself is not new — #1319's scoping pass measured it on 2026-08-05
+    ("a neighbouring shape does cascade ... R-AMBIGUOUS-CTOR plus a T-TYPE-MISMATCH
+    at the same range"). What is recorded here, and was NOT in that pass, is that it
+    is ORDER-DEPENDENT: the pass measured one ordering.
+  * Attributing it to #733 item 1's universe fallback is an INFERENCE from the shape
+    (bare ctor member in both clauses, unrelated result types) and from the `A1 vs
+    Z1` message. It was not traced through the compiler source.
+
+⚠️ This case ALSO demonstrates why the criterion excludes diagnostic MESSAGE TEXT.
+`R-AMBIGUOUS-CTOR` names the two modules in import-clause order, deliberately:
+
+    amodd first: "...brought into scope by both `amodd` and `zmod`. ..."
+    zmod  first: "...brought into scope by both `zmod` and `amodd`. ..."
+
+That is correct behaviour, and a text diff would call it a defect. The invariant
+sibling control-ambiguous-ctor-reject-invariant/ is the same collision with the
+type-forcing use site removed; it is graded GREEN, which is what shows the exclusion
+is a deliberate criterion choice rather than a hole.
+
+Ledgered in test/IMPORT-ORDER-LEDGER.txt against #733.
