@@ -148,7 +148,7 @@ importNamesIn : (ModuleExports -> List String) -> Map String ModuleExports -> Us
 importTypeNames : Map String ModuleExports -> UsePath -> List String
 importValueNames : Map String ModuleExports -> UsePath -> List String
 importedEffects : Map String ModuleExports -> List Decl -> List String
-importedIfaceMethods : Map String ModuleExports -> List Decl -> List String -> List (String, List String)
+importedIfaceMethods : Map String ModuleExports -> List Decl -> List (String, List String)
 importedModuleValueSets : Map String ModuleExports -> List Decl -> List (String, List String)
 importedNames : List Decl -> List String
 importedNamesMM : UsePath -> ModuleExports -> (List String, List ResError)
@@ -199,7 +199,7 @@ noteOriginTrace : String -> List Decl -> Unit
 numberFrom : Int -> List String -> List (String, Int)
 oneImport : Map String ModuleExports -> UsePath -> Loc -> ImportAdds
 oneImportEffects : Map String ModuleExports -> UsePath -> List String
-oneImportIfaceMethods : Map String ModuleExports -> List String -> UsePath -> List (String, List String)
+oneImportIfaceMethods : Map String ModuleExports -> UsePath -> List (String, List String)
 oneImportedModuleValues : Map String ModuleExports -> UsePath -> List (String, List String)
 optStrEq : Option String -> String -> Bool
 originOfTyName : Map String TyConOrigin -> String -> TyConOrigin

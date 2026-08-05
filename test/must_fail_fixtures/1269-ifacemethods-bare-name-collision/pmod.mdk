@@ -1,4 +1,0 @@
--- issue #1269: the interface rev.mdk actually imports and implements. Its only method
--- is `pmth`, which `impl Same P` provides in full.
-export interface Same f where
-  pmth : f a b -> Int

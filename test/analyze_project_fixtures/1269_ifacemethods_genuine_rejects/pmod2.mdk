@@ -1,0 +1,5 @@
+-- #1269 MIRROR PROBE support module: half two of the SAME-NAME collision.  Same
+-- spelling `Same2`, but UNGRADED, with a different required-method set (`pmth2`, not
+-- `gandThen2`).  `main_rejects.mdk` imports this one's `Same2` AND `pmth2` for real.
+export interface Same2 f where
+  pmth2 : f a b -> Int

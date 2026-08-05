@@ -1,0 +1,9 @@
+-- #1269 MIRROR PROBE support module: half one of the SAME-NAME collision.  `Same2`
+-- here is GRADED (slot 0 is row-kinded via `e` in an effect tail); its only required
+-- method is `gandThen2`.  `main_rejects.mdk` imports ONLY `gdummy2` from this module
+-- -- never `Same2` -- exactly like #1269's own repro.
+export interface Same2 f where
+  gandThen2 : f e a -> (a -> <e> f e b) -> f e b
+
+export gdummy2 : Int -> Int
+gdummy2 n = n

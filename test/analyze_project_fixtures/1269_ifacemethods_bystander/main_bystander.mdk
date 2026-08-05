@@ -1,0 +1,57 @@
+-- #1269 BYSTANDER FIXTURE -- "feature + UNRELATED code still behaves", the shape
+-- AGENTS.md requires whenever a fix touches something that can affect names it
+-- never sees (here: `oneImportIfaceMethods`/`filterIfaceMethods` in
+-- `compiler/frontend/resolve.mdk`, which used to scope an interface's method list by
+-- a PROGRAM-WIDE bare-name membership test instead of the actual per-import
+-- provenance).
+--
+-- The graph DOES contain a collision: `gmod3.mdk` and `pmod3.mdk` both declare an
+-- interface `Same3` at arity 1 -- one graded with required method `gandThen3`, one
+-- ungraded with required method `pmth3`.  Only their unrelated FUNCTIONS are
+-- imported here, so NOTHING BELOW MENTIONS `Same3`, `gandThen3` OR `pmth3`.
+--
+-- What the golden pins (every file's bucket is `[]`), and how each line could fail:
+--   * `impl Solo3 ET` implements BOTH of `Solo3`'s required methods.  If
+--     `oneImportIfaceMethods` still cross-contaminated (the pre-fix bug), this would
+--     not actually change THIS impl's outcome -- `Solo3` shares no name with
+--     anything imported -- so this line alone cannot witness the fix (see the
+--     🚨 paragraph below); it is here so a totally unrelated interface still checks
+--     clean.
+--   * `impl Display ET` is a genuine BYSTANDER against the prelude, not a witness:
+--     `Display` has exactly one required method (`display`), and this impl defines
+--     it, so a miss and a hit are byte-identical (`None => []` vs `["display"] -
+--     ["display"] = []`).
+--   * `plain` mentions none of this fix's machinery at all -- it answers AGENTS.md's
+--     "what happens to a program that never touches the table" directly.
+--
+-- 🚨 WHAT THIS FIXTURE CANNOT CATCH, stated so nobody reads it as covering more than
+-- it does.  It detects a key that WRONGLY MEETS another module's row (a spurious
+-- diagnostic appears where none should).  It CANNOT detect a key that never fires at
+-- all -- both `checkImplIface`'s guard and `ifaceMethodsOf`'s first-match abstain
+-- (empty list) on a genuine miss, so a write-side/read-side disagreement would leave
+-- every bucket here `[]` and this fixture green while the checks had silently
+-- stopped running.  That direction is covered by
+-- `test/analyze_project_fixtures/1269_ifacemethods_genuine_rejects/`'s two cells
+-- instead (one with no collision present, one with the exact collision shape here).
+-- The pair is the assertion; neither half alone is.
+import gmod3.{gdummy3}  -- ONLY the function; never gmod3's Same3
+import pmod3.{pdummy3}  -- ONLY the function; never pmod3's Same3
+
+interface Solo3 a where
+  soloFoo : a -> Int
+  soloBar : a -> Int
+
+data ET = MkET
+
+impl Solo3 ET where
+  soloFoo e = 1
+  soloBar e = 2
+
+impl Display ET where
+  display e = "ET"
+
+plain : Int -> Int
+plain n = n + 1
+
+n : Int
+n = gdummy3 (pdummy3 (plain (soloFoo MkET + soloBar MkET)))

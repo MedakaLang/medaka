@@ -70,7 +70,14 @@ for f in oj.get("files", []):
     base = os.path.basename(f["file"])
     items = []
     for x in f["diagnostics"]:
-        r = x.get("range", {}).get("start", {})
+        # `x.get("range", {})` is wrong when the KEY IS PRESENT with value `null`
+        # (a resolve diagnostic — no span, matching the self-hosted side's `None`
+        # per this file's own header comment): `dict.get` only falls back to the
+        # default when the key is MISSING, so `range: null` returned `None` here
+        # and crashed on `.get("start", {})`.  No fixture exercised this until
+        # #1269's own regression fixture added a resolve-layer diagnostic to this
+        # corpus for the first time (`or {}`, not the dict.get default).
+        r = (x.get("range") or {}).get("start", {})
         items.append((x["severity"], x["message"], r.get("line"), r.get("character")))
     oracle[base] = items
 
