@@ -1,0 +1,32 @@
+issue: 1305
+what: `backend/private_mangle.mdk`'s ctor-export index (`unitCtorExportEntry` /
+what: `ctorExportEntries`) has a `DNewtype` arm, and `ctorMemberEntry` expands a
+what: `UseMember name True` to that type's constructors -- so the EMITTER maps the
+what: bare spelling `Wrap` to n1305's newtype symbol.  The FRONT END never binds it
+what: there: a newtype's constructor is not importable by any spelling (measured on
+what: `main` with no collision present, both `{NT(..)}` and `{NT, Wrap}` give
+what: `Unbound variable: Wrap`), so resolve/typecheck bind `Wrap` to k1305's arity-2
+what: constructor -- confirmed independently, `w = Wrap 3` reports `w : Int -> KT`.
+what: Hand-derived correct output is `1`.  `medaka check` exits 0 with zero
+what: diagnostics and `medaka run` prints the correct `1`; the BUILT BINARY dies
+what: `E-NONEXHAUSTIVE-MATCH`, because it bound the arity-1 newtype constructor and
+what: `unKT`'s arity-2 pattern matches nothing.  `medaka build` itself exits 0 --
+what: only the executed binary fails.
+cmd: build-run main.mdk
+exit: 1
+control: build-run control.mdk
+why-fixture: run-VERSUS-built-binary divergence, so only `build-run` can see it:
+why-fixture: `check` and `run` are both clean and correct today and would stay so
+why-fixture: forever, pinning nothing.  The pinned exit 1 is the WRONG behaviour --
+why-fixture: when the emitter stops offering a symbol for an unimportable
+why-fixture: constructor (or the front end starts exporting it), the binary will
+why-fixture: print `1` at exit 0 and this row flips GREEN, failing the gate and
+why-fixture: naming the issue to close.
+why-fixture: The control drops `(..)` from the newtype member so the emitter's
+why-fixture: newtype arm has nothing to expand, which is the discriminator: it
+why-fixture: isolates the `(..)` expansion as the cause rather than the collision.
+why-fixture: NOT enrollable in `test/llvm_fixtures_modules/`: that corpus asserts
+why-fixture: eval == native == wasm and this shape is a KNOWN divergence, so it
+why-fixture: would read as a regression of A-2.7 rather than as someone else's open
+why-fixture: bug.  It is also pre-existing -- measured byte-identical on `main`
+why-fixture: `ae39ec41` and on the A-2.7 branch across check / run / build.

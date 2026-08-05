@@ -1,0 +1,14 @@
+-- issue #1305: `private_mangle`'s ctor-export index has a `DNewtype` arm, so the
+-- EMITTER expands `NT(..)` to n1305's `Wrap` and binds the bare spelling to that
+-- symbol.  The front end never does: a newtype's constructor is not importable by
+-- any spelling, so resolve/typecheck bind `Wrap` to k1305's arity-2 constructor
+-- (confirmed independently -- `w = Wrap 3` reports `w : Int -> KT`).
+--
+-- Hand-derived correct output: `1` (`unKT (Wrap 3 4)` = `4 - 3`).  `medaka check`
+-- exits 0, `medaka run` prints the correct `1`, and the BUILT BINARY dies
+-- `E-NONEXHAUSTIVE-MATCH` -- it bound the arity-1 newtype constructor, so `unKT`'s
+-- arity-2 pattern matches nothing.
+import n1305.{NT(..), unNT}
+import k1305.{KT, unKT}
+
+main = println (unKT (Wrap 3 4))

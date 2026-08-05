@@ -1,0 +1,56 @@
+-- #1111 A-2.7 REGRESSION GUARD: the engine's `T(..)` index must not bind a
+-- constructor the FRONT END never puts in scope.
+--
+-- 🚨 THIS FIXTURE EXISTS BECAUSE A-2.7'S FIRST CUT GOT IT WRONG, and the way it got
+-- it wrong is the transferable part.  That cut built the index arm-for-arm against
+-- `eval.collectCtors` — which is deliberately UNFILTERED, because every constructor
+-- a module declares needs a cell whether or not anyone outside can name it.  That
+-- makes it the right peer for "does this cell exist" and the WRONG peer for "may an
+-- import bind this name".  The second is a SCOPE question.
+--
+-- The distinction bites because the import frame OUT-RANKS `globalCells`: an
+-- over-indexed entry does not merely add a name, it SHADOWS the one that was
+-- correctly reached before.  With an unconditional `DNewtype` arm, `NT(..)` bound
+-- nmodv's `Wrap` and shadowed the `Wrap` the front end had actually resolved.
+--
+-- Expected output, derived by hand BEFORE any capture and independently of any
+-- engine: nmodv exports no constructor, so `NT(..)` puts nothing in scope and the
+-- only `Wrap` the front end can bind is kmodv's arity-2 one — `unKT (Wrap 3 4)` =
+-- `4 - 3` = `1`.  Confirmed independently by the typechecker, which reports
+-- `w = Wrap 3` as `w : Int -> KT` in this module.  Then `unNT (mkNT 9)` = `9`,
+-- reached through nmodv's own exported functions, which is the ONLY way its `Wrap`
+-- is reachable at all.  So `1` then `9`.
+--
+-- ⚠️ COUNTERFACTUAL — a regression guard's counterfactual is the BROKEN CUT, not
+-- pristine `main`.  Measured three ways on binaries cold-bootstrapped in one
+-- worktree:
+--   * pristine `main` `ae39ec41`: GREEN, `1`/`9`;
+--   * A-2.7's first cut (unconditional `DNewtype` arm): RED, `run` exit 1,
+--     `E-NOT-A-FUNCTION: applied non-function: Wrap 3`;
+--   * gating that arm on `newtypePub`: STILL RED — `export newtype` sets it, so the
+--     gate is a no-op here.  The arm had to be REMOVED, not filtered.  Recording
+--     this because the obvious fix looks right and is not.
+--
+-- ⚠️ WHY THIS IS NOT IN `test/llvm_fixtures_modules/` LIKE ITS SIBLINGS.  That corpus
+-- runs all three engines, and the NATIVE arm is wrong on this shape on `main`:
+-- `private_mangle`'s ctor-export index DOES have a `DNewtype` arm, so the emitter
+-- binds nmodv's `Wrap` and the built binary dies `E-NONEXHAUSTIVE-MATCH` while
+-- `run` prints the correct `1`.  That is a pre-existing run≠build divergence, filed
+-- separately and pinned in `test/must_fail_fixtures/`; enrolling this shape in a
+-- native gate would pin someone else's open bug as this unit's expectation.  Here
+-- it grades the two INTERPRETER drivers, which is where A-2.7's index lives.
+--
+-- ⚠️ THE CORPUS HAD NO `newtype` AT ALL.  Before this fixture there were zero
+-- `newtype` declarations in `test/eval_modules_fixtures/`,
+-- `test/llvm_fixtures_modules/` or `test/eval_typed_modules_fixtures/`, and zero in
+-- `compiler/`, `stdlib/` and `sqlite/` — so the compiler cannot self-host into the
+-- shape either, and no gate in the tree could fail on it.  Abstract `export data` is
+-- not a substitute: resolve refuses `T(..)` on it LOUDLY (*"exports no constructors
+-- … exported abstractly"*) before any engine is reached, so the newtype is the only
+-- spelling that reaches this index at all.
+import nmodv.{NT(..), mkNT, unNT}
+import kmodv.{KT, unKT}
+
+main =
+  println (unKT (Wrap 3 4))
+  println (unNT (mkNT 9))

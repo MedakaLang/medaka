@@ -1,5 +1,5 @@
 # META
-source_lines=3749
+source_lines=3789
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted eval stage — Stage-1 capstone, port of lib/eval.ml's tree-walking
@@ -42,6 +42,7 @@ import frontend.ast.{
   useMemberLocal,
   qualifiedLocal,
   Decl(..),
+  DataVis(..),
   ifaceIdentity,
 }
 import support.util.{
@@ -3257,22 +3258,61 @@ public export data ModExports v =
 export modExportCells : ModExports v -> List (String, Ref v)
 modExportCells (ModExports cells _) = cells
 
--- type name → the constructors it declares, for one module's decls.  Deliberately
--- matched arm-for-arm with `collectCtors`, which is what allocates the cells this
--- index is used to look up: an index entry `collectCtors` did not allocate would
--- name a cell that does not exist.
+-- type name → the constructors a `T(..)` member of an IMPORT may bind, for one
+-- module's decls.
 --
--- Peer of `backend/private_mangle.unitCtorExportEntry`.  The emitter has had this
--- index since #674 — which is exactly why `medaka build` resolves `import
--- m.{T(..)}` to m's constructors while all three engine drivers did not.
+-- 🚨 THE QUESTION IS "WHAT DOES THE FRONT END PUT IN SCOPE?", NOT "WHAT CELLS
+-- EXIST?", AND MATCHING THE WRONG PEER ALREADY SHIPPED A REGRESSION HERE.  The
+-- first cut of this index was built arm-for-arm against `collectCtors`, on the
+-- reasoning that an entry naming a cell `collectCtors` never allocated would name a
+-- cell that does not exist.  True, and NOT SUFFICIENT: `collectCtors` is
+-- deliberately unfiltered, because every constructor a module declares needs a cell
+-- whether or not anyone outside can name it.  This index answers a SCOPE question.
+--
+-- Necessary-but-not-sufficient bites hard here because the import frame OUT-RANKS
+-- `globalCells`: an over-indexed entry does not merely add a name, it SHADOWS the
+-- one that was correctly reached before.  So the test is not "does the cell exist"
+-- but "would the front end have bound this name here" — and where the answer is no,
+-- binding it turns a working program into a crash.
+--
+-- Both arms below are therefore derived from what the front end was MEASURED to do,
+-- on pristine `main`, not from what a sibling table happens to contain:
+--
+--   * `DData`, `VisPublic` only.  `public export data` puts its constructors in
+--     scope; `export data` is ABSTRACT and refuses loudly — *"'AT' exports no
+--     constructors from module 'absmod' (exported abstractly)"* — and a private
+--     `data` does not export the type at all.  Same gate `resolve.expTypeCtorsDirect`
+--     applies.  Resolve rejects the abstract case before the engine is reached, so
+--     the gate is masked on the typed path — but a mask is not a guarantee, and
+--     `eval_modules_main` does not run resolve at all.
+--
+--   * `DNewtype` — NO ARM, deliberately.  A newtype's constructor is not importable
+--     by ANY spelling today: `import nmod.{NT(..)}` and `import nmod.{NT, Wrap}`
+--     both give `Unbound variable: Wrap`, measured with no collision present, so
+--     this is the plain contract and not a collision artefact.  (Note the surprise:
+--     `export newtype` DOES set `newtypePub`, so gating this arm on `newtypePub`
+--     looks right and changes nothing — that gate was tried and the regression
+--     survived it.  The arm has to go, not be filtered.)
+--     An unconditional arm made `import nmod.{NT(..)}` bind `Wrap` and SHADOW a
+--     sibling module's legitimately-resolved `Wrap`, turning a correct `1` into
+--     `E-NOT-A-FUNCTION`.  Pinned by
+--     `test/eval_modules_fixtures/ctor_type_member_newtype_not_bound/`.
+--
+--   * no `DAttrib` arm, no `DTypeAlias` arm — `expTypeCtorsDirect` has neither.
+--     (An attributed decl thereby contributing nothing is #1228, pinned; this index
+--     inherits that rather than diverging from the scope layer.)
+--
+-- ⚠️ `backend/private_mangle.unitCtorExportEntry` is the SYMBOL-layer peer and it is
+-- NOT a safe model for this one: it filters on reserved-ness rather than scope and
+-- it DOES include `DNewtype`, which is why `medaka build` mis-binds the newtype
+-- shape above where `run` gets it right (filed as #1305 — a pre-existing run≠build
+-- divergence, not this unit's).  Copying the emitter here would have imported that
+-- bug into the interpreters.
 export ctorsByTypeOf : List Decl -> List (String, List String)
 ctorsByTypeOf decls = flatMap ctorNamesOfDecl decls
 
 ctorNamesOfDecl : Decl -> List (String, List String)
-ctorNamesOfDecl (DData { dataName = tyname, dataCtors = variants }) =
-  [(tyname, map variantName variants)]
-ctorNamesOfDecl (DNewtype { newtypeName = tyname, newtypeCtor = con }) =
-  [(tyname, [con])]
+ctorNamesOfDecl (DData { dataVis = VisPublic, dataName = tyname, dataCtors = variants }) = [(tyname, map variantName variants)]
 ctorNamesOfDecl _ = []
 
 -- value names a DUse binds, resolved to the exporting module's exported cells
@@ -3752,7 +3792,7 @@ export evalOneRootEnvWith : List (String, Value e) -> List Decl -> (String, List
 evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
   evalModulesRootEnvWith extraExterns preludeDecls [(rootId, prog)]
 # DESUGAR
-(DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Lit" true) (mem "Ty" true) (mem "Addr" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "FieldAssign" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "Route" true) (mem "ConPayload" true) (mem "Field" true) (mem "Variant" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "qualifiedLocal" false) (mem "Decl" true) (mem "ifaceIdentity" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Lit" true) (mem "Ty" true) (mem "Addr" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "FieldAssign" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "Route" true) (mem "ConPayload" true) (mem "Field" true) (mem "Variant" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "qualifiedLocal" false) (mem "Decl" true) (mem "DataVis" true) (mem "ifaceIdentity" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "reverseL" false) (mem "anyList" false) (mem "lookupAssoc" false) (mem "joinWith" false) (mem "fallthroughName" false) (mem "noneHeadTag" false) (mem "isEmptyL" false) (mem "filterList" false) (mem "initList" false) (mem "mapOption" false) (mem "joinDot" false) (mem "dedup" false) (mem "escStr" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Diag" true) (mem "Severity" true) (mem "cjAllToJson" false))))
 (DUse false (UseGroup ("bits64") ((mem "add64" false) (mem "sub64" false) (mem "mulLow64" false) (mem "xor64" false) (mem "shr64" false) (mem "mod64" false) (mem "ofInt" false) (mem "isZero" false) (mem "limbAt" false))))
@@ -5055,8 +5095,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DTypeSig true "ctorsByTypeOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "ctorsByTypeOf" ((PVar "decls")) (EApp (EApp (EVar "flatMap") (EVar "ctorNamesOfDecl")) (EVar "decls")))
 (DTypeSig false "ctorNamesOfDecl" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "ctorNamesOfDecl" ((PRec "DData" ((rf "dataName" (PVar "tyname")) (rf "dataCtors" (PVar "variants"))) false)) (EListLit (ETuple (EVar "tyname") (EApp (EApp (EVar "map") (EVar "variantName")) (EVar "variants")))))
-(DFunDef false "ctorNamesOfDecl" ((PRec "DNewtype" ((rf "newtypeName" (PVar "tyname")) (rf "newtypeCtor" (PVar "con"))) false)) (EListLit (ETuple (EVar "tyname") (EListLit (EVar "con")))))
+(DFunDef false "ctorNamesOfDecl" ((PRec "DData" ((rf "dataVis" (PCon "VisPublic")) (rf "dataName" (PVar "tyname")) (rf "dataCtors" (PVar "variants"))) false)) (EListLit (ETuple (EVar "tyname") (EApp (EApp (EVar "map") (EVar "variantName")) (EVar "variants")))))
 (DFunDef false "ctorNamesOfDecl" (PWild) (EListLit))
 (DTypeSig true "importFrameOf" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "ModExports") (TyApp (TyCon "Value") (TyVar "e"))))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e"))))))))
 (DFunDef false "importFrameOf" ((PVar "exportsMap") (PVar "decls")) (EApp (EApp (EVar "flatMap") (EApp (EVar "useImports") (EVar "exportsMap"))) (EVar "decls")))
@@ -5216,7 +5255,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DTypeSig true "evalOneRootEnvWith" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))))))))
 (DFunDef false "evalOneRootEnvWith" ((PVar "extraExterns") (PVar "preludeDecls") (PTuple (PVar "rootId") (PVar "prog"))) (EApp (EApp (EApp (EVar "evalModulesRootEnvWith") (EVar "extraExterns")) (EVar "preludeDecls")) (EListLit (ETuple (EVar "rootId") (EVar "prog")))))
 # MARK
-(DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Lit" true) (mem "Ty" true) (mem "Addr" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "FieldAssign" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "Route" true) (mem "ConPayload" true) (mem "Field" true) (mem "Variant" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "qualifiedLocal" false) (mem "Decl" true) (mem "ifaceIdentity" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Lit" true) (mem "Ty" true) (mem "Addr" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "FieldAssign" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "Route" true) (mem "ConPayload" true) (mem "Field" true) (mem "Variant" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "qualifiedLocal" false) (mem "Decl" true) (mem "DataVis" true) (mem "ifaceIdentity" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "reverseL" false) (mem "anyList" false) (mem "lookupAssoc" false) (mem "joinWith" false) (mem "fallthroughName" false) (mem "noneHeadTag" false) (mem "isEmptyL" false) (mem "filterList" false) (mem "initList" false) (mem "mapOption" false) (mem "joinDot" false) (mem "dedup" false) (mem "escStr" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Diag" true) (mem "Severity" true) (mem "cjAllToJson" false))))
 (DUse false (UseGroup ("bits64") ((mem "add64" false) (mem "sub64" false) (mem "mulLow64" false) (mem "xor64" false) (mem "shr64" false) (mem "mod64" false) (mem "ofInt" false) (mem "isZero" false) (mem "limbAt" false))))
@@ -6519,8 +6558,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DTypeSig true "ctorsByTypeOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "ctorsByTypeOf" ((PVar "decls")) (EApp (EApp (EDictApp "flatMap") (EVar "ctorNamesOfDecl")) (EVar "decls")))
 (DTypeSig false "ctorNamesOfDecl" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "ctorNamesOfDecl" ((PRec "DData" ((rf "dataName" (PVar "tyname")) (rf "dataCtors" (PVar "variants"))) false)) (EListLit (ETuple (EVar "tyname") (EApp (EApp (EMethodRef "map") (EVar "variantName")) (EVar "variants")))))
-(DFunDef false "ctorNamesOfDecl" ((PRec "DNewtype" ((rf "newtypeName" (PVar "tyname")) (rf "newtypeCtor" (PVar "con"))) false)) (EListLit (ETuple (EVar "tyname") (EListLit (EVar "con")))))
+(DFunDef false "ctorNamesOfDecl" ((PRec "DData" ((rf "dataVis" (PCon "VisPublic")) (rf "dataName" (PVar "tyname")) (rf "dataCtors" (PVar "variants"))) false)) (EListLit (ETuple (EVar "tyname") (EApp (EApp (EMethodRef "map") (EVar "variantName")) (EVar "variants")))))
 (DFunDef false "ctorNamesOfDecl" (PWild) (EListLit))
 (DTypeSig true "importFrameOf" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "ModExports") (TyApp (TyCon "Value") (TyVar "e"))))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e"))))))))
 (DFunDef false "importFrameOf" ((PVar "exportsMap") (PVar "decls")) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "useImports") (EVar "exportsMap"))) (EVar "decls")))

@@ -38,6 +38,7 @@ import frontend.ast.{
   useMemberLocal,
   qualifiedLocal,
   Decl(..),
+  DataVis(..),
   ifaceIdentity,
 }
 import support.util.{
@@ -3253,22 +3254,61 @@ public export data ModExports v =
 export modExportCells : ModExports v -> List (String, Ref v)
 modExportCells (ModExports cells _) = cells
 
--- type name → the constructors it declares, for one module's decls.  Deliberately
--- matched arm-for-arm with `collectCtors`, which is what allocates the cells this
--- index is used to look up: an index entry `collectCtors` did not allocate would
--- name a cell that does not exist.
+-- type name → the constructors a `T(..)` member of an IMPORT may bind, for one
+-- module's decls.
 --
--- Peer of `backend/private_mangle.unitCtorExportEntry`.  The emitter has had this
--- index since #674 — which is exactly why `medaka build` resolves `import
--- m.{T(..)}` to m's constructors while all three engine drivers did not.
+-- 🚨 THE QUESTION IS "WHAT DOES THE FRONT END PUT IN SCOPE?", NOT "WHAT CELLS
+-- EXIST?", AND MATCHING THE WRONG PEER ALREADY SHIPPED A REGRESSION HERE.  The
+-- first cut of this index was built arm-for-arm against `collectCtors`, on the
+-- reasoning that an entry naming a cell `collectCtors` never allocated would name a
+-- cell that does not exist.  True, and NOT SUFFICIENT: `collectCtors` is
+-- deliberately unfiltered, because every constructor a module declares needs a cell
+-- whether or not anyone outside can name it.  This index answers a SCOPE question.
+--
+-- Necessary-but-not-sufficient bites hard here because the import frame OUT-RANKS
+-- `globalCells`: an over-indexed entry does not merely add a name, it SHADOWS the
+-- one that was correctly reached before.  So the test is not "does the cell exist"
+-- but "would the front end have bound this name here" — and where the answer is no,
+-- binding it turns a working program into a crash.
+--
+-- Both arms below are therefore derived from what the front end was MEASURED to do,
+-- on pristine `main`, not from what a sibling table happens to contain:
+--
+--   * `DData`, `VisPublic` only.  `public export data` puts its constructors in
+--     scope; `export data` is ABSTRACT and refuses loudly — *"'AT' exports no
+--     constructors from module 'absmod' (exported abstractly)"* — and a private
+--     `data` does not export the type at all.  Same gate `resolve.expTypeCtorsDirect`
+--     applies.  Resolve rejects the abstract case before the engine is reached, so
+--     the gate is masked on the typed path — but a mask is not a guarantee, and
+--     `eval_modules_main` does not run resolve at all.
+--
+--   * `DNewtype` — NO ARM, deliberately.  A newtype's constructor is not importable
+--     by ANY spelling today: `import nmod.{NT(..)}` and `import nmod.{NT, Wrap}`
+--     both give `Unbound variable: Wrap`, measured with no collision present, so
+--     this is the plain contract and not a collision artefact.  (Note the surprise:
+--     `export newtype` DOES set `newtypePub`, so gating this arm on `newtypePub`
+--     looks right and changes nothing — that gate was tried and the regression
+--     survived it.  The arm has to go, not be filtered.)
+--     An unconditional arm made `import nmod.{NT(..)}` bind `Wrap` and SHADOW a
+--     sibling module's legitimately-resolved `Wrap`, turning a correct `1` into
+--     `E-NOT-A-FUNCTION`.  Pinned by
+--     `test/eval_modules_fixtures/ctor_type_member_newtype_not_bound/`.
+--
+--   * no `DAttrib` arm, no `DTypeAlias` arm — `expTypeCtorsDirect` has neither.
+--     (An attributed decl thereby contributing nothing is #1228, pinned; this index
+--     inherits that rather than diverging from the scope layer.)
+--
+-- ⚠️ `backend/private_mangle.unitCtorExportEntry` is the SYMBOL-layer peer and it is
+-- NOT a safe model for this one: it filters on reserved-ness rather than scope and
+-- it DOES include `DNewtype`, which is why `medaka build` mis-binds the newtype
+-- shape above where `run` gets it right (filed as #1305 — a pre-existing run≠build
+-- divergence, not this unit's).  Copying the emitter here would have imported that
+-- bug into the interpreters.
 export ctorsByTypeOf : List Decl -> List (String, List String)
 ctorsByTypeOf decls = flatMap ctorNamesOfDecl decls
 
 ctorNamesOfDecl : Decl -> List (String, List String)
-ctorNamesOfDecl (DData { dataName = tyname, dataCtors = variants }) =
-  [(tyname, map variantName variants)]
-ctorNamesOfDecl (DNewtype { newtypeName = tyname, newtypeCtor = con }) =
-  [(tyname, [con])]
+ctorNamesOfDecl (DData { dataVis = VisPublic, dataName = tyname, dataCtors = variants }) = [(tyname, map variantName variants)]
 ctorNamesOfDecl _ = []
 
 -- value names a DUse binds, resolved to the exporting module's exported cells

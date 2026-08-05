@@ -30,6 +30,14 @@
 -- mechanism must not reach — and unlike `ctor_scope_type_member_per_module/`, both
 -- sides of the counterfactual are green, so "unrelated code still behaves" is
 -- observable here rather than inferred.
+--
+-- ⚠️ IT DOES NOT COVER THE WHOLE OVER-BINDING FAMILY, and A-2.7 shipped a second
+-- member of that family past this fixture.  What this one detects is binding the
+-- WRONG TYPE'S constructors from the right module.  It is blind to binding the
+-- RIGHT type's constructor from a decl the exporting module does not EXPORT —
+-- `ctor_scope_type_member_newtype_vis/` is the cell for that, and it went red on a
+-- cut this fixture passed.  Over-binding is a family: "which decl?" and "is it
+-- exported?" are separate gates and need separate cells.
 import omodn.{OT(..), unOT}
 import pmodn.{PU, Wid, unPU}
 
