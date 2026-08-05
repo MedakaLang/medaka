@@ -1,0 +1,4 @@
+-- #1111 Stage A-2 unit A-2.5b (#1272 / #1275): half two.  Its `msmth` is the one
+-- the entry actually reaches, through the re-exporter `msmid`.
+export interface MSIB a where
+  msmth : a -> Int

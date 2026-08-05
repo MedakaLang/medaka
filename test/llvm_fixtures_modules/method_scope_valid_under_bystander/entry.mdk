@@ -1,0 +1,30 @@
+-- #1111 A-2.5b (#1275) — THE SEVERITY-MIRROR ACCEPT CELL: a VALID program that the
+-- pre-fix compiler REJECTED.  `exit 1 → exit 0` is the transition AGENTS.md warns is
+-- untested by construction (every pre-existing fixture covered the rejecting case),
+-- so this asserts the RUNTIME VALUE, on all three engines, not just silence.
+--
+-- EXPECTED VALUE DERIVED BY HAND from the language semantics, not captured from an
+-- engine: `msmth` reaches this module only through `msmid`, which re-exports
+-- `msifb`'s, so the occurrence means `MSIB.msmth`.  This module implements exactly
+-- that interface (`MSIB` is the name `msmid` re-exports; `msbys`'s same-named `MSIB`
+-- is not in scope here at all).  The program is well typed and must print `B`.
+--
+-- 🚨 BEFORE A-2.5b this was REJECTED, `No impl of MSIA for Blob` — a FALSE REJECT of
+-- a valid program, citing an interface the call never names, caused entirely by the
+-- bystander `msbys`.  Rename `msbys`'s interface to `MSIZ` and the PRE-FIX compiler
+-- accepted this same file: that one identifier, in a module this entry neither
+-- imports nor mentions, was the whole difference.  Measured on `main` @ ae39ec41.
+--
+-- Its rejecting mirrors are `analyze_project_fixtures/1275_bystander_iface_name_
+-- method_scope` (same graph, impl on the WRONG interface — must still reject) and
+-- `.../1275_genuine_error_under_bystander` (no impl at all — must still reject).
+import msmid.{MSIB, msmth}
+import msifa.{MSIA}
+
+data Blob = Blob
+
+impl MSIB Blob where
+  msmth _ = "B"
+
+main : <IO> Unit
+main = putStrLn (msmth Blob)

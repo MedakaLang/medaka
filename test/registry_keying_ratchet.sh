@@ -162,8 +162,8 @@ body_of() {
 # ⚠️ DERIVED, NOT TRUSTED: CrossRun's own comments -- `grep -n 'cross-module
 # accumulators\|field-Refs fresh' compiler/types/typecheck.mdk` finds all four
 # -- say "22" or "23" cross-module accumulators. Extracting the record's actual
-# field block gives 26 (re-derived after A-2.5 added universeMethodIdentsRef /
-# universeMethodCollidedRef) -- the comments are stale by three or four fields
+# field block gives 27 (re-derived after A-2.5b added universeMethodExportsRef;
+# it was 26 after A-2.5) -- the comments are stale by four or five fields
 # apiece. Trust the extraction; the comments are prose, not a gate.
 # (DriverState's own "~18 RESIDUAL survivor Refs" comment DOES match its actual
 # field count of 18.)
@@ -176,6 +176,7 @@ universeIfaceRequiredRef -- accumulated iface -> required-method-names map (impl
 universeMethodIfaceParamsRef -- accumulated method -> iface param map (#822 kind universe, iface half); still BARE-NAME-keyed and last-write-wins, but since A-2.5 it is only the FLOOR: the Module arm installs it OVERLAID per module by applyMethodScopeOverrides, so a name two interfaces both declare is decided by the importing module scope, not by registration order (#1092)
 universeMethodIdentsRef -- A-2.5: the IDENTITY-KEYED companion of the line above -- every (declaring module, method name) declaration of each method name, so a bare-name collision keeps BOTH rows instead of losing one to last-write-wins. Module-path-only: a flat/unstamped declaration mints no Ident (#1115 / E-1)
 universeMethodCollidedRef -- A-2.5: the method NAMES universeMethodIdentsRef holds >=2 distinct identities for. Normally EMPTY; it is what keeps the per-module overlay O(collisions) instead of O(all methods)
+universeMethodExportsRef -- A-2.5b (#1272/#1275): module id -> the (exported name, declaring Ident) method pairs a module puts in scope, re-exports folded in dependency-first. It is the thing A-2.5s witness (b) should have asked instead of comparing a bare interface NAME. NOT a bare-name-keyed cross-module table in the sense this ratchet pins: the OUTER key is the loader module id (a scope, the thing whose absence makes a table collide), and the VALUE carries identity -- a same-named interface in another module gets its own row under its own mid and its own Ident, which is exactly the collapse being removed. Built ONCE per compile by graphMethodExports at the two Module-mode driver preambles; never grown per module
 universeRegisteredIfacesRef -- accumulated registered-iface set, paired with universeMethodIfaceParamsRef above. STILL BARE-NAME, DELIBERATELY: A-2.4 examined it and declined, A-2.2b re-derived the same answer. The value is Unit, so a collapse selects no row; all three readers (recordIfaceObligation / inferNumLit / checkOneCallObligation, via ifaceRegistered) pass a LITERAL prelude name with no TyConOrigin to key from -- an identity key would answer False everywhere and silently switch every operator obligation off; and what it gates is the obligation channel, whose iface half is a bare TkBare NsIface (A-2.2b replaced the "<iface>|<tag>" splice with a RegKey but did NOT make that half an identity -- oblIfaceKey). Full derivation on ifaceRegistered in typecheck.mdk. Revisit WITH the obligation channel, not before
 universeMethodDispatchIdxRef -- accumulated interface dispatch-index list
 universeRecordByName -- accumulated record name -> RecordInfo map

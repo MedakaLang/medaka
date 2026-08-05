@@ -1,2 +1,0 @@
--- issue #1275: the RE-EXPORTER. main.mdk reaches `MB`/`mth` only through here.
-export import ifaceb.{MB, mth}

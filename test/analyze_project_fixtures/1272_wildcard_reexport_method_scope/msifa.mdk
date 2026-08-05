@@ -1,0 +1,4 @@
+-- #1111 Stage A-2 unit A-2.5b (#1272 / #1275): half one of the bare-METHOD-NAME
+-- collision.  `main` never imports this module's `mth` — only its INTERFACE name.
+export interface MSIA a where
+  msmth : a -> Int
