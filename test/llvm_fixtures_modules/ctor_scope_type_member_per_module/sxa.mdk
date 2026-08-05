@@ -1,0 +1,5 @@
+-- `Pin` at arity 1.
+public export data SA = Pin Int
+
+export unSA : SA -> Int
+unSA (Pin n) = n

@@ -1,0 +1,5 @@
+-- `Pin` at arity 2 — the same spelling as sxa's, a different declaration.
+public export data SB = Pin Int Int
+
+export unSB : SB -> Int
+unSB (Pin a b) = a * b

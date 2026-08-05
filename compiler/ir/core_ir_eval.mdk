@@ -87,6 +87,9 @@ import eval.eval.{
   methodCellsOf,
   importFrameOf,
   pubReexports,
+  ModExports(..),
+  modExportCells,
+  ctorsByTypeOf,
   evalVariantUpdate,
   buildCtorFieldOrders,
   ctorFieldOrdersRef,
@@ -535,7 +538,7 @@ cevalModules preludeDecls modules =
   let globalNames = map fst boolSeeds ++ map fst (externBindings ()) ++ map fst ctors ++ implMethodNames allDecls ++ map cBindName preludeGroups
   let globalCells = map (n => (n, Ref VUnit)) globalNames
   let globalEnv = EvalEnv [globalCells]
-  let mods = cBuildModInfos disp globalCells [] modules
+  let mods = cBuildModInfos disp (ModExports globalCells (ctorsByTypeOf preludeDecls)) [] modules
   let implEntries = flatMap (cImplEntryValues globalEnv) preludeImpls ++ flatMap cModImplValues mods
   let _ = installConsts globalCells boolSeeds
   let _ = installConsts globalCells (externBindings ())
@@ -548,9 +551,10 @@ cevalModules preludeDecls modules =
 -- pass 1: lower + allocate each module's local cells and build its env (imports
 -- resolved against already-processed modules, since loader order is
 -- dependency-first).  Mirror of eval.mdk's buildModInfos, lowering groups/impls.
-cBuildModInfos : List ((String, String), List Int) -> List (String, Ref (Value e)) -> List (String, List (String, Ref (Value e))) -> List (String, List Decl) -> List (CModInfo (Value e))
+cBuildModInfos : List ((String, String), List Int) -> ModExports (Value e) -> List (String, ModExports (Value e)) -> List (String, List Decl) -> List (CModInfo (Value e))
 cBuildModInfos _ _ _ [] = []
-cBuildModInfos disp globalCells exportsMap ((mid, decls)::rest) =
+cBuildModInfos disp coreExports exportsMap ((mid, decls)::rest) =
+  let globalCells = modExportCells coreExports
   let cbinds = lowerGroups decls
   let cimpls = lowerImplsWith disp decls
   -- P0-9 (Core-IR port of the eval.mdk fix): each module's OWN constructors ALSO
@@ -571,8 +575,12 @@ cBuildModInfos disp globalCells exportsMap ((mid, decls)::rest) =
   -- cell.  Methods are global-by-name and so appear in no module's localCells; without
   -- this, an ALIASED method import binds to nothing, while an un-aliased one silently
   -- works by falling through to the global frame under its unchanged name.
-  let exports = localCells ++ methodCellsOf globalCells decls ++ pubReexports globalCells exportsMap decls
-  CModInfo mid decls cbinds cimpls localCells menv :: cBuildModInfos disp globalCells ((mid, exports)::exportsMap) rest
+  -- `T(..)` CTOR EXPANSION (Core-IR port of the eval.mdk fix — same lockstep rule):
+  -- the type→ctors index rides WITH the cells in one `ModExports` so an importing
+  -- module's `import m.{T(..)}` binds m's own constructor cells instead of falling
+  -- through to the bare-name global frame, which every module's ctors share.
+  let exports = ModExports (localCells ++ methodCellsOf globalCells decls ++ pubReexports coreExports exportsMap decls) (ctorsByTypeOf decls)
+  CModInfo mid decls cbinds cimpls localCells menv :: cBuildModInfos disp coreExports ((mid, exports)::exportsMap) rest
 
 -- a module's impl methods / interface defaults close over ITS env but coalesce
 -- into the shared global VMulti (mirror of eval.mdk's modImplEntries)

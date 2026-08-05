@@ -1,0 +1,5 @@
+-- Consumer A: `Pin` here must mean sxa's arity-1 one.
+import sxa.{SA(..), unSA}
+
+export ra : Int
+ra = unSA (Pin 7)

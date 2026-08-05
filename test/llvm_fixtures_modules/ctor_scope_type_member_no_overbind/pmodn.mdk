@@ -1,0 +1,5 @@
+-- The `Wid` `entry.mdk` really imports: same spelling as omodn's, arity 2.
+public export data PU = Wid Int Int
+
+export unPU : PU -> Int
+unPU (Wid a b) = a + b

@@ -1,0 +1,10 @@
+-- A second module declaring a `Crate` at a DIFFERENT arity.  The entry never brings
+-- THIS one into scope; it only shares the whole-graph, bare-name-keyed global frame
+-- with it.
+public export data EB = Crate Int Int
+
+export ebv : EB
+ebv = Crate 8 2
+
+export unEB : EB -> Int
+unEB (Crate a b) = a - b

@@ -1,0 +1,29 @@
+-- #1111 A-2.7 OVER-BINDING GUARD: `import m.{T(..)}` binds the constructors of
+-- `T`, and no others of `m`.
+--
+-- The cheap way to make a `(..)` member bind something is to hand it every
+-- constructor the exporting module has.  That is wrong, and this program is where
+-- it shows: the import frame is scanned FIRST-match in source order, so an
+-- over-binding `omodn.{OT(..)}` clause would put omodn's arity-1 `Wid` ahead of the
+-- arity-2 `Wid` the next clause imports by name, and `Wid 1 2` would build a
+-- partial application instead of a `PU`.
+--
+-- The clause ORDER is the trigger and must not be "tidied": omodn must be first.
+--
+-- Expected output, derived by hand BEFORE any capture and independently of any
+-- engine: `unOT (Zed 4)` = `4`; `unPU (Wid 1 2)` = `1 + 2` = `3`.  So `4` then `3`.
+--
+-- ⚠️ THIS FIXTURE IS GREEN ON PRISTINE `main` TOO, and that is stated rather than
+-- hidden: before A-2.7 the `(..)` member bound nothing at all, so it could not
+-- over-bind.  Its counterfactual is therefore a MUTATION of the fix, not a revert —
+-- `memberCells`'s `(..)` arm made to bind every constructor of the exporting
+-- module.  That mutation is measured RED in the PR body.  Do not cite this fixture
+-- as evidence that A-2.7 changed anything; cite it as the thing that fails if the
+-- next edit widens the rule.
+import omodn.{OT(..), unOT}
+import pmodn.{PU, Wid, unPU}
+
+main : <IO> Unit
+main =
+  let _ = putStrLn (intToString (unOT (Zed 4)))
+  putStrLn (intToString (unPU (Wid 1 2)))

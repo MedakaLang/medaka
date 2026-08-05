@@ -1,0 +1,28 @@
+-- #1111 A-2.7: the same drain as
+-- `test/llvm_fixtures_modules/ctor_scope_type_member_arity/`, enrolled HERE because
+-- this corpus is the one that grades the two INTERPRETER module drivers directly:
+-- `diff_compiler_eval_modules.sh` runs `eval.evalModules` (untyped) and
+-- `diff_compiler_core_ir_modules.sh` runs `ir.core_ir_eval.cevalModules` over the
+-- very same directory.  Those are the two parallel drivers AGENTS.md requires be
+-- fixed in lockstep, and this fixture is what makes a one-sided fix red.
+--
+-- `import eamod.{EA(..)}` must bind eamod's `Crate` into this module's import
+-- frame.  Before A-2.7 a `(..)` member bound nothing — the frame binds a member by
+-- looking its ORIGIN name up in the exporting module's cells, and `EA` is a TYPE,
+-- which has no cell — so `Crate` fell through to `globalCells`, which is keyed by
+-- BARE name across every module's decls and holds whichever `Crate` registered
+-- last.
+--
+-- Expected output, derived by hand BEFORE any capture and independently of any
+-- engine: `Crate 5` is eamod's, so `unEA (Crate 5)` = `5`; `ebv` is ebmod's
+-- `Crate 8 2` and `unEB (Crate a b) = a - b` = `8 - 2` = `6`.  So `5` then `6`.
+--
+-- ⚠️ Measured on pristine `main` `ae39ec41`, BOTH drivers died
+-- `E-NONEXHAUSTIVE-MATCH` on this program while `medaka build` printed the right
+-- answers — the eval-vs-native divergence A-2.7 closes.
+import eamod.{EA(..), unEA}
+import ebmod.{EB, ebv, unEB}
+
+main =
+  println (unEA (Crate 5))
+  println (unEB ebv)

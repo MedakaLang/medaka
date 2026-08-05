@@ -1,0 +1,34 @@
+-- #1111 A-2.7 SCOPE PROOF: the fix must be keyed PER MODULE, and this is the
+-- program that observes a collision if it is not.
+--
+-- Two consumers with no import relationship, `usea` and `useb`, each write the bare
+-- spelling `Pin`.  They must mean DIFFERENT declarations — sxa's arity-1 `Pin` and
+-- sxb's arity-2 `Pin` — and each consumer reaches its own only through its own
+-- `T(..)` member.  A binding built once for the whole program instead of once per
+-- importing module can satisfy at most one of them, whichever registration wins,
+-- so "it is keyed per module" is asserted by a running program here rather than by
+-- a comment.
+--
+-- The third line is a genuine BYSTANDER: `bystand.mdk` imports nothing, declares no
+-- colliding name, and only supplies a number.  It is here because a frame-keying
+-- change is a program-global-table change, whose signature failure is that the
+-- feature works and something unrelated breaks.
+--
+-- Expected output, derived by hand BEFORE any capture and independently of any
+-- engine: `ra` = `unSA (Pin 7)` = `7`; `rb` = `unSB (Pin 2 3)` = `2 * 3` = `6`;
+-- `bys` = `6 + 5` = `11`.  So `7`, `6`, `11`.
+--
+-- ⚠️ COUNTERFACTUAL, measured on a MEDAKA_STRICT=1 binary built from pristine
+-- `main` `ae39ec41` (which IS "A-2.7 removed" — this branch has merged everything
+-- else in `main`): RED.  Both `Pin` spellings fell through to the one bare-name
+-- global cell, so exactly one consumer got the other's constructor.  Recorded in
+-- the PR body with the exact engine output.
+import usea.{ra}
+import useb.{rb}
+import bystand.{bys}
+
+main : <IO> Unit
+main =
+  let _ = putStrLn (intToString ra)
+  let _ = putStrLn (intToString rb)
+  putStrLn (intToString bys)
