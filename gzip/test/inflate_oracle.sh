@@ -53,6 +53,16 @@ fail=0
 ok()   { pass=$((pass + 1)); echo "ok   $1"; }
 bad()  { fail=$((fail + 1)); echo "FAIL $1"; }
 
+# Portable timeout. NOT coreutils `timeout` — macOS has no such binary, and
+# every build/test script here must run on Linux AND macOS (nothing enforces
+# that: all 11 CI jobs are ubuntu-latest, so a macOS-only break ships green).
+# Same shim as test/diff_compiler_engines.sh:215.
+#
+# ⚠️ Expiry code differs from coreutils: the shim is killed by SIGALRM and the
+# shell reports 128+14 = 142, where `timeout` would report 124. Real exit codes
+# pass through unchanged (measured: expiry 142, success 0, `exit 3` -> 3).
+run_t() { perl -e 'alarm shift; exec @ARGV' "$@"; }
+
 # The first DEFLATE block's BTYPE (0/1/2/3), robust to gzip header
 # variations (FEXTRA/FNAME/FCOMMENT/FHCRC) that a fixed byte-10 offset
 # would get wrong on a real-world `.gz` not produced with `-n`.
@@ -98,9 +108,9 @@ check_stored() {
   # Under `timeout` like the error paths: a decompressor that loops on VALID
   # input is just as much a defect, and an unbounded success path would hang
   # this gate rather than fail it.
-  timeout 60 "$BIN" "$TMP/in.gz" "$TMP/out.bin" >/dev/null 2>&1
+  run_t 60 "$BIN" "$TMP/in.gz" "$TMP/out.bin" >/dev/null 2>&1
   rc=$?
-  if [ "$rc" -eq 124 ]; then
+  if [ "$rc" -eq 142 ]; then
     bad "$desc — HUNG on a VALID stored stream"
     return
   elif [ "$rc" -ne 0 ]; then
@@ -132,9 +142,9 @@ check_fixed() {
     return
   fi
 
-  timeout 60 "$BIN" "$TMP/fx.gz" "$TMP/fx.out" >/dev/null 2>&1
+  run_t 60 "$BIN" "$TMP/fx.gz" "$TMP/fx.out" >/dev/null 2>&1
   rc=$?
-  if [ "$rc" -eq 124 ]; then
+  if [ "$rc" -eq 142 ]; then
     bad "$desc (level $level) — HUNG on a VALID fixed-Huffman stream"
     return
   elif [ "$rc" -ne 0 ]; then
@@ -159,9 +169,9 @@ check_dynamic_fail() {
     bad "$desc — oracle produced BTYPE=$bt, not dynamic Huffman; this gate tested nothing"
     return
   fi
-  out=$(timeout 30 "$BIN" "$gz" "$TMP/never.bin" 2>&1)
+  out=$(run_t 30 "$BIN" "$gz" "$TMP/never.bin" 2>&1)
   rc=$?
-  if [ "$rc" -eq 124 ]; then
+  if [ "$rc" -eq 142 ]; then
     bad "$desc — HUNG (timed out); a decompressor must not loop on bad/unimplemented input"
   elif [ "$rc" -eq 0 ]; then
     bad "$desc — exited 0; expected the Phase-3 dynamic-Huffman error"
@@ -231,9 +241,9 @@ fi
 # --- error paths: must fail cleanly, never hang, never emit garbage ----------
 expect_fail() {
   desc="$1"; file="$2"; want="$3"
-  out=$(timeout 30 "$BIN" "$file" "$TMP/never.bin" 2>&1)
+  out=$(run_t 30 "$BIN" "$file" "$TMP/never.bin" 2>&1)
   rc=$?
-  if [ "$rc" -eq 124 ]; then
+  if [ "$rc" -eq 142 ]; then
     bad "$desc — HUNG (timed out); a decompressor must not loop on bad input"
   elif [ "$rc" -eq 0 ]; then
     bad "$desc — exited 0; expected a non-zero exit and an error"
