@@ -13767,29 +13767,66 @@ headCollides table name hd = countHead table name hd > 1
 -- `KeyEntry`'s head field to an `Option HeadKey` and left the retest as `hd2 == hd`
 -- — `deriving Eq`, hence an IDENTITY comparison — which is strictly stronger than
 -- the bucket being scanned and answers False wherever the two entries' ORIGINS
--- differ.  That is not hypothetical: on
--- `test/must_fail_fixtures/1277-xmod-head-spelling-collision-across-ifaces` the
--- identity form counts 1 where the spelling form (and every pre-A-2.2b binary)
--- counts 2, measured with a build instrumented to panic when the two disagree.
+-- differ.  That is not hypothetical: on #1277's three-module repro the identity
+-- form counts 1 where the spelling form (and every pre-A-2.2b binary) counts 2,
+-- measured with a build instrumented to panic when the two disagree.  ⚠️ This
+-- line used to cite
+-- `test/must_fail_fixtures/1277-xmod-head-spelling-collision-across-ifaces`; that
+-- directory NO LONGER EXISTS.  A-2.10 drained the pin, and a drained must-fail
+-- leaves no regression test behind, so the shape's assertion moved into
+-- `test/diff_compiler_check_cli_modules.sh` (the `#1277, DRAINED BY A-2.10` block).
 --
 -- Why it MATTERS even though no gate moved: `headCollides` / `headCollidesByIface`
 -- going False where they were True makes `keyForSite` / `keyForSiteByIface` stamp
 -- the BARE HEAD WORD instead of the winner's canonical key, while
 -- `core_ir_lower.declRouteKey` derives the impl's own word from a spelling-based
 -- uniqueness test.  That is a dict-word skew — by `keyForSite`'s own #1128 note,
--- "invisible on the direct-call path … and live on the RDict path".  It is LATENT
--- today because the one shape known to reach it, #1277's, is itself an open S0
--- that swamps the difference — and it goes live the moment #1277 is fixed, at
--- which point the code looks correct and nothing in the corpus is watching.
+-- "invisible on the direct-call path … and live on the RDict path".
 --
--- ⚠️ "THE ONE SHAPE KNOWN TO REACH IT" IS A WITNESS, NOT A CENSUS.  What was
--- actually run: this file rebuilt with the retest reverted to the identity form
+-- 🚨 NO LONGER LATENT, AND NO LONGER A PREDICTION — MEASURED, #1317.  This
+-- paragraph used to end "it is LATENT today because the one shape known to reach
+-- it, #1277's, is itself an open S0 that swamps the difference — and it goes live
+-- the moment #1277 is fixed, at which point the code looks correct and nothing in
+-- the corpus is watching."  ⚠️ #1277 IS FIXED — CLOSED, drained by A-2.10, whose
+-- permanent acceptance legs are `A-2.10/1277-xmod-head-spelling-{run,build}` in
+-- `test/diff_compiler_check_cli_modules.sh`.  So the swamping is gone and the
+-- warning has come due; the sentence above stayed true right up until it wasn't,
+-- which is why it is quoted here rather than deleted.
+--
+-- What #1317's scoping pass actually ran, on a cold-built `MEDAKA_STRICT=1`
+-- binary at `7bf3165e`: THREE separate builds of this tree, probed against
+-- #1277's own three-module repro.  Changing NOTHING but the two counting scans'
+-- retest to the identity form — this bucket, `implExistsForHead` and BOTH
+-- `ImplUniverse` tables all left spelling-keyed — turned `(1, 2)` into `(1, 1)`.
+-- A valid program, exit 0, wrong answer, no diagnostic: #1277's own S0, back.
+-- Moving all of `dispHeadTab` reproduces it identically; moving ONLY the
+-- `ImplUniverse`/obligation half (`insertUnivImpl`, `univConcreteBucket`,
+-- `oblKeyParts`) does NOT — so the cause is isolated to these two scans.
+--
+-- ⇒ AND THE FIX IS NOT MORE SUPPLY.  `headCollides` does not ask "are these two
+-- heads the same type"; it asks "is the ROUTE WORD `keyForSite` is about to stamp
+-- ambiguous at run time".  Route words are bare names by construction and three
+-- engines re-derive that same uniqueness test from a bare `String` tag —
+-- `core_ir_lower.declRouteKey`/`ifaceDeclHeadUnique`, `llvm_emit.headTagUnique`/
+-- `distinctKeysAtHead`, and `eval.pickTagFallback`'s peer arm.  So the question is
+-- inherently SPELLING-scoped and answering it with identities is wrong at ANY
+-- supply level, total supply included.  These two scans are therefore NOT
+-- "spelling-keyed pending #1280/#1115"; they are spelling-keyed because their
+-- consumer is a byte-for-byte agreement with a namespace that has not moved.
+-- They retire WITH #1113 (B-2), whose blast list already names `keyForSite*` and
+-- the `KeyBuckets` slices alongside the emitter word-set retirement — at which
+-- point they are DELETED rather than re-keyed, there being no head-tag hedge left
+-- to disambiguate.  `keyForSite`'s own doc-comment reaches the same conclusion
+-- from the other direction; read it before touching either.
+--
+-- ⚠️ THE EARLIER WITNESS IS STILL A WITNESS, NOT A CENSUS.  What had been run
+-- before #1317: this file rebuilt with the retest reverted to the identity form
 -- and a panic on disagreement, which fired `answer=1 spell=2 at ff` on #1277's
 -- `main.mdk` and stayed SILENT on `main = println "hi"` and on #1277's own
 -- control (same program, head spelled `G`) — so the instrument discriminates.
--- Nobody has run that build over the whole fixture corpus.  If you need more
--- than "latent as far as anyone looked", derive it: revert the retest, rebuild,
--- and run the gates under the panicking binary.
+-- #1317 added an OBSERVABLE consequence for that one shape; nobody has still run
+-- either build over the whole fixture corpus.  If you need more than "as far as
+-- anyone looked", derive it: revert the retest, rebuild, and run the gates.
 --
 -- Enrolment rule, from `dispHeadTab`: if a site's answer would CHANGE when the
 -- head half becomes an identity, it goes through that function.
@@ -16413,8 +16450,12 @@ oblIfaceKey iface = TkBare NsIface iface
 -- fixture, not a re-key, and doing it here shipped a compiler that rejects
 -- `1 + 1`.
 --
--- 🚨 ONE OF THOSE TWO PRECONDITIONS IS MET, NOT BOTH, AND THE DIFFERENCE IS THE
--- WHOLE OF WHAT #1317 STILL HAS TO SOLVE.  Canonicality: met, by A-2.10.  Supply:
+-- 🚨 ONE OF THOSE TWO PRECONDITIONS IS MET, NOT BOTH.  ⚠️ This sentence used to
+-- continue "AND THE DIFFERENCE IS THE WHOLE OF WHAT #1317 STILL HAS TO SOLVE",
+-- which #1317's own scoping pass then measured to be false — there is a THIRD
+-- precondition, it is not a supply gap, and it is the binding one for half these
+-- sites.  See the 🚨 block below before acting on this paragraph.
+-- Canonicality: met, by A-2.10.  Supply:
 -- met **for the EXTERN population only**, by #1280 — which is one of the TWO
 -- populations that had no identity, not the residual.  ⚠️ An earlier draft of this
 -- paragraph said "BOTH … ARE NOW MET"; that was written by #1280's own author and
@@ -16441,12 +16482,66 @@ oblIfaceKey iface = TkBare NsIface iface
 -- symmetrically, since the flattened prelude's own declarations are unstamped
 -- there too (`externSchemes` carries that derivation and the call-site list).
 --
+-- 🚨 AND THERE IS A **THIRD PRECONDITION**, WHICH IS NOT A SUPPLY GAP AT ALL AND
+-- WHICH NO AMOUNT OF SUPPLY CLOSES — #1317's scoping pass, MEASURED.  The two
+-- preconditions above (canonicality, supply) are the ones this ledger has always
+-- named, and they are the wrong frame for HALF of the sites below.  Read this
+-- before re-keying anything here; it is the half that bites.
+--
+-- The sites this ledger enrols split into TWO independent tables:
+--
+--   T1  the `KeyBuckets` partition — `headBucketRender` (written by
+--       `bucketKeyEntriesFrom`, read by `bucketOfHead`) and its retests
+--       `headTabIs`/`headTabEq`/`headTabOf`, consumed by `implExistsForHeadGo`,
+--       `countHeadGo` and `countHeadByIfaceGo`.
+--   T2  the `ImplUniverse`/obligation channel — `insertUnivImpl`,
+--       `univConcreteBucket`, `oblKeyParts`.
+--
+-- **T2 moves cleanly; T1's two COUNTING scans must not move at all.**  Measured on
+-- a cold-built `MEDAKA_STRICT=1` binary at `7bf3165e`, three builds, probed with
+-- #1277's own three-module repro: moving all of `dispHeadTab` turns `(1, 2)` into
+-- `(1, 1)` — a valid program, exit 0, wrong answer, no diagnostic, i.e. #1277's
+-- own S0 re-introduced.  Moving T2 alone does not.  Moving ONLY the two counting
+-- scans' retest, with everything else here left spelling-keyed, reproduces it
+-- exactly — so the cause is isolated to `countHead`/`countHeadByIface`.
+--
+-- WHY, and why supply is beside the point: those two feed
+-- `headCollides`/`headCollidesByIface` → `keyForSite`/`keyForSiteByIface`, which
+-- stamp a ROUTE WORD.  Route words are bare names by construction, and three
+-- engines re-derive the same uniqueness test from a bare `String` tag
+-- (`core_ir_lower.declRouteKey`/`ifaceDeclHeadUnique`,
+-- `llvm_emit.headTagUnique`/`distinctKeysAtHead`, `eval.pickTagFallback`'s peer).
+-- An identity-keyed count answers 1 where the spelling count answers 2, so
+-- `keyForSite` takes its no-collision branch and stamps the bare head word into a
+-- dict cell that is then ambiguous at run time.  The question "is this route word
+-- ambiguous" is inherently SPELLING-scoped; answering it with identities is wrong
+-- at any supply level, TOTAL SUPPLY INCLUDED.  See `countHead`'s own comment for
+-- the full derivation and `keyForSite`'s for the same conclusion reached from the
+-- other side.
+--
 -- ⇒ The head COMPONENT is therefore still spelling-keyed, and that is still
--- CORRECT rather than merely deferred.  Moving it is its own unit with its own
--- fixtures, **#1317**, which also owns retiring this ledger and `oblIfaceKey`'s
--- bare interface half — and which must either close #1115 first or key a head
--- whose supply it has established, not assumed.  A re-key that assumes total
--- supply everywhere is the same mistake A-2.2b made in the other direction.
+-- CORRECT rather than merely deferred.  What #1317 owns, restated with the
+-- measurement in hand:
+--
+--   * **T1's counters retire WITH #1113 (B-2)**, not before it and not by a
+--     re-key — B-2's blast list already names `keyForSite*` and the `KeyBuckets`
+--     slices alongside the emitter word-set retirement, and at that point they are
+--     DELETED (no head-tag hedge left to disambiguate) rather than re-keyed.  The
+--     sequencing "`#1280` → `#1317` → B-2" recorded on #1113 is INVERTED for them.
+--   * **T2 is separable and may move ahead of B-2** — best taken with #991, so
+--     `Predicate` grows an interface identity and `oblIfaceKey`'s bare half moves
+--     with it rather than leaving the channel half-migrated.  Whoever takes it
+--     owes a fixture for the one risk the probes did NOT reach: `obUnivConcreteRef`
+--     is a per-RUN accumulator, and the prelude-flattened internal passes leave
+--     `Option`/`Ordering`/`Result` absent, so a row written with identity present
+--     and read from a flattened pass would MISS under an identity key.
+--   * **#1115 is NOT this unit's blocker.**  It is still open and still worth
+--     closing for I6.3's sake, but the regression above is on the MODULE arm,
+--     where every head carries identity; the flat-arm probes were byte-identical
+--     under every build.  Population (a) is identity-less SYMMETRICALLY — impl side
+--     and goal side equally unstamped — which is why it produced no false conflict.
+--     ⚠️ That last clause is an INFERENCE from the golden plus the three builds'
+--     agreement, not an audit of the class.
 --
 -- ⚠️ AND THE RIGID ARM IS KEYED, DELIBERATELY.  `headKeyName (HkRigid n) = n`,
 -- so a rigid parameter still hands out a bucket key — the §8 I6.1 residual
