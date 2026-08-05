@@ -103,6 +103,7 @@ expValuesDirect : List Decl -> List String
 expandMemberErrs : ModuleExports -> UseMember -> List ResError
 expandMemberNames : ModuleExports -> UseMember -> List (String, String, Loc)
 externNames : List Decl -> List String
+externTyOriginScope : List Decl -> Map String TyConOrigin
 externWithBodyErrors : List String -> List Decl -> List ResError
 fieldCheck : Option Loc -> Env -> String -> String -> List ResError
 fieldKnownErr : Option Loc -> Env -> String -> List ResError
