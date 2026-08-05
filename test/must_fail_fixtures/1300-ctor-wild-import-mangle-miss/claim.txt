@@ -1,0 +1,73 @@
+issue: 1300
+what: `import qa.{Jj(..), unQA}`, where `Jj` names a CONSTRUCTOR (not a type) of
+what: `qa`'s `public export data QT = Jj Int`, drops `Jj` from the backend's
+what: unit-scoped constructor-rename map. `medaka check` exits 0 (`main : Unit`)
+what: and `medaka run` is CORRECT, exit 0, prints `5`. `medaka build` FAILS:
+what: exit 1, `error: emitter failed compiling <path>` followed by `runtime
+what: error [E-PANIC]: unbound variable 'Jj' (not a local, ctor, or known fn)`.
+what: No collision of any kind is required -- exactly one module declares `Jj`,
+what: exactly one declares `QT`, and this is the only import of either anywhere
+what: in the program. This is NOT the collision-driven class in #733 item 1
+what: (two modules with colliding constructor/type names disagreeing between
+what: the typecheck overlay and the mangler's universe fallback) and NOT #1292
+what: (eval.mdk's `ctorToTypeRef` cross-module collision misrouting `run`'s
+what: arg-tag dispatch) -- this is collision-free and the failure is at BUILD,
+what: not at `run`.
+what: mechanism (compiler/backend/private_mangle.mdk, ctorMemberEntry):
+what:   ctorMemberEntry mid typeEntries (UseMember name wild _ _) =
+what:     if wild then match lookupCtorTypeEntry name typeEntries
+what:       Some ctors => flatMap (originCtorEntry mid) ctors
+what:       None => []
+what:     else if contains name (flatMap snd typeEntries) then originCtorEntry mid name else []
+what: `typeEntries : List (String, List String)` is keyed by TYPE name -> its
+what: constructor names. `Jj(..)` parses to `UseMember "Jj" wild=True`, so the
+what: `wild` branch does `lookupCtorTypeEntry "Jj" typeEntries` -- a lookup that
+what: treats `Jj` as a TYPE name. `Jj` is a constructor, not a type, so the
+what: lookup misses and the branch silently returns `[]`: `Jj` never enters
+what: `buildUnitCtorRenameMap`. The non-wild branch (control.mdk's `Jj`, no
+what: `(..)`) is different -- it scans `flatMap snd typeEntries` (every type's
+what: constructor list flattened), which finds `Jj` regardless of whether the
+what: name is a type or a constructor, so control.mdk builds fine.
+what: narrowing (all verified first-hand): `(..)` on the TYPE name instead
+what: (`QT(..)`), `import qa.*`, and dropping `(..)` (this fixture's control)
+what: all build fine. A nullary constructor and a two-constructor type both
+what: reproduce identically to the Int-arg single-constructor shape above --
+what: arity and constructor count are irrelevant. Also fails identically on the
+what: wasm backend (`--target wasm`): exit 1, `runtime error [E-PANIC]: unbound
+what: variable 'Jj' (not a local, global value, constructor, or known function)`
+what: -- both backends share the same `mangleUnits` pass, run before
+what: `elaborateModules` in `driveModules -> runEmitWith -> mangleUnits ->
+what: elaborateModules`.
+cmd: build main.mdk
+exit: 1
+stdout-line: runtime error [E-PANIC]: unbound variable 'Jj' (not a local, ctor, or known fn)
+control: build control.mdk
+why-fixture: the `build` verb grades `medaka build` ITSELF (exit code + combined
+why-fixture: stdout+stderr) -- this is a build-time REFUSAL of a program that
+why-fixture: `check` and `run` both accept and run correctly, not a run≠build
+why-fixture: value divergence, so `build-run` (which needs the build to SUCCEED
+why-fixture: first) cannot express it. `stdout-line`, not `stdout:`, is used for
+why-fixture: the E-PANIC message because `build`'s FIRST output line
+why-fixture: (`error: emitter failed compiling <path>`) embeds an absolute path
+why-fixture: that varies by checkout location; pinning it whole would drain on a
+why-fixture: path move having nothing to do with #1300. The E-PANIC line itself
+why-fixture: is path-independent and is the defect's signature.
+why-control: control.mdk is main.mdk's exact topology, sharing the SAME qa.mdk,
+why-control: with exactly one feature flipped: the import drops `(..)` after
+why-control: `Jj` (`import qa.{Jj, unQA}` instead of `import qa.{Jj(..), unQA}`).
+why-control: That routes the identical name through ctorMemberEntry's non-wild
+why-control: branch instead of its wild branch -- the ONE code-path fork this
+why-control: issue is about. It must build fine (exit 0) and its binary must
+why-control: print `5`. A red control means something else in constructor-import
+why-control: resolution broke, not that #1300 was fixed.
+why-verify: verified first-hand against a from-source, cold-bootstrapped native
+why-verify: build (`make medaka`, no borrowed emitter) of `origin/main` at
+why-verify: aec06bc7fe826998fa1a9d53154cdc0a7d99f272, with MEDAKA_STRICT=1.
+why-note: fix territory per the issue: ctorMemberEntry's wild branch should fall
+why-note: back to a bare-ctor-name check (mirroring the non-wild branch) when
+why-note: `lookupCtorTypeEntry` misses, rather than silently returning [] --
+why-note: `Ctor(..)` where `Ctor` already names exactly one constructor has an
+why-note: unambiguous, non-wildcard answer (that one constructor), the same
+why-note: answer the bare `Ctor` member already produces. Close #1300 and delete
+why-note: this fixture when `medaka build main.mdk` exits 0 and the binary
+why-note: prints `5`.
