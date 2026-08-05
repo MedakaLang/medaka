@@ -1,0 +1,5 @@
+-- #1288: re-exports BOTH `p` and `g` under wildcard, so its `Same` silently merges
+-- two unrelated same-named interfaces (`p.Same` and `g.Same`) into one exported name
+-- with no diagnostic anywhere. Used by main.mdk.
+export import p.*
+export import g.*

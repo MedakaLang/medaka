@@ -1,0 +1,9 @@
+-- #1288: an UNRELATED module that happens to declare its OWN interface also named
+-- `Same`, with a completely different method (`gandThen`). Nothing in main.mdk ever
+-- imports, mentions, or implements THIS interface -- it only collides by name, one
+-- import-hop away, inside mid.mdk's re-export surface.
+export interface Same f where
+  gandThen : f a -> Int
+
+export gdummy : Int -> Int
+gdummy n = n
