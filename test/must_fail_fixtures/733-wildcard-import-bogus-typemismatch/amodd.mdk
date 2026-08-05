@@ -1,0 +1,6 @@
+-- #733 (row 1c) support module. `A1` has TWO constructors, `A1` and `Dup` -- `Dup` is
+-- the name that collides with zmod's own `Dup` below.
+public export data A1 = A1 Int | Dup Int
+export unA1 : A1 -> Int
+unA1 (A1 n) = n
+unA1 (Dup n) = n
