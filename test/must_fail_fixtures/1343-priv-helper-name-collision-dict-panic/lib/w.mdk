@@ -1,0 +1,5 @@
+-- #1343: `bump` is NOT exported.  It is a module-private helper with an
+-- inferred `Num a =>`, and it is LIVE: the exported `used` calls it.
+bump x = x + 1
+
+export used y = bump y
