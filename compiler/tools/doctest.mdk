@@ -67,6 +67,21 @@ runErrors (RunResult _ _ _ e _) = e
 export runDetails : RunResult -> List (Example, ExResult)
 runDetails (RunResult _ _ _ _ d) = d
 
+-- ── engine selection (#81 Stage 3) ──────────────────────────────────────────
+-- Which execution engine renders an example's actual value. `EngInterp` is
+-- today's tree-walking interpreter (compiler/eval/eval.mdk); `EngNative`
+-- compiles the module under test to a real native binary and runs it (Stage 2,
+-- `compiler/tools/native_doctest.mdk`). A `RunResult` itself doesn't carry
+-- which engine produced it — this type exists purely to SELECT the engine at a
+-- call site and to name it when reporting, so callers can derive labels/JSON
+-- fields from the engine(s) actually run instead of hardcoding a string that
+-- would start lying the day a second engine ships.
+public export data Engine = EngInterp | EngNative
+
+export engineName : Engine -> String
+engineName EngInterp = "eval"
+engineName EngNative = "native"
+
 -- ── reporting (mirrors lib/test_cmd.ml) ────────────────────────────────────
 -- The per-example `ok`/`FAIL`/`ERROR` lines and the `(F failed, E errors)`
 -- summary suffix.  These live HERE, beside `RunResult`, rather than in a driver:
