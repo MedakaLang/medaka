@@ -1,0 +1,5 @@
+-- #1111 A-2.5b (#1275): the BYSTANDER.  Same interface NAME and same METHOD NAME as
+-- `a25b_ifb`'s, and the entry neither imports it nor mentions it -- it reaches the
+-- graph only through `a25b_ifa`'s bare `import`.
+export interface MSIB a where
+  msmth : a -> Int

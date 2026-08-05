@@ -1,0 +1,3 @@
+-- #1111 A-2.5b: the RE-EXPORTER.  Its module id differs from the declaring module's,
+-- which is why A-2.5 needed a second witness at all.
+export import lib.a25b_ifb.{MSIB, msmth}

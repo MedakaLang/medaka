@@ -1,0 +1,42 @@
+-- #1111 A-2.5b -- THE DISCRIMINATING CELL for review finding F1, and the reason it
+-- lives HERE rather than in test/llvm_fixtures_modules/.
+--
+-- F1: the method-export index was a `CrossRun` field, and `elaborateModules`' promotion
+-- arm opens with a SECOND `resetCrossModuleState ()`, which swapped in a fresh (empty)
+-- bundle.  The final elaboration sweep then ran with no index, every candidate missed,
+-- and the overlay fell back to the pre-#1092 floor.  Symptom: `check` exit 0 with zero
+-- diagnostics while `run` and `build` BOTH exit 1 saying *"type error ... Run 'medaka
+-- check' for details"* -- the surface the error names reports nothing.
+--
+-- WHY THIS CORPUS.  This gate grades check/run/build EXIT-CODE AGREEMENT against
+-- `.expected`, with the REAL PRELUDE, and requires a `.out` value pin on ACCEPT.  That
+-- is exactly F1's shape.  The sibling cell in `test/llvm_fixtures_modules/` CANNOT see
+-- it and is labelled non-discriminating there: that corpus's probe
+-- (`entry_support.runEmitWith`) emits WITHOUT gating on type errors, and its impl
+-- mangling omits the interface (`@mdk_impl_Blob_msmth`), so with one impl of `msmth`
+-- for `Blob` the emitted IR is byte-identical whichever interface the obligation was
+-- recorded against -- measured, md5 equal across the fix.
+--
+-- WHAT MAKES IT REACH THE BUG: `twice` is UNSIGNATURED and CONSTRAINED, so it is
+-- directly promoted, `promotionHarvestRef` is non-empty, and `elaborateModules`
+-- DISCARDS #194's single bare sweep and re-runs through the reset-bearing arm.  Every
+-- promotion-FREE fixture in this unit takes the fast path and stayed green while `run`
+-- and `build` were broken.
+--
+-- EXPECTED VALUE DERIVED BY HAND: `msmth` reaches this module only through
+-- `lib.a25b_mid`, which re-exports `lib.a25b_ifb`'s, so both occurrences mean
+-- `MSIB.msmth`; this module implements exactly that interface.  `twice Blob` is
+-- 7 + 7 = 14.  `.expected` is ACCEPT because that is the CORRECT verdict and the one
+-- this branch produces; at `$BASE` and at the pre-F1-fix tip it is not.
+import lib.a25b_mid.{MSIB, msmth}
+import lib.a25b_ifa.{MSIA}
+
+data Blob = Blob
+
+impl MSIB Blob where
+  msmth b = 7
+
+twice x = msmth x + msmth x
+
+main : <IO> Unit
+main = println (twice Blob)

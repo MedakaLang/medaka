@@ -1,5 +1,5 @@
 # META
-source_lines=22101
+source_lines=22145
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted typecheck stage — port of lib/typecheck.ml's HM core.  SLICE 1:
@@ -12573,7 +12573,8 @@ usePathBindsName path n = match importedBindings path
 -- answer to "this dependency's row does not carry that declaration", and the overlay
 -- stays an overlay rather than a rebuild (`applyMethodScopeOverrides`).  A *wholesale*
 -- miss — the index absent — is a programming error, and the property that forbids it is
--- stated on `graphMethodExportsRef` (it lives in the bundle with no reset point).
+-- stated on `graphMethodExports` (the CONJUNCTION: overwritten at every driver entry AND
+-- no reset point in between).
 depExportsMethodIdent : String -> String -> Ident -> Bool
 depExportsMethodIdent dep n ident = match omLookup dep driverState.value.graphMethodExportsRef.value
   None => False
@@ -20499,6 +20500,30 @@ reexportedMethodsOf _ _ = []
 -- function is R / #1288.**  It lands now, as named scaffolding, only because two S0s
 -- (#1272 / #1275) would otherwise wait on a component that does not exist yet.
 --
+-- ── THE SAFETY PROPERTY, AND IT IS A CONJUNCTION.  Both halves, or neither. ──
+-- The result is stored in `driverState.graphMethodExportsRef`, read only by
+-- `depExportsMethodIdent`.  What makes that safe is BOTH of:
+--
+--   (a) UNCONDITIONAL WHOLE-VALUE OVERWRITE AT EVERY Module-MODE DRIVER ENTRY.  The two
+--       entries are `checkModulesPreamble` and `elaborateModules`, each doing
+--       `setRef driverState.value.graphMethodExportsRef (graphMethodExports coreDecls modules)`
+--       over THAT compile's graph.  Never `omInsert`, never a merge — so compile N's rows
+--       cannot reach compile N+1.  This half is NECESSARY: `freshDriverState` initialises
+--       the field to `omEmpty`, so a driver that omits the write reads an empty index and
+--       every candidate misses, which is F1's symptom exactly.
+--   (b) NO RESET POINT IN BETWEEN.  `DriverState` has none — its own header says
+--       `freshDriverState` is the INITIAL construction only, and no whole-bundle
+--       `setRef driverState (…)` exists in the tree.  This half is also NECESSARY: on
+--       `CrossRun` the writes in (a) were already there and correct, and F1 still
+--       happened, because `resetCrossModuleState` cleared the field between the write and
+--       the read.
+--
+-- ⚠️ Do not restate this as "who clears, not who writes", and do not restate it as the
+-- writer enumeration alone.  Each of those was written down during review, each is half
+-- the property, and F1 is what the missing half costs.  (b) is greppable; (a) is a
+-- two-site enumeration that a new driver can invalidate — which is why the precondition
+-- is spelled out at `checkModuleFullDiags` as well.
+--
 -- ⚠️ Must run on the STAMPED graph: identity comes from `DInterface.ifaceOrigin`, which
 -- `stampGraphTyOrigins` writes.  Both call sites (`checkModulesPreamble`,
 -- `elaborateModules`) sit after their driver's stamp.
@@ -21128,12 +21153,16 @@ checkModulesPreamble runtimeDecls coreDecls modules =
   -- (already-stamped) graph, before any module — including the core pass below — reads
   -- it.  `elaborateModules` carries the identical line.
   --
-  -- ⚠️ NOT "built once per compile": that phrasing was in this comment, the ratchet row
-  -- and the PR body, and F1 falsified all three.  It is derived once PER DRIVER ENTRY,
-  -- and a driver may legitimately run twice over one graph.  The invariant that matters
-  -- is not how many times it is written but that it is LIVE at every entry into the
-  -- `Module` arm — see `graphMethodExportsRef`, which states the greppable property
-  -- that now carries it.
+  -- ⚠️ NOT "built once per compile": F1 falsified that phrasing.  It is derived once PER
+  -- DRIVER ENTRY, and a driver may legitimately run twice over one graph.  What matters is
+  -- not how many times it is written but that it is LIVE at every entry into the `Module`
+  -- arm — see `graphMethodExports`, which states the two-part property that carries it.
+  --
+  -- THIS LINE IS ONE HALF OF THAT PROPERTY.  `freshDriverState` initialises the field to
+  -- `omEmpty`, so a driver that does not write it reads an empty index and every candidate
+  -- misses — which IS F1's symptom.  The writer set is therefore a NECESSARY conjunct, not
+  -- "the wrong question": the two Module-mode driver entries that must carry this line are
+  -- `checkModulesPreamble` (here) and `elaborateModules`.
   let _ = setRef driverState.value.graphMethodExportsRef (graphMethodExports coreDecls modules)
   -- #80/#201: populate effect domains ONCE over the WHOLE import graph (builtins +
   -- every `effect …` decl in core or any module), BEFORE the per-module foldModules
@@ -21209,6 +21238,21 @@ checkModules runtimeDecls coreDecls0 modules0 =
 -- BEFORE the first module.  Every existing caller goes through a driver that does exactly
 -- that (foldModulesDiags / checkModulesDiags via resetCrossModuleState); a future
 -- standalone caller that skips it would leak the previous run's universe into this one.
+--
+-- 🚨 THE SENTENCE ABOVE DOES NOT COVER EVERYTHING THE Module PATH READS, AND THE ONE
+-- EXCEPTION IS EXACTLY BACKWARDS FROM IT (#1111 A-2.5b).  `driverState.graphMethodExportsRef`
+-- — the method-identity index `applyMethodScopeOverrides` consults on this path — is NOT a
+-- `CrossRun` accumulator and `resetCrossModuleState` does NOT clear it, deliberately: it is
+-- derived once from the WHOLE graph and has no per-module re-seed path, so being cleared
+-- mid-run is precisely the defect that put it on `driverState` (F1 — `check` clean while
+-- `run`/`build` reported a type error).  For it the precondition is not "clear before the
+-- first module" but **"OVERWRITE with this run's graph before the first module"**:
+--     setRef driverState.value.graphMethodExportsRef (graphMethodExports coreDecls modules)
+-- which `checkModulesPreamble` and `elaborateModules` both do.  ⚠️ The failure modes differ
+-- in KIND, which is why this is worth spelling out rather than folding into the list above:
+-- skipping `resetCrossModuleState` leaks the previous run's universe; skipping THIS write
+-- leaves the previous run's INDEX in place, and a stale index can pick a wrong interface
+-- where an empty one merely declines to the floor.  A standalone caller must do BOTH.
 export checkModuleFullDiags : String -> List (String, Scheme) -> List Decl -> List Decl -> List Decl -> (List (String, Scheme), List TcDiag, List TcDiag)
 checkModuleFullDiags mid seedVars accData accAll prog =
   -- #415 item 1: same seeding preamble as the flat entry points (one body), but the

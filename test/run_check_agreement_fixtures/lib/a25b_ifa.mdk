@@ -1,0 +1,10 @@
+-- #1111 A-2.5b: half one of the collision, and the only route by which the bystander
+-- enters the graph.
+-- selective rather than bare: a BARE `import lib.a25b_bys` parses as the DOTTED-VALUE
+-- form (import value `a25b_bys` from module `lib`) and fails to resolve.  Importing the
+-- interface NAME is enough to pull the bystander into the graph, and it still does not
+-- put `msmth` into the ENTRY's scope, which is what #1275's shape turns on.
+import lib.a25b_bys.{MSIB}
+
+export interface MSIA a where
+  msmth : a -> Int

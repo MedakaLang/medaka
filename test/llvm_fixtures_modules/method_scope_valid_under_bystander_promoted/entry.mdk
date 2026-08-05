@@ -1,8 +1,10 @@
--- #1111 A-2.5b — THE PROMOTION-BEARING CELL.  Its only difference from the sibling
+-- #1111 A-2.5b — the promotion-bearing cell.  Its only difference from the sibling
 -- `method_scope_valid_under_bystander` is the UNSIGNATURED CONSTRAINED FUNCTION
--- `twice`, and that one line is what routes `elaborateModules` down its SECOND
--- sweep.  Without a fixture on that path this whole class is invisible to every
--- gate, which is exactly how F1 shipped green on 11/11 required checks.
+-- `twice`, which is what routes `elaborateModules` down its SECOND sweep (the one
+-- whose first statement is another `resetCrossModuleState ()`).  It DOES reach that
+-- path — at the pre-fix commit the emitted `twice` takes a dict param, so the
+-- promotion arm demonstrably ran — but reaching a path is not observing its
+-- consequence.  See the non-discriminating note below before citing this cell.
 --
 -- WHY `twice` CHANGES THE PATH.  With no direct promotion anywhere,
 -- `promotionHarvestRef` is empty and #194's single bare sweep IS the final answer.
@@ -17,14 +19,30 @@
 -- `twice` mean `MSIB.msmth`; this module implements exactly that interface.
 -- `twice Blob` is `"B" ++ "B"` = `BB`.
 --
--- 🚨 COUNTERFACTUAL, MEASURED on the pre-F1-fix tip of this same branch (the commit
--- where `graphMethodExportsRef` was still a `CrossRun` field): `medaka check` exits
--- 0 and reports `"diagnostics":[]` for every file, while `medaka run` and `medaka
--- build` BOTH exit 1 with *"type error in entry.mdk. Run 'medaka check' for
--- details."* — the surface the error names reports nothing.  At `$BASE` the two
--- surfaces AGREE (both reject, with an actionable message), so the pre-fix tip was
--- strictly worse than the code it was fixing.  With the ref moved to `DriverState`
--- this returns `BB` at exit 0 on eval, native and wasm alike.
+-- 🚨 NON-DISCRIMINATING IN THIS CORPUS — DO NOT CITE IT AS COVERAGE FOR F1.
+-- This cell was added to catch F1 and it CANNOT: measured, it is GREEN on the pre-fix
+-- commit 0772effb, and the emitted IR is byte-identical across the fix
+-- (md5 2be2f2f1c32f95cec2b70f1680beb832 at both commits).  Two structural reasons, both
+-- of which apply to `test/llvm_fixtures_modules/` generally:
+--   1. this corpus's probe does not gate on type errors — `entry_support.runEmitWith`
+--      (`compiler/entries/entry_support.mdk`) calls `elaborateModules` and emits
+--      unconditionally, with no `hadTypeErrors` check.  F1's symptom is an obligation
+--      recorded against the wrong interface, i.e. a TYPE ERROR, which this harness never
+--      observes;
+--   2. impl mangling here omits the interface — the IR carries `@mdk_impl_Blob_msmth` —
+--      so with one impl of `msmth` for `Blob`, MSIA-vs-MSIB cannot move the symbol.
+-- The same argument makes the sibling `method_scope_valid_under_bystander` and every
+-- other cell of this corpus non-discriminating for F1, and `diff_compiler_engines.sh`
+-- reads the same corpus, so it does not help either.
+--
+-- ✅ THE DISCRIMINATING CELL IS
+--    `test/run_check_agreement_fixtures/accept_a25b_method_scope_promoted.mdk`,
+-- which grades check/run/build EXIT-CODE AGREEMENT with the real prelude and a `.out`
+-- value pin — F1's actual shape (`check` 0 while `run`/`build` 1).  Measured there:
+-- FAIL at `$BASE`, FAIL at the pre-F1-fix tip 0772effb, PASS here.
+--
+-- This cell is KEPT because it still pins the accept-under-collision VALUE on all three
+-- engines for a promotion-bearing graph, which is worth having — just not as F1 coverage.
 import msmid.{MSIB, msmth}
 import msifa.{MSIA}
 
