@@ -10908,13 +10908,24 @@ emitProgramMain e groups =
   let _ = emit e "define i32 @mdk_program_main(i32 %argc, ptr %argv) {"
   let _ = emit e "entry:"
   let _ = emit e "  call void @mdk_set_args(i32 %argc, ptr %argv)"
+  -- #1334: resolve `main`'s body FIRST, before touching any top-level global.
+  -- `mainBody` is a pure scan over `groups` — it neither reads nor writes `e`,
+  -- so hoisting it earlier changes NOTHING about the emitted IR for any program
+  -- that already builds today; it only changes which of two independent panics
+  -- fires first when BOTH conditions are true (no `main` AND a malformed value
+  -- global). A program with no `main` at all (e.g. `stdlib/core.mdk` built as
+  -- its own entry) is missing the more fundamental thing, so it should report
+  -- "no main" rather than tripping over an unrelated global first — see the
+  -- prelude-double-load note on emitTopGlobals below for why such a global can
+  -- appear at all.
+  let mainRhs = mainBody groups
   -- #561 PR-A: only SAFE (statically-orderable) value globals are eager-initialised
   -- in this prologue — byte-identical to the pre-#561 emitter whenever no global is
   -- lazy (the compiler's own case).  A SAFE global's whole eager reach is SAFE (the
   -- taint is downward-closed over reads), so this prologue never calls a force fn.
   -- LAZY globals are initialised on first use by their @mdk_force_<x> defines below.
   let _ = emitTopGlobals e (orderedValBinds groups (safeValBinds (valBinds groups)))
-  let (mv, mty) = emitExpr e [] (mainBody groups)
+  let (mv, mty) = emitExpr e [] mainRhs
   -- A Unit-returning `main` produces output ONLY through explicit print calls (or
   -- a panic); never auto-print its `()` result.  Detected by the DECLARED return
   -- type (`declSigOf "main"` → "Unit", robust even when the body LTy is
@@ -10963,6 +10974,15 @@ emitLines e (line::rest) =
 -- forward/mutual-dependency gap in lookupVarG instead of an uninitialised 0.
 -- A `Ref v` rhs allocs its cell as usual → the stored word is the cell POINTER, so
 -- `.value`/`setRef` deref through the loaded global.
+--
+-- #1334: the wildcard panic below fires for a genuinely multi-clause or
+-- non-nullary top-level function (a real emitter bug) — but ALSO for a name
+-- that legitimately has a single nullary clause per file yet arrives here with
+-- more than one, because it was loaded twice and merged (e.g. building
+-- `stdlib/core.mdk` as its OWN entry re-loads the prelude's `core.mdk` a second
+-- time as the entry module). That double-load merge is a separate, open defect
+-- (#1334 half 2) — this panic only ever reports the SYMPTOM ("more clauses than
+-- a value binding should have"), never which of the two causes produced it.
 emitTopGlobals : Emit -> List CBind -> Unit
 emitTopGlobals _ [] = ()
 emitTopGlobals e ((CBind name [CClause [] body])::rest) =
