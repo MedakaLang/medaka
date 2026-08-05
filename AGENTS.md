@@ -155,7 +155,8 @@ Two things that are easy to get wrong:
   so what CI validates is the **merged result**, not your branch in isolation. That is not a
   formality: two green branches have merged cleanly into a **crashing** tree (git auto-merged a
   break it could not see — one branch had added a caller into machinery the other was re-signing,
-  on different lines, so no conflict marker).
+  on different lines, so no conflict marker). It is also why the queue, not the `pull_request`
+  run, is the real authority on gate coverage — see the `preflight`-is-a-filter warning below.
 
   **You do NOT need to keep your branch up to date with `main`.** "Strict" mode is OFF and
   `update-branch` kicks are obsolete — the queue handles staleness. If a doc tells you to babysit
@@ -354,7 +355,35 @@ agent running the whole suite + a full oracle build takes the load average past 
 gets RESPAWNED by the harness** — it has killed several agents. Use the targeted forms.
 
 ⚠️ **`preflight` is a FILTER, NOT AN AUTHORITY.** It runs a subset and prints what it
-skipped. **CI on the PR is the authority. Nothing merges on a green preflight.**
+skipped. **The MERGE QUEUE is the authority — not a green `pull_request` check — and
+nothing merges on a green preflight.** That distinction matters because a green PR check
+does not by itself mean that shard ran anything: `ci.yml`'s "Plan this shard" step
+(`.github/workflows/ci.yml`, the `gates (…)` job) NARROWS each shard on a `pull_request`
+event to the intersection of that shard's patterns with the diff-derived gate set — its
+own `why=` string says so verbatim: *"pull_request — narrowed to the gates this diff
+touches (merge_group runs ALL of them)"*. A shard whose intersection is empty still
+reports SUCCESS having run nothing. **That is NOT a hole** — the planner fails closed
+(`::error::` + `exit 1`, same step) if a shard's *pattern* matches no gates in the whole
+tree, which is the actual "a gate silently never runs" hazard
+`diff_compiler_ci_shard_coverage.sh` (above) exists to catch; an empty per-PR
+*intersection* is the designed-for common case, not that failure. Real coverage for a
+narrowed-away gate runs later, in the merge queue's `merge_group` run, which is
+unnarrowed and tests the PR merged onto `main` (see the MERGE QUEUE bullet above) — that
+run is the authority, not the `pull_request` run.
+
+Measured instance: PR #1289 (a `compiler/frontend/resolve.mdk` change) reported all 12
+required checks green, but `gates (engines)`, `gates (sqlite)` and `gates (tools)` each
+had BOTH their `Build medaka` and `Gate shard — …` steps `skipped` — `engines` went green
+in 7 seconds having run nothing. Check whether a specific shard actually executed, rather
+than trusting the checkmark:
+```sh
+gh api repos/MedakaLang/medaka/actions/runs/<id>/jobs --paginate \
+  --jq '.jobs[] | "\(.name)\t" + ([.steps[]?|"\(.name)=\(.conclusion)"]|join(" | "))'
+```
+⚠️ **"CI green" is not corroboration of a PR-body claim about a specific gate's numbers.**
+Reading a green rollup as proof that a cited gate ran with the cited result is an invalid
+inference made — and caught only in review — during the 2026-08-05 A-2 session; verify
+with the command above, never with the checkmark.
 
 ⚠️ **On a BLAST-RADIUS path, `make preflight` IS the full suite — the two rules above
 collide, and this carve-out is the resolution** (#492). For `stdlib/*`, `compiler/support/*`,

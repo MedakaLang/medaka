@@ -1489,7 +1489,7 @@ actually run, or does it merely describe what the author expected to be true?**
 
 ---
 
-## Stage A-2 of the typecheck arc, 2026-08-03/05 — three role lessons, none about the code
+## Stage A-2 of the typecheck arc, 2026-08-03/05 — role lessons, none about the code
 
 - 🚨 **"Landing is serialized" is an instruction about ARMING, not a prediction about
   ordering.** Arming two PRs that both touch one file puts both in the merge queue, and the
@@ -1538,3 +1538,50 @@ actually run, or does it merely describe what the author expected to be true?**
   arc shipped a `grep` with an un-escaped `|` in a BRE (no `-E`), which matched only its own
   comment text and "re-verified" a false claim. A command that cannot fail carries more
   authority than a wrong number does.
+
+- ⭐⭐ **Run the two review lenses SEPARATELY — one adversarial, one conformance-plus-claims —
+  and don't let either ride on the other.** One reviewer tries to break the fix; the other
+  grades spec conformance **and** audits every claim in the PR body, code comments, fixture
+  headers, and issue bodies against what was actually run. Grading them together lets the
+  claim audit ride on the code review, which quietly drops it. Yield this session: **9 review
+  passes, every one found a real defect**; both behaviour-changing units were blocked while
+  green on all 11 required checks — one shipped a fix that worked on `check` and was inert
+  on `run`/`build`, the other a regression turning a correct program into a crash. The two
+  lenses also caught **each other's** errors twice: they reached opposite verdicts on one
+  fixture header (the adversarial reviewer was right), and a round-1 reviewer's confident
+  mechanism claim (`export newtype` "never" sets `newtypePub`) was false and drove a
+  prescribed fix that was later measured to fail. A single reviewer returns one verdict with
+  no signal that it might be wrong — the split is what supplies the signal.
+- ⭐⭐ **Verify the CONSEQUENCE, not the mechanism.** The session's dominant failure, three
+  costumes on one PR: a byte count proved a `gh api -X PATCH` write *happened*, not that the
+  body *contained the corrections* (two rewrites landed, every retracted claim was still
+  present); enumerating a field's **writers** answered the wrong question when the actual
+  defect was who **clears** it; a regression fixture reached the changed code path but could
+  not observe the consequence — green on the pre-fix commit, emitted IR byte-identical across
+  the "fix". The countermeasure that worked every time: state the acceptance test as an
+  observable on the **artifact**, never on the action — e.g. `grep -n '<retracted phrase>'
+  <body>` must be empty, not "the PATCH call returned 200".
+- ⚠️ **The orchestrator's own prescriptions need the same discipline as an agent's claims.**
+  Three times this session a confidently-relayed mechanism was wrong while the conclusion
+  happened to be right anyway. Each was caught only because the implementing agent
+  **measured** the prescription instead of applying it as given. Brief agents to test what
+  you hand them — say so explicitly in the brief, not just as a general expectation.
+- ⚠️ **Two silent fleet hazards on this shared box, both cost real time:**
+  - **The scratch root is shared.** One agent's `make preflight` log was overwritten by a
+    sibling's and read as its own result — caught only because the log text happened to name
+    the other agent's worktree id. Require gate logs at a path **private to the agent's own
+    worktree**, with the exit code captured on the **next line, no pipe** (a piped exit code
+    is the pipeline's, not the command's). Tell agents to grep any log they rely on for a
+    foreign worktree id before trusting it.
+  - **`refs/stash` is shared across every worktree** (`git rev-parse --git-common-dir` is the
+    same `.git` for all of them). A bare `git stash pop` grabbed a *different* agent's entry.
+    Ban bare `git stash`/`git stash pop` in briefs; use a throwaway WIP commit instead, or
+    `git checkout <commit> -- <files>` to materialize a counterfactual arm without touching
+    the shared stash stack.
+- ⚠️ **Worktree reaping is attribution-blocked on a shared box.** `git worktree list` showed
+  58 trees with a sibling orchestrator active concurrently. Only reap a tree you can actually
+  attribute to your own session, and only when all four signals agree: no unmerged commits,
+  clean `git status`, not locked, and no live process with its cwd inside it. Where any signal
+  is missing or another orchestrator's activity is plausible, **report the tree rather than
+  acting on it** — an unattributable reap risks deleting a sibling's in-flight work with no
+  way to undo it.
