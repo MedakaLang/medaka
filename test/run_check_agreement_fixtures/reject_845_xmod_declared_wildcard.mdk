@@ -1,0 +1,9 @@
+-- #1114: the DECLARED-context half of the same matrix.  `lib/obl1114_declared.mdk`
+-- WRITES `g : Num a => a -> a`, and the selective spelling of this already rejected at
+-- check before #1114 — but the wildcard spelling did NOT (measured: `check` exit 0,
+-- `run` "type error in ..., Run `medaka check` for details", i.e. run reporting a type
+-- error check declines to print).  So the spelling axis was broken independently of the
+-- declared/inferred axis, and both cells are the same §4.2 D6 violation.
+import lib.obl1114_declared.*
+
+main = println (g "abc")

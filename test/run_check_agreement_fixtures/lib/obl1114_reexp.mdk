@@ -1,0 +1,4 @@
+-- #845 re-export hop (#1114 review): a PURE re-exporter — its `prog` contains no function
+-- definition at all, so a store attributed only from a module's own `declTopFnNames`
+-- contributes nothing for it and `f`'s inferred `Num a =>` is lost one hop out.
+export import lib.obl1114_inferred.{f}

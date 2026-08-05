@@ -1,0 +1,6 @@
+-- #1114: declared context x module-alias spelling — the sixth cell of the matrix, also
+-- accepted at check before #1114 while run rejected.  See
+-- reject_845_xmod_declared_wildcard.mdk for why the declared half is pinned at all.
+import lib.obl1114_declared as H
+
+main = println (H.g "abc")
