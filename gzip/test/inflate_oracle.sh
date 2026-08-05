@@ -66,8 +66,16 @@ check_stored() {
     return
   fi
 
-  if ! "$BIN" "$TMP/in.gz" "$TMP/out.bin" >/dev/null 2>&1; then
-    bad "$desc — inflate_demo exited non-zero on a valid stored stream"
+  # Under `timeout` like the error paths: a decompressor that loops on VALID
+  # input is just as much a defect, and an unbounded success path would hang
+  # this gate rather than fail it.
+  timeout 60 "$BIN" "$TMP/in.gz" "$TMP/out.bin" >/dev/null 2>&1
+  rc=$?
+  if [ "$rc" -eq 124 ]; then
+    bad "$desc — HUNG on a VALID stored stream"
+    return
+  elif [ "$rc" -ne 0 ]; then
+    bad "$desc — inflate_demo exited $rc on a valid stored stream"
     return
   fi
   if cmp -s "$TMP/in.bin" "$TMP/out.bin"; then
@@ -114,13 +122,43 @@ printf 'hello world hello world hello world' | gzip -n -c > "$TMP/fixed.gz"
 expect_fail "fixed-Huffman block (Phase 2 boundary)" "$TMP/fixed.gz" "not yet implemented"
 
 # --- corrupted trailer: the CRC must actually be checked ---------------------
+# ⚠️ OCTAL escapes, not \xNN. /bin/sh here is dash, whose printf does NOT
+# interpret \xNN — it emits the 16 LITERAL characters `\xde\xad\xbe\xef`.
+# That silently appends 16 junk bytes instead of replacing 4, which lengthens
+# the file and shifts the whole trailer. The CRC case below still "passed"
+# that way, for entirely the wrong reason, until an ISIZE case was added and
+# failed with a CRC error that made no sense. Measured: hex-escape append
+# grew a 223-byte file to 235; octal-escape kept it at 223.
+# Guard it rather than trusting the comment — see the size assertion below.
+corrupt_last4() {
+  src="$1"; dst="$2"; keep="$3"
+  head -c "$keep" "$src" > "$dst"
+  printf '\336\255\276\357' >> "$dst"
+}
+
 head -c 200 /dev/urandom > "$TMP/crc.bin"
 gzip -1 -n -c "$TMP/crc.bin" > "$TMP/crc.gz"
 sz=$(wc -c < "$TMP/crc.gz")
-head -c $((sz - 8)) "$TMP/crc.gz" > "$TMP/crcbad.gz"
-printf '\xde\xad\xbe\xef' >> "$TMP/crcbad.gz"
+
+corrupt_last4 "$TMP/crc.gz" "$TMP/crcbad.gz" $((sz - 8))
 tail -c 4 "$TMP/crc.gz" >> "$TMP/crcbad.gz"
-expect_fail "corrupted trailer CRC-32 is rejected" "$TMP/crcbad.gz" "CRC"
+if [ "$(wc -c < "$TMP/crcbad.gz")" -ne "$sz" ]; then
+  bad "harness bug: corrupting the CRC changed the file LENGTH ($(wc -c < "$TMP/crcbad.gz") vs $sz) — printf escapes are not producing raw bytes"
+else
+  expect_fail "corrupted trailer CRC-32 is rejected" "$TMP/crcbad.gz" "CRC"
+fi
+
+# ISIZE is the OTHER half of the trailer and is checked independently of the
+# CRC. Corrupt only the last 4 bytes, leaving the CRC-32 intact, so a
+# gunzipMember that validated the checksum but merely computed the length
+# would pass the case above and fail here. A field that is computed but never
+# compared is decoration, and nothing else in this suite would notice.
+corrupt_last4 "$TMP/crc.gz" "$TMP/isizebad.gz" $((sz - 4))
+if [ "$(wc -c < "$TMP/isizebad.gz")" -ne "$sz" ]; then
+  bad "harness bug: corrupting ISIZE changed the file LENGTH ($(wc -c < "$TMP/isizebad.gz") vs $sz)"
+else
+  expect_fail "corrupted trailer ISIZE is rejected" "$TMP/isizebad.gz" "ISIZE"
+fi
 
 echo
 echo "$pass ok, $fail failing"
