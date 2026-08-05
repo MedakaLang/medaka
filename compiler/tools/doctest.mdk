@@ -14,7 +14,7 @@
 -- evaluate without error.
 --
 -- This module is pure extraction + the run plumbing (Example/RunResult types,
--- buildDetails, hasUseDecls); the comment side channel comes from
+-- buildDetailsFrom, hasUseDecls); the comment side channel comes from
 -- compiler/lexer.mdk (`collectComments`), the run drivers (single/multi) from
 -- compiler/tools/test_cmd.mdk.
 
@@ -22,7 +22,6 @@ import frontend.lexer.{Comment, collectComments, commentLine, commentText}
 import frontend.ast.{Decl, DUse}
 import frontend.parser.{parseResult, parseErrorMessage}
 import frontend.desugar.{desugar}
-import eval.eval.{Value(..), lookupBinding, force, ppValue}
 import support.util.{listLen, reverseL, joinNl, startsWith, stringTrim, splitNl}
 
 -- ── Data ──────────────────────────────────────────────────────────────────
@@ -224,7 +223,7 @@ export synthName : Int -> String
 synthName i = "__dt_" ++ intToString i ++ "__"
 
 -- Build the synthetic source line for example i.
-synthSrc : Int -> Example -> String
+export synthSrc : Int -> Example -> String
 synthSrc i ex =
   let rhs = match exampleExpected ex
     Some _ => "debug (" ++ exampleInput ex ++ ")"
@@ -264,36 +263,65 @@ concatOkDecls [] = []
 concatOkDecls ((Ok ds)::rest) = ds ++ concatOkDecls rest
 concatOkDecls ((Err _)::rest) = concatOkDecls rest
 
--- ── Compare evaluated bindings against expected ──────────────────────────────
--- env is the post-run binding environment (Ok env) or a single whole-program
--- error (Err msg) applying to every example.
+-- ── Compare rendered results against expected ────────────────────────────────
+-- Stage 1 (make `medaka test` run natively): this seam used to take the raw
+-- interpreter env (Result String (List (String, Value e))) — a shape only the
+-- tree-walking evaluator can produce. It is raised one level: an execution
+-- engine's whole obligation is now "one rendered actual per example, or one
+-- whole-file error" — renderedResult is either a single whole-program error
+-- (Err msg, e.g. a multi-module load failure) applying to every example, or
+-- (Ok) one Result String String per example, positionally aligned with
+-- `examples`: Ok (the debug-rendered actual) or Err (that example's own
+-- run/lookup failure, e.g. "could not evaluate: <expr>"). A native engine
+-- implements this contract directly; the interpreter arm (test_cmd.mdk) is a
+-- thin adapter over `lookupBinding (synthName i) env` / `ppValue (force v)`.
 
-export buildDetails : Result String (List (String, Value e)) -> List (Result String (List Decl)) -> List Example -> <e> RunResult
-buildDetails envResult synthResults examples =
-  let details = detailsGo envResult synthResults 0 examples
+export buildDetailsFrom : Result String (List (Result String String)) -> List (Result String (List Decl)) -> List Example -> RunResult
+buildDetailsFrom renderedResult synthResults examples =
+  let details = detailsGoFrom renderedResult synthResults examples
   let passed = countResult isPass details
   let failed = countResult isFail details
   let errors = countResult isErr details
   RunResult (listLen examples) passed failed errors details
 
-detailsGo : Result String (List (String, Value e)) -> List (Result String (List Decl)) -> Int -> List Example -> <e> List (Example, ExResult)
-detailsGo _ _ _ [] = []
-detailsGo envResult (sr::srRest) i (ex::rest) =
-  (ex, oneResult envResult sr i ex) :: detailsGo envResult srRest (i + 1) rest
-detailsGo _ [] _ (_::_) = []
+detailsGoFrom : Result String (List (Result String String)) -> List (Result String (List Decl)) -> List Example -> List (Example, ExResult)
+detailsGoFrom (Err msg) synthResults examples =
+  detailsGoErr msg synthResults examples
+detailsGoFrom (Ok rendered) synthResults examples =
+  detailsGoOk rendered synthResults examples
+
+-- Whole-file error: every example is Errored with that message, UNLESS its
+-- own synth failed to parse — a parse error is reported at its own location
+-- and never conflated with the whole-file failure (mirrors the pre-Stage-1
+-- `oneResult`'s `oneResult _ (Err msg) i ex` catch-all, which fired
+-- regardless of the env/render outcome).
+detailsGoErr : String -> List (Result String (List Decl)) -> List Example -> List (Example, ExResult)
+detailsGoErr _ _ [] = []
+detailsGoErr msg (sr::srRest) (ex::rest) =
+  (ex, oneResultErr msg sr) :: detailsGoErr msg srRest rest
+detailsGoErr _ [] (_::_) = []
 -- (the [] / (_::_) fallback only fires if synthResults and examples somehow
 -- desync in length — buildSynthResults always produces one entry per
 -- example, so this is unreachable in practice; kept for exhaustiveness.)
 
--- A per-example parse failure (`Err msg` from `synthOne`) is reported
--- directly at this example's own location — it never reaches `lookupBinding`,
--- so it can't be conflated with "evaluated but produced no binding".
-oneResult : Result String (List (String, Value e)) -> Result String (List Decl) -> Int -> Example -> <e> ExResult
-oneResult _ (Err msg) i ex = Errored ("parse error: " ++ msg)
-oneResult (Err msg) (Ok _) i ex = Errored msg
-oneResult (Ok env) (Ok _) i ex = match lookupBinding (synthName i) env
-  None => Errored ("could not evaluate: " ++ exampleInput ex)
-  Some v => compareValue ex (ppValue (force v))
+oneResultErr : String -> Result String (List Decl) -> ExResult
+oneResultErr _ (Err pmsg) = Errored ("parse error: " ++ pmsg)
+oneResultErr msg (Ok _) = Errored msg
+
+-- Successful run: one rendered Result per example, positionally aligned (a
+-- per-example parse failure still wins — it never reaches the rendered
+-- result, so it can't be conflated with "ran but produced no/bad output").
+detailsGoOk : List (Result String String) -> List (Result String (List Decl)) -> List Example -> List (Example, ExResult)
+detailsGoOk (r::rRest) (sr::srRest) (ex::rest) =
+  (ex, oneResultOk r sr ex) :: detailsGoOk rRest srRest rest
+detailsGoOk _ _ [] = []
+detailsGoOk [] _ (_::_) = []
+detailsGoOk _ [] (_::_) = []
+
+oneResultOk : Result String String -> Result String (List Decl) -> Example -> ExResult
+oneResultOk _ (Err pmsg) ex = Errored ("parse error: " ++ pmsg)
+oneResultOk (Err msg) (Ok _) ex = Errored msg
+oneResultOk (Ok actual) (Ok _) ex = compareValue ex actual
 
 compareValue : Example -> String -> ExResult
 compareValue ex actual = match exampleExpected ex
