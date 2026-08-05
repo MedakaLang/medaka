@@ -45,6 +45,9 @@ import eval.eval.{
   testCapableExterns,
   funNamesOf,
   dropShadowedExp,
+  lookupBinding,
+  force,
+  ppValue,
 }
 import tools.doctest.{
   Example,
@@ -53,7 +56,7 @@ import tools.doctest.{
   extractExamples,
   buildSynthResults,
   buildSynthDecls,
-  buildDetails,
+  buildDetailsFrom,
   hasUseDecls,
   runDetails,
   runPassed,
@@ -215,6 +218,27 @@ runChosen runtimeDecls coreDecls target userDecls roots examples synthDecls synt
   | otherwise =
     runSingle runtimeDecls coreDecls userDecls examples synthDecls synthResults
 
+-- ── The interpreter's adapter onto doctest.mdk's buildDetailsFrom seam ──────
+-- buildDetailsFrom (Stage 1) wants "one rendered actual per example, or one
+-- whole-file error" — not a raw interpreter env. This is the thin adapter:
+-- for each example i, look up its synthesized `__dt_i__` binding in the post-
+-- run env and render it, exactly as the pre-Stage-1 `oneResult` did inline.
+renderExamples : List (String, Value e) -> List Example -> <e> List (Result String String)
+renderExamples env examples = renderExamplesGo env 0 examples
+
+renderExamplesGo : List (String, Value e) -> Int -> List Example -> <e> List (Result String String)
+renderExamplesGo _ _ [] = []
+renderExamplesGo env i (ex::rest) =
+  renderOneExample env i ex :: renderExamplesGo env (i + 1) rest
+
+-- No binding for __dt_i__ means that example's synth never ran (its own
+-- decl was dropped, or the file errored before reaching it) — reported the
+-- same way the interpreter always has: "could not evaluate: <expr>".
+renderOneExample : List (String, Value e) -> Int -> Example -> <e> Result String String
+renderOneExample env i ex = match lookupBinding (synthName i) env
+  None => Err ("could not evaluate: " ++ exampleInput ex)
+  Some v => Ok (ppValue (force v))
+
 -- Single-file path: drop shadowed prelude, append synth, dict-elaborate, run.
 -- When the file under test IS the prelude (`medaka test stdlib/core.mdk`), it
 -- already declares everything the prelude provides, so prepending the prelude
@@ -240,7 +264,7 @@ runSingle runtimeDecls coreDecls userDecls examples synthDecls synthResults =
     dropShadowedExp userNames coreDecls
   let elaborated = elaborateOne runtimeDecls livePrelude ("__user__", allUser)
   let env = evalOneWith (testCapableExterns ()) [] ("__main__", elaborated)
-  buildDetails (Ok env) synthResults examples
+  buildDetailsFrom (Ok (renderExamples env examples)) synthResults examples
 
 -- DRIVER-COLLAPSE Phase 1+3 note on the dict-set: the old `coreDictNames`
 -- externally-built dict-set (preludeReturnPosDictNames ++ constrainedSigNames, with
@@ -269,12 +293,12 @@ pcHasFoldable (_::rest) = pcHasFoldable rest
 -- elaborate across modules, eval (root env carries the __dt_i__ bindings).
 runMulti : List Decl -> List Decl -> String -> List Decl -> List String -> List Example -> List Decl -> List (Result String (List Decl)) -> <IO> RunResult
 runMulti runtimeDecls coreDecls target _userDecls roots examples synthDecls synthResults = match loadProgram target roots
-  Err e => buildDetails (Err e) synthResults examples
+  Err e => buildDetailsFrom (Err e) synthResults examples
   Ok mods =>
     let injected = injectIntoRoot target synthDecls (map desugarPair mods)
     let elaborated = elaborateModules runtimeDecls coreDecls injected
     let env = evalModulesWith (testCapableExterns ()) (fst elaborated) (snd elaborated)
-    buildDetails (Ok env) synthResults examples
+    buildDetailsFrom (Ok (renderExamples env examples)) synthResults examples
 
 desugarPair : (String, List Decl) -> (String, List Decl)
 desugarPair (mid, p) = (mid, desugar p)
