@@ -1,0 +1,4 @@
+-- #845 re-export hop, SECOND hop: re-exports a re-export. Pins that the chain resolves at
+-- every hop (each module re-attributes under its own id as it is processed, dependency
+-- first) rather than only at depth 1.
+export import lib.obl1114_reexp.{f}

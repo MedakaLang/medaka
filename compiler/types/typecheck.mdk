@@ -2930,18 +2930,61 @@ oblAsTuple o = (o.pred.iface, o.pred.args, o.loc)
 callOblsWindow : Int -> List (String, List Mono, Option Loc)
 callOblsWindow mark = map oblAsTuple (wWindow perRun.value.obls mark)
 
--- #1114 (DICT-SEMANTICS §4.2 D1): is this recorded predicate GROUND — every argument
--- resolving to a concrete head — right now?  Deliberately the SAME test
--- `checkOneCallObligation` applies at the gate (`allConcreteHeads (map normalize occs)`,
--- plus its empty-vector early return), so "kept by a ground-preserving window" and
--- "checked by the gate" name one predicate rather than two approximations of it: a
--- kept obligation is guaranteed to reach a verdict, and a dropped one is guaranteed to
--- have been deferred there anyway.  An EMPTY argument vector is inert at the gate
--- (`if isEmptyL args then ()`), so counting it non-ground here loses no verdict.
-uOblIsGround : UObligation -> Bool
-uOblIsGround o =
+-- #1114 (DICT-SEMANTICS §4.2 D1): would `checkOneCallObligation` reach a VERDICT on this
+-- recorded predicate right now?  That — not groundness — is the question the D1-preserving
+-- window in `inferUserImplBodies` has to ask, and getting it wrong is silent by
+-- construction (see the warning at the end of this comment).
+--
+-- 🚨 THE GATE'S DECIDABLE SET IS STRICTLY LARGER THAN `allConcreteHeads`.  This predicate
+-- was `isNonEmptyL args && allConcreteHeads args` when #1114 first landed, on the stated
+-- belief that it was "the SAME test the gate applies".  IT IS NOT, and adversarial review
+-- produced the counterexample: `checkOneCallObligation` tests
+-- `anyListM monoIsFunction args` in an arm that runs BEFORE its `allConcreteHeads` arm, so
+-- a fully concrete FUNCTION-typed obligation (`Debug (Int -> Int)`, from `debug bumper`
+-- where `bumper : Int -> Int`) is decided — and rejected — by the gate, while
+-- `headTyconNameMono` answers `None` for a `TFun` (it enumerates `TCon`/`TRigid` only) and
+-- so `allConcreteHeads` calls it non-concrete.  The window therefore dropped a predicate
+-- the gate would have rejected, and D4's impl-channel exemption from D3 meant no ambiguity
+-- fired either: the predicate vanished with NO verdict from any channel.  That is #792's
+-- own three-verdict signature (`check` 0 / `run` `intToString: not an Int` / `build`
+-- `arg-tag dispatch on impl type that owns no constructors`), one token away from the
+-- shape #792 pinned.
+--
+-- The two populations kept here are exactly the ones whose verdict CANNOT CHANGE LATER,
+-- which is what makes retaining them sound:
+--   (a) `allConcreteHeads` — fully ground; grounding is monotone, a concrete head never
+--       becomes abstract.
+--   (b) `anyListM monoIsFunction` — a `TFun` argument; an arrow never becomes a non-arrow.
+-- (b) is NOT a special case invented here: it is the third instance of a settled
+-- convention.  `checkReqOne` already carries the same arm, in the same order, with a
+-- comment that states the rule in general terms ("fully GROUND yet structurally
+-- un-Ord/Eq/etc … Order the function-typed reject BEFORE the concreteness defer"), and
+-- `checkOneCallObligation` is the second.  See `allConcreteHeads` for why the convention
+-- is to order an arm rather than widen that predicate.
+-- `numUnimplementableHead`'s OTHER arm (a `TApp` whose spine head is an unbound tyvar) is
+-- deliberately NOT kept: that head can still bind, so its verdict is not stable and the
+-- predicate belongs to D2's deferred population.  An EMPTY argument vector is inert at the
+-- gate (`if isEmptyL args then ()`), so dropping it loses no verdict.
+--
+-- THE SET IS CLOSED, and it was enumerated rather than sampled — `TFun` was found by a
+-- counterexample, so the question "what ELSE?" has to be answered from the type.  `Mono`
+-- has six constructors and `headMonoNode` peels `TApp`, so a head is one of `TVar`, `TCon`,
+-- `TRigid`, `TFun`, `TEff`.  `TCon`/`TRigid` are the two `headTyconNameMono` names, so (a)
+-- covers them; `TFun` is (b); `TVar` can still bind, so gate and filter agree to defer it;
+-- and `TEff` is decided by NEITHER (`monoIsFunction` and `numUnimplementableHead` are both
+-- False for it, so the gate reaches its own `allConcreteHeads` arm and defers) — filter and
+-- gate agree there too.  No third population remains.
+--
+-- ⚠️ NO GATE CAN CATCH A REGRESSION HERE.  A predicate this filter drops is one no channel
+-- ever reports, so it produces silence, and silence is what every golden in the corpus
+-- already records for a program the compiler accepts.  If you narrow this predicate, the
+-- suite stays green.  The obligation is on the reader: any arm added to
+-- `checkOneCallObligation` ABOVE its `allConcreteHeads` test must be mirrored here, or it
+-- becomes unreachable for every parametric impl body in the language.
+uOblIsDecidableNow : UObligation -> Bool
+uOblIsDecidableNow o =
   let args = map normalize o.pred.args
-  isNonEmptyL args && allConcreteHeads args
+  isNonEmptyL args && (allConcreteHeads args || anyListM monoIsFunction args)
 
 -- #11 soundness (native obligation hole, ALWAYS-ON, independent of the dict-
 -- elaboration machinery): per top-level binding, the deferred impl obligations it
@@ -7223,12 +7266,17 @@ instantiateVarTrackedId x id s = match lookupSchemeObls x id perRun.value.scheme
 --       cross-module use site must read the store that holds the scheme context, which
 --       is exactly what the same-module use site reads one branch up.
 --
--- ORDER: (1) then (3) then (2).  (1) stays first, so every SIGNED callee resolves
--- exactly as it did.  (3) precedes (2) because (3) is source-exact and (2) is a bare
--- NAME table: the two populations are disjoint by construction (prelude names are kept
--- out of currentImportDefinersRef, so (3) always misses for them and falls through),
--- and the one case where both could answer — a user module exporting a name core also
--- defines — is precisely the case where the source-exact answer is the right one.
+-- ORDER: (1) then (3) then (2).  (1) stays first, so every SIGNED callee resolves exactly
+-- as it did.  (3) precedes (2) because (3) is IMPORT-SCOPED and (2) is a program-global
+-- bare-NAME table.  ⚠️ This rationale used to say (3) "is source-exact" and to justify the
+-- disjointness by `currentImportDefinersRef` — which is (1)'s gate, not (3)'s; (3) reads
+-- `importedSchemeOblsRef`.  The conclusion held, the stated reason did not, so here is the
+-- real one: (3)'s table is rebuilt per module from THIS module's own `DUse` decls, and
+-- `importDefinersOf` skipping `core` is irrelevant to it — what keeps prelude names out of
+-- (3) is that no module writes a `DUse` for the implicit prelude at all, so no arm of
+-- `importedSchemeOblEntries` ever emits one.  The populations are therefore disjoint by
+-- construction, and the one case where both could answer — a user module exporting a name
+-- core also defines — is exactly the case where the import-scoped answer is the right one.
 declaredCrossModuleObls : String -> Option (List (String, List Int))
 declaredCrossModuleObls x = match qualConstraintFor x
   Some (ids, ifaces) => Some (shatterVecObls ifaces ids)
@@ -15814,7 +15862,8 @@ checkBodyImpl seed mode prog0 =
       -- reads; this makes the cross-module use site read it too, under the same
       -- source-exact (mid, name) key.
       let _ = setRef crossRun.value.crossModuleSchemeOblsQualRef
-        (attributeModuleSchemeObls mid prog perRun.value.schemeObligationsRef.value ++ crossRun.value.crossModuleSchemeOblsQualRef.value)
+        (attributeModuleSchemeObls mid prog crossRun.value.crossModuleSchemeOblsQualRef.value perRun.value.schemeObligationsRef.value
+          ++ crossRun.value.crossModuleSchemeOblsQualRef.value)
       ()
   let _ = groundMultiParamObligations groundUniverse perRun.value.implObls.items.value
   -- P0-17: impl missing a required method.  #154 PR1: the Module path looks the required
@@ -16071,21 +16120,25 @@ inferUserImplBodies env allProg decls =
   -- replaced ("stays deferred to `build` exactly as before — a residual, not a
   -- regression") named it as a known residual without naming its cost.
   --
-  -- The policy is now written down: DICT-SEMANTICS §4.2 **D1** (a predicate ground where
-  -- it is recorded is discharged there — no window may discard it) and **D6(b)** (a
-  -- window that exists to suppress D3 false positives must filter by GROUNDNESS, not
-  -- discard wholesale).  So: window as before, then re-push exactly the obligations that
-  -- are ground when the window closes.  The abstract element tyvar of a parametric head
-  -- never grounds, so every false positive the window was built to stop is still
-  -- stopped; grounding is monotone, so a predicate ground here is ground at the gate and
-  -- its verdict cannot change between the two points.
+  -- The policy is now written down: DICT-SEMANTICS §4.2 **D1** (a predicate the gate can
+  -- decide where it is recorded is discharged there — no window may discard it) and
+  -- **D6(b)** (a window that exists to suppress D3 false positives must filter by what is
+  -- DECIDABLE, not discard wholesale).  So: window as before, then re-push exactly the
+  -- obligations `uOblIsDecidableNow` accepts.  The abstract element tyvar of a parametric
+  -- head is decidable by nothing, so every false positive the window was built to stop is
+  -- still stopped.
+  --
+  -- ⚠️ The predicate is "the GATE can decide it now", NOT "it is ground" — those differ,
+  -- and this site is where believing otherwise costs a verdict.  `uOblIsDecidableNow`
+  -- carries the derivation and the counterexample (`Debug (Int -> Int)`); read it before
+  -- touching either side.
   -- Re-pushed in `reverseL` order because `wWindow` yields newest-first (items are
   -- consed): reversing restores the original record order, which the gate reports in.
   let implOblsSnap = wSnapshot perRun.value.implObls
   let callSnap = wSnapshot perRun.value.obls
   let _ = inferImplBodies env allProg rpNames (filterList implHeadParametric decls)
-  let keptImpl = filterList (t => uOblIsGround (implOblToU t)) (wWindow perRun.value.implObls (snd implOblsSnap))
-  let keptCall = filterList uOblIsGround (wWindow perRun.value.obls (snd callSnap))
+  let keptImpl = filterList (t => uOblIsDecidableNow (implOblToU t)) (wWindow perRun.value.implObls (snd implOblsSnap))
+  let keptCall = filterList uOblIsDecidableNow (wWindow perRun.value.obls (snd callSnap))
   let _ = wRestore perRun.value.implObls implOblsSnap
   let _ = wRestore perRun.value.obls callSnap
   let _ = wPushAll perRun.value.implObls (reverseL keptImpl)
@@ -17358,6 +17411,31 @@ collectByParamGo (p::rest) pairs = match lookupAssoc p pairs
 -- every dispatch mono has a resolved concrete head tycon (no remaining bare
 -- TVar at the head) — the oracle's is_concrete gate, restricted to the head (a
 -- concrete head with free args, e.g. `Maybe a`, still uniquely picks the impl).
+--
+-- 🚨 THIS IS THE DISPATCH-HEAD PROJECTION, NOT A DECIDABILITY TEST, AND THE TWO COME
+-- APART ON EXACTLY ONE POPULATION.  `headTyconNameMono` enumerates `TCon`/`TRigid`, so
+-- its `None` conflates two different facts: "not ground yet" (a `TVar` head — may still
+-- bind) and "ground but HEADLESS" (a `TFun` — fully concrete, and no instance can ever
+-- match an arrow).  A caller asking "can entailment decide this now?" therefore CANNOT
+-- use this predicate alone; a caller asking "does this pick an impl?" can.
+--
+-- ⚠️ DO NOT "FIX" THE CONFLATION BY WIDENING THIS FUNCTION to treat `TFun` as concrete.
+-- The tree's settled convention is the opposite, and it predates #1114: every site that
+-- needs a VERDICT orders a function-typed arm BEFORE its concreteness test.  Three sites
+-- do this today —
+--   * `checkOneCallObligation`   (`anyListM monoIsFunction args && not implMatchesArgsU`)
+--   * `checkReqOne`              (same arm; its comment states the rule outright — "fully
+--                                 GROUND yet structurally un-Ord/Eq/etc … but its head has
+--                                 no tycon, so `allConcreteHeads` reads it as non-concrete.
+--                                 Order the function-typed reject BEFORE the concreteness
+--                                 defer")
+--   * `uOblIsDecidableNow`       (#1114, the parametric-impl-body window's filter)
+-- — and each pairs the arm with a `not (implMatches…)` guard, so a function type that DOES
+-- have a matching impl is not rejected.  Widening this predicate would make those guards
+-- unreachable and would reroute a *matching* function-typed obligation from "defer" into
+-- `checkNestedReqs`, changing behaviour on a path none of the above is about.
+-- The conflation is real; the fix for it is a separate, better-named projection, not a
+-- redefinition of this one.
 allConcreteHeads : List Mono -> Bool
 allConcreteHeads [] = True
 allConcreteHeads (m::rest) = isSome (headTyconNameMono m)
@@ -22075,13 +22153,51 @@ attributeModuleArrIfaces mid prog entries =
 --       top-level one.  That is byte-identically the policy the SAME-module use site
 --       already applies (`lookupSchemeOblsByName`'s first match), which is the point:
 --       an importer must see what a same-module caller sees.
-attributeModuleSchemeObls : String -> List Decl -> List ((String, Int), List (String, List Int)) -> List ((String, String), List (String, List Int))
-attributeModuleSchemeObls mid prog entries =
-  attributeSchemeOblsGo
-    mid
-    (namesToSet (declTopFnNames prog) omEmpty)
-    omEmpty
-    entries
+--
+-- 🚨 A MODULE'S CONTRIBUTION IS WHAT IT DECLARES *PLUS WHAT IT RE-EXPORTS*, and the second
+-- half is not optional — it is the recurrence `.claude/workstreams/TYPECHECK.md` records for
+-- #1283 and `renameAliasedMethods` (below) already learned for the METHOD tables: "the
+-- decl's origin names the DECLARING module and the import path names the RE-EXPORTER, so
+-- the identity test misses."  Attributing only `declTopFnNames prog` means a pure
+-- re-exporter (`export import lib.def.{f}`, whose `prog` has no function definitions at
+-- all) contributes NOTHING, so `import lib.reexp.{f}` found no entry and #845's whole
+-- failure came back one hop out — `check` 0, `build` 0, and the built binary SEGFAULTED.
+-- Adversarial review produced exactly that program; this arm is the answer to it.
+--
+-- [qual] is the ALREADY-ACCUMULATED cross-module table, and dependency-first module order
+-- is what makes reading it correct here: every module this one re-exports FROM has been
+-- processed already, so its entries are present. That also makes a multi-hop chain resolve
+-- without special-casing — each hop re-attributes under its own mid as it is processed,
+-- exactly as `reexportedMethodNames` folds the method sets.
+--
+-- Re-export entries come SECOND so the module's own top-level binding wins the first-match
+-- dedup below if a module somehow both defines and re-exports one name.
+attributeModuleSchemeObls : String -> List Decl -> List ((String, String), List (String, List Int)) -> List ((String, Int), List (String, List Int)) -> List ((String, String), List (String, List Int))
+attributeModuleSchemeObls mid prog qual entries = attributeSchemeOblsGo mid (namesToSet (publicValNames prog) omEmpty) omEmpty entries
+  ++ map (e => ((mid, fst e), snd e)) (reexportSchemeOblEntries prog qual)
+
+-- ⚠️ The export test is `publicValNames`, the module's own canonical one — NOT a
+-- hand-rolled `DFunDef True` scan.  A first cut used the latter and REGRESSED two of this
+-- PR's own fixtures: `export g : Num a => a -> a` on one line with `g x = x + 1` on the
+-- next parses as a PUBLIC `DTypeSig` plus a PRIVATE `DFunDef`, so a scan that only reads
+-- the `DFunDef` flag calls an exported binding private and drops it from the store.
+-- `publicValNames` already answers this (its `DTypeSig True` arm), and reusing it is what
+-- keeps this table's notion of "exported" from drifting from the module seed's.
+
+-- the scheme contexts a module RE-EXPORTS (`export import src.{…}` / `export import src.*`),
+-- each under the name it re-exports it as.  Reuses `schemeOblEntriesFor` — the same
+-- spelling table the IMPORT side uses — so re-export and import can never disagree about
+-- what a spelling binds; that is one table, not two kept in step by hand.
+-- ⚠️ `export import src as A` contributes entries keyed `A.<name>`, which no importer of
+-- THIS module can name (an alias is local to the file that writes it).  They are inert
+-- rather than wrong, and excluding them would mean a second spelling table.
+reexportSchemeOblEntries : List Decl -> List ((String, String), List (String, List Int)) -> List (String, List (String, List Int))
+reexportSchemeOblEntries [] _ = []
+reexportSchemeOblEntries ((DAttrib _ d)::rest) qual = reexportSchemeOblEntries [d] qual
+  ++ reexportSchemeOblEntries rest qual
+reexportSchemeOblEntries ((DUse True path _)::rest) qual = schemeOblEntriesFor (usePathModuleId path) path qual
+  ++ reexportSchemeOblEntries rest qual
+reexportSchemeOblEntries (_::rest) qual = reexportSchemeOblEntries rest qual
 
 attributeSchemeOblsGo : String -> OrdMap Unit -> OrdMap Unit -> List ((String, Int), List (String, List Int)) -> List ((String, String), List (String, List Int))
 attributeSchemeOblsGo _ _ _ [] = []

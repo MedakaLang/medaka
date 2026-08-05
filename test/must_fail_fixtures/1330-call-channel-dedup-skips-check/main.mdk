@@ -1,0 +1,5 @@
+data Color = Red
+
+main =
+  let _ = println (Red, 3)
+  println (1, 2)

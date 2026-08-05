@@ -1,7 +1,11 @@
--- #1114 (#845) keying probe, module Q: TWO unsignatured exports, one carrying an
--- inferred `Num a =>` context and one carrying none at all.  Wildcard-imported, so the
--- new store's widest arm copies both under their own names — and `rid` must come across
--- with an EMPTY context even though its module-mate `qnum` has one.
+-- #1114 (#845) keying probe, module Q. THREE bindings, each pinning a different property
+-- of the new store's wildcard arm:
+--   `qnum`    EXPORTED, carries an inferred `Num a =>`  — must be visible to an importer.
+--   `rid`     EXPORTED, carries NO context              — must NOT inherit its module-mate's.
+--   `hidden`  PRIVATE,  carries an inferred `Num a =>`  — must never enter the store at all,
+--             because the store is read only from OTHER modules.
 export qnum x = x + 1
 
 export rid x = x
+
+hidden n = n + 1

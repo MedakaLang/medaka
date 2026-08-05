@@ -107,7 +107,7 @@ attachEntryWarnOpt : Option String -> List (String, (List TcDiag, List TcDiag)) 
 attributeMethodModuleArities : String -> List Decl -> List (String, List Int) -> List ((String, String), List Int)
 attributeModuleArities : String -> List Decl -> List (String, List Int) -> List ((String, String), List Int)
 attributeModuleArrIfaces : String -> List Decl -> List (String, List String) -> List ((String, String), List String)
-attributeModuleSchemeObls : String -> List Decl -> List ((String, Int), List (String, List Int)) -> List ((String, String), List (String, List Int))
+attributeModuleSchemeObls : String -> List Decl -> List ((String, String), List (String, List Int)) -> List ((String, Int), List (String, List Int)) -> List ((String, String), List (String, List Int))
 attributeSchemeOblsGo : String -> Map String Unit -> Map String Unit -> List ((String, Int), List (String, List Int)) -> List ((String, String), List (String, List Int))
 augmentWithParams : List (String, Mono) -> List Ty -> List Mono -> List (String, Mono)
 axisSub : List (String, Param) -> (String, Param) -> Bool
@@ -1182,6 +1182,7 @@ recordStandaloneSigObligations : String -> String -> Mono -> Unit
 recordTypeError : TcDiag -> Unit
 recordUnopSite : String -> Ref Route -> Mono -> Unit
 reexportRenamed : (String, String) -> List (String, Ident) -> List (String, Ident)
+reexportSchemeOblEntries : List Decl -> List ((String, String), List (String, List Int)) -> List (String, List (String, List Int))
 reexportSeed : List (String, Scheme) -> List Decl -> List (String, List (String, Scheme)) -> List (String, Scheme)
 reexportedMethodIdents : Map String (List (String, Ident)) -> List Decl -> List (String, Ident)
 reexportedMethodIdentsOf : Map String (List (String, Ident)) -> Decl -> List (String, Ident)
@@ -1472,7 +1473,7 @@ typeMismatchReport : Mono -> Mono -> Unit
 typeMismatchReportRest : Mono -> Mono -> Unit
 tyvarId : Ref Tyvar -> Int
 tyvarLevel : Ref Tyvar -> Int
-uOblIsGround : UObligation -> Bool
+uOblIsDecidableNow : UObligation -> Bool
 unboundSpineHead : Mono -> Bool
 unboundVarFresh : String -> Mono
 unboundVarMsg : String -> String

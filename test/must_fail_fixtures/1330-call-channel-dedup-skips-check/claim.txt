@@ -1,0 +1,44 @@
+issue: 1330
+what: the CALL channel's obligation DEDUP skips the CHECK, not merely the report. A
+what: FIVE-LINE, PRELUDE-ONLY program typechecks clean and builds a SEGFAULTING binary
+what: at exit 0. `oblDedupKey` renders an obligation as (iface key, arity, present
+what: positions, each present position's HEAD), so `Display (Color, Int)` and
+what: `Display (Int, Int)` collide on `Display` at a 2-tuple head. On a collision
+what: `checkCallObligationsU` recurses WITHOUT calling `checkOneCallObligation`
+what: (`if dedup && contains key seen then …`), so the failing sibling's rejection is
+what: dropped outright rather than merely deduplicated at emission. The
+what: constrained-binding channel passes dedup=True at both driver arms.
+what: Measured on the PR #1328 binary:
+what:   medaka check main.mdk        -> exit 0, `main : Unit`, 0 errors
+what:   medaka build main.mdk -o X   -> exit 0, binary written
+what:   ./X                          -> exit 139, "runtime error [E-FATAL-SIGNAL]:
+what:                                   fatal memory fault (segmentation fault)"
+what: ORDER-DEPENDENT, exactly as #863 describes: swapping the two `println` lines
+what: makes `check` reject. The IMPL channel is immune (it passes dedup=False, the
+what: #863 split) -- `main = println "\{debug (Red, 3)}\{debug (1, 2)}"` rejects
+what: correctly -- which isolates the discriminator to the call channel's dedup=True.
+cmd: check main.mdk
+exit: 0
+control: check control.mdk
+why-fixture: this pins the CHECK-accepts half via `check`, the verb every row in this
+why-fixture: corpus grades. The build/segfault half is NOT expressible as a cmd/exit
+why-fixture: pair here (it needs a build plus a run of the artifact) and was confirmed
+why-fixture: by hand -- see the `what:` lines. Single-file and prelude-only on purpose:
+why-fixture: no import, no user function, no signature, no parametric impl, so nothing
+why-fixture: about the shape overlaps #845 or #792 (both drained by PR #1328).
+why-control: control.mdk is BYTE-IDENTICAL to main.mdk except `Color` derives Display, so
+why-control: BOTH same-key obligations are satisfiable. It must check clean (exit 0),
+why-control: proving that the two-obligation shape, tuple Display dispatch and the dedup
+why-control: path all work for a VALID program -- so the observation is isolated to the
+why-control: unsatisfiable sibling specifically, not to same-key obligations in general.
+why-control: (Note the OTHER discriminator, confirmed by hand but NOT expressible as this
+why-control: harness's single control: the offending expression ALONE -- `main = println
+why-control: (Red, 3)` with no deriving -- REJECTS correctly with `No impl of Display for
+why-control: Color`, which is what shows the diagnostic exists and that adding a later,
+why-control: well-typed, unrelated line is what suppresses it.)
+why-note: this is the residual DICT-SEMANTICS §4.2 OD5 names ("deduplication suppresses
+why-note: a REPORT, never a CHECK") and OD1 forbids ("no window, rollback, deduplication
+why-note: or channel filter may discard it"). The rule landed in PR #1328; the tree does
+why-note: not yet conform on this channel, and the §11 OD5 row records it as DIVERGENT
+why-note: rather than claiming enforcement. A fix that makes `check` reject this program
+why-note: flips this row's exit from 0 to nonzero and drains it.
