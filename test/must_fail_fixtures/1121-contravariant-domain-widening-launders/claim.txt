@@ -21,13 +21,22 @@ stdout: 1
 control: run control.mdk
 why-control: control.mdk is the SAME wrapper shape (`data _ a = MkX (... a ...)`) but with
 why-control: `a` in the CODOMAIN (`Int -> a`) instead of the domain, so the occurrence is
-why-control: COVARIANT instead of contravariant. Widening a covariant occurrence's effect
-why-control: row is the SOUND direction (EFFECTS-SEMANTICS §9), and `Giver` is immutable
-why-control: with no write-back operation, so accepting the widening is correct — nothing
-why-control: can ever install a genuinely effectful closure into the narrower-typed
-why-control: original. It must stay green: a fix that rejected every effect-row widening
-why-control: regardless of polarity (rather than the contravariant one specifically) would
-why-control: break this control, and the harness would report CONTROL-BROKE, not "fixed".
+why-control: COVARIANT-ONLY, never contravariant. The soundness argument here is STRUCTURAL,
+why-control: not a spec license: `Giver` is IMMUTABLE — no write-back operation at all (no
+why-control: `Ref`/`MutArray`/`HashMap`-style cell) — so the closure installed at construction
+why-control: can never be swapped afterward; the widened type only ever describes the SAME,
+why-control: already-fixed `pureGiver` closure, which performs no IO regardless of what its
+why-control: declared type now claims it may. Nothing in this program can make the widened
+why-control: claim observably false, so accepting it is correct today.
+why-control: ⚠️ This is NOT a claim that EFFECTS-SEMANTICS licenses covariant widening in
+why-control: general — §9's actual holding is the opposite: "no direction of weakening is
+why-control: sound in general — only equality is", because polarity is not knowable without a
+why-control: variance analysis Medaka does not have (§9's own text extends this to ordinary
+why-control: Type-kinded parameters, citing #1098). A CONSERVATIVE D-2 fix (#1119,
+why-control: per-parameter polarity) could legitimately choose invariance at any parameter
+why-control: position it cannot prove covariant-only, including this one. If that happens,
+why-control: CONTROL-BROKE here means "the landed rule is more conservative than this control
+why-control: assumed — re-derive the control against it," NOT "the environment broke."
 why-note: The pin is `run` exit 0 plus the exact two lines of stdout the laundered effect
 why-note: prints. A fix rejects the `wide = pureTaker` assignment (per-parameter variance,
 why-note: target-architecture stage D-2), which flips the exit/stdout and drains this row.
