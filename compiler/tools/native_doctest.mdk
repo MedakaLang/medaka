@@ -1,0 +1,336 @@
+-- compiler/tools/native_doctest.mdk — the NATIVE doctest execution engine
+-- (Stage 2 of "make `medaka test` run natively", issue #81).
+--
+-- `medaka test` runs every doctest under the tree-walking INTERPRETER, so a
+-- native-only miscompile is invisible to it — `compiler/tools/test_cmd.mdk`
+-- says so in its own comment.  That hole let a SQL expression parser ship
+-- 32/32 green while every arithmetic operator in its grammar was broken in the
+-- native binary.  This module closes it for doctests: it compiles the module
+-- under test — with its doctest bindings appended — to a real native binary,
+-- runs it, and reports one rendered actual per example.
+--
+-- ── the contract ────────────────────────────────────────────────────────────
+-- This is an ENGINE behind `doctest.mdk`'s `buildDetailsFrom` seam (Stage 1),
+-- exactly like the interpreter arm in `test_cmd.mdk`.  Its whole obligation is
+-- "one rendered actual per example, or one whole-file error".  It does NOT
+-- decide pass/fail: `buildDetailsFrom` compares actual against expected.
+--
+-- ⚠️ THAT SPLIT IS LOAD-BEARING.  A compiled program that printed its own
+-- `ok`/`FAIL` lines would let a miscompiled `String ==` mark its own homework
+-- green — the precise class of bug this engine exists to catch.  The compiled
+-- probe therefore only ever PRINTS VALUES; the driver judges them.
+--
+-- ── one build per FILE, not per example ─────────────────────────────────────
+-- `medaka build` is clang-bound (seconds), and `stdlib/string.mdk` alone has 64
+-- examples.  So the whole file becomes ONE program: the target's verbatim source
+-- ++ every `__dt_i__` synth binding ++ a synthesized `main` that prints each
+-- one, separated by sentinel lines the driver splits on.
+--
+-- VERBATIM source, not a printer round-trip: a round-trip would test the
+-- printer as much as the backend, and any formatting divergence would land as a
+-- doctest failure in a module that is fine.
+--
+-- APPENDED INTO THE TARGET'S OWN MODULE, not an importing entry module: doctests
+-- routinely exercise module-PRIVATE names (`stdlib/string.mdk`'s do), which an
+-- importer cannot see.  This mirrors what the interpreter arm already does with
+-- `injectIntoLast` / the `__user__` decl list.
+--
+-- ⚠️ `synthSrc` (doctest.mdk) is the SINGLE generator of the `__dt_i__` lines,
+-- shared with the interpreter arm.  Do not re-derive that text here.  If the two
+-- engines generated different synth source they would be testing different
+-- programs, and the whole differential is worthless.
+--
+-- ── the abort rule ──────────────────────────────────────────────────────────
+-- If the probe binary dies partway (a panic in example 9 of 64), every example
+-- after the last COMPLETE sentinel is reported `Errored` naming the abort — never
+-- dropped, never counted as passing.  "This didn't run" must never look like
+-- "this passed"; that is the failure mode the whole suite exists to prevent.
+--
+-- ── NOT wired to any CLI surface ────────────────────────────────────────────
+-- Stage 2 delivers the engine only.  `medaka test` still runs the interpreter
+-- arm, byte-for-byte unchanged.  Wiring (and the two-engine differential) is
+-- Stage 3.  `compiler/entries/native_doctest_probe_main.mdk` drives this module
+-- so it is exercised — and typechecked by `typecheck_compiler_source.sh`, which
+-- covers `compiler/entries/*` but NOT a `compiler/tools/` module that nothing
+-- imports.
+
+import frontend.ast.{Decl, DFunDef, DData, DInterface}
+import driver.build_cmd.{
+  BuildResult(..),
+  makeTempDir,
+  cleanupTempDir,
+  runBuildNativeRoots,
+  envOr,
+  defaultMedakaRoot,
+}
+import driver.loader.{entrySearchRoots}
+import support.path.{joinPath, baseOf, dirOf}
+import support.util.{joinNl, splitNl, reverseL, startsWith, stringTrim}
+import tools.doctest.{
+  Example,
+  RunResult,
+  buildDetailsFrom,
+  exampleExpected,
+  synthName,
+  synthSrc,
+}
+
+-- ── sentinels ───────────────────────────────────────────────────────────────
+-- A doctest's rendered value can span MANY lines (an expected block is
+-- `joinNl`ed), so the split point cannot be "one line per example".  The probe
+-- prints a sentinel line BEFORE each value; a value is every line up to the next
+-- sentinel.  A trailing `END` sentinel closes the last value — which is also
+-- what makes "complete" decidable: an example's value is complete iff ANOTHER
+-- sentinel followed it.  Without the terminator, a probe killed immediately
+-- after printing the final value would be indistinguishable from a clean run.
+
+sentinelPrefix : String
+sentinelPrefix = "@@__mdk_native_doctest__@@ "
+
+sentinelFor : String -> String
+sentinelFor tag = sentinelPrefix ++ tag
+
+endTag : String
+endTag = "END"
+
+-- The tag of a sentinel line, or None for an ordinary output line.
+sentTag : String -> Option String
+sentTag line
+  | startsWith sentinelPrefix line =
+    Some (stringSlice (stringLength sentinelPrefix) (stringLength line) line)
+  | otherwise = None
+
+-- ── skips that must be LOUD ─────────────────────────────────────────────────
+-- Two shapes cannot run natively.  Both return a whole-file error, so every
+-- example is reported `Errored` with the reason and the file's summary line
+-- reads `0/N passed (0 failed, N errors)`.  A silent skip would read exactly
+-- like a pass, which is the one outcome this engine may never produce.
+--
+-- Ledger: `test/NATIVE-DOCTEST-EXCEPTIONS.txt`.
+nativeSkipReason : String -> List Decl -> Option String
+nativeSkipReason target userDecls
+  | dtProgramIsCore userDecls = Some "native doctest runner: SKIPPED \{target} — it is the prelude itself, and `medaka build` cannot build stdlib/core.mdk as a program (issue #1334). No example was executed natively."
+  | definesMain userDecls = Some "native doctest runner: SKIPPED \{target} — it already defines a top-level `main`, which the synthesized doctest entry point would collide with. No example was executed natively."
+  | otherwise = None
+
+-- The prelude is the unique program declaring BOTH the `Ordering` data type and
+-- the `Foldable` interface (same discriminator as `resolve.mdk`'s and
+-- `test_cmd.mdk`'s private copies).
+dtProgramIsCore : List Decl -> Bool
+dtProgramIsCore prog = dtHasOrdering prog && dtHasFoldable prog
+
+dtHasOrdering : List Decl -> Bool
+dtHasOrdering [] = False
+dtHasOrdering ((DData { dataName = "Ordering" })::_) = True
+dtHasOrdering (_::rest) = dtHasOrdering rest
+
+dtHasFoldable : List Decl -> Bool
+dtHasFoldable [] = False
+dtHasFoldable ((DInterface { name = "Foldable", ... })::_) = True
+dtHasFoldable (_::rest) = dtHasFoldable rest
+
+definesMain : List Decl -> Bool
+definesMain [] = False
+definesMain ((DFunDef _ "main" _ _)::_) = True
+definesMain (_::rest) = definesMain rest
+
+-- ── entry point ─────────────────────────────────────────────────────────────
+-- `target`/`tsrc` are the module under test and its verbatim source;
+-- `userDecls` its desugared decls (only for the skip checks); `examples` and
+-- `synthResults` come from `doctest.mdk` exactly as the interpreter arm gets
+-- them, so both engines judge the same example list with the same indices.
+--
+-- The build environment (repo root, `medaka`, `CC`) is read here rather than
+-- taken as parameters, mirroring `medaka build`'s own `runBuildPlainCmd`.
+export runNativeDoctests : String -> String -> List Decl -> List Example -> List (Result String (List Decl)) -> <IO> RunResult
+runNativeDoctests target tsrc userDecls examples synthResults =
+  buildDetailsFrom
+    (nativeRendered target tsrc userDecls examples synthResults)
+    synthResults
+    examples
+
+-- The engine's obligation as data: Err = one whole-file failure, Ok = one
+-- rendered actual per example (positionally aligned with `examples`).
+nativeRendered : String -> String -> List Decl -> List Example -> List (Result String (List Decl)) -> <IO> Result String (List (Result String String))
+nativeRendered target tsrc userDecls examples synthResults = match nativeSkipReason target userDecls
+  Some reason => Err reason
+  None => match makeTempDir ()
+    Err e => Err "native doctest runner: could not create a scratch directory: \{e}"
+    Ok tmpDir =>
+      -- `rendered` is bound (and so fully forced — Medaka is strict) BEFORE the
+      -- teardown, so the probe binary still exists while it runs.  Same shape as
+      -- `build_cmd.mdk`'s `runBuildNative`.
+      let rendered = runInTmp target tsrc examples synthResults tmpDir
+      let _ = cleanupTempDir tmpDir
+      rendered
+
+-- ── the scratch project ─────────────────────────────────────────────────────
+-- ⚠️ TRUSTED-ROOT PROBLEM.  A copy of a stdlib module living outside `stdlib/`
+-- loses trusted-root status, so its internal-only externs (`arrayGetUnsafe`, …)
+-- become hard errors — 7 of them in `stdlib/string.mdk`, measured.
+--
+-- The fix is a `medaka.toml` written beside the copy.  That is not a trick: it
+-- is `loader.mdk`'s OWN documented trust rule (`projectTrustedMods`) — when the
+-- entry belongs to a REAL PROJECT (a manifest is found walking up), every module
+-- owned by the entry's own search roots is trusted.  The scratch dir genuinely
+-- IS a one-module project, so it earns trust by the rule rather than by evading
+-- the check.
+--
+-- Two things were verified on the binary rather than assumed:
+--   * `medaka build <copy>` WITHOUT the manifest fails with those 7 errors, and
+--     WITH it succeeds — so the manifest is what carries the trust;
+--   * the emit path this module actually uses (`runBuildNativeRoots` → the
+--     `medaka_emitter` binary) applies no internal-extern guard at all today,
+--     so the copy would build either way.  The manifest is therefore belt AND
+--     braces: it makes the trust hold by rule, so this engine keeps working if
+--     the guard is ever extended to the emit path.
+--
+-- The alternative — teaching the seam an `--allow-internal`-style bypass — was
+-- rejected: it would grant EVERY native doctest run unguarded access to the
+-- unsafe array kernels, which is strictly more permission than the module under
+-- test has at its real path.
+scratchManifest : String
+scratchManifest = "[project]\nname = \"medaka_native_doctest\"\n"
+
+-- The copy is named `dt_<basename>` rather than `<basename>`.  A module id
+-- collision is otherwise reachable: a copy of `stdlib/string.mdk` in the scratch
+-- dir and the real `stdlib/string.mdk` would both claim the module id `string`,
+-- and the loader would have to pick one.
+scratchEntryName : String -> String
+scratchEntryName target = "dt_" ++ baseOf target
+
+runInTmp : String -> String -> List Example -> List (Result String (List Decl)) -> String -> <IO> Result String (List (Result String String))
+runInTmp target tsrc examples synthResults tmpDir =
+  let entryPath = joinPath tmpDir (scratchEntryName target)
+  let outPath = joinPath tmpDir "dt_probe"
+  let _ = writeFile (joinPath tmpDir "medaka.toml") scratchManifest
+  match writeFile entryPath (probeSource tsrc examples synthResults)
+    Err e => Err "native doctest runner: could not write the probe source: \{e}"
+    Ok _ => buildAndRun target entryPath outPath tmpDir examples synthResults
+
+buildAndRun : String -> String -> String -> String -> List Example -> List (Result String (List Decl)) -> <IO> Result String (List (Result String String))
+buildAndRun target entryPath outPath tmpDir examples synthResults =
+  let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
+  let medaka = envOr "MEDAKA" "medaka"
+  let cc = envOr "CC" "clang"
+  -- The scratch entry's OWN search roots resolve nothing useful (it sits in a
+  -- `mktemp -d`), so the target's real roots are passed as extraRoots — the
+  -- exact case Stage 0 added that parameter for.  `compiler`/`stdlib` are
+  -- appended by `runBuildNativeRoots` itself.
+  let extraRoots = entrySearchRoots (dirOf target)
+  match runBuildNativeRoots root medaka cc entryPath outPath tmpDir False extraRoots
+    BuildErr msg => Err "native doctest runner: could not build \{target} natively\n\{msg}"
+    BuildOk _ => match runCommand outPath []
+      Err e => Err "native doctest runner: could not run the compiled probe: \{e}"
+      Ok (code, out, errOut) =>
+        Ok (renderAll (chunksOf (splitNl out)) (abortNote code errOut) 0 examples synthResults)
+
+-- ── the probe program ───────────────────────────────────────────────────────
+-- target source (verbatim) ++ the `__dt_i__` bindings ++ a synthesized `main`.
+--
+-- ⚠️ `main` MUST be a zero-arg VALUE.  `medaka run`/the runtime evaluate
+-- top-level bindings and never APPLY `main`, so `main () = …` is a silent no-op
+-- (exit 0, no output) — which here would present as every example aborting.
+--
+-- Referencing every `__dt_i__` from `main` is also what keeps `dceFilter` from
+-- dropping them: an unreferenced top-level binding is dead code, and a dropped
+-- binding is an example that never ran.
+probeSource : String -> List Example -> List (Result String (List Decl)) -> String
+probeSource tsrc examples synthResults =
+  joinNl
+    ([tsrc, ""] ++ synthLines 0 examples synthResults ++ ["", "main ="] ++ mainLines 0 examples synthResults ++ ["  putStrLn \"\{sentinelFor endTag}\"", ""])
+
+-- One synth binding per example whose synth PARSED.  An example whose synth
+-- failed to parse contributes no binding (mirroring `buildSynthDecls`) — its
+-- outcome is reported from `synthResults` by `buildDetailsFrom` and never
+-- consults the rendered value.
+synthLines : Int -> List Example -> List (Result String (List Decl)) -> List String
+synthLines _ [] _ = []
+synthLines _ (_::_) [] = []
+synthLines i (ex::rest) ((Ok _)::srRest) =
+  synthSrc i ex :: synthLines (i + 1) rest srRest
+synthLines i (_::rest) ((Err _)::srRest) = synthLines (i + 1) rest srRest
+
+-- Per example: the sentinel, then the value.
+--
+-- An example WITH an expected block synthesizes `__dt_i__ = debug (expr)`, i.e.
+-- a String — printed directly.  A SMOKE example (no expected block) synthesizes
+-- the raw expression, whose type is arbitrary and need not be printable, so it
+-- is only FORCED and contributes an empty value; `buildDetailsFrom` passes it
+-- as long as it evaluated.  (There are currently zero smoke examples in the
+-- tree, so this arm is correctness, not machinery.)
+mainLines : Int -> List Example -> List (Result String (List Decl)) -> List String
+mainLines _ [] _ = []
+mainLines _ (_::_) [] = []
+mainLines i (_::rest) ((Err _)::srRest) = mainLines (i + 1) rest srRest
+mainLines i (ex::rest) ((Ok _)::srRest) = ["  let _ = putStrLn \"\{sentinelFor (intToString i)}\"", valueLine i ex]
+  ++ mainLines (i + 1) rest srRest
+
+valueLine : Int -> Example -> String
+valueLine i ex = match exampleExpected ex
+  Some _ => "  let _ = putStrLn \{synthName i}"
+  None => "  let _ = \{synthName i}"
+
+-- ── reading the probe's stdout back ─────────────────────────────────────────
+
+-- tag, the value's lines, and whether ANOTHER sentinel followed (i.e. the value
+-- is complete rather than truncated by an abort).
+data Chunk = Chunk String (List String) Bool
+
+chunksOf : List String -> List Chunk
+chunksOf lines = reverseL (chunkScan [] None [] lines)
+
+-- Lines before the FIRST sentinel are dropped: they are whatever the module's
+-- own top-level effects printed, not part of any example's value.
+chunkScan : List Chunk -> Option String -> List String -> List String -> List Chunk
+chunkScan acc cur curLines [] = closeChunk acc cur curLines False
+chunkScan acc cur curLines (l::rest) = match sentTag l
+  Some t => chunkScan (closeChunk acc cur curLines True) (Some t) [] rest
+  None => match cur
+    None => chunkScan acc cur curLines rest
+    Some _ => chunkScan acc cur (l::curLines) rest
+
+closeChunk : List Chunk -> Option String -> List String -> Bool -> List Chunk
+closeChunk acc None _ _ = acc
+closeChunk acc (Some t) curLines terminated =
+  Chunk t (reverseL curLines) terminated :: acc
+
+lookupChunk : String -> List Chunk -> Option Chunk
+lookupChunk _ [] = None
+lookupChunk tag ((Chunk t ls done)::rest)
+  | t == tag = Some (Chunk t ls done)
+  | otherwise = lookupChunk tag rest
+
+-- ⚠️ THE ABORT RULE.  An example whose chunk is missing, or present but not
+-- closed by a following sentinel, is `Errored` NAMING the abort.  It is never
+-- dropped and never treated as a pass: a mid-run panic leaving later examples
+-- unjudged is exactly the "didn't run looks like passed" failure this engine
+-- exists to prevent.  A value that WAS fully printed before the abort is still
+-- judged normally — the run is truncated, not invalidated.
+abortNote : Int -> String -> String
+abortNote code errOut =
+  let detail = firstNonEmptyLine (splitNl errOut)
+  let suffix = if detail == "" then "" else " — " ++ detail
+  "native doctest run ended (probe exit \{intToString code}) before this example was reported\{suffix}"
+
+firstNonEmptyLine : List String -> String
+firstNonEmptyLine [] = ""
+firstNonEmptyLine (l::rest)
+  | stringTrim l == "" = firstNonEmptyLine rest
+  | otherwise = stringTrim l
+
+renderAll : List Chunk -> String -> Int -> List Example -> List (Result String (List Decl)) -> List (Result String String)
+renderAll _ _ _ [] _ = []
+renderAll _ _ _ (_::_) [] = []
+renderAll chunks note i (_::rest) (sr::srRest) =
+  renderOne chunks note i sr :: renderAll chunks note (i + 1) rest srRest
+
+-- The `Err _` synth arm's payload is never read: `buildDetailsFrom`'s
+-- `oneResultOk` reports that example's own parse error and ignores the rendered
+-- entry.  It exists to keep the list positionally aligned with `examples`.
+renderOne : List Chunk -> String -> Int -> Result String (List Decl) -> Result String String
+renderOne _ _ _ (Err _) = Err "example did not parse"
+renderOne chunks note i (Ok _) = match lookupChunk (intToString i) chunks
+  Some (Chunk _ ls True) => Ok (joinNl ls)
+  Some (Chunk _ _ False) => Err note
+  None => Err note

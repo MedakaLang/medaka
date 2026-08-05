@@ -1,11 +1,19 @@
 # `gzip/` — a DEFLATE/gzip codec in pure Medaka
 
-**Status:** PARTIAL — Phases 1-3: foundation, fixed-Huffman inflate, and
-dynamic-Huffman inflate. Stored, fixed-Huffman, and dynamic-Huffman blocks
-(`BTYPE` 00/01/10 — every block type a real-world `.gz` file uses) all
-decompress for real, including this repo's own
-`compiler/seed/emitter.ll.gz`. Deflate (compression, Phases 4-6) is not yet
-implemented. Design and phasing: [`../docs/design/GZIP-DESIGN.md`](../docs/design/GZIP-DESIGN.md).
+**Status:** PARTIAL — Phases 1-4: foundation, fixed-Huffman inflate,
+dynamic-Huffman inflate, and deflate (LZ77 + fixed-Huffman + stored
+fallback). Stored, fixed-Huffman, and dynamic-Huffman blocks (`BTYPE`
+00/01/10 — every block type a real-world `.gz` file uses) all decompress
+for real, including this repo's own `compiler/seed/emitter.ll.gz`.
+Compression now works too: `gzip/lib/deflate.mdk` emits real `.gz` files the
+system `gunzip` accepts and reproduces byte-for-byte — LZ77 hash-chain
+matching with lazy matching, fixed-Huffman blocks, and a stored-block
+fallback that guarantees incompressible input never grows beyond a small
+fixed overhead. Dynamic-Huffman *encoding* (Phase 5 — frequency counting,
+block splitting) is not yet implemented, so our own output is always larger
+than `gzip -6`'s (see `gzip/lib/deflate.mdk`'s module header for the ratio
+this leaves on the table). Design and phasing:
+[`../docs/design/GZIP-DESIGN.md`](../docs/design/GZIP-DESIGN.md).
 
 A dogfooding project, chosen to exercise the parts of the language the SQLite
 library leaves cold: sub-byte bit streams, in-place mutable arrays in a hot
@@ -20,17 +28,21 @@ loop, and property testing against an external oracle.
 | `lib/container.mdk` | RFC 1952 gzip member header and trailer, parse and emit |
 | `lib/huffman.mdk` | Canonical Huffman decoding (counts-and-offsets), fixed tables, length/distance tables |
 | `lib/inflate.mdk` | The DEFLATE block loop — stored (`BTYPE=00`), fixed-Huffman (`BTYPE=01`), and dynamic-Huffman (`BTYPE=10`) blocks all decode — plus the gzip member decoder (`gunzipMember`) wrapping it |
+| `lib/deflate.mdk` | Phase 4: LZ77 hash-chain match finder (with lazy matching) + fixed-Huffman block encoding (`BTYPE=01`) + stored-block fallback (`BTYPE=00`) + the gzip member compressor (`gzipCompress`) wrapping it. Dynamic-Huffman encoding (`BTYPE=10`) is Phase 5, not yet implemented |
 | `main.mdk` | The cross-module integration probe (see below) |
 | `inflate_demo.mdk` | CLI: `inflate_demo <input.gz> <output>` — the actual decompressor, used by `gzip/test/inflate_oracle.sh` |
+| `deflate_demo.mdk` | CLI: `deflate_demo <input> <output.gz>` — the actual compressor, used by `gzip/test/deflate_oracle.sh` |
 
 ## Running it
 
 ```sh
-medaka test gzip/lib/crc32.mdk        # and bitio.mdk, container.mdk, huffman.mdk, inflate.mdk
+medaka test gzip/lib/crc32.mdk        # and bitio.mdk, container.mdk, huffman.mdk, inflate.mdk, deflate.mdk
 medaka run  gzip/main.mdk
 medaka build gzip/main.mdk -o gzip_probe && ./gzip_probe
 medaka build gzip/inflate_demo.mdk -o inflate_demo && ./inflate_demo some.gz out.bin
-sh gzip/test/inflate_oracle.sh   # differential oracle against the system gzip/gunzip
+medaka build gzip/deflate_demo.mdk -o deflate_demo && ./deflate_demo some_file out.gz
+sh gzip/test/inflate_oracle.sh   # differential oracle against the system gzip/gunzip (decompress direction)
+sh gzip/test/deflate_oracle.sh   # differential oracle against the system gzip/gunzip (compress direction)
 ```
 
 Both engines must agree. An interpreter-green result proves nothing about the

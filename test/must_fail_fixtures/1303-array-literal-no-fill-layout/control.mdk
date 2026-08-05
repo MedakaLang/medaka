@@ -1,4 +1,0 @@
-bytes : Array Int
-bytes = fromList [31, 139, 8, 0, 0, 0, 0, 0, 4, 3, 1, 200, 0, 55, 255, 190]
-
-main = println (length bytes)

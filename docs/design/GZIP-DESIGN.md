@@ -1,10 +1,14 @@
 # DEFLATE / gzip — a compression codec in pure Medaka
 
-**Status:** PARTIAL — Phases 1-3 shipped (`gzip/`): stored + fixed-Huffman +
-dynamic-Huffman inflate, real round-trip decompression of any `.gz` whose
-blocks are BTYPE 00/01/10 — i.e. every real-world DEFLATE block type.
-Deflate (compression, Phases 4-6) is not yet implemented. A dogfood capstone
-chosen to exercise the parts of the language and
+**Status:** PARTIAL — Phases 1-4 shipped (`gzip/`): stored + fixed-Huffman +
+dynamic-Huffman inflate (real round-trip decompression of any `.gz` whose
+blocks are BTYPE 00/01/10 — i.e. every real-world DEFLATE block type), plus
+deflate — LZ77 hash-chain match finding (with lazy matching) + fixed-Huffman
+block encoding + stored-block fallback, real compression the system
+`gunzip` accepts and reproduces byte-for-byte. Dynamic-Huffman *encoding*
+(Phase 5) is not yet implemented, so our own output is always somewhat
+larger than `gzip -6`'s. A dogfood capstone chosen to exercise the parts of
+the language and
 stdlib that the SQLite library (`archive/design/SQLITE-DESIGN.md`, as-built in
 `sqlite/`) leaves cold: sub-byte bit streams, in-place mutable arrays in a hot
 loop, and round-trip property testing against an external oracle. The phasing
@@ -126,13 +130,14 @@ actually fast is an open question this project will answer.
 | **1** | `BitReader` + **stored (uncompressed) blocks** + gzip container parse/emit + CRC-32 | incompressible input (`/dev/urandom`) at any level emits a stored block — see below; `printf` \| `gzip` round-trip |
 | **2** | **Inflate, fixed Huffman** — the RFC 1951 static code tables, length/distance decoding, sliding window | `gzip -1`..`-9` (SHIPPED — see `gzip/test/inflate_oracle.sh`). ⚠️ You do not get to choose BTYPE; see "When gzip actually emits fixed Huffman" below. The oracle asserts the BTYPE it observed rather than assuming one |
 | **3** | **Inflate, dynamic Huffman** — code-length alphabet, HLIT/HDIST/HCLEN, canonical code construction (SHIPPED) | Real `.gz` corpus, including this repo's own `compiler/seed/emitter.ll.gz` — see `gzip/test/inflate_oracle.sh` |
-| **4** | **Deflate** — LZ77 hash-chain matcher + fixed-Huffman blocks + stored-block fallback | `gunzip` accepts our output and reproduces the input |
+| **4** | **Deflate** — LZ77 hash-chain matcher + fixed-Huffman blocks + stored-block fallback (SHIPPED) | `gunzip` accepts our output and reproduces the input — see `gzip/test/deflate_oracle.sh` |
 | **5** | **Deflate, dynamic Huffman** — frequency counting, length-limited code construction, block-splitting heuristic | Compression ratio vs `gzip -6` on a fixed corpus (reported, not gated) |
 | **6** | zlib container (RFC 1950) + Adler-32 | `python3 -c "import zlib"` round-trip |
 
-Phases 1–3 are the ones with real-world value on their own; a decompressor that
-cannot compress is still a useful library. Phases 4–6 are what make the round-trip
-property tests possible, which is where most of the language coverage lives.
+Phases 1–4 are the ones with real-world value on their own; a compressor
+without dynamic Huffman is still a useful library, just not a
+ratio-competitive one. Phase 5 is what closes that gap; Phase 6 is a
+sibling container format.
 
 ---
 
@@ -457,7 +462,8 @@ preamble and the "build the demo, run it, diff against the real tool" shape.
 | Input | What it catches |
 |-------|-----------------|
 | Empty file | Zero-length stream, `BFINAL` on an empty block |
-| One byte | Degenerate Huffman alphabets |
+| One byte | A minimal fixed-Huffman stream (the system `gzip` picks BTYPE=1 for a genuinely 0- or 1-byte input at every level 1–9 — its block-splitting heuristic never has enough symbol diversity at this size to justify a dynamic table, so this entry does **not** exercise a degenerate Huffman alphabet; see the "dynamic Huffman with zero used distance codes" entry below for that) |
+| Dynamic block with zero used distance codes | Degenerate Huffman alphabet: RFC 1951 §3.2.7's "no distance codes used at all" shape (`numUsed == 0`), which arises when a dynamic block is all-literals. Neither the system `gzip` nor Python's `zlib` (any strategy) ever produces this — both pad the distance tree to ≥2 codes when real usage is 0 or 1 — so this fixture is hand-built (`gzip/test/gen_zerodist_fixture.py`), the same technique Phase 3 used to pin the repeat-code-16 error path |
 | 100 KB of one repeated byte | The `distance = 1` overlap case, and the maximum-length code |
 | `/dev/urandom` output | Incompressible input → stored-block fallback; catches an encoder that grows the data and never notices |
 | A large `.mdk` source file | Realistic text, dynamic Huffman, long matches |

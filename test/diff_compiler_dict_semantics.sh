@@ -222,6 +222,26 @@
 #     of a `=>` context the same way the block permuter reverses impls) or record
 #     why not. ⚠️ A permutation differential is only order-free along the axis it
 #     actually permutes -- do not read section 4's green as "order does not decide".
+#   * 🚨 §4.2 (OBLIGATION DEFERRAL, OD1-OD6) IS ENTIRELY UNCOVERED -- six normative
+#     clauses landed in this spec (#1114) and this gate did not move. That gap is
+#     STRUCTURAL, not an oversight of one PR: this file's self-audit fails for an
+#     unwired FIXTURE, never for an unfixtured CLAUSE, so a whole subsection can be
+#     added to DICT-SEMANTICS.md and nothing here goes red. Recorded as the honest
+#     minimum until fixtures exist.
+#     Two of the six are already known NOT to hold, so a fixture would be red today
+#     rather than green -- which is the point of writing them down:
+#       - OD5 is DIVERGENT on the constrained-binding channel: #1330 (OPEN, S0,
+#         verified) -- five prelude-only lines, `check` 0, `build` 0, binary
+#         SEGFAULTS, because a dedup key collision skips the CHECK and not merely
+#         the report.
+#       - OD6 has three measured residuals (#1330, #1326 and its `run`-only face);
+#         see the §11 OD6 row.
+#     OD1's own history is the argument for covering this section rather than
+#     trusting it: its first implementation passed every gate in the tree while
+#     dropping a decidable predicate, because a DROPPED obligation produces SILENCE
+#     and silence is what a golden already records for an accepted program. A
+#     §4.2 fixture family therefore has to assert REJECTION of specific shapes; a
+#     corpus of accepted programs cannot see this class at all.
 #   * Section 4 tests exactly ONE reordering per qualifying fixture -- a full
 #     reversal of the qualifying blocks -- not all N! declaration orders. For
 #     N=2 that IS the only nontrivial permutation; for N=3 (the corpus's max

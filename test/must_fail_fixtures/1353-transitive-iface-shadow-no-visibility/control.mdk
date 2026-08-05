@@ -1,0 +1,5 @@
+-- CONTROL: main.mdk minus the `bridge` import (and the `bf 0` use). `Sizeable` never
+-- enters the module graph at all, so the imported standalone `fmod.size` answers.
+import fmod.{size}
+
+main = println (size "abc")

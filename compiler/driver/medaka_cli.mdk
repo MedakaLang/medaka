@@ -142,6 +142,7 @@ import eval.eval.{
   progArgsRef,
 }
 import tools.test_cmd.{runTest}
+import tools.doctest.{Engine(..)}
 import tools.repl.{initSession, replLoop}
 import tools.lsp.{runServer}
 import tools.mcp.{runMcpServer}
@@ -167,6 +168,7 @@ import tools.lint.{
   applyFindingDeny,
   isFindingError,
   lintFileDiagTriple,
+  splitLintNames,
 }
 import tools.lint_cache.{
   LintEntry(..),
@@ -316,7 +318,7 @@ usage _ = putStrLn (stringConcat
     "  medaka run [--release] <file.mdk>   Type-check and run a program\n",
     "  medaka build <file.mdk> [-o <out>] [--keep-ir]  Compile to a native binary (LLVM + clang)\n",
     "  medaka check [--json] <file.mdk>    Type-check without running\n",
-    "  medaka test [file.mdk]    Run doctests + prop tests\n",
+    "  medaka test [--native | --engines eval,native] [file.mdk]    Run doctests + prop tests (--native runs doctests through a compiled native binary INSTEAD of the interpreter; --engines runs the listed set, exit is the AND)\n",
     "  medaka doc [file.mdk]     Generate Markdown documentation\n",
     "  medaka lint [paths...]    Lint files/dirs (style rules; --fix, --cache, --disable/--only/--deny=<rules,...>)\n",
     "  medaka codemod <name> [flags] [paths...]  Apply a named source-preserving AST transform (--write/--stdout)\n",
@@ -720,7 +722,10 @@ lastModPair [p] = Some p
 lastModPair (_::rest) = lastModPair rest
 
 -- Drop check's non-positional flags (--release is silently ignored; --json is
--- handled by the caller via hasFlag before dropFlags strips it).
+-- handled by the caller via hasFlag before dropFlags strips it). `medaka
+-- test`'s own flags (--native, --engines <list>) are NOT here — `--engines`
+-- takes a value dropFlags doesn't know how to skip, so `medaka test` filters
+-- its own argv via `testTargets` instead (below).
 dropFlags : List String -> List String
 dropFlags [] = []
 dropFlags ("--json"::rest) = dropFlags rest
@@ -1860,26 +1865,99 @@ runProgramOutput preludeDecls modules = match mainTypeIsAsync ()
 -- `.mdk` file is tested in turn, aggregating: exit nonzero iff ANY file's
 -- tests failed OR couldn't be read (this is also what makes the #212 exit-0
 -- bug go away for the directory/project route, not just the single-file one).
+-- `--native` (#81 Stage 3) SWAPS the engine to native-only — sugar for
+-- `--engines native`, NOT an addition to the interpreter (a flag named
+-- "native" that silently also ran eval would mislead the exact stranger the
+-- 0.1.0 bar is written for). `--engines eval,native` is the explicit
+-- multi-engine form Stage 4's CI gate will use. Bare `medaka test <file>`
+-- (neither flag) is unchanged: interpreter-only, byte-identical to
+-- pre-#81-Stage-3 output. An unknown `--engines` name is a hard diagnostic
+-- naming the valid set — never a silent drop, which would let a typo run
+-- nothing and still exit 0 (the exact "didn't run looks like passed" failure
+-- this whole arc exists to close).
 runTestCmd : List String -> <IO> Unit
-runTestCmd argv = match dropFlags argv
-  [] =>
-    let _ = ePutStrLn "usage: medaka test [file.mdk | dir]"
+runTestCmd argv = match parseTestEngines argv
+  Err msg =>
+    let _ = ePutStrLn "medaka test: \{msg}"
     exit 1
-  [target] => match listDir target
-    Err _ => runTestOne target
-    Ok _ => runTestManyTargets [target]
-  targets => runTestManyTargets targets
+  Ok engines => match testTargets argv
+    [] =>
+      let _ = ePutStrLn "usage: medaka test [--native | --engines eval,native] [file.mdk | dir]"
+      exit 1
+    [target] => match listDir target
+      Err _ => runTestOne engines target
+      Ok _ => runTestManyTargets engines [target]
+    targets => runTestManyTargets engines targets
+
+-- `--engines <list>` and `--native` are MUTUALLY EXCLUSIVE — not "--engines
+-- silently wins". Letting one silently override the other reproduces, in
+-- miniature, the exact "flag quietly does something other than what the user
+-- asked" failure the whole --native/--engines split exists to remove: a user
+-- who typed --native and got only `--engines`'s answer, with no diagnostic,
+-- has no way to know --native was ignored. So both together is a hard error
+-- naming both flags, not a silent pick.  With neither given, the default is
+-- `[EngInterp]`.
+parseTestEngines : List String -> Result String (List Engine)
+parseTestEngines argv = match (testFlagValue "--engines" argv, hasFlag "--native" argv)
+  (Some _, True) => Err "--native and --engines are mutually exclusive; --native is shorthand for --engines native"
+  (Some spec, False) => parseEngineList spec
+  (None, True) => Ok [EngNative]
+  (None, False) => Ok [EngInterp]
+
+-- Comma list of engine names (`eval`/`native`) — mirrors `medaka snapshot
+-- --stages a,b`'s `parseStages`: an unknown name is a hard error naming the
+-- known set, not a silent drop.
+parseEngineList : String -> Result String (List Engine)
+parseEngineList spec =
+  let names = filterList (!= "") (map stringTrim (splitLintNames spec))
+  match names
+    [] => Err "--engines requires at least one of: eval, native"
+    _ => parseEngineNames names
+
+parseEngineNames : List String -> Result String (List Engine)
+parseEngineNames [] = Ok []
+parseEngineNames (n::rest) = match engineOfName n
+  None => Err "unknown engine '\{n}' (known: eval, native)"
+  Some e => map (e :: _) (parseEngineNames rest)
+
+engineOfName : String -> Option Engine
+engineOfName "eval" = Some EngInterp
+engineOfName "native" = Some EngNative
+engineOfName _ = None
+
+-- `--flag value` (space-separated, unlike lint's `--flag=v1,v2`) — same shape
+-- as `medaka snapshot`'s `snapFlagValue`, kept local since neither module
+-- exports its copy.
+testFlagValue : String -> List String -> Option String
+testFlagValue _ [] = None
+testFlagValue _ [_] = None
+testFlagValue name (a::v::rest) =
+  if a == name then
+    Some v
+  else
+    testFlagValue name (v::rest)
+
+-- Non-flag args for `medaka test`, minus `--native` and the VALUE of
+-- `--engines` (the shared `dropFlags` doesn't know about a value-taking
+-- flag). Mirrors `snapshotTargets`/`lintTargets`.
+testTargets : List String -> List String
+testTargets [] = []
+testTargets ("--engines"::_::rest) = testTargets rest
+testTargets ("--native"::rest) = testTargets rest
+testTargets (x::rest)
+  | startsWith "--" x = testTargets rest
+  | otherwise = x :: testTargets rest
 
 -- Original single-file path, unchanged: read <MEDAKA_ROOT>/stdlib sources,
 -- build search roots, run `runTest`, exit 1 on any failure/read-error.
-runTestOne : String -> <IO> Unit
-runTestOne target =
+runTestOne : List Engine -> String -> <IO> Unit
+runTestOne engines target =
   let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
   let rtPath = root ++ "/stdlib/runtime.mdk"
   let corePath = root ++ "/stdlib/core.mdk"
   let stdlibDir = root ++ "/stdlib"
   let roots = entrySearchRoots (dirOf2 target) ++ [stdlibDir]
-  let ok = runTest rtPath corePath target roots
+  let ok = runTest engines rtPath corePath target roots
   if ok then () else exit 1
 
 -- Directory/project/multi-target path: expand every target to concrete .mdk
@@ -1887,8 +1965,8 @@ runTestOne target =
 -- (empty dir, or a dir with no .mdk files) is reported and left at exit 0 —
 -- "nothing to test" is not a failure, mirroring runTest's own vacuous-pass
 -- convention for a single zero-doctest file.
-runTestManyTargets : List String -> <IO> Unit
-runTestManyTargets targets =
+runTestManyTargets : List Engine -> List String -> <IO> Unit
+runTestManyTargets engines targets =
   let files = flatMap expandLintTarget targets
   match files
     [] =>
@@ -1899,16 +1977,19 @@ runTestManyTargets targets =
       let rtPath = root ++ "/stdlib/runtime.mdk"
       let corePath = root ++ "/stdlib/core.mdk"
       let stdlibDir = root ++ "/stdlib"
-      if testFilesGo rtPath corePath stdlibDir files False then exit 1 else ()
+      if testFilesGo engines rtPath corePath stdlibDir files False then
+        exit 1
+      else
+        ()
 
 -- Fold `runTest` over an expanded file list, aggregating whether ANY file
 -- failed (tests failed, or the file itself couldn't be read/parsed).
-testFilesGo : String -> String -> String -> List String -> Bool -> <IO> Bool
-testFilesGo _ _ _ [] acc = acc
-testFilesGo rtPath corePath stdlibDir (f::rest) acc =
+testFilesGo : List Engine -> String -> String -> String -> List String -> Bool -> <IO> Bool
+testFilesGo _ _ _ _ [] acc = acc
+testFilesGo engines rtPath corePath stdlibDir (f::rest) acc =
   let roots = entrySearchRoots (dirOf2 f) ++ [stdlibDir]
-  let ok = runTest rtPath corePath f roots
-  testFilesGo rtPath corePath stdlibDir rest (acc || not ok)
+  let ok = runTest engines rtPath corePath f roots
+  testFilesGo engines rtPath corePath stdlibDir rest (acc || not ok)
 
 -- ── doc ───────────────────────────────────────────────────────────────────
 -- Mirrors bin/main.ml's `doc` arm + lib/doc.ml: read the target file, parse

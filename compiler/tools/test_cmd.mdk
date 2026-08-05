@@ -53,11 +53,15 @@ import tools.doctest.{
   Example,
   ExResult(..),
   RunResult(..),
+  Engine(..),
+  engineName,
   extractExamples,
   buildSynthResults,
   buildSynthDecls,
   buildDetailsFrom,
+  doctestFailSuffix,
   hasUseDecls,
+  printDoctestDetails,
   runDetails,
   runPassed,
   runFailed,
@@ -66,6 +70,7 @@ import tools.doctest.{
   exampleLine,
   synthName,
 }
+import tools.native_doctest.{runNativeDoctests}
 import tools.prop_runner.{runAllProps, hasProps, runAllPropsResults, PropResult}
 import tools.test_runner.{collectTests, runOneTest, hasTests}
 import driver.diagnostics.{
@@ -90,8 +95,13 @@ rootsOrDefault _ roots = roots
 -- returns False (P0-212): a file that couldn't even be opened is a FAILURE,
 -- not a vacuous pass, so callers that gate `exit 1` on this Bool (rather than
 -- on the printed report, since the report is prose, not a signal) see it.
-export runTest : String -> String -> String -> List String -> <IO> Bool
-runTest runtimeP coreP target roots = match readPreludeFile runtimeP
+-- `engines` selects which execution engine(s) render each doctest example's
+-- actual value — `[EngInterp]` (the default, byte-identical to pre-#81-Stage-3
+-- behavior), `[EngNative]` under `medaka test --native` (SWAPS the engine,
+-- doesn't add one), or an explicit `--engines eval,native` list. It has NO
+-- effect on the prop/`test "…"` phases, which remain interpreter-only.
+export runTest : List Engine -> String -> String -> String -> List String -> <IO> Bool
+runTest engines runtimeP coreP target roots = match readPreludeFile runtimeP
   Err e =>
     let _ = ePutStrLn e
     False
@@ -122,7 +132,7 @@ runTest runtimeP coreP target roots = match readPreludeFile runtimeP
             Some errText =>
               let _ = ePutStrLn (typecheckGateFail target errText)
               False
-            None => driveAll (desugar (parse rsrc)) (desugar (parse csrc)) target tsrc roots
+            None => driveAll engines (desugar (parse rsrc)) (desugar (parse csrc)) target tsrc roots
 
 -- ── doctest typecheck gate (issue #260) ──────────────────────────────────────
 -- `medaka test` used to GREEN-LIGHT a module whose DOCTESTS `medaka check`
@@ -188,18 +198,18 @@ renderFileErrors (path, src, diags) =
 typecheckGateFail : String -> String -> String
 typecheckGateFail target errText = "type error in \{target} — `medaka test` requires it to `medaka check` first:\n\{errText}"
 
-driveAll : List Decl -> List Decl -> String -> String -> List String -> <IO> Bool
-driveAll runtimeDecls coreDecls target tsrc roots =
+driveAll : List Engine -> List Decl -> List Decl -> String -> String -> List String -> <IO> Bool
+driveAll engines runtimeDecls coreDecls target tsrc roots =
   let userDecls = desugar (parse tsrc)
-  let doctestsOk = runDoctests runtimeDecls coreDecls target tsrc userDecls roots
+  let doctestsOk = runDoctests engines runtimeDecls coreDecls target tsrc userDecls roots
   let propsOk = runProps runtimeDecls coreDecls target userDecls roots
   let testsOk = runTestDecls runtimeDecls coreDecls target tsrc userDecls roots
   doctestsOk && propsOk && testsOk
 
 -- ── doctest phase ────────────────────────────────────────────────────────────
 
-runDoctests : List Decl -> List Decl -> String -> String -> List Decl -> List String -> <IO> Bool
-runDoctests runtimeDecls coreDecls target tsrc userDecls roots =
+runDoctests : List Engine -> List Decl -> List Decl -> String -> String -> List Decl -> List String -> <IO> Bool
+runDoctests engines runtimeDecls coreDecls target tsrc userDecls roots =
   let _ = putStrLn ("running doctests in " ++ target)
   let examples = extractExamples (collectComments tsrc)
   match examples
@@ -209,8 +219,51 @@ runDoctests runtimeDecls coreDecls target tsrc userDecls roots =
     _ =>
       let synthResults = buildSynthResults examples
       let synthDecls = buildSynthDecls synthResults
-      let result = runChosen runtimeDecls coreDecls target userDecls roots examples synthDecls synthResults
-      reportDoctests target result
+      runEngines
+        engines
+        runtimeDecls
+        coreDecls
+        target
+        tsrc
+        userDecls
+        roots
+        examples
+        synthDecls
+        synthResults
+
+-- Run the doctests under each requested engine in turn, AND-ing pass/fail
+-- across engines. With exactly one engine — `[EngInterp]`, the default — the
+-- report is BYTE-IDENTICAL to `medaka test`'s pre-#81-Stage-3 output: no
+-- engine tag is printed, and only ONE build/run happens. `--native` adds
+-- `EngNative` to the list, and each engine's block is labelled so the two
+-- reports (and their independent pass/fail) don't run together.
+runEngines : List Engine -> List Decl -> List Decl -> String -> String -> List Decl -> List String -> List Example -> List Decl -> List (Result String (List Decl)) -> <IO> Bool
+runEngines [e] runtimeDecls coreDecls target tsrc userDecls roots examples synthDecls synthResults =
+  let result = runChosenOn e runtimeDecls coreDecls target tsrc userDecls roots examples synthDecls synthResults
+  reportDoctests target result
+runEngines engines runtimeDecls coreDecls target tsrc userDecls roots examples synthDecls synthResults = runEnginesTagged engines runtimeDecls coreDecls target tsrc userDecls roots examples synthDecls synthResults
+
+runEnginesTagged : List Engine -> List Decl -> List Decl -> String -> String -> List Decl -> List String -> List Example -> List Decl -> List (Result String (List Decl)) -> <IO> Bool
+runEnginesTagged [] _ _ _ _ _ _ _ _ _ = True
+runEnginesTagged (e::rest) runtimeDecls coreDecls target tsrc userDecls roots examples synthDecls synthResults =
+  let _ = putStrLn ""
+  let _ = putStrLn "-- \{engineName e} --"
+  let result = runChosenOn e runtimeDecls coreDecls target tsrc userDecls roots examples synthDecls synthResults
+  let ok = reportDoctests target result
+  let restOk = runEnginesTagged rest runtimeDecls coreDecls target tsrc userDecls roots examples synthDecls synthResults
+  ok && restOk
+
+-- ── engine dispatch (#81 Stage 3) ────────────────────────────────────────────
+-- The SINGLE call site that picks an execution engine. `EngInterp` runs
+-- `runChosen` (today's interpreter path, verbatim); `EngNative` compiles the
+-- module to a real native binary via `tools.native_doctest` (Stage 2) and runs
+-- that. Both arms judge through the SAME `buildDetailsFrom` seam (one inside
+-- `runChosen`/`runSingle`/`runMulti`, the other inside `runNativeDoctests`
+-- itself) — extraction, synth generation, and judging are never duplicated
+-- here, only the execution engine differs.
+export runChosenOn : Engine -> List Decl -> List Decl -> String -> String -> List Decl -> List String -> List Example -> List Decl -> List (Result String (List Decl)) -> <IO> RunResult
+runChosenOn EngInterp runtimeDecls coreDecls target _tsrc userDecls roots examples synthDecls synthResults = runChosen runtimeDecls coreDecls target userDecls roots examples synthDecls synthResults
+runChosenOn EngNative _runtimeDecls _coreDecls target tsrc userDecls _roots examples _synthDecls synthResults = runNativeDoctests target tsrc userDecls examples synthResults
 
 runChosen : List Decl -> List Decl -> String -> List Decl -> List String -> List Example -> List Decl -> List (Result String (List Decl)) -> <IO> RunResult
 runChosen runtimeDecls coreDecls target userDecls roots examples synthDecls synthResults
@@ -319,38 +372,18 @@ injectIntoLast synthDecls (x::rest) = x :: injectIntoLast synthDecls rest
 
 -- ── doctest reporting (mirrors lib/test_cmd.ml) ──────────────────────────────
 
+-- The per-example lines and the `(F failed, E errors)` suffix moved to
+-- `tools/doctest.mdk` (#81 Stage 2), beside `RunResult`: a native engine must
+-- report a `RunResult` identically to this one, and three copies of the printer
+-- is how that silently stops being true.
 reportDoctests : String -> RunResult -> <IO> Bool
 reportDoctests target result =
-  let _ = printDetails target (runDetails result)
+  let _ = printDoctestDetails target (runDetails result)
   let total = runPassed result + runFailed result + runErrors result
   let _ = putStr "\n\{target}: \{intToString (runPassed result)}/\{intToString total} passed"
-  let _ = putStr (failSuffix result)
+  let _ = putStr (doctestFailSuffix result)
   let _ = putStr "\n"
   runFailed result == 0 && runErrors result == 0
-
-failSuffix : RunResult -> String
-failSuffix result
-  | runFailed result > 0 || runErrors result > 0 = " (\{intToString (runFailed result)} failed, \{intToString (runErrors result)} errors)"
-  | otherwise = ""
-
-printDetails : String -> List (Example, ExResult) -> <IO> Unit
-printDetails _ [] = ()
-printDetails target ((ex, res)::rest) =
-  let _ = printOne target ex res
-  printDetails target rest
-
-printOne : String -> Example -> ExResult -> <IO> Unit
-printOne target ex res =
-  let loc = "\{target}:\{intToString (exampleLine ex)}"
-  match res
-    Pass => putStrLn "  ok   \{loc}: \{exampleInput ex}"
-    Fail expected actual =>
-      let _ = putStrLn "  FAIL \{loc}: \{exampleInput ex}"
-      let _ = putStrLn ("       expected: " ++ expected)
-      putStrLn ("         actual: " ++ actual)
-    Errored msg =>
-      let _ = putStrLn "  ERROR \{loc}: \{exampleInput ex}"
-      putStrLn ("        " ++ msg)
 
 -- ── prop phase ───────────────────────────────────────────────────────────────
 -- Only runs (and prints) if the file declares props — mirrors the OCaml short
@@ -547,35 +580,48 @@ testFailSuffix failed errors
 -- never an unqualified pass.  The `test "…"` phase is intentionally NOT reported
 -- (medaka_test covers doctests + props, per #252); a file's `test "…"` decls are
 -- run only by the human `medaka test`.
-export runTestReport : String -> String -> String -> String -> String -> <IO> (RunResult, List PropResult)
-runTestReport runtimeSrc coreSrc target tsrc stdlibDir =
+export runTestReport : List Engine -> String -> String -> String -> String -> String -> <IO> (List (Engine, RunResult), List PropResult)
+runTestReport engines runtimeSrc coreSrc target tsrc stdlibDir =
   let runtimeDecls = desugar (parse runtimeSrc)
   let coreDecls = desugar (parse coreSrc)
   let roots = entrySearchRoots (dirOf target) ++ [stdlibDir]
   let userDecls = desugar (parse tsrc)
-  let doctestRun = doctestReport runtimeDecls coreDecls target tsrc userDecls roots
+  let doctestRuns = doctestReport engines runtimeDecls coreDecls target tsrc userDecls roots
   let propResults = propsReport runtimeDecls coreDecls target userDecls roots
-  (doctestRun, propResults)
+  (doctestRuns, propResults)
 
--- Doctest phase as pure data: extraction + runChosen, minus reportDoctests'
--- printing.  A file with zero doctests yields the empty RunResult.
-doctestReport : List Decl -> List Decl -> String -> String -> List Decl -> List String -> <IO> RunResult
-doctestReport runtimeDecls coreDecls target tsrc userDecls roots =
+-- Doctest phase as pure data: extraction + runChosenOn per requested engine,
+-- minus reportDoctests' printing.  A file with zero doctests yields the empty
+-- RunResult for every engine.  Positionally tagged by engine so a caller
+-- (e.g. `medaka mcp`'s medaka_test) can derive an "engine" label instead of
+-- hardcoding one.
+doctestReport : List Engine -> List Decl -> List Decl -> String -> String -> List Decl -> List String -> <IO> List (Engine, RunResult)
+doctestReport engines runtimeDecls coreDecls target tsrc userDecls roots =
   let examples = extractExamples (collectComments tsrc)
   match examples
-    [] => RunResult 0 0 0 0 []
+    [] => emptyDoctestRuns engines
     _ =>
       let synthResults = buildSynthResults examples
       let synthDecls = buildSynthDecls synthResults
-      runChosen
+      doctestReportGo
+        engines
         runtimeDecls
         coreDecls
         target
+        tsrc
         userDecls
         roots
         examples
         synthDecls
         synthResults
+
+emptyDoctestRuns : List Engine -> List (Engine, RunResult)
+emptyDoctestRuns [] = []
+emptyDoctestRuns (e::rest) = (e, RunResult 0 0 0 0 []) :: emptyDoctestRuns rest
+
+doctestReportGo : List Engine -> List Decl -> List Decl -> String -> String -> List Decl -> List String -> List Example -> List Decl -> List (Result String (List Decl)) -> <IO> List (Engine, RunResult)
+doctestReportGo [] _ _ _ _ _ _ _ _ _ = []
+doctestReportGo (e::rest) runtimeDecls coreDecls target tsrc userDecls roots examples synthDecls synthResults = (e, runChosenOn e runtimeDecls coreDecls target tsrc userDecls roots examples synthDecls synthResults) :: doctestReportGo rest runtimeDecls coreDecls target tsrc userDecls roots examples synthDecls synthResults
 
 -- Prop phase as pure data: same single-file/multi-module split as runProps, but
 -- calling runAllPropsResults (silent) instead of runAllProps (printing).

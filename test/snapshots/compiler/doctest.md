@@ -1,5 +1,5 @@
 # META
-source_lines=358
+source_lines=411
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted doctest extraction + running — port of lib/doctest.ml.
@@ -37,7 +37,12 @@ public export data Example = Example String (Option String) Int
 export exampleInput : Example -> String
 exampleInput (Example i _ _) = i
 
-exampleExpected : Example -> Option String
+-- Exported for the native execution engine (compiler/tools/native_doctest.mdk),
+-- which must know whether an example carries an expected block: `synthSrc`
+-- renders one as `debug (…)` (a String, printable) and a smoke example raw (an
+-- arbitrary, not-necessarily-printable type), and the synthesized `main` has to
+-- treat the two differently.
+export exampleExpected : Example -> Option String
 exampleExpected (Example _ e _) = e
 
 export exampleLine : Example -> Int
@@ -65,6 +70,54 @@ runErrors (RunResult _ _ _ e _) = e
 
 export runDetails : RunResult -> List (Example, ExResult)
 runDetails (RunResult _ _ _ _ d) = d
+
+-- ── engine selection (#81 Stage 3) ──────────────────────────────────────────
+-- Which execution engine renders an example's actual value. `EngInterp` is
+-- today's tree-walking interpreter (compiler/eval/eval.mdk); `EngNative`
+-- compiles the module under test to a real native binary and runs it (Stage 2,
+-- `compiler/tools/native_doctest.mdk`). A `RunResult` itself doesn't carry
+-- which engine produced it — this type exists purely to SELECT the engine at a
+-- call site and to name it when reporting, so callers can derive labels/JSON
+-- fields from the engine(s) actually run instead of hardcoding a string that
+-- would start lying the day a second engine ships.
+public export data Engine = EngInterp | EngNative
+
+export engineName : Engine -> String
+engineName EngInterp = "eval"
+engineName EngNative = "native"
+
+-- ── reporting (mirrors lib/test_cmd.ml) ────────────────────────────────────
+-- The per-example `ok`/`FAIL`/`ERROR` lines and the `(F failed, E errors)`
+-- summary suffix.  These live HERE, beside `RunResult`, rather than in a driver:
+-- a `RunResult` is engine-agnostic (Stage 1 raised `buildDetailsFrom` above the
+-- interpreter), so every engine's report must look identical or the two engines'
+-- output could not be compared.  `compiler/tools/test_cmd.mdk` (interpreter) and
+-- `compiler/entries/native_doctest_probe_main.mdk` (native) both render through
+-- these — they were three duplicated bodies until #81 Stage 2.
+
+export doctestFailSuffix : RunResult -> String
+doctestFailSuffix result
+  | runFailed result > 0 || runErrors result > 0 = " (\{intToString (runFailed result)} failed, \{intToString (runErrors result)} errors)"
+  | otherwise = ""
+
+export printDoctestDetails : String -> List (Example, ExResult) -> <IO> Unit
+printDoctestDetails _ [] = ()
+printDoctestDetails target ((ex, res)::rest) =
+  let _ = printDoctestOne target ex res
+  printDoctestDetails target rest
+
+printDoctestOne : String -> Example -> ExResult -> <IO> Unit
+printDoctestOne target ex res =
+  let loc = "\{target}:\{intToString (exampleLine ex)}"
+  match res
+    Pass => putStrLn "  ok   \{loc}: \{exampleInput ex}"
+    Fail expected actual =>
+      let _ = putStrLn "  FAIL \{loc}: \{exampleInput ex}"
+      let _ = putStrLn ("       expected: " ++ expected)
+      putStrLn ("         actual: " ++ actual)
+    Errored msg =>
+      let _ = putStrLn "  ERROR \{loc}: \{exampleInput ex}"
+      putStrLn ("        " ++ msg)
 
 -- ── small string helpers (compiler avoids the stdlib) ──────────────────────
 
@@ -369,7 +422,7 @@ isUse _ = False
 (DData Public "Example" () ((variant "Example" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")) (TyCon "Int")))) ())
 (DTypeSig true "exampleInput" (TyFun (TyCon "Example") (TyCon "String")))
 (DFunDef false "exampleInput" ((PCon "Example" (PVar "i") PWild PWild)) (EVar "i"))
-(DTypeSig false "exampleExpected" (TyFun (TyCon "Example") (TyApp (TyCon "Option") (TyCon "String"))))
+(DTypeSig true "exampleExpected" (TyFun (TyCon "Example") (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "exampleExpected" ((PCon "Example" PWild (PVar "e") PWild)) (EVar "e"))
 (DTypeSig true "exampleLine" (TyFun (TyCon "Example") (TyCon "Int")))
 (DFunDef false "exampleLine" ((PCon "Example" PWild PWild (PVar "l"))) (EVar "l"))
@@ -383,6 +436,17 @@ isUse _ = False
 (DFunDef false "runErrors" ((PCon "RunResult" PWild PWild PWild (PVar "e") PWild)) (EVar "e"))
 (DTypeSig true "runDetails" (TyFun (TyCon "RunResult") (TyApp (TyCon "List") (TyTuple (TyCon "Example") (TyCon "ExResult")))))
 (DFunDef false "runDetails" ((PCon "RunResult" PWild PWild PWild PWild (PVar "d"))) (EVar "d"))
+(DData Public "Engine" () ((variant "EngInterp" (ConPos)) (variant "EngNative" (ConPos))) ())
+(DTypeSig true "engineName" (TyFun (TyCon "Engine") (TyCon "String")))
+(DFunDef false "engineName" ((PCon "EngInterp")) (ELit (LString "eval")))
+(DFunDef false "engineName" ((PCon "EngNative")) (ELit (LString "native")))
+(DTypeSig true "doctestFailSuffix" (TyFun (TyCon "RunResult") (TyCon "String")))
+(DFunDef false "doctestFailSuffix" ((PVar "result")) (EIf (EBinOp "||" (EBinOp ">" (EApp (EVar "runFailed") (EVar "result")) (ELit (LInt 0))) (EBinOp ">" (EApp (EVar "runErrors") (EVar "result")) (ELit (LInt 0)))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString " (")) (EApp (EVar "display") (EApp (EVar "intToString") (EApp (EVar "runFailed") (EVar "result"))))) (ELit (LString " failed, "))) (EApp (EVar "display") (EApp (EVar "intToString") (EApp (EVar "runErrors") (EVar "result"))))) (ELit (LString " errors)"))) (EIf (EVar "otherwise") (ELit (LString "")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig true "printDoctestDetails" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Example") (TyCon "ExResult"))) (TyEffect ("IO") None (TyCon "Unit")))))
+(DFunDef false "printDoctestDetails" (PWild (PList)) (ELit LUnit))
+(DFunDef false "printDoctestDetails" ((PVar "target") (PCons (PTuple (PVar "ex") (PVar "res")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "printDoctestOne") (EVar "target")) (EVar "ex")) (EVar "res"))) (DoExpr (EApp (EApp (EVar "printDoctestDetails") (EVar "target")) (EVar "rest")))))
+(DTypeSig false "printDoctestOne" (TyFun (TyCon "String") (TyFun (TyCon "Example") (TyFun (TyCon "ExResult") (TyEffect ("IO") None (TyCon "Unit"))))))
+(DFunDef false "printDoctestOne" ((PVar "target") (PVar "ex") (PVar "res")) (EBlock (DoLet false false (PVar "loc") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "target"))) (ELit (LString ":"))) (EApp (EVar "display") (EApp (EVar "intToString") (EApp (EVar "exampleLine") (EVar "ex"))))) (ELit (LString "")))) (DoExpr (EMatch (EVar "res") (arm (PCon "Pass") () (EApp (EVar "putStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ok   ")) (EApp (EVar "display") (EVar "loc"))) (ELit (LString ": "))) (EApp (EVar "display") (EApp (EVar "exampleInput") (EVar "ex")))) (ELit (LString ""))))) (arm (PCon "Fail" (PVar "expected") (PVar "actual")) () (EBlock (DoLet false false PWild (EApp (EVar "putStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  FAIL ")) (EApp (EVar "display") (EVar "loc"))) (ELit (LString ": "))) (EApp (EVar "display") (EApp (EVar "exampleInput") (EVar "ex")))) (ELit (LString ""))))) (DoLet false false PWild (EApp (EVar "putStrLn") (EBinOp "++" (ELit (LString "       expected: ")) (EVar "expected")))) (DoExpr (EApp (EVar "putStrLn") (EBinOp "++" (ELit (LString "         actual: ")) (EVar "actual")))))) (arm (PCon "Errored" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "putStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ERROR ")) (EApp (EVar "display") (EVar "loc"))) (ELit (LString ": "))) (EApp (EVar "display") (EApp (EVar "exampleInput") (EVar "ex")))) (ELit (LString ""))))) (DoExpr (EApp (EVar "putStrLn") (EBinOp "++" (ELit (LString "        ")) (EVar "msg"))))))))))
 (DTypeSig false "slen" (TyFun (TyCon "String") (TyCon "Int")))
 (DFunDef false "slen" ((PVar "s")) (EApp (EVar "stringLength") (EVar "s")))
 (DTypeSig false "substr3" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "String")))))
@@ -502,7 +566,7 @@ isUse _ = False
 (DData Public "Example" () ((variant "Example" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")) (TyCon "Int")))) ())
 (DTypeSig true "exampleInput" (TyFun (TyCon "Example") (TyCon "String")))
 (DFunDef false "exampleInput" ((PCon "Example" (PVar "i") PWild PWild)) (EVar "i"))
-(DTypeSig false "exampleExpected" (TyFun (TyCon "Example") (TyApp (TyCon "Option") (TyCon "String"))))
+(DTypeSig true "exampleExpected" (TyFun (TyCon "Example") (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "exampleExpected" ((PCon "Example" PWild (PVar "e") PWild)) (EVar "e"))
 (DTypeSig true "exampleLine" (TyFun (TyCon "Example") (TyCon "Int")))
 (DFunDef false "exampleLine" ((PCon "Example" PWild PWild (PVar "l"))) (EVar "l"))
@@ -516,6 +580,17 @@ isUse _ = False
 (DFunDef false "runErrors" ((PCon "RunResult" PWild PWild PWild (PVar "e") PWild)) (EVar "e"))
 (DTypeSig true "runDetails" (TyFun (TyCon "RunResult") (TyApp (TyCon "List") (TyTuple (TyCon "Example") (TyCon "ExResult")))))
 (DFunDef false "runDetails" ((PCon "RunResult" PWild PWild PWild PWild (PVar "d"))) (EVar "d"))
+(DData Public "Engine" () ((variant "EngInterp" (ConPos)) (variant "EngNative" (ConPos))) ())
+(DTypeSig true "engineName" (TyFun (TyCon "Engine") (TyCon "String")))
+(DFunDef false "engineName" ((PCon "EngInterp")) (ELit (LString "eval")))
+(DFunDef false "engineName" ((PCon "EngNative")) (ELit (LString "native")))
+(DTypeSig true "doctestFailSuffix" (TyFun (TyCon "RunResult") (TyCon "String")))
+(DFunDef false "doctestFailSuffix" ((PVar "result")) (EIf (EBinOp "||" (EBinOp ">" (EApp (EVar "runFailed") (EVar "result")) (ELit (LInt 0))) (EBinOp ">" (EApp (EVar "runErrors") (EVar "result")) (ELit (LInt 0)))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString " (")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EApp (EVar "runFailed") (EVar "result"))))) (ELit (LString " failed, "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EApp (EVar "runErrors") (EVar "result"))))) (ELit (LString " errors)"))) (EIf (EVar "otherwise") (ELit (LString "")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig true "printDoctestDetails" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Example") (TyCon "ExResult"))) (TyEffect ("IO") None (TyCon "Unit")))))
+(DFunDef false "printDoctestDetails" (PWild (PList)) (ELit LUnit))
+(DFunDef false "printDoctestDetails" ((PVar "target") (PCons (PTuple (PVar "ex") (PVar "res")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "printDoctestOne") (EVar "target")) (EVar "ex")) (EVar "res"))) (DoExpr (EApp (EApp (EVar "printDoctestDetails") (EVar "target")) (EVar "rest")))))
+(DTypeSig false "printDoctestOne" (TyFun (TyCon "String") (TyFun (TyCon "Example") (TyFun (TyCon "ExResult") (TyEffect ("IO") None (TyCon "Unit"))))))
+(DFunDef false "printDoctestOne" ((PVar "target") (PVar "ex") (PVar "res")) (EBlock (DoLet false false (PVar "loc") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "target"))) (ELit (LString ":"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EApp (EVar "exampleLine") (EVar "ex"))))) (ELit (LString "")))) (DoExpr (EMatch (EVar "res") (arm (PCon "Pass") () (EApp (EVar "putStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ok   ")) (EApp (EMethodRef "display") (EVar "loc"))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EApp (EVar "exampleInput") (EVar "ex")))) (ELit (LString ""))))) (arm (PCon "Fail" (PVar "expected") (PVar "actual")) () (EBlock (DoLet false false PWild (EApp (EVar "putStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  FAIL ")) (EApp (EMethodRef "display") (EVar "loc"))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EApp (EVar "exampleInput") (EVar "ex")))) (ELit (LString ""))))) (DoLet false false PWild (EApp (EVar "putStrLn") (EBinOp "++" (ELit (LString "       expected: ")) (EVar "expected")))) (DoExpr (EApp (EVar "putStrLn") (EBinOp "++" (ELit (LString "         actual: ")) (EVar "actual")))))) (arm (PCon "Errored" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "putStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ERROR ")) (EApp (EMethodRef "display") (EVar "loc"))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EApp (EVar "exampleInput") (EVar "ex")))) (ELit (LString ""))))) (DoExpr (EApp (EVar "putStrLn") (EBinOp "++" (ELit (LString "        ")) (EVar "msg"))))))))))
 (DTypeSig false "slen" (TyFun (TyCon "String") (TyCon "Int")))
 (DFunDef false "slen" ((PVar "s")) (EApp (EVar "stringLength") (EVar "s")))
 (DTypeSig false "substr3" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "String")))))

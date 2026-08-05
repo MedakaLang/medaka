@@ -70,6 +70,8 @@ import tools.doctest.{
   Example,
   ExResult(..),
   RunResult,
+  Engine(..),
+  engineName,
   exampleInput,
   exampleLine,
   runPassed,
@@ -327,7 +329,7 @@ mcpTools = [
   McpTool "medaka_references" "FIRST CHOICE for \"find every use of X\" instead of grep — resolves by BINDER IDENTITY, not spelling, so it is correct under shadowing, import aliasing, and same-name-in-different-modules, where grep is not. Give `file` plus 0-based `line`/`col`; optional `includeDeclaration` (default true). Project-wide, read-only; never descends into stdlib bodies." medakaReferencesSchema runReferencesTool,
   McpTool "medaka_fmt" "FIRST CHOICE for formatting Medaka source instead of shelling out to `medaka fmt`. Provide exactly one of `file` or `source`. NEVER writes to disk — apply the returned text yourself. Pass `check: true` for a clean/dirty verdict only (no full text)." medakaFmtSchema runFmtTool,
   McpTool "medaka_lint" "FIRST CHOICE for style-linting Medaka source instead of shelling out to `medaka lint`. Give `paths` (array of file paths); narrow with comma-separated `deny`/`only`/`disable`. Report-only (no autofix) — same diagnostic schema as `medaka_check`." medakaLintSchema runLintTool,
-  McpTool "medaka_test" "FIRST CHOICE for running a file's doctests/property tests instead of `medaka test` via Bash. Give `file`. ⚠️ RESULTS ARE UNDER THE INTERPRETER (eval), NOT the native backend — report as \"passes under eval\", never unqualified (#81). Bare `test \"…\"` decls are NOT run here." medakaTestSchema runTestTool,
+  McpTool "medaka_test" mcpTestDescription medakaTestSchema runTestTool,
 ]
 
 -- The `tools/list` descriptor for one tool: { name, description, inputSchema }.
@@ -1163,6 +1165,33 @@ runLintTool _runtimeSrc _coreSrc _stdlibDir args = match pathsArg args
 
 -- ── medaka_test tool ──────────────────────────────────────────────────────────
 
+-- The engine(s) `medaka_test` actually runs. SINGLE SOURCE OF TRUTH: the tool
+-- description (below) and the payload's `engine`/`note` fields
+-- (`testReportJson`) are both DERIVED from this list rather than each
+-- carrying its own hand-written "eval" literal — three independent hardcodes
+-- that would silently start lying together (or, worse, drift apart from one
+-- another) the day this tool gains a native arm.  Today it is interpreter-only
+-- (#81 Stage 3 wires `--native` into the human `medaka test` CLI only, not
+-- this tool), so the list is `[EngInterp]`.
+mcpTestEngines : List Engine
+mcpTestEngines = [EngInterp]
+
+mcpTestEngineHasNative : List Engine -> Bool
+mcpTestEngineHasNative [] = False
+mcpTestEngineHasNative (EngNative::_) = True
+mcpTestEngineHasNative (_::rest) = mcpTestEngineHasNative rest
+
+-- The caveat sentence, derived from `engines`: interpreter-only gets the
+-- original #81 warning; a list that includes the native engine gets an
+-- honest statement instead of a now-false "results are eval-only" claim.
+mcpTestCaveat : List Engine -> String
+mcpTestCaveat engines
+  | mcpTestEngineHasNative engines = "Results include the NATIVE backend engine (not just the interpreter) — a native-only miscompile is observed here."
+  | otherwise = "⚠️ RESULTS ARE UNDER THE INTERPRETER (\{engineName EngInterp}), NOT the native backend — report as \"passes under eval\", never unqualified (#81)."
+
+mcpTestDescription : String
+mcpTestDescription = "FIRST CHOICE for running a file's doctests/property tests instead of `medaka test` via Bash. Give `file`. \{mcpTestCaveat mcpTestEngines} Bare `test \"…\"` decls are NOT run here."
+
 -- inputSchema: `file` (path), required.
 medakaTestSchema : Json
 medakaTestSchema = jObject
@@ -1236,54 +1265,86 @@ countFailProps [] = 0
 countFailProps (p::rest) =
   (if propResultPassed p then 0 else 1) + countFailProps rest
 
--- The run OVERALL passed iff every doctest and every property passed.  Drives
--- both the `summary.ok` field and the result's `isError` flag.
-testReportOk : RunResult -> List PropResult -> Bool
-testReportOk run props = runFailed run == 0
-  && runErrors run == 0
-  && allPropsPass props
+-- The first (today: only) doctest run, keyed off whichever engine actually
+-- ran it — `runTestReport` positionally tags each `RunResult` by the `Engine`
+-- that produced it, so this never has to assume which one that was.
+primaryDoctestRun : List (Engine, RunResult) -> RunResult
+primaryDoctestRun [] = RunResult 0 0 0 0 []
+primaryDoctestRun ((_, run)::_) = run
 
--- The full structured result body.  `engine`/`note` carry the interpreter caveat
--- INTO the payload (not just the tool description) so a consumer that never read
--- the description is still told these results are eval-only.
-testReportJson : String -> RunResult -> List PropResult -> Json
-testReportJson path run props = jObject
-  [
-    ("file", JString path),
-    ("engine", JString "eval"),
-    (
-      "note",
-      JString "Results are under the interpreter (eval), NOT the native backend — a native-only miscompile is not observed here (see #81). Report these as passing UNDER EVAL, not unqualified.",
-    ),
-    ("doctests", doctestsJson run),
-    ("properties", jArray (map propJson props)),
-    (
-      "summary",
-      jObject [
-        ("passed", JInt (runPassed run + countPassProps props)),
-        ("failed", JInt (runFailed run + runErrors run + countFailProps props)),
-        ("ok", JBool (testReportOk run props)),
-      ],
-    ),
-  ]
+-- The run OVERALL passed iff EVERY engine's doctest run and every property
+-- passed.  Drives both the `summary.ok` field and the result's `isError` flag.
+testReportOk : List (Engine, RunResult) -> List PropResult -> Bool
+testReportOk runs props = allDoctestRunsOk runs && allPropsPass props
+
+allDoctestRunsOk : List (Engine, RunResult) -> Bool
+allDoctestRunsOk [] = True
+allDoctestRunsOk ((_, run)::rest) = runFailed run == 0
+  && runErrors run == 0
+  && allDoctestRunsOk rest
+
+-- The engine name(s) that actually produced `runs` — DERIVED, never a literal
+-- "eval": a hardcoded string would silently start lying the day this tool
+-- runs more than the interpreter.
+doctestRunEngineNames : List (Engine, RunResult) -> List Engine
+doctestRunEngineNames [] = []
+doctestRunEngineNames ((e, _)::rest) = e :: doctestRunEngineNames rest
+
+-- Today `runs` is always a singleton (`mcpTestEngines == [EngInterp]`), so the
+-- top-level "engine" field is that one engine's name — derived from the list
+-- that actually ran, never a bare literal.
+primaryEngineName : List Engine -> String
+primaryEngineName [] = "unknown"
+primaryEngineName (e::_) = engineName e
+
+-- The full structured result body.  `engine`/`note` carry the interpreter
+-- caveat INTO the payload (not just the tool description) so a consumer that
+-- never read the description is still told what these results cover — and,
+-- like the description, both are DERIVED from the engines that actually ran
+-- (`doctestRunEngineNames runs`), not a hand-written literal.
+testReportJson : String -> List (Engine, RunResult) -> List PropResult -> Json
+testReportJson path runs props =
+  let engines = doctestRunEngineNames runs
+  jObject
+    [
+      ("file", JString path),
+      ("engine", JString (primaryEngineName engines)),
+      ("note", JString (mcpTestCaveat engines)),
+      ("doctests", doctestsJson (primaryDoctestRun runs)),
+      ("properties", jArray (map propJson props)),
+      (
+        "summary",
+        jObject [
+          (
+            "passed",
+            JInt (runPassed (primaryDoctestRun runs) + countPassProps props),
+          ),
+          (
+            "failed",
+            JInt (runFailed (primaryDoctestRun runs) + runErrors (primaryDoctestRun runs) + countFailProps props),
+          ),
+          ("ok", JBool (testReportOk runs props)),
+        ],
+      ),
+    ]
 
 -- medaka_test handler: read `file`, run its doctests + props through the
 -- non-printing structured reporter (tools.test_cmd.runTestReport), and return
 -- the per-example/per-property JSON.  isError=true iff any example/property
 -- failed (mirrors medaka_check's convention: isError flags a bad OUTCOME, with
 -- the detail in the structured content).  A missing/unreadable file is an
--- argument error, not a crash.  Results are eval-only — see the tool
--- description and the payload's `note`.
+-- argument error, not a crash.  Which engine(s) ran is reported per `engine`/
+-- `note`, DERIVED from `mcpTestEngines` — see the tool description too.
 runTestTool : String -> String -> String -> Json -> <IO> Json
 runTestTool runtimeSrc coreSrc stdlibDir args = match fieldStr "file" args
   None => toolArgError "medaka_test: missing or invalid argument — require 'file' (string)"
   Some path => match readFile path
     Err e => toolArgError (stringConcat ["medaka_test: cannot read file '", path, "': ", e])
     Ok tsrc =>
-      let (run, props) = runTestReport runtimeSrc coreSrc path tsrc stdlibDir
+      let (runs, props) = runTestReport mcpTestEngines runtimeSrc coreSrc path tsrc stdlibDir
       toolTextResult
-        (stringify (testReportJson path run props))
-        (not (testReportOk run props))
+        (stringify (testReportJson path runs props))
+        (not (testReportOk runs props))
 
 -- ── tools/call handler ───────────────────────────────────────────────────────
 

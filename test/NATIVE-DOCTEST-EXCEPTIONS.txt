@@ -1,0 +1,44 @@
+test/NATIVE-DOCTEST-EXCEPTIONS.txt — modules the NATIVE doctest engine cannot run
+=================================================================================
+
+Engine: compiler/tools/native_doctest.mdk  (issue #81, Stage 2)
+Probe:  compiler/entries/native_doctest_probe_main.mdk
+
+The native engine compiles the module under test — plus its `__dt_i__` doctest
+bindings and a synthesized `main` — into a real binary and runs it.  A few shapes
+cannot go through that path.  Each one is reported as a whole-file error naming
+the reason, so every example in the file shows up as `ERROR` and the summary
+reads `0/N passed (0 failed, N errors)`.
+
+⚠️ THERE IS NO SILENT SKIP, and there must never be one.  "This didn't run" that
+looks like "this passed" is the exact failure this engine exists to prevent — a
+SQL expression parser once shipped 32/32 green with every arithmetic operator in
+its grammar broken natively.  A row here documents a LOUD skip; it does not
+suppress one.
+
+Format:  <reason-tag>  <scope>  <issue>  <note>
+
+  PRELUDE-TARGET   stdlib/core.mdk   #1334
+      `medaka build stdlib/core.mdk` E-PANICs, so the prelude cannot be compiled
+      as a program and `medaka test stdlib/core.mdk` cannot run natively.  PR
+      #1342 makes the message honest; it does not make it build.  Detected by
+      `nativeSkipReason`'s `dtProgramIsCore` arm (the module declaring BOTH the
+      `Ordering` data type and the `Foldable` interface).
+      DRAINS WHEN: #1334 closes — drop the arm and this row, and the ~69
+      core.mdk examples start running natively.
+
+  OWNS-MAIN        any module defining a top-level `main`   (no issue)
+      The engine synthesizes `main` in the module under test's own namespace, so
+      a module that already defines one would be a duplicate definition.  This
+      is a DESIGN limit of the append-into-the-target scheme (which is what gives
+      the doctest bindings access to module-private names), not a bug: no module
+      in `stdlib/` or `compiler/` defines `main` except the entry points, which
+      carry no doctests.
+      DRAINS WHEN: someone needs it.  The fix would be to rename the target's own
+      `main` in the copied source, which requires a printer round-trip — rejected
+      for Stage 2 because a round-trip would test the printer as much as the
+      backend (see native_doctest.mdk's "VERBATIM source" note).
+
+Stage 3 (wiring `medaka test` to run both engines) is what turns this ledger into
+a gate-visible signal; today it is documentation of the two arms in
+`nativeSkipReason`.

@@ -1,0 +1,47 @@
+-- #1114: the "feature + UNRELATED code still behaves" fixture (AGENTS.md's required shape
+-- for any new program-global table), NOT another "the fix works" fixture. Six reject_845_*
+-- and two reject_792_* fixtures cover the firing case; this one asserts that bindings which
+-- must be UNAFFECTED still behave while the new machinery is live all around them.
+--
+-- ⚠️ EXTENDED after adversarial review, which was right that the first version did not
+-- establish its own stated property: it used distinct names and no private bindings, so
+-- "if either arm over-copied, this valid program would reject" was a claim the fixture
+-- could not have detected. Three assertions now, one per way the wildcard arm could
+-- over-copy:
+--
+--   1. MODULE-MATE — `rid` (no context) shares a module with `qnum` (inferred `Num a =>`).
+--      Applied to `NoNum`, which has no `Num` impl. A per-MODULE rather than per-BINDING
+--      copy rejects here.
+--   2. PRIVATE — `lib/obl1114_q.mdk`'s `hidden` also carries an inferred `Num a =>` and is
+--      NOT exported. Resolve already keeps the NAME out of scope, so the local `hidden`
+--      below is unambiguously this file's; the risk is the store, which is keyed by name
+--      and read cross-module. If a private binding's context enters it, the local
+--      `hidden`'s call — at `NoNum`, again with no `Num` — picks up a phantom obligation.
+--   3. SHADOWED — the local `hidden` deliberately reuses the private binding's name, which
+--      is the only spelling under which a leaked private entry could be reached at all.
+--
+-- ⚠️ Honest scope note: assertions 2 and 3 are pinned as REGRESSION guards, not as a
+-- reproduction. With the store built from `declTopFnNames` (private names included), this
+-- exact program still checked clean — the private entry is reached but its stored ids come
+-- from the DEFINING module and are absent from the local binding's instantiation subst, so
+-- `recordSchemeCallObligations`' #607 all-or-nothing guard skips the predicate whole. That
+-- is protection by id mismatch, not by design, and #739 records the same id space COLLIDING
+-- across modules — so the store is now filtered to exported names and this fixture pins the
+-- filter rather than a defect anyone has reproduced.
+--
+-- EXPECTED VALUES DERIVED BY HAND, not captured: `rid x = x` is the identity so `rid NoNum`
+-- is `NoNum` and `tag` maps it to its pinned string; the local `hidden` is a constant
+-- function; `pdisp x = "\{x}"` renders `Int` 5 as `"5"`; `qnum x = x + 1` at `Num Int`
+-- gives 6 + 1 = 7. Interpolating a String inserts it verbatim.
+import lib.obl1114_p.{pdisp}
+import lib.obl1114_q.*
+
+data NoNum = NoNum
+
+tag : NoNum -> String
+tag _ = "unrelated"
+
+hidden : NoNum -> String
+hidden _ = "shadowed-local"
+
+main = println "\{tag (rid NoNum)} / \{hidden NoNum} / \{pdisp 5} / \{qnum 6}"

@@ -1,0 +1,13 @@
+-- #1114 OVER-REJECTION GUARD for #845.  Every spelling in the reject_845_* fixtures,
+-- called at a type that DOES satisfy the constraint.  Recording an obligation that was
+-- previously dropped is only a fix if the satisfiable instantiation still resolves —
+-- over-rejecting these would be worse than the bug.  Covers all four spellings the
+-- lookup now serves: selective, member-alias (`{f as bumped}`), wildcard, module-alias.
+--
+-- EXPECTED VALUE DERIVED BY HAND, not captured: `f`/`g` are both `n + 1` at `Num Int`,
+-- so f 1 = 2, bumped 10 = 11, g 100 = 101, W.f 1000 = 1001 — printed as one 4-tuple.
+import lib.obl1114_inferred.{f, f as bumped}
+import lib.obl1114_declared.*
+import lib.obl1114_inferred as W
+
+main = println (f 1, bumped 10, g 100, W.f 1000)
