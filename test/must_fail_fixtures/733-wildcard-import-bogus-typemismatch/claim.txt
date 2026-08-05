@@ -14,7 +14,7 @@ what: (`import amodd.{A1, Dup, unA1}`) instead of through the wildcard -- it is 
 what: exit 0, and prints `1`. One import's SPELLING is the only variable, and it decides
 what: whether a valid program is accepted.
 what: Established by the #1319 scoping pass
-what: (https://github.com/MedakaLang/medaka/issues/1319#issuecomment-5194158153, dated
+what: (https://github.com/MedakaLang/medaka/issues/1319#issuecomment-5194103857, dated
 what: 2026-08-05, titled "SCOPING PASS"), which reproduced this exact pair first-hand and
 what: judged it an S1 (loud breakage: a valid program is rejected with a diagnostic
 what: naming an unrelated type), not the S2 the issue was originally filed under.
@@ -54,9 +54,14 @@ why-note: this is #733's row 1c, the one row of that issue's original three (1a
 why-note: bare-ctor-member, 1b same-named types, 1c wildcard) that the #1319 scoping
 why-note: pass found STILL reproducing -- 1a and 1b independently drained (already fixed;
 why-note: see the #733 tracker comment recording the scoping pass's per-row verdicts).
-why-note: NOT a duplicate of test/must_fail_fixtures/1300-*, which pins a MANGLER
-why-note: wildcard-import bug (a different defect in a different stage) despite the
-why-note: superficially similar "wildcard import" description.
+why-note: NOT a duplicate of test/must_fail_fixtures/1300-ctor-wild-import-mangle-miss/,
+why-note: which pins a MANGLER bug at the BUILD stage (`import qa.{Jj(..), unQA}` drops
+why-note: the collision-free ctor `Jj` from the mangler's unit-scoped rename map; `check`
+why-note: and `run` are both correct, only `build` panics) despite the superficially
+why-note: similar "wild import" naming -- that fixture's own claim.txt says outright it
+why-note: is "NOT the collision-driven class in #733 item 1". This row is the opposite
+why-note: shape: collision-driven, wrong at `check`/`run`/`build` alike, no ctor ever
+why-note: reaches the emitter.
 why-note: fix direction, per the #733 issue body: extend the R-AMBIGUOUS-CTOR /
 why-note: import-scoping overlay to resolve wildcard and bare-ctor-member imports by the
 why-note: unit's own import provenance (module-scoped) rather than falling back to a
