@@ -1,8 +1,9 @@
 -- #1269 BYSTANDER support module: half two of the SAME-NAME collision.  Same
 -- spelling `Same3`, but UNGRADED, with a different required-method set (`pmth3`, not
--- `gandThen3`).  Sorted after `gmod3` in `main_bystander.mdk`'s import list so it is
--- the one that would win a bare-name last-write-wins key -- but this fixture never
--- names `Same3` at all, so which one would "win" must not matter.
+-- `gandThen3`).  Sorted after `gmod3` in `main_bystander.mdk`'s import list, so under
+-- the pre-fix bare-name membership test `gmod3`'s `Same3` is the one that would win
+-- `ifaceMethodsOf`'s FIRST-MATCH scan (it sorts first, not last) -- but this fixture
+-- never names `Same3` at all, so which one would "win" must not matter.
 export interface Same3 f where
   pmth3 : f a b -> Int
 

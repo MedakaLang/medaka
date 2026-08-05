@@ -2663,7 +2663,7 @@ ownedFieldOwners exp ((f, o)::rest)
 -- validated an `impl`'s methods against whichever module's `Same` happened to
 -- sort first in `usePathsOf prog`, rejecting a complete, correct `impl` with
 -- `R-METHOD-NOT-IN-INTERFACE` naming a method it does implement
--- (`test/must_fail_fixtures/1269-ifacemethods-bare-name-collision/`).
+-- (`test/analyze_project_fixtures/1269_ifacemethods_genuine_rejects/`).
 --
 -- The fix: scope each import path to the interface names THAT PATH ITSELF
 -- actually binds (`importIfaceNames known path` — the same per-path
@@ -2671,8 +2671,15 @@ ownedFieldOwners exp ((f, o)::rest)
 -- instead of the flattened whole-program set.  `import gmod.{gdummy}`
 -- contributes nothing to `impIfaceMethods` no matter what else `gmod`
 -- exports; `import pmod.{Same, pmth}` contributes exactly `pmod`'s `Same`.
--- Order-independent by construction — each path's contribution no longer
--- depends on what any OTHER import statement named.
+-- No import statement's contribution depends on what any OTHER import
+-- statement named — but the table underneath is still bare-name-keyed and
+-- `ifaceMethodsOf` is still first-match, so when TWO import paths genuinely
+-- bind the SAME interface name (an actually ambiguous import, not this
+-- fix's target shape) the method-membership verdict is still
+-- order-dependent. That residual is never SILENT: a genuine cross-module
+-- name collision of that shape is always also flagged by
+-- `ambiguousIfaceErrors` (`AmbiguousInterface`), which does not depend on
+-- import order, so the order-dependent diagnostic never appears alone.
 importedIfaceMethods : OrdMap ModuleExports -> List Decl -> List (String, List String)
 importedIfaceMethods known prog =
   flatMap (oneImportIfaceMethods known) (usePathsOf prog)

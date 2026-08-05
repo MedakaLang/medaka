@@ -26,14 +26,32 @@
 --
 -- 🚨 WHAT THIS FIXTURE CANNOT CATCH, stated so nobody reads it as covering more than
 -- it does.  It detects a key that WRONGLY MEETS another module's row (a spurious
--- diagnostic appears where none should).  It CANNOT detect a key that never fires at
--- all -- both `checkImplIface`'s guard and `ifaceMethodsOf`'s first-match abstain
--- (empty list) on a genuine miss, so a write-side/read-side disagreement would leave
--- every bucket here `[]` and this fixture green while the checks had silently
--- stopped running.  That direction is covered by
--- `test/analyze_project_fixtures/1269_ifacemethods_genuine_rejects/`'s two cells
--- instead (one with no collision present, one with the exact collision shape here).
--- The pair is the assertion; neither half alone is.
+-- diagnostic appears where none should).  It does NOT exercise a write-side/read-side
+-- disagreement (`impIfaceMethods` missing a row for an interface that IS genuinely
+-- in `env.interfaces`) at all -- neither its silent nor its loud direction -- because
+-- nothing below references `Same3`, `Same3` is never in `env.interfaces` here, and
+-- `checkImplIface`'s first guard (`not (contains iface env.interfaces)`) never even
+-- reaches `ifaceMethodsOf` for it.
+--
+-- Corrected in review, because the claim here was previously wrong about the
+-- MECHANISM, not just the coverage: a write/read disagreement of that shape is NOT
+-- silent.  Read `checkImplIface`/`ifaceMethodsOf`/`checkMethodMember`
+-- (`compiler/frontend/resolve.mdk:1388-1404`) directly rather than trust this
+-- comment.  If `iface` IS in `env.interfaces` but its row is missing from
+-- `env.ifaceMethods`, `ifaceMethodsOf` returns `[]` (a miss), and
+-- `checkMethodMember iface [] m` then rejects `m` unconditionally
+-- (`contains mname []` is always `False`) -- so a write/read disagreement produces
+-- `MethodNotInInterface` for EVERY method of the impl, the loudest possible failure
+-- (reject-everything), not silence.  The other guard (the interface not in
+-- `env.interfaces` at all) is `UnknownInterface`, also loud.  There is no silent
+-- path in this mechanism to catch.  That direction -- whether the FILTER this PR
+-- changed (`oneImportIfaceMethods`/`filterIfaceMethods`) ever wrongly narrows
+-- `impIfaceMethods` to empty for an interface that legitimately IS in scope -- is
+-- covered by `test/analyze_project_fixtures/1269_ifacemethods_genuine_rejects/`'s
+-- two cells instead (one with no collision present, one with the exact collision
+-- shape here), both of which DO name an affected interface and both of which show
+-- the expected non-empty diagnostic set. The pair is the assertion; neither half
+-- alone is.
 import gmod3.{gdummy3}  -- ONLY the function; never gmod3's Same3
 import pmod3.{pdummy3}  -- ONLY the function; never pmod3's Same3
 
