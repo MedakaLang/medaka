@@ -14,12 +14,19 @@
 # red and tells whoever lands it to come update this file (same trick the
 # Phase-2 boundary used against this same file, until this wave landed it).
 #
-# ⚠️ We do NOT get to choose which BTYPE the system `gzip` picks for a given
-# input — its own heuristics decide, and they are aggressive: anything much
-# past ~2-4 KB of non-random input reliably tips into dynamic Huffman, even
-# at `-1`. So every case below ASSERTS which BTYPE it actually observed
-# rather than assuming — the same discipline `check_stored` already used for
-# BTYPE=00, extended to BTYPE=01/02.
+# ⚠️ We do NOT get to choose which BTYPE the system `gzip` picks — its own
+# block-splitting heuristic decides, and the deciding factor is SYMBOL
+# DIVERSITY, not size. Measured at -1: english-like prose tips into dynamic
+# Huffman at ~200 bytes and source code at ~100, while a repeated phrase is
+# still fixed at 4 KB (full table in the design doc). An earlier "~2-4 KB of
+# non-random input" rule of thumb was measured only on repetitive corpora and
+# does not generalize.
+#
+# Which is exactly why every case below ASSERTS the BTYPE it actually
+# observed rather than inferring one from a size — the same discipline
+# `check_stored` already used for BTYPE=00, extended to BTYPE=01/10. A gate
+# that assumed the block type from an input size would silently test nothing
+# the moment the heuristic disagreed.
 #
 # There is no `gzip -0`; the levels are -1..-9. See `check_stored`'s own
 # comment for the stored-block derivation this file inherited unchanged.
