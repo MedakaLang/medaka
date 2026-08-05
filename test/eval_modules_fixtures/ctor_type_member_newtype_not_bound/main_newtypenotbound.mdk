@@ -22,14 +22,16 @@
 -- is reachable at all.  So `1` then `9`.
 --
 -- ⚠️ COUNTERFACTUAL — a regression guard's counterfactual is the BROKEN CUT, not
--- pristine `main`.  Measured three ways on binaries cold-bootstrapped in one
+-- pristine `main`.  Measured on THIS FIXTURE (not on an equivalent probe), through
+-- BOTH gates that read this directory, on three binaries cold-bootstrapped in one
 -- worktree:
---   * pristine `main` `ae39ec41`: GREEN, `1`/`9`;
---   * A-2.7's first cut (unconditional `DNewtype` arm): RED, `run` exit 1,
---     `E-NOT-A-FUNCTION: applied non-function: Wrap 3`;
---   * gating that arm on `newtypePub`: STILL RED — `export newtype` sets it, so the
---     gate is a no-op here.  The arm had to be REMOVED, not filtered.  Recording
---     this because the obvious fix looks right and is not.
+--   * pristine `main` `ae39ec41`: `ok` on both — the shape was already correct, so
+--     this really is a guard and not a drain;
+--   * A-2.7's first cut (unconditional `DNewtype` arm): `FAIL` on both;
+--   * gating that arm on `newtypePub`: `FAIL` on both, unchanged — `export newtype`
+--     SETS `newtypePub`, so the obvious gate is a no-op here.  The arm had to be
+--     REMOVED, not filtered.  Recorded because the plausible fix is the wrong one
+--     and only running it says so.
 --
 -- ⚠️ WHY THIS IS NOT IN `test/llvm_fixtures_modules/` LIKE ITS SIBLINGS.  That corpus
 -- runs all three engines, and the NATIVE arm is wrong on this shape on `main`:
