@@ -1,0 +1,15 @@
+-- CONTROL: byte-identical to main.mdk except the import drops the `(..)` after
+-- `Jj`. `Jj` is a CONSTRUCTOR, not a type, so `(..)` here has no wildcard content
+-- to expand (`Jj` has no "constructors of its own") -- but the bug is that the
+-- backend mangler's wild branch (`ctorMemberEntry` in
+-- compiler/backend/private_mangle.mdk) treats ANY `(..)`-suffixed import member
+-- as a TYPE name and looks it up in a table keyed by type name. `Jj` isn't a type,
+-- so the lookup misses and returns [], and `Jj` never enters the unit's
+-- constructor-rename map -- independent of whether `(..)` was even meaningful.
+-- Dropping `(..)` routes the SAME import through the bare-member branch instead,
+-- which checks membership by scanning every type's constructor list and finds
+-- `Jj` correctly. This must BUILD FINE (exit 0) and the produced binary must
+-- print `5`.
+import qa.{Jj, unQA}
+
+main = println (unQA (Jj 5))
