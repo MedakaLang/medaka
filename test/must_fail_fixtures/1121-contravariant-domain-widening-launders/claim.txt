@@ -31,12 +31,16 @@ why-control: claim observably false, so accepting it is correct today.
 why-control: ⚠️ This is NOT a claim that EFFECTS-SEMANTICS licenses covariant widening in
 why-control: general — §9's actual holding is the opposite: "no direction of weakening is
 why-control: sound in general — only equality is", because polarity is not knowable without a
-why-control: variance analysis Medaka does not have (§9's own text extends this to ordinary
-why-control: Type-kinded parameters, citing #1098). A CONSERVATIVE D-2 fix (#1119,
-why-control: per-parameter polarity) could legitimately choose invariance at any parameter
-why-control: position it cannot prove covariant-only, including this one. If that happens,
-why-control: CONTROL-BROKE here means "the landed rule is more conservative than this control
-why-control: assumed — re-derive the control against it," NOT "the environment broke."
+why-control: variance analysis Medaka does not have. §9 SCOPES that holding to the
+why-control: `Effect`-kinded index and explicitly DECLINES to rest it on ordinary
+why-control: Type-kinded positions ("does not rest on how sibling type-argument positions
+why-control: behave; it stands on the variance argument above alone") — it notes only that
+why-control: the covariant-widening DEFECT lives there too (#1098). A CONSERVATIVE D-2 fix
+why-control: (#1119, per-parameter polarity) could legitimately choose invariance at any
+why-control: parameter position it cannot prove covariant-only, including this one. If that
+why-control: happens, CONTROL-BROKE here means "the landed rule is more conservative than
+why-control: this control assumed — re-derive the control against it," NOT "the environment
+why-control: broke."
 why-note: The pin is `run` exit 0 plus the exact two lines of stdout the laundered effect
 why-note: prints. A fix rejects the `wide = pureTaker` assignment (per-parameter variance,
 why-note: target-architecture stage D-2), which flips the exit/stdout and drains this row.
