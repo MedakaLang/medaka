@@ -1,5 +1,5 @@
 # META
-source_lines=22214
+source_lines=22239
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted typecheck stage — port of lib/typecheck.ml's HM core.  SLICE 1:
@@ -18301,8 +18301,33 @@ monoTyvarIds m = match normalize m
 -- declarations are unstamped on that path too and the two sides stay symmetric.
 -- The builtin layer is still supplied there, so it is strictly more identity than
 -- before, never a claim the driver cannot justify.
+--
+-- 🚨 FILTER BEFORE STAMPING, AND THAT ORDER IS PERFORMANCE, NOT STYLE.  The first
+-- cut here was `externSchemesGo (stampTyOrigins scope decls)`, which is a no-op
+-- difference for `runtimeDecls` (every element IS a `DExtern`) and wrong-shaped at
+-- the `checkBodyImpl` call site, where `decls` is the WHOLE MODULE.  Read the
+-- chain rather than take this on trust: `stampTyOrigins` is `map
+-- (stampDeclTyOrigins scope)`, and `stampDeclTyOrigins` is `mapOriginsInDecl`,
+-- i.e. a full `mapTyInDecl` REBUILD of the decl — so that shape reconstructs every
+-- declaration in the program and then discards all but the externs, in a stage
+-- `compiler/AGENTS.md` calls GC-bound.  Filtering first makes the walk
+-- proportional to the externs, which is all this function reads.
+--
+-- ⚠️ THE MECHANISM ABOVE IS READ OFF THE SOURCE; THE MAGNITUDE WAS NOT MEASURED.
+-- No before/after allocation number was taken, so this is a shape argument, not a
+-- perf result — do not cite it as one.  It needs no number to be the right shape:
+-- rebuilding what you are about to throw away is never the cheaper branch.
 externSchemes : OrdMap TyConOrigin -> List Decl -> List (String, Scheme)
-externSchemes scope decls = externSchemesGo (stampTyOrigins scope decls)
+externSchemes scope decls =
+  externSchemesGo (stampTyOrigins scope (externDecls decls))
+
+-- The `DExtern` sublist, in order.  Its own clause rather than a `filter` with a
+-- lambda predicate: `Decl` has no cheap "is an extern" projection, so the pattern
+-- match IS the predicate.
+externDecls : List Decl -> List Decl
+externDecls [] = []
+externDecls ((d@(DExtern _ _ _))::rest) = d :: externDecls rest
+externDecls (_::rest) = externDecls rest
 
 -- The pre-#1280 body, unchanged, over the ALREADY-STAMPED list.  It is split out
 -- rather than folded into the clause above so that the recursion cannot re-enter
@@ -25785,7 +25810,11 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "monoTyvarIds" (TyFun (TyCon "Mono") (TyApp (TyCon "List") (TyCon "Int"))))
 (DFunDef false "monoTyvarIds" ((PVar "m")) (EMatch (EApp (EVar "normalize") (EVar "m")) (arm (PCon "TVar" (PVar "cell")) () (EListLit (EApp (EVar "tyvarId") (EVar "cell")))) (arm (PCon "TApp" (PVar "a") (PVar "b")) () (EBinOp "++" (EApp (EVar "monoTyvarIds") (EVar "a")) (EApp (EVar "monoTyvarIds") (EVar "b")))) (arm (PCon "TFun" (PVar "a") PWild (PVar "b")) () (EBinOp "++" (EApp (EVar "monoTyvarIds") (EVar "a")) (EApp (EVar "monoTyvarIds") (EVar "b")))) (arm PWild () (EListLit))))
 (DTypeSig false "externSchemes" (TyFun (TyApp (TyCon "OrdMap") (TyCon "TyConOrigin")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))))
-(DFunDef false "externSchemes" ((PVar "scope") (PVar "decls")) (EApp (EVar "externSchemesGo") (EApp (EApp (EVar "stampTyOrigins") (EVar "scope")) (EVar "decls"))))
+(DFunDef false "externSchemes" ((PVar "scope") (PVar "decls")) (EApp (EVar "externSchemesGo") (EApp (EApp (EVar "stampTyOrigins") (EVar "scope")) (EApp (EVar "externDecls") (EVar "decls")))))
+(DTypeSig false "externDecls" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl"))))
+(DFunDef false "externDecls" ((PList)) (EListLit))
+(DFunDef false "externDecls" ((PCons (PAs "d" (PCon "DExtern" PWild PWild PWild)) (PVar "rest"))) (EBinOp "::" (EVar "d") (EApp (EVar "externDecls") (EVar "rest"))))
+(DFunDef false "externDecls" ((PCons PWild (PVar "rest"))) (EApp (EVar "externDecls") (EVar "rest")))
 (DTypeSig false "externSchemesGo" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))))
 (DFunDef false "externSchemesGo" ((PList)) (EListLit))
 (DFunDef false "externSchemesGo" ((PCons (PCon "DExtern" PWild (PVar "n") (PVar "ty")) (PVar "rest"))) (EBinOp "::" (ETuple (EVar "n") (EApp (EVar "sigToScheme") (EVar "ty"))) (EApp (EVar "externSchemesGo") (EVar "rest"))))
@@ -30148,7 +30177,11 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "monoTyvarIds" (TyFun (TyCon "Mono") (TyApp (TyCon "List") (TyCon "Int"))))
 (DFunDef false "monoTyvarIds" ((PVar "m")) (EMatch (EApp (EVar "normalize") (EVar "m")) (arm (PCon "TVar" (PVar "cell")) () (EListLit (EApp (EVar "tyvarId") (EVar "cell")))) (arm (PCon "TApp" (PVar "a") (PVar "b")) () (EBinOp "++" (EApp (EVar "monoTyvarIds") (EVar "a")) (EApp (EVar "monoTyvarIds") (EVar "b")))) (arm (PCon "TFun" (PVar "a") PWild (PVar "b")) () (EBinOp "++" (EApp (EVar "monoTyvarIds") (EVar "a")) (EApp (EVar "monoTyvarIds") (EVar "b")))) (arm PWild () (EListLit))))
 (DTypeSig false "externSchemes" (TyFun (TyApp (TyCon "OrdMap") (TyCon "TyConOrigin")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))))
-(DFunDef false "externSchemes" ((PVar "scope") (PVar "decls")) (EApp (EVar "externSchemesGo") (EApp (EApp (EVar "stampTyOrigins") (EVar "scope")) (EVar "decls"))))
+(DFunDef false "externSchemes" ((PVar "scope") (PVar "decls")) (EApp (EVar "externSchemesGo") (EApp (EApp (EVar "stampTyOrigins") (EVar "scope")) (EApp (EVar "externDecls") (EVar "decls")))))
+(DTypeSig false "externDecls" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl"))))
+(DFunDef false "externDecls" ((PList)) (EListLit))
+(DFunDef false "externDecls" ((PCons (PAs "d" (PCon "DExtern" PWild PWild PWild)) (PVar "rest"))) (EBinOp "::" (EVar "d") (EApp (EVar "externDecls") (EVar "rest"))))
+(DFunDef false "externDecls" ((PCons PWild (PVar "rest"))) (EApp (EVar "externDecls") (EVar "rest")))
 (DTypeSig false "externSchemesGo" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))))
 (DFunDef false "externSchemesGo" ((PList)) (EListLit))
 (DFunDef false "externSchemesGo" ((PCons (PCon "DExtern" PWild (PVar "n") (PVar "ty")) (PVar "rest"))) (EBinOp "::" (ETuple (EVar "n") (EApp (EVar "sigToScheme") (EVar "ty"))) (EApp (EVar "externSchemesGo") (EVar "rest"))))

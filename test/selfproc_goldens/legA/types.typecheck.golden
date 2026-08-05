@@ -516,6 +516,7 @@ extendLocalVars : TcEnv -> List (String, Scheme) -> TcEnv
 extendPropParams : TcEnv -> List PropParam -> TcEnv
 extendVar : TcEnv -> String -> Scheme -> TcEnv
 extendVars : TcEnv -> List (String, Scheme) -> TcEnv
+externDecls : List Decl -> List Decl
 externSchemes : Map String TyConOrigin -> List Decl -> List (String, Scheme)
 externSchemesGo : List Decl -> List (String, Scheme)
 fieldAssignDictSites : FieldAssign -> List (Ref (List Route))
