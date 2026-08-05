@@ -728,7 +728,7 @@ marker drain at the family's own stage.
 
 | Family | Structural cause (today) | Design element (target) | Open issues drained |
 |---|---|---|---|
-| A. Bare-name cross-module collision | Identity never acquired at resolve; tables faithfully reflect a pre-collapsed namespace | L2/R: qualified identity substrate; K: identity-keyed environments; registry ratchet | #1047, #1069, #1070 (5 of 7 confirmed + method tables), #1092, #1090 (comment), #733, #756; **the VALUE half** — #1326 ◇A-values, the `export import` residual on #845 ◇A-values (unit **#1337**; §2 R's correction; §6 Stage A tail) |
+| A. Bare-name cross-module collision | Identity never acquired at resolve; tables faithfully reflect a pre-collapsed namespace | L2/R: qualified identity substrate; K: identity-keyed environments; registry ratchet | #1047, #1069, #1070 (5 of 7 confirmed + method tables), #1092, #1090 (comment), #733, #756; **the VALUE half** — #1326 ◇A-values, the `export import` residual on #845 — ⚠️ **MEASURED AND DRAINED by #1114/PR #1328**, not pending: it was listed here while its observable was still *predicted from a diff*; it has since been run (`check` 0 · `run` `unknown op '+'` · `build` **0, binary written** · that binary **139, segfault**) and repaired by attributing what a module RE-EXPORTS, at depth 1 and 2, pinned in `run_check_agreement_fixtures/`. **#1337 keeps #1326** and the wildcard read-key question; it no longer has a fails-open member (unit **#1337**; §2 R's correction; §6 Stage A tail) |
 | B. Dispatch key under-discriminates | Selection re-derived downstream from keys coarser than instance identity (bare head tycon; per-module `IE` slice; superset word-sets) | S: one `min⊑` selector at `inst`; evidence references stamped; frozen admissibility; K: global `IE`; emitter word-set retirement | #1072, #1071, #1062; #1046 ◇F-1, #1075 ◇F-1 (both reach dispatch through a local lambda — arg-tag survives at their sites until locals carry evidence); #1068 ◇B-2-wasm |
 | C. Locals not dict-abstracted | `gen` applied at only two binder kinds; interim pin merges rigid vars | L4/E: uniform `gen` at every binder (#1082, gated on S-2(f)) | #1040, #1043, #1052 (and the #866-interim pin retires; #866/#1045 themselves are CLOSED) |
 | D. Impl/default & Flat/Module forks | Two implementations of one judgment kept in sync by hand | L1/E: `MethodBodyKind` merge; one driver, one stamper order | #992, #873-class, #462 ◇E-2, map §7.6 (unfiled → task E-2) |
@@ -1135,6 +1135,20 @@ orders merges, and the plan does not pretend otherwise.
   false positive in one direction and a false negative in the other is the
   argument for one unit rather than two patches; the pass's first job is to
   confirm or refute it.
+
+  ⚠️ **UPDATE (#1114 / PR #1328): the fails-OPEN member is drained, and that is
+  evidence bearing on the one-seam hypothesis rather than merely a smaller
+  membership.** Its observable was recorded here as *predicted, not measured*; it
+  has now been measured and repaired — and repaired **without any occurrence →
+  module resolution work**, purely by making the *write* side's notion of what a
+  module contributes match the language's (declares ∪ re-exports), reusing the
+  import side's own spelling table. No new AST carrier, no change at the read
+  site. So the pass's question 1 is answered **for that member**, in the
+  negative, and the two members are not obviously one seam after all. **#1326 is
+  untouched and still reproduces** (re-confirmed with #1328's own lookup ablated
+  and with both bindings signatured), as does the wildcard read-key question —
+  `importDefinersOf` is still built from import syntax only, and every other
+  consumer of `currentImportDefinersRef` still has that blind spot.
 
   **Deliberately open — do NOT pre-decide** (per the epic's 2026-08-05
   instrument note, *"stop pre-clustering residuals into guessed units; scoping
