@@ -47,6 +47,20 @@ leg's deformed goals; and **F-3c must key its diagnostic to `pickMostSpecificEnt
 `None` arm, not to that function's docstring**, which mis-describes equal heads as a
 no-unique-minimum case and would flip them. Nothing else moved.
 
+**Third addendum, 2026-08-05 — the post-#1162 population, adjudicated at TRACKER level.**
+Every `verified` S0/S1 filed after the second addendum is mapped in a new section at the
+end of this document ("Third addendum" before References), derived at `c0c67f15`. Its
+evidence bar is **weaker than the prior addenda and says so per row**: verdicts come from
+issue bodies, tracker state, and source greps at that commit — not from repros re-run on a
+cold-built binary — and the adjudication of record is the set of 2026-08-05 comments posted
+on the issues themselves. Ownership changes: **G-10 now has an issue (#1318)**, G-9's
+consumer clause is recorded on #1150 (still live — verified by grep at `c0c67f15`), G-11's
+declaration-time half is adopted onto A-3's blast list (#1112 comment), G-1 (#1136) and
+G-8 (#1137) have proposed owners, and the G-7 #1020 split is adopted onto #1112. Two new
+stage-filling issues: **#1317** (dispatch-key identity re-key) and **#1319**
+(constructor-namespace identity). No existing family row, verdict, mechanism or
+prediction was touched.
+
 > **The burden of proof here is inverted.** "The plan covers this" is the claim that
 > needs a mechanism plus a prediction; "this is a gap" is the cheap answer. A row with
 > no stateable mechanism is `NOT ESTABLISHED`, not "probably fine" — retiring a live
@@ -2189,6 +2203,82 @@ in the second addendum and worth applying to the rest when they are next revisit
 - **DETECTOR vs REPAIR.** A stage whose artifact would *reveal* a defect (§2 E's mandated
   arity fixture, for G-10) is not a stage that drains it. Saying so explicitly is what
   keeps a GAP verdict honest when a stage does in fact touch the area.
+
+---
+
+## Third addendum — 2026-08-05: tracker-level re-adjudication of the post-#1162 population
+
+**Provenance and evidence bar, stated first because it differs from the rest of this
+ledger.** Derived at `main` = `c0c67f15` (2026-08-05), as part of a three-track
+architecture audit (PR-conformance sweep · S0/S1 mapping · forward-plan review). Verdicts
+below come from issue bodies, stage states, merged-PR contents, and source greps at that
+commit. **Behavioural claims were NOT re-run on a cold-built binary** (unlike the first
+and second addenda), except the single grep-checkable one noted at #1150. Rows marked
+*inference* are hypotheses for a scoping pass with a binary, not findings — the
+distinction this repo's methodology comments keep having to restate. The adjudication of
+record is the set of 2026-08-05 comments posted on each issue; this section is the
+ledger's index of them.
+
+| Bug | Verdict | Stage / owner | Evidence bar |
+|---|---|---|---|
+| #1169 multi-param `requires` reads the wrong dict slot | candidate member of **G-10 (#1318)** — slot mis-assignment upstream of both engine symptoms | #1318 | inference, on-issue |
+| #1174 (Int, Char) call vs bare-tyvar-head impl rejects a legal program | **unmapped** — plausibly the #1161 shattered-goal class (bare-TyVar head matches anything at `entryHeadMatches`' arg-0 fallback); adjudication owed | none yet; candidate #1318-class | inference, HERE only — no on-issue comment |
+| #1177 predicate ORDER in a `=>` context decides dispatch | member of **G-10 (#1318)** — slot-per-tyvar cardinality is the mechanism | #1318 | inference, on-issue |
+| #1180 undetermined constraint silently picks the concrete impl | **CANDIDATE member only** of #1318 — the named fix site (`implHeadTagForIface`) may make it S-lane selector work instead | #1318 (candidate) | adjudication owed, on-issue |
+| #1182 two interfaces, one method name — `impl` block order decides | plausibly **A-3** (#1112): candidate collection keyed by interface identity in K's `IE` (`matchingEntries` keys by method name today) | A-3 (proposed) | inference, on-issue |
+| #1183 ⊑-incomparable overlap at a non-closed goal commits with a warning | **deferred by owner decision** (F-3d record) — needs the T4 quiescence pass, i.e. **E-4** territory; the accepted cost is on the epic | E-4 (revisit condition) | adjudicated (owner decision) |
+| #1191 prelude-standalone collision on the zero-import path | plausibly **E-1** (#1115) — the Flat arm's prelude concatenation; belongs in E-1's divergence enumeration | E-1 (proposed) | inference, on-issue |
+| #1217 record pattern `...` lowered to a bare wildcard | **OUT OF ARC** — desugar/exhaust pattern lowering; no stage here touches it; routes via the frontend pipeline | none (out of arc) | adjudicated, on-issue |
+| #1265 `CImplDefault` method-name half | **A-2 tail** — identity into the default's *symbol*; adjudicated in the A-2 handoff | A-2 (#1111) | adjudicated (handoff) |
+| #1276 alias-qualified method provenance erased before the method-scope table | **A-2 method-scope residual** — witness must survive `renameAliasedMethods`; PR #1296 proved it distinct from the drained #1272/#1275 | A-2 (#1111) | adjudicated (PR #1296) |
+| #1279 absent origin bridges two identities | downstream of **#1280** — closes when supply closes | A-2 (#1111) / #1280 | adjudicated (on-issue + handoff) |
+| #1283 overlay misses a re-exported member | member of **#1319** (constructor-namespace identity) | #1319 | adjudicated, on-issue |
+| #1284 overlaid sibling out-ranks a by-name import | member of **#1319** | #1319 | adjudicated, on-issue |
+| #1302 dependency's PRIVATE interface decides an importing module's obligation | A-2.5-witness fix **gated on an owed spec ruling** (S-2 mould — private-interface visibility); ruling before fix | A-2 (#1111), spec first | adjudicated, on-issue |
+
+**Also in the audited population but already family rows above:** #1150 (family A — the
+G-9 consumer clause is still live: `isCtorAppSpine` classifies via `ctorHeadIsUpper` at
+`c0c67f15`, verified by grep; the A-1/A-2 substrate landed and the consumer never moved —
+recorded on #1150 with the owed conformance fixture), #1161 (family B — its residual is
+now owned by #1318), #1162 (family J — G-11's declaration-time half adopted onto A-3's
+blast list via the #1112 comment).
+
+**Gap-ownership delta since the second addendum:**
+
+- **G-10 → #1318 filed.** Members #1161 (residual) and #1177; candidates #1169, #1180,
+  and (from this table) #1174. ⚠️ **Two rationales for the #1137 coupling are now on
+  record and the ORDERING is the same under both**: the epic's 2026-07-31 form ("the full
+  fix moves the leading dict-param count §2 E freezes") and this ledger's revised form
+  above (a *conformant* §2 E cannot freeze the shattering — DICT §4 `gen-sig` gives one
+  dict param per predicate — but **#1137's mandated arity conformance fixture cannot
+  honestly go green until G-10 lands**). #1318's body carries the epic's form; the
+  refinement is recorded there by comment. Either way: G-10 before or with #1137.
+- **G-9 → recorded on #1150** (see above). **G-11 → A-3 blast list** (#1112 comment).
+- **G-1 (#1136) → proposed Stage C sibling of C-2 (#830).** **G-8 (#1137) → proposed
+  E-lane.** Both are proposals for the lane scoping passes, posted on-issue; both issues
+  had zero movement since being filed as ownerless on 2026-07-30.
+- **G-7's #1020 split → adopted onto A-3's scope** (#1112 comment) — proposed on the epic
+  2026-07-30, half-adopted until now.
+
+**Family notes.** Family A's residue has changed character: after A-2's thirteen PRs the
+open members are no longer bare-name *tables* but witness/overlay *edge cases* (#1276
+alias, #1283 re-export, #1284 ranking, #1302 private) — each landed widening moved the
+boundary one hop out, which is why **#1319** exists (key the constructor namespace by
+declaration identity end-to-end; retire the overlay) and why **#1317** exists (the
+dispatch-key demand half, previously prose-only). Family B has **split**: key granularity
+(B-1/B-2, owned) vs predicate loss at the producers (G-10/#1318) — a fourth root cause
+that postdates #1084's "3 root causes + 1 arc" framing; #1084 is flagged for
+re-derivation. **Exclusion re-audit:** the §4 list holds; **#1292** (`ctorToTypeRef`
+runtime-tag collision, filed by A-2.7) is a new engine-realization candidate with a
+◇B-2 marker — B-2 removes the *path* to the tag fallback, the tag substrate itself is
+engine work.
+
+**What this addendum does not do.** It does not rewrite the family sections in this
+ledger's full row format (mechanism + falsifiable prediction, derived on a cold build)
+for the fourteen bugs above — that bar is owed at each owning unit's scoping pass, and
+pretending this table meets it would be the exact overstatement the Not-established
+section warns about. The NULL-vs-POSITIVE / EXECUTABLE-vs-PENDING / DETECTOR-vs-REPAIR
+distinctions of 2026-07-31 apply to every prediction referenced here.
 
 ---
 
