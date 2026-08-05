@@ -1,0 +1,9 @@
+-- #1353. `size` is imported explicitly and ONLY from fmod (an ordinary standalone).
+-- `Sizeable` is neither local to this module, nor imported by it, nor the prelude --
+-- it reaches the module graph only TRANSITIVELY, through `bridge`, which imports `sf`
+-- from `smod` (where `Sizeable`/`size` live) but does not re-export `Sizeable` or
+-- `size` at all.
+import fmod.{size}
+import bridge.{bf}
+
+main = println (size "abc" + bf 0)
