@@ -229,9 +229,14 @@ checkProp evalEnv body inputs =
 
 -- parameterized over the value type (v := Value e) — see the kind-inference
 -- note on eval.mdk's `Value`
+-- `PropFailed run shrunk fuelExhausted` — `fuelExhausted` is #1307's shrink
+-- fuel cap firing: True means shrinkLoopFuel hit the cap before a shrink arm
+-- returned None on its own, so `shrunk` may not be minimal and (per the
+-- issue's own severity rule: loud->silent is a regression) that must be
+-- reported on the same channel as the counterexample, not swallowed.
 public export data PropOutcome v =
   | PropPassed
-  | PropFailed Int (List (String, v))
+  | PropFailed Int (List (String, v)) Bool
 
 runProp : List (String, TyDef) -> List (String, Value e) -> Decl -> Int -> <IO> Bool
 runProp tydefs evalEnv (DProp _ name params body) maxTests =
@@ -240,8 +245,12 @@ runProp tydefs evalEnv (DProp _ name params body) maxTests =
     PropPassed =>
       let _ = putStrLn ("OK (" ++ intToString maxTests ++ " tests)")
       True
-    PropFailed run shrunk =>
+    PropFailed run shrunk fuelExhausted =>
       let _ = putStrLn "FAILED after \{intToString run}\{if run == 1 then " test" else " tests"}"
+      let _ = if fuelExhausted then
+        putStrLn "  WARNING: shrink fuel exhausted after \{intToString shrinkFuel} steps; the counterexample below may not be minimal, and a shrink arm is probably cycling (see #1307)."
+      else
+        ()
       let _ = putStrLn "  Counterexample:"
       let _ = printCounterexample shrunk
       False
@@ -266,7 +275,8 @@ findFailureStep : List (String, TyDef) -> List (String, Value e) -> List PropPar
 findFailureStep tydefs evalEnv params body maxTests run _ True =
   findFailure tydefs evalEnv params body maxTests (run + 1)
 findFailureStep _ evalEnv params body _ run inputs False =
-  PropFailed run (shrinkLoop evalEnv params body inputs)
+  let (shrunk, fuelExhausted) = shrinkLoop evalEnv params body inputs
+  PropFailed run shrunk fuelExhausted
 
 genInputs : List (String, TyDef) -> List PropParam -> <e> List (String, Value e)
 genInputs _ [] = []
@@ -292,15 +302,25 @@ escStrLocal s = "\"" ++ s ++ "\""
 shrinkFuel : Int
 shrinkFuel = 10000
 
-shrinkLoop : List (String, Value e) -> List PropParam -> Expr -> List (String, Value e) -> <e> List (String, Value e)
+-- Returns (candidate, fuelExhausted) rather than printing directly:
+-- shrinkLoop/shrinkLoopFuel stay effect-POLYMORPHIC (<e>, whatever the prop
+-- body under test performs — NOT necessarily <IO>), mirroring every other
+-- helper in this shrink chain (tryShrinkOne, findSmaller, checkProp all call
+-- `eval`, whose effect is the tested program's, not this tool's). Forcing
+-- <IO> here to print inline broke that polymorphism (a concrete effect
+-- can't be woven into an otherwise-generalized recursive effect variable —
+-- confirmed: `test_main` failed to typecheck with "declared with <> but
+-- also performs <IO>" when tried). The exhaustion flag is instead reported
+-- by the caller, `runProp`, which is unconditionally <IO> already.
+shrinkLoop : List (String, Value e) -> List PropParam -> Expr -> List (String, Value e) -> <e> (List (String, Value e), Bool)
 shrinkLoop evalEnv params body candidate =
   shrinkLoopFuel evalEnv params body candidate shrinkFuel
 
-shrinkLoopFuel : List (String, Value e) -> List PropParam -> Expr -> List (String, Value e) -> Int -> <e> List (String, Value e)
-shrinkLoopFuel _ _ _ candidate 0 = candidate
+shrinkLoopFuel : List (String, Value e) -> List PropParam -> Expr -> List (String, Value e) -> Int -> <e> (List (String, Value e), Bool)
+shrinkLoopFuel _ _ _ candidate 0 = (candidate, True)
 shrinkLoopFuel evalEnv params body candidate fuel = match tryShrinkOne evalEnv params body candidate 0
   Some better => shrinkLoopFuel evalEnv params body better (fuel - 1)
-  None => candidate
+  None => (candidate, False)
 
 -- Try each param in order; return the first candidate where some smaller value
 -- still fails the prop.
@@ -413,7 +433,7 @@ runEachResult tydefs evalEnv (_::rest) = runEachResult tydefs evalEnv rest
 
 propResultOf : String -> PropOutcome (Value e) -> PropResult
 propResultOf name PropPassed = PropResult name True "100 tests passed"
-propResultOf name (PropFailed run shrunk) = PropResult
+propResultOf name (PropFailed run shrunk fuelExhausted) = PropResult
   name
   False
   (stringConcat
@@ -422,6 +442,7 @@ propResultOf name (PropFailed run shrunk) = PropResult
       intToString run,
       if run == 1 then " test; counterexample: " else " tests; counterexample: ",
       renderCounterexample shrunk,
+      if fuelExhausted then " (WARNING: shrink fuel exhausted, counterexample may not be minimal — see #1307)" else "",
     ])
 
 renderCounterexample : List (String, Value e) -> String
