@@ -1418,5 +1418,190 @@ else
   fail=$((fail+1)); printf 'FAIL A-2.10/1277-xmod-head-spelling-build (native build failed)\n'
 fi
 
+# ── #1280: EXTERN SIGNATURES CARRY IDENTITY (the SUPPLY half of Stage A-2) ────
+#
+# `externSchemes` (compiler/types/typecheck.mdk) used to turn each `DExtern`'s
+# declared `Ty` into a `Scheme` OUTSIDE `stampTyOrigins`' walk, so every `Mono`
+# flowing out of an extern's declared type reached its consumers `OriginUnresolved`
+# on BOTH driver arms.  It now stamps under `externTyOriginScope`
+# (compiler/frontend/resolve.mdk).
+#
+# 🔬 WHAT WAS MEASURED, first-hand, on this tree, rather than inferred.  The
+# goal-side dispatch head for a user-declared interface at `Float`, dumped by a
+# temporary probe in `headTyconMono` and rendered through `regKeyRender`:
+#
+#                                     before            after
+#   probeMeth x  (x : Float)      builtin0:5:Float   builtin0:5:Float
+#   probeMeth (intToFloat 1)      bare0:5:Float      builtin0:5:Float
+#
+# — identical on the flat arm and the module arm.  A second probe, walking every
+# extern signature AFTER the stamping walk, reported ZERO surviving
+# `OriginUnresolved` heads on all four user-facing driver verbs (flat check, module
+# check, module run, flat run); with the stamping stubbed to `omEmpty` it reported
+# hundreds, so the probe was able to fail.  Neither probe is in the tree; the legs
+# below are the observable consequences that are.
+#
+# ⚠️ SUPPLY IS TOTAL ON THE USER-FACING ARMS ONLY, and that is stated because it is
+# a real bound on the claim, not a caveat about it.  The prelude-FLATTENED internal
+# passes (`elaborateDict`, `discoverPromoted`, `discoverPromotedJoint`,
+# `checkMatchToLines`) have no prelude boundary to attribute `Option`/`Ordering`/
+# `Result` to, so they pass `externTyOriginScope []` and those three heads stay
+# absent there.  That is symmetric rather than partial: on those paths the
+# prelude's OWN declarations are unstamped too (`checkProgramSeededSplit` with
+# `coreProg0 = []`), so both sides of every comparison are equally identity-less.
+#
+# ── leg 1: the FEATURE.  The permanent home for test/must_fail_fixtures/1279-… ──
+# That fixture pinned the bug (check exits 0 on a type-unsound program); it drains
+# when this lands, and a drained must-fail leaves no regression test behind — the
+# same argument the A-2.10 block above makes for 1208/1209.  An extern's `Option`
+# with no identity sat BETWEEN `Option@core` and a second module's own `Option` and
+# let unification link them, because `sameTyConHead` is absence-makes-no-claim and
+# unification LINKS.  With the extern head supplied there is nothing to bridge
+# through, and A-2.10's comparison refuses the pair with NO edit to the comparison.
+cat > "$TMP/x1280_evil.mdk" <<'EOF'
+public export data Ordering = MyLt | MyEq | MyGt
+
+export interface Foldable f where
+  myfold : f a -> Int
+
+public export data Option a = MyJust a
+
+export unwrapEvil : Option Int -> Int
+unwrapEvil (MyJust n) = n + 1000
+EOF
+# `Ordering` + `Foldable` together make `programIsCore` (a purely SYNTACTIC
+# self-test, compiler/frontend/resolve.mdk) answer True for x1280_evil, which
+# collapses its `typeSeed` and is what lets it declare a second `Option` at all.
+# That predicate is #1279's OTHER fix territory and is deliberately NOT touched
+# here — this leg asserts the supply half closes the hole on its own.
+cat > "$TMP/x1280_bridge.mdk" <<'EOF'
+import x1280_evil.{unwrapEvil}
+
+mid = stringIndexOf "zz" "a"
+
+usesCore : Bool
+usesCore = isSome mid
+
+main =
+  println usesCore
+  println (unwrapEvil mid)
+EOF
+x1280_rej="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check "$TMP/x1280_bridge.mdk" 2>&1)"
+x1280_rej_code=$?
+x1280_rej_json="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check --json "$TMP/x1280_bridge.mdk" 2>/dev/null)"
+if [ "$x1280_rej_code" -ne 0 ] && printf '%s' "$x1280_rej_json" | grep -q 'T-TYPE-MISMATCH'; then
+  pass=$((pass+1)); printf 'ok   1280/reject-absent-origin-bridge (extern Option no longer bridges two identities)\n'
+else
+  fail=$((fail+1)); printf 'FAIL 1280/reject-absent-origin-bridge (exit %d, no T-TYPE-MISMATCH: [%s])\n' "$x1280_rej_code" "$x1280_rej"
+fi
+# The message must name BOTH modules.  Same argument as A-2.10/reject-names-both-
+# modules: `Type mismatch: Option vs Option` is true and unactionable, and no other
+# gate reads this text once the must-fail fixture is deleted.
+if printf '%s' "$x1280_rej" | grep -q "share the name 'Option'" \
+  && printf '%s' "$x1280_rej" | grep -q "x1280_evil" \
+  && printf '%s' "$x1280_rej" | grep -q "core"; then
+  pass=$((pass+1)); printf 'ok   1280/reject-names-both-modules\n'
+else
+  fail=$((fail+1)); printf 'FAIL 1280/reject-names-both-modules (no actionable hint: [%s])\n' "$x1280_rej"
+fi
+#
+# ── leg 2: the BYSTANDER.  "feature + UNRELATED code still behaves" ────────────
+# AGENTS.md requires this shape of any change that alters what a PROGRAM-WIDE
+# comparison answers, and it is the one that catches this change's real failure
+# mode: supplying an identity can only ever turn an ACCEPT into a REJECT, so the
+# risk is a valid program refused, not an invalid one admitted.  A-2.2b shipped
+# exactly that regression (the compiler rejected its own prelude) and the uniform
+# alternative measured while scoping this unit does too — stamping the whole extern
+# population `OriginBuiltin` makes plain `isSome (stringIndexOf "z" "abc")` fail
+# with `Option vs Option — one comes from module 'core', the other from the language
+# itself`.  Hence: every binding below reaches a head OUT OF AN EXTERN and hands it
+# to a prelude or user consumer whose head acquired identity by a DIFFERENT route.
+#
+# The graph also CONTAINS a same-name collision — `x1280_defs` and `x1280_other`
+# both declare a type `Twin` — and the entry names NEITHER.  Only their unrelated
+# functions are imported, so both `Twin`s are registered into the cross-module
+# universe while nothing below mentions the name.
+#
+# ⚠️ EXPECTED VALUES ARE DERIVED FROM THE DECLARED SEMANTICS, NOT CAPTURED, per
+# AGENTS.md's "a captured golden records what the engine DID".  Each term, from
+# stdlib/runtime.mdk's signatures and stdlib/core.mdk's definitions:
+#   charFromCode 65        = Some 'A'   (ASCII 65)   -> fromOption -> charCode = 65
+#   stringToFloat "2.5"    = Some 2.5   -> +7.5 = 10.0 exactly (both are exact
+#                                          binary fractions) -> floatToInt = 10
+#   stringCompare "a" "b"  = Lt         ('a'=97 < 'b'=98)     -> 100
+#   arrayLength (stringToChars "abcd")  = 4
+#   floatToInt (sqrt (intToFloat 16))   = floatToInt 4.0      = 4
+#   unTwinA (twinA (stringLength "xyz"))                      = 3
+#   otherLen "ab"          = stringLength "ab"                = 2
+#   total = 65 + 10 + 100 + 4 + 4 + 3 + 2                     = 188
+cat > "$TMP/x1280_defs.mdk" <<'EOF'
+public export data Twin = MkTwinA Int
+
+export twinA : Int -> Twin
+twinA n = MkTwinA n
+
+export unTwinA : Twin -> Int
+unTwinA (MkTwinA n) = n
+EOF
+cat > "$TMP/x1280_other.mdk" <<'EOF'
+public export data Twin = MkTwinB String
+
+export otherLen : String -> Int
+otherLen s = stringLength s
+EOF
+cat > "$TMP/x1280_bystander.mdk" <<'EOF'
+import x1280_defs.{twinA, unTwinA} -- ONLY the functions; never defs' Twin
+import x1280_other.{otherLen}      -- ONLY the function; never other's Twin
+
+viaOptionChar : Int
+viaOptionChar = charCode (fromOption 'z' (charFromCode 65))
+
+viaOptionFloat : Int
+viaOptionFloat = floatToInt (fromOption 0.0 (stringToFloat "2.5") + 7.5)
+
+viaOrdering : Int
+viaOrdering = match stringCompare "a" "b"
+  Lt => 100
+  Eq => 0
+  Gt => 0
+
+viaArray : Int
+viaArray = arrayLength (stringToChars "abcd")
+
+viaFloat : Int
+viaFloat = floatToInt (sqrt (intToFloat 16))
+
+viaUserType : Int
+viaUserType = unTwinA (twinA (stringLength "xyz"))
+
+main =
+  println (viaOptionChar + viaOptionFloat + viaOrdering + viaArray + viaFloat + viaUserType + otherLen "ab")
+EOF
+x1280_acc="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check "$TMP/x1280_bystander.mdk" 2>&1)"
+x1280_acc_code=$?
+if [ "$x1280_acc_code" -eq 0 ]; then
+  pass=$((pass+1)); printf 'ok   1280/bystander-check (extern-sourced heads still meet their consumers)\n'
+else
+  fail=$((fail+1)); printf 'FAIL 1280/bystander-check (valid program rejected, exit %d: [%s])\n' "$x1280_acc_code" "$x1280_acc"
+fi
+x1280_run="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" run "$TMP/x1280_bystander.mdk" 2>&1)"
+x1280_run_code=$?
+if [ "$x1280_run_code" -eq 0 ] && [ "$x1280_run" = "188" ]; then
+  pass=$((pass+1)); printf 'ok   1280/bystander-run (188)\n'
+else
+  fail=$((fail+1)); printf 'FAIL 1280/bystander-run (exit %d, got [%s], want 188)\n' "$x1280_run_code" "$x1280_run"
+fi
+# The BUILD leg is not decoration here: the stamping site on the emit arm is
+# `elaborateModules`, the seam `run` and the separate `medaka_emitter` process
+# share, so an extern head stamped on one and not the other is a run != build
+# divergence rather than a diagnostic.
+if MEDAKA_ROOT="$ROOT" MEDAKA="$MEDAKA" bound "$MEDAKA" build "$TMP/x1280_bystander.mdk" -o "$TMP/x1280.bin" >/dev/null 2>&1 && [ -x "$TMP/x1280.bin" ]; then
+  x1280_bld="$("$TMP/x1280.bin" 2>/dev/null | head -1)"
+  if [ "$x1280_bld" = "188" ]; then pass=$((pass+1)); printf 'ok   1280/bystander-build (native agrees: 188)\n'
+  else fail=$((fail+1)); printf 'FAIL 1280/bystander-build (got [%s], want 188)\n' "$x1280_bld"; fi
+else
+  fail=$((fail+1)); printf 'FAIL 1280/bystander-build (native build failed)\n'
+fi
+
 printf '\n%d ok, %d failing\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

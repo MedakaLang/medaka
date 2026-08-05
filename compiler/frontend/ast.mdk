@@ -383,27 +383,48 @@ mkIdent ns origin name = map (io => Ident ns io name) (identOriginOf origin)
 --
 -- ⚠️ THE RESIDUAL IS A SUPPLY GAP, AND CLOSING IT STRENGTHENS THIS RULE WITH NO
 -- FURTHER EDIT — that is the property that makes the transitional shape
--- acceptable rather than a second sentinel.  Two populations have no identity
--- today: (a) the FLAT/loader-less driver's own user module (#1115 / E-1 —
--- `stampFlatTyOrigins` deliberately claims nothing there), and (b)
--- `stdlib/runtime.mdk`'s EXTERN signatures, which never pass through the
--- stamping walk (`externSchemes`) on either arm.  When a producer starts
+-- acceptable rather than a second sentinel.  ONE population has no identity
+-- today: the FLAT/loader-less driver's own user module (#1115 / E-1 —
+-- `stampFlatTyOrigins` deliberately claims nothing there).  When a producer starts
 -- supplying an origin, `identOriginOf` stops answering `None` for it and this
 -- predicate becomes strict equality on that population automatically.  At total
 -- supply it IS strict equality, which is I6.3's target state.
 --
--- 🚨 ABSENCE **CAN** BRIDGE TWO DISTINCT IDENTITIES — #1279, MEASURED, OPEN.
--- Unification LINKS, so `a ~ T@absent` then `a ~ T@core` then `a ~ T@evil`
--- accepts a pairing the DIRECT comparison refuses.  Both halves are measured on
--- this tree:
---   * the DIRECT form is CLOSED — `unwrapEvil (Some 1)`, where `unwrapEvil` takes
---     another module's own `Option`, is rejected with a `T-TYPE-MISMATCH` naming
---     both modules;
---   * the INDIRECT form is NOT.  `mid = stringIndexOf "zz" "a"` gives an
---     `Option Int` head with NO origin (population (b)); `isSome mid` links it to
---     `Option@core`, `unwrapEvil mid` links it to `Option@evil`, and `check`
---     exits 0 with ZERO diagnostics.  `run` prints `False`, then dies with
---     `E-NONEXHAUSTIVE-MATCH`.  Pinned: `test/must_fail_fixtures/1279-…`.
+-- ✅ THE OTHER POPULATION IS CLOSED, AND THAT IS THE "NO FURTHER EDIT" CLAIM
+-- OBSERVED RATHER THAN PREDICTED.  `stdlib/runtime.mdk`'s EXTERN signatures used
+-- to reach a `Scheme` without entering the stamping walk on EITHER arm; #1280
+-- moved the walk inside `externSchemes` (`types/typecheck.mdk`), under
+-- `externTyOriginScope` (`frontend/resolve.mdk`, which owns the derivation of why
+-- that scope and not a uniform one).  NOTHING IN THIS FILE CHANGED, and #1279 —
+-- the bridge below — went from `check` exit 0 with zero diagnostics to a
+-- `T-TYPE-MISMATCH` naming both modules.  A probe walking every extern signature
+-- after the walk reported ZERO surviving `OriginUnresolved` heads on the four
+-- user-facing driver verbs (flat/module × check/run); stubbing the walk made it
+-- report hundreds, so the measurement could fail.  ⚠️ It is total on THOSE arms
+-- only: the prelude-FLATTENED internal passes have no prelude boundary and so
+-- leave `Option`/`Ordering`/`Result` absent — symmetrically, since the flattened
+-- prelude's own declarations are unstamped there too (`externSchemes`' comment
+-- carries that derivation and the call-site list).
+--
+-- 🚨 ABSENCE **COULD** BRIDGE TWO DISTINCT IDENTITIES — #1279, MEASURED, DRAINED
+-- BY #1280.  This stays because the MECHANISM is starved, not repealed:
+-- unification LINKS, so `a ~ T@absent` then `a ~ T@core` then `a ~ T@evil` still
+-- accepts a pairing the DIRECT comparison refuses, for ANY head that reaches a
+-- comparison with no identity.  What #1280 removed is the SUPPLY that produced
+-- the absent middle head in the one measured repro; population (a) can still
+-- furnish one, and no experiment here establishes that no other shape can.  What
+-- was measured on this tree, before and after:
+--   * the DIRECT form was already CLOSED — `unwrapEvil (Some 1)`, where
+--     `unwrapEvil` takes another module's own `Option`, is rejected with a
+--     `T-TYPE-MISMATCH` naming both modules;
+--   * the INDIRECT form was NOT.  `mid = stringIndexOf "zz" "a"` gave an
+--     `Option Int` head with NO origin; `isSome mid` linked it to `Option@core`,
+--     `unwrapEvil mid` to `Option@evil`, and `check` exited 0 with ZERO
+--     diagnostics (`run` printed `False`, then died with
+--     `E-NONEXHAUSTIVE-MATCH`).  It is now rejected.  The must-fail fixture is
+--     deleted, per that gate's own drain instruction; the permanent regression
+--     leg is `1280/reject-absent-origin-bridge` in
+--     `test/diff_compiler_check_cli_modules.sh`.
 --
 -- ⚠️ THIS PARAGRAPH USED TO ASSERT THE OPPOSITE, AND THE ARGUMENT WAS AN
 -- ENUMERATION.  It read: population (b)'s type names are `primitiveTypes` plus
@@ -419,22 +440,28 @@ mkIdent ns origin name = map (io => Ident ns io name) (identOriginOf origin)
 -- a property of the prelude when it is a property of the DECL SHAPES in front of
 -- it, and any module can write those.
 --
--- ⚠️ NOT A REGRESSION FROM THIS UNIT, and the fix is not owed here.  Pre-A-2.10
--- `unifyN`'s `TCon`/`TCon` arm was `a == b`, so both forms were accepted; this
--- unit closed one of them.  What IS owed here is not asserting the other is
--- impossible.  Closing #1279 needs identity SUPPLY at the extern signatures
--- (population (b), already owed) or a `programIsCore` that is decided by the
--- driver rather than by decl shapes — neither is a change to this predicate,
--- which is the same "closing the supply gap strengthens this rule with no
--- further edit" property stated above.
+-- ⚠️ THE SEED FLIP ITSELF IS UNTOUCHED, and saying so is the point of keeping the
+-- paragraph above.  #1279 named two independent fix territories; #1280 took the
+-- SUPPLY one, so `programIsCore` is still a syntactic self-test and a module that
+-- writes those two decl shapes still collapses its own `typeSeed` and may still
+-- declare its own `Option`.  What that no longer buys it is a bridge through an
+-- extern.  Nothing here measures whether some OTHER route to an identity-less
+-- middle head exists — only the one repro was run, before and after.
+-- (`compiler/tools/test_cmd.mdk` carries a second copy of the predicate.)
 --
--- ⚠️ Re-derive population (b)'s name set rather than trusting any list; a new
--- extern naming a further prelude type moves it, and the command is
+-- ⚠️ NOT A REGRESSION FROM A-2.10, either.  Pre-A-2.10 `unifyN`'s `TCon`/`TCon`
+-- arm was `a == b`, so both forms were accepted; that unit closed the direct one
+-- and left the bridge, and #1280 closed the bridge by supply — neither is a change
+-- to this predicate, which is the "closing the supply gap strengthens this rule
+-- with no further edit" property, now observed rather than promised.
+--
+-- ⚠️ Re-derive the extern population's name set rather than trusting any list; a
+-- new extern naming a further prelude type moves it, and it is what
+-- `externTyOriginScope` has to keep covering.  The command is
 --   grep -E '^extern ' stdlib/runtime.mdk | sed -E 's/--.*$//; s/<[^>]*>//g' \
 --     | grep -oE '\b[A-Z][A-Za-z0-9_]*' | sort -u
 -- In population (a) nothing in the user module has an identity at all, so it
--- supplies no second identity of its own; it inherits #1279 through the prelude
--- exactly as (b) does.
+-- supplies no second identity of its own.
 --
 -- ⚠️ `TRigid` is deliberately NOT routed here and needs no arm: it carries no
 -- origin by construction (§8 I6.1 ∧ I6.3's corollary), so the cross-population

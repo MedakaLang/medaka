@@ -1,8 +1,10 @@
 # DEFLATE / gzip — a compression codec in pure Medaka
 
-**Status:** PARTIAL — Phases 1-2 shipped (`gzip/`): stored + fixed-Huffman
-inflate, real round-trip decompression of any `.gz` whose blocks are BTYPE
-00/01. A dogfood capstone chosen to exercise the parts of the language and
+**Status:** PARTIAL — Phases 1-3 shipped (`gzip/`): stored + fixed-Huffman +
+dynamic-Huffman inflate, real round-trip decompression of any `.gz` whose
+blocks are BTYPE 00/01/10 — i.e. every real-world DEFLATE block type.
+Deflate (compression, Phases 4-6) is not yet implemented. A dogfood capstone
+chosen to exercise the parts of the language and
 stdlib that the SQLite library (`archive/design/SQLITE-DESIGN.md`, as-built in
 `sqlite/`) leaves cold: sub-byte bit streams, in-place mutable arrays in a hot
 loop, and round-trip property testing against an external oracle. The phasing
@@ -123,7 +125,7 @@ actually fast is an open question this project will answer.
 |-------|-----------|--------|
 | **1** | `BitReader` + **stored (uncompressed) blocks** + gzip container parse/emit + CRC-32 | incompressible input (`/dev/urandom`) at any level emits a stored block — see below; `printf` \| `gzip` round-trip |
 | **2** | **Inflate, fixed Huffman** — the RFC 1951 static code tables, length/distance decoding, sliding window | `gzip -1`..`-9` (SHIPPED — see `gzip/test/inflate_oracle.sh`). ⚠️ You do not get to choose BTYPE; see "When gzip actually emits fixed Huffman" below. The oracle asserts the BTYPE it observed rather than assuming one |
-| **3** | **Inflate, dynamic Huffman** — code-length alphabet, HLIT/HDIST/HCLEN, canonical code construction | Real `.gz` corpus, including this repo's own `compiler/seed/emitter.ll.gz` |
+| **3** | **Inflate, dynamic Huffman** — code-length alphabet, HLIT/HDIST/HCLEN, canonical code construction (SHIPPED) | Real `.gz` corpus, including this repo's own `compiler/seed/emitter.ll.gz` — see `gzip/test/inflate_oracle.sh` |
 | **4** | **Deflate** — LZ77 hash-chain matcher + fixed-Huffman blocks + stored-block fallback | `gunzip` accepts our output and reproduces the input |
 | **5** | **Deflate, dynamic Huffman** — frequency counting, length-limited code construction, block-splitting heuristic | Compression ratio vs `gzip -6` on a fixed corpus (reported, not gated) |
 | **6** | zlib container (RFC 1950) + Adler-32 | `python3 -c "import zlib"` round-trip |

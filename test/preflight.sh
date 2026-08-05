@@ -635,6 +635,16 @@ for f in $changed; do
     sqlite/test/*|sqlite/lib/*|sqlite/*.mdk|sqlite/medaka.toml)
       add 'sqlite/test/*oracle' ;;
 
+    # ── gzip: same structural blind spot as sqlite, for the same reason ────────
+    # `gzip/test/inflate_oracle.sh` has no `*fixtures*`/`*goldens*` ancestor either
+    # — its goldens sit loose in `gzip/test/` next to the oracle that reads them —
+    # so the corpus derivation never triggers here and these gates would derive
+    # NOTHING. CI *does* grade this (`gzip/test/*oracle` runs in the `sqlite`
+    # shard), so without this arm a gzip change reports a green preflight having
+    # run nothing about it. See #1333.
+    gzip/test/*|gzip/lib/*|gzip/*.mdk|gzip/medaka.toml)
+      add 'gzip/test/*oracle' ;;
+
     # ── fixture/golden corpus change: run its ACTUAL consumers, not everything.
     # See _gates_for_fixture_dir above. A directory with zero discoverable
     # consumers is a real finding (dead corpus, or a gap in this derivation) —

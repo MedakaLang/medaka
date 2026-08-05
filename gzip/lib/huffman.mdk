@@ -21,15 +21,31 @@
 -- specifically, since `Huffman` carries no alphabet-identity tag to
 -- special-case on.
 --
--- PHASE 3 MARKER: the RFC (and zlib's `inftrees.c`, `type == CODES`)
--- forbids this exception OUTRIGHT for the dynamic-Huffman code-length
--- alphabet (HCLEN), regardless of length — a single-symbol code-length
--- table is always malformed there. `buildHuffman`/`kraftCheck` below have
--- no alphabet-identity parameter yet, so Phase 3's code-length-alphabet
--- caller CANNOT reuse this exception path as-is; it will need either a
--- `kraftCheck` variant, an added flag, or its own validation wrapper
--- before it can call `buildHuffman` safely. Left undone deliberately (no
--- Phase 3 code exists yet to thread a flag into), not silently.
+-- PHASE 3: the RFC (and zlib's `inftrees.c`, `type == CODES`) forbids the
+-- single-length-1-code exception OUTRIGHT for the dynamic-Huffman
+-- code-length alphabet (HCLEN), regardless of length — a single-symbol
+-- code-length table is always malformed there. `buildHuffmanStrict` below
+-- is that stricter entry point: same construction, `allowSingle = False`
+-- threaded into `kraftCheck`, so the HCLEN caller in `inflate.mdk` cannot
+-- accidentally inherit the litlen/dist exception.
+--
+-- PHASE 3 WIDENING: `kraftCheck` also now accepts `numUsed == 0` — an
+-- alphabet with EVERY code length zero — as complete, for BOTH
+-- `buildHuffman` and `buildHuffmanStrict`. This is not the RFC 1951
+-- §3.2.7 single-code exception (that one is narrower and still gated by
+-- `allowSingle`); it is a separate, unconditional case straight from
+-- puff.c's `construct()`: "if (h->count[0] == n) return 0" — a table
+-- with no used codes at all is a legal (if useless) construction, because
+-- `decodeSym` on it can never match any code and simply `Err`s on first
+-- use rather than reading garbage. This is exactly the shape the dynamic
+-- Huffman DISTANCE alphabet takes when a block is all-literals: HDIST's
+-- encoded minimum is one code, and RFC 1951 explicitly permits that one
+-- code to have length zero, meaning "no distance codes used at all"
+-- (§3.2.7). Before this widening `kraftCheck` had no way to accept that
+-- shape (a zero-symbol table doesn't satisfy the length-1 exception
+-- either), and it is exercised directly by
+-- `test "buildHuffman: an all-zero-length table (numUsed=0) is Ok, the RFC's
+-- no-distance-codes-used shape"` below.
 --
 -- `decodeSym` never reads garbage on a truncated stream: every bit read
 -- goes through `bitio.getBits`, whose own `Err` on end-of-input propagates
@@ -122,14 +138,18 @@ singleCodeIsLengthOne counts = match get 1 counts
 
 -- Kraft inequality check: fold `left = 2*left - counts[len]` over len 1..15,
 -- starting at `left = 1` (the whole code space). `left < 0` at any step is
--- over-subscription; `left > 0` at the end is incompleteness, forgiven only
--- when the single used code has length 1 (RFC 1951 §3.2.7 exception —
--- see `singleCodeIsLengthOne` above for why `numUsed == 1` alone is not
--- sufficient).
-kraftCheck : Array Int -> Int -> Int -> Int -> Result String Unit
-kraftCheck counts len left numUsed
+-- over-subscription; `left > 0` at the end is incompleteness, forgiven in
+-- two cases: `numUsed == 0` (unconditionally — see the module header's
+-- PHASE 3 WIDENING note) or, when `allowSingle` is set, the single used
+-- code has length 1 (RFC 1951 §3.2.7 exception — see
+-- `singleCodeIsLengthOne` above for why `numUsed == 1` alone is not
+-- sufficient). The code-length (HCLEN) alphabet calls this with
+-- `allowSingle = False` via `buildHuffmanStrict`, so it only ever gets the
+-- `numUsed == 0` forgiveness.
+kraftCheck : Array Int -> Int -> Int -> Int -> Bool -> Result String Unit
+kraftCheck counts len left numUsed allowSingle
   | len > maxCodeLen =
-    if left == 0 || numUsed == 1 && singleCodeIsLengthOne counts then
+    if left == 0 || numUsed == 0 || allowSingle && numUsed == 1 && singleCodeIsLengthOne counts then
       Ok ()
     else
       Err "buildHuffman: incomplete Huffman code (unused code space remains)"
@@ -139,7 +159,7 @@ kraftCheck counts len left numUsed
       if left2 < 0 then
         Err "buildHuffman: over-subscribed Huffman code (length \{len})"
       else
-        kraftCheck counts (len + 1) left2 numUsed
+        kraftCheck counts (len + 1) left2 numUsed allowSingle
     None => panic "kraftCheck: length \{len} out of table range (unreachable)"
 
 -- `offs[len]` = index into `symbols` where the first code of length `len`
@@ -183,24 +203,47 @@ placeSymbolsGo lengths i n offs symbols
         panic "placeSymbols: length \{len} out of table range (unreachable)"
     None => ()
 
-{- | Build a canonical Huffman decode table from code lengths indexed by
-   symbol (0 = symbol unused). `Err` on an over-subscribed or (genuinely)
-   incomplete code; see the module header for the single-code exception.
-
-   > buildHuffman [|2, 1, 3, 3|]
-   Ok Huffman { counts = [|0, 1, 1, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0|], symbols = [|1, 0, 2, 3|] }
--}
-export buildHuffman : Array Int -> Result String Huffman
-buildHuffman lengths =
+-- Shared construction for `buildHuffman`/`buildHuffmanStrict` — the only
+-- difference between the two public entry points is whether `kraftCheck`
+-- is allowed to forgive a single length-1 code (see the module header and
+-- `kraftCheck`'s own comment).
+buildHuffmanWith : Bool -> Array Int -> Result String Huffman
+buildHuffmanWith allowSingle lengths =
   let n = arrayLength lengths
   do
     _ <- validateLengths lengths 0 n
     let counts = countLengths lengths n
     let numUsed = sumUsed counts
-    _ <- kraftCheck counts 1 1 numUsed
+    _ <- kraftCheck counts 1 1 numUsed allowSingle
     let offs = buildOffsets counts
     let symbols = placeSymbols lengths n offs numUsed
     Ok Huffman { counts = counts, symbols = symbols }
+
+{- | Build a canonical Huffman decode table from code lengths indexed by
+   symbol (0 = symbol unused). `Err` on an over-subscribed or (genuinely)
+   incomplete code; see the module header for the single-code and
+   zero-used-code exceptions. This is the litlen/dist/fixed-table entry
+   point — it allows BOTH exceptions. For the dynamic-Huffman code-length
+   (HCLEN) alphabet, which the RFC forbids the single-code exception for,
+   use `buildHuffmanStrict` instead.
+
+   > buildHuffman [|2, 1, 3, 3|]
+   Ok Huffman { counts = [|0, 1, 1, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0|], symbols = [|1, 0, 2, 3|] }
+-}
+export buildHuffman : Array Int -> Result String Huffman
+buildHuffman lengths = buildHuffmanWith True lengths
+
+{- | Like `buildHuffman`, but WITHOUT the RFC 1951 §3.2.7 single-length-1
+   exception — only a fully complete code or an all-zero (numUsed == 0)
+   table is accepted. This is the correct entry point for the dynamic
+   Huffman code-length (HCLEN) alphabet (RFC 1951 §3.2.7 / zlib
+   `inftrees.c`'s `type == CODES`), which forbids that exception outright.
+
+   > buildHuffmanStrict [|1|]
+   Err "buildHuffman: incomplete Huffman code (unused code space remains)"
+-}
+export buildHuffmanStrict : Array Int -> Result String Huffman
+buildHuffmanStrict lengths = buildHuffmanWith False lengths
 
 {- | Decode one symbol: read a bit at a time, extending the running `code`
    and tracking `first`/`index` per length (puff.c's `decode()`). `Err` if
@@ -497,6 +540,33 @@ test "buildHuffman: single length-1 code (the RFC 1951 exception) is Ok, decodes
 -- `inftrees.c`. This assertion flipped from `Ok` to `Err` on 2026-08-05;
 -- see `kraftCheck`/`singleCodeIsLengthOne` above for the fix.
 test "buildHuffman: single length-9 code is NOT the exception (numUsed=1 alone is insufficient), Err" = expectEqual (Err "buildHuffman: incomplete Huffman code (unused code space remains)") (buildHuffman [|9|])
+
+-- PHASE 3 WIDENING: an all-zero-length table (numUsed=0) is now Ok under
+-- BOTH `buildHuffman` and `buildHuffmanStrict` — this is the RFC 1951
+-- §3.2.7 "no distance codes used at all" shape a dynamic-Huffman block's
+-- distance alphabet takes when the block is all-literals (its one
+-- transmitted code length is 0). See the module header's PHASE 3
+-- WIDENING note and `kraftCheck`'s own comment for why this is NOT the
+-- narrower single-code exception and is unconditional.
+test "buildHuffman: an all-zero-length table (numUsed=0) is Ok, the RFC's no-distance-codes-used shape" = expectEqual True (isOk (buildHuffman [|0, 0, 0|]))
+
+test "buildHuffmanStrict: an all-zero-length table (numUsed=0) is ALSO Ok (the exemption is unconditional, unlike the single-code one)" = expectEqual True (isOk (buildHuffmanStrict [|0, 0, 0|]))
+
+-- Decoding against a numUsed=0 table can never match any code — `decodeSym`
+-- reads up to `maxCodeLen` bits and then `Err`s, exactly puff.c's own
+-- documented behavior for this shape ("decode() will fail any code since
+-- all codes are invalid"), never a hang and never a garbage symbol.
+test "decodeSym over a numUsed=0 table errors rather than hanging or reading garbage" = match buildHuffman [|0, 0, 0|]
+  Ok h => expectEqual (Err "decodeSym: invalid Huffman code (no match within \{maxCodeLen} bits)") (decodeSym h (newBitReader [|0, 0, 0|]))
+  Err msg => fail "expected Ok from buildHuffman [0,0,0], got Err \{msg}"
+
+-- `buildHuffmanStrict` DOES still forbid the single-length-1 exception that
+-- `buildHuffman` allows — this is the load-bearing difference between the
+-- two entry points, pinned directly rather than only inferred from the
+-- module header's prose.
+test "buildHuffmanStrict: single length-1 code is REJECTED (unlike buildHuffman, which allows it)" = expectEqual (Err "buildHuffman: incomplete Huffman code (unused code space remains)") (buildHuffmanStrict [|1|])
+
+test "buildHuffman: single length-1 code is STILL accepted (buildHuffmanStrict did not regress this)" = expectEqual True (isOk (buildHuffman [|1|]))
 
 -- Truncated input, immediate: `decodeSym` on ANY table over an empty byte
 -- array cannot even read the first bit — `Err`, not a garbage symbol.

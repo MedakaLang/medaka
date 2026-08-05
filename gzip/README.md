@@ -1,9 +1,11 @@
 # `gzip/` — a DEFLATE/gzip codec in pure Medaka
 
-**Status:** PARTIAL — Phase 1 (foundation) + Phase 2 (fixed-Huffman inflate).
-Stored blocks and fixed-Huffman blocks both decompress for real; dynamic
-Huffman (`BTYPE=10`, most real-world `.gz` files past a few KB) is Phase 3
-and still errors. Design and phasing: [`../docs/design/GZIP-DESIGN.md`](../docs/design/GZIP-DESIGN.md).
+**Status:** PARTIAL — Phases 1-3: foundation, fixed-Huffman inflate, and
+dynamic-Huffman inflate. Stored, fixed-Huffman, and dynamic-Huffman blocks
+(`BTYPE` 00/01/10 — every block type a real-world `.gz` file uses) all
+decompress for real, including this repo's own
+`compiler/seed/emitter.ll.gz`. Deflate (compression, Phases 4-6) is not yet
+implemented. Design and phasing: [`../docs/design/GZIP-DESIGN.md`](../docs/design/GZIP-DESIGN.md).
 
 A dogfooding project, chosen to exercise the parts of the language the SQLite
 library leaves cold: sub-byte bit streams, in-place mutable arrays in a hot
@@ -17,7 +19,7 @@ loop, and property testing against an external oracle.
 | `lib/bitio.mdk` | LSB-first `BitReader`/`BitWriter` — the bit cursor `byteparser` cannot provide |
 | `lib/container.mdk` | RFC 1952 gzip member header and trailer, parse and emit |
 | `lib/huffman.mdk` | Canonical Huffman decoding (counts-and-offsets), fixed tables, length/distance tables |
-| `lib/inflate.mdk` | The DEFLATE block loop — stored (`BTYPE=00`) and fixed-Huffman (`BTYPE=01`) blocks decode; dynamic Huffman (`BTYPE=10`) is Phase 3 and errors — plus the gzip member decoder (`gunzipMember`) wrapping it |
+| `lib/inflate.mdk` | The DEFLATE block loop — stored (`BTYPE=00`), fixed-Huffman (`BTYPE=01`), and dynamic-Huffman (`BTYPE=10`) blocks all decode — plus the gzip member decoder (`gunzipMember`) wrapping it |
 | `main.mdk` | The cross-module integration probe (see below) |
 | `inflate_demo.mdk` | CLI: `inflate_demo <input.gz> <output>` — the actual decompressor, used by `gzip/test/inflate_oracle.sh` |
 
