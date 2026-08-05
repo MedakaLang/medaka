@@ -1,0 +1,19 @@
+-- Regression for #1295: `prop` could not generate a value of any record
+-- type — genVariant's ConNamed arm built a positional VCon (the same shape
+-- as ConPos) instead of a VRecord, so the first field access on a generated
+-- value panicked with "field access on non-record" and killed the whole
+-- `medaka test` run. This fixture must run clean end-to-end: a record-typed
+-- prop generating and round-tripping through field access.
+
+data Plain = Plain { a : Int, b : Int } deriving (Eq, Debug)
+data Pos = Pos Int Int deriving (Eq, Debug)
+
+idPlain : Plain -> Plain
+idPlain p = Plain { a = p.a, b = p.b }
+
+idPos : Pos -> Pos
+idPos (Pos x y) = Pos x y
+
+prop "positional ADT generates" (p : Pos) = idPos p == p
+prop "record generates and round-trips through field access" (p : Plain) =
+  idPlain p == p
