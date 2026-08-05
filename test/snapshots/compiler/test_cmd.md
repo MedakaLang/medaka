@@ -1,5 +1,5 @@
 # META
-source_lines=610
+source_lines=592
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/test_cmd.mdk — `medaka test` logic (doctests + property tests),
@@ -61,7 +61,9 @@ import tools.doctest.{
   buildSynthResults,
   buildSynthDecls,
   buildDetailsFrom,
+  doctestFailSuffix,
   hasUseDecls,
+  printDoctestDetails,
   runDetails,
   runPassed,
   runFailed,
@@ -323,38 +325,18 @@ injectIntoLast synthDecls (x::rest) = x :: injectIntoLast synthDecls rest
 
 -- ── doctest reporting (mirrors lib/test_cmd.ml) ──────────────────────────────
 
+-- The per-example lines and the `(F failed, E errors)` suffix moved to
+-- `tools/doctest.mdk` (#81 Stage 2), beside `RunResult`: a native engine must
+-- report a `RunResult` identically to this one, and three copies of the printer
+-- is how that silently stops being true.
 reportDoctests : String -> RunResult -> <IO> Bool
 reportDoctests target result =
-  let _ = printDetails target (runDetails result)
+  let _ = printDoctestDetails target (runDetails result)
   let total = runPassed result + runFailed result + runErrors result
   let _ = putStr "\n\{target}: \{intToString (runPassed result)}/\{intToString total} passed"
-  let _ = putStr (failSuffix result)
+  let _ = putStr (doctestFailSuffix result)
   let _ = putStr "\n"
   runFailed result == 0 && runErrors result == 0
-
-failSuffix : RunResult -> String
-failSuffix result
-  | runFailed result > 0 || runErrors result > 0 = " (\{intToString (runFailed result)} failed, \{intToString (runErrors result)} errors)"
-  | otherwise = ""
-
-printDetails : String -> List (Example, ExResult) -> <IO> Unit
-printDetails _ [] = ()
-printDetails target ((ex, res)::rest) =
-  let _ = printOne target ex res
-  printDetails target rest
-
-printOne : String -> Example -> ExResult -> <IO> Unit
-printOne target ex res =
-  let loc = "\{target}:\{intToString (exampleLine ex)}"
-  match res
-    Pass => putStrLn "  ok   \{loc}: \{exampleInput ex}"
-    Fail expected actual =>
-      let _ = putStrLn "  FAIL \{loc}: \{exampleInput ex}"
-      let _ = putStrLn ("       expected: " ++ expected)
-      putStrLn ("         actual: " ++ actual)
-    Errored msg =>
-      let _ = putStrLn "  ERROR \{loc}: \{exampleInput ex}"
-      putStrLn ("        " ++ msg)
 
 -- ── prop phase ───────────────────────────────────────────────────────────────
 -- Only runs (and prints) if the file declares props — mirrors the OCaml short
@@ -621,7 +603,7 @@ propsReportMulti runtimeDecls coreDecls target userDecls roots = match loadProgr
 (DUse false (UseGroup ("types" "typecheck") ((mem "elaborateOne" false) (mem "elaborateModules" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "collectComments" false))))
 (DUse false (UseGroup ("eval" "eval") ((mem "Value" false) (mem "evalOneWith" false) (mem "evalModulesWith" false) (mem "evalModulesRootEnvWith" false) (mem "testCapableExterns" false) (mem "funNamesOf" false) (mem "dropShadowedExp" false) (mem "lookupBinding" false) (mem "force" false) (mem "ppValue" false))))
-(DUse false (UseGroup ("tools" "doctest") ((mem "Example" false) (mem "ExResult" true) (mem "RunResult" true) (mem "extractExamples" false) (mem "buildSynthResults" false) (mem "buildSynthDecls" false) (mem "buildDetailsFrom" false) (mem "hasUseDecls" false) (mem "runDetails" false) (mem "runPassed" false) (mem "runFailed" false) (mem "runErrors" false) (mem "exampleInput" false) (mem "exampleLine" false) (mem "synthName" false))))
+(DUse false (UseGroup ("tools" "doctest") ((mem "Example" false) (mem "ExResult" true) (mem "RunResult" true) (mem "extractExamples" false) (mem "buildSynthResults" false) (mem "buildSynthDecls" false) (mem "buildDetailsFrom" false) (mem "doctestFailSuffix" false) (mem "hasUseDecls" false) (mem "printDoctestDetails" false) (mem "runDetails" false) (mem "runPassed" false) (mem "runFailed" false) (mem "runErrors" false) (mem "exampleInput" false) (mem "exampleLine" false) (mem "synthName" false))))
 (DUse false (UseGroup ("tools" "prop_runner") ((mem "runAllProps" false) (mem "hasProps" false) (mem "runAllPropsResults" false) (mem "PropResult" false))))
 (DUse false (UseGroup ("tools" "test_runner") ((mem "collectTests" false) (mem "runOneTest" false) (mem "hasTests" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "analyzeProject" false) (mem "analyzeLocated" false) (mem "readDiagSrc" false) (mem "ppDiagCliSrc" false) (mem "parseErrDiag" false) (mem "Diag" false) (mem "diagIsError" false))))
@@ -680,14 +662,7 @@ propsReportMulti runtimeDecls coreDecls target userDecls roots = match loadProgr
 (DFunDef false "injectIntoLast" ((PVar "synthDecls") (PList (PTuple (PVar "mid") (PVar "decls")))) (EListLit (ETuple (EVar "mid") (EBinOp "++" (EVar "decls") (EVar "synthDecls")))))
 (DFunDef false "injectIntoLast" ((PVar "synthDecls") (PCons (PVar "x") (PVar "rest"))) (EBinOp "::" (EVar "x") (EApp (EApp (EVar "injectIntoLast") (EVar "synthDecls")) (EVar "rest"))))
 (DTypeSig false "reportDoctests" (TyFun (TyCon "String") (TyFun (TyCon "RunResult") (TyEffect ("IO") None (TyCon "Bool")))))
-(DFunDef false "reportDoctests" ((PVar "target") (PVar "result")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "printDetails") (EVar "target")) (EApp (EVar "runDetails") (EVar "result")))) (DoLet false false (PVar "total") (EBinOp "+" (EBinOp "+" (EApp (EVar "runPassed") (EVar "result")) (EApp (EVar "runFailed") (EVar "result"))) (EApp (EVar "runErrors") (EVar "result")))) (DoLet false false PWild (EApp (EVar "putStr") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "\n")) (EApp (EVar "display") (EVar "target"))) (ELit (LString ": "))) (EApp (EVar "display") (EApp (EVar "intToString") (EApp (EVar "runPassed") (EVar "result"))))) (ELit (LString "/"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "total")))) (ELit (LString " passed"))))) (DoLet false false PWild (EApp (EVar "putStr") (EApp (EVar "failSuffix") (EVar "result")))) (DoLet false false PWild (EApp (EVar "putStr") (ELit (LString "\n")))) (DoExpr (EBinOp "&&" (EBinOp "==" (EApp (EVar "runFailed") (EVar "result")) (ELit (LInt 0))) (EBinOp "==" (EApp (EVar "runErrors") (EVar "result")) (ELit (LInt 0)))))))
-(DTypeSig false "failSuffix" (TyFun (TyCon "RunResult") (TyCon "String")))
-(DFunDef false "failSuffix" ((PVar "result")) (EIf (EBinOp "||" (EBinOp ">" (EApp (EVar "runFailed") (EVar "result")) (ELit (LInt 0))) (EBinOp ">" (EApp (EVar "runErrors") (EVar "result")) (ELit (LInt 0)))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString " (")) (EApp (EVar "display") (EApp (EVar "intToString") (EApp (EVar "runFailed") (EVar "result"))))) (ELit (LString " failed, "))) (EApp (EVar "display") (EApp (EVar "intToString") (EApp (EVar "runErrors") (EVar "result"))))) (ELit (LString " errors)"))) (EIf (EVar "otherwise") (ELit (LString "")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "printDetails" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Example") (TyCon "ExResult"))) (TyEffect ("IO") None (TyCon "Unit")))))
-(DFunDef false "printDetails" (PWild (PList)) (ELit LUnit))
-(DFunDef false "printDetails" ((PVar "target") (PCons (PTuple (PVar "ex") (PVar "res")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "printOne") (EVar "target")) (EVar "ex")) (EVar "res"))) (DoExpr (EApp (EApp (EVar "printDetails") (EVar "target")) (EVar "rest")))))
-(DTypeSig false "printOne" (TyFun (TyCon "String") (TyFun (TyCon "Example") (TyFun (TyCon "ExResult") (TyEffect ("IO") None (TyCon "Unit"))))))
-(DFunDef false "printOne" ((PVar "target") (PVar "ex") (PVar "res")) (EBlock (DoLet false false (PVar "loc") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "target"))) (ELit (LString ":"))) (EApp (EVar "display") (EApp (EVar "intToString") (EApp (EVar "exampleLine") (EVar "ex"))))) (ELit (LString "")))) (DoExpr (EMatch (EVar "res") (arm (PCon "Pass") () (EApp (EVar "putStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ok   ")) (EApp (EVar "display") (EVar "loc"))) (ELit (LString ": "))) (EApp (EVar "display") (EApp (EVar "exampleInput") (EVar "ex")))) (ELit (LString ""))))) (arm (PCon "Fail" (PVar "expected") (PVar "actual")) () (EBlock (DoLet false false PWild (EApp (EVar "putStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  FAIL ")) (EApp (EVar "display") (EVar "loc"))) (ELit (LString ": "))) (EApp (EVar "display") (EApp (EVar "exampleInput") (EVar "ex")))) (ELit (LString ""))))) (DoLet false false PWild (EApp (EVar "putStrLn") (EBinOp "++" (ELit (LString "       expected: ")) (EVar "expected")))) (DoExpr (EApp (EVar "putStrLn") (EBinOp "++" (ELit (LString "         actual: ")) (EVar "actual")))))) (arm (PCon "Errored" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "putStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ERROR ")) (EApp (EVar "display") (EVar "loc"))) (ELit (LString ": "))) (EApp (EVar "display") (EApp (EVar "exampleInput") (EVar "ex")))) (ELit (LString ""))))) (DoExpr (EApp (EVar "putStrLn") (EBinOp "++" (ELit (LString "        ")) (EVar "msg"))))))))))
+(DFunDef false "reportDoctests" ((PVar "target") (PVar "result")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "printDoctestDetails") (EVar "target")) (EApp (EVar "runDetails") (EVar "result")))) (DoLet false false (PVar "total") (EBinOp "+" (EBinOp "+" (EApp (EVar "runPassed") (EVar "result")) (EApp (EVar "runFailed") (EVar "result"))) (EApp (EVar "runErrors") (EVar "result")))) (DoLet false false PWild (EApp (EVar "putStr") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "\n")) (EApp (EVar "display") (EVar "target"))) (ELit (LString ": "))) (EApp (EVar "display") (EApp (EVar "intToString") (EApp (EVar "runPassed") (EVar "result"))))) (ELit (LString "/"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "total")))) (ELit (LString " passed"))))) (DoLet false false PWild (EApp (EVar "putStr") (EApp (EVar "doctestFailSuffix") (EVar "result")))) (DoLet false false PWild (EApp (EVar "putStr") (ELit (LString "\n")))) (DoExpr (EBinOp "&&" (EBinOp "==" (EApp (EVar "runFailed") (EVar "result")) (ELit (LInt 0))) (EBinOp "==" (EApp (EVar "runErrors") (EVar "result")) (ELit (LInt 0)))))))
 (DTypeSig false "runProps" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Bool"))))))))
 (DFunDef false "runProps" ((PVar "runtimeDecls") (PVar "coreDecls") (PVar "target") (PVar "userDecls") (PVar "roots")) (EIf (EApp (EVar "not") (EApp (EVar "hasProps") (EVar "userDecls"))) (EVar "True") (EIf (EApp (EVar "hasUseDecls") (EVar "userDecls")) (EApp (EApp (EApp (EApp (EApp (EVar "runPropsMulti") (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "target")) (EVar "userDecls")) (EVar "roots")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "runPropsSingle") (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "userDecls")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "runPropsSingle" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyCon "Bool"))))))
@@ -743,7 +718,7 @@ propsReportMulti runtimeDecls coreDecls target userDecls roots = match loadProgr
 (DUse false (UseGroup ("types" "typecheck") ((mem "elaborateOne" false) (mem "elaborateModules" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "collectComments" false))))
 (DUse false (UseGroup ("eval" "eval") ((mem "Value" false) (mem "evalOneWith" false) (mem "evalModulesWith" false) (mem "evalModulesRootEnvWith" false) (mem "testCapableExterns" false) (mem "funNamesOf" false) (mem "dropShadowedExp" false) (mem "lookupBinding" false) (mem "force" false) (mem "ppValue" false))))
-(DUse false (UseGroup ("tools" "doctest") ((mem "Example" false) (mem "ExResult" true) (mem "RunResult" true) (mem "extractExamples" false) (mem "buildSynthResults" false) (mem "buildSynthDecls" false) (mem "buildDetailsFrom" false) (mem "hasUseDecls" false) (mem "runDetails" false) (mem "runPassed" false) (mem "runFailed" false) (mem "runErrors" false) (mem "exampleInput" false) (mem "exampleLine" false) (mem "synthName" false))))
+(DUse false (UseGroup ("tools" "doctest") ((mem "Example" false) (mem "ExResult" true) (mem "RunResult" true) (mem "extractExamples" false) (mem "buildSynthResults" false) (mem "buildSynthDecls" false) (mem "buildDetailsFrom" false) (mem "doctestFailSuffix" false) (mem "hasUseDecls" false) (mem "printDoctestDetails" false) (mem "runDetails" false) (mem "runPassed" false) (mem "runFailed" false) (mem "runErrors" false) (mem "exampleInput" false) (mem "exampleLine" false) (mem "synthName" false))))
 (DUse false (UseGroup ("tools" "prop_runner") ((mem "runAllProps" false) (mem "hasProps" false) (mem "runAllPropsResults" false) (mem "PropResult" false))))
 (DUse false (UseGroup ("tools" "test_runner") ((mem "collectTests" false) (mem "runOneTest" false) (mem "hasTests" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "analyzeProject" false) (mem "analyzeLocated" false) (mem "readDiagSrc" false) (mem "ppDiagCliSrc" false) (mem "parseErrDiag" false) (mem "Diag" false) (mem "diagIsError" false))))
@@ -802,14 +777,7 @@ propsReportMulti runtimeDecls coreDecls target userDecls roots = match loadProgr
 (DFunDef false "injectIntoLast" ((PVar "synthDecls") (PList (PTuple (PVar "mid") (PVar "decls")))) (EListLit (ETuple (EVar "mid") (EBinOp "++" (EVar "decls") (EVar "synthDecls")))))
 (DFunDef false "injectIntoLast" ((PVar "synthDecls") (PCons (PVar "x") (PVar "rest"))) (EBinOp "::" (EVar "x") (EApp (EApp (EVar "injectIntoLast") (EVar "synthDecls")) (EVar "rest"))))
 (DTypeSig false "reportDoctests" (TyFun (TyCon "String") (TyFun (TyCon "RunResult") (TyEffect ("IO") None (TyCon "Bool")))))
-(DFunDef false "reportDoctests" ((PVar "target") (PVar "result")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "printDetails") (EVar "target")) (EApp (EVar "runDetails") (EVar "result")))) (DoLet false false (PVar "total") (EBinOp "+" (EBinOp "+" (EApp (EVar "runPassed") (EVar "result")) (EApp (EVar "runFailed") (EVar "result"))) (EApp (EVar "runErrors") (EVar "result")))) (DoLet false false PWild (EApp (EVar "putStr") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "\n")) (EApp (EMethodRef "display") (EVar "target"))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EApp (EVar "runPassed") (EVar "result"))))) (ELit (LString "/"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "total")))) (ELit (LString " passed"))))) (DoLet false false PWild (EApp (EVar "putStr") (EApp (EVar "failSuffix") (EVar "result")))) (DoLet false false PWild (EApp (EVar "putStr") (ELit (LString "\n")))) (DoExpr (EBinOp "&&" (EBinOp "==" (EApp (EVar "runFailed") (EVar "result")) (ELit (LInt 0))) (EBinOp "==" (EApp (EVar "runErrors") (EVar "result")) (ELit (LInt 0)))))))
-(DTypeSig false "failSuffix" (TyFun (TyCon "RunResult") (TyCon "String")))
-(DFunDef false "failSuffix" ((PVar "result")) (EIf (EBinOp "||" (EBinOp ">" (EApp (EVar "runFailed") (EVar "result")) (ELit (LInt 0))) (EBinOp ">" (EApp (EVar "runErrors") (EVar "result")) (ELit (LInt 0)))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString " (")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EApp (EVar "runFailed") (EVar "result"))))) (ELit (LString " failed, "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EApp (EVar "runErrors") (EVar "result"))))) (ELit (LString " errors)"))) (EIf (EVar "otherwise") (ELit (LString "")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "printDetails" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Example") (TyCon "ExResult"))) (TyEffect ("IO") None (TyCon "Unit")))))
-(DFunDef false "printDetails" (PWild (PList)) (ELit LUnit))
-(DFunDef false "printDetails" ((PVar "target") (PCons (PTuple (PVar "ex") (PVar "res")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "printOne") (EVar "target")) (EVar "ex")) (EVar "res"))) (DoExpr (EApp (EApp (EVar "printDetails") (EVar "target")) (EVar "rest")))))
-(DTypeSig false "printOne" (TyFun (TyCon "String") (TyFun (TyCon "Example") (TyFun (TyCon "ExResult") (TyEffect ("IO") None (TyCon "Unit"))))))
-(DFunDef false "printOne" ((PVar "target") (PVar "ex") (PVar "res")) (EBlock (DoLet false false (PVar "loc") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "target"))) (ELit (LString ":"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EApp (EVar "exampleLine") (EVar "ex"))))) (ELit (LString "")))) (DoExpr (EMatch (EVar "res") (arm (PCon "Pass") () (EApp (EVar "putStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ok   ")) (EApp (EMethodRef "display") (EVar "loc"))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EApp (EVar "exampleInput") (EVar "ex")))) (ELit (LString ""))))) (arm (PCon "Fail" (PVar "expected") (PVar "actual")) () (EBlock (DoLet false false PWild (EApp (EVar "putStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  FAIL ")) (EApp (EMethodRef "display") (EVar "loc"))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EApp (EVar "exampleInput") (EVar "ex")))) (ELit (LString ""))))) (DoLet false false PWild (EApp (EVar "putStrLn") (EBinOp "++" (ELit (LString "       expected: ")) (EVar "expected")))) (DoExpr (EApp (EVar "putStrLn") (EBinOp "++" (ELit (LString "         actual: ")) (EVar "actual")))))) (arm (PCon "Errored" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "putStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ERROR ")) (EApp (EMethodRef "display") (EVar "loc"))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EApp (EVar "exampleInput") (EVar "ex")))) (ELit (LString ""))))) (DoExpr (EApp (EVar "putStrLn") (EBinOp "++" (ELit (LString "        ")) (EVar "msg"))))))))))
+(DFunDef false "reportDoctests" ((PVar "target") (PVar "result")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "printDoctestDetails") (EVar "target")) (EApp (EVar "runDetails") (EVar "result")))) (DoLet false false (PVar "total") (EBinOp "+" (EBinOp "+" (EApp (EVar "runPassed") (EVar "result")) (EApp (EVar "runFailed") (EVar "result"))) (EApp (EVar "runErrors") (EVar "result")))) (DoLet false false PWild (EApp (EVar "putStr") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "\n")) (EApp (EMethodRef "display") (EVar "target"))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EApp (EVar "runPassed") (EVar "result"))))) (ELit (LString "/"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "total")))) (ELit (LString " passed"))))) (DoLet false false PWild (EApp (EVar "putStr") (EApp (EVar "doctestFailSuffix") (EVar "result")))) (DoLet false false PWild (EApp (EVar "putStr") (ELit (LString "\n")))) (DoExpr (EBinOp "&&" (EBinOp "==" (EApp (EVar "runFailed") (EVar "result")) (ELit (LInt 0))) (EBinOp "==" (EApp (EVar "runErrors") (EVar "result")) (ELit (LInt 0)))))))
 (DTypeSig false "runProps" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Bool"))))))))
 (DFunDef false "runProps" ((PVar "runtimeDecls") (PVar "coreDecls") (PVar "target") (PVar "userDecls") (PVar "roots")) (EIf (EApp (EVar "not") (EApp (EVar "hasProps") (EVar "userDecls"))) (EVar "True") (EIf (EApp (EVar "hasUseDecls") (EVar "userDecls")) (EApp (EApp (EApp (EApp (EApp (EVar "runPropsMulti") (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "target")) (EVar "userDecls")) (EVar "roots")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "runPropsSingle") (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "userDecls")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "runPropsSingle" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyCon "Bool"))))))

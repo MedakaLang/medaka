@@ -33,7 +33,12 @@ public export data Example = Example String (Option String) Int
 export exampleInput : Example -> String
 exampleInput (Example i _ _) = i
 
-exampleExpected : Example -> Option String
+-- Exported for the native execution engine (compiler/tools/native_doctest.mdk),
+-- which must know whether an example carries an expected block: `synthSrc`
+-- renders one as `debug (…)` (a String, printable) and a smoke example raw (an
+-- arbitrary, not-necessarily-printable type), and the synthesized `main` has to
+-- treat the two differently.
+export exampleExpected : Example -> Option String
 exampleExpected (Example _ e _) = e
 
 export exampleLine : Example -> Int
@@ -61,6 +66,39 @@ runErrors (RunResult _ _ _ e _) = e
 
 export runDetails : RunResult -> List (Example, ExResult)
 runDetails (RunResult _ _ _ _ d) = d
+
+-- ── reporting (mirrors lib/test_cmd.ml) ────────────────────────────────────
+-- The per-example `ok`/`FAIL`/`ERROR` lines and the `(F failed, E errors)`
+-- summary suffix.  These live HERE, beside `RunResult`, rather than in a driver:
+-- a `RunResult` is engine-agnostic (Stage 1 raised `buildDetailsFrom` above the
+-- interpreter), so every engine's report must look identical or the two engines'
+-- output could not be compared.  `compiler/tools/test_cmd.mdk` (interpreter) and
+-- `compiler/entries/native_doctest_probe_main.mdk` (native) both render through
+-- these — they were three duplicated bodies until #81 Stage 2.
+
+export doctestFailSuffix : RunResult -> String
+doctestFailSuffix result
+  | runFailed result > 0 || runErrors result > 0 = " (\{intToString (runFailed result)} failed, \{intToString (runErrors result)} errors)"
+  | otherwise = ""
+
+export printDoctestDetails : String -> List (Example, ExResult) -> <IO> Unit
+printDoctestDetails _ [] = ()
+printDoctestDetails target ((ex, res)::rest) =
+  let _ = printDoctestOne target ex res
+  printDoctestDetails target rest
+
+printDoctestOne : String -> Example -> ExResult -> <IO> Unit
+printDoctestOne target ex res =
+  let loc = "\{target}:\{intToString (exampleLine ex)}"
+  match res
+    Pass => putStrLn "  ok   \{loc}: \{exampleInput ex}"
+    Fail expected actual =>
+      let _ = putStrLn "  FAIL \{loc}: \{exampleInput ex}"
+      let _ = putStrLn ("       expected: " ++ expected)
+      putStrLn ("         actual: " ++ actual)
+    Errored msg =>
+      let _ = putStrLn "  ERROR \{loc}: \{exampleInput ex}"
+      putStrLn ("        " ++ msg)
 
 -- ── small string helpers (compiler avoids the stdlib) ──────────────────────
 

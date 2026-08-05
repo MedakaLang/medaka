@@ -1,0 +1,64 @@
+-- NATIVE DOCTEST probe (#81, Stage 2) — drives `tools.native_doctest` end to end.
+--
+--   medaka build compiler/entries/native_doctest_probe_main.mdk -o <bin>
+--   MEDAKA_ROOT=<repo root> <bin> <file.mdk>
+--
+-- Prints the same per-example shape `medaka test` does (`ok`/`FAIL`/`ERROR` +
+-- the `<file>: P/T passed` summary), but every result comes from a COMPILED
+-- NATIVE binary rather than the interpreter.  Exits 1 if any example failed or
+-- errored, so a harness can gate on it.
+--
+-- ── why this is a committed entry and not a scratch file ────────────────────
+-- Stage 2 deliberately wires the engine to NO CLI surface (that is Stage 3), so
+-- nothing in the `medaka_cli.mdk` import closure reaches `tools.native_doctest`
+-- — and `test/typecheck_compiler_source.sh` only walks that closure plus
+-- `compiler/entries/*.mdk`.  Without this entry the new module would be
+-- untypechecked by CI from the day it lands, which is exactly how PR #465's
+-- `fuzz_gen_main` break shipped 12/12 green.  This entry puts it in the gate.
+--
+-- ⚠️ `MEDAKA_ROOT` must point at the repo root: the engine shells out to the
+-- emitter and the C runtime under it, and the default is derived from the
+-- *probe binary's* own directory, which is wherever the harness put it.
+
+import frontend.parser.{parse}
+import frontend.desugar.{desugar}
+import frontend.lexer.{collectComments}
+import tools.doctest.{
+  RunResult,
+  buildSynthResults,
+  doctestFailSuffix,
+  extractExamples,
+  printDoctestDetails,
+  runDetails,
+  runErrors,
+  runFailed,
+  runPassed,
+}
+import tools.native_doctest.{runNativeDoctests}
+import entries.entry_support.{failWith}
+
+main = match args ()
+  [target] => runProbe target
+  _ => failWith "usage: <file.mdk>   (set MEDAKA_ROOT to the repo root)"
+
+runProbe : String -> <IO> Unit
+runProbe target = match readFile target
+  Err e => failWith e
+  Ok tsrc =>
+    let userDecls = desugar (parse tsrc)
+    let examples = extractExamples (collectComments tsrc)
+    match examples
+      [] => putStrLn "  (no doctests found)"
+      _ => report target (runNativeDoctests target tsrc userDecls examples (buildSynthResults examples))
+
+-- Same rendering as `medaka test`'s own doctest phase — deliberately, through
+-- the SAME printer (`tools/doctest.mdk`): the point of Stage 3's differential is
+-- that the two engines' reports are comparable, which a second printer here
+-- would quietly break.
+report : String -> RunResult -> <IO> Unit
+report target result =
+  let _ = putStrLn ("running native doctests in " ++ target)
+  let _ = printDoctestDetails target (runDetails result)
+  let total = runPassed result + runFailed result + runErrors result
+  let _ = putStrLn "\n\{target}: \{intToString (runPassed result)}/\{intToString total} passed\{doctestFailSuffix result}"
+  if runFailed result == 0 && runErrors result == 0 then () else exit 1
