@@ -667,7 +667,15 @@ jobs:
             # ⚠️ Re-measure before moving it; these numbers rot, and the count of cases is
             # derived from the directory, never written down:
             #   ls -d test/import_order_fixtures/*/ | wc -l
-            pattern: "'diff_compiler_eval*' 'diff_compiler_core_ir*' 'diff_compiler_dispatch_shape' 'diff_compiler_prelude_obj' 'diff_compiler_slice_oob' 'diff_compiler_ir_size' 'diff_compiler_origin_agreement' 'diff_compiler_import_order' 'bootstrap_lex' 'bootstrap_resolve' 'bootstrap_typecheck' 'bootstrap_eval'"
+            # 'diff_compiler_test_native' (#81 Stage 4): CI gate for `medaka test
+            # --native` / `--engines eval,native` — placed here by COST, not theme
+            # (measured 2026-08-05, merge_group run 31043828993: eval 215s was the
+            # cheapest shard after excluding `tools`/`engines` per the arc's own
+            # instructions; `types` 472s was the pole). It reads no test/bin oracle
+            # (only ./medaka + clang) and lands beside its closest sibling here,
+            # diff_compiler_origin_agreement, which also probes test_cmd.mdk's
+            # elaboration path. Measured wall time: ~6s.
+            pattern: "'diff_compiler_eval*' 'diff_compiler_core_ir*' 'diff_compiler_dispatch_shape' 'diff_compiler_prelude_obj' 'diff_compiler_slice_oob' 'diff_compiler_ir_size' 'diff_compiler_origin_agreement' 'diff_compiler_import_order' 'diff_compiler_test_native' 'bootstrap_lex' 'bootstrap_resolve' 'bootstrap_typecheck' 'bootstrap_eval'"
           - name: backend
             # 'build_cmd' (T8): THE end-to-end gate for the SHIPPING `medaka build` CLI —
             # 14 real programs built through the actual CLI, each binary's stdout diffed
