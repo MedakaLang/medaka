@@ -1,0 +1,8 @@
+-- issue #1359: `Wid` is declared in amod.mdk, re-exported by bmod.mdk via
+-- `export import`, and imported here from bmod -- one hop removed from the
+-- declaring module. check/run accept and run correctly; build panics.
+import bmod.{Wid}
+
+unWid (Wid n) = n
+
+main = println (unWid (Wid 5))
