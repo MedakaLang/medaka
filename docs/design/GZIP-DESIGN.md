@@ -457,7 +457,8 @@ preamble and the "build the demo, run it, diff against the real tool" shape.
 | Input | What it catches |
 |-------|-----------------|
 | Empty file | Zero-length stream, `BFINAL` on an empty block |
-| One byte | Degenerate Huffman alphabets |
+| One byte | A minimal fixed-Huffman stream (the system `gzip` picks BTYPE=1 for a genuinely 0- or 1-byte input at every level 1–9 — its block-splitting heuristic never has enough symbol diversity at this size to justify a dynamic table, so this entry does **not** exercise a degenerate Huffman alphabet; see the "dynamic Huffman with zero used distance codes" entry below for that) |
+| Dynamic block with zero used distance codes | Degenerate Huffman alphabet: RFC 1951 §3.2.7's "no distance codes used at all" shape (`numUsed == 0`), which arises when a dynamic block is all-literals. Neither the system `gzip` nor Python's `zlib` (any strategy) ever produces this — both pad the distance tree to ≥2 codes when real usage is 0 or 1 — so this fixture is hand-built (`gzip/test/gen_zerodist_fixture.py`), the same technique Phase 3 used to pin the repeat-code-16 error path |
 | 100 KB of one repeated byte | The `distance = 1` overlap case, and the maximum-length code |
 | `/dev/urandom` output | Incompressible input → stored-block fallback; catches an encoder that grows the data and never notices |
 | A large `.mdk` source file | Realistic text, dynamic Huffman, long matches |

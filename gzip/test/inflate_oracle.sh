@@ -181,6 +181,12 @@ check_dynamic() { check_huffman "$1" "$2" "$3" 2 "dynamic Huffman"; }
 # header's discipline).
 check_dynamic_file() {
   desc="$1"; gz="$2"; expected_plain="$3"
+  # Optional 4th arg: what the expected bytes were obtained from, for the ok/
+  # fail messages. Defaults to the original "system gunzip" wording (the
+  # self-referential seed case below) — override it when `expected_plain`
+  # came from somewhere else honest, e.g. a hand-built fixture's own known
+  # plaintext, so the log never claims an oracle it didn't use.
+  oracle_desc="${4:-system gunzip}"
 
   bt=$(first_block_type "$gz")
   if [ "$bt" != "2" ]; then
@@ -199,9 +205,9 @@ check_dynamic_file() {
   fi
   if cmp -s "$expected_plain" "$TMP/df.out"; then
     sz=$(wc -c < "$expected_plain")
-    ok "$desc ($sz bytes, dynamic Huffman, byte-for-byte vs system gunzip)"
+    ok "$desc ($sz bytes, dynamic Huffman, byte-for-byte vs $oracle_desc)"
   else
-    bad "$desc — output DIFFERS from system gunzip's own decompression"
+    bad "$desc — output DIFFERS from $oracle_desc"
   fi
 }
 
@@ -297,6 +303,42 @@ data = text + bytes(range(256)) * 3
 sys.stdout.buffer.write(data)
 " > "$TMP/allbytes.bin"
 check_dynamic "every byte value 0..255 present, mixed with diverse text" "$TMP/allbytes.bin" 6
+
+# --- dynamic Huffman with ZERO used distance codes (numUsed==0) -------------
+# The design doc's "one byte" corpus entry was originally meant to exercise a
+# degenerate Huffman alphabet, but its real observed shape is BTYPE=1 (fixed
+# Huffman, no alphabet construction at all) — see the two check_fixed cases
+# above and GZIP-DESIGN.md's corrected corpus-table row. This is the case
+# that actually exercises PR #1332's `kraftCheck` widening to accept
+# `numUsed == 0` (an alphabet with every code length zero — the shape the
+# DISTANCE alphabet takes when a dynamic block is all-literals, no
+# back-references at all): RFC 1951 §3.2.7 permits HDIST's one required code
+# to have length zero, meaning "no distance codes used at all."
+#
+# Neither the system `gzip` nor Python's `zlib` (any strategy, including
+# Z_HUFFMAN_ONLY which disables LZ77 matching outright) ever produces this
+# shape — zlib's own encoder pads the distance tree to at least 2 real codes
+# whenever usage is 0 or 1 ("to avoid special checks later on", its own
+# trees.c comment). So this fixture is hand-built by
+# gen_zerodist_fixture.py: a from-scratch canonical-Huffman encoder over a
+# shuffled permutation of all 256 byte values (every literal used exactly
+# once, no repeated bytes to back-reference), with the distance alphabet's
+# single required code explicitly given length 0.
+#
+# The generator independently VERIFIES its own construction two ways before
+# writing anything: (1) its own bit-level reader decodes the block header
+# back and asserts BTYPE really is 10 (dynamic) and the distance code table
+# really has zero used codes — not assumed, checked; (2) Python's own
+# `zlib.decompressobj` (NOT our inflater) independently confirms the hand
+# built bytes decode to the exact plaintext used to build them. Both are
+# printed to stderr for this gate's log.
+python3 "$ROOT/gzip/test/gen_zerodist_fixture.py" "$TMP/zerodist.gz" "$TMP/zerodist.expected" \
+  || { bad "zero-distance-code fixture generator failed (see stderr above)"; }
+if [ -s "$TMP/zerodist.gz" ]; then
+  check_dynamic_file "dynamic Huffman with zero used distance codes (numUsed==0, all-literal block)" \
+    "$TMP/zerodist.gz" "$TMP/zerodist.expected" \
+    "the known plaintext the fixture was hand-built from (independently cross-checked with Python's zlib.decompressobj, never our own inflater)"
+fi
 
 # Just over the 32768-byte window boundary — catches an off-by-one in the
 # sliding-window wrap logic that a smaller corpus would never reach (design
