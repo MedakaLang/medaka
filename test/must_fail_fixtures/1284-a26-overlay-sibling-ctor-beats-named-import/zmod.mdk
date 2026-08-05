@@ -1,7 +1,0 @@
--- #1284: the module whose constructor `main.mdk` names EXPLICITLY, in its FIRST
--- import clause.  `Sib : String -> ZZ` is the one the program means.
-public export data ZZ = Sib String | Zed
-
-export unz : ZZ -> String
-unz (Sib s) = s
-unz Zed = "z"

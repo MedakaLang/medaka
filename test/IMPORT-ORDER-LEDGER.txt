@@ -80,10 +80,20 @@
 # deliberately wrong signature); it prints every distinct signature it observed, and
 # those lines are what belongs here.
 
-1253-record-form-ctor-head-decided-by-import-order | #1253 | check=0;codes=;schemes=main : Unit\n;run=0:FROM-RA\n;build=0/0:FROM-RB\n | check=0;codes=;schemes=main : Unit\n;run=0:FROM-RB\n;build=0/0:FROM-RA\n
-
-1284-overlay-sibling-ctor-beats-named-import | #1284 | check=0;codes=;schemes=v : ZZ\nmain : Unit\n;run=0:s\n;build=0/0:s\n | check=1;codes=T-TYPE-MISMATCH,T-TYPE-MISMATCH;schemes=;run=1:;build=1/-:
-
-733-wildcard-import-ctor-falls-to-universe | #733 | check=0;codes=;schemes=main : Unit\n;run=0:1\n;build=0/0:1\n | check=1;codes=T-TYPE-MISMATCH;schemes=;run=1:;build=1/-:
+# ── DRAINED 2026-08-05 by #1319 unit 1 (#1111 A-2.11) ────────────────────────
+# Three rows are GONE from this file rather than edited, which is what a drain
+# looks like. Their FIXTURES are kept and are now graded as INVARIANT — i.e. they
+# became the regression guards for the fix, exactly as the header prescribes:
+#
+#   1253-record-form-ctor-head-decided-by-import-order  -> #1253, now
+#       check=1;codes=R-AMBIGUOUS-CTOR;schemes=;run=1:;build=1/-: in EVERY ordering
+#       (resolve's ctor-ambiguity peer now fires at record heads).
+#   1284-overlay-sibling-ctor-beats-named-import        -> #1284, now
+#       check=0;…;run=0:s\n;build=0/0:s\n in every ordering.
+#   733-wildcard-import-ctor-falls-to-universe          -> #733 item 1c, now
+#       check=0;…;run=0:1\n;build=0/0:1\n in every ordering.
+#
+# ⚠️ #733 IS NOT FULLY DRAINED — the row below is still live, so the issue stays
+# open. Item 1c was one of its symptoms, not the whole of it.
 
 733-ambiguous-ctor-reject-cascade-order-dependent | #733 | check=1;codes=R-AMBIGUOUS-CTOR;schemes=;run=1:;build=1/-: | check=1;codes=R-AMBIGUOUS-CTOR,T-TYPE-MISMATCH;schemes=;run=1:;build=1/-:

@@ -1,0 +1,5 @@
+-- Consumer A: `Dup` here is named BY NAME from colla, so it must mean colla's.
+import colla.{CA, Dup, unCA}
+
+export ra : Int
+ra = unCA (Dup 7)

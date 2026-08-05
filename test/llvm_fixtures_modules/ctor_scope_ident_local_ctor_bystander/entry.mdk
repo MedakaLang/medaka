@@ -1,0 +1,30 @@
+-- #1111 A-2.11 (#1319 unit 1) — THE "FEATURE PRESENT, UNRELATED CODE STILL
+-- BEHAVES" CELL, which is the fixture shape `AGENTS.md` requires of any change that
+-- adds a PROGRAM-GLOBAL TABLE.  Unit 1 adds two: `universeCtorIdentsRef` (the
+-- identity-keyed constructor companion) and its bare-name collided list.  A fixture
+-- that exercises the feature proves nothing about that hazard — "your feature works
+-- perfectly and something unrelated breaks" is the failure it produces — so the
+-- assertion here is about a module that takes no part in the collision.
+--
+-- The graph: `colla` and `collb` each declare a constructor spelled `Dup`, at
+-- different types, with NO import relationship between them.  `usea` means colla's
+-- (named by name), `useb` means collb's (reached only through `CB(..)`, which never
+-- spells `Dup`), and `bystand` means its OWN — while importing colla's constructors
+-- with `(..)` and using one of them, so its answer is not green by construction.
+-- See `bystand.mdk` for exactly which rung of the scope ladder it discriminates.
+--
+-- Expected output, derived BY HAND before any capture and independently of any
+-- engine:
+--   ra  = unCA (Dup 7)                    = 7
+--   rb  = unCB (Dup "b")                  = "b"
+--   bys = unPlain (Dup 5) + unCA (ACount 2) = 5 + (2 * 10) = 25
+-- so `7`, `b`, `25`.
+import usea.{ra}
+import useb.{rb}
+import bystand.{bys}
+
+main : <IO> Unit
+main =
+  let _ = putStrLn (intToString ra)
+  let _ = putStrLn rb
+  putStrLn (intToString bys)

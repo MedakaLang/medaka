@@ -1,8 +1,0 @@
--- issue #1253: TB is an UNRELATED type that happens to reuse the same record-form
--- constructor NAME `MkT` as ra.mdk's TA (different type, same ctor name, same
--- field name `fx` -- both required for the two to be textually interchangeable at
--- a bare `MkT { fx = ... }` call site).
-public export data TB = MkT { fx : Int }
-import ra.{Tag, tag}
-export impl Tag TB where
-  tag _ = "FROM-RB"

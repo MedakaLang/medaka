@@ -2,6 +2,8 @@ addImportProvenance : Map String (List String) -> String -> List String -> Map S
 addProvenance : Map String (List String) -> String -> String -> Map String (List String)
 ambigModPhrase : List String -> String
 ambigMods : Env -> String -> List String
+ambiguousCtorErrors : Env -> String -> Option Loc -> List ResError
+ambiguousHeadErrors : Env -> String -> Option Loc -> List ResError
 ambiguousIfaceErrors : Env -> String -> Option Loc -> List ResError
 ambiguousSet : Map String ModuleExports -> List Decl -> List (String, List String)
 ambiguousTypeErrors : Env -> String -> Option Loc -> List ResError

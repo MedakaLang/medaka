@@ -1,0 +1,8 @@
+-- `Dup` at Int, plus a NON-colliding sibling the bystander legitimately uses.
+public export data CA =
+  | Dup Int
+  | ACount Int
+
+export unCA : CA -> Int
+unCA (Dup n) = n
+unCA (ACount n) = n * 10

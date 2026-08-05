@@ -1,7 +1,0 @@
-public export data A1 =
-  | Dup
-  | Solo
-
-export unA1 : A1 -> Int
-unA1 Dup = 1
-unA1 Solo = 2

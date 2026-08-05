@@ -1,7 +1,0 @@
--- #733 row 1c CONTROL — main.mdk with ONE dimension flipped: amodd's members are
--- imported BY NAME (`{A1, Dup, unA1}`) instead of through `amodd.*`. Same two modules,
--- same collision (both declare `Dup`), same body. This must stay green.
-import amodd.{A1, Dup, unA1}
-import zmod.{zf}
-
-main = println (unA1 (Dup 1))

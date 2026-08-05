@@ -19,4 +19,15 @@ gate permutes. The ORDER dependence recorded above was measured separately, here
 the same binary: the wildcard file alone, with only its two import lines swapped.
 The named spelling is a separate case in this corpus and is INVARIANT.
 
-Ledgered in test/IMPORT-ORDER-LEDGER.txt against #733.
+DRAINED 2026-08-05 by #1319 unit 1 (#1111 A-2.11). The per-module scope decision the
+unit adds treats `import m.*` as binding every constructor `m` exports and then asks
+the export index whether that dependency really carries THIS declaration of the name
+— so the wildcard spelling is covered by the same rule as `{C}` and `{T(..)}` rather
+than by a separate one. The ledger row went RED naming #733; it was deleted.
+
+⚠️ #733 IS NOT CLOSED BY THIS. Item 1c was one symptom; the sibling case
+`733-ambiguous-ctor-reject-cascade-order-dependent` in this same corpus is STILL
+ledgered and still diverging. Do not close the issue on this row's drain alone.
+
+THIS CASE IS NOW THE REGRESSION GUARD, unledgered so the gate demands invariance.
+Current behaviour, every ordering: exit 0, prints `1`.

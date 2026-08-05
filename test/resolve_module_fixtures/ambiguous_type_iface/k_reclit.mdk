@@ -1,0 +1,8 @@
+-- CTOR occurrence 2/2 (#1253): the expression-position peer of `k_recpat` — a
+-- record LITERAL head with a constructor-only spelling, routed through
+-- `recCreateHead`.  Same set, same verdict, different arm; two positions, so two
+-- rows in `expected`.
+import ta.{Box(..)}
+import tb.{Box(..)}
+
+freshBox n = MkBox { boxSz = n }

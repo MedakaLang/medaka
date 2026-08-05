@@ -1,0 +1,4 @@
+public export data Cfg = { fld : Float }
+
+export zrf : Int -> Int
+zrf x = x

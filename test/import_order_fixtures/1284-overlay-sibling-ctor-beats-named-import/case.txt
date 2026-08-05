@@ -13,5 +13,12 @@ before this gate existed (`medaka run`, the two import lines swapped by hand):
                                   mentioned in this file)
     cmod clause first  -> exit 0, prints `s`
 
-Ledgered in test/IMPORT-ORDER-LEDGER.txt against #1284. When #1284 is fixed this
-case must become INVARIANT, the ledger row goes red, and the row is deleted.
+DRAINED 2026-08-05 by #1319 unit 1 (#1111 A-2.11): the constructor namespace got an
+identity-keyed companion of `universeDataEnv`'s ctor map plus a per-module
+import-scope decision, so `Sib` resolves to the declaration this file actually
+imports and a ride-along sibling cannot out-rank it. The ledger row went RED naming
+#1284 — that was the drain — and was deleted.
+
+THIS CASE IS NOW THE REGRESSION GUARD, and it is unledgered on purpose: with no row
+the gate requires it to be INVARIANT, so a fix that ever regresses reds it again.
+Current behaviour, every ordering: exit 0, prints `s`.

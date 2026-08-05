@@ -1,3 +1,5 @@
+(AmbiguousConstructor "MkBox" "ta" "tb")
+(AmbiguousConstructor "MkBox" "ta" "tb")
 (AmbiguousInterface "Speak" "ta" "tb")
 (AmbiguousInterface "Speak" "ta" "tb")
 (AmbiguousInterface "Speak" "ta" "tb")

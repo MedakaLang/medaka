@@ -1,6 +1,0 @@
--- #733 (row 1c) support module. `Z1` also has a `Dup` constructor -- same bare name as
--- amodd's, different result type. Its only role is to exist in the module graph.
-public export data Z1 = Z1 Int | Dup Int
-export zf : Z1 -> Int
-zf (Z1 n) = n
-zf (Dup n) = n

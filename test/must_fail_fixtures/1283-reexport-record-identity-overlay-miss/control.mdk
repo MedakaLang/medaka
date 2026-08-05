@@ -1,0 +1,14 @@
+-- CONTROL for #1283 Repro A.  Byte-identical to main.mdk except the FIRST import
+-- names `armod` — the module that DECLARES `Cfg`/`mkA` — instead of `remod`, which
+-- only re-exports them.  That single hop is the whole defect: with the declaring
+-- module named, `declOwnedBy` matches, the overlay fires, and this must stay GREEN.
+--
+-- If this goes red, the environment broke (the overlay itself regressed), NOT #1283.
+import armod.{Cfg, mkA}
+import zrmod.{zrf}
+
+get : Cfg -> Int
+get c = c.fld
+
+main : <IO> Unit
+main = println (get mkA + zrf 0)
