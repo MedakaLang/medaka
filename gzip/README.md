@@ -1,7 +1,9 @@
 # `gzip/` — a DEFLATE/gzip codec in pure Medaka
 
-**Status:** PARTIAL — Phase 1 (foundation) only. No inflater yet, so this cannot
-decompress anything. Design and phasing: [`../docs/design/GZIP-DESIGN.md`](../docs/design/GZIP-DESIGN.md).
+**Status:** PARTIAL — Phase 1 (foundation) + Phase 2 (fixed-Huffman inflate).
+Stored blocks and fixed-Huffman blocks both decompress for real; dynamic
+Huffman (`BTYPE=10`, most real-world `.gz` files past a few KB) is Phase 3
+and still errors. Design and phasing: [`../docs/design/GZIP-DESIGN.md`](../docs/design/GZIP-DESIGN.md).
 
 A dogfooding project, chosen to exercise the parts of the language the SQLite
 library leaves cold: sub-byte bit streams, in-place mutable arrays in a hot
@@ -14,14 +16,19 @@ loop, and property testing against an external oracle.
 | `lib/crc32.mdk` | CRC-32 (IEEE, reflected, `0xEDB88320`) and Adler-32 |
 | `lib/bitio.mdk` | LSB-first `BitReader`/`BitWriter` — the bit cursor `byteparser` cannot provide |
 | `lib/container.mdk` | RFC 1952 gzip member header and trailer, parse and emit |
+| `lib/huffman.mdk` | Canonical Huffman decoding (counts-and-offsets), fixed tables, length/distance tables |
+| `lib/inflate.mdk` | The DEFLATE block loop — stored (`BTYPE=00`) and fixed-Huffman (`BTYPE=01`) blocks decode; dynamic Huffman (`BTYPE=10`) is Phase 3 and errors — plus the gzip member decoder (`gunzipMember`) wrapping it |
 | `main.mdk` | The cross-module integration probe (see below) |
+| `inflate_demo.mdk` | CLI: `inflate_demo <input.gz> <output>` — the actual decompressor, used by `gzip/test/inflate_oracle.sh` |
 
 ## Running it
 
 ```sh
-medaka test gzip/lib/crc32.mdk        # and bitio.mdk, container.mdk
+medaka test gzip/lib/crc32.mdk        # and bitio.mdk, container.mdk, huffman.mdk, inflate.mdk
 medaka run  gzip/main.mdk
 medaka build gzip/main.mdk -o gzip_probe && ./gzip_probe
+medaka build gzip/inflate_demo.mdk -o inflate_demo && ./inflate_demo some.gz out.bin
+sh gzip/test/inflate_oracle.sh   # differential oracle against the system gzip/gunzip
 ```
 
 Both engines must agree. An interpreter-green result proves nothing about the

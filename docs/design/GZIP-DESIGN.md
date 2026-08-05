@@ -1,10 +1,11 @@
 # DEFLATE / gzip — a compression codec in pure Medaka
 
-**Status:** OPEN — design proposed, no code written. A dogfood capstone chosen to
-exercise the parts of the language and stdlib that the SQLite library
-(`archive/design/SQLITE-DESIGN.md`, as-built in `sqlite/`) leaves cold: sub-byte
-bit streams, in-place mutable arrays in a hot loop, and round-trip property
-testing against an external oracle. Nothing here is implemented; the phasing
+**Status:** PARTIAL — Phases 1-2 shipped (`gzip/`): stored + fixed-Huffman
+inflate, real round-trip decompression of any `.gz` whose blocks are BTYPE
+00/01. A dogfood capstone chosen to exercise the parts of the language and
+stdlib that the SQLite library (`archive/design/SQLITE-DESIGN.md`, as-built in
+`sqlite/`) leaves cold: sub-byte bit streams, in-place mutable arrays in a hot
+loop, and round-trip property testing against an external oracle. The phasing
 table below is the plan of record.
 
 ---
@@ -121,7 +122,7 @@ actually fast is an open question this project will answer.
 | Phase | What ships | Oracle |
 |-------|-----------|--------|
 | **1** | `BitReader` + **stored (uncompressed) blocks** + gzip container parse/emit + CRC-32 | incompressible input (`/dev/urandom`) at any level emits a stored block — see below; `printf` \| `gzip` round-trip |
-| **2** | **Inflate, fixed Huffman** — the RFC 1951 static code tables, length/distance decoding, sliding window | `gzip -1`..`-9` on small inputs |
+| **2** | **Inflate, fixed Huffman** — the RFC 1951 static code tables, length/distance decoding, sliding window | `gzip -1`..`-9` (SHIPPED — see `gzip/test/inflate_oracle.sh`). ⚠️ You do not get to choose BTYPE; see "When gzip actually emits fixed Huffman" below. The oracle asserts the BTYPE it observed rather than assuming one |
 | **3** | **Inflate, dynamic Huffman** — code-length alphabet, HLIT/HDIST/HCLEN, canonical code construction | Real `.gz` corpus, including this repo's own `compiler/seed/emitter.ll.gz` |
 | **4** | **Deflate** — LZ77 hash-chain matcher + fixed-Huffman blocks + stored-block fallback | `gunzip` accepts our output and reproduces the input |
 | **5** | **Deflate, dynamic Huffman** — frequency counting, length-limited code construction, block-splitting heuristic | Compression ratio vs `gzip -6` on a fixed corpus (reported, not gated) |
@@ -208,6 +209,49 @@ $ head -c 200 /dev/urandom > rand.bin && gzip -1 -n -c rand.bin | xxd -s 10 -l 6
 `0x01` is `BFINAL=1, BTYPE=00`; `LEN=0x00c8`=200 and `NLEN=0xff37` is its exact
 one's complement. That is the Phase 1 oracle, and it is a better one than a
 hypothetical `-0` anyway: it is the shape a real decompressor must handle.
+
+#### When gzip actually emits fixed Huffman
+
+You cannot ask for a block type — `gzip`'s block-splitting heuristic decides,
+and **the deciding factor is symbol diversity, not size.** An earlier draft of
+this doc said fixed Huffman held "past roughly 2-4 KB of non-random input at
+any level". That is true only of the *highly repetitive* corpus the figure was
+measured on, and badly wrong for realistic content. Measured at `-1`
+(`1` = fixed, `2` = dynamic):
+
+| content | 50 B | 100 B | 200 B | 500 B | 1 KB | 2 KB | 4 KB |
+|---|---|---|---|---|---|---|---|
+| one repeated byte | 1 | 1 | 1 | 1 | 1 | 1 | 2 |
+| a repeated phrase | 1 | 1 | 1 | 1 | 1 | 1 | 1 |
+| **english-like prose** | 1 | 1 | **2** | 2 | 2 | 2 | 2 |
+| **source code** | 1 | **2** | 2 | 2 | 2 | 2 | 2 |
+
+So prose tips at ~200 bytes and source at ~100, while a repeated phrase stays
+fixed at 4 KB. The intuition to carry is that a *literal-diverse* input makes a
+custom code table pay for itself almost immediately, whereas a low-entropy one
+never does.
+
+Consequence for testing: **assert the BTYPE you actually got.** A gate that
+assumes fixed Huffman from a size threshold silently tests nothing the moment
+the heuristic disagrees. Re-derive rather than trusting this table:
+
+```sh
+gzip -1 -n -c FILE | python3 -c "
+import sys; d=sys.stdin.buffer.read(); flg=d[3]; off=10
+if flg&4: off += 2 + (d[off]|(d[off+1]<<8))
+if flg&8:
+    while d[off]: off+=1
+    off+=1
+if flg&16:
+    while d[off]: off+=1
+    off+=1
+if flg&2: off+=2
+print((d[off]>>1)&3)"
+```
+
+⚠️ That header walk matters: a `.gz` carrying `FNAME` puts the first DEFLATE
+block well past byte 10 (`compiler/seed/emitter.ll.gz` starts at 18), so a
+fixed-offset read misidentifies its BTYPE.
 
 #### Fixed Huffman (BTYPE 01)
 

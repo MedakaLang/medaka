@@ -7,27 +7,35 @@
 # tool, never against a golden captured from our own output. A golden records
 # what this code did; `cmp` against the original records what is CORRECT.
 #
-# WHY INCOMPRESSIBLE INPUT: as of Phase 2 the inflater implements STORED blocks
-# (BTYPE=00) only. There is no `gzip -0` — GNU gzip 1.13 rejects it
-# (`invalid option -- '0'`); the levels are -1..-9. gzip falls back to a stored
-# block when compressing would EXPAND the data, so /dev/urandom is how you get
-# one out of the real tool. Verified:
-#     $ head -c 200 /dev/urandom > r.bin && gzip -1 -n -c r.bin | xxd -s 10 -l 6
-#     0000000a: 01c8 0037 ff        # 0x01 = BFINAL=1,BTYPE=00; LEN=200; NLEN=~200
+# Phase 2 status: STORED (BTYPE=00) and FIXED HUFFMAN (BTYPE=01) blocks both
+# decode for real now. DYNAMIC HUFFMAN (BTYPE=10) is still Phase 3 and is
+# asserted to fail cleanly with a named error — that is the honest Phase-3
+# boundary, and pinning it means the eventual implementation flips this gate
+# red and tells whoever lands it to come update this file (same trick the
+# Phase-2 boundary used against this same file, until this wave landed it).
 #
-# ⚠️ gzip's stored fallback is a PER-BLOCK heuristic, not "the whole input did
-# not compress" — a 40-byte random sample still came out as BTYPE=01 during
-# development. Sizes here are chosen large enough to reliably land on stored
-# blocks; if that ever stops holding, this gate fails loudly rather than
-# silently testing nothing (see the BTYPE assertion in check_stored below).
+# ⚠️ We do NOT get to choose which BTYPE the system `gzip` picks — its own
+# block-splitting heuristic decides, and the deciding factor is SYMBOL
+# DIVERSITY, not size. Measured at -1: english-like prose tips into dynamic
+# Huffman at ~200 bytes and source code at ~100, while a repeated phrase is
+# still fixed at 4 KB (full table in the design doc). An earlier "~2-4 KB of
+# non-random input" rule of thumb was measured only on repetitive corpora and
+# does not generalize.
 #
-# Compressible input (fixed/dynamic Huffman) is asserted to fail CLEANLY with a
-# named error and a non-zero exit — that is the honest Phase-2/3 boundary, and
-# pinning it means the eventual implementation FLIPS this gate red and tells
-# whoever lands it to come update this file.
+# Which is exactly why every case below ASSERTS the BTYPE it actually
+# observed rather than inferring one from a size — the same discipline
+# `check_stored` already used for BTYPE=00, extended to BTYPE=01/10. A gate
+# that assumed the block type from an input size would silently test nothing
+# the moment the heuristic disagreed.
 #
-# Run from the repo root or anywhere; requires: gzip, a built native `medaka`
-# (../medaka) + its emitter, MEDAKA_ROOT pointing at the repo root.
+# There is no `gzip -0`; the levels are -1..-9. See `check_stored`'s own
+# comment for the stored-block derivation this file inherited unchanged.
+#
+# Run from the repo root or anywhere; requires: gzip, python3 (for robust
+# gzip-header parsing — real `.gz` files may carry FNAME/FEXTRA/FCOMMENT
+# fields, which `-n`-generated fixtures don't, so a fixed byte-10 offset
+# is not safe in general), a built native `medaka` (../medaka) + its
+# emitter, MEDAKA_ROOT pointing at the repo root.
 set -u
 
 ROOT="${MEDAKA_ROOT:-$(cd "$(dirname "$0")/../.." && pwd)}"
@@ -36,6 +44,7 @@ export MEDAKA_EMITTER="${MEDAKA_EMITTER:-$ROOT/medaka_emitter}"
 export MEDAKA_ROOT="$ROOT"
 
 command -v gzip >/dev/null 2>&1 || { echo "SKIP-AS-FAIL: gzip not found (this gate's oracle)"; exit 1; }
+command -v python3 >/dev/null 2>&1 || { echo "SKIP-AS-FAIL: python3 not found (needed for gzip-header parsing)"; exit 1; }
 [ -x "$MEDAKA" ] || { echo "FAIL: no native medaka at $MEDAKA (build it first)"; exit 1; }
 
 TMP="$(mktemp -d)"
@@ -51,6 +60,44 @@ fail=0
 ok()   { pass=$((pass + 1)); echo "ok   $1"; }
 bad()  { fail=$((fail + 1)); echo "FAIL $1"; }
 
+# Portable timeout. NOT coreutils `timeout` — macOS has no such binary, and
+# every build/test script here must run on Linux AND macOS (nothing enforces
+# that: all 11 CI jobs are ubuntu-latest, so a macOS-only break ships green).
+# Same shim as test/diff_compiler_engines.sh:215.
+#
+# ⚠️ Expiry code differs from coreutils: the shim is killed by SIGALRM and the
+# shell reports 128+14 = 142, where `timeout` would report 124. Real exit codes
+# pass through unchanged (measured: expiry 142, success 0, `exit 3` -> 3).
+run_t() { perl -e 'alarm shift; exec @ARGV' "$@"; }
+
+# The first DEFLATE block's BTYPE (0/1/2/3), robust to gzip header
+# variations (FEXTRA/FNAME/FCOMMENT/FHCRC) that a fixed byte-10 offset
+# would get wrong on a real-world `.gz` not produced with `-n`.
+first_block_type() {
+  python3 - "$1" <<'EOF'
+import sys
+data = open(sys.argv[1], "rb").read()
+assert data[0] == 0x1F and data[1] == 0x8B, "not a gzip file"
+flg = data[3]
+off = 10
+if flg & 4:
+    xlen = data[off] | (data[off + 1] << 8)
+    off += 2 + xlen
+if flg & 8:
+    while data[off] != 0:
+        off += 1
+    off += 1
+if flg & 16:
+    while data[off] != 0:
+        off += 1
+    off += 1
+if flg & 2:
+    off += 2
+b = data[off]
+print((b >> 1) & 3)
+EOF
+}
+
 # --- stored-block round trip: real gzip output must decode byte-for-byte ------
 # Also asserts the stream really IS a stored block, so this can never silently
 # degrade into "we tested a shape the inflater rejects anyway".
@@ -59,19 +106,18 @@ check_stored() {
   head -c "$size" /dev/urandom > "$TMP/in.bin"
   gzip -1 -n -c "$TMP/in.bin" > "$TMP/in.gz"
 
-  btype_byte=$(od -An -tu1 -j 10 -N 1 "$TMP/in.gz" | tr -d ' ')
-  # LSB-first: bit0 = BFINAL, bits1-2 = BTYPE. Stored => (byte >> 1) & 3 == 0.
-  if [ $(( (btype_byte >> 1) & 3 )) -ne 0 ]; then
-    bad "$desc — oracle produced BTYPE=$(( (btype_byte >> 1) & 3 )), not a stored block; this gate tested nothing"
+  bt=$(first_block_type "$TMP/in.gz")
+  if [ "$bt" != "0" ]; then
+    bad "$desc — oracle produced BTYPE=$bt, not a stored block; this gate tested nothing"
     return
   fi
 
   # Under `timeout` like the error paths: a decompressor that loops on VALID
   # input is just as much a defect, and an unbounded success path would hang
   # this gate rather than fail it.
-  timeout 60 "$BIN" "$TMP/in.gz" "$TMP/out.bin" >/dev/null 2>&1
+  run_t 60 "$BIN" "$TMP/in.gz" "$TMP/out.bin" >/dev/null 2>&1
   rc=$?
-  if [ "$rc" -eq 124 ]; then
+  if [ "$rc" -eq 142 ]; then
     bad "$desc — HUNG on a VALID stored stream"
     return
   elif [ "$rc" -ne 0 ]; then
@@ -89,12 +135,122 @@ check_stored "small stored block"        200
 check_stored "single stored block"       4000
 check_stored "multi-block stored stream" 200000   # >65535 forces several blocks
 
+# --- fixed-Huffman round trip: real gzip output must decode byte-for-byte ----
+# Asserts BTYPE really is 1 (fixed Huffman) before trusting the round trip —
+# same discipline as check_stored, since gzip's block-type choice is a
+# heuristic we don't control.
+check_fixed() {
+  desc="$1"; src="$2"; level="$3"
+  gzip -"$level" -n -c "$src" > "$TMP/fx.gz"
+
+  bt=$(first_block_type "$TMP/fx.gz")
+  if [ "$bt" != "1" ]; then
+    bad "$desc (level $level) — oracle produced BTYPE=$bt, not fixed Huffman; this gate tested nothing"
+    return
+  fi
+
+  run_t 60 "$BIN" "$TMP/fx.gz" "$TMP/fx.out" >/dev/null 2>&1
+  rc=$?
+  if [ "$rc" -eq 142 ]; then
+    bad "$desc (level $level) — HUNG on a VALID fixed-Huffman stream"
+    return
+  elif [ "$rc" -ne 0 ]; then
+    bad "$desc (level $level) — inflate_demo exited $rc on a valid fixed-Huffman stream"
+    return
+  fi
+  if cmp -s "$src" "$TMP/fx.out"; then
+    sz=$(wc -c < "$src")
+    ok "$desc (level $level, $sz bytes, fixed Huffman, byte-for-byte)"
+  else
+    bad "$desc (level $level) — output DIFFERS from the original"
+  fi
+}
+
+# --- dynamic-Huffman boundary: must fail cleanly, naming Phase 3 -------------
+# Asserts BTYPE really is 2 (dynamic Huffman) — a gate that "passed" because
+# gzip happened to pick a DIFFERENT block type would be testing nothing.
+check_dynamic_fail() {
+  desc="$1"; gz="$2"
+  bt=$(first_block_type "$gz")
+  if [ "$bt" != "2" ]; then
+    bad "$desc — oracle produced BTYPE=$bt, not dynamic Huffman; this gate tested nothing"
+    return
+  fi
+  out=$(run_t 30 "$BIN" "$gz" "$TMP/never.bin" 2>&1)
+  rc=$?
+  if [ "$rc" -eq 142 ]; then
+    bad "$desc — HUNG (timed out); a decompressor must not loop on bad/unimplemented input"
+  elif [ "$rc" -eq 0 ]; then
+    bad "$desc — exited 0; expected the Phase-3 dynamic-Huffman error"
+  elif printf '%s' "$out" | grep -q "not yet implemented"; then
+    ok "$desc (exit $rc, dynamic Huffman, named the Phase-3 boundary)"
+  else
+    bad "$desc — failed as expected but did not name Phase 3: $out"
+  fi
+}
+
+# Small compressible text ("hello world" x3, 35 bytes) — the design doc's own
+# Phase 2 oracle shape (§"Fixed Huffman"). Verified: `gzip -N -n -c` on this
+# exact string is BTYPE=1 at every level 1..9 (checked by hand while writing
+# this gate), so the level loop below exercises the SAME real boundary
+# `check_fixed` itself asserts, rather than assuming it.
+printf 'hello world hello world hello world' > "$TMP/hw.bin"
+for lvl in 1 2 3 4 5 6 7 8 9; do
+  check_fixed "gzip -$lvl small compressible text" "$TMP/hw.bin" "$lvl"
+done
+
+# `printf 'hello' | gzip -n -c` — the exact bytes `gzip/main.mdk` documents as
+# BFINAL=1 BTYPE=1 (fixed Huffman) for input this small.
+printf 'hello' > "$TMP/hello.bin"
+check_fixed "gzip -n hello (documented BFINAL=1 BTYPE=1 shape)" "$TMP/hello.bin" 6
+
+# 2000 bytes of a single repeated byte — real gzip output, still fixed
+# Huffman at this size (verified by hand: BTYPE flips to dynamic only past
+# ~2-5 KB for this content). This is the DISTANCE=1 overlap case run through
+# the real decoder end to end, not just `copyBack`'s own unit tests: nearly
+# the whole block is one long run-length back-reference chain.
+python3 -c "import sys; sys.stdout.buffer.write(b'a' * 2000)" > "$TMP/rle.bin"
+check_fixed "gzip 2000 bytes of one repeated byte (distance=1 RLE)" "$TMP/rle.bin" 1
+
+# 2000 bytes of a repeated short phrase — real gzip output, still fixed
+# Huffman at this size, exercising longer (distance>1) back-references than
+# the pure-RLE case above.
+python3 -c "import sys; sys.stdout.write(('the quick brown fox ' * 200)[:2000])" > "$TMP/phrase.bin"
+check_fixed "gzip 2000 bytes of a repeated phrase (long back-references), level 1" "$TMP/phrase.bin" 1
+check_fixed "gzip 2000 bytes of a repeated phrase (long back-references), level 9" "$TMP/phrase.bin" 9
+
+# --- Phase 3 boundary: dynamic Huffman is pinned as NOT yet implemented ------
+
+# 100 KB of a repeated short string. This is the design doc's own corpus
+# entry for "the distance=1 overlap case, and the maximum-length code" — but
+# real gzip switches to DYNAMIC Huffman well before 100 KB (verified: even
+# `gzip -1` does, since its block-splitting heuristic is size-driven, not
+# just entropy-driven). So at this size the real tool hands us the Phase 3
+# shape, not Phase 2 — asserted below rather than assumed.
+python3 -c "print('the quick brown fox jumps over the lazy dog. ' * 2260, end='')" > "$TMP/big_repeat.bin"
+gzip -6 -n -c "$TMP/big_repeat.bin" > "$TMP/big_repeat.gz"
+check_dynamic_fail "100 KB repeated string (Phase 3 boundary)" "$TMP/big_repeat.gz"
+
+# A real .mdk source file from this repo — realistic text, long matches; real
+# gzip picks dynamic Huffman at this size too.
+gzip -6 -n -c "$ROOT/compiler/frontend/parser.mdk" > "$TMP/mdk_source.gz"
+check_dynamic_fail "real .mdk source file (Phase 3 boundary)" "$TMP/mdk_source.gz"
+
+# The committed seed itself: ~1.7 MB of real dynamic-Huffman data, already in
+# the repo, no fixture to add (design doc §"Self-referential").
+SEED_GZ="$ROOT/compiler/seed/emitter.ll.gz"
+if [ -f "$SEED_GZ" ]; then
+  check_dynamic_fail "compiler/seed/emitter.ll.gz (real-world corpus, Phase 3 boundary)" "$SEED_GZ"
+else
+  bad "compiler/seed/emitter.ll.gz not found at $SEED_GZ"
+fi
+
 # --- error paths: must fail cleanly, never hang, never emit garbage ----------
 expect_fail() {
   desc="$1"; file="$2"; want="$3"
-  out=$(timeout 30 "$BIN" "$file" "$TMP/never.bin" 2>&1)
+  out=$(run_t 30 "$BIN" "$file" "$TMP/never.bin" 2>&1)
   rc=$?
-  if [ "$rc" -eq 124 ]; then
+  if [ "$rc" -eq 142 ]; then
     bad "$desc — HUNG (timed out); a decompressor must not loop on bad input"
   elif [ "$rc" -eq 0 ]; then
     bad "$desc — exited 0; expected a non-zero exit and an error"
@@ -115,11 +271,6 @@ expect_fail "severely truncated stream"   "$TMP/trunc2.gz" "end of input"
 
 printf 'not a gzip file at all, just text' > "$TMP/notgz.bin"
 expect_fail "not a gzip stream"           "$TMP/notgz.bin" "magic"
-
-# Compressible text => gzip picks fixed Huffman. Pinning the Phase-2 boundary:
-# when fixed-Huffman inflate lands, this flips and whoever lands it updates here.
-printf 'hello world hello world hello world' | gzip -n -c > "$TMP/fixed.gz"
-expect_fail "fixed-Huffman block (Phase 2 boundary)" "$TMP/fixed.gz" "not yet implemented"
 
 # --- corrupted trailer: the CRC must actually be checked ---------------------
 # ⚠️ OCTAL escapes, not \xNN. /bin/sh here is dash, whose printf does NOT
