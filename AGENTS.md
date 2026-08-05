@@ -687,17 +687,49 @@ narrative lives at the link.
   next several, so `effvarCounter`'s comment finishes a clause begun on `inRigidityBodyRef`.
   This is a READING hazard baked into the committed source, not something `fmt` still does
   to you.
-  **The WRITING hazard this bullet used to describe is FIXED (#829, PR #1202) — retired
-  2026-08-01 after re-verifying both halves on a post-#1202 binary.** It claimed you could
-  not insert a standalone `--` line into the record (fmt would drag unrelated comments onto
-  the closing brace and leave a dangling fragment, with `fmt --check` passing on the damage),
-  and that a long trailing comment would wrap onto the NEXT field's line. Neither reproduces:
-  the root cause was `spliceInterior` mapping source→output lines 1:1 — true for a *trailing*
-  comment, false for a *standalone* one (consumes a line, produces none), so everything after
-  the first standalone comment drifted. Re-measured: inserting a standalone comment line, and
-  separately lengthening a trailing one past the line budget, each produce a whole-file `fmt
-  --write` diff containing **only the edit itself** — no drift, no wrap, no dangling fragment.
-  So edit comments there normally; just don't trust which field a pre-existing one belongs to.
+  🚨 **The WRITING hazard is NOT fixed. #829 is REOPENED (2026-08-05) — this bullet's
+  "FIXED, retired 2026-08-01" claim was itself wrong, and it sent an agent's mandatory
+  `fmt --write` into corrupting their own comment.** Re-verified first-hand on a fresh cold
+  `make medaka` of `origin/main` @ `f9db4fd2` (2026-08-05); both halves the retraction
+  claimed were fixed were re-tested independently and **both still reproduce**:
+  - **Standalone `--` block** (the issue's own two-line repro, `data Cfg =\n  | Cfg { … }`):
+    `fmt --write` collapses the header to `data Cfg = Cfg {` and drags the block onto the
+    field **two past** the one it described, with the block's second line dangling onto the
+    closing `}`.
+  - **Long trailing comment**: on the same header shape, a trailing comment on `alpha`
+    lands on `beta` after `fmt --write` — moved one field down.
+  - **On the real `PerRun` record**, with its header artificially put into the two-line
+    `data PerRun =\n | PerRun { … }` shape (the shape `DriverState`, in this same file, is
+    actually in today) and given ONE new field with a trailing comment plus one standalone
+    two-line block elsewhere in the body: `fmt --write` shifted **every one of the record's
+    ~60 trailing comments down by one field**, piling the last two onto the closing `}` line
+    — the whole-record cascade the reader-hazard paragraph above is a residue of.
+  - **In every case, `fmt --check` on the corrupted output exits 0** — it reports the damage
+    as already formatted, so the pre-commit hook (which gates on `fmt --check`, not a diff
+    against intent) lets it through. The corruption is a stable fixed point, not a slow leak:
+    a second `--write` reproduces the damaged file byte-for-byte, so it doesn't get worse,
+    but it also never self-heals.
+
+  **The trigger is the header shape, not the comment kind.** Both halves reproduce only when
+  the record's on-disk header is still the two-line `data X =\n  | X { … }` form (e.g.
+  `DriverState`, this file, today) — confirmed on that exact record: adding one field with a
+  trailing comment moved the comment onto the *next* field. Three things are safe, each
+  measured on this binary, not assumed:
+  - Adding a field with **no comment at all** is safe on either header shape — `fmt --write`
+    produces a byte-identical diff (only the added field line).
+  - Adding a comment to a record whose header is **already** the single-line `data X = X {
+    … }` form (PerRun's current shape) is safe — verified directly on `PerRun` as it stands
+    today: a new trailing-commented field and a new standalone two-line block each produced a
+    diff containing only the intended edit, and a second `fmt --write` was a no-op.
+  - If the header is still two-line, don't put the comment in the record at all — the
+    real-world workaround (PR #1296, still open, adding a new `Ref`-typed field to
+    `DriverState`): add the field bare and put the explanatory prose on the nearby function
+    that derives/populates it instead of as an interior record comment.
+
+  Check the shape before you decide: `grep -n '^data <Name> =$' -A1 compiler/types/typecheck.mdk`
+  — a hit followed by `  | <Name> {` is the unsafe two-line form; `data <Name> = <Name> {`
+  on one line is the safe collapsed form. Either way, don't trust `fmt --check` to catch a
+  misattached comment — diff the decl by eye after any comment-bearing record edit.
 - ⚠️ **A FIXTURE DIRECTORY IS A SHARED CORPUS.** Adding, moving, or deleting a fixture
   silently enrolls (or de-enrolls) you in gates you never named. Before touching one,
   **ENUMERATE every consumer, then run all of them.**
