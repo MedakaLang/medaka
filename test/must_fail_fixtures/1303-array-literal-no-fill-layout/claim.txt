@@ -1,0 +1,67 @@
+issue: 1303
+what: `medaka fmt` has only two layouts for a collection literal: all on one
+what: line, or ONE ELEMENT PER LINE. There is no fill/wrap mode that packs
+what: multiple scalar elements per line up to the budget. A ~40-element
+what: `Array Int` literal exceeding the line budget is rewritten to one
+what: element per line, ~8x the line count a fill layout would need.
+cmd: fmt-write main.mdk
+exit: 0
+file-after: bytes : Array Int
+file-after: bytes = fromList
+file-after: \0040\0040[
+file-after: \0040\0040\0040\004031,
+file-after: \0040\0040\0040\0040139,
+file-after: \0040\0040\0040\00408,
+file-after: \0040\0040\0040\00400,
+file-after: \0040\0040\0040\00400,
+file-after: \0040\0040\0040\00400,
+file-after: \0040\0040\0040\00400,
+file-after: \0040\0040\0040\00400,
+file-after: \0040\0040\0040\00404,
+file-after: \0040\0040\0040\00403,
+file-after: \0040\0040\0040\00401,
+file-after: \0040\0040\0040\0040200,
+file-after: \0040\0040\0040\00400,
+file-after: \0040\0040\0040\004055,
+file-after: \0040\0040\0040\0040255,
+file-after: \0040\0040\0040\0040190,
+file-after: \0040\0040\0040\0040246,
+file-after: \0040\0040\0040\00407,
+file-after: \0040\0040\0040\0040148,
+file-after: \0040\0040\0040\0040140,
+file-after: \0040\0040\0040\0040204,
+file-after: \0040\0040\0040\0040149,
+file-after: \0040\0040\0040\004034,
+file-after: \0040\0040\0040\0040157,
+file-after: \0040\0040\0040\004091,
+file-after: \0040\0040\0040\004012,
+file-after: \0040\0040\0040\0040200,
+file-after: \0040\0040\0040\004077,
+file-after: \0040\0040\0040\00403,
+file-after: \0040\0040\0040\004099,
+file-after: \0040\0040\0040\004088,
+file-after: \0040\0040\0040\0040200,
+file-after: \0040\0040\0040\0040121,
+file-after: \0040\0040\0040\00403,
+file-after: \0040\0040\0040\004044,
+file-after: \0040\0040\0040\0040190,
+file-after: \0040\0040\0040\0040200,
+file-after: \0040\0040\0040\004012,
+file-after: \0040\0040\0040\004055,
+file-after: \0040\0040\0040\00409,
+file-after: \0040\0040\0040\0040200,
+file-after: \0040\0040]
+file-after:
+file-after: main = println (length bytes)
+control: fmt-write control.mdk
+why-fixture: main.mdk declares a 40-element `Array Int` literal (the shape of
+why-fixture: a real binary fixture, e.g. gzip header + payload bytes) written
+why-fixture: on one source line, wide enough to exceed fmt's line budget.
+why-fixture: `fmt --write` breaks it out to ONE ELEMENT PER LINE (43 lines for
+why-fixture: 40 elements) rather than packing several elements per line up to
+why-fixture: the budget, which is the conventional fill layout for this shape.
+why-control: control.mdk is the identical construct with only 16 elements,
+why-control: which fits inside the line budget on one line. `fmt --write`
+why-control: leaves it untouched (verified by hand: same bytes before and
+why-control: after), isolating the bug to literals that EXCEED the budget
+why-control: rather than to array-literal formatting in general.
