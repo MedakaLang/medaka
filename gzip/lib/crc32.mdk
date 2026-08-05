@@ -1,0 +1,203 @@
+-- | gzip.lib.crc32 — CRC-32 (IEEE, reflected, poly 0xEDB88320) and Adler-32.
+--
+-- Both checksums are required by the gzip/zlib container formats: CRC-32
+-- trails a gzip member (RFC 1952 §2.3.1), Adler-32 trails a zlib stream
+-- (RFC 1950 §2.2). CRC-32 here is table-driven: `crcTable` is built once, as
+-- a module-level `Array Int` (lazy top-level nullary — evaluated on first
+-- use and cached, not recomputed per call).
+--
+-- Medaka's `Int` is 63-bit, so every place the algorithm assumes 32-bit
+-- wraparound is masked explicitly with `crc32Mask` (0xFFFFFFFF).
+-- `shiftRight` is a LOGICAL (unsigned) shift (stdlib/runtime.mdk), which is
+-- exactly what the reflected CRC algorithm needs — an arithmetic shift would
+-- drag sign bits into the table build and the per-byte update.
+
+import array.{makeWith, get, fromList}
+import test.{expectEqual}
+
+-- ---------------------------------------------------------------------------
+-- Named constants (STYLE §12 — name the meaning, fold makes shifts free)
+-- ---------------------------------------------------------------------------
+
+-- The reflected CRC-32 (IEEE 802.3) polynomial, 0xEDB88320.
+crcPoly : Int
+crcPoly = 3988292384
+
+-- 32-bit wraparound mask, 0xFFFFFFFF — Medaka's Int is 63-bit so this must
+-- be applied explicitly everywhere the algorithm assumes 32-bit overflow.
+crc32Mask : Int
+crc32Mask = 4294967295
+
+-- Adler-32's modulus, the largest prime below 2^16 (RFC 1950 §2.2).
+adlerMod : Int
+adlerMod = 65521
+
+-- ---------------------------------------------------------------------------
+-- CRC-32
+-- ---------------------------------------------------------------------------
+
+-- One bit of the reflected-CRC table build: shift right, XOR the polynomial
+-- in if the bit shifted out was set.
+crcStep : Int -> Int
+crcStep c =
+  if bitAnd c 1 == 1 then
+    bitXor crcPoly (shiftRight c 1)
+  else
+    shiftRight c 1
+
+-- Fold `crcStep` over all 8 bits of the table entry for byte `n`.
+crcTableEntry : Int -> Int
+crcTableEntry n =
+  crcStep (crcStep (crcStep (crcStep (crcStep (crcStep (crcStep (crcStep
+    n)))))))
+
+-- The 256-entry reflected CRC-32 lookup table, built once.
+crcTable : Array Int
+crcTable = makeWith 256 crcTableEntry
+
+-- | The CRC-32 initial register value, 0xFFFFFFFF.
+--
+-- > crc32Init
+-- 4294967295
+export crc32Init : Int
+crc32Init = crc32Mask
+
+-- | Fold one byte into a running (un-finalized) CRC register. Streaming
+-- callers call this once per byte, then finalize once with `crc32Final`.
+--
+-- > crc32Final (crc32Update crc32Init 97)
+-- 3904355907
+export crc32Update : Int -> Int -> Int
+crc32Update crc byte =
+  let idx = bitAnd (bitXor crc byte) 255
+  match get idx crcTable
+    Some entry => bitXor entry (shiftRight crc 8)
+    -- idx is bitAnd _ 255, so it is always 0..255 and crcTable always has
+    -- 256 entries — this arm cannot be reached by any input. Panic rather
+    -- than silently returning `crc` unchanged: a violated invariant here
+    -- must be loud, not a quietly wrong checksum.
+    None => panic "crc32Update: table index out of 0..255 range (unreachable)"
+
+-- | Finalize a running CRC register: invert (XOR 0xFFFFFFFF).
+--
+-- > crc32Final crc32Init
+-- 0
+export crc32Final : Int -> Int
+crc32Final crc = bitXor crc crc32Mask
+
+-- | CRC-32 (IEEE, gzip's checksum) of a byte array — the one-shot form of
+-- `crc32Init` / `crc32Update` / `crc32Final`.
+--
+-- > crc32 (fromList [49, 50, 51, 52, 53, 54, 55, 56, 57])
+-- 3421780262
+export crc32 : Array Int -> Int
+crc32 bytes = crc32Final (fold crc32Update crc32Init bytes)
+
+-- ---------------------------------------------------------------------------
+-- Adler-32
+-- ---------------------------------------------------------------------------
+
+-- Fold one byte into the running (a, b) sums; both reduced mod 65521 on
+-- every step, per RFC 1950 §2.2.
+adlerStep : (Int, Int) -> Int -> (Int, Int)
+adlerStep pair byte =
+  let (a, b) = pair
+  let a2 = (a + byte) % adlerMod
+  let b2 = (b + a2) % adlerMod
+  (a2, b2)
+
+-- | Adler-32 checksum of a byte array: `(b << 16) | a`, `a` starts at 1,
+-- `b` starts at 0 (RFC 1950 §2.2).
+--
+-- > adler32 (fromList [49, 50, 51, 52, 53, 54, 55, 56, 57])
+-- 152961502
+export adler32 : Array Int -> Int
+adler32 bytes =
+  let (a, b) = fold adlerStep (1, 0) bytes
+  shiftLeft b 16 + a
+
+-- ---------------------------------------------------------------------------
+-- Tests — external-oracle vectors (test) + algorithmic invariants (prop)
+-- ---------------------------------------------------------------------------
+
+-- The four `test` vectors below are the external oracle: independently
+-- computed with Python's `zlib.crc32`/`zlib.adler32` (not captured from this
+-- module's own output — a captured golden only proves self-consistency, not
+-- correctness). Covers: empty input, one byte, the canonical CRC-32 check
+-- value "123456789", and an input with bytes >= 0x80 (proves no 63-bit
+-- sign-bit contamination — the specific way this could break on Medaka's
+-- Int, which native shiftRight makes safe by being a LOGICAL shift).
+
+test "crc32 of empty input is 0" = expectEqual 0 (crc32 (fromList []))
+test "crc32 of a single byte matches zlib" =
+  expectEqual 3904355907 (crc32 (fromList [97]))
+test "crc32 check value \"123456789\" matches zlib" = expectEqual
+  3421780262
+  (crc32 (fromList [49, 50, 51, 52, 53, 54, 55, 56, 57]))
+test "crc32 of high bytes (>= 0x80) matches zlib" =
+  expectEqual 3512481647 (crc32 (fromList [128, 255, 0, 129, 254]))
+
+test "adler32 of empty input is 1" = expectEqual 1 (adler32 (fromList []))
+test "adler32 of a single byte matches zlib" =
+  expectEqual 6422626 (adler32 (fromList [97]))
+test "adler32 check value \"123456789\" matches zlib" = expectEqual
+  152961502
+  (adler32 (fromList [49, 50, 51, 52, 53, 54, 55, 56, 57]))
+test "adler32 of high bytes (>= 0x80) matches zlib" =
+  expectEqual 142672639 (adler32 (fromList [128, 255, 0, 129, 254]))
+
+-- An INDEPENDENT bit-serial CRC-32 reference: computes the same checksum by
+-- processing each byte one bit at a time (8 rounds of "shift, XOR the poly
+-- in if the bit shifted out was set" against a *freshly-XORed-in* byte),
+-- rather than via `crcTable`/`crc32Update`. It hardcodes its own copy of
+-- the polynomial (`refPoly`, NOT the module's `crcPoly` binding) so a
+-- corruption of `crcPoly` cannot silently corrupt the reference too.
+--
+-- This is deliberately a different algorithm shape from the table-driven
+-- path — table lookup vs. per-bit loop — so a bug in the table build (wrong
+-- fold count/direction), the index mask, or the polynomial itself makes the
+-- two sides disagree. Contrast with a "split the input, fold each half,
+-- compare to one-shot" property: that one is a mathematical identity of any
+-- pure left fold (`fold f z (a++b) == fold f (fold f z a) b` for ANY f) and
+-- so is a tautology that no crc32Update bug can break — this is not.
+refPoly : Int
+refPoly = 3988292384
+
+refCrcBit : Int -> Int
+refCrcBit c =
+  if bitAnd c 1 == 1 then
+    bitXor refPoly (shiftRight c 1)
+  else
+    shiftRight c 1
+
+refCrcByte : Int -> Int -> Int
+refCrcByte crc byte = refCrcBits (bitXor crc (bitAnd byte 255)) 8
+
+refCrcBits : Int -> Int -> Int
+refCrcBits c 0 = c
+refCrcBits c n = refCrcBits (refCrcBit c) (n - 1)
+
+refCrc32 : Array Int -> Int
+refCrc32 bytes = bitXor (fold refCrcByte crc32Mask bytes) crc32Mask
+
+prop "crc32 (table-driven) agrees with an independent bit-serial reference" (bytes : List Int) =
+  let bs = map mask8 bytes
+  crc32 (fromList bs) == refCrc32 (fromList bs)
+
+-- Mask an arbitrary generated Int down to a single byte (0..255).
+mask8 : Int -> Int
+mask8 n = bitAnd n 255
+
+-- Every CRC-32 result is a genuine 32-bit value — catches 63-bit sign-bit
+-- leakage, the specific way this algorithm could break on Medaka's Int.
+prop "crc32 of a single byte lands in 0..0xFFFFFFFF" (b : Int) =
+  let c = crc32 (fromList [mask8 b])
+  c >= 0 && c <= crc32Mask
+
+-- Adler-32's `a` component is an independent re-derivation of half the
+-- algorithm (1 + sum of bytes, mod 65521) — a table/loop bug in `adlerStep`
+-- shows up as a mismatch against this from-scratch formula.
+prop "adler32 a-component equals 1 + sum bytes mod 65521" (bytes : List Int) =
+  let bs = map mask8 bytes
+  let (a, _) = fold adlerStep (1, 0) (fromList bs)
+  a == (1 + sum bs) % adlerMod

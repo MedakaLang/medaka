@@ -1,0 +1,110 @@
+-- | gzip/main.mdk — Phase 1 integration probe for the DEFLATE/gzip library.
+--
+-- Phase 1 (see `docs/design/GZIP-DESIGN.md`) ships the three foundation
+-- modules — the gzip container codec, CRC-32/Adler-32, and the LSB-first bit
+-- cursor — but NOT yet an inflater. So this entry point is deliberately not a
+-- CLI: it is the cross-module integration check, the one thing no single
+-- module's own test suite can perform.
+--
+-- Each module is green in isolation. That proves nothing about whether they
+-- COMPOSE: a record exported with `export` rather than `public export` is
+-- abstract to every other module, and its fields are inaccessible from
+-- outside — a failure invisible to any same-module test run. This file is
+-- what makes that failure loud.
+--
+-- The corpus below is real output from the system tool, not bytes anyone
+-- invented:
+--
+--     $ printf 'hello' | gzip -n -c | xxd
+--     00000000: 1f8b 0800 0000 0000 0003 cb48 cdc9 c907
+--     00000010: 0086 a610 3605 0000 00
+--
+-- and the two facts it is checked against come from an independent oracle:
+--
+--     $ python3 -c "import zlib; print(zlib.crc32(b'hello'), len(b'hello'))"
+--     907060870 5
+--
+-- Run it with `medaka run gzip/main.mdk` AND with a `medaka build` — an
+-- interpreter-green result proves nothing about the compiled path.
+
+import array.{fromList, sliceClamped}
+import lib.container.{GzipHeader, parseGzipHeader, parseGzipTrailer}
+import lib.crc32.{crc32}
+import lib.bitio.{newBitReader, getBits}
+
+-- `printf 'hello' | gzip -n -c`, byte for byte.
+helloGz : Array Int
+helloGz = fromList
+  [
+    31,
+    139,
+    8,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    3,
+    203,
+    72,
+    205,
+    201,
+    201,
+    7,
+    0,
+    134,
+    166,
+    16,
+    54,
+    5,
+    0,
+    0,
+    0,
+  ]
+
+-- The uncompressed payload those bytes encode: "hello".
+helloBytes : Array Int
+helloBytes = fromList [104, 101, 108, 108, 111]
+
+-- Render a DEFLATE block-type code (RFC 1951 §3.2.3) as its name.
+blockTypeName : Int -> String
+blockTypeName 0 = "stored"
+blockTypeName 1 = "fixed Huffman"
+blockTypeName 2 = "dynamic Huffman"
+blockTypeName _ = "reserved (invalid)"
+
+-- Read the 3-bit block header off the front of a DEFLATE stream: BFINAL then
+-- a 2-bit BTYPE, both LSB-first.
+describeFirstBlock : Array Int -> String
+describeFirstBlock payload =
+  let r = newBitReader payload
+  match getBits 1 r
+    Err e => "bit read failed: " ++ e
+    Ok bfinal => match getBits 2 r
+      Err e => "bit read failed: " ++ e
+      Ok btype =>
+        "BFINAL=\{debug bfinal} BTYPE=\{debug btype} (\{blockTypeName btype})"
+
+-- Cross-module field access: this line is the whole point of the file. It
+-- fails to compile if `GzipHeader` is exported abstractly.
+describeHeader : GzipHeader -> Int -> String
+describeHeader h off =
+  "mtime=\{debug h.mtime} os=\{debug h.os} payload starts at byte \{debug off}"
+
+main = match parseGzipHeader helloGz
+  Err e => println ("header parse failed: " ++ e)
+  Ok (hdr, off) =>
+    let _ = println (describeHeader hdr off)
+    let payload = sliceClamped off (length helloGz - 8) helloGz
+    let _ = println (describeFirstBlock payload)
+    match parseGzipTrailer helloGz
+      Err e => println ("trailer parse failed: " ++ e)
+      Ok (storedCrc, storedSize) =>
+        let ourCrc = crc32 helloBytes
+        let _ = println "trailer crc=\{debug storedCrc} isize=\{debug storedSize}"
+        let _ = println "crc32 of \"hello\" = \{debug ourCrc}"
+        let crcOk = ourCrc == storedCrc
+        let sizeOk = storedSize == length helloBytes
+        println
+          "INTEGRATION: crc match=\{debug crcOk} size match=\{debug sizeOk}"

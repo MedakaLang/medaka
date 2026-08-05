@@ -1,0 +1,451 @@
+-- | gzip.lib.container — the RFC 1952 gzip member header and trailer.
+--
+-- The byte-aligned wrapper around the DEFLATE payload (see
+-- `docs/design/GZIP-DESIGN.md`, "The format §1: gzip member header"). Built
+-- on the GENERIC `stdlib/byteparser.mdk` / `stdlib/bytebuilder.mdk`
+-- primitives — gzip is LITTLE-ENDIAN (`leUint`/`emitU32LE`), the opposite of
+-- the sqlite package's big-endian on-disk format.
+--
+-- Header layout:
+--   0  2  Magic       0x1F 0x8B
+--   2  1  CM          compression method; 8 = deflate, else an error
+--   3  1  FLG         bit0 FTEXT, bit1 FHCRC, bit2 FEXTRA, bit3 FNAME,
+--                      bit4 FCOMMENT, bits 5-7 reserved (must be 0)
+--   4  4  MTIME       little-endian uint32, seconds since epoch; 0 = n/a
+--   8  1  XFL         compressor hint; passed through unchanged
+--   9  1  OS          source filesystem; passed through unchanged
+-- then, conditionally, in this order: FEXTRA (2-byte LE length + that many
+-- bytes), FNAME (NUL-terminated), FCOMMENT (NUL-terminated), FHCRC (2 bytes).
+--
+-- FHCRC is SKIPPED WITHOUT VALIDATION here (its bytes are consumed so the
+-- payload offset comes out right, but the checksum itself is never checked).
+-- CRC validation belongs to the module that owns the running CRC-32 over the
+-- header bytes, which does not exist in this tree yet — wiring it here would
+-- couple this module to that sibling before it's written.
+--
+-- MTIME/XFL/OS are logically unsigned (uint32/uint8/uint8); `emitU32LE`/
+-- `emitU8` already truncate a negative or oversized `Int` to that width by
+-- construction (each masks its own low byte per round), so a header built
+-- from an out-of-range field WRAPS on emit exactly the way `Int` wraps
+-- elsewhere in this codebase, rather than being rejected. `prop
+-- "emitGzipHeader/parseGzipHeader round-trips (numeric fields)"` below
+-- pins that as the intended contract, not an oversight.
+
+import byteparser.{
+  ByteParser,
+  BResult,
+  BOk,
+  BErr,
+  runBP,
+  byte,
+  anyByte,
+  leUint,
+  takeBytes,
+  satisfy,
+  many,
+  failWith,
+}
+import bytebuilder.{
+  Builder,
+  newBuilder,
+  emitU8,
+  emitU32LE,
+  emitBytes,
+  buildArray,
+}
+import string.{toUtf8, fromUtf8}
+import array  -- brings `impl Foldable Array` (toList) into scope; see AGENTS.md bare-import note
+import test.{expectEqual, fail}
+
+-- ---------------------------------------------------------------------------
+-- Named constants (STYLE §12 — name the meaning)
+-- ---------------------------------------------------------------------------
+
+gzipMagic0 : Int
+gzipMagic0 = 0x1F
+
+gzipMagic1 : Int
+gzipMagic1 = 0x8B
+
+cmDeflate : Int
+cmDeflate = 8
+
+flagFhcrc : Int
+flagFhcrc = 2
+
+flagFextra : Int
+flagFextra = 4
+
+flagFname : Int
+flagFname = 8
+
+flagFcomment : Int
+flagFcomment = 16
+
+-- Bits 5, 6, 7 of FLG — reserved, must be 0.
+flagReservedMask : Int
+flagReservedMask = 224
+
+-- ---------------------------------------------------------------------------
+-- GzipHeader
+-- ---------------------------------------------------------------------------
+
+public export data GzipHeader =
+  | GzipHeader {
+      mtime : Int,
+      name : Option String,
+      comment : Option String,
+      xfl : Int,
+      os : Int,
+    }
+deriving (Eq, Debug)
+
+hasFlag : Int -> Int -> Bool
+hasFlag flg mask = bitAnd flg mask != 0
+
+-- ---------------------------------------------------------------------------
+-- Parse
+-- ---------------------------------------------------------------------------
+
+checkMagic : List Int -> ByteParser Unit
+checkMagic [m0, m1]
+  | m0 == gzipMagic0 && m1 == gzipMagic1 = pure ()
+checkMagic _ = failWith "not a gzip stream (bad magic)"
+
+checkCm : Int -> ByteParser Unit
+checkCm cm
+  | cm == cmDeflate = pure ()
+  | otherwise = failWith "unsupported compression method (CM=\{cm}); only 8 (deflate) is supported"
+
+checkReserved : Int -> ByteParser Unit
+checkReserved flg
+  | hasFlag flg flagReservedMask =
+    failWith "reserved FLG bits (5,6,7) must be 0, got FLG=\{flg}"
+  | otherwise = pure ()
+
+-- One NUL-terminated byte run (FNAME / FCOMMENT payload, NUL not included).
+nulTerminated : ByteParser (List Int)
+nulTerminated = do
+  bs <- many (satisfy (!= 0))
+  _ <- byte 0
+  pure bs
+
+-- FEXTRA: 2-byte LE length, then that many bytes, discarded (no extra-field
+-- registry is modeled here).
+skipExtra : Int -> ByteParser Unit
+skipExtra flg = when
+  (hasFlag flg flagFextra)
+  (do
+    len <- leUint 2
+    _ <- takeBytes len
+    pure ())
+
+parseName : Int -> ByteParser (Option String)
+parseName flg =
+  if hasFlag flg flagFname then do
+    bs <- nulTerminated
+    pure (Some (fromUtf8 (arrayFromList bs)))
+  else pure None
+
+parseComment : Int -> ByteParser (Option String)
+parseComment flg =
+  if hasFlag flg flagFcomment then do
+    bs <- nulTerminated
+    pure (Some (fromUtf8 (arrayFromList bs)))
+  else pure None
+
+-- FHCRC: 2 bytes, consumed but NOT validated — see the module comment.
+skipFhcrc : Int -> ByteParser Unit
+skipFhcrc flg = when
+  (hasFlag flg flagFhcrc)
+  (do
+    _ <- takeBytes 2
+    pure ())
+
+gzipHeaderParser : ByteParser GzipHeader
+gzipHeaderParser = do
+  magic <- takeBytes 2
+  _ <- checkMagic magic
+  cm <- anyByte
+  _ <- checkCm cm
+  flg <- anyByte
+  _ <- checkReserved flg
+  mtimeVal <- leUint 4
+  xflVal <- anyByte
+  osVal <- anyByte
+  _ <- skipExtra flg
+  nameVal <- parseName flg
+  commentVal <- parseComment flg
+  _ <- skipFhcrc flg
+  pure
+    GzipHeader {
+      mtime = mtimeVal,
+      name = nameVal,
+      comment = commentVal,
+      xfl = xflVal,
+      os = osVal,
+    }
+
+{- | Parse a gzip member header. Returns the header and the byte offset at
+   which the DEFLATE payload begins — the caller needs that offset to hand
+   the remaining bytes to the bit reader.
+
+   A minimal header (no optional fields; a real `gzip -n` stream, xfl=0/os=3):
+
+   > parseGzipHeader (arrayFromList [31, 139, 8, 0, 0, 0, 0, 0, 0, 3])
+   Ok (GzipHeader { mtime = 0, name = None, comment = None, xfl = 0, os = 3 }, 10)
+-}
+export parseGzipHeader : Array Int -> Result String (GzipHeader, Int)
+parseGzipHeader bytes = match runBP gzipHeaderParser bytes 0
+  BOk h pos => Ok (h, pos)
+  BErr msg pos => Err "\{msg} at byte \{pos}"
+
+-- ---------------------------------------------------------------------------
+-- Trailer: (crc32, isize), the LAST 8 bytes of a gzip member.
+-- ---------------------------------------------------------------------------
+
+trailerParser : ByteParser (Int, Int)
+trailerParser = do
+  crc <- leUint 4
+  isize <- leUint 4
+  pure (crc, isize)
+
+{- | Read `(crc32, isize)` from the LAST 8 bytes of `bytes`. Both are checked
+   on inflate against the actual decompressed data by the module that owns
+   inflation; this only decodes the trailer bytes.
+
+   > parseGzipTrailer (arrayFromList [134, 166, 16, 54, 5, 0, 0, 0])
+   Ok (907060870, 5)
+-}
+export parseGzipTrailer : Array Int -> Result String (Int, Int)
+parseGzipTrailer bytes =
+  let n = arrayLength bytes
+  if n < 8 then Err "gzip trailer: input too short (need at least 8 bytes for CRC32+ISIZE), got \{n}"
+  else match runBP trailerParser bytes (n - 8)
+    BOk pair _ => Ok pair
+    BErr msg pos => Err "\{msg} at byte \{pos}"
+
+-- ---------------------------------------------------------------------------
+-- Emit
+-- ---------------------------------------------------------------------------
+
+flagsOf : GzipHeader -> Int
+flagsOf h =
+  let nameFlag = if isSome h.name then flagFname else 0
+  let commentFlag = if isSome h.comment then flagFcomment else 0
+  nameFlag + commentFlag
+
+-- Emit a NUL-terminated optional string field (FNAME/FCOMMENT), or nothing.
+emitOptionalField : Option String -> Builder -> Unit
+emitOptionalField None _ = ()
+emitOptionalField (Some s) buf =
+  emitBytes (toList (toUtf8 s)) buf
+  emitU8 0 buf
+
+{- | Emit a gzip member header. We never emit FEXTRA or FHCRC (there is
+   nothing to put in them without the sibling inflate/CRC module this
+   library doesn't have yet); FNAME/FCOMMENT are emitted iff present.
+
+   > emitGzipHeader GzipHeader { mtime = 0, name = None, comment = None, xfl = 0, os = 3 }
+   [|31, 139, 8, 0, 0, 0, 0, 0, 0, 3|]
+-}
+export emitGzipHeader : GzipHeader -> Array Int
+emitGzipHeader h =
+  let buf = newBuilder ()
+  emitU8 gzipMagic0 buf
+  emitU8 gzipMagic1 buf
+  emitU8 cmDeflate buf
+  emitU8 (flagsOf h) buf
+  emitU32LE h.mtime buf
+  emitU8 h.xfl buf
+  emitU8 h.os buf
+  emitOptionalField h.name buf
+  emitOptionalField h.comment buf
+  buildArray buf
+
+{- | Emit an 8-byte gzip trailer: CRC-32 of the uncompressed data, then
+   ISIZE (uncompressed length mod 2^32), both little-endian.
+
+   > emitGzipTrailer 907060870 5
+   [|134, 166, 16, 54, 5, 0, 0, 0|]
+-}
+export emitGzipTrailer : Int -> Int -> Array Int
+emitGzipTrailer crc isize =
+  let buf = newBuilder ()
+  emitU32LE crc buf
+  emitU32LE isize buf
+  buildArray buf
+
+-- ---------------------------------------------------------------------------
+-- Tests — fixed cases from a real `.gz` stream (external oracle: system
+-- `gzip`/`python3 -c "import zlib"`), not captured from this module's own
+-- output. See the friction report for how each byte array was derived.
+-- ---------------------------------------------------------------------------
+
+-- `printf 'hello' | gzip -n -c | xxd`:
+--   1f 8b 08 00 00000000 00 03  cb48 cdc9 c907 00  86a6 1036 0500 0000
+-- Minimal header (no FNAME/FCOMMENT/FEXTRA/FHCRC), xfl=0x00, os=0x03.
+test "parseGzipHeader: minimal header from `gzip -n`" = expectEqual
+  (Ok
+    (GzipHeader {
+        mtime = 0,
+        name = None,
+        comment = None,
+        xfl = 0,
+        os = 3,
+      }, 10))
+  (parseGzipHeader (arrayFromList [31, 139, 8, 0, 0, 0, 0, 0, 0, 3]))
+
+-- `printf 'hello' > greet.txt && gzip -k -f greet.txt | xxd`:
+--   1f 8b 08 08 509b726a 00 03  6772656574 2e747874 00  cb48...
+-- FNAME "greet.txt", mtime = 0x6a729b50 = 1785895760, header ends at byte 20.
+test "parseGzipHeader: FNAME set from a real gzip file" = expectEqual
+  (Ok
+    (
+      GzipHeader {
+        mtime = 1785895760,
+        name = Some "greet.txt",
+        comment = None,
+        xfl = 0,
+        os = 3,
+      },
+      20,
+    ))
+  (parseGzipHeader (arrayFromList
+    [
+      31,
+      139,
+      8,
+      8,
+      80,
+      155,
+      114,
+      106,
+      0,
+      3,
+      103,
+      114,
+      101,
+      101,
+      116,
+      46,
+      116,
+      120,
+      116,
+      0,
+    ]))
+
+-- Trailer of the same `hello.gz`, cross-checked against
+-- `python3 -c "import zlib; print(zlib.crc32(b'hello'), len(b'hello'))"`
+-- -> 907060870 5.
+test "parseGzipTrailer: crc/isize match zlib.crc32(b'hello')/len" = expectEqual
+  (Ok (907060870, 5))
+  (parseGzipTrailer (arrayFromList [134, 166, 16, 54, 5, 0, 0, 0]))
+
+-- The trailer parser reads only the LAST 8 bytes: pass the whole minimal
+-- `.gz` stream (header + 7-byte deflate payload + trailer) and it must skip
+-- straight to the trailer.
+test "parseGzipTrailer: reads the LAST 8 bytes of a full member" = expectEqual
+  (Ok (907060870, 5))
+  (parseGzipTrailer (arrayFromList
+    [
+      31,
+      139,
+      8,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      3,
+      203,
+      72,
+      205,
+      201,
+      201,
+      7,
+      0,
+      134,
+      166,
+      16,
+      54,
+      5,
+      0,
+      0,
+      0,
+    ]))
+
+-- Error path: bad magic (first two bytes wrong). The failure position is 2,
+-- not 0: `takeBytes 2` already consumed both magic bytes before `checkMagic`
+-- runs (ByteParser position-threading is post-hoc, not lookahead).
+test "parseGzipHeader: bad magic is rejected" = match parseGzipHeader (arrayFromList [0, 0, 8, 0, 0, 0, 0, 0, 0, 3])
+  Err msg => expectEqual "not a gzip stream (bad magic) at byte 2" msg
+  Ok _ => fail "expected Err on bad magic"
+
+-- Error path: CM != 8 (deflate is the only method gzip actually uses).
+test "parseGzipHeader: CM != 8 is rejected" = match parseGzipHeader (arrayFromList [31, 139, 9, 0, 0, 0, 0, 0, 0, 3])
+  Err msg => expectEqual "unsupported compression method (CM=9); only 8 (deflate) is supported at byte 3" msg
+  Ok _ => fail "expected Err on CM != 8"
+
+-- Error path: a reserved FLG bit (bit 5, value 32) is set.
+test "parseGzipHeader: a reserved FLG bit is rejected" = match parseGzipHeader (arrayFromList [31, 139, 8, 32, 0, 0, 0, 0, 0, 3])
+  Err msg => expectEqual "reserved FLG bits (5,6,7) must be 0, got FLG=32 at byte 4" msg
+  Ok _ => fail "expected Err on a reserved FLG bit"
+
+-- ---------------------------------------------------------------------------
+-- Properties
+-- ---------------------------------------------------------------------------
+
+{- | Round-trip on the numeric fields: emit then parse reproduces the
+   header, and the reported payload offset equals the emitted header's
+   length (10 fixed bytes; no optional fields here). `mtime`/`xfl`/`os` are
+   compared against their WRAPPED (uint32/uint8) values rather than the raw
+   generated `Int`, per the masking policy documented on `GzipHeader` above
+   — `Arbitrary Int` generates negatives (`randomInt (-1000) 1000`, see
+   `stdlib/core.mdk`), which is exactly the input that would catch a missing
+   mask. `name`/`comment` are fixed at `None` here: there is no `Arbitrary`
+   instance for `Option a` in this tree, so a generated `Option String` isn't
+   available (see the friction report). -}
+prop "emitGzipHeader/parseGzipHeader round-trips (numeric fields)" (mtimeIn : Int) (xflIn : Int) (osIn : Int) =
+  let h = GzipHeader {
+    mtime = mtimeIn,
+    name = None,
+    comment = None,
+    xfl = xflIn,
+    os = osIn,
+  }
+  let wrapped = GzipHeader {
+    mtime = bitAnd mtimeIn 4294967295,
+    name = None,
+    comment = None,
+    xfl = bitAnd xflIn 255,
+    os = bitAnd osIn 255,
+  }
+  match parseGzipHeader (emitGzipHeader h)
+    Ok (parsed, offset) => parsed == wrapped && offset == 10
+    Err _ => False
+
+{- | Round-trip for FNAME (an `Arbitrary String` value, restricted to strings
+   with no embedded NUL byte so the field stays well-formed — a generated
+   string containing a NUL would truncate at the first one, which is a fact
+   about NUL-terminated encoding, not a bug in this module). -}
+prop "emitGzipHeader/parseGzipHeader round-trips FNAME" (nameIn : String) =
+  let clean = fromUtf8 (arrayFromList (filter (b => b != 0) (toList (toUtf8 nameIn))))
+  let h = GzipHeader {
+    mtime = 0,
+    name = Some clean,
+    comment = None,
+    xfl = 0,
+    os = 3,
+  }
+  match parseGzipHeader (emitGzipHeader h)
+    Ok (parsed, offset) => parsed.name == Some clean
+      && offset == 10 + arrayLength (toUtf8 clean) + 1
+    Err _ => False
+
+-- Trailer round-trip, wrapped to uint32 the same way the header is.
+prop "emitGzipTrailer/parseGzipTrailer round-trips" (crcIn : Int) (isizeIn : Int) = match parseGzipTrailer (emitGzipTrailer crcIn isizeIn)
+  Ok (crc, isize) => crc == bitAnd crcIn 4294967295
+    && isize == bitAnd isizeIn 4294967295
+  Err _ => False
