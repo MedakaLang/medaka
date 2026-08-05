@@ -1,10 +1,11 @@
 # DEFLATE / gzip — a compression codec in pure Medaka
 
-**Status:** OPEN — design proposed, no code written. A dogfood capstone chosen to
-exercise the parts of the language and stdlib that the SQLite library
-(`archive/design/SQLITE-DESIGN.md`, as-built in `sqlite/`) leaves cold: sub-byte
-bit streams, in-place mutable arrays in a hot loop, and round-trip property
-testing against an external oracle. Nothing here is implemented; the phasing
+**Status:** PARTIAL — Phases 1-2 shipped (`gzip/`): stored + fixed-Huffman
+inflate, real round-trip decompression of any `.gz` whose blocks are BTYPE
+00/01. A dogfood capstone chosen to exercise the parts of the language and
+stdlib that the SQLite library (`archive/design/SQLITE-DESIGN.md`, as-built in
+`sqlite/`) leaves cold: sub-byte bit streams, in-place mutable arrays in a hot
+loop, and round-trip property testing against an external oracle. The phasing
 table below is the plan of record.
 
 ---
@@ -121,7 +122,7 @@ actually fast is an open question this project will answer.
 | Phase | What ships | Oracle |
 |-------|-----------|--------|
 | **1** | `BitReader` + **stored (uncompressed) blocks** + gzip container parse/emit + CRC-32 | incompressible input (`/dev/urandom`) at any level emits a stored block — see below; `printf` \| `gzip` round-trip |
-| **2** | **Inflate, fixed Huffman** — the RFC 1951 static code tables, length/distance decoding, sliding window | `gzip -1`..`-9` on small inputs |
+| **2** | **Inflate, fixed Huffman** — the RFC 1951 static code tables, length/distance decoding, sliding window | `gzip -1`..`-9` on small inputs (SHIPPED — see `gzip/test/inflate_oracle.sh`; "small" is real: the system `gzip`'s block-splitting heuristic tips into dynamic Huffman past roughly 2-4 KB even at `-1`, so this oracle exercises inputs at or under that boundary, asserting the observed BTYPE rather than assuming it) |
 | **3** | **Inflate, dynamic Huffman** — code-length alphabet, HLIT/HDIST/HCLEN, canonical code construction | Real `.gz` corpus, including this repo's own `compiler/seed/emitter.ll.gz` |
 | **4** | **Deflate** — LZ77 hash-chain matcher + fixed-Huffman blocks + stored-block fallback | `gunzip` accepts our output and reproduces the input |
 | **5** | **Deflate, dynamic Huffman** — frequency counting, length-limited code construction, block-splitting heuristic | Compression ratio vs `gzip -6` on a fixed corpus (reported, not gated) |

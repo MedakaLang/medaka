@@ -1,10 +1,14 @@
 -- | gzip/main.mdk — Phase 1 integration probe for the DEFLATE/gzip library.
 --
--- Phase 1 (see `docs/design/GZIP-DESIGN.md`) ships the three foundation
--- modules — the gzip container codec, CRC-32/Adler-32, and the LSB-first bit
--- cursor — but NOT yet an inflater. So this entry point is deliberately not a
--- CLI: it is the cross-module integration check, the one thing no single
--- module's own test suite can perform.
+-- Phase 1 (see `docs/design/GZIP-DESIGN.md`) shipped the three foundation
+-- modules exercised below — the gzip container codec, CRC-32/Adler-32, and
+-- the LSB-first bit cursor. As of Phase 2 there IS a real inflater
+-- (`lib.inflate.gunzipMember`, stored + fixed-Huffman blocks) — see
+-- `gzip/inflate_demo.mdk` for the actual decompression CLI. This file stays
+-- deliberately narrower than that: it is the cross-module integration
+-- check, the one thing no single module's own test suite can perform, so it
+-- keeps reading just the header/trailer/first-block-header fields by hand
+-- rather than delegating to `gunzipMember`.
 --
 -- Each module is green in isolation. That proves nothing about whether they
 -- COMPOSE: a record exported with `export` rather than `public export` is

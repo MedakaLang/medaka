@@ -1,19 +1,21 @@
 -- | gzip.lib.inflate — the DEFLATE block loop (RFC 1951) and the gzip member
 --   decoder that wraps it (RFC 1952).
 --
--- Phase 2 status: **stored blocks only** (`BTYPE=00`). Fixed Huffman
--- (`BTYPE=01`, Phase 2's real payload) and dynamic Huffman (`BTYPE=10`,
--- Phase 3) are dispatched to but not yet implemented — each returns a named
--- `Err` rather than being silently absorbed by a wildcard, so a later agent
--- adds them by replacing one match arm each, not by restructuring the loop.
--- `BTYPE=11` is reserved by the RFC and is always an `Err`.
+-- Phase 2 status: **stored blocks (`BTYPE=00`) and fixed Huffman
+-- (`BTYPE=01`)** are both real. Dynamic Huffman (`BTYPE=10`, Phase 3) is
+-- still dispatched to but not yet implemented — it returns a named `Err`
+-- rather than being silently absorbed by a wildcard, so a later agent adds
+-- it by replacing one match arm, not by restructuring the loop. `BTYPE=11`
+-- is reserved by the RFC and is always an `Err`.
 --
 -- The output accumulator (`out : MutArray Int`, built with `stdlib/mut_array.mdk`)
 -- *is* the sliding window — see `copyBack` below and
 -- `docs/design/GZIP-DESIGN.md` §"The sliding window and the overlap case".
--- Nothing here calls `copyBack` yet (no back-references exist before fixed/
--- dynamic Huffman blocks decode length/distance pairs), but it is written and
--- tested now so the window shape does not change under Phase 2/3.
+-- `inflateFixedHuffman` below is `copyBack`'s first real caller: every
+-- length/distance pair decoded from a fixed-Huffman block reads back through
+-- `out` itself, including bytes that block is *itself* still producing
+-- (`distance < length`, and `distance == 1` in particular — RLE of the
+-- trailing byte).
 --
 -- A stored block's raw bytes are pushed into `out` alongside being part of
 -- the decompressed output — that is not two operations, it is one `push` per
@@ -27,6 +29,15 @@ import mut_array.{MutArray, new, push, get as maGet, toArray, fromList}
 import lib.bitio.{BitReader, newBitReader, getBits, alignByte, getBytesAligned}
 import lib.container.{parseGzipHeader, parseGzipTrailer}
 import lib.crc32.{crc32}
+import lib.huffman.{
+  fixedLitLen,
+  fixedDist,
+  decodeSym,
+  lengthBase,
+  lengthExtra,
+  distBase,
+  distExtra,
+}
 import test.{expectEqual, fail}
 
 -- ---------------------------------------------------------------------------
@@ -138,18 +149,94 @@ inflateStored r out =
     Ok ()
 
 -- ---------------------------------------------------------------------------
+-- Fixed Huffman blocks (BTYPE 01)
+-- ---------------------------------------------------------------------------
+
+-- Literal/length symbol that ends a block (RFC 1951 §3.2.3).
+symEndOfBlock : Int
+symEndOfBlock = 256
+
+-- Largest literal/length symbol a fixed-Huffman block may legally carry
+-- (RFC 1951 §3.2.5: 257..285 are length codes; the fixed table technically
+-- has code space through 287, but 286/287 never occur in real data and are
+-- invalid if seen).
+maxLenSym : Int
+maxLenSym = 285
+
+-- Largest legal distance symbol (RFC 1951 §3.2.5: 30 and 31 are reserved and
+-- must never appear).
+maxDistSym : Int
+maxDistSym = 29
+
+-- Read one entry out of a flat RFC table by index, turning an out-of-range
+-- index into a named `Err` rather than a panic — unlike `huffman.mdk`'s
+-- internal `tableAt` (which panics because its callers only ever pass
+-- indices already validated against the table's own construction), the
+-- index here comes from a Huffman symbol decoded off a possibly-adversarial
+-- stream, so it must be a normal error path.
+lookupTable : Array Int -> Int -> String -> Result String Int
+lookupTable arr i name = match get i arr
+  Some v => Ok v
+  None => Err "inflate: \{name} index \{i} out of range (malformed stream)"
+
+-- | Decode one length/distance back-reference once the literal/length symbol
+--   (257..285, already known to be in range) has been read.
+--
+--   ⚠️ The two table families are indexed DIFFERENTLY (see
+--   `docs/design/GZIP-DESIGN.md` and each array's own comment in
+--   `huffman.mdk`): `lengthBase`/`lengthExtra` are indexed by
+--   `lenSym - 257`, but `distBase`/`distExtra` are indexed by the BARE
+--   distance symbol `dsym` — not `dsym - 257`, not `dsym - 1`.
+inflateLengthDistance : Int -> BitReader -> MutArray Int -> Result String Unit
+inflateLengthDistance lenSym r out = do
+  lenBase <- lookupTable lengthBase (lenSym - 257) "lengthBase"
+  lenExtraBits <- lookupTable lengthExtra (lenSym - 257) "lengthExtra"
+  lenExtra <- getBits lenExtraBits r
+  let len = lenBase + lenExtra
+  dsym <- decodeSym fixedDist r
+  distanceFor dsym len r out
+
+-- Split out of `inflateLengthDistance` so the `dsym > maxDistSym` check (RFC
+-- 1951 §3.2.3: distance codes 30/31 are reserved and always invalid) is a
+-- plain match-arm guard rather than nested inside a `do` block.
+distanceFor : Int -> Int -> BitReader -> MutArray Int -> Result String Unit
+distanceFor dsym len r out =
+  if dsym > maxDistSym then Err "inflate: invalid distance symbol \{dsym} (must be 0..\{maxDistSym})"
+  else do
+    distBaseV <- lookupTable distBase dsym "distBase"
+    distExtraBits <- lookupTable distExtra dsym "distExtra"
+    distExtraV <- getBits distExtraBits r
+    copyBack (distBaseV + distExtraV) len out
+
+-- | Decode literal/length symbols off `fixedLitLen` until end-of-block
+--   (symbol 256): a literal (< 256) is pushed straight to `out`; a length
+--   code (257..maxLenSym) reads its paired distance code and expands the
+--   back-reference via `copyBack`; anything else is a malformed stream.
+inflateFixedHuffman : BitReader -> MutArray Int -> Result String Unit
+inflateFixedHuffman r out = match decodeSym fixedLitLen r
+  Err e => Err e
+  Ok sym if sym < 256 =>
+    let _ = push sym out
+    inflateFixedHuffman r out
+  Ok sym if sym == symEndOfBlock => Ok ()
+  Ok sym if sym <= maxLenSym => match inflateLengthDistance sym r out
+    Err e => Err e
+    Ok _ => inflateFixedHuffman r out
+  Ok sym => Err "inflate: invalid literal/length symbol \{sym} (must be 0..\{maxLenSym} or \{symEndOfBlock})"
+
+-- ---------------------------------------------------------------------------
 -- Block dispatch — the Phase 2/3 seam
 -- ---------------------------------------------------------------------------
 
--- | Decode one block of the given `BTYPE` into `out`. `BTYPE=00` is real;
---   `BTYPE=01`/`10` are named stubs (Phase 2/3), and `BTYPE=11` is always
---   invalid per RFC 1951 §3.2.3. Adding fixed/dynamic Huffman is meant to be
---   a one-arm replacement here, not a restructuring of `inflateBlocks`.
+-- | Decode one block of the given `BTYPE` into `out`. `BTYPE=00` and
+--   `BTYPE=01` are real; `BTYPE=10` is a named stub (Phase 3), and
+--   `BTYPE=11` is always invalid per RFC 1951 §3.2.3. Adding dynamic Huffman
+--   is meant to be a one-arm replacement here, not a restructuring of
+--   `inflateBlocks`.
 inflateBlock : Int -> BitReader -> MutArray Int -> Result String Unit
 inflateBlock btype r out
   | btype == btypeStored = inflateStored r out
-  | btype == btypeFixedHuffman =
-    Err "fixed Huffman blocks not yet implemented (Phase 2)"
+  | btype == btypeFixedHuffman = inflateFixedHuffman r out
   | btype == btypeDynamicHuffman =
     Err "dynamic Huffman blocks not yet implemented (Phase 3)"
   | btype == btypeReserved =
@@ -228,9 +315,10 @@ gunzipMember bytes = do
 -- ---------------------------------------------------------------------------
 
 -- `printf 'hello' | gzip -n -c` — the same bytes `gzip/main.mdk` uses. `gzip`
--- picks BTYPE=1 (fixed Huffman) for input this small, so this pins the
--- honest Phase-2 boundary: this exact real-world stream is NOT yet
--- decodable, and the reason why is named, not a generic parse failure.
+-- picks BTYPE=1 (fixed Huffman) for input this small; now that Phase 2 is
+-- real, this round-trips to "hello" (the independent oracle:
+-- `python3 -c "import zlib; print(zlib.decompress(open('h.gz','rb').read(), 16+zlib.MAX_WBITS))"`
+-- on these exact bytes prints `b'hello'`).
 helloGz : Array Int
 helloGz = arrayFromList
   [
@@ -261,7 +349,126 @@ helloGz = arrayFromList
     0,
   ]
 
-test "gunzipMember on real hello.gz (fixed Huffman) is the honest Phase-2 boundary" = expectEqual (Err "fixed Huffman blocks not yet implemented (Phase 2)") (gunzipMember helloGz)
+test "gunzipMember on real hello.gz (fixed Huffman) round-trips to \"hello\"" = expectEqual (Ok (arrayFromList [104, 101, 108, 108, 111])) (gunzipMember helloGz)
+
+-- `python3 -c "print('ab'*37)" | gzip -n -c` — a repetitive input that
+-- exercises fixed-Huffman BACK-REFERENCES (not just literals like
+-- `helloGz`): 74 bytes of alternating "ab", real gzip output, still fixed
+-- Huffman (`xxd -s 10 -l 1` on this file is `0x4b` = 0b01001011; bit 0 =
+-- BFINAL=1, bits 1-2 = (0x4b>>1)&3 = 1 = fixed Huffman). This is the general
+-- overlap case (distance=2), a sibling of the `distance=1` RLE case already
+-- covered by `copyBack`'s own unit tests above, now exercised end to end
+-- through Huffman decoding.
+abRepeatedGz : Array Int
+abRepeatedGz = arrayFromList
+  [
+    31,
+    139,
+    8,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    3,
+    75,
+    76,
+    74,
+    164,
+    18,
+    4,
+    0,
+    12,
+    130,
+    171,
+    154,
+    74,
+    0,
+    0,
+    0,
+  ]
+
+abRepeatedBin : Array Int
+abRepeatedBin = arrayFromList
+  [
+    97,
+    98,
+    97,
+    98,
+    97,
+    98,
+    97,
+    98,
+    97,
+    98,
+    97,
+    98,
+    97,
+    98,
+    97,
+    98,
+    97,
+    98,
+    97,
+    98,
+    97,
+    98,
+    97,
+    98,
+    97,
+    98,
+    97,
+    98,
+    97,
+    98,
+    97,
+    98,
+    97,
+    98,
+    97,
+    98,
+    97,
+    98,
+    97,
+    98,
+    97,
+    98,
+    97,
+    98,
+    97,
+    98,
+    97,
+    98,
+    97,
+    98,
+    97,
+    98,
+    97,
+    98,
+    97,
+    98,
+    97,
+    98,
+    97,
+    98,
+    97,
+    98,
+    97,
+    98,
+    97,
+    98,
+    97,
+    98,
+    97,
+    98,
+    97,
+    98,
+    97,
+    98,
+  ]
+
+test "gunzipMember: fixed-Huffman with distance=2 back-references round-trips" = expectEqual (Ok abRepeatedBin) (gunzipMember abRepeatedGz)
 
 -- `head -c 200 /dev/urandom > rand.bin && gzip -1 -n -c rand.bin` — genuinely
 -- incompressible input, so gzip falls back to a STORED block (there is no
