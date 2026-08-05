@@ -534,7 +534,17 @@ jobs:
             # the 22nd is plain `oracle.sh`. '*_oracle' silently left it out — and the coverage
             # gate caught that immediately, on its first run after being widened. Which is the
             # whole argument for the widened gate in one line.
-            pattern: "'sqlite/test/*oracle'"
+            #
+            # gzip/test/*oracle joins this shard for the same two reasons: it is the
+            # same KIND of gate (a project oracle that drives ./medaka directly and
+            # reads no test/bin oracle), and this shard has the most room. Derived
+            # from merge_group run 30971754103 rather than assumed — types 472s,
+            # engines 465s, backend 395s, tools 357s, frontend 352s, eval 313s,
+            # sqlite 246s. Re-derive before moving anything; these numbers rot:
+            #   gh run view <id> --json jobs --jq '.jobs[]|select(.name|startswith("gates"))
+            #     |"\(((.completedAt|fromdate)-(.startedAt|fromdate)))s \(.name)"'
+            # It needs `gzip`, which ships on ubuntu-latest (unlike sqlite3, installed below).
+            pattern: "'sqlite/test/*oracle' 'gzip/test/*oracle'"
           - name: frontend
             # 'native_fixtures/run' (T8): 11 native-only regression assertions (parse-error
             # location + foreign-syntax hints + one eval dispatch check). A real gate that
