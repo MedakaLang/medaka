@@ -33,6 +33,31 @@ convenience: the program brings TWO different `MkT`s into scope and names one. N
 the drain moves it from "exit 0, order-dependent winner" to "exit 1 in every
 ordering" — loud, not quieter.
 
+⚠️ BUT "TWO DIFFERENT `MkT`s" IS THIS CASE, NOT THE WHOLE OF THE NEW REJECTION, AND A
+READER MUST NOT GENERALISE FROM IT. The set the record head now consults
+(`ctorAmbiguousSet`) counts PROVENANCES — distinct directly-imported modules — not
+declarations. So ONE declaration reached by TWO import paths counts as two, and a
+record head naming it is now rejected where it was accepted before:
+
+    import pa_def.{Box, MkBox}      -- pa_re is `export import pa_def.{MkBox}`
+    import pa_re.{MkBox}
+    ... MkBox { bx = 3 } ...        -> Ambiguous constructor: 'MkBox' is brought into
+                                       scope by both `pa_def` and `pa_re`, exit 1
+                                       (baseline accepted this and printed `3`)
+
+There is no silent wrongness in that shape to have been fixed — both paths name the
+same declaration — so it is a genuine new rejection of a valid program. It is graded
+S3 and deliberately NOT special-cased here, because the trigger is PRE-EXISTING and
+deliberately ONE RULE across the value / type / interface / ctor namespaces: the
+POSITIONAL spelling of that same program is rejected identically on the baseline
+binary, and resolve's own note says a change to that rule must change all four
+namespaces at once. This fix only stopped two occurrence POSITIONS from skipping the
+rule; it did not touch the rule. Found in adversarial review of PR #1352, recorded
+here so the next reader does not mistake it for a defect introduced by the drain.
+
+(The diagnostic's fix advice — "drop the other's `(..)`" — is inapplicable to that
+shape, since neither import uses `(..)`. Pre-existing message defect, ws:diagnostics.)
+
 THIS CASE IS NOW THE REGRESSION GUARD, unledgered so the gate demands invariance.
 Current behaviour, every ordering:
     check=1;codes=R-AMBIGUOUS-CTOR;schemes=;run=1:;build=1/-:

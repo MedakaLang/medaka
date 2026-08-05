@@ -1,5 +1,5 @@
 # META
-source_lines=22627
+source_lines=22651
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted typecheck stage — port of lib/typecheck.ml's HM core.  SLICE 1:
@@ -12777,9 +12777,25 @@ ctorCandScheme (_, _, s) = s
 
 -- Does THIS module declare a constructor spelled [n]?  Monomorphic and short-circuiting
 -- on purpose (`compiler/AGENTS.md`); runs only for a COLLIDED name.
+--
+-- 🚨 THE `DAttrib` ARM RECURSES INTO ITSELF (`declaresCtorNamed [d] n`), it does NOT
+-- unwrap one layer with `declCtorNamed n d`.  `DAttrib` CAN wrap another `DAttrib`
+-- (`parseAttrib` calls `parseDecl` recursively — `frontend/parser.mdk`'s own comment
+-- names the case), and `declCtorNamed`'s `_ => False` arm swallows a nested one
+-- silently.  Both siblings on this path already recurse (`insertCtorIdents`,
+-- `anyUsePathBindsCtor`); this one did not, and the divergence was caught in review
+-- rather than by any gate.
+--
+-- ⚠️ IT IS LATENT TODAY, WHICH IS WHY IT IS WRITTEN DOWN INSTEAD OF SHRUGGED OFF: an
+-- attribute on a `data` declaration currently destroys that declaration's constructors
+-- (a separate, pre-existing S1), so no doubly-attributed data decl reaches here with
+-- constructors to find.  When THAT is fixed this goes live, and its failure mode is
+-- precisely the counterfactual `ctor_scope_ident_local_ctor_bystander/bystand.mdk`
+-- measures: the own-declaration rung fails to decline, the single import witness wins,
+-- and the module's own constructor is clobbered by an imported same-named one.
 declaresCtorNamed : List Decl -> String -> Bool
 declaresCtorNamed [] _ = False
-declaresCtorNamed ((DAttrib _ d)::rest) n = declCtorNamed n d
+declaresCtorNamed ((DAttrib _ d)::rest) n = declaresCtorNamed [d] n
   || declaresCtorNamed rest n
 declaresCtorNamed (d::rest) n = declCtorNamed n d || declaresCtorNamed rest n
 
@@ -12836,10 +12852,18 @@ anyMemberBindsCtor n owner (m::rest) = memberBindsCtorName n owner m
   || anyMemberBindsCtor n owner rest
 
 -- The two spellings that bind a constructor: naming it, or naming its type with `(..)`.
--- The member's ORIGIN spelling is what is compared (`useMemberOrigin`'s field), because
--- the candidate table is keyed by the constructor's DECLARED name; an aliased member
--- (`{C as D}`) therefore does not witness, which matches the fact that no ctor is ever
--- registered under an alias.
+-- The member's ORIGIN spelling is what is compared — `UseMember`'s first field, the name
+-- in the EXPORTING module (`useMemberOrigin`) — because the candidate table is keyed by
+-- the constructor's DECLARED name and no constructor is ever registered under an alias.
+--
+-- ⚠️ AN EARLIER VERSION OF THIS COMMENT DREW THE OPPOSITE CONSEQUENCE FROM THE SAME
+-- (correct) premise, claiming that an aliased member `{C as D}` "therefore does not
+-- witness".  It is the origin that is compared, so such a member WOULD witness.  The
+-- point is moot either way — `import m.{C as D}` is REJECTED upstream ("is a type or
+-- constructor and cannot be aliased"), so no aliased constructor member reaches here —
+-- but a wrong consequence beside a right premise is exactly the sentence a later reader
+-- builds on, so it is corrected rather than deleted.  The `UseAlias` claim on
+-- `usePathBindsCtor` above is a different statement and is accurate.
 memberBindsCtorName : String -> String -> UseMember -> Bool
 memberBindsCtorName n owner (UseMember mn ctors _ _) = mn == n
   || ctors && mn == owner
@@ -25208,7 +25232,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "ctorCandScheme" ((PTuple PWild PWild (PVar "s"))) (EVar "s"))
 (DTypeSig false "declaresCtorNamed" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "declaresCtorNamed" ((PList) PWild) (EVar "False"))
-(DFunDef false "declaresCtorNamed" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest")) (PVar "n")) (EBinOp "||" (EApp (EApp (EVar "declCtorNamed") (EVar "n")) (EVar "d")) (EApp (EApp (EVar "declaresCtorNamed") (EVar "rest")) (EVar "n"))))
+(DFunDef false "declaresCtorNamed" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest")) (PVar "n")) (EBinOp "||" (EApp (EApp (EVar "declaresCtorNamed") (EListLit (EVar "d"))) (EVar "n")) (EApp (EApp (EVar "declaresCtorNamed") (EVar "rest")) (EVar "n"))))
 (DFunDef false "declaresCtorNamed" ((PCons (PVar "d") (PVar "rest")) (PVar "n")) (EBinOp "||" (EApp (EApp (EVar "declCtorNamed") (EVar "n")) (EVar "d")) (EApp (EApp (EVar "declaresCtorNamed") (EVar "rest")) (EVar "n"))))
 (DTypeSig false "ctorCandImported" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyFun (TyTuple (TyCon "Ident") (TyCon "String") (TyCon "Scheme")) (TyCon "Bool")))))
 (DFunDef false "ctorCandImported" ((PVar "prog") (PVar "n") (PTuple (PVar "ident") (PVar "owner") PWild)) (EApp (EApp (EApp (EApp (EVar "anyUsePathBindsCtor") (EVar "prog")) (EVar "n")) (EVar "owner")) (EVar "ident")))
@@ -29653,7 +29677,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "ctorCandScheme" ((PTuple PWild PWild (PVar "s"))) (EVar "s"))
 (DTypeSig false "declaresCtorNamed" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "declaresCtorNamed" ((PList) PWild) (EVar "False"))
-(DFunDef false "declaresCtorNamed" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest")) (PVar "n")) (EBinOp "||" (EApp (EApp (EVar "declCtorNamed") (EVar "n")) (EVar "d")) (EApp (EApp (EVar "declaresCtorNamed") (EVar "rest")) (EVar "n"))))
+(DFunDef false "declaresCtorNamed" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest")) (PVar "n")) (EBinOp "||" (EApp (EApp (EVar "declaresCtorNamed") (EListLit (EVar "d"))) (EVar "n")) (EApp (EApp (EVar "declaresCtorNamed") (EVar "rest")) (EVar "n"))))
 (DFunDef false "declaresCtorNamed" ((PCons (PVar "d") (PVar "rest")) (PVar "n")) (EBinOp "||" (EApp (EApp (EVar "declCtorNamed") (EVar "n")) (EVar "d")) (EApp (EApp (EVar "declaresCtorNamed") (EVar "rest")) (EVar "n"))))
 (DTypeSig false "ctorCandImported" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyFun (TyTuple (TyCon "Ident") (TyCon "String") (TyCon "Scheme")) (TyCon "Bool")))))
 (DFunDef false "ctorCandImported" ((PVar "prog") (PVar "n") (PTuple (PVar "ident") (PVar "owner") PWild)) (EApp (EApp (EApp (EApp (EVar "anyUsePathBindsCtor") (EVar "prog")) (EVar "n")) (EVar "owner")) (EVar "ident")))
