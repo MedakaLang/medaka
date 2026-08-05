@@ -1,0 +1,14 @@
+-- #1302: `mth Blob` unambiguously means `IB.mth` -- `mspriv`'s same-named method
+-- belongs to a PRIVATE interface and is not exported.  `impl IB Blob` exists.
+-- Correct verdict: ACCEPT, print 6 (mth Blob = 5, helper 5 = 6).
+-- Observed: rejected with `No impl of MSIP for Blob` -- naming an interface that
+-- is private to another module, is not in scope here, and cannot be written.
+import ifb.{IB, mth}
+import mspriv.*
+
+public export data Blob = Blob
+
+export impl IB Blob where
+  mth b = 5
+
+main = println (helper (mth Blob))

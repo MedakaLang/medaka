@@ -1,0 +1,14 @@
+-- #1302 CONTROL: identical to main.mdk except the import of `mspriv` is SELECTIVE
+-- rather than a wildcard.  That is the single variable: `usePathBindsName` answers
+-- True for every name only under `UseWild`, so the private interface stops being a
+-- witness.  Must print 6 at exit 0.  If this breaks, wildcard imports or private
+-- interfaces broke -- not #1302.
+import ifb.{IB, mth}
+import mspriv.{helper}
+
+public export data Blob = Blob
+
+export impl IB Blob where
+  mth b = 5
+
+main = println (helper (mth Blob))

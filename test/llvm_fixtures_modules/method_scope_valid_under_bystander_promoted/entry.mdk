@@ -1,0 +1,40 @@
+-- #1111 A-2.5b — THE PROMOTION-BEARING CELL.  Its only difference from the sibling
+-- `method_scope_valid_under_bystander` is the UNSIGNATURED CONSTRAINED FUNCTION
+-- `twice`, and that one line is what routes `elaborateModules` down its SECOND
+-- sweep.  Without a fixture on that path this whole class is invisible to every
+-- gate, which is exactly how F1 shipped green on 11/11 required checks.
+--
+-- WHY `twice` CHANGES THE PATH.  With no direct promotion anywhere,
+-- `promotionHarvestRef` is empty and #194's single bare sweep IS the final answer.
+-- An unsignatured constrained binding is directly promoted, so the harvest is
+-- non-empty, `elaborateModules` DISCARDS the bare sweep and re-runs — and the arm
+-- it re-runs through opens with a second `resetCrossModuleState ()`.  Every one of
+-- this unit's other five fixtures is promotion-free and takes the fast path, so all
+-- five were green while `run` and `build` were broken.
+--
+-- EXPECTED VALUE DERIVED BY HAND: `msmth` reaches this module only through `msmid`,
+-- which re-exports `msifb`'s, so both the direct occurrence and the one inside
+-- `twice` mean `MSIB.msmth`; this module implements exactly that interface.
+-- `twice Blob` is `"B" ++ "B"` = `BB`.
+--
+-- 🚨 COUNTERFACTUAL, MEASURED on the pre-F1-fix tip of this same branch (the commit
+-- where `graphMethodExportsRef` was still a `CrossRun` field): `medaka check` exits
+-- 0 and reports `"diagnostics":[]` for every file, while `medaka run` and `medaka
+-- build` BOTH exit 1 with *"type error in entry.mdk. Run 'medaka check' for
+-- details."* — the surface the error names reports nothing.  At `$BASE` the two
+-- surfaces AGREE (both reject, with an actionable message), so the pre-fix tip was
+-- strictly worse than the code it was fixing.  With the ref moved to `DriverState`
+-- this returns `BB` at exit 0 on eval, native and wasm alike.
+import msmid.{MSIB, msmth}
+import msifa.{MSIA}
+
+data Blob = Blob
+
+impl MSIB Blob where
+  msmth _ = "B"
+
+-- NO SIGNATURE, and constrained: this is the whole point of the fixture.
+twice x = msmth x ++ msmth x
+
+main : <IO> Unit
+main = putStrLn (twice Blob)
