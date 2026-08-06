@@ -1,0 +1,3 @@
+import lib.r.{f}
+
+main = println (f 1)
