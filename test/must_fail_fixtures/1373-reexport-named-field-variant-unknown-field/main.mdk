@@ -1,0 +1,4 @@
+import bre.{RA, Dup, unRA}
+
+main : <IO> Unit
+main = println (unRA (Dup { dx = 7 }))

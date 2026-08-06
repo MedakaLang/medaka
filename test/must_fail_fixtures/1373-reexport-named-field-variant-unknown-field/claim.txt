@@ -1,0 +1,59 @@
+issue: 1373
+what: a named-field VARIANT (`data RA = | Dup { dx : Int } | ACount Int`,
+what: declared in `bmod.mdk`) reached through a single `export import`
+what: re-export hop (`bre.mdk` re-exports `bmod.{RA, Dup, ACount, unRA}`;
+what: `main.mdk` imports `bre.{RA, Dup, unRA}`) cannot be built in RECORD
+what: form: `unRA (Dup { dx = 7 })` is rejected with `Unknown field: dx` --
+what: naming a field that IS declared, on a program with no collision
+what: anywhere in the graph (one `RA`, one `Dup`, one `dx`). This is NOT an
+what: identity/keying shape (contrast #1319/#1283, which are about which of
+what: TWO same-named declarations a module means) -- it is a re-export
+what: propagation defect: the `RecordInfo` reached through `bre` is a
+what: zero-field row, not `bmod`'s.
+what: hand-derived correct answer: `7`. `main` brings exactly one `Dup`
+what: into scope, `bmod`'s, whose `dx` is an `Int` -- there is no second
+what: `RA`, no second `Dup`, nothing to disambiguate.
+cmd: check-json main.mdk
+exit: 1
+diag-code: R-UNKNOWN-FIELD 3:22-3:36
+control: check-json control.mdk
+why-fixture: `check-json` grades the full diagnostic; `diag-code` (not
+why-fixture: `diag:`) is pinned because the underlying defect is the WRONG
+why-fixture: record row being reached, not this specific wording -- code +
+why-fixture: range is the stable, narrower assertion per this suite's own
+why-fixture: default guidance. Note the code is `R-UNKNOWN-FIELD`, NOT
+why-fixture: `T-UNKNOWN-FIELD` as the issue's own "suggested pin" section
+why-fixture: guessed -- measured directly rather than trusted.
+why-control: control.mdk is byte-identical to main.mdk except it imports
+why-control: `bmod.{RA, Dup, unRA}` DIRECTLY -- the declaring module named,
+why-control: no `export import` hop. Measured first-hand: `check --json`
+why-control: exits 0 with no diagnostics, and `medaka run control.mdk`
+why-control: prints `7`, exit 0 -- the hand-derived correct answer. That
+why-control: isolates the defect to the re-export hop specifically, not to
+why-control: named-field variants, record construction, or `bmod` in
+why-control: general.
+why-note: per the issue, three more facts are measured (not re-verified
+why-note: here, recorded for context): (1) the SAME re-export of a
+why-note: non-variant record type is fine, so this is specific to a
+why-note: named-field variant, not re-exports generally; (2) the
+why-note: constructor's positional form (`Dup 7`, through the SAME
+why-note: `bre` re-export) TYPECHECKS clean (`main : Unit`, exit 0) -- so
+why-note: `Dup` itself has a scheme, and only the record row behind it is
+why-note: wrong; (3) `import bre.{RA(..), unRA}` separately loses `public`
+why-note: visibility entirely, rejected as if `RA` were exported
+why-note: abstractly, despite `bmod` declaring it `public export`.
+why-note2: I additionally measured the POSITIONAL form end-to-end myself
+why-note2: (not pinned here -- one fixture per issue, and the coordinator's
+why-note2: brief for this row was the RECORD-form repro above): through
+why-note2: the SAME `bre` re-export, `unRA (Dup 7)` also `check`s clean
+why-note2: (`main : Unit`, exit 0) but `medaka run` PANICS: `runtime error
+why-note2: [E-PANIC]: no matching impl for dispatch`, exit 1. This settles
+why-note2: a disagreement recorded on the issue (one reviewer reported this
+why-note2: exact shape; the implementing agent could not reproduce it on
+why-note2: #1373's own files) -- it reproduces on this binary. Recorded as
+why-note2: a comment on the issue rather than pinned separately.
+why-note3: fix shape: whatever makes the `export import` re-export path
+why-note3: carry the FULL `RecordInfo` (not a zero-field stand-in) makes
+why-note3: `medaka run main.mdk` print `7` at exit 0, matching the control
+why-note3: -- flipping this row's exit from 1 to 0 and draining it. Close
+why-note3: #1373 and delete this fixture when that happens.
