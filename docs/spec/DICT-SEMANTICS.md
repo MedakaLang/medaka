@@ -1933,14 +1933,17 @@ module-qualified identity.
   claim to instances — not a rule about how a predicate over names is scoped. The
   coherence argument above does not transfer, either: two modules resolving the same
   *name* differently is **scoping**, not incoherence, and C4 says nothing about it.
-  ⚠️ The concrete instance this ambiguity produced:
-  `SHADOW-SEMANTICS.md` **S1** decides whether a bare name is a *shadow* by
-  intersecting two **name** sets, and its operands are scoped to what the
-  occurrence's module can **name** (that document's §1.0 and its S1-SCOPE ruling),
-  **while S2's impl universe stays graph-global under this clause**. Narrowing a
-  name set does not narrow `IE`. Anyone implementing I5 must keep the two apart;
-  anyone implementing S1 must not cite I5 as licence to make its operands
-  graph-global.
+  ⚠️ **The concrete instance this ambiguity produced, now ruled
+  (2026-08-06):** `SHADOW-SEMANTICS.md` **S1** decides whether a bare name is a
+  *shadow* by intersecting two **name** sets, and its operands are scoped — the
+  interface operand to what the occurrence's module can **name**, the standalone
+  operand to what is defined in or imported into it (that document's §1.0 and its
+  **S1-SCOPE** note) — **while S2's impl universe stays graph-global under this
+  clause**. Narrowing a name set does not narrow `IE`, and the two are compatible
+  rather than in tension. Ruling:
+  [#1375](https://github.com/MedakaLang/medaka/issues/1375). Anyone implementing
+  I5 must keep the two apart; anyone implementing S1 must not cite I5 as licence
+  to make its operands graph-global.
 
 - **I6 — Heads that no declaration produced, and the empty origin.** I4 assigns an
   identity `(originModule, name)` to every *declaration*. Three heads this
