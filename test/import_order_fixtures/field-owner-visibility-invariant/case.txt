@@ -1,0 +1,22 @@
+entry: main.mdk
+what: a field-owner set narrowed by import VISIBILITY stays order-invariant
+
+`afmod` declares `ARec = { fld : Int, extraA : Int }`; `zfmod` declares an unrelated
+`ZRec = { fld : String, extraZ : Int }`; `bridge` does a plain `import zfmod.{zff}` and
+re-exports nothing. `main` therefore has NO import path to `ZRec` and cannot spell it —
+yet before #1319 unit 2 the graph-global field→owners multimap let `ZRec` vote, and the
+undetermined receiver in `getf r = r.fld` was rejected as ambiguous.
+
+⚠️ SAID PLAINLY BECAUSE IT IS THE HONEST STATUS OF THIS ROW: this case was ALREADY
+order-invariant on the pre-change binary — it was rejected identically in both clause
+orders (measured by hand at `main` @ 1443870c). So it is NOT one of the rows that proves
+this gate can go red; what it pins is that the FIX did not introduce an order dependence.
+That is a real hazard for this change specifically: the narrowing decides on the set of
+owners visible from THIS module's `DUse` decls, and a rule that consulted them in clause
+order — or that stopped at the first witness in a way the clause order could reach —
+would make the outcome depend on which import came first. `record-reexport-identity-
+invariant/` in this same corpus is the row that WAS divergent and is the one to look at
+for "can this gate fail".
+
+Hand-derived correct answer, independent of any engine: `mkA.fld` is `3` and `bf 0` is
+`0`, so `3`.

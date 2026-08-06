@@ -1,0 +1,5 @@
+-- Declares the field name `shared`.  `entry`'s chain CAN name this record.
+public export data FA = { shared : Int, onlyA : Int }
+
+export mkFA : FA
+mkFA = FA { shared = 3, onlyA = 1 }

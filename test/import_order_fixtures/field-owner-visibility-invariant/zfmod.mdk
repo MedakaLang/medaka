@@ -1,0 +1,6 @@
+-- Declares the SAME field name as afmod, at an unrelated record.  Nothing in this
+-- graph has an import path to `ZRec` — `bridge` imports only `zff`.
+public export data ZRec = { fld : String, extraZ : Int }
+
+export zff : Int -> Int
+zff x = x

@@ -1,0 +1,7 @@
+-- Declares the SAME field name at an unrelated record and an unrelated field type.
+-- Nothing in this graph has an import path to `FB` — only `fbid` is ever imported,
+-- through `fbridge`.
+public export data FB = { shared : String, onlyB : Int }
+
+export fbid : Int -> Int
+fbid x = x

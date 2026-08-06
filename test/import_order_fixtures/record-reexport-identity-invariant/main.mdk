@@ -1,0 +1,9 @@
+-- #1283 Repro A, the RECORD spelling of the re-export miss.  Two import clauses.
+import remod.{Cfg, mkA}
+import zrmod.{zrf}
+
+get : Cfg -> Int
+get c = c.fld
+
+main : <IO> Unit
+main = println (get mkA + zrf 0)

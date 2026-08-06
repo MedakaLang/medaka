@@ -1,0 +1,11 @@
+-- THE DRAIN CELL.  `getf`'s receiver type is undetermined, so the field is resolved
+-- by the field→owners multimap — which before this unit held BOTH `FA` and `FB` and
+-- rejected this module with `Ambiguous field access: '.fld' is declared by …`,
+-- naming a record it has no way to reference.
+import fowa.{FA, mkFA}
+import fbridge.{bf}
+
+getf r = r.shared
+
+export rf : Int
+rf = getf mkFA + bf 0

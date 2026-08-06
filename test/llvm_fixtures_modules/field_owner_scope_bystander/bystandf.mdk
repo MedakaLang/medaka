@@ -1,0 +1,18 @@
+-- THE UNRELATED MODULE.  Its assertion (`bysf : Int`) is about a field name — `mine`
+-- — that no other record in this graph declares, so the narrowing has nothing to say
+-- about it.  It nonetheless sits INSIDE the live machinery: it imports `fowa`, whose
+-- `shared` IS the collided name, so `universeFieldCollidedRef` is non-empty in this
+-- module's arm and `overrideScopedFieldOwners` really runs here.
+--
+-- What it discriminates: a narrowing that wrote under the wrong key, or that iterated
+-- the collided list off by one, would rewrite `mine`'s owner list and turn `r.mine`
+-- into `Unknown field` / `Ambiguous field access`.  A cell asserting only about
+-- `shared` could not see that — it would be an assertion about the feature.
+import fowa.{FA, mkFA}
+
+public export data URec = { mine : Int, alsoMine : Int }
+
+getMine r = r.mine
+
+export bysf : Int
+bysf = getMine (URec { mine = 4, alsoMine = 9 }) + mkFA.onlyA

@@ -1,3 +1,4 @@
+-- The DECLARING module.  `entry` never names it.
 public export data Cfg = { fld : Int }
 
 export mkA : Cfg

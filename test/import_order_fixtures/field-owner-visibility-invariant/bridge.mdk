@@ -1,0 +1,4 @@
+import zfmod.{zff}
+
+export bf : Int -> Int
+bf x = zff x

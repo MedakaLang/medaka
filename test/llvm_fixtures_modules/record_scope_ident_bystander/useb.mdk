@@ -1,0 +1,5 @@
+-- Means rcollb's `Dup`, named BY NAME in the same clause as its type.
+import rcollb.{RB, Dup, unRB}
+
+export rb : String
+rb = unRB (Dup { dx = "b" })

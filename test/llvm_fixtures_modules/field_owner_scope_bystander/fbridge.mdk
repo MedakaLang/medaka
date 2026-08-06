@@ -1,0 +1,7 @@
+-- The module that drags `fowb` into the graph WITHOUT re-exporting anything from it.
+-- It is what makes `FB` a member of the graph-global field→owners multimap while
+-- being unreachable, by name, from anywhere downstream.
+import fowb.{fbid}
+
+export bf : Int -> Int
+bf x = fbid x

@@ -1,0 +1,32 @@
+-- #1111 A-2.12 (#1319 unit 2) — THE "FEATURE PRESENT, UNRELATED CODE STILL
+-- BEHAVES" CELL for the RECORD tables, which is the fixture shape `AGENTS.md`
+-- requires of any change that adds a PROGRAM-GLOBAL TABLE.  Unit 2 adds three:
+-- `universeRecordIdentsRef`, `universeRecordCollidedRef` and
+-- `universeFieldCollidedRef`.  A fixture that exercises the feature proves nothing
+-- about that hazard — "your feature works perfectly and something unrelated breaks"
+-- is the failure it produces — so the assertion here is about a module that takes no
+-- part in the collision.
+--
+-- The graph: `rcolla` and `rcollb` each declare a NAMED-FIELD variant spelled `Dup`,
+-- at different types and with different field types, with NO import relationship
+-- between them.  `usea` means rcolla's (reached only through `RA(..)`, which never
+-- spells `Dup`), `useb` means rcollb's (named by name), and `bystand` means its OWN
+-- — while importing rcolla's constructors with `(..)` and using one of them, so its
+-- answer is not green by construction.  See `bystand.mdk` for exactly which rung of
+-- the scope ladder it discriminates.
+--
+-- Expected output, derived BY HAND before any capture and independently of any
+-- engine:
+--   ra  = unRA (Dup { dx = 7 })                      = 7
+--   rb  = unRB (Dup { dx = "b" })                    = "b"
+--   bys = unPlain (Dup { px = 5 }) + unRA (ACount 2) = 5 + (2 * 10) = 25
+-- so `7`, `b`, `25`.
+import usea.{ra}
+import useb.{rb}
+import bystand.{bys}
+
+main : <IO> Unit
+main =
+  let _ = putStrLn (intToString ra)
+  let _ = putStrLn rb
+  putStrLn (intToString bys)

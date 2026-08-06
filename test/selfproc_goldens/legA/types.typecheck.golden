@@ -7,6 +7,7 @@ addCtor : TcEnv -> String -> Scheme -> TcEnv
 addCtorIdentCand : TcEnv -> String -> TyConOrigin -> String -> (Map String (List (Ident, String, Scheme)), List String) -> (Map String (List (Ident, String, Scheme)), List String)
 addFieldOwners : String -> List String -> Map String (List String) -> Map String (List String)
 addMethodIdentCand : String -> Ident -> (String, List String, Ty, List (String, List Kind)) -> (Map String (List (Ident, (String, List String, Ty, List (String, List Kind)))), List String) -> (Map String (List (Ident, (String, List String, Ty, List (String, List Kind)))), List String)
+addRecordIdentCand : String -> TyConOrigin -> String -> (Map String (List (Ident, String, RecordInfo)), List String) -> (Map String (List (Ident, String, RecordInfo)), List String)
 addVariants : TcEnv -> List (String, Mono) -> List (String, Ref Effvar) -> List Int -> List Int -> Mono -> List Variant -> TcEnv
 aliasArityMsg : String -> Int -> Int -> String
 aliasConstraintEntries : List Decl -> List ((String, String), List a) -> List (String, List a)
@@ -53,6 +54,8 @@ anyKRow : List Kind -> Bool
 anyListM : (a -> Bool) -> List a -> Bool
 anyMember : List String -> List String -> Bool
 anyMemberBindsCtor : String -> String -> List UseMember -> Bool
+anyOwnerDiffers : String -> List String -> Bool
+anyRecordCandVisible : List Decl -> String -> List (Ident, String, RecordInfo) -> Bool
 anyRootMatch : Int -> List (Mono, Loc) -> Bool
 anyRowSlotArg : List (String, Ref Effvar) -> List (String, Mono) -> List Ty -> Bool
 anySlotIsRow : Int -> List (List Ty, List String) -> Bool
@@ -66,8 +69,10 @@ appendDataUniverse : List Decl -> Unit
 appendOp : Mono -> Mono -> Mono
 appendUniverseAccums : List Decl -> Unit
 applyCtorScopeOverrides : List Decl -> TcEnv -> TcEnv
+applyFieldOwnerScopeOverrides : List Decl -> Unit
 applyMethodScopeOverrides : List Decl -> Map String (String, List String, Ty, List (String, List Kind)) -> Map String (String, List String, Ty, List (String, List Kind))
 applyParams : Mono -> List Mono -> Mono
+applyRecordScopeOverrides : List Decl -> Unit
 argAtomsUncoveredMsg : String -> String -> String -> List Atom -> String
 argDispatchIndices : List Decl -> List (String, Int)
 argDispatchOf : String -> Option Int
@@ -448,6 +453,7 @@ dropCtorIdentCand : Ident -> List (Ident, String, Scheme) -> List (Ident, String
 dropFirst : Int -> List a -> List a
 dropMethodIdentCand : Ident -> List (Ident, (String, List String, Ty, List (String, List Kind))) -> List (Ident, (String, List String, Ty, List (String, List Kind)))
 dropPairs : Int -> List (String, Int) -> List (String, Int)
+dropRecordIdentCand : Ident -> List (Ident, String, RecordInfo) -> List (Ident, String, RecordInfo)
 dropSchemesNamed : Map String Unit -> List (String, Scheme) -> List (String, Scheme)
 dropShadowedCore : List String -> List Decl -> List Decl
 dropVecObls : Int -> List (String, List Int) -> List (String, List Int)
@@ -622,6 +628,9 @@ groupClausesGo : List (String, (List Pat, Expr)) -> Map String (List (List Pat, 
 groupNames : List (String, (List Pat, Expr)) -> Map String Unit -> List String
 groupRefs : List (List Pat, Expr) -> List String
 groupSchemesOf : TcEnv -> List LetBind -> List (String, Scheme)
+growFieldCollided : List Decl -> List String -> List String
+growFieldCollidedNames : List Field -> List String -> List String
+growFieldCollidedVariants : List Variant -> List String -> List String
 growImplUniverse : List (String, List Ty, List Require) -> ImplUniverse -> ImplUniverse
 guardDictSites : Guard -> List (Ref (List Route))
 guardEVars : Guard -> List String
@@ -653,6 +662,7 @@ headTyconTy : Ty -> Option HeadKey
 headlessBucketKey : RegKey
 holeFillParam : String -> List (String, Expr) -> Option Expr -> Param
 idConflictHelp : (String, TyConOrigin, TyConOrigin) -> String
+identIsPrelude : Ident -> Bool
 idsForIfaceSlots : List String -> List Int
 idsForIfaceSlotsGo : Int -> List String -> List Int
 ifaceAtMonoId : Int -> List Mono -> List String -> Option String
@@ -728,6 +738,7 @@ importedBindings : UsePath -> Option (List (String, String))
 importedCtorEntry : List Decl -> String -> List (Ident, String, Scheme) -> Option Scheme
 importedCtorTypeDecls : List Decl -> List Decl -> List Decl
 importedMethodEntry : List Decl -> String -> List (Ident, (String, List String, Ty, List (String, List Kind))) -> Option (String, List String, Ty, List (String, List Kind))
+importedRecordEntry : List Decl -> String -> List (Ident, String, RecordInfo) -> Option RecordInfo
 importedSchemeOblEntries : List Decl -> List ((String, String), List (String, List Int)) -> List (String, List (String, List Int))
 importerShadowDomain : String -> Option Mono
 importerShadowOnEmitPath : String -> Ref Route -> Bool
@@ -842,6 +853,8 @@ insertIfaceParamKinds : TyConOrigin -> String -> Int -> String -> List Kind -> U
 insertIfaceRequired : List Decl -> Registry (List String) -> Registry (List String)
 insertMethodIdents : List Decl -> (Map String (List (Ident, (String, List String, Ty, List (String, List Kind)))), List String) -> (Map String (List (Ident, (String, List String, Ty, List (String, List Kind)))), List String)
 insertMethodIfaceParams : List Decl -> (Map String (String, List String, Ty, List (String, List Kind)), Map String Unit) -> (Map String (String, List String, Ty, List (String, List Kind)), Map String Unit)
+insertRecordIdents : List Decl -> (Map String (List (Ident, String, RecordInfo)), List String) -> (Map String (List (Ident, String, RecordInfo)), List String)
+insertRecordVariantIdents : String -> TyConOrigin -> List Variant -> (Map String (List (Ident, String, RecordInfo)), List String) -> (Map String (List (Ident, String, RecordInfo)), List String)
 insertUnivImpl : ImplUniverse -> (String, List Ty, List Require) -> ImplUniverse
 insertVariantIdents : TcEnv -> String -> TyConOrigin -> List Variant -> (Map String (List (Ident, String, Scheme)), List String) -> (Map String (List (Ident, String, Scheme)), List String)
 instantiate : Scheme -> Mono
@@ -1013,6 +1026,7 @@ monoUnboundVarLevels : Mono -> List (Int, Int)
 monosTvarIds : List Int -> List Mono -> List Int
 nameOf : Ref (List (Int, String)) -> Ref Int -> Int -> String
 namesToSet : List String -> Map String Unit -> Map String Unit
+narrowFieldOwners : List Decl -> String -> List String -> Unit
 negateOp : Mono -> Mono
 newEffvarId : Unit -> Int
 newTyvarId : Unit -> Int
@@ -1065,8 +1079,11 @@ overlayNote : String -> String -> String -> TyConOrigin -> Decl -> (Option Decl,
 overlayScan : String -> String -> Bool -> (Option Decl, Option Decl, Option Decl) -> List Decl -> (Option Decl, Option Decl, Option Decl)
 overlayScanOne : String -> String -> (Option Decl, Option Decl, Option Decl) -> Decl -> (Option Decl, Option Decl, Option Decl)
 overrideScopedCtors : List Decl -> Map String (List (Ident, String, Scheme)) -> List String -> TcEnv -> TcEnv
+overrideScopedFieldOwners : List Decl -> List String -> Unit
 overrideScopedMethods : List Decl -> Map String (List (Ident, (String, List String, Ty, List (String, List Kind)))) -> List String -> Map String (String, List String, Ty, List (String, List Kind)) -> Map String (String, List String, Ty, List (String, List Kind))
+overrideScopedRecords : List Decl -> Map String (List (Ident, String, RecordInfo)) -> List String -> Unit
 ownMethodIdent : List Decl -> String -> Option Ident
+ownersCollide : List String -> Bool
 pairIface : String -> Int -> List (String, Int)
 pairRecordByName : String -> Option (String, RecordInfo)
 pairsOfVecObls : List (String, List Int) -> List (String, Int)
@@ -1179,12 +1196,16 @@ recordArgStamp : String -> Ref Route -> Ref (List Route) -> Int -> Mono -> Unit
 recordArithSite : String -> Ref Route -> Mono -> Unit
 recordBinopSite : String -> Ref Route -> Mono -> Unit
 recordCallObligations : List String -> List Mono -> Unit
+recordCandImported : List Decl -> String -> (Ident, String, RecordInfo) -> Bool
+recordCandInfo : (Ident, String, RecordInfo) -> RecordInfo
 recordDoMonadError : Loc -> Unit
 recordFieldMap : RecordInfo -> Map String Mono
 recordFieldNames : RecordInfo -> List String
 recordIfaceObligation : String -> Mono -> Unit
 recordImplObligation : String -> Mono -> Mono
 recordImporterShadowDicts : TcEnv -> String -> List (Ref Route) -> Mono -> Unit
+recordKeyImportVisible : List Decl -> String -> Bool
+recordKeyVisible : List Decl -> String -> Bool
 recordLocalBind : String -> Mono -> Unit
 recordMethodDicts : String -> Ref (List Route) -> List (Int, Mono) -> Unit
 recordMethodLevelObls : List String -> Ty -> Mono -> Unit
@@ -1352,6 +1373,7 @@ scopeShadowsForGroup : List String -> Unit
 scopeShadowsUser : Unit -> Unit
 scopedCtorEntry : List Decl -> String -> List (Ident, String, Scheme) -> Option Scheme
 scopedMethodEntry : List Decl -> String -> List (Ident, (String, List String, Ty, List (String, List Kind))) -> Option (String, List String, Ty, List (String, List Kind))
+scopedRecordEntry : List Decl -> String -> List (Ident, String, RecordInfo) -> Option RecordInfo
 seedAbstractRecordTypes : List Decl -> List (String, List Decl) -> Unit
 seedAlphaLets : TcEnv -> String -> Expr -> TcEnv
 seedAndCheckSplit : List Decl -> List Decl -> List Decl -> List (String, Scheme)
