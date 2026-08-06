@@ -897,6 +897,27 @@ gen_consfam() {
 # module COUNT (and thus the file count and the gate's wall time) small while the
 # quadratic still dominates by N=100. "Constant decls per module, scale the module
 # count" — issue #153's fix shape.
+#
+# 🚨 EVERY MODULE ALSO DECLARES A RECORD, AND EVERY MODULE'S RECORD DECLARES THE SAME
+# FIELD NAME (`rfld`).  Added by #1111 A-2.12 (#1319 unit 2) after adversarial review
+# established that this generator — the ONLY multi-module one — emitted nullary
+# `data T0_j = T0_j` and therefore **declared no record and no field at all**.  Every
+# code path keyed on `recordByNameRef` / `fieldOwnersRef` short-circuited on an empty
+# list, so a per-module walk over the field→owners multimap measured **5.6x net
+# allocation at 240 modules (r3 = 6.47 against a hard 3.0)** and this gate reported
+# `r2 = 2.06 ok`.  The quadratic was not missed by a bad threshold; it was invisible
+# by construction.
+#
+# The two properties are deliberate and a future edit must keep both:
+#   * a SHARED FIELD NAME across modules, so `fieldOwnersRef["rfld"]` grows to N
+#     owners — that multimap is what any scoping of the field namespace has to walk;
+#   * SHORT-FORM records with UNIQUE names (`R<i>`), which keeps the fixture
+#     0-diagnostic.  N named-field variants sharing a field name would NOT be: a
+#     concrete receiver whose head tycon is not a registry key falls to
+#     `resolveFieldAmbiguous`, which picks `headL owners` — right for exactly one of
+#     the N and a `Type mismatch` for the rest.  (That gap is real and unfixed; it is
+#     pinned behaviourally by `test/llvm_fixtures_modules/field_owner_no_narrowing/`,
+#     not here, because this generator must stay 0-diagnostic — see the trap above.)
 gen_modules() {
   n=$1; dir=$2; k=$3
   rm -rf "$dir"; mkdir -p "$dir"
@@ -906,6 +927,7 @@ gen_modules() {
       printf 'public export data T0_%s = T0_%s\nexport impl Widget T0_%s where\n  wval _ = %s\n' "$j" "$j" "$j" "$j"
       j=$((j+1))
     done
+    printf 'public export data R0 = { rfld : Int, rx : Int }\nexport mkr0 : R0\nmkr0 = R0 { rfld = 0, rx = 0 }\nexport rv0 : Int\nrv0 = mkr0.rfld\n'
     printf 'export use0 : Int\nuse0 = '
     j=0; while [ "$j" -lt "$k" ]; do [ "$j" -gt 0 ] && printf ' + '; printf 'wval T0_%s' "$j"; j=$((j+1)); done
     printf '\n'
@@ -920,6 +942,8 @@ gen_modules() {
           "$i" "$j" "$i" "$j" "$i" "$j" "$j"
         j=$((j+1))
       done
+      printf 'public export data R%s = { rfld : Int, rx : Int }\nexport mkr%s : R%s\nmkr%s = R%s { rfld = %s, rx = 0 }\nexport rv%s : Int\nrv%s = mkr%s.rfld\n' \
+        "$i" "$i" "$i" "$i" "$i" "$i" "$i" "$i" "$i"
       printf 'export use%s : Int\nuse%s = ' "$i" "$i"
       j=0; while [ "$j" -lt "$k" ]; do [ "$j" -gt 0 ] && printf ' + '; printf 'wval T%s_%s' "$i" "$j"; j=$((j+1)); done
       printf '\n'

@@ -1,0 +1,31 @@
+-- #1111 A-2.12 (#1319 unit 2) — THE GUARD AGAINST NARROWING `fieldOwnersRef` BY IMPORT
+-- SPELLING.  It pins the property, not the implementation, so it outlives this unit.
+--
+-- `universeFieldOwners` is unscoped (a record with no import path here still votes in the
+-- ambiguity test) and #1070's fourth row is OPEN.  A first cut of unit 2 narrowed the
+-- owner set with the same constructor-witness predicates the record half uses, and
+-- adversarial review measured an accept->reject regression on exactly this program.  This
+-- cell is that program, so the next attempt cannot land the same mistake silently.
+--
+-- WHY IT DISCRIMINATES, stated so a future reader does not weaken it by accident:
+--   * `mkA`'s type is CONCRETE (`RA`), so this is `resolveFieldRecord`'s branch (c), the
+--     SECOND consumer of `fieldOwnersRef` — not the undetermined-receiver ambiguity arm
+--     that #1070's own repro exercises.  A guard written only against that arm misses this.
+--   * the key is `Dup` and the type is `RA`, so `lookupRecordByName "RA"` MISSES and the
+--     owners fallback is actually reached.  Rewrite `amod` as a short-form record and this
+--     cell silently stops testing anything.
+--   * `import amod.{RA, mkA}` has NO `(..)` and no constructor member, so NO constructor
+--     is witnessed for the owner key `Dup`.  Importing only `{mkA}` — a value — is equally
+--     legitimate and equally witnesses nothing.  That is the measurement that rules out
+--     any constructor-spelling predicate here: the question this fallback asks is "could
+--     this module be HOLDING a value of that record", which is a reachability question.
+--
+-- Expected output, derived BY HAND before any capture and independently of any engine:
+--   mkA.dx = 7, mkW.dx = 1, so `8`.
+-- Measured on the pre-change binary: `8`, exit 0.  On the first cut of unit 2:
+-- `Type mismatch: RA vs Wrec`, exit 1.
+import amod.{RA, mkA}
+import wmod.{Wrec, mkW}
+
+main : <IO> Unit
+main = putStrLn (intToString (mkA.dx + mkW.dx))

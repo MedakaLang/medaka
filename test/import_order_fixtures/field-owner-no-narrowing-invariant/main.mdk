@@ -1,0 +1,5 @@
+import amod.{RA, mkA}
+import wmod.{Wrec, mkW}
+
+main : <IO> Unit
+main = println (mkA.dx + mkW.dx)

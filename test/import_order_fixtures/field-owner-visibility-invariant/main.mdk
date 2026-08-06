@@ -1,9 +1,0 @@
--- The #1070 fourth-row shape: `.fld`'s owner set was graph-global, so `ZRec` — which
--- this file has no import path to and cannot spell — voted in the ambiguity test.
-import afmod.{ARec, mkA}
-import bridge.{bf}
-
-getf r = r.fld
-
-main : <IO> Unit
-main = println (getf mkA + bf 0)

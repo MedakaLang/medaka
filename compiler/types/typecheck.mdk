@@ -18,12 +18,6 @@ import frontend.ast.{
   Ns(..),
   Ident(..),
   mkIdent,
-  -- #1111 A-2.12 (#1319 unit 2): the ONLY eliminator for an `IdentOrigin` (its
-  -- constructors are module-private).  Read at exactly one site here —
-  -- `identIsPrelude`, which asks "is this declaration always in scope?" and so
-  -- cannot go through `usePathWitnessesCtor`, whose whole job is to require an
-  -- import clause.
-  identOriginFold,
   -- #1111 Stage A-2 unit A-2.10: the ONE type-head comparison every "same
   -- type?" test below is written against.  Its doc-comment derives why an
   -- absent origin makes no claim here while `ifaceIdMatches`/`tabKeyEq` refuse
@@ -2089,10 +2083,19 @@ public export data RecordInfo =
   | RecordInfo (List Int) Mono (List (String, Mono)) (OrdMap Mono)
 
 -- Keyed indices — so the hot per-field-access read paths never walk a linear registry
--- (issue #149).  #415 item 3: the lockstep is structural, not an obligation.
--- `registerRecordInfoKeyed` is the SOLE registration writer of both; they are cleared
--- together by resetState; and the cross-module universe copy goes through the single
--- loadDataUniverse/storeDataUniverse inverse pair.
+-- (issue #149).  #415 item 3: `registerRecordInfoKeyed` is the sole REGISTRATION writer of
+-- both; they are cleared together by resetState; and the cross-module universe copy goes
+-- through the single loadDataUniverse/storeDataUniverse inverse pair.
+--
+-- 🚨 THE LOCKSTEP WAS "STRUCTURAL, NOT AN OBLIGATION" UNTIL #1111 A-2.12 (#1319 unit 2),
+-- AND IT IS NOW AN OBLIGATION.  `applyRecordScopeOverrides` re-points `recordByNameRef`
+-- for a collided key and does NOT touch `fieldOwnersRef`, so the two are no longer written
+-- only in pairs and nothing enforces that they agree.  Correct today — re-pointing key `K`
+-- cannot change which KEYS own a field name — but if two same-named records have DISJOINT
+-- field sets, `fieldOwnersRef` can name `K` as the owner of a field the newly-selected `K`
+-- does not declare.  Probed and byte-identical to the pre-change binary (see that
+-- function's own note), so: an obligation with no observed consequence, not an invariant.
+-- Anything added here must state which of the two it writes and why the other is safe.
 --   recordByNameRef : registry KEY → RecordInfo.  omInsert is last-write-wins and
 --     the register site inserts in registration order, so it reproduces the old
 --     prepend-list first-match (latest-registered wins) for lookupRecordByName.
@@ -3152,7 +3155,6 @@ data CrossRun = CrossRun {
     universeRecordIdentsRef : Ref (OrdMap (List (Ident, String, RecordInfo))),  -- #1111 A-2.12 (#1319 unit 2): the identity-keyed COMPANION of the line above — see insertRecordIdents
     universeRecordCollidedRef : Ref (List String),  -- #1111 A-2.12: the registry KEYS the line above holds ≥2 distinct identities for (normally EMPTY)
     universeFieldOwners : Ref (OrdMap (List String)),
-    universeFieldCollidedRef : Ref (List String),  -- #1111 A-2.12: the FIELD names the line above holds ≥2 distinct owner keys for (normally EMPTY) — see growFieldCollided
     universeDataParamKinds : Ref (List (TabKey, List Kind)),  -- #1111 A-2.3: identity-keyed (TabKey), not bare name — see tyTabKey
     universeIfaceParamKinds : Ref (List (RegKey, List Kind)),  -- #822 iface half of the kind universe; #1111 A-2.4: identity×slot-keyed (RegKey), not "<iface>@<slot>" — see ifaceSlotKey
     universeAliasTable : Ref (List (TabKey, (List String, Ty))),  -- #1111 A-2.3: identity-keyed (TabKey), not bare name — see tyTabKey
@@ -3224,7 +3226,6 @@ freshCrossRun env = CrossRun {
   universeRecordIdentsRef = Ref omEmpty,
   universeRecordCollidedRef = Ref [],
   universeFieldOwners = Ref omEmpty,
-  universeFieldCollidedRef = Ref [],
   universeDataParamKinds = Ref [],
   universeIfaceParamKinds = Ref [],
   universeAliasTable = Ref [],
@@ -13042,20 +13043,46 @@ exportsCtorIdentFor n ident ((cn, _, ci)::rest)
 -- that is exactly why #1283 **Repro A** (the RECORD spelling of the re-export miss) stayed
 -- open when Repro B drained.
 --
--- Two DIFFERENT defects live here and they need two different answers.  Stating that
--- plainly matters, because one mechanism looks like it should cover both and does not:
+-- Two DIFFERENT defects live in these two tables, and **only the first is addressed here.**
 --
 --   * `recordByNameRef` is BARE-KEYED and LAST-WRITE-WINS, exactly like `universeDataEnv`'s
 --     ctor map.  Two modules each declaring `Cfg` leave ONE entry and load order picks it.
---     Answer: the A-2.5 / unit-1 shape, verbatim — an identity-keyed COMPANION plus a
---     per-module SCOPE DECISION for the collided keys only.
+--     Answer, and what this unit implements: the A-2.5 / unit-1 shape, verbatim — an
+--     identity-keyed COMPANION plus a per-module SCOPE DECISION for the collided keys only.
 --   * `fieldOwnersRef` is a multimap and ACCUMULATES.  Its key (the field name) is already
---     right; what is wrong is that its VALUE — the candidate owner set — is graph-global
---     rather than visibility-scoped, so a record the module has no import path to still
---     votes in the ambiguity test.  **A last-write-wins overlay structurally cannot fix
---     this** (an imported record's owner is added BESIDE the unimported one, never over
---     it), which is why A-2.6's drain never reached it and why it needs its own answer:
---     narrow the candidate SET to the owners this module can actually see.
+--     right; what is wrong is that its VALUE — the candidate owner set — is graph-global,
+--     so a record the module has no import path to still votes in the ambiguity test
+--     (#1070's fourth row).  **NOT FIXED HERE, and the reason is a measurement, not a
+--     preference.**
+--
+-- 🚨 WHY THE FIELD HALF IS NOT DONE WITH THIS MACHINERY.  A first cut of this unit did
+-- narrow the owner set using the SAME witness predicates the record half uses.  Adversarial
+-- review reproduced three defects in it, all confirmed against cold-built binaries:
+--
+--   1. **It is the WRONG QUESTION.**  `fieldOwnersRef` has two consumers, and the second —
+--      `resolveFieldRecord`'s concrete-receiver fallback, reached by every `data T = | C
+--      { … }` whose key `C` is not the type `T` — needs "could this module be HOLDING a
+--      value of that record", not "is that record's CONSTRUCTOR in scope".  Those come
+--      apart on ordinary code: `import amod.{RA, mkA}` (no `(..)`) witnesses no
+--      constructor, yet `mkA.dx` is legitimate.  Measured: `8` at exit 0 before, `Type
+--      mismatch: RA vs Wrec` at exit 1 after — an accept→reject regression on two
+--      libraries that merely share a field name.  Importing only the VALUE (`{mkA}`) is
+--      enough to reach it, so no constructor-spelling test can be the predicate.
+--   2. **The collided-FIELD list is not rare.**  Two records anywhere in the graph sharing
+--      `name`/`id`/`size` put a name on it, so the per-module walk is paid by real
+--      programs: interleaved A/B, deterministic net allocation, N modules x 4 records —
+--      60: 161→187 MB, 120: 261→399 MB, 240: **463→2583 MB (5.6x)**, r3 = 6.47 against a
+--      hard 3.0.  A `List` used as a set, i.e. this tree's signature defect.
+--   3. **It was non-monotonic and did not drain the common case anyway.**  The collided
+--      list is grown in `appendDataUniverse`, the LAST thing in a module's arm, so a
+--      module's own declarations are never in the list its own arm reads: local `MRec{fld}`
+--      plus ONE unrelated collider stayed rejected, while adding a SECOND unrelated
+--      collider made the same program compile.
+--
+-- The predicate the field half actually needs is a REACHABILITY question — is a value of
+-- this record type obtainable here, through any imported binding's type — which is a
+-- different analysis from anything this unit builds.  Rather than widen into it, the row
+-- stays open on #1070 / #1319 with those three findings recorded on it.
 --
 -- ⚠️ MIRROR DISCIPLINE, and it is now a THREE-way mirror (method / ctor / record) until
 -- #1288 lands.  The witness half is deliberately NOT re-implemented here: `declaresCtorNamed`
@@ -13071,6 +13098,24 @@ exportsCtorIdentFor n ident ((cn, _, ci)::rest)
 --
 -- ⚠️ SCAFFOLDING WITH A NAMED DELETER, same as unit 1: this is a further implementation of
 -- a fact `resolve.mdk` derives.  #1288 owns the consolidation.
+--
+-- ── THE NO-CARRIER RULING, RE-TESTED FOR THIS NAMESPACE RATHER THAN INHERITED ──
+-- #1319's adjudication adopted "no AST occurrence carrier" but flagged the negative as
+-- non-exhaustive and required the implementing PR to RE-TEST it.  Unit 1 discharged that
+-- for constructor occurrences with a driver-level argument (`desugar : List Decl -> List
+-- Decl` is applied per module, so no desugar pass is ever handed two modules).  That
+-- argument covers record occurrences too — but it is an argument, so the two real
+-- body-copy paths were re-run for RECORD occurrences specifically, first-hand:
+--   * interface-default specialization: `ifc` declares `data Box = { bv : Int }` and an
+--     interface whose default body is `boxOf (Box { bv = 1 })`; `user` declares its OWN
+--     `Box` at `{ bv : String }`, writes a body-less `impl`, and uses its own.  Result
+--     `ifc-1|mine`, exit 0 — the copied body keeps the interface module's `Box`.
+--   * another module's impl body: `impmod`'s `impl` body builds `impmod`'s `Box`; the
+--     importer declares its own at an unrelated field type.  Result `imp-5|mine`, exit 0.
+-- Neither occurrence is re-resolved in the importer's record scope, so a DECL-level scope
+-- decision is the right instrument and no node carrier is needed.  As with unit 1 this is
+-- falsifiable by a future change: a driver that hands `desugar` a concatenation of modules
+-- would reopen it.
 
 -- Grow the identity-keyed companion by THIS module's PUBLIC record declarations.
 --
@@ -13125,70 +13170,48 @@ dropRecordIdentCand ident ((c@(i, _, _))::rest)
   | i == ident = dropRecordIdentCand ident rest
   | otherwise = c :: dropRecordIdentCand ident rest
 
--- Grow the collided-FIELD list by THIS module's public record fields.  A field name is
--- collided once ≥2 DISTINCT registry keys own it — `addFieldOwners` prepends and can hold
--- a duplicate key after a re-registration, so DISTINCTNESS is what is tested, by
--- `ownersCollide` below (and not by `fieldOwnerNames`, for the allocation reason stated
--- there).
+-- ── THIS module's scoped view of `recordByNameRef` ─────────────────────────
+-- Runs at the `dataEnv` binding, immediately after `registerAllData … prog0` has written
+-- the floor (universe < import overlay < prog0) into the per-run ref, and iterates the
+-- collided-KEY list — a program in which no two modules declare the same record /
+-- named-field-variant name pays one `[]` match per module and mutates nothing.
 --
--- Runs over this module's own fields only, so the whole run costs O(total declared fields)
--- and never O(modules × fields).
-growFieldCollided : List Decl -> List String -> List String
-growFieldCollided [] acc = acc
-growFieldCollided ((DAttrib _ d)::rest) acc =
-  growFieldCollided rest (growFieldCollided [d] acc)
-growFieldCollided ((DData { dataCtors, ... })::rest) acc =
-  growFieldCollided rest (growFieldCollidedVariants dataCtors acc)
-growFieldCollided (_::rest) acc = growFieldCollided rest acc
-
-growFieldCollidedVariants : List Variant -> List String -> List String
-growFieldCollidedVariants [] acc = acc
-growFieldCollidedVariants ((Variant _ (ConNamed fields _))::rest) acc =
-  growFieldCollidedVariants rest (growFieldCollidedNames fields acc)
-growFieldCollidedVariants (_::rest) acc = growFieldCollidedVariants rest acc
-
--- Walks `List Field` directly rather than `map <name-of> fields`: the projection would
--- allocate a fresh `List String` per declaration for a walk that reads each name once.
-growFieldCollidedNames : List Field -> List String -> List String
-growFieldCollidedNames [] acc = acc
-growFieldCollidedNames ((Field fn _)::rest) acc
-  | contains fn acc = growFieldCollidedNames rest acc
-  | ownersCollide (fromOption [] (omLookup fn perRun.value.fieldOwnersRef.value)) = growFieldCollidedNames rest (fn::acc)
-  | otherwise = growFieldCollidedNames rest acc
-
--- "≥2 DISTINCT owner keys", tested WITHOUT canonicalizing.  Deliberately not
--- `listLen (fieldOwnerNames fn) >= 2`: this runs once per declared field of every
--- module, and `fieldOwnerNames`' `sortUniqS` would ALLOCATE a fresh list per call on a
--- population that is a singleton in almost every program (`compiler/AGENTS.md`'s named
--- exception — the cost of a scan is not the comparisons, it is what the projection
--- allocates).  Monomorphic and short-circuiting for the same reason.
---
--- "Some element differs from the head" IS "≥2 distinct": if every element equals the
--- head there is one distinct key, and if any differs there are at least two.
-ownersCollide : List String -> Bool
-ownersCollide [] = False
-ownersCollide (k::rest) = anyOwnerDiffers k rest
-
-anyOwnerDiffers : String -> List String -> Bool
-anyOwnerDiffers _ [] = False
-anyOwnerDiffers k (x::rest) = x != k || anyOwnerDiffers k rest
-
--- ── THIS module's scoped view of the two record tables ─────────────────────
--- Both overlays run at the `dataEnv` binding, immediately after `registerAllData … prog0`
--- has written the floor (universe < import overlay < prog0) into the per-run refs, and
--- both iterate a NORMALLY EMPTY collided list — a program with no record-key collision and
--- no multiply-owned field name pays two `[]` matches per module and mutates nothing.
+-- ⚠️ "NORMALLY EMPTY" IS A CLAIM ABOUT RECORD KEYS, NOT ABOUT FIELD NAMES, and the
+-- distinction is load-bearing rather than pedantic.  An earlier cut of this unit built the
+-- same machinery for `fieldOwnersRef` keyed on collided FIELD names; adversarial review
+-- measured that list to be routinely non-empty (any two records anywhere in the graph
+-- sharing `name`/`id`/`size` put a name on it), which turned the per-module walk into
+-- 5.6x net allocation at 240 modules.  A collided record KEY means two modules declare a
+-- record spelled the same, which is the collision this unit exists for and is genuinely
+-- rare — but it is an empirical claim, so the perf gate now carries a generator shape that
+-- declares records (`gen_records`), because its previous multi-module generator declared
+-- none and could not see this code path at all.
 --
 -- ⚠️ OVERLAY, never a rebuild: anything a module's scope does not decide keeps the floor's
 -- answer, which is today's behaviour.
 --
 -- 🚨 THE SCOPED VIEW MUST NOT REACH THE UNIVERSE, and it does not — but only because of
--- where `appendDataUniverse` reloads.  Both overlays mutate the PER-RUN refs, and
+-- where `appendDataUniverse` reloads.  The overlay mutates the PER-RUN ref, and
 -- `appendDataUniverse` (the end of this module's arm) opens with `loadDataUniverse ()`,
--- which overwrites both refs from the cross-run universe BEFORE this module's public decls
+-- which overwrites that ref from the cross-run universe BEFORE this module's public decls
 -- are registered into it.  So one module's scope decision is invisible to the next.
 -- Moving the reload, or growing the universe from the per-run refs as they stand at the
 -- end of the arm, would make module A's import scope decide module B's records.
+--
+-- 🚨 THIS BREAKS THE `#415` LOCKSTEP AND THE OBLIGATION IS NOW REAL.  The note at
+-- `registerRecordInfoKeyed` calls that function *"the SOLE registration writer of both"*
+-- `recordByNameRef` and `fieldOwnersRef`, and calls their lockstep *"structural, not an
+-- obligation"*.  That is no longer true: this overlay writes `recordByNameRef` ALONE.
+-- Nothing enforces the pairing any more, so a future edit here has to think about the
+-- other table.  What is at stake, stated as a measurement rather than a worry: re-pointing
+-- key `K` at a different declaration does not change WHICH keys own a field name (the key
+-- is the same string), but it does change which FIELDS `K` declares — so if two same-named
+-- records have DISJOINT field sets, `fieldOwnersRef` can still name `K` as the owner of a
+-- field the newly-selected `K` does not have.  Probed directly (`Cfg { alpha }` in one
+-- module, `Cfg { beta }` in another, both loaded, the overlay flipping the winner): the
+-- output is `Field 'beta' does not belong to record 'Cfg'`, BYTE-IDENTICAL to the
+-- pre-change binary, and the correct-direction answer.  So it is an obligation with no
+-- observed consequence today — not a known-good invariant.
 applyRecordScopeOverrides : List Decl -> Unit
 applyRecordScopeOverrides prog =
   overrideScopedRecords
@@ -13229,68 +13252,6 @@ recordCandInfo (_, _, ri) = ri
 recordCandImported : List Decl -> String -> (Ident, String, RecordInfo) -> Bool
 recordCandImported prog n (ident, owner, _) =
   anyUsePathBindsCtor prog n owner ident
-
--- Narrow each collided FIELD name's owner set to the owners THIS module can see.
---
--- 🚨 IT ONLY EVER TURNS AN AMBIGUITY INTO A DECISION.  The narrowing fires only when the
--- floor holds ≥2 owners AND exactly one of them is visible here; 0 visible owners (which
--- is what the emit path's mangled keys produce, and what an unstamped declaration
--- produces) DECLINES to the floor rather than guessing.  So no site that resolves a field
--- today can be made to resolve it to a DIFFERENT record by this pass.
---
--- And it cannot make a defect quieter: if the receiver's real type is the owner this
--- module cannot see, the surviving owner's result type still fails to unify with it, so
--- the outcome is a loud `Type mismatch` rather than a silent wrong field type.
-applyFieldOwnerScopeOverrides : List Decl -> Unit
-applyFieldOwnerScopeOverrides prog =
-  overrideScopedFieldOwners prog crossRun.value.universeFieldCollidedRef.value
-
-overrideScopedFieldOwners : List Decl -> List String -> Unit
-overrideScopedFieldOwners _ [] = ()
-overrideScopedFieldOwners prog (fn::rest) =
-  let owners = fieldOwnerNames fn
-  let _ = if listLen owners >= 2 then narrowFieldOwners prog fn owners else ()
-  overrideScopedFieldOwners prog rest
-
-narrowFieldOwners : List Decl -> String -> List String -> Unit
-narrowFieldOwners prog fn owners = match filterList (k => recordKeyVisible prog k) owners
-  [only] => setRef perRun.value.fieldOwnersRef (omInsert fn [only] perRun.value.fieldOwnersRef.value)
-  _ => ()
-
--- Can THIS module name the record registered under key [key]?
---
--- ⚠️ ABSENCE IS "YES", DELIBERATELY.  A key with no companion row is one no identity could
--- be minted for — a flat/unstamped declaration, or the emit path's mangled keys — and the
--- honest answer there is "this pass does not know", which must keep the floor.  Answering
--- "no" would let an unstamped population be filtered out silently, i.e. the opposite of
--- the honest-absence rule the rest of this arc is written to.
-recordKeyVisible : List Decl -> String -> Bool
-recordKeyVisible prog key = declaresCtorNamed prog key
-  || recordKeyImportVisible prog key
-
-recordKeyImportVisible : List Decl -> String -> Bool
-recordKeyImportVisible prog key = match omLookup key crossRun.value.universeRecordIdentsRef.value
-  None => True
-  Some cs => anyRecordCandVisible prog key cs
-
-anyRecordCandVisible : List Decl -> String -> List (Ident, String, RecordInfo) -> Bool
-anyRecordCandVisible _ _ [] = False
-anyRecordCandVisible prog key ((ident, owner, _)::rest) = identIsPrelude ident
-  || anyUsePathBindsCtor prog key owner ident
-  || anyRecordCandVisible prog key rest
-
--- The prelude is in scope in every module without an import clause, so a `core`-declared
--- (or builtin) record is visible everywhere and `usePathWitnessesCtor` — which requires an
--- import clause and explicitly skips `dep == "core"` — can never witness one.  This rung
--- is what stops the narrowing from filtering the prelude out of an owner set.
---
--- ⚠️ IT IS UNEXERCISED TODAY AND IS WRITTEN ANYWAY: `stdlib/core.mdk` declares no record
--- and no named-field variant (derived, not assumed — `grep -n 'data .* = {' stdlib/core.mdk`
--- is empty), so no prelude key can be an owner right now.  The day one is added, the
--- alternative is a silent false narrowing, which is the shape this whole arc keeps paying
--- for.
-identIsPrelude : Ident -> Bool
-identIsPrelude (Ident _ o _) = identOriginFold True (== "core") o
 
 missingImplMethodMsg : String -> List Ty -> String -> String
 missingImplMethodMsg iface tys method = "'impl \{iface} \{joinWith " " (map ppTyAtom tys)}' is missing method '\{method}'. Every interface method without a default body must be implemented — define '\{method}' in the impl (or check for a typo in a method name)"
@@ -16389,7 +16350,6 @@ checkBodyImpl seed mode prog0 =
                    (importedCtorTypeDecls prog0 crossRun.value.universeDataDecls.value)
       let env0 = registerAllData base prog0
       let _ = applyRecordScopeOverrides prog0
-      let _ = applyFieldOwnerScopeOverrides prog0
       applyCtorScopeOverrides prog0 env0
   -- #784: reject under-determined return-only effect vars on interface methods.
   -- MUST run AFTER `dataEnv` above populated `dataParamKindsRef` — the kind-aware
@@ -21047,7 +21007,6 @@ appendDataUniverse prog0 =
   let recAcc = insertRecordIdents pubDecls (crossRun.value.universeRecordIdentsRef.value, crossRun.value.universeRecordCollidedRef.value)
   let _ = setRef crossRun.value.universeRecordIdentsRef (fst recAcc)
   let _ = setRef crossRun.value.universeRecordCollidedRef (snd recAcc)
-  let _ = setRef crossRun.value.universeFieldCollidedRef (growFieldCollided pubDecls crossRun.value.universeFieldCollidedRef.value)
   -- #674: keep the DECLS too (universeDataEnv is a bare-name ctor env — last-write-wins,
   -- LOSSY across a duplicate ctor name — so it cannot recover a SPECIFIC module's ctor
   -- for the import-scoped overlay).  checkBodyImpl re-registers the ctors of the types

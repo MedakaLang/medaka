@@ -1,4 +1,0 @@
-public export data ARec = { fld : Int, extraA : Int }
-
-export mkA : ARec
-mkA = ARec { fld = 3, extraA = 1 }

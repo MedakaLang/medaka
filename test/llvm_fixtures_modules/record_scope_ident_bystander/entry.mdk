@@ -1,11 +1,16 @@
 -- #1111 A-2.12 (#1319 unit 2) — THE "FEATURE PRESENT, UNRELATED CODE STILL
--- BEHAVES" CELL for the RECORD tables, which is the fixture shape `AGENTS.md`
--- requires of any change that adds a PROGRAM-GLOBAL TABLE.  Unit 2 adds three:
--- `universeRecordIdentsRef`, `universeRecordCollidedRef` and
--- `universeFieldCollidedRef`.  A fixture that exercises the feature proves nothing
--- about that hazard — "your feature works perfectly and something unrelated breaks"
--- is the failure it produces — so the assertion here is about a module that takes no
--- part in the collision.
+-- BEHAVES" CELL for `recordByNameRef`, which is the fixture shape `AGENTS.md`
+-- requires of any change that adds a PROGRAM-GLOBAL TABLE.  Unit 2 adds two:
+-- `universeRecordIdentsRef` and `universeRecordCollidedRef`.  A fixture that
+-- exercises the feature proves nothing about that hazard — "your feature works
+-- perfectly and something unrelated breaks" is the failure it produces — so the
+-- assertion here is about a module that takes no part in the collision.
+--
+-- ⚠️ THIS CELL IS NOT THE WHOLE GUARD.  It is built out of NAMED-FIELD VARIANTS
+-- reached through the record-HEAD path, so it never touches the field→owners
+-- fallback.  A first cut of this unit broke that fallback and every cell here
+-- stayed green.  `field_owner_no_narrowing/` is the sibling that covers it; do not
+-- treat either as covering the other.
 --
 -- The graph: `rcolla` and `rcollb` each declare a NAMED-FIELD variant spelled `Dup`,
 -- at different types and with different field types, with NO import relationship

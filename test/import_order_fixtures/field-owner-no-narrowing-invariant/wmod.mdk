@@ -1,0 +1,7 @@
+-- The SECOND owner of the field name `dx`, at an unrelated record with an unrelated other
+-- field.  Two libraries sharing a field name is the entire setup — no collision of any
+-- type name, constructor name or registry key is involved.
+public export data Wrec = { dx : Int, wextra : Int }
+
+export mkW : Wrec
+mkW = Wrec { dx = 1, wextra = 2 }
