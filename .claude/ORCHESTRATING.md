@@ -1621,3 +1621,73 @@ green — and a byte-corruption helper was appending 16 literal characters, so i
 for the wrong reason. Neither is visible in a green run or in a careful read. When a change
 adds a *table* or a *byte-level helper*, perturb one cell and confirm something notices;
 budget it as a review step, not an optional extra.
+
+## #1319 unit 2, 2026-08-06/07 — SPLIT the adversarial review into two lenses; they catch disjoint sets
+
+Three rounds on one PR (`typecheck.mdk`, +313 lines), run **during a GitHub Actions outage**, so
+CI was not even a floor. The author reported ~50 local gates green, `selfcompile_emit` 40/40
+byte-identical, `engines` 562 fixtures 0 regressions. It would have merged on a green rollup.
+
+**Two reviewers, two briefs, and they found disjoint defect sets — neither found the other's:**
+
+| lens | brief | what it found |
+|---|---|---|
+| **correctness** | attack the code: precedence ladder, key scoping, over-widening, perf, driver lockstep | a **confirmed accept→reject S1** on ordinary code (two libraries sharing a field name), and a **super-quadratic** (r3 = 6.47 vs a hard 3.0) |
+| **claims** | attack the PROSE: PR body, commit message, code comments, fixture headers, ratchet reason strings | a **false guarantee shipped in three durable places** incl. a ratchet reason string, and a "derived, not assumed" claim whose grep **structurally could not match** the declaration it was asked about |
+
+A single general reviewer spends its budget on the diff and skims the narrative. **Brief the
+second one that the narrative IS the diff.** This arc's standing finding — *nine reviews, nine
+findings, almost all in prose* — is the reason, and it kept holding.
+
+**Both lenses must build a BASELINE binary from the merge-base.** Every before/after number in a
+PR body is a claim. The correctness reviewer's S1 was found by re-deriving the author's own
+before-column and getting a different answer.
+
+### The counterfactual is the review step people skip, and it inverted twice
+
+*"I added a generator so the gate can see this defect"* is not a gate until someone runs it
+**against a bug-present binary**. Measured here: the first generator read **`ok`** (r2 = 2.38) on
+the very defect it was added for — the ALLOC arm, which the file's own header calls the primary
+deterministic verdict; it reddened only via TIME, by 3.6 %, on the signal this repo distrusts.
+The fix was in the generator's own text (it already used a K-multiplier for the interface half
+and explained why). After strengthening: ALLOC r2 = **5.41**, decisively red.
+
+**Same for any "this fixture guards X" claim** — stub the thing back in and confirm red. A
+fixture that passes with the feature disabled is testing nothing, and this tree keeps producing
+them (the retired #66 row was a *permanently*-unfailable pin that no fix could ever have flipped).
+
+### 🚨 A fix for "your enumeration is incomplete" can be to DELETE the enumeration
+
+Round 1 flagged the PR's severity-direction section as under-enumerating. **Round 2 dropped the
+section entirely** — and *neither* reviewer caught it, because both were hunting a **wrong** claim,
+not an **absent** one. It surfaced only in the author's own round-3 report.
+
+**Add "what did the last round REMOVE?" to a delta-review brief.** A diff of the prose, not just
+of the code.
+
+### Hedges die in the handoff — twice, the second time inside the fix for it
+
+An agent's report to you labels its claims (*"inferred, not instrumented"*); **the PR ships them
+flat**. I then restated the agent's labels to a reviewer as a property of the PR — the third time
+in this arc that the claim reaching past its evidence was an *orchestrator brief*. Corrected the
+author, and round 2 announced the fix as landed **inside the section named for that split** while
+the diff touched the function **zero** times.
+
+**Verify the artifact, never the report** — `git diff <prev> <new> -- <file> | grep -c <symbol>`
+costs one command. The instinct to report upward and consider it delivered survives an explicit
+correction, so check rather than re-ask. See `feedback_epistemic_labels_die_in_the_handoff`.
+
+### Two adjudications worth reusing
+
+- **"A variant still reproduces" is NOT grounds to keep a pin.** The test is whether the
+  *variant's control* still discriminates the filed defect. Here the value-only spelling failed
+  **with no re-exporter at all**, so it was a different defect (filed separately, pinned) rather
+  than evidence the original was undrained. Treating them as one would have made the eventual
+  drain name the wrong issue — which the one-fixture-per-issue rule exists to prevent.
+- **Prefer REMOVING a half to repairing it out of scope.** Three of four blockers lived in one
+  call chain whose correct predicate turned out to be a *different analysis* (type reachability,
+  not constructor spelling). The author removed that half and stated plainly, in a box rather than
+  a footnote, which tracker row is therefore **not** drained. A narrower PR with an honest gap
+  beats a wider one with a quiet regression — but only if the gap is recorded at equal strength in
+  every durable place (ratchet row, source comment, commit message, PR body). Grep for the stale
+  footnote; that is the failure mode of an honest headline.
