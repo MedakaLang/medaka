@@ -860,7 +860,14 @@ gen_consfam() {
   } >> "$f"
 }
 
-# gen_modules — the ONLY multi-module generator (issue #153). Writes N separate
+# gen_modules — the only multi-module generator that declares any DATA TYPE (issue #153).
+# ⚠️ IT IS NOT THE ONLY MULTI-MODULE GENERATOR, and this line said so until #1319 unit 2.
+# There are three — derive them, do not trust a count:
+#     grep -n '^gen_[a-z_]*() {' test/diff_compiler_perf_scaling.sh
+# `gen_starimports` and `gen_reexports` are equally multi-module and declare VALUES only, so
+# record/field coverage exists in exactly ONE of the three multi-module shapes. The wrong
+# version of this sentence is the one a future agent uses to answer "is multi-module
+# covered?", check one generator, and stop. Writes N separate
 # .mdk files into DIR, chained by import (m0 <- m1 <- ... <- m{N-1} <- entry), each
 # module defining K data types + K impls of a shared interface `Widget`,
 # re-exporting `Widget(..)` and its method `wval` down the chain, and EXERCISING
@@ -898,26 +905,76 @@ gen_consfam() {
 # quadratic still dominates by N=100. "Constant decls per module, scale the module
 # count" — issue #153's fix shape.
 #
-# 🚨 EVERY MODULE ALSO DECLARES A RECORD, AND EVERY MODULE'S RECORD DECLARES THE SAME
-# FIELD NAME (`rfld`).  Added by #1111 A-2.12 (#1319 unit 2) after adversarial review
-# established that this generator — the ONLY multi-module one — emitted nullary
-# `data T0_j = T0_j` and therefore **declared no record and no field at all**.  Every
-# code path keyed on `recordByNameRef` / `fieldOwnersRef` short-circuited on an empty
-# list, so a per-module walk over the field→owners multimap measured **5.6x net
-# allocation at 240 modules (r3 = 6.47 against a hard 3.0)** and this gate reported
-# `r2 = 2.06 ok`.  The quadratic was not missed by a bad threshold; it was invisible
-# by construction.
+# 🚨 EVERY MODULE ALSO DECLARES `MOD_R` RECORDS OVER `MOD_F` SHARED FIELD NAMES.  Added
+# by #1111 A-2.12 (#1319 unit 2) after adversarial review established that NO multi-module
+# generator in this file declared a single record or field: this one emitted nullary
+# `data T0_j = T0_j`, and the other two declare VALUES only.  (Do not trust that sentence
+# either — derive the set: `grep -n '^gen_[a-z_]*() {' test/diff_compiler_perf_scaling.sh`.)
+# ⚠️ RECORDS WERE NOT ABSENT FROM THE FILE — `gen_widerecords` declares one, with N fields.
+# It writes a SINGLE FILE, so `fieldOwnersRef` never accumulates owners across modules and
+# `recordByNameRef` never sees two modules competing for a key.  "The corpus has records"
+# and "the corpus can see a cross-module record defect" are different claims, and only the
+# second one is what this block is about.
+# Every code path keyed on `recordByNameRef` / `fieldOwnersRef` therefore short-circuited on
+# an empty list: a per-module walk over the field→owners multimap that measured **5.6x net
+# allocation at 240 modules (r3 = 6.47 against a hard 3.0)** on a hand-rolled corpus was
+# reported by this gate as `r2 = 2.06 ok`.  The quadratic was not missed by a bad threshold;
+# it was invisible by construction.
 #
-# The two properties are deliberate and a future edit must keep both:
-#   * a SHARED FIELD NAME across modules, so `fieldOwnersRef["rfld"]` grows to N
+# ⚠️ MOD_R AND MOD_F ARE THE MULTIPLIER, AND A FIRST CUT AT 1x1 WAS NOT ENOUGH.  With one
+# record and one field name per module the shape reddened only the TIME arm (r2 = 2.60 against
+# 2.47) and left ALLOCATION — the verdict this file calls primary *because* it is
+# deterministic — at `ok` (r2 = 2.38).  A gate that can only redden through the signal the
+# repo says not to trust is coverage wearing a gate's clothes.  Same reasoning as `K` for the
+# interface half one paragraph up: the per-module walk costs O(collided field names x owners
+# per name), so MOD_F multiplies the number of walks and MOD_R multiplies the owners in each.
+# 4x4 is the ratio the review's own corpus was measured at.
+#
+# VERIFIED BY CONSTRUCTION, not asserted: this generator was run at MOD_N/MOD_K through a
+# binary carrying the removed field-owner narrowing, and the ALLOCATION arm goes RED.  If you
+# change MOD_R / MOD_F, redo that — a coverage claim for a defect class is only worth the
+# counterfactual behind it.
+#
+# The properties are deliberate and a future edit must keep all three:
+#   * SHARED FIELD NAMES across modules, so each `fieldOwnersRef[f<j>]` grows to N*MOD_R
 #     owners — that multimap is what any scoping of the field namespace has to walk;
-#   * SHORT-FORM records with UNIQUE names (`R<i>`), which keeps the fixture
-#     0-diagnostic.  N named-field variants sharing a field name would NOT be: a
-#     concrete receiver whose head tycon is not a registry key falls to
-#     `resolveFieldAmbiguous`, which picks `headL owners` — right for exactly one of
-#     the N and a `Type mismatch` for the rest.  (That gap is real and unfixed; it is
-#     pinned behaviourally by `test/llvm_fixtures_modules/field_owner_no_narrowing/`,
-#     not here, because this generator must stay 0-diagnostic — see the trap above.)
+#   * MOD_R records per module, so the owner lists grow with the module count AND the
+#     per-module constant;
+#   * SHORT-FORM records with UNIQUE names (`R<i>_<j>`), which keeps the fixture
+#     0-diagnostic.  Named-field variants sharing a field name would NOT be: a concrete
+#     receiver whose head tycon is not a registry key falls to `resolveFieldAmbiguous`,
+#     which picks `headL owners` — right for exactly one of them and a `Type mismatch` for
+#     the rest.  (That gap is real and unfixed; it is pinned behaviourally by
+#     `test/llvm_fixtures_modules/field_owner_no_narrowing/`, not here, because this
+#     generator must stay 0-diagnostic — see the trap above.)
+MOD_R=4
+MOD_F=4
+
+# one module's record block: MOD_R short-form records over the SAME MOD_F field names,
+# plus a concrete-receiver projection so the read path is exercised too.
+gen_mod_records() {
+  _i=$1
+  _j=0
+  while [ "$_j" -lt "$MOD_R" ]; do
+    printf 'public export data R%s_%s = {' "$_i" "$_j"
+    _f=0
+    while [ "$_f" -lt "$MOD_F" ]; do
+      [ "$_f" -gt 0 ] && printf ','
+      printf ' f%s : Int' "$_f"
+      _f=$((_f+1))
+    done
+    printf ' }\n'
+    _j=$((_j+1))
+  done
+  printf 'export mkr%s : R%s_0\nmkr%s = R%s_0 {' "$_i" "$_i" "$_i" "$_i"
+  _f=0
+  while [ "$_f" -lt "$MOD_F" ]; do
+    [ "$_f" -gt 0 ] && printf ','
+    printf ' f%s = 0' "$_f"
+    _f=$((_f+1))
+  done
+  printf ' }\nexport rv%s : Int\nrv%s = mkr%s.f0\n' "$_i" "$_i" "$_i"
+}
 gen_modules() {
   n=$1; dir=$2; k=$3
   rm -rf "$dir"; mkdir -p "$dir"
@@ -927,7 +984,7 @@ gen_modules() {
       printf 'public export data T0_%s = T0_%s\nexport impl Widget T0_%s where\n  wval _ = %s\n' "$j" "$j" "$j" "$j"
       j=$((j+1))
     done
-    printf 'public export data R0 = { rfld : Int, rx : Int }\nexport mkr0 : R0\nmkr0 = R0 { rfld = 0, rx = 0 }\nexport rv0 : Int\nrv0 = mkr0.rfld\n'
+    gen_mod_records 0
     printf 'export use0 : Int\nuse0 = '
     j=0; while [ "$j" -lt "$k" ]; do [ "$j" -gt 0 ] && printf ' + '; printf 'wval T0_%s' "$j"; j=$((j+1)); done
     printf '\n'
@@ -942,8 +999,7 @@ gen_modules() {
           "$i" "$j" "$i" "$j" "$i" "$j" "$j"
         j=$((j+1))
       done
-      printf 'public export data R%s = { rfld : Int, rx : Int }\nexport mkr%s : R%s\nmkr%s = R%s { rfld = %s, rx = 0 }\nexport rv%s : Int\nrv%s = mkr%s.rfld\n' \
-        "$i" "$i" "$i" "$i" "$i" "$i" "$i" "$i" "$i"
+      gen_mod_records "$i"
       printf 'export use%s : Int\nuse%s = ' "$i" "$i"
       j=0; while [ "$j" -lt "$k" ]; do [ "$j" -gt 0 ] && printf ' + '; printf 'wval T%s_%s' "$i" "$j"; j=$((j+1)); done
       printf '\n'

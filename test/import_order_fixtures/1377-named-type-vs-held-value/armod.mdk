@@ -1,0 +1,4 @@
+public export data Cfg = { alpha : Int }
+
+export mkA : Cfg
+mkA = Cfg { alpha = 2 }

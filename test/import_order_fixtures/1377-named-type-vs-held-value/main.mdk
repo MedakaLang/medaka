@@ -1,0 +1,10 @@
+-- #1377.  `main` NAMES armod's `Cfg` as a type (through the re-exporter) and separately
+-- HOLDS a value of zrmod's `Cfg`, whose type it never names and does not need to.
+import remod.{Cfg, mkA}
+import zrmod.{mkZ}
+
+useA : Cfg -> Int
+useA c = 0
+
+main : <IO> Unit
+main = println (useA mkA + mkZ.beta)

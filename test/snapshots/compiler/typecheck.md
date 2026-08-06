@@ -1,5 +1,5 @@
 # META
-source_lines=23331
+source_lines=23372
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted typecheck stage — port of lib/typecheck.ml's HM core.  SLICE 1:
@@ -2094,11 +2094,15 @@ public export data RecordInfo =
 -- 🚨 THE LOCKSTEP WAS "STRUCTURAL, NOT AN OBLIGATION" UNTIL #1111 A-2.12 (#1319 unit 2),
 -- AND IT IS NOW AN OBLIGATION.  `applyRecordScopeOverrides` re-points `recordByNameRef`
 -- for a collided key and does NOT touch `fieldOwnersRef`, so the two are no longer written
--- only in pairs and nothing enforces that they agree.  Correct today — re-pointing key `K`
--- cannot change which KEYS own a field name — but if two same-named records have DISJOINT
--- field sets, `fieldOwnersRef` can name `K` as the owner of a field the newly-selected `K`
--- does not declare.  Probed and byte-identical to the pre-change binary (see that
--- function's own note), so: an obligation with no observed consequence, not an invariant.
+-- only in pairs and nothing enforces that they agree.  Re-pointing key `K` cannot change
+-- which KEYS own a field name, but it does change which FIELDS `K` declares — so with two
+-- same-named records having DISJOINT field sets, `fieldOwnersRef` can name `K` as the owner
+-- of a field the newly-selected `K` does not declare.
+-- ⚠️ THAT IS NOT HYPOTHETICAL AND AN EARLIER DRAFT OF THIS NOTE SAID IT WAS.  It called the
+-- divergence "an obligation with no observed consequence" on the strength of one probe that
+-- kept every projection inside the module which NAMED the record — where the overlay and the
+-- floor agree by construction, so the probe could not have shown anything.  **#1377 is the
+-- consequence**, pinned at `test/must_fail_fixtures/1377-named-type-wins-over-held-value/`.
 -- Anything added here must state which of the two it writes and why the other is safe.
 --   recordByNameRef : registry KEY → RecordInfo.  omInsert is last-write-wins and
 --     the register site inserts in registration order, so it reproduces the old
@@ -6532,6 +6536,19 @@ resolveFieldRecord te fname = match headTyconNameMono te
 --     where today the exact lookup misses and the field→owners path answers correctly.
 --     Restricting it to single-variant types makes it serve ONLY the emit path, i.e. a
 --     THIRD keying scheme in a table that already has two — the opposite of reconciling.
+--
+-- 🚨 IT IS LOAD-BEARING, AND THAT IS MEASURED, NOT INFERRED.  The paragraph above was
+-- written as a derivation from `renameDecl`'s source; the adversarial review of PR #1372
+-- then ran the counterfactual, and this sentence exists so the next reader does not have to
+-- repeat it: **stubbed to `None`** — body replaced by a constant, nothing else changed —
+-- **the compiler TYPECHECKS CLEAN and then MISCOMPILES ITSELF INTO A SEGFAULT.**  So the
+-- suffix match is not dead code kept for safety; the self-compile depends on it, and it
+-- fails in the worst available way: no diagnostic, no type error, a crash in the produced
+-- binary.  Anyone retiring it must land the mangler fix in the SAME change.
+--
+-- ⚠️ THE MEASUREMENT IS THE REVIEWER'S, NOT MINE.  Recorded here rather than only in a PR
+-- body, because a PR body is not where someone standing at this function will be looking —
+-- which is the exact report-versus-artifact split that produced this note.
 --
 -- Left in place, with the reason written down, rather than half-migrated.
 lookupRecordByMangledHead : String -> String -> Option (String, RecordInfo)
@@ -13083,10 +13100,16 @@ exportsCtorIdentFor n ident ((cn, _, ci)::rest)
 --      plus ONE unrelated collider stayed rejected, while adding a SECOND unrelated
 --      collider made the same program compile.
 --
--- The predicate the field half actually needs is a REACHABILITY question — is a value of
--- this record type obtainable here, through any imported binding's type — which is a
--- different analysis from anything this unit builds.  Rather than widen into it, the row
--- stays open on #1070 / #1319 with those three findings recorded on it.
+-- The predicate the field half actually needs is a REACHABILITY question: can a value of
+-- this record type be OBTAINED here at all.  ⚠️ NOT "does an imported binding's type
+-- mention it" — that is one hop, and it is not enough.  A record reachable only
+-- TRANSITIVELY — as a field of an imported record, an element of an imported `List`, a type
+-- argument, a component of a returned tuple — is a value this module can hold and project
+-- `.f` on, so it must count.  The predicate is a closure over the imported type surface,
+-- which is a different analysis from anything this unit builds, and stating its true size
+-- is the point: an under-stated version invites the next agent to reach for a spelling test
+-- again.  Rather than widen into it, the row stays open on #1070 / #1319 with those three
+-- findings recorded on it.
 --
 -- ⚠️ MIRROR DISCIPLINE, and it is now a THREE-way mirror (method / ctor / record) until
 -- #1288 lands.  The witness half is deliberately NOT re-implemented here: `declaresCtorNamed`
@@ -13187,9 +13210,11 @@ dropRecordIdentCand ident ((c@(i, _, _))::rest)
 -- sharing `name`/`id`/`size` put a name on it), which turned the per-module walk into
 -- 5.6x net allocation at 240 modules.  A collided record KEY means two modules declare a
 -- record spelled the same, which is the collision this unit exists for and is genuinely
--- rare — but it is an empirical claim, so the perf gate now carries a generator shape that
--- declares records (`gen_records`), because its previous multi-module generator declared
--- none and could not see this code path at all.
+-- rare — but it is an empirical claim, so `gen_modules` in
+-- `test/diff_compiler_perf_scaling.sh` now declares records per module, because before that
+-- NO multi-module generator in the gate declared a single record or field and this code
+-- path could not be seen at all.  Derive the generator set rather than trusting this
+-- sentence: `grep -n '^gen_[a-z_]*() {' test/diff_compiler_perf_scaling.sh`.
 --
 -- ⚠️ OVERLAY, never a rebuild: anything a module's scope does not decide keeps the floor's
 -- answer, which is today's behaviour.
@@ -13206,16 +13231,32 @@ dropRecordIdentCand ident ((c@(i, _, _))::rest)
 -- `registerRecordInfoKeyed` calls that function *"the SOLE registration writer of both"*
 -- `recordByNameRef` and `fieldOwnersRef`, and calls their lockstep *"structural, not an
 -- obligation"*.  That is no longer true: this overlay writes `recordByNameRef` ALONE.
--- Nothing enforces the pairing any more, so a future edit here has to think about the
--- other table.  What is at stake, stated as a measurement rather than a worry: re-pointing
--- key `K` at a different declaration does not change WHICH keys own a field name (the key
--- is the same string), but it does change which FIELDS `K` declares — so if two same-named
--- records have DISJOINT field sets, `fieldOwnersRef` can still name `K` as the owner of a
--- field the newly-selected `K` does not have.  Probed directly (`Cfg { alpha }` in one
--- module, `Cfg { beta }` in another, both loaded, the overlay flipping the winner): the
--- output is `Field 'beta' does not belong to record 'Cfg'`, BYTE-IDENTICAL to the
--- pre-change binary, and the correct-direction answer.  So it is an obligation with no
--- observed consequence today — not a known-good invariant.
+-- Re-pointing key `K` does not change WHICH keys own a field name (the key is the same
+-- string), but it does change which FIELDS `K` declares — so with two same-named records
+-- having DISJOINT field sets, `fieldOwnersRef` can name `K` as the owner of a field the
+-- newly-selected `K` does not have.
+--
+-- 🚨 AND THAT HAS A CONSEQUENCE.  An earlier draft of this note called it *"an obligation
+-- with no observed consequence today"* on the strength of one probe; the probe kept both
+-- projections inside the module that NAMED the record, so the overlay agreed with the floor
+-- and could not show anything.  **#1377 is the consequence**: a module that names one `Cfg`
+-- and holds a value of the OTHER `Cfg` is refused, `Field 'beta' does not belong to record
+-- 'Cfg'`, exit 1, where `5` is correct.  Pinned at
+-- `test/must_fail_fixtures/1377-named-type-wins-over-held-value/`.
+--
+-- ── THE TRANSITIONAL RULE, STATED SO IT IS A DECISION AND NOT AN ACCIDENT ──
+-- **The declaration this module NAMES wins for EVERY projection of that key in this module,
+-- including projections of values whose type the module never named.**  That is what one
+-- bare-keyed entry per registry key can express, and it is deliberate for this unit: it is
+-- strictly better than the load-order coin flip it replaces (#1377 was ACCEPTED in one
+-- clause order and REFUSED in the other on `main`; it is now refused in both), and it is
+-- wrong in the case above.
+--
+-- It is **transitional**, not the target.  The target rule is *"the receiver's own identity
+-- selects its record"*, which needs `lookupRecordByName` to take an identity rather than a
+-- bare `String` — the same identity analysis #1376's claim file names, and the reason this
+-- unit stopped where it did rather than widening.  Do not read the rule above as settled
+-- semantics; read it as the best a bare key can do.
 applyRecordScopeOverrides : List Decl -> Unit
 applyRecordScopeOverrides prog =
   overrideScopedRecords

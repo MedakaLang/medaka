@@ -1,0 +1,65 @@
+issue: 1377
+what: `armod` declares `data Cfg = { alpha : Int }` and a value `mkA : Cfg`; `remod` is
+what: `export import armod.{Cfg, mkA}`; `zrmod` declares its OWN `data Cfg = { beta : Int }`
+what: and a value `mkZ : Cfg`. `main.mdk` NAMES armod's `Cfg` as a type (in `useA`'s
+what: signature, through the re-exporter) and separately HOLDS a value of zrmod's `Cfg`,
+what: whose type it never names and does not need to -- `mkZ`'s type comes from zrmod's
+what: signature and already carries its origin.
+what: `main.mdk` is REFUSED at exit 1 with `Type mismatch: Cfg vs Cfg -- one comes from
+what: module 'zrmod', the other from module 'armod'` plus `Field 'beta' does not belong to
+what: record 'Cfg'`, whose suggested remedy ("import the one you mean") is not actionable:
+what: main.mdk already imports only the one it means, and cannot import the other.
+what: HAND-DERIVED CORRECT ANSWER, independent of any engine: `5`. `useA c = 0` by
+what: definition and `mkZ.beta` is `5`.
+what: MECHANISM: `recordByNameRef` is keyed by the bare registry key and ONE entry answers
+what: TWO different questions -- (a) which declaration does the `Cfg` written in THIS
+what: module's own source denote, and (b) `resolveFieldRecord`'s exact-head lookup, given a
+what: receiver whose type is ALREADY known and already carries its origin. (b) does not
+what: depend on anything the module spelled, but `lookupRecordByName : String -> Option
+what: RecordInfo` takes a BARE STRING, so whatever decides the single entry necessarily
+what: answers both the same way. The diagnostic itself proves the missing information is
+what: present at the point of failure: it names both `zrmod` and `armod`.
+what: PRE-EXISTING AND PREVIOUSLY ORDER-DEPENDENT. Measured on `main` @ 1443870c: with
+what: `import remod...` first the program is ACCEPTED and prints the correct `5`; with
+what: `import zrmod...` first it is REFUSED with these same two diagnostics. #1319 unit 2
+what: (PR #1372) did not introduce the refusal -- it made it order-INDEPENDENT, which is
+what: the safe direction (consistently loud beats order-dependently loud) but is not a fix.
+what: That is why this row is filed rather than treated as a regression, and why its
+what: import_order sibling asserts INVARIANCE rather than a value.
+cmd: check-json main.mdk
+exit: 1
+diag-code: T-TYPE-MISMATCH 9:27-9:30
+diag-code: T-UNKNOWN-FIELD 9:27-9:30
+why-diag-code: `check-json`, because `diag-code:` asserts a 0-based LSP RANGE and only the
+why-diag-code: JSON arm emits one. `diag-code:` and not `diag:`, because the WORDING is not
+why-diag-code: the defect -- the refusal of a valid program is -- and a ws:diagnostics
+why-diag-code: reword must not drain this row. Only exit 0 drains it.
+why-diag-code: THE RANGES ARE LINE-COUNT SENSITIVE: both sit on the
+why-diag-code: `main = println (useA mkA + mkZ.beta)` line (0-based line 9), whose number is
+why-diag-code: set by main.mdk's two-line comment header. EDITING THAT HEADER BY ONE LINE
+why-diag-code: MOVES BOTH RANGES on a change that touched no code. Keep edits there
+why-diag-code: line-count-neutral, or re-derive and say why they moved -- a moved range is
+why-diag-code: NOT a fix.
+why-diag-code: BOTH rows are pinned, and they are DIFFERENT codes on the same range: a fix
+why-diag-code: that silences the head-tycon mismatch but still cannot find `beta` has not
+why-diag-code: drained anything.
+control: run control.mdk
+why-control: control.mdk removes the ONE variable: it never NAMES a `Cfg` at all (`useA`
+why-control: and its signature are gone), so the module holds a value of exactly one `Cfg`
+why-control: and spells none. Measured: exit 0, prints `5`.
+why-control: It is what rules out "`.field` on an imported record value is broken", "the
+why-control: re-export hop is broken", and "two same-named records break everything". What
+why-control: is left is precisely the conjunction in the `what:` narrative -- naming one
+why-control: while holding the other.
+why-fixture: MULTI-MODULE PIN, and it has to be: the defect is a property of the module
+why-fixture: GRAPH (two modules declaring the same record name, the entry naming one and
+why-fixture: holding a value of the other). A single file cannot express it.
+why-note: FIX DIRECTION: read the RECEIVER's head-tycon IDENTITY to select the record,
+why-note: rather than its spelling -- the same direction #1376's claim file names.
+why-note: NO SCOPE DECISION CAN ANSWER THIS SHAPE, which is the point: the discriminating
+why-note: information is in the receiver, not in anything the module wrote. Belongs with
+why-note: #1376 and the later units of #1319 (overlay retirement / option B2), not with a
+why-note: scope-decision unit.
+why-note: LOUD (exit 1), hence S1, and it is loud in BOTH import orders on this binary --
+why-note: see the import_order sibling `1377-named-type-vs-held-value`, which grades that
+why-note: invariance so a later fix cannot quietly restore the coin flip.

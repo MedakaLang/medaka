@@ -20,6 +20,17 @@
 --     any constructor-spelling predicate here: the question this fallback asks is "could
 --     this module be HOLDING a value of that record", which is a reachability question.
 --
+-- ⚠️ ONE UNDOCUMENTED DEPENDENCY, WRITTEN DOWN SO A RENAME DOES NOT LOOK LIKE A REGRESSION.
+-- This cell is green PARTLY because of an ordering accident: `dx` has two owner keys,
+-- `fieldOwnerNames` returns them `sortUniqS`ed, and `resolveFieldAmbiguous` takes
+-- `headL owners` — so `Dup` sorting before `Wrec` is what makes `mkA.dx` land on the right
+-- record.  Rename `Wrec` to something sorting before `Dup` and this cell REDDENS, for a
+-- reason that has nothing to do with the narrowing it guards.  (That is the same
+-- headL-picks-one mechanism `gen_modules` documents in
+-- `test/diff_compiler_perf_scaling.sh`, which is why its records must be short-form.)
+-- The failure would be LOUD, so it is not the hazard this cell exists for — but a future
+-- editor renaming a module here deserves to know why it broke.
+--
 -- Expected output, derived BY HAND before any capture and independently of any engine:
 --   mkA.dx = 7, mkW.dx = 1, so `8`.
 -- Measured on the pre-change binary: `8`, exit 0.  On the first cut of unit 2:
