@@ -27,9 +27,10 @@ than implementing a second version in the backend.
 
 **What this is not.** It is not a big-bang rewrite, a shared physical IR, a
 promise that sharing code proves semantics, or an instruction to wait for the
-typechecker arc. Additive contracts and independent planning work can land in
-parallel; identity, evidence, and calling-convention consumers have explicit
-upstream dependencies.
+typechecker arc. Development, review, and non-conflicting design/test work can
+proceed in parallel; compiler-source landing is serialized through the repo's
+one-PR golden lane. Semantic consumers wait only for their specific upstream
+facts, not for the entire typechecker epic.
 
 ## 1. Design laws
 
@@ -248,9 +249,14 @@ V carries a closed backend-neutral runtime type/kind:
 RuntimeType =
   RTInt | RTFloat | RTChar | RTBool | RTUnit | RTString
   | RTData Ident | RTRecord Ident | RTTuple Int | RTList
-  | RTArray | RTRef | RTClosure CallShape | RTEvidence Ident
+  | RTArray | RTRef | RTClosure ClosureRuntimeShape | RTEvidence Ident
   | RTParam TypeParamId | RTValue
 ```
+
+`ClosureRuntimeShape` is the runtime projection of `CallShape`: ordered evidence
+and value parameter representations plus result representation. It excludes
+`sourceArity` and `etaTarget`, which govern source application/adapter planning
+but do not distinguish runtime closure representation.
 
 The exact final ADT is a staging decision, but two constraints are fixed:
 
@@ -616,37 +622,53 @@ duplicated:
 | X-X | #1408 |
 
 ```text
-X-0D DraftSemanticProgram schema + comparison receipts
+Parallel pre-fan-in work (develop concurrently; land compiler PRs one at a time):
+  X-0D    draft schema/provenance/comparison receipts
+  X-N.H   LLVM explicit-input and per-emission-state hygiene
+  X-W.H   Wasm explicit-input/reset hygiene and product-input parity
+  X-L.H   semantic extern-catalog groundwork and current-domain validators
+  upstream producer development and independent S0/S1 fixes
+
+X-0D
   |\
-  | + typechecker A/E-1 ----------> X-I.P identity/visibility adoption
-  | + #353 ---------------------> X-T.P runtime-type production
-  | + #1318 -> #1137 -----------> X-C.P call-shape production
+  | + typechecker A/E-1 ------------> X-I.P identity/visibility adoption
+  | + #353 -------------------------> X-T.P runtime-type production
+  | + #1318 -> #1137 --------------> X-C.P call-shape production
   | + A-3/#1112 + #993/#1113/#1082 -> X-E.P evidence/disposition production
   |
-  + all authoritative producer checkpoints -> X-0V mint ValidSemanticProgram
-                                            -> X-A canonical ANF
-                                            -> X-G global/match/tail analyses
-                                            -> X-L.P abstract linkage/catalog/requirements
-                                            -> AP validation
+  + all required authoritative producer checkpoints -> X-0V
+                                                       -> X-A canonical ANF
+                                                       -> X-G analyses
+  {X-G, X-L.H} -> X-L.P LinkIds/reachability -> AP validation
 
-AP -> {X-I.C, X-T.C, X-C.C, X-E.C, X-G.C, X-L.C}
-   -> X-N native physical plan/renderer
-   -> X-W wasm physical plan/renderer + playground consumer
+AP -> shared .C semantic-consumer cutovers
+{AP, X-N.H} -> X-N.C LLVM physical plan/renderer
+{AP, X-W.H} -> X-W.C Wasm physical plan/renderer + playground consumer
+               (X-N.C and X-W.C are peers, not dependencies of one another)
 
-{all .C cutovers, X-L.C, X-N, X-W} -> X-X legacy deletion
+{all .C cutovers, X-L.C, X-N.C, X-W.C} -> X-X legacy deletion
 ```
 
 `.P` checkpoints adopt an authoritative producer into the draft and compare it
 against legacy behavior. `.C` checkpoints switch physical consumers only after
-AP validation. They may be milestones inside one stage issue; the suffixes make
-the no-cutover-before-validation rule reviewable.
+AP validation. `.H` checkpoints improve today's physical state/input seam
+without claiming semantic authority or consuming AP. They may be milestones
+inside one stage issue; the suffixes make the no-cutover-before-validation rule
+reviewable.
+
+**Landing versus development.** The lanes above permit parallel worktrees,
+prototypes, tests, and review. They do not permit simultaneous compiler-source
+landing: compiler-source snapshots and selfproc goldens are re-cut, never
+text-merged, so only one such PR is in flight. Architecture PRs interleave with
+typechecker PRs in that lane; high-severity fixes take priority.
 
 ### X-0 (#1399) - sole elaboration-to-engine contract
 
 X-0D publishes additive `DraftSemanticProgram` records beside current
 `CProgram`/install tables and compares every fact. Draft constructors remain
-visible and carry provenance per field. X-0V lands only after required upstream
-producers are authoritative; it validates and mints opaque
+visible and carry provenance per field. X-0D has no producer dependency and may
+land before the typechecker arc completes. X-0V lands only after required
+upstream producers are authoritative; it validates and mints opaque
 `ValidSemanticProgram`. No semantic behavior changes and no bug closure claim.
 The typed Core dump is the primary structural receipt.
 
@@ -657,7 +679,9 @@ behavior-preserving normalization, then build shared analyses over ANF. AP is
 opaque only after all analysis validators pass. No physical emitter switches
 until equivalence and malformed-plan controls are green. X-A alone mints
 generated `CallableId`s from stable source-node/role paths; V contains only
-`SourceCallableId`s.
+`SourceCallableId`s. X-A's design, fixtures, `StableNodeId`, serializer, and
+validator harness may be developed before X-0V; the authoritative V -> ANF
+lowerer and canonical/AP claims may not land before X-0V.
 
 ### X-I (#1401) - identity, visibility, and logical layout consumers
 
@@ -677,42 +701,51 @@ contract tests, not stolen drain claims.
 
 ### X-T (#353, adopted) - semantic runtime types
 
-Adopt #353. Migrate one recovery family at a time, then delete LLVM
-`inferSigs`/`typeOf` and Wasm `cexprIsFloat` fallbacks only when all consumers
-read typed Core. Never put LLVM `LTy` in V.
+Adopt #353. X-T.P stamps backend-neutral runtime facts into the draft and
+compares them against each named recovery family; it never puts LLVM `LTy` in
+V. After AP validation, X-T.C migrates physical consumers one family at a time
+and deletes LLVM `inferSigs`/`typeOf` and Wasm `cexprIsFloat` fallbacks only when
+those consumers read AP.
 
 ### X-C (#1402) - calling convention and application
 
-After #1318 and #1137, produce exact/PAP/over-application ANF, explicit eta/PAP
-nodes, canonical identity-keyed closure captures, and one call shape. Then
-migrate definitions, closures, methods, and both physical plans. X-C establishes
-the structural receipts for #1034, #1101, and #826; the stage whose plan first
-diverges owns each repair. #1101's CAF + distinct-caller boundary is a mandatory
-physical-call realization test, and centralization alone is not a proof that it
-is X-C rather than X-N.
+After #1318 and #1137, X-C.P populates and compares one authoritative call shape
+in the draft. X-A later uses validated V to produce exact/PAP/over-application
+ANF, explicit eta/PAP nodes, and canonical identity-keyed closure captures.
+After AP validation, X-C.C migrates definitions, closures, methods, and both
+physical plans. X-C establishes the structural receipts for #1034, #1101, and
+#826; the stage whose plan first diverges owns each repair. #1101's CAF +
+distinct-caller boundary is a mandatory physical-call realization test, and
+centralization alone is not a proof that it is X-C rather than X-N.
 
 ### X-E (#1403) - evidence and method disposition
 
 After #993/#1113/#1082 and A-3's complete #1112 default-disposition carrier,
-produce explicit evidence and validate slot keys. Then migrate all engines
-atomically. Retire route-word superset hedges, backend selection, incomplete
+X-E.P populates explicit evidence and complete dispositions in the draft and
+validates slot keys. After AP validation, X-E.C migrates all engines atomically
+and retires route-word superset hedges, backend selection, incomplete
 method-entry inference, and default synthesis. Direct/partial family: #1072
 (reopened after an accidental docs-only closure), #1127, #1046, #1068, #1020,
-#1265. For
-#1020, X-E owns complete-disposition production and consumption; a trap after a
-correct disposition reaches the Wasm physical plan remains X-W.
+#1265. #1072 may receive an earlier identity-safe targeted fix; X-E still owns
+route-word/key-bucket retirement. For #1020, X-E owns complete-disposition
+production and consumption; a trap after a correct disposition reaches the Wasm
+physical plan remains X-W.
 
 ### X-G (#1404) - globals, matching, tail work
 
 Represent `Force`, match/fallthrough targets, tail sites, and TRMC groups in AP.
 Globals remain lazy unless AP carries the safe-eager proof in section 6. Retain
 backend-specific mechanics. Use #1349 as a Wasm realization test for the known
-non-self method tail-call class.
+non-self method tail-call class. It is already self-draining through
+`test/wasm/diff_gzip.sh`'s `known_divergence` case, as recorded in
+`test/MUST-FAIL-NOT-PINNABLE.txt`.
 
 ### X-L (#1405) - linkage, tags, and extern requirements
 
-Adopt #347, #348, #377, #378, and #358. X-L.P builds the semantic `ExternCatalog`,
-`ReachableExternRequirements`, and injective abstract `LinkId`s before AP is
+Adopt #347, #348, #377, #378, and #358. X-L.H can establish the semantic
+`ExternCatalog` and validate collision domains already observable in current
+output. After canonical callable identity/reachability exists, X-L.P builds
+`ReachableExternRequirements` and injective abstract `LinkId`s before AP is
 validated. X-L.C maps those completed facts to target symbols/tags/imports and
 runs target-specific collision validators before changing sanitization. Include
 impl/method symbols and the #1397 same-named-type control in the collision-domain
@@ -721,19 +754,27 @@ output into silent aliasing.
 
 ### X-N (#1406) - native physical state and renderer
 
-Adopt #357. Move semantic prerequisites into input records and all remaining
-physical state into one per-emission context. Preserve byte-identical LLVM where
-semantics do not move, self-compile fixpoint, and prelude/program-half shape.
-The physical validator checks every direct named call against the callee plan's
-prototype; it does not rely on LLVM opaque-pointer verification (#1101).
+Adopt #357. X-N.H moves today's declaration-derived prerequisites into explicit
+input records and today's remaining physical state into one per-emission
+context; it can land before V/AP if it preserves installed inputs and
+byte-identical LLVM. Resetting at `emitProgram` after callers install inputs is
+not a valid implementation. X-N.C later lowers AP into the validated LLVM plan
+and pure renderer. Preserve the self-compile fixpoint and prelude/program-half
+shape throughout. The post-AP physical validator checks every direct named call
+against the callee plan's prototype; it does not rely on LLVM opaque-pointer
+verification (#1101).
 
 ### X-W (#1407) - Wasm physical state, scalar decision, and host ABI
 
-Mirror X-N at the physical-contract level, not line-for-line. Consolidate reset
-lifecycle, validate reachable host requirements without weakening the complete
-capability manifest, decide scalar mode by the criterion in section 8.1, migrate
-both `wasm_emit_modules_main` and `playground_main`, and add a behavior-level
-self-host assurance arm to tracker #384's linkage-only coverage.
+Mirror X-N at the physical-contract level, not line-for-line. X-W.H can
+consolidate today's reset/input lifecycle and assert product input-set parity
+before AP, while preserving current behavior. In particular, reproduce the
+shipping playground's missing `installCtorFloatFields` consequence before
+equalizing it; source divergence alone does not establish an observable bug.
+X-W.C later validates reachable host requirements without weakening the complete
+capability manifest, decides scalar mode by the criterion in section 8.1,
+migrates both `wasm_emit_modules_main` and `playground_main`, and adds a
+behavior-level self-host assurance arm to tracker #384's linkage-only coverage.
 
 ### X-X (#1408) - delete legacy authorities and add ratchets
 
@@ -742,6 +783,22 @@ bare-name layout tables, emitter-only semantic Core variants, and fallback
 authorities. Add structural checks preventing their reintroduction. This stage
 lands last; until then, every migrated decision has one declared authority and
 comparison assertions against the legacy path.
+
+### High-severity work during migration
+
+This S3 architecture arc never blocks an independently established S0/S1 fix.
+Fix a live defect before V/AP when its cause is reachable without inventing a
+second semantic authority; advance the narrow producer prerequisite when it is
+not. An interim fix must not add backend synthesis, spelling-keyed tables,
+ambient semantic state, route re-selection, or a quieter wrong answer. Repairing
+one defect instance also does not by itself satisfy the structural stage exit.
+
+#1072 is the discriminator. Draft PR #1081 correctly widens selection beyond a
+topological prefix for the filed arrangement, but adversarial review reproduced
+a new unrelated-module S0 because the widened universe is still keyed by bare
+interface/type spellings. It cannot land in that state. Qualified identity is a
+minimum prerequisite; a targeted identity-safe fix may precede #1113/X-E, while
+final evidence references and route-word/key-bucket retirement remain X-E work.
 
 ## 13. Verification doctrine
 
@@ -807,7 +864,7 @@ plan reduced cost.
 | Physical abstraction leaks into AP | field ownership table in every stage issue; reject LLVM/Wasm types in V/A/AP |
 | Loud path becomes silent during fallback removal | preserve severity; could-not-pass-before fixtures for new values |
 | Native fixpoint moves unexpectedly | two-rebuild/seed discipline and C3 receipts |
-| Wasm host set drifts | derive host/import keys from `ReachableExternRequirements`, keep `CapabilityManifest` unchanged, no encoded count |
+| Wasm host set drifts | derive host/import keys from `ReachableExternRequirements`, keep `CapabilityManifest` unchanged, no encoded count; preserve `diff_compiler_wasm_shim_parity.sh` until superseded by generated construction |
 | Migration leaves two permanent authorities | X-X exit criterion and structural ratchets |
 
 ## 15. Tracker relationship

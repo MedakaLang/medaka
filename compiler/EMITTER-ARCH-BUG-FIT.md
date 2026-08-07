@@ -18,13 +18,15 @@ stage's acceptance fixture flips.
 
 **Tracker maintenance.** #1072 was accidentally closed by docs-only PR #1389
 while its must-fail pin and source mechanism remained live; it was reopened on
-2026-08-07, and its real fix PR #1081 remains unmerged. #1020's missing
+2026-08-07. Draft PR #1081 fixes the filed arrangement but is blocked: review
+reproduced an unrelated-module S0 when its whole-graph widening meets bare
+interface/type keys. #1020's missing
 `S1: loud breakage` and `verified` labels were restored from its reproduced
-trap on the same date. Conversely, #1075's filed coded-panic behavior depends on
-unmerged PR #1074; current `main` is predicted by source review to retain
-#1046's silent behavior, but that exact baseline row was not independently
-executed in this planning pass. #1075 is therefore not counted as a distinct
-current defect.
+trap on the same date. #1075 is retained below as a branch residual: its coded
+panic was verified on unmerged PR #1074. An attributed pinning-agent report
+observes current `main` falling back to #1046's `meow|meow`; this planning pass
+did not independently rerun that arm. #1075 is not silently dropped from the
+open-issue population or reported as a branch behavior already on `main`.
 
 ## 1. Inclusion and verdicts
 
@@ -44,6 +46,7 @@ arc. The verdict vocabulary is:
 | `CONTRACT-DEPENDENCY` | upstream work fixes the cause; this architecture must consume the result and can prevent backend reinvention |
 | `PHYSICAL-RESIDUAL` | shared facts may improve localization, but one physical backend still owes a lowering fix |
 | `EVAL-RESIDUAL` | product AST evaluator, not LLVM/Wasm emission |
+| `BRANCH-RESIDUAL` | verified on an unmerged prerequisite branch, not established on current `main` |
 | `OUT-OF-ARC` | frontend, type soundness, diagnostics, or harness issue not owned here |
 | `NOT-ESTABLISHED` | symptom is real but no mechanism-to-stage claim is yet justified |
 
@@ -56,12 +59,20 @@ arc. The verdict vocabulary is:
 | Constructor import/export visibility and mangling | #1359; #1305 upstream-decision dependency; #1300 closed control; #1396 eval residual | upstream export contract, then X-I; eval peer separate |
 | Impl/method symbol identity | #1397 | upstream identity + X-I/X-L; eval/Core-eval peers |
 | Complete default-method identity/disposition | #1265, #1020 | A-3/#1112 producer, then X-E; Wasm residual |
-| Evidence/route realization | #1072, #1127, #1046, #1068 | #993/#1113/#1082 then X-E |
+| Evidence/route realization | #1072, #1127, #1046, #1068; #1075 branch residual | identity-safe defect fixes where available; #993/#1113/#1082 then X-E for structural retirement |
 | Calling convention/PAP/closures | #1034, #1101, #826; #1043 split | #1318/#1137 then X-C; #1101 residual X-C/X-N pending receipt |
 | Wasm tail realization | #1349 | X-G/X-W |
 
 The rest of the live S0/S1 set is accounted for in sections 4-7 so a reader
 cannot confuse "not an emitter bug" with "not reviewed".
+
+**Self-draining coverage is derived across all harnesses, not from
+`must_fail` alone.** #1020 and #1068 are pinned by `engine_divergence.txt`;
+#1127 by the dict-semantics ledger; #1349 by `test/wasm/diff_gzip.sh` and its
+`MUST-FAIL-NOT-PINNABLE` row. At this derivation point #1396 and #1397 have no
+repository self-draining artifact, and #1075 explicitly owes one if its
+prerequisite branch lands. Those are test debts on the issue, not evidence for
+or against the architecture verdict.
 
 ## 3. Direct and split backend families
 
@@ -132,8 +143,8 @@ or remain separately wrong; X-I does not claim their fix by association.
 then DRAINED-BY X-I/X-L for the emitted-symbol half; observed EVAL-RESIDUAL for
 product eval plus a Core-eval peer obligation.** Two unrelated modules' distinct
 `Thing` types and `impl
-Label Thing` declarations collapse to one `@mdk_impl_Thing_label`. The pinned
-issue report filed against `c5fda728` directly reports product eval/native
+Label Thing` declarations collapse to one `@mdk_impl_Thing_label`. The issue
+report filed against `c5fda728` directly reports product eval/native
 wrong output and shows one emitted LLVM definition; it additionally reports
 three-engine agreement, but does not include the Wasm command/output.
 
@@ -175,11 +186,19 @@ that remaining defect is strictly X-W physical realization.
 
 ### 3.6 Cross-module route word and most-specific winner - #1072
 
-**Verdict: DRAINED-BY #1113 then X-E.** The call site's module sees a
+**Verdict: CONTRACT-DEPENDENCY on qualified identity for a targeted defect fix;
+DRAINED-BY #1113 then X-E for structural retirement.** The call site's module sees a
 topological-prefix instance set and stamps a bare head; LLVM
 `implEntryRouteWords` ORs that word into every arm at the head. Reordering
 modules changes the answer. Merely stamping the prefix's canonical instance was
 built and disproved: it encodes the wrong prefix decision in every engine.
+
+Draft PR #1081 widens selection to the whole graph and fixes that arrangement,
+but review reproduced an unrelated module's same-named interface/type capturing
+the route because the widened tables remain bare-keyed. The prefix had been
+accidentally supplying scope to an unscoped key. Therefore #1081 cannot land as
+written, but neither must the live defect wait for all of X-E: once candidate
+identity is qualified, an identity-safe targeted fix may precede #1113.
 
 **Prediction.** Whole-graph K plus evidence references distinguish `InstId`,
 `EvidenceParam`, and `SupersPath`; the route-word hedge and
@@ -208,7 +227,9 @@ arg-tag dispatch because the local binder did not abstract evidence.
 **Prediction.** After local evidence abstraction, the site carries explicit
 evidence and cannot reach the sole-group shortcut. If a direct arg-tag site
 without local evidence remains and still misroutes, X-E owns that residual. Do
-not implement #1075's unmerged coded-panic state as an intermediate "fix".
+not describe #1075's coded-panic state as a fix: it is a verified
+`BRANCH-RESIDUAL` of unmerged PR #1074. #1075 remains tracked and owes its stated
+`build-run` pin if that prerequisite lands.
 
 ### 3.9 Wasm route recomputation - #1068
 
@@ -280,7 +301,9 @@ succeeds.
 
 **Prediction.** The shared plan marks the call as semantic tail and exact. The
 Wasm physical plan contains `return_call`/`return_call_ref`; a deep fixture and
-WAT shape assertion both fail before the fix and pass after it.
+WAT shape assertion both fail before the fix and pass after it. The existing
+`test/wasm/diff_gzip.sh` `known_divergence` case is already the self-draining
+behavior pin, as recorded in `test/MUST-FAIL-NOT-PINNABLE.txt`.
 
 ## 4. Upstream identity and obligation families
 
@@ -381,7 +404,8 @@ but they close prevention gaps:
 | X-E | evidence/default identity from A-3 and no engine selection | prefix-scoped selection encoded more strongly is correct |
 | X-G | explicit force/tail/control plan; #1349 Wasm realization | one physical TMC implementation fits both targets |
 | X-L | injective validated domains before sanitization changes | hash collision is impossible without a check/construction |
-| X-N/X-W | no ambient semantic prerequisites; physical validators | local output buffers/counters must be purely functional |
+| X-N.H/X-W.H | explicit current inputs/state and same-process isolation before AP | resetting away caller-installed inputs; behavior fix hidden as hygiene |
+| X-N.C/X-W.C | no ambient semantic prerequisites; validated AP physical plans | local output buffers/counters must be purely functional |
 | X-X | legacy authorities deleted and ratchets observed red | a second silent fallback is harmless |
 
 The burden of proof is intentionally asymmetric: a `DRAINED-BY` row needs a

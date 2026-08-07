@@ -122,7 +122,7 @@ ambient hooks before calling `emitProgram`.
 
 ### 3.1 LLVM install surface
 
-`llvm_emit_modules_main.emitTail` installs:
+The LLVM product entry installs:
 
 | Hook | Producer / meaning |
 |---|---|
@@ -137,22 +137,29 @@ ambient hooks before calling `emitProgram`.
 | `installEmitHalf` / `installPreludeSyms` | `prelude.o` split |
 | `installEmitSrcName` | source name for diagnostics |
 
+All rows except `installEmitSrcName` are installed by
+`llvm_emit_modules_main.emitTail`; `installEmitSrcName` is installed by that
+entry's `main` before `driveModules`.
+
 ### 3.2 Wasm install surface
 
-`wasm_emit_modules_main.emitTail` installs a different subset:
+The two shipping Wasm compiler entries already install different subsets:
 
-| Hook | Meaning |
-|---|---|
-| `installMethodIface` | shared method/interface and arity table |
-| `installDeclRetTypes` | declared return-type facts |
-| `installCtorFloatFields` | Float field facts |
-| `installMainIsFloatHint` | auto-print classification |
+| Hook | `wasm_emit_modules_main.emitTail` | `playground_main.runEmit` | Meaning |
+|---|---|---|---|
+| `installMethodIface` | yes | yes | shared method/interface and arity table |
+| `installDeclRetTypes` | yes | yes | declared return-type facts |
+| `installCtorFloatFields` | yes | **absent** | Float field facts |
+| `installMainIsFloatHint` | yes | yes | auto-print classification |
 
 The Wasm entry explicitly omits LLVM-only tables. This is legitimate where the
 fact is physical, but several omitted or parallel facts are semantic. The
 product behavior therefore depends on which entry happened to call which hook;
 closed #587 demonstrated that a probe entry without the product hook set can
-give a false architecture result.
+give a false architecture result. Here the shipping browser compiler itself
+omits `installCtorFloatFields`, which feeds `cexprIsFloat` field access and
+constructor-pattern Float binder seeding. The input-set divergence is established
+from source; whether a playground program observes it has not been reproduced.
 
 ### 3.3 Per-program derived indexes
 
@@ -172,7 +179,7 @@ Core. That distinction is not represented in their types.
 |---|---|---|---|
 | Scalar/runtime type | `LTy`, `inferSigs`, `typeOf`, `paramUseTy`, inline `emitExpr` recovery | `WTy`, `cexprIsFloat`, `refMainKind`, Float registries | partial `CBinPrim` stamp |
 | Method/source arity | `methodArityOf`, definition/call helpers | `methodArityOf`, closure eta/application helpers | arrow-spine table from `core_ir_lower` |
-| Exact/PAP/over-application | many `emitApp`/`emitPap`/`emitOverApp` branches | closure arity plus `$mdk_apply` branches | none |
+| Exact/PAP/over-application | `emitApp`/`emitOverApp` plus `emitPapClosure`/`emitMethodPap`/`emitCtorPap` families | closure arity plus `$mdk_apply` branches | none |
 | Record field slot | bare-name record and label indexes | `recFieldsRef` and record-name lookup | record-name strings on some nodes |
 | Dispatch arm/default | `implEntryRouteWords`, dispatch/default chain synthesis | `implEntryRouteKeyW`, dispatch chains, incomplete default synthesis | `Route` plus incomplete `CImplEntry` set |
 | Closure captures/layout | LLVM free-variable and allocation paths | Wasm closure-use scan and lifted functions | none |
@@ -276,6 +283,7 @@ and capability failures are therefore part of the Wasm backend's trusted base.
 | `test/diff_compiler_tmc_parity.sh` | shared TMC population parity |
 | `test/diff_compiler_dispatch_shape.sh` | outlined dispatch and prelude independence |
 | `test/diff_compiler_capability_matrix.sh` | extern existence/disposition and pure-domain ledger |
+| `test/diff_compiler_wasm_shim_parity.sh` | every marker block declared by reference host `run.js` is present and byte-identical across marker-discovered hosts (WH3); not symmetric key-set completeness |
 | `test/diff_compiler_perf_scaling.sh` | selected allocation/time growth classes |
 | `test/diff_compiler_must_fail.sh` | open verified issue still reproduces |
 
