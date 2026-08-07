@@ -6585,22 +6585,51 @@ resolveFieldRecord te fname = match headTyconNameMono te
 -- its record"*): that rule wants `lookupRecordByName` itself to take an identity,
 -- which moves the EXACT-hit arm above and is a change to the check path too.  This
 -- unit only makes the give-up arm stop guessing.
+--
+-- ⚠️ ON THE CHECK PATH THIS IS REACHED BUT INERT — it is NOT unreachable there, and
+-- an earlier draft of this note said it was.  A named-field variant's HEAD is not its
+-- registry KEY: `registerNamedFieldVariants` passes key = the CONSTRUCTOR and
+-- typeName = the TYPE (`registerRecordInfoKeyed o cname tyName params fields`), so
+-- `data WA = | CA { … }` registers key `CA` while the receiver's head is `WA`, the
+-- exact `lookupRecordByName "WA"` misses, and this function IS called with no
+-- mangling anywhere.  What makes it harmless is the candidate filter, not
+-- unreachability: no UNMANGLED key suffix-matches `__<head>`, so the list is empty,
+-- the narrowing runs over nothing, and the answer is the `None` it always was.
+-- That weaker claim is the one the safety argument actually needs — reachability was
+-- never the property doing the work — so stating it correctly strengthens the case
+-- rather than weakening it.  `test/llvm_fixtures_modules/field_owner_no_narrowing/`
+-- is a live cell of exactly this shape (head `RA`, key `Dup`).
 lookupRecordByMangledHead : Mono -> String -> String -> Option (String, RecordInfo)
 lookupRecordByMangledHead te head fname = match mangledHeadCandidates head fname
   [pair] => Some pair
-  cands => match filterList (recordCandIsReceiverDecl te) cands
-    [pair] => Some pair
-    _ => None
+  -- One mint of the receiver's key for the whole filter, not one per candidate:
+  -- `types/registry.mdk` names re-minting a `TabKey` per lookup as the thing the
+  -- #1111 A-2.3 follow-up hoisted, because `tabKeyOf` → `mkIdent` → `identOriginOf`
+  -- allocates on the way (an `Option`, the `map` closure, the `Ident`, the
+  -- `Some`/`None`, then the `TkIdent`/`TkBare` wrapper).  The cost here is small —
+  -- this arm only runs when the candidate list length ≠ 1, and at length 0 the
+  -- filter calls nothing — so this is about not borrowing an idiom from the file
+  -- that warns about it by name, not about a measured regression.
+  cands =>
+    let rk = headTyconMono te
+    match filterList (recordCandIsReceiverDecl rk) cands
+      [pair] => Some pair
+      _ => None
 
 -- Does this candidate's `RecordInfo` describe the declaration the RECEIVER's head
--- names?  `headTyconMono` is used on both sides rather than a bespoke match, so no
--- new origin-binding `Mono.TCon` pattern enters the set
--- `test/typecheck_compiler_source.sh` pins, and the equality is `HeadKey`'s derived
--- one — which `types/registry.mdk` already defines to keep `TkIdent` and `TkBare`
--- apart, so an identity-less head can never be equated with an identified one.
-recordCandIsReceiverDecl : Mono -> (String, RecordInfo) -> Bool
-recordCandIsReceiverDecl te (_, ri) =
-  headTyconMono te == headTyconMono (recordResultMono ri)
+-- names?  `rk` is the receiver's key, already projected by the caller (see the mint
+-- note there); `headTyconMono` produces both sides rather than a bespoke match, so
+-- no new origin-binding `Mono.TCon` pattern enters the set
+-- `test/typecheck_compiler_source.sh` pins.
+--
+-- The equality is `HeadKey`'s DERIVED one, and that is the fail-safe: `HeadKey`
+-- embeds `TabKey`, whose `TkIdent`/`TkBare` split `types/registry.mdk` defines so a
+-- key with identity can never equal one without.  So a receiver whose head was never
+-- stamped matches ZERO candidates — not "the first one" — and the caller falls back
+-- to today's ladder unchanged.  An absent identity therefore decides nothing, which
+-- is the same absence-makes-no-claim rule `sameTyConHead` owns one layer down.
+recordCandIsReceiverDecl : Option HeadKey -> (String, RecordInfo) -> Bool
+recordCandIsReceiverDecl rk (_, ri) = rk == headTyconMono (recordResultMono ri)
 
 -- The record's RESULT type — the head `registerRecordInfoKeyed` minted from the
 -- DECLARATION's origin (`applyParams (tconFrom o typeName) paramVars`), which is why

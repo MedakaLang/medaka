@@ -1188,7 +1188,7 @@ recordBinopSite : String -> Ref Route -> Mono -> Unit
 recordCallObligations : List String -> List Mono -> Unit
 recordCandImported : List Decl -> String -> (Ident, String, RecordInfo) -> Bool
 recordCandInfo : (Ident, String, RecordInfo) -> RecordInfo
-recordCandIsReceiverDecl : Mono -> (String, RecordInfo) -> Bool
+recordCandIsReceiverDecl : Option HeadKey -> (String, RecordInfo) -> Bool
 recordDoMonadError : Loc -> Unit
 recordFieldMap : RecordInfo -> Map String Mono
 recordFieldNames : RecordInfo -> List String
