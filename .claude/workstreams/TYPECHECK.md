@@ -16,7 +16,7 @@ coherence prelude-exclusion rule). This file carries only what the consolidation
 
 ---
 
-## 🚦 Standing gate: five questions before fixing ANY typechecker bug
+## 🚦 Standing gate: six questions before fixing ANY typechecker bug
 
 This is keyed to the **`ws:typecheck` label, not to a skill**, and it fires first because it
 gates everything else in this file. `harden-typechecker` is narrower than it looks — a fix that
@@ -24,7 +24,7 @@ threads through resolve/eval/desugar routes to `add-language-feature` instead (`
 a gate parked in a skill would silently miss that fix. Keying it to the label instead of a skill
 closes that gap.
 
-**Before fixing ANY typechecker bug, answer these five questions IN WRITING on the issue or PR:**
+**Before fixing ANY typechecker bug, answer these six questions IN WRITING on the issue or PR:**
 
 1. Does this bug represent an **architectural issue** or simply an **implementation gap**?
 2. Is there a **formal semantics** outlining the way this should behave? If yes, why aren't we
@@ -35,6 +35,9 @@ closes that gap.
    there a **single fix that resolves the entire class**?
 5. What is the **most ideal principled way** to resolve this bug so that the typechecker becomes
    more robust and properly architected?
+6. **If the fix WIDENS acceptance** (turns a reject into an accept — drains a false-REJECT
+   diagnostic), what was the reject keeping programs AWAY from downstream, and have you taken
+   newly-accepted programs all the way to the **built binary, executed** — not `check`, not `run`?
 
 **Why this exists.** `compiler/types/typecheck.mdk` is the most fragile, highest-consequence file
 in the tree, and its bug history is dominated by fixes that *relocated* a defect rather than
@@ -63,6 +66,22 @@ removing it:
 - **The P0-9 cross-module constructor fix patched `compiler/eval/eval.mdk` and left its parallel
   driver `compiler/ir/core_ir_eval.mdk` broken for months** — documented in `AGENTS.md`'s
   `evalModules`/`cevalModules` trap.
+- **#1381 (issue #1319 unit 3) drained a false REJECT and created #1382 (S0) + #1383 (S1).** The
+  front end became identity-correct for a record-namespace collision (`Type mismatch: Cfg vs Cfg`
+  no longer fires on legal programs) — every gate green: 29-gate preflight, `selfproc` 16 ok,
+  `engines` 528/0, `must_fail` 69/69, LEG A additive-only, CI 12/12. The back end still resolves
+  field layout by **bare name**, and `inferFieldAccess` (`compiler/types/typecheck.mdk:6440`)
+  `setRef`s the receiver's *unmangled* head name onto the AST node the emitter reads. Before the
+  fix, the selected `RecordInfo` **was** `lookupRecordByName r` — key and stamp agreed by
+  construction. After it, they can name different records: `check` 0, `medaka run` correct,
+  **built binary silently wrong** (plus a segfault variant and a destructive-write variant).
+  `diff_compiler_engines` would have redded instantly — eval and native resolve fields by name at
+  *run time*, so they're structurally immune to the layout bug and would have disagreed. It
+  didn't catch this because the new fixtures gave the colliding records single fields, so both
+  layouts picked index 0 and the wrong pick was unobservable: **the gate existed, the input
+  didn't.** Loud → silent is a severity increase even though the old behavior (a spurious reject)
+  was also wrong — see `AGENTS.md`'s "fix that makes a defect QUIETER" section, of which this is
+  a typecheck-specific instance.
 
 **Application notes:**
 
@@ -74,6 +93,31 @@ removing it:
 - **Concrete discriminator for questions 1 and 3:** does the fix change the KEY or the
   REPRESENTATION, or does it merely add a guard at ONE READ SITE? The second masquerading as the
   first is this file's signature failure mode.
+- **Concrete discriminator for question 6 — does typecheck now DECIDE by a richer key than the
+  one it STAMPS into the AST?** If the fix makes typecheck's *decision* sharper (e.g. resolve a
+  collision by full module-qualified identity) but the value it writes into a `Ref`/annotation
+  for a later stage to read is still the old, coarser key (e.g. the bare unmangled name), the
+  stamp is stale by construction and front end/back end now disagree on cases the old, coarser
+  decision made unreachable. Grep every `setRef`/annotation write the changed function makes and
+  check its key matches the one just used to decide.
+- **Question 6's verification checklist, concretely:**
+  - Take newly-accepted programs to `medaka build` and **execute the binary**. `medaka run` and
+    `medaka build` typecheck with the same binary and share the whole front end (`AGENTS.md`), so
+    they are not two independent observations of anything at or before typecheck — only the
+    built binary exercises the back end's read of the stamp.
+  - Treat the new SOMETHING as **untested by construction**: every pre-existing fixture covered
+    the reject (empty/absent) case, so no existing fixture can fail on a wrong new accept. Build
+    the test from the spec, not from the diff or from coverage.
+  - Check whether your new fixtures can even **express** the failure. A collision fixture with
+    single-field records can't show a field-order bug — both layouts pick index 0. Prefer
+    fixtures with ≥2 differently-ordered fields per colliding shape.
+  - `eval`/`run` agreeing with native is **not** corroboration for a back-end-only defect: a
+    tree-walker can be structurally immune to a bug that only a compiled representation exposes
+    (here, both resolve fields by name at run time) — a known-wrong oracle in the *reassuring*
+    direction, not just the usual wrong-in-the-alarming direction.
+  - Permute what the mechanism actually reads, not what's convenient — #1381's order-dependence
+    was on module-name **sort** order, not import-clause order, so a permutation differential
+    over import clauses would have found nothing.
 - **Question 2 has a real answer path.** Medaka has formal specs for several subsystems —
   `docs/spec/DICT-SEMANTICS.md`, `docs/spec/EFFECTS-SEMANTICS.md`, `docs/spec/SHADOW-SEMANTICS.md`,
   `docs/spec/LAYOUT-SEMANTICS.md`. "No formal semantics exists" is therefore a **finding**, not an
