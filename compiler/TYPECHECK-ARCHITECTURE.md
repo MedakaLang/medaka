@@ -656,6 +656,6 @@ written down as a trap. Only re-derivation caught any of them.
   §6 polymorphism and kinds (§6.1–§6.5, §6.7), §8 erasure, §10 conformance gaps
 - `docs/spec/SHADOW-SEMANTICS.md` — §1 clauses S1–S9, §3 per-stage enforcement table
 - `compiler/DRIVER-COLLAPSE-PLAN.md` — the Flat/Module collapse invariant (§7.6)
-- `.claude/workstreams/TYPECHECK.md` — the standing five-question gate, duplicate-family map
+- `.claude/workstreams/TYPECHECK.md` — the standing gate, duplicate-family map
 - `compiler/ARCH-REVIEW.md` — PASS 1/2 prior review
 - `compiler/ERROR-QUALITY.md` — the rubric governing Layer 8's error-path machinery
