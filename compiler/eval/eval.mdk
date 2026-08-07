@@ -3345,13 +3345,27 @@ modExportCells (ModExports cells _) = cells
 -- divergence is provably one-directional and a second index would be new code at
 -- the end of a review round.  Split it the day the prelude grows a private type.
 --
--- ⚠️ `backend/private_mangle.unitCtorExportEntry` is the SYMBOL-layer peer and it is
--- NOT a safe model for this one — it differs in THREE ways: it filters on
--- reserved-ness rather than visibility, it HAS a `DNewtype` arm, and it HAS a
--- `DAttrib` arm.  Its newtype arm is why `medaka build` mis-binds the shape above
--- where `run` gets it right (filed as #1305 — a pre-existing run≠build divergence,
--- not this unit's).  Copying the emitter here would have imported that bug into the
--- interpreters.
+-- ⚠️ `backend/private_mangle.unitCtorExportEntry` is the SYMBOL-layer peer.  It has
+-- since CONVERGED on this shape (2026-08-07): its `DNewtype` arm is gone and it now
+-- gates on `dataVis = VisPublic`, so the two indexes agree on visibility and on
+-- newtypes and differ only in that the mangler additionally filters reserved-ness
+-- (irrelevant here) and recurses through `DAttrib` (where this index, like
+-- `expTypeCtorsDirect`, has no arm — #1228, above).
+--     🚨 THAT CONVERGENCE DID NOT CLOSE #1305, AND THIS BLOCK USED TO CLAIM THE
+-- CAUSE THAT WOULD HAVE.  It said *"Its newtype arm is why `medaka build` mis-binds
+-- the shape above where `run` gets it right (filed as #1305)"*.  The arm was removed
+-- and #1305 STILL REPRODUCES, so the newtype arm was the mechanism of the symptom,
+-- not the cause of the disagreement.  The cause is one layer up and is not a backend
+-- fact at all: `resolve` binds the name from the newtype's module (`expCtorsDirect` /
+-- `expTypeCtorsDirect` are gated on `newtypePub`, which `export newtype` SETS) while
+-- `types.typecheck.publicDataDecls` has no `DNewtype` arm and resolves the IDENTITY
+-- from its bare-name data universe to a DIFFERENT module.  No import-driven mangler
+-- can agree with both at once, which is why removing the arm moved the observable
+-- (the built binary's `E-NONEXHAUSTIVE-MATCH` became a build-time `E-PANIC`) without
+-- settling anything.  Current pinned observation:
+-- `test/must_fail_fixtures/1305-newtype-ctor-import-native-divergence/claim.txt`.
+--     Copying the emitter here would still have imported a bug into the
+-- interpreters — just not that one.
 export ctorsByTypeOf : List Decl -> List (String, List String)
 ctorsByTypeOf decls = flatMap ctorNamesOfDecl decls
 

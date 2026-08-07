@@ -5,7 +5,7 @@ description: Typechecker-internal correctness and diagnostics work in compiler/t
 
 # Harden the typechecker
 
-⚠️ **Before fixing ANY typechecker bug**, answer the five standing questions in
+⚠️ **Before fixing ANY typechecker bug**, answer the standing questions in
 `.claude/workstreams/TYPECHECK.md` (keyed to the `ws:typecheck` label, not this skill) in writing
 on the issue/PR — `typecheck.mdk`'s bug history is dominated by fixes that relocated a defect
 rather than removing it.

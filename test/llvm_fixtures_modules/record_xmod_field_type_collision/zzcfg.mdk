@@ -1,0 +1,4 @@
+-- An unrelated record type ALSO named `Cfg`, whose sole field `fld` has the same
+-- name and the same INDEX as aacfg's but a DIFFERENT type (`Int` vs `Float`).  This
+-- is the `Cfg` the entry module actually imports and constructs.
+public export data Cfg = { fld : Int }

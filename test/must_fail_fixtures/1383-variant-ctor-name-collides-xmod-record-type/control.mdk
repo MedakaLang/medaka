@@ -1,0 +1,11 @@
+-- CONTROL for issue #1383: byte-identical to main.mdk (same imports shape,
+-- same projection `mkH.hx`), except it imports `boxlib.{Boxed, mkP}` instead
+-- of `plainlib.{Plain, mkP}` -- the unrelated module's record type no longer
+-- spells `Plain`. Per the issue's own mechanism this must check clean (exit
+-- 0, zero diagnostics) and `medaka run` must print `100` -- proving the
+-- bare-name collision on `Plain` is the trigger, not named-field variants,
+-- cross-module field projection, or `ahold` in general.
+import ahold.{Holder, mkH}
+import boxlib.{Boxed, mkP}
+main : <IO> Unit
+main = putStrLn (intToString mkH.hx)

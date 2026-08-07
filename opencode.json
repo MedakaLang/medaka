@@ -1,0 +1,26 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "skills": {
+    "paths": [".claude/skills"]
+  },
+  "permission": {
+    "bash": {
+      "*": "allow",
+      "rm *": "ask",
+      "git clean *": "ask",
+      "git reset *": "ask",
+      "git restore *": "ask",
+      "git checkout -- *": "ask",
+      "git push -f*": "ask",
+      "git push --force*": "ask"
+    },
+    "doom_loop": "ask"
+  },
+  "mcp": {
+    "medaka": {
+      "type": "local",
+      "command": ["./scripts/medaka-mcp-wrapper.sh"],
+      "cwd": "."
+    }
+  }
+}

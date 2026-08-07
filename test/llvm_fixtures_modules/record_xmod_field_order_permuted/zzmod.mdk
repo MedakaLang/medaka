@@ -1,0 +1,16 @@
+-- `armod.mdk`'s declaration — fields `a` then `b` — under a module name that sorts
+-- LAST instead of first.  See `aamod.mdk` for why the pair is permuted by NAME.
+--
+-- Pre-fix these were the corrupted projections; in the unpermuted sibling the same
+-- declaration's projections were the correct ones.
+public export data Cfg = { a : Int, b : Int }
+
+mkZZ : Cfg
+mkZZ = Cfg { a = 11, b = 22 }
+
+-- projected INSIDE the declaring module: `a` is slot 0, `b` is slot 1.
+export zzA : Int
+zzA = mkZZ.a
+
+export zzB : Int
+zzB = mkZZ.b
