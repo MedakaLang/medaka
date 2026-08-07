@@ -145,7 +145,7 @@ mangleUnits coreDecls modules =
   let modsOut = map (mangleModule exportsPerUnit ctorExportsPerUnit) modules
   (coreOut, modsOut)
 -- Per-unit CONSTRUCTOR exports: (mid, [(typeName, [ctorName])]).  Mirrors
--- exportsPerUnit but for data/record/newtype ctors, so an importing unit can map
+-- exportsPerUnit but for data/record ctors, so an importing unit can map
 -- `import M.{T(..)}` / `import M.{Ctor}` to `<M>__<Ctor>` (see ctorImportEntries).
 
 -- exported (pub) top-level function names of a unit, each paired with the module
@@ -214,23 +214,39 @@ lookupDefiner _ [] = None
 lookupDefiner k ((n, d)::rest) = if k == n then Some d else lookupDefiner k rest
 
 -- ── per-unit CONSTRUCTOR exports ──────────────────────────────────────────────
--- (mid, [(typeName, [ctorName])]) for every data/record/newtype the unit declares.
+-- (mid, [(typeName, [ctorName])]) for the data/record types the unit declares.
 -- A reserved constructor (Cons/Nil/Some/None/Ok/Err/Lt/Eq/Gt/True/False — the
 -- emitter's fixed-tag set) is OMITTED so it is never mangled (mangling would lose
 -- its reserved tag).  Visibility is not gated here: the import side only resolves
 -- what the importing unit actually brings into scope, and unmangled-because-private
 -- is harmless (an unimported ctor is never referenced cross-unit).
+--
+-- 🚨 THIS ANSWERS A SCOPE QUESTION — "may an IMPORTER name this constructor?" — not
+-- "does this constructor exist?".  The unit's OWN constructors are mangled from a
+-- different, deliberately unfiltered peer (`unitLocalCtorNames`, below), so
+-- declining an entry here never leaves a local definition unrenamed; it only
+-- declines to offer the symbol ACROSS a `DUse`.  Over-offering is not additive: the
+-- entry it manufactures SHADOWS whatever the front end actually bound.
+--
+-- ⚠️ NO `DNewtype` ARM, deliberately (#1305).  A newtype's constructor is not
+-- importable by ANY spelling — measured on this binary with no collision present,
+-- `import nmod.{NT(..)}`, `import nmod.{NT, Wrap}` and `import nmod.*` all give
+-- `T-UNBOUND` `Unbound variable: Wrap` — because `types/typecheck.publicDataDecls`
+-- (`:21219`) publishes `DData VisPublic` / `DInterface pub` / `DImpl pub` /
+-- `DTypeAlias pub` and has no `DNewtype` arm, so the ctor's scheme is never
+-- published.  An arm here offered `<nmod>__Wrap` for a name the front end had bound
+-- elsewhere, so `medaka build` mis-bound it while `run` was correct.
+--     ⚠️ Gating the arm on `newtypePub` LOOKS like the fix and is a NO-OP: `export
+-- newtype` SETS `newtypePub` (`frontend/resolve.expTypeCtorsDirect`, `:2913`, is
+-- gated on it and still indexes the ctor).  The arm has to be ABSENT, not filtered.
+--     This matches `eval.ctorsByTypeOf` (`compiler/eval/eval.mdk:3355`), the
+-- interpreter-side peer, which reached the same shape from the same derivation.
 unitCtorExportEntry : (String, List Decl) -> (String, List (String, List String))
 unitCtorExportEntry (mid, decls) = (mid, flatMap ctorExportEntries decls)
 
 ctorExportEntries : Decl -> List (String, List String)
 ctorExportEntries (DData { dataName = tyname, dataCtors = variants }) =
   [(tyname, filterList nonReservedCtor (map variantCtorName variants))]
-ctorExportEntries (DNewtype { newtypeName = tyname, newtypeCtor = con }) =
-  if nonReservedCtor con then
-    [(tyname, [con])]
-  else
-    []
 ctorExportEntries (DAttrib _ d) = ctorExportEntries d
 ctorExportEntries _ = []
 
@@ -323,14 +339,44 @@ useCtorPathEntries ctorExportsPerUnit path =
 -- `import M.*`: every ctor M exports comes into scope.
 
 -- a UseGroup member → ctor entries.  `UseMember name True` (`name(..)`) expands to
--- all of type `name`'s ctors; `UseMember name False` enters `name` itself iff it is
--- one of M's exported ctors.
+-- all of type `name`'s ctors; EVERY member, wild or not, ALSO enters `name` itself
+-- iff `name` is one of M's exported ctors.
+--
+-- 🚨 THE `(..)` IS A SUFFIX ON A MEMBER, NOT A SEPARATE SYNTACTIC FORM, so the wild
+-- branch is ADDITIVE to the bare-member branch rather than an alternative to it
+-- (#1300).  `typeEntries` is keyed by TYPE name, so `lookupCtorTypeEntry` asks "is
+-- `name` a type?"; when `name` is a CONSTRUCTOR the lookup misses, and treating the
+-- miss as `[]` dropped the ctor from the rename map entirely — `import qa.{Jj(..)}`
+-- on `public export data QT = Jj Int` built to `E-PANIC: unbound variable 'Jj'`
+-- while `check` and `run` were both correct.  Writing the same import WITHOUT `(..)`
+-- was fine, because that spelling took the bare branch.
+--
+-- This mirrors `frontend/resolve.expandMemberNames` (`:2327`) arm for arm — that is
+-- the scope layer this one has to agree with:
+--   * `UseMember name False`      → binds `name`                (bare only)
+--   * `UseMember name True`, hit  → binds `name` :: that type's ctors
+--   * `UseMember name True`, miss → binds `name`                (bare only)
+-- In the hit case resolve binds the member name too, which matters when `name` is
+-- both a type of M and a ctor of some other type of M; the bare check is what
+-- decides, exactly as it does for a non-wild member.  When the type and its sole
+-- ctor share a spelling (`data Foo = Foo Int`) both halves yield the SAME pair, and
+-- `mangleUnitU`'s `omFromPairs` collapses the duplicate.
 ctorMemberEntry : String -> List (String, List String) -> UseMember -> List (String, String)
 ctorMemberEntry mid typeEntries (UseMember name wild _ _) =
   if wild then match lookupCtorTypeEntry name typeEntries
-    Some ctors => flatMap (originCtorEntry mid) ctors
-    None => []
-  else if contains name (flatMap snd typeEntries) then originCtorEntry mid name else []
+    Some ctors => bareCtorMemberEntry mid typeEntries name
+      ++ flatMap (originCtorEntry mid) ctors
+    None => bareCtorMemberEntry mid typeEntries name
+  else bareCtorMemberEntry mid typeEntries name
+
+-- `name` itself, iff M exports a CONSTRUCTOR so spelled.  Scans every type's ctor
+-- list because the question is about ctor-ness, not about which type owns it.
+bareCtorMemberEntry : String -> List (String, List String) -> String -> List (String, String)
+bareCtorMemberEntry mid typeEntries name =
+  if contains name (flatMap snd typeEntries) then
+    originCtorEntry mid name
+  else
+    []
 
 typeCtorEntries : String -> (String, List String) -> List (String, String)
 typeCtorEntries mid (_, ctors) = flatMap (originCtorEntry mid) ctors

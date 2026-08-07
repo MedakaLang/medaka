@@ -1,0 +1,22 @@
+-- A newtype whose constructor is used ONLY inside its own module.  That is the only
+-- way a newtype's constructor is reachable at all: it is unconditionally
+-- module-private (`public` is a parse error on `newtype`), and measured on this
+-- binary with no collision present, `import nmodw.{NTW(..)}`, `import nmodw.{NTW,
+-- Wrapw}` and `import nmodw.*` all give `T-UNBOUND` `Unbound variable: Wrapw`.
+--
+-- `Wrapw` must still be mangled `nmodw__Wrapw` at its definition and at both of the
+-- uses below, or the flat emit path collides it with any other module's `Wrapw`.
+-- That renaming comes from `unitLocalCtorNames`, NOT from the ctor-EXPORT index — two
+-- different peers, and only the export one is visibility-scoped (#1305).
+export newtype NTW = Wrapw Int
+
+export mkNTW : Int -> NTW
+mkNTW n = Wrapw n
+
+-- the trailing wildcard clause is only here to keep this module diagnostic-free: a
+-- single-constructor `newtype` match is not recognised exhaustive, though the
+-- identical single-constructor `data` shape is (an unrelated known gap, noted in
+-- test/must_fail_fixtures/1311-newtype-ctor-import-bare-unbound/claim.txt).
+export unNTW : NTW -> Int
+unNTW (Wrapw n) = n
+unNTW _ = 0

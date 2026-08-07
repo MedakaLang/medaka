@@ -1,0 +1,11 @@
+-- `Vee` is BOTH a constructor (of `SA`) and a type name in its own right (whose
+-- constructor is `Wye`).  Both meanings are public, so a `Vee(..)` member has to
+-- bind both: the type's constructors AND the constructor so spelled.
+public export data SA = Vee Int
+public export data Vee = Wye Int
+
+export unSA : SA -> Int
+unSA (Vee n) = n
+
+export unVee : Vee -> Int
+unVee (Wye n) = n

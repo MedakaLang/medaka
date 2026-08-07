@@ -1,0 +1,62 @@
+-- #1305 NON-REGRESSION + COVERAGE CELL for the removal of the `DNewtype` arm from
+-- `backend/private_mangle.ctorExportEntries`.
+--
+-- That arm offered an importing unit the symbol `<nmodw>__Wrapw` for a constructor
+-- the front end never puts in that unit's scope.  This program is the case that must
+-- keep working across the removal: a newtype constructor that IS legitimately live —
+-- used inside its own module, and colliding by spelling with a public data
+-- constructor another module genuinely exports.
+--
+-- Two different peers are in play and deleting the wrong one is the trap.  The
+-- ctor-EXPORT index answers "may an IMPORTER name this?" (the arm that was removed);
+-- `unitLocalCtorNames` answers "does this unit define it?" and is deliberately
+-- unfiltered, which is what still renames nmodw's `Wrapw` to `nmodw__Wrapw` at its
+-- definition and at both uses inside nmodw.
+--
+-- Expected output, derived by hand BEFORE any capture and independently of any
+-- engine: `Wrapw` in THIS file can only be bmodw's arity-2 constructor — nmodw is
+-- imported without `(..)` and without a `Wrapw` member, so it contributes no
+-- constructor here — giving `unBW (Wrapw 1 3)` = `1 + 3` = `4`.  nmodw's own `Wrapw`
+-- is reached only through `mkNTW`/`unNTW`, which is the only way it is reachable at
+-- all, giving `9`.  So `9` then `4`.
+--
+-- ⚠️ WHY nmodw's CONSTRUCTOR IS NOT IMPORTED HERE: it cannot be.  Measured on this
+-- binary with no collision present, `import nmodw.{NTW(..), unNTW}`,
+-- `import nmodw.{NTW, Wrapw, unNTW}` and `import nmodw.*` all give
+-- `T-UNBOUND` `./p.mdk:3:23: Unbound variable: Wrapw`.  With the collision present,
+-- adding the `(..)` instead gets a RESOLVE refusal — `Ambiguous constructor: 'Wrapw'
+-- is brought into scope by both `nmodw` and `bmodw`` — so no spelling reaches the
+-- emitter with both constructors live.  That is why the shape #1305 actually files
+-- (a collider the unit never imports BY NAME, so no ambiguity is detected) cannot be
+-- expressed here and stays in `test/must_fail_fixtures/`.
+--
+-- 🚨 THIS IS NOT A FAIL-CAPABLE REGRESSION GUARD FOR THE SHIPPED DIFF, AND THE
+-- ATTEMPTS ARE RECORDED SO NOBODY CITES IT AS ONE.  It is green on pristine bfee53b4
+-- and green after the change, because the change only DELETES an export-index entry
+-- that no correct program could use.  Three counterfactual binaries were built and
+-- measured, not reasoned about:
+--   * `localCtorNames`'s `DNewtype` arm deleted (the plausible over-reach when "drop
+--     the newtype arm" is read as one instruction instead of two) — this program
+--     still built and still printed `9` / `4`, exit 0.  Derived reason: nmodw's
+--     `Wrapw` then stays bare on BOTH its definition and its uses, while bmodw's is
+--     still mangled, so the two never collide in the flat ctor table.
+--   * the same mutation against TWO modules whose newtype constructors share a
+--     spelling (`NTW = Wrapw Int` / `CTW = Wrapw Bool`) — also still correct, `9` /
+--     `1`.  A newtype constructor is always arity 1, so unmangling one cannot
+--     produce the differing-arity collapse the mangler exists to prevent.
+--   * pristine bfee53b4 — `9` / `4`, exit 0.
+-- So: treat this as a COVERAGE cell, not as evidence the change was necessary.  The
+-- two cells that ARE fail-capable for this PR are the sibling
+-- `ctor_scope_ctor_member_wild_suffix/` and `ctor_scope_ctor_member_wild_dual_role/`,
+-- both measured RED on pristine bfee53b4.
+--
+-- ⚠️ IT IS THIS CORPUS'S FIRST `newtype` AT ALL.  Before it, `grep -rn '\bnewtype\b'
+-- test/llvm_fixtures_modules/` returned nothing, so no native gate in the tree
+-- exercised newtype constructor mangling across a module boundary.
+import nmodw.{NTW, mkNTW, unNTW}
+import bmodw.{BW, Wrapw, unBW}
+
+main : <IO> Unit
+main =
+  let _ = putStrLn (intToString (unNTW (mkNTW 9)))
+  putStrLn (intToString (unBW (Wrapw 1 3)))

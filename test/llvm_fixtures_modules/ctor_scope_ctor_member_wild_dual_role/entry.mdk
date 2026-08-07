@@ -1,0 +1,32 @@
+-- #1300, SECOND SHAPE: a `(..)` member whose name is a type AND a constructor.
+--
+-- The sibling fixture `ctor_scope_ctor_member_wild_suffix/` covers the case where
+-- the `(..)` lookup MISSES.  This one covers the case where it HITS and the bare
+-- name is ALSO a constructor, so the two halves must both fire.
+-- `frontend/resolve.expandMemberNames` binds the member name and then the named
+-- type's constructors:
+--     Some ctors => (name, useMemberLocal m, loc) :: map (c => (c, c, loc)) ctors
+-- `backend/private_mangle.ctorMemberEntry` bound only the second half, so `Vee` — a
+-- constructor of `SA`, which the front end DID put in scope — never entered the
+-- rename map.
+--
+-- Expected output, derived by hand BEFORE any capture and independently of any
+-- engine: `Vee 7` is `SA`'s constructor, so `unSA (Vee 7)` = `7`; `Wye 2` comes from
+-- expanding the type `Vee`, so `unVee (Wye 2)` = `2`.  So `7` then `2`.
+--
+-- ⚠️ COUNTERFACTUAL, measured rather than asserted.  With
+-- `compiler/backend/private_mangle.mdk` restored to bfee53b4 and the binary rebuilt,
+-- this fixture is RED on the native arm:
+--     $ medaka build entry.mdk -o e
+--     error: emitter failed compiling entry.mdk
+--     runtime error [E-PANIC]: unbound variable 'Vee' (not a local, ctor, or known fn)
+--     exit 1
+-- while `medaka run entry.mdk` prints `7` / `2` at exit 0.  Note WHICH name the old
+-- binary names: `Vee`, the member name itself — the half the old code never bound —
+-- and not `Wye`, which came from the expansion it did perform.
+import smodw.{Vee(..), unSA, unVee}
+
+main : <IO> Unit
+main =
+  let _ = putStrLn (intToString (unSA (Vee 7)))
+  putStrLn (intToString (unVee (Wye 2)))

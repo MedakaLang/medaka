@@ -1,3 +1,0 @@
-import qa.{Jj(..), unQA}
-
-main = println (unQA (Jj 5))

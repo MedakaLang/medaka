@@ -1,0 +1,7 @@
+-- A PUBLIC data constructor spelled exactly like nmodw's newtype constructor, at a
+-- different arity.  entry.mdk imports THIS one by name; the differing arity is what
+-- would make a wrong binding observable.
+public export data BW = Wrapw Int Int
+
+export unBW : BW -> Int
+unBW (Wrapw a b) = a + b

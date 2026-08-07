@@ -1,0 +1,6 @@
+-- The `Kkw` entry.mdk actually imports: same spelling as qmodw's NULLARY `Kkw`, but
+-- arity 2 here.  The differing arity is what makes a wrong binding observable.
+public export data PW = Kkw Int Int
+
+export unPW : PW -> Int
+unPW (Kkw a b) = a + b
