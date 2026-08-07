@@ -153,7 +153,7 @@ explicit). Fixtures: `test/shadow_fixtures/` (one per matrix cell), run by
   *"RLocal carries no dict"* as a settled **invariant**. That invariant WAS the
   S-1 silent miscompile: it is now false by design. Do not restore it.
 
-## 1. The resolution function (clauses S1–S8)
+## 1. The resolution function (clauses S1–S9)
 
 ### 1.0 Scope vocabulary — READ THIS BEFORE S1
 
@@ -402,6 +402,91 @@ Given an occurrence of bare name `N` in module `M`:
   `d11`'s `4` was an **unqualified** call the impl universe stole — the abolished
   pre-inversion S2, a **bug**. `d21`'s `4` is dispatch the author **explicitly requested
   by writing `Ix a i =>`** — S5's carve-out, **correct**. Do not "fix" it back.
+
+> ### ♻️ 2026-08-07 — **S6, S7 and S8 below were RESTORED. They had no text for three weeks.**
+>
+> They were dropped by `9c6dcee5` (2026-07-17), whose diff replaced S5's
+> then-`#604`-blocked block and carried S6, S7 and S8 out with it. **Its commit
+> message does not mention them**, and nothing in this document ever retired
+> them: §2's matrix cites **S6** in the Clause column of rows 14–18 and **S8** in
+> rows 8 and 26, §5's narrative cites both, and the top matter and §2 cite **S7**
+> as a live claim — including *"S7's own note above says why"* under the matrix,
+> which pointed at deleted text. Restored **verbatim** from `9c6dcee5^` with
+> exactly two deviations, both in S8:
+>
+> - Its definer-gate sentence read *"is this a method of some **visible**
+>   interface"*. A bare "visible" is retired document-wide (§1.0) and no scope
+>   claim about `ifaceMethodName`'s lookup table has been established here, so
+>   the adjective is **dropped, not replaced** — the predicate is a membership
+>   test and the clause now says only that.
+> - Its closing paragraph predicted a *"probable live divergence from S2"* at
+>   multi-typaram importer width and recorded row 30 as **UNVERIFIED**.
+>   `9c6dcee5` — the very commit that dropped the clause — **probed row 30 and
+>   disproved that prediction**. The paragraph now records the measured outcome,
+>   which §2's row 30 and this document's top matter already state. **S8's
+>   normative content is unchanged by the swap**: the specified outcome for a
+>   multi-typaram *importer* shadow was the standalone before and is the
+>   standalone now.
+
+- **S6 (module-independence).** **[CHANGED]** For a **definer** shadow the impl
+  query is *deleted*, so S6 is **trivially satisfied**: where the interface and impl
+  live cannot change the outcome, because the outcome no longer depends on them. An
+  all-local live impl (`d2`) and an imported one (`d8`) now reject identically. For
+  an **importer** shadow S6 stands as written: the impl query is
+  location-independent, and where the standalone/interface/impl each live changes
+  *detection bookkeeping*, never the outcome.
+
+- **S7 (path agreement).** `run`, `check`, and `build` agree on every cell:
+  `check` accepts iff `run` and the built binary produce the (identical)
+  defined value. A shadow cell where they disagree is a conformance bug even if
+  each path is individually defensible.
+
+  > ⚠️ **Note what S7 COSTS you.** Because it *guarantees* the three engines agree,
+  > **no differential gate can ever see a shadow bug** — the `eq [1] [2]` erasure was
+  > invisible to every gate the project owns, **by construction**, and P0-20 even
+  > "fixed" that cell by making all three paths agree on the *wrong* answer. Tests for
+  > this rule must assert on **printed values against a pinned expectation**
+  > (`run_check_agreement`'s `.out` pin; the shadow gate's `value` column), **never**
+  > on cross-path agreement alone.
+
+- **S8 (arity and typaram arity).** **[S-3 CLOSED 2026-07-17, #54]** Neither a
+  method's *parameter* count nor its interface's *type-parameter* count changes the
+  rule: a shadow of a multi-**param** method (`comb : a -> a -> Int`, row 8 / `d7`) and
+  a shadow of a method on a multi-**TYPARAM** interface (`interface Ix a i`, row 26 /
+  `d11`) both follow S2 keyed on the first parameter, so under the inversion the
+  standalone wins in both and a live-impl receiver is a located reject.
+
+  ⚠️ **The gating predicate is a Fork-1 boundary, NOT an arity restriction.** The
+  **definer** entry points are gated on `ifaceMethodName` — is this name an interface
+  method at all — and nothing more, because the inversion never consults the impl
+  universe, so there is no receiver-to-typaram correspondence for them to require. The
+  **importer** entry points keep `singleTyparamIfaceMethod` (renamed from the
+  misleading `singleParamIfaceMethod`, which counted TYPE PARAMS while its name said
+  method params — the name that sent an agent down a wrong hypothesis and is called out
+  in #54). Fork 1's per-receiver rule genuinely does key the impl query on the receiver
+  head standing at the interface's ONE typaram, and a multi-typaram interface offers no
+  such correspondence to key on — `FromEntries c e`'s `fromEntries : List e -> c` does
+  not even take its first typaram as an argument.
+
+  ⚠️ **That is an implementation boundary, NOT a rule of the language — and #54 did not
+  make it one.** S2's importer arm is itself unqualified by typaram arity and carries an
+  explicit fallback (*"else → the standalone (`RLocal`), with the same domain
+  obligation"*), so the **specified** outcome for a multi-typaram *importer* shadow is
+  the standalone. An earlier draft of this clause called such shadows "out of scope,
+  deliberately"; that was a claim about the *language* with nothing in S2 to support it,
+  and it is **retracted**. A boundary in the code explains why the code is shaped as it
+  is; it does not license this document to stop specifying.
+
+  ✅ **And the binary conforms — measured, not assumed (row 30 / `i10`, 2026-07-17).**
+  This clause used to predict the opposite: that because all three importer entry points
+  decline at multi-typaram width, the occurrence falls through to **ordinary dispatch**,
+  which has no "else → standalone" arm, so a multi-typaram importer shadow was a
+  *"probable live divergence from S2"* — recorded as row 30, **UNVERIFIED**. Probed once
+  [#604](https://github.com/MedakaLang/medaka/issues/604) made a probe possible: it is
+  **conformant** (`4, 3`; `4/400/3` at N-way width). Ordinary dispatch reaches the impl
+  for a live-impl head, and for a no-impl head **the env's binding of the bare name
+  already IS the imported standalone**, so S2's fallback falls out without anyone
+  implementing it.
 
 ### S9 — a CONSTRAINED standalone (added 2026-07-13; closes S-1)
 
