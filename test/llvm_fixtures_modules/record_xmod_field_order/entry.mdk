@@ -1,0 +1,38 @@
+-- #1382 — TWO SAME-NAMED RECORDS AT DIFFERENT FIELD ORDERS, ONE MODULE GRAPH.
+--
+-- `armod` and `zrmod` each declare a record TYPE spelled `Cfg` with the same two
+-- `Int` field names at OPPOSITE indices.  They do not import each other, and
+-- neither projects the other's record — every `.a`/`.b` here happens INSIDE the
+-- module that declared the record being projected.
+--
+-- 🚨 THE ENTRY MODULE NEVER MENTIONS `Cfg` AT ALL.  It imports four plain `Int`
+-- values.  That is deliberate and it is the `AGENTS.md` "feature present, UNRELATED
+-- code still behaves" shape: the assertion is about code that takes no part in the
+-- collision, because the defect was that a module's OWN projections were corrupted
+-- by a declaration it has no import path to.
+--
+-- Expected output, derived BY HAND from the sources before anything was run and
+-- independently of any engine:
+--   armod: mkA = Cfg { a = 11, b = 22 }  =>  arA = 11, arB = 22
+--   zrmod: mkZ = Cfg { b = 33, a = 44 }  =>  zrA = 44, zrB = 33
+-- so `ar=11,22 zr=44,33`.
+--
+-- ⚠️ EVAL IS A KNOWN-WRONG ORACLE FOR THIS SHAPE, IN THE REASSURING DIRECTION, so
+-- this golden was NOT taken from `medaka run`.  The interpreter resolves fields by
+-- NAME at run time (`evalField (VRecord _ fields) field = fieldOr fields field`,
+-- `compiler/eval/eval.mdk`), so it is structurally immune to the layout question
+-- and printed the correct answer throughout the whole life of the bug.  What this
+-- cell grades is the EXECUTED NATIVE (and WasmGC) BINARY, via
+-- `diff_compiler_engines.sh`'s module arm.
+--
+-- Counterfactual, measured rather than reasoned: with `compiler/types/typecheck.mdk`
+-- restored to `c5fda728` and nothing else changed, on a binary cold-built from that
+-- source, this program's built binary prints `ar=11,22 zr=33,44` at exit 0 — zrmod's
+-- own two fields silently swapped, armod's correct.
+import armod.{arA, arB}
+import zrmod.{zrA, zrB}
+
+main : <IO> Unit
+main =
+  putStrLn
+    ("ar=" ++ intToString arA ++ "," ++ intToString arB ++ " zr=" ++ intToString zrA ++ "," ++ intToString zrB)

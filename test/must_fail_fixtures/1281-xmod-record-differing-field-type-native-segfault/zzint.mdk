@@ -1,2 +1,0 @@
--- CONTROL half of issue #1281: byte-identical role to zzcfg.mdk.
-public export data Cfg = { fld : Int }

@@ -1,5 +1,0 @@
--- issue #1281: `zzcfg` declares its OWN, unrelated record type also named `Cfg`,
--- whose sole field `fld` is an `Int` -- same name, same field name and index as
--- aacfg's `Cfg`, but a DIFFERENT field TYPE. This is the `Cfg` main.mdk actually
--- imports and constructs.
-public export data Cfg = { fld : Int }

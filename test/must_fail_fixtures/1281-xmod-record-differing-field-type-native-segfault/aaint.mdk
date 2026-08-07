@@ -1,6 +1,0 @@
--- CONTROL half of issue #1281: byte-identical role to aacfg.mdk, except this
--- `Cfg`'s `fld` is also `Int` -- the ONE variable the control isolates.
-public export data Cfg = { fld : Int }
-
-export aaf : Int -> Int
-aaf n = n
