@@ -411,14 +411,27 @@ Given an occurrence of bare name `N` in module `M`:
 > them: §2's matrix cites **S6** in the Clause column of rows 14–18 and **S8** in
 > rows 8 and 26, §5's narrative cites both, and the top matter and §2 cite **S7**
 > as a live claim — including *"S7's own note above says why"* under the matrix,
-> which pointed at deleted text. Restored **verbatim** from `9c6dcee5^` with
-> exactly two deviations, both in S8:
+> which pointed at deleted text. Restored from `9c6dcee5^` with **three
+> deviations** — one in S6, two in S8:
 >
+> - **S6's importer half is NARROWED, not restored** — the 🚨 paragraph inside S6
+>   below carries the derivation. Its three-subject location-independence
+>   sentence was true when written (2026-07-09) and was made **false** by #1375's
+>   scope ruling (2026-08-06) *while this clause was absent from the document*.
+>   Restoring it verbatim would have re-imported a claim S1-SCOPE contradicts
+>   thirty lines above it. ⚠️ **This is the deviation that makes the count three.**
+>   An earlier revision of this note said "exactly two" — correct about what had
+>   been done, wrong about what should have been. The third was found by the rules
+>   review on PR #1390, not by the restoration.
 > - Its definer-gate sentence read *"is this a method of some **visible**
 >   interface"*. A bare "visible" is retired document-wide (§1.0) and no scope
->   claim about `ifaceMethodName`'s lookup table has been established here, so
->   the adjective is **dropped, not replaced** — the predicate is a membership
->   test and the clause now says only that.
+>   claim about `ifaceMethodName`'s lookup table has been established here, so the
+>   adjective is **dropped with nothing put in its place** — the clause is left
+>   **silent on scope**, which is the honest state. ⚠️ It briefly read *"an
+>   interface method **at all**"*; that was withdrawn, because "at all" asserts the
+>   predicate is *unrestricted* — a true description of today's implementation, and
+>   the graph-global reading #1375 overturned for S1's interface operand — placed
+>   inside §1 with no marker saying which of the two it was.
 > - Its closing paragraph predicted a *"probable live divergence from S2"* at
 >   multi-typaram importer width and recorded row 30 as **UNVERIFIED**.
 >   `9c6dcee5` — the very commit that dropped the clause — **probed row 30 and
@@ -427,14 +440,59 @@ Given an occurrence of bare name `N` in module `M`:
 >   normative content is unchanged by the swap**: the specified outcome for a
 >   multi-typaram *importer* shadow was the standalone before and is the
 >   standalone now.
+>
+> **What this changes for an implementer — stated against the baseline that
+> matters.** Against `9c6dcee5^` (the text as it last stood) the delta is the S6
+> narrowing and nothing else. But **an implementer reads `main`**, where these
+> three clauses have *no text at all*, and against that baseline **three clauses of
+> obligation return**: S6 (location-independence for the impl and the standalone,
+> with the interface carved out), S7 (path agreement, and its warning that
+> cross-engine agreement is worthless as evidence), and S8 (neither method-param
+> count nor interface-typaram count changes the rule). None of the three is new
+> law — every one was already assumed by the tables that cite it throughout §2 and
+> §5 — but "no licensing delta" is only true against the 2026-07-17 baseline, and
+> saying it unqualified would be measuring against a document nobody reads.
 
 - **S6 (module-independence).** **[CHANGED]** For a **definer** shadow the impl
   query is *deleted*, so S6 is **trivially satisfied**: where the interface and impl
   live cannot change the outcome, because the outcome no longer depends on them. An
   all-local live impl (`d2`) and an imported one (`d8`) now reject identically. For
-  an **importer** shadow S6 stands as written: the impl query is
-  location-independent, and where the standalone/interface/impl each live changes
-  *detection bookkeeping*, never the outcome.
+  an **importer** shadow, **two of the three subjects** are still
+  location-independent: where the **impl** lives cannot change the outcome (S2's
+  impl universe is **graph-global**), and neither can which module the
+  **standalone** is imported from. Those two change *detection bookkeeping*, never
+  the outcome.
+
+  🚨 **The INTERFACE's location is NOT free, and S6 must not be read as saying it
+  is. [NARROWED 2026-08-07 — #1380.]** This clause read *"where the
+  standalone/**interface**/impl each live changes detection bookkeeping, never the
+  outcome"* — verbatim from the document's creation (`c96192c2`, 2026-07-09), when
+  S1's operands were graph-global and it was **true**. `b725020b` (2026-08-06,
+  #1375) scoped S1's interface operand to **nameable in `M`**, which makes the
+  interface's location **load-bearing**: hold the standalone, the impl and the
+  receiver fixed and move only the interface's declaring module out of `M`'s import
+  reach, and `N` stops being a shadow at all — S2's importer arm never applies, and
+  a live-impl head that **dispatched** now denotes the imported **standalone**
+  instead (a different answer, and a located reject where the receiver falls
+  outside that standalone's declared domain). The outcome flips on nothing but
+  where the interface lives. **S1-SCOPE says so in its own words, as the price of
+  that ruling:** *"an importer shadow whose only declaring interface is not
+  nameable in `M`, applied to a receiver at a live-impl head. Such a program
+  compiles today and stops compiling under this clause."*
+
+  **Why nobody reconciled the two.** This clause had **no text in the document**
+  from `9c6dcee5` (2026-07-17) until it was restored under #1380 (2026-08-07) — see
+  the restoration note above — and that is the entire window in which #1375 landed.
+  A clause that is absent cannot be checked against a new ruling, so the ruling's
+  own cost paragraph came to sit thirty lines above a contradiction that was not on
+  the page. **Restoring the sentence verbatim would have re-imported it.**
+
+  ⚠️ **§2's rows 14–18 do not grade this.** They vary the interface's topology only
+  *within* `M`'s nameable set (`i1` declares it in `main.mdk`; `i3` and `d8` import
+  it by name), so they are consistent with the narrowed clause and blind to the
+  out-of-set case — the corpus-blindness note under §2 says no unit in the corpus
+  can express that case at all. **A green row 14–18 is not evidence about this
+  paragraph.**
 
 - **S7 (path agreement).** `run`, `check`, and `build` agree on every cell:
   `check` accepts iff `run` and the built binary produce the (identical)
@@ -458,7 +516,7 @@ Given an occurrence of bare name `N` in module `M`:
 
   ⚠️ **The gating predicate is a Fork-1 boundary, NOT an arity restriction.** The
   **definer** entry points are gated on `ifaceMethodName` — is this name an interface
-  method at all — and nothing more, because the inversion never consults the impl
+  method — and nothing more, because the inversion never consults the impl
   universe, so there is no receiver-to-typaram correspondence for them to require. The
   **importer** entry points keep `singleTyparamIfaceMethod` (renamed from the
   misleading `singleParamIfaceMethod`, which counted TYPE PARAMS while its name said
