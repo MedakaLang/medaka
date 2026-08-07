@@ -1,0 +1,60 @@
+issue: 1383
+what: a named-field-VARIANT CONSTRUCTOR (`Plain { hx : Int }`, one of
+what: `Holder`'s variants, declared in ahold.mdk) collides by BARE NAME with
+what: an UNRELATED module's record TYPE (`plainlib.mdk`'s `public export data
+what: Plain = { px : Int }`) -- no import relationship between the two
+what: modules at all. `main.mdk` projects `mkH.hx` where `mkH : Holder`, and
+what: is rejected.
+what: hand-derived correct answer: `100`. `mkH : Holder`; `Holder`'s sole
+what: variant is the named-field constructor `Plain { hx : Int }`; `mkH.hx`
+what: projects `hx` from it. `plainlib`'s `Plain` is a different declaration
+what: in a different namespace position (a record TYPE, not this constructor)
+what: and is irrelevant to this projection.
+what: per the issue's mechanism: `pairRecordByName` -- the field-to-owners
+what: fallback in compiler/types/typecheck.mdk -- is keyed by a bare `String`.
+what: The constructor namespace (`Plain` the ctor) and the record-type
+what: namespace (`Plain` the type) collide in one table, so the lookup
+what: returns whichever entry the bare name `Plain` reaches.
+cmd: check-json main.mdk
+exit: 1
+diag: T-TYPE-MISMATCH 9:29-9:32 Type mismatch: Holder vs Plain
+diag: T-UNKNOWN-FIELD 9:29-9:32 Field 'hx' does not belong to record 'Plain'
+control: check-json control.mdk
+why-fixture: `check-json` grades the full ordered diagnostic list; `diag:`
+why-fixture: (not `diag-code`) is pinned because the MESSAGE is the defect
+why-fixture: here, not merely its location -- the diagnostic names a type
+why-fixture: (`Plain`) this program never puts in that position, and the
+why-fixture: issue's own point is that this is "actively misleading": `hx`
+why-fixture: DOES belong to the record the program means, and the compiler
+why-fixture: fetched the WRONG one. A fix that changed only the exit code
+why-fixture: while still naming the wrong type would not be a real fix, so
+why-fixture: pinning the exact wording (not just code+range) is deliberate.
+why-fixture: Both diagnostics come from the SAME wrong `RecordInfo` lookup
+why-fixture: (`pairRecordByName`), so both are pinned together, in the order
+why-fixture: the checker actually emits them (`T-TYPE-MISMATCH` then
+why-fixture: `T-UNKNOWN-FIELD`) -- measured firsthand via `check --json` on
+why-fixture: this exact fixture file, not assumed from the issue body's
+why-fixture: prose rendering.
+why-control: control.mdk is main.mdk with plainlib.mdk's role played by
+why-control: boxlib.mdk instead -- same shape (an unrelated module, one
+why-control: unrelated record with one unrelated `Int` field, one unrelated
+why-control: constructor function), except the record TYPE is named `Boxed`,
+why-control: not `Plain`. The ONE variable removed is the bare-name collision
+why-control: with ahold's `Plain` constructor. Measured firsthand:
+why-control: `check --json control.mdk` exits 0 with zero diagnostics in
+why-control: every file, and `medaka run control.mdk` prints `100` (the
+why-control: hand-derived correct answer) at exit 0. If this control breaks,
+why-control: named-field-variant projection broke outright, not #1383.
+why-note: graded S1 (loud breakage), per the issue: a legal program is
+why-note: refused, at `check`, at exit 1, with a located diagnostic --
+why-note: nothing silent, nothing memory-unsafe. Its sibling #1382 is the
+why-note: silent/unsafe form of a closely related bare-name-keying defect
+why-note: (a different table, the emitter's field-layout registry, not this
+why-note: table). The issue is explicit that a careless fix here -- one that
+why-note: changes WHICH `RecordInfo` is selected without also making the
+why-note: stamped name distinguishing -- would convert this S1 into #1382's
+why-note: S0 (a run/build divergence) rather than draining it. Whoever fixes
+why-note: this should grade the result against #1382's repros too, not only
+why-note: against this one. A fix makes `check --json main.mdk` exit 0 and
+why-note: `medaka run main.mdk` print `100`, draining this row. Close #1383
+why-note: and delete this fixture when that happens.

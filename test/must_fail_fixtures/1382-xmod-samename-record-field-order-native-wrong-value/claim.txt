@@ -1,0 +1,71 @@
+issue: 1382
+what: two UNRELATED modules (armod.mdk, zrmod.mdk) each declare a record TYPE
+what: with the SAME BARE NAME (`Cfg`), but with their two `Int` fields (`a`,
+what: `b`) in the OPPOSITE declaration order. main.mdk imports only plain Int
+what: VALUES from each (`arSum`, `selfA`, `selfB`) -- it never mentions `Cfg`
+what: itself, and neither module projects the other's record. Per the issue's
+what: mechanism: both native emitters (`fieldIdxByName` in llvm_emit.mdk,
+what: `recByName` in wasm_emit.mdk) resolve a record's field layout by BARE
+what: TYPE NAME across the WHOLE module graph, so having two same-named `Cfg`
+what: declarations reachable makes the emitter apply one module's field order
+what: to the other's values.
+what: hand-derived correct answer: `self=44,33 arsum=33`. Derived from the
+what: source before running anything: `mkZ = Cfg { b = 33, a = 44 }`, so
+what: `mkZ.a = 44` and `mkZ.b = 33`; `arSum = mkA.a + mkA.b = 11 + 22 = 33`.
+what: Measured firsthand: `medaka check` exits 0; `medaka run` prints exactly
+what: this correct value; the emitted BUILT BINARY instead prints
+what: `self=33,44 arsum=33` at exit 0 -- zrmod's own two fields silently
+what: swapped, even though zrmod is never touched by armod's layout at the
+what: type-system level.
+cmd: build-run main.mdk
+exit: 0
+stdout: self=33,44 arsum=33
+control: build-run control.mdk
+why-fixture: this is a run-VERSUS-built-binary divergence with no diagnostic
+why-fixture: anywhere -- `check` and `run` are both clean/correct today and
+why-fixture: would stay so forever, pinning nothing -- so only `build-run`
+why-fixture: (builds to a per-process temp binary, EXECUTES it, grades THAT
+why-fixture: exit code + stdout) can see it. The pinned stdout is the WRONG
+why-fixture: value the executed binary actually prints: zrmod's own `a` and
+why-fixture: `b` read back swapped, which is armod's field order applied to
+why-fixture: zrmod's storage. A fix makes this print `self=44,33 arsum=33`
+why-fixture: (matching `run` and matching this fixture's own control below) --
+why-fixture: a DIFFERENT stdout, not a different exit code; exit stays 0
+why-fixture: either way, so `stdout:` carries the whole discriminating weight.
+why-fixture: Module NAMES `armod`/`zrmod` are LOAD-BEARING (see the comment in
+why-fixture: each file): the issue states which module's layout wins follows
+why-fixture: module-NAME sort order, not import-clause order, so renaming
+why-fixture: either file could move which projection ends up wrong or which
+why-fixture: value this pin needs to expect.
+why-control: control.mdk is main.mdk with armod_ctl.mdk/zrmod_ctl.mdk
+why-control: replacing armod.mdk/zrmod.mdk -- the ONE variable changed is that
+why-control: both control `Cfg` declarations now share the SAME field order
+why-control: (`a` then `b`). The cross-module same-BARE-NAME `Cfg` collision
+why-control: is still fully present; only the field-order DISAGREEMENT is
+why-control: removed. Measured firsthand: `build-run control.mdk` exits 0 and
+why-control: prints `self=44,33 arsum=33` -- the correct value in both
+why-control: engines -- proving the same-name type collision alone does not
+why-control: corrupt the binary; the differing field ORDER is the trigger.
+why-control: If this control breaks, cross-module record field access broke
+why-control: outright, not #1382.
+why-note: the issue also gives a second repro (differing FIELD TYPES at the
+why-note: swapped positions, `Int`/`String`) that segfaults the built binary
+why-note: instead of printing a wrong value (`build main.mdk` exit 0, then
+why-note: running the produced binary exits 139 with
+why-note: "runtime error [E-FATAL-SIGNAL]: fatal memory fault"). Measured
+why-note: firsthand on this same binary: reproduces exactly as the issue
+why-note: states (`medaka run` prints the correct `44zed|11arm`; the built
+why-note: binary segfaults). Not pinned as a second row here (one fixture per
+why-note: issue) -- this row pins the same-mechanism SILENT-WRONG-VALUE half,
+why-note: which is the more clearly S0-shaped of the two (no crash, no
+why-note: signal, wrong answer at exit 0). Both halves share one fix site.
+why-note: coverage-on-fix: `test/diff_compiler_engines.sh` already asserts
+why-note: `eval == native` over `test/llvm_fixtures_modules/`, and a fixture
+why-note: with two same-named cross-module records at different field orders
+why-note: would red that gate immediately once added -- the gate exists, the
+why-note: input does not. Do NOT add this shape to `llvm_fixtures_modules/`
+why-note: now (it would turn `engines` red on every PR before the fix lands).
+why-note: When #1382 is fixed, MOVE this coverage there: add a fixture pair
+why-note: shaped like armod.mdk/zrmod.mdk/main.mdk to
+why-note: `test/llvm_fixtures_modules/`, asserting `self=44,33 arsum=33` on
+why-note: both engines, then close #1382 and delete this directory.

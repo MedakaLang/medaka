@@ -1,0 +1,10 @@
+-- issue #1383, verbatim from the issue body.
+-- Hand-derived correct answer: `100`. `mkH : Holder`; `Holder`'s sole variant
+-- is the named-field constructor `Plain { hx : Int }`; `mkH.hx` projects `hx`
+-- from it. `plainlib`'s `Plain` is a different declaration in a different
+-- namespace position (a record TYPE, not this constructor) and is irrelevant
+-- to this projection.
+import ahold.{Holder, mkH}
+import plainlib.{Plain, mkP}
+main : <IO> Unit
+main = putStrLn (intToString mkH.hx)
