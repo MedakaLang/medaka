@@ -1,0 +1,7 @@
+-- The pure bystander: a record whose name collides with nothing anywhere in the
+-- graph.  It shares only the FIELD name `shared`, which is what keeps it on the
+-- field→owners path this unit did not touch.
+public export data Other = { qx : Int, shared : Int }
+
+export mkQ : Other
+mkQ = Other { qx = 2, shared = 20 }

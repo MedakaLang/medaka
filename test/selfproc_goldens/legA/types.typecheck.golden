@@ -931,6 +931,7 @@ lookupQualArity : String -> String -> List ((String, String), List Int) -> Optio
 lookupQualIfaces : String -> String -> List ((String, String), List String) -> Option (List String)
 lookupRecordByMangledHead : String -> String -> Option (String, RecordInfo)
 lookupRecordByName : String -> Option RecordInfo
+lookupRecordForReceiver : Mono -> String -> Option RecordInfo
 lookupSchemeIface : String -> Int -> List ((String, Int), List (String, List Int)) -> Option String
 lookupSchemeObls : String -> Int -> List ((String, Int), List (String, List Int)) -> Option (List (String, List Int))
 lookupSchemeOblsByName : String -> List ((String, Int), List (String, List Int)) -> Option (List (String, List Int))
@@ -1180,17 +1181,21 @@ recFieldMono : List (String, Mono) -> Field -> (String, Mono)
 recPatFieldVarsTc : RecPatField -> List String
 recRoute : String -> Mono -> Int -> Route
 recRoutes : String -> Mono -> List Int -> List Route
+receiverTypeIdent : Mono -> Option Ident
 recordAbsorptions : List Atom -> Ref Effvar -> Unit
 recordArgSiteFn : String -> Int -> Mono -> Unit
 recordArgStamp : String -> Ref Route -> Ref (List Route) -> Int -> Mono -> Unit
 recordArithSite : String -> Ref Route -> Mono -> Unit
 recordBinopSite : String -> Ref Route -> Mono -> Unit
 recordCallObligations : List String -> List Mono -> Unit
+recordCandForType : Ident -> List (Ident, String, RecordInfo) -> Option RecordInfo
 recordCandImported : List Decl -> String -> (Ident, String, RecordInfo) -> Bool
 recordCandInfo : (Ident, String, RecordInfo) -> RecordInfo
+recordCandIsType : Ident -> Ident -> String -> Bool
 recordDoMonadError : Loc -> Unit
 recordFieldMap : RecordInfo -> Map String Mono
 recordFieldNames : RecordInfo -> List String
+recordForReceiverIdent : Mono -> String -> Option RecordInfo
 recordIfaceObligation : String -> Mono -> Unit
 recordImplObligation : String -> Mono -> Mono
 recordImporterShadowDicts : TcEnv -> String -> List (Ref Route) -> Mono -> Unit

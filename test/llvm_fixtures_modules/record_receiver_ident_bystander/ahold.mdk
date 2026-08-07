@@ -1,0 +1,19 @@
+-- A NAMED-FIELD VARIANT whose CONSTRUCTOR is spelled `Plain` — the same registry
+-- key `plainlib`'s record `Plain` uses, but owned by type `Holder`.  That is what
+-- makes key `Plain` collided in `universeRecordIdentsRef` with two candidates
+-- whose OWNING TYPE NAMES differ, so an identity test that compares only the
+-- declaring module (or only the key) cannot tell them apart.
+--
+-- `hxOf` projects `hx` HERE rather than in `entry`, on purpose: from `entry` the
+-- receiver head is `Holder`, arm (a) misses, and the field→owners fallback resolves
+-- `hx` through `pairRecordByName "Plain"` — a BARE-key read this unit deliberately
+-- did NOT change (see the PR's "what this unit did not do").  Projecting inside the
+-- declaring module keeps this cell about the paths unit 3 touches.
+public export data Holder =
+  | Plain { hx : Int }
+
+export mkH : Holder
+mkH = Plain { hx = 100 }
+
+export hxOf : Holder -> Int
+hxOf h = h.hx

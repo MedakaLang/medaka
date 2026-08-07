@@ -1,0 +1,33 @@
+-- #1111 A-2.13 (#1319 unit 3) — #1376's drain, on all three engines.
+--
+-- The spelling NO per-module scope decision can reach: `entry` imports only a
+-- VALUE of the record.  A-2.6's `memberOverlayDecl` and unit 2's
+-- `applyRecordScopeOverrides` both key on an import member that NAMES a
+-- constructor or its type, and `mkA` is neither — so both declined to the
+-- bare-name floor and module load order picked `zrmod`'s unrelated `Cfg`.
+--
+-- Before: `Type mismatch: Cfg vs Cfg — … one comes from module 'armod', the other
+-- from module 'zrmod'` plus `Float vs Int`, exit 1.  Measured first-hand on a
+-- binary cold-built from `main` @ e93d38d9 (unit 2 merged), and the issue records
+-- the same on `main` @ 1443870c and on PR #1372's branch.
+--
+-- ⚠️ THIS FIXTURE'S CONTROL IS ITS OWN SIBLING, NOT A FILE HERE.  The
+-- discriminator that proved this was not a #1283 re-export residual is that the
+-- DECLARING-module spelling (`import armod.{mkA}`, exactly what this file writes,
+-- no re-exporter anywhere) failed too.  `record_scope_reexport_ident/` is the
+-- re-export shape and stays green independently; if only that one is green this
+-- row is not covered.
+--
+-- Hand-derived correct answer, independent of any engine: `mkA : Cfg` is armod's
+-- record, whose `fld` is an `Int` and is `7`; `zrf 0 = 0`.  So `7`.
+--
+-- What makes it work now: `mkA`'s TYPE carries `armod` (that is how the old
+-- diagnostic knew to say `armod`), and `resolveFieldRecord`'s arm (a) selects the
+-- `RecordInfo` by that identity instead of by the string `"Cfg"`.  Nothing in this
+-- file's import spelling is consulted, which is the point — there is nothing here
+-- to key a scope decision on.
+import armod.{mkA}
+import zrmod.{zrf}
+
+main : <IO> Unit
+main = putStrLn (intToString (mkA.fld + zrf 0))

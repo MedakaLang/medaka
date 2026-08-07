@@ -1,5 +1,5 @@
 # META
-source_lines=23372
+source_lines=23540
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted typecheck stage — port of lib/typecheck.ml's HM core.  SLICE 1:
@@ -166,6 +166,9 @@ import types.registry.{
   HeadKey(..),
   headKeyOfCon,
   headKeyName,
+  -- A-2.13 (#1319 unit 3): the IDENTITY inside a projected head, for the one
+  -- record lookup that selects a row by the receiver rather than by a spelling.
+  headKeyIdent,
   -- A-2.2b (#1111): the dispatch-key layer.  `headBucketKey`/`RegKey` key the
   -- head-tycon buckets by IDENTITY; `dispKeyRender` renders a whole obligation
   -- ARGUMENT VECTOR, carrying its §8 I6.1 rigid positions in a separate group.
@@ -2101,8 +2104,15 @@ public export data RecordInfo =
 -- ⚠️ THAT IS NOT HYPOTHETICAL AND AN EARLIER DRAFT OF THIS NOTE SAID IT WAS.  It called the
 -- divergence "an obligation with no observed consequence" on the strength of one probe that
 -- kept every projection inside the module which NAMED the record — where the overlay and the
--- floor agree by construction, so the probe could not have shown anything.  **#1377 is the
--- consequence**, pinned at `test/must_fail_fixtures/1377-named-type-wins-over-held-value/`.
+-- floor agree by construction, so the probe could not have shown anything.  **#1377 was the
+-- consequence**: a module naming one `Cfg` and holding a value of the other was refused.
+-- 🚨 #1319 UNIT 3 DRAINED #1377, AND THE OBLIGATION SURVIVES IT.  Unit 3 did not reconcile
+-- the two tables; it stopped ASKING the overlay a question the overlay could not answer —
+-- `resolveFieldRecord`'s arm (a) now selects by the receiver's identity (see
+-- `lookupRecordForReceiver`).  So the one observed consequence is gone and the write
+-- asymmetry is not.  ⚠️ Do NOT restate this as "no observed consequence today": that exact
+-- sentence has now been wrong twice here, and what is true is narrower — the consequence
+-- that was found has been removed, and nobody has established that it was the only one.
 -- Anything added here must state which of the two it writes and why the other is safe.
 --   recordByNameRef : registry KEY → RecordInfo.  omInsert is last-write-wins and
 --     the register site inserts in registration order, so it reproduces the old
@@ -6496,9 +6506,12 @@ fieldOwnerNames fname =
 -- (c) receiver is a concrete non-record → first owner (so the later unify raises
 --     the usual mismatch), or unknown field if none.
 -- On error it pushes the matching type error and returns None.
+--
+-- ⚠️ ARM (a) DOES NOT ASK A SPELLING QUESTION, AND THAT IS WHY IT ALONE CALLS
+-- `lookupRecordForReceiver` INSTEAD OF `lookupRecordByName` — see that function.
 resolveFieldRecord : Mono -> String -> Option (String, RecordInfo)
 resolveFieldRecord te fname = match headTyconNameMono te
-  Some r => match lookupRecordByName r
+  Some r => match lookupRecordForReceiver te r
     Some ri => Some (r, ri)
     None => match lookupRecordByMangledHead r fname
       Some pair => Some pair
@@ -6507,6 +6520,151 @@ resolveFieldRecord te fname = match headTyconNameMono te
         None
       else resolveFieldByOwners te fname
   None => resolveFieldByOwners te fname
+
+-- ── #1111 Stage A-2 unit A-2.13 (#1319 unit 3): ONE ENTRY, TWO QUESTIONS ────
+--
+-- `recordByNameRef` is asked two questions that a single bare-`String` key
+-- cannot answer separately, and #1376 / #1377 are the two halves of that:
+--
+--   (1) a SPELLING question — "which declaration does the `Cfg` written in THIS
+--       module's source denote?"  Asked by `inferPatRec`, `inferRecordCreate`
+--       and `inferVariantUpdate`, each of which starts from a name the module
+--       wrote.  The bare key plus unit 2's per-module scope overlay
+--       (`applyRecordScopeOverrides`) is the RIGHT instrument for it: the answer
+--       is a property of what this module imported and declared.
+--   (2) an IDENTITY question — "given a receiver whose type is already inferred
+--       and already carries its origin, which `RecordInfo` describes it?"  Asked
+--       by `resolveFieldRecord`'s arm (a) ONLY.  Nothing the module spelled is
+--       an input: `mkZ.beta` is decided entirely by `mkZ`'s type.
+--
+-- Before this unit both questions read `lookupRecordByName`, so whatever decided
+-- the single entry answered both the same way — and a module that NAMES one
+-- declaration while HOLDING a value of the other cannot get both right.
+--
+-- ⚠️ THE SPLIT IS NOT MINE — IT IS THE SPEC'S, AND THE IMPLEMENTATION WAS NOT
+-- FOLLOWING IT.  `docs/spec/DICT-SEMANTICS.md` §8 I4 qualification 2 draws exactly
+-- this line, in one sentence, and names both sides:
+--
+--     "It applies only to occurrences resolved BY NAME.  A record-field selection
+--      `r.f` is resolved by the *type* of `r`, not by the spelling `f` … Record
+--      *construction* and record *patterns* name the record, and are ambiguous
+--      exactly when that name is."
+--
+-- So arm (a) is spec'd to resolve by the receiver's TYPE and was resolving by a
+-- per-module decision over a bare spelling; the other three readers are spec'd to
+-- resolve by name and do.  The diagnostic the collision produced was itself the
+-- evidence the information was in hand at the point of failure — it could name
+-- BOTH modules ("one comes from module 'zrmod', the other from 'armod'") while
+-- selecting by neither.
+--
+-- 🚨 THIS IS A SPLIT, NOT A GUARD AT A READ SITE, and the distinction is the one
+-- `.claude/workstreams/TYPECHECK.md`'s standing gate asks about (its
+-- "does the fix change the KEY, or add a guard at ONE READ SITE?"
+-- discriminator).  Question (2) now has its OWN key — the receiver's `Ident`,
+-- selected out of the identity-keyed companion `universeRecordIdentsRef` — and
+-- question (1) keeps the spelling key it always had.  One read site moves
+-- because exactly one read site asks question (2); a second site asking it would
+-- call this same function.  What is NOT claimed: `recordByNameRef` is still
+-- bare-keyed, and it is still the floor whenever the receiver carries no
+-- identity.  This unit does not retire the overlay (that is #1319 unit 4) nor
+-- the duplication (#1288 is the deleter, as for units 1 and 2).
+--
+-- ⚠️ THE FLOOR IS REACHED BY MISS, NEVER BY FALLBACK-ON-AMBIGUITY.  Three
+-- honest-absence cases fall through to `lookupRecordByName`, all of them
+-- "no identity was available", none of them "two candidates matched":
+--   * the receiver head carries no identity (`headKeyIdent` = `None`) — the
+--     flat/loader-less driver path, where NO declaration is stamped (#1115 /
+--     E-1), and the `HkRigid` §8 I6.1 residual;
+--   * the key has no companion row — the module's OWN records (the companion is
+--     grown from `pubDecls` at the END of a module's arm, so a module never sees
+--     itself in it) and every non-`ConNamed` declaration;
+--   * no candidate's type identity equals the receiver's — e.g. a receiver whose
+--     head is the TYPE of a named-field variant (`data T = | Cfg { … }`, key
+--     `Cfg`, type `T`), which arm (a) misses today too and which the
+--     field→owners path answers.
+-- Two candidates can never BOTH match: a match requires equal
+-- `(module, type name)`, and one module declaring two types of one name is a
+-- duplicate-definition error.  So this cannot invent an ambiguity resolution.
+lookupRecordForReceiver : Mono -> String -> Option RecordInfo
+lookupRecordForReceiver te r = match recordForReceiverIdent te r
+  Some ri => Some ri
+  None => lookupRecordByName r
+
+-- The identity half.  `universeRecordIdentsRef`'s outer key is the bare registry
+-- key — an INDEX into a candidate list, not the selector; the selector is the
+-- identity comparison below, which is why a collided key keeps both rows here
+-- where `recordByNameRef` keeps one.
+--
+-- ⚠️ THE CHEAP LOOKUP RUNS FIRST, DELIBERATELY.  This is on the path of EVERY
+-- `.field` access whose receiver head is a known record — not only the colliding
+-- ones — so the ordering is a cost decision, not a style one: `omLookup`
+-- allocates nothing, while `receiverTypeIdent` mints a `HeadKey` (and, inside it,
+-- an `Ident`).  A key with no companion row therefore pays one map lookup and
+-- allocates nothing at all.  Do not "simplify" by projecting the head first.
+recordForReceiverIdent : Mono -> String -> Option RecordInfo
+recordForReceiverIdent te r = match omLookup r crossRun.value.universeRecordIdentsRef.value
+  None => None
+  Some cs => match receiverTypeIdent te
+    None => None
+    Some ident => recordCandForType ident cs
+
+-- ⚠️ ROUTED THROUGH `headTyconMono`, NOT A FRESH `Mono.TCon` PATTERN.  Reading
+-- the origin field directly here would add a second site to the `Mono.TCon`
+-- origin-read ratchet in `test/typecheck_compiler_source.sh` and duplicate the
+-- head-node classification `headTyconMono`/`headTyconNameMono` owe each other.
+-- `headKeyIdent` (`types/registry.mdk`) is the accessor; its `None` collapses
+-- "rigid" and "no module id yet" because at a ROW lookup both mean the same
+-- thing — the derivation is written at that function.
+receiverTypeIdent : Mono -> Option Ident
+receiverTypeIdent te = match headTyconMono te
+  Some hk => headKeyIdent hk
+  None => None
+
+recordCandForType : Ident -> List (Ident, String, RecordInfo) -> Option RecordInfo
+recordCandForType _ [] = None
+recordCandForType want ((ci, tyName, ri)::rest)
+  | recordCandIsType want ci tyName = Some ri
+  | otherwise = recordCandForType want rest
+
+-- Is candidate `ci` (stored under its CONSTRUCTOR identity, beside the name of
+-- the TYPE it builds) the declaration the receiver identity `want` names?
+--
+-- A candidate carries `Ident NsCtor o cn` plus `tyName`, because that is what
+-- `insertRecordIdents` has in hand; the receiver's head names the TYPE, so the
+-- comparison is `(owning type name, declaring module)`.  BOTH halves are needed:
+-- a candidate keyed `Plain` may own type `Holder`, so the module alone does not
+-- decide, and two modules may both declare `Cfg`, so the name alone does not
+-- either.  `o` is the same `dataOrigin` `registerRecordInfoKeyed` put in the
+-- record's result type, which is what `headTyconMono` projects back out of a
+-- value of that record — so this compares the two ends of one declaration.
+--
+-- ⚠️ EACH CONJUNCT IS MEASURED, BY A DIFFERENT FIXTURE, AND NEITHER IS MEASURED
+-- BY THE OTHER'S.  Stubbing was run, not reasoned (#1319 unit 3's PR carries the
+-- table):
+--   * drop `cio == wio` (name only) → `record_receiver_ident_named_vs_held/`
+--     goes RED; `…_value_only/` and `…_bystander/` stay GREEN.
+--   * drop BOTH (first candidate wins) → `…_bystander/` goes RED at `mkP.px`;
+--     `…_value_only/` stays GREEN.  Since the name-only variant above leaves the
+--     bystander green, that redness is attributable to the TYPE-NAME conjunct.
+--   * stub the whole selection to `None` → both drain fixtures RED, bystander
+--     GREEN (which is what makes it a bystander and not a second drain).
+--
+-- ⚠️ NAME FIRST, AND MONOMORPHIC — the discipline `tabKeyEq` states at its own
+-- definition and `compiler/AGENTS.md` states for hot helpers.  It also allocates
+-- nothing, which is why the candidate identity is compared component-wise rather
+-- than rebuilt as an `Ident NsType …` and `==`-ed: this runs per candidate, per
+-- field access.
+--
+-- ⚠️ THIS IS STRICTER THAN `unify`'s HEAD TEST, AND THE DIRECTION IS THE POINT.
+-- `sameTyConHead` (`frontend/ast.mdk`) lets an ABSENT origin match anything,
+-- because it answers an ACCEPTANCE question where a false reject refuses a valid
+-- program.  This answers a LOOKUP, where a false hit is silent wrongness — so
+-- absence must never match, and it cannot: `headKeyIdent` yields no `Ident` for
+-- an unstamped head, and this function is not reached.  That inversion is the
+-- same one `ifaceIdMatches` and `sameTyConHead` document at each other.
+recordCandIsType : Ident -> Ident -> String -> Bool
+recordCandIsType (Ident _ wio wname) (Ident _ cio _) tyName = tyName == wname
+  && cio == wio
 
 -- Mangle-aware record lookup for the emit path.  `backend/private_mangle.mdk`
 -- renames a record's DECL name (a record's name IS its constructor) to
@@ -13236,27 +13394,37 @@ dropRecordIdentCand ident ((c@(i, _, _))::rest)
 -- having DISJOINT field sets, `fieldOwnersRef` can name `K` as the owner of a field the
 -- newly-selected `K` does not have.
 --
--- 🚨 AND THAT HAS A CONSEQUENCE.  An earlier draft of this note called it *"an obligation
+-- 🚨 AND THAT HAD A CONSEQUENCE.  An earlier draft of this note called it *"an obligation
 -- with no observed consequence today"* on the strength of one probe; the probe kept both
 -- projections inside the module that NAMED the record, so the overlay agreed with the floor
--- and could not show anything.  **#1377 is the consequence**: a module that names one `Cfg`
--- and holds a value of the OTHER `Cfg` is refused, `Field 'beta' does not belong to record
--- 'Cfg'`, exit 1, where `5` is correct.  Pinned at
--- `test/must_fail_fixtures/1377-named-type-wins-over-held-value/`.
+-- and could not show anything.  **#1377 was the consequence**: a module that names one `Cfg`
+-- and holds a value of the OTHER `Cfg` was refused, `Field 'beta' does not belong to record
+-- 'Cfg'`, exit 1, where `5` is correct.
 --
--- ── THE TRANSITIONAL RULE, STATED SO IT IS A DECISION AND NOT AN ACCIDENT ──
--- **The declaration this module NAMES wins for EVERY projection of that key in this module,
--- including projections of values whose type the module never named.**  That is what one
--- bare-keyed entry per registry key can express, and it is deliberate for this unit: it is
--- strictly better than the load-order coin flip it replaces (#1377 was ACCEPTED in one
--- clause order and REFUSED in the other on `main`; it is now refused in both), and it is
--- wrong in the case above.
+-- ⚠️ #1319 UNIT 3 DRAINED #1377 WITHOUT RECONCILING THESE TWO TABLES, so the write asymmetry
+-- above is unchanged and this paragraph must not be read as retired.  What unit 3 removed is
+-- the QUESTION: `resolveFieldRecord`'s arm (a) no longer reads this overlay's answer for a
+-- receiver whose type already carries an identity.  Do NOT restate the note as "no observed
+-- consequence today" — that sentence has been wrong twice here already; the accurate
+-- statement is that the consequence which was found is gone and nobody has shown it was the
+-- only one.
 --
--- It is **transitional**, not the target.  The target rule is *"the receiver's own identity
--- selects its record"*, which needs `lookupRecordByName` to take an identity rather than a
--- bare `String` — the same identity analysis #1376's claim file names, and the reason this
--- unit stopped where it did rather than widening.  Do not read the rule above as settled
--- semantics; read it as the best a bare key can do.
+-- ── THE RULE THIS OVERLAY NOW STATES, AND ITS BOUNDARY ──────────────────────
+-- **The declaration this module NAMES wins for every occurrence of that name WRITTEN IN THIS
+-- MODULE'S SOURCE** — a record literal, a record pattern, a variant update, an annotation.
+--
+-- 🚨 THE SECOND HALF OF THIS RULE WAS DELETED BY UNIT 3, AND THE OLD WORDING IS QUOTED HERE
+-- SO A STALE COPY ELSEWHERE IS RECOGNISABLE.  It used to read *"… for EVERY projection of
+-- that key in this module, including projections of values whose type the module never
+-- named"*, which is exactly the sentence #1377 falsified.  That clause is gone: a projection
+-- of a value whose type this module never named is now decided by the RECEIVER's identity
+-- (`lookupRecordForReceiver`), not here.
+--
+-- What is left is the SPELLING question, and for that a per-module scope decision is the
+-- right instrument rather than a stopgap — `docs/spec/DICT-SEMANTICS.md` §8 I4 qualification
+-- 2 says record construction and record patterns *are* ambiguous exactly when the name is.
+-- The overlay is still **scaffolding** for a different reason: it is a further implementation
+-- of a fact `resolve.mdk` derives, and #1288 owns the consolidation.  Unit 4 owns retiring it.
 applyRecordScopeOverrides : List Decl -> Unit
 applyRecordScopeOverrides prog =
   overrideScopedRecords
@@ -23387,7 +23555,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omKeys" false) (mem "omFromPairs" false) (mem "omMapValues" false) (mem "omSize" false))))
 (DUse false (UseGroup ("list") ((mem "replicate" false))))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "lookupAssoc" false) (mem "contains" false) (mem "endsWith" false) (mem "reverseL" false) (mem "joinWith" false) (mem "joinNl" false) (mem "joinDot" false) (mem "filterList" false) (mem "anyList" false) (mem "allList" false) (mem "initList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "minI" false) (mem "isSome" false) (mem "orElseOpt" false) (mem "zipL" false) (mem "dedup" false) (mem "dedupBy" false) (mem "lenKey" false) (mem "sortUniqS" false) (mem "startsWith" false) (mem "escStr" false) (mem "editDistance" false) (mem "noneHeadTag" false))))
-(DUse false (UseGroup ("types" "registry") ((mem "HeadKey" true) (mem "headKeyOfCon" false) (mem "headKeyName" false) (mem "RegKey" false) (mem "regKeyOfTab" false) (mem "regKeyNTab" false) (mem "regKeyNTabAt" false) (mem "regKeyRender" false) (mem "dispKeyRender" false) (mem "Registry" false) (mem "regEmpty" false) (mem "regInsertK" false) (mem "regLookupK" false) (mem "MultiRegistry" false) (mem "mregEmpty" false) (mem "mregAppendK" false) (mem "mregLookupK" false) (mem "SetRegistry" false) (mem "sregEmpty" false) (mem "sregAddK" false) (mem "sregSize" false))))
+(DUse false (UseGroup ("types" "registry") ((mem "HeadKey" true) (mem "headKeyOfCon" false) (mem "headKeyName" false) (mem "headKeyIdent" false) (mem "RegKey" false) (mem "regKeyOfTab" false) (mem "regKeyNTab" false) (mem "regKeyNTabAt" false) (mem "regKeyRender" false) (mem "dispKeyRender" false) (mem "Registry" false) (mem "regEmpty" false) (mem "regInsertK" false) (mem "regLookupK" false) (mem "MultiRegistry" false) (mem "mregEmpty" false) (mem "mregAppendK" false) (mem "mregLookupK" false) (mem "SetRegistry" false) (mem "sregEmpty" false) (mem "sregAddK" false) (mem "sregSize" false))))
 (DData Public "Mono" () ((variant "TVar" (ConPos (TyApp (TyCon "Ref") (TyCon "Tyvar")))) (variant "TCon" (ConPos (TyCon "String") (TyCon "TyConOrigin"))) (variant "TRigid" (ConPos (TyCon "String"))) (variant "TApp" (ConPos (TyCon "Mono") (TyCon "Mono"))) (variant "TFun" (ConPos (TyCon "Mono") (TyCon "EffRow") (TyCon "Mono"))) (variant "TEff" (ConPos (TyCon "EffRow")))) ())
 (DData Public "Tyvar" () ((variant "Unbound" (ConPos (TyCon "Int") (TyCon "Int"))) (variant "Link" (ConPos (TyCon "Mono")))) ())
 (DTypeSig false "tconBuiltin" (TyFun (TyCon "String") (TyCon "Mono")))
@@ -24604,7 +24772,18 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "fieldOwnerNames" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "fieldOwnerNames" ((PVar "fname")) (EApp (EVar "sortUniqS") (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "fname")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "fieldOwnersRef") "value")))))
 (DTypeSig false "resolveFieldRecord" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RecordInfo"))))))
-(DFunDef false "resolveFieldRecord" ((PVar "te") (PVar "fname")) (EMatch (EApp (EVar "headTyconNameMono") (EVar "te")) (arm (PCon "Some" (PVar "r")) () (EMatch (EApp (EVar "lookupRecordByName") (EVar "r")) (arm (PCon "Some" (PVar "ri")) () (EApp (EVar "Some") (ETuple (EVar "r") (EVar "ri")))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "lookupRecordByMangledHead") (EVar "r")) (EVar "fname")) (arm (PCon "Some" (PVar "pair")) () (EApp (EVar "Some") (EVar "pair"))) (arm (PCon "None") () (EIf (EApp (EApp (EVar "contains") (EVar "r")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "abstractRecordTypesRef") "value")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-ABSTRACT-FIELD"))) (EApp (EApp (EVar "abstractFieldMsg") (EVar "r")) (EVar "fname")))) (DoExpr (EVar "None"))) (EApp (EApp (EVar "resolveFieldByOwners") (EVar "te")) (EVar "fname")))))))) (arm (PCon "None") () (EApp (EApp (EVar "resolveFieldByOwners") (EVar "te")) (EVar "fname")))))
+(DFunDef false "resolveFieldRecord" ((PVar "te") (PVar "fname")) (EMatch (EApp (EVar "headTyconNameMono") (EVar "te")) (arm (PCon "Some" (PVar "r")) () (EMatch (EApp (EApp (EVar "lookupRecordForReceiver") (EVar "te")) (EVar "r")) (arm (PCon "Some" (PVar "ri")) () (EApp (EVar "Some") (ETuple (EVar "r") (EVar "ri")))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "lookupRecordByMangledHead") (EVar "r")) (EVar "fname")) (arm (PCon "Some" (PVar "pair")) () (EApp (EVar "Some") (EVar "pair"))) (arm (PCon "None") () (EIf (EApp (EApp (EVar "contains") (EVar "r")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "abstractRecordTypesRef") "value")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-ABSTRACT-FIELD"))) (EApp (EApp (EVar "abstractFieldMsg") (EVar "r")) (EVar "fname")))) (DoExpr (EVar "None"))) (EApp (EApp (EVar "resolveFieldByOwners") (EVar "te")) (EVar "fname")))))))) (arm (PCon "None") () (EApp (EApp (EVar "resolveFieldByOwners") (EVar "te")) (EVar "fname")))))
+(DTypeSig false "lookupRecordForReceiver" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "RecordInfo")))))
+(DFunDef false "lookupRecordForReceiver" ((PVar "te") (PVar "r")) (EMatch (EApp (EApp (EVar "recordForReceiverIdent") (EVar "te")) (EVar "r")) (arm (PCon "Some" (PVar "ri")) () (EApp (EVar "Some") (EVar "ri"))) (arm (PCon "None") () (EApp (EVar "lookupRecordByName") (EVar "r")))))
+(DTypeSig false "recordForReceiverIdent" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "RecordInfo")))))
+(DFunDef false "recordForReceiverIdent" ((PVar "te") (PVar "r")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "r")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeRecordIdentsRef") "value")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "cs")) () (EMatch (EApp (EVar "receiverTypeIdent") (EVar "te")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "ident")) () (EApp (EApp (EVar "recordCandForType") (EVar "ident")) (EVar "cs")))))))
+(DTypeSig false "receiverTypeIdent" (TyFun (TyCon "Mono") (TyApp (TyCon "Option") (TyCon "Ident"))))
+(DFunDef false "receiverTypeIdent" ((PVar "te")) (EMatch (EApp (EVar "headTyconMono") (EVar "te")) (arm (PCon "Some" (PVar "hk")) () (EApp (EVar "headKeyIdent") (EVar "hk"))) (arm (PCon "None") () (EVar "None"))))
+(DTypeSig false "recordCandForType" (TyFun (TyCon "Ident") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String") (TyCon "RecordInfo"))) (TyApp (TyCon "Option") (TyCon "RecordInfo")))))
+(DFunDef false "recordCandForType" (PWild (PList)) (EVar "None"))
+(DFunDef false "recordCandForType" ((PVar "want") (PCons (PTuple (PVar "ci") (PVar "tyName") (PVar "ri")) (PVar "rest"))) (EIf (EApp (EApp (EApp (EVar "recordCandIsType") (EVar "want")) (EVar "ci")) (EVar "tyName")) (EApp (EVar "Some") (EVar "ri")) (EIf (EVar "otherwise") (EApp (EApp (EVar "recordCandForType") (EVar "want")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "recordCandIsType" (TyFun (TyCon "Ident") (TyFun (TyCon "Ident") (TyFun (TyCon "String") (TyCon "Bool")))))
+(DFunDef false "recordCandIsType" ((PCon "Ident" PWild (PVar "wio") (PVar "wname")) (PCon "Ident" PWild (PVar "cio") PWild) (PVar "tyName")) (EBinOp "&&" (EBinOp "==" (EVar "tyName") (EVar "wname")) (EBinOp "==" (EVar "cio") (EVar "wio"))))
 (DTypeSig false "lookupRecordByMangledHead" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RecordInfo"))))))
 (DFunDef false "lookupRecordByMangledHead" ((PVar "head") (PVar "fname")) (EMatch (EApp (EApp (EVar "mangledHeadCandidates") (EVar "head")) (EVar "fname")) (arm (PList (PVar "pair")) () (EApp (EVar "Some") (EVar "pair"))) (arm PWild () (EVar "None"))))
 (DTypeSig false "mangledHeadCandidates" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "RecordInfo"))))))
@@ -27890,7 +28069,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omKeys" false) (mem "omFromPairs" false) (mem "omMapValues" false) (mem "omSize" false))))
 (DUse false (UseGroup ("list") ((mem "replicate" false))))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "lookupAssoc" false) (mem "contains" false) (mem "endsWith" false) (mem "reverseL" false) (mem "joinWith" false) (mem "joinNl" false) (mem "joinDot" false) (mem "filterList" false) (mem "anyList" false) (mem "allList" false) (mem "initList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "minI" false) (mem "isSome" false) (mem "orElseOpt" false) (mem "zipL" false) (mem "dedup" false) (mem "dedupBy" false) (mem "lenKey" false) (mem "sortUniqS" false) (mem "startsWith" false) (mem "escStr" false) (mem "editDistance" false) (mem "noneHeadTag" false))))
-(DUse false (UseGroup ("types" "registry") ((mem "HeadKey" true) (mem "headKeyOfCon" false) (mem "headKeyName" false) (mem "RegKey" false) (mem "regKeyOfTab" false) (mem "regKeyNTab" false) (mem "regKeyNTabAt" false) (mem "regKeyRender" false) (mem "dispKeyRender" false) (mem "Registry" false) (mem "regEmpty" false) (mem "regInsertK" false) (mem "regLookupK" false) (mem "MultiRegistry" false) (mem "mregEmpty" false) (mem "mregAppendK" false) (mem "mregLookupK" false) (mem "SetRegistry" false) (mem "sregEmpty" false) (mem "sregAddK" false) (mem "sregSize" false))))
+(DUse false (UseGroup ("types" "registry") ((mem "HeadKey" true) (mem "headKeyOfCon" false) (mem "headKeyName" false) (mem "headKeyIdent" false) (mem "RegKey" false) (mem "regKeyOfTab" false) (mem "regKeyNTab" false) (mem "regKeyNTabAt" false) (mem "regKeyRender" false) (mem "dispKeyRender" false) (mem "Registry" false) (mem "regEmpty" false) (mem "regInsertK" false) (mem "regLookupK" false) (mem "MultiRegistry" false) (mem "mregEmpty" false) (mem "mregAppendK" false) (mem "mregLookupK" false) (mem "SetRegistry" false) (mem "sregEmpty" false) (mem "sregAddK" false) (mem "sregSize" false))))
 (DData Public "Mono" () ((variant "TVar" (ConPos (TyApp (TyCon "Ref") (TyCon "Tyvar")))) (variant "TCon" (ConPos (TyCon "String") (TyCon "TyConOrigin"))) (variant "TRigid" (ConPos (TyCon "String"))) (variant "TApp" (ConPos (TyCon "Mono") (TyCon "Mono"))) (variant "TFun" (ConPos (TyCon "Mono") (TyCon "EffRow") (TyCon "Mono"))) (variant "TEff" (ConPos (TyCon "EffRow")))) ())
 (DData Public "Tyvar" () ((variant "Unbound" (ConPos (TyCon "Int") (TyCon "Int"))) (variant "Link" (ConPos (TyCon "Mono")))) ())
 (DTypeSig false "tconBuiltin" (TyFun (TyCon "String") (TyCon "Mono")))
@@ -29107,7 +29286,18 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "fieldOwnerNames" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "fieldOwnerNames" ((PVar "fname")) (EApp (EVar "sortUniqS") (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "fname")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "fieldOwnersRef") "value")))))
 (DTypeSig false "resolveFieldRecord" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RecordInfo"))))))
-(DFunDef false "resolveFieldRecord" ((PVar "te") (PVar "fname")) (EMatch (EApp (EVar "headTyconNameMono") (EVar "te")) (arm (PCon "Some" (PVar "r")) () (EMatch (EApp (EVar "lookupRecordByName") (EVar "r")) (arm (PCon "Some" (PVar "ri")) () (EApp (EVar "Some") (ETuple (EVar "r") (EVar "ri")))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "lookupRecordByMangledHead") (EVar "r")) (EVar "fname")) (arm (PCon "Some" (PVar "pair")) () (EApp (EVar "Some") (EVar "pair"))) (arm (PCon "None") () (EIf (EApp (EApp (EVar "contains") (EVar "r")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "abstractRecordTypesRef") "value")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-ABSTRACT-FIELD"))) (EApp (EApp (EVar "abstractFieldMsg") (EVar "r")) (EVar "fname")))) (DoExpr (EVar "None"))) (EApp (EApp (EVar "resolveFieldByOwners") (EVar "te")) (EVar "fname")))))))) (arm (PCon "None") () (EApp (EApp (EVar "resolveFieldByOwners") (EVar "te")) (EVar "fname")))))
+(DFunDef false "resolveFieldRecord" ((PVar "te") (PVar "fname")) (EMatch (EApp (EVar "headTyconNameMono") (EVar "te")) (arm (PCon "Some" (PVar "r")) () (EMatch (EApp (EApp (EVar "lookupRecordForReceiver") (EVar "te")) (EVar "r")) (arm (PCon "Some" (PVar "ri")) () (EApp (EVar "Some") (ETuple (EVar "r") (EVar "ri")))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "lookupRecordByMangledHead") (EVar "r")) (EVar "fname")) (arm (PCon "Some" (PVar "pair")) () (EApp (EVar "Some") (EVar "pair"))) (arm (PCon "None") () (EIf (EApp (EApp (EVar "contains") (EVar "r")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "abstractRecordTypesRef") "value")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-ABSTRACT-FIELD"))) (EApp (EApp (EVar "abstractFieldMsg") (EVar "r")) (EVar "fname")))) (DoExpr (EVar "None"))) (EApp (EApp (EVar "resolveFieldByOwners") (EVar "te")) (EVar "fname")))))))) (arm (PCon "None") () (EApp (EApp (EVar "resolveFieldByOwners") (EVar "te")) (EVar "fname")))))
+(DTypeSig false "lookupRecordForReceiver" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "RecordInfo")))))
+(DFunDef false "lookupRecordForReceiver" ((PVar "te") (PVar "r")) (EMatch (EApp (EApp (EVar "recordForReceiverIdent") (EVar "te")) (EVar "r")) (arm (PCon "Some" (PVar "ri")) () (EApp (EVar "Some") (EVar "ri"))) (arm (PCon "None") () (EApp (EVar "lookupRecordByName") (EVar "r")))))
+(DTypeSig false "recordForReceiverIdent" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "RecordInfo")))))
+(DFunDef false "recordForReceiverIdent" ((PVar "te") (PVar "r")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "r")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeRecordIdentsRef") "value")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "cs")) () (EMatch (EApp (EVar "receiverTypeIdent") (EVar "te")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "ident")) () (EApp (EApp (EVar "recordCandForType") (EVar "ident")) (EVar "cs")))))))
+(DTypeSig false "receiverTypeIdent" (TyFun (TyCon "Mono") (TyApp (TyCon "Option") (TyCon "Ident"))))
+(DFunDef false "receiverTypeIdent" ((PVar "te")) (EMatch (EApp (EVar "headTyconMono") (EVar "te")) (arm (PCon "Some" (PVar "hk")) () (EApp (EVar "headKeyIdent") (EVar "hk"))) (arm (PCon "None") () (EVar "None"))))
+(DTypeSig false "recordCandForType" (TyFun (TyCon "Ident") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String") (TyCon "RecordInfo"))) (TyApp (TyCon "Option") (TyCon "RecordInfo")))))
+(DFunDef false "recordCandForType" (PWild (PList)) (EVar "None"))
+(DFunDef false "recordCandForType" ((PVar "want") (PCons (PTuple (PVar "ci") (PVar "tyName") (PVar "ri")) (PVar "rest"))) (EIf (EApp (EApp (EApp (EVar "recordCandIsType") (EVar "want")) (EVar "ci")) (EVar "tyName")) (EApp (EVar "Some") (EVar "ri")) (EIf (EVar "otherwise") (EApp (EApp (EVar "recordCandForType") (EVar "want")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "recordCandIsType" (TyFun (TyCon "Ident") (TyFun (TyCon "Ident") (TyFun (TyCon "String") (TyCon "Bool")))))
+(DFunDef false "recordCandIsType" ((PCon "Ident" PWild (PVar "wio") (PVar "wname")) (PCon "Ident" PWild (PVar "cio") PWild) (PVar "tyName")) (EBinOp "&&" (EBinOp "==" (EVar "tyName") (EVar "wname")) (EBinOp "==" (EVar "cio") (EVar "wio"))))
 (DTypeSig false "lookupRecordByMangledHead" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RecordInfo"))))))
 (DFunDef false "lookupRecordByMangledHead" ((PVar "head") (PVar "fname")) (EMatch (EApp (EApp (EVar "mangledHeadCandidates") (EVar "head")) (EVar "fname")) (arm (PList (PVar "pair")) () (EApp (EVar "Some") (EVar "pair"))) (arm PWild () (EVar "None"))))
 (DTypeSig false "mangledHeadCandidates" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "RecordInfo"))))))

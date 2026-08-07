@@ -1,0 +1,24 @@
+entry: main.mdk
+what: a record reached ONLY through an imported VALUE answers the same in every import-clause order
+
+`main` imports one VALUE, `mkA : Cfg`, from `armod`, and one unrelated function from `zrmod`,
+which declares its OWN `Cfg`. Nothing `main` writes can name `zrmod`'s `Cfg`. Correct answer:
+`7`.
+
+⚠️ WHY THIS ROW EXISTS SEPARATELY FROM ITS VALUE FIXTURE. This is #1376's shape, drained by
+#1319 unit 3, and the value is pinned on all three engines at
+`test/llvm_fixtures_modules/record_receiver_ident_value_only/`. What that fixture CANNOT see
+is an over-widening: a golden records the answer the compiler produced and then defends it.
+The fix replaces a per-module SCOPE decision with an identity selection, and the failure mode
+a scope decision has — a different module graph traversal order picking a different winner —
+is invisible to a golden and visible to exactly this permutation.
+
+Measured before the fix, on a binary cold-built in the implementing worktree at `main` @
+`e93d38d9`: exit 1 in BOTH orderings, `Type mismatch: Cfg vs Cfg — … 'armod' … 'zrmod'` plus
+`Float vs Int`. So this cell was invariant-and-wrong before and is invariant-and-right after;
+it never graded a divergence, which is why it has no `test/IMPORT-ORDER-LEDGER.txt` row.
+Do not read the absence of a ledger row as "nothing was ever wrong here".
+
+⚠️ THE FIELD TYPES DIFFER ON PURPOSE (`Int` here, `Float` in `zrmod`). If a future change
+picks the wrong declaration the failure is LOUD in the signature, not a silently wrong
+projection — the same reason the value fixture is built that way.

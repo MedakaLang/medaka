@@ -1,0 +1,7 @@
+-- #1376's shape, permuted. Two import clauses, so two orderings; the signature
+-- (check verdict + codes + schemes + run + build) must be identical across both.
+import armod.{mkA}
+import zrmod.{zrf}
+
+main : <IO> Unit
+main = println (mkA.fld + zrf 0)

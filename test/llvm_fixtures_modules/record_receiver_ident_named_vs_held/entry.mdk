@@ -1,0 +1,45 @@
+-- #1111 A-2.13 (#1319 unit 3) — #1377's drain, on all three engines.
+--
+-- THE SHAPE: this module NAMES one `Cfg` as a type and HOLDS a value of a
+-- different `Cfg`.  `useA`'s signature spells armod's `Cfg` (through the
+-- re-exporter); `mkZ` is zrmod's `Cfg`, whose type this file never writes and does
+-- not need to — `mkZ`'s type comes from zrmod's signature and already carries its
+-- origin.
+--
+-- ⚠️ THIS IS THE CELL THAT PROVES THE FIX IS A SPLIT AND NOT A RELOCATION.  One
+-- bare-keyed `recordByNameRef` entry answered BOTH "which `Cfg` does the word
+-- `Cfg` on line `useA : Cfg -> Int` mean?" and "which record describes `mkZ`?", so
+-- whichever mechanism decided that single entry necessarily gave both the same
+-- answer and a module in this shape could not get both right.  Unit 2's per-module
+-- scope decision is still what answers the FIRST question (it is a spelling
+-- question, and `entry` did import armod's `Cfg` by name); unit 3 gives the SECOND
+-- question its own key.  A fixture that only exercised one of the two questions
+-- would pass under either mechanism alone.
+--
+-- Before, measured first-hand on a binary cold-built from `main` @ e93d38d9, in
+-- BOTH import-clause orders: exit 1, `Type mismatch: Cfg vs Cfg — … 'zrmod' …
+-- 'armod'` plus `Field 'beta' does not belong to record 'Cfg'`.  Before unit 2 it
+-- was a coin flip on clause order (`remod` first → the correct `5`; `zrmod` first →
+-- exit 1) — which is why order-invariance is pinned separately at
+-- `test/import_order_fixtures/record-named-type-vs-held-value-invariant/`, and why
+-- THAT row must stay green: a fix that accepts one ordering and refuses the other
+-- has restored the coin flip.  Neither cell subsumes the other — this one would
+-- stay green under a regression that made only one ordering wrong, and that one
+-- would stay green under a regression that made BOTH wrong.
+--
+-- ⚠️ THIS IS ALSO THE CELL THAT MEASURES THE DECLARING-MODULE CONJUNCT of the
+-- identity match, and it is the only one that does.  Stubbed, not argued: with
+-- the module comparison dropped (match on the owning TYPE NAME alone) this cell
+-- goes RED with the two diagnostics above, while `…_value_only/` and
+-- `…_bystander/` both stay GREEN.  The bystander covers the other conjunct.
+--
+-- Hand-derived correct answer, independent of any engine: `useA c = 0` by
+-- definition and `mkZ.beta = 5`, so `5`.
+import remod.{Cfg, mkA}
+import zrmod.{mkZ}
+
+useA : Cfg -> Int
+useA c = 0
+
+main : <IO> Unit
+main = putStrLn (intToString (useA mkA + mkZ.beta))

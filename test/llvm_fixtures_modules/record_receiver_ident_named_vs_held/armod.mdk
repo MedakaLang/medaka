@@ -1,0 +1,8 @@
+-- The declaration `entry` NAMES (through `remod`).  `entry` never imports it
+-- directly, so the decl's origin (`armod`) and the import path (`remod`) differ —
+-- the #1283 hop, kept in the shape on purpose so this cell also depends on unit
+-- 2's scope decision still working for the SPELLING question.
+public export data Cfg = { alpha : Int }
+
+export mkA : Cfg
+mkA = Cfg { alpha = 2 }

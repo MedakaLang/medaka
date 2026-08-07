@@ -1,0 +1,65 @@
+-- #1111 A-2.13 (#1319 unit 3) — the "FEATURE PRESENT, UNRELATED CODE STILL
+-- BEHAVES" cell.  It must be green BEFORE and AFTER the change; that is the
+-- property, not a drain.
+--
+-- ⚠️ WHAT IT IS FOR.  Unit 3 makes `resolveFieldRecord`'s arm (a) select a record
+-- by the RECEIVER'S IDENTITY out of `universeRecordIdentsRef`, and that path runs
+-- on EVERY `.field` access whose receiver head is a known record — not only on the
+-- colliding ones.  So the hazard is not "does #1376 drain", it is "does ordinary
+-- code that has nothing to do with a collision still resolve".  Every cell below
+-- is one of the ways this graph can reach that lookup, and none of them is the
+-- shape either issue is about.
+--
+-- The four cells, and which path each takes:
+--
+--   `mkQ.shared`  — otherlib's `Other` is UNIQUE graph-wide.  One candidate, and
+--                   the identity matches it.  This is the bystander proper: the
+--                   assertion is about a record no part of this change is about.
+--                   `shared` is deliberately a field name THREE records here
+--                   declare, so the field→owners multimap is non-trivial and the
+--                   cell also stands over the half unit 2 removed.
+--   `lv.shared`   — `Local` is declared by THIS module.  The companion is grown
+--                   from `pubDecls` at the END of a module's arm, so a module
+--                   never sees its own records in it: the identity lookup MISSES
+--                   and the bare-name floor answers, which is today's behaviour.
+--                   If that miss path regressed, this cell is what says so.
+--   `hxOf mkH`    — the projection happens inside `ahold`, on a NAMED-FIELD
+--                   VARIANT (registry key `Plain`, type `Holder`).  Arm (a) never
+--                   hits for it — the head is `Holder` and no companion row is
+--                   keyed `Holder` — so the field→owners path answers, unchanged.
+--   `mkP.px`      — THE DISCRIMINATING CELL, and what it discriminates is the
+--                   OWNING-TYPE-NAME half of the identity match.  Registry key
+--                   `Plain` is COLLIDED: `plainlib` declares a record `Plain`
+--                   and `ahold` declares a named-field variant also spelled
+--                   `Plain` but owning type `Holder`.  Measured by stubbing, not
+--                   argued: with the candidate match dropped entirely ("first
+--                   candidate wins") this cell FAILS — `Type mismatch: Plain vs
+--                   Holder` then `Field 'px' does not belong to record 'Plain'`.
+--
+-- ⚠️ AND HERE IS WHAT IT DOES *NOT* DISCRIMINATE, stated because an earlier draft
+-- of this header claimed it did.  Dropping only the DECLARING-MODULE conjunct
+-- (match on the owning type name alone) leaves this cell GREEN — measured — and
+-- reddens `record_receiver_ident_named_vs_held/` instead.  So the two conjuncts
+-- are covered by two different fixtures and neither covers the other; do not read
+-- this cell as guarding the module half.
+--
+-- ⚠️ THE CELL DEPENDS ON LOAD ORDER TO FAIL UNDER "FIRST CANDIDATE WINS", AND THAT
+-- IS FRAGILE.  `ahold` must be the EARLIER candidate under key `Plain` — the
+-- module names are chosen so it is, the same way `field_owner_no_narrowing/`
+-- depends on `sortUniqS(["Dup","Wrec"])`.  Renaming these modules can silently
+-- weaken the cell against that particular over-widening (it would still catch the
+-- type-name half via the `Holder` mismatch only if `ahold` still sorts first).
+--
+-- Hand-derived correct answer, independent of any engine:
+--   20 (mkQ.shared) + 1000 (lv.shared) + 100 (hxOf mkH) + 1 (mkP.px) = 1121.
+import ahold.{Holder, mkH, hxOf}
+import plainlib.{Plain, mkP}
+import otherlib.{Other, mkQ}
+
+data Local = { shared : Int }
+
+lv : Local
+lv = Local { shared = 1000 }
+
+main : <IO> Unit
+main = putStrLn (intToString (mkQ.shared + lv.shared + hxOf mkH + mkP.px))
