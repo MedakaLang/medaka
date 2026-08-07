@@ -159,9 +159,18 @@ explicit). Fixtures: `test/shadow_fixtures/` (one per matrix cell), run by
 
 ⚠️ **The word "visible" used to appear four times in S1–S2, undefined, carrying
 three different scopes.** That ambiguity is what produced
-[#1353](https://github.com/MedakaLang/medaka/issues/1353) and
-[#1302](https://github.com/MedakaLang/medaka/issues/1302), and it is why this
-section now names the scope at every occurrence instead of reusing one adjective.
+[#1353](https://github.com/MedakaLang/medaka/issues/1353), and it is why this
+section now names the scope at every occurrence instead of reusing one
+adjective. **[CORRECTED 2026-08-07 — this sentence used to also name
+[#1302](https://github.com/MedakaLang/medaka/issues/1302). That attribution was
+simply wrong: #1302's own filed repro never reaches this clause at all** (its
+`mth` is bound only as an impl method, never a standalone `DFunDef`, so S1's
+`funDef-names ∩ iface-method-names` conjunct is vacuously false there — see the
+⚠️ under S1). **Whether #1302's actual mechanism — a wildcard import surfacing
+a private interface's methods to a DIFFERENT check, the impl-obligation path —
+shares any root cause with this vocabulary defect is unverified; nothing here
+traces one. #1302 was bundled into "one ruling" by #1375's own framing (two
+axes of one operand), not because this clause's ambiguity produced its bug.**
 **Do not reintroduce a bare "visible" ANYWHERE IN THIS DOCUMENT** (widened
 2026-08-07 from "S1–S9" — see the top-matter note's account of why, and treat
 this as a *class* of ambiguous scope adjectives, not one string: "in scope",
