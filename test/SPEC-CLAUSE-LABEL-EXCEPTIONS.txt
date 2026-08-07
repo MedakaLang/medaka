@@ -1,0 +1,23 @@
+# test/SPEC-CLAUSE-LABEL-EXCEPTIONS.txt — checked-in ledger of every KNOWN
+# same-prefix token in docs/spec/*.md that LOOKS like an undefined clause
+# citation to test/check_spec_clause_labels.sh but is a deliberate, verified
+# non-citation. Read that gate's header first.
+#
+# Format (TAB-separated): <doc, exact git-relative path> <TAB> <LABEL> <TAB> <reason>
+#
+# This is a RATCHET, not a skip-list. Every line must ACTIVELY EARN ITS PLACE
+# on every run — mirrors test/DOC-LINK-EXCEPTIONS.txt's rule exactly:
+#   STALE  — the excused label is now actually DEFINED in that document (the
+#            gate would otherwise keep excusing any FUTURE, unrelated,
+#            genuinely-undefined reuse of the same label forever).
+#   ORPHAN — the excused label is no longer cited anywhere in that document
+#            at all (the line excuses nothing, and its reason string is now
+#            fiction — the same rot test/check_doc_links.sh's orphan check
+#            exists to prevent).
+# The gate fails on either condition and prints which line to delete.
+#
+# doc							LABEL	reason
+docs/spec/SHADOW-SEMANTICS.md	S0	Repo-wide severity-ladder floor (AGENTS.md: "S0: silent wrongness"), reused inline as prose ("an S0 silent wrongness") at lines 516/548/1028. SHADOW's own S-series (S1-S9) never numbers a clause from 0 — verified: `grep -nE '^- \*\*S0 |^#+ S0 ' docs/spec/SHADOW-SEMANTICS.md` is empty.
+docs/spec/EMITTER-SEMANTICS.md	S0	Same repo-wide severity-ladder floor, reused inline as prose ("this repo's defining S0 shape", "unfiled S0") at lines 78/97/220/273. EMITTER's own S-series (tail-call elimination, S1-S3) never numbers a clause from 0 — verified: `grep -nE '^- \*\*S0 |^#+ S0 ' docs/spec/EMITTER-SEMANTICS.md` is empty.
+docs/spec/DICT-SEMANTICS.md	D6	Line 771's own disclaimer: "These rules are `OD1`-`OD6`, not `D1`-`D6`. Sec 6.3 already owns `D1`-`D4`" — deliberately naming the NONEXISTENT "D6" to warn readers off conflating it with the (correctly two-letter-prefixed) OD-series. Never a real DICT clause.
+docs/spec/DICT-SEMANTICS.md	D10	Line 2148 cites `archive/DICT-CONFORMANCE-AUDIT.md`'s own, different, ARCHIVED "D1-D10" divergence-row numbering ("all D1-D10 divergences closed... that audit predates the overlap extension"), not this document's live D1-D4 defaulting clauses. A historical cross-document reference, not an omission.

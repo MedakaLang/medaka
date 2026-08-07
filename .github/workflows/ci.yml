@@ -1123,6 +1123,17 @@ jobs:
       - name: Docs must not cite fabricated symbols
         run: sh test/check_agent_doc_symbols.sh
 
+      # Also unguarded, same reason — and one layer down from both gates above: those
+      # check that a cited PATH exists and a cited SYMBOL resolves; this checks that a
+      # cited CLAUSE LABEL has a definition. docs/spec/SHADOW-SEMANTICS.md declares a
+      # numbered clause set (S1, S2, ...); commit 9c6dcee5 rewrote one clause in a
+      # 173-line hunk and silently carried three sibling clauses (S6, S7, S8) out with
+      # it — its own commit message cites S7 twice AS A LIVE CLAUSE in the commit that
+      # deleted S7's text. Nobody noticed for three weeks: every gate stayed green,
+      # because neither sibling gate above checks this. Pure text analysis, no compiler.
+      - name: Spec clause citations must resolve to a same-document definition
+        run: sh test/check_spec_clause_labels.sh
+
       # Also unguarded, same reason — and the same disease one layer down. The two gates
       # above check what the DOCS say; this checks what the TOOLS say. ~54 gate scripts
       # printed `sh test/build_oracles.sh` as their remediation advice — the command
