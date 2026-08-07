@@ -989,7 +989,7 @@ orders merges, and the plan does not pretend otherwise.
   *whether* a binder abstracts a dictionary parameter, not about how an
   identity key is represented, so it is dropped from this decision's
   grounds rather than stretched to cover it.) A-1's own PR answers the
-  standing five questions in `.claude/workstreams/TYPECHECK.md` as part of
+  standing questions in `.claude/workstreams/TYPECHECK.md` as part of
   making that decision, weighing the §2 bullet's three considerations —
   source safety, then L2 enforceability, then allocation — in that order.
 
@@ -1378,7 +1378,7 @@ whole arc.
   emitted IR (A at scale, B-2, F-1) runs the benchmark-emitter two-rebuild
   rule and the twice-run seed re-mint; a stale seed SEGFAULTing the fixpoint
   is a known failure mode, not a signal about the change.
-- **The standing five questions** (`.claude/workstreams/TYPECHECK.md`) apply to
+- **The standing questions** (`.claude/workstreams/TYPECHECK.md`) apply to
   every S0 fixed in passing; adversarial review is mandatory for every
   behavior-touching increment in B-1, B-2, E-2, E-4, F-1 (this seam produced
   confirmed S0s in three separate reviews during the #839/#840 arc).
@@ -1427,7 +1427,7 @@ whole arc.
   `docs/spec/SHADOW-SEMANTICS.md` — the governing semantics
 - `compiler/ARCH-REVIEW.md` (PASS 2), `compiler/DRIVER-COLLAPSE-PLAN.md` — prior
   structural verdicts this design keeps or completes
-- `.claude/workstreams/TYPECHECK.md` — the standing five-question gate
+- `.claude/workstreams/TYPECHECK.md` — the standing gate
 - Issues: **#1122 (the epic / stage tracker)**; #991–#995 (adopted),
   #1070/#1084 (family audits), #1082 (locals), #616 (conformance gate, adopted
   into S-1), #820–#824 (graded arc, peer); filed by this arc: #1107–#1121, plus
