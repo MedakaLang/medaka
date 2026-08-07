@@ -1,0 +1,6 @@
+-- Byte-for-byte the declaration in `record_receiver_ident_value_only_field_order/
+-- zrmod.mdk`, under a module name that now sorts FIRST instead of last.
+public export data Cfg = { b : Int, a : Int }
+
+export mkZ : Cfg
+mkZ = Cfg { b = 33, a = 44 }

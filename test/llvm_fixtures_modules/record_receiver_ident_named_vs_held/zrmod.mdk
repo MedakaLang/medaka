@@ -1,0 +1,7 @@
+-- The COLLIDER, and `entry` HOLDS one of its values.  Its field is `beta`, which
+-- armod's `Cfg` does not declare, so selecting the wrong record is LOUD (`Field
+-- 'beta' does not belong to record 'Cfg'`) rather than a silent projection.
+public export data Cfg = { beta : Int }
+
+export mkZ : Cfg
+mkZ = Cfg { beta = 5 }

@@ -1,0 +1,6 @@
+-- Byte-for-byte the declaration in `record_receiver_ident_value_only_field_order/
+-- armod.mdk`, under a module name that now sorts LAST instead of first.
+public export data Cfg = { a : Int, b : Int }
+
+export mkA : Cfg
+mkA = Cfg { a = 11, b = 22 }

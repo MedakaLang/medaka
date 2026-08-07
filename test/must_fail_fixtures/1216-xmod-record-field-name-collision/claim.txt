@@ -39,3 +39,48 @@ why-note: for record UPDATE -- or the stamp exists but the emitter's lookup is k
 why-note: by bare field name across the whole module graph regardless. A fix makes
 why-note: `build-run main.mdk` print `ob` then `BBB`, draining this row. Close #1216
 why-note: and delete this fixture when that happens.
+why-note:
+why-note: 🚨 A SECOND, INDEPENDENTLY REACHABLE ARM OF #1216 — MEASURED 2026-08-08
+why-note: DURING PR #1381's ROUND-3 REVIEW, AND NOT GATED BY THIS ROW. Ported here
+why-note: rather than given its own fixture because this harness enforces ONE ROW PER
+why-note: ISSUE (a hard MALFORMED); its own instruction on that collision is "merge
+why-note: them, port anything the other says". WHOEVER FIXES #1216 MUST DRAIN BOTH
+why-note: ARMS: draining only the arm above leaves the one below silently wrong, and
+why-note: this row will go green and say #1216 is fixed when it is not.
+why-note: The second arm, in full so it can be pasted:
+why-note:   awrap.mdk   public export data WrapA =
+why-note:                 | Cfg { a : Int, b : Int }
+why-note:               mkA : WrapA
+why-note:               mkA = Cfg { a = 11, b = 22 }
+why-note:               export arA : Int      arA = mkA.a
+why-note:               export arB : Int      arB = mkA.b
+why-note:   zwrap.mdk   public export data WrapZ =
+why-note:                 | Cfg { b : Int, a : Int }
+why-note:               mkZ : WrapZ
+why-note:               mkZ = Cfg { b = 33, a = 44 }
+why-note:               export zrA : Int      zrA = mkZ.a
+why-note:               export zrB : Int      zrB = mkZ.b
+why-note:   main.mdk    import awrap.{arA, arB}
+why-note:               import zwrap.{zrA, zrB}
+why-note:               main : <IO> Unit
+why-note:               main = putStrLn (intToString arA ++ "," ++ intToString arB
+why-note:                 ++ "," ++ intToString zrA ++ "," ++ intToString zrB)
+why-note: hand-derived correct output `11,22,44,33`. Measured: `check` exit 0,
+why-note: `run` -> `11,22,44,33` (CORRECT), `build` exit 0, and the BUILT BINARY
+why-note: prints `11,22,33,44` at exit 0 -- zwrap's own two fields swapped.
+why-note: WHY IT IS A DIFFERENT ARM, not a restatement: here BOTH colliding records
+why-note: are NAMED-FIELD VARIANTS whose owning TYPE differs from the shared
+why-note: constructor name, so the receiver's head (`WrapA`/`WrapZ`) is not the
+why-note: registry key (`Cfg`). `lookupRecordByMangledHead` keeps only candidates
+why-note: whose key suffix-matches `__<head>`, and `awrap__Cfg` does not end in
+why-note: `__WrapA` -- so the candidate list is EMPTY, PR #1395's receiver-identity
+why-note: narrowing never runs, and control falls to `resolveFieldByOwners` ->
+why-note: `pairRecordByName (headL owners)`, which picks the first key in `sortUniqS`
+why-note: order, i.e. BY MODULE-NAME SORT ORDER. #1395 fixed the arm where the head
+why-note: IS the key; this arm is untouched by it. Also note no projection here
+why-note: crosses a module boundary and the entry never mentions either type: a
+why-note: module's OWN projections are corrupted by a declaration it has no import
+why-note: path to.
+why-note: VERIFIED PRE-EXISTING, not introduced by #1319 unit 3: rebuilt with unit
+why-note: 3's identity selection stubbed back out (`resolveFieldRecord` arm (a)
+why-note: restored to `lookupRecordByName r`) and it reproduces byte-identically.

@@ -1,0 +1,47 @@
+-- A NAMED-FIELD VARIANT whose CONSTRUCTOR is spelled `Plain` — the same registry
+-- key `plainlib`'s record `Plain` uses, but owned by type `Holder`.  That is what
+-- makes key `Plain` collided in `universeRecordIdentsRef` with two candidates
+-- whose OWNING TYPE NAMES differ, so a match test that compares NEITHER half
+-- ("first candidate wins") cannot tell them apart.
+--
+-- 🚨 AN EARLIER VERSION OF THIS HEADER SAID "an identity test that compares only
+-- the declaring module (or only the key) cannot tell them apart."  THE FIRST HALF
+-- IS FALSE, MEASURED: module-only tells them apart here correctly, and reds
+-- nothing anywhere in the tree.  See `recordCandIsType`.
+--
+-- 🚨 `hxOf` PROJECTS `hx` HERE RATHER THAN IN `entry` BECAUSE THE `entry` ROUTE IS
+-- BROKEN, NOT MERELY DIFFERENT.  From `entry` the receiver head is `Holder`, arm
+-- (a) misses, and the field→owners fallback reaches `pairRecordByName "Plain"` — a
+-- BARE-key read, which for this collided key returns `plainlib`'s record and
+-- REFUSES the program at exit 1 (`Type mismatch: Holder vs Plain`, then `Field
+-- 'hx' does not belong to record 'Plain'`) where `100` is correct.  Verified
+-- PRE-EXISTING (it reproduces with unit 3's selection stubbed back out) and
+-- deliberately unfixed by unit 3; it is filed as **#1383** and pinned at
+-- `test/must_fail_fixtures/1383-variant-ctor-name-collides-xmod-record-type/`,
+-- re-confirmed still reproducing on the rebase onto #1395.  So this cell AVOIDS a
+-- broken path — it does not demonstrate a working one, and a reader standing here
+-- must not infer that `mkH.hx` from `entry` would resolve.
+--
+-- 🚨 AND THE RESIDUAL IS NOT ONLY THE LOUD REJECT.  An earlier version of this
+-- header named only #1383 (S1, a false REJECT), which understates it: the SAME
+-- `pairRecordByName (headL owners)` fallback also has a SILENT BUILT-BINARY face,
+-- and that one is **#1216 (S0, OPEN)**.  Measured 2026-08-08: two modules each
+-- declaring a named-field variant spelled `Cfg` whose owning types are `WrapA` and
+-- `WrapZ`, same two `Int` fields at opposite indices, every projection inside its
+-- own declaring module — `check` exits 0, `medaka run` prints the correct
+-- `11,22,44,33`, and the BUILT BINARY prints `11,22,33,44` at exit 0 with no
+-- diagnostic.  Neither key suffix-matches the other's head, so #1395's narrowing
+-- never runs and the owners fallback picks by module-NAME sort order.  The full
+-- repro is ported into
+-- `test/must_fail_fixtures/1216-xmod-record-field-name-collision/claim.txt`
+-- (one row per issue, so it could not have its own).  **Grade this residual
+-- S0-silent, not only S1-loud** — that is the fact a reader weighing the
+-- accept-widening above actually needs.
+public export data Holder =
+  | Plain { hx : Int }
+
+export mkH : Holder
+mkH = Plain { hx = 100 }
+
+export hxOf : Holder -> Int
+hxOf h = h.hx

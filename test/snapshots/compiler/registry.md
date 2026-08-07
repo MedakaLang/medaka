@@ -1,5 +1,5 @@
 # META
-source_lines=1961
+source_lines=1998
 stages=DESUGAR,MARK
 # SOURCE
 -- Identity + registry substrate — Stage A-2 unit A-2.0
@@ -1054,6 +1054,26 @@ export headKeyDecl : HeadKey -> Option TabKey
 headKeyDecl (HkDecl key) = Some key
 headKeyDecl (HkRigid _) = None
 
+-- The IDENTITY inside a projected head, or `None` when the head has none —
+-- the two-`None`-cases-collapsed peer of `headKeyDecl`, for a consumer that
+-- needs the `Ident` itself rather than a `TabKey` it will only ever key with.
+--
+-- 🚨 THE TWO `None`s ARE DELIBERATELY COLLAPSED, AND THAT IS SAFE ONLY FOR A
+-- LOOKUP.  `HkRigid` (§8 I6.1: not a declaration) and `HkDecl (TkBare …)` (a
+-- declaration whose module id has not been acquired — the flat/loader-less
+-- path, #1115 / E-1) are different facts, and `headKeyDecl`/`headBucketKey`
+-- keep them apart because their consumers key a BUCKET, where the distinction
+-- decides whether a row may be written.  This one answers "which row does this
+-- head select?", where both facts have the same correct answer — *no identity,
+-- therefore no row* — and merging them is exactly `tabKeyEq`'s rule that
+-- absence never matches, not even itself.  A consumer that needs to tell the
+-- two apart must call `headKeyDecl`; adding a `TkBare` fallback HERE would
+-- resurrect the bare-name collision the identity layer exists to remove.
+export headKeyIdent : HeadKey -> Option Ident
+headKeyIdent (HkDecl (TkIdent ident)) = Some ident
+headKeyIdent (HkDecl (TkBare _ _)) = None
+headKeyIdent (HkRigid _) = None
+
 export headBucketKey : Option HeadKey -> Option RegKey
 headBucketKey None = Some (RegKey [] [])
 headBucketKey (Some (HkDecl key)) = Some (regKeyOfTab key)
@@ -1963,6 +1983,23 @@ headU = HkDecl (TkBare NsType "Box")
 -- variable, and a builtin tuple head — not the argument itself.
 -- > map headKeyName [headA, headZ, headU, HkRigid "a", headKeyOfCon OriginBuiltin "__tuple2__"]
 -- ["Box", "Box", "Box", "a", "__tuple2__"]
+
+-- `headKeyIdent` (#1319 unit 3): the identity a head carries, for a consumer
+-- selecting a ROW rather than keying a bucket.  Two modules' same-named heads
+-- give DIFFERENT identities — that is the whole discrimination the record
+-- lookup in `types/typecheck.mdk` buys from it — and BOTH identity-less
+-- inhabitants answer `None`, which is `tabKeyEq`'s absence rule at the row
+-- layer rather than a fallback.
+-- > headKeyIdent headA == headKeyIdent headZ
+-- False
+-- > headKeyIdent headA == headKeyIdent (headKeyOfCon (OriginModule "apub") "Box")
+-- True
+-- > headKeyIdent (headKeyOfCon OriginBuiltin "Box") == Some (Ident NsType identOriginBuiltin "Box")
+-- True
+-- > headKeyIdent headU
+-- None
+-- > headKeyIdent (HkRigid "a")
+-- None
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Ns" true) (mem "Ident" true) (mem "IdentOrigin" false) (mem "TyConOrigin" true) (mem "identOriginOf" false) (mem "identOriginFold" false) (mem "identOriginBuiltin" false) (mem "mkIdent" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omDelete" false) (mem "omSize" false))))
@@ -2142,6 +2179,10 @@ headU = HkDecl (TkBare NsType "Box")
 (DTypeSig true "headKeyDecl" (TyFun (TyCon "HeadKey") (TyApp (TyCon "Option") (TyCon "TabKey"))))
 (DFunDef false "headKeyDecl" ((PCon "HkDecl" (PVar "key"))) (EApp (EVar "Some") (EVar "key")))
 (DFunDef false "headKeyDecl" ((PCon "HkRigid" PWild)) (EVar "None"))
+(DTypeSig true "headKeyIdent" (TyFun (TyCon "HeadKey") (TyApp (TyCon "Option") (TyCon "Ident"))))
+(DFunDef false "headKeyIdent" ((PCon "HkDecl" (PCon "TkIdent" (PVar "ident")))) (EApp (EVar "Some") (EVar "ident")))
+(DFunDef false "headKeyIdent" ((PCon "HkDecl" (PCon "TkBare" PWild PWild))) (EVar "None"))
+(DFunDef false "headKeyIdent" ((PCon "HkRigid" PWild)) (EVar "None"))
 (DTypeSig true "headBucketKey" (TyFun (TyApp (TyCon "Option") (TyCon "HeadKey")) (TyApp (TyCon "Option") (TyCon "RegKey"))))
 (DFunDef false "headBucketKey" ((PCon "None")) (EApp (EVar "Some") (EApp (EApp (EVar "RegKey") (EListLit)) (EListLit))))
 (DFunDef false "headBucketKey" ((PCon "Some" (PCon "HkDecl" (PVar "key")))) (EApp (EVar "Some") (EApp (EVar "regKeyOfTab") (EVar "key"))))
@@ -2428,6 +2469,10 @@ headU = HkDecl (TkBare NsType "Box")
 (DTypeSig true "headKeyDecl" (TyFun (TyCon "HeadKey") (TyApp (TyCon "Option") (TyCon "TabKey"))))
 (DFunDef false "headKeyDecl" ((PCon "HkDecl" (PVar "key"))) (EApp (EVar "Some") (EVar "key")))
 (DFunDef false "headKeyDecl" ((PCon "HkRigid" PWild)) (EVar "None"))
+(DTypeSig true "headKeyIdent" (TyFun (TyCon "HeadKey") (TyApp (TyCon "Option") (TyCon "Ident"))))
+(DFunDef false "headKeyIdent" ((PCon "HkDecl" (PCon "TkIdent" (PVar "ident")))) (EApp (EVar "Some") (EVar "ident")))
+(DFunDef false "headKeyIdent" ((PCon "HkDecl" (PCon "TkBare" PWild PWild))) (EVar "None"))
+(DFunDef false "headKeyIdent" ((PCon "HkRigid" PWild)) (EVar "None"))
 (DTypeSig true "headBucketKey" (TyFun (TyApp (TyCon "Option") (TyCon "HeadKey")) (TyApp (TyCon "Option") (TyCon "RegKey"))))
 (DFunDef false "headBucketKey" ((PCon "None")) (EApp (EVar "Some") (EApp (EApp (EVar "RegKey") (EListLit)) (EListLit))))
 (DFunDef false "headBucketKey" ((PCon "Some" (PCon "HkDecl" (PVar "key")))) (EApp (EVar "Some") (EApp (EVar "regKeyOfTab") (EVar "key"))))

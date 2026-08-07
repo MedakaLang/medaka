@@ -1,6 +1,0 @@
--- The SECOND `Cfg`.  `main.mdk` never names this type and does not need to: `mkZ`'s type
--- comes from this signature and already carries its origin.
-public export data Cfg = { beta : Int }
-
-export mkZ : Cfg
-mkZ = Cfg { beta = 5 }

@@ -1,3 +1,4 @@
+-- The DECLARING module.  `main` imports its VALUE and never names its type.
 public export data Cfg = { fld : Int }
 
 export mkA : Cfg

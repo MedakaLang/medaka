@@ -1,0 +1,74 @@
+-- #1111 A-2.13 (#1319 unit 3) — #1376's VALUE-ONLY shape, with the collision made
+-- OBSERVABLE.  This is the cell the round-2 adversarial review of PR #1381 said
+-- the unit's corpus could not express, and it is the SUCCESSOR to the assertion
+-- `test/must_fail_fixtures/1376-value-only-import-record-floor/claim.txt` carried
+-- before that pin was deleted:
+--
+--   "a same-FIELD-TYPE variant has NOT been probed and could be silently wrong;
+--    if one is found, re-grade #1376 to S0."
+--
+-- 🚨 ONE WAS FOUND.  It is #1382 — same-name records at opposite field orders
+-- corrupting each other's layout in the built binary, `check` 0, `run` correct,
+-- binary silently wrong, segfault on type-divergent fields.  #1382 was fixed on
+-- `main` by PR #1395 (`958bf53c`), which narrowed `lookupRecordByMangledHead`'s
+-- give-up arm by the receiver's own `HeadKey` instead of letting
+-- `pairRecordByName (headL owners)` decide a projection by module-name SORT ORDER.
+-- Unit 3 is rebased onto that fix, and this cell is the assertion turned into a
+-- gate rather than retired by deletion.
+--
+-- 🚨 WHICH MECHANISM EACH HALF OF THIS CELL ACTUALLY GRADES — DERIVED FROM THE
+-- TYPED CORE IR, NOT ASSERTED.  An earlier version of this header implied the
+-- whole cell grades #1319 unit 3.  It does not, and the dump says so plainly.
+-- `compiler/entries/core_ir_typed_modules_dump_main.mdk` over this fixture prints:
+--
+--   CFieldAccess (CVar "armod__mkA" AGlobal) "a" "armod__Cfg"
+--   CFieldAccess (CVar "armod__mkA" AGlobal) "b" "armod__Cfg"
+--   CFieldAccess (CVar "zrmod__mkZ" AGlobal) "a" "zrmod__Cfg"
+--   CFieldAccess (CVar "zrmod__mkZ" AGlobal) "b" "zrmod__Cfg"
+--
+-- Every stamp is MANGLED.  Unit 3's arm (a) returns `Some (r, ri)` where `r` is
+-- `headTyconNameMono te` — the UNMANGLED head name `Cfg` — so it cannot produce
+-- `armod__Cfg` at all.  These stamps came from `lookupRecordByMangledHead`, i.e.
+-- from PR #1395's receiver-identity narrowing, and they are correct: each receiver
+-- carries its own module's record.  Therefore:
+--
+--   * the LAYOUT half of this cell RE-GRADES #1395, not unit 3;
+--   * the ACCEPTANCE half grades unit 3 — `main` (with unit 3's selection stubbed
+--     back out) REFUSES this program at exit 1, `Type mismatch: Cfg vs Cfg — …
+--     'armod' … 'zrmod'` (#1376), measured, so the program only exists to be
+--     layout-graded because unit 3 accepts it.
+--
+-- Both halves are worth keeping in one cell: the acceptance is unit 3's and the
+-- layout is #1395's, and a regression in EITHER reds this row.  Do not try to build
+-- a cell that grades unit 3's layout half — on the emit path unit 3's arm cannot
+-- produce a stamp at all, so there may be no such cell to build.
+--
+-- ⚠️ WHY THE EXISTING #1382 CELLS DO NOT COVER THIS.  `record_xmod_field_order/`
+-- and its siblings project INSIDE the declaring module and their entry imports
+-- plain `Int`s; this one projects in `entry`, on a value reached ONLY through an
+-- imported binding, which is the arm unit 3 newly enables.
+--
+-- ⚠️ EVAL IS A KNOWN-WRONG ORACLE HERE, IN THE REASSURING DIRECTION.  The
+-- interpreter resolves fields by NAME at run time (`evalField (VRecord _ fields)`,
+-- `compiler/eval/eval.mdk`), so it is structurally immune to the layout question
+-- and prints the right answer even when the binary does not.  The golden below was
+-- NOT taken from `medaka run`; it is hand-derived, and the cell is graded on the
+-- EXECUTED NATIVE (and WasmGC) BINARY by `diff_compiler_engines.sh`'s module arm.
+--
+-- Hand-derived from the sources, before any engine was run:
+--   armod: mkA = Cfg { a = 11, b = 22 }  (order a,b)  =>  mkA.a = 11, mkA.b = 22
+--   zrmod: mkZ = Cfg { b = 33, a = 44 }  (order b,a)  =>  mkZ.a = 44, mkZ.b = 33
+-- so `11,22,44,33`.  A wrong pick for `mkZ` prints `11,22,33,44`.
+import armod.{mkA}
+import zrmod.{mkZ}
+
+main : <IO> Unit
+main =
+  putStrLn
+    (intToString mkA.a
+      ++ ","
+      ++ intToString mkA.b
+      ++ ","
+      ++ intToString mkZ.a
+      ++ ","
+      ++ intToString mkZ.b)

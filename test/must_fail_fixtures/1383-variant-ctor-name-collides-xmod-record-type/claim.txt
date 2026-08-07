@@ -58,3 +58,42 @@ why-note: this should grade the result against #1382's repros too, not only
 why-note: against this one. A fix makes `check --json main.mdk` exit 0 and
 why-note: `medaka run main.mdk` print `100`, draining this row. Close #1383
 why-note: and delete this fixture when that happens.
+why-note:
+why-note: 🚨 A SECOND FACE OF #1383, MEASURED 2026-08-08 IN PR #1381's ROUND-3
+why-note: REVIEW: THIS DEFECT IS IMPORT-CLAUSE-ORDER DEPENDENT, AND #1319 UNIT 3
+why-note: WIDENED IT. Ported here rather than given its own fixture because this
+why-note: harness enforces ONE ROW PER ISSUE (a hard MALFORMED) and prescribes
+why-note: merging. Not gated by the row above, which is clause-order invariant.
+why-note:   awrap.mdk  public export data Wrap =
+why-note:                | Cfg { a : Int, b : Int }
+why-note:              export mkW : Wrap    mkW = Cfg { a = 11, b = 22 }
+why-note:   zcfg.mdk   public export data Cfg = { b : Int, a : Int }
+why-note:              export mkZ : Cfg     mkZ = Cfg { b = 33, a = 44 }
+why-note:   main.mdk   import awrap.{mkW} / import zcfg.{mkZ}, then print
+why-note:              mkW.a, mkW.b, mkZ.a, mkZ.b
+why-note: hand-derived correct output `11,22,44,33`, and it cannot depend on the
+why-note: order two import lines are written in. Measured on PR #1381's branch:
+why-note:   order A (awrap clause first)  -> exit 1, two `T-TYPE-MISMATCH
+why-note:                                    Type mismatch: Wrap vs Cfg` on the
+why-note:                                    two mkW projections
+why-note:   order B (zcfg clause first)   -> exit 0, prints `11,22,44,33` CORRECTLY
+why-note: Same modules, same values, ONLY the two import lines transposed.
+why-note: mechanism: `mkW`'s head is `Wrap` but its record is filed under key
+why-note: `Cfg`, so the identity companion misses, the exact lookup misses, and no
+why-note: key suffix-matches `__Wrap` -- so `resolveFieldByOwners` answers. On the
+why-note: UNMANGLED check path BOTH declarations are filed under the one bare key
+why-note: `Cfg`, `sortUniqS` yields a SINGLE owner, and `pairRecordByName "Cfg"`
+why-note: returns whichever declaration currently holds that entry -- decided by
+why-note: module load order, which follows the entry's import clauses.
+why-note: 🚨 THE WIDENING IS DISCLOSED, NOT HIDDEN. Rebuilt with #1319 unit 3's
+why-note: identity selection stubbed back out: BOTH orderings are refused (order A
+why-note: on the mkW projections, order B on the mkZ projections instead) --
+why-note: invariant-and-wrong. Unit 3 fixes the mkZ side, because a plain record's
+why-note: head name IS its registry key so the companion hits; it cannot fix the
+why-note: mkW side, whose head `Wrap` is not the key `Cfg`. So the unit turns
+why-note: invariant-and-wrong into ORDER-DEPENDENT -- the coin flip
+why-note: test/diff_compiler_import_order.sh exists to forbid. Landed anyway,
+why-note: adjudicated by the owner: the underlying defect is this issue
+why-note: (pre-existing, still reproducing), unit 3 drains #1376/#1377 which
+why-note: nothing else does, and recording it here beats rediscovery.
+why-note: WHOEVER FIXES #1383 SHOULD CHECK BOTH ORDERINGS, not just the row above.

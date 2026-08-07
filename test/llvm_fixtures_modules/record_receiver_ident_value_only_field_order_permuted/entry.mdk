@@ -1,0 +1,34 @@
+-- The MODULE-NAME permutation of `record_receiver_ident_value_only_field_order/`.
+-- Same two declarations, same values, the two module names swapped so the OTHER
+-- layout sorts first.
+--
+-- 🚨 PERMUTE THE MODULE NAMES, NOT THE IMPORT CLAUSES.  The defect class this pair
+-- stands over decided a projection's record by module-NAME sort order (`sortUniqS`
+-- over the mangled owner keys), which is invariant under clause order — so a
+-- permutation differential over import clauses finds nothing here and would pass
+-- for the wrong reason.  `test/import_order_fixtures/` covers clause order for the
+-- SPELLING question; this cell covers name order for the IDENTITY question.
+--
+-- The correct answer cannot depend on what the modules are called, so it is the
+-- same hand-derived `11,22,44,33`.  If this cell and its sibling ever disagree,
+-- the selector has gone back to reading sort order.
+--
+-- 🚨 LIKE ITS SIBLING, THIS CELL'S LAYOUT HALF RE-GRADES PR #1395, NOT #1319 UNIT
+-- 3 — derived from the typed Core IR, where every stamp is MANGLED
+-- (`… "a" "zzmod__Cfg"`) and unit 3's arm stamps the UNMANGLED head name, so it
+-- cannot be the producer.  Unit 3 is what makes the program ACCEPTED at all
+-- (stubbed back out, it is refused at exit 1, #1376).  See the sibling's header
+-- for the full dump and derivation.
+import zzmod.{mkA}
+import aamod.{mkZ}
+
+main : <IO> Unit
+main =
+  putStrLn
+    (intToString mkA.a
+      ++ ","
+      ++ intToString mkA.b
+      ++ ","
+      ++ intToString mkZ.a
+      ++ ","
+      ++ intToString mkZ.b)

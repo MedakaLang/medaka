@@ -1,3 +1,4 @@
+-- The COLLIDER.  `main` imports only `zrf` and can never name this `Cfg`.
 public export data Cfg = { fld : Float }
 
 export zrf : Int -> Int
