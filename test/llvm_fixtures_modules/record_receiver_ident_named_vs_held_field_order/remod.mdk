@@ -1,0 +1,3 @@
+-- The RE-EXPORTER.  Declares nothing; it is what makes `entry`'s import path
+-- (`remod`) differ from the declaration's origin (`armod`).
+export import armod.{Cfg, mkA}

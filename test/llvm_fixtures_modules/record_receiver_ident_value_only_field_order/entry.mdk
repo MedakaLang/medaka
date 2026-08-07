@@ -1,0 +1,51 @@
+-- #1111 A-2.13 (#1319 unit 3) — #1376's VALUE-ONLY shape, with the collision made
+-- OBSERVABLE.  This is the cell the round-2 adversarial review of PR #1381 said
+-- the unit's corpus could not express, and it is the SUCCESSOR to the assertion
+-- `test/must_fail_fixtures/1376-value-only-import-record-floor/claim.txt` carried
+-- before that pin was deleted:
+--
+--   "a same-FIELD-TYPE variant has NOT been probed and could be silently wrong;
+--    if one is found, re-grade #1376 to S0."
+--
+-- 🚨 ONE WAS FOUND.  It is #1382 — same-name records at opposite field orders
+-- corrupting each other's layout in the built binary, `check` 0, `run` correct,
+-- binary silently wrong, segfault on type-divergent fields.  #1382 was fixed on
+-- `main` by PR #1395 (`958bf53c`), which narrowed `lookupRecordByMangledHead`'s
+-- give-up arm by the receiver's own `HeadKey` instead of letting
+-- `pairRecordByName (headL owners)` decide a projection by module-name SORT ORDER.
+-- Unit 3 is rebased onto that fix, and this cell is the assertion turned into a
+-- gate rather than retired by deletion.
+--
+-- ⚠️ WHY THE EXISTING #1382 CELLS DO NOT COVER THIS.  `record_xmod_field_order/`
+-- and its siblings project INSIDE the declaring module, so the identity companion
+-- misses (a module never sees its own records in it) and the mangled-head path
+-- answers.  Here the projection happens in `entry`, on a value reached ONLY through
+-- an imported binding — the arm unit 3 newly enables and which is REJECTED on the
+-- merge-base (#1376: `Type mismatch: Cfg vs Cfg — … 'armod' … 'zrmod'`, exit 1).
+-- So this is a newly-accepted program taken to the executed native binary, which is
+-- exactly what the `ws:typecheck` standing gate's question 6 asks for.
+--
+-- ⚠️ EVAL IS A KNOWN-WRONG ORACLE HERE, IN THE REASSURING DIRECTION.  The
+-- interpreter resolves fields by NAME at run time (`evalField (VRecord _ fields)`,
+-- `compiler/eval/eval.mdk`), so it is structurally immune to the layout question
+-- and prints the right answer even when the binary does not.  The golden below was
+-- NOT taken from `medaka run`; it is hand-derived, and the cell is graded on the
+-- EXECUTED NATIVE (and WasmGC) BINARY by `diff_compiler_engines.sh`'s module arm.
+--
+-- Hand-derived from the sources, before any engine was run:
+--   armod: mkA = Cfg { a = 11, b = 22 }  (order a,b)  =>  mkA.a = 11, mkA.b = 22
+--   zrmod: mkZ = Cfg { b = 33, a = 44 }  (order b,a)  =>  mkZ.a = 44, mkZ.b = 33
+-- so `11,22,44,33`.  A wrong pick for `mkZ` prints `11,22,33,44`.
+import armod.{mkA}
+import zrmod.{mkZ}
+
+main : <IO> Unit
+main =
+  putStrLn
+    (intToString mkA.a
+      ++ ","
+      ++ intToString mkA.b
+      ++ ","
+      ++ intToString mkZ.a
+      ++ ","
+      ++ intToString mkZ.b)

@@ -6627,23 +6627,60 @@ recordCandForType want ((ci, tyName, ri)::rest)
 --
 -- A candidate carries `Ident NsCtor o cn` plus `tyName`, because that is what
 -- `insertRecordIdents` has in hand; the receiver's head names the TYPE, so the
--- comparison is `(owning type name, declaring module)`.  BOTH halves are needed:
--- a candidate keyed `Plain` may own type `Holder`, so the module alone does not
--- decide, and two modules may both declare `Cfg`, so the name alone does not
--- either.  `o` is the same `dataOrigin` `registerRecordInfoKeyed` put in the
--- record's result type, which is what `headTyconMono` projects back out of a
--- value of that record — so this compares the two ends of one declaration.
+-- comparison is `(owning type name, declaring module)`.  `o` is the same
+-- `dataOrigin` `registerRecordInfoKeyed` put in the record's result type, which
+-- is what `headTyconMono` projects back out of a value of that record — so this
+-- compares the two ends of one declaration.
 --
--- ⚠️ EACH CONJUNCT IS MEASURED, BY A DIFFERENT FIXTURE, AND NEITHER IS MEASURED
--- BY THE OTHER'S.  Stubbing was run, not reasoned (#1319 unit 3's PR carries the
--- table):
---   * drop `cio == wio` (name only) → `record_receiver_ident_named_vs_held/`
---     goes RED; `…_value_only/` and `…_bystander/` stay GREEN.
---   * drop BOTH (first candidate wins) → `…_bystander/` goes RED at `mkP.px`;
---     `…_value_only/` stays GREEN.  Since the name-only variant above leaves the
---     bystander green, that redness is attributable to the TYPE-NAME conjunct.
+-- 🚨 RETRACTION (#1381 round-2 review, finding 1).  THE TWO CONJUNCTS ARE NOT
+-- SEPARATELY MEASURED, AND THE TYPE-NAME ONE CANNOT BE — by any fixture that
+-- asserts a VALUE or an ACCEPTANCE.  An earlier version of this comment claimed
+-- "each conjunct is measured, by a different fixture, and neither is measured by
+-- the other's"; the counterfactual that would have shown it false is the one
+-- that was never run.  What IS measured, by a separate cold rebuild each:
+--   * drop `cio == wio` (type name only) → `record_receiver_ident_named_vs_held/`
+--     goes RED; `…_value_only/` and `…_bystander/` stay GREEN.  So the
+--     DECLARING-MODULE conjunct is load-bearing and is measured.
+--   * drop BOTH (first candidate wins) → `…_bystander/` goes RED at `mkP.px`.
+--   * drop `tyName == wname` (module only) → NOTHING IN THE TREE GOES RED.  All
+--     52 `diff_compiler_llvm_modules` cells pass, `make check-self` is clean, and
+--     five purpose-built probes with ≥2 differently-ordered fields (so a wrong
+--     pick is observable rather than index-0-invisible) print the hand-derived
+--     value on the EXECUTED native binary.
 --   * stub the whole selection to `None` → both drain fixtures RED, bystander
 --     GREEN (which is what makes it a bystander and not a second drain).
+--
+-- WHY NO FIXTURE CAN DISCRIMINATE IT — the derivation, so the next reader does
+-- not re-run the rebuild.  The caller looks the candidate list up under
+-- `r = headTyconNameMono te`, while `wname` comes from `headTyconMono te` →
+-- `headKeyOfCon o n` → `Ident NsType o n`: the SAME `n`.  So `wname == r == the
+-- outer key`, always, and `tyName == wname` reduces to "this candidate's owning
+-- type name equals the registry key it is filed under" — i.e. "this candidate is
+-- a plain record, not a named-field variant of a differently-named type".  When
+-- the two conjuncts disagree the candidate is `(M, tyName = Y)` under key `r`
+-- with `Y /= r` while the receiver's head is `(M, r)`; that candidate's result
+-- head is `(M, Y)`, which can never unify with `(M, r)`.  And the floor
+-- `lookupRecordByName r` can only return a record whose CONSTRUCTOR is `r`,
+-- which is likewise never the receiver's own record.  BOTH ARMS REJECT.  So the
+-- conjunct can change neither an accepted program's value nor accept vs reject.
+--
+-- IT IS OBSERVABLE IN DIAGNOSTIC TEXT, IN EXACTLY ONE SHAPE, AND THERE IT MAKES
+-- THE MESSAGE WORSE.  Measured: `amod` declaring BOTH `data Tag = TA | TB` and
+-- `data Box = | Tag { bx : Int }`, `zmod` declaring `data Tag = { tx : Int }`,
+-- receiver `aTag : amod.Tag`, access `aTag.bx`.  Exit 1 either way.  With both
+-- conjuncts: `Type mismatch: Tag vs Tag — … 'amod' … 'zmod'` plus a spurious
+-- `Field 'bx' does not belong to record 'Tag'`.  With the module conjunct alone:
+-- one `Type mismatch: Tag vs Box`, naming the record actually selected.  No
+-- fixture pins this, deliberately — a golden here would enshrine the worse
+-- message as the expected one.
+--
+-- SO WHY KEEP IT.  Deleting it moves the whole correctness of the selector onto
+-- "a module contributes at most one candidate per registry key", which is true
+-- only because two constructors of one name in one module is a `Duplicate
+-- constructor` error — a property enforced by a DIFFERENT subsystem and asserted
+-- nowhere near here.  Keeping the conjunct costs one monomorphic string compare
+-- and keeps the comparison a direct expression of the question being asked.  It
+-- is belt-and-braces, and this comment says so instead of claiming a measurement.
 --
 -- ⚠️ NAME FIRST, AND MONOMORPHIC — the discipline `tabKeyEq` states at its own
 -- definition and `compiler/AGENTS.md` states for hot helpers.  It also allocates
@@ -6683,7 +6720,12 @@ recordCandIsType (Ident _ wio wname) (Ident _ cio _) tyName = tyName == wname
 --     `dataCtors` and leaves `dataName` alone — its own comment says so — while
 --     `registerRecordInfoKeyed` is called with key = the (mangled) ctor name and
 --     typeName = the (unmangled) `dataName`.  That mismatch IS the hack's whole reason,
---     and it is `ws:emitter`'s (#1300 / #1305 family), not this unit's;
+--     and it is `ws:emitter`'s (#1300 / #1305 family), not this unit's.
+--     ⚠️ #1300 IS NOW CLOSED (PR #1393) AND DID NOT DO THIS — re-derived 2026-08-07
+--     against the merged tree, not inferred from the issue state: `renameDecl` still
+--     rewrites `dataCtors` and still leaves `dataName` alone.  So the route stays
+--     open and #1305 is the live half; do not read the closed issue as the mangler
+--     having been fixed;
 --   * or a SECOND record index keyed by the declaration's TYPE identity.  Rejected:
 --     it is unsound for a multi-`ConNamed`-variant type — `data T = | A { x } | B { y }`
 --     would map `(o, T)` to one of the two, and `r.y` at `r : T` would resolve to `A`,

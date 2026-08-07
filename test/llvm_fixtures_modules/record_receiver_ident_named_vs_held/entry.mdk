@@ -31,10 +31,24 @@
 -- identity match, and it is the only one that does.  Stubbed, not argued: with
 -- the module comparison dropped (match on the owning TYPE NAME alone) this cell
 -- goes RED with the two diagnostics above, while `…_value_only/` and
--- `…_bystander/` both stay GREEN.  The bystander covers the other conjunct.
+-- `…_bystander/` both stay GREEN.
+--
+-- 🚨 DO NOT READ THAT AS "THE BYSTANDER COVERS THE OTHER CONJUNCT" — an earlier
+-- version of this header said so and it is FALSE.  The OWNING-TYPE-NAME conjunct
+-- is measured by NOTHING, and no fixture asserting a value or an acceptance can
+-- measure it; dropping it reds nothing in the whole tree.  The derivation, and
+-- the one diagnostic-only shape where it IS observable, are written at
+-- `recordCandIsType` in `compiler/types/typecheck.mdk`.  This cell measures ONE
+-- conjunct, not one of two measured halves.
 --
 -- Hand-derived correct answer, independent of any engine: `useA c = 0` by
 -- definition and `mkZ.beta = 5`, so `5`.
+--
+-- 🚨 THIS CELL CANNOT SEE A FIELD-LAYOUT ERROR.  Both colliding records have ONE
+-- field, so both layouts put it at index 0.  `record_receiver_ident_named_vs_held_
+-- field_order/` is the observable sibling: same shape, but both records declare
+-- `shared` at different indices, so a wrong pick is a wrong NUMBER on the executed
+-- binary rather than nothing at all.  Keep both.
 import remod.{Cfg, mkA}
 import zrmod.{mkZ}
 

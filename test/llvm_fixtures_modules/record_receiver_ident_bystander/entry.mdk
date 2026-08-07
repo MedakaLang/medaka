@@ -27,21 +27,31 @@
 --                   VARIANT (registry key `Plain`, type `Holder`).  Arm (a) never
 --                   hits for it — the head is `Holder` and no companion row is
 --                   keyed `Holder` — so the field→owners path answers, unchanged.
---   `mkP.px`      — THE DISCRIMINATING CELL, and what it discriminates is the
---                   OWNING-TYPE-NAME half of the identity match.  Registry key
---                   `Plain` is COLLIDED: `plainlib` declares a record `Plain`
---                   and `ahold` declares a named-field variant also spelled
---                   `Plain` but owning type `Holder`.  Measured by stubbing, not
---                   argued: with the candidate match dropped entirely ("first
---                   candidate wins") this cell FAILS — `Type mismatch: Plain vs
---                   Holder` then `Field 'px' does not belong to record 'Plain'`.
+--   `mkP.px`      — THE DISCRIMINATING CELL: it proves that SOME candidate match
+--                   runs at all.  Registry key `Plain` is COLLIDED: `plainlib`
+--                   declares a record `Plain` and `ahold` declares a named-field
+--                   variant also spelled `Plain` but owning type `Holder`.
+--                   Measured by stubbing, not argued: with the candidate match
+--                   dropped entirely ("first candidate wins") this cell FAILS —
+--                   `Type mismatch: Plain vs Holder` then `Field 'px' does not
+--                   belong to record 'Plain'`.
 --
--- ⚠️ AND HERE IS WHAT IT DOES *NOT* DISCRIMINATE, stated because an earlier draft
--- of this header claimed it did.  Dropping only the DECLARING-MODULE conjunct
--- (match on the owning type name alone) leaves this cell GREEN — measured — and
--- reddens `record_receiver_ident_named_vs_held/` instead.  So the two conjuncts
--- are covered by two different fixtures and neither covers the other; do not read
--- this cell as guarding the module half.
+-- ⚠️ AND HERE IS WHAT IT DOES *NOT* DISCRIMINATE.  Two drafts of this header have
+-- now been wrong about this, in opposite directions, so read the measurement and
+-- not the prose.
+--   * Dropping only the DECLARING-MODULE conjunct (match on the owning type name
+--     alone) leaves this cell GREEN — measured — and reddens
+--     `record_receiver_ident_named_vs_held/` instead.
+--   * 🚨 Dropping only the OWNING-TYPE-NAME conjunct (match on the declaring
+--     module alone) ALSO leaves this cell green — and leaves the ENTIRE TREE
+--     green: all 52 `diff_compiler_llvm_modules` cells, `make check-self`, and
+--     five purpose-built ≥2-field probes graded on the executed native binary.
+--     The previous draft's "so the two conjuncts are covered by two different
+--     fixtures" was therefore false: `mkP.px` reds only when BOTH are dropped, so
+--     it attributes redness to the PAIR, not to the type-name half.
+-- The type-name conjunct is kept as belt-and-braces, with the derivation of why
+-- nothing can measure it written at `recordCandIsType` in
+-- `compiler/types/typecheck.mdk`.  Do not add a fixture here claiming otherwise.
 --
 -- ⚠️ THE CELL DEPENDS ON LOAD ORDER TO FAIL UNDER "FIRST CANDIDATE WINS", AND THAT
 -- IS FRAGILE.  `ahold` must be the EARLIER candidate under key `Plain` — the

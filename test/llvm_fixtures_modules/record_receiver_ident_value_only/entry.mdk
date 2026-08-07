@@ -21,6 +21,18 @@
 -- Hand-derived correct answer, independent of any engine: `mkA : Cfg` is armod's
 -- record, whose `fld` is an `Int` and is `7`; `zrf 0 = 0`.  So `7`.
 --
+-- 🚨 THIS CELL CANNOT SEE A FIELD-LAYOUT ERROR, AND ITS SUCCESSOR CAN.  Both
+-- colliding records here have ONE field, so both layouts put it at index 0 and a
+-- wrong record pick is unobservable — the round-2 review of PR #1381 found exactly
+-- that, and it is why every cell of this family was green while the built binary
+-- was silently wrong (#1382).  The observable sibling is
+-- `record_receiver_ident_value_only_field_order/` (two same-typed `Int` fields at
+-- opposite indices) and its module-name permutation.  That sibling is also the
+-- SUCCESSOR to the assertion the deleted `must_fail_fixtures/1376-…/claim.txt`
+-- carried ("a same-FIELD-TYPE variant has NOT been probed and could be silently
+-- wrong"); the variant was found, it was #1382, and PR #1395 fixed it.  Keep both
+-- cells — this one grades the loud `Float vs Int` direction the other cannot.
+--
 -- What makes it work now: `mkA`'s TYPE carries `armod` (that is how the old
 -- diagnostic knew to say `armod`), and `resolveFieldRecord`'s arm (a) selects the
 -- `RecordInfo` by that identity instead of by the string `"Cfg"`.  Nothing in this

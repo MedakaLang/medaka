@@ -1,0 +1,7 @@
+-- The COLLIDER, and `entry` HOLDS one of its values while never naming its type.
+-- `shared` sits at index 0 here and index 1 in `armod`, so applying the wrong
+-- record's layout to `mkZ` prints a wrong NUMBER rather than raising a field error.
+public export data Cfg = { shared : Int, beta : Int }
+
+export mkZ : Cfg
+mkZ = Cfg { shared = 7, beta = 5 }

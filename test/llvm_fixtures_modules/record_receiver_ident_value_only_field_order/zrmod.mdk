@@ -1,0 +1,12 @@
+-- The collider.  Same field NAMES, opposite order.
+--
+-- ⚠️ THE MODULE NAMES ARE LOAD-BEARING AND THEY ARE PERMUTED ELSEWHERE.  The
+-- defect class this cell stands over decided the winner by module-NAME sort order
+-- (`sortUniqS` over the mangled owner keys `armod__Cfg` / `zrmod__Cfg`), so
+-- `armod` sorting first is not incidental.  Permuting import CLAUSES is invariant
+-- and proves nothing; the name permutation lives in the sibling cell
+-- `record_receiver_ident_value_only_field_order_permuted/`.
+public export data Cfg = { b : Int, a : Int }
+
+export mkZ : Cfg
+mkZ = Cfg { b = 33, a = 44 }

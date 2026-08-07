@@ -1,14 +1,26 @@
 -- A NAMED-FIELD VARIANT whose CONSTRUCTOR is spelled `Plain` — the same registry
 -- key `plainlib`'s record `Plain` uses, but owned by type `Holder`.  That is what
 -- makes key `Plain` collided in `universeRecordIdentsRef` with two candidates
--- whose OWNING TYPE NAMES differ, so an identity test that compares only the
--- declaring module (or only the key) cannot tell them apart.
+-- whose OWNING TYPE NAMES differ, so a match test that compares NEITHER half
+-- ("first candidate wins") cannot tell them apart.
 --
--- `hxOf` projects `hx` HERE rather than in `entry`, on purpose: from `entry` the
--- receiver head is `Holder`, arm (a) misses, and the field→owners fallback resolves
--- `hx` through `pairRecordByName "Plain"` — a BARE-key read this unit deliberately
--- did NOT change (see the PR's "what this unit did not do").  Projecting inside the
--- declaring module keeps this cell about the paths unit 3 touches.
+-- 🚨 AN EARLIER VERSION OF THIS HEADER SAID "an identity test that compares only
+-- the declaring module (or only the key) cannot tell them apart."  THE FIRST HALF
+-- IS FALSE, MEASURED: module-only tells them apart here correctly, and reds
+-- nothing anywhere in the tree.  See `recordCandIsType`.
+--
+-- 🚨 `hxOf` PROJECTS `hx` HERE RATHER THAN IN `entry` BECAUSE THE `entry` ROUTE IS
+-- BROKEN, NOT MERELY DIFFERENT.  From `entry` the receiver head is `Holder`, arm
+-- (a) misses, and the field→owners fallback reaches `pairRecordByName "Plain"` — a
+-- BARE-key read, which for this collided key returns `plainlib`'s record and
+-- REFUSES the program at exit 1 (`Type mismatch: Holder vs Plain`, then `Field
+-- 'hx' does not belong to record 'Plain'`) where `100` is correct.  Verified
+-- PRE-EXISTING (it reproduces with unit 3's selection stubbed back out) and
+-- deliberately unfixed by unit 3; it is filed as **#1383** and pinned at
+-- `test/must_fail_fixtures/1383-variant-ctor-name-collides-xmod-record-type/`,
+-- re-confirmed still reproducing on the rebase onto #1395.  So this cell AVOIDS a
+-- broken path — it does not demonstrate a working one, and a reader standing here
+-- must not infer that `mkH.hx` from `entry` would resolve.
 public export data Holder =
   | Plain { hx : Int }
 

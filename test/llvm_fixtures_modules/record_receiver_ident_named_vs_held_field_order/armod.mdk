@@ -1,0 +1,12 @@
+-- The declaration `entry` NAMES (through `remod`), so the decl's origin (`armod`)
+-- and the import path (`remod`) differ — the #1283 hop, kept so this cell also
+-- depends on unit 2's scope decision still answering the SPELLING question.
+--
+-- ⚠️ `shared` IS DECLARED BY BOTH COLLIDING RECORDS, AT DIFFERENT INDICES (1 here,
+-- 0 in `zrmod`).  That is the whole point of this cell versus its single-field
+-- sibling `record_receiver_ident_named_vs_held/`: there, both records had one
+-- field, both layouts put it at index 0, and a wrong record pick was unobservable.
+public export data Cfg = { alpha : Int, shared : Int }
+
+export mkA : Cfg
+mkA = Cfg { alpha = 1, shared = 2 }
