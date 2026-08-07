@@ -17,6 +17,22 @@
 -- hand-derived and the cell is graded on the EXECUTED NATIVE (and WasmGC) BINARY by
 -- `diff_compiler_engines.sh`'s module arm.
 --
+-- 🚨 WHICH MECHANISM EACH HALF GRADES, DERIVED FROM THE TYPED CORE IR.
+-- `core_ir_typed_modules_dump_main.mdk` over this fixture prints:
+--
+--   CFieldAccess (CVar "armod__mkA" AGlobal) "alpha"  "armod__Cfg"
+--   CFieldAccess (CVar "armod__mkA" AGlobal) "shared" "armod__Cfg"
+--   CFieldAccess (CVar "zrmod__mkZ" AGlobal) "shared" "zrmod__Cfg"
+--   CFieldAccess (CVar "zrmod__mkZ" AGlobal) "beta"   "zrmod__Cfg"
+--
+-- The stamps are MANGLED, and unit 3's arm (a) stamps the UNMANGLED head name, so
+-- it cannot have produced them: the LAYOUT half re-grades PR #1395's
+-- receiver-identity narrowing in `lookupRecordByMangledHead`, not unit 3.  What
+-- grades unit 3 is the ACCEPTANCE half — with unit 3's selection stubbed back out
+-- this program is REFUSED at exit 1 (`Type mismatch: Cfg vs Cfg — … 'zrmod' …
+-- 'armod'` plus `Field 'beta' does not belong to record 'Cfg'`), measured.  Keep
+-- both: a regression in either mechanism reds this row.
+--
 -- Hand-derived from the sources, before any engine was run:
 --   `useA c = 0` by definition;
 --   `mkA = Cfg { alpha = 1, shared = 2 }` => `mkA.alpha = 1`, `mkA.shared = 2`;

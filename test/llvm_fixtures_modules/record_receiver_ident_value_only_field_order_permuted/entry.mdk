@@ -12,6 +12,13 @@
 -- The correct answer cannot depend on what the modules are called, so it is the
 -- same hand-derived `11,22,44,33`.  If this cell and its sibling ever disagree,
 -- the selector has gone back to reading sort order.
+--
+-- 🚨 LIKE ITS SIBLING, THIS CELL'S LAYOUT HALF RE-GRADES PR #1395, NOT #1319 UNIT
+-- 3 — derived from the typed Core IR, where every stamp is MANGLED
+-- (`… "a" "zzmod__Cfg"`) and unit 3's arm stamps the UNMANGLED head name, so it
+-- cannot be the producer.  Unit 3 is what makes the program ACCEPTED at all
+-- (stubbed back out, it is refused at exit 1, #1376).  See the sibling's header
+-- for the full dump and derivation.
 import zzmod.{mkA}
 import aamod.{mkZ}
 

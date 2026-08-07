@@ -21,6 +21,22 @@
 -- re-confirmed still reproducing on the rebase onto #1395.  So this cell AVOIDS a
 -- broken path — it does not demonstrate a working one, and a reader standing here
 -- must not infer that `mkH.hx` from `entry` would resolve.
+--
+-- 🚨 AND THE RESIDUAL IS NOT ONLY THE LOUD REJECT.  An earlier version of this
+-- header named only #1383 (S1, a false REJECT), which understates it: the SAME
+-- `pairRecordByName (headL owners)` fallback also has a SILENT BUILT-BINARY face,
+-- and that one is **#1216 (S0, OPEN)**.  Measured 2026-08-08: two modules each
+-- declaring a named-field variant spelled `Cfg` whose owning types are `WrapA` and
+-- `WrapZ`, same two `Int` fields at opposite indices, every projection inside its
+-- own declaring module — `check` exits 0, `medaka run` prints the correct
+-- `11,22,44,33`, and the BUILT BINARY prints `11,22,33,44` at exit 0 with no
+-- diagnostic.  Neither key suffix-matches the other's head, so #1395's narrowing
+-- never runs and the owners fallback picks by module-NAME sort order.  The full
+-- repro is ported into
+-- `test/must_fail_fixtures/1216-xmod-record-field-name-collision/claim.txt`
+-- (one row per issue, so it could not have its own).  **Grade this residual
+-- S0-silent, not only S1-loud** — that is the fact a reader weighing the
+-- accept-widening above actually needs.
 public export data Holder =
   | Plain { hx : Int }
 

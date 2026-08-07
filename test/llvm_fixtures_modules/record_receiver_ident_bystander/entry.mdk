@@ -53,6 +53,26 @@
 -- nothing can measure it written at `recordCandIsType` in
 -- `compiler/types/typecheck.mdk`.  Do not add a fixture here claiming otherwise.
 --
+-- ⚠️ THE `hxOf mkH` CELL IS BLIND TO A LAYOUT ERROR, for exactly the reason the
+-- two DRAIN cells were: `Holder`'s `hx` and `plainlib`'s `px`/`shared` are
+-- DISJOINT, so the field→owners list for `hx` is a SINGLETON and no wrong record
+-- is reachable for it to pick.  It grades that the honest-absence route still
+-- ANSWERS, not that it answers with the right layout.  Left as-is rather than
+-- given a shared field at a differing index, because widening it would change
+-- what `mkP.px` discriminates (the cell's load-order note below) and this cell's
+-- job is the bystander property, not layout — the layout job belongs to
+-- `record_receiver_ident_value_only_field_order/` and its siblings.  Stated here
+-- rather than left for a reader to assume, which is the whole lesson of the
+-- single-field corpus.
+--
+-- ⚠️ AND THIS CELL HAS NO OBSERVABLE SUCCESSOR, DELIBERATELY.  Its two sibling
+-- round-1 cells (`…_value_only/`, `…_named_vs_held/`) each point at a
+-- `…_field_order/` successor because a wrong pick there is SILENT.  This one does
+-- not need one: its discriminating projection `mkP.px` fails LOUDLY (`Type
+-- mismatch: Plain vs Holder`, then `Field 'px' does not belong to record
+-- 'Plain'`) when the match is dropped, so there is no silent face to expose.
+-- TWO cells got successors, not three.
+--
 -- ⚠️ THE CELL DEPENDS ON LOAD ORDER TO FAIL UNDER "FIRST CANDIDATE WINS", AND THAT
 -- IS FRAGILE.  `ahold` must be the EARLIER candidate under key `Plain` — the
 -- module names are chosen so it is, the same way `field_owner_no_narrowing/`
