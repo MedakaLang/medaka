@@ -1,0 +1,31 @@
+entry: main.mdk
+what: #1377 is refused in EVERY import-clause order — it used to be a coin flip
+
+`main` NAMES armod's `Cfg` as a type (through the re-exporter) and separately HOLDS a value
+of zrmod's `Cfg`, whose type it never names. One bare-keyed `recordByNameRef` entry answers
+both questions, so a module cannot get both right. Correct answer: `5`.
+
+⚠️ THIS ROW IS DELIBERATELY UNLEDGERED, AND THE REASON IS NOT THAT THE BUG IS FIXED.
+`test/IMPORT-ORDER-LEDGER.txt` pins cases whose answer DIVERGES across orderings. This case
+does not diverge on this binary — it is refused both ways — so it has no row there. The bug
+is live and is pinned by its VALUE, not its order, at
+`test/must_fail_fixtures/1377-named-type-wins-over-held-value/`. Do not read the absence of
+a ledger row as a drain; read it with that fixture.
+
+Measured by hand on a binary cold-built from the PRE-#1372 source at `main` @ `1443870c`:
+
+  import remod… ; import zrmod…   ->  exit 0, prints `5`   (the CORRECT answer)
+  import zrmod… ; import remod…   ->  exit 1, `Type mismatch: Cfg vs Cfg — … 'zrmod' …
+                                      'armod'` + `Field 'beta' does not belong to record
+                                      'Cfg'`
+
+Same program, opposite verdict, decided by which cosmetic import line comes first — and the
+accepted ordering was the one that got the RIGHT answer. On #1319 unit 2's branch both
+orderings produce the second outcome.
+
+⚠️ SO THIS ROW GRADES A DIRECTION, NOT A VICTORY. Unit 2 did not fix #1377; it removed the
+order sensitivity, which is the safe direction (consistently loud beats order-dependently
+loud) and is why this case is invariant rather than ledgered. What the row is FOR is the
+eventual fix: reading the receiver's head-tycon identity must make this print `5` in BOTH
+orderings, and this cell fails loudly if a fix restores the coin flip — accepting one
+ordering and refusing the other is exactly what it used to do.

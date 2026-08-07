@@ -1,0 +1,5 @@
+-- The RE-EXPORTER.  It declares nothing; it is the whole defect in #1283 Repro A —
+-- the declaration's origin says `armod`, the import path `entry` writes says
+-- `remod`, so A-2.6's `declOwnedBy` identity test missed and the record table fell
+-- back to the universe's load-order winner (`zrmod`'s unrelated `Cfg`).
+export import armod.{Cfg, mkA}

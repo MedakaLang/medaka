@@ -1,0 +1,13 @@
+-- CONTROL for #1377.  Byte-identical to main.mdk except that it never NAMES the other
+-- `Cfg`: `useA` is gone and with it the only occurrence of the type in this module's own
+-- source, so the module holds a value of exactly one `Cfg` and names none.
+--
+-- That single variable is the defect: with nothing spelled, the entry the module needs is
+-- the one the floor/scope decision happens to hold, and it is zrmod's.  Runs clean at `5`.
+--
+-- If this breaks, the environment moved (`.field` on an imported value broke in general)
+-- and this row draining would be a lie.
+import zrmod.{mkZ}
+
+main : <IO> Unit
+main = println mkZ.beta

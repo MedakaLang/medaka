@@ -1,0 +1,7 @@
+-- #1376.  The ONE variable versus control.mdk is the import SPELLING: this names the
+-- module that declares `Cfg` but brings in only the VALUE `mkA`, not the type.
+import armod.{mkA}
+import zrmod.{zrf}
+
+main : <IO> Unit
+main = println (mkA.fld + zrf 0)

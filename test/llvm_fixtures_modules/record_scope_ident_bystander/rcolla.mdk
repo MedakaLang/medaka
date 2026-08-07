@@ -1,0 +1,10 @@
+-- One of the two unrelated modules that both declare a NAMED-FIELD variant spelled
+-- `Dup`.  `ACount` is deliberately NOT collided anywhere: `bystand` uses it, so
+-- "the local record wins" cannot be bought by dropping the import.
+public export data RA =
+  | Dup { dx : Int }
+  | ACount Int
+
+export unRA : RA -> Int
+unRA (Dup { dx }) = dx
+unRA (ACount n) = n * 10

@@ -2083,10 +2083,23 @@ public export data RecordInfo =
   | RecordInfo (List Int) Mono (List (String, Mono)) (OrdMap Mono)
 
 -- Keyed indices — so the hot per-field-access read paths never walk a linear registry
--- (issue #149).  #415 item 3: the lockstep is structural, not an obligation.
--- `registerRecordInfoKeyed` is the SOLE registration writer of both; they are cleared
--- together by resetState; and the cross-module universe copy goes through the single
--- loadDataUniverse/storeDataUniverse inverse pair.
+-- (issue #149).  #415 item 3: `registerRecordInfoKeyed` is the sole REGISTRATION writer of
+-- both; they are cleared together by resetState; and the cross-module universe copy goes
+-- through the single loadDataUniverse/storeDataUniverse inverse pair.
+--
+-- 🚨 THE LOCKSTEP WAS "STRUCTURAL, NOT AN OBLIGATION" UNTIL #1111 A-2.12 (#1319 unit 2),
+-- AND IT IS NOW AN OBLIGATION.  `applyRecordScopeOverrides` re-points `recordByNameRef`
+-- for a collided key and does NOT touch `fieldOwnersRef`, so the two are no longer written
+-- only in pairs and nothing enforces that they agree.  Re-pointing key `K` cannot change
+-- which KEYS own a field name, but it does change which FIELDS `K` declares — so with two
+-- same-named records having DISJOINT field sets, `fieldOwnersRef` can name `K` as the owner
+-- of a field the newly-selected `K` does not declare.
+-- ⚠️ THAT IS NOT HYPOTHETICAL AND AN EARLIER DRAFT OF THIS NOTE SAID IT WAS.  It called the
+-- divergence "an obligation with no observed consequence" on the strength of one probe that
+-- kept every projection inside the module which NAMED the record — where the overlay and the
+-- floor agree by construction, so the probe could not have shown anything.  **#1377 is the
+-- consequence**, pinned at `test/must_fail_fixtures/1377-named-type-wins-over-held-value/`.
+-- Anything added here must state which of the two it writes and why the other is safe.
 --   recordByNameRef : registry KEY → RecordInfo.  omInsert is last-write-wins and
 --     the register site inserts in registration order, so it reproduces the old
 --     prepend-list first-match (latest-registered wins) for lookupRecordByName.
@@ -3143,6 +3156,8 @@ data CrossRun = CrossRun {
     universeRegisteredIfacesRef : Ref (OrdMap Unit),  -- #1111 A-2.4: DELIBERATELY still bare-name — a Unit-valued NAME-membership set, see ifaceRegistered
     universeMethodDispatchIdxRef : Ref (List (String, Int)),
     universeRecordByName : Ref (OrdMap RecordInfo),
+    universeRecordIdentsRef : Ref (OrdMap (List (Ident, String, RecordInfo))),  -- #1111 A-2.12 (#1319 unit 2): the identity-keyed COMPANION of the line above — see insertRecordIdents
+    universeRecordCollidedRef : Ref (List String),  -- #1111 A-2.12: the registry KEYS the line above holds ≥2 distinct identities for (normally EMPTY)
     universeFieldOwners : Ref (OrdMap (List String)),
     universeDataParamKinds : Ref (List (TabKey, List Kind)),  -- #1111 A-2.3: identity-keyed (TabKey), not bare name — see tyTabKey
     universeIfaceParamKinds : Ref (List (RegKey, List Kind)),  -- #822 iface half of the kind universe; #1111 A-2.4: identity×slot-keyed (RegKey), not "<iface>@<slot>" — see ifaceSlotKey
@@ -3212,6 +3227,8 @@ freshCrossRun env = CrossRun {
   universeRegisteredIfacesRef = Ref omEmpty,
   universeMethodDispatchIdxRef = Ref [],
   universeRecordByName = Ref omEmpty,
+  universeRecordIdentsRef = Ref omEmpty,
+  universeRecordCollidedRef = Ref [],
   universeFieldOwners = Ref omEmpty,
   universeDataParamKinds = Ref [],
   universeIfaceParamKinds = Ref [],
@@ -6495,6 +6512,41 @@ resolveFieldRecord te fname = match headTyconNameMono te
 -- registry entry whose key suffix-matches `__<head>` AND owns `fname`; only when
 -- it is UNIQUE (else ambiguous → None, so the caller's owners path keeps today's
 -- behavior).  No-op off the emit path (unmangled key hits the exact lookup).
+--
+-- 🚨 #1319 UNIT 2 WAS SCOPED TO RETIRE THIS AND DELIBERATELY DID NOT.  The scoping
+-- pass's premise was *"a real identity key subsumes that hack"* — true, and the
+-- adjudication then chose **B1**, which does NOT make `recordByNameRef` identity-keyed:
+-- it keeps the bare key as a floor and decides collisions with a per-module scope
+-- overlay, exactly as unit 1 kept `universeDataEnv` bare.  So the premise the retirement
+-- rests on is not in the tree, and retiring the hack under B1 would need one of:
+--
+--   * the MANGLER fixed so a record's TYPE name is renamed in lockstep with its
+--     constructor name.  `renameDecl` (`backend/private_mangle.mdk`) rewrites
+--     `dataCtors` and leaves `dataName` alone — its own comment says so — while
+--     `registerRecordInfoKeyed` is called with key = the (mangled) ctor name and
+--     typeName = the (unmangled) `dataName`.  That mismatch IS the hack's whole reason,
+--     and it is `ws:emitter`'s (#1300 / #1305 family), not this unit's;
+--   * or a SECOND record index keyed by the declaration's TYPE identity.  Rejected:
+--     it is unsound for a multi-`ConNamed`-variant type — `data T = | A { x } | B { y }`
+--     would map `(o, T)` to one of the two, and `r.y` at `r : T` would resolve to `A`,
+--     where today the exact lookup misses and the field→owners path answers correctly.
+--     Restricting it to single-variant types makes it serve ONLY the emit path, i.e. a
+--     THIRD keying scheme in a table that already has two — the opposite of reconciling.
+--
+-- 🚨 IT IS LOAD-BEARING, AND THAT IS MEASURED, NOT INFERRED.  The paragraph above was
+-- written as a derivation from `renameDecl`'s source; the adversarial review of PR #1372
+-- then ran the counterfactual, and this sentence exists so the next reader does not have to
+-- repeat it: **stubbed to `None`** — body replaced by a constant, nothing else changed —
+-- **the compiler TYPECHECKS CLEAN and then MISCOMPILES ITSELF INTO A SEGFAULT.**  So the
+-- suffix match is not dead code kept for safety; the self-compile depends on it, and it
+-- fails in the worst available way: no diagnostic, no type error, a crash in the produced
+-- binary.  Anyone retiring it must land the mangler fix in the SAME change.
+--
+-- ⚠️ THE MEASUREMENT IS THE REVIEWER'S, NOT MINE.  Recorded here rather than only in a PR
+-- body, because a PR body is not where someone standing at this function will be looking —
+-- which is the exact report-versus-artifact split that produced this note.
+--
+-- Left in place, with the reason written down, rather than half-migrated.
 lookupRecordByMangledHead : String -> String -> Option (String, RecordInfo)
 lookupRecordByMangledHead head fname = match mangledHeadCandidates head fname
   [pair] => Some pair
@@ -12998,6 +13050,250 @@ exportsCtorIdentFor n ident ((cn, _, ci)::rest)
   | cn == n && ci == ident = True
   | otherwise = exportsCtorIdentFor n ident rest
 
+-- ── #1111 Stage A-2 unit A-2.12 (#1319 unit 2): the RECORD-table peer ──────
+--
+-- The two tables `registerRecordInfoKeyed` writes in lockstep — `recordByNameRef`
+-- (registry key → RecordInfo) and `fieldOwnersRef` (field name → owning registry keys) —
+-- are the constructor namespace's OTHER half, and unit 1 deliberately did not touch them.
+-- A record literal / record pattern / `.field` access never reads `universeDataEnv`'s
+-- constructor SCHEME env at all, so unit 1's `applyCtorScopeOverrides` cannot reach them:
+-- that is exactly why #1283 **Repro A** (the RECORD spelling of the re-export miss) stayed
+-- open when Repro B drained.
+--
+-- Two DIFFERENT defects live in these two tables, and **only the first is addressed here.**
+--
+--   * `recordByNameRef` is BARE-KEYED and LAST-WRITE-WINS, exactly like `universeDataEnv`'s
+--     ctor map.  Two modules each declaring `Cfg` leave ONE entry and load order picks it.
+--     Answer, and what this unit implements: the A-2.5 / unit-1 shape, verbatim — an
+--     identity-keyed COMPANION plus a per-module SCOPE DECISION for the collided keys only.
+--   * `fieldOwnersRef` is a multimap and ACCUMULATES.  Its key (the field name) is already
+--     right; what is wrong is that its VALUE — the candidate owner set — is graph-global,
+--     so a record the module has no import path to still votes in the ambiguity test
+--     (#1070's fourth row).  **NOT FIXED HERE, and the reason is a measurement, not a
+--     preference.**
+--
+-- 🚨 WHY THE FIELD HALF IS NOT DONE WITH THIS MACHINERY.  A first cut of this unit did
+-- narrow the owner set using the SAME witness predicates the record half uses.  Adversarial
+-- review reproduced three defects in it, all confirmed against cold-built binaries:
+--
+--   1. **It is the WRONG QUESTION.**  `fieldOwnersRef` has two consumers, and the second —
+--      `resolveFieldRecord`'s concrete-receiver fallback, reached by every `data T = | C
+--      { … }` whose key `C` is not the type `T` — needs "could this module be HOLDING a
+--      value of that record", not "is that record's CONSTRUCTOR in scope".  Those come
+--      apart on ordinary code: `import amod.{RA, mkA}` (no `(..)`) witnesses no
+--      constructor, yet `mkA.dx` is legitimate.  Measured: `8` at exit 0 before, `Type
+--      mismatch: RA vs Wrec` at exit 1 after — an accept→reject regression on two
+--      libraries that merely share a field name.  Importing only the VALUE (`{mkA}`) is
+--      enough to reach it, so no constructor-spelling test can be the predicate.
+--   2. **The collided-FIELD list is not rare.**  Two records anywhere in the graph sharing
+--      `name`/`id`/`size` put a name on it, so the per-module walk is paid by real
+--      programs: interleaved A/B, deterministic net allocation, N modules x 4 records —
+--      60: 161→187 MB, 120: 261→399 MB, 240: **463→2583 MB (5.6x)**, r3 = 6.47 against a
+--      hard 3.0.  A `List` used as a set, i.e. this tree's signature defect.
+--   3. **It was non-monotonic and did not drain the common case anyway.**  The collided
+--      list is grown in `appendDataUniverse`, the LAST thing in a module's arm, so a
+--      module's own declarations are never in the list its own arm reads: local `MRec{fld}`
+--      plus ONE unrelated collider stayed rejected, while adding a SECOND unrelated
+--      collider made the same program compile.
+--
+-- The predicate the field half actually needs is a REACHABILITY question: can a value of
+-- this record type be OBTAINED here at all.  ⚠️ NOT "does an imported binding's type
+-- mention it" — that is one hop, and it is not enough.  A record reachable only
+-- TRANSITIVELY — as a field of an imported record, an element of an imported `List`, a type
+-- argument, a component of a returned tuple — is a value this module can hold and project
+-- `.f` on, so it must count.  The predicate is a closure over the imported type surface,
+-- which is a different analysis from anything this unit builds, and stating its true size
+-- is the point: an under-stated version invites the next agent to reach for a spelling test
+-- again.  Rather than widen into it, the row stays open on #1070 / #1319 with those three
+-- findings recorded on it.
+--
+-- ⚠️ MIRROR DISCIPLINE, and it is now a THREE-way mirror (method / ctor / record) until
+-- #1288 lands.  The witness half is deliberately NOT re-implemented here: `declaresCtorNamed`
+-- and `anyUsePathBindsCtor` are SHARED with unit 1, because a record's name IS its
+-- constructor and a named-field variant is keyed by its constructor — the question "does
+-- this module declare, or import, a constructor spelled `n` owned by type `owner`" is
+-- literally the same question.  Only the candidate ROW type differs (RecordInfo instead of
+-- Scheme), so only the two projections below are new.
+--
+-- 🚨 IT MUST NOT RE-DECIDE AMBIGUITY, for the same reason and by the same construction as
+-- unit 1: two witnesses decline to the floor rather than picking one, so a genuinely
+-- ambiguous import stays resolve's to reject.
+--
+-- ⚠️ SCAFFOLDING WITH A NAMED DELETER, same as unit 1: this is a further implementation of
+-- a fact `resolve.mdk` derives.  #1288 owns the consolidation.
+--
+-- ── THE NO-CARRIER RULING, RE-TESTED FOR THIS NAMESPACE RATHER THAN INHERITED ──
+-- #1319's adjudication adopted "no AST occurrence carrier" but flagged the negative as
+-- non-exhaustive and required the implementing PR to RE-TEST it.  Unit 1 discharged that
+-- for constructor occurrences with a driver-level argument (`desugar : List Decl -> List
+-- Decl` is applied per module, so no desugar pass is ever handed two modules).  That
+-- argument covers record occurrences too — but it is an argument, so the two real
+-- body-copy paths were re-run for RECORD occurrences specifically, first-hand:
+--   * interface-default specialization: `ifc` declares `data Box = { bv : Int }` and an
+--     interface whose default body is `boxOf (Box { bv = 1 })`; `user` declares its OWN
+--     `Box` at `{ bv : String }`, writes a body-less `impl`, and uses its own.  Result
+--     `ifc-1|mine`, exit 0 — the copied body keeps the interface module's `Box`.
+--   * another module's impl body: `impmod`'s `impl` body builds `impmod`'s `Box`; the
+--     importer declares its own at an unrelated field type.  Result `imp-5|mine`, exit 0.
+-- Neither occurrence is re-resolved in the importer's record scope, so a DECL-level scope
+-- decision is the right instrument and no node carrier is needed.  As with unit 1 this is
+-- falsifiable by a future change: a driver that hands `desugar` a concatenation of modules
+-- would reopen it.
+
+-- Grow the identity-keyed companion by THIS module's PUBLIC record declarations.
+--
+-- 🚨 THE `RecordInfo` IS READ BACK OUT OF `recordByNameRef` RATHER THAN RE-DERIVED, for the
+-- same reason `insertCtorIdents` reads its `Scheme` out of `env2`: this runs immediately
+-- after `registerAllData … pubDecls` in `appendDataUniverse`, so `lookupRecordByName key`
+-- is THIS module's just-registered entry and the companion holds the very object the bare
+-- map holds.  Re-deriving would call `registerRecordInfoKeyed` a second time, minting a
+-- second set of `freshVars` for the same declaration — two RecordInfos for one record, the
+-- failure this placement exists to make impossible.
+--
+-- ⚠️ ONLY `ConNamed` VARIANTS ARE RECORDED, because only they are registered:
+-- `registerNamedFieldVariants` skips a positional variant, so a positional constructor has
+-- no `recordByNameRef` row to be a candidate for.  The short-form record `data X = { … }`
+-- IS a `ConNamed` variant (its key and its type name coincide); a `DNewtype` is `ConPos`
+-- and contributes nothing here.
+insertRecordIdents : List Decl -> (OrdMap (List (Ident, String, RecordInfo)), List String) -> (OrdMap (List (Ident, String, RecordInfo)), List String)
+insertRecordIdents [] acc = acc
+insertRecordIdents ((DAttrib _ d)::rest) acc =
+  insertRecordIdents rest (insertRecordIdents [d] acc)
+insertRecordIdents ((DData { dataName, dataCtors, dataOrigin, ... })::rest) acc = insertRecordIdents rest (insertRecordVariantIdents dataName dataOrigin dataCtors acc)
+insertRecordIdents (_::rest) acc = insertRecordIdents rest acc
+
+insertRecordVariantIdents : String -> TyConOrigin -> List Variant -> (OrdMap (List (Ident, String, RecordInfo)), List String) -> (OrdMap (List (Ident, String, RecordInfo)), List String)
+insertRecordVariantIdents _ _ [] acc = acc
+insertRecordVariantIdents tyName o ((Variant cn (ConNamed _ _))::rest) acc =
+  insertRecordVariantIdents tyName o rest (addRecordIdentCand tyName o cn acc)
+insertRecordVariantIdents tyName o (_::rest) acc =
+  insertRecordVariantIdents tyName o rest acc
+
+-- Upsert BY IDENTITY, so `listLen >= 2` means "two DISTINCT declarations of this registry
+-- key" and the collided list cannot fill with self-collisions.  Honest absence twice over,
+-- exactly as `addCtorIdentCand`: no module id ⇒ no identity ⇒ no candidate; no row in
+-- `recordByNameRef` ⇒ no candidate, since a candidate with no RecordInfo could not be
+-- selected anyway.
+addRecordIdentCand : String -> TyConOrigin -> String -> (OrdMap (List (Ident, String, RecordInfo)), List String) -> (OrdMap (List (Ident, String, RecordInfo)), List String)
+addRecordIdentCand tyName o cn (cands, collided) = match mkIdent NsCtor o cn
+  None => (cands, collided)
+  Some ident => match lookupRecordByName cn
+    None => (cands, collided)
+    Some ri =>
+      let prior = dropRecordIdentCand ident (fromOption [] (omLookup cn cands))
+      let next = prior ++ [(ident, tyName, ri)]
+      (
+        omInsert cn next cands,
+        if listLen next >= 2 && not (contains cn collided) then cn::collided else collided,
+      )
+
+dropRecordIdentCand : Ident -> List (Ident, String, RecordInfo) -> List (Ident, String, RecordInfo)
+dropRecordIdentCand _ [] = []
+dropRecordIdentCand ident ((c@(i, _, _))::rest)
+  | i == ident = dropRecordIdentCand ident rest
+  | otherwise = c :: dropRecordIdentCand ident rest
+
+-- ── THIS module's scoped view of `recordByNameRef` ─────────────────────────
+-- Runs at the `dataEnv` binding, immediately after `registerAllData … prog0` has written
+-- the floor (universe < import overlay < prog0) into the per-run ref, and iterates the
+-- collided-KEY list — a program in which no two modules declare the same record /
+-- named-field-variant name pays one `[]` match per module and mutates nothing.
+--
+-- ⚠️ "NORMALLY EMPTY" IS A CLAIM ABOUT RECORD KEYS, NOT ABOUT FIELD NAMES, and the
+-- distinction is load-bearing rather than pedantic.  An earlier cut of this unit built the
+-- same machinery for `fieldOwnersRef` keyed on collided FIELD names; adversarial review
+-- measured that list to be routinely non-empty (any two records anywhere in the graph
+-- sharing `name`/`id`/`size` put a name on it), which turned the per-module walk into
+-- 5.6x net allocation at 240 modules.  A collided record KEY means two modules declare a
+-- record spelled the same, which is the collision this unit exists for and is genuinely
+-- rare — but it is an empirical claim, so `gen_modules` in
+-- `test/diff_compiler_perf_scaling.sh` now declares records per module, because before that
+-- NO multi-module generator in the gate declared a single record or field and this code
+-- path could not be seen at all.  Derive the generator set rather than trusting this
+-- sentence: `grep -n '^gen_[a-z_]*() {' test/diff_compiler_perf_scaling.sh`.
+--
+-- ⚠️ OVERLAY, never a rebuild: anything a module's scope does not decide keeps the floor's
+-- answer, which is today's behaviour.
+--
+-- 🚨 THE SCOPED VIEW MUST NOT REACH THE UNIVERSE, and it does not — but only because of
+-- where `appendDataUniverse` reloads.  The overlay mutates the PER-RUN ref, and
+-- `appendDataUniverse` (the end of this module's arm) opens with `loadDataUniverse ()`,
+-- which overwrites that ref from the cross-run universe BEFORE this module's public decls
+-- are registered into it.  So one module's scope decision is invisible to the next.
+-- Moving the reload, or growing the universe from the per-run refs as they stand at the
+-- end of the arm, would make module A's import scope decide module B's records.
+--
+-- 🚨 THIS BREAKS THE `#415` LOCKSTEP AND THE OBLIGATION IS NOW REAL.  The note at
+-- `registerRecordInfoKeyed` calls that function *"the SOLE registration writer of both"*
+-- `recordByNameRef` and `fieldOwnersRef`, and calls their lockstep *"structural, not an
+-- obligation"*.  That is no longer true: this overlay writes `recordByNameRef` ALONE.
+-- Re-pointing key `K` does not change WHICH keys own a field name (the key is the same
+-- string), but it does change which FIELDS `K` declares — so with two same-named records
+-- having DISJOINT field sets, `fieldOwnersRef` can name `K` as the owner of a field the
+-- newly-selected `K` does not have.
+--
+-- 🚨 AND THAT HAS A CONSEQUENCE.  An earlier draft of this note called it *"an obligation
+-- with no observed consequence today"* on the strength of one probe; the probe kept both
+-- projections inside the module that NAMED the record, so the overlay agreed with the floor
+-- and could not show anything.  **#1377 is the consequence**: a module that names one `Cfg`
+-- and holds a value of the OTHER `Cfg` is refused, `Field 'beta' does not belong to record
+-- 'Cfg'`, exit 1, where `5` is correct.  Pinned at
+-- `test/must_fail_fixtures/1377-named-type-wins-over-held-value/`.
+--
+-- ── THE TRANSITIONAL RULE, STATED SO IT IS A DECISION AND NOT AN ACCIDENT ──
+-- **The declaration this module NAMES wins for EVERY projection of that key in this module,
+-- including projections of values whose type the module never named.**  That is what one
+-- bare-keyed entry per registry key can express, and it is deliberate for this unit: it is
+-- strictly better than the load-order coin flip it replaces (#1377 was ACCEPTED in one
+-- clause order and REFUSED in the other on `main`; it is now refused in both), and it is
+-- wrong in the case above.
+--
+-- It is **transitional**, not the target.  The target rule is *"the receiver's own identity
+-- selects its record"*, which needs `lookupRecordByName` to take an identity rather than a
+-- bare `String` — the same identity analysis #1376's claim file names, and the reason this
+-- unit stopped where it did rather than widening.  Do not read the rule above as settled
+-- semantics; read it as the best a bare key can do.
+applyRecordScopeOverrides : List Decl -> Unit
+applyRecordScopeOverrides prog =
+  overrideScopedRecords
+    prog
+    crossRun.value.universeRecordIdentsRef.value
+    crossRun.value.universeRecordCollidedRef.value
+
+overrideScopedRecords : List Decl -> OrdMap (List (Ident, String, RecordInfo)) -> List String -> Unit
+overrideScopedRecords _ _ [] = ()
+overrideScopedRecords prog cands (n::rest) =
+  let _ = match omLookup n cands
+    None => ()
+    Some cs => match scopedRecordEntry prog n cs
+      None => ()
+      Some ri => setRef perRun.value.recordByNameRef (omInsert n ri perRun.value.recordByNameRef.value)
+  overrideScopedRecords prog cands rest
+
+-- Which declaration of registry key [n] does THIS module mean?  The same ladder as
+-- `scopedCtorEntry`, using the SAME two predicates — see the mirror-discipline note above
+-- for why they are shared rather than copied.  The own-declaration rung is a DECLINE for
+-- the same reason it is there: `registerAllData base prog0` registered this module's own
+-- records LAST, so the floor already holds the own-declaration answer.
+scopedRecordEntry : List Decl -> String -> List (Ident, String, RecordInfo) -> Option RecordInfo
+scopedRecordEntry prog n cs =
+  if declaresCtorNamed prog n then
+    None
+  else
+    importedRecordEntry prog n cs
+
+importedRecordEntry : List Decl -> String -> List (Ident, String, RecordInfo) -> Option RecordInfo
+importedRecordEntry prog n cs = match filterList (c => recordCandImported prog n c) cs
+  [only] => Some (recordCandInfo only)
+  _ => None
+
+recordCandInfo : (Ident, String, RecordInfo) -> RecordInfo
+recordCandInfo (_, _, ri) = ri
+
+recordCandImported : List Decl -> String -> (Ident, String, RecordInfo) -> Bool
+recordCandImported prog n (ident, owner, _) =
+  anyUsePathBindsCtor prog n owner ident
+
 missingImplMethodMsg : String -> List Ty -> String -> String
 missingImplMethodMsg iface tys method = "'impl \{iface} \{joinWith " " (map ppTyAtom tys)}' is missing method '\{method}'. Every interface method without a default body must be implemented — define '\{method}' in the impl (or check for a typo in a method name)"
 
@@ -16085,9 +16381,17 @@ checkBodyImpl seed mode prog0 =
       -- scope selects.  It sits ABOVE prog0 and declines for any name prog0 declares, so
       -- the ladder above is unchanged: own > import scope > import overlay > universe.
       -- A collision-free program returns this very env unchanged and unallocated.
+      -- #1111 A-2.12 (#1319 unit 2): the two RECORD-table overlays are the same fifth
+      -- layer one namespace-half over, and they must run HERE — after `registerAllData …
+      -- prog0` has written the floor into `recordByNameRef` / `fieldOwnersRef` — for the
+      -- same reason `applyCtorScopeOverrides` wraps that call.  They are statements rather
+      -- than an env transform only because those two tables are per-run REFS, not `TcEnv`
+      -- fields; the ladder they implement is identical.  See applyRecordScopeOverrides.
       let base = registerAllData crossRun.value.universeDataEnv.value
                    (importedCtorTypeDecls prog0 crossRun.value.universeDataDecls.value)
-      applyCtorScopeOverrides prog0 (registerAllData base prog0)
+      let env0 = registerAllData base prog0
+      let _ = applyRecordScopeOverrides prog0
+      applyCtorScopeOverrides prog0 env0
   -- #784: reject under-determined return-only effect vars on interface methods.
   -- MUST run AFTER `dataEnv` above populated `dataParamKindsRef` — the kind-aware
   -- predicate (rowArgNames) reads that table to distinguish a row-kinded ctor arg
@@ -20736,6 +21040,14 @@ appendDataUniverse prog0 =
   let ctorAcc = insertCtorIdents env2 pubDecls (crossRun.value.universeCtorIdentsRef.value, crossRun.value.universeCtorCollidedRef.value)
   let _ = setRef crossRun.value.universeCtorIdentsRef (fst ctorAcc)
   let _ = setRef crossRun.value.universeCtorCollidedRef (snd ctorAcc)
+  -- #1111 A-2.12 (#1319 unit 2): the RECORD-table peer of the three lines above, grown
+  -- HERE and not in `registerRecordInfoKeyed` for the same reason — `registerAllData …
+  -- pubDecls` has just written this module's rows into `recordByNameRef` / `fieldOwnersRef`
+  -- (`storeDataUniverse` copies, it does not clear), so both helpers read back the very
+  -- objects the bare tables hold instead of minting a second set.  See insertRecordIdents.
+  let recAcc = insertRecordIdents pubDecls (crossRun.value.universeRecordIdentsRef.value, crossRun.value.universeRecordCollidedRef.value)
+  let _ = setRef crossRun.value.universeRecordIdentsRef (fst recAcc)
+  let _ = setRef crossRun.value.universeRecordCollidedRef (snd recAcc)
   -- #674: keep the DECLS too (universeDataEnv is a bare-name ctor env — last-write-wins,
   -- LOSSY across a duplicate ctor name — so it cannot recover a SPECIFIC module's ctor
   -- for the import-scoped overlay).  checkBodyImpl re-registers the ctors of the types
