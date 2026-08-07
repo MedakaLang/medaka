@@ -188,8 +188,15 @@ Given an occurrence of bare name `N` in module `M`:
   into `M`. The *interface* may live in any of the three nameable-in-`M`
   positions — local, imported, or prelude — and it is **not required to be
   local**; but an interface that `M` cannot name creates **no shadow in `M`**,
-  whether because no import path reaches its module at all or because its
-  declaration is not exported through the path that does. **The impl universe is
+  whether because no import path reaches its module at all (the
+  [#1353](https://github.com/MedakaLang/medaka/issues/1353) axis — reachability)
+  or because its declaration is not exported through the path that does (the
+  [#1302](https://github.com/MedakaLang/medaka/issues/1302) axis — export
+  visibility). **Both axes are settled the same way by this one clause**: both
+  are cases of "`M` cannot name it", and S1 does not distinguish which reason
+  applies — a module three hops away with no import path and a module one hop
+  away that never exported the declaration are the same failure of "nameable in
+  `M`", not two rules. **The impl universe is
   not narrowed by this clause** — see S2 and §1.0. Shadow-hood is per-module,
   per-name — not
   per-occurrence — and **the PRELUDE IS A MODULE**: a `core.mdk` occurrence of `N`
@@ -261,10 +268,13 @@ Given an occurrence of bare name `N` in module `M`:
   > **What is NOT ruled here** — three things, left open deliberately rather than
   > decided in passing:
   >
-  > 1. **Whether an interface is nameable through a re-export chain** is deferred
-  >    to the ordinary import/export rules. This clause *consumes* that answer; it
-  >    does not define it. (It is also the arm a naive implementation of this
-  >    clause is most likely to get wrong, by failing **closed**.)
+  > 1. **Whether an interface is nameable through a re-export chain** — the
+  >    finer-grained sub-question inside the
+  >    [#1302](https://github.com/MedakaLang/medaka/issues/1302) export-visibility
+  >    axis — is deferred to the ordinary import/export rules. This clause
+  >    *consumes* that answer; it does not define it. (It is also the arm a naive
+  >    implementation of this clause is most likely to get wrong, by failing
+  >    **closed**.)
   > 2. **Whether a PRELUDE standalone can be S1's left operand at all.** The kind
   >    partition admits only *defined in `M`* and *imported into `M`*, and the
   >    implicit prelude is neither on its face; no cell in §2 exercises it (every
@@ -528,12 +538,42 @@ three of run / build / check. Fixtures in `test/shadow_fixtures/`.
 > **So this section cannot be the evidence that S1's scope is implemented.** The
 > corpus is blind to the axis, and a reader who takes a green
 > `diff_compiler_shadow_semantics` as having graded the clause will be wrong.
-> Adding the discriminating cells — one per axis, reachability and export
-> visibility — belongs to the unit that implements the clause
-> ([#1375](https://github.com/MedakaLang/medaka/issues/1375)), not to this
-> document. Same shape as row 32's lesson (`36/36` on a *broken* binary, because
-> every unit then used an annotated or literal receiver) one axis over: **this
-> corpus has now twice graded green over a cell nothing in it could express.**
+> Same shape as row 32's lesson (`36/36` on a *broken* binary, because every unit
+> then used an annotated or literal receiver) one axis over: **this corpus has
+> now twice graded green over a cell nothing in it could express.**
+>
+> 🚧 **OWED, not landed here — two rows, one per axis, both KNOWN-BAD until M-2
+> lands.** [#1375](https://github.com/MedakaLang/medaka/issues/1375) is the spec
+> unit; it rules the clause and repairs the vocabulary but does not touch
+> `compiler/` or `test/`, so it cannot itself measure what the *current*,
+> unscoped implementation does on these shapes — and a KNOWN-BAD row pinned to a
+> guessed value is worse than no row (this document's own capture-goldens
+> discipline: a captured value must be independently established, never merely
+> observed). Both rows are owed to **M-2** ([#1354](https://github.com/MedakaLang/medaka/issues/1354)),
+> whose implementer must run exactly this investigation anyway to build the
+> scoped predicate, and should land them alongside the fix (KNOWN-BAD before,
+> flipping to OK the moment the predicate is scoped — the same self-draining
+> shape as rows 25/26/29 above):
+> - **Reachability row (#1353 axis).** A shadow occurrence in module `M` where
+>   the interface's declaring module `P` is loaded in the graph (so today's
+>   `accData` sees it regardless — `compiler/types/typecheck.mdk`'s
+>   `foldModules` accumulates every earlier module's `publicDataDecls`, which
+>   includes public interfaces, unconditionally over the whole topological
+>   order, not filtered by whether a later module actually imports `P`) but `M`
+>   has no import — direct or transitive — to `P`. #1375's own "sharper
+>   repro" is this row's candidate case: an imported standalone `size : Int ->
+>   Int` applied to a `Box` whose `impl Sizeable Box` lives in a module the
+>   occurrence module never imports, accepted at exit 0 printing `300` on
+>   current `main` — deletion control `Type mismatch: Int vs Box`.
+> - **Export-visibility row (#1302 axis).** A shadow occurrence in `M` that
+>   *does* import `P` (directly or transitively) but `P`'s declaration of the
+>   interface is not exported along that path (private in `P`, or exported only
+>   from a re-export chain `M` doesn't traverse) — the finer-grained sub-case
+>   the S1-SCOPE note's "what is NOT ruled here" item 1 flags as the arm most
+>   likely to fail closed under a naive implementation.
+>
+> Until then: **do not read the 26 OK / 0 BUG tally above as covering either
+> axis** — see the corpus-blindness note this paragraph sits under.
 
 > ### ⚠️ **`0 BUG` DOES NOT MEAN "NO VIOLATIONS". READ THE GAP AND UNVERIFIED COLUMNS.**
 >
@@ -757,9 +797,13 @@ same "which stage owns S4/S6" decision.
 > scheme via `maybeStandaloneValueMono`). Row **14 (d8)** now DISPATCHES cross-module
 > (run+build print `3`,`4`, matching d2): `shadowKeyTableRef` seeded from the global
 > `accData ++ implDecls ++ prog` (was missing the imported impl on the check path),
-> and both definer-shadow app paths decide per-receiver — a receiver with a visible
+> and both definer-shadow app paths decide per-receiver — a receiver with a live
 > impl fetches the method scheme from `methodIfaceParamsRef`, else the standalone
-> scheme. Fixtures `p0_19_value_pos_{shadow=REJECT,ok=ACCEPT}` + a d8 leg in
+> scheme. (This paragraph predates the 2026-08-06 scope ruling and describes the
+> pre-inversion, graph-global impl lookup this row had at the time — see S1-SCOPE
+> for the now-current, scoped reading; "live" here matches this document's own
+> S2 vocabulary, not a fourth undefined adjective.) Fixtures
+> `p0_19_value_pos_{shadow=REJECT,ok=ACCEPT}` + a d8 leg in
 > `diff_compiler_check_cli_modules` (14/0); agreement 24/0, fixpoint C3a/C3b YES.
 
 > **🐛 NEW CELL + ✅ FIX (2026-07-13, P0-20) — row 25: a LITERAL receiver.  The worst
