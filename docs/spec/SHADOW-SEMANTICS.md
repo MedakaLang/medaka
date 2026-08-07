@@ -36,6 +36,17 @@ column had silently gone stale in the OK direction (see the note under §2).
 > - **The branch.** **S1's interface operand is scoped to what the module can
 >   NAME; S2's impl universe stays graph-global.** The argument, the cost, and
 >   the **⟲ overturn condition** are in the **S1-SCOPE** note under S1.
+> - **Follow-on ruling, 2026-08-07
+>   ([#1380](https://github.com/MedakaLang/medaka/issues/1380)): the
+>   RE-EXPORT-CHAIN arm of that operand is IN SCOPE.** An interface reaching `M`
+>   through a re-export chain is nameable in `M` — **conditional on the ordinary
+>   import/export rules saying the declaration is exported along that path**,
+>   which S1 consumes and does not define; failing closed on such a chain is
+>   non-conformant. ⚠️ Unlike the branch above, this one is an acceptance
+>   **WIDENING** on the importer arm, not a narrowing, and it has a **silent**
+>   member (same accept both ways, different value at exit 0) as well as a loud
+>   one — the rule, the full licensing set, its cost, and the sub-predicate that
+>   stays deferred are all in the **S1-CHAIN** note under S1.
 >
 > ⚠️ **S2's old `GLOBAL` gloss ("local ∪ imported ∪ prelude") was independently
 > wrong** — narrower than `DICT-SEMANTICS.md` §8 I5's actual instance universe —
@@ -180,7 +191,7 @@ spelled out:
 
 | Term | Means | Used by |
 |---|---|---|
-| **nameable in `M`** | the declaration is one `M` may refer to by name: declared in `M`, **or** exported by a module `M` imports (directly, or through a re-export chain), **or** declared in the implicit prelude | S1's **interface** operand |
+| **nameable in `M`** | the declaration is one `M` may refer to by name: declared in `M`, **or** exported by a module `M` imports (directly, or through a re-export chain — **RULED IN SCOPE 2026-08-07, [#1380](https://github.com/MedakaLang/medaka/issues/1380); see S1-CHAIN under S1**, which also says what is still deferred: the sub-predicate deciding when a declaration counts as *exported through* a chain), **or** declared in the implicit prelude | S1's **interface** operand |
 | **defined in `M` or imported into `M`** | the two cases that assign a shadow its **kind** (definer / importer) — so this is also, exactly, S1's **standalone** operand | S1's **standalone** operand + the kind partition |
 | **graph-global** | ranges over **every** module of the loaded graph, whether or not any import path reaches it — `DICT-SEMANTICS.md` §8 **I5** | S2's **impl universe** only |
 
@@ -301,16 +312,213 @@ Given an occurrence of bare name `N` in module `M`:
   > name sets (that is an argument about the implementation: cache the scoped
   > predicate, do not re-globalize it).
   >
+  > ### 🔒 S1-CHAIN — RULED 2026-08-07 ([#1380](https://github.com/MedakaLang/medaka/issues/1380)): a RE-EXPORT CHAIN is IN SCOPE for S1
+  >
+  > §1.0's **nameable in `M`** row lists, among the ways a declaration can be
+  > *exported by a module `M` imports*, the case of reaching `M` **through a
+  > re-export chain**. That arm **stands**. An interface that reaches `M` through
+  > a re-export chain **is nameable in `M`**, and is therefore eligible as S1's
+  > interface operand. A
+  > conforming implementation **MUST** treat it so wherever the ordinary
+  > import/export rules say the declaration is exported along `M`'s import path,
+  > and **MAY NOT fail closed on chains.** Only the *sub-predicate* — what makes a
+  > declaration count as **exported through** a chain — stays deferred; that is
+  > item 1 below, now narrowed to it.
+  >
+  > **The verdict, on the worked program.** `M` imports `P`; `P` re-exports `Q`'s
+  > interface `I`, whose methods include `n`; `M` defines a standalone `n`. Then
+  > `I` is nameable in `M`, S1's intersection is non-empty, `n` **is a definer
+  > shadow in `M`**, and by S2's definer arm `n` denotes the standalone
+  > **unconditionally** — so `n` applied to a receiver at a live `impl I` head is a
+  > **located reject**, not a dispatch.
+  >
+  > **Why.** S1-SCOPE's criterion above is *can the author write it down*. If the
+  > import/export rules let `M` import and call the chain-exported method, it is a
+  > candidate the author could have meant; excluding it would be S1 answering a
+  > question this very note argues S1 has no business answering. The nameable set
+  > is **exactly** what "can `M` name it" evaluates to — no more, and no less.
+  >
+  > **🚨 WHAT THIS LICENSES THAT WAS NOT LICENSED BEFORE.** Stated as a set,
+  > because a rule that quietly widens is invisible to a citation audit.
+  >
+  > - **Newly NON-CONFORMANT:** an implementation whose nameable-in-`M` predicate
+  >   is satisfied only by a *direct* export and answers "not nameable" for a
+  >   chain-exported declaration. Failing closed on a chain was permitted by S1's
+  >   previous silence. It is not permitted now.
+  > **The discriminating cell is the IMPORTER arm**, not the definer one above,
+  > and it **splits in two on the standalone's domain**. Fix the configuration: `M`
+  > imports a standalone `n`; `P` (imported by `M`) re-exports `Q`'s interface `I`
+  > declaring a method `n`; the receiver's head `T` has a live `impl I`. With the
+  > chain arm **IN**, `n` is an **importer** shadow, so S2's importer arm applies
+  > and a live-impl head **DISPATCHES**. With it **out**, `n` is no shadow at all
+  > and the imported standalone is the only denotation. What that difference *looks
+  > like* depends on whether `T` is inside the standalone's declared domain:
+  >
+  > - **`T` OUTSIDE the standalone's domain — the LOUD half. Newly ACCEPTED.**
+  >   Chain out, the occurrence is a **located reject** (`Int vs T`). Chain in, it
+  >   **dispatches**. So this ruling turns a located reject into an accepted
+  >   dispatch — a **widening**, and the exact mirror of the acceptance
+  >   **narrowing** S1-SCOPE charges as this ruling's cost above (*"an importer
+  >   shadow whose only declaring interface is not nameable in `M`, applied to a
+  >   receiver at a live-impl head"*): chains are the sub-case being put back in.
+  > - 🚨 **`T` INSIDE the standalone's domain — the SILENT half. Newly a DIFFERENT
+  >   VALUE AT EXIT 0, and this is the member of the set that is easy to miss.**
+  >   Both readings **accept**. Chain in, the occurrence dispatches to `impl I T`;
+  >   chain out, it calls the imported standalone. Two different answers, no
+  >   diagnostic on either path, exit 0 both ways. **This is the `eq [1] [2]`
+  >   erasure shape** — the one the 2026-07-14 S2 inversion exists to abolish (see
+  >   the ⚡ banner in the top matter) — reaching the **importer** arm through a
+  >   re-export chain. And after this ruling the dispatch answer is **mandatory**,
+  >   not merely permitted, so this is a **licensing change and not only a
+  >   widening**: an implementation that returns the standalone's answer here is
+  >   non-conformant, and nothing about its output says so.
+  > - **The DEFINER cell does NOT discriminate the two readings.** Chain in, `n` is
+  >   a definer shadow and S2's definer arm gives the standalone unconditionally.
+  >   Chain out, **§1.0's `nameable in M` excludes `I` outright**, so `I`'s method
+  >   is never a candidate denotation for `n` in `M` at all and the module's own
+  >   top-level standalone is the only one left. Same denotation, reached by two
+  >   different routes. The worked program above states this ruling's verdict
+  >   correctly, but it is **not** the cell that tells the readings apart — do not
+  >   reach for it as a discriminating fixture. ⚠️ **Do not derive the chain-out
+  >   half from S9's tie-break prose** (*"a name written at top level in a module
+  >   is that module's name"*): that sentence sits inside a block marked
+  >   **`[REPLACED 2026-07-14]`**, and its very next clause — an `import` is a
+  >   *sibling* scope and does not shadow — is silent on this question rather than
+  >   support for it. **The route is §1.0's table, and only that.**
+  >
+  > **Nothing in `test/` asserted the behaviour this forbids — enumerated, not
+  > sampled.** `test/shadow_fixtures/` contains **zero** files matching `export
+  > import`, so the S1 corpus is chain-free (consistent with the corpus-blindness
+  > note under §2). Seven `test/must_fail_fixtures/` directories match, and
+  > **none** pins chain-dependent shadow-hood:
+  > `1353-transitive-iface-shadow-no-visibility`'s only match is a **comment
+  > stating the fixture is deliberately not a re-export** (its `bridge.mdk`:
+  > *"Plain `import`, NOT `export import`"*) — that is the **reachability** axis,
+  > not this one — and `1072` / `1288` / `1359` / `1369` / `1373` / `1377` are
+  > overlap, interface-identity, ctor-mangling, dict-passing, field-variant and
+  > named-type rows. Of the four must-fail pins whose `claim.txt` mentions
+  > shadowing (`93`, `1191`, `1351`, `1353`), only `1353` contains the string
+  > `export import` at all, in that negating comment. **No pin is orphaned by this
+  > ruling.**
+  >
+  > 🕳️ **But the SILENT half above is UNGRADEABLE by this corpus — and not merely
+  > for want of a chain.** Even given one, **no unit in `test/shadow_fixtures/`
+  > could express it**, because every importer unit's standalone is
+  > **domain-disjoint** from its own live-impl head, so all seven land in the LOUD
+  > half by construction. Derived over the whole importer corpus, not sampled:
+  > `i1` and `i3` and `i8` pair `size : Int -> Int` against `impl … Box` (`i8` also
+  > `Bar`); `i4` pairs `isEmpty : Tok -> Bool` against a `List` receiver; `i5`
+  > pairs `isEmpty : Int -> Bool` against `List`; `i10` pairs
+  > `get : Int -> Int -> Int` against `impl Ix Box Int`; `i11` pairs
+  > `display : Tok -> String` against an extern-sourced `Int`. In every one, the
+  > live-impl head is outside the standalone's domain, so the chain-out reading
+  > **rejects** rather than quietly returning a second answer. **A fixture for the
+  > silent half needs a standalone whose domain COVERS the live-impl head** — the
+  > shape no unit here has. This is the same lesson as rows 27–28 and row 32, a
+  > third time: *a gate that cannot express a cell cannot defend it.*
+  >
+  > ✅ **One gated fixture already requires a chain to propagate, one path over.**
+  > `test/analyze_project_fixtures/1272_wildcard_reexport_method_scope/` — enrolled
+  > by directory glob, not an allow-list (`test/diff_compiler_analyze_project.sh`
+  > iterates `"$FIXDIR"/*/`) — pins `T-NO-IMPL` *"No impl of MSIB for Blob"* on a
+  > program where `msmth` reaches the root module **only** through `msmid`'s
+  > `export import msifb.{MSIB, msmth}`: this note's `M`/`P`/`Q` shape at one hop.
+  > Failing closed there was the S0 that fixture exists to pin.
+  > ⚠️ **It corroborates the direction; it does not grade this clause.** That is
+  > the **impl-obligation** path, and its `msmth` is never a standalone `DFunDef`,
+  > so S1's conjunct is vacuously false there — the same reason #1302's repro does
+  > not exercise S1 (see the ⚠️ under S1).
+  >
+  > **⚠️ THE COST, stated as a cost.** This puts S1's conformance **downstream of
+  > a layer that has no spec of its own.** There is no import/export semantics
+  > document in `docs/spec/`; "the ordinary import/export rules" resolves to
+  > `SYNTAX.md` prose plus the implementation. That is the structural half of the
+  > cost and it is not in doubt.
+  >
+  > The behavioural half is **much narrower than `SYNTAX.md` makes it look**, and
+  > most of it is pinned GREEN. `docs/spec/SYNTAX.md:627-639` says `export import
+  > <mod>.{name}` does **not** re-export a name `<mod>` itself only has via its own
+  > `export import core.{name}`, and calls it *"a real compiler bug … filed as a
+  > finding by this pass, not fixed here."* That paragraph was written by
+  > `a8c54215` on **2026-07-13**, one day before
+  > [#52](https://github.com/MedakaLang/medaka/issues/52) (*"`export import m.{x}`
+  > silently re-exports NOTHING"*) closed on **2026-07-14** — so its *"reproduces
+  > on current `main`"* was measured against a tree without that fix. Against the
+  > corpus today:
+  >
+  > - **One hop, `core` origin — WORKS, pinned in two corpora.**
+  >   `test/resolve_module_fixtures/reexport_core/` (`prov.mdk` is exactly
+  >   `export import core.{Filterable, filter, filterMap}`) has a **0-byte**
+  >   `expected`, and `test/eval_modules_fixtures/reexport_core/main.eval.golden`
+  >   reads `[2, 4, 6] [30, 40]`. ⚠️ **That is `SYNTAX.md`'s own worked example —
+  >   `stdlib/list.mdk` re-exporting `core`'s `filter`, consumed by a plain
+  >   downstream `import` — and it is DISPROVED**, not merely unverified.
+  > - **Two hops, non-`core` origin — WORKS, pinned.**
+  >   `test/run_check_agreement_fixtures/lib/obl1114_reexp2.mdk` re-exports a
+  >   re-export; its own header says it *"Pins that the chain resolves at every hop
+  >   … rather than only at depth 1."*
+  > - **Two hops WITH a `core` origin — the intersection of those two, and the only
+  >   part still unpinned.** Tracked as
+  >   [#1412](https://github.com/MedakaLang/medaka/issues/1412).
+  >
+  > So do not cite `SYNTAX.md:627-639` as a live general bug: its concrete example
+  > is disproved and its general claim survives only at that one intersection.
+  >
+  > **The ruling does not turn on which.** Whichever way that resolves, the
+  > structural point stands: a chain defect belongs to the **import/export** layer
+  > and stays there, with one home. Under the rejected reading, S1's silence would
+  > have let an implementation bake fail-closed behaviour in as **conformant** —
+  > laundering an import/export defect into a spec-sanctioned outcome. That is the
+  > trade this ruling makes, and it is where to push to reopen it.
+  >
+  > **🚧 NEITHER READING DESCRIBES TODAY'S BINARY. This arm is a TARGET, not a
+  > description of behaviour.** The S1-detect universe today is **strictly wider
+  > than both** candidate readings: `allIfaceMethodNames`
+  > (`allIfaceMethodNames`, `compiler/types/typecheck.mdk` — cited **by symbol, not
+  > by line**: this function has moved twice in two days, and
+  > `test/check_doc_links.sh` strips a `:NNN` suffix before validating, so a line
+  > citation here can rot while `docs-links` still passes) matches
+  > `DInterface { methods, … }` and **never reads that declaration's `pub` field**
+  > (`pub : Bool` is `DInterface`'s first field —
+  > `compiler/frontend/ast.mdk:1210-1218`), and `appendUniverseAccums` folds its
+  > result into
+  > `crossRun.value.universeIfaceMethodsRef` **seeded with the ref's own previous
+  > value**, i.e. accumulated cumulatively in the loader's dependency-first
+  > topological order — the same shape `DICT-SEMANTICS.md` §8 **I5** records for
+  > the impl universe. So the binary today sees interfaces from modules `M` does
+  > not import **at all**, chain or no chain: the two readings are
+  > **indistinguishable on it**, and their difference becomes observable only once
+  > the reachability narrowing lands. That narrowing is owed to
+  > [#1354](https://github.com/MedakaLang/medaka/issues/1354) (§2's reachability
+  > row). **This ruling lands no compiler behaviour change.**
+  >
   > **What is NOT ruled here** — three things, left open deliberately rather than
   > decided in passing:
   >
-  > 1. **Whether an interface is nameable through a re-export chain** — the
-  >    finer-grained sub-question inside the
+  > 1. **What makes a declaration count as "exported through" a re-export chain**
+  >    — the sub-predicate, and *only* the sub-predicate. **Whether a
+  >    chain-exported interface is nameable in `M` is RULED: it is** — S1-CHAIN
+  >    above ([#1380](https://github.com/MedakaLang/medaka/issues/1380)). What
+  >    remains deferred to the ordinary import/export rules is the narrower
+  >    question those rules own: given a chain, is *this* declaration exported
+  >    along it. This clause *consumes* that predicate; it does not define it.
+  >    ⚠️ **Fail-closed is not an available answer for ANY chain, and the test is
+  >    BEHAVIOURAL — one witness is enough.** If the ordinary import/export rules
+  >    say a declaration is exported along `M`'s import path, an implementation
+  >    that answers *"not nameable in `M`"* for it is **non-conformant** — whatever
+  >    the hop count of that path, and whatever the implementation's internal
+  >    structure. **Propagating one hop and failing closed on two is therefore also
+  >    non-conformant, not a lesser form of compliance**, and "it does evaluate a
+  >    predicate, the predicate just says no" is not a defence: an implementation
+  >    that evaluates an unspecified predicate to false everywhere is
+  >    observationally identical to one that never evaluates it, so the obligation
+  >    is stated over **answers**, not over structure. This item's earlier wording
+  >    flagged that arm as *"the arm a naive implementation of this clause is most
+  >    likely to get wrong"*; it is now the arm a naive implementation gets wrong
+  >    **against a rule**, not merely against expectations. Related but distinct: the
   >    [#1302](https://github.com/MedakaLang/medaka/issues/1302) export-visibility
-  >    axis — is deferred to the ordinary import/export rules. This clause
-  >    *consumes* that answer; it does not define it. (It is also the arm a naive
-  >    implementation of this clause is most likely to get wrong, by failing
-  >    **closed**.)
+  >    axis, whose own filed repro does not exercise S1 at all (see the ⚠️ under
+  >    S1).
   > 2. **Whether a PRELUDE standalone can be S1's left operand at all.** The kind
   >    partition admits only *defined in `M`* and *imported into `M`*, and the
   >    implicit prelude is neither on its face; no cell in §2 exercises it (every
@@ -759,10 +967,14 @@ three of run / build / check. Fixtures in `test/shadow_fixtures/`.
 >   import — and whether such a shape reproduces anything wrong today is
 >   unverified; it would also be a distinct question from #1302's actual
 >   mechanism (a wildcard import surfacing a private interface's methods to the
->   impl-obligation check, per its own filing), not a re-export-chain case (the
->   S1-SCOPE note's "not ruled" item 1 is the re-export-chain sub-question
->   specifically, and is not this row). Owed to whoever picks up #1302's actual
->   mechanism.
+>   impl-obligation check, per its own filing), not a re-export-chain case — and
+>   the chain arm is in any event no longer open: it is **RULED IN SCOPE**
+>   (S1-CHAIN under S1, [#1380](https://github.com/MedakaLang/medaka/issues/1380)),
+>   and S1-SCOPE's "not ruled" item 1 is now narrowed to the *sub-predicate*
+>   deciding when a declaration counts as exported through a chain. Neither is
+>   this row: this row is a **direct** import whose declaration is not exported
+>   along it, which S1's own text already covers. Owed to whoever picks up
+>   #1302's actual mechanism.
 >
 > Until then: **do not read the 26 OK / 0 BUG tally above as covering either
 > axis** — see the corpus-blindness note this paragraph sits under.
