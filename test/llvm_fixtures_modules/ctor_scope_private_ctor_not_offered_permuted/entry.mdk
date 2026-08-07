@@ -1,0 +1,30 @@
+-- THE PERMUTATION HALF of `ctor_scope_private_ctor_not_offered/`.  Byte-identical to
+-- its sibling except the two import lines are SWAPPED; same modules, same assertion,
+-- same expected `7` / `5`.
+--
+-- 🚨 IT EXISTS BECAUSE IT WAS GREEN ON THE BROKEN BUILD, and that is the whole
+-- reason a permutation pair is the right instrument here.  The defect its sibling
+-- pins is an over-widened rename entry, and a rename map is first-entry-wins over
+-- decl order (`mangleUnitU`'s `omFromPairs (reverseL rmList)`).  With pvmod SECOND
+-- its bogus `Zt` entry loses the race to pubmod's correct one, so the identical
+-- program compiles correctly on a compiler that miscompiles the identical program
+-- written the other way round.
+--
+-- Measured with only `compiler/backend/private_mangle.mdk` restored to 6f63c710
+-- (the intermediate commit on this branch that introduced the widening) and the
+-- binary rebuilt:
+--     this file            → build exit 0, binary prints `7` / `5`, exit 0   (GREEN)
+--     the sibling          → build exit 0, binary dies E-NONEXHAUSTIVE-MATCH (RED)
+-- Same compiler, same modules, same values, opposite verdicts — decided by nothing
+-- but the order of two import lines.
+--
+-- So: a value golden CANNOT catch an over-widening (this cell's golden is satisfied
+-- by the broken compiler), and neither cell alone is evidence of anything.  Cite the
+-- PAIR or cite neither, and if either is ever deleted, delete both.
+import pubmod.{Zt, unQ}
+import pvmod.{Zt(..), unP}
+
+main : <IO> Unit
+main =
+  let _ = putStrLn (intToString (unQ (Zt 7)))
+  putStrLn (intToString (unP (Mk 5)))

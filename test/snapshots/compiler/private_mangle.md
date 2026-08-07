@@ -1,5 +1,5 @@
 # META
-source_lines=940
+source_lines=979
 stages=DESUGAR,MARK
 # SOURCE
 -- UNIVERSAL PER-MODULE NAME MANGLING for the flat multi-module EMIT path.
@@ -109,6 +109,7 @@ import frontend.ast.{
   useMemberLocal,
   qualifiedLocal,
   Variant(..),
+  DataVis(..),
 }
 import support.util.{
   contains,
@@ -218,12 +219,10 @@ lookupDefiner _ [] = None
 lookupDefiner k ((n, d)::rest) = if k == n then Some d else lookupDefiner k rest
 
 -- ── per-unit CONSTRUCTOR exports ──────────────────────────────────────────────
--- (mid, [(typeName, [ctorName])]) for the data/record types the unit declares.
--- A reserved constructor (Cons/Nil/Some/None/Ok/Err/Lt/Eq/Gt/True/False — the
--- emitter's fixed-tag set) is OMITTED so it is never mangled (mangling would lose
--- its reserved tag).  Visibility is not gated here: the import side only resolves
--- what the importing unit actually brings into scope, and unmangled-because-private
--- is harmless (an unimported ctor is never referenced cross-unit).
+-- (mid, [(typeName, [ctorName])]) for the PUBLIC data/record types the unit
+-- declares.  A reserved constructor (Cons/Nil/Some/None/Ok/Err/Lt/Eq/Gt/True/False —
+-- the emitter's fixed-tag set) is OMITTED so it is never mangled (mangling would
+-- lose its reserved tag).
 --
 -- 🚨 THIS ANSWERS A SCOPE QUESTION — "may an IMPORTER name this constructor?" — not
 -- "does this constructor exist?".  The unit's OWN constructors are mangled from a
@@ -231,6 +230,28 @@ lookupDefiner k ((n, d)::rest) = if k == n then Some d else lookupDefiner k rest
 -- declining an entry here never leaves a local definition unrenamed; it only
 -- declines to offer the symbol ACROSS a `DUse`.  Over-offering is not additive: the
 -- entry it manufactures SHADOWS whatever the front end actually bound.
+--
+-- ⚠️ THE `VisPublic` GATE IS LOAD-BEARING, and this comment used to say the opposite
+-- — *"Visibility is not gated here … unmangled-because-private is harmless (an
+-- unimported ctor is never referenced cross-unit)"*.  That was measurably false, and
+-- the counter-example is not exotic: a module can export a TYPE and privately declare
+-- a CONSTRUCTOR of the same spelling.
+--     public export data Zz = Mk Int      -- mp exports the TYPE `Zz`
+--     data Hidden = Zz Int Int            -- ...and privately declares a CTOR `Zz`
+-- An importer writing `import mp.{Zz(..)}` then `import mq.{Zz, unQ}` has `Zz` bound
+-- by the front end to mq's public arity-1 constructor (`run` prints the correct `7`),
+-- but an ungated table answers "is `Zz` a constructor of mp?" with YES — off mp's
+-- PRIVATE one — and, being first in decl order, that entry wins
+-- (`mangleUnitU`'s first-entry-wins `omFromPairs`).  Measured: the built binary died
+-- `E-NONEXHAUSTIVE-MATCH`, with `store i64 ptrtoint (ptr @mdk_ctorpap_mp__Zz_0 …)` in
+-- the IR and `mq__Zz` emitted nowhere.  Swapping only the two import lines made the
+-- same program correct again, which is the tell that a rename map is being keyed off
+-- something with no scope.
+--     So the gate mirrors `frontend/resolve.expCtorsDirect` (`:2903`) and
+-- `expTypeCtorsDirect` (`:2911`), both `DData VisPublic`, and `eval.ctorsByTypeOf`
+-- (`compiler/eval/eval.mdk`), which is `DData VisPublic` too.  Pinned by
+-- `test/llvm_fixtures_modules/ctor_scope_private_ctor_not_offered/` and its
+-- import-permuted twin.
 --
 -- ⚠️ NO `DNewtype` ARM, deliberately (#1305).  A newtype's constructor is not
 -- importable by ANY spelling — measured on this binary with no collision present,
@@ -243,14 +264,13 @@ lookupDefiner k ((n, d)::rest) = if k == n then Some d else lookupDefiner k rest
 --     ⚠️ Gating the arm on `newtypePub` LOOKS like the fix and is a NO-OP: `export
 -- newtype` SETS `newtypePub` (`frontend/resolve.expTypeCtorsDirect`, `:2913`, is
 -- gated on it and still indexes the ctor).  The arm has to be ABSENT, not filtered.
---     This matches `eval.ctorsByTypeOf` (`compiler/eval/eval.mdk:3355`), the
+--     This matches `eval.ctorsByTypeOf` (`compiler/eval/eval.mdk`), the
 -- interpreter-side peer, which reached the same shape from the same derivation.
 unitCtorExportEntry : (String, List Decl) -> (String, List (String, List String))
 unitCtorExportEntry (mid, decls) = (mid, flatMap ctorExportEntries decls)
 
 ctorExportEntries : Decl -> List (String, List String)
-ctorExportEntries (DData { dataName = tyname, dataCtors = variants }) =
-  [(tyname, filterList nonReservedCtor (map variantCtorName variants))]
+ctorExportEntries (DData { dataVis = VisPublic, dataName = tyname, dataCtors = variants }) = [(tyname, filterList nonReservedCtor (map variantCtorName variants))]
 ctorExportEntries (DAttrib _ d) = ctorExportEntries d
 ctorExportEntries _ = []
 
@@ -355,7 +375,7 @@ useCtorPathEntries ctorExportsPerUnit path =
 -- while `check` and `run` were both correct.  Writing the same import WITHOUT `(..)`
 -- was fine, because that spelling took the bare branch.
 --
--- This mirrors `frontend/resolve.expandMemberNames` (`:2327`) arm for arm — that is
+-- This mirrors the three ARMS of `frontend/resolve.expandMemberNames` (`:2327`) —
 -- the scope layer this one has to agree with:
 --   * `UseMember name False`      → binds `name`                (bare only)
 --   * `UseMember name True`, hit  → binds `name` :: that type's ctors
@@ -365,6 +385,25 @@ useCtorPathEntries ctorExportsPerUnit path =
 -- decides, exactly as it does for a non-wild member.  When the type and its sole
 -- ctor share a spelling (`data Foo = Foo Int`) both halves yield the SAME pair, and
 -- `mangleUnitU`'s `omFromPairs` collapses the duplicate.
+--
+-- 🚨 MIRRORING THE ARMS IS NOT MIRRORING THE TABLE, AND SAYING OTHERWISE ALREADY
+-- SHIPPED A REGRESSION.  These arms only ask questions; `unitCtorExportEntry`
+-- ANSWERS them, and matching arms against a table that disagrees with resolve's just
+-- routes the disagreement through a new spelling.  Adding the bare check to the wild
+-- branch did exactly that: it was correct as an arm and wrong as a whole, because the
+-- table it consults was ungated on visibility (see the `VisPublic` note on
+-- `unitCtorExportEntry`).  Whoever touches these arms next must ask what the table
+-- underneath them says.  Residual table-level divergences from resolve, at the time
+-- of writing:
+--   * VISIBILITY — closed, see the `VisPublic` gate above.
+--   * RE-EXPORT — `unitCtorExportEntry` has no `DUse True` arm, while the FUNCTION
+--     map's `reexportOne` (above) does.  So a ctor reaching an importer through
+--     `export import` reproduces #1300's exact symptom.  Filed and pinned as #1359;
+--     deliberately NOT fixed here.
+--   * `DAttrib` — this file recurses through it, resolve's `expCtorsDirect` /
+--     `expTypeCtorsDirect` swallow it in their `_::rest` wildcard (that asymmetry is
+--     #1228).  Not exploitable: an attributed public data decl is not importable at
+--     all, so nothing reaches these arms to disagree about.
 ctorMemberEntry : String -> List (String, List String) -> UseMember -> List (String, String)
 ctorMemberEntry mid typeEntries (UseMember name wild _ _) =
   if wild then match lookupCtorTypeEntry name typeEntries
@@ -943,7 +982,7 @@ recPatFieldVarsPM : RecPatField -> List String
 recPatFieldVarsPM (RecPatField label _ None) = [label]
 recPatFieldVarsPM (RecPatField _ _ (Some p)) = patVarsPM p
 # DESUGAR
-(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" true) (mem "Pat" true) (mem "Arm" true) (mem "Guard" true) (mem "GuardArm" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "FieldAssign" true) (mem "RecPatField" true) (mem "LetBind" true) (mem "FunClause" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "PropParam" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "qualifiedLocal" false) (mem "Variant" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" true) (mem "Pat" true) (mem "Arm" true) (mem "Guard" true) (mem "GuardArm" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "FieldAssign" true) (mem "RecPatField" true) (mem "LetBind" true) (mem "FunClause" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "PropParam" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "qualifiedLocal" false) (mem "Variant" true) (mem "DataVis" true))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "reverseL" false) (mem "isEmptyL" false) (mem "filterList" false) (mem "initList" false) (mem "joinDot" false) (mem "dedup" false) (mem "dedupBy" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omLookup" false) (mem "omFromPairs" false) (mem "omFromNames" false) (mem "omHasKey" false) (mem "omEmpty" false) (mem "omSize" false))))
 (DTypeSig true "mangleUnits" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))))
@@ -974,7 +1013,7 @@ recPatFieldVarsPM (RecPatField _ _ (Some p)) = patVarsPM p
 (DTypeSig false "unitCtorExportEntry" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "unitCtorExportEntry" ((PTuple (PVar "mid") (PVar "decls"))) (ETuple (EVar "mid") (EApp (EApp (EVar "flatMap") (EVar "ctorExportEntries")) (EVar "decls"))))
 (DTypeSig false "ctorExportEntries" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "ctorExportEntries" ((PRec "DData" ((rf "dataName" (PVar "tyname")) (rf "dataCtors" (PVar "variants"))) false)) (EListLit (ETuple (EVar "tyname") (EApp (EApp (EVar "filterList") (EVar "nonReservedCtor")) (EApp (EApp (EVar "map") (EVar "variantCtorName")) (EVar "variants"))))))
+(DFunDef false "ctorExportEntries" ((PRec "DData" ((rf "dataVis" (PCon "VisPublic")) (rf "dataName" (PVar "tyname")) (rf "dataCtors" (PVar "variants"))) false)) (EListLit (ETuple (EVar "tyname") (EApp (EApp (EVar "filterList") (EVar "nonReservedCtor")) (EApp (EApp (EVar "map") (EVar "variantCtorName")) (EVar "variants"))))))
 (DFunDef false "ctorExportEntries" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "ctorExportEntries") (EVar "d")))
 (DFunDef false "ctorExportEntries" (PWild) (EListLit))
 (DTypeSig false "variantCtorName" (TyFun (TyCon "Variant") (TyCon "String")))
@@ -1226,7 +1265,7 @@ recPatFieldVarsPM (RecPatField _ _ (Some p)) = patVarsPM p
 (DFunDef false "recPatFieldVarsPM" ((PCon "RecPatField" (PVar "label") PWild (PCon "None"))) (EListLit (EVar "label")))
 (DFunDef false "recPatFieldVarsPM" ((PCon "RecPatField" PWild PWild (PCon "Some" (PVar "p")))) (EApp (EVar "patVarsPM") (EVar "p")))
 # MARK
-(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" true) (mem "Pat" true) (mem "Arm" true) (mem "Guard" true) (mem "GuardArm" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "FieldAssign" true) (mem "RecPatField" true) (mem "LetBind" true) (mem "FunClause" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "PropParam" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "qualifiedLocal" false) (mem "Variant" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" true) (mem "Pat" true) (mem "Arm" true) (mem "Guard" true) (mem "GuardArm" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "FieldAssign" true) (mem "RecPatField" true) (mem "LetBind" true) (mem "FunClause" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "PropParam" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "qualifiedLocal" false) (mem "Variant" true) (mem "DataVis" true))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "reverseL" false) (mem "isEmptyL" false) (mem "filterList" false) (mem "initList" false) (mem "joinDot" false) (mem "dedup" false) (mem "dedupBy" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omLookup" false) (mem "omFromPairs" false) (mem "omFromNames" false) (mem "omHasKey" false) (mem "omEmpty" false) (mem "omSize" false))))
 (DTypeSig true "mangleUnits" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))))
@@ -1257,7 +1296,7 @@ recPatFieldVarsPM (RecPatField _ _ (Some p)) = patVarsPM p
 (DTypeSig false "unitCtorExportEntry" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "unitCtorExportEntry" ((PTuple (PVar "mid") (PVar "decls"))) (ETuple (EVar "mid") (EApp (EApp (EDictApp "flatMap") (EVar "ctorExportEntries")) (EVar "decls"))))
 (DTypeSig false "ctorExportEntries" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "ctorExportEntries" ((PRec "DData" ((rf "dataName" (PVar "tyname")) (rf "dataCtors" (PVar "variants"))) false)) (EListLit (ETuple (EVar "tyname") (EApp (EApp (EVar "filterList") (EVar "nonReservedCtor")) (EApp (EApp (EMethodRef "map") (EVar "variantCtorName")) (EVar "variants"))))))
+(DFunDef false "ctorExportEntries" ((PRec "DData" ((rf "dataVis" (PCon "VisPublic")) (rf "dataName" (PVar "tyname")) (rf "dataCtors" (PVar "variants"))) false)) (EListLit (ETuple (EVar "tyname") (EApp (EApp (EVar "filterList") (EVar "nonReservedCtor")) (EApp (EApp (EMethodRef "map") (EVar "variantCtorName")) (EVar "variants"))))))
 (DFunDef false "ctorExportEntries" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "ctorExportEntries") (EVar "d")))
 (DFunDef false "ctorExportEntries" (PWild) (EListLit))
 (DTypeSig false "variantCtorName" (TyFun (TyCon "Variant") (TyCon "String")))
