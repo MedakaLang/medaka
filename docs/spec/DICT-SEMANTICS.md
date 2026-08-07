@@ -1925,6 +1925,26 @@ module-qualified identity.
   hold only locally and coherence fails across module boundaries", which C4 forbids by
   name.
 
+  🚨 **I5 does NOT extend that price to NAMES, and in particular it does not decide
+  shadow-hood.** This paragraph has been read as licence for *any* graph-global
+  name-set predicate, which it is not: I5's subject is `match(IE, C τ̄)`, and its
+  closing sentence (*"Import scoping decides which names a module may write. It
+  never decides which instances exist."*) is a **boundary clause** bounding I5's own
+  claim to instances — not a rule about how a predicate over names is scoped. The
+  coherence argument above does not transfer, either: two modules resolving the same
+  *name* differently is **scoping**, not incoherence, and C4 says nothing about it.
+  ⚠️ **The concrete instance this ambiguity produced, now ruled
+  (2026-08-06):** `SHADOW-SEMANTICS.md` **S1** decides whether a bare name is a
+  *shadow* by intersecting two **name** sets, and its operands are scoped — the
+  interface operand to what the occurrence's module can **name**, the standalone
+  operand to what is defined in or imported into it (that document's §1.0 and its
+  **S1-SCOPE** note) — **while S2's impl universe stays graph-global under this
+  clause**. Narrowing a name set does not narrow `IE`, and the two are compatible
+  rather than in tension. Ruling:
+  [#1375](https://github.com/MedakaLang/medaka/issues/1375). Anyone implementing
+  I5 must keep the two apart; anyone implementing S1 must not cite I5 as licence
+  to make its operands graph-global.
+
 - **I6 — Heads that no declaration produced, and the empty origin.** I4 assigns an
   identity `(originModule, name)` to every *declaration*. Three heads this
   implementation constructs have **no declaration behind them**, and I4 as written is
