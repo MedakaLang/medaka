@@ -1,0 +1,11 @@
+-- The module whose CONSTRUCTOR `entry.mdk` names with a `(..)` suffix.  `Jjw` is a
+-- constructor of `QTW`, not a type, which is the whole point: the `(..)` has nothing
+-- to expand.
+--
+-- `Kkw` is a SECOND constructor of the SAME type, present so that an over-expanding
+-- `Jjw(..)` member has something wrong to drag in — see entry.mdk.
+public export data QTW = Jjw Int | Kkw
+
+export unQW : QTW -> Int
+unQW (Jjw n) = n
+unQW Kkw = 0

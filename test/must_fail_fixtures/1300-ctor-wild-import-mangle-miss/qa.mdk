@@ -1,4 +1,0 @@
-public export data QT = Jj Int
-
-export unQA : QT -> Int
-unQA (Jj n) = n

@@ -1,0 +1,7 @@
+-- The `Zt` entry.mdk actually binds: a genuinely PUBLIC constructor of the same
+-- spelling, arity 1 against pvmod's private arity-2 one.  The differing arity is what
+-- makes a wrong binding observable rather than merely wrong.
+public export data TQ = Zt Int
+
+export unQ : TQ -> Int
+unQ (Zt a) = a
