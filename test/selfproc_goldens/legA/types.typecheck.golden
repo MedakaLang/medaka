@@ -929,7 +929,7 @@ lookupLocalFlag : TcEnv -> String -> Bool
 lookupMethodCand : Ident -> List (Ident, (String, List String, Ty, List (String, List Kind))) -> Option (String, List String, Ty, List (String, List Kind))
 lookupQualArity : String -> String -> List ((String, String), List Int) -> Option (List Int)
 lookupQualIfaces : String -> String -> List ((String, String), List String) -> Option (List String)
-lookupRecordByMangledHead : String -> String -> Option (String, RecordInfo)
+lookupRecordByMangledHead : Mono -> String -> String -> Option (String, RecordInfo)
 lookupRecordByName : String -> Option RecordInfo
 lookupSchemeIface : String -> Int -> List ((String, Int), List (String, List Int)) -> Option String
 lookupSchemeObls : String -> Int -> List ((String, Int), List (String, List Int)) -> Option (List (String, List Int))
@@ -1188,6 +1188,7 @@ recordBinopSite : String -> Ref Route -> Mono -> Unit
 recordCallObligations : List String -> List Mono -> Unit
 recordCandImported : List Decl -> String -> (Ident, String, RecordInfo) -> Bool
 recordCandInfo : (Ident, String, RecordInfo) -> RecordInfo
+recordCandIsReceiverDecl : Option HeadKey -> (String, RecordInfo) -> Bool
 recordDoMonadError : Loc -> Unit
 recordFieldMap : RecordInfo -> Map String Mono
 recordFieldNames : RecordInfo -> List String
@@ -1205,6 +1206,7 @@ recordParamKinds : TyConOrigin -> String -> List Kind -> Unit
 recordPinnedLocals : String -> Option Loc -> List Int -> List (Int, String) -> Mono -> Bool
 recordPinnedLocalsGeneric : String -> Option Loc -> List Int -> List Int -> Mono -> Bool
 recordRLocalSite : TcEnv -> String -> Ref Route -> Mono -> Unit
+recordResultMono : RecordInfo -> Mono
 recordSchemeCallObligations : Int -> List (String, List Int) -> List (Int, Mono) -> Unit
 recordSigConstraintArgs : List Ty -> List (String, Mono) -> List (Int, Mono) -> Option (List Mono)
 recordSigConstraintObls : List Constraint -> List (String, Mono) -> List (Int, Mono) -> Unit
