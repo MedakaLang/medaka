@@ -26,8 +26,13 @@ column had silently gone stale in the OK direction (see the note under §2).
 > - **The vocabulary repair.** §1.0 defines **nameable in `M`** /
 >   **defined-in-`M`-or-imported-into-`M`** / **graph-global** once, and each of
 >   the four occurrences now names its own scope. **Do not reintroduce a bare
->   "visible" anywhere in S1–S9.** This half stands independently of the branch:
->   the defect was the undefined adjective.
+>   "visible" ANYWHERE IN THIS DOCUMENT** — widened 2026-08-07 from "S1–S9" after
+>   a fifth bare occurrence surfaced in §5's historical narrative, outside the
+>   literal S1–S9 clause text but the same failure mode; a word-scoped
+>   instruction does not stop a class of ambiguous scope adjectives ("in scope",
+>   "available to", "reachable from", "sees", …) either — see §0's fix to the
+>   `Shadow` bullet. This half stands independently of the branch: the defect
+>   was the undefined adjective, of whatever spelling, wherever it appears.
 > - **The branch.** **S1's interface operand is scoped to what the module can
 >   NAME; S2's impl universe stays graph-global.** The argument, the cost, and
 >   the **⟲ overturn condition** are in the **S1-SCOPE** note under S1.
@@ -120,10 +125,13 @@ explicit). Fixtures: `test/shadow_fixtures/` (one per matrix cell), run by
 
 ## 0. Terminology
 
-- **Shadow**: bare name `N` naming both a standalone top-level fn and an
-  interface method **in scope in the module containing the occurrence** (see
-  **Scope vocabulary** below, and S1 — shadow-hood is per-**module**, so "at the
-  call site" would be the wrong granularity).
+- **Shadow**: bare name `N` naming BOTH (a) a standalone top-level fn **defined
+  in `M` or imported into `M`**, AND (b) an interface method **nameable in
+  `M`**. ⚠️ **These are deliberately NOT the same scope** — see §1.0's **Scope
+  vocabulary** and S1, which states both operands explicitly; a single phrase
+  covering "both" (as an earlier revision of this bullet had it) reads as one
+  shared scope and is exactly the reading the ruling rejects. Shadow-hood is
+  per-**module**, so "at the call site" would be the wrong granularity.
 - **Definer shadow**: the standalone is defined in the *call site's own module*
   (in-tree: `stdlib/map.mdk` + `stdlib/hash_map.mdk` `toList`/`isEmpty`,
   `compiler/frontend/parser.mdk` `orElse` — all applied only to no-impl
@@ -131,6 +139,10 @@ explicit). Fixtures: `test/shadow_fixtures/` (one per matrix cell), run by
 - **Importer shadow**: the standalone is *imported* from another module (the
   everyday `import map` → `isEmpty m` pattern; the shadowed interface may live
   in the prelude, in the consuming module, or in a third module).
+- **Live impl** / **no-impl** (of a receiver): the receiver's head tycon does,
+  or does not, have an `impl` of the shadowed interface — tested against S2's
+  **graph-global** impl universe (§1.0), never filtered by what `M` can name.
+  Used throughout §2's matrix ("live-impl recv" / "no-impl recv") and §3.
 - **Routes** (`compiler/frontend/ast.mdk:69-72`): `RKey tag dicts` = dispatch to
   the impl whose head tycon is `tag`; `RLocal sym dicts` = NOT a dispatch, call
   the standalone (`sym` = the mangled standalone symbol on the build path, `""`
@@ -147,11 +159,24 @@ explicit). Fixtures: `test/shadow_fixtures/` (one per matrix cell), run by
 
 ⚠️ **The word "visible" used to appear four times in S1–S2, undefined, carrying
 three different scopes.** That ambiguity is what produced
-[#1353](https://github.com/MedakaLang/medaka/issues/1353) and
-[#1302](https://github.com/MedakaLang/medaka/issues/1302), and it is why this
-section now names the scope at every occurrence instead of reusing one adjective.
-**Do not reintroduce a bare "visible" anywhere in S1–S9.** The three scopes are
-genuinely different and must be spelled out:
+[#1353](https://github.com/MedakaLang/medaka/issues/1353), and it is why this
+section now names the scope at every occurrence instead of reusing one
+adjective. **[CORRECTED 2026-08-07 — this sentence used to also name
+[#1302](https://github.com/MedakaLang/medaka/issues/1302). That attribution was
+simply wrong: #1302's own filed repro never reaches this clause at all** (its
+`mth` is bound only as an impl method, never a standalone `DFunDef`, so S1's
+`funDef-names ∩ iface-method-names` conjunct is vacuously false there — see the
+⚠️ under S1). **Whether #1302's actual mechanism — a wildcard import surfacing
+a private interface's methods to a DIFFERENT check, the impl-obligation path —
+shares any root cause with this vocabulary defect is unverified; nothing here
+traces one. #1302 was bundled into "one ruling" by #1375's own framing (two
+axes of one operand), not because this clause's ambiguity produced its bug.**
+**Do not reintroduce a bare "visible" ANYWHERE IN THIS DOCUMENT** (widened
+2026-08-07 from "S1–S9" — see the top-matter note's account of why, and treat
+this as a *class* of ambiguous scope adjectives, not one string: "in scope",
+"available to", "reachable from", "sees" are the same failure under a
+different spelling). The three scopes are genuinely different and must be
+spelled out:
 
 | Term | Means | Used by |
 |---|---|---|
@@ -189,7 +214,9 @@ Given an occurrence of bare name `N` in module `M`:
   positions — local, imported, or prelude — and it is **not required to be
   local**; but an interface that `M` cannot name creates **no shadow in `M`**,
   whether because no import path reaches its module at all or because its
-  declaration is not exported through the path that does. **The impl universe is
+  declaration is not exported through the path that does — this clause treats
+  both failures of "nameable in `M`" uniformly; S1 does not distinguish which
+  reason applies. **The impl universe is
   not narrowed by this clause** — see S2 and §1.0. Shadow-hood is per-module,
   per-name — not
   per-occurrence — and **the PRELUDE IS A MODULE**: a `core.mdk` occurrence of `N`
@@ -197,6 +224,22 @@ Given an occurrence of bare name `N` in module `M`:
   (P0-21; before it, a user's `map` leaked into the prelude's own bodies). A name
   bound by a **local pattern** at the occurrence is not a shadow there — lexical
   scope resolves it to the binder.
+
+  ⚠️ **This clause settles [#1353](https://github.com/MedakaLang/medaka/issues/1353)'s
+  reachability axis. It does NOT, by itself, settle
+  [#1302](https://github.com/MedakaLang/medaka/issues/1302)'s export-visibility
+  axis, and a claim that it does is an over-claim — checked directly against
+  #1302's own filed repro (2026-08-07): its `mth` is bound only inside `impl IB
+  Blob where mth b = 5`, an **impl method**, never as a top-level standalone
+  `DFunDef`. S1's shadow-hood conjunct is `funDef-names(...) ∩
+  iface-method-names(...)` — with no standalone `mth` in the program, the
+  `funDef-names` side is empty and the conjunct is **vacuously false**
+  regardless of how the interface operand is scoped. Whatever governs #1302 (a
+  private interface's methods reaching a wildcard importer's impl-obligation
+  check, per its own filing) is therefore a **different mechanism** than the
+  one S1 governs — #1375's own Epistemic-status section already listed "#1302
+  measured under any predicate" as **not established**, and nothing landed here
+  establishes it. **#1302's grading remains open**, not settled by this clause.
 
   > ### 🔒 S1-SCOPE — why the operands are nameable-in-`M` and not graph-global
   >
@@ -261,10 +304,13 @@ Given an occurrence of bare name `N` in module `M`:
   > **What is NOT ruled here** — three things, left open deliberately rather than
   > decided in passing:
   >
-  > 1. **Whether an interface is nameable through a re-export chain** is deferred
-  >    to the ordinary import/export rules. This clause *consumes* that answer; it
-  >    does not define it. (It is also the arm a naive implementation of this
-  >    clause is most likely to get wrong, by failing **closed**.)
+  > 1. **Whether an interface is nameable through a re-export chain** — the
+  >    finer-grained sub-question inside the
+  >    [#1302](https://github.com/MedakaLang/medaka/issues/1302) export-visibility
+  >    axis — is deferred to the ordinary import/export rules. This clause
+  >    *consumes* that answer; it does not define it. (It is also the arm a naive
+  >    implementation of this clause is most likely to get wrong, by failing
+  >    **closed**.)
   > 2. **Whether a PRELUDE standalone can be S1's left operand at all.** The kind
   >    partition admits only *defined in `M`* and *imported into `M`*, and the
   >    implicit prelude is neither on its face; no cell in §2 exercises it (every
@@ -528,12 +574,55 @@ three of run / build / check. Fixtures in `test/shadow_fixtures/`.
 > **So this section cannot be the evidence that S1's scope is implemented.** The
 > corpus is blind to the axis, and a reader who takes a green
 > `diff_compiler_shadow_semantics` as having graded the clause will be wrong.
-> Adding the discriminating cells — one per axis, reachability and export
-> visibility — belongs to the unit that implements the clause
-> ([#1375](https://github.com/MedakaLang/medaka/issues/1375)), not to this
-> document. Same shape as row 32's lesson (`36/36` on a *broken* binary, because
-> every unit then used an annotated or literal receiver) one axis over: **this
-> corpus has now twice graded green over a cell nothing in it could express.**
+> Same shape as row 32's lesson (`36/36` on a *broken* binary, because every unit
+> then used an annotated or literal receiver) one axis over: **this corpus has
+> now twice graded green over a cell nothing in it could express.**
+>
+> 🚧 **OWED, not landed here.** [#1375](https://github.com/MedakaLang/medaka/issues/1375)
+> is the spec unit; it rules the clause and repairs the vocabulary but does not
+> touch `compiler/` or `test/`, so it cannot itself land a KNOWN-BAD fixture row
+> in §2 pinned to a guessed value (this document's own capture-goldens
+> discipline: a captured value must be independently established, never merely
+> observed).
+>
+> - **Reachability row (#1353 axis) — owed to M-2** ([#1354](https://github.com/MedakaLang/medaka/issues/1354)).
+>   A shadow occurrence in module `M` where the interface's declaring module `P`
+>   is loaded in the graph but `M` has no import — direct or transitive — to
+>   `P`. #1375's own "sharper repro", measured at `1443870c`: an imported
+>   standalone `size : Int -> Int` applied to a `Box` whose `impl Sizeable Box`
+>   lives in a module the occurrence module never imports, accepted at exit 0
+>   printing `300`; deletion control `Type mismatch: Int vs Box`. On the
+>   mechanism (verified 2026-08-07 by tracing to the actual consumer, not
+>   inferred from §3's row below, which names the wrong one): the Module-path
+>   shadow test reads `crossRun.value.universeIfaceMethodsRef`, grown per module
+>   by `appendUniverseAccums`'s call to `allIfaceMethodNames` — which carries
+>   **no `pub` filter** — accumulated **cumulatively in the loader's
+>   dependency-first topological order**, the same shape `DICT-SEMANTICS.md` §8
+>   I5's own "PARTIAL — cumulative, not global" finding documents for the impl
+>   universe: module *k*'s test sees every interface method declared in every
+>   module processed at or before *k*, whether or not *k* imports it. This is
+>   NOT `accData`/`publicDataDecls`/`foldModules` (an earlier draft of this
+>   paragraph named that path; it is dead on the Module path — see the marker on
+>   §3's S1-detect row).
+> - **Export-visibility row (#1302 axis) — ownership uncertain, NOT necessarily
+>   M-2.** Whether this axis even has an S1-shaped corpus row is unresolved:
+>   #1302's own filed repro does not exercise S1's shadow-hood conjunct at all
+>   (see the ⚠️ under S1 above — its `mth` is an impl method, never a
+>   standalone `DFunDef`, so `funDef-names ∩ iface-method-names` is vacuously
+>   false there regardless of interface scoping). A genuine S1-shaped
+>   export-visibility row would need a *different* program — a real
+>   definer/importer shadow where the interface lives in a module `M` imports
+>   directly but the interface's own declaration is not exported along that
+>   import — and whether such a shape reproduces anything wrong today is
+>   unverified; it would also be a distinct question from #1302's actual
+>   mechanism (a wildcard import surfacing a private interface's methods to the
+>   impl-obligation check, per its own filing), not a re-export-chain case (the
+>   S1-SCOPE note's "not ruled" item 1 is the re-export-chain sub-question
+>   specifically, and is not this row). Owed to whoever picks up #1302's actual
+>   mechanism.
+>
+> Until then: **do not read the 26 OK / 0 BUG tally above as covering either
+> axis** — see the corpus-blindness note this paragraph sits under.
 
 > ### ⚠️ **`0 BUG` DOES NOT MEAN "NO VIOLATIONS". READ THE GAP AND UNVERIFIED COLUMNS.**
 >
@@ -629,7 +718,7 @@ Line numbers at `cfc4fa5a`.
 
 | Clause | Stage / site | What it enforces | **Keying assumption** |
 |---|---|---|---|
-| S1 detect (run/check, definer) | `compiler/types/typecheck.mdk:11451` `buildDefinerShadows`; single-file seed `:8979`; per-module seed `checkModuleFullImpl:11199-11201` → `definerShadowNamesRef`/`standaloneValuesRef` | this module's funDefs that name a method | **bare-name intersection**: funDefs(`prog`) × `allIfaceMethodNames(accData ++ implDecls ++ prog)` — sees imported *interfaces* only via `accData` (public decls); see row-14 BUG |
+| S1 detect (run/check, definer) | 🔴 **STALE — re-verified 2026-08-07, wrong on the Module path.** `buildDefinerShadows` is the FLAT-path function; on the MODULE (multi-module) path the reader is `definerShadowsFromSet`, keyed on `crossRun.value.universeIfaceMethodsRef` (grown by `appendUniverseAccums` → `allIfaceMethodNames`) — not the symbols or line numbers this cell names. Line numbers are additionally untrusted per this table's own preamble | this module's funDefs that name a method | **bare-name intersection, but NOT via `accData`/`publicDataDecls` — those are DEAD on the Module path** (`fullUniverse` binds `[]` there; an in-source comment calls the old accData concat "a dead per-module O(N) concat"). The real feeder, `allIfaceMethodNames`, has **no `pub` filter** (sees a private interface's methods too — the opposite of what "public decls" implies) and is accumulated **cumulatively in the loader's dependency-first topological order**, not filtered by import reachability — the same shape as `DICT-SEMANTICS.md` §8 I5's "PARTIAL — cumulative, not global" row for the impl universe. This is the mechanism behind #1375's reachability axis; see row-14 BUG |
 | S1 detect (run/check, importer) | `typecheck.mdk:17020` `buildStandaloneShadowsGraph` | imported standalones shadowing a method | imported funDef names minus local names, methods scanned across `implDecls ++ prog` (the `cfc4fa5a` fix: LOCAL interfaces included) |
 | S1 detect (build path) | `typecheck.mdk:11475` `computeMangledShadowMap` + `unitMangledShadows:11480`, set once at `elaborateModules:11932` (`mangledShadowMapRef`); consumed by `buildDefinerShadows:11460` and `buildStandaloneShadowsGraph:11487-11497` | recover shadows AFTER mangling renamed the standalone | **forward-constructs `mangledName mid m`** per (module, method) and checks it against actual funDefs — exact, not prefix-stripping; empty map on the un-mangled path (inert) |
 | S1 mark | `typecheck.mdk:11942` `markRpNames` (∪ `buildStandaloneShadowsGraph`) → `prePassDictArg`/`prePassModulePairArg:11943-11944` rewrite occurrences to `EMethodAt` | occurrences get a route ref | graph-wide name set over USER modules (core excluded) |
@@ -757,9 +846,19 @@ same "which stage owns S4/S6" decision.
 > scheme via `maybeStandaloneValueMono`). Row **14 (d8)** now DISPATCHES cross-module
 > (run+build print `3`,`4`, matching d2): `shadowKeyTableRef` seeded from the global
 > `accData ++ implDecls ++ prog` (was missing the imported impl on the check path),
-> and both definer-shadow app paths decide per-receiver — a receiver with a visible
+> and both definer-shadow app paths decide per-receiver — a receiver with a live
 > impl fetches the method scheme from `methodIfaceParamsRef`, else the standalone
-> scheme. Fixtures `p0_19_value_pos_{shadow=REJECT,ok=ACCEPT}` + a d8 leg in
+> scheme. (This paragraph predates the **2026-07-14 S2 inversion**, not the
+> 2026-08-06 scope ruling — it is row 14's own per-receiver dispatch, later
+> reverted by the inversion (row 14's current entry a few paragraphs above says
+> so). The inversion is what superseded it: a definer shadow's applied
+> occurrence no longer consults the impl universe AT ALL, scoped or otherwise —
+> S1-SCOPE narrows a *name* set and explicitly leaves S2's impl-universe lookup
+> untouched (`DICT-SEMANTICS.md` §8 I5's cross-reference says the same from the
+> other side), so it is not the pointer this paragraph's mechanism needs.
+> "Live impl" is §0 Terminology's term, not a fourth undefined adjective.)
+> Fixtures
+> `p0_19_value_pos_{shadow=REJECT,ok=ACCEPT}` + a d8 leg in
 > `diff_compiler_check_cli_modules` (14/0); agreement 24/0, fixpoint C3a/C3b YES.
 
 > **🐛 NEW CELL + ✅ FIX (2026-07-13, P0-20) — row 25: a LITERAL receiver.  The worst
