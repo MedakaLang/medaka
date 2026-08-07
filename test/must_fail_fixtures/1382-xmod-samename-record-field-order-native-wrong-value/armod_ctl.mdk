@@ -1,0 +1,7 @@
+-- CONTROL half of issue #1382: byte-identical role to armod.mdk. Unchanged --
+-- this side of the collision was never the variable.
+public export data Cfg = { a : Int, b : Int }
+mkA : Cfg
+mkA = Cfg { a = 11, b = 22 }
+export arSum : Int
+arSum = mkA.a + mkA.b

@@ -1,0 +1,6 @@
+-- issue #1383, verbatim from the issue body. `Holder`'s sole variant is the
+-- named-field constructor `Plain { hx : Int }` -- a CONSTRUCTOR named `Plain`.
+public export data Holder =
+  | Plain { hx : Int }
+export mkH : Holder
+mkH = Plain { hx = 100 }

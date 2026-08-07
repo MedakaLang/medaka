@@ -1,0 +1,13 @@
+-- CONTROL for issue #1382: byte-identical structure to main.mdk (same
+-- imports, same projections, same arithmetic), except armod_ctl.mdk and
+-- zrmod_ctl.mdk declare their `Cfg` with the SAME field order. Per the
+-- issue's own sharpening this must build-run clean (exit 0) and print
+-- `self=44,33 arsum=33` -- the SAME value `run` gives on main.mdk -- proving
+-- the cross-module same-name TYPE collision alone is not sufficient to
+-- corrupt the binary: the differing field ORDER is the trigger.
+import armod_ctl.{arSum}
+import zrmod_ctl.{selfA, selfB}
+main : <IO> Unit
+main =
+  putStrLn ("self=" ++ intToString selfA ++ "," ++ intToString selfB
+    ++ " arsum=" ++ intToString arSum)

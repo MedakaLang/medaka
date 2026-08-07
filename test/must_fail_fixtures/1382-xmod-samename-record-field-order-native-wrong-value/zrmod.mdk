@@ -1,0 +1,15 @@
+-- issue #1382 repro A, verbatim from the issue body. `zrmod` declares its OWN,
+-- unrelated record TYPE also named `Cfg`, but with fields in the OPPOSITE
+-- order (`b` then `a`) from armod.mdk's `Cfg`. This module is ordinary,
+-- self-consistent code: projected INSIDE the declaring module, `mkZ.a` must
+-- read 44 and `mkZ.b` must read 33.
+--
+-- ⚠️ The module NAME "zrmod" is load-bearing (see armod.mdk) -- do not rename.
+public export data Cfg = { b : Int, a : Int }
+mkZ : Cfg
+mkZ = Cfg { b = 33, a = 44 }
+-- projected INSIDE the declaring module: must be 44 then 33
+export selfA : Int
+selfA = mkZ.a
+export selfB : Int
+selfB = mkZ.b
