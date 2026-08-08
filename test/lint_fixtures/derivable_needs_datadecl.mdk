@@ -1,6 +1,24 @@
 -- rule-hand-rolled-derivable now requires the impl's type to have a
 -- `data`/`record` declaration (with constructors) VISIBLE in the linted file —
 -- otherwise `deriving` isn't even available for it.
+--
+-- ⚠️ NOTE (#1112 A-3), CORRECTED: this file does NOT grade coherence/overlap
+-- acceptance. `compiler/entries/lint_main.mdk`'s own header says it "parses
+-- the target (NO desugar…)" and calls only `parseWithPositionsLocated` +
+-- `lintToLines` — no resolve, no typecheck, ever — so the lint gate this file
+-- feeds can only prove the LINT RULE doesn't misfire on a primitive, not that
+-- the underlying `impl Eq Int`/`impl Ord String` (α-equal to the prelude's
+-- own impls) is accepted by the type checker.
+-- The SOURCE is still worth keeping: as far as `grep -rn 'impl Eq Int\b\|impl
+-- Ord String\b' --include=*.mdk .` finds, its two impls are the only in-tree
+-- ones binding to the PRELUDE's Eq/Ord (every other `impl Eq Int` hit
+-- declares its own local `interface Eq`, shadowing the name, not the
+-- prelude's), and an A-3 experiment used this source directly — widening
+-- coherence's input flipped it from exit 0 to `T-CONFLICTING-IMPL`. Do not
+-- delete the file on a lint tidy-up.
+-- But the acceptance property itself is UNGRADED — no gate anywhere asserts
+-- "a user impl α-equal to a prelude impl stays accepted." A-3 owes a real
+-- fixture for that; this lint fixture is not it.
 
 -- NEGATIVE: `Int` is a primitive with no `data` decl → deriving is impossible →
 -- does NOT fire (this used to be a false positive).

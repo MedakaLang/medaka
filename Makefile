@@ -13,7 +13,7 @@
 MEDAKA_SCRATCH ?= /var/tmp/medaka-scratch
 export TMPDIR := $(shell mkdir -p $(MEDAKA_SCRATCH) 2>/dev/null && echo $(MEDAKA_SCRATCH) || echo /tmp)
 
-.PHONY: medaka emitter seed bootstrap seed-health check-self test gates snapshot-check preflight ci clean help docs-links docs-index agent-doc-symbols
+.PHONY: medaka emitter seed bootstrap seed-health check-self test gates snapshot-check preflight ci clean help docs-links docs-index agent-doc-symbols pr-helper-test
 
 ## medaka  — build the native OCaml-free `medaka` CLI (CANONICAL).
 ##           WARM (./medaka_emitter present): 2-stage rebuild from current source,
@@ -126,6 +126,11 @@ ci: medaka
 ##           and test/check_doc_links.sh's header for the FILE/REF format.
 docs-links:
 	sh test/check_doc_links.sh
+
+## pr-helper-test — run scripts/pr.sh's own test suite (mocked `gh`; no repo
+##           touched). POSIX sh, Linux + macOS. Would need no build.
+pr-helper-test:
+	sh test/pr_helper_test.sh
 
 ## docs-index — regenerate docs/README.md (THE doc index) from every doc's H1
 ##           + `**Status:**` banner. GENERATED file — never hand-edit it; run

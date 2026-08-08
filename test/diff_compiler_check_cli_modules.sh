@@ -1370,6 +1370,9 @@ fi
 # (B.mkB 0)`, whose receiver is `b.H` and whose only `Fb` impl answers 2, printed 1.
 # Measured before: `(1, 1)` at exit 0 on eval AND native, zero diagnostics.  Both
 # engines are graded because both were wrong.
+# ⚠️ These two legs (x1277_run below, x1277_bld further down) are stage A-3's
+# E1 tripwire (#1112) — the acceptance case a whole-graph `IE` must keep
+# passing. Nothing else in the tree names that role for them.
 cat > "$TMP/x1277_a.mdk" <<'EOF'
 public export data H = MkA Int
 

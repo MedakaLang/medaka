@@ -1,0 +1,3 @@
+import lib.rsel as R
+
+main = println (R.f 1)
