@@ -1878,13 +1878,19 @@ single signal:
 emit file **and** the build artifacts before concluding anything, and note that the pair that
 discriminates changes with the phase: neither artifact alone is sufficient in all three shapes.
 
-### 🚨 The PID-poll idiom the playbook mandates is BLOCKED, and the block message points at a tool that forbids polling
+### 🚨 The PID-poll idiom the playbook mandates is BLOCKED, and the block message routes you toward a yield
 
 The `until kill -0 $PID` form this playbook has been recommending is refused by the harness
-classifier, and the refusal text points at the **Monitor** tool — whose own description says
-*"do not poll or sleep."* That is a **direct instruction conflict**, and an agent resolved it
-the way the tooling invited: it yielded waiting on a Monitor notification, and **died with its
-work uncommitted.**
+classifier, and the refusal text points at the **Monitor** tool. An agent followed that route
+and **died with its work uncommitted**, having ended its turn waiting on a notification that
+never reached it.
+
+⚠️ **State the mechanism, not a quotation.** This paragraph originally claimed Monitor's own
+description says *"do not poll or sleep"* — **it does not; that phrasing was mine, in quotation
+marks, and a review caught it.** What is true is the shape: the Bash refusal steers you to
+Monitor, Monitor is built to notify rather than be polled, and an agent bounced between the two
+lands on "wait for the notification" — which is the one thing that kills it. **A fabricated
+quotation is worse than a paraphrase**: it survives review by looking checkable.
 
 **The correct form is `run_in_background: true` on a SINGLE bounded command** — one command, no
 `&`, no wrapper loop, and never end a turn waiting on a notification. Put that form in the

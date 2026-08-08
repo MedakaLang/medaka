@@ -748,10 +748,21 @@ MEDAKA_ROOT="$PWD" /tmp/alt/medaka run /tmp/hello.mdk # exit 0: 12345
 ⚠️ The miss diagnostic offers *"run from the project root"* as a remedy; measured, cwd
 being a directory that HAS `stdlib/` did **not** rescue it — only `MEDAKA_ROOT` or an
 exe-adjacent `stdlib/` did.
-⚠️ **Not every gate lets you point it at a second binary.** Four honour an override
-(`grep -rn 'MEDAKA="${MEDAKA:-' test/*.sh`); most hardcode `$ROOT/medaka`, so a two-arm run
-means a second worktree. `test/diff_compiler_shadow_semantics.sh` is the notable one and is
-filed as **#1431** — check the gate for the override before planning a differential around it.
+⚠️ **Not every gate lets you point it at a second binary.** Some honour an override; most
+hardcode `$ROOT/medaka`, so a two-arm run means a second worktree.
+**DERIVE the set, do not trust a count — including this sentence's:**
+```sh
+grep -rln 'MEDAKA="${MEDAKA:-' test/*.sh     # the gates you CAN point at a second binary
+```
+⚠️ Run that through a script file, not inline: this harness mangles a `${…}` inside a
+quoted inline argument and returns zero matches for a pattern that is really there.
+`test/diff_compiler_shadow_semantics.sh` is the notable hardcoded one and is filed as
+**#1431** — check the gate before planning a differential around it.
+🚨 This paragraph said **"Four honour an override"** until 2026-08-09, *while citing the
+very command that returns more than twice that*. Nobody ran it — the number came from a
+report, was repeated into #1431, and reached this file unverified. **A claim that ships its
+own derivation is only honest if someone executed it**; that is the whole point of the rule
+and it failed at the last inch here.
 
 **Playground e2e:** `playground/e2e/` is a Playwright harness driving a real browser against
 the built CM6 playground (`cd playground/e2e && ./run.sh`). Needs **node v24+** and a
