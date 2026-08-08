@@ -1,0 +1,23 @@
+-- SHADOW-SEMANTICS cell I17's ORDER twin, graded as its own row.  Byte-identical to
+-- main.mdk except the two interface-module import lines are swapped.  Reordering import
+-- clauses is cosmetic -- every formatter and every reviewer treats it that way -- so the
+-- two rows must agree, and a program whose meaning depends on the difference is wrong
+-- whatever the right answer turns out to be.
+--
+-- Before the fix these two files disagreed about whether the program COMPILES: main.mdk
+-- accepted at exit 0 printing 7, this one was rejected `Type mismatch: Int vs String`.
+--
+-- ⚠️ A PAIR IS WEAKER THAN A PERMUTATION DIFFERENTIAL, and that gap is deliberate rather
+-- than overlooked.  With three import clauses there are six orderings; this pins two of
+-- them.  `test/diff_compiler_import_order.sh` is the instrument that grades all six and it
+-- is where this graph belongs -- but a case added there passed locally on seven runs
+-- (warm and cold builds, 1/2/12 jobs, 2-core-pinned) and failed deterministically in CI,
+-- and `run_gates.sh` writes each gate's output to a temp dir it never prints, so the
+-- failure could not be diagnosed from the run.  Landing a gate row that reds `main` for an
+-- unexplained reason is worse than landing a narrower guard here, so the pair lands and
+-- the permutation case is owed once that discrepancy is understood.
+import fmodI.{mth}
+import zmodI.{zf}
+import amodI.{af}
+
+main = println (mth "abc" 5 + af 0 + zf 0)

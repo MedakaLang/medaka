@@ -1,5 +1,0 @@
-export interface IA a where
-  mth : a -> Int -> Int
-
-export af : Int -> Int
-af n = n

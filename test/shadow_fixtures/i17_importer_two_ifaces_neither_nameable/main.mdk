@@ -1,0 +1,29 @@
+-- SHADOW-SEMANTICS cell I17: TWO interfaces declare the same bare method name at
+-- DIFFERENT dispatch argument indices, and NEITHER is nameable here -- this module imports
+-- both of their modules but binds only `af` and `zf`.  So `mth` is not a shadow, the
+-- occurrence is the standalone this module explicitly imported, and the answer is
+-- 99 + 0 + 0 = 99.
+--
+-- This is #1351's graph, moved here when its must-fail pin drained.  Its `order-swapped`
+-- twin ships beside it and is graded as its own row: the two differ ONLY in the order of
+-- two import lines, and BEFORE the #1354-unit-A fix they disagreed about whether the
+-- program even compiles -- this file printed 7 (the body of `impl IZ String`, reached
+-- through IA's argument geometry) at exit 0, while the swapped file was REJECTED
+-- `Type mismatch: Int vs String`.
+--
+-- HOW THE EXPECTED VALUE WAS ESTABLISHED -- derived, not captured.  #1351's own filing
+-- hand-derived it before any fix existed: the call is `mth "abc" 5`, a String in FIRST
+-- position, while `impl IZ String`'s method takes an Int first -- so reaching that body is
+-- wrong under every reading, and the only defensible answers were the imported standalone
+-- (99) or a rejection.  S1 then picks between them: neither interface is nameable here, so
+-- `mth` is not a shadow and the standalone answers.
+--
+-- ⚠️ WHAT THIS DOES NOT ASSERT.  `universeMethodDispatchIdxRef` is still a bare
+-- method-name-keyed list read first-match; this graph no longer REACHES it, because
+-- shadow-hood is decided before the dispatch index is ever consulted.  The table's keying
+-- defect is latent, not removed.  Do not read a green row here as evidence about it.
+import fmodI.{mth}
+import amodI.{af}
+import zmodI.{zf}
+
+main = println (mth "abc" 5 + af 0 + zf 0)
