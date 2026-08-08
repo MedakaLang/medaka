@@ -3,7 +3,6 @@ activeDictPredOf : String -> Mono -> String -> Option String
 activeDictVarForEncl : Mono -> String -> Option String
 activeDictVarOf : Mono -> Option String
 activeDictVarOfEncl : Mono -> String -> Option String
-addCallableIfaceMethods : List Decl -> Map String Unit -> Map String Unit
 addCtor : TcEnv -> String -> Scheme -> TcEnv
 addCtorIdentCand : TcEnv -> String -> TyConOrigin -> String -> (Map String (List (Ident, String, Scheme)), List String) -> (Map String (List (Ident, String, Scheme)), List String)
 addFieldOwners : String -> List String -> Map String (List String) -> Map String (List String)
@@ -57,7 +56,6 @@ anyKRow : List Kind -> Bool
 anyListM : (a -> Bool) -> List a -> Bool
 anyMember : List String -> List String -> Bool
 anyMemberBindsCtor : String -> String -> List UseMember -> Bool
-anyNameIn : List String -> List String -> Bool
 anyRootMatch : Int -> List (Mono, Loc) -> Bool
 anyRowSlotArg : List (String, Ref Effvar) -> List (String, Mono) -> List Ty -> Bool
 anySlotIsRow : Int -> List (List Ty, List String) -> Bool
@@ -157,7 +155,6 @@ buildTupleCallHint : String -> List Expr -> Expr -> Expr -> (String, Option (Loc
 callArgVecs : List (List Mono) -> List Int -> List (Int, Mono) -> List (List Mono)
 callOblMonoIds : (String, List Mono, Option Loc) -> List (Int, String)
 callOblsWindow : Int -> List (String, List Mono, Option Loc)
-callableIfaceMethodSet : List Decl -> Map String Unit
 candidateBucket : Map String (List KeyEntry) -> HeadKey -> List KeyEntry
 candsOneIface : List KeyEntry -> Option String
 censusSuperClose : List Decl -> List (String, Int) -> List (String, Int)
@@ -1031,6 +1028,7 @@ nameOf : Ref (List (Int, String)) -> Ref Int -> Int -> String
 nameableIfaceMethodSet : List Decl -> Map String Unit
 nameableIfaceShadows : List Decl -> List String -> List String
 namesToSet : List String -> Map String Unit -> Map String Unit
+narrowRowToNamed : List String -> (String, List String) -> List (String, List String)
 negateOp : Mono -> Mono
 newEffvarId : Unit -> Int
 newTyvarId : Unit -> Int
@@ -1387,7 +1385,6 @@ seedAlphaLets : TcEnv -> String -> Expr -> TcEnv
 seedAndCheckSplit : List Decl -> List Decl -> List Decl -> List (String, Scheme)
 seedCheckRun : List Decl -> Unit
 seedEffectDomains : Unit -> Unit
-selectCallableRows : UsePath -> List (String, List String) -> List (String, List String)
 selectIfaceRows : UsePath -> List (String, List String) -> List (String, List String)
 selectImplEntryByIface : Map String (List KeyEntry) -> String -> List Mono -> Option KeyEntry
 selectReqImpl : Map String (List KeyEntry) -> Map String (List ImplEntry) -> String -> String -> Mono -> List Mono -> Option (Ty, List Ty, List Require)

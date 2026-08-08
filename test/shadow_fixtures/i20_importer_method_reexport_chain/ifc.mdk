@@ -1,0 +1,10 @@
+public export data Box = Box Int
+
+export interface Sizeable a where
+  size : a -> Int
+
+impl Sizeable Box where
+  size (Box n) = n
+
+impl Sizeable Int where
+  size n = n * 10

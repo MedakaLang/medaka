@@ -21548,6 +21548,17 @@ nameableIfaceShadows prog names
 -- way; WHICH declaration an occurrence then means is `applyMethodScopeOverrides`' question
 -- about a different table (`universeMethodIfaceParamsRef`), and answering it here would be
 -- a second resolver free to disagree with that one.
+--
+-- 🔒 THIS IS S1's RIGHT OPERAND UNDER S1-NS (RULED 2026-08-08), and it is the ONLY predicate
+-- in the compiler that answers it — `checkBodyImpl`'s shadow-hood and all three of the mark
+-- pass's filters read THIS set.  S1-NS (b) requires shadow-hood to be a superset of dispatch
+-- eligibility and rules two different predicates at the two sites non-conformant; one set
+-- makes them equal, so the invariant holds by construction rather than by test.  Do not
+-- introduce a second, wider set for marking: two earlier cuts of this unit did exactly that
+-- and each shipped an S0 (a `run`-vs-built-binary split, and a `build`-only E-PANIC).
+--
+-- The per-METHOD union of the two namespaces lives in `selectIfaceRows`, applied on the
+-- import arm here and on the re-export arm in `graphIfaceMethods`.
 nameableIfaceMethodSet : List Decl -> OrdMap Unit
 nameableIfaceMethodSet prog =
   addImportedIfaceMethods
@@ -22157,113 +22168,48 @@ reexportedIfaceMethodsOf acc (DUse True path _) = match omLookup (usePathModuleI
   Some src => selectIfaceRows path src
 reexportedIfaceMethodsOf _ _ = []
 
--- The rows of [src] a use-path admits INTO THE TYPE NAMESPACE.  One function, used on both
--- the import side (`nameableIfaceMethodSet`) and the re-export side above, so the two
--- cannot drift — the drift between them is precisely what F1/F2 were.
---   * `None` from `importedBindings` is the WILDCARD (`import m.*` / `export import m.*`):
---     every name the dependency provides, so every row.
---   * a member list admits the rows it NAMES, matched on the ORIGIN spelling (`fst`), which
---     is the name the dependency provides the row under.
---   * a bare `import m` yields `Some []` and admits NOTHING — it binds no names at all; its
---     job is to bring IMPLS into scope, which S2 governs and this clause explicitly does not.
+-- ── S1-NS (RULED 2026-08-08): the rows of [src] a use-path admits ──────────
+-- `docs/spec/SHADOW-SEMANTICS.md` S1-NS (a): S1's right operand is the PER-METHOD UNION of
+-- the two namespaces.  A row `(I, ms)` is NARROWED, not merely kept or dropped:
 --
--- ⚠️ `UseAlias` yields `Some []` here and so admits NOTHING, which is correct for THIS set:
--- an alias cannot put a TYPE name in scope (an alias-qualified name in type position is a
--- parse error), so it cannot make an interface nameable.  A bare `import m` is `Some []`
--- too, for the different reason that it binds no names at all.
+--   * WILDCARD (`import m.*`) — everything the dependency provides, so the whole row.
+--   * MODULE ALIAS (`import m as A`) — the whole row, on the VALUE arm: `A.n` is a legal
+--     call for every method `n`.  An alias cannot put a TYPE name in scope (alias-qualified
+--     names in type position are a parse error), so it admits nothing on the type arm — but
+--     a union needs only one arm.
+--   * MEMBER LIST — the TYPE arm admits the WHOLE row when the list names the interface `I`
+--     (an author who can write `impl I T` can write every method of `I`); otherwise the
+--     VALUE arm admits ONLY the methods the list actually names.
 --
--- ⚠️ An alias DOES make the methods CALLABLE, and that is a different question with a
--- different answer — see `callableIfaceMethodSet`, which is the set the mark pass filters
--- `argNames` with.  S1-CHAIN's rationale paragraph ("import and call the METHOD") and the
--- normative §1.0 table (which qualifies the INTERFACE operand) are pulling in those two
--- different directions; the two sets are how that is honoured without picking one.
+-- 🚨 PER METHOD, NOT PER ROW, and this is measured rather than stylistic: `import ifc.{tag}`
+-- leaves a sibling method UNBOUND (*"Unbound variable: size. (Did you forget to
+-- 'import ifc.{size}'?)"*), so admitting the whole row because the list names ONE method
+-- makes a DIFFERENT name dispatch-eligible on evidence that says nothing about it.  That
+-- over-approximates both namespaces at once, and it is what silently replaced a module's own
+-- top-level `size` with a foreign impl body (777 where 42 is correct, exit 0, no diagnostic
+-- on any verb — `test/shadow_fixtures/d23_definer_sibling_method_silent/`).
 --
--- On the RE-EXPORT side an alias cannot occur at all: `export import m as A` is rejected by
--- the parser, so no `DUse True` carries a `UseAlias`.
+-- ⚠️ ONE SELECTOR, USED ON THE IMPORT ARM **AND** THE RE-EXPORT ARM.  S1-NS makes the two
+-- symmetric: `export import ifc.{size}` must admit `size` one hop down exactly as
+-- `export import ifc.{Sizeable}` admits the row.  An implementation whose arms evaluate
+-- different namespaces is enumerated NON-CONFORMANT, and it was live here — a method-name
+-- re-export chain that `main` builds and runs at 50 failed `build` with `E-PANIC: arg-tag
+-- dispatch on impl type that owns no constructors`.  Keeping this ONE function is what makes
+-- that unrepresentable rather than merely fixed (`i20_importer_method_reexport_chain/`).
 selectIfaceRows : UsePath -> List (String, List String) -> List (String, List String)
+selectIfaceRows (UseAlias _ _) src = src
 selectIfaceRows path src = match importedBindings path
   None => src
-  Some bs => filterList (r => contains (fst r) (map fst bs)) src
+  Some bs => flatMap (r => narrowRowToNamed (map fst bs) r) src
 
--- ── the CALLABLE set: which interface METHODS can this module CALL? ─────────
--- 🚨 TWO SETS, TWO QUESTIONS, AND CONFLATING THEM IS A MEASURED S0 IN BOTH DIRECTIONS.
---   * `nameableIfaceMethodSet` answers *"which interfaces can `M` NAME?"* — S1's operand,
---     which decides SHADOW-HOOD.  It matches the INTERFACE name, because that is the name
---     an author must be able to write for the interface to be nameable: `impl Sizeable Blob`
---     is rejected `Unknown interface: Sizeable` in a module that did not import `Sizeable`.
---   * this set answers *"which interface methods can `M` CALL?"* — which decides MARKING,
---     and it is a DIFFERENT question with a different answer.  To call a method you import
---     the METHOD, and the compiler says so itself: with `import ifc.{Sizeable, Box(..)}` the
---     occurrence `size x` is rejected *"Unbound variable: size. (Did you forget to
---     'import ifc.{size}')"*.  So `import ifc.{size}` — the spelling the compiler DEMANDS
---     for a call — names no interface, and a callable set built only from interface names
---     answers False for the ordinary case.
---
--- ⚠️ THAT MISTAKE WAS AN S1, and it is why this set exists separately rather than as
--- `nameable ∪ aliases`.  With `import ifc.{size, Box(..)}` and an `impl Sizeable Int`
--- anywhere in the interface's universe, `size` fell out of `argNames`, the mark pass left a
--- plain `EVar`, and EMIT fell into arg-tag dispatch: `check` 0 and `run` correct, but
--- `medaka build` FAILED with `E-PANIC: arg-tag dispatch on impl type that owns no
--- constructors` on a program the base compiler builds fine.  Failing CLOSED, into the
--- S4/#410 class `nameableIfaceShadows`' own comment says must never happen.
---
--- 🚨 EVERY MARK-PASS FILTER USES THIS SET — `argNames`, the graph-wide shadow names, AND
--- the mangled shadow map.  Filtering them with DIFFERENT sets is itself an S0: the mangled
--- shadow map is the EMIT-path peer of `argNames`, so filtering one permissively and the
--- other strictly makes the two paths mark different occurrences.  MEASURED, one module with
--- an aliased interface and a same-named imported standalone: `run` printed 7, 7 while the
--- built binary printed 99, 7 — a split the base compiler does not have.  Shadow-HOOD
--- (`nameableIfaceShadows`, in `checkBodyImpl`) is the only consumer of the strict set.
--- Since `callable` is a SUPERSET of `nameable`, the two can never produce "is a shadow but
--- was never marked", which is the direction that has no route at all.
-callableIfaceMethodSet : List Decl -> OrdMap Unit
-callableIfaceMethodSet prog =
-  addCallableIfaceMethods prog (nameableIfaceMethodSet prog)
-
-addCallableIfaceMethods : List Decl -> OrdMap Unit -> OrdMap Unit
-addCallableIfaceMethods [] acc = acc
-addCallableIfaceMethods ((DAttrib _ d)::rest) acc =
-  addCallableIfaceMethods rest (addCallableIfaceMethods [d] acc)
-addCallableIfaceMethods ((DUse _ path _)::rest) acc = addCallableIfaceMethods
-  rest
-  (match omLookup (usePathModuleId path) driverState.value.graphIfaceMethodsRef.value
-    None => acc
-    Some src => addIfaceRowMethods (selectCallableRows path src) acc)
-addCallableIfaceMethods (_::rest) acc = addCallableIfaceMethods rest acc
-
--- The rows of [src] a use-path makes CALLABLE.  Wider than `selectIfaceRows` in exactly two
--- ways, each with its own reason:
---   * a member list admits a row when it names the interface OR ANY OF ITS METHODS, because
---     `import ifc.{size}` is the spelling required to call `size` and names no interface;
---   * a module ALIAS admits every row, because `A.mth` is a legal call and
---     `renameAliasedMethods` rewrites it to a bare `mth` before the mark pass runs.  Making
---     an alias admit nothing regressed #1277 (a CLOSED S0) from `(1, 2)` to `(1, 1)`.
---
--- ⚠️ THE ALIAS ARM IS UNCONDITIONAL, AND AN EARLIER ATTEMPT TO CONDITION IT WAS AN S0.
--- It once declined names the module "otherwise binds", to stop an alias turning an
--- explicitly imported standalone into a dispatch.  That rule cannot be expressed here, and
--- the attempt produced `run` = 99 against a built binary of 7 at exit 0 with no diagnostic.
--- The reason is upstream of this predicate: `renameAliasedMethods` erases the qualifier, so
--- a bare `size` and an `S.size` in the SAME module are the same token by the time any set
--- here is consulted — MEASURED, one module containing both spellings: `run` prints 7, 7 and
--- so cannot tell them apart at all, while the built binary prints 99, 7 because the MANGLER
--- renames the by-name import and leaves the de-aliased occurrence bare.  The run path has no
--- such signal and cannot be given one by any rule over import clauses.  Restoring provenance
--- to the occurrence is the fix and it belongs upstream (A-3 / #1112), not here; what this
--- unit owes is to not make the disagreement WORSE, which is why the arm is unconditional.
-selectCallableRows : UsePath -> List (String, List String) -> List (String, List String)
-selectCallableRows (UseAlias _ _) src = src
-selectCallableRows path src = match importedBindings path
-  None => src
-  Some bs =>
-    let named = map fst bs
-    filterList (r => contains (fst r) named || anyNameIn (snd r) named) src
-
-anyNameIn : List String -> List String -> Bool
-anyNameIn [] _ = False
-anyNameIn (n::rest) named
-  | contains n named = True
-  | otherwise = anyNameIn rest named
+-- TYPE arm: the list names the interface → the whole row.  VALUE arm: it does not → only
+-- the methods it names.  An empty narrowing contributes no row at all.
+narrowRowToNamed : List String -> (String, List String) -> List (String, List String)
+narrowRowToNamed named r
+  | contains (fst r) named = [r]
+  | otherwise = match filterList (m => contains m named) (snd r)
+    [] => []
+    ms => [(fst r, ms)]
 
 -- ── #1111 A-2.11 (#1319 unit 1): the CONSTRUCTOR peer of graphMethodExports ──
 -- (module id → [(ctor name, owning type name, declaring `Ident`)]), folded dependency-first
@@ -23911,20 +23857,24 @@ prePassModulePairArg rpNames shadowNames dictNames argNames shadowMap (mid, prog
   | omSize driverState.value.graphIfaceMethodsRef.value == 0 =
     (mid, prePassDictArg (dedup (rpNames ++ shadowNames)) dictNames argNames shadowMap prog)
   | otherwise =
-    -- TWO sets, deliberately: shadow-hood asks what this module can NAME, marking asks what
-    -- it can CALL, and a module alias answers those differently.  See `callableIfaceMethodSet`.
-    -- ONE set for all three mark-pass filters.  `shadowMap` is the EMIT-path peer of
-    -- `argNames`, so filtering them with different sets marks different occurrences on the
-    -- two paths — measured as a run-vs-build split the base compiler does not have.  See
-    -- `callableIfaceMethodSet`.  Shadow-HOOD uses the strict set, in `checkBodyImpl`.
-    let callable = callableIfaceMethodSet prog
+    -- 🔒 S1-NS (b), THE CLOSURE INVARIANT, HELD BY CONSTRUCTION.  The spec requires the
+    -- predicate deciding SHADOW-HOOD to be a SUPERSET of the one deciding DISPATCH
+    -- ELIGIBILITY, and rules two different predicates at the two sites non-conformant
+    -- WHICHEVER WAY THEY DIFFER.  There is exactly ONE predicate here — the same
+    -- `nameableIfaceMethodSet` that `checkBodyImpl` uses for shadow-hood — so the two sets
+    -- are EQUAL and the superset relation cannot be violated by any later edit that does not
+    -- first introduce a second set.  That is stronger than testing for the gap: it makes the
+    -- gap unrepresentable.  Two earlier cuts of this unit shipped S0s by filtering these
+    -- three lists with two different sets; `shadowMap` in particular is the EMIT-path peer of
+    -- `argNames`, so any divergence between them is a run-vs-build split by construction.
+    let nameable = nameableIfaceMethodSet prog
     (
       mid,
       prePassDictArg
-        (dedup (rpNames ++ filterList (n => omHasKey (shadowBareName shadowMap n) callable) shadowNames))
+        (dedup (rpNames ++ filterList (n => omHasKey (shadowBareName shadowMap n) nameable) shadowNames))
         dictNames
-        (filterList (n => omHasKey n callable) argNames)
-        (filterList (e => omHasKey (snd e) callable) shadowMap)
+        (filterList (n => omHasKey n nameable) argNames)
+        (filterList (e => omHasKey (snd e) nameable) shadowMap)
         prog,
     )
 

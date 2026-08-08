@@ -1,0 +1,19 @@
+-- SHADOW-SEMANTICS cell I20 (S1-NS (a), RE-EXPORT ARM SYMMETRY): the method arrives through
+-- a chain that re-exports it by METHOD name -- `export import ifc.{size, Box}` -- and names
+-- the interface nowhere. Under S1-NS the VALUE arm admits `size` at every re-export depth,
+-- so the occurrence is an ordinary dispatch: `impl Sizeable Int` answers 5 * 10 = 50.
+--
+-- 🚨 GRADED ON BUILD, because that is the only verb that could see this. An implementation
+-- whose re-export arm matches INTERFACE names only leaves `size` out of the dispatch-eligible
+-- set: the mark pass leaves a plain `EVar`, emit falls into arg-tag dispatch, and `medaka
+-- build` fails `E-PANIC: arg-tag dispatch on impl type that owns no constructors` while
+-- `check` exits 0 and `run` prints the right answer. That asymmetry was live on this PR and
+-- is enumerated NON-CONFORMANT by S1-NS -- the fourth independent namespace guess, at the one
+-- site nobody had counted.
+--
+-- The `impl Sizeable Int` is load-bearing: a PRIMITIVE receiver is what turns the missing
+-- mark into a panic rather than a silently different route, because a primitive carries no
+-- cell tag for arg-tag dispatch to read.
+import reexp.{size}
+
+main = println (size 5)
