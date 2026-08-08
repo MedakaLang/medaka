@@ -1,0 +1,22 @@
+-- SHADOW-SEMANTICS cell I18's decisive shape, graded as its own row: BOTH spellings in ONE
+-- module. `size "abc"` names the standalone this module imported; `S.size "abc"` is an
+-- explicitly alias-qualified method call. They MUST mean different things -- 99 then 7.
+--
+-- 🚨 WHAT THIS ROW DEFENDS IS THE AGREEMENT, NOT THE VALUES. `renameAliasedMethods` rewrites
+-- `S.size` to a bare `size`, so by the time the mark pass runs the two occurrences are the
+-- same token and `run` gives the SAME answer to both -- it cannot distinguish them, and the
+-- pinned `7\n7` records that, not an endorsement of it. What must hold is that `run` and the
+-- BUILT BINARY agree, and that is exactly what a fix in this area breaks first: filtering
+-- `argNames` and the mangled shadow map with DIFFERENT predicates made `run` print 7, 7
+-- while the binary printed 99, 7 -- a split the base compiler does not have. This row is
+-- what catches that, and an ACCEPT/REJECT column cannot: every cell here exits 0.
+--
+-- Correct behaviour is 99 then 7 on every verb. Reaching it needs the alias qualifier to
+-- survive to the mark pass (A-3 / #1112); until then this row keeps the two engines honest
+-- with each other and goes RED the day either the values or the agreement move.
+import fmod.{size}
+import smod as S
+
+main =
+  println (size "abc")
+  println (S.size "abc")

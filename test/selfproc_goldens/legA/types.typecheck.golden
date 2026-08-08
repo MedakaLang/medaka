@@ -3,7 +3,7 @@ activeDictPredOf : String -> Mono -> String -> Option String
 activeDictVarForEncl : Mono -> String -> Option String
 activeDictVarOf : Mono -> Option String
 activeDictVarOfEncl : Mono -> String -> Option String
-addAliasIfaceMethods : List Decl -> Map String Unit -> Map String Unit -> Map String Unit
+addCallableIfaceMethods : List Decl -> Map String Unit -> Map String Unit
 addCtor : TcEnv -> String -> Scheme -> TcEnv
 addCtorIdentCand : TcEnv -> String -> TyConOrigin -> String -> (Map String (List (Ident, String, Scheme)), List String) -> (Map String (List (Ident, String, Scheme)), List String)
 addFieldOwners : String -> List String -> Map String (List String) -> Map String (List String)
@@ -11,7 +11,6 @@ addIfaceRowMethods : List (String, List String) -> Map String Unit -> Map String
 addImportedIfaceMethods : List Decl -> Map String Unit -> Map String Unit
 addMethodIdentCand : String -> Ident -> (String, List String, Ty, List (String, List Kind)) -> (Map String (List (Ident, (String, List String, Ty, List (String, List Kind)))), List String) -> (Map String (List (Ident, (String, List String, Ty, List (String, List Kind)))), List String)
 addRecordIdentCand : String -> TyConOrigin -> String -> (Map String (List (Ident, String, RecordInfo)), List String) -> (Map String (List (Ident, String, RecordInfo)), List String)
-addUnboundRowMethods : List (String, List String) -> Map String Unit -> Map String Unit -> Map String Unit
 addVariants : TcEnv -> List (String, Mono) -> List (String, Ref Effvar) -> List Int -> List Int -> Mono -> List Variant -> TcEnv
 aliasArityMsg : String -> Int -> Int -> String
 aliasConstraintEntries : List Decl -> List ((String, String), List a) -> List (String, List a)
@@ -28,7 +27,6 @@ aliasMethodRenamesOf : List (String, List String) -> Decl -> List (String, Strin
 aliasMethodRenamesOfPath : List String -> UsePath -> List (String, String)
 aliasSchemeEntry : String -> String -> (String, Scheme) -> (String, Scheme)
 aliasSchemes : String -> String -> List (String, Scheme) -> List (String, Scheme)
-aliasedModuleIds : List Decl -> List String
 alignedMethodConstraintIds : String -> List (Int, Mono) -> Option (List Int)
 allArrowEffs : Mono -> List EffRow
 allConcreteHeads : List Mono -> Bool
@@ -59,6 +57,7 @@ anyKRow : List Kind -> Bool
 anyListM : (a -> Bool) -> List a -> Bool
 anyMember : List String -> List String -> Bool
 anyMemberBindsCtor : String -> String -> List UseMember -> Bool
+anyNameIn : List String -> List String -> Bool
 anyRootMatch : Int -> List (Mono, Loc) -> Bool
 anyRowSlotArg : List (String, Ref Effvar) -> List (String, Mono) -> List Ty -> Bool
 anySlotIsRow : Int -> List (List Ty, List String) -> Bool
@@ -138,7 +137,6 @@ blockLet : TcEnv -> Pat -> Expr -> TcEnv
 blockRecLet : TcEnv -> String -> Option Loc -> Expr -> TcEnv
 bodyRDictNames : Expr -> List String
 boolOp : Mono -> Mono -> Mono
-boundImportNames : List String -> List Decl -> List String
 boundTvarId : List Int -> Mono -> List Int
 boundTyvarIds : List Int -> List Mono -> Option (List Int)
 bucketArgsMatch : List (List Ty, List Require) -> List Mono -> Bool
@@ -1389,6 +1387,7 @@ seedAlphaLets : TcEnv -> String -> Expr -> TcEnv
 seedAndCheckSplit : List Decl -> List Decl -> List Decl -> List (String, Scheme)
 seedCheckRun : List Decl -> Unit
 seedEffectDomains : Unit -> Unit
+selectCallableRows : UsePath -> List (String, List String) -> List (String, List String)
 selectIfaceRows : UsePath -> List (String, List String) -> List (String, List String)
 selectImplEntryByIface : Map String (List KeyEntry) -> String -> List Mono -> Option KeyEntry
 selectReqImpl : Map String (List KeyEntry) -> Map String (List ImplEntry) -> String -> String -> Mono -> List Mono -> Option (Ty, List Ty, List Require)
