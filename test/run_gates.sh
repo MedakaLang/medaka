@@ -320,7 +320,43 @@ EOF
   fi
   echo "FAILED:$failed"
   [ "$phantom" -gt 0 ] && echo "  ($phantom of these are phantom skips: oracle not built — see above)"
-  echo "(logs in the run's temp dir; re-run a single gate by its path, e.g. sh test/<name>.sh"
+  # ── PRINT THE FAILING GATE'S OUTPUT. It used to be discarded, and that is a
+  # diagnosability hole with teeth: each gate's stdout+stderr goes to a file in a
+  # `mktemp -d` that nothing uploads and nothing prints, so a required CI shard could
+  # fail with a bare `FAIL  <gate>` and NOTHING else. On a dev box you just re-run the
+  # gate; in CI the temp dir is gone with the runner, so a failure that does not
+  # reproduce locally is not diagnosable AT ALL.
+  #
+  # The incident that prompted this is worth stating exactly, because the obvious reading
+  # of it is wrong: `diff_compiler_import_order` was red in the CI eval shard across three
+  # pushes and green on seven local runs (warm build, cold bootstrap from the seed, JOBS=1,
+  # JOBS=2 through this script, JOBS=12, two-core-pinned). That looked environment-dependent
+  # and was not. `main` had gained a LEDGERED fixture the branch predated, the branch's fix
+  # DRAINED it, and CI tests the PR merged onto `main` while the local tree does not — so
+  # the two were grading different corpora. One line of the gate's own output said so
+  # ("DRAINED — … no longer diverges"); it was thrown away, and hours went into
+  # environment theories instead. A merge-vs-branch corpus difference is the single most
+  # likely reason a gate is red only in CI, and it is exactly what this output reveals.
+  #
+  # Bounded per gate so a chatty gate cannot bury the summary above it.  200 lines, not
+  # 80: the bound must clear the LONGEST failing gate in the tree with real margin, and it
+  # does not clear it by much — `diff_compiler_must_fail.sh` prints 77 lines on a single
+  # drained row and grows with every fixture added, and it is precisely the gate whose text
+  # names the issue to close.  A bound that truncates the top of that output would cut the
+  # per-fixture explanation and keep only the tally, which is the half you already had.
+  # Derive the current worst case rather than trusting this number:
+  #   for g in test/diff_compiler_*.sh; do printf '%s ' "$g"; sh "$g" 2>&1 | wc -l; done
+  # `NO_FAIL_LOGS=1` restores the old silence.
+  if [ -z "${NO_FAIL_LOGS:-}" ]; then
+    for n in $failed; do
+      lf="$RESULTDIR/$n.log"
+      [ -f "$lf" ] || continue
+      printf '\n───── %s — last %s lines of its output ─────\n' "$n" "${FAIL_LOG_LINES:-200}"
+      tail -n "${FAIL_LOG_LINES:-200}" "$lf"
+    done
+    printf '\n'
+  fi
+  echo "(re-run a single gate by its path, e.g. sh test/<name>.sh"
   echo " — a name like sqlite_test_oracle is the repo-relative path with '/' as '_')"
   exit 1
 fi
