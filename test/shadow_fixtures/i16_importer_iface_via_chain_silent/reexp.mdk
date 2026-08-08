@@ -1,0 +1,6 @@
+-- SHADOW-SEMANTICS cell I16 provider 2: the re-exporter, naming the interface by TYPE
+-- name and no method -- the same shape i14 uses, on the silent axis.
+export import ifc.{Sizeable}
+
+export rf : Int -> Int
+rf n = n

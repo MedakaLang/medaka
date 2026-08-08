@@ -1,0 +1,21 @@
+-- SHADOW-SEMANTICS cell I16: the SILENT corner of the chain axis. `Sizeable` is nameable
+-- here only through `reexp`'s `export import ifc.{Sizeable}`, exactly as in i14 -- but the
+-- impl and the standalone share the receiver head (String), so BOTH candidates typecheck
+-- and the shadow decision is observable ONLY as a value: 7 (the impl) if `size` is a
+-- shadow here, 99 (the standalone) if it is not. Per S1 the interface IS nameable through
+-- the chain, so `size` is a shadow, `String` has a live impl, and S2's importer rule
+-- dispatches: 7.
+--
+-- ⚠️ PAIRED WITH `direct.mdk`, graded as its own row: the same graph with the chain hop
+-- removed. They must agree, and here agreement is about a NUMBER rather than a verdict.
+--
+-- WHY THIS CELL EXISTS SEPARATELY FROM i14. i14 covers the chain axis with a receiver the
+-- standalone cannot accept, so a lost shadow shows up as a located REJECT -- loud, and
+-- impossible to miss. This corpus's own history is that the LOUD half of a defect gets a
+-- fixture and the silent half does not (d18/d21, i6/i7), and the silent half is the one
+-- that ships. Here a lost shadow prints 99 at exit 0 on all three verbs with no
+-- diagnostic, and the ONLY thing that can catch it is a pinned value.
+import reexp.{Sizeable}
+import fmod.{size}
+
+main = println (size "abc")
