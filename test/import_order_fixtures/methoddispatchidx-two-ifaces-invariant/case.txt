@@ -1,0 +1,35 @@
+entry: main.mdk
+what: #1351's graph, UNLEDGERED — it must be INVARIANT, and this is the only instrument
+what: that can say so.
+
+Three import clauses, so all 3! = 6 orderings are exercised rather than one reversal.
+
+WHY IT IS HERE AND NOT IN test/must_fail_fixtures/. #1351 was pinned there as a
+reproducing S0: `main.mdk` printed 7 (the body of `impl IZ String`) at exit 0 while the
+same file with two import lines swapped was REJECTED `Type mismatch: Int vs String`.
+The #1354-unit-A fix drains that pin, so the pin is deleted -- and a value pin could
+never have graded the thing that actually mattered here. This issue's own scoping pass
+says so in as many words: a fix can drain the pin while the ORDER-DEPENDENCE survives,
+so a green pin is not evidence, and only a permutation differential can grade it. That
+is this corpus. The row is deliberately UNLEDGERED: an unledgered case must produce ONE
+signature across every ordering, which is the assertion #1351 needs.
+
+HOW THE EXPECTED VALUE WAS ESTABLISHED — derived from the language rules, not captured
+from the engine. `SHADOW-SEMANTICS.md` S1 (scope RULED 2026-08-06, #1375) makes `mth` a
+shadow in this module only if some interface declaring `mth` is NAMEABLE here. The entry
+imports `amodI` and `zmodI` but binds only `af` and `zf`; §1.0's `nameable in M` is about
+the declaration a module may refer to BY NAME, and this module cannot refer to `IA` or
+`IZ` at all -- writing `impl IA Blob` here is rejected `Unknown interface: IA`. So `mth`
+is not a shadow, the occurrence is the standalone explicitly imported from `fmodI`, and
+the answer is 99 + 0 + 0 = 99 on every ordering.
+
+That agrees with #1351's own hand-derived reasoning, which predates any fix: it argued
+that 7 is wrong under EVERY reading, because `impl IZ String`'s method takes an Int
+first while the call passes a String first, so the only defensible answers were the
+imported standalone (99) or a rejection. This case pins the first of those.
+
+⚠️ WHAT THIS DOES **NOT** ASSERT. `universeMethodDispatchIdxRef` is still a bare
+method-name-keyed list read first-match, and this graph no longer REACHES it -- shadow-hood
+is decided before the dispatch index is ever consulted. The table's keying defect is
+latent, not removed; retiring it is #1354 unit B's business. Do not read a green row here
+as evidence about that table.

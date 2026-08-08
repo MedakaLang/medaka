@@ -1,0 +1,16 @@
+-- #1351's graph, re-pointed here from test/must_fail_fixtures/ when its pin drained.
+-- Two UNRELATED interfaces share the bare method name `mth` at DIFFERENT dispatch
+-- argument indices (IA at 0, IZ at 1), IZ carries the program's only impl, and
+-- `fmodI.mth` is a standalone with the same bare name -- which is load-bearing, not
+-- decoration: `methodDispatchIdx`'s only reader is gated on `standaloneValuesRef`, so
+-- WITHOUT a standalone shadow the bare-name dispatch-index table is never read at all
+-- and the graph is immune to the defect it is meant to exercise.
+--
+-- Neither interface is nameable here: the entry imports both modules but binds only
+-- `af` and `zf`. So `mth` is not a shadow in this module and the occurrence is the
+-- standalone this module explicitly imported: 99, on every ordering.
+import fmodI.{mth}
+import amodI.{af}
+import zmodI.{zf}
+
+main = println (mth "abc" 5 + af 0 + zf 0)

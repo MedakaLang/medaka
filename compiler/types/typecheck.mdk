@@ -2621,29 +2621,30 @@ toggles = Ref (freshToggles ())
 -- now a named field on ONE cell (a type fact, not prose), the last piece of #158/#176.
 -- A record OF Refs (fields stay `Ref …`): every writer mutates a field-Ref in place, so
 -- no whole-record copy is allocated per set.
-data DriverState = DriverState {
-    effectDomains : Ref (List (String, Param)),
-    graphMethodExportsRef : Ref (OrdMap (List (String, Ident))),
-    graphIfaceMethodsRef : Ref (OrdMap (List (String, List String))),
-    graphCtorExportsRef : Ref (OrdMap (List (String, String, Ident))),  -- #1354 unit A follow-up: the TYPE-namespace peer of the line above — see graphIfaceMethods
-    abstractRecordTypesRef : Ref (List String),
-    argDispatchIdxRef : Ref (List (String, Int)),
-    dictEligibleRef : Ref (List String),
-    dictEligibleSetRef : Ref (OrdMap Unit),
-    mangledShadowMapRef : Ref (List (String, String)),
-    userIfaceNamesRef : Ref (List String),
-    coherenceUserDecls : Ref (List Decl),
-    superDeclsRef : Ref (List Decl),
-    standaloneValuesRef : Ref (List String),
-    methodDispatchIdxRef : Ref (List (String, Int)),
-    matchOracle : Ref Oracle,
-    matchWarnings : Ref (List TcDiag),
-    promotionHarvestRef : Ref (List String),
-    mainSchemeRef : Ref (Option Scheme),
-    sigNameSetRef : Ref (OrdMap Unit),
-    sigTyMapRef : Ref (OrdMap Ty),
-    implInferEnabled : Ref Bool,
-  }
+data DriverState =
+  | DriverState {
+      effectDomains : Ref (List (String, Param)),
+      graphMethodExportsRef : Ref (OrdMap (List (String, Ident))),
+      graphIfaceMethodsRef : Ref (OrdMap (List (String, List String))),
+      graphCtorExportsRef : Ref (OrdMap (List (String, String, Ident))),
+      abstractRecordTypesRef : Ref (List String),
+      argDispatchIdxRef : Ref (List (String, Int)),
+      dictEligibleRef : Ref (List String),
+      dictEligibleSetRef : Ref (OrdMap Unit),
+      mangledShadowMapRef : Ref (List (String, String)),
+      userIfaceNamesRef : Ref (List String),
+      coherenceUserDecls : Ref (List Decl),
+      superDeclsRef : Ref (List Decl),
+      standaloneValuesRef : Ref (List String),
+      methodDispatchIdxRef : Ref (List (String, Int)),
+      matchOracle : Ref Oracle,
+      matchWarnings : Ref (List TcDiag),
+      promotionHarvestRef : Ref (List String),
+      mainSchemeRef : Ref (Option Scheme),
+      sigNameSetRef : Ref (OrdMap Unit),
+      sigTyMapRef : Ref (OrdMap Ty),
+      implInferEnabled : Ref Bool,
+    }
 
 -- INITIAL construction only (NOT a per-module reset): each field reproduces its former
 -- top-level ref's initial.  The driver/per-module/per-group sites write each field at
@@ -22063,6 +22064,13 @@ reexportRenamed (origin, local) src =
   map (e => (local, snd e)) (filterList (e => fst e == origin) src)
 
 -- ── #1354 unit A follow-up: the TYPE-namespace peer of graphMethodExports ────
+-- Stored in `driverState.graphIfaceMethodsRef`, declared bare (no interior record
+-- comment) next to its method-namespace peer: `DriverState`'s header is still the
+-- two-line `data X =` / `| X {` form, and `medaka fmt --write` MOVES a trailing comment
+-- one field down on that shape while `fmt --check` reports the result as clean (#829,
+-- REOPENED).  It did exactly that to the first draft of this line — the comment landed on
+-- `graphCtorExportsRef`, where it read as describing the constructor index.  The prose
+-- lives here instead, which is the workaround PR #1296 uses for the same record.
 -- `mid → [(interface name as this module provides it, that interface's method names)]`,
 -- folded DEPENDENCY-FIRST so an `export import src.{…}` resolves against `src`'s
 -- already-computed row and a >1-hop re-export chain still resolves.  Read only by
@@ -22156,12 +22164,35 @@ reexportedIfaceMethodsOf _ _ = []
 --     every name the dependency provides, so every row.
 --   * a member list admits the rows it NAMES, matched on the ORIGIN spelling (`fst`), which
 --     is the name the dependency provides the row under.
---   * `UseAlias` yields `Some []` and so admits NOTHING — correct here rather than merely
---     conservative: an alias-qualified name in TYPE position is a PARSE ERROR, so an alias
---     cannot make an interface nameable.  A bare `import m` is `Some []` too, and binds no
---     names by the same rule (it exists to bring impls into scope, which S2 governs and
---     this clause explicitly does not).
+--   * a bare `import m` yields `Some []` and admits NOTHING — it binds no names at all; its
+--     job is to bring IMPLS into scope, which S2 governs and this clause explicitly does not.
+--
+-- 🚨 `UseAlias` ADMITS THE WHOLE ROW, and the naive reading of §1.0 gets this WRONG.
+-- `importedBindings` yields `Some []` for an alias, indistinguishable from the bare import
+-- above, so this arm must match the PATH rather than the member list.  Taking `Some []` at
+-- face value here REGRESSED #1277 — a CLOSED S0 — from `(1, 2)` to `(1, 1)` at exit 0 with
+-- no diagnostic, on `run` AND the built binary, caught by
+-- `test/diff_compiler_check_cli_modules.sh`'s re-pointed assertion for it.
+--
+-- WHY, mechanically: `import m as A` cannot put a TYPE name in scope (an alias-qualified
+-- name in type position is a parse error), but it absolutely puts the METHODS in scope —
+-- `A.ff` is a legal call, and `renameAliasedMethods` rewrites it to a BARE `ff` before the
+-- mark pass runs.  So an alias that admitted no rows dropped `ff` from `argNames`, the
+-- occurrence was never marked `EMethodAt`, and it lost its dispatch stamp.  The set this
+-- predicate feeds is a set of METHOD names reachable in `M`; for that set an alias behaves
+-- like a wildcard, which is also the FAIL-OPEN direction and is exactly today's behaviour
+-- for aliases.
+--
+-- ⚠️ This is the one place the clause's own recorded ambiguity bites: S1-CHAIN's rationale
+-- says "import and call the METHOD" while the normative §1.0 table qualifies the INTERFACE
+-- operand.  The ambiguity is filed separately and is NOT resolved here — this arm is
+-- chosen because it is the only one that keeps a closed S0 closed, and because it can only
+-- ADD shadow-hood, never remove it.
+--
+-- On the RE-EXPORT side this arm is DEAD: `export import m as A` is rejected by the parser,
+-- so no `DUse True` can carry a `UseAlias`.
 selectIfaceRows : UsePath -> List (String, List String) -> List (String, List String)
+selectIfaceRows (UseAlias _ _) src = src
 selectIfaceRows path src = match importedBindings path
   None => src
   Some bs => filterList (r => contains (fst r) (map fst bs)) src

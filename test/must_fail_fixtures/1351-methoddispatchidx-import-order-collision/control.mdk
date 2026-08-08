@@ -1,7 +1,0 @@
--- CONTROL: main.mdk minus the zmodI import (and the `zf 0` use). Only IA is in the
--- module graph, so there is nothing for the bare name `mth` to collide with -- the
--- imported standalone `fmodI.mth` answers, correctly.
-import fmodI.{mth}
-import amodI.{af}
-
-main = println (mth "abc" 5 + af 0)

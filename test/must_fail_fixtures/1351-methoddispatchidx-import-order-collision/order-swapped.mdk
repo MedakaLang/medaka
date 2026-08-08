@@ -1,9 +1,0 @@
--- NOT run by this gate (see claim.txt why-note). Byte-identical to main.mdk except the
--- two interface-module import lines are swapped -- amodI now imported AFTER zmodI. This
--- is the other half of the order-dependence the issue reports: `medaka check`/`run` on
--- this file REJECTS ("Type mismatch: Int vs String") where main.mdk accepts and prints 7.
-import fmodI.{mth}
-import zmodI.{zf}
-import amodI.{af}
-
-main = println (mth "abc" 5 + af 0 + zf 0)
