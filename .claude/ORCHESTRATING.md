@@ -1808,3 +1808,102 @@ own agent's work. **Cite compiler internals by symbol name**, which the gates ac
   silent divergence — but a control showed the same graph already reached it on `main`. The unit
   widened *reachability*, not the defect. Landed with a must-fail pin plus the disclosure re-graded
   from S1-loud to S0-silent. The discriminator is the control, not the severity label.
+
+## The shadow arc + wrap-up, 2026-08-08/09 — an UNDER-SPECIFIED RULE relocates its defect
+
+PR #1419 (#1353/#1354 unit A) took **eight review rounds**, and three of them *introduced* a
+new S0 while fixing the last. Six issues filed; three pinned in-arc, the other three closed out
+here. What follows is only what generalises.
+
+### ⭐⭐ An under-specified rule produces ONE DEFECT PER ROUND, at a DIFFERENT SITE
+
+Rounds 3, 4 and 5 of #1419 each shipped a fresh S0. The cause was **not a weak implementer**.
+The question *"which namespace is 'nameable in M' evaluated in"* had **no ruling**, so every
+round guessed — and guessed somewhere else, because the previous guess had been patched at the
+site the last review named.
+
+**The tell is a defect that RELOCATES rather than recurs.** A recurring defect means the
+implementer did not learn; a relocating one means there is nothing to learn *from* — the rule
+being implemented does not exist yet. When you see round N's fix hold and round N+1 break the
+same property one function over, **stop briefing fixes and go rule the spec.**
+
+Adopting S1-NS mid-arc converted *"try harder"* into *"here is the clause you violate."* The
+final fix then **deleted a predicate instead of adding a fourth** — after which the invariant
+holds by construction rather than by three agreeing call sites. Prefer the shape that removes
+a decision point; it is the only kind of fix that cannot relocate.
+
+### ⭐⭐ When the same CLASS recurs, ask for the ENUMERATION, not the patch
+
+Three consecutive rounds each fixed the lying comments they were **shown** — and each left a
+sibling behind: one of two, then two of three, then three of four. Every round was a correct
+fix to an incorrectly-scoped question.
+
+One sweep — *"enumerate every comment claiming something about these symbols and verify each"* —
+found **five more**, including a **fourth copy in `test/registry_keying_ratchet.sh`**, a file
+nobody had opened in eight rounds of review. A reviewer citing instances hands the author a
+list; the author fixes the list. **Make the enumeration the deliverable**, and name the symbol
+(`selectIfaceRows`, `rpNames`) rather than the file — the claims travel.
+
+Nothing mechanises this today: the two doc gates check that a cited **path** exists and that a
+backticked **symbol** resolves, and neither reads `.mdk` or `.sh` comments at all, which is
+where most such claims live. Filed as **#1432**. Until it exists, the sweep is the only
+defence, and its scope is itself an unchecked claim — so state the scope you swept.
+
+### ⭐⭐ I asserted a set was CLOSED twice, both times by enumerating the WRONG LEVEL
+
+- *"The consumer set is closed at two sites."* I had counted consumers of the two **sets**. The
+  decision surface was one level down, at the **row selectors** — three of them, one carrying a
+  live S1.
+- *"The closure invariant holds by construction."* I had counted selectors **and** sets. The
+  property was about **inputs to dispatch**, and `rpNames` was a third input that bypassed the
+  predicate entirely. That one was an S0.
+
+Both times I enumerated **what the change TOUCHED** and called it a property of **what I was
+CLAIMING**. Those are different sets and nothing warns you when they diverge. Before writing
+"closed", "exhaustive", or "by construction": *name the property, then enumerate its inputs* —
+starting from the consumer and working backwards, never from the diff forwards.
+
+### ⚠️ Agent liveness needs TWO artifacts, and WHICH two changes
+
+Three distinct false-stall shapes in one session, each of which would have been misread from a
+single signal:
+
+| shape | what looked dead | the artifact that proved otherwise |
+|---|---|---|
+| mid-build | git metadata stale for minutes | the **binary's** mtime |
+| mid-probe | binary stale (nothing rebuilding) | the **emit/log file** growing |
+| mid-read-then-build | BOTH stale ~10 min | a later binary appearing |
+
+**Low load average is never a stall signal** — an agent reading files pins nothing. Check the
+emit file **and** the build artifacts before concluding anything, and note that the pair that
+discriminates changes with the phase: neither artifact alone is sufficient in all three shapes.
+
+### 🚨 The PID-poll idiom the playbook mandates is BLOCKED, and the block message routes you toward a yield
+
+The `until kill -0 $PID` form this playbook has been recommending is refused by the harness
+classifier, and the refusal text points at the **Monitor** tool. An agent followed that route
+and **died with its work uncommitted**, having ended its turn waiting on a notification that
+never reached it.
+
+⚠️ **State the mechanism, not a quotation.** This paragraph originally claimed Monitor's own
+description says *"do not poll or sleep"* — **it does not; that phrasing was mine, in quotation
+marks, and a review caught it.** What is true is the shape: the Bash refusal steers you to
+Monitor, Monitor is built to notify rather than be polled, and an agent bounced between the two
+lands on "wait for the notification" — which is the one thing that kills it. **A fabricated
+quotation is worse than a paraphrase**: it survives review by looking checkable.
+
+**The correct form is `run_in_background: true` on a SINGLE bounded command** — one command, no
+`&`, no wrapper loop, and never end a turn waiting on a notification. Put that form in the
+prompt itself; an agent handed the bare `until` loop will hit the block and then improvise.
+
+### ⚠️ A multi-round PR body is a LEDGER, and REVERTS DO NOT SELF-DRAIN FROM IT
+
+Rounds 2, 4 and 5 each caught the body's "helpers" section naming symbols that a **later revert
+had deleted**. Additions get written into the body as they land; removals do not remove
+themselves, so the body drifts in exactly one direction — toward claiming more than the diff
+contains, which is the direction a reader cannot detect.
+
+**After ANY revert, re-audit the body's symbol lists.** Better, and what finally worked here:
+**derive them from the selfproc LEG A golden** rather than writing them by hand — the golden is
+recut from the tree, so a reverted symbol disappears from it without anyone remembering to look.
+This is the PR-body-has-no-reviewer lesson (previous section) with a mechanical fix attached.

@@ -102,6 +102,18 @@ access exists *only* via `as`). But it is **not** a no-op: **any** import of a m
 that module's `impl`s into scope for dispatch, which is the whole job of the bare form (e.g.
 `stdlib/json.mdk`'s bare `import array` — without it, `map (+ 1) [|1,2,3|]` is *"No impl of
 Mappable for Array"*).
+⚠️ **A `(..)` constructor import needs the DEFINING module to write `public export data`,
+not plain `export data`** — three agents lost probe rounds to this in one session, because
+the paragraph above never mentions the qualifier. Plain `export data` exports the type
+ABSTRACTLY: the type NAME is importable, its constructors are not, and the importer is
+rejected at exit 1 with *"'X' exports no constructors from module 'm' (exported
+abstractly). Remove '(..)' or export with 'public export'"*. Derive it on any binary — two
+`check` runs over the SAME importer, changing only the defining module's qualifier:
+```sh
+printf 'import m.{X(..)}\n\nmain = println 1\n' > /tmp/p/main.mdk
+printf 'export data X = X Int\n'        > /tmp/p/m.mdk; ./medaka check /tmp/p/main.mdk; echo "abstract -> $?"  # 1
+printf 'public export data X = X Int\n' > /tmp/p/m.mdk; ./medaka check /tmp/p/main.mdk; echo "public   -> $?"  # 0
+```
 `io.mdk` is the ergonomic layer over the `runtime.mdk` IO externs.
 
 ## 🚦 How work lands: `main` is PROTECTED — you cannot push to it
@@ -254,6 +266,31 @@ warning; **`MEDAKA_STRICT=1`** promotes it to a hard `exit 1`, useful when you n
 you're not debugging or verifying against a stale binary (`checkSourceStaleness`,
 `compiler/driver/medaka_cli.mdk`).
 
+🚨 **THE WARNING GOES TO STDERR, NEVER STDOUT — so `2>/dev/null` HIDES IT and a probe that
+reads stdout will never see it.** `checkSourceStaleness` emits it with `ePutStrLn` and
+nothing else prints it (`grep -rn 'may be stale; rebuild' compiler/` finds one site,
+inside that function). Measured on a stale `medaka run`: **stdout is the program's value
+alone, exit 0**, and `head -1` on stdout returns that value, not the warning. This is
+load-bearing in both directions:
+- **Do not** design a freshness probe around stdout, or around a nonzero exit — without
+  `MEDAKA_STRICT=1` a stale binary still exits 0 and still prints the right-looking answer.
+  Set `MEDAKA_STRICT=1` and read the exit code, or read stderr.
+- **Do** suspect it when a gate asserting an EMPTY stderr goes red for no semantic reason
+  (#1421 — that is build freshness, not a regression), and when an MCP tool result grows a
+  `staleBinary` field: `sourceStalenessVerdict` is threaded into `runMcpServer` and
+  `attachStaleness` (`compiler/tools/mcp.mdk`) splices that field onto every tool result,
+  which is a second graded channel the same warning reaches.
+
+Forcing the stale state without editing compiler source — point `MEDAKA_ROOT` at a
+throwaway root whose `compiler/` differs from the one baked in (give it a `stdlib` symlink
+so the run still reaches the program):
+```sh
+mkdir -p /tmp/fake/compiler; printf 'x = 1\n' > /tmp/fake/compiler/bogus.mdk; ln -s "$PWD/stdlib" /tmp/fake/stdlib
+printf 'main = println 12345\n' > /tmp/hello.mdk
+MEDAKA_ROOT=/tmp/fake ./medaka run /tmp/hello.mdk 2>/dev/null   # 12345 — warning invisible, exit 0
+MEDAKA_ROOT=/tmp/fake ./medaka run /tmp/hello.mdk >/dev/null    # the warning, on stderr
+```
+
 **In a worktree:** the shell cwd resets between calls, so use
 `make -C /absolute/path/to/worktree medaka`. The `./medaka` binary lands in the worktree.
 
@@ -334,9 +371,19 @@ sh test/build_oracles.sh --for 'diff_compiler_*'     # ✅ fresh-worktree recipe
 sh test/build_oracles.sh --for --list '<pattern>'    # ✅ DERIVE ONLY — which oracle names a
                                                       #    pattern resolves to, builds nothing
 FORCE=1 JOBS=1 sh test/build_oracles.sh --build-one <name>   # ✅ exactly one
+sh test/build_oracles.sh --for '<pattern>' --list    # ❌ NOT derive-only — this BUILDS
 sh test/run_gates.sh                                 # ❌ all 83
 FORCE=1 sh test/build_oracles.sh                     # ❌ all 54 oracles. Almost never right.
 ```
+
+⚠️ **`--list` must come IMMEDIATELY after `--for`, and the reversed order fails SILENTLY
+into the expensive path.** The derive-only mode is a positional test on the first two args
+(`[ "$1" = "--for" ] && [ "$2" = "--list" ]`, `test/build_oracles.sh`); write `--for
+'<pattern>' --list` and that test is false, `--list` is consumed as *another gate pattern*
+(it resolves to no gate and contributes nothing), the real pattern still resolves — so the
+script proceeds to **compile the whole derived oracle set** while you are waiting for a
+list. There is no diagnostic, because nothing is malformed. Derive the rule rather than
+trusting this paragraph: `grep -n '"--for"' test/build_oracles.sh`.
 
 🚨 **On a `compiler/backend/*` diff, `make preflight` forces the self-compile fixpoint and the
 loop can exceed the 10-minute foreground tool ceiling — killed at 600s with `exit 143`
@@ -657,12 +704,65 @@ stdout**, which handed a redirecting harness an empty artifact + apparent succes
 **nonexistent input file** or a **real typecheck error**, not just a wrong arity. `medaka build
 --keep-ir` remains the supported route.
 
+🚨 **`medaka build`'s EXIT CODE DOES NOT SURVIVE A PIPE — `... | tail`/`| head`/`| grep`
+reports the LAST stage's status, so a failing build reads as exit 0.** Two reviewers in one
+session nearly reported *"build fails at exit 0"* as a defect after piping the output to
+keep it short; the compiler was exiting 1 correctly the whole time. Same trap the must-fail
+suite's own header calls out for `run` (`test/diff_compiler_must_fail.sh`) — it applies to
+every verb, and it bites hardest on `build`, whose interesting output is on **stderr** and
+therefore invites a `2>&1 | tail`. **Redirect to a file and read `$?`, then read the file.**
+Derive it on the spot with any program that fails to build:
+```sh
+./medaka build broken.mdk -o /tmp/x > /tmp/x.log 2>&1; echo "direct: $?"   # 1
+./medaka build broken.mdk -o /tmp/x 2>&1 | tail -1;    echo "piped:  $?"   # 0 — tail's status
+```
+
 **`medaka run` and `medaka build` share the whole front end** — both typecheck with the
 **same binary**; they differ only in the execution engine (interpreter vs emitted native +
 runtime). So comparing `run` against `build` is a genuine test of **codegen and runtime**
 behavior (it is how several miscompiles were caught), but it is **NOT** two independent
 observations of anything at or before typecheck — a claim about resolve/typecheck-stage
 behavior gets exactly **one** observation from that pair, not two.
+
+⭐ **TWO-ARM DIFFERENTIAL REVIEW (base binary vs branch binary): a `medaka` binary resolves
+its emitter AND its stdlib from `exeDir` — the directory the BINARY sits in — not from the
+project root of the file it is compiling, and not from cwd.** `exeDir = dirOf
+(executablePath ())`, `defaultMedakaRoot = exeDir`, `defaultMedakaEmitter = joinPath exeDir
+"medaka_emitter"` (`compiler/driver/build_cmd.mdk`, the *"exe-relative install-layout
+defaults"* block); every `<root>/stdlib/...` read goes through `envOr "MEDAKA_ROOT"
+defaultMedakaRoot`. This is documented nowhere else and it is what makes a two-worktree
+comparison sound: **a base-arm binary invoked on files in a branch worktree still uses
+base's stdlib and base's emitter**, so the only variable is the compiler under test. It
+also means `MEDAKA_EMITTER`/`MEDAKA_ROOT`, if either is exported in your shell, silently
+CROSSES the arms — check for them before believing a differential. Verify from the
+consequence, not the source: copy `./medaka` alone into an empty directory and run it from
+inside a real checkout — it reports `cannot read the stdlib prelude at
+"<that-empty-dir>/stdlib/runtime.mdk"`, naming the binary's own directory, with cwd and the
+source file both elsewhere.
+```sh
+mkdir -p /tmp/alt && cp ./medaka /tmp/alt/            # cwd stays the repo root
+printf 'main = println 12345\n' > /tmp/hello.mdk
+/tmp/alt/medaka run /tmp/hello.mdk                    # exit 1: looks in /tmp/alt/stdlib
+MEDAKA_ROOT="$PWD" /tmp/alt/medaka run /tmp/hello.mdk # exit 0: 12345
+```
+⚠️ The miss diagnostic offers *"run from the project root"* as a remedy; measured, cwd
+being a directory that HAS `stdlib/` did **not** rescue it — only `MEDAKA_ROOT` or an
+exe-adjacent `stdlib/` did.
+⚠️ **Not every gate lets you point it at a second binary.** Some honour an override; most
+hardcode `$ROOT/medaka`, so a two-arm run means a second worktree.
+**DERIVE the set, do not trust a count — including this sentence's:**
+```sh
+grep -rln 'MEDAKA="${MEDAKA:-' test/*.sh     # the gates you CAN point at a second binary
+```
+⚠️ Run that through a script file, not inline: this harness mangles a `${…}` inside a
+quoted inline argument and returns zero matches for a pattern that is really there.
+`test/diff_compiler_shadow_semantics.sh` is the notable hardcoded one and is filed as
+**#1431** — check the gate before planning a differential around it.
+🚨 This paragraph said **"Four honour an override"** until 2026-08-09, *while citing the
+very command that returns more than twice that*. Nobody ran it — the number came from a
+report, was repeated into #1431, and reached this file unverified. **A claim that ships its
+own derivation is only honest if someone executed it**; that is the whole point of the rule
+and it failed at the last inch here.
 
 **Playground e2e:** `playground/e2e/` is a Playwright harness driving a real browser against
 the built CM6 playground (`cd playground/e2e && ./run.sh`). Needs **node v24+** and a
