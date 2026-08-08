@@ -320,7 +320,29 @@ EOF
   fi
   echo "FAILED:$failed"
   [ "$phantom" -gt 0 ] && echo "  ($phantom of these are phantom skips: oracle not built — see above)"
-  echo "(logs in the run's temp dir; re-run a single gate by its path, e.g. sh test/<name>.sh"
+  # ── PRINT THE FAILING GATE'S OUTPUT. It used to be discarded, and that is a
+  # diagnosability hole with teeth: each gate's stdout+stderr goes to a file in a
+  # `mktemp -d` that nothing uploads and nothing prints, so a required CI shard could
+  # fail with a bare `FAIL  <gate>` and NOTHING else. On a dev box you just re-run the
+  # gate; in CI the temp dir is gone with the runner, so a failure that does not
+  # reproduce locally is not diagnosable AT ALL — which is exactly the situation that
+  # prompted this (a gate red in the CI eval shard across three pushes and green on
+  # seven local runs: warm build, cold bootstrap from the seed, JOBS=1, JOBS=2 through
+  # this script, JOBS=12, and pinned to two cores).
+  #
+  # Bounded at 80 lines per gate so a chatty gate cannot bury the summary above it,
+  # and the head/tail split keeps a gate's own preamble (which usually says WHICH case
+  # failed) as well as its verdict line. `NO_FAIL_LOGS=1` restores the old silence.
+  if [ -z "${NO_FAIL_LOGS:-}" ]; then
+    for n in $failed; do
+      lf="$RESULTDIR/$n.log"
+      [ -f "$lf" ] || continue
+      printf '\n───── %s — last 80 lines of its output ─────\n' "$n"
+      tail -n 80 "$lf"
+    done
+    printf '\n'
+  fi
+  echo "(re-run a single gate by its path, e.g. sh test/<name>.sh"
   echo " — a name like sqlite_test_oracle is the repo-relative path with '/' as '_')"
   exit 1
 fi
