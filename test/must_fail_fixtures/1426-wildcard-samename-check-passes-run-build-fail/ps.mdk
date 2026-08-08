@@ -1,0 +1,2 @@
+export h : Display a => a -> String
+h x = "\{x}"
