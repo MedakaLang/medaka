@@ -83,6 +83,11 @@ editors/install-vscode         installs the VS Code extension. A dev-setup actio
 ops/provision                  provisions a build box. A dev-setup action.
 scripts/docker-dev             runs the build inside a Linux container. A dev wrapper.
 scripts/medaka-mcp-wrapper     stdio launch shim that .mcp.json execs into `medaka mcp` — not a gate.
+scripts/pr                     the verified PR-lifecycle helper (#1414): `body`/`watch`/`enqueue`/
+                               `complete` over gh — a dev tool, not a gate. Its test
+                               (test/pr_helper_test.sh) is in the `tools` shard and exercises it.
+test/fixtures/pr_mock_gh       mock `gh` used ONLY by test/pr_helper_test.sh (which is in the
+                               `tools` shard); running it directly proves nothing.
 
 # ── sourced libraries (never executed; `sh <file>` is a no-op) ──
 test/lib_scratch               shell library, not a script: sourced by run_gates / build_oracles /
