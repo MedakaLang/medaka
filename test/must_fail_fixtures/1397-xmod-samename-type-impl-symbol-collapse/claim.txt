@@ -1,0 +1,39 @@
+issue: 1397
+what: two modules, `aamod` and `zzmod`, each declare their OWN type named `Thing`
+what: (unrelated: neither imports the other) and each has its own `impl Label
+what: Thing`. `aamod`'s impl answers "aamod", `zzmod`'s answers "zzmod". main.mdk
+what: imports both and prints `aaLbl ++ "|" ++ zzLbl`. Hand-derived correct
+what: output: `aamod|zzmod` -- each module's `label` call must resolve against
+what: its OWN `impl` on its OWN `Thing`.
+what: `medaka check main.mdk` exits 0 with no diagnostic. `medaka run main.mdk`
+what: prints `aamod|aamod` at exit 0 -- SILENT WRONG: zzmod's own label call
+what: answers aamod's string. Confirmed the same shape holds for the built
+what: native binary (`medaka build --keep-ir` shows exactly ONE
+what: `define .*@mdk_impl_Thing_label` where there must be two -- the impl
+what: symbol is mangled on the BARE type name `Thing`, so two modules' impls for
+what: two distinct types collide into one emitted symbol and one silently wins);
+what: this fixture pins the `run` verb since that is the simplest CLI-reachable
+what: observable and it already reproduces the identical wrong value.
+cmd: run main.mdk
+exit: 0
+stdout: aamod|aamod
+control: run control.mdk
+why-fixture: MULTI-MODULE PIN, sibling files in this directory -- `medaka run`
+why-fixture: resolves same-directory sibling imports with no medaka.toml (same
+why-fixture: idiom as 1292-xmod-ctor-name-argtag-wrong-impl/).
+why-control: control.mdk is main.mdk with ONE variable changed: it imports
+why-control: `zzmod_distinct` (type `Zeeb`, not `Thing`) instead of `zzmod`, so
+why-control: the same two-impl-of-Label-on-a-cross-module-type-named-once-per-module
+why-control: shape exists but the TYPE NAMES no longer collide. Verified: `check
+why-control: control.mdk` exit 0 no diagnostics; `run control.mdk` exit 0, prints
+why-control: the CORRECT `aamod|zzmod`. If this control breaks, cross-module impl
+why-control: dispatch broke outright, not #1397's same-name-type collision.
+why-note: verified first-hand on a binary cold-bootstrapped in this worktree
+why-note: (test/pin-1396-1397-notpinnable branch base) under MEDAKA_STRICT=1;
+why-note: also independently reproduced via `medaka build --keep-ir main.mdk`
+why-note: (grep -c 'define .*@mdk_impl_Thing_label' on the kept .ll returns 1),
+why-note: matching the issue's own IR proof exactly.
+why-note: `evalModules`/`cevalModules` are parallel drivers per AGENTS.md -- a fix
+why-note: to the emitter's mangling alone would not necessarily drain this `run`
+why-note: pin; check the interpreter side too before closing #1397 on this row's
+why-note: strength.

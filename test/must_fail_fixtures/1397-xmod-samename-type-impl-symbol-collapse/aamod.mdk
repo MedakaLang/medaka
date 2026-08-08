@@ -1,0 +1,6 @@
+import iface.{Label, label}
+public export data Thing = MkA Int
+export impl Label Thing where
+  label _ = "aamod"
+export aaLbl : String
+aaLbl = label (MkA 1)

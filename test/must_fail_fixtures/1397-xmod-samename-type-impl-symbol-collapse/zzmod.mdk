@@ -1,0 +1,6 @@
+import iface.{Label, label}
+public export data Thing = MkZ Int
+export impl Label Thing where
+  label _ = "zzmod"
+export zzLbl : String
+zzLbl = label (MkZ 1)
