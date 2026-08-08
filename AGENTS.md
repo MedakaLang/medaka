@@ -118,6 +118,18 @@ gh pr create --fill
 gh pr merge --auto --merge           # merges itself the moment every required check goes green
 ```
 
+🛠️ **For the write/verify half of that lifecycle, prefer the verified helper
+`scripts/pr.sh`** (`body` / `watch` / `enqueue` / `complete`) — see
+`docs/ops/PR-HELPER.md`. Hand-rolled `gh` writes and `gh pr merge` exit codes
+carry no signal for the shapes #1212/#1213 record (see the MERGE QUEUE bullet
+below), so the helper verifies resulting state instead of return codes: it
+byte-compares a body readback, prints only check transitions, confirms queue
+membership via GraphQL, and proves the head SHA landed on `main`. Each
+subcommand is independent — a body edit needs no full lifecycle. The raw
+commands remain documented below because the failure explanation still matters;
+the helper just makes the verified-correct sequence one command instead of a
+hand-rebuilt ritual.
+
 **Eleven required checks:** the **seven** `gates (…)` shards (engines · backend · tools · sqlite ·
 eval · frontend · types), `soundness`, `seed-health`, `inlang`, `wasm`. ⚠️ **A gate matching
 `test/diff_compiler_*.sh` but no shard pattern in `ci.yml` SILENTLY NEVER RUNS** —
