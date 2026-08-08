@@ -2621,29 +2621,29 @@ toggles = Ref (freshToggles ())
 -- now a named field on ONE cell (a type fact, not prose), the last piece of #158/#176.
 -- A record OF Refs (fields stay `Ref …`): every writer mutates a field-Ref in place, so
 -- no whole-record copy is allocated per set.
-data DriverState =
-  | DriverState {
-      effectDomains : Ref (List (String, Param)),
-      graphMethodExportsRef : Ref (OrdMap (List (String, Ident))),
-      graphCtorExportsRef : Ref (OrdMap (List (String, String, Ident))),
-      abstractRecordTypesRef : Ref (List String),
-      argDispatchIdxRef : Ref (List (String, Int)),
-      dictEligibleRef : Ref (List String),
-      dictEligibleSetRef : Ref (OrdMap Unit),
-      mangledShadowMapRef : Ref (List (String, String)),
-      userIfaceNamesRef : Ref (List String),
-      coherenceUserDecls : Ref (List Decl),
-      superDeclsRef : Ref (List Decl),
-      standaloneValuesRef : Ref (List String),
-      methodDispatchIdxRef : Ref (List (String, Int)),
-      matchOracle : Ref Oracle,
-      matchWarnings : Ref (List TcDiag),
-      promotionHarvestRef : Ref (List String),
-      mainSchemeRef : Ref (Option Scheme),
-      sigNameSetRef : Ref (OrdMap Unit),
-      sigTyMapRef : Ref (OrdMap Ty),
-      implInferEnabled : Ref Bool,
-    }
+data DriverState = DriverState {
+    effectDomains : Ref (List (String, Param)),
+    graphMethodExportsRef : Ref (OrdMap (List (String, Ident))),
+    graphIfaceMethodsRef : Ref (OrdMap (List (String, List String))),
+    graphCtorExportsRef : Ref (OrdMap (List (String, String, Ident))),  -- #1354 unit A follow-up: the TYPE-namespace peer of the line above — see graphIfaceMethods
+    abstractRecordTypesRef : Ref (List String),
+    argDispatchIdxRef : Ref (List (String, Int)),
+    dictEligibleRef : Ref (List String),
+    dictEligibleSetRef : Ref (OrdMap Unit),
+    mangledShadowMapRef : Ref (List (String, String)),
+    userIfaceNamesRef : Ref (List String),
+    coherenceUserDecls : Ref (List Decl),
+    superDeclsRef : Ref (List Decl),
+    standaloneValuesRef : Ref (List String),
+    methodDispatchIdxRef : Ref (List (String, Int)),
+    matchOracle : Ref Oracle,
+    matchWarnings : Ref (List TcDiag),
+    promotionHarvestRef : Ref (List String),
+    mainSchemeRef : Ref (Option Scheme),
+    sigNameSetRef : Ref (OrdMap Unit),
+    sigTyMapRef : Ref (OrdMap Ty),
+    implInferEnabled : Ref Bool,
+  }
 
 -- INITIAL construction only (NOT a per-module reset): each field reproduces its former
 -- top-level ref's initial.  The driver/per-module/per-group sites write each field at
@@ -2652,6 +2652,7 @@ freshDriverState : Unit -> DriverState
 freshDriverState _ = DriverState {
   effectDomains = Ref [],
   graphMethodExportsRef = Ref omEmpty,
+  graphIfaceMethodsRef = Ref omEmpty,
   graphCtorExportsRef = Ref omEmpty,
   abstractRecordTypesRef = Ref [],
   argDispatchIdxRef = Ref [],
@@ -21492,41 +21493,54 @@ standaloneShadowsFromSet ifaceSet fnSet prog =
 -- `toList`, `isEmpty`, `orElse`) while `fnSet` holds every top-level fn name in the graph,
 -- so filtering the result is cheap and filtering the operand is not.
 --
+-- ⚠️ THE PREDICATE ASKS A TYPE-NAMESPACE QUESTION, and getting that wrong is how the first
+-- cut of this fix shipped two defects at once — see `graphIfaceMethods` for both, measured.
+-- §1.0's row says `nameable in M` qualifies **S1's INTERFACE operand**; asking instead
+-- whether the METHOD NAME is exported along the import path is a different question that
+-- answers differently in BOTH directions.
+--
 -- 🚨 IT FAILS OPEN, DELIBERATELY, AND THAT DIRECTION IS LOAD-BEARING.  Dropping shadow-hood
 -- from an occurrence that IS one makes it dispatch unconditionally (`recordRLocalSite`'s
 -- `standaloneValuesRef` guard declines, so no pending site exists for
 -- `resolveRLocalSites` to stamp and the route stays the method's RKey) — the S4/#410
 -- class, up to `no impl of method … for type …` on a valid program and a SIGSEGV variant.
 -- Adding shadow-hood is the pre-existing behaviour.  So an ABSENT index answers True for
--- every name rather than False: `graphMethodExportsRef` is written unconditionally at both
+-- every name rather than False: `graphIfaceMethodsRef` is written unconditionally at both
 -- Module-mode driver entries (`checkModulesPreamble`, `elaborateModules` — the conjunction
--- stated in full on `graphMethodExports`), and a driver that ever omits that write must
--- degrade to today's graph-global answer, not to "nothing is a shadow anywhere".
+-- stated in full on `graphMethodExports`, which this ref is written beside), and a driver
+-- that ever omits that write must degrade to today's graph-global answer, not to "nothing
+-- is a shadow anywhere".
 --
--- ⚠️ SCOPE, stated so it is not over-read.  This decides S1's REACHABILITY axis (#1353)
--- only.  It deliberately does NOT apply `usePathBindsName`, A-2.5's member filter: an
--- interface is nameable through an import that never mentions its METHOD name
--- (`import ifc.{Sizeable, Box(..)}` — the shadow corpus's own `i3`), so testing the method
--- spelling against the import's member list would answer False there and drop a shadow the
--- spec grants.  What survives is therefore the EXPORT-VISIBILITY axis (#1302): an import
--- that reaches the declaring module but does not put the interface in scope still passes
--- this test.  S1 treats both failures uniformly, but #1302's grading is explicitly still
--- open (see the S1 clause's own note), so this narrows the axis that is ruled and leaves
--- the axis that is not — which is also the fail-open direction.
+-- ⚠️ SCOPE, stated so it is not over-read.  The predicate is `nameable in M` as §1.0 defines
+-- it, applied to S1's INTERFACE operand — so it covers BOTH failures S1 names, the
+-- reachability one (#1353: no import path reaches the declaring module) and the one where a
+-- path exists but does not carry the interface.  What it does NOT decide is #1302's axis:
+-- `graphIfaceMethods` has no `pub` filter, so a module that imports a dependency BY NAME can
+-- still be told about that dependency's PRIVATE interface.  That is the fail-open direction
+-- and it is left exactly where #1302 and `declMethodIdentsOf`'s F3 already own it.
 nameableIfaceShadows : List Decl -> List String -> List String
 nameableIfaceShadows _ [] = []
 nameableIfaceShadows prog names
   -- fail OPEN on an absent index — see the paragraph above; `names` unchanged is exactly
   -- the pre-#1353 graph-global answer.
-  | omSize driverState.value.graphMethodExportsRef.value == 0 = names
+  | omSize driverState.value.graphIfaceMethodsRef.value == 0 = names
   | otherwise =
     let nameable = nameableIfaceMethodSet prog
     filterList (n => omHasKey n nameable) names
 
--- The bare method names declared by an interface NAMEABLE in module [prog] — S1's three
+-- The bare method names of every interface NAMEABLE in module [prog] — S1's three
 -- nameable-in-`M` positions, built ONCE per module: the implicit prelude (`core`'s row),
--- this module's own interfaces, and every module it imports (whose row already carries
--- what that module re-exports, at any chain depth — S1-CHAIN, #1380).
+-- this module's own interfaces, and, for each `DUse`, the interfaces THAT USE-PATH ADMITS
+-- out of the dependency's row (which already carries what the dependency re-exports, at any
+-- chain depth — S1-CHAIN, #1380).
+--
+-- 🚨 THE USE-PATH FILTER IS THE WHOLE POINT, and its absence was this fix's first defect.
+-- Taking a dependency's WHOLE row on any import makes `import smod.{sf}` — one unrelated
+-- function — enough to make `smod`'s interface "nameable", which it demonstrably is not:
+-- `impl Sizeable Blob` in that module is rejected `Unknown interface: Sizeable`.  That left
+-- #1353 narrowed rather than fixed (its own repro with the bridge hop removed still printed
+-- the impl's value).  `selectIfaceRows` is shared with the re-export side so the import and
+-- chain answers cannot drift apart.
 --
 -- Name-level rather than identity-level ON PURPOSE.  S1's intersection is over NAMES, so
 -- when two interfaces declare `n` and only one is nameable here, `n` is a shadow either
@@ -21535,29 +21549,29 @@ nameableIfaceShadows prog names
 -- a second resolver free to disagree with that one.
 nameableIfaceMethodSet : List Decl -> OrdMap Unit
 nameableIfaceMethodSet prog =
-  addDepRowMethods
-    ("core" :: importedModuleIds prog)
-    (namesToSet (allIfaceMethodNames prog) omEmpty)
+  addImportedIfaceMethods
+    prog
+    (addIfaceRowMethods
+      (fromOption
+        []
+        (omLookup "core" driverState.value.graphIfaceMethodsRef.value))
+      (namesToSet (allIfaceMethodNames prog) omEmpty))
 
-addDepRowMethods : List String -> OrdMap Unit -> OrdMap Unit
-addDepRowMethods [] acc = acc
-addDepRowMethods (dep::rest) acc = addDepRowMethods
+addImportedIfaceMethods : List Decl -> OrdMap Unit -> OrdMap Unit
+addImportedIfaceMethods [] acc = acc
+addImportedIfaceMethods ((DAttrib _ d)::rest) acc =
+  addImportedIfaceMethods rest (addImportedIfaceMethods [d] acc)
+addImportedIfaceMethods ((DUse _ path _)::rest) acc = addImportedIfaceMethods
   rest
-  (match omLookup dep driverState.value.graphMethodExportsRef.value
+  (match omLookup (usePathModuleId path) driverState.value.graphIfaceMethodsRef.value
     None => acc
-    Some es => namesToSet (map fst es) acc)
+    Some src => addIfaceRowMethods (selectIfaceRows path src) acc)
+addImportedIfaceMethods (_::rest) acc = addImportedIfaceMethods rest acc
 
--- the module ids [prog] imports, in declaration order.  Every `DUse` counts, aliased and
--- wildcard included: an alias-qualified occurrence is rewritten to a bare method name by
--- `renameAliasedMethods` before the mark pass runs, so an alias that could not name the
--- interface would drop shadow-hood the alias itself put in scope.
-importedModuleIds : List Decl -> List String
-importedModuleIds [] = []
-importedModuleIds ((DAttrib _ d)::rest) = importedModuleIds [d]
-  ++ importedModuleIds rest
-importedModuleIds ((DUse _ path _)::rest) =
-  usePathModuleId path :: importedModuleIds rest
-importedModuleIds (_::rest) = importedModuleIds rest
+addIfaceRowMethods : List (String, List String) -> OrdMap Unit -> OrdMap Unit
+addIfaceRowMethods [] acc = acc
+addIfaceRowMethods ((_, ms)::rest) acc =
+  addIfaceRowMethods rest (namesToSet ms acc)
 
 -- C5: graph-wide standalone-shadow names — every top-level funDef name in [userDecls]
 -- (the user modules, NOT core) that is also an interface method name anywhere in
@@ -22047,6 +22061,110 @@ reexportedMethodIdentsOf _ _ = []
 reexportRenamed : (String, String) -> List (String, Ident) -> List (String, Ident)
 reexportRenamed (origin, local) src =
   map (e => (local, snd e)) (filterList (e => fst e == origin) src)
+
+-- ── #1354 unit A follow-up: the TYPE-namespace peer of graphMethodExports ────
+-- `mid → [(interface name as this module provides it, that interface's method names)]`,
+-- folded DEPENDENCY-FIRST so an `export import src.{…}` resolves against `src`'s
+-- already-computed row and a >1-hop re-export chain still resolves.  Read only by
+-- `nameableIfaceMethodSet`.
+--
+-- 🚨 WHY THIS EXISTS AND `graphMethodExports` COULD NOT BE REUSED — the defect this fixes.
+-- `SHADOW-SEMANTICS.md` §1.0 says S1's `nameable in M` predicate applies to **S1's
+-- INTERFACE operand** — a TYPE-namespace question, "is this interface one `M` can name?".
+-- The first cut of this fix asked `graphMethodExports` instead, which is a **METHOD**-name
+-- index, and the two disagree in BOTH directions:
+--
+--   * TOO STRICT on a chain.  A re-exporter's row is built by matching the `export import`
+--     member list against METHOD names (`reexportRenamed`), so the ordinary
+--     `export import ifc.{Sizeable}` — re-exporting the interface by its TYPE name —
+--     yielded an EMPTY row and the predicate answered "not nameable" for an interface that
+--     demonstrably is.  MEASURED, two entry files differing by one import line: the direct
+--     import printed `300` and the chained one was REJECTED `Type mismatch: Int vs Box`.
+--     That is exactly what `SHADOW-SEMANTICS.md`'s S1-CHAIN forbids — it says the predicate
+--     "MAY NOT fail closed on chains" and enumerates an implementation satisfied only by a
+--     DIRECT export as **newly NON-CONFORMANT** (#1380).
+--   * TOO LOOSE on one hop.  Any import of the interface's home module admitted that
+--     module's WHOLE method row, so `import smod.{sf}` — which binds one unrelated function
+--     — made `Sizeable` "nameable".  It is not: `impl Sizeable Blob` in that module is
+--     rejected `Unknown interface: Sizeable` (resolve, `UnknownInterface`).  That left
+--     #1353 NARROWED rather than fixed — its own repro with the bridge hop removed.
+--
+-- Both are the same error: answering a method-namespace question where the spec asks a
+-- type-namespace one.  The member test that is WRONG for a method name (an interface is
+-- nameable through an import that never mentions its methods — the corpus's own `i3`,
+-- `import ifc.{Sizeable, Box(..)}`) is exactly RIGHT for the interface name, which is what
+-- `selectIfaceRows` applies on both the import and the re-export side.
+--
+-- ⚠️ IT MUST BE BUILT HERE, NOT TAKEN FROM RESOLVE, even though resolve owns
+-- `UnknownInterface` and already derives module exports.  `stampGraphTyOrigins`' own note
+-- says why: the separate `medaka_emitter` process NEVER RUNS RESOLVE, so a predicate that
+-- consumed resolve's tables would decide differently on `build` than on `check`/`run` — a
+-- manufactured front/back split (#1382).  This is therefore a THIRD derivation of a fact
+-- resolve owns, exactly as `graphMethodExports` is, and it retires at the same place: R /
+-- #1288, whose fix owns the fact and makes typecheck consume it.  Named scaffolding.
+--
+-- ⚠️ NO `pub` FILTER, exactly as `declMethodIdentsOf` has none (F3) — a private interface
+-- contributes a row.  That is the FAIL-OPEN direction for this predicate (it can only ADD
+-- shadow-hood, never remove it), which is the direction `nameableIfaceShadows` argues for.
+--
+-- SAFETY PROPERTY: the conjunction stated in full on `graphMethodExports` — unconditional
+-- whole-value overwrite at every Module-mode driver entry, AND no reset point in between —
+-- applies verbatim, because this ref is written on the same two lines and lives on the same
+-- `DriverState` that `resetCrossModuleState` does not touch.
+graphIfaceMethods : List Decl -> List (String, List Decl) -> OrdMap (List (String, List String))
+graphIfaceMethods coreDecls modules =
+  graphIfaceMethodsGo
+    (omInsert "core" (ifaceMethodRows coreDecls) omEmpty)
+    modules
+
+graphIfaceMethodsGo : OrdMap (List (String, List String)) -> List (String, List Decl) -> OrdMap (List (String, List String))
+graphIfaceMethodsGo acc [] = acc
+graphIfaceMethodsGo acc ((mid, decls)::rest) =
+  graphIfaceMethodsGo
+    (omInsert
+      mid
+      (ifaceMethodRows decls ++ reexportedIfaceMethods acc decls)
+      acc)
+    rest
+
+-- the (interface name, its method names) pairs [decls] DECLARES.
+ifaceMethodRows : List Decl -> List (String, List String)
+ifaceMethodRows decls = flatMap ifaceMethodRowOf decls
+
+ifaceMethodRowOf : Decl -> List (String, List String)
+ifaceMethodRowOf (DAttrib _ d) = ifaceMethodRowOf d
+ifaceMethodRowOf (DInterface { name, methods, ... }) =
+  [(name, ifaceMethodNames methods)]
+ifaceMethodRowOf _ = []
+
+-- the rows a module RE-EXPORTS via `export import src.{…}` (`DUse True`), taken from [acc]
+-- — the dependency's already-folded row, which is what makes a chain of any depth resolve.
+reexportedIfaceMethods : OrdMap (List (String, List String)) -> List Decl -> List (String, List String)
+reexportedIfaceMethods acc decls = flatMap (reexportedIfaceMethodsOf acc) decls
+
+reexportedIfaceMethodsOf : OrdMap (List (String, List String)) -> Decl -> List (String, List String)
+reexportedIfaceMethodsOf acc (DAttrib _ d) = reexportedIfaceMethodsOf acc d
+reexportedIfaceMethodsOf acc (DUse True path _) = match omLookup (usePathModuleId path) acc
+  None => []
+  Some src => selectIfaceRows path src
+reexportedIfaceMethodsOf _ _ = []
+
+-- The rows of [src] a use-path admits INTO THE TYPE NAMESPACE.  One function, used on both
+-- the import side (`nameableIfaceMethodSet`) and the re-export side above, so the two
+-- cannot drift — the drift between them is precisely what F1/F2 were.
+--   * `None` from `importedBindings` is the WILDCARD (`import m.*` / `export import m.*`):
+--     every name the dependency provides, so every row.
+--   * a member list admits the rows it NAMES, matched on the ORIGIN spelling (`fst`), which
+--     is the name the dependency provides the row under.
+--   * `UseAlias` yields `Some []` and so admits NOTHING — correct here rather than merely
+--     conservative: an alias-qualified name in TYPE position is a PARSE ERROR, so an alias
+--     cannot make an interface nameable.  A bare `import m` is `Some []` too, and binds no
+--     names by the same rule (it exists to bring impls into scope, which S2 governs and
+--     this clause explicitly does not).
+selectIfaceRows : UsePath -> List (String, List String) -> List (String, List String)
+selectIfaceRows path src = match importedBindings path
+  None => src
+  Some bs => filterList (r => contains (fst r) (map fst bs)) src
 
 -- ── #1111 A-2.11 (#1319 unit 1): the CONSTRUCTOR peer of graphMethodExports ──
 -- (module id → [(ctor name, owning type name, declaring `Ident`)]), folded dependency-first
@@ -22689,6 +22807,9 @@ checkModulesPreamble runtimeDecls coreDecls modules =
   -- "the wrong question": the two Module-mode driver entries that must carry this line are
   -- `checkModulesPreamble` (here) and `elaborateModules`.
   let _ = setRef driverState.value.graphMethodExportsRef (graphMethodExports coreDecls modules)
+  -- #1354 unit A follow-up: the TYPE-namespace peer, written in LOCKSTEP with the line
+  -- above.  Same graph, same two entries, same safety conjunction — see graphIfaceMethods.
+  let _ = setRef driverState.value.graphIfaceMethodsRef (graphIfaceMethods coreDecls modules)
   -- #1111 A-2.11 (#1319 unit 1): the CONSTRUCTOR peer of the line above, under the
   -- identical two-part property.  Both driver entries carry both lines or neither works.
   let _ = setRef driverState.value.graphCtorExportsRef (graphCtorExports coreDecls modules)
@@ -23103,6 +23224,9 @@ elaborateModules runtimeDecls coreDecls0 modulesIn =
   -- with another `resetCrossModuleState ()`.  This one write covers both ONLY because
   -- the ref is on `driverState`, which that reset does not touch (F1).
   let _ = setRef driverState.value.graphMethodExportsRef (graphMethodExports coreDecls modules)
+  -- #1354 unit A follow-up: the TYPE-namespace peer, written in LOCKSTEP with the line
+  -- above.  Same graph, same two entries, same safety conjunction — see graphIfaceMethods.
+  let _ = setRef driverState.value.graphIfaceMethodsRef (graphIfaceMethods coreDecls modules)
   -- #1111 A-2.11 (#1319 unit 1): the CONSTRUCTOR peer, same placement, same reasoning —
   -- including the two-sweep note above, which it inherits verbatim (same `driverState`).
   let _ = setRef driverState.value.graphCtorExportsRef (graphCtorExports coreDecls modules)

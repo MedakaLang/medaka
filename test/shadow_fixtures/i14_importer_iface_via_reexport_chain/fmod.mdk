@@ -1,0 +1,5 @@
+-- SHADOW-SEMANTICS cell I14 provider 4: the standalone that shadows ifc's method.
+-- Its domain is Int, so it cannot accept a Box -- which is what makes the shadow
+-- decision observable as a verdict rather than only as a value.
+export size : Int -> Int
+size n = n + 1

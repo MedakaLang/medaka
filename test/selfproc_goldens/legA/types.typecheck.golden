@@ -5,8 +5,9 @@ activeDictVarOf : Mono -> Option String
 activeDictVarOfEncl : Mono -> String -> Option String
 addCtor : TcEnv -> String -> Scheme -> TcEnv
 addCtorIdentCand : TcEnv -> String -> TyConOrigin -> String -> (Map String (List (Ident, String, Scheme)), List String) -> (Map String (List (Ident, String, Scheme)), List String)
-addDepRowMethods : List String -> Map String Unit -> Map String Unit
 addFieldOwners : String -> List String -> Map String (List String) -> Map String (List String)
+addIfaceRowMethods : List (String, List String) -> Map String Unit -> Map String Unit
+addImportedIfaceMethods : List Decl -> Map String Unit -> Map String Unit
 addMethodIdentCand : String -> Ident -> (String, List String, Ty, List (String, List Kind)) -> (Map String (List (Ident, (String, List String, Ty, List (String, List Kind)))), List String) -> (Map String (List (Ident, (String, List String, Ty, List (String, List Kind)))), List String)
 addRecordIdentCand : String -> TyConOrigin -> String -> (Map String (List (Ident, String, RecordInfo)), List String) -> (Map String (List (Ident, String, RecordInfo)), List String)
 addVariants : TcEnv -> List (String, Mono) -> List (String, Ref Effvar) -> List Int -> List Int -> Mono -> List Variant -> TcEnv
@@ -615,6 +616,8 @@ goalSiteLoc : Ref (Option Loc)
 goalsClosed : List Mono -> Bool
 graphCtorExports : List Decl -> List (String, List Decl) -> Map String (List (String, String, Ident))
 graphCtorExportsGo : Map String (List (String, String, Ident)) -> List (String, List Decl) -> Map String (List (String, String, Ident))
+graphIfaceMethods : List Decl -> List (String, List Decl) -> Map String (List (String, List String))
+graphIfaceMethodsGo : Map String (List (String, List String)) -> List (String, List Decl) -> Map String (List (String, List String))
 graphMethodExports : List Decl -> List (String, List Decl) -> Map String (List (String, Ident))
 graphMethodExportsGo : Map String (List (String, Ident)) -> List (String, List Decl) -> Map String (List (String, Ident))
 groundMultiParamObligations : List Decl -> List (String, List String, Ty, Mono, Option Loc) -> Unit
@@ -672,6 +675,8 @@ ifaceFromDictApps : Int -> List (Ref (List Route), List Mono, List String, List 
 ifaceMethodIdentPair : TyConOrigin -> IfaceMethod -> List (String, Ident)
 ifaceMethodName : String -> Bool
 ifaceMethodNames : List IfaceMethod -> List String
+ifaceMethodRowOf : Decl -> List (String, List String)
+ifaceMethodRows : List Decl -> List (String, List String)
 ifaceMethodSchemes : List Decl -> List (String, Scheme)
 ifaceMethodTy : List Decl -> String -> String -> Option (List String, Ty, List (String, List Kind))
 ifaceMethodTyResolved : List Decl -> String -> String -> Option (List String, Ty, List (String, List Kind))
@@ -732,7 +737,6 @@ importedBindings : UsePath -> Option (List (String, String))
 importedCtorEntry : List Decl -> String -> List (Ident, String, Scheme) -> Option Scheme
 importedCtorTypeDecls : List Decl -> List Decl -> List Decl
 importedMethodEntry : List Decl -> String -> List (Ident, (String, List String, Ty, List (String, List Kind))) -> Option (String, List String, Ty, List (String, List Kind))
-importedModuleIds : List Decl -> List String
 importedRecordEntry : List Decl -> String -> List (Ident, String, RecordInfo) -> Option RecordInfo
 importedSchemeOblEntries : List Decl -> List ((String, String), List (String, List Int)) -> List (String, List (String, List Int))
 importerShadowDomain : String -> Option Mono
@@ -1229,6 +1233,8 @@ reexportSchemeOblEntries : List Decl -> List ((String, String), List (String, Li
 reexportSeed : List (String, Scheme) -> List Decl -> List (String, List (String, Scheme)) -> List (String, Scheme)
 reexportedCtorIdents : Map String (List (String, String, Ident)) -> List Decl -> List (String, String, Ident)
 reexportedCtorIdentsOf : Map String (List (String, String, Ident)) -> Decl -> List (String, String, Ident)
+reexportedIfaceMethods : Map String (List (String, List String)) -> List Decl -> List (String, List String)
+reexportedIfaceMethodsOf : Map String (List (String, List String)) -> Decl -> List (String, List String)
 reexportedMethodIdents : Map String (List (String, Ident)) -> List Decl -> List (String, Ident)
 reexportedMethodIdentsOf : Map String (List (String, Ident)) -> Decl -> List (String, Ident)
 reexportedMethodNames : List (String, List String) -> List Decl -> List String
@@ -1378,6 +1384,7 @@ seedAlphaLets : TcEnv -> String -> Expr -> TcEnv
 seedAndCheckSplit : List Decl -> List Decl -> List Decl -> List (String, Scheme)
 seedCheckRun : List Decl -> Unit
 seedEffectDomains : Unit -> Unit
+selectIfaceRows : UsePath -> List (String, List String) -> List (String, List String)
 selectImplEntryByIface : Map String (List KeyEntry) -> String -> List Mono -> Option KeyEntry
 selectReqImpl : Map String (List KeyEntry) -> Map String (List ImplEntry) -> String -> String -> Mono -> List Mono -> Option (Ty, List Ty, List Require)
 selfBinding : String -> (String, String)

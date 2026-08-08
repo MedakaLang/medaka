@@ -1,0 +1,13 @@
+-- SHADOW-SEMANTICS cell I15's second row, graded separately by this gate: the BARE-IMPORT
+-- spelling of the same cell. A bare `import smod` binds NO names at all (its job is to
+-- bring impls into scope for dispatch, which S2 governs and S1 does not), so `Sizeable` is
+-- not nameable here either and the answer must match main.mdk's.
+--
+-- It is a distinct row because it takes a distinct arm of the predicate: `import smod.{sf}`
+-- is a member list that names no interface, while a bare `import smod` yields an EMPTY
+-- member list. A filter that special-cased the empty list -- e.g. read it as "binds
+-- everything", the way a wildcard legitimately is -- would pass main.mdk and fail here.
+import fmod.{size}
+import smod
+
+main = println (size "abc")
