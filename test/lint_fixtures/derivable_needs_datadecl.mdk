@@ -1,6 +1,12 @@
 -- rule-hand-rolled-derivable now requires the impl's type to have a
 -- `data`/`record` declaration (with constructors) VISIBLE in the linted file —
 -- otherwise `deriving` isn't even available for it.
+--
+-- ⚠️ LOAD-BEARING (#1112 A-3): the `impl Eq Int`/`impl Ord String` cases below
+-- are also the ONLY fixtures in the tree asserting that a user impl α-equal to
+-- a prelude impl stays ACCEPTED (not rejected). This lives in `lint_fixtures/`
+-- for the lint assertion, but do not delete it as a lint tidy-up — it is
+-- soundness coverage for the A-3 stage with no other home.
 
 -- NEGATIVE: `Int` is a primitive with no `data` decl → deriving is impossible →
 -- does NOT fire (this used to be a false positive).

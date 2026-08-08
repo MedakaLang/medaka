@@ -262,8 +262,13 @@ keyed by qualified identity, **assembled once and never per-module**:
 
 **Why whole-graph is load-bearing, not a style choice.** C4 (single instance
 environment) and I2 (global `IE` after import resolution) are *spec clauses*.
-The current architecture approximates them by marshalling 14-cell universe
-snapshots per module (`loadDataUniverse`/`storeDataUniverse`/
+The current architecture approximates them by marshalling per-module universe
+snapshots — the cells are the `universe*`/`obUniv*` fields on the driver
+record; derive the count rather than trust a number here (23 as of this
+writing):
+`grep -rn '^\s*universe[A-Za-z0-9_]* *:' compiler/ stdlib/ | grep -v '\.md:'`
+plus `grep -rn '^\s*obUniv[A-Za-z0-9_]* *:' compiler/ --include=*.mdk`
+(`loadDataUniverse`/`storeDataUniverse`/
 `appendUniverseAccums`) — and the approximation is exactly where #1072 lives:
 a site's module sees only its own slice of `IE`, concludes there is no
 collision at a head, and stamps a bare-head key that the emitter then ORs into
@@ -1201,9 +1206,11 @@ orders merges, and the plan does not pretend otherwise.
   since every existing fixture for this channel covers the rejecting case.*
 - **A-3. Whole-graph declaration analysis (K) — honest scope.** Build
   CE/IE/DataEnv once; the **Module path** reads K; the Flat fallback keeps a
-  marshalling **shim** (the 14-cell retirement completes at E-4, whose path is
-  the marshalling's only remaining consumer — teaching the fallback to read K
-  would mean editing the 20 mode branches E-2 deletes anyway). Impl
+  marshalling **shim** (the retirement of the universe-marshalling cells —
+  see §2 K above for how to derive their count rather than trust a bare
+  number — completes at E-4, whose path is the marshalling's only remaining
+  consumer — teaching the fallback to read K would mean editing the 20 mode
+  branches E-2 deletes anyway). Impl
   completeness + kind checks move to declaration time (**coordinate with #822**,
   which owns the kind machinery — one of the two arcs rewrites it, not both).
   Error-*ordering* golden drift is enumerated per family (this stage is

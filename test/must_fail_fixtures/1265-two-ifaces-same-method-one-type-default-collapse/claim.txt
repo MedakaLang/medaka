@@ -22,15 +22,25 @@ what: THE IDENTITY IS PRESENT AND CORRECT -- it is the KEY that has no room for 
 what: `test/bin/core_ir_typed_modules_dump_main` on this fixture prints BOTH:
 what:   CImplEntry "speak" 1 (CImplDefault "ifa::Speak" (PWild) (CLit (LString "A-default")...
 what:   CImplEntry "speak" 1 (CImplDefault "ifb::Greet" (PWild) (CLit (LString "B-default")...
-what: FIX SITES -- THREE, IN LOCKSTEP. `narrowDefaults`/`defaultOwnedBy`
-what: (compiler/backend/llvm_emit.mdk:1321-1327), `narrowDefaultsW`/`defaultOwnedByW`
-what: (compiler/backend/wasm_emit.mdk:4502-4508), `pickDefaultCand`/`ownDefault`/
-what: `oneOnly` (compiler/eval/eval.mdk:1045-1070), all reading `ifaceIdsAtTag`
-what: (compiler/ir/core_ir_lower.mdk:1233-1240) / `ifaceIdsAtTagE`
-what: (compiler/eval/eval.mdk:310-317). The real fix is to put the interface identity
-what: in the SYMBOL/KEY (`defaultFnName`, llvm_emit.mdk:1342; `defaultFnNameW`,
-what: wasm_emit.mdk:4516; eval's `defaultCellName`), not just in the candidate filter:
-what: filtering harder cannot help when two bodies share one name.
+what: CANDIDATE FIX SITES -- THREE, IN LOCKSTEP, BUT NOT SELF-CONTAINED.
+what: `narrowDefaults`/`defaultOwnedBy` (compiler/backend/llvm_emit.mdk:1321-1327),
+what: `narrowDefaultsW`/`defaultOwnedByW` (compiler/backend/wasm_emit.mdk:4502-4508),
+what: `pickDefaultCand`/`ownDefault`/`oneOnly` (compiler/eval/eval.mdk:1045-1070), all
+what: reading `ifaceIdsAtTag` (compiler/ir/core_ir_lower.mdk:1233-1240) /
+what: `ifaceIdsAtTagE` (compiler/eval/eval.mdk:310-317). Putting the interface
+what: identity in the SYMBOL/KEY (`defaultFnName`, llvm_emit.mdk:1342;
+what: `defaultFnNameW`, wasm_emit.mdk:4516; eval's `defaultCellName`) is NECESSARY but
+what: NOT SUFFICIENT on its own -- by the time execution reaches these three sites
+what: there is no interface identity left in hand to key with: `Route`
+what: (compiler/frontend/ast.mdk) is `RKey String (List Route)`, `CMethod`
+what: (compiler/ir/core_ir.mdk) is `CMethod String Route (List Route) (List Route)`,
+what: `EMethodRef` (compiler/frontend/ast.mdk) is `EMethodRef String`, and `markVar`
+what: (compiler/frontend/marker.mdk) tests membership in an `OrdMap Unit` of bare
+what: method names -- none of them carry an interface component. A real fix has to
+what: thread an interface identity through that upstream machinery first; filtering
+what: harder at the three candidate sites above cannot help when two bodies share
+what: one name and nothing arriving at the filter can tell them apart. See #1265,
+what: which now carries this evidence in full.
 what: ⚠️ ON A DRAIN, RE-CHECK ALL THREE ENGINES BEFORE CLOSING #1265. This row grades
 what: `run` (eval) only -- one verb can grade one engine -- and the three sites above
 what: are three separate pieces of code that a partial fix can move independently.
