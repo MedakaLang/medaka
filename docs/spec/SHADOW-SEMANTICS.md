@@ -382,19 +382,35 @@ Given an occurrence of bare name `N` in module `M`:
   > namespaces. (5) Admitting a whole interface row because a member list names **one of
   > its methods**.
   >
-  > **Newly ACCEPTED / a DIFFERENT VALUE.** Exactly ONE shape changes value against the
-  > pre-ruling compiler: an **importer** shadow whose interface is reachable only by naming
-  > a *sibling* method loses shadow-hood, so a receiver inside the standalone's domain
-  > answers with the imported standalone rather than the impl (777 → 42). That is
-  > S1-SCOPE's acceptance narrowing reaching its **silent** half, and it is the cost this
-  > clause charges itself. Corpus: `test/shadow_fixtures/i19_importer_sibling_method_silent/`.
+  > **Newly ACCEPTED / a DIFFERENT VALUE.** 🚨 **Read the BASELINE before the count — this
+  > paragraph used two different ones in four lines.** Every figure below is against the
+  > **merge base of the PR that landed S1-NS** (`main` at `61aa6399`; `compiler/types/
+  > typecheck.mdk` is byte-identical there and at `b5f8c489`, the base that PR was cut
+  > from). That is the only referent still reconstructable once the PR is merged, so an
+  > intra-PR baseline — "before this round's filter", "the state that shipped per-row
+  > admission" — must never be spelled *pre-ruling compiler*, which is what an earlier
+  > revision did on one side of this paragraph and not the other.
+  >
+  > **Of the shapes S1-NS itself governs, exactly ONE changes value against that base:** an
+  > **importer** shadow whose interface is reachable only by naming a *sibling* method loses
+  > shadow-hood, so a receiver inside the standalone's domain answers with the imported
+  > standalone rather than the impl (777 → 42). That is S1-SCOPE's acceptance narrowing
+  > reaching its **silent** half, and it is the cost this clause charges itself. Corpus:
+  > `test/shadow_fixtures/i19_importer_sibling_method_silent/`.
   >
   > ⚠️ **Measured, and stated because an earlier draft of this paragraph over-claimed.**
   > The definer twin (`d23_definer_sibling_method_silent/`) and the method-name re-export
-  > chain (`i20_importer_method_reexport_chain/`) are **42/42 and 50/50** on the pre-ruling
-  > compiler and after: they pin shapes the ruling makes *unrepresentable*, not values it
+  > chain (`i20_importer_method_reexport_chain/`) are **42/42 and 50/50** against that same
+  > base and after: they pin shapes the ruling makes *unrepresentable*, not values it
   > changes. Citing all three as "newly different" reads as three behaviour changes where
   > there is one.
+  >
+  > ⚠️ **"ONE shape" is scoped to S1-NS, NOT to the PR that carried it.** S1-SCOPE (#1375)
+  > landed in the same PR and moves considerably more against the same base — `i12` (7 → 99),
+  > `i13` (ACCEPT 300 → located REJECT), `i15` (7 → 99), `i17/main.mdk` (7 → 99),
+  > `i17/order-swapped.mdk` (REJECT → ACCEPT 99), plus `i19` above. This list is a floor and
+  > a pointer, not a census: re-derive it by building the base and re-running
+  > `test/diff_compiler_shadow_semantics.sh` rather than by trusting a count written here.
   >
   > **Explicitly NOT changed:** S2's graph-global impl universe (`DICT-SEMANTICS.md` §8
   > I5). S1-NS constrains a set of NAMES; it cannot narrow an instance environment.
@@ -1167,10 +1183,10 @@ Line numbers at `cfc4fa5a`.
 
 | Clause | Stage / site | What it enforces | **Keying assumption** |
 |---|---|---|---|
-| S1 detect (run/check, definer) | 🔴 **STALE — re-verified 2026-08-07, wrong on the Module path.** `buildDefinerShadows` is the FLAT-path function; on the MODULE (multi-module) path the reader is `definerShadowsFromSet`, keyed on `crossRun.value.universeIfaceMethodsRef` (grown by `appendUniverseAccums` → `allIfaceMethodNames`) — not the symbols or line numbers this cell names. Line numbers are additionally untrusted per this table's own preamble | this module's funDefs that name a method | **bare-name intersection, but NOT via `accData`/`publicDataDecls` — those are DEAD on the Module path** (`fullUniverse` binds `[]` there; an in-source comment calls the old accData concat "a dead per-module O(N) concat"). The real feeder, `allIfaceMethodNames`, has **no `pub` filter** (sees a private interface's methods too — the opposite of what "public decls" implies) and is accumulated **cumulatively in the loader's dependency-first topological order**, not filtered by import reachability — the same shape as `DICT-SEMANTICS.md` §8 I5's "PARTIAL — cumulative, not global" row for the impl universe. This is the mechanism behind #1375's reachability axis; see row-14 BUG |
+| S1 detect (run/check, definer) | 🔴 **STALE — re-verified 2026-08-07, wrong on the Module path.** `buildDefinerShadows` is the FLAT-path function; on the MODULE (multi-module) path the reader is `definerShadowsFromSet`, keyed on `crossRun.value.universeIfaceMethodsRef` (grown by `appendUniverseAccums` → `allIfaceMethodNames`) — not the symbols or line numbers this cell names. Line numbers are additionally untrusted per this table's own preamble | this module's funDefs that name a method | **bare-name intersection, but NOT via `accData`/`publicDataDecls` — those are DEAD on the Module path** (`fullUniverse` binds `[]` there; an in-source comment calls the old accData concat "a dead per-module O(N) concat"). The real feeder, `allIfaceMethodNames`, has **no `pub` filter** (sees a private interface's methods too — the opposite of what "public decls" implies) and is accumulated **cumulatively in the loader's dependency-first topological order**, not filtered by import reachability — the same shape as `DICT-SEMANTICS.md` §8 I5's "PARTIAL — cumulative, not global" row for the impl universe. This is the mechanism behind #1375's reachability axis; see row-14 BUG. ⚠️ **The FEEDER is still unfiltered; the RESULT no longer is (S1-NS / #1353, 2026-08-08).** `checkBodyImpl` now wraps *both* `definerShadowsFromSet` and `standaloneShadowsFromSet` in `nameableIfaceShadows`, which intersects the answer with `nameableIfaceMethodSet` — the methods of the interfaces that module can NAME. So this cell describes the operand, not the answer |
 | S1 detect (run/check, importer) | `typecheck.mdk:17020` `buildStandaloneShadowsGraph` | imported standalones shadowing a method | imported funDef names minus local names, methods scanned across `implDecls ++ prog` (the `cfc4fa5a` fix: LOCAL interfaces included) |
 | S1 detect (build path) | `typecheck.mdk:11475` `computeMangledShadowMap` + `unitMangledShadows:11480`, set once at `elaborateModules:11932` (`mangledShadowMapRef`); consumed by `buildDefinerShadows:11460` and `buildStandaloneShadowsGraph:11487-11497` | recover shadows AFTER mangling renamed the standalone | **forward-constructs `mangledName mid m`** per (module, method) and checks it against actual funDefs — exact, not prefix-stripping; empty map on the un-mangled path (inert) |
-| S1 mark | `typecheck.mdk:11942` `markRpNames` (∪ `buildStandaloneShadowsGraph`) → `prePassDictArg`/`prePassModulePairArg:11943-11944` rewrite occurrences to `EMethodAt` | occurrences get a route ref | graph-wide name set over USER modules (core excluded) |
+| S1 mark | `typecheck.mdk:11942` `markRpNames` (∪ `buildStandaloneShadowsGraph`) → `prePassDictArg`/`prePassModulePairArg:11943-11944` rewrite occurrences to `EMethodAt` | occurrences get a route ref | graph-wide name set over USER modules (core excluded). ⚠️ **NO LONGER graph-wide on the Module path (S1-NS / #1353, 2026-08-08).** `markRpNames` is still what `core` is marked with, but each USER module goes through `prePassModulePairArg`, which filters four of its five inputs — `rpNames`, the graph shadow set (through `shadowBareName`), `argNames` and `shadowMap` — to `nameableIfaceMethodSet` for *that* module. `dictNames` is the one input left unfiltered, and is not an input to dispatch (it yields `EDictAt`) |
 | (enabler of the S1 build split) | `compiler/backend/private_mangle.mdk`: `mangleUnits:117`, `buildUnitRenameMap:372`, `renameDecl` DFunDef `~578` + `renameScoped` EVar `~651` rename the standalone def + refs to `<mid>__N`; `renameIfaceMethod:626`/`renameImplMethod:636` leave the method **NAME bare** (header `:34-46`: dispatch is by bare name cross-module) | collision-free private symbols | **the asymmetry**: standalone side mangled, method side bare — which is exactly what defeated name-intersection detection (bug `0b4a7882`); driver order `compiler/entries/entry_support.mdk:133-134` (`runEmitWith`) and `:145-146` (`emitModulesWith`): mangle STRICTLY before mark |
 | S2 type + record (definer) | app-head peel → `definerShadowArgHead` (definer disjunct gated `ifaceMethodName`, fires on `definerShadowNamesRef`; importer-on-emit disjunct gated `singleTyparamIfaceMethod`, fires on a mark-seeded `RLocal sym` — the cross-module emit signal) → `inferDefinerShadowApp` + `definerShadowHeadType`. The un-marked `check` path peels via `definerShadowVarHead` → `inferDefinerShadowVarApp`. **`definerReceiverDispatches` is the single decision point** | **[CHANGED — THE INVERSION]** a definer shadow types against the STANDALONE scheme, **always** (via the mangled sym on build — the scheme-selection SIGSEGV fix); `enforceStandaloneDomain` then imposes its declared domain, so a live-impl receiver is a located reject. The only dispatch arm left is S5's dict-bound receiver | ⚠️ **`definerShadowArgHead` fires for IMPORTER shadows too** — its `routeLocalSym != ""` arm is the cross-module emit signal, so `inferDefinerShadowApp` serves BOTH kinds on the mangled path. "Did we reach this function" is therefore **NOT** the same question as "is this a definer shadow": `definerReceiverDispatches` must re-ask it via `isDefinerShadow` (`definerShadowNamesRef` never holds an imported standalone) or the inversion leaks onto importers and breaks `import map` |
 | S2 type + record (importer) | `typecheck.mdk:4950` `shadowStandaloneHead` → `inferShadowApp:4979`; standalone schemes stashed in `shadowStandaloneSchemesRef` (`checkModuleFullImpl:11210`, concrete-head pick); impl query table `shadowKeyTableRef` (`:11217`, includes LOCAL impls per `cfc4fa5a`) | live-impl head ⇒ ordinary app (dispatch); else instantiate the IMPORTED standalone scheme + stamp `RLocal` | standalone scheme = the seedVars entry whose first arrow domain has a **concrete head tycon** (never the poly method scheme) |

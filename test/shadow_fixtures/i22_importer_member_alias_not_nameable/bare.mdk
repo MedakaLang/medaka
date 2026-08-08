@@ -8,9 +8,14 @@
 --
 -- The pair is what makes i22 a defect report rather than a captured golden: one number
 -- alone could be argued to be intended, but two spellings with the same admission and
--- different answers cannot both be right. When the VALUE arm is re-keyed on the LOCAL
--- spelling, main.mdk moves to 99 and joins this row; until then this row is also the proof
--- that the correct value is reachable rather than hypothetical.
+-- different answers cannot both be right. Under a genuine fix main.mdk moves to 99 and
+-- joins this row; until then this row is also the proof that the correct value is reachable
+-- rather than hypothetical.
+--
+-- ⚠️ This header used to name that fix as "re-keying the VALUE arm on the LOCAL spelling".
+-- That was measured INERT -- see main.mdk's own header for why (the import is de-aliased
+-- upstream of `selectIfaceRows` on the run/build path) -- so do not treat it as the
+-- remaining step.
 import fmod.{size}
 import ifc
 

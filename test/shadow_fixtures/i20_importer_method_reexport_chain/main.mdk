@@ -11,6 +11,12 @@
 -- is enumerated NON-CONFORMANT by S1-NS -- the fourth independent namespace guess, at the one
 -- site nobody had counted.
 --
+-- ⚠️ BASELINE, stated so "was live on this PR" is not read as "was broken on main": the
+-- MERGE BASE prints 50 here too. This cell guards a regression an intermediate state of that
+-- PR introduced -- it pins a shape the ruling makes UNREPRESENTABLE, not a value the ruling
+-- changes. Of the three S1-NS cells (i19, d23, i20) only i19 differs from the merge base
+-- (777 -> 42); d23 is 42/42 and this one is 50/50 either side.
+--
 -- The `impl Sizeable Int` is load-bearing: a PRIMITIVE receiver is what turns the missing
 -- mark into a panic rather than a silently different route, because a primitive carries no
 -- cell tag for arg-tag dispatch to read.

@@ -6,10 +6,29 @@
 -- It cannot write `size` for it at all. So `size` here unambiguously denotes the
 -- standalone imported from `fmod`, and the correct answer is 99. It prints 7.
 --
--- CAUSE, and it is one token: `selectIfaceRows` narrows by the member ORIGIN spelling
--- (`map fst bs`), so `{size as sz}` admits `size` -- the name in the DEPENDENCY -- rather
--- than `sz`, the name this module can call. The fix is to key the VALUE arm on `snd` while
--- the TYPE arm keeps `fst`.
+-- MECHANISM: `selectIfaceRows` narrows by the member ORIGIN spelling (`map fst bs`), so
+-- `{size as sz}` admits `size` -- the name in the DEPENDENCY -- rather than `sz`, the name
+-- this module can call.
+--
+-- 🚨 THE FIX SHAPE IS NOT KNOWN, AND THE OBVIOUS ONE IS INERT. This header used to end
+-- "the fix is one token: key the VALUE arm on `snd` while the TYPE arm keeps `fst`". That
+-- change cannot move this file's answer, and it is DERIVABLE without building anything:
+--
+--     grep -n 'renameAliasedMethods \|graphIfaceMethods coreDecls' compiler/types/typecheck.mdk
+--
+-- `renameAliasedMethods` has exactly one call site, in `elaborateModules`, and it runs
+-- BEFORE that driver writes `graphIfaceMethodsRef` and before the mark pass. It applies
+-- `deAliasMethodImports`, which rewrites `import ifc.{size as sz}` into `import ifc.{size}`
+-- -- so by the time `selectIfaceRows` runs on the run/build path, `snd b == fst b` for every
+-- member and the two keyings are the same expression. A reviewer implemented the one-token
+-- change, rebuilt, and measured this file still at 7, which is what the derivation predicts.
+-- (The `check` path does not de-alias, so re-keying would move that arm alone -- a
+-- `check`/`run` split, not a fix.) A real fix spans at least those two functions and is a
+-- design question: not de-aliasing breaks aliased method CALLS outright, which is why
+-- `deAliasMethodImports` exists at all. A DOCUMENTED FIX SHAPE THAT IS INERT IS WORSE THAN
+-- NONE -- the next person implements it, sees nothing move, and looks for the defect
+-- somewhere else. The PINNED VALUES below are correct and this cell is verified
+-- fail-capable: under a genuine fix main.mdk moves 7 -> 99 while bare.mdk stays 99.
 --
 -- ⚠️ NOT A REGRESSION, AND THAT IS WHY IT IS PINNED RATHER THAN FIXED HERE. The base
 -- compiler prints 7 too -- the member-alias arm is exactly where this unit changes nothing.

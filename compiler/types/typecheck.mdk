@@ -21550,8 +21550,13 @@ nameableIfaceShadows prog names
 -- a second resolver free to disagree with that one.
 --
 -- 🔒 THIS IS S1's RIGHT OPERAND UNDER S1-NS (RULED 2026-08-08), and it is the ONLY predicate
--- in the compiler that answers it — `checkBodyImpl`'s shadow-hood and all three of the mark
--- pass's filters read THIS set.  S1-NS (b) requires shadow-hood to be a superset of dispatch
+-- in the compiler that answers it — `checkBodyImpl`'s shadow-hood and EVERY filter in the
+-- mark pass read THIS set.  Named rather than counted, because a count rots silently and
+-- this sentence already did (it said "all three" for a week after `rpNames` became the
+-- fourth): `prePassModulePairArg` filters `rpNames`, `shadowNames` (through
+-- `shadowBareName`), `argNames` and `shadowMap` — its own `otherwise` arm enumerates them
+-- against what `rewriteArgScoped` can turn into an `EMethodAt`.  S1-NS (b) requires
+-- shadow-hood to be a superset of dispatch
 -- eligibility and rules two different predicates at the two sites non-conformant; one set
 -- makes them equal, so the invariant holds by construction rather than by test.  Do not
 -- introduce a second, wider set for marking: two earlier cuts of this unit did exactly that
@@ -22180,6 +22185,13 @@ reexportedIfaceMethodsOf _ _ = []
 --   * MEMBER LIST — the TYPE arm admits the WHOLE row when the list names the interface `I`
 --     (an author who can write `impl I T` can write every method of `I`); otherwise the
 --     VALUE arm admits ONLY the methods the list actually names.
+--   * BARE (`import m`) or DOTTED (`import a.b.n`) — `importedBindings` answers `Some []` for
+--     the bare form, so the member list is EMPTY and admits NOTHING.  Stated because the
+--     three bullets above read as an exhaustive enumeration and this is the fourth arm:
+--     reading an empty member list as "binds everything" (the way a wildcard legitimately is
+--     read) is a real mistake, and `i15_importer_iface_one_hop_unbound/bare.mdk` exists to
+--     catch it.  A bare import brings IMPLS into scope, which S2 governs; it binds no NAMES,
+--     which is all S1 asks about.
 --
 -- 🚨 PER METHOD, NOT PER ROW, and this is measured rather than stylistic: `import ifc.{tag}`
 -- leaves a sibling method UNBOUND (*"Unbound variable: size. (Did you forget to
@@ -22220,11 +22232,31 @@ selectIfaceRows path src = match importedBindings path
 -- denotes `fmod`'s standalone.
 --
 -- NOT FIXED HERE, deliberately.  It is NOT a regression — base prints 7 too, so the alias arm
--- is exactly where this unit changes nothing — and re-keying the VALUE arm on `snd` is a
--- behaviour change on a fresh axis that no ruling has been written for.  Pinned instead, so
--- it self-drains: `test/shadow_fixtures/i22_importer_member_alias_not_nameable/`.  The fix
--- shape when it is taken: key the VALUE arm on `snd` (the LOCAL spelling) while the TYPE arm
--- keeps `fst`.
+-- is exactly where this unit changes nothing — and any fix is a behaviour change on a fresh
+-- axis that no ruling has been written for.  Pinned instead, so it self-drains:
+-- `test/shadow_fixtures/i22_importer_member_alias_not_nameable/`.
+--
+-- 🚨 THE FIX SHAPE IS NOT KNOWN, AND THE OBVIOUS ONE IS INERT.  This note used to end *"the
+-- fix shape when it is taken: key the VALUE arm on `snd` (the LOCAL spelling) while the TYPE
+-- arm keeps `fst`"*.  It cannot move the run/build answer, and that is DERIVABLE from this
+-- file without building anything — grep the two call sites and read the order:
+--
+--     grep -n 'renameAliasedMethods \|graphIfaceMethods coreDecls' compiler/types/typecheck.mdk
+--
+-- `renameAliasedMethods` has exactly ONE call site, in `elaborateModules`, and it runs
+-- BEFORE that driver writes `graphIfaceMethodsRef` and before the mark pass.  It applies
+-- `deAliasMethodImports`, whose whole job (b) is rewriting `import ifc.{size as sz}` into
+-- `import ifc.{size}` — the alias is dropped because a method is global-by-name.  So by the
+-- time `selectIfaceRows` runs on that path, `snd b == fst b` for every member and the two
+-- keyings are literally the SAME EXPRESSION.  A reviewer implemented the one-token change,
+-- rebuilt, and measured `i22/main.mdk` still at **7** — which is what the derivation
+-- predicts.  (The `check` path does NOT de-alias, having no `renameAliasedMethods` call, so
+-- re-keying WOULD move that arm alone.  That is a `check`≠`run` split, not a fix.)  A real
+-- fix therefore spans at least those two functions and is a design question, because simply
+-- not de-aliasing breaks aliased method CALLS outright, which is the whole reason
+-- `deAliasMethodImports` exists.
+-- A DOCUMENTED FIX SHAPE THAT IS INERT IS WORSE THAN NONE: the next person implements it,
+-- sees nothing move, and concludes the defect is somewhere else.
 narrowRowToNamed : List String -> (String, List String) -> List (String, List String)
 narrowRowToNamed named r
   | contains (fst r) named = [r]
@@ -23870,10 +23902,18 @@ prePassModulePair rpNames (mid, prog) = (mid, prePassDict rpNames [] prog)
 -- and testing a mangled symbol against a set of METHOD names would answer False for every
 -- legitimate shadow.
 --
--- [dictNames] is NOT filtered: those are `=>`-constrained FUNCTION names, not interface
--- methods, and dropping one under-applies a dict-passed callee (`unbound identifier:
--- $dict_…`) — the Phase-134 shape.  [rpNames] is not filtered either; see the split at
--- `markSharedNames`.
+-- [dictNames] is the ONE input NOT filtered: those are `=>`-constrained FUNCTION names, not
+-- interface methods, and dropping one under-applies a dict-passed callee (`unbound
+-- identifier: $dict_…`) — the Phase-134 shape.
+--
+-- ⚠️ [rpNames] **IS** FILTERED, by the same predicate as everything else here — read the
+-- `otherwise` arm below, which is four `filterList`s and one bare `dictNames`.  The split
+-- that makes the per-module filter possible is at `markSharedNames`.  This paragraph read
+-- *"[rpNames] is not filtered either"* until 2026-08-08: introduced and falsified by the
+-- same PR, and then missed by the very commit whose job was retiring that claim at its
+-- sibling site.  It was the THIRD copy of the sentence.  Nothing in this tree links a claim
+-- to the code it describes, so when one of these turns out to be false, check the SET of
+-- sites that assert it — not the one you were handed.
 prePassModulePairArg : List String -> List String -> List String -> List String -> List (String, String) -> (String, List Decl) -> (String, List Decl)
 prePassModulePairArg rpNames shadowNames dictNames argNames shadowMap (mid, prog)
   -- fail OPEN when the graph index is absent, for the reason stated on
