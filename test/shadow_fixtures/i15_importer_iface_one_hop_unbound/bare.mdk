@@ -7,6 +7,14 @@
 -- is a member list that names no interface, while a bare `import smod` yields an EMPTY
 -- member list. A filter that special-cased the empty list -- e.g. read it as "binds
 -- everything", the way a wildcard legitimately is -- would pass main.mdk and fail here.
+--
+-- 🚨 THAT IS NOT HYPOTHETICAL, AND THIS ROW IS THE LOCK ON IT. A module ALIAS
+-- (`import m as A`) also yields an empty member list, and it MUST admit the whole row --
+-- an alias cannot name a type but `A.mth` is a legal call, and dropping it regressed
+-- #1277, a closed S0, from (1, 2) to (1, 1) at exit 0. The correct fix distinguishes the
+-- two by matching the use-path CONSTRUCTOR, not by relaxing the empty-list case. If a
+-- later change takes the shorter route and special-cases `Some []`, #1277 stays green and
+-- THIS row is what goes red.
 import fmod.{size}
 import smod
 
