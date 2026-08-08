@@ -1,0 +1,6 @@
+-- #1326 Repro B: the constrained `h` reaches the module graph through HERE, so the entry
+-- never writes the name `psmod` anywhere. Merely being in the import graph was enough.
+import psmod.{h}
+
+export viaP : Display a => a -> String
+viaP n = h n

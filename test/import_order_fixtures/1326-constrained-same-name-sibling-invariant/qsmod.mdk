@@ -1,0 +1,4 @@
+-- #1326: the UNCONSTRAINED half. Same bare name `h`, no context, a different module, no
+-- relationship to psmod.mdk whatsoever. This is the binding the entry actually calls.
+export h : a -> a
+h x = x

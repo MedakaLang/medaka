@@ -1,0 +1,9 @@
+import midmod.{viaP}
+import qsmod.{h}
+
+data NoDisp = NoDisp
+
+tag : NoDisp -> String
+tag _ = "ok"
+
+main = println "\{tag (h NoDisp)} / \{viaP 5}"

@@ -1,0 +1,23 @@
+-- #1369 REGRESSION GUARD. A legal, SATISFIABLE call to a binding whose `Num a =>` context
+-- is DECLARED and which is reached through `export import` got NO dictionary at the call
+-- site: `check` exited 0, `medaka build` exited 0 and the native binary printed the right
+-- answer, and `medaka run` panicked `intToString: not an Int` -- dict UNDER-application,
+-- not a type error. Three verbs, three different answers.
+--
+-- ⚠️ ONLY THIS GATE CAN SEE IT. A corpus that grades `check` output is blind (check was
+-- green); a corpus that grades the built binary is blind (the emit path re-seeds its
+-- arity table from the bare cross-module accumulator, so native was already correct).
+-- The observable is the DISAGREEMENT, which is what this gate's expect/check/run/build
+-- columns plus the `.out` value pin are.
+--
+-- Three spellings in one program, each a separately-measured broken cell of #1369's
+-- matrix: depth 1 selective, depth 2 selective, depth 1 wildcard re-export.
+--
+-- EXPECTED VALUE DERIVED BY HAND, not captured: `lib.obl1114_declared.g` is
+-- `g : Num a => a -> a` with body `x + 1` at `Num Int`, so g 5 = 6, g 41 = 42, g 9 = 10
+-- whichever hop it is reached through -- a re-exporter is transparent.
+import lib.obl1369_reexp_declared.{g}
+import lib.obl1369_reexp2_declared.{g as g2}
+import lib.obl1369_reexp_wild.{g as g3}
+
+main = println (g 5, g2 41, g3 9)

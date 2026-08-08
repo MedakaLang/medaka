@@ -1,0 +1,5 @@
+-- #1326: the CONSTRAINED half of the same-named pair. The entry module never names this
+-- module at all — it is reached only through midmod.mdk — yet its `Display a =>` context
+-- was what got attributed to qsmod's unrelated `h`.
+export h : Display a => a -> String
+h x = "\{x}"
