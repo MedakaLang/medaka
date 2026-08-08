@@ -1,0 +1,6 @@
+data Parcel = Parcel Float
+
+interface Preserve a where
+  preserve : a -> a
+  through : a -> (Int -> a) -> a
+  collect : Monoid m => (a -> m) -> a -> m

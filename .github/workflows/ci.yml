@@ -675,7 +675,11 @@ jobs:
             # (only ./medaka + clang) and lands beside its closest sibling here,
             # diff_compiler_origin_agreement, which also probes test_cmd.mdk's
             # elaboration path. Measured wall time: ~6s.
-            pattern: "'diff_compiler_eval*' 'diff_compiler_core_ir*' 'diff_compiler_dispatch_shape' 'diff_compiler_prelude_obj' 'diff_compiler_slice_oob' 'diff_compiler_ir_size' 'diff_compiler_origin_agreement' 'diff_compiler_import_order' 'diff_compiler_test_native' 'bootstrap_lex' 'bootstrap_resolve' 'bootstrap_typecheck' 'bootstrap_eval'"
+            # 'diff_compiler_draft_semantic' (#1399 X-0D) is another lightweight
+            # compiled-probe gate parked here for cost: this shard already builds
+            # the adjacent Core/elaboration probes, so its marginal build joins the
+            # existing parallel oracle batch rather than becoming a serial oracle.
+            pattern: "'diff_compiler_eval*' 'diff_compiler_core_ir*' 'diff_compiler_dispatch_shape' 'diff_compiler_prelude_obj' 'diff_compiler_slice_oob' 'diff_compiler_ir_size' 'diff_compiler_origin_agreement' 'diff_compiler_draft_semantic' 'diff_compiler_import_order' 'diff_compiler_test_native' 'bootstrap_lex' 'bootstrap_resolve' 'bootstrap_typecheck' 'bootstrap_eval'"
           - name: backend
             # 'build_cmd' (T8): THE end-to-end gate for the SHIPPING `medaka build` CLI —
             # 14 real programs built through the actual CLI, each binary's stdout diffed
