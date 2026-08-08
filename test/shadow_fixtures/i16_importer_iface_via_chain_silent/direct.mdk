@@ -1,0 +1,9 @@
+-- SHADOW-SEMANTICS cell I16's CONTROL, graded as its own row: the chain hop removed,
+-- `ifc` imported directly. Same interface, same impl, same standalone, same receiver --
+-- so the two rows must print the same number. On the silent axis this pair is the whole
+-- test: neither file can fail loudly, so only their agreement plus the pinned value can
+-- detect a chain that changed the program's meaning.
+import ifc.{Sizeable}
+import fmod.{size}
+
+main = println (size "abc")

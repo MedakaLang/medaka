@@ -105,4 +105,16 @@
 # reading per the issue's hand-derivation — see this case's own case.txt) and a
 # rejected program. See test/import_order_fixtures/1351-.../case.txt for how the
 # two signatures below were established and why neither is claimed correct.
+#
+# ⚠️ RE-POINTED 2026-08-08 by #1354 unit A, and the signatures below were RE-CUT
+# from the gate at that time. The entry's member list changed from `zmodI.{zf}`
+# to `zmodI.{IZ, zf}`. Under the OLD spelling this case now CONVERGES, because
+# SHADOW-SEMANTICS S1's interface operand is scoped to what the module can NAME
+# and neither interface was nameable there — so `mth` is no longer a shadow and
+# the bare-name dispatch-index table is never consulted. That convergence is
+# real and it is NOT a fix: naming either interface in its own import brings the
+# order-dependence back unchanged. The row was re-pointed rather than drained
+# precisely because draining it would have left an OPEN, `verified`, S0 issue
+# with no mechanical guard, on the strength of a spelling that stopped reaching
+# the defect.
 1351-methoddispatchidx-import-order-collision | #1351 | check=0;codes=;schemes=main : Unit\n;run=0:7\n;build=0/0:7\n | check=1;codes=T-TYPE-MISMATCH;schemes=;run=1:;build=1/-:

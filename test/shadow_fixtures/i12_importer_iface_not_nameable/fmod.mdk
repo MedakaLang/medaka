@@ -1,0 +1,4 @@
+-- SHADOW-SEMANTICS cell I12 provider 3: the standalone main.mdk explicitly
+-- imports, sharing `smod.Sizeable`'s method name by coincidence only.
+export size : String -> Int
+size s = 99

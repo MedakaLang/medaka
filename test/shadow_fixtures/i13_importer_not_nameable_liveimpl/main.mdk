@@ -1,0 +1,21 @@
+-- SHADOW-SEMANTICS cell I13 (S1 scope, ruling #1375): the i12 shape with a LIVE
+-- IMPL at the receiver's head tycon, which is the direction that shows the clause
+-- changing what a WRITABLE name denotes.
+--
+-- `size` here is the `Int -> Int` standalone this module explicitly imported from
+-- `prov`, and `Box` comes from `boxmod`; `Sizeable` and `impl Sizeable Box` live
+-- in `ifcmod`, which reaches the graph only through `bridge`'s plain import and
+-- is therefore NOT nameable here.  So `size` is not a shadow in this module, the
+-- occurrence is the imported `Int -> Int` standalone, and applying it to a `Box`
+-- is a located REJECT (`Type mismatch: Int vs Box`) on all three verbs.
+--
+-- Under the graph-global reading the same source is ACCEPTED at exit 0 and prints
+-- `300` -- an impl body from a module with no import path to here, selected for a
+-- receiver the name the author actually wrote cannot even accept.  Unlike i12 the
+-- wrong answer is not merely a different number: it is only reachable through a
+-- denotation this module cannot write down.
+import boxmod.{Box(..)}
+import prov.{size}
+import bridge.{bf}
+
+main = println (size (Box 3) + bf 0)

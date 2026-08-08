@@ -1,0 +1,5 @@
+-- SHADOW-SEMANTICS cell I20 provider 2: a re-exporter that re-exports the METHOD by name
+-- and never mentions the interface. S1-NS (a) makes the re-export arm SYMMETRIC with the
+-- import arm, so this must admit `size` one hop down exactly as `export import
+-- ifc.{Sizeable}` admits the whole row.
+export import ifc.{size, Box}

@@ -1,0 +1,22 @@
+-- SHADOW-SEMANTICS cell I17's ORDER twin, graded as its own row.  Byte-identical to
+-- main.mdk except the two interface-module import lines are swapped.  Reordering import
+-- clauses is cosmetic -- every formatter and every reviewer treats it that way -- so the
+-- two rows must agree, and a program whose meaning depends on the difference is wrong
+-- whatever the right answer turns out to be.
+--
+-- Before the fix these two files disagreed about whether the program COMPILES: main.mdk
+-- accepted at exit 0 printing 7, this one was rejected `Type mismatch: Int vs String`.
+--
+-- ⚠️ A PAIR IS WEAKER THAN A PERMUTATION DIFFERENTIAL: three import clauses have six
+-- orderings and this pins two.  The other four are NOT owed --
+-- `test/import_order_fixtures/1351-methoddispatchidx-import-order-collision/` is this same
+-- graph in the permutation corpus, and this fix DRAINED its ledger row, so it now runs
+-- UNLEDGERED there and must stay invariant across all six.  These two rows are the
+-- SEMANTIC companion to that one: they say WHY the answer is 99 -- neither interface is
+-- nameable in the entry -- and pin the VALUE on all three verbs, which an invariance check
+-- alone cannot, because six orderings agreeing on a WRONG value is also invariant.
+import fmodI.{mth}
+import zmodI.{zf}
+import amodI.{af}
+
+main = println (mth "abc" 5 + af 0 + zf 0)

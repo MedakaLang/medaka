@@ -1,0 +1,11 @@
+-- SHADOW-SEMANTICS cell I12 provider 1: the interface and its ONLY impl.  No
+-- module in this graph imports `smod` except `bridge`, and `bridge` imports
+-- only `sf` -- so `Sizeable` is NOT nameable in main.mdk by any path.
+export interface Sizeable a where
+  size : a -> Int
+
+impl Sizeable String where
+  size s = 7
+
+export sf : Int -> Int
+sf n = n

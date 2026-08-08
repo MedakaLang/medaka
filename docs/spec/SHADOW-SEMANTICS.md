@@ -191,7 +191,7 @@ spelled out:
 
 | Term | Means | Used by |
 |---|---|---|
-| **nameable in `M`** | the declaration is one `M` may refer to by name: declared in `M`, **or** exported by a module `M` imports (directly, or through a re-export chain — **RULED IN SCOPE 2026-08-07, [#1380](https://github.com/MedakaLang/medaka/issues/1380); see S1-CHAIN under S1**, which also says what is still deferred: the sub-predicate deciding when a declaration counts as *exported through* a chain), **or** declared in the implicit prelude | S1's **interface** operand |
+| **nameable in `M`** | the declaration is one `M` may refer to by name: declared in `M`, **or** exported by a module `M` imports **AND ADMITTED BY THAT IMPORT PATH** (directly, or through a re-export chain — **RULED IN SCOPE 2026-08-07, [#1380](https://github.com/MedakaLang/medaka/issues/1380); see S1-CHAIN under S1**, which also says what is still deferred: the sub-predicate deciding when a declaration counts as *exported through* a chain), **or** declared in the implicit prelude. ⚠️ **The "and admitted by that import path" clause was ADDED 2026-08-08 by S1-NS**: this row previously said only *"exported by a module `M` imports"*, which is module-level and, read literally, is satisfied by `import smod.{sf}` — an import that names one unrelated function. That reading is exactly the too-loose one this document's own headline forbids, and it shipped as a bug. **What "admitted" means is S1-NS (a), which is the per-METHOD union of the two namespaces — see S1-NS under S1.** | S1's **interface** operand |
 | **defined in `M` or imported into `M`** | the two cases that assign a shadow its **kind** (definer / importer) — so this is also, exactly, S1's **standalone** operand | S1's **standalone** operand + the kind partition |
 | **graph-global** | ranges over **every** module of the loaded graph, whether or not any import path reaches it — `DICT-SEMANTICS.md` §8 **I5** | S2's **impl universe** only |
 
@@ -258,15 +258,29 @@ Given an occurrence of bare name `N` in module `M`:
   > is a **name-resolution** rule: given a bare name the author wrote, it decides
   > which of two candidate denotations that name has. For the rule to be
   > *choosing*, both candidates must be things the author could have meant — and a
-  > method of an interface `M` cannot name is one `M` cannot call, cannot import,
-  > cannot request by writing a `=>` constraint (S5), and cannot write an `impl`
-  > for. Letting it decide what `M`'s own written names denote is not a tie-break
+  > method of an interface `M` can neither **name** nor **call** is one `M` cannot
+  > reach at all. Letting it decide what `M`'s own written names denote is not a tie-break
   > between candidates; it is one candidate being supplied from outside the
   > program the author can see. That is also the reading under which S1's
   > **left** operand and its **right** operand carry the same scope: the left one
   > is *already* pinned by this clause's own kind partition (a standalone neither
   > defined in `M` nor imported into `M` has no shadow kind, so S2 — stated per
   > kind — would assign its occurrences no denotation at all).
+  >
+  > 🚨 **CORRECTION (2026-08-08, S1-NS). The sentence above USED TO READ** *"a method
+  > of an interface `M` cannot name is one `M` cannot call, cannot import, cannot
+  > request by writing a `=>` constraint (S5), and cannot write an `impl` for."*
+  > **That four-way conjunction is FALSE, and its falsity is why this clause could be
+  > quoted in good faith to reach opposite answers.** Measured: the four split **2–2**
+  > along the namespace line. With `import ifc.{size}` — the interface NOT nameable —
+  > calling `size 5` is **ACCEPTED with no diagnostic**, while `impl Sizeable Blob` and
+  > `twice : Sizeable a => a -> Int` are both rejected `Unknown interface: Sizeable`.
+  > With `import ifc as I`, `I.size 5` is likewise **ACCEPTED** while `impl Sizeable Int`
+  > is rejected. So *call* and *import* track the **VALUE** namespace; *`impl`* and
+  > *`=>`* track the **TYPE** namespace. The repaired sentence claims only what holds:
+  > a method the module can neither name nor call is unreachable. **The consequence —
+  > that S1's operand must be the UNION of the two namespaces rather than either one —
+  > is S1-NS below.**
   >
   > This is the same tie-break the **S2 inversion** rests on, applied one level
   > out: *"a name written at top level in a module is that module's name"*, and
@@ -311,6 +325,81 @@ Given an occurrence of bare name `N` in module `M`:
   > (that narrowing is the ruling's content), nor by a perf result on per-module
   > name sets (that is an argument about the implementation: cache the scoped
   > predicate, do not re-globalize it).
+  >
+  > ### 🔒 S1-NS — RULED 2026-08-08: S1's interface operand is the PER-METHOD UNION of the two namespaces, and marking is CLOSED under shadow-hood
+  >
+  > **(a) The operand.** A bare method name `n` is in S1's **right** operand in module
+  > `M` iff at least one interface `I` declaring a method named `n` satisfies any of:
+  >
+  > - **(i) TYPE arm** — `I`'s own name is admitted into `M`: `I` is declared in `M`,
+  >   declared in the implicit prelude, or `M`'s import path admits the name `I` (a
+  >   member list naming `I`, or a wildcard), **at any re-export depth**.
+  > - **(ii) VALUE arm** — the name `n` is admitted into `M` as a callable method of
+  >   `I`: a member list naming `n`, a wildcard, or a **module alias**
+  >   (`import ifc as A`, since `A.n` is a legal call), **at any re-export depth**.
+  > - **(iii)** `I` is declared in `M` or in the implicit prelude.
+  >
+  > **Per METHOD, not per interface row.** A member list naming the *interface* admits
+  > every method of it (an author who can write `impl I T` can write all of them). A
+  > member list naming *some* methods admits **only those methods**. This is measured,
+  > not stylistic: `import ifc.{tag}` leaves a sibling `size` **Unbound**, so admitting
+  > a whole row because one member is named makes a **different** name dispatch-eligible
+  > on evidence that says nothing about it.
+  >
+  > **Both arms apply symmetrically on the RE-EXPORT side.** `export import ifc.{size}`
+  > must admit `size` one hop down exactly as `export import ifc.{Sizeable}` admits the
+  > row. An implementation whose re-export arm matches only interface names is
+  > **non-conformant**.
+  >
+  > **(b) THE CLOSURE INVARIANT.**
+  >
+  > > **An occurrence of a bare name that a conforming implementation resolves by
+  > > interface DISPATCH must be one S1 classifies.** The predicate deciding
+  > > **shadow-hood** MUST be a **superset** of the predicate deciding **dispatch
+  > > eligibility**. Two different predicates at the two sites is **non-conformant,
+  > > whichever way they differ.**
+  >
+  > In the gap `dispatch-set ∖ shadow-set` an occurrence is routed to an `impl` while
+  > S1 has declined to classify it, so S2's definer inversion never fires and a module's
+  > own top-level binding is replaced by a foreign impl body with no diagnostic on any
+  > verb. Worse, the occurrence is *typed* against the standalone and *routed* to the
+  > method: measured, that yields `check` exit 0 then `run`/`build` E-PANIC. That is a
+  > type hole, not a scoping disagreement. (b) is namespace-independent.
+  >
+  > **Why the union, and not either namespace alone.** Each arm is load-bearing and each
+  > was measured. Drop the VALUE arm and `import ifc.{size}` — the spelling the compiler
+  > *demands* for a call — stops being dispatch-eligible: `check` 0, `run` correct,
+  > **`build` E-PANIC: arg-tag dispatch on impl type that owns no constructors**. Drop
+  > the TYPE arm and `export import ifc.{Sizeable}` stops making a shadow — precisely
+  > what S1-CHAIN enumerates as non-conformant. Neither namespace alone can serve S1,
+  > and (b) forbids serving each at a different site.
+  >
+  > **Newly NON-CONFORMANT.** (1) Deciding shadow-hood with one predicate and dispatch
+  > eligibility with a wider one. (2) A predicate satisfied only by the **type** name,
+  > so `import ifc.{size}` does not admit it. (3) A predicate satisfied only by a
+  > **method** name, so `import ifc.{Sizeable}` does not admit the row. (4) An
+  > implementation whose **re-export** arm and **import** arm evaluate different
+  > namespaces. (5) Admitting a whole interface row because a member list names **one of
+  > its methods**.
+  >
+  > **Newly ACCEPTED / a DIFFERENT VALUE.** An **importer** shadow whose interface is
+  > reachable only by naming a *sibling* method loses shadow-hood, so a receiver inside
+  > the standalone's domain answers with the imported standalone rather than the impl —
+  > this is S1-SCOPE's acceptance narrowing reaching its **silent** half, and it is the
+  > cost this clause charges itself. The **definer** twin returns the module's own
+  > standalone rather than a foreign impl body. Corpus:
+  > `test/shadow_fixtures/i19_importer_sibling_method_silent/`,
+  > `d23_definer_sibling_method_silent/`, `i20_importer_method_reexport_chain/`.
+  >
+  > **Explicitly NOT changed:** S2's graph-global impl universe (`DICT-SEMANTICS.md` §8
+  > I5). S1-NS constrains a set of NAMES; it cannot narrow an instance environment.
+  >
+  > **⟲ Overturn condition.** (a) is overturned by a program written entirely against
+  > names its own module can either *write* or *call*, correct under the language's
+  > other rules, whose intended meaning requires a **strictly narrower** operand than
+  > the union. (b) is overturned only by exhibiting a dispatch-eligible occurrence that
+  > S1 declines to classify **and** for which some other clause supplies a denotation —
+  > today no clause does, which is why the gap is silent.
   >
   > ### 🔒 S1-CHAIN — RULED 2026-08-07 ([#1380](https://github.com/MedakaLang/medaka/issues/1380)): a RE-EXPORT CHAIN is IN SCOPE for S1
   >
