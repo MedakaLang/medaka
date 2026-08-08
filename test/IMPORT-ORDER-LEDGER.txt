@@ -97,3 +97,12 @@
 # open. Item 1c was one of its symptoms, not the whole of it.
 
 733-ambiguous-ctor-reject-cascade-order-dependent | #733 | check=1;codes=R-AMBIGUOUS-CTOR;schemes=;run=1:;build=1/-: | check=1;codes=R-AMBIGUOUS-CTOR,T-TYPE-MISMATCH;schemes=;run=1:;build=1/-:
+
+# ── #1351 (OPEN): universeMethodDispatchIdxRef bare-method-name collision ─────
+# Two unrelated interfaces sharing a bare method name at DIFFERING dispatch
+# argument indices, plus a standalone shadow of the same name. Import-line order
+# alone decides between a clean type-check that prints `7` (wrong under every
+# reading per the issue's hand-derivation — see this case's own case.txt) and a
+# rejected program. See test/import_order_fixtures/1351-.../case.txt for how the
+# two signatures below were established and why neither is claimed correct.
+1351-methoddispatchidx-import-order-collision | #1351 | check=0;codes=;schemes=main : Unit\n;run=0:7\n;build=0/0:7\n | check=1;codes=T-TYPE-MISMATCH;schemes=;run=1:;build=1/-:
