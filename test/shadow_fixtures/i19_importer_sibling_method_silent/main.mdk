@@ -6,7 +6,8 @@
 --
 -- 🚨 THIS IS THE SILENT CELL, and it is why the value is pinned rather than the verdict.
 -- The standalone's domain COVERS the impl's head (both are String), so both candidates
--- typecheck and every verb exits 0. The pre-#1353 compiler printed 777 -- the impl body --
+-- typecheck and every verb exits 0. The pre-#1353 compiler -- the MERGE BASE, and this is
+-- one of the few cells here that genuinely differs from it -- printed 777, the impl body,
 -- on evidence about a DIFFERENT name. Nothing in an ACCEPT/REJECT column can see the
 -- difference; only the pinned value can.
 --

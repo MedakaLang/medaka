@@ -11,7 +11,10 @@
 -- shadow-hood, which is S1-NS's own "Newly NON-CONFORMANT (1)", and 52 assertions were green
 -- over it because not one of them could express a return-position method.
 --
--- Measured before the fix: `run` printed 777 (the impl body, through an interface this
+-- Measured BEFORE THIS ROUND'S `rpNames` FILTER -- i.e. against this PR's own intermediate
+-- head, NOT against the merge base. (The merge base does not print anything on the `build`
+-- arm at all: it fails with `E-PANIC: unbound method: zed` and produces no artifact, which
+-- is a different and louder defect.) `run` printed 777 (the impl body, through an interface this
 -- module cannot name) while the BUILT BINARY printed 42 -- both exit 0, no diagnostic on any
 -- verb. On emit the occurrence is mangled to `main__zed`, so the bare-keyed `rpNames` misses
 -- it and the filtered `shadowMap` decides; on `run` the name is still bare and `rpNames`

@@ -9,8 +9,9 @@
 -- and not the other would leave the other silent, which is exactly the shape this corpus has
 -- been bitten by before (d18/i6b, d22/i7).
 --
--- Graded on `run` AND the built binary for the reason d24 states: before the fix `run`
--- printed 777 and the binary printed 42, both at exit 0 with no diagnostic.
+-- Graded on `run` AND the built binary for the reason d24 states: before THIS ROUND'S
+-- `rpNames` filter -- this PR's own intermediate head, not the merge base -- `run` printed
+-- 777 and the binary printed 42, both at exit 0 with no diagnostic.
 import fmod.{zed}
 import smod.{sf}
 

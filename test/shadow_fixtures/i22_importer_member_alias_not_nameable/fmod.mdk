@@ -1,0 +1,2 @@
+export size : String -> Int
+size s = 99

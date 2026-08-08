@@ -1,0 +1,17 @@
+-- SHADOW-SEMANTICS cell I22's DISCRIMINATOR, graded as its own row: byte-identical to
+-- main.mdk except the second import line is a bare `import ifc` instead of
+-- `import ifc.{size as sz}`.
+--
+-- Both spellings admit exactly the same amount of the interface into this module: NOTHING
+-- writable. A bare import binds no names, and a member alias binds only `sz`. So both
+-- should print 99 -- and only this one does. main.mdk prints 7.
+--
+-- The pair is what makes i22 a defect report rather than a captured golden: one number
+-- alone could be argued to be intended, but two spellings with the same admission and
+-- different answers cannot both be right. When the VALUE arm is re-keyed on the LOCAL
+-- spelling, main.mdk moves to 99 and joins this row; until then this row is also the proof
+-- that the correct value is reachable rather than hypothetical.
+import fmod.{size}
+import ifc
+
+main = println (size "abc")

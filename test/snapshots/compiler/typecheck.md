@@ -1,5 +1,5 @@
 # META
-source_lines=24039
+source_lines=24061
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted typecheck stage — port of lib/typecheck.ml's HM core.  SLICE 1:
@@ -22209,14 +22209,26 @@ selectIfaceRows path src = match importedBindings path
 -- TYPE arm: the list names the interface → the whole row.  VALUE arm: it does not → only
 -- the methods it names.  An empty narrowing contributes no row at all.
 --
--- ⚠️ KNOWN DEVIATION FROM S1-NS (a)(ii), recorded rather than silently carried: [named] is
--- built from the member ORIGIN spellings (`map fst bs`), so `import ifc.{size as sz}`
--- admits `size` — the name in the DEPENDENCY — while the only name this module can call is
--- `sz`.  The clause says the admitted name must be the callable one.  It is unobservable
--- today because member-ALIASED method imports are independently broken on both sides of
--- this predicate, so no program can reach the difference; it becomes live the moment that
--- is fixed, and the fix here is to key the VALUE arm on `snd` while the TYPE arm keeps
--- `fst`.
+-- 🚨 KNOWN DEVIATION FROM S1-NS (a)(ii), AND IT IS OBSERVABLE TODAY.  [named] is built from
+-- the member ORIGIN spellings (`map fst bs`), so `import ifc.{size as sz}` admits `size` —
+-- the name in the DEPENDENCY — while the only name this module can write for that method is
+-- `sz`.  S1-NS (a)(ii) says the admitted name must be the CALLABLE one.
+--
+-- ⚠️ An earlier version of this note claimed the deviation was "unobservable today because
+-- member-ALIASED method imports are independently broken".  BOTH HALVES ARE FALSE, measured:
+-- `import ifc.{size as sz}` then `sz "ab"` prints 7, so aliased method imports work fine;
+-- and a program does reach the difference — with a standalone `size` imported from `fmod`,
+-- adding `import ifc` prints 99 while adding `import ifc.{size as sz}` prints 7, the two
+-- differing only in that second import line.  Under the clause, 99 is correct for BOTH: the
+-- alias case gives this module no way to write `size` for the method, so `size` unambiguously
+-- denotes `fmod`'s standalone.
+--
+-- NOT FIXED HERE, deliberately.  It is NOT a regression — base prints 7 too, so the alias arm
+-- is exactly where this unit changes nothing — and re-keying the VALUE arm on `snd` is a
+-- behaviour change on a fresh axis that no ruling has been written for.  Pinned instead, so
+-- it self-drains: `test/shadow_fixtures/i22_importer_member_alias_not_nameable/`.  The fix
+-- shape when it is taken: key the VALUE arm on `snd` (the LOCAL spelling) while the TYPE arm
+-- keeps `fst`.
 narrowRowToNamed : List String -> (String, List String) -> List (String, List String)
 narrowRowToNamed named r
   | contains (fst r) named = [r]
@@ -23322,9 +23334,19 @@ elaborateModules runtimeDecls coreDecls0 modulesIn =
   -- is still what CORE is marked with: `core` is the prelude, every interface it declares
   -- is nameable in it, and S1 makes a `core.mdk` occurrence no user standalone's shadow
   -- anyway (P0-21).  Scoping happens in `prePassModulePairArg`, which has the module's own
-  -- decls in hand.  ⚠️ `rpNames` (RETURN-position methods) is deliberately NOT scoped here:
-  -- it is a different axis with no filed repro, and widening a fix past its evidence is
-  -- what this workstream's gate question 3 exists to stop.
+  -- decls in hand — INCLUDING `rpNames`, which `prePassModulePairArg` filters with the same
+  -- predicate as everything else it marks.
+  --
+  -- 🚨 THIS COMMENT USED TO SAY `rpNames` WAS "deliberately NOT scoped here: a different
+  -- axis with no filed repro", AND THAT CARVE-OUT WAS AN S0.  The repro was missing because
+  -- the CORPUS could not express it — every interface method in `test/shadow_fixtures/`
+  -- mentioned its typaram in an ARGUMENT, so 52 assertions were green while a
+  -- RETURN-position method of a non-nameable interface gave `run` 777 against a built binary
+  -- of 42, both at exit 0 with no diagnostic.  "No filed repro" was a fact about the
+  -- corpus, not about the code.  See `prePassModulePairArg` for the full enumeration of
+  -- every input that can become an `EMethodAt`, and
+  -- `test/shadow_fixtures/d24_definer_return_pos_not_nameable/` for the cell that now
+  -- expresses the axis.
   let markSharedNames = dedup (rpNames ++ methodConstraintNames allDecls)
   let graphShadowNames = buildStandaloneShadowsGraph allDecls (flatMap snd modules)
   let markRpNames = dedup (markSharedNames ++ graphShadowNames)
