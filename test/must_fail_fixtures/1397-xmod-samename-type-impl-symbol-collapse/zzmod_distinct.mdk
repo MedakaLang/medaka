@@ -1,0 +1,6 @@
+import iface.{Label, label}
+public export data Zeeb = MkZ Int
+export impl Label Zeeb where
+  label _ = "zzmod"
+export zzLbl : String
+zzLbl = label (MkZ 1)
