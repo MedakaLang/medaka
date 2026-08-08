@@ -1,0 +1,93 @@
+issue: 1351
+what: `universeMethodDispatchIdxRef` (compiler/types/typecheck.mdk) maps a BARE
+what: interface-method name to that method's dispatch argument index, accumulated
+what: across the whole import graph by plain concatenation, and read by a first-match
+what: scan (`methodDispatchIdx`). `amodI.IA.mth : a -> Int -> Int` puts its typaram at
+what: dispatch index 0; `zmodI.IZ.mth : Int -> b -> Int` puts it at index 1, and IZ
+what: carries the program's only impl (`impl IZ String`). `fmodI.mth : String -> Int
+what: -> Int` is an unrelated standalone with the same bare name. Importing fmodI,
+what: then amodI, then zmodI (main.mdk) types clean at exit 0 and prints 7 -- the body
+what: of `impl IZ String`, reached from a call site (`mth "abc" 5`) whose argument is
+what: a String in FIRST position, which only matches IA's geometry, not IZ's.
+what: Verified first-hand on the #1354-unit-A binary (MEDAKA_STRICT=1):
+what:   medaka check main.mdk  -> "main : Unit", exit 0 (zero diagnostics)
+what:   medaka run main.mdk    -> 7, exit 0
+what:   medaka run control.mdk -> 99, exit 0 (control: no zmodI in the graph)
+what:   medaka build main.mdk -o X && ./X -> exit 0, prints 7 (native AGREES with run)
+what:   medaka run order-swapped.mdk -> REJECTED, "Type mismatch: Int vs String"
+what: Hand-derived correct answer: 7 is wrong under every reading of the scoping
+what: rules. The occurrence is `mth "abc" 5`: a String receiver in the FIRST
+what: position. `impl IZ String`'s method takes an Int first (`mth : Int -> b ->
+what: Int`) -- the call cannot be reaching that body through IZ's own geometry.
+what: Either the imported standalone answers (99, as control.mdk shows) or the call
+what: is rejected (as order-swapped.mdk shows) -- reaching IZ's body through IA's
+what: argument position is neither. Independently of which value is "right",
+what: main.mdk and order-swapped.mdk differ ONLY in the order of two import lines --
+what: a change that cannot alter program meaning -- and disagree about whether the
+what: program compiles at all.
+what: RE-POINTED 2026-08-08 by #1354 unit A. The third clause was `zmodI.{zf}` and is
+what: now `zmodI.{IZ, zf}`, which is also the more idiomatic way to write this
+what: program. Under the OLD spelling this graph CONVERGES on that unit's binary:
+what: SHADOW-SEMANTICS S1's interface operand is now scoped to what the module can
+what: NAME, and with neither `IA` nor `IZ` nameable in the entry, `mth` stops being a
+what: shadow -- so `recordRLocalSite`'s `standaloneValuesRef` gate declines and
+what: `methodDispatchIdx` is never consulted at all. That convergence is REAL and it
+what: is NOT a fix for this issue: naming either interface in its own import
+what: restores the defect unchanged, because `mth` is a shadow again and the
+what: bare-name first-match table is consulted again. Verified both ways on the same
+what: binary. The pin was re-pointed rather than deleted for exactly the reason the
+what: suite exists: deleting it would have left an OPEN, `verified`, S0 issue with no
+what: mechanical guard, on the strength of a spelling that had stopped reaching the
+what: defect. The not-nameable spelling is separately guarded, as a POSITIVE test, by
+what: test/shadow_fixtures/i17_importer_two_ifaces_neither_nameable/.
+cmd: run main.mdk
+exit: 0
+stdout: 7
+control: run control.mdk
+why-verb: `run` rather than `build-run`: the defect is reached in the shared front end
+why-verb: (methodDispatchIdx / recordRLocalSite, compiler/types/typecheck.mdk), which
+why-verb: `medaka run` and `medaka build` both go through, so the two engines are not
+why-verb: two independent observations here and `run` is the cheaper verb (no clang).
+why-verb: The native arm was confirmed by hand anyway (see `what:` above): `medaka
+why-verb: build main.mdk` exits 0 and the produced binary prints the same 7 at exit 0.
+why-verb: `check` cannot be the verb: check is clean (exit 0, zero diagnostics) on
+why-verb: main.mdk -- the silence is precisely the S0, so there is no diagnostic for
+why-verb: `check --json` to key on.
+why-stdout: the observable is a WRONG VALUE AT EXIT 0, not a wrong exit code alone
+why-stdout: (`exit: 0` by itself asserts nothing -- a correct program also exits 0).
+why-stdout: `7` is exactly `impl IZ String`'s body, so the only thing that can move
+why-stdout: this string is a change to which candidate's dispatch geometry the call
+why-stdout: resolves through -- which is the defect.
+why-control: control.mdk is main.mdk with ONE variable removed: the `import
+why-control: zmodI.{IZ, zf}` line (and the then-unreachable `zf 0` use). Only IA is in
+why-control: the module graph, so there is nothing bare-name `mth` can collide with
+why-control: at a different dispatch index, and the imported standalone answers
+why-control: correctly: 99. This isolates the observation to "two interfaces sharing
+why-control: a bare method name at DIFFERING dispatch indices, plus a standalone
+why-control: shadow" specifically, not to importing three modules in general.
+why-note: A THIRD file ships here, `order-swapped.mdk`, NOT run by this gate (its
+why-note: exit code, 1, cannot be a `control:`, per diff_compiler_must_fail.sh's
+why-note: control-must-be-green check). It is byte-identical to main.mdk except the
+why-note: two interface-module import lines are swapped. The ORDER half is graded
+why-note: properly elsewhere: test/import_order_fixtures/1351-.../ is the same graph
+why-note: in the permutation differential, ledgered in test/IMPORT-ORDER-LEDGER.txt,
+why-note: where all six orderings are compared and the two distinct signatures are
+why-note: pinned. A value pin cannot grade order-invariance and that gate cannot pin
+why-note: a hand-derived value; the two are complementary and both are needed.
+why-note: TRAP (per the issue's own "Trap for whoever pins or fixes this" section):
+why-note: `methodDispatchIdx`'s only caller, `recordRLocalSite`, is gated on `not
+why-note: (contains name driverState.value.standaloneValuesRef.value)` -- WITHOUT a
+why-note: standalone shadow of the SAME bare name (`fmodI.mth` here), the table is
+why-note: never read at all, and a two-interface-only repro would pass for the wrong
+why-note: reason, immune to the defect. `fmodI.mth` is therefore load-bearing, not
+why-note: incidental.
+why-note: SECOND TRAP, added by the re-point and specific to this issue's current
+why-note: state: the standalone shadow is necessary but NO LONGER SUFFICIENT. Since
+why-note: #1354 unit A, `mth` is a shadow only if some interface declaring it is
+why-note: NAMEABLE in the entry -- so a member list that names neither interface
+why-note: (`zmodI.{zf}`) makes this graph converge and pass for the wrong reason, the
+why-note: same shape as the first trap one axis over. Anyone shrinking this fixture
+why-note: must keep an interface named in its own import.
+why-note: fix direction, per the issue: `methodDispatchIdxRef` needs an
+why-note: interface-scoped key (not a bare method name), so two unrelated interfaces
+why-note: sharing a method name at different dispatch positions cannot collide.

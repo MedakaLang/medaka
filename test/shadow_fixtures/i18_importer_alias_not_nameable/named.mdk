@@ -1,0 +1,13 @@
+-- SHADOW-SEMANTICS cell I18's POSITIVE twin, graded as its own row: the same graph with
+-- the module alias replaced by an import that NAMES the interface. `Sizeable` is nameable
+-- here, so `size` IS a shadow, `String` has a live impl, and S2's importer rule dispatches:
+-- 7.
+--
+-- Without this row i18 would only ever show the predicate saying NO, and a predicate that
+-- says NO to everything passes it. The pair is what shows the alias answer is a decision
+-- rather than a blanket refusal -- and it is the same discrimination i15 makes on the
+-- member-list axis, restated on the alias axis.
+import fmod.{size}
+import smod.{Sizeable, sf}
+
+main = println (size "abc")

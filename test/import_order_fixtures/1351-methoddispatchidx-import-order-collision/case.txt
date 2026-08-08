@@ -68,3 +68,19 @@ complementary graded instrument to the must-fail pin: that harness grades ONE
 command plus a control per fixture (its own header explains why), so it cannot pin
 the order-invariance half; this gate's permutation differential needs no ground
 truth and grades exactly that half.
+
+⚠️ RE-POINTED 2026-08-08 by #1354 unit A, and the ledger signatures were RE-CUT from
+the gate then. main.mdk's third clause changed from `zmodI.{zf}` to `zmodI.{IZ, zf}`.
+Under the OLD spelling this case CONVERGES on that unit's binary -- SHADOW-SEMANTICS
+S1's interface operand is now scoped to what the module can NAME, and with neither
+`IA` nor `IZ` nameable there `mth` stops being a shadow, so `methodDispatchIdx` (the
+bare-name first-match list this case exists to expose) is never consulted at all.
+That convergence is real, and it is NOT a fix for #1351: naming either interface in
+its own import restores the order-dependence unchanged, which is what the current
+member list does. Re-pointed rather than drained because draining would have left an
+OPEN, `verified`, S0 issue with no mechanical guard, on the strength of a spelling
+that had stopped reaching the defect.
+
+The not-nameable spelling did not go unguarded either: it is
+test/shadow_fixtures/i17_importer_two_ifaces_neither_nameable/, which pins the value
+99 on all three verbs and is the SEMANTIC companion to this case.

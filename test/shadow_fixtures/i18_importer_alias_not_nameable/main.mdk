@@ -1,0 +1,25 @@
+-- SHADOW-SEMANTICS cell I18: the interface's home module is imported under a MODULE
+-- ALIAS, and that does NOT make the interface nameable here. `import smod as S` cannot put
+-- a TYPE name in scope at all -- an alias-qualified name in type position is a parse error
+-- -- and writing `impl Sizeable Blob` in this module is rejected `Unknown interface:
+-- Sizeable`. That is the SAME evidence i15 cites to conclude "not a shadow", so the two
+-- cells must agree: `size` is not a shadow here and the occurrence is the standalone this
+-- module explicitly imported from `fmod`: 99.
+--
+-- ⚠️ PAIRED WITH `named.mdk`, graded as its own row: the same graph with the alias replaced
+-- by `import smod.{Sizeable, sf}`, which DOES name the interface. That one prints 7. The
+-- pair is the point -- the predicate must answer the two spellings differently, and one
+-- number without the other cannot show that it does.
+--
+-- WHY THIS CELL EXISTS. An earlier cut of the #1353 fix made a module alias admit the
+-- aliased module's WHOLE interface row, because doing otherwise regressed #1277 (a closed
+-- S0) from (1, 2) to (1, 1). That bought #1277 at the price of this cell: one predicate
+-- answering "nameable?" YES for an alias while `impl Sizeable Blob` in the same module
+-- answered NO -- 7 vs 99, exit 0, no diagnostic, which is #1353's own symptom one spelling
+-- over. The fix is that these are TWO questions: what a module can NAME (this cell, which
+-- decides shadow-hood) and what it can CALL (#1277's `A.ff`, which decides marking). See
+-- `callableIfaceMethodSet` for why an alias answers them differently.
+import fmod.{size}
+import smod as S
+
+main = println (size "abc")

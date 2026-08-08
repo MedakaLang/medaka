@@ -1,5 +1,5 @@
 # META
-source_lines=23979
+source_lines=24063
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted typecheck stage — port of lib/typecheck.ml's HM core.  SLICE 1:
@@ -22171,35 +22171,110 @@ reexportedIfaceMethodsOf _ _ = []
 --   * a bare `import m` yields `Some []` and admits NOTHING — it binds no names at all; its
 --     job is to bring IMPLS into scope, which S2 governs and this clause explicitly does not.
 --
--- 🚨 `UseAlias` ADMITS THE WHOLE ROW, and the naive reading of §1.0 gets this WRONG.
--- `importedBindings` yields `Some []` for an alias, indistinguishable from the bare import
--- above, so this arm must match the PATH rather than the member list.  Taking `Some []` at
--- face value here REGRESSED #1277 — a CLOSED S0 — from `(1, 2)` to `(1, 1)` at exit 0 with
--- no diagnostic, on `run` AND the built binary, caught by
--- `test/diff_compiler_check_cli_modules.sh`'s re-pointed assertion for it.
+-- ⚠️ `UseAlias` yields `Some []` here and so admits NOTHING, which is correct for THIS set:
+-- an alias cannot put a TYPE name in scope (an alias-qualified name in type position is a
+-- parse error), so it cannot make an interface nameable.  A bare `import m` is `Some []`
+-- too, for the different reason that it binds no names at all.
 --
--- WHY, mechanically: `import m as A` cannot put a TYPE name in scope (an alias-qualified
--- name in type position is a parse error), but it absolutely puts the METHODS in scope —
--- `A.ff` is a legal call, and `renameAliasedMethods` rewrites it to a BARE `ff` before the
--- mark pass runs.  So an alias that admitted no rows dropped `ff` from `argNames`, the
--- occurrence was never marked `EMethodAt`, and it lost its dispatch stamp.  The set this
--- predicate feeds is a set of METHOD names reachable in `M`; for that set an alias behaves
--- like a wildcard, which is also the FAIL-OPEN direction and is exactly today's behaviour
--- for aliases.
+-- ⚠️ An alias DOES make the methods CALLABLE, and that is a different question with a
+-- different answer — see `callableIfaceMethodSet`, which is the set the mark pass filters
+-- `argNames` with.  S1-CHAIN's rationale paragraph ("import and call the METHOD") and the
+-- normative §1.0 table (which qualifies the INTERFACE operand) are pulling in those two
+-- different directions; the two sets are how that is honoured without picking one.
 --
--- ⚠️ This is the one place the clause's own recorded ambiguity bites: S1-CHAIN's rationale
--- says "import and call the METHOD" while the normative §1.0 table qualifies the INTERFACE
--- operand.  The ambiguity is filed separately and is NOT resolved here — this arm is
--- chosen because it is the only one that keeps a closed S0 closed, and because it can only
--- ADD shadow-hood, never remove it.
---
--- On the RE-EXPORT side this arm is DEAD: `export import m as A` is rejected by the parser,
--- so no `DUse True` can carry a `UseAlias`.
+-- On the RE-EXPORT side an alias cannot occur at all: `export import m as A` is rejected by
+-- the parser, so no `DUse True` carries a `UseAlias`.
 selectIfaceRows : UsePath -> List (String, List String) -> List (String, List String)
-selectIfaceRows (UseAlias _ _) src = src
 selectIfaceRows path src = match importedBindings path
   None => src
   Some bs => filterList (r => contains (fst r) (map fst bs)) src
+
+-- ── the CALLABLE set: the same rows PLUS what a module ALIAS reaches ─────────
+-- 🚨 TWO SETS, TWO QUESTIONS, AND CONFLATING THEM IS A MEASURED S0 IN BOTH DIRECTIONS.
+--   * `nameableIfaceMethodSet` answers *"which interfaces can `M` NAME?"* — S1's operand,
+--     which decides SHADOW-HOOD.  A module alias answers NO here: `import m as A` cannot put
+--     a TYPE name in scope at all (an alias-qualified name in type position is a parse
+--     error), and `impl Sizeable Blob` in such a module is rejected `Unknown interface:
+--     Sizeable`.  That rejection is the same evidence `i15` cites to conclude "not a
+--     shadow", so admitting an alias there gives two verdicts to one piece of evidence.
+--   * `callableIfaceMethodSet` answers *"which interface methods can `M` CALL?"* — which
+--     decides MARKING.  A module alias answers YES: `A.mth` is a legal call, and
+--     `renameAliasedMethods` rewrites it to a bare `mth` before the mark pass sees it.
+--
+-- Making an alias admit nothing regressed #1277 (a CLOSED S0) from `(1, 2)` to `(1, 1)` at
+-- exit 0; making it admit everything makes an alias import silently turn an explicitly
+-- imported standalone into a dispatch (7 where 99 is correct — #1353's own symptom, one
+-- spelling over).  Neither set alone can be right for both, which is why there are two.
+--
+-- ⚠️ THE ALIAS ARM IS NOT UNCONDITIONAL, and the condition is the whole point.  It admits
+-- an aliased module's rows only for names this module does NOT otherwise bind.  The reason
+-- is precise: the ONLY way an aliased method reaches the mark pass as a bare name is that
+-- `renameAliasedMethods` ERASED the qualifier the author wrote, and that erasure must never
+-- let `A.mth` outrank a bare `mth` the module really did bind.  #1277's `ff` is bound by
+-- nothing else, so it is admitted and keeps dispatching; a bare `size` that names an
+-- explicitly imported standalone is bound, so the alias does not claim it.
+callableIfaceMethodSet : List Decl -> OrdMap Unit
+callableIfaceMethodSet prog =
+  addAliasIfaceMethods
+    prog
+    (namesToSet
+      (map fst (funDefs prog) ++ boundImportNames (aliasedModuleIds prog) prog)
+      omEmpty)
+    (nameableIfaceMethodSet prog)
+
+addAliasIfaceMethods : List Decl -> OrdMap Unit -> OrdMap Unit -> OrdMap Unit
+addAliasIfaceMethods [] _ acc = acc
+addAliasIfaceMethods ((DAttrib _ d)::rest) bound acc =
+  addAliasIfaceMethods rest bound (addAliasIfaceMethods [d] bound acc)
+addAliasIfaceMethods ((DUse _ (path@(UseAlias _ _)) _)::rest) bound acc = addAliasIfaceMethods
+  rest
+  bound
+  (match omLookup (usePathModuleId path) driverState.value.graphIfaceMethodsRef.value
+    None => acc
+    Some src => addUnboundRowMethods src bound acc)
+addAliasIfaceMethods (_::rest) bound acc = addAliasIfaceMethods rest bound acc
+
+addUnboundRowMethods : List (String, List String) -> OrdMap Unit -> OrdMap Unit -> OrdMap Unit
+addUnboundRowMethods [] _ acc = acc
+addUnboundRowMethods ((_, ms)::rest) bound acc = addUnboundRowMethods
+  rest
+  bound
+  (namesToSet (filterList (n => not (omHasKey n bound)) ms) acc)
+
+-- every bare name [prog]'s imports bind, EXCLUDING every import of a module that [prog]
+-- also imports under an ALIAS ([aliased]).
+--
+-- 🚨 THAT EXCLUSION IS LOAD-BEARING AND NON-OBVIOUS: `deAliasMethodImports` does not replace
+-- an alias import, it KEEPS it and APPENDS a synthesized `UseGroup` naming that module's
+-- METHODS (`import m as A` becomes `import m as A` plus `import m.{mth, …}`).  Counting that
+-- synthetic group as a binding makes every alias-reached method look "otherwise bound", the
+-- alias arm admits nothing, and #1277 regresses to `(1, 1)` — measured, exactly the failure
+-- this exclusion exists to prevent.  Keyed on the MODULE ID rather than on the shape of the
+-- clause because the synthesized group is structurally indistinguishable from a hand-written
+-- `import m.{mth}` (same `quals`, same `Loc`); what identifies it is that the same module is
+-- also aliased.
+--
+-- A wildcard binds names this cannot enumerate, so it contributes nothing — that
+-- under-approximation makes the alias arm slightly MORE admitting, its fail-open direction.
+boundImportNames : List String -> List Decl -> List String
+boundImportNames _ [] = []
+boundImportNames aliased ((DAttrib _ d)::rest) = boundImportNames aliased [d]
+  ++ boundImportNames aliased rest
+boundImportNames aliased ((DUse _ path _)::rest)
+  | contains (usePathModuleId path) aliased = boundImportNames aliased rest
+  | otherwise = match importedBindings path
+    None => boundImportNames aliased rest
+    Some bs => map snd bs ++ boundImportNames aliased rest
+boundImportNames aliased (_::rest) = boundImportNames aliased rest
+
+-- the module ids [prog] imports under a `UseAlias`.
+aliasedModuleIds : List Decl -> List String
+aliasedModuleIds [] = []
+aliasedModuleIds ((DAttrib _ d)::rest) = aliasedModuleIds [d]
+  ++ aliasedModuleIds rest
+aliasedModuleIds ((DUse _ (path@(UseAlias _ _)) _)::rest) =
+  usePathModuleId path :: aliasedModuleIds rest
+aliasedModuleIds (_::rest) = aliasedModuleIds rest
 
 -- ── #1111 A-2.11 (#1319 unit 1): the CONSTRUCTOR peer of graphMethodExports ──
 -- (module id → [(ctor name, owning type name, declaring `Ident`)]), folded dependency-first
@@ -23838,16 +23913,25 @@ prePassModulePairArg rpNames shadowNames dictNames argNames shadowMap (mid, prog
   -- fail OPEN when the graph index is absent, for the reason stated on
   -- `nameableIfaceShadows`: an unscoped mark set is today's behaviour, an empty one is the
   -- S4/#410 class.
-  | omSize driverState.value.graphMethodExportsRef.value == 0 =
+  -- ⚠️ GUARD THE REF THIS ACTUALLY READS.  It used to test `graphMethodExportsRef` while the
+  -- body reads `graphIfaceMethodsRef` — an implicit conjunction ("they are written on
+  -- adjacent lines") of exactly the kind the `registry_keying_ratchet` row beside it exists
+  -- to forbid.  If the two ever diverged this arm would run with an EMPTY iface index and
+  -- filter out every imported and prelude shadow name, failing CLOSED into the S4/#410 class
+  -- that `nameableIfaceShadows` says must never happen.
+  | omSize driverState.value.graphIfaceMethodsRef.value == 0 =
     (mid, prePassDictArg (dedup (rpNames ++ shadowNames)) dictNames argNames shadowMap prog)
   | otherwise =
+    -- TWO sets, deliberately: shadow-hood asks what this module can NAME, marking asks what
+    -- it can CALL, and a module alias answers those differently.  See `callableIfaceMethodSet`.
     let nameable = nameableIfaceMethodSet prog
+    let callable = callableIfaceMethodSet prog
     (
       mid,
       prePassDictArg
         (dedup (rpNames ++ filterList (n => omHasKey (shadowBareName shadowMap n) nameable) shadowNames))
         dictNames
-        (filterList (n => omHasKey n nameable) argNames)
+        (filterList (n => omHasKey n callable) argNames)
         (filterList (e => omHasKey (snd e) nameable) shadowMap)
         prog,
     )
@@ -28270,8 +28354,27 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "reexportedIfaceMethodsOf" ((PVar "acc") (PCon "DUse" (PCon "True") (PVar "path") PWild)) (EMatch (EApp (EApp (EVar "omLookup") (EApp (EVar "usePathModuleId") (EVar "path"))) (EVar "acc")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "src")) () (EApp (EApp (EVar "selectIfaceRows") (EVar "path")) (EVar "src")))))
 (DFunDef false "reexportedIfaceMethodsOf" (PWild PWild) (EListLit))
 (DTypeSig false "selectIfaceRows" (TyFun (TyCon "UsePath") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "selectIfaceRows" ((PCon "UseAlias" PWild PWild) (PVar "src")) (EVar "src"))
 (DFunDef false "selectIfaceRows" ((PVar "path") (PVar "src")) (EMatch (EApp (EVar "importedBindings") (EVar "path")) (arm (PCon "None") () (EVar "src")) (arm (PCon "Some" (PVar "bs")) () (EApp (EApp (EVar "filterList") (ELam ((PVar "r")) (EApp (EApp (EVar "contains") (EApp (EVar "fst") (EVar "r"))) (EApp (EApp (EVar "map") (EVar "fst")) (EVar "bs"))))) (EVar "src")))))
+(DTypeSig false "callableIfaceMethodSet" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "OrdMap") (TyCon "Unit"))))
+(DFunDef false "callableIfaceMethodSet" ((PVar "prog")) (EApp (EApp (EApp (EVar "addAliasIfaceMethods") (EVar "prog")) (EApp (EApp (EVar "namesToSet") (EBinOp "++" (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EVar "funDefs") (EVar "prog"))) (EApp (EApp (EVar "boundImportNames") (EApp (EVar "aliasedModuleIds") (EVar "prog"))) (EVar "prog")))) (EVar "omEmpty"))) (EApp (EVar "nameableIfaceMethodSet") (EVar "prog"))))
+(DTypeSig false "addAliasIfaceMethods" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit"))))))
+(DFunDef false "addAliasIfaceMethods" ((PList) PWild (PVar "acc")) (EVar "acc"))
+(DFunDef false "addAliasIfaceMethods" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest")) (PVar "bound") (PVar "acc")) (EApp (EApp (EApp (EVar "addAliasIfaceMethods") (EVar "rest")) (EVar "bound")) (EApp (EApp (EApp (EVar "addAliasIfaceMethods") (EListLit (EVar "d"))) (EVar "bound")) (EVar "acc"))))
+(DFunDef false "addAliasIfaceMethods" ((PCons (PCon "DUse" PWild (PAs "path" (PCon "UseAlias" PWild PWild)) PWild) (PVar "rest")) (PVar "bound") (PVar "acc")) (EApp (EApp (EApp (EVar "addAliasIfaceMethods") (EVar "rest")) (EVar "bound")) (EMatch (EApp (EApp (EVar "omLookup") (EApp (EVar "usePathModuleId") (EVar "path"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "graphIfaceMethodsRef") "value")) (arm (PCon "None") () (EVar "acc")) (arm (PCon "Some" (PVar "src")) () (EApp (EApp (EApp (EVar "addUnboundRowMethods") (EVar "src")) (EVar "bound")) (EVar "acc"))))))
+(DFunDef false "addAliasIfaceMethods" ((PCons PWild (PVar "rest")) (PVar "bound") (PVar "acc")) (EApp (EApp (EApp (EVar "addAliasIfaceMethods") (EVar "rest")) (EVar "bound")) (EVar "acc")))
+(DTypeSig false "addUnboundRowMethods" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit"))))))
+(DFunDef false "addUnboundRowMethods" ((PList) PWild (PVar "acc")) (EVar "acc"))
+(DFunDef false "addUnboundRowMethods" ((PCons (PTuple PWild (PVar "ms")) (PVar "rest")) (PVar "bound") (PVar "acc")) (EApp (EApp (EApp (EVar "addUnboundRowMethods") (EVar "rest")) (EVar "bound")) (EApp (EApp (EVar "namesToSet") (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "bound"))))) (EVar "ms"))) (EVar "acc"))))
+(DTypeSig false "boundImportNames" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "boundImportNames" (PWild (PList)) (EListLit))
+(DFunDef false "boundImportNames" ((PVar "aliased") (PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "boundImportNames") (EVar "aliased")) (EListLit (EVar "d"))) (EApp (EApp (EVar "boundImportNames") (EVar "aliased")) (EVar "rest"))))
+(DFunDef false "boundImportNames" ((PVar "aliased") (PCons (PCon "DUse" PWild (PVar "path") PWild) (PVar "rest"))) (EIf (EApp (EApp (EVar "contains") (EApp (EVar "usePathModuleId") (EVar "path"))) (EVar "aliased")) (EApp (EApp (EVar "boundImportNames") (EVar "aliased")) (EVar "rest")) (EIf (EVar "otherwise") (EMatch (EApp (EVar "importedBindings") (EVar "path")) (arm (PCon "None") () (EApp (EApp (EVar "boundImportNames") (EVar "aliased")) (EVar "rest"))) (arm (PCon "Some" (PVar "bs")) () (EBinOp "++" (EApp (EApp (EVar "map") (EVar "snd")) (EVar "bs")) (EApp (EApp (EVar "boundImportNames") (EVar "aliased")) (EVar "rest"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "boundImportNames" ((PVar "aliased") (PCons PWild (PVar "rest"))) (EApp (EApp (EVar "boundImportNames") (EVar "aliased")) (EVar "rest")))
+(DTypeSig false "aliasedModuleIds" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "aliasedModuleIds" ((PList)) (EListLit))
+(DFunDef false "aliasedModuleIds" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EBinOp "++" (EApp (EVar "aliasedModuleIds") (EListLit (EVar "d"))) (EApp (EVar "aliasedModuleIds") (EVar "rest"))))
+(DFunDef false "aliasedModuleIds" ((PCons (PCon "DUse" PWild (PAs "path" (PCon "UseAlias" PWild PWild)) PWild) (PVar "rest"))) (EBinOp "::" (EApp (EVar "usePathModuleId") (EVar "path")) (EApp (EVar "aliasedModuleIds") (EVar "rest"))))
+(DFunDef false "aliasedModuleIds" ((PCons PWild (PVar "rest"))) (EApp (EVar "aliasedModuleIds") (EVar "rest")))
 (DTypeSig false "graphCtorExports" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Ident")))))))
 (DFunDef false "graphCtorExports" ((PVar "coreDecls") (PVar "modules")) (EApp (EApp (EVar "graphCtorExportsGo") (EApp (EApp (EApp (EVar "omInsert") (ELit (LString "core"))) (EApp (EVar "declCtorIdents") (EVar "coreDecls"))) (EVar "omEmpty"))) (EVar "modules")))
 (DTypeSig false "graphCtorExportsGo" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Ident")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Ident")))))))
@@ -28520,7 +28623,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "prePassModulePair" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))
 (DFunDef false "prePassModulePair" ((PVar "rpNames") (PTuple (PVar "mid") (PVar "prog"))) (ETuple (EVar "mid") (EApp (EApp (EApp (EVar "prePassDict") (EVar "rpNames")) (EListLit)) (EVar "prog"))))
 (DTypeSig false "prePassModulePairArg" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))))))
-(DFunDef false "prePassModulePairArg" ((PVar "rpNames") (PVar "shadowNames") (PVar "dictNames") (PVar "argNames") (PVar "shadowMap") (PTuple (PVar "mid") (PVar "prog"))) (EIf (EBinOp "==" (EApp (EVar "omSize") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "graphMethodExportsRef") "value")) (ELit (LInt 0))) (ETuple (EVar "mid") (EApp (EApp (EApp (EApp (EApp (EVar "prePassDictArg") (EApp (EVar "dedup") (EBinOp "++" (EVar "rpNames") (EVar "shadowNames")))) (EVar "dictNames")) (EVar "argNames")) (EVar "shadowMap")) (EVar "prog"))) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "nameable") (EApp (EVar "nameableIfaceMethodSet") (EVar "prog"))) (DoExpr (ETuple (EVar "mid") (EApp (EApp (EApp (EApp (EApp (EVar "prePassDictArg") (EApp (EVar "dedup") (EBinOp "++" (EVar "rpNames") (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EApp (EApp (EVar "omHasKey") (EApp (EApp (EVar "shadowBareName") (EVar "shadowMap")) (EVar "n"))) (EVar "nameable")))) (EVar "shadowNames"))))) (EVar "dictNames")) (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "nameable")))) (EVar "argNames"))) (EApp (EApp (EVar "filterList") (ELam ((PVar "e")) (EApp (EApp (EVar "omHasKey") (EApp (EVar "snd") (EVar "e"))) (EVar "nameable")))) (EVar "shadowMap"))) (EVar "prog"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "prePassModulePairArg" ((PVar "rpNames") (PVar "shadowNames") (PVar "dictNames") (PVar "argNames") (PVar "shadowMap") (PTuple (PVar "mid") (PVar "prog"))) (EIf (EBinOp "==" (EApp (EVar "omSize") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "graphIfaceMethodsRef") "value")) (ELit (LInt 0))) (ETuple (EVar "mid") (EApp (EApp (EApp (EApp (EApp (EVar "prePassDictArg") (EApp (EVar "dedup") (EBinOp "++" (EVar "rpNames") (EVar "shadowNames")))) (EVar "dictNames")) (EVar "argNames")) (EVar "shadowMap")) (EVar "prog"))) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "nameable") (EApp (EVar "nameableIfaceMethodSet") (EVar "prog"))) (DoLet false false (PVar "callable") (EApp (EVar "callableIfaceMethodSet") (EVar "prog"))) (DoExpr (ETuple (EVar "mid") (EApp (EApp (EApp (EApp (EApp (EVar "prePassDictArg") (EApp (EVar "dedup") (EBinOp "++" (EVar "rpNames") (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EApp (EApp (EVar "omHasKey") (EApp (EApp (EVar "shadowBareName") (EVar "shadowMap")) (EVar "n"))) (EVar "nameable")))) (EVar "shadowNames"))))) (EVar "dictNames")) (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "callable")))) (EVar "argNames"))) (EApp (EApp (EVar "filterList") (ELam ((PVar "e")) (EApp (EApp (EVar "omHasKey") (EApp (EVar "snd") (EVar "e"))) (EVar "nameable")))) (EVar "shadowMap"))) (EVar "prog"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "shadowBareName" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "shadowBareName" ((PVar "sm") (PVar "n")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EVar "sm")) (arm (PCon "Some" (PVar "bare")) () (EVar "bare")) (arm (PCon "None") () (EVar "n"))))
 (DTypeSig true "markModules" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))))
@@ -32823,8 +32926,27 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "reexportedIfaceMethodsOf" ((PVar "acc") (PCon "DUse" (PCon "True") (PVar "path") PWild)) (EMatch (EApp (EApp (EVar "omLookup") (EApp (EVar "usePathModuleId") (EVar "path"))) (EVar "acc")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "src")) () (EApp (EApp (EVar "selectIfaceRows") (EVar "path")) (EVar "src")))))
 (DFunDef false "reexportedIfaceMethodsOf" (PWild PWild) (EListLit))
 (DTypeSig false "selectIfaceRows" (TyFun (TyCon "UsePath") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "selectIfaceRows" ((PCon "UseAlias" PWild PWild) (PVar "src")) (EVar "src"))
 (DFunDef false "selectIfaceRows" ((PVar "path") (PVar "src")) (EMatch (EApp (EVar "importedBindings") (EVar "path")) (arm (PCon "None") () (EVar "src")) (arm (PCon "Some" (PVar "bs")) () (EApp (EApp (EVar "filterList") (ELam ((PVar "r")) (EApp (EApp (EVar "contains") (EApp (EVar "fst") (EVar "r"))) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "bs"))))) (EVar "src")))))
+(DTypeSig false "callableIfaceMethodSet" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "OrdMap") (TyCon "Unit"))))
+(DFunDef false "callableIfaceMethodSet" ((PVar "prog")) (EApp (EApp (EApp (EVar "addAliasIfaceMethods") (EVar "prog")) (EApp (EApp (EVar "namesToSet") (EBinOp "++" (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EVar "funDefs") (EVar "prog"))) (EApp (EApp (EVar "boundImportNames") (EApp (EVar "aliasedModuleIds") (EVar "prog"))) (EVar "prog")))) (EVar "omEmpty"))) (EApp (EVar "nameableIfaceMethodSet") (EVar "prog"))))
+(DTypeSig false "addAliasIfaceMethods" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit"))))))
+(DFunDef false "addAliasIfaceMethods" ((PList) PWild (PVar "acc")) (EVar "acc"))
+(DFunDef false "addAliasIfaceMethods" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest")) (PVar "bound") (PVar "acc")) (EApp (EApp (EApp (EVar "addAliasIfaceMethods") (EVar "rest")) (EVar "bound")) (EApp (EApp (EApp (EVar "addAliasIfaceMethods") (EListLit (EVar "d"))) (EVar "bound")) (EVar "acc"))))
+(DFunDef false "addAliasIfaceMethods" ((PCons (PCon "DUse" PWild (PAs "path" (PCon "UseAlias" PWild PWild)) PWild) (PVar "rest")) (PVar "bound") (PVar "acc")) (EApp (EApp (EApp (EVar "addAliasIfaceMethods") (EVar "rest")) (EVar "bound")) (EMatch (EApp (EApp (EVar "omLookup") (EApp (EVar "usePathModuleId") (EVar "path"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "graphIfaceMethodsRef") "value")) (arm (PCon "None") () (EVar "acc")) (arm (PCon "Some" (PVar "src")) () (EApp (EApp (EApp (EVar "addUnboundRowMethods") (EVar "src")) (EVar "bound")) (EVar "acc"))))))
+(DFunDef false "addAliasIfaceMethods" ((PCons PWild (PVar "rest")) (PVar "bound") (PVar "acc")) (EApp (EApp (EApp (EVar "addAliasIfaceMethods") (EVar "rest")) (EVar "bound")) (EVar "acc")))
+(DTypeSig false "addUnboundRowMethods" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit"))))))
+(DFunDef false "addUnboundRowMethods" ((PList) PWild (PVar "acc")) (EVar "acc"))
+(DFunDef false "addUnboundRowMethods" ((PCons (PTuple PWild (PVar "ms")) (PVar "rest")) (PVar "bound") (PVar "acc")) (EApp (EApp (EApp (EVar "addUnboundRowMethods") (EVar "rest")) (EVar "bound")) (EApp (EApp (EVar "namesToSet") (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "bound"))))) (EVar "ms"))) (EVar "acc"))))
+(DTypeSig false "boundImportNames" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "boundImportNames" (PWild (PList)) (EListLit))
+(DFunDef false "boundImportNames" ((PVar "aliased") (PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "boundImportNames") (EVar "aliased")) (EListLit (EVar "d"))) (EApp (EApp (EVar "boundImportNames") (EVar "aliased")) (EVar "rest"))))
+(DFunDef false "boundImportNames" ((PVar "aliased") (PCons (PCon "DUse" PWild (PVar "path") PWild) (PVar "rest"))) (EIf (EApp (EApp (EVar "contains") (EApp (EVar "usePathModuleId") (EVar "path"))) (EVar "aliased")) (EApp (EApp (EVar "boundImportNames") (EVar "aliased")) (EVar "rest")) (EIf (EVar "otherwise") (EMatch (EApp (EVar "importedBindings") (EVar "path")) (arm (PCon "None") () (EApp (EApp (EVar "boundImportNames") (EVar "aliased")) (EVar "rest"))) (arm (PCon "Some" (PVar "bs")) () (EBinOp "++" (EApp (EApp (EMethodRef "map") (EVar "snd")) (EVar "bs")) (EApp (EApp (EVar "boundImportNames") (EVar "aliased")) (EVar "rest"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "boundImportNames" ((PVar "aliased") (PCons PWild (PVar "rest"))) (EApp (EApp (EVar "boundImportNames") (EVar "aliased")) (EVar "rest")))
+(DTypeSig false "aliasedModuleIds" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "aliasedModuleIds" ((PList)) (EListLit))
+(DFunDef false "aliasedModuleIds" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EBinOp "++" (EApp (EVar "aliasedModuleIds") (EListLit (EVar "d"))) (EApp (EVar "aliasedModuleIds") (EVar "rest"))))
+(DFunDef false "aliasedModuleIds" ((PCons (PCon "DUse" PWild (PAs "path" (PCon "UseAlias" PWild PWild)) PWild) (PVar "rest"))) (EBinOp "::" (EApp (EVar "usePathModuleId") (EVar "path")) (EApp (EVar "aliasedModuleIds") (EVar "rest"))))
+(DFunDef false "aliasedModuleIds" ((PCons PWild (PVar "rest"))) (EApp (EVar "aliasedModuleIds") (EVar "rest")))
 (DTypeSig false "graphCtorExports" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Ident")))))))
 (DFunDef false "graphCtorExports" ((PVar "coreDecls") (PVar "modules")) (EApp (EApp (EVar "graphCtorExportsGo") (EApp (EApp (EApp (EVar "omInsert") (ELit (LString "core"))) (EApp (EVar "declCtorIdents") (EVar "coreDecls"))) (EVar "omEmpty"))) (EVar "modules")))
 (DTypeSig false "graphCtorExportsGo" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Ident")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Ident")))))))
@@ -33073,7 +33195,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "prePassModulePair" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))
 (DFunDef false "prePassModulePair" ((PVar "rpNames") (PTuple (PVar "mid") (PVar "prog"))) (ETuple (EVar "mid") (EApp (EApp (EApp (EVar "prePassDict") (EVar "rpNames")) (EListLit)) (EVar "prog"))))
 (DTypeSig false "prePassModulePairArg" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))))))
-(DFunDef false "prePassModulePairArg" ((PVar "rpNames") (PVar "shadowNames") (PVar "dictNames") (PVar "argNames") (PVar "shadowMap") (PTuple (PVar "mid") (PVar "prog"))) (EIf (EBinOp "==" (EApp (EVar "omSize") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "graphMethodExportsRef") "value")) (ELit (LInt 0))) (ETuple (EVar "mid") (EApp (EApp (EApp (EApp (EApp (EVar "prePassDictArg") (EApp (EVar "dedup") (EBinOp "++" (EVar "rpNames") (EVar "shadowNames")))) (EVar "dictNames")) (EVar "argNames")) (EVar "shadowMap")) (EVar "prog"))) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "nameable") (EApp (EVar "nameableIfaceMethodSet") (EVar "prog"))) (DoExpr (ETuple (EVar "mid") (EApp (EApp (EApp (EApp (EApp (EVar "prePassDictArg") (EApp (EVar "dedup") (EBinOp "++" (EVar "rpNames") (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EApp (EApp (EVar "omHasKey") (EApp (EApp (EVar "shadowBareName") (EVar "shadowMap")) (EVar "n"))) (EVar "nameable")))) (EVar "shadowNames"))))) (EVar "dictNames")) (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "nameable")))) (EVar "argNames"))) (EApp (EApp (EVar "filterList") (ELam ((PVar "e")) (EApp (EApp (EVar "omHasKey") (EApp (EVar "snd") (EVar "e"))) (EVar "nameable")))) (EVar "shadowMap"))) (EVar "prog"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "prePassModulePairArg" ((PVar "rpNames") (PVar "shadowNames") (PVar "dictNames") (PVar "argNames") (PVar "shadowMap") (PTuple (PVar "mid") (PVar "prog"))) (EIf (EBinOp "==" (EApp (EVar "omSize") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "graphIfaceMethodsRef") "value")) (ELit (LInt 0))) (ETuple (EVar "mid") (EApp (EApp (EApp (EApp (EApp (EVar "prePassDictArg") (EApp (EVar "dedup") (EBinOp "++" (EVar "rpNames") (EVar "shadowNames")))) (EVar "dictNames")) (EVar "argNames")) (EVar "shadowMap")) (EVar "prog"))) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "nameable") (EApp (EVar "nameableIfaceMethodSet") (EVar "prog"))) (DoLet false false (PVar "callable") (EApp (EVar "callableIfaceMethodSet") (EVar "prog"))) (DoExpr (ETuple (EVar "mid") (EApp (EApp (EApp (EApp (EApp (EVar "prePassDictArg") (EApp (EVar "dedup") (EBinOp "++" (EVar "rpNames") (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EApp (EApp (EVar "omHasKey") (EApp (EApp (EVar "shadowBareName") (EVar "shadowMap")) (EVar "n"))) (EVar "nameable")))) (EVar "shadowNames"))))) (EVar "dictNames")) (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "callable")))) (EVar "argNames"))) (EApp (EApp (EVar "filterList") (ELam ((PVar "e")) (EApp (EApp (EVar "omHasKey") (EApp (EVar "snd") (EVar "e"))) (EVar "nameable")))) (EVar "shadowMap"))) (EVar "prog"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "shadowBareName" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "shadowBareName" ((PVar "sm") (PVar "n")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EVar "sm")) (arm (PCon "Some" (PVar "bare")) () (EVar "bare")) (arm (PCon "None") () (EVar "n"))))
 (DTypeSig true "markModules" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))))
