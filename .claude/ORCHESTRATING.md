@@ -1691,3 +1691,120 @@ correction, so check rather than re-ask. See `feedback_epistemic_labels_die_in_t
   beats a wider one with a quiet regression — but only if the gap is recorded at equal strength in
   every durable place (ratchet row, source comment, commit message, PR body). Grep for the stale
   footnote; that is the failure mode of an honest headline.
+
+## The typecheck arc, 2026-08-07/08 — eight merges, and the biggest defect source was MY OWN PROSE
+
+Eight PRs merged (#1389, #1393, #1395, #1390, #1410, #1381, #1411, #1415), two S0s closed, six
+issues filed. **Fifteen review passes, fifteen real findings, zero PRs correct as first
+submitted** — every one green on all twelve checks beforehand. The base rate has not decayed.
+What follows is only what generalises.
+
+### ⭐⭐ The orchestrator's PR body is the one artifact with no reviewer
+
+**The plurality of blocking findings this session were in text I wrote, not in agent code.** Agent
+diffs got two adversarial lenses each; the body I wrapped around them got none until a lens
+happened to read it — and a PR body becomes the merge commit message.
+
+- A **round-1 rationale surviving into a round-2 body** (#1393): it still asserted the exact
+  framing the round-2 source retracts in a 🚨 block.
+- A **stale count** (#1390): "exactly two deviations" after review moved it to three — in a PR
+  where a claims lens had already *certified* "two" as true against the artifact.
+- A **diffstat that was neither figure**: `+144/−10` — a net insertion count paired with a
+  *summed* deletion count. ⚠️ **Round diffs do not compose additively** when a later round
+  deletes text an earlier one added. State the true net or the true sum, never one field of each.
+- A **fabricated line number** relayed into a brief, and a **reviewer's overcount** ("two source
+  comments"; there was one) passed through verbatim, costing an auditor a cycle hunting it.
+
+**Every one was a number or a `file:line` I had not run.** Countermeasures, all cheap:
+brief the claims lens at **the body, not just the diff**; re-read the body after every fix round;
+and **never quote a repo-wide count** (`docs-links` references, symbol claims, corpus totals) —
+it is a property of the whole tree at run time, `main` moves under concurrent work, and the only
+durable assertion such a run makes is **0 dead**.
+
+### ⭐⭐ A faithfulness check can CERTIFY the property that is the defect
+
+#1390 restored three spec clauses a 173-line hunk had silently deleted three weeks earlier. The
+claims lens machine-diffed the restoration and **confirmed "verbatim, exactly two deviations."**
+The rules lens then found that **the verbatim-ness was the defect**: the restored clause asserted
+something true when written and falsified by a ruling that landed *while the clause was absent* —
+so nobody reconciled it, and a faithful restore reintroduced the very "one question, two answers"
+defect the issue existed to drain.
+
+**A restore, revert, or cherry-pick is never a null change. Measure the licensing delta against
+CURRENT `main`, never against the point of deletion** — "every sentence stood here until commit X"
+is a claim about history, not about obligation. And **text that was absent while a ruling landed
+is the highest-risk text in the tree**: it is precisely what no reconciliation pass looked at.
+
+Neither lens found the other's defect. This is the sharpest argument yet for the split.
+
+### ⭐⭐ Test every warning the author WROTE against the author's own diff
+
+Twice this session a PR's own comment stated precisely the rule its change broke. #1393's new
+comment read *"Over-offering is not additive: the entry it manufactures SHADOWS whatever the front
+end actually bound"* — written to justify deleting one arm, while the same diff added a new
+over-offering path that adversarial review confirmed as a regression. #1381's review found the same
+shape one PR earlier.
+
+An author who writes a warning has the right rule in hand and lacks only the reflex to turn it on
+their own change. **Grep the diff for every normative sentence it adds and evaluate each as a claim
+about that diff.** Put it in the review brief.
+
+Its mechanism generalises: **a correspondence claim between two code paths must be checked at the
+DATA level, not the control-flow level.** #1393's argument was that one function now mirrors
+another "arm for arm." The arms did mirror; the *tables underneath* did not (one gated on
+visibility, one did not), so a correctly-shaped question was asked of a wrongly-scoped set.
+
+### ⚠️ A two-call state check FAKES a merge-queue bounce
+
+My watcher reported `#1393 BOUNCED`. It had merged. The loop read PR `state` and `isInMergeQueue`
+in **two separate calls**, and the merge completed between them — a bounce and a merge both drive
+`isInMergeQueue` to `false` and differ *only* by `state`. On seeing `queued=false` after having
+been queued, **re-read `state` and decide on the fresh value**; then confirm any terminal verdict
+against the artifact (`git merge-base --is-ancestor <tip> origin/main`), never the watcher's word.
+
+Note the direction: a watcher built to catch a *silent* failure produced a *false alarm* — the
+cheaper direction, but a tripwire that cries wolf is one annoyance away from being widened.
+
+### 🚨 "Resolves but isn't true" — citation currency is what nothing checks
+
+Four findings across two rounds were citations that **resolved** and were **wrong**: right file /
+wrong line, right quote / expired premise, right file / wrong content, right sentence / inside a
+block marked `[REPLACED]`. All four passed a citation audit.
+
+The mechanism is a **seam between two gates**: `check_doc_links.sh` strips a trailing `:NNN` before
+validating (its own header says so) and `agent-doc-symbols` grades backticked symbols — so a
+`path:line` citation is checked for path existence and **nothing else**. Neither gate is buggy; the
+class is uncovered by construction. Evidence recorded on **#1197**.
+
+⚠️ **A rebase alone invalidates line citations without touching a byte of the cited file** — so
+"re-derived against the parent" can be true when written and false when merged. I did this to my
+own agent's work. **Cite compiler internals by symbol name**, which the gates actually check.
+
+### ⚠️ Two landing hazards, both nearly shipped
+
+- **A closing keyword inside a sentence that means the opposite.** *"whoever **fixes #1216** must
+  drain BOTH arms"* sat in a PR body **and** a commit message. GitHub pattern-matches
+  `fix(es)?\s+#\d+` and scans commit messages landing on the default branch — it does not read
+  English. #1216 was the live S0 the merge decision depended on staying open. **Add the grep to the
+  review checklist**: `grep -inE '(close[sd]?|fix(e[sd])?|resolve[sd]?)[[:space:]]+#(N…)'` over the
+  body *and* the message. This repo's memory already flags the trap four times and it still shipped.
+- **An agent amending a pushed commit that a reviewer has seen.** One agent amended with real
+  content changes and force-pushed; the reviewed SHA survived only in the reflog, and the
+  amendment carried **+113/−55 of unreviewed prose** that read as "the same reviewed change." A
+  sibling agent facing the same choice picked a follow-up commit *"so the reviewer's approved SHA
+  stays intact and the delta is reviewable"* — that is the right default. **Say so in the brief**,
+  and pin the reviewed SHA (`git branch preserve/<pr>-reviewed-<sha>`) before allowing a rewrite.
+
+### ⭐ Two adjudications worth reusing
+
+- **A prescription that mispredicts once should be demoted, loudly, in the next brief.** The
+  recorded plan was that a mangler fix would drain a record-layout S0. It did not — the S0's filed
+  root cause was itself wrong (it blamed both emitters; the emitters were correct and typecheck's
+  stamp was not). When the next agent was aimed at that S0, the brief said explicitly *"this route
+  has already mispredicted once; choose your own fix site."* It found the real cause in one probe.
+  **Correct the issue body when a root cause is disproved** — the next reader inherits it otherwise.
+- **"Land with pins" is a legitimate answer to a severity-increase finding when the defect is
+  PRE-EXISTING and the control proves it.** A unit's accept-widening routed new programs into a
+  silent divergence — but a control showed the same graph already reached it on `main`. The unit
+  widened *reachability*, not the defect. Landed with a must-fail pin plus the disclosure re-graded
+  from S1-loud to S0-silent. The discriminator is the control, not the severity label.
