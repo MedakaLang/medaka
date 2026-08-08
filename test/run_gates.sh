@@ -325,10 +325,18 @@ EOF
   # `mktemp -d` that nothing uploads and nothing prints, so a required CI shard could
   # fail with a bare `FAIL  <gate>` and NOTHING else. On a dev box you just re-run the
   # gate; in CI the temp dir is gone with the runner, so a failure that does not
-  # reproduce locally is not diagnosable AT ALL — which is exactly the situation that
-  # prompted this (a gate red in the CI eval shard across three pushes and green on
-  # seven local runs: warm build, cold bootstrap from the seed, JOBS=1, JOBS=2 through
-  # this script, JOBS=12, and pinned to two cores).
+  # reproduce locally is not diagnosable AT ALL.
+  #
+  # The incident that prompted this is worth stating exactly, because the obvious reading
+  # of it is wrong: `diff_compiler_import_order` was red in the CI eval shard across three
+  # pushes and green on seven local runs (warm build, cold bootstrap from the seed, JOBS=1,
+  # JOBS=2 through this script, JOBS=12, two-core-pinned). That looked environment-dependent
+  # and was not. `main` had gained a LEDGERED fixture the branch predated, the branch's fix
+  # DRAINED it, and CI tests the PR merged onto `main` while the local tree does not — so
+  # the two were grading different corpora. One line of the gate's own output said so
+  # ("DRAINED — … no longer diverges"); it was thrown away, and hours went into
+  # environment theories instead. A merge-vs-branch corpus difference is the single most
+  # likely reason a gate is red only in CI, and it is exactly what this output reveals.
   #
   # Bounded at 80 lines per gate so a chatty gate cannot bury the summary above it,
   # and the head/tail split keeps a gate's own preamble (which usually says WHICH case
