@@ -1,0 +1,28 @@
+-- SHADOW-SEMANTICS cell D24 (S1-NS (b), RETURN-POSITION): this module DEFINES its own `zed`
+-- and reaches `smod` only through `import smod.{sf}` -- which admits neither the type name
+-- `Zed` nor the method name `zed`. So `zed` is not in S1's right operand, it is not a
+-- shadow, and the module's own binding answers: 42 + 0 = 42.
+--
+-- 🚨 THE WHOLE CORPUS WAS ARG-POSITION UNTIL THIS CELL. Derive it: every interface method
+-- in test/shadow_fixtures/ mentioned its typaram in an ARGUMENT. `zed : a` does not -- the
+-- typaram appears only in the RESULT -- and that single axis selects a completely different
+-- input to the mark pass: `returnPosMethodNames`, which was concatenated RAW while the
+-- arg-position inputs were filtered. Dispatch-eligibility was therefore a strict SUPERSET of
+-- shadow-hood, which is S1-NS's own "Newly NON-CONFORMANT (1)", and 52 assertions were green
+-- over it because not one of them could express a return-position method.
+--
+-- Measured BEFORE THIS ROUND'S `rpNames` FILTER -- i.e. against this PR's own intermediate
+-- head, NOT against the merge base. (The merge base does not print anything on the `build`
+-- arm at all: it fails with `E-PANIC: unbound method: zed` and produces no artifact, which
+-- is a different and louder defect.) `run` printed 777 (the impl body, through an interface this
+-- module cannot name) while the BUILT BINARY printed 42 -- both exit 0, no diagnostic on any
+-- verb. On emit the occurrence is mangled to `main__zed`, so the bare-keyed `rpNames` misses
+-- it and the filtered `shadowMap` decides; on `run` the name is still bare and `rpNames`
+-- matches. That is why this cell must be graded on `run` AND the built binary: an
+-- ACCEPT/REJECT column sees nothing, and either verb alone sees nothing either.
+import smod.{sf}
+
+zed : Int
+zed = 42
+
+main = println (zed + sf 0)

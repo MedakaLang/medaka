@@ -3,6 +3,3 @@ export interface Sizeable a where
 
 impl Sizeable String where
   size s = 7
-
-export sf : Int -> Int
-sf n = n

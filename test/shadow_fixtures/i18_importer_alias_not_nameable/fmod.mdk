@@ -1,0 +1,3 @@
+-- SHADOW-SEMANTICS cell I15 provider 2: the standalone main.mdk explicitly imports.
+export size : String -> Int
+size s = 99

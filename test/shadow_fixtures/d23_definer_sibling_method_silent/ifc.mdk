@@ -1,0 +1,10 @@
+-- SHADOW-SEMANTICS cell I19 provider 1: an interface with TWO methods.  `tag` is the
+-- SIBLING the consumer imports; `size` is the one it never names.  The impl is at String
+-- -- the same head the shadowing standalone accepts -- which is what makes the cell silent.
+export interface Sizeable a where
+  size : a -> Int
+  tag : a -> Int
+
+impl Sizeable String where
+  size s = 777
+  tag s = 1

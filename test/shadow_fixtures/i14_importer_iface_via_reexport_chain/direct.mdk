@@ -1,0 +1,10 @@
+-- SHADOW-SEMANTICS cell I14's CONTROL, graded as its own row by this gate.
+-- Byte-identical to main.mdk's import block except the first line: `ifc` directly instead
+-- of `reexp`. Same interface, same impl, same receiver, same standalone -- so whatever the
+-- answer is, the two files must produce it identically. A divergence means the chain hop
+-- itself changed the program's meaning, which is the defect this pair exists to catch.
+import ifc.{Sizeable}
+import boxmod.{Box(..)}
+import fmod.{size}
+
+main = println (size (Box 3))

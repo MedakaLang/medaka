@@ -1,0 +1,11 @@
+-- SHADOW-SEMANTICS cell I17 provider 2: an UNRELATED interface that happens to declare a
+-- method with the same bare name at a DIFFERENT dispatch index (1, not 0), plus the
+-- program's only impl.  The differing index is what made the collision observable.
+export interface IZ b where
+  mth : Int -> b -> Int
+
+impl IZ String where
+  mth n s = 7
+
+export zf : Int -> Int
+zf n = n

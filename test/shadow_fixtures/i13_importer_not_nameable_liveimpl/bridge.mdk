@@ -1,0 +1,6 @@
+-- SHADOW-SEMANTICS cell I13 provider 3: a PLAIN `import` naming only `ifn`.  It
+-- pulls `ifcmod` into the loaded graph and re-exports nothing of it.
+import ifcmod.{ifn}
+
+export bf : Int -> Int
+bf n = ifn n

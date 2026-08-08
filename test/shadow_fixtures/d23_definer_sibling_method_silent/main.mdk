@@ -1,0 +1,28 @@
+-- SHADOW-SEMANTICS cell D23 (S1-NS (a), DEFINER twin of I19): this module DEFINES its own
+-- `size` and reaches the interface ONLY by naming a SIBLING method. `import ifc.{tag}`
+-- admits `tag` and nothing else, so `size` is not in S1's right operand here, it is not a
+-- shadow, and the module's OWN top-level binding answers: 42.
+--
+-- 🚨 THE DEFINER S0 THE S1-NS PASS NAMES, AND IT HAD NO FIXTURE AT ALL. Under per-ROW
+-- admission the interface was admitted because a DIFFERENT method was named, `size` became a
+-- shadow, and S2's definer inversion never got the chance to fire -- so a module's own
+-- top-level function was silently replaced by a foreign impl body, printing 777 at exit 0
+-- with no diagnostic on any verb. A module losing its own definition to an interface it
+-- never named is the worst shape in this corpus, and the corpus could not express it.
+--
+-- ⚠️ SCOPE, measured rather than assumed: `main` ALREADY gives 42 here. This cell fails only
+-- against the intermediate state of the PR that introduced per-ROW admission, so it guards a
+-- regression that unit introduced rather than one it inherited. It is kept because the shape
+-- is the one the ruling is written about and nothing else in the corpus expresses it -- but
+-- do not cite it as evidence that the unit changed behaviour on `main`.
+--
+-- The receiver is String, inside the standalone's domain AND at the impl's head, so both
+-- candidates typecheck: only a pinned VALUE can tell 42 from 777. The definer/importer pair
+-- matters because S2 treats the two kinds differently -- I19 is the importer half, and a fix
+-- that repaired one without the other would leave this one silent.
+import ifc.{tag}
+
+size : String -> Int
+size s = 42
+
+main = println (size "abc")

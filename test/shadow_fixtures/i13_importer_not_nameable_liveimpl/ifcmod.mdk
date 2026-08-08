@@ -1,0 +1,12 @@
+-- SHADOW-SEMANTICS cell I13 provider 2: the interface AND a live impl at the
+-- receiver's head tycon.  Nothing main.mdk imports re-exports either.
+import boxmod.{Box}
+
+export interface Sizeable a where
+  size : a -> Int
+
+impl Sizeable Box where
+  size (Box n) = n * 100
+
+export ifn : Int -> Int
+ifn n = n

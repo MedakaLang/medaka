@@ -1,0 +1,33 @@
+-- SHADOW-SEMANTICS cell I17's ORDER twin, graded as its own row.  Byte-identical to
+-- main.mdk except the two interface-module import lines are swapped.  Reordering import
+-- clauses is cosmetic -- every formatter and every reviewer treats it that way -- so the
+-- two rows must agree, and a program whose meaning depends on the difference is wrong
+-- whatever the right answer turns out to be.
+--
+-- Before the fix these two files disagreed about whether the program COMPILES: main.mdk
+-- accepted at exit 0 printing 7, this one was rejected `Type mismatch: Int vs String`.
+--
+-- ⚠️ A PAIR IS WEAKER THAN A PERMUTATION DIFFERENTIAL: three import clauses have six
+-- orderings and this pins two.  The other four are NOT owed --
+-- `test/import_order_fixtures/1351-methoddispatchidx-import-order-collision/` is this same
+-- graph in the permutation corpus, and it is STILL LEDGERED there.  These two rows are the
+-- SEMANTIC companion to that one: they say WHY the answer is 99 -- neither interface is
+-- nameable in the entry -- and pin the VALUE on all three verbs, which an invariance check
+-- alone cannot, because six orderings agreeing on a WRONG value is also invariant.
+--
+-- 🚨 THIS HEADER SAID THAT FIX "DRAINED ITS LEDGER ROW, SO IT NOW RUNS UNLEDGERED".  IT IS
+-- FALSE AND IT IS DANGEROUS.  An early round of the fix did drain the row; a later round
+-- RE-POINTED the permutation fixture instead -- its entry member list went from
+-- `zmodI.{zf}` to `zmodI.{IZ, zf}` -- and RE-CUT the two ledger signatures, precisely so
+-- the case keeps diverging.  `sh test/diff_compiler_import_order.sh` reports it
+-- `KNOWN-BAD #1351, still diverging exactly as pinned`, and `test/IMPORT-ORDER-LEDGER.txt`
+-- still carries the row.  DO NOT "fix" that fixture back to the converging spelling: under
+-- the old member list neither interface is nameable there, `mth` stops being a shadow, the
+-- bare-name dispatch-index table is never consulted, and the case converges for a reason
+-- that has nothing to do with #1351 -- which is OPEN, `verified`, and S0.  Converging it
+-- would silently remove its only mechanical guard.
+import fmodI.{mth}
+import zmodI.{zf}
+import amodI.{af}
+
+main = println (mth "abc" 5 + af 0 + zf 0)

@@ -191,7 +191,7 @@ spelled out:
 
 | Term | Means | Used by |
 |---|---|---|
-| **nameable in `M`** | the declaration is one `M` may refer to by name: declared in `M`, **or** exported by a module `M` imports (directly, or through a re-export chain — **RULED IN SCOPE 2026-08-07, [#1380](https://github.com/MedakaLang/medaka/issues/1380); see S1-CHAIN under S1**, which also says what is still deferred: the sub-predicate deciding when a declaration counts as *exported through* a chain), **or** declared in the implicit prelude | S1's **interface** operand |
+| **nameable in `M`** | the declaration is one `M` may refer to by name: declared in `M`, **or** exported by a module `M` imports **AND ADMITTED BY THAT IMPORT PATH** (directly, or through a re-export chain — **RULED IN SCOPE 2026-08-07, [#1380](https://github.com/MedakaLang/medaka/issues/1380); see S1-CHAIN under S1**, which also says what is still deferred: the sub-predicate deciding when a declaration counts as *exported through* a chain), **or** declared in the implicit prelude. ⚠️ **The "and admitted by that import path" clause was ADDED 2026-08-08 by S1-NS**: this row previously said only *"exported by a module `M` imports"*, which is module-level and, read literally, is satisfied by `import smod.{sf}` — an import that names one unrelated function. That reading is exactly the too-loose one this document's own headline forbids, and it shipped as a bug. **What "admitted" means is S1-NS (a), which is the per-METHOD union of the two namespaces — see S1-NS under S1.** | S1's **interface** operand |
 | **defined in `M` or imported into `M`** | the two cases that assign a shadow its **kind** (definer / importer) — so this is also, exactly, S1's **standalone** operand | S1's **standalone** operand + the kind partition |
 | **graph-global** | ranges over **every** module of the loaded graph, whether or not any import path reaches it — `DICT-SEMANTICS.md` §8 **I5** | S2's **impl universe** only |
 
@@ -258,15 +258,29 @@ Given an occurrence of bare name `N` in module `M`:
   > is a **name-resolution** rule: given a bare name the author wrote, it decides
   > which of two candidate denotations that name has. For the rule to be
   > *choosing*, both candidates must be things the author could have meant — and a
-  > method of an interface `M` cannot name is one `M` cannot call, cannot import,
-  > cannot request by writing a `=>` constraint (S5), and cannot write an `impl`
-  > for. Letting it decide what `M`'s own written names denote is not a tie-break
+  > method of an interface `M` can neither **name** nor **call** is one `M` cannot
+  > reach at all. Letting it decide what `M`'s own written names denote is not a tie-break
   > between candidates; it is one candidate being supplied from outside the
   > program the author can see. That is also the reading under which S1's
   > **left** operand and its **right** operand carry the same scope: the left one
   > is *already* pinned by this clause's own kind partition (a standalone neither
   > defined in `M` nor imported into `M` has no shadow kind, so S2 — stated per
   > kind — would assign its occurrences no denotation at all).
+  >
+  > 🚨 **CORRECTION (2026-08-08, S1-NS). The sentence above USED TO READ** *"a method
+  > of an interface `M` cannot name is one `M` cannot call, cannot import, cannot
+  > request by writing a `=>` constraint (S5), and cannot write an `impl` for."*
+  > **That four-way conjunction is FALSE, and its falsity is why this clause could be
+  > quoted in good faith to reach opposite answers.** Measured: the four split **2–2**
+  > along the namespace line. With `import ifc.{size}` — the interface NOT nameable —
+  > calling `size 5` is **ACCEPTED with no diagnostic**, while `impl Sizeable Blob` and
+  > `twice : Sizeable a => a -> Int` are both rejected `Unknown interface: Sizeable`.
+  > With `import ifc as I`, `I.size 5` is likewise **ACCEPTED** while `impl Sizeable Int`
+  > is rejected. So *call* and *import* track the **VALUE** namespace; *`impl`* and
+  > *`=>`* track the **TYPE** namespace. The repaired sentence claims only what holds:
+  > a method the module can neither name nor call is unreachable. **The consequence —
+  > that S1's operand must be the UNION of the two namespaces rather than either one —
+  > is S1-NS below.**
   >
   > This is the same tie-break the **S2 inversion** rests on, applied one level
   > out: *"a name written at top level in a module is that module's name"*, and
@@ -311,6 +325,102 @@ Given an occurrence of bare name `N` in module `M`:
   > (that narrowing is the ruling's content), nor by a perf result on per-module
   > name sets (that is an argument about the implementation: cache the scoped
   > predicate, do not re-globalize it).
+  >
+  > ### 🔒 S1-NS — RULED 2026-08-08: S1's interface operand is the PER-METHOD UNION of the two namespaces, and marking is CLOSED under shadow-hood
+  >
+  > **(a) The operand.** A bare method name `n` is in S1's **right** operand in module
+  > `M` iff at least one interface `I` declaring a method named `n` satisfies any of:
+  >
+  > - **(i) TYPE arm** — `I`'s own name is admitted into `M`: `I` is declared in `M`,
+  >   declared in the implicit prelude, or `M`'s import path admits the name `I` (a
+  >   member list naming `I`, or a wildcard), **at any re-export depth**.
+  > - **(ii) VALUE arm** — the name `n` is admitted into `M` as a callable method of
+  >   `I`: a member list naming `n`, a wildcard, or a **module alias**
+  >   (`import ifc as A`, since `A.n` is a legal call), **at any re-export depth**.
+  > - **(iii)** `I` is declared in `M` or in the implicit prelude.
+  >
+  > **Per METHOD, not per interface row.** A member list naming the *interface* admits
+  > every method of it (an author who can write `impl I T` can write all of them). A
+  > member list naming *some* methods admits **only those methods**. This is measured,
+  > not stylistic: `import ifc.{tag}` leaves a sibling `size` **Unbound**, so admitting
+  > a whole row because one member is named makes a **different** name dispatch-eligible
+  > on evidence that says nothing about it.
+  >
+  > **Both arms apply symmetrically on the RE-EXPORT side.** `export import ifc.{size}`
+  > must admit `size` one hop down exactly as `export import ifc.{Sizeable}` admits the
+  > row. An implementation whose re-export arm matches only interface names is
+  > **non-conformant**.
+  >
+  > **(b) THE CLOSURE INVARIANT.**
+  >
+  > > **An occurrence of a bare name that a conforming implementation resolves by
+  > > interface DISPATCH must be one S1 classifies.** The predicate deciding
+  > > **shadow-hood** MUST be a **superset** of the predicate deciding **dispatch
+  > > eligibility**. Two different predicates at the two sites is **non-conformant,
+  > > whichever way they differ.**
+  >
+  > In the gap `dispatch-set ∖ shadow-set` an occurrence is routed to an `impl` while
+  > S1 has declined to classify it, so S2's definer inversion never fires and a module's
+  > own top-level binding is replaced by a foreign impl body with no diagnostic on any
+  > verb. Worse, the occurrence is *typed* against the standalone and *routed* to the
+  > method: measured, that yields `check` exit 0 then `run`/`build` E-PANIC. That is a
+  > type hole, not a scoping disagreement. (b) is namespace-independent.
+  >
+  > **Why the union, and not either namespace alone.** Each arm is load-bearing and each
+  > was measured. Drop the VALUE arm and `import ifc.{size}` — the spelling the compiler
+  > *demands* for a call — stops being dispatch-eligible: `check` 0, `run` correct,
+  > **`build` E-PANIC: arg-tag dispatch on impl type that owns no constructors**. Drop
+  > the TYPE arm and `export import ifc.{Sizeable}` stops making a shadow — precisely
+  > what S1-CHAIN enumerates as non-conformant. Neither namespace alone can serve S1,
+  > and (b) forbids serving each at a different site.
+  >
+  > **Newly NON-CONFORMANT.** (1) Deciding shadow-hood with one predicate and dispatch
+  > eligibility with a wider one. (2) A predicate satisfied only by the **type** name,
+  > so `import ifc.{size}` does not admit it. (3) A predicate satisfied only by a
+  > **method** name, so `import ifc.{Sizeable}` does not admit the row. (4) An
+  > implementation whose **re-export** arm and **import** arm evaluate different
+  > namespaces. (5) Admitting a whole interface row because a member list names **one of
+  > its methods**.
+  >
+  > **Newly ACCEPTED / a DIFFERENT VALUE.** 🚨 **Read the BASELINE before the count — this
+  > paragraph used two different ones in four lines.** Every figure below is against the
+  > **merge base of the PR that landed S1-NS** (`main` at `61aa6399`; `compiler/types/
+  > typecheck.mdk` is byte-identical there and at `b5f8c489`, the base that PR was cut
+  > from). That is the only referent still reconstructable once the PR is merged, so an
+  > intra-PR baseline — "before this round's filter", "the state that shipped per-row
+  > admission" — must never be spelled *pre-ruling compiler*, which is what an earlier
+  > revision did on one side of this paragraph and not the other.
+  >
+  > **Of the shapes S1-NS itself governs, exactly ONE changes value against that base:** an
+  > **importer** shadow whose interface is reachable only by naming a *sibling* method loses
+  > shadow-hood, so a receiver inside the standalone's domain answers with the imported
+  > standalone rather than the impl (777 → 42). That is S1-SCOPE's acceptance narrowing
+  > reaching its **silent** half, and it is the cost this clause charges itself. Corpus:
+  > `test/shadow_fixtures/i19_importer_sibling_method_silent/`.
+  >
+  > ⚠️ **Measured, and stated because an earlier draft of this paragraph over-claimed.**
+  > The definer twin (`d23_definer_sibling_method_silent/`) and the method-name re-export
+  > chain (`i20_importer_method_reexport_chain/`) are **42/42 and 50/50** against that same
+  > base and after: they pin shapes the ruling makes *unrepresentable*, not values it
+  > changes. Citing all three as "newly different" reads as three behaviour changes where
+  > there is one.
+  >
+  > ⚠️ **"ONE shape" is scoped to S1-NS, NOT to the PR that carried it.** S1-SCOPE (#1375)
+  > landed in the same PR and moves considerably more against the same base — `i12` (7 → 99),
+  > `i13` (ACCEPT 300 → located REJECT), `i15` (7 → 99), `i17/main.mdk` (7 → 99),
+  > `i17/order-swapped.mdk` (REJECT → ACCEPT 99), plus `i19` above. This list is a floor and
+  > a pointer, not a census: re-derive it by building the base and re-running
+  > `test/diff_compiler_shadow_semantics.sh` rather than by trusting a count written here.
+  >
+  > **Explicitly NOT changed:** S2's graph-global impl universe (`DICT-SEMANTICS.md` §8
+  > I5). S1-NS constrains a set of NAMES; it cannot narrow an instance environment.
+  >
+  > **⟲ Overturn condition.** (a) is overturned by a program written entirely against
+  > names its own module can either *write* or *call*, correct under the language's
+  > other rules, whose intended meaning requires a **strictly narrower** operand than
+  > the union. (b) is overturned only by exhibiting a dispatch-eligible occurrence that
+  > S1 declines to classify **and** for which some other clause supplies a denotation —
+  > today no clause does, which is why the gap is silent.
   >
   > ### 🔒 S1-CHAIN — RULED 2026-08-07 ([#1380](https://github.com/MedakaLang/medaka/issues/1380)): a RE-EXPORT CHAIN is IN SCOPE for S1
   >
@@ -1073,10 +1183,10 @@ Line numbers at `cfc4fa5a`.
 
 | Clause | Stage / site | What it enforces | **Keying assumption** |
 |---|---|---|---|
-| S1 detect (run/check, definer) | 🔴 **STALE — re-verified 2026-08-07, wrong on the Module path.** `buildDefinerShadows` is the FLAT-path function; on the MODULE (multi-module) path the reader is `definerShadowsFromSet`, keyed on `crossRun.value.universeIfaceMethodsRef` (grown by `appendUniverseAccums` → `allIfaceMethodNames`) — not the symbols or line numbers this cell names. Line numbers are additionally untrusted per this table's own preamble | this module's funDefs that name a method | **bare-name intersection, but NOT via `accData`/`publicDataDecls` — those are DEAD on the Module path** (`fullUniverse` binds `[]` there; an in-source comment calls the old accData concat "a dead per-module O(N) concat"). The real feeder, `allIfaceMethodNames`, has **no `pub` filter** (sees a private interface's methods too — the opposite of what "public decls" implies) and is accumulated **cumulatively in the loader's dependency-first topological order**, not filtered by import reachability — the same shape as `DICT-SEMANTICS.md` §8 I5's "PARTIAL — cumulative, not global" row for the impl universe. This is the mechanism behind #1375's reachability axis; see row-14 BUG |
+| S1 detect (run/check, definer) | 🔴 **STALE — re-verified 2026-08-07, wrong on the Module path.** `buildDefinerShadows` is the FLAT-path function; on the MODULE (multi-module) path the reader is `definerShadowsFromSet`, keyed on `crossRun.value.universeIfaceMethodsRef` (grown by `appendUniverseAccums` → `allIfaceMethodNames`) — not the symbols or line numbers this cell names. Line numbers are additionally untrusted per this table's own preamble | this module's funDefs that name a method | **bare-name intersection, but NOT via `accData`/`publicDataDecls` — those are DEAD on the Module path** (`fullUniverse` binds `[]` there; an in-source comment calls the old accData concat "a dead per-module O(N) concat"). The real feeder, `allIfaceMethodNames`, has **no `pub` filter** (sees a private interface's methods too — the opposite of what "public decls" implies) and is accumulated **cumulatively in the loader's dependency-first topological order**, not filtered by import reachability — the same shape as `DICT-SEMANTICS.md` §8 I5's "PARTIAL — cumulative, not global" row for the impl universe. This is the mechanism behind #1375's reachability axis; see row-14 BUG. ⚠️ **The FEEDER is still unfiltered; the RESULT no longer is (S1-NS / #1353, 2026-08-08).** `checkBodyImpl` now wraps *both* `definerShadowsFromSet` and `standaloneShadowsFromSet` in `nameableIfaceShadows`, which intersects the answer with `nameableIfaceMethodSet` — the methods of the interfaces that module can NAME. So this cell describes the operand, not the answer |
 | S1 detect (run/check, importer) | `typecheck.mdk:17020` `buildStandaloneShadowsGraph` | imported standalones shadowing a method | imported funDef names minus local names, methods scanned across `implDecls ++ prog` (the `cfc4fa5a` fix: LOCAL interfaces included) |
 | S1 detect (build path) | `typecheck.mdk:11475` `computeMangledShadowMap` + `unitMangledShadows:11480`, set once at `elaborateModules:11932` (`mangledShadowMapRef`); consumed by `buildDefinerShadows:11460` and `buildStandaloneShadowsGraph:11487-11497` | recover shadows AFTER mangling renamed the standalone | **forward-constructs `mangledName mid m`** per (module, method) and checks it against actual funDefs — exact, not prefix-stripping; empty map on the un-mangled path (inert) |
-| S1 mark | `typecheck.mdk:11942` `markRpNames` (∪ `buildStandaloneShadowsGraph`) → `prePassDictArg`/`prePassModulePairArg:11943-11944` rewrite occurrences to `EMethodAt` | occurrences get a route ref | graph-wide name set over USER modules (core excluded) |
+| S1 mark | `typecheck.mdk:11942` `markRpNames` (∪ `buildStandaloneShadowsGraph`) → `prePassDictArg`/`prePassModulePairArg:11943-11944` rewrite occurrences to `EMethodAt` | occurrences get a route ref | graph-wide name set over USER modules (core excluded). ⚠️ **NO LONGER graph-wide on the Module path (S1-NS / #1353, 2026-08-08).** `markRpNames` is still what `core` is marked with, but each USER module goes through `prePassModulePairArg`, which filters four of its five inputs — `rpNames`, the graph shadow set (through `shadowBareName`), `argNames` and `shadowMap` — to `nameableIfaceMethodSet` for *that* module. `dictNames` is the one input left unfiltered, and is not an input to dispatch (it yields `EDictAt`) |
 | (enabler of the S1 build split) | `compiler/backend/private_mangle.mdk`: `mangleUnits:117`, `buildUnitRenameMap:372`, `renameDecl` DFunDef `~578` + `renameScoped` EVar `~651` rename the standalone def + refs to `<mid>__N`; `renameIfaceMethod:626`/`renameImplMethod:636` leave the method **NAME bare** (header `:34-46`: dispatch is by bare name cross-module) | collision-free private symbols | **the asymmetry**: standalone side mangled, method side bare — which is exactly what defeated name-intersection detection (bug `0b4a7882`); driver order `compiler/entries/entry_support.mdk:133-134` (`runEmitWith`) and `:145-146` (`emitModulesWith`): mangle STRICTLY before mark |
 | S2 type + record (definer) | app-head peel → `definerShadowArgHead` (definer disjunct gated `ifaceMethodName`, fires on `definerShadowNamesRef`; importer-on-emit disjunct gated `singleTyparamIfaceMethod`, fires on a mark-seeded `RLocal sym` — the cross-module emit signal) → `inferDefinerShadowApp` + `definerShadowHeadType`. The un-marked `check` path peels via `definerShadowVarHead` → `inferDefinerShadowVarApp`. **`definerReceiverDispatches` is the single decision point** | **[CHANGED — THE INVERSION]** a definer shadow types against the STANDALONE scheme, **always** (via the mangled sym on build — the scheme-selection SIGSEGV fix); `enforceStandaloneDomain` then imposes its declared domain, so a live-impl receiver is a located reject. The only dispatch arm left is S5's dict-bound receiver | ⚠️ **`definerShadowArgHead` fires for IMPORTER shadows too** — its `routeLocalSym != ""` arm is the cross-module emit signal, so `inferDefinerShadowApp` serves BOTH kinds on the mangled path. "Did we reach this function" is therefore **NOT** the same question as "is this a definer shadow": `definerReceiverDispatches` must re-ask it via `isDefinerShadow` (`definerShadowNamesRef` never holds an imported standalone) or the inversion leaks onto importers and breaks `import map` |
 | S2 type + record (importer) | `typecheck.mdk:4950` `shadowStandaloneHead` → `inferShadowApp:4979`; standalone schemes stashed in `shadowStandaloneSchemesRef` (`checkModuleFullImpl:11210`, concrete-head pick); impl query table `shadowKeyTableRef` (`:11217`, includes LOCAL impls per `cfc4fa5a`) | live-impl head ⇒ ordinary app (dispatch); else instantiate the IMPORTED standalone scheme + stamp `RLocal` | standalone scheme = the seedVars entry whose first arrow domain has a **concrete head tycon** (never the poly method scheme) |

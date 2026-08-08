@@ -1,0 +1,8 @@
+export interface Zed a where
+  zed : a
+
+impl Zed Int where
+  zed = 777
+
+export sf : Int -> Int
+sf x = x

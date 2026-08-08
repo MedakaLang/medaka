@@ -1,0 +1,5 @@
+-- SHADOW-SEMANTICS cell I16 provider 3: the shadowing standalone. Its domain is String,
+-- the SAME head the impl covers, so both candidates typecheck and the difference between
+-- them is a VALUE, never a verdict.
+export size : String -> Int
+size s = 99

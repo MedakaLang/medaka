@@ -2625,6 +2625,7 @@ data DriverState =
   | DriverState {
       effectDomains : Ref (List (String, Param)),
       graphMethodExportsRef : Ref (OrdMap (List (String, Ident))),
+      graphIfaceMethodsRef : Ref (OrdMap (List (String, List String))),
       graphCtorExportsRef : Ref (OrdMap (List (String, String, Ident))),
       abstractRecordTypesRef : Ref (List String),
       argDispatchIdxRef : Ref (List (String, Int)),
@@ -2652,6 +2653,7 @@ freshDriverState : Unit -> DriverState
 freshDriverState _ = DriverState {
   effectDomains = Ref [],
   graphMethodExportsRef = Ref omEmpty,
+  graphIfaceMethodsRef = Ref omEmpty,
   graphCtorExportsRef = Ref omEmpty,
   abstractRecordTypesRef = Ref [],
   argDispatchIdxRef = Ref [],
@@ -16545,13 +16547,19 @@ checkBodyImpl seed mode prog0 =
   -- SET instead (byte-identical membership).  importerShadows exist only across a module
   -- boundary; the `Module _ _ []` arm (cmCheckWorker / core pass, implDecls = []) keeps
   -- the old empty result — `funDefs [] = []` gave no imported fns there.
+  -- #1354 unit A (#1353): both accumulators are graph-global, so the intersection alone
+  -- implements only S1's LEFT operand.  `nameableIfaceShadows` supplies the RIGHT one —
+  -- the interface must be nameable in THIS module.  Applied to the RESULT, never inside
+  -- either filter (the result is single-digit; `fnSet` is every fn name in the graph), and
+  -- fail-open when the graph index is absent.  See `nameableIfaceShadows`.  The Flat arms
+  -- are untouched: a single file is one module and its own interfaces are nameable in it.
   let definerShadows = match mode
     Flat _ => buildDefinerShadows fullUniverse prog0
-    Module _ _ _ => definerShadowsFromSet crossRun.value.universeIfaceMethodsRef.value prog0
+    Module _ _ _ => nameableIfaceShadows prog0 (definerShadowsFromSet crossRun.value.universeIfaceMethodsRef.value prog0)
   let importerShadows = match mode
     Flat _ => []
     Module _ _ [] => []
-    Module _ _ _ => standaloneShadowsFromSet crossRun.value.universeIfaceMethodsRef.value crossRun.value.universeFunNamesRef.value prog0
+    Module _ _ _ => nameableIfaceShadows prog0 (standaloneShadowsFromSet crossRun.value.universeIfaceMethodsRef.value crossRun.value.universeFunNamesRef.value prog0)
   let sigs = sigsOf prog
   let _ = setRef perRun.value.definerShadowNamesRef definerShadows
   let _ = setRef perRun.value.definerShadowSigsRef sigs
@@ -21469,6 +21477,119 @@ standaloneShadowsFromSet ifaceSet fnSet prog =
     None => []) (omKeys fnSet)
   dedup (direct ++ mangled)
 
+-- ── #1354 unit A (#1353): SHADOW-SEMANTICS S1's `nameable in M` interface operand ──
+-- `docs/spec/SHADOW-SEMANTICS.md` S1 (SCOPE RULED 2026-08-06, #1375) intersects
+-- funDef-names(standalones defined in or imported into `M`) with
+-- iface-method-names(interfaces **nameable in `M`**).  `universeIfaceMethodsRef` is the
+-- accumulated method-name set of EVERY module the loader processed, so the two builders
+-- above implement the LEFT operand's scope (the `fnSet`/`localNames` guards) and give the
+-- RIGHT one none: an interface reachable only transitively, through a module that
+-- re-exports nothing, captured a standalone the occurrence's module had explicitly
+-- imported (#1353, S0 — `7` instead of `99`, at exit 0, no diagnostic).
+--
+-- The remedy is a SUPPLY, not a re-key: the set is a correct MEMBERSHIP set and re-keying
+-- it would answer a question nobody asks of it.  This is the missing predicate, applied to
+-- the ALREADY-COMPUTED intersection rather than inside either operand's filter — the
+-- intersection is single-digit in practice (over `compiler/**` + `stdlib/*` it is 3:
+-- `toList`, `isEmpty`, `orElse`) while `fnSet` holds every top-level fn name in the graph,
+-- so filtering the result is cheap and filtering the operand is not.
+--
+-- ⚠️ THE PREDICATE ASKS A TYPE-NAMESPACE QUESTION, and getting that wrong is how the first
+-- cut of this fix shipped two defects at once — see `graphIfaceMethods` for both, measured.
+-- §1.0's row says `nameable in M` qualifies **S1's INTERFACE operand**; asking instead
+-- whether the METHOD NAME is exported along the import path is a different question that
+-- answers differently in BOTH directions.
+--
+-- 🚨 IT FAILS OPEN, DELIBERATELY, AND THAT DIRECTION IS LOAD-BEARING.  Dropping shadow-hood
+-- from an occurrence that IS one makes it dispatch unconditionally (`recordRLocalSite`'s
+-- `standaloneValuesRef` guard declines, so no pending site exists for
+-- `resolveRLocalSites` to stamp and the route stays the method's RKey) — the S4/#410
+-- class, up to `no impl of method … for type …` on a valid program and a SIGSEGV variant.
+-- Adding shadow-hood is the pre-existing behaviour.  So an ABSENT index answers True for
+-- every name rather than False: `graphIfaceMethodsRef` is written unconditionally at both
+-- Module-mode driver entries (`checkModulesPreamble`, `elaborateModules` — the conjunction
+-- stated in full on `graphMethodExports`, which this ref is written beside), and a driver
+-- that ever omits that write must degrade to today's graph-global answer, not to "nothing
+-- is a shadow anywhere".
+--
+-- ⚠️ SCOPE, stated so it is not over-read.  The predicate is `nameable in M` as §1.0 defines
+-- it, applied to S1's INTERFACE operand — so it covers BOTH failures S1 names, the
+-- reachability one (#1353: no import path reaches the declaring module) and the one where a
+-- path exists but does not carry the interface.  What it does NOT decide is #1302's axis:
+-- `graphIfaceMethods` has no `pub` filter, so a module that imports a dependency BY NAME can
+-- still be told about that dependency's PRIVATE interface.  That is the fail-open direction
+-- and it is left exactly where #1302 and `declMethodIdentsOf`'s F3 already own it.
+nameableIfaceShadows : List Decl -> List String -> List String
+nameableIfaceShadows _ [] = []
+nameableIfaceShadows prog names
+  -- fail OPEN on an absent index — see the paragraph above; `names` unchanged is exactly
+  -- the pre-#1353 graph-global answer.
+  | omSize driverState.value.graphIfaceMethodsRef.value == 0 = names
+  | otherwise =
+    let nameable = nameableIfaceMethodSet prog
+    filterList (n => omHasKey n nameable) names
+
+-- The bare method names of every interface NAMEABLE in module [prog] — S1's three
+-- nameable-in-`M` positions, built ONCE per module: the implicit prelude (`core`'s row),
+-- this module's own interfaces, and, for each `DUse`, the interfaces THAT USE-PATH ADMITS
+-- out of the dependency's row (which already carries what the dependency re-exports, at any
+-- chain depth — S1-CHAIN, #1380).
+--
+-- 🚨 THE USE-PATH FILTER IS THE WHOLE POINT, and its absence was this fix's first defect.
+-- Taking a dependency's WHOLE row on any import makes `import smod.{sf}` — one unrelated
+-- function — enough to make `smod`'s interface "nameable", which it demonstrably is not:
+-- `impl Sizeable Blob` in that module is rejected `Unknown interface: Sizeable`.  That left
+-- #1353 narrowed rather than fixed (its own repro with the bridge hop removed still printed
+-- the impl's value).  `selectIfaceRows` is shared with the re-export side so the import and
+-- chain answers cannot drift apart.
+--
+-- Name-level rather than identity-level ON PURPOSE.  S1's intersection is over NAMES, so
+-- when two interfaces declare `n` and only one is nameable here, `n` is a shadow either
+-- way; WHICH declaration an occurrence then means is `applyMethodScopeOverrides`' question
+-- about a different table (`universeMethodIfaceParamsRef`), and answering it here would be
+-- a second resolver free to disagree with that one.
+--
+-- 🔒 THIS IS S1's RIGHT OPERAND UNDER S1-NS (RULED 2026-08-08), and it is the ONLY predicate
+-- in the compiler that answers it — `checkBodyImpl`'s shadow-hood and EVERY filter in the
+-- mark pass read THIS set.  Named rather than counted, because a count rots silently and
+-- this sentence already did (it said "all three" for a week after `rpNames` became the
+-- fourth): `prePassModulePairArg` filters `rpNames`, `shadowNames` (through
+-- `shadowBareName`), `argNames` and `shadowMap` — its own `otherwise` arm enumerates them
+-- against what `rewriteArgScoped` can turn into an `EMethodAt`.  S1-NS (b) requires
+-- shadow-hood to be a superset of dispatch
+-- eligibility and rules two different predicates at the two sites non-conformant; one set
+-- makes them equal, so the invariant holds by construction rather than by test.  Do not
+-- introduce a second, wider set for marking: two earlier cuts of this unit did exactly that
+-- and each shipped an S0 (a `run`-vs-built-binary split, and a `build`-only E-PANIC).
+--
+-- The per-METHOD union of the two namespaces lives in `selectIfaceRows`, applied on the
+-- import arm here and on the re-export arm in `graphIfaceMethods`.
+nameableIfaceMethodSet : List Decl -> OrdMap Unit
+nameableIfaceMethodSet prog =
+  addImportedIfaceMethods
+    prog
+    (addIfaceRowMethods
+      (fromOption
+        []
+        (omLookup "core" driverState.value.graphIfaceMethodsRef.value))
+      (namesToSet (allIfaceMethodNames prog) omEmpty))
+
+addImportedIfaceMethods : List Decl -> OrdMap Unit -> OrdMap Unit
+addImportedIfaceMethods [] acc = acc
+addImportedIfaceMethods ((DAttrib _ d)::rest) acc =
+  addImportedIfaceMethods rest (addImportedIfaceMethods [d] acc)
+addImportedIfaceMethods ((DUse _ path _)::rest) acc = addImportedIfaceMethods
+  rest
+  (match omLookup (usePathModuleId path) driverState.value.graphIfaceMethodsRef.value
+    None => acc
+    Some src => addIfaceRowMethods (selectIfaceRows path src) acc)
+addImportedIfaceMethods (_::rest) acc = addImportedIfaceMethods rest acc
+
+addIfaceRowMethods : List (String, List String) -> OrdMap Unit -> OrdMap Unit
+addIfaceRowMethods [] acc = acc
+addIfaceRowMethods ((_, ms)::rest) acc =
+  addIfaceRowMethods rest (namesToSet ms acc)
+
 -- C5: graph-wide standalone-shadow names — every top-level funDef name in [userDecls]
 -- (the user modules, NOT core) that is also an interface method name anywhere in
 -- [allDecls].  Used by the MARK pass to rewrite such occurrences to EMethodAt (so the
@@ -21957,6 +22078,191 @@ reexportedMethodIdentsOf _ _ = []
 reexportRenamed : (String, String) -> List (String, Ident) -> List (String, Ident)
 reexportRenamed (origin, local) src =
   map (e => (local, snd e)) (filterList (e => fst e == origin) src)
+
+-- ── #1354 unit A follow-up: the TYPE-namespace peer of graphMethodExports ────
+-- Stored in `driverState.graphIfaceMethodsRef`, declared bare (no interior record
+-- comment) next to its method-namespace peer: `DriverState`'s header is still the
+-- two-line `data X =` / `| X {` form, and `medaka fmt --write` MOVES a trailing comment
+-- one field down on that shape while `fmt --check` reports the result as clean (#829,
+-- REOPENED).  It did exactly that to the first draft of this line — the comment landed on
+-- `graphCtorExportsRef`, where it read as describing the constructor index.  The prose
+-- lives here instead, which is the workaround PR #1296 uses for the same record.
+-- `mid → [(interface name as this module provides it, that interface's method names)]`,
+-- folded DEPENDENCY-FIRST so an `export import src.{…}` resolves against `src`'s
+-- already-computed row and a >1-hop re-export chain still resolves.  Read only by
+-- `nameableIfaceMethodSet`.
+--
+-- 🚨 WHY THIS EXISTS AND `graphMethodExports` COULD NOT BE REUSED — the defect this fixes.
+-- `SHADOW-SEMANTICS.md` §1.0 says S1's `nameable in M` predicate applies to **S1's
+-- INTERFACE operand** — a TYPE-namespace question, "is this interface one `M` can name?".
+-- The first cut of this fix asked `graphMethodExports` instead, which is a **METHOD**-name
+-- index, and the two disagree in BOTH directions:
+--
+--   * TOO STRICT on a chain.  A re-exporter's row is built by matching the `export import`
+--     member list against METHOD names (`reexportRenamed`), so the ordinary
+--     `export import ifc.{Sizeable}` — re-exporting the interface by its TYPE name —
+--     yielded an EMPTY row and the predicate answered "not nameable" for an interface that
+--     demonstrably is.  MEASURED, two entry files differing by one import line: the direct
+--     import printed `300` and the chained one was REJECTED `Type mismatch: Int vs Box`.
+--     That is exactly what `SHADOW-SEMANTICS.md`'s S1-CHAIN forbids — it says the predicate
+--     "MAY NOT fail closed on chains" and enumerates an implementation satisfied only by a
+--     DIRECT export as **newly NON-CONFORMANT** (#1380).
+--   * TOO LOOSE on one hop.  Any import of the interface's home module admitted that
+--     module's WHOLE method row, so `import smod.{sf}` — which binds one unrelated function
+--     — made `Sizeable` "nameable".  It is not: `impl Sizeable Blob` in that module is
+--     rejected `Unknown interface: Sizeable` (resolve, `UnknownInterface`).  That left
+--     #1353 NARROWED rather than fixed — its own repro with the bridge hop removed.
+--
+-- Both are the same error: answering a method-namespace question where the spec asks a
+-- type-namespace one.  The member test that is WRONG for a method name (an interface is
+-- nameable through an import that never mentions its methods — the corpus's own `i3`,
+-- `import ifc.{Sizeable, Box(..)}`) is exactly RIGHT for the interface name, which is what
+-- `selectIfaceRows` applies on both the import and the re-export side.
+--
+-- ⚠️ IT MUST BE BUILT HERE, NOT TAKEN FROM RESOLVE, even though resolve owns
+-- `UnknownInterface` and already derives module exports.  `stampGraphTyOrigins`' own note
+-- says why: the separate `medaka_emitter` process NEVER RUNS RESOLVE, so a predicate that
+-- consumed resolve's tables would decide differently on `build` than on `check`/`run` — a
+-- manufactured front/back split (#1382).  This is therefore a THIRD derivation of a fact
+-- resolve owns, exactly as `graphMethodExports` is, and it retires at the same place: R /
+-- #1288, whose fix owns the fact and makes typecheck consume it.  Named scaffolding.
+--
+-- ⚠️ NO `pub` FILTER, exactly as `declMethodIdentsOf` has none (F3) — a private interface
+-- contributes a row.  That is the FAIL-OPEN direction for this predicate (it can only ADD
+-- shadow-hood, never remove it), which is the direction `nameableIfaceShadows` argues for.
+--
+-- SAFETY PROPERTY: the conjunction stated in full on `graphMethodExports` — unconditional
+-- whole-value overwrite at every Module-mode driver entry, AND no reset point in between —
+-- applies verbatim, because this ref is written on the same two lines and lives on the same
+-- `DriverState` that `resetCrossModuleState` does not touch.
+graphIfaceMethods : List Decl -> List (String, List Decl) -> OrdMap (List (String, List String))
+graphIfaceMethods coreDecls modules =
+  graphIfaceMethodsGo
+    (omInsert "core" (ifaceMethodRows coreDecls) omEmpty)
+    modules
+
+graphIfaceMethodsGo : OrdMap (List (String, List String)) -> List (String, List Decl) -> OrdMap (List (String, List String))
+graphIfaceMethodsGo acc [] = acc
+graphIfaceMethodsGo acc ((mid, decls)::rest) =
+  graphIfaceMethodsGo
+    (omInsert
+      mid
+      (ifaceMethodRows decls ++ reexportedIfaceMethods acc decls)
+      acc)
+    rest
+
+-- the (interface name, its method names) pairs [decls] DECLARES.
+ifaceMethodRows : List Decl -> List (String, List String)
+ifaceMethodRows decls = flatMap ifaceMethodRowOf decls
+
+ifaceMethodRowOf : Decl -> List (String, List String)
+ifaceMethodRowOf (DAttrib _ d) = ifaceMethodRowOf d
+ifaceMethodRowOf (DInterface { name, methods, ... }) =
+  [(name, ifaceMethodNames methods)]
+ifaceMethodRowOf _ = []
+
+-- the rows a module RE-EXPORTS via `export import src.{…}` (`DUse True`), taken from [acc]
+-- — the dependency's already-folded row, which is what makes a chain of any depth resolve.
+reexportedIfaceMethods : OrdMap (List (String, List String)) -> List Decl -> List (String, List String)
+reexportedIfaceMethods acc decls = flatMap (reexportedIfaceMethodsOf acc) decls
+
+reexportedIfaceMethodsOf : OrdMap (List (String, List String)) -> Decl -> List (String, List String)
+reexportedIfaceMethodsOf acc (DAttrib _ d) = reexportedIfaceMethodsOf acc d
+reexportedIfaceMethodsOf acc (DUse True path _) = match omLookup (usePathModuleId path) acc
+  None => []
+  Some src => selectIfaceRows path src
+reexportedIfaceMethodsOf _ _ = []
+
+-- ── S1-NS (RULED 2026-08-08): the rows of [src] a use-path admits ──────────
+-- `docs/spec/SHADOW-SEMANTICS.md` S1-NS (a): S1's right operand is the PER-METHOD UNION of
+-- the two namespaces.  A row `(I, ms)` is NARROWED, not merely kept or dropped:
+--
+--   * WILDCARD (`import m.*`) — everything the dependency provides, so the whole row.
+--   * MODULE ALIAS (`import m as A`) — the whole row, on the VALUE arm: `A.n` is a legal
+--     call for every method `n`.  An alias cannot put a TYPE name in scope (alias-qualified
+--     names in type position are a parse error), so it admits nothing on the type arm — but
+--     a union needs only one arm.
+--   * MEMBER LIST — the TYPE arm admits the WHOLE row when the list names the interface `I`
+--     (an author who can write `impl I T` can write every method of `I`); otherwise the
+--     VALUE arm admits ONLY the methods the list actually names.
+--   * BARE (`import m`) or DOTTED (`import a.b.n`) — `importedBindings` answers `Some []` for
+--     the bare form, so the member list is EMPTY and admits NOTHING.  Stated because the
+--     three bullets above read as an exhaustive enumeration and this is the fourth arm:
+--     reading an empty member list as "binds everything" (the way a wildcard legitimately is
+--     read) is a real mistake, and `i15_importer_iface_one_hop_unbound/bare.mdk` exists to
+--     catch it.  A bare import brings IMPLS into scope, which S2 governs; it binds no NAMES,
+--     which is all S1 asks about.
+--
+-- 🚨 PER METHOD, NOT PER ROW, and this is measured rather than stylistic: `import ifc.{tag}`
+-- leaves a sibling method UNBOUND (*"Unbound variable: size. (Did you forget to
+-- 'import ifc.{size}'?)"*), so admitting the whole row because the list names ONE method
+-- makes a DIFFERENT name dispatch-eligible on evidence that says nothing about it.  That
+-- over-approximates both namespaces at once, and it is what silently replaced a module's own
+-- top-level `size` with a foreign impl body (777 where 42 is correct, exit 0, no diagnostic
+-- on any verb — `test/shadow_fixtures/d23_definer_sibling_method_silent/`).
+--
+-- ⚠️ ONE SELECTOR, USED ON THE IMPORT ARM **AND** THE RE-EXPORT ARM.  S1-NS makes the two
+-- symmetric: `export import ifc.{size}` must admit `size` one hop down exactly as
+-- `export import ifc.{Sizeable}` admits the row.  An implementation whose arms evaluate
+-- different namespaces is enumerated NON-CONFORMANT, and it was live here — a method-name
+-- re-export chain that `main` builds and runs at 50 failed `build` with `E-PANIC: arg-tag
+-- dispatch on impl type that owns no constructors`.  Keeping this ONE function is what makes
+-- that unrepresentable rather than merely fixed (`i20_importer_method_reexport_chain/`).
+selectIfaceRows : UsePath -> List (String, List String) -> List (String, List String)
+selectIfaceRows (UseAlias _ _) src = src
+selectIfaceRows path src = match importedBindings path
+  None => src
+  Some bs => flatMap (r => narrowRowToNamed (map fst bs) r) src
+
+-- TYPE arm: the list names the interface → the whole row.  VALUE arm: it does not → only
+-- the methods it names.  An empty narrowing contributes no row at all.
+--
+-- 🚨 KNOWN DEVIATION FROM S1-NS (a)(ii), AND IT IS OBSERVABLE TODAY.  [named] is built from
+-- the member ORIGIN spellings (`map fst bs`), so `import ifc.{size as sz}` admits `size` —
+-- the name in the DEPENDENCY — while the only name this module can write for that method is
+-- `sz`.  S1-NS (a)(ii) says the admitted name must be the CALLABLE one.
+--
+-- ⚠️ An earlier version of this note claimed the deviation was "unobservable today because
+-- member-ALIASED method imports are independently broken".  BOTH HALVES ARE FALSE, measured:
+-- `import ifc.{size as sz}` then `sz "ab"` prints 7, so aliased method imports work fine;
+-- and a program does reach the difference — with a standalone `size` imported from `fmod`,
+-- adding `import ifc` prints 99 while adding `import ifc.{size as sz}` prints 7, the two
+-- differing only in that second import line.  Under the clause, 99 is correct for BOTH: the
+-- alias case gives this module no way to write `size` for the method, so `size` unambiguously
+-- denotes `fmod`'s standalone.
+--
+-- NOT FIXED HERE, deliberately.  It is NOT a regression — base prints 7 too, so the alias arm
+-- is exactly where this unit changes nothing — and any fix is a behaviour change on a fresh
+-- axis that no ruling has been written for.  Pinned instead, so it self-drains:
+-- `test/shadow_fixtures/i22_importer_member_alias_not_nameable/`.
+--
+-- 🚨 THE FIX SHAPE IS NOT KNOWN, AND THE OBVIOUS ONE IS INERT.  This note used to end *"the
+-- fix shape when it is taken: key the VALUE arm on `snd` (the LOCAL spelling) while the TYPE
+-- arm keeps `fst`"*.  It cannot move the run/build answer, and that is DERIVABLE from this
+-- file without building anything — grep the two call sites and read the order:
+--
+--     grep -n 'renameAliasedMethods \|graphIfaceMethods coreDecls' compiler/types/typecheck.mdk
+--
+-- `renameAliasedMethods` has exactly ONE call site, in `elaborateModules`, and it runs
+-- BEFORE that driver writes `graphIfaceMethodsRef` and before the mark pass.  It applies
+-- `deAliasMethodImports`, whose whole job (b) is rewriting `import ifc.{size as sz}` into
+-- `import ifc.{size}` — the alias is dropped because a method is global-by-name.  So by the
+-- time `selectIfaceRows` runs on that path, `snd b == fst b` for every member and the two
+-- keyings are literally the SAME EXPRESSION.  A reviewer implemented the one-token change,
+-- rebuilt, and measured `i22/main.mdk` still at **7** — which is what the derivation
+-- predicts.  (The `check` path does NOT de-alias, having no `renameAliasedMethods` call, so
+-- re-keying WOULD move that arm alone.  That is a `check`≠`run` split, not a fix.)  A real
+-- fix therefore spans at least those two functions and is a design question, because simply
+-- not de-aliasing breaks aliased method CALLS outright, which is the whole reason
+-- `deAliasMethodImports` exists.
+-- A DOCUMENTED FIX SHAPE THAT IS INERT IS WORSE THAN NONE: the next person implements it,
+-- sees nothing move, and concludes the defect is somewhere else.
+narrowRowToNamed : List String -> (String, List String) -> List (String, List String)
+narrowRowToNamed named r
+  | contains (fst r) named = [r]
+  | otherwise = match filterList (m => contains m named) (snd r)
+    [] => []
+    ms => [(fst r, ms)]
 
 -- ── #1111 A-2.11 (#1319 unit 1): the CONSTRUCTOR peer of graphMethodExports ──
 -- (module id → [(ctor name, owning type name, declaring `Ident`)]), folded dependency-first
@@ -22599,6 +22905,9 @@ checkModulesPreamble runtimeDecls coreDecls modules =
   -- "the wrong question": the two Module-mode driver entries that must carry this line are
   -- `checkModulesPreamble` (here) and `elaborateModules`.
   let _ = setRef driverState.value.graphMethodExportsRef (graphMethodExports coreDecls modules)
+  -- #1354 unit A follow-up: the TYPE-namespace peer, written in LOCKSTEP with the line
+  -- above.  Same graph, same two entries, same safety conjunction — see graphIfaceMethods.
+  let _ = setRef driverState.value.graphIfaceMethodsRef (graphIfaceMethods coreDecls modules)
   -- #1111 A-2.11 (#1319 unit 1): the CONSTRUCTOR peer of the line above, under the
   -- identical two-part property.  Both driver entries carry both lines or neither works.
   let _ = setRef driverState.value.graphCtorExportsRef (graphCtorExports coreDecls modules)
@@ -23013,6 +23322,9 @@ elaborateModules runtimeDecls coreDecls0 modulesIn =
   -- with another `resetCrossModuleState ()`.  This one write covers both ONLY because
   -- the ref is on `driverState`, which that reset does not touch (F1).
   let _ = setRef driverState.value.graphMethodExportsRef (graphMethodExports coreDecls modules)
+  -- #1354 unit A follow-up: the TYPE-namespace peer, written in LOCKSTEP with the line
+  -- above.  Same graph, same two entries, same safety conjunction — see graphIfaceMethods.
+  let _ = setRef driverState.value.graphIfaceMethodsRef (graphIfaceMethods coreDecls modules)
   -- #1111 A-2.11 (#1319 unit 1): the CONSTRUCTOR peer, same placement, same reasoning —
   -- including the two-sweep note above, which it inherits verbatim (same `driverState`).
   let _ = setRef driverState.value.graphCtorExportsRef (graphCtorExports coreDecls modules)
@@ -23042,7 +23354,30 @@ elaborateModules runtimeDecls coreDecls0 modulesIn =
   let bareDictNames0 = dedup (moduleDictNames coreDecls allDecls modules)
   let dictNames0 = dedup (bareDictNames0
     ++ aliasDictNames bareDictNames0 (("core", coreDecls)::modules) modules)
-  let markRpNames = dedup (rpNames ++ methodConstraintNames allDecls ++ buildStandaloneShadowsGraph allDecls (flatMap snd modules))
+  -- #1354 unit A (#1353): the mark set is split so its SHADOW component can be scoped per
+  -- module.  `buildStandaloneShadowsGraph` is graph-global by construction (its own header
+  -- says "graph-wide"), and so is `argNames` — both hand one name set to a rewriter that
+  -- runs per module, which is how an interface reachable only transitively captured an
+  -- explicitly-imported standalone on the run/build path.  `markRpNames` (the unsplit set)
+  -- is still what CORE is marked with: `core` is the prelude, every interface it declares
+  -- is nameable in it, and S1 makes a `core.mdk` occurrence no user standalone's shadow
+  -- anyway (P0-21).  Scoping happens in `prePassModulePairArg`, which has the module's own
+  -- decls in hand — INCLUDING `rpNames`, which `prePassModulePairArg` filters with the same
+  -- predicate as everything else it marks.
+  --
+  -- 🚨 THIS COMMENT USED TO SAY `rpNames` WAS "deliberately NOT scoped here: a different
+  -- axis with no filed repro", AND THAT CARVE-OUT WAS AN S0.  The repro was missing because
+  -- the CORPUS could not express it — every interface method in `test/shadow_fixtures/`
+  -- mentioned its typaram in an ARGUMENT, so 52 assertions were green while a
+  -- RETURN-position method of a non-nameable interface gave `run` 777 against a built binary
+  -- of 42, both at exit 0 with no diagnostic.  "No filed repro" was a fact about the
+  -- corpus, not about the code.  See `prePassModulePairArg` for the full enumeration of
+  -- every input that can become an `EMethodAt`, and
+  -- `test/shadow_fixtures/d24_definer_return_pos_not_nameable/` for the cell that now
+  -- expresses the axis.
+  let markSharedNames = dedup (rpNames ++ methodConstraintNames allDecls)
+  let graphShadowNames = buildStandaloneShadowsGraph allDecls (flatMap snd modules)
+  let markRpNames = dedup (markSharedNames ++ graphShadowNames)
   -- #1280: the EMIT arm's copy of `checkModulesPreamble`'s line — the same scope,
   -- for the driver that does not use that preamble.  This is the seam `run` and
   -- the separate `medaka_emitter` process share, so an extern head stamped here
@@ -23054,7 +23389,7 @@ elaborateModules runtimeDecls coreDecls0 modulesIn =
   -- and any promotion-free program — the harvest is empty and this sweep's stamped trees
   -- are already correct, saving the whole discovery typecheck (the ~20% front-end win).
   let core2a = prePassDictArg markRpNames dictNames0 argNames driverState.value.mangledShadowMapRef.value coreDecls
-  let modules2a = map (prePassModulePairArg markRpNames dictNames0 argNames driverState.value.mangledShadowMapRef.value) modules
+  let modules2a = map (prePassModulePairArg markSharedNames graphShadowNames dictNames0 argNames driverState.value.mangledShadowMapRef.value) modules
   let _ = setRef driverState.value.promotionHarvestRef []
   let coreSchemesA = elabModuleStamp "" runtimeSeed [] core2a core2a
   -- #154 PR-C: elabHarvestWorker → elabWorker → elabModuleStamp reads accAll as its
@@ -23102,7 +23437,7 @@ elaborateModules runtimeDecls coreDecls0 modulesIn =
       let dictNames = dedup (bareDictNames
         ++ aliasDictNames bareDictNames (("core", coreDecls)::modules) modules)
       let core2 = prePassDictArg markRpNames dictNames argNames driverState.value.mangledShadowMapRef.value coreDecls
-      let modules2 = map (prePassModulePairArg markRpNames dictNames argNames driverState.value.mangledShadowMapRef.value) modules
+      let modules2 = map (prePassModulePairArg markSharedNames graphShadowNames dictNames argNames driverState.value.mangledShadowMapRef.value) modules
       let coreSchemes = elabModuleStamp "" runtimeSeed [] core2 core2
       -- #154 PR-C: same as the bare sweep above — elabWorker reads accAll (impl universe,
       -- order-observable) but not accData (dead Module field).  wantAll=True keeps the
@@ -23541,9 +23876,106 @@ prePassModulePair rpNames (mid, prog) = (mid, prePassDict rpNames [] prog)
 -- populated on every path (single elaboration mode).  Degenerates to
 -- prePassModulePair when both are [] (prePassDictArg with empty argNames/dictNames
 -- == prePassDict).
-prePassModulePairArg : List String -> List String -> List String -> List (String, String) -> (String, List Decl) -> (String, List Decl)
-prePassModulePairArg rpNames dictNames argNames shadowMap (mid, prog) =
-  (mid, prePassDictArg rpNames dictNames argNames shadowMap prog)
+-- #1354 unit A (#1353): [shadowNames] (the graph-wide standalone-shadow set) and
+-- [argNames] (every interface method with a dispatch argument index, graph-wide) are BOTH
+-- decided over the whole loaded graph and BOTH consumed here, per module — so an interface
+-- the module cannot name still rewrote its occurrences of a same-named imported standalone
+-- to `EMethodAt`, and dispatch then answered from an impl the module has no path to.  Both
+-- are filtered to `SHADOW-SEMANTICS.md` S1's `nameable in M` (§1.0; ruling #1375) using the
+-- module's own decls, which are exactly what this function already has in hand.
+--
+-- This is the RUN/BUILD half of the fix; `checkBodyImpl`'s `definerShadows`/
+-- `importerShadows` are the CHECK half.  Neither is sufficient alone — the mark pass
+-- rewrites the occurrence before typecheck ever consults `standaloneValuesRef`, so
+-- filtering only there leaves `check` right and the binary wrong (the S7 divergence #1375
+-- warns a mark-pass-only fix introduces, with the arms swapped).
+--
+-- [shadowMap] is filtered too, and THAT is the arm the emit path actually takes: the
+-- mangler rewrites an imported `size` occurrence to `fmod__size`, so neither name set above
+-- can match it and `rewriteArgScoped`'s FIRST guard — the `sm` lookup — is what marks it.
+-- Filtering it here, at the CONSUMING module, is the placement #1375 requires: the map is a
+-- PRODUCER-side index (`computeMangledShadowMap` walks the unit that DEFINES the
+-- standalone), and keying its visibility on that definer instead fails CLOSED and reddens
+-- the corpus's `i1`/`i3`/`i8`/`i10` — the provider module does not import the consumer
+-- where the interface lives (the #411 shape).  Same reason [shadowNames] is scoped through
+-- `shadowBareName`: on the emit path `buildStandaloneShadowsGraph` returns MANGLED symbols,
+-- and testing a mangled symbol against a set of METHOD names would answer False for every
+-- legitimate shadow.
+--
+-- [dictNames] is the ONE input NOT filtered: those are `=>`-constrained FUNCTION names, not
+-- interface methods, and dropping one under-applies a dict-passed callee (`unbound
+-- identifier: $dict_…`) — the Phase-134 shape.
+--
+-- ⚠️ [rpNames] **IS** FILTERED, by the same predicate as everything else here — read the
+-- `otherwise` arm below, which is four `filterList`s and one bare `dictNames`.  The split
+-- that makes the per-module filter possible is at `markSharedNames`.  This paragraph read
+-- *"[rpNames] is not filtered either"* until 2026-08-08: introduced and falsified by the
+-- same PR, and then missed by the very commit whose job was retiring that claim at its
+-- sibling site.  It was the THIRD copy of the sentence.  Nothing in this tree links a claim
+-- to the code it describes, so when one of these turns out to be false, check the SET of
+-- sites that assert it — not the one you were handed.
+prePassModulePairArg : List String -> List String -> List String -> List String -> List (String, String) -> (String, List Decl) -> (String, List Decl)
+prePassModulePairArg rpNames shadowNames dictNames argNames shadowMap (mid, prog)
+  -- fail OPEN when the graph index is absent, for the reason stated on
+  -- `nameableIfaceShadows`: an unscoped mark set is today's behaviour, an empty one is the
+  -- S4/#410 class.
+  -- ⚠️ GUARD THE REF THIS ACTUALLY READS.  It used to test `graphMethodExportsRef` while the
+  -- body reads `graphIfaceMethodsRef` — an implicit conjunction ("they are written on
+  -- adjacent lines") of exactly the kind the `registry_keying_ratchet` row beside it exists
+  -- to forbid.  If the two ever diverged this arm would run with an EMPTY iface index and
+  -- filter out every imported and prelude shadow name, failing CLOSED into the S4/#410 class
+  -- that `nameableIfaceShadows` says must never happen.
+  | omSize driverState.value.graphIfaceMethodsRef.value == 0 =
+    (mid, prePassDictArg (dedup (rpNames ++ shadowNames)) dictNames argNames shadowMap prog)
+  | otherwise =
+    -- 🔒 S1-NS (b), THE CLOSURE INVARIANT.  The spec requires the predicate deciding
+    -- SHADOW-HOOD to be a SUPERSET of the one deciding DISPATCH ELIGIBILITY, and rules two
+    -- different predicates at the two sites non-conformant WHICHEVER WAY THEY DIFFER.
+    --
+    -- 🚨 THE INVARIANT IS ABOUT INPUTS TO DISPATCH, NOT ABOUT SETS OR SELECTORS, AND
+    -- COUNTING THE WRONG THING SHIPPED AN S0.  An earlier revision of this comment said
+    -- "there is exactly ONE predicate here … the two sets are EQUAL … the gap is
+    -- unrepresentable" — and was false four lines above itself, because `rpNames` was
+    -- concatenated RAW into the first argument while the other three lists were filtered.
+    -- `rewriteArgScoped` dispatches on `rp`, `an` AND `sm`, so dispatch-eligibility was
+    -- `rpNames ∪ filtered(…)` — a strict superset of shadow-hood, which is S1-NS's own
+    -- "Newly NON-CONFORMANT (1)".  Measured: a return-position method of a non-nameable
+    -- interface gave `run` 777 against a built binary of 42, both exit 0, no diagnostic.
+    --
+    -- THE ENUMERATION, so the next reader checks the SET rather than trusting a sentence.
+    -- Every input `rewriteArgScoped` can turn into an `EMethodAt` is filtered here:
+    --   * `rpNames`   — return-position method names AND method-level-constraint method
+    --                   names (`markSharedNames` concatenates both).  BOTH are interface
+    --                   METHOD names — each walks `DInterface`'s `methods` — so both are the
+    --                   same kind of set as `argNames` and both are filtered.
+    --   * `shadowNames` — via `shadowBareName`, because on the emit path these are mangled.
+    --   * `argNames`  — arg-position dispatch indices.
+    --   * `shadowMap` — the emit-path peer of `argNames`.
+    -- `dictNames` is the ONE input deliberately NOT filtered, and it is not an input to
+    -- dispatch at all: it produces `EDictAt`, a dict application of a `=>`-constrained
+    -- FUNCTION, which selects no impl from a receiver.  Filtering it would drop a dict
+    -- argument and UNDER-APPLY the callee (`unbound identifier: $dict_…`, the Phase-134
+    -- shape) — so it is disjoint by node kind, not by name, and that is probed rather than
+    -- argued (see `test/shadow_fixtures/`'s return-position cells and the PR body).
+    let nameable = nameableIfaceMethodSet prog
+    let keep = (n => omHasKey n nameable)
+    (
+      mid,
+      prePassDictArg
+        (dedup (filterList keep rpNames
+          ++ filterList (n => omHasKey (shadowBareName shadowMap n) nameable) shadowNames))
+        dictNames
+        (filterList keep argNames)
+        (filterList (e => omHasKey (snd e) nameable) shadowMap)
+        prog,
+    )
+
+-- the BARE interface-method name a (possibly mangled) standalone-shadow symbol stands for.
+-- Identity on the un-mangled run/check path, where the map is empty.
+shadowBareName : List (String, String) -> String -> String
+shadowBareName sm n = match lookupAssoc n sm
+  Some bare => bare
+  None => n
 
 -- The mark sub-phase of elaborateModules (RKey-only): compute rpNames over the
 -- full module graph and prePassDict each module.  Exported so profiling drivers

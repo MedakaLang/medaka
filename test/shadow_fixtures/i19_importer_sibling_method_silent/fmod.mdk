@@ -1,0 +1,5 @@
+-- SHADOW-SEMANTICS cell I19 provider 2: the standalone the consumer imports by name. Its
+-- domain COVERS String, the same head `impl Sizeable String` covers, so both candidates
+-- typecheck and the difference between them is a VALUE, never a verdict.
+export size : String -> Int
+size s = 42

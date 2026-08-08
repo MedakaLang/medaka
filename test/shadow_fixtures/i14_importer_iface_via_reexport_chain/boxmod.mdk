@@ -1,0 +1,5 @@
+-- SHADOW-SEMANTICS cell I14 provider 1: the receiver type, kept in its OWN module so
+-- main.mdk can construct a Box WITHOUT importing the interface's home module.  If
+-- main.mdk imported `ifc` for `Box`, the chain would not be the only path to `Sizeable`
+-- and this cell would stop testing chains.
+public export data Box = Box Int

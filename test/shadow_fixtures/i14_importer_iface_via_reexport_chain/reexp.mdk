@@ -1,0 +1,8 @@
+-- SHADOW-SEMANTICS cell I14 provider 3: the RE-EXPORTER, and the whole point of the cell.
+-- `export import ifc.{Sizeable}` re-exports the interface by its TYPE name and names no
+-- method, which is the ordinary way to re-export an interface.  §1.0 makes `Sizeable`
+-- nameable in every module that imports `reexp` and names it.
+export import ifc.{Sizeable}
+
+export rf : Int -> Int
+rf n = n

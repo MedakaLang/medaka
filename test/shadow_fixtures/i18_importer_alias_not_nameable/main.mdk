@@ -1,0 +1,24 @@
+-- SHADOW-SEMANTICS cell I18: an interface reached ONLY through a module ALIAS.
+--
+-- 🚨 THIS ROW PINS A KNOWN-INCONSISTENT PRE-EXISTING ANSWER. It is NOT a claim that 7 is
+-- correct. `import smod as S` cannot put a TYPE name in scope -- an alias-qualified name in
+-- type position is a parse error -- and writing `impl Sizeable Blob` in this module is
+-- rejected `Unknown interface: Sizeable`. By S1's own criterion the interface is therefore
+-- not nameable here, `size` is not a shadow, and the explicitly imported standalone should
+-- answer 99. It answers 7, on this binary AND on the base compiler.
+--
+-- WHY IT IS PINNED ANYWAY, AND WHY IT WAS NOT "FIXED": the discriminating information does
+-- not exist by the time any rule here could use it. `renameAliasedMethods` rewrites `S.size`
+-- to a BARE `size`, so an alias-qualified call and a bare reference to the imported
+-- standalone become the SAME token -- see `both.mdk` beside this file, which contains both
+-- spellings and shows `run` cannot tell them apart at all. An attempt to condition the alias
+-- rule on "names this module otherwise binds" produced `run` = 99 against a built binary of
+-- 7, at exit 0 with no diagnostic: a NEW silent divergence, strictly worse than the
+-- inconsistency it tried to remove. Repairing this needs provenance restored to the
+-- occurrence upstream (A-3 / #1112), not another rule over import clauses.
+--
+-- The row self-drains: the day the alias axis is fixed this goes RED and is re-graded to 99.
+import fmod.{size}
+import smod as S
+
+main = println (size "abc")
