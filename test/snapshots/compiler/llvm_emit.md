@@ -1,5 +1,5 @@
 # META
-source_lines=11256
+source_lines=11268
 stages=DESUGAR,MARK
 # SOURCE
 -- Core IR -> textual LLVM IR — Stage 2.4 NATIVE BACKEND (slices 1–8+).
@@ -1319,8 +1319,20 @@ findByTag tag (_::rest) = findByTag tag rest
 -- fixture is green because its two types are DISTINCT tags.  Narrowing harder cannot
 -- fix it: `defaultFnName` is `mdk_default_<method>_<tag>`, so two interfaces' default
 -- bodies have exactly ONE symbol to live under and one is simply not emitted.  The
--- fix is to put the interface identity in the KEY, not only in this filter.  Pinned
--- at test/must_fail_fixtures/1265-two-ifaces-same-method-one-type-default-collapse/.
+-- fix needs the interface identity in the KEY, not only in this filter — but that
+-- is NECESSARY, not SUFFICIENT: by the time execution reaches here, there is no
+-- interface identity left to key with.  `Route` (`compiler/frontend/ast.mdk`) is
+-- `RKey String (List Route)` — a dispatch tag and element dicts, no interface
+-- component; `CMethod` (`compiler/ir/core_ir.mdk`) is `CMethod String Route
+-- (List Route) (List Route)` — a bare method name; `EMethodRef`
+-- (`compiler/frontend/ast.mdk`) is `EMethodRef String` — a bare name; and
+-- `markVar` (`compiler/frontend/marker.mdk`) tests membership in an `OrdMap Unit`
+-- keyed on bare method names. None of the call-site machinery between the
+-- interface declaration and this filter carries an interface identity to route
+-- on, so "key the symbol" cannot be carried out in this filter alone. See #1265,
+-- which now carries the full evidence for what threading an identity through
+-- actually requires.  Pinned at
+-- test/must_fail_fixtures/1265-two-ifaces-same-method-one-type-default-collapse/.
 defaultFor : Emit -> String -> Option CImplEntry
 defaultFor e method = defaultForAt e method ""
 
