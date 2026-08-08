@@ -5,6 +5,7 @@ activeDictVarOf : Mono -> Option String
 activeDictVarOfEncl : Mono -> String -> Option String
 addCtor : TcEnv -> String -> Scheme -> TcEnv
 addCtorIdentCand : TcEnv -> String -> TyConOrigin -> String -> (Map String (List (Ident, String, Scheme)), List String) -> (Map String (List (Ident, String, Scheme)), List String)
+addDepRowMethods : List String -> Map String Unit -> Map String Unit
 addFieldOwners : String -> List String -> Map String (List String) -> Map String (List String)
 addMethodIdentCand : String -> Ident -> (String, List String, Ty, List (String, List Kind)) -> (Map String (List (Ident, (String, List String, Ty, List (String, List Kind)))), List String) -> (Map String (List (Ident, (String, List String, Ty, List (String, List Kind)))), List String)
 addRecordIdentCand : String -> TyConOrigin -> String -> (Map String (List (Ident, String, RecordInfo)), List String) -> (Map String (List (Ident, String, RecordInfo)), List String)
@@ -731,6 +732,7 @@ importedBindings : UsePath -> Option (List (String, String))
 importedCtorEntry : List Decl -> String -> List (Ident, String, Scheme) -> Option Scheme
 importedCtorTypeDecls : List Decl -> List Decl -> List Decl
 importedMethodEntry : List Decl -> String -> List (Ident, (String, List String, Ty, List (String, List Kind))) -> Option (String, List String, Ty, List (String, List Kind))
+importedModuleIds : List Decl -> List String
 importedRecordEntry : List Decl -> String -> List (Ident, String, RecordInfo) -> Option RecordInfo
 importedSchemeOblEntries : List Decl -> List ((String, String), List (String, List Int)) -> List (String, List (String, List Int))
 importerShadowDomain : String -> Option Mono
@@ -1019,6 +1021,8 @@ monoUnboundIds : Mono -> List Int
 monoUnboundVarLevels : Mono -> List (Int, Int)
 monosTvarIds : List Int -> List Mono -> List Int
 nameOf : Ref (List (Int, String)) -> Ref Int -> Int -> String
+nameableIfaceMethodSet : List Decl -> Map String Unit
+nameableIfaceShadows : List Decl -> List String -> List String
 namesToSet : List String -> Map String Unit -> Map String Unit
 negateOp : Mono -> Mono
 newEffvarId : Unit -> Int
@@ -1135,7 +1139,7 @@ prePassIfaceMethodScoped : ArgRw -> IfaceMethod -> IfaceMethod
 prePassImplMethodScoped : ArgRw -> ImplMethod -> ImplMethod
 prePassLetBindScoped : ArgRw -> LetBind -> LetBind
 prePassModulePair : List String -> (String, List Decl) -> (String, List Decl)
-prePassModulePairArg : List String -> List String -> List String -> List (String, String) -> (String, List Decl) -> (String, List Decl)
+prePassModulePairArg : List String -> List String -> List String -> List String -> List (String, String) -> (String, List Decl) -> (String, List Decl)
 preferConcrete : Mono -> Mono -> Mono
 prefixConcrete : String -> String
 prefixPatternErrMsg : String -> String -> String
@@ -1383,6 +1387,7 @@ setDictEligible : List String -> Unit
 setLocIfSome : Option Loc -> Unit
 setNumlitFloats : Unit -> Unit
 setNumlitFloatsGo : List (Mono, Ref (Option Float), Int, Ref Route) -> Unit
+shadowBareName : List (String, String) -> String -> String
 shadowDomainFor : TcEnv -> String -> String -> Option Mono
 shadowStandaloneDictSlots : (List Int, List String) -> List (Int, Mono) -> (List Mono, List String)
 shadowStandaloneDictSlotsAt : Option Scheme -> String -> Mono -> (List Mono, List String)

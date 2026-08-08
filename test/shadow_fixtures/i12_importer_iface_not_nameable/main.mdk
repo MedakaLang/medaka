@@ -1,0 +1,20 @@
+-- SHADOW-SEMANTICS cell I12 (S1 scope, ruling #1375): the interface whose method
+-- name coincides with the imported standalone's is NOT nameable here.  `Sizeable`
+-- is not declared in this module, not imported by it, and not the prelude; it
+-- reaches the loaded graph only TRANSITIVELY, through `bridge`, which re-exports
+-- nothing.  So S1's intersection is empty for `size` in this module, `size` is
+-- not a shadow here, and the occurrence is an ordinary call to the standalone
+-- main.mdk explicitly imported: 99.
+--
+-- This is the corpus-gap row #1375 records as owed: before it, EVERY unit put the
+-- shadowed interface INSIDE the occurrence module's nameable set (`d*` are single
+-- file; i1/i6/i6b/i7/i8/i9/i10 declare it locally; i3 and d8 import it by name;
+-- i4/i5/i11 shadow the prelude), so the corpus was structurally blind to this
+-- axis and graded 37/37 under BOTH readings of the clause.  It was #1353 (S0):
+-- adding the `import bridge.{bf}` line -- an `Int -> Int` function from a third
+-- module -- changed `size "abc"` from the standalone this module imported to an
+-- impl body in a module it has no import path to, at exit 0, on all three verbs.
+import fmod.{size}
+import bridge.{bf}
+
+main = println (size "abc" + bf 0)

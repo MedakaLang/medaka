@@ -1,0 +1,7 @@
+-- SHADOW-SEMANTICS cell I12 provider 2: a PLAIN `import` (not `export import`),
+-- naming only `sf`.  It re-exports nothing, so it puts `smod` in the loaded
+-- module graph without making anything of `smod` nameable in its importers.
+import smod.{sf}
+
+export bf : Int -> Int
+bf n = sf n

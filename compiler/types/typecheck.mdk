@@ -16545,13 +16545,19 @@ checkBodyImpl seed mode prog0 =
   -- SET instead (byte-identical membership).  importerShadows exist only across a module
   -- boundary; the `Module _ _ []` arm (cmCheckWorker / core pass, implDecls = []) keeps
   -- the old empty result — `funDefs [] = []` gave no imported fns there.
+  -- #1354 unit A (#1353): both accumulators are graph-global, so the intersection alone
+  -- implements only S1's LEFT operand.  `nameableIfaceShadows` supplies the RIGHT one —
+  -- the interface must be nameable in THIS module.  Applied to the RESULT, never inside
+  -- either filter (the result is single-digit; `fnSet` is every fn name in the graph), and
+  -- fail-open when the graph index is absent.  See `nameableIfaceShadows`.  The Flat arms
+  -- are untouched: a single file is one module and its own interfaces are nameable in it.
   let definerShadows = match mode
     Flat _ => buildDefinerShadows fullUniverse prog0
-    Module _ _ _ => definerShadowsFromSet crossRun.value.universeIfaceMethodsRef.value prog0
+    Module _ _ _ => nameableIfaceShadows prog0 (definerShadowsFromSet crossRun.value.universeIfaceMethodsRef.value prog0)
   let importerShadows = match mode
     Flat _ => []
     Module _ _ [] => []
-    Module _ _ _ => standaloneShadowsFromSet crossRun.value.universeIfaceMethodsRef.value crossRun.value.universeFunNamesRef.value prog0
+    Module _ _ _ => nameableIfaceShadows prog0 (standaloneShadowsFromSet crossRun.value.universeIfaceMethodsRef.value crossRun.value.universeFunNamesRef.value prog0)
   let sigs = sigsOf prog
   let _ = setRef perRun.value.definerShadowNamesRef definerShadows
   let _ = setRef perRun.value.definerShadowSigsRef sigs
@@ -21469,6 +21475,90 @@ standaloneShadowsFromSet ifaceSet fnSet prog =
     None => []) (omKeys fnSet)
   dedup (direct ++ mangled)
 
+-- ── #1354 unit A (#1353): SHADOW-SEMANTICS S1's `nameable in M` interface operand ──
+-- `docs/spec/SHADOW-SEMANTICS.md` S1 (SCOPE RULED 2026-08-06, #1375) intersects
+-- funDef-names(standalones defined in or imported into `M`) with
+-- iface-method-names(interfaces **nameable in `M`**).  `universeIfaceMethodsRef` is the
+-- accumulated method-name set of EVERY module the loader processed, so the two builders
+-- above implement the LEFT operand's scope (the `fnSet`/`localNames` guards) and give the
+-- RIGHT one none: an interface reachable only transitively, through a module that
+-- re-exports nothing, captured a standalone the occurrence's module had explicitly
+-- imported (#1353, S0 — `7` instead of `99`, at exit 0, no diagnostic).
+--
+-- The remedy is a SUPPLY, not a re-key: the set is a correct MEMBERSHIP set and re-keying
+-- it would answer a question nobody asks of it.  This is the missing predicate, applied to
+-- the ALREADY-COMPUTED intersection rather than inside either operand's filter — the
+-- intersection is single-digit in practice (over `compiler/**` + `stdlib/*` it is 3:
+-- `toList`, `isEmpty`, `orElse`) while `fnSet` holds every top-level fn name in the graph,
+-- so filtering the result is cheap and filtering the operand is not.
+--
+-- 🚨 IT FAILS OPEN, DELIBERATELY, AND THAT DIRECTION IS LOAD-BEARING.  Dropping shadow-hood
+-- from an occurrence that IS one makes it dispatch unconditionally (`recordRLocalSite`'s
+-- `standaloneValuesRef` guard declines, so no pending site exists for
+-- `resolveRLocalSites` to stamp and the route stays the method's RKey) — the S4/#410
+-- class, up to `no impl of method … for type …` on a valid program and a SIGSEGV variant.
+-- Adding shadow-hood is the pre-existing behaviour.  So an ABSENT index answers True for
+-- every name rather than False: `graphMethodExportsRef` is written unconditionally at both
+-- Module-mode driver entries (`checkModulesPreamble`, `elaborateModules` — the conjunction
+-- stated in full on `graphMethodExports`), and a driver that ever omits that write must
+-- degrade to today's graph-global answer, not to "nothing is a shadow anywhere".
+--
+-- ⚠️ SCOPE, stated so it is not over-read.  This decides S1's REACHABILITY axis (#1353)
+-- only.  It deliberately does NOT apply `usePathBindsName`, A-2.5's member filter: an
+-- interface is nameable through an import that never mentions its METHOD name
+-- (`import ifc.{Sizeable, Box(..)}` — the shadow corpus's own `i3`), so testing the method
+-- spelling against the import's member list would answer False there and drop a shadow the
+-- spec grants.  What survives is therefore the EXPORT-VISIBILITY axis (#1302): an import
+-- that reaches the declaring module but does not put the interface in scope still passes
+-- this test.  S1 treats both failures uniformly, but #1302's grading is explicitly still
+-- open (see the S1 clause's own note), so this narrows the axis that is ruled and leaves
+-- the axis that is not — which is also the fail-open direction.
+nameableIfaceShadows : List Decl -> List String -> List String
+nameableIfaceShadows _ [] = []
+nameableIfaceShadows prog names
+  -- fail OPEN on an absent index — see the paragraph above; `names` unchanged is exactly
+  -- the pre-#1353 graph-global answer.
+  | omSize driverState.value.graphMethodExportsRef.value == 0 = names
+  | otherwise =
+    let nameable = nameableIfaceMethodSet prog
+    filterList (n => omHasKey n nameable) names
+
+-- The bare method names declared by an interface NAMEABLE in module [prog] — S1's three
+-- nameable-in-`M` positions, built ONCE per module: the implicit prelude (`core`'s row),
+-- this module's own interfaces, and every module it imports (whose row already carries
+-- what that module re-exports, at any chain depth — S1-CHAIN, #1380).
+--
+-- Name-level rather than identity-level ON PURPOSE.  S1's intersection is over NAMES, so
+-- when two interfaces declare `n` and only one is nameable here, `n` is a shadow either
+-- way; WHICH declaration an occurrence then means is `applyMethodScopeOverrides`' question
+-- about a different table (`universeMethodIfaceParamsRef`), and answering it here would be
+-- a second resolver free to disagree with that one.
+nameableIfaceMethodSet : List Decl -> OrdMap Unit
+nameableIfaceMethodSet prog =
+  addDepRowMethods
+    ("core" :: importedModuleIds prog)
+    (namesToSet (allIfaceMethodNames prog) omEmpty)
+
+addDepRowMethods : List String -> OrdMap Unit -> OrdMap Unit
+addDepRowMethods [] acc = acc
+addDepRowMethods (dep::rest) acc = addDepRowMethods
+  rest
+  (match omLookup dep driverState.value.graphMethodExportsRef.value
+    None => acc
+    Some es => namesToSet (map fst es) acc)
+
+-- the module ids [prog] imports, in declaration order.  Every `DUse` counts, aliased and
+-- wildcard included: an alias-qualified occurrence is rewritten to a bare method name by
+-- `renameAliasedMethods` before the mark pass runs, so an alias that could not name the
+-- interface would drop shadow-hood the alias itself put in scope.
+importedModuleIds : List Decl -> List String
+importedModuleIds [] = []
+importedModuleIds ((DAttrib _ d)::rest) = importedModuleIds [d]
+  ++ importedModuleIds rest
+importedModuleIds ((DUse _ path _)::rest) =
+  usePathModuleId path :: importedModuleIds rest
+importedModuleIds (_::rest) = importedModuleIds rest
+
 -- C5: graph-wide standalone-shadow names — every top-level funDef name in [userDecls]
 -- (the user modules, NOT core) that is also an interface method name anywhere in
 -- [allDecls].  Used by the MARK pass to rewrite such occurrences to EMethodAt (so the
@@ -23042,7 +23132,20 @@ elaborateModules runtimeDecls coreDecls0 modulesIn =
   let bareDictNames0 = dedup (moduleDictNames coreDecls allDecls modules)
   let dictNames0 = dedup (bareDictNames0
     ++ aliasDictNames bareDictNames0 (("core", coreDecls)::modules) modules)
-  let markRpNames = dedup (rpNames ++ methodConstraintNames allDecls ++ buildStandaloneShadowsGraph allDecls (flatMap snd modules))
+  -- #1354 unit A (#1353): the mark set is split so its SHADOW component can be scoped per
+  -- module.  `buildStandaloneShadowsGraph` is graph-global by construction (its own header
+  -- says "graph-wide"), and so is `argNames` — both hand one name set to a rewriter that
+  -- runs per module, which is how an interface reachable only transitively captured an
+  -- explicitly-imported standalone on the run/build path.  `markRpNames` (the unsplit set)
+  -- is still what CORE is marked with: `core` is the prelude, every interface it declares
+  -- is nameable in it, and S1 makes a `core.mdk` occurrence no user standalone's shadow
+  -- anyway (P0-21).  Scoping happens in `prePassModulePairArg`, which has the module's own
+  -- decls in hand.  ⚠️ `rpNames` (RETURN-position methods) is deliberately NOT scoped here:
+  -- it is a different axis with no filed repro, and widening a fix past its evidence is
+  -- what this workstream's gate question 3 exists to stop.
+  let markSharedNames = dedup (rpNames ++ methodConstraintNames allDecls)
+  let graphShadowNames = buildStandaloneShadowsGraph allDecls (flatMap snd modules)
+  let markRpNames = dedup (markSharedNames ++ graphShadowNames)
   -- #1280: the EMIT arm's copy of `checkModulesPreamble`'s line — the same scope,
   -- for the driver that does not use that preamble.  This is the seam `run` and
   -- the separate `medaka_emitter` process share, so an extern head stamped here
@@ -23054,7 +23157,7 @@ elaborateModules runtimeDecls coreDecls0 modulesIn =
   -- and any promotion-free program — the harvest is empty and this sweep's stamped trees
   -- are already correct, saving the whole discovery typecheck (the ~20% front-end win).
   let core2a = prePassDictArg markRpNames dictNames0 argNames driverState.value.mangledShadowMapRef.value coreDecls
-  let modules2a = map (prePassModulePairArg markRpNames dictNames0 argNames driverState.value.mangledShadowMapRef.value) modules
+  let modules2a = map (prePassModulePairArg markSharedNames graphShadowNames dictNames0 argNames driverState.value.mangledShadowMapRef.value) modules
   let _ = setRef driverState.value.promotionHarvestRef []
   let coreSchemesA = elabModuleStamp "" runtimeSeed [] core2a core2a
   -- #154 PR-C: elabHarvestWorker → elabWorker → elabModuleStamp reads accAll as its
@@ -23102,7 +23205,7 @@ elaborateModules runtimeDecls coreDecls0 modulesIn =
       let dictNames = dedup (bareDictNames
         ++ aliasDictNames bareDictNames (("core", coreDecls)::modules) modules)
       let core2 = prePassDictArg markRpNames dictNames argNames driverState.value.mangledShadowMapRef.value coreDecls
-      let modules2 = map (prePassModulePairArg markRpNames dictNames argNames driverState.value.mangledShadowMapRef.value) modules
+      let modules2 = map (prePassModulePairArg markSharedNames graphShadowNames dictNames argNames driverState.value.mangledShadowMapRef.value) modules
       let coreSchemes = elabModuleStamp "" runtimeSeed [] core2 core2
       -- #154 PR-C: same as the bare sweep above — elabWorker reads accAll (impl universe,
       -- order-observable) but not accData (dead Module field).  wantAll=True keeps the
@@ -23541,9 +23644,61 @@ prePassModulePair rpNames (mid, prog) = (mid, prePassDict rpNames [] prog)
 -- populated on every path (single elaboration mode).  Degenerates to
 -- prePassModulePair when both are [] (prePassDictArg with empty argNames/dictNames
 -- == prePassDict).
-prePassModulePairArg : List String -> List String -> List String -> List (String, String) -> (String, List Decl) -> (String, List Decl)
-prePassModulePairArg rpNames dictNames argNames shadowMap (mid, prog) =
-  (mid, prePassDictArg rpNames dictNames argNames shadowMap prog)
+-- #1354 unit A (#1353): [shadowNames] (the graph-wide standalone-shadow set) and
+-- [argNames] (every interface method with a dispatch argument index, graph-wide) are BOTH
+-- decided over the whole loaded graph and BOTH consumed here, per module — so an interface
+-- the module cannot name still rewrote its occurrences of a same-named imported standalone
+-- to `EMethodAt`, and dispatch then answered from an impl the module has no path to.  Both
+-- are filtered to `SHADOW-SEMANTICS.md` S1's `nameable in M` (§1.0; ruling #1375) using the
+-- module's own decls, which are exactly what this function already has in hand.
+--
+-- This is the RUN/BUILD half of the fix; `checkBodyImpl`'s `definerShadows`/
+-- `importerShadows` are the CHECK half.  Neither is sufficient alone — the mark pass
+-- rewrites the occurrence before typecheck ever consults `standaloneValuesRef`, so
+-- filtering only there leaves `check` right and the binary wrong (the S7 divergence #1375
+-- warns a mark-pass-only fix introduces, with the arms swapped).
+--
+-- [shadowMap] is filtered too, and THAT is the arm the emit path actually takes: the
+-- mangler rewrites an imported `size` occurrence to `fmod__size`, so neither name set above
+-- can match it and `rewriteArgScoped`'s FIRST guard — the `sm` lookup — is what marks it.
+-- Filtering it here, at the CONSUMING module, is the placement #1375 requires: the map is a
+-- PRODUCER-side index (`computeMangledShadowMap` walks the unit that DEFINES the
+-- standalone), and keying its visibility on that definer instead fails CLOSED and reddens
+-- the corpus's `i1`/`i3`/`i8`/`i10` — the provider module does not import the consumer
+-- where the interface lives (the #411 shape).  Same reason [shadowNames] is scoped through
+-- `shadowBareName`: on the emit path `buildStandaloneShadowsGraph` returns MANGLED symbols,
+-- and testing a mangled symbol against a set of METHOD names would answer False for every
+-- legitimate shadow.
+--
+-- [dictNames] is NOT filtered: those are `=>`-constrained FUNCTION names, not interface
+-- methods, and dropping one under-applies a dict-passed callee (`unbound identifier:
+-- $dict_…`) — the Phase-134 shape.  [rpNames] is not filtered either; see the split at
+-- `markSharedNames`.
+prePassModulePairArg : List String -> List String -> List String -> List String -> List (String, String) -> (String, List Decl) -> (String, List Decl)
+prePassModulePairArg rpNames shadowNames dictNames argNames shadowMap (mid, prog)
+  -- fail OPEN when the graph index is absent, for the reason stated on
+  -- `nameableIfaceShadows`: an unscoped mark set is today's behaviour, an empty one is the
+  -- S4/#410 class.
+  | omSize driverState.value.graphMethodExportsRef.value == 0 =
+    (mid, prePassDictArg (dedup (rpNames ++ shadowNames)) dictNames argNames shadowMap prog)
+  | otherwise =
+    let nameable = nameableIfaceMethodSet prog
+    (
+      mid,
+      prePassDictArg
+        (dedup (rpNames ++ filterList (n => omHasKey (shadowBareName shadowMap n) nameable) shadowNames))
+        dictNames
+        (filterList (n => omHasKey n nameable) argNames)
+        (filterList (e => omHasKey (snd e) nameable) shadowMap)
+        prog,
+    )
+
+-- the BARE interface-method name a (possibly mangled) standalone-shadow symbol stands for.
+-- Identity on the un-mangled run/check path, where the map is empty.
+shadowBareName : List (String, String) -> String -> String
+shadowBareName sm n = match lookupAssoc n sm
+  Some bare => bare
+  None => n
 
 -- The mark sub-phase of elaborateModules (RKey-only): compute rpNames over the
 -- full module graph and prePassDict each module.  Exported so profiling drivers

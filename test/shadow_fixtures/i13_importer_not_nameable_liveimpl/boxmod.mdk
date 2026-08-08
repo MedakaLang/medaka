@@ -1,0 +1,4 @@
+-- SHADOW-SEMANTICS cell I13 provider 1: the receiver type, nameable in main.mdk.
+-- Deliberately SEPARATE from the interface module: main.mdk must be able to
+-- construct a `Box` while being unable to name `Sizeable`.
+public export data Box = Box Int
