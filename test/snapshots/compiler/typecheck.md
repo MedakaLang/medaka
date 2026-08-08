@@ -1,5 +1,5 @@
 # META
-source_lines=24009
+source_lines=24039
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted typecheck stage — port of lib/typecheck.ml's HM core.  SLICE 1:
@@ -22208,6 +22208,15 @@ selectIfaceRows path src = match importedBindings path
 
 -- TYPE arm: the list names the interface → the whole row.  VALUE arm: it does not → only
 -- the methods it names.  An empty narrowing contributes no row at all.
+--
+-- ⚠️ KNOWN DEVIATION FROM S1-NS (a)(ii), recorded rather than silently carried: [named] is
+-- built from the member ORIGIN spellings (`map fst bs`), so `import ifc.{size as sz}`
+-- admits `size` — the name in the DEPENDENCY — while the only name this module can call is
+-- `sz`.  The clause says the admitted name must be the callable one.  It is unobservable
+-- today because member-ALIASED method imports are independently broken on both sides of
+-- this predicate, so no program can reach the difference; it becomes live the moment that
+-- is fixed, and the fix here is to key the VALUE arm on `snd` while the TYPE arm keeps
+-- `fst`.
 narrowRowToNamed : List String -> (String, List String) -> List (String, List String)
 narrowRowToNamed named r
   | contains (fst r) named = [r]
@@ -23861,23 +23870,44 @@ prePassModulePairArg rpNames shadowNames dictNames argNames shadowMap (mid, prog
   | omSize driverState.value.graphIfaceMethodsRef.value == 0 =
     (mid, prePassDictArg (dedup (rpNames ++ shadowNames)) dictNames argNames shadowMap prog)
   | otherwise =
-    -- 🔒 S1-NS (b), THE CLOSURE INVARIANT, HELD BY CONSTRUCTION.  The spec requires the
-    -- predicate deciding SHADOW-HOOD to be a SUPERSET of the one deciding DISPATCH
-    -- ELIGIBILITY, and rules two different predicates at the two sites non-conformant
-    -- WHICHEVER WAY THEY DIFFER.  There is exactly ONE predicate here — the same
-    -- `nameableIfaceMethodSet` that `checkBodyImpl` uses for shadow-hood — so the two sets
-    -- are EQUAL and the superset relation cannot be violated by any later edit that does not
-    -- first introduce a second set.  That is stronger than testing for the gap: it makes the
-    -- gap unrepresentable.  Two earlier cuts of this unit shipped S0s by filtering these
-    -- three lists with two different sets; `shadowMap` in particular is the EMIT-path peer of
-    -- `argNames`, so any divergence between them is a run-vs-build split by construction.
+    -- 🔒 S1-NS (b), THE CLOSURE INVARIANT.  The spec requires the predicate deciding
+    -- SHADOW-HOOD to be a SUPERSET of the one deciding DISPATCH ELIGIBILITY, and rules two
+    -- different predicates at the two sites non-conformant WHICHEVER WAY THEY DIFFER.
+    --
+    -- 🚨 THE INVARIANT IS ABOUT INPUTS TO DISPATCH, NOT ABOUT SETS OR SELECTORS, AND
+    -- COUNTING THE WRONG THING SHIPPED AN S0.  An earlier revision of this comment said
+    -- "there is exactly ONE predicate here … the two sets are EQUAL … the gap is
+    -- unrepresentable" — and was false four lines above itself, because `rpNames` was
+    -- concatenated RAW into the first argument while the other three lists were filtered.
+    -- `rewriteArgScoped` dispatches on `rp`, `an` AND `sm`, so dispatch-eligibility was
+    -- `rpNames ∪ filtered(…)` — a strict superset of shadow-hood, which is S1-NS's own
+    -- "Newly NON-CONFORMANT (1)".  Measured: a return-position method of a non-nameable
+    -- interface gave `run` 777 against a built binary of 42, both exit 0, no diagnostic.
+    --
+    -- THE ENUMERATION, so the next reader checks the SET rather than trusting a sentence.
+    -- Every input `rewriteArgScoped` can turn into an `EMethodAt` is filtered here:
+    --   * `rpNames`   — return-position method names AND method-level-constraint method
+    --                   names (`markSharedNames` concatenates both).  BOTH are interface
+    --                   METHOD names — each walks `DInterface`'s `methods` — so both are the
+    --                   same kind of set as `argNames` and both are filtered.
+    --   * `shadowNames` — via `shadowBareName`, because on the emit path these are mangled.
+    --   * `argNames`  — arg-position dispatch indices.
+    --   * `shadowMap` — the emit-path peer of `argNames`.
+    -- `dictNames` is the ONE input deliberately NOT filtered, and it is not an input to
+    -- dispatch at all: it produces `EDictAt`, a dict application of a `=>`-constrained
+    -- FUNCTION, which selects no impl from a receiver.  Filtering it would drop a dict
+    -- argument and UNDER-APPLY the callee (`unbound identifier: $dict_…`, the Phase-134
+    -- shape) — so it is disjoint by node kind, not by name, and that is probed rather than
+    -- argued (see `test/shadow_fixtures/`'s return-position cells and the PR body).
     let nameable = nameableIfaceMethodSet prog
+    let keep = (n => omHasKey n nameable)
     (
       mid,
       prePassDictArg
-        (dedup (rpNames ++ filterList (n => omHasKey (shadowBareName shadowMap n) nameable) shadowNames))
+        (dedup (filterList keep rpNames
+          ++ filterList (n => omHasKey (shadowBareName shadowMap n) nameable) shadowNames))
         dictNames
-        (filterList (n => omHasKey n nameable) argNames)
+        (filterList keep argNames)
         (filterList (e => omHasKey (snd e) nameable) shadowMap)
         prog,
     )
@@ -28552,7 +28582,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "prePassModulePair" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))
 (DFunDef false "prePassModulePair" ((PVar "rpNames") (PTuple (PVar "mid") (PVar "prog"))) (ETuple (EVar "mid") (EApp (EApp (EApp (EVar "prePassDict") (EVar "rpNames")) (EListLit)) (EVar "prog"))))
 (DTypeSig false "prePassModulePairArg" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))))))
-(DFunDef false "prePassModulePairArg" ((PVar "rpNames") (PVar "shadowNames") (PVar "dictNames") (PVar "argNames") (PVar "shadowMap") (PTuple (PVar "mid") (PVar "prog"))) (EIf (EBinOp "==" (EApp (EVar "omSize") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "graphIfaceMethodsRef") "value")) (ELit (LInt 0))) (ETuple (EVar "mid") (EApp (EApp (EApp (EApp (EApp (EVar "prePassDictArg") (EApp (EVar "dedup") (EBinOp "++" (EVar "rpNames") (EVar "shadowNames")))) (EVar "dictNames")) (EVar "argNames")) (EVar "shadowMap")) (EVar "prog"))) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "nameable") (EApp (EVar "nameableIfaceMethodSet") (EVar "prog"))) (DoExpr (ETuple (EVar "mid") (EApp (EApp (EApp (EApp (EApp (EVar "prePassDictArg") (EApp (EVar "dedup") (EBinOp "++" (EVar "rpNames") (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EApp (EApp (EVar "omHasKey") (EApp (EApp (EVar "shadowBareName") (EVar "shadowMap")) (EVar "n"))) (EVar "nameable")))) (EVar "shadowNames"))))) (EVar "dictNames")) (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "nameable")))) (EVar "argNames"))) (EApp (EApp (EVar "filterList") (ELam ((PVar "e")) (EApp (EApp (EVar "omHasKey") (EApp (EVar "snd") (EVar "e"))) (EVar "nameable")))) (EVar "shadowMap"))) (EVar "prog"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "prePassModulePairArg" ((PVar "rpNames") (PVar "shadowNames") (PVar "dictNames") (PVar "argNames") (PVar "shadowMap") (PTuple (PVar "mid") (PVar "prog"))) (EIf (EBinOp "==" (EApp (EVar "omSize") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "graphIfaceMethodsRef") "value")) (ELit (LInt 0))) (ETuple (EVar "mid") (EApp (EApp (EApp (EApp (EApp (EVar "prePassDictArg") (EApp (EVar "dedup") (EBinOp "++" (EVar "rpNames") (EVar "shadowNames")))) (EVar "dictNames")) (EVar "argNames")) (EVar "shadowMap")) (EVar "prog"))) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "nameable") (EApp (EVar "nameableIfaceMethodSet") (EVar "prog"))) (DoLet false false (PVar "keep") (ELam ((PVar "n")) (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "nameable")))) (DoExpr (ETuple (EVar "mid") (EApp (EApp (EApp (EApp (EApp (EVar "prePassDictArg") (EApp (EVar "dedup") (EBinOp "++" (EApp (EApp (EVar "filterList") (EVar "keep")) (EVar "rpNames")) (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EApp (EApp (EVar "omHasKey") (EApp (EApp (EVar "shadowBareName") (EVar "shadowMap")) (EVar "n"))) (EVar "nameable")))) (EVar "shadowNames"))))) (EVar "dictNames")) (EApp (EApp (EVar "filterList") (EVar "keep")) (EVar "argNames"))) (EApp (EApp (EVar "filterList") (ELam ((PVar "e")) (EApp (EApp (EVar "omHasKey") (EApp (EVar "snd") (EVar "e"))) (EVar "nameable")))) (EVar "shadowMap"))) (EVar "prog"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "shadowBareName" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "shadowBareName" ((PVar "sm") (PVar "n")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EVar "sm")) (arm (PCon "Some" (PVar "bare")) () (EVar "bare")) (arm (PCon "None") () (EVar "n"))))
 (DTypeSig true "markModules" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))))
@@ -33107,7 +33137,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "prePassModulePair" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))
 (DFunDef false "prePassModulePair" ((PVar "rpNames") (PTuple (PVar "mid") (PVar "prog"))) (ETuple (EVar "mid") (EApp (EApp (EApp (EVar "prePassDict") (EVar "rpNames")) (EListLit)) (EVar "prog"))))
 (DTypeSig false "prePassModulePairArg" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))))))
-(DFunDef false "prePassModulePairArg" ((PVar "rpNames") (PVar "shadowNames") (PVar "dictNames") (PVar "argNames") (PVar "shadowMap") (PTuple (PVar "mid") (PVar "prog"))) (EIf (EBinOp "==" (EApp (EVar "omSize") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "graphIfaceMethodsRef") "value")) (ELit (LInt 0))) (ETuple (EVar "mid") (EApp (EApp (EApp (EApp (EApp (EVar "prePassDictArg") (EApp (EVar "dedup") (EBinOp "++" (EVar "rpNames") (EVar "shadowNames")))) (EVar "dictNames")) (EVar "argNames")) (EVar "shadowMap")) (EVar "prog"))) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "nameable") (EApp (EVar "nameableIfaceMethodSet") (EVar "prog"))) (DoExpr (ETuple (EVar "mid") (EApp (EApp (EApp (EApp (EApp (EVar "prePassDictArg") (EApp (EVar "dedup") (EBinOp "++" (EVar "rpNames") (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EApp (EApp (EVar "omHasKey") (EApp (EApp (EVar "shadowBareName") (EVar "shadowMap")) (EVar "n"))) (EVar "nameable")))) (EVar "shadowNames"))))) (EVar "dictNames")) (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "nameable")))) (EVar "argNames"))) (EApp (EApp (EVar "filterList") (ELam ((PVar "e")) (EApp (EApp (EVar "omHasKey") (EApp (EVar "snd") (EVar "e"))) (EVar "nameable")))) (EVar "shadowMap"))) (EVar "prog"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "prePassModulePairArg" ((PVar "rpNames") (PVar "shadowNames") (PVar "dictNames") (PVar "argNames") (PVar "shadowMap") (PTuple (PVar "mid") (PVar "prog"))) (EIf (EBinOp "==" (EApp (EVar "omSize") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "graphIfaceMethodsRef") "value")) (ELit (LInt 0))) (ETuple (EVar "mid") (EApp (EApp (EApp (EApp (EApp (EVar "prePassDictArg") (EApp (EVar "dedup") (EBinOp "++" (EVar "rpNames") (EVar "shadowNames")))) (EVar "dictNames")) (EVar "argNames")) (EVar "shadowMap")) (EVar "prog"))) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "nameable") (EApp (EVar "nameableIfaceMethodSet") (EVar "prog"))) (DoLet false false (PVar "keep") (ELam ((PVar "n")) (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "nameable")))) (DoExpr (ETuple (EVar "mid") (EApp (EApp (EApp (EApp (EApp (EVar "prePassDictArg") (EApp (EVar "dedup") (EBinOp "++" (EApp (EApp (EVar "filterList") (EVar "keep")) (EVar "rpNames")) (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EApp (EApp (EVar "omHasKey") (EApp (EApp (EVar "shadowBareName") (EVar "shadowMap")) (EVar "n"))) (EVar "nameable")))) (EVar "shadowNames"))))) (EVar "dictNames")) (EApp (EApp (EVar "filterList") (EVar "keep")) (EVar "argNames"))) (EApp (EApp (EVar "filterList") (ELam ((PVar "e")) (EApp (EApp (EVar "omHasKey") (EApp (EVar "snd") (EVar "e"))) (EVar "nameable")))) (EVar "shadowMap"))) (EVar "prog"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "shadowBareName" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "shadowBareName" ((PVar "sm") (PVar "n")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EVar "sm")) (arm (PCon "Some" (PVar "bare")) () (EVar "bare")) (arm (PCon "None") () (EVar "n"))))
 (DTypeSig true "markModules" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))))

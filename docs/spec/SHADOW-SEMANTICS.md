@@ -382,14 +382,19 @@ Given an occurrence of bare name `N` in module `M`:
   > namespaces. (5) Admitting a whole interface row because a member list names **one of
   > its methods**.
   >
-  > **Newly ACCEPTED / a DIFFERENT VALUE.** An **importer** shadow whose interface is
-  > reachable only by naming a *sibling* method loses shadow-hood, so a receiver inside
-  > the standalone's domain answers with the imported standalone rather than the impl —
-  > this is S1-SCOPE's acceptance narrowing reaching its **silent** half, and it is the
-  > cost this clause charges itself. The **definer** twin returns the module's own
-  > standalone rather than a foreign impl body. Corpus:
-  > `test/shadow_fixtures/i19_importer_sibling_method_silent/`,
-  > `d23_definer_sibling_method_silent/`, `i20_importer_method_reexport_chain/`.
+  > **Newly ACCEPTED / a DIFFERENT VALUE.** Exactly ONE shape changes value against the
+  > pre-ruling compiler: an **importer** shadow whose interface is reachable only by naming
+  > a *sibling* method loses shadow-hood, so a receiver inside the standalone's domain
+  > answers with the imported standalone rather than the impl (777 → 42). That is
+  > S1-SCOPE's acceptance narrowing reaching its **silent** half, and it is the cost this
+  > clause charges itself. Corpus: `test/shadow_fixtures/i19_importer_sibling_method_silent/`.
+  >
+  > ⚠️ **Measured, and stated because an earlier draft of this paragraph over-claimed.**
+  > The definer twin (`d23_definer_sibling_method_silent/`) and the method-name re-export
+  > chain (`i20_importer_method_reexport_chain/`) are **42/42 and 50/50** on the pre-ruling
+  > compiler and after: they pin shapes the ruling makes *unrepresentable*, not values it
+  > changes. Citing all three as "newly different" reads as three behaviour changes where
+  > there is one.
   >
   > **Explicitly NOT changed:** S2's graph-global impl universe (`DICT-SEMANTICS.md` §8
   > I5). S1-NS constrains a set of NAMES; it cannot narrow an instance environment.

@@ -1,0 +1,17 @@
+-- SHADOW-SEMANTICS cell I21 (S1-NS (b), RETURN-POSITION, IMPORTER twin of d24): the same
+-- axis with the standalone IMPORTED rather than defined here. `import smod.{sf}` admits
+-- neither `Zed` nor `zed`, so `zed` is not a shadow and the imported standalone answers:
+-- 42 + 0 = 42.
+--
+-- The definer/importer pair is not redundant: S2 states its rule PER KIND, and the two kinds
+-- reach the mark pass through different paths -- a definer's name is mangled to `main__zed`
+-- on emit while an importer's is rewritten to the provider's symbol. A fix that repaired one
+-- and not the other would leave the other silent, which is exactly the shape this corpus has
+-- been bitten by before (d18/i6b, d22/i7).
+--
+-- Graded on `run` AND the built binary for the reason d24 states: before the fix `run`
+-- printed 777 and the binary printed 42, both at exit 0 with no diagnostic.
+import fmod.{zed}
+import smod.{sf}
+
+main = println (zed + sf 0)
