@@ -80,7 +80,7 @@ non-ASCII: café — 日本語 — 🐟
 last line
 EOF
 
-MOCK_READBACK="$(cat "$WORK/body.md")" run_expect "body round-trip ok" 0 \
+MOCK_READBACK_FILE="$WORK/body.md" run_expect "body round-trip ok" 0 \
   body --number 7 --file "$WORK/body.md" --repo MedakaLang/medaka
 
 # The write must have used -F ... body=@file (file expansion), never -f.
@@ -100,14 +100,29 @@ MOCK_READBACK="something else entirely" run_contains \
   "body readback mismatch fails" 1 "does not match" \
   body --number 7 --file "$WORK/body.md" --repo MedakaLang/medaka
 
-# PATCH failure -> nonzero.
-MOCK_PATCH_FAIL=yes MOCK_READBACK="x" run_contains \
-  "body patch failure fails" 1 "did not succeed" \
+# A body WITHOUT a trailing newline must round-trip byte-identical (the
+# --template readback must not inject or swallow a final LF).
+printf 'no trailing newline' >"$WORK/body-nolf.md"
+MOCK_READBACK_FILE="$WORK/body-nolf.md" run_contains \
+  "body no-trailing-LF round-trip ok" 0 "updated and verified" \
+  body --number 7 --file "$WORK/body-nolf.md" --repo MedakaLang/medaka
+# ...and a body with MULTIPLE trailing newlines round-trips too.
+printf 'two trailing\n\n\n' >"$WORK/body-multilf.md"
+MOCK_READBACK_FILE="$WORK/body-multilf.md" run_contains \
+  "body multi-trailing-LF round-trip ok" 0 "updated and verified" \
+  body --number 7 --file "$WORK/body-multilf.md" --repo MedakaLang/medaka
+
+# The PATCH exit code is deliberately NOT trusted: a PATCH that exits nonzero
+# but whose readback matches must report success (the write did land), and a
+# PATCH that exits 0 with a mismatched readback must fail (covered by the
+# "readback mismatch" test above). Read the state back, never the return code.
+MOCK_PATCH_FAIL=yes MOCK_READBACK_FILE="$WORK/body.md" run_contains \
+  "body ignores meaningless PATCH exit code when readback matches" 0 "updated and verified" \
   body --number 7 --file "$WORK/body.md" --repo MedakaLang/medaka
 
 # Issue variant targets the issues/ resource, not pulls/.
 : >"$MOCK_LOG"
-MOCK_READBACK="$(cat "$WORK/body.md")" run_expect "body issue ok" 0 \
+MOCK_READBACK_FILE="$WORK/body.md" run_expect "body issue ok" 0 \
   body --number 13 --issue --file "$WORK/body.md" --repo MedakaLang/medaka
 if grep -q 'issues/13' "$MOCK_LOG"; then
   pass=$((pass + 1))
@@ -149,6 +164,12 @@ if grep -qF 'isInMergeQueue state' "$MOCK_LOG"; then
 else
   fail=$((fail + 1)); echo "FAIL: enqueue GraphQL query missing isInMergeQueue/state" >&2
 fi
+# The auto-merge request itself must have been issued (command construction).
+if grep -q 'pr merge 9 --repo MedakaLang/medaka --auto --merge' "$MOCK_LOG"; then
+  pass=$((pass + 1))
+else
+  fail=$((fail + 1)); echo "FAIL: enqueue did not issue gh pr merge --auto --merge" >&2
+fi
 
 # ---------------------------------------------------------------------------
 # watch
@@ -185,6 +206,18 @@ else
   printf '%s\n' "$tout" | sed 's/^/    /' >&2
 fi
 
+# A non-completed pending state (e.g. "waiting") must NOT read as done: the
+# helper keeps polling and finally times out (exit 1) rather than claiming
+# success. Only `completed` is terminal.
+MOCK_CHECKRUNS="gateA	waiting	" run_contains \
+  "watch never reports success on pending (waiting) state" 1 "still running after" \
+  watch --number 7 --interval 1 --timeout 2 --repo MedakaLang/medaka
+
+# An empty check set (no runs registered yet) must not report success either.
+MOCK_CHECKRUNS="" run_contains \
+  "watch never reports success on empty check set" 1 "still running after" \
+  watch --number 7 --interval 1 --timeout 2 --repo MedakaLang/medaka
+
 # ---------------------------------------------------------------------------
 # complete
 # ---------------------------------------------------------------------------
@@ -209,15 +242,22 @@ git clone -q "$BARE" "$WORK/complete-work"
 
 cd "$WORK/complete-work"
 
-# Ancestor head -> ok.
-MOCK_STATE=MERGED run_contains "complete ok when sha on main" 0 "is an ancestor of origin/main" \
+# Ancestor head -> ok. MOCK_REPO_URL points the helper's authoritative fetch
+# at the throwaway bare repo (not this checkout's "origin").
+MOCK_STATE=MERGED MOCK_REPO_URL="$BARE" run_contains \
+  "complete ok when sha on main" 0 "is an ancestor of MedakaLang/medaka main" \
   complete --number 7 --sha "$C1" --interval 1 --timeout 2 --repo MedakaLang/medaka
 
 # Non-ancestor head -> nonzero, mentions the race / merged sha.
-MOCK_STATE=MERGED MOCK_MERGED_SHA="$C1" run_contains \
+MOCK_STATE=MERGED MOCK_REPO_URL="$BARE" MOCK_MERGED_SHA="$C1" run_contains \
   "complete fails when sha not on main" 1 "push-after-enqueue race" \
   complete --number 7 --sha 0000000000000000000000000000000000000000 \
     --interval 1 --timeout 2 --repo MedakaLang/medaka
+
+# Resolving a clone URL for the repo fails -> nonzero (refuse, never guess).
+MOCK_STATE=MERGED MOCK_REPO_URL="" run_contains \
+  "complete refuses when repo URL unresolvable" 1 "cannot resolve a clone URL" \
+  complete --number 7 --sha "$C1" --interval 1 --timeout 2 --repo MedakaLang/medaka
 
 # PR never merges -> nonzero.
 MOCK_STATE=OPEN run_contains "complete times out waiting for MERGED" 1 "did not reach MERGED" \

@@ -95,15 +95,18 @@ cmd_body() {
   resource="pulls"; [ "$kind" = issue ] && resource="issues"
 
   # PATCH with -F (not -f): -F expands the leading @ as a file read; -f writes
-  # the literal four characters "@file" (#1212 item 2).
-  if ! $GH api -X PATCH "repos/$REPO/$resource/$num" -F "body=@$file" >/dev/null 2>&1; then
-    die "body: PATCH of $kind $num did not succeed"
-  fi
+  # the literal four characters "@file" (#1212 item 2). We deliberately do NOT
+  # gate on the PATCH's exit code (#1212: gh can no-op while exiting 0, or
+  # report an error after the server applied the write) — the readback below is
+  # the sole signal, per "read the state back, never the return code".
+  $GH api -X PATCH "repos/$REPO/$resource/$num" -F "body=@$file" >/dev/null 2>&1 || true
 
-  # Read back and byte-compare. A no-op'ing write (--body-file) or a literal
-  # @file (mistakenly using -f) is caught here, not by the PATCH's exit code.
+  # Read back and byte-compare. --template (not --jq) so the readback carries
+  # no trailing newline a JSON pipe would append: byte fidelity both ways, so a
+  # stored body with or without a final LF round-trips unchanged. A no-op'ing
+  # write (--body-file) or a literal @file (mistakenly using -f) is caught here.
   tmp="$(mktemp "${TMPDIR:-/tmp}/pr-body.XXXXXX")"
-  if ! $GH api "repos/$REPO/$resource/$num" --jq .body >"$tmp" 2>/dev/null; then
+  if ! $GH api "repos/$REPO/$resource/$num" --template '{{.body}}' >"$tmp" 2>/dev/null; then
     rm -f "$tmp"
     die "body: could not read back $kind $num body to verify write"
   fi
@@ -156,7 +159,7 @@ cmd_enqueue() {
   while [ "$elapsed" -lt "$timeout" ]; do
     raw=$($GH api graphql -f "query=$q" --jq '.data.repository.pullRequest' 2>/dev/null) || raw=
     state="$(printf '%s' "$raw" | sed -n 's/.*"state": *"\([A-Z]*\)".*/\1/p')"
-    inqueue="$(printf '%s' "$raw" | sed -n 's/.*"isInMergeQueue": *\(true\|false\).*/\1/p')"
+    inqueue="$(printf '%s' "$raw" | sed -n 's/.*"isInMergeQueue": *\([a-z]*\).*/\1/p')"
     if [ "$inqueue" = true ]; then
       echo "ok: PR $num is in the merge queue (state=$state)"
       return 0
@@ -209,8 +212,10 @@ cmd_watch() {
   elapsed=0
   while [ "$elapsed" -lt "$timeout" ]; do
     # Per check-run: NAME<TAB>STATUS<TAB>CONCLUSION(, empty while running).
+    # per_page=100 so a PR with more than the default 30 check-runs still has
+    # every run counted — an omitted running/failing check must not read as done.
     cur="$prevdir/cur"
-    $GH api "repos/$REPO/commits/$head/check-runs" \
+    $GH api "repos/$REPO/commits/$head/check-runs?per_page=100" \
       --jq '.check_runs[] | [.name, .status, (.conclusion // "")] | @tsv' >"$cur" 2>/dev/null
 
     running=0
@@ -221,11 +226,16 @@ cmd_watch() {
       status="$(printf '%s' "$line" | cut -f2)"
       conclusion="$(printf '%s' "$line" | cut -f3)"
 
-      if [ "$status" = in_progress ] || [ "$status" = queued ]; then
+      # Only `completed` is terminal. queued/in_progress/waiting/requested/
+      # pending all mean "still going" — a check in any other state must keep
+      # us polling, or a not-yet-completed run would be read as success.
+      if [ "$status" != completed ]; then
         running=1
       fi
 
-      prevline="$(grep -F -- "${name}${TAB}" "$prev" 2>/dev/null | head -1 || true)"
+      # Exact first-field match against the previous snapshot (awk, not grep
+      # substring): `bar` must never match a stored `foo-bar` row.
+      prevline="$(awk -F "$TAB" -v n="$name" '$1 == n { print; exit }' "$prev" 2>/dev/null || true)"
       prevstatus="$(printf '%s' "$prevline" | cut -f2)"
       prevconcl="$(printf '%s' "$prevline" | cut -f3)"
 
@@ -303,15 +313,26 @@ cmd_complete() {
   done
   [ "$state" = MERGED ] || die "complete: PR $num did not reach MERGED within ${timeout}s"
 
-  git fetch origin main >/dev/null 2>&1 || true
-  if git merge-base --is-ancestor "$sha" origin/main 2>/dev/null; then
-    echo "ok: $sha is an ancestor of origin/main — the PR landed your intended head"
+  # Verify against the ACTUAL repo's main, not this checkout's origin: the
+  # helper may run in a checkout whose origin is a different repo than $REPO,
+  # and verifying a foreign origin would certify the wrong thing. Fetch $REPO's
+  # main into a throwaway ref and require the fetch to succeed — a failed fetch
+  # is loud, never a silent success.
+  repo_url=$($GH repo view "$REPO" --json url --jq .url 2>/dev/null | tr -d '"' || true)
+  [ -n "$repo_url" ] || die "complete: cannot resolve a clone URL for $REPO to verify main"
+  check_ref="refs/pr-helper/main-$$"
+  if ! git fetch -q "$repo_url" main:"$check_ref" 2>/dev/null; then
+    die "complete: could not fetch $REPO main to verify — refusing to report success"
+  fi
+  trap 'git update-ref -d "$check_ref" 2>/dev/null || true' 0 1 2 3 15
+  if git merge-base --is-ancestor "$sha" "$check_ref" 2>/dev/null; then
+    echo "ok: $sha is an ancestor of $REPO main — the PR landed your intended head"
     exit 0
   fi
   # Distinguish "merged something else" from "sha never fetched": report the
   # actual merge commit so the caller can see what did land.
   merged_sha=$($GH pr view "$num" --repo "$REPO" --json mergeCommit --jq '.mergeCommit.oid' 2>/dev/null | tr -d '"' || true)
-  die "complete: $sha is NOT an ancestor of origin/main (merged_sha=${merged_sha:-unknown}) — push-after-enqueue race: the branch head the queue merged may differ from $sha"
+  die "complete: $sha is NOT an ancestor of $REPO main (merged_sha=${merged_sha:-unknown}) — push-after-enqueue race: the branch head the queue merged may differ from $sha"
 }
 
 # ---------------------------------------------------------------------------

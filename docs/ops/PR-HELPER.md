@@ -24,7 +24,7 @@ hand, and the underlying tools demonstrably lie about success:
 - **Verified completion** — a commit pushed to an enqueued PR can miss its own
   merge; the branch may be merged as it stood, leaving the later push behind.
   Verifying against the **branch** is the natural-but-wrong check; the right one
-  is `--is-ancestor` against `origin/main`. #1213.
+  `--is-ancestor` against `main`. #1213.
 
 The helper is **non-interactive** and each subcommand is usable on its own: a
 body edit never requires running the whole lifecycle.
@@ -83,10 +83,13 @@ holds within the timeout.
 ### 4. `complete` — verified completion
 
 Waits for the PR to reach `MERGED`, then proves the intended head commit is an
-**ancestor of `origin/main`** (`git merge-base --is-ancestor`). This is the 
-#1213 race check: a commit pushed after enqueue may be absent from what actually
-landed. On failure it reports the PR's actual `mergeCommit` so the caller can see
-what did land. Fails if the given SHA is not on `main` after the PR closes.
+**ancestor of the repo's `main`** (fetched authoritatively into a throwaway git
+ref from the `--repo`'s clone URL, not this checkout's assumed origin;
+`git merge-base --is-ancestor`). This is the #1213 race check: a commit pushed
+after enqueue may be absent from what actually landed. On failure it reports
+the PR's actual `mergeCommit` so the caller can see what did land. Fails if the
+given SHA is not on `main` after the PR closes, or if the repo's `main` cannot
+be fetched (never guesses).
 
 ## Testing
 

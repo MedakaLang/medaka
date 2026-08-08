@@ -16,9 +16,13 @@ if [ "$1" = api ] && printf '%s' "$*" | grep -q -- ' -X PATCH '; then
   exit 0
 fi
 
-# --- body: read back ---
-if [ "$1" = api ] && printf '%s' "$*" | grep -q ' --jq .body'; then
-  printf '%s\n' "${MOCK_READBACK:-}"
+# --- body: read back (--template, no added trailing newline) ---
+if [ "$1" = api ] && printf '%s' "$*" | grep -q '{{.body}}'; then
+  if [ -n "${MOCK_READBACK_FILE:-}" ]; then
+    cat "$MOCK_READBACK_FILE"          # byte-exact, trailing newlines preserved
+  else
+    printf '%s' "${MOCK_READBACK:-}"
+  fi
   exit 0
 fi
 
@@ -39,7 +43,14 @@ if [ "$1" = api ] && printf '%s' "$*" | grep -q 'check-runs'; then
     printf '%s\n' "$line"
     exit 0
   fi
-  printf '%s\n' "${MOCK_CHECKRUNS:-}"
+  # Zero bytes when no snapshot given — never a spurious blank "check".
+  [ -n "${MOCK_CHECKRUNS:-}" ] && printf '%s\n' "$MOCK_CHECKRUNS"
+  exit 0
+fi
+
+# --- complete: resolve clone URL for $REPO ---
+if [ "$1" = repo ] && [ "$2" = view ]; then
+  printf '%s' "${MOCK_REPO_URL:-}"
   exit 0
 fi
 
