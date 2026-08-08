@@ -1,0 +1,4 @@
+-- #1369 second hop: re-exports a re-export of a DECLARED-context binding. Each hop
+-- re-attributes under its own module id as it is processed (dependency-first), so a chain
+-- must resolve at depth 2 and not only at depth 1.
+export import lib.obl1369_reexp_declared.{g}

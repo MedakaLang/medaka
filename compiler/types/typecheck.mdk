@@ -3982,6 +3982,7 @@ data PerRun = PerRun {
     funConstraintsRef : Ref (List (String, List Int)),
     funConstraintArgsRef : Ref (List (String, List (List Mono))),
     funConstraintIfacesRef : Ref (List (String, List String)),
+    ownFunConstraintNamesRef : Ref (OrdMap Unit),
     currentImportDefinersRef : Ref (List (String, String)),
     currentImportOriginsRef : Ref (List (String, String)),
     importedSchemeOblsRef : Ref (OrdMap (List (String, List Int))),  -- #1114/#845: this module's imported bindings' scheme contexts, keyed by LOCAL spelling (see importedSchemeOblEntries)
@@ -4060,6 +4061,7 @@ freshPerRun _ = PerRun {
   funConstraintsRef = Ref [],
   funConstraintArgsRef = Ref [],
   funConstraintIfacesRef = Ref [],
+  ownFunConstraintNamesRef = Ref omEmpty,
   currentImportDefinersRef = Ref [],
   currentImportOriginsRef = Ref [],
   importedSchemeOblsRef = Ref omEmpty,
@@ -16786,10 +16788,17 @@ checkBodyImpl seed mode prog0 =
     Module mid _ _ =>
       let _ = expandSupersTable driverState.value.superDeclsRef.value
       let _ = setRef crossRun.value.crossModuleFunConstraintsRef perRun.value.funConstraintsRef.value
+      -- #1337: both snapshots take THIS module's originated-name set and the
+      -- already-accumulated qual table — see `attributeModuleArities` for why a
+      -- `declTopFnNames`-only filter both over-admitted (#1326) and omitted (#1369).
       let _ = setRef crossRun.value.crossModuleFunConstraintsQualRef
-        (attributeModuleArities mid prog perRun.value.funConstraintsRef.value ++ crossRun.value.crossModuleFunConstraintsQualRef.value)
+        (attributeModuleArities mid prog perRun.value.ownFunConstraintNamesRef.value
+          crossRun.value.crossModuleFunConstraintsQualRef.value perRun.value.funConstraintsRef.value
+          ++ crossRun.value.crossModuleFunConstraintsQualRef.value)
       let _ = setRef crossRun.value.crossModuleFunConstraintIfacesQualRef
-        (attributeModuleArrIfaces mid prog perRun.value.funConstraintIfacesRef.value ++ crossRun.value.crossModuleFunConstraintIfacesQualRef.value)
+        (attributeModuleArrIfaces mid prog perRun.value.ownFunConstraintNamesRef.value
+          crossRun.value.crossModuleFunConstraintIfacesQualRef.value perRun.value.funConstraintIfacesRef.value
+          ++ crossRun.value.crossModuleFunConstraintIfacesQualRef.value)
       let _ = setRef crossRun.value.crossModuleFunConstraintIfacesRef perRun.value.funConstraintIfacesRef.value
       let _ = setRef crossRun.value.crossModuleMethodConstraintsRef perRun.value.methodConstraintsRef.value
       let _ = setRef crossRun.value.crossModuleMethodConstraintsQualRef
@@ -20172,6 +20181,7 @@ registerMember _ [] _ = ()
 registerMember m ifaceMonos argVecs =
   let ids = registerMemberSlots m 0 (map snd ifaceMonos)
   let keptIfaces = keptConstraintIfaces ifaceMonos
+  let _ = noteOwnFunConstraint m
   let _ = setRef perRun.value.funConstraintsRef ((m, ids)::perRun.value.funConstraintsRef.value)
   let _ = setRef perRun.value.funConstraintArgsRef ((m, keptConstraintArgs ifaceMonos argVecs)::perRun.value.funConstraintArgsRef.value)
   setRef
@@ -20207,6 +20217,21 @@ registerMemberSlots m kept (mono::rest) = match normalize mono
     let _ = setRef perRun.value.activeDictVars ((id, dictParamName m kept)::perRun.value.activeDictVars.value)
     id :: registerMemberSlots m (kept + 1) rest
   _ => registerMemberSlots m kept rest
+
+-- #1337 (#1326/#1369): PROVENANCE for the declared-context dict-arity pair.  `registerMember`
+-- and `registerInferredFor` are the only two writers of `funConstraintsRef` /
+-- `funConstraintIfacesRef` that ORIGINATE an entry; every other write to those refs
+-- (checkModuleFullImpl's per-module preamble) SEEDS them from the program-global bare
+-- accumulator, i.e. copies OTHER modules' entries in.  Recording the originated names here is
+-- what lets `attributeModuleArities` tell the two apart when it snapshots this module's
+-- contribution — see its own comment for why a name-membership test could not.
+-- Reset per module for free: `ownFunConstraintNamesRef` is a PerRun field and `resetState`
+-- re-mints the whole bundle, so it is always in lockstep with the two refs it describes.
+noteOwnFunConstraint : String -> Unit
+noteOwnFunConstraint m =
+  setRef
+    perRun.value.ownFunConstraintNamesRef
+    (omInsert m () perRun.value.ownFunConstraintNamesRef.value)
 
 -- Pass B: infer each member's clauses, unifying with its placeholder.
 -- Phase 73 (bidirectional, signature-driven parameter typing): a member WITH a
@@ -20858,6 +20883,7 @@ boundTvarId boundIds mono = match normalize mono
 registerInferredFor : String -> List Int -> Unit
 registerInferredFor _ [] = ()
 registerInferredFor m ids =
+  let _ = noteOwnFunConstraint m
   let _ = setRef perRun.value.funConstraintsRef ((m, ids)::perRun.value.funConstraintsRef.value)
   let _ = setRef perRun.value.funConstraintIfacesRef ((m, map (ifaceForInferredId m) ids)::perRun.value.funConstraintIfacesRef.value)
   let _ = registerActiveDictVars m 0 ids
@@ -21721,20 +21747,27 @@ schemeOblEntriesFor : String -> UsePath -> List ((String, String), List (String,
 schemeOblEntriesFor mid (UseAlias _ a) qual =
   flatMap (moduleAliasEntry mid a) qual
 -- `import m.*` → every constrained binding m defines is written under its OWN name here.
-schemeOblEntriesFor mid (UseWild _) qual = flatMap (wildSchemeOblEntry mid) qual
+schemeOblEntriesFor mid (UseWild _) qual = flatMap (wildLocalEntry mid) qual
 -- `import m.{x}` / `import m.{x as y}` → `x` (resp. `y`) carries x's scheme context.
 schemeOblEntriesFor mid (UseGroup _ ms) qual =
-  flatMap (memberSchemeOblEntry mid qual) ms
+  flatMap (memberLocalEntry mid qual) ms
 -- `import m` binds NO names (it exists to bring m's impls into scope), so nothing here.
 schemeOblEntriesFor _ _ _ = []
 
-wildSchemeOblEntry : String -> ((String, String), List (String, List Int)) -> List (String, List (String, List Int))
-wildSchemeOblEntry mid ((defMid, n), obs)
-  | defMid == mid = [(n, obs)]
+-- Re-key ONE qual-table entry to the LOCAL spelling a `.*` form binds it under, keeping
+-- only entries the named module actually defines.  Generic over the payload: shared by the
+-- scheme-context table (`schemeOblEntriesFor`) and, since #1337, by the dict-arity pair's
+-- re-export walk (`reexportEntriesFor`) — one rule for "what does this spelling bind",
+-- which is the same reason `schemeOblEntriesFor` reuses the import side's own table.
+wildLocalEntry : String -> ((String, String), List a) -> List (String, List a)
+wildLocalEntry mid ((defMid, n), v)
+  | defMid == mid = [(n, v)]
   | otherwise = []
 
-memberSchemeOblEntry : String -> List ((String, String), List (String, List Int)) -> UseMember -> List (String, List (String, List Int))
-memberSchemeOblEntry mid qual m =
+-- The `{x}` / `{x as y}` peer of `wildLocalEntry`.  `useMemberLocal`, not `useMemberAlias`:
+-- the UNALIASED member spelling is the common one and both callers need it.
+memberLocalEntry : String -> List ((String, String), List a) -> UseMember -> List (String, List a)
+memberLocalEntry mid qual m =
   let local = useMemberLocal m
   let origin = useMemberOrigin m
   map
@@ -21756,6 +21789,43 @@ aliasEntriesFor mid (UseAlias _ a) qual = flatMap (moduleAliasEntry mid a) qual
 aliasEntriesFor mid (UseGroup _ ms) qual =
   flatMap (memberAliasEntry mid qual) ms
 aliasEntriesFor _ _ _ = []
+
+-- #1337 (#1369): the dict arities / slot-parallel ifaces a module RE-EXPORTS
+-- (`export import src.{…}` / `export import src.*`), each under the name it re-exports it
+-- as.  The WRITE-side twin of `aliasConstraintEntries` above and the dict-arity twin of
+-- `reexportSchemeOblEntries`: [qual] is the already-accumulated `(definerMid, name)` table,
+-- read in dependency-first module order, so a >1-hop chain resolves as each hop
+-- re-attributes under its own mid.
+--
+-- ⚠️ This has a `UseWild` arm and `aliasEntriesFor` deliberately does NOT (see its own
+-- note).  They are not in tension, because the two functions feed OPPOSITE sides of the
+-- seam: `aliasConstraintEntries` re-keys what THIS module's `funConstraintsRef` holds for
+-- ITS OWN call sites (where the bare re-seed already covers a wildcard-imported name), while
+-- this one decides what this module PUBLISHES to its importers — and there the wildcard
+-- re-export is a measured #1369 cell, not a case something else covers.  Adding the arm
+-- here therefore cannot change emit-path dict-passing arity, which is precisely the blast
+-- radius that note reserves.
+reexportConstraintEntries : List Decl -> List ((String, String), List a) -> List (String, List a)
+reexportConstraintEntries [] _ = []
+reexportConstraintEntries ((DAttrib _ d)::rest) qual = reexportConstraintEntries [d] qual
+  ++ reexportConstraintEntries rest qual
+reexportConstraintEntries ((DUse True path _)::rest) qual = reexportEntriesFor (usePathModuleId path) path qual
+  ++ reexportConstraintEntries rest qual
+reexportConstraintEntries (_::rest) qual = reexportConstraintEntries rest qual
+
+reexportEntriesFor : String -> UsePath -> List ((String, String), List a) -> List (String, List a)
+-- `export import src as A` is a hard resolve error ("a module alias is file-local"), so this
+-- arm is unreachable from the surface language; kept so the walk is total over UsePath and
+-- structurally parallel to `schemeOblEntriesFor`.
+reexportEntriesFor mid (UseAlias _ a) qual =
+  flatMap (moduleAliasEntry mid a) qual
+-- `export import src.*` → every constrained fn src defines is re-exported under its OWN name.
+reexportEntriesFor mid (UseWild _) qual = flatMap (wildLocalEntry mid) qual
+-- `export import src.{x}` / `{x as y}` → `x` (resp. `y`) carries x's dict arity.
+reexportEntriesFor mid (UseGroup _ ms) qual =
+  flatMap (memberLocalEntry mid qual) ms
+-- `export import src` re-exports no NAMES (it exists to propagate impls), so nothing here.
+reexportEntriesFor _ _ _ = []
 
 -- ── import aliasing of an interface/impl METHOD ─────────────────────────────────
 -- A method is GLOBAL-BY-NAME.  Impl coalescing, dispatch routing, the emitter's method
@@ -23320,30 +23390,69 @@ scopeMethodArities promotedMQ scopeMods =
 modInScope : String -> OrdMap Unit -> Bool
 modInScope mid scopeMods = mid == "" || omHasKey mid scopeMods
 
--- attribute each fn DEFINED in [prog] that carries a funConstraintsRef entry to [mid].
-attributeModuleArities : String -> List Decl -> List (String, List Int) -> List ((String, String), List Int)
+-- A MODULE'S CONTRIBUTION to the declared-context dict-arity table is what it ORIGINATES
+-- plus what it RE-EXPORTS.  Both halves were wrong, in opposite directions, and both were
+-- the one `declTopFnNames` name-membership test this function used to apply (#1337):
+--
+--   * OVER-ADMITS (#1326, fails CLOSED).  [entries] is `funConstraintsRef`, which
+--     checkModuleFullImpl SEEDS from the program-global BARE `crossModuleFunConstraintsRef`
+--     accumulator before this module infers anything.  So it already holds every OTHER
+--     module's constrained fns, keyed by bare name.  "Does [prog] declare a top-level fn of
+--     that name" is then true for an unrelated same-named binding, and another module's
+--     constraint gets written under THIS module's key: a bare-keyed accumulator LAUNDERED
+--     into a correctly-keyed table.  `lib/ps.h : Display a => a -> String` and an unrelated
+--     `lib/qs.h : a -> a` produced a row `(lib.qs, h) ↦ [Display]`, and an importer naming
+--     only `qs`'s `h` was rejected at its own call site with `ps`'s obligation — order-
+--     dependently, since only the module processed AFTER the constrained one is poisoned.
+--     The key was right and the call site's occurrence→module resolution was right; the
+--     table's CONTENTS were wrong, which is why every read-site guard downstream
+--     (`hasImportDefiner`, the #739 source-exact discipline, the alias de-aliasing) is
+--     individually correct and the answer was still wrong.  [own] is the fix: only the two
+--     ORIGINATING writers record a name there (see `noteOwnFunConstraint`), so a seeded
+--     entry can no longer be mistaken for this module's own.
+--
+--   * OMITS (#1369, fails OPEN).  A pure re-exporter (`export import lib.decl.{f}`) has no
+--     function definitions at all, so `declTopFnNames` admitted nothing and no `(lib.r, f)`
+--     row was ever written.  At the call site `currentImportDefinersRef` says `f ↦ lib.r`,
+--     `qualConstraintFor` missed, and the #739 guard makes a miss AUTHORITATIVE — so
+--     `declaredConstraintSlots` returned `([], [])` and the call was elaborated with NO dict:
+--     `check` 0, native correct (the emit path re-seeds from the bare accumulator), `medaka
+--     run` panicking `intToString: not an Int` on a legal program.
+--     This is the same recurrence `.claude/workstreams/TYPECHECK.md` records for #1283 and
+--     that `attributeModuleSchemeObls` (the scheme-context sibling, above) and
+--     `reexportedMethodNames` already answer for their own tables: "the decl's origin names
+--     the DECLARING module and the import path names the RE-EXPORTER, so the identity test
+--     misses."  [qual] is the ALREADY-ACCUMULATED cross-module table, and dependency-first
+--     module order is what makes reading it correct here — every module this one re-exports
+--     FROM has been processed already, so a multi-hop chain resolves with no special case.
+--
+-- ⚠️ The two halves are NOT independent: adding the re-export rows without removing the
+-- laundered ones would propagate a poisoned row one hop further.  Land them together.
+attributeModuleArities : String -> List Decl -> OrdMap Unit -> List ((String, String), List Int) -> List (String, List Int) -> List ((String, String), List Int)
 -- Structural duplicate of `attributeModuleArrIfaces` below (same body, two
 -- payload instantiations); NOT de-duplicated here because this is a
 -- tooling-scoped PR and this is language internals — tracked in #1201.
 -- lint-disable-next-line rule-duplicate-body
-attributeModuleArities mid prog entries =
+attributeModuleArities mid prog own qual entries =
   let progNames = namesToSet (declTopFnNames prog) omEmpty
-  map
-    (e => ((mid, fst e), snd e))
-    (filterList (e => omHasKey (fst e) progNames) entries)
+  map (e => ((mid, fst e), snd e)) (filterList (e => omHasKey (fst e) progNames && omHasKey (fst e) own) entries)
+    ++ map (e => ((mid, fst e), snd e)) (reexportConstraintEntries prog qual)
 
 -- WS-2/D2: ifaces analog of attributeModuleArities — attribute each fn DEFINED in [prog]
 -- that carries a funConstraintIfacesRef entry to [mid], slot-parallel to the arity qual
 -- snapshot, so inferDictAtFound reads a callee's ids + ifaces from one (mid,name) source.
-attributeModuleArrIfaces : String -> List Decl -> List (String, List String) -> List ((String, String), List String)
+-- #1337: same [own] provenance filter and same re-export arm, applied through the SAME
+-- `noteOwnFunConstraint` set and the SAME `reexportConstraintEntries` walk — the two tables
+-- are read as one record by `qualConstraintFor`, so they must gain and lose rows together
+-- or an id vector gets paired with a different predicate's iface names.
+attributeModuleArrIfaces : String -> List Decl -> OrdMap Unit -> List ((String, String), List String) -> List (String, List String) -> List ((String, String), List String)
 -- Structural duplicate of `attributeModuleArities` above; deferred
 -- de-duplication — see #1201.
 -- lint-disable-next-line rule-duplicate-body
-attributeModuleArrIfaces mid prog entries =
+attributeModuleArrIfaces mid prog own qual entries =
   let progNames = namesToSet (declTopFnNames prog) omEmpty
-  map
-    (e => ((mid, fst e), snd e))
-    (filterList (e => omHasKey (fst e) progNames) entries)
+  map (e => ((mid, fst e), snd e)) (filterList (e => omHasKey (fst e) progNames && omHasKey (fst e) own) entries)
+    ++ map (e => ((mid, fst e), snd e)) (reexportConstraintEntries prog qual)
 
 -- #1114 (#845): attribute each TOP-LEVEL binding of [prog] that carries a
 -- `schemeObligationsRef` entry to [mid], source-exactly keyed `(mid, name)` — the same

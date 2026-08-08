@@ -1,0 +1,5 @@
+-- #1369: the DECLARED-context peer of obl1114_reexp.mdk. That module re-exports an
+-- INFERRED-context binding, which #1114 already covered; the declared-context cell was the
+-- one still failing — the two contexts are served by DIFFERENT stores (the scheme-context
+-- store vs the dict-arity pair), so covering one says nothing about the other.
+export import lib.obl1114_declared.{g}

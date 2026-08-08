@@ -1,2 +1,0 @@
-export h : a -> a
-h x = x

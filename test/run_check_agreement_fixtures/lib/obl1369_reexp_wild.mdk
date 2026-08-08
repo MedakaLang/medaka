@@ -1,0 +1,5 @@
+-- #1369: the WILDCARD re-export spelling of the same declared-context binding. A
+-- re-exporter contributes what it re-exports under EVERY spelling, not just the selective
+-- one -- the wildcard cell was measured broken too, and a spelling-matched fix that closed
+-- only `export import m.{x}` is the shape #674/#1070 warn about.
+export import lib.obl1114_declared.*

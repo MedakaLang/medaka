@@ -111,8 +111,8 @@ attachEntryDiagOpt : Option String -> List (String, (List TcDiag, List TcDiag)) 
 attachEntryWarn : TcDiag -> List (String, (List TcDiag, List TcDiag)) -> List (String, (List TcDiag, List TcDiag))
 attachEntryWarnOpt : Option String -> List (String, (List TcDiag, List TcDiag)) -> List (String, (List TcDiag, List TcDiag))
 attributeMethodModuleArities : String -> List Decl -> List (String, List Int) -> List ((String, String), List Int)
-attributeModuleArities : String -> List Decl -> List (String, List Int) -> List ((String, String), List Int)
-attributeModuleArrIfaces : String -> List Decl -> List (String, List String) -> List ((String, String), List String)
+attributeModuleArities : String -> List Decl -> Map String Unit -> List ((String, String), List Int) -> List (String, List Int) -> List ((String, String), List Int)
+attributeModuleArrIfaces : String -> List Decl -> Map String Unit -> List ((String, String), List String) -> List (String, List String) -> List ((String, String), List String)
 attributeModuleSchemeObls : String -> List Decl -> List ((String, String), List (String, List Int)) -> List ((String, Int), List (String, List Int)) -> List ((String, String), List (String, List Int))
 attributeSchemeOblsGo : String -> Map String Unit -> Map String Unit -> List ((String, Int), List (String, List Int)) -> List ((String, String), List (String, List Int))
 augmentWithParams : List (String, Mono) -> List Ty -> List Mono -> List (String, Mono)
@@ -965,10 +965,10 @@ memberBinding : UseMember -> (String, String)
 memberBindsCtorName : String -> String -> UseMember -> Bool
 memberClauseIsValue : (List Pat, Expr) -> Bool
 memberDictName : List String -> UseMember -> List String
+memberLocalEntry : String -> List ((String, String), List a) -> UseMember -> List (String, List a)
 memberMethodRename : List String -> UseMember -> List (String, String)
 memberOverlayDecl : List Decl -> String -> UseMember -> List Decl
 memberPeelSource : List (String, Ty) -> String -> Mono -> Option Mono
-memberSchemeOblEntry : String -> List ((String, String), List (String, List Int)) -> UseMember -> List (String, List (String, List Int))
 memberSigIsFun : List (String, Ty) -> String -> Mono -> Bool
 memberSuffix : String -> String
 mergeByDeclIdx : List KeyEntry -> List KeyEntry -> List KeyEntry
@@ -1039,6 +1039,7 @@ notAFunctionHint : Option String -> String
 notAFunctionMsg : String -> String
 noteHeadCtor : Pat -> Map String Unit -> Map String Unit
 noteNumlitCtx : Mono -> Mono -> String -> Unit
+noteOwnFunConstraint : String -> Unit
 noteTypeErrorDetected : Unit -> Unit
 nthArgMono : Int -> Mono -> Option Mono
 nthInt : Int -> List Int -> Int
@@ -1219,7 +1220,9 @@ recordSite : String -> Ref Route -> Ref (List Route) -> Mono -> Mono
 recordStandaloneSigObligations : String -> String -> Mono -> Unit
 recordTypeError : TcDiag -> Unit
 recordUnopSite : String -> Ref Route -> Mono -> Unit
+reexportConstraintEntries : List Decl -> List ((String, String), List a) -> List (String, List a)
 reexportCtorMember : UseMember -> List (String, String, Ident) -> List (String, String, Ident)
+reexportEntriesFor : String -> UsePath -> List ((String, String), List a) -> List (String, List a)
 reexportRenamed : (String, String) -> List (String, Ident) -> List (String, Ident)
 reexportSchemeOblEntries : List Decl -> List ((String, String), List (String, List Int)) -> List (String, List (String, List Int))
 reexportSeed : List (String, Scheme) -> List Decl -> List (String, List (String, Scheme)) -> List (String, Scheme)
@@ -1576,7 +1579,7 @@ wRestore : Windowed a -> (List a, Int) -> Unit
 wSnapshot : Windowed a -> (List a, Int)
 wWindow : Windowed a -> Int -> List a
 walkDispatch : List String -> Ty -> Mono -> List (String, Mono)
-wildSchemeOblEntry : String -> ((String, String), List (String, List Int)) -> List (String, List (String, List Int))
+wildLocalEntry : String -> ((String, String), List a) -> List (String, List a)
 wrapIf : Bool -> String -> String
 zerosL : Int -> List Int
 zipUnify : List Mono -> List Mono -> Unit

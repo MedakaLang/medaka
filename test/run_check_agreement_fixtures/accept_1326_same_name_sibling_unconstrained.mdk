@@ -1,0 +1,27 @@
+-- #1326 REGRESSION GUARD (Repro A). Two modules export the same bare name `h1326`, one
+-- with a `Display a =>` context and one with none. Importing both -- the constrained one
+-- under an alias, the unconstrained one plainly -- and calling the UNCONSTRAINED one on a
+-- type with no `Display` impl was rejected at that call site with the OTHER module's
+-- obligation. A legal program refused.
+--
+-- ⚠️ The load-bearing call is `tag (h1326 NoDisp)`: `NoDisp` deliberately has NO `Display`
+-- impl, so the fixture fails the instant the constrained sibling's context is attributed
+-- here. `ph 5` is present only to keep BOTH imports live -- each half alone was always
+-- fine, and it is having both in scope that triggered the misattribution.
+--
+-- Guarded here as well as in test/import_order_fixtures/ because the two gates observe
+-- different things: that one asserts the answer does not depend on clause ORDER, this one
+-- asserts check/run/build agree AND pins the value both engines must print.
+--
+-- EXPECTED VALUE DERIVED BY HAND, not captured: `h1326` in scope here is qs's identity
+-- function, so `tag (h1326 NoDisp)` is `tag NoDisp` = "ok"; `ph 5` interpolates 5 at
+-- `Display Int` = "5".
+import lib.obl1326_ps.{h1326 as ph}
+import lib.obl1326_qs.{h1326}
+
+data NoDisp = NoDisp
+
+tag : NoDisp -> String
+tag _ = "ok"
+
+main = println "\{tag (h1326 NoDisp)} / \{ph 5}"
