@@ -580,7 +580,12 @@ on purpose). Re-install after a fresh clone:
 `cp .githooks/pre-commit "$(git rev-parse --git-common-dir)/hooks/pre-commit"`.
 
 - **Format** — `medaka fmt --check` rejects any staged unformatted `.mdk`. **Run `medaka fmt --write
-  <changed.mdk>` and re-`git add` before committing any `.mdk` edit.**
+  <changed.mdk>` and re-`git add` before committing any `.mdk` edit.** A bare `medaka fmt <file>`
+  (no flag) is READ-ONLY — it never writes, and behaves like `--check` (reports files that aren't
+  formatted, exit 1 if any). **`--write` is the only mode that mutates**, and it always prints a
+  one-line summary (`formatted N file(s)` / `already formatted`) so a write is never silent (#1348 —
+  the bare form used to default to writing, silently, with no output). `medaka fmt --help` (and
+  `--help`/`-h` on every other subcommand) prints that subcommand's flags.
   ⚠️ **The tree is NOT fmt-clean** (verified 2026-07-14): `sqlite/lib/varint.mdk` and
   `stdlib/byteparser.mdk` both fail `fmt --check`, so touching either drags an unrelated
   `.[`→`[` normalization into your diff. (This file claimed "the whole tree is clean". It isn't.)
