@@ -146,6 +146,7 @@ bucketOfHead : Option HeadKey -> Map String (List KeyEntry) -> List KeyEntry
 bucketRecvMatch : List (List Ty, List Require) -> Mono -> Bool
 buildAdj : List String -> Map String Unit -> Map String (List (List Pat, Expr)) -> Map String (List String) -> Map String (List String)
 buildAliasGraphEntry : List String -> (TabKey, (List String, Ty)) -> (String, List String)
+buildDeclEnvs : List Decl -> List (String, List Decl) -> DeclEnvs
 buildDefinerShadows : List Decl -> List Decl -> List String
 buildImplTable : List Decl -> Map String (List ImplEntry)
 buildImplUniverse : List Decl -> ImplUniverse
@@ -364,6 +365,14 @@ declBodyVarsOf : String -> Decl -> List String
 declCtorIdents : List Decl -> List (String, String, Ident)
 declCtorIdentsOf : Decl -> List (String, String, Ident)
 declCtorNamed : String -> Decl -> Bool
+declEnvDeclsOf : List DeclEnvModule -> List Decl
+declEnvModulesFrom : Int -> List (String, List Decl) -> List DeclEnvModule
+declEnvOrdIndex : Map String Int -> List DeclEnvModule -> Map String Int
+declEnvVisibleAt : Int -> Int -> Bool
+declEnvsOrdOf : String -> DeclEnvs -> Int
+declEnvsUpTo : Int -> DeclEnvs -> List DeclEnvModule
+declEnvsUpToGo : Int -> List DeclEnvModule -> List DeclEnvModule
+declEnvsVisible : String -> DeclEnvs -> List DeclEnvModule
 declGradedScope : List String -> List IfaceMethod -> List (String, List Kind)
 declGradedScopeAdd : String -> List Kind -> List (String, List Kind) -> List (String, List Kind)
 declIfaceMethods : Decl -> List (String, Scheme)
@@ -496,6 +505,7 @@ elaborateModules : List Decl -> List Decl -> List (String, List Decl) -> (List D
 elaborateOne : List Decl -> List Decl -> (String, List Decl) -> List Decl
 emitCyclicAliasErrors : List String -> Unit
 emitValueShadowGate : String -> Bool
+emptyDeclEnvs : DeclEnvs
 emptyImplUniverse : ImplUniverse
 enclDictVarOf : Mono -> String -> Option String
 enclSlot : String -> Mono -> Option Int
