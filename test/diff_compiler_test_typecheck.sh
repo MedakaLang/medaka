@@ -17,35 +17,62 @@
 # entire point is exercising eval on constructs the type checker REJECTS. Gating those
 # would break the suite that exists to measure eval-vs-check divergence.
 #
-# WHAT THIS GATE PINS — the four cells of the matrix plus the two boundaries that
-# make the fix's SCOPE observable rather than merely asserted:
+# WHAT THIS GATE PINS — the four cells of the behaviour matrix, plus four boundary
+# cells that make the fix's SCOPE observable rather than merely asserted:
 #
 #   a  zero doctests, ill-typed      exit 1 + the check-first diagnostic   <- the #1229 bug
 #   b  zero doctests, clean          exit 0 + "(no doctests found)"
 #   c  doctests present, passing     exit 0 + "1/1 passed"
 #   d  doctests present, failing     exit 1 + "FAIL" + "0/1 passed"
-#   e  `test "…"` decls, ill-typed   exit 0                <- the exemption, NOT widened
+#   e  `test "…"` decls, ill-typed   exit 0 + the test actually PASSES  <- the exemption
 #   f  directory with a zero-doctest ill-typed member      exit 1
+#   g  IMPORT-BEARING, zero doctests, ill-typed            exit 1 + located diagnostic
+#   h  `prop "…"` decls, ill-typed   exit 0 + the prop actually RUNS    <- the exemption
 #
 # Cells b/c/d are the regression guard for the fix, and they matter more than they
 # look: this change turns a path that reported NOTHING into one that reports SOMETHING,
 # so every pre-existing fixture in the tree covers only the old empty case and NONE of
-# them can fail on a bad version of it. Cell e is the inverse guard — it fails if the
-# gate is widened to swallow the eval-regression corpus.
+# them can fail on a bad version of it. Cells e and h are the inverse guard — they fail
+# if the gate is widened to swallow the eval-regression corpus. They cover the two
+# disjuncts of the exemption predicate SEPARATELY (`hasTests` and `hasProps`), because
+# one cell can only ever exercise one of them.
+#
+# Cell g exists because `typecheckErrors` ROUTES on `hasUseDecls` (test_cmd.mdk): an
+# import-bearing target goes to projectTypeErrors -> `analyzeProject`, a prelude-only
+# one to singleFileTypeErrors -> `analyzeLocated`. Cells a and f are both import-free,
+# so without g every assertion about the newly-opened path would land on ONE of the two
+# arms. It is also the arm worth watching: `analyzeProject` is the function carrying
+# #1362's silent-accept hole, and a zero-doctest ill-typed file WITH imports is newly
+# routed through it by this change. Its fixture uses a genuine `Type mismatch` (not an
+# unbound name) so the assertion reaches the type checker, not just the resolver.
 #
 # Cell b is why the exit code stays 0 for a clean file with no tests: a source file
 # with no tests is a legitimate steady state for `medaka test <dir>`, not a phantom
 # skip, and it is the overwhelming majority of this tree. Derive that rather than
 # trusting a number in a comment:
-#   for f in $(git ls-files '*.mdk'); do grep -q -- '-- >' "$f" && continue
-#     grep -qE '^ *(prop|test) "' "$f" || echo "$f"; done | wc -l
-# (2808 of 2886 tracked .mdk files, measured 2026-08-09.) The substantive change is
+#   for f in $(git ls-files '*.mdk'); do grep -qE '^[[:space:]]*(-- )?> ' "$f" && continue
+#     grep -qE '^[[:space:]]*(prop|test) "' "$f" || echo "$f"; done | wc -l
+# (2807 of 2886 tracked .mdk files, measured 2026-08-09.) The substantive change is
 # that REACHING exit 0 now requires type-checking clean.
+# ⚠️ The `(-- )?` is load-bearing: doctest.mdk's `isInputLine` tests `startsWith "-- > "`
+# AFTER `expandBlock`/`expandLines` trim each `{- … -}` inner line and re-prefix "-- ",
+# so a bare `> expr` in a block comment IS a doctest — the dominant form in stdlib. A
+# line-comment-only pattern scores stdlib/list.mdk at 0 doctests when it has 123, and
+# inflates the exempt set from 18 files to 36. Those two functions are the authority.
 #
 # Fixtures are written to a temp dir rather than a committed corpus: each is 1-6 lines,
-# two of them deliberately do not typecheck (so they would fight the fmt/lint/snapshot
+# three of them deliberately do not typecheck (so they would fight the fmt/lint/snapshot
 # hooks and enrol in gates they have no business in), and a shared fixture directory is
 # a shared corpus.
+#
+# ⚠️ FIXTURE NAMES ARE PART OF THE ASSERTION SURFACE. Every expected substring is
+# grepped against output that contains the fixture's own PATH, so a name sharing a
+# substring with an expectation makes that expectation self-satisfying. This gate had
+# exactly that bug in review: cell e's fixture was named `e_testdecl_broken.mdk` and its
+# expectation was `ok`, which matched the `ok` inside br-OK-en on the `running doctests
+# in <target>` line — unconditionally, whether the test passed or failed. Names below
+# are chosen to share no substring with any expectation, and the expectations use the
+# runner's SPACED prefixes (`  ok   `, three spaces) which no path can contain.
 #
 # Usage:  sh test/diff_compiler_test_typecheck.sh
 #         MEDAKA=/other/tree/medaka sh test/diff_compiler_test_typecheck.sh   # 2-arm diff
@@ -80,7 +107,7 @@ double x = x * 2
 EOF
 
 # d: one FAILING doctest (the function is correct; the expectation is wrong).
-cat > "$TMP/d_doctest_fail.mdk" <<'EOF'
+cat > "$TMP/d_doctest_wrong_expectation.mdk" <<'EOF'
 -- > double 3
 -- 7
 double : Int -> Int
@@ -88,20 +115,44 @@ double x = x * 2
 EOF
 
 # e: zero doctests but a `test "…"` decl, alongside an ill-typed binding. This is the
-# shape test/ported/*.mdk has, and the gate must NOT fire on it.
-cat > "$TMP/e_testdecl_broken.mdk" <<'EOF'
+# shape test/ported/*.mdk has, and the gate must NOT fire on it. The assertion is that
+# the run REACHES and PASSES the test — exit 0 alone would also be produced by a gate
+# that fired and swallowed its own diagnostic.
+cat > "$TMP/e_exempt_via_testdecl.mdk" <<'EOF'
 import test.{expectEqual}
 
-broken = nosuchvariable
+illTyped = nosuchvariable
 
-test "arithmetic" = expectEqual 2 (1 + 1)
+test "sum of two" = expectEqual 2 (1 + 1)
+EOF
+
+# h: the OTHER disjunct of the exemption predicate — `prop "…"` with no `test "…"`.
+# `hasProps || hasTests` needs a cell per disjunct; cell e only ever exercises hasTests.
+cat > "$TMP/h_exempt_via_prop.mdk" <<'EOF'
+illTyped = nosuchvariable
+
+prop "addition commutes" (x : Int) (y : Int) = x + y == y + x
 EOF
 
 # f: a directory whose members are a passing-doctest file and a zero-doctest ill-typed
 # file. The aggregate run must be nonzero — the issue's "directory variant".
 mkdir -p "$TMP/dir"
-cp "$TMP/c_doctest_pass.mdk" "$TMP/dir/ok.mdk"
-cp "$TMP/a_nodoc_broken.mdk" "$TMP/dir/broken.mdk"
+cp "$TMP/c_doctest_pass.mdk" "$TMP/dir/clean.mdk"
+cp "$TMP/a_nodoc_broken.mdk" "$TMP/dir/illtyped.mdk"
+
+# g: a 2-FILE PROJECT. The import routes typecheckErrors down the analyzeProject arm
+# (hasUseDecls), which cells a/f never reach. The error is a genuine type mismatch so
+# the assertion exercises the type checker, not only name resolution.
+mkdir -p "$TMP/proj"
+cat > "$TMP/proj/sib.mdk" <<'EOF'
+export helper : Int -> Int
+helper x = x + 1
+EOF
+cat > "$TMP/proj/main.mdk" <<'EOF'
+import sib.{helper}
+
+main = println (helper "not an int")
+EOF
 
 # ── driver ───────────────────────────────────────────────────────────────────
 # Exit codes are the SUBJECT here, so every invocation redirects to a file and reads
@@ -142,14 +193,23 @@ run_case 'b zero-doctest clean' "$TMP/b_nodoc_clean.mdk" 0 \
 run_case 'c doctest passing' "$TMP/c_doctest_pass.mdk" 0 \
   '1/1 passed'
 
-run_case 'd doctest failing' "$TMP/d_doctest_fail.mdk" 1 \
+run_case 'd doctest failing' "$TMP/d_doctest_wrong_expectation.mdk" 1 \
   'FAIL' '0/1 passed'
 
-run_case 'e test-decl exemption preserved' "$TMP/e_testdecl_broken.mdk" 0 \
-  'ok' 'arithmetic'
+# The exemption cells assert the test/prop actually RAN AND PASSED, not merely exit 0:
+# a gate that fired and swallowed its own diagnostic would also exit 0, and `1/1 passed`
+# / `OK (100 tests)` are the only output a spuriously-gated run could not produce.
+run_case 'e exemption preserved (hasTests)' "$TMP/e_exempt_via_testdecl.mdk" 0 \
+  '  ok   ' 'sum of two' '1/1 passed'
+
+run_case 'h exemption preserved (hasProps)' "$TMP/h_exempt_via_prop.mdk" 0 \
+  'OK (100 tests)' '1 passed, 0 failed'
 
 run_case 'f directory with ill-typed member' "$TMP/dir" 1 \
   'requires it to `medaka check` first'
+
+run_case 'g import-bearing, zero doctests, ill-typed' "$TMP/proj/main.mdk" 1 \
+  'requires it to `medaka check` first' 'Type mismatch: Int vs String'
 
 # Cell a's counterpart: `medaka check` must reject the same file, or the gate is
 # comparing `test` against nothing. This is the positive control for the whole matrix
