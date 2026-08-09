@@ -1,0 +1,67 @@
+issue: 1449
+what: `T-NONREC-VALUE-LET` ("'X' is bound by 'let rec' but its right-hand side is
+what: not a function") is emitted WITH NO SOURCE LOCATION. `checkLetBind`
+what: (compiler/types/typecheck.mdk) calls `pushTypeError "T-NONREC-VALUE-LET"
+what: (letRecNonFunctionMsg name)` and passes no location at all, so the
+what: diagnostic has no position of its own. Two consequences, both measured
+what: first-hand on a cold-bootstrapped binary:
+what: (1) STANDALONE -- main.mdk here -- human `check` prints
+what: "<unknown location>: 'notFn' is bound by 'let rec' but its right-hand side
+what: is not a function" and `check --json` reports `"range": null`, i.e. the
+what: rendered range below. The binding is on a known line; the diagnostic names
+what: none.
+what: (2) IN A LARGE FILE the missing location is filled from a STALE ambient
+what: position, which is the issue's original observation. Reproduced directly:
+what: `check --json test/ported/test_eval_ported.mdk --allow-internal` reports
+what: FIVE T-NONREC-VALUE-LET diagnostics (factLR, isEvenLR, isOddLR, isELR2,
+what: isOLR2) ALL at 0-based `128:33-128:34` -- human line 129, which is
+what: `    0 => "zero"` inside an unrelated `classifyN` match, ~700 lines above
+what: the bindings, which are at human lines 842-856. Column 33 is past the end
+what: of that line. The two are one defect: the diagnostic carries no location,
+what: so it renders as unknown or borrows someone else's.
+what: THE REJECTION ITSELF IS CORRECT HERE -- `5` really is not a function. Only
+what: the location is wrong. That is deliberate: it keeps this pin independent of
+what: #807 (`let rec f = x => ...`, a genuine lambda, wrongly rejected because
+what: `isSyntacticLambda` does not see through `ELoc`), which is separately pinned
+what: at test/must_fail_fixtures/807-let-rec-lambda-rhs-rejected/.
+cmd: check-json main.mdk
+exit: 1
+diag-code: T-NONREC-VALUE-LET None:None-None:None
+control: check-json control.mdk
+why-verb: `check-json` because the DEFECT IS THE RANGE, and only the JSON arm
+why-verb: exposes it as data rather than as the rendered words "<unknown
+why-verb: location>". `diag-code:` rather than `diag:` per
+why-verb: docs/ops/TESTING-DESIGN.md 4.5: the message prose is not the defect (it
+why-verb: is a fine sentence) and must stay free to change.
+why-diag-code: `None:None-None:None` is how test/diff_compiler_must_fail.sh's own
+why-diag-code: `render_diags` renders a diagnostic whose `range` is null (`r =
+why-diag-code: d.get("range") or {}`, #789) -- so this pin literally reads "this
+why-diag-code: diagnostic has no location", which is exactly the claim. It is
+why-diag-code: therefore NOT line-sensitive: main.mdk's comment header can be edited
+why-diag-code: freely without moving it. Any fix that threads a real location into
+why-diag-code: `checkLetBind` replaces this with a concrete range and reddens the row.
+why-diag-code: NOTE for whoever reads that red: #807's own claim.txt why-note states
+why-diag-code: the top-level lambda variant reports `0:0-0:0`. Re-measured on this
+why-diag-code: binary it reports `None:None-None:None` (null), not `0:0`. If this row
+why-diag-code: ever goes red showing `0:0-0:0`, that is a RENDERING change, not a fix
+why-diag-code: to #1449 -- the diagnostic still has no location of its own. Check
+why-diag-code: which before closing the issue.
+why-control: control.mdk is the same TOP-LEVEL `let rec` with exactly ONE variable
+why-control: changed: the binding is in clause form (`countDown n = ...`) rather
+why-control: than value form (`notFn = 5`), so `clauseIsNonFunction` returns False
+why-control: on a `FunClause _ _` and `checkLetBind` never fires. Measured:
+why-control: `check --json` -> exit 0 with zero diagnostics, `run` -> exit 0
+why-control: printing 0. That isolates the row to the diagnostic emitted by
+why-control: `checkLetBind`, not to top-level `let rec`, to recursion, or to the
+why-control: prelude. If this control breaks, top-level `let rec` broke and #1449
+why-control: has NOT drained.
+why-note: SCOPE. Per the issue as re-scoped, this row pins the WRONG-LOCATION half
+why-note: ONLY. The issue's claim 2 (that a real `n => ...` lambda is being rejected)
+why-note: belongs to #807 and is NOT asserted here -- main.mdk's RHS is the literal
+why-note: `5`, which the compiler is right to reject. A fix to #807 alone therefore
+why-note: leaves this row reproducing, and a fix to this row leaves #807's fixture
+why-note: reproducing; neither can false-drain the other.
+why-note: The five-diagnostics-at-129:33 measurement above is recorded as evidence,
+why-note: not pinned: it lives in test/ported/test_eval_ported.mdk, a shared corpus
+why-note: outside this harness, and a line-number pin into a 941-line file would move
+why-note: for reasons unrelated to #1449.

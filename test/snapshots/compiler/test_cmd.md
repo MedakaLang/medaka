@@ -1,5 +1,5 @@
 # META
-source_lines=656
+source_lines=691
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/test_cmd.mdk — `medaka test` logic (doctests + property tests),
@@ -86,7 +86,7 @@ import driver.diagnostics.{
   Diag,
   diagIsError,
 }
-import support.util.{listLen, joinNl}
+import support.util.{listLen, joinNl, isNonEmptyL}
 import support.path.{dirOf}
 
 export rootsOrDefault : String -> List String -> List String
@@ -138,28 +138,63 @@ runTest engines runtimeP coreP target roots = match readPreludeFile runtimeP
               False
             None => driveAll engines (desugar (parse rsrc)) (desugar (parse csrc)) target tsrc roots
 
--- ── doctest typecheck gate (issue #260) ──────────────────────────────────────
+-- ── typecheck gate (issues #260, #1229) ──────────────────────────────────────
 -- `medaka test` used to GREEN-LIGHT a module whose DOCTESTS `medaka check`
 -- REJECTS: the doctest driver ELABORATES the module (dict-passing) but never
 -- surfaces the accumulated type errors, so a module with type errors — even ones
 -- in functions no doctest exercises — passed `test` while `check` failed
 -- (test-green / check-dies, the repo's #1 bug class INVERTED, reproduced building
--- stdlib/bits64).  So when a module carries DOCTESTS, type-check the whole module
--- FIRST — exactly the way `medaka check` does — and fail the run (before running
--- any example) if it doesn't check.
+-- stdlib/bits64).  So type-check the whole module FIRST — exactly the way `medaka
+-- check` does — and fail the run (before running any example) if it doesn't check.
 --
--- ⚠️ SCOPED TO DOCTEST-BEARING modules on purpose (issue #260 is about "the
--- doctest runner").  The `test "…"` / `prop "…"` phases DELIBERATELY exercise
--- eval on constructs the type checker rejects — the ported eval-regression corpus
--- (`test/ported/*.mdk`, run by `diff_compiler_ported.sh`) has 0 doctests and 200+
--- `test "…"` assertions over `let rec` non-function RHSs, `deriving (Num)`,
--- ambiguous instances resolved by eval's arg-tag, etc.  Gating those would break a
--- suite whose entire point is eval-vs-check divergence.  Every real stdlib module
--- WITH doctests already `check`s clean, so this gate only ever fires on the bug.
+-- ⚠️ The EXEMPTION is `test "…"` / `prop "…"`-BEARING modules, NOT "everything
+-- without a doctest" (issue #1229 narrowed it).  Those two phases DELIBERATELY
+-- exercise eval on constructs the type checker rejects — the ported
+-- eval-regression corpus (`test/ported/*.mdk`, run by `diff_compiler_ported.sh`)
+-- has 0 doctests and 200+ `test "…"` assertions over `let rec` non-function RHSs,
+-- `deriving (Num)`, ambiguous instances resolved by eval's arg-tag, etc.  Gating
+-- those would break a suite whose entire point is eval-vs-check divergence.
+--
+-- ── issue #1229: the zero-doctest hole ──────────────────────────────────────
+-- The exemption used to be keyed on doctests ALONE (`[] => None`), so a module
+-- with NO test-facing construct of any kind — no doctest, no `test "…"`, no
+-- `prop "…"` — skipped the gate too, printed `(no doctests found)` and exited 0
+-- WITHOUT EVER BEING TYPE-CHECKED: `medaka test broken.mdk` reported success on
+-- source `medaka check` rejects.  That shape has no eval-vs-check-divergence
+-- rationale to preserve (there is nothing for eval to run), so it is gated now.
+-- A module that type-checks and declares no tests still exits 0 with the same
+-- `(no doctests found)` report — the run is no longer vacuous, it type-checked
+-- the file.  It is NOT the "a gate that ran nothing must never report green"
+-- case: a source file with no tests is a legitimate steady state, not a phantom
+-- skip, and it is the OVERWHELMING majority of the tree — so a nonzero exit here
+-- would make `medaka test <dir>` permanently red on any real project.  Derive
+-- the majority rather than trusting a number in a comment:
+--   for f in $(git ls-files '*.mdk'); do grep -qE '^[[:space:]]*(-- )?> ' "$f" && continue
+--     grep -qE '^[[:space:]]*(prop|test) "' "$f" || echo "$f"; done | wc -l
+-- (2807 of 2886 tracked `.mdk` files, measured 2026-08-09.)
+-- ⚠️ That `(-- )?` is NOT optional polish.  `isInputLine` (tools/doctest.mdk) tests
+-- `startsWith "-- > "` AFTER `expandBlock`/`expandLines` have trimmed each inner line
+-- of a `{- … -}` lexeme and RE-PREFIXED it with `"-- "`, so a bare `> expr` inside a
+-- block comment is a doctest too — and that is the DOMINANT form in stdlib.  A
+-- line-comment-only `grep -- '-- >'` scores stdlib/list.mdk at 0 doctests when it has
+-- 123, and mis-reports the exempt set as 36 files (including core/list) when it is 18.
+-- `isInputLine` + `expandBlock` are the authority; the grep above is an approximation
+-- of them, not a second definition.
+--
+-- ⚠️ PRECEDENCE: doctest presence WINS over the `test`/`prop` exemption — the first
+-- guard below is checked first, so a module carrying BOTH is type-checked.  That is
+-- deliberate (#260's fix must not be weakened by adding one `test "…"` decl) and it
+-- is load-bearing for 24 tracked files that carry both, stdlib/{core,list,map,json,
+-- array,…} among them — i.e. most of the stdlib would silently stop being gated if
+-- the guards were reordered.  Derive that set the same block-aware way:
+--   for f in $(git ls-files '*.mdk'); do grep -qE '^[[:space:]]*(-- )?> ' "$f" || continue
+--     grep -qE '^[[:space:]]*(prop|test) "' "$f" && echo "$f"; done
 doctestGate : String -> List String -> String -> String -> String -> List Decl -> <IO> Option String
-doctestGate target roots rsrc csrc tsrc userDecls = match extractExamples (collectComments tsrc)
-  [] => None
-  _ => typecheckErrors target roots rsrc csrc tsrc userDecls
+doctestGate target roots rsrc csrc tsrc userDecls
+  | isNonEmptyL (extractExamples (collectComments tsrc)) =
+    typecheckErrors target roots rsrc csrc tsrc userDecls
+  | hasProps userDecls || hasTests userDecls = None
+  | otherwise = typecheckErrors target roots rsrc csrc tsrc userDecls
 
 -- Type-check the module the way `medaka check` does, routing by import-presence
 -- to mirror the CLI's own `check`:
@@ -672,7 +707,7 @@ propsReportMulti runtimeDecls coreDecls target userDecls roots = match loadProgr
 (DUse false (UseGroup ("tools" "prop_runner") ((mem "runAllProps" false) (mem "hasProps" false) (mem "runAllPropsResults" false) (mem "PropResult" false))))
 (DUse false (UseGroup ("tools" "test_runner") ((mem "collectTests" false) (mem "runOneTest" false) (mem "hasTests" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "analyzeProject" false) (mem "analyzeLocated" false) (mem "readDiagSrc" false) (mem "ppDiagCliSrc" false) (mem "parseErrDiag" false) (mem "Diag" false) (mem "diagIsError" false))))
-(DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "joinNl" false))))
+(DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "joinNl" false) (mem "isNonEmptyL" false))))
 (DUse false (UseGroup ("support" "path") ((mem "dirOf" false))))
 (DTypeSig true "rootsOrDefault" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "rootsOrDefault" ((PVar "target") (PList)) (EListLit (EApp (EVar "dirOf") (EVar "target"))))
@@ -680,7 +715,7 @@ propsReportMulti runtimeDecls coreDecls target userDecls roots = match loadProgr
 (DTypeSig true "runTest" (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Bool"))))))))
 (DFunDef false "runTest" ((PVar "engines") (PVar "runtimeP") (PVar "coreP") (PVar "target") (PVar "roots")) (EMatch (EApp (EVar "readPreludeFile") (EVar "runtimeP")) (arm (PCon "Err" (PVar "e")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "e"))) (DoExpr (EVar "False")))) (arm (PCon "Ok" (PVar "rsrc")) () (EMatch (EApp (EVar "readPreludeFile") (EVar "coreP")) (arm (PCon "Err" (PVar "e")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "e"))) (DoExpr (EVar "False")))) (arm (PCon "Ok" (PVar "csrc")) () (EMatch (EApp (EVar "readFile") (EVar "target")) (arm (PCon "Err" (PVar "e")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "e"))) (DoExpr (EVar "False")))) (arm (PCon "Ok" (PVar "tsrc")) () (EMatch (EApp (EVar "parseResult") (EVar "tsrc")) (arm (PCon "Err" (PVar "e")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EApp (EApp (EApp (EVar "ppDiagCliSrc") (EVar "tsrc")) (EVar "target")) (EApp (EApp (EVar "parseErrDiag") (EVar "target")) (EVar "e"))))) (DoExpr (EVar "False")))) (arm (PCon "Ok" PWild) () (EBlock (DoLet false false (PVar "userDecls") (EApp (EVar "desugar") (EApp (EVar "parse") (EVar "tsrc")))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EVar "doctestGate") (EVar "target")) (EVar "roots")) (EVar "rsrc")) (EVar "csrc")) (EVar "tsrc")) (EVar "userDecls")) (arm (PCon "Some" (PVar "errText")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EApp (EApp (EVar "typecheckGateFail") (EVar "target")) (EVar "errText")))) (DoExpr (EVar "False")))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "driveAll") (EVar "engines")) (EApp (EVar "desugar") (EApp (EVar "parse") (EVar "rsrc")))) (EApp (EVar "desugar") (EApp (EVar "parse") (EVar "csrc")))) (EVar "target")) (EVar "tsrc")) (EVar "roots")))))))))))))))
 (DTypeSig false "doctestGate" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String"))))))))))
-(DFunDef false "doctestGate" ((PVar "target") (PVar "roots") (PVar "rsrc") (PVar "csrc") (PVar "tsrc") (PVar "userDecls")) (EMatch (EApp (EVar "extractExamples") (EApp (EVar "collectComments") (EVar "tsrc"))) (arm (PList) () (EVar "None")) (arm PWild () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "typecheckErrors") (EVar "target")) (EVar "roots")) (EVar "rsrc")) (EVar "csrc")) (EVar "tsrc")) (EVar "userDecls")))))
+(DFunDef false "doctestGate" ((PVar "target") (PVar "roots") (PVar "rsrc") (PVar "csrc") (PVar "tsrc") (PVar "userDecls")) (EIf (EApp (EVar "isNonEmptyL") (EApp (EVar "extractExamples") (EApp (EVar "collectComments") (EVar "tsrc")))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "typecheckErrors") (EVar "target")) (EVar "roots")) (EVar "rsrc")) (EVar "csrc")) (EVar "tsrc")) (EVar "userDecls")) (EIf (EBinOp "||" (EApp (EVar "hasProps") (EVar "userDecls")) (EApp (EVar "hasTests") (EVar "userDecls"))) (EVar "None") (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "typecheckErrors") (EVar "target")) (EVar "roots")) (EVar "rsrc")) (EVar "csrc")) (EVar "tsrc")) (EVar "userDecls")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "typecheckErrors" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String"))))))))))
 (DFunDef false "typecheckErrors" ((PVar "target") (PVar "roots") (PVar "rsrc") (PVar "csrc") (PVar "tsrc") (PVar "userDecls")) (EIf (EApp (EVar "hasUseDecls") (EVar "userDecls")) (EApp (EApp (EApp (EApp (EVar "projectTypeErrors") (EVar "target")) (EVar "roots")) (EVar "rsrc")) (EVar "csrc")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "singleFileTypeErrors") (EVar "target")) (EVar "tsrc")) (EVar "rsrc")) (EVar "csrc")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "singleFileTypeErrors" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))))
@@ -803,7 +838,7 @@ propsReportMulti runtimeDecls coreDecls target userDecls roots = match loadProgr
 (DUse false (UseGroup ("tools" "prop_runner") ((mem "runAllProps" false) (mem "hasProps" false) (mem "runAllPropsResults" false) (mem "PropResult" false))))
 (DUse false (UseGroup ("tools" "test_runner") ((mem "collectTests" false) (mem "runOneTest" false) (mem "hasTests" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "analyzeProject" false) (mem "analyzeLocated" false) (mem "readDiagSrc" false) (mem "ppDiagCliSrc" false) (mem "parseErrDiag" false) (mem "Diag" false) (mem "diagIsError" false))))
-(DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "joinNl" false))))
+(DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "joinNl" false) (mem "isNonEmptyL" false))))
 (DUse false (UseGroup ("support" "path") ((mem "dirOf" false))))
 (DTypeSig true "rootsOrDefault" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "rootsOrDefault" ((PVar "target") (PList)) (EListLit (EApp (EVar "dirOf") (EVar "target"))))
@@ -811,7 +846,7 @@ propsReportMulti runtimeDecls coreDecls target userDecls roots = match loadProgr
 (DTypeSig true "runTest" (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Bool"))))))))
 (DFunDef false "runTest" ((PVar "engines") (PVar "runtimeP") (PVar "coreP") (PVar "target") (PVar "roots")) (EMatch (EApp (EVar "readPreludeFile") (EVar "runtimeP")) (arm (PCon "Err" (PVar "e")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "e"))) (DoExpr (EVar "False")))) (arm (PCon "Ok" (PVar "rsrc")) () (EMatch (EApp (EVar "readPreludeFile") (EVar "coreP")) (arm (PCon "Err" (PVar "e")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "e"))) (DoExpr (EVar "False")))) (arm (PCon "Ok" (PVar "csrc")) () (EMatch (EApp (EVar "readFile") (EVar "target")) (arm (PCon "Err" (PVar "e")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "e"))) (DoExpr (EVar "False")))) (arm (PCon "Ok" (PVar "tsrc")) () (EMatch (EApp (EVar "parseResult") (EVar "tsrc")) (arm (PCon "Err" (PVar "e")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EApp (EApp (EApp (EVar "ppDiagCliSrc") (EVar "tsrc")) (EVar "target")) (EApp (EApp (EVar "parseErrDiag") (EVar "target")) (EVar "e"))))) (DoExpr (EVar "False")))) (arm (PCon "Ok" PWild) () (EBlock (DoLet false false (PVar "userDecls") (EApp (EVar "desugar") (EApp (EVar "parse") (EVar "tsrc")))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EVar "doctestGate") (EVar "target")) (EVar "roots")) (EVar "rsrc")) (EVar "csrc")) (EVar "tsrc")) (EVar "userDecls")) (arm (PCon "Some" (PVar "errText")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EApp (EApp (EVar "typecheckGateFail") (EVar "target")) (EVar "errText")))) (DoExpr (EVar "False")))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "driveAll") (EVar "engines")) (EApp (EVar "desugar") (EApp (EVar "parse") (EVar "rsrc")))) (EApp (EVar "desugar") (EApp (EVar "parse") (EVar "csrc")))) (EVar "target")) (EVar "tsrc")) (EVar "roots")))))))))))))))
 (DTypeSig false "doctestGate" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String"))))))))))
-(DFunDef false "doctestGate" ((PVar "target") (PVar "roots") (PVar "rsrc") (PVar "csrc") (PVar "tsrc") (PVar "userDecls")) (EMatch (EApp (EVar "extractExamples") (EApp (EVar "collectComments") (EVar "tsrc"))) (arm (PList) () (EVar "None")) (arm PWild () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "typecheckErrors") (EVar "target")) (EVar "roots")) (EVar "rsrc")) (EVar "csrc")) (EVar "tsrc")) (EVar "userDecls")))))
+(DFunDef false "doctestGate" ((PVar "target") (PVar "roots") (PVar "rsrc") (PVar "csrc") (PVar "tsrc") (PVar "userDecls")) (EIf (EApp (EVar "isNonEmptyL") (EApp (EVar "extractExamples") (EApp (EVar "collectComments") (EVar "tsrc")))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "typecheckErrors") (EVar "target")) (EVar "roots")) (EVar "rsrc")) (EVar "csrc")) (EVar "tsrc")) (EVar "userDecls")) (EIf (EBinOp "||" (EApp (EVar "hasProps") (EVar "userDecls")) (EApp (EVar "hasTests") (EVar "userDecls"))) (EVar "None") (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "typecheckErrors") (EVar "target")) (EVar "roots")) (EVar "rsrc")) (EVar "csrc")) (EVar "tsrc")) (EVar "userDecls")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "typecheckErrors" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String"))))))))))
 (DFunDef false "typecheckErrors" ((PVar "target") (PVar "roots") (PVar "rsrc") (PVar "csrc") (PVar "tsrc") (PVar "userDecls")) (EIf (EApp (EVar "hasUseDecls") (EVar "userDecls")) (EApp (EApp (EApp (EApp (EVar "projectTypeErrors") (EVar "target")) (EVar "roots")) (EVar "rsrc")) (EVar "csrc")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "singleFileTypeErrors") (EVar "target")) (EVar "tsrc")) (EVar "rsrc")) (EVar "csrc")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "singleFileTypeErrors" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))))

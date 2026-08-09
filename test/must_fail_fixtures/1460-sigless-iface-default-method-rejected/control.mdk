@@ -1,0 +1,9 @@
+interface GreetI a where
+  nameI : a -> String
+  helloI : a -> String
+  helloI x = "Hello " ++ nameI x
+
+impl GreetI Int where
+  nameI _ = "World"
+
+main = println (helloI 0)

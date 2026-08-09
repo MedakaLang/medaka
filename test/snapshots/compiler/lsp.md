@@ -1,5 +1,5 @@
 # META
-source_lines=1920
+source_lines=1921
 stages=DESUGAR,MARK
 # SOURCE
 -- lint-disable-file rule-duplicate-body
@@ -1241,14 +1241,21 @@ semanticTokensOptions = jObject
    Layout tokens (NEWLINE/INDENT/DEDENT) carry the depth/line-start signal and emit
    no token.  Robust on unparseable buffers (pure token walk). -}
 
--- Decides how an uppercase name (and record fields) is colored at this point.
+-- Decides how an uppercase name is colored at this point.
+--
+-- There used to be an `MRecord` mode here, entered only from the removed
+-- `record` keyword (`nextMode TRecord _ = MRecord`).  Freeing `record` as an
+-- ordinary identifier (#62) deleted its single producer, so the mode became
+-- unreachable and went with it.  This is not a highlighting regression: the
+-- token it keyed on could not appear in any program that parsed, so no valid
+-- source ever entered the mode — today's record fields live in `data X = { … }`
+-- and are already coloured by the `MDataHead`/`MDataVariant` path.
 data SMode =
   | MExpr
   | MType
   | MDataHead
   | MDataVariant
   | MDataPayload
-  | MRecord
   | MIfaceOne
   | MIfaceMany
 
@@ -1267,7 +1274,6 @@ isKeywordTok TThen = True
 isKeywordTok TElse = True
 isKeywordTok TMatch = True
 isKeywordTok TData = True
-isKeywordTok TRecord = True
 isKeywordTok TInterface = True
 isKeywordTok TDefault = True
 isKeywordTok TImpl = True
@@ -1302,11 +1308,9 @@ roleOf : Token -> Int -> Bool -> SMode -> Option Int
 roleOf (TUpper _) _ _ MIfaceOne = Some 7  -- interface/impl name → typeclass
 roleOf (TUpper _) _ _ MIfaceMany = Some 7  -- requires/deriving names → typeclass
 roleOf (TUpper _) _ _ mode = Some (upperRole mode)
-roleOf (TIdent _) depth lineStart mode =
+roleOf (TIdent _) depth lineStart _ =
   if lineStart && (depth == 0) then Some 3      -- top-level definition head
-  else match mode
-    MRecord => Some 4                            -- record field name
-    _ => None                                    -- local / param / reference
+  else None                                      -- local / param / reference
 roleOf (TBacktickIdent _) _ _ _ = Some 3
 roleOf (TString _) _ _ _ = Some 5
 roleOf (TChar _) _ _ _ = Some 5
@@ -1322,7 +1326,6 @@ roleOf t _ _ _ = if isKeywordTok t then Some 0 else None
 nextMode : Token -> SMode -> SMode
 nextMode TData _ = MDataHead
 nextMode TNewtype _ = MDataHead
-nextMode TRecord _ = MRecord
 nextMode TInterface _ = MIfaceOne
 nextMode TImpl _ = MIfaceOne
 nextMode TRequires _ = MIfaceMany
@@ -1332,10 +1335,8 @@ nextMode TType _ = MType
 nextMode TOf _ = MType
 nextMode TWhere _ = MExpr
 nextMode (TUpper _) MIfaceOne = MType
-nextMode TColon MRecord = MRecord
 nextMode TColon _ = MType
 nextMode TEqual MDataHead = MDataVariant
-nextMode TEqual MRecord = MRecord
 nextMode TEqual _ = MExpr
 nextMode TPipe MDataVariant = MDataVariant
 nextMode TPipe MDataPayload = MDataVariant
@@ -2186,7 +2187,7 @@ unit = ()
 (DFunDef false "semanticLegend" () (EListLit (ELit (LString "keyword")) (ELit (LString "class")) (ELit (LString "macro")) (ELit (LString "function")) (ELit (LString "property")) (ELit (LString "string")) (ELit (LString "number")) (ELit (LString "selfParameter"))))
 (DTypeSig false "semanticTokensOptions" (TyCon "Json"))
 (DFunDef false "semanticTokensOptions" () (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "legend")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "tokenTypes")) (EApp (EVar "jArray") (EApp (EApp (EVar "map") (EVar "JString")) (EVar "semanticLegend")))) (ETuple (ELit (LString "tokenModifiers")) (EApp (EVar "jArray") (EListLit)))))) (ETuple (ELit (LString "full")) (EApp (EVar "JBool") (EVar "True"))))))
-(DData Private "SMode" () ((variant "MExpr" (ConPos)) (variant "MType" (ConPos)) (variant "MDataHead" (ConPos)) (variant "MDataVariant" (ConPos)) (variant "MDataPayload" (ConPos)) (variant "MRecord" (ConPos)) (variant "MIfaceOne" (ConPos)) (variant "MIfaceMany" (ConPos))) ())
+(DData Private "SMode" () ((variant "MExpr" (ConPos)) (variant "MType" (ConPos)) (variant "MDataHead" (ConPos)) (variant "MDataVariant" (ConPos)) (variant "MDataPayload" (ConPos)) (variant "MIfaceOne" (ConPos)) (variant "MIfaceMany" (ConPos))) ())
 (DData Private "SemCtx" () ((variant "SemCtx" (ConPos (TyCon "Int") (TyCon "Bool") (TyCon "SMode")))) ())
 (DTypeSig false "isKeywordTok" (TyFun (TyCon "Token") (TyCon "Bool")))
 (DFunDef false "isKeywordTok" ((PCon "TLet")) (EVar "True"))
@@ -2199,7 +2200,6 @@ unit = ()
 (DFunDef false "isKeywordTok" ((PCon "TElse")) (EVar "True"))
 (DFunDef false "isKeywordTok" ((PCon "TMatch")) (EVar "True"))
 (DFunDef false "isKeywordTok" ((PCon "TData")) (EVar "True"))
-(DFunDef false "isKeywordTok" ((PCon "TRecord")) (EVar "True"))
 (DFunDef false "isKeywordTok" ((PCon "TInterface")) (EVar "True"))
 (DFunDef false "isKeywordTok" ((PCon "TDefault")) (EVar "True"))
 (DFunDef false "isKeywordTok" ((PCon "TImpl")) (EVar "True"))
@@ -2229,7 +2229,7 @@ unit = ()
 (DFunDef false "roleOf" ((PCon "TUpper" PWild) PWild PWild (PCon "MIfaceOne")) (EApp (EVar "Some") (ELit (LInt 7))))
 (DFunDef false "roleOf" ((PCon "TUpper" PWild) PWild PWild (PCon "MIfaceMany")) (EApp (EVar "Some") (ELit (LInt 7))))
 (DFunDef false "roleOf" ((PCon "TUpper" PWild) PWild PWild (PVar "mode")) (EApp (EVar "Some") (EApp (EVar "upperRole") (EVar "mode"))))
-(DFunDef false "roleOf" ((PCon "TIdent" PWild) (PVar "depth") (PVar "lineStart") (PVar "mode")) (EIf (EBinOp "&&" (EVar "lineStart") (EBinOp "==" (EVar "depth") (ELit (LInt 0)))) (EApp (EVar "Some") (ELit (LInt 3))) (EMatch (EVar "mode") (arm (PCon "MRecord") () (EApp (EVar "Some") (ELit (LInt 4)))) (arm PWild () (EVar "None")))))
+(DFunDef false "roleOf" ((PCon "TIdent" PWild) (PVar "depth") (PVar "lineStart") PWild) (EIf (EBinOp "&&" (EVar "lineStart") (EBinOp "==" (EVar "depth") (ELit (LInt 0)))) (EApp (EVar "Some") (ELit (LInt 3))) (EVar "None")))
 (DFunDef false "roleOf" ((PCon "TBacktickIdent" PWild) PWild PWild PWild) (EApp (EVar "Some") (ELit (LInt 3))))
 (DFunDef false "roleOf" ((PCon "TString" PWild) PWild PWild PWild) (EApp (EVar "Some") (ELit (LInt 5))))
 (DFunDef false "roleOf" ((PCon "TChar" PWild) PWild PWild PWild) (EApp (EVar "Some") (ELit (LInt 5))))
@@ -2243,7 +2243,6 @@ unit = ()
 (DTypeSig false "nextMode" (TyFun (TyCon "Token") (TyFun (TyCon "SMode") (TyCon "SMode"))))
 (DFunDef false "nextMode" ((PCon "TData") PWild) (EVar "MDataHead"))
 (DFunDef false "nextMode" ((PCon "TNewtype") PWild) (EVar "MDataHead"))
-(DFunDef false "nextMode" ((PCon "TRecord") PWild) (EVar "MRecord"))
 (DFunDef false "nextMode" ((PCon "TInterface") PWild) (EVar "MIfaceOne"))
 (DFunDef false "nextMode" ((PCon "TImpl") PWild) (EVar "MIfaceOne"))
 (DFunDef false "nextMode" ((PCon "TRequires") PWild) (EVar "MIfaceMany"))
@@ -2253,10 +2252,8 @@ unit = ()
 (DFunDef false "nextMode" ((PCon "TOf") PWild) (EVar "MType"))
 (DFunDef false "nextMode" ((PCon "TWhere") PWild) (EVar "MExpr"))
 (DFunDef false "nextMode" ((PCon "TUpper" PWild) (PCon "MIfaceOne")) (EVar "MType"))
-(DFunDef false "nextMode" ((PCon "TColon") (PCon "MRecord")) (EVar "MRecord"))
 (DFunDef false "nextMode" ((PCon "TColon") PWild) (EVar "MType"))
 (DFunDef false "nextMode" ((PCon "TEqual") (PCon "MDataHead")) (EVar "MDataVariant"))
-(DFunDef false "nextMode" ((PCon "TEqual") (PCon "MRecord")) (EVar "MRecord"))
 (DFunDef false "nextMode" ((PCon "TEqual") PWild) (EVar "MExpr"))
 (DFunDef false "nextMode" ((PCon "TPipe") (PCon "MDataVariant")) (EVar "MDataVariant"))
 (DFunDef false "nextMode" ((PCon "TPipe") (PCon "MDataPayload")) (EVar "MDataVariant"))
@@ -2635,7 +2632,7 @@ unit = ()
 (DFunDef false "semanticLegend" () (EListLit (ELit (LString "keyword")) (ELit (LString "class")) (ELit (LString "macro")) (ELit (LString "function")) (ELit (LString "property")) (ELit (LString "string")) (ELit (LString "number")) (ELit (LString "selfParameter"))))
 (DTypeSig false "semanticTokensOptions" (TyCon "Json"))
 (DFunDef false "semanticTokensOptions" () (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "legend")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "tokenTypes")) (EApp (EVar "jArray") (EApp (EApp (EMethodRef "map") (EVar "JString")) (EVar "semanticLegend")))) (ETuple (ELit (LString "tokenModifiers")) (EApp (EVar "jArray") (EListLit)))))) (ETuple (ELit (LString "full")) (EApp (EVar "JBool") (EVar "True"))))))
-(DData Private "SMode" () ((variant "MExpr" (ConPos)) (variant "MType" (ConPos)) (variant "MDataHead" (ConPos)) (variant "MDataVariant" (ConPos)) (variant "MDataPayload" (ConPos)) (variant "MRecord" (ConPos)) (variant "MIfaceOne" (ConPos)) (variant "MIfaceMany" (ConPos))) ())
+(DData Private "SMode" () ((variant "MExpr" (ConPos)) (variant "MType" (ConPos)) (variant "MDataHead" (ConPos)) (variant "MDataVariant" (ConPos)) (variant "MDataPayload" (ConPos)) (variant "MIfaceOne" (ConPos)) (variant "MIfaceMany" (ConPos))) ())
 (DData Private "SemCtx" () ((variant "SemCtx" (ConPos (TyCon "Int") (TyCon "Bool") (TyCon "SMode")))) ())
 (DTypeSig false "isKeywordTok" (TyFun (TyCon "Token") (TyCon "Bool")))
 (DFunDef false "isKeywordTok" ((PCon "TLet")) (EVar "True"))
@@ -2648,7 +2645,6 @@ unit = ()
 (DFunDef false "isKeywordTok" ((PCon "TElse")) (EVar "True"))
 (DFunDef false "isKeywordTok" ((PCon "TMatch")) (EVar "True"))
 (DFunDef false "isKeywordTok" ((PCon "TData")) (EVar "True"))
-(DFunDef false "isKeywordTok" ((PCon "TRecord")) (EVar "True"))
 (DFunDef false "isKeywordTok" ((PCon "TInterface")) (EVar "True"))
 (DFunDef false "isKeywordTok" ((PCon "TDefault")) (EVar "True"))
 (DFunDef false "isKeywordTok" ((PCon "TImpl")) (EVar "True"))
@@ -2678,7 +2674,7 @@ unit = ()
 (DFunDef false "roleOf" ((PCon "TUpper" PWild) PWild PWild (PCon "MIfaceOne")) (EApp (EVar "Some") (ELit (LInt 7))))
 (DFunDef false "roleOf" ((PCon "TUpper" PWild) PWild PWild (PCon "MIfaceMany")) (EApp (EVar "Some") (ELit (LInt 7))))
 (DFunDef false "roleOf" ((PCon "TUpper" PWild) PWild PWild (PVar "mode")) (EApp (EVar "Some") (EApp (EVar "upperRole") (EVar "mode"))))
-(DFunDef false "roleOf" ((PCon "TIdent" PWild) (PVar "depth") (PVar "lineStart") (PVar "mode")) (EIf (EBinOp "&&" (EVar "lineStart") (EBinOp "==" (EVar "depth") (ELit (LInt 0)))) (EApp (EVar "Some") (ELit (LInt 3))) (EMatch (EVar "mode") (arm (PCon "MRecord") () (EApp (EVar "Some") (ELit (LInt 4)))) (arm PWild () (EVar "None")))))
+(DFunDef false "roleOf" ((PCon "TIdent" PWild) (PVar "depth") (PVar "lineStart") PWild) (EIf (EBinOp "&&" (EVar "lineStart") (EBinOp "==" (EVar "depth") (ELit (LInt 0)))) (EApp (EVar "Some") (ELit (LInt 3))) (EVar "None")))
 (DFunDef false "roleOf" ((PCon "TBacktickIdent" PWild) PWild PWild PWild) (EApp (EVar "Some") (ELit (LInt 3))))
 (DFunDef false "roleOf" ((PCon "TString" PWild) PWild PWild PWild) (EApp (EVar "Some") (ELit (LInt 5))))
 (DFunDef false "roleOf" ((PCon "TChar" PWild) PWild PWild PWild) (EApp (EVar "Some") (ELit (LInt 5))))
@@ -2692,7 +2688,6 @@ unit = ()
 (DTypeSig false "nextMode" (TyFun (TyCon "Token") (TyFun (TyCon "SMode") (TyCon "SMode"))))
 (DFunDef false "nextMode" ((PCon "TData") PWild) (EVar "MDataHead"))
 (DFunDef false "nextMode" ((PCon "TNewtype") PWild) (EVar "MDataHead"))
-(DFunDef false "nextMode" ((PCon "TRecord") PWild) (EVar "MRecord"))
 (DFunDef false "nextMode" ((PCon "TInterface") PWild) (EVar "MIfaceOne"))
 (DFunDef false "nextMode" ((PCon "TImpl") PWild) (EVar "MIfaceOne"))
 (DFunDef false "nextMode" ((PCon "TRequires") PWild) (EVar "MIfaceMany"))
@@ -2702,10 +2697,8 @@ unit = ()
 (DFunDef false "nextMode" ((PCon "TOf") PWild) (EVar "MType"))
 (DFunDef false "nextMode" ((PCon "TWhere") PWild) (EVar "MExpr"))
 (DFunDef false "nextMode" ((PCon "TUpper" PWild) (PCon "MIfaceOne")) (EVar "MType"))
-(DFunDef false "nextMode" ((PCon "TColon") (PCon "MRecord")) (EVar "MRecord"))
 (DFunDef false "nextMode" ((PCon "TColon") PWild) (EVar "MType"))
 (DFunDef false "nextMode" ((PCon "TEqual") (PCon "MDataHead")) (EVar "MDataVariant"))
-(DFunDef false "nextMode" ((PCon "TEqual") (PCon "MRecord")) (EVar "MRecord"))
 (DFunDef false "nextMode" ((PCon "TEqual") PWild) (EVar "MExpr"))
 (DFunDef false "nextMode" ((PCon "TPipe") (PCon "MDataVariant")) (EVar "MDataVariant"))
 (DFunDef false "nextMode" ((PCon "TPipe") (PCon "MDataPayload")) (EVar "MDataVariant"))

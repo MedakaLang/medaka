@@ -19,11 +19,16 @@
 //                  kind to resume when its `{`/`}` balance returns to 0
 //                  (interpolations nest: `"\{ f "\{x}" }"`).
 
-// The 28 keywords (lexer.mdk keywordOrIdent, 295-328).  True/False are NOT here
-// — they lex as TUpper (uppercase), handled as `bool` below.
+// The keyword set, mirroring lexer.mdk's `keywordOrIdent` table.  True/False are
+// NOT here — they lex as TUpper (uppercase), handled as `bool` below.  Derive the
+// authority, don't trust a count (this comment claimed "28" for a 32-element set):
+//   grep -n '^keywordOrIdent "' compiler/frontend/lexer.mdk
+// `record` was removed from this set by #62 — it is an ordinary identifier now.
+// (`internal` is here but not in `keywordOrIdent`; it is a modifier the
+// playground colours, not a lexer keyword.)
 export const KEYWORDS = new Set([
   'let', 'rec', 'with', 'mut', 'in', 'if', 'then', 'else', 'match', 'data',
-  'record', 'interface', 'default', 'impl', 'import', 'export', 'public',
+  'interface', 'default', 'impl', 'import', 'export', 'public',
   'where', 'of', 'do', 'as', 'extern', 'requires', 'deriving', 'type',
   'newtype', 'prop', 'test', 'bench', 'effect', 'internal', 'function',
 ]);

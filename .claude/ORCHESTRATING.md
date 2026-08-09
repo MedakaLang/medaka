@@ -978,6 +978,29 @@ confirmed clean** (`git status --short`). A shared worktree makes "capture my di
 - **Doc-edit hygiene under concurrency:** if an agent is concurrently *appending* to a shared doc (most
   append an "AS-BUILT" section at EOF), make your own edit a **mid-file insert** in a stable region — the
   3-way merge then auto-resolves instead of conflicting at EOF.
+- 🚨 **Shared APPEND-TARGET REGISTRIES are a collision surface beyond source files and goldens.**
+  Seven PRs ran across disjoint source files, serialized on source files and on the documented
+  snapshot/LEG A goldens — and that was not enough: **#1436 was ejected from the merge queue**
+  (`mergeable: CONFLICTING`) after **#1442** landed ahead of it. Neither PR's "owned" files
+  conflicted; the collisions were all in files where two PRs each *add a row/line to a shared
+  list*: `.github/workflows/ci.yml`'s `tools` shard `pattern:` — both PRs appended their new
+  gate's name to the **same line** (confirmed: `gh pr diff 1436` and `gh pr diff 1442` both
+  touch that identical `pattern:` string); `test/preflight.sh`'s change→gate selection map; and
+  `test/MUST-FAIL-NOT-PINNABLE.txt`, where #1436 deleted the `#1348` row and **#1435** deleted
+  the adjacent `#1360` row two lines above it. Treat any single-line list a gate reads as a
+  registry — `ci.yml` shard patterns, `test/preflight.sh`'s map, `test/MUST-FAIL-NOT-PINNABLE.txt`,
+  `test/CAPABILITY-EXCEPTIONS.txt`, `test/engine_divergence.txt` — and add it to the pre-dispatch
+  serialization check alongside source files and goldens.
+  - **Resolving one: take BOTH sides, then re-run the gate that validates the registry** —
+    `sh test/diff_compiler_ci_shard_coverage.sh` for `ci.yml` (it fails a gate matching no shard
+    pattern, i.e. a pattern one side's `--ours`/`--theirs` resolve would silently drop — see its
+    own header, "A gate matching no shard pattern silently never runs"). Never `--ours`/`--theirs`
+    on a registry: that doesn't fail loudly, it just **stops the other PR's gate from ever
+    running again while every check stays green.**
+  - **An enqueue that succeeded is not a merge.** `scripts/pr.sh enqueue` correctly verified queue
+    membership at the time; the PR was ejected later when another PR landed ahead of it in the
+    queue. A queued PR's state must be **read back** before you treat it as landed — never
+    inferred from an earlier successful enqueue.
 
 ---
 

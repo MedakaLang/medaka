@@ -1,5 +1,5 @@
 # META
-source_lines=431
+source_lines=430
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted Medaka REPL (Stage 4, Phase B.9)
@@ -85,7 +85,6 @@ initSession runtimeDecls preludeDecls =
 -- ── Input classification ──────────────────────────────────────────────────
 isDeclStartToken : Token -> Bool
 isDeclStartToken TData = True
-isDeclStartToken TRecord = True
 isDeclStartToken TInterface = True
 isDeclStartToken TImpl = True
 isDeclStartToken TImport = True
@@ -458,7 +457,6 @@ stringSplitOn sep s start cur len
 (DFunDef false "initSession" ((PVar "runtimeDecls") (PVar "preludeDecls")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "setRef") (EVar "runtimeDeclsRef")) (EVar "runtimeDecls"))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EVar "preludeDeclsRef")) (EVar "preludeDecls"))) (DoLet false false (PVar "prelSchemes") (EApp (EApp (EVar "checkProgramSchemes") (EListLit)) (EVar "preludeDecls"))) (DoLet false false (PVar "prelNames") (EApp (EApp (EVar "map") (EVar "fst")) (EVar "prelSchemes"))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EVar "preludeNamesRef")) (EVar "prelNames"))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EVar "knownNamesRef")) (EVar "prelNames"))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EVar "accumulatedRef")) (EListLit))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "userBindingsRef")) (EListLit)))))
 (DTypeSig false "isDeclStartToken" (TyFun (TyCon "Token") (TyCon "Bool")))
 (DFunDef false "isDeclStartToken" ((PCon "TData")) (EVar "True"))
-(DFunDef false "isDeclStartToken" ((PCon "TRecord")) (EVar "True"))
 (DFunDef false "isDeclStartToken" ((PCon "TInterface")) (EVar "True"))
 (DFunDef false "isDeclStartToken" ((PCon "TImpl")) (EVar "True"))
 (DFunDef false "isDeclStartToken" ((PCon "TImport")) (EVar "True"))
@@ -601,7 +599,6 @@ stringSplitOn sep s start cur len
 (DFunDef false "initSession" ((PVar "runtimeDecls") (PVar "preludeDecls")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "setRef") (EVar "runtimeDeclsRef")) (EVar "runtimeDecls"))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EVar "preludeDeclsRef")) (EVar "preludeDecls"))) (DoLet false false (PVar "prelSchemes") (EApp (EApp (EVar "checkProgramSchemes") (EListLit)) (EVar "preludeDecls"))) (DoLet false false (PVar "prelNames") (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "prelSchemes"))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EVar "preludeNamesRef")) (EVar "prelNames"))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EVar "knownNamesRef")) (EVar "prelNames"))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EVar "accumulatedRef")) (EListLit))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "userBindingsRef")) (EListLit)))))
 (DTypeSig false "isDeclStartToken" (TyFun (TyCon "Token") (TyCon "Bool")))
 (DFunDef false "isDeclStartToken" ((PCon "TData")) (EVar "True"))
-(DFunDef false "isDeclStartToken" ((PCon "TRecord")) (EVar "True"))
 (DFunDef false "isDeclStartToken" ((PCon "TInterface")) (EVar "True"))
 (DFunDef false "isDeclStartToken" ((PCon "TImpl")) (EVar "True"))
 (DFunDef false "isDeclStartToken" ((PCon "TImport")) (EVar "True"))

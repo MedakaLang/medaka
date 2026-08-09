@@ -1,0 +1,6 @@
+-- #62: freeing the WORD `record` must not lose the diagnostic for the removed
+-- CONSTRUCT.  `firstRecordDeclIdx` keys on this shape (`record Upper … = {`
+-- with no `|` in the braces), not on the token.
+record Point = { x : Int, y : Int }
+
+main = println 1

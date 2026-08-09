@@ -1,0 +1,6 @@
+-- #935: the same diagnostic on the OTHER admitted shape — a top-level type
+-- SIGNATURE (`kw :`), not a binding (`kw =`) — and on a different one of the
+-- five keywords, which before the fix reported a bare ``unexpected `else` ``.
+else : Int
+
+main = println 1

@@ -1,0 +1,222 @@
+test/ported/TYPECHECK-TRIAGE.txt — why each `medaka check` diagnostic in this corpus exists
+============================================================================================
+
+Issue #1445 decided: no silent typecheck skips in `medaka test`.  `test/ported/*.mdk` is the
+reason a module-level exemption still exists, on the belief that the corpus is untypecheckable
+by design.  This file records the FIRST measurement of that belief (2026-08-09, cold-built
+binary at merge-base of the branch, human `medaka check`, exit code read without a pipe).
+
+The belief is mostly WRONG.  Of 23 diagnostics across the three gate targets, 7 were
+incidental, 4 were essential divergence, 12 were compiler bugs, and 0 were code defects.
+⚠️ Don't trust that split — DERIVE it from the rows below, which are the actual record:
+  grep -cE '\((A|B|C|D)\)$' test/ported/TYPECHECK-TRIAGE.txt   # 23
+  grep -c '(A)$' …   # 7      grep -c '(B)$' …   # 4
+  grep -c '(C)$' …   # 0      grep -c '(D)$' …   # 12
+This line has been WRONG TWICE.  It said 14/4/5 (submod.mdk's (D) counted outside the
+(D) column), then 13/4/6 (the helloI/helloW cluster still miscounted as incidental —
+review established it is #1460, a construct that CANNOT be written).  Both times the
+per-diagnostic rows were correct and only this summary was not.  That is the whole
+argument for deriving it.
+The 6 internal-primitive POLICY rows at the end are not part of that 23 — they are a
+flag question, not a triage bucket.
+
+⚠️ WHAT KEEPS THIS FILE HONEST.  Nothing here is self-verifying; it is prose.  The
+mechanism that stops it rotting is the TYPECHECK LEDGER in
+test/diff_compiler_ported.sh, which asserts each file's `medaka check` verdict on every
+CI run and PROMOTEs a REJECT row the moment its issue is fixed.  If you change a verdict
+here, change it there — and the ledger, not this file, is the authority.
+
+Buckets
+-------
+  (A) INCIDENTAL — the assertion does not need the rejected construct; a type annotation or a
+      missing method signature makes it check clean without changing what it tests.  FIXED.
+  (B) ESSENTIAL  — the rejected construct IS the test (an eval-vs-check divergence assertion).
+      ISOLATED into a named file; never "fixed", because removing the construct deletes the
+      coverage rather than passing it.
+  (C) DEFECT     — the code is wrong and the checker is right.  (None found.)
+  (D) COMPILER BUG — the checker is wrong to reject.  Reported, NOT worked around.
+
+Reproduce
+---------
+  ./medaka check test/ported/test_run_ported.mdk
+  ./medaka check test/ported/test_loader_ported.mdk
+  ./medaka check --allow-internal test/ported/test_eval_ported.mdk
+(Without `--allow-internal` the third reports only the 6 internal-primitive policy rows and
+suppresses everything else — the resolve pass fails before typecheck runs.)
+
+--------------------------------------------------------------------------------------------
+test_run_ported.mdk — 1 diagnostic
+--------------------------------------------------------------------------------------------
+501:53  Ambiguous instance for `Ord`  (`expectTrue (pingP 5 : Bool)`)                      (A)
+        `pingP`/`pongP` are an unannotated mutually-recursive pair; `n <= 0` yields
+        `Ord a, Num a` and the bare literal `5` never grounds `a`.  The subject of the test is
+        RETURN-position inference (the `: Bool` ascription), not the argument type — the
+        self-recursive sibling `mkPR` two lines up has the same shape and does NOT report,
+        so the ambiguity is an artifact of the mutual pair, not of the feature under test.
+        FIX: ground the argument (`pingP (5 : Int) : Bool`).  Return-position inference is
+        untouched.
+
+--------------------------------------------------------------------------------------------
+test_loader_ported.mdk — 4 diagnostics (1 of them in the sibling module submod.mdk)
+--------------------------------------------------------------------------------------------
+submod.mdk:28:15  Could not deduce 'Base m' from the signature of 'mkSub'                  (D)
+        `mkSub : Sub m => a -> m a`, and `interface Sub f requires Base f`, so `Base m` is a
+        SUPERCLASS of a declared constraint.  Superclass entailment works — the identical
+        code in ONE file checks clean (exit 0, `mkSub : Sub b => a -> b a`), and so does
+        `./medaka check test/ported/submod.mdk` on its own.  It fails only when the module is
+        reached through the multi-module path.  Minimal 2-module repro filed; NOT worked
+        around here, because adding `Base m =>` would mask a live false-reject that also
+        breaks `medaka run`.
+220:31  Ambiguous instance for `Ord`   (`maximum (fromL [3, 1, 2])`)                       (A)
+223:2   Ambiguous instance for `Debug` (`product (fromL [2, 3, 4])`)                       (A)
+223:2   Ambiguous instance for `Eq`    (same expression)                                   (A)
+        The section tests Foldable-derived methods over an IMPORTED Foldable impl
+        (bagmod.mdk).  The element type is never grounded, so `Ord`/`Eq`/`Debug` on it are
+        genuinely ambiguous — Medaka does not default numeric literals.  FIX: ascribe the
+        list element type.  The imported-impl dispatch under test is unchanged.
+        ⚠️ The DIFF also annotates `sum (fromL [1, 2, 3])` at :218, which reported NO
+        diagnostic.  That is deliberate and is not an unrecorded fix: the checker dedups
+        ambiguity reports PER INTERFACE, so with `Ord`/`Eq`/`Debug` already claimed by :220
+        and :223 a fourth site cannot surface until those are fixed — the same masking that
+        made this whole triage an iterative measurement (see the note under the eval rows).
+        `sum` is the identical shape over the identical unannotated literal list; leaving it
+        bare would have re-dirtied the file on the next round.  Verified by the ledger:
+        test_loader_ported.mdk's remaining rejection is the submod.mdk (D) alone.
+
+--------------------------------------------------------------------------------------------
+test_eval_ported.mdk — 18 diagnostics under --allow-internal, + 6 policy rows without it
+--------------------------------------------------------------------------------------------
+474:38  cannot derive 'Num' for 'Dist'                                                    (B)
+481:10  No impl of Num for Dist  (consequence of the above)                               (B)
+915:40  cannot derive 'Generic' for 'WrapGen'                                             (B)
+916:23  No impl of Generic for WrapGen  (consequence of the above)                        (B)
+        `newtypeDerivers` (compiler/frontend/desugar.mdk) deliberately omits `Num` and
+        `Generic` — its own comment says the specialized newtype derivers "this port has not
+        taken", so a newtype "genuinely cannot derive them here".  The interpreter reaches
+        the assertion anyway: `expandDecl` DROPS a derive it has no deriver for, the newtype
+        is representationally its payload, and untyped eval's arg-tag dispatch then finds
+        `Num Int` / the data `Generic`.  That is exactly the eval-vs-check divergence this
+        corpus exists to pin.  ISOLATED to test_eval_divergent_ported.mdk.
+
+129:33  'factLR'   is bound by 'let rec' but its right-hand side is not a function         (D)
+129:33  'isEvenLR' — same                                                                 (D)
+129:33  'isOddLR'  — same                                                                 (D)
+129:33  'isELR2'   — same                                                                 (D)
+129:33  'isOLR2'   — same                                                                 (D)
+        BLOCKED ON #807 — NOT #1449.  ⚠️ This block cited #1449 in the first revision.  That
+        was wrong twice over: #807 was ALREADY FILED (OPEN, `verified`, and titled almost
+        exactly this), and the comment block DIRECTLY ABOVE the `isSyntacticLambda` I cited
+        says so — "⚠️ #807 (pre-existing, out of scope here): does NOT see through an ELoc
+        wrapper" (compiler/types/typecheck.mdk, six lines above :10015).  I read the function
+        and not the paragraph over it.  #1449 is ONLY the location defect; fixing it alone
+        would not make one of these five bindings typecheck.
+        Every one of these five right-hand sides is an `n => …` lambda (lines 842-856).
+        `isSyntacticLambda` (compiler/types/typecheck.mdk:10015-10017) matches a BARE `ELam`
+        and does not peel the transparent `ELoc` on a top-level clause's RHS, so
+        `clauseIsNonFunction` (:10044) calls it a non-function.  Not corpus-specific and not
+        test-only: `let rec idA = n => n` in a 3-line file is rejected by `medaka check` AND
+        `medaka run`.
+        ⚠️ SCOPE, measured — do NOT state this as "the parser wraps EVERY lambda, therefore
+        every let rec breaks".  I wrote that and it over-reaches: the EXPRESSION-level
+        `let rec f = <lambda> in …` is ACCEPTED (`letRecInline`, still in
+        test_eval_ported.mdk), and not because the guard is missing there.
+        `checkRecBindNonFunction` (:10076-10079) applies the same bare `isSyntacticLambda` on
+        that path and DOES fire: `let rec loop = loop in 1` is rejected at exit 1 with a real
+        location.  So the guard is live on both paths and only the TOP-LEVEL clause's RHS
+        arrives ELoc-wrapped.  Positive control run both ways before this was written.
+        The bogus 129:33 location is #1449 (`pushTypeError`, :10040, has no location to give).
+        NOT worked around; ISOLATED to test_eval_letrec_toplevel_ported.mdk pending #807.
+
+716:13  Impl of 'helloI' for interface 'GreetI' pins the method's quantified tyvars '_'    (D)
+725:13  Impl of 'helloW' for interface 'GreetW' — same                                     (D)
+716:13  Default body of 'helloI' in interface 'GreetI' pins '_'                            (D)
+725:13  Default body of 'helloW' in interface 'GreetW' pins '_'                            (D)
+929:59  Method 'helloI' in interface 'GreetI' does not mention interface parameter(s) 'a'  (D)
+929:59  Method 'helloW' in interface 'GreetW' — same                                       (D)
+        ⚠️ RECLASSIFIED (A) -> (D) after review.  All six are one cause: `helloI`/`helloW`
+        are default methods declared with a BODY and no SIGNATURE.  That is not a local
+        slip — it is UNWRITABLE.  `ifaceMemberRest` (compiler/frontend/parser.mdk) stamps a
+        body-only member as `IfaceMethod name (TyVar "_") …`, and `phantomMethodMsg`
+        (compiler/types/typecheck.mdk) accepts only when `anyMember (tyVarNames mty)
+        typarams` — `tyVarNames (TyVar "_")` is `["_"]`, which is never an interface
+        parameter name, so on any interface with >=1 parameter the reject branch is
+        unconditional.  Untyped eval runs the construct fine (measured: `medaka test` on a
+        signature-less GreetI -> 1/1 passed), so this is check-rejects/eval-accepts — the
+        very class this corpus pins.  FILED AS #1460.
+        THE EDIT IS STILL RIGHT, AND IS NOT A WORKAROUND FOR #1460: the section's subject
+        is that a default method RUNS for an impl that does not override it, and the
+        signatured form tests exactly that.  Verified on a 9-line reduction: 4 errors ->
+        exit 0, prints "Hello World".
+        ⚠️ BUT THE SIGNATURE-LESS FORM NOW HAS NO COVERAGE ANYWHERE.  The existing
+        T-PHANTOM-METHOD fixtures all use EXPLICITLY-TYPED phantom methods, which is a
+        different shape (a written type that omits the parameter, not an absent type).
+        Recorded in #1460 and in test/ported/README.md's mapping row.
+        (The 929:59 location is bogus — the decl is at 714-716.  Same mis-location family as
+        #1449; recorded there.)
+
+836:42  Ambiguous instance for `Ord`   (`signFnKw (-5)`)                                   (A)
+843:32  Ambiguous instance for `Debug` (`factLR 5`)                                        (A)
+856:43  Ambiguous instance for `Eq`    (`isELR2 6`)                                        (A)
+        NOT downstream of the let-rec bug — verified by rewriting the same three bodies in
+        the accepted `f n = …` form, which reproduces all three ambiguities verbatim.  Same
+        no-defaulting cause as the loader rows.  FIX: annotate the bindings.  A fourth
+        instance (`isEvenLR 8`) is latent — it is masked today because that binding errors
+        out first — and is annotated too.
+
+ 28:48  'arrayGetUnsafe' is an internal-only primitive             (policy, not semantics)
+783:42  'arrayGetUnsafe' — same
+787:2   'arraySetUnsafe' — same
+788:2   'arrayGetUnsafe' — same
+794:2   'arraySetUnsafe' — same
+795:2   'arrayGetUnsafe' — same
+        Reported only WITHOUT `--allow-internal`, and they suppress every row above (the
+        rejection is in RESOLVE, before typecheck runs).  These assertions test the unsafe
+        array primitives themselves, so removing the calls deletes the coverage.  ISOLATED
+        to test_eval_internal_prims_ported.mdk.
+        ⚠️ CORRECTED after review.  This block used to say `medaka test` needs an
+        `--allow-internal` it does not have.  That is WRONG: `medaka test` DOES NOT ENFORCE
+        the internal-extern restriction on EITHER route, so the file gates clean there today
+        with no flag, and would keep gating clean if the #1445 exemption were removed
+        tomorrow.  Both routes are unguarded — import-bearing goes `analyzeProject` ->
+        `resolvePass` -> `resolveModule`, which is `resolveModuleG []`, an EMPTY guard list
+        (compiler/frontend/resolve.mdk); prelude-only goes `analyzeLocated`, which
+        compiler/tools/test_cmd.mdk documents verbatim as "UNGUARDED for internal-only
+        externs".  The first of those is the OPEN S0 #1362.  So the real dependency is:
+        THE DAY #1362 IS FIXED, THIS FILE STARTS FAILING `medaka test`.  Plan against that,
+        not against a missing flag.  `medaka check --allow-internal` on it is exit 0 —
+        asserted by the CLEAN-INT row in diff_compiler_ported.sh's typecheck ledger.
+
+--------------------------------------------------------------------------------------------
+Residue after this change — what still cannot `medaka check` clean, and why
+--------------------------------------------------------------------------------------------
+⚠️ THIS TABLE IS PROSE.  The ENFORCED version is the typecheck ledger in
+test/diff_compiler_ported.sh — every row below is an assertion there, graded on every CI
+run, and a REJECT row PROMOTEs (reddening the gate) the moment its issue is fixed.  If the
+two ever disagree, the ledger is right.  Derive it:
+  grep -A8 '^typecheck_ledger=' test/diff_compiler_ported.sh
+
+  test_eval_divergent_ported.mdk        (B) by design, while newtypeDerivers omits
+                                            Num/Generic.  THE only genuinely-untypecheckable
+                                            file in the corpus.  Tracked as #1461 and drained
+                                            by test/must_fail_fixtures/1461-newtype-deriving-
+                                            num-generic/ — the file itself asserts nothing
+                                            about the divergence and must not be read as
+                                            coverage (its own header says so).
+  test_eval_letrec_toplevel_ported.mdk  (D) blocked on #807 (NOT #1449 — see the rows above).
+                                            Delete-and-merge-back when that lands; the file
+                                            has no other reason to exist.
+  test_loader_ported.mdk                (D) blocked on #1457, the multi-module superclass-
+                                            entailment false reject (submod.mdk:28).  Not
+                                            isolated — the offending decl is in a shared
+                                            sibling module, and the assertions using it are
+                                            correct.
+  test_eval_internal_prims_ported.mdk   NOT a typecheck residue.  `medaka check
+                                            --allow-internal` is exit 0, and `medaka test`
+                                            does not enforce the restriction at all today.
+                                            Its real dependency is the open S0 #1362.
+
+  test_run_ported.mdk  and  test_eval_ported.mdk  now check clean at exit 0.
+
+So the by-design residue the #1445 follow-up must still grant an exemption to is ONE FILE
+(test_eval_divergent_ported.mdk).  Two more are debt with named issues (#807, #1457) that
+delete themselves when those land, and one is a #1362 dependency rather than an exemption.

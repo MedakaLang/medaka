@@ -105,6 +105,17 @@ case "$out" in
   *) bad method_shadow_run "expected True, got [$out]" ;;
 esac
 
+# #62: `record` as a MODULE name (`import record.*`).  This fixture directory
+# existed for months with NO assertion referencing it — it was blocked on the
+# removed-keyword diagnostic firing on the bare token regardless of position,
+# so wiring it up would only have pinned the bug.  Freeing the word unblocked
+# it, so it is live now: the import must resolve and the program must run.
+out="$(perl -e 'alarm 30; exec @ARGV' -- "$M" run "$FIX/keyword_import_record/main.mdk" 2>&1)"
+case "$out" in
+  "hello from record module") ok keyword_import_record ;;
+  *) bad keyword_import_record "expected 'hello from record module', got [$out]" ;;
+esac
+
 # inline-let missing-in: located error at the `let` keyword with a hint.
 # Before the fix, native reported 2:0 ("if" line) with no hint.
 out="$(perl -e 'alarm 30; exec @ARGV' -- "$M" check "$FIX/inline_let_missing_in.mdk" 2>&1)"

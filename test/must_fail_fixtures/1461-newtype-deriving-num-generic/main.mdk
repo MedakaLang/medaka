@@ -1,0 +1,10 @@
+-- #1461: `newtype` cannot derive `Num` or `Generic`; `data` can derive `Generic`.
+-- `newtypeDerivers` (compiler/frontend/desugar.mdk) is deliberately shorter than
+-- `dataDerivers` -- an untaken port of lib/desugar.ml's specialized newtype derivers.
+--
+-- ONE derive name per decl, so each pinned diagnostic has an unambiguous range.
+newtype Dist = Dist Int deriving (Num)
+
+newtype WrapGen = WrapGen Int deriving (Generic)
+
+main = println 1

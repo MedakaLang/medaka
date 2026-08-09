@@ -81,7 +81,6 @@ initSession runtimeDecls preludeDecls =
 -- ── Input classification ──────────────────────────────────────────────────
 isDeclStartToken : Token -> Bool
 isDeclStartToken TData = True
-isDeclStartToken TRecord = True
 isDeclStartToken TInterface = True
 isDeclStartToken TImpl = True
 isDeclStartToken TImport = True

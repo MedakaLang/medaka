@@ -90,7 +90,16 @@ if [ "$IC" = "ok" ]; then echo "OK: integrity_check = ok"; else echo "FAIL: inte
 # Gate 2: expected updated-row counts in the probe output.
 echo "=== Gate 2: updated-row counts ==="
 check_count() {
-  if echo "$PROBE_OUT" | grep -qF "$1"; then echo "OK: $1"; else echo "FAIL: missing '$1'"; fail=1; fi
+  # NOTE: a `producer | grep -q ...` pipe is a broken-pipe trap under
+  # `pipefail` — `grep -q` exits the instant it finds a match, closing its
+  # read end while the producer may still be writing; the producer then dies
+  # with EPIPE ("write error: Broken pipe"), `pipefail` makes THAT the
+  # pipeline's exit status even though grep found the match, and the `if`
+  # takes the else branch — reporting a real match as "missing". A
+  # here-string has bash write the whole value to a temp file BEFORE grep
+  # ever runs, so there is no live pipe and nothing for an early exit to
+  # race against.
+  if grep -qF -- "$1" <<<"$PROBE_OUT"; then echo "OK: $1"; else echo "FAIL: missing '$1'"; fail=1; fi
 }
 check_count "t1 total+=10 WHERE total>=50: updated 2 rows"
 check_count "t2 x*=2: updated 2 rows"
