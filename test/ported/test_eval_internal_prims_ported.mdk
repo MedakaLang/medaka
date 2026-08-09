@@ -1,0 +1,55 @@
+-- test_eval_internal_prims_ported.mdk — the array assertions that call
+-- INTERNAL-ONLY primitives, split out of test_eval_ported.mdk.
+--
+-- ⚠️ This file typechecks CLEAN, but only with `--allow-internal`:
+--     ./medaka check --allow-internal test/ported/test_eval_internal_prims_ported.mdk
+-- `arrayGetUnsafe`/`arraySetUnsafe` are internal-only primitives, so a plain
+-- `medaka check` reports "'arrayGetUnsafe' is an internal-only primitive" — and
+-- that rejection happens in resolve, which SUPPRESSES every other diagnostic in
+-- the file.  That is what made it look, before this split, as though
+-- test_eval_ported.mdk had only 6 problems.
+--
+-- These assertions test the unsafe primitives THEMSELVES (ported from
+-- t_array_get_unsafe / t_array_set_unsafe / t_array_copy), so rewriting them
+-- against the safe `array` module would delete the coverage rather than fix it.
+-- They are isolated here so the follow-up to #1445 needs an `--allow-internal`
+-- route for ONE named file instead of for the whole corpus (`medaka test` has no
+-- such flag today — compiler/tools/test_cmd.mdk).
+--
+-- Ported from: t_range_array_half_open, t_range_array_inclusive, t_array_length,
+--              t_array_length_empty, t_array_make, t_array_get_unsafe,
+--              t_array_set_unsafe, t_array_copy, t_array_from_list
+-- NOTE: Array has no Eq impl; convert to List for expectEqual.
+-- Run with: medaka test test/ported/test_eval_internal_prims_ported.mdk
+
+import test.{expectEqual}
+
+-- Helper: convert an Array Int to a List Int for expectEqual comparisons.
+-- (Array has no Foldable impl in core; array.mdk adds it, but we avoid that import.)
+arrayToList : Array Int -> List Int
+arrayToList a =
+  let go i = if i >= arrayLength a then [] else arrayGetUnsafe i a :: go (i + 1)
+  go 0
+
+test "array length" = expectEqual 3 (arrayLength [|10, 20, 30|])
+test "array length empty" = expectEqual 0 (arrayLength ([||] : Array Int))
+test "array range half-open" = expectEqual [0, 1, 2] (arrayToList [|0..3|])
+test "array range inclusive" = expectEqual [1, 2, 3] (arrayToList [|1..=3|])
+test "array make" = expectEqual [7, 7, 7, 7] (arrayToList (arrayMake 4 7))
+test "array get unsafe" = expectEqual 30 (arrayGetUnsafe 2 ([|10, 20, 30, 40|] : Array Int))
+
+arraySetResult =
+  let a = [|1, 2, 3|]
+  arraySetUnsafe 1 99 a
+  arrayGetUnsafe 1 a
+test "array set unsafe" = expectEqual 99 arraySetResult
+
+arrayCopyResult =
+  let a = [|1, 2, 3|]
+  let b = arrayCopy a
+  arraySetUnsafe 0 999 b
+  arrayGetUnsafe 0 a
+test "array copy is independent" = expectEqual 1 arrayCopyResult
+
+test "array from list" = expectEqual [10, 20, 30] (arrayToList (arrayFromList [10, 20, 30]))
+test "array from list empty" = expectEqual ([] : List Int) (arrayToList (arrayFromList []))

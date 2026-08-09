@@ -1,0 +1,55 @@
+-- test_eval_divergent_ported.mdk — the assertions/declarations `medaka check`
+-- REJECTS BY DESIGN, split out of test_eval_ported.mdk.
+--
+-- ⚠️ THIS IS THE ONE FILE IN test/ported/ THAT IS GENUINELY UNTYPECHECKABLE.
+-- Do NOT "fix" anything here.  Removing a construct below does not make a test
+-- pass — it DELETES the coverage, because the construct IS the test: each one is
+-- a shape the interpreter accepts and the type checker rejects, and pinning that
+-- divergence is why test/ported/ exists (issue #1445).
+--
+-- Both cases have the same cause, stated by the compiler's own source:
+-- `newtypeDerivers` (compiler/frontend/desugar.mdk) is DELIBERATELY shorter than
+-- `dataDerivers` — "`Generic` (and `Num`) go through specialized newtype derivers
+-- in lib/desugar.ml that this port has not taken, so a newtype genuinely cannot
+-- derive them here."  `medaka check` therefore reports
+--   cannot derive 'Num' for 'Dist'; supported: Eq, Ord, Debug, Display, Hashable
+--   cannot derive 'Generic' for 'WrapGen'; …
+-- while `expandDecl` silently DROPS a derive it has no deriver for, the newtype is
+-- representationally its payload, and untyped eval's arg-tag dispatch then finds
+-- `Num Int` / the `data` Generic impl.  Note the asymmetry that makes this a real
+-- divergence and not a typo: `data … deriving (Generic)` IS accepted (see
+-- test_eval_ported.mdk's `BoxG`) — only the newtype form is not.
+--
+-- If `newtypeDerivers` ever grows `Num`/`Generic`, this file's reason to exist
+-- ends: check it, and fold it back into test_eval_ported.mdk.
+--
+-- Ported from: t_newtype_deriving_num_add, t_newtype_deriving_num_mul (the
+-- ASSERTIONS for these were already removed 2026-07-11 — newtype constructors are
+-- unbound at eval; the declarations remain because they are what diverges).
+-- Run with: medaka test test/ported/test_eval_divergent_ported.mdk
+
+import test.{expectEqual}
+
+-- ── newtype deriving (Num) ───────────────────────────────────────────────────
+newtype Dist = Dist Int deriving (Eq, Num)
+distR : Dist
+distR = add (Dist 3) (Dist 4)
+distRN = match distR
+  Dist n => n
+
+distMul : Dist
+distMul = mul (Dist 3) (Dist 4)
+distMulN = match distMul
+  Dist n => n
+
+-- ── newtype deriving (Generic) ───────────────────────────────────────────────
+-- Expected shape: RCon "WrapGen" [RInt 5]
+newtype WrapGen = WrapGen Int deriving (Generic)
+genNewtypeName = match to_rep (WrapGen 5)
+  RCon name _ => name
+  _ => ""
+
+-- A live assertion so this file is not silently vacuous under `medaka test`.
+-- It exercises nothing divergent on its own; the divergence is the declarations
+-- above being reached at all.
+test "divergent corpus is reached" = expectEqual 1 (1 : Int)

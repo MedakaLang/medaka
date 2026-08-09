@@ -1,0 +1,43 @@
+-- test_eval_letrec_toplevel_ported.mdk — the top-level `let rec` assertions,
+-- split out of test_eval_ported.mdk because `medaka check` FALSELY REJECTS them.
+--
+-- ⚠️ THIS FILE IS RESIDUE, NOT A DESIGN.  Every binding below has a genuine
+-- `n => …` lambda right-hand side, and every one of them is reported as
+-- "'<name>' is bound by 'let rec' but its right-hand side is not a function".
+-- That is issue #1449: the parser wraps every lambda in a transparent `ELoc`
+-- (`lamTail e = located (lamTailRaw e)`, compiler/frontend/parser.mdk), while
+-- `isSyntacticLambda` (compiler/types/typecheck.mdk) matches a BARE `ELam` and
+-- never peels it — so `clauseIsNonFunction` calls every top-level
+-- `let rec f = <lambda>` a non-function.  It is not test-only: a three-line file
+--   let rec idA = n => n
+--   main = println (idA 5)
+-- is rejected by `medaka check` AND by `medaka run`.
+--
+-- WHEN #1449 LANDS: delete this file and move these bindings back into
+-- test_eval_ported.mdk's "let rec" section.  It has no other reason to exist.
+--
+-- Ported from: t_letrec_top_fact, t_letrec_top_mutual, t_letrec_inline_mutual
+-- Run with: medaka test test/ported/test_eval_letrec_toplevel_ported.mdk
+
+import test.{expectEqual, expectTrue}
+
+-- The signatures are NOT part of the #1449 workaround — they ground the numeric
+-- literals at the call sites, which are ambiguous in the accepted `f n = …` form
+-- too (Medaka does not default numeric literals).
+factLR : Int -> Int
+let rec factLR = n => if n == 0 then 1 else n * factLR (n - 1)
+test "let rec top-level fact" = expectEqual 120 (factLR 5)
+
+isEvenLR : Int -> Bool
+let rec isEvenLR = n => if n == 0 then True else isOddLR (n - 1)
+isOddLR : Int -> Bool
+let rec isOddLR = n => if n == 0 then False else isEvenLR (n - 1)
+test "let rec top-level mutual" = expectTrue (isEvenLR 8)
+
+-- "inline mutual" expressed as two separate top-level `let rec` bindings (the
+-- `with` mutual-recursion grouping has been removed).
+isELR2 : Int -> Bool
+let rec isELR2 = n => if n == 0 then True else isOLR2 (n - 1)
+isOLR2 : Int -> Bool
+let rec isOLR2 = n => if n == 0 then False else isELR2 (n - 1)
+test "let rec inline mutual" = expectTrue (isELR2 6)

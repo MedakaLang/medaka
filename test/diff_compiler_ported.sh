@@ -24,7 +24,9 @@ DIR="$ROOT/test/ported"
 
 [ -x "$NATIVE" ] || { echo "SKIP: ./medaka not built — run: make medaka"; exit 2; }
 
-files="test_eval_ported.mdk test_run_ported.mdk test_loader_ported.mdk"
+files="test_eval_ported.mdk test_run_ported.mdk test_loader_ported.mdk
+test_eval_divergent_ported.mdk test_eval_letrec_toplevel_ported.mdk
+test_eval_internal_prims_ported.mdk"
 
 # ── KNOWN FAILURES ───────────────────────────────────────────────────────────
 # These files fail on REAL INTERPRETER BUGS, not test rot. They are recorded here
@@ -46,9 +48,23 @@ files="test_eval_ported.mdk test_run_ported.mdk test_loader_ported.mdk"
 #   test_run_ported.mdk     charIsAlpha on a non-ASCII char ('é') panics
 #                           "no matching impl for dispatch" (line 135). Unicode
 #                           char classification is not implemented in the interpreter.
-#   test_loader_ported.mdk  "eval: unsupported node (slice 2)" — the interpreter
-#                           does not lower slice syntax. Independently recorded by
-#                           the engine census as `eval:unsupported-node`.
+#   test_loader_ported.mdk  ⚠️ CAUSE CORRECTED 2026-08-09 (#1445).  This row used
+#                           to read '"eval: unsupported node (slice 2)" — the
+#                           interpreter does not lower slice syntax.'  That is
+#                           WRONG: there is NO slice syntax in this file or in any
+#                           module it imports — all six `.[` occurrences under
+#                           test/ported/ are in test_run_ported.mdk, a DIFFERENT
+#                           known-failure (derive it: grep -n '\.\[' test/ported/*.mdk).
+#                           MEASURED cause: the run aborts with
+#                             runtime error [E-PANIC]: '++' requires Semigroup
+#                               (List, String, or a type with append)
+#                           immediately after the assertion at :91, i.e. at the
+#                           Phase 69.x-e case `foldMap MkSum [1, 2, 3, 4]` over
+#                           summod.mdk's user `impl Semigroup Sum`.  Same family
+#                           as the "native `++` ignores a user `append`" gap
+#                           already recorded in test_eval_ported.mdk's removed-
+#                           cases note.  Re-derive rather than trust this text:
+#                             ./medaka test test/ported/test_loader_ported.mdk
 KNOWN_FAIL="test_run_ported.mdk test_loader_ported.mdk"
 
 is_known() {
