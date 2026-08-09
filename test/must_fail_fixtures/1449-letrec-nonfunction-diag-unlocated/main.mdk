@@ -1,0 +1,9 @@
+-- #1449: `T-NONREC-VALUE-LET` is pushed with NO source location. The rejection
+-- below is CORRECT (`5` really is not a function) -- what is wrong is that the
+-- diagnostic carries no position of its own, so it renders as `<unknown
+-- location>` standalone and inherits a STALE ambient location in a larger file.
+-- The line number of the binding below is deliberately NOT pinned: the whole
+-- point is that the diagnostic reports no line at all.
+let rec notFn = 5
+
+main = println notFn
