@@ -45,6 +45,7 @@ blockStmtGo : Array Token -> Array Int -> Int -> Int -> Int -> Bool -> List Int
 blockStmtLines : Array Token -> Array Int -> Int -> Int -> List Int
 bodyChainTopOp : Expr -> Option String
 bodyIsBlock : Expr -> Bool
+braceAfterEq : Array Token -> Int -> Int
 braceBlockFrom : Array Token -> Int -> Int -> Int -> Int
 braceBlockMsg : String
 braceHasBarAtTop : Array Token -> Int -> Int -> Bool
@@ -242,7 +243,6 @@ isCtorChars : Array Char -> Bool
 isCtorName : String -> Bool
 isDataDecl : Decl -> Bool
 isForeignKwTok : Token -> Bool
-isGuardLineEndTok : Token -> Bool
 isIntMinLit : Int -> Bool
 isLayoutTok : Token -> Bool
 isLeadingModifierTok : Token -> Bool
@@ -252,7 +252,6 @@ isOpenDelim : Token -> Bool
 isPlainIdentTok : Token -> Bool
 isTStringTok : Token -> Bool
 isTUpperTok : Token -> Bool
-isUpperTok : Token -> Bool
 joinComma : List String -> String
 joinSemi : List String -> String
 kvElemToField : Expr -> FieldAssign
@@ -290,7 +289,7 @@ letRecStmt : Parser DoStmt
 letRecWithRemovedMsg : String
 letTailFor : Pat -> Expr -> Token -> Parser DoStmt
 lineAt : Array Int -> Int -> Int
-lineIsRecordBody : Array Token -> Int -> Int -> Bool
+lineIsRecordBody : Array Token -> Int -> Int -> Bool -> Bool
 lineTrailingColonNoEq : Array Token -> Int -> Int -> Bool -> Bool -> Bool
 listAfterComma : Expr -> Token -> Parser Expr
 listFor : Token -> Parser Expr
@@ -485,6 +484,7 @@ propParam : Parser PropParam
 rangeAfter : Expr -> Bool -> Parser Expr
 recordFieldExpr : Parser (List String, Expr)
 recordFieldExprRest : List String -> Token -> Parser (List String, Expr)
+recordHeadIdx : Array Token -> Int -> Int
 recordPat : String -> Parser Pat
 recordPatField : Parser RecPatField
 recordPatFieldRest : String -> Loc -> Token -> Parser RecPatField

@@ -1,0 +1,16 @@
+-- #62.  The MULTI-LINE removed-record forms, which the first cut of the
+-- shape-keyed scan silently stopped diagnosing (it stopped its walk at the
+-- `TIndent` between `=` and `{`).  This is the population that matters most:
+-- `docs/spec/language-design.md` still documents the brace-less form below as
+-- THE product-type syntax, so it is what a migrating reader types.
+--
+-- Both forms lex as ONE logical line — `Person` `canEndExpr`, so a deeper line
+-- is absorbed as an application continuation.  Only the first is reported
+-- (the pre-scan returns the FIRST match); the sibling record_decl_removed.mdk
+-- covers the single-line form and the export-modifier form is covered by the
+-- probe recorded in the safety comment.
+record Person
+  name : String
+  age : Int
+
+main = println 1

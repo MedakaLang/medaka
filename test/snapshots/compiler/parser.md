@@ -1,5 +1,5 @@
 # META
-source_lines=4968
+source_lines=5012
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted Medaka parser — Stage 1 port of `lib/parser.mly`.  A monadic
@@ -2950,7 +2950,7 @@ eqGuardIfMsg = "an equation guard uses `|`, not `if` — write `| cond = body`"
 eqGuardShapeFrom : Array Token -> Int -> Int -> Bool
 eqGuardShapeFrom toks i depth
   | i >= arrayLength toks = False
-  | depth == 0 && isGuardLineEndTok (peekTok toks i) = False
+  | depth == 0 && isLineEndTok (peekTok toks i) = False
   | depth == 0 && peekTok toks i == TThen = False
   | depth == 0 && peekTok toks i == TEqual = True
   | isBracketOpenTok (peekTok toks i) =
@@ -2959,12 +2959,16 @@ eqGuardShapeFrom toks i depth
     eqGuardShapeFrom toks (i + 1) (depth - 1)
   | otherwise = eqGuardShapeFrom toks (i + 1) depth
 
-isGuardLineEndTok : Token -> Bool
-isGuardLineEndTok TNewline = True
-isGuardLineEndTok TIndent = True
-isGuardLineEndTok TDedent = True
-isGuardLineEndTok TEof = True
-isGuardLineEndTok _ = False
+-- A token that ends the current LOGICAL line for a pre-grammar token scan.
+-- Shared by every such scan in this file — it was `isGuardLineEndTok` until
+-- #62/#935 added a second caller, at which point the guard-specific name was
+-- the only thing making it look local.
+isLineEndTok : Token -> Bool
+isLineEndTok TNewline = True
+isLineEndTok TIndent = True
+isLineEndTok TDedent = True
+isLineEndTok TEof = True
+isLineEndTok _ = False
 
 eqGuardShapeP : Parser Bool
 eqGuardShapeP = Parser (toks pos => POk (eqGuardShapeFrom toks pos 0) pos)
@@ -4507,25 +4511,52 @@ firstMutIdx toks i
 -- keys on the removed CONSTRUCT'S SHAPE, the same way `firstForeignKwIdx` keys
 -- on `for`/`while`/`def` (also plain `TIdent`s).
 --
--- Shape: a TOP-LEVEL logical line that starts `record Upper`, and whose first
--- depth-0 `=` is immediately followed by `{`, with no `|` at that brace's own
--- depth before its `}`.
+-- Shape: a TOP-LEVEL logical line that starts `record Upper` (after any
+-- `export`/`public` modifier) and then either
+--   (a) has a depth-0 `=` followed by `{` — allowing ONE `INDENT`/`NEWLINE`
+--       between them, which is how the multi-line form lexes — with no `|` at
+--       that brace's own depth before its `}`; or
+--   (b) reaches the end of its logical line with NO depth-0 `=` at all, having
+--       seen a depth-0 `:` or such a `{`.
 --
--- SAFETY (why this can never fire on valid Medaka).  A `{` that STARTS an
--- expression has exactly one production in this grammar — `parseRecordUpdate`
--- (`parseAtomRaw`'s `TLBrace => parseRecordUpdate`), which is `{ expr | field =
--- val, … }` and therefore ALWAYS contains a `|` at the brace's own depth.  A
--- constructor record literal (`P { x = 1 }`) has no `|`, but it is `TUpper`-led
--- (`upperAtomRest c TLBrace`), so its `{` is never the token right after `=`.
--- Hence `= {` with no depth-1 `|` is not a parseable expression under any arm,
--- and a decl `record Foo = { … }` that reaches this scan was never going to
--- compile.  Verified on the binary: `f Point = { x : Int, y : Int }` fails with
--- `unexpected ','; expected '|'`, while `f Pat = { r | x = 1 }` and `f Pat = P
--- { x = 1 }` both compile — and neither of the latter two matches this shape.
+-- Arm (b) is not an extra: it is the form
+-- `docs/spec/language-design.md` still documents as THE product-type syntax —
+--     record Person
+--       name : String
+--       age  : Int
+-- — which lexes as ONE logical line (`Person` `canEndExpr`, so the deeper lines
+-- are absorbed as application continuations and no INDENT is ever emitted), and
+-- is therefore the shape a reader migrating from that doc actually types.  It
+-- was diagnosed on `main` by the old bare-token scan; dropping it here would
+-- have traded a precise removal message for `unexpected ':'` on the wrong line.
 --
--- The `Upper` requirement keeps it off ordinary code that merely binds the name
--- (`record = 1`, `record r = { r | x = 1 }`): the removed construct always named
--- an uppercase type.  Located at `record`.
+-- SAFETY (why this can never fire on valid Medaka).  Two independent proofs,
+-- one per arm.
+--
+-- (a) A `{` that STARTS an expression has exactly one production in this
+-- grammar — `parseRecordUpdate` (`parseAtomRaw`'s `TLBrace =>
+-- parseRecordUpdate`), which is `{ expr | field = val, … }` and therefore
+-- ALWAYS contains a `|` at the brace's own depth (it `expectTok TPipe`
+-- unconditionally).  A constructor record literal (`P { x = 1 }`) has no `|`,
+-- but it is `TUpper`-led (`upperAtomRest c TLBrace`), so its `{` is never the
+-- token right after `=`.  Hence `= {` with no depth-1 `|` is not a parseable
+-- expression under any arm.  Verified on the binary: `f Point = { x : Int, y :
+-- Int }` fails with `unexpected ','; expected '|'`, while `f Pat = { r | x = 1
+-- }` and `f Pat = P { x = 1 }` both compile — and neither matches this shape,
+-- one-line or multi-line (the `|` is inside the braces either way).
+--
+-- (b) A top-level declaration line ALWAYS contains a depth-0 `=`, unless it is
+-- a type signature — and a signature's LHS is a single lowercase name, so it
+-- cannot be `record Upper …`.  Every other decl form starts with its own
+-- keyword (`data`/`interface`/`impl`/`import`/…), not with an identifier.  So
+-- "starts `record Upper` and has no depth-0 `=` on the whole logical line" is
+-- already never-valid on its own; the `:`/`{` evidence is required on top of
+-- that only to keep the RECORD message off unrelated broken lines.
+--
+-- The `Upper` requirement keeps the scan off ordinary code that merely binds
+-- the name (`record = 1`, `record r = { r | x = 1 }`, `record : Int`): the
+-- removed construct always named an uppercase type.  Located at `record`, not
+-- at the modifier — that is the word the message is about.
 
 -- Is there a `|` at THIS brace's own depth before it closes?  `i` points just
 -- past the `{`; `depth` counts nested brackets opened since.  True also on a
@@ -4542,26 +4573,43 @@ braceHasBarAtTop toks i depth
     braceHasBarAtTop toks (i + 1) (depth - 1)
   | otherwise = braceHasBarAtTop toks (i + 1) depth
 
--- Walk the logical line from `i` looking for a depth-0 `=` immediately followed
--- by `{` whose body has no top-level `|`.  Stops at the line's end.
-lineIsRecordBody : Array Token -> Int -> Int -> Bool
-lineIsRecordBody toks i depth
-  | i >= arrayLength toks = False
-  | depth == 0 && isLineEndTok (peekTok toks i) = False
-  | depth == 0 && peekTok toks i == TEqual && peekTok toks (i + 1) == TLBrace =
-    not (braceHasBarAtTop toks (i + 2) 0)
-  | isBracketOpenTok (peekTok toks i) =
-    lineIsRecordBody toks (i + 1) (depth + 1)
-  | isBracketCloseTok (peekTok toks i) =
-    lineIsRecordBody toks (i + 1) (depth - 1)
-  | otherwise = lineIsRecordBody toks (i + 1) depth
+-- Index of the `{` a depth-0 `=` at `i` introduces, tolerating ONE layout token
+-- between them (`record Person =⏎  { … }` lexes as `= INDENT {`), or -1.
+braceAfterEq : Array Token -> Int -> Int
+braceAfterEq toks i
+  | peekTok toks (i + 1) == TLBrace = i + 1
+  | isLineEndTok (peekTok toks (i + 1)) && peekTok toks (i + 2) == TLBrace =
+    i + 2
+  | otherwise = 0 - 1
 
-isLineEndTok : Token -> Bool
-isLineEndTok TNewline = True
-isLineEndTok TIndent = True
-isLineEndTok TDedent = True
-isLineEndTok TEof = True
-isLineEndTok _ = False
+-- Walk the logical line from `i`.  Arm (a) commits at the first depth-0 `=`;
+-- arm (b) commits at the line's end, having seen no such `=`.  `sawField` is
+-- the (b) evidence: a depth-0 `:` or a depth-0 brace with no top-level `|`.
+lineIsRecordBody : Array Token -> Int -> Int -> Bool -> Bool
+lineIsRecordBody toks i depth sawField
+  | i >= arrayLength toks = sawField
+  | depth == 0 && isLineEndTok (peekTok toks i) = sawField
+  | depth == 0 && peekTok toks i == TEqual =
+    let b = braceAfterEq toks i
+    if b < 0 then False else not (braceHasBarAtTop toks (b + 1) 0)
+  | depth == 0 && peekTok toks i == TColon =
+    lineIsRecordBody toks (i + 1) depth True
+  | depth == 0 && peekTok toks i == TLBrace = lineIsRecordBody toks (i + 1) (depth + 1) (not (braceHasBarAtTop toks (i + 1) 0))
+  | isBracketOpenTok (peekTok toks i) =
+    lineIsRecordBody toks (i + 1) (depth + 1) sawField
+  | isBracketCloseTok (peekTok toks i) =
+    lineIsRecordBody toks (i + 1) (depth - 1) sawField
+  | otherwise = lineIsRecordBody toks (i + 1) depth sawField
+
+-- `record` may be preceded by an export modifier (`export record X = { … }` was
+-- as writable as the bare form).  Index of the `record` token at a decl head
+-- starting at `i`, or -1 if this head does not start one.
+recordHeadIdx : Array Token -> Int -> Int
+recordHeadIdx toks i
+  | peekTok toks i == TExport || peekTok toks i == TPublic =
+    recordHeadIdx toks (i + 1)
+  | peekTok toks i == TIdent "record" && isTUpperTok (peekTok toks (i + 1)) && lineIsRecordBody toks (i + 2) 0 False = i
+  | otherwise = 0 - 1
 
 -- Index of the `record` starting a removed record declaration, or -1.
 -- `depth` is the INDENT nesting: only depth 0 is a declaration position, so a
@@ -4569,15 +4617,11 @@ isLineEndTok _ = False
 firstRecordDeclIdx : Array Token -> Int -> Int -> Bool -> Int
 firstRecordDeclIdx toks i depth lineStart
   | i >= arrayLength toks = 0 - 1
-  | lineStart && depth == 0 && peekTok toks i == TIdent "record" && isUpperTok (peekTok toks (i + 1)) && lineIsRecordBody toks (i + 2) 0 = i
+  | lineStart && depth == 0 && recordHeadIdx toks i >= 0 = recordHeadIdx toks i
   | peekTok toks i == TIndent = firstRecordDeclIdx toks (i + 1) (depth + 1) True
   | peekTok toks i == TDedent = firstRecordDeclIdx toks (i + 1) (depth - 1) True
   | peekTok toks i == TNewline = firstRecordDeclIdx toks (i + 1) depth True
   | otherwise = firstRecordDeclIdx toks (i + 1) depth False
-
-isUpperTok : Token -> Bool
-isUpperTok (TUpper _) = True
-isUpperTok _ = False
 
 -- #935.  `let`/`rec`/`if`/`then`/`else` are reserved, but they are deliberately
 -- absent from `reservedIdentKeyword` (see its comment: a fatal there would
@@ -5949,13 +5993,13 @@ parseResultWith src tokList offList =
 (DTypeSig false "eqGuardIfMsg" (TyCon "String"))
 (DFunDef false "eqGuardIfMsg" () (ELit (LString "an equation guard uses `|`, not `if` — write `| cond = body`")))
 (DTypeSig false "eqGuardShapeFrom" (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
-(DFunDef false "eqGuardShapeFrom" ((PVar "toks") (PVar "i") (PVar "depth")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "toks"))) (EVar "False") (EIf (EBinOp "&&" (EBinOp "==" (EVar "depth") (ELit (LInt 0))) (EApp (EVar "isGuardLineEndTok") (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "i")))) (EVar "False") (EIf (EBinOp "&&" (EBinOp "==" (EVar "depth") (ELit (LInt 0))) (EBinOp "==" (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "i")) (EVar "TThen"))) (EVar "False") (EIf (EBinOp "&&" (EBinOp "==" (EVar "depth") (ELit (LInt 0))) (EBinOp "==" (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "i")) (EVar "TEqual"))) (EVar "True") (EIf (EApp (EVar "isBracketOpenTok") (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "i"))) (EApp (EApp (EApp (EVar "eqGuardShapeFrom") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "+" (EVar "depth") (ELit (LInt 1)))) (EIf (EApp (EVar "isBracketCloseTok") (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "i"))) (EApp (EApp (EApp (EVar "eqGuardShapeFrom") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "-" (EVar "depth") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "eqGuardShapeFrom") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "depth")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))))
-(DTypeSig false "isGuardLineEndTok" (TyFun (TyCon "Token") (TyCon "Bool")))
-(DFunDef false "isGuardLineEndTok" ((PCon "TNewline")) (EVar "True"))
-(DFunDef false "isGuardLineEndTok" ((PCon "TIndent")) (EVar "True"))
-(DFunDef false "isGuardLineEndTok" ((PCon "TDedent")) (EVar "True"))
-(DFunDef false "isGuardLineEndTok" ((PCon "TEof")) (EVar "True"))
-(DFunDef false "isGuardLineEndTok" (PWild) (EVar "False"))
+(DFunDef false "eqGuardShapeFrom" ((PVar "toks") (PVar "i") (PVar "depth")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "toks"))) (EVar "False") (EIf (EBinOp "&&" (EBinOp "==" (EVar "depth") (ELit (LInt 0))) (EApp (EVar "isLineEndTok") (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "i")))) (EVar "False") (EIf (EBinOp "&&" (EBinOp "==" (EVar "depth") (ELit (LInt 0))) (EBinOp "==" (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "i")) (EVar "TThen"))) (EVar "False") (EIf (EBinOp "&&" (EBinOp "==" (EVar "depth") (ELit (LInt 0))) (EBinOp "==" (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "i")) (EVar "TEqual"))) (EVar "True") (EIf (EApp (EVar "isBracketOpenTok") (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "i"))) (EApp (EApp (EApp (EVar "eqGuardShapeFrom") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "+" (EVar "depth") (ELit (LInt 1)))) (EIf (EApp (EVar "isBracketCloseTok") (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "i"))) (EApp (EApp (EApp (EVar "eqGuardShapeFrom") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "-" (EVar "depth") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "eqGuardShapeFrom") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "depth")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))))
+(DTypeSig false "isLineEndTok" (TyFun (TyCon "Token") (TyCon "Bool")))
+(DFunDef false "isLineEndTok" ((PCon "TNewline")) (EVar "True"))
+(DFunDef false "isLineEndTok" ((PCon "TIndent")) (EVar "True"))
+(DFunDef false "isLineEndTok" ((PCon "TDedent")) (EVar "True"))
+(DFunDef false "isLineEndTok" ((PCon "TEof")) (EVar "True"))
+(DFunDef false "isLineEndTok" (PWild) (EVar "False"))
 (DTypeSig false "eqGuardShapeP" (TyApp (TyCon "Parser") (TyCon "Bool")))
 (DFunDef false "eqGuardShapeP" () (EApp (EVar "Parser") (ELam ((PVar "toks") (PVar "pos")) (EApp (EApp (EVar "POk") (EApp (EApp (EApp (EVar "eqGuardShapeFrom") (EVar "toks")) (EVar "pos")) (ELit (LInt 0)))) (EVar "pos")))))
 (DTypeSig false "parseGuard" (TyApp (TyCon "Parser") (TyCon "Guard")))
@@ -6397,19 +6441,14 @@ parseResultWith src tokList offList =
 (DFunDef false "firstMutIdx" ((PVar "toks") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "toks"))) (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 1))) (EIf (EBinOp "==" (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "i")) (EVar "TMut")) (EVar "i") (EIf (EVar "otherwise") (EApp (EApp (EVar "firstMutIdx") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "braceHasBarAtTop" (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
 (DFunDef false "braceHasBarAtTop" ((PVar "toks") (PVar "i") (PVar "depth")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "toks"))) (EVar "True") (EIf (EBinOp "==" (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "i")) (EVar "TEof")) (EVar "True") (EIf (EBinOp "&&" (EBinOp "==" (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "i")) (EVar "TPipe")) (EBinOp "==" (EVar "depth") (ELit (LInt 0)))) (EVar "True") (EIf (EBinOp "&&" (EBinOp "==" (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "i")) (EVar "TRBrace")) (EBinOp "==" (EVar "depth") (ELit (LInt 0)))) (EVar "False") (EIf (EApp (EVar "isBracketOpenTok") (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "i"))) (EApp (EApp (EApp (EVar "braceHasBarAtTop") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "+" (EVar "depth") (ELit (LInt 1)))) (EIf (EApp (EVar "isBracketCloseTok") (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "i"))) (EApp (EApp (EApp (EVar "braceHasBarAtTop") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "-" (EVar "depth") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "braceHasBarAtTop") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "depth")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))))
-(DTypeSig false "lineIsRecordBody" (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
-(DFunDef false "lineIsRecordBody" ((PVar "toks") (PVar "i") (PVar "depth")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "toks"))) (EVar "False") (EIf (EBinOp "&&" (EBinOp "==" (EVar "depth") (ELit (LInt 0))) (EApp (EVar "isLineEndTok") (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "i")))) (EVar "False") (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "depth") (ELit (LInt 0))) (EBinOp "==" (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "i")) (EVar "TEqual"))) (EBinOp "==" (EApp (EApp (EVar "peekTok") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "TLBrace"))) (EApp (EVar "not") (EApp (EApp (EApp (EVar "braceHasBarAtTop") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 2)))) (ELit (LInt 0)))) (EIf (EApp (EVar "isBracketOpenTok") (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "i"))) (EApp (EApp (EApp (EVar "lineIsRecordBody") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "+" (EVar "depth") (ELit (LInt 1)))) (EIf (EApp (EVar "isBracketCloseTok") (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "i"))) (EApp (EApp (EApp (EVar "lineIsRecordBody") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "-" (EVar "depth") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "lineIsRecordBody") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "depth")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))))
-(DTypeSig false "isLineEndTok" (TyFun (TyCon "Token") (TyCon "Bool")))
-(DFunDef false "isLineEndTok" ((PCon "TNewline")) (EVar "True"))
-(DFunDef false "isLineEndTok" ((PCon "TIndent")) (EVar "True"))
-(DFunDef false "isLineEndTok" ((PCon "TDedent")) (EVar "True"))
-(DFunDef false "isLineEndTok" ((PCon "TEof")) (EVar "True"))
-(DFunDef false "isLineEndTok" (PWild) (EVar "False"))
+(DTypeSig false "braceAfterEq" (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyCon "Int") (TyCon "Int"))))
+(DFunDef false "braceAfterEq" ((PVar "toks") (PVar "i")) (EIf (EBinOp "==" (EApp (EApp (EVar "peekTok") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "TLBrace")) (EBinOp "+" (EVar "i") (ELit (LInt 1))) (EIf (EBinOp "&&" (EApp (EVar "isLineEndTok") (EApp (EApp (EVar "peekTok") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (EBinOp "==" (EApp (EApp (EVar "peekTok") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 2)))) (EVar "TLBrace"))) (EBinOp "+" (EVar "i") (ELit (LInt 2))) (EIf (EVar "otherwise") (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 1))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "lineIsRecordBody" (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyCon "Bool"))))))
+(DFunDef false "lineIsRecordBody" ((PVar "toks") (PVar "i") (PVar "depth") (PVar "sawField")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "toks"))) (EVar "sawField") (EIf (EBinOp "&&" (EBinOp "==" (EVar "depth") (ELit (LInt 0))) (EApp (EVar "isLineEndTok") (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "i")))) (EVar "sawField") (EIf (EBinOp "&&" (EBinOp "==" (EVar "depth") (ELit (LInt 0))) (EBinOp "==" (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "i")) (EVar "TEqual"))) (EBlock (DoLet false false (PVar "b") (EApp (EApp (EVar "braceAfterEq") (EVar "toks")) (EVar "i"))) (DoExpr (EIf (EBinOp "<" (EVar "b") (ELit (LInt 0))) (EVar "False") (EApp (EVar "not") (EApp (EApp (EApp (EVar "braceHasBarAtTop") (EVar "toks")) (EBinOp "+" (EVar "b") (ELit (LInt 1)))) (ELit (LInt 0))))))) (EIf (EBinOp "&&" (EBinOp "==" (EVar "depth") (ELit (LInt 0))) (EBinOp "==" (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "i")) (EVar "TColon"))) (EApp (EApp (EApp (EApp (EVar "lineIsRecordBody") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "depth")) (EVar "True")) (EIf (EBinOp "&&" (EBinOp "==" (EVar "depth") (ELit (LInt 0))) (EBinOp "==" (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "i")) (EVar "TLBrace"))) (EApp (EApp (EApp (EApp (EVar "lineIsRecordBody") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "+" (EVar "depth") (ELit (LInt 1)))) (EApp (EVar "not") (EApp (EApp (EApp (EVar "braceHasBarAtTop") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (ELit (LInt 0))))) (EIf (EApp (EVar "isBracketOpenTok") (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "i"))) (EApp (EApp (EApp (EApp (EVar "lineIsRecordBody") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "+" (EVar "depth") (ELit (LInt 1)))) (EVar "sawField")) (EIf (EApp (EVar "isBracketCloseTok") (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "i"))) (EApp (EApp (EApp (EApp (EVar "lineIsRecordBody") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "-" (EVar "depth") (ELit (LInt 1)))) (EVar "sawField")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "lineIsRecordBody") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "depth")) (EVar "sawField")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))))))
+(DTypeSig false "recordHeadIdx" (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyCon "Int") (TyCon "Int"))))
+(DFunDef false "recordHeadIdx" ((PVar "toks") (PVar "i")) (EIf (EBinOp "||" (EBinOp "==" (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "i")) (EVar "TExport")) (EBinOp "==" (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "i")) (EVar "TPublic"))) (EApp (EApp (EVar "recordHeadIdx") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "i")) (EApp (EVar "TIdent") (ELit (LString "record")))) (EApp (EVar "isTUpperTok") (EApp (EApp (EVar "peekTok") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))))) (EApp (EApp (EApp (EApp (EVar "lineIsRecordBody") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 2)))) (ELit (LInt 0))) (EVar "False"))) (EVar "i") (EIf (EVar "otherwise") (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 1))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "firstRecordDeclIdx" (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyCon "Int"))))))
-(DFunDef false "firstRecordDeclIdx" ((PVar "toks") (PVar "i") (PVar "depth") (PVar "lineStart")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "toks"))) (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 1))) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EVar "lineStart") (EBinOp "==" (EVar "depth") (ELit (LInt 0)))) (EBinOp "==" (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "i")) (EApp (EVar "TIdent") (ELit (LString "record"))))) (EApp (EVar "isUpperTok") (EApp (EApp (EVar "peekTok") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))))) (EApp (EApp (EApp (EVar "lineIsRecordBody") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 2)))) (ELit (LInt 0)))) (EVar "i") (EIf (EBinOp "==" (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "i")) (EVar "TIndent")) (EApp (EApp (EApp (EApp (EVar "firstRecordDeclIdx") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "+" (EVar "depth") (ELit (LInt 1)))) (EVar "True")) (EIf (EBinOp "==" (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "i")) (EVar "TDedent")) (EApp (EApp (EApp (EApp (EVar "firstRecordDeclIdx") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "-" (EVar "depth") (ELit (LInt 1)))) (EVar "True")) (EIf (EBinOp "==" (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "i")) (EVar "TNewline")) (EApp (EApp (EApp (EApp (EVar "firstRecordDeclIdx") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "depth")) (EVar "True")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "firstRecordDeclIdx") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "depth")) (EVar "False")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))))
-(DTypeSig false "isUpperTok" (TyFun (TyCon "Token") (TyCon "Bool")))
-(DFunDef false "isUpperTok" ((PCon "TUpper" PWild)) (EVar "True"))
-(DFunDef false "isUpperTok" (PWild) (EVar "False"))
+(DFunDef false "firstRecordDeclIdx" ((PVar "toks") (PVar "i") (PVar "depth") (PVar "lineStart")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "toks"))) (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 1))) (EIf (EBinOp "&&" (EBinOp "&&" (EVar "lineStart") (EBinOp "==" (EVar "depth") (ELit (LInt 0)))) (EBinOp ">=" (EApp (EApp (EVar "recordHeadIdx") (EVar "toks")) (EVar "i")) (ELit (LInt 0)))) (EApp (EApp (EVar "recordHeadIdx") (EVar "toks")) (EVar "i")) (EIf (EBinOp "==" (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "i")) (EVar "TIndent")) (EApp (EApp (EApp (EApp (EVar "firstRecordDeclIdx") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "+" (EVar "depth") (ELit (LInt 1)))) (EVar "True")) (EIf (EBinOp "==" (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "i")) (EVar "TDedent")) (EApp (EApp (EApp (EApp (EVar "firstRecordDeclIdx") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "-" (EVar "depth") (ELit (LInt 1)))) (EVar "True")) (EIf (EBinOp "==" (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "i")) (EVar "TNewline")) (EApp (EApp (EApp (EApp (EVar "firstRecordDeclIdx") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "depth")) (EVar "True")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "firstRecordDeclIdx") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "depth")) (EVar "False")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))))
 (DTypeSig false "contextualKwName" (TyFun (TyCon "Token") (TyCon "String")))
 (DFunDef false "contextualKwName" ((PCon "TLet")) (ELit (LString "let")))
 (DFunDef false "contextualKwName" ((PCon "TRec")) (ELit (LString "rec")))
@@ -7485,13 +7524,13 @@ parseResultWith src tokList offList =
 (DTypeSig false "eqGuardIfMsg" (TyCon "String"))
 (DFunDef false "eqGuardIfMsg" () (ELit (LString "an equation guard uses `|`, not `if` — write `| cond = body`")))
 (DTypeSig false "eqGuardShapeFrom" (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
-(DFunDef false "eqGuardShapeFrom" ((PVar "toks") (PVar "i") (PVar "depth")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "toks"))) (EVar "False") (EIf (EBinOp "&&" (EBinOp "==" (EVar "depth") (ELit (LInt 0))) (EApp (EVar "isGuardLineEndTok") (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "i")))) (EVar "False") (EIf (EBinOp "&&" (EBinOp "==" (EVar "depth") (ELit (LInt 0))) (EBinOp "==" (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "i")) (EVar "TThen"))) (EVar "False") (EIf (EBinOp "&&" (EBinOp "==" (EVar "depth") (ELit (LInt 0))) (EBinOp "==" (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "i")) (EVar "TEqual"))) (EVar "True") (EIf (EApp (EVar "isBracketOpenTok") (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "i"))) (EApp (EApp (EApp (EVar "eqGuardShapeFrom") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "+" (EVar "depth") (ELit (LInt 1)))) (EIf (EApp (EVar "isBracketCloseTok") (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "i"))) (EApp (EApp (EApp (EVar "eqGuardShapeFrom") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "-" (EVar "depth") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "eqGuardShapeFrom") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "depth")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))))
-(DTypeSig false "isGuardLineEndTok" (TyFun (TyCon "Token") (TyCon "Bool")))
-(DFunDef false "isGuardLineEndTok" ((PCon "TNewline")) (EVar "True"))
-(DFunDef false "isGuardLineEndTok" ((PCon "TIndent")) (EVar "True"))
-(DFunDef false "isGuardLineEndTok" ((PCon "TDedent")) (EVar "True"))
-(DFunDef false "isGuardLineEndTok" ((PCon "TEof")) (EVar "True"))
-(DFunDef false "isGuardLineEndTok" (PWild) (EVar "False"))
+(DFunDef false "eqGuardShapeFrom" ((PVar "toks") (PVar "i") (PVar "depth")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "toks"))) (EVar "False") (EIf (EBinOp "&&" (EBinOp "==" (EVar "depth") (ELit (LInt 0))) (EApp (EVar "isLineEndTok") (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "i")))) (EVar "False") (EIf (EBinOp "&&" (EBinOp "==" (EVar "depth") (ELit (LInt 0))) (EBinOp "==" (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "i")) (EVar "TThen"))) (EVar "False") (EIf (EBinOp "&&" (EBinOp "==" (EVar "depth") (ELit (LInt 0))) (EBinOp "==" (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "i")) (EVar "TEqual"))) (EVar "True") (EIf (EApp (EVar "isBracketOpenTok") (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "i"))) (EApp (EApp (EApp (EVar "eqGuardShapeFrom") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "+" (EVar "depth") (ELit (LInt 1)))) (EIf (EApp (EVar "isBracketCloseTok") (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "i"))) (EApp (EApp (EApp (EVar "eqGuardShapeFrom") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "-" (EVar "depth") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "eqGuardShapeFrom") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "depth")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))))
+(DTypeSig false "isLineEndTok" (TyFun (TyCon "Token") (TyCon "Bool")))
+(DFunDef false "isLineEndTok" ((PCon "TNewline")) (EVar "True"))
+(DFunDef false "isLineEndTok" ((PCon "TIndent")) (EVar "True"))
+(DFunDef false "isLineEndTok" ((PCon "TDedent")) (EVar "True"))
+(DFunDef false "isLineEndTok" ((PCon "TEof")) (EVar "True"))
+(DFunDef false "isLineEndTok" (PWild) (EVar "False"))
 (DTypeSig false "eqGuardShapeP" (TyApp (TyCon "Parser") (TyCon "Bool")))
 (DFunDef false "eqGuardShapeP" () (EApp (EVar "Parser") (ELam ((PVar "toks") (PVar "pos")) (EApp (EApp (EVar "POk") (EApp (EApp (EApp (EVar "eqGuardShapeFrom") (EVar "toks")) (EVar "pos")) (ELit (LInt 0)))) (EVar "pos")))))
 (DTypeSig false "parseGuard" (TyApp (TyCon "Parser") (TyCon "Guard")))
@@ -7933,19 +7972,14 @@ parseResultWith src tokList offList =
 (DFunDef false "firstMutIdx" ((PVar "toks") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "toks"))) (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 1))) (EIf (EBinOp "==" (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "i")) (EVar "TMut")) (EVar "i") (EIf (EVar "otherwise") (EApp (EApp (EVar "firstMutIdx") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "braceHasBarAtTop" (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
 (DFunDef false "braceHasBarAtTop" ((PVar "toks") (PVar "i") (PVar "depth")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "toks"))) (EVar "True") (EIf (EBinOp "==" (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "i")) (EVar "TEof")) (EVar "True") (EIf (EBinOp "&&" (EBinOp "==" (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "i")) (EVar "TPipe")) (EBinOp "==" (EVar "depth") (ELit (LInt 0)))) (EVar "True") (EIf (EBinOp "&&" (EBinOp "==" (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "i")) (EVar "TRBrace")) (EBinOp "==" (EVar "depth") (ELit (LInt 0)))) (EVar "False") (EIf (EApp (EVar "isBracketOpenTok") (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "i"))) (EApp (EApp (EApp (EVar "braceHasBarAtTop") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "+" (EVar "depth") (ELit (LInt 1)))) (EIf (EApp (EVar "isBracketCloseTok") (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "i"))) (EApp (EApp (EApp (EVar "braceHasBarAtTop") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "-" (EVar "depth") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "braceHasBarAtTop") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "depth")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))))
-(DTypeSig false "lineIsRecordBody" (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
-(DFunDef false "lineIsRecordBody" ((PVar "toks") (PVar "i") (PVar "depth")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "toks"))) (EVar "False") (EIf (EBinOp "&&" (EBinOp "==" (EVar "depth") (ELit (LInt 0))) (EApp (EVar "isLineEndTok") (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "i")))) (EVar "False") (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "depth") (ELit (LInt 0))) (EBinOp "==" (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "i")) (EVar "TEqual"))) (EBinOp "==" (EApp (EApp (EVar "peekTok") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "TLBrace"))) (EApp (EVar "not") (EApp (EApp (EApp (EVar "braceHasBarAtTop") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 2)))) (ELit (LInt 0)))) (EIf (EApp (EVar "isBracketOpenTok") (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "i"))) (EApp (EApp (EApp (EVar "lineIsRecordBody") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "+" (EVar "depth") (ELit (LInt 1)))) (EIf (EApp (EVar "isBracketCloseTok") (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "i"))) (EApp (EApp (EApp (EVar "lineIsRecordBody") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "-" (EVar "depth") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "lineIsRecordBody") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "depth")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))))
-(DTypeSig false "isLineEndTok" (TyFun (TyCon "Token") (TyCon "Bool")))
-(DFunDef false "isLineEndTok" ((PCon "TNewline")) (EVar "True"))
-(DFunDef false "isLineEndTok" ((PCon "TIndent")) (EVar "True"))
-(DFunDef false "isLineEndTok" ((PCon "TDedent")) (EVar "True"))
-(DFunDef false "isLineEndTok" ((PCon "TEof")) (EVar "True"))
-(DFunDef false "isLineEndTok" (PWild) (EVar "False"))
+(DTypeSig false "braceAfterEq" (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyCon "Int") (TyCon "Int"))))
+(DFunDef false "braceAfterEq" ((PVar "toks") (PVar "i")) (EIf (EBinOp "==" (EApp (EApp (EVar "peekTok") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "TLBrace")) (EBinOp "+" (EVar "i") (ELit (LInt 1))) (EIf (EBinOp "&&" (EApp (EVar "isLineEndTok") (EApp (EApp (EVar "peekTok") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (EBinOp "==" (EApp (EApp (EVar "peekTok") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 2)))) (EVar "TLBrace"))) (EBinOp "+" (EVar "i") (ELit (LInt 2))) (EIf (EVar "otherwise") (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 1))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "lineIsRecordBody" (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyCon "Bool"))))))
+(DFunDef false "lineIsRecordBody" ((PVar "toks") (PVar "i") (PVar "depth") (PVar "sawField")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "toks"))) (EVar "sawField") (EIf (EBinOp "&&" (EBinOp "==" (EVar "depth") (ELit (LInt 0))) (EApp (EVar "isLineEndTok") (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "i")))) (EVar "sawField") (EIf (EBinOp "&&" (EBinOp "==" (EVar "depth") (ELit (LInt 0))) (EBinOp "==" (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "i")) (EVar "TEqual"))) (EBlock (DoLet false false (PVar "b") (EApp (EApp (EVar "braceAfterEq") (EVar "toks")) (EVar "i"))) (DoExpr (EIf (EBinOp "<" (EVar "b") (ELit (LInt 0))) (EVar "False") (EApp (EVar "not") (EApp (EApp (EApp (EVar "braceHasBarAtTop") (EVar "toks")) (EBinOp "+" (EVar "b") (ELit (LInt 1)))) (ELit (LInt 0))))))) (EIf (EBinOp "&&" (EBinOp "==" (EVar "depth") (ELit (LInt 0))) (EBinOp "==" (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "i")) (EVar "TColon"))) (EApp (EApp (EApp (EApp (EVar "lineIsRecordBody") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "depth")) (EVar "True")) (EIf (EBinOp "&&" (EBinOp "==" (EVar "depth") (ELit (LInt 0))) (EBinOp "==" (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "i")) (EVar "TLBrace"))) (EApp (EApp (EApp (EApp (EVar "lineIsRecordBody") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "+" (EVar "depth") (ELit (LInt 1)))) (EApp (EVar "not") (EApp (EApp (EApp (EVar "braceHasBarAtTop") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (ELit (LInt 0))))) (EIf (EApp (EVar "isBracketOpenTok") (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "i"))) (EApp (EApp (EApp (EApp (EVar "lineIsRecordBody") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "+" (EVar "depth") (ELit (LInt 1)))) (EVar "sawField")) (EIf (EApp (EVar "isBracketCloseTok") (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "i"))) (EApp (EApp (EApp (EApp (EVar "lineIsRecordBody") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "-" (EVar "depth") (ELit (LInt 1)))) (EVar "sawField")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "lineIsRecordBody") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "depth")) (EVar "sawField")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))))))
+(DTypeSig false "recordHeadIdx" (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyCon "Int") (TyCon "Int"))))
+(DFunDef false "recordHeadIdx" ((PVar "toks") (PVar "i")) (EIf (EBinOp "||" (EBinOp "==" (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "i")) (EVar "TExport")) (EBinOp "==" (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "i")) (EVar "TPublic"))) (EApp (EApp (EVar "recordHeadIdx") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "i")) (EApp (EVar "TIdent") (ELit (LString "record")))) (EApp (EVar "isTUpperTok") (EApp (EApp (EVar "peekTok") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))))) (EApp (EApp (EApp (EApp (EVar "lineIsRecordBody") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 2)))) (ELit (LInt 0))) (EVar "False"))) (EVar "i") (EIf (EVar "otherwise") (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 1))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "firstRecordDeclIdx" (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyCon "Int"))))))
-(DFunDef false "firstRecordDeclIdx" ((PVar "toks") (PVar "i") (PVar "depth") (PVar "lineStart")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "toks"))) (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 1))) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EVar "lineStart") (EBinOp "==" (EVar "depth") (ELit (LInt 0)))) (EBinOp "==" (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "i")) (EApp (EVar "TIdent") (ELit (LString "record"))))) (EApp (EVar "isUpperTok") (EApp (EApp (EVar "peekTok") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))))) (EApp (EApp (EApp (EVar "lineIsRecordBody") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 2)))) (ELit (LInt 0)))) (EVar "i") (EIf (EBinOp "==" (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "i")) (EVar "TIndent")) (EApp (EApp (EApp (EApp (EVar "firstRecordDeclIdx") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "+" (EVar "depth") (ELit (LInt 1)))) (EVar "True")) (EIf (EBinOp "==" (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "i")) (EVar "TDedent")) (EApp (EApp (EApp (EApp (EVar "firstRecordDeclIdx") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "-" (EVar "depth") (ELit (LInt 1)))) (EVar "True")) (EIf (EBinOp "==" (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "i")) (EVar "TNewline")) (EApp (EApp (EApp (EApp (EVar "firstRecordDeclIdx") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "depth")) (EVar "True")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "firstRecordDeclIdx") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "depth")) (EVar "False")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))))
-(DTypeSig false "isUpperTok" (TyFun (TyCon "Token") (TyCon "Bool")))
-(DFunDef false "isUpperTok" ((PCon "TUpper" PWild)) (EVar "True"))
-(DFunDef false "isUpperTok" (PWild) (EVar "False"))
+(DFunDef false "firstRecordDeclIdx" ((PVar "toks") (PVar "i") (PVar "depth") (PVar "lineStart")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "toks"))) (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 1))) (EIf (EBinOp "&&" (EBinOp "&&" (EVar "lineStart") (EBinOp "==" (EVar "depth") (ELit (LInt 0)))) (EBinOp ">=" (EApp (EApp (EVar "recordHeadIdx") (EVar "toks")) (EVar "i")) (ELit (LInt 0)))) (EApp (EApp (EVar "recordHeadIdx") (EVar "toks")) (EVar "i")) (EIf (EBinOp "==" (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "i")) (EVar "TIndent")) (EApp (EApp (EApp (EApp (EVar "firstRecordDeclIdx") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "+" (EVar "depth") (ELit (LInt 1)))) (EVar "True")) (EIf (EBinOp "==" (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "i")) (EVar "TDedent")) (EApp (EApp (EApp (EApp (EVar "firstRecordDeclIdx") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "-" (EVar "depth") (ELit (LInt 1)))) (EVar "True")) (EIf (EBinOp "==" (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "i")) (EVar "TNewline")) (EApp (EApp (EApp (EApp (EVar "firstRecordDeclIdx") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "depth")) (EVar "True")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "firstRecordDeclIdx") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "depth")) (EVar "False")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))))
 (DTypeSig false "contextualKwName" (TyFun (TyCon "Token") (TyCon "String")))
 (DFunDef false "contextualKwName" ((PCon "TLet")) (ELit (LString "let")))
 (DFunDef false "contextualKwName" ((PCon "TRec")) (ELit (LString "rec")))

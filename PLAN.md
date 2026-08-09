@@ -226,10 +226,17 @@ after P0-5 (shares lexer/parser/desugar/eval).
 > files incl. sexp round-trip), STOP and surface it as a decision — do NOT silently leave an inert stub.
 > Each bite's gate: no dangling references, `medaka lint` clean, fixpoint C3a/C3b YES.
 > **⚠️ CORRECTED REMOVAL TARGET (learned on backtick 2026-07-10): the lexer TOKEN is KEPT as the
-> reserved-word HINT SENTINEL** (exactly as `TFunction`/`TRecord`/`TMut`/`TSlashEq` are kept). Delete the
+> reserved-word HINT SENTINEL** (exactly as `TFunction`/`TMut`/`TSlashEq` are kept). Delete the
 > **grammar production + AST node + downstream logic/desugar/emit**, and add a `firstXIdx` pre-grammar hint
 > scan on the token — do NOT chase `grep <TToken> = 0` (the token must survive for the hint). The success
 > signal is: the parser has no production for the construct + the construct yields the located hint.
+> ⚠️ **This rule has a COUNTEREXAMPLE, and it used to cite that counterexample as an example.** It listed
+> `TRecord` in the fence above until #62 deleted that token outright: keeping the token costs the WORD, and
+> `record` is a noun users want as a value, field, type and module name. Where the removed construct has a
+> positional discriminator, key the pre-scan on the construct's SHAPE and free the token
+> (`firstRecordDeclIdx`, `compiler/frontend/parser.mdk`, carries the never-valid-Medaka proof such a scan
+> owes). Keep the token only when there is NO such shape — which is exactly why `mut`/`function` still have
+> one (`keywordOrIdent`, `compiler/frontend/lexer.mdk`, records that split).
 
 **Record consolidation (added to this batch 2026-07-10 — see the `record`→`data` discussion above):**
 - **Bite A ✅ LANDED (`f441a796`):** `data X = { … }` name-omission sugar (single braced ctor ⇒ ctor named

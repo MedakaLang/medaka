@@ -493,9 +493,14 @@ separate `record` keyword — write `data X = { … }` (the constructor is named
 the type) or the explicit `data X = X { … }`.
 
 Because there is no keyword, **`record` is an ordinary identifier** (#62): it is
-legal as a value, a parameter, a field name, a type name, or a module name
-(`import record.*`). Only the removed *declaration* shape — `record Upper … =
-{ … }` — is still rejected, with a hint naming the `data` replacement.
+legal as a value, a parameter, a field name, a type name, an interface method,
+or a module name (`import record.*`). Only the removed *declaration* shapes are
+still rejected, with a hint naming the `data` replacement — see the
+shape-coverage list under "Reserved words / keywords" below for exactly which.
+
+⚠️ `docs/spec/language-design.md` still shows the removed brace-less `record`
+form as the product-type syntax. That section is stale; this file is ground
+truth for what the current binary accepts.
 
 ```medaka
 data Person = { name : String, age : Int }          -- record = single-ctor named data
@@ -865,9 +870,22 @@ fails:
    `P-PARSE`, not `P-RESERVED-KEYWORD` — these are removal errors, not
    reserved-identifier errors).
    The removed `record` **declaration** is diagnosed the same way, but by
-   `firstRecordDeclIdx`, which keys on the construct's SHAPE
-   (`record Upper … = { … }` with no `|` in the braces) rather than on the
-   word — which is exactly what lets the word itself be a name.
+   `firstRecordDeclIdx`, which keys on the construct's SHAPE rather than on the
+   word — which is exactly what lets the word itself be a name. Because it is
+   shape-keyed, its coverage is a defined set rather than "any `record`", and
+   that set is worth knowing. It fires on a top-level line starting
+   `record Upper` (after an `export`/`public` modifier) that then either
+
+   - has `= { … }` with **no `|`** in the braces — one line, or with the braces
+     indented below the `=`; or
+   - reaches the end of its logical line with **no `=` at all** — the brace-less
+     `record Person` / indented `name : String` form.
+
+   A `record`-headed line outside that set (say `record Foo = someExpr`) gets an
+   ordinary parse error, not the removal hint. That is the deliberate trade for
+   freeing the word: the scan must never claim a line that could be valid code,
+   and `record Foo = { r | x = 1 }` **is** valid — it defines a function named
+   `record`.
 3. **Contextual keywords** — `let`, `rec`, `if`, `then`, `else` are
    deliberately **absent** from `reservedIdentKeyword` because each is
    legitimately expected to follow a pattern in some position (`rec` after
