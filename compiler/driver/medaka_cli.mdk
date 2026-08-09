@@ -71,14 +71,12 @@ import frontend.desugar.{desugar}
 import frontend.resolve.{
   resolveModulesToHumane,
   resolveModulesToHumaneG,
-  resolveModulesToHumaneGF,
   resolveModulesToHumaneByPath,
 }
 import driver.loader.{
   LoadError,
   LoadMsg,
   LoadParseFailed,
-  loadProgramE,
   loadProgramFilesLocatedE,
   findProjectRoot,
   findProjectRootOrSelf,
@@ -1600,11 +1598,20 @@ typecheckGate allowInternal root input =
         -- and rendered by moduleLoadErrText.
         Ok tsrc => match parseResult tsrc
           Err e => TGErr (ppParseError tsrc input e)
-          Ok _ => match loadProgramE input roots
+          -- #186/#1360: load with `loadProgramFilesLocatedE`, exactly as
+          -- `runCheckCmd` and `runRunCmd` already do.  Plain `loadProgramE`
+          -- gave this gate BOTH halves of the misattribution at once: it parses
+          -- with placeholder-loc `parse` (every span collapses to 1:0) AND carries
+          -- no per-module path, so an imported module's resolve error printed as
+          -- `<entry>:1:0:` — wrong file AND wrong position.  The located loader
+          -- carries real spans and the modId → path map `pathMap` threads below.
+          Ok _ => match loadProgramFilesLocatedE (_ => None) input roots
             Err lerr => TGErr (moduleLoadErrText tsrc input stdlibDir lerr)
-            Ok mods =>
+            Ok modsWithPath =>
+              let mods = map dropModPath modsWithPath
+              let pathMap = map modIdToPath modsWithPath
               let trusted = projectTrustedMods input roots stdlibDir mods
-              typecheckGateRoute allowInternal trusted roots rsrc csrc tsrc input mods
+              typecheckGateRoute allowInternal trusted pathMap roots rsrc csrc tsrc input mods
 
 -- Route by module count.  A single loaded module (no non-core imports) runs the
 -- ACCURATE located check `medaka check` uses for single files — analyzeLocatedG
@@ -1642,8 +1649,8 @@ typecheckGate allowInternal root input =
 -- The elaborate + hadTypeErrors gate is KEPT behind it as belt-and-braces (it is the
 -- emit path's own view, and it is not a superset of nothing — a diagnostic only the
 -- emit elaboration can see still aborts before the emitter).
-typecheckGateRoute : Bool -> List String -> List String -> String -> String -> String -> String -> List (String, List Decl) -> <IO> TypecheckGate
-typecheckGateRoute allowInternal trusted _ rsrc csrc tsrc target [(mid, _)] =
+typecheckGateRoute : Bool -> List String -> List (String, String) -> List String -> String -> String -> String -> String -> List (String, List Decl) -> <IO> TypecheckGate
+typecheckGateRoute allowInternal trusted _ _ rsrc csrc tsrc target [(mid, _)] =
   -- Same fix as checkRoute's single-module arm: honour the caller-computed
   -- `trusted` (owning-root) signal here too, not just `--allow-internal`.
   let diags = analyzeLocatedG (allowInternal || contains mid trusted) rsrc csrc tsrc
@@ -1651,11 +1658,15 @@ typecheckGateRoute allowInternal trusted _ rsrc csrc tsrc target [(mid, _)] =
   match errs
     [] => TGOk (flatMap renderTripleWarnings (cohWarnTriples tsrc target diags))
     _ => TGErr (joinNl (map (ppDiagCliSrc tsrc target) errs))
-typecheckGateRoute allowInternal trusted roots rsrc csrc tsrc target mods =
+typecheckGateRoute allowInternal trusted pathMap roots rsrc csrc tsrc target mods =
   let rtD = desugar (parse rsrc)
   let coreD = desugar (parse csrc)
   let modsD = map desugarPair mods
-  let resDiags = resolveModulesToHumaneGF target allowInternal trusted rtD coreD modsD
+  -- #186/#1360: attribute each module's resolve errors to its OWN file, via the
+  -- loader's modId → path map — the SAME `resolveModulesToHumaneByPath` seam
+  -- `checkRoute` has used since #41.  The single `target` fallback this replaced
+  -- stamped EVERY imported module's error with the entry file's path.
+  let resDiags = resolveModulesToHumaneByPath pathMap allowInternal trusted rtD coreD modsD
   match resDiags
     "" => match locatedProjectDiags target roots rsrc csrc
       -- CHECK-STRENGTH gate: the located per-module ERROR diagnostics, identical to
@@ -1878,11 +1889,17 @@ runRunCmd argv =
             Err e =>
               let _ = ePutStrLn (ppParseError (readFileSafe target) target e)
               exit 1
-            Ok _ => match map (map dropModPath) (loadProgramFilesLocatedE (_ => None) target roots)
+            -- #186/#1360: keep the loader's per-module PATHS instead of dropping
+            -- them at the load site.  They were already being carried here and
+            -- discarded one line later, which is why every imported module's
+            -- resolve error had to fall back to the entry file's path.
+            Ok _ => match loadProgramFilesLocatedE (_ => None) target roots
               Err lerr =>
                 let _ = ePutStrLn (moduleLoadErrText (readFileSafe target) target stdlibDir lerr)
                 exit 1
-              Ok mods =>
+              Ok modsWithPath =>
+                let mods = map dropModPath modsWithPath
+                let pathMap = map modIdToPath modsWithPath
                 let rtD = desugar (parse rsrc)
                 let coreD = desugar (parse csrc)
                 let modsD = map desugarPair mods
@@ -1925,7 +1942,9 @@ runRunCmd argv =
                     -- panic, while `check` on the same program printed the real
                     -- located `No impl of Display for Foo`.  See typecheckGateRoute
                     -- for why this is not an over-rejection.
-                    let resDiags = resolveModulesToHumaneGF target allowInternal trusted rtD coreD modsD
+                    -- #186/#1360: per-module attribution via the loader's
+                    -- `pathMap`, the same seam `checkRoute` uses (#41).
+                    let resDiags = resolveModulesToHumaneByPath pathMap allowInternal trusted rtD coreD modsD
                     match resDiags
                       -- `locatedProjectDiags`, not `locatedProjectErrors`: the same
                       -- single `analyzeProject` pass, but keeping the WARNINGS the

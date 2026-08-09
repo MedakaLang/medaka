@@ -1,0 +1,9 @@
+interface Shape a where
+  area : a -> Float
+
+data Circle = Circle
+
+impl Shape Circle
+  area _ = 1.0
+
+main = println 1

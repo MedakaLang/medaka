@@ -1,5 +1,3 @@
 interface Foo a where m : a -> String
 
-useM = m
-
-main = println "x"
+main = println 1
