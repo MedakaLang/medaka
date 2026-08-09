@@ -46,7 +46,11 @@ for f in "$FIXDIR"/*.mdk; do
   [ -f "$f" ] || continue
   name="$(basename "$f")"
   golden="${f%.mdk}.eval.golden"
-  [ -f "$golden" ] || { echo "no golden for $name (run sh test/capture_goldens.sh)"; fail=$((fail+1)); continue; }
+  # ⚠️ `sh test/capture_goldens.sh` is a NO-OP for this corpus (#1241) — test/eval_fixtures/
+  # is a FROZEN dev-probe family (dev/eval_probe.exe, removed with OCaml); it is not a
+  # ROWS entry and has no `--frozen` tag (see test/capture_goldens.sh's "FROZEN families"
+  # list). There is no regeneration script.
+  [ -f "$golden" ] || { echo "no golden for $name — NO REGEN SCRIPT (FROZEN corpus); hand-derive the expected pp_value and write $golden yourself"; fail=$((fail+1)); continue; }
   ref="$(cat "$golden")"
   self="$("$RUN" "$f" 2>/dev/null | strip_unit)"
   if [ "$ref" = "$self" ]; then pass=$((pass+1)); printf 'ok   %s\n' "$name"

@@ -21,14 +21,34 @@
 # Phase 1 captured the eval_probe VALUE goldens — the largest A cluster:
 #   test/eval_fixtures/*.mdk  (20)   eval engine value oracle
 #
-# ⚠️ test/llvm_fixtures/*.mdk is NOT a driver-table row and never runs under a bare
-# `capture_goldens.sh` — its `.native.golden`s (renamed from `.eval.golden` by #559)
-# are the emitted program's RUNTIME STDOUT, so regenerating one means emit -> clang
-# -> link -> RUN, not a stage dump.
-# (A `test/llvm_fixtures/*.mdk (180)` row was advertised here for months after it was
+# ⚠️ CHECK THE SET, NOT ONE MEMBER (#1241): most `test/*_fixtures/` corpora are NOT
+# covered by this file, and a bare/tagged invocation SILENTLY writes nothing for an
+# uncovered one — no error, exit 0, "0 oracle failures" — which reads exactly like
+# success. Only three things in this file ever WRITE a golden:
+#   1. a `ROWS=` driver-table row (grep -n '^ROWS=' -A5 this file) — currently only
+#      eval_dict_fixtures / eval_typed_fixtures;
+#   2. an explicit `if want <tag>; then … fi` block with a body (grep -n '^if want '
+#      this file) — currently only `eval_modules` and `repl`;
+#   3. an opt-in `--frozen <tag>` arm in the FROZEN_TAG case (grep -n '^  [a-z_]*)$'
+#      this file, or just read the `--frozen` usage line above) — currently `fmt`,
+#      `printer`, `boot_typecheck`, `selfproc_legA`, `llvm_eval`, `build_construct`,
+#      `native_cli`.
+# EVERY OTHER corpus this file's comments describe as "FROZEN" (eval, eval_prelude,
+# eval_list, eval_typed_modules, tcmod, tc_probe, diag_analyze, analyze_project,
+# new, build_diff, selfproc's lex/parse/tc probes, …) has NO regenerator here at
+# all — most because their OCaml dev-probe oracle was removed with OCaml and never
+# had a native replacement written. Before trusting "run sh test/capture_goldens.sh
+# [tag]" from ANY gate's own error message, verify the tag is one of the three
+# groups above; if it isn't, that gate's message is stale (file it, and hand-derive
+# the golden per that gate's own header comment instead).
+#
+# `test/llvm_fixtures/*.mdk` is the original instance of this trap (a
+# `test/llvm_fixtures/*.mdk (180)` row was advertised here for months after it was
 # deleted in 6869cc8d, so the documented "capture a golden" recipe silently did
-# NOTHING for the one corpus you add an emitter fixture to.)  It now has a real,
-# supported regenerator — an opt-in FROZEN family:
+# NOTHING for the one corpus you add an emitter fixture to) — its `.native.golden`s
+# (renamed from `.eval.golden` by #559) are the emitted program's RUNTIME STDOUT, so
+# regenerating one means emit -> clang -> link -> RUN, not a stage dump. It now has
+# a real, supported regenerator, group 3 above:
 #
 #   sh test/capture_goldens.sh --frozen llvm_eval
 #
