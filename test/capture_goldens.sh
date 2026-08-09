@@ -22,17 +22,32 @@
 #   test/eval_fixtures/*.mdk  (20)   eval engine value oracle
 #
 # ⚠️ CHECK THE SET, NOT ONE MEMBER (#1241): most `test/*_fixtures/` corpora are NOT
-# covered by this file, and a bare/tagged invocation SILENTLY writes nothing for an
-# uncovered one — no error, exit 0, "0 oracle failures" — which reads exactly like
-# success. Only three things in this file ever WRITE a golden:
+# covered by this file. What happens for an uncovered one depends on whether you
+# passed a tag:
+#   * BARE (`sh test/capture_goldens.sh`, or a tag that happens to prefix-match
+#     "eval" — see the `want()` trap noted further down): SILENT no-op for any
+#     uncovered corpus — no error, exit 0, "0 oracle failures" — indistinguishable
+#     from success. This is the #1241 shape.
+#   * an UNKNOWN TAG that matches no row/want-block/`--frozen` arm at all: LOUD —
+#     the ROWS-preflight block below refuses with "MISSING ORACLE BINARIES" for a
+#     recognized-but-unbuilt tag, and an unrecognized filter that matches zero
+#     fixtures is caught at the bottom of this file ("ERROR: filter '<tag>' matched
+#     ZERO fixtures — 0 goldens written, this is NOT a bless", exit 2). A gate
+#     recipe naming a dead TAG (e.g. `capture_goldens.sh build_diff`) is still a
+#     dead recipe — it just fails loudly instead of silently — so both shapes are
+#     worth fixing at the gate, only one of them is #1241's silent-success trap.
+# Only three things in this file ever WRITE a golden:
 #   1. a `ROWS=` driver-table row (grep -n '^ROWS=' -A5 this file) — currently only
 #      eval_dict_fixtures / eval_typed_fixtures;
 #   2. an explicit `if want <tag>; then … fi` block with a body (grep -n '^if want '
 #      this file) — currently only `eval_modules` and `repl`;
-#   3. an opt-in `--frozen <tag>` arm in the FROZEN_TAG case (grep -n '^  [a-z_]*)$'
-#      this file, or just read the `--frozen` usage line above) — currently `fmt`,
-#      `printer`, `boot_typecheck`, `selfproc_legA`, `llvm_eval`, `build_construct`,
-#      `native_cli`.
+#   3. an opt-in `--frozen <tag>` arm in the FROZEN_TAG case — DERIVE this, don't
+#      trust a list here (the `--frozen` usage/error strings elsewhere in this file
+#      say `printer` is valid; it has no case arm and falls through to "unknown
+#      --frozen tag", exit 2):
+#        grep -nE '^    [A-Za-z_]+\)$' test/capture_goldens.sh
+#      — currently `fmt`, `selfproc_legA`, `boot_typecheck`, `llvm_eval`,
+#      `build_construct`, `native_cli`.
 # EVERY OTHER corpus this file's comments describe as "FROZEN" (eval, eval_prelude,
 # eval_list, eval_typed_modules, tcmod, tc_probe, diag_analyze, analyze_project,
 # new, build_diff, selfproc's lex/parse/tc probes, …) has NO regenerator here at
@@ -41,6 +56,13 @@
 # [tag]" from ANY gate's own error message, verify the tag is one of the three
 # groups above; if it isn't, that gate's message is stale (file it, and hand-derive
 # the golden per that gate's own header comment instead).
+#
+# ⚠️ `want()`'s FILTER match is a PREFIX-OF-"eval" check, not a tag match: `case
+# "eval" in "$FILTER"*)`. Any FILTER that is itself a prefix of the literal string
+# "eval" — "e", "ev", "eva", "eval" — makes want() return true UNCONDITIONALLY,
+# enabling every `if want <tag>` block (repl, eval_modules) regardless of what tag
+# you actually meant. `sh test/capture_goldens.sh e` silently also (re)writes the
+# repl and eval_modules goldens, not just an "eval*"-named corpus.
 #
 # `test/llvm_fixtures/*.mdk` is the original instance of this trap (a
 # `test/llvm_fixtures/*.mdk (180)` row was advertised here for months after it was

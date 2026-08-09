@@ -49,8 +49,11 @@ for d in "$FIXDIR"/*/; do
   [ -n "$entry" ] || { echo "skip $name (no root_*.mdk / main_*.mdk entry)"; continue; }
 
   # OCaml-free (REROOT-PLAN §2b): the oracle JSON is the committed
-  # <dir>/oracle.json captured from `medaka check --json` by capture_goldens.sh;
-  # the self-hosted analyzeProject runs as the native diagnostics_project_main.
+  # <dir>/oracle.json, originally captured from the OCaml `medaka check --json`
+  # oracle while OCaml was trusted (capture_goldens.sh's "analyze_project
+  # fixtures" comment) — NOT regenerable via `capture_goldens.sh` today, see the
+  # NO REGEN SCRIPT comment at the `[ -f "$golden" ]` check below. The
+  # self-hosted analyzeProject runs as the native diagnostics_project_main.
   golden="$root/oracle.json"
   # ⚠️ `sh test/capture_goldens.sh analyze_project` is a NO-OP for this corpus —
   # analyze_project fixtures are FROZEN (test/capture_goldens.sh has no

@@ -3,9 +3,11 @@
 #
 # OCaml-free (REROOT-PLAN §2c): native host test/bin/new_main scaffolds a project
 # tree in a temp dir; the reference is a committed golden tree under
-# test/new_golden/myapp captured from `main.exe new myapp`
-# (test/capture_goldens.sh new).  Diffs the produced tree (file list + byte content)
-# vs the golden.  Cleans up on success; leaves the temp dir on failure.
+# test/new_golden/myapp, originally captured from `main.exe new myapp` while
+# OCaml was trusted. ⚠️ `test/capture_goldens.sh new` is NOT a working recipe
+# today — see the NO REGEN SCRIPT comment at the `[ -d "$GOLD" ]` check below.
+# Diffs the produced tree (file list + byte content) vs the golden.  Cleans up
+# on success; leaves the temp dir on failure.
 set -e
 set -u
 
