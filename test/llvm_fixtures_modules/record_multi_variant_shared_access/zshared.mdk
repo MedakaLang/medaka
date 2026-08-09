@@ -1,0 +1,18 @@
+-- The declaration half of #1469's pin.  `Shared` has two named-field constructors that
+-- AGREE on every offset — the shape `T-FIELD-VARIANT-CONFLICT` deliberately leaves
+-- legal, because the LLVM backend emits one constant slot index and the choice of stamp
+-- is unobservable there.
+--
+-- On WasmGC it is observable: a record is a `struct` type PER CONSTRUCTOR and
+-- `emitFieldAccessRef` (`compiler/backend/wasm_emit.mdk`) emits
+-- `ref.cast (ref $C_<ctor>)` + `struct.get`, so casting an `SB` value to `SA`'s struct
+-- type is illegal whatever the layouts are.
+public export data Shared =
+  | SA { sx : Int, sy : Int }
+  | SB { sx : Int, sy : Int }
+
+export mkSA : Shared
+mkSA = SA { sx = 1, sy = 2 }
+
+export mkSB : Shared
+mkSB = SB { sx = 3, sy = 4 }

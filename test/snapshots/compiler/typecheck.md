@@ -1,5 +1,5 @@
 # META
-source_lines=24479
+source_lines=24529
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted typecheck stage — port of lib/typecheck.ml's HM core.  SLICE 1:
@@ -6576,39 +6576,84 @@ resolveFieldRecordPick te fname = match headTyconNameMono te
 -- single constructor, DO NOT STAMP ONE.  Reject with `T-FIELD-VARIANT-CONFLICT`
 -- and tell the user to match on the constructor.
 --
--- 🚨 THERE IS NO "THE OFFSETS AGREE, SO THE STAMP IS IMMATERIAL" EXEMPTION, AND
--- THE FIRST CUT OF THIS GUARD HAD ONE.  It rejected only when two constructors
--- put the field at DIFFERENT offsets, on the argument that when they agree every
--- admissible stamp emits the same `loadField`.  That argument is TRUE OF THE LLVM
--- BACKEND AND FALSE OF WasmGC, and CI is where it broke: `gates (engines)` went
--- red on a fixture whose two constructors agree on every offset.
+-- 🚨 THIS GUARD IS A DELIBERATE STATIC OVER-APPROXIMATION OF AN UNDECIDABLE
+-- PROPERTY, AND SAYING SO IS LOAD-BEARING — TWO ROUNDS OF THIS PR CLAIMED IT WAS
+-- SOMETHING SHARPER AND BOTH CLAIMS WERE MEASURED FALSE.  What actually decides
+-- whether a program is right is *which constructor reaches the access at run
+-- time*, and typecheck cannot see that.  22 programs were built and executed on
+-- BOTH shipping backends, cold, on the merge base; the discriminator is perfect
+-- and it is pure dataflow:
 --
--- WHY, and it is not a wasm bug of the kind that can be waited out: on WasmGC a
--- record is a `struct` type PER CONSTRUCTOR, so the stamp names a TYPE and the
--- access is a cast followed by `struct.get`.  Offsets are irrelevant there —
--- casting a `B` value to `A`'s struct type is illegal whatever the layouts are.
--- MEASURED, both engines, on a cold build of the merge base AND of this branch
--- (so it is neither introduced nor drained by this PR):
+--     only ONE constructor of the type ever reaches the access  -> both backends CORRECT
+--     TWO OR MORE constructors reach it                         -> native wrong (or SIGSEGV),
+--                                                                  WasmGC `illegal cast`
 --
---     shape                                          native      WasmGC
---     |PA{px,py}|PB{px,py,pz}| , mkA.px and mkB.px    pa=1,2 …    trap: illegal cast
---     |PA{px,py}|PB{px,py}|    , same, equal arity    p=1,3       trap: illegal cast
---     |A{x}|B{x}|              , IDENTICAL fields     t=1,2       trap: illegal cast
---     …the same, with only the STAMPED ctor selected  t=1         t=1        (ok)
+-- Two programs that differ only in that respect are IDENTICAL to every test this
+-- seam can perform:
 --
--- The third row is `test/references_fixtures/dup_field_def/`'s own `getX t = t.x`:
--- it was never a "live cell proving the exemption safe", it was a program that
--- worked on one of the two shipping backends.  So the rule is uniform — a
--- selection must name ONE constructor — and it is the rule that is sound on
--- BOTH backends rather than on whichever one the reader had in mind.
+--     |A{x,y}|B{x,y,z}| , B built and consumed by `match`, only A projected  -> correct
+--     |A{x}|B{x}|       , both built, BOTH projected                         -> wasm traps
+--
+-- Same declarations, same field names, same offsets; different answer.  **So the
+-- divergent set is NOT statically characterizable at this seam.**  Any rule here
+-- is an approximation, and the only question is which errors it makes.
+--
+-- ⚠️ SO THE RULE IS SCOPED TO THE JOB THIS PR OWES, NOT TO "REJECT EVERYTHING
+-- BROKEN" — WHICH IT CANNOT DO.  #1455's Q-IDENT selection makes a set of
+-- programs REACHABLE that a spurious `Type mismatch` used to turn away; where
+-- those programs are miscompiled, loud → silent is a severity INCREASE and this
+-- PR must not cause it.  Every such program has the receiver's field at DIFFERENT
+-- offsets in two constructors — that is what the LLVM backend gets wrong, since
+-- it emits one constant `loadField <idx>` — so the offset test is the EXACT
+-- characterization of the newly-reachable damage, not a proxy for it.  Rejecting
+-- more than that buys nothing this PR owes and costs working programs (below).
+--
+-- 🚨 THE COST OF GOING WIDER, MEASURED — THIS IS WHY THE "A SIBLING DECLARES THE
+-- FIELD AT ALL" RULE WAS RETRACTED.  Round 3 of this PR dropped the offset test
+-- on the argument that WasmGC casts rather than offsets, so an identical layout
+-- is no protection.  The MECHANISM is true (`emitFieldAccessRef`,
+-- `backend/wasm_emit.mdk`, emits `ref.cast (ref $C_<ctor>)`), but the conclusion
+-- drawn from it — "so nothing in that class works on both backends" — is false.
+-- MEASURED on a cold build of the merge base, native binary AND WasmGC:
+--
+--     shape                                                    native   WasmGC
+--     |A{x,y}|B{x,y}| , only A built, only A projected          t=1,2    t=1,2   ok
+--     |A{x,y}|B{x,y}| , only B built, only B projected          t=1,2    t=1,2   ok
+--     |A{x,y}|B{x,y,z}| , B `match`ed, only A projected         t=1,2    t=1,2   ok
+--     |Dev{host,port}|Prod{host,port,tls}| , defaultDev.host    ok       ok      ok
+--     record UPDATE `{ mkA | x = 5 }` on |A{x,y}|B{x,y}|        u=5      u=5     ok
+--     |A{x}|B{x}| , both built, BOTH projected                  t=1,2    TRAP
+--
+-- Five working programs for one trapping one — and the first four are an ordinary
+-- programming pattern, not a coincidence: `recFieldsRef`/`recByName` are built
+-- from CONSTRUCTION sites, so when the stamped constructor is never constructed
+-- the emitters fall through to the label search and land on the one that is.
+-- Rejecting that class is over-rejection, and `docs`-side it exceeded the scope
+-- the owner accepted (which reserved the offset-agreeing case as legal).
+--
+-- ⚠️ WHAT IS THEREFORE LEFT ACCEPTED AND STILL BROKEN, FILED NOT HIDDEN.  This
+-- guard is incomplete on purpose, in two named directions:
+--   * **#1469** — the offset-AGREEING class where two constructors do reach the
+--     access: native is correct, WasmGC traps `illegal cast`.  Pre-existing on
+--     both arms, pinned by `test/llvm_fixtures_modules/record_multi_variant_
+--     shared_access/` + its `test/engine_divergence.txt` row.
+--   * **#1468** — a sibling that declares a DIFFERENT field name is not a rival
+--     at all, so `data T = |A{x}|B{z}|; t.x` is accepted and reads `B`'s slot 0
+--     (a wrong `Int`, or a heap address printed as an `Int`).  Pre-existing on
+--     both arms, pinned in `test/must_fail_fixtures/`.
+-- Neither is introduced or drained by this PR.  **The refused set is NOT the set
+-- the backends disagree about** — an earlier draft of this comment said it was,
+-- and that sentence is what #1468 falsifies.
 --
 -- ⚠️ SINGLE-CONSTRUCTOR RECORD TYPES ARE UNAFFECTED, which is what keeps this
 -- from being a blanket ban on `.field`: `data X = { … }` and
 -- `data T = | C { … }` have exactly one named-field constructor, so the stamp IS
--- the runtime constructor, always.  What is refused is exactly the set the two
--- backends disagree about.  `frontend/ast.mdk`'s `Decl` shares `pub` and
+-- the runtime constructor, always.  `frontend/ast.mdk`'s `Decl` shares `pub` and
 -- `methods` between `DInterface` and `DImpl` and is unaffected too — because
 -- nothing in `compiler/` SELECTS either one; they are only ever matched.
+--
+-- The end state that retires this guard entirely is **#1465** (tag-dispatched
+-- field selectors in both backends), which the diagnostic's `help` names.
 stampableFieldRecord : Mono -> String -> Option (String, RecordInfo) -> Option (String, RecordInfo)
 stampableFieldRecord _ _ None = None
 stampableFieldRecord te fname (Some (rname, ri)) = match fieldRivalCtor te fname rname ri
@@ -6617,28 +6662,31 @@ stampableFieldRecord te fname (Some (rname, ri)) = match fieldRivalCtor te fname
     let _ = pushTypeErrorHelpFixAt "T-FIELD-VARIANT-CONFLICT" currentLoc.value (fieldVariantConflictMsg fname tyname rname rival mine other) (fieldVariantConflictHelp fname rname) None
     None
 
--- TWO MESSAGES, ONE CODE.  Both are the same judgement — "the receiver's type
--- does not name one constructor, so there is nothing to stamp" — and both have
--- the same remedy, so they share `T-FIELD-VARIANT-CONFLICT` (the precedent is
--- `T-AMBIGUOUS-INSTANCE`, which carries two messages for one judgement).  They
--- differ because the DIFFERING-OFFSET case can say something sharper, and saying
--- it is most of what makes the diagnostic actionable.
+-- ONE MESSAGE, and it NAMES THE TWO POSITIONS, because the positions are the
+-- defect: the emitted access is a single constant-offset load and the receiver's
+-- type admits two different offsets for `fname`.  Re-ordering one constructor's
+-- fields to agree really does make the program legal again, so the message must
+-- say which positions disagree or the reader cannot act on it.
 fieldVariantConflictMsg : String -> String -> String -> String -> Int -> Int -> String
-fieldVariantConflictMsg fname tyname mineName rivalName mine other
-  | mine == other = "Field '\{fname}' is declared by more than one of '\{tyname}''s constructors ('\{mineName}' and '\{rivalName}'). A '.\{fname}' is resolved by the receiver's TYPE, which does not say which constructor built the value, so there is no one field to use here"
-  | otherwise = "Field '\{fname}' sits at a different position in each of '\{tyname}''s constructors: '\{mineName}' declares it at position \{intToString (mine + 1)}, '\{rivalName}' at position \{intToString (other + 1)}. A '.\{fname}' is resolved by the receiver's TYPE, which does not say which constructor built the value, so there is no one field to use here"
+fieldVariantConflictMsg fname tyname mineName rivalName mine other = "Field '\{fname}' sits at a different position in each of '\{tyname}''s constructors: '\{mineName}' declares it at position \{intToString (mine + 1)}, '\{rivalName}' at position \{intToString (other + 1)}. A '.\{fname}' is resolved by the receiver's TYPE, which does not say which constructor built the value, so there is no one slot to load here"
 
+-- The `help` names BOTH remedies that exist today and the issue that owns the
+-- end state (#1465 — tag-dispatched selectors in both backends, which retires
+-- this diagnostic).  `match` is the portable one; re-ordering the fields so every
+-- constructor agrees is the local one, and it works precisely because the offset
+-- is what this rule tests.
 fieldVariantConflictHelp : String -> String -> String
-fieldVariantConflictHelp fname mineName =
-  "match on the constructor instead (e.g. '\{mineName} { \{fname} = x } => x')"
+fieldVariantConflictHelp fname mineName = "match on the constructor instead (e.g. '\{mineName} { \{fname} = x } => x'), or declare '\{fname}' at the same position in every constructor. Tracked as #1465 (tag-dispatched field selectors)"
 
--- Is there a SIBLING constructor of the receiver's own type that also declares
--- `fname`?  Returns its key and both offsets, so the message can name them.
+-- Is there a SIBLING constructor of the receiver's own type that declares
+-- `fname` AT A DIFFERENT POSITION?  Returns its key and both offsets, so the
+-- message can name them.
 --
--- ⚠️ THE OFFSETS ARE FOR THE MESSAGE, NOT FOR THE DECISION.  An earlier cut used
--- them to decide (equal offsets => no rival), which is the exemption the 🚨 note
--- at `stampableFieldRecord` retracts: WasmGC casts to the stamped constructor's
--- struct type, so a rival with an IDENTICAL layout traps just the same.
+-- ⚠️ THE OFFSETS ARE THE DECISION, AND ROUND 3 OF THIS PR REMOVED THEM AND HAD TO
+-- PUT THEM BACK.  Removing the test rejects `|A{x,y}|B{x,y}|` and
+-- `|Dev{host,port}|Prod{host,port,tls}|` — measured correct on BOTH shipping
+-- backends — for one trapping shape it catches.  See the 🚨 cost table at
+-- `stampableFieldRecord`, and #1469 for what stays accepted and wasm-broken.
 --
 -- ⚠️ IT ANSWERS `None` UNLESS THE SELECTED RECORD IS THE RECEIVER'S OWN
 -- DECLARATION.  Arm (c) deliberately hands back a foreign key for a concrete
@@ -6756,12 +6804,14 @@ fieldRivalCtorGo rk fname rname mine (c::rest)
     None => fieldRivalCtorGo rk fname rname mine rest
     Some ri2 => match fieldOffsetIn fname (recordFieldNames ri2)
       None => fieldRivalCtorGo rk fname rname mine rest
-      -- ⚠️ NO `if other == mine then keep looking` HERE.  That line was the
-      -- offset-agreement exemption, and it is what put `gates (engines)` red:
-      -- WasmGC casts to the stamped constructor's struct TYPE, so an identical
-      -- layout is no protection.  A sibling that declares the field AT ALL is a
-      -- rival; the offsets ride along only so the message can be sharper.
-      Some other => Some (c, mine, other)
+      -- ⚠️ A SIBLING THAT AGREES ON THE OFFSET IS NOT A RIVAL, AND THE WALK MUST
+      -- KEEP LOOKING RATHER THAN STOP — a type may have three constructors, two
+      -- agreeing and one not.  Returning `None` at the first agreeing sibling
+      -- would hide the third.  (Round 3 removed this test altogether; the cost
+      -- table at `stampableFieldRecord` is why it is back.)
+      Some other =>
+        if other == mine then fieldRivalCtorGo rk fname rname mine rest
+        else Some (c, mine, other)
 
 -- The field's POSITIONAL offset in a record's declaration-order field list —
 -- the number both emitters compute from the stamp (`indexOfStr label labels`,
@@ -25718,9 +25768,9 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "stampableFieldRecord" (PWild PWild (PCon "None")) (EVar "None"))
 (DFunDef false "stampableFieldRecord" ((PVar "te") (PVar "fname") (PCon "Some" (PTuple (PVar "rname") (PVar "ri")))) (EMatch (EApp (EApp (EApp (EApp (EVar "fieldRivalCtor") (EVar "te")) (EVar "fname")) (EVar "rname")) (EVar "ri")) (arm (PCon "None") () (EApp (EVar "Some") (ETuple (EVar "rname") (EVar "ri")))) (arm (PCon "Some" (PTuple (PVar "tyname") (PVar "rival") (PVar "mine") (PVar "other"))) () (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "pushTypeErrorHelpFixAt") (ELit (LString "T-FIELD-VARIANT-CONFLICT"))) (EFieldAccess (EVar "currentLoc") "value")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "fieldVariantConflictMsg") (EVar "fname")) (EVar "tyname")) (EVar "rname")) (EVar "rival")) (EVar "mine")) (EVar "other"))) (EApp (EApp (EVar "fieldVariantConflictHelp") (EVar "fname")) (EVar "rname"))) (EVar "None"))) (DoExpr (EVar "None"))))))
 (DTypeSig false "fieldVariantConflictMsg" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String"))))))))
-(DFunDef false "fieldVariantConflictMsg" ((PVar "fname") (PVar "tyname") (PVar "mineName") (PVar "rivalName") (PVar "mine") (PVar "other")) (EIf (EBinOp "==" (EVar "mine") (EVar "other")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Field '")) (EApp (EVar "display") (EVar "fname"))) (ELit (LString "' is declared by more than one of '"))) (EApp (EVar "display") (EVar "tyname"))) (ELit (LString "''s constructors ('"))) (EApp (EVar "display") (EVar "mineName"))) (ELit (LString "' and '"))) (EApp (EVar "display") (EVar "rivalName"))) (ELit (LString "'). A '."))) (EApp (EVar "display") (EVar "fname"))) (ELit (LString "' is resolved by the receiver's TYPE, which does not say which constructor built the value, so there is no one field to use here"))) (EIf (EVar "otherwise") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Field '")) (EApp (EVar "display") (EVar "fname"))) (ELit (LString "' sits at a different position in each of '"))) (EApp (EVar "display") (EVar "tyname"))) (ELit (LString "''s constructors: '"))) (EApp (EVar "display") (EVar "mineName"))) (ELit (LString "' declares it at position "))) (EApp (EVar "display") (EApp (EVar "intToString") (EBinOp "+" (EVar "mine") (ELit (LInt 1)))))) (ELit (LString ", '"))) (EApp (EVar "display") (EVar "rivalName"))) (ELit (LString "' at position "))) (EApp (EVar "display") (EApp (EVar "intToString") (EBinOp "+" (EVar "other") (ELit (LInt 1)))))) (ELit (LString ". A '."))) (EApp (EVar "display") (EVar "fname"))) (ELit (LString "' is resolved by the receiver's TYPE, which does not say which constructor built the value, so there is no one field to use here"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "fieldVariantConflictMsg" ((PVar "fname") (PVar "tyname") (PVar "mineName") (PVar "rivalName") (PVar "mine") (PVar "other")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Field '")) (EApp (EVar "display") (EVar "fname"))) (ELit (LString "' sits at a different position in each of '"))) (EApp (EVar "display") (EVar "tyname"))) (ELit (LString "''s constructors: '"))) (EApp (EVar "display") (EVar "mineName"))) (ELit (LString "' declares it at position "))) (EApp (EVar "display") (EApp (EVar "intToString") (EBinOp "+" (EVar "mine") (ELit (LInt 1)))))) (ELit (LString ", '"))) (EApp (EVar "display") (EVar "rivalName"))) (ELit (LString "' at position "))) (EApp (EVar "display") (EApp (EVar "intToString") (EBinOp "+" (EVar "other") (ELit (LInt 1)))))) (ELit (LString ". A '."))) (EApp (EVar "display") (EVar "fname"))) (ELit (LString "' is resolved by the receiver's TYPE, which does not say which constructor built the value, so there is no one slot to load here"))))
 (DTypeSig false "fieldVariantConflictHelp" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
-(DFunDef false "fieldVariantConflictHelp" ((PVar "fname") (PVar "mineName")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "match on the constructor instead (e.g. '")) (EApp (EVar "display") (EVar "mineName"))) (ELit (LString " { "))) (EApp (EVar "display") (EVar "fname"))) (ELit (LString " = x } => x')"))))
+(DFunDef false "fieldVariantConflictHelp" ((PVar "fname") (PVar "mineName")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "match on the constructor instead (e.g. '")) (EApp (EVar "display") (EVar "mineName"))) (ELit (LString " { "))) (EApp (EVar "display") (EVar "fname"))) (ELit (LString " = x } => x'), or declare '"))) (EApp (EVar "display") (EVar "fname"))) (ELit (LString "' at the same position in every constructor. Tracked as #1465 (tag-dispatched field selectors)"))))
 (DTypeSig false "fieldRivalCtor" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "RecordInfo") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Int") (TyCon "Int"))))))))
 (DFunDef false "fieldRivalCtor" ((PVar "te") (PVar "fname") (PVar "rname") (PVar "ri")) (EBlock (DoLet false false (PVar "rk") (EApp (EVar "headTyconMono") (EVar "te"))) (DoExpr (EIf (EApp (EVar "not") (EApp (EApp (EVar "recordInfoIsReceiverDecl") (EVar "rk")) (EVar "ri"))) (EVar "None") (EIf (EApp (EVar "not") (EApp (EVar "fieldHasRivalOwners") (EVar "fname"))) (EVar "None") (EMatch (EApp (EApp (EVar "fieldOffsetIn") (EVar "fname")) (EApp (EVar "recordFieldNames") (EVar "ri"))) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "mine")) () (EApp (EApp (EApp (EApp (EApp (EVar "fieldRivalCtorOfType") (EApp (EVar "headTyconNameMono") (EVar "te"))) (EVar "rk")) (EVar "fname")) (EVar "rname")) (EVar "mine")))))))))
 (DTypeSig false "fieldRivalCtorOfType" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "HeadKey")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Int") (TyCon "Int")))))))))
@@ -25732,7 +25782,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "fieldHasRivalOwners" ((PVar "fname")) (EMatch (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "fname")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "fieldOwnersRef") "value"))) (arm (PList) () (EVar "False")) (arm (PList PWild) () (EVar "False")) (arm PWild () (EVar "True"))))
 (DTypeSig false "fieldRivalCtorGo" (TyFun (TyApp (TyCon "Option") (TyCon "HeadKey")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Int")))))))))
 (DFunDef false "fieldRivalCtorGo" (PWild PWild PWild PWild (PList)) (EVar "None"))
-(DFunDef false "fieldRivalCtorGo" ((PVar "rk") (PVar "fname") (PVar "rname") (PVar "mine") (PCons (PVar "c") (PVar "rest"))) (EIf (EBinOp "==" (EVar "c") (EVar "rname")) (EApp (EApp (EApp (EApp (EApp (EVar "fieldRivalCtorGo") (EVar "rk")) (EVar "fname")) (EVar "rname")) (EVar "mine")) (EVar "rest")) (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "recordForKeyAndReceiver") (EVar "rk")) (EVar "c")) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EVar "fieldRivalCtorGo") (EVar "rk")) (EVar "fname")) (EVar "rname")) (EVar "mine")) (EVar "rest"))) (arm (PCon "Some" (PVar "ri2")) () (EMatch (EApp (EApp (EVar "fieldOffsetIn") (EVar "fname")) (EApp (EVar "recordFieldNames") (EVar "ri2"))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EVar "fieldRivalCtorGo") (EVar "rk")) (EVar "fname")) (EVar "rname")) (EVar "mine")) (EVar "rest"))) (arm (PCon "Some" (PVar "other")) () (EApp (EVar "Some") (ETuple (EVar "c") (EVar "mine") (EVar "other"))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "fieldRivalCtorGo" ((PVar "rk") (PVar "fname") (PVar "rname") (PVar "mine") (PCons (PVar "c") (PVar "rest"))) (EIf (EBinOp "==" (EVar "c") (EVar "rname")) (EApp (EApp (EApp (EApp (EApp (EVar "fieldRivalCtorGo") (EVar "rk")) (EVar "fname")) (EVar "rname")) (EVar "mine")) (EVar "rest")) (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "recordForKeyAndReceiver") (EVar "rk")) (EVar "c")) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EVar "fieldRivalCtorGo") (EVar "rk")) (EVar "fname")) (EVar "rname")) (EVar "mine")) (EVar "rest"))) (arm (PCon "Some" (PVar "ri2")) () (EMatch (EApp (EApp (EVar "fieldOffsetIn") (EVar "fname")) (EApp (EVar "recordFieldNames") (EVar "ri2"))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EVar "fieldRivalCtorGo") (EVar "rk")) (EVar "fname")) (EVar "rname")) (EVar "mine")) (EVar "rest"))) (arm (PCon "Some" (PVar "other")) () (EIf (EBinOp "==" (EVar "other") (EVar "mine")) (EApp (EApp (EApp (EApp (EApp (EVar "fieldRivalCtorGo") (EVar "rk")) (EVar "fname")) (EVar "rname")) (EVar "mine")) (EVar "rest")) (EApp (EVar "Some") (ETuple (EVar "c") (EVar "mine") (EVar "other")))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "fieldOffsetIn" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Int")))))
 (DFunDef false "fieldOffsetIn" ((PVar "fname") (PVar "names")) (EApp (EApp (EApp (EVar "fieldOffsetInGo") (EVar "fname")) (EVar "names")) (ELit (LInt 0))))
 (DTypeSig false "fieldOffsetInGo" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int"))))))
@@ -30311,9 +30361,9 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "stampableFieldRecord" (PWild PWild (PCon "None")) (EVar "None"))
 (DFunDef false "stampableFieldRecord" ((PVar "te") (PVar "fname") (PCon "Some" (PTuple (PVar "rname") (PVar "ri")))) (EMatch (EApp (EApp (EApp (EApp (EVar "fieldRivalCtor") (EVar "te")) (EVar "fname")) (EVar "rname")) (EVar "ri")) (arm (PCon "None") () (EApp (EVar "Some") (ETuple (EVar "rname") (EVar "ri")))) (arm (PCon "Some" (PTuple (PVar "tyname") (PVar "rival") (PVar "mine") (PVar "other"))) () (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "pushTypeErrorHelpFixAt") (ELit (LString "T-FIELD-VARIANT-CONFLICT"))) (EFieldAccess (EVar "currentLoc") "value")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "fieldVariantConflictMsg") (EVar "fname")) (EVar "tyname")) (EVar "rname")) (EVar "rival")) (EVar "mine")) (EVar "other"))) (EApp (EApp (EVar "fieldVariantConflictHelp") (EVar "fname")) (EVar "rname"))) (EVar "None"))) (DoExpr (EVar "None"))))))
 (DTypeSig false "fieldVariantConflictMsg" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String"))))))))
-(DFunDef false "fieldVariantConflictMsg" ((PVar "fname") (PVar "tyname") (PVar "mineName") (PVar "rivalName") (PVar "mine") (PVar "other")) (EIf (EBinOp "==" (EVar "mine") (EVar "other")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Field '")) (EApp (EMethodRef "display") (EVar "fname"))) (ELit (LString "' is declared by more than one of '"))) (EApp (EMethodRef "display") (EVar "tyname"))) (ELit (LString "''s constructors ('"))) (EApp (EMethodRef "display") (EVar "mineName"))) (ELit (LString "' and '"))) (EApp (EMethodRef "display") (EVar "rivalName"))) (ELit (LString "'). A '."))) (EApp (EMethodRef "display") (EVar "fname"))) (ELit (LString "' is resolved by the receiver's TYPE, which does not say which constructor built the value, so there is no one field to use here"))) (EIf (EVar "otherwise") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Field '")) (EApp (EMethodRef "display") (EVar "fname"))) (ELit (LString "' sits at a different position in each of '"))) (EApp (EMethodRef "display") (EVar "tyname"))) (ELit (LString "''s constructors: '"))) (EApp (EMethodRef "display") (EVar "mineName"))) (ELit (LString "' declares it at position "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EBinOp "+" (EVar "mine") (ELit (LInt 1)))))) (ELit (LString ", '"))) (EApp (EMethodRef "display") (EVar "rivalName"))) (ELit (LString "' at position "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EBinOp "+" (EVar "other") (ELit (LInt 1)))))) (ELit (LString ". A '."))) (EApp (EMethodRef "display") (EVar "fname"))) (ELit (LString "' is resolved by the receiver's TYPE, which does not say which constructor built the value, so there is no one field to use here"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "fieldVariantConflictMsg" ((PVar "fname") (PVar "tyname") (PVar "mineName") (PVar "rivalName") (PVar "mine") (PVar "other")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Field '")) (EApp (EMethodRef "display") (EVar "fname"))) (ELit (LString "' sits at a different position in each of '"))) (EApp (EMethodRef "display") (EVar "tyname"))) (ELit (LString "''s constructors: '"))) (EApp (EMethodRef "display") (EVar "mineName"))) (ELit (LString "' declares it at position "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EBinOp "+" (EVar "mine") (ELit (LInt 1)))))) (ELit (LString ", '"))) (EApp (EMethodRef "display") (EVar "rivalName"))) (ELit (LString "' at position "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EBinOp "+" (EVar "other") (ELit (LInt 1)))))) (ELit (LString ". A '."))) (EApp (EMethodRef "display") (EVar "fname"))) (ELit (LString "' is resolved by the receiver's TYPE, which does not say which constructor built the value, so there is no one slot to load here"))))
 (DTypeSig false "fieldVariantConflictHelp" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
-(DFunDef false "fieldVariantConflictHelp" ((PVar "fname") (PVar "mineName")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "match on the constructor instead (e.g. '")) (EApp (EMethodRef "display") (EVar "mineName"))) (ELit (LString " { "))) (EApp (EMethodRef "display") (EVar "fname"))) (ELit (LString " = x } => x')"))))
+(DFunDef false "fieldVariantConflictHelp" ((PVar "fname") (PVar "mineName")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "match on the constructor instead (e.g. '")) (EApp (EMethodRef "display") (EVar "mineName"))) (ELit (LString " { "))) (EApp (EMethodRef "display") (EVar "fname"))) (ELit (LString " = x } => x'), or declare '"))) (EApp (EMethodRef "display") (EVar "fname"))) (ELit (LString "' at the same position in every constructor. Tracked as #1465 (tag-dispatched field selectors)"))))
 (DTypeSig false "fieldRivalCtor" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "RecordInfo") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Int") (TyCon "Int"))))))))
 (DFunDef false "fieldRivalCtor" ((PVar "te") (PVar "fname") (PVar "rname") (PVar "ri")) (EBlock (DoLet false false (PVar "rk") (EApp (EVar "headTyconMono") (EVar "te"))) (DoExpr (EIf (EApp (EVar "not") (EApp (EApp (EVar "recordInfoIsReceiverDecl") (EVar "rk")) (EVar "ri"))) (EVar "None") (EIf (EApp (EVar "not") (EApp (EVar "fieldHasRivalOwners") (EVar "fname"))) (EVar "None") (EMatch (EApp (EApp (EVar "fieldOffsetIn") (EVar "fname")) (EApp (EVar "recordFieldNames") (EVar "ri"))) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "mine")) () (EApp (EApp (EApp (EApp (EApp (EVar "fieldRivalCtorOfType") (EApp (EVar "headTyconNameMono") (EVar "te"))) (EVar "rk")) (EVar "fname")) (EVar "rname")) (EVar "mine")))))))))
 (DTypeSig false "fieldRivalCtorOfType" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "HeadKey")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Int") (TyCon "Int")))))))))
@@ -30325,7 +30375,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "fieldHasRivalOwners" ((PVar "fname")) (EMatch (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "fname")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "fieldOwnersRef") "value"))) (arm (PList) () (EVar "False")) (arm (PList PWild) () (EVar "False")) (arm PWild () (EVar "True"))))
 (DTypeSig false "fieldRivalCtorGo" (TyFun (TyApp (TyCon "Option") (TyCon "HeadKey")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Int")))))))))
 (DFunDef false "fieldRivalCtorGo" (PWild PWild PWild PWild (PList)) (EVar "None"))
-(DFunDef false "fieldRivalCtorGo" ((PVar "rk") (PVar "fname") (PVar "rname") (PVar "mine") (PCons (PVar "c") (PVar "rest"))) (EIf (EBinOp "==" (EVar "c") (EVar "rname")) (EApp (EApp (EApp (EApp (EApp (EVar "fieldRivalCtorGo") (EVar "rk")) (EVar "fname")) (EVar "rname")) (EVar "mine")) (EVar "rest")) (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "recordForKeyAndReceiver") (EVar "rk")) (EVar "c")) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EVar "fieldRivalCtorGo") (EVar "rk")) (EVar "fname")) (EVar "rname")) (EVar "mine")) (EVar "rest"))) (arm (PCon "Some" (PVar "ri2")) () (EMatch (EApp (EApp (EVar "fieldOffsetIn") (EVar "fname")) (EApp (EVar "recordFieldNames") (EVar "ri2"))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EVar "fieldRivalCtorGo") (EVar "rk")) (EVar "fname")) (EVar "rname")) (EVar "mine")) (EVar "rest"))) (arm (PCon "Some" (PVar "other")) () (EApp (EVar "Some") (ETuple (EVar "c") (EVar "mine") (EVar "other"))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "fieldRivalCtorGo" ((PVar "rk") (PVar "fname") (PVar "rname") (PVar "mine") (PCons (PVar "c") (PVar "rest"))) (EIf (EBinOp "==" (EVar "c") (EVar "rname")) (EApp (EApp (EApp (EApp (EApp (EVar "fieldRivalCtorGo") (EVar "rk")) (EVar "fname")) (EVar "rname")) (EVar "mine")) (EVar "rest")) (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "recordForKeyAndReceiver") (EVar "rk")) (EVar "c")) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EVar "fieldRivalCtorGo") (EVar "rk")) (EVar "fname")) (EVar "rname")) (EVar "mine")) (EVar "rest"))) (arm (PCon "Some" (PVar "ri2")) () (EMatch (EApp (EApp (EVar "fieldOffsetIn") (EVar "fname")) (EApp (EVar "recordFieldNames") (EVar "ri2"))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EVar "fieldRivalCtorGo") (EVar "rk")) (EVar "fname")) (EVar "rname")) (EVar "mine")) (EVar "rest"))) (arm (PCon "Some" (PVar "other")) () (EIf (EBinOp "==" (EVar "other") (EVar "mine")) (EApp (EApp (EApp (EApp (EApp (EVar "fieldRivalCtorGo") (EVar "rk")) (EVar "fname")) (EVar "rname")) (EVar "mine")) (EVar "rest")) (EApp (EVar "Some") (ETuple (EVar "c") (EVar "mine") (EVar "other")))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "fieldOffsetIn" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Int")))))
 (DFunDef false "fieldOffsetIn" ((PVar "fname") (PVar "names")) (EApp (EApp (EApp (EVar "fieldOffsetInGo") (EVar "fname")) (EVar "names")) (ELit (LInt 0))))
 (DTypeSig false "fieldOffsetInGo" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int"))))))

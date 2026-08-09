@@ -1,1 +1,0 @@
-TYPE ERROR: Field 'px' is declared by more than one of 'Pair''s constructors ('PA' and 'PB'). A '.px' is resolved by the receiver's TYPE, which does not say which constructor built the value, so there is no one field to use here

@@ -1,0 +1,23 @@
+-- #1469's SELF-DRAINING PIN: values of TWO constructors of one record type reach the
+-- same `.sx` selection.  The LLVM backend prints the correct answer; WasmGC traps at
+-- instantiation with `illegal cast`.  Both constructors place `sx` at the same offset,
+-- so `T-FIELD-VARIANT-CONFLICT` (#1455) does NOT fire here — deliberately: rejecting
+-- this class would also reject five measured programs that work on both backends (see
+-- `test/typecheck_error_fixtures/field_variant_offset_agree_control.mdk`), and whether a
+-- program of this shape traps depends on WHICH CONSTRUCTOR REACHES THE ACCESS AT RUN
+-- TIME, which no declaration-level test at the typecheck seam can see.
+--
+-- Expected output, DERIVED BY HAND: `mkSA = SA { sx = 1, … }`, `mkSB = SB { sx = 3, … }`,
+-- so `t=1,3`.  eval and the native binary both print it; the golden is theirs.
+--
+-- ⚠️ THE WasmGC ARM IS LEDGERED, NOT SILENT.  `test/engine_divergence.txt` carries this
+-- cell as `wasm:codegen-bug #1469`, so `diff_compiler_engines` FAILS with PROMOTE the
+-- moment wasm stops trapping — which is what #1465 (tag-dispatched field selectors in
+-- both backends) will do.  Delete the row and this comment then.
+--
+-- MEASURED on cold builds of BOTH the merge base `bfcd4ea7` and this branch, so the
+-- divergence is pre-existing and neither introduced nor drained by #1455.
+import zshared.{mkSA, mkSB}
+
+main : <IO> Unit
+main = putStrLn ("t=" ++ intToString mkSA.sx ++ "," ++ intToString mkSB.sx)

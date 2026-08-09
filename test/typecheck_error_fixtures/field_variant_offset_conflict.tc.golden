@@ -1,1 +1,1 @@
-TYPE ERROR: Field 'alpha' sits at a different position in each of 'Wrap''s constructors: 'Cfg' declares it at position 1, 'Dfg' at position 2. A '.alpha' is resolved by the receiver's TYPE, which does not say which constructor built the value, so there is no one field to use here
+TYPE ERROR: Field 'alpha' sits at a different position in each of 'Wrap''s constructors: 'Cfg' declares it at position 1, 'Dfg' at position 2. A '.alpha' is resolved by the receiver's TYPE, which does not say which constructor built the value, so there is no one slot to load here

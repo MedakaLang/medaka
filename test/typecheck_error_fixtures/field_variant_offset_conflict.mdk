@@ -14,13 +14,22 @@
 -- only statically honest answer to a program whose meaning the back end cannot
 -- represent.
 --
--- ⚠️ THIS IS THE DIFFERING-OFFSET ARM OF THE RULE, NOT THE WHOLE OF IT.  Its sibling
--- `field_variant_same_offset_conflict.mdk` is the IDENTICAL-layout arm, which is
--- refused just the same and carries the other of the code's two messages — see that
--- file for the WasmGC measurement that retired the "the offsets agree, so the stamp is
--- immaterial" exemption an earlier cut of this fix shipped with.
--- `field_variant_single_ctor_control.mdk` is the control: one named-field constructor
--- per type, so the stamp IS the runtime constructor and the selection stays legal.
+-- ⚠️ THE OFFSETS ARE THE RULE, NOT A DETAIL OF THE MESSAGE — AND THE CONTROLS ARE
+-- WHERE THAT IS PINNED.  A sibling constructor that declares `alpha` at the SAME
+-- position is not a rival (`field_variant_offset_agree_control.mdk`), and a sibling
+-- that declares a different field entirely is not one either
+-- (`field_variant_sibling_other_field_control.mdk`).  Round 3 of #1455 briefly
+-- dropped the offset test and rejected both of those shapes; they were measured
+-- CORRECT on both shipping backends, so it was over-rejection and it was retracted.
+-- `field_variant_single_ctor_control.mdk` is the third control: one named-field
+-- constructor per type, so the stamp IS the runtime constructor.
+--
+-- ⚠️ THE REFUSED SET IS NOT THE SET THE BACKENDS DISAGREE ABOUT, AND NOTHING HERE
+-- CLAIMS IT IS.  The guard is a declaration-level over-approximation of a runtime
+-- dataflow property; #1469 (WasmGC traps where two constructors reach an
+-- offset-AGREEING access) and #1468 (a sibling declaring a different field) are
+-- both accepted here and both broken.  #1465 owns the end state that retires this
+-- diagnostic.
 data Wrap =
   | Cfg { alpha : Int, beta : Int }
   | Dfg { beta : Int, alpha : Int }

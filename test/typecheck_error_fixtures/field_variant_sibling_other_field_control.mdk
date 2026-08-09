@@ -1,0 +1,29 @@
+-- THE SECOND CONTROL ON THE ACCEPTED HALF OF T-FIELD-VARIANT-CONFLICT: a sibling
+-- constructor that declares a DIFFERENT field is not a rival (#1455 second review,
+-- finding F4).
+--
+-- `T` has two named-field constructors, but only `A` declares `x`, so a `.x`
+-- selection has exactly one candidate offset and the guard must not fire.  Without
+-- this cell nothing in the tree pins that axis: a future change that widened the
+-- rule to "any multi-constructor receiver" would pass every other fixture here.
+-- (Round 3 of #1455 deleted the only control that covered a neighbouring axis and
+-- replaced it with a single-CONSTRUCTOR one, which cannot see this.)
+--
+-- 🚨 THIS CELL PINS ACCEPTANCE, NOT CORRECTNESS, AND THE DIFFERENCE IS AN OPEN S0.
+-- `getX (B { z = 99 })` has no meaning, and the built binary happily reads `B`'s
+-- slot 0 for it — a wrong `Int` at exit 0, or, with the sibling field `String`-typed,
+-- a heap address printed as an `Int`.  MEASURED identically on the merge base
+-- `bfcd4ea7` and on this branch, so it is pre-existing and NOT drained by #1455;
+-- it is filed as **#1468** and pinned in `test/must_fail_fixtures/`.  What this cell
+-- asserts is only that #1455's guard does not fire here — which is correct, because
+-- the offsets do not disagree, and because rejecting it would reject `getX mkA` too.
+--
+-- ⚠️ THE ASSERTION IS THE ERROR THAT DOES APPEAR, NOT THE ABSENCE OF ONE.  The body
+-- is ill-typed in an UNRELATED way (`Bool` annotation, `Int` field), so the golden is
+-- a one-line `Type mismatch` that can only be produced if `.x` RESOLVED.
+data T =
+  | A { x : Int }
+  | B { z : Int }
+
+getX : T -> Bool
+getX t = t.x

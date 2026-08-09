@@ -39,21 +39,3 @@ mkA n = A { x = n }
 
 export getX : T -> Int
 getX t = t.x
-
--- ⚠️ `getX` ABOVE NO LONGER TYPECHECKS, AND THAT IS FINE HERE — but it is worth
--- saying, because it stopped being a working program during #1455's round-2 review
--- and nothing in this fixture's own gate would tell you.  `t.x` selects through a
--- `T`-typed receiver and `T` has TWO named-field constructors, so the selection names
--- no constructor and is now refused (`T-FIELD-VARIANT-CONFLICT`).  It was never
--- portable: MEASURED on a cold build of the merge base `bfcd4ea7`, native printed
--- `t=1,2` while the WasmGC build TRAPPED at instantiation with `illegal cast` — on
--- WasmGC a record is a struct type PER CONSTRUCTOR, so the stamp is a cast.
---
--- This file is kept BYTE-IDENTICAL above this line anyway, deliberately.
--- `diff_compiler_references_correctness.sh` dumps the REFERENCE INDEX (resolve +
--- index); it never typechecks, so the dump is unaffected — verified by running the
--- gate on this exact file with the new compiler.  And the `.x` occurrence is the ONLY
--- thing in the fixture that produces a `field|x` USE: rewriting it as a record PATTERN
--- was tried and dropped the golden's `main|field|x` row to `USES 0`, weakening the very
--- cell #964 added.  Every pinned `main.mdk:LINE:COL` in expected.golden is at or above
--- line 41, so this note cannot move one.

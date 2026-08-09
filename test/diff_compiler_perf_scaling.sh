@@ -847,11 +847,30 @@ gen_widerecords() {
 #
 # WHAT IS SUPERLINEAR, and it is NOT introduced by the selector this shape was added
 # alongside: `fieldOwnerNames` does `sortUniqS` over the WHOLE owner list ON EVERY
-# ACCESS that reaches it — O(N log N) per access, N accesses. MEASURED on a cold build
-# of the merge base `bfcd4ea7`, i.e. WITHOUT #1455's identity selection: the same growth
-# order (alloc r2 6.37 there vs 6.13 on the branch). The branch adds a constant factor
-# (it walks the same sorted list to identity-match, and it is doing strictly MORE work —
-# resolving successfully where the merge base errored out).
+# ACCESS that reaches it — O(N log N) per access, N accesses.
+#
+# ⚠️ THE NUMBERS HERE ARE THE ONES THIS GATE ITSELF PRINTS, AND NOTHING ELSE. An earlier
+# cut of this comment cited "alloc r2 6.37 on the merge base vs 6.13 on the branch",
+# which contradicts the `KNOWN_CEIL` block above, the row this gate emits, and the PR
+# body — all three of which say 3.11 — with no stage or band named that could reconcile
+# them. It was not reproducible from anything in the tree, so it is deleted rather than
+# rationalised. The live, reproducible figure is the gate's own row at N=150 -> 300:
+#
+#     fieldowners 150  311.6 MB  1008.5 MB  r2 3.11  known-superlinear (ceiling 3.40)
+#
+# reproduced independently by #1455's second reviewer to the same three digits — which is
+# this file's allocation-determinism claim paying off.
+#
+# ⚠️ THE MERGE-BASE HALF IS *RELAYED*, NOT RE-DERIVED HERE. #1455's author reports an
+# interleaved A/B in which the merge base reads r1 3.18 / r2 3.06 on the same generated
+# program (which it REJECTS — `Type mismatch: FT0 vs FR0`), i.e. the same growth ORDER
+# without #1455's identity selection. Nobody has re-run that arm since, and it cannot be
+# re-run from this tree alone: `gen_fieldowners` is new in #1455, so the merge base's copy
+# of this gate has no such shape. What IS derivable from the tree is the mechanism —
+# `fieldOwnerNames`' per-access `sortUniqS` is untouched by #1455 — and the branch row
+# above. The branch adds a constant factor on top (it walks the same sorted list to
+# identity-match, and it does strictly MORE work: it resolves where the merge base errored
+# out).
 #
 # ⚠️ WHY #1455 STILL OWES THIS ROW.  Before it, a program of this shape was REJECTED
 # (`Type mismatch: FT0 vs FR0` — `headL owners` guessing), so the liability existed but

@@ -1,82 +1,52 @@
--- TWO NAMED-FIELD CONSTRUCTORS OF ONE TYPE — the axis every cell in this corpus was
--- missing until #1455's adversarial review (finding 1).  The corpus varied field ORDER
--- and module IDENTITY; every type in it had at most ONE named-field constructor, so no
--- input could reach the case where two `RecordInfo`s share a type identity.
---
--- 🚨 A `.field` SELECTION THROUGH SUCH A TYPE IS NOT IN THIS CELL, AND ITS ABSENCE IS
--- THE FINDING.  The first version of this cell selected `mkA.px` on a `Pair` whose two
--- constructors AGREE on every offset, on the argument that an agreeing layout makes the
--- stamp immaterial.  That argument is true of the LLVM backend and false of WasmGC, and
--- `gates (engines)` is what said so: on WasmGC a record is a `struct` type PER
--- CONSTRUCTOR, so the stamp is a CAST, and casting a `PB` to `PA`'s struct type is
--- illegal whatever the layouts are.  MEASURED on cold builds of BOTH the merge base
--- `bfcd4ea7` and this branch — so it is pre-existing, not introduced:
---
---     shape                                          native      WasmGC
---     |PA{px,py}|PB{px,py,pz}| , mkA.px and mkB.px    pa=1,2 …    trap: illegal cast
---     |PA{px,py}|PB{px,py}|    , equal arity too      p=1,3       trap: illegal cast
---     |A{x}|B{x}|              , IDENTICAL fields     t=1,2       trap: illegal cast
---     …the same, with only the STAMPED ctor selected  t=1         t=1        (ok)
---
--- So such a selection is now refused by `stampableFieldRecord`
--- (`T-FIELD-VARIANT-CONFLICT`) and this cell exercises the remedy the diagnostic names
--- — `match` — which every engine agrees on.  The rejection itself is pinned where a
--- rejection belongs, in `test/typecheck_error_fixtures/field_variant_*`.
-public export data Pair =
-  | PA { px : Int, py : Int }
-  | PB { px : Int, py : Int, pz : Int }
+-- The other half of the collision: the SAME constructor key `Cfg`, a DIFFERENT owning
+-- type `WrapZ`, two named-field constructors again, and the two `Int` fields at the
+-- OPPOSITE indices.  `amulti` and `zmulti` neither import nor are imported by each
+-- other, and each projects only its OWN record.
+public export data WrapZ =
+  | Cfg { b : Int, a : Int }
+  | Dfg { b : Int, a : Int }
 
-export mkA : Pair
-mkA = PA { px = 1, py = 2 }
+mkZ : WrapZ
+mkZ = Cfg { b = 33, a = 44 }
 
-export mkB : Pair
-mkB = PB { px = 3, py = 4, pz = 5 }
+export zrA : Int
+zrA = mkZ.a
 
-export pairPx : Pair -> Int
-pairPx p = match p
-  PA { px = x } => x
-  PB { px = x } => x
+export zrB : Int
+zrB = mkZ.b
 
--- 🚨 THE BYSTANDER.  `Wrap`'s two constructors DISAGREE on `alpha`'s offset (0 in
--- `Cfg`, 1 in `Dfg`).  Declaring such a type is still legal, and BOTH of its
--- constructors are constructed here — which is what puts them in the emitter's
--- construction-site-built `recName -> labels` table, the discriminator #1455's reviewer
--- isolated.  Nothing in the entry's output comes from a `.alpha`, so this cell asserts
--- about code that has NOTHING TO DO with the conflicting declaration: `AGENTS.md`'s
--- "feature present, UNRELATED code still behaves" shape, which is what a program-wide
--- rule owes and what a "does my feature work" fixture cannot give.
-public export data Wrap =
-  | Cfg { alpha : Int, beta : Int }
-  | Dfg { beta : Int, alpha : Int }
+-- 🚨 THE BYSTANDER.  `Byst`'s two constructors DISAGREE on `alpha`'s offset (0 in
+-- `ByA`, 1 in `ByB`), which is the shape `T-FIELD-VARIANT-CONFLICT` refuses to
+-- SELECT through.  Declaring such a type is still legal and BOTH of its constructors
+-- are constructed here — which is what puts them in the emitters'
+-- construction-site-built `recName -> labels` table.  Nothing in this cell's output
+-- comes from a `.alpha`, so the cell asserts about code that has NOTHING TO DO with
+-- the conflicting declaration: `AGENTS.md`'s "feature present, UNRELATED code still
+-- behaves" shape, which is what a program-wide rule owes and what a "does my feature
+-- work" fixture cannot give.
+public export data Byst =
+  | ByA { alpha : Int, beta : Int }
+  | ByB { beta : Int, alpha : Int }
 
-export mkC : Wrap
-mkC = Cfg { alpha = 10, beta = 20 }
+mkBy1 : Byst
+mkBy1 = ByA { alpha = 10, beta = 20 }
 
-export mkD : Wrap
-mkD = Dfg { beta = 220, alpha = 110 }
+mkBy2 : Byst
+mkBy2 = ByB { beta = 220, alpha = 110 }
 
 -- ⚠️ BOTH ARMS RETURN THE SAME PROJECTION ON PURPOSE, and that is a guard, not
--- laziness.  `Cfg` and `Dfg` share BOTH labels, and an arm naming only shared labels
--- picks the arm by CONSTRUCTOR natively but by LABEL SET in the interpreter (#1462,
--- re-measured on the merge base while building this cell).  What is NOT divergent is
--- the BINDING: the interpreter still binds `alpha` by name.  Making both arms project
--- `alpha` therefore keeps this cell a test of THIS defect rather than of #1462.
-export wrapAlpha : Wrap -> Int
-wrapAlpha w = match w
-  Cfg { alpha = a } => a
-  Dfg { alpha = a } => a
+-- laziness.  `ByA` and `ByB` share BOTH labels, and an arm naming only shared labels
+-- picks the arm by CONSTRUCTOR natively but by LABEL SET in the interpreter (#1462).
+-- What is NOT divergent is the BINDING: the interpreter still binds `alpha` by name.
+-- Making both arms project `alpha` therefore keeps this cell a test of THIS defect
+-- rather than of #1462.
+bystAlpha : Byst -> Int
+bystAlpha w = match w
+  ByA { alpha = x } => x
+  ByB { alpha = x } => x
 
--- The SINGLE-constructor half, kept so this cell still asserts a VALUE that depends on
--- the stamp `#1455` changed.  Two records, one named-field constructor each, sharing
--- both field names at OPPOSITE offsets: `mkS.sx` and `mkO.sx` can only both be right if
--- each selection resolved to its OWN declaration.  A single-constructor type is exactly
--- the case the guard leaves alone — the stamp IS the runtime constructor, always.
-public export data Solo = { sx : Int, sy : Int }
+export by1 : Int
+by1 = bystAlpha mkBy1
 
-export mkS : Solo
-mkS = Solo { sx = 7, sy = 8 }
-
-public export data Olos = { sy : Int, sx : Int }
-
-export mkO : Olos
-mkO = Olos { sy = 6, sx = 5 }
+export by2 : Int
+by2 = bystAlpha mkBy2
