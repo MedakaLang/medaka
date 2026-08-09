@@ -1,5 +1,5 @@
 # META
-source_lines=4356
+source_lines=4375
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted resolve stage — Stage 2 port of `lib/resolve.ml` (single-file
@@ -3148,8 +3148,16 @@ resolveModulesToHumane runtimeDecls preludeDecls mods =
     ppResErrorLocated
     (resolveModulesErrors runtimeDecls preludeDecls omEmpty mods))
 
--- Guarded variant of resolveModulesToHumane for the run/build/check CLI:
--- `allowInternal` / `trustedMods` decide per-module internal-extern trust.
+-- Guarded variant of resolveModulesToHumane: `allowInternal` / `trustedMods`
+-- decide per-module internal-extern trust.
+-- ⚠️ The route list this comment used to carry ("for the run/build/check CLI")
+-- is STALE and was already stale before #186: `check` stopped calling this in
+-- #41, and `run`/`build` stopped in #186.  Its ONE remaining caller is
+-- `runCheckModules` (`compiler/tools/check.mdk`).  It renders via
+-- `ppResErrorLocated`, i.e. an EMPTY fallback file, so on a multi-module graph
+-- its lines would read `:L:C: …` with no filename at all — see
+-- `resolveModulesToHumaneByPath` below for why that is not reachable today, and
+-- do not add a caller without reading that note first.
 export resolveModulesToHumaneG : Bool -> List String -> List Decl -> List Decl -> List (String, List Decl) -> String
 resolveModulesToHumaneG allowInternal trustedMods runtimeDecls preludeDecls mods = joinNl (map ppResErrorLocated (resolveModulesErrorsG allowInternal trustedMods runtimeDecls preludeDecls omEmpty mods))
 
@@ -3164,8 +3172,19 @@ resolveModulesToHumaneG allowInternal trustedMods runtimeDecls preludeDecls mods
 
 -- Like resolveModulesToHumaneG but attributing each module's located resolve
 -- errors to that module's OWN file, looked up in `modPaths` (a modId → real file
--- path assoc the loader carries).  This is the ONLY multi-module humane renderer
--- — `check` (#41), `run` and `build` (#186/#1360) all go through it.  Fixes the multi-module misattribution where an
+-- path assoc the loader carries).  `check` (#41), `run` and `build` (#186/#1360)
+-- all gate on this renderer.
+-- ⚠️ NOT the only multi-module renderer, and the earlier wording here claimed it
+-- was.  `resolveModulesToHumaneG` above is still exported and still called by
+-- `runCheckModules` (`compiler/tools/check.mdk`), which `checkRoute` invokes.
+-- What IS true is narrower, and it is a property of the CALL SITE rather than of
+-- this function: `checkRoute` (`compiler/driver/medaka_cli.mdk`) matches THIS
+-- function's result against `""` FIRST and only reaches `runCheckModules` in the
+-- no-resolve-errors branch, so the surviving `resolveModulesToHumaneG` call can
+-- only ever return `""` there.  That makes it vestigial rather than harmless-in
+-- -general: it is the guard, not the renderer, that keeps its empty-filename
+-- output off the screen.  If you move or weaken that guard, restore the filename
+-- first.  Fixes the multi-module misattribution where an
 -- IMPORTED module's error printed the ENTRY file's path (#41): the multi-module
 -- `parseLocated` Locs carry `file == ""`, so a single shared `fallbackFile` sent
 -- EVERY module's errors to the entry.  Threading the per-module path fixes the

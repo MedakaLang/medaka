@@ -460,23 +460,51 @@ esac
 
 # 12c. THE POSITION MUST BE REAL, NOT A PLACEHOLDER (#1360, `build`'s second half).
 #      `build`'s gate used to load with the non-located `loadProgramE`, collapsing
-#      EVERY span to 1:0 — visible even when the filename happened to be right (an
-#      entry-module resolve error).  Assert `build` reports the SAME `file:L:C:`
-#      prefix `check` does on an ENTRY-module resolve error, where 12b's dep-file
-#      assertion cannot see the difference.
+#      EVERY span to 1:0 — a defect visible even when the FILENAME happens to be
+#      right, which 12b's dep-file assertion is blind to.  So this leg puts the
+#      only resolve error in the ENTRY module and asserts `build` reports the same
+#      `file:L:C:` prefix `check` does.  It also covers 12b's blind spot in the
+#      other direction: 12b's reject arm is `*resuse.mdk:*`, so "an ENTRY error
+#      wrongly attributed to the DEP" is untested there.
+#
+#      ⚠️ THE IMPORT MUST BE A CLEAN MODULE.  This gate uses ONE `mktemp -d` for
+#      every leg (`trap ... EXIT`), so `$TMP/reshelper.mdk` — written by leg 12
+#      with its own unbound `missingName` — is still on disk here.  Importing THAT
+#      would make this leg a second dep-attribution test: the loader is
+#      dependency-first (`visitModF` appends a module AFTER recursing into its
+#      imports) and `resolveModulesErrorsByPathGo` concatenates in that order, so
+#      the FIRST diagnostic line would be reshelper's, not the entry's, and the
+#      entry-module case would silently go untested.  `helper.mdk` (written at the
+#      top of this gate) is clean, so `nosuchName` is the only resolve error and
+#      the first line is necessarily the entry's.
 cat > "$TMP/entryres.mdk" <<'EOF'
-import reshelper.{rh}
+import helper.{double}
 
-main = println (nosuchName 3)
+main = println (nosuchName (double 3))
 EOF
-ent_chk="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check "$TMP/entryres.mdk" 2>&1 | head -1)"
-ent_bld="$(MEDAKA_ROOT="$ROOT" MEDAKA="$MEDAKA" bound "$MEDAKA" build "$TMP/entryres.mdk" -o "$TMP/entryres.out" 2>&1 | head -1)"
+# ⚠️ Capture the WHOLE output, then take line 1 from the variable.  Piping the
+# command itself into `head -1` would report head's exit status, so a failing
+# build reads as exit 0 and the outcome assertion below could never fire.
+ent_chk_all="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check "$TMP/entryres.mdk" 2>&1)"
+ent_bld_all="$(MEDAKA_ROOT="$ROOT" MEDAKA="$MEDAKA" bound "$MEDAKA" build "$TMP/entryres.mdk" -o "$TMP/entryres.out" 2>&1)"
+ent_bld_code=$?
+ent_chk="$(printf '%s\n' "$ent_chk_all" | head -1)"
+ent_bld="$(printf '%s\n' "$ent_bld_all" | head -1)"
 ent_chk_pos="${ent_chk%%: *}"
 ent_bld_pos="${ent_bld%%: *}"
+# Assert the MESSAGE and the outcome too, not just prefix equality: if both arms
+# emitted nothing, both prefixes would be empty and a bare equality check would
+# report `ok` having proven nothing (12b asserts all three; so must this).
+case "$ent_bld" in
+  *entryres.mdk:*:*:*"Unbound variable"*) : ;;
+  *) fail=$((fail+1)); printf 'FAIL entry-resolve/build-pos (entry resolve error not located at the entry: [%s])\n' "$ent_bld"; ent_bld_pos="<unasserted>" ;;
+esac
 case "$ent_bld_pos" in
+  "<unasserted>") : ;;
   *:1:0) fail=$((fail+1)); printf 'FAIL entry-resolve/build-pos (#1360: placeholder loc 1:0 back: [%s])\n' "$ent_bld" ;;
-  *) if [ "$ent_bld_pos" = "$ent_chk_pos" ]; then pass=$((pass+1)); printf 'ok   entry-resolve/build-pos (#1360: build agrees with check on file:L:C)\n'
-     else fail=$((fail+1)); printf 'FAIL entry-resolve/build-pos (check=[%s] build=[%s])\n' "$ent_chk_pos" "$ent_bld_pos"; fi ;;
+  *) if [ "$ent_bld_pos" != "$ent_chk_pos" ]; then fail=$((fail+1)); printf 'FAIL entry-resolve/build-pos (check=[%s] build=[%s])\n' "$ent_chk_pos" "$ent_bld_pos"
+     elif [ "$ent_bld_code" -eq 0 ] || [ -x "$TMP/entryres.out" ]; then fail=$((fail+1)); printf 'FAIL entry-resolve/build-pos (located but built? exit %d)\n' "$ent_bld_code"
+     else pass=$((pass+1)); printf 'ok   entry-resolve/build-pos (#1360: build agrees with check on file:L:C, no binary)\n'; fi ;;
 esac
 
 # 13. ENTRY-PROJECT internal-extern trust (#42, POSITIVE).  A sibling module of the

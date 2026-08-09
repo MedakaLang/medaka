@@ -77,7 +77,6 @@ import driver.loader.{
   LoadError,
   LoadMsg,
   LoadParseFailed,
-  loadProgramE,
   loadProgramFilesLocatedE,
   findProjectRoot,
   findProjectRootOrSelf,
@@ -1482,8 +1481,8 @@ typecheckGate allowInternal root input =
         -- and rendered by moduleLoadErrText.
         Ok tsrc => match parseResult tsrc
           Err e => TGErr (ppParseError tsrc input e)
-          -- #186/#1360: load with `loadProgramFilesLocatedE`, exactly as `check`
-          -- (line ~411) and `run` (line ~1746) already do.  Plain `loadProgramE`
+          -- #186/#1360: load with `loadProgramFilesLocatedE`, exactly as
+          -- `runCheckCmd` and `runRunCmd` already do.  Plain `loadProgramE`
           -- gave this gate BOTH halves of the misattribution at once: it parses
           -- with placeholder-loc `parse` (every span collapses to 1:0) AND carries
           -- no per-module path, so an imported module's resolve error printed as
