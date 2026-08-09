@@ -228,6 +228,104 @@ and the `perf-hunt` skill.
 Goldens are re-cut from source, never text-merged — two typecheck branches always fight over the
 same golden files. And never `git add -A` (see `.claude/workstreams/HARNESS.md`).
 
+### 11. "Will this key change fail SILENTLY?" has NO general answer — it depends on GATE vs PAYLOAD
+Two arguments in this arc were built on *predicted silence*, and the prediction was backwards.
+
+- A **GATE** table is consulted for **permission**. Its value is often `Unit`; a missed lookup means
+  *the check vanishes* — genuinely silent. `universeRegisteredIfacesRef` / `ifaceRegistered` is one.
+- A **PAYLOAD** table is consulted for **content**. A missed lookup means *"no impl exists"* — which
+  is a **reject**, i.e. deafening. `oblIfaceKey` / `ImplUniverse` is one.
+
+Measured (2026-08-09, the P1 experiment on #1112): identity-keying `IE` while `Predicate` stayed bare
+did **not** silently switch obligations off — it made them **universally unsatisfiable**. The prototype
+compiler rejects its own prelude (`No impl of Eq for Int`), `make check-self` FAILS, and goldens moved
+61/61 in a behaviour-driven corpus. `oblIfaceKey`'s own in-source ledger predicts the opposite polarity
+and **owes a correction**; it reasoned from a gate-shaped sibling while describing a payload-shaped
+table.
+
+⚠️ The two can nest: `checkUndeterminedObligation`'s RULE 3 is guarded on `implCountForIfaceU >= 2`
+with `| otherwise = ()`, so a missed count reads 0 and `T-AMBIGUOUS-INSTANCE` stops emitting — a
+genuine gate-shaped sub-case **inside** the payload table, which is presumably how they got conflated.
+
+**Before asserting a key change will be caught (or missed), classify the table.** And note the effect
+can **partition by origin supply**: origin-carrying impls are written `TkIdent`, read `TkBare`, and
+vanish, while flat-file user impls carry `OriginUnresolved`, stay `TkBare` on both sides, and are
+unaffected — so a probe drawn only from the flat corpus reports "no effect."
+
+### 12. Derive a table family by SHAPE, not by a NAMING CONVENTION
+#1070's family is defined by a shape — *a flat table keyed by a bare `String`, populated across module
+boundaries, last-write-wins, silent on loss*. Every issue in the arc enumerated it with a **prefix**
+grep on `universe*`. Those are not the same set, and multiple "the set is complete" claims rest on the
+prefix.
+
+Re-derived 2026-08-09: **~20 shape-members sit outside both prefix greps**, in `types/`
+(`DriverState`), `backend/`, `ir/` and `eval/` — including `argDispatchIdxRef`, and
+`methodIfaceTableRef` / `methodIfaceIndexRef` in `backend/emit_support.mdk`, which **both backends
+read**. A `types/`-anchored enumeration structurally cannot reach them.
+
+The leverage is that `OrdMap a = Map String a` (`compiler/support/ordmap.mdk`), so *bare-`String`-keyed*
+is a **type** fact and therefore greppable. 🚨 **And the obvious shape grep is itself a trap:** anchoring
+on `^ident :` silently drops every `export`-prefixed declaration — measured **65 rows anchored vs 75
+prefixed**, and the 10 missed include `methodIfaceTableRef` and `methodIfaceIndexRef` themselves. The
+derivation that fixes a scope error can re-commit it one level down. Full command + graded table: the
+2026-08-09 audit comment on #1070.
+
+### 13. A FALSE REJECT can be LOAD-BEARING — draining one exposes what it was hiding
+Three instances in one day (2026-08-09), which is why this is a trap and not a footnote:
+
+- **#1424** — landing the re-export arm without the provenance filter propagated a poisoned row one hop
+  and turned a legal 4-module program into a three-verb reject. The two halves were coupled *through
+  the table*, not through the function they share; each is measured-unsafe alone, in opposite
+  directions.
+- **PR #1455 round 1** — draining #1383's false reject let collider-bearing programs reach a
+  **pre-existing** layout bug: clean `check`, wrong built binary, and in one variant a **SIGSEGV**.
+  Loud → silent, the severity increase the ladder warns about.
+- **PR #1455's extension** — fixing that properly *narrowed the language* (`T-FIELD-VARIANT-CONFLICT`),
+  and in doing so revealed that the arm-(a) spelling, both single-file spellings and the whole
+  record-**update** path had been silently wrong at exit 0 all along.
+
+**Ask of any accept-widening fix: what was this reject keeping programs AWAY from?** The answer is
+often a defect nobody has met, because nothing could reach it. See the standing gate's Q6, and note
+Q6 has an **inverse** for narrowing fixes: the hazard becomes false rejects on legal programs.
+
+### 14. `MEDAKA_STRICT=1` makes a two-binary differential IMPOSSIBLE from one tree
+The baseline binary hard-exits 1 on the staleness check, so every cell reads "fail" and the
+differential looks catastrophic. An agent lost a cycle to this reading 15/15 cells as failures.
+
+**Remedy:** extract a pristine tree with `git archive` and point `MEDAKA_ROOT` at it. Also confirm
+`MEDAKA_ROOT` / `MEDAKA_EMITTER` are not exported in your shell — either one silently crosses the arms
+(a binary resolves its emitter and stdlib from `exeDir`, which is what makes the comparison sound in
+the first place; `AGENTS.md`, the two-arm differential note).
+
+### 15. 🚨 A local `diff_compiler_engines` run is a TWO-engine population unless you set `MEDAKA_REQUIRE_WASM=1`
+The wasm arm **silently degrades off** when its toolchain is unavailable — the gate still prints a
+total and still exits 0. So a local *"exit 0, 541 clean, 0 regressions"* is a **T1-only** number that
+reads exactly like three-engine coverage. CI grades three and reported 540 + **1 regression on the same
+commit** — a different population, not a contradiction.
+
+**This cost real certification error twice in one PR (#1455):**
+
+1. An author reported engines green from a local run and pushed; CI redded on the cell they had just
+   added.
+2. Worse, and this is the one to remember: round 2 carved out an exemption — *"where all constructors
+   place the field at the same offset the stamp is immaterial"* — and pinned a fixture (`pB`) as a
+   working program the rule **must not break**. **On WasmGC that program already trapped**
+   (`illegal cast`) at the merge base. The exemption is true of LLVM and **false of WasmGC**, because a
+   record there is a `struct` type **per constructor**: the stamp names a TYPE and the access is a
+   **cast**, so identical offsets are no protection at all. A two-engine measurement had certified a
+   carve-out that blessed programs which trap on one of the two shipping backends.
+
+**Rules:**
+- **Always `MEDAKA_REQUIRE_WASM=1` before reporting an engines number**, and say in the PR body which
+  invocation produced it. An unlabelled engines figure should be assumed two-engine.
+- **A "must not move" row proven on two engines is not proven.** Before carving an exemption out of a
+  correctness rule, check the carve-out against **all three** engines — the exemption is exactly where
+  a backend-specific representation difference hides.
+- **LLVM and WasmGC do not share a record representation.** Reasoning about field *offsets* is
+  LLVM-shaped; WasmGC dispatches by struct type and cast. Any rule phrased in terms of offsets needs a
+  wasm answer stated separately. This generalises past this arc — see `AGENTS.md`'s note that wasm was
+  never wrong on the fallthrough class *because it already had the design LLVM lacked*.
+
 ---
 
 ## Sequencing
