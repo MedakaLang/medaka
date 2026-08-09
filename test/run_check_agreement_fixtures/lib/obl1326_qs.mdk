@@ -1,4 +1,0 @@
--- #1326: the UNCONSTRAINED half. Same bare name as obl1326_ps.mdk's export, unrelated
--- module, no context. An importer of THIS one must not inherit that one's obligation.
-export h1326 : a -> a
-h1326 x = x

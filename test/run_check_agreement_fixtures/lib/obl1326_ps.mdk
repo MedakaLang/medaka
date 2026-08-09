@@ -1,3 +1,0 @@
--- #1326: the CONSTRAINED half of a same-bare-named cross-module pair (see obl1326_qs.mdk).
-export h1326 : Display a => a -> String
-h1326 x = "\{x}"

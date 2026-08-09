@@ -97,3 +97,16 @@
 # open. Item 1c was one of its symptoms, not the whole of it.
 
 733-ambiguous-ctor-reject-cascade-order-dependent | #733 | check=1;codes=R-AMBIGUOUS-CTOR;schemes=;run=1:;build=1/-: | check=1;codes=R-AMBIGUOUS-CTOR,T-TYPE-MISMATCH;schemes=;run=1:;build=1/-:
+
+# ── ADDED 2026-08-09 by PR #1424 (the #1369 re-export arm) ───────────────────
+# NOT introduced by that PR — it is #1326, already OPEN and already pinned as a
+# must-fail (test/must_fail_fixtures/1326-cross-module-bare-name-obligation-
+# misattributed/), reproducing identically on `main` @ b5f8c489. #1424 originally
+# carried a provenance filter that DRAINED it and this fixture was landing green;
+# that half was measured to red `diff_compiler_selfproc` LEG D and
+# `diff_compiler_dict_semantics`'s own §8 I1 row and was reverted, so the fixture
+# is kept LEDGERED rather than deleted — the permutation property is the half the
+# must-fail harness (one command per fixture) structurally cannot express.
+# OWNER: #1326, which #1425 owns end to end (three coupled laundering sites).
+# Both signatures transcribed from this gate's output, not hand-derived.
+1326-constrained-same-name-sibling-invariant | #1326 | check=0;codes=;schemes=tag : NoDisp -> String\nmain : Unit\n;run=0:ok / 5\n;build=0/0:ok / 5\n | check=1;codes=T-NO-IMPL;schemes=;run=1:;build=1/-:

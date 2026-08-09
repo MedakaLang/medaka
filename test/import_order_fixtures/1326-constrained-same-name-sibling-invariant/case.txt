@@ -1,6 +1,14 @@
 entry: main.mdk
-what: #1326 REGRESSION GUARD — a same-named constrained binding elsewhere in the import
-      graph must not decide whether an unrelated call site typechecks, in EITHER clause order
+what: #1326 — a same-named constrained binding elsewhere in the import graph MUST NOT
+      decide whether an unrelated call site typechecks. It still does. LEDGERED, OPEN.
+
+⚠️ THIS CASE IS LEDGERED IN test/IMPORT-ORDER-LEDGER.txt AGAINST #1326 — it is a live
+order-dependence bug shipping on `main`, not a passing guard. It is here, and not merely
+in test/must_fail_fixtures/1326-…/, because that harness grades ONE command and cannot
+express the property that was actually violated: INVARIANCE UNDER IMPORT-CLAUSE ORDER.
+#1326 is owned by #1425 (the three coupled dict-arity laundering sites). When #1425 lands,
+this row CONVERGES, the ledger row goes RED naming #1326 to close, and the fixture stays —
+unledgered it is graded as invariant and becomes the regression guard for the fix.
 
 `qsmod.h : a -> a` and `psmod.h : Display a => a -> String` are two unrelated top-level
 bindings that happen to share a bare name. The entry imports `qsmod.{h}` and calls
@@ -12,17 +20,20 @@ so if `psmod`'s obligation is ever attributed to `qsmod`'s `h`, the program is r
 `tag (h NoDisp)` — a call site that touches none of the machinery under test. A fixture
 that only exercised `viaP 5` would pass on the broken compiler.
 
-WHY THIS CORPUS RATHER THAN A GOLDEN. #1326 was an IMPORT-CLAUSE-ORDER defect and neither
-the issue nor its must-fail pin said so: the poisoning happened only in the
+WHY THIS CORPUS RATHER THAN A GOLDEN. #1326 is an IMPORT-CLAUSE-ORDER defect and neither
+the issue nor its must-fail pin says so: the poisoning happens only in the
 constrained-then-unconstrained module processing order, which follows import-clause order,
-so the LAST-processed same-named module was the victim. With `midmod` first the entry was
-rejected; with `qsmod` first it checked clean. A golden records one ordering and then
-defends it. Permutation invariance is the property that was actually violated.
+so the LAST-processed same-named module is the victim. With `midmod` first the entry is
+rejected; with `qsmod` first it checks clean. A golden records one ordering and then
+defends it. Permutation invariance is the property that is actually violated.
 
-HOW THE EXPECTED VALUE WAS ESTABLISHED — derived, not captured. `h` here is unambiguously
-`qsmod`'s identity function (`psmod`'s is not in scope in the entry under any spelling), so
-`tag (h NoDisp)` is `tag NoDisp` = "ok"; `viaP 5` interpolates `5` at `Display Int` = "5".
-The program must print `ok / 5` at exit 0 in EVERY ordering. Confirmed on a binary built
-from the #1337 fix branch; confirmed to FAIL (check exit 1, `No impl of Display for NoDisp`
-with the caret on `h`) in the midmod-first ordering on a binary built from `main` @
-b5f8c489, so this row can fail and did.
+HOW THE EXPECTED VALUE WAS ESTABLISHED — derived, not captured, and it is the CORRECT
+answer that this case does not produce. `h` here is unambiguously `qsmod`'s identity
+function (`psmod`'s is not in scope in the entry under any spelling), so `tag (h NoDisp)`
+is `tag NoDisp` = "ok"; `viaP 5` interpolates `5` at `Display Int` = "5". The program
+must print `ok / 5` at exit 0 in EVERY ordering; today it does so in one ordering and is
+rejected with `T-NO-IMPL` in the other. Both pinned signatures in the ledger row were
+transcribed from this gate's own output on a binary cold-bootstrapped from
+`compiler/seed/emitter.ll.gz` in an isolated worktree, on the branch of PR #1424 (the
+re-export arm, which does not touch this half of the seam); the same two-signature
+divergence was reported on `main` @ b5f8c489 by that PR's scoping pass.

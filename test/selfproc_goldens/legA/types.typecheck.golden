@@ -111,8 +111,8 @@ attachEntryDiagOpt : Option String -> List (String, (List TcDiag, List TcDiag)) 
 attachEntryWarn : TcDiag -> List (String, (List TcDiag, List TcDiag)) -> List (String, (List TcDiag, List TcDiag))
 attachEntryWarnOpt : Option String -> List (String, (List TcDiag, List TcDiag)) -> List (String, (List TcDiag, List TcDiag))
 attributeMethodModuleArities : String -> List Decl -> List (String, List Int) -> List ((String, String), List Int)
-attributeModuleArities : String -> List Decl -> Map String Unit -> List ((String, String), List Int) -> List (String, List Int) -> List ((String, String), List Int)
-attributeModuleArrIfaces : String -> List Decl -> Map String Unit -> List ((String, String), List String) -> List (String, List String) -> List ((String, String), List String)
+attributeModuleArities : String -> List Decl -> List ((String, String), List Int) -> List (String, List Int) -> List ((String, String), List Int)
+attributeModuleArrIfaces : String -> List Decl -> List ((String, String), List String) -> List (String, List String) -> List ((String, String), List String)
 attributeModuleSchemeObls : String -> List Decl -> List ((String, String), List (String, List Int)) -> List ((String, Int), List (String, List Int)) -> List ((String, String), List (String, List Int))
 attributeSchemeOblsGo : String -> Map String Unit -> Map String Unit -> List ((String, Int), List (String, List Int)) -> List ((String, String), List (String, List Int))
 augmentWithParams : List (String, Mono) -> List Ty -> List Mono -> List (String, Mono)
@@ -1039,7 +1039,6 @@ notAFunctionHint : Option String -> String
 notAFunctionMsg : String -> String
 noteHeadCtor : Pat -> Map String Unit -> Map String Unit
 noteNumlitCtx : Mono -> Mono -> String -> Unit
-noteOwnFunConstraint : String -> Unit
 noteTypeErrorDetected : Unit -> Unit
 nthArgMono : Int -> Mono -> Option Mono
 nthInt : Int -> List Int -> Int
