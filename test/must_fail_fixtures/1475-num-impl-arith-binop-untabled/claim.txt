@@ -1,0 +1,67 @@
+issue: 1475
+what: `binopMethod` (compiler/types/typecheck.mdk:7114-7122) maps `==`/`!=`/`++`/
+what: `<`/`>`/`<=`/`>=` to their dispatch method names but falls through to `None`
+what: for `+ - * / %` -- so `recordBinopSite` never records a dispatch site for
+what: arithmetic operators, the node's route ref is never stamped, and
+what: `rewriteBinopExpr` leaves a raw `EBinOp` in the tree even for a user type
+what: with a COMPLETE `impl Num`. `medaka check` exits 0 (the typechecker's own
+what: `numArithOp` already records a `Num a` obligation, so the constraint is
+what: satisfied and nothing looks wrong) and `medaka build` exits 0 (a binary is
+what: produced) -- the toolchain says fine twice. Only the EXECUTED artifact
+what: reveals the defect: eval panics `unknown op '+'` (exit 1), and the native
+what: binary raises `E-NONEXHAUSTIVE-MATCH` (also exit 1) because the emitted
+what: dispatch fell through to a machine-op arm that never matches a `V`'s
+what: constructor tag. `%` is deliberately excluded from this fixture: `interface
+what: Num` declares no `mod`/`rem` method, so `%` has no target for the same fix
+what: and pinning it here would make the row NOT drain when `+ - * /` are fixed.
+cmd: build-run main.mdk
+exit: 1
+control: build-run control.mdk
+why-fixture: main.mdk uses a plain `data V = V Int` -- NOT a record. The issue's
+why-fixture: own measurement table is explicit that exit 139 (SEGFAULT) is
+why-fixture: SHAPE-SPECIFIC to a record payload; 8 of the 9 shapes it tried,
+why-fixture: including plain single-field `data`, fail LOUDLY at exit 1 with
+why-fixture: `E-NONEXHAUSTIVE-MATCH` instead (the garbage/mistagged pointer
+why-fixture: fails the destructuring match rather than reading past the end of
+why-fixture: a record layout). Pinning 139 here would pin an INCIDENTAL shape
+why-fixture: and leave the general defect -- which is what actually needs
+why-fixture: fixing -- unpinned; this row pins the general, non-record
+why-fixture: behaviour instead, as the issue itself asks.
+why-fixture: `build-run` builds main.mdk to a per-process temp binary, then
+why-fixture: EXECUTES it and grades THAT binary's exit code -- `check` and
+why-fixture: `build` both exit 0 on this program (verified by hand: `check`
+why-fixture: reports 0 errors, `build` produces a binary), so a check- or
+why-fixture: build-based pin would be green today and green forever without
+why-fixture: ever touching the cell where #1475 actually lives. No `stdout` is
+why-fixture: pinned: `un (V 3 + V 4)` never reaches `println` (the match fails
+why-fixture: first), so stdout is empty either way, and the
+why-fixture: `E-NONEXHAUSTIVE-MATCH` runtime-error text lands on stderr, which
+why-fixture: build-run's stdout-only grading does not see (measured by hand,
+why-fixture: separating the streams) -- exit 1 is itself the whole observable
+why-fixture: signature this row can grade, distinct from a build failure
+why-fixture: (which `run_verb` would instead report as exit 126, MALFORMED for
+why-fixture: this verb -- see the #1394 trap in this suite's own header) and
+why-fixture: distinct from the record shape's 139.
+why-control: control.mdk is byte-identical to main.mdk except `main` calls the
+why-control: impl's `add` method directly (`add (V 3) (V 4)`) instead of going
+why-control: through the `+` operator -- the ONE flipped feature, isolating the
+why-control: defect to OPERATOR dispatch rather than to the `impl Num V` block,
+why-control: `un`, or native codegen being broken in general. `add (V a) (V b)
+why-control: = V (a * 100 + b)` is deliberately NOT raw addition (so a
+why-control: silently-falls-back-to-machine-add path would print the wrong
+why-control: number instead of matching); `un (add (V 3) (V 4))` is `3*100+4 =
+why-control: 304`, and this control does build-run clean to exit 0 printing
+why-control: `304` (verified by hand), proving the impl, `un`, and native
+why-control: dispatch through a NAMED method call are all otherwise intact.
+why-note: `%` is out of scope for this pin on purpose: `interface Num` has no
+why-note: `mod`/`rem` method, so `binopMethod` cannot map `%` to anything by
+why-note: the same table-completion fix that repairs `+ - * /` -- that needs a
+why-note: separate interface decision, per the issue's own explicit carve-out.
+why-note: Including `%` here would make this row NOT drain when the real fix
+why-note: for `+ - * /` lands, which is precisely the false-negative shape this
+why-note: suite's header warns against.
+why-note: A fix that adds `+`/`-`/`*`/`/` to `binopMethod` (mapping to
+why-note: `add`/`sub`/`mul`/`div`) so `recordBinopSite` stamps a real dispatch
+why-note: route for arithmetic operators makes main.bin execute to exit 0 and
+why-note: print `304`, draining this row. Close #1475 and delete this fixture
+why-note: when that happens.

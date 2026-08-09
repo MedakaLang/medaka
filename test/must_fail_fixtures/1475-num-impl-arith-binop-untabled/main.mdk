@@ -1,0 +1,16 @@
+data V = V Int deriving (Eq, Ord)
+
+impl Num V where
+  add (V a) (V b) = V (a * 100 + b)
+  sub (V a) (V b) = V (a - b)
+  mul (V a) (V b) = V (a * b)
+  div (V a) (V b) = V (a / b)
+  negate (V a) = V (0 - a)
+  abs (V a) = V a
+  signum (V a) = V 1
+  fromInt n = V n
+
+un : V -> Int
+un (V a) = a
+
+main = println (un (V 3 + V 4))
