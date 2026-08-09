@@ -1,20 +1,33 @@
 -- test_eval_internal_prims_ported.mdk — the array assertions that call
 -- INTERNAL-ONLY primitives, split out of test_eval_ported.mdk.
 --
--- ⚠️ This file typechecks CLEAN, but only with `--allow-internal`:
+-- ⚠️ This file typechecks CLEAN under `medaka check` only with `--allow-internal`:
 --     ./medaka check --allow-internal test/ported/test_eval_internal_prims_ported.mdk
 -- `arrayGetUnsafe`/`arraySetUnsafe` are internal-only primitives, so a plain
 -- `medaka check` reports "'arrayGetUnsafe' is an internal-only primitive" — and
--- that rejection happens in resolve, which SUPPRESSES every other diagnostic in
+-- that rejection happens in RESOLVE, which SUPPRESSES every other diagnostic in
 -- the file.  That is what made it look, before this split, as though
 -- test_eval_ported.mdk had only 6 problems.
+--
+-- ⚠️ BUT `medaka test` DOES NOT ENFORCE THE RESTRICTION AT ALL, on either route,
+-- so this file gates clean there TODAY with no flag — and would keep gating clean
+-- if the #1445 exemption were removed tomorrow.  Both routes are unguarded:
+--   • import-bearing (this file — it imports `test`): `analyzeProject` →
+--     `resolvePass` calls `resolveModule`, which is `resolveModuleG []` — an
+--     EMPTY guard list (compiler/frontend/resolve.mdk).
+--   • prelude-only: `analyzeLocated`, which compiler/tools/test_cmd.mdk documents
+--     in as many words as "UNGUARDED for internal-only externs".
+-- The first of those is the open S0 #1362.  THE DAY #1362 IS FIXED, THIS FILE
+-- STARTS FAILING `medaka test` — that is the dependency to plan against, not a
+-- missing flag.  `medaka test` has no `--allow-internal` today; whether it should
+-- grow one is a question for the #1445 follow-up, and this file is the only
+-- reason it would need one.
 --
 -- These assertions test the unsafe primitives THEMSELVES (ported from
 -- t_array_get_unsafe / t_array_set_unsafe / t_array_copy), so rewriting them
 -- against the safe `array` module would delete the coverage rather than fix it.
--- They are isolated here so the follow-up to #1445 needs an `--allow-internal`
--- route for ONE named file instead of for the whole corpus (`medaka test` has no
--- such flag today — compiler/tools/test_cmd.mdk).
+-- They are isolated here so that whatever the follow-up decides applies to ONE
+-- named file instead of to the whole corpus.
 --
 -- Ported from: t_range_array_half_open, t_range_array_inclusive, t_array_length,
 --              t_array_length_empty, t_array_make, t_array_get_unsafe,

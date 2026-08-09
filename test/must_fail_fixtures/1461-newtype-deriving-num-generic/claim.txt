@@ -1,0 +1,68 @@
+issue: 1461
+what: `newtypeDerivers` (compiler/frontend/desugar.mdk) is DELIBERATELY shorter than
+what: `dataDerivers` -- its own comment says `Generic` (and `Num`) "go through
+what: specialized newtype derivers in lib/desugar.ml that this port has not taken, so
+what: a newtype genuinely cannot derive them here". `dataDerivers` lists
+what: Eq/Ord/Debug/Display/Generic/Hashable; `newtypeDerivers` lists
+what: Eq/Ord/Debug/Display/Hashable. So `deriving (Generic)` is available on a `data`
+what: and NOT on a `newtype` (the asymmetry pinned here), and `deriving (Num)` is
+what: available on neither. `medaka check` and `medaka run` both reject at exit 1 with
+what: R-CANNOT-DERIVE; the message is honest about what it OBSERVED (no deriver claims
+what: this name) rather than claiming the interface is unknown -- `Num` is a real
+what: interface. This is unfinished port work, not a design decision.
+what: WHY THIS FIXTURE EXISTS AT ALL: `test/ported/test_eval_divergent_ported.mdk`
+what: (added in PR #1459 for #1445) holds exactly these two declarations as the ONE
+what: genuinely-untypecheckable file in that corpus, and the #1445 follow-up will grant
+what: it the residual typecheck exemption. Without this pin that file is a SKIP-LIST:
+what: if newtypeDerivers grows Num/Generic, nothing in the tree fails, the file
+what: silently becomes typecheckable, and the residue table rots -- the exact failure
+what: `test/diff_compiler_ported.sh`'s KNOWN_FAIL comment forbids ("a skip-list is
+what: exactly how test/ported/ rotted in the first place"). This row is that corpus's
+what: drain. It is deliberately NOT in test/ported/: a must-fail pin must be graded by
+what: the must-fail harness, and test/ported/ is graded by `medaka test` pass/fail.
+what: The assertions that once surrounded these declarations were removed 2026-07-11
+what: for an UNRELATED reason (newtype constructors are unbound at eval -- recorded in
+what: test_eval_ported.mdk's own removed-cases note), which is why the declarations
+what: stand with no test around them and why an ordinary golden cannot pin them.
+cmd: check-json main.mdk
+exit: 1
+diag-code: R-CANNOT-DERIVE 5:34-5:37
+diag-code: R-CANNOT-DERIVE 7:40-7:47
+control: check control.mdk
+why-verb: `check-json`, not `check` -- `diag-code:` reads the stable `code` +
+why-verb: `range` out of the JSON envelope, which is what TESTING-DESIGN 4.5
+why-verb: prescribes as the default. `run` would pin the same two diagnostics (verified
+why-verb: by hand: `medaka run main.mdk` -> exit 1, same first message) but adds the
+why-verb: interpreter to the moving parts for no gain -- the defect is entirely in
+why-verb: desugar's deriver table, reached identically by both verbs.
+why-diag-code: `diag-code:` and NOT `diag:` -- the message embeds the SUPPORTED-DERIVER
+why-diag-code: LIST ("supported: Eq, Ord, Debug, Display, Hashable"), which is generated
+why-diag-code: from `newtypeDerivers` itself via `map fst`. Adding an unrelated newtype
+why-diag-code: deriver (say `Bounded`) would rewrite that string and FALSE-DRAIN a
+why-diag-code: `diag:` row while Num/Generic were still missing. The code+range is the
+why-diag-code: narrow fact: `R-CANNOT-DERIVE` at the derive NAME's own span.
+why-two-rows: both `Num` and `Generic` are pinned because they drain INDEPENDENTLY --
+why-two-rows: `Generic` needs the specialized newtype deriver ported, `Num` needs a
+why-two-rows: deriver that does not exist for `data` either. A single-row pin would go
+why-two-rows: red on whichever landed first and be read as "1461 fixed".
+why-ranges: the ranges are LINE-SENSITIVE (0-based): 5:34-5:37 is `Num` inside
+why-ranges: `deriving (Num)` on line 6 of main.mdk, 7:40-7:47 is `Generic` on line 8.
+why-ranges: main.mdk's comment header is therefore LOAD-BEARING -- adding or removing a
+why-ranges: header line moves both rows. Keep edits to it line-count-neutral, or
+why-ranges: re-derive both rows with `medaka check --json main.mdk`.
+why-ranges: One derive name per decl on purpose: `deriving (Eq, Num)` would put two
+why-ranges: names in one clause and make the pinned span depend on how the list is
+why-ranges: traversed rather than on the defect.
+why-control: control.mdk is the discriminator, not just an environment canary: it is the
+why-control: SAME `deriving (Generic)` on a `data` instead of a `newtype`, plus a
+why-control: `to_rep`/`RCon` match that actually CONSUMES the derived instance. It
+why-control: checks at exit 0 and RUNS printing `DistD` (both verified by hand). So a
+why-control: red control means the deriving machinery, the Generic/to_rep surface, or
+why-control: the check pipeline regressed -- never that #1461 drained.
+why-control: `Num` is deliberately ABSENT from the control: no deriver table has it, so
+why-control: `data … deriving (Num)` is rejected too, and a control must exit 0. That
+why-control: asymmetry is stated in `what:` rather than wired as a second control.
+why-note: this row drains when either range stops reporting R-CANNOT-DERIVE. When it
+why-note: does: close 1461, delete this fixture, and check whether
+why-note: test/ported/test_eval_divergent_ported.mdk can be folded back into
+why-note: test_eval_ported.mdk -- that file's header says so and names this issue.

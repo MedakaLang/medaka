@@ -766,11 +766,14 @@ test "range list empty" = expectEqual ([] : List Int) [5..3]
 -- Ported from: t_range_array_half_open, t_range_array_inclusive, t_array_length,
 --              t_array_length_empty, t_array_make, t_array_get_unsafe,
 --              t_array_set_unsafe, t_array_copy, t_array_from_list
--- MOVED to test_eval_internal_prims_ported.mdk.  Every one of them reads or
--- writes through `arrayGetUnsafe`/`arraySetUnsafe`, which are internal-only
--- primitives: `medaka check` rejects them outside the stdlib unless
--- `--allow-internal` is passed, and that rejection SUPPRESSES every other
--- diagnostic in the file.  Keeping them here would make this file need a flag.
+-- MOVED to test_eval_internal_prims_ported.mdk.  Most of them read or write
+-- through `arrayGetUnsafe`/`arraySetUnsafe` — directly, or via the `arrayToList`
+-- helper that moved with them — which are internal-only primitives: `medaka check`
+-- rejects those outside the stdlib unless `--allow-internal` is passed, and that
+-- rejection SUPPRESSES every other diagnostic in the file.  The whole section
+-- moved together rather than just the offending assertions, because splitting a
+-- section across two files for the sake of `array length` (which touches no
+-- unsafe primitive) would cost more than it buys.
 
 -- ── Range patterns ───────────────────────────────────────────────────────────
 -- Ported from: t_range_pat_int_hit, t_range_pat_int_miss,
@@ -818,10 +821,13 @@ test "function guard" = expectEqual (-1) (signFnKw (-5))
 
 -- ── let rec, EXPRESSION form (Phase 57) ─────────────────────────────────────
 -- Ported from: t_letrec_inline
--- The four TOP-LEVEL `let rec` cases (t_letrec_top_fact, t_letrec_top_mutual,
+-- The three TOP-LEVEL `let rec` cases (t_letrec_top_fact, t_letrec_top_mutual,
 -- t_letrec_inline_mutual) moved to test_eval_letrec_toplevel_ported.mdk — the
--- checker falsely rejects every top-level `let rec f = <lambda>` (#1449), and
+-- checker falsely rejects every top-level `let rec f = <lambda>` (#807), and
 -- keeping them here would make this whole file untypecheckable for one bug.
+-- The EXPRESSION-level form below is unaffected and stays: it is accepted, and
+-- not because the guard is missing there (a non-lambda expression-level
+-- `let rec` is correctly rejected — measured).
 
 letRecInline = let rec fact = n => if n == 0 then 1 else n * fact (n - 1) in fact 6
 test "let rec inline" = expectEqual 720 letRecInline

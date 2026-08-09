@@ -20,12 +20,28 @@
 -- divergence and not a typo: `data … deriving (Generic)` IS accepted (see
 -- test_eval_ported.mdk's `BoxG`) — only the newtype form is not.
 --
--- If `newtypeDerivers` ever grows `Num`/`Generic`, this file's reason to exist
--- ends: check it, and fold it back into test_eval_ported.mdk.
+-- ⚠️ WHAT ACTUALLY GUARDS THIS, AND WHAT DOES NOT.
+-- Nothing in THIS file notices if the gap closes.  `distRN` / `distMulN` /
+-- `genNewtypeName` are referenced by no assertion anywhere in the corpus — the
+-- ASSERTIONS that once used them were removed 2026-07-11 for an unrelated reason
+-- (newtype constructors are unbound at eval; see test_eval_ported.mdk's
+-- removed-cases note), which is why the declarations stand bare.  So this file on
+-- its own is a SKIP-LIST, and a skip-list cannot notice an accidental fix.
 --
--- Ported from: t_newtype_deriving_num_add, t_newtype_deriving_num_mul (the
--- ASSERTIONS for these were already removed 2026-07-11 — newtype constructors are
--- unbound at eval; the declarations remain because they are what diverges).
+-- The drain lives in two places OUTSIDE this file, both of which go red the day
+-- `newtypeDerivers` grows `Num`/`Generic`:
+--   • test/must_fail_fixtures/1461-newtype-deriving-num-generic/ — pins both
+--     R-CANNOT-DERIVE diagnostics (self-draining, names the issue).
+--   • test/diff_compiler_ported.sh's typecheck ledger — this file's REJECT row
+--     PROMOTEs when `medaka check` starts accepting it.
+-- The assertion below is a liveness marker only.  It proves the file was LOADED
+-- and its declarations were reached; it does NOT test the divergence, and it is
+-- not what would fail on a fix.  Do not read it as coverage.
+--
+-- WHEN #1461 LANDS: delete this file, fold the declarations back into
+-- test_eval_ported.mdk, promote its ledger row, and delete the must-fail fixture.
+--
+-- Ported from: t_newtype_deriving_num_add, t_newtype_deriving_num_mul.
 -- Run with: medaka test test/ported/test_eval_divergent_ported.mdk
 
 import test.{expectEqual}
@@ -49,7 +65,7 @@ genNewtypeName = match to_rep (WrapGen 5)
   RCon name _ => name
   _ => ""
 
--- A live assertion so this file is not silently vacuous under `medaka test`.
--- It exercises nothing divergent on its own; the divergence is the declarations
--- above being reached at all.
+-- LIVENESS MARKER, NOT COVERAGE — see the header.  Its only job is to stop
+-- `medaka test` reporting this file as having no tests.  The real drains are the
+-- must-fail fixture and the typecheck ledger, both named above.
 test "divergent corpus is reached" = expectEqual 1 (1 : Int)
