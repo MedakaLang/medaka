@@ -10,9 +10,8 @@
 --
 -- Run with: `medaka test sqlite/test/roundtrip_test.mdk` from the sqlite project root.
 
-import test.{expectTrue, expectEqual, expectAll, pass, fail}
+import test.{Expectation, expectTrue, expectEqual, expectAll, pass, fail}
 import test.dbfix.{q, qd}
-import array.{arrayFromList}
 import byteparser.{runByteParser}
 import lib.varint.{sqVarint, sqVarintBytes}
 import lib.recordenc.{encodeRecord}
