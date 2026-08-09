@@ -49,10 +49,19 @@ for d in "$FIXDIR"/*/; do
   [ -n "$entry" ] || { echo "skip $name (no root_*.mdk / main_*.mdk entry)"; continue; }
 
   # OCaml-free (REROOT-PLAN §2b): the oracle JSON is the committed
-  # <dir>/oracle.json captured from `medaka check --json` by capture_goldens.sh;
-  # the self-hosted analyzeProject runs as the native diagnostics_project_main.
+  # <dir>/oracle.json, originally captured from the OCaml `medaka check --json`
+  # oracle while OCaml was trusted (capture_goldens.sh's "analyze_project
+  # fixtures" comment) — NOT regenerable via `capture_goldens.sh` today, see the
+  # NO REGEN SCRIPT comment at the `[ -f "$golden" ]` check below. The
+  # self-hosted analyzeProject runs as the native diagnostics_project_main.
   golden="$root/oracle.json"
-  [ -f "$golden" ] || { fail=$((fail+1)); printf 'FAIL %s (no oracle.json — run sh test/capture_goldens.sh analyze_project)\n' "$name"; continue; }
+  # ⚠️ `sh test/capture_goldens.sh analyze_project` is a NO-OP for this corpus —
+  # analyze_project fixtures are FROZEN (test/capture_goldens.sh has no
+  # `analyze_project` ROWS entry, `--frozen` tag, or `want` block at all). There
+  # is no regeneration script; capture_goldens.sh's own "analyze_project
+  # fixtures" comment says to re-root by running `./medaka check --json` with
+  # sorted output by hand and reviewing the diff before committing it.
+  [ -f "$golden" ] || { fail=$((fail+1)); printf 'FAIL %s (no oracle.json — NO REGEN SCRIPT; hand-write from `./medaka check --json`, see capture_goldens.sh "analyze_project fixtures" comment)\n' "$name"; continue; }
   oracle_json="$(cat "$golden")"
   # Strip the native value-entry's trailing "()" (Unit return; runtime/medaka_rt.c)
   # appended to the last output line, so it can't corrupt the final "## FILE" path.

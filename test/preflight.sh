@@ -536,6 +536,10 @@ for f in $changed; do
     # moves which module id that arm claims.
     compiler/tools/*test*|compiler/tools/doctest.mdk|compiler/tools/prop_runner.mdk)
       add 'diff_compiler_test'; add 'diff_compiler_ported'
+      # #1229: diff_compiler_test_typecheck.sh pins the typecheck-first gate in
+      # test_cmd.mdk's doctestGate — including the zero-doctest cell, whose whole
+      # failure mode is exit 0 with no output, i.e. invisible to every golden gate.
+      add 'diff_compiler_test_typecheck'
       add 'diff_compiler_origin_agreement'
       add 'diff_compiler_dict_semantics'
       # #81 Stage 4: diff_compiler_test_native.sh is the CI gate protecting the

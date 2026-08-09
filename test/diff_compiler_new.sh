@@ -3,9 +3,11 @@
 #
 # OCaml-free (REROOT-PLAN §2c): native host test/bin/new_main scaffolds a project
 # tree in a temp dir; the reference is a committed golden tree under
-# test/new_golden/myapp captured from `main.exe new myapp`
-# (test/capture_goldens.sh new).  Diffs the produced tree (file list + byte content)
-# vs the golden.  Cleans up on success; leaves the temp dir on failure.
+# test/new_golden/myapp, originally captured from `main.exe new myapp` while
+# OCaml was trusted. ⚠️ `test/capture_goldens.sh new` is NOT a working recipe
+# today — see the NO REGEN SCRIPT comment at the `[ -d "$GOLD" ]` check below.
+# Diffs the produced tree (file list + byte content) vs the golden.  Cleans up
+# on success; leaves the temp dir on failure.
 set -e
 set -u
 
@@ -14,7 +16,14 @@ RUN="$ROOT/test/bin/new_main"
 GOLD="$ROOT/test/new_golden/myapp"
 
 [ -x "$RUN" ] || { echo "build oracles first: FORCE=1 JOBS=1 sh test/build_oracles.sh --build-one $(basename "$RUN") (missing $RUN)"; exit 2; }
-[ -d "$GOLD" ] || { echo "no golden tree $GOLD — run sh test/capture_goldens.sh new"; exit 2; }
+# ⚠️ `sh test/capture_goldens.sh new` is a NO-OP for this corpus (same trap as
+# #1241) — "new" is a FROZEN family (no ROWS entry, no `--frozen` tag) whose
+# comment ("new: FROZEN — scaffold tree from `medaka new` depends on current
+# binary. Re-capture after Phase 3 rebuild.") is a stale one-time migration
+# note, not a working recipe. There is no regeneration script; hand-write by
+# running `"$RUN" myapp` in a temp dir yourself, review the produced tree, then
+# copy it to `$GOLD`.
+[ -d "$GOLD" ] || { echo "no golden tree $GOLD — NO REGEN SCRIPT; hand-write via $RUN myapp in a temp dir and review, see comment above"; exit 2; }
 
 pass=0; fail=0
 NAME="myapp"

@@ -84,8 +84,16 @@ fi
 for f in "$ENTRY" "$LEXPROBE" "$PARSEPROBE" "$TCPROBE"; do
   [ -f "$f" ] || { echo "missing $f"; exit 2; }
 done
+# ⚠️ `sh test/capture_goldens.sh selfproc` is a NO-OP for this corpus (same trap
+# as #1241) — there is no "selfproc" tag/ROWS entry/`--frozen` family in
+# test/capture_goldens.sh at all. These three goldens were captured from the
+# OCaml reference (dev/eval_probe.exe, tc_module_probe.exe) while OCaml was
+# trusted and it is gone; there is no regeneration script. (Do not confuse this
+# with LEG A's SEPARATE `test/selfproc_goldens/legA/` golden, which IS
+# regenerable via `sh test/capture_goldens.sh --frozen selfproc_legA` — see the
+# header comment above.)
 for g in "$GOLDDIR/lex_probe.golden" "$GOLDDIR/parse_probe.golden" "$GOLDDIR/tc_probe.golden"; do
-  [ -f "$g" ] || { echo "missing golden $g — run: sh test/capture_goldens.sh selfproc"; exit 2; }
+  [ -f "$g" ] || { echo "missing golden $g — NO REGEN SCRIPT (FROZEN, OCaml oracle removed); hand-derive and write it yourself, see comment above"; exit 2; }
 done
 
 # The native runtime auto-prints main's Unit return as a trailing "()" appended to

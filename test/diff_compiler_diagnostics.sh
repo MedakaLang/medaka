@@ -32,7 +32,13 @@ run_case() {
   category="$1"; name="$2"; f="$3"
   golden="${f%.mdk}.analyze.golden"
   if [ ! -f "$golden" ]; then
-    fail=$((fail+1)); printf 'FAIL %s/%s (no .analyze.golden — run sh test/capture_goldens.sh diag_analyze)\n' "$category" "$name"; return
+    # ⚠️ `sh test/capture_goldens.sh diag_analyze` is a NO-OP for this corpus (same
+    # trap as #1241) — diag_analyze is a FROZEN dev-probe family (dev/diagdump.exe,
+    # removed with OCaml); no ROWS entry, no `--frozen` tag. There is no
+    # regeneration script; hand-write via
+    # `"$RUN" "$RT" "$CORE" "$f" | strip_unit | LC_ALL=C sort > "$golden"`, review
+    # the output (source locations must be stripped) before committing it.
+    fail=$((fail+1)); printf 'FAIL %s/%s (no .analyze.golden — NO REGEN SCRIPT; hand-write and review, see comment above)\n' "$category" "$name"; return
   fi
   want="$(LC_ALL=C sort < "$golden")"
   self="$("$RUN" "$RT" "$CORE" "$f" 2>/dev/null | strip_unit | LC_ALL=C sort)"

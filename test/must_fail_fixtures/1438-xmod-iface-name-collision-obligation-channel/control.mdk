@@ -1,0 +1,4 @@
+import amod
+import czmod.{useBulk, Widget(..)}
+
+main = println (useBulk (Widget 3))
