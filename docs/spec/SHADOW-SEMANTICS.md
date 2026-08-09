@@ -47,6 +47,21 @@ column had silently gone stale in the OK direction (see the note under §2).
 >   member (same accept both ways, different value at exit 0) as well as a loud
 >   one — the rule, the full licensing set, its cost, and the sub-predicate that
 >   stays deferred are all in the **S1-CHAIN** note under S1.
+> - **Follow-on ruling, 2026-08-09
+>   ([#1351](https://github.com/MedakaLang/medaka/issues/1351)): S2's importer arm
+>   is evaluated PER DECLARATION.** When more than one interface declares a method
+>   named `N`, S2's *"any impl of **the shadowed interface** for **the receiver's**
+>   head tycon"* has no referent for either definite article — shadow-hood is
+>   decided over **names**, and which argument is the receiver is a property of an
+>   interface's **declaration**. **S2-DECL** (under S2) repairs both: only
+>   declarations S1-NS (a) admits may decide, the receiver argument and the impl
+>   query must come from the **same** declaration, disagreement between two admitted
+>   declarations is a located reject, and no answer may move with import-clause
+>   order. ⚠️ Unlike the two rulings above, **neither execution arm implements this
+>   today, and they are non-conformant for DIFFERENT reasons** — `check`/`run` reads
+>   a bare-name dispatch-index table, `build` reads none and assumes the receiver is
+>   argument 0. The measurement is in S2-DECL's Conformance paragraph; it is also
+>   why a candidate fix graded on `run` alone is a new **S7** violation.
 >
 > ⚠️ **S2's old `GLOBAL` gloss ("local ∪ imported ∪ prelude") was independently
 > wrong** — narrower than `DICT-SEMANTICS.md` §8 I5's actual instance universe —
@@ -669,6 +684,124 @@ Given an occurrence of bare name `N` in module `M`:
     made S1 unreadable. Do not restore it: say **graph-global** here and
     **nameable in `M`** at S1 (§1.0).
 
+  > ### 🔒 S2-DECL — RULED 2026-08-09 ([#1351](https://github.com/MedakaLang/medaka/issues/1351)): the importer arm is evaluated PER DECLARATION, over declarations S1 admits, and BOTH its halves come from the SAME one
+  >
+  > **The gap this fills — two definite articles with no referent.** The importer
+  > arm above reads *"any impl of **the shadowed interface** for **the receiver's**
+  > head tycon `T`"*. Neither phrase denotes when **more than one interface declares
+  > a method named `N`**. S1 and S1-NS classify shadow-hood over **names**, so `N`
+  > can be a shadow in `M` while two distinct interfaces declare it — and then there
+  > is no *the* shadowed interface. Nor is there a *the* receiver: **which argument
+  > is the receiver is a property of an interface's declaration, not of the
+  > occurrence**, and two declarations of the same method name may put it at
+  > different argument positions. This is the same defect as the adjective this
+  > document retired — a phrase that can be quoted in good faith to reach opposite
+  > answers — and the clause set was inconsistent under both readings, so the repair
+  > cannot be a branch selection.
+  >
+  > **(a) Receiver argument.** For a declaration `I` of a method named `N`, the
+  > **receiver argument** is the first parameter of `I`'s declared method type whose
+  > type mentions `I`'s **dispatch typaram** (S8: `I`'s first type parameter). It is
+  > **not** necessarily the occurrence's first argument: for `interface IZ b where
+  > mth : Int -> b -> Int` the receiver argument is **argument 1**. ⚠️ **S8's phrase
+  > *"keyed on the first parameter"* means the interface's first TYPE parameter, not
+  > the method's first value parameter** — read as the latter it contradicts this
+  > sub-clause, and that reading is the emit-path non-conformance recorded below.
+  >
+  > **(b) Both halves from the same declaration.** The importer arm is evaluated
+  > against a **declaration**, not a name. Each declaration `I` supplies **both**
+  > halves together: the receiver argument (a), **and** the impl query, which is
+  > *"does an `impl` of `I` exist at that receiver's head tycon `T`"* — still asked
+  > over the **graph-global** instance universe (`DICT-SEMANTICS.md` §8 **I5**),
+  > unchanged. **Taking the receiver argument from one declaration and the impl
+  > query from another is non-conformant**: that pairing is a denotation no
+  > declaration has, and it is exactly what #1351 ships (an occurrence typed against
+  > one interface's declared method type and routed off another's argument
+  > geometry).
+  >
+  > **(c) Admitted declarations.** `I` is **admitted** in `M` iff `I` satisfies
+  > **S1-NS (a)** — the same per-method union of the two namespaces that decides
+  > shadow-hood. A declaration `M` cannot name supplies **neither** half. This is
+  > S1-SCOPE's criterion applied one level in: it already governs whether `N` is a
+  > shadow at all, and a declaration that cannot make `N` a shadow cannot decide
+  > what `N` denotes either. **Note the asymmetry this preserves:** the *names* that
+  > may decide are narrowed; the *instances* that answer the query are not (I5).
+  >
+  > **(d) The choice, by cardinality of the admitted set.**
+  >
+  > - **Exactly one** → it decides, per (a)+(b).
+  > - **Two or more that yield the SAME denotation** (all the standalone, or all the
+  >   same impl) → that denotation. Shadow-hood is per **name** (S1); an occurrence
+  >   is not ambiguous merely because two declarations agree about it.
+  > - **Two or more that DISAGREE** → a **located reject** at the occurrence. Not a
+  >   silent pick: by S1-SCOPE's own criterion this clause set is a
+  >   *name-resolution* rule, which must be **choosing between candidates the author
+  >   could have meant**; with two admitted candidates and no discriminator written
+  >   in the source there is nothing to choose on, and any tie-break the
+  >   implementation applies is supplied from outside the program the author can
+  >   write down.
+  > - **None** → S1 already says `N` is not a shadow in `M`; the standalone denotes.
+  >   Unchanged by this clause.
+  >
+  > **(e) ORDER-INVARIANCE, stated as a rule so it can be gated.** The choice in (d)
+  > **may never be a function of import-clause order, module-processing order, or
+  > declaration order.** A resolution rule whose answer moves when two `import`
+  > clauses are swapped is non-conformant **whatever value it produces** — including
+  > when the two orders differ only in *accepting* versus *rejecting*. The
+  > instrument is a permutation differential, not a golden:
+  > `test/diff_compiler_import_order.sh`.
+  >
+  > **What it costs, stated as a cost.** One cell **narrows**: two admitted,
+  > disagreeing declarations plus a standalone `N` compiles today and stops
+  > compiling under (d). Same migration shape as S1-SCOPE's. And #1351's own corpus
+  > **changes value**: under this clause every ordering of
+  > `test/import_order_fixtures/1351-methoddispatchidx-import-order-collision/`
+  > denotes the imported standalone (`IZ` is the only admitted declaration; its
+  > receiver argument is argument 1, an `Int`, and no `impl IZ Int` exists), which
+  > agrees with that case's semantic companion
+  > `test/shadow_fixtures/i17_importer_two_ifaces_neither_nameable/`. **PREDICTED
+  > UNDER THIS CLAUSE, not measured** — no binary implements it yet.
+  >
+  > **What it does NOT change.** S2's graph-global impl universe (I5). This clause
+  > changes what the query *asks* (an impl of `I`, rather than of anything declaring
+  > a method of that name); it does not narrow which modules' instances may answer.
+  > It also does not touch the **definer** arm, which never consults the impl
+  > universe at all.
+  >
+  > **Conformance today — MEASURED 2026-08-09 (cold `make medaka` at `bfcd4ea7`,
+  > `MEDAKA_STRICT=1`), and the two arms fail (b) DIFFERENTLY.**
+  >
+  > - **`check` / `run`.** The receiver argument comes from `methodDispatchIdx`, a
+  >   **bare-method-name** first-match lookup over a graph-global accumulator, while
+  >   the occurrence is typed from `methodIfaceParamsRef`, a bare-method-name map
+  >   with the **opposite** tie-break. With two colliding declarations the two name
+  >   different ones by construction — violating (b) — and the pick moves with
+  >   import-clause order, violating (e). The impl query, `implExistsForHead`, is
+  >   keyed by method **name** and head tycon, never by interface — so it can answer
+  >   about an `impl` of a declaration `M` cannot name, violating (c).
+  > - **`build`.** The emitter takes a different branch entirely:
+  >   `definerShadowArgHead`'s importer-on-emit disjunct (`importerShadowOnEmitPath`,
+  >   gated on a mark-seeded non-empty route symbol, hence **inert on the un-mangled
+  >   `run`/`check` path**) routes the occurrence into `inferDefinerShadowApp`, which
+  >   sets `suppressRLocalRecord` and therefore **never reads any dispatch-index
+  >   table at all**. Its receiver is the peeled application's **first argument**,
+  >   positionally — so it violates (a) for every method whose receiver argument is
+  >   not argument 0, and it does so **order-invariantly**, which is why the defect
+  >   cannot be seen by (e)'s instrument on that arm.
+  >
+  > Because the two arms decide by different mechanisms, **a fix applied to one is a
+  > new S7 violation**: re-deriving the `check` arm's index alone moves `run` to the
+  > standalone while the built binary still dispatches. Any candidate must be graded
+  > on the **executed binary**, not on `run`.
+  >
+  > **⟲ Overturn condition.** (b) is overturned by a program, correct under the
+  > language's other rules, whose intended meaning requires the receiver argument of
+  > one declaration together with the impl query of another. (d)'s reject arm is
+  > overturned by a **source-derivable, order-independent** discriminator between two
+  > admitted declarations — an occurrence-level carrier recording which interface the
+  > author named would convert many of today's reject cells into the one-admitted
+  > case, and is the standing candidate; (e) survives either way.
+
 - **S3 (N-way).** **[CHANGED]** **Vacuous for a definer shadow:** every occurrence
   is the standalone regardless of receiver, so no receiver selects an impl; a
   receiver at a live-impl head is a **located reject**, not a dispatch. The impls
@@ -1193,6 +1326,7 @@ Line numbers at `cfc4fa5a`.
 | **S4 value-position pin** | check: `maybeStandaloneValueMono` (`typecheck.mdk`); build: `maybeStandaloneValueMonoEmit` via `inferMethodAt` — gated by **`emitValueShadowGate`** | a bare value-position shadow (`map size xs`, not an app head) denotes the STANDALONE: pin its TYPE to the standalone scheme (`Int -> Int`) so a HOF grounds the element concretely, instead of the permissive method scheme (`a -> i -> Int`, a function) whose `Display (List (Int -> Int))` stamps a **NULL element dict → SIGSEGV** (#410/#669 single-typaram; **#724 multi-typaram**) | **[#724] gated PER SHADOW KIND on BOTH paths** — DEFINER arm typaram-agnostic (`isDefinerShadow`, i.e. `contains name definerShadowNamesRef`), IMPORTER arm `singleTyparamIfaceMethod` (Fork 1). Before #724 the check path was already per-kind (definer typaram-agnostic) but the emit path used ONE blanket `singleTyparamIfaceMethod`, so a **multi-typaram definer value position** grounded on check yet DECLINED on emit → the #410 skew at multi-typaram width. ⚠️ the emit classifier is **`isDefinerShadow`, NOT `shadowStandaloneSchemesRef` membership** — that ref is `standaloneSchemeFor`'s scheme-SOURCE selector and an importer occurrence is not reliably in it at this pin, so keying on it mis-grounds the i10 multi-typaram importer app head to a garbage-pointer build. App heads never reach the pin as value positions: a definer app head is bracketed `shadowHeadCtxRef` True by `inferDefinerShadowApp`. Fixtures: `d22`/`d22b` (multi-typaram definer value position), `d22z` (app-head control) |
 | S2 no-impl obligation skip | `typecheck.mdk:4670` `recordImplObligation`, skip arm `:4688` | a no-impl shadow receiver is a legitimate standalone fallback, not `No impl of …` | bare name ∈ `definerShadowNamesRef` ∪ `standaloneValuesRef` — skips the obligation for EVERY occurrence of the name, impl-having or not (this un-checks row 13: the domain mismatch is never re-imposed) |
 | S2/S3/S5 route stamping | `recordRLocalSite` (gated on `standaloneValuesRef`, suppressed inside `inferDefinerShadowApp`); `resolveRLocalSites` / `resolveRLocalSite`: **`isDefinerShadow` ⇒ `RLocal sym` unconditionally**, else (importer) grounded head + `implExistsForHead` → leave route (dispatch) else `RLocal sym` (`stampRLocalOrFallback`); ungrounded → `RLocal` for definer shadows; build-path RKey via `pendingArgStamps` push → `resolveArgStamps` | **[CHANGED — THE INVERSION]** route by SHADOW KIND first, receiver second. `resolveArgStamps` runs BEFORE `resolveRLocalSites`, so the `RLocal` stamp wins | ⚠️ **`isDefinerShadow` carries the SAME gate as every typing entry point** (`ifaceMethodName` since #54; it was the typaram-count test `singleParamIfaceMethod`, whose mismatch with nothing else was S-3 / row 26). Routing here on a gate the typing entry points do not share routes a site whose TYPE came from the dispatch path — **route and type disagreeing is precisely the P0-20 bug class.** The two gates must stay identical |
+| **S2-DECL** receiver argument + impl query | check/run: `methodDispatchIdx` → `recordRLocalSite` → `resolveRLocalSite` → `implExistsForHead`. build: `definerShadowArgHead`'s importer disjunct (`importerShadowOnEmitPath`) → `inferDefinerShadowApp`, which sets `suppressRLocalRecord` and peels the application's FIRST argument | which argument is the receiver, and whose impls answer the query | 🔴 **NON-CONFORMANT on BOTH arms, for DIFFERENT reasons — MEASURED 2026-08-09 ([#1351](https://github.com/MedakaLang/medaka/issues/1351)).** check/run keys the receiver position on the **bare method name** (first-match over a graph-global accumulator, so import-clause order decides) while the occurrence's TYPE comes from `methodIfaceParamsRef` — same key, **opposite** tie-break — so with two colliding declarations the two name different ones by construction (S2-DECL (b), (e)). build reads **no** dispatch-index table at all: the receiver is argument 0, positionally (S2-DECL (a)). `implExistsForHead` is keyed `(method name, head tycon)` with no interface, so it can answer about an impl of a declaration the module cannot name (S2-DECL (c)). ⚠️ **The two arms are independent**: re-deriving either dispatch-index table moves `run` and leaves the built binary where it was — an **S7** violation, not a partial fix |
 | route representation | `compiler/frontend/ast.mdk:69-72` (`RKey`/`RLocal String`); sexp `compiler/ir/core_ir_sexp.mdk:43-44` (`RLocal ""` serializes to the old nullary form) | ONE occurrence needs TWO names: bare `N` for dispatch, `<mid>__N` for the standalone | the mangled standalone symbol is **carried in the route**, stamped at resolve time (Fork-2 carry-in-route) |
 | lowering | `compiler/ir/core_ir_lower.mdk:144` `EMethodAt name … → CMethod name …` | route + both names survive to the backends | `name` is the single bare field; the RLocal symbol rides the route |
 | emit (LLVM) | `compiler/backend/llvm_emit.mdk:3413` `emitMethod … (RKey tag)` → `implFor e name tag`; `:3435` `… (RLocal sym)` → `emitKnownFnSat e ("mdk_" ++ sym)` | S2's two arms at codegen | RKey needs the **bare** method name; RLocal needs the **mangled** symbol |
