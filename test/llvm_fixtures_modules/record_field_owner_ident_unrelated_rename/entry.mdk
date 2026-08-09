@@ -1,0 +1,32 @@
+-- MONOTONICITY UNDER RENAME — the sibling of `field_owner_no_narrowing/`, and the
+-- counterfactual its header used to describe as an accepted fragility.
+--
+-- That cell's header said, correctly for the compiler of the time:
+--
+--     "Rename `Wrec` to something sorting before `Dup` and this cell REDDENS, for a
+--      reason that has nothing to do with the narrowing it guards."
+--
+-- This IS that program.  The one variable against `field_owner_no_narrowing/` is the
+-- unrelated module's record name — `Wrec` → `Arec` — which moves it ahead of `Dup` in
+-- the `sortUniqS`ed owner list for `dx`.  MEASURED on a cold build of the merge base:
+-- `Type mismatch: RA vs Arec`, exit 1, on a program whose only edit was renaming a
+-- record in a module the projection has nothing to do with.
+--
+-- Under identity selection the owner-list ORDER stops deciding anything: `mkA.dx`
+-- selects the declaration whose `(declaring module, type name)` equals `mkA`'s own
+-- head, which no rename of `wmod`'s record can change.  So this cell and
+-- `field_owner_no_narrowing/` must now print the SAME value, and that is the property
+-- pinned here.
+--
+-- ⚠️ KEEP BOTH.  The sibling grades that the fallback is not narrowed by import
+-- spelling (`import amod.{RA, mkA}` witnesses no constructor for the owner key `Dup`);
+-- this one grades that it is not decided by owner-key sort order.  A regression can
+-- hit either without the other.
+--
+-- Hand-derived correct answer, independent of any engine: mkA.dx = 7, mkW.dx = 1,
+-- so `8` — the same value its sibling prints, which is the point.
+import amod.{RA, mkA}
+import wmod.{Arec, mkW}
+
+main : <IO> Unit
+main = putStrLn (intToString (mkA.dx + mkW.dx))

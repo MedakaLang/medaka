@@ -1,2 +1,0 @@
--- issue #1216: `beta` is index 0 in Other, index 1 in Rec (main.mdk).
-public export data Other = Other { beta : String, alpha : String }

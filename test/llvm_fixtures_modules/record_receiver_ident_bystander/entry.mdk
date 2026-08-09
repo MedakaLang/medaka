@@ -26,7 +26,15 @@
 --   `hxOf mkH`    — the projection happens inside `ahold`, on a NAMED-FIELD
 --                   VARIANT (registry key `Plain`, type `Holder`).  Arm (a) never
 --                   hits for it — the head is `Holder` and no companion row is
---                   keyed `Holder` — so the field→owners path answers, unchanged.
+--                   keyed `Holder` — so the field→owners path answers.
+--                   ⚠️ "…answers, UNCHANGED" is what this line said until
+--                   Q-IDENT (#1383 / #1216), and that word is now false: the
+--                   field→owners path ITSELF selects by receiver identity now,
+--                   and `pairRecordByName` is only its decline arm.  The cell's
+--                   VALUE is unchanged (`hx` has a singleton owner list here, so
+--                   both rules agree), which is why it stayed green — not because
+--                   the path stayed the same.  The route is graded as a route by
+--                   `record_field_owner_ident_variant_vs_record_type/`.
 --   `mkP.px`      — THE DISCRIMINATING CELL: it proves that SOME candidate match
 --                   runs at all.  Registry key `Plain` is COLLIDED: `plainlib`
 --                   declares a record `Plain` and `ahold` declares a named-field

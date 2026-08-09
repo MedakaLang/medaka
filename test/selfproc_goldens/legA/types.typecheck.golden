@@ -1084,6 +1084,8 @@ overrideScopedCtors : List Decl -> Map String (List (Ident, String, Scheme)) -> 
 overrideScopedMethods : List Decl -> Map String (List (Ident, (String, List String, Ty, List (String, List Kind)))) -> List String -> Map String (String, List String, Ty, List (String, List Kind)) -> Map String (String, List String, Ty, List (String, List Kind))
 overrideScopedRecords : List Decl -> Map String (List (Ident, String, RecordInfo)) -> List String -> Unit
 ownMethodIdent : List Decl -> String -> Option Ident
+ownersMatchingReceiver : Mono -> List String -> Option (String, RecordInfo)
+ownersMatchingReceiverGo : Option HeadKey -> List String -> Option (String, RecordInfo)
 pairIface : String -> Int -> List (String, Int)
 pairRecordByName : String -> Option (String, RecordInfo)
 pairsOfVecObls : List (String, List Int) -> List (String, Int)
@@ -1205,10 +1207,13 @@ recordCandIsType : Ident -> Ident -> String -> Bool
 recordDoMonadError : Loc -> Unit
 recordFieldMap : RecordInfo -> Map String Mono
 recordFieldNames : RecordInfo -> List String
+recordForKeyAndReceiver : Option HeadKey -> String -> Option RecordInfo
 recordForReceiverIdent : Mono -> String -> Option RecordInfo
+recordIdentRowForReceiver : Option HeadKey -> List (Ident, String, RecordInfo) -> Option RecordInfo
 recordIfaceObligation : String -> Mono -> Unit
 recordImplObligation : String -> Mono -> Mono
 recordImporterShadowDicts : TcEnv -> String -> List (Ref Route) -> Mono -> Unit
+recordInfoIsReceiverDecl : Option HeadKey -> RecordInfo -> Bool
 recordLocalBind : String -> Mono -> Unit
 recordMethodDicts : String -> Ref (List Route) -> List (Int, Mono) -> Unit
 recordMethodLevelObls : List String -> Ty -> Mono -> Unit

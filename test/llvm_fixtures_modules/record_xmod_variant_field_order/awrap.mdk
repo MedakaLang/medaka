@@ -1,0 +1,15 @@
+-- #1216 arm 2.  A NAMED-FIELD VARIANT: registry key `Cfg`, owning type `WrapA`.  Both
+-- projections below happen INSIDE the declaring module and never cross a module
+-- boundary; `zwrap` declares the same constructor name at the OPPOSITE field order and
+-- the two modules neither import nor are imported by each other.
+public export data WrapA =
+  | Cfg { a : Int, b : Int }
+
+mkA : WrapA
+mkA = Cfg { a = 11, b = 22 }
+
+export arA : Int
+arA = mkA.a
+
+export arB : Int
+arB = mkA.b

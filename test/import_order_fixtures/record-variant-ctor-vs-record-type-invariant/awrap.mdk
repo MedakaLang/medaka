@@ -1,0 +1,8 @@
+-- A NAMED-FIELD VARIANT: registry key `Cfg`, owning type `Wrap`.  A value of it has
+-- head `Wrap`, which is NOT the key, so a projection of it falls to the field→owners
+-- path rather than the exact record lookup.
+public export data Wrap =
+  | Cfg { a : Int, b : Int }
+
+export mkW : Wrap
+mkW = Cfg { a = 11, b = 22 }

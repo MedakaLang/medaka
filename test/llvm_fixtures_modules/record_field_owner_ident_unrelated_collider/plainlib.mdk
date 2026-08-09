@@ -1,0 +1,8 @@
+-- The UNRELATED module whose record TYPE spells the same bare name as ahold's
+-- constructor.  There is no import relationship between the two modules at all.
+-- Fields are the same two names at the OPPOSITE indices, so the wrong pick is a
+-- wrong VALUE, not merely a wrong record name in a message.
+public export data Plain = { hy : Int, hx : Int }
+
+export mkP : Plain
+mkP = Plain { hy = 7, hx = 5 }

@@ -1,0 +1,7 @@
+-- An unrelated module whose record TYPE spells the same bare name `Cfg`, with the same
+-- two field names at the opposite indices.  On the unmangled check path BOTH
+-- declarations are filed under the one bare registry key `Cfg`.
+public export data Cfg = { b : Int, a : Int }
+
+export mkZ : Cfg
+mkZ = Cfg { b = 33, a = 44 }

@@ -1,5 +1,5 @@
 # META
-source_lines=24101
+source_lines=24211
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted typecheck stage — port of lib/typecheck.ml's HM core.  SLICE 1:
@@ -6835,7 +6835,16 @@ lookupRecordByMangledHead te head fname = match mangledHeadCandidates head fname
 -- to today's ladder unchanged.  An absent identity therefore decides nothing, which
 -- is the same absence-makes-no-claim rule `sameTyConHead` owns one layer down.
 recordCandIsReceiverDecl : Option HeadKey -> (String, RecordInfo) -> Bool
-recordCandIsReceiverDecl rk (_, ri) = rk == headTyconMono (recordResultMono ri)
+recordCandIsReceiverDecl rk (_, ri) = recordInfoIsReceiverDecl rk ri
+
+-- The comparison itself, over a bare `RecordInfo`, so the `(key, info)` pair the
+-- filter above happens to carry is not forced onto callers that hold only the
+-- info (`ownersMatchingReceiver` below walks the identity companion, whose rows
+-- are `(Ident, String, RecordInfo)`).  Same equality, same fail-safe: `rk` stays
+-- an `Option HeadKey` rather than being unwrapped, so nothing allocates a `Some`
+-- per candidate, and an absent identity on either side matches nothing.
+recordInfoIsReceiverDecl : Option HeadKey -> RecordInfo -> Bool
+recordInfoIsReceiverDecl rk ri = rk == headTyconMono (recordResultMono ri)
 
 -- The record's RESULT type — the head `registerRecordInfoKeyed` minted from the
 -- DECLARATION's origin (`applyParams (tconFrom o typeName) paramVars`), which is why
@@ -6864,13 +6873,114 @@ mangledHeadCandidatesGo head (key::rest)
     None => mangledHeadCandidatesGo head rest
   | otherwise = mangledHeadCandidatesGo head rest
 
+-- ── Q-IDENT (#1383 both faces, #1216 both arms): a CONCRETE receiver selects its
+--    record by IDENTITY, never by which declaration currently holds the key ─────
+--
+-- `resolveFieldByOwners` is the give-up path.  It is reached whenever the
+-- receiver's head is not itself a registry KEY — a named-field variant
+-- `data Wrap = | Cfg { … }` files under `Cfg` while a value of it has head
+-- `Wrap`, so the exact `lookupRecordByName "Wrap"` misses, no key suffix-matches
+-- `__Wrap`, and control lands here.  Both of its non-empty arms then answered by
+-- KEY (`pairRecordByName r` / `pairRecordByName (headL owners)`), and
+-- `recordByNameRef` holds ONE row per bare key, last-write-wins over module
+-- registration order.
+--
+-- 🚨 THE OWNER SET IS NOT THE DEFECT, AND ASSUMING IT WAS MISROUTED THIS FIX
+-- ONCE.  In all four programs this drains (#1383's two faces, #1216's two arms)
+-- `fieldOwnerNames` returns a SINGLETON holding the RIGHT key — and it
+-- `sortUniqS`es, so `headL` is order-insensitive anyway.  What varies with
+-- module registration order is which declaration that one key REACHES.  A
+-- reachability/narrowing analysis over the owner set is therefore neither
+-- necessary nor sufficient here; it is owed to a different reader (the `TVar`
+-- ambiguity arm, #1070's fourth row) and is deliberately NOT part of this.
+--
+-- The question this arm asks is the IDENTITY question `lookupRecordForReceiver`
+-- already answers for `resolveFieldRecord`'s arm (a), and
+-- `docs/spec/DICT-SEMANTICS.md` §8 I4 qualification 2 states it:
+-- *"A record-field selection `r.f` is resolved by the TYPE of `r`, not by the
+-- spelling `f`."*  Nothing the module spelled is an input.  So ask it here too,
+-- over the owner keys the field→owners multimap already produced, and let the
+-- identity — not the key — select.
+--
+-- 🚨 IT REPLACES A GUESS, NEVER A DECISION, SO ACCEPTANCE CANNOT NARROW.  A
+-- candidate matches only when its `(declaring module, type name)` EQUALS the
+-- receiver's, and `inferFieldOfRecord` then unifies `te` against that same
+-- declaration's result — which succeeds by construction.  The old pick could
+-- unify only when it happened to BE the receiver's declaration, and in that case
+-- this walk reaches the same row first (same sorted key order, floor row
+-- included).  On a miss it DECLINES and the ladder below runs unchanged, so it
+-- can neither empty an owner set nor refuse a program that used to check.
+--
+-- ⚠️ THE `TVar` ARM IS UNTOUCHED.  `headTyconMono` answers `None` for an unbound
+-- receiver (`headMonoNode` normalizes first), so the selection is skipped and
+-- `resolveFieldAmbiguous` still pushes `T-AMBIGUOUS-FIELD` on exactly today's
+-- programs.
+--
+-- ⚠️ IT FIXES THE STAMP, NOT ONLY THE SELECTION — which is what makes #1216 a
+-- drain rather than a relocation.  `inferFieldAccess` `setRef`s the returned KEY
+-- onto the access node; `ir/core_ir_lower.mdk` carries it into
+-- `CFieldAccess … recName`, and both emitters read THAT for field ORDER.
+-- Returning the key the matching row is filed under keeps the decision and the
+-- stamp on one declaration — the "decides by a richer key than the one it
+-- STAMPS" hazard `.claude/workstreams/TYPECHECK.md`'s standing gate names, and
+-- the one it records against #1381 (decision sharpened by identity, stamp left
+-- as the receiver's unmangled head name).  On the emit path that key is the
+-- distinguishing mangled `<mid>__<ctor>`, which is why #1216's built binary
+-- stops applying the other module's layout.
 resolveFieldByOwners : Mono -> String -> Option (String, RecordInfo)
 resolveFieldByOwners te fname = match fieldOwnerNames fname
   [] =>
     let _ = pushUnknownField fname "<unknown>"
     None
-  [r] => pairRecordByName r
-  r::rest => resolveFieldAmbiguous te fname (r::rest)
+  r::rest => match ownersMatchingReceiver te (r::rest)
+    Some pair => Some pair
+    None => match rest
+      [] => pairRecordByName r
+      _ => resolveFieldAmbiguous te fname (r::rest)
+
+-- The receiver's key is minted ONCE for the whole walk, not once per key or per
+-- candidate — the same hoist `lookupRecordByMangledHead` documents at its own
+-- `rk` binding.  `None` (no head type constructor: an unbound var) declines
+-- immediately, before any map lookup.
+ownersMatchingReceiver : Mono -> List String -> Option (String, RecordInfo)
+ownersMatchingReceiver te owners =
+  let rk = headTyconMono te
+  match rk
+    None => None
+    Some _ => ownersMatchingReceiverGo rk owners
+
+-- One key at a time, in `fieldOwnerNames`' existing `sortUniqS` order, and
+-- SHORT-CIRCUITING on the first match — hand-written monomorphic recursion, not
+-- a `filterList`/`any` over prelude `Foldable` (`compiler/AGENTS.md`: delegating
+-- a hot scan to one measured +56% self-compile).
+ownersMatchingReceiverGo : Option HeadKey -> List String -> Option (String, RecordInfo)
+ownersMatchingReceiverGo _ [] = None
+ownersMatchingReceiverGo rk (k::rest) = match recordForKeyAndReceiver rk k
+  Some ri => Some (k, ri)
+  None => ownersMatchingReceiverGo rk rest
+
+-- Candidates under ONE registry key: the identity-keyed companion's rows first —
+-- it keeps EVERY declaration filed under a collided key, which is the whole
+-- reason it exists — then the bare floor row.  The floor is not redundant: a
+-- module's OWN records are absent from the companion (it is grown from
+-- `pubDecls` at the END of each module's arm, so a module never sees itself),
+-- and so is every declaration under a driver that never populated it.
+--
+-- Both sources go through the SAME identity test, so the floor cannot smuggle in
+-- a foreign declaration the way a bare `lookupRecordByName` does — the floor row
+-- is now a CANDIDATE, not an answer.
+recordForKeyAndReceiver : Option HeadKey -> String -> Option RecordInfo
+recordForKeyAndReceiver rk k = match recordIdentRowForReceiver rk (fromOption [] (omLookup k crossRun.value.universeRecordIdentsRef.value))
+  Some ri => Some ri
+  None => match lookupRecordByName k
+    None => None
+    Some ri => if recordInfoIsReceiverDecl rk ri then Some ri else None
+
+recordIdentRowForReceiver : Option HeadKey -> List (Ident, String, RecordInfo) -> Option RecordInfo
+recordIdentRowForReceiver _ [] = None
+recordIdentRowForReceiver rk ((_, _, ri)::rest)
+  | recordInfoIsReceiverDecl rk ri = Some ri
+  | otherwise = recordIdentRowForReceiver rk rest
 
 -- multiple owners: receiver still an unbound var ⇒ genuinely ambiguous; a
 -- concrete (non-record) receiver ⇒ pick the first owner so the later unify
@@ -25348,7 +25458,9 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "lookupRecordByMangledHead" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RecordInfo")))))))
 (DFunDef false "lookupRecordByMangledHead" ((PVar "te") (PVar "head") (PVar "fname")) (EMatch (EApp (EApp (EVar "mangledHeadCandidates") (EVar "head")) (EVar "fname")) (arm (PList (PVar "pair")) () (EApp (EVar "Some") (EVar "pair"))) (arm (PVar "cands") () (EBlock (DoLet false false (PVar "rk") (EApp (EVar "headTyconMono") (EVar "te"))) (DoExpr (EMatch (EApp (EApp (EVar "filterList") (EApp (EVar "recordCandIsReceiverDecl") (EVar "rk"))) (EVar "cands")) (arm (PList (PVar "pair")) () (EApp (EVar "Some") (EVar "pair"))) (arm PWild () (EVar "None"))))))))
 (DTypeSig false "recordCandIsReceiverDecl" (TyFun (TyApp (TyCon "Option") (TyCon "HeadKey")) (TyFun (TyTuple (TyCon "String") (TyCon "RecordInfo")) (TyCon "Bool"))))
-(DFunDef false "recordCandIsReceiverDecl" ((PVar "rk") (PTuple PWild (PVar "ri"))) (EBinOp "==" (EVar "rk") (EApp (EVar "headTyconMono") (EApp (EVar "recordResultMono") (EVar "ri")))))
+(DFunDef false "recordCandIsReceiverDecl" ((PVar "rk") (PTuple PWild (PVar "ri"))) (EApp (EApp (EVar "recordInfoIsReceiverDecl") (EVar "rk")) (EVar "ri")))
+(DTypeSig false "recordInfoIsReceiverDecl" (TyFun (TyApp (TyCon "Option") (TyCon "HeadKey")) (TyFun (TyCon "RecordInfo") (TyCon "Bool"))))
+(DFunDef false "recordInfoIsReceiverDecl" ((PVar "rk") (PVar "ri")) (EBinOp "==" (EVar "rk") (EApp (EVar "headTyconMono") (EApp (EVar "recordResultMono") (EVar "ri")))))
 (DTypeSig false "recordResultMono" (TyFun (TyCon "RecordInfo") (TyCon "Mono")))
 (DFunDef false "recordResultMono" ((PCon "RecordInfo" PWild (PVar "result") PWild PWild)) (EVar "result"))
 (DTypeSig false "mangledHeadCandidates" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "RecordInfo"))))))
@@ -25357,7 +25469,17 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "mangledHeadCandidatesGo" (PWild (PList)) (EListLit))
 (DFunDef false "mangledHeadCandidatesGo" ((PVar "head") (PCons (PVar "key") (PVar "rest"))) (EIf (EApp (EApp (EVar "endsWith") (EBinOp "++" (ELit (LString "__")) (EVar "head"))) (EVar "key")) (EMatch (EApp (EVar "lookupRecordByName") (EVar "key")) (arm (PCon "Some" (PVar "ri")) () (EBinOp "::" (ETuple (EVar "key") (EVar "ri")) (EApp (EApp (EVar "mangledHeadCandidatesGo") (EVar "head")) (EVar "rest")))) (arm (PCon "None") () (EApp (EApp (EVar "mangledHeadCandidatesGo") (EVar "head")) (EVar "rest")))) (EIf (EVar "otherwise") (EApp (EApp (EVar "mangledHeadCandidatesGo") (EVar "head")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "resolveFieldByOwners" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RecordInfo"))))))
-(DFunDef false "resolveFieldByOwners" ((PVar "te") (PVar "fname")) (EMatch (EApp (EVar "fieldOwnerNames") (EVar "fname")) (arm (PList) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "pushUnknownField") (EVar "fname")) (ELit (LString "<unknown>")))) (DoExpr (EVar "None")))) (arm (PList (PVar "r")) () (EApp (EVar "pairRecordByName") (EVar "r"))) (arm (PCons (PVar "r") (PVar "rest")) () (EApp (EApp (EApp (EVar "resolveFieldAmbiguous") (EVar "te")) (EVar "fname")) (EBinOp "::" (EVar "r") (EVar "rest"))))))
+(DFunDef false "resolveFieldByOwners" ((PVar "te") (PVar "fname")) (EMatch (EApp (EVar "fieldOwnerNames") (EVar "fname")) (arm (PList) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "pushUnknownField") (EVar "fname")) (ELit (LString "<unknown>")))) (DoExpr (EVar "None")))) (arm (PCons (PVar "r") (PVar "rest")) () (EMatch (EApp (EApp (EVar "ownersMatchingReceiver") (EVar "te")) (EBinOp "::" (EVar "r") (EVar "rest"))) (arm (PCon "Some" (PVar "pair")) () (EApp (EVar "Some") (EVar "pair"))) (arm (PCon "None") () (EMatch (EVar "rest") (arm (PList) () (EApp (EVar "pairRecordByName") (EVar "r"))) (arm PWild () (EApp (EApp (EApp (EVar "resolveFieldAmbiguous") (EVar "te")) (EVar "fname")) (EBinOp "::" (EVar "r") (EVar "rest"))))))))))
+(DTypeSig false "ownersMatchingReceiver" (TyFun (TyCon "Mono") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RecordInfo"))))))
+(DFunDef false "ownersMatchingReceiver" ((PVar "te") (PVar "owners")) (EBlock (DoLet false false (PVar "rk") (EApp (EVar "headTyconMono") (EVar "te"))) (DoExpr (EMatch (EVar "rk") (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" PWild) () (EApp (EApp (EVar "ownersMatchingReceiverGo") (EVar "rk")) (EVar "owners")))))))
+(DTypeSig false "ownersMatchingReceiverGo" (TyFun (TyApp (TyCon "Option") (TyCon "HeadKey")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RecordInfo"))))))
+(DFunDef false "ownersMatchingReceiverGo" (PWild (PList)) (EVar "None"))
+(DFunDef false "ownersMatchingReceiverGo" ((PVar "rk") (PCons (PVar "k") (PVar "rest"))) (EMatch (EApp (EApp (EVar "recordForKeyAndReceiver") (EVar "rk")) (EVar "k")) (arm (PCon "Some" (PVar "ri")) () (EApp (EVar "Some") (ETuple (EVar "k") (EVar "ri")))) (arm (PCon "None") () (EApp (EApp (EVar "ownersMatchingReceiverGo") (EVar "rk")) (EVar "rest")))))
+(DTypeSig false "recordForKeyAndReceiver" (TyFun (TyApp (TyCon "Option") (TyCon "HeadKey")) (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "RecordInfo")))))
+(DFunDef false "recordForKeyAndReceiver" ((PVar "rk") (PVar "k")) (EMatch (EApp (EApp (EVar "recordIdentRowForReceiver") (EVar "rk")) (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "k")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeRecordIdentsRef") "value")))) (arm (PCon "Some" (PVar "ri")) () (EApp (EVar "Some") (EVar "ri"))) (arm (PCon "None") () (EMatch (EApp (EVar "lookupRecordByName") (EVar "k")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "ri")) () (EIf (EApp (EApp (EVar "recordInfoIsReceiverDecl") (EVar "rk")) (EVar "ri")) (EApp (EVar "Some") (EVar "ri")) (EVar "None")))))))
+(DTypeSig false "recordIdentRowForReceiver" (TyFun (TyApp (TyCon "Option") (TyCon "HeadKey")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String") (TyCon "RecordInfo"))) (TyApp (TyCon "Option") (TyCon "RecordInfo")))))
+(DFunDef false "recordIdentRowForReceiver" (PWild (PList)) (EVar "None"))
+(DFunDef false "recordIdentRowForReceiver" ((PVar "rk") (PCons (PTuple PWild PWild (PVar "ri")) (PVar "rest"))) (EIf (EApp (EApp (EVar "recordInfoIsReceiverDecl") (EVar "rk")) (EVar "ri")) (EApp (EVar "Some") (EVar "ri")) (EIf (EVar "otherwise") (EApp (EApp (EVar "recordIdentRowForReceiver") (EVar "rk")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "resolveFieldAmbiguous" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RecordInfo")))))))
 (DFunDef false "resolveFieldAmbiguous" ((PVar "te") (PVar "fname") (PVar "owners")) (EMatch (EApp (EVar "normalize") (EVar "te")) (arm (PCon "TVar" PWild) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-AMBIGUOUS-FIELD"))) (EApp (EApp (EVar "ambiguousFieldMsg") (EVar "fname")) (EVar "owners")))) (DoExpr (EVar "None")))) (arm PWild () (EApp (EVar "pairRecordByName") (EApp (EVar "headL") (EVar "owners"))))))
 (DTypeSig false "pairRecordByName" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RecordInfo")))))
@@ -29903,7 +30025,9 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "lookupRecordByMangledHead" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RecordInfo")))))))
 (DFunDef false "lookupRecordByMangledHead" ((PVar "te") (PVar "head") (PVar "fname")) (EMatch (EApp (EApp (EVar "mangledHeadCandidates") (EVar "head")) (EVar "fname")) (arm (PList (PVar "pair")) () (EApp (EVar "Some") (EVar "pair"))) (arm (PVar "cands") () (EBlock (DoLet false false (PVar "rk") (EApp (EVar "headTyconMono") (EVar "te"))) (DoExpr (EMatch (EApp (EApp (EVar "filterList") (EApp (EVar "recordCandIsReceiverDecl") (EVar "rk"))) (EVar "cands")) (arm (PList (PVar "pair")) () (EApp (EVar "Some") (EVar "pair"))) (arm PWild () (EVar "None"))))))))
 (DTypeSig false "recordCandIsReceiverDecl" (TyFun (TyApp (TyCon "Option") (TyCon "HeadKey")) (TyFun (TyTuple (TyCon "String") (TyCon "RecordInfo")) (TyCon "Bool"))))
-(DFunDef false "recordCandIsReceiverDecl" ((PVar "rk") (PTuple PWild (PVar "ri"))) (EBinOp "==" (EVar "rk") (EApp (EVar "headTyconMono") (EApp (EVar "recordResultMono") (EVar "ri")))))
+(DFunDef false "recordCandIsReceiverDecl" ((PVar "rk") (PTuple PWild (PVar "ri"))) (EApp (EApp (EVar "recordInfoIsReceiverDecl") (EVar "rk")) (EVar "ri")))
+(DTypeSig false "recordInfoIsReceiverDecl" (TyFun (TyApp (TyCon "Option") (TyCon "HeadKey")) (TyFun (TyCon "RecordInfo") (TyCon "Bool"))))
+(DFunDef false "recordInfoIsReceiverDecl" ((PVar "rk") (PVar "ri")) (EBinOp "==" (EVar "rk") (EApp (EVar "headTyconMono") (EApp (EVar "recordResultMono") (EVar "ri")))))
 (DTypeSig false "recordResultMono" (TyFun (TyCon "RecordInfo") (TyCon "Mono")))
 (DFunDef false "recordResultMono" ((PCon "RecordInfo" PWild (PVar "result") PWild PWild)) (EVar "result"))
 (DTypeSig false "mangledHeadCandidates" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "RecordInfo"))))))
@@ -29912,7 +30036,17 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "mangledHeadCandidatesGo" (PWild (PList)) (EListLit))
 (DFunDef false "mangledHeadCandidatesGo" ((PVar "head") (PCons (PVar "key") (PVar "rest"))) (EIf (EApp (EApp (EVar "endsWith") (EBinOp "++" (ELit (LString "__")) (EVar "head"))) (EVar "key")) (EMatch (EApp (EVar "lookupRecordByName") (EVar "key")) (arm (PCon "Some" (PVar "ri")) () (EBinOp "::" (ETuple (EVar "key") (EVar "ri")) (EApp (EApp (EVar "mangledHeadCandidatesGo") (EVar "head")) (EVar "rest")))) (arm (PCon "None") () (EApp (EApp (EVar "mangledHeadCandidatesGo") (EVar "head")) (EVar "rest")))) (EIf (EVar "otherwise") (EApp (EApp (EVar "mangledHeadCandidatesGo") (EVar "head")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "resolveFieldByOwners" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RecordInfo"))))))
-(DFunDef false "resolveFieldByOwners" ((PVar "te") (PVar "fname")) (EMatch (EApp (EVar "fieldOwnerNames") (EVar "fname")) (arm (PList) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "pushUnknownField") (EVar "fname")) (ELit (LString "<unknown>")))) (DoExpr (EVar "None")))) (arm (PList (PVar "r")) () (EApp (EVar "pairRecordByName") (EVar "r"))) (arm (PCons (PVar "r") (PVar "rest")) () (EApp (EApp (EApp (EVar "resolveFieldAmbiguous") (EVar "te")) (EVar "fname")) (EBinOp "::" (EVar "r") (EVar "rest"))))))
+(DFunDef false "resolveFieldByOwners" ((PVar "te") (PVar "fname")) (EMatch (EApp (EVar "fieldOwnerNames") (EVar "fname")) (arm (PList) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "pushUnknownField") (EVar "fname")) (ELit (LString "<unknown>")))) (DoExpr (EVar "None")))) (arm (PCons (PVar "r") (PVar "rest")) () (EMatch (EApp (EApp (EVar "ownersMatchingReceiver") (EVar "te")) (EBinOp "::" (EVar "r") (EVar "rest"))) (arm (PCon "Some" (PVar "pair")) () (EApp (EVar "Some") (EVar "pair"))) (arm (PCon "None") () (EMatch (EVar "rest") (arm (PList) () (EApp (EVar "pairRecordByName") (EVar "r"))) (arm PWild () (EApp (EApp (EApp (EVar "resolveFieldAmbiguous") (EVar "te")) (EVar "fname")) (EBinOp "::" (EVar "r") (EVar "rest"))))))))))
+(DTypeSig false "ownersMatchingReceiver" (TyFun (TyCon "Mono") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RecordInfo"))))))
+(DFunDef false "ownersMatchingReceiver" ((PVar "te") (PVar "owners")) (EBlock (DoLet false false (PVar "rk") (EApp (EVar "headTyconMono") (EVar "te"))) (DoExpr (EMatch (EVar "rk") (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" PWild) () (EApp (EApp (EVar "ownersMatchingReceiverGo") (EVar "rk")) (EVar "owners")))))))
+(DTypeSig false "ownersMatchingReceiverGo" (TyFun (TyApp (TyCon "Option") (TyCon "HeadKey")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RecordInfo"))))))
+(DFunDef false "ownersMatchingReceiverGo" (PWild (PList)) (EVar "None"))
+(DFunDef false "ownersMatchingReceiverGo" ((PVar "rk") (PCons (PVar "k") (PVar "rest"))) (EMatch (EApp (EApp (EVar "recordForKeyAndReceiver") (EVar "rk")) (EVar "k")) (arm (PCon "Some" (PVar "ri")) () (EApp (EVar "Some") (ETuple (EVar "k") (EVar "ri")))) (arm (PCon "None") () (EApp (EApp (EVar "ownersMatchingReceiverGo") (EVar "rk")) (EVar "rest")))))
+(DTypeSig false "recordForKeyAndReceiver" (TyFun (TyApp (TyCon "Option") (TyCon "HeadKey")) (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "RecordInfo")))))
+(DFunDef false "recordForKeyAndReceiver" ((PVar "rk") (PVar "k")) (EMatch (EApp (EApp (EVar "recordIdentRowForReceiver") (EVar "rk")) (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "k")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeRecordIdentsRef") "value")))) (arm (PCon "Some" (PVar "ri")) () (EApp (EVar "Some") (EVar "ri"))) (arm (PCon "None") () (EMatch (EApp (EVar "lookupRecordByName") (EVar "k")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "ri")) () (EIf (EApp (EApp (EVar "recordInfoIsReceiverDecl") (EVar "rk")) (EVar "ri")) (EApp (EVar "Some") (EVar "ri")) (EVar "None")))))))
+(DTypeSig false "recordIdentRowForReceiver" (TyFun (TyApp (TyCon "Option") (TyCon "HeadKey")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String") (TyCon "RecordInfo"))) (TyApp (TyCon "Option") (TyCon "RecordInfo")))))
+(DFunDef false "recordIdentRowForReceiver" (PWild (PList)) (EVar "None"))
+(DFunDef false "recordIdentRowForReceiver" ((PVar "rk") (PCons (PTuple PWild PWild (PVar "ri")) (PVar "rest"))) (EIf (EApp (EApp (EVar "recordInfoIsReceiverDecl") (EVar "rk")) (EVar "ri")) (EApp (EVar "Some") (EVar "ri")) (EIf (EVar "otherwise") (EApp (EApp (EVar "recordIdentRowForReceiver") (EVar "rk")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "resolveFieldAmbiguous" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RecordInfo")))))))
 (DFunDef false "resolveFieldAmbiguous" ((PVar "te") (PVar "fname") (PVar "owners")) (EMatch (EApp (EVar "normalize") (EVar "te")) (arm (PCon "TVar" PWild) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-AMBIGUOUS-FIELD"))) (EApp (EApp (EVar "ambiguousFieldMsg") (EVar "fname")) (EVar "owners")))) (DoExpr (EVar "None")))) (arm PWild () (EApp (EVar "pairRecordByName") (EApp (EVar "headL") (EVar "owners"))))))
 (DTypeSig false "pairRecordByName" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RecordInfo")))))

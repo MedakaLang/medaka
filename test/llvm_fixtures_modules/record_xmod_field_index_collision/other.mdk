@@ -1,0 +1,4 @@
+-- #1216 arm 1: `beta` is index 0 here and index 1 in the entry's own `Rec`.  The two
+-- records share only that field NAME — no type name, constructor name or registry key
+-- collides anywhere in this graph.
+public export data Other = Other { beta : String, alpha : String }

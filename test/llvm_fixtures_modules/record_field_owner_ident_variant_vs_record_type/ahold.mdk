@@ -1,0 +1,13 @@
+-- #1383 face 1.  `Holder`'s sole variant is the NAMED-FIELD CONSTRUCTOR `Plain`, so
+-- this declaration is filed in the record registry under key `Plain` while a value of
+-- it has head tycon `Holder`.  That gap is what sends `mkH.hx` down the field→owners
+-- fallback: `lookupRecordByName "Holder"` misses and no key suffix-matches `__Holder`.
+--
+-- Its two fields are ordered OPPOSITELY to plainlib's, so picking the other `Plain`
+-- is observable as a VALUE and not only as a diagnostic.  (The single-field corpus is
+-- what let #1382 ship: both layouts pick index 0 and a wrong pick is invisible.)
+public export data Holder =
+  | Plain { hx : Int, hy : Int }
+
+export mkH : Holder
+mkH = Plain { hx = 100, hy = 200 }

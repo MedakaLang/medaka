@@ -1,0 +1,7 @@
+-- `field_owner_no_narrowing/wmod.mdk` with ONE variable changed: the record is named
+-- `Arec`, not `Wrec`, so its registry key sorts BEFORE `Dup` instead of after it.
+-- Nothing else about this module — or about the program — differs.
+public export data Arec = { dx : Int, wextra : Int }
+
+export mkW : Arec
+mkW = Arec { dx = 1, wextra = 2 }

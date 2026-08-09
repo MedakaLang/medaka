@@ -1,0 +1,8 @@
+-- THE UNRELATED COLLIDER.  It shares nothing with ahold or plainlib except the two
+-- FIELD NAMES, and it is imported by the entry only so that it is loaded at all.  Its
+-- registry key `Aaa` sorts BEFORE `Plain`, which is the whole point: on the pre-fix
+-- compiler, adding this module alone changed the entry's verdict.
+public export data Aaa = { hx : Int, hy : Int }
+
+export mkQ : Aaa
+mkQ = Aaa { hx = 1, hy = 2 }

@@ -1,0 +1,13 @@
+-- The other half of #1216 arm 2: the SAME constructor name `Cfg`, a DIFFERENT owning
+-- type `WrapZ`, and the two `Int` fields at the opposite indices.
+public export data WrapZ =
+  | Cfg { b : Int, a : Int }
+
+mkZ : WrapZ
+mkZ = Cfg { b = 33, a = 44 }
+
+export zrA : Int
+zrA = mkZ.a
+
+export zrB : Int
+zrB = mkZ.b

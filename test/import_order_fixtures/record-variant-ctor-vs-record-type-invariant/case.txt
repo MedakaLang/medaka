@@ -1,0 +1,40 @@
+entry: main.mdk
+what: #1383 face 2 — a named-field-variant CONSTRUCTOR colliding by bare name with an
+what: unrelated module's record TYPE answers the same in EVERY import-clause order
+
+`awrap` declares `data Wrap = | Cfg { a, b }` — a constructor named `Cfg` under type `Wrap`.
+`zcfg` declares an unrelated record TYPE `Cfg` with the same two field names at the opposite
+indices.  `main` holds one value of each and projects both.  Correct answer: `11,22,44,33`,
+and it cannot depend on the order two import lines are written in.
+
+⚠️ THE ROW IS DELIBERATELY UNLEDGERED — it is an INVARIANT case, not a KNOWN-BAD one.
+`test/IMPORT-ORDER-LEDGER.txt` pins cases whose answer DIVERGES across orderings; this one
+must not diverge again.
+
+History, measured first-hand at each step rather than inferred:
+
+  before #1319 unit 3   INVARIANT and WRONG — refused in both orderings (order A on the
+                        `mkW` projections, order B on the `mkZ` ones instead).
+  after unit 3          ORDER-DEPENDENT — the coin flip this gate exists to forbid, landed
+                        knowingly and disclosed on #1383:
+                          import awrap… ; import zcfg…  ->  exit 1, two `Type mismatch:
+                                                            Wrap vs Cfg` on the two `mkW`
+                                                            projections
+                          import zcfg… ; import awrap…  ->  exit 0, prints `11,22,44,33`
+                        Unit 3 fixed the `mkZ` side (a plain record's head IS its registry
+                        key, so the identity companion hits) and could not fix the `mkW`
+                        side, whose head `Wrap` is not the key `Cfg`.
+  after Q-IDENT         INVARIANT and RIGHT — `11,22,44,33` in both orderings, measured on a
+                        binary cold-built in this worktree.
+
+⚠️ WHY THE ORDER MATTERED, since the obvious explanation is wrong and cost a routing pass:
+it is NOT `headL owners` picking the first of several owner keys.  `fieldOwnerNames`
+`sortUniqS`es, and here the owner list is the SINGLETON `["Cfg"]` in the first place — both
+declarations file under that one key.  What import-clause order permutes is MODULE LOAD
+ORDER, and `recordByNameRef` is last-write-wins over it, so the one key reached a different
+declaration in each ordering.
+
+⚠️ Read this together with `test/llvm_fixtures_modules/record_xmod_variant_field_order/`.
+This cell grades the DIRECTION (a future change that accepts one ordering and refuses the
+other has restored the coin flip); that cell grades the VALUE on the executed native and
+WasmGC binaries, where a wrong pick is silent rather than loud.

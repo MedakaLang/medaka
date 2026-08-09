@@ -1,0 +1,7 @@
+import awrap.{mkW}
+import zcfg.{mkZ}
+
+main : <IO> Unit
+main =
+  println
+    (intToString mkW.a ++ "," ++ intToString mkW.b ++ "," ++ intToString mkZ.a ++ "," ++ intToString mkZ.b)
