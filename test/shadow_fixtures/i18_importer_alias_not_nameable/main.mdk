@@ -1,23 +1,34 @@
 -- SHADOW-SEMANTICS cell I18: an interface reached ONLY through a module ALIAS.
 --
--- 🚨 THIS ROW PINS A KNOWN-INCONSISTENT PRE-EXISTING ANSWER. It is NOT a claim that 7 is
--- correct. `import smod as S` cannot put a TYPE name in scope -- an alias-qualified name in
--- type position is a parse error -- and writing `impl Sizeable Blob` in this module is
--- rejected `Unknown interface: Sizeable`. By S1's own criterion the interface is therefore
--- not nameable here, `size` is not a shadow, and the explicitly imported standalone should
--- answer 99. It answers 7, on this binary AND on the base compiler.
+-- CONFORMANT under S1-NS (RULED 2026-08-08; docs/spec/SHADOW-SEMANTICS.md, the "S1-NS" block
+-- under S1). `size` IS in S1's right operand here, and 7 is the correct, conformant answer --
+-- not a known-inconsistent placeholder awaiting a fix.
 --
--- WHY IT IS PINNED ANYWAY, AND WHY IT WAS NOT "FIXED": the discriminating information does
--- not exist by the time any rule here could use it. `renameAliasedMethods` rewrites `S.size`
--- to a BARE `size`, so an alias-qualified call and a bare reference to the imported
--- standalone become the SAME token -- see `both.mdk` beside this file, which contains both
--- spellings and shows `run` cannot tell them apart at all. An attempt to condition the alias
--- rule on "names this module otherwise binds" produced `run` = 99 against a built binary of
--- 7, at exit 0 with no diagnostic: a NEW silent divergence, strictly worse than the
--- inconsistency it tried to remove. Repairing this needs provenance restored to the
--- occurrence upstream (A-3 / #1112), not another rule over import clauses.
+-- S1-NS (a) is a UNION over three arms; a bare method name is admitted if ANY ONE of them
+-- holds. Arm (i), the TYPE arm, does fail exactly as this row used to argue: `import smod as S`
+-- cannot put a TYPE name in scope -- an alias-qualified name in type position is a parse error
+-- -- and `impl Sizeable Blob` in this module is correctly rejected `Unknown interface:
+-- Sizeable`. But arm (ii), the VALUE arm, is satisfied independently: it admits `size` via "a
+-- member list naming `n`, a wildcard, or a module alias (`import ifc as A`, since `A.n` is a
+-- legal call)" -- and `import smod as S` is exactly that alias. Because (a) is a union, arm
+-- (i)'s failure does not disqualify the row: `size` is an importer shadow in this module, S2's
+-- importer-shadow rule finds a live `impl Sizeable String` at the receiver's head, and dispatch
+-- to the method -- 7 -- is what conformance requires.
 --
--- The row self-drains: the day the alias axis is fixed this goes RED and is re-graded to 99.
+-- MECHANISM, KEPT FOR THE RECORD (real, and still load-bearing elsewhere -- not the reason 7 is
+-- right here, since S1-NS settles that without needing it): `renameAliasedMethods` rewrites
+-- `S.size` to a BARE `size` before the mark pass, so an alias-qualified call and a bare
+-- reference to an explicitly-imported standalone become the SAME token by the time any rule
+-- here runs -- see `both.mdk` beside this file, which puts both spellings in one module and
+-- shows `run` cannot tell them apart. This is why an import-clause-shaped rule can never
+-- recover which spelling was written: the qualifier is gone by marking time, so any fix
+-- attempted at that layer reasons from information that no longer exists. It was tried once
+-- anyway, conditioning admission on "names this module otherwise binds": it produced `run` = 99
+-- against a built binary of 7, at exit 0 with no diagnostic -- a NEW silent divergence, worse
+-- than the inconsistency it was trying to remove. This row does not need that fix -- S1-NS
+-- answers it directly, over names, without touching provenance -- but the erasure it documents
+-- is real, which is why `both.mdk` is graded as its own row rather than assumed to follow from
+-- this one.
 import fmod.{size}
 import smod as S
 
