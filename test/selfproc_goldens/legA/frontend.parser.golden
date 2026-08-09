@@ -122,6 +122,7 @@ emit : a -> Parser a
 encodeAxis : (String, String) -> String
 encodeProductParam : List (String, String) -> String
 encodeSetParam : List String -> String
+endsDecl : Token -> Bool
 eqGuardIfMsg : String
 eqGuardShapeFrom : Array Token -> Int -> Int -> Bool
 eqGuardShapeP : Parser Bool
@@ -179,8 +180,8 @@ identNameP : Parser String
 ifKind : Token -> Parser Expr
 ifLet : Parser Expr
 ifPlain : Parser Expr
-ifaceBody : Parser (List IfaceMethod)
-ifaceBodyFor : Token -> Parser (List IfaceMethod)
+ifaceBody : Int -> Parser (List IfaceMethod)
+ifaceBodyFor : Int -> Token -> Parser (List IfaceMethod)
 ifaceMember : Parser IfaceMethod
 ifaceMemberRest : String -> List Pat -> Token -> Parser IfaceMethod
 ifaceMembers : Parser (List IfaceMethod)
@@ -190,9 +191,9 @@ ifaceSuper : Parser (List Super)
 ifaceSuperEntry : Parser Super
 ifaceSuperFor : Token -> Parser (List Super)
 ifaceWhereBody : Token -> Parser (List IfaceMethod)
-implBody : Parser (List ImplMethod)
-implBodyFor : Token -> Parser (List ImplMethod)
-implHead : Bool -> Token -> Parser Decl
+implBody : Int -> Parser (List ImplMethod)
+implBodyFor : Int -> Token -> Parser (List ImplMethod)
+implHead : Bool -> Int -> Token -> Parser Decl
 implHeadTokGo : Array Token -> Int -> Int -> Option Int
 implHeadTokIdx : Array Token -> Int -> Option Int
 implHeadTokStep : Array Token -> Int -> Int -> Token -> Option Int
@@ -203,7 +204,7 @@ implMethodsLoop : Parser (List ImplMethod)
 implRequireEntry : Parser Require
 implRequires : Parser (List Require)
 implRequiresFor : Token -> Parser (List Require)
-implRest : Bool -> String -> Parser Decl
+implRest : Bool -> Int -> String -> Parser Decl
 implWhereBody : Token -> Parser (List ImplMethod)
 importIdent : Parser String
 importIdentFor : Token -> Parser String
@@ -307,6 +308,8 @@ memberAliasOrNot : Int -> String -> Bool -> Parser UseMember
 methodNameGo : Array Token -> Int -> Int -> Int -> Bool -> List (Option Int)
 methodNameIdxs : Array Token -> Int -> Int -> List (Option Int)
 methodNameStep : Array Token -> Int -> Int -> Int -> Bool -> Token -> List (Option Int)
+missingWhereIfaceMsg : String
+missingWhereImplMsg : String
 mkAttr : String -> Option String -> Attr
 mkEffect : (List (String, Option String), Option String) -> Ty -> Ty
 mkLocated : String -> Array Token -> Array Int -> Int -> String -> Int -> ParseError
@@ -489,6 +492,8 @@ resultDeclsResult : String -> Array Token -> Array Int -> Int -> PR (List Decl) 
 rhsStartIdx : Array Token -> Int -> Int -> Int -> Int
 rngPatRest : Lit -> Parser Lit -> Token -> Parser Pat
 runP : Parser a -> Array Token -> Int -> PR a
+sameLineWhereIfaceMsg : String
+sameLineWhereImplMsg : String
 scanForLetIn : Array Token -> Int -> Int -> Bool
 sectionOpStr : Token -> Option String
 sectionTail : String -> Token -> Parser Expr

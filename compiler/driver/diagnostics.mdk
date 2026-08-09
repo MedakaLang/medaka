@@ -348,6 +348,9 @@ parseErrCode msg
   | startsWith "Medaka has no 'while'" msg = "P-FOR-WHILE"
   | startsWith "Medaka has no 'def'" msg = "P-DEF-KEYWORD"
   | startsWith "Medaka has no statement terminator" msg = "L-SEMICOLON"
+  | startsWith "missing `where` on this " msg = "P-MISSING-WHERE"
+  | startsWith "a `where` block must start on the next line" msg =
+    "P-WHERE-BODY-SAME-LINE"
   | startsWith "a match-arm guard uses" msg = "P-GUARD-BAR-IN-MATCH"
   | startsWith "an equation guard uses" msg = "P-GUARD-IF-IN-EQUATION"
   | isReservedKwMsg msg = "P-RESERVED-KEYWORD"
@@ -416,6 +419,22 @@ parseErrHelpFix msg (Loc f sl sc el ec)
   | startsWith "`public` only applies to `data` declarations" msg = (
     Some "`public` only makes a `data` export its constructors too; a function or value is exported with plain `export` — drop `public` here",
     Some (Fix (Loc f sl sc sl (sc + stringLength "public")) ""),
+  )
+  -- Missing `where` on an `interface`/`impl` header (#1160), and a member
+  -- written on the same line as `where` (#1140).  Help-only, deliberately: the
+  -- repair for the first is an INSERTION at the end of the header LINE and for
+  -- the second a line break plus an indent, and neither position is derivable
+  -- from the single-point `Loc` these diagnostics carry (both are anchored at
+  -- the construct that is wrong — the header keyword / the misplaced member —
+  -- not at the edit site).  A `fix` here would have to guess a column, which is
+  -- worse than none: an agent applies it verbatim.
+  | startsWith "missing `where` on this " msg = (
+    Some "`interface` and `impl` headers end with `where`, and their members are indented on the lines below — a header with no `where` swallows the next line as another type argument, which is why the error the parser used to report landed there",
+    None,
+  )
+  | startsWith "a `where` block must start on the next line" msg = (
+    Some "`where` opens a block only when it is the LAST token on its line (docs/spec/LAYOUT-SEMANTICS.md §7.1); anything written after it on the same line is not in the block",
+    None,
   )
   -- Guard-keyword confusion (#591): the parser anchors each diagnostic AT the
   -- offending keyword (`|` / `if`), so `sc` is its first char — the fix is a

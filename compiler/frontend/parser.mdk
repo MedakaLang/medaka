@@ -2633,11 +2633,12 @@ effDomainFor _ = pure None
 -- ── interface declarations ───────────────────────────────────────────────
 parseInterface : Bool -> Bool -> Parser Decl
 parseInterface pub isDefault = do
+  kw <- getPos
   expectTok TInterface
   name <- upperNameP
   typarams <- many lowerNameP
   supers <- ifaceSuper
-  methods <- ifaceBody
+  methods <- ifaceBody kw
   -- #1110: the parser has a token stream, not a module id, so it builds every
   -- type declaration identity-less; resolve acquires it (`stampDeclOrigin`).
   pure (dInterfaceUnresolved pub isDefault name typarams supers methods)
@@ -2660,20 +2661,25 @@ ifaceSuperEntry = do
   params <- many lowerNameP
   pure (superUnresolved name params)
 
--- `where INDENT members DEDENT` body, or a marker interface (optional where)
-ifaceBody : Parser (List IfaceMethod)
-ifaceBody = do
+-- `where INDENT members DEDENT` body, or a marker interface (optional where).
+-- `kw` is the `interface` keyword's token index, captured before it was
+-- consumed, so the missing-`where` diagnostic can be re-attributed to the
+-- header line (#1160) instead of to whatever token the parser tripped over.
+ifaceBody : Int -> Parser (List IfaceMethod)
+ifaceBody kw = do
   t <- peekP
-  ifaceBodyFor t
+  ifaceBodyFor kw t
 
-ifaceBodyFor : Token -> Parser (List IfaceMethod)
-ifaceBodyFor TWhere = do
+ifaceBodyFor : Int -> Token -> Parser (List IfaceMethod)
+ifaceBodyFor _ TWhere = do
   advance
   t <- peekP
   ifaceWhereBody t
-ifaceBodyFor _ = do
-  skipNewlines
-  pure []
+ifaceBodyFor kw t
+  | endsDecl t = do
+    skipNewlines
+    pure []
+  | otherwise = fatalAtP missingWhereIfaceMsg kw
 
 ifaceWhereBody : Token -> Parser (List IfaceMethod)
 ifaceWhereBody TIndent = do
@@ -2682,9 +2688,49 @@ ifaceWhereBody TIndent = do
   expectTok TDedent
   skipNewlines
   pure ms
-ifaceWhereBody _ = do
-  skipNewlines
-  pure []
+ifaceWhereBody t
+  | endsDecl t = do
+    skipNewlines
+    pure []
+  | otherwise = fatalP sameLineWhereIfaceMsg
+
+-- A token that legitimately ENDS a declaration where a `where` block could
+-- otherwise have started: end of line (marker interface / method-less impl),
+-- a dedent closing an enclosing block, or end of file.  Anything else after a
+-- header — or after its `where` — is a layout mistake, not a body (#1140/#1160);
+-- it used to be swallowed by a `_` arm that returned an EMPTY member list, which
+-- silently discarded the declaration the user actually wrote.
+endsDecl : Token -> Bool
+endsDecl TNewline = True
+endsDecl TDedent = True
+endsDecl TEof = True
+endsDecl _ = False
+
+-- #1160.  `interface Shape a⏎  area : a -> Float` lexes as ONE logical line:
+-- the header ends in `a`, which `canEndExpr` (LAYOUT-SEMANTICS §7.1), so the
+-- deeper next line is absorbed as an application continuation rather than
+-- heralding a block — the token stream never contains an INDENT to notice.
+-- The parser therefore over-consumes `area` as another type parameter and only
+-- trips on the `:`, one line past the real defect.  These messages are reported
+-- at the HEADER KEYWORD instead (`fatalAtP`), which is the token that is
+-- actually missing something.
+missingWhereIfaceMsg : String
+missingWhereIfaceMsg = "missing `where` on this `interface` header — an interface's members live in a `where` block: end the header with `where` and indent each member on the lines below it"
+
+missingWhereImplMsg : String
+missingWhereImplMsg = "missing `where` on this `impl` header — an impl's methods live in a `where` block: end the header with `where` and indent each method on the lines below it"
+
+-- #1140.  `where` only heralds a block when it ENDS a line (LAYOUT-SEMANTICS
+-- §7.1/§9), so `interface Foo a where m : a -> String` opens no block at all and
+-- `m` is not a member of anything.  Rejecting it here is deliberate: the old `_`
+-- arm returned `[]`, registering an interface with ZERO methods and no
+-- diagnostic, and the loss surfaced later as an unlocated "Method 'm' is not
+-- part of interface 'Foo'" blaming a correct `impl`.
+sameLineWhereIfaceMsg : String
+sameLineWhereIfaceMsg = "a `where` block must start on the next line — move this interface member onto its own line, indented below the `interface` header (`where` heralds a block only when it ends a line)"
+
+sameLineWhereImplMsg : String
+sameLineWhereImplMsg = "a `where` block must start on the next line — move this impl method onto its own line, indented below the `impl` header (`where` heralds a block only when it ends a line)"
 
 ifaceMembers : Parser (List IfaceMethod)
 ifaceMembers = do
@@ -2723,24 +2769,25 @@ ifaceMemberRest _ _ _ = failP "expected : or = in interface member"
 -- ── impl declarations ────────────────────────────────────────────────────
 parseImpl : Bool -> Parser Decl
 parseImpl pub = do
+  kw <- getPos
   expectTok TImpl
   t <- peekP
-  implHead pub t
+  implHead pub kw t
 
 -- `impl Iface tyargs…`.  (Named impls — `impl name of Iface …` — have been
 -- removed; a lowercase head or a stray `of` now yields a clean parse error.)
-implHead : Bool -> Token -> Parser Decl
-implHead pub (TUpper u) = do
+implHead : Bool -> Int -> Token -> Parser Decl
+implHead pub kw (TUpper u) = do
   advance
-  implRest pub u
-implHead pub (TIdent _) = failP namedImplRemovedMsg
-implHead _ _ = failP "expected impl head"
+  implRest pub kw u
+implHead _ _ (TIdent _) = failP namedImplRemovedMsg
+implHead _ _ _ = failP "expected impl head"
 
-implRest : Bool -> String -> Parser Decl
-implRest pub iface = do
+implRest : Bool -> Int -> String -> Parser Decl
+implRest pub kw iface = do
   tyargs <- many parseTyAtom
   reqs <- implRequires
-  methods <- implBody
+  methods <- implBody kw
   pure (dImplUnresolved pub iface tyargs reqs methods)
 
 namedImplRemovedMsg : String
@@ -2767,19 +2814,23 @@ implRequireEntry = do
   tys <- many parseTyAtom
   pure (requireUnresolved iface tys)
 
-implBody : Parser (List ImplMethod)
-implBody = do
+-- `kw` is the `impl` keyword's token index — see `ifaceBody` for why the
+-- missing-`where` diagnostic has to be re-attributed to it (#1160).
+implBody : Int -> Parser (List ImplMethod)
+implBody kw = do
   t <- peekP
-  implBodyFor t
+  implBodyFor kw t
 
-implBodyFor : Token -> Parser (List ImplMethod)
-implBodyFor TWhere = do
+implBodyFor : Int -> Token -> Parser (List ImplMethod)
+implBodyFor _ TWhere = do
   advance
   t <- peekP
   implWhereBody t
-implBodyFor _ = do
-  skipNewlines
-  pure []
+implBodyFor kw t
+  | endsDecl t = do
+    skipNewlines
+    pure []
+  | otherwise = fatalAtP missingWhereImplMsg kw
 
 implWhereBody : Token -> Parser (List ImplMethod)
 implWhereBody TIndent = do
@@ -2788,9 +2839,11 @@ implWhereBody TIndent = do
   expectTok TDedent
   skipNewlines
   pure ms
-implWhereBody _ = do
-  skipNewlines
-  pure []
+implWhereBody t
+  | endsDecl t = do
+    skipNewlines
+    pure []
+  | otherwise = fatalP sameLineWhereImplMsg
 
 implMethods : Parser (List ImplMethod)
 implMethods = do
