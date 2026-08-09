@@ -1,0 +1,29 @@
+-- MONOTONICITY: adding an UNRELATED module must not change an existing program's
+-- verdict.  This is `record_field_owner_ident_variant_vs_record_type/` with exactly
+-- one thing added — `aaa`, a module that shares only the two FIELD NAMES with the
+-- other two and has no import relationship to either.
+--
+-- 🚨 THE ASSERTION IS ABOUT CODE THAT TAKES NO PART IN THE COLLISION, which is the
+-- `AGENTS.md` "feature present, UNRELATED code still behaves" shape.  On the pre-fix
+-- compiler `mkH.hx` was already rejected, and adding `aaa` changed the diagnostic from
+-- `Type mismatch: Holder vs Plain` to `Type mismatch: Holder vs Aaa` — a different
+-- wrong record, chosen because `Aaa` sorts before `Plain` in the `sortUniqS`ed owner
+-- list `headL` was reading.  Measured on a cold build of the merge base.
+--
+-- Identity selection makes that unreachable by construction: a candidate matches only
+-- when its `(declaring module, type name)` EQUALS the receiver's, and an unrelated
+-- module's declaration names a module the receiver's does not.  So an added row can
+-- never match and can never displace a match.  This cell is that argument's
+-- counterfactual.
+--
+-- Expected output, derived BY HAND before anything was run:
+--   mkH.hx = 100, mkH.hy = 200 ; mkP.hx = 5, mkP.hy = 7 ; mkQ.hx = 1, mkQ.hy = 2
+-- so `h=100,200 p=5,7 q=1,2` — the sibling cell's line with ` q=1,2` appended.
+import ahold.{Holder, mkH}
+import plainlib.{Plain, mkP}
+import aaa.{Aaa, mkQ}
+
+main : <IO> Unit
+main =
+  putStrLn
+    ("h=" ++ intToString mkH.hx ++ "," ++ intToString mkH.hy ++ " p=" ++ intToString mkP.hx ++ "," ++ intToString mkP.hy ++ " q=" ++ intToString mkQ.hx ++ "," ++ intToString mkQ.hy)

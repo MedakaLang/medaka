@@ -1,0 +1,38 @@
+-- #1216 ARM 1 — THE DRAIN CELL.  Two records in DIFFERENT modules declare a field
+-- with the SAME NAME at DIFFERENT INDICES: `beta` is index 0 in other's `Other` and
+-- index 1 in this module's own `Rec`.  Nothing else collides — not a type name, not a
+-- constructor name, not a registry key.
+--
+-- `medaka run` was correct throughout the life of the bug and `medaka check` exited 0;
+-- the EXECUTED NATIVE BINARY printed `oa` for the first line — other's `alpha`, i.e.
+-- index 1, which is where `beta` sits in `Rec`.  Silent, at exit 0, with no diagnostic.
+--
+-- ⚠️ SO THE ORACLE FOR THIS GOLDEN IS THE HAND DERIVATION, NOT `medaka run`.  The
+-- interpreter resolves fields by NAME at run time, so it is structurally immune to the
+-- layout question and agrees with the correct answer even when the emitter is wrong —
+-- a known-wrong oracle in the reassuring direction.
+--
+-- Expected output, derived BY HAND from the sources before anything was run:
+--   Other { beta = "ob", alpha = "oa" } . beta  =>  "ob"
+--   getBeta (Rec { alpha = "AAA", beta = "BBB" })  =>  "BBB"
+-- so `ob` then `BBB`.
+--
+-- ⚠️ THE SECOND LINE IS THE CONTROL AND IT MUST STAY.  `getBeta` projects a GENUINE
+-- `Rec`; it printed `BBB` correctly on the broken compiler too.  A cell asserting only
+-- the first line could not distinguish "the wrong-slot read is fixed" from "record
+-- field access broke outright".
+--
+-- ⚠️ WHY THE ENTRY DOES THE PROJECTING.  The wrong read was `Other { … }.beta`
+-- evaluated HERE, in the module that imports `Other` — moving the construction into
+-- `other.mdk` would change which module registers what and defuse the cell.
+import other.{Other(..)}
+
+data Rec = Rec { alpha : String, beta : String }
+
+getBeta : Rec -> String
+getBeta r = r.beta
+
+main : <IO> Unit
+main =
+  let _ = putStrLn (Other { beta = "ob", alpha = "oa" }.beta)
+  putStrLn (getBeta (Rec { alpha = "AAA", beta = "BBB" }))

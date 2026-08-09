@@ -1,0 +1,52 @@
+-- The other half of the collision: the SAME constructor key `Cfg`, a DIFFERENT owning
+-- type `WrapZ`, two named-field constructors again, and the two `Int` fields at the
+-- OPPOSITE indices.  `amulti` and `zmulti` neither import nor are imported by each
+-- other, and each projects only its OWN record.
+public export data WrapZ =
+  | Cfg { b : Int, a : Int }
+  | Dfg { b : Int, a : Int }
+
+mkZ : WrapZ
+mkZ = Cfg { b = 33, a = 44 }
+
+export zrA : Int
+zrA = mkZ.a
+
+export zrB : Int
+zrB = mkZ.b
+
+-- 🚨 THE BYSTANDER.  `Byst`'s two constructors DISAGREE on `alpha`'s offset (0 in
+-- `ByA`, 1 in `ByB`), which is the shape `T-FIELD-VARIANT-CONFLICT` refuses to
+-- SELECT through.  Declaring such a type is still legal and BOTH of its constructors
+-- are constructed here — which is what puts them in the emitters'
+-- construction-site-built `recName -> labels` table.  Nothing in this cell's output
+-- comes from a `.alpha`, so the cell asserts about code that has NOTHING TO DO with
+-- the conflicting declaration: `AGENTS.md`'s "feature present, UNRELATED code still
+-- behaves" shape, which is what a program-wide rule owes and what a "does my feature
+-- work" fixture cannot give.
+public export data Byst =
+  | ByA { alpha : Int, beta : Int }
+  | ByB { beta : Int, alpha : Int }
+
+mkBy1 : Byst
+mkBy1 = ByA { alpha = 10, beta = 20 }
+
+mkBy2 : Byst
+mkBy2 = ByB { beta = 220, alpha = 110 }
+
+-- ⚠️ BOTH ARMS RETURN THE SAME PROJECTION ON PURPOSE, and that is a guard, not
+-- laziness.  `ByA` and `ByB` share BOTH labels, and an arm naming only shared labels
+-- picks the arm by CONSTRUCTOR natively but by LABEL SET in the interpreter (#1462).
+-- What is NOT divergent is the BINDING: the interpreter still binds `alpha` by name.
+-- Making both arms project `alpha` therefore keeps this cell a test of THIS defect
+-- rather than of #1462.
+bystAlpha : Byst -> Int
+bystAlpha w = match w
+  ByA { alpha = x } => x
+  ByB { alpha = x } => x
+
+export by1 : Int
+by1 = bystAlpha mkBy1
+
+export by2 : Int
+by2 = bystAlpha mkBy2

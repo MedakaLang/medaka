@@ -1,0 +1,33 @@
+-- THE MISSING AXIS, MADE FAIL-CAPABLE (#1455 second review, finding F3).
+--
+-- `WrapA` has TWO named-field constructors — the axis every cell in this corpus was
+-- missing — and its registry key `Cfg` COLLIDES with `zmulti`'s, under a different
+-- owning type.  Both halves are needed:
+--
+--   * the two constructors make this the multi-named-field-constructor input the
+--     corpus had none of, and they AGREE on both offsets, which is the half of
+--     `T-FIELD-VARIANT-CONFLICT`'s rule that must stay legal;
+--   * the cross-module key collision is what makes the cell FAIL ON THE MERGE BASE.
+--     The first version of this cell reached its multi-constructor type only through
+--     `match` and asserted its VALUES through two SHORT-FORM records, whose head IS
+--     their registry key — so `resolveFieldRecord` arm (a) answered them and the code
+--     #1455 changes was never reached.  MEASURED: merge base and branch printed the
+--     same bytes, i.e. the cell pinned nothing.
+--
+-- ⚠️ ONLY `Cfg` IS EVER CONSTRUCTED HERE, AND THAT IS DELIBERATE.  A program where
+-- values of TWO constructors reach the same `.a` traps on WasmGC (`illegal cast` — the
+-- stamp is a `ref.cast` to a per-constructor struct type), which is #1469 and is
+-- pre-existing on both arms.  This cell is not the place for it; the pin for #1469 is
+-- `record_multi_variant_shared_access/` plus its `test/engine_divergence.txt` row.
+public export data WrapA =
+  | Cfg { a : Int, b : Int }
+  | Dfg { a : Int, b : Int }
+
+mkA : WrapA
+mkA = Cfg { a = 11, b = 22 }
+
+export arA : Int
+arA = mkA.a
+
+export arB : Int
+arB = mkA.b

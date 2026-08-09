@@ -2,9 +2,17 @@
 -- sends `mkA.dx` down the field->owners fallback instead of the exact
 -- `lookupRecordByName <head tycon>` hit, and it is why this shape is not covered by any
 -- cell built out of short-form records.
+--
+-- ⚠️ `dpre` IS NOT PADDING — it puts `dx` at OFFSET 1 here while `wmod`'s rival owner
+-- puts it at offset 0, so a wrong pick between the two is a wrong VALUE (`99` instead of
+-- `7`) and not merely a diagnostic.  A single-field version of this record cannot express
+-- that: both layouts would pick index 0 and the wrong pick would be invisible on the
+-- executed binary, which is exactly how #1382 shipped past `diff_compiler_engines`.
+-- (#1455 adversarial review, finding 2 — the body's "every new fixture uses records with
+-- >=2 differently-ordered fields" claim was false of this cell and its sibling.)
 public export data RA =
-  | Dup { dx : Int }
+  | Dup { dpre : Int, dx : Int }
   | ACount Int
 
 export mkA : RA
-mkA = Dup { dx = 7 }
+mkA = Dup { dpre = 99, dx = 7 }

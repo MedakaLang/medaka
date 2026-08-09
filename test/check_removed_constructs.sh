@@ -62,6 +62,27 @@
 # expression position — excluding glued `x@pat` as-patterns (still legal)
 # and line-leading `@attrib` declarations (still legal).
 #
+# ── ⚠️ A LATENCY WORTH KNOWING BEFORE YOU TIGHTEN THIS GATE ────────────────
+#
+# This gate runs `medaka check --json` over EVERY tracked `.mdk` in the tree
+# (`git ls-files '*.mdk'`, ~2900 files) and then classifies ONLY parse errors:
+# a `T-*` type error reads `CLEAN` and exits 0 (measured — a deliberately
+# ill-typed fixture scanned as `0 finding(s)`). That is CORRECT for what this
+# gate is for; it is stated here because it is the exact shape of a trap for
+# whoever next widens it.
+#
+# The tree may therefore legitimately contain a `.mdk` that does not TYPECHECK
+# — several fixture corpora are ill-typed on purpose (`test/typecheck_error_
+# fixtures/` is the whole point of one). So do NOT "tighten" this gate into a
+# corpus-wide `check` by treating any nonzero exit as a finding: it would go
+# red on every fixture in this tree whose job is to be rejected. If a
+# corpus-wide typecheck gate is ever wanted, it needs its OWN opt-in set, not
+# this one's `git ls-files` sweep.
+#
+# Noticed during #1455's second adversarial review, when that PR briefly left a
+# `test/references_fixtures/` fixture ill-typed and asked whether any gate
+# would see it. This one compiles it and, by construction, does not grade it.
+#
 # Usage:  sh test/check_removed_constructs.sh [--json] [file.mdk ...]
 # Exit:   0 if no findings (outside the documented ALLOWLIST below), else 1.
 #         2 if ./medaka isn't built yet.

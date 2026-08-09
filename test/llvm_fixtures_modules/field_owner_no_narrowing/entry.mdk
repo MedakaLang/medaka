@@ -20,16 +20,29 @@
 --     any constructor-spelling predicate here: the question this fallback asks is "could
 --     this module be HOLDING a value of that record", which is a reachability question.
 --
--- ⚠️ ONE UNDOCUMENTED DEPENDENCY, WRITTEN DOWN SO A RENAME DOES NOT LOOK LIKE A REGRESSION.
--- This cell is green PARTLY because of an ordering accident: `dx` has two owner keys,
--- `fieldOwnerNames` returns them `sortUniqS`ed, and `resolveFieldAmbiguous` takes
--- `headL owners` — so `Dup` sorting before `Wrec` is what makes `mkA.dx` land on the right
--- record.  Rename `Wrec` to something sorting before `Dup` and this cell REDDENS, for a
--- reason that has nothing to do with the narrowing it guards.  (That is the same
--- headL-picks-one mechanism `gen_modules` documents in
--- `test/diff_compiler_perf_scaling.sh`, which is why its records must be short-form.)
--- The failure would be LOUD, so it is not the hazard this cell exists for — but a future
--- editor renaming a module here deserves to know why it broke.
+-- ⚠️ THE ORDERING DEPENDENCY THIS HEADER USED TO RECORD IS GONE — RETIRED, NOT FORGOTTEN.
+-- It said: *"this cell is green PARTLY because of an ordering accident … rename `Wrec` to
+-- something sorting before `Dup` and this cell REDDENS, for a reason that has nothing to do
+-- with the narrowing it guards."*  That was true and MEASURED: on the merge base, renaming
+-- `Wrec` → `Arec` gave `Type mismatch: RA vs Arec` at exit 1.
+--
+-- Q-IDENT (#1383 / #1216) removed it.  `resolveFieldByOwners` now selects the candidate whose
+-- `(declaring module, type name)` equals the RECEIVER's before consulting the ladder, so
+-- `headL owners` no longer decides anything here and `sortUniqS(["Dup","Wrec"])` is not
+-- load-bearing.  The claim is not merely argued: `record_field_owner_ident_unrelated_rename/`
+-- IS that renamed program, kept as a live cell, and it prints the same `8` this one does.
+--
+-- ⚠️ `gen_modules` in `test/diff_compiler_perf_scaling.sh` still requires SHORT-FORM records,
+-- and its own reason for that is now the weaker one — a named-field-variant projection would
+-- reach the field→owners fallback, which is a cost question rather than the 0-diagnostic
+-- question its comment gives.  Read that comment against this note before changing either.
+--
+-- ⚠️ A WRONG PICK HERE IS A WRONG VALUE, NOT ONLY A DIAGNOSTIC — since #1455's review
+-- (finding 2).  `Dup` declares `dpre` before `dx` while `wmod`'s `Wrec` declares `dx`
+-- first, so the two owners of `dx` disagree on its OFFSET and selecting the wrong one
+-- reads `99` instead of `7` on the executed binary.  Before that the record was
+-- single-field, both layouts picked index 0, and this cell could only ever have failed
+-- as a diagnostic.  Do not collapse it back.
 --
 -- Expected output, derived BY HAND before any capture and independently of any engine:
 --   mkA.dx = 7, mkW.dx = 1, so `8`.

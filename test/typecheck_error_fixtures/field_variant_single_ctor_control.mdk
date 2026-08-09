@@ -1,0 +1,36 @@
+-- THE CONTROL for `field_variant_offset_conflict.mdk` and
+-- `field_variant_type_conflict.mdk` (#1455 review round 2, re-pointed in round 5).
+--
+-- The rule is "a `.field` whose receiver TYPE has TWO named-field constructors declaring
+-- that field AT DIFFERENT OFFSETS, or AT DEFINITELY DIFFERENT TYPES, names no
+-- constructor". The control changes exactly one thing: each type has ONE named-field
+-- constructor, so the stamp IS the runtime constructor and the selection is legal —
+-- whatever the offsets and types say. That is the overwhelmingly common shape —
+-- `data X = { … }` and `data T = | C { … }` — and it must not move.
+--
+-- 🚨 THE HEADER ABOVE HAS NOW BEEN WRONG TWICE, IN THE SAME TWO WAYS, AND BOTH WERE
+-- CAUGHT ONLY IN REVIEW. It cited a sibling fixture that the SAME PR deleted (a
+-- dangling path, and the only such hit in the tree), and it stated the rule without the
+-- qualifier — round 3's RETRACTED "declares that field at all" form. Review 2's F5 was
+-- this exact defect one file over. A control's header is a claim about the rule it
+-- controls: re-read it whenever the rule moves, and note that `make docs-links` does
+-- NOT reach a fixture path cited from a `.mdk` comment — only a reader does.
+--
+-- ⚠️ THE TWO TYPES SHARE BOTH FIELD NAMES ON PURPOSE, at OPPOSITE offsets. Without a
+-- second owner of `sx` the guard's cheap first gate ("does any other registry key own
+-- this field?") answers no and the rest of it never runs, so a control built from one
+-- record would prove only that the gate short-circuits — not that the precise test
+-- accepts. Here the gate passes and the precise test is what returns `None`.
+--
+-- ⚠️ THE ASSERTION IS THE ERROR THAT DOES APPEAR, NOT THE ABSENCE OF ONE. An "it checks
+-- clean" control in this corpus would have to dump the whole 123-line prelude scheme
+-- list as its golden (see `impl_method_constraint_ok.mdk`). Instead the body is
+-- deliberately ill-typed in an UNRELATED way — the annotation says `Bool`, the field is
+-- an `Int` — so the golden is a one-line `Type mismatch`, and it can only be produced if
+-- `.sx` RESOLVED. A guard that over-fired would replace it with the conflict message.
+data Solo = { sx : Int, sy : Int }
+
+data Olos = { sy : Int, sx : Int }
+
+getSx : Solo -> Bool
+getSx s = s.sx

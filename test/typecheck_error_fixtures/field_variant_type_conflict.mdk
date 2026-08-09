@@ -1,0 +1,70 @@
+-- T-FIELD-VARIANT-CONFLICT, THE TYPE ARM (#1455 round-4 adversarial review, F1).
+--
+-- `Wrap` has TWO named-field constructors and they declare `alpha` at the SAME
+-- offset (0 in both) but at DIFFERENT TYPES.  The offset test that shipped in round
+-- 4 is structurally unable to see this shape, and round 4's comment claimed the
+-- offset test was "the EXACT characterization of the newly-reachable damage, not a
+-- proxy for it".  It was not.  This is the counterexample, and it is the exact
+-- loud → silent severity increase the guard exists to prevent:
+--
+--     merge base `e6392c19`  `check` exit 1 — `Type mismatch: Wrap vs Aaa` x2
+--     round 4 (`fd2c5ecb`)   `check` exit 0 with ZERO diagnostics, `build` exit 0,
+--                            and the BUILT BINARY printed `c=7 d=1 a=8` — `Dfg`'s
+--                            `True` read as an `Int`, at exit 0.  `medaka run`
+--                            raised `E-PANIC intToString: not an Int`, i.e. it was
+--                            RIGHT and therefore blind: the #1216 signature.
+--
+-- With the rival field spelled `String` instead of `Bool` the same program printed a
+-- HEAP ADDRESS as an `Int` — three runs, three different addresses — which is why
+-- the pinned spelling is `Bool`: it is deterministic.
+--
+-- ⚠️ THE THIRD DECLARATION IS NOT DECORATION — IT IS WHAT MAKES THIS NEWLY
+-- REACHABLE.  `Aaa` shares both field names with `Wrap`'s constructors and has
+-- nothing else to do with them.  Without it the merge base accepts the program too
+-- (and miscompiles it identically), so the shape would be pre-existing rather than
+-- something #1455 must not ship: it is the collider that puts `alpha` under two
+-- registry owners, which is what #1455's Q-IDENT selection made resolvable instead
+-- of a spurious `Type mismatch`.  Delete `Aaa` and this cell stops testing #1455.
+--
+-- ⚠️ WHY THE TYPE ARM IS NOT COVERED BY THE UNDECIDABILITY ARGUMENT that keeps
+-- `field_variant_offset_agree_control.mdk` legal.  That argument is about WHICH
+-- CONSTRUCTOR REACHES the access, which is runtime dataflow.  "The two constructors
+-- declare this field at different types" is a DECLARATION-level fact, and it is
+-- stronger than a layout disagreement: the selection is choosing the expression's
+-- own STATIC TYPE arbitrarily, so the program has no meaning for any back end to
+-- get right, whichever constructor turns up.
+--
+-- ⚠️ THE SECOND HALF, `Mixed`, IS THE PARAMETRIC SPELLING OF THE SAME DEFECT, AND IT
+-- IS HERE BECAUSE IT IS THE ONE A NAIVE TYPE TEST MISSES.  The RAW declared types are
+-- a type PARAMETER against `Int`, which any variable-tolerant comparison declines on
+-- — so a first cut of this rule accepted it.  MEASURED on this branch at that point,
+-- on the same three-module shape as `Wrap`: `check` exit 0, `build` exit 0, and the
+-- built binary SEGFAULTED at exit 139 reading the `Int` as a `String`, where the merge
+-- base rejected it at exit 1.  A second loud → silent, one axis over from `Wrap`'s.
+-- The shipped rule instantiates each constructor's declared type at the RECEIVER's
+-- type arguments first (`monoAtParams`), so `Mixed String` is a conflict here while
+-- the SAME declarations at `Mixed Int` are not — which is what
+-- `field_variant_param_type_control.mdk` pins.
+--
+-- ⚠️ THE ASSERTION IS THE ERROR THAT DOES APPEAR, NOT THE ABSENCE OF ONE — the same
+-- trick the sibling controls use.  Here the golden IS the conflict message, so no
+-- unrelated ill-typing is needed; what has to be checked by eye is that each message
+-- names the two TYPES (not two positions, which agree in both halves) and that the
+-- `help` offers the type remedy rather than the re-ordering one.
+data Wrap =
+  | Cfg { alpha : Int, beta : Int }
+  | Dfg { alpha : Bool, beta : Int }
+
+data Aaa = { alpha : Int, beta : Int }
+
+data Mixed m =
+  | Mx { mf : m, mg : Int }
+  | My { mf : Int, mg : Int }
+
+data Amix = { mf : Int, mg : Int }
+
+getAlpha : Wrap -> Int
+getAlpha w = w.alpha
+
+getMf : Mixed String -> String
+getMf m = m.mf

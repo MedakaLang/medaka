@@ -1,0 +1,38 @@
+-- T-FIELD-VARIANT-CONFLICT (#1455 adversarial review, finding 1).
+--
+-- `Wrap` has TWO named-field constructors and they place `alpha` at DIFFERENT
+-- offsets (0 in `Cfg`, 1 in `Dfg`).  A `.alpha` selection is resolved by the
+-- receiver's TYPE, which does not say which constructor built the value, while the
+-- emitted code is a single constant-offset load — so no constructor key can be
+-- stamped and the access is refused.
+--
+-- WHAT THIS PINS IS A REJECT THAT REPLACES A SILENTLY WRONG ACCEPT.  MEASURED on a
+-- cold build of the merge base `bfcd4ea7`, at exit 0 with no diagnostic: `medaka
+-- run` printed the correct `11,22` while the BUILT BINARY printed `22,11`; with the
+-- two fields at different offsets AND different types the built binary SIGSEGVed
+-- (exit 139).  So the golden here is not "the compiler got stricter" — it is the
+-- only statically honest answer to a program whose meaning the back end cannot
+-- represent.
+--
+-- ⚠️ THE OFFSETS ARE THE RULE, NOT A DETAIL OF THE MESSAGE — AND THE CONTROLS ARE
+-- WHERE THAT IS PINNED.  A sibling constructor that declares `alpha` at the SAME
+-- position is not a rival (`field_variant_offset_agree_control.mdk`), and a sibling
+-- that declares a different field entirely is not one either
+-- (`field_variant_sibling_other_field_control.mdk`).  Round 3 of #1455 briefly
+-- dropped the offset test and rejected both of those shapes; they were measured
+-- CORRECT on both shipping backends, so it was over-rejection and it was retracted.
+-- `field_variant_single_ctor_control.mdk` is the third control: one named-field
+-- constructor per type, so the stamp IS the runtime constructor.
+--
+-- ⚠️ THE REFUSED SET IS NOT THE SET THE BACKENDS DISAGREE ABOUT, AND NOTHING HERE
+-- CLAIMS IT IS.  The guard is a declaration-level over-approximation of a runtime
+-- dataflow property; #1469 (WasmGC traps where two constructors reach an
+-- offset-AGREEING access) and #1468 (a sibling declaring a different field) are
+-- both accepted here and both broken.  #1465 owns the end state that retires this
+-- diagnostic.
+data Wrap =
+  | Cfg { alpha : Int, beta : Int }
+  | Dfg { beta : Int, alpha : Int }
+
+getAlpha : Wrap -> Int
+getAlpha w = w.alpha

@@ -1,0 +1,31 @@
+-- THIS FILE IS SHARED, BYTE FOR BYTE, WITH
+-- `test/llvm_fixtures_modules/record_multi_variant_shared_access_one_reach/zshared.mdk`,
+-- AND THAT IS ITS ENTIRE JOB.  `cmp` them: if they ever differ, the pair below stops
+-- being a witness and both entries' comments become false.
+--
+-- The two fixtures are the pair that proves the divergent set is NOT statically
+-- characterizable at the typecheck seam (`stampableFieldRecord`,
+-- `compiler/types/typecheck.mdk`).  They share these declarations exactly, both
+-- CONSTRUCT both constructors, and both print `t=1,3`.  The only difference is at a
+-- USE SITE, in the entry module: whether `mkSB`'s value is PROJECTED or consumed by a
+-- `match`.  One is clean on both backends; the other traps on WasmGC.
+--
+-- `Shared`'s two named-field constructors AGREE on every offset and on every declared
+-- field TYPE — the shape `T-FIELD-VARIANT-CONFLICT` deliberately leaves legal, because
+-- the LLVM backend emits one constant slot index and the choice of stamp is
+-- unobservable there.
+--
+-- On WasmGC it is observable: a record is a `struct` type PER CONSTRUCTOR and
+-- `emitFieldAccessRef` (`compiler/backend/wasm_emit.mdk`) emits
+-- `ref.cast (ref $C_<ctor>)` + `struct.get`, so casting an `SB` value to `SA`'s struct
+-- type is illegal whatever the layouts are.  That is #1469, and it is a property of
+-- the USE SITE, which is exactly what no declaration-level rule can see.
+public export data Shared =
+  | SA { sx : Int, sy : Int }
+  | SB { sx : Int, sy : Int }
+
+export mkSA : Shared
+mkSA = SA { sx = 1, sy = 2 }
+
+export mkSB : Shared
+mkSB = SB { sx = 3, sy = 4 }

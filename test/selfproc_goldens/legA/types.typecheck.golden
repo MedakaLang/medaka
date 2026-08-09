@@ -544,9 +544,20 @@ fieldAssignEVars : FieldAssign -> List String
 fieldAssignNamePair : FieldAssign -> (String, Unit)
 fieldAssignSites : FieldAssign -> List (Ref Route)
 fieldFixFrom : Option Loc -> String -> Option (Loc, String)
+fieldHasRivalOwners : String -> Bool
 fieldOwnerNames : String -> List String
+fieldRivalCtor : Mono -> String -> String -> RecordInfo -> Option (String, String, FieldRivalWhy)
+fieldRivalCtorGo : Option HeadKey -> String -> String -> (Int, Mono) -> List Mono -> List String -> Option (String, FieldRivalWhy)
+fieldRivalCtorNamed : String -> Option HeadKey -> String -> String -> (Int, Mono) -> List Mono -> List String -> Option (String, String, FieldRivalWhy)
+fieldRivalCtorOfType : Option String -> Option HeadKey -> String -> String -> (Int, Mono) -> List Mono -> Option (String, String, FieldRivalWhy)
+fieldRivalWhy : (Int, Mono) -> (Int, Mono) -> Option FieldRivalWhy
+fieldSlotAt : List Mono -> String -> RecordInfo -> Option (Int, Mono)
+fieldSlotIn : String -> List (String, Mono) -> Option (Int, Mono)
+fieldSlotInGo : String -> List (String, Mono) -> Int -> Option (Int, Mono)
 fieldTyOf : Field -> Ty
 fieldTypeE : List (String, Ref Effvar) -> List (String, Mono) -> Field -> Mono
+fieldVariantConflictHelp : String -> String -> FieldRivalWhy -> String
+fieldVariantConflictMsg : String -> String -> String -> String -> FieldRivalWhy -> String
 fillHoleAtom : List (String, Expr) -> Option Expr -> Atom -> Atom
 fillHolesInRow : List (String, Expr) -> EffRow -> Option Expr -> EffRow
 filterImplTysFor : List Decl -> String -> String -> List (List Ty)
@@ -1011,6 +1022,9 @@ moduleAliasEntry : String -> String -> ((String, String), List a) -> List (Strin
 moduleDictNames : List Decl -> List Decl -> List (String, List Decl) -> List String
 moduleUserFnNames : List (String, List Decl) -> List String
 monoArgUnboundIds : Mono -> List Int
+monoAtParams : List Int -> List Mono -> Mono -> Mono
+monoDeclDefinitelyDiffers : Mono -> Mono -> Bool
+monoDeclDiffersGo : Mono -> Mono -> Bool
 monoIdsWithIface : (Mono, String) -> List (Int, String)
 monoIsApp : Mono -> Bool
 monoIsBareTyvar : Mono -> Bool
@@ -1084,10 +1098,13 @@ overrideScopedCtors : List Decl -> Map String (List (Ident, String, Scheme)) -> 
 overrideScopedMethods : List Decl -> Map String (List (Ident, (String, List String, Ty, List (String, List Kind)))) -> List String -> Map String (String, List String, Ty, List (String, List Kind)) -> Map String (String, List String, Ty, List (String, List Kind))
 overrideScopedRecords : List Decl -> Map String (List (Ident, String, RecordInfo)) -> List String -> Unit
 ownMethodIdent : List Decl -> String -> Option Ident
+ownersMatchingReceiver : Mono -> List String -> Option (String, RecordInfo)
+ownersMatchingReceiverGo : Option HeadKey -> List String -> Option (String, RecordInfo)
 pairIface : String -> Int -> List (String, Int)
 pairRecordByName : String -> Option (String, RecordInfo)
 pairsOfVecObls : List (String, List Int) -> List (String, Int)
 paramMonoOf : List (String, Mono) -> String -> Mono
+paramSubstOf : List Int -> List Mono -> List (Int, Mono)
 patVarsListTc : List Pat -> List String
 patVarsTc : Pat -> List String
 payloadAstTypes : ConPayload -> List Ty
@@ -1205,10 +1222,14 @@ recordCandIsType : Ident -> Ident -> String -> Bool
 recordDoMonadError : Loc -> Unit
 recordFieldMap : RecordInfo -> Map String Mono
 recordFieldNames : RecordInfo -> List String
+recordFields : RecordInfo -> List (String, Mono)
+recordForKeyAndReceiver : Option HeadKey -> String -> Option RecordInfo
 recordForReceiverIdent : Mono -> String -> Option RecordInfo
+recordIdentRowForReceiver : Option HeadKey -> List (Ident, String, RecordInfo) -> Option RecordInfo
 recordIfaceObligation : String -> Mono -> Unit
 recordImplObligation : String -> Mono -> Mono
 recordImporterShadowDicts : TcEnv -> String -> List (Ref Route) -> Mono -> Unit
+recordInfoIsReceiverDecl : Option HeadKey -> RecordInfo -> Bool
 recordLocalBind : String -> Mono -> Unit
 recordMethodDicts : String -> Ref (List Route) -> List (Int, Mono) -> Unit
 recordMethodLevelObls : List String -> Ty -> Mono -> Unit
@@ -1216,6 +1237,7 @@ recordMethodLevelSlotObls : List (String, String) -> List (String, Mono) -> Unit
 recordMethodObligationGuarded : TcEnv -> String -> Scheme -> Mono -> Mono
 recordNumlitLoc : Mono -> Unit
 recordObl : Predicate -> Int -> Provenance -> Option Loc -> Unit
+recordParamIds : RecordInfo -> List Int
 recordParamKinds : TyConOrigin -> String -> List Kind -> Unit
 recordPinnedLocals : String -> Option Loc -> List Int -> List (Int, String) -> Mono -> Bool
 recordPinnedLocalsGeneric : String -> Option Loc -> List Int -> List Int -> Mono -> Bool
@@ -1314,6 +1336,7 @@ resolveDictApps : List Decl -> Map String (List ImplEntry) -> Map String (List K
 resolveFieldAmbiguous : Mono -> String -> List String -> Option (String, RecordInfo)
 resolveFieldByOwners : Mono -> String -> Option (String, RecordInfo)
 resolveFieldRecord : Mono -> String -> Option (String, RecordInfo)
+resolveFieldRecordPick : Mono -> String -> Option (String, RecordInfo)
 resolveMemberSchemes : (String, String) -> List (String, Scheme) -> List (String, Scheme)
 resolveMethodDicts : Map String (List ImplEntry) -> Map String (List KeyEntry) -> List (Ref (List Route), List Mono) -> Unit
 resolveOpSite : Bool -> Map String (List ImplEntry) -> Map String (List KeyEntry) -> String -> Ref Route -> Mono -> Bool -> String -> Unit
@@ -1433,6 +1456,7 @@ splitOnSemiGo : String -> Int -> Int -> List String -> List String
 stampOpRouteVal : Bool -> Map String (List ImplEntry) -> Map String (List KeyEntry) -> String -> Mono -> String -> Route
 stampRLocalOrFallback : Bool -> Ref Route -> String -> List Route -> Unit
 stampRoutes : List (Ref Route) -> Unit
+stampableFieldRecord : Mono -> String -> Option (String, RecordInfo) -> Option (String, RecordInfo)
 standaloneSchemeFor : TcEnv -> String -> String -> Option Scheme
 standaloneShadowDomain : String -> Option Mono
 standaloneShadowScheme : String -> Option Mono

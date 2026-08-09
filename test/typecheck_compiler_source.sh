@@ -491,6 +491,13 @@ echo "checking #1110 Mono.TCon mint set ..."
 #     side of the same rule. It finds the head whose two identities conflict so the
 #     otherwise-unreadable `Type mismatch: T vs T` can name the two modules. It is a
 #     READER, not a decider — nothing about acceptance goes through it.
+#   `monoDeclDiffersGo (TCon n1 o1) (TCon n2 o2) = …`  — #1455 round 5: a further
+#     comparison, and it DOES decide acceptance. It asks whether two constructors of
+#     ONE record type declare the same field at definitely-different types, and
+#     refuses the `.field` selection if so (`T-FIELD-VARIANT-CONFLICT`). It is routed
+#     through `sameTyConHead` for exactly the reason the six above are: the
+#     absent-origin rule must be the SAME rule here, or two modules' `Int` would
+#     become "different types" and the guard would refuse working programs.
 #
 # 🚨 THIS LIST IS THE ONLY PLACE THE COMPARISON SET IS ENUMERATED MECHANICALLY.
 # ANY further comparison added without listing it here FAILS this gate, which is the
@@ -508,6 +515,7 @@ cohEqR (TCon a oa) (TCon b ob) = sameTyConHead a oa b ob
 TCon n2 o2 => if sameTyConHead n o n2 o2 then MOk else MFail
 TCon x ox => match normalize b
 TCon y oy => sameTyConHead x ox y oy
+monoDeclDiffersGo (TCon n1 o1) (TCon n2 o2) = not (sameTyConHead n1 o1 n2 o2)
 tconBuiltin n = TCon n OriginBuiltin
 tconFrom o n = TCon n o
 tconTupleHead n = TCon (tupleHeadTagTc n) OriginBuiltin

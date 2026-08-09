@@ -1,0 +1,48 @@
+-- THE CLEAN HALF OF THE UNDECIDABILITY WITNESS (#1455 round 5).  Its twin is
+-- `test/llvm_fixtures_modules/record_multi_variant_shared_access/`, which is #1469's
+-- self-draining pin.
+--
+-- 🚨 WHAT THE PAIR PROVES, AND WHY IT HAD TO BE A PAIR IN THE CORPUS.  Both fixtures
+-- import a `zshared.mdk` that is BYTE-IDENTICAL between them (`cmp` the two files),
+-- both CONSTRUCT both of `Shared`'s constructors, and both print `t=1,3`.  The ONLY
+-- difference is here, at a use site:
+--
+--     this cell   `mkSA.sx` projected; `mkSB` consumed by `match`   native ok, wasm ok
+--     the twin    `mkSA.sx` AND `mkSB.sx` both projected            native ok, wasm TRAPS
+--                                                                   (`illegal cast`)
+--
+-- Two programs with the same declarations, the same field names, the same offsets and
+-- the same output, and one of them is broken on a shipping backend.  So no
+-- declaration-level rule at the typecheck seam can separate them, and
+-- `T-FIELD-VARIANT-CONFLICT` is necessarily an approximation rather than the exact
+-- characterization of the divergent set — a claim two rounds of #1455 made in some
+-- form and two rounds of review measured false.  `stampableFieldRecord`
+-- (`compiler/types/typecheck.mdk`) cites these two directories by name.
+--
+-- ⚠️ ROUNDS 3 AND 4 CITED A PAIR THAT DID NOT HAVE THE PROPERTY — `|A{x,y}|B{x,y,z}|`
+-- against `|A{x}|B{x}|`, which share neither their declarations nor their field
+-- names, under a sentence asserting they shared both.  Putting the witness in the
+-- corpus instead of in prose is the fix: the shared half is now literally shared, and
+-- a `cmp` settles it.
+--
+-- ⚠️ THIS CELL MUST STAY WasmGC-CLEAN.  It is not ledgered in
+-- `test/engine_divergence.txt` — deliberately, because its whole value is being the
+-- arm that WORKS.  If `diff_compiler_engines` ever reports a divergence here, the
+-- pair has stopped being a witness and the argument above needs re-deriving, not
+-- silencing with a ledger row.
+--
+-- Expected output, DERIVED BY HAND: `mkSA = SA { sx = 1, … }` so `mkSA.sx` is 1;
+-- `mkSB = SB { sx = 3, … }` and `sxOf` returns whichever arm matches, i.e. 3.  So
+-- `t=1,3` — the same bytes the twin prints, which is what makes the two comparable.
+import zshared.{Shared, SA, SB, mkSA, mkSB}
+
+-- The `match` the diagnostic's own `help` tells users to write, and the reason this
+-- arm is wasm-clean: a `match` binds the field per CONSTRUCTOR, so each arm's cast is
+-- to the struct type the value actually has.
+sxOf : Shared -> Int
+sxOf s = match s
+  SA { sx = v } => v
+  SB { sx = v } => v
+
+main : <IO> Unit
+main = putStrLn ("t=" ++ intToString mkSA.sx ++ "," ++ intToString (sxOf mkSB))

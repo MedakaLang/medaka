@@ -1,0 +1,40 @@
+-- THE CONTROL THAT DISTINGUISHES THE SHIPPED RULE FROM "REJECT ANY `.field` ON A
+-- MULTI-CONSTRUCTOR RECORD TYPE" (#1455, restored after round 3 deleted it).
+--
+-- `Pair` has TWO named-field constructors and BOTH declare `px` — at the SAME
+-- position.  The selection therefore stays LEGAL: the LLVM backend emits one
+-- constant-offset load and every admissible stamp yields the same offset, so
+-- nothing about the choice is observable.
+--
+-- 🚨 WHY THIS FILE CAME BACK.  Round 3 of #1455 deleted this control and widened
+-- the guard to "a sibling declares the field AT ALL", on the argument that WasmGC
+-- casts to the stamped constructor's struct TYPE and so an identical layout is no
+-- protection.  The MECHANISM is real (`emitFieldAccessRef`, `wasm_emit.mdk`); the
+-- conclusion drawn from it is false.  MEASURED on a cold build of the merge base
+-- `bfcd4ea7` — native binary AND WasmGC, the same path `diff_wasm_modules.sh` uses:
+--
+--     |A{x,y}|B{x,y}|   , only A built, only A projected        native ok   wasm ok
+--     |A{x,y}|B{x,y}|   , only B built, only B projected        native ok   wasm ok
+--     |A{x,y}|B{x,y,z}| , B `match`ed, only A projected         native ok   wasm ok
+--     |Dev{host,port}|Prod{host,port,tls}| , defaultDev.host    native ok   wasm ok
+--     record UPDATE `{ mkA | x = 5 }`                           native ok   wasm ok
+--     |A{x}|B{x}|       , both built, BOTH projected            native ok   wasm TRAP
+--
+-- The trapping row is real and is tracked as **#1469** — but it is a RUNTIME
+-- dataflow property (does a value of another constructor reach this access?), and
+-- this seam sees only declarations.  Rejecting the whole class to catch it takes
+-- away five ordinary programs for one broken one.  So the rule keeps the offset
+-- test, this control pins that it does, and #1469 carries what is left.
+--
+-- ⚠️ THE ASSERTION IS THE ERROR THAT DOES APPEAR, NOT THE ABSENCE OF ONE — the same
+-- trick as `field_variant_single_ctor_control.mdk`.  An "it checks clean" control in
+-- this corpus would have to pin the whole prelude scheme dump.  Instead the body is
+-- ill-typed in an UNRELATED way (the annotation says `Bool`, the field is an `Int`),
+-- so the golden is a one-line `Type mismatch` that can only be produced if `.px`
+-- RESOLVED.  A guard that over-fired would replace it with the conflict message.
+data Pair =
+  | PA { px : Int, py : Int }
+  | PB { px : Int, py : Int, pz : Int }
+
+getPx : Pair -> Bool
+getPx p = p.px

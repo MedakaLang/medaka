@@ -1,0 +1,37 @@
+-- THE MISSING AXIS: a type with TWO named-field CONSTRUCTORS (#1455 review, finding 1
+-- ask 2), rebuilt in round 4 to be FAIL-CAPABLE (second review, finding F3).
+--
+-- `diff_compiler_engines` — which grades eval == native == wasm on this corpus — would
+-- have caught the class #1455's first review found, because the interpreter resolves
+-- fields by name at run time and is structurally immune to a wrong constant offset. The
+-- gate existed; the input did not.
+--
+-- 🚨 THE ENTRY NEVER MENTIONS `Cfg`, `WrapA`, `WrapZ` OR `Byst`.  It imports six plain
+-- `Int` values.  Two modules that do not import each other each declare a
+-- two-named-field-constructor type whose registry key is `Cfg`, with their fields at
+-- OPPOSITE indices, and each projects only its OWN record — so a module's own
+-- projections are corrupted by a declaration it has no import path to.
+--
+-- Expected output, DERIVED BY HAND from the sources before anything was run or captured:
+--   amulti: mkA = Cfg { a = 11, b = 22 }   =>  arA = 11, arB = 22
+--   zmulti: mkZ = Cfg { b = 33, a = 44 }   =>  zrA = 44, zrB = 33
+--   bystAlpha mkBy1 = 10, bystAlpha mkBy2 = 110
+-- so `11,22,44,33 w=10,110`.
+--
+-- ⚠️ FAIL-CAPABILITY, MEASURED — this is what round 3's version of the cell did not have.
+-- On a binary cold-built from the merge base `bfcd4ea7`: `check` exits 0, `medaka run`
+-- prints the correct `11,22,44,33`, `build` exits 0, and the EXECUTED BINARY prints
+-- `11,22,33,44` — zmulti's own two fields silently swapped, at exit 0, no diagnostic —
+-- while the WasmGC arm TRAPS (`instantiate failed: illegal cast`, the stamp naming the
+-- other module's `Cfg` struct type).  On this branch all three engines print the golden.
+--
+-- ⚠️ EVAL IS NOT THE ORACLE HERE.  The interpreter printed the correct answer throughout
+-- the whole life of the bug; what this cell grades is the EXECUTED NATIVE (and WasmGC)
+-- binary.  The golden was hand-derived above, not captured from `medaka run`.
+import amulti.{arA, arB}
+import zmulti.{zrA, zrB, by1, by2}
+
+main : <IO> Unit
+main =
+  putStrLn
+    (intToString arA ++ "," ++ intToString arB ++ "," ++ intToString zrA ++ "," ++ intToString zrB ++ " w=" ++ intToString by1 ++ "," ++ intToString by2)

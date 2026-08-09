@@ -1,0 +1,15 @@
+-- Code-identical to `field_owner_no_narrowing/amod.mdk`: a NAMED-FIELD VARIANT whose
+-- registry key is `Dup` and whose type is `RA`.  That gap is what sends `mkA.dx` down
+-- the field→owners fallback instead of the exact `lookupRecordByName <head tycon>` hit.
+--
+-- ⚠️ `dpre` IS NOT PADDING — it puts `dx` at OFFSET 1 here while `wmod`'s rival owner
+-- puts it at offset 0, so a wrong pick between the two is a wrong VALUE (`99` instead of
+-- `7`) and not merely a diagnostic.  A single-field version of this record cannot express
+-- that: both layouts would pick index 0 and the wrong pick would be invisible on the
+-- executed binary.  (#1455 adversarial review, finding 2.)
+public export data RA =
+  | Dup { dpre : Int, dx : Int }
+  | ACount Int
+
+export mkA : RA
+mkA = Dup { dpre = 99, dx = 7 }

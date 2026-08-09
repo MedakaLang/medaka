@@ -1,5 +1,5 @@
 # META
-source_lines=24101
+source_lines=24748
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted typecheck stage — port of lib/typecheck.ml's HM core.  SLICE 1:
@@ -108,6 +108,7 @@ import frontend.resolve.{
 import frontend.exhaust.{
   Oracle,
   buildOracle,
+  oGetCtors,
   useful,
   patUnreachable,
   patHasRange,
@@ -6511,8 +6512,17 @@ fieldOwnerNames fname =
 --
 -- ⚠️ ARM (a) DOES NOT ASK A SPELLING QUESTION, AND THAT IS WHY IT ALONE CALLS
 -- `lookupRecordForReceiver` INSTEAD OF `lookupRecordByName` — see that function.
+--
+-- ⚠️ EVERY ARM'S ANSWER GOES THROUGH `stampableFieldRecord` — the guard that
+-- refuses to hand out a key the decision did not determine.  See it below; it is
+-- deliberately wrapped around the WHOLE ladder rather than added to one arm,
+-- because all four arms decide by a TYPE and all of them return a CONSTRUCTOR.
 resolveFieldRecord : Mono -> String -> Option (String, RecordInfo)
-resolveFieldRecord te fname = match headTyconNameMono te
+resolveFieldRecord te fname =
+  stampableFieldRecord te fname (resolveFieldRecordPick te fname)
+
+resolveFieldRecordPick : Mono -> String -> Option (String, RecordInfo)
+resolveFieldRecordPick te fname = match headTyconNameMono te
   Some r => match lookupRecordForReceiver te r
     Some ri => Some (r, ri)
     None => match lookupRecordByMangledHead te r fname
@@ -6522,6 +6532,499 @@ resolveFieldRecord te fname = match headTyconNameMono te
         None
       else resolveFieldByOwners te fname
   None => resolveFieldByOwners te fname
+
+-- ── THE STAMP GUARD: a DECISION that does not determine the STAMP is not a
+--    decision, and nothing may be stamped from it (#1455 review finding 1) ────
+--
+-- `resolveFieldRecord`'s result IS the stamp.  Both callers `setRef` the
+-- returned KEY onto the AST node — `inferFieldAccess` and
+-- `inferRecordUpdateField` — `ir/core_ir_lower.mdk` carries it into
+-- `CFieldAccess … recName` / `CRecordUpdate`, and both emitters resolve the
+-- field's positional OFFSET from it (`fieldIdxByName`, `backend/llvm_emit.mdk`).
+--
+-- 🚨 EVERY ARM ABOVE DECIDES BY A **TYPE** AND RETURNS A **CONSTRUCTOR**, AND
+-- THOSE ARE IN BIJECTION ONLY WHEN A TYPE HAS AT MOST ONE NAMED-FIELD
+-- CONSTRUCTOR DECLARING THE FIELD.  The counterexample is one line:
+--
+--     data Wrap = | Cfg { alpha : Int, beta : Int } | Dfg { beta : Int, alpha : Int }
+--
+-- Two declarations, ONE type identity `(mmm, Wrap)`, and `alpha` at offset 0 in
+-- one and offset 1 in the other.  A receiver of type `Wrap` says nothing about
+-- which constructor built the value, so *no* key is the right key: whichever the
+-- ladder returns, `w.alpha` compiles to a single `loadField w <idx>` that is
+-- wrong for half the values of that type.  MEASURED on the merge base, all at
+-- exit 0 with `medaka run` printing the RIGHT answer (the tree-walker resolves
+-- fields by name at run time, so it is structurally immune):
+--
+--     shape                                       run        built binary
+--     alpha/beta swapped between two ctors        11,22      22,11      (wrong value)
+--     tgt at index 1 vs index 0, both Int         7          0          (wrong value)
+--     tgt at index 1 vs index 0, both String      dee        SIGSEGV    (exit 139)
+--
+-- The same three reproduce with the type's OWN name as the first constructor's
+-- key (`data Wrap = | Wrap { … } | Dfg { … }`), which arm (a) answers and never
+-- reaches `resolveFieldByOwners` at all — which is why this guard is on the
+-- LADDER'S RESULT and not inside any one arm.  #1455's Q-IDENT selection made
+-- the collider-bearing spellings *reachable* (they used to be turned away by a
+-- spurious `Type mismatch`), and loud → silent is a severity INCREASE even when
+-- the old behaviour was also wrong; the class itself predates it.
+--
+-- ⚠️ THE ANSWER IS NOT "PICK BETTER".  There is no better pick — the information
+-- needed to pick is the runtime tag, which a `.field` selection does not consult
+-- (`emitFieldAccess` emits one constant offset).  So the honest fix is the one
+-- the standing gate's Q6 discriminator asks for: if the decision cannot name a
+-- single constructor, DO NOT STAMP ONE.  Reject with `T-FIELD-VARIANT-CONFLICT`
+-- and tell the user to match on the constructor.
+--
+-- 🚨 THIS GUARD IS A DELIBERATE STATIC OVER-APPROXIMATION OF AN UNDECIDABLE
+-- PROPERTY, AND SAYING SO IS LOAD-BEARING — TWO ROUNDS OF THIS PR CLAIMED IT WAS
+-- SOMETHING SHARPER AND BOTH CLAIMS WERE MEASURED FALSE.  What actually decides
+-- whether a program is right is *which constructor reaches the access at run
+-- time*, and typecheck cannot see that.  22 programs were built and executed on
+-- BOTH shipping backends, cold, on the merge base; the discriminator is perfect
+-- and it is pure dataflow:
+--
+--     only ONE constructor of the type ever reaches the access  -> both backends CORRECT
+--     TWO OR MORE constructors reach it                         -> native wrong (or SIGSEGV),
+--                                                                  WasmGC `illegal cast`
+--
+-- Two programs that differ only in that respect are IDENTICAL to every test this
+-- seam can perform, and the witness is IN THE CORPUS rather than in this prose —
+-- `test/llvm_fixtures_modules/record_multi_variant_shared_access/` and
+-- `…_shared_access_one_reach/`, whose `zshared.mdk` files are BYTE-IDENTICAL
+-- (`cmp` them; that is the whole point and it is mechanically checkable):
+--
+--     data Shared = | SA { sx : Int, sy : Int } | SB { sx : Int, sy : Int }
+--     mkSA = SA { sx = 1, sy = 2 }   mkSB = SB { sx = 3, sy = 4 }
+--
+-- Both constructors are CONSTRUCTED in both programs and both programs print the
+-- same `t=1,3`.  The only difference is whether the SECOND constructor's value is
+-- PROJECTED or consumed by a `match`:
+--
+--     entry: `mkSA.sx`, and `mkSB` via `match`     native t=1,3   WasmGC t=1,3
+--     entry: `mkSA.sx` AND `mkSB.sx`               native t=1,3   WasmGC TRAPS
+--                                                                 (`illegal cast`)
+--
+-- Same declarations, same field names, same offsets, same output; different
+-- answer, and the only difference is a USE SITE.  **So the divergent set is NOT
+-- statically characterizable at this seam.**  Any rule here is an approximation,
+-- and the only question is which errors it makes.
+--
+-- ⚠️ THE CONCLUSION IS OLD, THIS WITNESS IS NOT — THE ONE THIS COMMENT SHIPPED
+-- UNTIL ROUND 5 DID NOT EXHIBIT THE PROPERTY IT WAS CITED FOR.  It read
+-- `|A{x,y}|B{x,y,z}|` against `|A{x}|B{x}|`, under the sentence "same
+-- declarations, same field names" — two programs that share NEITHER, and no pair
+-- in the tables here or in the PR body had the property either.  The property is
+-- real; the evidence was not.  A claim of the form "these two differ ONLY in X"
+-- is checkable by construction — if the shared part is not literally shared,
+-- either say so or make it so.  Here it is literally shared, by `cmp`.
+--
+-- ⚠️ SO THE RULE IS SCOPED TO THE JOB THIS PR OWES, NOT TO "REJECT EVERYTHING
+-- BROKEN" — WHICH IT CANNOT DO.  #1455's Q-IDENT selection makes a set of
+-- programs REACHABLE that a spurious `Type mismatch` used to turn away; where
+-- those programs are miscompiled, loud → silent is a severity INCREASE and this
+-- PR must not cause it.  The rule is TWO declaration-level tests and a sibling
+-- constructor is a RIVAL if EITHER fires (`fieldRivalWhy`):
+--
+--   (1) DIFFERENT OFFSET.  That is what the LLVM backend gets wrong — it emits
+--       one constant `loadField <idx>` for every value of the type.
+--   (2) DEFINITELY DIFFERENT DECLARED TYPE.  Then the access's own STATIC type is
+--       whatever the ladder happened to pick, so the program has no meaning for
+--       the back end to get right, and the binary reads a `Bool` (or a heap
+--       pointer) as an `Int`.
+--
+-- 🚨 TEST (2) EXISTS BECAUSE THIS PARAGRAPH USED TO CLAIM TEST (1) WAS "THE EXACT
+-- CHARACTERIZATION OF THE NEWLY-REACHABLE DAMAGE, NOT A PROXY FOR IT".  THAT WAS
+-- FALSE, and the counterexample is precisely the loud → silent transition this
+-- guard exists to prevent (#1455 round-4 review, F1).  MEASURED, and pinned at
+-- `test/typecheck_error_fixtures/field_variant_type_conflict.mdk`:
+--
+--     data Wrap = | Cfg { alpha : Int, beta : Int } | Dfg { alpha : Bool, beta : Int }
+--     data Aaa  = { alpha : Int, beta : Int }        -- the unrelated collider that
+--                                                    -- makes it NEWLY REACHABLE
+--
+--     merge base  `check` exit 1 — `Type mismatch: Wrap vs Aaa`
+--     round 4     `check` exit 0 (zero diagnostics), `build` exit 0, and the
+--                 BINARY prints `c=7 d=1 a=8` — `True` read as an `Int`, at exit
+--                 0, with `medaka run` right and therefore blind
+--
+-- `alpha` is at offset 0 in BOTH constructors, so test (1) is structurally unable
+-- to see it.  Nor is it covered by the undecidability argument above: "which
+-- constructor reaches the access" is runtime dataflow, but "the two constructors
+-- declare this field at different types" is a DECLARATION-level fact, sitting in
+-- the very structure this walk already holds — `RecordInfo`'s
+-- `List (String, Mono)`, which the walk used to throw away with `map fst`.
+--
+-- ⚠️ AND THE "EXACT CHARACTERIZATION" SENTENCE IS NOT COMING BACK IN TEST (2)'S
+-- NAME EITHER.  The rule is an over-approximation in one direction and an
+-- under-approximation in the other, and both directions are named below.
+-- Rejecting more than this buys nothing this PR owes and costs working programs.
+--
+-- 🚨 THE COST OF GOING WIDER, MEASURED — THIS IS WHY THE "A SIBLING DECLARES THE
+-- FIELD AT ALL" RULE WAS RETRACTED.  Round 3 of this PR dropped the offset test
+-- on the argument that WasmGC casts rather than offsets, so an identical layout
+-- is no protection.  The MECHANISM is true (`emitFieldAccessRef`,
+-- `backend/wasm_emit.mdk`, emits `ref.cast (ref $C_<ctor>)`), but the conclusion
+-- drawn from it — "so nothing in that class works on both backends" — is false.
+-- MEASURED on a cold build of the merge base, native binary AND WasmGC:
+--
+--     shape                                                    native   WasmGC
+--     |A{x,y}|B{x,y}| , only A built, only A projected          t=1,2    t=1,2   ok
+--     |A{x,y}|B{x,y}| , only B built, only B projected          t=1,2    t=1,2   ok
+--     |A{x,y}|B{x,y,z}| , B `match`ed, only A projected         t=1,2    t=1,2   ok
+--     |Dev{host,port}|Prod{host,port,tls}| , defaultDev.host    ok       ok      ok
+--     record UPDATE `{ mkA | x = 5 }` on |A{x,y}|B{x,y}|        u=5      u=5     ok
+--     |A{x}|B{x}| , both built, BOTH projected                  t=1,2    TRAP
+--
+-- Five working programs for one trapping one — and the first four are an ordinary
+-- programming pattern, not a coincidence: `recFieldsRef`/`recByName` are built
+-- from CONSTRUCTION sites, so when the stamped constructor is never constructed
+-- the emitters fall through to the label search and land on the one that is.
+-- Rejecting that class is over-rejection, and `docs`-side it exceeded the scope
+-- the owner accepted (which reserved the offset-agreeing case as legal).
+--
+-- ⚠️ WHAT IS THEREFORE LEFT ACCEPTED AND STILL BROKEN, FILED NOT HIDDEN.  This
+-- guard is incomplete on purpose, in two named directions:
+--   * **#1469** — the offset-AGREEING class where two constructors do reach the
+--     access: native is correct, WasmGC traps `illegal cast`.  Pre-existing on
+--     both arms, pinned by `test/llvm_fixtures_modules/record_multi_variant_
+--     shared_access/` + its `test/engine_divergence.txt` row.
+--   * **#1468** — a sibling that declares a DIFFERENT field name is not a rival
+--     at all, so `data T = |A{x}|B{z}|; t.x` is accepted and reads `B`'s slot 0
+--     (a wrong `Int`, or a heap address printed as an `Int`).  Pre-existing on
+--     both arms, pinned in `test/must_fail_fixtures/`.
+-- Neither is introduced or drained by this PR.  **The refused set is NOT the set
+-- the backends disagree about** — an earlier draft of this comment said it was,
+-- and that sentence is what #1468 falsifies.
+--
+-- ⚠️ TEST (2) DECLINES WHEREVER A VARIABLE SURVIVES THE INSTANTIATION, and that
+-- residual is a DIFFERENT kind from the two above: it is bounded by what the
+-- receiver's own type says, not by what the declarations say.  `data W a =
+-- | C { f : a } | D { f : Int }` refuses at receiver `W String` (measured) and
+-- accepts at `W Int` (correct — both slots ARE `Int` there) and at a polymorphic
+-- `W a` (the caller decides; this seam cannot).  `field_variant_param_type_control.mdk`
+-- pins the accepting half and `field_variant_type_conflict.mdk` the refusing one,
+-- because a rule with an instantiation step in it will otherwise be "simplified"
+-- back into one of the two wrong answers — both of which were measured on this
+-- branch on the way here (see `monoAtParams`).
+--
+-- ⚠️ SINGLE-CONSTRUCTOR RECORD TYPES ARE UNAFFECTED, which is what keeps this
+-- from being a blanket ban on `.field`: `data X = { … }` and
+-- `data T = | C { … }` have exactly one named-field constructor, so the stamp IS
+-- the runtime constructor, always.  `frontend/ast.mdk`'s `Decl` shares `pub` and
+-- `methods` between `DInterface` and `DImpl` and is unaffected too — because
+-- nothing in `compiler/` SELECTS either one; they are only ever matched.
+--
+-- The end state that retires this guard entirely is **#1465** (tag-dispatched
+-- field selectors in both backends), which the diagnostic's `help` names.
+stampableFieldRecord : Mono -> String -> Option (String, RecordInfo) -> Option (String, RecordInfo)
+stampableFieldRecord _ _ None = None
+stampableFieldRecord te fname (Some (rname, ri)) = match fieldRivalCtor te fname rname ri
+  None => Some (rname, ri)
+  Some (tyname, rival, why) =>
+    let _ = pushTypeErrorHelpFixAt "T-FIELD-VARIANT-CONFLICT" currentLoc.value (fieldVariantConflictMsg fname tyname rname rival why) (fieldVariantConflictHelp fname rname why) None
+    None
+
+-- WHY a sibling constructor of the receiver's own type is a RIVAL — the two ways
+-- a receiver TYPE can fail to determine the load a `.field` compiles to.  It
+-- carries the two disagreeing VALUES, not just a tag, because the whole point of
+-- the message is to name them: neither remedy is actionable from "these two
+-- disagree" alone.
+--
+-- ⚠️ IT IS NOT AN ORDERED SEVERITY.  `fieldRivalWhy` tests the offset first only
+-- because it is the cheaper comparison and because a program that fails both is
+-- more usefully described by the positions; the two are independent defects and
+-- either alone is disqualifying.
+data FieldRivalWhy = RivalOffset Int Int | RivalType Mono Mono
+
+-- ONE CODE, TWO MESSAGES, because the two tests have two different remedies and a
+-- message that named the wrong one would be worse than none.  The offset arm
+-- names the two POSITIONS and the type arm names the two TYPES; in both cases
+-- making the two agree really does make the program legal again, so the reader
+-- cannot act on the diagnostic unless it says which pair disagrees.
+fieldVariantConflictMsg : String -> String -> String -> String -> FieldRivalWhy -> String
+fieldVariantConflictMsg fname tyname mineName rivalName (RivalOffset mine other) = "Field '\{fname}' sits at a different position in each of '\{tyname}''s constructors: '\{mineName}' declares it at position \{intToString (mine + 1)}, '\{rivalName}' at position \{intToString (other + 1)}. A '.\{fname}' is resolved by the receiver's TYPE, which does not say which constructor built the value, so there is no one slot to load here"
+fieldVariantConflictMsg fname tyname mineName rivalName (RivalType mine other) = "Field '\{fname}' is declared with a different type in each of '\{tyname}''s constructors: '\{mineName}' declares it as '\{ppMono mine}', '\{rivalName}' as '\{ppMono other}'. A '.\{fname}' is resolved by the receiver's TYPE, which does not say which constructor built the value, so there is no one type this selection could have"
+
+-- The `help` names BOTH remedies that exist today and the issue that owns the
+-- end state (#1465 — tag-dispatched selectors in both backends, which retires
+-- this diagnostic).  `match` is the portable one and is the same on both arms;
+-- the local one differs, and it works precisely because the thing it changes is
+-- the thing the corresponding test compares.
+fieldVariantConflictHelp : String -> String -> FieldRivalWhy -> String
+fieldVariantConflictHelp fname mineName (RivalOffset _ _) = "match on the constructor instead (e.g. '\{mineName} { \{fname} = x } => x'), or declare '\{fname}' at the same position in every constructor. Tracked as #1465 (tag-dispatched field selectors)"
+fieldVariantConflictHelp fname mineName (RivalType _ _) = "match on the constructor instead (e.g. '\{mineName} { \{fname} = x } => x'), or declare '\{fname}' with the same type in every constructor. Tracked as #1465 (tag-dispatched field selectors)"
+
+-- Is there a SIBLING constructor of the receiver's own type that declares
+-- `fname` AT A DIFFERENT POSITION, or AT A DEFINITELY DIFFERENT TYPE?  Returns
+-- its key and which of the two disagreements it is, so the message can name the
+-- pair the reader has to reconcile.
+--
+-- ⚠️ THE OFFSET TEST IS A DECISION, NOT THE DECISION, AND ROUND 3 OF THIS PR
+-- REMOVED IT AND HAD TO PUT IT BACK.  Removing it rejects `|A{x,y}|B{x,y}|` and
+-- `|Dev{host,port}|Prod{host,port,tls}|` — measured correct on BOTH shipping
+-- backends — for one trapping shape it catches.  See the 🚨 cost table at
+-- `stampableFieldRecord`, and #1469 for what stays accepted and wasm-broken.
+-- Round 4 then claimed the offset test was the EXACT characterization of the
+-- damage; that was false and the type test (`fieldRivalWhy`) is what closes it.
+--
+-- ⚠️ IT ANSWERS `None` UNLESS THE SELECTED RECORD IS THE RECEIVER'S OWN
+-- DECLARATION.  Arm (c) deliberately hands back a foreign key for a concrete
+-- non-record receiver *so that the later unify raises the usual mismatch*
+-- (`resolveFieldAmbiguous`); second-guessing that pick here would replace a
+-- `Type mismatch` with a conflict message about constructors the program never
+-- mentions.  So the identity test comes first and the guard is scoped to
+-- "the right declaration was found, and its type still does not pin the load".
+--
+-- ⚠️ TWO GATES, CHEAPEST FIRST, AND THE FIRST ONE IS WHAT KEEPS THIS OFF THE HOT
+-- PATH.  This runs on EVERY field access and every record update in the program,
+-- including the arm-(a) fast path that answers every projection in the
+-- compiler's own source — so it may not `sortUniqS` anything (`fieldOwnerNames`
+-- does, and the per-access cost of that is the pre-existing superlinearity
+-- #1456 tracks).  Gate 1 is one `omLookup` plus a length-<=1 test and stops
+-- almost every access; gate 2 is one more `omLookup` and a walk over the
+-- receiver TYPE's own constructors, which is O(1) in program size.
+--
+-- ⚠️ IT READS `recordFields`, NOT `recordFieldNames`, AND THAT IS BOTH HALVES OF
+-- ROUND 5.  `recordFieldNames` is `map fst fields` — it ALLOCATED a fresh list on
+-- every access clearing gate 1 and again per sibling (the round-4 review's one
+-- craft note, "the obvious place for a future quadratic to hide"), and the `Mono`
+-- it dropped on the floor is exactly the information test (2) needs.  Reading the
+-- pairs directly removes the allocation and supplies the type in one change.
+--
+-- ⚠️ THE RECEIVER'S TYPE ARGUMENTS ARE TAKEN ONCE, AFTER BOTH GATES.  Medaka is
+-- strict, so a `let` above the gates would run `spineParts` on every field access
+-- in the program; bound here it runs only on the handful that reach the walk.
+fieldRivalCtor : Mono -> String -> String -> RecordInfo -> Option (String, String, FieldRivalWhy)
+fieldRivalCtor te fname rname ri =
+  let rk = headTyconMono te
+  if not (recordInfoIsReceiverDecl rk ri) then None
+  else
+    if not (fieldHasRivalOwners fname) then None
+    else
+      let targs = snd (spineParts te)
+      match fieldSlotAt targs fname ri
+        None => None
+        Some mine => fieldRivalCtorOfType (headTyconNameMono te) rk fname rname mine targs
+
+-- The tail of the walk, split out so neither half is a three-deep `Option`
+-- passthrough chain (`rule-bind-chain-to-do`).  A `do` block is the rewrite that
+-- rule normally wants; it is the wrong instrument here, because this sits on the
+-- path of every field access and a `do` over `Option` is dict-passed
+-- `andThen`/`pure` (`compiler/AGENTS.md`'s measured +56% anti-pattern), whereas a
+-- split keeps both halves monomorphic and short-circuiting.
+fieldRivalCtorOfType : Option String -> Option HeadKey -> String -> String -> (Int, Mono) -> List Mono -> Option (String, String, FieldRivalWhy)
+fieldRivalCtorOfType None _ _ _ _ _ = None
+fieldRivalCtorOfType (Some tyname) rk fname rname mine targs = match oGetCtors driverState.value.matchOracle.value tyname
+  None => None
+  Some ctors => fieldRivalCtorNamed tyname rk fname rname mine targs ctors
+
+-- Re-attaches the receiver's type NAME to a found rival, so the message can say
+-- whose constructors these are without the walk having to carry it.  `map` over
+-- the `Option` rather than a two-arm match (`rule-match-to-map`); this runs at
+-- most once per access and only when a rival was actually found, so the
+-- dict-passed `map` is nowhere near the hot path the walk itself is on.
+fieldRivalCtorNamed : String -> Option HeadKey -> String -> String -> (Int, Mono) -> List Mono -> List String -> Option (String, String, FieldRivalWhy)
+fieldRivalCtorNamed tyname rk fname rname mine targs ctors = map
+  ((rival, why) => (tyname, rival, why))
+  (fieldRivalCtorGo rk fname rname mine targs ctors)
+
+-- GATE 1 — complete, and one map lookup.  A second constructor declaring
+-- `fname` is a second registry KEY owning it, so `fieldOwnersRef` (the
+-- ACCUMULATING field→owners multimap, no last-write-wins) answers "could there
+-- be a rival at all?" outright.  Read RAW, deliberately: `fieldOwnerNames`'
+-- `sortUniqS` exists to make the RENDERED owner list byte-stable, and the
+-- question here is only "are there two?", which no ordering changes.  Almost
+-- every field name in a program has exactly one owner, so almost every access
+-- stops here having allocated nothing.
+--
+-- ⚠️ IT ONLY EVER ASKS "ARE THERE TWO?" — it must never hand the list on to a
+-- walk.  See the 🚨 note at gate 2: the list is O(program) whenever a field name
+-- is shared across modules, and this function is on the path of EVERY field
+-- access, so walking it here is a quadratic.  Measured, and it was one.
+fieldHasRivalOwners : String -> Bool
+fieldHasRivalOwners fname = match fromOption [] (omLookup fname perRun.value.fieldOwnersRef.value)
+  [] => False
+  [_] => False
+  _ => True
+
+-- GATE 2 — precise, and bounded by the receiver TYPE's own constructor count
+-- rather than by the owner list.  The candidate names come from the ctor oracle
+-- (`type → its constructors`), which is already built graph-wide for
+-- exhaustiveness and costs one `omLookup`; a one-constructor type ends the walk
+-- immediately.
+--
+-- 🚨 IT MUST NOT FALL BACK TO THE OWNER LIST WHEN THE ORACLE MISSES, AND THIS
+-- COMMENT EXISTS BECAUSE AN EARLIER CUT DID.  The reasoning for the fallback was
+-- sound in kind — the owner list is a SUPERSET of the type's own constructors,
+-- so identity confirmation would discard the rest and the ANSWER would be
+-- identical — and it was there to stop the guard being present on one driver and
+-- absent on another.  It was also a **quadratic**: this runs on every field
+-- access, the owner list is O(program) when a field name is shared across
+-- modules, and `checkModules` (the scheme-returning module driver — the one
+-- `test/diff_compiler_perf_scaling.sh`'s `modules` shape profiles) does NOT seed
+-- the oracle.  MEASURED, interleaved, min-of-5, heap-pinned, on the gate's own
+-- `modules` fixture at N=100/200/400: merge base 0.211 / 0.402 / 0.863 s
+-- (linear), with the fallback 0.247 / 0.607 / 1.594 s — branch/base 1.17x ->
+-- 1.51x -> 1.85x, i.e. the EXTRA cost growing superlinearly, and the gate's hard
+-- `modules` TIME arm went red at r2 = 3.27.
+--
+-- So the guard DECLINES where the oracle has no row, and the driver asymmetry is
+-- stated rather than paid for: `seedCheckRun` is run by every driver that
+-- REPORTS diagnostics (`checkProgramDiags`, `checkToLinesWithRuntime`,
+-- `checkErrorsWithRuntime`, `checkModuleFullDiags` — i.e. `medaka check`,
+-- `run`, `build`, `lint`, the LSP and MCP servers), and not by the two
+-- scheme-only probe drivers (`checkToLines`, `checkModules`), which report no
+-- diagnostics at all and therefore cannot surface this one either way.
+-- `test/typecheck_error_fixtures/field_variant_offset_conflict.mdk` is in that
+-- gate's `PRELUDE_DEP` list for exactly this reason.
+--
+-- ⚠️ THE ORACLE IS BARE-NAME-KEYED, SO IT SUPPLIES CANDIDATES AND DECIDES
+-- NOTHING.  Every name it hands over is confirmed through
+-- `recordForKeyAndReceiver`, i.e. the same `(declaring module, type name)`
+-- identity test the selection itself uses — so a same-named type in another
+-- module can neither invent a rival (its rows fail the identity test) nor be
+-- mistaken for this one.  What it CAN still do is hide a rival, if the bare key
+-- resolved to the other module's type: that direction is a missed diagnostic,
+-- never a false reject, and it is the same residual `oGetCtors` already carries
+-- for exhaustiveness.
+fieldRivalCtorGo : Option HeadKey -> String -> String -> (Int, Mono) -> List Mono -> List String -> Option (String, FieldRivalWhy)
+fieldRivalCtorGo _ _ _ _ _ [] = None
+fieldRivalCtorGo rk fname rname mine targs (c::rest)
+  | c == rname = fieldRivalCtorGo rk fname rname mine targs rest
+  | otherwise = match recordForKeyAndReceiver rk c
+    None => fieldRivalCtorGo rk fname rname mine targs rest
+    Some ri2 => match fieldSlotAt targs fname ri2
+      None => fieldRivalCtorGo rk fname rname mine targs rest
+      -- ⚠️ A SIBLING THAT AGREES ON BOTH TESTS IS NOT A RIVAL, AND THE WALK MUST
+      -- KEEP LOOKING RATHER THAN STOP — a type may have three constructors, two
+      -- agreeing and one not.  Returning `None` at the first agreeing sibling
+      -- would hide the third.  (Round 3 removed the offset test altogether; the
+      -- cost table at `stampableFieldRecord` is why it is back.)
+      Some other => match fieldRivalWhy mine other
+        None => fieldRivalCtorGo rk fname rname mine targs rest
+        Some why => Some (c, why)
+
+-- THE TEST ITSELF, over the receiver's own slot and a sibling's.  Offsets first
+-- because the comparison is an `Int` `!=`; the type comparison runs only when the
+-- offsets agree, which is already the rare case.
+fieldRivalWhy : (Int, Mono) -> (Int, Mono) -> Option FieldRivalWhy
+fieldRivalWhy (mineIdx, mineTy) (otherIdx, otherTy)
+  | mineIdx != otherIdx = Some (RivalOffset mineIdx otherIdx)
+  | monoDeclDefinitelyDiffers mineTy otherTy = Some (RivalType mineTy otherTy)
+  | otherwise = None
+
+-- ONE CONSTRUCTOR'S SLOT FOR `fname`, WITH THE DECLARED TYPE INSTANTIATED AT THE
+-- RECEIVER'S OWN TYPE ARGUMENTS.  The instantiation is the whole reason the type
+-- test can be sharp without over-rejecting, and it is what "compare the `Mono`s
+-- under the same instantiation `RecordInfo` keeps" means concretely.
+--
+-- ⚠️ THE `rule-match-to-map` REWRITE IS DECLINED HERE, AND FOR THE OPPOSITE REASON
+-- IT IS ACCEPTED AT `fieldRivalCtorNamed`.  That one runs at most once per access
+-- and only after a rival is found; this one runs on EVERY access that clears gate
+-- 1 and again per sibling, and `map` over an `Option` is dict-passed
+-- (`compiler/AGENTS.md`'s measured +56% self-compile anti-pattern).  The two-arm
+-- match keeps it monomorphic.
+fieldSlotAt : List Mono -> String -> RecordInfo -> Option (Int, Mono)
+-- lint-disable-next-line rule-match-to-map
+fieldSlotAt targs fname ri = match fieldSlotIn fname (recordFields ri)
+  None => None
+  Some (i, t) => Some (i, monoAtParams (recordParamIds ri) targs t)
+
+-- 🚨 WITHOUT THIS SUBSTITUTION THE TYPE TEST IS WRONG IN BOTH DIRECTIONS, AND BOTH
+-- WERE MEASURED ON THIS BRANCH BEFORE IT EXISTED.  A `RecordInfo` holds the RAW
+-- declaration type, so each constructor of one type carries ITS OWN parameter
+-- variables:
+--
+--   * FALSE REJECT without it — `data Both w = | Bw { wf : w } | Aw { wf : w } |`
+--     stores two DIFFERENT `TVar` cells for one source-level `w`, so a structural
+--     comparison calls them different types and refuses an ordinary parameterised
+--     record.  That is precisely the over-rejection round 3 of this PR was
+--     rejected for, one axis over.
+--   * MISSED REJECT without it — `data W a = | Cw { wf : a } | Dw { wf : Int } |`
+--     at receiver `W String` is a genuine conflict (`Cw`'s slot is a `String`
+--     there, `Dw`'s is an `Int`), but the RAW types are a variable against `Int`
+--     and any variable-tolerant rule declines.  MEASURED on this branch before
+--     the substitution landed: `check` exit 0, `build` exit 0, and the binary
+--     SEGFAULTED at exit 139 reading the `Int` as a `String`, where the merge
+--     base rejected the same program at exit 1.  Another loud → silent.
+--
+-- Substituting the declaration's params by the receiver's arguments answers both:
+-- `Both Int` compares `Int` with `Int` and accepts, `W String` compares `String`
+-- with `Int` and refuses, and `Both a` inside a polymorphic function compares one
+-- caller variable with itself and accepts.  Positional, because `recordParamIds`
+-- is `map monoTyvarId paramVars` in the same order `recordResultMono`'s spine
+-- applies them, which is the order the receiver's own arguments arrive in.
+--
+-- Empty on either side returns the type UNCHANGED rather than walking it: a
+-- non-parameterised record (the overwhelmingly common case) pays nothing.
+monoAtParams : List Int -> List Mono -> Mono -> Mono
+monoAtParams [] _ t = t
+monoAtParams _ [] t = t
+monoAtParams ids targs t = substMono (paramSubstOf ids targs) [] t
+
+-- Hand-written monomorphic pairing rather than `zip` — this is on the field-access
+-- path and the prelude `zip` is dict-free but still a generic allocation the
+-- shorter arity makes pointless.  A length mismatch (which a well-kinded receiver
+-- cannot produce) truncates, leaving the surplus params as their own variables,
+-- which the comparison below then declines on.  Fail-safe by construction.
+paramSubstOf : List Int -> List Mono -> List (Int, Mono)
+paramSubstOf [] _ = []
+paramSubstOf _ [] = []
+paramSubstOf (i::is) (a::ats) = (i, a) :: paramSubstOf is ats
+
+-- Are two field types — already instantiated at the receiver, above — DEFINITELY
+-- different?  The name is the contract: `False` means "not proven different", NOT
+-- "the same".
+--
+-- 🚨 IT IS STILL ONE-SIDED, AND DELIBERATELY.  A type VARIABLE on either side
+-- (an unbound `TVar`, or a `TRigid` parameter) answers `False` and the walk
+-- declines, because after instantiation a remaining variable means the RECEIVER
+-- itself was polymorphic there — the caller decides, and this seam cannot.  What
+-- is left is the case that can be decided outright: two CONCRETE head type
+-- constructors that are not the same head, compared through `sameTyConHead`
+-- (`frontend/ast.mdk`), which owns the absent-origin rule — an absent identity
+-- makes no claim, so two modules' `Int` do not become "different types" here.
+--
+-- ⚠️ EFFECT ROWS NEVER PARTICIPATE.  A `TFun` on either side answers `False`
+-- outright, so the `EffRow` it carries is not compared — effects erase and never
+-- take part in matching (`docs/spec/EFFECTS-SEMANTICS.md` §8; the same rule
+-- coherence and dispatch follow one layer down).  Two function-typed fields are
+-- both closure pointers anyway, so nothing is given up.
+monoDeclDefinitelyDiffers : Mono -> Mono -> Bool
+monoDeclDefinitelyDiffers a b = monoDeclDiffersGo (normalize a) (normalize b)
+
+-- Hand-written monomorphic structural recursion, `normalize`-ing at every spine
+-- level the way `headMonoNode` does.  It runs at most once per sibling and only
+-- when the offsets already agreed, so it is nowhere near the hot path gate 1
+-- protects.
+monoDeclDiffersGo : Mono -> Mono -> Bool
+monoDeclDiffersGo (TCon n1 o1) (TCon n2 o2) = not (sameTyConHead n1 o1 n2 o2)
+monoDeclDiffersGo (TCon _ _) (TApp _ _) = True
+monoDeclDiffersGo (TApp _ _) (TCon _ _) = True
+monoDeclDiffersGo (TApp f1 x1) (TApp f2 x2) = monoDeclDiffersGo (normalize f1) (normalize f2)
+  || monoDeclDiffersGo (normalize x1) (normalize x2)
+-- Everything else — a variable or a rigid on either side, a `TFun`, a `TEff` —
+-- is UNDECIDED, which is the safe answer.  See the two ⚠️ paragraphs above; this
+-- wildcard is the whole one-sidedness and it must stay a wildcard, because a new
+-- `Mono` constructor arriving here should decline, not reject.
+monoDeclDiffersGo _ _ = False
+
+-- The field's POSITIONAL offset in a record's declaration-order field list, and
+-- its RAW declared type — the offset is the number both emitters compute from the
+-- stamp (`indexOfStr label labels`, `backend/llvm_emit.mdk`), reproduced here
+-- over the same order `RecordInfo` keeps.  The type is raw on purpose: `fieldSlotAt`
+-- is the only caller and it instantiates immediately, so the substitution lives in
+-- one place.  Hand-written and monomorphic, not a prelude fold, and it walks the
+-- `(name, type)` pairs directly so nothing is allocated to get either.
+fieldSlotIn : String -> List (String, Mono) -> Option (Int, Mono)
+fieldSlotIn fname fields = fieldSlotInGo fname fields 0
+
+fieldSlotInGo : String -> List (String, Mono) -> Int -> Option (Int, Mono)
+fieldSlotInGo _ [] _ = None
+fieldSlotInGo fname ((n, t)::rest) i
+  | n == fname = Some (i, t)
+  | otherwise = fieldSlotInGo fname rest (i + 1)
 
 -- ── #1111 Stage A-2 unit A-2.13 (#1319 unit 3): ONE ENTRY, TWO QUESTIONS ────
 --
@@ -6835,7 +7338,16 @@ lookupRecordByMangledHead te head fname = match mangledHeadCandidates head fname
 -- to today's ladder unchanged.  An absent identity therefore decides nothing, which
 -- is the same absence-makes-no-claim rule `sameTyConHead` owns one layer down.
 recordCandIsReceiverDecl : Option HeadKey -> (String, RecordInfo) -> Bool
-recordCandIsReceiverDecl rk (_, ri) = rk == headTyconMono (recordResultMono ri)
+recordCandIsReceiverDecl rk (_, ri) = recordInfoIsReceiverDecl rk ri
+
+-- The comparison itself, over a bare `RecordInfo`, so the `(key, info)` pair the
+-- filter above happens to carry is not forced onto callers that hold only the
+-- info (`ownersMatchingReceiver` below walks the identity companion, whose rows
+-- are `(Ident, String, RecordInfo)`).  Same equality, same fail-safe: `rk` stays
+-- an `Option HeadKey` rather than being unwrapped, so nothing allocates a `Some`
+-- per candidate, and an absent identity on either side matches nothing.
+recordInfoIsReceiverDecl : Option HeadKey -> RecordInfo -> Bool
+recordInfoIsReceiverDecl rk ri = rk == headTyconMono (recordResultMono ri)
 
 -- The record's RESULT type — the head `registerRecordInfoKeyed` minted from the
 -- DECLARATION's origin (`applyParams (tconFrom o typeName) paramVars`), which is why
@@ -6864,13 +7376,129 @@ mangledHeadCandidatesGo head (key::rest)
     None => mangledHeadCandidatesGo head rest
   | otherwise = mangledHeadCandidatesGo head rest
 
+-- ── Q-IDENT (#1383 both faces, #1216 both arms): a CONCRETE receiver selects its
+--    record by IDENTITY, never by which declaration currently holds the key ─────
+--
+-- `resolveFieldByOwners` is the give-up path.  It is reached whenever the
+-- receiver's head is not itself a registry KEY — a named-field variant
+-- `data Wrap = | Cfg { … }` files under `Cfg` while a value of it has head
+-- `Wrap`, so the exact `lookupRecordByName "Wrap"` misses, no key suffix-matches
+-- `__Wrap`, and control lands here.  Both of its non-empty arms then answered by
+-- KEY (`pairRecordByName r` / `pairRecordByName (headL owners)`), and
+-- `recordByNameRef` holds ONE row per bare key, last-write-wins over module
+-- registration order.
+--
+-- 🚨 THE OWNER SET IS NOT THE DEFECT, AND ASSUMING IT WAS MISROUTED THIS FIX
+-- ONCE.  In all four programs this drains (#1383's two faces, #1216's two arms)
+-- `fieldOwnerNames` returns a SINGLETON holding the RIGHT key — and it
+-- `sortUniqS`es, so `headL` is order-insensitive anyway.  What varies with
+-- module registration order is which declaration that one key REACHES.  A
+-- reachability/narrowing analysis over the owner set is therefore neither
+-- necessary nor sufficient here; it is owed to a different reader (the `TVar`
+-- ambiguity arm, #1070's fourth row) and is deliberately NOT part of this.
+--
+-- The question this arm asks is the IDENTITY question `lookupRecordForReceiver`
+-- already answers for `resolveFieldRecord`'s arm (a), and
+-- `docs/spec/DICT-SEMANTICS.md` §8 I4 qualification 2 states it:
+-- *"A record-field selection `r.f` is resolved by the TYPE of `r`, not by the
+-- spelling `f`."*  Nothing the module spelled is an input.  So ask it here too,
+-- over the owner keys the field→owners multimap already produced, and let the
+-- identity — not the key — select.
+--
+-- 🚨 IT REPLACES A GUESS, NEVER A DECISION, SO ACCEPTANCE CANNOT NARROW.  A
+-- candidate matches only when its `(declaring module, type name)` EQUALS the
+-- receiver's, and `inferFieldOfRecord` then unifies `te` against that same
+-- declaration's result — which succeeds by construction.  The old pick could
+-- unify only when it happened to BE the receiver's declaration, and in that case
+-- this walk reaches the same row first (same sorted key order, floor row
+-- included).  On a miss it DECLINES and the ladder below runs unchanged, so it
+-- can neither empty an owner set nor refuse a program that used to check.
+--
+-- ⚠️ THE `TVar` ARM IS UNTOUCHED.  `headTyconMono` answers `None` for an unbound
+-- receiver (`headMonoNode` normalizes first), so the selection is skipped and
+-- `resolveFieldAmbiguous` still pushes `T-AMBIGUOUS-FIELD` on exactly today's
+-- programs.
+--
+-- ⚠️ IT MOVES THE STAMP WITH THE SELECTION — which is what makes #1216 a drain
+-- rather than a relocation.  `inferFieldAccess` `setRef`s the returned KEY onto
+-- the access node; `ir/core_ir_lower.mdk` carries it into
+-- `CFieldAccess … recName`, and both emitters read THAT for field ORDER.  The
+-- walk returns the key the matching row is filed under, so on the emit path that
+-- key is the distinguishing mangled `<mid>__<ctor>`, which is why #1216's built
+-- binary stops applying the other module's layout.
+--
+-- 🚨 RETRACTION (#1455 adversarial review, finding 1).  THIS PARAGRAPH USED TO
+-- READ ON TO CLAIM THAT RETURNING THAT KEY "keeps the decision and the stamp on
+-- one declaration", i.e. that the standing gate's Q6 discriminator — *does
+-- typecheck DECIDE by a richer key than the one it STAMPS?* — is answered NO.
+-- **That is false in general and the review measured what it costs.**  The
+-- decision is `recordInfoIsReceiverDecl`, a comparison of the receiver's TYPE
+-- identity `(declaring module, type name)`; the value returned is a CONSTRUCTOR
+-- key.  A type with TWO named-field constructors — `data Wrap = | Cfg { alpha,
+-- beta } | Dfg { beta, alpha }` — puts two rows behind one type identity, this
+-- walk matches BOTH and takes whichever key sorts first, and the built binary
+-- then reads the other constructor's slot (wrong value, or a SIGSEGV when the
+-- slots' types differ).  What is true, and all that is claimed here now, is the
+-- narrower statement: the key returned is the key of the row that MATCHED, so
+-- the stamp is never a *different* row's key than the one the walk selected.
+-- Whether the walk's question can select a single row at all is a separate
+-- property, and it is enforced separately — see `stampableFieldRecord`, which
+-- guards every arm's result and refuses to hand out a key when the receiver's
+-- type leaves the field's offset undetermined.
 resolveFieldByOwners : Mono -> String -> Option (String, RecordInfo)
 resolveFieldByOwners te fname = match fieldOwnerNames fname
   [] =>
     let _ = pushUnknownField fname "<unknown>"
     None
-  [r] => pairRecordByName r
-  r::rest => resolveFieldAmbiguous te fname (r::rest)
+  r::rest => match ownersMatchingReceiver te (r::rest)
+    Some pair => Some pair
+    None => match rest
+      [] => pairRecordByName r
+      _ => resolveFieldAmbiguous te fname (r::rest)
+
+-- The receiver's key is minted ONCE for the whole walk, not once per key or per
+-- candidate — the same hoist `lookupRecordByMangledHead` documents at its own
+-- `rk` binding.  `None` (no head type constructor: an unbound var) declines
+-- immediately, before any map lookup.
+ownersMatchingReceiver : Mono -> List String -> Option (String, RecordInfo)
+ownersMatchingReceiver te owners =
+  let rk = headTyconMono te
+  match rk
+    None => None
+    Some _ => ownersMatchingReceiverGo rk owners
+
+-- One key at a time, in `fieldOwnerNames`' existing `sortUniqS` order, and
+-- SHORT-CIRCUITING on the first match — hand-written monomorphic recursion, not
+-- a `filterList`/`any` over prelude `Foldable` (`compiler/AGENTS.md`: delegating
+-- a hot scan to one measured +56% self-compile).
+ownersMatchingReceiverGo : Option HeadKey -> List String -> Option (String, RecordInfo)
+ownersMatchingReceiverGo _ [] = None
+ownersMatchingReceiverGo rk (k::rest) = match recordForKeyAndReceiver rk k
+  Some ri => Some (k, ri)
+  None => ownersMatchingReceiverGo rk rest
+
+-- Candidates under ONE registry key: the identity-keyed companion's rows first —
+-- it keeps EVERY declaration filed under a collided key, which is the whole
+-- reason it exists — then the bare floor row.  The floor is not redundant: a
+-- module's OWN records are absent from the companion (it is grown from
+-- `pubDecls` at the END of each module's arm, so a module never sees itself),
+-- and so is every declaration under a driver that never populated it.
+--
+-- Both sources go through the SAME identity test, so the floor cannot smuggle in
+-- a foreign declaration the way a bare `lookupRecordByName` does — the floor row
+-- is now a CANDIDATE, not an answer.
+recordForKeyAndReceiver : Option HeadKey -> String -> Option RecordInfo
+recordForKeyAndReceiver rk k = match recordIdentRowForReceiver rk (fromOption [] (omLookup k crossRun.value.universeRecordIdentsRef.value))
+  Some ri => Some ri
+  None => match lookupRecordByName k
+    None => None
+    Some ri => if recordInfoIsReceiverDecl rk ri then Some ri else None
+
+recordIdentRowForReceiver : Option HeadKey -> List (Ident, String, RecordInfo) -> Option RecordInfo
+recordIdentRowForReceiver _ [] = None
+recordIdentRowForReceiver rk ((_, _, ri)::rest)
+  | recordInfoIsReceiverDecl rk ri = Some ri
+  | otherwise = recordIdentRowForReceiver rk rest
 
 -- multiple owners: receiver still an unbound var ⇒ genuinely ambiguous; a
 -- concrete (non-record) receiver ⇒ pick the first owner so the later unify
@@ -9671,6 +10299,25 @@ recordFieldMap (RecordInfo _ _ _ idx) = idx
 
 recordFieldNames : RecordInfo -> List String
 recordFieldNames (RecordInfo _ _ fields _) = map fst fields
+
+-- The `(name, declared type)` pairs THEMSELVES, in declaration order — the same
+-- list `recordFieldNames` projects the names out of, handed over without the
+-- `map fst` allocation.  Reach for this rather than `recordFieldNames` wherever
+-- the field TYPES are wanted or the caller is on a hot path: the guard at
+-- `fieldRivalCtor` needs both halves per access, and building a names-only list
+-- to walk was both an allocation and the reason the declared type used to be
+-- unavailable there.
+recordFields : RecordInfo -> List (String, Mono)
+recordFields (RecordInfo _ _ fields _) = fields
+
+-- The declaration's own type-PARAMETER tyvar ids, in declaration order — the same
+-- list `instantiateRecord` hands to `freshSubst`, exposed for callers that need to
+-- instantiate at a KNOWN receiver rather than at fresh variables (`monoAtParams`,
+-- reached from the stamp guard).  Positional: `registerRecordInfoKeyed` mints it as
+-- `map monoTyvarId paramVars` and builds `recordResultMono` by applying the SAME
+-- `paramVars` in the SAME order, so index k here is the receiver's argument k.
+recordParamIds : RecordInfo -> List Int
+recordParamIds (RecordInfo paramIds _ _ _) = paramIds
 
 substField : List (Int, Mono) -> (String, Mono) -> (String, Mono)
 substField subst (fn, fm) = (fn, substMono subst [] fm)
@@ -24109,7 +24756,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DUse false (UseGroup ("frontend" "desugar") ((mem "mapProg" false))))
 (DUse false (UseGroup ("frontend" "marker") ((mem "localBoundNames" false))))
 (DUse false (UseGroup ("frontend" "resolve") ((mem "stampBindingIds" false) (mem "stampGraphTyOrigins" false) (mem "stampFlatTyOrigins" false) (mem "stampDeclOrigins" false) (mem "stampTyOrigins" false) (mem "externTyOriginScope" false) (mem "noteOriginTrace" false))))
-(DUse false (UseGroup ("frontend" "exhaust") ((mem "Oracle" false) (mem "buildOracle" false) (mem "useful" false) (mem "patUnreachable" false) (mem "patHasRange" false) (mem "usefulWitness" false) (mem "renderWitness" false) (mem "desugarPat" false))))
+(DUse false (UseGroup ("frontend" "exhaust") ((mem "Oracle" false) (mem "buildOracle" false) (mem "oGetCtors" false) (mem "useful" false) (mem "patUnreachable" false) (mem "patHasRange" false) (mem "usefulWitness" false) (mem "renderWitness" false) (mem "desugarPat" false))))
 (DUse false (UseGroup ("support" "char") ((mem "isUpper" false))))
 (DUse false (UseGroup ("backend" "private_mangle") ((mem "mangledName" false))))
 (DUse false (UseGroup ("support" "scc") ((mem "tarjanSCCs" false))))
@@ -25333,7 +25980,56 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "fieldOwnerNames" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "fieldOwnerNames" ((PVar "fname")) (EApp (EVar "sortUniqS") (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "fname")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "fieldOwnersRef") "value")))))
 (DTypeSig false "resolveFieldRecord" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RecordInfo"))))))
-(DFunDef false "resolveFieldRecord" ((PVar "te") (PVar "fname")) (EMatch (EApp (EVar "headTyconNameMono") (EVar "te")) (arm (PCon "Some" (PVar "r")) () (EMatch (EApp (EApp (EVar "lookupRecordForReceiver") (EVar "te")) (EVar "r")) (arm (PCon "Some" (PVar "ri")) () (EApp (EVar "Some") (ETuple (EVar "r") (EVar "ri")))) (arm (PCon "None") () (EMatch (EApp (EApp (EApp (EVar "lookupRecordByMangledHead") (EVar "te")) (EVar "r")) (EVar "fname")) (arm (PCon "Some" (PVar "pair")) () (EApp (EVar "Some") (EVar "pair"))) (arm (PCon "None") () (EIf (EApp (EApp (EVar "contains") (EVar "r")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "abstractRecordTypesRef") "value")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-ABSTRACT-FIELD"))) (EApp (EApp (EVar "abstractFieldMsg") (EVar "r")) (EVar "fname")))) (DoExpr (EVar "None"))) (EApp (EApp (EVar "resolveFieldByOwners") (EVar "te")) (EVar "fname")))))))) (arm (PCon "None") () (EApp (EApp (EVar "resolveFieldByOwners") (EVar "te")) (EVar "fname")))))
+(DFunDef false "resolveFieldRecord" ((PVar "te") (PVar "fname")) (EApp (EApp (EApp (EVar "stampableFieldRecord") (EVar "te")) (EVar "fname")) (EApp (EApp (EVar "resolveFieldRecordPick") (EVar "te")) (EVar "fname"))))
+(DTypeSig false "resolveFieldRecordPick" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RecordInfo"))))))
+(DFunDef false "resolveFieldRecordPick" ((PVar "te") (PVar "fname")) (EMatch (EApp (EVar "headTyconNameMono") (EVar "te")) (arm (PCon "Some" (PVar "r")) () (EMatch (EApp (EApp (EVar "lookupRecordForReceiver") (EVar "te")) (EVar "r")) (arm (PCon "Some" (PVar "ri")) () (EApp (EVar "Some") (ETuple (EVar "r") (EVar "ri")))) (arm (PCon "None") () (EMatch (EApp (EApp (EApp (EVar "lookupRecordByMangledHead") (EVar "te")) (EVar "r")) (EVar "fname")) (arm (PCon "Some" (PVar "pair")) () (EApp (EVar "Some") (EVar "pair"))) (arm (PCon "None") () (EIf (EApp (EApp (EVar "contains") (EVar "r")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "abstractRecordTypesRef") "value")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-ABSTRACT-FIELD"))) (EApp (EApp (EVar "abstractFieldMsg") (EVar "r")) (EVar "fname")))) (DoExpr (EVar "None"))) (EApp (EApp (EVar "resolveFieldByOwners") (EVar "te")) (EVar "fname")))))))) (arm (PCon "None") () (EApp (EApp (EVar "resolveFieldByOwners") (EVar "te")) (EVar "fname")))))
+(DTypeSig false "stampableFieldRecord" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RecordInfo"))) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RecordInfo")))))))
+(DFunDef false "stampableFieldRecord" (PWild PWild (PCon "None")) (EVar "None"))
+(DFunDef false "stampableFieldRecord" ((PVar "te") (PVar "fname") (PCon "Some" (PTuple (PVar "rname") (PVar "ri")))) (EMatch (EApp (EApp (EApp (EApp (EVar "fieldRivalCtor") (EVar "te")) (EVar "fname")) (EVar "rname")) (EVar "ri")) (arm (PCon "None") () (EApp (EVar "Some") (ETuple (EVar "rname") (EVar "ri")))) (arm (PCon "Some" (PTuple (PVar "tyname") (PVar "rival") (PVar "why"))) () (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "pushTypeErrorHelpFixAt") (ELit (LString "T-FIELD-VARIANT-CONFLICT"))) (EFieldAccess (EVar "currentLoc") "value")) (EApp (EApp (EApp (EApp (EApp (EVar "fieldVariantConflictMsg") (EVar "fname")) (EVar "tyname")) (EVar "rname")) (EVar "rival")) (EVar "why"))) (EApp (EApp (EApp (EVar "fieldVariantConflictHelp") (EVar "fname")) (EVar "rname")) (EVar "why"))) (EVar "None"))) (DoExpr (EVar "None"))))))
+(DData Private "FieldRivalWhy" () ((variant "RivalOffset" (ConPos (TyCon "Int") (TyCon "Int"))) (variant "RivalType" (ConPos (TyCon "Mono") (TyCon "Mono")))) ())
+(DTypeSig false "fieldVariantConflictMsg" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "FieldRivalWhy") (TyCon "String")))))))
+(DFunDef false "fieldVariantConflictMsg" ((PVar "fname") (PVar "tyname") (PVar "mineName") (PVar "rivalName") (PCon "RivalOffset" (PVar "mine") (PVar "other"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Field '")) (EApp (EVar "display") (EVar "fname"))) (ELit (LString "' sits at a different position in each of '"))) (EApp (EVar "display") (EVar "tyname"))) (ELit (LString "''s constructors: '"))) (EApp (EVar "display") (EVar "mineName"))) (ELit (LString "' declares it at position "))) (EApp (EVar "display") (EApp (EVar "intToString") (EBinOp "+" (EVar "mine") (ELit (LInt 1)))))) (ELit (LString ", '"))) (EApp (EVar "display") (EVar "rivalName"))) (ELit (LString "' at position "))) (EApp (EVar "display") (EApp (EVar "intToString") (EBinOp "+" (EVar "other") (ELit (LInt 1)))))) (ELit (LString ". A '."))) (EApp (EVar "display") (EVar "fname"))) (ELit (LString "' is resolved by the receiver's TYPE, which does not say which constructor built the value, so there is no one slot to load here"))))
+(DFunDef false "fieldVariantConflictMsg" ((PVar "fname") (PVar "tyname") (PVar "mineName") (PVar "rivalName") (PCon "RivalType" (PVar "mine") (PVar "other"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Field '")) (EApp (EVar "display") (EVar "fname"))) (ELit (LString "' is declared with a different type in each of '"))) (EApp (EVar "display") (EVar "tyname"))) (ELit (LString "''s constructors: '"))) (EApp (EVar "display") (EVar "mineName"))) (ELit (LString "' declares it as '"))) (EApp (EVar "display") (EApp (EVar "ppMono") (EVar "mine")))) (ELit (LString "', '"))) (EApp (EVar "display") (EVar "rivalName"))) (ELit (LString "' as '"))) (EApp (EVar "display") (EApp (EVar "ppMono") (EVar "other")))) (ELit (LString "'. A '."))) (EApp (EVar "display") (EVar "fname"))) (ELit (LString "' is resolved by the receiver's TYPE, which does not say which constructor built the value, so there is no one type this selection could have"))))
+(DTypeSig false "fieldVariantConflictHelp" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "FieldRivalWhy") (TyCon "String")))))
+(DFunDef false "fieldVariantConflictHelp" ((PVar "fname") (PVar "mineName") (PCon "RivalOffset" PWild PWild)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "match on the constructor instead (e.g. '")) (EApp (EVar "display") (EVar "mineName"))) (ELit (LString " { "))) (EApp (EVar "display") (EVar "fname"))) (ELit (LString " = x } => x'), or declare '"))) (EApp (EVar "display") (EVar "fname"))) (ELit (LString "' at the same position in every constructor. Tracked as #1465 (tag-dispatched field selectors)"))))
+(DFunDef false "fieldVariantConflictHelp" ((PVar "fname") (PVar "mineName") (PCon "RivalType" PWild PWild)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "match on the constructor instead (e.g. '")) (EApp (EVar "display") (EVar "mineName"))) (ELit (LString " { "))) (EApp (EVar "display") (EVar "fname"))) (ELit (LString " = x } => x'), or declare '"))) (EApp (EVar "display") (EVar "fname"))) (ELit (LString "' with the same type in every constructor. Tracked as #1465 (tag-dispatched field selectors)"))))
+(DTypeSig false "fieldRivalCtor" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "RecordInfo") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String") (TyCon "FieldRivalWhy"))))))))
+(DFunDef false "fieldRivalCtor" ((PVar "te") (PVar "fname") (PVar "rname") (PVar "ri")) (EBlock (DoLet false false (PVar "rk") (EApp (EVar "headTyconMono") (EVar "te"))) (DoExpr (EIf (EApp (EVar "not") (EApp (EApp (EVar "recordInfoIsReceiverDecl") (EVar "rk")) (EVar "ri"))) (EVar "None") (EIf (EApp (EVar "not") (EApp (EVar "fieldHasRivalOwners") (EVar "fname"))) (EVar "None") (EBlock (DoLet false false (PVar "targs") (EApp (EVar "snd") (EApp (EVar "spineParts") (EVar "te")))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "fieldSlotAt") (EVar "targs")) (EVar "fname")) (EVar "ri")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "mine")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "fieldRivalCtorOfType") (EApp (EVar "headTyconNameMono") (EVar "te"))) (EVar "rk")) (EVar "fname")) (EVar "rname")) (EVar "mine")) (EVar "targs")))))))))))
+(DTypeSig false "fieldRivalCtorOfType" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "HeadKey")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyTuple (TyCon "Int") (TyCon "Mono")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String") (TyCon "FieldRivalWhy"))))))))))
+(DFunDef false "fieldRivalCtorOfType" ((PCon "None") PWild PWild PWild PWild PWild) (EVar "None"))
+(DFunDef false "fieldRivalCtorOfType" ((PCon "Some" (PVar "tyname")) (PVar "rk") (PVar "fname") (PVar "rname") (PVar "mine") (PVar "targs")) (EMatch (EApp (EApp (EVar "oGetCtors") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchOracle") "value")) (EVar "tyname")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "ctors")) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "fieldRivalCtorNamed") (EVar "tyname")) (EVar "rk")) (EVar "fname")) (EVar "rname")) (EVar "mine")) (EVar "targs")) (EVar "ctors")))))
+(DTypeSig false "fieldRivalCtorNamed" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "HeadKey")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyTuple (TyCon "Int") (TyCon "Mono")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String") (TyCon "FieldRivalWhy")))))))))))
+(DFunDef false "fieldRivalCtorNamed" ((PVar "tyname") (PVar "rk") (PVar "fname") (PVar "rname") (PVar "mine") (PVar "targs") (PVar "ctors")) (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "rival") (PVar "why"))) (ETuple (EVar "tyname") (EVar "rival") (EVar "why")))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "fieldRivalCtorGo") (EVar "rk")) (EVar "fname")) (EVar "rname")) (EVar "mine")) (EVar "targs")) (EVar "ctors"))))
+(DTypeSig false "fieldHasRivalOwners" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "fieldHasRivalOwners" ((PVar "fname")) (EMatch (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "fname")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "fieldOwnersRef") "value"))) (arm (PList) () (EVar "False")) (arm (PList PWild) () (EVar "False")) (arm PWild () (EVar "True"))))
+(DTypeSig false "fieldRivalCtorGo" (TyFun (TyApp (TyCon "Option") (TyCon "HeadKey")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyTuple (TyCon "Int") (TyCon "Mono")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "FieldRivalWhy"))))))))))
+(DFunDef false "fieldRivalCtorGo" (PWild PWild PWild PWild PWild (PList)) (EVar "None"))
+(DFunDef false "fieldRivalCtorGo" ((PVar "rk") (PVar "fname") (PVar "rname") (PVar "mine") (PVar "targs") (PCons (PVar "c") (PVar "rest"))) (EIf (EBinOp "==" (EVar "c") (EVar "rname")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "fieldRivalCtorGo") (EVar "rk")) (EVar "fname")) (EVar "rname")) (EVar "mine")) (EVar "targs")) (EVar "rest")) (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "recordForKeyAndReceiver") (EVar "rk")) (EVar "c")) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "fieldRivalCtorGo") (EVar "rk")) (EVar "fname")) (EVar "rname")) (EVar "mine")) (EVar "targs")) (EVar "rest"))) (arm (PCon "Some" (PVar "ri2")) () (EMatch (EApp (EApp (EApp (EVar "fieldSlotAt") (EVar "targs")) (EVar "fname")) (EVar "ri2")) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "fieldRivalCtorGo") (EVar "rk")) (EVar "fname")) (EVar "rname")) (EVar "mine")) (EVar "targs")) (EVar "rest"))) (arm (PCon "Some" (PVar "other")) () (EMatch (EApp (EApp (EVar "fieldRivalWhy") (EVar "mine")) (EVar "other")) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "fieldRivalCtorGo") (EVar "rk")) (EVar "fname")) (EVar "rname")) (EVar "mine")) (EVar "targs")) (EVar "rest"))) (arm (PCon "Some" (PVar "why")) () (EApp (EVar "Some") (ETuple (EVar "c") (EVar "why"))))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "fieldRivalWhy" (TyFun (TyTuple (TyCon "Int") (TyCon "Mono")) (TyFun (TyTuple (TyCon "Int") (TyCon "Mono")) (TyApp (TyCon "Option") (TyCon "FieldRivalWhy")))))
+(DFunDef false "fieldRivalWhy" ((PTuple (PVar "mineIdx") (PVar "mineTy")) (PTuple (PVar "otherIdx") (PVar "otherTy"))) (EIf (EBinOp "!=" (EVar "mineIdx") (EVar "otherIdx")) (EApp (EVar "Some") (EApp (EApp (EVar "RivalOffset") (EVar "mineIdx")) (EVar "otherIdx"))) (EIf (EApp (EApp (EVar "monoDeclDefinitelyDiffers") (EVar "mineTy")) (EVar "otherTy")) (EApp (EVar "Some") (EApp (EApp (EVar "RivalType") (EVar "mineTy")) (EVar "otherTy"))) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "fieldSlotAt" (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyCon "String") (TyFun (TyCon "RecordInfo") (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Mono")))))))
+(DFunDef false "fieldSlotAt" ((PVar "targs") (PVar "fname") (PVar "ri")) (EMatch (EApp (EApp (EVar "fieldSlotIn") (EVar "fname")) (EApp (EVar "recordFields") (EVar "ri"))) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PTuple (PVar "i") (PVar "t"))) () (EApp (EVar "Some") (ETuple (EVar "i") (EApp (EApp (EApp (EVar "monoAtParams") (EApp (EVar "recordParamIds") (EVar "ri"))) (EVar "targs")) (EVar "t")))))))
+(DTypeSig false "monoAtParams" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyCon "Mono") (TyCon "Mono")))))
+(DFunDef false "monoAtParams" ((PList) PWild (PVar "t")) (EVar "t"))
+(DFunDef false "monoAtParams" (PWild (PList) (PVar "t")) (EVar "t"))
+(DFunDef false "monoAtParams" ((PVar "ids") (PVar "targs") (PVar "t")) (EApp (EApp (EApp (EVar "substMono") (EApp (EApp (EVar "paramSubstOf") (EVar "ids")) (EVar "targs"))) (EListLit)) (EVar "t")))
+(DTypeSig false "paramSubstOf" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Mono"))))))
+(DFunDef false "paramSubstOf" ((PList) PWild) (EListLit))
+(DFunDef false "paramSubstOf" (PWild (PList)) (EListLit))
+(DFunDef false "paramSubstOf" ((PCons (PVar "i") (PVar "is")) (PCons (PVar "a") (PVar "ats"))) (EBinOp "::" (ETuple (EVar "i") (EVar "a")) (EApp (EApp (EVar "paramSubstOf") (EVar "is")) (EVar "ats"))))
+(DTypeSig false "monoDeclDefinitelyDiffers" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Bool"))))
+(DFunDef false "monoDeclDefinitelyDiffers" ((PVar "a") (PVar "b")) (EApp (EApp (EVar "monoDeclDiffersGo") (EApp (EVar "normalize") (EVar "a"))) (EApp (EVar "normalize") (EVar "b"))))
+(DTypeSig false "monoDeclDiffersGo" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Bool"))))
+(DFunDef false "monoDeclDiffersGo" ((PCon "TCon" (PVar "n1") (PVar "o1")) (PCon "TCon" (PVar "n2") (PVar "o2"))) (EApp (EVar "not") (EApp (EApp (EApp (EApp (EVar "sameTyConHead") (EVar "n1")) (EVar "o1")) (EVar "n2")) (EVar "o2"))))
+(DFunDef false "monoDeclDiffersGo" ((PCon "TCon" PWild PWild) (PCon "TApp" PWild PWild)) (EVar "True"))
+(DFunDef false "monoDeclDiffersGo" ((PCon "TApp" PWild PWild) (PCon "TCon" PWild PWild)) (EVar "True"))
+(DFunDef false "monoDeclDiffersGo" ((PCon "TApp" (PVar "f1") (PVar "x1")) (PCon "TApp" (PVar "f2") (PVar "x2"))) (EBinOp "||" (EApp (EApp (EVar "monoDeclDiffersGo") (EApp (EVar "normalize") (EVar "f1"))) (EApp (EVar "normalize") (EVar "f2"))) (EApp (EApp (EVar "monoDeclDiffersGo") (EApp (EVar "normalize") (EVar "x1"))) (EApp (EVar "normalize") (EVar "x2")))))
+(DFunDef false "monoDeclDiffersGo" (PWild PWild) (EVar "False"))
+(DTypeSig false "fieldSlotIn" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Mono"))))))
+(DFunDef false "fieldSlotIn" ((PVar "fname") (PVar "fields")) (EApp (EApp (EApp (EVar "fieldSlotInGo") (EVar "fname")) (EVar "fields")) (ELit (LInt 0))))
+(DTypeSig false "fieldSlotInGo" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Mono")))))))
+(DFunDef false "fieldSlotInGo" (PWild (PList) PWild) (EVar "None"))
+(DFunDef false "fieldSlotInGo" ((PVar "fname") (PCons (PTuple (PVar "n") (PVar "t")) (PVar "rest")) (PVar "i")) (EIf (EBinOp "==" (EVar "n") (EVar "fname")) (EApp (EVar "Some") (ETuple (EVar "i") (EVar "t"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "fieldSlotInGo") (EVar "fname")) (EVar "rest")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "lookupRecordForReceiver" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "RecordInfo")))))
 (DFunDef false "lookupRecordForReceiver" ((PVar "te") (PVar "r")) (EMatch (EApp (EApp (EVar "recordForReceiverIdent") (EVar "te")) (EVar "r")) (arm (PCon "Some" (PVar "ri")) () (EApp (EVar "Some") (EVar "ri"))) (arm (PCon "None") () (EApp (EVar "lookupRecordByName") (EVar "r")))))
 (DTypeSig false "recordForReceiverIdent" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "RecordInfo")))))
@@ -25348,7 +26044,9 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "lookupRecordByMangledHead" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RecordInfo")))))))
 (DFunDef false "lookupRecordByMangledHead" ((PVar "te") (PVar "head") (PVar "fname")) (EMatch (EApp (EApp (EVar "mangledHeadCandidates") (EVar "head")) (EVar "fname")) (arm (PList (PVar "pair")) () (EApp (EVar "Some") (EVar "pair"))) (arm (PVar "cands") () (EBlock (DoLet false false (PVar "rk") (EApp (EVar "headTyconMono") (EVar "te"))) (DoExpr (EMatch (EApp (EApp (EVar "filterList") (EApp (EVar "recordCandIsReceiverDecl") (EVar "rk"))) (EVar "cands")) (arm (PList (PVar "pair")) () (EApp (EVar "Some") (EVar "pair"))) (arm PWild () (EVar "None"))))))))
 (DTypeSig false "recordCandIsReceiverDecl" (TyFun (TyApp (TyCon "Option") (TyCon "HeadKey")) (TyFun (TyTuple (TyCon "String") (TyCon "RecordInfo")) (TyCon "Bool"))))
-(DFunDef false "recordCandIsReceiverDecl" ((PVar "rk") (PTuple PWild (PVar "ri"))) (EBinOp "==" (EVar "rk") (EApp (EVar "headTyconMono") (EApp (EVar "recordResultMono") (EVar "ri")))))
+(DFunDef false "recordCandIsReceiverDecl" ((PVar "rk") (PTuple PWild (PVar "ri"))) (EApp (EApp (EVar "recordInfoIsReceiverDecl") (EVar "rk")) (EVar "ri")))
+(DTypeSig false "recordInfoIsReceiverDecl" (TyFun (TyApp (TyCon "Option") (TyCon "HeadKey")) (TyFun (TyCon "RecordInfo") (TyCon "Bool"))))
+(DFunDef false "recordInfoIsReceiverDecl" ((PVar "rk") (PVar "ri")) (EBinOp "==" (EVar "rk") (EApp (EVar "headTyconMono") (EApp (EVar "recordResultMono") (EVar "ri")))))
 (DTypeSig false "recordResultMono" (TyFun (TyCon "RecordInfo") (TyCon "Mono")))
 (DFunDef false "recordResultMono" ((PCon "RecordInfo" PWild (PVar "result") PWild PWild)) (EVar "result"))
 (DTypeSig false "mangledHeadCandidates" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "RecordInfo"))))))
@@ -25357,7 +26055,17 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "mangledHeadCandidatesGo" (PWild (PList)) (EListLit))
 (DFunDef false "mangledHeadCandidatesGo" ((PVar "head") (PCons (PVar "key") (PVar "rest"))) (EIf (EApp (EApp (EVar "endsWith") (EBinOp "++" (ELit (LString "__")) (EVar "head"))) (EVar "key")) (EMatch (EApp (EVar "lookupRecordByName") (EVar "key")) (arm (PCon "Some" (PVar "ri")) () (EBinOp "::" (ETuple (EVar "key") (EVar "ri")) (EApp (EApp (EVar "mangledHeadCandidatesGo") (EVar "head")) (EVar "rest")))) (arm (PCon "None") () (EApp (EApp (EVar "mangledHeadCandidatesGo") (EVar "head")) (EVar "rest")))) (EIf (EVar "otherwise") (EApp (EApp (EVar "mangledHeadCandidatesGo") (EVar "head")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "resolveFieldByOwners" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RecordInfo"))))))
-(DFunDef false "resolveFieldByOwners" ((PVar "te") (PVar "fname")) (EMatch (EApp (EVar "fieldOwnerNames") (EVar "fname")) (arm (PList) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "pushUnknownField") (EVar "fname")) (ELit (LString "<unknown>")))) (DoExpr (EVar "None")))) (arm (PList (PVar "r")) () (EApp (EVar "pairRecordByName") (EVar "r"))) (arm (PCons (PVar "r") (PVar "rest")) () (EApp (EApp (EApp (EVar "resolveFieldAmbiguous") (EVar "te")) (EVar "fname")) (EBinOp "::" (EVar "r") (EVar "rest"))))))
+(DFunDef false "resolveFieldByOwners" ((PVar "te") (PVar "fname")) (EMatch (EApp (EVar "fieldOwnerNames") (EVar "fname")) (arm (PList) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "pushUnknownField") (EVar "fname")) (ELit (LString "<unknown>")))) (DoExpr (EVar "None")))) (arm (PCons (PVar "r") (PVar "rest")) () (EMatch (EApp (EApp (EVar "ownersMatchingReceiver") (EVar "te")) (EBinOp "::" (EVar "r") (EVar "rest"))) (arm (PCon "Some" (PVar "pair")) () (EApp (EVar "Some") (EVar "pair"))) (arm (PCon "None") () (EMatch (EVar "rest") (arm (PList) () (EApp (EVar "pairRecordByName") (EVar "r"))) (arm PWild () (EApp (EApp (EApp (EVar "resolveFieldAmbiguous") (EVar "te")) (EVar "fname")) (EBinOp "::" (EVar "r") (EVar "rest"))))))))))
+(DTypeSig false "ownersMatchingReceiver" (TyFun (TyCon "Mono") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RecordInfo"))))))
+(DFunDef false "ownersMatchingReceiver" ((PVar "te") (PVar "owners")) (EBlock (DoLet false false (PVar "rk") (EApp (EVar "headTyconMono") (EVar "te"))) (DoExpr (EMatch (EVar "rk") (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" PWild) () (EApp (EApp (EVar "ownersMatchingReceiverGo") (EVar "rk")) (EVar "owners")))))))
+(DTypeSig false "ownersMatchingReceiverGo" (TyFun (TyApp (TyCon "Option") (TyCon "HeadKey")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RecordInfo"))))))
+(DFunDef false "ownersMatchingReceiverGo" (PWild (PList)) (EVar "None"))
+(DFunDef false "ownersMatchingReceiverGo" ((PVar "rk") (PCons (PVar "k") (PVar "rest"))) (EMatch (EApp (EApp (EVar "recordForKeyAndReceiver") (EVar "rk")) (EVar "k")) (arm (PCon "Some" (PVar "ri")) () (EApp (EVar "Some") (ETuple (EVar "k") (EVar "ri")))) (arm (PCon "None") () (EApp (EApp (EVar "ownersMatchingReceiverGo") (EVar "rk")) (EVar "rest")))))
+(DTypeSig false "recordForKeyAndReceiver" (TyFun (TyApp (TyCon "Option") (TyCon "HeadKey")) (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "RecordInfo")))))
+(DFunDef false "recordForKeyAndReceiver" ((PVar "rk") (PVar "k")) (EMatch (EApp (EApp (EVar "recordIdentRowForReceiver") (EVar "rk")) (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "k")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeRecordIdentsRef") "value")))) (arm (PCon "Some" (PVar "ri")) () (EApp (EVar "Some") (EVar "ri"))) (arm (PCon "None") () (EMatch (EApp (EVar "lookupRecordByName") (EVar "k")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "ri")) () (EIf (EApp (EApp (EVar "recordInfoIsReceiverDecl") (EVar "rk")) (EVar "ri")) (EApp (EVar "Some") (EVar "ri")) (EVar "None")))))))
+(DTypeSig false "recordIdentRowForReceiver" (TyFun (TyApp (TyCon "Option") (TyCon "HeadKey")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String") (TyCon "RecordInfo"))) (TyApp (TyCon "Option") (TyCon "RecordInfo")))))
+(DFunDef false "recordIdentRowForReceiver" (PWild (PList)) (EVar "None"))
+(DFunDef false "recordIdentRowForReceiver" ((PVar "rk") (PCons (PTuple PWild PWild (PVar "ri")) (PVar "rest"))) (EIf (EApp (EApp (EVar "recordInfoIsReceiverDecl") (EVar "rk")) (EVar "ri")) (EApp (EVar "Some") (EVar "ri")) (EIf (EVar "otherwise") (EApp (EApp (EVar "recordIdentRowForReceiver") (EVar "rk")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "resolveFieldAmbiguous" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RecordInfo")))))))
 (DFunDef false "resolveFieldAmbiguous" ((PVar "te") (PVar "fname") (PVar "owners")) (EMatch (EApp (EVar "normalize") (EVar "te")) (arm (PCon "TVar" PWild) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-AMBIGUOUS-FIELD"))) (EApp (EApp (EVar "ambiguousFieldMsg") (EVar "fname")) (EVar "owners")))) (DoExpr (EVar "None")))) (arm PWild () (EApp (EVar "pairRecordByName") (EApp (EVar "headL") (EVar "owners"))))))
 (DTypeSig false "pairRecordByName" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RecordInfo")))))
@@ -25873,6 +26581,10 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "recordFieldMap" ((PCon "RecordInfo" PWild PWild PWild (PVar "idx"))) (EVar "idx"))
 (DTypeSig false "recordFieldNames" (TyFun (TyCon "RecordInfo") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "recordFieldNames" ((PCon "RecordInfo" PWild PWild (PVar "fields") PWild)) (EApp (EApp (EVar "map") (EVar "fst")) (EVar "fields")))
+(DTypeSig false "recordFields" (TyFun (TyCon "RecordInfo") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono")))))
+(DFunDef false "recordFields" ((PCon "RecordInfo" PWild PWild (PVar "fields") PWild)) (EVar "fields"))
+(DTypeSig false "recordParamIds" (TyFun (TyCon "RecordInfo") (TyApp (TyCon "List") (TyCon "Int"))))
+(DFunDef false "recordParamIds" ((PCon "RecordInfo" (PVar "paramIds") PWild PWild PWild)) (EVar "paramIds"))
 (DTypeSig false "substField" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Mono"))) (TyFun (TyTuple (TyCon "String") (TyCon "Mono")) (TyTuple (TyCon "String") (TyCon "Mono")))))
 (DFunDef false "substField" ((PVar "subst") (PTuple (PVar "fn") (PVar "fm"))) (ETuple (EVar "fn") (EApp (EApp (EApp (EVar "substMono") (EVar "subst")) (EListLit)) (EVar "fm"))))
 (DTypeSig false "registerVariants" (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Variant")) (TyCon "TcEnv")))))))
@@ -28664,7 +29376,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DUse false (UseGroup ("frontend" "desugar") ((mem "mapProg" false))))
 (DUse false (UseGroup ("frontend" "marker") ((mem "localBoundNames" false))))
 (DUse false (UseGroup ("frontend" "resolve") ((mem "stampBindingIds" false) (mem "stampGraphTyOrigins" false) (mem "stampFlatTyOrigins" false) (mem "stampDeclOrigins" false) (mem "stampTyOrigins" false) (mem "externTyOriginScope" false) (mem "noteOriginTrace" false))))
-(DUse false (UseGroup ("frontend" "exhaust") ((mem "Oracle" false) (mem "buildOracle" false) (mem "useful" false) (mem "patUnreachable" false) (mem "patHasRange" false) (mem "usefulWitness" false) (mem "renderWitness" false) (mem "desugarPat" false))))
+(DUse false (UseGroup ("frontend" "exhaust") ((mem "Oracle" false) (mem "buildOracle" false) (mem "oGetCtors" false) (mem "useful" false) (mem "patUnreachable" false) (mem "patHasRange" false) (mem "usefulWitness" false) (mem "renderWitness" false) (mem "desugarPat" false))))
 (DUse false (UseGroup ("support" "char") ((mem "isUpper" false))))
 (DUse false (UseGroup ("backend" "private_mangle") ((mem "mangledName" false))))
 (DUse false (UseGroup ("support" "scc") ((mem "tarjanSCCs" false))))
@@ -29888,7 +30600,56 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "fieldOwnerNames" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "fieldOwnerNames" ((PVar "fname")) (EApp (EVar "sortUniqS") (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "fname")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "fieldOwnersRef") "value")))))
 (DTypeSig false "resolveFieldRecord" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RecordInfo"))))))
-(DFunDef false "resolveFieldRecord" ((PVar "te") (PVar "fname")) (EMatch (EApp (EVar "headTyconNameMono") (EVar "te")) (arm (PCon "Some" (PVar "r")) () (EMatch (EApp (EApp (EVar "lookupRecordForReceiver") (EVar "te")) (EVar "r")) (arm (PCon "Some" (PVar "ri")) () (EApp (EVar "Some") (ETuple (EVar "r") (EVar "ri")))) (arm (PCon "None") () (EMatch (EApp (EApp (EApp (EVar "lookupRecordByMangledHead") (EVar "te")) (EVar "r")) (EVar "fname")) (arm (PCon "Some" (PVar "pair")) () (EApp (EVar "Some") (EVar "pair"))) (arm (PCon "None") () (EIf (EApp (EApp (EVar "contains") (EVar "r")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "abstractRecordTypesRef") "value")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-ABSTRACT-FIELD"))) (EApp (EApp (EVar "abstractFieldMsg") (EVar "r")) (EVar "fname")))) (DoExpr (EVar "None"))) (EApp (EApp (EVar "resolveFieldByOwners") (EVar "te")) (EVar "fname")))))))) (arm (PCon "None") () (EApp (EApp (EVar "resolveFieldByOwners") (EVar "te")) (EVar "fname")))))
+(DFunDef false "resolveFieldRecord" ((PVar "te") (PVar "fname")) (EApp (EApp (EApp (EVar "stampableFieldRecord") (EVar "te")) (EVar "fname")) (EApp (EApp (EVar "resolveFieldRecordPick") (EVar "te")) (EVar "fname"))))
+(DTypeSig false "resolveFieldRecordPick" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RecordInfo"))))))
+(DFunDef false "resolveFieldRecordPick" ((PVar "te") (PVar "fname")) (EMatch (EApp (EVar "headTyconNameMono") (EVar "te")) (arm (PCon "Some" (PVar "r")) () (EMatch (EApp (EApp (EVar "lookupRecordForReceiver") (EVar "te")) (EVar "r")) (arm (PCon "Some" (PVar "ri")) () (EApp (EVar "Some") (ETuple (EVar "r") (EVar "ri")))) (arm (PCon "None") () (EMatch (EApp (EApp (EApp (EVar "lookupRecordByMangledHead") (EVar "te")) (EVar "r")) (EVar "fname")) (arm (PCon "Some" (PVar "pair")) () (EApp (EVar "Some") (EVar "pair"))) (arm (PCon "None") () (EIf (EApp (EApp (EVar "contains") (EVar "r")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "abstractRecordTypesRef") "value")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-ABSTRACT-FIELD"))) (EApp (EApp (EVar "abstractFieldMsg") (EVar "r")) (EVar "fname")))) (DoExpr (EVar "None"))) (EApp (EApp (EVar "resolveFieldByOwners") (EVar "te")) (EVar "fname")))))))) (arm (PCon "None") () (EApp (EApp (EVar "resolveFieldByOwners") (EVar "te")) (EVar "fname")))))
+(DTypeSig false "stampableFieldRecord" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RecordInfo"))) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RecordInfo")))))))
+(DFunDef false "stampableFieldRecord" (PWild PWild (PCon "None")) (EVar "None"))
+(DFunDef false "stampableFieldRecord" ((PVar "te") (PVar "fname") (PCon "Some" (PTuple (PVar "rname") (PVar "ri")))) (EMatch (EApp (EApp (EApp (EApp (EVar "fieldRivalCtor") (EVar "te")) (EVar "fname")) (EVar "rname")) (EVar "ri")) (arm (PCon "None") () (EApp (EVar "Some") (ETuple (EVar "rname") (EVar "ri")))) (arm (PCon "Some" (PTuple (PVar "tyname") (PVar "rival") (PVar "why"))) () (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "pushTypeErrorHelpFixAt") (ELit (LString "T-FIELD-VARIANT-CONFLICT"))) (EFieldAccess (EVar "currentLoc") "value")) (EApp (EApp (EApp (EApp (EApp (EVar "fieldVariantConflictMsg") (EVar "fname")) (EVar "tyname")) (EVar "rname")) (EVar "rival")) (EVar "why"))) (EApp (EApp (EApp (EVar "fieldVariantConflictHelp") (EVar "fname")) (EVar "rname")) (EVar "why"))) (EVar "None"))) (DoExpr (EVar "None"))))))
+(DData Private "FieldRivalWhy" () ((variant "RivalOffset" (ConPos (TyCon "Int") (TyCon "Int"))) (variant "RivalType" (ConPos (TyCon "Mono") (TyCon "Mono")))) ())
+(DTypeSig false "fieldVariantConflictMsg" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "FieldRivalWhy") (TyCon "String")))))))
+(DFunDef false "fieldVariantConflictMsg" ((PVar "fname") (PVar "tyname") (PVar "mineName") (PVar "rivalName") (PCon "RivalOffset" (PVar "mine") (PVar "other"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Field '")) (EApp (EMethodRef "display") (EVar "fname"))) (ELit (LString "' sits at a different position in each of '"))) (EApp (EMethodRef "display") (EVar "tyname"))) (ELit (LString "''s constructors: '"))) (EApp (EMethodRef "display") (EVar "mineName"))) (ELit (LString "' declares it at position "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EBinOp "+" (EVar "mine") (ELit (LInt 1)))))) (ELit (LString ", '"))) (EApp (EMethodRef "display") (EVar "rivalName"))) (ELit (LString "' at position "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EBinOp "+" (EVar "other") (ELit (LInt 1)))))) (ELit (LString ". A '."))) (EApp (EMethodRef "display") (EVar "fname"))) (ELit (LString "' is resolved by the receiver's TYPE, which does not say which constructor built the value, so there is no one slot to load here"))))
+(DFunDef false "fieldVariantConflictMsg" ((PVar "fname") (PVar "tyname") (PVar "mineName") (PVar "rivalName") (PCon "RivalType" (PVar "mine") (PVar "other"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Field '")) (EApp (EMethodRef "display") (EVar "fname"))) (ELit (LString "' is declared with a different type in each of '"))) (EApp (EMethodRef "display") (EVar "tyname"))) (ELit (LString "''s constructors: '"))) (EApp (EMethodRef "display") (EVar "mineName"))) (ELit (LString "' declares it as '"))) (EApp (EMethodRef "display") (EApp (EVar "ppMono") (EVar "mine")))) (ELit (LString "', '"))) (EApp (EMethodRef "display") (EVar "rivalName"))) (ELit (LString "' as '"))) (EApp (EMethodRef "display") (EApp (EVar "ppMono") (EVar "other")))) (ELit (LString "'. A '."))) (EApp (EMethodRef "display") (EVar "fname"))) (ELit (LString "' is resolved by the receiver's TYPE, which does not say which constructor built the value, so there is no one type this selection could have"))))
+(DTypeSig false "fieldVariantConflictHelp" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "FieldRivalWhy") (TyCon "String")))))
+(DFunDef false "fieldVariantConflictHelp" ((PVar "fname") (PVar "mineName") (PCon "RivalOffset" PWild PWild)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "match on the constructor instead (e.g. '")) (EApp (EMethodRef "display") (EVar "mineName"))) (ELit (LString " { "))) (EApp (EMethodRef "display") (EVar "fname"))) (ELit (LString " = x } => x'), or declare '"))) (EApp (EMethodRef "display") (EVar "fname"))) (ELit (LString "' at the same position in every constructor. Tracked as #1465 (tag-dispatched field selectors)"))))
+(DFunDef false "fieldVariantConflictHelp" ((PVar "fname") (PVar "mineName") (PCon "RivalType" PWild PWild)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "match on the constructor instead (e.g. '")) (EApp (EMethodRef "display") (EVar "mineName"))) (ELit (LString " { "))) (EApp (EMethodRef "display") (EVar "fname"))) (ELit (LString " = x } => x'), or declare '"))) (EApp (EMethodRef "display") (EVar "fname"))) (ELit (LString "' with the same type in every constructor. Tracked as #1465 (tag-dispatched field selectors)"))))
+(DTypeSig false "fieldRivalCtor" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "RecordInfo") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String") (TyCon "FieldRivalWhy"))))))))
+(DFunDef false "fieldRivalCtor" ((PVar "te") (PVar "fname") (PVar "rname") (PVar "ri")) (EBlock (DoLet false false (PVar "rk") (EApp (EVar "headTyconMono") (EVar "te"))) (DoExpr (EIf (EApp (EVar "not") (EApp (EApp (EVar "recordInfoIsReceiverDecl") (EVar "rk")) (EVar "ri"))) (EVar "None") (EIf (EApp (EVar "not") (EApp (EVar "fieldHasRivalOwners") (EVar "fname"))) (EVar "None") (EBlock (DoLet false false (PVar "targs") (EApp (EVar "snd") (EApp (EVar "spineParts") (EVar "te")))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "fieldSlotAt") (EVar "targs")) (EVar "fname")) (EVar "ri")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "mine")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "fieldRivalCtorOfType") (EApp (EVar "headTyconNameMono") (EVar "te"))) (EVar "rk")) (EVar "fname")) (EVar "rname")) (EVar "mine")) (EVar "targs")))))))))))
+(DTypeSig false "fieldRivalCtorOfType" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "HeadKey")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyTuple (TyCon "Int") (TyCon "Mono")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String") (TyCon "FieldRivalWhy"))))))))))
+(DFunDef false "fieldRivalCtorOfType" ((PCon "None") PWild PWild PWild PWild PWild) (EVar "None"))
+(DFunDef false "fieldRivalCtorOfType" ((PCon "Some" (PVar "tyname")) (PVar "rk") (PVar "fname") (PVar "rname") (PVar "mine") (PVar "targs")) (EMatch (EApp (EApp (EVar "oGetCtors") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchOracle") "value")) (EVar "tyname")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "ctors")) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "fieldRivalCtorNamed") (EVar "tyname")) (EVar "rk")) (EVar "fname")) (EVar "rname")) (EVar "mine")) (EVar "targs")) (EVar "ctors")))))
+(DTypeSig false "fieldRivalCtorNamed" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "HeadKey")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyTuple (TyCon "Int") (TyCon "Mono")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String") (TyCon "FieldRivalWhy")))))))))))
+(DFunDef false "fieldRivalCtorNamed" ((PVar "tyname") (PVar "rk") (PVar "fname") (PVar "rname") (PVar "mine") (PVar "targs") (PVar "ctors")) (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "rival") (PVar "why"))) (ETuple (EVar "tyname") (EVar "rival") (EVar "why")))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "fieldRivalCtorGo") (EVar "rk")) (EVar "fname")) (EVar "rname")) (EVar "mine")) (EVar "targs")) (EVar "ctors"))))
+(DTypeSig false "fieldHasRivalOwners" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "fieldHasRivalOwners" ((PVar "fname")) (EMatch (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "fname")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "fieldOwnersRef") "value"))) (arm (PList) () (EVar "False")) (arm (PList PWild) () (EVar "False")) (arm PWild () (EVar "True"))))
+(DTypeSig false "fieldRivalCtorGo" (TyFun (TyApp (TyCon "Option") (TyCon "HeadKey")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyTuple (TyCon "Int") (TyCon "Mono")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "FieldRivalWhy"))))))))))
+(DFunDef false "fieldRivalCtorGo" (PWild PWild PWild PWild PWild (PList)) (EVar "None"))
+(DFunDef false "fieldRivalCtorGo" ((PVar "rk") (PVar "fname") (PVar "rname") (PVar "mine") (PVar "targs") (PCons (PVar "c") (PVar "rest"))) (EIf (EBinOp "==" (EVar "c") (EVar "rname")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "fieldRivalCtorGo") (EVar "rk")) (EVar "fname")) (EVar "rname")) (EVar "mine")) (EVar "targs")) (EVar "rest")) (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "recordForKeyAndReceiver") (EVar "rk")) (EVar "c")) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "fieldRivalCtorGo") (EVar "rk")) (EVar "fname")) (EVar "rname")) (EVar "mine")) (EVar "targs")) (EVar "rest"))) (arm (PCon "Some" (PVar "ri2")) () (EMatch (EApp (EApp (EApp (EVar "fieldSlotAt") (EVar "targs")) (EVar "fname")) (EVar "ri2")) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "fieldRivalCtorGo") (EVar "rk")) (EVar "fname")) (EVar "rname")) (EVar "mine")) (EVar "targs")) (EVar "rest"))) (arm (PCon "Some" (PVar "other")) () (EMatch (EApp (EApp (EVar "fieldRivalWhy") (EVar "mine")) (EVar "other")) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "fieldRivalCtorGo") (EVar "rk")) (EVar "fname")) (EVar "rname")) (EVar "mine")) (EVar "targs")) (EVar "rest"))) (arm (PCon "Some" (PVar "why")) () (EApp (EVar "Some") (ETuple (EVar "c") (EVar "why"))))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "fieldRivalWhy" (TyFun (TyTuple (TyCon "Int") (TyCon "Mono")) (TyFun (TyTuple (TyCon "Int") (TyCon "Mono")) (TyApp (TyCon "Option") (TyCon "FieldRivalWhy")))))
+(DFunDef false "fieldRivalWhy" ((PTuple (PVar "mineIdx") (PVar "mineTy")) (PTuple (PVar "otherIdx") (PVar "otherTy"))) (EIf (EBinOp "!=" (EVar "mineIdx") (EVar "otherIdx")) (EApp (EVar "Some") (EApp (EApp (EVar "RivalOffset") (EVar "mineIdx")) (EVar "otherIdx"))) (EIf (EApp (EApp (EVar "monoDeclDefinitelyDiffers") (EVar "mineTy")) (EVar "otherTy")) (EApp (EVar "Some") (EApp (EApp (EVar "RivalType") (EVar "mineTy")) (EVar "otherTy"))) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "fieldSlotAt" (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyCon "String") (TyFun (TyCon "RecordInfo") (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Mono")))))))
+(DFunDef false "fieldSlotAt" ((PVar "targs") (PVar "fname") (PVar "ri")) (EMatch (EApp (EApp (EVar "fieldSlotIn") (EVar "fname")) (EApp (EVar "recordFields") (EVar "ri"))) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PTuple (PVar "i") (PVar "t"))) () (EApp (EVar "Some") (ETuple (EVar "i") (EApp (EApp (EApp (EVar "monoAtParams") (EApp (EVar "recordParamIds") (EVar "ri"))) (EVar "targs")) (EVar "t")))))))
+(DTypeSig false "monoAtParams" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyCon "Mono") (TyCon "Mono")))))
+(DFunDef false "monoAtParams" ((PList) PWild (PVar "t")) (EVar "t"))
+(DFunDef false "monoAtParams" (PWild (PList) (PVar "t")) (EVar "t"))
+(DFunDef false "monoAtParams" ((PVar "ids") (PVar "targs") (PVar "t")) (EApp (EApp (EApp (EVar "substMono") (EApp (EApp (EVar "paramSubstOf") (EVar "ids")) (EVar "targs"))) (EListLit)) (EVar "t")))
+(DTypeSig false "paramSubstOf" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Mono"))))))
+(DFunDef false "paramSubstOf" ((PList) PWild) (EListLit))
+(DFunDef false "paramSubstOf" (PWild (PList)) (EListLit))
+(DFunDef false "paramSubstOf" ((PCons (PVar "i") (PVar "is")) (PCons (PVar "a") (PVar "ats"))) (EBinOp "::" (ETuple (EVar "i") (EVar "a")) (EApp (EApp (EVar "paramSubstOf") (EVar "is")) (EVar "ats"))))
+(DTypeSig false "monoDeclDefinitelyDiffers" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Bool"))))
+(DFunDef false "monoDeclDefinitelyDiffers" ((PVar "a") (PVar "b")) (EApp (EApp (EVar "monoDeclDiffersGo") (EApp (EVar "normalize") (EVar "a"))) (EApp (EVar "normalize") (EVar "b"))))
+(DTypeSig false "monoDeclDiffersGo" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Bool"))))
+(DFunDef false "monoDeclDiffersGo" ((PCon "TCon" (PVar "n1") (PVar "o1")) (PCon "TCon" (PVar "n2") (PVar "o2"))) (EApp (EVar "not") (EApp (EApp (EApp (EApp (EVar "sameTyConHead") (EVar "n1")) (EVar "o1")) (EVar "n2")) (EVar "o2"))))
+(DFunDef false "monoDeclDiffersGo" ((PCon "TCon" PWild PWild) (PCon "TApp" PWild PWild)) (EVar "True"))
+(DFunDef false "monoDeclDiffersGo" ((PCon "TApp" PWild PWild) (PCon "TCon" PWild PWild)) (EVar "True"))
+(DFunDef false "monoDeclDiffersGo" ((PCon "TApp" (PVar "f1") (PVar "x1")) (PCon "TApp" (PVar "f2") (PVar "x2"))) (EBinOp "||" (EApp (EApp (EVar "monoDeclDiffersGo") (EApp (EVar "normalize") (EVar "f1"))) (EApp (EVar "normalize") (EVar "f2"))) (EApp (EApp (EVar "monoDeclDiffersGo") (EApp (EVar "normalize") (EVar "x1"))) (EApp (EVar "normalize") (EVar "x2")))))
+(DFunDef false "monoDeclDiffersGo" (PWild PWild) (EVar "False"))
+(DTypeSig false "fieldSlotIn" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Mono"))))))
+(DFunDef false "fieldSlotIn" ((PVar "fname") (PVar "fields")) (EApp (EApp (EApp (EVar "fieldSlotInGo") (EVar "fname")) (EVar "fields")) (ELit (LInt 0))))
+(DTypeSig false "fieldSlotInGo" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Mono")))))))
+(DFunDef false "fieldSlotInGo" (PWild (PList) PWild) (EVar "None"))
+(DFunDef false "fieldSlotInGo" ((PVar "fname") (PCons (PTuple (PVar "n") (PVar "t")) (PVar "rest")) (PVar "i")) (EIf (EBinOp "==" (EVar "n") (EVar "fname")) (EApp (EVar "Some") (ETuple (EVar "i") (EVar "t"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "fieldSlotInGo") (EVar "fname")) (EVar "rest")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "lookupRecordForReceiver" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "RecordInfo")))))
 (DFunDef false "lookupRecordForReceiver" ((PVar "te") (PVar "r")) (EMatch (EApp (EApp (EVar "recordForReceiverIdent") (EVar "te")) (EVar "r")) (arm (PCon "Some" (PVar "ri")) () (EApp (EVar "Some") (EVar "ri"))) (arm (PCon "None") () (EApp (EVar "lookupRecordByName") (EVar "r")))))
 (DTypeSig false "recordForReceiverIdent" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "RecordInfo")))))
@@ -29903,7 +30664,9 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "lookupRecordByMangledHead" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RecordInfo")))))))
 (DFunDef false "lookupRecordByMangledHead" ((PVar "te") (PVar "head") (PVar "fname")) (EMatch (EApp (EApp (EVar "mangledHeadCandidates") (EVar "head")) (EVar "fname")) (arm (PList (PVar "pair")) () (EApp (EVar "Some") (EVar "pair"))) (arm (PVar "cands") () (EBlock (DoLet false false (PVar "rk") (EApp (EVar "headTyconMono") (EVar "te"))) (DoExpr (EMatch (EApp (EApp (EVar "filterList") (EApp (EVar "recordCandIsReceiverDecl") (EVar "rk"))) (EVar "cands")) (arm (PList (PVar "pair")) () (EApp (EVar "Some") (EVar "pair"))) (arm PWild () (EVar "None"))))))))
 (DTypeSig false "recordCandIsReceiverDecl" (TyFun (TyApp (TyCon "Option") (TyCon "HeadKey")) (TyFun (TyTuple (TyCon "String") (TyCon "RecordInfo")) (TyCon "Bool"))))
-(DFunDef false "recordCandIsReceiverDecl" ((PVar "rk") (PTuple PWild (PVar "ri"))) (EBinOp "==" (EVar "rk") (EApp (EVar "headTyconMono") (EApp (EVar "recordResultMono") (EVar "ri")))))
+(DFunDef false "recordCandIsReceiverDecl" ((PVar "rk") (PTuple PWild (PVar "ri"))) (EApp (EApp (EVar "recordInfoIsReceiverDecl") (EVar "rk")) (EVar "ri")))
+(DTypeSig false "recordInfoIsReceiverDecl" (TyFun (TyApp (TyCon "Option") (TyCon "HeadKey")) (TyFun (TyCon "RecordInfo") (TyCon "Bool"))))
+(DFunDef false "recordInfoIsReceiverDecl" ((PVar "rk") (PVar "ri")) (EBinOp "==" (EVar "rk") (EApp (EVar "headTyconMono") (EApp (EVar "recordResultMono") (EVar "ri")))))
 (DTypeSig false "recordResultMono" (TyFun (TyCon "RecordInfo") (TyCon "Mono")))
 (DFunDef false "recordResultMono" ((PCon "RecordInfo" PWild (PVar "result") PWild PWild)) (EVar "result"))
 (DTypeSig false "mangledHeadCandidates" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "RecordInfo"))))))
@@ -29912,7 +30675,17 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "mangledHeadCandidatesGo" (PWild (PList)) (EListLit))
 (DFunDef false "mangledHeadCandidatesGo" ((PVar "head") (PCons (PVar "key") (PVar "rest"))) (EIf (EApp (EApp (EVar "endsWith") (EBinOp "++" (ELit (LString "__")) (EVar "head"))) (EVar "key")) (EMatch (EApp (EVar "lookupRecordByName") (EVar "key")) (arm (PCon "Some" (PVar "ri")) () (EBinOp "::" (ETuple (EVar "key") (EVar "ri")) (EApp (EApp (EVar "mangledHeadCandidatesGo") (EVar "head")) (EVar "rest")))) (arm (PCon "None") () (EApp (EApp (EVar "mangledHeadCandidatesGo") (EVar "head")) (EVar "rest")))) (EIf (EVar "otherwise") (EApp (EApp (EVar "mangledHeadCandidatesGo") (EVar "head")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "resolveFieldByOwners" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RecordInfo"))))))
-(DFunDef false "resolveFieldByOwners" ((PVar "te") (PVar "fname")) (EMatch (EApp (EVar "fieldOwnerNames") (EVar "fname")) (arm (PList) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "pushUnknownField") (EVar "fname")) (ELit (LString "<unknown>")))) (DoExpr (EVar "None")))) (arm (PList (PVar "r")) () (EApp (EVar "pairRecordByName") (EVar "r"))) (arm (PCons (PVar "r") (PVar "rest")) () (EApp (EApp (EApp (EVar "resolveFieldAmbiguous") (EVar "te")) (EVar "fname")) (EBinOp "::" (EVar "r") (EVar "rest"))))))
+(DFunDef false "resolveFieldByOwners" ((PVar "te") (PVar "fname")) (EMatch (EApp (EVar "fieldOwnerNames") (EVar "fname")) (arm (PList) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "pushUnknownField") (EVar "fname")) (ELit (LString "<unknown>")))) (DoExpr (EVar "None")))) (arm (PCons (PVar "r") (PVar "rest")) () (EMatch (EApp (EApp (EVar "ownersMatchingReceiver") (EVar "te")) (EBinOp "::" (EVar "r") (EVar "rest"))) (arm (PCon "Some" (PVar "pair")) () (EApp (EVar "Some") (EVar "pair"))) (arm (PCon "None") () (EMatch (EVar "rest") (arm (PList) () (EApp (EVar "pairRecordByName") (EVar "r"))) (arm PWild () (EApp (EApp (EApp (EVar "resolveFieldAmbiguous") (EVar "te")) (EVar "fname")) (EBinOp "::" (EVar "r") (EVar "rest"))))))))))
+(DTypeSig false "ownersMatchingReceiver" (TyFun (TyCon "Mono") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RecordInfo"))))))
+(DFunDef false "ownersMatchingReceiver" ((PVar "te") (PVar "owners")) (EBlock (DoLet false false (PVar "rk") (EApp (EVar "headTyconMono") (EVar "te"))) (DoExpr (EMatch (EVar "rk") (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" PWild) () (EApp (EApp (EVar "ownersMatchingReceiverGo") (EVar "rk")) (EVar "owners")))))))
+(DTypeSig false "ownersMatchingReceiverGo" (TyFun (TyApp (TyCon "Option") (TyCon "HeadKey")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RecordInfo"))))))
+(DFunDef false "ownersMatchingReceiverGo" (PWild (PList)) (EVar "None"))
+(DFunDef false "ownersMatchingReceiverGo" ((PVar "rk") (PCons (PVar "k") (PVar "rest"))) (EMatch (EApp (EApp (EVar "recordForKeyAndReceiver") (EVar "rk")) (EVar "k")) (arm (PCon "Some" (PVar "ri")) () (EApp (EVar "Some") (ETuple (EVar "k") (EVar "ri")))) (arm (PCon "None") () (EApp (EApp (EVar "ownersMatchingReceiverGo") (EVar "rk")) (EVar "rest")))))
+(DTypeSig false "recordForKeyAndReceiver" (TyFun (TyApp (TyCon "Option") (TyCon "HeadKey")) (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "RecordInfo")))))
+(DFunDef false "recordForKeyAndReceiver" ((PVar "rk") (PVar "k")) (EMatch (EApp (EApp (EVar "recordIdentRowForReceiver") (EVar "rk")) (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "k")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeRecordIdentsRef") "value")))) (arm (PCon "Some" (PVar "ri")) () (EApp (EVar "Some") (EVar "ri"))) (arm (PCon "None") () (EMatch (EApp (EVar "lookupRecordByName") (EVar "k")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "ri")) () (EIf (EApp (EApp (EVar "recordInfoIsReceiverDecl") (EVar "rk")) (EVar "ri")) (EApp (EVar "Some") (EVar "ri")) (EVar "None")))))))
+(DTypeSig false "recordIdentRowForReceiver" (TyFun (TyApp (TyCon "Option") (TyCon "HeadKey")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String") (TyCon "RecordInfo"))) (TyApp (TyCon "Option") (TyCon "RecordInfo")))))
+(DFunDef false "recordIdentRowForReceiver" (PWild (PList)) (EVar "None"))
+(DFunDef false "recordIdentRowForReceiver" ((PVar "rk") (PCons (PTuple PWild PWild (PVar "ri")) (PVar "rest"))) (EIf (EApp (EApp (EVar "recordInfoIsReceiverDecl") (EVar "rk")) (EVar "ri")) (EApp (EVar "Some") (EVar "ri")) (EIf (EVar "otherwise") (EApp (EApp (EVar "recordIdentRowForReceiver") (EVar "rk")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "resolveFieldAmbiguous" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RecordInfo")))))))
 (DFunDef false "resolveFieldAmbiguous" ((PVar "te") (PVar "fname") (PVar "owners")) (EMatch (EApp (EVar "normalize") (EVar "te")) (arm (PCon "TVar" PWild) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-AMBIGUOUS-FIELD"))) (EApp (EApp (EVar "ambiguousFieldMsg") (EVar "fname")) (EVar "owners")))) (DoExpr (EVar "None")))) (arm PWild () (EApp (EVar "pairRecordByName") (EApp (EVar "headL") (EVar "owners"))))))
 (DTypeSig false "pairRecordByName" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RecordInfo")))))
@@ -30428,6 +31201,10 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "recordFieldMap" ((PCon "RecordInfo" PWild PWild PWild (PVar "idx"))) (EVar "idx"))
 (DTypeSig false "recordFieldNames" (TyFun (TyCon "RecordInfo") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "recordFieldNames" ((PCon "RecordInfo" PWild PWild (PVar "fields") PWild)) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "fields")))
+(DTypeSig false "recordFields" (TyFun (TyCon "RecordInfo") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono")))))
+(DFunDef false "recordFields" ((PCon "RecordInfo" PWild PWild (PVar "fields") PWild)) (EVar "fields"))
+(DTypeSig false "recordParamIds" (TyFun (TyCon "RecordInfo") (TyApp (TyCon "List") (TyCon "Int"))))
+(DFunDef false "recordParamIds" ((PCon "RecordInfo" (PVar "paramIds") PWild PWild PWild)) (EVar "paramIds"))
 (DTypeSig false "substField" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Mono"))) (TyFun (TyTuple (TyCon "String") (TyCon "Mono")) (TyTuple (TyCon "String") (TyCon "Mono")))))
 (DFunDef false "substField" ((PVar "subst") (PTuple (PVar "fn") (PVar "fm"))) (ETuple (EVar "fn") (EApp (EApp (EApp (EVar "substMono") (EVar "subst")) (EListLit)) (EVar "fm"))))
 (DTypeSig false "registerVariants" (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Variant")) (TyCon "TcEnv")))))))

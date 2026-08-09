@@ -224,6 +224,13 @@ WIDERECORDS_N="${PERF_WIDERECORDS_N:-$N}"
 # other shapes' 1000. See gen_consfam.
 CONSFAM_N="${PERF_CONSFAM_N:-200}"
 
+# `fieldowners` (#1456) samples at 150/300/600. See gen_fieldowners for the shape and
+# the KNOWN_SUPERLINEAR entry for what it asserts. The band is chosen from the ALLOC
+# arm's side: at 150 the net figure already clears the TOOSMALL floor by two orders of
+# magnitude, and 600 is where the ratio is unambiguous without adding minutes to a gate
+# that is already one of the slowest in the tree.
+FIELDOWNERS_N="${PERF_FIELDOWNERS_N:-150}"
+
 # `xref` samples the WASM arm at its OWN, SMALLER band — 2000/4000/8000 rather than
 # the shape's 4000/8000/16000. This is a COST fix and it is the reason this gate is
 # not the CI critical path. The band is deliberate — a ratio measured here does not
@@ -318,9 +325,39 @@ TIME_HEAP="${PERF_TIME_HEAP:-2147483648}"
 #           net-alloc, FLAT and linear to N=1600 (r2 2.02 @ 100/200/400, 2.02 @ 200/400/800,
 #           2.04 @ 400/800/1600; 91 -> 183 -> 370 -> 748 -> 1528 MB), and typecheck TIME
 #           dropped under the 200ms floor. PROMOTED OUT 2026-07-16 — now a HARD linear gate.
-# No currently-ledgered superlinear shapes: every entry has drained. is_known() below
-# stays (a future regression can re-ledger a shape without re-adding the plumbing).
-KNOWN_SUPERLINEAR=""
+#
+# ⚠️ THE ONE CURRENTLY-LEDGERED SHAPE IS `fieldowners`; the `modules` paragraph above
+# describes a state this file's own HISTORY section records as PROMOTED OUT — read
+# `KNOWN_SUPERLINEAR` below, not the prose, for what is ledgered today.
+#
+#   fieldowners — the field→owners FALLBACK (#1456), added with #1455. `fieldOwnerNames`
+#           `sortUniqS`es the WHOLE owner list ON EVERY ACCESS that reaches
+#           `resolveFieldByOwners`, and this shape gives a field name N owner keys and N
+#           reaching accesses. See gen_fieldowners for why `gen_modules` is structurally
+#           blind to it (short-form projection => arm (a) answers => the fallback never
+#           runs), for the merge-base measurement showing the growth order PREDATES
+#           #1455's identity selection, and for why it is graded on ALLOCATION ONLY.
+#           It is ledgered rather than shipped red because the fix is A-3a's
+#           identity-keyed `(field name, owning type identity)` index, which retires the
+#           per-access sort and the walk together — at which point this row FAILS
+#           demanding promotion, which is the whole contract.
+#           MEASURED (this box, deterministic net alloc — machine-independent, so the
+#           ceiling below is valid on the CI box; see the file header) at N=150/300/600.
+KNOWN_SUPERLINEAR="fieldowners"
+
+# The recorded ceiling and the promotion trigger for each ledgered shape. `ceil` is the
+# r2 (net-alloc 4N/2N) this shape reads TODAY, rounded UP by a small margin: exceed it
+# and the gate fails ("KNOWN-BAD, AND GOT WORSE"). `fixed` is the ratio below which the
+# shape has effectively returned to linear: drop under it and the gate fails demanding
+# PROMOTION out of the ledger. Both are filled in from the measured run recorded above.
+#
+# MEASURED on this box at N=150/300/600, deterministic net-total allocation:
+#   net-N 311.6 MB -> net-2N 1008.5 MB, r2 = 3.11  (the linear shapes in this file all
+#   read 2.00-2.16; the file's hard THRESH is 3.0)
+# so the ceiling carries a small drift margin over 3.11 and the promotion trigger sits
+# above the linear band but well under today's reading.
+KNOWN_CEIL_fieldowners="3.40"
+KNOWN_FIXED_fieldowners="2.60"
 
 is_known() {
   for k in $KNOWN_SUPERLINEAR; do [ "$k" = "$1" ] && return 0; done
@@ -792,6 +829,82 @@ gen_widerecords() {
 # (not via the SHAPES loop): the emit-stage OP ratio is not in OP_STAGES, and the
 # TIME arm cannot see these at all — they are PURE SCANS that allocate almost nothing
 # per step, exactly the class THE SECOND RULE in compiler/AGENTS.md is about.
+# gen_fieldowners — THE FIELD→OWNERS FALLBACK SHAPE (#1456).
+#
+# 🚨 IT EXISTS BECAUSE `gen_modules` IS STRUCTURALLY BLIND HERE, IN BOTH DIRECTIONS.
+# `gen_mod_records` already collides field names across every generated module, so its
+# owner lists reach N*MOD_R keys — but its projection `mkr<i>.f0` is on a SHORT-FORM
+# record whose head IS its registry key, so `resolveFieldRecord`'s arm (a) answers it
+# and it NEVER REACHES `resolveFieldByOwners`. Its own comment requires it to stay
+# short-form. A green `modules` row is therefore not evidence about this path.
+#
+# The one variable that changes here is the RECORD FORM: a named-field VARIANT
+# `data FT<i> = | FV<i> { … }` is filed in the registry under `FV<i>` while a value of
+# it has head `FT<i>`, so `lookupRecordByName "FT<i>"` misses, no key suffix-matches
+# `__FT<i>`, and `mkv<i>.g0` lands in the fallback. Every generated type declares the
+# SAME four field names, so `fieldOwnerNames "g0"` returns N keys and there are N such
+# accesses.
+#
+# WHAT IS SUPERLINEAR, and it is NOT introduced by the selector this shape was added
+# alongside: `fieldOwnerNames` does `sortUniqS` over the WHOLE owner list ON EVERY
+# ACCESS that reaches it — O(N log N) per access, N accesses.
+#
+# ⚠️ THE NUMBERS HERE ARE THE ONES THIS GATE ITSELF PRINTS, AND NOTHING ELSE. An earlier
+# cut of this comment cited "alloc r2 6.37 on the merge base vs 6.13 on the branch",
+# which contradicts the `KNOWN_CEIL` block above, the row this gate emits, and the PR
+# body — all three of which say 3.11 — with no stage or band named that could reconcile
+# them. It was not reproducible from anything in the tree, so it is deleted rather than
+# rationalised. The live, reproducible figure is the gate's own row at N=150 -> 300:
+#
+#     fieldowners 150  311.6 MB  1008.5 MB  r2 3.11  known-superlinear (ceiling 3.40)
+#
+# reproduced independently by #1455's second reviewer to the same three digits — which is
+# this file's allocation-determinism claim paying off.
+#
+# ⚠️ THE MERGE-BASE HALF IS *RELAYED*, NOT RE-DERIVED HERE. #1455's author reports an
+# interleaved A/B in which the merge base reads r1 3.18 / r2 3.06 on the same generated
+# program (which it REJECTS — `Type mismatch: FT0 vs FR0`), i.e. the same growth ORDER
+# without #1455's identity selection. Nobody has re-run that arm since, and it cannot be
+# re-run from this tree alone: `gen_fieldowners` is new in #1455, so the merge base's copy
+# of this gate has no such shape. What IS derivable from the tree is the mechanism —
+# `fieldOwnerNames`' per-access `sortUniqS` is untouched by #1455 — and the branch row
+# above. The branch adds a constant factor on top (it walks the same sorted list to
+# identity-match, and it does strictly MORE work: it resolves where the merge base errored
+# out).
+#
+# ⚠️ WHY #1455 STILL OWES THIS ROW.  Before it, a program of this shape was REJECTED
+# (`Type mismatch: FT0 vs FR0` — `headL owners` guessing), so the liability existed but
+# nothing could reach it. Widening acceptance made it reachable for the first time, and
+# "a pre-existing cost that no program could pay" becoming payable is a real consequence
+# that no existing row could see. `KNOWN_SUPERLINEAR` is where such a thing goes: green
+# now, FAILS if it worsens, FAILS demanding promotion when A-3a's identity-keyed
+# `(field name, owning type identity)` index retires both the per-access `sortUniqS` and
+# the walk.
+#
+# ⚠️ GRADED ON ALLOCATION ONLY, DELIBERATELY, and the reason is not squeamishness: an
+# allocation ratio is deterministic and machine-independent (this file's own header), so
+# a ceiling measured anywhere is valid on the CI box. A TIME ceiling is not — it would
+# have to be taken on the CI box and re-taken whenever that box changes — so this shape
+# joins the OP-ONLY list that skips the TIME min-of-K arm rather than shipping a number
+# nobody can reproduce. The wall-clock IS superlinear here too (branch/base 1.67x ->
+# 2.27x -> 2.57x across doublings on the author's box); that is recorded on #1456, not
+# encoded as a gate constant.
+gen_fieldowners() {
+  n=$1; f=$2; : > "$f"
+  {
+    i=0; while [ "$i" -lt "$n" ]; do
+      printf 'data FT%s =\n  | FV%s { g0 : Int, g1 : Int, g2 : Int, g3 : Int }\n' "$i" "$i"
+      printf 'mkv%s : FT%s\nmkv%s = FV%s { g0 = %s, g1 = 0, g2 = 0, g3 = 0 }\n' "$i" "$i" "$i" "$i" "$i"
+      printf 'pv%s : Int\npv%s = mkv%s.g0\n' "$i" "$i" "$i"
+      i=$((i+1))
+    done
+    # `main` roots only pv0; resolve/typecheck (the graded stages) run pre-DCE over every
+    # decl, so all N accesses are checked while the backend stages stay small — the same
+    # rooting trick gen_widerecords uses and for the same reason.
+    printf 'main = println pv0\n'
+  } >> "$f"
+}
+
 gen_emittables() {
   n=$1; f=$2; : > "$f"
   i=0; while [ "$i" -lt "$n" ]; do
@@ -2106,7 +2219,7 @@ printf -- '---------------------------------------------------------------------
 # LINEAR resolve-op regression guard whose `ownersOf` target is now COUNTED and O(log N)
 # indexed (#984), so a reintroduced per-mention scan turns it superlinear (see
 # gen_widerecords).
-SHAPES="bindings match listlit nesting xref comments marksweep manyifaces widerecords typos consfam"
+SHAPES="bindings match listlit nesting xref comments marksweep manyifaces widerecords typos consfam fieldowners"
 if [ "$PERF_DEEP" = "1" ]; then
   SHAPES="$SHAPES manydefs"
 else
@@ -2126,6 +2239,7 @@ for shape in $SHAPES; do
     manyifaces) base_n="$MANYIFACES_N" ;;
     widerecords) base_n="$WIDERECORDS_N" ;;
     consfam)    base_n="$CONSFAM_N" ;;
+    fieldowners) base_n="$FIELDOWNERS_N" ;;
     *)          base_n="$N" ;;
   esac
   n1="$base_n"; n2=$((base_n * 2)); n3=$((base_n * 4))
@@ -2163,6 +2277,17 @@ for shape in $SHAPES; do
   case "$shape" in
     marksweep|manyifaces|widerecords|typos)
     time_lines="           time: (OP-ONLY shape — TIME min-of-K arm skipped, #883/#884 cost fix. its graded stage is under the ${TIME_FLOOR}s floor at this band, so TIME grades it nowhere; the op arm below is its coverage.)
+"
+    ;;
+    fieldowners)
+    # ⚠️ SKIPPED FOR A DIFFERENT REASON THAN THE FOUR ABOVE, and the difference matters.
+    # Those four skip because their graded stage sits UNDER the time floor. This one's
+    # typecheck TIME is well over the floor and IS superlinear — it is skipped because a
+    # TIME ceiling is a BOX-DEPENDENT constant (this file's header: allocation is
+    # deterministic and machine-independent, wall-clock is not), and #1456's ledger entry
+    # is an allocation ceiling precisely so it can be trusted on the CI box. Grading TIME
+    # here would need a second ceiling nobody can reproduce off the CI runner.
+    time_lines="           time: (ALLOC-ONLY shape — TIME min-of-K arm skipped ON PURPOSE, #1456: its typecheck time IS superlinear, but a TIME ceiling is box-dependent while the ledgered ALLOC ceiling is not.)
 "
     ;;
     *)
@@ -2331,7 +2456,11 @@ for shape in $SHAPES; do
         "$shape" "$(basename "$0")"
     else
       known=$((known+1))
-      printf '%-10s %8s %9s MB %9s MB %8s  known-superlinear (T17; ceiling %s)\n' \
+      # ⚠️ The label used to read "T17", the `match` entry's issue tag — hard-coded in a
+      # branch that serves EVERY ledgered shape, so it named the wrong bug for any entry
+      # but that one (and `match` was promoted out in 2026-07). Say where the row is
+      # written down instead of naming one issue for all of them.
+      printf '%-10s %8s %9s MB %9s MB %8s  known-superlinear (see KNOWN_SUPERLINEAR; ceiling %s)\n' \
         "$shape" "$n1" "$d1" "$d2" "$ratio" "$ceil"
     fi
 

@@ -1,0 +1,47 @@
+-- #1383 face 1 — THE DRAIN CELL for the S1 this issue filed, and the layout half of
+-- it that no fixture could express before.
+--
+-- A named-field-variant CONSTRUCTOR (`Plain`, one of `Holder`'s variants, in ahold)
+-- collides by BARE NAME with an unrelated module's record TYPE (plainlib's `Plain`).
+-- `mkH.hx` is a projection of ahold's declaration and has nothing to do with
+-- plainlib; before Q-IDENT it was REJECTED at exit 1 with `Type mismatch: Holder vs
+-- Plain` plus `Field 'hx' does not belong to record 'Plain'` — a diagnostic naming a
+-- type this program never puts in that position.
+--
+-- WHY THE FALLBACK IS REACHED AT ALL (so a future edit does not silently defuse it):
+-- `mkH`'s head is `Holder` but its registry key is `Plain`, so `resolveFieldRecord`'s
+-- exact `lookupRecordByName "Holder"` misses, the identity companion has no row under
+-- `Holder`, and no key suffix-matches `__Holder`.  Control lands in
+-- `resolveFieldByOwners`, which answered `pairRecordByName` — the ONE row the bare key
+-- `Plain` currently reaches, decided by module registration order.  Rewrite `ahold` as
+-- a short-form record and this cell silently stops testing anything.
+--
+-- ⚠️ THE OWNER SET WAS NEVER THE DEFECT.  `fieldOwnerNames "hx"` is the SINGLETON
+-- `["Plain"]` here — the RIGHT key — and it is `sortUniqS`ed, so `headL` is
+-- order-insensitive.  What was wrong is which DECLARATION that one key reached.  A
+-- narrowing/reachability analysis over the owner set would not have moved this cell.
+--
+-- Expected output, derived BY HAND from the sources before anything was run and
+-- independently of any engine:
+--   ahold:    mkH = Plain { hx = 100, hy = 200 }  =>  mkH.hx = 100, mkH.hy = 200
+--   plainlib: mkP = Plain { hy = 7,   hx = 5 }    =>  mkP.hx = 5,   mkP.hy = 7
+-- so `h=100,200 p=5,7`.
+--
+-- ⚠️ THE FIELD ORDERS ARE OPPOSITE ON PURPOSE.  If the selection regressed to picking
+-- plainlib's record for `mkH.hx` the front end rejects (loud); if some future change
+-- made it ACCEPT with the wrong record, the projection would read plainlib's slot 1
+-- for `hx` and this cell reds on the VALUE.  Both failure directions are covered, and
+-- the second is the one `record_receiver_ident_*`'s single-field ancestors could not
+-- see.
+--
+-- ⚠️ `mkP.hx`/`mkP.hy` are NOT redundant with the ahold half.  They take a DIFFERENT
+-- path — a plain record's head IS its key, so `resolveFieldRecord` arm (a) answers
+-- them out of the identity companion (#1319 unit 3), never reaching the fallback this
+-- cell is about.  They are the "unrelated code still behaves" half.
+import ahold.{Holder, mkH}
+import plainlib.{Plain, mkP}
+
+main : <IO> Unit
+main =
+  putStrLn
+    ("h=" ++ intToString mkH.hx ++ "," ++ intToString mkH.hy ++ " p=" ++ intToString mkP.hx ++ "," ++ intToString mkP.hy)
