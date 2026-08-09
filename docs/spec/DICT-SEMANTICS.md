@@ -2116,6 +2116,99 @@ module-qualified identity.
   both, and the conflict will surface as a per-call-site decision about an empty
   origin — which is the defect I6.3 exists to forbid.
 
+- **I7 — An OPERATOR's class, and a numeric literal's class, are fixed by the language
+  definition. They are not resolved by name, and no user declaration can capture
+  them.** I4 gives an identity to every declaration and rules on occurrences; I6 rules
+  on heads with no declaration behind them. A third population is governed by neither:
+  the predicates this implementation **synthesizes** at an operator or a literal. `1 +
+  1` demands `Num`, `x == y` demands `Eq`, `x < y` demands `Ord`, `xs ++ ys` demands
+  `Semigroup` — and at none of those sites did the programmer write a class name.
+  There is **no occurrence to resolve**, so I4's machinery does not reach them, and
+  the mechanical reading (*"look the spelling up in whatever interface table is in
+  scope"*) is the wrong answer rather than an under-specified one.
+
+  **The rule.** For each operator and for the numeric literal, the class its
+  synthesized predicate names is a **fixed constant of the language**, denoting the
+  **prelude's** declaration of that class and carrying that declaration's I4 identity
+  `(originModule = the prelude module, name)`. It is the same class in every module of
+  every graph. An implementation MUST NOT determine it by looking up the class
+  spelling in a table that any non-prelude declaration can write to, and MUST NOT
+  determine it by resolving the operator to a method name and reading that method's
+  class.
+
+  The bindings are part of the language definition, not of any user's scope:
+
+  | Surface | Synthesized predicate | Prelude method the elaboration uses |
+  |---|---|---|
+  | `+` `-` `*` `/` `%`, unary `-` | `Num τ` | `add` / `sub` / `mul` / `div` / `negate` |
+  | `==` `!=` | `Eq τ` | `eq` |
+  | `<` `>` `<=` `>=` | `Ord τ` | `compare` and its derived methods |
+  | `++` | `Semigroup τ` | `append` |
+  | integer literal `n` | `Num τ` | `fromInt` |
+
+  Four qualifications, each of which changes the rule rather than decorating it:
+
+  1. **This is an instance of I4's qualification 2, not an exception to I4.** That
+     qualification already says the ambiguity rule *"applies only to occurrences
+     resolved BY NAME"*, and gives `r.f` as the case where the spelling is not the
+     resolution key. An operator is the stronger form of the same fact: the spelling
+     is not merely not the key, **it is not present**. I7 therefore does not weaken
+     I4's *"two modules may declare the same name"* — it says what the synthesized
+     predicate denotes when neither module's name was written down.
+
+  2. **A user MAY declare an interface spelled `Num`, `Eq`, `Ord` or `Semigroup`, and
+     it is never rejected for that.** I4 states that the reject-at-declaration
+     alternative is not adopted, and I7 does not reintroduce it by the back door. Such
+     a declaration is an ordinary interface with its own I4 identity; users may
+     `impl` it and call its methods by name. What it does **not** do is capture an
+     operator: `1 + 1` in that same module still demands the *prelude's* `Num`. A
+     program that wants the user's class must name it — by calling its methods, or by
+     writing it in a signature — which is an occurrence resolved by name and therefore
+     governed by I4 in the ordinary way.
+
+  3. **The identity must be DERIVED from the prelude's own declarations, never
+     invented.** The prelude is a module (§7.1 U1; `SHADOW-SEMANTICS.md` S1), its
+     `interface` declarations carry I4 identities like any other, and those
+     declarations are in hand wherever the operator predicates are synthesized. The
+     implementation MUST read the identity off them. It MUST NOT fabricate an ambient
+     module id for the prelude — that is the I6.3 failure in a different namespace,
+     and it is unnecessary here because a real declaration exists to read.
+
+  4. **Absent the prelude, there are no built-in classes and the operators impose no
+     class constraint.** A driver elaborating without the prelude (a bare-HM
+     configuration) has no `Num`/`Eq`/`Ord`/`Semigroup` declaration to denote, so the
+     synthesized predicates are not merely undischarged — they are **not
+     synthesized**. The gate an implementation tests before synthesizing MUST be *"is
+     the PRELUDE's class present"*, answered from the prelude's declarations. It MUST
+     NOT be *"is some interface named `Num` registered"*, which a user declaration can
+     satisfy: that gate makes a user's class both the trigger for the obligation and,
+     under a name-keyed lookup, its referent — the capture this clause forbids,
+     reached through the gate instead of through the payload.
+
+  ⚠️ **The failure this rules out is REACHABLE TODAY, and it is silent.** The
+  numeric-literal path is the one place this implementation already anchors a built-in
+  class by name — it elaborates a literal to a `fromInt` occurrence and resolves
+  `fromInt` in the **user's term scope** — so any binding spelled `fromInt` re-anchors
+  every numeric literal in the module. Measured on `adb789ca`: a file whose only
+  addition is a top-level `fromInt : Int -> Float` typechecks at exit 0 and then
+  `println (1 + 1)` prints **`2.0`** under the interpreter and **`2`** from the
+  compiled binary — two engines, two answers, no diagnostic, on a program the
+  implementation accepts. The binding need not be an interface method (a plain
+  function does it), need not collide with any interface *name*, and need not be
+  top-level (a `let` binder does it). This is why qualification 1 is stated as
+  "not present" rather than "not the key": an implementation that anchors an
+  operator's class by resolving *any* name — the class's or its method's — has
+  already lost, and the literal path is the proof.
+
+  ⚠️ **Do not read I7 as licence to skip the dictionary.** I7 fixes *which class* an
+  operator demands; §5 still fixes how the demand is discharged. An operator whose
+  predicate is satisfied by a user instance must dispatch through that instance's
+  dictionary exactly as a method call does. An implementation that records the
+  predicate, accepts the program, and then evaluates the operator by a primitive that
+  only understands built-in representations satisfies I7's identity requirement while
+  violating §5 and §9's type preservation — accepting a program it cannot run. That
+  is a distinct defect from the one I7 rules out, and closing I7 does not close it.
+
 ---
 
 ## 9. Soundness statements (targets for a later proof/audit)
@@ -2269,6 +2362,15 @@ clauses were written *because* behaviour existed with no governing rule, so the 
 record where the behaviour and the rule now differ rather than pretending the clauses
 were already in force.
 
+The **§8 I7** rows were added with clause I7 (2026-08-10) and verified against source
+at `adb789ca`. Unlike every batch above them, their verdicts are **first-hand
+behavioural measurements on a binary built from that commit**, not source reading:
+each 🔴 cell names the program, the three verbs, and the exit codes it was derived
+from. Where a row says a divergence is *unreachable today*, it also names **what makes
+it unreachable and when that expires** — in every case the prelude flatten that §7.1
+**U1** removes — because "unreachable" without that is a verdict with a hidden premise,
+which is what §0's non-derivation principle forbids recording.
+
 The **§8 I6** rows were added with clause I6 (2026-08-01) and verified against source
 at `fa07eaa7`. Several are marked 🟡 rather than ✅ on purpose: the property *is* true
 of the tree today, but it is true **because of the very name-collapse I4 rejects**, so
@@ -2365,6 +2467,10 @@ function rather than over the pass that was expected to call it.
 | §8 **I6.2 (b)** — UNFORGEABLE: no source file may produce a head carrying the reserved origin | ✅ **VERIFIED at the SURFACE level, over EVERY frontend producer — not just the parser.** `compiler/frontend/parser.mdk` has exactly **two** `TyCon`-constructing sites: `parseTyAtom:2026`'s `TUpper c` arm (`:2030-2034`), and `tupleCtorTyOfArity:2102` (`:2105`) — the `(,)`/`(,,)`/… sugar, which produces exactly `tupleCtorTyName:2109`. A `TIdent` becomes `TyVar` instead (`:2035`). `__tupleN__` begins with `_`, and `identStartLower:1637` is `isLower (at src p) \|\| at src p == '_'` (`compiler/frontend/lexer.mdk:1638`), so the spelling can never arrive as `TUpper`. The tree states the invariant itself: *"A `TyCon` can only start at a `TUpper` token (`parseTyAtom`)"* (`compiler/frontend/parser.mdk:3648`). 🚨 **The parser is NOT the sole producer, and a claim that it is does not survive a grep — this cell said only "the parser" at first and that scoping was the same defect the preamble above catalogues.** `compiler/frontend/desugar.mdk` builds three more: `derivedImpl:183` (`tys = [TyCon tyName None]`, `:187`), `appliedHead:515`, and `pinType:979`. **All three take an already-parsed UPPER name**, which is what actually closes the route: the `deriving` path's `name` is `parseData:2924`'s `name <- upperNameP` (`:2927`), and the map/set-literal path's is `upperBrace:831`'s `x` reaching `classifyBrace:899` — and `upperNameFor:1988` accepts `TUpper` and **fails on everything else** (`:1990`). So every frontend `TyCon` producer derives its name from a `TUpper` token or from the `(,)` sugar, which is a stronger statement than a sole-producer claim would have been. (Remaining sites construct no new name: `substTyVars:15003` rebuilds `TCon n` from the `n` it matched, `typecheck.mdk:13282` uses an internal `RScalar` route tag, and `compiler/entries/fuzz_gen_main.mdk:437-443` is a fuzz generator, not a source path.) ⚠️ **NOT ESTABLISHED at the `Mono` level — see the keying column** | that the reserved origin cannot be named by user text | ⚠️ **The tempting differential is an INVERSION — do not read it as a refutation.** `impl Q (,)` applied to `Int` rejects, while `impl Q __tuple2__` applied to `Int` accepts and prints. That is **not** forgery of the builtin: `__tuple2__` parsed as a type **variable**, so `headTyconTy _ = None` (`compiler/types/typecheck.mdk:12463`) filed the impl in the headless bucket — the author wrote a general `impl Q a` with an odd-looking variable name, and the accept is correct. The observation is evidence *for* (b), by a mechanism a `Mono`-level reading cannot see. 🔴 **The `Mono` level is now VERIFIED REACHABLE — MEASURED 2026-08-02, no longer "suspect"**: the row below correctly recorded that the *signature-position* rigid is closed and that *"every other path on which `fromAstTypeE`'s `TyVar` fallback or `paramMonoOf` actually fires"* was untested. It is the **constructor-field** position, and it forges the builtin:<br>`interface Q a where qq : a -> Int` + `impl Q (,)` + `data Bad = Bad __tuple2__` + `use (Bad v) = qq v` **checks clean, exit 0**, on a pre-split binary. Control: rename the rigid to `zzz` and it rejects, `No impl of Q for zzz` — so the *only* thing making it accept is the reserved spelling. A second, independent route: `data Bad = Bad __tuple2__` + `g : Bad -> (,)` + `g (Bad v) = v` also checks clean, i.e. the fabricated head **unifies with** the builtin head, not merely dispatches to it. `__tuple2__` is a legal type-variable spelling because `identStartLower` (`compiler/frontend/lexer.mdk:1638`) admits a leading `_`. Same shape as the already-documented `__none__` forgery (`candidateBucket:11976-11985`). **OWED — #1243** (filed 2026-08-02 as the dedicated issue for this `Mono`-level forgery; #1110 is the multi-PR stage and owns I6.1, not this cell — pinned by `test/must_fail_fixtures/1243-rigid-forges-builtin-tuple-head/`, which self-drains when it is fixed). **S3, not S0: the forging type is UNINHABITABLE** — the declaring type's field is an unbound rigid and a rigid unifies only with itself, so `mk = Bad (1, 2)` is rejected `Type mismatch: (,) vs (a, b)` (measured) and the wrongness is type-level only. ⚠️ A **bound** type parameter does NOT forge (`data Box __tuple2__ = Box __tuple2__` / `unbox : Box Int -> (,)` errors `Type mismatch: (,) vs Int`, measured) — the parameter is substituted before any head comparison, so **only an UNBOUND rigid reaches this**, i.e. the sole route in is #1240's shape. It is also the sharpest reason the I6 corollary row is not optional. ⚠️ **ARCH A-1 PR "A" PRESERVED this forgery deliberately** — the split is answer-preserving by ruling (carrier now, semantics later), so the six sites that used to compare the two populations with one `TCon` name-equality now carry **explicit** cross-population arms rather than falling to a wildcard: `unifyN:3590`, `matchStep:12753`, `cohGoR`, `cohStep`, `cohEqR`, `monoSameGiven`, plus `tupleSpine:13859`. Each names this clause in its own comment. Without them the two repros above become `No impl of Q for (,)` and `Type mismatch: (,) vs (,)` — a silent-to-loud ANSWER CHANGE, which is exactly what the ruling excluded from this step. So the forgery is now **explicit and greppable** (`grep -nw TRigid`) instead of emergent, but it is NOT drained. ✅ **ONE construction route is PROBED AND CLOSED — the SIGNATURE-POSITION rigid.** Given `interface Q a` + `impl Q (,)`, the binding `g : __tuple2__ -> Int` / `g v = q v` — a rigid whose spelling *is* the reserved tuple tag — is **rejected**, `Could not deduce 'Q __tuple2__' from the signature of 'g'`, and the control with the rigid renamed `zzz` rejects **byte-identically** (`Could not deduce 'Q zzz' …`). So the fabricated head does not unify with the builtin head at the point that matters, even though the message shows the rigid genuinely carrying the tag spelling. ⚠️ **The tree explains WHY, which is what makes this durable rather than anecdotal**: *"A rigid signature variable is NOT reified to a `TCon` here"* (`compiler/types/typecheck.mdk:12176-12177`) — a signature's free variable is bound by the scheme and stays an unbound `TVar`, so `fromAstTypeE`'s rigid fallback (`:4372`; it was `:4279` and built a `TCon` pre-#1110) never fires for it. 🚨 **SCOPE OF THE PROBE, stated because a passing probe of ONE route is not a proof of a negative** — and this table's own preamble enumerates the instances where a scoped search produced a confidently wrong "no site exists" verdict (§5.1 **M2**, the record-field half of §8 **I4**, and §8 **I6.1**), so the hazard is not hypothetical here. What was tested: the **signature-position** rigid, on a built binary, **relayed** — this PR built nothing and did not re-run it. What was **not** tested: every other path on which `fromAstTypeE`'s `TyVar` fallback or `paramMonoOf` actually fires, i.e. an *unbound* parameter rather than a scheme-quantified one — which is precisely the `__none__` shape above, and it remains documented-reachable. The verdict stays OWED |
 | §8 **I6.3** (`""` is not a module identity) | 🟡 **PARTIAL — the sentinel exists and is READ AS ONE.** `cohImplsOf:10716` is defined as `cohImplsOfMid "" d` (`:10717`) — the per-module coherence sweep records no origin — and the empty string is then read back by `cohIsCrossModule:11079` (`mid1 != "" && mid2 != "" && mid1 != mid2`, `:11080`) and `cohSoftInScope:11058` (whose first arm is `cohSoftInScope "" "" = True`, `:11059`). **OWED — #1110** for the elimination | which coherence sweep OWNS a ⊑-incomparable pair, and whether the message names both modules | ⚠️ **A MIGRATION hazard, not a live defect** — the severity rests on the reachability row below, not on this one. Today `""` reads as *"origin not recorded"*, and its only consumers are message wording (`cohHardMsg:11074`, `cohWhereSuffix:11094`) and sweep ownership (`cohClassify:11037`'s drop arm `:11042`, a de-duplication) — **no acceptance decision**. A-1 makes real origins available at both sweeps; the clause forbids promoting the sentinel to an identity at that moment rather than eliminating it. The origins the clause says exist are already in the tree for the prelude (`coreExports:2494`'s `modId = "core"`, `compiler/frontend/resolve.mdk:2496`) |
 | §8 **I6.3 (reachability)** — no comparison mixes `""` with a real id today | ✅ **CHECKED, not assumed** — `cohScan` has exactly **two** call sites: `checkCoherence:11142` over `cohCollectImpls:11548` (every mid `""`) and `globalCoherenceConflict:11588` over `cohCollectModuleImpls:11564` (mids from the loader). Each collector is uniform, so a `("" , real)` pair never forms | the severity of the row above: a mixed pair would drop a soft finding, never accept anything wrong | 🔴 **the "every mid real" half is INHERITED FROM THE PRODUCER, NOT ENFORCED AT THE COLLECTOR — name the owner or this row rots the moment A-1 changes the producers.** `cohCollectModuleImpls:11564` pattern-matches `(mid, prog)` and passes `mid` through **without any non-emptiness test**; the guarantee lives entirely in `moduleIdOfPath:117` (`compiler/driver/loader.mdk`), which is `slashToDot (stripSuffixStr ".mdk" (relUnderRoots roots path))` (`:119`) and would yield `""` for a path of exactly `<root>/.mdk`. Nothing asserts it: where that degenerate name is excluded at all it is excluded **incidentally**, by a dot-entry filter written for a different purpose — `dropDotEntries:1427`, applied in `enumerateDir` (`compiler/tools/refindex.mdk:1412`), one frame below `enumerateMdkFiles:1403` — and on a different code path. **So the invariant has no owner.** Reachability of the degenerate path through the loader's own enumeration was **not** established here (structural reading; no binary run) — UNVERIFIED, and deliberately not claimed either way |
+| §8 **I7 (operators)** — the class an OPERATOR demands is the prelude's, fixed | `inferBinop:7148-7159` (`compiler/types/typecheck.mdk`) dispatches `+ - * / %` → `numArithOp:7279`, `== !=` → `eqCompareOp:7448`, `< > <= >=` → `ordCompareOp:7469`, `++` → `appendOp:7183`, each calling `recordIfaceObligation:7200` with a **literal `String`** | 🟡 **HOLDS — but incidentally, and the reason it holds is not the reason I7 gives.** The literal name is not resolved against anything, so no user declaration can redirect it; that much is I7-conformant by accident of the constant being hard-coded. What the constant does **not** carry is an identity: the predicate reaches `Predicate { iface : String, args }:2888` bare, so the *prelude's* `Num` and a hypothetical user `Num` would be indistinguishable downstream if both were ever registered | 🔴 **bare `String`, therefore by I4 not a key.** Today unreachable-in-an-accepted-program: a user redeclaration of a prelude interface name is rejected `Duplicate interface: <N>` — **MEASURED at `adb789ca` on 12 cells** (`Num`/`Eq`/`Ord`/`Semigroup`/`Display`/`Mappable`, flat + module + imported + *un*imported), every verb, exit 1. ⚠️ **That protection is an ARTIFACT OF THE PRELUDE FLATTEN, not a rule** — it fires because the prelude's decls sit in the same declaration list as the user's, so the collision reads as a within-module duplicate. §7.1 **U1** requires the prelude to be a node instead, at which point two *modules* declare the name, I4 makes that legal, and the protection evaporates. `resolve.mdk:4245-4258` already **depends** on it in writing (*"unreachable in an accepted program — resolve rejects it outright"*), so U1 retires a load-bearing assumption in a second file |
+| §8 **I7 (literals)** — the class a numeric LITERAL demands is the prelude's, fixed | `inferNumLit:7296` (`compiler/types/typecheck.mdk`) guards on `ifaceRegistered "Num"` then resolves the literal through **`lookupVar env "fromInt"`** — a bare-name lookup in the **user's term scope** | 🔴 **DIVERGENT — I7's central prohibition, violated, silently.** Any binding spelled `fromInt` re-anchors every numeric literal in the module. **MEASURED at `adb789ca`:** adding only `fromInt : Int -> Float` / `fromInt _ = 10.5` to a file makes `check` exit 0 (`0 errors`) while `println (1 + 1)` prints **`2.0`** under `run` and **`2`** from the built binary — an eval/native divergence at exit 0 on an accepted program. A plain top-level function suffices (no interface, no name collision); a `let` binder suffices. The loud cousin (a `fromInt` whose return type has no `Num` impl → a cascade of prelude-internal errors mislocated to the user's line 1) is filed as **#259** at S2; the silent, engine-divergent shape above is **not** covered by that issue | 🔴 keyed on the **term-namespace spelling `fromInt`** in the user's scope — the exact "resolve the operator to a method name and read that method's class" anchoring I7 forbids |
+| §8 **I7 qual. 4** — the synthesis gate must be "the PRELUDE's class is present", not "some class of that name is registered" | `ifaceRegistered:7259` → `registeredIfacesRef : Ref (OrdMap Unit):3968`, written by `registerMethodIfaceParamsMethods:19594` for **every** interface declared anywhere, prelude or user | 🔴 **DIVERGENT by construction.** The gate asks a bare-name membership question over a table any declaration writes to. Unreachable today only via the same flatten artifact as the operators row; under §7.1 U1 a user `interface Num` would satisfy the gate, so the obligation would be synthesized *because of* the user's class — the capture I7 qual. 4 rules out, reached through the gate rather than the payload | 🔴 bare `String` key, `Unit` value. ⚠️ The `Unit` value is the stated reason (#1111 A-2.4 / A-2.2b, ledger at `:7211-7258`) this table was **deliberately** left bare-keyed. I7 does not retract that reasoning so much as relocate it: the operator sites do not need a lookup over *registered* interfaces at all, they need the **prelude's** four identities, which is a different and smaller table |
+| §8 **I7** ⚠️2 (identity fixed ⇏ dictionary discharged) — an operator satisfied by a user instance must dispatch through it | `evalArith:1852` (`compiler/eval/eval.mdk`), the arithmetic fallthrough: `panic ("unknown op '" ++ op ++ "'")` | 🔴 **DIVERGENT, and it is the distinct §5 defect the clause's second trap names.** The `Num` obligation for `+ - * / %` is recorded and correctly discharged against a user `impl Num T`, and then no dictionary is projected. **MEASURED at `adb789ca`:** a complete `impl Num Money` with `Money 3 + Money 4` gives `check` exit 0, `run` exit 1 `E-PANIC: unknown op '+'`, `build` exit **0**, and the built binary **segfaults**, `E-FATAL-SIGNAL`, exit **139** — on both the flat and the module arm. ⚠️ **The three other operator classes do NOT share this**: `==` (`Eq`), `<` (`Ord`) and `++` (`Semigroup`) each dispatch to the user's impl correctly and print the right answer on both engines, measured on the same binary. The gap is arithmetic-only | — (a §5 dispatch gap, not a keying one; recorded here because I7's identity ruling is what makes it visible as a *separate* defect rather than a consequence) |
 | §9 soundness statements (type preservation, semantic adequacy, coherence, evaluator interchangeability, `gen-sig` authority) | composite of every row above | explicitly "targets for a later proof/audit" (§9's own header) — not independently implemented checks | — |
 
 **Partial enforcement found (NOT "unimplemented"):** §3 W2 (instance-context
