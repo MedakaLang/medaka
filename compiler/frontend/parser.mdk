@@ -1567,27 +1567,30 @@ recordPatFieldRest name nameLoc _ = pure (RecPatField name nameLoc None)
 -- user would plausibly try as a name), or None for a structural token (`=`, `(`,
 -- `,`, …) whose presence is the ordinary end-of-pattern signal that MUST stay a
 -- recoverable `failP` so `many parseParamPat` / list-cons parsing terminates.
--- `mut`/`record`/`function`/`with` are listed for a complete enumeration of the
--- table but never reach this arm on the loader/user-facing path (`parseResult`/
+-- `mut`/`function`/`with` are listed for a complete enumeration of the table but
+-- never reach this arm on the loader/user-facing path (`parseResult`/
 -- `parseLocatedResult`): a pre-grammar token scan —`letMutRemovedMsg` etc.,
 -- ~parser.mdk:4108— preempts them there. The narrower internal `parse`/
 -- `parseLocated` entry (self-typecheck tool) runs no such scan, so the arm can
 -- fire for them — harmless, since none is ever a legal identifier under any
--- channel.
+-- channel. (`record` is NOT in this table any more: it is an ordinary
+-- identifier, #62 — see `keywordOrIdent` in lexer.mdk for why it was freed and
+-- `mut`/`function` were not.)
 -- ⚠️ `let`/`if`/`then`/`else`/`rec` are DELIBERATELY absent (→ None → recoverable
 -- "expected pattern"): `if` legitimately follows a pattern as a match-arm GUARD
 -- (`pat if cond => body`) and `rec` legitimately follows `let` (`let rec go = …`),
 -- so `many parsePatAtom` / the let-binder path MUST stay recoverable at them (a
--- fatal here miscompiles the compiler's own guarded arms and every `let rec`); the
--- others are implausible as identifiers and kept generic so existing handling
--- never regresses.
+-- fatal here miscompiles the compiler's own guarded arms and every `let rec`).
+-- They are still RESERVED — you cannot bind one — so the diagnostic for the
+-- unambiguous case is produced POSITIONALLY instead, by `firstCtxKwDeclIdx`
+-- below (#935), which reuses `reservedKeywordMsg` so the same
+-- `P-RESERVED-KEYWORD` code and `append _` fix reach the user.
 reservedIdentKeyword : Token -> Option String
 reservedIdentKeyword TWith = Some "with"
 reservedIdentKeyword TMut = Some "mut"
 reservedIdentKeyword TIn = Some "in"
 reservedIdentKeyword TMatch = Some "match"
 reservedIdentKeyword TData = Some "data"
-reservedIdentKeyword TRecord = Some "record"
 reservedIdentKeyword TInterface = Some "interface"
 reservedIdentKeyword TDefault = Some "default"
 reservedIdentKeyword TImpl = Some "impl"
@@ -2402,12 +2405,12 @@ importIdent = do
 
 -- a path component: a lowercase module name, an Uppercase name (e.g.
 -- `collections.HashMap`), or a keyword that is legal as a path component
--- (`test`, `record`, `data`, `type`).
+-- (`test`, `data`, `type`).  `record` needs no arm of its own since #62 — it
+-- lexes as a plain `TIdent` and the first arm takes it.
 importIdentFor : Token -> Parser String
 importIdentFor (TIdent x) = emit x
 importIdentFor (TUpper x) = emit x
 importIdentFor TTest = emit "test"
-importIdentFor TRecord = emit "record"
 importIdentFor TData = emit "data"
 importIdentFor TType = emit "type"
 importIdentFor _ = failP "expected import path component"
@@ -4494,15 +4497,127 @@ firstMutIdx toks i
   | otherwise = firstMutIdx toks (i + 1)
 
 -- `record` has been removed as a declaration keyword (records are now the
--- `data X = { … }` short form).  `record` (TRecord) is a reserved word with no
--- remaining valid use, so its presence is always the removed keyword.  A
--- pre-grammar token scan surfaces a located hint (pointing at `record`).
--- Index of the first `TRecord` in the stream, or -1 if absent.
-firstRecordIdx : Array Token -> Int -> Int
-firstRecordIdx toks i
+-- `data X = { … }` short form), but — unlike `mut`/`function` above — the WORD
+-- is an ordinary identifier again (#62; `keywordOrIdent`, lexer.mdk, carries the
+-- reasoning for the split).  So this scan can no longer key on the token: it
+-- keys on the removed CONSTRUCT'S SHAPE, the same way `firstForeignKwIdx` keys
+-- on `for`/`while`/`def` (also plain `TIdent`s).
+--
+-- Shape: a TOP-LEVEL logical line that starts `record Upper`, and whose first
+-- depth-0 `=` is immediately followed by `{`, with no `|` at that brace's own
+-- depth before its `}`.
+--
+-- SAFETY (why this can never fire on valid Medaka).  A `{` that STARTS an
+-- expression has exactly one production in this grammar — `parseRecordUpdate`
+-- (`parseAtomRaw`'s `TLBrace => parseRecordUpdate`), which is `{ expr | field =
+-- val, … }` and therefore ALWAYS contains a `|` at the brace's own depth.  A
+-- constructor record literal (`P { x = 1 }`) has no `|`, but it is `TUpper`-led
+-- (`upperAtomRest c TLBrace`), so its `{` is never the token right after `=`.
+-- Hence `= {` with no depth-1 `|` is not a parseable expression under any arm,
+-- and a decl `record Foo = { … }` that reaches this scan was never going to
+-- compile.  Verified on the binary: `f Point = { x : Int, y : Int }` fails with
+-- `unexpected ','; expected '|'`, while `f Pat = { r | x = 1 }` and `f Pat = P
+-- { x = 1 }` both compile — and neither of the latter two matches this shape.
+--
+-- The `Upper` requirement keeps it off ordinary code that merely binds the name
+-- (`record = 1`, `record r = { r | x = 1 }`): the removed construct always named
+-- an uppercase type.  Located at `record`.
+
+-- Is there a `|` at THIS brace's own depth before it closes?  `i` points just
+-- past the `{`; `depth` counts nested brackets opened since.  True also on a
+-- malformed/unclosed brace (fail safe: don't claim the construct).
+braceHasBarAtTop : Array Token -> Int -> Int -> Bool
+braceHasBarAtTop toks i depth
+  | i >= arrayLength toks = True
+  | peekTok toks i == TEof = True
+  | peekTok toks i == TPipe && depth == 0 = True
+  | peekTok toks i == TRBrace && depth == 0 = False
+  | isBracketOpenTok (peekTok toks i) =
+    braceHasBarAtTop toks (i + 1) (depth + 1)
+  | isBracketCloseTok (peekTok toks i) =
+    braceHasBarAtTop toks (i + 1) (depth - 1)
+  | otherwise = braceHasBarAtTop toks (i + 1) depth
+
+-- Walk the logical line from `i` looking for a depth-0 `=` immediately followed
+-- by `{` whose body has no top-level `|`.  Stops at the line's end.
+lineIsRecordBody : Array Token -> Int -> Int -> Bool
+lineIsRecordBody toks i depth
+  | i >= arrayLength toks = False
+  | depth == 0 && isLineEndTok (peekTok toks i) = False
+  | depth == 0 && peekTok toks i == TEqual && peekTok toks (i + 1) == TLBrace =
+    not (braceHasBarAtTop toks (i + 2) 0)
+  | isBracketOpenTok (peekTok toks i) =
+    lineIsRecordBody toks (i + 1) (depth + 1)
+  | isBracketCloseTok (peekTok toks i) =
+    lineIsRecordBody toks (i + 1) (depth - 1)
+  | otherwise = lineIsRecordBody toks (i + 1) depth
+
+isLineEndTok : Token -> Bool
+isLineEndTok TNewline = True
+isLineEndTok TIndent = True
+isLineEndTok TDedent = True
+isLineEndTok TEof = True
+isLineEndTok _ = False
+
+-- Index of the `record` starting a removed record declaration, or -1.
+-- `depth` is the INDENT nesting: only depth 0 is a declaration position, so a
+-- local binding named `record` inside a `do`/`where` block is never touched.
+firstRecordDeclIdx : Array Token -> Int -> Int -> Bool -> Int
+firstRecordDeclIdx toks i depth lineStart
   | i >= arrayLength toks = 0 - 1
-  | peekTok toks i == TRecord = i
-  | otherwise = firstRecordIdx toks (i + 1)
+  | lineStart && depth == 0 && peekTok toks i == TIdent "record" && isUpperTok (peekTok toks (i + 1)) && lineIsRecordBody toks (i + 2) 0 = i
+  | peekTok toks i == TIndent = firstRecordDeclIdx toks (i + 1) (depth + 1) True
+  | peekTok toks i == TDedent = firstRecordDeclIdx toks (i + 1) (depth - 1) True
+  | peekTok toks i == TNewline = firstRecordDeclIdx toks (i + 1) depth True
+  | otherwise = firstRecordDeclIdx toks (i + 1) depth False
+
+isUpperTok : Token -> Bool
+isUpperTok (TUpper _) = True
+isUpperTok _ = False
+
+-- #935.  `let`/`rec`/`if`/`then`/`else` are reserved, but they are deliberately
+-- absent from `reservedIdentKeyword` (see its comment: a fatal there would
+-- break match-arm guards and every `let rec`), so binding one used to produce a
+-- grammar-internal error that never names the real problem — `let = 5` reported
+-- ``unexpected `=`; expected `rec` ``, and `if = 5` reported ``unexpected `if` ``.
+--
+-- A TOP-LEVEL logical line whose FIRST token is one of these five and whose
+-- SECOND is `=` or `:` is unambiguously an attempted top-level binding or type
+-- signature named by a keyword — the position issue #935 asks for.
+--
+-- SAFETY.  Depth 0 excludes every position where these words are legal: a
+-- match-arm guard (`pat if cond => body`) and an `if`/`then`/`else` statement
+-- both live inside an INDENT, and `rec` only ever follows `let`, never starting
+-- a line.  Requiring `=`/`:` as the very next token excludes the remaining
+-- top-level shapes outright — no valid Medaka has `if =`, `then :`, `let =`,
+-- `rec =` or `else :`, because each of these keywords must be followed by an
+-- expression or a binder.  Located at the keyword, and worded with
+-- `reservedKeywordMsg` so the driver maps it to `P-RESERVED-KEYWORD` and offers
+-- the same machine-applicable `append _` fix the 22 fully-reserved words get.
+contextualKwName : Token -> String
+contextualKwName TLet = "let"
+contextualKwName TRec = "rec"
+contextualKwName TIf = "if"
+contextualKwName TThen = "then"
+contextualKwName TElse = "else"
+contextualKwName _ = ""
+
+isContextualKw : Token -> Bool
+isContextualKw t = contextualKwName t != ""
+
+isBinderTok : Token -> Bool
+isBinderTok TEqual = True
+isBinderTok TColon = True
+isBinderTok _ = False
+
+firstCtxKwDeclIdx : Array Token -> Int -> Int -> Bool -> Int
+firstCtxKwDeclIdx toks i depth lineStart
+  | i >= arrayLength toks = 0 - 1
+  | lineStart && depth == 0 && isContextualKw (peekTok toks i) && isBinderTok (peekTok toks (i + 1)) = i
+  | peekTok toks i == TIndent = firstCtxKwDeclIdx toks (i + 1) (depth + 1) True
+  | peekTok toks i == TDedent = firstCtxKwDeclIdx toks (i + 1) (depth - 1) True
+  | peekTok toks i == TNewline = firstCtxKwDeclIdx toks (i + 1) depth True
+  | otherwise = firstCtxKwDeclIdx toks (i + 1) depth False
 
 -- `function` has been removed as a keyword: a point-free one-arg match is
 -- spelled `x => match x { … }`, or as a multi-clause definition.  `function`
@@ -4804,7 +4919,8 @@ parseResultWith src tokList offList =
   let srcLen = stringLength src
   let seIdx = firstSlashEqIdx toks 0
   let lmIdx = firstMutIdx toks 0
-  let recIdx = firstRecordIdx toks 0
+  let recIdx = firstRecordDeclIdx toks 0 0 True
+  let ckIdx = firstCtxKwDeclIdx toks 0 0 True
   let fnIdx = firstFunctionIdx toks 0
   let ilIdx = firstInlineLetMissingIn toks 0
   let coIdx = firstHsCaseOfIdx toks 0
@@ -4828,6 +4944,8 @@ parseResultWith src tokList offList =
         Err (mkLocated src toks offs srcLen letMutRemovedMsg lmIdx)
       else if recIdx >= 0 then
         Err (mkLocated src toks offs srcLen recordRemovedMsg recIdx)
+      else if ckIdx >= 0 then
+        Err (mkLocated src toks offs srcLen (reservedKeywordMsg (contextualKwName (peekTok toks ckIdx))) ckIdx)
       else if fnIdx >= 0 then
         Err (mkLocated src toks offs srcLen functionRemovedMsg fnIdx)
       else if ilIdx >= 0 then

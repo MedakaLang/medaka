@@ -1,0 +1,13 @@
+-- #62: `record` is an ordinary identifier — a value, a parameter, a field name
+-- and a local binding, all in one file.  Expected: ZERO diagnostics.
+data Cfg = { record : Int }
+
+record : Int
+record = 5
+
+bump : Cfg -> Int -> Cfg
+bump c record = { c | record = record }
+
+main =
+  let record = bump (Cfg { record = 1 }) 9
+  println record.record

@@ -1,0 +1,21 @@
+-- #935 BYSTANDER fixture: every one of the five contextual keywords in a
+-- position where it is LEGAL, including the two that forced them out of
+-- `reservedIdentKeyword` in the first place — a match-arm `if` guard and
+-- `let rec`.  `firstCtxKwDeclIdx` only fires at depth 0 with `=`/`:` next, so
+-- none of these may be touched.  Expected: ZERO diagnostics.
+classify : Int -> String
+classify n = match n
+  x if x > 0 => "pos"
+  _ => "other"
+
+countdown : Int -> Int
+countdown n =
+  let rec go k = if k <= 0 then 0 else go (k - 1)
+  go n
+
+main =
+  let x = if 1 > 0 then 1 else 0
+  if x > 0 then
+    println (classify (countdown 3))
+  else
+    println "no"

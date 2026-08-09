@@ -47,6 +47,7 @@ bodyChainTopOp : Expr -> Option String
 bodyIsBlock : Expr -> Bool
 braceBlockFrom : Array Token -> Int -> Int -> Int -> Int
 braceBlockMsg : String
+braceHasBarAtTop : Array Token -> Int -> Int -> Bool
 braceItems : String -> Parser Expr
 braceItemsFor : String -> Token -> Parser Expr
 bracketIndexRest : Expr -> Expr -> Token -> Parser Expr
@@ -74,6 +75,7 @@ concatMapC : List Ty -> List Constraint
 consField : RecPatField -> (List RecPatField, Bool) -> (List RecPatField, Bool)
 consTail : Expr -> Parser Expr
 constraintTail : Ty -> Parser Ty
+contextualKwName : Token -> String
 ctorOrVar : String -> Pat
 curryLam : List Pat -> Expr -> Expr
 dataAfterEq : String -> Token -> Parser (List Variant, List DeriveRef)
@@ -152,6 +154,7 @@ firstBacktickIdx : Array Token -> Int -> Int
 firstBlockCommentIdx : Array Token -> Int -> Int
 firstBraceBlockIdx : Array Token -> Int -> Int
 firstContentAt : Array Token -> Int -> Int -> Int
+firstCtxKwDeclIdx : Array Token -> Int -> Int -> Bool -> Int
 firstForeignKwIdx : Array Token -> Int -> Bool -> Int
 firstFunctionIdx : Array Token -> Int -> Int
 firstHsCaseOfIdx : Array Token -> Int -> Int
@@ -160,7 +163,7 @@ firstIndentIdx : Array Token -> Int -> Int -> Int
 firstInlineLetMissingIn : Array Token -> Int -> Int
 firstLexError : Array Token -> Int -> Option (Int, String)
 firstMutIdx : Array Token -> Int -> Int
-firstRecordIdx : Array Token -> Int -> Int
+firstRecordDeclIdx : Array Token -> Int -> Int -> Bool -> Int
 firstSlashEqIdx : Array Token -> Int -> Int
 firstWithIdx : Array Token -> Int -> Int
 flattenFieldPath : Expr -> Option (String, List String)
@@ -229,9 +232,11 @@ interpOpenFor : Token -> Parser String
 interpOpenStr : Parser String
 interpRest : Parser (List InterpPart)
 interpRestFor : Expr -> Token -> Parser (List InterpPart)
+isBinderTok : Token -> Bool
 isBracketCloseTok : Token -> Bool
 isBracketOpenTok : Token -> Bool
 isCloseDelim : Token -> Bool
+isContextualKw : Token -> Bool
 isContinuationOpStr : String -> Bool
 isCtorChars : Array Char -> Bool
 isCtorName : String -> Bool
@@ -241,11 +246,13 @@ isGuardLineEndTok : Token -> Bool
 isIntMinLit : Int -> Bool
 isLayoutTok : Token -> Bool
 isLeadingModifierTok : Token -> Bool
+isLineEndTok : Token -> Bool
 isNoiseTok : Token -> Bool
 isOpenDelim : Token -> Bool
 isPlainIdentTok : Token -> Bool
 isTStringTok : Token -> Bool
 isTUpperTok : Token -> Bool
+isUpperTok : Token -> Bool
 joinComma : List String -> String
 joinSemi : List String -> String
 kvElemToField : Expr -> FieldAssign
@@ -283,6 +290,7 @@ letRecStmt : Parser DoStmt
 letRecWithRemovedMsg : String
 letTailFor : Pat -> Expr -> Token -> Parser DoStmt
 lineAt : Array Int -> Int -> Int
+lineIsRecordBody : Array Token -> Int -> Int -> Bool
 lineTrailingColonNoEq : Array Token -> Int -> Int -> Bool -> Bool -> Bool
 listAfterComma : Expr -> Token -> Parser Expr
 listFor : Token -> Parser Expr

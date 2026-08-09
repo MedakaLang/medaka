@@ -1,0 +1,1 @@
+{"files":[{"file":"<fixture>","diagnostics":[{"code":"P-PARSE","kind":"parse","message":"`record` is not a keyword — declare a record as `data X = { field : T, … }`","range":{"end":{"character":1,"line":3},"start":{"character":0,"line":3}},"severity":1,"source":"medaka"}]}]}

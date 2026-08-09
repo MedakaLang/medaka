@@ -12,7 +12,7 @@
 -- algorithm + else-continuation filter + leading-operator continuation + Phase
 -- 137 expression-RHS continuation lines (a would-be INDENT that just continues
 -- an application is suppressed; resolved in the layout pass from the previous
--- significant token + a match/record-opener flag + the deeper line's first
+-- significant token + a `match`-opener flag + the deeper line's first
 -- token).  Validated byte-for-byte against the OCaml reference: 16/16 curated
 -- fixtures + all 13 real .mdk files (stdlib + this lexer lexing itself).
 --
@@ -67,7 +67,6 @@ public export data Token =
   | TElse
   | TMatch
   | TData
-  | TRecord
   | TInterface
   | TDefault
   | TImpl
@@ -167,7 +166,6 @@ tokenToString TThen = "THEN"
 tokenToString TElse = "ELSE"
 tokenToString TMatch = "MATCH"
 tokenToString TData = "DATA"
-tokenToString TRecord = "RECORD"
 tokenToString TInterface = "INTERFACE"
 tokenToString TDefault = "DEFAULT"
 tokenToString TImpl = "IMPL"
@@ -270,7 +268,6 @@ describeToken TThen = "`then`"
 describeToken TElse = "`else`"
 describeToken TMatch = "`match`"
 describeToken TData = "`data`"
-describeToken TRecord = "`record`"
 describeToken TInterface = "`interface`"
 describeToken TDefault = "`default`"
 describeToken TImpl = "`impl`"
@@ -422,6 +419,40 @@ intLitOverflows src start endp =
 -- ── Keyword table ───────────────────────────────────────────────────────
 -- True/False are NOT here: they start uppercase, so the OCaml lexer emits them
 -- as UPPER (keyword_or_ident only fires for lowercase/underscore lexemes).
+--
+-- ⚠️ THIS TABLE IS THE RESERVED-WORD SET.  A lexeme listed here can never be a
+-- variable, parameter, field, constructor-payload or module-path name; a lexeme
+-- absent from it always can.  Derive the set, never quote a count:
+--
+--   grep -n '^keywordOrIdent "' compiler/frontend/lexer.mdk
+--
+-- ── Why `record` is NOT here but `mut`/`function` ARE (#62) ─────────────
+-- All three named constructs that have since been REMOVED from the language
+-- (`record X = { … }`, `let mut`, `function`), so none of them is reserved
+-- because the grammar still needs the word.  They differ in what the word is
+-- worth as an ordinary identifier, and that is the whole criterion:
+--
+--   `record` — a genuinely useful noun.  Users name a value, a field, a type or
+--     a MODULE `record` (`import record.*`, `test/native_fixtures/
+--     keyword_import_record/`), and reserving it bought nothing but a wall.  It
+--     is therefore an ordinary `TIdent`, and the removed DECLARATION is caught
+--     positionally instead — `firstRecordDeclIdx` in parser.mdk fires on the
+--     construct's shape (`record Upper … = {` with no `|`), not on the word.
+--   `mut`, `function` — kept reserved DELIBERATELY, not by omission.  Each is
+--     the first token of a removed construct that is otherwise indistinguishable
+--     from ordinary code: `let mut x = e` is exactly `let` applied to a binder
+--     named `mut`, and `function` followed by an indented block is exactly an
+--     application.  There is no positional discriminator to move the diagnostic
+--     onto, so freeing them would trade a clear "this was removed, write X
+--     instead" for a generic parse error one line later — a strictly worse
+--     message for a construct newcomers from OCaml/JS still reach for.  The
+--     cost is that `mut`/`function` cannot be identifiers; that is the price,
+--     and it is paid knowingly.
+--
+-- If a future change gives `mut`/`function` a positional discriminator as clean
+-- as `record`'s, freeing them is the same edit: drop the row here, move the
+-- pre-scan in parser.mdk from the bare token to the construct shape, and prove
+-- the shape is never valid Medaka (see `firstRecordDeclIdx`'s safety proof).
 keywordOrIdent : String -> Token
 keywordOrIdent "let" = TLet
 keywordOrIdent "rec" = TRec
@@ -433,7 +464,6 @@ keywordOrIdent "then" = TThen
 keywordOrIdent "else" = TElse
 keywordOrIdent "match" = TMatch
 keywordOrIdent "data" = TData
-keywordOrIdent "record" = TRecord
 keywordOrIdent "interface" = TInterface
 keywordOrIdent "default" = TDefault
 keywordOrIdent "impl" = TImpl
@@ -1722,7 +1752,7 @@ continuationTok src len np
 -- ── Layout pass: RawTok stream -> Token stream ──────────────────────────
 -- Mirrors lib/lexer.mll `handle_indent` + the Phase 137 continuation-line
 -- resolution + the EOF unwind.  Threads `prev` (the previous significant token)
--- and `opener` (whether a `match`/`record` header appeared on the line being
+-- and `opener` (whether a `match` header appeared on the line being
 -- ended), so a would-be INDENT can be suppressed into an application
 -- continuation when the deeper line just continues the current expression.
 -- The layout pass threads each token's source char offset alongside it as a
@@ -1736,7 +1766,7 @@ continuationTok src len np
 -- top level (no enclosing bracket).  Each open bracket `( [ [| { .{` pushes a
 -- frame holding the count of nested layout contexts that bracket has opened
 -- (head = innermost bracket).  Inside a bracket the DEFAULT is free-form
--- (newlines invisible); when a herald (`match`/`do`/`function`/`record`) opens a
+-- (newlines invisible); when a herald (`match`/`do`) opens a
 -- block the head frame increments and the herald's `INDENT`/`NEWLINE`/`DEDENT`
 -- become live, exactly like top-level layout — until they dedent back below the
 -- herald column (frame → 0, free-form again) or the matching bracket closer
@@ -1849,7 +1879,7 @@ prevIsTrailingOp (Some t) = isTrailingContinuationOp t
 prevIsTrailingOp None = False
 
 -- Inside a bracket (free-form), the ONLY lines that arm a nested layout context
--- are the locked herald set (LAYOUT-BRACKETS §6.1): `match`/`record` (carried by
+-- are the locked herald set (LAYOUT-BRACKETS §6.1): `match` (carried by
 -- the `opener` flag) and the `do` keyword (whose own next line opens the
 -- block).  Crucially this is NOT the generic top-level `not prevCanEnd` rule
 -- — after a `,` (or `=` etc.) `prevCanEnd` is also false, but a `,`-led

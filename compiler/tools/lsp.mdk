@@ -1237,14 +1237,21 @@ semanticTokensOptions = jObject
    Layout tokens (NEWLINE/INDENT/DEDENT) carry the depth/line-start signal and emit
    no token.  Robust on unparseable buffers (pure token walk). -}
 
--- Decides how an uppercase name (and record fields) is colored at this point.
+-- Decides how an uppercase name is colored at this point.
+--
+-- There used to be an `MRecord` mode here, entered only from the removed
+-- `record` keyword (`nextMode TRecord _ = MRecord`).  Freeing `record` as an
+-- ordinary identifier (#62) deleted its single producer, so the mode became
+-- unreachable and went with it.  This is not a highlighting regression: the
+-- token it keyed on could not appear in any program that parsed, so no valid
+-- source ever entered the mode — today's record fields live in `data X = { … }`
+-- and are already coloured by the `MDataHead`/`MDataVariant` path.
 data SMode =
   | MExpr
   | MType
   | MDataHead
   | MDataVariant
   | MDataPayload
-  | MRecord
   | MIfaceOne
   | MIfaceMany
 
@@ -1263,7 +1270,6 @@ isKeywordTok TThen = True
 isKeywordTok TElse = True
 isKeywordTok TMatch = True
 isKeywordTok TData = True
-isKeywordTok TRecord = True
 isKeywordTok TInterface = True
 isKeywordTok TDefault = True
 isKeywordTok TImpl = True
@@ -1298,11 +1304,9 @@ roleOf : Token -> Int -> Bool -> SMode -> Option Int
 roleOf (TUpper _) _ _ MIfaceOne = Some 7  -- interface/impl name → typeclass
 roleOf (TUpper _) _ _ MIfaceMany = Some 7  -- requires/deriving names → typeclass
 roleOf (TUpper _) _ _ mode = Some (upperRole mode)
-roleOf (TIdent _) depth lineStart mode =
+roleOf (TIdent _) depth lineStart _ =
   if lineStart && (depth == 0) then Some 3      -- top-level definition head
-  else match mode
-    MRecord => Some 4                            -- record field name
-    _ => None                                    -- local / param / reference
+  else None                                      -- local / param / reference
 roleOf (TBacktickIdent _) _ _ _ = Some 3
 roleOf (TString _) _ _ _ = Some 5
 roleOf (TChar _) _ _ _ = Some 5
@@ -1318,7 +1322,6 @@ roleOf t _ _ _ = if isKeywordTok t then Some 0 else None
 nextMode : Token -> SMode -> SMode
 nextMode TData _ = MDataHead
 nextMode TNewtype _ = MDataHead
-nextMode TRecord _ = MRecord
 nextMode TInterface _ = MIfaceOne
 nextMode TImpl _ = MIfaceOne
 nextMode TRequires _ = MIfaceMany
@@ -1328,10 +1331,8 @@ nextMode TType _ = MType
 nextMode TOf _ = MType
 nextMode TWhere _ = MExpr
 nextMode (TUpper _) MIfaceOne = MType
-nextMode TColon MRecord = MRecord
 nextMode TColon _ = MType
 nextMode TEqual MDataHead = MDataVariant
-nextMode TEqual MRecord = MRecord
 nextMode TEqual _ = MExpr
 nextMode TPipe MDataVariant = MDataVariant
 nextMode TPipe MDataPayload = MDataVariant
