@@ -37,6 +37,13 @@
 -- reach the field→owners fallback, which is a cost question rather than the 0-diagnostic
 -- question its comment gives.  Read that comment against this note before changing either.
 --
+-- ⚠️ A WRONG PICK HERE IS A WRONG VALUE, NOT ONLY A DIAGNOSTIC — since #1455's review
+-- (finding 2).  `Dup` declares `dpre` before `dx` while `wmod`'s `Wrec` declares `dx`
+-- first, so the two owners of `dx` disagree on its OFFSET and selecting the wrong one
+-- reads `99` instead of `7` on the executed binary.  Before that the record was
+-- single-field, both layouts picked index 0, and this cell could only ever have failed
+-- as a diagnostic.  Do not collapse it back.
+--
 -- Expected output, derived BY HAND before any capture and independently of any engine:
 --   mkA.dx = 7, mkW.dx = 1, so `8`.
 -- Measured on the pre-change binary: `8`, exit 0.  On the first cut of unit 2:

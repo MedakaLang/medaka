@@ -23,6 +23,13 @@
 -- this one grades that it is not decided by owner-key sort order.  A regression can
 -- hit either without the other.
 --
+-- ⚠️ A WRONG PICK HERE IS A WRONG VALUE, NOT ONLY A DIAGNOSTIC — since #1455's review
+-- (finding 2).  `Dup` declares `dpre` before `dx` while `wmod`'s `Arec` declares `dx`
+-- first, so the two owners of `dx` disagree on its OFFSET and selecting the wrong one
+-- reads `99` instead of `7` on the executed binary.  Before that the record was
+-- single-field, both layouts picked index 0, and this cell could only ever have failed
+-- as a diagnostic.  Do not collapse it back.
+--
 -- Hand-derived correct answer, independent of any engine: mkA.dx = 7, mkW.dx = 1,
 -- so `8` — the same value its sibling prints, which is the point.
 import amod.{RA, mkA}

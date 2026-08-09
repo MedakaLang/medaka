@@ -1,0 +1,40 @@
+-- THE MISSING AXIS: a type with TWO named-field CONSTRUCTORS (#1455 review, finding 1
+-- ask 2).  `diff_compiler_engines` — which grades eval == native == wasm on this corpus —
+-- WOULD have caught the defect that review found, because the interpreter resolves fields
+-- by name at run time and is structurally immune to a wrong constant offset, so it and
+-- native disagree the moment the offset is wrong.  The gate existed; the input did not.
+-- This cell is the input.
+--
+-- Two things are asserted, and neither is "the new diagnostic fires":
+--
+--   1. A multi-named-field-constructor type whose constructors AGREE on the offsets of
+--      the selected fields is still LEGAL and still correct, on every engine.  `mkA` is a
+--      `PA` and `mkB` is a `PB`, so a single stamped constructor has to serve two runtime
+--      layouts; the fields hold different numbers, so a wrong offset is a wrong value.
+--      This is the carve-out `stampableFieldRecord` deliberately keeps open, and the tree
+--      depends on it (`frontend/ast.mdk`'s `Decl.pub`,
+--      `test/references_fixtures/dup_field_def/`'s `getX t = t.x`).
+--
+--   2. A type whose constructors DISAGREE (`zmulti`'s `Wrap`) may still be DECLARED, and
+--      both of its constructors CONSTRUCTED, without changing anything about the rest of
+--      the program.  Nothing in this entry's output comes from a `.alpha` selection; it
+--      comes from `Pair` and from a `match`.  That is the "feature present, UNRELATED code
+--      still behaves" fixture `AGENTS.md` says a program-wide rule owes, and it is the one
+--      a "my feature works" fixture cannot substitute for.
+--
+-- Expected output, DERIVED BY HAND from the sources before anything was run or captured:
+--   mkA is `PA { px = 1, py = 2 }`   -> `mkA.px` = 1, `mkA.py` = 2
+--   mkB is `PB { px = 3, py = 4, … }` -> `mkB.px` = 3, `mkB.py` = 4
+--   wrapAlpha mkC = 10, wrapAlpha mkD = 110
+-- so `pa=1,2 pb=3,4 w=10,110`.
+--
+-- Counterfactual, MEASURED on a cold build of the merge base `bfcd4ea7`: an entry
+-- selecting `.alpha` on a `Wrap` instead of matching printed `d=22,11` where `medaka run`
+-- printed `d=11,22` (and, with the field types differing, SIGSEGV'd at exit 139) — which
+-- is why that selection is not in this cell and is pinned as a rejection instead.
+import zmulti.{Pair, Wrap, mkA, mkB, mkC, mkD, wrapAlpha}
+
+main : <IO> Unit
+main =
+  putStrLn
+    ("pa=" ++ intToString mkA.px ++ "," ++ intToString mkA.py ++ " pb=" ++ intToString mkB.px ++ "," ++ intToString mkB.py ++ " w=" ++ intToString (wrapAlpha mkC) ++ "," ++ intToString (wrapAlpha mkD))

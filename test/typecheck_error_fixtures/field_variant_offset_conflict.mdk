@@ -1,0 +1,27 @@
+-- T-FIELD-VARIANT-CONFLICT (#1455 adversarial review, finding 1).
+--
+-- `Wrap` has TWO named-field constructors and they place `alpha` at DIFFERENT
+-- offsets (0 in `Cfg`, 1 in `Dfg`).  A `.alpha` selection is resolved by the
+-- receiver's TYPE, which does not say which constructor built the value, while the
+-- emitted code is a single constant-offset load — so no constructor key can be
+-- stamped and the access is refused.
+--
+-- WHAT THIS PINS IS A REJECT THAT REPLACES A SILENTLY WRONG ACCEPT.  MEASURED on a
+-- cold build of the merge base `bfcd4ea7`, at exit 0 with no diagnostic: `medaka
+-- run` printed the correct `11,22` while the BUILT BINARY printed `22,11`; with the
+-- two fields at different offsets AND different types the built binary SIGSEGVed
+-- (exit 139).  So the golden here is not "the compiler got stricter" — it is the
+-- only statically honest answer to a program whose meaning the back end cannot
+-- represent.
+--
+-- ⚠️ ITS CONTROL IS `field_variant_offset_agree_ok.mdk`, AND THE PAIR IS THE POINT.
+-- The rule is NOT "reject multi-constructor record types" — when every constructor
+-- agrees on the offset, every admissible stamp yields the same load and the access
+-- stays legal.  A guard with no passing neighbour cannot show which half of it is
+-- load-bearing.
+data Wrap =
+  | Cfg { alpha : Int, beta : Int }
+  | Dfg { beta : Int, alpha : Int }
+
+getAlpha : Wrap -> Int
+getAlpha w = w.alpha

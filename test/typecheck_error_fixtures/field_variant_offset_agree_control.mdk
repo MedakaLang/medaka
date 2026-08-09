@@ -1,0 +1,29 @@
+-- THE CONTROL for `field_variant_offset_conflict.mdk` (#1455 review, finding 1).
+--
+-- Same shape — a type with TWO named-field constructors, one field selected through a
+-- receiver typed by the TYPE and not by a constructor — with ONE variable changed:
+-- both constructors place `px` at the SAME offset (0).  The stamp is then immaterial
+-- (whichever constructor typecheck picks, the emitted load reads the same slot), so
+-- `T-FIELD-VARIANT-CONFLICT` must NOT fire.
+--
+-- ⚠️ THE ASSERTION IS THE ERROR THAT DOES APPEAR, NOT THE ABSENCE OF ONE.  An "it
+-- checks clean" control in this corpus would have to dump the whole 123-line prelude
+-- scheme list as its golden (see `impl_method_constraint_ok.mdk`), which is a lot of
+-- golden for one bit.  Instead the body is deliberately ill-typed in an UNRELATED way:
+-- the annotation says `Bool`, the field is an `Int`.  So the golden is a one-line
+-- `Type mismatch`, and it can only be produced if `.px` RESOLVED — the conflict guard
+-- returns `None` without a stamp, which would give this file the conflict message
+-- instead.  A guard that over-fired would move this golden.
+--
+-- ⚠️ THIS IS NOT DECORATION.  Without it the conflict fixture is compatible with a much
+-- cruder rule — "reject any `.field` on a multi-constructor record type" — which would
+-- break real code in this very tree: `frontend/ast.mdk`'s `Decl` shares `pub` between
+-- `DInterface` and `DImpl` at offset 0, and `test/references_fixtures/dup_field_def/`
+-- selects `t.x` over `data T = | A { x : Int } | B { x : Int }`.  This cell is what
+-- distinguishes the rule that shipped from the rule that would have.
+data Pair =
+  | PA { px : Int, py : Int }
+  | PB { px : Int, py : Int, pz : Int }
+
+getPx : Pair -> Bool
+getPx p = p.px

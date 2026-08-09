@@ -544,9 +544,18 @@ fieldAssignEVars : FieldAssign -> List String
 fieldAssignNamePair : FieldAssign -> (String, Unit)
 fieldAssignSites : FieldAssign -> List (Ref Route)
 fieldFixFrom : Option Loc -> String -> Option (Loc, String)
+fieldHasRivalOwners : String -> Bool
+fieldOffsetIn : String -> List String -> Option Int
+fieldOffsetInGo : String -> List String -> Int -> Option Int
+fieldOffsetRival : Mono -> String -> String -> RecordInfo -> Option (String, String, Int, Int)
+fieldOffsetRivalGo : Option HeadKey -> String -> String -> Int -> List String -> Option (String, Int, Int)
+fieldOffsetRivalNamed : String -> Option HeadKey -> String -> String -> Int -> List String -> Option (String, String, Int, Int)
+fieldOffsetRivalOfType : Option String -> Option HeadKey -> String -> String -> Int -> Option (String, String, Int, Int)
 fieldOwnerNames : String -> List String
 fieldTyOf : Field -> Ty
 fieldTypeE : List (String, Ref Effvar) -> List (String, Mono) -> Field -> Mono
+fieldVariantConflictHelp : String -> String -> String
+fieldVariantConflictMsg : String -> String -> String -> String -> Int -> Int -> String
 fillHoleAtom : List (String, Expr) -> Option Expr -> Atom -> Atom
 fillHolesInRow : List (String, Expr) -> EffRow -> Option Expr -> EffRow
 filterImplTysFor : List Decl -> String -> String -> List (List Ty)
@@ -1319,6 +1328,7 @@ resolveDictApps : List Decl -> Map String (List ImplEntry) -> Map String (List K
 resolveFieldAmbiguous : Mono -> String -> List String -> Option (String, RecordInfo)
 resolveFieldByOwners : Mono -> String -> Option (String, RecordInfo)
 resolveFieldRecord : Mono -> String -> Option (String, RecordInfo)
+resolveFieldRecordPick : Mono -> String -> Option (String, RecordInfo)
 resolveMemberSchemes : (String, String) -> List (String, Scheme) -> List (String, Scheme)
 resolveMethodDicts : Map String (List ImplEntry) -> Map String (List KeyEntry) -> List (Ref (List Route), List Mono) -> Unit
 resolveOpSite : Bool -> Map String (List ImplEntry) -> Map String (List KeyEntry) -> String -> Ref Route -> Mono -> Bool -> String -> Unit
@@ -1438,6 +1448,7 @@ splitOnSemiGo : String -> Int -> Int -> List String -> List String
 stampOpRouteVal : Bool -> Map String (List ImplEntry) -> Map String (List KeyEntry) -> String -> Mono -> String -> Route
 stampRLocalOrFallback : Bool -> Ref Route -> String -> List Route -> Unit
 stampRoutes : List (Ref Route) -> Unit
+stampableFieldRecord : Mono -> String -> Option (String, RecordInfo) -> Option (String, RecordInfo)
 standaloneSchemeFor : TcEnv -> String -> String -> Option Scheme
 standaloneShadowDomain : String -> Option Mono
 standaloneShadowScheme : String -> Option Mono
