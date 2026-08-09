@@ -297,6 +297,35 @@ differential looks catastrophic. An agent lost a cycle to this reading 15/15 cel
 (a binary resolves its emitter and stdlib from `exeDir`, which is what makes the comparison sound in
 the first place; `AGENTS.md`, the two-arm differential note).
 
+### 15. 🚨 A local `diff_compiler_engines` run is a TWO-engine population unless you set `MEDAKA_REQUIRE_WASM=1`
+The wasm arm **silently degrades off** when its toolchain is unavailable — the gate still prints a
+total and still exits 0. So a local *"exit 0, 541 clean, 0 regressions"* is a **T1-only** number that
+reads exactly like three-engine coverage. CI grades three and reported 540 + **1 regression on the same
+commit** — a different population, not a contradiction.
+
+**This cost real certification error twice in one PR (#1455):**
+
+1. An author reported engines green from a local run and pushed; CI redded on the cell they had just
+   added.
+2. Worse, and this is the one to remember: round 2 carved out an exemption — *"where all constructors
+   place the field at the same offset the stamp is immaterial"* — and pinned a fixture (`pB`) as a
+   working program the rule **must not break**. **On WasmGC that program already trapped**
+   (`illegal cast`) at the merge base. The exemption is true of LLVM and **false of WasmGC**, because a
+   record there is a `struct` type **per constructor**: the stamp names a TYPE and the access is a
+   **cast**, so identical offsets are no protection at all. A two-engine measurement had certified a
+   carve-out that blessed programs which trap on one of the two shipping backends.
+
+**Rules:**
+- **Always `MEDAKA_REQUIRE_WASM=1` before reporting an engines number**, and say in the PR body which
+  invocation produced it. An unlabelled engines figure should be assumed two-engine.
+- **A "must not move" row proven on two engines is not proven.** Before carving an exemption out of a
+  correctness rule, check the carve-out against **all three** engines — the exemption is exactly where
+  a backend-specific representation difference hides.
+- **LLVM and WasmGC do not share a record representation.** Reasoning about field *offsets* is
+  LLVM-shaped; WasmGC dispatches by struct type and cast. Any rule phrased in terms of offsets needs a
+  wasm answer stated separately. This generalises past this arc — see `AGENTS.md`'s note that wasm was
+  never wrong on the fallthrough class *because it already had the design LLVM lacked*.
+
 ---
 
 ## Sequencing
