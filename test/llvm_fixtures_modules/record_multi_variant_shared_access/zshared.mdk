@@ -1,0 +1,26 @@
+-- `Shared` has two named-field constructors that AGREE on every offset and on every
+-- declared field TYPE — a shape `main` currently has no declaration-level check against
+-- at all (a proposed `T-FIELD-VARIANT-CONFLICT` guard on the still-parked PR #1455 would
+-- deliberately leave it legal too, because the LLVM backend emits one constant slot
+-- index and the choice of stamp is unobservable there).
+--
+-- On PR #1455's branch this file backed a two-fixture WITNESS pair proving the divergent
+-- set is not statically characterizable at the typecheck seam: this same `zshared.mdk`
+-- byte-for-byte, paired with an entry module that consumes `mkSB` via `match` instead of
+-- projecting `.sx`, is WasmGC-clean. That witness fixture belongs to #1455's typecheck
+-- work and is not ported here — only #1469's own pin (this directory) is.
+--
+-- On WasmGC the divergence IS observable: a record is a `struct` type PER CONSTRUCTOR and
+-- `emitFieldAccessRef` (`compiler/backend/wasm_emit.mdk`) emits
+-- `ref.cast (ref $C_<ctor>)` + `struct.get`, so casting an `SB` value to `SA`'s struct
+-- type is illegal whatever the layouts are.  That is #1469, and it is a property of
+-- the USE SITE, which is exactly what no declaration-level rule can see.
+public export data Shared =
+  | SA { sx : Int, sy : Int }
+  | SB { sx : Int, sy : Int }
+
+export mkSA : Shared
+mkSA = SA { sx = 1, sy = 2 }
+
+export mkSB : Shared
+mkSB = SB { sx = 3, sy = 4 }
