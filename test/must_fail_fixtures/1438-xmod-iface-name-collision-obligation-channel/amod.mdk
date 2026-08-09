@@ -1,0 +1,5 @@
+export interface Sizer a where
+  weight : a -> Int
+
+export impl Sizer Int where
+  weight n = n * 100

@@ -1,0 +1,97 @@
+issue: 1438
+what: `zmod` declares its OWN interface `Sizer` (method `bulk`) and a constrained
+what: binding `useBulk : Sizer b => b -> Int` inside the SAME module -- no import,
+what: no alias, no ambiguity: per DICT-SEMANTICS.md Sec.8 I4 qualification 1 (a
+what: same-module declaration wins over an import) this occurrence unambiguously
+what: denotes `zmod.Sizer`. `zmod.Sizer` has NO impl for `Int` anywhere in the
+what: graph. `amod` declares an UNRELATED interface that merely happens to share
+what: the spelling `Sizer` (method `weight`, disjoint from `bulk`) and DOES have
+what: `impl Sizer Int`. `useBulk 3` is silently ACCEPTED: `check` is clean at exit
+what: 0, `run` E-PANICs `unbound identifier: bulk` (the dict-passing machinery
+what: handed `useBulk` a dictionary shaped for `amod.Sizer`, i.e. `{weight}`, and
+what: projecting `bulk` out of it finds nothing), and `medaka build` produces a
+what: binary that SEGFAULTS at exit 139.
+what: CORRECT VERDICT: reject, `No impl of Sizer for Int` -- exactly what both
+what: hand-verified controls (rename amod's interface; delete amod's impl --
+what: neither pinned by this fixture's cmd/control, since each collapses the very
+what: shape being pinned) independently produce.
+what: MEASURED FIRST-HAND on a cold `make medaka` build of main @
+what: fe8595bce55f3a8c8a71521fa11302a1faab5d26, MEDAKA_STRICT=1:
+what:   medaka check main.mdk        -> `main : Unit`, exit 0 (SILENT ACCEPT)
+what:   medaka run main.mdk          -> E-PANIC "unbound identifier: bulk", exit 1
+what:   medaka build main.mdk -o X   -> exit 0, binary written
+what:   ./X                          -> E-FATAL-SIGNAL segfault, exit 139
+what: The build/run/segfault triple is independently confirmed by hand and is NOT
+what: pinned by this fixture's cmd/control (per this suite's established
+what: convention for this exact shape -- e.g. 1330-call-obligation-dedup-skips-check
+what: -- since a segfault's exit code and crash text are runtime-fragile across
+what: platforms and clang versions, while an exit-0-with-no-diagnostic `check` is
+what: the crisp, stable assertion of the SAME silent acceptance).
+what: MECHANISM (read from source; NOT independently ablation-proven by me --
+what: relayed and read, not instrumented). `oblIfaceKey`
+what: (compiler/types/typecheck.mdk) is `TkBare NsIface iface` -- the interface
+what: half of every `ImplUniverse` obligation-entailment bucket is a bare string
+what: on both the impl-registration writer and the goal-lookup reader, so
+what: `zmod.Sizer` and `amod.Sizer` collapse into ONE bucket keyed only on the
+what: spelling `Sizer`. The code's own comment at that site states this is a
+what: KNOWN, deliberate, currently-unfixed limitation (`Predicate` carries no
+what: interface origin) awaiting a Predicate-identity unit ("A-2.5's file").
+cmd: check main.mdk
+exit: 0
+stdout-line: main : Unit
+control: check control.mdk
+why-verb: `check` (not `check-json`): the pin is a SILENT ACCEPT (no diagnostic
+why-verb: fires at all), so there is no code+range for `check --json` to add, and
+why-verb: `check --json`'s own output embeds this fixture's absolute path (see
+why-verb: 1330's and 819's claim.txt for the same established workaround), which
+why-verb: `stdout-line: main : Unit` avoids entirely. `run`'s crash text goes to
+why-verb: STDERR (measured: stdout is empty on the panic), so `run` cannot supply
+why-verb: a stronger pin than a bare `exit: 1` here -- weaker and less specific
+why-verb: than the check-side silent accept, which is why `check` is the graded
+why-verb: verb, matching 1330's precedent for this exact "check accepts, run/build
+why-verb: crash" shape.
+why-control: control.mdk keeps the IDENTICAL two-module `Sizer`-name collision
+why-control: (imports `amod`, whose foreign `Sizer` interface and `impl Sizer Int`
+why-control: are byte-identical to main.mdk's) but calls `useBulk` at a
+why-control: NON-colliding receiver head (`Widget`, from a THIRD module `czmod`
+why-control: that provides its own genuine `impl Sizer Widget`) instead of `Int`.
+why-control: `ImplUniverse`'s buckets are keyed on [interface, RECEIVER HEAD]
+why-control: jointly (`growImplUniverse`/`insertUnivImpl`), so `amod`'s `Int`-only
+why-control: entry never populates the `[Sizer, Widget]` bucket -- the collision
+why-control: is present in the graph but inert for this call. This isolates the
+why-control: defect to "the SAME receiver head, both interfaces populate it": the
+why-control: general obligation-checking machinery, even with the bare-name
+why-control: interface collision physically present in the same build, correctly
+why-control: accepts and correctly runs a genuinely well-typed program (verified:
+why-control: `run control.mdk` -> `1003`, i.e. `czmod`'s own `bulk (Widget 3) =
+why-control: 3 + 1000`, not `amod`'s `weight`).
+why-note: NOT a duplicate of #1047 (two same-named interfaces, METHOD-LESS impls,
+why-note: lost DEFAULT method body -- no explicit impl bodies, no crash, both
+why-note: engines just print a wrong default), #1288 (an export-table RE-EXPORT
+why-note: merge causing a FALSE REJECT, opposite direction), #1182/#1265 (two
+why-note: DIFFERENT interfaces sharing a METHOD NAME on one receiver, decided by
+why-note: `impl`-block order via `matchingEntries` -- here the two interfaces'
+why-note: methods are DISJOINT, `weight` vs `bulk`, and the mechanism is
+why-note: `oblIfaceKey`/`ImplUniverse` entailment, not method-name dispatch
+why-note: selection), #1330 (dedup skipping a check within ONE interface, no
+why-note: cross-module collision), #1180 (an undetermined tyvar committing to a
+why-note: concrete impl within ONE interface), #1275/#1276 (method-OCCURRENCE
+why-note: resolution -- which interface a bare/alias-qualified method CALL
+why-note: spells -- a different table, `usePathWitnesses`/
+why-note: `applyMethodScopeOverrides`; this repro's `bulk` occurrence inside
+why-note: `useBulk`'s own body is unambiguous, the wrongness is entirely in
+why-note: entailing the SIGNATURE's `Sizer b =>` predicate), #1326 (bare-name
+why-note: VALUE-binding constraint misattribution, a different namespace,
+why-note: opposite direction), or #1354 (audits the METHOD namespace's remaining
+why-note: bare tables -- `ImplUniverse`/`oblIfaceKey` is not one of its five rows).
+why-note: Closest relative is CLOSED #1277 (same root cause, `oblIfaceKey`'s bare
+why-note: `TkBare NsIface`), but that shape additionally requires two modules'
+why-note: RECEIVER TYPES to share a spelling AND the two interfaces to share a
+why-note: METHOD name -- neither is present here (receiver is builtin `Int`;
+why-note: methods are `weight` vs `bulk`), and this reproduces on a binary built
+why-note: after #1277's fix, through `ImplUniverse`'s interface-bare-name half
+why-note: alone via an explicit user-written `=>` constraint, independent of
+why-note: `dispHeadTab` head-spelling collision or method-name-based selection.
+why-note: A fix flips `check main.mdk`'s exit from 0 to nonzero (rejecting with
+why-note: `No impl of Sizer for Int`, as both hand-verified controls already do)
+why-note: and drains this row.
