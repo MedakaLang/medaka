@@ -273,7 +273,6 @@ resolveModulesErrorsG : Bool -> List String -> List Decl -> List Decl -> Map Str
 resolveModulesToHumane : List Decl -> List Decl -> List (String, List Decl) -> String
 resolveModulesToHumaneByPath : List (String, String) -> Bool -> List String -> List Decl -> List Decl -> List (String, List Decl) -> String
 resolveModulesToHumaneG : Bool -> List String -> List Decl -> List Decl -> List (String, List Decl) -> String
-resolveModulesToHumaneGF : String -> Bool -> List String -> List Decl -> List Decl -> List (String, List Decl) -> String
 resolveModulesToLines : List Decl -> List Decl -> List (String, List Decl) -> String
 resolveModulesToLinesG : Bool -> List String -> List Decl -> List Decl -> List (String, List Decl) -> String
 resolveProgram : List Decl -> List Decl -> List Decl -> List ResError
