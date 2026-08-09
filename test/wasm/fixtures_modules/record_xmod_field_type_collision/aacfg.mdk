@@ -1,0 +1,9 @@
+-- W9 port of test/llvm_fixtures_modules/record_xmod_field_type_collision/aacfg.mdk
+-- (#1418). `aacfg` declares a record TYPE named `Cfg` whose sole field, `fld`, is
+-- a `Float`. `entry.mdk` never imports `Cfg` from here — only the unrelated `aaf`
+-- function — but this module's `Cfg` is still in the module graph, which is
+-- exactly what #1382 (fixed) needed to corrupt the OTHER `Cfg`'s layout.
+public export data Cfg = { fld : Float }
+
+export aaf : Int -> Int
+aaf n = n

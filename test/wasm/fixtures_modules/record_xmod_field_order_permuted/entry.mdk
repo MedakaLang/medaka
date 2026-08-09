@@ -1,0 +1,22 @@
+-- W9 port of test/llvm_fixtures_modules/record_xmod_field_order_permuted/entry.mdk
+-- (#1418). Same collision as `record_xmod_field_order/`, module names swapped, so
+-- the declaration that sorts first is now the `{ b, a }` one — a golden pinned at
+-- only one sort order cannot tell "the right record is selected" apart from "the
+-- record that sorts first happens to be right"; this pair can.
+--
+-- Expected output, derived BY HAND from the sources before this fixture was ever
+-- run, identically to the already-hand-derived LLVM original:
+--   aamod: mkAA = Cfg { b = 33, a = 44 }  =>  aaA = 44, aaB = 33
+--   zzmod: mkZZ = Cfg { a = 11, b = 22 }  =>  zzA = 11, zzB = 22
+-- so `aa=44,33 zz=11,22`.
+--
+-- Live differential (native oracle) gate — see record_xmod_field_order/entry.mdk
+-- for why there is no golden to enshrine here. Checked against the hand-derived
+-- value above, not just against each other.
+import aamod.{aaA, aaB}
+import zzmod.{zzA, zzB}
+
+main : <IO> Unit
+main =
+  putStrLn
+    ("aa=" ++ intToString aaA ++ "," ++ intToString aaB ++ " zz=" ++ intToString zzA ++ "," ++ intToString zzB)

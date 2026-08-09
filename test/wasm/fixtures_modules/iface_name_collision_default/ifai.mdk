@@ -1,0 +1,13 @@
+-- W9 port of test/llvm_fixtures_modules/iface_name_collision_default/ifai.mdk
+-- (#1418). #1047: A's implementor. `impl Speak DogA` is METHOD-LESS, so DogA
+-- inherits ifa.mdk's default body ("A-default"). Cross-module, so desugar's
+-- same-module `fillImplDefaults` never specialises it and the untagged-default
+-- registry is what has to answer.
+import ifa.{Speak(..), speak}
+
+public export data DogA = DogA
+
+impl Speak DogA where
+
+export sayA : DogA -> String
+sayA d = speak d
