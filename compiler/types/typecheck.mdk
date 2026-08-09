@@ -2608,6 +2608,135 @@ freshToggles _ = Toggles {
 toggles : Ref Toggles
 toggles = Ref (freshToggles ())
 
+-- ── A-3.1 (#1112): the whole-graph declaration ENVELOPE ──────────────────────
+-- Stage A-3's `K` is ONE declaration analysis over the whole loaded module graph,
+-- assembled once in the driver preamble instead of marshalled per module
+-- (`compiler/TYPECHECK-TARGET-ARCHITECTURE.md` §2 K).  This unit lands the
+-- ENVELOPE ONLY — the ordinal-tagged carrier, its whole-graph builder, and the one
+-- ordinal filter.  It carries NO `CE`, `IE` or `DataEnv` contents: those are
+-- A-3.2 / A-3.3 / A-3.4, which add fields to `DeclEnvs` and populate them inside
+-- `buildDeclEnvs`.  Nothing here retires a `universe*`/`obUniv*` marshalling cell,
+-- and nothing here re-keys one.
+--
+-- WHY AN ORDINAL.  §2 K's whole-graph environments are language-VISIBLE: an impl
+-- declared in a topo-LATER module becomes usable by an earlier one (an
+-- orphan-instance-style acceptance widening, which §5 R2 owns).  The #1112
+-- decomposition (2026-08-08) therefore stages that: every entry carries the
+-- ordinal of the module that declared it, and every read filters
+-- `entryOrd <= currentOrd`, which reproduces today's prior-modules-plus-me
+-- universe.  The semantics change then becomes the DELETION OF ONE FILTER —
+-- `declEnvVisibleAt`, and nothing else — which is A-3.6: one reviewable diff with
+-- an attributable golden delta.  Route every future ordinal test through that one
+-- predicate; open-coding `<=` at a read site silently costs that property.
+--
+-- ⚠️ WHAT IS LIVE TODAY, AND WHAT IS NOT — this unit's bar is BYTE-IDENTICAL, so
+-- it may not move a judgment.  LIVE: `buildDeclEnvs` runs at both Module-mode
+-- driver entries, and `deAllDecls` supplies the whole-graph decl list each of them
+-- previously concatenated inline, so a mis-built envelope is LOUD
+-- (`populateEffectDomains` would miss a module's `effect` decls) rather than
+-- silent.  NOT LIVE: the filter.  `declEnvsVisible` has no caller in this unit —
+-- its callers are A-3.2/A-3.3/A-3.4's table reads.  It is `export`ed to keep
+-- `rule-dead-code` off the unreached block, NOT because anything outside this
+-- module consumes it.
+--
+-- ORDINALS.  The prelude is 0; then each module of the loader's dependency-first
+-- list, in that order.  The prelude is indexed under BOTH `"core"` — the spelling
+-- its `graph*Exports` peers key it under — and `""`, which is the `mid` both
+-- drivers actually pass for the core pass (`checkModuleFull` → `checkModuleFullImpl
+-- ""`; `elabModuleStamp ""`), so `declEnvsOrdOf` cannot miss on either spelling.
+--
+-- 🚨 A-3.2+ WILL ADD FIELDS TO `DeclEnvs`, SO READ THIS BEFORE YOU DO.  The one
+-- interior comment on each record below is LOAD-BEARING against #829 (REOPENED),
+-- and MEASURED on this binary rather than relayed: `medaka fmt --write` renders a
+-- multi-line record with NO interior comment as `data X =` / `| X { … }`, and that
+-- two-line header is exactly #829's trigger shape — adding one interior comment to
+-- a record already in it moved that comment onto the NEXT field (probed on a
+-- 5-field synthetic record: the comment written beside field 3 came back beside
+-- field 4), and `fmt --check` then reports the damage as clean.  A record that
+-- already carries an interior
+-- comment formats to the one-line `data X = X {` header instead, which is the safe
+-- shape.  Keep at least one interior comment here; do not "tidy" them away.
+data DeclEnvModule = DeclEnvModule {
+    demOrd : Int,  -- 0 = the prelude; then the loader's dependency-first order
+    demId : String,
+    demDecls : List Decl,
+  }
+
+data DeclEnvs = DeclEnvs {
+    deModules : List DeclEnvModule,  -- ordinal order, prelude first
+    deOrdIndex : OrdMap Int,
+    deAllDecls : List Decl,
+  }
+
+-- INITIAL construction only, exactly as `freshDriverState` is: a driver that never
+-- calls `buildDeclEnvs` reads an empty graph, on which every `declEnvsOrdOf`
+-- misses.  See `declEnvsOrdOf` for why a miss is fail-CLOSED.
+emptyDeclEnvs : DeclEnvs
+emptyDeclEnvs =
+  DeclEnvs { deModules = [], deOrdIndex = omEmpty, deAllDecls = [] }
+
+-- Build the envelope from the prelude + the loader's dependency-first module list.
+-- ⚠️ Must run AFTER the driver's `stampGraphTyOrigins`, for the same reason
+-- `graphMethodExports` must: identity lives on the decls, so an envelope built
+-- from the unstamped tree would carry a different one.  Both current call sites
+-- (`checkModulesPreamble`, `elaborateModules`) sit after their driver's stamp.
+buildDeclEnvs : List Decl -> List (String, List Decl) -> DeclEnvs
+buildDeclEnvs coreDecls modules =
+  let mods = declEnvModulesFrom 0 (("core", coreDecls)::modules)
+  DeclEnvs {
+    deModules = mods,
+    deOrdIndex = declEnvOrdIndex (omInsert "" 0 omEmpty) mods,
+    deAllDecls = declEnvDeclsOf mods,
+  }
+
+declEnvModulesFrom : Int -> List (String, List Decl) -> List DeclEnvModule
+declEnvModulesFrom _ [] = []
+declEnvModulesFrom k ((mid, decls)::rest) =
+  DeclEnvModule { demOrd = k, demId = mid, demDecls = decls } ::
+    declEnvModulesFrom (k + 1) rest
+
+declEnvOrdIndex : OrdMap Int -> List DeclEnvModule -> OrdMap Int
+declEnvOrdIndex acc [] = acc
+declEnvOrdIndex acc (m::rest) =
+  declEnvOrdIndex (omInsert m.demId m.demOrd acc) rest
+
+-- The graph's decls in ordinal order.  `++` is associative, so this is the same
+-- LIST VALUE the two drivers built as `coreDecls ++ flatMap snd modules` — that
+-- equality is what makes replacing their inline concats byte-identical.
+declEnvDeclsOf : List DeclEnvModule -> List Decl
+declEnvDeclsOf [] = []
+declEnvDeclsOf (m::rest) = m.demDecls ++ declEnvDeclsOf rest
+
+-- 🚨 THE ONE ORDINAL FILTER.  A-3.6 is the deletion of this predicate's body (it
+-- becomes `True`) and nothing else.
+declEnvVisibleAt : Int -> Int -> Bool
+declEnvVisibleAt cur entryOrd = entryOrd <= cur
+
+-- The ordinal of [mid], or `0 - 1` when the envelope holds no row for it.
+-- FAIL-CLOSED deliberately: at `-1` `declEnvVisibleAt` rejects every entry, so a
+-- reader arriving with an unknown module id LOSES declarations and produces a
+-- reject (loud), instead of gaining the whole graph early and producing a silent
+-- accept.  `buildDeclEnvs` registers the prelude's `""` spelling, so the miss is
+-- unreachable from the two drivers that exist today.
+declEnvsOrdOf : String -> DeclEnvs -> Int
+declEnvsOrdOf mid envs = match omLookup mid envs.deOrdIndex
+  Some k => k
+  None => 0 - 1
+
+declEnvsUpTo : Int -> DeclEnvs -> List DeclEnvModule
+declEnvsUpTo cur envs = declEnvsUpToGo cur envs.deModules
+
+declEnvsUpToGo : Int -> List DeclEnvModule -> List DeclEnvModule
+declEnvsUpToGo _ [] = []
+declEnvsUpToGo cur (m::rest)
+  | declEnvVisibleAt cur m.demOrd = m :: declEnvsUpToGo cur rest
+  | otherwise = declEnvsUpToGo cur rest
+
+-- The graph as [mid] may see it under the transitional ordinal rule: itself plus
+-- every topo-earlier module.  NO CALLER IN THIS UNIT — see the block header.
+export declEnvsVisible : String -> DeclEnvs -> List DeclEnvModule
+declEnvsVisible mid envs = declEnvsUpTo (declEnvsOrdOf mid envs) envs
+
 -- #158 PR5 / #176 closure: the ~18 RESIDUAL survivor Refs — governed until now by
 -- per-ref prose and clustered in NEITHER `resetState` (PerRun/Toggles) NOR
 -- `resetCrossModuleState` (CrossRun).  They have HETEROGENEOUS lifecycles
@@ -2627,6 +2756,7 @@ data DriverState =
       graphMethodExportsRef : Ref (OrdMap (List (String, Ident))),
       graphIfaceMethodsRef : Ref (OrdMap (List (String, List String))),
       graphCtorExportsRef : Ref (OrdMap (List (String, String, Ident))),
+      declEnvsRef : Ref DeclEnvs,
       abstractRecordTypesRef : Ref (List String),
       argDispatchIdxRef : Ref (List (String, Int)),
       dictEligibleRef : Ref (List String),
@@ -2655,6 +2785,7 @@ freshDriverState _ = DriverState {
   graphMethodExportsRef = Ref omEmpty,
   graphIfaceMethodsRef = Ref omEmpty,
   graphCtorExportsRef = Ref omEmpty,
+  declEnvsRef = Ref emptyDeclEnvs,
   abstractRecordTypesRef = Ref [],
   argDispatchIdxRef = Ref [],
   dictEligibleRef = Ref [],
@@ -22911,12 +23042,21 @@ checkModulesPreamble runtimeDecls coreDecls modules =
   -- #1111 A-2.11 (#1319 unit 1): the CONSTRUCTOR peer of the line above, under the
   -- identical two-part property.  Both driver entries carry both lines or neither works.
   let _ = setRef driverState.value.graphCtorExportsRef (graphCtorExports coreDecls modules)
+  -- #1112 A-3.1: the whole-graph declaration envelope, under the SAME two-part
+  -- property as the three lines above (`driverState` has no reset point, and both
+  -- Module-mode driver entries write it unconditionally).  `elaborateModules`
+  -- carries the identical line.  See `buildDeclEnvs`.
+  let declEnvs = buildDeclEnvs coreDecls modules
+  let _ = setRef driverState.value.declEnvsRef declEnvs
   -- #80/#201: populate effect domains ONCE over the WHOLE import graph (builtins +
   -- every `effect …` decl in core or any module), BEFORE the per-module foldModules
   -- loop, so a module using an effect declared in ANOTHER module sees its domain.
   -- resetState no longer re-seeds, so this survives every per-module reset below.
   -- Must precede the core checkModuleFull (it runs checkEffectParams, reading these).
-  let _ = populateEffectDomains (coreDecls ++ flatMap snd modules)
+  -- #1112 A-3.1: `deAllDecls` IS `coreDecls ++ flatMap snd modules` (see
+  -- `declEnvDeclsOf`) — the same list value, now derived from the envelope so a
+  -- module the envelope drops is loud here rather than silent.
+  let _ = populateEffectDomains declEnvs.deAllDecls
   -- #1280: `coreDecls` arrives here ALREADY STAMPED (each caller's
   -- `stampGraphTyOrigins` line above), but the scope is derived from its type
   -- NAMES, not its origins, so it is the same map either way.
@@ -23328,7 +23468,15 @@ elaborateModules runtimeDecls coreDecls0 modulesIn =
   -- #1111 A-2.11 (#1319 unit 1): the CONSTRUCTOR peer, same placement, same reasoning —
   -- including the two-sweep note above, which it inherits verbatim (same `driverState`).
   let _ = setRef driverState.value.graphCtorExportsRef (graphCtorExports coreDecls modules)
-  let allDecls = coreDecls ++ flatMap snd modules
+  -- #1112 A-3.1: the whole-graph declaration envelope — the identical line
+  -- `checkModulesPreamble` carries, for the driver that does not use that preamble.
+  -- It inherits the two-sweep note above for the same reason the three peers do: the
+  -- ref is on `driverState`, which `resetCrossModuleState` does not touch.
+  let declEnvs = buildDeclEnvs coreDecls modules
+  let _ = setRef driverState.value.declEnvsRef declEnvs
+  -- #1112 A-3.1: `deAllDecls` IS `coreDecls ++ flatMap snd modules` — the same list
+  -- value (see `declEnvDeclsOf`), now derived from the envelope.
+  let allDecls = declEnvs.deAllDecls
   -- #80/#201: populate effect domains ONCE over the WHOLE import graph (builtins +
   -- every `effect …` decl), BEFORE any per-module resetState (discovery scratch pass
   -- + the elabModuleStamp loop both call it) can read them — resetState no longer
