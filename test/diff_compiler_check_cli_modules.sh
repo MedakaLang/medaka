@@ -426,6 +426,59 @@ case "$res_chk" in
   *) fail=$((fail+1)); printf 'FAIL imported-resolve/attr (imported resolve error not located: [%s])\n' "$res_chk" ;;
 esac
 
+# 12b. THE SAME RESOLVE ERROR THROUGH `run` AND `build` (#186 / #1360 — the build/run
+#      half of #41).  #41's per-module `pathMap` was wired into `checkRoute` ONLY;
+#      `typecheckGateRoute` (build) and the run route kept the single-`target`
+#      fallback renderer, so an IMPORTED module's resolve error printed under the
+#      ENTRY file's name.  Measured before the fix, on this very fixture:
+#        check : reshelper.mdk:2:11:  (correct)
+#        run   : resuse.mdk:2:11:     (real line/col, WRONG file)
+#        build : resuse.mdk:1:0:      (wrong file AND collapsed placeholder loc —
+#                                      build additionally used the non-located
+#                                      loader `loadProgramE`)
+#      So the assertion is deliberately BOTH-SIDED: the diagnostic must name the
+#      dep file with a real L:C, and must NOT name the entry file at all.  A gate
+#      that only checked "mentions reshelper.mdk" would have passed on the `build`
+#      arm the day it printed `resuse.mdk:1:0` with no reshelper mention at all —
+#      hence the explicit entry-file rejection arm first in each case.
+res_run="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" run "$TMP/resuse.mdk" 2>&1)"
+res_run_code=$?
+case "$res_run" in
+  *resuse.mdk:*"Unbound variable"*) fail=$((fail+1)); printf 'FAIL imported-resolve/run (#186: imported resolve error mislabeled as entry: [%s])\n' "$res_run" ;;
+  *reshelper.mdk:*:*:*"Unbound variable"*) if [ "$res_run_code" -ne 0 ]; then pass=$((pass+1)); printf 'ok   imported-resolve/run (#186: located at its OWN file)\n'
+                  else fail=$((fail+1)); printf 'FAIL imported-resolve/run (located but exit 0)\n'; fi ;;
+  *) fail=$((fail+1)); printf 'FAIL imported-resolve/run (imported resolve error not located: [%s])\n' "$res_run" ;;
+esac
+res_bld="$(MEDAKA_ROOT="$ROOT" MEDAKA="$MEDAKA" bound "$MEDAKA" build "$TMP/resuse.mdk" -o "$TMP/resuse.out" 2>&1)"
+res_bld_code=$?
+case "$res_bld" in
+  *resuse.mdk:*"Unbound variable"*) fail=$((fail+1)); printf 'FAIL imported-resolve/build (#186: imported resolve error mislabeled as entry: [%s])\n' "$res_bld" ;;
+  *reshelper.mdk:*:*:*"Unbound variable"*) if [ "$res_bld_code" -ne 0 ] && [ ! -x "$TMP/resuse.out" ]; then pass=$((pass+1)); printf 'ok   imported-resolve/build (#186: located at its OWN file, no binary)\n'
+                  else fail=$((fail+1)); printf 'FAIL imported-resolve/build (located but built? exit %d)\n' "$res_bld_code"; fi ;;
+  *) fail=$((fail+1)); printf 'FAIL imported-resolve/build (imported resolve error not located: [%s])\n' "$res_bld" ;;
+esac
+
+# 12c. THE POSITION MUST BE REAL, NOT A PLACEHOLDER (#1360, `build`'s second half).
+#      `build`'s gate used to load with the non-located `loadProgramE`, collapsing
+#      EVERY span to 1:0 — visible even when the filename happened to be right (an
+#      entry-module resolve error).  Assert `build` reports the SAME `file:L:C:`
+#      prefix `check` does on an ENTRY-module resolve error, where 12b's dep-file
+#      assertion cannot see the difference.
+cat > "$TMP/entryres.mdk" <<'EOF'
+import reshelper.{rh}
+
+main = println (nosuchName 3)
+EOF
+ent_chk="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check "$TMP/entryres.mdk" 2>&1 | head -1)"
+ent_bld="$(MEDAKA_ROOT="$ROOT" MEDAKA="$MEDAKA" bound "$MEDAKA" build "$TMP/entryres.mdk" -o "$TMP/entryres.out" 2>&1 | head -1)"
+ent_chk_pos="${ent_chk%%: *}"
+ent_bld_pos="${ent_bld%%: *}"
+case "$ent_bld_pos" in
+  *:1:0) fail=$((fail+1)); printf 'FAIL entry-resolve/build-pos (#1360: placeholder loc 1:0 back: [%s])\n' "$ent_bld" ;;
+  *) if [ "$ent_bld_pos" = "$ent_chk_pos" ]; then pass=$((pass+1)); printf 'ok   entry-resolve/build-pos (#1360: build agrees with check on file:L:C)\n'
+     else fail=$((fail+1)); printf 'FAIL entry-resolve/build-pos (check=[%s] build=[%s])\n' "$ent_chk_pos" "$ent_bld_pos"; fi ;;
+esac
+
 # 13. ENTRY-PROJECT internal-extern trust (#42, POSITIVE).  A sibling module of the
 #     entry, within the SAME `medaka.toml` project, legitimately calls an
 #     internal-only kernel (`arrayGetUnsafe`).  Checking your OWN multi-module
