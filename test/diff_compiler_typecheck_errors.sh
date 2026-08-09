@@ -56,7 +56,13 @@ for f in "$FIXDIR"/*.mdk; do
   [ -f "$f" ] || continue
   name="$(basename "$f")"
   golden="${f%.mdk}.tc.golden"
-  [ -f "$golden" ] || { echo "no golden for $name (run sh test/capture_goldens.sh tc)"; fail=$((fail+2)); continue; }
+  # ⚠️ `sh test/capture_goldens.sh tc` is a NO-OP for this corpus (same trap as
+  # #1241) — "tc"/tc_probe/tc_module are FROZEN dev-probe families (dev/
+  # tc_module_probe.exe, removed with OCaml); no ROWS entry, no `--frozen` tag.
+  # There is no regeneration script; hand-write from the native driver's own
+  # output ("$CHECK"/"$TC_MAIN" per the PRELUDE_DEP branch below) and REVIEW the
+  # diagnostic text before committing it as the golden.
+  [ -f "$golden" ] || { echo "no golden for $name — NO REGEN SCRIPT; hand-write and review, see comment above"; fail=$((fail+2)); continue; }
   ref="$(LC_ALL=C sort < "$golden")"
 
   # Prelude-dependent fixtures (#11): Driver A structurally can't reject — run

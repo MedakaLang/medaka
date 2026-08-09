@@ -78,6 +78,7 @@ if [ "${1:-}" = "--build-one" ]; then
   fi
   [ -x "$out" ] || { echo "FAIL: $e build produced no binary" >&2; tail -8 "$BINDIR/$e.buildlog" >&2; exit 1; }
   rm -f "$BINDIR/$e.buildlog"
+  printf 'built       %s\n' "$e"
   exit 0
 fi
 
