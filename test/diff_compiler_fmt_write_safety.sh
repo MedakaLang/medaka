@@ -52,6 +52,12 @@ if [ "$before" = "$after" ]; then ok "bare fmt: file byte-identical"
 else bad "bare fmt: file byte-identical" "checksum changed ($before -> $after) — bare fmt MUTATED the file"; fi
 if [ "$bare_rc" = "1" ]; then ok "bare fmt: exit 1 on unformatted input"
 else bad "bare fmt: exit 1 on unformatted input" "exit was $bare_rc"; fi
+# The report goes to STDERR (`fmtOne`/`fmtOneReport` use `ePutStrLn`), not stdout.
+bare_err="$(cat "$TMP/bare.err")"
+case "$bare_err" in
+  *"not formatted"*) ok "bare fmt: stderr reports 'not formatted'" ;;
+  *) bad "bare fmt: stderr reports 'not formatted'" "stderr was: [$bare_err]" ;;
+esac
 
 # ── 2. bare `fmt <file>` on ALREADY-formatted input: silent, exit 0, never mutates ──
 FMTD="$TMP/fmtd.mdk"
@@ -64,6 +70,12 @@ if [ "$before2" = "$after2" ]; then ok "bare fmt (already formatted): file byte-
 else bad "bare fmt (already formatted): file byte-identical" "checksum changed"; fi
 if [ "$bare2_rc" = "0" ]; then ok "bare fmt (already formatted): exit 0"
 else bad "bare fmt (already formatted): exit 0" "exit was $bare2_rc"; fi
+# Silent means silent on BOTH streams — a spurious report on a clean file is just as
+# much a regression as a missing one on a dirty file, and neither was graded before.
+if [ ! -s "$TMP/bare2.out" ]; then ok "bare fmt (already formatted): stdout empty"
+else bad "bare fmt (already formatted): stdout empty" "stdout was: [$(cat "$TMP/bare2.out")]"; fi
+if [ ! -s "$TMP/bare2.err" ]; then ok "bare fmt (already formatted): stderr empty"
+else bad "bare fmt (already formatted): stderr empty" "stderr was: [$(cat "$TMP/bare2.err")]"; fi
 
 # ── 3. `--write` mutates AND prints a one-line summary ──────────────────────
 WR="$TMP/write.mdk"
@@ -122,6 +134,69 @@ else bad "--stdout: file byte-identical" "checksum changed"; fi
 c6="$(sum "$STD")"
 if [ "$b6" = "$c6" ]; then ok "--check: file byte-identical"
 else bad "--check: file byte-identical" "checksum changed"; fi
+
+# ── 7. the DIRECTORY arm — the one that caused the incident ────────────────
+# `runFmtCmd` routes a single literal file through `fmtOne` and a directory (or
+# 2+ targets) through the SEPARATE `fmtManyTargets`/`fmtFilesGo` path — a green
+# single-file gate proves nothing about this arm. This is the shape that
+# silently reformatted ~500 tracked files: bare `medaka fmt <dir>` must be
+# read-only over EVERY file it finds, and `--write` must aggregate a plural
+# summary ("formatted N files", not "formatted 1 file" repeated or a bare "1").
+DIR="$TMP/dir_target"
+mkdir -p "$DIR"
+D1="$DIR/a.mdk"
+D2="$DIR/b.mdk"
+printf 'main    =\n  println   1\n' > "$D1"
+printf 'main    =\n  println   2\n' > "$D2"
+d1_before="$(sum "$D1")"
+d2_before="$(sum "$D2")"
+"$MEDAKA" fmt "$DIR" >"$TMP/dir_bare.out" 2>"$TMP/dir_bare.err"
+dir_bare_rc=$?
+d1_after="$(sum "$D1")"
+d2_after="$(sum "$D2")"
+if [ "$d1_before" = "$d1_after" ] && [ "$d2_before" = "$d2_after" ]; then
+  ok "bare fmt <dir>: both files byte-identical"
+else
+  bad "bare fmt <dir>: both files byte-identical" "a: $d1_before->$d1_after b: $d2_before->$d2_after"
+fi
+if [ "$dir_bare_rc" = "1" ]; then ok "bare fmt <dir>: exit 1 (unformatted files present)"
+else bad "bare fmt <dir>: exit 1 (unformatted files present)" "exit was $dir_bare_rc"; fi
+
+d1_before2="$(sum "$D1")"
+d2_before2="$(sum "$D2")"
+out_dir_write="$("$MEDAKA" fmt --write "$DIR" 2>"$TMP/dir_write.err")"
+dir_write_rc=$?
+d1_after2="$(sum "$D1")"
+d2_after2="$(sum "$D2")"
+if [ "$d1_before2" != "$d1_after2" ] && [ "$d2_before2" != "$d2_after2" ]; then
+  ok "--write <dir>: both files WERE rewritten"
+else
+  bad "--write <dir>: both files WERE rewritten" "a changed=$([ "$d1_before2" != "$d1_after2" ] && echo yes || echo no) b changed=$([ "$d2_before2" != "$d2_after2" ] && echo yes || echo no)"
+fi
+if [ "$dir_write_rc" = "0" ]; then ok "--write <dir>: exit 0 on success"
+else bad "--write <dir>: exit 0 on success" "exit was $dir_write_rc"; fi
+case "$out_dir_write" in
+  *"formatted 2 files"*) ok "--write <dir>: prints the PLURAL summary ('formatted 2 files')" ;;
+  *) bad "--write <dir>: prints the PLURAL summary ('formatted 2 files')" "stdout was: [$out_dir_write]" ;;
+esac
+
+# --write again on the now-formatted directory: no mutation, "already formatted"
+# (0 changed is the same code path for both dir and single-file, but exercise it
+# here too since fmtFilesGo's tuple accumulator is what's actually under test).
+d1_before3="$(sum "$D1")"
+d2_before3="$(sum "$D2")"
+out_dir_write2="$("$MEDAKA" fmt --write "$DIR" 2>"$TMP/dir_write2.err")"
+d1_after3="$(sum "$D1")"
+d2_after3="$(sum "$D2")"
+if [ "$d1_before3" = "$d1_after3" ] && [ "$d2_before3" = "$d2_after3" ]; then
+  ok "--write <dir> (idempotent): both files byte-identical on 2nd run"
+else
+  bad "--write <dir> (idempotent): both files byte-identical on 2nd run" "checksum changed on a no-op write"
+fi
+case "$out_dir_write2" in
+  *"already formatted"*) ok "--write <dir> (idempotent): prints 'already formatted'" ;;
+  *) bad "--write <dir> (idempotent): prints 'already formatted'" "stdout was: [$out_dir_write2]" ;;
+esac
 
 echo
 echo "$pass passed, $fail failed"

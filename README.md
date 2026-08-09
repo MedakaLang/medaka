@@ -135,9 +135,10 @@ are resolved relative to the root.
 
 **Format source code:**
 ```sh
-medaka fmt path/to/file.mdk        # rewrite in place
-medaka fmt --check src/            # report-only, exit 1 if any
-medaka fmt --stdout one_file.mdk   # print to stdout
+medaka fmt path/to/file.mdk        # read-only: report unformatted files, exit 1 if any
+medaka fmt --write path/to/file.mdk  # rewrite in place; prints a one-line summary
+medaka fmt --check src/            # explicit form of the default (report-only, exit 1 if any)
+medaka fmt --stdout one_file.mdk   # print to stdout (single file only)
 ```
 
 The formatter parses, re-prints, and verifies the output reparses to

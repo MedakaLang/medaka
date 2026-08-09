@@ -4,7 +4,7 @@
 -- subcommands with no OCaml at runtime.
 --
 --   ./medaka check <file.mdk>     type-check (parse→…→typecheck), via check.runCheck
---   ./medaka fmt [--stdout|--check|--write] <file.mdk>   format (default: in place)
+--   ./medaka fmt [--stdout|--check|--write] <file.mdk>   format (default: --check, read-only; --write rewrites)
 --   ./medaka new <name>           scaffold a new project
 --   ./medaka help | --help | -h   usage
 --
@@ -1254,6 +1254,11 @@ codemodHelpText = stringConcat
     "Any other --flag consumes the next token as its value, passed to the\n",
     "named codemod. Run `medaka codemod` with no arguments to list the\n",
     "available codemods.\n",
+    "\n",
+    "NOTE: `--help`/`-h` is only recognized in the FIRST position — as\n",
+    "`medaka codemod --help`, before a codemod name. `medaka codemod <name>\n",
+    "--help` is NOT special-cased (it is a codemod flag) and codemod-specific\n",
+    "help does not exist yet.\n",
   ]
 
 runCodemodCmd : List String -> <IO> Unit

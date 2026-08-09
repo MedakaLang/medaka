@@ -521,7 +521,8 @@ for f in $changed; do
     compiler/driver/*)
       add 'diff_compiler_check*'; add 'diff_compiler_diagnostics'; add 'diff_compiler_build'
       add 'diff_compiler_import_order'
-      add 'diff_compiler_dict_semantics' ;;
+      add 'diff_compiler_dict_semantics'
+      add 'diff_compiler_fmt_write_safety' ;;
     compiler/tools/lint*.mdk)      add 'diff_compiler_lint*' ;;
     compiler/tools/fmt.mdk|compiler/tools/printer.mdk) add 'diff_compiler_fmt'; add 'diff_compiler_snapshot*' ;;
     compiler/tools/lsp.mdk)        add 'diff_compiler_lsp*' ;;
