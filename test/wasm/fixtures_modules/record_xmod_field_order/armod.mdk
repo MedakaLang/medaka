@@ -1,0 +1,24 @@
+-- W9 port of test/llvm_fixtures_modules/record_xmod_field_order/armod.mdk (#1418).
+--
+-- One of two UNRELATED modules that each declare a record TYPE spelled `Cfg`.
+-- There is no import relationship between this module and `zrmod`, and neither
+-- ever projects the other's record.
+--
+-- Its two `Int` fields are in the OPPOSITE declaration order from zrmod's, which
+-- is the whole trigger: a same-name collision alone is harmless (the emitter's
+-- field-order table is keyed by the MANGLED ctor name `armod__Cfg` and is correct),
+-- what was wrong was the record IDENTITY typecheck stamped onto each projection
+-- (#1382, fixed).
+--
+-- THE MODULE NAME IS LOAD-BEARING (see the LLVM original) — `armod` sorts first.
+public export data Cfg = { a : Int, b : Int }
+
+mkA : Cfg
+mkA = Cfg { a = 11, b = 22 }
+
+-- projected INSIDE the declaring module: `a` is slot 0, `b` is slot 1.
+export arA : Int
+arA = mkA.a
+
+export arB : Int
+arB = mkA.b

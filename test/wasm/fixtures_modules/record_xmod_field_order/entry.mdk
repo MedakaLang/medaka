@@ -1,0 +1,31 @@
+-- W9 port of test/llvm_fixtures_modules/record_xmod_field_order/entry.mdk (#1418,
+-- closing the coverage gap filed there: this corpus had ZERO cross-module
+-- same-name `data`/`interface` collision fixtures before this PR).
+--
+-- #1382 — TWO SAME-NAMED RECORDS AT DIFFERENT FIELD ORDERS, ONE MODULE GRAPH.
+-- `armod` and `zrmod` each declare a record TYPE spelled `Cfg` with the same two
+-- `Int` field names at OPPOSITE indices.  They do not import each other, and
+-- neither projects the other's record — every `.a`/`.b` happens INSIDE the module
+-- that declared the record being projected.  THE ENTRY MODULE NEVER MENTIONS `Cfg`
+-- AT ALL — it imports four plain `Int` values (the AGENTS.md "feature present,
+-- UNRELATED code still behaves" shape).
+--
+-- Expected output, derived BY HAND from the sources before this fixture was ever
+-- run, identically to the already-hand-derived LLVM original this ports
+-- (test/llvm_fixtures_modules/record_xmod_field_order/entry.mdk):
+--   armod: mkA = Cfg { a = 11, b = 22 }  =>  arA = 11, arB = 22
+--   zrmod: mkZ = Cfg { b = 33, a = 44 }  =>  zrA = 44, zrB = 33
+-- so `ar=11,22 zr=44,33`.
+--
+-- This gate (diff_wasm_modules.sh) is a LIVE differential against the native
+-- `medaka build` oracle, not a captured golden — there is nothing here to
+-- enshrine. Both the native oracle and the wasm engine were checked against the
+-- hand-derived value above (not just against each other) before landing; #1382 is
+-- long since fixed on both backends, so no divergence is expected on this shape.
+import armod.{arA, arB}
+import zrmod.{zrA, zrB}
+
+main : <IO> Unit
+main =
+  putStrLn
+    ("ar=" ++ intToString arA ++ "," ++ intToString arB ++ " zr=" ++ intToString zrA ++ "," ++ intToString zrB)

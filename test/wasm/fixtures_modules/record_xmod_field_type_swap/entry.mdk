@@ -1,0 +1,23 @@
+-- W9 port of test/llvm_fixtures_modules/record_xmod_field_type_swap/entry.mdk
+-- (#1418) — the `ws:soundness` half of #1382 (fixed): same mechanism as
+-- `record_xmod_field_order/`, but the two colliding fields have DIFFERENT TYPES at
+-- the swapped positions, so the wrong slot is not just the wrong number: it reads
+-- an `Int` out of a cell holding a `String` pointer. On the LLVM backend, pre-fix
+-- this shape was a native segfault rather than a wrong-value print (recorded in
+-- the LLVM original's own comment) — the class of bug a backend can get wrong in
+-- a way an interpreter structurally cannot, which is exactly why it belongs in
+-- every backend's corpus, wasm included.
+--
+-- Expected output, derived BY HAND from the sources before this fixture was ever
+-- run, identically to the already-hand-derived LLVM original:
+--   zrmod: mkZ = Cfg { s = "zed", a = 44 }  =>  zrOut = "44" ++ "zed" = 44zed
+--   armod: mkA = Cfg { a = 11, s = "arm" }  =>  arOut = "11" ++ "arm" = 11arm
+-- so `44zed|11arm`.
+--
+-- Live differential (native oracle) gate — no golden to enshrine. Checked against
+-- the hand-derived value above, not just against each other.
+import armod.{arOut}
+import zrmod.{zrOut}
+
+main : <IO> Unit
+main = putStrLn (zrOut ++ "|" ++ arOut)

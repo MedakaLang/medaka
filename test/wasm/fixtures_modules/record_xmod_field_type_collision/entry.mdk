@@ -1,0 +1,26 @@
+-- W9 port of test/llvm_fixtures_modules/record_xmod_field_type_collision/entry.mdk
+-- (#1418) — the SAME-INDEX, DIFFERENT-FIELD-TYPE spelling of the cross-module
+-- record identity defect (#1281/#1382, fixed). Kept distinct from
+-- `record_xmod_field_order/`: there the two records disagree about field ORDER,
+-- here they agree about order and disagree about the field's TYPE, so what the
+-- wrong record buys is the wrong SLOT REPRESENTATION (an unboxed Float cell read
+-- as a tagged Int) rather than the wrong offset — genuinely different codegen
+-- hazard for a backend to get wrong, worth its own wasm cell.
+--
+-- This module imports `aaf` — NOT `Cfg` — from `aacfg`, and `Cfg` only from
+-- `zzcfg`. `Cfg` at the literal below can therefore only mean zzcfg's, the sole
+-- `Cfg` this module ever brings into scope.
+--
+-- Expected output, derived BY HAND before this fixture was ever run, identically
+-- to the already-hand-derived LLVM original: `Cfg { fld = 7 }` then `.fld`, so `7`.
+--
+-- Live differential (native oracle) gate — no golden to enshrine. Checked against
+-- the hand-derived value above, not just against each other.
+import aacfg.{aaf}
+import zzcfg.{Cfg}
+
+v : Cfg
+v = Cfg { fld = 7 }
+
+main : <IO> Unit
+main = putStrLn (intToString v.fld)

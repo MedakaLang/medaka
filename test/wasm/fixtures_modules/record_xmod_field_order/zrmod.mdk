@@ -1,0 +1,20 @@
+-- W9 port of test/llvm_fixtures_modules/record_xmod_field_order/zrmod.mdk (#1418).
+--
+-- The other declaration of `Cfg`, with the SAME two field names at the OPPOSITE
+-- indices.  No import relationship with `armod`; this module is ordinary,
+-- self-consistent code that was broken purely by the existence of a same-named
+-- record somewhere else in the graph (#1382, fixed).
+--
+-- THE MODULE NAME IS LOAD-BEARING — `zrmod` sorts AFTER `armod`, so pre-fix these
+-- two projections were the ones that read armod's slots.
+public export data Cfg = { b : Int, a : Int }
+
+mkZ : Cfg
+mkZ = Cfg { b = 33, a = 44 }
+
+-- projected INSIDE the declaring module: `b` is slot 0, `a` is slot 1.
+export zrA : Int
+zrA = mkZ.a
+
+export zrB : Int
+zrB = mkZ.b

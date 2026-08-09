@@ -1,0 +1,15 @@
+-- W9 port of test/llvm_fixtures_modules/record_xmod_field_order_permuted/aamod.mdk
+-- (#1418).  THE MODULE-NAME PERMUTATION of `record_xmod_field_order/`: same two
+-- `Cfg` declarations and field orders, only the two MODULE NAMES are swapped, so
+-- the declaration that sorts first is now the `{ b, a }` one — this pair catches a
+-- fix that only got the sort-first-wins direction right (#1382, fixed).
+public export data Cfg = { b : Int, a : Int }
+
+mkAA : Cfg
+mkAA = Cfg { b = 33, a = 44 }
+
+export aaA : Int
+aaA = mkAA.a
+
+export aaB : Int
+aaB = mkAA.b

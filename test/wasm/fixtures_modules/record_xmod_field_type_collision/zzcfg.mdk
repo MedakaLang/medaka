@@ -1,0 +1,5 @@
+-- W9 port of test/llvm_fixtures_modules/record_xmod_field_type_collision/zzcfg.mdk
+-- (#1418). An unrelated record type ALSO named `Cfg`, whose sole field `fld` has
+-- the same name and the same INDEX as aacfg's but a DIFFERENT type (`Int` vs
+-- `Float`). This is the `Cfg` the entry module actually imports and constructs.
+public export data Cfg = { fld : Int }

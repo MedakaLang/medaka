@@ -1,0 +1,13 @@
+-- W9 port of test/llvm_fixtures_modules/record_xmod_field_order_permuted/zzmod.mdk
+-- (#1418).  The other `Cfg`, same field names, opposite indices from `aamod`; no
+-- import relationship between the two.
+public export data Cfg = { a : Int, b : Int }
+
+mkZZ : Cfg
+mkZZ = Cfg { a = 11, b = 22 }
+
+export zzA : Int
+zzA = mkZZ.a
+
+export zzB : Int
+zzB = mkZZ.b
