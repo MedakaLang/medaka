@@ -213,14 +213,19 @@ test "imported poly-monad wrapper pure dispatch some" =
 
 import bagmod.{Bag, fromL}
 
+-- The `: List Int` ascriptions ground the ELEMENT type.  Medaka does not default
+-- numeric literals, so `maximum`/`product` over an unannotated literal list leave
+-- `Ord`/`Eq`/`Debug` on the element genuinely ambiguous.  What this section tests
+-- — Foldable-derived methods dispatching to bagmod.mdk's IMPORTED impl — is
+-- unaffected by grounding the element.
 test "foldable-derived sum over imported instance" =
-  expectEqual 6 (sum (fromL [1, 2, 3]))
+  expectEqual 6 (sum (fromL ([1, 2, 3] : List Int)))
 
 test "foldable-derived maximum over imported instance" =
-  expectEqual "Some 3" (debug (maximum (fromL [3, 1, 2])))
+  expectEqual "Some 3" (debug (maximum (fromL ([3, 1, 2] : List Int))))
 
 test "foldable-derived product over imported instance" =
-  expectEqual 24 (product (fromL [2, 3, 4]))
+  expectEqual 24 (product (fromL ([2, 3, 4] : List Int)))
 
 test "foldable-derived length over imported instance" =
   expectEqual 3 (length (fromL [1, 2, 3]))

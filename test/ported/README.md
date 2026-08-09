@@ -8,8 +8,22 @@ Run with:
     medaka test test/ported/test_run_ported.mdk
     medaka test test/ported/test_eval_ported.mdk
     medaka test test/ported/test_loader_ported.mdk
+    medaka test test/ported/test_eval_divergent_ported.mdk
+    medaka test test/ported/test_eval_letrec_toplevel_ported.mdk
+    medaka test test/ported/test_eval_internal_prims_ported.mdk
 
 (Or via the built binary: `./medaka test test/ported/test_run_ported.mdk`)
+
+⚠️ **Do not maintain that list by hand — derive it.** `test/diff_compiler_ported.sh`'s
+`files=` variable is the authority on what this corpus contains, and this README has
+already been stale once:
+
+    grep -A3 '^files=' test/diff_compiler_ported.sh
+
+The last three files were split out of `test_eval_ported.mdk` by the #1445 typecheck
+triage; each one's own header says why it exists and what would let it be folded back.
+`test/ported/TYPECHECK-TRIAGE.txt` is the per-diagnostic record, and
+`diff_compiler_ported.sh`'s **typecheck ledger** is what keeps it from rotting.
 
 ## test_loader_ported.mdk
 
@@ -206,7 +220,7 @@ cases not yet ported. They could be added in a follow-up pass:
 | `t_float_add`…`t_float_neg_lit` | 6 assertions | Float/modulo |
 | `t_where_single`…`t_where_on_new_line` (11) | 11 assertions | Where clauses |
 | `t_guard_basic_neg`…`t_pguard_match_arm` (8) | 8 assertions | Function guards |
-| `t_newtype_wrap`…`t_newtype_deriving_ord` (8) | 8 assertions | Newtypes |
+| `t_newtype_wrap`…`t_newtype_deriving_ord` (8) | 8 assertions | Newtypes. The `deriving (Num)` declarations moved to **`test_eval_divergent_ported.mdk`** (#1461) |
 | `t_interp_basic`…`t_interp_derived` (9) | 9 assertions | String interpolation |
 | `t_bang_true`…`t_bang_chain` | 3 assertions | Unary operators |
 | `t_escape_newline`…`t_leading_newline_indent` (8) | 8 assertions | String escapes |
@@ -220,14 +234,14 @@ cases not yet ported. They could be added in a follow-up pass:
 | `t_field_assign_record`…`t_multi_field_ref_mid` (5) | 5 assertions | Field assign (Phase 28) |
 | `t_rec_pat_pun`…`t_rec_pat_rest` (3) | 3 assertions | Record patterns (Phase 31) |
 | `t_named_ctor_create_eval`…`t_named_ctor_field_order_eval` (3) | 3 assertions | Named-field variants (Phase 39) |
-| `t_iface_default_runs`, `t_iface_default_where_runs` | 2 assertions | Interface defaults (Phase 33) |
+| `t_iface_default_runs`, `t_iface_default_where_runs` | 2 assertions | Interface defaults (Phase 33). ⚠️ Both interfaces gained an explicit method signature in the #1445 triage: a signature-less default method is unconditionally rejected (#1460), so the SIGNATURE-LESS form these were ported from now has no coverage anywhere |
 | `t_if_let_match`…`t_let_else_no_match` (4) | 4 assertions | if let / let else (Phase 38) |
 | `t_rec_eq_constraint_true`…`t_rec_mutual_constraint` (4) | 4 assertions | Recursive constrained (Phase 74) |
 | `t_range_list_half_open`…`t_range_list_empty` (3) | 3 assertions | Range literals |
-| `t_range_array_half_open`…`t_array_from_list_empty` (7) | 7 assertions | Array primitives |
+| `t_range_array_half_open`…`t_array_from_list_empty` (7) | 7 assertions | Array primitives → moved to **`test_eval_internal_prims_ported.mdk`** (they reach `arrayGetUnsafe`/`arraySetUnsafe`) |
 | `t_range_pat_int_hit`…`t_range_pat_char_miss` (5) | 5 assertions | Range patterns |
 | `t_function_eval`, `t_function_guard_eval` | 2 assertions | `function` keyword (Phase 44) |
-| `t_letrec_top_fact`…`t_letrec_inline_mutual` (4) | 4 assertions | let rec (Phase 57) |
+| `t_letrec_top_fact`…`t_letrec_inline_mutual` (4) | 4 assertions | let rec (Phase 57). The 3 TOP-LEVEL cases moved to **`test_eval_letrec_toplevel_ported.mdk`** (#807); the expression-level `t_letrec_inline` stays in `test_eval_ported.mdk` |
 | `t_order_zero_param_before_fun`…`t_order_zero_param_chain` (3) | 3 assertions | Binding order (Phase 59.5) |
 | `t_cont_logical_eval` | 1 assertion | Leading-op continuation |
 | `t_generic_data_positional`…`t_derive_generic_param` (6) | 6 assertions | Generic/deriving |

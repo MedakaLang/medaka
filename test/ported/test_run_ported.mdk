@@ -50,8 +50,8 @@ classify x =
     let neg = "neg"
     neg
 
-test "if inline-then block-else pos" = expectEqual "pos" (classify 5)
-test "if inline-then block-else neg" = expectEqual "neg" (classify (-3))
+test "if inline-then block-else pos" = expectEqual "pos" (classify (5 : Int))
+test "if inline-then block-else neg" = expectEqual "neg" (classify (-3 : Int))
 
 -- else-less if: t_if_elseless — the function does IO; test the expression form
 test "else-less if pos" = expectTrue (5 > 0)
@@ -105,8 +105,8 @@ tk n _
 tk _ [] = []
 tk n (x :: xs) = x :: tk (n - 1) xs
 
-test "guard fallthrough take 2" = expectEqual [10, 20] (tk 2 [10, 20, 30, 40])
-test "guard base case (guard passes)" = expectEqual [] (tk 0 [10, 20, 30, 40])
+test "guard fallthrough take 2" = expectEqual [10, 20] (tk (2 : Int) [10, 20, 30, 40])
+test "guard base case (guard passes)" = expectEqual ([] : List Int) (tk (0 : Int) [10, 20, 30, 40])
 
 -- ── String/Char kernel (Phase 75) ──────────────────────────────────────────
 -- Ported from: t_string_kernel, t_string_codepoint, t_string_index_of,
@@ -492,13 +492,18 @@ test "inferred return-pos wrapper bool" = expectTrue (mkP 5 : Bool)
 
 mkPR n = if n <= 0 then tagP 0 else mkPR (n - 1)
 
-test "inferred return-pos recursive string" = expectEqual "S" (mkPR 3 : String)
-test "inferred return-pos recursive bool" = expectFalse (mkPR 3 : Bool)
+test "inferred return-pos recursive string" = expectEqual "S" (mkPR (3 : Int) : String)
+test "inferred return-pos recursive bool" = expectFalse (mkPR (3 : Int) : Bool)
 
 pingP n = if n <= 0 then tagP 0 else pongP (n - 1)
 pongP n = if n <= 0 then tagP 1 else pingP (n - 1)
 
-test "inferred return-pos mutual bool" = expectTrue (pingP 5 : Bool)
+-- The `(5 : Int)` grounds the ARGUMENT only: `pingP`/`pongP` are a mutually-
+-- recursive pair whose `n <= 0` yields `Ord a, Num a`, and a bare literal leaves
+-- `a` ambiguous (the self-recursive `mkPR` above does not have this problem).
+-- Return-position inference — the thing this section tests — is still carried by
+-- the `: Bool` ascription.
+test "inferred return-pos mutual bool" = expectTrue (pingP (5 : Int) : Bool)
 
 -- ── Runtime-error detection (REMOVED 2026-07-11) ─────────────────────────────
 -- t_runtime_err / t_guard_exhausted_err / t_string_bracket_index_oob used the
