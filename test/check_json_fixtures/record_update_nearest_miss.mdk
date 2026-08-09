@@ -1,0 +1,15 @@
+-- #62 NEAREST-MISS bystander.  A top-level line that literally starts
+-- `record Upper` and whose RHS is a VALID record update.  This is the only
+-- shape where a `braceHasBarAtTop` depth miscount would turn working code into
+-- a hard error — the scan must see the `|` and decline.  Expected: ZERO
+-- diagnostics.  (Its multi-line twin is a separate fixture: only one binding
+-- per module can be named `record`.)
+data P = { x : Int }
+data K = K
+
+record : K -> P -> P
+record K r = { r | x = 1 }
+
+main =
+  let p = record K (P { x = 0 })
+  println p.x

@@ -14,7 +14,6 @@
     { "include": "#impl-decl" },
     { "include": "#data-decl" },
     { "include": "#block-constructor" },
-    { "include": "#record-name" },
     { "include": "#type-param" },
     { "include": "#pipe-constructor" },
     { "include": "#deriving-iface" },
@@ -185,18 +184,9 @@
       ]
     },
 
-    "record-name": {
-      "comment": "record TypeName — color the type name being declared",
-      "match": "\\b(record)\\s+([A-Z][a-zA-Z0-9_']*)",
-      "captures": {
-        "1": { "name": "keyword.declaration.medaka" },
-        "2": { "name": "entity.name.type.medaka" }
-      }
-    },
-
     "type-param": {
       "comment": "type params in declaration headers and constraint positions",
-      "match": "(?<=\\b(?:data|record|interface)\\s{1,40}[A-Za-z0-9_']{1,40}\\s{1,10}|\\b(?:data|record|interface)\\s{1,40}[A-Za-z0-9_']{1,40}(?:\\s{1,10}[a-z][a-zA-Z0-9_']*){1}\\s{1,10}|\\b(?:data|record|interface)\\s{1,40}[A-Za-z0-9_']{1,40}(?:\\s{1,10}[a-z][a-zA-Z0-9_']*){2}\\s{1,10}|\\b(?:data|record|interface)\\s{1,40}[A-Za-z0-9_']{1,40}(?:\\s{1,10}[a-z][a-zA-Z0-9_']*){3}\\s{1,10}|\\b(?:requires|of)\\s{1,20}[A-Z][a-zA-Z0-9_']{0,40}\\s{1,10}|\\b(?:requires|of)\\s{1,20}[A-Z][a-zA-Z0-9_']{0,40}(?:\\s{1,10}[a-z][a-zA-Z0-9_']*){1}\\s{1,10})(?!(?:where|requires|of|deriving|let|in|if|then|else|match|do|mut|as|import|export|data|record|interface|impl|default|extern)\\b)([a-z][a-zA-Z0-9_']*)",
+      "match": "(?<=\\b(?:data|interface)\\s{1,40}[A-Za-z0-9_']{1,40}\\s{1,10}|\\b(?:data|interface)\\s{1,40}[A-Za-z0-9_']{1,40}(?:\\s{1,10}[a-z][a-zA-Z0-9_']*){1}\\s{1,10}|\\b(?:data|interface)\\s{1,40}[A-Za-z0-9_']{1,40}(?:\\s{1,10}[a-z][a-zA-Z0-9_']*){2}\\s{1,10}|\\b(?:data|interface)\\s{1,40}[A-Za-z0-9_']{1,40}(?:\\s{1,10}[a-z][a-zA-Z0-9_']*){3}\\s{1,10}|\\b(?:requires|of)\\s{1,20}[A-Z][a-zA-Z0-9_']{0,40}\\s{1,10}|\\b(?:requires|of)\\s{1,20}[A-Z][a-zA-Z0-9_']{0,40}(?:\\s{1,10}[a-z][a-zA-Z0-9_']*){1}\\s{1,10})(?!(?:where|requires|of|deriving|let|in|if|then|else|match|do|mut|as|import|export|data|interface|impl|default|extern)\\b)([a-z][a-zA-Z0-9_']*)",
       "captures": {
         "1": { "name": "variable.parameter.type.medaka" }
       }
@@ -259,7 +249,7 @@
         },
         {
           "name": "keyword.declaration.medaka",
-          "match": "\\b(data|record|interface|impl|default|extern|type|newtype|prop|bench|function)\\b"
+          "match": "\\b(data|interface|impl|default|extern|type|newtype|prop|bench|function)\\b"
         },
         {
           "name": "keyword.modifier.medaka",

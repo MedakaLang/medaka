@@ -1,0 +1,8 @@
+-- #935: a CONTEXTUAL keyword bound at a TOP-LEVEL LHS.  Before the fix this
+-- reported ``unexpected `=`; expected `rec` `` — a message about the `let rec`
+-- grammar, in a file that is not trying to write one.  (Its sibling
+-- reserved_kw_let_binding.mdk covers a FULLY-reserved word in a nested `let`,
+-- which reaches the same code by the other producer, `reservedIdentKeyword`.)
+let = 5
+
+main = println 1

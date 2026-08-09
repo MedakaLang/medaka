@@ -1,0 +1,1 @@
+{"files":[{"file":"<fixture>","diagnostics":[{"code":"T-TYPE-MISMATCH","kind":"type","message":"Type mismatch: Int vs String","range":{"end":{"character":24,"line":16},"start":{"character":12,"line":16}},"severity":1,"source":"medaka"}]}]}

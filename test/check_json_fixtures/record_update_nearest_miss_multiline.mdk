@@ -1,0 +1,15 @@
+-- #62 NEAREST-MISS bystander, multi-line arm.  Same shape as its one-line twin
+-- but with the update braces indented below the `=`, which is exactly the
+-- `= INDENT {` sequence `braceAfterEq` was widened to accept.  Widening the
+-- accept side is what makes this the shape at risk, so it is asserted on its
+-- own.  Expected: ZERO diagnostics.
+data P = { x : Int }
+data K = K
+
+record : K -> P -> P
+record K r =
+  { r | x = 2 }
+
+main =
+  let p = record K (P { x = 0 })
+  println p.x
