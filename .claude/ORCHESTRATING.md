@@ -1072,6 +1072,70 @@ an emitter-graph file does NOT invalidate the seed (emitted IR is identical); an
 
 ---
 
+## Your ROUTING comment is the frame later work is scoped against (2026-08-09)
+
+`[[feedback_the_orchestrators_prose_is_the_unreviewed_artifact]]` covers PR bodies. **A routing comment
+is worse**, and this session produced two instances in one day — both overturned by measurement within
+hours, both already acted on by the time they were.
+
+- **"The #1326/#1369 'indivisible' adjudication was wrong."** I argued the two needed different code
+  changes in one function pair, so sharing a function ≠ sharing a mechanism. A two-arm differential
+  showed they are coupled **through the table**: the re-export arm propagates exactly the rows the
+  provenance filter removes, and each half alone is measured-unsafe in opposite directions. **The
+  evidence was already in a source comment on the branch** (*"would propagate a poisoned row one hop
+  further. Land them together"*) and I reasoned past it.
+- **"#1383 IS the `universeFieldOwners` row."** Built on *"`headL owners` takes the first of a
+  graph-global list, which explains the import-order dependence."* But `fieldOwnerNames` `sortUniqS`es
+  (`typecheck.mdk`, and two further comments say so) — that read is **order-insensitive**. A design pass
+  then measured the owner set to be a **singleton holding the right key** in both faces.
+
+**Why routing is the dangerous kind.** A PR body describes work already done. A routing comment tells
+the next agent *where the defect lives and what shape the fix has* — so a wrong one converts directly
+into tracker structure and dispatched work. My #1383 routing caused an analysis-design gate to be added
+to that issue **aimed at the wrong half**.
+
+**Rules:**
+
+1. **Before routing a defect to a mechanism, grep the mechanism.** "X takes the first element, therefore
+   order matters" requires checking the list is unsorted. An explanation that *fits* the observed
+   behaviour is not evidence it *causes* it.
+2. **When retracting someone else's verdict, ask whether you are replacing their bad ARGUMENT with your
+   bad VERDICT.** A right conclusion reached badly is still right; overturning it needs evidence about
+   the conclusion. The original #1326/#1369 adjudication was right via a wrong argument — my
+   "correction" was strictly worse, because a verdict is what the next agent acts on.
+3. **Post retractions as new comments, never silent edits** — the earlier comment reads as the frame, so
+   the correction must sit where the frame is, and must name what was already acted on so the downstream
+   artifact gets re-aimed too.
+4. **Hedge a relayed lead, and demand it be tested by INTERVENTION.** One lead I relayed
+   (`argDispatchIdxRef`'s two write sites) was confirmed as a *fact* and refuted as the *cause* — the
+   reader's value is discarded, so patching it is not a no-op, it is simply unused. That refutation only
+   happened because the brief said *"check it actually accounts for the symptom rather than merely being
+   adjacent."* Put that sentence in.
+
+## Small operational facts that cost time this session (2026-08-09)
+
+- **An agent that ESCALATES a decision and then completes will re-surface it every time something wakes
+  it.** It has no way to learn its escalation was answered. Two agents re-reported stale "the open
+  decision, unchanged" summaries three times between them. **`TaskStop` the agent once you have acted on
+  its escalation** — the report is already in your context and on the PR.
+- **Brief a PRIVATE scratch subdirectory.** Two agents collided writing the same `build.log` path under
+  the shared session scratch dir.
+- **`gh issue edit` / `gh pr edit` currently FAIL on this repo** with a Projects-classic GraphQL
+  deprecation error. Use `gh api -X PATCH repos/<owner>/<repo>/issues/<N>` (or `.../pulls/<N>`), and
+  read the state back — `gh` writes can silently no-op.
+- **A wrap-up cannot reap worktrees from an isolated session.** The harness refuses git operations
+  targeting another worktree, so `git worktree list` is derivable but every removal signal and the
+  removal itself are not. That is *report-and-hold*, not a skipped step — post the derived list and let
+  each owner reap.
+- **A queue bounce is not automatically your break, and not automatically a flake either.** #1439 (a
+  test-only fixture PR, 12/12 green) was dequeued by `gates (sqlite)`. The discriminator — gathered
+  **before** re-enqueueing — was that the same gate passed on the **same base** in two other runs, and
+  that the PR's diff could not reach it. Re-enqueued and it merged unchanged. Blind-retrying a
+  deterministic red burned a round-trip on #1005; gathering the same-base evidence first is what
+  separates the two cases.
+
+---
+
 ## Failure modes seen
 
 - **Agent commits on its OWN-named branch, not the `worktree-agent-<id>` branch.** Merging the
