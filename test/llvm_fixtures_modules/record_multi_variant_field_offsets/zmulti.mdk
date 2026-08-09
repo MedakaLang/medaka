@@ -3,12 +3,25 @@
 -- and module IDENTITY; every type in it had at most ONE named-field constructor, so no
 -- input could reach the case where two `RecordInfo`s share a type identity.
 --
--- `Pair`'s two constructors AGREE on the offset of `px` (0) and `py` (1) and differ in
--- arity, which is what makes a `.px` / `.py` selection on a `Pair` legal: whichever
--- constructor typecheck stamps, the emitted `loadField` reads the same slot.  The values
--- below are built with DIFFERENT constructors and their fields hold DIFFERENT numbers, so
--- a regression that re-broke offset selection is a wrong VALUE on the executed binary,
--- not an invisible index-0 coincidence.
+-- 🚨 A `.field` SELECTION THROUGH SUCH A TYPE IS NOT IN THIS CELL, AND ITS ABSENCE IS
+-- THE FINDING.  The first version of this cell selected `mkA.px` on a `Pair` whose two
+-- constructors AGREE on every offset, on the argument that an agreeing layout makes the
+-- stamp immaterial.  That argument is true of the LLVM backend and false of WasmGC, and
+-- `gates (engines)` is what said so: on WasmGC a record is a `struct` type PER
+-- CONSTRUCTOR, so the stamp is a CAST, and casting a `PB` to `PA`'s struct type is
+-- illegal whatever the layouts are.  MEASURED on cold builds of BOTH the merge base
+-- `bfcd4ea7` and this branch — so it is pre-existing, not introduced:
+--
+--     shape                                          native      WasmGC
+--     |PA{px,py}|PB{px,py,pz}| , mkA.px and mkB.px    pa=1,2 …    trap: illegal cast
+--     |PA{px,py}|PB{px,py}|    , equal arity too      p=1,3       trap: illegal cast
+--     |A{x}|B{x}|              , IDENTICAL fields     t=1,2       trap: illegal cast
+--     …the same, with only the STAMPED ctor selected  t=1         t=1        (ok)
+--
+-- So such a selection is now refused by `stampableFieldRecord`
+-- (`T-FIELD-VARIANT-CONFLICT`) and this cell exercises the remedy the diagnostic names
+-- — `match` — which every engine agrees on.  The rejection itself is pinned where a
+-- rejection belongs, in `test/typecheck_error_fixtures/field_variant_*`.
 public export data Pair =
   | PA { px : Int, py : Int }
   | PB { px : Int, py : Int, pz : Int }
@@ -19,19 +32,19 @@ mkA = PA { px = 1, py = 2 }
 export mkB : Pair
 mkB = PB { px = 3, py = 4, pz = 5 }
 
--- 🚨 THE BYSTANDER, AND IT IS THE POINT OF THE CELL.  `Wrap`'s two constructors DISAGREE
--- on `alpha`'s offset (0 in `Cfg`, 1 in `Dfg`), so `w.alpha` on a `Wrap` receiver is
--- refused by `stampableFieldRecord` with `T-FIELD-VARIANT-CONFLICT` — the receiver's TYPE
--- does not say which constructor built the value and the emitted code is one constant
--- offset.  Declaring such a type is still legal, and BOTH of its constructors are
--- constructed here (which is what puts them in the emitter's construction-site-built
--- `recName -> labels` table — the discriminator #1455's reviewer isolated).
---
--- This cell asserts about code that has NOTHING TO DO with that type: the entry's whole
--- output comes from `Pair` and from `wrapAlpha`, and adding or removing `Wrap` must not
--- move it.  That is `AGENTS.md`'s "feature present, UNRELATED code still behaves" shape,
--- which is what a new program-wide rule owes and what a "does my feature work" fixture
--- cannot give.
+export pairPx : Pair -> Int
+pairPx p = match p
+  PA { px = x } => x
+  PB { px = x } => x
+
+-- 🚨 THE BYSTANDER.  `Wrap`'s two constructors DISAGREE on `alpha`'s offset (0 in
+-- `Cfg`, 1 in `Dfg`).  Declaring such a type is still legal, and BOTH of its
+-- constructors are constructed here — which is what puts them in the emitter's
+-- construction-site-built `recName -> labels` table, the discriminator #1455's reviewer
+-- isolated.  Nothing in the entry's output comes from a `.alpha`, so this cell asserts
+-- about code that has NOTHING TO DO with the conflicting declaration: `AGENTS.md`'s
+-- "feature present, UNRELATED code still behaves" shape, which is what a program-wide
+-- rule owes and what a "does my feature work" fixture cannot give.
 public export data Wrap =
   | Cfg { alpha : Int, beta : Int }
   | Dfg { beta : Int, alpha : Int }
@@ -42,18 +55,28 @@ mkC = Cfg { alpha = 10, beta = 20 }
 export mkD : Wrap
 mkD = Dfg { beta = 220, alpha = 110 }
 
--- The REMEDY the diagnostic names, exercised so the advice is not merely asserted: a
--- `match` names the constructor, so each arm knows its own layout.
---
--- ⚠️ BOTH ARMS RETURN THE SAME PROJECTION ON PURPOSE, and that is a guard, not laziness.
--- `Cfg` and `Dfg` share BOTH labels, and `frontend/ast.mdk`'s `Decl` note records that an
--- arm naming only shared labels picks the arm by CONSTRUCTOR natively but by LABEL SET in
--- the interpreter (#1217) — measured again here on the merge base: a two-arm `match` over
--- `mkD` takes the `Cfg` arm under `medaka run` and the `Dfg` arm on the built binary.
--- What is NOT divergent is the BINDING: the interpreter still binds `alpha` by name, so
--- both engines produced `11` for `mkD`'s `alpha` from the wrong arm.  Making both arms
--- project `alpha` therefore keeps this cell a test of THIS defect rather than of #1217.
+-- ⚠️ BOTH ARMS RETURN THE SAME PROJECTION ON PURPOSE, and that is a guard, not
+-- laziness.  `Cfg` and `Dfg` share BOTH labels, and an arm naming only shared labels
+-- picks the arm by CONSTRUCTOR natively but by LABEL SET in the interpreter (#1462,
+-- re-measured on the merge base while building this cell).  What is NOT divergent is
+-- the BINDING: the interpreter still binds `alpha` by name.  Making both arms project
+-- `alpha` therefore keeps this cell a test of THIS defect rather than of #1462.
 export wrapAlpha : Wrap -> Int
 wrapAlpha w = match w
   Cfg { alpha = a } => a
   Dfg { alpha = a } => a
+
+-- The SINGLE-constructor half, kept so this cell still asserts a VALUE that depends on
+-- the stamp `#1455` changed.  Two records, one named-field constructor each, sharing
+-- both field names at OPPOSITE offsets: `mkS.sx` and `mkO.sx` can only both be right if
+-- each selection resolved to its OWN declaration.  A single-constructor type is exactly
+-- the case the guard leaves alone — the stamp IS the runtime constructor, always.
+public export data Solo = { sx : Int, sy : Int }
+
+export mkS : Solo
+mkS = Solo { sx = 7, sy = 8 }
+
+public export data Olos = { sy : Int, sx : Int }
+
+export mkO : Olos
+mkO = Olos { sy = 6, sx = 5 }

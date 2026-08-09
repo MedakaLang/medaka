@@ -1,40 +1,43 @@
 -- THE MISSING AXIS: a type with TWO named-field CONSTRUCTORS (#1455 review, finding 1
--- ask 2).  `diff_compiler_engines` — which grades eval == native == wasm on this corpus —
--- WOULD have caught the defect that review found, because the interpreter resolves fields
--- by name at run time and is structurally immune to a wrong constant offset, so it and
--- native disagree the moment the offset is wrong.  The gate existed; the input did not.
--- This cell is the input.
+-- ask 2).  `diff_compiler_engines` — which grades eval == native == wasm on this corpus
+-- — WOULD have caught the defect that review found, because the interpreter resolves
+-- fields by name at run time and is structurally immune to a wrong constant offset, so
+-- it and native disagree the moment the offset is wrong.  The gate existed; the input
+-- did not.  This cell is the input, and on its first CI run it immediately earned its
+-- keep by red-lining a WasmGC divergence nobody had measured (see `zmulti.mdk`).
 --
--- Two things are asserted, and neither is "the new diagnostic fires":
+-- Three things are asserted, and none of them is "the new diagnostic fires":
 --
---   1. A multi-named-field-constructor type whose constructors AGREE on the offsets of
---      the selected fields is still LEGAL and still correct, on every engine.  `mkA` is a
---      `PA` and `mkB` is a `PB`, so a single stamped constructor has to serve two runtime
---      layouts; the fields hold different numbers, so a wrong offset is a wrong value.
---      This is the carve-out `stampableFieldRecord` deliberately keeps open, and the tree
---      depends on it (`frontend/ast.mdk`'s `Decl.pub`,
---      `test/references_fixtures/dup_field_def/`'s `getX t = t.x`).
+--   1. A multi-named-field-constructor type is DECLARED, both constructors are
+--      CONSTRUCTED, and both are consumed through `match` — the remedy the new
+--      diagnostic names — with every engine agreeing on the values.  `Pair`'s
+--      constructors have different arities and `Wrap`'s disagree on `alpha`'s offset,
+--      so both of the shapes the guard reasons about are present and executing.
 --
---   2. A type whose constructors DISAGREE (`zmulti`'s `Wrap`) may still be DECLARED, and
---      both of its constructors CONSTRUCTED, without changing anything about the rest of
---      the program.  Nothing in this entry's output comes from a `.alpha` selection; it
---      comes from `Pair` and from a `match`.  That is the "feature present, UNRELATED code
---      still behaves" fixture `AGENTS.md` says a program-wide rule owes, and it is the one
---      a "my feature works" fixture cannot substitute for.
+--   2. A type whose constructors DISAGREE (`Wrap`) may still be declared, and both of
+--      its constructors constructed, without changing anything about the rest of the
+--      program.  Nothing here selects `.alpha`.  That is the "feature present,
+--      UNRELATED code still behaves" fixture `AGENTS.md` says a program-wide rule owes.
+--
+--   3. `.sx`/`.sy` on the two SINGLE-constructor records still resolve to their OWN
+--      declarations, which is the property #1455 changed and the case the guard leaves
+--      alone.  Their fields are at OPPOSITE offsets, so a wrong pick is a wrong VALUE
+--      on the executed binary rather than an index-0 coincidence.
 --
 -- Expected output, DERIVED BY HAND from the sources before anything was run or captured:
---   mkA is `PA { px = 1, py = 2 }`   -> `mkA.px` = 1, `mkA.py` = 2
---   mkB is `PB { px = 3, py = 4, … }` -> `mkB.px` = 3, `mkB.py` = 4
---   wrapAlpha mkC = 10, wrapAlpha mkD = 110
--- so `pa=1,2 pb=3,4 w=10,110`.
+--   wrapAlpha mkC = 10, wrapAlpha mkD = 110               -> w=10,110
+--   pairPx mkA = 1, pairPx mkB = 3                        -> p=1,3
+--   mkS is Solo { sx = 7, sy = 8 }                        -> s=7,8
+--   mkO is Olos { sy = 6, sx = 5 }                        -> o=5,6
+-- so `w=10,110 p=1,3 s=7,8 o=5,6`.
 --
 -- Counterfactual, MEASURED on a cold build of the merge base `bfcd4ea7`: an entry
--- selecting `.alpha` on a `Wrap` instead of matching printed `d=22,11` where `medaka run`
--- printed `d=11,22` (and, with the field types differing, SIGSEGV'd at exit 139) — which
--- is why that selection is not in this cell and is pinned as a rejection instead.
-import zmulti.{Pair, Wrap, mkA, mkB, mkC, mkD, wrapAlpha}
+-- selecting `.alpha` on a `Wrap` instead of matching printed `d=22,11` where `medaka
+-- run` printed `d=11,22` (and, with the field types differing, SIGSEGV'd at exit 139) —
+-- which is why that selection is not in this cell and is pinned as a rejection instead.
+import zmulti.{Pair, Wrap, Solo, Olos, mkA, mkB, mkC, mkD, mkS, mkO, pairPx, wrapAlpha}
 
 main : <IO> Unit
 main =
   putStrLn
-    ("pa=" ++ intToString mkA.px ++ "," ++ intToString mkA.py ++ " pb=" ++ intToString mkB.px ++ "," ++ intToString mkB.py ++ " w=" ++ intToString (wrapAlpha mkC) ++ "," ++ intToString (wrapAlpha mkD))
+    ("w=" ++ intToString (wrapAlpha mkC) ++ "," ++ intToString (wrapAlpha mkD) ++ " p=" ++ intToString (pairPx mkA) ++ "," ++ intToString (pairPx mkB) ++ " s=" ++ intToString mkS.sx ++ "," ++ intToString mkS.sy ++ " o=" ++ intToString mkO.sx ++ "," ++ intToString mkO.sy)

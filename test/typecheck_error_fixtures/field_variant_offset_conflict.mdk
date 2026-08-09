@@ -14,11 +14,13 @@
 -- only statically honest answer to a program whose meaning the back end cannot
 -- represent.
 --
--- ⚠️ ITS CONTROL IS `field_variant_offset_agree_ok.mdk`, AND THE PAIR IS THE POINT.
--- The rule is NOT "reject multi-constructor record types" — when every constructor
--- agrees on the offset, every admissible stamp yields the same load and the access
--- stays legal.  A guard with no passing neighbour cannot show which half of it is
--- load-bearing.
+-- ⚠️ THIS IS THE DIFFERING-OFFSET ARM OF THE RULE, NOT THE WHOLE OF IT.  Its sibling
+-- `field_variant_same_offset_conflict.mdk` is the IDENTICAL-layout arm, which is
+-- refused just the same and carries the other of the code's two messages — see that
+-- file for the WasmGC measurement that retired the "the offsets agree, so the stamp is
+-- immaterial" exemption an earlier cut of this fix shipped with.
+-- `field_variant_single_ctor_control.mdk` is the control: one named-field constructor
+-- per type, so the stamp IS the runtime constructor and the selection stays legal.
 data Wrap =
   | Cfg { alpha : Int, beta : Int }
   | Dfg { beta : Int, alpha : Int }

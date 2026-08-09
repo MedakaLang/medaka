@@ -547,11 +547,11 @@ fieldFixFrom : Option Loc -> String -> Option (Loc, String)
 fieldHasRivalOwners : String -> Bool
 fieldOffsetIn : String -> List String -> Option Int
 fieldOffsetInGo : String -> List String -> Int -> Option Int
-fieldOffsetRival : Mono -> String -> String -> RecordInfo -> Option (String, String, Int, Int)
-fieldOffsetRivalGo : Option HeadKey -> String -> String -> Int -> List String -> Option (String, Int, Int)
-fieldOffsetRivalNamed : String -> Option HeadKey -> String -> String -> Int -> List String -> Option (String, String, Int, Int)
-fieldOffsetRivalOfType : Option String -> Option HeadKey -> String -> String -> Int -> Option (String, String, Int, Int)
 fieldOwnerNames : String -> List String
+fieldRivalCtor : Mono -> String -> String -> RecordInfo -> Option (String, String, Int, Int)
+fieldRivalCtorGo : Option HeadKey -> String -> String -> Int -> List String -> Option (String, Int, Int)
+fieldRivalCtorNamed : String -> Option HeadKey -> String -> String -> Int -> List String -> Option (String, String, Int, Int)
+fieldRivalCtorOfType : Option String -> Option HeadKey -> String -> String -> Int -> Option (String, String, Int, Int)
 fieldTyOf : Field -> Ty
 fieldTypeE : List (String, Ref Effvar) -> List (String, Mono) -> Field -> Mono
 fieldVariantConflictHelp : String -> String -> String

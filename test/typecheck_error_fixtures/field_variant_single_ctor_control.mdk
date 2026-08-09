@@ -1,0 +1,27 @@
+-- THE CONTROL for `field_variant_offset_conflict.mdk` and
+-- `field_variant_same_offset_conflict.mdk` (#1455 review round 2).
+--
+-- The rule is "a `.field` whose receiver TYPE has TWO named-field constructors declaring
+-- that field names no constructor". The control changes exactly one thing: each type has
+-- ONE named-field constructor, so the stamp IS the runtime constructor and the selection
+-- is legal. That is the overwhelmingly common shape — `data X = { … }` and
+-- `data T = | C { … }` — and it must not move.
+--
+-- ⚠️ THE TWO TYPES SHARE BOTH FIELD NAMES ON PURPOSE, at OPPOSITE offsets. Without a
+-- second owner of `sx` the guard's cheap first gate ("does any other registry key own
+-- this field?") answers no and the rest of it never runs, so a control built from one
+-- record would prove only that the gate short-circuits — not that the precise test
+-- accepts. Here the gate passes and the precise test is what returns `None`.
+--
+-- ⚠️ THE ASSERTION IS THE ERROR THAT DOES APPEAR, NOT THE ABSENCE OF ONE. An "it checks
+-- clean" control in this corpus would have to dump the whole 123-line prelude scheme
+-- list as its golden (see `impl_method_constraint_ok.mdk`). Instead the body is
+-- deliberately ill-typed in an UNRELATED way — the annotation says `Bool`, the field is
+-- an `Int` — so the golden is a one-line `Type mismatch`, and it can only be produced if
+-- `.sx` RESOLVED. A guard that over-fired would replace it with the conflict message.
+data Solo = { sx : Int, sy : Int }
+
+data Olos = { sy : Int, sx : Int }
+
+getSx : Solo -> Bool
+getSx s = s.sx
