@@ -545,17 +545,19 @@ fieldAssignNamePair : FieldAssign -> (String, Unit)
 fieldAssignSites : FieldAssign -> List (Ref Route)
 fieldFixFrom : Option Loc -> String -> Option (Loc, String)
 fieldHasRivalOwners : String -> Bool
-fieldOffsetIn : String -> List String -> Option Int
-fieldOffsetInGo : String -> List String -> Int -> Option Int
 fieldOwnerNames : String -> List String
-fieldRivalCtor : Mono -> String -> String -> RecordInfo -> Option (String, String, Int, Int)
-fieldRivalCtorGo : Option HeadKey -> String -> String -> Int -> List String -> Option (String, Int, Int)
-fieldRivalCtorNamed : String -> Option HeadKey -> String -> String -> Int -> List String -> Option (String, String, Int, Int)
-fieldRivalCtorOfType : Option String -> Option HeadKey -> String -> String -> Int -> Option (String, String, Int, Int)
+fieldRivalCtor : Mono -> String -> String -> RecordInfo -> Option (String, String, FieldRivalWhy)
+fieldRivalCtorGo : Option HeadKey -> String -> String -> (Int, Mono) -> List Mono -> List String -> Option (String, FieldRivalWhy)
+fieldRivalCtorNamed : String -> Option HeadKey -> String -> String -> (Int, Mono) -> List Mono -> List String -> Option (String, String, FieldRivalWhy)
+fieldRivalCtorOfType : Option String -> Option HeadKey -> String -> String -> (Int, Mono) -> List Mono -> Option (String, String, FieldRivalWhy)
+fieldRivalWhy : (Int, Mono) -> (Int, Mono) -> Option FieldRivalWhy
+fieldSlotAt : List Mono -> String -> RecordInfo -> Option (Int, Mono)
+fieldSlotIn : String -> List (String, Mono) -> Option (Int, Mono)
+fieldSlotInGo : String -> List (String, Mono) -> Int -> Option (Int, Mono)
 fieldTyOf : Field -> Ty
 fieldTypeE : List (String, Ref Effvar) -> List (String, Mono) -> Field -> Mono
-fieldVariantConflictHelp : String -> String -> String
-fieldVariantConflictMsg : String -> String -> String -> String -> Int -> Int -> String
+fieldVariantConflictHelp : String -> String -> FieldRivalWhy -> String
+fieldVariantConflictMsg : String -> String -> String -> String -> FieldRivalWhy -> String
 fillHoleAtom : List (String, Expr) -> Option Expr -> Atom -> Atom
 fillHolesInRow : List (String, Expr) -> EffRow -> Option Expr -> EffRow
 filterImplTysFor : List Decl -> String -> String -> List (List Ty)
@@ -1020,6 +1022,9 @@ moduleAliasEntry : String -> String -> ((String, String), List a) -> List (Strin
 moduleDictNames : List Decl -> List Decl -> List (String, List Decl) -> List String
 moduleUserFnNames : List (String, List Decl) -> List String
 monoArgUnboundIds : Mono -> List Int
+monoAtParams : List Int -> List Mono -> Mono -> Mono
+monoDeclDefinitelyDiffers : Mono -> Mono -> Bool
+monoDeclDiffersGo : Mono -> Mono -> Bool
 monoIdsWithIface : (Mono, String) -> List (Int, String)
 monoIsApp : Mono -> Bool
 monoIsBareTyvar : Mono -> Bool
@@ -1099,6 +1104,7 @@ pairIface : String -> Int -> List (String, Int)
 pairRecordByName : String -> Option (String, RecordInfo)
 pairsOfVecObls : List (String, List Int) -> List (String, Int)
 paramMonoOf : List (String, Mono) -> String -> Mono
+paramSubstOf : List Int -> List Mono -> List (Int, Mono)
 patVarsListTc : List Pat -> List String
 patVarsTc : Pat -> List String
 payloadAstTypes : ConPayload -> List Ty
@@ -1216,6 +1222,7 @@ recordCandIsType : Ident -> Ident -> String -> Bool
 recordDoMonadError : Loc -> Unit
 recordFieldMap : RecordInfo -> Map String Mono
 recordFieldNames : RecordInfo -> List String
+recordFields : RecordInfo -> List (String, Mono)
 recordForKeyAndReceiver : Option HeadKey -> String -> Option RecordInfo
 recordForReceiverIdent : Mono -> String -> Option RecordInfo
 recordIdentRowForReceiver : Option HeadKey -> List (Ident, String, RecordInfo) -> Option RecordInfo
@@ -1230,6 +1237,7 @@ recordMethodLevelSlotObls : List (String, String) -> List (String, Mono) -> Unit
 recordMethodObligationGuarded : TcEnv -> String -> Scheme -> Mono -> Mono
 recordNumlitLoc : Mono -> Unit
 recordObl : Predicate -> Int -> Provenance -> Option Loc -> Unit
+recordParamIds : RecordInfo -> List Int
 recordParamKinds : TyConOrigin -> String -> List Kind -> Unit
 recordPinnedLocals : String -> Option Loc -> List Int -> List (Int, String) -> Mono -> Bool
 recordPinnedLocalsGeneric : String -> Option Loc -> List Int -> List Int -> Mono -> Bool

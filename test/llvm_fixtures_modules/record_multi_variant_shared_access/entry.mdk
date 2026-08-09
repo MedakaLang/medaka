@@ -17,6 +17,16 @@
 --
 -- MEASURED on cold builds of BOTH the merge base `bfcd4ea7` and this branch, so the
 -- divergence is pre-existing and neither introduced nor drained by #1455.
+--
+-- 🚨 IT IS ALSO HALF OF A WITNESS, AND THE OTHER HALF IS
+-- `test/llvm_fixtures_modules/record_multi_variant_shared_access_one_reach/`.  That
+-- cell's `zshared.mdk` is BYTE-IDENTICAL to this one's (`cmp` them), constructs both
+-- constructors just like this one, and prints the same `t=1,3` — it differs ONLY in
+-- consuming `mkSB` with a `match` instead of projecting `mkSB.sx`, and it is WasmGC
+-- CLEAN.  That pair is what proves no declaration-level rule at the typecheck seam
+-- can separate the working programs from the trapping ones; see the twin's header and
+-- `stampableFieldRecord` in `compiler/types/typecheck.mdk`.  If you edit `zshared.mdk`
+-- here, edit it there too, byte for byte, or the witness dies.
 import zshared.{mkSA, mkSB}
 
 main : <IO> Unit

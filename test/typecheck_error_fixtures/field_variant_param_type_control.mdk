@@ -1,0 +1,50 @@
+-- THE CONTROL FOR THE TYPE ARM OF T-FIELD-VARIANT-CONFLICT: after instantiation at
+-- the receiver, these two shapes AGREE, and the guard must not fire (#1455 round 5).
+--
+-- `field_variant_type_conflict.mdk` pins the refusing half of the same rule, in both
+-- its concrete and its parametric spelling.  This cell pins the boundary on the other
+-- side, and it is the one a naive implementation gets wrong.
+--
+-- 🚨 WHY A STRUCTURAL COMPARISON OF THE RAW DECLARED TYPES WOULD BE A FRESH
+-- FALSE-REJECT SOURCE.  A `RecordInfo` holds the RAW declaration type, so each
+-- constructor carries ITS OWN parameter variables: the two `w`s in `Both` below are
+-- two DIFFERENT `TVar` cells for one source-level parameter, and a structural
+-- comparison would call them different types.  `Both` is as ordinary as a
+-- parameterised record gets — refusing it would be exactly the over-rejection round 3
+-- of this PR was rejected for, one axis over.  `monoAtParams`
+-- (`compiler/types/typecheck.mdk`) substitutes each declaration's parameters by the
+-- RECEIVER's type arguments before comparing, which is what makes both halves right.
+--
+-- ⚠️ `Mixed` IS THE SHARP HALF OF THE SAME BOUNDARY, AND IT IS WHY THE RECEIVER'S
+-- ARGUMENTS HAVE TO BE PART OF THE TEST.  `| Mx { mf : m }` against
+-- `| My { mf : Int }` is a CONFLICT at receiver `Mixed String` and NOT a conflict at
+-- receiver `Mixed Int` — at `Mixed Int` both slots really are `Int`.  This cell
+-- selects at `Mixed Int` and must be accepted; `field_variant_type_conflict.mdk`
+-- selects the same declarations at `Mixed String` and must be refused.  A rule that
+-- ignored the receiver would have to get one of those two wrong, and both wrong
+-- answers were MEASURED on this branch on the way to the shipped one.
+--
+-- ⚠️ THE TWO TYPES SHARE THEIR FIELD NAMES ON PURPOSE, for the reason
+-- `field_variant_single_ctor_control.mdk` gives: without a second registry owner of
+-- `wf`/`mf` the guard's cheap first gate answers "no rival possible" and the precise
+-- test never runs, so the cell would prove only that the gate short-circuits.
+--
+-- ⚠️ THE ASSERTION IS THE ERROR THAT DOES APPEAR, NOT THE ABSENCE OF ONE.  `getWf`'s
+-- body is ill-typed in an UNRELATED way (the annotation says `Bool`, the field is the
+-- parameter instantiated at `Int`), so the golden is a one-line `Type mismatch` that
+-- can only be produced if `.wf` RESOLVED.  `getMf` is well-typed and contributes
+-- nothing to the golden — which is itself the assertion for `Mixed`: a guard that
+-- over-fired there would add a second line.
+data Both w =
+  | Bw { wf : w, wg : Int }
+  | Aw { wf : w, wg : Int }
+
+data Mixed m =
+  | Mx { mf : m, mg : Int }
+  | My { mf : Int, mg : Int }
+
+getWf : Both Int -> Bool
+getWf b = b.wf
+
+getMf : Mixed Int -> Int
+getMf m = m.mf
