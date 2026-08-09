@@ -140,7 +140,13 @@ if [ "$g3" = "0" ]; then echo "OK: name/age queries correct (dup + NULL keys)"; 
 echo "=== Gate 4: sqlite3 uses each index ==="
 PN="$(sqlite3 "$DB" "EXPLAIN QUERY PLAN SELECT id FROM people WHERE name='bob';")"
 PA="$(sqlite3 "$DB" "EXPLAIN QUERY PLAN SELECT id FROM people WHERE age=25;")"
-if echo "$PN" | grep -q "INDEX idx_name" && echo "$PA" | grep -q "INDEX idx_age"; then
+# Here-strings (not `producer | grep -q`) on purpose: `grep -q` exits on its
+# first match, closing the pipe while the producer may still be writing —
+# under `pipefail` that write failure becomes the pipeline's exit status
+# even though grep matched, and a real match gets reported as "missing"
+# (see sqlite/test/update_expr_oracle.sh's check_count, #1447). A here-string
+# is written to a temp file before grep runs, so there is no live pipe.
+if grep -q "INDEX idx_name" <<<"$PN" && grep -q "INDEX idx_age" <<<"$PA"; then
   echo "OK: query planner uses idx_name and idx_age"
 else
   echo "FAIL: planner did not use the indexes"
@@ -194,7 +200,7 @@ fits () {
   rm -f "$FILLDB"
   local out
   out="$("$FILLER" "$n" "$FILLDB" 2>&1)"
-  if echo "$out" | grep -q '^Error:'; then return 1; fi
+  if grep -q '^Error:' <<<"$out"; then return 1; fi
   [ -f "$FILLDB" ] || return 1
   [ "$(sqlite3 "$FILLDB" 'PRAGMA integrity_check;')" = "ok" ] || return 1
   return 0
@@ -246,7 +252,7 @@ fi
 echo "=== Gate 8: overflow boundary is a clean refusal (no truncated index) ==="
 rm -f "$FILLDB"
 OVOUT="$("$FILLER" "$OVER" "$FILLDB" 2>&1)"
-if echo "$OVOUT" | grep -q '^Error:.*multi-page' && [ ! -f "$FILLDB" ]; then
+if grep -q '^Error:.*multi-page' <<<"$OVOUT" && [ ! -f "$FILLDB" ]; then
   echo "OK: n=$OVER refused cleanly ($OVOUT) and wrote NO database"
 else
   echo "FAIL: n=$OVER did not refuse cleanly (out='$OVOUT', db-exists=$( [ -f "$FILLDB" ] && echo yes || echo no ))"
