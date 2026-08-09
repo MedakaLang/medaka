@@ -45,7 +45,13 @@ if [ -d "$FIXDIR" ]; then
     name="$(basename "$d")"
     root="${d%/}"
     [ -f "$d/entry" ]        || { echo "FAIL fixture/$name (no entry file)"; fail=$((fail+1)); continue; }
-    [ -f "$d/oracle.tcmod" ] || { echo "FAIL fixture/$name (no oracle.tcmod — run sh test/capture_goldens.sh tcmod)"; fail=$((fail+1)); continue; }
+    # ⚠️ `sh test/capture_goldens.sh tcmod` is a NO-OP for this corpus (same trap as
+    # #1241) — tcmod is a FROZEN dev-probe family (dev/tc_module_probe.exe, removed
+    # with OCaml); no ROWS entry, no `--frozen` tag. There is no regeneration
+    # script; hand-write via
+    # `"$SELF" "$RUNTIME" "$CORE" <entry> <root> | strip_unit | LC_ALL=C sort > oracle.tcmod`,
+    # review the schemes before committing.
+    [ -f "$d/oracle.tcmod" ] || { echo "FAIL fixture/$name (no oracle.tcmod — NO REGEN SCRIPT; hand-write and review, see comment above)"; fail=$((fail+1)); continue; }
     entry="$root/$(cat "$d/entry")"
     golden="$(LC_ALL=C sort < "$d/oracle.tcmod")"
     self="$("$SELF" "$RUNTIME" "$CORE" "$entry" "$root" 2>/dev/null | strip_unit | LC_ALL=C sort)"

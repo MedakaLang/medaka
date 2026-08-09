@@ -75,7 +75,13 @@ for dir in "$FIXDIR"/*/; do
   [ -f "$entry" ] || { echo "skip $(basename "$dir") (no entry.mdk)"; continue; }
   name="$(basename "$dir")"
   golden="${dir%/}/entry.eval.golden"
-  [ -f "$golden" ] || { echo "no golden for $name (run sh test/capture_goldens.sh)"; fail=$((fail+1)); continue; }
+  # ⚠️ `sh test/capture_goldens.sh` is a NO-OP for this corpus (same trap as #1241) —
+  # test/llvm_fixtures_modules/ is not mentioned anywhere in test/capture_goldens.sh
+  # (no ROWS entry, no `--frozen` tag, no `want` block). There is no regeneration
+  # script; hand-write via the eval_typed_modules_main probe (the same evaluator
+  # this golden's IO capture was originally taken from — see the header comment
+  # above) and REVIEW the output before committing it.
+  [ -f "$golden" ] || { echo "no golden for $name — NO REGEN SCRIPT; hand-write and review (see comment above)"; fail=$((fail+1)); continue; }
   ref="$(cat "$golden")"
   ll="$WORK/$name.ll"
   bin="$WORK/$name.bin"

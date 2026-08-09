@@ -36,7 +36,12 @@ for dir in "$FIXDIR"/*/; do
   [ -f "$entry" ] || { echo "skip $(basename "$dir") (no main.mdk)"; continue; }
   name="$(basename "$dir")"
   golden="${dir%/}/main.eval.golden"
-  [ -f "$golden" ] || { echo "no golden for $name (run sh test/capture_goldens.sh)"; fail=$((fail+1)); continue; }
+  # ⚠️ `sh test/capture_goldens.sh` is a NO-OP for this corpus (same trap as #1241) —
+  # test/eval_typed_modules_fixtures/ is FROZEN in capture_goldens.sh (no ROWS
+  # entry, no `--frozen` tag; its "eval_typed_modules : FROZEN" comment is a
+  # stale one-time Phase-3 migration note, not a working recipe). There is no
+  # regeneration script.
+  [ -f "$golden" ] || { echo "no golden for $name — NO REGEN SCRIPT (FROZEN corpus); hand-derive the expected pp_value and write $golden yourself"; fail=$((fail+1)); continue; }
   ref="$(cat "$golden")"
   self="$("$SELF" "$RUNTIME" "$CORE" "$entry" "${dir%/}" 2>/dev/null | strip_unit)"
   if [ "$ref" = "$self" ]; then pass=$((pass+1)); printf 'ok   %s\n' "$name"
