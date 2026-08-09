@@ -1,0 +1,7 @@
+import amod.{af}  -- amod imported FIRST, IA's arity (1) wins the bare-name collision
+import zmod.{IZ, szK}  -- the method actually called is IZ's (String receiver)
+
+applyIt : (Int -> Int) -> Int
+applyIt g = g 5
+
+main = println (applyIt (szK "hi"))
