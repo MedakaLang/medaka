@@ -492,8 +492,8 @@ test "inferred return-pos wrapper bool" = expectTrue (mkP 5 : Bool)
 
 mkPR n = if n <= 0 then tagP 0 else mkPR (n - 1)
 
-test "inferred return-pos recursive string" = expectEqual "S" (mkPR (3 : Int) :String)
-test "inferred return-pos recursive bool" = expectFalse (mkPR (3 : Int) :Bool)
+test "inferred return-pos recursive string" = expectEqual "S" (mkPR (3 : Int) : String)
+test "inferred return-pos recursive bool" = expectFalse (mkPR (3 : Int) : Bool)
 
 pingP n = if n <= 0 then tagP 0 else pongP (n - 1)
 pongP n = if n <= 0 then tagP 1 else pingP (n - 1)
