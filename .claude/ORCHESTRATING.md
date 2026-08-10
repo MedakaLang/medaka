@@ -55,8 +55,15 @@ gh pr merge --auto --merge       # enqueues; the merge queue does the rest
 > This generalizes past `gh`: the recurring failure is **a tool reporting success while nothing
 > happened**, and the uniform defense is to re-derive the resulting state.
 
-**Ten required checks:** the **seven** `gates (…)` shards, **`soundness`**, `seed-health`, `inlang`. Zero
-approvals — the *checks* are the gate, not a human, so an agent can self-merge on green.
+**Required checks are a ruleset, not a remembered count.** Derive their current contexts before making a
+claim or changing CI:
+```sh
+gh api repos/MedakaLang/medaka/rulesets --jq '.[]|select(.enforcement=="active")|.id' | while read -r id; do
+  gh api "repos/MedakaLang/medaka/rulesets/$id" \
+    --jq '.rules[]|select(.type=="required_status_checks")|.parameters.required_status_checks[].context'
+done
+```
+Zero approvals — the *checks* are the gate, not a human, so an agent can self-merge on green.
 
 **`soundness` is required ON PURPOSE and must never be dropped.** It runs the compiler-source
 typecheck + the self-compile fixpoint. **Every gate passes on an ill-typed compiler** (the build does
@@ -66,17 +73,23 @@ with every shard green.
 ### ✅ There is a MERGE QUEUE. Do not hand-manage staleness.
 
 The repo is in the **MedakaLang org**; the queue is **ON** and replaced `strict` mode. It builds a
-temp branch of *your PR merged onto current `main`, plus everything queued ahead of you*, runs all
-nine checks **on that**, and merges only if green — the guarantee `strict` crudely approximated, and
-the reason branch-only CI is not enough (two branches both touched `typecheck.mdk`, auto-merged fine,
-and their **goldens** diverged → `main` red). It batches up to 5 entries per run (`ALLGREEN`: a bad
-PR fails its group and is bisected out; 5-min window; a lone PR never waits). Config:
-`merge_method=MERGE`, `grouping_strategy=ALLGREEN`, batch 1–5, 60-min check timeout. **`ci.yml`'s
+temp branch of *your PR merged onto current `main`, plus everything queued ahead of you*, runs every
+required context **on that**, and merges only if green — the guarantee `strict` crudely approximated,
+and the reason branch-only CI is not enough (two branches both touched `typecheck.mdk`, auto-merged
+fine, and their **goldens** diverged → `main` red). Queue parameters also live in the active ruleset;
+derive rather than encode them:
+```sh
+gh api repos/MedakaLang/medaka/rulesets --jq '.[]|select(.enforcement=="active")|.id' | while read -r id; do
+  gh api "repos/MedakaLang/medaka/rulesets/$id" \
+    --jq '.rules[]|select(.type=="merge_queue")|.parameters'
+done
+```
+**`ci.yml`'s
 `merge_group:` trigger is what makes the checks run on the queue's temp branch — without it the queue
 deadlocks. Do not remove it.**
 
 **`strict` is OFF deliberately.** With a queue it is redundant *and harmful*: it forces every open PR
-to rebase onto every merge and re-run all nine checks — the O(N²) tax the queue exists to delete.
+to rebase onto every merge and re-run every required context — the O(N²) tax the queue exists to delete.
 (The day we enabled the queue: 13 merges in one hour across three orchestrators; under `strict` one
 PR paid five full 20-minute suites without landing.)
 
@@ -170,8 +183,8 @@ everyone else's 30-second gate run into minutes. That has happened repeatedly.
 
 ```
 agent:        make preflight        # targeted: builds + runs ONLY what the diff touches
-              commit on its own branch, REPORT THE SHA
-orchestrator: verify → push → open a PR → CI runs the FULL suite → merge ONLY on green CI
+               commit on its own branch, REPORT THE SHA
+orchestrator: verify → push → narrowed PR CI → review → enqueue → full merge-group CI → merge
 ```
 
 The mechanics are in `AGENTS.md` (`make preflight` / `build_oracles.sh --for` / `make test` vs
@@ -185,10 +198,27 @@ there anyway — it is decisive and CI is too late); a `compiler/support/*` or `
 (blast radius is everything); a merge of two branches touching one subsystem; a CI failure you cannot
 reproduce.
 
+### Fast local feedback; independent CI evidence
+
+After an edit, run targeted format and lint **before** rebuilding the compiler or building any oracle.
+That puts cheap mechanical failures ahead of the expensive path and avoids rebuilding again after a
+formatter rewrite. For a comment-bearing two-line record, follow AGENTS.md's formatter safety rule and
+inspect the declaration after `fmt --write`. When formatter/linter behavior or accepted syntax itself
+changed, rerun the relevant check with the freshly built binary and apply any owed reflow before using
+its result.
+
+Local verification should be the smallest fail-capable signal for the changed property, plus the
+non-negotiable compiler checks the diff requires (for example, source typechecking and the native
+fixpoint for an LLVM backend change). Do not reproduce CI's broad matrix locally just to accumulate a
+longer receipt. Push once that signal is adequate: pull-request CI independently runs the relevant
+narrowed gates; the merge queue's `merge_group` run executes the full authoritative suite. The reviewer
+judges the diff and whether its tests can fail rather than re-running the author's suite.
+
 ### ⚠️ THE PREFLIGHT IS A FILTER, NOT AN AUTHORITY
 
-Green preflight = *the gates most likely to notice your change did not break*. Nothing more. **CI on
-the PR is the authority. Never merge on a green preflight.** A targeted local run re-introduces the
+Green preflight = *the gates most likely to notice your change did not break*. Nothing more. **Neither
+preflight nor a green narrowed PR run is the authority; merge-group CI is. Never merge on a green
+preflight.** A targeted local run re-introduces the
 exact hazard the testing overhaul exists to kill — **a suite reporting green while testing less than
 it appears to** (`diff_compiler_lint_multi` sat "skipped" for months, *while also failing*, because
 dash couldn't parse it and exit 2 counted as SKIP; a fresh clone once ran **zero tests and printed "0
@@ -632,19 +662,16 @@ cannot see the bug — will "fix" something else to make its change look justifi
 `needs-repro` label exists precisely so you can tell an agent which issues are leads rather than
 facts.** When it lands, have the agent flip the label to `verified` (with the SHA) or close it.
 
-⚠️ Also: **`git merge main` SILENTLY NO-OPS** when another worktree has `main` checked out (very
-likely with several agents live). Tell agents **`git merge origin/main`**.
-
 Every delegated task prompt should contain, in order:
 
 1. **One-line project framing** + the task.
-2. **STEP 0 — sync + VERIFY BASE:** `git merge origin/main --no-edit` first (never bare `git merge
-   main`), then `git merge-base --is-ancestor <tip-SHA> HEAD && echo BASE_OK || echo BASE_STALE` —
-   must print `BASE_OK`, else STOP+report. (An agent once silently built Phase 5 on a base missing two
-   prior phases; a redo was needed.) **Then record `BASE=$(git rev-parse HEAD)` — the pinned branch
-   point.** Every downstream diff/checkout uses `$BASE`, never `origin/main`/`main`: this box shares one
-   `.git` across worktrees, so those refs advance under you the moment any sibling agent fetches, and a
-   moving ref is not a fixed point (#519).
+2. **STEP 0 — choose + VERIFY BASE:** fetch `origin/main`, then record one immutable
+   `TASK_BASE=$(git rev-parse origin/main)` when the task starts from current main. An explicitly chosen
+   last-known-green or stacked SHA is also valid; state why. Create the worktree at exactly
+   `$TASK_BASE`, then require `git rev-parse HEAD` to equal it. (An agent once silently built Phase 5 on
+   a base missing two prior phases; a redo was needed.) Every downstream diff/checkout uses
+   `$TASK_BASE`, never `origin/main`/`main`: this box shares one `.git` across worktrees, so those refs
+   advance under you the moment any sibling fetches, and a moving ref is not a fixed point (#519).
 3. **Environment rules:** how to build (`make -C <worktree> medaka`), the no-`eval`/PATH quirks, the
    `perl -e 'alarm N; exec @ARGV'` timeout shim.
 4. **Context (verified facts):** the root cause + `file:line` pointers you already confirmed, and the
@@ -725,12 +752,13 @@ trap is treating "I'll remember it" as a fourth option — you won't.)
 
 ## Review every agent PR before merging — a REQUIRED step in the merge flow, not an optional extra
 
-**The merge flow is: CI green → independent reviewer → enqueue. Never skip the middle step.** An
-agent's own report is a claim, not a review — and a green CI on a bad diff is still a bad diff. So on
-**every** agent-authored PR, once CI is green, spawn a READ-ONLY **Sonnet reviewer** over the diff
-(playbook: **`.claude/skills/pr-review/SKILL.md`**) and enqueue *only* after it returns APPROVE. It
-reports; you decide; the *authoring* agent fixes (it has the context). **Gates prove *behavior*; the
-reviewer judges *craft*.**
+**The merge flow is: adequate local signal → narrowed PR CI → independent reviewer → enqueue →
+merge-group CI. Never skip review.** An agent's own report is a claim, not a review — and a green CI on
+a bad diff is still a bad diff. On **every** agent-authored PR, spawn the configured read-only
+**`compiler-reviewer`** agent over the diff (playbook: **`.claude/skills/pr-review/SKILL.md`**) once the material
+state is locally verified; it may run concurrently with PR CI. Enqueue only after it returns APPROVE.
+It reports; you decide; the *authoring* agent fixes (it has the context). **Gates provide evidence only
+for paths that actually ran; the reviewer judges test adequacy, discrimination, regressions, and craft.**
 
 - **Point the reviewer at the risk this specific change carries**, not a generic pass: byte-exactness
   for a data path, behavior-equivalence for a consolidation/migration (does the canonical match the
@@ -739,8 +767,8 @@ reviewer judges *craft*.**
 - **A change YOU verified hands-on** (e.g. an emitter fix you built + ran the fixpoint + diffed RNG
   byte-for-byte yourself) can count as the review — you did the reviewer's job directly. Say so. But
   don't self-certify an agent's diff you only *read*; spawn the reviewer.
-- Run it AFTER green (a red CI may change the diff, wasting the review). Reviews are cheap and parallel;
-  there is no excuse to enqueue unreviewed.
+- Run it after adequate local verification; it can overlap with PR CI. Rerun or resume it after any
+  material CI repair. There is no excuse to enqueue unreviewed.
 
 It has twice returned **do-not-merge** on a diff whose own gates were green, both times on this repo's
 #1 bug class (check green / run dies) — e.g. import aliasing left an aliased *interface method* unbound
@@ -879,8 +907,8 @@ When two branches touch one subsystem:
   newly exposed). Both found in a 60-second hand-probe *after* the agents reported green. Ask: "what
   does this newly accept, and does it RUN *and* BUILD correctly across every instantiation (Int *and*
   Float)?" A clean fixpoint + green differentials do NOT cover behavior the corpus never had.
-- `git log $BASE..<branch>` + `git diff --stat $BASE...<branch>` — the commits exist and the surface
-  matches the report. **Use the pinned `$BASE` from STEP 0, never `main`/`origin/main`**: every worktree
+- `git log $TASK_BASE..<branch>` + `git diff --stat $TASK_BASE...<branch>` — the commits exist and the surface
+  matches the report. **Use the pinned `$TASK_BASE` from STEP 0, never `main`/`origin/main`**: every worktree
   on this box shares one `.git`, so those refs move under a sibling's `git fetch` mid-task and a moving
   ref is not a fixed point to diff against (#519).
 - **Pick the decisive check per change type.** Self-hosted emitter → the **fixpoint** (C3a/C3b): it
@@ -933,6 +961,20 @@ a list of defects to anyone. **Do not hand over prose. Hand over a script.**
   debugging depth matters. Default for the hottest/most-load-bearing files.
 - Escalate mid-pattern: a "simple" first step may be Sonnet; the general fix it ladders into is Opus.
 
+### A mechanic edits; it does not discover
+
+Use a mechanic only after a scout/designer has supplied a bounded edit packet: exact files and symbols,
+the invariant to preserve, known caller/mirror set, and the one or two commands that grade the slice.
+Its first substantive action should be an edit, not a fresh architecture census. Do not hand it a whole
+hot-file refactor and ask it to rediscover ownership, call chains, and tests; that is design work and
+will consume its bounded turn without producing a commit. Mechanics are prohibited for S0/S1 bugs,
+typechecker or backend work, semantic decisions, architecture, and golden adjudication; a prompt calling
+one of those tasks "mechanical" does not change the routing.
+
+If a mechanic returns without an edit, the conductor must immediately narrow the work to a closed
+ownership family, take over the mechanical change, or return to design. Retrying the same broad prompt
+or merely increasing a tool budget repeats the routing failure.
+
 ---
 
 ## Parallelism & file hygiene
@@ -952,6 +994,11 @@ that drift detector is exactly what proves the seed was not contaminated. Do thi
 > Work ONLY in your own worktree. Do NOT `cd` into `/root/medaka` or any
 > `.claude/worktrees/<other>` directory, and do NOT build there — the CLAUDE.md path in your
 > context may point at someone else's tree; ignore it and use your own cwd.
+
+For a task beginning from current main, query and fetch the remote tip before creating its worktree; pin
+the task to that fetched commit, not to `/root/medaka`'s possibly stale checked-out `main`. A deliberately
+stacked or last-known-green task instead uses its explicitly recorded parent SHA. Shared worktrees can lag
+GitHub while other sessions advance refs, so a local `HEAD` alone is not a current-base proof.
 
 On your side: **never run `refresh_seed.sh`, `make medaka`, or `git add -A` in a tree you have not just
 confirmed clean** (`git status --short`). A shared worktree makes "capture my diff" unsound.
@@ -1148,7 +1195,7 @@ to that issue **aimed at the wrong half**.
   agent's "small additive change" report means a stale base. ⚠️ A shifted `origin/main` is ALSO a cause
   of a spurious surface, not only a stale agent base — this box shares one `.git`, so `origin/main`
   advances under a running diff the instant any sibling agent fetches. **The fix is the same either
-  way: diff against the pinned `$BASE` from STEP 0, never a moving ref** (#519, and see HARNESS.md).
+   way: diff against the pinned `$TASK_BASE` from STEP 0, never a moving ref** (#519, and see HARNESS.md).
 - **Stale-binary footguns.** (1) `make medaka`'s `find -newer` short-circuit can leave `./medaka` NOT
   carrying a lexer/compiler-graph change → `FORCE_EMITTER_REBUILD=1 make medaka` to verify one. (2) The
   `test/bin/*` oracles: `test/build_oracles.sh` **mtime-skips rebuilds**, so after a
@@ -1632,7 +1679,7 @@ actually run, or does it merely describe what the author expected to be true?**
   headers, and issue bodies against what was actually run. Grading them together lets the
   claim audit ride on the code review, which quietly drops it. Yield this session: **9 review
   passes, every one found a real defect**; both behaviour-changing units were blocked while
-  green on all 11 required checks — one shipped a fix that worked on `check` and was inert
+   green on every required check — one shipped a fix that worked on `check` and was inert
   on `run`/`build`, the other a regression turning a correct program into a crash. The two
   lenses also caught **each other's** errors twice: they reached opposite verdicts on one
   fixture header (the adversarial reviewer was right), and a round-1 reviewer's confident

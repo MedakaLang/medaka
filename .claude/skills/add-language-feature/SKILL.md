@@ -125,8 +125,9 @@ codebase with automatic imports.
 
 ## Verify
 
-`main` is PROTECTED — branch, then land via PR (nine required checks, zero
-approvals). Build first: `make medaka`. Before committing:
+`main` is PROTECTED — branch, then land via PR (every required context, zero
+approvals). On an existing compiler binary, format/lint before rebuilding; a fresh
+worktree must bootstrap once before it can run those commands. Before committing:
 
 ```sh
 medaka fmt --write <each changed .mdk>   # the pre-commit hook REJECTS unformatted .mdk

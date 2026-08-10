@@ -72,7 +72,7 @@ are unaffected — those are genuine wins.
 - the **op** arm counts the `contains` steps via `opBump` — exactly what you removed — so the
   op count goes **DOWN**.
 
-All 12 required checks stayed green. **"The gates pass" is evidence behavior did not change;
+Every required check stayed green. **"The gates pass" is evidence behavior did not change;
 it is NOT evidence a perf claim is true.**
 
 **So:** before migrating a scan whose key projection allocates, A/B `allocBytes` per call at
