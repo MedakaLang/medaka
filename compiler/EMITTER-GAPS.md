@@ -25,10 +25,11 @@ record-and-continue log so a SINGLE run surfaces EVERY unlowerable construct.
 > medaka run compiler/entries/llvm_emit_gaps_main.mdk \
 >   stdlib/runtime.mdk stdlib/core.mdk compiler/entries/all_modules_entry.mdk compiler
 > ```
-> The recording flag (`gapRecordEnabled`) defaults **OFF** — every gap site still
+> Normal emission is **Strict** — every gap site still
 > `panic`s on the normal path, so `diff_compiler_llvm` (129/129),
 > `diff_compiler_llvm_typed` (25/25), `diff_compiler_core_ir` (20/20) and
-> `diff_compiler_eval` (20/20) stay **byte-identical**. Only this probe flips it on.
+> `diff_compiler_eval` (20/20) stay **byte-identical**. Only this probe uses
+> per-emission **Record** mode.
 
 This is the orthogonal axis to `DISPATCH-INVENTORY.md`: dispatch is DONE
 (D0–D3b-2 — every arg-position site is `RKey`/`RDict` on the emit path), but the

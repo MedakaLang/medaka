@@ -183,4 +183,19 @@ else
     exit 1
   }
   printf 'checked same-process EmitInput isolation (P -> P+U -> P; distinct IR; P=7, P+U=11)\n'
+  "$EMITBIN" --gap-isolation > "$ISO/gap-isolation.out" 2> "$ISO/gap-isolation.err"
+  gap_rc=$?
+  [ "$gap_rc" -ne 0 ] || {
+    echo 'FAIL: strict LLVM emission inherited Record mode after a same-process recorded gap'
+    exit 1
+  }
+  [ "$(cat "$ISO/gap-isolation.out")" = 'LLVM_GAP_RECORD_OK' ] || {
+    printf 'FAIL: recorded-gap control did not reach its positive marker\n%s\n' "$(cat "$ISO/gap-isolation.out")"
+    exit 1
+  }
+  grep -F 'unsupported Core IR node CMatch' "$ISO/gap-isolation.err" >/dev/null || {
+    printf 'FAIL: strict-after-record control did not report CMatch\n%s\n' "$(cat "$ISO/gap-isolation.err")"
+    exit 1
+  }
+  printf 'checked same-process LLVM gap isolation (Record -> Strict CMatch)\n'
 fi

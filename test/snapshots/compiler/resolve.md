@@ -4345,7 +4345,7 @@ externTyOriginScope coreDecls = flatTyOriginScope coreDecls
 -- type, which is a strictly smaller set than the decls this tap retains.)
 --
 -- Shape is the established probe-flag idiom: `setFaithfulRoutes`
--- (ir/core_ir_sexp.mdk), `gapRecordEnabled` (backend/llvm_emit.mdk).  OFF by
+-- (ir/core_ir_sexp.mdk). OFF by
 -- default; one `Bool` read on the hot path; and it retains the decl lists BY
 -- REFERENCE (no copy, no projection, no rendering) so the probe owns the format and
 -- this file owns nothing but the fact.

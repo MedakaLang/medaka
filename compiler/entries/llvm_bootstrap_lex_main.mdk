@@ -3,7 +3,7 @@
 -- llvm_emit_modules_main.mdk (runs the REAL emitProgram so the native binary can
 -- be linked + run + byte-diffed against the interpreter), with ONE difference:
 --
---   it calls enableGapRecord () BEFORE emitProgram.
+--   it calls emitProgramRecord instead of strict emitProgram.
 --
 -- Why.  The bootstrap forces the REAL stdlib/core.mdk prelude through emitProgram
 -- (unlike llvm_emit_modules_main.mdk's deliberately EMPTY prelude).  core.mdk
@@ -17,7 +17,7 @@
 -- against the interpreter: if any gap the lexer ACTUALLY reaches got a "0"
 -- placeholder, the output diverges and the diff FAILS.  A passing diff therefore
 -- proves every placeholder was dead code.  (We reuse llvm_emit_gaps_main.mdk's
--- recording mechanism — enableGapRecord — but keep the REAL emitProgram, not the
+-- recording mechanism — emitProgramRecord — but keep the REAL emission path, not the
 -- measure-only emitProgramGaps.)
 --
 --   medaka run compiler/entries/llvm_bootstrap_lex_main.mdk <runtime.mdk> <core.mdk> <entry.mdk> [root ...]
@@ -40,7 +40,7 @@ import ir.core_ir_lower.{
   ctorFieldTypeNames,
   declSigTypeNames,
 }
-import backend.llvm_emit.{emitProgram, enableGapRecord, makeEmitInput}
+import backend.llvm_emit.{emitProgramRecord, makeEmitInput}
 import backend.private_mangle.{mangleUnits}
 import entries.entry_support.{driveModules}
 
@@ -54,8 +54,8 @@ runEmit runtimeDecls coreDecls modules =
   let allDecls = coreD ++ flatMap snd modules2
   let _ = preludeReturnPosDictNames coreD allDecls ++ preludeArgPosDictNames coreD allDecls ++ constrainedSigNames allDecls
   let input = makeEmitInput (returnsSelfTable allDecls) (selfFnParamTable allDecls) (methodIfaceTable allDecls) (methodConstraintIfaces allDecls) (ctorFieldTypeNames allDecls) (declSigTypeNames runtimeDecls ++ declSigTypeNames allDecls) (mainTypeIsUnit ()) (mainTypeIsFloat ()) 0 [] [] ""
-  let _ = enableGapRecord ()
-  putStr (emitProgram input (lowerProgramEmit allDecls))
+  let (text, _) = emitProgramRecord input (lowerProgramEmit allDecls)
+  putStr text
 -- Module-qualify module-PRIVATE top-level functions whose bare name collides
 -- across units, BEFORE elaborateModules flattens the boundaries away.  Without
 -- this, two modules' same-named privates (e.g. lex_main.emit vs lexer.emit) both

@@ -627,7 +627,7 @@ strSegIdRef = Ref 0
 curBindRef : Ref String
 curBindRef = Ref "?"
 
--- ── gap census (mirrors llvm_emit's gapRecordEnabled/gapLog/curGapBind) ───────
+-- ── gap census (mirrors LLVM's per-emission gap recording) ───────────────────
 -- The WasmGC emitter normally `panic`s at the first node it can't lower (`gap`).
 -- In CENSUS mode the gap helpers instead RECORD the reason and return a
 -- type-appropriate placeholder so emission CONTINUES, surfacing EVERY gap over the

@@ -33,8 +33,8 @@ prints the canonical token stream) and byte-diff against
 **Harness:** `test/bootstrap_lex.sh` (models `diff_compiler_llvm_modules.sh`;
 real `core.mdk`; diffs over every `test/diff_fixtures/*.mdk`).
 **Emit driver:** `compiler/entries/llvm_bootstrap_lex_main.mdk` — clone of
-`llvm_emit_modules_main.mdk` that runs the REAL `emitProgram` but calls
-`enableGapRecord ()` first, so the 8 UNREACHABLE dead-code gaps in `core.mdk`
+`llvm_emit_modules_main.mdk` that runs the REAL record-mode `emitProgramRecord`, so the
+8 UNREACHABLE dead-code gaps in `core.mdk`
 (`max`/`min` in `maximum`/`minimum`, the `Arbitrary` impls) become harmless `"0"`
 placeholders instead of aborting. The byte-diff is the safety net: a gap the
 lexer actually REACHES would diverge a fixture and FAIL — a passing diff proves
@@ -707,7 +707,7 @@ NOT a per-PR hard gate, so an emitter change does not force a seed refresh every
 ### The build driver fixpoints too
 C3 was proven only for the gap-tolerant bootstrap driver
 (`llvm_bootstrap_lex_main.mdk`). `medaka build` shells out to the **strict** driver
-`compiler/entries/llvm_emit_modules_main.mdk` (no `enableGapRecord`; instead `dceFilter`
+`compiler/entries/llvm_emit_modules_main.mdk` (Strict mode; instead `dceFilter`
 drops the unreachable `max`/`min`/`clamp` gaps). `test/selfcompile_build_fixpoint.sh`
 runs the C3 flow against *that* driver — using it as both the compiler and the program
 compiled — and confirms **C3a YES** (native IR1 == interpreted emission) and **C3b YES**

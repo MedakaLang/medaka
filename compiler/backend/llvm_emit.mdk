@@ -272,23 +272,17 @@ import backend.emit_support.{
 }
 
 -- ── D4 emitter-completeness inventory (record-and-skip) ──────────────────────
--- A MEASUREMENT scaffold for STAGE D4 (compiler/EMITTER-GAPS.md).  OFF by default:
--- when `gapRecordEnabled` is False every gap site below still `panic`s, exactly as
+-- A MEASUREMENT scaffold for STAGE D4 (compiler/EMITTER-GAPS.md). Strict by default:
+-- every gap site below still `panic`s, exactly as
 -- before, so normal emit output and all four diff_compiler_* gates stay
--- byte-identical.  The D4 gaps probe (llvm_emit_gaps_main.mdk) flips it ON to
+-- byte-identical. The D4 gaps probe (llvm_emit_gaps_main.mdk) emits in Record mode to
 -- COLLECT every gap in one pass instead of aborting on the first: each gap is
 -- recorded as "<binding>\t<reason>" and the offending construct returns a benign
 -- placeholder so emission of the rest of the program proceeds.  The placeholder
 -- poisons only that one sub-expression's output (which the probe discards — it
--- never compiles/links the .ll), so it surfaces ALL gaps rather than one.
-gapRecordEnabled : Ref Bool
-gapRecordEnabled = Ref False
-
-gapLog : Ref (List String)
-gapLog = Ref []
-
-curGapBind : Ref String
-curGapBind = Ref "?"
+-- never compiles/links the .ll), so it surfaces ALL gaps rather than one. Gap state
+-- belongs to an individual emission, never the module process.
+data GapMode = Strict | Record
 
 -- The CTFail target for a multi-clause function emitted as a CHAIN of single-clause
 
@@ -439,27 +433,14 @@ gDispIsMember n = match dispGroupOf gDispGroupsRef.value n
   Some _ => True
   None => False
 
-export enableGapRecord : Unit -> Unit
-enableGapRecord _ = setRef gapRecordEnabled True
-
--- clear the gap log (so one process can run several independent gap censuses).
-export resetGaps : Unit -> Unit
-resetGaps _ =
-  let _ = setRef gapLog []
-  let _ = resetEmittedDefaults ()
-  setRef curGapBind "?"
-
--- the recorded gap events, in first-recorded order ("<binding>\t<reason>").
-export gapEvents : Unit -> List String
-gapEvents _ = reverseL gapLog.value
-
 -- set the binding name attributed to subsequent gaps (the probe sets this per
 -- top-level binding / impl entry before emitting it).
-export setGapBind : String -> Unit
-setGapBind name = setRef curGapBind name
+setGapBind : Emit -> String -> Unit
+setGapBind e name = setRef e.curGapBind name
 
-noteGap : String -> Unit
-noteGap reason = setRef gapLog ("\{curGapBind.value}\t\{reason}"::gapLog.value)
+noteGap : Emit -> String -> Unit
+noteGap e reason =
+  setRef e.gapLog ("\{e.curGapBind.value}\t\{reason}"::e.gapLog.value)
 
 -- ── method-call RESULT-type inference (native backend) ──────────────────────
 -- The (interface, method) -> returns-self table, computed by core_ir_lower's
@@ -643,31 +624,27 @@ isCurSelfFnParam name = contains name curSelfFnParamsRef.value
 -- gap helpers: when recording is on, log the reason + return a placeholder so
 -- emission continues; otherwise `panic` (the unchanged normal-path behaviour).
 -- One per return shape the panic sites need.
-gapE : String -> (String, LTy)
-gapE reason =
-  if gapRecordEnabled.value then
-    let _ = noteGap reason in ("0", LTInt)
-  else
-    panic reason
+gapE : Emit -> String -> (String, LTy)
+gapE e reason = match e.gapMode
+  Record => let _ = noteGap e reason in ("0", LTInt)
+  Strict => panic reason
 
-gapU : String -> Unit
-gapU reason = if gapRecordEnabled.value then noteGap reason else panic reason
+gapU : Emit -> String -> Unit
+gapU e reason = match e.gapMode
+  Record => noteGap e reason
+  Strict => panic reason
 
 -- gap that returns the unchanged emit env (the bindPattern accumulator).
-gapEnv : String -> List (String, (String, LTy)) -> List (String, (String, LTy))
-gapEnv reason env =
-  if gapRecordEnabled.value then
-    let _ = noteGap reason in env
-  else
-    panic reason
+gapEnv : Emit -> String -> List (String, (String, LTy)) -> List (String, (String, LTy))
+gapEnv e reason env = match e.gapMode
+  Record => let _ = noteGap e reason in env
+  Strict => panic reason
 
 -- gap that returns a placeholder operand word (an unbound dict witness).
-gapStr : String -> String
-gapStr reason =
-  if gapRecordEnabled.value then
-    let _ = noteGap reason in "0"
-  else
-    panic reason
+gapStr : Emit -> String -> String
+gapStr e reason = match e.gapMode
+  Record => let _ = noteGap e reason in "0"
+  Strict => panic reason
 
 -- the static type of a slice-1/3 value, used to pick the print routine and the
 -- int-vs-float instruction (Core IR is type-erased; for this subset the type is
@@ -809,6 +786,9 @@ data Emit =
       implEntries : Ref (List CImplEntry),
       ctorTypes : Ref (List (String, String)),
       globalsReg : Ref (List (String, (Bool, LTy))),
+      gapMode : GapMode,
+      gapLog : Ref (List String),
+      curGapBind : Ref String,
     }
 
 -- a function's inferred signature: its parameter types (in order) and its return
@@ -1791,7 +1771,7 @@ emitExpr e env (CListIndex a i) = emitListIndex e env a i
 emitExpr e env (CListSlice a lo hi incl) = emitListSlice e env a lo hi incl
 emitExpr e env (CList es) = emitList e env es
 emitExpr e env (CRangeList lo hi incl) = emitRangeList e env lo hi incl
-emitExpr _ _ other = gapE ("unsupported Core IR node " ++ ctag other)
+emitExpr e _ other = gapE e ("unsupported Core IR node " ++ ctag other)
 
 -- a variable occurrence: a bare constructor name is a NULLARY ADT value
 -- → allocate its heap cell; a bare KNOWN top-level FUNCTION name used as a VALUE
@@ -1888,7 +1868,7 @@ lookupVarG e env x = match lookupAssoc x env
       let _ = emit e "  \{r} = load i64, ptr @mdk_g_\{x}"
       (r, LTInt)
     None =>
-      gapE ("unbound variable '" ++ x ++ "' (not a local, ctor, or known fn)")
+      gapE e ("unbound variable '" ++ x ++ "' (not a local, ctor, or known fn)")
 -- A not-yet-initialised global is still loaded from its `@mdk_g_<name>` cell:
 -- the `load` resolves at the instruction's RUNTIME, not emit time.  Two cases
 -- reach here, both correct as a deferred load.  (1) A reference INSIDE A LAMBDA
@@ -1946,7 +1926,7 @@ emitLit _ (LChar c) =
   let cp = charCode (arrayGetUnsafe 0 (stringToChars c))
   (intToString (cp * 2 + 1), LTChar)
 emitLit _ LUnit = ("1", LTUnit)
-emitLit _ _ = gapE "non-Int/Float/Bool/String/Char/Unit literal"
+emitLit e _ = gapE e "non-Int/Float/Bool/String/Char/Unit literal"
 
 -- ── string literals + string externs (native extern catalog slice 1) ─────────
 -- emit a module-scope line (a private string-literal global) into the side buffer
@@ -2035,7 +2015,7 @@ emitStrExtern e env "stringLength" args = match emitArgs e env args
   _ => panic "llvm: stringLength takes one argument"
 -- INTRINSIC: load cp_count@16, tag it
 
-emitStrExtern _ _ name _ = gapE ("unsupported string extern " ++ name)
+emitStrExtern e _ name _ = gapE e ("unsupported string extern " ++ name)
 
 -- numeric conversion externs (native extern catalog slice 2).
 -- intToFloat / floatToInt are INTRINSIC: inline sitofp / fptosi + box/untag.
@@ -2183,7 +2163,7 @@ emitNumExtern e env name args
       let _ = emit e "  \{r} = call double @mdk_\{name}(double \{da}, double \{db})"
       (boxFloat e r, LTFloat)
     _ => panic "llvm: binary math extern takes two arguments"
-emitNumExtern _ _ name _ = gapE ("unsupported numeric extern " ++ name)
+emitNumExtern e _ name _ = gapE e ("unsupported numeric extern " ++ name)
 
 -- IO-output externs (native extern catalog slice 3).
 -- putStr/putStrLn write to stdout; ePutStr/ePutStrLn write to stderr.
@@ -2244,7 +2224,7 @@ emitIoExtern e env "enableRunStdoutFlush" args = match emitArgs e env args
     let _ = emit e ("  call void @mdk_enable_run_stdout_flush(i64 " ++ u ++ ")")
     ("1", LTUnit)
   _ => panic "llvm: enableRunStdoutFlush takes exactly one argument"
-emitIoExtern _ _ name _ = gapE ("unsupported IO extern " ++ name)
+emitIoExtern e _ name _ = gapE e ("unsupported IO extern " ++ name)
 
 -- abort externs (native extern catalog slice 4).
 -- panic/exit terminate the process; the call itself never returns, so the
@@ -2303,7 +2283,7 @@ emitArrIntrinsic e env "arraySetUnsafe" args = match emitArgs e env args
     let _ = storeFieldDyn e arr idx_raw x
     ("1", LTUnit)
   _ => panic "llvm: arraySetUnsafe takes three arguments"
-emitArrIntrinsic _ _ name _ = gapE ("unsupported array intrinsic " ++ name)
+emitArrIntrinsic e _ name _ = gapE e ("unsupported array intrinsic " ++ name)
 
 -- array leaf externs (native extern catalog slice 7).
 -- C helpers in runtime/medaka_rt.c; array cell = [i64 count | elem@8 | ...].
@@ -2344,7 +2324,7 @@ emitArrLeafExtern e env "arrayFill" args = match emitArgs e env args
     let _ = emit e "  call void @mdk_array_fill(i64 \{x}, i64 \{arr})"
     ("1", LTUnit)
   _ => panic "llvm: arrayFill takes two arguments"
-emitArrLeafExtern _ _ name _ = gapE ("unsupported array leaf extern " ++ name)
+emitArrLeafExtern e _ name _ = gapE e ("unsupported array leaf extern " ++ name)
 
 -- char scalar externs (native extern catalog slice 8).
 -- charCode is INTRINSIC: Char and Int share the same tagged word encoding, so
@@ -2363,7 +2343,7 @@ emitCharExtern e env "charToStr" args = match emitArgs e env args
     let _ = emit e "  \{r} = call i64 @mdk_char_to_str(i64 \{a})"
     (r, LTStr)
   _ => panic "llvm: charToStr takes one argument"
-emitCharExtern _ _ name _ = gapE ("unsupported char extern " ++ name)
+emitCharExtern e _ name _ = gapE e ("unsupported char extern " ++ name)
 
 -- slice 9: string↔char conversions + codepoint slicing.
 isStrCharExtern : String -> Bool
@@ -2409,7 +2389,7 @@ emitStrCharExtern e env "stringFromUtf8Bytes" args = match emitArgs e env args
     let _ = emit e "  \{r} = call i64 @mdk_string_from_utf8_bytes(i64 \{a})"
     (r, LTStr)
   _ => panic "llvm: stringFromUtf8Bytes takes one argument"
-emitStrCharExtern _ _ name _ = gapE ("unsupported str-char extern " ++ name)
+emitStrCharExtern e _ name _ = gapE e ("unsupported str-char extern " ++ name)
 
 -- slice 14: ASCII char classification + case mapping (unicode subset).
 -- Predicate externs return raw 0/1 from C; emitter wraps with tagInt to Bool.
@@ -2485,7 +2465,7 @@ emitUnicodeExtern e env "stringToLower" args = match emitArgs e env args
     let _ = emit e "  \{r} = call i64 @mdk_string_to_lower(i64 \{s})"
     (r, LTStr)
   _ => panic "llvm: stringToLower takes one argument"
-emitUnicodeExtern _ _ name _ = gapE ("unsupported unicode extern " ++ name)
+emitUnicodeExtern e _ name _ = gapE e ("unsupported unicode extern " ++ name)
 
 -- slice 10: ADT-RETURNING externs (precursor canary).  The C side constructs the
 -- result cell with the reserved tags (see `reservedTag` / runtime mdk_some etc.), so
@@ -2523,7 +2503,7 @@ emitAdtExtern e env "stringCompare" args = match emitArgs e env args
     let _ = emit e "  \{r} = call i64 @mdk_string_compare(i64 \{a}, i64 \{b})"
     (r, LTCon)
   _ => panic "llvm: stringCompare takes two arguments"
-emitAdtExtern _ _ name _ = gapE ("unsupported adt extern " ++ name)
+emitAdtExtern e _ name _ = gapE e ("unsupported adt extern " ++ name)
 
 -- slice 12: args + env externs.  `args ()` → List String of argv[1..];
 -- `getEnv name` → Option String.  Results are LTCon — never auto-printed.
@@ -2543,7 +2523,7 @@ emitEnvExtern e env "getEnv" args = match emitArgs e env args
     let _ = emit e "  \{r} = call i64 @mdk_get_env(i64 \{n})"
     (r, LTCon)
   _ => panic "llvm: getEnv takes one argument"
-emitEnvExtern _ _ name _ = gapE ("unsupported env extern " ++ name)
+emitEnvExtern e _ name _ = gapE e ("unsupported env extern " ++ name)
 
 -- slice 13: file IO + stdin externs.  Result/Option/List returns are LTCon;
 -- fileExists returns raw 0/1 which the emitter tags (LTBool); readLine/readAll
@@ -2696,7 +2676,7 @@ emitFileExtern e env "buildFingerprint" args = match emitArgs e env args
     let _ = emit e "  \{r} = call i64 @mdk_build_fingerprint(i64 \{u})"
     (r, LTStr)
   _ => panic "llvm: buildFingerprint takes one (Unit) argument"
-emitFileExtern _ _ name _ = gapE ("unsupported file extern " ++ name)
+emitFileExtern e _ name _ = gapE e ("unsupported file extern " ++ name)
 
 -- Net externs (NET-DESIGN.md).  A SEPARATE family from isFileExtern — deliberately,
 -- so the wasm backend can reject the whole net set in one guard.  All return a
@@ -2781,7 +2761,7 @@ emitNetExtern e env "netSetTimeout" args = match emitArgs e env args
     let _ = emit e "  \{r} = call i64 @mdk_net_set_timeout(i64 \{fd}, i64 \{ms})"
     (r, LTCon)
   _ => panic "llvm: netSetTimeout takes two arguments"
-emitNetExtern _ _ name _ = gapE ("unsupported net extern " ++ name)
+emitNetExtern e _ name _ = gapE e ("unsupported net extern " ++ name)
 
 -- Tier D: RNG (deterministic SplitMix64).  The C runtime holds the state; the
 -- algorithm matches lib/eval.ml splitmix64_next, seeded identically, so output is
@@ -2822,7 +2802,7 @@ emitRngExtern e env "setSeed" args = match emitArgs e env args
     let _ = emit e ("  call void @mdk_set_seed(i64 " ++ n ++ ")")
     ("1", LTUnit)
   _ => panic "llvm: setSeed takes one argument"
-emitRngExtern _ _ name _ = gapE ("unsupported rng extern " ++ name)
+emitRngExtern e _ name _ = gapE e ("unsupported rng extern " ++ name)
 
 -- wallTimeSec / allocBytes: both take Unit and return a boxed Float (same ABI
 -- as randomFloat).  C: mdk_wall_time_sec / mdk_alloc_bytes in medaka_rt.c.
@@ -2854,7 +2834,7 @@ emitPerfExtern e env "allocBytes" args = match emitArgs e env args
     let _ = emit e "  \{r} = call i64 @mdk_alloc_bytes(i64 \{u})"
     (r, LTFloat)
   _ => panic "llvm: allocBytes takes one (Unit) argument"
-emitPerfExtern _ _ name _ = gapE ("unsupported perf extern " ++ name)
+emitPerfExtern e _ name _ = gapE e ("unsupported perf extern " ++ name)
 
 -- Hashable per-type hashers (specified, byte-identical to lib/eval.ml hash_*).
 -- Each unpacks the native arg the C helper wants (untagged int / codepoint /
@@ -2893,7 +2873,7 @@ emitBitExtern e env "bitNot" args = match emitArgs e env args
     let _ = emit e "  \{r} = call i64 @mdk_bit_not(i64 \{x})"
     (tagInt e r, LTInt)
   _ => panic "llvm: bitNot takes one argument"
-emitBitExtern _ _ name _ = gapE ("unsupported bit extern " ++ name)
+emitBitExtern e _ name _ = gapE e ("unsupported bit extern " ++ name)
 
 isHashExtern : String -> Bool
 isHashExtern name =
@@ -2934,7 +2914,7 @@ emitHashExtern e env "hashString" args = match emitArgs e env args
     let _ = emit e "  \{r} = call i64 @mdk_hash_string(i64 \{a})"
     (tagInt e r, LTInt)
   _ => panic "llvm: hashString takes one argument"
-emitHashExtern _ _ name _ = gapE ("unsupported hash extern " ++ name)
+emitHashExtern e _ name _ = gapE e ("unsupported hash extern " ++ name)
 
 -- Debug-literal externs (byte-exact quoted/escaped rendering; no oracle change).
 -- The String/Char arg word passes straight to the C helper (mdk_debug_*_lit
@@ -2956,7 +2936,7 @@ emitDebugLitExtern e env "debugCharLit" args = match emitArgs e env args
     let _ = emit e "  \{r} = call i64 @mdk_debug_char_lit(i64 \{cp})"
     (r, LTStr)
   _ => panic "llvm: debugCharLit takes one argument"
-emitDebugLitExtern _ _ name _ = gapE ("unsupported debug-lit extern " ++ name)
+emitDebugLitExtern e _ name _ = gapE e ("unsupported debug-lit extern " ++ name)
 
 -- ── extern dispatch: applied form ───────────────────────────────────────────
 -- Is `name` a KNOWN extern of any family the emitter handles?  The OR of every
@@ -3059,7 +3039,7 @@ emitBin e env op l r tag
       _ =>
         let _ = emit e "  \{r2} = call i64 @mdk_append(i64 \{lv}, i64 \{rv})"
         (r2, LTUnknown)
-  | otherwise = gapE ("unsupported binary operator '" ++ op ++ "'")
+  | otherwise = gapE e ("unsupported binary operator '" ++ op ++ "'")
 -- LTUnknown: the left operand is itself a runtime-dispatched-append result
 -- (a CHAINED `++`, e.g. `a ++ b ++ c`).  Its kind is genuinely unknown — it
 -- may be a String OR a list (typecheck.mdk's `freeEffvars` builds `List Int`
@@ -3668,7 +3648,7 @@ emitUn e env "!" x =
   let r = freshReg e
   let _ = emit e "  \{r} = xor i64 \{i}, 1"
   (tagInt e r, LTBool)
-emitUn _ _ op _ = gapE ("unsupported unary op " ++ op)
+emitUn e _ op _ = gapE e ("unsupported unary op " ++ op)
 
 -- `if`: lower via an alloca slot (memory, not phi) so a branch's own internal
 -- control flow never has to be threaded into a phi's incoming-block list — the
@@ -3739,8 +3719,9 @@ emitLet e env False pat e1 e2 =
   else
     bindPattern e env pat v e2
   emitExpr e env2 e2
-emitLet _ _ _ _ _ _ =
+emitLet e _ _ _ _ _ =
   gapE
+    e
     "unsupported let (only non-recursive let var/_/tuple = e, or function-let)"
 
 -- a `let`/`where` group.  Bindings emit one at a time, left-to-right, threading
@@ -3784,7 +3765,7 @@ emitKnotRun e env binds body =
   let run = takeFnRun binds
   let after = dropS (lengthS run) binds
   let runNames = bindNames run
-  if anyRefsOutsideRun run runNames (bindNames after) then gapE "unsupported let-group: a binding forward/mutually references a later value binding (knot-tying covers only mutual function bindings)"
+  if anyRefsOutsideRun run runNames (bindNames after) then gapE e "unsupported let-group: a binding forward/mutually references a later value binding (knot-tying covers only mutual function bindings)"
   else
     let env2 = emitLetGroupKnot e env run runNames
     emitLetGroup e env2 after body
@@ -4036,8 +4017,8 @@ emitBlock e env ((CSAssign x ex)::rest) =
 emitBlock e env [CSAssign _ ex] =
   let _ = emitExpr e env ex
   ("1", LTUnit)
-emitBlock _ _ [] = gapE "empty block"
-emitBlock _ _ _ = gapE "unsupported block statement"
+emitBlock e _ [] = gapE e "empty block"
+emitBlock e _ _ = gapE e "unsupported block statement"
 
 -- bind a list of field patterns to a parallel list of loaded field words.
 bindFieldList : Emit -> List (String, (String, LTy)) -> List Pat -> List String -> List (String, (String, LTy))
@@ -4401,7 +4382,7 @@ emitMethodValue e env name route implRoutes methRoutes =
   if arity <= 0 then emitMethod e env name route implRoutes methRoutes []
   else
     let capNames = methValDictNames route
-    let capWords = capDictWords env capNames
+    let capWords = capDictWords e env capNames
     let lamName = "mdk_methval_\{name}_\{intToString (freshId e)}"
     let _ = emitMethodValDefine e env lamName name route implRoutes methRoutes arity capNames
     emitClosureAllocA e lamName arity capWords
@@ -4450,9 +4431,9 @@ methValDictNames (RLocal _ dicts) = routeDictNames [] dicts
 methValDictNames _ = []
 
 -- the operand words for each captured dict name, looked up in the current emit env.
-capDictWords : List (String, (String, LTy)) -> List String -> List String
-capDictWords _ [] = []
-capDictWords env (d::rest) = dictOperand env d :: capDictWords env rest
+capDictWords : Emit -> List (String, (String, LTy)) -> List String -> List String
+capDictWords _ _ [] = []
+capDictWords e env (d::rest) = dictOperand e env d :: capDictWords e env rest
 
 -- emit the lifted method-value forwarder.  Captures (the dict words) load from
 -- `%clos` fields 1.. and rebind the route's dict name(s); the body re-emits the
@@ -4499,7 +4480,7 @@ emitDictValue e env name routes =
       let lamName = "mdk_dictval_\{name}_\{intToString (freshId e)}"
       let _ = emitDictValDefine e lamName name (lengthS dictWords) valArity
       emitClosureAllocA e lamName valArity dictWords
-  else gapE ("CDict head '" ++ name ++ "' is not a known top-level function")
+  else gapE e ("CDict head '" ++ name ++ "' is not a known top-level function")
 
 -- emit the lifted constrained-fn value forwarder.  Closure cell layout: field 0 =
 -- code_ptr, fields 1..nDicts = captured dict words.  The forwarder takes `valArity`
@@ -4546,7 +4527,7 @@ dictRoutedUnderApplied _ _ _ _ = False
 emitMethodPap : Emit -> List (String, (String, LTy)) -> String -> Route -> List Route -> List Route -> List String -> Int -> (String, LTy)
 emitMethodPap e env name route implRoutes methRoutes argOps arity =
   let capNames = dedupS (routeDictNames [] (route :: implRoutes ++ methRoutes))
-  let dictWords = capDictWords env capNames
+  let dictWords = capDictWords e env capNames
   let remaining = arity - lengthS argOps
   let lamName = "mdk_methpap_\{name}_\{intToString (freshId e)}"
   let _ = emitMethodPapDefine e env lamName name route implRoutes methRoutes arity capNames (lengthS argOps)
@@ -4613,7 +4594,7 @@ emitDefaultRKey e env name tag methRoutes implRoutes argOps = match defaultForAt
     else
       LTInt
     emitImplCall e fname (dictWords ++ argOps) resTy
-  None => gapE "no impl of method '\{name}' for type '\{tag}'"
+  None => gapE e "no impl of method '\{name}' for type '\{tag}'"
 
 -- Dispatch tier for an RKey route that matched no concrete impl: a GENERAL instance
 -- (`impl Iface a`), whose head is a bare type variable and so is registered under
@@ -5098,7 +5079,7 @@ declareOfDefine l =
 -- on either would get its own dispatcher rather than a silently mis-arity'd call.
 emitMethodDispatchChain : Emit -> List (String, (String, LTy)) -> String -> String -> List Route -> List String -> (String, LTy)
 emitMethodDispatchChain e env name d methRoutes argOps =
-  let dictPtr = dictOperand env d
+  let dictPtr = dictOperand e env d
   let methWords = dictWordsOf e env methRoutes
   let nmw = lengthS methWords
   let nargs = lengthS argOps
@@ -5583,11 +5564,12 @@ emitMethodArgDispatch e method argOps =
 emitDefaultArgTag : Emit -> String -> List String -> (String, LTy)
 emitDefaultArgTag e method argOps =
   gapE
+    e
     ("arg-tag dispatch for method '" ++ method ++ "' has no impl groups (unresolved RNone fallback)")
 
 emitArgTagDispatch : Emit -> String -> List ImplGroup -> List String -> (String, LTy)
 emitArgTagDispatch e method groups argOps
-  | headPos (groupPositionsOf (headGroup groups)) >= lengthS argOps = gapE ("arg-tag dispatch for method '" ++ method ++ "': discriminating arg position not supplied (under-applied / unapplied method)")
+  | headPos (groupPositionsOf (headGroup groups)) >= lengthS argOps = gapE e ("arg-tag dispatch for method '" ++ method ++ "': discriminating arg position not supplied (under-applied / unapplied method)")
   | otherwise = emitArgTagDispatchGo e method groups argOps (headPos (groupPositionsOf (headGroup groups)))
 
 emitArgTagDispatchGo : Emit -> String -> List ImplGroup -> List String -> Int -> (String, LTy)
@@ -5622,8 +5604,9 @@ emitArgDispatchChain e method tagReg (g::rest) argOps slot endL =
 -- an i1 that is true when the loaded ctor tag equals ANY of a type's constructor
 -- tags (OR-chain of icmp eq against each hashName).
 emitTagMatch : Emit -> String -> List String -> String
-emitTagMatch _ _ [] =
+emitTagMatch e _ [] =
   gapStr
+    e
     "arg-tag dispatch on impl type that owns no constructors (primitive receiver carries no cell tag)"
 emitTagMatch e tagReg [c] =
   let r = freshReg e
@@ -5699,7 +5682,7 @@ emitDictApp e env name routes argOps =
           emitPapClosure e ("mdk_" ++ name) allWords n
         else emitDictAppDirect e name allWords
       None => emitDictAppDirect e name allWords
-  else gapE ("CDict head '" ++ name ++ "' is not a known top-level function")
+  else gapE e ("CDict head '" ++ name ++ "' is not a known top-level function")
 
 -- the plain direct constrained-fn call: dict words followed by the real arg words,
 -- in the order dict_pass bound `name`'s leading dict params (the historical lowering).
@@ -5734,8 +5717,8 @@ dictWordOfRoute e env (RKey key reqs) =
     emitConstDictCell e (hashName key) reqWords
   else
     emitDictCell e (hashName key) reqWords
-dictWordOfRoute _ env (RDict d) = dictOperand env d
-dictWordOfRoute _ env (RDictFwd d) = dictOperand env d
+dictWordOfRoute e env (RDict d) = dictOperand e env d
+dictWordOfRoute e env (RDictFwd d) = dictOperand e env d
 dictWordOfRoute _ _ RNone = "0"
 -- S-1: RLocal's own dicts are the call's leading dict ARGS (emitted by emitMethod's
 -- RLocal arm via emitDictApp), not a dict WITNESS for this route — so as a witness it
@@ -5796,10 +5779,10 @@ emitConstDictCell e headTag reqWords =
       "ptrtoint (ptr @" ++ gname ++ " to i64)"
 
 -- the operand word a dict parameter name is bound to in the emit env.
-dictOperand : List (String, (String, LTy)) -> String -> String
-dictOperand env d = match lookupAssoc d env
+dictOperand : Emit -> List (String, (String, LTy)) -> String -> String
+dictOperand e env d = match lookupAssoc d env
   Some (op, _) => op
-  None => gapStr ("unbound dict witness '" ++ d ++ "' in emit env (dict not threaded to this site)")
+  None => gapStr e ("unbound dict witness '" ++ d ++ "' in emit env (dict not threaded to this site)")
 
 -- ── impl method definitions ─────────────────────────────────────────────────
 -- Each typeclass impl method lowers to ONE top-level `@mdk_impl_<tag>_<method>`,
@@ -6332,7 +6315,7 @@ listContains (x::rest) v
 emitGroupBody : Emit -> String -> String -> List Int -> Int -> List (List Pat, CExpr) -> Unit
 emitGroupBody e fname _ _ 0 [([], body)] = emitFnBody e [] fname body
 emitGroupBody e fname _ _ 0 _ =
-  gapU "nullary impl group with more than one clause"
+  gapU e "nullary impl group with more than one clause"
 -- Fast path: single-clause all-PVar impl (e.g. `append xs ys = xs ++ ys`).
 -- Build a typed env directly from param names × receiver type so that `++`/`::`
 -- operands inherit the correct LTy (LTStr/LTCon) from the impl head tag.
@@ -7501,11 +7484,11 @@ emitTree e env roots arms _ slot endL _ rty (CTLeaf i) =
 emitTree e env roots arms occs slot endL ftL rty (CTGuard i fail) = match nthArm arms i
   Some (CArm pat guards body) => if allGuardsEmittable guards then emitGuardedArm e env roots arms occs pat guards body fail slot endL ftL rty
   else
-    let _ = gapU "refutable pattern guard (`p <- e`) in a match arm (CTGuard) — not yet lowered"
+    let _ = gapU e "refutable pattern guard (`p <- e`) in a match arm (CTGuard) — not yet lowered"
     let _ = emit e ("  store i64 0, ptr " ++ slot)
     emit e ("  br label %" ++ endL)
   None =>
-    let _ = gapU "guarded arm index out of range (CTGuard)"
+    let _ = gapU e "guarded arm index out of range (CTGuard)"
     let _ = emit e ("  store i64 0, ptr " ++ slot)
     emit e ("  br label %" ++ endL)
 emitTree e env roots arms occs slot endL ftL rty (CTDrop sub) =
@@ -7530,7 +7513,7 @@ emitLeaf e env roots arms i slot endL rty = match nthArm arms i
           let _ = setRef rty bty
           let _ = emit e "  store i64 \{bv}, ptr \{slot}"
           emit e ("  br label %" ++ endL)
-  None => gapU "decision arm index out of range"
+  None => gapU e "decision arm index out of range"
 -- TRMC (TRMC-DESIGN.md): when a destination-passing loop is active (multi-clause
 -- eligible fn — emitClauseTree's clause-selection tree), the clause body is a
 -- TAIL leaf → descend it via emitTrmcBody (cons-into-dest+loop / store+exit)
@@ -7670,8 +7653,9 @@ bindPattern e env (PAs x _ p) v body =
 -- it); bind the head element (field 0) to `p` and the tail (field 1) to `PList ps`.
 bindPattern e env (PList (p::ps)) v body =
   bindFields e env [p, PList ps] v body 0
-bindPattern _ env p _ _ =
+bindPattern e env p _ _ =
   gapEnv
+    e
     ("unsupported pattern in match arm (variable / wildcard / constructor / tuple / cons / nil / int-literal only): " ++ ptag p)
     env
 
@@ -7795,6 +7779,7 @@ emitRefutMatch e env (PList (p::ps)) v body failL =
   emitRefutFields e env [p, PList ps] v body failL 0
 emitRefutMatch e env p _ _ _ =
   gapEnv
+    e
     ("refutable pattern in guard/range arm not lowered (variable / wildcard / as / tuple / literal / range / constructor / cons / list only): " ++ ptag p)
     env
 
@@ -7881,7 +7866,7 @@ emitSwitch e env roots arms (foc::rest) (branches@((CTBranch h _)::_)) dft slot 
 -- Note: HUnit is now handled before reaching here (irrefutable — no test needed).
 gapSwitchHead : Emit -> String -> String -> Unit
 gapSwitchHead e slot endL =
-  let _ = gapU "unsupported switch head (constructor / list / tuple / int-literal / unit heads only)"
+  let _ = gapU e "unsupported switch head (constructor / list / tuple / int-literal / unit heads only)"
   let _ = emit e ("  store i64 0, ptr " ++ slot)
   emit e ("  br label %" ++ endL)
 
@@ -7920,7 +7905,7 @@ emitConChain e env roots arms foc rest tagReg ((CTBranch h sub)::more) dft slot 
     let _ = emit e (next ++ ":")
     emitConChain e env roots arms foc rest tagReg more dft slot endL ftL rty
   None =>
-    let _ = gapU "heterogeneous constructor switch (a column is all-constructor or all-literal)"
+    let _ = gapU e "heterogeneous constructor switch (a column is all-constructor or all-literal)"
     let _ = emit e ("  store i64 0, ptr " ++ slot)
     emit e ("  br label %" ++ endL)
 
@@ -7976,8 +7961,8 @@ emitLitChain e env roots arms foc rest ((CTBranch (HLit (LString s)) sub)::more)
   let _ = emitTree e env roots arms rest slot endL ftL rty sub
   let _ = emit e (next ++ ":")
   emitLitChain e env roots arms foc rest more dft slot endL ftL rty
-emitLitChain _ _ _ _ _ _ _ _ _ _ _ _ =
-  gapU "non-Int literal switch (no Float / Bool literal heads)"
+emitLitChain e _ _ _ _ _ _ _ _ _ _ _ =
+  gapU e "non-Int literal switch (no Float / Bool literal heads)"
 
 -- ── small list helpers ────────────────────────────────────────────
 takeS : Int -> List a -> List a
@@ -8052,7 +8037,7 @@ emitFn e (CBind name (c::rest)) = match dispGroupOf gDispGroupsRef.value name
       ()
     else
       emitMultiClauseFn e name clauses
-emitFn _ (CBind _ []) = gapU "top-level function with no clauses"
+emitFn e (CBind _ []) = gapU e "top-level function with no clauses"
 
 -- TRMC branch point (TRMC-DESIGN.md §"Emitter touchpoints" #2): if `name`'s
 -- clauses are TRMC-eligible AND its leading-dict count is uniform across clauses
@@ -8667,7 +8652,7 @@ emitGDispMembers _ _ [] = ()
 emitGDispMembers e binds (m::rest) =
   let _ = match dispFindBind binds m
     Some b => emitGDispMember e b
-    None => gapU ("(b') group member without a bind: " ++ m)
+    None => gapU e ("(b') group member without a bind: " ++ m)
   emitGDispMembers e binds rest
 
 -- a member's entry block: reload its arity-many slots (typed from its inferred
@@ -8679,7 +8664,7 @@ emitGDispMembers e binds (m::rest) =
 -- fallthrough (each member manages its own fallthroughs).
 emitGDispMember : Emit -> CBind -> Unit
 emitGDispMember e (CBind name clauses) = match gDispCtxRef.value
-  GDispOff => gapU "(b') member emit with no active group context"
+  GDispOff => gapU e "(b') member emit with no active group context"
   GDispOn _ _ uslots _ _ =>
     let arity = clauseArityOf clauses
     let ptys = match sigLookup e name
@@ -9152,6 +9137,7 @@ emitFnBodyDBlock e env self worker fp arity ((CSLet _ (PVar x _) rhs)::rest) =
     emitFnBodyDBlock e ((x, (v, ty))::env) self worker fp arity rest
 emitFnBodyDBlock e env _ _ _ _ _ =
   gapU
+    e
     "float-worker block: unexpected statement shape (should be gated by floatWorkerBlockOk)"
 
 emitTailLeafD : Emit -> List (String, (String, LTy)) -> String -> String -> List Int -> Int -> CExpr -> (CExpr, List CExpr) -> Unit
@@ -10076,7 +10062,7 @@ emitRecordUpdate e env recName base updates =
   let (bw, _) = emitExpr e env base
   let firstLabel = cFieldFirstLabel updates
   match recordByName e recName firstLabel
-    None => gapE ("CRecordUpdate: unknown record type for field '" ++ firstLabel ++ "'")
+    None => gapE e ("CRecordUpdate: unknown record type for field '" ++ firstLabel ++ "'")
     Some (name, labels) =>
       let updatePairs = emitUpdatePairs e env updates
       let words = buildUpdateWords e bw labels updatePairs 0
@@ -10102,7 +10088,7 @@ emitVariantUpdate : Emit -> List (String, (String, LTy)) -> String -> CExpr -> L
 emitVariantUpdate e env con base updates =
   let (bw, _) = emitExpr e env base
   match recFieldsOfName e con
-    None => gapE ("CVariantUpdate: unknown variant type for constructor '" ++ con ++ "'")
+    None => gapE e ("CVariantUpdate: unknown variant type for constructor '" ++ con ++ "'")
     Some labels =>
       let updatePairs = emitUpdatePairs e env updates
       let words = buildUpdateWords e bw labels updatePairs 0
@@ -10112,7 +10098,7 @@ emitRefAlloc : Emit -> List (String, (String, LTy)) -> List CExpr -> (String, LT
 emitRefAlloc e env [x] =
   let (xw, _) = emitExpr e env x
   emitCtorAlloc e "$ref" [xw]
-emitRefAlloc e env _ = gapE "Ref expects exactly 1 argument"
+emitRefAlloc e env _ = gapE e "Ref expects exactly 1 argument"
 
 emitSetRef : Emit -> List (String, (String, LTy)) -> List CExpr -> (String, LTy)
 emitSetRef e env [r, x] =
@@ -10124,7 +10110,7 @@ emitSetRef e env [r, x] =
   let _ = emit e "  \{fp} = getelementptr i8, ptr \{p}, i64 8"
   let _ = emit e "  store i64 \{xw}, ptr \{fp}"
   ("1", LTInt)
-emitSetRef e env _ = gapE "setRef expects exactly 2 arguments"
+emitSetRef e env _ = gapE e "setRef expects exactly 2 arguments"
 
 emitFieldExprs : Emit -> List (String, (String, LTy)) -> List CField -> List String
 emitFieldExprs _ _ [] = []
@@ -10644,7 +10630,7 @@ emitArrayMakeWith e env [nExpr, fExpr] =
   let w = freshReg e
   let _ = emit e "  \{w} = ptrtoint ptr \{p} to i64"
   (w, LTCon)
-emitArrayMakeWith e env _ = gapE "arrayMakeWith takes two arguments"
+emitArrayMakeWith e env _ = gapE e "arrayMakeWith takes two arguments"
 
 -- ── lists ─────────────────────────────────────────────────────────
 -- VALUE REPRESENTATION: a list is a chain of boxed Cons cells (matching the
@@ -10776,7 +10762,17 @@ emitRangeList e env lo hi incl =
 -- `@main` that computes the top-level nullary value bindings (in source order),
 -- then `main`'s body, then a type-directed print.
 export emitProgram : EmitInput -> CProgram -> String
-emitProgram input (CProgram groups ctorArs ctorTypes implEntries) =
+emitProgram input cp =
+  let (text, _) = emitProgramMode Strict input cp
+  text
+
+-- Record-mode emission is self-contained: callers receive both the rendered LLVM and
+-- the gap events, so no state can leak across emissions in one process.
+export emitProgramRecord : EmitInput -> CProgram -> (String, List String)
+emitProgramRecord input cp = emitProgramMode Record input cp
+
+emitProgramMode : GapMode -> EmitInput -> CProgram -> (String, List String)
+emitProgramMode gapMode input (CProgram groups ctorArs ctorTypes implEntries) =
   let e = Emit {
     -- issue #118: the two halves are emitted by INDEPENDENT emitter runs, so they
     -- get disjoint gensym ranges or their lifted defines collide — see
@@ -10799,6 +10795,9 @@ emitProgram input (CProgram groups ctorArs ctorTypes implEntries) =
       initGlobalsRegReady (valBinds groups)
     else
       initGlobalsReg (valBinds groups)),
+    gapMode = gapMode,
+    gapLog = Ref [],
+    curGapBind = Ref "?",
   }
   let _ = resetDistinctTypeNames ()
   let _ = setRef dictConstCacheRef []
@@ -10866,7 +10865,7 @@ emitProgram input (CProgram groups ctorArs ctorTypes implEntries) =
   let _ = emitFns e (fnBinds groups)
   let _ = emitImpls e implEntries
   let _ = preludeIdSpaceGuard e
-  joinNl (reverseL e.buf.value ++ reverseL e.lams.value)
+  (joinNl (reverseL e.buf.value ++ reverseL e.lams.value), reverseL e.gapLog.value)
 
 -- `@mdk_program_main`: the init prologue (every top-level value binding's rhs, in
 -- source order) followed by `main`'s own body and the type-directed print.
@@ -11126,6 +11125,9 @@ emitProgramGaps input (CProgram groups ctorArs ctorTypes implEntries) =
     implEntries = Ref implEntries,
     ctorTypes = Ref ctorTypes,
     globalsReg = Ref (initGlobalsRegReady (valBinds groups)),
+    gapMode = Record,
+    gapLog = Ref [],
+    curGapBind = Ref "?",
   }
   let _ = resetDistinctTypeNames ()
   let _ = setRef dictConstCacheRef []
@@ -11153,18 +11155,17 @@ emitProgramGaps input (CProgram groups ctorArs ctorTypes implEntries) =
   -- the gap census emits every bind ORDINARILY — reset the (b′) groups so a prior
   -- emitProgram's routing state can never leak into this path.
   let _ = setRef gDispGroupsRef []
-  let _ = resetGaps ()
-  let _ = enableGapRecord ()
+  let _ = resetEmittedDefaults ()
   let _ = emitPreamble e
   let _ = emitFnsGaps e (fnBinds groups)
   let _ = emitImplsGaps e implEntries
   let _ = emitTopBindsGaps e [] (valBinds groups)
-  gapEvents ()
+  reverseL e.gapLog.value
 
 emitFnsGaps : Emit -> List CBind -> Unit
 emitFnsGaps _ [] = ()
 emitFnsGaps e ((CBind name cs)::rest) =
-  let _ = setGapBind ("fn " ++ name)
+  let _ = setGapBind e ("fn " ++ name)
   let _ = emitFn e (CBind name cs)
   emitFnsGaps e rest
 
@@ -11174,17 +11175,17 @@ emitImplsGaps e entries = emitGroupsGaps e (groupImpls e entries)
 emitGroupsGaps : Emit -> List ImplGroup -> Unit
 emitGroupsGaps _ [] = ()
 emitGroupsGaps e (g::rest) =
-  let _ = setGapBind "impl \{groupMethodOf g}@\{groupTag g}"
+  let _ = setGapBind e "impl \{groupMethodOf g}@\{groupTag g}"
   let _ = emitGroup e g
   emitGroupsGaps e rest
 
 emitTopBindsGaps : Emit -> List (String, (String, LTy)) -> List CBind -> Unit
 emitTopBindsGaps _ _ [] = ()
 emitTopBindsGaps e env ((CBind name [CClause [] body])::rest) =
-  let _ = setGapBind ("val " ++ name)
+  let _ = setGapBind e ("val " ++ name)
   let (v, ty) = emitExpr e env body
   emitTopBindsGaps e ((name, (v, ty))::env) rest
 emitTopBindsGaps e env ((CBind name _)::rest) =
-  let _ = setGapBind ("val " ++ name)
-  let _ = gapU "non-nullary / multi-clause value binding"
+  let _ = setGapBind e ("val " ++ name)
+  let _ = gapU e "non-nullary / multi-clause value binding"
   emitTopBindsGaps e env rest
