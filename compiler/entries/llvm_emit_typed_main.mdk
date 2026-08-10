@@ -11,7 +11,7 @@
 -- The dispatch fixtures are prelude-free (their own interfaces + impls), so the
 -- harness passes ONLY runtime.mdk: elaborateDict resolves every route without
 -- pulling core.mdk's machinery into the emitted module (the spike's scalar subset).
-import frontend.ast.{Decl}
+import frontend.ast.{Decl, Lit(..)}
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
 import types.typecheck.{
@@ -32,12 +32,15 @@ import ir.core_ir_lower.{
   ctorFieldTypeNames,
   declSigTypeNames,
 }
-import backend.llvm_emit.{emitProgram, makeEmitInput}
+import ir.core_ir.{CProgram(..), CBind(..), CClause(..), CExpr(..)}
+import backend.llvm_emit.{emitProgram, emitProgramRecord, makeEmitInput}
 import entries.entry_support.{driveRuntime, failWith}
+import support.util.{contains}
 
 main = match args ()
   ["--isolation", runtimePath, pPath, pPlusUPath] =>
     emitIsolation runtimePath pPath pPlusUPath
+  ["--gap-isolation"] => emitGapIsolation
   _ => driveRuntime emit
 
 -- P -> P+U -> P in one interpreter process. The middle program reuses P's
@@ -62,6 +65,21 @@ emitIsolation runtimePath pPath pPlusUPath = match readFile runtimePath
           failWith "LLVM EmitInput isolation failure: P+U did not produce distinct LLVM"
         else
           putStr "EMIT_INPUT_ISOLATION_OK\n"
+
+-- Record then strict-emit the same unsupported Core node in ONE process. The
+-- record marker reaches stdout before the strict panic; the shell control asserts
+-- both, so an ambient Record mode leak changes the second observation to exit 0.
+emitGapIsolation : <IO> Unit
+emitGapIsolation =
+  let input = makeEmitInput [] [] [] [] [] [] False False 0 [] [] ""
+  let cp = CProgram [CBind "main" [CClause [] (CMatch (CLit (LInt 0)) [])]] [] [] []
+  let (_, gaps) = emitProgramRecord input cp
+  if contains "?\tunsupported Core IR node CMatch" gaps then
+    let _ = putStr "LLVM_GAP_RECORD_OK\n"
+    let _ = emitProgram input cp
+    failWith
+      "LLVM gap isolation failure: strict emission returned after a recorded gap"
+  else failWith "LLVM gap isolation failure: record emission did not report CMatch"
 
 emit : List Decl -> List Decl -> List Decl -> <IO> Unit
 emit runtimeDecls preludeDecls userDecls =

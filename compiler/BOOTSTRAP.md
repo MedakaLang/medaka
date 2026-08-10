@@ -33,8 +33,8 @@ prints the canonical token stream) and byte-diff against
 **Harness:** `test/bootstrap_lex.sh` (models `diff_compiler_llvm_modules.sh`;
 real `core.mdk`; diffs over every `test/diff_fixtures/*.mdk`).
 **Emit driver:** `compiler/entries/llvm_bootstrap_lex_main.mdk` — clone of
-`llvm_emit_modules_main.mdk` that runs the REAL `emitProgram` but calls
-`enableGapRecord ()` first, so the 8 UNREACHABLE dead-code gaps in `core.mdk`
+`llvm_emit_modules_main.mdk` that runs the REAL record-mode `emitProgramRecord`, so the
+8 UNREACHABLE dead-code gaps in `core.mdk`
 (`max`/`min` in `maximum`/`minimum`, the `Arbitrary` impls) become harmless `"0"`
 placeholders instead of aborting. The byte-diff is the safety net: a gap the
 lexer actually REACHES would diverge a fixture and FAIL — a passing diff proves
