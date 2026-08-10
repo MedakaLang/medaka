@@ -3,13 +3,19 @@ activeDictPredOf : String -> Mono -> String -> Option String
 activeDictVarForEncl : Mono -> String -> Option String
 activeDictVarOf : Mono -> Option String
 activeDictVarOfEncl : Mono -> String -> Option String
+addAliasDecl : String -> TyConOrigin -> List String -> Ty -> DataEnv -> DataEnv
 addCtor : TcEnv -> String -> Scheme -> TcEnv
 addCtorIdentCand : TcEnv -> String -> TyConOrigin -> String -> (Map String (List (Ident, String, Scheme)), List String) -> (Map String (List (Ident, String, Scheme)), List String)
+addCtorIdentRaw : String -> TyConOrigin -> String -> ConPayload -> DataEnv -> DataEnv
+addDataTypeDecl : String -> TyConOrigin -> List String -> List Variant -> DataEnv -> DataEnv
+addFieldOwnerIdents : Ident -> String -> List Field -> DataEnv -> DataEnv
 addFieldOwners : String -> List String -> Map String (List String) -> Map String (List String)
 addIfaceRowMethods : List (String, List String) -> Map String Unit -> Map String Unit
 addImportedIfaceMethods : List Decl -> Map String Unit -> Map String Unit
 addMethodIdentCand : String -> Ident -> (IfaceRef, List String, Ty, List (String, List Kind)) -> (Map String (List (Ident, (IfaceRef, List String, Ty, List (String, List Kind)))), List String) -> (Map String (List (Ident, (IfaceRef, List String, Ty, List (String, List Kind)))), List String)
 addRecordIdentCand : String -> TyConOrigin -> String -> (Map String (List (Ident, String, RecordInfo)), List String) -> (Map String (List (Ident, String, RecordInfo)), List String)
+addRecordIdentRaw : String -> String -> Ident -> List Field -> DataEnv -> DataEnv
+addVariantIdentsRaw : String -> TyConOrigin -> List Variant -> DataEnv -> DataEnv
 addVariants : TcEnv -> List (String, Mono) -> List (String, Ref Effvar) -> List Int -> List Int -> Mono -> List Variant -> TcEnv
 aliasArityMsg : String -> Int -> Int -> String
 aliasConstraintEntries : List Decl -> List ((String, String), List a) -> List (String, List a)
@@ -146,6 +152,7 @@ bucketOfHead : Option HeadKey -> Map String (List KeyEntry) -> List KeyEntry
 bucketRecvMatch : List (List Ty, List Require) -> Mono -> Bool
 buildAdj : List String -> Map String Unit -> Map String (List (List Pat, Expr)) -> Map String (List String) -> Map String (List String)
 buildAliasGraphEntry : List String -> (TabKey, (List String, Ty)) -> (String, List String)
+buildDataEnv : List Decl -> DataEnv
 buildDeclEnvs : List Decl -> List (String, List Decl) -> DeclEnvs
 buildDefinerShadows : List Decl -> List Decl -> List String
 buildImplTable : List Decl -> Map String (List ImplEntry)
@@ -364,8 +371,13 @@ currentLocalSchemes : Unit -> List (String, Scheme)
 currentMethodMismatch : Ref (Option String)
 currentSeedSchemes : Unit -> List (String, Scheme)
 cyclicSuperIfaceMsg : List String -> String
+dataEnvFromDeclsGo : List Decl -> DataEnv -> DataEnv
 deAliasMethodImports : List (String, List String) -> Decl -> List Decl
 deAliasMethodMember : List String -> UseMember -> UseMember
+deFieldOwnerCollisionEnv : DataEnv
+deFieldOwnerFixtureA : Decl
+deFieldOwnerFixtureB : Decl
+deFieldOwnerSingleEnv : DataEnv
 declBodyVars : String -> List Decl -> List String
 declBodyVarsOf : String -> Decl -> List String
 declCtorIdents : List Decl -> List (String, String, Ident)
@@ -512,6 +524,7 @@ elaborateOne : List Decl -> List Decl -> (String, List Decl) -> List Decl
 emitCyclicAliasErrors : List String -> Unit
 emitValueShadowGate : String -> Bool
 emptyBuiltinClasses : BuiltinClassOrigins
+emptyDataEnv : DataEnv
 emptyDeclEnvs : DeclEnvs
 emptyImplUniverse : ImplUniverse
 enclDictVarOf : Mono -> String -> Option String

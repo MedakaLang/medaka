@@ -88,6 +88,11 @@ test: medaka
 	./medaka test stdlib/list.mdk
 	./medaka test stdlib/core.mdk
 	./medaka test compiler/types/registry.mdk
+	## A-3.2 (#1112): `typecheck.mdk` IS reached by check-self/typecheck_compiler_source.sh
+	## (it has plenty of call sites), but neither of those RUNS doctests — only
+	## `medaka test <file>` does. Listed here so `DataEnv`'s doctests (the
+	## deFieldOwnerIdents identity-collision case) actually execute somewhere.
+	./medaka test compiler/types/typecheck.mdk
 
 ## gates   — the FULL differential gate suite (all 82 test/diff_compiler_*.sh, in
 ##           parallel). Needs `make medaka` AND pre-built oracles:

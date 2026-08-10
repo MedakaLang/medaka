@@ -2666,14 +2666,19 @@ data DeclEnvs = DeclEnvs {
     deModules : List DeclEnvModule,  -- ordinal order, prelude first
     deOrdIndex : OrdMap Int,
     deAllDecls : List Decl,
+    deData : DataEnv,  -- A-3.2 (#1112): NOT LIVE — see the block above `DataEnv`
   }
 
 -- INITIAL construction only, exactly as `freshDriverState` is: a driver that never
 -- calls `buildDeclEnvs` reads an empty graph, on which every `declEnvsOrdOf`
 -- misses.  See `declEnvsOrdOf` for why a miss is fail-CLOSED.
 emptyDeclEnvs : DeclEnvs
-emptyDeclEnvs =
-  DeclEnvs { deModules = [], deOrdIndex = omEmpty, deAllDecls = [] }
+emptyDeclEnvs = DeclEnvs {
+  deModules = [],
+  deOrdIndex = omEmpty,
+  deAllDecls = [],
+  deData = emptyDataEnv,
+}
 
 -- Build the envelope from the prelude + the loader's dependency-first module list.
 -- ⚠️ Must run AFTER the driver's `stampGraphTyOrigins`, for the same reason
@@ -2683,10 +2688,12 @@ emptyDeclEnvs =
 buildDeclEnvs : List Decl -> List (String, List Decl) -> DeclEnvs
 buildDeclEnvs coreDecls modules =
   let mods = declEnvModulesFrom 0 (("core", coreDecls)::modules)
+  let allDecls = declEnvDeclsOf mods
   DeclEnvs {
     deModules = mods,
     deOrdIndex = declEnvOrdIndex (omInsert "" 0 omEmpty) mods,
-    deAllDecls = declEnvDeclsOf mods,
+    deAllDecls = allDecls,
+    deData = buildDataEnv allDecls,
   }
 
 declEnvModulesFrom : Int -> List (String, List Decl) -> List DeclEnvModule
@@ -2736,6 +2743,188 @@ declEnvsUpToGo cur (m::rest)
 -- every topo-earlier module.  NO CALLER IN THIS UNIT — see the block header.
 export declEnvsVisible : String -> DeclEnvs -> List DeclEnvModule
 declEnvsVisible mid envs = declEnvsUpTo (declEnvsOrdOf mid envs) envs
+
+-- ── A-3.2 (#1112): the `DataEnv` slice — types, constructor/record identity,
+-- field ownership, aliases ──────────────────────────────────────────────────
+-- §2 K: *"`DataEnv`: datatypes, constructor schemes, records and field
+-- ownership, aliases with cycle rejection."*  This unit lands the SYNTACTIC
+-- half only — an identity-keyed index over the RAW declarations, built once
+-- from `DeclEnvs`'s own ordinal-tagged decl list.  It carries NO elaborated
+-- `Scheme`/`RecordInfo`/`Mono` — see why below — and it is NOT LIVE (no
+-- caller outside this block populating it), for the identical reason
+-- `declEnvsVisible` above has none: A-3.5 is what wires a consumer to it.
+--
+-- 🚨 WHY NOT JUST CALL `registerAllData`/`insertCtorIdents`/`insertRecordIdents`.
+-- Every one of those reads or writes `perRun`/`crossRun` REFS as a side effect
+-- (`recordParamKinds`, `registerRecordInfoKeyed`, `lookupCtor`,
+-- `lookupRecordByName`), and elaborating a ctor's field types
+-- (`fromAstTypeE`) resolves aliases through `perRun.value.aliasTableRef` and
+-- MINTS FRESH TYVAR IDS (`mintParamReprs` → `freshVars`) from a global
+-- monotonic counter.  `buildDeclEnvs` runs in the driver PREAMBLE, before the
+-- per-module walk that owns that counter — calling any of those functions
+-- here would either corrupt the real tables the live walk depends on, or (if
+-- carefully isolated) still shift every later tyvar id and move every scheme
+-- this PR must NOT move.  So this index is deliberately SYNTACTIC: raw
+-- `Variant`/`Field`/`Ty` nodes, keyed by identity, no elaboration performed.
+data DataTypeDecl =
+  | DataTypeDecl {
+      dtKey : TabKey,
+      dtName : String,
+      dtOrigin : TyConOrigin,
+      dtParams : List String,
+      dtVariants : List Variant,
+    }
+
+data AliasDecl =
+  | AliasDecl {
+      adKey : TabKey,
+      adName : String,
+      adParams : List String,
+      adRhs : Ty,
+    }
+
+-- `deFieldOwnerIdents` is the NEW identity-keyed table: `universeFieldOwners`
+-- (`crossRun`) is bare-String-keyed only and has no identity companion today
+-- (unlike the ctor/record tables, which A-2.11/A-2.12 (#1319 units 1/2)
+-- already gave one).  Mirrors `deCtorIdents`/`deRecordIdents`'s shape: field
+-- name -> every (owning ctor Ident, owning ctor name) that declares it, in
+-- declaration order, so a same-named field declared by two DIFFERENT
+-- (identity-distinct) records is observable as two entries rather than one
+-- bare-name collision.
+data DataEnv =
+  | DataEnv {
+      deTypes : List (TabKey, DataTypeDecl),
+      deCtorIdents : OrdMap (List (Ident, String, Variant)),
+      deRecordIdents : OrdMap (List (Ident, String, List Field)),
+      deFieldOwnerIdents : OrdMap (List (Ident, String)),
+      deAliases : List (TabKey, AliasDecl),
+    }
+
+emptyDataEnv : DataEnv
+emptyDataEnv = DataEnv {
+  deTypes = [],
+  deCtorIdents = omEmpty,
+  deRecordIdents = omEmpty,
+  deFieldOwnerIdents = omEmpty,
+  deAliases = [],
+}
+
+-- Build the whole-graph `DataEnv` from the SAME decl list `deAllDecls` holds
+-- (ordinal order, prelude first) — one left fold, no re-traversal per module.
+buildDataEnv : List Decl -> DataEnv
+buildDataEnv decls = dataEnvFromDeclsGo decls emptyDataEnv
+
+dataEnvFromDeclsGo : List Decl -> DataEnv -> DataEnv
+dataEnvFromDeclsGo [] acc = acc
+dataEnvFromDeclsGo ((DAttrib _ d)::rest) acc = dataEnvFromDeclsGo (d::rest) acc
+dataEnvFromDeclsGo ((DData { dataName, dataParams, dataCtors, dataOrigin, ... })::rest) acc = dataEnvFromDeclsGo rest (addDataTypeDecl dataName dataOrigin dataParams dataCtors acc)
+dataEnvFromDeclsGo ((DNewtype { newtypeName, newtypeParams, newtypeCtor, newtypeFieldTy, newtypeOrigin, ... })::rest) acc = dataEnvFromDeclsGo rest (addDataTypeDecl newtypeName newtypeOrigin newtypeParams [Variant newtypeCtor (ConPos [newtypeFieldTy])] acc)
+dataEnvFromDeclsGo ((DTypeAlias { tyAliasName, tyAliasParams, tyAliasRhs, tyAliasOrigin, ... })::rest) acc = dataEnvFromDeclsGo rest (addAliasDecl tyAliasName tyAliasOrigin tyAliasParams tyAliasRhs acc)
+dataEnvFromDeclsGo (_::rest) acc = dataEnvFromDeclsGo rest acc
+
+addDataTypeDecl : String -> TyConOrigin -> List String -> List Variant -> DataEnv -> DataEnv
+addDataTypeDecl name o params variants env =
+  let key = tyTabKey o name
+  let dt = DataTypeDecl {
+    dtKey = key,
+    dtName = name,
+    dtOrigin = o,
+    dtParams = params,
+    dtVariants = variants,
+  }
+  addVariantIdentsRaw
+    name
+    o
+    variants
+    DataEnv { env | deTypes = (key, dt)::env.deTypes }
+
+addVariantIdentsRaw : String -> TyConOrigin -> List Variant -> DataEnv -> DataEnv
+addVariantIdentsRaw _ _ [] env = env
+addVariantIdentsRaw tyName o ((Variant cn payload)::rest) env =
+  addVariantIdentsRaw tyName o rest (addCtorIdentRaw tyName o cn payload env)
+
+-- Honest absence, exactly as `addCtorIdentCand`: no module id ⇒ no identity ⇒
+-- no candidate — `mkIdent` refuses `OriginUnresolved`/`OriginModule ""`.
+addCtorIdentRaw : String -> TyConOrigin -> String -> ConPayload -> DataEnv -> DataEnv
+addCtorIdentRaw tyName o cn payload env = match mkIdent NsCtor o cn
+  None => env
+  Some ident =>
+    let next = fromOption [] (omLookup cn env.deCtorIdents) ++ [(ident, tyName, Variant cn payload)]
+    let env2 = DataEnv { env | deCtorIdents = omInsert cn next env.deCtorIdents }
+    match payload
+      ConNamed fields _ => addRecordIdentRaw tyName cn ident fields env2
+      ConPos _ => env2
+
+addRecordIdentRaw : String -> String -> Ident -> List Field -> DataEnv -> DataEnv
+addRecordIdentRaw tyName cn ident fields env =
+  let next = fromOption [] (omLookup cn env.deRecordIdents) ++ [(ident, tyName, fields)]
+  addFieldOwnerIdents
+    ident
+    cn
+    fields
+    DataEnv { env | deRecordIdents = omInsert cn next env.deRecordIdents }
+
+addFieldOwnerIdents : Ident -> String -> List Field -> DataEnv -> DataEnv
+addFieldOwnerIdents _ _ [] env = env
+addFieldOwnerIdents ident cn ((Field fn _)::rest) env =
+  let next = fromOption [] (omLookup fn env.deFieldOwnerIdents) ++ [(ident, cn)]
+  addFieldOwnerIdents
+    ident
+    cn
+    rest
+    DataEnv { env | deFieldOwnerIdents = omInsert fn next env.deFieldOwnerIdents }
+
+addAliasDecl : String -> TyConOrigin -> List String -> Ty -> DataEnv -> DataEnv
+addAliasDecl name o params rhs env =
+  let key = tyTabKey o name
+  let ad = AliasDecl {
+    adKey = key,
+    adName = name,
+    adParams = params,
+    adRhs = rhs,
+  }
+  DataEnv { env | deAliases = (key, ad)::env.deAliases }
+
+-- Fixture for the doctests below: two DIFFERENT modules ("m", "n") each
+-- declaring a record named-field variant with field "x".
+deFieldOwnerFixtureA : Decl
+deFieldOwnerFixtureA = DData {
+  dataVis = VisPublic,
+  dataName = "Pt",
+  dataParams = [],
+  dataCtors = [Variant "Pt" (ConNamed [Field "x" (tyConBuiltin "Int" None)] False)],
+  dataDerives = [],
+  dataOrigin = OriginModule "m",
+}
+
+deFieldOwnerFixtureB : Decl
+deFieldOwnerFixtureB = DData {
+  dataVis = VisPublic,
+  dataName = "Vec",
+  dataParams = [],
+  dataCtors = [Variant "Vec" (ConNamed [Field "x" (tyConBuiltin "Int" None)] False)],
+  dataDerives = [],
+  dataOrigin = OriginModule "n",
+}
+
+deFieldOwnerCollisionEnv : DataEnv
+deFieldOwnerCollisionEnv =
+  buildDataEnv [deFieldOwnerFixtureA, deFieldOwnerFixtureB]
+
+deFieldOwnerSingleEnv : DataEnv
+deFieldOwnerSingleEnv = buildDataEnv [deFieldOwnerFixtureA]
+
+-- ── doctests: two modules declaring a same-named field on DIFFERENT records
+-- (the "+ a universeFieldOwners fixture, it has none" case #1112's scoping
+-- pass names) must show up as TWO distinct owners, keyed by their DISTINCT
+-- identities — never collapsed into one bare-name row the way
+-- `universeFieldOwners` (`crossRun`) would.
+-- > map snd (fromOption [] (omLookup "x" deFieldOwnerCollisionEnv.deFieldOwnerIdents))
+-- ["Pt", "Vec"]
+-- > listLen (fromOption [] (omLookup "x" deFieldOwnerCollisionEnv.deFieldOwnerIdents))
+-- 2
+-- > map snd (fromOption [] (omLookup "x" deFieldOwnerSingleEnv.deFieldOwnerIdents))
+-- ["Pt"]
 
 -- #158 PR5 / #176 closure: the ~18 RESIDUAL survivor Refs — governed until now by
 -- per-ref prose and clustered in NEITHER `resetState` (PerRun/Toggles) NOR

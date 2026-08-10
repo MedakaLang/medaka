@@ -1,5 +1,5 @@
 # META
-source_lines=24669
+source_lines=24858
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted typecheck stage — port of lib/typecheck.ml's HM core.  SLICE 1:
@@ -2670,14 +2670,19 @@ data DeclEnvs = DeclEnvs {
     deModules : List DeclEnvModule,  -- ordinal order, prelude first
     deOrdIndex : OrdMap Int,
     deAllDecls : List Decl,
+    deData : DataEnv,  -- A-3.2 (#1112): NOT LIVE — see the block above `DataEnv`
   }
 
 -- INITIAL construction only, exactly as `freshDriverState` is: a driver that never
 -- calls `buildDeclEnvs` reads an empty graph, on which every `declEnvsOrdOf`
 -- misses.  See `declEnvsOrdOf` for why a miss is fail-CLOSED.
 emptyDeclEnvs : DeclEnvs
-emptyDeclEnvs =
-  DeclEnvs { deModules = [], deOrdIndex = omEmpty, deAllDecls = [] }
+emptyDeclEnvs = DeclEnvs {
+  deModules = [],
+  deOrdIndex = omEmpty,
+  deAllDecls = [],
+  deData = emptyDataEnv,
+}
 
 -- Build the envelope from the prelude + the loader's dependency-first module list.
 -- ⚠️ Must run AFTER the driver's `stampGraphTyOrigins`, for the same reason
@@ -2687,10 +2692,12 @@ emptyDeclEnvs =
 buildDeclEnvs : List Decl -> List (String, List Decl) -> DeclEnvs
 buildDeclEnvs coreDecls modules =
   let mods = declEnvModulesFrom 0 (("core", coreDecls)::modules)
+  let allDecls = declEnvDeclsOf mods
   DeclEnvs {
     deModules = mods,
     deOrdIndex = declEnvOrdIndex (omInsert "" 0 omEmpty) mods,
-    deAllDecls = declEnvDeclsOf mods,
+    deAllDecls = allDecls,
+    deData = buildDataEnv allDecls,
   }
 
 declEnvModulesFrom : Int -> List (String, List Decl) -> List DeclEnvModule
@@ -2740,6 +2747,188 @@ declEnvsUpToGo cur (m::rest)
 -- every topo-earlier module.  NO CALLER IN THIS UNIT — see the block header.
 export declEnvsVisible : String -> DeclEnvs -> List DeclEnvModule
 declEnvsVisible mid envs = declEnvsUpTo (declEnvsOrdOf mid envs) envs
+
+-- ── A-3.2 (#1112): the `DataEnv` slice — types, constructor/record identity,
+-- field ownership, aliases ──────────────────────────────────────────────────
+-- §2 K: *"`DataEnv`: datatypes, constructor schemes, records and field
+-- ownership, aliases with cycle rejection."*  This unit lands the SYNTACTIC
+-- half only — an identity-keyed index over the RAW declarations, built once
+-- from `DeclEnvs`'s own ordinal-tagged decl list.  It carries NO elaborated
+-- `Scheme`/`RecordInfo`/`Mono` — see why below — and it is NOT LIVE (no
+-- caller outside this block populating it), for the identical reason
+-- `declEnvsVisible` above has none: A-3.5 is what wires a consumer to it.
+--
+-- 🚨 WHY NOT JUST CALL `registerAllData`/`insertCtorIdents`/`insertRecordIdents`.
+-- Every one of those reads or writes `perRun`/`crossRun` REFS as a side effect
+-- (`recordParamKinds`, `registerRecordInfoKeyed`, `lookupCtor`,
+-- `lookupRecordByName`), and elaborating a ctor's field types
+-- (`fromAstTypeE`) resolves aliases through `perRun.value.aliasTableRef` and
+-- MINTS FRESH TYVAR IDS (`mintParamReprs` → `freshVars`) from a global
+-- monotonic counter.  `buildDeclEnvs` runs in the driver PREAMBLE, before the
+-- per-module walk that owns that counter — calling any of those functions
+-- here would either corrupt the real tables the live walk depends on, or (if
+-- carefully isolated) still shift every later tyvar id and move every scheme
+-- this PR must NOT move.  So this index is deliberately SYNTACTIC: raw
+-- `Variant`/`Field`/`Ty` nodes, keyed by identity, no elaboration performed.
+data DataTypeDecl =
+  | DataTypeDecl {
+      dtKey : TabKey,
+      dtName : String,
+      dtOrigin : TyConOrigin,
+      dtParams : List String,
+      dtVariants : List Variant,
+    }
+
+data AliasDecl =
+  | AliasDecl {
+      adKey : TabKey,
+      adName : String,
+      adParams : List String,
+      adRhs : Ty,
+    }
+
+-- `deFieldOwnerIdents` is the NEW identity-keyed table: `universeFieldOwners`
+-- (`crossRun`) is bare-String-keyed only and has no identity companion today
+-- (unlike the ctor/record tables, which A-2.11/A-2.12 (#1319 units 1/2)
+-- already gave one).  Mirrors `deCtorIdents`/`deRecordIdents`'s shape: field
+-- name -> every (owning ctor Ident, owning ctor name) that declares it, in
+-- declaration order, so a same-named field declared by two DIFFERENT
+-- (identity-distinct) records is observable as two entries rather than one
+-- bare-name collision.
+data DataEnv =
+  | DataEnv {
+      deTypes : List (TabKey, DataTypeDecl),
+      deCtorIdents : OrdMap (List (Ident, String, Variant)),
+      deRecordIdents : OrdMap (List (Ident, String, List Field)),
+      deFieldOwnerIdents : OrdMap (List (Ident, String)),
+      deAliases : List (TabKey, AliasDecl),
+    }
+
+emptyDataEnv : DataEnv
+emptyDataEnv = DataEnv {
+  deTypes = [],
+  deCtorIdents = omEmpty,
+  deRecordIdents = omEmpty,
+  deFieldOwnerIdents = omEmpty,
+  deAliases = [],
+}
+
+-- Build the whole-graph `DataEnv` from the SAME decl list `deAllDecls` holds
+-- (ordinal order, prelude first) — one left fold, no re-traversal per module.
+buildDataEnv : List Decl -> DataEnv
+buildDataEnv decls = dataEnvFromDeclsGo decls emptyDataEnv
+
+dataEnvFromDeclsGo : List Decl -> DataEnv -> DataEnv
+dataEnvFromDeclsGo [] acc = acc
+dataEnvFromDeclsGo ((DAttrib _ d)::rest) acc = dataEnvFromDeclsGo (d::rest) acc
+dataEnvFromDeclsGo ((DData { dataName, dataParams, dataCtors, dataOrigin, ... })::rest) acc = dataEnvFromDeclsGo rest (addDataTypeDecl dataName dataOrigin dataParams dataCtors acc)
+dataEnvFromDeclsGo ((DNewtype { newtypeName, newtypeParams, newtypeCtor, newtypeFieldTy, newtypeOrigin, ... })::rest) acc = dataEnvFromDeclsGo rest (addDataTypeDecl newtypeName newtypeOrigin newtypeParams [Variant newtypeCtor (ConPos [newtypeFieldTy])] acc)
+dataEnvFromDeclsGo ((DTypeAlias { tyAliasName, tyAliasParams, tyAliasRhs, tyAliasOrigin, ... })::rest) acc = dataEnvFromDeclsGo rest (addAliasDecl tyAliasName tyAliasOrigin tyAliasParams tyAliasRhs acc)
+dataEnvFromDeclsGo (_::rest) acc = dataEnvFromDeclsGo rest acc
+
+addDataTypeDecl : String -> TyConOrigin -> List String -> List Variant -> DataEnv -> DataEnv
+addDataTypeDecl name o params variants env =
+  let key = tyTabKey o name
+  let dt = DataTypeDecl {
+    dtKey = key,
+    dtName = name,
+    dtOrigin = o,
+    dtParams = params,
+    dtVariants = variants,
+  }
+  addVariantIdentsRaw
+    name
+    o
+    variants
+    DataEnv { env | deTypes = (key, dt)::env.deTypes }
+
+addVariantIdentsRaw : String -> TyConOrigin -> List Variant -> DataEnv -> DataEnv
+addVariantIdentsRaw _ _ [] env = env
+addVariantIdentsRaw tyName o ((Variant cn payload)::rest) env =
+  addVariantIdentsRaw tyName o rest (addCtorIdentRaw tyName o cn payload env)
+
+-- Honest absence, exactly as `addCtorIdentCand`: no module id ⇒ no identity ⇒
+-- no candidate — `mkIdent` refuses `OriginUnresolved`/`OriginModule ""`.
+addCtorIdentRaw : String -> TyConOrigin -> String -> ConPayload -> DataEnv -> DataEnv
+addCtorIdentRaw tyName o cn payload env = match mkIdent NsCtor o cn
+  None => env
+  Some ident =>
+    let next = fromOption [] (omLookup cn env.deCtorIdents) ++ [(ident, tyName, Variant cn payload)]
+    let env2 = DataEnv { env | deCtorIdents = omInsert cn next env.deCtorIdents }
+    match payload
+      ConNamed fields _ => addRecordIdentRaw tyName cn ident fields env2
+      ConPos _ => env2
+
+addRecordIdentRaw : String -> String -> Ident -> List Field -> DataEnv -> DataEnv
+addRecordIdentRaw tyName cn ident fields env =
+  let next = fromOption [] (omLookup cn env.deRecordIdents) ++ [(ident, tyName, fields)]
+  addFieldOwnerIdents
+    ident
+    cn
+    fields
+    DataEnv { env | deRecordIdents = omInsert cn next env.deRecordIdents }
+
+addFieldOwnerIdents : Ident -> String -> List Field -> DataEnv -> DataEnv
+addFieldOwnerIdents _ _ [] env = env
+addFieldOwnerIdents ident cn ((Field fn _)::rest) env =
+  let next = fromOption [] (omLookup fn env.deFieldOwnerIdents) ++ [(ident, cn)]
+  addFieldOwnerIdents
+    ident
+    cn
+    rest
+    DataEnv { env | deFieldOwnerIdents = omInsert fn next env.deFieldOwnerIdents }
+
+addAliasDecl : String -> TyConOrigin -> List String -> Ty -> DataEnv -> DataEnv
+addAliasDecl name o params rhs env =
+  let key = tyTabKey o name
+  let ad = AliasDecl {
+    adKey = key,
+    adName = name,
+    adParams = params,
+    adRhs = rhs,
+  }
+  DataEnv { env | deAliases = (key, ad)::env.deAliases }
+
+-- Fixture for the doctests below: two DIFFERENT modules ("m", "n") each
+-- declaring a record named-field variant with field "x".
+deFieldOwnerFixtureA : Decl
+deFieldOwnerFixtureA = DData {
+  dataVis = VisPublic,
+  dataName = "Pt",
+  dataParams = [],
+  dataCtors = [Variant "Pt" (ConNamed [Field "x" (tyConBuiltin "Int" None)] False)],
+  dataDerives = [],
+  dataOrigin = OriginModule "m",
+}
+
+deFieldOwnerFixtureB : Decl
+deFieldOwnerFixtureB = DData {
+  dataVis = VisPublic,
+  dataName = "Vec",
+  dataParams = [],
+  dataCtors = [Variant "Vec" (ConNamed [Field "x" (tyConBuiltin "Int" None)] False)],
+  dataDerives = [],
+  dataOrigin = OriginModule "n",
+}
+
+deFieldOwnerCollisionEnv : DataEnv
+deFieldOwnerCollisionEnv =
+  buildDataEnv [deFieldOwnerFixtureA, deFieldOwnerFixtureB]
+
+deFieldOwnerSingleEnv : DataEnv
+deFieldOwnerSingleEnv = buildDataEnv [deFieldOwnerFixtureA]
+
+-- ── doctests: two modules declaring a same-named field on DIFFERENT records
+-- (the "+ a universeFieldOwners fixture, it has none" case #1112's scoping
+-- pass names) must show up as TWO distinct owners, keyed by their DISTINCT
+-- identities — never collapsed into one bare-name row the way
+-- `universeFieldOwners` (`crossRun`) would.
+-- > map snd (fromOption [] (omLookup "x" deFieldOwnerCollisionEnv.deFieldOwnerIdents))
+-- ["Pt", "Vec"]
+-- > listLen (fromOption [] (omLookup "x" deFieldOwnerCollisionEnv.deFieldOwnerIdents))
+-- 2
+-- > map snd (fromOption [] (omLookup "x" deFieldOwnerSingleEnv.deFieldOwnerIdents))
+-- ["Pt"]
 
 -- #158 PR5 / #176 closure: the ~18 RESIDUAL survivor Refs — governed until now by
 -- per-ref prose and clustered in NEITHER `resetState` (PerRun/Toggles) NOR
@@ -25150,11 +25339,11 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "toggles" (TyApp (TyCon "Ref") (TyCon "Toggles")))
 (DFunDef false "toggles" () (EApp (EVar "Ref") (EApp (EVar "freshToggles") (ELit LUnit))))
 (DData Private "DeclEnvModule" () ((variant "DeclEnvModule" (ConNamed (field "demOrd" (TyCon "Int")) (field "demId" (TyCon "String")) (field "demDecls" (TyApp (TyCon "List") (TyCon "Decl")))))) ())
-(DData Private "DeclEnvs" () ((variant "DeclEnvs" (ConNamed (field "deModules" (TyApp (TyCon "List") (TyCon "DeclEnvModule"))) (field "deOrdIndex" (TyApp (TyCon "OrdMap") (TyCon "Int"))) (field "deAllDecls" (TyApp (TyCon "List") (TyCon "Decl")))))) ())
+(DData Private "DeclEnvs" () ((variant "DeclEnvs" (ConNamed (field "deModules" (TyApp (TyCon "List") (TyCon "DeclEnvModule"))) (field "deOrdIndex" (TyApp (TyCon "OrdMap") (TyCon "Int"))) (field "deAllDecls" (TyApp (TyCon "List") (TyCon "Decl"))) (field "deData" (TyCon "DataEnv"))))) ())
 (DTypeSig false "emptyDeclEnvs" (TyCon "DeclEnvs"))
-(DFunDef false "emptyDeclEnvs" () (ERecordCreate "DeclEnvs" ((fa "deModules" (EListLit)) (fa "deOrdIndex" (EVar "omEmpty")) (fa "deAllDecls" (EListLit)))))
+(DFunDef false "emptyDeclEnvs" () (ERecordCreate "DeclEnvs" ((fa "deModules" (EListLit)) (fa "deOrdIndex" (EVar "omEmpty")) (fa "deAllDecls" (EListLit)) (fa "deData" (EVar "emptyDataEnv")))))
 (DTypeSig false "buildDeclEnvs" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "DeclEnvs"))))
-(DFunDef false "buildDeclEnvs" ((PVar "coreDecls") (PVar "modules")) (EBlock (DoLet false false (PVar "mods") (EApp (EApp (EVar "declEnvModulesFrom") (ELit (LInt 0))) (EBinOp "::" (ETuple (ELit (LString "core")) (EVar "coreDecls")) (EVar "modules")))) (DoExpr (ERecordCreate "DeclEnvs" ((fa "deModules" (EVar "mods")) (fa "deOrdIndex" (EApp (EApp (EVar "declEnvOrdIndex") (EApp (EApp (EApp (EVar "omInsert") (ELit (LString ""))) (ELit (LInt 0))) (EVar "omEmpty"))) (EVar "mods"))) (fa "deAllDecls" (EApp (EVar "declEnvDeclsOf") (EVar "mods"))))))))
+(DFunDef false "buildDeclEnvs" ((PVar "coreDecls") (PVar "modules")) (EBlock (DoLet false false (PVar "mods") (EApp (EApp (EVar "declEnvModulesFrom") (ELit (LInt 0))) (EBinOp "::" (ETuple (ELit (LString "core")) (EVar "coreDecls")) (EVar "modules")))) (DoLet false false (PVar "allDecls") (EApp (EVar "declEnvDeclsOf") (EVar "mods"))) (DoExpr (ERecordCreate "DeclEnvs" ((fa "deModules" (EVar "mods")) (fa "deOrdIndex" (EApp (EApp (EVar "declEnvOrdIndex") (EApp (EApp (EApp (EVar "omInsert") (ELit (LString ""))) (ELit (LInt 0))) (EVar "omEmpty"))) (EVar "mods"))) (fa "deAllDecls" (EVar "allDecls")) (fa "deData" (EApp (EVar "buildDataEnv") (EVar "allDecls"))))))))
 (DTypeSig false "declEnvModulesFrom" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyCon "DeclEnvModule")))))
 (DFunDef false "declEnvModulesFrom" (PWild (PList)) (EListLit))
 (DFunDef false "declEnvModulesFrom" ((PVar "k") (PCons (PTuple (PVar "mid") (PVar "decls")) (PVar "rest"))) (EBinOp "::" (ERecordCreate "DeclEnvModule" ((fa "demOrd" (EVar "k")) (fa "demId" (EVar "mid")) (fa "demDecls" (EVar "decls")))) (EApp (EApp (EVar "declEnvModulesFrom") (EBinOp "+" (EVar "k") (ELit (LInt 1)))) (EVar "rest"))))
@@ -25175,6 +25364,42 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "declEnvsUpToGo" ((PVar "cur") (PCons (PVar "m") (PVar "rest"))) (EIf (EApp (EApp (EVar "declEnvVisibleAt") (EVar "cur")) (EFieldAccess (EVar "m") "demOrd")) (EBinOp "::" (EVar "m") (EApp (EApp (EVar "declEnvsUpToGo") (EVar "cur")) (EVar "rest"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "declEnvsUpToGo") (EVar "cur")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "declEnvsVisible" (TyFun (TyCon "String") (TyFun (TyCon "DeclEnvs") (TyApp (TyCon "List") (TyCon "DeclEnvModule")))))
 (DFunDef false "declEnvsVisible" ((PVar "mid") (PVar "envs")) (EApp (EApp (EVar "declEnvsUpTo") (EApp (EApp (EVar "declEnvsOrdOf") (EVar "mid")) (EVar "envs"))) (EVar "envs")))
+(DData Private "DataTypeDecl" () ((variant "DataTypeDecl" (ConNamed (field "dtKey" (TyCon "TabKey")) (field "dtName" (TyCon "String")) (field "dtOrigin" (TyCon "TyConOrigin")) (field "dtParams" (TyApp (TyCon "List") (TyCon "String"))) (field "dtVariants" (TyApp (TyCon "List") (TyCon "Variant")))))) ())
+(DData Private "AliasDecl" () ((variant "AliasDecl" (ConNamed (field "adKey" (TyCon "TabKey")) (field "adName" (TyCon "String")) (field "adParams" (TyApp (TyCon "List") (TyCon "String"))) (field "adRhs" (TyCon "Ty"))))) ())
+(DData Private "DataEnv" () ((variant "DataEnv" (ConNamed (field "deTypes" (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyCon "DataTypeDecl")))) (field "deCtorIdents" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String") (TyCon "Variant"))))) (field "deRecordIdents" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String") (TyApp (TyCon "List") (TyCon "Field")))))) (field "deFieldOwnerIdents" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String"))))) (field "deAliases" (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyCon "AliasDecl"))))))) ())
+(DTypeSig false "emptyDataEnv" (TyCon "DataEnv"))
+(DFunDef false "emptyDataEnv" () (ERecordCreate "DataEnv" ((fa "deTypes" (EListLit)) (fa "deCtorIdents" (EVar "omEmpty")) (fa "deRecordIdents" (EVar "omEmpty")) (fa "deFieldOwnerIdents" (EVar "omEmpty")) (fa "deAliases" (EListLit)))))
+(DTypeSig false "buildDataEnv" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "DataEnv")))
+(DFunDef false "buildDataEnv" ((PVar "decls")) (EApp (EApp (EVar "dataEnvFromDeclsGo") (EVar "decls")) (EVar "emptyDataEnv")))
+(DTypeSig false "dataEnvFromDeclsGo" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "DataEnv") (TyCon "DataEnv"))))
+(DFunDef false "dataEnvFromDeclsGo" ((PList) (PVar "acc")) (EVar "acc"))
+(DFunDef false "dataEnvFromDeclsGo" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "dataEnvFromDeclsGo") (EBinOp "::" (EVar "d") (EVar "rest"))) (EVar "acc")))
+(DFunDef false "dataEnvFromDeclsGo" ((PCons (PRec "DData" ((rf "dataName" None) (rf "dataParams" None) (rf "dataCtors" None) (rf "dataOrigin" None)) true) (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "dataEnvFromDeclsGo") (EVar "rest")) (EApp (EApp (EApp (EApp (EApp (EVar "addDataTypeDecl") (EVar "dataName")) (EVar "dataOrigin")) (EVar "dataParams")) (EVar "dataCtors")) (EVar "acc"))))
+(DFunDef false "dataEnvFromDeclsGo" ((PCons (PRec "DNewtype" ((rf "newtypeName" None) (rf "newtypeParams" None) (rf "newtypeCtor" None) (rf "newtypeFieldTy" None) (rf "newtypeOrigin" None)) true) (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "dataEnvFromDeclsGo") (EVar "rest")) (EApp (EApp (EApp (EApp (EApp (EVar "addDataTypeDecl") (EVar "newtypeName")) (EVar "newtypeOrigin")) (EVar "newtypeParams")) (EListLit (EApp (EApp (EVar "Variant") (EVar "newtypeCtor")) (EApp (EVar "ConPos") (EListLit (EVar "newtypeFieldTy")))))) (EVar "acc"))))
+(DFunDef false "dataEnvFromDeclsGo" ((PCons (PRec "DTypeAlias" ((rf "tyAliasName" None) (rf "tyAliasParams" None) (rf "tyAliasRhs" None) (rf "tyAliasOrigin" None)) true) (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "dataEnvFromDeclsGo") (EVar "rest")) (EApp (EApp (EApp (EApp (EApp (EVar "addAliasDecl") (EVar "tyAliasName")) (EVar "tyAliasOrigin")) (EVar "tyAliasParams")) (EVar "tyAliasRhs")) (EVar "acc"))))
+(DFunDef false "dataEnvFromDeclsGo" ((PCons PWild (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "dataEnvFromDeclsGo") (EVar "rest")) (EVar "acc")))
+(DTypeSig false "addDataTypeDecl" (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Variant")) (TyFun (TyCon "DataEnv") (TyCon "DataEnv")))))))
+(DFunDef false "addDataTypeDecl" ((PVar "name") (PVar "o") (PVar "params") (PVar "variants") (PVar "env")) (EBlock (DoLet false false (PVar "key") (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "name"))) (DoLet false false (PVar "dt") (ERecordCreate "DataTypeDecl" ((fa "dtKey" (EVar "key")) (fa "dtName" (EVar "name")) (fa "dtOrigin" (EVar "o")) (fa "dtParams" (EVar "params")) (fa "dtVariants" (EVar "variants"))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "addVariantIdentsRaw") (EVar "name")) (EVar "o")) (EVar "variants")) (EVariantUpdate "DataEnv" (EVar "env") ((fa "deTypes" (EBinOp "::" (ETuple (EVar "key") (EVar "dt")) (EFieldAccess (EVar "env") "deTypes")))))))))
+(DTypeSig false "addVariantIdentsRaw" (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyFun (TyApp (TyCon "List") (TyCon "Variant")) (TyFun (TyCon "DataEnv") (TyCon "DataEnv"))))))
+(DFunDef false "addVariantIdentsRaw" (PWild PWild (PList) (PVar "env")) (EVar "env"))
+(DFunDef false "addVariantIdentsRaw" ((PVar "tyName") (PVar "o") (PCons (PCon "Variant" (PVar "cn") (PVar "payload")) (PVar "rest")) (PVar "env")) (EApp (EApp (EApp (EApp (EVar "addVariantIdentsRaw") (EVar "tyName")) (EVar "o")) (EVar "rest")) (EApp (EApp (EApp (EApp (EApp (EVar "addCtorIdentRaw") (EVar "tyName")) (EVar "o")) (EVar "cn")) (EVar "payload")) (EVar "env"))))
+(DTypeSig false "addCtorIdentRaw" (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyFun (TyCon "ConPayload") (TyFun (TyCon "DataEnv") (TyCon "DataEnv")))))))
+(DFunDef false "addCtorIdentRaw" ((PVar "tyName") (PVar "o") (PVar "cn") (PVar "payload") (PVar "env")) (EMatch (EApp (EApp (EApp (EVar "mkIdent") (EVar "NsCtor")) (EVar "o")) (EVar "cn")) (arm (PCon "None") () (EVar "env")) (arm (PCon "Some" (PVar "ident")) () (EBlock (DoLet false false (PVar "next") (EBinOp "++" (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "cn")) (EFieldAccess (EVar "env") "deCtorIdents"))) (EListLit (ETuple (EVar "ident") (EVar "tyName") (EApp (EApp (EVar "Variant") (EVar "cn")) (EVar "payload")))))) (DoLet false false (PVar "env2") (EVariantUpdate "DataEnv" (EVar "env") ((fa "deCtorIdents" (EApp (EApp (EApp (EVar "omInsert") (EVar "cn")) (EVar "next")) (EFieldAccess (EVar "env") "deCtorIdents")))))) (DoExpr (EMatch (EVar "payload") (arm (PCon "ConNamed" (PVar "fields") PWild) () (EApp (EApp (EApp (EApp (EApp (EVar "addRecordIdentRaw") (EVar "tyName")) (EVar "cn")) (EVar "ident")) (EVar "fields")) (EVar "env2"))) (arm (PCon "ConPos" PWild) () (EVar "env2"))))))))
+(DTypeSig false "addRecordIdentRaw" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Ident") (TyFun (TyApp (TyCon "List") (TyCon "Field")) (TyFun (TyCon "DataEnv") (TyCon "DataEnv")))))))
+(DFunDef false "addRecordIdentRaw" ((PVar "tyName") (PVar "cn") (PVar "ident") (PVar "fields") (PVar "env")) (EBlock (DoLet false false (PVar "next") (EBinOp "++" (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "cn")) (EFieldAccess (EVar "env") "deRecordIdents"))) (EListLit (ETuple (EVar "ident") (EVar "tyName") (EVar "fields"))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "addFieldOwnerIdents") (EVar "ident")) (EVar "cn")) (EVar "fields")) (EVariantUpdate "DataEnv" (EVar "env") ((fa "deRecordIdents" (EApp (EApp (EApp (EVar "omInsert") (EVar "cn")) (EVar "next")) (EFieldAccess (EVar "env") "deRecordIdents")))))))))
+(DTypeSig false "addFieldOwnerIdents" (TyFun (TyCon "Ident") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Field")) (TyFun (TyCon "DataEnv") (TyCon "DataEnv"))))))
+(DFunDef false "addFieldOwnerIdents" (PWild PWild (PList) (PVar "env")) (EVar "env"))
+(DFunDef false "addFieldOwnerIdents" ((PVar "ident") (PVar "cn") (PCons (PCon "Field" (PVar "fn") PWild) (PVar "rest")) (PVar "env")) (EBlock (DoLet false false (PVar "next") (EBinOp "++" (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "fn")) (EFieldAccess (EVar "env") "deFieldOwnerIdents"))) (EListLit (ETuple (EVar "ident") (EVar "cn"))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "addFieldOwnerIdents") (EVar "ident")) (EVar "cn")) (EVar "rest")) (EVariantUpdate "DataEnv" (EVar "env") ((fa "deFieldOwnerIdents" (EApp (EApp (EApp (EVar "omInsert") (EVar "fn")) (EVar "next")) (EFieldAccess (EVar "env") "deFieldOwnerIdents")))))))))
+(DTypeSig false "addAliasDecl" (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Ty") (TyFun (TyCon "DataEnv") (TyCon "DataEnv")))))))
+(DFunDef false "addAliasDecl" ((PVar "name") (PVar "o") (PVar "params") (PVar "rhs") (PVar "env")) (EBlock (DoLet false false (PVar "key") (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "name"))) (DoLet false false (PVar "ad") (ERecordCreate "AliasDecl" ((fa "adKey" (EVar "key")) (fa "adName" (EVar "name")) (fa "adParams" (EVar "params")) (fa "adRhs" (EVar "rhs"))))) (DoExpr (EVariantUpdate "DataEnv" (EVar "env") ((fa "deAliases" (EBinOp "::" (ETuple (EVar "key") (EVar "ad")) (EFieldAccess (EVar "env") "deAliases"))))))))
+(DTypeSig false "deFieldOwnerFixtureA" (TyCon "Decl"))
+(DFunDef false "deFieldOwnerFixtureA" () (ERecordCreate "DData" ((fa "dataVis" (EVar "VisPublic")) (fa "dataName" (ELit (LString "Pt"))) (fa "dataParams" (EListLit)) (fa "dataCtors" (EListLit (EApp (EApp (EVar "Variant") (ELit (LString "Pt"))) (EApp (EApp (EVar "ConNamed") (EListLit (EApp (EApp (EVar "Field") (ELit (LString "x"))) (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))))) (EVar "False"))))) (fa "dataDerives" (EListLit)) (fa "dataOrigin" (EApp (EVar "OriginModule") (ELit (LString "m")))))))
+(DTypeSig false "deFieldOwnerFixtureB" (TyCon "Decl"))
+(DFunDef false "deFieldOwnerFixtureB" () (ERecordCreate "DData" ((fa "dataVis" (EVar "VisPublic")) (fa "dataName" (ELit (LString "Vec"))) (fa "dataParams" (EListLit)) (fa "dataCtors" (EListLit (EApp (EApp (EVar "Variant") (ELit (LString "Vec"))) (EApp (EApp (EVar "ConNamed") (EListLit (EApp (EApp (EVar "Field") (ELit (LString "x"))) (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))))) (EVar "False"))))) (fa "dataDerives" (EListLit)) (fa "dataOrigin" (EApp (EVar "OriginModule") (ELit (LString "n")))))))
+(DTypeSig false "deFieldOwnerCollisionEnv" (TyCon "DataEnv"))
+(DFunDef false "deFieldOwnerCollisionEnv" () (EApp (EVar "buildDataEnv") (EListLit (EVar "deFieldOwnerFixtureA") (EVar "deFieldOwnerFixtureB"))))
+(DTypeSig false "deFieldOwnerSingleEnv" (TyCon "DataEnv"))
+(DFunDef false "deFieldOwnerSingleEnv" () (EApp (EVar "buildDataEnv") (EListLit (EVar "deFieldOwnerFixtureA"))))
 (DData Private "DriverState" () ((variant "DriverState" (ConNamed (field "effectDomains" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))))) (field "graphMethodExportsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ident")))))) (field "graphIfaceMethodsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))) (field "graphCtorExportsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Ident")))))) (field "declEnvsRef" (TyApp (TyCon "Ref") (TyCon "DeclEnvs"))) (field "abstractRecordTypesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "argDispatchIdxRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))))) (field "dictEligibleRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "dictEligibleSetRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (field "mangledShadowMapRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))) (field "userIfaceNamesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "coherenceUserDecls" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Decl")))) (field "superDeclsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Decl")))) (field "standaloneValuesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "methodDispatchIdxRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))))) (field "matchOracle" (TyApp (TyCon "Ref") (TyCon "Oracle"))) (field "matchWarnings" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "TcDiag")))) (field "promotionHarvestRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "mainSchemeRef" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "Scheme")))) (field "sigNameSetRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (field "sigTyMapRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Ty")))) (field "implInferEnabled" (TyApp (TyCon "Ref") (TyCon "Bool")))))) ())
 (DTypeSig false "freshDriverState" (TyFun (TyCon "Unit") (TyCon "DriverState")))
 (DFunDef false "freshDriverState" (PWild) (ERecordCreate "DriverState" ((fa "effectDomains" (EApp (EVar "Ref") (EListLit))) (fa "graphMethodExportsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "graphIfaceMethodsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "graphCtorExportsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "declEnvsRef" (EApp (EVar "Ref") (EVar "emptyDeclEnvs"))) (fa "abstractRecordTypesRef" (EApp (EVar "Ref") (EListLit))) (fa "argDispatchIdxRef" (EApp (EVar "Ref") (EListLit))) (fa "dictEligibleRef" (EApp (EVar "Ref") (EListLit))) (fa "dictEligibleSetRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "mangledShadowMapRef" (EApp (EVar "Ref") (EListLit))) (fa "userIfaceNamesRef" (EApp (EVar "Ref") (EListLit))) (fa "coherenceUserDecls" (EApp (EVar "Ref") (EListLit))) (fa "superDeclsRef" (EApp (EVar "Ref") (EListLit))) (fa "standaloneValuesRef" (EApp (EVar "Ref") (EListLit))) (fa "methodDispatchIdxRef" (EApp (EVar "Ref") (EListLit))) (fa "matchOracle" (EApp (EVar "Ref") (EApp (EVar "buildOracle") (EListLit)))) (fa "matchWarnings" (EApp (EVar "Ref") (EListLit))) (fa "promotionHarvestRef" (EApp (EVar "Ref") (EListLit))) (fa "mainSchemeRef" (EApp (EVar "Ref") (EVar "None"))) (fa "sigNameSetRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "sigTyMapRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "implInferEnabled" (EApp (EVar "Ref") (EVar "False"))))))
@@ -29780,11 +30005,11 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "toggles" (TyApp (TyCon "Ref") (TyCon "Toggles")))
 (DFunDef false "toggles" () (EApp (EVar "Ref") (EApp (EVar "freshToggles") (ELit LUnit))))
 (DData Private "DeclEnvModule" () ((variant "DeclEnvModule" (ConNamed (field "demOrd" (TyCon "Int")) (field "demId" (TyCon "String")) (field "demDecls" (TyApp (TyCon "List") (TyCon "Decl")))))) ())
-(DData Private "DeclEnvs" () ((variant "DeclEnvs" (ConNamed (field "deModules" (TyApp (TyCon "List") (TyCon "DeclEnvModule"))) (field "deOrdIndex" (TyApp (TyCon "OrdMap") (TyCon "Int"))) (field "deAllDecls" (TyApp (TyCon "List") (TyCon "Decl")))))) ())
+(DData Private "DeclEnvs" () ((variant "DeclEnvs" (ConNamed (field "deModules" (TyApp (TyCon "List") (TyCon "DeclEnvModule"))) (field "deOrdIndex" (TyApp (TyCon "OrdMap") (TyCon "Int"))) (field "deAllDecls" (TyApp (TyCon "List") (TyCon "Decl"))) (field "deData" (TyCon "DataEnv"))))) ())
 (DTypeSig false "emptyDeclEnvs" (TyCon "DeclEnvs"))
-(DFunDef false "emptyDeclEnvs" () (ERecordCreate "DeclEnvs" ((fa "deModules" (EListLit)) (fa "deOrdIndex" (EVar "omEmpty")) (fa "deAllDecls" (EListLit)))))
+(DFunDef false "emptyDeclEnvs" () (ERecordCreate "DeclEnvs" ((fa "deModules" (EListLit)) (fa "deOrdIndex" (EVar "omEmpty")) (fa "deAllDecls" (EListLit)) (fa "deData" (EVar "emptyDataEnv")))))
 (DTypeSig false "buildDeclEnvs" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "DeclEnvs"))))
-(DFunDef false "buildDeclEnvs" ((PVar "coreDecls") (PVar "modules")) (EBlock (DoLet false false (PVar "mods") (EApp (EApp (EVar "declEnvModulesFrom") (ELit (LInt 0))) (EBinOp "::" (ETuple (ELit (LString "core")) (EVar "coreDecls")) (EVar "modules")))) (DoExpr (ERecordCreate "DeclEnvs" ((fa "deModules" (EVar "mods")) (fa "deOrdIndex" (EApp (EApp (EVar "declEnvOrdIndex") (EApp (EApp (EApp (EVar "omInsert") (ELit (LString ""))) (ELit (LInt 0))) (EVar "omEmpty"))) (EVar "mods"))) (fa "deAllDecls" (EApp (EVar "declEnvDeclsOf") (EVar "mods"))))))))
+(DFunDef false "buildDeclEnvs" ((PVar "coreDecls") (PVar "modules")) (EBlock (DoLet false false (PVar "mods") (EApp (EApp (EVar "declEnvModulesFrom") (ELit (LInt 0))) (EBinOp "::" (ETuple (ELit (LString "core")) (EVar "coreDecls")) (EVar "modules")))) (DoLet false false (PVar "allDecls") (EApp (EVar "declEnvDeclsOf") (EVar "mods"))) (DoExpr (ERecordCreate "DeclEnvs" ((fa "deModules" (EVar "mods")) (fa "deOrdIndex" (EApp (EApp (EVar "declEnvOrdIndex") (EApp (EApp (EApp (EVar "omInsert") (ELit (LString ""))) (ELit (LInt 0))) (EVar "omEmpty"))) (EVar "mods"))) (fa "deAllDecls" (EVar "allDecls")) (fa "deData" (EApp (EVar "buildDataEnv") (EVar "allDecls"))))))))
 (DTypeSig false "declEnvModulesFrom" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyCon "DeclEnvModule")))))
 (DFunDef false "declEnvModulesFrom" (PWild (PList)) (EListLit))
 (DFunDef false "declEnvModulesFrom" ((PVar "k") (PCons (PTuple (PVar "mid") (PVar "decls")) (PVar "rest"))) (EBinOp "::" (ERecordCreate "DeclEnvModule" ((fa "demOrd" (EVar "k")) (fa "demId" (EVar "mid")) (fa "demDecls" (EVar "decls")))) (EApp (EApp (EVar "declEnvModulesFrom") (EBinOp "+" (EVar "k") (ELit (LInt 1)))) (EVar "rest"))))
@@ -29805,6 +30030,42 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "declEnvsUpToGo" ((PVar "cur") (PCons (PVar "m") (PVar "rest"))) (EIf (EApp (EApp (EVar "declEnvVisibleAt") (EVar "cur")) (EFieldAccess (EVar "m") "demOrd")) (EBinOp "::" (EVar "m") (EApp (EApp (EVar "declEnvsUpToGo") (EVar "cur")) (EVar "rest"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "declEnvsUpToGo") (EVar "cur")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "declEnvsVisible" (TyFun (TyCon "String") (TyFun (TyCon "DeclEnvs") (TyApp (TyCon "List") (TyCon "DeclEnvModule")))))
 (DFunDef false "declEnvsVisible" ((PVar "mid") (PVar "envs")) (EApp (EApp (EVar "declEnvsUpTo") (EApp (EApp (EVar "declEnvsOrdOf") (EVar "mid")) (EVar "envs"))) (EVar "envs")))
+(DData Private "DataTypeDecl" () ((variant "DataTypeDecl" (ConNamed (field "dtKey" (TyCon "TabKey")) (field "dtName" (TyCon "String")) (field "dtOrigin" (TyCon "TyConOrigin")) (field "dtParams" (TyApp (TyCon "List") (TyCon "String"))) (field "dtVariants" (TyApp (TyCon "List") (TyCon "Variant")))))) ())
+(DData Private "AliasDecl" () ((variant "AliasDecl" (ConNamed (field "adKey" (TyCon "TabKey")) (field "adName" (TyCon "String")) (field "adParams" (TyApp (TyCon "List") (TyCon "String"))) (field "adRhs" (TyCon "Ty"))))) ())
+(DData Private "DataEnv" () ((variant "DataEnv" (ConNamed (field "deTypes" (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyCon "DataTypeDecl")))) (field "deCtorIdents" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String") (TyCon "Variant"))))) (field "deRecordIdents" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String") (TyApp (TyCon "List") (TyCon "Field")))))) (field "deFieldOwnerIdents" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String"))))) (field "deAliases" (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyCon "AliasDecl"))))))) ())
+(DTypeSig false "emptyDataEnv" (TyCon "DataEnv"))
+(DFunDef false "emptyDataEnv" () (ERecordCreate "DataEnv" ((fa "deTypes" (EListLit)) (fa "deCtorIdents" (EVar "omEmpty")) (fa "deRecordIdents" (EVar "omEmpty")) (fa "deFieldOwnerIdents" (EVar "omEmpty")) (fa "deAliases" (EListLit)))))
+(DTypeSig false "buildDataEnv" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "DataEnv")))
+(DFunDef false "buildDataEnv" ((PVar "decls")) (EApp (EApp (EVar "dataEnvFromDeclsGo") (EVar "decls")) (EVar "emptyDataEnv")))
+(DTypeSig false "dataEnvFromDeclsGo" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "DataEnv") (TyCon "DataEnv"))))
+(DFunDef false "dataEnvFromDeclsGo" ((PList) (PVar "acc")) (EVar "acc"))
+(DFunDef false "dataEnvFromDeclsGo" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "dataEnvFromDeclsGo") (EBinOp "::" (EVar "d") (EVar "rest"))) (EVar "acc")))
+(DFunDef false "dataEnvFromDeclsGo" ((PCons (PRec "DData" ((rf "dataName" None) (rf "dataParams" None) (rf "dataCtors" None) (rf "dataOrigin" None)) true) (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "dataEnvFromDeclsGo") (EVar "rest")) (EApp (EApp (EApp (EApp (EApp (EVar "addDataTypeDecl") (EVar "dataName")) (EVar "dataOrigin")) (EVar "dataParams")) (EVar "dataCtors")) (EVar "acc"))))
+(DFunDef false "dataEnvFromDeclsGo" ((PCons (PRec "DNewtype" ((rf "newtypeName" None) (rf "newtypeParams" None) (rf "newtypeCtor" None) (rf "newtypeFieldTy" None) (rf "newtypeOrigin" None)) true) (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "dataEnvFromDeclsGo") (EVar "rest")) (EApp (EApp (EApp (EApp (EApp (EVar "addDataTypeDecl") (EVar "newtypeName")) (EVar "newtypeOrigin")) (EVar "newtypeParams")) (EListLit (EApp (EApp (EVar "Variant") (EVar "newtypeCtor")) (EApp (EVar "ConPos") (EListLit (EVar "newtypeFieldTy")))))) (EVar "acc"))))
+(DFunDef false "dataEnvFromDeclsGo" ((PCons (PRec "DTypeAlias" ((rf "tyAliasName" None) (rf "tyAliasParams" None) (rf "tyAliasRhs" None) (rf "tyAliasOrigin" None)) true) (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "dataEnvFromDeclsGo") (EVar "rest")) (EApp (EApp (EApp (EApp (EApp (EVar "addAliasDecl") (EVar "tyAliasName")) (EVar "tyAliasOrigin")) (EVar "tyAliasParams")) (EVar "tyAliasRhs")) (EVar "acc"))))
+(DFunDef false "dataEnvFromDeclsGo" ((PCons PWild (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "dataEnvFromDeclsGo") (EVar "rest")) (EVar "acc")))
+(DTypeSig false "addDataTypeDecl" (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Variant")) (TyFun (TyCon "DataEnv") (TyCon "DataEnv")))))))
+(DFunDef false "addDataTypeDecl" ((PVar "name") (PVar "o") (PVar "params") (PVar "variants") (PVar "env")) (EBlock (DoLet false false (PVar "key") (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "name"))) (DoLet false false (PVar "dt") (ERecordCreate "DataTypeDecl" ((fa "dtKey" (EVar "key")) (fa "dtName" (EVar "name")) (fa "dtOrigin" (EVar "o")) (fa "dtParams" (EVar "params")) (fa "dtVariants" (EVar "variants"))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "addVariantIdentsRaw") (EVar "name")) (EVar "o")) (EVar "variants")) (EVariantUpdate "DataEnv" (EVar "env") ((fa "deTypes" (EBinOp "::" (ETuple (EVar "key") (EVar "dt")) (EFieldAccess (EVar "env") "deTypes")))))))))
+(DTypeSig false "addVariantIdentsRaw" (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyFun (TyApp (TyCon "List") (TyCon "Variant")) (TyFun (TyCon "DataEnv") (TyCon "DataEnv"))))))
+(DFunDef false "addVariantIdentsRaw" (PWild PWild (PList) (PVar "env")) (EVar "env"))
+(DFunDef false "addVariantIdentsRaw" ((PVar "tyName") (PVar "o") (PCons (PCon "Variant" (PVar "cn") (PVar "payload")) (PVar "rest")) (PVar "env")) (EApp (EApp (EApp (EApp (EVar "addVariantIdentsRaw") (EVar "tyName")) (EVar "o")) (EVar "rest")) (EApp (EApp (EApp (EApp (EApp (EVar "addCtorIdentRaw") (EVar "tyName")) (EVar "o")) (EVar "cn")) (EVar "payload")) (EVar "env"))))
+(DTypeSig false "addCtorIdentRaw" (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyFun (TyCon "ConPayload") (TyFun (TyCon "DataEnv") (TyCon "DataEnv")))))))
+(DFunDef false "addCtorIdentRaw" ((PVar "tyName") (PVar "o") (PVar "cn") (PVar "payload") (PVar "env")) (EMatch (EApp (EApp (EApp (EVar "mkIdent") (EVar "NsCtor")) (EVar "o")) (EVar "cn")) (arm (PCon "None") () (EVar "env")) (arm (PCon "Some" (PVar "ident")) () (EBlock (DoLet false false (PVar "next") (EBinOp "++" (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "cn")) (EFieldAccess (EVar "env") "deCtorIdents"))) (EListLit (ETuple (EVar "ident") (EVar "tyName") (EApp (EApp (EVar "Variant") (EVar "cn")) (EVar "payload")))))) (DoLet false false (PVar "env2") (EVariantUpdate "DataEnv" (EVar "env") ((fa "deCtorIdents" (EApp (EApp (EApp (EVar "omInsert") (EVar "cn")) (EVar "next")) (EFieldAccess (EVar "env") "deCtorIdents")))))) (DoExpr (EMatch (EVar "payload") (arm (PCon "ConNamed" (PVar "fields") PWild) () (EApp (EApp (EApp (EApp (EApp (EVar "addRecordIdentRaw") (EVar "tyName")) (EVar "cn")) (EVar "ident")) (EVar "fields")) (EVar "env2"))) (arm (PCon "ConPos" PWild) () (EVar "env2"))))))))
+(DTypeSig false "addRecordIdentRaw" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Ident") (TyFun (TyApp (TyCon "List") (TyCon "Field")) (TyFun (TyCon "DataEnv") (TyCon "DataEnv")))))))
+(DFunDef false "addRecordIdentRaw" ((PVar "tyName") (PVar "cn") (PVar "ident") (PVar "fields") (PVar "env")) (EBlock (DoLet false false (PVar "next") (EBinOp "++" (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "cn")) (EFieldAccess (EVar "env") "deRecordIdents"))) (EListLit (ETuple (EVar "ident") (EVar "tyName") (EVar "fields"))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "addFieldOwnerIdents") (EVar "ident")) (EVar "cn")) (EVar "fields")) (EVariantUpdate "DataEnv" (EVar "env") ((fa "deRecordIdents" (EApp (EApp (EApp (EVar "omInsert") (EVar "cn")) (EVar "next")) (EFieldAccess (EVar "env") "deRecordIdents")))))))))
+(DTypeSig false "addFieldOwnerIdents" (TyFun (TyCon "Ident") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Field")) (TyFun (TyCon "DataEnv") (TyCon "DataEnv"))))))
+(DFunDef false "addFieldOwnerIdents" (PWild PWild (PList) (PVar "env")) (EVar "env"))
+(DFunDef false "addFieldOwnerIdents" ((PVar "ident") (PVar "cn") (PCons (PCon "Field" (PVar "fn") PWild) (PVar "rest")) (PVar "env")) (EBlock (DoLet false false (PVar "next") (EBinOp "++" (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "fn")) (EFieldAccess (EVar "env") "deFieldOwnerIdents"))) (EListLit (ETuple (EVar "ident") (EVar "cn"))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "addFieldOwnerIdents") (EVar "ident")) (EVar "cn")) (EVar "rest")) (EVariantUpdate "DataEnv" (EVar "env") ((fa "deFieldOwnerIdents" (EApp (EApp (EApp (EVar "omInsert") (EVar "fn")) (EVar "next")) (EFieldAccess (EVar "env") "deFieldOwnerIdents")))))))))
+(DTypeSig false "addAliasDecl" (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Ty") (TyFun (TyCon "DataEnv") (TyCon "DataEnv")))))))
+(DFunDef false "addAliasDecl" ((PVar "name") (PVar "o") (PVar "params") (PVar "rhs") (PVar "env")) (EBlock (DoLet false false (PVar "key") (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "name"))) (DoLet false false (PVar "ad") (ERecordCreate "AliasDecl" ((fa "adKey" (EVar "key")) (fa "adName" (EVar "name")) (fa "adParams" (EVar "params")) (fa "adRhs" (EVar "rhs"))))) (DoExpr (EVariantUpdate "DataEnv" (EVar "env") ((fa "deAliases" (EBinOp "::" (ETuple (EVar "key") (EVar "ad")) (EFieldAccess (EVar "env") "deAliases"))))))))
+(DTypeSig false "deFieldOwnerFixtureA" (TyCon "Decl"))
+(DFunDef false "deFieldOwnerFixtureA" () (ERecordCreate "DData" ((fa "dataVis" (EVar "VisPublic")) (fa "dataName" (ELit (LString "Pt"))) (fa "dataParams" (EListLit)) (fa "dataCtors" (EListLit (EApp (EApp (EVar "Variant") (ELit (LString "Pt"))) (EApp (EApp (EVar "ConNamed") (EListLit (EApp (EApp (EVar "Field") (ELit (LString "x"))) (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))))) (EVar "False"))))) (fa "dataDerives" (EListLit)) (fa "dataOrigin" (EApp (EVar "OriginModule") (ELit (LString "m")))))))
+(DTypeSig false "deFieldOwnerFixtureB" (TyCon "Decl"))
+(DFunDef false "deFieldOwnerFixtureB" () (ERecordCreate "DData" ((fa "dataVis" (EVar "VisPublic")) (fa "dataName" (ELit (LString "Vec"))) (fa "dataParams" (EListLit)) (fa "dataCtors" (EListLit (EApp (EApp (EVar "Variant") (ELit (LString "Vec"))) (EApp (EApp (EVar "ConNamed") (EListLit (EApp (EApp (EVar "Field") (ELit (LString "x"))) (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))))) (EVar "False"))))) (fa "dataDerives" (EListLit)) (fa "dataOrigin" (EApp (EVar "OriginModule") (ELit (LString "n")))))))
+(DTypeSig false "deFieldOwnerCollisionEnv" (TyCon "DataEnv"))
+(DFunDef false "deFieldOwnerCollisionEnv" () (EApp (EVar "buildDataEnv") (EListLit (EVar "deFieldOwnerFixtureA") (EVar "deFieldOwnerFixtureB"))))
+(DTypeSig false "deFieldOwnerSingleEnv" (TyCon "DataEnv"))
+(DFunDef false "deFieldOwnerSingleEnv" () (EApp (EVar "buildDataEnv") (EListLit (EVar "deFieldOwnerFixtureA"))))
 (DData Private "DriverState" () ((variant "DriverState" (ConNamed (field "effectDomains" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))))) (field "graphMethodExportsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ident")))))) (field "graphIfaceMethodsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))) (field "graphCtorExportsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Ident")))))) (field "declEnvsRef" (TyApp (TyCon "Ref") (TyCon "DeclEnvs"))) (field "abstractRecordTypesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "argDispatchIdxRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))))) (field "dictEligibleRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "dictEligibleSetRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (field "mangledShadowMapRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))) (field "userIfaceNamesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "coherenceUserDecls" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Decl")))) (field "superDeclsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Decl")))) (field "standaloneValuesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "methodDispatchIdxRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))))) (field "matchOracle" (TyApp (TyCon "Ref") (TyCon "Oracle"))) (field "matchWarnings" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "TcDiag")))) (field "promotionHarvestRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "mainSchemeRef" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "Scheme")))) (field "sigNameSetRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (field "sigTyMapRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Ty")))) (field "implInferEnabled" (TyApp (TyCon "Ref") (TyCon "Bool")))))) ())
 (DTypeSig false "freshDriverState" (TyFun (TyCon "Unit") (TyCon "DriverState")))
 (DFunDef false "freshDriverState" (PWild) (ERecordCreate "DriverState" ((fa "effectDomains" (EApp (EVar "Ref") (EListLit))) (fa "graphMethodExportsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "graphIfaceMethodsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "graphCtorExportsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "declEnvsRef" (EApp (EVar "Ref") (EVar "emptyDeclEnvs"))) (fa "abstractRecordTypesRef" (EApp (EVar "Ref") (EListLit))) (fa "argDispatchIdxRef" (EApp (EVar "Ref") (EListLit))) (fa "dictEligibleRef" (EApp (EVar "Ref") (EListLit))) (fa "dictEligibleSetRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "mangledShadowMapRef" (EApp (EVar "Ref") (EListLit))) (fa "userIfaceNamesRef" (EApp (EVar "Ref") (EListLit))) (fa "coherenceUserDecls" (EApp (EVar "Ref") (EListLit))) (fa "superDeclsRef" (EApp (EVar "Ref") (EListLit))) (fa "standaloneValuesRef" (EApp (EVar "Ref") (EListLit))) (fa "methodDispatchIdxRef" (EApp (EVar "Ref") (EListLit))) (fa "matchOracle" (EApp (EVar "Ref") (EApp (EVar "buildOracle") (EListLit)))) (fa "matchWarnings" (EApp (EVar "Ref") (EListLit))) (fa "promotionHarvestRef" (EApp (EVar "Ref") (EListLit))) (fa "mainSchemeRef" (EApp (EVar "Ref") (EVar "None"))) (fa "sigNameSetRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "sigTyMapRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "implInferEnabled" (EApp (EVar "Ref") (EVar "False"))))))
