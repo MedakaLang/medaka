@@ -1,5 +1,5 @@
 # META
-source_lines=601
+source_lines=600
 stages=DESUGAR,MARK
 # SOURCE
 -- BACKEND-NEUTRAL EMIT SUPPORT — helpers shared verbatim by BOTH the LLVM
@@ -446,11 +446,10 @@ lazyGlobalNames binds =
   let tainted = foldTaintSCCs adj methodSet (tarjanSCCs allNames adj) omEmpty
   filterList (n => n != "main" && omHasKey n tainted) (valGlobalNames binds)
 
--- ── interface-method dispatch metadata (installed once per compile) ──────────
+-- ── interface-method dispatch metadata (Wasm legacy state) ───────────────────
 -- method → (interface, declared-full-arity), from the program's `DInterface`
--- decls.  Populated by each backend's `installMethodIface` before emitProgram; an
--- empty table (prelude-free probe entries) makes every lookup a no-op.  Shared so
--- the two emitters read the same install point.
+-- decls. LLVM carries this fact in EmitInput; Wasm retains this install hook until
+-- X-W.H migrates its input seam.
 export methodIfaceTableRef : Ref (List (String, (String, Int)))
 methodIfaceTableRef = Ref []
 

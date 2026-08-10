@@ -42,20 +42,7 @@ import ir.core_ir_lower.{
   ctorFieldTypeNames,
   declSigTypeNames,
 }
-import backend.llvm_emit.{
-  emitProgram,
-  installReturnsSelf,
-  installSelfFnParams,
-  installMethodIface,
-  installMethodConstraintIfaces,
-  installCtorFieldTypes,
-  installDeclSigTypes,
-  installMainIsUnitHint,
-  installMainIsFloatHint,
-  installEmitHalf,
-  installPreludeSyms,
-  installEmitSrcName,
-}
+import backend.llvm_emit.{emitProgram, makeEmitInput}
 import ir.dce.{dceFilter}
 import entries.entry_support.{driveModules, runEmitWith}
 
@@ -66,9 +53,7 @@ srcNameFromArgs (_::_::entry::_) = entry
 srcNameFromArgs _ = ""
 
 main : <IO> Unit
-main =
-  let _ = installEmitSrcName (srcNameFromArgs (args ()))
-  driveModules (runEmitWith emitTail)
+main = driveModules (runEmitWith emitTail)
 
 -- COMPOSITE-MAIN AUTO-PRINT: the shared mangle+elaborate+auto-print-wrap glue
 -- (design §10) lives once in entry_support.runEmitWith, parameterized by this
@@ -95,10 +80,9 @@ emitHalfOfEnv = match getEnv "MEDAKA_EMIT_HALF"
 -- Lowering core.mdk's decls ON THEIR OWN is what makes this a question of where a
 -- decl was DEFINED rather than a guess at its emitted name.  Only ever run in mode
 -- 2, so the default emit path is untouched (and pays nothing for it).
-installPreludeSymsOf : List Decl -> <IO> Unit
-installPreludeSymsOf coreD = match lowerProgramEmit coreD
-  CProgram groups _ _ impls =>
-    installPreludeSyms (map cbindNameOf groups) (implKeysOf impls)
+preludeSymsOf : List Decl -> (List String, List (String, String))
+preludeSymsOf coreD = match lowerProgramEmit coreD
+  CProgram groups _ _ impls => (map cbindNameOf groups, implKeysOf impls)
 
 cbindNameOf : CBind -> String
 cbindNameOf (CBind n _) = n
@@ -116,7 +100,6 @@ implKeysOf (_::rest) = implKeysOf rest
 emitTail : List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit
 emitTail runtimeDecls coreD modules2 =
   let half = emitHalfOfEnv
-  let _ = installEmitHalf half
   let allDecls0 = coreD ++ flatMap snd modules2
   -- SOURCE DCE IS OFF in the prelude-object modes.  It is per-program by
   -- construction, so it would (1) shrink prelude.o to whatever the stub entry
@@ -126,17 +109,14 @@ emitTail runtimeDecls coreD modules2 =
   -- real relocation graph instead (issue #120), which is strictly more precise
   -- than source reachability anyway.
   let allDecls = if half == 0 then dceFilter allDecls0 else allDecls0
-  let _ = if half == 2 then installPreludeSymsOf coreD else ()
+  let (preludeBinds, preludeImpls) = if half == 2 then preludeSymsOf coreD else ([], [])
   let _ = preludeReturnPosDictNames coreD allDecls ++ preludeArgPosDictNames coreD allDecls ++ constrainedSigNames allDecls
-  let _ = installReturnsSelf (returnsSelfTable allDecls)
-  let _ = installSelfFnParams (selfFnParamTable allDecls)
-  let _ = installMethodIface (methodIfaceTable allDecls)
-  let _ = installMethodConstraintIfaces (methodConstraintIfaces allDecls)
-  let _ = installCtorFieldTypes (ctorFieldTypeNames allDecls)
-  let _ = installDeclSigTypes (declSigTypeNames runtimeDecls ++ declSigTypeNames allDecls)
-  let _ = installMainIsUnitHint (mainTypeIsUnit ())
-  let _ = installMainIsFloatHint (mainTypeIsFloat ())
-  putStr (emitProgram (lowerProgramEmit allDecls))
+  let input = makeEmitInput
+    (returnsSelfTable allDecls) (selfFnParamTable allDecls) (methodIfaceTable allDecls)
+    (methodConstraintIfaces allDecls) (ctorFieldTypeNames allDecls)
+    (declSigTypeNames runtimeDecls ++ declSigTypeNames allDecls)
+    (mainTypeIsUnit ()) (mainTypeIsFloat ()) half preludeBinds preludeImpls (srcNameFromArgs (args ()))
+  putStr (emitProgram input (lowerProgramEmit allDecls))
 -- Module-qualify module-PRIVATE top-level functions whose bare name collides
 -- across units, BEFORE elaborateModules flattens the boundaries away (same
 -- flat-emit @mdk_<name> collision risk the bootstrap driver fixes).  The gate

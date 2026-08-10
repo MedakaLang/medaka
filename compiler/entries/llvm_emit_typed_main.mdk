@@ -12,6 +12,8 @@
 -- harness passes ONLY runtime.mdk: elaborateDict resolves every route without
 -- pulling core.mdk's machinery into the emitted module (the spike's scalar subset).
 import frontend.ast.{Decl}
+import frontend.parser.{parse}
+import frontend.desugar.{desugar}
 import types.typecheck.{
   elaborateDict,
   constrainedSigNames,
@@ -30,20 +32,36 @@ import ir.core_ir_lower.{
   ctorFieldTypeNames,
   declSigTypeNames,
 }
-import backend.llvm_emit.{
-  emitProgram,
-  installReturnsSelf,
-  installSelfFnParams,
-  installMethodIface,
-  installMethodConstraintIfaces,
-  installCtorFieldTypes,
-  installDeclSigTypes,
-  installMainIsUnitHint,
-  installMainIsFloatHint,
-}
-import entries.entry_support.{driveRuntime}
+import backend.llvm_emit.{emitProgram, makeEmitInput}
+import entries.entry_support.{driveRuntime, failWith}
 
-main = driveRuntime emit
+main = match args ()
+  ["--isolation", runtimePath, pPath, pPlusUPath] =>
+    emitIsolation runtimePath pPath pPlusUPath
+  _ => driveRuntime emit
+
+-- P -> P+U -> P in one interpreter process. The middle program reuses P's
+-- interface/method spellings and adds U, so its input tables materially differ.
+emitIsolation : String -> String -> String -> <IO> Unit
+emitIsolation runtimePath pPath pPlusUPath = match readFile runtimePath
+  Err msg => failWith msg
+  Ok runtimeSrc => match readFile pPath
+    Err msg => failWith msg
+    Ok pSrc => match readFile pPlusUPath
+      Err msg => failWith msg
+      Ok pPlusUSrc =>
+        let runtimeDecls = desugar (parse runtimeSrc)
+        let pDecls = desugar (parse pSrc)
+        let pPlusUDecls = desugar (parse pPlusUSrc)
+        let p1 = runEmit runtimeDecls [] pDecls
+        let pPlusU = runEmit runtimeDecls [] pPlusUDecls
+        let p2 = runEmit runtimeDecls [] pDecls
+        if p1 != p2 then
+          failWith "LLVM EmitInput isolation failure: P changed after same-process P+U emission"
+        else if p1 == pPlusU then
+          failWith "LLVM EmitInput isolation failure: P+U did not produce distinct LLVM"
+        else
+          putStr "EMIT_INPUT_ISOLATION_OK\n"
 
 emit : List Decl -> List Decl -> List Decl -> <IO> Unit
 emit runtimeDecls preludeDecls userDecls =
@@ -55,16 +73,7 @@ runEmit runtimeDecls preludeDecls userDecls =
   let livePrelude = dropShadowedExp userNames preludeDecls
   let combined = livePrelude ++ userDecls
   let dictNames = preludeReturnPosDictNames livePrelude combined ++ preludeArgPosDictNames livePrelude combined ++ constrainedSigNames userDecls
-  let _ = installReturnsSelf (returnsSelfTable combined)
-  let _ = installSelfFnParams (selfFnParamTable combined)
-  let _ = installMethodIface (methodIfaceTable combined)
-  let _ = installMethodConstraintIfaces (methodConstraintIfaces combined)
-  let _ = installCtorFieldTypes (ctorFieldTypeNames combined)
-  let _ = installDeclSigTypes (declSigTypeNames runtimeDecls ++ declSigTypeNames combined)
-  let _ = installMainIsUnitHint (mainTypeIsUnit ())
-  let _ = installMainIsFloatHint (mainTypeIsFloat ())
-  emitProgram (lowerProgramEmit (elaborateDict
-    runtimeDecls
-    dictNames
-    userNames
-    combined))
+  let input = makeEmitInput (returnsSelfTable combined) (selfFnParamTable combined) (methodIfaceTable combined) (methodConstraintIfaces combined) (ctorFieldTypeNames combined) (declSigTypeNames runtimeDecls ++ declSigTypeNames combined) (mainTypeIsUnit ()) (mainTypeIsFloat ()) 0 [] [] ""
+  emitProgram
+    input
+    (lowerProgramEmit (elaborateDict runtimeDecls dictNames userNames combined))

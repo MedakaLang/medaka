@@ -40,18 +40,7 @@ import ir.core_ir_lower.{
   ctorFieldTypeNames,
   declSigTypeNames,
 }
-import backend.llvm_emit.{
-  emitProgram,
-  enableGapRecord,
-  installReturnsSelf,
-  installSelfFnParams,
-  installMethodIface,
-  installMethodConstraintIfaces,
-  installCtorFieldTypes,
-  installDeclSigTypes,
-  installMainIsUnitHint,
-  installMainIsFloatHint,
-}
+import backend.llvm_emit.{emitProgram, enableGapRecord, makeEmitInput}
 import backend.private_mangle.{mangleUnits}
 import entries.entry_support.{driveModules}
 
@@ -64,16 +53,9 @@ runEmit runtimeDecls coreDecls modules =
   let (coreD, modules2) = elaborateModules runtimeDecls coreMangled modulesMangled
   let allDecls = coreD ++ flatMap snd modules2
   let _ = preludeReturnPosDictNames coreD allDecls ++ preludeArgPosDictNames coreD allDecls ++ constrainedSigNames allDecls
-  let _ = installReturnsSelf (returnsSelfTable allDecls)
-  let _ = installSelfFnParams (selfFnParamTable allDecls)
-  let _ = installMethodIface (methodIfaceTable allDecls)
-  let _ = installMethodConstraintIfaces (methodConstraintIfaces allDecls)
-  let _ = installCtorFieldTypes (ctorFieldTypeNames allDecls)
-  let _ = installDeclSigTypes (declSigTypeNames runtimeDecls ++ declSigTypeNames allDecls)
-  let _ = installMainIsUnitHint (mainTypeIsUnit ())
-  let _ = installMainIsFloatHint (mainTypeIsFloat ())
+  let input = makeEmitInput (returnsSelfTable allDecls) (selfFnParamTable allDecls) (methodIfaceTable allDecls) (methodConstraintIfaces allDecls) (ctorFieldTypeNames allDecls) (declSigTypeNames runtimeDecls ++ declSigTypeNames allDecls) (mainTypeIsUnit ()) (mainTypeIsFloat ()) 0 [] [] ""
   let _ = enableGapRecord ()
-  putStr (emitProgram (lowerProgramEmit allDecls))
+  putStr (emitProgram input (lowerProgramEmit allDecls))
 -- Module-qualify module-PRIVATE top-level functions whose bare name collides
 -- across units, BEFORE elaborateModules flattens the boundaries away.  Without
 -- this, two modules' same-named privates (e.g. lex_main.emit vs lexer.emit) both

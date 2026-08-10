@@ -3,13 +3,11 @@
 #
 # ── WHY THIS GATE EXISTS ──────────────────────────────────────────────────────
 # diff_compiler_llvm.sh is our headline IR-golden gate ("220 ok, byte-identical
-# IR"), but its entry — compiler/entries/llvm_emit_main.mdk — installs NONE of the
-# emitter's seven side-tables (installReturnsSelf/installSelfFnParams/
-# installMethodConstraintIfaces/installCtorFieldTypes/installDeclSigTypes/
-# installMainIsUnitHint/installMainIsFloatHint are all empty there). So under that
-# entry every side-table-fed code path runs in its degenerate state, and ANY change
-# to those tables' content or lifecycle is a NO-OP that the 220-fixture gate cannot
-# see. Meanwhile the gates that DO install the tables — diff_compiler_llvm_typed.sh
+# IR"), but its entry — compiler/entries/llvm_emit_main.mdk — constructs an empty
+# explicit EmitInput. So under that entry every declaration-derived input path runs
+# in its degenerate state, and ANY change to those inputs is a NO-OP that the
+# 220-fixture gate cannot see. Meanwhile diff_compiler_llvm_typed.sh and
+# diff_compiler_llvm_modules.sh construct populated EmitInput values but compare program
 # and diff_compiler_llvm_modules.sh — compare program OUTPUT, not IR, so an IR
 # PESSIMIZATION that still computes the right answer is invisible to them BY
 # CONSTRUCTION (e.g. a specialized `@mdk_list_append` call degrading to a generic
@@ -17,9 +15,9 @@
 # reset-the-seven-at-emitProgram change moved emitted IR and STILL passed
 # "220 ok / 48 ok / 16 ok" across all three existing gates.
 #
-# This gate closes that hole: it drives the SAME installing entry the typed OUTPUT
-# gate uses (test/bin/llvm_emit_typed_main, from compiler/entries/llvm_emit_typed_main.mdk,
-# which installs all seven tables), but compares the EMITTED LLVM IR byte-for-byte
+# This gate closes that hole: it drives the SAME explicit-input entry the typed OUTPUT
+# gate uses (test/bin/llvm_emit_typed_main, from compiler/entries/llvm_emit_typed_main.mdk),
+# but compares the EMITTED LLVM IR byte-for-byte
 # against committed goldens. A change that moves the IR — including an inert
 # pessimization — flips a golden RED here even when the program's output is
 # unchanged.
@@ -49,9 +47,9 @@
 # ── FOUR QUESTIONS (issue #587 / ORCHESTRATING.md) ────────────────────────────
 #  1. Where is it skipped? It runs in the `backend` CI shard (globbed by
 #     'diff_compiler_llvm*' in .github/workflows/ci.yml) — i.e. it runs on exactly
-#     the PRs that touch the emitter/side-tables, which is never a docs-only PR.
+#     the PRs that touch the emitter/input seam, which is never a docs-only PR.
 #  2. Is the caught bug-class the skip's trigger-class? Yes: it fails iff emitted IR
-#     moves, and an emitter/side-table change is precisely what moves emitted IR.
+#     moves, and an emitter/input change is precisely what moves emitted IR.
 #  3. Seen it fail? Yes — applying #357's reset-the-seven at emitProgram degraded
 #     @mdk_list_append -> @mdk_append and this gate named the fixture; reverted.
 #  4. Can it no-op? No: N==0 (no fixtures, or no goldens) is a hard FAILURE below.
@@ -66,6 +64,8 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 EMITBIN="$ROOT/test/bin/llvm_emit_typed_main"
 RUNTIME="$ROOT/stdlib/runtime.mdk"
 FIXDIR="$ROOT/test/llvm_fixtures_typed"
+RT="$ROOT/runtime/medaka_rt.c"
+CC="${CC:-clang}"
 
 # ── Per-fixture worker (parallel fan-out target); shared state via env ─────────
 if [ "${1:-}" = "--one" ]; then
@@ -144,5 +144,43 @@ if [ "${CAPTURE:-0}" = "1" ]; then
   [ "$fail" -eq 0 ]
 else
   printf '\nchecked %d, %d ok, %d failing\n' "$n_fixtures" "$pass" "$fail"
-  [ "$fail" -eq 0 ]
+  [ "$fail" -eq 0 ] || exit 1
+  # Same-process P -> P+U -> P control. P calls Mark, consuming method-arity
+  # metadata; the middle input adds U's unrelated owner/impl under the same Mark
+  # interface/method spelling. This single-file entry has no import graph, so it
+  # makes no module-order claim; the module emitter owns that separate dimension.
+  # These private temp files are not a shared fixture corpus.
+  command -v "$CC" >/dev/null 2>&1 || { echo "FAIL: no C compiler for isolation control"; exit 1; }
+  if command -v pkg-config >/dev/null 2>&1 && pkg-config --exists bdw-gc 2>/dev/null; then
+    GC_CFLAGS="$(pkg-config --cflags bdw-gc)"; GC_LIBS="$(pkg-config --libs bdw-gc)"
+  elif GC_PREFIX="$(brew --prefix bdw-gc 2>/dev/null)" && [ -n "$GC_PREFIX" ] && [ -f "$GC_PREFIX/include/gc.h" ]; then
+    GC_CFLAGS="-I$GC_PREFIX/include"; GC_LIBS="-L$GC_PREFIX/lib -lgc"
+  else
+    GC_CFLAGS=""; GC_LIBS="-lgc"
+  fi
+  ISO="$WORK/isolation"; mkdir "$ISO"
+  printf '%s\n' 'interface Mark a where' '  mark : a -> Int' 'data P = P' 'impl Mark P where' '  mark P = 7' 'main = mark P' > "$ISO/p.mdk"
+  printf '%s\n' 'interface Mark a where' '  mark : a -> Int' 'data U = U' 'impl Mark U where' '  mark U = 11' 'main = mark U' > "$ISO/u.mdk"
+  printf '%s\n' 'interface Mark a where' '  mark : a -> Int' 'data P = P' 'data U = U' 'impl Mark P where' '  mark P = 7' 'impl Mark U where' '  mark U = 11' 'main = mark U' > "$ISO/positive.mdk"
+  "$EMITBIN" --isolation "$RUNTIME" "$ISO/p.mdk" "$ISO/positive.mdk" > "$ISO/isolation.ll" 2> "$ISO/isolation.err"
+  isolation_rc=$?
+  if [ "$isolation_rc" -ne 0 ]; then
+    printf 'FAIL: same-process EmitInput isolation control\n%s\n' "$(cat "$ISO/isolation.err")"
+    exit 1
+  fi
+  isolation_verdict="$(cat "$ISO/isolation.ll")"
+  [ "$isolation_verdict" = "EMIT_INPUT_ISOLATION_OK" ] || {
+    printf 'FAIL: same-process EmitInput isolation verdict was %s\n' "$isolation_verdict"
+    exit 1
+  }
+  for n in p positive; do
+    "$EMITBIN" "$RUNTIME" "$ISO/$n.mdk" > "$ISO/$n.ll" 2> "$ISO/$n.err" || { cat "$ISO/$n.err"; exit 1; }
+    "$CC" $GC_CFLAGS "$ISO/$n.ll" "$RT" $GC_LIBS -lm -o "$ISO/$n.bin" || exit 1
+  done
+  p_out="$("$ISO/p.bin")"; positive_out="$("$ISO/positive.bin")"
+  [ "$p_out" = 7 ] && [ "$positive_out" = 11 ] || {
+    printf 'FAIL: isolation control expected P=7 P+U=11; got P=%s P+U=%s\n' "$p_out" "$positive_out"
+    exit 1
+  }
+  printf 'checked same-process EmitInput isolation (P -> P+U -> P; distinct IR; P=7, P+U=11)\n'
 fi

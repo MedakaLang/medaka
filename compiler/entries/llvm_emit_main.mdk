@@ -20,7 +20,7 @@ import frontend.parser.{parse}
 import frontend.desugar.{desugar}
 import types.annotate.{annotateProgram}
 import ir.core_ir_lower.{lowerProgramEmit}
-import backend.llvm_emit.{emitProgram}
+import backend.llvm_emit.{emitProgram, makeEmitInput}
 
 main = match args ()
   [targetPath] => withTarget targetPath
@@ -28,5 +28,5 @@ main = match args ()
 
 withTarget : String -> <IO> Unit
 withTarget targetPath = match readFile targetPath
-  Ok targetSrc => putStr (emitProgram (lowerProgramEmit (annotateProgram (desugar (parse targetSrc)))))
+  Ok targetSrc => putStr (emitProgram (makeEmitInput [] [] [] [] [] [] False False 0 [] [] "") (lowerProgramEmit (annotateProgram (desugar (parse targetSrc)))))
   Err msg => ePutStrLn msg

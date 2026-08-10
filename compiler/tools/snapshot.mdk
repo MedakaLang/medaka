@@ -192,14 +192,7 @@ import types.typecheck.{
 import eval.eval.{evalOneOutput, funNamesOf, dropShadowedExp, noMainMsg}
 import backend.llvm_emit.{
   emitProgram,
-  installReturnsSelf,
-  installSelfFnParams,
-  installMethodIface,
-  installMethodConstraintIfaces,
-  installCtorFieldTypes,
-  installDeclSigTypes,
-  installMainIsUnitHint,
-  installMainIsFloatHint,
+  makeEmitInput,
   enableGapRecord,
   resetGaps,
   gapEvents,
@@ -210,6 +203,7 @@ import backend.llvm_emit.{
 -- shim that existed solely because Medaka had no import aliasing.)
 import backend.wasm_emit.{
   emitProgram as wasmText,
+  installMethodIface,
   installDeclRetTypes,
   installCtorFloatFields,
   enableGapRecordW,
@@ -634,21 +628,15 @@ emitBoth root sel runtimeDecls userDecls =
 
 llvmOf : List Decl -> List Decl -> CProgram -> String
 llvmOf runtimeDecls allDecls cp =
-  let _ = installReturnsSelf (returnsSelfTable allDecls)
-  let _ = installSelfFnParams (selfFnParamTable allDecls)
-  let _ = installMethodIface (methodIfaceTable allDecls)
-  let _ = installMethodConstraintIfaces (methodConstraintIfaces allDecls)
-  let _ = installCtorFieldTypes (ctorFieldTypeNames allDecls)
-  let _ = installDeclSigTypes (declSigTypeNames runtimeDecls ++ declSigTypeNames allDecls)
-  let _ = installMainIsUnitHint (mainTypeIsUnit ())
-  let _ = installMainIsFloatHint (mainTypeIsFloat ())
+  let input = makeEmitInput (returnsSelfTable allDecls) (selfFnParamTable allDecls) (methodIfaceTable allDecls) (methodConstraintIfaces allDecls) (ctorFieldTypeNames allDecls) (declSigTypeNames runtimeDecls ++ declSigTypeNames allDecls) (mainTypeIsUnit ()) (mainTypeIsFloat ()) 0 [] [] ""
   let _ = resetGaps ()
   let _ = enableGapRecord ()
-  let text = emitProgram cp
+  let text = emitProgram input cp
   withGaps ";" text (gapEvents ())
 
 wasmOf : List Decl -> List Decl -> CProgram -> String
 wasmOf runtimeDecls allDecls cp =
+  let _ = installMethodIface (methodIfaceTable allDecls)
   let _ = installDeclRetTypes (declSigTypeNames runtimeDecls ++ declSigTypeNames allDecls)
   let _ = installCtorFloatFields (ctorFieldTypeNames allDecls)
   let _ = resetGapsW ()
