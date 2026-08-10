@@ -1,0 +1,9 @@
+-- An UNRELATED interface that merely shares the spelling `Sizer`.  Its method is
+-- `weight`, disjoint from `zmod.Sizer`'s `bulk`, so no program can confuse the two
+-- by reading them.  It is the only `impl Sizer Int` in the graph — and it is an impl
+-- of THIS class, not of `zmod`'s.
+export interface Sizer a where
+  weight : a -> Int
+
+export impl Sizer Int where
+  weight n = n * 100

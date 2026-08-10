@@ -1,0 +1,56 @@
+-- §8 I4 / §3 `inst` — THE RULE-3 AMBIGUITY REJECT, WITH ORIGIN-CARRYING IMPLS.
+--
+-- WHY THIS FIXTURE EXISTS, stated as the failure it guards rather than the feature
+-- it exercises.  `checkUndeterminedObligation`'s RULE 3 is guarded on
+-- `implCountForIfaceU univ iface >= 2`; every other consequence of a missed
+-- `ImplUniverse` lookup is a REJECT (a payload table's miss means "no impl exists"),
+-- but THIS one reads a miss as the count 0 and simply STOPS EMITTING
+-- `T-AMBIGUOUS-INSTANCE` — the one place in the obligation channel where a keying
+-- mistake goes QUIET rather than loud.  #1446 moved that count's key from the
+-- interface's bare SPELLING to its `(module, name)` identity, and the four existing
+-- ambiguity fixtures in `test/typecheck_error_fixtures/` are all SINGLE-FILE, so
+-- every interface in them is `OriginUnresolved` on both sides and keys `TkBare` —
+-- none of them can observe an identity-keyed count at all.
+--
+-- SPEC ANSWER, HAND-DERIVED, NOT CAPTURED.  `roundtrip : Mk a => Int -> Int` fixes
+-- `a` in neither its argument nor its result, so at `roundtrip 14` the predicate
+-- `Mk ?a` reaches §3 `inst` with `?a` free and quantified by nothing.
+-- `match(IE, Mk ?a)` is {`Mk Widget`, `Mk Gadget`} — two impls, mutually
+-- ⊑-incomparable (no substitution turns `Widget` into `Gadget`), so there is no
+-- unique ⊑-minimum and the goal is genuinely ambiguous.  §3 requires a UNIQUE
+-- selection; the implementation's deliberate divergence from the OCaml oracle's
+-- silent first-wins is to REJECT (`T-AMBIGUOUS-INSTANCE`).  Both engines must
+-- reject at check time, so there is no value to pin.
+--
+-- 🚨 THIS FIXTURE DOES NOT DISCRIMINATE THE IDENTITY RE-KEY, AND AN EARLIER VERSION
+-- OF THIS HEADER CLAIMED IT DID.  The claim was: "were the reader to key `TkBare`
+-- while the writer keys `TkIdent`, `implCountForIfaceU` would answer 0, RULE 3's
+-- guard would be false, and this program would be ACCEPTED at exit 0".  That
+-- counterfactual is UNREACHABLE in this implementation, and it was refuted by
+-- building exactly that compiler: neutering `implCountForIfaceU` to
+-- `regKeyOfTab (TkBare NsIface iface.irName)` and changing nothing else leaves this
+-- file exiting 1 with the same diagnostic at the same location.  The reason is
+-- `insertUnivImplKeys`: every identity-carrying impl is ALSO indexed under its bare
+-- spelling, so the bare bucket holds both head tags and the count is 2 either way.
+-- (Neutering the WRITER instead does redden this row — and also produces 609
+-- `No impl of` in the compiler's own closure, so `check-self` catches that far more
+-- loudly and this row adds no unique coverage there either.)
+--
+-- ⚠️ IT ALSO BEHAVES IDENTICALLY ON THE BASE BINARY, so it witnesses nothing about
+-- #1446.  It is kept as a §3 CONFORMANCE row — RULE 3 must reject a genuinely
+-- ambiguous cross-module goal — and NOT as evidence for the re-key.  The
+-- arm-discriminating coverage lives in `i4-xmod-requires-foreign-iface-rejected/`.
+-- A fixture whose stated purpose cannot fire reads as coverage while providing none;
+-- that is why the claim is deleted rather than softened.
+--
+-- ⚠️ OBSERVED SITE, recorded because it differs from the obvious reading and a later
+-- reader should not have to re-derive it: the diagnostic lands at `lib.mdk:25`
+-- (`roundtrip`'s own body), NOT at `main`'s call.  `roundtrip`'s `a` escapes its
+-- generalized group anchored to nothing, so RULE 3 fires while `lib` is being
+-- checked — which is the arm where both sides carry `mod:lib`.  The entry file is
+-- still load-bearing: it is what makes `lib` a MODULE rather than a flat program, and
+-- deleting it collapses the fixture to the `TkBare`/`TkBare` shape the four existing
+-- single-file ambiguity fixtures already cover.
+import lib.{Mk, roundtrip}
+
+main = println (roundtrip 14)

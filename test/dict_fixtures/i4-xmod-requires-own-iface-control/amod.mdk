@@ -1,0 +1,18 @@
+-- The same-spelled foreign `Sizer` is STILL PRESENT — that is the point of the
+-- control — but its impl sits at head `Bool` rather than `Int`.
+--
+-- 🚨 THE HEAD HAD TO MOVE, AND THE REASON IS A REAL FINDING, NOT FIXTURE
+-- CONVENIENCE.  With `impl Sizer Int` here AND in `zmod`, BOTH arms reject with
+-- `T-CONFLICTING-IMPL` (`Conflicting `impl Sizer`. Defined in amod and zmod`) —
+-- MEASURED, and it is what the first cut of this control did.  #1446 gave the
+-- OBLIGATION channel an interface identity, but COHERENCE still keys the interface
+-- half by SPELLING (it runs off the `KeyBuckets` side, which #1317's T1 rule
+-- deliberately keeps spelling-scoped), so two unrelated classes' impls at the same
+-- head still read as one conflict.  The two checkers therefore disagree about
+-- whether `amod.Sizer` and `zmod.Sizer` are the same class.  That inconsistency is
+-- pre-existing in direction and out of scope here; it is recorded on #1482.
+export interface Sizer a where
+  weight : a -> Int
+
+export impl Sizer Bool where
+  weight _ = 1

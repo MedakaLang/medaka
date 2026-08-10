@@ -1,0 +1,10 @@
+-- The module that POSES the goal.  Its `requires Sizer a` is an interface
+-- OCCURRENCE, resolved in THIS module's scope, so it denotes `zmod.Sizer` — the
+-- interface declared three lines up, whose method is `bulk`.
+export interface Sizer a where
+  bulk : a -> Int
+
+public export data Wrap a = Wrap a
+
+export impl Debug (Wrap a) requires Sizer a where
+  debug (Wrap x) = "W\{bulk x}"

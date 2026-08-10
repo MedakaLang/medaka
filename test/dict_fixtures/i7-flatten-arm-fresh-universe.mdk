@@ -1,0 +1,55 @@
+-- §8 I7 / §7.1 — THE FLATTEN-ARM / MODULE-ARM PARTITION, PINNED.
+--
+-- WHAT THIS IS A TRIPWIRE FOR, and it is not this file's own behaviour.  #1446's
+-- scoping pass named one risk it could not reach: `obUnivConcreteRef` and its two
+-- siblings are per-RUN accumulators that SURVIVE the per-module `resetState`, and
+-- the five prelude-FLATTENED internal passes (`elaborateDict`, `discoverPromoted`,
+-- `discoverPromotedJoint`, `checkBodyImpl`, `checkMatchToLines` — grep
+-- `externTyOriginScope []`) have no prelude boundary.  A row WRITTEN with an
+-- interface identity present and READ from a flattened pass would MISS under an
+-- identity key.
+--
+-- IT DOES NOT REPRODUCE, and the reason is STRUCTURAL rather than statistical:
+-- there are exactly TWO `ImplUniverse` sources and they are ARM-GATED.  The `Flat`
+-- arm builds a FRESH `buildImplUniverse prog` (`checkBodyImpl`'s `fullUniverse`
+-- match); only the `Module` arm reads the CrossRun accumulator; all five flattened
+-- sites route to `Flat`.  Writer and reader are therefore the same pass over the
+-- same decls, symmetric at whatever supply level that pass has.
+--
+-- ⚠️ THAT SEPARATION IS NOW LOAD-BEARING, AND E-1 (#1115) IS THE UNIT THAT BREAKS
+-- IT.  E-1 migrates Flat consumers onto the Module path.  On the day it does, the
+-- refutation above stops holding by its own terms, and something must go RED rather
+-- than silently start missing.  This file is that something.
+--
+-- HOW IT DISCRIMINATES.  No imports at all, so `medaka check` takes the Flat arm
+-- with a real `coreProg`, while `medaka run`/`medaka build` additionally drive the
+-- prelude-flattened discovery passes (dict promotion for `sumAll`, whose `Num a =>`
+-- context is INFERRED, not ascribed).  Every dispatch below is against a PRELUDE
+-- impl reached through a conditional instance:
+--   * `Debug (List (Option Int))` needs `impl Debug List requires Debug a` and
+--     `impl Debug Option requires Debug a` to BOTH be visible to the pass that
+--     elaborates `debug`;
+--   * `sumAll` dispatches `Num`, the operator class §8 I7 fixes to the prelude's;
+--   * `[1, 2] ++ [3]` dispatches `Semigroup`, `1 == 1` `Eq`, `2 < 3` `Ord` — the
+--     other three I7 classes, so all four are exercised on one file.
+-- If a flattened pass ever read a universe built by a DIFFERENT pass with different
+-- origin supply, these prelude impls become invisible to it and the reject is loud
+-- (`No impl of Debug for List`), on `run` and `build` but NOT on `check`.
+--
+-- ⚠️ HONEST LIMIT, stated because the row would otherwise over-claim: this is an
+-- END-TO-END consequence pin, not a direct assertion about which universe object a
+-- pass read.  It cannot distinguish "the partition held" from "the partition broke
+-- but both universes happened to agree".  Nothing available today can: the
+-- writer-only prototype #1446 used masks contamination behind a universal false
+-- reject.  Treat a RED here as "read the arm partition again", not as a diagnosis.
+--
+-- SPEC ANSWER, HAND-DERIVED: `sumAll [1, 2, 3]` = 6; `debug [Some 1, None]` renders
+-- the list of options; `[1, 2] ++ [3]` = [1, 2, 3]; `1 == 1` True; `2 < 3` True.
+sumAll xs = fold (+) 0 xs
+
+main =
+  let _ = println (sumAll [1, 2, 3])
+  let _ = println (debug [Some 1, None])
+  let _ = println ([1, 2] ++ [3])
+  let _ = println (1 == 1)
+  println (2 < 3)

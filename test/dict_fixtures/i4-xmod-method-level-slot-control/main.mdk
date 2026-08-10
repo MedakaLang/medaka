@@ -1,0 +1,23 @@
+-- CONTROL for i4-xmod-method-level-slot-rejected.
+--
+-- SPEC ANSWER, HAND-DERIVED: with `zmod`'s own `impl Sizer Int` present,
+-- `match(IE, zmod.Sizer Int)` is the singleton {`zmod`'s impl}, trivially its own
+-- ⊑-minimum, so §3 `inst` selects it and `peek Cell 3` = `bulk 3` = 3 + 7 = 10.
+-- Prints `10`.
+--
+-- 🚨 `10` IS A VALUE ONLY `zmod`'s IMPL CAN PRODUCE — `amod`'s `weight n = n * 100`
+-- would give `300`.  So the pair separates "the reject was removed" from "the wrong
+-- impl was selected", which a verdict-only control cannot.
+--
+-- ⚠️ It rules out the duller readings of the sibling's reject, each of which would
+-- predict a reject HERE too: "a method-level `=>` slot cannot be discharged at all
+-- across modules"; "any same-spelled interface in the graph poisons the goal";
+-- "`Holder`'s impl cannot see `Sizer`".  None survives `10`.
+--
+-- ⚠️ BEHAVES IDENTICALLY ON BOTH ARMS, deliberately and stated so it is not
+-- mistaken for coverage of #1446: a goal with exactly one candidate is not a witness
+-- to an identity re-key.  Two edits from the sibling, not one — see `amod.mdk`.
+import amod
+import zmod.{Cell(..), useCell}
+
+main = println (useCell 3)
