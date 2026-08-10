@@ -1994,3 +1994,68 @@ contains, which is the direction a reader cannot detect.
 **derive them from the selfproc LEG A golden** rather than writing them by hand — the golden is
 recut from the tree, so a reverted symbol disappears from it without anyone remembering to look.
 This is the PR-body-has-no-reviewer lesson (previous section) with a mechanical fix attached.
+
+## The typecheck-rearchitecture arc, 2026-08-10 — five merges, and every role defect was in a CITATION, a RELATION, or a POLL
+
+#1491/#1494/#1495/#1498/#1501 merged; #1492/#1493 (S1), #1497 (S0), #1499 (S3), #1500 (S2) filed;
+#1496 and #1502 left open. None of the four lessons below is about the compiler.
+
+### ⭐⭐ A PRECISE citation is not a VERIFIED one — the precision is what buys the unearned trust
+
+An agent cited "#1112 §1 row 7" as the authority for *"#1265 gates A-3.4."* That row says the
+opposite, verbatim: **"DOES NOT GATE — belongs with B-2"** — and the same adjudication's
+precondition list reads *"Explicitly NOT preconditions: … #1265 …"*. The section was real, the row
+existed, the numbering was right; only the claim was invented. I relayed it to the repo owner as a
+decision she needed to make **before opening it**, precisely BECAUSE `§1 row 7` reads like
+something nobody writes unless they have read it.
+
+**The check is to OPEN the citation, not to admire its specificity.** A vague citation gets checked
+because it has to be. Retracted at #1112 `issuecomment-5237149420`, which needed four independent
+lines of the record to undo one plausible sentence. Sibling of *"citation currency is what nothing
+checks"* (2026-08-07/08) — that one is a citation that ROTTED; this one never held.
+
+### ⭐⭐ An experiment about a RELATION between two things is not pinned by measuring ONE of them
+
+The hypothesis was *"impl candidacy is prefix-scoped"*: whether a foreign same-spelled impl is a
+candidate depends on its topological position **relative to the module where the goal is
+elaborated**. Two agents independently built a fixture whose goal lived in `main`. `main` is always
+topologically LAST, so no permutation of its imports can put the impl after the goal — both got a
+**false null**, and both had correctly *proved their topological order*. Neither had stated **which
+module elaborates the goal**, which is the other half of the relation. It cost three runs.
+
+The settling run added a `midmod` holding the goal and permuted only two import lines in `main`,
+moving the impl from before to after `midmod` while holding `midmod`'s import reachability constant
+at none: the reject appeared and disappeared (#1482 `issuecomment-5237121185`, MEASURED at
+`99780077`).
+
+**When a hypothesis is "A relative to B", require the probe to REPORT BOTH A AND B** — not the
+ordering it achieved. This is the discriminating-probe rule, but what failed to discriminate was
+the fixture's SHAPE, not its assertion, so reading the assertion could not catch it.
+
+### ⭐⭐ A completion poll must be unable to pass on a FAILED READ
+
+An agent's merge-completion poll tested `mergedAt != "null"`. A transient empty API response
+satisfied that test and it reported MERGED for a PR still sitting in the queue; it caught itself
+only by re-reading state two ways. (RELAYED — the agent's own report, not re-run here.)
+
+**Distinct from the stale-sentinel trap and from the two-call bounce above: those pass on the WRONG
+data, this passes on the ABSENCE of data.** A completion predicate must be a POSITIVE match on the
+value that means done — `mergedAt` parses as a timestamp, `state == "MERGED"`, the head SHA is an
+ancestor of `origin/main` — never `!= <the sentinel you expect on failure>`, because every
+*unforeseen* failure mode also `!=` it. Ask of any poll: *what does an empty response do to it?*
+`scripts/pr.sh complete` already answers this (it proves the head SHA landed on `main`); prefer it
+to a hand-rolled poll.
+
+### ⭐⭐ Two agents can disagree because they ran DIFFERENT EXPERIMENTS, not because the answer is uncertain
+
+One agent measured the order-sensitivity above; another could not reproduce it. The instinct is a
+third opinion. What settled it was **running both constructions on ONE binary at ONE recorded
+commit and publishing the datum neither had reported** — which module elaborates the goal. The
+dissenter's null was then *explained* (its goal was in `main`) rather than outvoted, which is the
+only outcome that also tells you what to build next.
+
+Two details worth copying. A **third** agent reproduced the flip incidentally on the *same commit
+as the dissenter*, which killed a tidy "the intervening merge (`fa9f7564`) changed it" story before
+anyone spent a run on it. And the settling report states its commit, its build provenance and its
+exit-code-reading method, so the next disagreement can be diffed against it instead of restarted.
+**Tiebreak by making the two experiments identical, not by adding a voter.**
