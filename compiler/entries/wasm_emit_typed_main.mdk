@@ -32,11 +32,17 @@ import types.typecheck.{
   preludeArgPosDictNames,
 }
 import eval.eval.{funNamesOf, dropShadowedExp}
-import ir.core_ir_lower.{lowerProgramEmit, declSigTypeNames, ctorFieldTypeNames}
+import ir.core_ir_lower.{
+  lowerProgramEmit,
+  declSigTypeNames,
+  ctorFieldTypeNames,
+  declaredRecordFieldOrders,
+}
 import backend.wasm_emit.{
   emitProgram,
   installDeclRetTypes,
   installCtorFloatFields,
+  installRecFieldOrders,
 }
 import entries.entry_support.{driveRuntime}
 
@@ -57,5 +63,9 @@ runEmit runtimeDecls preludeDecls userDecls =
   let _ = installDeclRetTypes (declSigTypeNames runtimeDecls ++ declSigTypeNames combined)
   -- W-SQLITE-4 stage 2: install ctor/record field Float indices.
   let _ = installCtorFloatFields (ctorFieldTypeNames combined)
+  -- #1513: the record field-ORDER table, from the SAME decls that are lowered.
+  -- The W5 gate oracle for test/wasm/diff_wasm_typed.sh; see the note in the sibling
+  -- wasm_emit_main.mdk on why a gate-only driver must seed too.
+  let _ = installRecFieldOrders (declaredRecordFieldOrders combined)
   emitProgram
     (lowerProgramEmit (elaborateDict runtimeDecls dictNames userNames combined))

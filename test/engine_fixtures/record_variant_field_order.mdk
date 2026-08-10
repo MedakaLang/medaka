@@ -1,0 +1,40 @@
+-- #1513 / #1306, third instance of the class: a named-field VARIANT of a
+-- multi-constructor data type, written out of declaration order.  Surfaced by the
+-- adversarial review of the fix, MEASURED both ways: `VA { a = 1, b = 2 }` printed
+-- `1` for `getB` on base -- wrong -- and prints `2` on the branch.
+--
+-- It is a genuinely different declaration form from its two sibling fixtures, not a
+-- respelling, and each difference is one a narrower fix could have missed:
+--   * the constructor is one of SEVERAL, so the cell carries a real tag and
+--     `cellTag`/`ctorOrdinal` are in play, not just a single-ctor record cell;
+--   * the CONSTRUCTOR NAME IS NOT THE TYPE NAME (`VA` vs `V`), and the field-order
+--     table is keyed by the CONSTRUCTOR while `getA : V -> Int` mentions the TYPE;
+--   * `VB Int` is a POSITIONAL sibling with no field labels at all, so
+--     `declaredRecordFieldOrders` must contribute an entry for `VA` and none for
+--     `VB` -- `variantNamedOrder`'s non-`ConNamed` arm returning `[]` rather than a
+--     bogus empty-label row is what keeps `findRecByField`/`findRecordByLabel` from
+--     ever matching `VB`.
+--
+-- EXPECTED VALUE, HAND-DERIVED from this source before any engine was run --
+-- pinned at test/engine_value_pins/engine/record_variant_field_order.pin:
+--
+--   (1, 2)
+--
+--   the literal sets `a = 1` and `b = 2` BY NAME; the declaration orders the slots
+--   `b` then `a`, so a positional fill in WRITTEN order would put `1` in slot 0
+--   (`b`) and `2` in slot 1 (`a`) and the pair would read `(2, 1)` -- the exact
+--   transposition, which is why both components are pinned rather than one.
+
+data V =
+  | VA { b : Int, a : Int }
+  | VB Int
+
+getA : V -> Int
+getA v = v.a
+
+getB : V -> Int
+getB v = v.b
+
+main =
+  let v = VA { a = 1, b = 2 }
+  (getA v, getB v)

@@ -1,0 +1,58 @@
+-- #1513, the OTHER half of the same property (found while fixing it; MEASURED).
+--
+-- Both emit backends store a record cell POSITIONALLY, in the order the `CRecord`
+-- node lists its fields, while every reader indexes by the DECLARED order.  Their
+-- in-source comments already asserted the two coincide -- wasm_emit's
+-- `emitRecordRef` says "CRecord carries fields in DECLARED order (lowering
+-- preserves it)" -- but nothing established it.  No pass reordered a literal, and
+-- the field-order table was whatever the FIRST construction site happened to write.
+--
+-- So `a` below, written `{ g = …, f = … }`, installed `[g, f]` as the layout of
+-- `R`, and `b`, written in declared order, was laid out `[f, g]` and read with
+-- `a`'s indices.  MEASURED on `main` @ 0675ce16 before the fix: `medaka run`
+-- printed the correct `10 30` and the BUILT BINARY printed `10 40` at exit 0.
+--
+-- `core_ir_lower.normalizeRecordOrder` now makes the asserted invariant true, at
+-- the one point every emit driver funnels through, so both backends inherit it.
+-- The field expressions are bound to temporaries IN WRITTEN ORDER first, so an
+-- effectful field expression still runs when the source says it does.
+--
+-- This is also the shape issue #1306 pinned (its fixture drained on this fix and is
+-- removed with it), so it keeps #1306's own spelling in two respects the
+-- replacement would otherwise have quietly dropped: the last component reads the
+-- field back through a RECORD PATTERN rather than a projection (both go through the
+-- same positional layout, and keeping both means the fixture still fails if only one
+-- of the two readers is repaired), and the CONSTRUCTOR NAME DIFFERS FROM THE TYPE
+-- NAME (`data R = Rec { … }`).  That second one matters because the field-order
+-- table is keyed by the CONSTRUCTOR while the type is what a signature mentions --
+-- `getF : R -> Int` -- so a fix that keyed the table on the type name would resolve
+-- every record in a `data X = X { … }` program and none in this one.
+--
+-- EXPECTED VALUE, HAND-DERIVED from this source before any engine was run --
+-- pinned at test/engine_value_pins/engine/record_literal_field_order.pin:
+--
+--   (10, 20, 30, 40, 10)
+--
+--   `a` is `{ g = 20, f = 10 }`, so `a.f = 10` and `a.g = 20`.
+--   `b` is `{ f = 30, g = 40 }`, so `b.f = 30` and `b.g = 40`.
+--   the last `10` is `a`'s `f` again, read by pattern instead of by projection.
+--
+-- `b` is the BYSTANDER: it is written in declared order, so it was laid out
+-- correctly by the OLD rule as well -- for every program where no sibling literal
+-- disagreed.  It must still be correct now that the declaration, not `a`, decides.
+-- `40` in the third slot instead of `30` is the defect's signature.
+
+data R = Rec { f : Int, g : Int }
+
+getF : R -> Int
+getF r = r.f
+
+getG : R -> Int
+getG r = r.g
+
+main =
+  let a = Rec { g = 20, f = 10 }
+  let b = Rec { f = 30, g = 40 }
+  let patF = match a
+    Rec { f } => f
+  (getF a, getG a, getF b, getG b, patF)

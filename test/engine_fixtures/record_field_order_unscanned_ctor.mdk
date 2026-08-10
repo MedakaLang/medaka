@@ -1,0 +1,54 @@
+-- #1513 REGRESSION (replaces the must-fail pin the fix drained).
+--
+-- The LLVM emitter used to build its record field-ORDER table by SCANNING the
+-- lowered program for construction sites.  A record whose only construction site
+-- sits somewhere the scan does not walk was therefore absent from the table, and
+-- `fieldIdxByName` fell through to a label-only search that answers with THE FIRST
+-- OTHER RECORD OWNING THAT LABEL -- and emitted that record's index.
+--
+-- `B`'s only construction site here is inside a MATCH-ARM GUARD, which the scan
+-- walked past (`scanArmsRecords` took the arm's body and never its qualifiers).
+-- `A.k` is at index 1 and `B.k` at index 0, so `getKB` was emitted as a read of a
+-- `B` cell's SECOND word -- `q`, not `k`.  MEASURED on `main` @ 0675ce16 before the
+-- fix: `medaka run` printed the correct `(5, 7)` and the BUILT BINARY printed
+-- `(5, 99)` at exit 0.  The same shape with the colliding fields differently typed
+-- segfaulted from a clean typecheck.
+--
+-- The fix is not "also scan guards": the emitters now seed the table from the
+-- `DData` DECLARATIONS (`core_ir_lower.declaredRecordFieldOrders`), which is
+-- present whatever any scan walks.  This fixture is the guard POSITION; its
+-- sibling `record_literal_field_order.mdk` is the other half of the same property
+-- (the order a scan reports is the first LITERAL's, not the declaration's).
+--
+-- EXPECTED VALUE, HAND-DERIVED from this source before any engine was run --
+-- pinned at test/engine_value_pins/engine/record_field_order_unscanned_ctor.pin:
+--
+--   (5, 7)
+--
+--   5  is `a.k` where `a = A { p = 10, k = 5 }`.  `A` is constructed the ordinary
+--      way, so it was in the table before this change too: it is the BYSTANDER
+--      half, and it must not move.  A fix that made the table available to `B` by
+--      disturbing how an already-present record resolves would break this number.
+--   7  is `b.k` where `b = B { k = 7, q = 99 }`.  `99` -- the value the defect
+--      produced -- is `B`'s `q`, reachable only through `A`'s index for `k`, so
+--      the two numbers are not interchangeable by accident.
+--
+-- `medaka run` is CORRECT here on every build, before and after: the interpreter
+-- resolves fields by name at run time.  Only an engine that lays a record out
+-- positionally can see this, which is why it lives in the three-engine corpus.
+
+data A = A { p : Int, k : Int }
+
+data B = B { k : Int, q : Int }
+
+getKB : B -> Int
+getKB b = b.k
+
+readK : Int -> Int
+readK n = match n
+  0 if Some b <- Some (B { k = 7, q = 99 }) => getKB b
+  _ => 0
+
+main =
+  let a = A { p = 10, k = 5 }
+  (a.k, readK 0)

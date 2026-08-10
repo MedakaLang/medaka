@@ -49,6 +49,7 @@ import types.typecheck.{
 }
 import eval.eval.{funNamesOf, dropShadowedExp}
 import ir.core_ir_lower.{
+  declaredRecordFieldOrders,
   lowerProgramEmit,
   returnsSelfTable,
   selfFnParamTable,
@@ -68,6 +69,7 @@ import backend.llvm_emit.{emitProgram, makeEmitInput}
 import backend.wasm_emit.{
   emitProgram as wasmText,
   installMethodIface as installMethodIfaceW,
+  installRecFieldOrders as installRecFieldOrdersW,
   installMainIsFloatHint as installMainIsFloatHintW,
   installDeclRetTypes,
   installCtorFloatFields,
@@ -229,7 +231,7 @@ runStaged on targetPath rsrc csrc tsrc =
     (returnsSelfTable combined) (selfFnParamTable combined) (methodIfaceTable combined)
     (methodConstraintIfaces combined) (ctorFieldTypeNames combined)
     (declSigTypeNames rDecls ++ declSigTypeNames combined)
-    (mainTypeIsUnit ()) (mainTypeIsFloat ()) 0 [] [] targetPath
+    (mainTypeIsUnit ()) (mainTypeIsFloat ()) 0 [] [] targetPath (declaredRecordFieldOrders combined)
   let elaborated = elaborateDict rDecls dictNames userNames combined
   let tEl1 = now ()
   let _ = emitPhaseAO on "elaborate" (tEl1 - tEl0) (allocSnap () - aEl0) declsOp (opSnap () - oEl0)
@@ -368,6 +370,7 @@ wasmStage : Bool -> Bool -> CProgram -> List Decl -> List Decl -> String -> <IO>
 wasmStage _ False _ _ _ _ = ()
 wasmStage on True cprog live rDecls declsOp =
   let _ = installMethodIfaceW (methodIfaceTable live)
+  let _ = installRecFieldOrdersW (declaredRecordFieldOrders live)
   let _ = installDeclRetTypes (declSigTypeNames rDecls ++ declSigTypeNames live)
   let _ = installCtorFloatFields (ctorFieldTypeNames live)
   let _ = installMainIsFloatHintW (mainTypeIsFloat ())

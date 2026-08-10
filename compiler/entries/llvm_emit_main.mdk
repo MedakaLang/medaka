@@ -16,10 +16,11 @@
 -- swaps the final consumer (emit LLVM instead of ceval) — the Axis-1 discipline
 -- (Core IR is backend-neutral; backends are sibling consumers) in miniature.
 
+import frontend.ast.{Decl}
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
 import types.annotate.{annotateProgram}
-import ir.core_ir_lower.{lowerProgramEmit}
+import ir.core_ir_lower.{lowerProgramEmit, declaredRecordFieldOrders}
 import backend.llvm_emit.{emitProgram, makeEmitInput}
 
 main = match args ()
@@ -28,5 +29,28 @@ main = match args ()
 
 withTarget : String -> <IO> Unit
 withTarget targetPath = match readFile targetPath
-  Ok targetSrc => putStr (emitProgram (makeEmitInput [] [] [] [] [] [] False False 0 [] [] "") (lowerProgramEmit (annotateProgram (desugar (parse targetSrc)))))
+  Ok targetSrc => emitTarget (annotateProgram (desugar (parse targetSrc)))
   Err msg => ePutStrLn msg
+
+-- The record field-order table comes from the SAME decl list that is lowered, so
+-- its ctor keys and the lowered program's `CRecord` names agree by construction
+-- (#1513 — the emitter no longer recovers that order by scanning for construction
+-- sites, which misses a record that is only ever projected).
+emitTarget : List Decl -> <IO> Unit
+emitTarget decls =
+  putStr (emitProgram
+    (makeEmitInput
+      []
+      []
+      []
+      []
+      []
+      []
+      False
+      False
+      0
+      []
+      []
+      ""
+      (declaredRecordFieldOrders decls))
+    (lowerProgramEmit decls))

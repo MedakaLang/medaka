@@ -32,6 +32,7 @@ import types.typecheck.{
   mainTypeIsFloat,
 }
 import ir.core_ir_lower.{
+  declaredRecordFieldOrders,
   lowerProgramEmit,
   returnsSelfTable,
   selfFnParamTable,
@@ -53,7 +54,7 @@ runEmit runtimeDecls coreDecls modules =
   let (coreD, modules2) = elaborateModules runtimeDecls coreMangled modulesMangled
   let allDecls = coreD ++ flatMap snd modules2
   let _ = preludeReturnPosDictNames coreD allDecls ++ preludeArgPosDictNames coreD allDecls ++ constrainedSigNames allDecls
-  let input = makeEmitInput (returnsSelfTable allDecls) (selfFnParamTable allDecls) (methodIfaceTable allDecls) (methodConstraintIfaces allDecls) (ctorFieldTypeNames allDecls) (declSigTypeNames runtimeDecls ++ declSigTypeNames allDecls) (mainTypeIsUnit ()) (mainTypeIsFloat ()) 0 [] [] ""
+  let input = makeEmitInput (returnsSelfTable allDecls) (selfFnParamTable allDecls) (methodIfaceTable allDecls) (methodConstraintIfaces allDecls) (ctorFieldTypeNames allDecls) (declSigTypeNames runtimeDecls ++ declSigTypeNames allDecls) (mainTypeIsUnit ()) (mainTypeIsFloat ()) 0 [] [] "" (declaredRecordFieldOrders allDecls)
   let (text, _) = emitProgramRecord input (lowerProgramEmit allDecls)
   putStr text
 -- Module-qualify module-PRIVATE top-level functions whose bare name collides

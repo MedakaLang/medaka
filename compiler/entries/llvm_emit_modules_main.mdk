@@ -34,6 +34,7 @@ import types.typecheck.{
 }
 import ir.core_ir.{CProgram(..), CBind(..), CImplEntry(..), CImplBody(..)}
 import ir.core_ir_lower.{
+  declaredRecordFieldOrders,
   lowerProgramEmit,
   returnsSelfTable,
   selfFnParamTable,
@@ -115,7 +116,7 @@ emitTail runtimeDecls coreD modules2 =
     (returnsSelfTable allDecls) (selfFnParamTable allDecls) (methodIfaceTable allDecls)
     (methodConstraintIfaces allDecls) (ctorFieldTypeNames allDecls)
     (declSigTypeNames runtimeDecls ++ declSigTypeNames allDecls)
-    (mainTypeIsUnit ()) (mainTypeIsFloat ()) half preludeBinds preludeImpls (srcNameFromArgs (args ()))
+    (mainTypeIsUnit ()) (mainTypeIsFloat ()) half preludeBinds preludeImpls (srcNameFromArgs (args ())) (declaredRecordFieldOrders allDecls)
   putStr (emitProgram input (lowerProgramEmit allDecls))
 -- Module-qualify module-PRIVATE top-level functions whose bare name collides
 -- across units, BEFORE elaborateModules flattens the boundaries away (same

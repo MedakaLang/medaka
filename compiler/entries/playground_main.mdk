@@ -107,12 +107,18 @@ import types.typecheck.{
   ppSchemeNamed,
   checkProgramSchemesWithRuntime,
 }
-import ir.core_ir_lower.{lowerProgramEmit, methodIfaceTable, declSigTypeNames}
+import ir.core_ir_lower.{
+  lowerProgramEmit,
+  methodIfaceTable,
+  declSigTypeNames,
+  declaredRecordFieldOrders,
+}
 import backend.private_mangle.{mangleUnits}
 import ir.dce.{dceFilter}
 import backend.wasm_emit.{
   emitProgram,
   installMethodIface,
+  installRecFieldOrders,
   installDeclRetTypes,
   installMainIsFloatHint,
 }
@@ -323,6 +329,8 @@ runEmit runtimeDecls coreDecls modules =
   let allDecls = dceFilter allDecls0
   let _ = preludeReturnPosDictNames coreD allDecls ++ preludeArgPosDictNames coreD allDecls ++ constrainedSigNames allDecls
   let _ = installMethodIface (methodIfaceTable allDecls)
+  -- #1513: the record field-order table, from the SAME decls that are lowered.
+  let _ = installRecFieldOrders (declaredRecordFieldOrders allDecls)
   let _ = installDeclRetTypes (declSigTypeNames runtimeDecls ++ declSigTypeNames allDecls)
   let _ = installMainIsFloatHint (mainTypeIsFloat ())
   putStr (emitProgram (lowerProgramEmit allDecls))
