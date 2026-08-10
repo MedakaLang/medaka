@@ -9,7 +9,13 @@ permission:
   read: allow
   glob: allow
   grep: allow
-  bash: allow
+  bash:
+    "*": ask
+    "git status*": allow
+    "git diff*": allow
+    "git log*": allow
+    "git show*": allow
+    "git rev-parse*": allow
   websearch: allow
   webfetch: allow
   skill: allow
@@ -30,7 +36,7 @@ Review:
 1. **Conformance:** Accepted and rejected programs, diagnostics, engines, and observable guarantees match authoritative semantics. Flag ambiguity requiring a language-design decision.
 2. **Architecture:** Semantic decisions live in the correct stage; identities are scoped; mirrored drivers/backends remain aligned; the change simplifies rather than adds a workaround.
 3. **Adversarial behavior:** Construct counterexamples beyond supplied fixtures. Test unrelated code around global tables or AST nodes, cross-module identities, imports, ordering, arity, boundary shapes, and relevant engines. Engine agreement is not proof when defects may be shared.
-4. **Tests and goldens:** Independently establish expectations. Check shared fixture consumers, snapshot blessing, selfproc LEG A, stale-oracle grading, and must-fail pins. Captured output alone is not an oracle.
+4. **Tests and goldens:** Independently establish expectations. Check shared fixture consumers, snapshot blessing, selfproc LEG A, stale-oracle grading, and must-fail pins. Inspect local and CI receipts, including whether selected paths actually graded; do not duplicate a completed broad suite merely to recreate a receipt. Run only the smallest targeted discriminator needed to establish a finding. Captured output alone is not an oracle.
 5. **Craft:** Find needless complexity, duplicated derivation, `List`-as-set/map performance hazards, error-accumulation violations, stale claims, broad diffs, and platform-specific script regressions.
 
 Classify findings as `critical`, `high`, `medium`, or `low`; state whether each is related or unrelated and implementation-conforming or potentially premise-changing. Critical and high findings block landing. Do not manufacture findings, but return `clean` only after attempting discriminating probes.

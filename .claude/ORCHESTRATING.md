@@ -170,8 +170,8 @@ everyone else's 30-second gate run into minutes. That has happened repeatedly.
 
 ```
 agent:        make preflight        # targeted: builds + runs ONLY what the diff touches
-              commit on its own branch, REPORT THE SHA
-orchestrator: verify → push → open a PR → CI runs the FULL suite → merge ONLY on green CI
+               commit on its own branch, REPORT THE SHA
+orchestrator: verify → push → narrowed PR CI → review → enqueue → full merge-group CI → merge
 ```
 
 The mechanics are in `AGENTS.md` (`make preflight` / `build_oracles.sh --for` / `make test` vs
@@ -195,14 +195,15 @@ inspect the declaration after `fmt --write`.
 Local verification should be the smallest fail-capable signal for the changed property, plus the
 non-negotiable compiler checks the diff requires (for example, source typechecking and the native
 fixpoint for an LLVM backend change). Do not reproduce CI's broad matrix locally just to accumulate a
-longer receipt. Push once that signal is adequate: CI executes the independent full/merge-group check,
-and the reviewer judges the diff and whether its tests can fail rather than re-running the author's
-suite.
+longer receipt. Push once that signal is adequate: pull-request CI independently runs the relevant
+narrowed gates; the merge queue's `merge_group` run executes the full authoritative suite. The reviewer
+judges the diff and whether its tests can fail rather than re-running the author's suite.
 
 ### ⚠️ THE PREFLIGHT IS A FILTER, NOT AN AUTHORITY
 
-Green preflight = *the gates most likely to notice your change did not break*. Nothing more. **CI on
-the PR is the authority. Never merge on a green preflight.** A targeted local run re-introduces the
+Green preflight = *the gates most likely to notice your change did not break*. Nothing more. **Neither
+preflight nor a green narrowed PR run is the authority; merge-group CI is. Never merge on a green
+preflight.** A targeted local run re-introduces the
 exact hazard the testing overhaul exists to kill — **a suite reporting green while testing less than
 it appears to** (`diff_compiler_lint_multi` sat "skipped" for months, *while also failing*, because
 dash couldn't parse it and exit 2 counted as SKIP; a fresh clone once ran **zero tests and printed "0
@@ -646,19 +647,16 @@ cannot see the bug — will "fix" something else to make its change look justifi
 `needs-repro` label exists precisely so you can tell an agent which issues are leads rather than
 facts.** When it lands, have the agent flip the label to `verified` (with the SHA) or close it.
 
-⚠️ Also: **`git merge main` SILENTLY NO-OPS** when another worktree has `main` checked out (very
-likely with several agents live). Tell agents **`git merge origin/main`**.
-
 Every delegated task prompt should contain, in order:
 
 1. **One-line project framing** + the task.
-2. **STEP 0 — sync + VERIFY BASE:** `git merge origin/main --no-edit` first (never bare `git merge
-   main`), then `git merge-base --is-ancestor <tip-SHA> HEAD && echo BASE_OK || echo BASE_STALE` —
-   must print `BASE_OK`, else STOP+report. (An agent once silently built Phase 5 on a base missing two
-   prior phases; a redo was needed.) **Then record `BASE=$(git rev-parse HEAD)` — the pinned branch
-   point.** Every downstream diff/checkout uses `$BASE`, never `origin/main`/`main`: this box shares one
-   `.git` across worktrees, so those refs advance under you the moment any sibling agent fetches, and a
-   moving ref is not a fixed point (#519).
+2. **STEP 0 — choose + VERIFY BASE:** fetch `origin/main`, then record one immutable
+   `TASK_BASE=$(git rev-parse origin/main)` when the task starts from current main. An explicitly chosen
+   last-known-green or stacked SHA is also valid; state why. Create the worktree at exactly
+   `$TASK_BASE`, then require `git rev-parse HEAD` to equal it. (An agent once silently built Phase 5 on
+   a base missing two prior phases; a redo was needed.) Every downstream diff/checkout uses
+   `$TASK_BASE`, never `origin/main`/`main`: this box shares one `.git` across worktrees, so those refs
+   advance under you the moment any sibling fetches, and a moving ref is not a fixed point (#519).
 3. **Environment rules:** how to build (`make -C <worktree> medaka`), the no-`eval`/PATH quirks, the
    `perl -e 'alarm N; exec @ARGV'` timeout shim.
 4. **Context (verified facts):** the root cause + `file:line` pointers you already confirmed, and the
@@ -739,12 +737,13 @@ trap is treating "I'll remember it" as a fourth option — you won't.)
 
 ## Review every agent PR before merging — a REQUIRED step in the merge flow, not an optional extra
 
-**The merge flow is: CI green → independent reviewer → enqueue. Never skip the middle step.** An
-agent's own report is a claim, not a review — and a green CI on a bad diff is still a bad diff. So on
-**every** agent-authored PR, once CI is green, spawn a READ-ONLY **Sonnet reviewer** over the diff
-(playbook: **`.claude/skills/pr-review/SKILL.md`**) and enqueue *only* after it returns APPROVE. It
-reports; you decide; the *authoring* agent fixes (it has the context). **Gates prove *behavior*; the
-reviewer judges *craft*.**
+**The merge flow is: adequate local signal → narrowed PR CI → independent reviewer → enqueue →
+merge-group CI. Never skip review.** An agent's own report is a claim, not a review — and a green CI on
+a bad diff is still a bad diff. On **every** agent-authored PR, spawn the configured read-only
+**`reviewer`** agent over the diff (playbook: **`.claude/skills/pr-review/SKILL.md`**) once the material
+state is locally verified; it may run concurrently with PR CI. Enqueue only after it returns APPROVE.
+It reports; you decide; the *authoring* agent fixes (it has the context). **Gates provide evidence only
+for paths that actually ran; the reviewer judges test adequacy, discrimination, regressions, and craft.**
 
 - **Point the reviewer at the risk this specific change carries**, not a generic pass: byte-exactness
   for a data path, behavior-equivalence for a consolidation/migration (does the canonical match the
@@ -753,8 +752,8 @@ reviewer judges *craft*.**
 - **A change YOU verified hands-on** (e.g. an emitter fix you built + ran the fixpoint + diffed RNG
   byte-for-byte yourself) can count as the review — you did the reviewer's job directly. Say so. But
   don't self-certify an agent's diff you only *read*; spawn the reviewer.
-- Run it AFTER green (a red CI may change the diff, wasting the review). Reviews are cheap and parallel;
-  there is no excuse to enqueue unreviewed.
+- Run it after adequate local verification; it can overlap with PR CI. Rerun or resume it after any
+  material CI repair. There is no excuse to enqueue unreviewed.
 
 It has twice returned **do-not-merge** on a diff whose own gates were green, both times on this repo's
 #1 bug class (check green / run dies) — e.g. import aliasing left an aliased *interface method* unbound
@@ -953,7 +952,9 @@ Use a mechanic only after a scout/designer has supplied a bounded edit packet: e
 the invariant to preserve, known caller/mirror set, and the one or two commands that grade the slice.
 Its first substantive action should be an edit, not a fresh architecture census. Do not hand it a whole
 hot-file refactor and ask it to rediscover ownership, call chains, and tests; that is design work and
-will consume its bounded turn without producing a commit.
+will consume its bounded turn without producing a commit. Mechanics are prohibited for S0/S1 bugs,
+typechecker or backend work, semantic decisions, architecture, and golden adjudication; a prompt calling
+one of those tasks "mechanical" does not change the routing.
 
 If a mechanic returns without an edit, the conductor must immediately narrow the work to a closed
 ownership family, take over the mechanical change, or return to design. Retrying the same broad prompt
