@@ -406,6 +406,7 @@ declMethodNamesOf : Decl -> List String
 declOwnedBy : String -> String -> TyConOrigin -> Bool
 declTopFnNames : List Decl -> List String
 declaredConstraintArgs : String -> List (List Mono)
+declaredConstraintIds : String -> List Int
 declaredConstraintSlots : String -> List CSlot
 declaredCrossModuleObls : String -> Option (List VecObl)
 declaredEffects : Ty -> List Atom
@@ -1253,6 +1254,8 @@ pushTypeErrorOnceAt : String -> Option Loc -> String -> Unit
 pushUnknownField : String -> String -> Unit
 pushUnknownFieldMaybeSuggest : String -> String -> List String -> Unit
 qualConstraintFor : String -> Option (List CSlot)
+qualConstraintIds : String -> Option (List Int)
+qualConstraintKey : String -> Option (String, String)
 qualSchemeOblsFor : String -> Option (List VecObl)
 quoteStr : String -> String
 quotedNames : List String -> String

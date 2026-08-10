@@ -2074,17 +2074,34 @@ occurrence-layer reconciliation, not a table widening. Do not delete the leg on 
 prose: `grep -n ifaceRefBare compiler/types/typecheck.mdk`, and delete it only when every
 remaining hit is the definition itself.
 
-### 10.5 Measured consequence: #1438 drained HERE, not at #1507
+### 10.5 Measured: #1438's PINNED INSTANCE drained at U1b; the CLASS did not
 
-The scope ruling on #1482 predicted #1438 would drain at #1507. **That prediction is false
-for the pinned shape, measured on a cold-built binary of this branch**: #1438's repro
-reaches the obligation channel through a constrained binding's signature `=>` slot —
-`qualConstraintFor` → `declaredCrossModuleObls` → `recordSchemeCallObligations` — which is
-U1b's channel, not the method-occurrence one. Its `must_fail` pin flipped green and was
-replaced by the positive rows
-`test/dict_fixtures/i4-xmod-sig-constraint-{foreign-iface-rejected,own-iface-control}`.
-What #1507 still owns is the method-occurrence *reach* of the same class (a bare method
-call), which remains silently accepted.
+The scope ruling on #1482 predicted #1438 would drain at #1507. **Half of that is false and
+half is true, and conflating them is the trap.** Both halves are MEASURED on a cold-built
+binary of the implementing branch.
+
+- **The pinned instance drained at U1b.** #1438's repro uses a SIGNED forwarder
+  (`useBulk : Sizer b => b -> Int`), so its goal comes from the signature `=>` slot —
+  `qualConstraintFor` → `declaredCrossModuleObls` → `recordSchemeCallObligations`, U1b's
+  channel. It now rejects (`No impl of Sizer for Int`, exit 1); its `must_fail` pin flipped
+  green and was replaced by the positive rows
+  `test/dict_fixtures/i4-xmod-sig-constraint-{foreign-iface-rejected,own-iface-control}`.
+- **The class did not.** Delete one line — the forwarder's signature — and the same program
+  is a silent accept again: `check` exit 0, `run` E-PANIC `unbound identifier: bulk`,
+  `build` exit 0, and **the built binary segfaults at 139**. The goal is then posed by a
+  bare METHOD OCCURRENCE, `recordImplObligation`'s producer, which #1507 owns and which
+  still mints `ifaceRefBare`. Pinned at
+  `test/must_fail_fixtures/1507-xmod-iface-name-collision-method-occurrence/` — the minimal
+  pair of the deleted fixture, and the only assertion of that S0 in the tree.
+
+⇒ **#1438 stays OPEN**, its remaining reach is guarded under #1507, and the bare
+compatibility leg may be withdrawn only when that unit lands.
+
+⚠️ This section originally read *"#1438 drained HERE, not at #1507"*. That came from a
+fixture flipping green, which is evidence about an instance and never about a class — the
+same distinction PR #1480's body drew for itself one unit earlier. It was caught in
+adversarial review by someone building the variant the fixtures did not cover, which is the
+cheapest check available and the one a green corpus cannot perform for you.
 
 ### 10.6 Not settled here
 

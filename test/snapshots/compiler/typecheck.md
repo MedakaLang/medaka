@@ -1,5 +1,5 @@
 # META
-source_lines=25614
+source_lines=25682
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted typecheck stage — port of lib/typecheck.ml's HM core.  SLICE 1:
@@ -7008,22 +7008,71 @@ inferDictAt env name routesRef = match lookupVar env name
 -- + funConstraintIfacesRef path (today's behavior; same slots when no collision, since
 -- the qual entry is the same module's same ids the bare first-match returns sans collision).
 qualConstraintFor : String -> Option (List CSlot)
-qualConstraintFor name = match lookupAssoc name perRun.value.currentImportDefinersRef.value
+qualConstraintFor name = match qualConstraintKey name
   None => None
-  Some src =>
-    -- #739 fix follow-up: resolve an aliased import's surface name to its ORIGINAL exported
-    -- name before keying the qual tables (they are attributed under the defining name).  A
-    -- plain import / non-alias defaults to the name itself.  Without this, `{set as hmSet}`
-    -- of a constrained `hash_map.set` misses (qual has `(hash_map, set)`, not `(hash_map,
-    -- hmSet)`), declaredConstraintSlots returns ([],[]) and inferDictAtFound DROPS the Hash
-    -- dict → `no matching impl for dispatch` at run/build.
-    let origin = fromOption name (lookupAssoc name perRun.value.currentImportOriginsRef.value)
+  Some (src, origin) =>
     -- U1b (#1482): the two independent lookups still default to `[]` independently —
     -- that is the manufacturable mismatch described on `CSlot` — but they now meet in
     -- `pairSlots`, which owns the policy, instead of in three downstream zips.
     map (ids => pairSlots ids
       (fromOption [] (lookupQualIfaces src origin crossRun.value.crossModuleFunConstraintIfacesQualRef.value)))
       (lookupQualArity src origin crossRun.value.crossModuleFunConstraintsQualRef.value)
+
+-- the (import-source module, ORIGINAL exported name) key a cross-module callee's qual
+-- entries live under; `None` ⇒ local fn / wildcard import / re-export / check path.
+--
+-- #739 fix follow-up: an aliased import's surface name is resolved to its ORIGINAL
+-- exported name before keying the qual tables (they are attributed under the defining
+-- name).  A plain import / non-alias defaults to the name itself.  Without this,
+-- `{set as hmSet}` of a constrained `hash_map.set` misses (qual has `(hash_map, set)`,
+-- not `(hash_map, hmSet)`), the slot lookup comes back empty and `inferDictAtFound`
+-- DROPS the Hash dict → `no matching impl for dispatch` at run/build.
+--
+-- ⚠️ FACTORED OUT BY U1b (#1482) so `qualConstraintFor` (slots) and
+-- `qualConstraintIds` (ids only) cannot drift on WHICH entry they resolve to.  Two
+-- readers of one table that re-derive the key independently is the shape this seam
+-- already pays for elsewhere; there is one derivation.
+qualConstraintKey : String -> Option (String, String)
+qualConstraintKey name = map
+  (src => (
+    src,
+    fromOption name (lookupAssoc name perRun.value.currentImportOriginsRef.value),
+  ))
+  (lookupAssoc name perRun.value.currentImportDefinersRef.value)
+
+-- the callee's registered dict-slot IDS, UNPAIRED and UNTRUNCATED — the exact list the
+-- pre-U1b `declaredConstraintSlots` returned as its first component.
+--
+-- 🚨 WHY THIS EXISTS, AND WHY IT IS NOT THE PARALLEL-LIST HAZARD `CSlot` REMOVED.
+-- `pairSlots` truncates to the SHORTER of (ids, ifaces), which is correct everywhere the
+-- result decides dict SLOTS — that is exactly what the zips it replaced did.  But two
+-- guards in `inferDictAtFound` and one in `shadowStandaloneDictSlotsAt` do not ask about
+-- slots; they ask *"is this callee registered as constrained at all"* and *"did the
+-- instantiation pin any of its constraint vars"*.  Reading a TRUNCATED list there changes
+-- the answer whenever the arity table HITS and the iface table MISSES — a mismatch this
+-- seam can manufacture by construction (see `CSlot`) — and the two arms then differ:
+-- one records an empty dict app, the other skips routing (and, at the standalone site,
+-- skips a `unify` side effect).  Nobody has built a witness, so the difference is
+-- unmeasured, which is precisely why this unit does not take it: an obligation-identity
+-- change must not smuggle in a routing change nobody asked for.
+--
+-- It is NOT zipped against an interface list anywhere — its only consumers are
+-- `isEmptyL` and `anyIdPinned` — so it cannot mispair with one.  That is the property
+-- `CSlot` protects, and it is preserved.
+declaredConstraintIds : String -> List Int
+declaredConstraintIds name = match qualConstraintIds name
+  Some ids => ids
+  -- same #739 source-exact discipline as `declaredConstraintSlots`' `None` arm below:
+  -- a known import with no qual entry is genuinely unconstrained, and must NOT fall
+  -- through to the source-blind bare-name table.
+  None =>
+    if hasImportDefiner name then []
+    else fromOption [] (lookupAssocSL2 name perRun.value.funConstraintsRef.value)
+
+qualConstraintIds : String -> Option (List Int)
+qualConstraintIds name = match qualConstraintKey name
+  None => None
+  Some (src, origin) => lookupQualArity src origin crossRun.value.crossModuleFunConstraintsQualRef.value
 
 lookupQualArity : String -> String -> List ((String, String), List Int) -> Option (List Int)
 lookupQualArity _ _ [] = None
@@ -7082,7 +7131,9 @@ inferDictAtFound : String -> Ref (List Route) -> (Mono, List (Int, Mono)) -> Mon
 inferDictAtFound name routesRef inst =
   let q = qualConstraintFor name
   let slots = declaredConstraintSlots name
-  let declaredIds = map (s => s.csId) slots
+  -- ⚠️ UNTRUNCATED on purpose — `map (s => s.csId) slots` is NOT the same list when the
+  -- arity table hits and the iface table misses.  See `declaredConstraintIds`.
+  let declaredIds = declaredConstraintIds name
   let known = match q
         Some _ => True
         None => hasKeySL2 name perRun.value.funConstraintsRef.value
@@ -10078,7 +10129,10 @@ shadowStandaloneDictSlotsAt mscheme key xt =
   -- the unconstrained standalone: nothing to solve, no unify, no perturbation at all.
   -- This short-circuit is what makes the change provably fixpoint-safe — all 5 of the
   -- compiler's own definer shadows are unconstrained and never reach the unify below.
-  if isEmptyL slots then ([], [])
+  -- ⚠️ Gated on the UNTRUNCATED id list, not on `slots`: this guard also decides whether
+  -- the `unify` below runs, so a truncation here would remove a unification side effect.
+  -- See `declaredConstraintIds`.
+  if isEmptyL (declaredConstraintIds key) then ([], [])
   else match mscheme
     None => ([], [])
     Some s =>
@@ -18816,11 +18870,25 @@ insertUnivImpl univ (iface, tys, reqs) =
 -- census either — derive it: `grep -n ifaceRefBare compiler/types/typecheck.mdk`, and
 -- delete the leg only when every remaining hit is the definition itself.
 --
--- ⚠️ CONSEQUENCE FOR #1438, STATED PLAINLY RATHER THAN LEFT TO BE DISCOVERED: with
--- this leg present, a goal recorded at any remaining `ifaceRefBare` site still matches
--- ANY same-spelled impl, i.e. exactly today's behaviour — so #1438's own repro is
--- still accepted and its `must_fail` pin still holds.  **#1438 drains at #1507, not at
--- U1b.**
+-- ⚠️ CONSEQUENCE FOR #1438, AND THE SENTENCE THIS PARAGRAPH GOT WRONG.  It read
+-- "#1438's own repro is still accepted and its `must_fail` pin still holds; #1438
+-- drains at #1507, not at U1b" — written in the very commit that DELETED that pin.
+-- MEASURED on U1b's own branch build: #1438's repro uses a SIGNED forwarder
+-- (`useBulk : Sizer b => b -> Int`), so its goal comes from the signature `=>` slot,
+-- which is one of the two channels U1b widened; it now REJECTS
+-- (`No impl of Sizer for Int`, exit 1) and its pin drained.
+--
+-- 🚨 THE PINNED INSTANCE DRAINED; THE CLASS DID NOT, AND THAT IS THE DISTINCTION TO
+-- CARRY.  Delete the signature line from that repro and the goal is posed by a bare
+-- METHOD OCCURRENCE instead — the producer below that still mints `ifaceRefBare` —
+-- and it is a silent accept again: MEASURED on the same binary, `check` exit 0,
+-- `build` exit 0, and the built binary SEGFAULTS at 139.  So with this leg present a
+-- goal recorded at any REMAINING `ifaceRefBare` site still matches ANY same-spelled
+-- impl, exactly as before.  #1438 stays OPEN for that half; **the remaining reach
+-- drains at #1507**, which is also when this leg may be withdrawn.  The minimal pair
+-- is pinned at `test/must_fail_fixtures/1507-xmod-iface-name-collision-method-occurrence/`,
+-- and the drained half is guarded positively by
+-- `test/dict_fixtures/i4-xmod-sig-constraint-foreign-iface-rejected/`.
 --
 -- Order within a bucket is preserved per key (`mregAppendK` appends), so
 -- `findMatchingImplReqsU`'s declaration-order first-match is unchanged on either leg.
@@ -26877,7 +26945,13 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "inferDictAt" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Route"))) (TyCon "Mono")))))
 (DFunDef false "inferDictAt" ((PVar "env") (PVar "name") (PVar "routesRef")) (EMatch (EApp (EApp (EVar "lookupVar") (EVar "env")) (EVar "name")) (arm (PCon "None") () (EApp (EVar "panic") (EBinOp "++" (ELit (LString "unbound constrained fn: ")) (EVar "name")))) (arm (PCon "Some" (PVar "scheme")) () (EApp (EApp (EApp (EVar "inferDictAtFound") (EVar "name")) (EVar "routesRef")) (EApp (EVar "instantiateTracked") (EVar "scheme"))))))
 (DTypeSig false "qualConstraintFor" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "CSlot")))))
-(DFunDef false "qualConstraintFor" ((PVar "name")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "name")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentImportDefinersRef") "value")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "src")) () (EBlock (DoLet false false (PVar "origin") (EApp (EApp (EVar "fromOption") (EVar "name")) (EApp (EApp (EVar "lookupAssoc") (EVar "name")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentImportOriginsRef") "value")))) (DoExpr (EApp (EApp (EVar "map") (ELam ((PVar "ids")) (EApp (EApp (EVar "pairSlots") (EVar "ids")) (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EApp (EVar "lookupQualIfaces") (EVar "src")) (EVar "origin")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunConstraintIfacesQualRef") "value")))))) (EApp (EApp (EApp (EVar "lookupQualArity") (EVar "src")) (EVar "origin")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunConstraintsQualRef") "value"))))))))
+(DFunDef false "qualConstraintFor" ((PVar "name")) (EMatch (EApp (EVar "qualConstraintKey") (EVar "name")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PTuple (PVar "src") (PVar "origin"))) () (EApp (EApp (EVar "map") (ELam ((PVar "ids")) (EApp (EApp (EVar "pairSlots") (EVar "ids")) (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EApp (EVar "lookupQualIfaces") (EVar "src")) (EVar "origin")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunConstraintIfacesQualRef") "value")))))) (EApp (EApp (EApp (EVar "lookupQualArity") (EVar "src")) (EVar "origin")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunConstraintsQualRef") "value"))))))
+(DTypeSig false "qualConstraintKey" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String")))))
+(DFunDef false "qualConstraintKey" ((PVar "name")) (EApp (EApp (EVar "map") (ELam ((PVar "src")) (ETuple (EVar "src") (EApp (EApp (EVar "fromOption") (EVar "name")) (EApp (EApp (EVar "lookupAssoc") (EVar "name")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentImportOriginsRef") "value")))))) (EApp (EApp (EVar "lookupAssoc") (EVar "name")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentImportDefinersRef") "value"))))
+(DTypeSig false "declaredConstraintIds" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Int"))))
+(DFunDef false "declaredConstraintIds" ((PVar "name")) (EMatch (EApp (EVar "qualConstraintIds") (EVar "name")) (arm (PCon "Some" (PVar "ids")) () (EVar "ids")) (arm (PCon "None") () (EIf (EApp (EVar "hasImportDefiner") (EVar "name")) (EListLit) (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EVar "lookupAssocSL2") (EVar "name")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funConstraintsRef") "value")))))))
+(DTypeSig false "qualConstraintIds" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Int")))))
+(DFunDef false "qualConstraintIds" ((PVar "name")) (EMatch (EApp (EVar "qualConstraintKey") (EVar "name")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PTuple (PVar "src") (PVar "origin"))) () (EApp (EApp (EApp (EVar "lookupQualArity") (EVar "src")) (EVar "origin")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunConstraintsQualRef") "value")))))
 (DTypeSig false "lookupQualArity" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int")))) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Int")))))))
 (DFunDef false "lookupQualArity" (PWild PWild (PList)) (EVar "None"))
 (DFunDef false "lookupQualArity" ((PVar "src") (PVar "name") (PCons (PTuple (PTuple (PVar "m") (PVar "n")) (PVar "v")) (PVar "rest"))) (EIf (EBinOp "&&" (EBinOp "==" (EVar "m") (EVar "src")) (EBinOp "==" (EVar "n") (EVar "name"))) (EApp (EVar "Some") (EVar "v")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "lookupQualArity") (EVar "src")) (EVar "name")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
@@ -26889,7 +26963,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "hasImportDefiner" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "hasImportDefiner" ((PVar "name")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "name")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentImportDefinersRef") "value")) (arm (PCon "Some" PWild) () (EVar "True")) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig false "inferDictAtFound" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Route"))) (TyFun (TyTuple (TyCon "Mono") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Mono")))) (TyCon "Mono")))))
-(DFunDef false "inferDictAtFound" ((PVar "name") (PVar "routesRef") (PVar "inst")) (EBlock (DoLet false false (PVar "q") (EApp (EVar "qualConstraintFor") (EVar "name"))) (DoLet false false (PVar "slots") (EApp (EVar "declaredConstraintSlots") (EVar "name"))) (DoLet false false (PVar "declaredIds") (EApp (EApp (EVar "map") (ELam ((PVar "s")) (EFieldAccess (EVar "s") "csId"))) (EVar "slots"))) (DoLet false false (PVar "known") (EMatch (EVar "q") (arm (PCon "Some" PWild) () (EVar "True")) (arm (PCon "None") () (EApp (EApp (EVar "hasKeySL2") (EVar "name")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funConstraintsRef") "value"))))) (DoExpr (EIf (EBinOp "&&" (EApp (EVar "isEmptyL") (EVar "declaredIds")) (EApp (EVar "hasImportDefiner") (EVar "name"))) (EApp (EVar "fst") (EVar "inst")) (EIf (EBinOp "&&" (EVar "known") (EApp (EApp (EVar "anyIdPinned") (EVar "declaredIds")) (EApp (EVar "snd") (EVar "inst")))) (EBlock (DoLet false false (PVar "expanded") (EApp (EApp (EVar "expandSupersPairs") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "superDeclsRef") "value")) (EVar "slots"))) (DoLet false false (PVar "ids") (EApp (EApp (EVar "map") (ELam ((PVar "s")) (EFieldAccess (EVar "s") "csId"))) (EVar "expanded"))) (DoLet false false (PVar "monos") (EApp (EApp (EVar "constraintMonosOf") (EVar "ids")) (EApp (EVar "snd") (EVar "inst")))) (DoLet false false PWild (EApp (EVar "pushDictApp") (ETuple (EVar "routesRef") (EVar "monos") (EApp (EApp (EVar "map") (ELam ((PVar "s")) (EFieldAccess (EFieldAccess (EVar "s") "csIface") "irName"))) (EVar "expanded")) (EApp (EApp (EApp (EVar "callArgVecs") (EApp (EVar "declaredConstraintArgs") (EVar "name"))) (EVar "ids")) (EApp (EVar "snd") (EVar "inst"))) (EFieldAccess (EVar "currentLoc") "value")))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "dictAppFns")) (EApp (EApp (EApp (EVar "consSiteFn") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentFn") "value")) (EVar "monos")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "dictAppFns") "value")))) (DoLet false false PWild (EApp (EApp (EVar "recordCallObligations") (EVar "expanded")) (EVar "monos"))) (DoExpr (EApp (EVar "fst") (EVar "inst")))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "pendingRecDictApps")) (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "RecDictApp") (EVar "routesRef")) (EVar "name")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentFn") "value")) (EApp (EVar "fst") (EVar "inst"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "pendingRecDictApps") "value")))) (DoExpr (EApp (EVar "fst") (EVar "inst")))))))))
+(DFunDef false "inferDictAtFound" ((PVar "name") (PVar "routesRef") (PVar "inst")) (EBlock (DoLet false false (PVar "q") (EApp (EVar "qualConstraintFor") (EVar "name"))) (DoLet false false (PVar "slots") (EApp (EVar "declaredConstraintSlots") (EVar "name"))) (DoLet false false (PVar "declaredIds") (EApp (EVar "declaredConstraintIds") (EVar "name"))) (DoLet false false (PVar "known") (EMatch (EVar "q") (arm (PCon "Some" PWild) () (EVar "True")) (arm (PCon "None") () (EApp (EApp (EVar "hasKeySL2") (EVar "name")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funConstraintsRef") "value"))))) (DoExpr (EIf (EBinOp "&&" (EApp (EVar "isEmptyL") (EVar "declaredIds")) (EApp (EVar "hasImportDefiner") (EVar "name"))) (EApp (EVar "fst") (EVar "inst")) (EIf (EBinOp "&&" (EVar "known") (EApp (EApp (EVar "anyIdPinned") (EVar "declaredIds")) (EApp (EVar "snd") (EVar "inst")))) (EBlock (DoLet false false (PVar "expanded") (EApp (EApp (EVar "expandSupersPairs") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "superDeclsRef") "value")) (EVar "slots"))) (DoLet false false (PVar "ids") (EApp (EApp (EVar "map") (ELam ((PVar "s")) (EFieldAccess (EVar "s") "csId"))) (EVar "expanded"))) (DoLet false false (PVar "monos") (EApp (EApp (EVar "constraintMonosOf") (EVar "ids")) (EApp (EVar "snd") (EVar "inst")))) (DoLet false false PWild (EApp (EVar "pushDictApp") (ETuple (EVar "routesRef") (EVar "monos") (EApp (EApp (EVar "map") (ELam ((PVar "s")) (EFieldAccess (EFieldAccess (EVar "s") "csIface") "irName"))) (EVar "expanded")) (EApp (EApp (EApp (EVar "callArgVecs") (EApp (EVar "declaredConstraintArgs") (EVar "name"))) (EVar "ids")) (EApp (EVar "snd") (EVar "inst"))) (EFieldAccess (EVar "currentLoc") "value")))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "dictAppFns")) (EApp (EApp (EApp (EVar "consSiteFn") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentFn") "value")) (EVar "monos")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "dictAppFns") "value")))) (DoLet false false PWild (EApp (EApp (EVar "recordCallObligations") (EVar "expanded")) (EVar "monos"))) (DoExpr (EApp (EVar "fst") (EVar "inst")))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "pendingRecDictApps")) (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "RecDictApp") (EVar "routesRef")) (EVar "name")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentFn") "value")) (EApp (EVar "fst") (EVar "inst"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "pendingRecDictApps") "value")))) (DoExpr (EApp (EVar "fst") (EVar "inst")))))))))
 (DTypeSig false "anyIdPinned" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Mono"))) (TyCon "Bool"))))
 (DFunDef false "anyIdPinned" ((PList) PWild) (EVar "False"))
 (DFunDef false "anyIdPinned" ((PCons (PVar "id") (PVar "rest")) (PVar "subst")) (EMatch (EApp (EApp (EVar "lookupAssocI") (EVar "id")) (EVar "subst")) (arm (PCon "Some" PWild) () (EVar "True")) (arm (PCon "None") () (EApp (EApp (EVar "anyIdPinned") (EVar "rest")) (EVar "subst")))))
@@ -27365,7 +27439,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "shadowStandaloneDictsWith" (TyFun (TyApp (TyCon "Option") (TyCon "Scheme")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Mono") (TyTuple (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "List") (TyCon "String"))))))))
 (DFunDef false "shadowStandaloneDictsWith" ((PVar "mscheme") (PVar "name") (PVar "sym") (PVar "xt")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "recordStandaloneSigObligations") (EVar "name")) (EVar "sym")) (EVar "xt"))) (DoExpr (EApp (EApp (EApp (EVar "shadowStandaloneDictSlotsAt") (EVar "mscheme")) (EIf (EBinOp "==" (EVar "sym") (ELit (LString ""))) (EVar "name") (EVar "sym"))) (EVar "xt")))))
 (DTypeSig false "shadowStandaloneDictSlotsAt" (TyFun (TyApp (TyCon "Option") (TyCon "Scheme")) (TyFun (TyCon "String") (TyFun (TyCon "Mono") (TyTuple (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "shadowStandaloneDictSlotsAt" ((PVar "mscheme") (PVar "key") (PVar "xt")) (EBlock (DoLet false false (PVar "slots") (EApp (EVar "declaredConstraintSlots") (EVar "key"))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EVar "slots")) (ETuple (EListLit) (EListLit)) (EMatch (EVar "mscheme") (arm (PCon "None") () (ETuple (EListLit) (EListLit))) (arm (PCon "Some" (PVar "s")) () (EBlock (DoLet false false (PVar "inst") (EApp (EVar "instantiateTracked") (EVar "s"))) (DoLet false false (PVar "r") (EApp (EVar "freshVar") (ELit LUnit))) (DoLet false false (PVar "eff") (EApp (EVar "openRow") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "unify") (EApp (EVar "fst") (EVar "inst"))) (EApp (EApp (EApp (EVar "TFun") (EVar "xt")) (EVar "eff")) (EVar "r")))) (DoExpr (EApp (EApp (EVar "shadowStandaloneDictSlots") (EVar "slots")) (EApp (EVar "snd") (EVar "inst")))))))))))
+(DFunDef false "shadowStandaloneDictSlotsAt" ((PVar "mscheme") (PVar "key") (PVar "xt")) (EBlock (DoLet false false (PVar "slots") (EApp (EVar "declaredConstraintSlots") (EVar "key"))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EApp (EVar "declaredConstraintIds") (EVar "key"))) (ETuple (EListLit) (EListLit)) (EMatch (EVar "mscheme") (arm (PCon "None") () (ETuple (EListLit) (EListLit))) (arm (PCon "Some" (PVar "s")) () (EBlock (DoLet false false (PVar "inst") (EApp (EVar "instantiateTracked") (EVar "s"))) (DoLet false false (PVar "r") (EApp (EVar "freshVar") (ELit LUnit))) (DoLet false false (PVar "eff") (EApp (EVar "openRow") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "unify") (EApp (EVar "fst") (EVar "inst"))) (EApp (EApp (EApp (EVar "TFun") (EVar "xt")) (EVar "eff")) (EVar "r")))) (DoExpr (EApp (EApp (EVar "shadowStandaloneDictSlots") (EVar "slots")) (EApp (EVar "snd") (EVar "inst")))))))))))
 (DTypeSig false "shadowStandaloneDictSlots" (TyFun (TyApp (TyCon "List") (TyCon "CSlot")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Mono"))) (TyTuple (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "shadowStandaloneDictSlots" ((PVar "slots") (PVar "subst")) (EIf (EApp (EVar "isEmptyL") (EVar "slots")) (ETuple (EListLit) (EListLit)) (EBlock (DoLet false false (PVar "expanded") (EApp (EApp (EVar "expandSupersPairs") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "superDeclsRef") "value")) (EVar "slots"))) (DoExpr (ETuple (EApp (EApp (EVar "constraintMonosOf") (EApp (EApp (EVar "map") (ELam ((PVar "sl")) (EFieldAccess (EVar "sl") "csId"))) (EVar "expanded"))) (EVar "subst")) (EApp (EApp (EVar "map") (ELam ((PVar "sl")) (EFieldAccess (EFieldAccess (EVar "sl") "csIface") "irName"))) (EVar "expanded")))))))
 (DTypeSig false "recordStandaloneSigObligations" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Mono") (TyCon "Unit")))))
@@ -31632,7 +31706,13 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "inferDictAt" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Route"))) (TyCon "Mono")))))
 (DFunDef false "inferDictAt" ((PVar "env") (PVar "name") (PVar "routesRef")) (EMatch (EApp (EApp (EVar "lookupVar") (EVar "env")) (EVar "name")) (arm (PCon "None") () (EApp (EVar "panic") (EBinOp "++" (ELit (LString "unbound constrained fn: ")) (EVar "name")))) (arm (PCon "Some" (PVar "scheme")) () (EApp (EApp (EApp (EVar "inferDictAtFound") (EVar "name")) (EVar "routesRef")) (EApp (EVar "instantiateTracked") (EVar "scheme"))))))
 (DTypeSig false "qualConstraintFor" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "CSlot")))))
-(DFunDef false "qualConstraintFor" ((PVar "name")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "name")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentImportDefinersRef") "value")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "src")) () (EBlock (DoLet false false (PVar "origin") (EApp (EApp (EVar "fromOption") (EVar "name")) (EApp (EApp (EVar "lookupAssoc") (EVar "name")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentImportOriginsRef") "value")))) (DoExpr (EApp (EApp (EMethodRef "map") (ELam ((PVar "ids")) (EApp (EApp (EVar "pairSlots") (EVar "ids")) (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EApp (EVar "lookupQualIfaces") (EVar "src")) (EVar "origin")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunConstraintIfacesQualRef") "value")))))) (EApp (EApp (EApp (EVar "lookupQualArity") (EVar "src")) (EVar "origin")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunConstraintsQualRef") "value"))))))))
+(DFunDef false "qualConstraintFor" ((PVar "name")) (EMatch (EApp (EVar "qualConstraintKey") (EVar "name")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PTuple (PVar "src") (PVar "origin"))) () (EApp (EApp (EMethodRef "map") (ELam ((PVar "ids")) (EApp (EApp (EVar "pairSlots") (EVar "ids")) (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EApp (EVar "lookupQualIfaces") (EVar "src")) (EVar "origin")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunConstraintIfacesQualRef") "value")))))) (EApp (EApp (EApp (EVar "lookupQualArity") (EVar "src")) (EVar "origin")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunConstraintsQualRef") "value"))))))
+(DTypeSig false "qualConstraintKey" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String")))))
+(DFunDef false "qualConstraintKey" ((PVar "name")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "src")) (ETuple (EVar "src") (EApp (EApp (EVar "fromOption") (EVar "name")) (EApp (EApp (EVar "lookupAssoc") (EVar "name")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentImportOriginsRef") "value")))))) (EApp (EApp (EVar "lookupAssoc") (EVar "name")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentImportDefinersRef") "value"))))
+(DTypeSig false "declaredConstraintIds" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Int"))))
+(DFunDef false "declaredConstraintIds" ((PVar "name")) (EMatch (EApp (EVar "qualConstraintIds") (EVar "name")) (arm (PCon "Some" (PVar "ids")) () (EVar "ids")) (arm (PCon "None") () (EIf (EApp (EVar "hasImportDefiner") (EVar "name")) (EListLit) (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EVar "lookupAssocSL2") (EVar "name")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funConstraintsRef") "value")))))))
+(DTypeSig false "qualConstraintIds" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Int")))))
+(DFunDef false "qualConstraintIds" ((PVar "name")) (EMatch (EApp (EVar "qualConstraintKey") (EVar "name")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PTuple (PVar "src") (PVar "origin"))) () (EApp (EApp (EApp (EVar "lookupQualArity") (EVar "src")) (EVar "origin")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunConstraintsQualRef") "value")))))
 (DTypeSig false "lookupQualArity" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int")))) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Int")))))))
 (DFunDef false "lookupQualArity" (PWild PWild (PList)) (EVar "None"))
 (DFunDef false "lookupQualArity" ((PVar "src") (PVar "name") (PCons (PTuple (PTuple (PVar "m") (PVar "n")) (PVar "v")) (PVar "rest"))) (EIf (EBinOp "&&" (EBinOp "==" (EVar "m") (EVar "src")) (EBinOp "==" (EVar "n") (EVar "name"))) (EApp (EVar "Some") (EVar "v")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "lookupQualArity") (EVar "src")) (EVar "name")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
@@ -31644,7 +31724,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "hasImportDefiner" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "hasImportDefiner" ((PVar "name")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "name")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentImportDefinersRef") "value")) (arm (PCon "Some" PWild) () (EVar "True")) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig false "inferDictAtFound" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Route"))) (TyFun (TyTuple (TyCon "Mono") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Mono")))) (TyCon "Mono")))))
-(DFunDef false "inferDictAtFound" ((PVar "name") (PVar "routesRef") (PVar "inst")) (EBlock (DoLet false false (PVar "q") (EApp (EVar "qualConstraintFor") (EVar "name"))) (DoLet false false (PVar "slots") (EApp (EVar "declaredConstraintSlots") (EVar "name"))) (DoLet false false (PVar "declaredIds") (EApp (EApp (EMethodRef "map") (ELam ((PVar "s")) (EFieldAccess (EVar "s") "csId"))) (EVar "slots"))) (DoLet false false (PVar "known") (EMatch (EVar "q") (arm (PCon "Some" PWild) () (EVar "True")) (arm (PCon "None") () (EApp (EApp (EVar "hasKeySL2") (EVar "name")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funConstraintsRef") "value"))))) (DoExpr (EIf (EBinOp "&&" (EApp (EVar "isEmptyL") (EVar "declaredIds")) (EApp (EVar "hasImportDefiner") (EVar "name"))) (EApp (EVar "fst") (EVar "inst")) (EIf (EBinOp "&&" (EVar "known") (EApp (EApp (EVar "anyIdPinned") (EVar "declaredIds")) (EApp (EVar "snd") (EVar "inst")))) (EBlock (DoLet false false (PVar "expanded") (EApp (EApp (EVar "expandSupersPairs") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "superDeclsRef") "value")) (EVar "slots"))) (DoLet false false (PVar "ids") (EApp (EApp (EMethodRef "map") (ELam ((PVar "s")) (EFieldAccess (EVar "s") "csId"))) (EVar "expanded"))) (DoLet false false (PVar "monos") (EApp (EApp (EVar "constraintMonosOf") (EVar "ids")) (EApp (EVar "snd") (EVar "inst")))) (DoLet false false PWild (EApp (EVar "pushDictApp") (ETuple (EVar "routesRef") (EVar "monos") (EApp (EApp (EMethodRef "map") (ELam ((PVar "s")) (EFieldAccess (EFieldAccess (EVar "s") "csIface") "irName"))) (EVar "expanded")) (EApp (EApp (EApp (EVar "callArgVecs") (EApp (EVar "declaredConstraintArgs") (EVar "name"))) (EVar "ids")) (EApp (EVar "snd") (EVar "inst"))) (EFieldAccess (EVar "currentLoc") "value")))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "dictAppFns")) (EApp (EApp (EApp (EVar "consSiteFn") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentFn") "value")) (EVar "monos")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "dictAppFns") "value")))) (DoLet false false PWild (EApp (EApp (EVar "recordCallObligations") (EVar "expanded")) (EVar "monos"))) (DoExpr (EApp (EVar "fst") (EVar "inst")))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "pendingRecDictApps")) (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "RecDictApp") (EVar "routesRef")) (EVar "name")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentFn") "value")) (EApp (EVar "fst") (EVar "inst"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "pendingRecDictApps") "value")))) (DoExpr (EApp (EVar "fst") (EVar "inst")))))))))
+(DFunDef false "inferDictAtFound" ((PVar "name") (PVar "routesRef") (PVar "inst")) (EBlock (DoLet false false (PVar "q") (EApp (EVar "qualConstraintFor") (EVar "name"))) (DoLet false false (PVar "slots") (EApp (EVar "declaredConstraintSlots") (EVar "name"))) (DoLet false false (PVar "declaredIds") (EApp (EVar "declaredConstraintIds") (EVar "name"))) (DoLet false false (PVar "known") (EMatch (EVar "q") (arm (PCon "Some" PWild) () (EVar "True")) (arm (PCon "None") () (EApp (EApp (EVar "hasKeySL2") (EVar "name")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funConstraintsRef") "value"))))) (DoExpr (EIf (EBinOp "&&" (EApp (EVar "isEmptyL") (EVar "declaredIds")) (EApp (EVar "hasImportDefiner") (EVar "name"))) (EApp (EVar "fst") (EVar "inst")) (EIf (EBinOp "&&" (EVar "known") (EApp (EApp (EVar "anyIdPinned") (EVar "declaredIds")) (EApp (EVar "snd") (EVar "inst")))) (EBlock (DoLet false false (PVar "expanded") (EApp (EApp (EVar "expandSupersPairs") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "superDeclsRef") "value")) (EVar "slots"))) (DoLet false false (PVar "ids") (EApp (EApp (EMethodRef "map") (ELam ((PVar "s")) (EFieldAccess (EVar "s") "csId"))) (EVar "expanded"))) (DoLet false false (PVar "monos") (EApp (EApp (EVar "constraintMonosOf") (EVar "ids")) (EApp (EVar "snd") (EVar "inst")))) (DoLet false false PWild (EApp (EVar "pushDictApp") (ETuple (EVar "routesRef") (EVar "monos") (EApp (EApp (EMethodRef "map") (ELam ((PVar "s")) (EFieldAccess (EFieldAccess (EVar "s") "csIface") "irName"))) (EVar "expanded")) (EApp (EApp (EApp (EVar "callArgVecs") (EApp (EVar "declaredConstraintArgs") (EVar "name"))) (EVar "ids")) (EApp (EVar "snd") (EVar "inst"))) (EFieldAccess (EVar "currentLoc") "value")))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "dictAppFns")) (EApp (EApp (EApp (EVar "consSiteFn") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentFn") "value")) (EVar "monos")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "dictAppFns") "value")))) (DoLet false false PWild (EApp (EApp (EVar "recordCallObligations") (EVar "expanded")) (EVar "monos"))) (DoExpr (EApp (EVar "fst") (EVar "inst")))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "pendingRecDictApps")) (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "RecDictApp") (EVar "routesRef")) (EVar "name")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentFn") "value")) (EApp (EVar "fst") (EVar "inst"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "pendingRecDictApps") "value")))) (DoExpr (EApp (EVar "fst") (EVar "inst")))))))))
 (DTypeSig false "anyIdPinned" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Mono"))) (TyCon "Bool"))))
 (DFunDef false "anyIdPinned" ((PList) PWild) (EVar "False"))
 (DFunDef false "anyIdPinned" ((PCons (PVar "id") (PVar "rest")) (PVar "subst")) (EMatch (EApp (EApp (EVar "lookupAssocI") (EVar "id")) (EVar "subst")) (arm (PCon "Some" PWild) () (EVar "True")) (arm (PCon "None") () (EApp (EApp (EVar "anyIdPinned") (EVar "rest")) (EVar "subst")))))
@@ -32120,7 +32200,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "shadowStandaloneDictsWith" (TyFun (TyApp (TyCon "Option") (TyCon "Scheme")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Mono") (TyTuple (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "List") (TyCon "String"))))))))
 (DFunDef false "shadowStandaloneDictsWith" ((PVar "mscheme") (PVar "name") (PVar "sym") (PVar "xt")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "recordStandaloneSigObligations") (EVar "name")) (EVar "sym")) (EVar "xt"))) (DoExpr (EApp (EApp (EApp (EVar "shadowStandaloneDictSlotsAt") (EVar "mscheme")) (EIf (EBinOp "==" (EVar "sym") (ELit (LString ""))) (EVar "name") (EVar "sym"))) (EVar "xt")))))
 (DTypeSig false "shadowStandaloneDictSlotsAt" (TyFun (TyApp (TyCon "Option") (TyCon "Scheme")) (TyFun (TyCon "String") (TyFun (TyCon "Mono") (TyTuple (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "shadowStandaloneDictSlotsAt" ((PVar "mscheme") (PVar "key") (PVar "xt")) (EBlock (DoLet false false (PVar "slots") (EApp (EVar "declaredConstraintSlots") (EVar "key"))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EVar "slots")) (ETuple (EListLit) (EListLit)) (EMatch (EVar "mscheme") (arm (PCon "None") () (ETuple (EListLit) (EListLit))) (arm (PCon "Some" (PVar "s")) () (EBlock (DoLet false false (PVar "inst") (EApp (EVar "instantiateTracked") (EVar "s"))) (DoLet false false (PVar "r") (EApp (EVar "freshVar") (ELit LUnit))) (DoLet false false (PVar "eff") (EApp (EVar "openRow") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "unify") (EApp (EVar "fst") (EVar "inst"))) (EApp (EApp (EApp (EVar "TFun") (EVar "xt")) (EVar "eff")) (EVar "r")))) (DoExpr (EApp (EApp (EVar "shadowStandaloneDictSlots") (EVar "slots")) (EApp (EVar "snd") (EVar "inst")))))))))))
+(DFunDef false "shadowStandaloneDictSlotsAt" ((PVar "mscheme") (PVar "key") (PVar "xt")) (EBlock (DoLet false false (PVar "slots") (EApp (EVar "declaredConstraintSlots") (EVar "key"))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EApp (EVar "declaredConstraintIds") (EVar "key"))) (ETuple (EListLit) (EListLit)) (EMatch (EVar "mscheme") (arm (PCon "None") () (ETuple (EListLit) (EListLit))) (arm (PCon "Some" (PVar "s")) () (EBlock (DoLet false false (PVar "inst") (EApp (EVar "instantiateTracked") (EVar "s"))) (DoLet false false (PVar "r") (EApp (EVar "freshVar") (ELit LUnit))) (DoLet false false (PVar "eff") (EApp (EVar "openRow") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "unify") (EApp (EVar "fst") (EVar "inst"))) (EApp (EApp (EApp (EVar "TFun") (EVar "xt")) (EVar "eff")) (EVar "r")))) (DoExpr (EApp (EApp (EVar "shadowStandaloneDictSlots") (EVar "slots")) (EApp (EVar "snd") (EVar "inst")))))))))))
 (DTypeSig false "shadowStandaloneDictSlots" (TyFun (TyApp (TyCon "List") (TyCon "CSlot")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Mono"))) (TyTuple (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "shadowStandaloneDictSlots" ((PVar "slots") (PVar "subst")) (EIf (EApp (EVar "isEmptyL") (EVar "slots")) (ETuple (EListLit) (EListLit)) (EBlock (DoLet false false (PVar "expanded") (EApp (EApp (EVar "expandSupersPairs") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "superDeclsRef") "value")) (EVar "slots"))) (DoExpr (ETuple (EApp (EApp (EVar "constraintMonosOf") (EApp (EApp (EMethodRef "map") (ELam ((PVar "sl")) (EFieldAccess (EVar "sl") "csId"))) (EVar "expanded"))) (EVar "subst")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "sl")) (EFieldAccess (EFieldAccess (EVar "sl") "csIface") "irName"))) (EVar "expanded")))))))
 (DTypeSig false "recordStandaloneSigObligations" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Mono") (TyCon "Unit")))))

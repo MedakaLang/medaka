@@ -7004,22 +7004,71 @@ inferDictAt env name routesRef = match lookupVar env name
 -- + funConstraintIfacesRef path (today's behavior; same slots when no collision, since
 -- the qual entry is the same module's same ids the bare first-match returns sans collision).
 qualConstraintFor : String -> Option (List CSlot)
-qualConstraintFor name = match lookupAssoc name perRun.value.currentImportDefinersRef.value
+qualConstraintFor name = match qualConstraintKey name
   None => None
-  Some src =>
-    -- #739 fix follow-up: resolve an aliased import's surface name to its ORIGINAL exported
-    -- name before keying the qual tables (they are attributed under the defining name).  A
-    -- plain import / non-alias defaults to the name itself.  Without this, `{set as hmSet}`
-    -- of a constrained `hash_map.set` misses (qual has `(hash_map, set)`, not `(hash_map,
-    -- hmSet)`), declaredConstraintSlots returns ([],[]) and inferDictAtFound DROPS the Hash
-    -- dict → `no matching impl for dispatch` at run/build.
-    let origin = fromOption name (lookupAssoc name perRun.value.currentImportOriginsRef.value)
+  Some (src, origin) =>
     -- U1b (#1482): the two independent lookups still default to `[]` independently —
     -- that is the manufacturable mismatch described on `CSlot` — but they now meet in
     -- `pairSlots`, which owns the policy, instead of in three downstream zips.
     map (ids => pairSlots ids
       (fromOption [] (lookupQualIfaces src origin crossRun.value.crossModuleFunConstraintIfacesQualRef.value)))
       (lookupQualArity src origin crossRun.value.crossModuleFunConstraintsQualRef.value)
+
+-- the (import-source module, ORIGINAL exported name) key a cross-module callee's qual
+-- entries live under; `None` ⇒ local fn / wildcard import / re-export / check path.
+--
+-- #739 fix follow-up: an aliased import's surface name is resolved to its ORIGINAL
+-- exported name before keying the qual tables (they are attributed under the defining
+-- name).  A plain import / non-alias defaults to the name itself.  Without this,
+-- `{set as hmSet}` of a constrained `hash_map.set` misses (qual has `(hash_map, set)`,
+-- not `(hash_map, hmSet)`), the slot lookup comes back empty and `inferDictAtFound`
+-- DROPS the Hash dict → `no matching impl for dispatch` at run/build.
+--
+-- ⚠️ FACTORED OUT BY U1b (#1482) so `qualConstraintFor` (slots) and
+-- `qualConstraintIds` (ids only) cannot drift on WHICH entry they resolve to.  Two
+-- readers of one table that re-derive the key independently is the shape this seam
+-- already pays for elsewhere; there is one derivation.
+qualConstraintKey : String -> Option (String, String)
+qualConstraintKey name = map
+  (src => (
+    src,
+    fromOption name (lookupAssoc name perRun.value.currentImportOriginsRef.value),
+  ))
+  (lookupAssoc name perRun.value.currentImportDefinersRef.value)
+
+-- the callee's registered dict-slot IDS, UNPAIRED and UNTRUNCATED — the exact list the
+-- pre-U1b `declaredConstraintSlots` returned as its first component.
+--
+-- 🚨 WHY THIS EXISTS, AND WHY IT IS NOT THE PARALLEL-LIST HAZARD `CSlot` REMOVED.
+-- `pairSlots` truncates to the SHORTER of (ids, ifaces), which is correct everywhere the
+-- result decides dict SLOTS — that is exactly what the zips it replaced did.  But two
+-- guards in `inferDictAtFound` and one in `shadowStandaloneDictSlotsAt` do not ask about
+-- slots; they ask *"is this callee registered as constrained at all"* and *"did the
+-- instantiation pin any of its constraint vars"*.  Reading a TRUNCATED list there changes
+-- the answer whenever the arity table HITS and the iface table MISSES — a mismatch this
+-- seam can manufacture by construction (see `CSlot`) — and the two arms then differ:
+-- one records an empty dict app, the other skips routing (and, at the standalone site,
+-- skips a `unify` side effect).  Nobody has built a witness, so the difference is
+-- unmeasured, which is precisely why this unit does not take it: an obligation-identity
+-- change must not smuggle in a routing change nobody asked for.
+--
+-- It is NOT zipped against an interface list anywhere — its only consumers are
+-- `isEmptyL` and `anyIdPinned` — so it cannot mispair with one.  That is the property
+-- `CSlot` protects, and it is preserved.
+declaredConstraintIds : String -> List Int
+declaredConstraintIds name = match qualConstraintIds name
+  Some ids => ids
+  -- same #739 source-exact discipline as `declaredConstraintSlots`' `None` arm below:
+  -- a known import with no qual entry is genuinely unconstrained, and must NOT fall
+  -- through to the source-blind bare-name table.
+  None =>
+    if hasImportDefiner name then []
+    else fromOption [] (lookupAssocSL2 name perRun.value.funConstraintsRef.value)
+
+qualConstraintIds : String -> Option (List Int)
+qualConstraintIds name = match qualConstraintKey name
+  None => None
+  Some (src, origin) => lookupQualArity src origin crossRun.value.crossModuleFunConstraintsQualRef.value
 
 lookupQualArity : String -> String -> List ((String, String), List Int) -> Option (List Int)
 lookupQualArity _ _ [] = None
@@ -7078,7 +7127,9 @@ inferDictAtFound : String -> Ref (List Route) -> (Mono, List (Int, Mono)) -> Mon
 inferDictAtFound name routesRef inst =
   let q = qualConstraintFor name
   let slots = declaredConstraintSlots name
-  let declaredIds = map (s => s.csId) slots
+  -- ⚠️ UNTRUNCATED on purpose — `map (s => s.csId) slots` is NOT the same list when the
+  -- arity table hits and the iface table misses.  See `declaredConstraintIds`.
+  let declaredIds = declaredConstraintIds name
   let known = match q
         Some _ => True
         None => hasKeySL2 name perRun.value.funConstraintsRef.value
@@ -10074,7 +10125,10 @@ shadowStandaloneDictSlotsAt mscheme key xt =
   -- the unconstrained standalone: nothing to solve, no unify, no perturbation at all.
   -- This short-circuit is what makes the change provably fixpoint-safe — all 5 of the
   -- compiler's own definer shadows are unconstrained and never reach the unify below.
-  if isEmptyL slots then ([], [])
+  -- ⚠️ Gated on the UNTRUNCATED id list, not on `slots`: this guard also decides whether
+  -- the `unify` below runs, so a truncation here would remove a unification side effect.
+  -- See `declaredConstraintIds`.
+  if isEmptyL (declaredConstraintIds key) then ([], [])
   else match mscheme
     None => ([], [])
     Some s =>
@@ -18812,11 +18866,25 @@ insertUnivImpl univ (iface, tys, reqs) =
 -- census either — derive it: `grep -n ifaceRefBare compiler/types/typecheck.mdk`, and
 -- delete the leg only when every remaining hit is the definition itself.
 --
--- ⚠️ CONSEQUENCE FOR #1438, STATED PLAINLY RATHER THAN LEFT TO BE DISCOVERED: with
--- this leg present, a goal recorded at any remaining `ifaceRefBare` site still matches
--- ANY same-spelled impl, i.e. exactly today's behaviour — so #1438's own repro is
--- still accepted and its `must_fail` pin still holds.  **#1438 drains at #1507, not at
--- U1b.**
+-- ⚠️ CONSEQUENCE FOR #1438, AND THE SENTENCE THIS PARAGRAPH GOT WRONG.  It read
+-- "#1438's own repro is still accepted and its `must_fail` pin still holds; #1438
+-- drains at #1507, not at U1b" — written in the very commit that DELETED that pin.
+-- MEASURED on U1b's own branch build: #1438's repro uses a SIGNED forwarder
+-- (`useBulk : Sizer b => b -> Int`), so its goal comes from the signature `=>` slot,
+-- which is one of the two channels U1b widened; it now REJECTS
+-- (`No impl of Sizer for Int`, exit 1) and its pin drained.
+--
+-- 🚨 THE PINNED INSTANCE DRAINED; THE CLASS DID NOT, AND THAT IS THE DISTINCTION TO
+-- CARRY.  Delete the signature line from that repro and the goal is posed by a bare
+-- METHOD OCCURRENCE instead — the producer below that still mints `ifaceRefBare` —
+-- and it is a silent accept again: MEASURED on the same binary, `check` exit 0,
+-- `build` exit 0, and the built binary SEGFAULTS at 139.  So with this leg present a
+-- goal recorded at any REMAINING `ifaceRefBare` site still matches ANY same-spelled
+-- impl, exactly as before.  #1438 stays OPEN for that half; **the remaining reach
+-- drains at #1507**, which is also when this leg may be withdrawn.  The minimal pair
+-- is pinned at `test/must_fail_fixtures/1507-xmod-iface-name-collision-method-occurrence/`,
+-- and the drained half is guarded positively by
+-- `test/dict_fixtures/i4-xmod-sig-constraint-foreign-iface-rejected/`.
 --
 -- Order within a bucket is preserved per key (`mregAppendK` appends), so
 -- `findMatchingImplReqsU`'s declaration-order first-match is unchanged on either leg.
