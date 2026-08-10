@@ -89,7 +89,7 @@ done
 deadlocks. Do not remove it.**
 
 **`strict` is OFF deliberately.** With a queue it is redundant *and harmful*: it forces every open PR
-to rebase onto every merge and re-run all nine checks — the O(N²) tax the queue exists to delete.
+to rebase onto every merge and re-run every required context — the O(N²) tax the queue exists to delete.
 (The day we enabled the queue: 13 merges in one hour across three orchestrators; under `strict` one
 PR paid five full 20-minute suites without landing.)
 
@@ -1679,7 +1679,7 @@ actually run, or does it merely describe what the author expected to be true?**
   headers, and issue bodies against what was actually run. Grading them together lets the
   claim audit ride on the code review, which quietly drops it. Yield this session: **9 review
   passes, every one found a real defect**; both behaviour-changing units were blocked while
-  green on all 11 required checks — one shipped a fix that worked on `check` and was inert
+   green on every required check — one shipped a fix that worked on `check` and was inert
   on `run`/`build`, the other a regression turning a correct program into a crash. The two
   lenses also caught **each other's** errors twice: they reached opposite verdicts on one
   fixture header (the adversarial reviewer was right), and a round-1 reviewer's confident
