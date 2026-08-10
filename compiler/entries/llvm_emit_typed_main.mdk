@@ -54,12 +54,14 @@ emitIsolation runtimePath pPath pPlusUPath = match readFile runtimePath
         let pDecls = desugar (parse pSrc)
         let pPlusUDecls = desugar (parse pPlusUSrc)
         let p1 = runEmit runtimeDecls [] pDecls
-        let _ = runEmit runtimeDecls [] pPlusUDecls
+        let pPlusU = runEmit runtimeDecls [] pPlusUDecls
         let p2 = runEmit runtimeDecls [] pDecls
-        if p1 == p2 then
-          putStr p1
-        else
+        if p1 != p2 then
           failWith "LLVM EmitInput isolation failure: P changed after same-process P+U emission"
+        else if p1 == pPlusU then
+          failWith "LLVM EmitInput isolation failure: P+U did not produce distinct LLVM"
+        else
+          putStr "EMIT_INPUT_ISOLATION_OK\n"
 
 emit : List Decl -> List Decl -> List Decl -> <IO> Unit
 emit runtimeDecls preludeDecls userDecls =

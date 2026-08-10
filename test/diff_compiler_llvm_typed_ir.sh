@@ -47,9 +47,9 @@
 # ── FOUR QUESTIONS (issue #587 / ORCHESTRATING.md) ────────────────────────────
 #  1. Where is it skipped? It runs in the `backend` CI shard (globbed by
 #     'diff_compiler_llvm*' in .github/workflows/ci.yml) — i.e. it runs on exactly
-#     the PRs that touch the emitter/side-tables, which is never a docs-only PR.
+#     the PRs that touch the emitter/input seam, which is never a docs-only PR.
 #  2. Is the caught bug-class the skip's trigger-class? Yes: it fails iff emitted IR
-#     moves, and an emitter/side-table change is precisely what moves emitted IR.
+#     moves, and an emitter/input change is precisely what moves emitted IR.
 #  3. Seen it fail? Yes — applying #357's reset-the-seven at emitProgram degraded
 #     @mdk_list_append -> @mdk_append and this gate named the fixture; reverted.
 #  4. Can it no-op? No: N==0 (no fixtures, or no goldens) is a hard FAILURE below.
@@ -145,8 +145,10 @@ if [ "${CAPTURE:-0}" = "1" ]; then
 else
   printf '\nchecked %d, %d ok, %d failing\n' "$n_fixtures" "$pass" "$fail"
   [ "$fail" -eq 0 ] || exit 1
-  # Same-process P -> P+U -> P control. The middle input includes P's namespace
-  # plus U's extra data/impl rows, while the positive program selects U and prints 11.
+  # Same-process P -> P+U -> P control. P calls Mark, consuming method-arity
+  # metadata; the middle input adds U's unrelated owner/impl under the same Mark
+  # interface/method spelling. This single-file entry has no import graph, so it
+  # makes no module-order claim; the module emitter owns that separate dimension.
   # These private temp files are not a shared fixture corpus.
   command -v "$CC" >/dev/null 2>&1 || { echo "FAIL: no C compiler for isolation control"; exit 1; }
   if command -v pkg-config >/dev/null 2>&1 && pkg-config --exists bdw-gc 2>/dev/null; then
@@ -166,6 +168,11 @@ else
     printf 'FAIL: same-process EmitInput isolation control\n%s\n' "$(cat "$ISO/isolation.err")"
     exit 1
   fi
+  isolation_verdict="$(cat "$ISO/isolation.ll")"
+  [ "$isolation_verdict" = "EMIT_INPUT_ISOLATION_OK" ] || {
+    printf 'FAIL: same-process EmitInput isolation verdict was %s\n' "$isolation_verdict"
+    exit 1
+  }
   for n in p positive; do
     "$EMITBIN" "$RUNTIME" "$ISO/$n.mdk" > "$ISO/$n.ll" 2> "$ISO/$n.err" || { cat "$ISO/$n.err"; exit 1; }
     "$CC" $GC_CFLAGS "$ISO/$n.ll" "$RT" $GC_LIBS -lm -o "$ISO/$n.bin" || exit 1
@@ -175,5 +182,5 @@ else
     printf 'FAIL: isolation control expected P=7 P+U=11; got P=%s P+U=%s\n' "$p_out" "$positive_out"
     exit 1
   }
-  printf 'checked same-process EmitInput isolation (P -> P+U -> P; P=7, P+U=11)\n'
+  printf 'checked same-process EmitInput isolation (P -> P+U -> P; distinct IR; P=7, P+U=11)\n'
 fi
