@@ -130,8 +130,8 @@ identifiers it can't resolve split into clear sub-categories:
 
 ## Notes
 
-- This census is the WasmGC analogue of the LLVM emitter's
-  `gapRecordEnabled`/`gapLog`/`emitProgramGaps` mechanism. The WasmGC emitter is
+- This census is the WasmGC analogue of LLVM's per-emission Record mode and
+  `emitProgramGaps` mechanism. The WasmGC emitter is
   **outside the self-host compiler graph** (only the gate/census entries import
   it), so these changes need **no fixpoint and no seed re-mint**.
 - The default emit path (record mode OFF) is **behaviorally identical** to

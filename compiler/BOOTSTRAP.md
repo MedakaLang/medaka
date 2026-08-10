@@ -707,7 +707,7 @@ NOT a per-PR hard gate, so an emitter change does not force a seed refresh every
 ### The build driver fixpoints too
 C3 was proven only for the gap-tolerant bootstrap driver
 (`llvm_bootstrap_lex_main.mdk`). `medaka build` shells out to the **strict** driver
-`compiler/entries/llvm_emit_modules_main.mdk` (no `enableGapRecord`; instead `dceFilter`
+`compiler/entries/llvm_emit_modules_main.mdk` (Strict mode; instead `dceFilter`
 drops the unreachable `max`/`min`/`clamp` gaps). `test/selfcompile_build_fixpoint.sh`
 runs the C3 flow against *that* driver — using it as both the compiler and the program
 compiled — and confirms **C3a YES** (native IR1 == interpreted emission) and **C3b YES**
