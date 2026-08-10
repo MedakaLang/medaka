@@ -89,9 +89,9 @@ nulled. Its fix (`labelFallthrough`, node-carried) covers the sentinel half; the
 ALSO converted since — `ftL` is now a plain parameter threaded through `emitTree`, not a module
 Ref (#354; see the "PLAIN PARAMETER, not ambient state" comment at its signature). Do not add new
 write-then-read Refs; carry the decision on the node/parameter (wasm threads the label as an
-argument — the reference design, which LLVM emit now matches for both halves). Install-once tables
-(`returnsSelfTableRef` family) have no per-program reset (#357) — do not add siblings to that
-lifecycle.
+argument — the reference design, which LLVM emit now matches for both halves). LLVM's former
+install-once semantic tables now enter through `EmitInput`; Wasm's temporary install seam awaits
+X-W.H. Do not add new ambient semantic-input siblings to either lifecycle.
 
 ### 8. Probes: `main` must be a zero-arg Unit value, and `do` is monadic
 `main () = …` is a silent no-op; `medaka run` rejects non-Unit value-mains with a diagnostic
