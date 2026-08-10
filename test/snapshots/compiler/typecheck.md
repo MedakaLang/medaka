@@ -1,5 +1,5 @@
 # META
-source_lines=24858
+source_lines=24933
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted typecheck stage — port of lib/typecheck.ml's HM core.  SLICE 1:
@@ -2638,10 +2638,15 @@ toggles = Ref (freshToggles ())
 -- driver entries, and `deAllDecls` supplies the whole-graph decl list each of them
 -- previously concatenated inline, so a mis-built envelope is LOUD
 -- (`populateEffectDomains` would miss a module's `effect` decls) rather than
--- silent.  NOT LIVE: the filter.  `declEnvsVisible` has no caller in this unit —
--- its callers are A-3.2/A-3.3/A-3.4's table reads.  It is `export`ed to keep
--- `rule-dead-code` off the unreached block, NOT because anything outside this
--- module consumes it.
+-- silent.  NOT LIVE: the filter.  `declEnvsVisible` has no caller in this unit,
+-- and STILL has none after A-3.2a (#1112) — that unit's `DataEnv` construction
+-- reads `deAllDecls` directly, unfiltered, and does not call `declEnvsVisible`
+-- either.  (This paragraph used to name "A-3.2/A-3.3/A-3.4's table reads" as
+-- the callers; A-3.2a falsified that for its own slice — it builds `DataEnv`
+-- but does not wire a consumer, ordinal-filtered or not.  Correct rather than
+-- trust: whichever unit first calls `declEnvsVisible` should update this line
+-- to name itself.)  It is `export`ed to keep `rule-dead-code` off the
+-- unreached block, NOT because anything outside this module consumes it.
 --
 -- ORDINALS.  The prelude is 0; then each module of the loader's dependency-first
 -- list, in that order.  The prelude is indexed under BOTH `"core"` — the spelling
@@ -2670,7 +2675,7 @@ data DeclEnvs = DeclEnvs {
     deModules : List DeclEnvModule,  -- ordinal order, prelude first
     deOrdIndex : OrdMap Int,
     deAllDecls : List Decl,
-    deData : DataEnv,  -- A-3.2 (#1112): NOT LIVE — see the block above `DataEnv`
+    deData : DataEnv,  -- A-3.2a (#1112): CONSTRUCTION ONLY, NOT LIVE — see the block above `DataEnv`
   }
 
 -- INITIAL construction only, exactly as `freshDriverState` is: a driver that never
@@ -2748,15 +2753,47 @@ declEnvsUpToGo cur (m::rest)
 export declEnvsVisible : String -> DeclEnvs -> List DeclEnvModule
 declEnvsVisible mid envs = declEnvsUpTo (declEnvsOrdOf mid envs) envs
 
--- ── A-3.2 (#1112): the `DataEnv` slice — types, constructor/record identity,
--- field ownership, aliases ──────────────────────────────────────────────────
+-- ── A-3.2a (#1112): the `DataEnv` slice — CONSTRUCTION ONLY, NOT LIVE ────────
 -- §2 K: *"`DataEnv`: datatypes, constructor schemes, records and field
--- ownership, aliases with cycle rejection."*  This unit lands the SYNTACTIC
--- half only — an identity-keyed index over the RAW declarations, built once
--- from `DeclEnvs`'s own ordinal-tagged decl list.  It carries NO elaborated
--- `Scheme`/`RecordInfo`/`Mono` — see why below — and it is NOT LIVE (no
--- caller outside this block populating it), for the identical reason
--- `declEnvsVisible` above has none: A-3.5 is what wires a consumer to it.
+-- ownership, aliases with cycle rejection."*  #1112's own decomposition table
+-- describes A-3.2 as retiring `load`/`store` (`loadDataUniverse`/
+-- `storeDataUniverse`) plus the `importedCtorTypeDecls` overlay ladder onto
+-- #1319's identity keys — i.e. it names BOTH construction AND retirement.
+-- Those two are incompatible under one bar: retiring a live table can only be
+-- judged by running the program differently, and this PR's bar is
+-- BYTE-IDENTICAL.  So this slice, A-3.2a, does CONSTRUCTION ONLY: it builds
+-- `DataEnv` and wires it into `DeclEnvs`/`buildDeclEnvs`, and retires NOTHING
+-- — no `universe*`/`obUniv*` row, no `load`/`store` call, no overlay.  The
+-- retirement (absorbing #1319 unit 4) is a follow-on PR, A-3.2b.
+--
+-- This unit lands the SYNTACTIC half only — an identity-keyed index over the
+-- RAW declarations, built once from `DeclEnvs`'s own ordinal-tagged decl
+-- list.  It carries NO elaborated `Scheme`/`RecordInfo`/`Mono` — see why
+-- below — and it is NOT LIVE: no caller outside this block populates or
+-- reads `deData`, for the identical reason `declEnvsVisible` above has no
+-- caller.  "Byte-identical" is therefore WEAK evidence for this PR — nothing
+-- reads the new field, so nothing could have moved a judgment even if the
+-- construction were wrong.  The load-bearing checks are the STATIC ones (the
+-- doctests below) and the additive-only golden diffs, not the differential
+-- gates.
+--
+-- ⚠️ VISIBILITY DIVERGENCE, for whoever consumes this next: `buildDataEnv`
+-- folds EVERY decl in `deAllDecls`, private included.  `universeFieldOwners`/
+-- `universeDataEnv` (the live crossRun tables) accumulate only `pubDecls`
+-- (`publicDataDecls prog0` at `appendDataUniverse`'s call site) plus a
+-- separate opaque-kind-only pass (`registerOpaqueParamKinds`).  `DataEnv`
+-- here is therefore a SUPERSET of what the live universe ever held — fine
+-- while nothing reads it, a real design question (filter to public at
+-- construction, or filter at the read site?) once something does.
+--
+-- ⚠️ LATENT DIVERGENCE, noted rather than fixed: `addCtorIdentRaw` (below)
+-- upserts unconditionally, unlike `addCtorIdentCand`'s upsert-by-identity
+-- (`dropCtorIdentCand`) which exists to keep a RE-REGISTERED declaration from
+-- self-colliding when the same decl list is folded more than once.
+-- `buildDataEnv` folds `deAllDecls` exactly ONCE, so no producer re-presents
+-- the same identity today and the divergence is inert — but a future caller
+-- that folds a decl list twice (mirroring how `appendDataUniverse` can run
+-- per module) would need the same guard `addCtorIdentCand` has.
 --
 -- 🚨 WHY NOT JUST CALL `registerAllData`/`insertCtorIdents`/`insertRecordIdents`.
 -- Every one of those reads or writes `perRun`/`crossRun` REFS as a side effect
@@ -2770,39 +2807,44 @@ declEnvsVisible mid envs = declEnvsUpTo (declEnvsOrdOf mid envs) envs
 -- carefully isolated) still shift every later tyvar id and move every scheme
 -- this PR must NOT move.  So this index is deliberately SYNTACTIC: raw
 -- `Variant`/`Field`/`Ty` nodes, keyed by identity, no elaboration performed.
-data DataTypeDecl =
-  | DataTypeDecl {
-      dtKey : TabKey,
-      dtName : String,
-      dtOrigin : TyConOrigin,
-      dtParams : List String,
-      dtVariants : List Variant,
-    }
+data DataTypeDecl = DataTypeDecl {
+    dtKey : TabKey,
+    dtName : String,  -- identity key, `tyTabKey dtOrigin dtName` — same family as `universeDataParamKinds`
+    dtOrigin : TyConOrigin,
+    dtParams : List String,
+    dtVariants : List Variant,
+  }
 
-data AliasDecl =
-  | AliasDecl {
-      adKey : TabKey,
-      adName : String,
-      adParams : List String,
-      adRhs : Ty,
-    }
+data AliasDecl = AliasDecl {
+    adKey : TabKey,
+    adName : String,  -- identity key, `tyTabKey o adName` — same family as `universeAliasTable`
+    adParams : List String,
+    adRhs : Ty,
+  }
 
 -- `deFieldOwnerIdents` is the NEW identity-keyed table: `universeFieldOwners`
 -- (`crossRun`) is bare-String-keyed only and has no identity companion today
 -- (unlike the ctor/record tables, which A-2.11/A-2.12 (#1319 units 1/2)
 -- already gave one).  Mirrors `deCtorIdents`/`deRecordIdents`'s shape: field
 -- name -> every (owning ctor Ident, owning ctor name) that declares it, in
--- declaration order, so a same-named field declared by two DIFFERENT
--- (identity-distinct) records is observable as two entries rather than one
--- bare-name collision.
-data DataEnv =
-  | DataEnv {
-      deTypes : List (TabKey, DataTypeDecl),
-      deCtorIdents : OrdMap (List (Ident, String, Variant)),
-      deRecordIdents : OrdMap (List (Ident, String, List Field)),
-      deFieldOwnerIdents : OrdMap (List (Ident, String)),
-      deAliases : List (TabKey, AliasDecl),
-    }
+-- declaration order.
+--
+-- ⚠️ `universeFieldOwners`'s `addFieldOwners` is ALREADY a multimap, so two
+-- DIFFERENT ctor names sharing a field are NOT the case this table adds
+-- anything for — the bare table shows both rows already.  What only THIS
+-- table can state is the case where the OWNING CTOR NAME REPEATS: two
+-- records both named "Pt" (in different modules) sharing a field "x" append
+-- the SAME bare string "Pt" twice to the bare table's owner list, which a
+-- reader cannot tell apart from one declaration counted twice.
+-- `deFieldOwnerIdents` keeps the two as distinct `Ident`s (different
+-- `TyConOrigin`) — see `distinctIdentsIn2` and the doctests below.
+data DataEnv = DataEnv {
+    deTypes : List (TabKey, DataTypeDecl),
+    deCtorIdents : OrdMap (List (Ident, String, Variant)),
+    deRecordIdents : OrdMap (List (Ident, String, List Field)),
+    deFieldOwnerIdents : OrdMap (List (Ident, String)),
+    deAliases : List (TabKey, AliasDecl),  -- NEW — no bare-name table has an identity companion for field ownership today
+  }
 
 emptyDataEnv : DataEnv
 emptyDataEnv = DataEnv {
@@ -2911,6 +2953,25 @@ deFieldOwnerFixtureB = DData {
   dataOrigin = OriginModule "n",
 }
 
+-- Same DECLARED NAME as fixture A ("Pt"), different module.  This is the case
+-- the bare-name table (`universeFieldOwners`) genuinely cannot discriminate:
+-- `addFieldOwners` is already a multimap, so it does NOT collapse fixture A/B
+-- above (different ctor NAMES "Pt"/"Vec" — the bare table already shows two
+-- rows for those).  What the bare table collapses is A vs C: both would
+-- append the SAME bare string "Pt" to field "x"'s owner list, so a reader of
+-- that list cannot tell "Pt" declared twice from one declaration counted
+-- twice.  The identity table keeps them as two DISTINCT `Ident`s (different
+-- `OriginModule`), which `distinctIdentsIn2` below asserts on directly.
+deFieldOwnerFixtureC : Decl
+deFieldOwnerFixtureC = DData {
+  dataVis = VisPublic,
+  dataName = "Pt",
+  dataParams = [],
+  dataCtors = [Variant "Pt" (ConNamed [Field "x" (tyConBuiltin "Int" None)] False)],
+  dataDerives = [],
+  dataOrigin = OriginModule "n",
+}
+
 deFieldOwnerCollisionEnv : DataEnv
 deFieldOwnerCollisionEnv =
   buildDataEnv [deFieldOwnerFixtureA, deFieldOwnerFixtureB]
@@ -2918,17 +2979,31 @@ deFieldOwnerCollisionEnv =
 deFieldOwnerSingleEnv : DataEnv
 deFieldOwnerSingleEnv = buildDataEnv [deFieldOwnerFixtureA]
 
--- ── doctests: two modules declaring a same-named field on DIFFERENT records
--- (the "+ a universeFieldOwners fixture, it has none" case #1112's scoping
--- pass names) must show up as TWO distinct owners, keyed by their DISTINCT
--- identities — never collapsed into one bare-name row the way
--- `universeFieldOwners` (`crossRun`) would.
+deFieldOwnerSameNameEnv : DataEnv
+deFieldOwnerSameNameEnv =
+  buildDataEnv [deFieldOwnerFixtureA, deFieldOwnerFixtureC]
+
+-- Two-element owner list, DISTINCT `Ident`s (never a fixed answer): the
+-- property a bare-name multimap cannot state, since two `String`s "Pt"/"Pt"
+-- carry no way to tell them apart.
+distinctIdentsIn2 : List (Ident, String) -> Bool
+distinctIdentsIn2 [(i1, _), (i2, _)] = i1 != i2
+distinctIdentsIn2 _ = False
+
+-- ── doctests ─────────────────────────────────────────────────────────────
 -- > map snd (fromOption [] (omLookup "x" deFieldOwnerCollisionEnv.deFieldOwnerIdents))
 -- ["Pt", "Vec"]
 -- > listLen (fromOption [] (omLookup "x" deFieldOwnerCollisionEnv.deFieldOwnerIdents))
 -- 2
 -- > map snd (fromOption [] (omLookup "x" deFieldOwnerSingleEnv.deFieldOwnerIdents))
 -- ["Pt"]
+
+-- The discriminating case: SAME declared name ("Pt") from two DIFFERENT
+-- modules stays two DISTINCT identities, not one bare-name collision.
+-- > map snd (fromOption [] (omLookup "x" deFieldOwnerSameNameEnv.deFieldOwnerIdents))
+-- ["Pt", "Pt"]
+-- > distinctIdentsIn2 (fromOption [] (omLookup "x" deFieldOwnerSameNameEnv.deFieldOwnerIdents))
+-- True
 
 -- #158 PR5 / #176 closure: the ~18 RESIDUAL survivor Refs — governed until now by
 -- per-ref prose and clustered in NEITHER `resetState` (PerRun/Toggles) NOR
@@ -25396,10 +25471,17 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "deFieldOwnerFixtureA" () (ERecordCreate "DData" ((fa "dataVis" (EVar "VisPublic")) (fa "dataName" (ELit (LString "Pt"))) (fa "dataParams" (EListLit)) (fa "dataCtors" (EListLit (EApp (EApp (EVar "Variant") (ELit (LString "Pt"))) (EApp (EApp (EVar "ConNamed") (EListLit (EApp (EApp (EVar "Field") (ELit (LString "x"))) (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))))) (EVar "False"))))) (fa "dataDerives" (EListLit)) (fa "dataOrigin" (EApp (EVar "OriginModule") (ELit (LString "m")))))))
 (DTypeSig false "deFieldOwnerFixtureB" (TyCon "Decl"))
 (DFunDef false "deFieldOwnerFixtureB" () (ERecordCreate "DData" ((fa "dataVis" (EVar "VisPublic")) (fa "dataName" (ELit (LString "Vec"))) (fa "dataParams" (EListLit)) (fa "dataCtors" (EListLit (EApp (EApp (EVar "Variant") (ELit (LString "Vec"))) (EApp (EApp (EVar "ConNamed") (EListLit (EApp (EApp (EVar "Field") (ELit (LString "x"))) (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))))) (EVar "False"))))) (fa "dataDerives" (EListLit)) (fa "dataOrigin" (EApp (EVar "OriginModule") (ELit (LString "n")))))))
+(DTypeSig false "deFieldOwnerFixtureC" (TyCon "Decl"))
+(DFunDef false "deFieldOwnerFixtureC" () (ERecordCreate "DData" ((fa "dataVis" (EVar "VisPublic")) (fa "dataName" (ELit (LString "Pt"))) (fa "dataParams" (EListLit)) (fa "dataCtors" (EListLit (EApp (EApp (EVar "Variant") (ELit (LString "Pt"))) (EApp (EApp (EVar "ConNamed") (EListLit (EApp (EApp (EVar "Field") (ELit (LString "x"))) (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))))) (EVar "False"))))) (fa "dataDerives" (EListLit)) (fa "dataOrigin" (EApp (EVar "OriginModule") (ELit (LString "n")))))))
 (DTypeSig false "deFieldOwnerCollisionEnv" (TyCon "DataEnv"))
 (DFunDef false "deFieldOwnerCollisionEnv" () (EApp (EVar "buildDataEnv") (EListLit (EVar "deFieldOwnerFixtureA") (EVar "deFieldOwnerFixtureB"))))
 (DTypeSig false "deFieldOwnerSingleEnv" (TyCon "DataEnv"))
 (DFunDef false "deFieldOwnerSingleEnv" () (EApp (EVar "buildDataEnv") (EListLit (EVar "deFieldOwnerFixtureA"))))
+(DTypeSig false "deFieldOwnerSameNameEnv" (TyCon "DataEnv"))
+(DFunDef false "deFieldOwnerSameNameEnv" () (EApp (EVar "buildDataEnv") (EListLit (EVar "deFieldOwnerFixtureA") (EVar "deFieldOwnerFixtureC"))))
+(DTypeSig false "distinctIdentsIn2" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String"))) (TyCon "Bool")))
+(DFunDef false "distinctIdentsIn2" ((PList (PTuple (PVar "i1") PWild) (PTuple (PVar "i2") PWild))) (EBinOp "!=" (EVar "i1") (EVar "i2")))
+(DFunDef false "distinctIdentsIn2" (PWild) (EVar "False"))
 (DData Private "DriverState" () ((variant "DriverState" (ConNamed (field "effectDomains" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))))) (field "graphMethodExportsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ident")))))) (field "graphIfaceMethodsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))) (field "graphCtorExportsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Ident")))))) (field "declEnvsRef" (TyApp (TyCon "Ref") (TyCon "DeclEnvs"))) (field "abstractRecordTypesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "argDispatchIdxRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))))) (field "dictEligibleRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "dictEligibleSetRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (field "mangledShadowMapRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))) (field "userIfaceNamesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "coherenceUserDecls" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Decl")))) (field "superDeclsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Decl")))) (field "standaloneValuesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "methodDispatchIdxRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))))) (field "matchOracle" (TyApp (TyCon "Ref") (TyCon "Oracle"))) (field "matchWarnings" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "TcDiag")))) (field "promotionHarvestRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "mainSchemeRef" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "Scheme")))) (field "sigNameSetRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (field "sigTyMapRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Ty")))) (field "implInferEnabled" (TyApp (TyCon "Ref") (TyCon "Bool")))))) ())
 (DTypeSig false "freshDriverState" (TyFun (TyCon "Unit") (TyCon "DriverState")))
 (DFunDef false "freshDriverState" (PWild) (ERecordCreate "DriverState" ((fa "effectDomains" (EApp (EVar "Ref") (EListLit))) (fa "graphMethodExportsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "graphIfaceMethodsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "graphCtorExportsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "declEnvsRef" (EApp (EVar "Ref") (EVar "emptyDeclEnvs"))) (fa "abstractRecordTypesRef" (EApp (EVar "Ref") (EListLit))) (fa "argDispatchIdxRef" (EApp (EVar "Ref") (EListLit))) (fa "dictEligibleRef" (EApp (EVar "Ref") (EListLit))) (fa "dictEligibleSetRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "mangledShadowMapRef" (EApp (EVar "Ref") (EListLit))) (fa "userIfaceNamesRef" (EApp (EVar "Ref") (EListLit))) (fa "coherenceUserDecls" (EApp (EVar "Ref") (EListLit))) (fa "superDeclsRef" (EApp (EVar "Ref") (EListLit))) (fa "standaloneValuesRef" (EApp (EVar "Ref") (EListLit))) (fa "methodDispatchIdxRef" (EApp (EVar "Ref") (EListLit))) (fa "matchOracle" (EApp (EVar "Ref") (EApp (EVar "buildOracle") (EListLit)))) (fa "matchWarnings" (EApp (EVar "Ref") (EListLit))) (fa "promotionHarvestRef" (EApp (EVar "Ref") (EListLit))) (fa "mainSchemeRef" (EApp (EVar "Ref") (EVar "None"))) (fa "sigNameSetRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "sigTyMapRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "implInferEnabled" (EApp (EVar "Ref") (EVar "False"))))))
@@ -30062,10 +30144,17 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "deFieldOwnerFixtureA" () (ERecordCreate "DData" ((fa "dataVis" (EVar "VisPublic")) (fa "dataName" (ELit (LString "Pt"))) (fa "dataParams" (EListLit)) (fa "dataCtors" (EListLit (EApp (EApp (EVar "Variant") (ELit (LString "Pt"))) (EApp (EApp (EVar "ConNamed") (EListLit (EApp (EApp (EVar "Field") (ELit (LString "x"))) (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))))) (EVar "False"))))) (fa "dataDerives" (EListLit)) (fa "dataOrigin" (EApp (EVar "OriginModule") (ELit (LString "m")))))))
 (DTypeSig false "deFieldOwnerFixtureB" (TyCon "Decl"))
 (DFunDef false "deFieldOwnerFixtureB" () (ERecordCreate "DData" ((fa "dataVis" (EVar "VisPublic")) (fa "dataName" (ELit (LString "Vec"))) (fa "dataParams" (EListLit)) (fa "dataCtors" (EListLit (EApp (EApp (EVar "Variant") (ELit (LString "Vec"))) (EApp (EApp (EVar "ConNamed") (EListLit (EApp (EApp (EVar "Field") (ELit (LString "x"))) (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))))) (EVar "False"))))) (fa "dataDerives" (EListLit)) (fa "dataOrigin" (EApp (EVar "OriginModule") (ELit (LString "n")))))))
+(DTypeSig false "deFieldOwnerFixtureC" (TyCon "Decl"))
+(DFunDef false "deFieldOwnerFixtureC" () (ERecordCreate "DData" ((fa "dataVis" (EVar "VisPublic")) (fa "dataName" (ELit (LString "Pt"))) (fa "dataParams" (EListLit)) (fa "dataCtors" (EListLit (EApp (EApp (EVar "Variant") (ELit (LString "Pt"))) (EApp (EApp (EVar "ConNamed") (EListLit (EApp (EApp (EVar "Field") (ELit (LString "x"))) (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))))) (EVar "False"))))) (fa "dataDerives" (EListLit)) (fa "dataOrigin" (EApp (EVar "OriginModule") (ELit (LString "n")))))))
 (DTypeSig false "deFieldOwnerCollisionEnv" (TyCon "DataEnv"))
 (DFunDef false "deFieldOwnerCollisionEnv" () (EApp (EVar "buildDataEnv") (EListLit (EVar "deFieldOwnerFixtureA") (EVar "deFieldOwnerFixtureB"))))
 (DTypeSig false "deFieldOwnerSingleEnv" (TyCon "DataEnv"))
 (DFunDef false "deFieldOwnerSingleEnv" () (EApp (EVar "buildDataEnv") (EListLit (EVar "deFieldOwnerFixtureA"))))
+(DTypeSig false "deFieldOwnerSameNameEnv" (TyCon "DataEnv"))
+(DFunDef false "deFieldOwnerSameNameEnv" () (EApp (EVar "buildDataEnv") (EListLit (EVar "deFieldOwnerFixtureA") (EVar "deFieldOwnerFixtureC"))))
+(DTypeSig false "distinctIdentsIn2" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String"))) (TyCon "Bool")))
+(DFunDef false "distinctIdentsIn2" ((PList (PTuple (PVar "i1") PWild) (PTuple (PVar "i2") PWild))) (EBinOp "!=" (EVar "i1") (EVar "i2")))
+(DFunDef false "distinctIdentsIn2" (PWild) (EVar "False"))
 (DData Private "DriverState" () ((variant "DriverState" (ConNamed (field "effectDomains" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Param"))))) (field "graphMethodExportsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ident")))))) (field "graphIfaceMethodsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))) (field "graphCtorExportsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Ident")))))) (field "declEnvsRef" (TyApp (TyCon "Ref") (TyCon "DeclEnvs"))) (field "abstractRecordTypesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "argDispatchIdxRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))))) (field "dictEligibleRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "dictEligibleSetRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (field "mangledShadowMapRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))) (field "userIfaceNamesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "coherenceUserDecls" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Decl")))) (field "superDeclsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Decl")))) (field "standaloneValuesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "methodDispatchIdxRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))))) (field "matchOracle" (TyApp (TyCon "Ref") (TyCon "Oracle"))) (field "matchWarnings" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "TcDiag")))) (field "promotionHarvestRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "mainSchemeRef" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "Scheme")))) (field "sigNameSetRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (field "sigTyMapRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Ty")))) (field "implInferEnabled" (TyApp (TyCon "Ref") (TyCon "Bool")))))) ())
 (DTypeSig false "freshDriverState" (TyFun (TyCon "Unit") (TyCon "DriverState")))
 (DFunDef false "freshDriverState" (PWild) (ERecordCreate "DriverState" ((fa "effectDomains" (EApp (EVar "Ref") (EListLit))) (fa "graphMethodExportsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "graphIfaceMethodsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "graphCtorExportsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "declEnvsRef" (EApp (EVar "Ref") (EVar "emptyDeclEnvs"))) (fa "abstractRecordTypesRef" (EApp (EVar "Ref") (EListLit))) (fa "argDispatchIdxRef" (EApp (EVar "Ref") (EListLit))) (fa "dictEligibleRef" (EApp (EVar "Ref") (EListLit))) (fa "dictEligibleSetRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "mangledShadowMapRef" (EApp (EVar "Ref") (EListLit))) (fa "userIfaceNamesRef" (EApp (EVar "Ref") (EListLit))) (fa "coherenceUserDecls" (EApp (EVar "Ref") (EListLit))) (fa "superDeclsRef" (EApp (EVar "Ref") (EListLit))) (fa "standaloneValuesRef" (EApp (EVar "Ref") (EListLit))) (fa "methodDispatchIdxRef" (EApp (EVar "Ref") (EListLit))) (fa "matchOracle" (EApp (EVar "Ref") (EApp (EVar "buildOracle") (EListLit)))) (fa "matchWarnings" (EApp (EVar "Ref") (EListLit))) (fa "promotionHarvestRef" (EApp (EVar "Ref") (EListLit))) (fa "mainSchemeRef" (EApp (EVar "Ref") (EVar "None"))) (fa "sigNameSetRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "sigTyMapRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "implInferEnabled" (EApp (EVar "Ref") (EVar "False"))))))

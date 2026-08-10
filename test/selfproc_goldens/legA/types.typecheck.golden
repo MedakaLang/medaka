@@ -377,6 +377,8 @@ deAliasMethodMember : List String -> UseMember -> UseMember
 deFieldOwnerCollisionEnv : DataEnv
 deFieldOwnerFixtureA : Decl
 deFieldOwnerFixtureB : Decl
+deFieldOwnerFixtureC : Decl
+deFieldOwnerSameNameEnv : DataEnv
 deFieldOwnerSingleEnv : DataEnv
 declBodyVars : String -> List Decl -> List String
 declBodyVarsOf : String -> Decl -> List String
@@ -464,6 +466,7 @@ discoverPromotedModules : List Decl -> List Decl -> List (String, List Decl) -> 
 dispHeadTab : HeadKey -> TabKey
 dispatchMonosOf : List String -> Ty -> Mono -> List Mono
 dispatchTyparams : List String -> List String
+distinctIdentsIn2 : List (Ident, String) -> Bool
 djoin : Param -> Param -> Param
 djoinN : Param -> Param -> Param
 doRequiresMonadMsg : String
