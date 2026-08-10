@@ -1344,7 +1344,7 @@ jobs:
   # ── T25: the WasmGC backend gates ─────────────────────────────────────────────
   #
   # The WasmGC backend is one of Medaka's TWO production backends and the engine the
-  # PLAYGROUND (the 0.1.0 front door) runs on — yet until this job its five gates ran
+  # PLAYGROUND (the 0.1.0 front door) runs on — yet until this job its Wasm gates ran
   # in NO CI job at all. A stock ubuntu-latest runner has neither wasm-tools nor a
   # WasmGC-capable node>=22, and the gates SKIP (exit 2) when the toolchain is absent,
   # so nothing was watching. That is exactly how two silent wasm miscompiles (a `round`
@@ -1352,7 +1352,7 @@ jobs:
   # ledger these five rows lived in until T25.
   #
   # ── ONE job, not six more gate shards, ON PURPOSE ────────────────────────────────
-  # Only these five gates need wasm-tools + a WasmGC node. Adding that toolchain to
+  # Only these gates need wasm-tools + a WasmGC node. Adding that toolchain to
   # every `gates` shard would tax all six for a tool one job needs — the reasoning
   # CI-COVERAGE-EXCEPTIONS.txt already spelled out for build_wasm_cmd.
   #
@@ -1454,7 +1454,7 @@ jobs:
         run: make medaka
 
       # The three WasmGC emitter oracle binaries (wasm_emit_main / _typed_ / _modules_)
-      # that the five gates drive. Cheap; deliberately NOT cached (they are a pure
+      # that these gates drive. Cheap; deliberately NOT cached (they are a pure
       # function of the whole compiler graph, which the medaka cache above already keys).
       - name: Build the wasm emitter oracles
         if: needs.detect.outputs.docs_only != 'true'
@@ -1462,7 +1462,7 @@ jobs:
           export MEDAKA_EMITTER="$PWD/medaka_emitter"
           sh test/wasm/build_wasm_oracle.sh
 
-      # The six gates, each invoked by its LITERAL repo-relative path — that literal is
+      # The gates, each invoked by its LITERAL repo-relative path — that literal is
       # what makes diff_compiler_ci_shard_coverage.sh classify them "covered" (see the
       # COVERAGE note above). Run DIRECTLY, not via run_gates.sh: a direct exit 2 (a
       # toolchain skip) then FAILS the job instead of being reclassified as a skip — and
@@ -1477,6 +1477,7 @@ jobs:
           rc=0
           bash test/wasm/diff_wasm.sh          || rc=1
           bash test/wasm/diff_wasm_typed.sh    || rc=1
+          bash test/wasm/diff_playground_input.sh || rc=1
           bash test/wasm/diff_wasm_modules.sh  || rc=1
           bash test/wasm/diff_sqlite.sh        || rc=1
           bash test/wasm/diff_gzip.sh          || rc=1

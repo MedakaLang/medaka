@@ -149,17 +149,21 @@ The two shipping Wasm compiler entries already install different subsets:
 |---|---|---|---|
 | `installMethodIface` | yes | yes | shared method/interface and arity table |
 | `installDeclRetTypes` | yes | yes | declared return-type facts |
-| `installCtorFloatFields` | yes | **absent** | Float field facts |
+| `installCtorFloatFields` | yes | yes | Float field facts |
 | `installMainIsFloatHint` | yes | yes | auto-print classification |
 
 The Wasm entry explicitly omits LLVM-only tables. This is legitimate where the
 fact is physical, but several omitted or parallel facts are semantic. The
 product behavior therefore depends on which entry happened to call which hook;
 closed #587 demonstrated that a probe entry without the product hook set can
-give a false architecture result. Here the shipping browser compiler itself
-omits `installCtorFloatFields`, which feeds `cexprIsFloat` field access and
-constructor-pattern Float binder seeding. The input-set divergence is established
-from source; whether a playground program observes it has not been reproduced.
+give a false architecture result. The shipping browser compiler formerly omitted
+`installCtorFloatFields`, which feeds `cexprIsFloat` field access and
+constructor-pattern Float binder seeding. That omission was observed as P1
+(record-field Float unary negation) and P2 (constructor-pattern Float unary
+negation): both produced parse-valid WAT that trapped on an illegal cast. The
+focused repair installs `ctorFieldTypeNames allDecls` immediately after declared
+return types in `playground_main.runEmit`; the ambient input-set parity problem
+remains open.
 
 ### 3.3 Per-program derived indexes
 
