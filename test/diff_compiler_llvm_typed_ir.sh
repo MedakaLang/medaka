@@ -62,6 +62,7 @@ set -u
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 EMITBIN="$ROOT/test/bin/llvm_emit_typed_main"
+EMITTER="$ROOT/compiler/backend/llvm_emit.mdk"
 RUNTIME="$ROOT/stdlib/runtime.mdk"
 FIXDIR="$ROOT/test/llvm_fixtures_typed"
 RT="$ROOT/runtime/medaka_rt.c"
@@ -94,6 +95,16 @@ if [ "${1:-}" = "--one" ]; then
   printf '%s\n' "$msg"
   exit 0
 fi
+
+# X-N.H2 structural ratchet: every mutable physical cell belongs to `Emit`, whose
+# fields are indented. A top-level Ref declaration reintroduces process-global
+# emission state and must fail before an output golden can normalize it away.
+if LC_ALL=C grep -En '^(export[[:space:]]+)?[[:alnum:]_]+[[:space:]]*:[[:space:]]*Ref([[:space:](]|$)' "$EMITTER" \
+  || LC_ALL=C grep -En '^[[:alnum:]_]+[[:space:]]*=[[:space:]]*Ref([[:space:](]|$)' "$EMITTER"; then
+  echo 'FAIL: compiler/backend/llvm_emit.mdk declares module-level Ref state; move it into Emit'
+  exit 1
+fi
+printf 'checked LLVM physical-state ownership (no module-level Ref declarations)\n'
 
 [ -x "$EMITBIN" ] || { echo "build oracles first: FORCE=1 JOBS=1 sh test/build_oracles.sh --build-one $(basename "$EMITBIN") (missing $EMITBIN)"; exit 2; }
 
@@ -169,7 +180,7 @@ else
     exit 1
   fi
   isolation_verdict="$(cat "$ISO/isolation.ll")"
-  [ "$isolation_verdict" = "EMIT_INPUT_ISOLATION_OK" ] || {
+  [ "$isolation_verdict" = "LLVM_EMIT_ISOLATION_OK" ] || {
     printf 'FAIL: same-process EmitInput isolation verdict was %s\n' "$isolation_verdict"
     exit 1
   }
@@ -182,7 +193,7 @@ else
     printf 'FAIL: isolation control expected P=7 P+U=11; got P=%s P+U=%s\n' "$p_out" "$positive_out"
     exit 1
   }
-  printf 'checked same-process EmitInput isolation (P -> P+U -> P; distinct IR; P=7, P+U=11)\n'
+  printf 'checked same-process LLVM emission isolation (P -> P+U -> P; distinct IR; P=7, P+U=11)\n'
   "$EMITBIN" --gap-isolation > "$ISO/gap-isolation.out" 2> "$ISO/gap-isolation.err"
   gap_rc=$?
   [ "$gap_rc" -ne 0 ] || {

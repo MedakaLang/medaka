@@ -33,7 +33,7 @@ to it, in gate-verified steps (DAG in #362).
 | Family | Members |
 |---|---|
 | Type recovery ×2 | `typeOf`/`callRetTy`/`paramUseTy`/`inferSigs` (pure twin) ∥ every `emitExpr` arm's inline `(String, LTy)` recovery (#353 — the file admits the twinning at the `typeOf` header) |
-| Float-ness heuristics ×5 | `staticIsFloat` · two-pass `inferSigs` (mutates `sigs`!) · `bodyFloatRet`/`closureRetTyRef` · the `RScalar` stamp (the done-right model) · `mainTypeIsFloat` auto-print hint (#353) |
+| Float-ness heuristics ×5 | `staticIsFloat` · two-pass `inferSigs` (mutates `sigs`!) · `bodyFloatRet`/`closureRetTy` · the `RScalar` stamp (the done-right model) · `mainTypeIsFloat` auto-print hint (#353) |
 | Cell allocators ×6 | `emitCtorAlloc` ∥ `emitClosureAlloc` ∥ `emitClosureAllocPatch` ∥ dict cell ∥ atomic Float box ∥ TRMC cons cell (#356 — `$tuple`/`$ref` were already unified; the rest were not) |
 | Call emission ×16 | `emitApp`/`emitExternApplied`/`emitIndirect`/`emitImplCall*`/`emitOverApp`/`emitApplyAny`/`emitApplyRuntime`/`emitPap*`/`emitDictApp*`/`emitCtorApp`/`emitMethodDispatch*`/`emitTrmcTailCall` |
 | Extern dispatch ladders ×5 | `emitFileExtern`/`emitNumExtern`/`emitNetExtern`/`emitUnicodeExtern`/io+str siblings — the five biggest fns in the file (#358) |
