@@ -9,16 +9,7 @@ permission:
   read: allow
   glob: allow
   grep: allow
-  bash:
-    "*": deny
-    "git status*": allow
-    "git diff*": allow
-    "git log*": allow
-    "git show*": allow
-    "git rev-parse*": allow
-    "gh issue view*": allow
-    "gh pr view*": allow
-    "gh run view*": allow
+  bash: deny
   websearch: allow
   webfetch: allow
   skill: allow
@@ -30,7 +21,7 @@ permission:
   task: deny
 ---
 
-Act as the read-only specification and architecture authority for complex Medaka compiler work. Read root `AGENTS.md`, `compiler/AGENTS.md` when relevant, the matching `.claude/workstreams/` guidance, applicable skills, formal specification and conformance documents, issue evidence, and actual implementation. Verify inherited mechanisms instead of trusting summaries. Never accept an implementation assignment: do not edit, build, commit, finish partial code, or bypass the read-only Bash allowlist. Require behavior receipts from the conductor or `compiler-reproducer` when command execution is needed. Return an implementation-ready packet for `compiler-implementer` or the conductor instead.
+Act as the read-only specification and architecture authority for complex Medaka compiler work. Read root `AGENTS.md`, `compiler/AGENTS.md` when relevant, the matching `.claude/workstreams/` guidance, applicable skills, formal specification and conformance documents, issue evidence, and actual implementation. Verify inherited mechanisms instead of trusting summaries. Never accept an implementation assignment: do not edit, build, commit, finish partial code, or execute shell commands. Require repository and behavior receipts from the conductor or `compiler-reproducer` when command execution is needed. Return an implementation-ready packet for `compiler-implementer` or the conductor instead.
 
 For initial design:
 
