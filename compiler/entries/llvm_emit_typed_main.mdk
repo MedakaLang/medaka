@@ -12,6 +12,8 @@
 -- harness passes ONLY runtime.mdk: elaborateDict resolves every route without
 -- pulling core.mdk's machinery into the emitted module (the spike's scalar subset).
 import frontend.ast.{Decl}
+import frontend.parser.{parse}
+import frontend.desugar.{desugar}
 import types.typecheck.{
   elaborateDict,
   constrainedSigNames,
@@ -30,20 +32,34 @@ import ir.core_ir_lower.{
   ctorFieldTypeNames,
   declSigTypeNames,
 }
-import backend.llvm_emit.{
-  emitProgram,
-  installReturnsSelf,
-  installSelfFnParams,
-  installMethodIface,
-  installMethodConstraintIfaces,
-  installCtorFieldTypes,
-  installDeclSigTypes,
-  installMainIsUnitHint,
-  installMainIsFloatHint,
-}
-import entries.entry_support.{driveRuntime}
+import backend.llvm_emit.{emitProgram, EmitInput(..)}
+import entries.entry_support.{driveRuntime, failWith}
 
-main = driveRuntime emit
+main = match args ()
+  ["--isolation", runtimePath, pPath, uPath] =>
+    emitIsolation runtimePath pPath uPath
+  _ => driveRuntime emit
+
+-- P -> U -> P in one interpreter process.  Each call constructs a new EmitInput;
+-- the final P text must equal the first even when U carries unrelated metadata.
+emitIsolation : String -> String -> String -> <IO> Unit
+emitIsolation runtimePath pPath uPath = match readFile runtimePath
+  Err msg => failWith msg
+  Ok runtimeSrc => match readFile pPath
+    Err msg => failWith msg
+    Ok pSrc => match readFile uPath
+      Err msg => failWith msg
+      Ok uSrc =>
+        let runtimeDecls = desugar (parse runtimeSrc)
+        let pDecls = desugar (parse pSrc)
+        let uDecls = desugar (parse uSrc)
+        let p1 = runEmit runtimeDecls [] pDecls
+        let _ = runEmit runtimeDecls [] uDecls
+        let p2 = runEmit runtimeDecls [] pDecls
+        if p1 == p2 then
+          putStr p1
+        else
+          failWith "LLVM EmitInput isolation failure: P changed after same-process U emission"
 
 emit : List Decl -> List Decl -> List Decl -> <IO> Unit
 emit runtimeDecls preludeDecls userDecls =
@@ -55,16 +71,20 @@ runEmit runtimeDecls preludeDecls userDecls =
   let livePrelude = dropShadowedExp userNames preludeDecls
   let combined = livePrelude ++ userDecls
   let dictNames = preludeReturnPosDictNames livePrelude combined ++ preludeArgPosDictNames livePrelude combined ++ constrainedSigNames userDecls
-  let _ = installReturnsSelf (returnsSelfTable combined)
-  let _ = installSelfFnParams (selfFnParamTable combined)
-  let _ = installMethodIface (methodIfaceTable combined)
-  let _ = installMethodConstraintIfaces (methodConstraintIfaces combined)
-  let _ = installCtorFieldTypes (ctorFieldTypeNames combined)
-  let _ = installDeclSigTypes (declSigTypeNames runtimeDecls ++ declSigTypeNames combined)
-  let _ = installMainIsUnitHint (mainTypeIsUnit ())
-  let _ = installMainIsFloatHint (mainTypeIsFloat ())
-  emitProgram (lowerProgramEmit (elaborateDict
-    runtimeDecls
-    dictNames
-    userNames
-    combined))
+  let input = EmitInput {
+    returnsSelf = returnsSelfTable combined,
+    selfFnParams = selfFnParamTable combined,
+    methodIfaces = methodIfaceTable combined,
+    methodConstraintIfaces = methodConstraintIfaces combined,
+    ctorFieldTypes = ctorFieldTypeNames combined,
+    declSigTypes = declSigTypeNames runtimeDecls ++ declSigTypeNames combined,
+    mainIsUnit = mainTypeIsUnit (),
+    mainIsFloat = mainTypeIsFloat (),
+    emitHalf = 0,
+    preludeBinds = [],
+    preludeImpls = [],
+    srcName = "",
+  }
+  emitProgram
+    input
+    (lowerProgramEmit (elaborateDict runtimeDecls dictNames userNames combined))

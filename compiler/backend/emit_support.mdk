@@ -481,6 +481,13 @@ methodIfaceOf method = match methodIfaceIndexRef.value
     Some (iface, _) => iface
     None => ""
 
+-- Pure lookup for emitters that carry their method metadata explicitly.  The
+-- Ref-backed wrappers above remain for Wasm during X-W.H.
+export methodIfaceOfIn : List (String, (String, Int)) -> String -> String
+methodIfaceOfIn table method = match lookupAssoc method table
+  Some (iface, _) => iface
+  None => ""
+
 -- the declared full arity of an interface method (0 = not found).
 export methodArityOf : String -> Int
 methodArityOf method = match methodIfaceIndexRef.value
@@ -490,6 +497,11 @@ methodArityOf method = match methodIfaceIndexRef.value
   None => match lookupAssoc method methodIfaceTableRef.value
     Some (_, arity) => arity
     None => 0
+
+export methodArityOfIn : List (String, (String, Int)) -> String -> Int
+methodArityOfIn table method = match lookupAssoc method table
+  Some (_, arity) => arity
+  None => 0
 
 -- ── dict-witness parameter names (shared by BOTH backends) ───────────────────
 -- `$dict_<fn>_<slot>` — a dict witness param that dict_pass/elaborateModules PREPENDS

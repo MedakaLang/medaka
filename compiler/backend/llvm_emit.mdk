@@ -264,10 +264,8 @@ import backend.emit_support.{
   bindEagerReach,
   bindNameMap,
   lazyGlobalNames,
-  methodIfaceTableRef,
-  setMethodIfaceTable,
-  methodIfaceOf,
-  methodArityOf,
+  methodIfaceOfIn,
+  methodArityOfIn,
   isDictParamName,
   ftPrefix,
   ftLabelOf,
@@ -467,9 +465,7 @@ noteGap reason = setRef gapLog ("\{curGapBind.value}\t\{reason}"::gapLog.value)
 
 -- ── method-call RESULT-type inference (native backend) ──────────────────────
 -- The (interface, method) -> returns-self table, computed by core_ir_lower's
--- `returnsSelfTable` and installed once at the start of emitProgram/
--- emitProgramGaps (a module-level Ref, mirroring gapLog — avoids threading a
--- field through every Emit pattern).  A method whose RESULT type mentions the
+-- `returnsSelfTable` and carried in EmitInput.  A method whose RESULT type mentions the
 -- interface/self type variable (`map`/`ap`/`andThen`: f a -> … -> f b) returns
 -- the CONTAINER; the emitter types its RKey-dispatched call result as the impl's
 -- own type (`tagToLTy tag` → LTCon for List), so a downstream `++`/`::` on that
@@ -477,21 +473,11 @@ noteGap reason = setRef gapLog ("\{curGapBind.value}\t\{reason}"::gapLog.value)
 -- closes EMITTER-GAPS #3's last residual (`ap@List` / `andThen@List`, whose `++`
 -- operand is a CALL result like `map f xs` / the recursive `ap fs xs`, not a
 -- param the static E2c typing could reach).
-returnsSelfTableRef : Ref (List ((String, String), Bool))
-returnsSelfTableRef = Ref []
-
--- install the (interface, method) -> returns-self table (from core_ir_lower's
--- `returnsSelfTable <decls>`).  A consumer that emits typeclass methods calls
--- this BEFORE emitProgram/emitProgramGaps; a method/interface-free consumer may
--- skip it (the empty default ⇒ returns-self False ⇒ unchanged behaviour).
-export installReturnsSelf : List ((String, String), Bool) -> Unit
-installReturnsSelf t = setRef returnsSelfTableRef t
-
 -- does interface method (iface, method) return the self/container type?
 -- (False when absent — the conservative default keeps the pre-change behaviour.)
-methodReturnsSelf : String -> String -> Bool
-methodReturnsSelf iface method =
-  lookupReturnsSelf iface method returnsSelfTableRef.value
+methodReturnsSelf : Emit -> String -> String -> Bool
+methodReturnsSelf e iface method =
+  lookupReturnsSelf iface method e.input.returnsSelf
 
 lookupReturnsSelf : String -> String -> List ((String, String), Bool) -> Bool
 lookupReturnsSelf _ _ [] = False
@@ -509,15 +495,9 @@ lookupReturnsSelf iface method (((i, m), b)::rest)
 -- APPLICATION of such a param (`f x`) as `tagToLTy curImplTagRef` instead of the
 -- LTInt indirect-call default.  This closes `andThen@List`, whose `++` LEFT
 -- operand `f x` is an indirect call the method-call inference can't reach.
-selfFnParamTableRef : Ref (List ((String, String), List Int))
-selfFnParamTableRef = Ref []
-
-export installSelfFnParams : List ((String, String), List Int) -> Unit
-installSelfFnParams t = setRef selfFnParamTableRef t
-
-selfFnParamPositions : String -> String -> List Int
-selfFnParamPositions iface method =
-  lookupSelfFnParams iface method selfFnParamTableRef.value
+selfFnParamPositions : Emit -> String -> String -> List Int
+selfFnParamPositions e iface method =
+  lookupSelfFnParams iface method e.input.selfFnParams
 
 lookupSelfFnParams : String -> String -> List ((String, String), List Int) -> List Int
 lookupSelfFnParams _ _ [] = []
@@ -540,12 +520,6 @@ lookupSelfFnParams iface method (((i, m), p)::rest)
 --     dispatch tag, so a partially-applied inner method lowers to a direct
 --     `@mdk_impl_<tag>_<method>` call instead of an un-dispatchable arg-tag site.
 -- Keyed by BARE method name (interface method names are distinct in the prelude).
--- The table Ref + the `methodIfaceOf`/`methodArityOf` readers live in
--- `backend.emit_support` (shared with the WasmGC emitter); `installMethodIface`
--- stays here as the LLVM-side install entry point the emit drivers import.
-export installMethodIface : List (String, (String, Int)) -> Unit
-installMethodIface t = setMethodIfaceTable t
-
 -- ── method → method-level constraint INTERFACE names (native backend, G7) ────
 -- Per interface method that carries a method-level `=>` constraint, the interface
 -- names of those constraints IN SLOT ORDER (the order typecheck fills the method
@@ -553,15 +527,9 @@ installMethodIface t = setMethodIfaceTable t
 -- cross-interface method in the body (foldMap's `empty`, a Monoid method) to the
 -- threaded method-dict param at its slot, so it dispatches the right impl at run
 -- time without baking a single Monoid tag into the shared default define.
-methodConstraintIfacesRef : Ref (List (String, List String))
-methodConstraintIfacesRef = Ref []
-
-export installMethodConstraintIfaces : List (String, List String) -> Unit
-installMethodConstraintIfaces t = setRef methodConstraintIfacesRef t
-
 -- the method-level constraint interface names for [method], in slot order ([]=none).
-methodConstraintIfacesOf : String -> List String
-methodConstraintIfacesOf method = match lookupAssoc method methodConstraintIfacesRef.value
+methodConstraintIfacesOf : Emit -> String -> List String
+methodConstraintIfacesOf e method = match lookupAssoc method e.input.methodConstraintIfaces
   Some ifaces => ifaces
   None => []
 
@@ -574,9 +542,6 @@ methodConstraintIfacesOf method = match lookupAssoc method methodConstraintIface
 -- SIGSEGV; Gap E2).  Installed before emitProgram/emitProgramGaps (module-level
 -- Ref, mirroring returnsSelfTableRef); empty default ⇒ no field is overridden ⇒
 -- unchanged pre-change behaviour.
-ctorFieldTypesRef : Ref (List (String, List String))
-ctorFieldTypesRef = Ref []
-
 -- #352: the table above has ONE ENTRY PER CONSTRUCTOR in the program, and
 -- `ctorFieldTypeNamesOf` is called from `bindPattern` for EVERY constructor pattern
 -- the emitter binds — so the `lookupAssoc` scan was O(patterns × ctors) = O(N²).
@@ -587,23 +552,11 @@ ctorFieldTypesRef = Ref []
 -- `reverseL` makes the FIRST list entry win on a duplicate ctor name, matching the
 -- `lookupAssoc` first-match it replaces. Uninstalled (None) it falls back to the
 -- linear scan — identical answer either way, so the emitted IR is byte-identical.
-ctorFieldTypeMapRef : Ref (Option (OrdMap (List String)))
-ctorFieldTypeMapRef = Ref None
-
-export installCtorFieldTypes : List (String, List String) -> Unit
-installCtorFieldTypes t =
-  let _ = setRef ctorFieldTypesRef t
-  setRef ctorFieldTypeMapRef (Some (omFromPairs (reverseL t) omEmpty))
-
 -- the declared field type-head names of a constructor, or [] if unknown.
-ctorFieldTypeNamesOf : String -> List String
-ctorFieldTypeNamesOf con = match ctorFieldTypeMapRef.value
-  Some m => match omLookup con m
-    Some names => names
-    None => []
-  None => match lookupAssoc con ctorFieldTypesRef.value
-    Some names => names
-    None => []
+ctorFieldTypeNamesOf : Emit -> String -> List String
+ctorFieldTypeNamesOf e con = match omLookup con e.ctorFieldTypes
+  Some names => names
+  None => []
 
 -- map a declared field type-head NAME to a definite scalar LTy, or None when it
 -- is not a known scalar (polymorphic / pointer-typed / "" unknown) — None ⇒ the
@@ -629,9 +582,6 @@ fieldNameToLTy _ = None
 -- ctorFieldTypesRef); empty default ⇒ no fn is seeded ⇒ unchanged pre-change
 -- behaviour.  ADDITIVE: only known-scalar declared params/returns override; an
 -- unannotated fn / non-scalar declared type falls through to the existing guess.
-declSigTypesRef : Ref (List (String, (List String, String)))
-declSigTypesRef = Ref []
-
 -- Index over `declSigTypesRef`, built at the single install point below so it can
 -- never go stale. `reverseL` makes the FIRST list entry win on a duplicate key,
 -- matching the `lookupAssoc` first-match it replaces (the table is
@@ -639,21 +589,11 @@ declSigTypesRef = Ref []
 -- preserving that order is load-bearing). The table is set once per emit run and
 -- GROWS with the program (one entry per annotated fn), and `declSigOf` is called
 -- once per binding per inference pass, so the old scan was quadratic.
-declSigMapRef : Ref (Option (OrdMap (List String, String)))
-declSigMapRef = Ref None
-
-export installDeclSigTypes : List (String, (List String, String)) -> Unit
-installDeclSigTypes t =
-  let _ = setRef declSigTypesRef t
-  setRef declSigMapRef (Some (omFromPairs (reverseL t) omEmpty))
-
 -- the declared (param-type-head-names, return-type-head-name) of a function, or
 -- None when it has no annotation.  Falls back to the linear scan only when the
 -- index is uninstalled (mirrors `sigLookup`).
-declSigOf : String -> Option (List String, String)
-declSigOf name = match declSigMapRef.value
-  Some m => omLookup name m
-  None => lookupAssoc name declSigTypesRef.value
+declSigOf : Emit -> String -> Option (List String, String)
+declSigOf e name = omLookup name e.declSigTypes
 
 nthName : List String -> Int -> Option String
 nthName (x::_) 0 = Some x
@@ -826,8 +766,44 @@ data LTy =
 -- so any function body may reference any global.  MULTI-MODULE init (each module's
 -- globals initialised in cross-module dependency order) is a D4 concern — NOT built
 -- here; this is the single-program (`@main` + prologue) milestone.
+-- All declaration-derived semantic facts required by LLVM emission.  Callers
+-- construct this immutable value for each program; LLVM never reads installed
+-- semantic state from a previous emission.
+public export data EmitInput =
+  | EmitInput {
+      returnsSelf : List ((String, String), Bool),
+      selfFnParams : List ((String, String), List Int),
+      methodIfaces : List (String, (String, Int)),
+      methodConstraintIfaces : List (String, List String),
+      ctorFieldTypes : List (String, List String),
+      declSigTypes : List (String, (List String, String)),
+      mainIsUnit : Bool,
+      mainIsFloat : Bool,
+      emitHalf : Int,
+      preludeBinds : List String,
+      preludeImpls : List (String, String),
+      srcName : String,
+    }
+
+export emptyEmitInput : EmitInput
+emptyEmitInput = EmitInput {
+  returnsSelf = [],
+  selfFnParams = [],
+  methodIfaces = [],
+  methodConstraintIfaces = [],
+  ctorFieldTypes = [],
+  declSigTypes = [],
+  mainIsUnit = False,
+  mainIsFloat = False,
+  emitHalf = emitHalfWhole,
+  preludeBinds = [],
+  preludeImpls = [],
+  srcName = "",
+}
+
 data Emit =
   | Emit {
+      input : EmitInput,
       counter : Ref Int,
       buf : Ref (List String),
       fnNames : Ref (List String),
@@ -838,6 +814,8 @@ data Emit =
       implEntries : Ref (List CImplEntry),
       ctorTypes : Ref (List (String, String)),
       globalsReg : Ref (List (String, (Bool, LTy))),
+      ctorFieldTypes : OrdMap (List String),
+      declSigTypes : OrdMap (List String, String),
     }
 
 -- a function's inferred signature: its parameter types (in order) and its return
@@ -3406,7 +3384,7 @@ isFloatFieldLabel : Emit -> String -> String -> Bool
 isFloatFieldLabel e recName label = match floatFieldRecord e recName label
   Some (name, labels) => match indexOfStr label labels
     Some pos =>
-      let tns = ctorFieldTypeNamesOf name
+      let tns = ctorFieldTypeNamesOf e name
       if pos < listLen tns then nthStr tns pos == "Float" else False
     None => False
   None => False
@@ -4344,8 +4322,8 @@ emitMethod e env name route implRoutes methRoutes argOps
   -- (emitImplCallSat/emitMethodArgDispatch → emitPapClosure); this is the missing
   -- RDict/RDictFwd analogue.  The PAP captures the route's dict word(s) + the
   -- supplied args; its forwarder rebinds them and re-emits the saturated dispatch.
-  | dictRoutedUnderApplied route name argOps =
-      emitMethodPap e env name route implRoutes methRoutes argOps (methodArityOf name)
+  | dictRoutedUnderApplied e route name argOps =
+      emitMethodPap e env name route implRoutes methRoutes argOps (methodArityOfIn e.input.methodIfaces name)
 emitMethod e env name (RKey tag _) implRoutes methRoutes argOps = match implFor e name tag
   Some entry =>
     let dictWords = dictWordsOf e env (methRoutes ++ implRoutes)
@@ -4354,12 +4332,12 @@ emitMethod e env name (RKey tag _) implRoutes methRoutes argOps = match implFor 
     -- entry's REAL head tag; the lifted-fn symbol uses implFnSymOf (head when
     -- unique, sanitized key on collision) so it matches emitGroup's name.
     let headTag = implEntryTag entry
-    let resTy = if methodReturnsSelf (implEntryIface entry) name then tagToLTy headTag else LTInt
+    let resTy = if methodReturnsSelf e (implEntryIface entry) name then tagToLTy headTag else LTInt
     emitImplCallSat
       e
       (implFnName (implFnSymE e name entry) name)
       (dictWords ++ argOps)
-      (methodArityOf name + lengthS dictWords)
+      (methodArityOfIn e.input.methodIfaces name + lengthS dictWords)
       resTy
   None => emitGeneralRKey e env name tag methRoutes implRoutes argOps
 emitMethod e env name (RDict d) implRoutes methRoutes argOps =
@@ -4461,8 +4439,8 @@ methValArity : Emit -> String -> Route -> Int
 methValArity e name (RLocal sym dicts) =
   let target = if sym == "" then name else sym
   let a = fnArity e target - listLen dicts
-  if a <= 0 then methodArityOf name else a
-methValArity _ name _ = methodArityOf name
+  if a <= 0 then methodArityOfIn e.input.methodIfaces name else a
+methValArity e name _ = methodArityOfIn e.input.methodIfaces name
 
 -- the dict-witness param name(s) a route reads at runtime (the names whose words the
 -- value-closure must capture so the lifted body can rebind them).  Only RDict/
@@ -4558,12 +4536,12 @@ emitDictValDefine e lamName name nDicts valArity =
 -- arity known, fewer real args than that, and the route reads a forwarded dict
 -- param.  (RKey/RNone routes PAP through their own emitImplCallSat/arg-dispatch
 -- paths, so they are excluded here and keep their existing lowering.)
-dictRoutedUnderApplied : Route -> String -> List String -> Bool
-dictRoutedUnderApplied (RDict _) name argOps =
-  lengthS argOps < methodArityOf name
-dictRoutedUnderApplied (RDictFwd _) name argOps =
-  lengthS argOps < methodArityOf name
-dictRoutedUnderApplied _ _ _ = False
+dictRoutedUnderApplied : Emit -> Route -> String -> List String -> Bool
+dictRoutedUnderApplied e (RDict _) name argOps =
+  lengthS argOps < methodArityOfIn e.input.methodIfaces name
+dictRoutedUnderApplied e (RDictFwd _) name argOps =
+  lengthS argOps < methodArityOfIn e.input.methodIfaces name
+dictRoutedUnderApplied _ _ _ _ = False
 
 -- E22: build the residual PAP closure for an under-applied dict-routed method.
 -- Captures the route's dict word(s) (so the runtime impl switch still reads the
@@ -4637,7 +4615,7 @@ emitDefaultRKey e env name tag methRoutes implRoutes argOps = match defaultForAt
     let fname = defaultFnName tag name
     let _ = ensureDefaultEmitted e fname tag name entry
     let dictWords = dictWordsOf e env (methRoutes ++ implRoutes)
-    let resTy = if methodReturnsSelf (methodIfaceOf name) name then
+    let resTy = if methodReturnsSelf e (methodIfaceOfIn e.input.methodIfaces name) name then
       tagToLTy tag
     else
       LTInt
@@ -4662,7 +4640,7 @@ emitGeneralRKey e env name tag methRoutes implRoutes argOps = match findByTag no
   Some entry =>
     let dictWords = dictWordsOf e env (methRoutes ++ implRoutes)
     let headTag = implEntryTag entry
-    let resTy = if methodReturnsSelf (implEntryIface entry) name then
+    let resTy = if methodReturnsSelf e (implEntryIface entry) name then
       tagToLTy headTag
     else
       LTInt
@@ -4670,7 +4648,7 @@ emitGeneralRKey e env name tag methRoutes implRoutes argOps = match findByTag no
       e
       (implFnName (implFnSymE e name entry) name)
       (dictWords ++ argOps)
-      (methodArityOf name + lengthS dictWords)
+      (methodArityOfIn e.input.methodIfaces name + lengthS dictWords)
       resTy
   None => emitDefaultRKey e env name tag methRoutes implRoutes argOps
 -- Native Gap C (parametric default-method dict-synthesis, 2026-06-12): a
@@ -4943,7 +4921,7 @@ soleImplDirect e name = match implsOf e name
 defaultReachesOtherTags : Emit -> String -> CImplEntry -> Bool
 defaultReachesOtherTags e name ent = match defaultFor e name
   None => False
-  Some _ => isNonEmptyL (tagsMinus (ifaceTags e (methodIfaceOf name)) (implEntryTags e [ent]))
+  Some _ => isNonEmptyL (tagsMinus (ifaceTags e (methodIfaceOfIn e.input.methodIfaces name)) (implEntryTags e [ent]))
 
 -- The SITE-level form of the same test.  In prelude-object mode a dict-routed
 -- site must NOT bake an impl decision into its enclosing define, because that
@@ -4962,7 +4940,7 @@ defaultReachesOtherTags e name ent = match defaultFor e name
 -- stays byte-for-byte what it was.
 soleImplDirectSite : Emit -> String -> Option CImplEntry
 soleImplDirectSite e name =
-  if emitHalfRef.value == emitHalfWhole then
+  if e.input.emitHalf == emitHalfWhole then
     soleImplDirect e name
   else
     None
@@ -5015,12 +4993,6 @@ emitHalfPrelude = 1
 emitHalfProgram : Int
 emitHalfProgram = 2
 
-emitHalfRef : Ref Int
-emitHalfRef = Ref emitHalfWhole
-
-export installEmitHalf : Int -> Unit
-installEmitHalf n = setRef emitHalfRef n
-
 -- The gensym-id base for the PROGRAM half.  `freshId` (the module-global counter)
 -- names every LIFTED define — `@mdk_lamN`, `@mdk_eta*_N`, `@mdk_pap_*_N` — and
 -- those have external linkage, so if the two halves drew from the same range they
@@ -5035,7 +5007,7 @@ programHalfIdBase = 1000000
 
 preludeIdSpaceGuard : Emit -> Unit
 preludeIdSpaceGuard e =
-  if emitHalfRef.value == emitHalfPrelude && e.counter.value >= programHalfIdBase then
+  if e.input.emitHalf == emitHalfPrelude && e.counter.value >= programHalfIdBase then
     panic "prelude-object emit exhausted its gensym id space (\{intToString e.counter.value} >= \{intToString programHalfIdBase}) — raise programHalfIdBase in llvm_emit.mdk"
   else
     ()
@@ -5044,26 +5016,15 @@ preludeIdSpaceGuard e =
 -- (mode 2 only — in mode 1 every decl in the program IS the prelude).  Derived by
 -- lowering core.mdk's decls on their own, so the classification comes from where a
 -- decl was DEFINED, not from guessing at its emitted name.
-preludeBindsRef : Ref (List String)
-preludeBindsRef = Ref []
-
-preludeImplsRef : Ref (List (String, String))
-preludeImplsRef = Ref []
-
-export installPreludeSyms : List String -> List (String, String) -> Unit
-installPreludeSyms binds impls =
-  let _ = setRef preludeBindsRef binds
-  setRef preludeImplsRef impls
-
 -- Is this top-level bind / impl group one whose define lives in `prelude.o`?
 -- Only ever True in mode 2.
-hiddenBind : String -> Bool
-hiddenBind name = emitHalfRef.value == emitHalfProgram
-  && contains name preludeBindsRef.value
+hiddenBind : Emit -> String -> Bool
+hiddenBind e name = e.input.emitHalf == emitHalfProgram
+  && contains name e.input.preludeBinds
 
-hiddenImplGroup : ImplGroup -> Bool
-hiddenImplGroup (ImplGroup method tag _ _ _ _) = emitHalfRef.value == emitHalfProgram
-  && hasImplKey method tag preludeImplsRef.value
+hiddenImplGroup : Emit -> ImplGroup -> Bool
+hiddenImplGroup e (ImplGroup method tag _ _ _ _) = e.input.emitHalf == emitHalfProgram
+  && hasImplKey method tag e.input.preludeImpls
 
 hasImplKey : String -> String -> List (String, String) -> Bool
 hasImplKey _ _ [] = False
@@ -5180,7 +5141,7 @@ ensureDispatcherEmitted e fname name nmw nargs =
     -- re-walks the prelude's own bodies (emitAsDeclares), so it reaches this exact
     -- (name, nmw, nargs) site and DEFINES every dispatcher the prelude declares: the
     -- demand set is derived, never encoded, and a mismatch is a LOUD undefined symbol.
-    if emitHalfRef.value == emitHalfPrelude then
+    if e.input.emitHalf == emitHalfPrelude then
       emitGlobal e "declare i64 @\{fname}(\{dispParamDecls nmw nargs})"
     else
       emitDispatcherDefine e fname name nmw nargs
@@ -5248,14 +5209,14 @@ emitDispatchBody e name dictPtr methWords argOps =
   let endL = "dispend" ++ intToString (freshLocal e)
   let _ = match impls
     [] => match defaultFor e name
-      Some entry => emitDefaultDispatchChain e dictPtr headTag (ifaceTags e (methodIfaceOf name)) name entry argOps slot endL
+      Some entry => emitDefaultDispatchChain e dictPtr headTag (ifaceTags e (methodIfaceOfIn e.input.methodIfaces name)) name entry argOps slot endL
       None => emitDispatchChain e dictPtr headTag impls name methWords argOps slot endL
     _ => match defaultFor e name
       -- MIXED default+impls: append default-synthesis arms for interface tags with no
       -- explicit impl (derived-Ord ADTs inheriting `max`/`min` from the default).
       Some entry =>
         let covered = implEntryTags e impls
-        let uncovered = tagsMinus (ifaceTags e (methodIfaceOf name)) covered
+        let uncovered = tagsMinus (ifaceTags e (methodIfaceOfIn e.input.methodIfaces name)) covered
         match uncovered
           [] => emitDispatchChain e dictPtr headTag impls name methWords argOps slot endL
           _ => emitDispatchChainDefaulted e dictPtr headTag impls uncovered name entry methWords argOps slot endL
@@ -5368,7 +5329,8 @@ emitDefaultDispatchChain e dictPtr headTag (tag::rest) name entry argOps slot en
 -- equals the number of per-instance `requires` dicts stored in the boxed dict cell
 -- (fields 1..count), so the chain loads exactly that many and prepends them.
 implReqCount : Emit -> String -> CImplEntry -> Int
-implReqCount e name ent = listLen (implPats ent) - methodArityOf name
+implReqCount e name ent =
+  listLen (implPats ent) - methodArityOfIn e.input.methodIfaces name
 
 -- load `n` nested dict words from the boxed dict cell `dictPtr`.  The head tag is
 -- the cell header (offset 0); the nested req dicts are fields 0..n-1 (loadField i ⇒
@@ -5610,7 +5572,7 @@ emitMethodArgDispatch e method argOps =
   let groups = implGroupsForMethod e method
   match groups
     [] => emitDefaultArgTag e method argOps
-    [g] => emitImplCallSat e (implFnName (groupSymTag g) method) argOps (methodArityOf method) LTInt
+    [g] => emitImplCallSat e (implFnName (groupSymTag g) method) argOps (methodArityOfIn e.input.methodIfaces method) LTInt
     _ => emitArgTagDispatch e method groups argOps
 
 -- E19: an arg-tag site for a method with NO tagged impl groups — an interface
@@ -5686,7 +5648,7 @@ emitTagMatch e tagReg (c::rest) =
 -- the impl groups of one method, in program order.
 implGroupsForMethod : Emit -> String -> List ImplGroup
 implGroupsForMethod e method =
-  filterGroupsByMethod method (groupImpls (implEntriesOf e))
+  filterGroupsByMethod method (groupImpls e (implEntriesOf e))
 
 filterGroupsByMethod : String -> List ImplGroup -> List ImplGroup
 filterGroupsByMethod _ [] = []
@@ -5877,13 +5839,13 @@ data ImplGroup =
   | ImplGroup String String String (List Int) Int (List (List Pat, CExpr))
 
 emitImpls : Emit -> List CImplEntry -> Unit
-emitImpls e entries = emitGroups e (groupImpls entries)
+emitImpls e entries = emitGroups e (groupImpls e entries)
 
 emitGroups : Emit -> List ImplGroup -> Unit
 emitGroups _ [] = ()
 emitGroups e (g::rest) =
   -- PROGRAM half (issue #118): same treatment as a prelude fn bind — see emitFns.
-  let _ = if hiddenImplGroup g then
+  let _ = if hiddenImplGroup e g then
     emitAsDeclares e (_ => emitGroup e g)
   else
     emitGroup e g
@@ -5893,7 +5855,7 @@ emitGroup : Emit -> ImplGroup -> Unit
 emitGroup e (ImplGroup method tag symTag positions arity clauses) =
   let fname = implFnName symTag method
   let iface = implGroupIface e method tag
-  let selfFnPos = selfFnParamPositions iface method
+  let selfFnPos = selfFnParamPositions e iface method
   let _ = setCurImplSelfFns tag (selfFnParamNames clauses selfFnPos)
   if trmcImplTry e fname method tag positions arity clauses then
     let _ = clearCurImplSelfFns ()
@@ -5977,9 +5939,9 @@ emitDefaultDefine : Emit -> String -> String -> String -> CImplEntry -> Unit
 emitDefaultDefine e fname tag method entry =
   let pats0 = implPats entry
   let body0 = implBody entry
-  let dictIfaces = methodConstraintIfacesOf method
+  let dictIfaces = methodConstraintIfacesOf e method
   let nDicts = listLen dictIfaces
-  let arity0 = maxInt (nDicts + methodArityOf method) (listLen pats0)
+  let arity0 = maxInt (nDicts + methodArityOfIn e.input.methodIfaces method) (listLen pats0)
   let (pats1, body1) = etaExpand pats0 body0 arity0 (listLen pats0)
   let nReq = innerDefaultReqCount e method tag
   let reqPats = reqDictPats nReq 0
@@ -5990,11 +5952,11 @@ emitDefaultDefine e fname tag method entry =
   -- program's own code via its dispatch chain) — defining it in each would be a
   -- duplicate symbol.  So it joins `@mdk_disp_*` in the program half, which walks
   -- the prelude's bodies and therefore reaches every default the prelude declares.
-  if emitHalfRef.value == emitHalfPrelude then
+  if e.input.emitHalf == emitHalfPrelude then
     emitGlobal e "declare i64 @\{fname}(\{implParamDecls arity 0})"
   else
-    let bodyS = restampIfaceDicts methodIfaceTableRef.value (methodIfaceOf method) tag (reqDictRoutes nReq 0) body1
-    let body = restampCrossIface methodIfaceTableRef.value method dictIfaces bodyS
+    let bodyS = restampIfaceDicts e.input.methodIfaces (methodIfaceOfIn e.input.methodIfaces method) tag (reqDictRoutes nReq 0) body1
+    let body = restampCrossIface e.input.methodIfaces method dictIfaces bodyS
     let saved = (bufRef e).value
     let _ = setRef (bufRef e) []
     let scope = beginDefine e
@@ -6548,8 +6510,9 @@ headPat [] = PWild
 -- stays coalesced.  Preserves first-seen group order and source clause order within
 -- each (the Maranget priority).  CImplDefault entries (interface defaults) are
 -- skipped — they are the arg-tag fallback, never a lifted static-dispatch target.
-groupImpls : List CImplEntry -> List ImplGroup
-groupImpls entries = mapMut (gatherGroup entries) (distinctImplKeys entries [])
+groupImpls : Emit -> List CImplEntry -> List ImplGroup
+groupImpls e entries =
+  mapMut (gatherGroup e entries) (distinctImplKeys entries [])
 
 -- map a <Mut> function over a list (map is pure; gatherGroup now reads the method
 -- arity table to eta-expand point-free impls, so the walk must be <Mut>).
@@ -6583,8 +6546,8 @@ keySeen m t ((m2, t2)::rest) =
 -- RKey/arg-tag call sites (which use methodArityOf) and the define agree.  A
 -- multi-clause or already-full-arity impl is unchanged (etaExpand is a no-op when
 -- have >= arity).
-gatherGroup : List CImplEntry -> (String, String) -> ImplGroup
-gatherGroup entries (method, key) =
+gatherGroup : Emit -> List CImplEntry -> (String, String) -> ImplGroup
+gatherGroup e entries (method, key) =
   let tag = headTagForKey method key entries
   let symTag = implFnSymTag entries method tag key
   let cls0 = gatherClauses method key entries
@@ -6599,7 +6562,7 @@ gatherGroup entries (method, key) =
   -- (container dropped) → SIGSEGV no longer happens.  nDicts = 0 for a concrete impl
   -- ⇒ identical to the old `maxInt (clauseArity) (methodArityOf)`.
   let nDicts = leadingDictPats (firstClausePats cls0)
-  let arity = maxInt (clauseArity cls0) (methodArityOf method + nDicts)
+  let arity = maxInt (clauseArity cls0) (methodArityOfIn e.input.methodIfaces method + nDicts)
   let cls = map (etaExpandClause arity) cls0
   ImplGroup method tag symTag positions arity cls
 
@@ -7024,8 +6987,8 @@ emitExternEtaClosure e name =
 emitMethodEtaClosure : Emit -> String -> (String, LTy)
 emitMethodEtaClosure e name =
   let lamName = "mdk_eta_\{name}_\{intToString (freshId e)}"
-  let _ = emitMethodEtaDefine e lamName name (methodArityOf name)
-  emitClosureAlloc e lamName (methodArityOf name) []
+  let _ = emitMethodEtaDefine e lamName name (methodArityOfIn e.input.methodIfaces name)
+  emitClosureAlloc e lamName (methodArityOfIn e.input.methodIfaces name) []
 
 -- the captureless method-eta forwarder `@mdk_etaN(i64 %clos, %arg…) { <inline
 -- arg-tag dispatch over %arg0..%arg(N-1)>; ret }` (mirror of emitExternEtaDefine).
@@ -7051,7 +7014,7 @@ emitMethodEtaDefine e lamName name arity =
 -- extern with no recorded signature defaults to arity 1 (every current extern is
 -- annotated, so this is a defensive fallback, not a live path).
 externArity : Emit -> String -> Int
-externArity _ name = match declSigOf name
+externArity e name = match declSigOf e name
   Some (ptys, _) => lengthS ptys
   None => 1
 
@@ -7698,7 +7661,7 @@ bindPattern e env (PVar x _) v body = bindVarTy e env x v body ""
 -- than guessing LTInt from body-use.  Non-scalar / unknown fields fall back to the
 -- paramUseTy guess (declared name "" passed through bindFieldsDecl).
 bindPattern e env (PCon c args) v body =
-  bindFieldsDecl e env args (ctorFieldTypeNamesOf c) v body 0
+  bindFieldsDecl e env args (ctorFieldTypeNamesOf e c) v body 0
 bindPattern e env (PTuple ps) v body = bindFields e env ps v body 0
 -- built-in list patterns: a cons cell is a 2-field "Cons" constructor
 -- (head = field 0, tail = field 1); the empty-list pattern (a "Nil" cell) binds
@@ -8066,7 +8029,7 @@ emitFns _ [] = ()
 emitFns e (b::rest) =
   -- PROGRAM half (issue #118): a prelude bind's define already lives in prelude.o,
   -- so emit it, keep the side effects, and ship only its `declare`.
-  let _ = if hiddenBind (bindName b) then
+  let _ = if hiddenBind e (bindName b) then
     emitAsDeclares e (_ => emitFn e b)
   else
     emitFn e b
@@ -8250,13 +8213,15 @@ leadingDictPats _ = 0
 methodBodyDeficit : Emit -> CExpr -> Int
 methodBodyDeficit e (CLet _ _ _ b) = methodBodyDeficit e b
 methodBodyDeficit e (CLetGroup _ b) = methodBodyDeficit e b
-methodBodyDeficit _ (CMethod name _ _ _) = methodArityOf name
+methodBodyDeficit e (CMethod name _ _ _) =
+  methodArityOfIn e.input.methodIfaces name
 methodBodyDeficit e (CDict name routes) =
   maxInt 0 (fnArity e name - listLen routes)
 methodBodyDeficit e app =
   let (hd, args) = flattenApp app []
   match hd
-    CMethod name _ _ _ => maxInt 0 (methodArityOf name - listLen args)
+    CMethod name _ _ _ =>
+      maxInt 0 (methodArityOfIn e.input.methodIfaces name - listLen args)
     CDict name routes =>
       maxInt 0 (fnArity e name - listLen routes - listLen args)
     _ => 0
@@ -9498,7 +9463,7 @@ emitGlobalDecls e (b::rest) =
   -- source order, INITIALISED) by `@mdk_program_main`, which lives in the program
   -- half — so prelude.o only declares it.  Defining it in both halves would be a
   -- duplicate symbol.
-  let line = if emitHalfRef.value == emitHalfPrelude then
+  let line = if e.input.emitHalf == emitHalfPrelude then
     "@mdk_g_" ++ bindName b ++ " = external global i64"
   else
     "@mdk_g_" ++ bindName b ++ " = global i64 0"
@@ -9508,7 +9473,7 @@ emitGlobalDecls e (b::rest) =
   -- the PRELUDE half the flag is external (defined by the program half's force fn,
   -- alongside @mdk_g_*) and the force fn is declared so a prelude body can call it.
   let _ = if isLazyGlobal (bindName b) then
-      if emitHalfRef.value == emitHalfPrelude then
+      if e.input.emitHalf == emitHalfPrelude then
         let _ = emitGlobal e "@mdk_gs_\{bindName b} = external global i8"
         emitGlobal e "declare i64 @mdk_force_\{bindName b}()"
       else
@@ -9996,20 +9961,20 @@ zipParamEnv _ _ = []
 -- one inference pass: recompute every function's signature using the prior table.
 -- (Gap E1: each binding's DECLARED signature, looked up by name in the installed
 -- `declSigTypesRef` table, seeds its param/return types over the body-use guess.)
-inferPass : OrdMap FnSig -> List CBind -> List (String, FnSig)
-inferPass _ [] = []
-inferPass sigs (b::rest) =
-  (bindName b, inferOneSig sigs (declSigOf (bindName b)) b) ::
-    inferPass sigs rest
+inferPass : OrdMap (List String, String) -> OrdMap FnSig -> List CBind -> List (String, FnSig)
+inferPass _ _ [] = []
+inferPass decls sigs (b::rest) =
+  (bindName b, inferOneSig sigs (omLookup (bindName b) decls) b) ::
+    inferPass decls sigs rest
 
 -- fixpoint to two passes: pass 1 seeds signatures (callees defined earlier are
 -- already typed); pass 2 lets a caller see a callee defined later / mutual
 -- recursion settle.  Two passes suffice for the spike's call graphs (no deeper
 -- type-flow chains than caller→callee→sibling exist in the subset).
-inferSigs : List CBind -> List (String, FnSig)
-inferSigs fns =
-  let pass1 = inferPass omEmpty fns
-  inferPass (sigsToMap pass1) fns
+inferSigs : OrdMap (List String, String) -> List CBind -> List (String, FnSig)
+inferSigs decls fns =
+  let pass1 = inferPass decls omEmpty fns
+  inferPass decls (sigsToMap pass1) fns
 
 -- ── operator -> LLVM mnemonic tables ────────────────────────────────────────
 intOp : String -> String
@@ -10820,16 +10785,17 @@ emitRangeList e env lo hi incl =
 -- LLVM function per top-level `name p… = …` binding, then a single
 -- `@main` that computes the top-level nullary value bindings (in source order),
 -- then `main`'s body, then a type-directed print.
-export emitProgram : CProgram -> String
-emitProgram (CProgram groups ctorArs ctorTypes implEntries) =
+export emitProgram : EmitInput -> CProgram -> String
+emitProgram input (CProgram groups ctorArs ctorTypes implEntries) =
   let e = Emit {
     -- issue #118: the two halves are emitted by INDEPENDENT emitter runs, so they
     -- get disjoint gensym ranges or their lifted defines collide — see
     -- programHalfIdBase.  Mode 0 keeps starting at 0, so its IR is unchanged.
-    counter = Ref (if emitHalfRef.value == emitHalfProgram then programHalfIdBase else 0),
+    input = input,
+    counter = Ref (if input.emitHalf == emitHalfProgram then programHalfIdBase else 0),
     buf = Ref [],
     fnNames = Ref (collectFns groups),
-    sigs = Ref (inferSigs (fnBinds groups)),
+    sigs = Ref (inferSigs (omFromPairs (reverseL input.declSigTypes) omEmpty) (fnBinds groups)),
     ctors = Ref ctorArs,
     lams = Ref [],
     recFields = Ref (collectRecords groups),
@@ -10839,10 +10805,12 @@ emitProgram (CProgram groups ctorArs ctorTypes implEntries) =
     -- the globals initialised as it computes them — so they start READY, exactly as
     -- the non-emitting gaps driver does (initGlobalsRegReady).  Without this every
     -- prelude body that loads a global would hit the forward-dependency gap.
-    globalsReg = Ref (if emitHalfRef.value == emitHalfPrelude then
+    globalsReg = Ref (if input.emitHalf == emitHalfPrelude then
       initGlobalsRegReady (valBinds groups)
     else
       initGlobalsReg (valBinds groups)),
+    ctorFieldTypes = omFromPairs (reverseL input.ctorFieldTypes) omEmpty,
+    declSigTypes = omFromPairs (reverseL input.declSigTypes) omEmpty,
   }
   let _ = resetDistinctTypeNames ()
   let _ = setRef dictConstCacheRef []
@@ -10902,11 +10870,11 @@ emitProgram (CProgram groups ctorArs ctorTypes implEntries) =
   -- issue #118: the PRELUDE half is a LIBRARY — it has no entry point, and the
   -- program half's `@mdk_program_main` is the one that defines and initialises
   -- every `@mdk_g_*` (the prelude's included).
-  let _ = if emitHalfRef.value == emitHalfPrelude then () else emitProgramMain e groups
+  let _ = if input.emitHalf == emitHalfPrelude then () else emitProgramMain e groups
   -- #561 PR-A: LAZY value globals' @mdk_force_<x> defines live with the init logic
   -- (@mdk_program_main), i.e. the program/whole half; the prelude half only declares
   -- them (emitGlobalDecls).  In whole mode with no lazy global this emits nothing.
-  let _ = if emitHalfRef.value == emitHalfPrelude then () else emitLazyForces e (valBinds groups)
+  let _ = if input.emitHalf == emitHalfPrelude then () else emitLazyForces e (valBinds groups)
   let _ = emitFns e (fnBinds groups)
   let _ = emitImpls e implEntries
   let _ = preludeIdSpaceGuard e
@@ -10930,7 +10898,7 @@ emitProgramMain e groups =
   -- "no main" rather than tripping over an unrelated global first — see the
   -- prelude-double-load note on emitTopGlobals below for why such a global can
   -- appear at all.
-  let mainRhs = mainBody groups
+  let mainRhs = mainBody e groups
   -- #561 PR-A: only SAFE (statically-orderable) value globals are eager-initialised
   -- in this prologue — byte-identical to the pre-#561 emitter whenever no global is
   -- lazy (the compiler's own case).  A SAFE global's whole eager reach is SAFE (the
@@ -10948,7 +10916,7 @@ emitProgramMain e groups =
   -- C4: if the typecheck Float hint is set, override the structural LTy so the
   -- print path uses the Float formatter even when emitExpr returns LTUnknown/LTInt
   -- (the type-erased result from a polymorphic HOF like `fold`).
-  let mty2 = if mainIsFloatHintRef.value then LTFloat else mty
+  let mty2 = if e.input.mainIsFloat then LTFloat else mty
   let _ = if mainIsUnit e mty2 then () else emitPrint e mv mty2
   let _ = emit e "  ret i32 0"
   emit e "}"
@@ -11063,46 +11031,11 @@ emitForceFn e name body =
   let _ = emit e "  ret i64 \{v}"
   emit e "}"
 
--- Hint from the driver: True when typecheck resolved main's inferred return type to
--- Unit (e.g. via a polymorphic HOF whose result specialises to Unit with no explicit
--- annotation).  Set by the emit driver after elaborateModules via installMainIsUnitHint.
-mainIsUnitHintRef : Ref Bool
-mainIsUnitHintRef = Ref False
-
-export installMainIsUnitHint : Bool -> Unit
-installMainIsUnitHint b = setRef mainIsUnitHintRef b
-
--- Hint from the driver: True when typecheck resolved main's inferred return type to
--- Float (e.g. via a polymorphic HOF whose result specialises to Float with no explicit
--- annotation).  Set by the emit driver after elaborateModules via installMainIsFloatHint.
--- C4 (SHARED-FLOAT-RESIDUAL-DESIGN §6): fixes bare Float value mains that print garbage
--- because the structural mainKind sees LTInt on a type-erased polymorphic-HOF return.
-mainIsFloatHintRef : Ref Bool
-mainIsFloatHintRef = Ref False
-
-export installMainIsFloatHint : Bool -> Unit
-installMainIsFloatHint b = setRef mainIsFloatHintRef b
-
--- Optional hint from the driver: the source path (or module name) of the program
--- being emitted.  `CProgram` carries no source location, so the emitter cannot name
--- the offending file on its own; a driver that has the path sets it here BEFORE
--- emitProgram (mirroring installMainIsUnitHint) so the `no 'main' binding` diagnostic
--- can point the user at their file.  Empty (the default) => the message omits the file.
-emitSrcNameRef : Ref String
-emitSrcNameRef = Ref ""
-
-export installEmitSrcName : String -> Unit
-installEmitSrcName name = setRef emitSrcNameRef name
-
 -- " in <file>" when a source name was installed, else "" — a shared clause for the
 -- two main-shape diagnostics below.  A function (not a lazy nullary value) so it
 -- re-reads the ref at each call rather than memoising a stale first read.
-emitSrcWhere : Unit -> String
-emitSrcWhere () =
-  if emitSrcNameRef.value == "" then
-    ""
-  else
-    " in " ++ emitSrcNameRef.value
+emitSrcWhere : Emit -> String
+emitSrcWhere e = if e.input.srcName == "" then "" else " in " ++ e.input.srcName
 
 -- Is `main` Unit-returning (→ suppress the auto-print of its result)?  Three checks:
 -- 1. The typecheck-inferred-Unit hint (installMainIsUnitHint) — catches unannotated
@@ -11112,8 +11045,8 @@ emitSrcWhere () =
 -- 3. The body's emit-time LTy (LTUnit) — catches the simple `main = putStrLn …` case.
 mainIsUnit : Emit -> LTy -> Bool
 mainIsUnit e mty =
-  if mainIsUnitHintRef.value then True
-  else match declSigOf "main"
+  if e.input.mainIsUnit then True
+  else match declSigOf e "main"
     Some (_, "Unit") => True
     _ => match mty
       LTUnit => True
@@ -11149,15 +11082,15 @@ emitPrint _ _ LTClosure =
 -- the body of the `main` binding (must be a nullary clause).  Both diagnostics name
 -- the file (when a driver installed it via installEmitSrcName) and state the fix — the
 -- zero-arg-value shape is a documented beginner footgun.
-mainBody : List CBind -> CExpr
-mainBody [] =
+mainBody : Emit -> List CBind -> CExpr
+mainBody e [] =
   panic
-    ("llvm: no 'main' binding found" ++ emitSrcWhere () ++ " — a program must define 'main' as a zero-arg value: write 'main = …', not" ++ " 'main () = …'. ('medaka run'/'build' never applies main; it forces a" ++ " zero-arg main for its effects.)")
-mainBody ((CBind "main" [CClause [] body])::_) = body
-mainBody ((CBind "main" _)::_) =
+    ("llvm: no 'main' binding found" ++ emitSrcWhere e ++ " — a program must define 'main' as a zero-arg value: write 'main = …', not" ++ " 'main () = …'. ('medaka run'/'build' never applies main; it forces a" ++ " zero-arg main for its effects.)")
+mainBody _ ((CBind "main" [CClause [] body])::_) = body
+mainBody e ((CBind "main" _)::_) =
   panic
-    ("llvm: 'main'" ++ emitSrcWhere () ++ " must be a zero-arg value: write 'main = …', not 'main () = …' or" ++ " 'main x = …'. ('medaka run'/'build' never applies main; it forces a" ++ " zero-arg main for its effects.)")
-mainBody (_::rest) = mainBody rest
+    ("llvm: 'main'" ++ emitSrcWhere e ++ " must be a zero-arg value: write 'main = …', not 'main () = …' or" ++ " 'main x = …'. ('medaka run'/'build' never applies main; it forces a" ++ " zero-arg main for its effects.)")
+mainBody e (_::rest) = mainBody e rest
 
 -- a readable tag for the unsupported-node panic (only the nodes a slice-1
 -- fixture could hit if it strayed out of scope).
@@ -11194,16 +11127,19 @@ ctag _ = "?"
 export emitProgramGaps : CProgram -> List String
 emitProgramGaps (CProgram groups ctorArs ctorTypes implEntries) =
   let e = Emit {
+    input = emptyEmitInput,
     counter = Ref 0,
     buf = Ref [],
     fnNames = Ref (collectFns groups),
-    sigs = Ref (inferSigs (fnBinds groups)),
+    sigs = Ref (inferSigs omEmpty (fnBinds groups)),
     ctors = Ref ctorArs,
     lams = Ref [],
     recFields = Ref (collectRecords groups),
     implEntries = Ref implEntries,
     ctorTypes = Ref ctorTypes,
     globalsReg = Ref (initGlobalsRegReady (valBinds groups)),
+    ctorFieldTypes = omEmpty,
+    declSigTypes = omEmpty,
   }
   let _ = resetDistinctTypeNames ()
   let _ = setRef dictConstCacheRef []
@@ -11247,7 +11183,7 @@ emitFnsGaps e ((CBind name cs)::rest) =
   emitFnsGaps e rest
 
 emitImplsGaps : Emit -> List CImplEntry -> Unit
-emitImplsGaps e entries = emitGroupsGaps e (groupImpls entries)
+emitImplsGaps e entries = emitGroupsGaps e (groupImpls e entries)
 
 emitGroupsGaps : Emit -> List ImplGroup -> Unit
 emitGroupsGaps _ [] = ()

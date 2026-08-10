@@ -144,5 +144,18 @@ if [ "${CAPTURE:-0}" = "1" ]; then
   [ "$fail" -eq 0 ]
 else
   printf '\nchecked %d, %d ok, %d failing\n' "$n_fixtures" "$pass" "$fail"
-  [ "$fail" -eq 0 ]
+  [ "$fail" -eq 0 ] || exit 1
+  # Same-process P -> U -> P control.  The regular workers each launch a fresh
+  # process, so they cannot detect an ambient table surviving a prior emission.
+  # Reuse the first two typed fixtures rather than adding a shared-corpus fixture.
+  set -- $fixtures
+  p="$1"; u="$2"
+  [ -n "${u:-}" ] || { echo "FAIL: isolation control needs two typed fixtures"; exit 1; }
+  "$EMITBIN" --isolation "$RUNTIME" "$p" "$u" > "$WORK/isolation.ll" 2> "$WORK/isolation.err"
+  isolation_rc=$?
+  if [ "$isolation_rc" -ne 0 ]; then
+    printf 'FAIL: same-process EmitInput isolation control\n%s\n' "$(cat "$WORK/isolation.err")"
+    exit 1
+  fi
+  printf 'checked same-process EmitInput isolation (%s -> %s -> %s)\n' "$(basename "$p")" "$(basename "$u")" "$(basename "$p")"
 fi

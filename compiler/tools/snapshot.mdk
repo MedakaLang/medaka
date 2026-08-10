@@ -192,14 +192,7 @@ import types.typecheck.{
 import eval.eval.{evalOneOutput, funNamesOf, dropShadowedExp, noMainMsg}
 import backend.llvm_emit.{
   emitProgram,
-  installReturnsSelf,
-  installSelfFnParams,
-  installMethodIface,
-  installMethodConstraintIfaces,
-  installCtorFieldTypes,
-  installDeclSigTypes,
-  installMainIsUnitHint,
-  installMainIsFloatHint,
+  EmitInput(..),
   enableGapRecord,
   resetGaps,
   gapEvents,
@@ -634,17 +627,23 @@ emitBoth root sel runtimeDecls userDecls =
 
 llvmOf : List Decl -> List Decl -> CProgram -> String
 llvmOf runtimeDecls allDecls cp =
-  let _ = installReturnsSelf (returnsSelfTable allDecls)
-  let _ = installSelfFnParams (selfFnParamTable allDecls)
-  let _ = installMethodIface (methodIfaceTable allDecls)
-  let _ = installMethodConstraintIfaces (methodConstraintIfaces allDecls)
-  let _ = installCtorFieldTypes (ctorFieldTypeNames allDecls)
-  let _ = installDeclSigTypes (declSigTypeNames runtimeDecls ++ declSigTypeNames allDecls)
-  let _ = installMainIsUnitHint (mainTypeIsUnit ())
-  let _ = installMainIsFloatHint (mainTypeIsFloat ())
+  let input = EmitInput {
+    returnsSelf = returnsSelfTable allDecls,
+    selfFnParams = selfFnParamTable allDecls,
+    methodIfaces = methodIfaceTable allDecls,
+    methodConstraintIfaces = methodConstraintIfaces allDecls,
+    ctorFieldTypes = ctorFieldTypeNames allDecls,
+    declSigTypes = declSigTypeNames runtimeDecls ++ declSigTypeNames allDecls,
+    mainIsUnit = mainTypeIsUnit (),
+    mainIsFloat = mainTypeIsFloat (),
+    emitHalf = 0,
+    preludeBinds = [],
+    preludeImpls = [],
+    srcName = "",
+  }
   let _ = resetGaps ()
   let _ = enableGapRecord ()
-  let text = emitProgram cp
+  let text = emitProgram input cp
   withGaps ";" text (gapEvents ())
 
 wasmOf : List Decl -> List Decl -> CProgram -> String

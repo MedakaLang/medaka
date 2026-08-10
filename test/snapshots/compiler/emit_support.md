@@ -1,5 +1,5 @@
 # META
-source_lines=601
+source_lines=613
 stages=DESUGAR,MARK
 # SOURCE
 -- BACKEND-NEUTRAL EMIT SUPPORT — helpers shared verbatim by BOTH the LLVM
@@ -485,6 +485,13 @@ methodIfaceOf method = match methodIfaceIndexRef.value
     Some (iface, _) => iface
     None => ""
 
+-- Pure lookup for emitters that carry their method metadata explicitly.  The
+-- Ref-backed wrappers above remain for Wasm during X-W.H.
+export methodIfaceOfIn : List (String, (String, Int)) -> String -> String
+methodIfaceOfIn table method = match lookupAssoc method table
+  Some (iface, _) => iface
+  None => ""
+
 -- the declared full arity of an interface method (0 = not found).
 export methodArityOf : String -> Int
 methodArityOf method = match methodIfaceIndexRef.value
@@ -494,6 +501,11 @@ methodArityOf method = match methodIfaceIndexRef.value
   None => match lookupAssoc method methodIfaceTableRef.value
     Some (_, arity) => arity
     None => 0
+
+export methodArityOfIn : List (String, (String, Int)) -> String -> Int
+methodArityOfIn table method = match lookupAssoc method table
+  Some (_, arity) => arity
+  None => 0
 
 -- ── dict-witness parameter names (shared by BOTH backends) ───────────────────
 -- `$dict_<fn>_<slot>` — a dict witness param that dict_pass/elaborateModules PREPENDS
@@ -787,8 +799,12 @@ rngBound _ = 0
 (DFunDef false "setMethodIfaceTable" ((PVar "t")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "setRef") (EVar "methodIfaceTableRef")) (EVar "t"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "methodIfaceIndexRef")) (EApp (EVar "Some") (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EVar "t"))) (EVar "omEmpty")))))))
 (DTypeSig true "methodIfaceOf" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "methodIfaceOf" ((PVar "method")) (EMatch (EFieldAccess (EVar "methodIfaceIndexRef") "value") (arm (PCon "Some" (PVar "m")) () (EMatch (EApp (EApp (EVar "omLookup") (EVar "method")) (EVar "m")) (arm (PCon "Some" (PTuple (PVar "iface") PWild)) () (EVar "iface")) (arm (PCon "None") () (ELit (LString ""))))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "method")) (EFieldAccess (EVar "methodIfaceTableRef") "value")) (arm (PCon "Some" (PTuple (PVar "iface") PWild)) () (EVar "iface")) (arm (PCon "None") () (ELit (LString "")))))))
+(DTypeSig true "methodIfaceOfIn" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "Int")))) (TyFun (TyCon "String") (TyCon "String"))))
+(DFunDef false "methodIfaceOfIn" ((PVar "table") (PVar "method")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "method")) (EVar "table")) (arm (PCon "Some" (PTuple (PVar "iface") PWild)) () (EVar "iface")) (arm (PCon "None") () (ELit (LString "")))))
 (DTypeSig true "methodArityOf" (TyFun (TyCon "String") (TyCon "Int")))
 (DFunDef false "methodArityOf" ((PVar "method")) (EMatch (EFieldAccess (EVar "methodIfaceIndexRef") "value") (arm (PCon "Some" (PVar "m")) () (EMatch (EApp (EApp (EVar "omLookup") (EVar "method")) (EVar "m")) (arm (PCon "Some" (PTuple PWild (PVar "arity"))) () (EVar "arity")) (arm (PCon "None") () (ELit (LInt 0))))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "method")) (EFieldAccess (EVar "methodIfaceTableRef") "value")) (arm (PCon "Some" (PTuple PWild (PVar "arity"))) () (EVar "arity")) (arm (PCon "None") () (ELit (LInt 0)))))))
+(DTypeSig true "methodArityOfIn" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "Int")))) (TyFun (TyCon "String") (TyCon "Int"))))
+(DFunDef false "methodArityOfIn" ((PVar "table") (PVar "method")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "method")) (EVar "table")) (arm (PCon "Some" (PTuple PWild (PVar "arity"))) () (EVar "arity")) (arm (PCon "None") () (ELit (LInt 0)))))
 (DTypeSig true "isDictParamName" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isDictParamName" ((PVar "x")) (EBinOp "&&" (EBinOp ">=" (EApp (EVar "stringLength") (EVar "x")) (ELit (LInt 5))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (ELit (LInt 5))) (EVar "x")) (ELit (LString "$dict")))))
 (DTypeSig true "ftPrefix" (TyCon "String"))
@@ -1001,8 +1017,12 @@ rngBound _ = 0
 (DFunDef false "setMethodIfaceTable" ((PVar "t")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "setRef") (EVar "methodIfaceTableRef")) (EVar "t"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "methodIfaceIndexRef")) (EApp (EVar "Some") (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EVar "t"))) (EVar "omEmpty")))))))
 (DTypeSig true "methodIfaceOf" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "methodIfaceOf" ((PVar "method")) (EMatch (EFieldAccess (EVar "methodIfaceIndexRef") "value") (arm (PCon "Some" (PVar "m")) () (EMatch (EApp (EApp (EVar "omLookup") (EVar "method")) (EVar "m")) (arm (PCon "Some" (PTuple (PVar "iface") PWild)) () (EVar "iface")) (arm (PCon "None") () (ELit (LString ""))))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "method")) (EFieldAccess (EVar "methodIfaceTableRef") "value")) (arm (PCon "Some" (PTuple (PVar "iface") PWild)) () (EVar "iface")) (arm (PCon "None") () (ELit (LString "")))))))
+(DTypeSig true "methodIfaceOfIn" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "Int")))) (TyFun (TyCon "String") (TyCon "String"))))
+(DFunDef false "methodIfaceOfIn" ((PVar "table") (PVar "method")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "method")) (EVar "table")) (arm (PCon "Some" (PTuple (PVar "iface") PWild)) () (EVar "iface")) (arm (PCon "None") () (ELit (LString "")))))
 (DTypeSig true "methodArityOf" (TyFun (TyCon "String") (TyCon "Int")))
 (DFunDef false "methodArityOf" ((PVar "method")) (EMatch (EFieldAccess (EVar "methodIfaceIndexRef") "value") (arm (PCon "Some" (PVar "m")) () (EMatch (EApp (EApp (EVar "omLookup") (EVar "method")) (EVar "m")) (arm (PCon "Some" (PTuple PWild (PVar "arity"))) () (EVar "arity")) (arm (PCon "None") () (ELit (LInt 0))))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "method")) (EFieldAccess (EVar "methodIfaceTableRef") "value")) (arm (PCon "Some" (PTuple PWild (PVar "arity"))) () (EVar "arity")) (arm (PCon "None") () (ELit (LInt 0)))))))
+(DTypeSig true "methodArityOfIn" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "Int")))) (TyFun (TyCon "String") (TyCon "Int"))))
+(DFunDef false "methodArityOfIn" ((PVar "table") (PVar "method")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "method")) (EVar "table")) (arm (PCon "Some" (PTuple PWild (PVar "arity"))) () (EVar "arity")) (arm (PCon "None") () (ELit (LInt 0)))))
 (DTypeSig true "isDictParamName" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isDictParamName" ((PVar "x")) (EBinOp "&&" (EBinOp ">=" (EApp (EVar "stringLength") (EVar "x")) (ELit (LInt 5))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (ELit (LInt 5))) (EVar "x")) (ELit (LString "$dict")))))
 (DTypeSig true "ftPrefix" (TyCon "String"))
