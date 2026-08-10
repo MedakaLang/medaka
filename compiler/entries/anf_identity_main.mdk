@@ -14,7 +14,7 @@ canonicalInputs = [
   StableNodeIdInput "src/main.mdk" 3 2 3 14 [0, 1] RoleLiftedLambda,
   StableNodeIdInput "src/main.mdk" 3 2 3 14 [0, 1] RoleWrapper,
   StableNodeIdInput "src/main.mdk" 3 2 3 14 [0, 2] RoleEtaAdapter,
-  StableNodeIdInput "src/main.mdk" 8 0 8 9 [2] RolePapEntry,
+  StableNodeIdInput "src/a:b\\c.mdk" 8 0 8 9 [2] RolePapEntry,
 ]
 
 renderMint : StableNodeIdInput -> String

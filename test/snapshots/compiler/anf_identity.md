@@ -1,5 +1,5 @@
 # META
-source_lines=86
+source_lines=78
 stages=DESUGAR,MARK
 # SOURCE
 -- X-A preparatory identity substrate (#1400).
@@ -53,16 +53,8 @@ canonicalPathComponentsGo (component::rest) = component != ""
   && component != ".."
   && canonicalPathComponentsGo rest
 
-hasChar : String -> String -> Int -> Bool
-hasChar needle text i
-  | i >= stringLength text = False
-  | stringSlice i (i + 1) text == needle = True
-  | otherwise = hasChar needle text (i + 1)
-
 canonicalProjectPath : String -> Bool
 canonicalProjectPath path = canonicalPathComponents (splitOnChar '/' path)
-  && not (hasChar "\\" path 0)
-  && not (hasChar ":" path 0)
 
 validSpan : Int -> Int -> Int -> Int -> Bool
 validSpan startLine startCol endLine endCol = startLine >= 1
@@ -110,10 +102,8 @@ foldStableNodeId f (StableNodeId path startLine startCol endLine endCol childPat
 (DTypeSig false "canonicalPathComponentsGo" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool")))
 (DFunDef false "canonicalPathComponentsGo" ((PList)) (EVar "True"))
 (DFunDef false "canonicalPathComponentsGo" ((PCons (PVar "component") (PVar "rest"))) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "!=" (EVar "component") (ELit (LString ""))) (EBinOp "!=" (EVar "component") (ELit (LString ".")))) (EBinOp "!=" (EVar "component") (ELit (LString "..")))) (EApp (EVar "canonicalPathComponentsGo") (EVar "rest"))))
-(DTypeSig false "hasChar" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "Bool")))))
-(DFunDef false "hasChar" ((PVar "needle") (PVar "text") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "stringLength") (EVar "text"))) (EVar "False") (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "text")) (EVar "needle")) (EVar "True") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "hasChar") (EVar "needle")) (EVar "text")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "canonicalProjectPath" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "canonicalProjectPath" ((PVar "path")) (EBinOp "&&" (EBinOp "&&" (EApp (EVar "canonicalPathComponents") (EApp (EApp (EVar "splitOnChar") (ELit (LChar "/"))) (EVar "path"))) (EApp (EVar "not") (EApp (EApp (EApp (EVar "hasChar") (ELit (LString "\\"))) (EVar "path")) (ELit (LInt 0))))) (EApp (EVar "not") (EApp (EApp (EApp (EVar "hasChar") (ELit (LString ":"))) (EVar "path")) (ELit (LInt 0))))))
+(DFunDef false "canonicalProjectPath" ((PVar "path")) (EApp (EVar "canonicalPathComponents") (EApp (EApp (EVar "splitOnChar") (ELit (LChar "/"))) (EVar "path"))))
 (DTypeSig false "validSpan" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool"))))))
 (DFunDef false "validSpan" ((PVar "startLine") (PVar "startCol") (PVar "endLine") (PVar "endCol")) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp ">=" (EVar "startLine") (ELit (LInt 1))) (EBinOp ">=" (EVar "startCol") (ELit (LInt 0)))) (EBinOp ">=" (EVar "endLine") (ELit (LInt 1)))) (EBinOp ">=" (EVar "endLine") (EVar "startLine"))) (EBinOp ">=" (EVar "endCol") (ELit (LInt 0)))) (EBinOp "||" (EBinOp "!=" (EVar "endLine") (EVar "startLine")) (EBinOp ">=" (EVar "endCol") (EVar "startCol")))))
 (DTypeSig true "mintStableNodeId" (TyFun (TyCon "StableNodeIdInput") (TyApp (TyApp (TyCon "Result") (TyCon "StableNodeIdError")) (TyCon "StableNodeId"))))
@@ -142,10 +132,8 @@ foldStableNodeId f (StableNodeId path startLine startCol endLine endCol childPat
 (DTypeSig false "canonicalPathComponentsGo" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool")))
 (DFunDef false "canonicalPathComponentsGo" ((PList)) (EVar "True"))
 (DFunDef false "canonicalPathComponentsGo" ((PCons (PVar "component") (PVar "rest"))) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "!=" (EVar "component") (ELit (LString ""))) (EBinOp "!=" (EVar "component") (ELit (LString ".")))) (EBinOp "!=" (EVar "component") (ELit (LString "..")))) (EApp (EVar "canonicalPathComponentsGo") (EVar "rest"))))
-(DTypeSig false "hasChar" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "Bool")))))
-(DFunDef false "hasChar" ((PVar "needle") (PVar "text") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "stringLength") (EVar "text"))) (EVar "False") (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "text")) (EVar "needle")) (EVar "True") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "hasChar") (EVar "needle")) (EVar "text")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "canonicalProjectPath" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "canonicalProjectPath" ((PVar "path")) (EBinOp "&&" (EBinOp "&&" (EApp (EVar "canonicalPathComponents") (EApp (EApp (EVar "splitOnChar") (ELit (LChar "/"))) (EVar "path"))) (EApp (EVar "not") (EApp (EApp (EApp (EVar "hasChar") (ELit (LString "\\"))) (EVar "path")) (ELit (LInt 0))))) (EApp (EVar "not") (EApp (EApp (EApp (EVar "hasChar") (ELit (LString ":"))) (EVar "path")) (ELit (LInt 0))))))
+(DFunDef false "canonicalProjectPath" ((PVar "path")) (EApp (EVar "canonicalPathComponents") (EApp (EApp (EVar "splitOnChar") (ELit (LChar "/"))) (EVar "path"))))
 (DTypeSig false "validSpan" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool"))))))
 (DFunDef false "validSpan" ((PVar "startLine") (PVar "startCol") (PVar "endLine") (PVar "endCol")) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp ">=" (EVar "startLine") (ELit (LInt 1))) (EBinOp ">=" (EVar "startCol") (ELit (LInt 0)))) (EBinOp ">=" (EVar "endLine") (ELit (LInt 1)))) (EBinOp ">=" (EVar "endLine") (EVar "startLine"))) (EBinOp ">=" (EVar "endCol") (ELit (LInt 0)))) (EBinOp "||" (EBinOp "!=" (EVar "endLine") (EVar "startLine")) (EBinOp ">=" (EVar "endCol") (EVar "startCol")))))
 (DTypeSig true "mintStableNodeId" (TyFun (TyCon "StableNodeIdInput") (TyApp (TyApp (TyCon "Result") (TyCon "StableNodeIdError")) (TyCon "StableNodeId"))))
