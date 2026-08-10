@@ -1995,6 +1995,107 @@ stays accepted, and A-3.7 (not A-3.4) is where it is at risk. Do not tidy it.
 
 ---
 
+## 10. U1b — the vector-obligation predicate's interface half: the naming contract
+
+Landed by the PR that implements **#1482**. This section exists so the contract is
+defended by `make docs-links` / `make agent-doc-symbols` instead of by an issue comment.
+
+### 10.1 Three meanings, one shape — and how the shape stopped being ambiguous
+
+Before U1b, `compiler/types/typecheck.mdk` used `(String, List Int)` for **two unrelated
+things**, 58 lines apart, with only a convention keeping them out of each other's readers:
+
+| | table | payload before | the `String` meant |
+|---|---|---|---|
+| **M1** | `schemeObligationsRef` (+ `coreSchemeObligationsRef`, `crossModuleSchemeOblsQualRef`, `importedSchemeOblsRef`) | `List (String, List Int)` | **interface name** + scheme-var id vector |
+| **M2** | `funConstraintsRef` (+ `methodConstraintsRef`, `scopeArities`, …) | `List (String, List Int)` | **function name** + its dict-slot ids |
+| **M3** | `funConstraintIfacesRef` (+ its two mirrors) | `List (String, List String)` | **function name** + slot-parallel interface names |
+
+U1b widens M1's and M3's **interface** half to the identity-carrying `IfaceRef` (#1446 P1):
+
+- **M1 → `VecObl { voIface : IfaceRef, voIds : List Int }`**;
+- **M3 payload → `List IfaceRef`** (no record: a bare list is already unambiguous);
+- **M2 → UNCHANGED.** It is #1425's substrate (`checkModuleFullImpl`'s bare seed,
+  `scopeArities`, `attributeModuleArities`); re-typing it under an open S1 mid-excavation
+  buys nothing here.
+
+**The widening IS the disambiguation.** With M1 out of `(String, List Int)`, the fn-name
+meaning is that shape's only inhabitant, so passing one family's value to the other
+family's reader is an ordinary type error in the compiler's own typechecker — defended by
+`make check-self` and `test/typecheck_compiler_source.sh`, not by a naming convention. No
+`type` alias was introduced: this file has none, and an alias carries no nominal identity
+the compiler could check.
+
+### 10.2 The pairing point — `CSlot` and `pairSlots`
+
+`qualConstraintFor` used to return `(List Int, List String)` built from **two independent
+table lookups, each defaulting to `[]`**, so a hit on one with a miss on the other produced
+a slot-parallel length mismatch **by construction**. Three separate downstream zips then
+truncated it away silently, each carrying a comment saying it did so — the comments were
+there and the family grew anyway.
+
+U1b makes the mismatch unrepresentable **downstream of one function**:
+
+- `data CSlot = CSlot { csIface : IfaceRef, csId : Int }`;
+- `pairSlots : List Int -> List IfaceRef -> List CSlot` is the ONLY place an id list meets
+  an interface list, and the mismatch policy lives there, once;
+- `qualConstraintFor : String -> Option (List CSlot)` and
+  `declaredConstraintSlots : String -> List CSlot`;
+- **`shatterVecObls` is deleted** (its zip is gone; `vecOblsOfSlots` lifts already-paired
+  slots), and `recordCallObligations` / `expandSupersEntry` / `shadowStandaloneDictSlots`
+  each lose one of their two parallel lists.
+
+**Policy: truncation is preserved byte-for-byte.** Diagnosing a mismatch instead is only
+safe once someone has MEASURED that no real program reaches one; that experiment is not
+done, so the default stands.
+
+### 10.3 What stays keyed by SPELLING, deliberately
+
+Carrying identity is not the same as *asking* an identity question. These readers keep
+comparing `irName`, and each would change behaviour if re-keyed:
+
+- every **display** surface (`ppSchemeCon` / `renderConstraintCtx`) — otherwise every
+  rendered `Num a =>` moves;
+- the **dedup/coverage** currency (`vecOblKey`, `containsVecObl`, `pairsOfVecObls`,
+  `cslotKey`, `censusSuperSlotsOf`) — `cslotKey` decides how many dict slots a constrained
+  fn has, so an identity key would move emitted dict **arity**;
+- the **routing** goal (`pushDictApp`'s iface component, `resolveDictApps`) — a route word
+  against the spelling-keyed `KeyBuckets`, kept that way by #1317 T1 / the closed S0 #1277;
+- `groupConstraintMonosRef`, whose only reader compares interface names.
+
+### 10.4 The bare compatibility leg: CORRECTED drain condition
+
+`insertUnivImplKeys`'s in-source comment said *"both `ifaceRefBare` call sites disappear …
+delete it then, and #1438 drains with it."* **It counted two against a set of three**, and
+keyed a destructive instruction on a condition no single unit would satisfy. U1b retires
+the two it named; **the leg stays**, because `recordImplObligation`'s method-occurrence
+goal still mints a bare `IfaceRef`. That producer is **#1507** — a decl-layer /
+occurrence-layer reconciliation, not a table widening. Do not delete the leg on a count in
+prose: `grep -n ifaceRefBare compiler/types/typecheck.mdk`, and delete it only when every
+remaining hit is the definition itself.
+
+### 10.5 Measured consequence: #1438 drained HERE, not at #1507
+
+The scope ruling on #1482 predicted #1438 would drain at #1507. **That prediction is false
+for the pinned shape, measured on a cold-built binary of this branch**: #1438's repro
+reaches the obligation channel through a constrained binding's signature `=>` slot —
+`qualConstraintFor` → `declaredCrossModuleObls` → `recordSchemeCallObligations` — which is
+U1b's channel, not the method-occurrence one. Its `must_fail` pin flipped green and was
+replaced by the positive rows
+`test/dict_fixtures/i4-xmod-sig-constraint-{foreign-iface-rejected,own-iface-control}`.
+What #1507 still owns is the method-occurrence *reach* of the same class (a bare method
+call), which remains silently accepted.
+
+### 10.6 Not settled here
+
+- **Coherence still keys the interface half by SPELLING** while the obligation channel now
+  keys it by identity, so the two checkers disagree about whether two same-spelled
+  interfaces are one class. A-3.7 owns it; U1b widens the gap rather than closing it.
+- The `ifaceForInferredId` fallback that recovers a slot's interface from `pendingDictApps`
+  is bare **by construction** — that channel stores route words (§10.3).
+
+---
+
 ## References
 
 - [`TYPECHECK-ARCHITECTURE.md`](TYPECHECK-ARCHITECTURE.md) — the derived map this design targets

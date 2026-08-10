@@ -399,12 +399,26 @@ echo "  ok: $(printf '%s\n' "$originun_actual" | grep -c .) OriginUnresolved con
 #     prelude-free program declares none of the four and implements none of them), and
 #     it is the value a `Ty`-layer sentinel would be WRONG to have: nothing stamps this
 #     table, so there is no immunity rule to make a first write permanent.
+# ⚠️ U1b (#1482) ADDED ONE LINE, `ifaceRefNone`, AND IT IS A DIFFERENT FACT FROM
+# `ifaceRefBare` — which is the whole reason it is a second name rather than a call.
+# The slot-parallel interface channels (`funConstraintIfacesRef` and the `CSlot`
+# lists derived from it) have always used the EMPTY SPELLING `""` to mean "this dict
+# slot has no recoverable interface at all"; every reader tests `irName == ""` and
+# SKIPS the slot. `ifaceRefBare` means the opposite kind of thing — a real interface
+# whose IDENTITY is not recoverable here — and its call sites are the residual
+# worklist `grep -n ifaceRefBare` drains. Routing the empty sentinel through it would
+# put a permanent non-drainable hit on that worklist and make the drain check lie.
+# It is at the interface-occurrence layer, not the `Ty` layer, so the same reasoning
+# as the six #1446 lines applies: listed here rather than the grep widened. It mints
+# no identity a `stampTyHead` immunity rule could make permanent — the value is never
+# compared for identity, only for `irName == ""`.
 tc_originun_allowed="OriginUnresolved => [TkBare NsIface ir.irName]
 bcEq = OriginUnresolved,
 bcNum = OriginUnresolved,
 bcOrd = OriginUnresolved,
 bcSemigroup = OriginUnresolved,
 ifaceRefBare n = IfaceRef { irName = n, irOrigin = OriginUnresolved }
+ifaceRefNone = IfaceRef { irName = \"\", irOrigin = OriginUnresolved }
 originPhrase OriginUnresolved = \"an unknown module\"
 tconUnresolved n = TCon n OriginUnresolved"
 tc_originun_actual=$(grep -w 'OriginUnresolved' "$ROOT/compiler/types/typecheck.mdk" \

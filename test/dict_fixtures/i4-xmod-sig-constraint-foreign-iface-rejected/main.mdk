@@ -1,0 +1,46 @@
+-- §8 I4 — A SIGNATURE `=>` CONSTRAINT NAMES ITS OWN CLASS, NOT A SAME-SPELLED
+-- FOREIGN ONE.  This is #1438's OWN repro, moved here verbatim when U1b (#1482)
+-- drained its `must_fail` pin: the pin asserted the bug still reproduced, and it
+-- does not any more, so the S0 needs a POSITIVE guard or it has none at all.
+--
+-- SPEC ANSWER, HAND-DERIVED FROM DICT-SEMANTICS §3 + §8 I4, not read off a binary:
+--   1. `zmod` declares its own `interface Sizer a where bulk` and, in the SAME
+--      module, `useBulk : Sizer b => b -> Int`.  Exactly one `Sizer` is in scope
+--      there (§8 I4 qualification 1: a same-module declaration wins over an
+--      import — and `zmod` imports nothing at all), so the `=>` occurrence
+--      unambiguously denotes `zmod.Sizer`, identity `(zmod, Sizer)`.
+--   2. `main` calls `useBulk 3`, instantiating `b := Int`, which poses the goal
+--      `zmod.Sizer Int`.
+--   3. `match(IE, zmod.Sizer Int)` is EMPTY.  The graph's only `impl Sizer Int`
+--      belongs to `amod.Sizer` — a different declaration whose method set
+--      (`weight`) is disjoint from `zmod.Sizer`'s (`bulk`).  An impl of one class
+--      is not an impl of another that merely shares a spelling.
+--   ⇒ REJECT, `No impl of Sizer for Int` (`T-NO-IMPL`), on all three verbs.
+--      There is no value to pin: the program never runs.
+--
+-- 🚨 WHAT THIS ROW GUARDS, MEASURED ON A `main`-BUILT BINARY (709db738) BEFORE
+-- U1b: this exact program was a SILENT ACCEPT — `check` exit 0 printing
+-- `main : Unit`; `run` E-PANIC `unbound identifier: bulk` (the dict-passing
+-- machinery handed `useBulk` a dictionary shaped for `amod.Sizer`, i.e.
+-- `{weight}`, and projecting `bulk` out of it found nothing); `build` exit 0 with
+-- a binary that SEGFAULTS at 139.  That was #1438.  If a later change re-widens
+-- the SIGNATURE-CONSTRAINT channel back to a spelling, THIS ROW GOES
+-- GREEN-BY-ACCEPTING and the S0 is back — which is exactly what it exists to stop.
+--
+-- ⚠️ TOPOLOGICALLY DISCRIMINATING BY CONSTRUCTION, which is not automatic here.
+-- The goal is posed by `zmod`'s signature and elaborated when `zmod` is
+-- processed; `amod`'s foreign impl lives in a module `zmod` does not import.  A
+-- shape whose goal is posed only in `main` would be a false null, because `main`
+-- is always topologically LAST and therefore always sees the whole universe.
+--
+-- ⚠️ Distinct from `i4-xmod-requires-foreign-iface-rejected` (the sibling row):
+-- that one reaches the collision through an impl's `requires` (`requireOrigin`),
+-- a channel #1446/PR #1480 already gave identity.  THIS one reaches it through a
+-- constrained binding's `=>` slot re-instantiated at a CROSS-MODULE call site —
+-- `funConstraintIfacesRef` + `schemeObligationsRef`, the two tables U1b widened.
+-- The two rows are the same S0 through two different producers, and before U1b
+-- exactly one of them rejected.
+import amod
+import zmod.{useBulk}
+
+main = println (useBulk 3)

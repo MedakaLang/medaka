@@ -1,0 +1,28 @@
+-- CONTROL for `i4-xmod-sig-constraint-foreign-iface-rejected`.
+--
+-- SPEC ANSWER, HAND-DERIVED BEFORE ANY BINARY WAS RUN.  `zmod` now carries its OWN
+-- `impl Sizer Int` (`bulk n = n + 7`), so `match(IE, zmod.Sizer Int)` is the
+-- singleton {zmod's impl} and `useBulk 3` = `bulk 3` = `3 + 7` = **10**.
+-- ACCEPT on all three verbs, printing `10`.
+--
+-- ⚠️ The VALUE is what makes this a control rather than a verdict echo.  `10` is a
+-- number only `zmod.Sizer`'s impl can produce; `amod.Sizer`'s `weight n = n * 100`
+-- would give `300`.  So the PAIR of rows separates "the reject was removed" from
+-- "the WRONG impl was selected", which a verdict-only control cannot.  It also
+-- rules out the two duller readings of the sibling's reject, each of which
+-- predicts a reject here too:
+--   * "a cross-module constrained callee cannot discharge its `=>` at all";
+--   * "any same-spelled interface anywhere in the graph poisons the goal".
+--
+-- ⚠️ TWO EDITS FROM THE SIBLING, NOT ONE, AND THE SECOND IS FORCED: `amod`'s impl
+-- also moves from head `Int` to head `Bool`.  With both at `Int`, BOTH arms reject
+-- `T-CONFLICTING-IMPL` before the obligation channel is ever reached.  U1b (#1482)
+-- gave the OBLIGATION channel an identity; COHERENCE still keys the interface half
+-- by SPELLING (the `KeyBuckets` side, kept spelling-scoped deliberately by #1317
+-- T1), so the two checkers still disagree about whether `amod.Sizer` and
+-- `zmod.Sizer` are one class.  Pre-existing in direction, out of scope for U1b,
+-- and recorded on #1482 — the same note the `requires` control carries.
+import amod
+import zmod.{useBulk}
+
+main = println (useBulk 3)

@@ -1,5 +1,0 @@
-export interface Sizer a where
-  bulk : a -> Int
-
-export useBulk : Sizer b => b -> Int
-useBulk x = bulk x

@@ -1,0 +1,8 @@
+-- The same-spelled foreign interface, still present in the graph so the collision is
+-- real.  Its impl sits at head `Bool`, not `Int` — see main.mdk for why that edit is
+-- forced rather than cosmetic.
+export interface Sizer a where
+  weight : a -> Int
+
+export impl Sizer Bool where
+  weight _ = 100

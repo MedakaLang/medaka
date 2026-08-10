@@ -1,0 +1,8 @@
+-- The module that POSES the goal.  `Sizer b =>` is an interface OCCURRENCE
+-- resolved in THIS module's scope, and this module imports nothing, so it denotes
+-- the `Sizer` declared three lines up — whose method is `bulk`.
+export interface Sizer a where
+  bulk : a -> Int
+
+export useBulk : Sizer b => b -> Int
+useBulk x = bulk x
