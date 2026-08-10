@@ -30,7 +30,10 @@ the owed spec paragraph as its own task.
 maps it to the current code. §4 is the traceability matrix — the reason to believe
 this architecture *eliminates classes* rather than instances. §5 lists the
 decisions this proposal reopens (with justification) and the ones it deliberately
-does not. §6 is the migration DAG. §7 is verification doctrine. §8 is risks.
+does not. §6 is the migration DAG. §7 is verification doctrine. §8 is risks. §9 is
+the first per-unit design in this document: **A-3.4, the `IE` registry** — read it
+only when implementing that unit; §2 K and §6 A-3 remain the architecture of
+record above it.
 
 ---
 
@@ -1217,6 +1220,11 @@ orders merges, and the plan does not pretend otherwise.
   explicitly not byte-identical). Carries the global-candidacy
   could-not-pass-before fixture (R2). *Depends on A-1/A-2; serialize against
   every other typecheck PR.*
+  📐 **A-3 is split into A-3a (`CE`+`DataEnv`) and A-3b (`IE`) and decomposed
+  into seven units with fixed edges `3.1 → {3.2,3.3,3.4} → 3.5 → 3.6 → 3.7` —
+  read #1112's split header and its 2026-08-08 scoping comment before starting
+  any of them.** A-3.1 (the ordinal-filtered envelope) has landed;
+  **A-3.4's own unit design is §9 of this document**.
 
 **Stage B — One selection discipline (families B, E, H)**
 
@@ -1424,6 +1432,566 @@ whole arc.
   arc's own design forks (#823's eager-arm decision), the `do`/`defer` routing
   implementation (#824), and any change to surface syntax. The `medaka check`
   CLI surface is unchanged throughout.
+
+---
+
+## 9. A-3.4 — the `IE` registry: unit design
+
+**Status of this section:** DESIGN, no implementation. It is the first per-unit
+design carried inside this document, because A-3.4's absence of one was the only
+thing standing between it and implementation (#1112). Scope is exactly the
+A-3.4 cell of the 2026-08-08 decomposition on #1112 — *"one registry replacing
+three answers to «what impls exist»"* — under the fixed edges
+`3.1 → {3.2,3.3,3.4} → 3.5 → 3.6 → 3.7`. A-3.5/3.6/3.7, #1265, #1482 and B-2
+(#1113) are out of scope and this design must not be read as licensing work in
+them.
+
+Every claim below is labelled **MEASURED** (run first-hand while writing this),
+**DERIVED** (read off the source at the cited coordinates) or **RELAYED**
+(someone else's result, cited).
+
+### 9.1 The three preconditions, re-derived
+
+- **P1/T2 are present.** DERIVED at `99780077`: `data IfaceRef { irName,
+  irOrigin : TyConOrigin }` and `Predicate { iface : IfaceRef, args }`
+  (`compiler/types/typecheck.mdk:3060-3075`); the writer
+  `insertUnivImpl`/`insertUnivImplKeys`/`insertUnivImplAt` and the readers
+  `implCountForIfaceU`/`univConcreteBucket`/`univHeadless` all key the interface
+  half in the `NsIface` namespace (`:17885-17949`, `:17981-17982`,
+  `:18275-18297`). So `IE`'s interface key exists already; A-3.4 **reuses** it
+  and mints no parallel scheme.
+  ⚠️ **Not "the one mint" — say two, both `NsIface`.** DERIVED at `da16471c`:
+  the writer calls `oblIfaceKeys` (**plural**, `:17887` → `:17928-17931`), which
+  returns `[oblIfaceKey ir]` when the interface carries an origin and
+  `[oblIfaceKey ir, TkBare NsIface ir.irName]` otherwise —
+  `oblIfaceKey ir = tabKeyOf NsIface ir.irOrigin ir.irName` (`:17981-17982`) is
+  one of the two. The second is the **bare compatibility leg** §9.4 discloses,
+  and it is a *key* mint, not just a read. Leg 1 of §9.3 is unaffected — both
+  mints are `NsIface`, which is what that leg's greppable proposition is about —
+  but "one mint" sitting next to "identity-keyed" is the
+  partial-identity-reads-as-complete shape this arc keeps paying for, so the
+  count is stated rather than rounded down.
+- **#1265 does NOT gate A-3.4** — and this reverses the gate the 2026-08-08
+  scoping pass set, so the derivation is spelled out rather than asserted. The
+  later adjudication already rules this way in two independent places: #1112's
+  §1 **row 7** reads *"`methodIfaceTableRef` … **DOES NOT GATE — belongs with
+  B-2**"*, and the same comment's precondition list reads *"Explicitly NOT
+  preconditions: … #1265 …"*. The mechanics agree, three ways, all MEASURED:
+  (a) #1265's body never names `methodIfaceTableRef` — `gh issue view 1265
+  --json body | grep -c methodIface` → **0**; (b) its collapse key is an
+  **emitted symbol**, `defaultFnName tag method = "mdk_default_\{method}_\{safeIdent tag}"`
+  (`compiler/backend/llvm_emit.mdk:1361`, mirrored as `defaultFnNameW`,
+  `compiler/backend/wasm_emit.mdk:4528`); (c) eval's default registry is
+  **already identity-keyed** — `defaultCellName ifaceId method =
+  "\{ifaceId}#\{method}"` (`compiler/eval/eval.mdk:335`) — so eval's wrong
+  answer is produced by a **selector over two survivors**
+  (`ifaceIdsAtTag`/`defaultOwnedBy`'s first-match fallback,
+  `compiler/ir/core_ir_lower.mdk:1241-1248`,
+  `compiler/backend/wasm_emit.mdk:4511-4518`), not by a bare table key.
+  The residual bake-in worry is answered *by §9.3's constraint*, not by luck:
+  the only way building `IE` could entrench #1265 is if `IE` grew a
+  `(method, tag)`-keyed default registry, and §9.3 forbids that mechanically.
+  ✅ **The conflicting record is retracted, and the invitation this section used
+  to extend has been taken up and closed.** The 2026-08-10 cross-reference
+  comment that named #1265 as A-3.4's binding gate
+  (#1112 `issuecomment-5236675191`) was corrected by its own author the same day
+  in #1112 `issuecomment-5237149420` (2026-08-10T07:27Z, MEASURED via
+  `gh api repos/MedakaLang/medaka/issues/comments/5237149420`), which agrees with
+  (a)/(b)/(c) above point-for-point and concludes *"A-3.4's start does not
+  require a ruling on issue 1265."* The design review that followed reviewed the
+  substance and **did not dissent** (RELAYED). So this is not an open question a
+  later reader may re-litigate: the mechanics (a)/(b)/(c) are the durable record,
+  and the earlier claim survives only as the retracted comment it is.
+- **#1482 (U1b) does not gate A-3.4** — it binds A-3.6 (RELAYED from the
+  2026-08-10 comment; independently DERIVED here: A-3.4 adds no goal producer and
+  deletes no filter).
+
+### 9.2 The candidacy filter is live, and A-3.4 keeps it ON
+
+MEASURED at `99780077` on a cold-bootstrapped binary in an isolated worktree,
+under `MEDAKA_STRICT=1`, exit codes read from unpiped invocations. Four modules;
+the *only* difference between the arms is the topological position of the module
+carrying the foreign `impl Sizer Int` (same spellings, same impl, same goal):
+
+| arm | foreign impl's module | `check` |
+|---|---|---|
+| impl topo-**earlier** than the goal's module | before `cmod` | **exit 0, silent accept** (the #1438 S0) |
+| impl topo-**later** than the goal's module | after `cmod` | **exit 1**, `No impl of Sizer for Int` at the call site |
+
+The hand-derived correct answer for both, from DICT §8 I4 (a class is a
+`(module, name)`), is the reject. So candidacy today is genuinely the
+topological **prefix**, the ordinal filter A-3.1 landed reproduces it, and
+**deleting that filter converts the second arm into the first** — a silent
+accept. This discharges the experiment #1112's 2026-08-10 comment recorded as
+OWED, in the direction that comment named as the bad one: A-3.6 widens #1438's
+reach and is correctly gated on #1482.
+
+**Consequence for this unit, non-negotiable:** every `IE` read goes through
+`declEnvVisibleAt` (`compiler/types/typecheck.mdk:2712-2713`) via one accessor.
+A-3.4 does not delete, weaken, or open-code that predicate. A-3.6 remains the
+deletion of its body and nothing else.
+
+### 9.3 THE CONSTRAINT: `IE` is keyed by impl identity; the default-arm word namespace is NOT `IE`'s
+
+This is the design decision the missing doc left open, and it is stated first
+because everything else is subordinate to it.
+
+> **`IE` holds impls. An interface's default-method arm is a property of the
+> INTERFACE declaration — `CE`'s content (A-3a) — and the emit-side
+> method/default *word* namespace belongs to B-2 (#1113), whose body already
+> claims "the disjoint default-tag word namespace". No `IE` key component may
+> be a method name.**
+
+A future `IE` that folded the default-body/default-arm registry in and keyed it
+`(method, tag)` would rebuild #1265 in the new substrate: that pair is exactly
+the key whose two survivors #1265 is the first-match over.
+
+**Three legs hold an implementation to it. Prose alone would not.**
+
+1. **Representation.** `IE`'s key is a `RegKey` built only from `TabKey`s tagged
+   `NsIface` and `NsType` — the existing `oblIfaceKey` / `dispHeadTab` /
+   `regKeyNTab` mints (`compiler/types/registry.mdk:507-530`,
+   `compiler/types/typecheck.mdk:17940-17948`). A method name enters an `IE`
+   row only as **payload** (`ieMethods`, the impl's own defined-method list),
+   never through a key mint. `Ns` is a closed six-constructor enum — `NsType`,
+   `NsIface`, `NsMethod`, `NsCtor`, `NsField`, `NsValue`, declared at
+   `compiler/frontend/ast.mdk:193-200` (DERIVED at `da16471c`; ⚠️ **not**
+   `compiler/types/registry.mdk:341-347`, which an earlier draft of this line
+   cited — that range is `nsTag`, the *renderer*) — so "no method component" is a
+   greppable proposition about which `Ns` constructors appear inside `IE`'s
+   block, not a matter of taste.
+2. **A ratchet check.** Add **check 4** to `test/registry_keying_ratchet.sh` —
+   which already runs inside `test/typecheck_compiler_source.sh`, itself inside
+   the required `soundness` job, so no new CI wiring and no shard-coverage
+   hazard (that script's own header explains why folding in beats standing
+   beside). The check delimits `IE`'s block by its banner comment and FAILS if,
+   within it, any of these appears: a key mint naming `NsMethod`, `NsField` or
+   `NsValue`; or any of `defaultFnName`, `defaultCellName`, `ifaceIdsAtTag`,
+   `defaultOwnedBy`, `narrowDefaults`, `CImplDefault`, `methodIfaceTableRef`.
+   Occurrence-level extraction (`grep -oE`), never a per-line containment test —
+   the hole that script's own header documents.
+
+   It ships with **four** executed positive controls, in the mutate/rerun/restore
+   style that script's existing controls A–F use (`RUN ALL SIX if you touch any
+   extraction/filter in this file`, `test/registry_keying_ratchet.sh:48-50` —
+   those six grade checks 1–3 and stay as they are; these four are check 4's own,
+   so the PR reports **ten**):
+
+   - **G** — a `tabKeyOf NsMethod` **inside** the block → must **FAIL**.
+   - **H** — the same text **in a comment** inside the block → must **pass**
+     (a mention is not a mint; no false positive).
+   - **I** — the same text **outside** the block → must **pass** (the delimiting
+     works).
+   - **J** — 🚨 **delete (or rename) the banner comment** so the block extracts
+     **empty** → must **FAIL**. Without J the check has this tree's signature
+     failure mode built in: a later refactor moves or rewords the banner, the
+     block becomes empty, and check 4 passes having examined nothing — a green
+     that tested less than it appears to. Check 1 already solves exactly this and
+     the pattern is one `if` to copy: it counts its extraction and exits 1 with
+     *"this check just validated nothing. Update the range markers — do NOT treat
+     a zero extraction as a pass"* (`test/registry_keying_ratchet.sh:242-251`;
+     the writer ratchet repeats it at `:319`). Check 4 must fail closed the same
+     way — a zero-length `IE` block is a broken delimiter, never an empty answer.
+3. **A declared non-flip.** `test/must_fail_fixtures/1265-two-ifaces-same-method-one-type-default-collapse`
+   must stay RED across A-3.4, declared up front per §7's pin→stage map. It is
+   the *observable* of this constraint: if A-3.4 changed the default-arm answer
+   in any direction, the pin flips and the must-fail gate reds naming #1265.
+   Fail-capable both ways, which prose is not.
+
+The constraint is also stated in the ratchet's **existing `declEnvsRef` row**, so
+widening it is an edit to a reviewed artefact rather than a silent drift — see
+§9.8 item 3 for *which* row, which is not the obvious one.
+
+🚨 **And the corollary this design owes, because nothing else in the tree covers
+it.** Check 1 pins the field sets of **`CrossRun` and `DriverState` only**: it
+`sed`-extracts from `data CrossRun = CrossRun {` and from `  | DriverState {` and
+compares each against its allowlist (`test/registry_keying_ratchet.sh:231-274`,
+DERIVED at `da16471c`; `grep -n DeclEnvs test/registry_keying_ratchet.sh` finds
+the string only *inside* the `declEnvsRef` row's prose, never as an extraction
+range). **`DeclEnvs`' own field set is therefore pinned by nothing** — so `IE`, a
+program-global table, would enter the tree *outside* the very field ratchet that
+exists for that shape — and A-3.2/A-3.3 will add their fields to the same
+unpinned record (`DeclEnvs` today holds exactly A-3.1's three, `:2665-2669`), so
+this is a gap that widens with each remaining A-3 unit rather than a one-off.
+**A-3.4 should
+extend check 1's extraction to `DeclEnvs` (and `DeclEnvModule`) with a third
+allowlist.** It is a small change — one more `sed` range, one more `*_expected`
+list, one more `!=` comparison, reusing the zero-extraction guard already there —
+and it is the difference between "the ratchet covers the bundle `IE` lives in"
+and "the ratchet covers the bundle that merely *points at* the bundle `IE` lives
+in". Its own positive control follows check 1's control **B**: add a rogue field
+to `DeclEnvs` → must FAIL.
+
+### 9.4 Data shape, key, and identity
+
+`DeclEnvs` (`compiler/types/typecheck.mdk:2665-2669`) grows **one** field. The
+row type carries what §2 K specifies — *"every impl with its full head, context,
+and method table"* — plus an instance identity:
+
+- `ieOrd : Int` — the declaring module's ordinal (A-3.1's `demOrd`). The scope.
+- `ieInst : InstRef` — the **instance identity**: declaring module id, ordinal,
+  and the impl's sequence number *within the whole-graph build*. Minted in
+  exactly one place, inside the builder.
+- `ieIface : IfaceRef` — reused, not re-invented (P1's carrier).
+- `ieTys : List Ty` · `ieReqs : List Require` — the full head and context.
+- `ieMethods : List String` — the method table, **payload only** (§9.3).
+- `ieLoc : Option Loc` — for A-3.7's diagnostics.
+
+Index: the same three buckets the obligation channel already has, with the same
+keys — `MultiRegistry` for concrete heads keyed `regKeyNTab [oblIfaceKey ir,
+dispHeadTab hk]`, `MultiRegistry` for headless heads keyed
+`regKeyOfTab (oblIfaceKey ir)`, and `Registry SetRegistry` for the
+iface→head-tag set. `mregAppendK`, not `mregAddK`: forward declaration order
+within a bucket is semantic (`findMatchingImplReqsU`).
+
+**Why `InstRef` is part of this unit and not a nicety.** `cohClassify`'s own
+ledger records that tightening coherence needs *"INSTANCE IDENTITY this tree
+does not have (`bucketKeyEntriesFrom` restarts its numbering at 0 per module, so
+two distinct impls in different modules share an index) … L2 / A-3 / B-2 work"*
+(`compiler/types/typecheck.mdk:12930-12937`, DERIVED). A-3.4 is where that
+identity is minted; A-3.7 and B-2's `InstId` consume it. A-3.4 itself reads it
+nowhere — it is a deliverable, not a behaviour change.
+
+**The head half stays bare, by decision, with its measured reason.** Do not read
+"identity-keyed `IE`" as covering both halves: `dispHeadTab`
+(`compiler/types/typecheck.mdk:18163`) is spelling-keyed because the **goal**
+side cannot match an identity there, and re-keying it re-introduces the closed
+S0 #1277 (the #1317 T1 rule; RELAYED, with the derivation written at
+`dispHeadTab`'s own block). The compatibility leg in `insertUnivImplKeys` —
+index an identity-carrying impl **also** under its bare spelling, for goals
+minted by the two remaining `ifaceRefBare` producers — is carried into `IE`
+unchanged, which is why **#1438 still accepts after A-3.4** and its pin still
+holds. That drain is #1482's (U1b), not this unit's.
+
+### 9.5 Where it is built, and why building it is observationally inert
+
+Built inside `buildDeclEnvs` (`compiler/types/typecheck.mdk:2683-2690`), folding
+`deModules` in ordinal order. It must run after the driver's
+`stampGraphTyOrigins`, for the same reason A-3.1 records: identity lives on the
+decls.
+
+**The equality argument, which is the whole byte-identical bar.** Today's
+Module-arm universe is grown one module at a time in `appendUniverseAccums`
+(`:21809-21836`), whose own comment records that it feeds `growImplUniverse` the
+*same* `implDeclsWithReqs` triples the old per-module rebuild consumed.
+`implDeclsWithReqs` is a `flatMap` (`:18707-18708`) — pure and
+order-preserving — and `growImplUniverse` is a left fold that appends per key
+(`:17878-17880`). Therefore, for the ordinal prefix `d₀ ++ … ++ dₖ`:
+
+```
+growImplUniverse (implDeclsWithReqs (d₀ ++ … ++ dₖ)) empty
+  ==  the k-fold accumulation appendUniverseAccums has after module k
+```
+
+— same rows, same buckets, same within-bucket order. That is what makes a
+prefix-filtered `IE` at ordinal *k* the same value the accumulator holds when
+module *k* is checked, and it is the proposition PR2 below must *measure*, not
+assume.
+
+⚠️ **The fold algebra above is the part that is verified, and it is not where
+this breaks. Name the other half as its own sub-proposition:**
+
+> **DL — the decl-list identity.** `envs.deModules`' `demDecls` at ordinal *k*
+> **is** the `prog` that `appendUniverseAccums` was called with for module *k*,
+> for every *k*, in the same order, exactly once each.
+
+DL is assumed, not shown, by the algebra: `appendUniverseAccums prog` takes the
+module's own decl list as its argument (`:21809-21810`, DERIVED) while `IE`'s
+builder reads `demDecls` (`:2662`, `:2695`), and those are two independently
+constructed lists. DL is false if the two disagree about the prelude's shape
+(one node vs concatenated), about a `DAttrib` unwrapping, about which arm supplies
+a re-exported decl, or about how many times a driver runs over one graph — and
+`graphMethodExportsRef`'s ratchet row already records that *"a driver may run
+twice over one graph"* (`test/registry_keying_ratchet.sh:206`, DERIVED). **The
+equality is the conjunction of the algebra and DL.** An implementer who verifies
+only the algebra has verified the half that was never in doubt.
+
+**Two ordered PRs.**
+
+- **PR1 — carrier + builder.** The `DeclEnvs` field, the row type, `InstRef`,
+  the ordinal-filtered accessor, the ratchet check 4, its allowlist-row edit
+  (§9.8 item 3) and the shadow-compare below. **Zero readers**; the filter is on.
+  Byte-identical by construction (the only new code is unreached by any
+  judgment).
+
+  🚨 **PR1 cannot otherwise fail on the value it builds, and that is a defect in
+  the staging, not merely a limitation to note.** With zero readers, a mis-built
+  `IE` — wrong ordinal, dropped rows, wrong within-bucket order — is
+  unobservable: check 4 grades **namespace hygiene**, the doctests grade the
+  **mints**, and neither looks at the population. PR2's gate is then *"zero
+  program-output golden movement"*, which cannot see an order divergence inside a
+  bucket whose first-match only matters for shapes the corpus does not contain.
+  That is a silent widening deferred to a later unit — the shape §9.9's first
+  falsifier is supposed to catch and structurally cannot.
+
+  **Remedy, with in-tree precedent: PR1 ships a temporary shadow-compare.** At
+  each point `appendUniverseAccums` grows the accumulators, also project `IE` at
+  the current ordinal and **panic on disagreement** (rows, buckets, and
+  within-bucket order), then delete the instrument in PR2. The precedent is this
+  file's own #1277/#1317 work, which built the compiler with exactly this
+  instrument: *"a panic on disagreement, which fired `answer=1 spell=2 at ff` on
+  #1277's `main.mdk` and stayed SILENT on `main = println "hi"` and on #1277's own
+  control … so the instrument discriminates"*
+  (`compiler/types/typecheck.mdk:15280-15290`, DERIVED). That is the property
+  wanted here in both directions: it makes PR1 **fail-capable**, and running it
+  over the gate corpus **discharges DL and the algebra as a measurement before
+  PR2 commits to them** — which is strictly better than PR2 measuring the same
+  equality through goldens that cannot see order. It must be a hard panic, not a
+  diagnostic: a diagnostic would move goldens and be blessed away.
+
+  ⚠️ Two constraints on the instrument, both from this tree's own record. It is
+  a *whole-graph projection per module*, so it is **quadratic by construction**
+  and must not be left in — hence "temporary", stated in the code beside it and
+  in the PR body. And a panic is `<Panic>`-shaped in a stage that accumulates
+  errors rather than raising (`AGENTS.md`, "Errors accumulate"), which is exactly
+  why it is an instrument that PR2 deletes and never a shipped check.
+
+  **Retirement condition for PR1, stated up front.** If the PR2 flip re-scopes
+  onto A-3.5 (§9.9's first falsifier), PR1 has added a `driver_allowed`-side row
+  with none removed — and by A-3.1's own rule *a unit that adds a row without
+  shrinking another has not moved the arc*. In that outcome PR1 is **not**
+  retroactively fine: the owner decides between (i) keeping it as declared
+  substrate for A-3.5/3.7 with the re-scope written into the epic's stage table
+  and the shadow-compare **kept** until a reader exists, or (ii) reverting it so
+  the arc carries no unread field. Do not leave that choice implicit — an unread
+  field with no reader in sight is how shelf-ware enters, and #1112's stage table
+  is where the answer is recorded.
+- **PR2 — one reader flip, conditional.** The **Module** arm's obligation
+  universe becomes a projection of `IE` at the current ordinal instead of the
+  three `obUniv*` accumulators; the **Flat** arm keeps `buildImplUniverse` as
+  the shim, and no `match mode` branch is edited (E-2 deletes those). This is
+  what makes `IE` real rather than shelf-ware, and it is the unit's mechanical
+  progress signal: the three `obUniv*` rows leave `cross_allowed` while the
+  `declEnvsRef` row in `driver_allowed` grows to own their contents (§9.8 item 3
+  — no new row is added; that is the point) — per A-3.1's note, *a unit that adds
+  a row without shrinking another has not moved the arc*. **PR2 lands only if the
+  §9.5 equality holds as a measurement** (zero program-output golden movement).
+  If it does not, PR1 ships alone and the reader flip is re-scoped onto A-3.5
+  with the measured divergence written up — that is a scoping outcome, not a
+  golden to bless.
+
+**What A-3.4 explicitly does not touch:** `keyForSite*` and the `KeyBuckets`
+slices must not appear in its diff at all (the 2026-08-08 landing check; B-2
+deletes them, and re-keying their counting scans re-introduced #1277 in a
+measured experiment); `universeRegisteredIfacesRef` stays bare; the three
+`*CollidedRef` detectors stay bare (merging by bare name is their purpose).
+
+### 9.6 The subsumption enumeration — derived by SHAPE, not by prefix
+
+Derived three ways, because a `universe*` prefix grep provably misses members
+(`.claude/workstreams/TYPECHECK.md` trap 12): (i) the record enumeration of
+`CrossRun` and `DriverState` (the two `awk` recipes in #1112's 2026-08-09
+comment); (ii) *every* function in `compiler/types/typecheck.mdk` that matches a
+`DImpl` pattern — `grep -n 'DImpl' compiler/types/typecheck.mdk` — which is what
+reaches the impl-side answers that live in **no** ref at all and are recomputed
+per call; (iii) the engine/emit side, which no `types/`-anchored derivation can
+reach. Run the three commands rather than trusting this table's membership.
+
+| today's answer to "what impls exist" | shape | A-3.4 |
+|---|---|---|
+| `obUnivConcreteRef` / `obUnivHeadlessRef` / `obUnivIfaceTagsRef` (`ImplUniverse`) | `CrossRun` registries, identity-keyed interface half | **SUBSUMED** (PR2) — this *is* `IE` |
+| `buildImplUniverse` / `growImplUniverse` / `implDeclsWithReqs` | pure builders over a decl list | **SUBSUMED** as `IE`'s builder input; the Flat shim keeps them |
+| `universeKeyBucketsRef` / `buildKeyTable` / `keyEntryOf` / `matchingEntries*` / `keyForSite*` / `headCollides*` / `implExistsForHead` (`KeyBuckets`) | route-word registry, head half bare by design | **DEFERRED → B-2, by DELETION.** Must not appear in the diff |
+| `buildImplTable` / `implEntryOf` / `findImplEntry` (`ImplBuckets`, 2 build sites: `:11369`, `:24576`) | per-run bucket table keyed by bare iface+tag, consumed by `entail`/`routeOf` | **DEFERRED → B-2.** §2 K's *"K's IE is the single environment both must read"* consolidation stays owed; `IE` supplies the data, B-2 moves the reader (its blast list already owns `Route`) |
+| **`implKeyOf` (`compiler/eval/eval.mdk:481-483`) and its per-impl dict-registry family** — `declImplEntries`/`declImplIfaceIdRow` (`eval.mdk:305`, `:2001`), `lowerDeclImpl` → `CImplEntry`'s `key` field (`compiler/ir/core_ir_lower.mdk:1293-1313`, `:1221`), `distinctImplKeys` (`compiler/backend/wasm_emit.mdk:4066-4070`) | the **engine-side** per-impl dict-cell registry: `implKeyOf iface tys nm = "\{iface}\|…"`, a **bare-iface-name** key rendered into a runtime cell/symbol name, consumed by all three engines | **NOT `IE` → B-2 (#1113), with `Route`.** Verdict given explicitly because it is literally an answer to *"what impls exist"* and a re-deriving implementer will hit it: it is a **route-word** registry, not a declaration environment — same class as the `KeyBuckets` row above, and identity-keying it re-runs #1317's measured T1 failure (`typecheck.mdk:15253-15261`, where re-keying the *counting* scans alone reproduced #1277's S0 — and `:15263-15272` records why the question is *inherently* spelling-scoped: three engines re-derive the same uniqueness test from a bare `String` tag). Its **typecheck-side twin `implKeyTc` (`typecheck.mdk:14598-14599`) IS covered** — `keyEntryOf` (`:14582-14590`) → `KeyBuckets` → B-2, byte-identical output by that function's own doc-comment, which is the whole reason the two must move together. ⚠️ Do not confuse `implKeyOf` with wasm's *homonym* at `wasm_emit.mdk:4068` (`CImplEntry -> List (String, String)`, a different function that merely projects the key this one minted) |
+| `cohCollectImpls` / `cohCollectModuleImpls` / `cohImplsOf` (`:12590-12591`) / `cohImplsOfMid` (`:12612-12616`) / `CohImpl` / `coherenceUserDecls` | user-decls-only list, class identity a bare `String` (`:12588`, compared at `:12909`) | **DEFERRED → A-3.7**, which also inherits the two-checkers-disagree gap; A-3.4 supplies `InstRef` |
+| `implCompletenessMsgsOf` / `implCompletenessMsgsOfMap` (`:13125-13212`) | per-decl scans; the map arm reads `universeIfaceRequiredRef` (CE) | **DEFERRED → A-3.5** (decl-time relocation). Behaviour inherited **verbatim**; see §9.9 |
+| `superImplMsgsOf` / `implMatchesSuper` (`:14193-14251`) | scan of `allDecls` for a super's impl | **DEFERRED → A-3.5** |
+| `implTysIfMatch` · `implHeadTagForIface` · `implHeadGround` · `implHeadParametric` · `declMethodNamesOf` · `argImplRequiresRoutesRecD`'s decl walk | per-call decl-list scans, no ref — invisible to every prefix grep | **DEFERRED**: they become `IE` readers where the read is authoritative (A-3.5/3.6), not here |
+| `superDeclsRef`, `argDispatchIdxRef`, `methodDispatchIdxRef` | `DriverState`, interface/method-side | **NOT `IE`** — CE-side or RLocal-site channels (#1351); A-3.3 excludes the latter two deliberately |
+| `methodIfaceTableRef` / `methodIfaceIndexRef` (`compiler/backend/emit_support.mdk:449-464`, read by both backends) | emit-side method→(iface, arity) assoc list | **NOT `IE`** — #1112 §1 row 7: belongs with B-2 |
+| `ifaceImplHeadsRef` / `ifaceIdsAtTag` / `defaultOwnedBy` / `narrowDefaults` / `CImplDefault` (`compiler/ir/core_ir_lower.mdk`, both emitters), `defaultCellName` cells (`compiler/eval/eval.mdk`) | the default-arm registry and its selector | **NOT `IE`, BY CONSTRAINT** (§9.3) — B-2 / #1265 |
+
+### 9.7 `IE` is a program-global table: naming its key's scope, and proving it
+
+`AGENTS.md` names the program-global table as the most expensive shape in this
+tree, and demands the key's scope be *proven*, not asserted. `IE` has **four**
+scoping components; each is proven by an observation, not by a sentence:
+
+1. **Interface half — `tabKeyOf NsIface origin name`.** Two same-spelled
+   interfaces in two modules mint different keys. Already *asserted in-tree* by
+   `compiler/types/registry.mdk`'s own doctests
+   (`tabKeyOf NsIface (OriginModule "gmod") "Same"` vs `… "pmod" …`, `:1797-1802`),
+   and `tabKeyEq` never equates `TkIdent` with `TkBare`. A-3.4 adds a doctest at
+   the `IE` builder asserting the two impls land in **different buckets**.
+2. **Head half — bare, deliberately.** Stated as a residual with its measured
+   reason (§9.4), not papered over. Its scope comes from component 1 plus the
+   ordinal, which is exactly why "identity-keyed" must not be claimed for the
+   pair.
+3. **Row identity — `InstRef`.** Minted from `(demId, demOrd, sequence)` in one
+   place, so two impls can never share it — the property
+   `bucketKeyEntriesFrom`'s restart-at-0 numbering lacks. Doctest: two
+   same-spelled impls in two modules get distinct `InstRef`s.
+4. **Table scope — the ordinal.** Every read filters through
+   `declEnvVisibleAt`; the fail-closed miss arm (`declEnvsOrdOf` → `-1`, which
+   rejects every entry) is inherited from A-3.1 and keeps an unknown module id
+   loud rather than globally permissive.
+
+**The fixtures.** F2/F3/F4 carry the required *"feature + UNRELATED code still
+behaves"* shape, not *"feature works"*. ⚠️ **F1 is a different instrument and
+must not be filed under that heading** — every program it runs *does* read `IE`,
+because they all consume prelude impls, so it is a **whole-population regression
+probe** (does the table still answer correctly for the entire prelude?) rather
+than a bystander. Both are needed; conflating them would let the set look like it
+has bystander coverage when F1 is the only member that ran.
+
+- **F1 — the whole-population probe** (*not* a bystander; see above).
+  `make check-self` plus `medaka check` of
+  `stdlib/core.mdk`, `stdlib/list.mdk`, `stdlib/map.mdk` and
+  `compiler/driver/medaka_cli.mdk`, each exit 0 with zero diagnostics. Not
+  ceremony: this is the exact probe that caught **both** prior key regressions in
+  this channel (9 / 7 / 8 / 7 / 37 spurious `No impl of …` rejects, RELAYED from
+  the A-2.2b and #1112-P1 experiments). A program containing only
+  `main = println 1` is the cheapest member and must be run.
+- **F2 — the empty table.** A module graph in which **no** module declares an
+  `impl`: `IE` is empty and `check`/`run`/`build`+execute must be unchanged. An
+  empty program-global table must be observationally inert.
+- **F3 — two colliders with no import edge BETWEEN THEM, plus a bystander, under
+  one entry that reaches all three.** Both colliders declare a same-spelled
+  interface *and* their own impls; the bystander uses neither; assert the
+  bystander's value and diagnostics are unchanged from base. This is the
+  cross-module-collision-without-an-import-edge hazard stated as a fixture.
+
+  🚨 **The no-import-edge property must hold between the two COLLIDERS, and the
+  entry must import all three — an earlier draft said "a third module that imports
+  neither", which would have graded nothing.** The loader is **entry-rooted**:
+  `loadProgramFilesE` is one DFS that recurses over `directImports` from the entry
+  module and nothing else (`compiler/driver/loader.mdk:860-887`, with `:462-463`'s
+  *"there is exactly ONE DFS"*; `analyzeProject` takes the same `entry` +`roots`
+  pair, `compiler/driver/diagnostics.mdk:798-799` — DERIVED at `da16471c`; the
+  only directory-walk enumeration in the tree is `compiler/tools/refindex.mdk`'s
+  #254 whole-project index — `moduleIdOfPath` exists for it, `loader.mdk:112-118`
+  — whose consumers are `tools/lsp.mdk` and `tools/mcp.mdk`, not `check`/`run`/
+  `build`). So
+  a module no import edge reaches is **never loaded, never parsed, never
+  checked** — a fixture whose bystander is the entry would leave both colliders
+  outside the graph and go green having exercised no collision at all. Shape it as
+  `main.mdk` importing all three, with the edge omitted only between the two
+  colliders.
+- **F4 — a bystander inside the collision fixtures.** The #1438 and #1265
+  fixture shapes each gain a sibling module that uses neither interface and
+  asserts its own value, graded on the **built and executed** binary — the pins
+  themselves only grade the colliding module.
+- **F5 — a permutation differential.** Permute module declaration order and
+  import-clause order across F3 and require identical output. Goldens cannot see
+  an over-widening; a permutation can. Permute what the mechanism reads (module
+  order, per #1381's lesson), not only what is convenient.
+- **F6 — declared non-flips.** `1265-…`, `1438-…`, `1216-…` and `1383-…` must
+  all stay RED, declared before the run so a flip reads as the break it is.
+- **F7 — the E1 tripwire.** `test/diff_compiler_check_cli_modules.sh` carries
+  A-3's unmarked #1277 acceptance legs (run + build) and is a landing gate for
+  this unit.
+
+`test/lint_fixtures/derivable_needs_datadecl.mdk` is load-bearing coverage
+here — it is the only thing asserting that a user impl α-equal to a prelude impl
+stays accepted, and A-3.7 (not A-3.4) is where it is at risk. Do not tidy it.
+
+### 9.8 Exit criteria, and the bar
+
+1. `IE` is built once, inside `buildDeclEnvs`, ordinal-tagged, every read through
+   `declEnvVisibleAt`; the filter is ON and A-3.6 remains one predicate body.
+2. Ratchet check 4 live, with its **four** positive controls **G/H/I/J**
+   (§9.3 leg 2) executed and their results reported in the PR body — not reasoned
+   about. **J is the load-bearing one**: delete the banner, and check 4 must FAIL
+   rather than pass on an empty block. If check 1's extraction is extended to
+   `DeclEnvs` (§9.3's corollary), its rogue-field control is executed and reported
+   too, bringing the reported count to **eleven** (six existing + G/H/I/J + that
+   one). ⚠️ Report the controls you ran, not a count you copied from here.
+3. 🚨 **`driver_allowed` must NOT gain an `IE` row — amend the existing
+   `declEnvsRef` row instead.** DERIVED at `da16471c`, and this reverses what an
+   earlier draft of this item directed: check 1 compares **exact sets** — it
+   `sed`-extracts `driver_actual` from the `  | DriverState {` record and tests
+   `[ "$driver_actual" != "$driver_expected" ]`, where `driver_expected` is the
+   first word of every `driver_allowed` row
+   (`test/registry_keying_ratchet.sh:229`, `:236-239`, `:266-274`). §9.4 puts the
+   new field **inside `DeclEnvs`**, not on `DriverState`. So an `IE` allowlist row
+   with no matching `DriverState` field **fails check 1** — inside
+   `typecheck_compiler_source.sh`, inside the required `soundness` job. The row to
+   edit is `declEnvsRef` (`:209`), whose own text — *"ENVELOPE ONLY -- it carries
+   no CE/IE/DataEnv contents"* — goes false the moment PR1 lands, and which
+   already names this unit: *"A-3.2/A-3.3/A-3.4 add those fields and populate them
+   inside `buildDeclEnvs`"*. On PR2 `cross_allowed` **loses** the three `obUniv*`
+   rows as that row grows to own their contents. A row added with none removed has
+   not moved the arc — and here the progress signal is a row *growing*, exactly as
+   `declEnvsRef` predicts of itself. Plus §9.3's corollary: extend check 1 to
+   `DeclEnvs`, so the bundle `IE` actually lives in is pinned at all.
+4. Zero program-output golden movement. Two compiler-source goldens move: the
+   `typecheck.md` snapshot (bless via
+   `sh test/diff_compiler_snapshot_frontend.sh --bless compiler/types/typecheck.mdk`
+   — the `_frontend` suite, not `_types`) and
+   `test/selfproc_goldens/legA/types.typecheck.golden`, **additive-only**.
+5. `test/selfcompile_fixpoint.sh` C3a+C3b, `test/typecheck_compiler_source.sh`
+   (which runs the ratchet), `test/diff_compiler_selfproc.sh` grading for real
+   (not exit 2), `test/diff_compiler_engines.sh` under
+   `MEDAKA_REQUIRE_WASM=1` — an unlabelled engines number is a two-engine number.
+6. F1–F7 above; zero must-fail flips, declared in advance.
+7. `InstRef` exists and is read by no judgment, documented as A-3.7/B-2's input.
+8. 🚨 **An INTERLEAVED wall-clock A/B on the self-compile is a LIVE REQUIREMENT,
+   not a blocked bar.** This item read *"BLOCKED, not satisfied: its only
+   instrument (`test/bench.sh`) does not run on this project's Linux box
+   (#1187)"* — **that is stale and the citation has flipped.** MEASURED
+   2026-08-10: **#1187 is CLOSED** (`2026-08-01T18:55:57Z`, via
+   `gh issue view 1187 --json state,closedAt`), fixed by `8d358f00` *"bench.sh
+   measures on Linux — portable timing arms, per-arm RSS units"*; `test/bench.sh`
+   now probes three timing arms in preference order and takes the GNU
+   `/usr/bin/time -v` arm on this box, converting **KB→MB** RSS
+   (`test/bench.sh:78-96` the detection block, `:130-134` the GNU arm; MEASURED — `/usr/bin/time -v true` prints
+   `Elapsed (wall clock) time` here, which is the exact predicate its detection
+   block tests).
+
+   **Why this is a requirement and not a nicety.** A-3.4 adds a **whole-graph
+   table built on every compile** to a stage `AGENTS.md` calls **GC-bound**, and
+   PR1's entire cost justification is *"byte-identical"* — which is a statement
+   about output, not about time or allocation. Byte-identical output is fully
+   consistent with a self-compile regression.
+
+   **The bar:** `sh test/bench.sh` `selfcompile`, min-of-N, on a quiet box
+   (`compiler/PERF-SCOPE.md` §2b), **arms ALTERNATED A,B,A,B… — not all of A then
+   all of B.** Interleaving is not pedantry: a shared box drifts under other
+   agents' load, and a blocked run is exactly how a drift gets attributed to the
+   diff. State the minimum detectable effect and the invocation that produced the
+   number. ⚠️ `bench.sh` times `./medaka` in **its own tree** and has no built-in
+   A/B mode, so two arms means **two worktrees, alternated by hand** — and
+   `.claude/workstreams/TYPECHECK.md` trap 14 applies: `MEDAKA_STRICT=1` makes a
+   two-binary differential impossible from one tree, and an exported
+   `MEDAKA_ROOT`/`MEDAKA_EMITTER` silently crosses the arms. Also budget the
+   `benchmark-emitter` skill's two-rebuild rule if the emitter itself moves.
+
+   Report allocation alongside time — allocation is deterministic and time is not
+   (`.claude/workstreams/TYPECHECK.md` trap 9) — but **allocation alone does not
+   discharge this item**: a whole-graph fold that allocates the same rows the
+   accumulators already allocate can still cost time. If the A/B cannot be run,
+   that is an **owed measurement stated as owed**, not a pass.
+9. #829: `DeclEnvs`/`DeclEnvModule` keep at least one interior comment each, and
+   any new commented field is diffed by eye after `fmt --write`.
+
+### 9.9 What would falsify this design
+
+- **A program-output golden moves on PR2.** Then §9.5's equality is false — the
+  prefix build and the accumulator differ in population or in order. Land PR1
+  alone; do not bless.
+- **`IE` needs a method-name key component** to answer something A-3.4 promises.
+  Then §9.3's split (`IE` = impls · `CE` = interface defaults · B-2 = emit words)
+  is wrong, and it is an **owner-level re-adjudication**, not a local patch.
+- **Any `IE` read needs an entry at ordinal > current.** Then the filter is not
+  equality-preserving and A-3.6 is being done early, under #1482's open gate.
+- **#1265's pin flips.** `IE` absorbed the default arm, or the emit words moved.
+  Revert; that is B-2's.
+- **#1438's pin flips.** The bare compatibility leg was dropped; that drain is
+  #1482's and its own fixture set has to come with it.
+- **`InstRef` turns out not to be unique** (two impls sharing one) — then the
+  mint is not the single enumeration point it claims, and A-3.7's coherence
+  tightening would inherit the very defect it is waiting on.
+- **The interleaved A/B shows a self-compile regression beyond the stated minimum
+  detectable effect.** Then the whole-graph build is not free and `IE` must be
+  built incrementally, which changes §9.5's equality argument. ⚠️ **This
+  falsifier is live and unconditional** — it used to open *"#1187 lands a harness
+  and …"*, which parked it behind an issue that had already closed nine days
+  earlier (§9.8 item 8). There is no conditional left: run it.
+- **The PR1 shadow-compare panics** (§9.5). Then either the algebra or `DL` is
+  false, and the instrument has told you which module and which bucket — that is
+  the outcome it exists for, and it is cheaper than PR2 discovering it through a
+  golden that cannot see order.
 
 ---
 
