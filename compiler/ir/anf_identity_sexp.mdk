@@ -1,0 +1,32 @@
+-- Stable, lossless rendering for X-A's preparatory StableNodeId substrate.
+
+import ir.anf_identity.{
+  StableGeneratedRole(..),
+  StableNodeId,
+  StableNodeIdError(..),
+  foldStableNodeId,
+}
+import ir.sexp.{node, slist}
+import support.util.{escStr}
+
+roleSexp : StableGeneratedRole -> String
+roleSexp RoleLiftedLambda = "lifted-lambda"
+roleSexp RoleWrapper = "wrapper"
+roleSexp RoleEtaAdapter = "eta-adapter"
+roleSexp RolePapEntry = "pap-entry"
+
+errorSexp : StableNodeIdError -> String
+errorSexp EmptyProjectPath = "empty-project-path"
+errorSexp AbsoluteProjectPath = "absolute-project-path"
+errorSexp ParentProjectPath = "parent-project-path"
+errorSexp NonCanonicalProjectPath = "noncanonical-project-path"
+errorSexp InvalidSourceSpan = "invalid-source-span"
+errorSexp NegativeStructuralIndex = "negative-structural-index"
+
+export stableNodeIdToSexp : StableNodeId -> String
+stableNodeIdToSexp nodeId = foldStableNodeId
+  (path startLine startCol endLine endCol childPath role => node "stable-node-id" [escStr path, node "span" [intToString startLine, intToString startCol, intToString endLine, intToString endCol], node "child-path" [slist (map intToString childPath)], roleSexp role])
+  nodeId
+
+export stableNodeIdErrorToSexp : StableNodeIdError -> String
+stableNodeIdErrorToSexp err = node "stable-node-id-error" [errorSexp err]

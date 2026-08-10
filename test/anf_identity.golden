@@ -1,0 +1,1 @@
+(stable-node-ids (stable-node-id "src/main.mdk" (span 3 2 3 14) (child-path (0 1)) lifted-lambda) (stable-node-id "src/main.mdk" (span 3 2 3 14) (child-path (0 1)) wrapper) (stable-node-id "src/main.mdk" (span 3 2 3 14) (child-path (0 2)) eta-adapter) (stable-node-id "src/a:b\\c.mdk" (span 8 0 8 9) (child-path (2)) pap-entry))

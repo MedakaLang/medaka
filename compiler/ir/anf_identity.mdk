@@ -1,0 +1,78 @@
+-- X-A preparatory identity substrate (#1400).
+--
+-- This is deliberately not ANF, CallableId, or AP.  It validates only the
+-- stable source-node/role component that X-A will later use after V exists.
+-- No shipping emitter may import this module.
+
+import support.util.{splitOnChar, startsWith}
+
+public export data StableGeneratedRole =
+  | RoleLiftedLambda
+  | RoleWrapper
+  | RoleEtaAdapter
+  | RolePapEntry
+deriving (Eq, Ord, Debug)
+
+public export data StableNodeIdInput =
+  | StableNodeIdInput String Int Int Int Int (List Int) StableGeneratedRole
+
+public export data StableNodeIdError =
+  | EmptyProjectPath
+  | AbsoluteProjectPath
+  | ParentProjectPath
+  | NonCanonicalProjectPath
+  | InvalidSourceSpan
+  | NegativeStructuralIndex
+deriving (Eq, Debug)
+
+-- The constructor remains module-private: every StableNodeId passed to a later
+-- X-A lowering has passed the path/span/structural validation below.
+export data StableNodeId =
+  | StableNodeId String Int Int Int Int (List Int) StableGeneratedRole
+deriving (Eq, Ord)
+
+allNonNegative : List Int -> Bool
+allNonNegative [] = True
+allNonNegative (n::ns) = n >= 0 && allNonNegative ns
+
+canonicalPathComponents : List String -> Bool
+canonicalPathComponents [] = False
+canonicalPathComponents (component::rest) = component != ""
+  && component != "."
+  && component != ".."
+  && canonicalPathComponentsGo rest
+
+canonicalPathComponentsGo : List String -> Bool
+canonicalPathComponentsGo [] = True
+canonicalPathComponentsGo (component::rest) = component != ""
+  && component != "."
+  && component != ".."
+  && canonicalPathComponentsGo rest
+
+canonicalProjectPath : String -> Bool
+canonicalProjectPath path = canonicalPathComponents (splitOnChar '/' path)
+
+validSpan : Int -> Int -> Int -> Int -> Bool
+validSpan startLine startCol endLine endCol = startLine >= 1
+  && startCol >= 0
+  && endLine >= 1
+  && endLine >= startLine
+  && endCol >= 0
+  && (endLine != startLine || endCol >= startCol)
+
+export mintStableNodeId : StableNodeIdInput -> Result StableNodeIdError StableNodeId
+mintStableNodeId (StableNodeIdInput path startLine startCol endLine endCol childPath role)
+  | path == "" = Err EmptyProjectPath
+  | startsWith "/" path = Err AbsoluteProjectPath
+  | startsWith "../" path = Err ParentProjectPath
+  | not (canonicalProjectPath path) = Err NonCanonicalProjectPath
+  | not (validSpan startLine startCol endLine endCol) = Err InvalidSourceSpan
+  | not (allNonNegative childPath) = Err NegativeStructuralIndex
+  | otherwise =
+    Ok (StableNodeId path startLine startCol endLine endCol childPath role)
+
+-- A serializer may inspect an already-validated ID, but clients cannot forge
+-- one through this fold.  The structured value, not its rendered form, is the
+-- identity used by future planning maps.
+export foldStableNodeId : (String -> Int -> Int -> Int -> Int -> List Int -> StableGeneratedRole -> a) -> StableNodeId -> a
+foldStableNodeId f (StableNodeId path startLine startCol endLine endCol childPath role) = f path startLine startCol endLine endCol childPath role

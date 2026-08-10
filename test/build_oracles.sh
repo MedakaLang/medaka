@@ -143,6 +143,8 @@ fi
 #   draft_semantic_main   — diff_compiler_draft_semantic.sh (#1399 X-0D): builds
 #                           the non-authoritative comparison carrier on the real
 #                           multi-module emit seam and prints transport receipts.
+#   anf_identity_main     — diff_compiler_anf_identity.sh (#1400 X-A): validates
+#                           and serializes the non-authoritative StableNodeId substrate.
 #   resolve_main          — diff_compiler_resolve.sh
 #   resolve_batch         — diff_compiler_resolve_batch.sh
 #   resolve_modules_main  — diff_compiler_resolve_modules.sh
@@ -181,7 +183,7 @@ core_ir_dict_pp_main \
 llvm_emit_main llvm_emit_typed_main llvm_emit_modules_main \
 llvm_bootstrap_lex_main \
 lex_main parse_main parse_result_main \
-resolve_main resolve_batch resolve_modules_main origin_agreement_main draft_semantic_main \
+resolve_main resolve_batch resolve_modules_main origin_agreement_main draft_semantic_main anf_identity_main \
 typecheck_main check_main check_batch \
 check_modules_main check_all_main check_match_main exhaust_main lint_main lint_fix_main \
 diagnostics_main diagnostics_project_main \
