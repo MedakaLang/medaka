@@ -1,5 +1,5 @@
 # META
-source_lines=1291
+source_lines=1282
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/snapshot.mdk — `medaka snapshot`, the in-process snapshot runner
@@ -194,15 +194,8 @@ import types.typecheck.{
   resetTypeErrorsSticky,
 }
 import eval.eval.{evalOneOutput, funNamesOf, dropShadowedExp, noMainMsg}
-import backend.llvm_emit.{
-  emitProgram,
-  makeEmitInput,
-  enableGapRecord,
-  resetGaps,
-  gapEvents,
-}
--- `backend.wasm_emit` also exports `emitProgram`, colliding with the LLVM one above.
--- A member alias renames it on import, so BOTH backends are driven from ONE process
+import backend.llvm_emit.{emitProgramRecord, makeEmitInput}
+-- A member alias gives the Wasm emitter a distinct local name, so BOTH backends are driven from ONE process
 -- over ONE lowered CProgram.  (This is what retired `tools/snap_wasm.mdk`, a re-export
 -- shim that existed solely because Medaka had no import aliasing.)
 import backend.wasm_emit.{
@@ -633,10 +626,8 @@ emitBoth root sel runtimeDecls userDecls =
 llvmOf : List Decl -> List Decl -> CProgram -> String
 llvmOf runtimeDecls allDecls cp =
   let input = makeEmitInput (returnsSelfTable allDecls) (selfFnParamTable allDecls) (methodIfaceTable allDecls) (methodConstraintIfaces allDecls) (ctorFieldTypeNames allDecls) (declSigTypeNames runtimeDecls ++ declSigTypeNames allDecls) (mainTypeIsUnit ()) (mainTypeIsFloat ()) 0 [] [] ""
-  let _ = resetGaps ()
-  let _ = enableGapRecord ()
-  let text = emitProgram input cp
-  withGaps ";" text (gapEvents ())
+  let (text, gaps) = emitProgramRecord input cp
+  withGaps ";" text gaps
 
 wasmOf : List Decl -> List Decl -> CProgram -> String
 wasmOf runtimeDecls allDecls cp =
@@ -1307,7 +1298,7 @@ mapUnit f (x::rest) =
 (DUse false (UseGroup ("types" "annotate") ((mem "annotateProgram" false))))
 (DUse false (UseGroup ("types" "typecheck") ((mem "checkToLinesWithRuntime" false) (mem "setCoherenceUserDecls" false) (mem "elaborateOne" false) (mem "elaborateDict" false) (mem "constrainedSigNames" false) (mem "mainTypeIsUnit" false) (mem "mainTypeIsFloat" false) (mem "hadTypeErrors" false) (mem "hadMatchWarnings" false) (mem "resetTypeErrorsSticky" false))))
 (DUse false (UseGroup ("eval" "eval") ((mem "evalOneOutput" false) (mem "funNamesOf" false) (mem "dropShadowedExp" false) (mem "noMainMsg" false))))
-(DUse false (UseGroup ("backend" "llvm_emit") ((mem "emitProgram" false) (mem "makeEmitInput" false) (mem "enableGapRecord" false) (mem "resetGaps" false) (mem "gapEvents" false))))
+(DUse false (UseGroup ("backend" "llvm_emit") ((mem "emitProgramRecord" false) (mem "makeEmitInput" false))))
 (DUse false (UseGroup ("backend" "wasm_emit") ((mem "emitProgram" false "wasmText") (mem "installMethodIface" false) (mem "installDeclRetTypes" false) (mem "installCtorFloatFields" false) (mem "enableGapRecordW" false) (mem "resetGapsW" false) (mem "gapEventsW" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "joinWith" false) (mem "splitNl" false) (mem "startsWith" false) (mem "anyList" false) (mem "reverseL" false) (mem "filterList" false))))
 (DUse false (UseGroup ("support" "path") ((mem "chopExt" false) (mem "baseOf" false))))
@@ -1411,7 +1402,7 @@ mapUnit f (x::rest) =
 (DTypeSig false "emitBoth" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyCon "Unit")))))))
 (DFunDef false "emitBoth" ((PVar "root") (PVar "sel") (PVar "runtimeDecls") (PVar "userDecls")) (EBlock (DoLet false false (PVar "userNames") (EApp (EVar "funNamesOf") (EVar "userDecls"))) (DoLet false false (PVar "dictNames") (EApp (EVar "constrainedSigNames") (EVar "userDecls"))) (DoLet false false (PVar "allDecls") (EApp (EApp (EApp (EApp (EVar "elaborateDict") (EVar "runtimeDecls")) (EVar "dictNames")) (EVar "userNames")) (EVar "userDecls"))) (DoLet false false (PVar "cp") (EApp (EVar "lowerProgramEmit") (EVar "allDecls"))) (DoLet false false PWild (EIf (EApp (EApp (EVar "wants") (EVar "sel")) (ELit (LString "LLVM"))) (EApp (EApp (EApp (EVar "emitSection") (EVar "root")) (ELit (LString "LLVM"))) (EApp (EApp (EApp (EVar "llvmOf") (EVar "runtimeDecls")) (EVar "allDecls")) (EVar "cp"))) (ELit LUnit))) (DoExpr (EIf (EApp (EApp (EVar "wants") (EVar "sel")) (ELit (LString "WASM"))) (EApp (EApp (EApp (EVar "emitSection") (EVar "root")) (ELit (LString "WASM"))) (EApp (EApp (EApp (EVar "wasmOf") (EVar "runtimeDecls")) (EVar "allDecls")) (EVar "cp"))) (ELit LUnit)))))
 (DTypeSig false "llvmOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "CProgram") (TyCon "String")))))
-(DFunDef false "llvmOf" ((PVar "runtimeDecls") (PVar "allDecls") (PVar "cp")) (EBlock (DoLet false false (PVar "input") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "makeEmitInput") (EApp (EVar "returnsSelfTable") (EVar "allDecls"))) (EApp (EVar "selfFnParamTable") (EVar "allDecls"))) (EApp (EVar "methodIfaceTable") (EVar "allDecls"))) (EApp (EVar "methodConstraintIfaces") (EVar "allDecls"))) (EApp (EVar "ctorFieldTypeNames") (EVar "allDecls"))) (EBinOp "++" (EApp (EVar "declSigTypeNames") (EVar "runtimeDecls")) (EApp (EVar "declSigTypeNames") (EVar "allDecls")))) (EApp (EVar "mainTypeIsUnit") (ELit LUnit))) (EApp (EVar "mainTypeIsFloat") (ELit LUnit))) (ELit (LInt 0))) (EListLit)) (EListLit)) (ELit (LString "")))) (DoLet false false PWild (EApp (EVar "resetGaps") (ELit LUnit))) (DoLet false false PWild (EApp (EVar "enableGapRecord") (ELit LUnit))) (DoLet false false (PVar "text") (EApp (EApp (EVar "emitProgram") (EVar "input")) (EVar "cp"))) (DoExpr (EApp (EApp (EApp (EVar "withGaps") (ELit (LString ";"))) (EVar "text")) (EApp (EVar "gapEvents") (ELit LUnit))))))
+(DFunDef false "llvmOf" ((PVar "runtimeDecls") (PVar "allDecls") (PVar "cp")) (EBlock (DoLet false false (PVar "input") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "makeEmitInput") (EApp (EVar "returnsSelfTable") (EVar "allDecls"))) (EApp (EVar "selfFnParamTable") (EVar "allDecls"))) (EApp (EVar "methodIfaceTable") (EVar "allDecls"))) (EApp (EVar "methodConstraintIfaces") (EVar "allDecls"))) (EApp (EVar "ctorFieldTypeNames") (EVar "allDecls"))) (EBinOp "++" (EApp (EVar "declSigTypeNames") (EVar "runtimeDecls")) (EApp (EVar "declSigTypeNames") (EVar "allDecls")))) (EApp (EVar "mainTypeIsUnit") (ELit LUnit))) (EApp (EVar "mainTypeIsFloat") (ELit LUnit))) (ELit (LInt 0))) (EListLit)) (EListLit)) (ELit (LString "")))) (DoLet false false (PTuple (PVar "text") (PVar "gaps")) (EApp (EApp (EVar "emitProgramRecord") (EVar "input")) (EVar "cp"))) (DoExpr (EApp (EApp (EApp (EVar "withGaps") (ELit (LString ";"))) (EVar "text")) (EVar "gaps")))))
 (DTypeSig false "wasmOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "CProgram") (TyCon "String")))))
 (DFunDef false "wasmOf" ((PVar "runtimeDecls") (PVar "allDecls") (PVar "cp")) (EBlock (DoLet false false PWild (EApp (EVar "installMethodIface") (EApp (EVar "methodIfaceTable") (EVar "allDecls")))) (DoLet false false PWild (EApp (EVar "installDeclRetTypes") (EBinOp "++" (EApp (EVar "declSigTypeNames") (EVar "runtimeDecls")) (EApp (EVar "declSigTypeNames") (EVar "allDecls"))))) (DoLet false false PWild (EApp (EVar "installCtorFloatFields") (EApp (EVar "ctorFieldTypeNames") (EVar "allDecls")))) (DoLet false false PWild (EApp (EVar "resetGapsW") (ELit LUnit))) (DoLet false false PWild (EApp (EVar "enableGapRecordW") (ELit LUnit))) (DoLet false false (PVar "text") (EApp (EVar "wasmText") (EVar "cp"))) (DoExpr (EApp (EApp (EApp (EVar "withGaps") (ELit (LString ";;"))) (EVar "text")) (EApp (EVar "gapEventsW") (ELit LUnit))))))
 (DTypeSig false "withGaps" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))))
@@ -1619,7 +1610,7 @@ mapUnit f (x::rest) =
 (DUse false (UseGroup ("types" "annotate") ((mem "annotateProgram" false))))
 (DUse false (UseGroup ("types" "typecheck") ((mem "checkToLinesWithRuntime" false) (mem "setCoherenceUserDecls" false) (mem "elaborateOne" false) (mem "elaborateDict" false) (mem "constrainedSigNames" false) (mem "mainTypeIsUnit" false) (mem "mainTypeIsFloat" false) (mem "hadTypeErrors" false) (mem "hadMatchWarnings" false) (mem "resetTypeErrorsSticky" false))))
 (DUse false (UseGroup ("eval" "eval") ((mem "evalOneOutput" false) (mem "funNamesOf" false) (mem "dropShadowedExp" false) (mem "noMainMsg" false))))
-(DUse false (UseGroup ("backend" "llvm_emit") ((mem "emitProgram" false) (mem "makeEmitInput" false) (mem "enableGapRecord" false) (mem "resetGaps" false) (mem "gapEvents" false))))
+(DUse false (UseGroup ("backend" "llvm_emit") ((mem "emitProgramRecord" false) (mem "makeEmitInput" false))))
 (DUse false (UseGroup ("backend" "wasm_emit") ((mem "emitProgram" false "wasmText") (mem "installMethodIface" false) (mem "installDeclRetTypes" false) (mem "installCtorFloatFields" false) (mem "enableGapRecordW" false) (mem "resetGapsW" false) (mem "gapEventsW" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "joinWith" false) (mem "splitNl" false) (mem "startsWith" false) (mem "anyList" false) (mem "reverseL" false) (mem "filterList" false))))
 (DUse false (UseGroup ("support" "path") ((mem "chopExt" false) (mem "baseOf" false))))
@@ -1723,7 +1714,7 @@ mapUnit f (x::rest) =
 (DTypeSig false "emitBoth" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyCon "Unit")))))))
 (DFunDef false "emitBoth" ((PVar "root") (PVar "sel") (PVar "runtimeDecls") (PVar "userDecls")) (EBlock (DoLet false false (PVar "userNames") (EApp (EVar "funNamesOf") (EVar "userDecls"))) (DoLet false false (PVar "dictNames") (EApp (EVar "constrainedSigNames") (EVar "userDecls"))) (DoLet false false (PVar "allDecls") (EApp (EApp (EApp (EApp (EVar "elaborateDict") (EVar "runtimeDecls")) (EVar "dictNames")) (EVar "userNames")) (EVar "userDecls"))) (DoLet false false (PVar "cp") (EApp (EVar "lowerProgramEmit") (EVar "allDecls"))) (DoLet false false PWild (EIf (EApp (EApp (EVar "wants") (EVar "sel")) (ELit (LString "LLVM"))) (EApp (EApp (EApp (EVar "emitSection") (EVar "root")) (ELit (LString "LLVM"))) (EApp (EApp (EApp (EVar "llvmOf") (EVar "runtimeDecls")) (EVar "allDecls")) (EVar "cp"))) (ELit LUnit))) (DoExpr (EIf (EApp (EApp (EVar "wants") (EVar "sel")) (ELit (LString "WASM"))) (EApp (EApp (EApp (EVar "emitSection") (EVar "root")) (ELit (LString "WASM"))) (EApp (EApp (EApp (EVar "wasmOf") (EVar "runtimeDecls")) (EVar "allDecls")) (EVar "cp"))) (ELit LUnit)))))
 (DTypeSig false "llvmOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "CProgram") (TyCon "String")))))
-(DFunDef false "llvmOf" ((PVar "runtimeDecls") (PVar "allDecls") (PVar "cp")) (EBlock (DoLet false false (PVar "input") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "makeEmitInput") (EApp (EVar "returnsSelfTable") (EVar "allDecls"))) (EApp (EVar "selfFnParamTable") (EVar "allDecls"))) (EApp (EVar "methodIfaceTable") (EVar "allDecls"))) (EApp (EVar "methodConstraintIfaces") (EVar "allDecls"))) (EApp (EVar "ctorFieldTypeNames") (EVar "allDecls"))) (EBinOp "++" (EApp (EVar "declSigTypeNames") (EVar "runtimeDecls")) (EApp (EVar "declSigTypeNames") (EVar "allDecls")))) (EApp (EVar "mainTypeIsUnit") (ELit LUnit))) (EApp (EVar "mainTypeIsFloat") (ELit LUnit))) (ELit (LInt 0))) (EListLit)) (EListLit)) (ELit (LString "")))) (DoLet false false PWild (EApp (EVar "resetGaps") (ELit LUnit))) (DoLet false false PWild (EApp (EVar "enableGapRecord") (ELit LUnit))) (DoLet false false (PVar "text") (EApp (EApp (EVar "emitProgram") (EVar "input")) (EVar "cp"))) (DoExpr (EApp (EApp (EApp (EVar "withGaps") (ELit (LString ";"))) (EVar "text")) (EApp (EVar "gapEvents") (ELit LUnit))))))
+(DFunDef false "llvmOf" ((PVar "runtimeDecls") (PVar "allDecls") (PVar "cp")) (EBlock (DoLet false false (PVar "input") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "makeEmitInput") (EApp (EVar "returnsSelfTable") (EVar "allDecls"))) (EApp (EVar "selfFnParamTable") (EVar "allDecls"))) (EApp (EVar "methodIfaceTable") (EVar "allDecls"))) (EApp (EVar "methodConstraintIfaces") (EVar "allDecls"))) (EApp (EVar "ctorFieldTypeNames") (EVar "allDecls"))) (EBinOp "++" (EApp (EVar "declSigTypeNames") (EVar "runtimeDecls")) (EApp (EVar "declSigTypeNames") (EVar "allDecls")))) (EApp (EVar "mainTypeIsUnit") (ELit LUnit))) (EApp (EVar "mainTypeIsFloat") (ELit LUnit))) (ELit (LInt 0))) (EListLit)) (EListLit)) (ELit (LString "")))) (DoLet false false (PTuple (PVar "text") (PVar "gaps")) (EApp (EApp (EVar "emitProgramRecord") (EVar "input")) (EVar "cp"))) (DoExpr (EApp (EApp (EApp (EVar "withGaps") (ELit (LString ";"))) (EVar "text")) (EVar "gaps")))))
 (DTypeSig false "wasmOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "CProgram") (TyCon "String")))))
 (DFunDef false "wasmOf" ((PVar "runtimeDecls") (PVar "allDecls") (PVar "cp")) (EBlock (DoLet false false PWild (EApp (EVar "installMethodIface") (EApp (EVar "methodIfaceTable") (EVar "allDecls")))) (DoLet false false PWild (EApp (EVar "installDeclRetTypes") (EBinOp "++" (EApp (EVar "declSigTypeNames") (EVar "runtimeDecls")) (EApp (EVar "declSigTypeNames") (EVar "allDecls"))))) (DoLet false false PWild (EApp (EVar "installCtorFloatFields") (EApp (EVar "ctorFieldTypeNames") (EVar "allDecls")))) (DoLet false false PWild (EApp (EVar "resetGapsW") (ELit LUnit))) (DoLet false false PWild (EApp (EVar "enableGapRecordW") (ELit LUnit))) (DoLet false false (PVar "text") (EApp (EVar "wasmText") (EVar "cp"))) (DoExpr (EApp (EApp (EApp (EVar "withGaps") (ELit (LString ";;"))) (EVar "text")) (EApp (EVar "gapEventsW") (ELit LUnit))))))
 (DTypeSig false "withGaps" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))))

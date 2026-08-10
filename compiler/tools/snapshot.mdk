@@ -190,15 +190,8 @@ import types.typecheck.{
   resetTypeErrorsSticky,
 }
 import eval.eval.{evalOneOutput, funNamesOf, dropShadowedExp, noMainMsg}
-import backend.llvm_emit.{
-  emitProgram,
-  makeEmitInput,
-  enableGapRecord,
-  resetGaps,
-  gapEvents,
-}
--- `backend.wasm_emit` also exports `emitProgram`, colliding with the LLVM one above.
--- A member alias renames it on import, so BOTH backends are driven from ONE process
+import backend.llvm_emit.{emitProgramRecord, makeEmitInput}
+-- A member alias gives the Wasm emitter a distinct local name, so BOTH backends are driven from ONE process
 -- over ONE lowered CProgram.  (This is what retired `tools/snap_wasm.mdk`, a re-export
 -- shim that existed solely because Medaka had no import aliasing.)
 import backend.wasm_emit.{
@@ -629,10 +622,8 @@ emitBoth root sel runtimeDecls userDecls =
 llvmOf : List Decl -> List Decl -> CProgram -> String
 llvmOf runtimeDecls allDecls cp =
   let input = makeEmitInput (returnsSelfTable allDecls) (selfFnParamTable allDecls) (methodIfaceTable allDecls) (methodConstraintIfaces allDecls) (ctorFieldTypeNames allDecls) (declSigTypeNames runtimeDecls ++ declSigTypeNames allDecls) (mainTypeIsUnit ()) (mainTypeIsFloat ()) 0 [] [] ""
-  let _ = resetGaps ()
-  let _ = enableGapRecord ()
-  let text = emitProgram input cp
-  withGaps ";" text (gapEvents ())
+  let (text, gaps) = emitProgramRecord input cp
+  withGaps ";" text gaps
 
 wasmOf : List Decl -> List Decl -> CProgram -> String
 wasmOf runtimeDecls allDecls cp =
