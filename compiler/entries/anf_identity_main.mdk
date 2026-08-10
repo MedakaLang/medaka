@@ -1,0 +1,47 @@
+-- X-A preparatory probe (#1400).  This hand-builds identity components only;
+-- it never lowers a user program and is not a physical-emitter input.
+
+import ir.anf_identity.{
+  StableGeneratedRole(..),
+  StableNodeIdInput(..),
+  mintStableNodeId,
+}
+import ir.anf_identity_sexp.{stableNodeIdErrorToSexp, stableNodeIdToSexp}
+import ir.sexp.{node, slist}
+
+canonicalInputs : List StableNodeIdInput
+canonicalInputs = [
+  StableNodeIdInput "src/main.mdk" 3 2 3 14 [0, 1] RoleLiftedLambda,
+  StableNodeIdInput "src/main.mdk" 3 2 3 14 [0, 1] RoleWrapper,
+  StableNodeIdInput "src/main.mdk" 3 2 3 14 [0, 2] RoleEtaAdapter,
+  StableNodeIdInput "src/main.mdk" 8 0 8 9 [2] RolePapEntry,
+]
+
+renderMint : StableNodeIdInput -> String
+renderMint input = match mintStableNodeId input
+  Ok nodeId => stableNodeIdToSexp nodeId
+  Err err => stableNodeIdErrorToSexp err
+
+invalidInput : String -> StableNodeIdInput
+invalidInput "absolute" =
+  StableNodeIdInput "/tmp/main.mdk" 0 0 0 1 [0] RoleLiftedLambda
+invalidInput "parent" =
+  StableNodeIdInput "../main.mdk" 0 0 0 1 [0] RoleLiftedLambda
+invalidInput "span" =
+  StableNodeIdInput "src/main.mdk" 2 4 2 3 [0] RoleLiftedLambda
+invalidInput "child" =
+  StableNodeIdInput "src/main.mdk" 0 0 0 1 [-1] RoleLiftedLambda
+invalidInput _ = StableNodeIdInput "" 0 0 0 1 [0] RoleLiftedLambda
+
+report : String -> String
+report "absolute" = renderMint (invalidInput "absolute")
+report "parent" = renderMint (invalidInput "parent")
+report "span" = renderMint (invalidInput "span")
+report "child" = renderMint (invalidInput "child")
+report "empty-path" = renderMint (invalidInput "")
+report _ = node "stable-node-ids" (map renderMint canonicalInputs)
+
+main : <IO> Unit
+main = match getEnv "MEDAKA_ANF_IDENTITY_MUTATION"
+  Some mutation => putStrLn (report mutation)
+  None => putStrLn (report "")

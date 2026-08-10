@@ -493,6 +493,7 @@ for f in $changed; do
     compiler/ir/*)
       add 'diff_compiler_core_ir*'; add 'diff_compiler_llvm*'; add 'diff_compiler_snapshot*'
       add 'diff_compiler_draft_semantic'
+      add 'diff_compiler_anf_identity'
       add 'diff_compiler_engines'
       add 'diff_compiler_shadow_semantics'; add 'diff_compiler_dict_semantics' ;;
 
