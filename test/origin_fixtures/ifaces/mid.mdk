@@ -1,0 +1,53 @@
+-- #1110 PR C corpus — DECLARE AND RE-EXPORT THE SAME NAME.  This module is the
+-- witness for #1245 (FIXED), in BOTH namespaces.
+--
+-- `mid` re-exports `deep`'s `Relay` (interface) and `Baton` (type) AND declares a
+-- `Relay` and a `Baton` of its own.  What a consumer writing `import mid.{Relay,
+-- hop}` actually binds is **mid's own** interface — verified by method identity on
+-- the binary this fixture was written against, not inferred:
+--
+--     import mid.{Relay, hop} ; impl Relay Int where hop n = n   -> exit 0
+--     import mid.{Relay, via} ; impl Relay Int where via n = n
+--       -> "Method 'via' is not part of interface 'Relay'", exit 1
+--
+-- The type namespace binds mid's own the same way, verified the same way (two
+-- modules declaring `data Bar`, the second re-exporting the first's: the consumer
+-- can name the SECOND's constructor, and the first's is *"Unbound variable …
+-- Did you mean …"*).
+--
+-- 🚨 SO THE GOLDEN MUST SAY `mod:mid` FOR BOTH — `iface:Relay 1 mod:mid` and
+-- `Baton 1 mod:mid`.  Until #1245 it said `mod:deep`: `known["mid"]` is built by
+-- `typeOriginExports`, which concatenated own-declarations FIRST and re-exports
+-- LAST while every consumer folds it LAST-WRITE-WINS (`omFromPairs`,
+-- `support/ordmap.mdk`), so the re-exported source won and `bindTypeOrigin` handed
+-- the consumer an id for a module that did not declare what it bound.  The fix
+-- reordered that concatenation to re-exports first, own last, agreeing with
+-- `tyOriginScope` and with what resolve binds.
+--
+-- ⚠️ MEASURED, by rebuilding at the pre-fix ordering with this corpus in place:
+-- the `Baton` spread line read `Baton 2 mod:deep|mod:mid`, not `1 mod:deep`.
+-- `mid`'s OWN occurrence (`carry : Baton -> Int`, below) is stamped from `mid`'s
+-- own `tyOriginScope`, where the own-declaration layer wins, so `mid` said
+-- `mod:mid` while its consumer said `mod:deep` — ONE binding, TWO identities, in
+-- one program.  That is the sharpest form of the defect and it is why this
+-- fixture writes an occurrence on BOTH ends of the chain rather than only in
+-- `main_ifaces`; `iface:Relay` cannot show it, because no module here writes a
+-- `Relay` occurrence except the consumer.
+--
+-- ⚠️ BOTH NAMESPACES ARE PINNED HERE DELIBERATELY.  The two share one
+-- concatenation, so a regression would move both rows — but "they share a
+-- function" is a claim about the source, and this gate is the only place in the
+-- tree where an origin is OBSERVABLE at all.  Do not drop either row.
+
+export import deep.{Relay, Baton}
+
+export interface Relay a where
+  hop : a -> Int
+
+export data Baton = MidBaton
+
+-- Gives `main_ifaces` a way to write a `Baton` OCCURRENCE without exporting any
+-- constructor: `Baton` is abstract on both ends, so the corpus pins the type-side
+-- origin without also dragging in the cross-module constructor-merge shape.
+export carry : Baton -> Int
+carry MidBaton = 1

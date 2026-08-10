@@ -1,0 +1,12 @@
+-- #1047: B's implementor.  `impl Speak DogB` is METHOD-LESS, so DogB inherits
+-- ifb.mdk's default ("B-default") -- and THAT is the fact that used to be lost:
+-- the registry was filtered by the bare METHOD name `speak`, so first-match
+-- handed DogB the other module's body.
+import ifb.{Speak(..), speak}
+
+public export data DogB = DogB
+
+impl Speak DogB where
+
+export sayB : DogB -> String
+sayB d = speak d

@@ -16,6 +16,87 @@ below means only "no two engines disagree" — an observability property, not a 
 claim; see the note under the matrix, and S7's own warning.** Until
 this gate existed the corpus below **ran nowhere**, and the matrix's own Status
 column had silently gone stale in the OK direction (see the note under §2).
+> ## 🔒 2026-08-06 — **S1's SCOPE IS RULED, AND THE WORD "visible" IS RETIRED FROM S1–S9.**
+>
+> A commissioned spec pass found the adjective **"visible"** used four times
+> across S1–S2, **defined nowhere**, carrying **three different scopes** — so the
+> clause set was internally inconsistent under *both* candidate readings and the
+> repair could not be a branch selection. Both halves are now landed:
+>
+> - **The vocabulary repair.** §1.0 defines **nameable in `M`** /
+>   **defined-in-`M`-or-imported-into-`M`** / **graph-global** once, and each of
+>   the four occurrences now names its own scope. **Do not reintroduce a bare
+>   "visible" ANYWHERE IN THIS DOCUMENT** — widened 2026-08-07 from "S1–S9" after
+>   a fifth bare occurrence surfaced in §5's historical narrative, outside the
+>   literal S1–S9 clause text but the same failure mode; a word-scoped
+>   instruction does not stop a class of ambiguous scope adjectives ("in scope",
+>   "available to", "reachable from", "sees", …) either — see §0's fix to the
+>   `Shadow` bullet. This half stands independently of the branch: the defect
+>   was the undefined adjective, of whatever spelling, wherever it appears.
+> - **The branch.** **S1's interface operand is scoped to what the module can
+>   NAME; S2's impl universe stays graph-global.** The argument, the cost, and
+>   the **⟲ overturn condition** are in the **S1-SCOPE** note under S1.
+> - **Follow-on ruling, 2026-08-07
+>   ([#1380](https://github.com/MedakaLang/medaka/issues/1380)): the
+>   RE-EXPORT-CHAIN arm of that operand is IN SCOPE.** An interface reaching `M`
+>   through a re-export chain is nameable in `M` — **conditional on the ordinary
+>   import/export rules saying the declaration is exported along that path**,
+>   which S1 consumes and does not define; failing closed on such a chain is
+>   non-conformant. ⚠️ Unlike the branch above, this one is an acceptance
+>   **WIDENING** on the importer arm, not a narrowing, and it has a **silent**
+>   member (same accept both ways, different value at exit 0) as well as a loud
+>   one — the rule, the full licensing set, its cost, and the sub-predicate that
+>   stays deferred are all in the **S1-CHAIN** note under S1.
+> - **Follow-on ruling, 2026-08-09
+>   ([#1351](https://github.com/MedakaLang/medaka/issues/1351)): S2's importer arm
+>   is evaluated PER DECLARATION.** When more than one interface declares a method
+>   named `N`, S2's *"any impl of **the shadowed interface** for **the receiver's**
+>   head tycon"* has no referent for either definite article — shadow-hood is
+>   decided over **names**, and which argument is the receiver is a property of an
+>   interface's **declaration**. **S2-DECL** (under S2) repairs both: only
+>   declarations S1-NS (a) admits may decide, the receiver argument and the impl
+>   query must come from the **same** declaration, disagreement between two admitted
+>   declarations is a located reject, and no answer may move with import-clause
+>   order. ⚠️ Unlike the two rulings above, **neither execution arm implements this
+>   today, and they are non-conformant for DIFFERENT reasons** — `check`/`run` reads
+>   a bare-name dispatch-index table, `build` reads none and assumes the receiver is
+>   argument 0. The measurement is in S2-DECL's Conformance paragraph; it is also
+>   why a candidate fix graded on `run` alone is a new **S7** violation.
+>
+> ⚠️ **S2's old `GLOBAL` gloss ("local ∪ imported ∪ prelude") was independently
+> wrong** — narrower than `DICT-SEMANTICS.md` §8 I5's actual instance universe —
+> *and* it was the same enumeration S1 used restrictively, thirty lines apart.
+> Corrected; see the warning on S2's importer arm.
+>
+> **Home of the ruling:**
+> [#1375](https://github.com/MedakaLang/medaka/issues/1375) (successor to
+> #1107), which owns [#1353](https://github.com/MedakaLang/medaka/issues/1353)
+> and [#1302](https://github.com/MedakaLang/medaka/issues/1302) as **one**
+> ruling — they are two axes of the same operand, reachability and export
+> visibility. The derivation, the measurements, and the strongest argument
+> *against* the ruling are on #1353.
+>
+> 🚨 **When the ruling landed the implementation did NOT conform and §2's matrix
+> could not tell you so** — no fixture then exercised the axis. **Both halves have
+> since moved, in opposite directions, and neither generalises to the other
+> clauses above:**
+> - **S1-SCOPE and S1-NS are now implemented and GRADED** — [#1353](https://github.com/MedakaLang/medaka/issues/1353)
+>   is closed, the shadow-hood answer is intersected with the module's nameable
+>   set (§3's S1-detect rows), and §2 **rows 33–45** are the discriminating cells.
+>   Those rows are the corpus-gap item #1375 recorded as owed; before them the
+>   corpus graded byte-identically under either reading.
+> - **S2-DECL is NOT implemented on EITHER execution arm**, and they are
+>   non-conformant for different reasons ([#1351](https://github.com/MedakaLang/medaka/issues/1351),
+>   OPEN) — see S2-DECL's own Conformance paragraph.
+> - **Row 39 ([#1430](https://github.com/MedakaLang/medaka/issues/1430), OPEN
+>   S0)** is a live three-verb divergence on S2's definer inversion at
+>   *return position*, with the interface unambiguously nameable — so it is
+>   downstream of every ruling here rather than covered by one.
+>
+> Per this document's own scope rule, *the spec is the target, not a description
+> of present behavior.* **The 2026-08-06 spec change itself landed no compiler
+> behaviour change**; the conformance above arrived separately and later.
+
 **Scope:** a bare name `N` that is BOTH a top-level standalone function AND an
 interface-method name (a "shadow"). Peer of `DICT-SEMANTICS.md` /
 `LAYOUT-SEMANTICS.md`: clauses S1–S9, a gated decision matrix, and a per-stage
@@ -85,8 +166,13 @@ explicit). Fixtures: `test/shadow_fixtures/` (one per matrix cell), run by
 
 ## 0. Terminology
 
-- **Shadow**: bare name `N` naming both a standalone top-level fn and an
-  interface method visible at the call site.
+- **Shadow**: bare name `N` naming BOTH (a) a standalone top-level fn **defined
+  in `M` or imported into `M`**, AND (b) an interface method **nameable in
+  `M`**. ⚠️ **These are deliberately NOT the same scope** — see §1.0's **Scope
+  vocabulary** and S1, which states both operands explicitly; a single phrase
+  covering "both" (as an earlier revision of this bullet had it) reads as one
+  shared scope and is exactly the reading the ruling rejects. Shadow-hood is
+  per-**module**, so "at the call site" would be the wrong granularity.
 - **Definer shadow**: the standalone is defined in the *call site's own module*
   (in-tree: `stdlib/map.mdk` + `stdlib/hash_map.mdk` `toList`/`isEmpty`,
   `compiler/frontend/parser.mdk` `orElse` — all applied only to no-impl
@@ -94,6 +180,10 @@ explicit). Fixtures: `test/shadow_fixtures/` (one per matrix cell), run by
 - **Importer shadow**: the standalone is *imported* from another module (the
   everyday `import map` → `isEmpty m` pattern; the shadowed interface may live
   in the prelude, in the consuming module, or in a third module).
+- **Live impl** / **no-impl** (of a receiver): the receiver's head tycon does,
+  or does not, have an `impl` of the shadowed interface — tested against S2's
+  **graph-global** impl universe (§1.0), never filtered by what `M` can name.
+  Used throughout §2's matrix ("live-impl recv" / "no-impl recv") and §3.
 - **Routes** (`compiler/frontend/ast.mdk:69-72`): `RKey tag dicts` = dispatch to
   the impl whose head tycon is `tag`; `RLocal sym dicts` = NOT a dispatch, call
   the standalone (`sym` = the mangled standalone symbol on the build path, `""`
@@ -104,20 +194,541 @@ explicit). Fixtures: `test/shadow_fixtures/` (one per matrix cell), run by
   *"RLocal carries no dict"* as a settled **invariant**. That invariant WAS the
   S-1 silent miscompile: it is now false by design. Do not restore it.
 
-## 1. The resolution function (clauses S1–S8)
+## 1. The resolution function (clauses S1–S9)
 
-Given an occurrence of bare name `N`:
+### 1.0 Scope vocabulary — READ THIS BEFORE S1
 
-- **S1 (shadow-hood).** `N` is a shadow iff `N` ∈ funDef-names(visible
-  standalones) ∩ iface-method-names(visible interfaces). `N` is a **definer
-  shadow** in module `M` iff the standalone is defined **in `M`**; an **importer
-  shadow** iff it is *imported* into `M`. The *interface* may live anywhere
-  (local, imported, prelude). Shadow-hood is per-module, per-name — not
+⚠️ **The word "visible" used to appear four times in S1–S2, undefined, carrying
+three different scopes.** That ambiguity is what produced
+[#1353](https://github.com/MedakaLang/medaka/issues/1353), and it is why this
+section now names the scope at every occurrence instead of reusing one
+adjective. **[CORRECTED 2026-08-07 — this sentence used to also name
+[#1302](https://github.com/MedakaLang/medaka/issues/1302). That attribution was
+simply wrong: #1302's own filed repro never reaches this clause at all** (its
+`mth` is bound only as an impl method, never a standalone `DFunDef`, so S1's
+`funDef-names ∩ iface-method-names` conjunct is vacuously false there — see the
+⚠️ under S1). **Whether #1302's actual mechanism — a wildcard import surfacing
+a private interface's methods to a DIFFERENT check, the impl-obligation path —
+shares any root cause with this vocabulary defect is unverified; nothing here
+traces one. #1302 was bundled into "one ruling" by #1375's own framing (two
+axes of one operand), not because this clause's ambiguity produced its bug.**
+**Do not reintroduce a bare "visible" ANYWHERE IN THIS DOCUMENT** (widened
+2026-08-07 from "S1–S9" — see the top-matter note's account of why, and treat
+this as a *class* of ambiguous scope adjectives, not one string: "in scope",
+"available to", "reachable from", "sees" are the same failure under a
+different spelling). The three scopes are genuinely different and must be
+spelled out:
+
+| Term | Means | Used by |
+|---|---|---|
+| **nameable in `M`** | the declaration is one `M` may refer to by name: declared in `M`, **or** exported by a module `M` imports **AND ADMITTED BY THAT IMPORT PATH** (directly, or through a re-export chain — **RULED IN SCOPE 2026-08-07, [#1380](https://github.com/MedakaLang/medaka/issues/1380); see S1-CHAIN under S1**, which also says what is still deferred: the sub-predicate deciding when a declaration counts as *exported through* a chain), **or** declared in the implicit prelude. ⚠️ **The "and admitted by that import path" clause was ADDED 2026-08-08 by S1-NS**: this row previously said only *"exported by a module `M` imports"*, which is module-level and, read literally, is satisfied by `import smod.{sf}` — an import that names one unrelated function. That reading is exactly the too-loose one this document's own headline forbids, and it shipped as a bug. **What "admitted" means is S1-NS (a), which is the per-METHOD union of the two namespaces — see S1-NS under S1.** | S1's **interface** operand |
+| **defined in `M` or imported into `M`** | the two cases that assign a shadow its **kind** (definer / importer) — so this is also, exactly, S1's **standalone** operand | S1's **standalone** operand + the kind partition |
+| **graph-global** | ranges over **every** module of the loaded graph, whether or not any import path reaches it — `DICT-SEMANTICS.md` §8 **I5** | S2's **impl universe** only |
+
+⚠️ **S1's two operands are NOT the same set, and that is deliberate.** The
+standalone operand is the *narrower* one — it is pinned by S1's own kind
+partition, not chosen: a standalone neither defined in `M` nor imported into `M`
+has no shadow **kind**, and S2 is stated **per kind**, so S1 would classify an
+occurrence that S2 then gives no denotation. The interface operand is the wider
+**nameable in `M`**, which is what the phrase "the interface may live locally, be
+imported, or be the prelude" was always for. Both operands are scoped; they are
+scoped to different things, and each now says which.
+
+**"Nameable" and "graph-global" are NOT the same set** either, and *that*
+difference is the whole content of S1 versus S2: a module `M` with no import path
+to module `P` cannot name `P`'s interfaces (so they create no shadow in `M`) but
+`P`'s **instances** are still candidates for every goal arising in `M` (I5). One
+is about **names**, the other about **instances**. ⚠️ Beware in particular that
+"local ∪ imported ∪ prelude" is **not** a synonym for graph-global — it is
+strictly narrower than I5's instance universe, an older wording of S2 used it as
+one anyway, and that collision (the same three-item enumeration carrying opposite
+force thirty lines apart) is what made S1 unreadable.
+
+Given an occurrence of bare name `N` in module `M`:
+
+- **S1 (shadow-hood).** **[SCOPE RULED 2026-08-06 — §1.0 + the S1-SCOPE note
+  below; #1375]** `N` is a shadow **in `M`** iff `N` ∈ funDef-names(standalones
+  **defined in `M` or imported into `M`**) ∩ iface-method-names(interfaces
+  **nameable in `M`**). `N` is a **definer shadow** in module `M` iff the
+  standalone is defined **in `M`**; an **importer shadow** iff it is *imported*
+  into `M`. The *interface* may live in any of the three nameable-in-`M`
+  positions — local, imported, or prelude — and it is **not required to be
+  local**; but an interface that `M` cannot name creates **no shadow in `M`**,
+  whether because no import path reaches its module at all or because its
+  declaration is not exported through the path that does — this clause treats
+  both failures of "nameable in `M`" uniformly; S1 does not distinguish which
+  reason applies. **The impl universe is
+  not narrowed by this clause** — see S2 and §1.0. Shadow-hood is per-module,
+  per-name — not
   per-occurrence — and **the PRELUDE IS A MODULE**: a `core.mdk` occurrence of `N`
   is never a shadow of a user standalone, on *any* path, flat or multi-module
   (P0-21; before it, a user's `map` leaked into the prelude's own bodies). A name
   bound by a **local pattern** at the occurrence is not a shadow there — lexical
   scope resolves it to the binder.
+
+  ⚠️ **This clause settles [#1353](https://github.com/MedakaLang/medaka/issues/1353)'s
+  reachability axis. It does NOT, by itself, settle
+  [#1302](https://github.com/MedakaLang/medaka/issues/1302)'s export-visibility
+  axis, and a claim that it does is an over-claim — checked directly against
+  #1302's own filed repro (2026-08-07): its `mth` is bound only inside `impl IB
+  Blob where mth b = 5`, an **impl method**, never as a top-level standalone
+  `DFunDef`. S1's shadow-hood conjunct is `funDef-names(...) ∩
+  iface-method-names(...)` — with no standalone `mth` in the program, the
+  `funDef-names` side is empty and the conjunct is **vacuously false**
+  regardless of how the interface operand is scoped. Whatever governs #1302 (a
+  private interface's methods reaching a wildcard importer's impl-obligation
+  check, per its own filing) is therefore a **different mechanism** than the
+  one S1 governs — #1375's own Epistemic-status section already listed "#1302
+  measured under any predicate" as **not established**, and nothing landed here
+  establishes it. **#1302's grading remains open**, not settled by this clause.
+
+  **The reach of this ruling for each of the two issues #1375 bundled, stated
+  as a verdict rather than left to be inferred — this is #1375's scope item 3.**
+
+  | Issue | Axis | Verdict of the S1 clause set |
+  |---|---|---|
+  | [#1353](https://github.com/MedakaLang/medaka/issues/1353) | reachability — no import path reaches the interface's module | **DRAINED.** The clause decides it, §2 rows 33–35 grade it, and the issue is CLOSED with its must-fail pin drained and deleted |
+  | [#1302](https://github.com/MedakaLang/medaka/issues/1302) | export visibility — a path reaches the module, the declaration is not exported through it | **CONSTRAINED, NOT DRAINED.** The clause fixes what the answer *would* be for an S1-shaped program on that axis — a declaration `M` cannot name contributes no method name to `M`'s shadow surface, whatever the reason it cannot name it, which S1 states as one uniform condition. It does **not** reach #1302's filed program, which never poses an S1 question |
+
+  🚩 **This is a correction to #1375's own framing, recorded rather than
+  harmonised.** That issue adopted the ruling as covering *"#1353 and #1302 as
+  ONE ruling … two axes of the same operand"*, and its reasoning — that a repair
+  on one axis alone would leave the other open for a third issue to be filed
+  against the same clause — is sound **about the clause**. It is wrong about
+  **#1302**, whose repro exercises a different clause entirely. The bundling
+  therefore bought the axis, not the issue: **#1302 must not be drained on the
+  strength of this ruling, and its severity is not re-graded by it.** What is
+  owed there is unchanged — a measurement of that issue's own mechanism, which
+  has never been taken under any predicate.
+
+  > ### 🔒 S1-SCOPE — why the operands are nameable-in-`M` and not graph-global
+  >
+  > **The argument, so it can be disagreed with rather than merely obeyed.** S1
+  > is a **name-resolution** rule: given a bare name the author wrote, it decides
+  > which of two candidate denotations that name has. For the rule to be
+  > *choosing*, both candidates must be things the author could have meant — and a
+  > method of an interface `M` can neither **name** nor **call** is one `M` cannot
+  > reach at all. Letting it decide what `M`'s own written names denote is not a tie-break
+  > between candidates; it is one candidate being supplied from outside the
+  > program the author can see. That is also the reading under which S1's
+  > **left** operand and its **right** operand carry the same scope: the left one
+  > is *already* pinned by this clause's own kind partition (a standalone neither
+  > defined in `M` nor imported into `M` has no shadow kind, so S2 — stated per
+  > kind — would assign its occurrences no denotation at all).
+  >
+  > 🚨 **CORRECTION (2026-08-08, S1-NS). The sentence above USED TO READ** *"a method
+  > of an interface `M` cannot name is one `M` cannot call, cannot import, cannot
+  > request by writing a `=>` constraint (S5), and cannot write an `impl` for."*
+  > **That four-way conjunction is FALSE, and its falsity is why this clause could be
+  > quoted in good faith to reach opposite answers.** Measured: the four split **2–2**
+  > along the namespace line. With `import ifc.{size}` — the interface NOT nameable —
+  > calling `size 5` is **ACCEPTED with no diagnostic**, while `impl Sizeable Blob` and
+  > `twice : Sizeable a => a -> Int` are both rejected `Unknown interface: Sizeable`.
+  > With `import ifc as I`, `I.size 5` is likewise **ACCEPTED** while `impl Sizeable Int`
+  > is rejected. So *call* and *import* track the **VALUE** namespace; *`impl`* and
+  > *`=>`* track the **TYPE** namespace. The repaired sentence claims only what holds:
+  > a method the module can neither name nor call is unreachable. **The consequence —
+  > that S1's operand must be the UNION of the two namespaces rather than either one —
+  > is S1-NS below.**
+  >
+  > This is the same tie-break the **S2 inversion** rests on, applied one level
+  > out: *"a name written at top level in a module is that module's name"*, and
+  > *"an `import` is a **sibling** scope, not an **inner** one"*. Both are
+  > statements about scopes the author can see.
+  >
+  > **What it costs, stated as a cost.** This is an acceptance **narrowing** in
+  > exactly one cell — an importer shadow whose only declaring interface is not
+  > nameable in `M`, applied to a receiver at a live-impl head. Such a program
+  > compiles today and stops compiling under this clause. That is deliberate (it
+  > was reaching a method it could not name), and it is the same migration shape
+  > as `DICT-SEMANTICS.md` §8 I5's class 2.
+  >
+  > **What it does NOT cost: S2's global impl universe is untouched.** S1
+  > constrains a set of **names**; S2 constrains a set of **instances**; I5 rules
+  > those are separately scoped, and narrowing a name set cannot narrow the
+  > instance environment. Measured (2026-08-06, `1443870c`): §2's corpus **as it
+  > then stood** was byte-identical under either scope for S1 — including **every** S2-importer
+  > *dispatch* cell and `i5`'s explicit Fork-1 control. ⚠️ **Read that as a
+  > corpus GAP, not as a proof of innocuousness** — it was identical *because* no
+  > unit then put the interface outside `M`'s nameable set.
+  > ✅ **That gap is CLOSED: §2 rows 33–45 are the discriminating cells**, landed
+  > 2026-08-08 and enumerated in the corpus note under the matrix — the item
+  > #1375 recorded as owed. 🚨 **Do not cite the byte-identical result as current
+  > evidence of anything.** It is a statement about a corpus that no longer
+  > exists, and the whole content of rows 33–45 is that a corpus which cannot
+  > express a cell says nothing about it in either direction.
+  >
+  > **The strongest argument AGAINST this ruling, so it is not lost.**
+  > `DICT-SEMANTICS.md` §8 I5's own price paragraph already concedes that a
+  > program's meaning is a function of the whole loaded graph, which is exactly
+  > the cost charged against the graph-global reading above. The answer is that
+  > I5 buys that cost *for instances*, in exchange for a specific property —
+  > global coherence (C4), which per-module candidate sets cannot provide — and
+  > there is no analogous purchase for names: two modules resolving the same
+  > **name** differently is scoping, not incoherence. Extending I5's concession
+  > from instances to names would need its own argument, and I5 makes none. If
+  > you want to reopen this ruling, that is the place to push.
+  >
+  > **⟲ Overturn condition.** This scope ruling is overturned by a program that
+  > (a) is written entirely against names its own module can name, (b) is correct
+  > under the language's other rules, and (c) can only be given its intended
+  > meaning if S1's operands range over declarations the module cannot name —
+  > equivalently, a legitimate use of a method the author could not have written
+  > down. It is **not** overturned by a program that breaks under the narrowing
+  > (that narrowing is the ruling's content), nor by a perf result on per-module
+  > name sets (that is an argument about the implementation: cache the scoped
+  > predicate, do not re-globalize it).
+  >
+  > ### 🔒 S1-NS — RULED 2026-08-08: S1's interface operand is the PER-METHOD UNION of the two namespaces, and marking is CLOSED under shadow-hood
+  >
+  > **(a) The operand.** A bare method name `n` is in S1's **right** operand in module
+  > `M` iff at least one interface `I` declaring a method named `n` satisfies any of:
+  >
+  > - **(i) TYPE arm** — `I`'s own name is admitted into `M`: `I` is declared in `M`,
+  >   declared in the implicit prelude, or `M`'s import path admits the name `I` (a
+  >   member list naming `I`, or a wildcard), **at any re-export depth**.
+  > - **(ii) VALUE arm** — the name `n` is admitted into `M` as a callable method of
+  >   `I`: a member list naming `n`, a wildcard, or a **module alias**
+  >   (`import ifc as A`, since `A.n` is a legal call), **at any re-export depth**.
+  > - **(iii)** `I` is declared in `M` or in the implicit prelude.
+  >
+  > **Per METHOD, not per interface row.** A member list naming the *interface* admits
+  > every method of it (an author who can write `impl I T` can write all of them). A
+  > member list naming *some* methods admits **only those methods**. This is measured,
+  > not stylistic: `import ifc.{tag}` leaves a sibling `size` **Unbound**, so admitting
+  > a whole row because one member is named makes a **different** name dispatch-eligible
+  > on evidence that says nothing about it.
+  >
+  > **Both arms apply symmetrically on the RE-EXPORT side.** `export import ifc.{size}`
+  > must admit `size` one hop down exactly as `export import ifc.{Sizeable}` admits the
+  > row. An implementation whose re-export arm matches only interface names is
+  > **non-conformant**.
+  >
+  > **(b) THE CLOSURE INVARIANT.**
+  >
+  > > **An occurrence of a bare name that a conforming implementation resolves by
+  > > interface DISPATCH must be one S1 classifies.** The predicate deciding
+  > > **shadow-hood** MUST be a **superset** of the predicate deciding **dispatch
+  > > eligibility**. Two different predicates at the two sites is **non-conformant,
+  > > whichever way they differ.**
+  >
+  > In the gap `dispatch-set ∖ shadow-set` an occurrence is routed to an `impl` while
+  > S1 has declined to classify it, so S2's definer inversion never fires and a module's
+  > own top-level binding is replaced by a foreign impl body with no diagnostic on any
+  > verb. Worse, the occurrence is *typed* against the standalone and *routed* to the
+  > method: measured, that yields `check` exit 0 then `run`/`build` E-PANIC. That is a
+  > type hole, not a scoping disagreement. (b) is namespace-independent.
+  >
+  > **Why the union, and not either namespace alone.** Each arm is load-bearing and each
+  > was measured. Drop the VALUE arm and `import ifc.{size}` — the spelling the compiler
+  > *demands* for a call — stops being dispatch-eligible: `check` 0, `run` correct,
+  > **`build` E-PANIC: arg-tag dispatch on impl type that owns no constructors**. Drop
+  > the TYPE arm and `export import ifc.{Sizeable}` stops making a shadow — precisely
+  > what S1-CHAIN enumerates as non-conformant. Neither namespace alone can serve S1,
+  > and (b) forbids serving each at a different site.
+  >
+  > **Newly NON-CONFORMANT.** (1) Deciding shadow-hood with one predicate and dispatch
+  > eligibility with a wider one. (2) A predicate satisfied only by the **type** name,
+  > so `import ifc.{size}` does not admit it. (3) A predicate satisfied only by a
+  > **method** name, so `import ifc.{Sizeable}` does not admit the row. (4) An
+  > implementation whose **re-export** arm and **import** arm evaluate different
+  > namespaces. (5) Admitting a whole interface row because a member list names **one of
+  > its methods**.
+  >
+  > **Newly ACCEPTED / a DIFFERENT VALUE.** 🚨 **Read the BASELINE before the count — this
+  > paragraph used two different ones in four lines.** Every figure below is against the
+  > **merge base of the PR that landed S1-NS** (`main` at `61aa6399`; `compiler/types/
+  > typecheck.mdk` is byte-identical there and at `b5f8c489`, the base that PR was cut
+  > from). That is the only referent still reconstructable once the PR is merged, so an
+  > intra-PR baseline — "before this round's filter", "the state that shipped per-row
+  > admission" — must never be spelled *pre-ruling compiler*, which is what an earlier
+  > revision did on one side of this paragraph and not the other.
+  >
+  > **Of the shapes S1-NS itself governs, exactly ONE changes value against that base:** an
+  > **importer** shadow whose interface is reachable only by naming a *sibling* method loses
+  > shadow-hood, so a receiver inside the standalone's domain answers with the imported
+  > standalone rather than the impl (777 → 42). That is S1-SCOPE's acceptance narrowing
+  > reaching its **silent** half, and it is the cost this clause charges itself. Corpus:
+  > `test/shadow_fixtures/i19_importer_sibling_method_silent/`.
+  >
+  > ⚠️ **Measured, and stated because an earlier draft of this paragraph over-claimed.**
+  > The definer twin (`d23_definer_sibling_method_silent/`) and the method-name re-export
+  > chain (`i20_importer_method_reexport_chain/`) are **42/42 and 50/50** against that same
+  > base and after: they pin shapes the ruling makes *unrepresentable*, not values it
+  > changes. Citing all three as "newly different" reads as three behaviour changes where
+  > there is one.
+  >
+  > ⚠️ **"ONE shape" is scoped to S1-NS, NOT to the PR that carried it.** S1-SCOPE (#1375)
+  > landed in the same PR and moves considerably more against the same base — `i12` (7 → 99),
+  > `i13` (ACCEPT 300 → located REJECT), `i15` (7 → 99), `i17/main.mdk` (7 → 99),
+  > `i17/order-swapped.mdk` (REJECT → ACCEPT 99), plus `i19` above. This list is a floor and
+  > a pointer, not a census: re-derive it by building the base and re-running
+  > `test/diff_compiler_shadow_semantics.sh` rather than by trusting a count written here.
+  >
+  > **Explicitly NOT changed:** S2's graph-global impl universe (`DICT-SEMANTICS.md` §8
+  > I5). S1-NS constrains a set of NAMES; it cannot narrow an instance environment.
+  >
+  > **⟲ Overturn condition.** (a) is overturned by a program written entirely against
+  > names its own module can either *write* or *call*, correct under the language's
+  > other rules, whose intended meaning requires a **strictly narrower** operand than
+  > the union. (b) is overturned only by exhibiting a dispatch-eligible occurrence that
+  > S1 declines to classify **and** for which some other clause supplies a denotation —
+  > today no clause does, which is why the gap is silent.
+  >
+  > ### 🔒 S1-CHAIN — RULED 2026-08-07 ([#1380](https://github.com/MedakaLang/medaka/issues/1380)): a RE-EXPORT CHAIN is IN SCOPE for S1
+  >
+  > §1.0's **nameable in `M`** row lists, among the ways a declaration can be
+  > *exported by a module `M` imports*, the case of reaching `M` **through a
+  > re-export chain**. That arm **stands**. An interface that reaches `M` through
+  > a re-export chain **is nameable in `M`**, and is therefore eligible as S1's
+  > interface operand. A
+  > conforming implementation **MUST** treat it so wherever the ordinary
+  > import/export rules say the declaration is exported along `M`'s import path,
+  > and **MAY NOT fail closed on chains.** Only the *sub-predicate* — what makes a
+  > declaration count as **exported through** a chain — stays deferred; that is
+  > item 1 below, now narrowed to it.
+  >
+  > **The verdict, on the worked program.** `M` imports `P`; `P` re-exports `Q`'s
+  > interface `I`, whose methods include `n`; `M` defines a standalone `n`. Then
+  > `I` is nameable in `M`, S1's intersection is non-empty, `n` **is a definer
+  > shadow in `M`**, and by S2's definer arm `n` denotes the standalone
+  > **unconditionally** — so `n` applied to a receiver at a live `impl I` head is a
+  > **located reject**, not a dispatch.
+  >
+  > **Why.** S1-SCOPE's criterion above is *can the author write it down*. If the
+  > import/export rules let `M` import and call the chain-exported method, it is a
+  > candidate the author could have meant; excluding it would be S1 answering a
+  > question this very note argues S1 has no business answering. The nameable set
+  > is **exactly** what "can `M` name it" evaluates to — no more, and no less.
+  >
+  > **🚨 WHAT THIS LICENSES THAT WAS NOT LICENSED BEFORE.** Stated as a set,
+  > because a rule that quietly widens is invisible to a citation audit.
+  >
+  > - **Newly NON-CONFORMANT:** an implementation whose nameable-in-`M` predicate
+  >   is satisfied only by a *direct* export and answers "not nameable" for a
+  >   chain-exported declaration. Failing closed on a chain was permitted by S1's
+  >   previous silence. It is not permitted now.
+  > **The discriminating cell is the IMPORTER arm**, not the definer one above,
+  > and it **splits in two on the standalone's domain**. Fix the configuration: `M`
+  > imports a standalone `n`; `P` (imported by `M`) re-exports `Q`'s interface `I`
+  > declaring a method `n`; the receiver's head `T` has a live `impl I`. With the
+  > chain arm **IN**, `n` is an **importer** shadow, so S2's importer arm applies
+  > and a live-impl head **DISPATCHES**. With it **out**, `n` is no shadow at all
+  > and the imported standalone is the only denotation. What that difference *looks
+  > like* depends on whether `T` is inside the standalone's declared domain:
+  >
+  > - **`T` OUTSIDE the standalone's domain — the LOUD half. Newly ACCEPTED.**
+  >   Chain out, the occurrence is a **located reject** (`Int vs T`). Chain in, it
+  >   **dispatches**. So this ruling turns a located reject into an accepted
+  >   dispatch — a **widening**, and the exact mirror of the acceptance
+  >   **narrowing** S1-SCOPE charges as this ruling's cost above (*"an importer
+  >   shadow whose only declaring interface is not nameable in `M`, applied to a
+  >   receiver at a live-impl head"*): chains are the sub-case being put back in.
+  > - 🚨 **`T` INSIDE the standalone's domain — the SILENT half. Newly a DIFFERENT
+  >   VALUE AT EXIT 0, and this is the member of the set that is easy to miss.**
+  >   Both readings **accept**. Chain in, the occurrence dispatches to `impl I T`;
+  >   chain out, it calls the imported standalone. Two different answers, no
+  >   diagnostic on either path, exit 0 both ways. **This is the `eq [1] [2]`
+  >   erasure shape** — the one the 2026-07-14 S2 inversion exists to abolish (see
+  >   the ⚡ banner in the top matter) — reaching the **importer** arm through a
+  >   re-export chain. And after this ruling the dispatch answer is **mandatory**,
+  >   not merely permitted, so this is a **licensing change and not only a
+  >   widening**: an implementation that returns the standalone's answer here is
+  >   non-conformant, and nothing about its output says so.
+  > - **The DEFINER cell does NOT discriminate the two readings.** Chain in, `n` is
+  >   a definer shadow and S2's definer arm gives the standalone unconditionally.
+  >   Chain out, **§1.0's `nameable in M` excludes `I` outright**, so `I`'s method
+  >   is never a candidate denotation for `n` in `M` at all and the module's own
+  >   top-level standalone is the only one left. Same denotation, reached by two
+  >   different routes. The worked program above states this ruling's verdict
+  >   correctly, but it is **not** the cell that tells the readings apart — do not
+  >   reach for it as a discriminating fixture. ⚠️ **Do not derive the chain-out
+  >   half from S9's tie-break prose** (*"a name written at top level in a module
+  >   is that module's name"*): that sentence sits inside a block marked
+  >   **`[REPLACED 2026-07-14]`**, and its very next clause — an `import` is a
+  >   *sibling* scope and does not shadow — is silent on this question rather than
+  >   support for it. **The route is §1.0's table, and only that.**
+  >
+  > **Nothing in `test/` asserted the behaviour this forbids — enumerated, not
+  > sampled, AT THE TIME OF THE RULING (2026-08-07).** `test/shadow_fixtures/`
+  > then contained **zero** files matching `export import`, so the S1 corpus was
+  > chain-free (consistent with the corpus-blindness note under §2).
+  > ⚠️ **That is no longer the corpus's state and must not be re-derived from
+  > this sentence** — the chain rows (§2 rows 40, 43, 44) were added
+  > 2026-08-08 and each carries an `export import`. Derive it:
+  > `grep -rl 'export import' test/shadow_fixtures/`. The enumeration below is
+  > about **pins**, not fixtures, and is unaffected. Seven
+  > `test/must_fail_fixtures/` directories matched, and
+  > **none** pins chain-dependent shadow-hood:
+  > `1353-transitive-iface-shadow-no-visibility`'s only match is a **comment
+  > stating the fixture is deliberately not a re-export** (its `bridge.mdk`:
+  > *"Plain `import`, NOT `export import`"*) — that is the **reachability** axis,
+  > not this one — and `1072` / `1288` / `1359` / `1369` / `1373` / `1377` are
+  > overlap, interface-identity, ctor-mangling, dict-passing, field-variant and
+  > named-type rows. Of the four must-fail pins whose `claim.txt` mentions
+  > shadowing (`93`, `1191`, `1351`, `1353`), only `1353` contains the string
+  > `export import` at all, in that negating comment. **No pin is orphaned by this
+  > ruling.**
+  >
+  > 🕳️ **The SILENT half above WAS UNGRADEABLE by this corpus — and not merely
+  > for want of a chain. ✅ CLOSED 2026-08-08 by §2 row 44**
+  > (`i16_importer_iface_via_chain_silent/`), which is exactly the shape this
+  > paragraph said no unit had: a standalone whose domain **covers** the
+  > live-impl head, both spellings graded, hop and no-hop pinned to the same
+  > value. The derivation below is kept because it is *how* the missing cell was
+  > identified, and because the reasoning generalises — read it as the method,
+  > not as the corpus's present state. At the time of the ruling: **no unit in
+  > `test/shadow_fixtures/` could express it**, because every importer unit's
+  > standalone was
+  > **domain-disjoint** from its own live-impl head, so all seven land in the LOUD
+  > half by construction. Derived over the whole importer corpus, not sampled:
+  > `i1` and `i3` and `i8` pair `size : Int -> Int` against `impl … Box` (`i8` also
+  > `Bar`); `i4` pairs `isEmpty : Tok -> Bool` against a `List` receiver; `i5`
+  > pairs `isEmpty : Int -> Bool` against `List`; `i10` pairs
+  > `get : Int -> Int -> Int` against `impl Ix Box Int`; `i11` pairs
+  > `display : Tok -> String` against an extern-sourced `Int`. In every one, the
+  > live-impl head is outside the standalone's domain, so the chain-out reading
+  > **rejects** rather than quietly returning a second answer. **A fixture for the
+  > silent half needs a standalone whose domain COVERS the live-impl head** — the
+  > shape no unit then had, and the shape row 44 now is. This is the same lesson
+  > as rows 27–28 and row 32, a third time: *a gate that cannot express a cell
+  > cannot defend it.*
+  >
+  > ✅ **One gated fixture already requires a chain to propagate, one path over.**
+  > `test/analyze_project_fixtures/1272_wildcard_reexport_method_scope/` — enrolled
+  > by directory glob, not an allow-list (`test/diff_compiler_analyze_project.sh`
+  > iterates `"$FIXDIR"/*/`) — pins `T-NO-IMPL` *"No impl of MSIB for Blob"* on a
+  > program where `msmth` reaches the root module **only** through `msmid`'s
+  > `export import msifb.{MSIB, msmth}`: this note's `M`/`P`/`Q` shape at one hop.
+  > Failing closed there was the S0 that fixture exists to pin.
+  > ⚠️ **It corroborates the direction; it does not grade this clause.** That is
+  > the **impl-obligation** path, and its `msmth` is never a standalone `DFunDef`,
+  > so S1's conjunct is vacuously false there — the same reason #1302's repro does
+  > not exercise S1 (see the ⚠️ under S1).
+  >
+  > **⚠️ THE COST, stated as a cost.** This puts S1's conformance **downstream of
+  > a layer that has no spec of its own.** There is no import/export semantics
+  > document in `docs/spec/`; "the ordinary import/export rules" resolves to
+  > `SYNTAX.md` prose plus the implementation. That is the structural half of the
+  > cost and it is not in doubt.
+  >
+  > The behavioural half is **much narrower than `SYNTAX.md` makes it look**, and
+  > most of it is pinned GREEN. `docs/spec/SYNTAX.md:627-639` says `export import
+  > <mod>.{name}` does **not** re-export a name `<mod>` itself only has via its own
+  > `export import core.{name}`, and calls it *"a real compiler bug … filed as a
+  > finding by this pass, not fixed here."* That paragraph was written by
+  > `a8c54215` on **2026-07-13**, one day before
+  > [#52](https://github.com/MedakaLang/medaka/issues/52) (*"`export import m.{x}`
+  > silently re-exports NOTHING"*) closed on **2026-07-14** — so its *"reproduces
+  > on current `main`"* was measured against a tree without that fix. Against the
+  > corpus today:
+  >
+  > - **One hop, `core` origin — WORKS, pinned in two corpora.**
+  >   `test/resolve_module_fixtures/reexport_core/` (`prov.mdk` is exactly
+  >   `export import core.{Filterable, filter, filterMap}`) has a **0-byte**
+  >   `expected`, and `test/eval_modules_fixtures/reexport_core/main.eval.golden`
+  >   reads `[2, 4, 6] [30, 40]`. ⚠️ **That is `SYNTAX.md`'s own worked example —
+  >   `stdlib/list.mdk` re-exporting `core`'s `filter`, consumed by a plain
+  >   downstream `import` — and it is DISPROVED**, not merely unverified.
+  > - **Two hops, non-`core` origin — WORKS, pinned.**
+  >   `test/run_check_agreement_fixtures/lib/obl1114_reexp2.mdk` re-exports a
+  >   re-export; its own header says it *"Pins that the chain resolves at every hop
+  >   … rather than only at depth 1."*
+  > - **Two hops WITH a `core` origin — the intersection of those two, and the only
+  >   part still unpinned.** Tracked as
+  >   [#1412](https://github.com/MedakaLang/medaka/issues/1412).
+  >
+  > So do not cite `SYNTAX.md:627-639` as a live general bug: its concrete example
+  > is disproved and its general claim survives only at that one intersection.
+  >
+  > **The ruling does not turn on which.** Whichever way that resolves, the
+  > structural point stands: a chain defect belongs to the **import/export** layer
+  > and stays there, with one home. Under the rejected reading, S1's silence would
+  > have let an implementation bake fail-closed behaviour in as **conformant** —
+  > laundering an import/export defect into a spec-sanctioned outcome. That is the
+  > trade this ruling makes, and it is where to push to reopen it.
+  >
+  > **🚧 NEITHER READING DESCRIBES TODAY'S BINARY. This arm is a TARGET, not a
+  > description of behaviour.** The S1-detect universe today is **strictly wider
+  > than both** candidate readings: `allIfaceMethodNames`
+  > (`allIfaceMethodNames`, `compiler/types/typecheck.mdk` — cited **by symbol, not
+  > by line**: this function has moved twice in two days, and
+  > `test/check_doc_links.sh` strips a `:NNN` suffix before validating, so a line
+  > citation here can rot while `docs-links` still passes) matches
+  > `DInterface { methods, … }` and **never reads that declaration's `pub` field**
+  > (`pub : Bool` is `DInterface`'s first field —
+  > `compiler/frontend/ast.mdk:1210-1218`), and `appendUniverseAccums` folds its
+  > result into
+  > `crossRun.value.universeIfaceMethodsRef` **seeded with the ref's own previous
+  > value**, i.e. accumulated cumulatively in the loader's dependency-first
+  > topological order — the same shape `DICT-SEMANTICS.md` §8 **I5** records for
+  > the impl universe. So the binary today sees interfaces from modules `M` does
+  > not import **at all**, chain or no chain: the two readings are
+  > **indistinguishable on it**, and their difference becomes observable only once
+  > the reachability narrowing lands. That narrowing is owed to
+  > [#1354](https://github.com/MedakaLang/medaka/issues/1354) (§2's reachability
+  > row). **This ruling lands no compiler behaviour change.**
+  >
+  > **What is NOT ruled here** — three things, left open deliberately rather than
+  > decided in passing:
+  >
+  > 1. **What makes a declaration count as "exported through" a re-export chain**
+  >    — the sub-predicate, and *only* the sub-predicate. **Whether a
+  >    chain-exported interface is nameable in `M` is RULED: it is** — S1-CHAIN
+  >    above ([#1380](https://github.com/MedakaLang/medaka/issues/1380)). What
+  >    remains deferred to the ordinary import/export rules is the narrower
+  >    question those rules own: given a chain, is *this* declaration exported
+  >    along it. This clause *consumes* that predicate; it does not define it.
+  >    ⚠️ **Fail-closed is not an available answer for ANY chain, and the test is
+  >    BEHAVIOURAL — one witness is enough.** If the ordinary import/export rules
+  >    say a declaration is exported along `M`'s import path, an implementation
+  >    that answers *"not nameable in `M`"* for it is **non-conformant** — whatever
+  >    the hop count of that path, and whatever the implementation's internal
+  >    structure. **Propagating one hop and failing closed on two is therefore also
+  >    non-conformant, not a lesser form of compliance**, and "it does evaluate a
+  >    predicate, the predicate just says no" is not a defence: an implementation
+  >    that evaluates an unspecified predicate to false everywhere is
+  >    observationally identical to one that never evaluates it, so the obligation
+  >    is stated over **answers**, not over structure. This item's earlier wording
+  >    flagged that arm as *"the arm a naive implementation of this clause is most
+  >    likely to get wrong"*; it is now the arm a naive implementation gets wrong
+  >    **against a rule**, not merely against expectations. Related but distinct: the
+  >    [#1302](https://github.com/MedakaLang/medaka/issues/1302) export-visibility
+  >    axis, whose own filed repro does not exercise S1 at all (see the ⚠️ under
+  >    S1).
+  > 2. **Whether a PRELUDE standalone can be S1's left operand at all.** The kind
+  >    partition admits only *defined in `M`* and *imported into `M`*, and the
+  >    implicit prelude is neither on its face; no cell in §2 exercises it (every
+  >    corpus unit's standalone is local or explicitly imported — **still true
+  >    after rows 33–45**, which vary the *interface* operand and leave the
+  >    standalone operand alone). Nothing here turns on it, so nothing here
+  >    decides it.
+  >
+  >    🚨 **The spec may leave this open; CODE CANNOT.** A per-module
+  >    nameable-in-`M` predicate has to answer it the moment it is written, and if it gets
+  >    answered **by accident** — as a fallthrough, a default arm, or whichever
+  >    branch was convenient — that is the class of defect this whole pass exists
+  >    to remove: an unwritten rule decided by implementation drift and then
+  >    inherited as if intended. **Owed: the implementing unit must state which
+  >    way it answers this and why, or this item must be ruled first.** Answering
+  >    it silently is not an option (#1375).
+  >
+  >    ⚠️ **Adjacent, and NOT the same question — but the nearest live evidence
+  >    that the prelude boundary is load-bearing rather than theoretical:**
+  >    [#1191](https://github.com/MedakaLang/medaka/issues/1191) (OPEN) is a user
+  >    binding colliding with a **prelude standalone**, with no interface
+  >    anywhere in the program — so S1 does not reach it under *any* reading of
+  >    either operand, and it is not an argument for either answer. What it shows
+  >    is that the flat/zero-import path already resolves such a collision against
+  >    the **prelude's** scheme rather than the user's, which is the mechanism
+  >    whoever rules this item will be reasoning about. Pinned at
+  >    `test/must_fail_fixtures/1191-prelude-standalone-collision/`.
+  > 3. **Effect-label identity**, which `DICT-SEMANTICS.md` §8 I4 also leaves open.
+  >
+  > **What this ruling was NOT decided on.** It is an argument from the clause's
+  > text and from what kind of rule S1 is — **not** a finding about what the
+  > author of "may live anywhere" intended, which was not established and is not
+  > claimed. It was adopted as a decision on that basis (#1375).
 
 - **S2 (applied — THE INVERSION).** **[CHANGED 2026-07-14]**
 
@@ -125,16 +736,145 @@ Given an occurrence of bare name `N`:
     unconditionally** (`RLocal`). **The impl universe is NOT consulted.** The
     argument must type against the standalone's declared domain; a mismatch is a
     **located reject** at `check` (and at `run`/`build`, which typecheck first).
-    *A visible impl of the shadowed interface at the receiver's head no longer
+    *An impl of the shadowed interface at the receiver's head no longer
     overrides the standalone — **this is the inversion.*** (Carve-out: S5's
     dict-bound receiver.)
 
   - An **importer** shadow keeps the **old per-receiver rule**: if any impl of the
-    shadowed interface for the receiver's head tycon `T` is visible (the impl
-    universe is GLOBAL — local ∪ imported ∪ prelude; instances are coherent across
-    modules, cf. `DICT-SEMANTICS.md`) → **method dispatch** (`RKey T`); else → the
-    standalone (`RLocal`), with the same domain obligation. An `import` is a
+    shadowed interface for the receiver's head tycon `T` exists **anywhere in the
+    loaded module graph** (the impl universe is **graph-global** — instances are
+    coherent across modules, and import scoping never decides which instances
+    exist: `DICT-SEMANTICS.md` §8 **I5**) → **method dispatch** (`RKey T`); else →
+    the standalone (`RLocal`), with the same domain obligation. An `import` is a
     *sibling* scope, not an *inner* one, so it does not shadow.
+    ⚠️ **This clause glossed `GLOBAL` as "local ∪ imported ∪ prelude" until the
+    S1-scope ruling (2026-08-06, #1375). That gloss was wrong on its own terms,
+    independently of anything about S1**: I5's instance universe is *"every
+    instance declared in every module of the loaded graph … **not only** the
+    modules the goal's own module imports"*, which is strictly **larger** than
+    those three. And it was the **same three-item enumeration** S1 uses for its
+    interface operand — a set that genuinely *is* those three and no more — so
+    one phrase carried opposite force thirty lines apart, which is precisely what
+    made S1 unreadable. Do not restore it: say **graph-global** here and
+    **nameable in `M`** at S1 (§1.0).
+
+  > ### 🔒 S2-DECL — RULED 2026-08-09 ([#1351](https://github.com/MedakaLang/medaka/issues/1351)): the importer arm is evaluated PER DECLARATION, over declarations S1 admits, and BOTH its halves come from the SAME one
+  >
+  > **The gap this fills — two definite articles with no referent.** The importer
+  > arm above reads *"any impl of **the shadowed interface** for **the receiver's**
+  > head tycon `T`"*. Neither phrase denotes when **more than one interface declares
+  > a method named `N`**. S1 and S1-NS classify shadow-hood over **names**, so `N`
+  > can be a shadow in `M` while two distinct interfaces declare it — and then there
+  > is no *the* shadowed interface. Nor is there a *the* receiver: **which argument
+  > is the receiver is a property of an interface's declaration, not of the
+  > occurrence**, and two declarations of the same method name may put it at
+  > different argument positions. This is the same defect as the adjective this
+  > document retired — a phrase that can be quoted in good faith to reach opposite
+  > answers — and the clause set was inconsistent under both readings, so the repair
+  > cannot be a branch selection.
+  >
+  > **(a) Receiver argument.** For a declaration `I` of a method named `N`, the
+  > **receiver argument** is the first parameter of `I`'s declared method type whose
+  > type mentions `I`'s **dispatch typaram** (S8: `I`'s first type parameter). It is
+  > **not** necessarily the occurrence's first argument: for `interface IZ b where
+  > mth : Int -> b -> Int` the receiver argument is **argument 1**. ⚠️ **S8's phrase
+  > *"keyed on the first parameter"* means the interface's first TYPE parameter, not
+  > the method's first value parameter** — read as the latter it contradicts this
+  > sub-clause, and that reading is the emit-path non-conformance recorded below.
+  >
+  > **(b) Both halves from the same declaration.** The importer arm is evaluated
+  > against a **declaration**, not a name. Each declaration `I` supplies **both**
+  > halves together: the receiver argument (a), **and** the impl query, which is
+  > *"does an `impl` of `I` exist at that receiver's head tycon `T`"* — still asked
+  > over the **graph-global** instance universe (`DICT-SEMANTICS.md` §8 **I5**),
+  > unchanged. **Taking the receiver argument from one declaration and the impl
+  > query from another is non-conformant**: that pairing is a denotation no
+  > declaration has, and it is exactly what #1351 ships (an occurrence typed against
+  > one interface's declared method type and routed off another's argument
+  > geometry).
+  >
+  > **(c) Admitted declarations.** `I` is **admitted** in `M` iff `I` satisfies
+  > **S1-NS (a)** — the same per-method union of the two namespaces that decides
+  > shadow-hood. A declaration `M` cannot name supplies **neither** half. This is
+  > S1-SCOPE's criterion applied one level in: it already governs whether `N` is a
+  > shadow at all, and a declaration that cannot make `N` a shadow cannot decide
+  > what `N` denotes either. **Note the asymmetry this preserves:** the *names* that
+  > may decide are narrowed; the *instances* that answer the query are not (I5).
+  >
+  > **(d) The choice, by cardinality of the admitted set.**
+  >
+  > - **Exactly one** → it decides, per (a)+(b).
+  > - **Two or more that yield the SAME denotation** (all the standalone, or all the
+  >   same impl) → that denotation. Shadow-hood is per **name** (S1); an occurrence
+  >   is not ambiguous merely because two declarations agree about it.
+  > - **Two or more that DISAGREE** → a **located reject** at the occurrence. Not a
+  >   silent pick: by S1-SCOPE's own criterion this clause set is a
+  >   *name-resolution* rule, which must be **choosing between candidates the author
+  >   could have meant**; with two admitted candidates and no discriminator written
+  >   in the source there is nothing to choose on, and any tie-break the
+  >   implementation applies is supplied from outside the program the author can
+  >   write down.
+  > - **None** → S1 already says `N` is not a shadow in `M`; the standalone denotes.
+  >   Unchanged by this clause.
+  >
+  > **(e) ORDER-INVARIANCE, stated as a rule so it can be gated.** The choice in (d)
+  > **may never be a function of import-clause order, module-processing order, or
+  > declaration order.** A resolution rule whose answer moves when two `import`
+  > clauses are swapped is non-conformant **whatever value it produces** — including
+  > when the two orders differ only in *accepting* versus *rejecting*. The
+  > instrument is a permutation differential, not a golden:
+  > `test/diff_compiler_import_order.sh`.
+  >
+  > **What it costs, stated as a cost.** One cell **narrows**: two admitted,
+  > disagreeing declarations plus a standalone `N` compiles today and stops
+  > compiling under (d). Same migration shape as S1-SCOPE's. And #1351's own corpus
+  > **changes value**: under this clause every ordering of
+  > `test/import_order_fixtures/1351-methoddispatchidx-import-order-collision/`
+  > denotes the imported standalone (`IZ` is the only admitted declaration; its
+  > receiver argument is argument 1, an `Int`, and no `impl IZ Int` exists), which
+  > agrees with that case's semantic companion
+  > `test/shadow_fixtures/i17_importer_two_ifaces_neither_nameable/`. **PREDICTED
+  > UNDER THIS CLAUSE, not measured** — no binary implements it yet.
+  >
+  > **What it does NOT change.** S2's graph-global impl universe (I5). This clause
+  > changes what the query *asks* (an impl of `I`, rather than of anything declaring
+  > a method of that name); it does not narrow which modules' instances may answer.
+  > It also does not touch the **definer** arm, which never consults the impl
+  > universe at all.
+  >
+  > **Conformance today — MEASURED 2026-08-09 (cold `make medaka` at `bfcd4ea7`,
+  > `MEDAKA_STRICT=1`), and the two arms fail (b) DIFFERENTLY.**
+  >
+  > - **`check` / `run`.** The receiver argument comes from `methodDispatchIdx`, a
+  >   **bare-method-name** first-match lookup over a graph-global accumulator, while
+  >   the occurrence is typed from `methodIfaceParamsRef`, a bare-method-name map
+  >   with the **opposite** tie-break. With two colliding declarations the two name
+  >   different ones by construction — violating (b) — and the pick moves with
+  >   import-clause order, violating (e). The impl query, `implExistsForHead`, is
+  >   keyed by method **name** and head tycon, never by interface — so it can answer
+  >   about an `impl` of a declaration `M` cannot name, violating (c).
+  > - **`build`.** The emitter takes a different branch entirely:
+  >   `definerShadowArgHead`'s importer-on-emit disjunct (`importerShadowOnEmitPath`,
+  >   gated on a mark-seeded non-empty route symbol, hence **inert on the un-mangled
+  >   `run`/`check` path**) routes the occurrence into `inferDefinerShadowApp`, which
+  >   sets `suppressRLocalRecord` and therefore **never reads any dispatch-index
+  >   table at all**. Its receiver is the peeled application's **first argument**,
+  >   positionally — so it violates (a) for every method whose receiver argument is
+  >   not argument 0, and it does so **order-invariantly**, which is why the defect
+  >   cannot be seen by (e)'s instrument on that arm.
+  >
+  > Because the two arms decide by different mechanisms, **a fix applied to one is a
+  > new S7 violation**: re-deriving the `check` arm's index alone moves `run` to the
+  > standalone while the built binary still dispatches. Any candidate must be graded
+  > on the **executed binary**, not on `run`.
+  >
+  > **⟲ Overturn condition.** (b) is overturned by a program, correct under the
+  > language's other rules, whose intended meaning requires the receiver argument of
+  > one declaration together with the impl query of another. (d)'s reject arm is
+  > overturned by a **source-derivable, order-independent** discriminator between two
+  > admitted declarations — an occurrence-level carrier recording which interface the
+  > author named would convert many of today's reject cells into the one-admitted
+  > case, and is the standing candidate; (e) survives either way.
 
 - **S3 (N-way).** **[CHANGED]** **Vacuous for a definer shadow:** every occurrence
   is the standalone regardless of receiver, so no receiver selects an impl; a
@@ -187,6 +927,155 @@ Given an occurrence of bare name `N`:
   `d11`'s `4` was an **unqualified** call the impl universe stole — the abolished
   pre-inversion S2, a **bug**. `d21`'s `4` is dispatch the author **explicitly requested
   by writing `Ix a i =>`** — S5's carve-out, **correct**. Do not "fix" it back.
+
+> ### ♻️ 2026-08-07 — **S6, S7 and S8 below were RESTORED. They had no text for three weeks.**
+>
+> They were dropped by `9c6dcee5` (2026-07-17), whose diff replaced S5's
+> then-`#604`-blocked block and carried S6, S7 and S8 out with it. **Its commit
+> message does not mention them**, and nothing in this document ever retired
+> them: §2's matrix cites **S6** in the Clause column of rows 14–18 and **S8** in
+> rows 8 and 26, §5's narrative cites both, and the top matter and §2 cite **S7**
+> as a live claim — including *"S7's own note above says why"* under the matrix,
+> which pointed at deleted text. Restored from `9c6dcee5^` with **three
+> deviations** — one in S6, two in S8:
+>
+> - **S6's importer half is NARROWED, not restored** — the 🚨 paragraph inside S6
+>   below carries the derivation. Its three-subject location-independence
+>   sentence was true when written (2026-07-09) and was made **false** by #1375's
+>   scope ruling (2026-08-06) *while this clause was absent from the document*.
+>   Restoring it verbatim would have re-imported a claim S1-SCOPE contradicts
+>   thirty lines above it. ⚠️ **This is the deviation that makes the count three.**
+>   An earlier revision of this note said "exactly two" — correct about what had
+>   been done, wrong about what should have been. The third was found by the rules
+>   review on PR #1390, not by the restoration.
+> - Its definer-gate sentence read *"is this a method of some **visible**
+>   interface"*. A bare "visible" is retired document-wide (§1.0) and no scope
+>   claim about `ifaceMethodName`'s lookup table has been established here, so the
+>   adjective is **dropped with nothing put in its place** — the clause is left
+>   **silent on scope**, which is the honest state. ⚠️ It briefly read *"an
+>   interface method **at all**"*; that was withdrawn, because "at all" asserts the
+>   predicate is *unrestricted* — a true description of today's implementation, and
+>   the graph-global reading #1375 overturned for S1's interface operand — placed
+>   inside §1 with no marker saying which of the two it was.
+> - Its closing paragraph predicted a *"probable live divergence from S2"* at
+>   multi-typaram importer width and recorded row 30 as **UNVERIFIED**.
+>   `9c6dcee5` — the very commit that dropped the clause — **probed row 30 and
+>   disproved that prediction**. The paragraph now records the measured outcome,
+>   which §2's row 30 and this document's top matter already state. **S8's
+>   normative content is unchanged by the swap**: the specified outcome for a
+>   multi-typaram *importer* shadow was the standalone before and is the
+>   standalone now.
+>
+> **What this changes for an implementer — stated against the baseline that
+> matters.** Against `9c6dcee5^` (the text as it last stood) the delta is the S6
+> narrowing and nothing else. But **an implementer reads `main`**, where these
+> three clauses have *no text at all*, and against that baseline **three clauses of
+> obligation return**: S6 (location-independence for the impl and the standalone,
+> with the interface carved out), S7 (path agreement, and its warning that
+> cross-engine agreement is worthless as evidence), and S8 (neither method-param
+> count nor interface-typaram count changes the rule). None of the three is new
+> law — every one was already assumed by the tables that cite it throughout §2 and
+> §5 — but "no licensing delta" is only true against the 2026-07-17 baseline, and
+> saying it unqualified would be measuring against a document nobody reads.
+
+- **S6 (module-independence).** **[CHANGED]** For a **definer** shadow the impl
+  query is *deleted*, so S6 is **trivially satisfied**: where the interface and impl
+  live cannot change the outcome, because the outcome no longer depends on them. An
+  all-local live impl (`d2`) and an imported one (`d8`) now reject identically. For
+  an **importer** shadow, **two of the three subjects** are still
+  location-independent: where the **impl** lives cannot change the outcome (S2's
+  impl universe is **graph-global**), and neither can which module the
+  **standalone** is imported from. Those two change *detection bookkeeping*, never
+  the outcome.
+
+  🚨 **The INTERFACE's location is NOT free, and S6 must not be read as saying it
+  is. [NARROWED 2026-08-07 — #1380.]** This clause read *"where the
+  standalone/**interface**/impl each live changes detection bookkeeping, never the
+  outcome"* — verbatim from the document's creation (`c96192c2`, 2026-07-09), when
+  S1's operands were graph-global and it was **true**. `b725020b` (2026-08-06,
+  #1375) scoped S1's interface operand to **nameable in `M`**, which makes the
+  interface's location **load-bearing**: hold the standalone, the impl and the
+  receiver fixed and move only the interface's declaring module out of `M`'s import
+  reach, and `N` stops being a shadow at all — S2's importer arm never applies, and
+  a live-impl head that **dispatched** now denotes the imported **standalone**
+  instead (a different answer, and a located reject where the receiver falls
+  outside that standalone's declared domain). The outcome flips on nothing but
+  where the interface lives. **S1-SCOPE says so in its own words, as the price of
+  that ruling:** *"an importer shadow whose only declaring interface is not
+  nameable in `M`, applied to a receiver at a live-impl head. Such a program
+  compiles today and stops compiling under this clause."*
+
+  **Why nobody reconciled the two.** This clause had **no text in the document**
+  from `9c6dcee5` (2026-07-17) until it was restored under #1380 (2026-08-07) — see
+  the restoration note above — and that is the entire window in which #1375 landed.
+  A clause that is absent cannot be checked against a new ruling, so the ruling's
+  own cost paragraph came to sit thirty lines above a contradiction that was not on
+  the page. **Restoring the sentence verbatim would have re-imported it.**
+
+  ⚠️ **§2's rows 14–18 do not grade this.** They vary the interface's topology only
+  *within* `M`'s nameable set (`i1` declares it in `main.mdk`; `i3` and `d8` import
+  it by name), so they are consistent with the narrowed clause and blind to the
+  out-of-set case. **A green row 14–18 is not evidence about this paragraph.**
+  ✅ **Rows 33–45 ARE**, and they are what to cite instead — added 2026-08-08,
+  after this note was written, and they move the interface's declaring module out
+  of `M`'s reach in every way the import/export rules allow: no path at all
+  (33–34), a path that binds a different name (35), a sibling method (36–37), no
+  admitted name at all (38), a re-export chain (40, 43–44), a module or member
+  alias (41–42). **Row 44 is the one that shows the outcome flipping with nothing
+  but the interface's location and NO diagnostic on any verb** — the silent
+  member this paragraph's own narrowing produces.
+
+- **S7 (path agreement).** `run`, `check`, and `build` agree on every cell:
+  `check` accepts iff `run` and the built binary produce the (identical)
+  defined value. A shadow cell where they disagree is a conformance bug even if
+  each path is individually defensible.
+
+  > ⚠️ **Note what S7 COSTS you.** Because it *guarantees* the three engines agree,
+  > **no differential gate can ever see a shadow bug** — the `eq [1] [2]` erasure was
+  > invisible to every gate the project owns, **by construction**, and P0-20 even
+  > "fixed" that cell by making all three paths agree on the *wrong* answer. Tests for
+  > this rule must assert on **printed values against a pinned expectation**
+  > (`run_check_agreement`'s `.out` pin; the shadow gate's `value` column), **never**
+  > on cross-path agreement alone.
+
+- **S8 (arity and typaram arity).** **[S-3 CLOSED 2026-07-17, #54]** Neither a
+  method's *parameter* count nor its interface's *type-parameter* count changes the
+  rule: a shadow of a multi-**param** method (`comb : a -> a -> Int`, row 8 / `d7`) and
+  a shadow of a method on a multi-**TYPARAM** interface (`interface Ix a i`, row 26 /
+  `d11`) both follow S2 keyed on the first parameter, so under the inversion the
+  standalone wins in both and a live-impl receiver is a located reject.
+
+  ⚠️ **The gating predicate is a Fork-1 boundary, NOT an arity restriction.** The
+  **definer** entry points are gated on `ifaceMethodName` — is this name an interface
+  method — and nothing more, because the inversion never consults the impl
+  universe, so there is no receiver-to-typaram correspondence for them to require. The
+  **importer** entry points keep `singleTyparamIfaceMethod` (renamed from the
+  misleading `singleParamIfaceMethod`, which counted TYPE PARAMS while its name said
+  method params — the name that sent an agent down a wrong hypothesis and is called out
+  in #54). Fork 1's per-receiver rule genuinely does key the impl query on the receiver
+  head standing at the interface's ONE typaram, and a multi-typaram interface offers no
+  such correspondence to key on — `FromEntries c e`'s `fromEntries : List e -> c` does
+  not even take its first typaram as an argument.
+
+  ⚠️ **That is an implementation boundary, NOT a rule of the language — and #54 did not
+  make it one.** S2's importer arm is itself unqualified by typaram arity and carries an
+  explicit fallback (*"else → the standalone (`RLocal`), with the same domain
+  obligation"*), so the **specified** outcome for a multi-typaram *importer* shadow is
+  the standalone. An earlier draft of this clause called such shadows "out of scope,
+  deliberately"; that was a claim about the *language* with nothing in S2 to support it,
+  and it is **retracted**. A boundary in the code explains why the code is shaped as it
+  is; it does not license this document to stop specifying.
+
+  ✅ **And the binary conforms — measured, not assumed (row 30 / `i10`, 2026-07-17).**
+  This clause used to predict the opposite: that because all three importer entry points
+  decline at multi-typaram width, the occurrence falls through to **ordinary dispatch**,
+  which has no "else → standalone" arm, so a multi-typaram importer shadow was a
+  *"probable live divergence from S2"* — recorded as row 30, **UNVERIFIED**. Probed once
+  [#604](https://github.com/MedakaLang/medaka/issues/604) made a probe possible: it is
+  **conformant** (`4, 3`; `4/400/3` at N-way width). Ordinary dispatch reaches the impl
+  for a live-impl head, and for a no-impl head **the env's binding of the bare name
+  already IS the imported standalone**, so S2's fallback falls out without anyone
+  implementing it.
 
 ### S9 — a CONSTRAINED standalone (added 2026-07-13; closes S-1)
 
@@ -330,10 +1219,212 @@ three of run / build / check. Fixtures in `test/shadow_fixtures/`.
 
 | 31 | definer · **value position** over no-impl elements · method of a **multi-TYPARAM interface** (`interface Ix a i`) · UNANNOTATED | S4 | standalone → [2, 3, 4] | `d22_definer_multityparam_value_pos.mdk` (+ `d22b` String elems, `d22z` app-head control) | [2,3,4] | [2,3,4] | accept | **OK** (**FIXED 2026-07-19, [#724]** — row 9c/`d18` at multi-typaram width, the cell the corpus lacked: `d18` is single-typaram, `d11`/row 26 is multi-typaram but an APP head. The CHECK path grounded the value position to the standalone typaram-agnostically (`maybeStandaloneValueMono`'s definer arm = `ifaceMethodName`), but the EMIT path DECLINED it behind a blanket `singleTyparamIfaceMethod` gate, so `map size` inferred a function element type → NULL `Display` element dict → the shipped binary **SEGFAULTed (139)** while check/run were clean — the #410 skew at multi-typaram width. Fixed by splitting `maybeStandaloneValueMonoEmit`'s gate per shadow kind (`emitValueShadowGate`): DEFINER arm `isDefinerShadow` (typaram-agnostic), IMPORTER arm `singleTyparamIfaceMethod` (i10/Fork 1). Safe against the app-head ambiguity because a definer app head is bracketed `shadowHeadCtxRef` True by `inferDefinerShadowApp` — `d22z` is the control) |
 
-**Tally: 25 OK · 0 BUG · 0 GAP · 0 UNVERIFIED · 3 UNTESTED-NO-FIXTURE ·
-1 UNREACHABLE · 2 baselines.**
+| 32 | **importer** · shadow of a PRELUDE method whose live-impl receiver is **EXTERN-SOURCED** | S2 (importer arm) | standalone → `tok`; method → `3`, `2`, `97` | `i11_importer_extern_receiver/` | tok,3,2,97 | tok,3,2,97 | accept | **OK** — the **PROVENANCE** axis, not a new type axis. `display (3 : Int)` and `display (stringLength "xy")` have the SAME receiver type and must route the same way; only how the `Int` was obtained differs. **ADDED 2026-08-04 by the adversarial review of [#1274](https://github.com/MedakaLang/medaka/pull/1274) (#1111 A-2.2b), which shipped an S0 this corpus could not see**: a dispatch-existence retest was changed to compare the goal head's *identity* against the impl head's, and `stdlib/runtime.mdk`'s extern signatures never pass through resolve's head-stamping walk, so an extern-sourced `Int` carries no `TyConOrigin` and the retest answered "no impl" — silently rerouting the call to the imported standalone. `diff_compiler_shadow_semantics` graded **36/36 on the broken binary**, because **every other cell in this corpus uses an annotated or literal receiver**. This row is the one the ⭐ rule in that gate's header (*"vary the receiver's PROVENANCE"*) had always asked for and nobody had written |
 
-> ### ⚠️ **`0 BUG` DOES NOT MEAN "NO VIOLATIONS". READ THE GAP AND UNVERIFIED COLUMNS.**
+> ### ⭐ Rows 33–45 — THE NAMEABILITY BLOCK. These are the cells this corpus could not express, and they close the gap #1375 recorded as owed.
+>
+> **Every row 3–32 above puts the shadowed interface INSIDE the occurrence
+> module's nameable set** (§1.0) — the `d*` units are single-file, so
+> nameable-in-`M` and graph-global coincide there by construction;
+> `i1`/`i6`/`i6b`/`i7`/`i8`/`i9`/`i10` declare the interface in `main.mdk`;
+> `i3` and `d8` import it by name; `i4`/`i5`/`i11` shadow the prelude. That is
+> why the corpus once graded **byte-identically** under S1's scoped reading and
+> under the graph-global one it replaced, and why a green
+> `diff_compiler_shadow_semantics` was **not** evidence about the ruling.
+>
+> The rows below are the discriminating cells. Each holds the standalone, the
+> impl and the receiver fixed and varies only **how much of the interface `M`'s
+> import path admits** — no path at all (33–35), a sibling method (36–37), no
+> method and no type name (38), a module alias (41), a member alias (42), a
+> re-export chain (40, 43–44), two colliding declarations and neither admitted
+> (45). ⚠️ **They discriminate S1's operand; they do not re-grade S2.** The impl
+> universe stays **graph-global** in every one of them (§1.0, `DICT-SEMANTICS.md`
+> §8 I5) — what changes is whether the occurrence is a shadow at all.
+>
+> 🚨 **Read the SILENT rows first, not the loud ones.** Only **34** and **43**
+> fail with a located reject — the easy half. **33, 35, 36, 37, 38, 41, 42, 44
+> and 45 accept under BOTH readings** and differ only in the value printed at
+> exit 0 on all three verbs: the `eq [1] [2]` shape, which by **S7** no
+> differential gate can see and which no ACCEPT/REJECT column can express. **39
+> and 40 are neither** — they split *across verbs* (39: `check` accept, `run` a
+> wrong value, `build` an E-PANIC; 40: `check` and `run` correct, `build` an
+> E-PANIC), which is an **S7** violation and the reason each is graded on the
+> verb that can see it rather than on `run`. This is the corpus's own recurring
+> lesson (rows 27–28, row 29, row 32) a fourth time: **the loud half of a defect
+> gets a fixture and the silent half is the one that ships.**
+>
+> **Where the Status column for 33–45 comes from, stated because it is not a fresh
+> local run** (2026-08-10). It is read off each unit's pinned expectation in
+> `test/diff_compiler_shadow_semantics.sh`, which asserts verdict **and** value on
+> all three verbs per unit and runs in CI's `types` shard — so a Status here that
+> disagreed with the binary would be a red gate rather than a stale cell, which is
+> the property the note above this table demands. **The Specified-outcome column
+> is NOT inherited from the gate**: each was re-derived from S1 / S1-NS (a) /
+> S1-CHAIN / S2 / S2-DECL against the fixture source. Rows 41, 42 and 45 are where
+> that derivation and a fixture's own header prose part company; each says so in
+> its Status cell.
+
+| # | Cell (kind · receiver · topology · use) | Clause | Specified outcome | Fixture | run | build | check | Status |
+|---|---|---|---|---|---|---|---|---|
+| 33 | **importer** · interface NOT NAMEABLE — its module reaches the loaded graph **only transitively**, through a third module's **plain** `import` (which re-exports nothing) · receiver inside the standalone's domain | S1 (S1-SCOPE) | **not a shadow** → the imported standalone → `99` | `i12_importer_iface_not_nameable/` | 99 | 99 | accept | **OK** — the reachability cell #1375 recorded as owed, and the shape [#1353](https://github.com/MedakaLang/medaka/issues/1353) (S0, closed) was filed on. Under the graph-global reading the identical source prints **`7`** — an impl body from a module `main.mdk` has no import path to — at exit 0 on all three verbs. ⚠️ It **replaces a drained must-fail pin** (`1353-transitive-iface-shadow-no-visibility`, since deleted): a drained pin is removed, so without this row a fixed S0 would have no guard at all |
+| 34 | **importer** · same topology as row 33 · **LIVE impl at the receiver's head tycon**, receiver **outside** the standalone's domain | S1 (S1-SCOPE) | **not a shadow** → the imported `Int -> Int` standalone applied to a `Box` → **located REJECT** `Type mismatch: Int vs Box` | `i13_importer_not_nameable_liveimpl/` | reject | reject | reject | **OK** — #1375's own "sharper repro". Under the graph-global reading the same source is ACCEPTED at exit 0 printing `300`. Row 33 pins a wrong **value**; this pins a wrong **denotation**, and the two fail for different reasons: here the answer is reachable *only* through a name the author could not have written |
+| 35 | **importer** · the interface's home module **IS** imported — and the interface is still not nameable, because the import binds a different name (`import smod.{sf}`, and the bare-`import` spelling as its own row) | S1 (S1-SCOPE) + S1-NS (a) | **not a shadow** → the imported standalone → `99` (both spellings) | `i15_importer_iface_one_hop_unbound/` (`main.mdk` + `bare.mdk`) | 99 / 99 | 99 / 99 | accept | **OK** — the **ONE-HOP** form of row 33, one line shorter, and **not a duplicate of it**: a fix that admits a dependency's whole interface set on any import of it leaves row 33 green while this one still prints `7`. `bare.mdk` takes a different arm — a bare `import smod` is an **empty** member list, not a wildcard (AGENTS.md: a bare import binds NO names) — and is the lock that keeps a fix from special-casing the empty list, which would also break the **module-alias** admission row 41 depends on (#1277) |
+| 36 | **importer** · interface reached **only by naming a SIBLING method** (`import ifc.{tag}`) · standalone's domain **covers** the live-impl head — the SILENT cell | S1-NS (a), per-**method** | `size` is admitted by **no** arm → not a shadow → the imported standalone → `42` | `i19_importer_sibling_method_silent/` | 42 | 42 | accept | **OK** — measurably per-method: writing `size x` on the strength of `import ifc.{tag}` is `Unbound variable: size`. Admitting the whole interface row because *one* member is named would make a **different** name dispatch-eligible on evidence that says nothing about it. Pre-ruling this printed `777`, the impl body; `777 → 42` is S1-SCOPE's acceptance narrowing reaching its **silent** half, which is the cost that clause charges itself |
+| 37 | **definer** twin of row 36 — the module defines its own `size` and reaches the interface only by naming a sibling method | S1-NS (a) + S2 (definer arm) | not a shadow → the module's **own** top-level binding → `42` | `d23_definer_sibling_method_silent/` | 42 | 42 | accept | **OK** — paired with row 36 because **S2 states its rule per KIND**, so a fix repairing one arm leaves the other silent (the `d18`/`i6b`, `d22`/`i7` shape). ⚠️ **Baseline note, so this row is not over-read:** the merge base already answers `42` here — it guards a regression the S1-NS unit could have introduced, not one it inherited |
+| 38 | **RETURN-POSITION** method (`zed : a` — the interface typaram appears **only** in the result) · interface admitted by **no** arm · DEFINER and IMPORTER graded separately | S1-NS (a) + S1-NS (b) | not a shadow → the module's own / the imported `zed` → `42` in both | `d24_definer_return_pos_not_nameable/`, `i21_importer_return_pos_not_nameable/` | 42 / 42 | 42 / 42 | accept | **OK** — the axis the corpus was wholly missing: **every** interface method in rows 3–32 mentions its typaram in an ARGUMENT. That one axis selects a different mark-pass input, which was concatenated **raw** while the arg-position inputs were filtered — making dispatch-eligibility a strict **superset** of shadow-hood, i.e. S1-NS (b)'s closure invariant violated, with the whole corpus green over it. Measured before the fix: `run` `777` vs **built binary** `42`, both exit 0 |
+| 39 | **RETURN-POSITION** method · **interface IS nameable** (`import smod.{Zed, sf}`) · DEFINER — the discriminating control for row 38 | S2 (definer arm) + S7 | `zed` **is** a definer shadow → the standalone, unconditionally → `42` | — (`test/must_fail_fixtures/1430-return-pos-definer-skips-s2-inversion/`) | **777** | **E-PANIC** `unbound method: zed`, exit 1 | accept, 0 diagnostics | 🔴 **BUG — [#1430](https://github.com/MedakaLang/medaka/issues/1430), OPEN S0.** Three verbs, three answers; the S0 half is `run`'s silently wrong value. **This is why row 38 must not be read as covering return position** — row 38 passes *because S1 declines to classify*, so it never reaches S2's inversion at all. The load-bearing axis is return-position-ness, **not** the nameability that rows 33–38 vary: give the method an argument mentioning the typaram and the inversion fires correctly. Pinned in the must-fail suite (self-draining), **not** in `test/shadow_fixtures/` — so `diff_compiler_shadow_semantics` is green over it |
+| 40 | **importer** · the METHOD arrives through a **re-export chain that names the method, not the interface** (`export import ifc.{size, Box}`) · no standalone of that name anywhere | S1-NS (a)(ii) + (b) | S1's **left** operand is empty → not a shadow → **ordinary dispatch** → `impl Sizeable Int` → `50` | `i20_importer_method_reexport_chain/` | 50 | 50 | accept | **OK** — graded on **`build`**, the only verb that could see it: an implementation whose re-export arm matches interface names only leaves `size` out of the dispatch-eligible set, the mark pass leaves a plain `EVar`, and emit falls into arg-tag dispatch — `check` exits 0 and `run` prints the right answer while `build` **E-PANICs**. S1-NS enumerates that asymmetry as non-conformant (item 4). The `impl Sizeable Int` is load-bearing: a **primitive** receiver carries no cell tag, which is what turns the missing mark into a panic |
+| 41 | **importer** · interface reached **only through a MODULE ALIAS** (`import smod as S`) | S1-NS (a)(ii) | the alias arm admits `size` (*"a module alias … since `A.n` is a legal call"*) → `size` **is** a shadow → S2's importer arm, live `impl Sizeable String` → **dispatch** → `7` | `i18_importer_alias_not_nameable/` (`main.mdk` + `both.mdk`) | 7 / 7,7 | 7 / 7,7 | accept | **OK against the clause as written** — ⚠️ **and the fixture's own header says the opposite.** That header argues from the TYPE arm alone (an alias cannot put `Sizeable` in type position, so `impl Sizeable Blob` is rejected) and concludes the answer *"should"* be `99`. **S1-NS (a) is a UNION, and either arm suffices**; `i15_importer_iface_one_hop_unbound/bare.mdk`'s own note says the alias *"MUST admit the whole row"* and cites #1277 for it. The pinned values are conformant; **the disagreement is between two fixture comments and this clause, and it is a comment-truth defect, not a behaviour one** — see the ⚠️ under the tally |
+| 42 | **importer** · method reached **only under a MEMBER ALIAS** (`import ifc.{size as sz}`), with a bare-`import` sibling as the discriminator | S1-NS (a)(ii) | the only callable spelling this import admits is **`sz`**; `size` is admitted by no arm → not a shadow → the imported standalone → `99` (both spellings) | `i22_importer_member_alias_not_nameable/` (`main.mdk` + `bare.mdk`) | **7** / 99 | **7** / 99 | accept | ❌ **KNOWN-BAD (main.mdk), self-draining — re-grade to `99` the day it is fixed.** `bare.mdk` is the proof the correct value is reachable rather than hypothetical: two spellings that admit the *same* amount of the interface (nothing writable) give different answers, and both cannot be right. ⚠️ **The obvious fix is INERT and this row says so** — `renameAliasedMethods` rewrites `{size as sz}` to `{size}` before `selectIfaceRows` ever runs, so re-keying that call on the local spelling cannot move this cell. A real fix spans both, and is a design question no ruling covers |
+| 43 | **importer** · interface nameable **only through a re-export chain** (`export import ifc.{Sizeable}`) · receiver **outside** the standalone's domain — the LOUD half · graded against a hop-free control | S1-CHAIN ([#1380](https://github.com/MedakaLang/medaka/issues/1380)) | the chain arm admits `Sizeable` → shadow → S2's importer arm, live `impl Sizeable Box` → **dispatch** → `300`; the control **must agree** | `i14_importer_iface_via_reexport_chain/` (`main.mdk` + `direct.mdk`) | 300 / 300 | 300 / 300 | accept | **OK** — the corpus contained **no `export import` at all** before this cell (derive: `grep -rl 'export import' test/shadow_fixtures/`), which is exactly how a first cut could build the predicate out of a method-name index, answer *not nameable* for a chain that names **no method**, and reject this program while `direct.mdk` printed `300`. The **control is the real assertion**: re-routing one import through a re-exporter cannot change a program's meaning, so the two rows must agree under **either** reading of the clause |
+| 44 | **importer** · same chain as row 43 · receiver **inside** the standalone's domain — the **SILENT** half · graded against a hop-free control | S1-CHAIN | shadow → dispatch → `7`; **not** the standalone's `99`; the control must agree | `i16_importer_iface_via_chain_silent/` (`main.mdk` + `direct.mdk`) | 7 / 7 | 7 / 7 | accept | **OK** — this is the cell S1-CHAIN's own 🕳️ paragraph recorded as **ungradeable by this corpus**, and it is now graded. Both readings **accept**; the answer is observable only as a value at exit 0 on every verb, so neither an ACCEPT/REJECT column nor cross-engine agreement can see it. A lost shadow here prints `99` silently — the `eq [1] [2]` erasure shape reaching the **importer** arm through a chain |
+| 45 | **importer** · **TWO** unrelated interfaces declare the same bare method name at **different** dispatch argument positions (`mth : a -> Int -> Int` and `mth : Int -> b -> Int`) · **neither** admitted · graded against an import-order permutation | S2-DECL (d), the **none-admitted** arm | the admitted set is **empty** → S1 says `mth` is not a shadow → the imported standalone → `99`; the order-swapped row **must agree** | `i17_importer_two_ifaces_neither_nameable/` (`main.mdk` + `order-swapped.mdk`) | 99 / 99 | 99 / 99 | accept | **OK** — the standalone `fmodI.mth` is **load-bearing**: the bare-name dispatch-index table's only reader is gated on the standalone-values set, so without it this graph never reaches the defect. **Value DERIVED, not captured** — hand-derived from S2-DECL before any fix. ⚠️ **Two orderings is not a permutation differential**: three clauses have six orderings and this pins two. The other four live in `test/import_order_fixtures/1351-methoddispatchidx-import-order-collision/`, which is **still ledgered KNOWN-BAD** under [#1351](https://github.com/MedakaLang/medaka/issues/1351) — 🚨 **do not "converge" it to make these rows agree**: with neither interface nameable the bare-name table is never consulted, so the old spelling stopped reaching a defect that is still open |
+
+**Tally — DERIVE IT, do not read it.** The status distribution moves with every
+row added, and the figure this line used to carry
+(`26 OK · 0 BUG · 0 GAP · 0 UNVERIFIED · 3 UNTESTED-NO-FIXTURE`) was wrong on
+**four** of its five counts **before** this section grew — measured against the
+table as it stood at `adb789ca`, i.e. with none of rows 33–45 in it. It
+under-counted `OK` by **eight** (34, not 26); it omitted row 9c's `KNOWN-BAD`
+from every bucket, so that row was in no count at all; it claimed
+`3 UNTESTED-NO-FIXTURE` for rows 21–23, which have had fixtures since
+2026-07-16 (§4 carries the same stale claim, corrected there); and its `0 BUG`
+is addressed on its own below. A tally is an encoded fact with no derivation
+and no expiry, sitting one command away from the table it summarises:
+
+```sh
+awk -F'|' '/^\| *[0-9]/ { s=$10; gsub(/[^A-Za-z-]/," ",s); sub(/^ +/,"",s);
+                          split(s,a," "); print a[1] }' \
+    docs/spec/SHADOW-SEMANTICS.md | sort | uniq -c
+```
+
+⚠️ **Classify on the status cell's FIRST word, as that command does — not on
+whether the cell contains a keyword.** Several cells *discuss* a `BUG` or a
+`KNOWN-BAD` elsewhere in the same prose (row 45 points at a still-ledgered
+import-order pin), so a substring count over the whole cell over-reports both.
+That is the same failure this table's own history records one level up: a count
+taken by the easiest available method rather than by the one that answers the
+question.
+
+At **2026-08-10** the command above reads: **45 OK · 1 BUG (row 39, #1430) ·
+2 KNOWN-BAD (rows 9c and 42) · 1 UNREACHABLE · 2 baselines — 51 rows** —
+recorded as a dated observation, not as a number this page maintains.
+
+> ⚠️ **`0 BUG` IS NO LONGER TRUE, AND THAT IS THE POINT OF ROW 39.** The tally
+> read `0 BUG` while [#1430](https://github.com/MedakaLang/medaka/issues/1430)
+> was open — a definer shadow of a **return-position** method giving `check`
+> accept, `run` `777` and `build` an E-PANIC, three verbs and three answers.
+> It stayed invisible here because its fixture lives in
+> `test/must_fail_fixtures/`, not in `test/shadow_fixtures/`, so the gate that
+> enforces **this** table is green over it. **A cell with no row in this matrix
+> is not a cell this matrix grades**, whatever its tally says.
+
+> ⚠️ **Row 41 is a live disagreement between this clause set and two fixture
+> headers, and it is recorded rather than harmonised.** `i18`'s header asserts
+> the module-alias cell *"should"* answer `99`, reasoning from S1-NS (a)(i)
+> alone; `i15`'s `bare.mdk` header asserts the alias *"MUST admit the whole
+> row"*, reasoning from (a)(ii), and cites a closed S0 (#1277) that regressed
+> when the alias arm was dropped. **(a) is a union of the two arms, so the
+> second reading is the one the clause states** and the pinned `7` is
+> conformant. Nothing here changes a value or a pin: the defect is a comment
+> claiming a non-conformance the clause does not support, which is the shape
+> this document's own §2 preamble was written about. **Owed:** correct `i18`'s
+> header, or rule the alias arm out of (a)(ii) — one or the other, not neither.
+
+> ### 🕳️ THIS MATRIX GRADED NOTHING ABOUT S1's SCOPE UNTIL 2026-08-08. Rows 33–45 are that gap being closed — read what they still do NOT cover.
+>
+> **Until rows 33–45 existed, no unit in `test/shadow_fixtures/` put the shadowed
+> interface outside the occurrence module's nameable set** (§1.0), so **no row
+> discriminated S1's scope from the graph-global reading of the same clause** —
+> and a green `diff_compiler_shadow_semantics` was not evidence about the ruling.
+> Derived, not assumed, over rows 3–32: every `d*` unit there is single-file, so
+> nameable-in-`M` and graph-global coincide by construction;
+> `i1`/`i6`/`i6b`/`i7`/`i8`/`i9`/`i10` declare the interface in `main.mdk`
+> itself; `i3` and `d8` import it by name; `i4`/`i5` shadow prelude `Foldable`
+> and `i11` prelude `Display`.
+>
+> **Measured, not inferred** (2026-08-06, `1443870c`, i.e. *before* the block
+> above landed): the corpus as it then stood graded **byte-identically** whether
+> S1's operands were scoped or graph-global — the same assertion count under
+> each, with the two logs `diff`-identical. That measurement is the reason this
+> note exists, and it is **not** superseded by rows 33–45; it is what those rows
+> were written against. ⚠️ **Fixture UNITS and gate ASSERTIONS are different
+> numbers** (assertions are units plus the coverage self-audit, and a
+> multi-file unit contributes one row per graded `.mdk`), **and neither is a
+> count to trust from this page.** Derive them: `ls test/shadow_fixtures/ | wc -l`
+> and the `ok   coverage:` line the gate prints. (A figure of *17* has circulated
+> for this corpus. It is wrong, and it is not a stale-but-once-true number — do
+> not reintroduce it.)
+>
+> **What rows 33–45 now grade, and what they do not.**
+>
+> - ✅ **Reachability (#1353's axis, the ruling's own).** Rows 33–35 —
+>   transitive-only, and the one-hop form where the interface's module *is*
+>   imported under a member list that binds another name. [#1353](https://github.com/MedakaLang/medaka/issues/1353)
+>   is **CLOSED**; its must-fail pin was drained and deleted, and row 33 is what
+>   replaced it. The mechanism it was filed on, recorded because §3's own
+>   S1-detect row is marked stale about it: the Module-path shadow test reads
+>   `crossRun.value.universeIfaceMethodsRef`, grown per module by
+>   `appendUniverseAccums`'s call to `allIfaceMethodNames` — which carries **no
+>   `pub` filter** — accumulated **cumulatively in the loader's dependency-first
+>   topological order**, the same shape `DICT-SEMANTICS.md` §8 I5 records for the
+>   impl universe. The **feeder** is still unfiltered; what changed is that the
+>   **result** is now intersected with the nameable set (§3).
+> - ✅ **The namespace axis (S1-NS).** Rows 36–38 and 40–42 — sibling method,
+>   return position, re-export by method name, module alias, member alias.
+> - ✅ **The re-export chain (S1-CHAIN / #1380), including its SILENT half.**
+>   Rows 43–44. S1-CHAIN's own 🕳️ paragraph recorded the silent half as
+>   ungradeable by this corpus and enumerated why every importer unit then
+>   present landed in the loud half; row 44 is the cell it said was missing.
+> - ❌ **NOT graded: whether a PRELUDE standalone can be S1's LEFT operand.**
+>   S1-SCOPE's "not ruled" item 2, still open. Every unit in this corpus has a
+>   standalone that is local or explicitly imported, so nothing here exercises
+>   it — the corpus is blind to that axis exactly as it was blind to this one.
+>   ⚠️ Adjacent and **not** the same question, but the nearest live evidence
+>   that the flat/prelude scoping boundary is load-bearing:
+>   [#1191](https://github.com/MedakaLang/medaka/issues/1191) (OPEN), a user
+>   binding colliding with a **prelude standalone** — no interface anywhere, so
+>   S1 does not reach it — rejected on the zero-import single-file path against
+>   the *prelude's* scheme. Pinned at
+>   `test/must_fail_fixtures/1191-prelude-standalone-collision/`.
+> - ❌ **NOT graded: export visibility (#1302's axis) — and it is not clear this
+>   matrix is where it belongs.** [#1302](https://github.com/MedakaLang/medaka/issues/1302)'s
+>   own filed repro does not exercise S1's shadow-hood conjunct at all (see the
+>   ⚠️ under S1: its `mth` is an impl method, never a standalone `DFunDef`, so
+>   `funDef-names ∩ iface-method-names` is vacuously false there **regardless of
+>   how the interface operand is scoped**). A genuine S1-shaped export-visibility
+>   row would need a *different* program — a real definer/importer shadow where
+>   the interface lives in a module `M` imports **directly** but the interface's
+>   declaration is not exported along that import — and whether such a shape
+>   reproduces anything wrong today is **unverified**. It is also a distinct
+>   question from #1302's actual mechanism (a wildcard import surfacing a private
+>   interface's methods to the **impl-obligation** check). Not a chain case
+>   either: the chain arm is **RULED IN SCOPE** (S1-CHAIN, #1380), and
+>   S1-SCOPE's "not ruled" item 1 is narrowed to the sub-predicate. Owed to
+>   whoever picks up #1302's actual mechanism.
+>
+> **The lesson stands even though the gap is closed, and it is the reason the ❌
+> bullets above are written out rather than left implicit.** Row 32 graded green
+> on a *broken* binary because every unit then used an annotated or literal
+> receiver; rows 27–28 graded green over a real break because every importer unit
+> then used a grounded receiver; rows 33–45 were absent while the clause they
+> grade was being ruled. **Three times this corpus has been green over a cell
+> nothing in it could express.** The remedy is never a bigger corpus — a corpus
+> that cannot discriminate a ruling grades it exactly as well at 49 units as at
+> 17, which is *not at all*. **Name the axis you are not varying.**
+>
+> ⚠️ **Two units in this corpus still have no row above**, and neither is a
+> nameability cell: `i6b_importer_value_pos_arity_differ_unannot/` and
+> `d18b_definer_value_pos_string_elem.mdk` are unannotated/element-type siblings
+> of rows 21a and 9c. They are graded by the gate; they are simply not called out
+> here. Derive the set rather than trusting this sentence — every unit the gate
+> grades is in its own table, and its coverage self-audit fails if one is not.
+
+> ### ⚠️ **A LOW `BUG` COUNT DOES NOT MEAN "NO VIOLATIONS". READ THE GAP AND UNVERIFIED COLUMNS.**
+>
+> *(This heading read `0 BUG` until 2026-08-10. The tally is no longer zero —
+> row 39 / #1430 — but the lesson below was always about what the column
+> **cannot** see, so it applies at any count.)*
 >
 > **BUG** here means *the engines disagree with each other* — and that is an
 > **observability** property, not a severity one. It is the thing a differential gate can
@@ -427,16 +1518,17 @@ Line numbers at `cfc4fa5a`.
 
 | Clause | Stage / site | What it enforces | **Keying assumption** |
 |---|---|---|---|
-| S1 detect (run/check, definer) | `compiler/types/typecheck.mdk:11451` `buildDefinerShadows`; single-file seed `:8979`; per-module seed `checkModuleFullImpl:11199-11201` → `definerShadowNamesRef`/`standaloneValuesRef` | this module's funDefs that name a method | **bare-name intersection**: funDefs(`prog`) × `allIfaceMethodNames(accData ++ implDecls ++ prog)` — sees imported *interfaces* only via `accData` (public decls); see row-14 BUG |
+| S1 detect (run/check, definer) | 🔴 **STALE — re-verified 2026-08-07, wrong on the Module path.** `buildDefinerShadows` is the FLAT-path function; on the MODULE (multi-module) path the reader is `definerShadowsFromSet`, keyed on `crossRun.value.universeIfaceMethodsRef` (grown by `appendUniverseAccums` → `allIfaceMethodNames`) — not the symbols or line numbers this cell names. Line numbers are additionally untrusted per this table's own preamble | this module's funDefs that name a method | **bare-name intersection, but NOT via `accData`/`publicDataDecls` — those are DEAD on the Module path** (`fullUniverse` binds `[]` there; an in-source comment calls the old accData concat "a dead per-module O(N) concat"). The real feeder, `allIfaceMethodNames`, has **no `pub` filter** (sees a private interface's methods too — the opposite of what "public decls" implies) and is accumulated **cumulatively in the loader's dependency-first topological order**, not filtered by import reachability — the same shape as `DICT-SEMANTICS.md` §8 I5's "PARTIAL — cumulative, not global" row for the impl universe. This is the mechanism behind #1375's reachability axis; see row-14 BUG. ⚠️ **The FEEDER is still unfiltered; the RESULT no longer is (S1-NS / #1353, 2026-08-08).** `checkBodyImpl` now wraps *both* `definerShadowsFromSet` and `standaloneShadowsFromSet` in `nameableIfaceShadows`, which intersects the answer with `nameableIfaceMethodSet` — the methods of the interfaces that module can NAME. So this cell describes the operand, not the answer |
 | S1 detect (run/check, importer) | `typecheck.mdk:17020` `buildStandaloneShadowsGraph` | imported standalones shadowing a method | imported funDef names minus local names, methods scanned across `implDecls ++ prog` (the `cfc4fa5a` fix: LOCAL interfaces included) |
 | S1 detect (build path) | `typecheck.mdk:11475` `computeMangledShadowMap` + `unitMangledShadows:11480`, set once at `elaborateModules:11932` (`mangledShadowMapRef`); consumed by `buildDefinerShadows:11460` and `buildStandaloneShadowsGraph:11487-11497` | recover shadows AFTER mangling renamed the standalone | **forward-constructs `mangledName mid m`** per (module, method) and checks it against actual funDefs — exact, not prefix-stripping; empty map on the un-mangled path (inert) |
-| S1 mark | `typecheck.mdk:11942` `markRpNames` (∪ `buildStandaloneShadowsGraph`) → `prePassDictArg`/`prePassModulePairArg:11943-11944` rewrite occurrences to `EMethodAt` | occurrences get a route ref | graph-wide name set over USER modules (core excluded) |
+| S1 mark | `typecheck.mdk:11942` `markRpNames` (∪ `buildStandaloneShadowsGraph`) → `prePassDictArg`/`prePassModulePairArg:11943-11944` rewrite occurrences to `EMethodAt` | occurrences get a route ref | graph-wide name set over USER modules (core excluded). ⚠️ **NO LONGER graph-wide on the Module path (S1-NS / #1353, 2026-08-08).** `markRpNames` is still what `core` is marked with, but each USER module goes through `prePassModulePairArg`, which filters four of its five inputs — `rpNames`, the graph shadow set (through `shadowBareName`), `argNames` and `shadowMap` — to `nameableIfaceMethodSet` for *that* module. `dictNames` is the one input left unfiltered, and is not an input to dispatch (it yields `EDictAt`) |
 | (enabler of the S1 build split) | `compiler/backend/private_mangle.mdk`: `mangleUnits:117`, `buildUnitRenameMap:372`, `renameDecl` DFunDef `~578` + `renameScoped` EVar `~651` rename the standalone def + refs to `<mid>__N`; `renameIfaceMethod:626`/`renameImplMethod:636` leave the method **NAME bare** (header `:34-46`: dispatch is by bare name cross-module) | collision-free private symbols | **the asymmetry**: standalone side mangled, method side bare — which is exactly what defeated name-intersection detection (bug `0b4a7882`); driver order `compiler/entries/entry_support.mdk:133-134` (`runEmitWith`) and `:145-146` (`emitModulesWith`): mangle STRICTLY before mark |
 | S2 type + record (definer) | app-head peel → `definerShadowArgHead` (definer disjunct gated `ifaceMethodName`, fires on `definerShadowNamesRef`; importer-on-emit disjunct gated `singleTyparamIfaceMethod`, fires on a mark-seeded `RLocal sym` — the cross-module emit signal) → `inferDefinerShadowApp` + `definerShadowHeadType`. The un-marked `check` path peels via `definerShadowVarHead` → `inferDefinerShadowVarApp`. **`definerReceiverDispatches` is the single decision point** | **[CHANGED — THE INVERSION]** a definer shadow types against the STANDALONE scheme, **always** (via the mangled sym on build — the scheme-selection SIGSEGV fix); `enforceStandaloneDomain` then imposes its declared domain, so a live-impl receiver is a located reject. The only dispatch arm left is S5's dict-bound receiver | ⚠️ **`definerShadowArgHead` fires for IMPORTER shadows too** — its `routeLocalSym != ""` arm is the cross-module emit signal, so `inferDefinerShadowApp` serves BOTH kinds on the mangled path. "Did we reach this function" is therefore **NOT** the same question as "is this a definer shadow": `definerReceiverDispatches` must re-ask it via `isDefinerShadow` (`definerShadowNamesRef` never holds an imported standalone) or the inversion leaks onto importers and breaks `import map` |
 | S2 type + record (importer) | `typecheck.mdk:4950` `shadowStandaloneHead` → `inferShadowApp:4979`; standalone schemes stashed in `shadowStandaloneSchemesRef` (`checkModuleFullImpl:11210`, concrete-head pick); impl query table `shadowKeyTableRef` (`:11217`, includes LOCAL impls per `cfc4fa5a`) | live-impl head ⇒ ordinary app (dispatch); else instantiate the IMPORTED standalone scheme + stamp `RLocal` | standalone scheme = the seedVars entry whose first arrow domain has a **concrete head tycon** (never the poly method scheme) |
 | **S4 value-position pin** | check: `maybeStandaloneValueMono` (`typecheck.mdk`); build: `maybeStandaloneValueMonoEmit` via `inferMethodAt` — gated by **`emitValueShadowGate`** | a bare value-position shadow (`map size xs`, not an app head) denotes the STANDALONE: pin its TYPE to the standalone scheme (`Int -> Int`) so a HOF grounds the element concretely, instead of the permissive method scheme (`a -> i -> Int`, a function) whose `Display (List (Int -> Int))` stamps a **NULL element dict → SIGSEGV** (#410/#669 single-typaram; **#724 multi-typaram**) | **[#724] gated PER SHADOW KIND on BOTH paths** — DEFINER arm typaram-agnostic (`isDefinerShadow`, i.e. `contains name definerShadowNamesRef`), IMPORTER arm `singleTyparamIfaceMethod` (Fork 1). Before #724 the check path was already per-kind (definer typaram-agnostic) but the emit path used ONE blanket `singleTyparamIfaceMethod`, so a **multi-typaram definer value position** grounded on check yet DECLINED on emit → the #410 skew at multi-typaram width. ⚠️ the emit classifier is **`isDefinerShadow`, NOT `shadowStandaloneSchemesRef` membership** — that ref is `standaloneSchemeFor`'s scheme-SOURCE selector and an importer occurrence is not reliably in it at this pin, so keying on it mis-grounds the i10 multi-typaram importer app head to a garbage-pointer build. App heads never reach the pin as value positions: a definer app head is bracketed `shadowHeadCtxRef` True by `inferDefinerShadowApp`. Fixtures: `d22`/`d22b` (multi-typaram definer value position), `d22z` (app-head control) |
 | S2 no-impl obligation skip | `typecheck.mdk:4670` `recordImplObligation`, skip arm `:4688` | a no-impl shadow receiver is a legitimate standalone fallback, not `No impl of …` | bare name ∈ `definerShadowNamesRef` ∪ `standaloneValuesRef` — skips the obligation for EVERY occurrence of the name, impl-having or not (this un-checks row 13: the domain mismatch is never re-imposed) |
 | S2/S3/S5 route stamping | `recordRLocalSite` (gated on `standaloneValuesRef`, suppressed inside `inferDefinerShadowApp`); `resolveRLocalSites` / `resolveRLocalSite`: **`isDefinerShadow` ⇒ `RLocal sym` unconditionally**, else (importer) grounded head + `implExistsForHead` → leave route (dispatch) else `RLocal sym` (`stampRLocalOrFallback`); ungrounded → `RLocal` for definer shadows; build-path RKey via `pendingArgStamps` push → `resolveArgStamps` | **[CHANGED — THE INVERSION]** route by SHADOW KIND first, receiver second. `resolveArgStamps` runs BEFORE `resolveRLocalSites`, so the `RLocal` stamp wins | ⚠️ **`isDefinerShadow` carries the SAME gate as every typing entry point** (`ifaceMethodName` since #54; it was the typaram-count test `singleParamIfaceMethod`, whose mismatch with nothing else was S-3 / row 26). Routing here on a gate the typing entry points do not share routes a site whose TYPE came from the dispatch path — **route and type disagreeing is precisely the P0-20 bug class.** The two gates must stay identical |
+| **S2-DECL** receiver argument + impl query | check/run: `methodDispatchIdx` → `recordRLocalSite` → `resolveRLocalSite` → `implExistsForHead`. build: `definerShadowArgHead`'s importer disjunct (`importerShadowOnEmitPath`) → `inferDefinerShadowApp`, which sets `suppressRLocalRecord` and peels the application's FIRST argument | which argument is the receiver, and whose impls answer the query | 🔴 **NON-CONFORMANT on BOTH arms, for DIFFERENT reasons — MEASURED 2026-08-09 ([#1351](https://github.com/MedakaLang/medaka/issues/1351)).** check/run keys the receiver position on the **bare method name** (first-match over a graph-global accumulator, so import-clause order decides) while the occurrence's TYPE comes from `methodIfaceParamsRef` — same key, **opposite** tie-break — so with two colliding declarations the two name different ones by construction (S2-DECL (b), (e)). build reads **no** dispatch-index table at all: the receiver is argument 0, positionally (S2-DECL (a)). `implExistsForHead` is keyed `(method name, head tycon)` with no interface, so it can answer about an impl of a declaration the module cannot name (S2-DECL (c)). ⚠️ **The two arms are independent**: re-deriving either dispatch-index table moves `run` and leaves the built binary where it was — an **S7** violation, not a partial fix |
 | route representation | `compiler/frontend/ast.mdk:69-72` (`RKey`/`RLocal String`); sexp `compiler/ir/core_ir_sexp.mdk:43-44` (`RLocal ""` serializes to the old nullary form) | ONE occurrence needs TWO names: bare `N` for dispatch, `<mid>__N` for the standalone | the mangled standalone symbol is **carried in the route**, stamped at resolve time (Fork-2 carry-in-route) |
 | lowering | `compiler/ir/core_ir_lower.mdk:144` `EMethodAt name … → CMethod name …` | route + both names survive to the backends | `name` is the single bare field; the RLocal symbol rides the route |
 | emit (LLVM) | `compiler/backend/llvm_emit.mdk:3413` `emitMethod … (RKey tag)` → `implFor e name tag`; `:3435` `… (RLocal sym)` → `emitKnownFnSat e ("mdk_" ++ sym)` | S2's two arms at codegen | RKey needs the **bare** method name; RLocal needs the **mangled** symbol |
@@ -448,9 +1540,20 @@ Line numbers at `cfc4fa5a`.
 ## 4. The gate (`test/diff_compiler_shadow_semantics.sh`)
 
 **The matrix in §2 is enforced.** One gate owns the whole corpus
-(`test/shadow_fixtures/`, 17 fixture units — 13 single-file `.mdk` plus the
-`d8`/`i1`/`i3`/`i4` multi-module directories), and for each it drives all three
-paths and asserts:
+(`test/shadow_fixtures/` — single-file `.mdk` units plus the `d8`/`i*`
+multi-module directories), and for each it drives all three paths and asserts:
+
+⚠️ **This paragraph carried a hard-coded "17 fixture units — 13 single-file
+`.mdk` plus the `d8`/`i1`/`i3`/`i4` multi-module directories" until 2026-08-06.
+It was stale by more than a factor of two, and it PROPAGATED** — the figure was
+copied forward into issue text and into a task brief, where it was used to size
+the blast radius of a spec ruling against this corpus. **Do not write the count
+here.** Derive it, and keep the two numbers distinct: `ls test/shadow_fixtures/ |
+wc -l` gives the fixture-**unit** count, the gate's own `ok   coverage:` line
+prints the same number as it grades it, and the gate's final tally reports
+**assertions**, which is units **plus one** (the coverage self-audit). At
+2026-08-06 those were **36** and **37** respectively — recorded as a dated
+observation, not as a fact this page maintains.
 
 - the **verdict** — `check`, `run`, and `build` each ACCEPT or REJECT exactly as
   the cell specifies; and
@@ -472,16 +1575,32 @@ Two properties that keep it from rotting:
   twice.** `d10` (row 25) was added as a KNOWN-BAD row pinning the S-1 miscompile,
   S-1 landed, and the gate went red on the next run. `d11` (row 26) pinned S-3 the
   same way, and went red the moment #54 taught the definer entry points this shape
-  (2026-07-17). The only KNOWN-BAD row left is `d18` (a #410 residual: `build`
-  ships a binary that SEGFAULTs while `run` is correct).
+  (2026-07-17). **Two KNOWN-BAD rows are open:** `d18` (row 9c, a #410 residual —
+  `build` ships a binary that SEGFAULTs while `run` is correct) and
+  `i22_importer_member_alias_not_nameable/main.mdk` (row 42, the member-alias
+  cell, pinned to `7` where S1-NS (a)(ii) specifies `99`, with its own `bare.mdk`
+  sibling as the discriminator). ⚠️ **A KNOWN-BAD row is not the only way a cell
+  can be non-conformant and still green here** — row 39 ([#1430](https://github.com/MedakaLang/medaka/issues/1430),
+  OPEN S0) is pinned in `test/must_fail_fixtures/`, **not** in
+  `test/shadow_fixtures/`, so this gate is green over it and the coverage
+  self-audit below cannot see it either: the audit checks that every fixture in
+  *this* directory has a row, never that every cell in §2 has a fixture *here*.
 
 CI: the `types` shard (`.github/workflows/ci.yml`); `diff_compiler_ci_shard_coverage`
 enforces that it is in exactly one shard.
 
-Still **UNTESTED-NO-FIXTURE** (rows 21–23): importer value-position, importer
-N-way, and a return-position method shadow. Adding those three fixtures is the
-next mechanical step — the gate picks them up automatically once a row is added
-to its table (and its coverage audit will fail until one is).
+⚠️ **This paragraph read *"Still UNTESTED-NO-FIXTURE (rows 21–23): importer
+value-position, importer N-way, and a return-position method shadow"* until
+2026-08-10. All three got fixtures on 2026-07-16 while fixing #411** — rows 21a,
+21b, 22, 23a and 23b in §2 name them — so the claim had been false for
+three-and-a-half weeks, and §2's tally still carried its `3 UNTESTED-NO-FIXTURE`
+bucket for the same rows. **There is no UNTESTED-NO-FIXTURE cell left in §2**;
+derive the status distribution from the table itself rather than from a
+sentence here (the command is under §2's tally).
+
+The mechanical step it described still holds for any *new* cell: the gate picks
+a fixture up automatically once a row is added to its own table, and its
+coverage audit fails until one is.
 
 ## 5. Residuals — HISTORICAL (all four now CLOSED; kept for the repro + root cause)
 
@@ -544,9 +1663,19 @@ same "which stage owns S4/S6" decision.
 > scheme via `maybeStandaloneValueMono`). Row **14 (d8)** now DISPATCHES cross-module
 > (run+build print `3`,`4`, matching d2): `shadowKeyTableRef` seeded from the global
 > `accData ++ implDecls ++ prog` (was missing the imported impl on the check path),
-> and both definer-shadow app paths decide per-receiver — a receiver with a visible
+> and both definer-shadow app paths decide per-receiver — a receiver with a live
 > impl fetches the method scheme from `methodIfaceParamsRef`, else the standalone
-> scheme. Fixtures `p0_19_value_pos_{shadow=REJECT,ok=ACCEPT}` + a d8 leg in
+> scheme. (This paragraph predates the **2026-07-14 S2 inversion**, not the
+> 2026-08-06 scope ruling — it is row 14's own per-receiver dispatch, later
+> reverted by the inversion (row 14's current entry a few paragraphs above says
+> so). The inversion is what superseded it: a definer shadow's applied
+> occurrence no longer consults the impl universe AT ALL, scoped or otherwise —
+> S1-SCOPE narrows a *name* set and explicitly leaves S2's impl-universe lookup
+> untouched (`DICT-SEMANTICS.md` §8 I5's cross-reference says the same from the
+> other side), so it is not the pointer this paragraph's mechanism needs.
+> "Live impl" is §0 Terminology's term, not a fourth undefined adjective.)
+> Fixtures
+> `p0_19_value_pos_{shadow=REJECT,ok=ACCEPT}` + a d8 leg in
 > `diff_compiler_check_cli_modules` (14/0); agreement 24/0, fixpoint C3a/C3b YES.
 
 > **🐛 NEW CELL + ✅ FIX (2026-07-13, P0-20) — row 25: a LITERAL receiver.  The worst

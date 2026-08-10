@@ -1,0 +1,1 @@
+TYPE ERROR: 'impl Alpha ET' is missing method 'abar'. Every interface method without a default body must be implemented — define 'abar' in the impl (or check for a typo in a method name)

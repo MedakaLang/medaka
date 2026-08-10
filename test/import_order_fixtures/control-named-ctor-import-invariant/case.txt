@@ -1,0 +1,13 @@
+entry: main.mdk
+what: CONTROL — the byte-identical graph with the ctor imported BY NAME is order-INVARIANT
+
+Same two modules as 733-wildcard-import-ctor-falls-to-universe, same program text,
+one variable changed: `import amodd.*` becomes `import amodd.{A1, Dup, unA1}`. That
+spelling IS covered by the A-2.6 import-scoped overlay, so `Dup` never reaches the
+universe pool and the answer does not depend on clause order.
+
+Observed by hand on a binary cold-bootstrapped from `main` @ 0af30a78, 2026-08-05:
+`medaka run` printed `1` at exit 0 with either clause first.
+
+This is one of the two rows that make this gate's green mean something. It is a PASS
+today and it CAN fail: it is the row proof (b) in the PR body perturbs.

@@ -1,0 +1,77 @@
+issue: 1359
+what: `amod.mdk` declares `public export data AT = Wid Int`. `bmod.mdk` is
+what: `export import amod.{Wid}` -- a re-export, no declaration of its own.
+what: `main.mdk` is `import bmod.{Wid}`, one hop removed from the declaring
+what: module. `medaka check` exits 0 (`unWid : AT -> Int` / `main : Unit`) and
+what: `medaka run` is CORRECT, exit 0, prints `5`. `medaka build` FAILS: exit
+what: 1, `error: emitter failed compiling <path>` followed by `runtime error
+what: [E-PANIC]: unbound variable 'Wid' (not a local, ctor, or known fn)`. No
+what: collision of any kind is required -- exactly one module declares `Wid`,
+what: exactly one re-exports it, exactly one imports it, and this is the only
+what: `Wid`/`AT` anywhere in the program. Also reproduces identically with
+what: `export import amod.*` in bmod.mdk in place of the `{Wid}` spelling
+what: (verified by hand, not separately pinned here).
+what: mechanism (compiler/backend/private_mangle.mdk): two parallel
+what: constructor-export mechanisms feed the mangler's per-unit
+what: constructor-rename map, and they are NOT symmetric. Function
+what: re-exports ARE followed transitively: `reexportFnEntries` has an
+what: explicit `DUse True path _` arm (`export import` parses to `DUse True`)
+what: that walks the re-export chain via `reexportMembers`/`reexportOne`.
+what: Constructor exports are NOT: `unitCtorExportEntry (mid, decls) =
+what: (mid, flatMap ctorExportEntries decls)` and `ctorExportEntries` has arms
+what: only for `DData`, `DNewtype`, and `DAttrib` (one-layer recurse) -- no
+what: `DUse True` arm at all. So `bmod`'s own `ctorExportEntries` never sees
+what: `Wid` (it is declared in `amod`, not `bmod`), `bmod`'s row in
+what: `ctorExportsPerUnit` has no entry for it, and `main`'s reference to
+what: `Wid` (imported from `bmod`) misses at mangle time -- the shared
+what: emit-support panic path (`compiler/entries/entry_support.mdk`'s
+what: `failWith`, #440) fires. Typecheck/resolve/eval never see a problem
+what: because they resolve `Wid` through the ordinary (unmangled)
+what: constructor-name path, which correctly follows `export import` chains
+what: -- this is purely a backend/mangler gap.
+what: relation to #1300/#1305: same family (mangler's constructor-rename map
+what: has a gap `check`/`run` never see, `build` panics) but a DIFFERENT
+what: trigger and code path. #1300 is a DIRECT import with `(..)` on a
+what: constructor spelling (`ctorMemberEntry`'s `wild` branch misses); this
+what: fixture's import has no `(..)` at all. #1305 is a newtype whose
+what: constructor resolve/typecheck never scope but the mangler binds anyway
+what: (a front-end/backend disagreement about SCOPE); this fixture's
+what: constructor IS correctly in scope everywhere -- the gap is purely that
+what: `ctorExportEntries` has no re-export-following arm, unlike its function
+what: sibling `reexportFnEntries`.
+cmd: build main.mdk
+exit: 1
+stdout-line: runtime error [E-PANIC]: unbound variable 'Wid' (not a local, ctor, or known fn)
+control: build-run control.mdk
+why-fixture: the `build` verb grades `medaka build` ITSELF (exit code +
+why-fixture: combined stdout+stderr) -- this is a build-time REFUSAL of a
+why-fixture: program `check` and `run` both accept and run correctly, not a
+why-fixture: run-vs-built-binary VALUE divergence, so `build-run` cannot
+why-fixture: express the observation on `main.mdk` (its build never succeeds).
+why-fixture: `stdout-line`, not `stdout:`, because `build`'s FIRST output line
+why-fixture: (`error: emitter failed compiling <path>`) embeds an absolute
+why-fixture: path that varies by checkout location -- pinning it whole would
+why-fixture: drain on a path move having nothing to do with #1359. The
+why-fixture: E-PANIC line itself is path-independent and is the defect's
+why-fixture: signature.
+why-control: control.mdk is main.mdk's exact use shape (same `unWid (Wid n) =
+why-control: n` / `main = println (unWid (Wid 5))`) with the ONE variable
+why-control: removed: `import amod.{Wid}` (DIRECT, no re-export hop) instead
+why-control: of `import bmod.{Wid}` (routed through bmod's `export import`
+why-control: re-export). Unlike this fixture's `cmd`, the control uses
+why-control: `build-run` (not bare `build`) because it must positively
+why-control: demonstrate a WORKING build, not just a clean exit code --
+why-control: verified: `medaka build control.mdk` exits 0 and the produced
+why-control: binary exits 0 printing `5`. A red control means constructor
+why-control: import/mangling broke in general, not that #1359 was fixed.
+why-verify: verified first-hand against a from-source, cold-bootstrapped
+why-verify: native build (`make medaka`, no borrowed emitter) of `origin/main`
+why-verify: at 8af1aafaa803147e499ea11e19717ad4c581506d, with
+why-verify: MEDAKA_STRICT=1 (no staleness warning on either `main.mdk` or
+why-verify: `control.mdk`).
+why-note: fix territory per the issue: `ctorExportEntries` (or
+why-note: `unitCtorExportEntry`) needs a `DUse True path _` arm mirroring
+why-note: `reexportFnEntries`'s, walking the re-export chain to pull in a
+why-note: re-exported module's own constructor rows. Close #1359 and delete
+why-note: this fixture when `medaka build main.mdk` exits 0 and the binary
+why-note: prints `5`.

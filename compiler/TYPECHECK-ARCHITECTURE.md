@@ -303,7 +303,7 @@ the impl, and writes a `Route` back into the AST's `Ref Route` cells.
 | Superinterface existence | dedicated walk | ~35 lines | DICT §3 |
 | Impl completeness / phantom methods | two walks | ~169 lines | **none** |
 | Interface type-parameter kinds | `checkGradedImplHeads` | ~195 lines | EFFECTS §6.1–§6.5 |
-| **Field resolution + record registry** | `resolveFieldRecord`, `collectAbstractRecordTypes`; cells `recordsRef`, `recordByNameRef`, `fieldOwnersRef`, `abstractRecordTypesRef` | ~410 lines / 4 cells | **none** |
+| **Field resolution + record registry** | `resolveFieldRecord`, `collectAbstractRecordTypes`; cells `recordByNameRef`, `fieldOwnersRef`, `abstractRecordTypesRef` | ~410 lines / 3 cells | **none** |
 
 ⚠️ DICT §6 is C1–C4 (unique most-specific instance, superclass consistency, resolution
 determinism, one instance environment). **It does not require an impl to define every
@@ -656,6 +656,6 @@ written down as a trap. Only re-derivation caught any of them.
   §6 polymorphism and kinds (§6.1–§6.5, §6.7), §8 erasure, §10 conformance gaps
 - `docs/spec/SHADOW-SEMANTICS.md` — §1 clauses S1–S9, §3 per-stage enforcement table
 - `compiler/DRIVER-COLLAPSE-PLAN.md` — the Flat/Module collapse invariant (§7.6)
-- `.claude/workstreams/TYPECHECK.md` — the standing five-question gate, duplicate-family map
+- `.claude/workstreams/TYPECHECK.md` — the standing gate, duplicate-family map
 - `compiler/ARCH-REVIEW.md` — PASS 1/2 prior review
 - `compiler/ERROR-QUALITY.md` — the rubric governing Layer 8's error-path machinery

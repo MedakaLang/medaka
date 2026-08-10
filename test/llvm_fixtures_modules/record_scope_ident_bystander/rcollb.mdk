@@ -1,0 +1,9 @@
+-- The other declaration of `Dup`, at an unrelated type and an unrelated field type.
+-- There is NO import relationship between this module and `rcolla`.
+public export data RB =
+  | Dup { dx : String }
+  | BOther
+
+export unRB : RB -> String
+unRB (Dup { dx }) = dx
+unRB BOther = "other"

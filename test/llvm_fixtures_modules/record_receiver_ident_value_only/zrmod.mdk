@@ -1,0 +1,7 @@
+-- The COLLIDER.  `entry` imports only `zrf` from it and can never name this `Cfg`.
+-- Its `fld` is a `Float` on purpose: if the wrong declaration is selected the
+-- failure is LOUD (`Float vs Int`) rather than a silently wrong projection.
+public export data Cfg = { fld : Float }
+
+export zrf : Int -> Int
+zrf x = x

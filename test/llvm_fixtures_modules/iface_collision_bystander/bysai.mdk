@@ -1,0 +1,9 @@
+-- #1047 BYSTANDER: A's method-less implementor.
+import bysa.{Speak(..), speak}
+
+public export data DogA = DogA
+
+impl Speak DogA where
+
+export sayA : DogA -> String
+sayA d = speak d

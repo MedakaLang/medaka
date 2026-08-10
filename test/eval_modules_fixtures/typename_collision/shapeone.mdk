@@ -1,0 +1,10 @@
+-- Declares a type named `Shape`.  Knows nothing about `shapetwo` — no import
+-- relationship in either direction — and the assertion in main_typenamecollide
+-- is about THIS module's answers.
+data Shape = Corner Int Int
+
+export mkOne : Int -> Shape
+mkOne n = Corner n (n + n)
+
+export oneSpan : Shape -> Int
+oneSpan (Corner a b) = b - a

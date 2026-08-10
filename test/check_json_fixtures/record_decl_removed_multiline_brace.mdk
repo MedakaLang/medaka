@@ -1,0 +1,10 @@
+-- #62.  The other multi-line removed-record form — `=` on the header line with
+-- the braces indented below, which lexes as `= INDENT {`.  Split from its
+-- sibling because the pre-scan reports only the FIRST match in a file, so two
+-- shapes in one fixture would leave the second unasserted.
+record Person =
+  { name : String
+  , age : Int
+  }
+
+main = println 1

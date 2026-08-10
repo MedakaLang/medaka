@@ -1,0 +1,6 @@
+running doctests in test/compiler_test_fixtures/record_prop.mdk
+  (no doctests found)
+Testing "positional ADT generates" ... OK (100 tests)
+Testing "record generates and round-trips through field access" ... OK (100 tests)
+
+2 passed, 0 failed

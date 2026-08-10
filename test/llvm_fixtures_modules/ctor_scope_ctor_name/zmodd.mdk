@@ -1,0 +1,7 @@
+-- The COLLIDING module: an unrelated data type whose constructor shares the bare
+-- name `Dup`.  `entry.mdk` imports only `zdf` from here, never `Z1` and never this
+-- `Dup`.
+public export data Z1 = Dup String
+
+export zdf : Int -> Int
+zdf n = n

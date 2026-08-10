@@ -1,5 +1,5 @@
 # META
-source_lines=330
+source_lines=411
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted doctest extraction + running — port of lib/doctest.ml.
@@ -18,7 +18,7 @@ stages=DESUGAR,MARK
 -- evaluate without error.
 --
 -- This module is pure extraction + the run plumbing (Example/RunResult types,
--- buildDetails, hasUseDecls); the comment side channel comes from
+-- buildDetailsFrom, hasUseDecls); the comment side channel comes from
 -- compiler/lexer.mdk (`collectComments`), the run drivers (single/multi) from
 -- compiler/tools/test_cmd.mdk.
 
@@ -26,7 +26,6 @@ import frontend.lexer.{Comment, collectComments, commentLine, commentText}
 import frontend.ast.{Decl, DUse}
 import frontend.parser.{parseResult, parseErrorMessage}
 import frontend.desugar.{desugar}
-import eval.eval.{Value(..), lookupBinding, force, ppValue}
 import support.util.{listLen, reverseL, joinNl, startsWith, stringTrim, splitNl}
 
 -- ── Data ──────────────────────────────────────────────────────────────────
@@ -38,7 +37,12 @@ public export data Example = Example String (Option String) Int
 export exampleInput : Example -> String
 exampleInput (Example i _ _) = i
 
-exampleExpected : Example -> Option String
+-- Exported for the native execution engine (compiler/tools/native_doctest.mdk),
+-- which must know whether an example carries an expected block: `synthSrc`
+-- renders one as `debug (…)` (a String, printable) and a smoke example raw (an
+-- arbitrary, not-necessarily-printable type), and the synthesized `main` has to
+-- treat the two differently.
+export exampleExpected : Example -> Option String
 exampleExpected (Example _ e _) = e
 
 export exampleLine : Example -> Int
@@ -66,6 +70,54 @@ runErrors (RunResult _ _ _ e _) = e
 
 export runDetails : RunResult -> List (Example, ExResult)
 runDetails (RunResult _ _ _ _ d) = d
+
+-- ── engine selection (#81 Stage 3) ──────────────────────────────────────────
+-- Which execution engine renders an example's actual value. `EngInterp` is
+-- today's tree-walking interpreter (compiler/eval/eval.mdk); `EngNative`
+-- compiles the module under test to a real native binary and runs it (Stage 2,
+-- `compiler/tools/native_doctest.mdk`). A `RunResult` itself doesn't carry
+-- which engine produced it — this type exists purely to SELECT the engine at a
+-- call site and to name it when reporting, so callers can derive labels/JSON
+-- fields from the engine(s) actually run instead of hardcoding a string that
+-- would start lying the day a second engine ships.
+public export data Engine = EngInterp | EngNative
+
+export engineName : Engine -> String
+engineName EngInterp = "eval"
+engineName EngNative = "native"
+
+-- ── reporting (mirrors lib/test_cmd.ml) ────────────────────────────────────
+-- The per-example `ok`/`FAIL`/`ERROR` lines and the `(F failed, E errors)`
+-- summary suffix.  These live HERE, beside `RunResult`, rather than in a driver:
+-- a `RunResult` is engine-agnostic (Stage 1 raised `buildDetailsFrom` above the
+-- interpreter), so every engine's report must look identical or the two engines'
+-- output could not be compared.  `compiler/tools/test_cmd.mdk` (interpreter) and
+-- `compiler/entries/native_doctest_probe_main.mdk` (native) both render through
+-- these — they were three duplicated bodies until #81 Stage 2.
+
+export doctestFailSuffix : RunResult -> String
+doctestFailSuffix result
+  | runFailed result > 0 || runErrors result > 0 = " (\{intToString (runFailed result)} failed, \{intToString (runErrors result)} errors)"
+  | otherwise = ""
+
+export printDoctestDetails : String -> List (Example, ExResult) -> <IO> Unit
+printDoctestDetails _ [] = ()
+printDoctestDetails target ((ex, res)::rest) =
+  let _ = printDoctestOne target ex res
+  printDoctestDetails target rest
+
+printDoctestOne : String -> Example -> ExResult -> <IO> Unit
+printDoctestOne target ex res =
+  let loc = "\{target}:\{intToString (exampleLine ex)}"
+  match res
+    Pass => putStrLn "  ok   \{loc}: \{exampleInput ex}"
+    Fail expected actual =>
+      let _ = putStrLn "  FAIL \{loc}: \{exampleInput ex}"
+      let _ = putStrLn ("       expected: " ++ expected)
+      putStrLn ("         actual: " ++ actual)
+    Errored msg =>
+      let _ = putStrLn "  ERROR \{loc}: \{exampleInput ex}"
+      putStrLn ("        " ++ msg)
 
 -- ── small string helpers (compiler avoids the stdlib) ──────────────────────
 
@@ -228,7 +280,7 @@ export synthName : Int -> String
 synthName i = "__dt_" ++ intToString i ++ "__"
 
 -- Build the synthetic source line for example i.
-synthSrc : Int -> Example -> String
+export synthSrc : Int -> Example -> String
 synthSrc i ex =
   let rhs = match exampleExpected ex
     Some _ => "debug (" ++ exampleInput ex ++ ")"
@@ -268,36 +320,65 @@ concatOkDecls [] = []
 concatOkDecls ((Ok ds)::rest) = ds ++ concatOkDecls rest
 concatOkDecls ((Err _)::rest) = concatOkDecls rest
 
--- ── Compare evaluated bindings against expected ──────────────────────────────
--- env is the post-run binding environment (Ok env) or a single whole-program
--- error (Err msg) applying to every example.
+-- ── Compare rendered results against expected ────────────────────────────────
+-- Stage 1 (make `medaka test` run natively): this seam used to take the raw
+-- interpreter env (Result String (List (String, Value e))) — a shape only the
+-- tree-walking evaluator can produce. It is raised one level: an execution
+-- engine's whole obligation is now "one rendered actual per example, or one
+-- whole-file error" — renderedResult is either a single whole-program error
+-- (Err msg, e.g. a multi-module load failure) applying to every example, or
+-- (Ok) one Result String String per example, positionally aligned with
+-- `examples`: Ok (the debug-rendered actual) or Err (that example's own
+-- run/lookup failure, e.g. "could not evaluate: <expr>"). A native engine
+-- implements this contract directly; the interpreter arm (test_cmd.mdk) is a
+-- thin adapter over `lookupBinding (synthName i) env` / `ppValue (force v)`.
 
-export buildDetails : Result String (List (String, Value e)) -> List (Result String (List Decl)) -> List Example -> <e> RunResult
-buildDetails envResult synthResults examples =
-  let details = detailsGo envResult synthResults 0 examples
+export buildDetailsFrom : Result String (List (Result String String)) -> List (Result String (List Decl)) -> List Example -> RunResult
+buildDetailsFrom renderedResult synthResults examples =
+  let details = detailsGoFrom renderedResult synthResults examples
   let passed = countResult isPass details
   let failed = countResult isFail details
   let errors = countResult isErr details
   RunResult (listLen examples) passed failed errors details
 
-detailsGo : Result String (List (String, Value e)) -> List (Result String (List Decl)) -> Int -> List Example -> <e> List (Example, ExResult)
-detailsGo _ _ _ [] = []
-detailsGo envResult (sr::srRest) i (ex::rest) =
-  (ex, oneResult envResult sr i ex) :: detailsGo envResult srRest (i + 1) rest
-detailsGo _ [] _ (_::_) = []
+detailsGoFrom : Result String (List (Result String String)) -> List (Result String (List Decl)) -> List Example -> List (Example, ExResult)
+detailsGoFrom (Err msg) synthResults examples =
+  detailsGoErr msg synthResults examples
+detailsGoFrom (Ok rendered) synthResults examples =
+  detailsGoOk rendered synthResults examples
+
+-- Whole-file error: every example is Errored with that message, UNLESS its
+-- own synth failed to parse — a parse error is reported at its own location
+-- and never conflated with the whole-file failure (mirrors the pre-Stage-1
+-- `oneResult`'s `oneResult _ (Err msg) i ex` catch-all, which fired
+-- regardless of the env/render outcome).
+detailsGoErr : String -> List (Result String (List Decl)) -> List Example -> List (Example, ExResult)
+detailsGoErr _ _ [] = []
+detailsGoErr msg (sr::srRest) (ex::rest) =
+  (ex, oneResultErr msg sr) :: detailsGoErr msg srRest rest
+detailsGoErr _ [] (_::_) = []
 -- (the [] / (_::_) fallback only fires if synthResults and examples somehow
 -- desync in length — buildSynthResults always produces one entry per
 -- example, so this is unreachable in practice; kept for exhaustiveness.)
 
--- A per-example parse failure (`Err msg` from `synthOne`) is reported
--- directly at this example's own location — it never reaches `lookupBinding`,
--- so it can't be conflated with "evaluated but produced no binding".
-oneResult : Result String (List (String, Value e)) -> Result String (List Decl) -> Int -> Example -> <e> ExResult
-oneResult _ (Err msg) i ex = Errored ("parse error: " ++ msg)
-oneResult (Err msg) (Ok _) i ex = Errored msg
-oneResult (Ok env) (Ok _) i ex = match lookupBinding (synthName i) env
-  None => Errored ("could not evaluate: " ++ exampleInput ex)
-  Some v => compareValue ex (ppValue (force v))
+oneResultErr : String -> Result String (List Decl) -> ExResult
+oneResultErr _ (Err pmsg) = Errored ("parse error: " ++ pmsg)
+oneResultErr msg (Ok _) = Errored msg
+
+-- Successful run: one rendered Result per example, positionally aligned (a
+-- per-example parse failure still wins — it never reaches the rendered
+-- result, so it can't be conflated with "ran but produced no/bad output").
+detailsGoOk : List (Result String String) -> List (Result String (List Decl)) -> List Example -> List (Example, ExResult)
+detailsGoOk (r::rRest) (sr::srRest) (ex::rest) =
+  (ex, oneResultOk r sr ex) :: detailsGoOk rRest srRest rest
+detailsGoOk _ _ [] = []
+detailsGoOk [] _ (_::_) = []
+detailsGoOk _ [] (_::_) = []
+
+oneResultOk : Result String String -> Result String (List Decl) -> Example -> ExResult
+oneResultOk _ (Err pmsg) ex = Errored ("parse error: " ++ pmsg)
+oneResultOk (Err msg) (Ok _) ex = Errored msg
+oneResultOk (Ok actual) (Ok _) ex = compareValue ex actual
 
 compareValue : Example -> String -> ExResult
 compareValue ex actual = match exampleExpected ex
@@ -337,12 +418,11 @@ isUse _ = False
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false) (mem "DUse" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parseResult" false) (mem "parseErrorMessage" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false))))
-(DUse false (UseGroup ("eval" "eval") ((mem "Value" true) (mem "lookupBinding" false) (mem "force" false) (mem "ppValue" false))))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "reverseL" false) (mem "joinNl" false) (mem "startsWith" false) (mem "stringTrim" false) (mem "splitNl" false))))
 (DData Public "Example" () ((variant "Example" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")) (TyCon "Int")))) ())
 (DTypeSig true "exampleInput" (TyFun (TyCon "Example") (TyCon "String")))
 (DFunDef false "exampleInput" ((PCon "Example" (PVar "i") PWild PWild)) (EVar "i"))
-(DTypeSig false "exampleExpected" (TyFun (TyCon "Example") (TyApp (TyCon "Option") (TyCon "String"))))
+(DTypeSig true "exampleExpected" (TyFun (TyCon "Example") (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "exampleExpected" ((PCon "Example" PWild (PVar "e") PWild)) (EVar "e"))
 (DTypeSig true "exampleLine" (TyFun (TyCon "Example") (TyCon "Int")))
 (DFunDef false "exampleLine" ((PCon "Example" PWild PWild (PVar "l"))) (EVar "l"))
@@ -356,6 +436,17 @@ isUse _ = False
 (DFunDef false "runErrors" ((PCon "RunResult" PWild PWild PWild (PVar "e") PWild)) (EVar "e"))
 (DTypeSig true "runDetails" (TyFun (TyCon "RunResult") (TyApp (TyCon "List") (TyTuple (TyCon "Example") (TyCon "ExResult")))))
 (DFunDef false "runDetails" ((PCon "RunResult" PWild PWild PWild PWild (PVar "d"))) (EVar "d"))
+(DData Public "Engine" () ((variant "EngInterp" (ConPos)) (variant "EngNative" (ConPos))) ())
+(DTypeSig true "engineName" (TyFun (TyCon "Engine") (TyCon "String")))
+(DFunDef false "engineName" ((PCon "EngInterp")) (ELit (LString "eval")))
+(DFunDef false "engineName" ((PCon "EngNative")) (ELit (LString "native")))
+(DTypeSig true "doctestFailSuffix" (TyFun (TyCon "RunResult") (TyCon "String")))
+(DFunDef false "doctestFailSuffix" ((PVar "result")) (EIf (EBinOp "||" (EBinOp ">" (EApp (EVar "runFailed") (EVar "result")) (ELit (LInt 0))) (EBinOp ">" (EApp (EVar "runErrors") (EVar "result")) (ELit (LInt 0)))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString " (")) (EApp (EVar "display") (EApp (EVar "intToString") (EApp (EVar "runFailed") (EVar "result"))))) (ELit (LString " failed, "))) (EApp (EVar "display") (EApp (EVar "intToString") (EApp (EVar "runErrors") (EVar "result"))))) (ELit (LString " errors)"))) (EIf (EVar "otherwise") (ELit (LString "")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig true "printDoctestDetails" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Example") (TyCon "ExResult"))) (TyEffect ("IO") None (TyCon "Unit")))))
+(DFunDef false "printDoctestDetails" (PWild (PList)) (ELit LUnit))
+(DFunDef false "printDoctestDetails" ((PVar "target") (PCons (PTuple (PVar "ex") (PVar "res")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "printDoctestOne") (EVar "target")) (EVar "ex")) (EVar "res"))) (DoExpr (EApp (EApp (EVar "printDoctestDetails") (EVar "target")) (EVar "rest")))))
+(DTypeSig false "printDoctestOne" (TyFun (TyCon "String") (TyFun (TyCon "Example") (TyFun (TyCon "ExResult") (TyEffect ("IO") None (TyCon "Unit"))))))
+(DFunDef false "printDoctestOne" ((PVar "target") (PVar "ex") (PVar "res")) (EBlock (DoLet false false (PVar "loc") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "target"))) (ELit (LString ":"))) (EApp (EVar "display") (EApp (EVar "intToString") (EApp (EVar "exampleLine") (EVar "ex"))))) (ELit (LString "")))) (DoExpr (EMatch (EVar "res") (arm (PCon "Pass") () (EApp (EVar "putStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ok   ")) (EApp (EVar "display") (EVar "loc"))) (ELit (LString ": "))) (EApp (EVar "display") (EApp (EVar "exampleInput") (EVar "ex")))) (ELit (LString ""))))) (arm (PCon "Fail" (PVar "expected") (PVar "actual")) () (EBlock (DoLet false false PWild (EApp (EVar "putStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  FAIL ")) (EApp (EVar "display") (EVar "loc"))) (ELit (LString ": "))) (EApp (EVar "display") (EApp (EVar "exampleInput") (EVar "ex")))) (ELit (LString ""))))) (DoLet false false PWild (EApp (EVar "putStrLn") (EBinOp "++" (ELit (LString "       expected: ")) (EVar "expected")))) (DoExpr (EApp (EVar "putStrLn") (EBinOp "++" (ELit (LString "         actual: ")) (EVar "actual")))))) (arm (PCon "Errored" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "putStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ERROR ")) (EApp (EVar "display") (EVar "loc"))) (ELit (LString ": "))) (EApp (EVar "display") (EApp (EVar "exampleInput") (EVar "ex")))) (ELit (LString ""))))) (DoExpr (EApp (EVar "putStrLn") (EBinOp "++" (ELit (LString "        ")) (EVar "msg"))))))))))
 (DTypeSig false "slen" (TyFun (TyCon "String") (TyCon "Int")))
 (DFunDef false "slen" ((PVar "s")) (EApp (EVar "stringLength") (EVar "s")))
 (DTypeSig false "substr3" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "String")))))
@@ -408,7 +499,7 @@ isUse _ = False
 (DFunDef false "concatMapC" ((PCons (PVar "c") (PVar "rest"))) (EBinOp "++" (EIf (EApp (EVar "isBlockComment") (EVar "c")) (EApp (EVar "expandBlock") (EVar "c")) (EListLit (EVar "c"))) (EApp (EVar "concatMapC") (EVar "rest"))))
 (DTypeSig true "synthName" (TyFun (TyCon "Int") (TyCon "String")))
 (DFunDef false "synthName" ((PVar "i")) (EBinOp "++" (EBinOp "++" (ELit (LString "__dt_")) (EApp (EVar "intToString") (EVar "i"))) (ELit (LString "__"))))
-(DTypeSig false "synthSrc" (TyFun (TyCon "Int") (TyFun (TyCon "Example") (TyCon "String"))))
+(DTypeSig true "synthSrc" (TyFun (TyCon "Int") (TyFun (TyCon "Example") (TyCon "String"))))
 (DFunDef false "synthSrc" ((PVar "i") (PVar "ex")) (EBlock (DoLet false false (PVar "rhs") (EMatch (EApp (EVar "exampleExpected") (EVar "ex")) (arm (PCon "Some" PWild) () (EBinOp "++" (EBinOp "++" (ELit (LString "debug (")) (EApp (EVar "exampleInput") (EVar "ex"))) (ELit (LString ")")))) (arm (PCon "None") () (EApp (EVar "exampleInput") (EVar "ex"))))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "synthName") (EVar "i")))) (ELit (LString " = "))) (EApp (EVar "display") (EVar "rhs"))) (ELit (LString ""))))))
 (DTypeSig true "buildSynthResults" (TyFun (TyApp (TyCon "List") (TyCon "Example")) (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl"))))))
 (DFunDef false "buildSynthResults" ((PVar "examples")) (EApp (EApp (EVar "buildSynthResultsGo") (ELit (LInt 0))) (EVar "examples")))
@@ -423,16 +514,27 @@ isUse _ = False
 (DFunDef false "concatOkDecls" ((PList)) (EListLit))
 (DFunDef false "concatOkDecls" ((PCons (PCon "Ok" (PVar "ds")) (PVar "rest"))) (EBinOp "++" (EVar "ds") (EApp (EVar "concatOkDecls") (EVar "rest"))))
 (DFunDef false "concatOkDecls" ((PCons (PCon "Err" PWild) (PVar "rest"))) (EApp (EVar "concatOkDecls") (EVar "rest")))
-(DTypeSig true "buildDetails" (TyFun (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e"))))) (TyFun (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyCon "Example")) (TyEffect () (Some "e") (TyCon "RunResult"))))))
-(DFunDef false "buildDetails" ((PVar "envResult") (PVar "synthResults") (PVar "examples")) (EBlock (DoLet false false (PVar "details") (EApp (EApp (EApp (EApp (EVar "detailsGo") (EVar "envResult")) (EVar "synthResults")) (ELit (LInt 0))) (EVar "examples"))) (DoLet false false (PVar "passed") (EApp (EApp (EVar "countResult") (EVar "isPass")) (EVar "details"))) (DoLet false false (PVar "failed") (EApp (EApp (EVar "countResult") (EVar "isFail")) (EVar "details"))) (DoLet false false (PVar "errors") (EApp (EApp (EVar "countResult") (EVar "isErr")) (EVar "details"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "RunResult") (EApp (EVar "listLen") (EVar "examples"))) (EVar "passed")) (EVar "failed")) (EVar "errors")) (EVar "details")))))
-(DTypeSig false "detailsGo" (TyFun (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e"))))) (TyFun (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Example")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "Example") (TyCon "ExResult")))))))))
-(DFunDef false "detailsGo" (PWild PWild PWild (PList)) (EListLit))
-(DFunDef false "detailsGo" ((PVar "envResult") (PCons (PVar "sr") (PVar "srRest")) (PVar "i") (PCons (PVar "ex") (PVar "rest"))) (EBinOp "::" (ETuple (EVar "ex") (EApp (EApp (EApp (EApp (EVar "oneResult") (EVar "envResult")) (EVar "sr")) (EVar "i")) (EVar "ex"))) (EApp (EApp (EApp (EApp (EVar "detailsGo") (EVar "envResult")) (EVar "srRest")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest"))))
-(DFunDef false "detailsGo" (PWild (PList) PWild (PCons PWild PWild)) (EListLit))
-(DTypeSig false "oneResult" (TyFun (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e"))))) (TyFun (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl"))) (TyFun (TyCon "Int") (TyFun (TyCon "Example") (TyEffect () (Some "e") (TyCon "ExResult")))))))
-(DFunDef false "oneResult" (PWild (PCon "Err" (PVar "msg")) (PVar "i") (PVar "ex")) (EApp (EVar "Errored") (EBinOp "++" (ELit (LString "parse error: ")) (EVar "msg"))))
-(DFunDef false "oneResult" ((PCon "Err" (PVar "msg")) (PCon "Ok" PWild) (PVar "i") (PVar "ex")) (EApp (EVar "Errored") (EVar "msg")))
-(DFunDef false "oneResult" ((PCon "Ok" (PVar "env")) (PCon "Ok" PWild) (PVar "i") (PVar "ex")) (EMatch (EApp (EApp (EVar "lookupBinding") (EApp (EVar "synthName") (EVar "i"))) (EVar "env")) (arm (PCon "None") () (EApp (EVar "Errored") (EBinOp "++" (ELit (LString "could not evaluate: ")) (EApp (EVar "exampleInput") (EVar "ex"))))) (arm (PCon "Some" (PVar "v")) () (EApp (EApp (EVar "compareValue") (EVar "ex")) (EApp (EVar "ppValue") (EApp (EVar "force") (EVar "v")))))))
+(DTypeSig true "buildDetailsFrom" (TyFun (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyCon "Example")) (TyCon "RunResult")))))
+(DFunDef false "buildDetailsFrom" ((PVar "renderedResult") (PVar "synthResults") (PVar "examples")) (EBlock (DoLet false false (PVar "details") (EApp (EApp (EApp (EVar "detailsGoFrom") (EVar "renderedResult")) (EVar "synthResults")) (EVar "examples"))) (DoLet false false (PVar "passed") (EApp (EApp (EVar "countResult") (EVar "isPass")) (EVar "details"))) (DoLet false false (PVar "failed") (EApp (EApp (EVar "countResult") (EVar "isFail")) (EVar "details"))) (DoLet false false (PVar "errors") (EApp (EApp (EVar "countResult") (EVar "isErr")) (EVar "details"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "RunResult") (EApp (EVar "listLen") (EVar "examples"))) (EVar "passed")) (EVar "failed")) (EVar "errors")) (EVar "details")))))
+(DTypeSig false "detailsGoFrom" (TyFun (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyCon "Example")) (TyApp (TyCon "List") (TyTuple (TyCon "Example") (TyCon "ExResult")))))))
+(DFunDef false "detailsGoFrom" ((PCon "Err" (PVar "msg")) (PVar "synthResults") (PVar "examples")) (EApp (EApp (EApp (EVar "detailsGoErr") (EVar "msg")) (EVar "synthResults")) (EVar "examples")))
+(DFunDef false "detailsGoFrom" ((PCon "Ok" (PVar "rendered")) (PVar "synthResults") (PVar "examples")) (EApp (EApp (EApp (EVar "detailsGoOk") (EVar "rendered")) (EVar "synthResults")) (EVar "examples")))
+(DTypeSig false "detailsGoErr" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyCon "Example")) (TyApp (TyCon "List") (TyTuple (TyCon "Example") (TyCon "ExResult")))))))
+(DFunDef false "detailsGoErr" (PWild PWild (PList)) (EListLit))
+(DFunDef false "detailsGoErr" ((PVar "msg") (PCons (PVar "sr") (PVar "srRest")) (PCons (PVar "ex") (PVar "rest"))) (EBinOp "::" (ETuple (EVar "ex") (EApp (EApp (EVar "oneResultErr") (EVar "msg")) (EVar "sr"))) (EApp (EApp (EApp (EVar "detailsGoErr") (EVar "msg")) (EVar "srRest")) (EVar "rest"))))
+(DFunDef false "detailsGoErr" (PWild (PList) (PCons PWild PWild)) (EListLit))
+(DTypeSig false "oneResultErr" (TyFun (TyCon "String") (TyFun (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl"))) (TyCon "ExResult"))))
+(DFunDef false "oneResultErr" (PWild (PCon "Err" (PVar "pmsg"))) (EApp (EVar "Errored") (EBinOp "++" (ELit (LString "parse error: ")) (EVar "pmsg"))))
+(DFunDef false "oneResultErr" ((PVar "msg") (PCon "Ok" PWild)) (EApp (EVar "Errored") (EVar "msg")))
+(DTypeSig false "detailsGoOk" (TyFun (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyCon "Example")) (TyApp (TyCon "List") (TyTuple (TyCon "Example") (TyCon "ExResult")))))))
+(DFunDef false "detailsGoOk" ((PCons (PVar "r") (PVar "rRest")) (PCons (PVar "sr") (PVar "srRest")) (PCons (PVar "ex") (PVar "rest"))) (EBinOp "::" (ETuple (EVar "ex") (EApp (EApp (EApp (EVar "oneResultOk") (EVar "r")) (EVar "sr")) (EVar "ex"))) (EApp (EApp (EApp (EVar "detailsGoOk") (EVar "rRest")) (EVar "srRest")) (EVar "rest"))))
+(DFunDef false "detailsGoOk" (PWild PWild (PList)) (EListLit))
+(DFunDef false "detailsGoOk" ((PList) PWild (PCons PWild PWild)) (EListLit))
+(DFunDef false "detailsGoOk" (PWild (PList) (PCons PWild PWild)) (EListLit))
+(DTypeSig false "oneResultOk" (TyFun (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")) (TyFun (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl"))) (TyFun (TyCon "Example") (TyCon "ExResult")))))
+(DFunDef false "oneResultOk" (PWild (PCon "Err" (PVar "pmsg")) (PVar "ex")) (EApp (EVar "Errored") (EBinOp "++" (ELit (LString "parse error: ")) (EVar "pmsg"))))
+(DFunDef false "oneResultOk" ((PCon "Err" (PVar "msg")) (PCon "Ok" PWild) (PVar "ex")) (EApp (EVar "Errored") (EVar "msg")))
+(DFunDef false "oneResultOk" ((PCon "Ok" (PVar "actual")) (PCon "Ok" PWild) (PVar "ex")) (EApp (EApp (EVar "compareValue") (EVar "ex")) (EVar "actual")))
 (DTypeSig false "compareValue" (TyFun (TyCon "Example") (TyFun (TyCon "String") (TyCon "ExResult"))))
 (DFunDef false "compareValue" ((PVar "ex") (PVar "actual")) (EMatch (EApp (EVar "exampleExpected") (EVar "ex")) (arm (PCon "None") () (EVar "Pass")) (arm (PCon "Some" (PVar "exp")) () (EIf (EBinOp "==" (EVar "actual") (EVar "exp")) (EVar "Pass") (EApp (EApp (EVar "Fail") (EVar "exp")) (EVar "actual"))))))
 (DTypeSig false "isPass" (TyFun (TyCon "ExResult") (TyCon "Bool")))
@@ -460,12 +562,11 @@ isUse _ = False
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false) (mem "DUse" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parseResult" false) (mem "parseErrorMessage" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false))))
-(DUse false (UseGroup ("eval" "eval") ((mem "Value" true) (mem "lookupBinding" false) (mem "force" false) (mem "ppValue" false))))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "reverseL" false) (mem "joinNl" false) (mem "startsWith" false) (mem "stringTrim" false) (mem "splitNl" false))))
 (DData Public "Example" () ((variant "Example" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")) (TyCon "Int")))) ())
 (DTypeSig true "exampleInput" (TyFun (TyCon "Example") (TyCon "String")))
 (DFunDef false "exampleInput" ((PCon "Example" (PVar "i") PWild PWild)) (EVar "i"))
-(DTypeSig false "exampleExpected" (TyFun (TyCon "Example") (TyApp (TyCon "Option") (TyCon "String"))))
+(DTypeSig true "exampleExpected" (TyFun (TyCon "Example") (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "exampleExpected" ((PCon "Example" PWild (PVar "e") PWild)) (EVar "e"))
 (DTypeSig true "exampleLine" (TyFun (TyCon "Example") (TyCon "Int")))
 (DFunDef false "exampleLine" ((PCon "Example" PWild PWild (PVar "l"))) (EVar "l"))
@@ -479,6 +580,17 @@ isUse _ = False
 (DFunDef false "runErrors" ((PCon "RunResult" PWild PWild PWild (PVar "e") PWild)) (EVar "e"))
 (DTypeSig true "runDetails" (TyFun (TyCon "RunResult") (TyApp (TyCon "List") (TyTuple (TyCon "Example") (TyCon "ExResult")))))
 (DFunDef false "runDetails" ((PCon "RunResult" PWild PWild PWild PWild (PVar "d"))) (EVar "d"))
+(DData Public "Engine" () ((variant "EngInterp" (ConPos)) (variant "EngNative" (ConPos))) ())
+(DTypeSig true "engineName" (TyFun (TyCon "Engine") (TyCon "String")))
+(DFunDef false "engineName" ((PCon "EngInterp")) (ELit (LString "eval")))
+(DFunDef false "engineName" ((PCon "EngNative")) (ELit (LString "native")))
+(DTypeSig true "doctestFailSuffix" (TyFun (TyCon "RunResult") (TyCon "String")))
+(DFunDef false "doctestFailSuffix" ((PVar "result")) (EIf (EBinOp "||" (EBinOp ">" (EApp (EVar "runFailed") (EVar "result")) (ELit (LInt 0))) (EBinOp ">" (EApp (EVar "runErrors") (EVar "result")) (ELit (LInt 0)))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString " (")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EApp (EVar "runFailed") (EVar "result"))))) (ELit (LString " failed, "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EApp (EVar "runErrors") (EVar "result"))))) (ELit (LString " errors)"))) (EIf (EVar "otherwise") (ELit (LString "")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig true "printDoctestDetails" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Example") (TyCon "ExResult"))) (TyEffect ("IO") None (TyCon "Unit")))))
+(DFunDef false "printDoctestDetails" (PWild (PList)) (ELit LUnit))
+(DFunDef false "printDoctestDetails" ((PVar "target") (PCons (PTuple (PVar "ex") (PVar "res")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "printDoctestOne") (EVar "target")) (EVar "ex")) (EVar "res"))) (DoExpr (EApp (EApp (EVar "printDoctestDetails") (EVar "target")) (EVar "rest")))))
+(DTypeSig false "printDoctestOne" (TyFun (TyCon "String") (TyFun (TyCon "Example") (TyFun (TyCon "ExResult") (TyEffect ("IO") None (TyCon "Unit"))))))
+(DFunDef false "printDoctestOne" ((PVar "target") (PVar "ex") (PVar "res")) (EBlock (DoLet false false (PVar "loc") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "target"))) (ELit (LString ":"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EApp (EVar "exampleLine") (EVar "ex"))))) (ELit (LString "")))) (DoExpr (EMatch (EVar "res") (arm (PCon "Pass") () (EApp (EVar "putStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ok   ")) (EApp (EMethodRef "display") (EVar "loc"))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EApp (EVar "exampleInput") (EVar "ex")))) (ELit (LString ""))))) (arm (PCon "Fail" (PVar "expected") (PVar "actual")) () (EBlock (DoLet false false PWild (EApp (EVar "putStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  FAIL ")) (EApp (EMethodRef "display") (EVar "loc"))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EApp (EVar "exampleInput") (EVar "ex")))) (ELit (LString ""))))) (DoLet false false PWild (EApp (EVar "putStrLn") (EBinOp "++" (ELit (LString "       expected: ")) (EVar "expected")))) (DoExpr (EApp (EVar "putStrLn") (EBinOp "++" (ELit (LString "         actual: ")) (EVar "actual")))))) (arm (PCon "Errored" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "putStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ERROR ")) (EApp (EMethodRef "display") (EVar "loc"))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EApp (EVar "exampleInput") (EVar "ex")))) (ELit (LString ""))))) (DoExpr (EApp (EVar "putStrLn") (EBinOp "++" (ELit (LString "        ")) (EVar "msg"))))))))))
 (DTypeSig false "slen" (TyFun (TyCon "String") (TyCon "Int")))
 (DFunDef false "slen" ((PVar "s")) (EApp (EVar "stringLength") (EVar "s")))
 (DTypeSig false "substr3" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "String")))))
@@ -531,7 +643,7 @@ isUse _ = False
 (DFunDef false "concatMapC" ((PCons (PVar "c") (PVar "rest"))) (EBinOp "++" (EIf (EApp (EVar "isBlockComment") (EVar "c")) (EApp (EVar "expandBlock") (EVar "c")) (EListLit (EVar "c"))) (EApp (EVar "concatMapC") (EVar "rest"))))
 (DTypeSig true "synthName" (TyFun (TyCon "Int") (TyCon "String")))
 (DFunDef false "synthName" ((PVar "i")) (EBinOp "++" (EBinOp "++" (ELit (LString "__dt_")) (EApp (EVar "intToString") (EVar "i"))) (ELit (LString "__"))))
-(DTypeSig false "synthSrc" (TyFun (TyCon "Int") (TyFun (TyCon "Example") (TyCon "String"))))
+(DTypeSig true "synthSrc" (TyFun (TyCon "Int") (TyFun (TyCon "Example") (TyCon "String"))))
 (DFunDef false "synthSrc" ((PVar "i") (PVar "ex")) (EBlock (DoLet false false (PVar "rhs") (EMatch (EApp (EVar "exampleExpected") (EVar "ex")) (arm (PCon "Some" PWild) () (EBinOp "++" (EBinOp "++" (ELit (LString "debug (")) (EApp (EVar "exampleInput") (EVar "ex"))) (ELit (LString ")")))) (arm (PCon "None") () (EApp (EVar "exampleInput") (EVar "ex"))))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "synthName") (EVar "i")))) (ELit (LString " = "))) (EApp (EMethodRef "display") (EVar "rhs"))) (ELit (LString ""))))))
 (DTypeSig true "buildSynthResults" (TyFun (TyApp (TyCon "List") (TyCon "Example")) (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl"))))))
 (DFunDef false "buildSynthResults" ((PVar "examples")) (EApp (EApp (EVar "buildSynthResultsGo") (ELit (LInt 0))) (EVar "examples")))
@@ -546,16 +658,27 @@ isUse _ = False
 (DFunDef false "concatOkDecls" ((PList)) (EListLit))
 (DFunDef false "concatOkDecls" ((PCons (PCon "Ok" (PVar "ds")) (PVar "rest"))) (EBinOp "++" (EVar "ds") (EApp (EVar "concatOkDecls") (EVar "rest"))))
 (DFunDef false "concatOkDecls" ((PCons (PCon "Err" PWild) (PVar "rest"))) (EApp (EVar "concatOkDecls") (EVar "rest")))
-(DTypeSig true "buildDetails" (TyFun (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e"))))) (TyFun (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyCon "Example")) (TyEffect () (Some "e") (TyCon "RunResult"))))))
-(DFunDef false "buildDetails" ((PVar "envResult") (PVar "synthResults") (PVar "examples")) (EBlock (DoLet false false (PVar "details") (EApp (EApp (EApp (EApp (EVar "detailsGo") (EVar "envResult")) (EVar "synthResults")) (ELit (LInt 0))) (EVar "examples"))) (DoLet false false (PVar "passed") (EApp (EApp (EVar "countResult") (EVar "isPass")) (EVar "details"))) (DoLet false false (PVar "failed") (EApp (EApp (EVar "countResult") (EVar "isFail")) (EVar "details"))) (DoLet false false (PVar "errors") (EApp (EApp (EVar "countResult") (EVar "isErr")) (EVar "details"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "RunResult") (EApp (EVar "listLen") (EVar "examples"))) (EVar "passed")) (EVar "failed")) (EVar "errors")) (EVar "details")))))
-(DTypeSig false "detailsGo" (TyFun (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e"))))) (TyFun (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Example")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "Example") (TyCon "ExResult")))))))))
-(DFunDef false "detailsGo" (PWild PWild PWild (PList)) (EListLit))
-(DFunDef false "detailsGo" ((PVar "envResult") (PCons (PVar "sr") (PVar "srRest")) (PVar "i") (PCons (PVar "ex") (PVar "rest"))) (EBinOp "::" (ETuple (EVar "ex") (EApp (EApp (EApp (EApp (EVar "oneResult") (EVar "envResult")) (EVar "sr")) (EVar "i")) (EVar "ex"))) (EApp (EApp (EApp (EApp (EVar "detailsGo") (EVar "envResult")) (EVar "srRest")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest"))))
-(DFunDef false "detailsGo" (PWild (PList) PWild (PCons PWild PWild)) (EListLit))
-(DTypeSig false "oneResult" (TyFun (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e"))))) (TyFun (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl"))) (TyFun (TyCon "Int") (TyFun (TyCon "Example") (TyEffect () (Some "e") (TyCon "ExResult")))))))
-(DFunDef false "oneResult" (PWild (PCon "Err" (PVar "msg")) (PVar "i") (PVar "ex")) (EApp (EVar "Errored") (EBinOp "++" (ELit (LString "parse error: ")) (EVar "msg"))))
-(DFunDef false "oneResult" ((PCon "Err" (PVar "msg")) (PCon "Ok" PWild) (PVar "i") (PVar "ex")) (EApp (EVar "Errored") (EVar "msg")))
-(DFunDef false "oneResult" ((PCon "Ok" (PVar "env")) (PCon "Ok" PWild) (PVar "i") (PVar "ex")) (EMatch (EApp (EApp (EVar "lookupBinding") (EApp (EVar "synthName") (EVar "i"))) (EVar "env")) (arm (PCon "None") () (EApp (EVar "Errored") (EBinOp "++" (ELit (LString "could not evaluate: ")) (EApp (EVar "exampleInput") (EVar "ex"))))) (arm (PCon "Some" (PVar "v")) () (EApp (EApp (EVar "compareValue") (EVar "ex")) (EApp (EVar "ppValue") (EApp (EVar "force") (EVar "v")))))))
+(DTypeSig true "buildDetailsFrom" (TyFun (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyCon "Example")) (TyCon "RunResult")))))
+(DFunDef false "buildDetailsFrom" ((PVar "renderedResult") (PVar "synthResults") (PVar "examples")) (EBlock (DoLet false false (PVar "details") (EApp (EApp (EApp (EVar "detailsGoFrom") (EVar "renderedResult")) (EVar "synthResults")) (EVar "examples"))) (DoLet false false (PVar "passed") (EApp (EApp (EVar "countResult") (EVar "isPass")) (EVar "details"))) (DoLet false false (PVar "failed") (EApp (EApp (EVar "countResult") (EVar "isFail")) (EVar "details"))) (DoLet false false (PVar "errors") (EApp (EApp (EVar "countResult") (EVar "isErr")) (EVar "details"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "RunResult") (EApp (EVar "listLen") (EVar "examples"))) (EVar "passed")) (EVar "failed")) (EVar "errors")) (EVar "details")))))
+(DTypeSig false "detailsGoFrom" (TyFun (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyCon "Example")) (TyApp (TyCon "List") (TyTuple (TyCon "Example") (TyCon "ExResult")))))))
+(DFunDef false "detailsGoFrom" ((PCon "Err" (PVar "msg")) (PVar "synthResults") (PVar "examples")) (EApp (EApp (EApp (EVar "detailsGoErr") (EVar "msg")) (EVar "synthResults")) (EVar "examples")))
+(DFunDef false "detailsGoFrom" ((PCon "Ok" (PVar "rendered")) (PVar "synthResults") (PVar "examples")) (EApp (EApp (EApp (EVar "detailsGoOk") (EVar "rendered")) (EVar "synthResults")) (EVar "examples")))
+(DTypeSig false "detailsGoErr" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyCon "Example")) (TyApp (TyCon "List") (TyTuple (TyCon "Example") (TyCon "ExResult")))))))
+(DFunDef false "detailsGoErr" (PWild PWild (PList)) (EListLit))
+(DFunDef false "detailsGoErr" ((PVar "msg") (PCons (PVar "sr") (PVar "srRest")) (PCons (PVar "ex") (PVar "rest"))) (EBinOp "::" (ETuple (EVar "ex") (EApp (EApp (EVar "oneResultErr") (EVar "msg")) (EVar "sr"))) (EApp (EApp (EApp (EVar "detailsGoErr") (EVar "msg")) (EVar "srRest")) (EVar "rest"))))
+(DFunDef false "detailsGoErr" (PWild (PList) (PCons PWild PWild)) (EListLit))
+(DTypeSig false "oneResultErr" (TyFun (TyCon "String") (TyFun (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl"))) (TyCon "ExResult"))))
+(DFunDef false "oneResultErr" (PWild (PCon "Err" (PVar "pmsg"))) (EApp (EVar "Errored") (EBinOp "++" (ELit (LString "parse error: ")) (EVar "pmsg"))))
+(DFunDef false "oneResultErr" ((PVar "msg") (PCon "Ok" PWild)) (EApp (EVar "Errored") (EVar "msg")))
+(DTypeSig false "detailsGoOk" (TyFun (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyCon "Example")) (TyApp (TyCon "List") (TyTuple (TyCon "Example") (TyCon "ExResult")))))))
+(DFunDef false "detailsGoOk" ((PCons (PVar "r") (PVar "rRest")) (PCons (PVar "sr") (PVar "srRest")) (PCons (PVar "ex") (PVar "rest"))) (EBinOp "::" (ETuple (EVar "ex") (EApp (EApp (EApp (EVar "oneResultOk") (EVar "r")) (EVar "sr")) (EVar "ex"))) (EApp (EApp (EApp (EVar "detailsGoOk") (EVar "rRest")) (EVar "srRest")) (EVar "rest"))))
+(DFunDef false "detailsGoOk" (PWild PWild (PList)) (EListLit))
+(DFunDef false "detailsGoOk" ((PList) PWild (PCons PWild PWild)) (EListLit))
+(DFunDef false "detailsGoOk" (PWild (PList) (PCons PWild PWild)) (EListLit))
+(DTypeSig false "oneResultOk" (TyFun (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")) (TyFun (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl"))) (TyFun (TyCon "Example") (TyCon "ExResult")))))
+(DFunDef false "oneResultOk" (PWild (PCon "Err" (PVar "pmsg")) (PVar "ex")) (EApp (EVar "Errored") (EBinOp "++" (ELit (LString "parse error: ")) (EVar "pmsg"))))
+(DFunDef false "oneResultOk" ((PCon "Err" (PVar "msg")) (PCon "Ok" PWild) (PVar "ex")) (EApp (EVar "Errored") (EVar "msg")))
+(DFunDef false "oneResultOk" ((PCon "Ok" (PVar "actual")) (PCon "Ok" PWild) (PVar "ex")) (EApp (EApp (EVar "compareValue") (EVar "ex")) (EVar "actual")))
 (DTypeSig false "compareValue" (TyFun (TyCon "Example") (TyFun (TyCon "String") (TyCon "ExResult"))))
 (DFunDef false "compareValue" ((PVar "ex") (PVar "actual")) (EMatch (EApp (EVar "exampleExpected") (EVar "ex")) (arm (PCon "None") () (EVar "Pass")) (arm (PCon "Some" (PVar "exp")) () (EIf (EBinOp "==" (EVar "actual") (EVar "exp")) (EVar "Pass") (EApp (EApp (EVar "Fail") (EVar "exp")) (EVar "actual"))))))
 (DTypeSig false "isPass" (TyFun (TyCon "ExResult") (TyCon "Bool")))

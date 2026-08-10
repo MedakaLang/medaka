@@ -1,0 +1,7 @@
+-- The `Wrap` the entry actually gets: a PUBLIC data constructor of the same
+-- spelling at a DIFFERENT arity.  The differing arity is what makes a wrong
+-- binding observable at all.
+public export data KT = Wrap Int Int
+
+export unKT : KT -> Int
+unKT (Wrap a b) = b - a

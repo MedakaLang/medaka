@@ -1,0 +1,138 @@
+issue: 1265
+what: MECHANISM. The Core IR's untagged-default registry (`CImplDefault`) is looked
+what: up by (bare METHOD name, dispatch TAG) and the emitted symbol is
+what: `mdk_default_<method>_<tag>` -- neither carries an INTERFACE component. So when
+what: ONE type implements TWO DIFFERENT interfaces that happen to declare a method of
+what: the SAME bare name, the two interfaces' distinct default bodies have exactly one
+what: name to live under and one of them is silently discarded. First-match (i.e.
+what: loader module order) picks the survivor. Exit 0, no diagnostic, identically
+what: wrong on eval AND native AND wasm.
+what: PR #1264 gave `CImplDefault` a leading interface IDENTITY string
+what: (`ast.ifaceIdentity` -> "<module>::<Iface>") and narrows the candidate defaults
+what: by (method, tag). That fixed #1047's shape -- two SAME-NAMED interfaces on two
+what: DIFFERENT types -- and this one survives it, because the narrowing predicate
+what: `ifaceIdsAtTag tag` returns the identity of EVERY interface implemented at that
+what: tag. `Dog` implements both, so BOTH candidates pass `defaultOwnedBy`, the filter
+what: yields TWO survivors, and `narrowDefaults`' `_ => Some fallback` arm hands back
+what: exactly what first-match returned. The residual note left in llvm_emit.mdk
+what: assumed the two interfaces must share an INTERFACE name (which the
+what: `Conflicting impl <Iface>` guard does catch); they need only share a METHOD
+what: name, which that guard never sees.
+what: THE IDENTITY IS PRESENT AND CORRECT -- it is the KEY that has no room for it.
+what: `test/bin/core_ir_typed_modules_dump_main` on this fixture prints BOTH:
+what:   CImplEntry "speak" 1 (CImplDefault "ifa::Speak" (PWild) (CLit (LString "A-default")...
+what:   CImplEntry "speak" 1 (CImplDefault "ifb::Greet" (PWild) (CLit (LString "B-default")...
+what: CANDIDATE FIX SITES -- THREE, IN LOCKSTEP, BUT NOT SELF-CONTAINED. (Cited by
+what: symbol, not line -- line numbers here rot with every unrelated edit to these
+what: files; grep the symbol instead of trusting a number.)
+what: `narrowDefaults`/`defaultOwnedBy` (compiler/backend/llvm_emit.mdk),
+what: `narrowDefaultsW`/`defaultOwnedByW` (compiler/backend/wasm_emit.mdk),
+what: `pickDefaultCand`/`ownDefault`/`oneOnly` (compiler/eval/eval.mdk), all
+what: reading `ifaceIdsAtTag` (compiler/ir/core_ir_lower.mdk) /
+what: `ifaceIdsAtTagE` (compiler/eval/eval.mdk). Putting the interface
+what: identity in the SYMBOL/KEY (`defaultFnName` in llvm_emit.mdk;
+what: `defaultFnNameW` in wasm_emit.mdk; eval's `defaultCellName`) is NECESSARY but
+what: NOT SUFFICIENT on its own -- by the time execution reaches these three sites
+what: there is no interface identity left in hand to key with: `Route`
+what: (compiler/frontend/ast.mdk) is `RKey String (List Route)`, `CMethod`
+what: (compiler/ir/core_ir.mdk) is `CMethod String Route (List Route) (List Route)`,
+what: `EMethodRef` (compiler/frontend/ast.mdk) is `EMethodRef String`, and `markVar`
+what: (compiler/frontend/marker.mdk) tests membership in an `OrdMap Unit` of bare
+what: method names -- none of them carry an interface component. A real fix has to
+what: thread an interface identity through that upstream machinery first; filtering
+what: harder at the three candidate sites above cannot help when two bodies share
+what: one name and nothing arriving at the filter can tell them apart. See #1265,
+what: which now carries this evidence in full.
+what: ⚠️ ON A DRAIN, RE-CHECK ALL THREE ENGINES BEFORE CLOSING #1265. This row grades
+what: `run` (eval) only -- one verb can grade one engine -- and the three sites above
+what: are three separate pieces of code that a partial fix can move independently.
+what: A drain here proves eval is fixed; it does NOT prove native or wasm are.
+what: MEASURED FIRST-HAND on a cold `make medaka` of 2a8c4905 (the merge of PR #1264):
+what:   check --json main.mdk  -> every file "diagnostics":[] , exit 0 (SILENT)
+what:   run main.mdk           -> A-default|A-default , exit 0
+what:   build main.mdk + exec  -> A-default|A-default , exit 0 (native AGREES)
+what:   build --target wasm + node test/wasm/run.js
+what:                          -> A-default|A-default , exit 0 (wasm AGREES)
+what:   run control.mdk        -> control-ok:A-default|B-default , exit 0
+what:   run order-probe.mdk    -> B-default|B-default , exit 0
+what: CORRECT ANSWER, derived from the spec BEFORE any engine was run:
+what: A-default|B-default. DICT-SEMANTICS §5 / §5.1 M1 -- an interface default fills
+what: the slot the SELECTED INSTANCE omits. `sayA`'s selected instance is
+what: `ifa::Speak Dog`, whose class declares "A-default"; `sayB`'s is `ifb::Greet Dog`,
+what: whose class declares "B-default". §8 I4 makes a class `(module, name)`, so
+what: `ifa::Speak` and `ifb::Greet` are unrelated classes that merely share a method
+what: spelling and NEITHER may observe the other's default. This is NOT a disputed
+what: value (contrast #1182, below).
+what: EMITTED IR, from `medaka build --keep-ir` -- the symbol collision itself:
+what:   1067:  %t0 = call i64 @mdk_default_speak_Dog(i64 %arg0)      <- in mdk_ca__sayA
+what:   1073:  %t0 = call i64 @mdk_default_speak_Dog(i64 %arg0)      <- in mdk_cb__sayB
+what:   11311:define i64 @mdk_default_speak_Dog(i64 %arg0) {
+what: ONE definition, two call sites, and its body loads @.strc.19 =
+what: c"\41\2D\64\65\66\61\75\6C\74\00" ("A-default"). `grep -c B-default` over the
+what: whole .ll is 0: ifb::Greet's default body is not mis-selected, it is ABSENT.
+cmd: run main.mdk
+exit: 0
+stdout: A-default|A-default
+control: run control.mdk
+why-verb: `run` rather than `build-run`: cheapest (no clang), and eval is one of the
+why-verb: three engines that is wrong, so it discriminates. The native and wasm arms
+why-verb: were confirmed BY HAND (transcript above) and are NOT covered by this row --
+why-verb: see the ⚠️ in `what:`. ⚠️ `run` and `build` share the front end, so on the
+why-verb: ACCEPTANCE question (exit 0, no diagnostic) they are ONE observation; the
+why-verb: executed VALUE on eval/native/wasm is three genuine observations, and they
+why-verb: were all three taken.
+why-verb: `check` cannot be the verb: `check --json` is CLEAN and exit 0 on both files
+why-verb: -- the silence is precisely the S0.
+why-stdout: the observable is a WRONG VALUE AT EXIT 0, not a wrong exit code. `exit: 0`
+why-stdout: alone asserts nothing (a correct program also exits 0), so the
+why-stdout: discrimination lives in `stdout: A-default|A-default` -- the string that is
+why-stdout: wrong. Both halves are load-bearing: the SECOND field is the defect (it
+why-stdout: should read B-default), and the FIRST proves the program still ran and the
+why-stdout: `Speak` side still resolves. Nothing else in this repo can move that string:
+why-stdout: the two literals are declared in this fixture's own two interface files and
+why-stdout: are referenced nowhere else in the tree.
+why-control: control.mdk flips exactly ONE dimension: the two interfaces are
+why-control: implemented on TWO types (KDog, KCat) instead of one, so their defaults
+why-control: land at two different dispatch TAGS. Everything else is identical --
+why-control: different interface names, shared METHOD name `speak`, method-less impls,
+why-control: cross-module, same two default bodies. That is exactly the condition
+why-control: #1264's narrowing CAN handle (`ifaceIdsAtTag "KDog"` returns one identity,
+why-control: `narrowDefaults` has one survivor), so it asserts the correct
+why-control: A-default|B-default and must stay GREEN under any fix.
+why-control: THE PAIR IS THE ASSERTION: main.mdk (one tag -> collapsed) plus
+why-control: control.mdk (two tags -> correct) together say the defect is the SHARED
+why-control: TAG, not the shared method name and not method-less impls in general.
+why-control: A CONTROL-BROKE here therefore means a fix regressed the ALREADY-WORKING
+why-control: two-type case -- the environment moved, not the bug -- and is not a drain.
+why-control: Per #1144 this harness grades a control on its EXIT CODE ONLY, so the
+why-control: control ASSERTS the string and panics otherwise rather than printing it.
+why-control: PROVEN ABLE TO FAIL ON THIS TREE: mutating the comparand to a value the
+why-control: program cannot produce ("A-default|ZZZ") makes `medaka run` exit 1 with
+why-control: `runtime error [E-PANIC]: control regressed: with the two interfaces on
+why-control: SEPARATE types the defaults no longer resolve to A-default|B-default`.
+why-note: A THIRD file ships here, `order-probe.mdk`, NOT run by this gate. It is
+why-note: main.mdk with the first two imports SWAPPED and nothing else changed, and it
+why-note: prints B-default|B-default. So the correct answer A-default|B-default is
+why-note: produced by NEITHER permutation -- the defect is order-DEPENDENT, not merely
+why-note: a fixed wrong answer. That file carries the one command that re-derives it.
+why-note: NOT #1047, NOT #1182, NOT #1046, and no other pin subsumes this one.
+why-note:   * #1047 (CLOSED, correctly) is two modules declaring interfaces with the
+why-note:     same INTERFACE name, implemented on two DIFFERENT types. Its repro
+why-note:     (test/llvm_fixtures_modules/iface_name_collision_default/) genuinely no
+why-note:     longer reproduces after PR #1264 and its pin drained. Here the interface
+why-note:     names DIFFER, the method name is shared, and the implementing type is the
+why-note:     SAME -- a trigger no interface-name-keyed fix can reach.
+why-note:   * #1182 is two interfaces sharing a method name in ONE file with
+why-note:     METHOD-BEARING impls; the defect there is candidate-set deformation in the
+why-note:     shared front end (`matchingEntries`/`pickMostSpecificEntry`) and which
+why-note:     value is correct is genuinely IN DISPUTE. Here both impls are METHOD-LESS,
+why-note:     each call site sits in a module where only ONE of the two interfaces is in
+why-note:     scope (so name resolution is unambiguous and the front end picks the right
+why-note:     interface), the defect is in the Core IR default registry, and the correct
+why-note:     answer is settled by DICT-SEMANTICS §5. Fixing #1182's selector would not
+why-note:     touch `narrowDefaults`.
+why-note:   * #1046 is a method-less impl falling to ARG-TAG dispatch with a single
+why-note:     interface in play; there is no second interface and no default collision.
+why-note: `diff_compiler_engines` is structurally blind to this -- all three engines
+why-note: agree on A-default|A-default -- which is why the must-fail corpus is where it
+why-note: lives.

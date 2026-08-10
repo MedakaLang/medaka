@@ -1,0 +1,5 @@
+-- SHADOW-SEMANTICS cell I21 provider 2: the standalone the consumer imports by name.
+-- RETURN-POSITION shape: a nullary value, not a function, so the interface method it
+-- collides with (`zed : a`) mentions the typaram ONLY in its result.
+export zed : Int
+zed = 42

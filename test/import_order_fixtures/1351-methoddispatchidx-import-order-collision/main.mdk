@@ -1,0 +1,21 @@
+-- #1351. `fmodI.mth` is a standalone (required: methodDispatchIdxRef's only reader is
+-- gated on standaloneValuesRef, so without a standalone shadow the table is never
+-- read at all -- see claim.txt's trap note). `amodI.IA.mth : a -> Int -> Int` puts the
+-- typaram at dispatch index 0; `zmodI.IZ.mth : Int -> b -> Int` puts it at index 1, and
+-- IZ carries the program's only impl. Importing fmodI before amodI before zmodI:
+-- ⚠️ RE-POINTED (#1354 unit A), NOT DRAINED.  This entry used to import `zmodI.{zf}` --
+-- naming neither interface -- and under that spelling the answer is now invariant, because
+-- SHADOW-SEMANTICS S1's interface operand is scoped to what the module can NAME and neither
+-- `IA` nor `IZ` is nameable there.  That convergence is REAL but it is not a fix for #1351:
+-- name either interface in its own import and the order-dependence returns unchanged,
+-- because `mth` is a shadow again and `methodDispatchIdx` -- still a bare-method-name list
+-- read FIRST-MATCH -- is consulted again.
+--
+-- So the member list here names `IZ`, which is also the more idiomatic way to write this
+-- program.  Deleting the row instead would have left an OPEN, `verified`, S0 issue with no
+-- mechanical guard at all, on the strength of a spelling that no longer reaches the defect.
+import fmodI.{mth}
+import amodI.{af}
+import zmodI.{IZ, zf}
+
+main = println (mth "abc" 5 + af 0 + zf 0)

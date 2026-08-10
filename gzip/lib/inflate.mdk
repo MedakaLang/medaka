@@ -1,0 +1,1558 @@
+-- | gzip.lib.inflate — the DEFLATE block loop (RFC 1951) and the gzip member
+--   decoder that wraps it (RFC 1952).
+--
+-- Phase 3 status: **stored (`BTYPE=00`), fixed Huffman (`BTYPE=01`), and
+-- dynamic Huffman (`BTYPE=10`)** blocks all decode for real now. `BTYPE=11`
+-- is reserved by the RFC and is always an `Err`.
+--
+-- Dynamic Huffman (RFC 1951 §3.2.7) reads HLIT/HDIST/HCLEN, then the
+-- HCLEN 3-bit code-length-alphabet lengths in the RFC's permuted order
+-- (`clOrder`), builds THAT alphabet's canonical table with
+-- `huffman.buildHuffmanStrict` (the code-length alphabet forbids the
+-- single-code exception `buildHuffman` otherwise allows — see
+-- `huffman.mdk`'s module header), and uses it to decode `HLIT+257 +
+-- HDIST+1` real code lengths honouring the run-length escapes 16/17/18.
+-- Those lengths split into the literal/length and distance tables, each
+-- built with plain `buildHuffman` (which does allow the single-code AND
+-- zero-used-code exceptions — the latter covers an all-literals block,
+-- whose distance alphabet legally has zero used codes). From there,
+-- `inflateHuffmanBlock` — the literal/length + back-reference loop
+-- `inflateFixedHuffman` already used — is reused unchanged, parameterized
+-- over whichever pair of tables (fixed or dynamic) is in play.
+--
+-- The output accumulator (`out : MutArray Int`, built with `stdlib/mut_array.mdk`)
+-- *is* the sliding window — see `copyBack` below and
+-- `docs/design/GZIP-DESIGN.md` §"The sliding window and the overlap case".
+-- `inflateFixedHuffman` below is `copyBack`'s first real caller: every
+-- length/distance pair decoded from a fixed-Huffman block reads back through
+-- `out` itself, including bytes that block is *itself* still producing
+-- (`distance < length`, and `distance == 1` in particular — RLE of the
+-- trailing byte).
+--
+-- A stored block's raw bytes are pushed into `out` alongside being part of
+-- the decompressed output — that is not two operations, it is one `push` per
+-- byte, since `out` serves both roles at once. A later block's back-reference
+-- can therefore reach into a stored block's bytes, which is the "classic bug"
+-- the design doc calls out: forgetting this makes stored-block bytes
+-- invisible to a subsequent Huffman block's `copyBack`.
+
+import array.{get, set, make, sliceClamped}
+import mut_array.{MutArray, new, push, get as maGet, toArray, fromList}
+import lib.bitio.{
+  BitReader,
+  newBitReader,
+  getBits,
+  alignByte,
+  getBytesAligned,
+  newBitWriter,
+  putBits,
+  putCodeMSB,
+  finishBitWriter,
+}
+import lib.container.{parseGzipHeader, parseGzipTrailer}
+import lib.crc32.{crc32}
+import lib.huffman.{
+  Huffman,
+  fixedLitLen,
+  fixedDist,
+  decodeSym,
+  buildHuffman,
+  buildHuffmanStrict,
+  lengthBase,
+  lengthExtra,
+  distBase,
+  distExtra,
+}
+import test.{expectEqual, expectTrue, fail}
+
+-- ---------------------------------------------------------------------------
+-- Named constants (STYLE §12 — name the meaning)
+-- ---------------------------------------------------------------------------
+
+btypeStored : Int
+btypeStored = 0
+
+btypeFixedHuffman : Int
+btypeFixedHuffman = 1
+
+btypeDynamicHuffman : Int
+btypeDynamicHuffman = 2
+
+btypeReserved : Int
+btypeReserved = 3
+
+-- 16-bit wraparound mask, 0xFFFF — LEN/NLEN are each a raw 16-bit field.
+mask16 : Int
+mask16 = 65535
+
+-- 32-bit wraparound mask, 0xFFFFFFFF — ISIZE is uncompressed length mod 2^32.
+mask32 : Int
+mask32 = 4294967295
+
+-- ---------------------------------------------------------------------------
+-- The sliding window: `copyBack`
+-- ---------------------------------------------------------------------------
+
+{- | Copy `length` bytes from `distance` bytes back in `out` to the end of
+   `out`, READ-then-PUSH one byte at a time (never a `blit`, never a
+   pre-snapshotted slice — see the module header and the design doc's
+   "overlap case" section: when `distance < length` the source region
+   overlaps the bytes this very call is producing, and `distance = 1` — pure
+   run-length repetition of the last byte — is the common case that a
+   whole-slice copy gets wrong).
+
+   `distance` must be in `1..length(out)` (inclusive at the top: `distance ==
+   length(out)` legally refers to the very first byte ever pushed). Anything
+   else is a malformed stream, not a wrap-around, and is an `Err`.
+
+   Design-doc-verified shape: `copyBack 1 4` over `[65, 66]` yields
+   `[65, 66, 66, 66, 66, 66]` (RLE of the trailing byte). -}
+export copyBack : Int -> Int -> MutArray Int -> Result String Unit
+copyBack distance len out =
+  let outLen = length out
+  if distance <= 0 then
+    Err "copyBack: distance must be positive, got \{distance}"
+  else if distance > outLen then
+    Err "copyBack: distance \{distance} exceeds current output length \{outLen}"
+  else
+    copyBackGo distance len out
+
+copyBackGo : Int -> Int -> MutArray Int -> Result String Unit
+copyBackGo distance remaining out
+  | remaining <= 0 = Ok ()
+  | otherwise =
+    let outLen = length out
+    match maGet (outLen - distance) out
+      Some b =>
+        let _ = push b out
+        copyBackGo distance (remaining - 1) out
+      -- `outLen` only grows across this loop (one `push` per iteration) and
+      -- `distance <= outLen` was already established by `copyBack` before
+      -- the first call, so `outLen - distance` is always a valid live index
+      -- — this arm is unreachable. Panic rather than a quiet `Err`: a
+      -- violated loop invariant here is a bug in this module, not bad input.
+      None => panic "copyBack: source index out of range (unreachable)"
+
+-- ---------------------------------------------------------------------------
+-- Stored blocks (BTYPE 00)
+-- ---------------------------------------------------------------------------
+
+-- NLEN must be the one's complement of LEN, both taken as raw 16-bit fields.
+checkNlen : Int -> Int -> Result String Unit
+checkNlen len nlen =
+  if bitAnd (bitNot len) mask16 == nlen then
+    Ok ()
+  else
+    Err "stored block: NLEN (\{nlen}) is not the one's complement of LEN (\{len})"
+
+-- Push every byte of `bytes` onto `out`, in order — this is what makes a
+-- stored block's payload part of the sliding window, not just part of the
+-- output (see the module header).
+pushAll : Array Int -> MutArray Int -> Unit
+pushAll bytes out = pushAllGo bytes 0 (arrayLength bytes) out
+
+pushAllGo : Array Int -> Int -> Int -> MutArray Int -> Unit
+pushAllGo bytes i n out
+  | i >= n = ()
+  | otherwise = match get i bytes
+    Some b =>
+      let _ = push b out
+      pushAllGo bytes (i + 1) n out
+    None => ()
+
+-- | A stored block: byte-align, `LEN`/`NLEN` (2 bytes LE each, validated
+--   against each other), then `LEN` raw bytes copied verbatim into `out`.
+inflateStored : BitReader -> MutArray Int -> Result String Unit
+inflateStored r out =
+  let _ = alignByte r
+  do
+    len <- getBits 16 r
+    nlen <- getBits 16 r
+    _ <- checkNlen len nlen
+    bytes <- getBytesAligned len r
+    let _ = pushAll bytes out
+    Ok ()
+
+-- ---------------------------------------------------------------------------
+-- Fixed Huffman blocks (BTYPE 01)
+-- ---------------------------------------------------------------------------
+
+-- Literal/length symbol that ends a block (RFC 1951 §3.2.3).
+symEndOfBlock : Int
+symEndOfBlock = 256
+
+-- Largest literal/length symbol a fixed-Huffman block may legally carry
+-- (RFC 1951 §3.2.5: 257..285 are length codes; the fixed table technically
+-- has code space through 287, but 286/287 never occur in real data and are
+-- invalid if seen).
+maxLenSym : Int
+maxLenSym = 285
+
+-- Largest legal distance symbol (RFC 1951 §3.2.5: 30 and 31 are reserved and
+-- must never appear).
+maxDistSym : Int
+maxDistSym = 29
+
+-- Read one entry out of a flat RFC table by index, turning an out-of-range
+-- index into a named `Err` rather than a panic — unlike `huffman.mdk`'s
+-- internal `tableAt` (which panics because its callers only ever pass
+-- indices already validated against the table's own construction), the
+-- index here comes from a Huffman symbol decoded off a possibly-adversarial
+-- stream, so it must be a normal error path.
+lookupTable : Array Int -> Int -> String -> Result String Int
+lookupTable arr i name = match get i arr
+  Some v => Ok v
+  None => Err "inflate: \{name} index \{i} out of range (malformed stream)"
+
+-- | Decode one length/distance back-reference once the literal/length symbol
+--   (257..285, already known to be in range) has been read. Takes the
+--   DISTANCE table as a parameter — `fixedDist` for a fixed-Huffman block,
+--   the block's own decoded distance table for a dynamic-Huffman one — so
+--   this one function serves both BTYPEs (see `inflateHuffmanBlock` below).
+--
+--   ⚠️ The two table families are indexed DIFFERENTLY (see
+--   `docs/design/GZIP-DESIGN.md` and each array's own comment in
+--   `huffman.mdk`): `lengthBase`/`lengthExtra` are indexed by
+--   `lenSym - 257`, but `distBase`/`distExtra` are indexed by the BARE
+--   distance symbol `dsym` — not `dsym - 257`, not `dsym - 1`.
+inflateLengthDistance : Huffman -> Int -> BitReader -> MutArray Int -> Result String Unit
+inflateLengthDistance distHuff lenSym r out = do
+  lenBase <- lookupTable lengthBase (lenSym - 257) "lengthBase"
+  lenExtraBits <- lookupTable lengthExtra (lenSym - 257) "lengthExtra"
+  lenExtra <- getBits lenExtraBits r
+  let len = lenBase + lenExtra
+  dsym <- decodeSym distHuff r
+  distanceFor dsym len r out
+
+-- Split out of `inflateLengthDistance` so the `dsym > maxDistSym` check (RFC
+-- 1951 §3.2.3: distance codes 30/31 are reserved and always invalid) is a
+-- plain match-arm guard rather than nested inside a `do` block.
+distanceFor : Int -> Int -> BitReader -> MutArray Int -> Result String Unit
+distanceFor dsym len r out =
+  if dsym > maxDistSym then Err "inflate: invalid distance symbol \{dsym} (must be 0..\{maxDistSym})"
+  else do
+    distBaseV <- lookupTable distBase dsym "distBase"
+    distExtraBits <- lookupTable distExtra dsym "distExtra"
+    distExtraV <- getBits distExtraBits r
+    copyBack (distBaseV + distExtraV) len out
+
+-- | Decode literal/length symbols off `litHuff` until end-of-block (symbol
+--   256): a literal (< 256) is pushed straight to `out`; a length code
+--   (257..maxLenSym) reads its paired distance code off `distHuff` and
+--   expands the back-reference via `copyBack`; anything else is a malformed
+--   stream. Shared by fixed-Huffman (`fixedLitLen`/`fixedDist`) and
+--   dynamic-Huffman (the block's own decoded tables) blocks — see the
+--   module header.
+inflateHuffmanBlock : Huffman -> Huffman -> BitReader -> MutArray Int -> Result String Unit
+inflateHuffmanBlock litHuff distHuff r out = match decodeSym litHuff r
+  Err e => Err e
+  Ok sym if sym < 256 =>
+    let _ = push sym out
+    inflateHuffmanBlock litHuff distHuff r out
+  Ok sym if sym == symEndOfBlock => Ok ()
+  Ok sym if sym <= maxLenSym => match inflateLengthDistance distHuff sym r out
+    Err e => Err e
+    Ok _ => inflateHuffmanBlock litHuff distHuff r out
+  Ok sym => Err "inflate: invalid literal/length symbol \{sym} (must be 0..\{maxLenSym} or \{symEndOfBlock})"
+
+-- | Fixed-Huffman blocks (BTYPE 01): the RFC 1951 §3.2.6 fixed literal/length
+--   and distance tables, unchanged from Phase 2.
+inflateFixedHuffman : BitReader -> MutArray Int -> Result String Unit
+inflateFixedHuffman r out = inflateHuffmanBlock fixedLitLen fixedDist r out
+
+-- ---------------------------------------------------------------------------
+-- Dynamic Huffman blocks (BTYPE 10, RFC 1951 §3.2.7)
+-- ---------------------------------------------------------------------------
+
+-- The order in which the HCLEN 3-bit code-length-alphabet lengths are
+-- transmitted — a fixed permutation of the 19 code-length symbols
+-- (0..18), NOT symbol order. RFC 1951 §3.2.7's own table.
+clOrder : Array Int
+clOrder = [|16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15|]
+
+-- Size of the code-length alphabet itself (symbols 0..18).
+numClSymbols : Int
+numClSymbols = 19
+
+-- Code-length run-length escapes (RFC 1951 §3.2.7): symbol -> (extra bits,
+-- minimum repeat count). 16 repeats the PREVIOUS length; 17/18 repeat a
+-- length of ZERO. Only used by name below, not as a table lookup, since
+-- there are exactly three cases and a flat array would obscure rather than
+-- clarify them.
+symRepPrev : Int
+symRepPrev = 16
+
+symRepZero3 : Int
+symRepZero3 = 17
+
+symRepZero7 : Int
+symRepZero7 = 18
+
+-- | Read the HCLEN 3-bit code-length-alphabet lengths, in the RFC's
+--   permuted order (`clOrder`), into a fresh 19-slot table (unused slots
+--   default to 0 — a code length of 0 means "this code-length symbol is
+--   itself unused", which is the common case: only `nClen` of the 19 are
+--   transmitted).
+readClLengths : BitReader -> Int -> Result String (Array Int)
+readClLengths r nClen =
+  let lens = make numClSymbols 0
+  readClLengthsGo r 0 nClen lens
+
+readClLengthsGo : BitReader -> Int -> Int -> Array Int -> Result String (Array Int)
+readClLengthsGo r i nClen lens
+  | i >= nClen = Ok lens
+  | otherwise = do
+    v <- getBits 3 r
+    idx <- lookupTable clOrder i "clOrder"
+    let _ = set idx v lens
+    readClLengthsGo r (i + 1) nClen lens
+
+-- | Read HLIT/HDIST/HCLEN and the HCLEN code-length lengths, and build the
+--   code-length alphabet's own canonical table. `buildHuffmanStrict`, NOT
+--   `buildHuffman` — RFC 1951 forbids the single-code exception for this
+--   alphabet (see `huffman.mdk`'s module header and `buildHuffmanStrict`'s
+--   own doc comment).
+readDynamicHeader : BitReader -> Result String (Int, Int, Huffman)
+readDynamicHeader r = do
+  hlit <- getBits 5 r
+  hdist <- getBits 5 r
+  hclen <- getBits 4 r
+  let nLit = hlit + 257
+  let nDist = hdist + 1
+  let nClen = hclen + 4
+  clLengths <- readClLengths r nClen
+  clHuff <- buildHuffmanStrict clLengths
+  Ok (nLit, nDist, clHuff)
+
+-- Fill `lens[i .. i+count)` with `val`, `Err` if that would run past `total`
+-- (a malformed stream whose run-length escape overruns the code-length
+-- table) rather than writing out of bounds. Returns the new write index.
+fillRepeat : Array Int -> Int -> Int -> Int -> Int -> Result String Int
+fillRepeat lens i total val count =
+  if i + count > total then Err "dynamic Huffman: code-length repeat runs past the end of the table (have \{total} entries, run would reach \{i + count})"
+  else
+    let _ = fillRepeatGo lens i (i + count) val
+    Ok (i + count)
+
+fillRepeatGo : Array Int -> Int -> Int -> Int -> Unit
+fillRepeatGo lens i limit val
+  | i >= limit = ()
+  | otherwise =
+    let _ = set i val lens
+    fillRepeatGo lens (i + 1) limit val
+
+-- | Decode `total` (= HLIT+257 + HDIST+1) code lengths for the real
+--   literal/length + distance alphabets, using the code-length alphabet
+--   `clHuff` and honouring the run-length escapes: 16 repeats the previous
+--   length 3-6 times (2 extra bits), 17 repeats zero 3-10 times (3 extra
+--   bits), 18 repeats zero 11-138 times (7 extra bits). A 16 as the very
+--   first symbol (no previous length yet) is a malformed stream, checked
+--   BEFORE reading its extra bits or touching the output array — never an
+--   out-of-bounds read.
+readCodeLengths : Huffman -> BitReader -> Int -> Result String (Array Int)
+readCodeLengths clHuff r total =
+  let lens = make total 0
+  readCodeLengthsGo clHuff r lens 0 total (-1)
+
+readCodeLengthsGo : Huffman -> BitReader -> Array Int -> Int -> Int -> Int -> Result String (Array Int)
+readCodeLengthsGo clHuff r lens i total prevLen
+  | i >= total = Ok lens
+  | otherwise = match decodeSym clHuff r
+    Err e => Err e
+    Ok sym if sym < symRepPrev =>
+      let _ = set i sym lens
+      readCodeLengthsGo clHuff r lens (i + 1) total sym
+    Ok sym if sym == symRepPrev => if prevLen < 0 then Err "dynamic Huffman: repeat-previous code (16) with no previous code length to repeat"
+    else match getBits 2 r
+      Err e => Err e
+      Ok extra => match fillRepeat lens i total prevLen (3 + extra)
+        Err e => Err e
+        Ok i2 => readCodeLengthsGo clHuff r lens i2 total prevLen
+    Ok sym if sym == symRepZero3 => match getBits 3 r
+      Err e => Err e
+      Ok extra => match fillRepeat lens i total 0 (3 + extra)
+        Err e => Err e
+        Ok i2 => readCodeLengthsGo clHuff r lens i2 total prevLen
+    Ok sym if sym == symRepZero7 => match getBits 7 r
+      Err e => Err e
+      Ok extra => match fillRepeat lens i total 0 (11 + extra)
+        Err e => Err e
+        Ok i2 => readCodeLengthsGo clHuff r lens i2 total prevLen
+    Ok sym =>
+      Err "dynamic Huffman: invalid code-length symbol \{sym} (must be 0..18)"
+
+-- | Decode a whole dynamic-Huffman block: header + code-length alphabet +
+--   the HLIT/HDIST code lengths (with run-length escapes), split into the
+--   literal/length and distance tables (`buildHuffman` — which DOES allow
+--   both the single-code and zero-used-code exceptions, unlike the
+--   code-length alphabet above), then the same `inflateHuffmanBlock` loop
+--   fixed-Huffman blocks already use.
+inflateDynamicHuffman : BitReader -> MutArray Int -> Result String Unit
+inflateDynamicHuffman r out = do
+  (nLit, nDist, clHuff) <- readDynamicHeader r
+  let total = nLit + nDist
+  lens <- readCodeLengths clHuff r total
+  let litLenLengths = sliceClamped 0 nLit lens
+  let distLengths = sliceClamped nLit total lens
+  litHuff <- buildHuffman litLenLengths
+  distHuff <- buildHuffman distLengths
+  inflateHuffmanBlock litHuff distHuff r out
+
+-- ---------------------------------------------------------------------------
+-- Block dispatch
+-- ---------------------------------------------------------------------------
+
+-- | Decode one block of the given `BTYPE` into `out`. `BTYPE=00`, `BTYPE=01`,
+--   and `BTYPE=10` are all real; `BTYPE=11` is always invalid per RFC 1951
+--   §3.2.3.
+inflateBlock : Int -> BitReader -> MutArray Int -> Result String Unit
+inflateBlock btype r out
+  | btype == btypeStored = inflateStored r out
+  | btype == btypeFixedHuffman = inflateFixedHuffman r out
+  | btype == btypeDynamicHuffman = inflateDynamicHuffman r out
+  | btype == btypeReserved =
+    Err "invalid DEFLATE block: BTYPE=3 is reserved (RFC 1951 §3.2.3)"
+  | otherwise = panic "inflateBlock: BTYPE \{btype} out of the 0..3 range getBits 2 can produce (unreachable)"
+
+-- Read BFINAL (1 bit) + BTYPE (2 bits), both LSB-first, decode one block,
+-- and loop until a block with BFINAL=1.
+inflateBlocks : BitReader -> MutArray Int -> Result String Unit
+inflateBlocks r out = do
+  bfinal <- getBits 1 r
+  btype <- getBits 2 r
+  _ <- inflateBlock btype r out
+  if bfinal == 1 then Ok () else inflateBlocks r out
+
+{- | Decode a raw DEFLATE stream (RFC 1951) — no gzip/zlib framing — to its
+   uncompressed bytes.
+
+   > inflate (arrayFromList [1, 3, 0, 252, 255, 65, 66, 67])
+   Ok [|65, 66, 67|]
+-}
+export inflate : Array Int -> Result String (Array Int)
+inflate bytes =
+  let r = newBitReader bytes
+  let out = new ()
+  do
+    _ <- inflateBlocks r out
+    Ok (toArray out)
+
+-- ---------------------------------------------------------------------------
+-- gzip member decode: header + inflate + trailer validation
+-- ---------------------------------------------------------------------------
+
+checkCrc : Int -> Int -> Result String Unit
+checkCrc ours stored =
+  if ours == stored then
+    Ok ()
+  else
+    Err "gzip trailer CRC-32 mismatch: computed \{ours}, trailer says \{stored}"
+
+checkIsize : Int -> Int -> Result String Unit
+checkIsize ours stored =
+  if bitAnd ours mask32 == stored then
+    Ok ()
+  else
+    Err "gzip trailer ISIZE mismatch: computed \{ours} (mod 2^32), trailer says \{stored}"
+
+{- | Decode a whole `.gz` member: parse the header, inflate the DEFLATE
+   payload between the header and the 8-byte trailer, then validate BOTH
+   trailer fields against the decoded bytes — CRC-32 and ISIZE. A checksum
+   that is never checked is decoration, not a checksum, so a mismatch on
+   either is a named `Err`, not a silently accepted decode.
+
+   The bytes below are a hand-built minimal gzip member wrapping a single
+   stored DEFLATE block for `"hi"`, verified against the system `gunzip`
+   (`gunzip -c` on these exact bytes prints `hi`, exit 0).
+
+   > gunzipMember (arrayFromList [31,139,8,0,0,0,0,0,0,3,1,2,0,253,255,104,105,172,42,147,216,2,0,0,0])
+   Ok [|104, 105|]
+-}
+export gunzipMember : Array Int -> Result String (Array Int)
+gunzipMember bytes = do
+  (hdr, off) <- parseGzipHeader bytes
+  let n = arrayLength bytes
+  let payload = sliceClamped off (n - 8) bytes
+  decoded <- inflate payload
+  (storedCrc, storedIsize) <- parseGzipTrailer bytes
+  _ <- checkCrc (crc32 decoded) storedCrc
+  _ <- checkIsize (arrayLength decoded) storedIsize
+  Ok decoded
+
+-- ---------------------------------------------------------------------------
+-- Tests — external-oracle vectors, hand-derived shapes, and pinned
+-- not-yet-implemented boundaries. No golden is ever captured from this
+-- module's own output (see gzip/README.md "Testing policy").
+-- ---------------------------------------------------------------------------
+
+-- `printf 'hello' | gzip -n -c` — the same bytes `gzip/main.mdk` uses. `gzip`
+-- picks BTYPE=1 (fixed Huffman) for input this small; now that Phase 2 is
+-- real, this round-trips to "hello" (the independent oracle:
+-- `python3 -c "import zlib; print(zlib.decompress(open('h.gz','rb').read(), 16+zlib.MAX_WBITS))"`
+-- on these exact bytes prints `b'hello'`).
+helloGz : Array Int
+helloGz = arrayFromList
+  [
+    31,
+    139,
+    8,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    3,
+    203,
+    72,
+    205,
+    201,
+    201,
+    7,
+    0,
+    134,
+    166,
+    16,
+    54,
+    5,
+    0,
+    0,
+    0,
+  ]
+
+test "gunzipMember on real hello.gz (fixed Huffman) round-trips to \"hello\"" = expectEqual (Ok (arrayFromList [104, 101, 108, 108, 111])) (gunzipMember helloGz)
+
+-- `python3 -c "print('ab'*37)" | gzip -n -c` — a repetitive input that
+-- exercises fixed-Huffman BACK-REFERENCES (not just literals like
+-- `helloGz`): 74 bytes of alternating "ab", real gzip output, still fixed
+-- Huffman (`xxd -s 10 -l 1` on this file is `0x4b` = 0b01001011; bit 0 =
+-- BFINAL=1, bits 1-2 = (0x4b>>1)&3 = 1 = fixed Huffman). This is the general
+-- overlap case (distance=2), a sibling of the `distance=1` RLE case already
+-- covered by `copyBack`'s own unit tests above, now exercised end to end
+-- through Huffman decoding.
+abRepeatedGz : Array Int
+abRepeatedGz = arrayFromList
+  [
+    31,
+    139,
+    8,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    3,
+    75,
+    76,
+    74,
+    164,
+    18,
+    4,
+    0,
+    12,
+    130,
+    171,
+    154,
+    74,
+    0,
+    0,
+    0,
+  ]
+
+abRepeatedBin : Array Int
+abRepeatedBin = arrayFromList
+  [
+    97,
+    98,
+    97,
+    98,
+    97,
+    98,
+    97,
+    98,
+    97,
+    98,
+    97,
+    98,
+    97,
+    98,
+    97,
+    98,
+    97,
+    98,
+    97,
+    98,
+    97,
+    98,
+    97,
+    98,
+    97,
+    98,
+    97,
+    98,
+    97,
+    98,
+    97,
+    98,
+    97,
+    98,
+    97,
+    98,
+    97,
+    98,
+    97,
+    98,
+    97,
+    98,
+    97,
+    98,
+    97,
+    98,
+    97,
+    98,
+    97,
+    98,
+    97,
+    98,
+    97,
+    98,
+    97,
+    98,
+    97,
+    98,
+    97,
+    98,
+    97,
+    98,
+    97,
+    98,
+    97,
+    98,
+    97,
+    98,
+    97,
+    98,
+    97,
+    98,
+    97,
+    98,
+  ]
+
+test "gunzipMember: fixed-Huffman with distance=2 back-references round-trips" = expectEqual (Ok abRepeatedBin) (gunzipMember abRepeatedGz)
+
+-- ---------------------------------------------------------------------------
+-- Dynamic Huffman (BTYPE 10, Phase 3) — raw DEFLATE stream (no gzip
+-- container), exercising `inflate` directly rather than `gunzipMember`. The
+-- bytes are real `zlib` output at `wbits=-15` (raw DEFLATE, no zlib header),
+-- independently confirmed to be BTYPE=2 by inspecting bit 1-2 of the first
+-- byte before trusting it as a dynamic-Huffman fixture:
+--
+--   python3 -c "
+--   import zlib, random
+--   random.seed(3)
+--   words = ['medaka','gzip','deflate','huffman','dynamic','static','stream','block','symbol','code']
+--   random.shuffle(words)
+--   data = ((' '.join(words) + '. ') * 3).encode()
+--   co = zlib.compressobj(6, zlib.DEFLATED, -15)
+--   out = co.compress(data) + co.flush()
+--   print((out[0]>>1)&3, len(out), len(data))"
+--
+-- prints `2 70 207` — dynamic Huffman, 70 compressed bytes decoding to the
+-- 207-byte `dynExpected` text below. This exercises the full HLIT/HDIST/
+-- HCLEN + code-length-alphabet + run-length-escape + literal/length +
+-- back-reference path end to end, independent of the gzip container.
+-- ---------------------------------------------------------------------------
+
+dynBytes : Array Int
+dynBytes = arrayFromList
+  [
+    205,
+    204,
+    193,
+    13,
+    128,
+    32,
+    16,
+    68,
+    209,
+    86,
+    166,
+    2,
+    123,
+    26,
+    216,
+    5,
+    9,
+    44,
+    107,
+    4,
+    15,
+    88,
+    189,
+    148,
+    225,
+    233,
+    31,
+    94,
+    242,
+    243,
+    91,
+    46,
+    140,
+    201,
+    89,
+    226,
+    206,
+    173,
+    52,
+    152,
+    10,
+    43,
+    17,
+    93,
+    20,
+    178,
+    58,
+    109,
+    83,
+    104,
+    30,
+    43,
+    68,
+    83,
+    227,
+    84,
+    140,
+    101,
+    193,
+    27,
+    206,
+    39,
+    37,
+    99,
+    63,
+    144,
+    127,
+    51,
+    249,
+    0,
+  ]
+
+-- The plaintext `dynBytes` decodes to (ASCII bytes of the shuffled-word text
+-- above, repeated 3 times) — from the SAME python invocation, `list(data)`.
+dynExpected : Array Int
+dynExpected = arrayFromList
+  [
+    103,
+    122,
+    105,
+    112,
+    32,
+    115,
+    116,
+    97,
+    116,
+    105,
+    99,
+    32,
+    115,
+    116,
+    114,
+    101,
+    97,
+    109,
+    32,
+    109,
+    101,
+    100,
+    97,
+    107,
+    97,
+    32,
+    99,
+    111,
+    100,
+    101,
+    32,
+    100,
+    121,
+    110,
+    97,
+    109,
+    105,
+    99,
+    32,
+    98,
+    108,
+    111,
+    99,
+    107,
+    32,
+    100,
+    101,
+    102,
+    108,
+    97,
+    116,
+    101,
+    32,
+    115,
+    121,
+    109,
+    98,
+    111,
+    108,
+    32,
+    104,
+    117,
+    102,
+    102,
+    109,
+    97,
+    110,
+    46,
+    32,
+    103,
+    122,
+    105,
+    112,
+    32,
+    115,
+    116,
+    97,
+    116,
+    105,
+    99,
+    32,
+    115,
+    116,
+    114,
+    101,
+    97,
+    109,
+    32,
+    109,
+    101,
+    100,
+    97,
+    107,
+    97,
+    32,
+    99,
+    111,
+    100,
+    101,
+    32,
+    100,
+    121,
+    110,
+    97,
+    109,
+    105,
+    99,
+    32,
+    98,
+    108,
+    111,
+    99,
+    107,
+    32,
+    100,
+    101,
+    102,
+    108,
+    97,
+    116,
+    101,
+    32,
+    115,
+    121,
+    109,
+    98,
+    111,
+    108,
+    32,
+    104,
+    117,
+    102,
+    102,
+    109,
+    97,
+    110,
+    46,
+    32,
+    103,
+    122,
+    105,
+    112,
+    32,
+    115,
+    116,
+    97,
+    116,
+    105,
+    99,
+    32,
+    115,
+    116,
+    114,
+    101,
+    97,
+    109,
+    32,
+    109,
+    101,
+    100,
+    97,
+    107,
+    97,
+    32,
+    99,
+    111,
+    100,
+    101,
+    32,
+    100,
+    121,
+    110,
+    97,
+    109,
+    105,
+    99,
+    32,
+    98,
+    108,
+    111,
+    99,
+    107,
+    32,
+    100,
+    101,
+    102,
+    108,
+    97,
+    116,
+    101,
+    32,
+    115,
+    121,
+    109,
+    98,
+    111,
+    108,
+    32,
+    104,
+    117,
+    102,
+    102,
+    109,
+    97,
+    110,
+    46,
+    32,
+  ]
+
+test "inflate: real dynamic-Huffman raw DEFLATE stream (zlib -15) round-trips" = expectEqual (Ok dynExpected) (inflate dynBytes)
+
+-- ---------------------------------------------------------------------------
+-- Hand-derived dynamic-Huffman error path: a repeat-previous code-length
+-- symbol (16) as the very FIRST decoded code-length symbol, with no
+-- previous length to repeat — RFC 1951 §3.2.7's own malformed-stream case,
+-- and the design doc's explicit "must Err, not read out of bounds"
+-- requirement. Built by hand with `bitio`'s writer primitives (the same
+-- technique `huffman.mdk`'s own tests use), not captured from our decoder:
+--
+--   BFINAL=1, BTYPE=2 (dynamic), HLIT=0 (nLit=257), HDIST=0 (nDist=1),
+--   HCLEN=0 (nClen=4, the minimum — covers clOrder positions 0..3, i.e.
+--   code-length symbols 16, 17, 18, 0). Transmitted 3-bit lengths: symbol16
+--   -> 1, symbol17 -> 0, symbol18 -> 0, symbol0 -> 1. That is a
+--   Kraft-COMPLETE 2-symbol code-length alphabet (two length-1 codes,
+--   0.5+0.5=1) — `buildHuffmanStrict` accepts it with no exception needed.
+--   Canonical assignment (ascending symbol order within a length): symbol0
+--   gets code "0", symbol16 gets code "1". The block body's first (and
+--   only) bit is therefore a single `1`, decoding to code-length symbol 16
+--   as literally the FIRST symbol of the block — i == 0, prevLen == -1 —
+--   which `readCodeLengthsGo` must reject before touching `getBits 2` or
+--   the output array at all.
+-- ---------------------------------------------------------------------------
+
+repeatFirstBytes : Array Int
+repeatFirstBytes =
+  let w = newBitWriter ()
+  let _ = putBits 1 1 w  -- BFINAL = 1
+  let _ = putBits 2 2 w  -- BTYPE = 2 (dynamic Huffman)
+  let _ = putBits 0 5 w  -- HLIT = 0 -> nLit = 257
+  let _ = putBits 0 5 w  -- HDIST = 0 -> nDist = 1
+  let _ = putBits 0 4 w  -- HCLEN = 0 -> nClen = 4
+  let _ = putBits 1 3 w  -- clOrder[0] = symbol 16, length 1
+  let _ = putBits 0 3 w  -- clOrder[1] = symbol 17, length 0 (unused)
+  let _ = putBits 0 3 w  -- clOrder[2] = symbol 18, length 0 (unused)
+  let _ = putBits 1 3 w  -- clOrder[3] = symbol 0,  length 1
+  let _ = putCodeMSB 1 1 w  -- the block body's first code-length symbol: code "1" -> symbol 16
+  finishBitWriter w
+
+test "inflate: dynamic Huffman rejects repeat-code 16 as the FIRST code-length symbol (no previous length)" = expectEqual (Err "dynamic Huffman: repeat-previous code (16) with no previous code length to repeat") (inflate repeatFirstBytes)
+
+-- `head -c 200 /dev/urandom > rand.bin && gzip -1 -n -c rand.bin` — genuinely
+-- incompressible input, so gzip falls back to a STORED block (there is no
+-- `gzip -0`; see design doc "The oracle"). Verified on this box:
+--   $ xxd -s 10 -l 6 rand.gz  ->  01c8 0037 ff
+-- 0x01 = BFINAL=1,BTYPE=00; LEN=0x00c8=200; NLEN=0xff37, the exact one's
+-- complement of 200. Cross-checked against
+-- `python3 -c "import zlib; d=open('rand.bin','rb').read(); print(zlib.crc32(d), len(d))"`
+-- -> 547945378 200.
+randGz : Array Int
+randGz = arrayFromList
+  [
+    31,
+    139,
+    8,
+    0,
+    0,
+    0,
+    0,
+    0,
+    4,
+    3,
+    1,
+    200,
+    0,
+    55,
+    255,
+    190,
+    246,
+    7,
+    148,
+    140,
+    204,
+    149,
+    34,
+    157,
+    59,
+    105,
+    78,
+    139,
+    12,
+    231,
+    77,
+    123,
+    149,
+    186,
+    225,
+    117,
+    173,
+    39,
+    30,
+    68,
+    168,
+    225,
+    77,
+    156,
+    131,
+    16,
+    184,
+    216,
+    6,
+    73,
+    248,
+    122,
+    225,
+    141,
+    220,
+    91,
+    157,
+    16,
+    255,
+    181,
+    8,
+    13,
+    100,
+    202,
+    137,
+    199,
+    185,
+    210,
+    108,
+    225,
+    18,
+    33,
+    5,
+    206,
+    152,
+    26,
+    254,
+    127,
+    84,
+    202,
+    154,
+    167,
+    124,
+    252,
+    141,
+    136,
+    108,
+    34,
+    7,
+    38,
+    231,
+    155,
+    60,
+    142,
+    124,
+    93,
+    53,
+    248,
+    19,
+    246,
+    162,
+    230,
+    25,
+    186,
+    135,
+    220,
+    205,
+    123,
+    92,
+    159,
+    122,
+    220,
+    40,
+    141,
+    230,
+    159,
+    22,
+    167,
+    37,
+    109,
+    108,
+    254,
+    2,
+    19,
+    56,
+    91,
+    180,
+    254,
+    214,
+    119,
+    115,
+    189,
+    255,
+    31,
+    16,
+    146,
+    246,
+    3,
+    23,
+    72,
+    163,
+    157,
+    187,
+    251,
+    204,
+    138,
+    106,
+    133,
+    111,
+    74,
+    231,
+    32,
+    221,
+    125,
+    127,
+    246,
+    204,
+    166,
+    219,
+    42,
+    153,
+    120,
+    174,
+    43,
+    151,
+    52,
+    168,
+    18,
+    217,
+    6,
+    225,
+    250,
+    65,
+    150,
+    113,
+    82,
+    56,
+    11,
+    243,
+    88,
+    99,
+    138,
+    25,
+    128,
+    232,
+    218,
+    51,
+    248,
+    151,
+    250,
+    176,
+    60,
+    177,
+    73,
+    157,
+    39,
+    184,
+    131,
+    101,
+    125,
+    101,
+    91,
+    229,
+    23,
+    154,
+    250,
+    197,
+    248,
+    98,
+    90,
+    106,
+    191,
+    88,
+    196,
+    3,
+    162,
+    251,
+    168,
+    32,
+    200,
+    0,
+    0,
+    0,
+  ]
+
+-- The 200 raw bytes `randGz` decompresses to (the payload bytes of `randGz`
+-- between the 10-byte header + 5-byte block header, and the 8-byte trailer).
+randBin : Array Int
+randBin = arrayFromList
+  [
+    190,
+    246,
+    7,
+    148,
+    140,
+    204,
+    149,
+    34,
+    157,
+    59,
+    105,
+    78,
+    139,
+    12,
+    231,
+    77,
+    123,
+    149,
+    186,
+    225,
+    117,
+    173,
+    39,
+    30,
+    68,
+    168,
+    225,
+    77,
+    156,
+    131,
+    16,
+    184,
+    216,
+    6,
+    73,
+    248,
+    122,
+    225,
+    141,
+    220,
+    91,
+    157,
+    16,
+    255,
+    181,
+    8,
+    13,
+    100,
+    202,
+    137,
+    199,
+    185,
+    210,
+    108,
+    225,
+    18,
+    33,
+    5,
+    206,
+    152,
+    26,
+    254,
+    127,
+    84,
+    202,
+    154,
+    167,
+    124,
+    252,
+    141,
+    136,
+    108,
+    34,
+    7,
+    38,
+    231,
+    155,
+    60,
+    142,
+    124,
+    93,
+    53,
+    248,
+    19,
+    246,
+    162,
+    230,
+    25,
+    186,
+    135,
+    220,
+    205,
+    123,
+    92,
+    159,
+    122,
+    220,
+    40,
+    141,
+    230,
+    159,
+    22,
+    167,
+    37,
+    109,
+    108,
+    254,
+    2,
+    19,
+    56,
+    91,
+    180,
+    254,
+    214,
+    119,
+    115,
+    189,
+    255,
+    31,
+    16,
+    146,
+    246,
+    3,
+    23,
+    72,
+    163,
+    157,
+    187,
+    251,
+    204,
+    138,
+    106,
+    133,
+    111,
+    74,
+    231,
+    32,
+    221,
+    125,
+    127,
+    246,
+    204,
+    166,
+    219,
+    42,
+    153,
+    120,
+    174,
+    43,
+    151,
+    52,
+    168,
+    18,
+    217,
+    6,
+    225,
+    250,
+    65,
+    150,
+    113,
+    82,
+    56,
+    11,
+    243,
+    88,
+    99,
+    138,
+    25,
+    128,
+    232,
+    218,
+    51,
+    248,
+    151,
+    250,
+    176,
+    60,
+    177,
+    73,
+    157,
+    39,
+    184,
+    131,
+    101,
+    125,
+    101,
+    91,
+    229,
+    23,
+    154,
+    250,
+    197,
+    248,
+    98,
+    90,
+    106,
+    191,
+    88,
+    196,
+    3,
+  ]
+
+test "gunzipMember: real stored-block .gz round-trips byte for byte" =
+  expectEqual (Ok randBin) (gunzipMember randGz)
+
+-- Corrupt NLEN (byte offset 13, one of the two NLEN bytes: 55 -> 56) so it is
+-- no longer the one's complement of LEN=200.
+corruptedNlenGz : Array Int
+corruptedNlenGz = arrayFromList (setAt 13 56 (toList randGz))
+
+setAt : Int -> a -> List a -> List a
+setAt _ _ [] = []
+setAt 0 v (_::rest) = v::rest
+setAt i v (x::rest) = x :: setAt (i - 1) v rest
+
+test "gunzipMember: a corrupted NLEN is rejected" = match gunzipMember corruptedNlenGz
+  Err msg => expectEqual "stored block: NLEN (65336) is not the one's complement of LEN (200)" msg
+  Ok _ => fail "expected Err on corrupted NLEN"
+
+-- Truncate mid-payload (keep only the header + block header + a handful of
+-- payload bytes, well short of LEN=200 and short of the trailer). Must be an
+-- `Err`, not a hang and not a wrong-length success.
+truncatedGz : Array Int
+truncatedGz = sliceClamped 0 20 randGz
+
+test "gunzipMember: a truncated stream is Err, not a hang" =
+  expectEqual True (isErr (gunzipMember truncatedGz))
+
+-- Corrupt one byte of the CRC-32 field in the trailer (the last 8 bytes,
+-- first 4 are CRC-32 LE — flip the low byte).
+corruptedCrcGz : Array Int
+corruptedCrcGz =
+  arrayFromList (setAt (arrayLength randGz - 8) 0 (toList randGz))
+
+test "gunzipMember: a corrupted trailer CRC-32 is rejected" = match gunzipMember corruptedCrcGz
+  Err msg => expectEqual "gzip trailer CRC-32 mismatch: computed 547945378, trailer says 547945216" msg
+  Ok _ => fail "expected Err on a corrupted trailer CRC-32"
+
+-- ---------------------------------------------------------------------------
+-- `copyBack` — the sliding-window primitive, exercised now even though no
+-- caller exists yet (see module header).
+-- ---------------------------------------------------------------------------
+
+copyBackResult : List Int -> Int -> Int -> Result String (Array Int)
+copyBackResult seed distance len =
+  let out = fromList seed
+  map (_ => toArray out) (copyBack distance len out)
+
+-- Design-doc-verified shape: `distance=1, length=4` over `[65,66]` is
+-- run-length encoding of the trailing byte, `66`, four more times.
+test "copyBack: distance=1 (RLE) repeats the trailing byte" = expectEqual
+  (Ok (arrayFromList [65, 66, 66, 66, 66, 66]))
+  (copyBackResult [65, 66] 1 4)
+
+-- `distance == length(out)` is legal and refers to the very FIRST output
+-- byte: over `[65, 66, 67]`, distance=3, len=2 reads index 0 then index 1
+-- (which by then is the just-copied 65), yielding `[65, 66, 67, 65, 66]`.
+test "copyBack: distance == outLen refers to the first output byte (legal)" = expectEqual
+  (Ok (arrayFromList [65, 66, 67, 65, 66]))
+  (copyBackResult [65, 66, 67] 3 2)
+
+-- A general overlap case: `distance=2, length=5` over `[1, 2]` alternates
+-- the two seed bytes, since each copied byte becomes a source two positions
+-- later: seed `1,2` followed by 5 more copies `1,2,1,2,1`.
+test "copyBack: distance=2, length=5 alternates the seed bytes" = expectEqual
+  (Ok (arrayFromList [1, 2, 1, 2, 1, 2, 1]))
+  (copyBackResult [1, 2] 2 5)
+
+-- `distance > length(out)` is a malformed stream, not a wrap-around: `Err`.
+test "copyBack: distance > outLen is rejected" = match copyBackResult [65, 66] 5 1
+  Err msg =>
+    expectEqual "copyBack: distance 5 exceeds current output length 2" msg
+  Ok _ => fail "expected Err on distance > outLen"
+
+-- `distance <= 0` is also malformed (there is no RFC encoding for it, but a
+-- corrupted/adversarial stream could still produce it once Phase 2/3 decode
+-- distance symbols) and must not silently no-op or underflow.
+test "copyBack: distance <= 0 is rejected" = match copyBackResult [65, 66] 0 1
+  Err msg => expectEqual "copyBack: distance must be positive, got 0" msg
+  Ok _ => fail "expected Err on distance <= 0"
+
+-- ---------------------------------------------------------------------------
+-- Properties
+-- ---------------------------------------------------------------------------
+
+-- `copyBack distance length` always grows the output by exactly `length`
+-- elements, for any legal `distance` (1..seedLen) — a from-scratch identity
+-- independent of what bytes actually land there.
+prop "copyBack grows the output by exactly `length`, for any legal distance" (seed : List Int) (distRaw : Int) (lenRaw : Int) =
+  let seedLen = length seed
+  if seedLen == 0 then True  -- no legal distance exists over an empty window
+  else
+    let distance = 1 + abs distRaw % seedLen
+    let len = abs lenRaw % 64
+    let out = fromList seed
+    match copyBack distance len out
+      Ok _ => length out == seedLen + len
+      Err _ => False
+
+-- `inflate` of a single stored block round-trips arbitrary bytes: BFINAL=1,
+-- BTYPE=00, LEN/NLEN framing it, followed by the bytes themselves. This is
+-- an independent hand-rolled encoder (not `inflate`'s own logic reused), so
+-- a bug shared between "how this property builds a stored block" and "how
+-- `inflateStored` reads one" would have to be the SAME bug in both, not a
+-- tautology any encoding/decoding pair would pass.
+storedBlockStream : List Int -> Array Int
+storedBlockStream bytes =
+  let n = length bytes
+  let lenLow = bitAnd n 255
+  let lenHigh = shiftRight (bitAnd n mask16) 8
+  let nlen = bitAnd (bitNot n) mask16
+  let nlenLow = bitAnd nlen 255
+  let nlenHigh = shiftRight nlen 8
+  arrayFromList
+    (1 :: lenLow :: lenHigh :: nlenLow :: nlenHigh :: map (b => bitAnd b 255) bytes)
+
+prop "inflate of a hand-built single stored block round-trips arbitrary bytes" (bytes : List Int) =
+  let masked = map (b => bitAnd b 255) bytes
+  match inflate (storedBlockStream bytes)
+    Ok got => got == arrayFromList masked
+    Err _ => False

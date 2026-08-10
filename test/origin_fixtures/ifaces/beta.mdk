@@ -1,0 +1,35 @@
+-- #1110 PR C corpus — the OTHER module declaring `Speak`.  No import of alpha, no
+-- shared type: the collision is purely the name.
+--
+-- The method name is deliberately `speak` here too.  With two DIFFERENT method
+-- names the shape is loud (`impl Speak (Pair a)` fails with "missing method
+-- 'holler'"), and a loud failure is the easy case.  Matching the method names makes
+-- the MERGE ITSELF silent — which is the shape #1047 actually is and the one a gate
+-- has to be able to see.
+--
+-- ⚠️ CORRECTED BY #1110 UNIT E/F.  This used to say "`main_ifaces.mdk` checks and
+-- runs at exit 0".  It does not any more — its `Speak` occurrences are now reported
+-- `R-AMBIGUOUS-INTERFACE`, because they are ambiguous in that module's SCOPE.  The
+-- MERGE those occurrences feed is still silent, which is the property this fixture
+-- is about: #1047 is a TABLE collision between modules that never meet in one
+-- scope, so no use-site diagnostic reaches it and its pin still reproduces.
+
+export interface Speak a where
+  speak : a -> String
+
+public export data Dog = Dog
+
+export impl Speak Dog where
+  speak _ = "beta-dog"
+
+-- A `requires` on an impl — the `Require` carrier, the fourth occurrence position,
+-- naming beta's own `Speak`.
+public export data Kennel a = Kennel a
+
+export impl Speak (Kennel a) requires Speak a where
+  speak (Kennel x) = "kennel(\{speak x})"
+
+-- beta's half of the precedence witness — see alpha.mdk.  Declared, never used
+-- here, so beta contributes a `decl:Echo` row and no `iface:Echo` one.
+export interface Echo a where
+  echo : a -> String

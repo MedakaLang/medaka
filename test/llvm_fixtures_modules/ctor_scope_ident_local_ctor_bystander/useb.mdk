@@ -1,0 +1,6 @@
+-- Consumer B: the `(..)` spelling, which never spells `Dup` at all — the member
+-- filter has to reach it through the OWNING TYPE name.
+import collb.{CB(..), unCB}
+
+export rb : String
+rb = unCB (Dup "b")

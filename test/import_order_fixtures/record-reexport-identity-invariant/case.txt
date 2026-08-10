@@ -1,0 +1,24 @@
+entry: main.mdk
+what: #1283 Repro A (the RECORD spelling of the re-export identity miss) is order-INVARIANT
+
+`armod` declares `data Cfg = { fld : Int }`; `remod` is `export import armod.{Cfg, mkA}`;
+`zrmod` declares its OWN, unrelated `data Cfg = { fld : Float }` which `main` never
+imports. `main` names the RE-EXPORTER, so A-2.6's `declOwnedBy` identity test compared the
+decl's origin (`armod`) against the import path's module (`remod`) and missed, and the
+record table fell back to the universe's load-order winner.
+
+⚠️ THIS ROW WAS ORDER-DEPENDENT AND NOBODY HAD PINNED IT. Measured by hand on a binary
+cold-built from the PRE-change source at `main` @ 1443870c (both orderings, same graph):
+
+  import remod.… ; import zrmod.…   ->  exit 1, `Type mismatch: Cfg vs Cfg —
+                                        … 'armod' … 'zrmod'` + `Int vs Float`
+  import zrmod.… ; import remod.…   ->  exit 0, prints `7`
+
+Same program, opposite answer, decided by which cosmetic import line comes first. That is
+the divergence class this gate exists for, and #1283's own must-fail fixture could not see
+it (it grades ONE command plus a control). It is NOT carried as a ledger row because
+#1319 unit 2 drains it in the same PR: on the post-change binary both orderings exit 0 and
+print `7`, so the row lands as an INVARIANT regression guard rather than as a ledgered bug.
+
+Hand-derived correct answer, independent of any engine: `main` brings exactly ONE `Cfg`
+into scope — armod's, whose `fld` is an `Int` — and `zrf 0 = 0`, so `7`.

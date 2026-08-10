@@ -402,9 +402,14 @@ for f in $changed; do
     # "plausibly").
     # #1110: resolve.mdk OWNS the two origin stampers and the agreement tap they are
     # observed through, so it is the primary subject of diff_compiler_origin_agreement.
+    # #1319 unit 0: resolve.mdk expands every import spelling into the name set it
+    # binds and attributes each to a module — the fact every import-clause ordering
+    # defect in the tracker (#733/#1253/#1284) is decided by. Goldens cannot see an
+    # over-widening there; the permutation differential can.
     compiler/frontend/resolve.mdk|compiler/frontend/marker.mdk)
       add 'diff_compiler_resolve*'; add 'diff_compiler_snapshot*'; add 'diff_compiler_check*'
       add 'diff_compiler_origin_agreement'
+      add 'diff_compiler_import_order'
       add 'diff_compiler_dict_semantics' ;;
     compiler/frontend/exhaust.mdk)
       add 'diff_compiler_exhaust'; add 'diff_compiler_check_match' ;;
@@ -435,7 +440,11 @@ for f in $changed; do
       # #1110: typecheck.mdk hosts BOTH ends of the resolve->typecheck channel
       # (checkProgramSeededSplit on the flat path, elaborateModules on the graph
       # path) — i.e. two of the three arms the agreement table compares.
-      add 'diff_compiler_origin_agreement' ;;
+      add 'diff_compiler_origin_agreement'
+      # #1319 unit 0: typecheck.mdk owns universeDataEnv, universeRecordByName and
+      # the A-2.6 import-scoped overlay — the tables whose keying decides which
+      # declaration an import clause's constructor name lands on.
+      add 'diff_compiler_import_order' ;;
 
     # ── THE THREE ENGINES ─────────────────────────────────────────────────────
     #
@@ -483,6 +492,7 @@ for f in $changed; do
     # cited sites under compiler/ir/*.
     compiler/ir/*)
       add 'diff_compiler_core_ir*'; add 'diff_compiler_llvm*'; add 'diff_compiler_snapshot*'
+      add 'diff_compiler_draft_semantic'
       add 'diff_compiler_engines'
       add 'diff_compiler_shadow_semantics'; add 'diff_compiler_dict_semantics' ;;
 
@@ -499,12 +509,21 @@ for f in $changed; do
       add 'diff_compiler_capability_matrix'
       add 'diff_compiler_engines'; add 'diff_compiler_tmc_parity'
       add 'diff_compiler_shadow_semantics'; add 'diff_compiler_dict_semantics'
+      # #1319 unit 0: private_mangle.mdk keeps its OWN ctor-import index — a
+      # separate order-observable structure from typecheck's, and #674's root cause
+      # was the two disagreeing. The permutation gate grades the `build` arm, so it
+      # is the one differential that can see the mangler decide by clause order.
+      add 'diff_compiler_import_order'
       need_fixpoint=1 ;;
 
     # #1131: driver/loader.mdk is a cited DICT-SEMANTICS site.
+    # #1319 unit 0: loader.mdk owns the dependency walk and topo sort — the module
+    # ORDER every table downstream is populated in.
     compiler/driver/*)
       add 'diff_compiler_check*'; add 'diff_compiler_diagnostics'; add 'diff_compiler_build'
-      add 'diff_compiler_dict_semantics' ;;
+      add 'diff_compiler_import_order'
+      add 'diff_compiler_dict_semantics'
+      add 'diff_compiler_fmt_write_safety' ;;
     compiler/tools/lint*.mdk)      add 'diff_compiler_lint*' ;;
     compiler/tools/fmt.mdk|compiler/tools/printer.mdk) add 'diff_compiler_fmt'; add 'diff_compiler_snapshot*' ;;
     compiler/tools/lsp.mdk)        add 'diff_compiler_lsp*' ;;
@@ -518,8 +537,17 @@ for f in $changed; do
     # moves which module id that arm claims.
     compiler/tools/*test*|compiler/tools/doctest.mdk|compiler/tools/prop_runner.mdk)
       add 'diff_compiler_test'; add 'diff_compiler_ported'
+      # #1229: diff_compiler_test_typecheck.sh pins the typecheck-first gate in
+      # test_cmd.mdk's doctestGate — including the zero-doctest cell, whose whole
+      # failure mode is exit 0 with no output, i.e. invisible to every golden gate.
+      add 'diff_compiler_test_typecheck'
       add 'diff_compiler_origin_agreement'
-      add 'diff_compiler_dict_semantics' ;;
+      add 'diff_compiler_dict_semantics'
+      # #81 Stage 4: diff_compiler_test_native.sh is the CI gate protecting the
+      # native-engine half of this arm (`medaka test --native` / `--engines`);
+      # without this line a change to test_cmd.mdk derives a gate set that omits
+      # the one gate that would catch it regressing native doctest execution.
+      add 'diff_compiler_test_native' ;;
     compiler/tools/*)              add 'diff_compiler_check*' ;;
 
     # ── the compiler's private mini-stdlib: used by every stage. ──
@@ -600,6 +628,14 @@ for f in $changed; do
     # never a per-file path — so the answer is the same for every file under it.
     test/snapshots/*)              add 'diff_compiler_snapshot*' ;;
 
+    # ── #1319 unit 0: the import-order ledger, which `_fixture_dir_for` cannot see ──
+    # It is a loose file under test/, not inside a `*fixtures*` directory, so the
+    # corpus derivation never fires for it. This arm matters more than most: the
+    # ledger is precisely the file someone edits ALONE when this gate goes red, and
+    # a preflight that derives NOTHING from a ledger edit is the masking path the
+    # ledger's own header warns about.
+    test/IMPORT-ORDER-LEDGER.txt)  add 'diff_compiler_import_order' ;;
+
     # ── sqlite: the derivation structurally CANNOT reach it ───────────────────
     # `_fixture_dir_for` only fires for a path with a `*fixtures*`/`*goldens*` ancestor
     # directory. The SQLite corpus has none — its goldens sit loose in `sqlite/test/`
@@ -609,6 +645,16 @@ for f in $changed; do
     # it and prints green".
     sqlite/test/*|sqlite/lib/*|sqlite/*.mdk|sqlite/medaka.toml)
       add 'sqlite/test/*oracle' ;;
+
+    # ── gzip: same structural blind spot as sqlite, for the same reason ────────
+    # `gzip/test/inflate_oracle.sh` has no `*fixtures*`/`*goldens*` ancestor either
+    # — its goldens sit loose in `gzip/test/` next to the oracle that reads them —
+    # so the corpus derivation never triggers here and these gates would derive
+    # NOTHING. CI *does* grade this (`gzip/test/*oracle` runs in the `sqlite`
+    # shard), so without this arm a gzip change reports a green preflight having
+    # run nothing about it. See #1333.
+    gzip/test/*|gzip/lib/*|gzip/*.mdk|gzip/medaka.toml)
+      add 'gzip/test/*oracle' ;;
 
     # ── fixture/golden corpus change: run its ACTUAL consumers, not everything.
     # See _gates_for_fixture_dir above. A directory with zero discoverable
@@ -704,6 +750,44 @@ for f in $changed; do
   esac
 done
 
+# ── the IN-LANGUAGE suite (`make test`) is NOT a gate, so nothing above can reach it ──
+#
+# `$gates` is a set of `test/*.sh` scripts run through run_gates.sh. `make test` is a
+# different animal: it invokes `./medaka test <file>` directly on a handful of .mdk
+# modules, and it is a REQUIRED check of its own (`inlang`). So every arm above can
+# fire, every gate can pass, and the doctests of the very file you edited never run.
+#
+# That is not hypothetical — it is why this block exists. PR #1270 changed
+# compiler/types/registry.mdk; `make preflight` was run TWICE, including on the merged
+# tree, and could not see that the file's own doctests were red. The gate set it derives
+# (25 gates) is correct and none of them run a doctest. The break was a merge artifact
+# between two branches that were each green alone, so no pre-merge signal existed
+# anywhere except `make test` — the one thing the loop did not call.
+#
+# The file list is DERIVED from the Makefile's `test:` recipe, never re-listed here.
+# That matters more than the saved keystrokes: the Makefile's own comment instructs
+# "Add a line here for every call-site-free compiler module", so this list is expected
+# to GROW, and a copy here would silently stop covering whatever was added. Scoped to
+# the `./medaka test` lines only — the recipe's `sh test/diff_compiler_ported.sh` line
+# is a gate and already has arms in the table above.
+#
+# Cost: measured 0.5s for compiler/types/registry.mdk (144 doctests) on the dev box,
+# against a preflight that spends ~1m41s building ./medaka before it runs anything. It
+# adds ZERO gates — it is a separate step, like need_fixpoint — so the `would run N
+# gate(s)` count is unchanged by design.
+inlang_files=$(awk '/^test: medaka$/{f=1;next} f&&/^\t/{print} f&&!/^\t/{exit}' "$ROOT/Makefile" \
+  | sed -n 's|^	\./medaka test ||p')
+inlang_run=""
+for f in $changed; do
+  for _if in $inlang_files; do
+    [ "$f" = "$_if" ] || continue
+    # Only if it still exists — a DELETED module cannot be doctested, and `changed`
+    # lists deletions (same reasoning as the gate-self-run arm above, #337).
+    [ -f "$ROOT/$f" ] || continue
+    case " $inlang_run " in *" $f "*) ;; *) inlang_run="$inlang_run $f" ;; esac
+  done
+done
+
 # ── resolve gates → the ORACLES they actually need ───────────────────────────
 #
 # ⚠️ A PATTERN THAT MATCHES ZERO GATES IS AN ERROR, NOT AN EMPTY SET.
@@ -777,6 +861,14 @@ if [ -n "${PREFLIGHT_DRY:-}" ]; then
     for r in $full_reasons; do printf '  FULL      %s\n' "$r"; done
     printf '  (locally that means the 85 diff_compiler_* gates; in CI it means the whole suite.)\n'
   fi
+  if [ -n "$inlang_run" ]; then
+    # SURFACED IN DRY ON PURPOSE. AGENTS.md records that PREFLIGHT_DRY does NOT
+    # surface the forced fixpoint (that flag is read after this exit), and calls the
+    # resulting short gate list misleading. Do not repeat that here: a step the real
+    # run will perform must appear in the dry-run's account of the real run.
+    printf '── would also run the IN-LANGUAGE suite (`make test`; the `inlang` check) ─────\n'
+    for _if in $inlang_run; do printf '  INLANG    ./medaka test %s\n' "$_if"; done
+  fi
   if [ -n "$unmapped" ]; then
     printf '── %s path(s) the change→gate map has NO OPINION about ─────\n' \
       "$(printf '%s\n' $unmapped | grep -c .)"
@@ -785,7 +877,12 @@ if [ -n "${PREFLIGHT_DRY:-}" ]; then
   exit 0
 fi
 
-[ -n "$pats" ] || { echo "preflight: no gates map to these changes (docs/config only?) — nothing to run."; exit 0; }
+# ⚠️ `$inlang_run` is part of the "is there anything to do?" test, not just `$pats`.
+# A diff touching ONLY a module named in the Makefile's `test:` recipe derives no
+# gate pattern from some future arm layout, and exiting here would skip the one check
+# that can see it — reinstating, in this script, exactly the blind spot the block that
+# builds `$inlang_run` exists to close.
+[ -n "$pats" ] || [ -n "$inlang_run" ] || { echo "preflight: no gates map to these changes (docs/config only?) — nothing to run."; exit 0; }
 
 # ── LOCAL_SKIP: what THIS BOX declines to pay for. Not what the diff misses. ──
 #
@@ -939,17 +1036,37 @@ make -C "$ROOT" medaka >/dev/null 2>&1 || { echo "preflight: make medaka FAILED"
 # of them knew the rule. So now there is one: build_oracles.sh --for is the single source
 # of truth for "which oracles does this gate set need", and preflight calls it. Same
 # derivation, one implementation, cannot drift again.
-printf '── building the oracles these gates read ─────\n'
-if ! sh "$ROOT/test/build_oracles.sh" --for $pats; then
-  echo "preflight: oracle build FAILED"
-  exit 1
+rc=0
+
+# ⚠️ BOTH of these are guarded on `$pats` being NON-EMPTY, and that guard is not
+# defensive tidiness. `build_oracles.sh --for` with no pattern builds ALL 54 oracles
+# and `run_gates.sh` with no pattern runs ALL 84 gates — i.e. word-splitting an empty
+# `$pats` turns the narrowest possible diff into the two commands AGENTS.md most
+# explicitly forbids. That path became reachable the moment `$inlang_run` alone could
+# get us past the "nothing to run" exit above.
+if [ -n "$pats" ]; then
+  printf '── building the oracles these gates read ─────\n'
+  if ! sh "$ROOT/test/build_oracles.sh" --for $pats; then
+    echo "preflight: oracle build FAILED"
+    exit 1
+  fi
+
+  # ── run the targeted gates ─────────────────────────────────────────────────
+  echo
+  echo "── gates ─────────────────────────────────────────────────────"
+  sh "$ROOT/test/run_gates.sh" $pats || rc=$?
 fi
 
-# ── run the targeted gates ───────────────────────────────────────────────────
-echo
-echo "── gates ─────────────────────────────────────────────────────"
-rc=0
-sh "$ROOT/test/run_gates.sh" $pats || rc=$?
+# ── the in-language suite, for the modules `make test` names ─────────────────
+# Needs no oracle and no golden — `./medaka test` typechecks the file and runs its
+# doctests against the ./medaka just built above.
+if [ -n "$inlang_run" ]; then
+  echo
+  echo "── in-language suite (\`make test\` names these; the \`inlang\` required check) ──"
+  for _if in $inlang_run; do
+    "$ROOT/medaka" test "$ROOT/$_if" || rc=1
+  done
+fi
 
 # ── the fixpoint, for backend changes only ───────────────────────────────────
 if [ "$need_fixpoint" -eq 1 ]; then
@@ -1025,6 +1142,12 @@ cat <<EOF
 ── NOT RUN LOCALLY ───────────────────────────────────────────────
 $engines_line
 $([ "$need_fixpoint" -eq 1 ] || echo "  selfcompile_fixpoint       (not a backend change) — the \`soundness\` check runs it on every event; it is never narrowed.")
+$([ -n "$inlang_run" ] && echo "  make test                  PARTIAL — ran only the modules THIS diff touched ($(echo $inlang_run)).
+                             The \`inlang\` check runs the whole recipe, doctests of every
+                             module it names plus diff_compiler_ported." \
+                       || echo "  make test                  the in-language suite (doctests/props). No module this diff
+                             touches is named in the Makefile's \`test:\` recipe, so nothing
+                             here would run it; the \`inlang\` check runs it in full.")
   the other $remaining of $total_gates gates
 
   This preflight is a FILTER, not an authority. A green run here means the gates

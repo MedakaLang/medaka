@@ -1,0 +1,5 @@
+export interface Sizeable a where
+  size : a -> Int
+
+impl Sizeable String where
+  size s = 7

@@ -1,0 +1,6 @@
+-- The record half of the collided key `Plain`.  `px` is declared ONLY here, so
+-- selecting `ahold`'s row instead is loud.
+public export data Plain = { px : Int, shared : Int }
+
+export mkP : Plain
+mkP = Plain { px = 1, shared = 10 }

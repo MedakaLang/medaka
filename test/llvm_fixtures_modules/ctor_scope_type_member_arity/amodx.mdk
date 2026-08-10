@@ -1,0 +1,5 @@
+-- The module `entry.mdk` imports with the `T(..)` spelling.  Its `Box` has arity 1.
+public export data XA = Box Int
+
+export unXA : XA -> Int
+unXA (Box n) = n

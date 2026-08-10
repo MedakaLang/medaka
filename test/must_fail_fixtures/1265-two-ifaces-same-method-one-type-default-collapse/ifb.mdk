@@ -1,0 +1,8 @@
+-- #1265, interface B: a DIFFERENT interface name (`Greet`) declaring a method of
+-- the SAME bare name `speak`, with a different default body.  Per DICT-SEMANTICS
+-- §8 I4 a class is `(module, name)`, so `ifa::Speak` and `ifb::Greet` are two
+-- unrelated classes that merely share a method spelling; neither may observe the
+-- other's default (§5 / §5.1 M1).  B's default is the one that vanishes.
+export interface Greet x where
+  speak : x -> String
+  speak _ = "B-default"

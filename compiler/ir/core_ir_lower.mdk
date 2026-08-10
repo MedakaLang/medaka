@@ -33,6 +33,7 @@ import frontend.ast.{
   MethodDefault(..),
   ImplMethod(..),
   Route(..),
+  ifaceIdentity,
 }
 import ir.core_ir.{
   CExpr(..),
@@ -643,11 +644,11 @@ rewriteImplRP fo (CImplEntry n s (CImplTagged tag key iface ps pats body)) =
       ps
       (map (rewritePat fo) pats)
       (rewriteExprRP fo body))
-rewriteImplRP fo (CImplEntry n s (CImplDefault pats body)) =
+rewriteImplRP fo (CImplEntry n s (CImplDefault ifaceId pats body)) =
   CImplEntry
     n
     s
-    (CImplDefault (map (rewritePat fo) pats) (rewriteExprRP fo body))
+    (CImplDefault ifaceId (map (rewritePat fo) pats) (rewriteExprRP fo body))
 
 rewriteExprRP : List (String, List String) -> CExpr -> CExpr
 rewriteExprRP _ (CLit l) = CLit l
@@ -841,7 +842,7 @@ distinctImplKeysL (_::rest) method cap acc =
 
 hasDefaultL : List CImplEntry -> String -> Bool
 hasDefaultL [] _ = False
-hasDefaultL ((CImplEntry n _ (CImplDefault _ _))::rest) m = n == m
+hasDefaultL ((CImplEntry n _ (CImplDefault _ _ _))::rest) m = n == m
   || hasDefaultL rest m
 hasDefaultL (_::rest) m = hasDefaultL rest m
 
@@ -949,8 +950,8 @@ hoistClause keys (CClause pats body) = CClause pats (hoistExpr keys body)
 hoistImpl : List (String, String) -> CImplEntry -> CImplEntry
 hoistImpl keys (CImplEntry n s (CImplTagged tag key iface pos pats body)) =
   CImplEntry n s (CImplTagged tag key iface pos pats (hoistExpr keys body))
-hoistImpl keys (CImplEntry n s (CImplDefault pats body)) =
-  CImplEntry n s (CImplDefault pats (hoistExpr keys body))
+hoistImpl keys (CImplEntry n s (CImplDefault ifaceId pats body)) =
+  CImplEntry n s (CImplDefault ifaceId pats (hoistExpr keys body))
 
 -- the structural walk (mirrors rewriteExprRP), rewriting ONLY the gated CMethod
 -- occurrence; everything else recurses unchanged.
@@ -1191,27 +1192,60 @@ lowerImpls prog =
 -- the same way.  A per-driver `install*` call — the shape the other side tables
 -- use — can be FORGOTTEN in a new driver, and the failure mode of forgetting it
 -- is exactly the segfault this fixes.
--- one row per DECLARED impl: (iface, head tag, canonical impl key).
-ifaceImplHeadsRef : Ref (List (String, String, String))
+-- ── #1047: the row also carries the INTERFACE IDENTITY ──────────────────────
+-- The `iface` field is a BARE NAME, and two unrelated modules may each declare an
+-- interface spelled the same way.  `implOrigin` (`frontend/ast.mdk`, stamped by
+-- resolve's `fillIfaceOccOrigin` from the impl module's own interface scope) says
+-- WHICH `Speak` this impl is an impl of, so the row can answer the one question
+-- the untagged-default registry needs and could not previously ask: given the
+-- dispatch tag a default is being emitted for, whose interface is it?
+--
+-- ⚠️ It is a strict WIDENING of the row, not a re-keying: `ifaceImplRouteKeys` /
+-- `ifaceDeclHeadUnique` still match on the bare `iface` name exactly as before, so
+-- every route key and collision verdict — and therefore every byte of emitted IR
+-- on a program with no METHOD-name collision — is unchanged.  (⚠️ METHOD, not
+-- interface: the colliding interfaces' own names are irrelevant and may differ.)
+-- one row per DECLARED impl: (iface identity, iface, head tag, canonical impl key).
+ifaceImplHeadsRef : Ref (List (String, String, String, String))
 ifaceImplHeadsRef = Ref []
 
-export installIfaceImplHeads : List (String, String, String) -> Unit
+export installIfaceImplHeads : List (String, String, String, String) -> Unit
 installIfaceImplHeads t = setRef ifaceImplHeadsRef t
 
-export ifaceImplHeadTable : List Decl -> List (String, String, String)
+export ifaceImplHeadTable : List Decl -> List (String, String, String, String)
 ifaceImplHeadTable prog = flatMap ifaceImplHeadEntries prog
 
-ifaceImplHeadEntries : Decl -> List (String, String, String)
+ifaceImplHeadEntries : Decl -> List (String, String, String, String)
 -- #1037: matched arm-for-arm with `lowerDeclImpl`, which now unwraps `DAttrib` too.
 ifaceImplHeadEntries (DAttrib _ d) = ifaceImplHeadEntries d
-ifaceImplHeadEntries (DImpl { iface = ifaceName, tys = typeArgs, ... }) = [
-  (
-    ifaceName,
-    fromOption noneHeadTag (headTyconHead typeArgs),
-    implKeyOf ifaceName typeArgs None,
-  )
-]
+ifaceImplHeadEntries (DImpl { iface = ifaceName, implOrigin = o, tys = typeArgs, ... }) = [(ifaceIdentity o ifaceName, ifaceName, fromOption noneHeadTag (headTyconHead typeArgs), implKeyOf ifaceName typeArgs None)]
 ifaceImplHeadEntries _ = []
+
+-- #1047: the interface IDENTITIES of every declared impl whose head tag OR
+-- canonical key is [tag] — the reverse of `ifaceImplRouteKeys`.  The emitters'
+-- `defaultFor`/`defaultForW` use it to decide WHICH interface's default body a
+-- `@mdk_default_<method>_<tag>` wrapper must hold; see their own comments for why
+-- the answer is only consulted when two defaults share a METHOD name (the
+-- interfaces' own names are irrelevant and may differ freely).
+--
+-- ⚠️ A tag is NOT a function to one interface — one type routinely implements
+-- several (`impl Eq Dog` and `impl Debug Dog` both head at "Dog") — so this
+-- returns a LIST and the caller must intersect it with the candidate defaults'
+-- identities rather than taking the head.
+--
+-- ⚠️ AND THE INTERSECTION IS NOT ENOUGH, which is #1265 (still open).  When ONE type
+-- implements TWO interfaces that share a method name, this list contains BOTH
+-- identities, so BOTH candidate defaults survive the intersection and every caller
+-- falls back to first-match.  Not fixable here: `mdk_default_<method>_<tag>` has no
+-- interface component, so the two default bodies have one symbol between them.
+export ifaceIdsAtTag : String -> List String
+ifaceIdsAtTag tag = ifaceIdsAtTagGo tag ifaceImplHeadsRef.value
+
+ifaceIdsAtTagGo : String -> List (String, String, String, String) -> List String
+ifaceIdsAtTagGo _ [] = []
+ifaceIdsAtTagGo tag ((ifaceId, _, t, k)::rest)
+  | t == tag || k == tag = ifaceId :: ifaceIdsAtTagGo tag rest
+  | otherwise = ifaceIdsAtTagGo tag rest
 
 -- #1036: the ROUTE KEY each declared impl of [iface] is dispatched under at run
 -- time, in declaration order (the caller dedups — `ifaceTags` already runs the
@@ -1223,9 +1257,9 @@ ifaceImplHeadEntries _ = []
 export ifaceImplRouteKeys : String -> List String
 ifaceImplRouteKeys iface = ifaceRouteKeysGo iface ifaceImplHeadsRef.value
 
-ifaceRouteKeysGo : String -> List (String, String, String) -> List String
+ifaceRouteKeysGo : String -> List (String, String, String, String) -> List String
 ifaceRouteKeysGo _ [] = []
-ifaceRouteKeysGo iface ((i, tag, key)::rest)
+ifaceRouteKeysGo iface ((_, i, tag, key)::rest)
   | i == iface = declRouteKey tag key (ifaceDeclHeadUnique i tag) :: ifaceRouteKeysGo iface rest
   | otherwise = ifaceRouteKeysGo iface rest
 
@@ -1242,9 +1276,9 @@ export ifaceDeclHeadUnique : String -> String -> Bool
 ifaceDeclHeadUnique iface tag =
   listLen (declKeysAtHead ifaceImplHeadsRef.value iface tag []) <= 1
 
-declKeysAtHead : List (String, String, String) -> String -> String -> List String -> List String
+declKeysAtHead : List (String, String, String, String) -> String -> String -> List String -> List String
 declKeysAtHead [] _ _ acc = acc
-declKeysAtHead ((i, t, k)::rest) iface tag acc
+declKeysAtHead ((_, i, t, k)::rest) iface tag acc
   | i == iface && t == tag && not (contains k acc) =
     declKeysAtHead rest iface tag (k::acc)
   | otherwise = declKeysAtHead rest iface tag acc
@@ -1266,8 +1300,11 @@ lowerDeclImpl : List ((String, String), List Int) -> Decl -> List CImplEntry
 -- same shape and silently answered from the interface default instead.
 lowerDeclImpl disp (DAttrib _ d) = lowerDeclImpl disp d
 lowerDeclImpl disp (DImpl { iface = ifaceName, tys = typeArgs, methods, ... }) = map (lowerImplMethod disp ifaceName typeArgs) methods
-lowerDeclImpl _ (DInterface { typarams = typeParams, methods, ... }) =
-  flatMap (lowerDefault typeParams) methods
+-- #1047: the default carries the DECLARING interface's identity, read straight off
+-- `DInterface.ifaceOrigin` (resolve stamps it in `elaborateModules`' preamble —
+-- `stampGraphTyOrigins`, the seam the `run` path and the separate `medaka_emitter`
+-- BUILD process share, so both engines see the same identity or neither does).
+lowerDeclImpl _ (DInterface { name = ifaceName, ifaceOrigin = o, typarams = typeParams, methods, ... }) = flatMap (lowerDefault (ifaceIdentity o ifaceName) typeParams) methods
 lowerDeclImpl _ _ = []
 
 lowerImplMethod : List ((String, String), List Int) -> String -> List Ty -> ImplMethod -> CImplEntry
@@ -1280,9 +1317,9 @@ lowerImplMethod disp ifaceName typeArgs (ImplMethod mname pats body) =
     (tyvarsInArgs typeArgs)
     (CImplTagged tag key ifaceName positions pats (lower body))
 
-lowerDefault : List String -> IfaceMethod -> List CImplEntry
-lowerDefault _ (IfaceMethod _ _ None) = []
-lowerDefault typeParams (IfaceMethod mname _ (Some (MethodDefault pats body))) = [CImplEntry mname (listLen typeParams) (CImplDefault pats (lower body))]
+lowerDefault : String -> List String -> IfaceMethod -> List CImplEntry
+lowerDefault _ _ (IfaceMethod _ _ None) = []
+lowerDefault ifaceId typeParams (IfaceMethod mname _ (Some (MethodDefault pats body))) = [CImplEntry mname (listLen typeParams) (CImplDefault ifaceId pats (lower body))]
 
 -- ── returns-self table (native backend: method-call RESULT-type inference) ───
 -- Per (interface, method): does the method's RESULT type mention an interface
@@ -1447,7 +1484,7 @@ methodLevelConstraintIfaces typarams (TyEffect _ _ t) =
 methodLevelConstraintIfaces _ _ = []
 
 constraintIfaceIfMethodLevel : List String -> Constraint -> List String
-constraintIfaceIfMethodLevel typarams (Constraint ifaceName args)
+constraintIfaceIfMethodLevel typarams (Constraint { constraintHead = ifaceName, constraintArgs = args })
   | constraintArgsMentionNonParam typarams args = [ifaceName]
   | otherwise = []
 

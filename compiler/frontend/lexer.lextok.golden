@@ -130,9 +130,6 @@ PIPE
 UPPER "TData"
 NEWLINE
 PIPE
-UPPER "TRecord"
-NEWLINE
-PIPE
 UPPER "TInterface"
 NEWLINE
 PIPE
@@ -539,11 +536,6 @@ IDENT "tokenToString"
 UPPER "TData"
 EQUAL
 STRING "DATA"
-NEWLINE
-IDENT "tokenToString"
-UPPER "TRecord"
-EQUAL
-STRING "RECORD"
 NEWLINE
 IDENT "tokenToString"
 UPPER "TInterface"
@@ -1076,11 +1068,6 @@ IDENT "describeToken"
 UPPER "TData"
 EQUAL
 STRING "`data`"
-NEWLINE
-IDENT "describeToken"
-UPPER "TRecord"
-EQUAL
-STRING "`record`"
 NEWLINE
 IDENT "describeToken"
 UPPER "TInterface"
@@ -1869,11 +1856,6 @@ IDENT "keywordOrIdent"
 STRING "data"
 EQUAL
 UPPER "TData"
-NEWLINE
-IDENT "keywordOrIdent"
-STRING "record"
-EQUAL
-UPPER "TRecord"
 NEWLINE
 IDENT "keywordOrIdent"
 STRING "interface"

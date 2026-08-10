@@ -1,0 +1,13 @@
+-- #1288 CONTROL: identical to main.mdk except it imports `midctl` (single import,
+-- `p.Same` only) instead of `mid` (the two-way wildcard merge). That is the ONE
+-- variable: whether the `Same` this file's `impl` provides was ever ambiguous
+-- upstream. Must print 1 at exit 0. If this breaks, plain re-export or `impl`
+-- completeness broke -- not #1288.
+import midctl.{Same, pmth}
+
+data P a = MkP a
+
+impl Same P where
+  pmth p = 1
+
+main = println (pmth (MkP 1))

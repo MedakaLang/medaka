@@ -1,0 +1,6 @@
+-- #1256's colliding module: a same-named record whose `fld` is a `Float`.  The entry
+-- imports only `zrf` from here.
+public export data Cfg = { fld : Float }
+
+export zrf : Int -> Int
+zrf n = n

@@ -1,0 +1,30 @@
+-- #1111 A-2.6, drains #1259 (S1, import-spelling-dependent FALSE REJECT): two
+-- unrelated modules each declare a constructor spelled `Dup`, and this unit imports
+-- `A1` and its `Dup` BY NAME plus `zmodd`'s unrelated `zdf`.
+--
+-- Expected output, derived by hand BEFORE capture: `Dup` here can only mean
+-- `amodd.Dup : Int -> A1` — the only `Dup` this file brings into scope — so `v : A1`
+-- agrees with it, `unA1 v` is `5`, and `zdf 1` is `1`.
+--
+-- Pre-fix (verified first-hand on a binary built from 40756bea) this exact file was
+-- REJECTED with `Type mismatch: A1 vs Z1`, naming a type it never mentions, while the
+-- SAME program spelled `import amodd.{A1(..)}` was accepted.  That spelling split is
+-- the tell: both spellings bring the same `Dup` into scope, so the defect was the
+-- bare-name keying of the ctor env plus an overlay that reached only `(..)`, not
+-- whether the right `Dup` was visible.
+--
+-- 🚨 This is the `exit 1 → exit 0` direction, so the new acceptance is untested by
+-- construction — no pre-existing fixture could fail on it.  The mirrors that must
+-- STILL be rejected are pinned as
+-- `test/analyze_project_fixtures/1111_a26_genuine_ctor_rejects/` (no collision) and
+-- `.../1111_a26_collision_rejects/` (collision present).
+import amodd.{A1, Dup, unA1}
+import zmodd.{zdf}
+
+v : A1
+v = Dup 5
+
+main : <IO> Unit
+main =
+  let _ = putStrLn (intToString (unA1 v))
+  putStrLn (intToString (zdf 1))

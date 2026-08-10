@@ -16,7 +16,7 @@ coherence prelude-exclusion rule). This file carries only what the consolidation
 
 ---
 
-## 🚦 Standing gate: five questions before fixing ANY typechecker bug
+## 🚦 Standing gate: six questions before fixing ANY typechecker bug
 
 This is keyed to the **`ws:typecheck` label, not to a skill**, and it fires first because it
 gates everything else in this file. `harden-typechecker` is narrower than it looks — a fix that
@@ -24,7 +24,7 @@ threads through resolve/eval/desugar routes to `add-language-feature` instead (`
 a gate parked in a skill would silently miss that fix. Keying it to the label instead of a skill
 closes that gap.
 
-**Before fixing ANY typechecker bug, answer these five questions IN WRITING on the issue or PR:**
+**Before fixing ANY typechecker bug, answer these six questions IN WRITING on the issue or PR:**
 
 1. Does this bug represent an **architectural issue** or simply an **implementation gap**?
 2. Is there a **formal semantics** outlining the way this should behave? If yes, why aren't we
@@ -35,6 +35,9 @@ closes that gap.
    there a **single fix that resolves the entire class**?
 5. What is the **most ideal principled way** to resolve this bug so that the typechecker becomes
    more robust and properly architected?
+6. **If the fix WIDENS acceptance** (turns a reject into an accept — drains a false-REJECT
+   diagnostic), what was the reject keeping programs AWAY from downstream, and have you taken
+   newly-accepted programs all the way to the **built binary, executed** — not `check`, not `run`?
 
 **Why this exists.** `compiler/types/typecheck.mdk` is the most fragile, highest-consequence file
 in the tree, and its bug history is dominated by fixes that *relocated* a defect rather than
@@ -45,13 +48,40 @@ removing it:
   one-slot-per-name property `nsMethod` had, so an imported *type* sharing the interface's name
   now steals the slot (#1044). #1070's audit calls this out by name: *"relocating the lookup is
   not a fix."*
-- **#674's fix covered only ONE import spelling.** `import amod.{A1(..)}` resolves correctly;
-  `import amod.{A1, Dup}` still gets the wrong type, because the patch matched
-  `ctorMemberTypeName` against the `(..)` import flag rather than fixing the underlying bare-name
-  keying (#1070).
+- **#674's fix covered only ONE import spelling, and widening it moved the boundary rather
+  than removing it.** The original patch matched the member's spelling against the `(..)`
+  import flag instead of fixing the underlying bare-name keying, so `import amod.{A1(..)}`
+  resolved correctly while `import amod.{A1, Dup}` got the wrong type (#1070). #1111 A-2.6
+  widened the rule to any member that *names a constructor* (`memberOverlayDecl`) and scoped
+  the pool lookup by declaration identity (`declOwnedBy`), which genuinely drained #1256 and
+  #1259 — **and the same shape immediately reappeared one hop out**, through a re-export
+  (`export import armod.{Cfg}`), where the decl's origin names the *declaring* module and the
+  import path names the *re-exporter*, so the identity test misses (#1283). Widening a
+  spelling-matched rule is still not the same as keying the table correctly.
+  ⚠️ A-2.6 also shows the cost of getting the *layering* wrong while the keying is right: its
+  first cut registered the import overlay **after** the module's own `prog0`, so an imported
+  decl's constructors out-ranked locally-declared ones and `import json.{Json, JNull}` plus a
+  local `data Tok = JString String` was rejected. Ask of any per-module overlay not only
+  *"is the key scoped?"* but *"what does it out-rank, and should it?"*.
 - **The P0-9 cross-module constructor fix patched `compiler/eval/eval.mdk` and left its parallel
   driver `compiler/ir/core_ir_eval.mdk` broken for months** — documented in `AGENTS.md`'s
   `evalModules`/`cevalModules` trap.
+- **#1381 (issue #1319 unit 3) drained a false REJECT and created #1382 (S0) + #1383 (S1).** The
+  front end became identity-correct for a record-namespace collision (`Type mismatch: Cfg vs Cfg`
+  no longer fires on legal programs) — every gate green: 29-gate preflight, `selfproc` 16 ok,
+  `engines` 528/0, `must_fail` 69/69, LEG A additive-only, CI 12/12. The back end still resolves
+  field layout by **bare name**, and `inferFieldAccess` (`compiler/types/typecheck.mdk:6440`)
+  `setRef`s the receiver's *unmangled* head name onto the AST node the emitter reads. Before the
+  fix, the selected `RecordInfo` **was** `lookupRecordByName r` — key and stamp agreed by
+  construction. After it, they can name different records: `check` 0, `medaka run` correct,
+  **built binary silently wrong** (plus a segfault variant and a destructive-write variant).
+  `diff_compiler_engines` would have redded instantly — eval and native resolve fields by name at
+  *run time*, so they're structurally immune to the layout bug and would have disagreed. It
+  didn't catch this because the new fixtures gave the colliding records single fields, so both
+  layouts picked index 0 and the wrong pick was unobservable: **the gate existed, the input
+  didn't.** Loud → silent is a severity increase even though the old behavior (a spurious reject)
+  was also wrong — see `AGENTS.md`'s "fix that makes a defect QUIETER" section, of which this is
+  a typecheck-specific instance.
 
 **Application notes:**
 
@@ -63,6 +93,31 @@ removing it:
 - **Concrete discriminator for questions 1 and 3:** does the fix change the KEY or the
   REPRESENTATION, or does it merely add a guard at ONE READ SITE? The second masquerading as the
   first is this file's signature failure mode.
+- **Concrete discriminator for question 6 — does typecheck now DECIDE by a richer key than the
+  one it STAMPS into the AST?** If the fix makes typecheck's *decision* sharper (e.g. resolve a
+  collision by full module-qualified identity) but the value it writes into a `Ref`/annotation
+  for a later stage to read is still the old, coarser key (e.g. the bare unmangled name), the
+  stamp is stale by construction and front end/back end now disagree on cases the old, coarser
+  decision made unreachable. Grep every `setRef`/annotation write the changed function makes and
+  check its key matches the one just used to decide.
+- **Question 6's verification checklist, concretely:**
+  - Take newly-accepted programs to `medaka build` and **execute the binary**. `medaka run` and
+    `medaka build` typecheck with the same binary and share the whole front end (`AGENTS.md`), so
+    they are not two independent observations of anything at or before typecheck — only the
+    built binary exercises the back end's read of the stamp.
+  - Treat the new SOMETHING as **untested by construction**: every pre-existing fixture covered
+    the reject (empty/absent) case, so no existing fixture can fail on a wrong new accept. Build
+    the test from the spec, not from the diff or from coverage.
+  - Check whether your new fixtures can even **express** the failure. A collision fixture with
+    single-field records can't show a field-order bug — both layouts pick index 0. Prefer
+    fixtures with ≥2 differently-ordered fields per colliding shape.
+  - `eval`/`run` agreeing with native is **not** corroboration for a back-end-only defect: a
+    tree-walker can be structurally immune to a bug that only a compiled representation exposes
+    (here, both resolve fields by name at run time) — a known-wrong oracle in the *reassuring*
+    direction, not just the usual wrong-in-the-alarming direction.
+  - Permute what the mechanism actually reads, not what's convenient — #1381's order-dependence
+    was on module-name **sort** order, not import-clause order, so a permutation differential
+    over import clauses would have found nothing.
 - **Question 2 has a real answer path.** Medaka has formal specs for several subsystems —
   `docs/spec/DICT-SEMANTICS.md`, `docs/spec/EFFECTS-SEMANTICS.md`, `docs/spec/SHADOW-SEMANTICS.md`,
   `docs/spec/LAYOUT-SEMANTICS.md`. "No formal semantics exists" is therefore a **finding**, not an
@@ -172,6 +227,104 @@ and the `perf-hunt` skill.
 ### 10. One compiler-source PR in flight; stage commits by path
 Goldens are re-cut from source, never text-merged — two typecheck branches always fight over the
 same golden files. And never `git add -A` (see `.claude/workstreams/HARNESS.md`).
+
+### 11. "Will this key change fail SILENTLY?" has NO general answer — it depends on GATE vs PAYLOAD
+Two arguments in this arc were built on *predicted silence*, and the prediction was backwards.
+
+- A **GATE** table is consulted for **permission**. Its value is often `Unit`; a missed lookup means
+  *the check vanishes* — genuinely silent. `universeRegisteredIfacesRef` / `ifaceRegistered` is one.
+- A **PAYLOAD** table is consulted for **content**. A missed lookup means *"no impl exists"* — which
+  is a **reject**, i.e. deafening. `oblIfaceKey` / `ImplUniverse` is one.
+
+Measured (2026-08-09, the P1 experiment on #1112): identity-keying `IE` while `Predicate` stayed bare
+did **not** silently switch obligations off — it made them **universally unsatisfiable**. The prototype
+compiler rejects its own prelude (`No impl of Eq for Int`), `make check-self` FAILS, and goldens moved
+61/61 in a behaviour-driven corpus. `oblIfaceKey`'s own in-source ledger predicts the opposite polarity
+and **owes a correction**; it reasoned from a gate-shaped sibling while describing a payload-shaped
+table.
+
+⚠️ The two can nest: `checkUndeterminedObligation`'s RULE 3 is guarded on `implCountForIfaceU >= 2`
+with `| otherwise = ()`, so a missed count reads 0 and `T-AMBIGUOUS-INSTANCE` stops emitting — a
+genuine gate-shaped sub-case **inside** the payload table, which is presumably how they got conflated.
+
+**Before asserting a key change will be caught (or missed), classify the table.** And note the effect
+can **partition by origin supply**: origin-carrying impls are written `TkIdent`, read `TkBare`, and
+vanish, while flat-file user impls carry `OriginUnresolved`, stay `TkBare` on both sides, and are
+unaffected — so a probe drawn only from the flat corpus reports "no effect."
+
+### 12. Derive a table family by SHAPE, not by a NAMING CONVENTION
+#1070's family is defined by a shape — *a flat table keyed by a bare `String`, populated across module
+boundaries, last-write-wins, silent on loss*. Every issue in the arc enumerated it with a **prefix**
+grep on `universe*`. Those are not the same set, and multiple "the set is complete" claims rest on the
+prefix.
+
+Re-derived 2026-08-09: **~20 shape-members sit outside both prefix greps**, in `types/`
+(`DriverState`), `backend/`, `ir/` and `eval/` — including `argDispatchIdxRef`, and
+`methodIfaceTableRef` / `methodIfaceIndexRef` in `backend/emit_support.mdk`, which **both backends
+read**. A `types/`-anchored enumeration structurally cannot reach them.
+
+The leverage is that `OrdMap a = Map String a` (`compiler/support/ordmap.mdk`), so *bare-`String`-keyed*
+is a **type** fact and therefore greppable. 🚨 **And the obvious shape grep is itself a trap:** anchoring
+on `^ident :` silently drops every `export`-prefixed declaration — measured **65 rows anchored vs 75
+prefixed**, and the 10 missed include `methodIfaceTableRef` and `methodIfaceIndexRef` themselves. The
+derivation that fixes a scope error can re-commit it one level down. Full command + graded table: the
+2026-08-09 audit comment on #1070.
+
+### 13. A FALSE REJECT can be LOAD-BEARING — draining one exposes what it was hiding
+Three instances in one day (2026-08-09), which is why this is a trap and not a footnote:
+
+- **#1424** — landing the re-export arm without the provenance filter propagated a poisoned row one hop
+  and turned a legal 4-module program into a three-verb reject. The two halves were coupled *through
+  the table*, not through the function they share; each is measured-unsafe alone, in opposite
+  directions.
+- **PR #1455 round 1** — draining #1383's false reject let collider-bearing programs reach a
+  **pre-existing** layout bug: clean `check`, wrong built binary, and in one variant a **SIGSEGV**.
+  Loud → silent, the severity increase the ladder warns about.
+- **PR #1455's extension** — fixing that properly *narrowed the language* (`T-FIELD-VARIANT-CONFLICT`),
+  and in doing so revealed that the arm-(a) spelling, both single-file spellings and the whole
+  record-**update** path had been silently wrong at exit 0 all along.
+
+**Ask of any accept-widening fix: what was this reject keeping programs AWAY from?** The answer is
+often a defect nobody has met, because nothing could reach it. See the standing gate's Q6, and note
+Q6 has an **inverse** for narrowing fixes: the hazard becomes false rejects on legal programs.
+
+### 14. `MEDAKA_STRICT=1` makes a two-binary differential IMPOSSIBLE from one tree
+The baseline binary hard-exits 1 on the staleness check, so every cell reads "fail" and the
+differential looks catastrophic. An agent lost a cycle to this reading 15/15 cells as failures.
+
+**Remedy:** extract a pristine tree with `git archive` and point `MEDAKA_ROOT` at it. Also confirm
+`MEDAKA_ROOT` / `MEDAKA_EMITTER` are not exported in your shell — either one silently crosses the arms
+(a binary resolves its emitter and stdlib from `exeDir`, which is what makes the comparison sound in
+the first place; `AGENTS.md`, the two-arm differential note).
+
+### 15. 🚨 A local `diff_compiler_engines` run is a TWO-engine population unless you set `MEDAKA_REQUIRE_WASM=1`
+The wasm arm **silently degrades off** when its toolchain is unavailable — the gate still prints a
+total and still exits 0. So a local *"exit 0, 541 clean, 0 regressions"* is a **T1-only** number that
+reads exactly like three-engine coverage. CI grades three and reported 540 + **1 regression on the same
+commit** — a different population, not a contradiction.
+
+**This cost real certification error twice in one PR (#1455):**
+
+1. An author reported engines green from a local run and pushed; CI redded on the cell they had just
+   added.
+2. Worse, and this is the one to remember: round 2 carved out an exemption — *"where all constructors
+   place the field at the same offset the stamp is immaterial"* — and pinned a fixture (`pB`) as a
+   working program the rule **must not break**. **On WasmGC that program already trapped**
+   (`illegal cast`) at the merge base. The exemption is true of LLVM and **false of WasmGC**, because a
+   record there is a `struct` type **per constructor**: the stamp names a TYPE and the access is a
+   **cast**, so identical offsets are no protection at all. A two-engine measurement had certified a
+   carve-out that blessed programs which trap on one of the two shipping backends.
+
+**Rules:**
+- **Always `MEDAKA_REQUIRE_WASM=1` before reporting an engines number**, and say in the PR body which
+  invocation produced it. An unlabelled engines figure should be assumed two-engine.
+- **A "must not move" row proven on two engines is not proven.** Before carving an exemption out of a
+  correctness rule, check the carve-out against **all three** engines — the exemption is exactly where
+  a backend-specific representation difference hides.
+- **LLVM and WasmGC do not share a record representation.** Reasoning about field *offsets* is
+  LLVM-shaped; WasmGC dispatches by struct type and cast. Any rule phrased in terms of offsets needs a
+  wasm answer stated separately. This generalises past this arc — see `AGENTS.md`'s note that wasm was
+  never wrong on the fallthrough class *because it already had the design LLVM lacked*.
 
 ---
 

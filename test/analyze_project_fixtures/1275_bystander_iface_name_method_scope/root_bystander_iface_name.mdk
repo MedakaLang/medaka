@@ -1,0 +1,28 @@
+-- #1111 A-2.5b (#1275): an unrelated BYSTANDER module that happens to declare an
+-- interface with the same NAME and the same METHOD NAME must not be able to decide
+-- this module's obligation.  This is AGENTS.md's 'program-global table keyed by
+-- something with no scope' hazard, in the table Stage A-2 exists to de-collide.
+--
+-- EXPECTED VALUE DERIVED BY HAND: `msmth` reaches this module ONLY through
+-- `msmid`, which selectively re-exports `msifb`'s.  `import msifa.{MSIA}` selects
+-- the interface, not the method.  `msbys` is imported by nobody this module can
+-- see.  The occurrence means `MSIB.msmth`; `Blob` implements `MSIA` only.  `check`
+-- must report exactly one error:
+--
+--   No impl of MSIB for Blob; write an 'impl MSIB Blob'.
+--
+-- 🚨 BEFORE A-2.5b this checked CLEAN at exit 0 and printed 1 — `MSIA`'s body —
+-- while the SAME graph with `msbys`'s interface renamed to `MSIZ` (one identifier,
+-- in a module this file neither imports nor mentions) rejected correctly.  A-2.5's
+-- witness (b) compared a bare interface NAME, so `msbys`'s `MSIB` satisfied it for
+-- the same import path, the two-matches guard fired, and the override declined to
+-- the last-write-wins floor.
+import msmid.{MSIB, msmth}
+import msifa.{MSIA}
+
+public export data Blob = Blob
+
+export impl MSIA Blob where
+  msmth b = 1
+
+main = println (msmth Blob)

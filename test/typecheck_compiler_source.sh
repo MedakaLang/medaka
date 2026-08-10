@@ -224,9 +224,26 @@ compiler/frontend/parser.mdk"
 # as "no claim"). The comment above already licenses this -- "the module that
 # CONSUMES it in a pattern may name it" -- the mechanism just cannot see the
 # difference. It mints nothing: it is a probe with no `TyCon` construction anywhere.
+#
+# ⚠️ types/typecheck.mdk IS on this list as of #1110 unit D, and it is the one entry
+# that mints the sentinel at a layer this ratchet's prose was not written for. Its
+# mentions are the `Mono` layer, NOT `Ty`: `tconUnresolved n = TCon n
+# OriginUnresolved` and its two callers. `Mono` has no stamping pass and therefore no
+# immunity rule to make a wrong first write permanent, so the hazard the paragraph
+# above describes does not transfer -- what transfers is the weaker requirement that
+# a site claiming "no identity available" be deliberate and few.
+#
+# 🚨 BUT A FILENAME ENTRY EXEMPTS THE WHOLE 20k-LINE FILE, INCLUDING ANY FUTURE
+# `Ty`-LAYER `TyCon { …, tyConOrigin = OriginUnresolved }` LITERAL IN IT -- which is
+# precisely the bypass this ratchet's FAIL message exists to catch. Nothing is masked
+# today, and rather than accept the forward-looking softening the exemption is made
+# LINE-GRAINED by the companion check just below: the `OriginUnresolved`-bearing lines
+# of typecheck.mdk are pinned by text, so a `Ty`-layer literal added there fails even
+# though the filename is allow-listed.
 originun_allowed="compiler/entries/origin_agreement_main.mdk
 compiler/frontend/ast.mdk
-compiler/frontend/resolve.mdk"
+compiler/frontend/resolve.mdk
+compiler/types/typecheck.mdk"
 tyconun_actual=$(git -C "$ROOT" grep -lw -- 'tyConUnresolved' -- '*.mdk' 2>/dev/null \
   | while IFS= read -r f; do
       # a file counts only if it mentions the producer OUTSIDE a comment line
@@ -292,6 +309,46 @@ if [ "$declun_actual" != "$declun_allowed" ]; then
 fi
 echo "  ok: $(printf '%s\n' "$declun_actual" | grep -c .) decl-layer producer file(s)"
 
+# The INTERFACE-OCCURRENCE peers (#1110 PR B): `constraintUnresolved` /
+# `requireUnresolved` / `superUnresolved` / `dImplUnresolved` mint a node that NAMES
+# an interface at a use site (`=>` predicate, `requires`, superinterface, `impl`
+# head) whose module identity has not been acquired. Same hazard, same remedy as
+# the two ratchets above: a POST-resolve call re-synthesises the node from its
+# projected fields and silently resets an identity resolve already stamped, and the
+# immunity rule makes the reset permanent. Rebuild with a record UPDATE
+# (`Constraint { c | constraintArgs = … }`, `DImpl { d | methods = … }`).
+#
+# Deliberately a SEPARATE list from `declun_allowed` rather than four more names in
+# its alternation: an `impl` is not a DECLARATION of the interface it names, so
+# `DImpl` mints no decl-layer carrier and must never grow a `declHeadOf` arm (see
+# that function's own comment in compiler/entries/origin_agreement_main.mdk).
+# Merging the two lists is how that distinction gets lost.
+occun_allowed="compiler/frontend/ast.mdk
+compiler/frontend/desugar.mdk
+compiler/frontend/parser.mdk"
+# ⚠️ Inherits #1222 exactly as the two ratchets above do: `git grep` sees only
+# TRACKED files. Same construction on purpose, so all three move together.
+occun_actual=$(git -C "$ROOT" grep -lwE -- 'constraintUnresolved|requireUnresolved|superUnresolved|dImplUnresolved' -- '*.mdk' 2>/dev/null \
+  | while IFS= read -r f; do
+      if grep -wE 'constraintUnresolved|requireUnresolved|superUnresolved|dImplUnresolved' "$ROOT/$f" \
+         | grep -qvE '^[[:space:]]*--'; then
+        echo "$f"
+      fi
+    done | sort)
+if [ "$occun_actual" != "$occun_allowed" ]; then
+  echo "FAIL: the #1110 interface-occurrence unresolved-producer set changed."
+  echo "  allowed (PRE-RESOLVE construction only):"
+  printf '    %s\n' $occun_allowed
+  echo "  actual:"
+  printf '    %s\n' $occun_actual
+  echo "  A post-resolve call to one of these RESETS an acquired interface-occurrence"
+  echo "  identity, and the immunity rule makes that permanent. Rebuild with a record"
+  echo "  UPDATE (\`Constraint { c | constraintArgs = … }\`) instead. If the new site"
+  echo "  really is pre-resolve, add it to the list above and say why in the PR."
+  exit 1
+fi
+echo "  ok: $(printf '%s\n' "$occun_actual" | grep -c .) occurrence-layer producer file(s)"
+
 originun_actual=$(git -C "$ROOT" grep -lw -- 'OriginUnresolved' -- '*.mdk' 2>/dev/null \
   | while IFS= read -r f; do
       if grep -w 'OriginUnresolved' "$ROOT/$f" | grep -qvE '^[[:space:]]*--'; then
@@ -312,6 +369,240 @@ if [ "$originun_actual" != "$originun_allowed" ]; then
 fi
 echo "  ok: $(printf '%s\n' "$originun_actual" | grep -c .) OriginUnresolved constructor site(s)"
 
+# The LINE-GRAINED half of the typecheck.mdk entry above (see its comment). The
+# filename allow-list cannot tell the `Mono` layer from the `Ty` layer inside one
+# 20k-line file; this pins the exact lines, so a `Ty`-layer
+# `TyCon { …, tyConOrigin = OriginUnresolved }` literal added to typecheck.mdk fails
+# here even though the file is allow-listed.
+# ⚠️ ONE OF THE TWO LINES IS AN ELIMINATOR ARM, NOT A CONSTRUCTION.
+# `originPhrase OriginUnresolved = …` (#1111 A-2.10) renders an origin into the
+# user-facing text of the same-spelling type-mismatch hint. It CONSTRUCTS nothing —
+# `OriginUnresolved` is on its LEFT-hand side — and it exists to keep `originPhrase`
+# TOTAL over the three inhabitants rather than closing it with a wildcard, which is
+# the shape `stampTyHead`'s own comment argues for ("a fourth inhabitant should be
+# MADE TO SHOW UP here"). The arm is unreachable from its only caller (a conflict
+# requires two PRESENT identities, so `firstIdConflict` never hands it an absent
+# one); it is answered rather than omitted so that a future caller with a laxer
+# precondition gets prose instead of a non-exhaustive-match warning. Listed here
+# rather than the grep widened, per the remedy this ratchet's siblings state.
+tc_originun_allowed="originPhrase OriginUnresolved = \"an unknown module\"
+tconUnresolved n = TCon n OriginUnresolved"
+tc_originun_actual=$(grep -w 'OriginUnresolved' "$ROOT/compiler/types/typecheck.mdk" \
+  | sed 's/^[[:space:]]*//' \
+  | grep -vE '^--' \
+  | LC_ALL=C sort)
+if [ "$tc_originun_actual" != "$tc_originun_allowed" ]; then
+  echo "FAIL: the OriginUnresolved lines of compiler/types/typecheck.mdk changed."
+  echo "  allowed (the Mono-layer mint, and nothing else):"
+  printf '%s\n' "$tc_originun_allowed" | sed 's/^/    /'
+  echo "  actual:"
+  printf '%s\n' "$tc_originun_actual" | sed 's/^/    /'
+  echo "  typecheck.mdk is on \`originun_allowed\` for its \`Mono\`-layer mint ONLY."
+  echo "  A \`Ty\`-layer literal here bypasses \`tyConUnresolved\` and its ratchet; a"
+  echo "  NEW Mono-layer sentinel site needs the same justification the two existing"
+  echo "  callers carry at the call. Route it, or add the line here and say why."
+  exit 1
+fi
+echo "  ok: 1 Mono-layer OriginUnresolved line in typecheck.mdk, no Ty-layer literal"
+
+# ── #1110 unit D: the `Mono.TCon` MINT SET ──────────────────────────────────
+# `Mono.TCon` (compiler/types/typecheck.mdk) carries a `TyConOrigin` — the GOAL side
+# of a dispatch key, the peer of the impl side's `headTyconTy`. Unlike the `Ty` layer
+# it has NO stamping pass, so there is no `stampTyHead`-style first-write filter for
+# its correctness to rest on: identity must be right AT CONSTRUCTION.
+#
+# "Every construction site is individually right" is a materially weaker property
+# than a single filter, so the source does not rely on it. Every application of the
+# constructor is funnelled through FOUR one-line mints, each named for the identity
+# class it claims, and this ratchet pins that there are no others. What the pin buys
+# is that a reviewer grades four lines plus the choice of helper at each call, rather
+# than re-deriving what a bare third argument meant at ~90 sites.
+#
+# HOW IT TELLS A CONSTRUCTION FROM A PATTERN: a pattern that does not need the origin
+# leaves its slot `_`, and an occurrence of `TCon` whose origin slot is anything else
+# is a construction OR a pattern that binds the origin. ⚠️ The second half of that
+# disjunction used to read "nothing reads the origin field yet, so every PATTERN
+# leaves its slot `_`" — that stopped being true at #1111 A-2.2 (`headTyconMono`) and
+# is thoroughly false since A-2.10, which made SIX comparisons read it. The filter is
+# unchanged and still correct; only its rationale was overstated. The allowlist below
+# is therefore the audit: four mints plus every origin-binding pattern, each listed.
+# ⚠️ Do NOT write the pattern COUNT into this prose. The list is the count, and the
+# label the gate prints derives it — an encoded number here is exactly the kind of
+# fact that was already falsified once by the next unit to touch this file.
+#
+# 🚨 IT FILTERS PER OCCURRENCE, NOT PER LINE, AND THE DIFFERENCE IS A PROVEN HOLE.
+# The first cut of this ratchet dropped any LINE matching the pattern shape, so a line
+# carrying BOTH a pattern and a construction vanished whole. Measured against the head
+# blob at the time:
+#   baseline                                        -> 5 lines (decl + 4 mints)
+#   + `rogue (TCon a _) = TCon a OriginBuiltin`      -> 5 lines, IDENTICAL: invisible
+#   + `rogue2 x = TCon x OriginBuiltin` (own line)   -> 6 lines, caught
+# 35 lines in the file already match the pattern shape and could host one — including
+# `unifyN (ta@(TCon a _)) (tb@(TCon b _))` and `cohGoR _ (TCon a _) (TCon b _)`, i.e.
+# exactly where the next unit edits. So patterns are ERASED IN PLACE (`sed …//g`) and
+# whatever `TCon` survives is reported. ⚠️ A reported line therefore shows GAPS where
+# a pattern stood — probe B below reports `rogueA () = TCon a OriginBuiltin` — and
+# that is the erasure, not a corrupted source line.
+#
+# The trailing-comment strip in front of it closes the false positive that WAS this
+# ratchet's masking path: a side comment mentioning `TCon` survives the `^--` filter,
+# fails the gate, and cannot sensibly be "added to the list of mints" — so the only
+# available response would have been the one thing the remedy below forbids.
+#
+# 🔬 POSITIVE CONTROL — append each to compiler/types/typecheck.mdk, rerun this gate,
+# restore. Re-run ALL FOUR if you touch the filter; a green here means nothing unless
+# B and C both fail and D does not.
+#   A  (unmodified)                                  -> ok, 4 mints
+#   B  rogueA (TCon a _) = TCon a OriginBuiltin      -> FAIL   (construction sharing a
+#                                                       line with a pattern: the hole)
+#   C  rogueB x = TCon x OriginBuiltin               -> FAIL   (own line)
+#   D  rogueC : Int -> Int  -- a note about TCon     -> ok     (side comment, not a
+#                                                       construction: no false positive)
+#
+# 🚨 REMEDY WHEN THIS FIRES: add the offending LINE to `mono_tcon_allowed` and justify
+# it in the PR — never widen the regex. Widening is the masking path: the filter's
+# only discriminator is the `_` in the origin slot, so relaxing it re-admits exactly
+# the sites this exists to enumerate. A pattern that legitimately BINDS the origin is
+# the expected first false positive; list it, and the list stays the audit.
+echo "checking #1110 Mono.TCon mint set ..."
+# ⚠️ ONLY FOUR OF THE LINES BELOW ARE MINTS. The declaration line and the
+# origin-BINDING PATTERNS are listed here too, because the filter's discriminator is
+# the `_` in the origin slot and a pattern that binds the origin cannot be erased by
+# it. That is exactly the false positive the remedy predicts — "a pattern that
+# legitimately BINDS the origin is the expected first false positive; list it, and
+# the list stays the audit" — so they are listed rather than the filter widened.
+# NONE OF THEM CONSTRUCTS A `TCon` — that is the property, and it is checked by the
+# exact-set comparison, not by counting.
+#
+# ⚠️ THIS LINE SAID "NONE of the seven" AND THEN ENUMERATED EIGHT FUNCTIONS, two
+# lines below the sentence forbidding exactly that. Do not replace it with a
+# corrected number: the enumeration below is the set, and the gate's own label
+# derives the arithmetic from the allowlist (`$mono_tcon_pats origin-binding
+# pattern(s)`) — run the gate if you want a count.
+#
+#   `TCon n o => Some (headKeyOfCon o n)`  — `headTyconMono`, #1111 A-2.2: the first
+#     site in the file to READ an origin, projecting the head into a `HeadKey`.
+#   the SIX COMPARISONS — #1111 A-2.10: the "are these the same type?" tests, all
+#     routed through `sameTyConHead` (`compiler/frontend/ast.mdk`), which owns the
+#     absent-origin rule. In source order: `unifyN`, `cohGoR`, `cohStep` (two
+#     lines: the general-side match and its `TCon`/`TCon` inner arm), `cohEqR`,
+#     `matchStep`, `monoSameGiven` (two lines, same reason as `cohStep`).
+#   `(TCon n1 o1, TCon n2 o2) =>`  — `firstIdConflict`, #1111 A-2.10: the DIAGNOSTIC
+#     side of the same rule. It finds the head whose two identities conflict so the
+#     otherwise-unreadable `Type mismatch: T vs T` can name the two modules. It is a
+#     READER, not a decider — nothing about acceptance goes through it.
+#
+# 🚨 THIS LIST IS THE ONLY PLACE THE COMPARISON SET IS ENUMERATED MECHANICALLY.
+# ANY further comparison added without listing it here FAILS this gate, which is the
+# point: the set is what a reviewer has to grade, and `AGENTS.md`'s wildcard-arm
+# hazard says to audit it as a SET rather than one member.  (This sentence said "a
+# seventh" while the list already held more than that — an ordinal is a count.)
+mono_tcon_allowed="| TCon String TyConOrigin
+TCon n o => Some (headKeyOfCon o n)
+(TCon n1 o1, TCon n2 o2) =>
+unifyN (ta@(TCon a oa)) (tb@(TCon b ob)) =
+cohGoR _ (TCon a oa) (TCon b ob) = sameTyConHead a oa b ob
+TCon a oa => match s
+TCon b ob => if sameTyConHead a oa b ob then MOk else MFail
+cohEqR (TCon a oa) (TCon b ob) = sameTyConHead a oa b ob
+TCon n2 o2 => if sameTyConHead n o n2 o2 then MOk else MFail
+TCon x ox => match normalize b
+TCon y oy => sameTyConHead x ox y oy
+tconBuiltin n = TCon n OriginBuiltin
+tconFrom o n = TCon n o
+tconTupleHead n = TCon (tupleHeadTagTc n) OriginBuiltin
+tconUnresolved n = TCon n OriginUnresolved"
+mono_tcon_actual=$(grep -wE 'TCon' "$ROOT/compiler/types/typecheck.mdk" \
+  | sed 's/^[[:space:]]*//' \
+  | grep -vE '^--' \
+  | sed -E 's/[[:space:]]--[[:space:]].*$//' \
+  | sed -E 's/TCon (_|[A-Za-z0-9_]+|"[A-Za-z0-9_]+") _//g' \
+  | grep -wE 'TCon' \
+  | LC_ALL=C sort)
+mono_tcon_expected=$(printf '%s\n' "$mono_tcon_allowed" | LC_ALL=C sort)
+if [ "$mono_tcon_actual" != "$mono_tcon_expected" ]; then
+  echo "FAIL: the #1110 \`Mono.TCon\` construction set changed."
+  echo "  allowed (the declaration + the four mints):"
+  printf '%s\n' "$mono_tcon_expected" | sed 's/^/    /'
+  echo "  actual:"
+  printf '%s\n' "$mono_tcon_actual" | sed 's/^/    /'
+  echo "  A \`TCon\` built outside \`tconBuiltin\` / \`tconTupleHead\` / \`tconFrom\` /"
+  echo "  \`tconUnresolved\` decides a module identity at a site nobody reviewed as"
+  echo "  deciding one. Route it through the mint whose NAME states the class:"
+  echo "    tconBuiltin     a head the LANGUAGE provides (§8 I6.2(a))"
+  echo "    tconTupleHead   the builtin \`__tupleN__\` head"
+  echo "    tconFrom        an identity ACQUIRED from a Ty.TyCon or a decl carrier"
+  echo "    tconUnresolved  no identity source exists at this site -- say why"
+  echo "  Do NOT widen the pattern-vs-construction filter above; add the line here."
+  exit 1
+fi
+# ⚠️ DERIVED, not a hardcoded subtraction.  This label read `- 2` (declaration +
+# one bound pattern) and would have been wrong the moment A-2.10 listed six more —
+# the same "encoded fact with no derivation" `AGENTS.md` warns about, inside the
+# gate that exists to keep a set honest.  The four mints are exactly the allowlist
+# rows that CONSTRUCT (` = TCon `); everything else in it is the declaration or a
+# pattern.  What actually prevents a silent absorption is still the exact-set
+# comparison above, not this arithmetic.
+mono_tcon_mints=$(printf '%s\n' "$mono_tcon_expected" | grep -c ' = TCon ')
+mono_tcon_pats=$(($(printf '%s\n' "$mono_tcon_expected" | grep -c .) - mono_tcon_mints - 1))
+echo "  ok: $mono_tcon_mints Mono.TCon mint(s) + $mono_tcon_pats origin-binding pattern(s), no other construction site"
+
+# The names `tconBuiltin` claims as language-provided must be exactly that, and the
+# authority is resolve's own `primitiveTypes` rather than a second hand-kept list here.
+#
+# ⚠️ WHAT THIS CHECK ACTUALLY BUYS, stated because the first cut claimed something
+# stronger and false ("one list read by both layers, so they cannot disagree"). The
+# `Ty` layer does NOT answer *from* `primitiveTypes`: `tyOriginScope`
+# (compiler/frontend/resolve.mdk) is a LAST-WINS fold whose builtin layer has the
+# LOWEST precedence, under prelude, imports and the module's own declarations. What
+# closes the gap is a different fact -- `primitiveTypes` is ALSO the duplicate-type
+# seed (`duplicateErrors`'s `typeSeed = primitiveTypes ++ …`, unconditional), so no
+# module can declare a TYPE of one of these names and the higher layers are empty at
+# those keys. Measured: `data List a = …` -> `Duplicate type: List`.
+#
+# ⚠️ Only the TYPE namespace: `primitiveTypes` does not seed `ifaceSeed`, so
+# `interface Int a where …` is accepted (measured, exit 0). It cannot collide here
+# because interfaces are keyed `iface:<Name>` while the builtin layer holds the bare
+# name -- witness `test/references_fixtures/iface_ty_collide/`.
+#
+# 🚨 THEREFORE THIS CHECK IS MEMBERSHIP, NOT AGREEMENT, AND CANNOT SEE THE DAY THAT
+# CHANGES. If duplicate-type rejection is ever relaxed -- resolve's own comment
+# contemplates "a future prelude `data List`" -- an occurrence would carry
+# `OriginModule "core"` while `tconBuiltin "List"` still hands out `OriginBuiltin`,
+# and this gate would stay GREEN. Whoever relaxes it owes both sites.
+prim_block=$(sed -n '/^primitiveTypes : List String$/,/^$/p' "$ROOT/compiler/frontend/resolve.mdk")
+prim_names=$(grep -oE 'tconBuiltin "[A-Za-z0-9_]+"' "$ROOT/compiler/types/typecheck.mdk" \
+             | sed 's/.*"\(.*\)"/\1/' | LC_ALL=C sort -u)
+# ⚠️ COUNTED, not just checked: an empty `prim_names` would walk zero iterations and
+# print the same `ok` line as a full pass -- the "a validator that checked nothing
+# reads exactly like one that passed" shape the anti-vacuity guards elsewhere in this
+# suite exist for. The four ratchets above all print counts; this one now does too.
+prim_n=$(printf '%s\n' "$prim_names" | grep -c .)
+if [ "$prim_n" -eq 0 ]; then
+  echo "FAIL: no \`tconBuiltin \"<name>\"\` call sites found in typecheck.mdk at all."
+  echo "  This check just asserted nothing. Either the mint was renamed (update the"
+  echo "  grep) or every builtin head moved to another mint (say which, and why)."
+  exit 1
+fi
+prim_bad=""
+for n in $prim_names; do
+  case "$prim_block" in
+    *"\"$n\""*) ;;
+    *) prim_bad="$prim_bad $n" ;;
+  esac
+done
+if [ -n "$prim_bad" ]; then
+  echo "FAIL: \`tconBuiltin\` is claiming §8 I6.2(a)'s program-global identity for"
+  echo "  head(s) that are NOT in compiler/frontend/resolve.mdk's \`primitiveTypes\`:"
+  printf '    %s\n' $prim_bad
+  echo "  A name outside that list CAN be declared by a module (it is the same list"
+  echo "  duplicate-type rejection seeds from), so the Ty layer would attribute it to"
+  echo "  that module while this mint calls it builtin. Use \`tconFrom\` with the"
+  echo "  acquired origin, or \`tconUnresolved\` if this site genuinely has none."
+  exit 1
+fi
+echo "  ok: $prim_n distinct tconBuiltin head(s), all in resolve's primitiveTypes"
+
 # ── #1110/#1226 carrier-completeness ratchet ────────────────────────────────
 # `declHeadOf` (compiler/entries/origin_agreement_main.mdk) has a wildcard fallback
 # (`declHeadOf _ = []`), and the decl-layer producer ratchet above hardcodes a
@@ -324,12 +615,64 @@ echo "  ok: $(printf '%s\n' "$originun_actual" | grep -c .) OriginUnresolved con
 # populated and graded by NOTHING, under a green gate that looks like it covers the
 # layer. This pins the NAME SET (not a count -- a bare count has no derivation and a
 # rename would slip past it) so a new or renamed carrier field fails HERE instead.
-carrier_expected="dataOrigin
+#
+# ⚠️ TWO CLASSES, PINNED SEPARATELY (#1110 PR B). A single flat name-set could be
+# kept green by adding a name to it, which is the masking move this pin exists to
+# refuse. So each carrier must declare WHICH grader owns it:
+#
+#   GRADED -- the agreement probe reads this field by name at runtime. Mechanically
+#             verified below: the name must appear OUTSIDE a comment in
+#             compiler/entries/origin_agreement_main.mdk.
+#   OWED   -- the field exists but no grader reads it yet, with the PR that owes the
+#             grading named here. Mechanically SELF-DRAINING below: the name must
+#             NOT yet appear in the probe, so the moment someone wires it in, this
+#             gate reds and forces the name to move up to the graded set.
+#
+# The OWED list held #1110 PR B's four interface-OCCURRENCE carriers, which PR B
+# could not grade: nothing stamped them yet (PR B was carrier-only), so every arm
+# would have reported `OriginUnresolved` and the only thing the probe could print
+# was a larger RESIDUAL -- a golden move on a PR whose whole contract was
+# byte-identity. PR C landed the stamping AND the grading together, which is
+# precisely what the two-sided self-drain below forces, and the four names moved to
+# GRADED.
+#
+# ⚠️ #1110 PR C DRAINED THE OWED LIST TO EMPTY, and the four names moved UP rather
+# than being deleted: resolve now stamps the interface-occurrence carriers
+# (`fillIfaceOccOrigin` through `mapOriginsInDecl`) and the agreement probe grades them as
+# `iface:<Name>` rows. Both halves of the OWED self-drain fired on that change —
+# the probe half and the stamper half — which is exactly the promotion this pin was
+# built to force. An EMPTY owed list is a legitimate steady state, not a disarmed
+# ratchet: the name-set pin below still fails on any new or renamed carrier, and a
+# newly-added one has to be classified into one of these two lists to get past it.
+carrier_graded_expected="constraintOrigin
+dataOrigin
 ifaceOrigin
+implOrigin
 newtypeOrigin
+requireOrigin
+superOrigin
 tyAliasOrigin
 tyConOrigin"
-carrier_actual=$(grep -oE '^[[:space:]]*[A-Za-z0-9_]+[[:space:]]*:[[:space:]]*TyConOrigin' "$ROOT/compiler/frontend/ast.mdk" \
+carrier_owed_expected=""
+# ⚠️ `grep -v '^$'` is load-bearing now that the OWED list can legitimately be
+# EMPTY: `printf '%s\n%s\n'` on an empty second argument emits a blank line, which
+# sorts FIRST and would make this set comparison fail against a field list that can
+# never contain one.
+carrier_expected=$(printf '%s\n%s\n' "$carrier_graded_expected" "$carrier_owed_expected" | grep -v '^$' | sort)
+# ⚠️ `[[:space:]]+`, NOT `[[:space:]]*`, AND THE CHANGE IS A NARROWING WITH A
+# DERIVATION — not the regex-widening the sibling ratchets forbid.  A carrier is a
+# RECORD FIELD, and a record field in this file is always INDENTED: it sits inside a
+# `Ctor { … }` block, which the offside rule cannot place at column 0.  A TOP-LEVEL
+# TYPE SIGNATURE whose FIRST parameter happens to be a `TyConOrigin` is
+# indistinguishable from a field under the old `*` form — `tyConIdsConflict :
+# TyConOrigin -> TyConOrigin -> Bool` (#1111 A-2.10) was reported as a tenth carrier
+# field, and the remedy this gate prints would have had it added to
+# `carrier_graded_expected`, i.e. a NON-FIELD listed as a carrier and then required
+# to appear in the agreement probe.  Listing it would have been the lie; requiring
+# the indentation a field always has is the fix.  (`sameTyConHead` beside it never
+# matched, because its first parameter is a `String` — which is exactly why the
+# false positive is a coincidence of parameter ORDER and would have recurred.)
+carrier_actual=$(grep -oE '^[[:space:]]+[A-Za-z0-9_]+[[:space:]]*:[[:space:]]*TyConOrigin' "$ROOT/compiler/frontend/ast.mdk" \
   | sed -E 's/^[[:space:]]*//; s/[[:space:]]*:.*$//' | sort)
 if [ "$carrier_actual" != "$carrier_expected" ]; then
   echo "FAIL: the set of \`: TyConOrigin\`-typed fields in compiler/frontend/ast.mdk changed."
@@ -340,14 +683,64 @@ if [ "$carrier_actual" != "$carrier_expected" ]; then
   echo "  A new (or renamed) TyConOrigin carrier is invisible to BOTH of:"
   echo "    - declHeadOf in compiler/entries/origin_agreement_main.mdk -- its wildcard"
   echo "      arm (\`declHeadOf _ = []\`) silently drops any carrier it doesn't name;"
-  echo "      add a match arm for the new decl constructor."
-  echo "    - the decl-layer producer ratchet just above in THIS file -- its hardcoded"
-  echo "      dDataUnresolved|dTypeAliasUnresolved|dNewtypeUnresolved|dInterfaceUnresolved"
-  echo "      alternation won't see the new carrier's mint helper; add it there too."
-  echo "  Update BOTH, then update carrier_expected above to the new field-name set."
+  echo "      add a match arm for the new decl constructor. (Note: an OCCURRENCE"
+  echo "      carrier does NOT belong there -- see declHeadOf's own comment.)"
+  echo "    - the producer ratchets just above in THIS file -- their hardcoded name"
+  echo "      alternations won't see the new carrier's mint helper; add it there too."
+  echo "  Update BOTH, then add the field to carrier_graded_expected (if a grader now"
+  echo "  reads it) or carrier_owed_expected (naming the PR that owes the grading)."
   exit 1
 fi
-echo "  ok: $(printf '%s\n' "$carrier_actual" | grep -c .) TyConOrigin carrier field(s)"
+# GRADED: each name must be read, outside a comment, by the agreement probe.
+probe_src="$ROOT/compiler/entries/origin_agreement_main.mdk"
+for c in $carrier_graded_expected; do
+  if ! grep -w "$c" "$probe_src" | grep -qvE '^[[:space:]]*--'; then
+    echo "FAIL: carrier \`$c\` is listed as GRADED but compiler/entries/origin_agreement_main.mdk"
+    echo "  no longer reads it outside a comment. Either restore the read, or move the"
+    echo "  name to carrier_owed_expected and say in the PR which PR owes the grading."
+    exit 1
+  fi
+done
+# OWED: the self-drain, pinned in BOTH directions -- the name must be absent from
+# the probe AND from the stamper.
+#
+# The probe half alone pins BOOKKEEPING, not grading, and would have a hole big
+# enough to drive the whole hazard through: a later PR could stamp an OWED carrier
+# inside compiler/frontend/resolve.mdk and never touch the probe, and EVERY ratchet
+# here stays green -- `originun_allowed` already lists resolve.mdk (it is the decl
+# stamper's home) and the producer ratchets pin only mint-helper CALL SITES, not
+# field writes. The gate would then print `ok: … (N graded, M owed)` over carriers
+# that are live, stamped, and graded by nothing -- verbatim the hazard the header
+# above says this ratchet exists to prevent. So pin the stamper too: the moment the
+# stamp lands, this reds and demands the promotion AND the probe wiring together.
+#
+# ⚠️ The comment filter is `^[[:space:]]*--`, i.e. LEADING comments only. A TRAILING
+# side comment or a string literal that merely NAMES an owed carrier would therefore
+# trip this check spuriously -- and the printed remedy would then "fix" it by moving
+# the name to the graded list, disarming the tripwire in two lines. That is the
+# remedy-disarms-the-tripwire shape, so it is stated rather than left to be
+# rediscovered. It is a note and not a code change because both files are clean of
+# that shape today (verified: no trailing `--` mentions of any carrier name in
+# either), and a looser filter would cost more than it buys.
+stamper_src="$ROOT/compiler/frontend/resolve.mdk"
+for c in $carrier_owed_expected; do
+  if grep -w "$c" "$probe_src" | grep -qvE '^[[:space:]]*--'; then
+    echo "FAIL: carrier \`$c\` is listed as OWED but compiler/entries/origin_agreement_main.mdk"
+    echo "  now reads it -- the grading this list was waiting for has landed."
+    echo "  Move \`$c\` from carrier_owed_expected to carrier_graded_expected."
+    exit 1
+  fi
+  if grep -w "$c" "$stamper_src" | grep -qvE '^[[:space:]]*--'; then
+    echo "FAIL: carrier \`$c\` is listed as OWED but compiler/frontend/resolve.mdk now"
+    echo "  WRITES it -- the carrier is live while nothing grades it, which is the"
+    echo "  exact state this ratchet exists to refuse."
+    echo "  Land the grading in the SAME change: extend the agreement probe"
+    echo "  (compiler/entries/origin_agreement_main.mdk) to read \`$c\`, then move it"
+    echo "  from carrier_owed_expected to carrier_graded_expected."
+    exit 1
+  fi
+done
+echo "  ok: $(printf '%s\n' "$carrier_actual" | grep -c .) TyConOrigin carrier field(s) ($(printf '%s\n' "$carrier_graded_expected" | grep -c .) graded, $(printf '%s\n' "$carrier_owed_expected" | grep -c .) owed)"
 
 # The name-set pin above matches `<name> : TyConOrigin`, so it only sees a
 # NAMED-record field -- verified by mutation: a new named field fires it, a
@@ -364,7 +757,56 @@ echo "  ok: $(printf '%s\n' "$carrier_actual" | grep -c .) TyConOrigin carrier f
 # count steady (same mention, different name) but changes the name set, which
 # only the pin above catches; a POSITIONAL addition holds the name set steady
 # but moves this count, which only THIS pin catches.
-carrier_count_expected=6
+# 6 -> 10 (#1110 PR B): the four interface-occurrence carriers
+# (`constraintOrigin` / `superOrigin` / `requireOrigin` / `implOrigin`). Every one is
+# a NAMED field, so the name-set pin above sees them too; this count moves for the
+# same four and is bumped for that reason and no other.
+#
+# 10 -> 11 (#1047, Stage A-2 unit A-2.9): `ifaceIdentity : TyConOrigin -> String ->
+# String`, ast.mdk's first CONSUMER of the carrier — the function that projects
+# `(originModule, name)` into the one comparable string the Core IR's
+# `CImplDefault` and eval's default cells carry.  It is a READER, not a carrier:
+# it adds no field to any node, mints no origin, and declares no new inhabitant,
+# so neither `declHeadOf` nor either producer ratchet gains an arm (adding one
+# would be the contradiction this gate's own message warns about).  The name-set
+# pin above is correctly silent — a signature is not a named record field — and
+# this form-independent count is correctly NOT, which is exactly the division of
+# labour the paragraph above describes.  Bumped for that reason and no other.
+#
+# 11 -> 13 (#1111, Stage A-2 unit A-2.0): `identOriginOf : TyConOrigin -> Option
+# IdentOrigin` and `mkIdent : Ns -> TyConOrigin -> String -> Option Ident`, the
+# substrate's two CONSUMERS of the carrier — the total conversion from a
+# pipeline-stage-marked `TyConOrigin` to the well-formed `IdentOrigin` that keys
+# every re-keyed cross-module table, and the convenience form over it.  Exactly
+# the same class as the 10 -> 11 bump above and bumped for the same reason: both
+# are READERS.  Neither adds a field to any node, mints an origin, or declares a
+# new `TyConOrigin` inhabitant, so no `declHeadOf` arm and no producer-ratchet
+# entry is owed — and the carrier field set is INDEPENDENTLY still `9 graded, 0
+# owed`, which is the pin that would have caught a real carrier sneaking in here.
+#
+# ⚠️ This bump was forced by the MERGE QUEUE, not by either branch: #1264 set this
+# to 11 and #1262 added the two signatures, so both were green alone and the
+# merged tree was red.  That is the pin working.  Any A-2 unit that adds a
+# `TyConOrigin` reader to ast.mdk while another is in flight will land here again;
+# re-derive with
+#   grep -w 'TyConOrigin' compiler/frontend/ast.mdk | grep -cvE '^[[:space:]]*--'
+# rather than trusting this number.
+#
+# 13 -> 15 (#1111, Stage A-2 unit A-2.10): `sameTyConHead : String -> TyConOrigin ->
+# String -> TyConOrigin -> Bool` and `tyConIdsConflict : TyConOrigin -> TyConOrigin
+# -> Bool` — the seam every "are these the same type?" comparison in
+# `types/typecheck.mdk` now goes through.  Same class as both bumps above and
+# bumped for the same reason: READERS.  No field on any node, no mint, no new
+# inhabitant, so no `declHeadOf` arm and no producer-ratchet entry is owed, and the
+# carrier field set is INDEPENDENTLY still `9 graded, 0 owed`.
+#
+# ⚠️ `tyConIdsConflict` ALSO tripped the NAME-SET pin above, which the paragraph
+# there says is "correctly silent — a signature is not a named record field".  That
+# claim was true of every prior reader by ACCIDENT OF PARAMETER ORDER and false for
+# this one: its first parameter is a `TyConOrigin`, so `^[[:space:]]*NAME[[:space:]]*:
+# [[:space:]]*TyConOrigin` matched the signature.  The discriminator was narrowed to
+# require the indentation a record field always has; the derivation is at that grep.
+carrier_count_expected=15
 # Comment-filtered, matching the idiom the three sibling ratchets above already
 # use (`grep -w … | grep -qvE '^[[:space:]]*--'`). An unfiltered count reds this
 # gate on a COMMENT-ONLY diff that merely names `TyConOrigin` in prose -- someone
@@ -380,16 +822,36 @@ if [ "$carrier_count_actual" != "$carrier_count_expected" ]; then
   echo "  The name-set pin just above only sees NAMED-record fields, so it is SILENT on"
   echo "  a POSITIONAL TyConOrigin carrier (e.g. \`Variant String ConPayload TyConOrigin\`)"
   echo "  or one reached through a type alias -- both move THIS count instead."
-  echo "  If you added a genuine new carrier:"
-  echo "    - add a match arm to declHeadOf in compiler/entries/origin_agreement_main.mdk"
-  echo "      (its wildcard arm silently drops any carrier it doesn't name);"
-  echo "    - add its mint helper to the decl-layer producer ratchet above in THIS file;"
-  echo "    - if it is a NAMED field, add it to carrier_expected above too;"
+  echo "  If you added a genuine new carrier -- FIRST decide which LAYER it is on,"
+  echo "  because the remedy differs and getting it backwards is a contradiction:"
+  echo "    - DECL-layer (a type DECLARATION acquires identity): add a match arm to"
+  echo "      declHeadOf in compiler/entries/origin_agreement_main.mdk (its wildcard"
+  echo "      arm silently drops any carrier it doesn't name), and add its mint"
+  echo "      helper to the DECL-layer producer ratchet above in THIS file."
+  echo "    - OCCURRENCE-layer (a USE site names a head someone else declared): do"
+  echo "      NOT add a declHeadOf arm -- that function's own comment forbids it for"
+  echo "      exactly this case ('DImpl mints NO decl-layer carrier and must not"
+  echo "      appear here'). Add the mint helper to the OCCURRENCE-layer producer"
+  echo "      ratchet above instead, and grade it in the probe's occurrence walk."
+  echo "    - then classify the field: add it to carrier_graded_expected (a grader"
+  echo "      reads it) or carrier_owed_expected (grading owed; name the PR that owes"
+  echo "      it). Do NOT edit carrier_expected -- it is DERIVED from those two."
   echo "    - then update carrier_count_expected here to the new mention count,"
   echo "      and say why in the PR."
   exit 1
 fi
 echo "  ok: $carrier_count_actual TyConOrigin mention(s) in ast.mdk (name-set + positional)"
+
+# ── #1111 Stage A-2 unit A-2.8: registry keying ratchet ─────────────────────
+# Mechanical enforcement for the registry-keying arc (re-keying ~15
+# program-global cross-module tables from bare names to qualified identity):
+# pins CrossRun's and DriverState's field sets, their setRef write targets,
+# and the three engine module drivers' frame-seeding parity. Deliberately
+# NOT a standalone test/*.sh gate -- see test/registry_keying_ratchet.sh's own
+# header for why it rides inside this already-CI-wired script instead.
+if ! sh "$ROOT/test/registry_keying_ratchet.sh" "$ROOT"; then
+  exit 1
+fi
 
 echo "PASS: compiler source is type-clean (0 error-severity diagnostics across medaka_cli.mdk + $n_entries entries)."
 exit 0

@@ -1,0 +1,13 @@
+-- Control for #1461: the SAME two derive names, on `data` instead of `newtype`,
+-- minus `Num` (which no table has -- see claim.txt why-control).
+--
+-- `data … deriving (Generic)` is the discriminator: it proves the deriving
+-- machinery, the `Generic`/`to_rep` surface and the check pipeline all work, so a
+-- break here means the ENVIRONMENT moved, not that #1461 drained.
+data DistD = DistD Int deriving (Eq, Generic)
+
+genName = match to_rep (DistD 5)
+  RCon name _ => name
+  _ => ""
+
+main = println genName

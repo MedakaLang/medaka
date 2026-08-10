@@ -1,0 +1,9 @@
+-- #1111 A-2.5 BYSTANDER: half two of the collision.  Same method spelling as
+-- `mcolla.mdk`'s, unrelated interface.  Sorted after `mcolla` so it is the one
+-- that registers LAST and therefore OWNS the single bare-name row the
+-- cross-module method table keeps for `cmth`.  The entry imports only `fz`.
+export interface CollZ a where
+  cmth : a -> Int
+
+export fz : Int -> Int
+fz n = n * 2

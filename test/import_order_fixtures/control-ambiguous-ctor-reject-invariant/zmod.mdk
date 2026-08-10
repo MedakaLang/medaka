@@ -1,0 +1,4 @@
+public export data Z1 = Dup Int
+
+export zf : Int
+zf = 0

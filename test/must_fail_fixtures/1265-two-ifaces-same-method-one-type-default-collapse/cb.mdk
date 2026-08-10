@@ -1,0 +1,12 @@
+-- #1265: B's implementor.  `impl Greet Dog` is METHOD-LESS, so Dog must inherit
+-- ifb's default ("B-default") for the `Greet` slot.  `sayB` calls `speak` where
+-- only `Greet` is in scope.  This is the call whose answer is wrong: the emitted
+-- program contains ONE `@mdk_default_speak_Dog` and "B-default" appears in it
+-- nowhere at all.
+import ifb.{Greet(..), speak}
+import dog.{Dog(..)}
+
+impl Greet Dog where
+
+export sayB : Dog -> String
+sayB d = speak d

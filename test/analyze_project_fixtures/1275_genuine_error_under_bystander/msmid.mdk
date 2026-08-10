@@ -1,0 +1,4 @@
+-- #1111 Stage A-2 unit A-2.5b (#1272 / #1275): the RE-EXPORTER.  Its own module id
+-- (`msmid`) differs from the identity's declaring module (`msifb`), which is the
+-- whole reason A-2.5 needed a second witness at all.
+export import msifb.{MSIB, msmth}

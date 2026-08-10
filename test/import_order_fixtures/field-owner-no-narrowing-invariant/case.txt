@@ -1,0 +1,25 @@
+entry: main.mdk
+what: the field->owners fallback for a CONCRETE receiver is order-invariant, and must stay
+what: unnarrowed by import spelling
+
+`amod` declares a NAMED-FIELD VARIANT (registry key `Dup`, type `RA`) with a field `dx`;
+`wmod` declares an unrelated short-form record that also declares `dx`. No type name, no
+constructor name and no registry key collide — the only thing two libraries share is a
+FIELD NAME, which is as ordinary as `name` / `id` / `size`.
+
+`mkA.dx` has a CONCRETE receiver whose head tycon (`RA`) is not a registry key, so
+`lookupRecordByName` misses and `resolveFieldRecord`'s branch (c) reaches
+`fieldOwnersRef` — the consumer that is NOT the undetermined-receiver ambiguity arm.
+
+Observed by hand on a binary cold-built from the pre-change source at `main` @ `1443870c`:
+`medaka run` printed `8` at exit 0 with either clause first, and `medaka check` reported no
+diagnostic either way. So this row was ALREADY invariant on baseline — it is not one of
+the rows that proves this gate can go red.
+
+⚠️ WHAT IT IS FOR, since a green-before-and-after row needs a stated purpose: the first cut
+of #1319 unit 2 narrowed `fieldOwnersRef` per module using constructor-witness predicates,
+and turned this exact program into `Type mismatch: RA vs Wrec` at exit 1 (measured; the
+narrowing was removed before landing). Any future scoping of that table must keep this row
+green, and the permutation axis matters specifically because a narrowing decides on the
+set of owners visible from this module's own `DUse` decls — a rule that consulted them in
+clause order would make the answer depend on which import came first.

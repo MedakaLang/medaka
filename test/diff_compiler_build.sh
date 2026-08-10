@@ -41,7 +41,13 @@ if [ "${1:-}" = "--one" ]; then
   golden="${src%.mdk}.build.golden"
   st=0; msg=""
   if [ ! -f "$golden" ]; then
-    msg="FAIL $label (no .build.golden — run sh test/capture_goldens.sh build_diff)"; st=1
+    # ⚠️ `sh test/capture_goldens.sh build_diff` is a NO-OP for this corpus (same
+    # trap as #1241) — build_diff has no ROWS entry and no `--frozen` tag in
+    # test/capture_goldens.sh (its "build_cmd / build_diff : FROZEN" comment is a
+    # stale one-time Phase-3 migration note, not a working recipe). To regenerate:
+    # build+run this fixture yourself and REVIEW the output before committing it
+    # as the golden (`./medaka build "$src" -o /tmp/b && /tmp/b > "$golden"`).
+    msg="FAIL $label (no .build.golden — NO REGEN SCRIPT; hand-write via ./medaka build $src -o <bin> && <bin> > $golden, review before committing)"; st=1
   elif ! MEDAKA_ROOT="$ROOT" MEDAKA_EMITTER="$EMITTER" MEDAKA_CLANG_OPT="${BUILD_OPT:--O0}" \
          "$MEDAKA" build "$src" -o "$bin" >"$WORKDIR/$label.sb.out" 2>"$WORKDIR/$label.sb.err"; then
     msg="$(printf 'FAIL %s (native build)\n%s' "$label" "$(sed 's/^/    /' "$WORKDIR/$label.sb.err" | head -6)")"; st=1

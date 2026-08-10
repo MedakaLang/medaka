@@ -167,7 +167,14 @@
 --            (literals + intToString); cp_count cached so stringLength is O(1).
 --            GC-managed under Boehm for free (aligned pointer, low bit 0).
 
-import frontend.ast.{Lit(..), Pat(..), Addr(..), Route(..), Loc(..)}
+import frontend.ast.{
+  Lit(..),
+  Pat(..),
+  Addr(..),
+  Route(..),
+  Loc(..),
+  ifaceIdMatches,
+}
 import ir.core_ir.{
   CExpr(..),
   CField(..),
@@ -188,6 +195,7 @@ import ir.core_ir_lower.{
   canonPat,
   ifaceImplRouteKeys,
   ifaceDeclHeadUnique,
+  ifaceIdsAtTag,
 }
 import support.util.{
   reverseL,
@@ -196,6 +204,7 @@ import support.util.{
   listLen,
   contains,
   filterList,
+  anyList,
   startsWith,
   fallthroughName,
   noneHeadTag,
@@ -1262,15 +1271,109 @@ findByTag tag (_::rest) = findByTag tag rest
 -- the interface DEFAULT entry (CImplDefault) for a method: the untagged body the
 -- interface declared and the type's `impl` did not override.  None ⇒ no default
 -- (the method has no default body — a genuine missing-impl error).
+--
+-- ── #1047: WHICH default, when two interfaces share a method name ────────────
+-- The registry is filtered by the interface METHOD name alone, and a method name
+-- is not unique across interfaces: two UNRELATED modules may each declare
+-- `interface Speak x where speak : x -> String` with a DIFFERENT default body.
+-- Both lower to a `CImplEntry "speak" _ (CImplDefault <ifaceId> …)`, i.e. two entries
+-- under one METHOD name — `CImplDefault`'s own leading String is the interface
+-- IDENTITY, never the method name (core_ir.mdk:222-230); the method name lives on the
+-- enclosing `CImplEntry`.  (Pre-#1264 `CImplDefault` had no String field at all, so a
+-- `CImplDefault "speak"` exists in neither the old tree nor the new one.)
+-- So first-match handed a method-less
+-- `impl Speak DogB` the OTHER module's body — `@mdk_default_speak_DogB` was
+-- correctly routed and correctly named, and simply contained the wrong string.
+-- Exit 0, no diagnostic, all three engines equally wrong.
+--
+-- The tag-aware form intersects the candidate defaults' interface IDENTITIES
+-- (`CImplDefault`'s field 0) with the identities of the interfaces the impl(s) at
+-- [tag] actually implement (`ifaceIdsAtTag`, off the declared-impl table — which
+-- sees a METHOD-LESS impl, the shape that has no `CImplTagged` at all).
+--
+-- ⚠️ CONSERVATIVE BY CONSTRUCTION.  With ≤1 candidate — every program in this tree
+-- (derived 2026-08-03: 15 defaulted interface methods across stdlib/, compiler/ and
+-- sqlite/lib/, all 15 names distinct) and every program without a METHOD-name
+-- collision — it returns exactly what first-match returned, so the emitted IR is
+-- byte-identical and the fixpoint is unaffected.
+-- It narrows only when the narrowing is UNAMBIGUOUS (exactly one
+-- survivor); an empty or ambiguous intersection falls back to first-match rather
+-- than inventing an answer, because `ifaceIdentity` is `""` (absence) on every
+-- loader-less driver and absence must never decide a dispatch.
+--
+-- ⚠️ THE TRIGGER IS A **METHOD**-NAME COLLISION, NOT AN INTERFACE-NAME ONE.  This
+-- envelope said "interface-name collision" until 2026-08-03, silently narrowing the
+-- section header above — and the narrowed version is what the fix was validated
+-- against.  Two interfaces with DIFFERENT names sharing only a method name are not
+-- caught by the `Conflicting impl <Iface>` guard, which never sees method names at
+-- all.
+--
+-- ⚠️ RESIDUAL, STILL OPEN: #1265.  `ifaceIdsAtTag` returns the identity of EVERY
+-- interface implemented at [tag], so when ONE type implements TWO interfaces that
+-- share a method name, BOTH candidates pass `defaultOwnedBy`, `narrowDefaults` has
+-- two survivors, and the `_ => Some fallback` arm restores first-match.  #1264's own
+-- fixture is green because its two types are DISTINCT tags.  Narrowing harder cannot
+-- fix it: `defaultFnName` is `mdk_default_<method>_<tag>`, so two interfaces' default
+-- bodies have exactly ONE symbol to live under and one is simply not emitted.  The
+-- fix needs the interface identity in the KEY, not only in this filter — but that
+-- is NECESSARY, not SUFFICIENT: by the time execution reaches here, there is no
+-- interface identity left to key with.  `Route` (`compiler/frontend/ast.mdk`) is
+-- `RKey String (List Route)` — a dispatch tag and element dicts, no interface
+-- component; `CMethod` (`compiler/ir/core_ir.mdk`) is `CMethod String Route
+-- (List Route) (List Route)` — a bare method name; `EMethodRef`
+-- (`compiler/frontend/ast.mdk`) is `EMethodRef String` — a bare name; and
+-- `markVar` (`compiler/frontend/marker.mdk`) tests membership in an `OrdMap Unit`
+-- keyed on bare method names. None of the call-site machinery between the
+-- interface declaration and this filter carries an interface identity to route
+-- on, so "key the symbol" cannot be carried out in this filter alone. See #1265,
+-- which now carries the full evidence for what threading an identity through
+-- actually requires.  Pinned at
+-- test/must_fail_fixtures/1265-two-ifaces-same-method-one-type-default-collapse/.
 defaultFor : Emit -> String -> Option CImplEntry
-defaultFor e method = findDefault method (methodEntries e method)
+defaultFor e method = defaultForAt e method ""
 
-findDefault : String -> List CImplEntry -> Option CImplEntry
-findDefault _ [] = None
-findDefault method ((CImplEntry n s (CImplDefault pats body))::rest)
-  | n == method = Some (CImplEntry n s (CImplDefault pats body))
-  | otherwise = findDefault method rest
-findDefault method (_::rest) = findDefault method rest
+-- [tag] is the concrete dispatch tag the default is being emitted FOR (the `<tag>`
+-- of `@mdk_default_<method>_<tag>`); "" means "no tag in hand", which degrades to
+-- first-match.
+defaultForAt : Emit -> String -> String -> Option CImplEntry
+defaultForAt e method tag =
+  pickDefaultAt tag (findDefaults method (methodEntries e method))
+
+-- every untagged default named [method], in program order (the set first-match
+-- used to take the head of).
+findDefaults : String -> List CImplEntry -> List CImplEntry
+findDefaults _ [] = []
+findDefaults method ((CImplEntry n s (CImplDefault ifaceId pats body))::rest)
+  | n == method =
+    CImplEntry n s (CImplDefault ifaceId pats body) :: findDefaults method rest
+  | otherwise = findDefaults method rest
+findDefaults method (_::rest) = findDefaults method rest
+
+pickDefaultAt : String -> List CImplEntry -> Option CImplEntry
+pickDefaultAt _ [] = None
+pickDefaultAt _ [d] = Some d
+pickDefaultAt tag (d::rest) = narrowDefaults (d::rest) (ifaceIdsAtTag tag) d
+
+narrowDefaults : List CImplEntry -> List String -> CImplEntry -> Option CImplEntry
+narrowDefaults ds ids fallback = match filterList (defaultOwnedBy ids) ds
+  [only] => Some only
+  _ => Some fallback
+
+defaultOwnedBy : List String -> CImplEntry -> Bool
+defaultOwnedBy ids ent = anyList (ifaceIdMatches (defaultIfaceIdOf ent)) ids
+
+defaultIfaceIdOf : CImplEntry -> String
+defaultIfaceIdOf (CImplEntry _ _ (CImplDefault ifaceId _ _)) = ifaceId
+defaultIfaceIdOf _ = ""
+
+-- the tag-narrowed default for (method, tag), or [fallback] when there is none to
+-- narrow to.  `defaultForAt` can only return None when the method has NO default
+-- at all — and every caller of this helper already holds one — so the fallback is
+-- reached in practice only via `pickDefaultAt`'s own ambiguity arm.
+defaultAtOr : CImplEntry -> Emit -> String -> String -> CImplEntry
+defaultAtOr fallback e method tag = match defaultForAt e method tag
+  Some ent => ent
+  None => fallback
 
 -- the lifted LLVM name of an interface default method (E19): `mdk_default_<method>_<tag>`.
 -- A default is emitted only on the CONCRETE RKey path (`filter`@List), keyed per
@@ -1392,11 +1495,11 @@ isImplMethod e name = match implMethodSetRef.value
 -- the parameter patterns + body of an impl entry (CImplTagged or CImplDefault).
 implPats : CImplEntry -> List Pat
 implPats (CImplEntry _ _ (CImplTagged _ _ _ _ pats _)) = pats
-implPats (CImplEntry _ _ (CImplDefault pats _)) = pats
+implPats (CImplEntry _ _ (CImplDefault _ pats _)) = pats
 
 implBody : CImplEntry -> CExpr
 implBody (CImplEntry _ _ (CImplTagged _ _ _ _ _ body)) = body
-implBody (CImplEntry _ _ (CImplDefault _ body)) = body
+implBody (CImplEntry _ _ (CImplDefault _ _ body)) = body
 
 -- #747: is this a nullary/return-position/no-requires impl — the exact shape
 -- core_ir_lower.memoKeys treats as a per-instance CAF (positions == [] && pats == [],
@@ -1409,7 +1512,7 @@ implEntryMemoisable _ = False
 
 implEntryTag : CImplEntry -> String
 implEntryTag (CImplEntry _ _ (CImplTagged tag _ _ _ _ _)) = tag
-implEntryTag (CImplEntry _ _ (CImplDefault _ _)) = ""
+implEntryTag (CImplEntry _ _ (CImplDefault _ _ _)) = ""
 
 -- the ROUTE key the typechecker stamps for this impl — the bare head tag when the
 -- head is unique (byte-identical to the pre-C7 dict header), else the canonical
@@ -4524,7 +4627,12 @@ emitMethodPapDefine e env lamName name route implRoutes methRoutes arity capName
 -- still shared across monoids: only the runtime dict word differs per call, so one
 -- `@mdk_default_foldMap_List` serves both a List- and a String-monoid fold.
 emitDefaultRKey : Emit -> List (String, (String, LTy)) -> String -> String -> List Route -> List Route -> List String -> (String, LTy)
-emitDefaultRKey e env name tag methRoutes implRoutes argOps = match defaultFor e name
+-- #1047: `defaultForAt`, not `defaultFor` — the tag is what the narrowing keys on,
+-- and this is the site that emits the body.  ⚠️ The trigger is a METHOD-name
+-- collision, not an interface-name one (the interfaces' own names are irrelevant),
+-- and the tag does NOT disambiguate when ONE tag carries TWO interfaces sharing a
+-- method name — that is #1265, still open.
+emitDefaultRKey e env name tag methRoutes implRoutes argOps = match defaultForAt e name tag
   Some entry =>
     let fname = defaultFnName tag name
     let _ = ensureDefaultEmitted e fname tag name entry
@@ -4783,7 +4891,7 @@ emitPapDefineIndirect e papName supplied remaining =
 -- lookup); "" for a default entry (it carries no tag/iface — never RKey-reached).
 implEntryIface : CImplEntry -> String
 implEntryIface (CImplEntry _ _ (CImplTagged _ _ iface _ _ _)) = iface
-implEntryIface (CImplEntry _ _ (CImplDefault _ _)) = ""
+implEntryIface (CImplEntry _ _ (CImplDefault _ _ _)) = ""
 
 -- a runtime method dispatch (RDict/RDictFwd): the enclosing function's dict
 -- PARAMETER `d` (a BOXED dict-witness pointer, GAP 1 Option A) selects the impl at
@@ -5234,7 +5342,13 @@ emitDefaultDispatchChain e dictPtr headTag (tag::rest) name entry argOps slot en
   let _ = emit e "  br i1 \{cmp}, label %\{yes}, label %\{next}"
   let _ = emit e (yes ++ ":")
   let fname = defaultFnName tag name
-  let _ = ensureDefaultEmitted e fname tag name entry
+  -- #1047: this chain walks MANY tags but was handed ONE `entry`, so under a
+  -- METHOD-name collision (the interfaces' own names are irrelevant) every arm
+  -- would emit the same (possibly wrong)
+  -- body.  Re-resolve per arm; [entry] stays the fallback for a tag the
+  -- declared-impl table cannot narrow, which is the pre-#1047 behaviour.
+  -- ⚠️ Re-resolving PER ARM still cannot separate two interfaces at ONE tag: #1265.
+  let _ = ensureDefaultEmitted e fname tag name (defaultAtOr entry e name tag)
   let reqCount = innerDefaultReqCount e name tag
   let reqDicts = loadReqDicts e dictPtr reqCount 0
   let (rv, _) = emitImplCall e fname (reqDicts ++ argOps) LTInt
@@ -10806,13 +10920,24 @@ emitProgramMain e groups =
   let _ = emit e "define i32 @mdk_program_main(i32 %argc, ptr %argv) {"
   let _ = emit e "entry:"
   let _ = emit e "  call void @mdk_set_args(i32 %argc, ptr %argv)"
+  -- #1334: resolve `main`'s body FIRST, before touching any top-level global.
+  -- `mainBody` is a pure scan over `groups` — it neither reads nor writes `e`,
+  -- so hoisting it earlier changes NOTHING about the emitted IR for any program
+  -- that already builds today; it only changes which of two independent panics
+  -- fires first when BOTH conditions are true (no `main` AND a malformed value
+  -- global). A program with no `main` at all (e.g. `stdlib/core.mdk` built as
+  -- its own entry) is missing the more fundamental thing, so it should report
+  -- "no main" rather than tripping over an unrelated global first — see the
+  -- prelude-double-load note on emitTopGlobals below for why such a global can
+  -- appear at all.
+  let mainRhs = mainBody groups
   -- #561 PR-A: only SAFE (statically-orderable) value globals are eager-initialised
   -- in this prologue — byte-identical to the pre-#561 emitter whenever no global is
   -- lazy (the compiler's own case).  A SAFE global's whole eager reach is SAFE (the
   -- taint is downward-closed over reads), so this prologue never calls a force fn.
   -- LAZY globals are initialised on first use by their @mdk_force_<x> defines below.
   let _ = emitTopGlobals e (orderedValBinds groups (safeValBinds (valBinds groups)))
-  let (mv, mty) = emitExpr e [] (mainBody groups)
+  let (mv, mty) = emitExpr e [] mainRhs
   -- A Unit-returning `main` produces output ONLY through explicit print calls (or
   -- a panic); never auto-print its `()` result.  Detected by the DECLARED return
   -- type (`declSigOf "main"` → "Unit", robust even when the body LTy is
@@ -10861,6 +10986,15 @@ emitLines e (line::rest) =
 -- forward/mutual-dependency gap in lookupVarG instead of an uninitialised 0.
 -- A `Ref v` rhs allocs its cell as usual → the stored word is the cell POINTER, so
 -- `.value`/`setRef` deref through the loaded global.
+--
+-- #1334: the wildcard panic below fires for a genuinely multi-clause or
+-- non-nullary top-level function (a real emitter bug) — but ALSO for a name
+-- that legitimately has a single nullary clause per file yet arrives here with
+-- more than one, because it was loaded twice and merged (e.g. building
+-- `stdlib/core.mdk` as its OWN entry re-loads the prelude's `core.mdk` a second
+-- time as the entry module). That double-load merge is a separate, open defect
+-- (#1334 half 2) — this panic only ever reports the SYMPTOM ("more clauses than
+-- a value binding should have"), never which of the two causes produced it.
 emitTopGlobals : Emit -> List CBind -> Unit
 emitTopGlobals _ [] = ()
 emitTopGlobals e ((CBind name [CClause [] body])::rest) =

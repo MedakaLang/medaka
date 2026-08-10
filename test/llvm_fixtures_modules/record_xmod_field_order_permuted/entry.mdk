@@ -1,0 +1,25 @@
+-- #1382 — THE MODULE-NAME PERMUTATION of `record_xmod_field_order/`.
+--
+-- Same two `Cfg` declarations, same field orders, same projections; only the two
+-- MODULE NAMES are swapped, so the declaration that sorts first is now the `{ b, a }`
+-- one.  A golden can only ever pin the order it was captured at, so a single cell
+-- cannot tell "the right record is selected" apart from "the record that happens to
+-- sort first is selected and it happened to be right here" — this pair can.
+--
+-- Expected output, derived BY HAND from the sources before anything was run and
+-- independently of any engine:
+--   aamod: mkAA = Cfg { b = 33, a = 44 }  =>  aaA = 44, aaB = 33
+--   zzmod: mkZZ = Cfg { a = 11, b = 22 }  =>  zzA = 11, zzB = 22
+-- so `aa=44,33 zz=11,22`.
+--
+-- Counterfactual, measured rather than reasoned: with `compiler/types/typecheck.mdk`
+-- restored to `c5fda728` and nothing else changed, this program's built binary prints
+-- `aa=44,33 zz=22,11` at exit 0 — the OTHER module's projections corrupted than in
+-- the unpermuted sibling, which is the whole point of the pair.
+import aamod.{aaA, aaB}
+import zzmod.{zzA, zzB}
+
+main : <IO> Unit
+main =
+  putStrLn
+    ("aa=" ++ intToString aaA ++ "," ++ intToString aaB ++ " zz=" ++ intToString zzA ++ "," ++ intToString zzB)

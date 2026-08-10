@@ -45,8 +45,10 @@ blockStmtGo : Array Token -> Array Int -> Int -> Int -> Int -> Bool -> List Int
 blockStmtLines : Array Token -> Array Int -> Int -> Int -> List Int
 bodyChainTopOp : Expr -> Option String
 bodyIsBlock : Expr -> Bool
+braceAfterEq : Array Token -> Int -> Int
 braceBlockFrom : Array Token -> Int -> Int -> Int -> Int
 braceBlockMsg : String
+braceHasBarAtTop : Array Token -> Int -> Int -> Bool
 braceItems : String -> Parser Expr
 braceItemsFor : String -> Token -> Parser Expr
 bracketIndexRest : Expr -> Expr -> Token -> Parser Expr
@@ -74,6 +76,7 @@ concatMapC : List Ty -> List Constraint
 consField : RecPatField -> (List RecPatField, Bool) -> (List RecPatField, Bool)
 consTail : Expr -> Parser Expr
 constraintTail : Ty -> Parser Ty
+contextualKwName : Token -> String
 ctorOrVar : String -> Pat
 curryLam : List Pat -> Expr -> Expr
 dataAfterEq : String -> Token -> Parser (List Variant, List DeriveRef)
@@ -122,6 +125,7 @@ emit : a -> Parser a
 encodeAxis : (String, String) -> String
 encodeProductParam : List (String, String) -> String
 encodeSetParam : List String -> String
+endsDecl : Token -> Bool
 eqGuardIfMsg : String
 eqGuardShapeFrom : Array Token -> Int -> Int -> Bool
 eqGuardShapeP : Parser Bool
@@ -151,6 +155,7 @@ firstBacktickIdx : Array Token -> Int -> Int
 firstBlockCommentIdx : Array Token -> Int -> Int
 firstBraceBlockIdx : Array Token -> Int -> Int
 firstContentAt : Array Token -> Int -> Int -> Int
+firstCtxKwDeclIdx : Array Token -> Int -> Int -> Bool -> Int
 firstForeignKwIdx : Array Token -> Int -> Bool -> Int
 firstFunctionIdx : Array Token -> Int -> Int
 firstHsCaseOfIdx : Array Token -> Int -> Int
@@ -159,7 +164,7 @@ firstIndentIdx : Array Token -> Int -> Int -> Int
 firstInlineLetMissingIn : Array Token -> Int -> Int
 firstLexError : Array Token -> Int -> Option (Int, String)
 firstMutIdx : Array Token -> Int -> Int
-firstRecordIdx : Array Token -> Int -> Int
+firstRecordDeclIdx : Array Token -> Int -> Int -> Bool -> Int
 firstSlashEqIdx : Array Token -> Int -> Int
 firstWithIdx : Array Token -> Int -> Int
 flattenFieldPath : Expr -> Option (String, List String)
@@ -179,8 +184,8 @@ identNameP : Parser String
 ifKind : Token -> Parser Expr
 ifLet : Parser Expr
 ifPlain : Parser Expr
-ifaceBody : Parser (List IfaceMethod)
-ifaceBodyFor : Token -> Parser (List IfaceMethod)
+ifaceBody : Int -> Parser (List IfaceMethod)
+ifaceBodyFor : Int -> Token -> Parser (List IfaceMethod)
 ifaceMember : Parser IfaceMethod
 ifaceMemberRest : String -> List Pat -> Token -> Parser IfaceMethod
 ifaceMembers : Parser (List IfaceMethod)
@@ -190,9 +195,9 @@ ifaceSuper : Parser (List Super)
 ifaceSuperEntry : Parser Super
 ifaceSuperFor : Token -> Parser (List Super)
 ifaceWhereBody : Token -> Parser (List IfaceMethod)
-implBody : Parser (List ImplMethod)
-implBodyFor : Token -> Parser (List ImplMethod)
-implHead : Bool -> Token -> Parser Decl
+implBody : Int -> Parser (List ImplMethod)
+implBodyFor : Int -> Token -> Parser (List ImplMethod)
+implHead : Bool -> Int -> Token -> Parser Decl
 implHeadTokGo : Array Token -> Int -> Int -> Option Int
 implHeadTokIdx : Array Token -> Int -> Option Int
 implHeadTokStep : Array Token -> Int -> Int -> Token -> Option Int
@@ -203,7 +208,7 @@ implMethodsLoop : Parser (List ImplMethod)
 implRequireEntry : Parser Require
 implRequires : Parser (List Require)
 implRequiresFor : Token -> Parser (List Require)
-implRest : Bool -> String -> Parser Decl
+implRest : Bool -> Int -> String -> Parser Decl
 implWhereBody : Token -> Parser (List ImplMethod)
 importIdent : Parser String
 importIdentFor : Token -> Parser String
@@ -228,18 +233,20 @@ interpOpenFor : Token -> Parser String
 interpOpenStr : Parser String
 interpRest : Parser (List InterpPart)
 interpRestFor : Expr -> Token -> Parser (List InterpPart)
+isBinderTok : Token -> Bool
 isBracketCloseTok : Token -> Bool
 isBracketOpenTok : Token -> Bool
 isCloseDelim : Token -> Bool
+isContextualKw : Token -> Bool
 isContinuationOpStr : String -> Bool
 isCtorChars : Array Char -> Bool
 isCtorName : String -> Bool
 isDataDecl : Decl -> Bool
 isForeignKwTok : Token -> Bool
-isGuardLineEndTok : Token -> Bool
 isIntMinLit : Int -> Bool
 isLayoutTok : Token -> Bool
 isLeadingModifierTok : Token -> Bool
+isLineEndTok : Token -> Bool
 isNoiseTok : Token -> Bool
 isOpenDelim : Token -> Bool
 isPlainIdentTok : Token -> Bool
@@ -282,6 +289,7 @@ letRecStmt : Parser DoStmt
 letRecWithRemovedMsg : String
 letTailFor : Pat -> Expr -> Token -> Parser DoStmt
 lineAt : Array Int -> Int -> Int
+lineIsRecordBody : Array Token -> Int -> Int -> Bool -> Bool
 lineTrailingColonNoEq : Array Token -> Int -> Int -> Bool -> Bool -> Bool
 listAfterComma : Expr -> Token -> Parser Expr
 listFor : Token -> Parser Expr
@@ -307,6 +315,8 @@ memberAliasOrNot : Int -> String -> Bool -> Parser UseMember
 methodNameGo : Array Token -> Int -> Int -> Int -> Bool -> List (Option Int)
 methodNameIdxs : Array Token -> Int -> Int -> List (Option Int)
 methodNameStep : Array Token -> Int -> Int -> Int -> Bool -> Token -> List (Option Int)
+missingWhereIfaceMsg : String
+missingWhereImplMsg : String
 mkAttr : String -> Option String -> Attr
 mkEffect : (List (String, Option String), Option String) -> Ty -> Ty
 mkLocated : String -> Array Token -> Array Int -> Int -> String -> Int -> ParseError
@@ -474,6 +484,7 @@ propParam : Parser PropParam
 rangeAfter : Expr -> Bool -> Parser Expr
 recordFieldExpr : Parser (List String, Expr)
 recordFieldExprRest : List String -> Token -> Parser (List String, Expr)
+recordHeadIdx : Array Token -> Int -> Int
 recordPat : String -> Parser Pat
 recordPatField : Parser RecPatField
 recordPatFieldRest : String -> Loc -> Token -> Parser RecPatField
@@ -489,6 +500,8 @@ resultDeclsResult : String -> Array Token -> Array Int -> Int -> PR (List Decl) 
 rhsStartIdx : Array Token -> Int -> Int -> Int -> Int
 rngPatRest : Lit -> Parser Lit -> Token -> Parser Pat
 runP : Parser a -> Array Token -> Int -> PR a
+sameLineWhereIfaceMsg : String
+sameLineWhereImplMsg : String
 scanForLetIn : Array Token -> Int -> Int -> Bool
 sectionOpStr : Token -> Option String
 sectionTail : String -> Token -> Parser Expr

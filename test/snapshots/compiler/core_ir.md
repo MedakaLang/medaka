@@ -1,5 +1,5 @@
 # META
-source_lines=232
+source_lines=242
 stages=DESUGAR,MARK
 # SOURCE
 -- Core IR — STAGE2-DESIGN §2.1.  A serializable, backend-neutral intermediate
@@ -220,12 +220,22 @@ public export data CClause = CClause (List Pat) CExpr
 --     full-type impl key [for type-arg-distinct same-head dispatch, mirrors
 --     eval.mdk's VTypedImpl `k`], iface, dispatch
 --     positions, the clause's patterns, its lowered body).
---   CImplDefault = an untagged interface default (patterns + lowered body — the
---     fallback).
+--   CImplDefault = an untagged interface default (the INTERFACE IDENTITY that
+--     declared it, patterns + lowered body — the fallback).
+--
+-- ⚠️ `CImplDefault`'s leading String is #1047's fix and is NOT the interface's
+-- bare NAME: it is `ast.ifaceIdentity` (`"<module>::<Iface>"`), because two
+-- unrelated modules may each declare an interface with the same bare name and
+-- their defaults must not be confusable.  The registry is otherwise filtered by
+-- the bare METHOD name alone (`llvm_emit.findDefault`, `wasm_emit.findDefaultW`,
+-- `eval.pickTagFallback`), which is what made a method-less `impl Speak DogB`
+-- inherit the OTHER module's default body at exit 0 with no diagnostic.  Compare
+-- it ONLY with `ast.ifaceIdMatches` — `""` is absence, and absence must never
+-- match absence.
 public export data CImplEntry = CImplEntry String Int CImplBody
 public export data CImplBody =
   | CImplTagged String String String (List Int) (List Pat) CExpr
-  | CImplDefault (List Pat) CExpr
+  | CImplDefault String (List Pat) CExpr
 
 -- ── programs ───────────────────────────────────────────────────────────────
 -- A lowered program: top-level function groups (coalesced multi-clause), the
@@ -247,7 +257,7 @@ public export data CProgram =
 (DData Public "CBind" () ((variant "CBind" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "CClause"))))) ())
 (DData Public "CClause" () ((variant "CClause" (ConPos (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "CExpr")))) ())
 (DData Public "CImplEntry" () ((variant "CImplEntry" (ConPos (TyCon "String") (TyCon "Int") (TyCon "CImplBody")))) ())
-(DData Public "CImplBody" () ((variant "CImplTagged" (ConPos (TyCon "String") (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "CExpr"))) (variant "CImplDefault" (ConPos (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "CExpr")))) ())
+(DData Public "CImplBody" () ((variant "CImplTagged" (ConPos (TyCon "String") (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "CExpr"))) (variant "CImplDefault" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "CExpr")))) ())
 (DData Public "CProgram" () ((variant "CProgram" (ConPos (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "CImplEntry"))))) ())
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Lit" false) (mem "Pat" false) (mem "Addr" false) (mem "Route" false))))
@@ -262,5 +272,5 @@ public export data CProgram =
 (DData Public "CBind" () ((variant "CBind" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "CClause"))))) ())
 (DData Public "CClause" () ((variant "CClause" (ConPos (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "CExpr")))) ())
 (DData Public "CImplEntry" () ((variant "CImplEntry" (ConPos (TyCon "String") (TyCon "Int") (TyCon "CImplBody")))) ())
-(DData Public "CImplBody" () ((variant "CImplTagged" (ConPos (TyCon "String") (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "CExpr"))) (variant "CImplDefault" (ConPos (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "CExpr")))) ())
+(DData Public "CImplBody" () ((variant "CImplTagged" (ConPos (TyCon "String") (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "CExpr"))) (variant "CImplDefault" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "CExpr")))) ())
 (DData Public "CProgram" () ((variant "CProgram" (ConPos (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "CImplEntry"))))) ())

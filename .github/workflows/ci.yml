@@ -534,7 +534,17 @@ jobs:
             # the 22nd is plain `oracle.sh`. '*_oracle' silently left it out — and the coverage
             # gate caught that immediately, on its first run after being widened. Which is the
             # whole argument for the widened gate in one line.
-            pattern: "'sqlite/test/*oracle'"
+            #
+            # gzip/test/*oracle joins this shard for the same two reasons: it is the
+            # same KIND of gate (a project oracle that drives ./medaka directly and
+            # reads no test/bin oracle), and this shard has the most room. Derived
+            # from merge_group run 30971754103 rather than assumed — types 472s,
+            # engines 465s, backend 395s, tools 357s, frontend 352s, eval 313s,
+            # sqlite 246s. Re-derive before moving anything; these numbers rot:
+            #   gh run view <id> --json jobs --jq '.jobs[]|select(.name|startswith("gates"))
+            #     |"\(((.completedAt|fromdate)-(.startedAt|fromdate)))s \(.name)"'
+            # It needs `gzip`, which ships on ubuntu-latest (unlike sqlite3, installed below).
+            pattern: "'sqlite/test/*oracle' 'gzip/test/*oracle'"
           - name: frontend
             # 'native_fixtures/run' (T8): 11 native-only regression assertions (parse-error
             # location + foreign-syntax hints + one eval dispatch check). A real gate that
@@ -638,7 +648,38 @@ jobs:
             # paper) would instead be the FULL serial cost of the first and only oracle
             # that shard builds. ⚠️ Re-measure before moving it — those numbers rot; the
             # one-liner is in the `engines` entry above.
-            pattern: "'diff_compiler_eval*' 'diff_compiler_core_ir*' 'diff_compiler_dispatch_shape' 'diff_compiler_prelude_obj' 'diff_compiler_slice_oob' 'diff_compiler_ir_size' 'diff_compiler_origin_agreement' 'bootstrap_lex' 'bootstrap_resolve' 'bootstrap_typecheck' 'bootstrap_eval'"
+            #
+            # 'diff_compiler_import_order' (#1319 unit 0) is a FRONTEND/TYPES gate here
+            # for the same cost reason, fifth time over — the import-clause permutation
+            # differential, the one artefact that can observe an over-widening in
+            # constructor-name resolution (a golden records the permissive answer and
+            # then defends it). Its thematic homes are `frontend` (which owns
+            # diff_compiler_resolve*) and `types`; derived from the three merge_group
+            # runs 31022994812 / 30983572270 / 30981872310 on 2026-08-05, the shard
+            # walls were engines 324/334/473s, types 299/300/454s, tools 185/178/332s,
+            # backend 166/152/387s, frontend 223/165/299s, sqlite 108/123/199s and eval
+            # 92/83/246s — so both thematic homes are at or near the pole and this is
+            # the cheapest shard on every one of the three. It reads NO test/bin oracle;
+            # it needs only ./medaka + the emitter, which this shard already builds for
+            # dispatch_shape, prelude_obj, slice_oob and ir_size. It drives check + run +
+            # build + exec once per ORDERING — every n! ordering of each case's import
+            # clauses — and measured 25s wall on the dev box at the corpus it landed with.
+            # ⚠️ Re-measure before moving it; these numbers rot, and the count of cases is
+            # derived from the directory, never written down:
+            #   ls -d test/import_order_fixtures/*/ | wc -l
+            # 'diff_compiler_test_native' (#81 Stage 4): CI gate for `medaka test
+            # --native` / `--engines eval,native` — placed here by COST, not theme
+            # (measured 2026-08-05, merge_group run 31043828993: eval 215s was the
+            # cheapest shard after excluding `tools`/`engines` per the arc's own
+            # instructions; `types` 472s was the pole). It reads no test/bin oracle
+            # (only ./medaka + clang) and lands beside its closest sibling here,
+            # diff_compiler_origin_agreement, which also probes test_cmd.mdk's
+            # elaboration path. Measured wall time: ~6s.
+            # 'diff_compiler_draft_semantic' (#1399 X-0D) is another lightweight
+            # compiled-probe gate parked here for cost: this shard already builds
+            # the adjacent Core/elaboration probes, so its marginal build joins the
+            # existing parallel oracle batch rather than becoming a serial oracle.
+            pattern: "'diff_compiler_eval*' 'diff_compiler_core_ir*' 'diff_compiler_dispatch_shape' 'diff_compiler_prelude_obj' 'diff_compiler_slice_oob' 'diff_compiler_ir_size' 'diff_compiler_origin_agreement' 'diff_compiler_draft_semantic' 'diff_compiler_import_order' 'diff_compiler_test_native' 'bootstrap_lex' 'bootstrap_resolve' 'bootstrap_typecheck' 'bootstrap_eval'"
           - name: backend
             # 'build_cmd' (T8): THE end-to-end gate for the SHIPPING `medaka build` CLI —
             # 14 real programs built through the actual CLI, each binary's stdout diffed
@@ -666,7 +707,13 @@ jobs:
             # cheap invocations (~2s), and `tools` is the shard with room (114 CPU-s
             # vs engines' 834 — engines is the heaviest shard and must never grow;
             # it is NOT, despite what this line once said, the critical path).
-            pattern: "'diff_compiler_lint*' 'diff_compiler_lsp*' 'diff_compiler_mcp' 'diff_compiler_codemod' 'diff_compiler_repl' 'diff_compiler_new' 'diff_compiler_test' 'diff_compiler_ported' 'diff_compiler_doc' 'diff_compiler_index' 'diff_compiler_references*' 'diff_compiler_capability_matrix' 'diff_compiler_internal_extern' 'diff_compiler_effect*' 'diff_compiler_entry_exit_codes' 'diff_compiler_run_check_agreement' 'diff_compiler_run_stdout_flush' 'diff_compiler_run_entry_subdir' 'diff_compiler_ci_shard_coverage' 'diff_compiler_perf_stage_census' 'diff_compiler_fixture_corpus_coverage' 'diff_compiler_source_bytes' 'check_syntax_examples' 'check_build_oracles_for_consistency' 'cross_project_deps' 'cross_project_twonames' 'manifest_emit' 'lsp_harness' 'diff_net'"
+            # 'diff_compiler_test_typecheck' (#1229): named EXPLICITLY, because the
+            # neighbouring 'diff_compiler_test' entry is an exact name and not a glob
+            # — a new sibling matches nothing and would silently never run in CI, the
+            # exact hazard diff_compiler_ci_shard_coverage exists to catch. It reads no
+            # oracle and is six `./medaka test` invocations over tmp fixtures (~2s), so
+            # it belongs beside diff_compiler_test, whose subject (test_cmd.mdk) it shares.
+            pattern: "'diff_compiler_lint*' 'diff_compiler_lsp*' 'diff_compiler_mcp' 'diff_compiler_codemod' 'diff_compiler_repl' 'diff_compiler_new' 'diff_compiler_test' 'diff_compiler_test_typecheck' 'diff_compiler_ported' 'diff_compiler_doc' 'diff_compiler_index' 'diff_compiler_references*' 'diff_compiler_capability_matrix' 'diff_compiler_internal_extern' 'diff_compiler_effect*' 'diff_compiler_entry_exit_codes' 'diff_compiler_run_check_agreement' 'diff_compiler_run_stdout_flush' 'diff_compiler_run_entry_subdir' 'diff_compiler_ci_shard_coverage' 'diff_compiler_perf_stage_census' 'diff_compiler_fixture_corpus_coverage' 'diff_compiler_source_bytes' 'diff_compiler_fmt_write_safety' 'check_syntax_examples' 'check_build_oracles_for_consistency' 'cross_project_deps' 'cross_project_twonames' 'manifest_emit' 'lsp_harness' 'diff_net' 'pr_helper_test'"
     name: gates (${{ matrix.name }})
     steps:
       - uses: actions/checkout@v4
@@ -1086,6 +1133,17 @@ jobs:
       - name: Docs must not cite fabricated symbols
         run: sh test/check_agent_doc_symbols.sh
 
+      # Also unguarded, same reason — and one layer down from both gates above: those
+      # check that a cited PATH exists and a cited SYMBOL resolves; this checks that a
+      # cited CLAUSE LABEL has a definition. docs/spec/SHADOW-SEMANTICS.md declares a
+      # numbered clause set (S1, S2, ...); commit 9c6dcee5 rewrote one clause in a
+      # 173-line hunk and silently carried three sibling clauses (S6, S7, S8) out with
+      # it — its own commit message cites S7 twice AS A LIVE CLAUSE in the commit that
+      # deleted S7's text. Nobody noticed for three weeks: every gate stayed green,
+      # because neither sibling gate above checks this. Pure text analysis, no compiler.
+      - name: Spec clause citations must resolve to a same-document definition
+        run: sh test/check_spec_clause_labels.sh
+
       # Also unguarded, same reason — and the same disease one layer down. The two gates
       # above check what the DOCS say; this checks what the TOOLS say. ~54 gate scripts
       # printed `sh test/build_oracles.sh` as their remediation advice — the command
@@ -1403,12 +1461,12 @@ jobs:
           export MEDAKA_EMITTER="$PWD/medaka_emitter"
           sh test/wasm/build_wasm_oracle.sh
 
-      # The five gates, each invoked by its LITERAL repo-relative path — that literal is
+      # The six gates, each invoked by its LITERAL repo-relative path — that literal is
       # what makes diff_compiler_ci_shard_coverage.sh classify them "covered" (see the
       # COVERAGE note above). Run DIRECTLY, not via run_gates.sh: a direct exit 2 (a
       # toolchain skip) then FAILS the job instead of being reclassified as a skip — and
       # "a skip is not a pass" is the entire reason this gate coverage hole existed. All
-      # five run (|| rc=1) before the job fails, so one red gate never hides the others.
+      # six run (|| rc=1) before the job fails, so one red gate never hides the others.
       - name: WasmGC backend gates
         if: needs.detect.outputs.docs_only != 'true'
         run: |
@@ -1420,5 +1478,6 @@ jobs:
           bash test/wasm/diff_wasm_typed.sh    || rc=1
           bash test/wasm/diff_wasm_modules.sh  || rc=1
           bash test/wasm/diff_sqlite.sh        || rc=1
+          bash test/wasm/diff_gzip.sh          || rc=1
           bash test/build_wasm_cmd.sh          || rc=1
           exit $rc

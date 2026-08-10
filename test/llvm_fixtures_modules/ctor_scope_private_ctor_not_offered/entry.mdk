@@ -1,0 +1,45 @@
+-- THE CTOR-EXPORT INDEX MUST NOT OFFER A MODULE-PRIVATE CONSTRUCTOR.
+--
+-- `backend/private_mangle.ctorExportEntries` answers "may an IMPORTER name this
+-- constructor?".  It used to answer from an UNGATED table — every `DData` the unit
+-- declares, private ones included — and its own comment defended that as harmless:
+-- *"the import side only resolves what the importing unit actually brings into
+-- scope, and unmangled-because-private is harmless."*  That is false whenever a
+-- module exports a TYPE and privately declares a CONSTRUCTOR of the same spelling,
+-- which is exactly what pvmod does.
+--
+-- Expected output, derived by hand BEFORE any capture and independently of any
+-- engine: `Zt` in this file can only be pubmod's public arity-1 constructor —
+-- pvmod's `Zt(..)` member names pvmod's TYPE `Zt`, whose only constructor is `Mk`,
+-- and pvmod's arity-2 `Zt` belongs to the private `Hidden` and is exported by
+-- nothing.  So `unQ (Zt 7)` = `7` and `unP (Mk 5)` = `5`: `7` then `5`.
+-- The typechecker agrees independently — a probe binding `w = Zt 7` in this module
+-- reports `w : TQ`, pubmod's type.
+--
+-- ⚠️ COUNTERFACTUAL — THE COUNTERFACTUAL IS NOT THE MERGE BASE.  This program is
+-- CORRECT on bfee53b4 and was broken by an INTERMEDIATE commit on this same branch
+-- (6f63c710, the #1300 fix), which taught the wild branch to ask the bare-ctor
+-- question that the ungated table then answered wrongly.  Measured with only
+-- `compiler/backend/private_mangle.mdk` restored to 6f63c710 and the binary rebuilt:
+--     $ medaka run entry.mdk        → 7 / 5, exit 0
+--     $ medaka build entry.mdk -o e → exit 0
+--     $ ./e                         → runtime error [E-NONEXHAUSTIVE-MATCH], exit 1
+-- and on bfee53b4 the same program prints `7` / `5` at exit 0 on both engines.  So
+-- this cell grades a REGRESSION INTERNAL TO THE BRANCH, and a diff against `main`
+-- would not have shown it.
+--
+-- 🚨 THE IMPORT ORDER IS THE TRIGGER AND MUST NOT BE "TIDIED": pvmod must stay
+-- FIRST.  The rename map is first-entry-wins over decl order
+-- (`mangleUnitU`'s `omFromPairs (reverseL rmList)`), so with pvmod second its bogus
+-- entry loses the race and the same broken compiler produces a CORRECT binary.  The
+-- permuted twin `ctor_scope_private_ctor_not_offered_permuted/` pins that order and
+-- was measured GREEN on the very same broken build — which is the point: a value
+-- golden cannot catch an over-widening, only the permutation pair can, and either
+-- cell alone would have read as proof the compiler was fine.
+import pvmod.{Zt(..), unP}
+import pubmod.{Zt, unQ}
+
+main : <IO> Unit
+main =
+  let _ = putStrLn (intToString (unQ (Zt 7)))
+  putStrLn (intToString (unP (Mk 5)))

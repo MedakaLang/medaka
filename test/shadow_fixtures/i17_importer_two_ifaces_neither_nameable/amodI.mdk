@@ -1,0 +1,7 @@
+-- SHADOW-SEMANTICS cell I17 provider 1: interface IA, whose method puts the typaram at
+-- dispatch argument index 0.
+export interface IA a where
+  mth : a -> Int -> Int
+
+export af : Int -> Int
+af n = n

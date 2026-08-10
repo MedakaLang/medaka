@@ -1,0 +1,5 @@
+-- `Crate` at arity 1 — the constructor `main_ctortypemember` brings in via `(..)`.
+public export data EA = Crate Int
+
+export unEA : EA -> Int
+unEA (Crate n) = n

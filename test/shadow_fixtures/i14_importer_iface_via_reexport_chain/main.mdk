@@ -1,0 +1,25 @@
+-- SHADOW-SEMANTICS cell I14 (S1-CHAIN, #1380): the shadowed interface is nameable in this
+-- module ONLY THROUGH A RE-EXPORT CHAIN.  `Sizeable` is not declared here, not the prelude,
+-- and `ifc` is not imported here -- it arrives via `reexp`, which re-exports it by TYPE
+-- name.  §1.0's `nameable in M` covers exactly that ("exported by a module `M` imports,
+-- directly, OR THROUGH A RE-EXPORT CHAIN"), so `size` IS a shadow here, `Box` has a live
+-- impl, and the occurrence dispatches: 300.
+--
+-- ⚠️ PAIRED WITH `direct.mdk`, WHICH THIS GATE ALSO RUNS AS ITS OWN ROW. That file is this
+-- one with `import reexp.{Sizeable}` replaced by `import ifc.{Sizeable}` -- the SAME
+-- interface reached directly instead of through the chain. The two must agree, and that
+-- invariant holds under either reading of the clause, which is what makes it the thing to
+-- code against rather than the value.
+--
+-- WHY THIS CELL EXISTS: the corpus contained ZERO `export import` before it (derive:
+-- `grep -rl 'export import' test/shadow_fixtures/`), and the first cut of the #1353 fix
+-- built its nameable-in-`M` predicate out of a METHOD-name index whose re-export fold
+-- matches member lists against METHOD names. `export import ifc.{Sizeable}` names no
+-- method, so the predicate answered "not nameable" and this program was REJECTED while
+-- `direct.mdk` printed 300 -- a false reject on a program the base accepts, and the
+-- non-conformance S1-CHAIN enumerates by name ("MAY NOT fail closed on chains").
+import reexp.{Sizeable}
+import boxmod.{Box(..)}
+import fmod.{size}
+
+main = println (size (Box 3))

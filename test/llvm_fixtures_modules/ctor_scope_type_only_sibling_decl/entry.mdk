@@ -1,0 +1,38 @@
+-- #1111 A-2.6: the SIBLING-DECL route, and the counter-example to the claim that a
+-- member which looks like a type name "contributes nothing".
+--
+-- Rule (b) of `importedCtorTypeDecls` is a CONSTRUCTOR-name test.  `pmod` declares
+-- no type `T` at all — only `data Wrap = T Int` — so `import pmod.{T, pf}` matches
+-- by rule (b) and contributes `Wrap`, sibling constructors and all.  A member
+-- spelled like a type therefore DOES contribute whenever the module has some other
+-- decl with a constructor of that spelling.  `ctor_scope_type_only_no_hijack` is
+-- green only because `hja`'s single variant is `Hit`, i.e. because of its shape —
+-- not because type-shaped members are inert.
+--
+-- What keeps that harmless is the LAYERING, not the rule: the overlay is registered
+-- below this module's own `prog0`, so `Wrap`'s `T` cannot clobber the `T` declared
+-- right here.
+--
+-- Expected output, derived by hand BEFORE any capture and independently of any
+-- engine: `T "hi"` is `Loc`'s `T` (this module's own declaration wins), `unloc`
+-- gives `hi`; `pf 5` is `5`.
+--
+-- ⚠️ THE FAILURE THIS PINS, measured on the first cut of A-2.6 (PR #1282 as first
+-- pushed, binary built from f6c2d391): REJECTED, `Type mismatch: Wrap vs Loc`, exit
+-- 1, FIVE diagnostics.  Pristine `main` (26585d3c) exits 0 and prints `hi`/`5`.
+--
+-- ⚠️ Control, measured on BOTH binaries: change the import to `pmod.{pf}` and it is
+-- green either way — so it is the member `T`, not the mere presence of `Wrap`, that
+-- drives it.  Deleting `Wrap` is NOT a usable control: it also un-exports the name
+-- `T`, so the import fails at RESOLVE with `Module 'pmod' has no exported name 'T'`.
+import pmod.{T, pf}
+
+data Loc = T String
+
+unloc : Loc -> String
+unloc (T s) = s
+
+main : <IO> Unit
+main =
+  let _ = putStrLn (unloc (T "hi"))
+  putStrLn (intToString (pf 5))

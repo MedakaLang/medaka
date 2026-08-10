@@ -1,0 +1,10 @@
+-- #1265 CONTROL support: B's implementor, on its OWN type `KCat`.  Identical to
+-- cb.mdk except the implementing type is not shared with da.mdk.
+import ifb.{Greet(..), speak}
+
+public export data KCat = KCat
+
+impl Greet KCat where
+
+export sayKB : KCat -> String
+sayKB c = speak c

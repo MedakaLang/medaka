@@ -1,0 +1,9 @@
+-- A SECOND, unrelated declaration of the same constructor spelling, at a different
+-- type.  `colla` and `collb` never import each other.
+public export data CB =
+  | Dup String
+  | BSolo
+
+export unCB : CB -> String
+unCB (Dup s) = s
+unCB BSolo = "solo"

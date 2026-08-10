@@ -1,0 +1,19 @@
+-- issue #1306: the literal writes `p` then `q`; the declaration orders them `q`
+-- then `p`.  The emitter fills the constructor's slots POSITIONALLY in WRITTEN
+-- order instead of reordering by field name, so slot 0 (`q`) gets `1` and slot 1
+-- (`p`) gets `2`.
+--
+-- Hand-derived correct output: `2` then `1` -- the literal sets `p = 1` and
+-- `q = 2` BY NAME, and the declaration's order is irrelevant to what each field
+-- holds.  `medaka check` exits 0, `medaka run` prints the correct `2`/`1`, and the
+-- built binary prints `1`/`2` at exit 0 with no diagnostic anywhere.
+--
+-- One file, no imports, no name collision: none of those are required.
+data R = Rec { q : Int, p : Int }
+
+main =
+  let v = Rec { p = 1, q = 2 }
+  println (match v
+    Rec { q } => q)
+  println (match v
+    Rec { p } => p)

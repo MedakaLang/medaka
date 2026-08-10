@@ -1,0 +1,10 @@
+dispatched : Int
+externCmp : String -> Bool
+externIntoUser : String -> Crate Int
+lst : List Int
+opt : Option Int
+ord : Ordering
+pair : (Int, String)
+res : Result String Int
+viaAlias : Crate Int -> Int
+viaRelay : Int

@@ -1,0 +1,8 @@
+export interface IZ b where
+  szK : b -> Int -> Int  -- arity 2, SAME method name, unrelated interface
+
+export impl IZ String where
+  szK s k = k + 7
+
+export zf : Int
+zf = 2

@@ -1,0 +1,10 @@
+-- #1111 A-2.3 BYSTANDER: half two of the SAME-NAME COLLISION.  Same spellings as
+-- `dupa.mdk` (`Dup` at arity 2, `Shared` nullary), different kinds and different
+-- expansion.  Sorted after `dupa` so it is the one that registers LAST and would
+-- win a bare-name first-match lookup.  The entry imports only `dz` from here.
+public export data Dup p q = MkDupZ p q
+
+export type Shared = Float
+
+export dz : Int -> Int
+dz n = n

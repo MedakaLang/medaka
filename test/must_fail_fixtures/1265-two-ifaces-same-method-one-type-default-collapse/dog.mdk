@@ -1,0 +1,5 @@
+-- #1265: the ONE type that implements BOTH interfaces.  This is the whole defect
+-- condition: `ifaceIdsAtTag "Dog"` returns the identity of EVERY interface
+-- implemented at that tag, so the (method, tag)-keyed narrowing has two survivors
+-- and falls back to first-match.  See control.mdk for the two-types boundary.
+public export data Dog = Dog

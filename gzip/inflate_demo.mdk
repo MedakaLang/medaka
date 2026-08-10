@@ -1,0 +1,47 @@
+-- | gzip/inflate_demo.mdk — a CLI wrapper around `lib.inflate.gunzipMember`,
+--   for the differential test harness (see `docs/design/GZIP-DESIGN.md`
+--   §"Testing" and `sqlite/test/` for the template this mirrors).
+--
+-- Usage (after `medaka build gzip/inflate_demo.mdk -o inflate_demo`):
+--
+--     inflate_demo <input.gz> <output>
+--
+-- Reads `<input.gz>` byte-clean (`readFileBytes`), decodes it with
+-- `gunzipMember` — which validates BOTH trailer fields (CRC-32, ISIZE)
+-- against the decoded bytes, not just the DEFLATE stream itself — and writes
+-- the result byte-clean to `<output>` (`writeFileBytes`). On any failure
+-- (bad args, unreadable input, a rejected stream) it prints one line to
+-- STDERR and exits non-zero, so a shell harness can diff both the output
+-- bytes AND the exit code against the system `gunzip`.
+--
+-- `readFileBytes`/`writeFileBytes` are NOT available in the interpreter
+-- (`medaka run`), so this demo only runs once built (`medaka build`) — that
+-- is expected, not a bug in this file.
+
+import lib.inflate.{gunzipMember}
+import io.{eprintln}
+
+usage : String
+usage = "usage: inflate_demo <input.gz> <output>"
+
+runInflate : String -> String -> <IO, FileRead, FileWrite> Unit
+runInflate inPath outPath = match readFileBytes inPath
+  Err e =>
+    let _ = eprintln "inflate_demo: could not read \{inPath}: \{e}"
+    exit 1
+  Ok raw => match gunzipMember raw
+    Err e =>
+      let _ = eprintln "inflate_demo: \{e}"
+      exit 1
+    Ok decoded => match writeFileBytes outPath decoded
+      Err e =>
+        let _ = eprintln "inflate_demo: could not write \{outPath}: \{e}"
+        exit 1
+      Ok _ => ()
+
+main : <IO, FileRead, FileWrite> Unit
+main = match args ()
+  [inPath, outPath] => runInflate inPath outPath
+  _ =>
+    let _ = eprintln usage
+    exit 1

@@ -1,0 +1,7 @@
+builtinHeads : (List Int, String)
+crossModuleAlias : Parcel Int -> Int
+crossModuleDispatch : Int
+crossModuleType : Parcel Int
+externSourced : Bool
+preludeTypes : Option (Result String Int)
+throughCollidingModules : Int

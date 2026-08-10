@@ -76,7 +76,6 @@ import eval.eval.{
   evalRecordUpdate,
   evalValueField,
   evalField,
-  narrowMethod,
   routeTag,
   applyDicts,
   applyMethodDicts,
@@ -88,11 +87,15 @@ import eval.eval.{
   methodCellsOf,
   importFrameOf,
   pubReexports,
+  ModExports(..),
+  modExportCells,
+  ctorsByTypeOf,
   evalVariantUpdate,
   buildCtorFieldOrders,
   ctorFieldOrdersRef,
   methodAtNarrow,
   applyValues,
+  defaultCellName,
 }
 
 -- ── the evaluator ─────────────────────────────────────────────────────────
@@ -165,7 +168,7 @@ ceval env (CRangeArray lo hi incl) =
 -- has no decls of its own, so it is served by lowerImpls installing at lowering
 -- time — the last point that still holds them.
 ceval env (CMethod name route implRoutes methRoutes) =
-  let (narrowed, fwdReqs) = methodAtNarrow env (lookupEnv env name) route
+  let (narrowed, fwdReqs) = methodAtNarrow env name (lookupEnv env name) route
   applyMethodDicts env name route narrowed fwdReqs implRoutes methRoutes
 ceval env (CDict name routes) = applyDicts env (lookupEnv env name) routes
 ceval _ _ = panic "core_ir ceval: unsupported node"
@@ -404,7 +407,7 @@ cevalProgram (CProgram groups ctorArs ctorToType implEntries) =
   let _ = installConsts cells boolSeeds
   let _ = installConsts cells (externBindings ())
   let _ = installConsts cells ctors
-  let _ = installConsts cells (coalesceImpls (map (cImplEntryValue env) implEntries))
+  let _ = installConsts cells (coalesceImpls (flatMap (cImplEntryValues env) implEntries))
   let _ = cInstallTopGroups env cells groups
   map cellResult cells
 -- impls (lazy closures) install BEFORE groups so a nullary group's eager body
@@ -420,19 +423,38 @@ ctorBinding (name, arity) = (name, makeCtor name arity)
 -- the AST walker installs.  The only difference from eval.mdk is the closure
 -- body runs `ceval` over a `CExpr` instead of `eval` over an `Expr`.
 cImplMethodNames : List CImplEntry -> List String
-cImplMethodNames entries = dedup (map cImplEntryName entries)
+cImplMethodNames entries = dedup (flatMap cImplEntryNames entries)
 
-cImplEntryName : CImplEntry -> String
-cImplEntryName (CImplEntry n _ _) = n
+-- #1047: an entry contributes the qualified default cell name too, in LOCKSTEP
+-- with `cImplEntryValue` — a name with no entry is a dead `VUnit` cell, an entry
+-- with no name panics in `findCell`.  Peer of eval.mdk's `defaultNamesOf`.
+cImplEntryNames : CImplEntry -> List String
+cImplEntryNames (CImplEntry n _ (CImplDefault ifaceId _ _)) =
+  n :: qualifiedDefaultNameC ifaceId n
+cImplEntryNames (CImplEntry n _ _) = [n]
 
+qualifiedDefaultNameC : String -> String -> List String
+qualifiedDefaultNameC "" _ = []
+qualifiedDefaultNameC ifaceId n = [defaultCellName ifaceId n]
+
+-- One entry, or TWO for an identified interface default (#1047): the same value
+-- bound under both the bare method name and `<ifaceId>#<method>`.  Peer of
+-- eval.mdk's `defaultEntry`.
 cImplEntryValue : EvalEnv (Value e) -> CImplEntry -> (String, (Int, Value e))
 cImplEntryValue env (CImplEntry name score body) =
   (name, (score, cImplBodyValue env body))
 
+cImplEntryValues : EvalEnv (Value e) -> CImplEntry -> List (String, (Int, Value e))
+cImplEntryValues env (CImplEntry name score (CImplDefault ifaceId pats body)) =
+  let scored = (score, cImplMethodValue env [] pats body)
+  (name, scored) :: map (q => (q, scored)) (qualifiedDefaultNameC ifaceId name)
+cImplEntryValues env ent = [cImplEntryValue env ent]
+
 cImplBodyValue : EvalEnv (Value e) -> CImplBody -> Value e
 cImplBodyValue env (CImplTagged tag key iface positions pats body) =
   VTypedImpl tag key positions 0 (cImplMethodValue env positions pats body)
-cImplBodyValue env (CImplDefault pats body) = cImplMethodValue env [] pats body
+cImplBodyValue env (CImplDefault _ pats body) =
+  cImplMethodValue env [] pats body
 
 -- A point-free (no-param) impl/default body: defer a return-position method as a
 -- VThunk; otherwise eta-expand so the discriminating arg still reaches the body
@@ -516,8 +538,8 @@ cevalModules preludeDecls modules =
   let globalNames = map fst boolSeeds ++ map fst (externBindings ()) ++ map fst ctors ++ implMethodNames allDecls ++ map cBindName preludeGroups
   let globalCells = map (n => (n, Ref VUnit)) globalNames
   let globalEnv = EvalEnv [globalCells]
-  let mods = cBuildModInfos disp globalCells [] modules
-  let implEntries = map (cImplEntryValue globalEnv) preludeImpls ++ flatMap cModImplValues mods
+  let mods = cBuildModInfos disp (ModExports globalCells (ctorsByTypeOf preludeDecls)) [] modules
+  let implEntries = flatMap (cImplEntryValues globalEnv) preludeImpls ++ flatMap cModImplValues mods
   let _ = installConsts globalCells boolSeeds
   let _ = installConsts globalCells (externBindings ())
   let _ = installConsts globalCells ctors
@@ -529,9 +551,10 @@ cevalModules preludeDecls modules =
 -- pass 1: lower + allocate each module's local cells and build its env (imports
 -- resolved against already-processed modules, since loader order is
 -- dependency-first).  Mirror of eval.mdk's buildModInfos, lowering groups/impls.
-cBuildModInfos : List ((String, String), List Int) -> List (String, Ref (Value e)) -> List (String, List (String, Ref (Value e))) -> List (String, List Decl) -> List (CModInfo (Value e))
+cBuildModInfos : List ((String, String), List Int) -> ModExports (Value e) -> List (String, ModExports (Value e)) -> List (String, List Decl) -> List (CModInfo (Value e))
 cBuildModInfos _ _ _ [] = []
-cBuildModInfos disp globalCells exportsMap ((mid, decls)::rest) =
+cBuildModInfos disp coreExports exportsMap ((mid, decls)::rest) =
+  let globalCells = modExportCells coreExports
   let cbinds = lowerGroups decls
   let cimpls = lowerImplsWith disp decls
   -- P0-9 (Core-IR port of the eval.mdk fix): each module's OWN constructors ALSO
@@ -552,14 +575,18 @@ cBuildModInfos disp globalCells exportsMap ((mid, decls)::rest) =
   -- cell.  Methods are global-by-name and so appear in no module's localCells; without
   -- this, an ALIASED method import binds to nothing, while an un-aliased one silently
   -- works by falling through to the global frame under its unchanged name.
-  let exports = localCells ++ methodCellsOf globalCells decls ++ pubReexports globalCells exportsMap decls
-  CModInfo mid decls cbinds cimpls localCells menv :: cBuildModInfos disp globalCells ((mid, exports)::exportsMap) rest
+  -- `T(..)` CTOR EXPANSION (Core-IR port of the eval.mdk fix — same lockstep rule):
+  -- the type→ctors index rides WITH the cells in one `ModExports` so an importing
+  -- module's `import m.{T(..)}` binds m's own constructor cells instead of falling
+  -- through to the bare-name global frame, which every module's ctors share.
+  let exports = ModExports (localCells ++ methodCellsOf globalCells decls ++ pubReexports coreExports exportsMap decls) (ctorsByTypeOf decls)
+  CModInfo mid decls cbinds cimpls localCells menv :: cBuildModInfos disp coreExports ((mid, exports)::exportsMap) rest
 
 -- a module's impl methods / interface defaults close over ITS env but coalesce
 -- into the shared global VMulti (mirror of eval.mdk's modImplEntries)
 cModImplValues : CModInfo (Value e) -> <e> List (String, (Int, Value e))
 cModImplValues (CModInfo _ _ _ cimpls _ menv) =
-  map (cImplEntryValue menv) cimpls
+  flatMap (cImplEntryValues menv) cimpls
 
 -- pass 2: install each module's groups into its own cells (its env)
 cInstallModGroups : List (CModInfo (Value e)) -> <e> Unit

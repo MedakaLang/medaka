@@ -1,0 +1,5 @@
+-- #1114 (#845) keying probe, module P: an unsignatured export whose `Display a =>`
+-- context is INFERRED (string interpolation inserts `display`).  Imported SELECTIVELY by
+-- accept_845_unrelated_module_same_name.mdk, alongside a wildcard import of
+-- obl1114_q.mdk, so both new lookup arms are live in one program.
+export pdisp x = "\{x}"

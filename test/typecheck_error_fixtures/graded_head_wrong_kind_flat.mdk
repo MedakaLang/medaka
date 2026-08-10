@@ -1,0 +1,26 @@
+-- #1111 A-2.4 MIRROR PROBE (FLAT / single-file arm), graded-head-kind half.
+--
+-- The peer of iface_incomplete_impl_flat.mdk, for the OTHER table A-2.4 re-keys
+-- (`universeIfaceParamKinds`, read by `checkGradedImplTys`).  `Graded`'s slot 0 is
+-- row-kinded (`f e a` with `e` in an effect-tail position), `Q`'s slot 0 is an
+-- ordinary `Type`, so the head is GENUINELY wrong-kinded and must STILL be rejected
+-- with T-IMPL-KIND-MISMATCH.  There is no same-name interface anywhere here.
+--
+-- ⚠️ THIS TABLE IS THE ONE READ ON BOTH DRIVER ARMS -- `checkGradedImplHeads` is
+-- called from `checkBodyImpl`, which Flat and Module share -- so it is where an
+-- identity-only key would have silently switched the check OFF for `medaka check` on
+-- a no-import file.  That is a `loud -> silent` regression, which AGENTS.md grades as
+-- a severity INCREASE, and it is invisible to every other gate: a check that stops
+-- firing moves no output any fixture asserts.  This fixture is the witness.
+--
+-- The body is deliberately the recursive `gthen q f = gthen q f` rather than
+-- something that builds a `Q`: a constructed body drags in an unrelated second
+-- diagnostic (a `Num` constraint on the method's quantified `b`), which would let the
+-- fixture keep passing on the wrong diagnostic if the kind check ever went quiet.
+interface Graded f where
+  gthen : f e a -> (a -> <e> f e b) -> f e b
+
+data Q a b = MkQ a b
+
+impl Graded Q where
+  gthen q f = gthen q f

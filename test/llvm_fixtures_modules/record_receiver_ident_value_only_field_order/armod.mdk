@@ -1,0 +1,9 @@
+-- One of two UNRELATED modules each declaring a record TYPE spelled `Cfg`, with
+-- the SAME two `Int` field names at OPPOSITE indices.  Same-typed on purpose: the
+-- disjoint-field and divergent-type shapes make a wrong pick LOUD, which is what
+-- blinded the original unit-3 corpus.  Here a wrong pick is a WRONG NUMBER.
+public export data Cfg = { a : Int, b : Int }
+
+-- Exported as a VALUE, not a type: `entry` never writes `Cfg`.
+export mkA : Cfg
+mkA = Cfg { a = 11, b = 22 }

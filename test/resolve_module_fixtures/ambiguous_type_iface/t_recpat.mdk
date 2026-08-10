@@ -1,0 +1,19 @@
+-- TYPE occurrence 2/3: a record PATTERN head (`recPatHead`).  `checkPat` routes
+-- `PRec` here and NOT through its `PCon` arm, so neither ambiguity peer sees this
+-- position by default — without its own guard it is silent while a signature is
+-- flagged.  No signature on `sizeOf`, so `Crate` occurs exactly once.
+--
+-- ⚠️ `Crate` is used here because it is the TYPE spelling of the head, which is
+-- what `typeAmbiguous` is keyed by.  A record head may equally be a CTOR-ONLY
+-- spelling (`data T = MkT { fx : Int }` → head `MkT`); that half is #1253, drained
+-- by #1319 unit 1 and pinned by the `k_recpat` / `k_reclit` cells beside this one.
+--
+-- ⚠️ THIS CELL ALSO PINS THAT THE TWO PEERS DO NOT DOUBLE-REPORT.  `Crate` is in
+-- BOTH ambiguity sets — a record's sole variant carries the type's own name — so a
+-- record head that concatenated the two verdicts would emit one collision twice and
+-- this cell's single row would become two.  `ambiguousHeadErrors` returns exactly
+-- one verdict; that is what keeps this golden at one row per occurrence.
+import ta.{Crate}
+import tb.{Crate}
+
+sizeOf (Crate { crateSz = n }) = n

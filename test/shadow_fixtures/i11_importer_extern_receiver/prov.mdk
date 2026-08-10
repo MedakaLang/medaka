@@ -1,0 +1,8 @@
+-- SHADOW-SEMANTICS cell I11 provider: the i4 shape (a module defining a NEW
+-- type plus a standalone whose name shadows a PRELUDE method), one axis over —
+-- the shadowed method is `Display.display`, so the live-impl receivers below
+-- can be primitives reached through several different PROVENANCES.
+public export data Tok = Tok Int
+
+export display : Tok -> String
+display _ = "tok"

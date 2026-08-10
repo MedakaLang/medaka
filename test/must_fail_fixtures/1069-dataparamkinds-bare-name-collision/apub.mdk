@@ -1,2 +1,0 @@
--- issue #1069: sibling module for the SHADOWED (correct) `Box`, arity 2 (e, a).
-public export data Box e a = MkBox (Unit -> <e> a)

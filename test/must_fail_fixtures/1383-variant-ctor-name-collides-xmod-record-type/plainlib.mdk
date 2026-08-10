@@ -1,0 +1,6 @@
+-- issue #1383, verbatim from the issue body. An UNRELATED module declaring a
+-- record TYPE also named `Plain` -- same bare name as ahold.mdk's ctor, no
+-- import relationship between the two modules at all.
+public export data Plain = { px : Int }
+export mkP : Plain
+mkP = Plain { px = 1 }

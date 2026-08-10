@@ -1,0 +1,21 @@
+-- #792 (drained by #1114): a PARAMETRIC impl head (`impl Foo (List a)`) whose method
+-- body needs a GROUND instance that is missing and named in no `requires`.  `Bar`
+-- derives nothing, so `debug Bar` needs `Debug Bar`, which does not exist.  Nothing
+-- about that obligation is abstract — DICT-SEMANTICS §4.2 D1 says it is discharged
+-- where it is recorded, so `check` must reject.
+--
+-- BEFORE #1114: `check` exited 0 (`main : Unit`, zero diagnostics) while `build` exited
+-- 1 with `E-PANIC: no impl of method 'debug' for type 'Bar'` and `run` exited 1 with
+-- `E-PANIC: intToString: not an Int` — three verdicts, one program.  #781/#787 window
+-- the obligation channel across parametric-impl-body inference to suppress the
+-- ambiguity false positives its ABSTRACT element var would raise, and the rollback was
+-- wholesale: it took the ground obligations with it (§4.2 D6(b)).
+data Bar = Bar
+
+interface Foo a where
+  foo : a -> String
+
+impl Foo (List a) where
+  foo _ = debug Bar
+
+main = println (foo ([1] : List Int))

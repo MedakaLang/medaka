@@ -1,2 +1,0 @@
--- issue #1070: sibling module for the SHADOWED (correct) alias `T`.
-export type T = Int

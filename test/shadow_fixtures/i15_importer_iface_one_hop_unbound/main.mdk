@@ -1,0 +1,20 @@
+-- SHADOW-SEMANTICS cell I15 (S1 scope, ruling #1375): the interface's home module IS
+-- imported here -- and the interface still is not nameable, because the import binds only
+-- `sf`. §1.0's `nameable in M` is about the DECLARATION a module may refer to by name, not
+-- about which modules it touches, and this module cannot refer to `Sizeable` at all:
+-- writing `impl Sizeable Blob` here is rejected `Unknown interface: Sizeable` (resolve,
+-- `UnknownInterface`) -- on the base binary as well as this one, so it is not a property
+-- this change created. So `size` is not a shadow here and the occurrence is the standalone
+-- explicitly imported from `fmod`: 99.
+--
+-- WHY THIS CELL EXISTS: i12 pins the TRANSITIVE form of the same defect -- the interface's
+-- module reached only through a third module that re-exports nothing. This is the ONE-HOP
+-- form, and it is one line SHORTER: #1353's own repro with the bridge removed. The first
+-- cut of that fix admitted a dependency's WHOLE interface set on any import of it, so this
+-- shape still printed 7 while i12 was green -- the S0 narrowed rather than fixed, with its
+-- must-fail pin already deleted. A one-hop cell and a transitive cell are NOT the same
+-- test; the transitive one passes while the one-hop one is broken.
+import fmod.{size}
+import smod.{sf}
+
+main = println (size "abc" + sf 0)

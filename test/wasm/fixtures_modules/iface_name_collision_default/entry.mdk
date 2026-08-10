@@ -1,0 +1,36 @@
+-- W9 port of test/llvm_fixtures_modules/iface_name_collision_default/entry.mdk
+-- (#1418, closing the coverage gap filed there — the wasm corpus had ZERO
+-- cross-module same-name `interface` fixtures before this PR).
+--
+-- #1047 (S0, CLOSED by Stage A-2 unit A-2.9): two UNRELATED modules each declare
+-- `interface Speak x where speak : x -> String` with a DIFFERENT default body,
+-- and each is implemented by a METHOD-LESS impl in its own module. The Core IR's
+-- untagged-default registry (`CImplDefault`) used to carry no interface identity
+-- and was looked up by the bare METHOD name, so first-match gave BOTH types
+-- module A's body: `A-default|A-default`, exit 0, no diagnostic — on eval AND
+-- native AND wasm, since all three engines resolved the same registry the same
+-- wrong way (which is exactly why diff_compiler_engines never saw it — all three
+-- agreed and all three were wrong; this fixture guards the fixed state instead).
+--
+-- The EXPECTED value is derived from the spec, not captured from an engine.
+-- DICT-SEMANTICS §5: the interface default is used only when the SELECTED
+-- INSTANCE omits the method. `ifai.DogA` implements the only `Speak` in ITS scope
+-- (ifa's), so it selects ifa's default; `ifbi.DogB` likewise selects ifb's. Under
+-- the decided class model a class is `(module, name)` (§8 I4), so neither module
+-- can observe the other's default at all. Correct = `A-default|B-default`.
+--
+-- Both `sayA`/`sayB` call `speak` on a statically-known concrete type (DogA/DogB),
+-- so this is the DIRECT (RKey) dispatch route, not a constrained forwarder through
+-- the runtime dict dispatcher — deliberately, so this fixture does not also
+-- require wasm's dict-routed interface-default arms (#1020, a separate known gap
+-- already ledgered on the sibling fixtures inherited_default_dict_dispatch /
+-- attributed_impl_dispatch in test/llvm_fixtures_modules/).
+--
+-- Live differential (native oracle) gate — no golden to enshrine. Checked against
+-- the hand-derived value above (not just against each other) on all three
+-- engines: eval, native (this gate's oracle), and wasm.
+import ifai.{DogA(..), sayA}
+import ifbi.{DogB(..), sayB}
+
+main : <IO> Unit
+main = putStrLn (sayA DogA ++ "|" ++ sayB DogB)

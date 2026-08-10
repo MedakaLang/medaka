@@ -1,0 +1,299 @@
+=== ORIGIN AGREEMENT (#1110) ===
+# <slot> <head> <flat~graph> <single~graph> <flat~single>
+alpha Cat R-ONLY CONFLICT R-ONLY
+alpha Ghost R-ONLY CONFLICT R-ONLY
+alpha Int AGREE AGREE AGREE
+alpha String AGREE AGREE AGREE
+alpha decl:Boxed R-ONLY CONFLICT R-ONLY
+alpha decl:Cat R-ONLY CONFLICT R-ONLY
+alpha decl:Echo R-ONLY CONFLICT R-ONLY
+alpha decl:Ghost R-ONLY CONFLICT R-ONLY
+alpha decl:Loud R-ONLY CONFLICT R-ONLY
+alpha decl:Plain R-ONLY CONFLICT R-ONLY
+alpha decl:Quiet R-ONLY CONFLICT R-ONLY
+alpha decl:Speak R-ONLY CONFLICT R-ONLY
+alpha decl:Sub R-ONLY CONFLICT R-ONLY
+alpha decl:Tagged R-ONLY CONFLICT R-ONLY
+alpha iface:Boxed R-ONLY CONFLICT R-ONLY
+alpha iface:Loud R-ONLY CONFLICT R-ONLY
+alpha iface:Plain R-ONLY CONFLICT R-ONLY
+alpha iface:Quiet R-ONLY CONFLICT R-ONLY
+alpha iface:Speak R-ONLY CONFLICT R-ONLY
+alpha iface:Tagged R-ONLY CONFLICT R-ONLY
+beta Dog R-ONLY CONFLICT R-ONLY
+beta Kennel R-ONLY CONFLICT R-ONLY
+beta String AGREE AGREE AGREE
+beta decl:Dog R-ONLY CONFLICT R-ONLY
+beta decl:Echo R-ONLY CONFLICT R-ONLY
+beta decl:Kennel R-ONLY CONFLICT R-ONLY
+beta decl:Speak R-ONLY CONFLICT R-ONLY
+beta iface:Speak R-ONLY CONFLICT R-ONLY
+core Array AGREE AGREE AGREE
+core Bool AGREE AGREE AGREE
+core Char AGREE AGREE AGREE
+core Float AGREE AGREE AGREE
+core Int AGREE AGREE AGREE
+core List AGREE AGREE AGREE
+core Option AGREE AGREE AGREE
+core Ordering AGREE AGREE AGREE
+core RField AGREE AGREE AGREE
+core Rep AGREE AGREE AGREE
+core Result AGREE AGREE AGREE
+core String AGREE AGREE AGREE
+core Unit AGREE AGREE AGREE
+core __tuple2__ AGREE AGREE AGREE
+core decl:Alternative AGREE AGREE AGREE
+core decl:Applicative AGREE AGREE AGREE
+core decl:Arbitrary AGREE AGREE AGREE
+core decl:Bimappable AGREE AGREE AGREE
+core decl:Bounded AGREE AGREE AGREE
+core decl:Debug AGREE AGREE AGREE
+core decl:Display AGREE AGREE AGREE
+core decl:Eq AGREE AGREE AGREE
+core decl:Filterable AGREE AGREE AGREE
+core decl:Foldable AGREE AGREE AGREE
+core decl:FromEntries AGREE AGREE AGREE
+core decl:Generic AGREE AGREE AGREE
+core decl:Hashable AGREE AGREE AGREE
+core decl:Index AGREE AGREE AGREE
+core decl:IndexMut AGREE AGREE AGREE
+core decl:Mappable AGREE AGREE AGREE
+core decl:Monoid AGREE AGREE AGREE
+core decl:Num AGREE AGREE AGREE
+core decl:Option AGREE AGREE AGREE
+core decl:Ord AGREE AGREE AGREE
+core decl:Ordering AGREE AGREE AGREE
+core decl:RField AGREE AGREE AGREE
+core decl:Rep AGREE AGREE AGREE
+core decl:Result AGREE AGREE AGREE
+core decl:Semigroup AGREE AGREE AGREE
+core decl:Slice AGREE AGREE AGREE
+core decl:Thenable AGREE AGREE AGREE
+core decl:Traversable AGREE AGREE AGREE
+core iface:Alternative AGREE AGREE AGREE
+core iface:Applicative AGREE AGREE AGREE
+core iface:Arbitrary AGREE AGREE AGREE
+core iface:Bimappable AGREE AGREE AGREE
+core iface:Bounded AGREE AGREE AGREE
+core iface:Debug AGREE AGREE AGREE
+core iface:Display AGREE AGREE AGREE
+core iface:Eq AGREE AGREE AGREE
+core iface:Filterable AGREE AGREE AGREE
+core iface:Foldable AGREE AGREE AGREE
+core iface:Generic AGREE AGREE AGREE
+core iface:Hashable AGREE AGREE AGREE
+core iface:Index AGREE AGREE AGREE
+core iface:IndexMut AGREE AGREE AGREE
+core iface:Mappable AGREE AGREE AGREE
+core iface:Monoid AGREE AGREE AGREE
+core iface:Num AGREE AGREE AGREE
+core iface:Ord AGREE AGREE AGREE
+core iface:Semigroup AGREE AGREE AGREE
+core iface:Slice AGREE AGREE AGREE
+core iface:Thenable AGREE AGREE AGREE
+core iface:Traversable AGREE AGREE AGREE
+deep Int AGREE AGREE AGREE
+deep decl:Baton R-ONLY CONFLICT R-ONLY
+deep decl:Relay R-ONLY CONFLICT R-ONLY
+main_ifaces Baton R-ONLY R-ONLY NEITHER
+main_ifaces Int AGREE AGREE AGREE
+main_ifaces Pair R-ONLY CONFLICT R-ONLY
+main_ifaces String AGREE AGREE AGREE
+main_ifaces decl:Pair R-ONLY CONFLICT R-ONLY
+main_ifaces iface:Echo R-ONLY R-ONLY NEITHER
+main_ifaces iface:Relay R-ONLY R-ONLY NEITHER
+main_ifaces iface:Speak R-ONLY R-ONLY NEITHER
+mid Baton R-ONLY CONFLICT R-ONLY
+mid Int AGREE AGREE AGREE
+mid decl:Baton R-ONLY CONFLICT R-ONLY
+mid decl:Relay R-ONLY CONFLICT R-ONLY
+=== CONFLICTS ===
+# PINNED, #1223 (medaka test <dir>: one declaration, two module ids, one process).
+# ⚠️ THESE ROWS DRAIN BY REVIEW, NOT MECHANICALLY. The `single` arm's "__user__" is
+# a SHAPE MODEL spelled in this probe, not read from compiler/tools/test_cmd.mdk,
+# so unifying the drivers will NOT flip these rows on its own. Whoever fixes #1223
+# must delete them here by hand. (Sourcing the id from the driver would make it
+# mechanical; that is a change to test_cmd.mdk and is deliberately not in this PR.)
+alpha Cat flat=- single=mod:__user__ graph=mod:alpha
+alpha Ghost flat=- single=mod:__user__ graph=mod:alpha
+alpha decl:Boxed flat=- single=mod:__user__ graph=mod:alpha
+alpha decl:Cat flat=- single=mod:__user__ graph=mod:alpha
+alpha decl:Echo flat=- single=mod:__user__ graph=mod:alpha
+alpha decl:Ghost flat=- single=mod:__user__ graph=mod:alpha
+alpha decl:Loud flat=- single=mod:__user__ graph=mod:alpha
+alpha decl:Plain flat=- single=mod:__user__ graph=mod:alpha
+alpha decl:Quiet flat=- single=mod:__user__ graph=mod:alpha
+alpha decl:Speak flat=- single=mod:__user__ graph=mod:alpha
+alpha decl:Sub flat=- single=mod:__user__ graph=mod:alpha
+alpha decl:Tagged flat=- single=mod:__user__ graph=mod:alpha
+alpha iface:Boxed flat=- single=mod:__user__ graph=mod:alpha
+alpha iface:Loud flat=- single=mod:__user__ graph=mod:alpha
+alpha iface:Plain flat=- single=mod:__user__ graph=mod:alpha
+alpha iface:Quiet flat=- single=mod:__user__ graph=mod:alpha
+alpha iface:Speak flat=- single=mod:__user__ graph=mod:alpha
+alpha iface:Tagged flat=- single=mod:__user__ graph=mod:alpha
+beta Dog flat=- single=mod:__user__ graph=mod:beta
+beta Kennel flat=- single=mod:__user__ graph=mod:beta
+beta decl:Dog flat=- single=mod:__user__ graph=mod:beta
+beta decl:Echo flat=- single=mod:__user__ graph=mod:beta
+beta decl:Kennel flat=- single=mod:__user__ graph=mod:beta
+beta decl:Speak flat=- single=mod:__user__ graph=mod:beta
+beta iface:Speak flat=- single=mod:__user__ graph=mod:beta
+deep decl:Baton flat=- single=mod:__user__ graph=mod:deep
+deep decl:Relay flat=- single=mod:__user__ graph=mod:deep
+main_ifaces Pair flat=- single=mod:__user__ graph=mod:main_ifaces
+main_ifaces decl:Pair flat=- single=mod:__user__ graph=mod:main_ifaces
+mid Baton flat=- single=mod:__user__ graph=mod:mid
+mid decl:Baton flat=- single=mod:__user__ graph=mod:mid
+mid decl:Relay flat=- single=mod:__user__ graph=mod:mid
+=== RESIDUAL ===
+# <arm> <slot> <head> — an `OriginUnresolved` head that SURVIVED stamping.
+# NOT necessarily a defect; NOT necessarily empty. Read the section comment.
+flat alpha Cat
+flat alpha Ghost
+flat alpha decl:Boxed
+flat alpha decl:Cat
+flat alpha decl:Echo
+flat alpha decl:Ghost
+flat alpha decl:Loud
+flat alpha decl:Plain
+flat alpha decl:Quiet
+flat alpha decl:Speak
+flat alpha decl:Sub
+flat alpha decl:Tagged
+flat alpha iface:Boxed
+flat alpha iface:Loud
+flat alpha iface:Plain
+flat alpha iface:Quiet
+flat alpha iface:Speak
+flat alpha iface:Tagged
+flat beta Dog
+flat beta Kennel
+flat beta decl:Dog
+flat beta decl:Echo
+flat beta decl:Kennel
+flat beta decl:Speak
+flat beta iface:Speak
+flat deep decl:Baton
+flat deep decl:Relay
+flat main_ifaces Baton
+flat main_ifaces Pair
+flat main_ifaces decl:Pair
+flat main_ifaces iface:Echo
+flat main_ifaces iface:Relay
+flat main_ifaces iface:Speak
+flat mid Baton
+flat mid decl:Baton
+flat mid decl:Relay
+single main_ifaces Baton
+single main_ifaces iface:Echo
+single main_ifaces iface:Relay
+single main_ifaces iface:Speak
+=== HEAD SPREAD ===
+# <head> <distinct graph-arm origins across ALL slots> <the origins themselves>
+Array 1 builtin
+Baton 1 mod:mid
+Bool 1 builtin
+Cat 1 mod:alpha
+Char 1 builtin
+Dog 1 mod:beta
+Float 1 builtin
+Ghost 1 mod:alpha
+Int 1 builtin
+Kennel 1 mod:beta
+List 1 builtin
+Option 1 mod:core
+Ordering 1 mod:core
+Pair 1 mod:main_ifaces
+RField 1 mod:core
+Rep 1 mod:core
+Result 1 mod:core
+String 1 builtin
+Unit 1 builtin
+__tuple2__ 1 builtin
+decl:Alternative 1 mod:core
+decl:Applicative 1 mod:core
+decl:Arbitrary 1 mod:core
+decl:Baton 2 mod:deep|mod:mid
+decl:Bimappable 1 mod:core
+decl:Bounded 1 mod:core
+decl:Boxed 1 mod:alpha
+decl:Cat 1 mod:alpha
+decl:Debug 1 mod:core
+decl:Display 1 mod:core
+decl:Dog 1 mod:beta
+decl:Echo 2 mod:alpha|mod:beta
+decl:Eq 1 mod:core
+decl:Filterable 1 mod:core
+decl:Foldable 1 mod:core
+decl:FromEntries 1 mod:core
+decl:Generic 1 mod:core
+decl:Ghost 1 mod:alpha
+decl:Hashable 1 mod:core
+decl:Index 1 mod:core
+decl:IndexMut 1 mod:core
+decl:Kennel 1 mod:beta
+decl:Loud 1 mod:alpha
+decl:Mappable 1 mod:core
+decl:Monoid 1 mod:core
+decl:Num 1 mod:core
+decl:Option 1 mod:core
+decl:Ord 1 mod:core
+decl:Ordering 1 mod:core
+decl:Pair 1 mod:main_ifaces
+decl:Plain 1 mod:alpha
+decl:Quiet 1 mod:alpha
+decl:RField 1 mod:core
+decl:Relay 2 mod:deep|mod:mid
+decl:Rep 1 mod:core
+decl:Result 1 mod:core
+decl:Semigroup 1 mod:core
+decl:Slice 1 mod:core
+decl:Speak 2 mod:alpha|mod:beta
+decl:Sub 1 mod:alpha
+decl:Tagged 1 mod:alpha
+decl:Thenable 1 mod:core
+decl:Traversable 1 mod:core
+iface:Alternative 1 mod:core
+iface:Applicative 1 mod:core
+iface:Arbitrary 1 mod:core
+iface:Bimappable 1 mod:core
+iface:Bounded 1 mod:core
+iface:Boxed 1 mod:alpha
+iface:Debug 1 mod:core
+iface:Display 1 mod:core
+iface:Echo 1 mod:beta
+iface:Eq 1 mod:core
+iface:Filterable 1 mod:core
+iface:Foldable 1 mod:core
+iface:Generic 1 mod:core
+iface:Hashable 1 mod:core
+iface:Index 1 mod:core
+iface:IndexMut 1 mod:core
+iface:Loud 1 mod:alpha
+iface:Mappable 1 mod:core
+iface:Monoid 1 mod:core
+iface:Num 1 mod:core
+iface:Ord 1 mod:core
+iface:Plain 1 mod:alpha
+iface:Quiet 1 mod:alpha
+iface:Relay 1 mod:mid
+iface:Semigroup 1 mod:core
+iface:Slice 1 mod:core
+iface:Speak 2 mod:alpha|mod:beta
+iface:Tagged 1 mod:alpha
+iface:Thenable 1 mod:core
+iface:Traversable 1 mod:core
+=== SUMMARY ===
+modules 5
+graph-modules 5
+flat-segments 10
+decl-heads 47
+iface-occs-constraintOrigin 47
+iface-occs-superOrigin 12
+iface-occs-requireOrigin 96
+iface-occs-implOrigin 124
+heads 107
+claims 321
+residual 40
+conflicts 32

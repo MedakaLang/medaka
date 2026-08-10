@@ -1,0 +1,12 @@
+-- A newtype.  `export newtype` DOES set `newtypePub` — but a newtype's constructor
+-- is nevertheless not importable by any spelling: measured on `main`, both
+-- `import nmodv.{NT(..)}` and `import nmodv.{NT, Wrap}` give `Unbound variable:
+-- Wrap` with no collision present.  So `Wrap` never enters an importer's scope from
+-- here, and the engine's `T(..)` index must not pretend otherwise.
+export newtype NT = Wrap Int
+
+export mkNT : Int -> NT
+mkNT n = Wrap n
+
+export unNT : NT -> Int
+unNT (Wrap n) = n

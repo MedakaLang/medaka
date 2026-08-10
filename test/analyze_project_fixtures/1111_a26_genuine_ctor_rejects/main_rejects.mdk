@@ -1,0 +1,29 @@
+-- #1111 A-2.6, the SEVERITY MIRROR.  A-2.6 turns two `exit 1`/wrong-value programs
+-- into `exit 0` ones, and that direction is a severity INCREASE if it over-reaches:
+-- every pre-existing fixture in this tree covered the REJECTING behaviour, so the
+-- new acceptance is untested by construction and nothing derived from the diff or
+-- from coverage would catch an over-widening.  This file is the deliberate opposite
+-- cell — genuinely ill-typed uses of exactly the two surfaces A-2.6 touched, with
+-- NO name collision anywhere in the graph, so the overlay is not even in play.
+--
+-- Both must still be REJECTED, with the field/argument type the ONE declaring module
+-- gives them:
+--   * `Cfg { fld = "s" }` — `onecfg.Cfg.fld : Int`, so `String vs Int`.
+--   * `Dup "s"`           — `onecfg.Dup : Int -> A1`, so `Int vs String`.
+--
+-- The collision-bearing peer of the first cell (same wrong field type, but WITH
+-- #1256's two same-named `Cfg`s in the graph, which must reject identically rather
+-- than fall through to the other module's `Float`) is `1111_a26_collision_rejects/`
+-- — NOT `1111_a26_bystander_ctor_collision/`, which this note mis-cited: that is a
+-- third cell again (collision present, program VALID).  Together the three cover
+-- collision×validity.  ⚠️ This file's oracle pins LINE numbers — keep edits neutral.
+import onecfg.{Cfg, A1, Dup}
+
+bad1 : Cfg
+bad1 = Cfg { fld = "s" }
+
+bad2 : A1
+bad2 = Dup "s"
+
+main : <IO> Unit
+main = println "unreachable"

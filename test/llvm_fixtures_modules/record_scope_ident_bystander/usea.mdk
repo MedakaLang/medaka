@@ -1,0 +1,7 @@
+-- Means rcolla's `Dup`, reached only through `RA(..)` — a member that never SPELLS
+-- the constructor.  That is why the witness predicate cannot be `usePathBindsName`
+-- (A-2.5's member filter), and this cell is what would go wrong if it were.
+import rcolla.{RA(..), unRA}
+
+export ra : Int
+ra = unRA (Dup { dx = 7 })

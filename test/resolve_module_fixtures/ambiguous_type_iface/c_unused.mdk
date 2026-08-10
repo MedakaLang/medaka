@@ -1,0 +1,9 @@
+-- CONTROL 2 — USE SITE, NOT IMPORT SITE.  Both declarers imported, all three
+-- colliding names bound in this module's scope, and NONE of them ever written.
+-- Importing an ambiguity you never name stays legal, so this module contributes
+-- ZERO rows.  Moving the check to the import statement would light it up.
+import ta.{Widget, Crate, Speak}
+import tb.{Widget, Crate, Speak}
+
+untouched : Int -> Int
+untouched n = n

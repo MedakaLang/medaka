@@ -1,0 +1,29 @@
+-- #792 SECOND SHAPE, found by adversarial review of the first fix (#1114) and one token
+-- away from its sibling `reject_792_parametric_impl_ground_missing.mdk`: the missing
+-- instance is needed at a FUNCTION type rather than at a nullary constructor.
+--
+-- `debug bumper` needs `Debug (Int -> Int)`. Nothing about that predicate is abstract and
+-- no instance can ever match an arrow, so DICT-SEMANTICS §4.2 OD1 makes it a check-time
+-- reject — it is OD1's "structurally refutable" population, which is decidable WITHOUT
+-- being ground.
+--
+-- WHY THIS FIXTURE EXISTS SEPARATELY: #1114's first cut filtered the parametric-impl
+-- window on `allConcreteHeads`, and `headTyconNameMono` enumerates `TCon`/`TRigid` only —
+-- so a fully concrete arrow read as NON-concrete, the window dropped the predicate, and
+-- OD4's impl-channel exemption meant no ambiguity fired either. `check` exited 0 while
+-- `run` gave `intToString: not an Int` and `build` gave `arg-tag dispatch on impl type
+-- that owns no constructors` — #792's own three-verdict signature, restored by a type
+-- change its sibling fixture cannot express. A corpus that pins only the `debug Bar`
+-- shape reports this as fixed.
+data Bar = Bar
+
+interface Foo a where
+  foo : a -> String
+
+bumper : Int -> Int
+bumper n = n + 1
+
+impl Foo (List a) where
+  foo _ = debug bumper
+
+main = println (foo ([1] : List Int))

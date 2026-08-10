@@ -1,0 +1,4 @@
+-- #1288 CONTROL support module: identical to mid.mdk except the `export import g.*`
+-- line is REMOVED -- the single variable the control isolates. `Same` here can only
+-- ever mean `p.Same`; no merge is possible. Used by control.mdk.
+export import p.*

@@ -452,6 +452,49 @@ findIndexGo pred arr i n =
    > minimum (fromList [3, 1, 2])
    Some 1 -}
 
+-- ── Indexed iteration ────────────────────────────────────────────────────
+
+{- `arrayGetUnsafe` is internal-only, and the bounds-checked `get` returns an
+   `Option` whose `None` arm a caller walking a known-good index range can
+   never hit — forcing an unreachable match at every call site. These two
+   give bounds-safe indexed access without either: the index is threaded by
+   construction, never taken from caller-supplied input. Argument/callback
+   order follows `List.mapWithIndex` (index before element) and
+   `Foldable.fold` (accumulator, then element). -}
+
+{- | Left-to-right fold, threading the running index alongside each element.
+
+   > foldWithIndex (acc i x => acc + i * x) 0 (fromList [10, 20, 30])
+   80
+   > foldWithIndex (acc i x => (i, x) :: acc) [] (fromList ([] : List Int))
+   [] -}
+export foldWithIndex : (b -> Int -> a -> <e> b) -> b -> Array a -> <e> b
+foldWithIndex f z arr = foldWithIndexGo f arr 0 (arrayLength arr) z
+
+foldWithIndexGo : (b -> Int -> a -> <e> b) -> Array a -> Int -> Int -> b -> <e> b
+foldWithIndexGo f arr i n acc =
+  if i >= n then
+    acc
+  else
+    foldWithIndexGo f arr (i + 1) n (f acc i (arrayGetUnsafe i arr))
+
+{- | Visit every element in order, applying `f` to its index and itself for
+   the side effect. The bounds-safe replacement for hand-rolled index
+   recursion over `get`/`arrayGetUnsafe` in effectful loops (e.g. streaming
+   an array's bytes into a writer).
+
+   > let acc = Ref [] in let _ = forEachWithIndex (i x => acc := (i, x) :: acc.value) (fromList [7, 8, 9]) in acc.value
+   [(2, 9), (1, 8), (0, 7)] -}
+export forEachWithIndex : (Int -> a -> <e> Unit) -> Array a -> <e> Unit
+forEachWithIndex f arr = forEachWithIndexGo f arr 0 (arrayLength arr)
+
+forEachWithIndexGo : (Int -> a -> <e> Unit) -> Array a -> Int -> Int -> <e> Unit
+forEachWithIndexGo f arr i n =
+  if i >= n then ()
+  else
+    let _ = f i (arrayGetUnsafe i arr)
+    forEachWithIndexGo f arr (i + 1) n
+
 -- ── Typeclass impls ─────────────────────────────────────────────────────
 
 export impl Mappable Array where
@@ -516,3 +559,21 @@ prop "makeWith length" (n : Int) =
 prop "makeWith element at index 0" (n : Int) =
   let n' = if n <= 0 then 1 else n
   arrayGetUnsafe 0 (makeWith n' (i => i * 3 + 7)) == 7
+
+{- `foldWithIndex`/`forEachWithIndex` are checked against an oracle built
+   from primitives with no shared implementation with them: `range` (a
+   separate index-generation path) paired with the existing array `zip` and
+   `Foldable.fold`, not against a restatement of `foldWithIndex` itself. -}
+
+prop "foldWithIndex matches fold over zip with range" (xs : List Int) =
+  let arr = fromList xs
+  let viaIndex = foldWithIndex (acc i x => (i, x)::acc) [] arr
+  let viaZip = fold (acc pair => pair::acc) [] (zip (range 0 (length arr)) arr)
+  eq viaIndex viaZip
+
+prop "forEachWithIndex visits every index once, in order, matching zip with range" (xs : List Int) =
+  let arr = fromList xs
+  let seen = Ref []
+  let _ = forEachWithIndex (i x => seen := (i, x)::seen.value) arr
+  let viaZip = fold (acc pair => pair::acc) [] (zip (range 0 (length arr)) arr)
+  eq seen.value viaZip

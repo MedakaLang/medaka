@@ -1,0 +1,48 @@
+-- #1110 PR B — the "new carrier present, UNRELATED code still behaves" fixture
+-- (AGENTS.md Traps, the "ADDING A PROGRAM-GLOBAL TABLE OR A NEW AST CONSTRUCTOR"
+-- fence).  All four interface-OCCURRENCE identity carriers are PRESENT in this
+-- program — a superinterface (`Super`), a `=>` predicate (`Constraint`), an impl
+-- `requires` (`Require`), and four impl heads (`DImpl`) — but `main` reaches NONE
+-- of them.  That asymmetry is the whole point: a field widening on a widely
+-- matched AST node fails as "the feature works and something unrelated breaks"
+-- (record-slot mis-resolution #1216, label-set pattern matching #1217), and every
+-- pre-existing fixture pins the output its author expected.
+--
+-- The assertion is therefore the record/ADT/arithmetic code below, which names no
+-- interface at all: a two-field record built and read back by FIELD NAME, a
+-- positional one-field ADT, and integer arithmetic.
+--
+-- Expected value derived by hand, not from the engine: blend (Pair 5 7) is
+-- 5 * 10 + 7 = 57, unbox (Box 4) is 4, and 57 + 4 = 61.
+interface Shape a where
+  sides : a -> Int
+
+interface Tagged a requires Shape a where
+  tag : a -> Int
+
+data Tri = Tri
+data Wrap a = Wrap a
+
+impl Shape Tri where
+  sides Tri = 3
+
+impl Tagged Tri where
+  tag Tri = 9
+
+impl Shape (Wrap a) requires Shape a where
+  sides (Wrap x) = sides x
+
+sidesOf : Shape a => a -> Int
+sidesOf x = sides x
+
+-- ── nothing below this line names an interface ──────────────────────────────
+data Pair = Pair { pairLo : Int, pairHi : Int }
+data Box = Box Int
+
+unbox : Box -> Int
+unbox (Box n) = n
+
+blend : Pair -> Int
+blend p = p.pairLo * 10 + p.pairHi
+
+main = blend (Pair { pairLo = 5, pairHi = 7 }) + unbox (Box 4)

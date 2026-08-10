@@ -4,7 +4,7 @@
 -- subcommands with no OCaml at runtime.
 --
 --   ./medaka check <file.mdk>     type-check (parse→…→typecheck), via check.runCheck
---   ./medaka fmt [--stdout|--check|--write] <file.mdk>   format (default: in place)
+--   ./medaka fmt [--stdout|--check|--write] <file.mdk>   format (default: --check, read-only; --write rewrites)
 --   ./medaka new <name>           scaffold a new project
 --   ./medaka help | --help | -h   usage
 --
@@ -71,14 +71,12 @@ import frontend.desugar.{desugar}
 import frontend.resolve.{
   resolveModulesToHumane,
   resolveModulesToHumaneG,
-  resolveModulesToHumaneGF,
   resolveModulesToHumaneByPath,
 }
 import driver.loader.{
   LoadError,
   LoadMsg,
   LoadParseFailed,
-  loadProgramE,
   loadProgramFilesLocatedE,
   findProjectRoot,
   findProjectRootOrSelf,
@@ -142,6 +140,7 @@ import eval.eval.{
   progArgsRef,
 }
 import tools.test_cmd.{runTest}
+import tools.doctest.{Engine(..)}
 import tools.repl.{initSession, replLoop}
 import tools.lsp.{runServer}
 import tools.mcp.{runMcpServer}
@@ -167,6 +166,7 @@ import tools.lint.{
   applyFindingDeny,
   isFindingError,
   lintFileDiagTriple,
+  splitLintNames,
 }
 import tools.lint_cache.{
   LintEntry(..),
@@ -286,22 +286,42 @@ runCli _ = match args ()
   "--version"::_ => printVersion ()
   "-v"::_ => printVersion ()
   "version"::_ => printVersion ()
-  "check"::rest => runCheckCmd rest
-  "fmt"::rest => runFmtCmd rest
+  "check"::rest => dispatchSub checkHelpText runCheckCmd rest
+  "fmt"::rest => dispatchSub fmtHelpText runFmtCmd rest
   "new"::rest => runNewCmd rest
   "build"::rest => runBuildCmd rest
-  "run"::rest => runRunCmd rest
-  "test"::rest => runTestCmd rest
-  "snapshot"::rest => runSnapshotCmd rest
-  "doc"::rest => runDocCmd rest
-  "lint"::rest => runLintCmd rest
-  "codemod"::rest => runCodemodCmd rest
-  "check-policy"::rest => runCheckPolicyCmd rest
-  "manifest"::rest => runManifestCmd rest
+  "run"::rest => dispatchSub runHelpText runRunCmd rest
+  "test"::rest => dispatchSub testHelpText runTestCmd rest
+  "snapshot"::rest => dispatchSub snapshotHelpText runSnapshotCmd rest
+  "doc"::rest => dispatchSub docHelpText runDocCmd rest
+  "lint"::rest => dispatchSub lintHelpText runLintCmd rest
+  "codemod"::rest => dispatchSub codemodHelpText runCodemodCmd rest
+  "check-policy"::rest => dispatchSub checkPolicyHelpText runCheckPolicyCmd rest
+  "manifest"::rest => dispatchSub manifestHelpText runManifestCmd rest
   "repl"::rest => runReplCmd rest
   "lsp"::rest => runLspCmd rest
   "mcp"::rest => runMcpCmd rest
   sub::_ => notYet sub
+
+-- #1348: `medaka <sub> --help`/`-h` used to fall straight into the
+-- subcommand's own argv parsing, which (for every subcommand below) treats
+-- an unrecognized leading-`-` token as either a hard parse error or — worse,
+-- for `check`/`run`/`doc`/etc, whose parsers only strip a small flag
+-- ALLOWLIST — a literal filename, so `medaka fmt --help` reported "unknown
+-- flag: --help" and `medaka check --help` tried to read a file named
+-- `--help`. `build`/`new`/`repl`/`lsp`/`mcp` already special-case `--help`/
+-- `-h` internally (kept as-is); this intercepts it centrally for the rest,
+-- at the FIRST position only — a `--help` appearing after a real target is
+-- passed through unchanged (e.g. a program's own `--help` passthrough arg
+-- to `medaka run prog.mdk --help`).
+dispatchSub : String -> (List String -> <IO> Unit) -> List String -> <IO> Unit
+dispatchSub help _ ("--help"::_) =
+  let _ = putStrLn help
+  exit 0
+dispatchSub help _ ("-h"::_) =
+  let _ = putStrLn help
+  exit 0
+dispatchSub _ run rest = run rest
 
 -- ── usage (mirrors bin/main.ml print_usage) ───────────────────────────────
 -- Takes Unit so the interpreter's top-level-value evaluation doesn't fire its
@@ -316,12 +336,12 @@ usage _ = putStrLn (stringConcat
     "  medaka run [--release] <file.mdk>   Type-check and run a program\n",
     "  medaka build <file.mdk> [-o <out>] [--keep-ir]  Compile to a native binary (LLVM + clang)\n",
     "  medaka check [--json] <file.mdk>    Type-check without running\n",
-    "  medaka test [file.mdk]    Run doctests + prop tests\n",
+    "  medaka test [--native | --engines eval,native] [file.mdk]    Run doctests + prop tests (--native runs doctests through a compiled native binary INSTEAD of the interpreter; --engines runs the listed set, exit is the AND)\n",
     "  medaka doc [file.mdk]     Generate Markdown documentation\n",
     "  medaka lint [paths...]    Lint files/dirs (style rules; --fix, --cache, --disable/--only/--deny=<rules,...>)\n",
     "  medaka codemod <name> [flags] [paths...]  Apply a named source-preserving AST transform (--write/--stdout)\n",
     "  medaka snapshot [--check|--new|--bless] [paths...]  Per-stage snapshot tests (--out <dir>, --stages <a,b,..>)\n",
-    "  medaka fmt [paths...]     Format .mdk files in place (or --check)\n",
+    "  medaka fmt [paths...]     Report unformatted files (default; use --write to rewrite in place)\n",
     "  medaka new <name>         Scaffold a new project directory\n",
     "  medaka repl               Start an interactive REPL (reads stdin until EOF or :quit)\n",
     "  medaka lsp                Run the language server over stdio\n",
@@ -371,6 +391,21 @@ ppParseError src file e =
 -- behaviour — keeps the no-import goldens green); a multi-module load goes through
 -- runCheckModules (multi-module resolve + per-module-frame typecheck), so a valid
 -- cross-module reference reports import-aware diagnostics instead of `UnknownModule`.
+checkHelpText : String
+checkHelpText = stringConcat
+  [
+    "medaka check — Type-check a file without running it\n",
+    "\n",
+    "Usage:\n",
+    "  medaka check [--json] [--types] [--allow-internal] <file.mdk>\n",
+    "\n",
+    "  --json            emit the {\"files\":[...]} structured-diagnostics\n",
+    "                    envelope instead of human text\n",
+    "  --types           show the full inferred-scheme dump, prelude included\n",
+    "                    (default: only your own top-level bindings)\n",
+    "  --allow-internal  permit internal-only externs outside stdlib/\n",
+  ]
+
 runCheckCmd : List String -> <IO> Unit
 runCheckCmd argv =
   let jsonMode = hasFlag "--json" argv
@@ -720,7 +755,10 @@ lastModPair [p] = Some p
 lastModPair (_::rest) = lastModPair rest
 
 -- Drop check's non-positional flags (--release is silently ignored; --json is
--- handled by the caller via hasFlag before dropFlags strips it).
+-- handled by the caller via hasFlag before dropFlags strips it). `medaka
+-- test`'s own flags (--native, --engines <list>) are NOT here — `--engines`
+-- takes a value dropFlags doesn't know how to skip, so `medaka test` filters
+-- its own argv via `testTargets` instead (below).
 dropFlags : List String -> List String
 dropFlags [] = []
 dropFlags ("--json"::rest) = dropFlags rest
@@ -1008,18 +1046,58 @@ tripleHasDiags : (String, String, List Diag) -> Bool
 tripleHasDiags (_, _, []) = False
 tripleHasDiags _ = True
 
--- Mirrors lib/fmt.ml's single-file dispatch: default --write (in place),
--- --stdout prints, --check reports.  A single literal-file target keeps the
--- ORIGINAL single-file path byte-for-byte (goldens depend on this).  A
--- directory target (or multiple targets) recursively expands via the SAME
--- `expandLintTarget`/`collectMdkFiles` walk `medaka lint` uses (dir/file
--- discriminated by `listDir`; skips dotfiles/dot-dirs; no test/-exclusion,
--- matching lint's own behavior) and formats every `.mdk` found, aggregating
--- exit codes the way `medaka lint`'s multi-file path does (any error → exit 1).
+-- #1348: writing REQUIRES `--write`. The bare form used to default to
+-- FmtWrite (silent in-place rewrite, no output, exit 0 whether or not
+-- anything changed) — a destructive operation indistinguishable from a
+-- no-op, and it once silently reformatted ~500 tracked files. The bare
+-- default is now `FmtCheck`: read-only (never touches the file), reports
+-- which files are NOT formatted (one line each, exit 1 if any), and is
+-- SILENT + exit 0 when everything is already formatted — exactly `--check`
+-- with no flag needed. This is chosen over defaulting to `--stdout`
+-- (dumping the formatted source to stdout) because it is the one behaviour
+-- that already generalizes uniformly across a single file, multiple files,
+-- and a directory target (`--stdout` inherently requires exactly one file,
+-- so a bare `medaka fmt somedir/` would need a second, different default);
+-- it also matches the read-only convention of `gofmt -l`/`rustfmt --check`.
+-- `--write` is the only mode that mutates, and it now prints a one-line
+-- summary of what it did (`formatted N file(s)` / `already formatted`) —
+-- see `fmtWriteSummaryLine` — so a write can never again produce zero
+-- observable output.
+--
+-- A single literal-file target keeps the ORIGINAL single-file path
+-- byte-for-byte (goldens depend on this).  A directory target (or multiple
+-- targets) recursively expands via the SAME `expandLintTarget`/
+-- `collectMdkFiles` walk `medaka lint` uses (dir/file discriminated by
+-- `listDir`; skips dotfiles/dot-dirs; no test/-exclusion, matching lint's
+-- own behavior) and formats every `.mdk` found, aggregating exit codes the
+-- way `medaka lint`'s multi-file path does (any error → exit 1).
 data FmtMode = FmtWrite | FmtStdout | FmtCheck
 
+fmtHelpText : String
+fmtHelpText = stringConcat
+  [
+    "medaka fmt — Format .mdk file(s)\n",
+    "\n",
+    "Usage:\n",
+    "  medaka fmt [--check | --stdout | --write] <path>...\n",
+    "\n",
+    "Read-only unless --write is given.\n",
+    "\n",
+    "  (default)    same as --check: reports files that are not formatted\n",
+    "               (exit 1 if any); prints nothing when already formatted.\n",
+    "               Never writes.\n",
+    "  --check      explicit form of the default\n",
+    "  --stdout     print the formatted result to stdout (single file only);\n",
+    "               never writes\n",
+    "  --write, -w  rewrite the file(s) in place and print a one-line summary\n",
+    "               (\"formatted N file(s)\" / \"already formatted\")\n",
+    "\n",
+    "A path may be a file or a directory (recursively expanded; dotfiles and\n",
+    "dot-dirs are skipped).\n",
+  ]
+
 runFmtCmd : List String -> <IO> Unit
-runFmtCmd argv = match parseFmtArgs argv FmtWrite []
+runFmtCmd argv = match parseFmtArgs argv FmtCheck []
   Err msg =>
     let _ = ePutStrLn msg
     exit 2
@@ -1045,46 +1123,65 @@ fmtManyTargets mode targets =
     [] =>
       let _ = ePutStrLn "medaka fmt: no .mdk files found"
       exit 2
-    _ => if fmtFilesGo mode files False then exit 1 else ()
+    _ =>
+      let (hadErr, changed) = fmtFilesGo mode files (False, 0)
+      let _ = match mode
+        FmtWrite => putStrLn (fmtWriteSummaryLine changed)
+        _ => ()
+      if hadErr then exit 1 else ()
 
--- Fold over an expanded file list, formatting each and aggregating whether any
--- error occurred (read failure, parse error, or --check finding unformatted
--- output) — mirrors `lintFilesGo`'s aggregation.
-fmtFilesGo : FmtMode -> List String -> Bool -> <IO> Bool
+-- Fold over an expanded file list, formatting each and aggregating whether
+-- any error occurred (read failure, parse error, or --check finding
+-- unformatted output — mirrors `lintFilesGo`'s aggregation) AND, for
+-- `--write`, how many files were actually rewritten (so the caller can print
+-- the "#1348" summary line once for the whole batch rather than per file).
+fmtFilesGo : FmtMode -> List String -> (Bool, Int) -> <IO> (Bool, Int)
 fmtFilesGo _ [] acc = acc
-fmtFilesGo mode (f::rest) acc =
-  let hadErr = fmtOneReport mode f
-  fmtFilesGo mode rest (acc || hadErr)
+fmtFilesGo mode (f::rest) (errAcc, changedAcc) =
+  let (hadErr, changed) = fmtOneReport mode f
+  fmtFilesGo
+    mode
+    rest
+    (errAcc || hadErr, changedAcc + (if changed then 1 else 0))
 
--- Like `fmtOne` but reports to stdout/stderr and RETURNS whether an error
--- occurred instead of exiting immediately, so `fmtFilesGo` can aggregate
--- across many files (the single-file path still calls `fmtOne` directly and
--- exits per its own original codes, unchanged).
-fmtOneReport : FmtMode -> String -> <IO> Bool
+-- One line summarizing a `--write` run over N files: 0 changed reads as
+-- "already formatted" (mirrors `fmtOne`'s single-file wording), one file
+-- changed keeps the singular, more than one pluralizes.
+fmtWriteSummaryLine : Int -> String
+fmtWriteSummaryLine 0 = "already formatted"
+fmtWriteSummaryLine 1 = "formatted 1 file"
+fmtWriteSummaryLine n = "formatted \{intToString n} files"
+
+-- Like `fmtOne` but reports to stdout/stderr and RETURNS (hadErr, changed)
+-- instead of exiting immediately, so `fmtFilesGo` can aggregate across many
+-- files (the single-file path still calls `fmtOne` directly and exits per
+-- its own original codes, unchanged). `changed` is only meaningful for
+-- `FmtWrite` — every other mode returns `False` for it.
+fmtOneReport : FmtMode -> String -> <IO> (Bool, Bool)
 fmtOneReport mode file = match readFile file
   Err msg =>
     let _ = ePutStrLn "\{file}: \{msg}"
-    True
+    (True, False)
   Ok src => match parseResult src
     Err e =>
       let _ = ePutStrLn (ppParseError src file e)
-      True
+      (True, False)
     Ok _ =>
       let formatted = formatSource src
       match mode
         FmtStdout =>
           let _ = putStr formatted
-          False
-        FmtCheck => if formatted == src then False
+          (False, False)
+        FmtCheck => if formatted == src then (False, False)
         else
           let _ = ePutStrLn (file ++ ": not formatted")
-          True
-        FmtWrite => if formatted == src then False
+          (True, False)
+        FmtWrite => if formatted == src then (False, False)
         else match writeFile file formatted
           Err msg =>
             let _ = ePutStrLn "\{file}: \{msg}"
-            True
-          Ok _ => False
+            (True, False)
+          Ok _ => (False, True)
 
 parseFmtArgs : List String -> FmtMode -> List String -> Result String (FmtMode, List String)
 parseFmtArgs [] mode acc = Ok (mode, reverseL acc)
@@ -1117,12 +1214,12 @@ fmtOne mode file = match readFile file
         else
           let _ = ePutStrLn (file ++ ": not formatted")
           exit 1
-        FmtWrite => if formatted == src then ()
+        FmtWrite => if formatted == src then putStrLn "already formatted"
         else match writeFile file formatted
           Err msg =>
             let _ = ePutStrLn "\{file}: \{msg}"
             exit 2
-          Ok _ => ()
+          Ok _ => putStrLn "formatted 1 file"
 
 -- ── codemod ────────────────────────────────────────────────────────────────
 -- `medaka codemod <name> [codemod-flags] [--write|--stdout] <paths...>`.
@@ -1138,6 +1235,29 @@ fmtOne mode file = match readFile file
 -- `--stdout` prints one file's result (original text if unchanged).  A bare
 -- `medaka codemod` lists the registry and exits 2.
 data CodeMode = CmDry | CmWrite | CmStdout
+
+codemodHelpText : String
+codemodHelpText = stringConcat
+  [
+    "medaka codemod — Apply a named source-preserving AST transform\n",
+    "\n",
+    "Usage:\n",
+    "  medaka codemod <name> [flags] [--write|--stdout] <paths...>\n",
+    "\n",
+    "  (default)  dry-run: prints \"would rewrite: <file>\" per changed file,\n",
+    "             exits 1 if any file would change. Never writes.\n",
+    "  --write    rewrite only the files that actually change\n",
+    "  --stdout   print one file's result (single file only)\n",
+    "\n",
+    "Any other --flag consumes the next token as its value, passed to the\n",
+    "named codemod. Run `medaka codemod` with no arguments to list the\n",
+    "available codemods.\n",
+    "\n",
+    "NOTE: `--help`/`-h` is only recognized in the FIRST position — as\n",
+    "`medaka codemod --help`, before a codemod name. `medaka codemod <name>\n",
+    "--help` is NOT special-cased (it is a codemod flag) and codemod-specific\n",
+    "help does not exist yet.\n",
+  ]
 
 runCodemodCmd : List String -> <IO> Unit
 runCodemodCmd [] = listCodemodsAndExit ()
@@ -1478,11 +1598,20 @@ typecheckGate allowInternal root input =
         -- and rendered by moduleLoadErrText.
         Ok tsrc => match parseResult tsrc
           Err e => TGErr (ppParseError tsrc input e)
-          Ok _ => match loadProgramE input roots
+          -- #186/#1360: load with `loadProgramFilesLocatedE`, exactly as
+          -- `runCheckCmd` and `runRunCmd` already do.  Plain `loadProgramE`
+          -- gave this gate BOTH halves of the misattribution at once: it parses
+          -- with placeholder-loc `parse` (every span collapses to 1:0) AND carries
+          -- no per-module path, so an imported module's resolve error printed as
+          -- `<entry>:1:0:` — wrong file AND wrong position.  The located loader
+          -- carries real spans and the modId → path map `pathMap` threads below.
+          Ok _ => match loadProgramFilesLocatedE (_ => None) input roots
             Err lerr => TGErr (moduleLoadErrText tsrc input stdlibDir lerr)
-            Ok mods =>
+            Ok modsWithPath =>
+              let mods = map dropModPath modsWithPath
+              let pathMap = map modIdToPath modsWithPath
               let trusted = projectTrustedMods input roots stdlibDir mods
-              typecheckGateRoute allowInternal trusted roots rsrc csrc tsrc input mods
+              typecheckGateRoute allowInternal trusted pathMap roots rsrc csrc tsrc input mods
 
 -- Route by module count.  A single loaded module (no non-core imports) runs the
 -- ACCURATE located check `medaka check` uses for single files — analyzeLocatedG
@@ -1520,8 +1649,8 @@ typecheckGate allowInternal root input =
 -- The elaborate + hadTypeErrors gate is KEPT behind it as belt-and-braces (it is the
 -- emit path's own view, and it is not a superset of nothing — a diagnostic only the
 -- emit elaboration can see still aborts before the emitter).
-typecheckGateRoute : Bool -> List String -> List String -> String -> String -> String -> String -> List (String, List Decl) -> <IO> TypecheckGate
-typecheckGateRoute allowInternal trusted _ rsrc csrc tsrc target [(mid, _)] =
+typecheckGateRoute : Bool -> List String -> List (String, String) -> List String -> String -> String -> String -> String -> List (String, List Decl) -> <IO> TypecheckGate
+typecheckGateRoute allowInternal trusted _ _ rsrc csrc tsrc target [(mid, _)] =
   -- Same fix as checkRoute's single-module arm: honour the caller-computed
   -- `trusted` (owning-root) signal here too, not just `--allow-internal`.
   let diags = analyzeLocatedG (allowInternal || contains mid trusted) rsrc csrc tsrc
@@ -1529,11 +1658,15 @@ typecheckGateRoute allowInternal trusted _ rsrc csrc tsrc target [(mid, _)] =
   match errs
     [] => TGOk (flatMap renderTripleWarnings (cohWarnTriples tsrc target diags))
     _ => TGErr (joinNl (map (ppDiagCliSrc tsrc target) errs))
-typecheckGateRoute allowInternal trusted roots rsrc csrc tsrc target mods =
+typecheckGateRoute allowInternal trusted pathMap roots rsrc csrc tsrc target mods =
   let rtD = desugar (parse rsrc)
   let coreD = desugar (parse csrc)
   let modsD = map desugarPair mods
-  let resDiags = resolveModulesToHumaneGF target allowInternal trusted rtD coreD modsD
+  -- #186/#1360: attribute each module's resolve errors to its OWN file, via the
+  -- loader's modId → path map — the SAME `resolveModulesToHumaneByPath` seam
+  -- `checkRoute` has used since #41.  The single `target` fallback this replaced
+  -- stamped EVERY imported module's error with the entry file's path.
+  let resDiags = resolveModulesToHumaneByPath pathMap allowInternal trusted rtD coreD modsD
   match resDiags
     "" => match locatedProjectDiags target roots rsrc csrc
       -- CHECK-STRENGTH gate: the located per-module ERROR diagnostics, identical to
@@ -1687,6 +1820,24 @@ flushPendingRunDiags True = match pendingRunDiags.value
   [] => ()
   ts => ePutStrLn (cjAllToJson ts)
 
+runHelpText : String
+runHelpText = stringConcat
+  [
+    "medaka run — Type-check and run a program (interpreter)\n",
+    "\n",
+    "Usage:\n",
+    "  medaka run [--json] [--allow-internal] [--release] <file.mdk> [args...]\n",
+    "\n",
+    "  --json            emit the Diag JSON envelope for a compile-time error or\n",
+    "                    a runtime panic, instead of human text\n",
+    "  --allow-internal  permit internal-only externs outside stdlib/\n",
+    "  --release         accepted, ignored (no-op for the interpreter path;\n",
+    "                    kept for symmetry with `medaka build --release`)\n",
+    "\n",
+    "Args after <file.mdk> are passed through to the program's own `args`.\n",
+    "Inline-eval (`-e <expr>`) is NOT supported — pass a file.\n",
+  ]
+
 runRunCmd : List String -> <IO> Unit
 runRunCmd argv =
   let jsonMode = hasFlag "--json" argv
@@ -1738,11 +1889,17 @@ runRunCmd argv =
             Err e =>
               let _ = ePutStrLn (ppParseError (readFileSafe target) target e)
               exit 1
-            Ok _ => match map (map dropModPath) (loadProgramFilesLocatedE (_ => None) target roots)
+            -- #186/#1360: keep the loader's per-module PATHS instead of dropping
+            -- them at the load site.  They were already being carried here and
+            -- discarded one line later, which is why every imported module's
+            -- resolve error had to fall back to the entry file's path.
+            Ok _ => match loadProgramFilesLocatedE (_ => None) target roots
               Err lerr =>
                 let _ = ePutStrLn (moduleLoadErrText (readFileSafe target) target stdlibDir lerr)
                 exit 1
-              Ok mods =>
+              Ok modsWithPath =>
+                let mods = map dropModPath modsWithPath
+                let pathMap = map modIdToPath modsWithPath
                 let rtD = desugar (parse rsrc)
                 let coreD = desugar (parse csrc)
                 let modsD = map desugarPair mods
@@ -1785,7 +1942,9 @@ runRunCmd argv =
                     -- panic, while `check` on the same program printed the real
                     -- located `No impl of Display for Foo`.  See typecheckGateRoute
                     -- for why this is not an over-rejection.
-                    let resDiags = resolveModulesToHumaneGF target allowInternal trusted rtD coreD modsD
+                    -- #186/#1360: per-module attribution via the loader's
+                    -- `pathMap`, the same seam `checkRoute` uses (#41).
+                    let resDiags = resolveModulesToHumaneByPath pathMap allowInternal trusted rtD coreD modsD
                     match resDiags
                       -- `locatedProjectDiags`, not `locatedProjectErrors`: the same
                       -- single `analyzeProject` pass, but keeping the WARNINGS the
@@ -1860,26 +2019,117 @@ runProgramOutput preludeDecls modules = match mainTypeIsAsync ()
 -- `.mdk` file is tested in turn, aggregating: exit nonzero iff ANY file's
 -- tests failed OR couldn't be read (this is also what makes the #212 exit-0
 -- bug go away for the directory/project route, not just the single-file one).
+-- `--native` (#81 Stage 3) SWAPS the engine to native-only — sugar for
+-- `--engines native`, NOT an addition to the interpreter (a flag named
+-- "native" that silently also ran eval would mislead the exact stranger the
+-- 0.1.0 bar is written for). `--engines eval,native` is the explicit
+-- multi-engine form Stage 4's CI gate will use. Bare `medaka test <file>`
+-- (neither flag) is unchanged: interpreter-only, byte-identical to
+-- pre-#81-Stage-3 output. An unknown `--engines` name is a hard diagnostic
+-- naming the valid set — never a silent drop, which would let a typo run
+-- nothing and still exit 0 (the exact "didn't run looks like passed" failure
+-- this whole arc exists to close).
+testHelpText : String
+testHelpText = stringConcat
+  [
+    "medaka test — Run doctests + property tests\n",
+    "\n",
+    "Usage:\n",
+    "  medaka test [--native | --engines eval,native] [file.mdk | dir]\n",
+    "\n",
+    "  --native            run doctests through a compiled native binary\n",
+    "                      instead of the interpreter (shorthand for\n",
+    "                      --engines native)\n",
+    "  --engines e1,e2,...  run the listed engine set (known: eval, native);\n",
+    "                      exit code is the AND across engines\n",
+    "\n",
+    "--native and --engines are mutually exclusive. With neither, the default\n",
+    "is the interpreter (eval) alone. A file.mdk or dir target is required.\n",
+  ]
+
 runTestCmd : List String -> <IO> Unit
-runTestCmd argv = match dropFlags argv
-  [] =>
-    let _ = ePutStrLn "usage: medaka test [file.mdk | dir]"
+runTestCmd argv = match parseTestEngines argv
+  Err msg =>
+    let _ = ePutStrLn "medaka test: \{msg}"
     exit 1
-  [target] => match listDir target
-    Err _ => runTestOne target
-    Ok _ => runTestManyTargets [target]
-  targets => runTestManyTargets targets
+  Ok engines => match testTargets argv
+    [] =>
+      let _ = ePutStrLn "usage: medaka test [--native | --engines eval,native] [file.mdk | dir]"
+      exit 1
+    [target] => match listDir target
+      Err _ => runTestOne engines target
+      Ok _ => runTestManyTargets engines [target]
+    targets => runTestManyTargets engines targets
+
+-- `--engines <list>` and `--native` are MUTUALLY EXCLUSIVE — not "--engines
+-- silently wins". Letting one silently override the other reproduces, in
+-- miniature, the exact "flag quietly does something other than what the user
+-- asked" failure the whole --native/--engines split exists to remove: a user
+-- who typed --native and got only `--engines`'s answer, with no diagnostic,
+-- has no way to know --native was ignored. So both together is a hard error
+-- naming both flags, not a silent pick.  With neither given, the default is
+-- `[EngInterp]`.
+parseTestEngines : List String -> Result String (List Engine)
+parseTestEngines argv = match (testFlagValue "--engines" argv, hasFlag "--native" argv)
+  (Some _, True) => Err "--native and --engines are mutually exclusive; --native is shorthand for --engines native"
+  (Some spec, False) => parseEngineList spec
+  (None, True) => Ok [EngNative]
+  (None, False) => Ok [EngInterp]
+
+-- Comma list of engine names (`eval`/`native`) — mirrors `medaka snapshot
+-- --stages a,b`'s `parseStages`: an unknown name is a hard error naming the
+-- known set, not a silent drop.
+parseEngineList : String -> Result String (List Engine)
+parseEngineList spec =
+  let names = filterList (!= "") (map stringTrim (splitLintNames spec))
+  match names
+    [] => Err "--engines requires at least one of: eval, native"
+    _ => parseEngineNames names
+
+parseEngineNames : List String -> Result String (List Engine)
+parseEngineNames [] = Ok []
+parseEngineNames (n::rest) = match engineOfName n
+  None => Err "unknown engine '\{n}' (known: eval, native)"
+  Some e => map (e :: _) (parseEngineNames rest)
+
+engineOfName : String -> Option Engine
+engineOfName "eval" = Some EngInterp
+engineOfName "native" = Some EngNative
+engineOfName _ = None
+
+-- `--flag value` (space-separated, unlike lint's `--flag=v1,v2`) — same shape
+-- as `medaka snapshot`'s `snapFlagValue`, kept local since neither module
+-- exports its copy.
+testFlagValue : String -> List String -> Option String
+testFlagValue _ [] = None
+testFlagValue _ [_] = None
+testFlagValue name (a::v::rest) =
+  if a == name then
+    Some v
+  else
+    testFlagValue name (v::rest)
+
+-- Non-flag args for `medaka test`, minus `--native` and the VALUE of
+-- `--engines` (the shared `dropFlags` doesn't know about a value-taking
+-- flag). Mirrors `snapshotTargets`/`lintTargets`.
+testTargets : List String -> List String
+testTargets [] = []
+testTargets ("--engines"::_::rest) = testTargets rest
+testTargets ("--native"::rest) = testTargets rest
+testTargets (x::rest)
+  | startsWith "--" x = testTargets rest
+  | otherwise = x :: testTargets rest
 
 -- Original single-file path, unchanged: read <MEDAKA_ROOT>/stdlib sources,
 -- build search roots, run `runTest`, exit 1 on any failure/read-error.
-runTestOne : String -> <IO> Unit
-runTestOne target =
+runTestOne : List Engine -> String -> <IO> Unit
+runTestOne engines target =
   let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
   let rtPath = root ++ "/stdlib/runtime.mdk"
   let corePath = root ++ "/stdlib/core.mdk"
   let stdlibDir = root ++ "/stdlib"
   let roots = entrySearchRoots (dirOf2 target) ++ [stdlibDir]
-  let ok = runTest rtPath corePath target roots
+  let ok = runTest engines rtPath corePath target roots
   if ok then () else exit 1
 
 -- Directory/project/multi-target path: expand every target to concrete .mdk
@@ -1887,8 +2137,8 @@ runTestOne target =
 -- (empty dir, or a dir with no .mdk files) is reported and left at exit 0 —
 -- "nothing to test" is not a failure, mirroring runTest's own vacuous-pass
 -- convention for a single zero-doctest file.
-runTestManyTargets : List String -> <IO> Unit
-runTestManyTargets targets =
+runTestManyTargets : List Engine -> List String -> <IO> Unit
+runTestManyTargets engines targets =
   let files = flatMap expandLintTarget targets
   match files
     [] =>
@@ -1899,16 +2149,19 @@ runTestManyTargets targets =
       let rtPath = root ++ "/stdlib/runtime.mdk"
       let corePath = root ++ "/stdlib/core.mdk"
       let stdlibDir = root ++ "/stdlib"
-      if testFilesGo rtPath corePath stdlibDir files False then exit 1 else ()
+      if testFilesGo engines rtPath corePath stdlibDir files False then
+        exit 1
+      else
+        ()
 
 -- Fold `runTest` over an expanded file list, aggregating whether ANY file
 -- failed (tests failed, or the file itself couldn't be read/parsed).
-testFilesGo : String -> String -> String -> List String -> Bool -> <IO> Bool
-testFilesGo _ _ _ [] acc = acc
-testFilesGo rtPath corePath stdlibDir (f::rest) acc =
+testFilesGo : List Engine -> String -> String -> String -> List String -> Bool -> <IO> Bool
+testFilesGo _ _ _ _ [] acc = acc
+testFilesGo engines rtPath corePath stdlibDir (f::rest) acc =
   let roots = entrySearchRoots (dirOf2 f) ++ [stdlibDir]
-  let ok = runTest rtPath corePath f roots
-  testFilesGo rtPath corePath stdlibDir rest (acc || not ok)
+  let ok = runTest engines rtPath corePath f roots
+  testFilesGo engines rtPath corePath stdlibDir rest (acc || not ok)
 
 -- ── doc ───────────────────────────────────────────────────────────────────
 -- Mirrors bin/main.ml's `doc` arm + lib/doc.ml: read the target file, parse
@@ -1917,6 +2170,18 @@ testFilesGo rtPath corePath stdlibDir (f::rest) acc =
 -- print Markdown to stdout.  Single-file only (OCaml `doc` is single-file too).
 -- Prelude sources (runtime.mdk/core.mdk) come from MEDAKA_ROOT for scheme
 -- inference, exactly as check/run/test do.
+docHelpText : String
+docHelpText = stringConcat
+  [
+    "medaka doc — Generate Markdown documentation for a file\n",
+    "\n",
+    "Usage:\n",
+    "  medaka doc <file.mdk>\n",
+    "\n",
+    "Prints Markdown for every PUBLIC declaration (with inferred type\n",
+    "schemes) in <file.mdk> to stdout. Single-file only.\n",
+  ]
+
 runDocCmd : List String -> <IO> Unit
 runDocCmd argv = match dropFlags argv
   [] =>
@@ -1948,6 +2213,23 @@ runDocCmd argv = match dropFlags argv
 -- MEDAKA_ROOT, as check/run/doc do.  runCheckPolicy returns (report, accepted?);
 -- we print the report and exit 0 (accept) / 1 (reject) — the OCaml arm exits the
 -- same way.  Defaults (allow "Cache,Log", fn "transform") match the oracle.
+checkPolicyHelpText : String
+checkPolicyHelpText = stringConcat
+  [
+    "medaka check-policy — Check a plugin's inferred effects against an allow-list\n",
+    "\n",
+    "Usage:\n",
+    "  medaka check-policy <file.mdk> [--allow L1,L2,...] [--fn name]\n",
+    "\n",
+    "  --allow L1,L2,...  effect labels the plugin is permitted to use\n",
+    "                     (default: Cache,Log)\n",
+    "  --fn name          the function whose inferred effect row is checked\n",
+    "                     (default: transform)\n",
+    "\n",
+    "Prints an accept/reject header; on accept, also runs the plugin on a\n",
+    "sample request. Exit 0 on accept, 1 on reject.\n",
+  ]
+
 runCheckPolicyCmd : List String -> <IO> Unit
 runCheckPolicyCmd argv = match parsePolicyArgs argv
   PolicyArgs None _ _ =>
@@ -1997,6 +2279,22 @@ runCheckPolicyCmd argv = match parsePolicyArgs argv
 --
 -- WS-1c (deferred): Wasm custom section embedding (see
 -- compiler/tools/check_policy.mdk comment + EFFECTS-SEMANTICS.md §7).
+manifestHelpText : String
+manifestHelpText = stringConcat
+  [
+    "medaka manifest — Emit a module's verified capability manifest as TOML\n",
+    "\n",
+    "Usage:\n",
+    "  medaka manifest <file.mdk> [--fn name]\n",
+    "\n",
+    "  --fn name  the function whose inferred effect row is emitted\n",
+    "             (default: main)\n",
+    "\n",
+    "Prints a [package.capabilities] TOML block: one entry per effect label\n",
+    "in the function's inferred effect row (a prefix-param becomes a string\n",
+    "value; a Unit/top param becomes `true`).\n",
+  ]
+
 runManifestCmd : List String -> <IO> Unit
 runManifestCmd argv = match parseManifestArgs argv
   ManifestArgs None _ =>
@@ -2042,6 +2340,29 @@ runManifestCmd argv = match parseManifestArgs argv
 --   no file arg             → find medaka.toml project root, lint top-level .mdk files
 --     (note: top-level only — subdirectory .mdk files are not walked recursively)
 -- Exit 0 unless a SevError finding exists (only via --deny in v1 report mode).
+lintHelpText : String
+lintHelpText = stringConcat
+  [
+    "medaka lint — Lint files/dirs against style rules\n",
+    "\n",
+    "Usage:\n",
+    "  medaka lint [paths...] [flags]\n",
+    "\n",
+    "  --fix                 rewrite fixable findings in-place\n",
+    "  --json                emit the {\"files\":[...]} structured-diagnostics\n",
+    "                       envelope instead of human text (--fix is ignored)\n",
+    "  --cache                reuse per-file results for files whose content is\n",
+    "                       unchanged (opt-in, like ESLint's --cache)\n",
+    "  --disable=r1,r2,...    suppress findings from the named rules\n",
+    "  --only=r1,...          keep only findings from the named rules\n",
+    "  --deny=r1,...          promote findings from the named rules to error\n",
+    "\n",
+    "Target resolution: explicit file args are linted in order; a single\n",
+    "directory arg lints its top-level .mdk files (not recursive); no args\n",
+    "finds the medaka.toml project root and lints its top-level .mdk files.\n",
+    "Exit 0 unless a SevError finding exists.\n",
+  ]
+
 runLintCmd : List String -> <IO> Unit
 runLintCmd argv =
   let _ = assertLintFlagsHaveValues argv
@@ -2547,6 +2868,28 @@ assertBlessIsScoped argv targets =
     let _ = ePutStrLn "    medaka snapshot --bless --out test/snapshots/compiler compiler/frontend/lexer.mdk"
     let _ = ePutStrLn "  (or, family-aware:  sh test/diff_compiler_snapshot_frontend.sh --bless compiler/frontend/lexer.mdk)"
     exit 1
+
+snapshotHelpText : String
+snapshotHelpText = stringConcat
+  [
+    "medaka snapshot — Per-stage snapshot tests\n",
+    "\n",
+    "Usage:\n",
+    "  medaka snapshot [--check | --new | --bless] <paths...>\n",
+    "                  [--out <dir>] [--stages <a,b,...>] [--isolate]\n",
+    "\n",
+    "One mode is REQUIRED, and the three are mutually exclusive:\n",
+    "  --check   compare against the existing snapshot; write nothing\n",
+    "  --new     create a MISSING snapshot; never touch an existing one\n",
+    "  --bless   rewrite an EXISTING snapshot; never create one; requires\n",
+    "            explicit targets (no whole-suite bless)\n",
+    "\n",
+    "  --out <dir>       snapshot directory (default derived from MEDAKA_ROOT)\n",
+    "  --stages a,b,...   restrict to the named stages (default: every stage)\n",
+    "  --isolate          run one process per fixture (debug aid for a crasher)\n",
+    "\n",
+    "A path may be a file or directory (recursively expanded).\n",
+  ]
 
 runSnapshotCmd : List String -> <IO> Unit
 runSnapshotCmd argv =

@@ -1,0 +1,8 @@
+-- SHADOW-SEMANTICS cell I14 provider 2: the interface and a live impl at Box.
+import boxmod.{Box}
+
+export interface Sizeable a where
+  size : a -> Int
+
+impl Sizeable Box where
+  size (Box n) = n * 100

@@ -47,6 +47,20 @@ leg's deformed goals; and **F-3c must key its diagnostic to `pickMostSpecificEnt
 `None` arm, not to that function's docstring**, which mis-describes equal heads as a
 no-unique-minimum case and would flip them. Nothing else moved.
 
+**Third addendum, 2026-08-05 — the post-#1162 population, adjudicated at TRACKER level.**
+Every `verified` S0/S1 filed after the second addendum is mapped in a new section at the
+end of this document ("Third addendum" before References), derived at `c0c67f15`. Its
+evidence bar is **weaker than the prior addenda and says so per row**: verdicts come from
+issue bodies, tracker state, and source greps at that commit — not from repros re-run on a
+cold-built binary — and the adjudication of record is the set of 2026-08-05 comments posted
+on the issues themselves. Ownership changes: **G-10 now has an issue (#1318)**, G-9's
+consumer clause is recorded on #1150 (still live — verified by grep at `c0c67f15`), G-11's
+declaration-time half is adopted onto A-3's blast list (#1112 comment), G-1 (#1136) and
+G-8 (#1137) have proposed owners, and the G-7 #1020 split is adopted onto #1112. Two new
+stage-filling issues: **#1317** (dispatch-key identity re-key) and **#1319**
+(constructor-namespace identity). No existing family row, verdict, mechanism or
+prediction was touched.
+
 > **The burden of proof here is inverted.** "The plan covers this" is the claim that
 > needs a mechanism plus a prediction; "this is a gap" is the cheap answer. A row with
 > no stateable mechanism is `NOT ESTABLISHED`, not "probably fine" — retiring a live
@@ -333,9 +347,27 @@ to `v : Box <Stdout> Int` — byte-identical to the control with `zopapub.mdk` d
 A-1 alone is **not** sufficient and must not close this: identity has to reach the
 *table key*, which is A-2.
 
-⚠️ Guard when pinning: the repro is silent **only at matching arity** — every hot reader
-guards on `listLen kinds == listLen args` (`:1424`, `:4289`), so a same-name/different-
-arity clash abstains loudly and a naive pin is immune to the defect it means to catch.
+✅ **CONFIRMED, 2026-08-03, by A-2.3** (`universeAliasTable` + `universeDataParamKinds`
+re-keyed to `TabKey`). The repro's `check main.mdk` went from `v : Box Unit Int` to
+`v : Box <Stdout> Int`, byte-identical to its control, and
+`test/diff_compiler_must_fail.sh` drained the row and named the issue. The prediction's
+"A-1 alone is not sufficient" half also held: A-1 shipped with every hot reader binding
+the acquired origin `o` in the same pattern as the head NAME and using it only to mint
+the head, never to key the lookup.
+
+🚨 **THE GUARD PARAGRAPH THAT USED TO SIT HERE WAS FALSE, and it is corrected rather
+than deleted because it would have disarmed the pin.** It said the repro is silent *"only
+at matching arity"*, because *"every hot reader guards on `listLen kinds == listLen
+args`, so a same-name/different-arity clash abstains loudly"*. Measured with a 2×5 matrix
+(shadower arity 0/1/2/3 plus a control × the use-site row spelled WRAPPED
+`Box (<Stdout> Unit) Int` or BARE `Bx <Stdout> Int`): **arity moved the outcome in
+neither direction.** On the guard-PASSING path the winning entry's kinds are all-`KType`,
+so `foldAppKinds` erases the row exactly as `appFallback` does. What actually selected
+silent-vs-loud was the row's SPELLING at the use site — the wrapped form unwraps to a
+real type and keeps inferring silently (#1069), the bare form raises
+`T-ROW-KIND-MISMATCH` (#1090, the same table with the opposite symptom). The identical
+claim in `compiler/types/typecheck.mdk`'s `registerOpaqueParamKinds` doc-comment was
+corrected by the same PR; #1069's issue body carries it too and is left alone.
 
 ---
 
@@ -398,6 +430,42 @@ reclassification in this ledger. Specifically: the `universeAliasTable` repro
 (`amod.type T = Int` / `zmod.type T = Float` + `zf`; entry imports only `zmod.{zf}`) must
 change from `check → v : Float`, `run → 42.0` to `v : Int` / `42`. The umbrella closes
 only when **all** rows are drained or reclassified — not when the first one is.
+
+✅ **THE `universeAliasTable` ROW IS CONFIRMED AND DRAINED, 2026-08-03, by A-2.3.** That
+repro now reads `v : Int` and prints `42` on all three engines (interpreter, native and
+WasmGC, each run first-hand — the row was previously wrong on all three, which is why
+`diff_compiler_engines` never saw it). Its fixture was deleted and **#1070 was left
+OPEN**, exactly as this paragraph's last sentence requires: the remaining rows are
+tracked as #1256 (`universeRecordByName`), #1257 (`ifaceSlotKey`), #1258
+(`universeIfaceRequiredRef`) and #1259 (`universeDataEnv`), each with its own
+`test/must_fail_fixtures/` pin, draining on units A-2.4 / A-2.6. The umbrella's own row
+in `test/MUST-FAIL-NOT-PINNABLE.txt` records why it now carries no fixture of its own.
+
+✅ **THE `ifaceSlotKey` (#1257) AND `universeIfaceRequiredRef` (#1258) ROWS ARE
+CONFIRMED AND DRAINED, 2026-08-03, by A-2.4** (`universeIfaceParamKinds` re-keyed to
+`RegKey` = interface identity × slot ordinal; `universeIfaceRequiredRef` re-keyed to a
+`Registry` over interface identity). Both repros go from `exit 1` to `exit 0` and print
+`1`: #1257's `impl Same P` is no longer judged against a same-named GRADED interface's
+slot kinds, and #1258's `impl Same ET` is no longer judged against a same-named
+interface's required-method list. Verified on `check`, on `run`, and on `build` + the
+native binary — noting that `run` and `build` share the front end, so on the ACCEPTANCE
+question those are ONE observation, while the printed `1` is a genuine per-engine
+observation on each. Both fixtures were deleted and **#1070 remains OPEN**; the
+remaining rows are #1256 (`universeRecordByName`) and #1259 (`universeDataEnv`),
+draining on unit A-2.6.
+
+🚨 **AND A-2.4 FALSIFIED PART OF ITS OWN BRIEF, which is recorded here because a
+future reader would otherwise re-derive it.** #1257's fixture notes (and the A-2.4
+brief) attributed the REVERSED-import-order symptom —
+`Method 'pmth' is not part of interface 'Same'` — to `universeIfaceRequiredRef`. It does
+not come from there. It is `R-METHOD-NOT-IN-INTERFACE`, raised by `checkMethodMember`
+in **`compiler/frontend/resolve.mdk`** off `Env.ifaceMethods`, a *resolve-layer* assoc
+list keyed by bare interface name and scanned first-match by `ifaceMethodsOf`. It is
+unchanged by either table A-2.4 re-keyed (re-run first-hand on the A-2.4 binary), it is
+on no A-2 unit's list, and it is now tracked as **#1269** with its own
+`test/must_fail_fixtures/1269-ifacemethods-bare-name-collision/` pin. The
+interface-name collision therefore has a THIRD table, in a file this arc does not
+touch.
 
 ⚠️ Two rows to hold to a higher bar: `universeRecordByName` and `universeDataEnv` were
 audit-verified but **not** independently re-run by #1070's author, and `universeRecordByName`
@@ -2138,10 +2206,86 @@ in the second addendum and worth applying to the rest when they are next revisit
 
 ---
 
+## Third addendum — 2026-08-05: tracker-level re-adjudication of the post-#1162 population
+
+**Provenance and evidence bar, stated first because it differs from the rest of this
+ledger.** Derived at `main` = `c0c67f15` (2026-08-05), as part of a three-track
+architecture audit (PR-conformance sweep · S0/S1 mapping · forward-plan review). Verdicts
+below come from issue bodies, stage states, merged-PR contents, and source greps at that
+commit. **Behavioural claims were NOT re-run on a cold-built binary** (unlike the first
+and second addenda), except the single grep-checkable one noted at #1150. Rows marked
+*inference* are hypotheses for a scoping pass with a binary, not findings — the
+distinction this repo's methodology comments keep having to restate. The adjudication of
+record is the set of 2026-08-05 comments posted on each issue; this section is the
+ledger's index of them.
+
+| Bug | Verdict | Stage / owner | Evidence bar |
+|---|---|---|---|
+| #1169 multi-param `requires` reads the wrong dict slot | candidate member of **G-10 (#1318)** — slot mis-assignment upstream of both engine symptoms | #1318 | inference, on-issue |
+| #1174 (Int, Char) call vs bare-tyvar-head impl rejects a legal program | **unmapped** — plausibly the #1161 shattered-goal class (bare-TyVar head matches anything at `entryHeadMatches`' arg-0 fallback); adjudication owed | none yet; candidate #1318-class | inference, HERE only — no on-issue comment |
+| #1177 predicate ORDER in a `=>` context decides dispatch | member of **G-10 (#1318)** — slot-per-tyvar cardinality is the mechanism | #1318 | inference, on-issue |
+| #1180 undetermined constraint silently picks the concrete impl | **CANDIDATE member only** of #1318 — the named fix site (`implHeadTagForIface`) may make it S-lane selector work instead | #1318 (candidate) | adjudication owed, on-issue |
+| #1182 two interfaces, one method name — `impl` block order decides | plausibly **A-3** (#1112): candidate collection keyed by interface identity in K's `IE` (`matchingEntries` keys by method name today) | A-3 (proposed) | inference, on-issue |
+| #1183 ⊑-incomparable overlap at a non-closed goal commits with a warning | **deferred by owner decision** (F-3d record) — needs the T4 quiescence pass, i.e. **E-4** territory; the accepted cost is on the epic | E-4 (revisit condition) | adjudicated (owner decision) |
+| #1191 prelude-standalone collision on the zero-import path | plausibly **E-1** (#1115) — the Flat arm's prelude concatenation; belongs in E-1's divergence enumeration | E-1 (proposed) | inference, on-issue |
+| #1217 record pattern `...` lowered to a bare wildcard | **OUT OF ARC** — desugar/exhaust pattern lowering; no stage here touches it; routes via the frontend pipeline | none (out of arc) | adjudicated, on-issue |
+| #1265 `CImplDefault` method-name half | **A-2 tail** — identity into the default's *symbol*; adjudicated in the A-2 handoff | A-2 (#1111) | adjudicated (handoff) |
+| #1276 alias-qualified method provenance erased before the method-scope table | **A-2 method-scope residual** — witness must survive `renameAliasedMethods`; PR #1296 proved it distinct from the drained #1272/#1275 | A-2 (#1111) | adjudicated (PR #1296) |
+| #1279 absent origin bridges two identities | downstream of **#1280** — closes when supply closes | A-2 (#1111) / #1280 | adjudicated (on-issue + handoff) |
+| #1283 overlay misses a re-exported member | member of **#1319** (constructor-namespace identity) | #1319 | adjudicated, on-issue |
+| #1284 overlaid sibling out-ranks a by-name import | member of **#1319** | #1319 | adjudicated, on-issue |
+| #1302 dependency's PRIVATE interface decides an importing module's obligation | A-2.5-witness fix **gated on an owed spec ruling** (S-2 mould — private-interface visibility); ruling before fix | A-2 (#1111), spec first | adjudicated, on-issue |
+
+**Also in the audited population but already family rows above:** #1150 (family A — the
+G-9 consumer clause is still live: `isCtorAppSpine` classifies via `ctorHeadIsUpper` at
+`c0c67f15`, verified by grep; the A-1/A-2 substrate landed and the consumer never moved —
+recorded on #1150 with the owed conformance fixture), #1161 (family B — its residual is
+now owned by #1318), #1162 (family J — G-11's declaration-time half adopted onto A-3's
+blast list via the #1112 comment).
+
+**Gap-ownership delta since the second addendum:**
+
+- **G-10 → #1318 filed.** Members #1161 (residual) and #1177; candidates #1169, #1180,
+  and (from this table) #1174. ⚠️ **Two rationales for the #1137 coupling are now on
+  record and the ORDERING is the same under both**: the epic's 2026-07-31 form ("the full
+  fix moves the leading dict-param count §2 E freezes") and this ledger's revised form
+  above (a *conformant* §2 E cannot freeze the shattering — DICT §4 `gen-sig` gives one
+  dict param per predicate — but **#1137's mandated arity conformance fixture cannot
+  honestly go green until G-10 lands**). #1318's body carries the epic's form; the
+  refinement is recorded there by comment. Either way: G-10 before or with #1137.
+- **G-9 → recorded on #1150** (see above). **G-11 → A-3 blast list** (#1112 comment).
+- **G-1 (#1136) → proposed Stage C sibling of C-2 (#830).** **G-8 (#1137) → proposed
+  E-lane.** Both are proposals for the lane scoping passes, posted on-issue; both issues
+  had zero movement since being filed as ownerless on 2026-07-30.
+- **G-7's #1020 split → adopted onto A-3's scope** (#1112 comment) — proposed on the epic
+  2026-07-30, half-adopted until now.
+
+**Family notes.** Family A's residue has changed character: after A-2's thirteen PRs the
+open members are no longer bare-name *tables* but witness/overlay *edge cases* (#1276
+alias, #1283 re-export, #1284 ranking, #1302 private) — each landed widening moved the
+boundary one hop out, which is why **#1319** exists (key the constructor namespace by
+declaration identity end-to-end; retire the overlay) and why **#1317** exists (the
+dispatch-key demand half, previously prose-only). Family B has **split**: key granularity
+(B-1/B-2, owned) vs predicate loss at the producers (G-10/#1318) — a fourth root cause
+that postdates #1084's "3 root causes + 1 arc" framing; #1084 is flagged for
+re-derivation. **Exclusion re-audit:** the §4 list holds; **#1292** (`ctorToTypeRef`
+runtime-tag collision, filed by A-2.7) is a new engine-realization candidate with a
+◇B-2 marker — B-2 removes the *path* to the tag fallback, the tag substrate itself is
+engine work.
+
+**What this addendum does not do.** It does not rewrite the family sections in this
+ledger's full row format (mechanism + falsifiable prediction, derived on a cold build)
+for the fourteen bugs above — that bar is owed at each owning unit's scoping pass, and
+pretending this table meets it would be the exact overstatement the Not-established
+section warns about. The NULL-vs-POSITIVE / EXECUTABLE-vs-PENDING / DETECTOR-vs-REPAIR
+distinctions of 2026-07-31 apply to every prediction referenced here.
+
+---
+
 ## References
 
 - [`TYPECHECK-TARGET-ARCHITECTURE.md`](TYPECHECK-TARGET-ARCHITECTURE.md) — the design (authority)
 - [`TYPECHECK-ARCHITECTURE.md`](TYPECHECK-ARCHITECTURE.md) — the derived map
 - [`../docs/spec/DICT-SEMANTICS.md`](../docs/spec/DICT-SEMANTICS.md) §11, [`../docs/spec/EFFECTS-SEMANTICS.md`](../docs/spec/EFFECTS-SEMANTICS.md) §11 — per-clause enforcement tables (clause → site → keying assumption)
 - Epic **#1122** — stage table and dependency spine
-- `.claude/workstreams/TYPECHECK.md` — the standing five-question gate
+- `.claude/workstreams/TYPECHECK.md` — the standing gate

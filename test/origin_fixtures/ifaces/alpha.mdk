@@ -1,0 +1,113 @@
+-- #1110 PR C corpus — one of TWO UNRELATED modules that each declare an interface
+-- of the SAME NAME.  alpha and beta have no import relationship and share no type;
+-- the only thing they have in common is the spelling `Speak`.
+--
+-- WHY THIS SHAPE.  The bare interface name is the key the whole dispatch path is
+-- built on today (`implKeyOf` in eval, `matchingEntriesByIfaceGo` in typecheck,
+-- both bare string equality), which is #1047.  Resolve acquiring module identity
+-- for interface OCCURRENCES is the substrate that eventually re-keys those tables;
+-- this fixture is what makes the acquisition observable, so the golden must show
+-- alpha's `Speak` occurrences carrying `mod:alpha` and beta's carrying `mod:beta`.
+--
+-- 🚨 WHAT THIS FIXTURE DOES *NOT* ASSERT, stated so nobody reads more into the
+-- golden than is there: it does NOT assert that the two `Speak`s route to different
+-- impls.  They do not — that is exactly the open S0 #1047, pinned as still
+-- reproducing in test/must_fail_fixtures/1047-cross-module-iface-name-collision/ —
+-- and PR C does not fix it, because nothing in the compiler READS these origins
+-- yet.  The silent merge is visible in the source, not in this gate.  What the
+-- golden asserts is that RESOLVE now tells the two apart, which is the fact the
+-- eventual re-keying consumes.
+--
+-- ⚠️ CORRECTED BY #1110 UNIT E/F.  This paragraph used to add "`main_ifaces.mdk`
+-- compiles and runs at exit 0 with no diagnostic".  It no longer does: every
+-- `Speak`/`Echo` occurrence there is now reported `R-AMBIGUOUS-INTERFACE`.  That
+-- changes nothing about the sentence it was supporting — the diagnostic fires on a
+-- SCOPE collision (two import provenances in `main_ifaces`' own scope) and #1047 is
+-- a TABLE collision between modules that never meet in one scope, so #1047 remains
+-- open and its pin still reproduces.  See `main_ifaces.mdk`'s header.
+
+export interface Speak a where
+  speak : a -> String
+
+public export data Cat = Cat
+
+-- An `impl` is a USE of an interface, so `DImpl.implOrigin` is an occurrence
+-- carrier, not a declaration one.  This is the `iface:Speak` claim alpha owns.
+export impl Speak Cat where
+  speak _ = "alpha-cat"
+
+-- A `=>` predicate — a `Constraint`, the occurrence position that lives inside a
+-- `Ty` and can therefore nest arbitrarily deep.
+export twice : Speak a => a -> String
+twice x = "\{speak x}/\{speak x}"
+
+-- A SUPERINTERFACE occurrence (`Super`) over alpha's own `Speak`.
+export interface Loud a requires Speak a where
+  shout : a -> String
+
+export impl Loud Cat where
+  shout c = speak c
+
+-- ── PER-CARRIER DISCRIMINATORS ───────────────────────────────────────────────
+-- Everything above names `Speak` through several carriers at once, so a golden row
+-- for it would survive three of the four arms being deleted.  Each interface below
+-- is named through EXACTLY ONE occurrence carrier and nothing else:
+--
+--   `Constraint`   -> `Quiet`   named only by the `=>` on `sotto`
+--   `Super`        -> `Tagged`  named only by `interface Sub a requires Tagged a`
+--   `Require`      -> `Boxed`   named only by `impl … requires Boxed a`
+--   `DImpl.iface`  -> `Plain`   named only as the HEAD of an `impl`
+--
+-- ⚠️ THE MAP IS ONE-WAY: name -> carrier, not carrier -> a row only it can move.
+-- `Quiet` and `Tagged` really are independently falsifiable — deleting the
+-- `TyConstrained` arm of `mapOriginsInTy` removes exactly `iface:Quiet` (and
+-- `iface:Echo`), measured.  `Boxed` and `Plain` are NOT independent AT ARM
+-- GRANULARITY, because `mapIfaceOccDeclLocal`'s single `DImpl` arm stamps
+-- `implOrigin` AND maps `reqs`: deleting that arm removes `iface:Plain` and
+-- `iface:Boxed` together, and narrowing the deletion to just the `implOrigin` field
+-- expression still takes `iface:Loud` and the prelude interfaces named only through
+-- impls along with `iface:Plain`.  What the table above states, and all it states,
+-- is that each NAME is reachable through exactly one carrier — which is checkable
+-- straight from this file.
+--
+-- The control for the other direction is already in the corpus and costs nothing:
+-- `FromEntries` is declared in `stdlib/core.mdk` and OCCURS nowhere in it, so it
+-- has a `core decl:FromEntries` row and NO `core iface:FromEntries` row.  That is
+-- what makes these rows occurrence rows rather than a second copy of the decl
+-- layer.  Do not "fix" any of these by giving them extra uses.
+
+export interface Quiet a where
+  hush : a -> String
+
+export sotto : Quiet a => a -> String
+sotto x = hush x
+
+export interface Tagged a where
+  tagOf : a -> Int
+
+export interface Sub a requires Tagged a where
+  subm : a -> Int
+
+export interface Boxed a where
+  unbox : a -> Int
+
+export interface Plain a where
+  plain : a -> Int
+
+public export data Ghost a = Ghost a
+
+export impl Plain (Ghost a) requires Boxed a where
+  plain _ = 0
+
+-- ── THE PRECEDENCE WITNESS ───────────────────────────────────────────────────
+-- `Echo` is declared in BOTH alpha and beta and OCCURS in NEITHER — its only
+-- occurrence in the whole corpus is the `=>` on `main_ifaces.resound`, which sees
+-- both declarations at once.  So its `HEAD SPREAD` line reads `iface:Echo 1
+-- mod:<winner>` and is the only place in this golden that shows WHICH declaration a
+-- module importing two same-named interfaces actually binds.
+--
+-- `Speak` cannot answer that question: it occurs in alpha and in beta as well, so
+-- its spread line is `2 mod:alpha|mod:beta` no matter what main chose.  Without
+-- `Echo` the precedence rule would be an unpinned claim in a comment.
+export interface Echo a where
+  echo : a -> String

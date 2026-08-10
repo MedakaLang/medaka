@@ -1,0 +1,22 @@
+-- SHADOW-SEMANTICS cell I19 (S1-NS (a), PER-METHOD): the interface is reached ONLY by
+-- naming a SIBLING method. `import ifc.{tag}` admits `tag` and nothing else -- measurably:
+-- writing `size x` on the strength of that import is rejected *"Unbound variable: size.
+-- (Did you forget to 'import ifc.{size}'?)"*. So `size` is not in S1's right operand here,
+-- it is not a shadow, and the occurrence is the standalone this module imported: 42.
+--
+-- 🚨 THIS IS THE SILENT CELL, and it is why the value is pinned rather than the verdict.
+-- The standalone's domain COVERS the impl's head (both are String), so both candidates
+-- typecheck and every verb exits 0. The pre-#1353 compiler -- the MERGE BASE, and this is
+-- one of the few cells here that genuinely differs from it -- printed 777, the impl body,
+-- on evidence about a DIFFERENT name. Nothing in an ACCEPT/REJECT column can see the
+-- difference; only the pinned value can.
+--
+-- ⚠️ 777 -> 42 is an acceptance NARROWING arriving at its silent half, not a new quieting.
+-- S1-SCOPE charges exactly this as the ruling's own cost, and the corpus's own
+-- corpus-blindness note says it could not express it -- which is why this cell is owed by
+-- the ruling rather than optional. Per-ROW admission (taking the whole interface because
+-- one of its methods is named) is what produced 777, and S1-NS (a) forbids it by name.
+import fmod.{size}
+import ifc.{tag}
+
+main = println (size "abc")

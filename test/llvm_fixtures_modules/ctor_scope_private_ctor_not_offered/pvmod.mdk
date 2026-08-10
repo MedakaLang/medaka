@@ -1,0 +1,12 @@
+-- The trap module.  It exports a public TYPE named `Zt`, and SEPARATELY declares a
+-- PRIVATE data type whose CONSTRUCTOR is also spelled `Zt`, at a different arity.
+--
+-- Nothing outside this module may name that constructor — `Hidden` is private, so
+-- `frontend/resolve.expCtorsDirect` never lists `Zt` among pvmod's exported ctors.
+-- The backend's ctor-export index must agree; when it did not, it answered "is `Zt`
+-- a constructor of pvmod?" with YES off this decl.
+public export data Zt = Mk Int
+data Hidden = Zt Int Int
+
+export unP : Zt -> Int
+unP (Mk n) = n

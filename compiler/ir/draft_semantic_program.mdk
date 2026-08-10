@@ -1,0 +1,357 @@
+-- X-0D's additive elaboration-to-engine comparison carrier (#1399).
+--
+-- This module deliberately does NOT define ValidSemanticProgram. The draft is
+-- visible, non-authoritative, and consumed only by its structural probe. It
+-- inventories the semantic inputs today's emitters receive through CProgram or
+-- install* hooks while the authoritative identity/type/call/evidence producers
+-- are still landing. Physical emitters must not import this module.
+
+import frontend.ast.{Decl}
+import ir.core_ir.{CProgram(..)}
+import ir.core_ir_lower.{
+  lowerProgramEmit,
+  returnsSelfTable,
+  selfFnParamTable,
+  methodIfaceTable,
+  methodConstraintIfaces,
+  ctorFieldTypeNames,
+  declSigTypeNames,
+}
+import ir.core_ir_sexp.{cprogramToSexp}
+import ir.dce.{dceFilter}
+import ir.sexp.{boolStr, node, slist}
+import support.util.{escStr, listLen}
+
+-- Provenance is typed rather than free-form so producer changes move the draft
+-- schema instead of silently changing a comment or diagnostic string.
+public export data DraftProducer =
+  | ProducerLoadedRuntime
+  | ProducerElaborateModules
+  | ProducerLowerProgramEmit
+  | ProducerReturnsSelfTable
+  | ProducerSelfFnParamTable
+  | ProducerMethodIfaceTable
+  | ProducerMethodConstraintIfaces
+  | ProducerCtorFieldTypeNames
+  | ProducerDeclSigTypeNames
+  | ProducerMainScheme
+  | ProducerIdentityVisibility
+  | ProducerRuntimeTypes
+  | ProducerCallShapes
+  | ProducerEvidence
+  | ProducerMethodDispositions
+  | ProducerCapabilityManifest
+deriving (Eq, Debug)
+
+public export data DraftPopulation =
+  | PopulationRuntimeDecls
+  | PopulationElaboratedPrelude
+  | PopulationElaboratedModules
+  | PopulationPostDceEmitCore
+  | PopulationElaboratedGraph
+  | PopulationRuntimeAndGraph
+  | PopulationEntryScheme
+deriving (Eq, Debug)
+
+public export data DraftObservation a =
+  | DraftObservation DraftProducer DraftPopulation a
+
+-- Preserve source-unit partitions as ordered rows. In particular, do not put
+-- legacy spelling-keyed facts in a Map: duplicate spellings are evidence for
+-- X-I/X-E, not entries to overwrite.
+public export data DraftModule = DraftModule String (List Decl)
+public export data DraftRows a = DraftRows String (List a)
+
+public export data DraftFact =
+  | FactRuntimeProjection
+  | FactPreludeProjection
+  | FactModuleProjection
+  | FactLegacyCore
+  | FactReturnsSelf
+  | FactSelfFnParams
+  | FactMethodIface
+  | FactMethodConstraints
+  | FactCtorFieldTypes
+  | FactDeclSigTypes
+  | FactMainIsUnit
+  | FactMainIsFloat
+  | FactIdentityVisibility
+  | FactRuntimeTypes
+  | FactCallShapes
+  | FactEvidence
+  | FactMethodDispositions
+  | FactCapabilityManifest
+deriving (Eq, Debug)
+
+public export data DraftPending = DraftPending DraftFact DraftProducer String
+
+public export data DraftComparison =
+  | DraftMatch
+  | DraftDifferent
+deriving (Eq, Debug)
+
+public export data DraftReceipt =
+  | DraftReceipt DraftFact DraftProducer DraftPopulation DraftComparison
+
+-- Positional on purpose. Record field labels are a program-global namespace in
+-- current Medaka, and this migration carrier must not add another collision
+-- surface while owner-qualified FieldId is still pending.
+public export data DraftSemanticProgram =
+  | DraftSemanticProgram (DraftObservation (List Decl)) (DraftObservation (List Decl)) (DraftObservation (List DraftModule)) (DraftObservation CProgram) (DraftObservation (List (DraftRows ((String, String), Bool)))) (DraftObservation (List (DraftRows ((String, String), List Int)))) (DraftObservation (List (DraftRows (String, (String, Int))))) (DraftObservation (List (DraftRows (String, List String)))) (DraftObservation (List (DraftRows (String, List String)))) (DraftObservation (List (DraftRows (String, (List String, String))))) (DraftObservation Bool) (DraftObservation Bool) (List DraftPending)
+
+moduleOf : (String, List Decl) -> DraftModule
+moduleOf (mid, decls) = DraftModule mid decls
+
+rowsOf : (List Decl -> List a) -> DraftModule -> DraftRows a
+rowsOf f (DraftModule mid decls) = DraftRows mid (f decls)
+
+rowsFor : (List Decl -> List a) -> List DraftModule -> List (DraftRows a)
+rowsFor f modules = map (rowsOf f) modules
+
+semanticModules : List Decl -> List (String, List Decl) -> List DraftModule
+semanticModules coreD modules = DraftModule "core" coreD :: map moduleOf modules
+
+pendingFacts : List DraftPending
+pendingFacts = [
+  DraftPending FactIdentityVisibility ProducerIdentityVisibility "X-I.P and #1115",
+  DraftPending FactRuntimeTypes ProducerRuntimeTypes "X-T.P / #353",
+  DraftPending FactCallShapes ProducerCallShapes "X-C.P / #1318 -> #1137",
+  DraftPending FactEvidence ProducerEvidence "X-E.P / #993, #1113, #1082",
+  DraftPending FactMethodDispositions ProducerMethodDispositions "X-E.P / A-3 #1112",
+  DraftPending FactCapabilityManifest ProducerCapabilityManifest "effects manifest producer",
+]
+
+export buildDraftSemanticProgram : List Decl -> List Decl -> List (String, List Decl) -> Bool -> Bool -> DraftSemanticProgram
+buildDraftSemanticProgram runtimeDecls coreD modules mainIsUnit mainIsFloat =
+  let allDecls = dceFilter (coreD ++ flatMap snd modules)
+  let semMods = semanticModules coreD modules
+  let sigMods = DraftModule "runtime" runtimeDecls :: semMods
+  DraftSemanticProgram
+    (DraftObservation ProducerLoadedRuntime PopulationRuntimeDecls runtimeDecls)
+    (DraftObservation
+      ProducerElaborateModules
+      PopulationElaboratedPrelude
+      coreD)
+    (DraftObservation
+      ProducerElaborateModules
+      PopulationElaboratedModules
+      (map moduleOf modules))
+    (DraftObservation
+      ProducerLowerProgramEmit
+      PopulationPostDceEmitCore
+      (lowerProgramEmit allDecls))
+    (DraftObservation
+      ProducerReturnsSelfTable
+      PopulationElaboratedGraph
+      (rowsFor returnsSelfTable semMods))
+    (DraftObservation
+      ProducerSelfFnParamTable
+      PopulationElaboratedGraph
+      (rowsFor selfFnParamTable semMods))
+    (DraftObservation
+      ProducerMethodIfaceTable
+      PopulationElaboratedGraph
+      (rowsFor methodIfaceTable semMods))
+    (DraftObservation
+      ProducerMethodConstraintIfaces
+      PopulationElaboratedGraph
+      (rowsFor methodConstraintIfaces semMods))
+    (DraftObservation
+      ProducerCtorFieldTypeNames
+      PopulationElaboratedGraph
+      (rowsFor ctorFieldTypeNames semMods))
+    (DraftObservation
+      ProducerDeclSigTypeNames
+      PopulationRuntimeAndGraph
+      (rowsFor declSigTypeNames sigMods))
+    (DraftObservation ProducerMainScheme PopulationEntryScheme mainIsUnit)
+    (DraftObservation ProducerMainScheme PopulationEntryScheme mainIsFloat)
+    pendingFacts
+
+flattenRows : List (DraftRows a) -> List a
+flattenRows [] = []
+flattenRows ((DraftRows _ rows)::rest) = rows ++ flattenRows rest
+
+receipt : DraftFact -> DraftProducer -> DraftPopulation -> Bool -> DraftReceipt
+receipt fact producer population same = DraftReceipt
+  fact
+  producer
+  population
+  (if same then DraftMatch else DraftDifferent)
+
+observationMetadataMatches : DraftProducer -> DraftPopulation -> DraftProducer -> DraftPopulation -> Bool
+observationMetadataMatches expectedProducer expectedPopulation actualProducer actualPopulation = expectedProducer == actualProducer && expectedPopulation == actualPopulation
+
+modulesSexp : List DraftModule -> String
+modulesSexp modules = slist (map draftModulePayloadSexp modules)
+
+-- `ir.sexp.programToSexp` intentionally rejects post-typecheck EMethodAt, so
+-- compare the executable projection with the same typed Core serializer used
+-- by the primary structural probe. Declaration-only facts are compared by the
+-- dedicated rows below rather than hidden behind this projection.
+draftModulePayloadSexp : DraftModule -> String
+draftModulePayloadSexp (DraftModule mid decls) =
+  node "module" [escStr mid, cprogramToSexp (lowerProgramEmit decls)]
+
+draftModuleSexp : DraftModule -> String
+draftModuleSexp (DraftModule mid decls) =
+  node "module" [escStr mid, intToString (listLen decls)]
+
+-- These are transport receipts only: they prove each NAMED projection consumed
+-- by today's emit seam was copied with the expected provenance and population.
+-- The three declaration-envelope receipts compare module identity/order plus
+-- typed Core projections; declaration-only semantic inputs are checked by their
+-- dedicated table receipts. This is not a faithful typed-AST equality claim,
+-- and none of it certifies that a legacy answer is semantically correct. Future
+-- .P stages add independent producer observations and semantic comparisons.
+export compareDraftSemanticProgram : DraftSemanticProgram -> List Decl -> List Decl -> List (String, List Decl) -> Bool -> Bool -> List DraftReceipt
+compareDraftSemanticProgram (DraftSemanticProgram (DraftObservation runtimeProducer runtimePopulation draftRuntime) (DraftObservation coreProducer corePopulation draftCore) (DraftObservation modulesProducer modulesPopulation draftModules) (DraftObservation legacyCoreProducer legacyCorePopulation draftLegacyCore) (DraftObservation returnsSelfProducer returnsSelfPopulation draftReturnsSelf) (DraftObservation selfFnProducer selfFnPopulation draftSelfFnParams) (DraftObservation methodIfaceProducer methodIfacePopulation draftMethodIface) (DraftObservation methodConstraintsProducer methodConstraintsPopulation draftMethodConstraints) (DraftObservation ctorFieldsProducer ctorFieldsPopulation draftCtorFieldTypes) (DraftObservation declSigsProducer declSigsPopulation draftDeclSigTypes) (DraftObservation mainUnitProducer mainUnitPopulation draftMainIsUnit) (DraftObservation mainFloatProducer mainFloatPopulation draftMainIsFloat) _) runtimeDecls coreD modules mainIsUnit mainIsFloat =
+  let allDecls = dceFilter (coreD ++ flatMap snd modules)
+  [
+    receipt FactRuntimeProjection ProducerLoadedRuntime PopulationRuntimeDecls (observationMetadataMatches ProducerLoadedRuntime PopulationRuntimeDecls runtimeProducer runtimePopulation && modulesSexp [DraftModule "runtime" draftRuntime] == modulesSexp [DraftModule "runtime" runtimeDecls]),
+    receipt FactPreludeProjection ProducerElaborateModules PopulationElaboratedPrelude (observationMetadataMatches ProducerElaborateModules PopulationElaboratedPrelude coreProducer corePopulation && modulesSexp [DraftModule "core" draftCore] == modulesSexp [DraftModule "core" coreD]),
+    receipt FactModuleProjection ProducerElaborateModules PopulationElaboratedModules (observationMetadataMatches ProducerElaborateModules PopulationElaboratedModules modulesProducer modulesPopulation && modulesSexp draftModules == modulesSexp (map moduleOf modules)),
+    receipt FactLegacyCore ProducerLowerProgramEmit PopulationPostDceEmitCore (observationMetadataMatches ProducerLowerProgramEmit PopulationPostDceEmitCore legacyCoreProducer legacyCorePopulation && cprogramToSexp draftLegacyCore == cprogramToSexp (lowerProgramEmit allDecls)),
+    receipt FactReturnsSelf ProducerReturnsSelfTable PopulationElaboratedGraph (observationMetadataMatches ProducerReturnsSelfTable PopulationElaboratedGraph returnsSelfProducer returnsSelfPopulation && flattenRows draftReturnsSelf == returnsSelfTable allDecls),
+    receipt FactSelfFnParams ProducerSelfFnParamTable PopulationElaboratedGraph (observationMetadataMatches ProducerSelfFnParamTable PopulationElaboratedGraph selfFnProducer selfFnPopulation && flattenRows draftSelfFnParams == selfFnParamTable allDecls),
+    receipt FactMethodIface ProducerMethodIfaceTable PopulationElaboratedGraph (observationMetadataMatches ProducerMethodIfaceTable PopulationElaboratedGraph methodIfaceProducer methodIfacePopulation && flattenRows draftMethodIface == methodIfaceTable allDecls),
+    receipt FactMethodConstraints ProducerMethodConstraintIfaces PopulationElaboratedGraph (observationMetadataMatches ProducerMethodConstraintIfaces PopulationElaboratedGraph methodConstraintsProducer methodConstraintsPopulation && flattenRows draftMethodConstraints == methodConstraintIfaces allDecls),
+    receipt FactCtorFieldTypes ProducerCtorFieldTypeNames PopulationElaboratedGraph (observationMetadataMatches ProducerCtorFieldTypeNames PopulationElaboratedGraph ctorFieldsProducer ctorFieldsPopulation && flattenRows draftCtorFieldTypes == ctorFieldTypeNames allDecls),
+    receipt FactDeclSigTypes ProducerDeclSigTypeNames PopulationRuntimeAndGraph (observationMetadataMatches ProducerDeclSigTypeNames PopulationRuntimeAndGraph declSigsProducer declSigsPopulation && flattenRows draftDeclSigTypes == declSigTypeNames runtimeDecls ++ declSigTypeNames allDecls),
+    receipt FactMainIsUnit ProducerMainScheme PopulationEntryScheme (observationMetadataMatches ProducerMainScheme PopulationEntryScheme mainUnitProducer mainUnitPopulation && draftMainIsUnit == mainIsUnit),
+    receipt FactMainIsFloat ProducerMainScheme PopulationEntryScheme (observationMetadataMatches ProducerMainScheme PopulationEntryScheme mainFloatProducer mainFloatPopulation && draftMainIsFloat == mainIsFloat),
+  ]
+
+dropFirstRows : List (DraftRows a) -> List (DraftRows a)
+dropFirstRows [] = []
+dropFirstRows ((DraftRows mid [])::rest) =
+  DraftRows mid [] :: dropFirstRows rest
+dropFirstRows ((DraftRows mid (_::rows))::rest) = DraftRows mid rows :: rest
+
+-- Test-only negative seam. Draft constructors are intentionally public during
+-- migration; this named helper keeps the probe's malformed-field control small.
+export draftWithoutFirstMethodIface : DraftSemanticProgram -> DraftSemanticProgram
+draftWithoutFirstMethodIface (DraftSemanticProgram runtimeD coreD modules legacyCore returnsSelf selfFnParams (DraftObservation producer population methodIface) methodConstraints ctorFieldTypes declSigTypes mainIsUnit mainIsFloat pending) = DraftSemanticProgram runtimeD coreD modules legacyCore returnsSelf selfFnParams (DraftObservation producer population (dropFirstRows methodIface)) methodConstraints ctorFieldTypes declSigTypes mainIsUnit mainIsFloat pending
+
+-- Provenance is part of the compared field, not decorative output.
+export draftWithWrongMethodIfaceProvenance : DraftSemanticProgram -> DraftSemanticProgram
+draftWithWrongMethodIfaceProvenance (DraftSemanticProgram runtimeD coreD modules legacyCore returnsSelf selfFnParams (DraftObservation _ _ methodIface) methodConstraints ctorFieldTypes declSigTypes mainIsUnit mainIsFloat pending) = DraftSemanticProgram runtimeD coreD modules legacyCore returnsSelf selfFnParams (DraftObservation ProducerRuntimeTypes PopulationRuntimeDecls methodIface) methodConstraints ctorFieldTypes declSigTypes mainIsUnit mainIsFloat pending
+
+producerSexp : DraftProducer -> String
+producerSexp ProducerLoadedRuntime = "loader:runtime"
+producerSexp ProducerElaborateModules = "elaborateModules"
+producerSexp ProducerLowerProgramEmit = "lowerProgramEmit"
+producerSexp ProducerReturnsSelfTable = "returnsSelfTable"
+producerSexp ProducerSelfFnParamTable = "selfFnParamTable"
+producerSexp ProducerMethodIfaceTable = "methodIfaceTable"
+producerSexp ProducerMethodConstraintIfaces = "methodConstraintIfaces"
+producerSexp ProducerCtorFieldTypeNames = "ctorFieldTypeNames"
+producerSexp ProducerDeclSigTypeNames = "declSigTypeNames"
+producerSexp ProducerMainScheme = "mainScheme"
+producerSexp ProducerIdentityVisibility = "X-I.P"
+producerSexp ProducerRuntimeTypes = "X-T.P"
+producerSexp ProducerCallShapes = "X-C.P"
+producerSexp ProducerEvidence = "X-E.P:evidence"
+producerSexp ProducerMethodDispositions = "X-E.P:dispositions"
+producerSexp ProducerCapabilityManifest = "effects:manifest"
+
+populationSexp : DraftPopulation -> String
+populationSexp PopulationRuntimeDecls = "runtime-decls"
+populationSexp PopulationElaboratedPrelude = "elaborated-prelude"
+populationSexp PopulationElaboratedModules = "elaborated-modules"
+populationSexp PopulationPostDceEmitCore = "post-dce-emit-core"
+populationSexp PopulationElaboratedGraph = "elaborated-graph"
+populationSexp PopulationRuntimeAndGraph = "runtime-and-elaborated-graph"
+populationSexp PopulationEntryScheme = "entry-scheme"
+
+factSexp : DraftFact -> String
+factSexp FactRuntimeProjection = "runtime-emitter-projection"
+factSexp FactPreludeProjection = "prelude-emitter-projection"
+factSexp FactModuleProjection = "module-emitter-projection"
+factSexp FactLegacyCore = "legacy-core"
+factSexp FactReturnsSelf = "returns-self"
+factSexp FactSelfFnParams = "self-fn-params"
+factSexp FactMethodIface = "method-iface"
+factSexp FactMethodConstraints = "method-constraints"
+factSexp FactCtorFieldTypes = "ctor-field-types"
+factSexp FactDeclSigTypes = "decl-sig-types"
+factSexp FactMainIsUnit = "main-is-unit"
+factSexp FactMainIsFloat = "main-is-float"
+factSexp FactIdentityVisibility = "identity-visibility"
+factSexp FactRuntimeTypes = "runtime-types"
+factSexp FactCallShapes = "call-shapes"
+factSexp FactEvidence = "evidence"
+factSexp FactMethodDispositions = "method-dispositions"
+factSexp FactCapabilityManifest = "capability-manifest"
+
+comparisonSexp : DraftComparison -> String
+comparisonSexp DraftMatch = "MATCH"
+comparisonSexp DraftDifferent = "DIFFERENT"
+
+pendingSexp : DraftPending -> String
+pendingSexp (DraftPending fact producer dependency) =
+  node "pending" [factSexp fact, producerSexp producer, escStr dependency]
+
+receiptSexp : DraftReceipt -> String
+receiptSexp (DraftReceipt fact producer population comparison) = node
+  "receipt"
+  [
+    factSexp fact,
+    producerSexp producer,
+    populationSexp population,
+    comparisonSexp comparison,
+  ]
+
+rowsSummary : List (DraftRows a) -> String
+rowsSummary rows = slist (map rowSummary rows)
+
+rowSummary : DraftRows a -> String
+rowSummary (DraftRows mid values) =
+  node "rows" [escStr mid, intToString (listLen values)]
+
+cprogramSummary : CProgram -> String
+cprogramSummary (CProgram binds ctorArities ctorTypes impls) = node
+  "CProgramSummary"
+  [
+    intToString (listLen binds),
+    intToString (listLen ctorArities),
+    intToString (listLen ctorTypes),
+    intToString (listLen impls),
+  ]
+
+observationSexp : DraftProducer -> DraftPopulation -> String -> String
+observationSexp producer population payload =
+  node "observed" [producerSexp producer, populationSexp population, payload]
+
+declObservationSexp : DraftObservation (List Decl) -> String
+declObservationSexp (DraftObservation producer population decls) =
+  observationSexp producer population (intToString (listLen decls))
+
+moduleObservationSexp : DraftObservation (List DraftModule) -> String
+moduleObservationSexp (DraftObservation producer population modules) =
+  observationSexp producer population (slist (map draftModuleSexp modules))
+
+coreObservationSexp : DraftObservation CProgram -> String
+coreObservationSexp (DraftObservation producer population program) =
+  observationSexp producer population (cprogramSummary program)
+
+rowsObservationSexp : DraftObservation (List (DraftRows a)) -> String
+rowsObservationSexp (DraftObservation producer population rows) =
+  observationSexp producer population (rowsSummary rows)
+
+boolObservationSexp : DraftObservation Bool -> String
+boolObservationSexp (DraftObservation producer population value) =
+  observationSexp producer population (boolStr value)
+
+differentCount : List DraftReceipt -> Int
+differentCount [] = 0
+differentCount ((DraftReceipt _ _ _ DraftDifferent)::rest) =
+  1 + differentCount rest
+differentCount (_::rest) = differentCount rest
+
+-- Compact by design: the existing typed Core dump remains the detailed
+-- structural receipt. This dump exposes populations, source-unit row counts,
+-- pending producers, and exact transport-comparison verdicts without copying a
+-- full prelude-sized CProgram into a second golden family.
+export draftSemanticProgramToSexp : DraftSemanticProgram -> List DraftReceipt -> String
+draftSemanticProgramToSexp (DraftSemanticProgram runtimeD coreD modules legacyCore returnsSelf selfFnParams methodIface methodConstraints ctorFieldTypes declSigTypes mainIsUnit mainIsFloat pending) receipts = node "DraftSemanticProgram" [node "runtime" [declObservationSexp runtimeD], node "prelude" [declObservationSexp coreD], node "modules" [moduleObservationSexp modules], node "legacy-core" [coreObservationSexp legacyCore], node "returns-self" [rowsObservationSexp returnsSelf], node "self-fn-params" [rowsObservationSexp selfFnParams], node "method-iface" [rowsObservationSexp methodIface], node "method-constraints" [rowsObservationSexp methodConstraints], node "ctor-field-types" [rowsObservationSexp ctorFieldTypes], node "decl-sig-types" [rowsObservationSexp declSigTypes], node "main-is-unit" [boolObservationSexp mainIsUnit], node "main-is-float" [boolObservationSexp mainIsFloat], node "pending-facts" [slist (map pendingSexp pending)], node "transport-receipts" [slist (map receiptSexp receipts)], node "summary" [node "receipts" [intToString (listLen receipts)], node "different" [intToString (differentCount receipts)]]]

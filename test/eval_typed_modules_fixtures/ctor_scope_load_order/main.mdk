@@ -1,0 +1,45 @@
+-- #1111 A-2.6: the fixture that discriminates the IDENTITY-SCOPED pool lookup
+-- (`declOwnedBy`) from a bare-name one.  It is the counterfactual control for the
+-- unit, and it is the only file here that can go red on a "cheaper" version of the
+-- fix, so read what it pins.
+--
+-- The overlay resolves an imported constructor to a decl drawn from the whole-graph
+-- data-universe POOL.  That pool is appended in LOAD order and searched FIRST-match,
+-- while the universe tables it overlays are `omInsert` LAST-write-wins — the two
+-- orders are OPPOSITE.  Here the wanted module (`zzcfg`, `fld : Int`) is imported
+-- SECOND, so a bare-name pool search lands on `aacfg`'s `Float` `Cfg` — i.e. the
+-- overlay meant to defeat load order would itself become a load-order coin flip, and
+-- would flip the answer to `7.0` on a program pristine `main` gets RIGHT.
+--
+-- Expected output, derived by hand: `7`.  `Cfg` at the literal head can only mean
+-- `zzcfg.Cfg`, the sole `Cfg` this file imports, so `fld : Int`.
+--
+-- MEASURED, three binaries, same source tree (this is a positive control, not an
+-- argument):
+--   * pristine `main` (40756bea) ................ `7`  (no overlay fires at all;
+--     the universe's last-write-wins happens to pick `zzcfg`, which is right HERE
+--     and wrong in #1256's order — the same coin, other face)
+--   * A-2.6 as shipped ......................... `7`
+--   * A-2.6 with `declOwnedBy` stubbed to `True`  `7.0`  ← REGRESSION vs main
+-- So this file distinguishes the shipped fix from the obvious cheaper one, and
+-- neither drain fixture does.
+--
+-- ⚠️ Why EVAL-ONLY and not the 3-engine `llvm_fixtures_modules` corpus: the built
+-- binary for this exact program SEGFAULTS (`E-FATAL-SIGNAL`, exit 139), and that is
+-- PRE-EXISTING and unrelated to A-2.6 — verified byte-identical on a binary built
+-- from pristine 40756bea, on A-2.6, and on the stubbed counterfactual.  It is the
+-- native mangler's own bare-name ctor collision (#733 item 1's predicted
+-- typecheck↔mangler divergence; #1216 is the same emitter reading the wrong record
+-- slot).  Enrolling this shape in a native gate would pin somebody else's open bug
+-- as this unit's expectation.  Filed as #1281, with the sharpening discriminator:
+-- the byte-identical graph with both records carrying `fld : Int` builds and runs
+-- correctly, so the trigger is the differing field TYPE, not the name collision.
+-- MOVE THIS FIXTURE to `test/llvm_fixtures_modules/` when #1281 drains.
+import aacfg.{aaf}
+import zzcfg.{Cfg}
+
+v : Cfg
+v = Cfg { fld = 7 }
+
+main : <IO> Unit
+main = println v.fld

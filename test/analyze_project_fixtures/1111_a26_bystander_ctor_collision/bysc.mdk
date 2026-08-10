@@ -1,0 +1,14 @@
+-- THE BYSTANDER.  Nothing here shares a name with anything in `bysa`/`bysz`, this
+-- module imports neither of them, and no name it declares is reachable from the
+-- collision.  Its schemes and its behaviour must be exactly what they would be if
+-- `bysa`/`bysz` did not exist.
+public export data Color =
+  | Red
+  | Green
+
+export shade : Color -> String
+shade Red = "r"
+shade Green = "g"
+
+export widen : Int -> Int
+widen n = n + 1

@@ -1,0 +1,34 @@
+entry: main.mdk
+what: a module that NAMES one `Cfg` and HOLDS a value of another answers the same in EVERY import-clause order
+
+`main` NAMES armod's `Cfg` as a type (through the re-exporter) and separately HOLDS a value
+of zrmod's `Cfg`, whose type it never names. Correct answer: `5`.
+
+⚠️ THIS ROW WAS FILED AS `1377-named-type-vs-held-value`. #1319 unit 3 DRAINED #1377, so the
+row is renamed to what it now pins — a PROPERTY, not an open issue — and it outlives the
+issue on purpose. It has been all three things in sequence, which is why the history is kept
+here rather than in a closed issue nobody will open:
+
+  before #1319 unit 2   ORDER-DEPENDENT and the accepted ordering was the CORRECT one
+                        (measured by hand on a binary cold-built from `main` @ `1443870c`):
+                          import remod… ; import zrmod…  ->  exit 0, prints `5`
+                          import zrmod… ; import remod…  ->  exit 1, `Type mismatch: Cfg vs
+                                                             Cfg — … 'zrmod' … 'armod'` +
+                                                             `Field 'beta' does not belong to
+                                                             record 'Cfg'`
+  after unit 2          INVARIANT and WRONG — refused in both orderings. Unit 2 did not fix
+                        it; it removed the order sensitivity, which is the safe direction
+                        (consistently loud beats order-dependently loud). Filed as #1377.
+  after unit 3          INVARIANT and RIGHT — `5` in both orderings, measured first-hand on a
+                        binary cold-built in this worktree.
+
+⚠️ SO THE ROW IS STILL UNLEDGERED, AND STILL NOT BECAUSE IT IS UNINTERESTING.
+`test/IMPORT-ORDER-LEDGER.txt` pins cases whose answer DIVERGES across orderings; this one
+does not diverge and never should again. What it grades is the DIRECTION: a future change to
+the record tables that accepts one ordering and refuses the other has restored the coin flip,
+and this cell is the only thing that says so — the value itself is pinned separately by
+`test/llvm_fixtures_modules/record_receiver_ident_named_vs_held/`, on all three engines.
+
+⚠️ Read the two together. This cell alone would stay green if a regression made BOTH orderings
+wrong again (that is exactly the state unit 2 left it in), and that fixture alone would stay
+green if a regression made only the other ordering wrong.

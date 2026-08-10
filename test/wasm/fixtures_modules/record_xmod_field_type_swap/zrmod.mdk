@@ -1,0 +1,11 @@
+-- W9 port of test/llvm_fixtures_modules/record_xmod_field_type_swap/zrmod.mdk
+-- (#1418). The other `Cfg`, same two field NAMES, opposite indices, and the field
+-- TYPES differ at each index. No import relationship with `armod`; both
+-- projections below are of this module's OWN record.
+public export data Cfg = { s : String, a : Int }
+
+mkZ : Cfg
+mkZ = Cfg { s = "zed", a = 44 }
+
+export zrOut : String
+zrOut = intToString mkZ.a ++ mkZ.s

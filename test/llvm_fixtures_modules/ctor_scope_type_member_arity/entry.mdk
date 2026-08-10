@@ -1,0 +1,41 @@
+-- #1111 A-2.7 DRAIN: `import m.{T(..)}` must bind m's constructors in the ENGINE
+-- import frame, not leave them to the bare-name global frame.
+--
+-- The engines give each module a frame stack `[localCells, imports, globalCells]`.
+-- `globalCells` is keyed by BARE name and populated from EVERY module's decls, so
+-- two modules declaring a `Box` share one cell (last registration wins).  P0-9
+-- covered a module's OWN constructors by copying them into `localCells`; nothing
+-- covered CONSTRUCTORS ARRIVING BY IMPORT under the `(..)` spelling, because the
+-- import frame binds a member by looking its ORIGIN NAME up in the exporting
+-- module's cells — and `XA` is a TYPE, which has no cell.  So `XA(..)` bound
+-- nothing and `Box` fell through to the global cell, which held `bmodx`'s arity-2
+-- `Box`.
+--
+-- Expected output, derived by hand BEFORE any capture and independently of any
+-- engine: `Box 5` here is `amodx`'s (the only `Box` this file brings into scope),
+-- so `unXA (Box 5)` = `5`; `bxv` is `bmodx`'s `Box 3 4` and `unXB (Box a b) = b - a`
+-- = `4 - 3` = `1`.  So `5` then `1`.
+--
+-- ⚠️ THE FAILURE THIS PINS, measured first-hand on a MEDAKA_STRICT=1 binary built
+-- from `ae39ec41` (pristine `main`, A-2.6 already merged): all THREE engine drivers
+-- died `E-NONEXHAUSTIVE-MATCH` (`Box 5` built a partially-applied arity-2
+-- constructor, which no `Box x` pattern matches), while `medaka build` printed the
+-- correct `5`.  So this was a live eval-vs-native DIVERGENCE, not a shared gap —
+-- and `medaka check` exited 0 on it, because A-2.6 had already fixed the
+-- typecheck-side half of exactly this question.  The emitter has had the missing
+-- index since #674 (`backend/private_mangle.ctorMemberEntry`), which is why the
+-- native arm was right the whole time.
+--
+-- ⚠️ THE ARITY IS LOAD-BEARING, and that is why the existing corpus missed this.
+-- `test/llvm_fixtures_modules/ctor_scope_ctors_prefer_type_name/` already has a
+-- `{T(..)}` import colliding with a sibling module's constructor — but both spell a
+-- NULLARY `A`, and two nullary constructors of the same name build the same
+-- `VCon "A" []`, so a wrong cell is unobservable there.  A wrong cell only shows
+-- when the arities differ.
+import amodx.{XA(..), unXA}
+import bmodx.{XB, bxv, unXB}
+
+main : <IO> Unit
+main =
+  let _ = putStrLn (intToString (unXA (Box 5)))
+  putStrLn (intToString (unXB bxv))

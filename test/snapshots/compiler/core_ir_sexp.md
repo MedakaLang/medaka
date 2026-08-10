@@ -1,5 +1,5 @@
 # META
-source_lines=231
+source_lines=232
 stages=DESUGAR,MARK
 # SOURCE
 -- Structural S-expression dump of the Core IR (STAGE2-DESIGN §2.1).  Mirrors
@@ -209,8 +209,9 @@ cimplBodySexp (CImplTagged tag key iface positions pats body) = node
     slist (map patSexp pats),
     cexprSexp body,
   ]
-cimplBodySexp (CImplDefault pats body) =
-  node "CImplDefault" [slist (map patSexp pats), cexprSexp body]
+cimplBodySexp (CImplDefault ifaceId pats body) = node
+  "CImplDefault"
+  [escStr ifaceId, slist (map patSexp pats), cexprSexp body]
 
 export cimplEntrySexp : CImplEntry -> String
 cimplEntrySexp (CImplEntry name score body) =
@@ -315,7 +316,7 @@ cprogramToSexp (CProgram binds ctorArities ctorToType impls) = node
 (DFunDef false "cclauseSexp" ((PCon "CClause" (PVar "pats") (PVar "body"))) (EApp (EApp (EVar "node") (ELit (LString "CClause"))) (EListLit (EApp (EVar "slist") (EApp (EApp (EVar "map") (EVar "patSexp")) (EVar "pats"))) (EApp (EVar "cexprSexp") (EVar "body")))))
 (DTypeSig true "cimplBodySexp" (TyFun (TyCon "CImplBody") (TyCon "String")))
 (DFunDef false "cimplBodySexp" ((PCon "CImplTagged" (PVar "tag") (PVar "key") (PVar "iface") (PVar "positions") (PVar "pats") (PVar "body"))) (EApp (EApp (EVar "node") (ELit (LString "CImplTagged"))) (EListLit (EApp (EVar "escStr") (EVar "tag")) (EApp (EVar "escStr") (EVar "key")) (EApp (EVar "escStr") (EVar "iface")) (EApp (EVar "slist") (EApp (EApp (EVar "map") (EVar "intToString")) (EVar "positions"))) (EApp (EVar "slist") (EApp (EApp (EVar "map") (EVar "patSexp")) (EVar "pats"))) (EApp (EVar "cexprSexp") (EVar "body")))))
-(DFunDef false "cimplBodySexp" ((PCon "CImplDefault" (PVar "pats") (PVar "body"))) (EApp (EApp (EVar "node") (ELit (LString "CImplDefault"))) (EListLit (EApp (EVar "slist") (EApp (EApp (EVar "map") (EVar "patSexp")) (EVar "pats"))) (EApp (EVar "cexprSexp") (EVar "body")))))
+(DFunDef false "cimplBodySexp" ((PCon "CImplDefault" (PVar "ifaceId") (PVar "pats") (PVar "body"))) (EApp (EApp (EVar "node") (ELit (LString "CImplDefault"))) (EListLit (EApp (EVar "escStr") (EVar "ifaceId")) (EApp (EVar "slist") (EApp (EApp (EVar "map") (EVar "patSexp")) (EVar "pats"))) (EApp (EVar "cexprSexp") (EVar "body")))))
 (DTypeSig true "cimplEntrySexp" (TyFun (TyCon "CImplEntry") (TyCon "String")))
 (DFunDef false "cimplEntrySexp" ((PCon "CImplEntry" (PVar "name") (PVar "score") (PVar "body"))) (EApp (EApp (EVar "node") (ELit (LString "CImplEntry"))) (EListLit (EApp (EVar "escStr") (EVar "name")) (EApp (EVar "intToString") (EVar "score")) (EApp (EVar "cimplBodySexp") (EVar "body")))))
 (DTypeSig false "ctorArityPairSexp" (TyFun (TyTuple (TyCon "String") (TyCon "Int")) (TyCon "String")))
@@ -406,7 +407,7 @@ cprogramToSexp (CProgram binds ctorArities ctorToType impls) = node
 (DFunDef false "cclauseSexp" ((PCon "CClause" (PVar "pats") (PVar "body"))) (EApp (EApp (EVar "node") (ELit (LString "CClause"))) (EListLit (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (EVar "patSexp")) (EVar "pats"))) (EApp (EVar "cexprSexp") (EVar "body")))))
 (DTypeSig true "cimplBodySexp" (TyFun (TyCon "CImplBody") (TyCon "String")))
 (DFunDef false "cimplBodySexp" ((PCon "CImplTagged" (PVar "tag") (PVar "key") (PVar "iface") (PVar "positions") (PVar "pats") (PVar "body"))) (EApp (EApp (EVar "node") (ELit (LString "CImplTagged"))) (EListLit (EApp (EVar "escStr") (EVar "tag")) (EApp (EVar "escStr") (EVar "key")) (EApp (EVar "escStr") (EVar "iface")) (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (EVar "intToString")) (EVar "positions"))) (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (EVar "patSexp")) (EVar "pats"))) (EApp (EVar "cexprSexp") (EVar "body")))))
-(DFunDef false "cimplBodySexp" ((PCon "CImplDefault" (PVar "pats") (PVar "body"))) (EApp (EApp (EVar "node") (ELit (LString "CImplDefault"))) (EListLit (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (EVar "patSexp")) (EVar "pats"))) (EApp (EVar "cexprSexp") (EVar "body")))))
+(DFunDef false "cimplBodySexp" ((PCon "CImplDefault" (PVar "ifaceId") (PVar "pats") (PVar "body"))) (EApp (EApp (EVar "node") (ELit (LString "CImplDefault"))) (EListLit (EApp (EVar "escStr") (EVar "ifaceId")) (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (EVar "patSexp")) (EVar "pats"))) (EApp (EVar "cexprSexp") (EVar "body")))))
 (DTypeSig true "cimplEntrySexp" (TyFun (TyCon "CImplEntry") (TyCon "String")))
 (DFunDef false "cimplEntrySexp" ((PCon "CImplEntry" (PVar "name") (PVar "score") (PVar "body"))) (EApp (EApp (EVar "node") (ELit (LString "CImplEntry"))) (EListLit (EApp (EVar "escStr") (EVar "name")) (EApp (EVar "intToString") (EVar "score")) (EApp (EVar "cimplBodySexp") (EVar "body")))))
 (DTypeSig false "ctorArityPairSexp" (TyFun (TyTuple (TyCon "String") (TyCon "Int")) (TyCon "String")))

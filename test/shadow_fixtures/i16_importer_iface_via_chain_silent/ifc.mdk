@@ -1,0 +1,7 @@
+-- SHADOW-SEMANTICS cell I16 provider 1: the interface and its only impl, at String --
+-- a head the shadowing standalone ALSO accepts, which is what makes this cell silent.
+export interface Sizeable a where
+  size : a -> Int
+
+impl Sizeable String where
+  size s = 7

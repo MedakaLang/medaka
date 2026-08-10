@@ -1,0 +1,803 @@
+-- | gzip.lib.huffman — canonical Huffman decoding for DEFLATE (RFC 1951 §3.2.2, §3.2.6).
+--
+-- Counts-and-offsets decoding, NOT a node-per-bit tree (see
+-- `docs/design/GZIP-DESIGN.md`, "Canonical Huffman decoding"): `Huffman`
+-- carries `counts` (how many codes of each length 0..15) and `symbols`
+-- (every used symbol, sorted by (length, symbol)). `decodeSym` reads one
+-- bit at a time and walks the length ladder, at most 15 iterations, no
+-- allocation, no tree nodes — the algorithm from puff.c's `decode()`.
+--
+-- `buildHuffman` validates the Kraft inequality on the way in: an
+-- over-subscribed code (sum of 2^-len > 1) is always an `Err`; an
+-- incomplete code (sum < 1) is an `Err` too, EXCEPT a code with exactly one
+-- used symbol AT LENGTH 1 — RFC 1951 §3.2.7: "If only one distance code is
+-- used, it is encoded using one bit, not zero bits; in this case there is a
+-- single code length of one, with one unused code." Both conditions are
+-- required: `numUsed == 1` alone is NOT the exception (a lone symbol at any
+-- OTHER length, e.g. 9, is still an `Err` — zlib's `inftrees.c` encodes the
+-- same restriction via `max != 1`, `max` being the maximum code length
+-- used, not just the count of used symbols). This module accepts the
+-- exception for any single-length-1-code table, not just a distance table
+-- specifically, since `Huffman` carries no alphabet-identity tag to
+-- special-case on.
+--
+-- PHASE 3: the RFC (and zlib's `inftrees.c`, `type == CODES`) forbids the
+-- single-length-1-code exception OUTRIGHT for the dynamic-Huffman
+-- code-length alphabet (HCLEN), regardless of length — a single-symbol
+-- code-length table is always malformed there. `buildHuffmanStrict` below
+-- is that stricter entry point: same construction, `allowSingle = False`
+-- threaded into `kraftCheck`, so the HCLEN caller in `inflate.mdk` cannot
+-- accidentally inherit the litlen/dist exception.
+--
+-- PHASE 3 WIDENING: `kraftCheck` also now accepts `numUsed == 0` — an
+-- alphabet with EVERY code length zero — as complete, for BOTH
+-- `buildHuffman` and `buildHuffmanStrict`. This is not the RFC 1951
+-- §3.2.7 single-code exception (that one is narrower and still gated by
+-- `allowSingle`); it is a separate, unconditional case straight from
+-- puff.c's `construct()`: "if (h->count[0] == n) return 0" — a table
+-- with no used codes at all is a legal (if useless) construction, because
+-- `decodeSym` on it can never match any code and simply `Err`s on first
+-- use rather than reading garbage. This is exactly the shape the dynamic
+-- Huffman DISTANCE alphabet takes when a block is all-literals: HDIST's
+-- encoded minimum is one code, and RFC 1951 explicitly permits that one
+-- code to have length zero, meaning "no distance codes used at all"
+-- (§3.2.7). Before this widening `kraftCheck` had no way to accept that
+-- shape (a zero-symbol table doesn't satisfy the length-1 exception
+-- either), and it is exercised directly by
+-- `test "buildHuffman: an all-zero-length table (numUsed=0) is Ok, the RFC's
+-- no-distance-codes-used shape"` below.
+--
+-- `decodeSym` never reads garbage on a truncated stream: every bit read
+-- goes through `bitio.getBits`, whose own `Err` on end-of-input propagates
+-- straight through (no swallowing, no default symbol).
+--
+-- Length/distance tables (RFC 1951 §3.2.5) are each encoded ONCE, as flat
+-- `Array Int`, and nothing in this file re-derives a second copy — a
+-- hand-typed duplicate would be wrong in exactly one cell and pass every
+-- test but one.
+
+import array.{get, set, make, makeWith}
+import lib.bitio.{
+  BitReader,
+  BitWriter,
+  newBitReader,
+  getBits,
+  newBitWriter,
+  putCodeMSB,
+  finishBitWriter,
+}
+import test.{expectEqual, expectTrue, fail}
+
+-- ---------------------------------------------------------------------------
+-- Huffman: counts-and-offsets canonical decode table
+-- ---------------------------------------------------------------------------
+
+-- | `counts[len]` = number of codes of length `len` (indices 0..15, index 0
+--   always 0 — no code has length 0). `symbols` holds every used symbol,
+--   sorted first by code length then by symbol value — the canonical order.
+public export data Huffman =
+  | Huffman { counts : Array Int, symbols : Array Int }
+deriving (Eq, Debug)
+
+-- Largest legal DEFLATE Huffman code length (RFC 1951 §3.2.7).
+maxCodeLen : Int
+maxCodeLen = 15
+
+-- Every code length in `lengths` must be 0 (unused) or 1..maxCodeLen.
+validateLengths : Array Int -> Int -> Int -> Result String Unit
+validateLengths lengths i n
+  | i >= n = Ok ()
+  | otherwise = match get i lengths
+    Some len =>
+      if len < 0 || len > maxCodeLen then
+        Err "buildHuffman: symbol \{i} has invalid code length \{len} (must be 0..\{maxCodeLen})"
+      else
+        validateLengths lengths (i + 1) n
+    None => Ok ()
+
+-- `counts[len]` = how many symbols in `lengths` have code length `len`.
+countLengths : Array Int -> Int -> Array Int
+countLengths lengths n =
+  let counts = make (maxCodeLen + 1) 0
+  let _ = countLengthsGo lengths 0 n counts
+  counts
+
+countLengthsGo : Array Int -> Int -> Int -> Array Int -> Unit
+countLengthsGo lengths i n counts
+  | i >= n = ()
+  | otherwise = match get i lengths
+    Some len => if len == 0 then countLengthsGo lengths (i + 1) n counts
+    else match get len counts
+      Some c =>
+        let _ = set len (c + 1) counts
+        countLengthsGo lengths (i + 1) n counts
+      None => panic "countLengths: length \{len} out of table range (unreachable after validateLengths)"
+    None => ()
+
+-- Total number of symbols with a nonzero code length.
+sumUsed : Array Int -> Int
+sumUsed counts = sumUsedGo counts 1 0
+
+sumUsedGo : Array Int -> Int -> Int -> Int
+sumUsedGo counts len acc
+  | len > maxCodeLen = acc
+  | otherwise = match get len counts
+    Some c => sumUsedGo counts (len + 1) (acc + c)
+    None => panic "sumUsed: length \{len} out of table range (unreachable)"
+
+-- The RFC 1951 §3.2.7 single-code exception is narrower than "exactly one
+-- symbol used": the one used code must ALSO have length 1 (`counts[1] ==
+-- 1`, which — given `numUsed == 1` — implies every other length's count is
+-- 0). A lone symbol at any other length (e.g. one 9-bit code) is NOT
+-- exempt: zlib's `inftrees.c` guards this with `max != 1` (`max` = the
+-- maximum code length actually used), not merely a used-symbol count.
+singleCodeIsLengthOne : Array Int -> Bool
+singleCodeIsLengthOne counts = match get 1 counts
+  Some c => c == 1
+  None => False
+
+-- Kraft inequality check: fold `left = 2*left - counts[len]` over len 1..15,
+-- starting at `left = 1` (the whole code space). `left < 0` at any step is
+-- over-subscription; `left > 0` at the end is incompleteness, forgiven in
+-- two cases: `numUsed == 0` (unconditionally — see the module header's
+-- PHASE 3 WIDENING note) or, when `allowSingle` is set, the single used
+-- code has length 1 (RFC 1951 §3.2.7 exception — see
+-- `singleCodeIsLengthOne` above for why `numUsed == 1` alone is not
+-- sufficient). The code-length (HCLEN) alphabet calls this with
+-- `allowSingle = False` via `buildHuffmanStrict`, so it only ever gets the
+-- `numUsed == 0` forgiveness.
+kraftCheck : Array Int -> Int -> Int -> Int -> Bool -> Result String Unit
+kraftCheck counts len left numUsed allowSingle
+  | len > maxCodeLen =
+    if left == 0 || numUsed == 0 || allowSingle && numUsed == 1 && singleCodeIsLengthOne counts then
+      Ok ()
+    else
+      Err "buildHuffman: incomplete Huffman code (unused code space remains)"
+  | otherwise = match get len counts
+    Some c =>
+      let left2 = left * 2 - c
+      if left2 < 0 then
+        Err "buildHuffman: over-subscribed Huffman code (length \{len})"
+      else
+        kraftCheck counts (len + 1) left2 numUsed allowSingle
+    None => panic "kraftCheck: length \{len} out of table range (unreachable)"
+
+-- `offs[len]` = index into `symbols` where the first code of length `len`
+-- lands: `offs[1] = 0`, `offs[len+1] = offs[len] + counts[len]`.
+buildOffsets : Array Int -> Array Int
+buildOffsets counts =
+  let offs = make (maxCodeLen + 1) 0
+  let _ = buildOffsetsGo counts 1 0 offs
+  offs
+
+buildOffsetsGo : Array Int -> Int -> Int -> Array Int -> Unit
+buildOffsetsGo counts len acc offs
+  | len > maxCodeLen = ()
+  | otherwise =
+    let _ = set len acc offs
+    match get len counts
+      Some c => buildOffsetsGo counts (len + 1) (acc + c) offs
+      None =>
+        panic "buildOffsets: length \{len} out of table range (unreachable)"
+
+-- Scatter every used symbol (in ascending symbol order) into `symbols` at
+-- its length's next free `offs` slot, advancing that slot as we go — this
+-- is what makes `symbols` end up sorted by (length, symbol).
+placeSymbols : Array Int -> Int -> Array Int -> Int -> Array Int
+placeSymbols lengths n offs total =
+  let symbols = make total 0
+  let _ = placeSymbolsGo lengths 0 n offs symbols
+  symbols
+
+placeSymbolsGo : Array Int -> Int -> Int -> Array Int -> Array Int -> Unit
+placeSymbolsGo lengths i n offs symbols
+  | i >= n = ()
+  | otherwise = match get i lengths
+    Some len => if len == 0 then placeSymbolsGo lengths (i + 1) n offs symbols
+    else match get len offs
+      Some pos =>
+        let _ = set pos i symbols
+        let _ = set len (pos + 1) offs
+        placeSymbolsGo lengths (i + 1) n offs symbols
+      None =>
+        panic "placeSymbols: length \{len} out of table range (unreachable)"
+    None => ()
+
+-- Shared construction for `buildHuffman`/`buildHuffmanStrict` — the only
+-- difference between the two public entry points is whether `kraftCheck`
+-- is allowed to forgive a single length-1 code (see the module header and
+-- `kraftCheck`'s own comment).
+buildHuffmanWith : Bool -> Array Int -> Result String Huffman
+buildHuffmanWith allowSingle lengths =
+  let n = arrayLength lengths
+  do
+    _ <- validateLengths lengths 0 n
+    let counts = countLengths lengths n
+    let numUsed = sumUsed counts
+    _ <- kraftCheck counts 1 1 numUsed allowSingle
+    let offs = buildOffsets counts
+    let symbols = placeSymbols lengths n offs numUsed
+    Ok Huffman { counts = counts, symbols = symbols }
+
+{- | Build a canonical Huffman decode table from code lengths indexed by
+   symbol (0 = symbol unused). `Err` on an over-subscribed or (genuinely)
+   incomplete code; see the module header for the single-code and
+   zero-used-code exceptions. This is the litlen/dist/fixed-table entry
+   point — it allows BOTH exceptions. For the dynamic-Huffman code-length
+   (HCLEN) alphabet, which the RFC forbids the single-code exception for,
+   use `buildHuffmanStrict` instead.
+
+   > buildHuffman [|2, 1, 3, 3|]
+   Ok Huffman { counts = [|0, 1, 1, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0|], symbols = [|1, 0, 2, 3|] }
+-}
+export buildHuffman : Array Int -> Result String Huffman
+buildHuffman lengths = buildHuffmanWith True lengths
+
+{- | Like `buildHuffman`, but WITHOUT the RFC 1951 §3.2.7 single-length-1
+   exception — only a fully complete code or an all-zero (numUsed == 0)
+   table is accepted. This is the correct entry point for the dynamic
+   Huffman code-length (HCLEN) alphabet (RFC 1951 §3.2.7 / zlib
+   `inftrees.c`'s `type == CODES`), which forbids that exception outright.
+
+   > buildHuffmanStrict [|1|]
+   Err "buildHuffman: incomplete Huffman code (unused code space remains)"
+-}
+export buildHuffmanStrict : Array Int -> Result String Huffman
+buildHuffmanStrict lengths = buildHuffmanWith False lengths
+
+{- | Decode one symbol: read a bit at a time, extending the running `code`
+   and tracking `first`/`index` per length (puff.c's `decode()`). `Err` if
+   the input runs out mid-symbol (propagated straight from `getBits`, never
+   turned into a garbage symbol) or if no code of any length 1..15 matches
+   (a malformed stream).
+
+   > decodeSym fixedLitLen (newBitReader [|142|])
+   Ok 65
+-}
+export decodeSym : Huffman -> BitReader -> Result String Int
+decodeSym h r = decodeSymGo h r 1 0 0 0
+
+decodeSymGo : Huffman -> BitReader -> Int -> Int -> Int -> Int -> Result String Int
+decodeSymGo h r len code first index
+  | len > maxCodeLen =
+    Err "decodeSym: invalid Huffman code (no match within \{maxCodeLen} bits)"
+  | otherwise = do
+    bit <- getBits 1 r
+    let code2 = bitOr code bit
+    match get len h.counts
+      Some count => if code2 - first < count then match get (index + code2 - first) h.symbols
+        Some sym => Ok sym
+        None => panic "decodeSym: symbol index out of range (unreachable for a table built by buildHuffman)"
+      else decodeSymGo h r (len + 1) (shiftLeft code2 1) (shiftLeft (first + count) 1) (index + count)
+      None => panic "decodeSym: length \{len} out of table range (unreachable)"
+
+-- ---------------------------------------------------------------------------
+-- Fixed Huffman (RFC 1951 §3.2.6)
+-- ---------------------------------------------------------------------------
+
+-- Fixed literal/length code lengths: 0-143 -> 8, 144-255 -> 9, 256-279 -> 7,
+-- 280-287 -> 8.
+fixedLitLenLenAt : Int -> Int
+fixedLitLenLenAt sym
+  | sym <= 143 = 8
+  | sym <= 255 = 9
+  | sym <= 279 = 7
+  | otherwise = 8
+
+fixedLitLenLengths : Array Int
+fixedLitLenLengths = makeWith 288 fixedLitLenLenAt
+
+-- | The fixed literal/length Huffman table (RFC 1951 §3.2.6), used by
+--   fixed-Huffman (BTYPE 01) blocks.
+export fixedLitLen : Huffman
+fixedLitLen = match buildHuffman fixedLitLenLengths
+  Ok h => h
+  Err msg => panic "fixedLitLen: buildHuffman rejected the RFC 1951 fixed table (unreachable): \{msg}"
+
+-- | The fixed distance Huffman table: a flat 5-bit code over all 32 codes
+--   0-31 (RFC 1951 §3.2.6 — codes 30/31 are reserved and never occur in
+--   real data, but are still part of the fixed 32-code table, which is what
+--   makes it Kraft-complete: 30 real + 2 reserved codes at length 5).
+export fixedDist : Huffman
+fixedDist = match buildHuffman (make 32 5)
+  Ok h => h
+  Err msg => panic "fixedDist: buildHuffman rejected the RFC 1951 fixed distance table (unreachable): \{msg}"
+
+-- ---------------------------------------------------------------------------
+-- Length and distance extra-bits tables (RFC 1951 §3.2.5)
+-- ---------------------------------------------------------------------------
+
+-- | Base length for length symbols 257..285, indexed by `symbol - 257`.
+export lengthBase : Array Int
+lengthBase = [|
+  3,
+  4,
+  5,
+  6,
+  7,
+  8,
+  9,
+  10,
+  11,
+  13,
+  15,
+  17,
+  19,
+  23,
+  27,
+  31,
+  35,
+  43,
+  51,
+  59,
+  67,
+  83,
+  99,
+  115,
+  131,
+  163,
+  195,
+  227,
+  258,
+|]
+
+-- | Extra-bit count for length symbols 257..285, indexed by `symbol - 257`.
+export lengthExtra : Array Int
+lengthExtra = [|
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  1,
+  1,
+  1,
+  1,
+  2,
+  2,
+  2,
+  2,
+  3,
+  3,
+  3,
+  3,
+  4,
+  4,
+  4,
+  4,
+  5,
+  5,
+  5,
+  5,
+  0,
+|]
+
+-- | Base distance for distance symbols 0..29, indexed by symbol.
+export distBase : Array Int
+distBase = [|
+  1,
+  2,
+  3,
+  4,
+  5,
+  7,
+  9,
+  13,
+  17,
+  25,
+  33,
+  49,
+  65,
+  97,
+  129,
+  193,
+  257,
+  385,
+  513,
+  769,
+  1025,
+  1537,
+  2049,
+  3073,
+  4097,
+  6145,
+  8193,
+  12289,
+  16385,
+  24577,
+|]
+
+-- | Extra-bit count for distance symbols 0..29, indexed by symbol.
+export distExtra : Array Int
+distExtra = [|
+  0,
+  0,
+  0,
+  0,
+  1,
+  1,
+  2,
+  2,
+  3,
+  3,
+  4,
+  4,
+  5,
+  5,
+  6,
+  6,
+  7,
+  7,
+  8,
+  8,
+  9,
+  9,
+  10,
+  10,
+  11,
+  11,
+  12,
+  12,
+  13,
+  13,
+|]
+
+-- ---------------------------------------------------------------------------
+-- Tests — external-oracle vectors (`test`) + algorithmic invariants (`prop`)
+-- ---------------------------------------------------------------------------
+
+-- Write one Huffman CODE (MSB-of-code-first, per `bitio.putCodeMSB`) into a
+-- fresh byte-aligned buffer.
+codeBytesFor : Int -> Int -> Array Int
+codeBytesFor code width =
+  let w = newBitWriter ()
+  let _ = putCodeMSB code width w
+  finishBitWriter w
+
+-- RFC 1951 §3.2.6: literal 65 has the 8-bit fixed code 48 + 65 = 113
+-- (0b01110001). Packed MSB-of-code-first into an LSB-first stream, a
+-- byte-aligned 8-bit code emerges bit-reversed: `gzip/lib/bitio.mdk`
+-- already pins `putCodeMSB 113 8 -> [|142|]` independently. So
+-- `decodeSym fixedLitLen` over a reader on `[|142|]` must return 65 — this
+-- ties this module's decoder to a fact derived from the RFC and verified
+-- independently of both `bitio.mdk` and this file.
+test "decodeSym fixedLitLen over [|142|] (bit-reversed fixed code of literal 65) -> 65" = expectEqual (Ok 65) (decodeSym fixedLitLen (newBitReader [|142|]))
+
+-- A second RFC-derived fixed-table anchor, in the 7-bit range: symbol 256
+-- (block-end) has fixed code 0b0000000 (7 zero bits, RFC 1951 §3.2.6 table:
+-- 256-279 -> codes 0000000 through 0010111). Byte-aligned, its bit-reversal
+-- is still all zeros, so it emerges as a plain zero byte.
+test "decodeSym fixedLitLen over [|0|] (fixed code of symbol 256, block-end) -> 256" = expectEqual (Ok 256) (decodeSym fixedLitLen (newBitReader [|0|]))
+
+-- fixedDist is a flat 5-bit code: symbol 13 (0b01101) round-trips through
+-- `bitio.mdk`'s own independently-pinned `putCodeMSB 13 5 -> [|22|]` test.
+test "decodeSym fixedDist over [|22|] (bit-reversed flat 5-bit code of symbol 13) -> 13" = expectEqual (Ok 13) (decodeSym fixedDist (newBitReader [|22|]))
+
+-- buildHuffman on a small hand-worked length vector [2, 1, 3, 3] (symbols
+-- 0, 1, 2, 3 respectively). Kraft sum = 2^-2 + 2^-1 + 2^-3 + 2^-3
+-- = 0.25 + 0.5 + 0.125 + 0.125 = 1.0 exactly — complete. Canonical
+-- assignment (RFC 1951 §3.2.2: shortest-length-first, then by symbol):
+--   symbol 1 (len 1): first code of length 1 = 0            -> "0"
+--   symbol 0 (len 2): (0 + 1) << 1 = 2                       -> "10"
+--   symbol 2 (len 3): (2 + 1) << 1 = 6                       -> "110"
+--   symbol 3 (len 3): 6 + 1 = 7                               -> "111"
+-- Packed one after another (no padding) via `putCodeMSB` and decoded back
+-- in order — this exercises `decodeSym` advancing correctly across repeated
+-- calls on the SAME reader, not just a single isolated decode.
+lex233Bytes : Array Int
+lex233Bytes =
+  let w = newBitWriter ()
+  let _ = putCodeMSB 0 1 w
+  let _ = putCodeMSB 2 2 w
+  let _ = putCodeMSB 6 3 w
+  let _ = putCodeMSB 7 3 w
+  finishBitWriter w
+
+decodeFour : Huffman -> BitReader -> Result String (Int, Int, Int, Int)
+decodeFour h r = do
+  a <- decodeSym h r
+  b <- decodeSym h r
+  c <- decodeSym h r
+  d <- decodeSym h r
+  Ok (a, b, c, d)
+
+test "buildHuffman [2,1,3,3]: symbols decode back in stream order (1,0,2,3)" = match buildHuffman [|2, 1, 3, 3|]
+  Ok h =>
+    expectEqual (Ok (1, 0, 2, 3)) (decodeFour h (newBitReader lex233Bytes))
+  Err msg => fail "expected Ok from buildHuffman [2,1,3,3], got Err \{msg}"
+
+-- Over-subscribed: three symbols all at length 1. Kraft sum = 3 * 2^-1 =
+-- 1.5 > 1. The violation is detected the first time `left` goes negative,
+-- which happens at length 1 itself (left = 1*2 - 3 = -1).
+test "buildHuffman: three length-1 codes is over-subscribed" = expectEqual
+  (Err "buildHuffman: over-subscribed Huffman code (length 1)")
+  (buildHuffman [|1, 1, 1|])
+
+-- Incomplete, NOT the single-code exception: two symbols both at length 2.
+-- Kraft sum = 2 * 2^-2 = 0.5 < 1, and numUsed = 2 (not the exempted 1).
+test "buildHuffman: two length-2 codes (numUsed=2) is incomplete, Err" = expectEqual
+  (Err "buildHuffman: incomplete Huffman code (unused code space remains)")
+  (buildHuffman [|2, 2|])
+
+-- The single-code exception itself: one symbol at length 1. Kraft sum =
+-- 2^-1 = 0.5 < 1 (incomplete by the raw inequality) but numUsed = 1, so
+-- RFC 1951 §3.2.6 sanctions it. The RFC's own convention for this case is
+-- the 1-bit code "0" (reading bit "1" would be a malformed stream), which
+-- is exactly the code this test decodes.
+test "buildHuffman: single length-1 code (the RFC 1951 exception) is Ok, decodes" = match buildHuffman [|1|]
+  Ok h => expectEqual (Ok 0) (decodeSym h (newBitReader (codeBytesFor 0 1)))
+  Err msg => fail "expected Ok from buildHuffman [1] (single-code exception), got Err \{msg}"
+
+-- NARROWED (was "single length-9 code is also Ok under the exception"):
+-- a coordinator review caught that this pinned a broader exception than
+-- RFC 1951 §3.2.7 sanctions. `numUsed == 1` alone is NOT the exception —
+-- the one used code must also have length 1. A lone symbol at length 9 is
+-- a genuinely incomplete code (Kraft sum 2^-9, nowhere near 1) with no RFC
+-- cover, so it must now be `Err`, matching zlib's `max != 1` guard in
+-- `inftrees.c`. This assertion flipped from `Ok` to `Err` on 2026-08-05;
+-- see `kraftCheck`/`singleCodeIsLengthOne` above for the fix.
+test "buildHuffman: single length-9 code is NOT the exception (numUsed=1 alone is insufficient), Err" = expectEqual (Err "buildHuffman: incomplete Huffman code (unused code space remains)") (buildHuffman [|9|])
+
+-- PHASE 3 WIDENING: an all-zero-length table (numUsed=0) is now Ok under
+-- BOTH `buildHuffman` and `buildHuffmanStrict` — this is the RFC 1951
+-- §3.2.7 "no distance codes used at all" shape a dynamic-Huffman block's
+-- distance alphabet takes when the block is all-literals (its one
+-- transmitted code length is 0). See the module header's PHASE 3
+-- WIDENING note and `kraftCheck`'s own comment for why this is NOT the
+-- narrower single-code exception and is unconditional.
+test "buildHuffman: an all-zero-length table (numUsed=0) is Ok, the RFC's no-distance-codes-used shape" = expectEqual True (isOk (buildHuffman [|0, 0, 0|]))
+
+test "buildHuffmanStrict: an all-zero-length table (numUsed=0) is ALSO Ok (the exemption is unconditional, unlike the single-code one)" = expectEqual True (isOk (buildHuffmanStrict [|0, 0, 0|]))
+
+-- Decoding against a numUsed=0 table can never match any code — `decodeSym`
+-- reads up to `maxCodeLen` bits and then `Err`s, exactly puff.c's own
+-- documented behavior for this shape ("decode() will fail any code since
+-- all codes are invalid"), never a hang and never a garbage symbol.
+test "decodeSym over a numUsed=0 table errors rather than hanging or reading garbage" = match buildHuffman [|0, 0, 0|]
+  Ok h => expectEqual (Err "decodeSym: invalid Huffman code (no match within \{maxCodeLen} bits)") (decodeSym h (newBitReader [|0, 0, 0|]))
+  Err msg => fail "expected Ok from buildHuffman [0,0,0], got Err \{msg}"
+
+-- `buildHuffmanStrict` DOES still forbid the single-length-1 exception that
+-- `buildHuffman` allows — this is the load-bearing difference between the
+-- two entry points, pinned directly rather than only inferred from the
+-- module header's prose.
+test "buildHuffmanStrict: single length-1 code is REJECTED (unlike buildHuffman, which allows it)" = expectEqual (Err "buildHuffman: incomplete Huffman code (unused code space remains)") (buildHuffmanStrict [|1|])
+
+test "buildHuffman: single length-1 code is STILL accepted (buildHuffmanStrict did not regress this)" = expectEqual True (isOk (buildHuffman [|1|]))
+
+-- Truncated input, immediate: `decodeSym` on ANY table over an empty byte
+-- array cannot even read the first bit — `Err`, not a garbage symbol.
+test "decodeSym over empty input is Err, not a hang or garbage symbol" =
+  expectEqual
+    (Err "getBits: unexpected end of input (need 1 bit(s), have 0 buffered)")
+    (decodeSym fixedLitLen (newBitReader [||]))
+
+-- Truncated input, MID-symbol: a real mid-symbol truncation against the
+-- ACTUAL `fixedLitLen` table (the synthetic single-length-9 table used
+-- here previously is gone — see the narrowed test above). Derived by hand
+-- from the fixed table's canonical structure (RFC 1951 §3.2.6: length 7
+-- covers codes 0..23 for symbols 256-279; length 8 covers codes 48..199;
+-- length 9 covers codes 400..511 for symbols 144-255) and cross-checked
+-- against the binary before pinning: the first 7 read bits "1100100"
+-- (code value 100) exceed length 7's range (0..23) and, followed by an
+-- 8th bit "0", give a length-8 code value of 200 — past length 8's range
+-- (48..199 to make code2-first<count) — so decoding must continue to
+-- length 9, needing a bit that is not there. Physically, `getBits` is
+-- LSB-first within a byte, so stream bits [1,1,0,0,1,0,0,0] (read order)
+-- pack into the single byte value 1+2+16 = 19. Appending a second byte of
+-- 0 supplies the missing 9th bit (0) and completes to symbol 144, the
+-- first 9-bit literal (code 400) — checked as a control to confirm this
+-- is a genuine truncation, not a code that could never decode at all.
+test "decodeSym fixedLitLen, one truncating byte [|19|]: errors on the missing 9th bit" = expectEqual (Err "getBits: unexpected end of input (need 1 bit(s), have 0 buffered)") (decodeSym fixedLitLen (newBitReader [|19|]))
+
+test "decodeSym fixedLitLen, control: [|19, 0|] (9th bit supplied) decodes to symbol 144" = expectEqual (Ok 144) (decodeSym fixedLitLen (newBitReader [|19, 0|]))
+
+-- ---------------------------------------------------------------------------
+-- Table structural checks — `lengthBase`/`lengthExtra`/`distBase`/`distExtra`
+-- are each encoded exactly once (see the module header); nothing above this
+-- point exercises them at all, so a single wrong cell would decode every
+-- match of that length/distance to silently the wrong value. Re-typing a
+-- second copy of the RFC table to compare against would just move the risk
+-- (a hand-copied second table is wrong in exactly one cell and passes every
+-- test but one) — instead, check the STRUCTURE the RFC's own construction
+-- guarantees: within a contiguous run, `base[j+1] = base[j] + 2^extra[j]`.
+-- This is derived from the RFC's own construction rule, not copied from its
+-- table, so it catches an off-by-one in ANY cell of either array.
+-- ---------------------------------------------------------------------------
+
+-- `tableAt arr i` reads a fixed RFC table at `i`, panicking (rather than
+-- silently treating a missing entry as some default) if `i` is out of
+-- range — a violated invariant here must be loud, matching this file's
+-- other "unreachable" panics.
+tableAt : Array Int -> Int -> Int
+tableAt arr i = match get i arr
+  Some v => v
+  None => panic "tableAt: index \{i} out of range (unreachable for a correctly-sized RFC table)"
+
+-- `base[j+1] = base[j] + 2^extra[j]` for every `j` in `[start, limit]`
+-- (predicting entries up to `limit + 1`).
+chainHolds : Array Int -> Array Int -> Int -> Int -> Bool
+chainHolds base extra j limit
+  | j > limit = True
+  | otherwise =
+    let b = tableAt base j
+    let e = tableAt extra j
+    let bNext = tableAt base (j + 1)
+    bNext == b + shiftLeft 1 e && chainHolds base extra (j + 1) limit
+
+test "lengthBase/lengthExtra array sizes cover symbols 257..285 (29 entries each)" = expectEqual (29, 29) (arrayLength lengthBase, arrayLength lengthExtra)
+
+test "distBase/distExtra array sizes cover symbols 0..29 (30 entries each)" =
+  expectEqual (30, 30) (arrayLength distBase, arrayLength distExtra)
+
+test "lengthBase endpoints: symbol 257 -> 3, symbol 285 -> 258" =
+  expectEqual (Some 3, Some 258) (get 0 lengthBase, get 28 lengthBase)
+
+test "distBase endpoints: symbol 0 -> 1, symbol 29 -> 24577" =
+  expectEqual (Some 1, Some 24577) (get 0 distBase, get 29 distBase)
+
+-- Structural chain over length symbols 257..284 (indices 0..27): each base
+-- is exactly the previous base plus 2^(previous extra-bit count) — the
+-- RFC's own length-range construction. Verified by hand for a sample:
+-- length symbol 265 (index 8) is base 11 with 1 extra bit, so symbol 266
+-- (index 9) must be 11 + 2 = 13, and it is.
+test "lengthBase/lengthExtra chain: base[j+1] = base[j] + 2^extra[j] for symbols 257..284" = expectTrue (chainHolds lengthBase lengthExtra 0 26)
+
+-- Symbol 285 (index 28) is the RFC's deliberate anomaly: base 258, 0 extra
+-- bits — NOT what the chain from symbol 284 (base 227, 5 extra bits) would
+-- predict (227 + 32 = 259). This caps the maximum match length at 258
+-- rather than letting the pattern run to 259, so it must be asserted
+-- separately rather than folded into the chain check above.
+test "lengthBase: symbol 285 is the RFC's anomaly (258, not the chain-predicted 259)" = expectEqual (Some 258, Some 0) (get 28 lengthBase, get 28 lengthExtra)
+
+-- Structural chain over the FULL distance table, symbols 0..29 (indices
+-- 0..29) — no anomaly here, the pattern holds end to end. Verified by
+-- hand: distance symbol 8 is base 17 with 3 extra bits, so symbol 9 must
+-- be 17 + 8 = 25, and it is; the last step (symbol 28, base 16385, 13
+-- extra) predicts symbol 29 = 16385 + 8192 = 24577, matching the endpoint
+-- checked above.
+test "distBase/distExtra chain: base[j+1] = base[j] + 2^extra[j] for all symbols 0..29" = expectTrue (chainHolds distBase distExtra 0 28)
+
+-- ---------------------------------------------------------------------------
+-- Properties — canonical-code round-trip against an INDEPENDENT encoder
+-- ---------------------------------------------------------------------------
+
+-- Independent re-derivation of the canonical code assignment, straight from
+-- RFC 1951 §3.2.2's own pseudocode (`next_code[bits] = (next_code[bits-1] +
+-- count[bits-1]) << 1`) — a different control shape from `buildHuffman`'s
+-- offsets-and-scatter construction, so a bug shared by both would have to
+-- be a bug in the RFC's own algorithm, not in either implementation here.
+-- Used ONLY by the property below, never by `buildHuffman`/`decodeSym`
+-- themselves.
+testCountLengths : Array Int -> Int -> Array Int
+testCountLengths lengths n =
+  let counts = make (maxCodeLen + 1) 0
+  let _ = testCountLengthsGo lengths 0 n counts
+  counts
+
+testCountLengthsGo : Array Int -> Int -> Int -> Array Int -> Unit
+testCountLengthsGo lengths i n counts
+  | i >= n = ()
+  | otherwise = match get i lengths
+    Some len => if len == 0 then testCountLengthsGo lengths (i + 1) n counts
+    else match get len counts
+      Some c =>
+        let _ = set len (c + 1) counts
+        testCountLengthsGo lengths (i + 1) n counts
+      None => testCountLengthsGo lengths (i + 1) n counts
+    None => ()
+
+nextCodeTable : Array Int -> Array Int
+nextCodeTable counts =
+  let next = make (maxCodeLen + 1) 0
+  let _ = nextCodeTableGo counts 1 0 next
+  next
+
+nextCodeTableGo : Array Int -> Int -> Int -> Array Int -> Unit
+nextCodeTableGo counts len code next
+  | len > maxCodeLen = ()
+  | otherwise = match get (len - 1) counts
+    Some prevCount =>
+      let code2 = shiftLeft (code + prevCount) 1
+      let _ = set len code2 next
+      nextCodeTableGo counts (len + 1) code2 next
+    None => ()
+
+symbolCodesFor : Array Int -> Int -> Array Int
+symbolCodesFor lengths n =
+  let counts = testCountLengths lengths n
+  let next = nextCodeTable counts
+  let codes = make n 0
+  let _ = symbolCodesGo lengths 0 n next codes
+  codes
+
+symbolCodesGo : Array Int -> Int -> Int -> Array Int -> Array Int -> Unit
+symbolCodesGo lengths i n next codes
+  | i >= n = ()
+  | otherwise = match get i lengths
+    Some len => if len == 0 then symbolCodesGo lengths (i + 1) n next codes
+    else match get len next
+      Some c =>
+        let _ = set i c codes
+        let _ = set len (c + 1) next
+        symbolCodesGo lengths (i + 1) n next codes
+      None => symbolCodesGo lengths (i + 1) n next codes
+    None => ()
+
+usedSymbols : Array Int -> Int -> Int -> List Int
+usedSymbols lengths i n
+  | i >= n = []
+  | otherwise = match get i lengths
+    Some len =>
+      if len == 0 then
+        usedSymbols lengths (i + 1) n
+      else
+        i :: usedSymbols lengths (i + 1) n
+    None => []
+
+emitUsed : Array Int -> Array Int -> Int -> Int -> BitWriter -> Unit
+emitUsed lengths codes i n w
+  | i >= n = ()
+  | otherwise = match get i lengths
+    Some len => if len == 0 then emitUsed lengths codes (i + 1) n w
+    else match get i codes
+      Some c =>
+        let _ = putCodeMSB c len w
+        emitUsed lengths codes (i + 1) n w
+      None => emitUsed lengths codes (i + 1) n w
+    None => ()
+
+decodeExpected : Huffman -> BitReader -> List Int -> Bool
+decodeExpected h r [] = True
+decodeExpected h r (sym::rest) = match decodeSym h r
+  Ok got => got == sym && decodeExpected h r rest
+  Err _ => False
+
+-- Given a Kraft-complete length vector, every used symbol's canonical code
+-- (computed by `nextCodeTable`/`symbolCodesFor`, NOT by `buildHuffman`)
+-- round-trips through `decodeSym` over a stream built with `putCodeMSB`.
+roundTripLengths : Array Int -> Bool
+roundTripLengths lengths = match buildHuffman lengths
+  Err _ => False
+  Ok h =>
+    let n = arrayLength lengths
+    let codes = symbolCodesFor lengths n
+    let w = newBitWriter ()
+    let _ = emitUsed lengths codes 0 n w
+    let bytes = finishBitWriter w
+    let r = newBitReader bytes
+    decodeExpected h r (usedSymbols lengths 0 n)
+
+-- Generate a Kraft-COMPLETE length multiset by recursively splitting a code
+-- space: `genTree decisions depth` owns a `2^-depth` slice of the code
+-- space; on `True` (and depth still under the 15-bit cap) it splits into
+-- two half-size children, each recursively built the same way; on `False`
+-- (or when decisions run out, or the depth cap is hit) it becomes a single
+-- leaf occupying its whole slice — so the leaves' combined Kraft sum is
+-- ALWAYS exactly `2^-depth`, by construction, regardless of the decisions.
+-- `genLengths` calls this twice at depth 1 (Kraft sum 0.5 + 0.5 = 1),
+-- guaranteeing at least 2 symbols and a genuinely complete code every time.
+genTree : List Bool -> Int -> (List Int, List Bool)
+genTree [] depth = ([depth], [])
+genTree (d::rest) depth
+  | depth >= maxCodeLen || not d = ([depth], rest)
+  | otherwise =
+    let (leftLeaves, rest2) = genTree rest (depth + 1)
+    let (rightLeaves, rest3) = genTree rest2 (depth + 1)
+    (leftLeaves ++ rightLeaves, rest3)
+
+genLengths : List Bool -> List Int
+genLengths decisions =
+  let (left, rest) = genTree decisions 1
+  let (right, _) = genTree rest 1
+  left ++ right
+
+-- The property itself: for ANY generated split-decision sequence, the
+-- resulting complete code's symbols all round-trip. Checked for the
+-- ability to fail (see the friction report) by temporarily corrupting
+-- `decodeSymGo`'s comparison operator — the property went red immediately,
+-- confirming this is not a tautology of shared code between encode/decode.
+prop "canonical-code round-trip: any Kraft-complete length vector's symbols decode back" (decisions : List Bool) = roundTripLengths (arrayFromList (genLengths decisions))

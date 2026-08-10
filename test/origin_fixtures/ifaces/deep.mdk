@@ -1,0 +1,25 @@
+-- #1110 PR C corpus — the DEFINER end of the declare-and-re-export chain.
+--
+-- `Relay` (interface) and `Baton` (type) are both declared here and both
+-- re-exported by `mid.mdk`, which ALSO declares one of each under the same name.
+-- See mid.mdk for what that pins (#1245, FIXED).  Nothing in this module ever
+-- writes a `Relay` or `Baton` occurrence, so `deep` contributes a `decl:Relay` and
+-- a `decl:Baton` row and NO `iface:Relay` or `Baton` one — which is what makes the
+-- single `iface:Relay` / `Baton` occurrence rows in the golden unambiguously
+-- attributable to `main_ifaces`.
+--
+-- ⚠️ Read that as the narrow claim it is: `deep` DOES contribute an occurrence row,
+-- `deep Int AGREE AGREE AGREE`, from `via`'s return type below.  "No occurrence
+-- rows" would be false; only "no occurrence row for the two names this fixture is
+-- about" is true.
+--
+-- ⚠️ TWO NAMESPACES ON PURPOSE.  `typeOriginExports` decides the declare-and-
+-- re-export collision for types and interfaces in ONE concatenation, so a witness
+-- in only one namespace would leave the other's answer asserted rather than
+-- observed — and this gate is the only thing in the tree that can observe an
+-- origin at all.
+
+export interface Relay a where
+  via : a -> Int
+
+export data Baton = DeepBaton

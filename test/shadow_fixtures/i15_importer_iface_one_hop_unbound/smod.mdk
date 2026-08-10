@@ -1,0 +1,10 @@
+-- SHADOW-SEMANTICS cell I15 provider 1: the interface, its ONLY impl, and one ordinary
+-- unrelated function.  main.mdk imports THIS module -- but only for `sf`.
+export interface Sizeable a where
+  size : a -> Int
+
+impl Sizeable String where
+  size s = 7
+
+export sf : Int -> Int
+sf n = n

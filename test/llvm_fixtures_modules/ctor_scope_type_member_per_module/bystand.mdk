@@ -1,0 +1,4 @@
+-- The BYSTANDER: imports nothing, declares no colliding name, and is reached only
+-- through a plain value import.  Its answer must not move.
+export bys : Int
+bys = 6 + 5

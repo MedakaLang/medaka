@@ -1,0 +1,58 @@
+-- test_eval_letrec_toplevel_ported.mdk — the top-level `let rec` assertions,
+-- split out of test_eval_ported.mdk because `medaka check` FALSELY REJECTS them.
+--
+-- ⚠️ THIS FILE IS RESIDUE, NOT A DESIGN.  Every binding below has a genuine
+-- `n => …` lambda right-hand side, and every one of them is reported as
+-- "'<name>' is bound by 'let rec' but its right-hand side is not a function".
+--
+-- THE BLOCKER IS #807, NOT #1449.  `isSyntacticLambda`
+-- (compiler/types/typecheck.mdk) matches a BARE `ELam` and does not see through
+-- the transparent `ELoc` the parser puts on a top-level `let rec` clause's RHS,
+-- so `clauseIsNonFunction` calls every top-level `let rec f = <lambda>` a
+-- non-function.  The comment block directly ABOVE `isSyntacticLambda` says this
+-- in as many words and names #807.  It is not test-only: a three-line file
+--   let rec idA = n => n
+--   main = println (idA 5)
+-- is rejected by `medaka check` AND by `medaka run`.
+--
+-- #1449 is the SEPARATE location defect — the diagnostic reports a constant
+-- `129:33` that has nothing to do with the file (it is the end of the last line
+-- of the imported stdlib/test.mdk).  Fixing #1449 alone will NOT make this file
+-- typecheck.  Do not delete this file because #1449 closed.
+--
+-- The rejection is specific to the TOP-LEVEL form.  The expression-level
+-- `let rec f = <lambda> in …` is accepted (it is still in test_eval_ported.mdk),
+-- and that is not because the guard is absent there: `checkRecBindNonFunction`
+-- is live on that path — a non-lambda expression-level `let rec loop = loop in 1`
+-- IS rejected, with a real location.  Measured both ways.
+--
+-- WHEN #807 LANDS: delete this file and move these bindings back into
+-- test_eval_ported.mdk's "let rec" section, and promote the REJECT row for this
+-- file to CLEAN in test/diff_compiler_ported.sh's typecheck ledger.  It has no
+-- other reason to exist.
+--
+-- Ported from: t_letrec_top_fact, t_letrec_top_mutual, t_letrec_inline_mutual
+-- Run with: medaka test test/ported/test_eval_letrec_toplevel_ported.mdk
+
+import test.{expectEqual, expectTrue}
+
+-- The signatures are NOT part of the #1449 workaround — they ground the numeric
+-- literals at the call sites, which are ambiguous in the accepted `f n = …` form
+-- too (Medaka does not default numeric literals).
+factLR : Int -> Int
+let rec factLR = n => if n == 0 then 1 else n * factLR (n - 1)
+test "let rec top-level fact" = expectEqual 120 (factLR 5)
+
+isEvenLR : Int -> Bool
+let rec isEvenLR = n => if n == 0 then True else isOddLR (n - 1)
+isOddLR : Int -> Bool
+let rec isOddLR = n => if n == 0 then False else isEvenLR (n - 1)
+test "let rec top-level mutual" = expectTrue (isEvenLR 8)
+
+-- "inline mutual" expressed as two separate top-level `let rec` bindings (the
+-- `with` mutual-recursion grouping has been removed).
+isELR2 : Int -> Bool
+let rec isELR2 = n => if n == 0 then True else isOLR2 (n - 1)
+isOLR2 : Int -> Bool
+let rec isOLR2 = n => if n == 0 then False else isELR2 (n - 1)
+test "let rec inline mutual" = expectTrue (isELR2 6)

@@ -1,0 +1,50 @@
+-- | gzip/deflate_demo.mdk — a CLI wrapper around `lib.deflate.gzipCompress`,
+--   for the differential test harness (see `docs/design/GZIP-DESIGN.md`
+--   §"Testing" and `gzip/inflate_demo.mdk` for the sibling this mirrors).
+--
+-- Usage (after `medaka build gzip/deflate_demo.mdk -o deflate_demo`):
+--
+--     deflate_demo <input> <output.gz>
+--
+-- Reads `<input>` byte-clean (`readFileBytes`), compresses it with
+-- `gzipCompress` (fixed-Huffman or stored, per `lib.deflate`'s size
+-- comparison — see that module's header), and writes the result byte-clean
+-- to `<output.gz>` (`writeFileBytes`). On any failure (bad args, unreadable
+-- input) it prints one line to STDERR and exits non-zero.
+--
+-- This demo does NOT itself validate the output — that is
+-- `gzip/test/deflate_oracle.sh`'s job: the system `gunzip` must accept
+-- `<output.gz>` and reproduce `<input>` byte-for-byte. See that script and
+-- `lib.deflate`'s module header for why this is the load-bearing proof of
+-- conformance, not anything this demo or this library's own tests assert
+-- about themselves.
+--
+-- `readFileBytes`/`writeFileBytes` are NOT available in the interpreter
+-- (`medaka run`), so this demo only runs once built (`medaka build`) — that
+-- is expected, not a bug in this file (same note as `inflate_demo.mdk`).
+
+import lib.deflate.{gzipCompress}
+import io.{eprintln}
+
+usage : String
+usage = "usage: deflate_demo <input> <output.gz>"
+
+runDeflate : String -> String -> <IO, FileRead, FileWrite> Unit
+runDeflate inPath outPath = match readFileBytes inPath
+  Err e =>
+    let _ = eprintln "deflate_demo: could not read \{inPath}: \{e}"
+    exit 1
+  Ok raw =>
+    let compressed = gzipCompress raw
+    match writeFileBytes outPath compressed
+      Err e =>
+        let _ = eprintln "deflate_demo: could not write \{outPath}: \{e}"
+        exit 1
+      Ok _ => ()
+
+main : <IO, FileRead, FileWrite> Unit
+main = match args ()
+  [inPath, outPath] => runDeflate inPath outPath
+  _ =>
+    let _ = eprintln usage
+    exit 1

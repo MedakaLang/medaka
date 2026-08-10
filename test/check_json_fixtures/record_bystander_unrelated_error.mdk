@@ -1,0 +1,19 @@
+-- #62 BYSTANDER fixture.  The new `firstRecordDeclIdx` / `firstCtxKwDeclIdx`
+-- pre-scans run before the grammar on EVERY file, so their failure mode is
+-- preempting somebody else's diagnostic.  This file is full of the tokens they
+-- look at — a binding named `record`, an uppercase name right after it, braces,
+-- and a top-level `if`/`then`/`else` expression — but the ONLY thing asserted
+-- is an unrelated TYPE error in code that uses none of it.  If either scan
+-- over-fires, this golden changes from a `T-*` diagnostic to a `P-*` one.
+data Point = { x : Int }
+
+record : Point
+record = Point { x = 1 }
+
+pick : Int -> Int
+pick n = if n > 0 then 1 else 0
+
+unrelated : Int
+unrelated = "not an int"
+
+main = println (pick record.x)

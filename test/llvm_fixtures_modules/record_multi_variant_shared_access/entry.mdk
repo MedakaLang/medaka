@@ -1,0 +1,43 @@
+-- #1469's SELF-DRAINING PIN: values of TWO constructors of one record type reach the
+-- same `.sx` selection.  The LLVM backend prints the correct answer; WasmGC traps at
+-- instantiation with `illegal cast`.  Both constructors place `sx` at the same offset.
+-- `main` has no declaration-level well-formedness check that would reject this shape
+-- at all (a proposed `T-FIELD-VARIANT-CONFLICT` guard exists only on the still-parked
+-- PR #1455, blocked on #1319 — and even there it is deliberately scoped to NOT fire on
+-- this class, since rejecting it would also reject programs that work fine on both
+-- backends). Whether a program of this shape traps depends on WHICH CONSTRUCTOR REACHES
+-- THE ACCESS AT RUN TIME, which no declaration-level test at the typecheck seam can see.
+--
+-- Expected output, DERIVED BY HAND: `mkSA = SA { sx = 1, … }`, `mkSB = SB { sx = 3, … }`,
+-- so `t=1,3`.  eval and the native binary both print it; the golden is theirs.
+--
+-- ⚠️ THE WasmGC ARM IS LEDGERED, NOT SILENT.  `test/engine_divergence.txt` carries this
+-- cell as `wasm:codegen-bug #1469`, so `diff_compiler_engines` FAILS with PROMOTE the
+-- moment wasm stops trapping — which is what #1465 (tag-dispatched field selectors in
+-- both backends) will do.  Delete the row and this comment then.
+--
+-- RE-VERIFIED first-hand on a COLD `make medaka` of `main` @
+-- `b24f9c4f0b3ae7eb33b4b9ebc9158580b1a5168d` (2026-08-09):
+--   medaka run entry.mdk                                -> exit 0, stdout "t=1,3"
+--   medaka build entry.mdk -o /tmp/o && /tmp/o           -> exit 0, stdout "t=1,3"
+--   medaka build --target wasm entry.mdk -o /tmp/o.wasm  -> exit 0 (emits+validates)
+--   node test/wasm/run.js /tmp/o.wasm                    -> exit 1, stderr
+--     "instantiate failed: illegal cast"
+--
+-- This pin was originally found and written on PR #1455's branch, which measured the
+-- same divergence on cold builds of BOTH the merge base `bfcd4ea7` and that branch, so
+-- it is pre-existing and was neither introduced nor drained by #1455. That PR has since
+-- been parked as a draft (blocked on #1319), so its pin cannot reach `main` through it;
+-- this fixture rescues the finding into a standalone PR, independently re-verified
+-- against `main` as above rather than trusting the branch's numbers.
+--
+-- #1455's branch also carried a paired WITNESS fixture,
+-- `record_multi_variant_shared_access_one_reach/`, showing the SAME declarations produce
+-- a WasmGC-clean program when the second constructor is consumed by `match` instead of
+-- projected — proving no declaration-level rule can separate the two. That witness is
+-- itself part of #1455's typecheck work and is not ported here; this directory carries
+-- only #1469's own self-draining pin.
+import zshared.{mkSA, mkSB}
+
+main : <IO> Unit
+main = putStrLn ("t=" ++ intToString mkSA.sx ++ "," ++ intToString mkSB.sx)

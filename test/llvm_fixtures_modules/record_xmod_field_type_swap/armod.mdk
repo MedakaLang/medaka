@@ -1,0 +1,12 @@
+-- The MEMORY-UNSAFETY half of #1382: the two colliding fields have DIFFERENT TYPES
+-- at the swapped positions, so reading the wrong slot reads an `Int` out of a cell
+-- holding a `String` pointer rather than merely reading the wrong number.
+--
+-- `Cfg` here is `{ a : Int, s : String }`; zrmod's is `{ s : String, a : Int }`.
+public export data Cfg = { a : Int, s : String }
+
+mkA : Cfg
+mkA = Cfg { a = 11, s = "arm" }
+
+export arOut : String
+arOut = intToString mkA.a ++ mkA.s

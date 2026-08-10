@@ -1,0 +1,22 @@
+-- #1382, the `ws:soundness` half — same mechanism as
+-- `record_xmod_field_order/`, but the two colliding fields have DIFFERENT TYPES at
+-- the swapped positions, so the wrong slot is not just the wrong number: it reads
+-- an `Int` out of a cell holding a `String` pointer.
+--
+-- Expected output, derived BY HAND from the sources before anything was run:
+--   zrmod: mkZ = Cfg { s = "zed", a = 44 }  =>  zrOut = "44" ++ "zed" = 44zed
+--   armod: mkA = Cfg { a = 11, s = "arm" }  =>  arOut = "11" ++ "arm" = 11arm
+-- so `44zed|11arm`.
+--
+-- Counterfactual, measured on THIS directory rather than reasoned: with
+-- `compiler/types/typecheck.mdk` restored to `c5fda728` and nothing else changed,
+-- `medaka build` on this entry still exits 0 and the produced binary dies with
+-- `runtime error [E-FATAL-SIGNAL]: fatal memory fault (segmentation fault)` at exit
+-- 139, having printed nothing.  (`medaka run` on the same shape was correct
+-- throughout — that half was measured on the issue's own Repro B files, not on this
+-- directory, and it is why the golden below was hand-derived instead of captured.)
+import armod.{arOut}
+import zrmod.{zrOut}
+
+main : <IO> Unit
+main = putStrLn (zrOut ++ "|" ++ arOut)

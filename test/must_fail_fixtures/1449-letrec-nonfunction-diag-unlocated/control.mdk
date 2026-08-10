@@ -1,0 +1,9 @@
+-- #1449 control: the same TOP-LEVEL `let rec`, with the ONE variable changed --
+-- the binding is written in clause form (`countDown n = ...`), which
+-- `clauseIsNonFunction` classifies as a function, so `checkLetBind` never fires
+-- and no diagnostic is produced at all. Must check clean at exit 0 (it also runs
+-- and prints 0). If this breaks, top-level `let rec` broke in general, not the
+-- diagnostic-location defect #1449 is about.
+let rec countDown n = if n == 0 then 0 else countDown (n - 1)
+
+main = println (countDown 5)

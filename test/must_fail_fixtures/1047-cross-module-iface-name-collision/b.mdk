@@ -1,6 +1,0 @@
--- issue #1047, module B: an UNRELATED module declaring an interface with the SAME
--- bare name `Speak`, default `"B-default"`. It never imports a.mdk and a.mdk never
--- imports it. Its default is the one that goes missing.
-export interface Speak x where
-  speak : x -> String
-  speak _ = "B-default"

@@ -14,6 +14,7 @@ alpha decl:CrateId R-ONLY CONFLICT R-ONLY
 alpha decl:Tag R-ONLY CONFLICT R-ONLY
 alpha decl:Weighable R-ONLY CONFLICT R-ONLY
 alpha decl:Weight R-ONLY CONFLICT R-ONLY
+alpha iface:Weighable R-ONLY CONFLICT R-ONLY
 beta Crate R-ONLY R-ONLY NEITHER
 beta Int AGREE AGREE AGREE
 beta Result AGREE AGREE AGREE
@@ -21,6 +22,7 @@ beta Shipment R-ONLY CONFLICT R-ONLY
 beta String AGREE AGREE AGREE
 beta Tag R-ONLY R-ONLY NEITHER
 beta decl:Shipment R-ONLY CONFLICT R-ONLY
+beta iface:Weighable R-ONLY R-ONLY NEITHER
 core Array AGREE AGREE AGREE
 core Bool AGREE AGREE AGREE
 core Char AGREE AGREE AGREE
@@ -35,34 +37,56 @@ core Result AGREE AGREE AGREE
 core String AGREE AGREE AGREE
 core Unit AGREE AGREE AGREE
 core __tuple2__ AGREE AGREE AGREE
-core decl:Alternative R-ONLY AGREE R-ONLY
-core decl:Applicative R-ONLY AGREE R-ONLY
-core decl:Arbitrary R-ONLY AGREE R-ONLY
-core decl:Bimappable R-ONLY AGREE R-ONLY
-core decl:Bounded R-ONLY AGREE R-ONLY
-core decl:Debug R-ONLY AGREE R-ONLY
-core decl:Display R-ONLY AGREE R-ONLY
-core decl:Eq R-ONLY AGREE R-ONLY
-core decl:Filterable R-ONLY AGREE R-ONLY
-core decl:Foldable R-ONLY AGREE R-ONLY
-core decl:FromEntries R-ONLY AGREE R-ONLY
-core decl:Generic R-ONLY AGREE R-ONLY
-core decl:Hashable R-ONLY AGREE R-ONLY
-core decl:Index R-ONLY AGREE R-ONLY
-core decl:IndexMut R-ONLY AGREE R-ONLY
-core decl:Mappable R-ONLY AGREE R-ONLY
-core decl:Monoid R-ONLY AGREE R-ONLY
-core decl:Num R-ONLY AGREE R-ONLY
-core decl:Option R-ONLY AGREE R-ONLY
-core decl:Ord R-ONLY AGREE R-ONLY
-core decl:Ordering R-ONLY AGREE R-ONLY
-core decl:RField R-ONLY AGREE R-ONLY
-core decl:Rep R-ONLY AGREE R-ONLY
-core decl:Result R-ONLY AGREE R-ONLY
-core decl:Semigroup R-ONLY AGREE R-ONLY
-core decl:Slice R-ONLY AGREE R-ONLY
-core decl:Thenable R-ONLY AGREE R-ONLY
-core decl:Traversable R-ONLY AGREE R-ONLY
+core decl:Alternative AGREE AGREE AGREE
+core decl:Applicative AGREE AGREE AGREE
+core decl:Arbitrary AGREE AGREE AGREE
+core decl:Bimappable AGREE AGREE AGREE
+core decl:Bounded AGREE AGREE AGREE
+core decl:Debug AGREE AGREE AGREE
+core decl:Display AGREE AGREE AGREE
+core decl:Eq AGREE AGREE AGREE
+core decl:Filterable AGREE AGREE AGREE
+core decl:Foldable AGREE AGREE AGREE
+core decl:FromEntries AGREE AGREE AGREE
+core decl:Generic AGREE AGREE AGREE
+core decl:Hashable AGREE AGREE AGREE
+core decl:Index AGREE AGREE AGREE
+core decl:IndexMut AGREE AGREE AGREE
+core decl:Mappable AGREE AGREE AGREE
+core decl:Monoid AGREE AGREE AGREE
+core decl:Num AGREE AGREE AGREE
+core decl:Option AGREE AGREE AGREE
+core decl:Ord AGREE AGREE AGREE
+core decl:Ordering AGREE AGREE AGREE
+core decl:RField AGREE AGREE AGREE
+core decl:Rep AGREE AGREE AGREE
+core decl:Result AGREE AGREE AGREE
+core decl:Semigroup AGREE AGREE AGREE
+core decl:Slice AGREE AGREE AGREE
+core decl:Thenable AGREE AGREE AGREE
+core decl:Traversable AGREE AGREE AGREE
+core iface:Alternative AGREE AGREE AGREE
+core iface:Applicative AGREE AGREE AGREE
+core iface:Arbitrary AGREE AGREE AGREE
+core iface:Bimappable AGREE AGREE AGREE
+core iface:Bounded AGREE AGREE AGREE
+core iface:Debug AGREE AGREE AGREE
+core iface:Display AGREE AGREE AGREE
+core iface:Eq AGREE AGREE AGREE
+core iface:Filterable AGREE AGREE AGREE
+core iface:Foldable AGREE AGREE AGREE
+core iface:Generic AGREE AGREE AGREE
+core iface:Hashable AGREE AGREE AGREE
+core iface:Index AGREE AGREE AGREE
+core iface:IndexMut AGREE AGREE AGREE
+core iface:Mappable AGREE AGREE AGREE
+core iface:Monoid AGREE AGREE AGREE
+core iface:Num AGREE AGREE AGREE
+core iface:Ord AGREE AGREE AGREE
+core iface:Semigroup AGREE AGREE AGREE
+core iface:Slice AGREE AGREE AGREE
+core iface:Thenable AGREE AGREE AGREE
+core iface:Traversable AGREE AGREE AGREE
 main_graph Crate R-ONLY R-ONLY NEITHER
 main_graph Int AGREE AGREE AGREE
 main_graph Option AGREE AGREE AGREE
@@ -85,6 +109,7 @@ alpha decl:CrateId flat=- single=mod:__user__ graph=mod:alpha
 alpha decl:Tag flat=- single=mod:__user__ graph=mod:alpha
 alpha decl:Weighable flat=- single=mod:__user__ graph=mod:alpha
 alpha decl:Weight flat=- single=mod:__user__ graph=mod:alpha
+alpha iface:Weighable flat=- single=mod:__user__ graph=mod:alpha
 beta Shipment flat=- single=mod:__user__ graph=mod:beta
 beta decl:Shipment flat=- single=mod:__user__ graph=mod:beta
 === RESIDUAL ===
@@ -99,43 +124,18 @@ flat alpha decl:CrateId
 flat alpha decl:Tag
 flat alpha decl:Weighable
 flat alpha decl:Weight
+flat alpha iface:Weighable
 flat beta Crate
 flat beta Shipment
 flat beta Tag
 flat beta decl:Shipment
-flat core decl:Alternative
-flat core decl:Applicative
-flat core decl:Arbitrary
-flat core decl:Bimappable
-flat core decl:Bounded
-flat core decl:Debug
-flat core decl:Display
-flat core decl:Eq
-flat core decl:Filterable
-flat core decl:Foldable
-flat core decl:FromEntries
-flat core decl:Generic
-flat core decl:Hashable
-flat core decl:Index
-flat core decl:IndexMut
-flat core decl:Mappable
-flat core decl:Monoid
-flat core decl:Num
-flat core decl:Option
-flat core decl:Ord
-flat core decl:Ordering
-flat core decl:RField
-flat core decl:Rep
-flat core decl:Result
-flat core decl:Semigroup
-flat core decl:Slice
-flat core decl:Thenable
-flat core decl:Traversable
+flat beta iface:Weighable
 flat main_graph Crate
 flat main_graph Shipment
 flat main_graph Tag
 single beta Crate
 single beta Tag
+single beta iface:Weighable
 single main_graph Crate
 single main_graph Shipment
 single main_graph Tag
@@ -194,12 +194,39 @@ decl:Thenable 1 mod:core
 decl:Traversable 1 mod:core
 decl:Weighable 1 mod:alpha
 decl:Weight 1 mod:alpha
+iface:Alternative 1 mod:core
+iface:Applicative 1 mod:core
+iface:Arbitrary 1 mod:core
+iface:Bimappable 1 mod:core
+iface:Bounded 1 mod:core
+iface:Debug 1 mod:core
+iface:Display 1 mod:core
+iface:Eq 1 mod:core
+iface:Filterable 1 mod:core
+iface:Foldable 1 mod:core
+iface:Generic 1 mod:core
+iface:Hashable 1 mod:core
+iface:Index 1 mod:core
+iface:IndexMut 1 mod:core
+iface:Mappable 1 mod:core
+iface:Monoid 1 mod:core
+iface:Num 1 mod:core
+iface:Ord 1 mod:core
+iface:Semigroup 1 mod:core
+iface:Slice 1 mod:core
+iface:Thenable 1 mod:core
+iface:Traversable 1 mod:core
+iface:Weighable 1 mod:alpha
 === SUMMARY ===
 modules 3
 graph-modules 3
 flat-segments 6
 decl-heads 34
-heads 69
-claims 207
-residual 49
-conflicts 11
+iface-occs-constraintOrigin 43
+iface-occs-superOrigin 10
+iface-occs-requireOrigin 93
+iface-occs-implOrigin 119
+heads 93
+claims 279
+residual 24
+conflicts 12

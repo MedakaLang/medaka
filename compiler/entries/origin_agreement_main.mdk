@@ -27,9 +27,14 @@
 --   flat    checkProgramSchemesWithRuntime   `medaka check` on a no-import file, the
 --                                            LSP, `doc`, `repl`, the playground —
 --                                            one buffer at a time, prelude separate.
---                                            Its result is SCHEMES, and a `Mono.TCon`
---                                            carries no origin, so it is read through
---                                            resolve.mdk's agreement tap.
+--                                            Its result is SCHEMES, i.e. `Mono`,
+--                                            not the stamped decl trees — so it is
+--                                            read through resolve.mdk's agreement
+--                                            tap.  (`Mono.TCon` gained an origin
+--                                            field in #1110's unit D; this probe
+--                                            still reads the DECL trees, because
+--                                            the schemes only cover heads that
+--                                            reach a top-level binding's type.)
 --   single  elaborateModules … [("__user__", …)]
 --                                            `medaka test <file>` / the snapshot
 --                                            driver (compiler/tools/test_cmd.mdk).
@@ -94,8 +99,13 @@
 -- large, DELIBERATE, documented set (subset-and-agreement — see the section's own
 -- comment further down).  Only the pinning is the assertion.
 
-import frontend.ast.{Decl(..), Ty(..), TyConOrigin(..), mapTyInDecl}
-import frontend.resolve.{setOriginTrace, takeOriginTrace}
+import frontend.ast.{Decl(..), Ty(..), TyConOrigin(..)}
+import frontend.resolve.{
+  setOriginTrace,
+  takeOriginTrace,
+  mapOriginsInDecl,
+  ifaceKey,
+}
 import types.typecheck.{elaborateModules, checkProgramSchemesWithRuntime}
 import entries.entry_support.{driveModules}
 import support.util.{listLen}
@@ -134,7 +144,7 @@ report : List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit
 report runtimeDecls coreDecls modules =
   let (segments, flatClaims) = flatArm runtimeDecls coreDecls modules
   let singleClaims = singleArm runtimeDecls coreDecls modules
-  let (graphMods, graphDecls, graphClaims) = graphArm runtimeDecls coreDecls modules
+  let (graphMods, graphDecls, graphIfaces, graphClaims) = graphArm runtimeDecls coreDecls modules
   let allClaims = flatClaims ++ singleClaims ++ graphClaims
   let uniq = dedupAdj sameClaim (sortByCmp cmpClaim allClaims)
   let (table, conflicts, nrows, nconf) = groupRows uniq
@@ -158,10 +168,21 @@ report runtimeDecls coreDecls modules =
   let _ = putStr "# <head> <distinct graph-arm origins across ALL slots> <the origins themselves>\n"
   let _ = putStr (spreadSection uniq)
   let _ = putStr "=== SUMMARY ===\n"
+  -- What each number counts, so a reviewer checking the arithmetic on a golden diff
+  -- does not have to reconstruct the claim model from this file:
+  --   heads       TABLE ROWS — distinct (slot, head) pairs, all arms merged.
+  --   claims      distinct (arm, slot, head, originKey) tuples AFTER dedup, so ONE
+  --               head claimed identically by all three arms contributes 3, and a
+  --               head an arm never saw contributes 0 for that arm.
+  --   residual    distinct (arm, slot, head) with NO origin — a subset of `claims`.
+  --   conflicts   TABLE ROWS carrying a CONFLICT in any of the three arm pairs.
+  --   decl-heads / iface-occs-*   raw carrier SITES the graph arm visited (not
+  --               deduped, not row counts) — the anti-vacuity signals.
   let _ = putStr "modules \{listLen modules}\n"
   let _ = putStr "graph-modules \{graphMods}\n"
   let _ = putStr "flat-segments \{segments}\n"
   let _ = putStr "decl-heads \{graphDecls}\n"
+  let _ = putStr (carrierLines graphIfaces)
   let _ = putStr "heads \{nrows}\n"
   let _ = putStr "claims \{listLen uniq}\n"
   let _ = putStr "residual \{nresid}\n"
@@ -226,16 +247,22 @@ singleArm rt core ((mid, decls)::rest) =
     ++ singleArm rt core rest
 
 -- GRAPH: the loader's whole module graph, elaborated once — `run` / `build`.
--- Returns (module count, DECL-LAYER carriers seen, claims).  The middle number is
--- the anti-vacuity signal for the decl layer, the exact peer of `flat-segments`
--- for the tap: if a future refactor stops the decl carriers reaching the trees
--- `elaborateModules` returns, this goes to 0 and the gate reds — rather than the
--- table quietly losing every `decl:` row while still reporting "0 conflicts".
-graphArm : List Decl -> List Decl -> List (String, List Decl) -> (Int, Int, List Claim)
+-- Returns (module count, DECL-LAYER carriers seen, PER-CARRIER interface-occurrence
+-- counts, claims).  The two middle values are the anti-vacuity signals for the two
+-- layers no `Ty` walk can reach, the exact peers of `flat-segments` for the tap: if
+-- a future refactor stops those carriers reaching the trees `elaborateModules`
+-- returns, a count goes to 0 and the gate reds — rather than the table quietly
+-- losing every `decl:` / `iface:` row while still reporting "0 conflicts".
+graphArm : List Decl -> List Decl -> List (String, List Decl) -> (Int, Int, List (String, Int), List Claim)
 graphArm rt core modules =
   let (coreD, mods) = elaborateModules rt core modules
   let cs = claimsOf "graph" "core" coreD ++ graphModClaims (map fst modules) mods
-  (listLen mods, listLen (declHeads coreD) + declHeadsCount mods, cs)
+  (
+    listLen mods,
+    listLen (declHeads coreD) + declHeadsCount mods,
+    carrierCounts coreD mods,
+    cs,
+  )
 
 -- Slots come from the INPUT list, positionally.  The probe must not take the
 -- driver's word for which module a returned decl list belongs to.
@@ -252,11 +279,11 @@ headClaim : String -> String -> (String, TyConOrigin) -> Claim
 headClaim arm slot (n, o) = Claim arm slot n (originKey o)
 
 -- ── the head collector ───────────────────────────────────────────────────────
--- TWO LAYERS, and the distinction is the whole reason this probe was widened.
+-- THREE LAYERS, and the distinction is the whole reason this probe was widened.
 --
 --   OCCURRENCE  every `TyCon` head written in a signature, stamped by resolve's
---               `stampTyOrigins`/`stampTyHead`.  Collected through `mapTyInDecl` —
---               the SAME total Ty-position traversal the stamper uses
+--               `stampTyOrigins`/`stampTyHead`.  Collected through
+--               `mapOriginsInDecl` — the SAME total traversal the stamper uses
 --               (`stampDeclTyOrigins`).  Sharing the traversal is the point: this
 --               probe can never observe a SMALLER set of positions than the
 --               stamper wrote, and a new Ty position added to the AST reaches
@@ -264,6 +291,14 @@ headClaim arm slot (n, o) = Claim arm slot n (originKey o)
 --   DECLARATION `DData.dataOrigin` / `DNewtype.newtypeOrigin` /
 --               `DTypeAlias.tyAliasOrigin` / `DInterface.ifaceOrigin`, stamped by
 --               resolve's `stampDeclOrigins`/`stampDeclOrigin`.
+--   INTERFACE   `Constraint.constraintOrigin` (a `=>` predicate),
+--   OCCURRENCE  `Super.superOrigin` (`interface Sub a requires Sup a`),
+--               `Require.requireOrigin` (`impl I T requires Eq a`) and
+--               `DImpl.implOrigin` (the interface an `impl` is an impl OF),
+--               stamped by resolve's `fillIfaceOccOrigin` through
+--               `mapOriginsInDecl`, and collected here through that SAME function,
+--               which is why this probe can never observe a smaller set of
+--               positions than the stamper wrote.
 --
 -- 🚨 THE DECL LAYER WAS INVISIBLE HERE UNTIL THIS CHANGE, AND THAT IS EXACTLY THE
 -- CONDITION UNDER WHICH THE TWO S0s IN THIS FILE'S HEADER SHIPPED THROUGH GREEN CI.
@@ -274,27 +309,56 @@ headClaim arm slot (n, o) = Claim arm slot n (originKey o)
 -- collected by its OWN walk, beside the occurrence one, and not by widening
 -- `noteHead` (which is a `Ty -> (Ty, Bool)` callback and structurally cannot).
 --
--- ⚠️ THE TWO LAYERS ARE STAMPED BY DIFFERENT FUNCTIONS ON DIFFERENT PATHS, so they
+-- ⚠️ THE LAYERS ARE STAMPED BY DIFFERENT FUNCTIONS ON DIFFERENT PATHS, so they
 -- must stay TELLABLE APART in the output or a decl-layer regression hides behind an
 -- occurrence-layer row of the same name.  A decl carrier is reported under the name
--- `decl:<TypeName>`; a bare `<TypeName>` row is always an occurrence.  `:` cannot
--- occur in a Medaka type name, so the two namespaces cannot collide.
+-- `decl:<Name>`, an interface occurrence under `iface:<Name>`; a bare `<TypeName>`
+-- row is always a type occurrence.  `:` cannot occur in a Medaka type or interface
+-- name, so the three namespaces cannot collide.
 --
--- ⚠️ The layers genuinely disagree today, by design, and the golden shows it: the
--- FLAT driver runs `stampFlatTyOrigins`, which stamps occurrences ONLY and never
--- calls `stampDeclOrigins` at all (`frontend/resolve.mdk` — "FLAT (loader-less)
--- DRIVERS GET NOTHING HERE").  So every `decl:` row on the flat arm is silent, and
--- that silence is the documented `#1110 flat-identity` residual, not a defect.
+-- ⚠️ The layers still disagree today, by design, and the golden shows it — but
+-- narrower than it used to be (#1227, fixed): the FLAT driver's
+-- `checkProgramSeededSplit` (`types/typecheck.mdk`) now calls `stampDeclOrigins
+-- "core"` on its PRELUDE half, alongside `stampFlatTyOrigins`'s occurrence stamp,
+-- so `flat core decl:*` rows AGREE with the graph arm.  It still never stamps the
+-- USER half, or any flat driver with no separate prelude boundary
+-- (`coreProg0 = []`, e.g. `checkProgramSeeded`) — those have no module id, so
+-- their `decl:` rows stay silent, and that silence is the documented
+-- `#1110 flat-identity` residual, not a defect.
+-- 🚨 INTERFACE ROWS CARRY AN `iface:` PREFIX, AND THAT IS A CORRECTNESS
+-- REQUIREMENT, NOT A LABELLING PREFERENCE.  Medaka keeps type names and interface
+-- names in SEPARATE NAMESPACES — a file declaring both `data Foo = Foo` and
+-- `interface Foo a where …` checks clean — so an interface `Foo` pushed into this
+-- accumulator under the BARE name `Foo` would land on the same key as a type `Foo`
+-- and be graded AGREE/CONFLICT against it.  Both sides are typed `TyConOrigin`, so
+-- that comparison is type-correct and therefore invisible: the shared carrier type
+-- is exactly what removes the compiler's ability to object.  In one arm and slot it
+-- would read as `ArmMulti` — an arm contradicting itself — i.e. a CONFLICT
+-- manufactured by the probe's own keying.
+--
+-- ⚠️ The DECL layer's `decl:` keys still merge the two namespaces (`decl:Foo` for a
+-- `data Foo` and for an `interface Foo` alike), and that is left alone deliberately
+-- rather than overlooked: every `decl:` row in one slot is stamped with THAT
+-- module's id, so a type/interface pun inside one module yields two IDENTICAL
+-- claims, dedups to one row, and cannot move a verdict.  The residue is that a
+-- `HEAD SPREAD` line can merge a type and an interface of the same name declared in
+-- different modules; that section already documents `> 1` as corpus-dependent and
+-- pinned for review.  Splitting it would move existing golden rows for no verdict
+-- change, so it is stated here instead.
 headsOf : List Decl -> List (String, TyConOrigin)
 headsOf decls =
   let acc = Ref []
   let _ = walkDecls acc decls
   declHeads decls ++ acc.value
 
+-- ONE walk, BOTH occurrence layers, through resolve's own `mapOriginsInDecl` — the
+-- very function `stampDeclTyOrigins` drives.  Both recorders share one accumulator
+-- because their keys are already disjoint: a type head goes in bare, an interface
+-- occurrence goes in `iface:`-tagged.
 walkDecls : Ref (List (String, TyConOrigin)) -> List Decl -> Unit
 walkDecls _ [] = ()
 walkDecls acc (d::rest) =
-  let _ = mapTyInDecl (noteHead acc) d
+  let _ = mapOriginsInDecl (noteHead acc) (noteIfaceOcc acc) d
   walkDecls acc rest
 
 noteHead : Ref (List (String, TyConOrigin)) -> Ty -> (Ty, Bool)
@@ -302,6 +366,69 @@ noteHead acc (t@(TyCon { tyConName = n, tyConOrigin = o })) =
   let _ = setRef acc ((n, o)::acc.value)
   (t, False)
 noteHead _ t = (t, False)
+
+-- `noteIfaceOcc` records and hands the origin straight back, so the tree is
+-- returned unchanged and the walk is a pure observation — the exact shape
+-- `noteHead` already uses.  The carrier tag is not part of the KEY: a `Speak`
+-- written as a `=>` and a `Speak` written as an `impl` head name the same
+-- declaration, so they belong in the same row and must be able to disagree with
+-- each other.  The tag is what `carrierCounts` below asserts on.
+noteIfaceOcc : Ref (List (String, TyConOrigin)) -> String -> String -> TyConOrigin -> TyConOrigin
+noteIfaceOcc acc _ n o =
+  let _ = setRef acc ((ifaceKey n, o)::acc.value)
+  o
+
+-- ── the PER-CARRIER anti-vacuity counts (#1110 PR C) ─────────────────────────
+-- 🚨 FOUR counts, not one, and each names its carrier field LITERALLY.  Two things
+-- rest on that, and neither is cosmetic:
+--
+--   * A single merged `iface-occs` total stays healthily large while ONE of the
+--     four carriers goes dead — `superOrigin` is the smallest population in every
+--     corpus here, so it is exactly the one a merged count would hide.  These are
+--     the peer of `decl-heads`, one per carrier.
+--   * `test/typecheck_compiler_source.sh`'s carrier ratchet verifies GRADED status
+--     by requiring each carrier's field NAME to appear, outside a comment, in THIS
+--     FILE.  This probe reads the four through resolve's shared `mapOriginsInDecl`
+--     traversal — by position, naming none of them — so without these literals the
+--     ratchet could not distinguish "graded through a shared walk" from "not graded
+--     at all", and the honest way to satisfy it is to assert per carrier rather
+--     than to loosen the pin.
+--
+-- The walk is its own, driven with an INERT `Ty` callback, so it visits exactly the
+-- positions the stamper visits and observes only the interface ones.
+ifaceCarriers : List String
+ifaceCarriers =
+  ["constraintOrigin", "superOrigin", "requireOrigin", "implOrigin"]
+
+carrierCounts : List Decl -> List (String, List Decl) -> List (String, Int)
+carrierCounts coreD mods =
+  map (carrierCountOf (coreD ++ flatMap snd mods)) ifaceCarriers
+
+carrierCountOf : List Decl -> String -> (String, Int)
+carrierCountOf decls tag =
+  let acc = Ref 0
+  let _ = walkCarrier tag acc decls
+  (tag, acc.value)
+
+walkCarrier : String -> Ref Int -> List Decl -> Unit
+walkCarrier _ _ [] = ()
+walkCarrier tag acc (d::rest) =
+  let _ = mapOriginsInDecl inertTy (bumpCarrier tag acc) d
+  walkCarrier tag acc rest
+
+bumpCarrier : String -> Ref Int -> String -> String -> TyConOrigin -> TyConOrigin
+bumpCarrier tag acc carrier _ o =
+  if carrier == tag then
+    let _ = setRef acc (acc.value + 1)
+    o
+  else o
+
+inertTy : Ty -> (Ty, Bool)
+inertTy t = (t, False)
+
+carrierLines : List (String, Int) -> String
+carrierLines [] = ""
+carrierLines ((tag, n)::rest) = "iface-occs-\{tag} \{n}\n\{carrierLines rest}"
 
 -- ── the DECL-LAYER carrier collector (#1110) ─────────────────────────────────
 declHeads : List Decl -> List (String, TyConOrigin)
@@ -439,17 +566,16 @@ sameRow slot name c = claimSlot c == slot && claimName c == name
 --     graph path claims — builtins and the prelude's own types, and nothing else.
 --     It does not stamp the user program's own declarations (no loader id to
 --     attribute them to), it does not walk `usePathsOf prog` so it stamps nothing
---     the buffer IMPORTS either, and it never calls `stampDeclOrigins` at all, so
---     the entire `decl:` layer is silent on that arm.  Under-supplying identity is
+--     the buffer IMPORTS either.  The decl layer (`stampDeclOrigins`) is called on
+--     the flat arm's PRELUDE half only (`checkProgramSeededSplit`, #1227, fixed),
+--     so `flat core decl:*` no longer shows up here — it moved to AGREE in the
+--     table above.  `decl:` rows are still silent here for the user program's own
+--     declarations, and for any flat driver with no separate prelude boundary
+--     (`coreProg0 = []`, e.g. `checkProgramSeeded`) — those have no module id to
+--     stamp with, same as the occurrence layer.  Under-supplying identity is
 --     correctable by a later graph pass; OVER-supplying a wrong one is made
 --     PERMANENT by the immunity rule.  That asymmetry is the documented
 --     subset-and-agreement safety property, and these rows ARE it.
---
---     ⚠️ EXCEPT the `flat core decl:*` rows: for those, `checkProgramSeededSplit`
---     already knows the id (`stampFlatTyOrigins coreProg0 coreProg0` stamps the
---     prelude's own type OCCURRENCES `mod:core`), so their silence is not
---     "no loader id to invent" — it is an unwired decl-layer stamp on a known
---     id, tracked as #1227, not an instance of the safety property above.
 --
 --   * a `graph` row is the one that deserves reading.  The graph path has a real
 --     module id for every module and a scope built from builtins + prelude +
@@ -518,10 +644,19 @@ sameArmSlotName a b = claimArm a == claimArm b
 
 -- ── head spread: the DEFINER-CHASE check ─────────────────────────────────────
 -- The agreement table above compares arms WITHIN one slot, so it is structurally
--- blind to one thing the corpus deliberately contains: a type reached through a
--- RE-EXPORT must be attributed to its DEFINER, never to the last re-exporter
+-- blind to one thing the corpus deliberately contains: a type reached ONLY through
+-- a RE-EXPORT — one the re-exporting module does not itself declare — must be
+-- attributed to its DEFINER, never to the re-exporter
 -- (resolve.mdk's `typeOriginExports` exists for exactly this, and it is the half
--- `ModuleExports.expTypes` cannot answer).  If the graph arm attributed `Crate` to
+-- `ModuleExports.expTypes` cannot answer).
+--
+-- ⚠️ THAT "ONLY" IS LOAD-BEARING, and this comment lacked it until #1245.  When
+-- the re-exporting module ALSO DECLARES the name, the definer IS the re-exporter —
+-- its own declaration is what a consumer's `import m.{Foo}` binds — and this very
+-- section prints that: `Baton 1 mod:mid` and `iface:Relay 1 mod:mid` in
+-- `test/origin_fixtures/ifaces/agreement.golden`, where `mid` both re-exports
+-- `deep`'s and declares its own.  Unscoped, this header read as a claim its own
+-- output contradicts.  If the graph arm attributed `Crate` to
 -- `beta` in beta's slot and to `alpha` in alpha's, every row would still read
 -- AGREE/R-ONLY and the gate would say nothing.
 --

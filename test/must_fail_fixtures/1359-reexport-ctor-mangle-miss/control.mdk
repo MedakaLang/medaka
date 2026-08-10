@@ -1,0 +1,8 @@
+-- issue #1359 control: the ONE variable removed -- `Wid` is imported DIRECTLY
+-- from amod.mdk (the declaring module), never through bmod's `export import`
+-- re-export hop. Same declaring module, same constructor, same use shape.
+import amod.{Wid}
+
+unWid (Wid n) = n
+
+main = println (unWid (Wid 5))

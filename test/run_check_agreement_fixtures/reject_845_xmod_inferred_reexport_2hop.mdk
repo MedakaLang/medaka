@@ -1,0 +1,8 @@
+-- #845 re-export at DEPTH 2 (#1114 review follow-up). A one-hop fixture cannot tell a fix
+-- that follows re-exports transitively from one that special-cases depth 1 — and the
+-- method-table analogue (`reexportedMethodNames`) states in its own comment that the
+-- dependency-first fold exists so "a >1-hop chain still resolves". Pinning only depth 1
+-- would leave the chain claim untested.
+import lib.obl1114_reexp2.{f}
+
+main = println (f "abc")

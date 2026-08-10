@@ -1,0 +1,15 @@
+-- INTERFACE occurrence 3/4: an impl `requires` (`Require`, via `checkRequire`).
+--
+-- TWO rows, and the pair is the point: an impl `requires` cannot be written without
+-- an impl head, so this module also re-covers occurrence 2/4 — and the two rows
+-- survive dedup only because their LOCATIONS differ.  The head is located from
+-- `firstTyLocList tyargs` (`Box`); the `requires` predicate's args are all type
+-- variables, so it has none and reports unlocated.  Losing either locator would
+-- collapse this module to one row.
+import ta.{Speak}
+import tb.{Speak}
+
+data Box a = Box a
+
+impl Speak (Box a) requires Speak a where
+  speak _ = "box"

@@ -1,0 +1,121 @@
+-- #1111 Stage A-2 unit A-2.2b — the BYSTANDER fixture for the dispatch-key
+-- re-key (`obUniv*`, `KeyBuckets`, `checkCallObligationsU`'s dedup key).
+--
+-- 🚨 WHAT A BYSTANDER FIXTURE IS FOR, and why "the feature works" is the WRONG
+-- assertion here (`AGENTS.md`, the program-global-table hazard): every table
+-- this unit re-keys is consulted by EVERY dispatch in EVERY program, including
+-- programs that use none of the shapes the re-key was about. A fixture that
+-- exercised only the re-keyed shapes would pass while unrelated dispatch broke —
+-- which is what happened during authoring: the first cut keyed the head
+-- component on IDENTITY, and the compiler rejected its own prelude
+-- (`No impl of Ord for Int`, `No impl of Display for String`). Nothing about
+-- general or overlapping impls would have caught that.
+--
+-- ⚠️ WHAT THIS FILE ACTUALLY WITNESSES — MEASURED BY COUNTERFACTUAL, and NOT
+-- what the first draft of this header claimed. Three deliberate breakages were
+-- applied to `compiler/types/typecheck.mdk`, rebuilt, and re-run:
+--
+--   A  skew the READER's headless bucket key (`bucketOfHead`'s `None` arm) so
+--      the general instance is filed under a key no goal asks for
+--                                              → **INERT while the general
+--      instance had a CONSTANT body**, and **WITNESSED once it needs a dict**.
+--      Both halves re-measured first-hand on 2026-08-04 against a binary built
+--      with `bucketOfHead None` prefixing a literal into its rendered key:
+--
+--        `impl Sz a where sz _ = 999`               (the ORIGINAL general
+--        instance) → `((True, 14, n=1, Some 'z', Gt), 999, 7, 1, 2)`, exit 0.
+--        UNCHANGED. The 999 comes from the ENGINE's general-instance fallback
+--        tier (`emitGeneralRKey` → `findByTag noneHeadTag` in `llvm_emit.mdk`,
+--        `pickTagFallback` in `eval.mdk`), not from the `KeyBuckets` selection
+--        this unit re-keyed — exactly what `keyForSite`'s own #1128 comment
+--        warns ("a green suite here is evidence about the fallback, not about
+--        the route word").
+--
+--        `impl Sz a requires Display a where sz x = stringLength (display x)`
+--        (what this file ships now) → eval: `runtime error [E-PANIC]:
+--        intToString: not an Int`, exit 1. native: `runtime error
+--        [E-FATAL-SIGNAL]: fatal memory fault (segmentation fault)`, exit 139.
+--
+--      ⚠️ AN EARLIER DRAFT OF THIS HEADER STOPPED AT THE FIRST HALF and added
+--      "Nothing in this tree does; that is recorded, not papered over" — which
+--      reads as *this key is not witnessable*, and it is not true. The fallback
+--      tier can substitute for a CONSTANT, because a constant needs nothing
+--      routed to it; it cannot substitute for an ELEMENT DICT. Adding the
+--      `requires` is the whole repair, and an honestly-labelled untestable key
+--      is still an untestable key.
+--   B  skew the READER's DECLARATION bucket key (`bucketOfHead`'s `Some` arm)
+--   C  skew the READER's `obUnivConcreteRef` key (`univConcreteBucket`)
+--                                              → **NEITHER PRODUCES A BINARY**.
+--      Both fail during `make medaka` stage A with a clang error on the emitted
+--      IR (`use of undefined value '@mdk_isEmpty'`) — a mis-dispatched
+--      self-compile. So the impl-side/goal-side key agreement is load-bearing at
+--      BUILD time, and its guard is `make medaka` + `make check-self` +
+--      `selfcompile_fixpoint.sh`, which fail long before any fixture runs.
+--
+-- ⇒ Read this file as the bystander it is: `bystander` asserts that ordinary
+-- prelude dispatch — `Eq`, `Ord`, `Num`, `Display`, `Debug`, `Semigroup`, all
+-- routed through the four re-keyed tables — is unchanged in a program that ALSO
+-- contains a general instance, an overlapping concrete sibling and a two-param
+-- interface. The declarations below are the "unrelated feature" it must survive,
+-- not assertions about that feature's own machinery.
+--
+-- The expected value is HAND-DERIVED, not captured (`AGENTS.md`: a captured
+-- golden records what the engine did, not what is correct) — see `bystander`
+-- and `main`. Recorded here so the next reader does not have to re-derive it:
+--
+--   ((True, 14, n=1, Some 'z', Gt), 4, 7, 1, 2)
+--
+-- The `4` is `stringLength (display True)` = `stringLength "True"` — the
+-- general instance reached WITH its `Display Bool` element dict. (It was `999`
+-- while that instance had a constant body; counterfactual A above is why it no
+-- longer does.) The `7` is unchanged: `impl Sz (Box a)` is more specific and
+-- out-ranks the general instance at a `Box` receiver, and carries no `requires`.
+--
+-- `diff_compiler_engines.sh` diffs eval/native/wasm against each other with no
+-- golden mediating, so this comment is the only place the intended value is
+-- written down.
+
+interface Sz a where
+  sz : a -> Int
+
+-- The GENERAL (headless) instance — its head is a bare type variable, so it has
+-- no head type constructor at all.
+--
+-- ⚠️ THE `requires` IS WHAT MAKES THE HEADLESS BUCKET WITNESSABLE, and it is
+-- the whole of counterfactual A's repair (below).  A general instance with a
+-- CONSTANT body is invisible to the headless bucket key: whichever tier answers
+-- (the `KeyBuckets` selection this unit re-keyed, or the engines' own
+-- general-instance fallback) returns the same 999.  A general instance that
+-- must be handed its ELEMENT DICT is not — the answer now depends on a
+-- `Display` dict having been routed to it, which only the headless entry
+-- carries.
+impl Sz a requires Display a where
+  sz x = stringLength (display x)
+
+data Box a = MkBox a
+
+-- ...and a concrete sibling, which must out-rank it at a `Box` receiver.
+impl Sz (Box a) where
+  sz _ = 7
+
+interface Ix a b where
+  ixOf : a -> b -> Int
+
+impl Ix Int Bool where
+  ixOf _ _ = 1
+
+impl Ix Int Char where
+  ixOf _ _ = 2
+
+-- ── THE BYSTANDER ─────────────────────────────────────────────────────────
+-- Prelude dispatch only — it names nothing declared above. Hand-derived:
+-- `[3, 1, 2] == [3, 1, 2]` is True;
+-- `2 + 3 * 4` is 14; `"\{(1 : Int)}"` interpolates through `Display Int` to
+-- `"1"`, appended to `"n="` through `Semigroup String`; `debug (Some 'z')`
+-- renders the prelude `Option` instance; `compare (2 : Int) 1` is `GT`.
+bystander : Unit -> (Bool, Int, String, String, Ordering)
+bystander _ =
+  let xs = [3, 1, 2]
+  (xs == [3, 1, 2], 2 + 3 * 4, "n=" ++ "\{1 : Int}", debug (Some 'z'), compare (2 : Int) 1)
+
+main = (bystander (), sz True, sz (MkBox (1 : Int)), ixOf (1 : Int) True, ixOf (1 : Int) 'c')

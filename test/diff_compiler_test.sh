@@ -26,9 +26,16 @@
 #     truth the native runtime actually implements; #505 un-deferred once that
 #     was confirmed on a fresh build)
 #   test/compiler_test_fixtures/mixed.mdk  passing + FAILING doctest + prop
+#   test/compiler_test_fixtures/record_prop.mdk  GH #1295: a passing/positional
+#     ADT prop plus a passing RECORD-typed prop (genVariant's ConNamed arm used
+#     to build a positional VCon and panic on first field access)
 #   test/compiler_test_fixtures/blockquote_and_valid.mdk  GH #55: a malformed
 #     example (Markdown blockquote) does not abort the file — the valid
 #     examples before AND after it still run
+#   test/compiler_test_fixtures/int_shrink.mdk  GH #1307: a FAILING Int-typed
+#     prop used to hang forever shrinking (shrinkInt 0 had no base case).
+#     Pins the deterministic shrunk counterexample, proving shrinking
+#     terminates and converges.
 #
 # DEFERRED (pre-existing compiler/native gaps, NOT gate-rerooting regressions):
 #   stdlib/{mut_array,array,map}.mdk — the #55 `$dict_sum_1` panic on the eval/test
@@ -72,6 +79,16 @@ RUN="$ROOT/test/bin/test_main"
 RUNTIME="$ROOT/stdlib/runtime.mdk"
 CORE="$ROOT/stdlib/core.mdk"
 
+# Portable per-fixture timeout (no coreutils `timeout` on macOS — see
+# diff_compiler_engines.sh's identical `run_t`). #1307: a hung shrink loop
+# used to make this gate stall to CI's 60-minute job ceiling with no
+# diagnostic; every "$RUN" invocation below now goes through this so a
+# regression here times out LOUDLY (perl SIGALRM => exit 142) instead of
+# hanging. Generous, since this gate legitimately runs many fixtures
+# (default scope: the whole stdlib doctest/prop corpus).
+TIMEOUT="${TIMEOUT:-120}"
+run_t() { perl -e 'alarm shift; exec @ARGV' "$@"; }
+
 [ -x "$RUN" ] || { echo "build oracles first: FORCE=1 JOBS=1 sh test/build_oracles.sh --build-one $(basename "$RUN") (missing $RUN)"; exit 2; }
 
 # Drop the native value entry's trailing "()" (Unit auto-print; runtime/medaka_rt.c).
@@ -95,6 +112,8 @@ else
          $ROOT/stdlib/hash_set.mdk \
          $ROOT/test/compiler_test_fixtures/mixed.mdk \
          $ROOT/test/compiler_test_fixtures/sum_dict.mdk \
+         $ROOT/test/compiler_test_fixtures/record_prop.mdk \
+         $ROOT/test/compiler_test_fixtures/int_shrink.mdk \
          $ROOT/test/compiler_test_fixtures/mappable_not_foldable.mdk \
          $ROOT/test/compiler_test_fixtures/shadow_impl_tolist.mdk \
          $ROOT/test/compiler_test_fixtures/blockquote_and_valid.mdk \
@@ -108,7 +127,7 @@ if [ "${CAPTURE:-0}" = "1" ]; then
     name="$(basename "$f")"
     golden="${f%.mdk}.test.golden"
     root="$(dirname "$f")"
-    "$RUN" "$RUNTIME" "$CORE" "$f" "$root" 2>/dev/null | sed "s#$ROOT/##g" | strip_unit > "$golden"
+    run_t "$TIMEOUT" "$RUN" "$RUNTIME" "$CORE" "$f" "$root" 2>/dev/null | sed "s#$ROOT/##g" | strip_unit > "$golden"
     wrote=$((wrote + 1))
     printf 'captured %s\n' "$name"
   done
@@ -127,7 +146,7 @@ for f in $files; do
   fi
   root="$(dirname "$f")"
   expected="$(cat "$golden")"
-  actual="$("$RUN" "$RUNTIME" "$CORE" "$f" "$root" 2>/dev/null | sed "s#$ROOT/##g" | strip_unit)"
+  actual="$(run_t "$TIMEOUT" "$RUN" "$RUNTIME" "$CORE" "$f" "$root" 2>/dev/null | sed "s#$ROOT/##g" | strip_unit)"
   if [ "$expected" = "$actual" ]; then
     pass=$((pass + 1))
     printf 'ok   %s\n' "$name"
@@ -151,7 +170,7 @@ if [ "$scoped" -eq 0 ]; then
 # or ERRORED (a printed "N passed, M failed" report used to always exit 0 —
 # a CI trap). test/bin/test_main is the native-built oracle for
 # compiler/entries/test_main.mdk, so it carries the same exit-code fix.
-"$RUN" "$RUNTIME" "$CORE" "$ROOT/test/compiler_test_fixtures/mixed.mdk" "$ROOT/test/compiler_test_fixtures" >/dev/null 2>&1
+run_t "$TIMEOUT" "$RUN" "$RUNTIME" "$CORE" "$ROOT/test/compiler_test_fixtures/mixed.mdk" "$ROOT/test/compiler_test_fixtures" >/dev/null 2>&1
 mixed_code=$?
 if [ "$mixed_code" -ne 0 ]; then
   pass=$((pass + 1)); printf 'ok   mixed.mdk exit code (%d != 0, has a FAILing doctest)\n' "$mixed_code"
@@ -159,7 +178,7 @@ else
   fail=$((fail + 1)); printf 'FAIL mixed.mdk exit code: expected nonzero (has a failing doctest), got 0\n'
 fi
 
-"$RUN" "$RUNTIME" "$CORE" "$ROOT/stdlib/list.mdk" "$ROOT/stdlib" >/dev/null 2>&1
+run_t "$TIMEOUT" "$RUN" "$RUNTIME" "$CORE" "$ROOT/stdlib/list.mdk" "$ROOT/stdlib" >/dev/null 2>&1
 list_code=$?
 if [ "$list_code" -eq 0 ]; then
   pass=$((pass + 1)); printf 'ok   list.mdk exit code (0, all-passing suite)\n'
@@ -173,7 +192,7 @@ fi
 # print "1/1 passed" and exit 0 (test-green / check-dies).  The .test.golden is
 # empty because the located error is emitted on STDERR (errors-to-stderr, like a
 # read error); the discriminator here is the exit code.
-"$RUN" "$RUNTIME" "$CORE" "$ROOT/test/compiler_test_fixtures/doctest_typecheck_gate.mdk" "$ROOT/test/compiler_test_fixtures" >/dev/null 2>&1
+run_t "$TIMEOUT" "$RUN" "$RUNTIME" "$CORE" "$ROOT/test/compiler_test_fixtures/doctest_typecheck_gate.mdk" "$ROOT/test/compiler_test_fixtures" >/dev/null 2>&1
 dtg_code=$?
 if [ "$dtg_code" -ne 0 ]; then
   pass=$((pass + 1)); printf 'ok   doctest_typecheck_gate.mdk exit code (%d != 0, module does not typecheck)\n' "$dtg_code"
@@ -185,9 +204,9 @@ fi
 # discovery + eval + per-test report + summary + exit code.  The fixture imports
 # `test` (in stdlib), so stdlib must be a search root alongside the fixture dir.
 td="$ROOT/test/compiler_test_fixtures/test_decls.mdk"
-td_out="$("$RUN" "$RUNTIME" "$CORE" "$td" "$ROOT/test/compiler_test_fixtures" "$ROOT/stdlib" 2>/dev/null | sed "s#$ROOT/##g")"
+td_out="$(run_t "$TIMEOUT" "$RUN" "$RUNTIME" "$CORE" "$td" "$ROOT/test/compiler_test_fixtures" "$ROOT/stdlib" 2>/dev/null | sed "s#$ROOT/##g")"
 td_code=0
-"$RUN" "$RUNTIME" "$CORE" "$td" "$ROOT/test/compiler_test_fixtures" "$ROOT/stdlib" >/dev/null 2>&1 || td_code=$?
+run_t "$TIMEOUT" "$RUN" "$RUNTIME" "$CORE" "$td" "$ROOT/test/compiler_test_fixtures" "$ROOT/stdlib" >/dev/null 2>&1 || td_code=$?
 td_expected="running tests in test/compiler_test_fixtures/test_decls.mdk
   ok   test/compiler_test_fixtures/test_decls.mdk:8: passing assertion
   FAIL test/compiler_test_fixtures/test_decls.mdk:9: failing assertion
@@ -217,7 +236,7 @@ fi
 # stdlib must be a search root alongside the fixture dir — hence a bespoke block
 # rather than a row in the single-root $files loop.
 nh="$ROOT/test/compiler_test_fixtures/hash_negative_hash.mdk"
-nh_out="$("$RUN" "$RUNTIME" "$CORE" "$nh" "$ROOT/test/compiler_test_fixtures" "$ROOT/stdlib" 2>/dev/null | sed "s#$ROOT/##g")"
+nh_out="$(run_t "$TIMEOUT" "$RUN" "$RUNTIME" "$CORE" "$nh" "$ROOT/test/compiler_test_fixtures" "$ROOT/stdlib" 2>/dev/null | sed "s#$ROOT/##g")"
 nh_expected="running doctests in test/compiler_test_fixtures/hash_negative_hash.mdk
   (no doctests found)
 running tests in test/compiler_test_fixtures/hash_negative_hash.mdk
@@ -243,9 +262,9 @@ fi
 # STDERR CONTENT is the only signal. (#55 fixed a parse error in a doctest EXAMPLE;
 # this is a parse error in the module SOURCE itself.)
 pe="$ROOT/test/compiler_test_fixtures/parse_error.mdk"
-pe_out="$("$RUN" "$RUNTIME" "$CORE" "$pe" "$ROOT/test/compiler_test_fixtures" 2>&1 | sed "s#$ROOT/##g")"
+pe_out="$(run_t "$TIMEOUT" "$RUN" "$RUNTIME" "$CORE" "$pe" "$ROOT/test/compiler_test_fixtures" 2>&1 | sed "s#$ROOT/##g")"
 pe_code=0
-"$RUN" "$RUNTIME" "$CORE" "$pe" "$ROOT/test/compiler_test_fixtures" >/dev/null 2>&1 || pe_code=$?
+run_t "$TIMEOUT" "$RUN" "$RUNTIME" "$CORE" "$pe" "$ROOT/test/compiler_test_fixtures" >/dev/null 2>&1 || pe_code=$?
 if printf '%s' "$pe_out" | grep -qF "test/compiler_test_fixtures/parse_error.mdk:1:0:" \
   && ! printf '%s' "$pe_out" | grep -qF "E-PANIC" \
   && [ "$pe_code" -ne 0 ]; then

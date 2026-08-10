@@ -225,6 +225,28 @@ calm. Before you rely on a watcher, **run its exact query once by hand and confi
   a queue-bounce (the PR goes back to OPEN with a failed `merge_group` run) — that looks identical to
   "still queued." Bound the wait (e.g. ~30 iterations) so it can't hang forever, and re-check on exit.
 
+#### 🚨 A CONFLICTED PR GETS **ZERO** CI RUNS, AND EMPTY LOOKS EXACTLY LIKE PENDING
+
+`ci.yml` is `pull_request`-triggered (`.github/workflows/ci.yml:113`), so a run checks out
+**`refs/pull/N/merge`**. GitHub cannot materialize that ref while the branch conflicts with `main`,
+so the workflow never has anything to check out and **no run is ever queued** — not pending, not
+failed, *absent*. Every surface agrees and all read as "still queuing": `gh pr checks` says `no
+checks reported`, `gh run list --branch` returns `[]`, `gh pr view --json statusCheckRollup` has
+length 0.
+
+An agent waited ~30 minutes and reported *"looks like GitHub-side queuing"* — the honest read of
+that evidence, and wrong. The discriminators:
+
+```sh
+gh pr view N --json mergeStateStatus --jq .mergeStateStatus   # DIRTY == conflicts
+git ls-remote origin 'refs/pull/N/*'   # only .../head, NO .../merge  <- the direct proof
+```
+
+After the branch merges `origin/main`, the merge ref appears and the run starts immediately.
+Generalizes: **no signal is not a state on the green→pending→red axis.** When a watcher returns
+nothing, ask what would make the thing *unable to report* before concluding it has nothing to
+report.
+
 When CI goes red, **act, don't just report**:
 
 1. **Diagnose from the log** (`gh run view <id> --log-failed`): infra/workflow bug, real regression, or
@@ -546,6 +568,12 @@ Each is a failure actually watched happen this session:
      Do NOT await a notification."*
    - *"You are the implementer. Do not delegate, do not spawn a sub-agent, do not 'resume' another agent."*
 
+   ⚠️ **`pgrep -f <pattern>` SELF-MATCHES — say so, because agents adapt the idiom above into it.**
+   Two agents in one session rewrote the PID-poll as `pgrep -f '<pattern>'` and each burned a full
+   600s tool timeout, because the polling wrapper's own command line *contains* the pattern it is
+   grepping for, so the loop can never terminate. Poll a real PID, or grep the output FILE — never
+   the process table for a pattern you also typed.
+
    **Orchestrator-side remedy that actually unblocked them:** don't nudge blindly — `ps aux | grep -E
    'preflight|make medaka'`, wait on the PID yourself, READ the log, and hand the agent the *result*.
    Also verify a `timeout`-wrapped build **succeeded** rather than being killed at the limit; a
@@ -580,6 +608,13 @@ Each is a failure actually watched happen this session:
    code itself lives. Both were caught only because the *receiving* agent re-grepped. A relayed
    citation is a claim you are re-asserting; one `grep -n` for the definition before you paste it into
    a prompt is the whole cost.
+   ⚠️ **A relayed SCOPE CHARACTERISATION is the same claim, one level up.** The orchestrator told an
+   agent a just-merged PR was "comments only, so the merge should be textual and trivial" — true of
+   the *follow-up commit* the orchestrator had verified byte-by-byte, not of the whole PR, which also
+   exported a function and added a call. The agent read the merged hunks instead of trusting the
+   brief and caught it. Tell agents to verify a base's diff scope themselves (`git diff --stat`)
+   rather than inherit the orchestrator's summary — "comment-only," "additive," "mechanical" are
+   claims, and re-deriving one costs a single command.
 5. **"Disproving me is a SUCCESS."** Say it explicitly. It fired **three times in one session**, every
    time against the orchestrator. An honest `UNVERIFIED` beats a confident wrong answer.
 
@@ -792,6 +827,22 @@ green result. General rule: **for every "I verified Z," name the observation tha
 shown ¬Z; if none exists, say "not established" instead.** Generalizable trap: **two
 "independent" checks that share a pipeline stage give you ONE observation, not two.**
 
+### ⚠️ Split a PRE-EXISTING defect out of the PR that merely REPLICATES it
+
+A review of #1244 found that `resolve.mdk`'s `typeOriginExports` and `tyOriginScope` disagree
+on re-export precedence: a module that both declares and re-exports the same name attributes it
+to the re-exported source instead of the declarer. The mechanism was **pre-existing** — the
+identical probe reproduces on the `data`/type side, which #1244 never touched — and the PR only
+replicated it into a second namespace (interfaces).
+
+Fixing it inside #1244 would have moved goldens well beyond the PR's own layer (its own filed
+issue, #1245, says so: *"this fixes the type side too... expect golden movement beyond the
+interface layer"*), so a red result would not have named its culprit. The split: the PR narrows
+its now-overreaching claims and pins the wrong answer as a fixture; a separate issue owns the
+ordering fix; and the fix is recorded as a **precondition on the downstream unit that will
+first consume the value** rather than blocking the PR that merely inherited it. Keep the two
+apart, and say in the issue why they were kept apart.
+
 ---
 
 ## ⚠️ A clean auto-merge is NOT agreement
@@ -927,6 +978,29 @@ confirmed clean** (`git status --short`). A shared worktree makes "capture my di
 - **Doc-edit hygiene under concurrency:** if an agent is concurrently *appending* to a shared doc (most
   append an "AS-BUILT" section at EOF), make your own edit a **mid-file insert** in a stable region — the
   3-way merge then auto-resolves instead of conflicting at EOF.
+- 🚨 **Shared APPEND-TARGET REGISTRIES are a collision surface beyond source files and goldens.**
+  Seven PRs ran across disjoint source files, serialized on source files and on the documented
+  snapshot/LEG A goldens — and that was not enough: **#1436 was ejected from the merge queue**
+  (`mergeable: CONFLICTING`) after **#1442** landed ahead of it. Neither PR's "owned" files
+  conflicted; the collisions were all in files where two PRs each *add a row/line to a shared
+  list*: `.github/workflows/ci.yml`'s `tools` shard `pattern:` — both PRs appended their new
+  gate's name to the **same line** (confirmed: `gh pr diff 1436` and `gh pr diff 1442` both
+  touch that identical `pattern:` string); `test/preflight.sh`'s change→gate selection map; and
+  `test/MUST-FAIL-NOT-PINNABLE.txt`, where #1436 deleted the `#1348` row and **#1435** deleted
+  the adjacent `#1360` row two lines above it. Treat any single-line list a gate reads as a
+  registry — `ci.yml` shard patterns, `test/preflight.sh`'s map, `test/MUST-FAIL-NOT-PINNABLE.txt`,
+  `test/CAPABILITY-EXCEPTIONS.txt`, `test/engine_divergence.txt` — and add it to the pre-dispatch
+  serialization check alongside source files and goldens.
+  - **Resolving one: take BOTH sides, then re-run the gate that validates the registry** —
+    `sh test/diff_compiler_ci_shard_coverage.sh` for `ci.yml` (it fails a gate matching no shard
+    pattern, i.e. a pattern one side's `--ours`/`--theirs` resolve would silently drop — see its
+    own header, "A gate matching no shard pattern silently never runs"). Never `--ours`/`--theirs`
+    on a registry: that doesn't fail loudly, it just **stops the other PR's gate from ever
+    running again while every check stays green.**
+  - **An enqueue that succeeded is not a merge.** `scripts/pr.sh enqueue` correctly verified queue
+    membership at the time; the PR was ejected later when another PR landed ahead of it in the
+    queue. A queued PR's state must be **read back** before you treat it as landed — never
+    inferred from an earlier successful enqueue.
 
 ---
 
@@ -995,6 +1069,70 @@ For a large, route-fragile change (this session: TRMC), don't hand one agent the
 
 Re-mint the seed once at the **completed-change checkpoint**, not per sub-part. A *comment-only* edit to
 an emitter-graph file does NOT invalidate the seed (emitted IR is identical); any logic change does.
+
+---
+
+## Your ROUTING comment is the frame later work is scoped against (2026-08-09)
+
+`[[feedback_the_orchestrators_prose_is_the_unreviewed_artifact]]` covers PR bodies. **A routing comment
+is worse**, and this session produced two instances in one day — both overturned by measurement within
+hours, both already acted on by the time they were.
+
+- **"The #1326/#1369 'indivisible' adjudication was wrong."** I argued the two needed different code
+  changes in one function pair, so sharing a function ≠ sharing a mechanism. A two-arm differential
+  showed they are coupled **through the table**: the re-export arm propagates exactly the rows the
+  provenance filter removes, and each half alone is measured-unsafe in opposite directions. **The
+  evidence was already in a source comment on the branch** (*"would propagate a poisoned row one hop
+  further. Land them together"*) and I reasoned past it.
+- **"#1383 IS the `universeFieldOwners` row."** Built on *"`headL owners` takes the first of a
+  graph-global list, which explains the import-order dependence."* But `fieldOwnerNames` `sortUniqS`es
+  (`typecheck.mdk`, and two further comments say so) — that read is **order-insensitive**. A design pass
+  then measured the owner set to be a **singleton holding the right key** in both faces.
+
+**Why routing is the dangerous kind.** A PR body describes work already done. A routing comment tells
+the next agent *where the defect lives and what shape the fix has* — so a wrong one converts directly
+into tracker structure and dispatched work. My #1383 routing caused an analysis-design gate to be added
+to that issue **aimed at the wrong half**.
+
+**Rules:**
+
+1. **Before routing a defect to a mechanism, grep the mechanism.** "X takes the first element, therefore
+   order matters" requires checking the list is unsorted. An explanation that *fits* the observed
+   behaviour is not evidence it *causes* it.
+2. **When retracting someone else's verdict, ask whether you are replacing their bad ARGUMENT with your
+   bad VERDICT.** A right conclusion reached badly is still right; overturning it needs evidence about
+   the conclusion. The original #1326/#1369 adjudication was right via a wrong argument — my
+   "correction" was strictly worse, because a verdict is what the next agent acts on.
+3. **Post retractions as new comments, never silent edits** — the earlier comment reads as the frame, so
+   the correction must sit where the frame is, and must name what was already acted on so the downstream
+   artifact gets re-aimed too.
+4. **Hedge a relayed lead, and demand it be tested by INTERVENTION.** One lead I relayed
+   (`argDispatchIdxRef`'s two write sites) was confirmed as a *fact* and refuted as the *cause* — the
+   reader's value is discarded, so patching it is not a no-op, it is simply unused. That refutation only
+   happened because the brief said *"check it actually accounts for the symptom rather than merely being
+   adjacent."* Put that sentence in.
+
+## Small operational facts that cost time this session (2026-08-09)
+
+- **An agent that ESCALATES a decision and then completes will re-surface it every time something wakes
+  it.** It has no way to learn its escalation was answered. Two agents re-reported stale "the open
+  decision, unchanged" summaries three times between them. **`TaskStop` the agent once you have acted on
+  its escalation** — the report is already in your context and on the PR.
+- **Brief a PRIVATE scratch subdirectory.** Two agents collided writing the same `build.log` path under
+  the shared session scratch dir.
+- **`gh issue edit` / `gh pr edit` currently FAIL on this repo** with a Projects-classic GraphQL
+  deprecation error. Use `gh api -X PATCH repos/<owner>/<repo>/issues/<N>` (or `.../pulls/<N>`), and
+  read the state back — `gh` writes can silently no-op.
+- **A wrap-up cannot reap worktrees from an isolated session.** The harness refuses git operations
+  targeting another worktree, so `git worktree list` is derivable but every removal signal and the
+  removal itself are not. That is *report-and-hold*, not a skipped step — post the derived list and let
+  each owner reap.
+- **A queue bounce is not automatically your break, and not automatically a flake either.** #1439 (a
+  test-only fixture PR, 12/12 green) was dequeued by `gates (sqlite)`. The discriminator — gathered
+  **before** re-enqueueing — was that the same gate passed on the **same base** in two other runs, and
+  that the PR's diff could not reach it. Re-enqueued and it merged unchanged. Blind-retrying a
+  deterministic red burned a round-trip on #1005; gathering the same-base evidence first is what
+  separates the two cases.
 
 ---
 
@@ -1103,6 +1241,13 @@ an emitter-graph file does NOT invalidate the seed (emitted IR is identical); an
 - After each landing, reconcile `PLAN.md`, and verify root-cause claims on the binary before trusting them
   in docs.
 - Record durable workflow learnings in memory; record role learnings **here**.
+- **Pin a must-fail fixture to the DEFECT issue, never the multi-PR STAGE issue.** A stage issue
+  (e.g. an arc-tracking #1110) closes when the stage lands, long before the pinned defect is fixed —
+  `must_fail_census.sh` then reports PINNED-BUT-CLOSED and the next reader has to work out which of
+  the stage's PRs the pin meant. File a dedicated issue for the defect and retarget the pin to it.
+  ⚠️ The retarget is not a one-line edit: `diff_compiler_must_fail.sh` cross-checks the fixture
+  **directory name** against `claim.txt`'s `issue:` field (`test/diff_compiler_must_fail.sh:386,391`)
+  and reports MALFORMED on a mismatch — `git mv` the directory too, so history follows.
 
 ### 🏁 At session end, run the `orchestrator-wrapup` skill — don't hand-roll the close-out
 
@@ -1377,3 +1522,475 @@ that is what makes them expensive.
      suspected stderr-capture golden move, sweep the shard's own scripts for `2>&1` and name
      the candidates before the log arrives; the log then confirms or refutes in one read
      rather than starting the investigation.
+
+---
+
+## Stage A-1 of the typecheck arc, 2026-08-02/03 — four PRs, and the recurring defect was a CLAIM REACHING PAST ITS EVIDENCE
+
+#1234 → #1235 → #1238 → #1244 (rigid/mono separation, arc #1110, epic #1122). Every one of the
+four merged 12/12 green and was reviewed adversarially. In all four the finding was **not wrong
+code** — it was a *claim*, in a comment or a PR body, that asserted more than had been measured.
+Different surface each time:
+
+- **#1234** — the PR's own first commit (`e8b2483f`) never touched `compiler/entries/
+  origin_agreement_main.mdk` or `test/diff_compiler_origin_agreement.sh`, so both still quoted
+  `resolve.mdk`'s old *"FLAT (loader-less) DRIVERS GET NOTHING HERE"* text verbatim and described
+  #1227 as still open, after the fix landed. Invisible to every gate: `compiler/entries/*.mdk` is
+  not in the snapshot corpus (no `origin_agreement_main.md` under `test/snapshots/`), and a gate
+  script's own prose is never diffed against anything. Caught in review, fixed in the same PR
+  (`5fbca08c`).
+- **#1238 round 1** — a source comment stated *"a rigid name is lexically lowercase and a real
+  `TCon` name lexically uppercase,"* which licensed leaving four wildcards unarmed. Both halves are
+  false at the edges: `identStartLower` accepts `_`, and a **real** head can legally be
+  `__tupleN__` (`tupleCtorTyName` via `tyConBuiltin`) — so the two populations collide there.
+  Measured: `data Bad = Bad __tuple2__ ; g : Bad -> (,) ; g (Bad v) = v` typechecked clean on
+  `main` and produced `Type mismatch: (,) vs (,)` — an error whose two sides render identically —
+  on the branch before the fix. Fixing it exposed a second, S0-shaped hole once the discriminating
+  fixture's positive control deleted the new arm: not a different diagnostic, but **no diagnostic
+  at all** (silent accept, exit 0).
+- **#1238 round 3** — a fixture header claimed its program exercised the eleven exhaustive `Mono`
+  match arms. `test/eval_fixtures/` is **typecheck-free**: none of its five consumers (this gate,
+  `bootstrap_eval.sh`, `diff_compiler_core_ir.sh`, `diff_compiler_core_ir_roundtrip.sh`,
+  `diff_compiler_snapshot_core_ir.sh` — none of whose entry points, `entries/eval_main.mdk:19`,
+  `entries/core_ir_main.mdk:33`, `entries/core_ir_roundtrip_main.mdk:28`, `tools/snapshot.mdk:588`,
+  imports `types.typecheck`) constructs a single `Mono` for a fixture here. The author's own
+  positive control (delete an arm → fixture still green) supported the *wide* conclusion
+  "typecheck is not reached" and the header wrote the *narrow* one, "the dispatch half is not
+  reached" — the same species of overreach as the false naming invariant one round earlier, on a
+  probe that was itself sound. `test/diff_compiler_eval.sh`'s own header now says this was "twice"
+  written confidently and wrongly, and points a type-level assertion at
+  `test/typecheck_error_fixtures/` or `test/typecheck_fixtures/` instead.
+- **#1244** — three `resolve.mdk` comments plus the PR body asserted that a re-exported interface
+  always attributes to its **definer**. True only where the re-exporter does not also declare the
+  name itself: a module that both declares and re-exports the same interface attributes it to the
+  re-exported source instead (filed #1245). The identical mechanism already reproduces on the
+  `data`/type side, which #1244 never touched — so #1244 replicated a pre-existing defect into a
+  second namespace rather than introducing one (see "Split a PRE-EXISTING defect..." above).
+
+**Why it matters for orchestration:** no gate can see this class. Goldens pin *output*, not
+*justifications* — a comment or a PR-body claim can be flatly false while every fixture stays
+green. A false claim is exactly what the *next* agent inherits and builds on, so it propagates
+silently instead of failing loudly. Add this to every review brief, as a question separate from
+"is the code correct": **is every claim in this diff's comments and PR body supported by what was
+actually run, or does it merely describe what the author expected to be true?**
+
+---
+
+## Stage A-2 of the typecheck arc, 2026-08-03/05 — role lessons, none about the code
+
+- 🚨 **"Landing is serialized" is an instruction about ARMING, not a prediction about
+  ordering.** Arming two PRs that both touch one file puts both in the merge queue, and the
+  queue builds a temp branch of *your PR merged onto `main` plus everything queued ahead of
+  you* — so two PRs that each merge cleanly onto `main` can still conflict with **each
+  other**, and GitHub gives no signal for it: both read `mergeable: MERGEABLE`,
+  `mergeStateStatus: CLEAN`, because each is evaluated against `main` alone, never against
+  its queue siblings. Measured: two units collided in 4 files, two of them **goldens** — and
+  goldens are re-cut, never text-merged (see the ledger entry above), so a queue auto-merge
+  would have spliced two independent re-cuts. The check GitHub does not run for you, before
+  arming a second PR that shares a file with one already armed:
+  ```sh
+  git merge-tree --write-tree --name-only origin/<branch-a> origin/<branch-b> | tail -20
+  ```
+  And a related trap in the same arming step: `gh pr merge --disable-auto` does **NOT**
+  dequeue an already-queued PR — it returns *"already queued to merge"* and
+  `isInMergeQueue` stays `true`. The GraphQL mutation is the only thing that pulls one
+  back out:
+  ```sh
+  ID=$(gh api graphql -f query='{repository(owner:"MedakaLang",name:"medaka"){pullRequest(number:N){id}}}' --jq '.data.repository.pullRequest.id')
+  gh api graphql -f query="mutation{dequeuePullRequest(input:{id:\"$ID\"}){mergeQueueEntry{id}}}"
+  ```
+- ⚠️ **A review finding relayed into a fix brief becomes a CONSTRAINT, not a claim.** When
+  you hand an implementer *"the reviewer found X, therefore do Y,"* Y arrives as an
+  instruction — pushing back on it costs the implementer credibility rather than earning it.
+  Four times this session an agent had to contradict a brief of mine that had laundered a
+  reviewer's *observation* into my own *inference*; each time they were right, and each time
+  they had to run a control I had not. **Mark the epistemic status explicitly** — *"the
+  reviewer OBSERVED X; whether that means Y is UNVERIFIED, check it"* — and say plainly that
+  the agent may contradict it. A finding you did not reproduce yourself is a hypothesis with
+  a reviewer's name attached to it, not a fact.
+- ⭐ **Budget for the review yield; it does not decay.** Every behaviour-changing unit that
+  entered adversarial review this arc came back with a real finding, all 12/12 green
+  beforehand — including **two S0s introduced by the fix for another S0**, and one
+  **quadratic that `make preflight` structurally cannot see** (it never selects
+  `diff_compiler_perf_scaling.sh` on its own). One unit took **four** rounds; most took one
+  or two. Rounds are not churn when each attacks a dimension the last did not — track *what
+  dimension* each round covered, and stop when a round would only re-cover one already
+  closed, not when the round count merely feels high. Split every review brief into two
+  graded deliverables: *"is the code correct"* and *"is every claim in the comments, fixture
+  headers, and PR body supported by what was actually run"* — grading the second can ride on
+  the first once it is done.
+
+  ⚠️ Prefer a fact with a **derivation** over a bare assertion — but **run any command you
+  write, verbatim, and read its actual output** before trusting the derivation: this same
+  arc shipped a `grep` with an un-escaped `|` in a BRE (no `-E`), which matched only its own
+  comment text and "re-verified" a false claim. A command that cannot fail carries more
+  authority than a wrong number does.
+
+- ⭐⭐ **Run the two review lenses SEPARATELY — one adversarial, one conformance-plus-claims —
+  and don't let either ride on the other.** One reviewer tries to break the fix; the other
+  grades spec conformance **and** audits every claim in the PR body, code comments, fixture
+  headers, and issue bodies against what was actually run. Grading them together lets the
+  claim audit ride on the code review, which quietly drops it. Yield this session: **9 review
+  passes, every one found a real defect**; both behaviour-changing units were blocked while
+  green on all 11 required checks — one shipped a fix that worked on `check` and was inert
+  on `run`/`build`, the other a regression turning a correct program into a crash. The two
+  lenses also caught **each other's** errors twice: they reached opposite verdicts on one
+  fixture header (the adversarial reviewer was right), and a round-1 reviewer's confident
+  mechanism claim (`export newtype` "never" sets `newtypePub`) was false and drove a
+  prescribed fix that was later measured to fail. A single reviewer returns one verdict with
+  no signal that it might be wrong — the split is what supplies the signal.
+- ⭐⭐ **Verify the CONSEQUENCE, not the mechanism.** The session's dominant failure, three
+  costumes on one PR: a byte count proved a `gh api -X PATCH` write *happened*, not that the
+  body *contained the corrections* (two rewrites landed, every retracted claim was still
+  present); enumerating a field's **writers** answered the wrong question when the actual
+  defect was who **clears** it; a regression fixture reached the changed code path but could
+  not observe the consequence — green on the pre-fix commit, emitted IR byte-identical across
+  the "fix". The countermeasure that worked every time: state the acceptance test as an
+  observable on the **artifact**, never on the action — e.g. `grep -n '<retracted phrase>'
+  <body>` must be empty, not "the PATCH call returned 200".
+- ⚠️ **The orchestrator's own prescriptions need the same discipline as an agent's claims.**
+  Three times this session a confidently-relayed mechanism was wrong while the conclusion
+  happened to be right anyway. Each was caught only because the implementing agent
+  **measured** the prescription instead of applying it as given. Brief agents to test what
+  you hand them — say so explicitly in the brief, not just as a general expectation.
+- ⚠️ **Two silent fleet hazards on this shared box, both cost real time:**
+  - **The scratch root is shared.** One agent's `make preflight` log was overwritten by a
+    sibling's and read as its own result — caught only because the log text happened to name
+    the other agent's worktree id. Require gate logs at a path **private to the agent's own
+    worktree**, with the exit code captured on the **next line, no pipe** (a piped exit code
+    is the pipeline's, not the command's). Tell agents to grep any log they rely on for a
+    foreign worktree id before trusting it.
+  - **`refs/stash` is shared across every worktree** (`git rev-parse --git-common-dir` is the
+    same `.git` for all of them). A bare `git stash pop` grabbed a *different* agent's entry.
+    Ban bare `git stash`/`git stash pop` in briefs; use a throwaway WIP commit instead, or
+    `git checkout <commit> -- <files>` to materialize a counterfactual arm without touching
+    the shared stash stack.
+- ⚠️ **Worktree reaping is attribution-blocked on a shared box.** `git worktree list` showed
+  58 trees with a sibling orchestrator active concurrently. Only reap a tree you can actually
+  attribute to your own session, and only when all four signals agree: no unmerged commits,
+  clean `git status`, not locked, and no live process with its cwd inside it. Where any signal
+  is missing or another orchestrator's activity is plausible, **report the tree rather than
+  acting on it** — an unattributable reap risks deleting a sibling's in-flight work with no
+  way to undo it.
+
+## The gzip dogfood arc, 2026-08-05 — a pinned BOUNDARY, and defenses that mask
+
+A capstone dogfood (`gzip/`, DEFLATE decompressor) built end to end by Sonnet subagents.
+Five PRs merged, two enqueued, six issues filed. Three lessons generalise past the project.
+
+- ⭐ **PIN THE UNIMPLEMENTED BOUNDARY IN A GATE, NOT IN PROSE.** A staged feature always
+  has a "not yet implemented" edge. Writing it in a comment rots silently; asserting it in
+  a gate makes the *implementation* flip the gate red and name the file to update. Used
+  twice here: the Phase-2 boundary (`expect_fail … "not yet implemented"`) went red exactly
+  when fixed-Huffman landed, and was replaced by real round-trips plus a fresh Phase-3 pin.
+  Cost: one line. It converts "someone will remember to update the gate" into a mechanical
+  instruction delivered at the right moment, to the right person.
+- 🚨 **A DEFENSIVE LAYER THAT DEGRADES SILENTLY IS THE MASKING PATH FOR THE BUG IT GUARDS.**
+  The fix for a shrink-loop hang (#1307) added a fuel cap — correct — that returned
+  **silently** on exhaustion. So a future cycling arm would produce a *worse* counterexample
+  after 10000 quiet evaluations and nobody would ever learn the cycle existed. Removing a
+  hang is right; removing the *signal* with it is the loud→silent regression this repo ranks
+  as a severity increase. **For any cap/limit/fallback you add, ask what an observer sees
+  when it fires — and make it say so.** Then watch it fire (temporarily shrink the limit)
+  rather than trusting that it would.
+- ⚠️ **CHERRY-PICKING AN AGENT'S COMMIT BREAKS THE WRAP-UP WORKTREE CHECK.** Landing agents'
+  work by `git cherry-pick` onto your own branch (rather than merging their branches) means
+  their original SHAs are never ancestors of `main`, so `log origin/main..HEAD` reports
+  "unmerged" **forever** and every such tree looks unreapable. The discriminating check is
+  **content identity, not ancestry**: for each file the branch touched, compare
+  `git -C <wt> show HEAD:<f>` against `git show origin/main:<f>` — all-identical means the
+  work landed and the tree is provably redundant. That cleanly separated 5 reapable trees
+  from 3 whose work was still in flight, where ancestry alone said "hold" for all 8.
+
+⚠️ **Two of the three defects worth reporting this arc were found by MUTATION, not review.**
+Four RFC tables shipped with no assertion at all — corrupting one cell left all 13 checks
+green — and a byte-corruption helper was appending 16 literal characters, so its gate passed
+for the wrong reason. Neither is visible in a green run or in a careful read. When a change
+adds a *table* or a *byte-level helper*, perturb one cell and confirm something notices;
+budget it as a review step, not an optional extra.
+
+## #1319 unit 2, 2026-08-06/07 — SPLIT the adversarial review into two lenses; they catch disjoint sets
+
+Three rounds on one PR (`typecheck.mdk`, +313 lines), run **during a GitHub Actions outage**, so
+CI was not even a floor. The author reported ~50 local gates green, `selfcompile_emit` 40/40
+byte-identical, `engines` 562 fixtures 0 regressions. It would have merged on a green rollup.
+
+**Two reviewers, two briefs, and they found disjoint defect sets — neither found the other's:**
+
+| lens | brief | what it found |
+|---|---|---|
+| **correctness** | attack the code: precedence ladder, key scoping, over-widening, perf, driver lockstep | a **confirmed accept→reject S1** on ordinary code (two libraries sharing a field name), and a **super-quadratic** (r3 = 6.47 vs a hard 3.0) |
+| **claims** | attack the PROSE: PR body, commit message, code comments, fixture headers, ratchet reason strings | a **false guarantee shipped in three durable places** incl. a ratchet reason string, and a "derived, not assumed" claim whose grep **structurally could not match** the declaration it was asked about |
+
+A single general reviewer spends its budget on the diff and skims the narrative. **Brief the
+second one that the narrative IS the diff.** This arc's standing finding — *nine reviews, nine
+findings, almost all in prose* — is the reason, and it kept holding.
+
+**Both lenses must build a BASELINE binary from the merge-base.** Every before/after number in a
+PR body is a claim. The correctness reviewer's S1 was found by re-deriving the author's own
+before-column and getting a different answer.
+
+### The counterfactual is the review step people skip, and it inverted twice
+
+*"I added a generator so the gate can see this defect"* is not a gate until someone runs it
+**against a bug-present binary**. Measured here: the first generator read **`ok`** (r2 = 2.38) on
+the very defect it was added for — the ALLOC arm, which the file's own header calls the primary
+deterministic verdict; it reddened only via TIME, by 3.6 %, on the signal this repo distrusts.
+The fix was in the generator's own text (it already used a K-multiplier for the interface half
+and explained why). After strengthening: ALLOC r2 = **5.41**, decisively red.
+
+**Same for any "this fixture guards X" claim** — stub the thing back in and confirm red. A
+fixture that passes with the feature disabled is testing nothing, and this tree keeps producing
+them (the retired #66 row was a *permanently*-unfailable pin that no fix could ever have flipped).
+
+### 🚨 A fix for "your enumeration is incomplete" can be to DELETE the enumeration
+
+Round 1 flagged the PR's severity-direction section as under-enumerating. **Round 2 dropped the
+section entirely** — and *neither* reviewer caught it, because both were hunting a **wrong** claim,
+not an **absent** one. It surfaced only in the author's own round-3 report.
+
+**Add "what did the last round REMOVE?" to a delta-review brief.** A diff of the prose, not just
+of the code.
+
+### Hedges die in the handoff — twice, the second time inside the fix for it
+
+An agent's report to you labels its claims (*"inferred, not instrumented"*); **the PR ships them
+flat**. I then restated the agent's labels to a reviewer as a property of the PR — the third time
+in this arc that the claim reaching past its evidence was an *orchestrator brief*. Corrected the
+author, and round 2 announced the fix as landed **inside the section named for that split** while
+the diff touched the function **zero** times.
+
+**Verify the artifact, never the report** — `git diff <prev> <new> -- <file> | grep -c <symbol>`
+costs one command. The instinct to report upward and consider it delivered survives an explicit
+correction, so check rather than re-ask. See `feedback_epistemic_labels_die_in_the_handoff`.
+
+### Two adjudications worth reusing
+
+- **"A variant still reproduces" is NOT grounds to keep a pin.** The test is whether the
+  *variant's control* still discriminates the filed defect. Here the value-only spelling failed
+  **with no re-exporter at all**, so it was a different defect (filed separately, pinned) rather
+  than evidence the original was undrained. Treating them as one would have made the eventual
+  drain name the wrong issue — which the one-fixture-per-issue rule exists to prevent.
+- **Prefer REMOVING a half to repairing it out of scope.** Three of four blockers lived in one
+  call chain whose correct predicate turned out to be a *different analysis* (type reachability,
+  not constructor spelling). The author removed that half and stated plainly, in a box rather than
+  a footnote, which tracker row is therefore **not** drained. A narrower PR with an honest gap
+  beats a wider one with a quiet regression — but only if the gap is recorded at equal strength in
+  every durable place (ratchet row, source comment, commit message, PR body). Grep for the stale
+  footnote; that is the failure mode of an honest headline.
+
+## The typecheck arc, 2026-08-07/08 — eight merges, and the biggest defect source was MY OWN PROSE
+
+Eight PRs merged (#1389, #1393, #1395, #1390, #1410, #1381, #1411, #1415), two S0s closed, six
+issues filed. **Fifteen review passes, fifteen real findings, zero PRs correct as first
+submitted** — every one green on all twelve checks beforehand. The base rate has not decayed.
+What follows is only what generalises.
+
+### ⭐⭐ The orchestrator's PR body is the one artifact with no reviewer
+
+**The plurality of blocking findings this session were in text I wrote, not in agent code.** Agent
+diffs got two adversarial lenses each; the body I wrapped around them got none until a lens
+happened to read it — and a PR body becomes the merge commit message.
+
+- A **round-1 rationale surviving into a round-2 body** (#1393): it still asserted the exact
+  framing the round-2 source retracts in a 🚨 block.
+- A **stale count** (#1390): "exactly two deviations" after review moved it to three — in a PR
+  where a claims lens had already *certified* "two" as true against the artifact.
+- A **diffstat that was neither figure**: `+144/−10` — a net insertion count paired with a
+  *summed* deletion count. ⚠️ **Round diffs do not compose additively** when a later round
+  deletes text an earlier one added. State the true net or the true sum, never one field of each.
+- A **fabricated line number** relayed into a brief, and a **reviewer's overcount** ("two source
+  comments"; there was one) passed through verbatim, costing an auditor a cycle hunting it.
+
+**Every one was a number or a `file:line` I had not run.** Countermeasures, all cheap:
+brief the claims lens at **the body, not just the diff**; re-read the body after every fix round;
+and **never quote a repo-wide count** (`docs-links` references, symbol claims, corpus totals) —
+it is a property of the whole tree at run time, `main` moves under concurrent work, and the only
+durable assertion such a run makes is **0 dead**.
+
+### ⭐⭐ A faithfulness check can CERTIFY the property that is the defect
+
+#1390 restored three spec clauses a 173-line hunk had silently deleted three weeks earlier. The
+claims lens machine-diffed the restoration and **confirmed "verbatim, exactly two deviations."**
+The rules lens then found that **the verbatim-ness was the defect**: the restored clause asserted
+something true when written and falsified by a ruling that landed *while the clause was absent* —
+so nobody reconciled it, and a faithful restore reintroduced the very "one question, two answers"
+defect the issue existed to drain.
+
+**A restore, revert, or cherry-pick is never a null change. Measure the licensing delta against
+CURRENT `main`, never against the point of deletion** — "every sentence stood here until commit X"
+is a claim about history, not about obligation. And **text that was absent while a ruling landed
+is the highest-risk text in the tree**: it is precisely what no reconciliation pass looked at.
+
+Neither lens found the other's defect. This is the sharpest argument yet for the split.
+
+### ⭐⭐ Test every warning the author WROTE against the author's own diff
+
+Twice this session a PR's own comment stated precisely the rule its change broke. #1393's new
+comment read *"Over-offering is not additive: the entry it manufactures SHADOWS whatever the front
+end actually bound"* — written to justify deleting one arm, while the same diff added a new
+over-offering path that adversarial review confirmed as a regression. #1381's review found the same
+shape one PR earlier.
+
+An author who writes a warning has the right rule in hand and lacks only the reflex to turn it on
+their own change. **Grep the diff for every normative sentence it adds and evaluate each as a claim
+about that diff.** Put it in the review brief.
+
+Its mechanism generalises: **a correspondence claim between two code paths must be checked at the
+DATA level, not the control-flow level.** #1393's argument was that one function now mirrors
+another "arm for arm." The arms did mirror; the *tables underneath* did not (one gated on
+visibility, one did not), so a correctly-shaped question was asked of a wrongly-scoped set.
+
+### ⚠️ A two-call state check FAKES a merge-queue bounce
+
+My watcher reported `#1393 BOUNCED`. It had merged. The loop read PR `state` and `isInMergeQueue`
+in **two separate calls**, and the merge completed between them — a bounce and a merge both drive
+`isInMergeQueue` to `false` and differ *only* by `state`. On seeing `queued=false` after having
+been queued, **re-read `state` and decide on the fresh value**; then confirm any terminal verdict
+against the artifact (`git merge-base --is-ancestor <tip> origin/main`), never the watcher's word.
+
+Note the direction: a watcher built to catch a *silent* failure produced a *false alarm* — the
+cheaper direction, but a tripwire that cries wolf is one annoyance away from being widened.
+
+### 🚨 "Resolves but isn't true" — citation currency is what nothing checks
+
+Four findings across two rounds were citations that **resolved** and were **wrong**: right file /
+wrong line, right quote / expired premise, right file / wrong content, right sentence / inside a
+block marked `[REPLACED]`. All four passed a citation audit.
+
+The mechanism is a **seam between two gates**: `check_doc_links.sh` strips a trailing `:NNN` before
+validating (its own header says so) and `agent-doc-symbols` grades backticked symbols — so a
+`path:line` citation is checked for path existence and **nothing else**. Neither gate is buggy; the
+class is uncovered by construction. Evidence recorded on **#1197**.
+
+⚠️ **A rebase alone invalidates line citations without touching a byte of the cited file** — so
+"re-derived against the parent" can be true when written and false when merged. I did this to my
+own agent's work. **Cite compiler internals by symbol name**, which the gates actually check.
+
+### ⚠️ Two landing hazards, both nearly shipped
+
+- **A closing keyword inside a sentence that means the opposite.** *"whoever **fixes #1216** must
+  drain BOTH arms"* sat in a PR body **and** a commit message. GitHub pattern-matches
+  `fix(es)?\s+#\d+` and scans commit messages landing on the default branch — it does not read
+  English. #1216 was the live S0 the merge decision depended on staying open. **Add the grep to the
+  review checklist**: `grep -inE '(close[sd]?|fix(e[sd])?|resolve[sd]?)[[:space:]]+#(N…)'` over the
+  body *and* the message. This repo's memory already flags the trap four times and it still shipped.
+- **An agent amending a pushed commit that a reviewer has seen.** One agent amended with real
+  content changes and force-pushed; the reviewed SHA survived only in the reflog, and the
+  amendment carried **+113/−55 of unreviewed prose** that read as "the same reviewed change." A
+  sibling agent facing the same choice picked a follow-up commit *"so the reviewer's approved SHA
+  stays intact and the delta is reviewable"* — that is the right default. **Say so in the brief**,
+  and pin the reviewed SHA (`git branch preserve/<pr>-reviewed-<sha>`) before allowing a rewrite.
+
+### ⭐ Two adjudications worth reusing
+
+- **A prescription that mispredicts once should be demoted, loudly, in the next brief.** The
+  recorded plan was that a mangler fix would drain a record-layout S0. It did not — the S0's filed
+  root cause was itself wrong (it blamed both emitters; the emitters were correct and typecheck's
+  stamp was not). When the next agent was aimed at that S0, the brief said explicitly *"this route
+  has already mispredicted once; choose your own fix site."* It found the real cause in one probe.
+  **Correct the issue body when a root cause is disproved** — the next reader inherits it otherwise.
+- **"Land with pins" is a legitimate answer to a severity-increase finding when the defect is
+  PRE-EXISTING and the control proves it.** A unit's accept-widening routed new programs into a
+  silent divergence — but a control showed the same graph already reached it on `main`. The unit
+  widened *reachability*, not the defect. Landed with a must-fail pin plus the disclosure re-graded
+  from S1-loud to S0-silent. The discriminator is the control, not the severity label.
+
+## The shadow arc + wrap-up, 2026-08-08/09 — an UNDER-SPECIFIED RULE relocates its defect
+
+PR #1419 (#1353/#1354 unit A) took **eight review rounds**, and three of them *introduced* a
+new S0 while fixing the last. Six issues filed; three pinned in-arc, the other three closed out
+here. What follows is only what generalises.
+
+### ⭐⭐ An under-specified rule produces ONE DEFECT PER ROUND, at a DIFFERENT SITE
+
+Rounds 3, 4 and 5 of #1419 each shipped a fresh S0. The cause was **not a weak implementer**.
+The question *"which namespace is 'nameable in M' evaluated in"* had **no ruling**, so every
+round guessed — and guessed somewhere else, because the previous guess had been patched at the
+site the last review named.
+
+**The tell is a defect that RELOCATES rather than recurs.** A recurring defect means the
+implementer did not learn; a relocating one means there is nothing to learn *from* — the rule
+being implemented does not exist yet. When you see round N's fix hold and round N+1 break the
+same property one function over, **stop briefing fixes and go rule the spec.**
+
+Adopting S1-NS mid-arc converted *"try harder"* into *"here is the clause you violate."* The
+final fix then **deleted a predicate instead of adding a fourth** — after which the invariant
+holds by construction rather than by three agreeing call sites. Prefer the shape that removes
+a decision point; it is the only kind of fix that cannot relocate.
+
+### ⭐⭐ When the same CLASS recurs, ask for the ENUMERATION, not the patch
+
+Three consecutive rounds each fixed the lying comments they were **shown** — and each left a
+sibling behind: one of two, then two of three, then three of four. Every round was a correct
+fix to an incorrectly-scoped question.
+
+One sweep — *"enumerate every comment claiming something about these symbols and verify each"* —
+found **five more**, including a **fourth copy in `test/registry_keying_ratchet.sh`**, a file
+nobody had opened in eight rounds of review. A reviewer citing instances hands the author a
+list; the author fixes the list. **Make the enumeration the deliverable**, and name the symbol
+(`selectIfaceRows`, `rpNames`) rather than the file — the claims travel.
+
+Nothing mechanises this today: the two doc gates check that a cited **path** exists and that a
+backticked **symbol** resolves, and neither reads `.mdk` or `.sh` comments at all, which is
+where most such claims live. Filed as **#1432**. Until it exists, the sweep is the only
+defence, and its scope is itself an unchecked claim — so state the scope you swept.
+
+### ⭐⭐ I asserted a set was CLOSED twice, both times by enumerating the WRONG LEVEL
+
+- *"The consumer set is closed at two sites."* I had counted consumers of the two **sets**. The
+  decision surface was one level down, at the **row selectors** — three of them, one carrying a
+  live S1.
+- *"The closure invariant holds by construction."* I had counted selectors **and** sets. The
+  property was about **inputs to dispatch**, and `rpNames` was a third input that bypassed the
+  predicate entirely. That one was an S0.
+
+Both times I enumerated **what the change TOUCHED** and called it a property of **what I was
+CLAIMING**. Those are different sets and nothing warns you when they diverge. Before writing
+"closed", "exhaustive", or "by construction": *name the property, then enumerate its inputs* —
+starting from the consumer and working backwards, never from the diff forwards.
+
+### ⚠️ Agent liveness needs TWO artifacts, and WHICH two changes
+
+Three distinct false-stall shapes in one session, each of which would have been misread from a
+single signal:
+
+| shape | what looked dead | the artifact that proved otherwise |
+|---|---|---|
+| mid-build | git metadata stale for minutes | the **binary's** mtime |
+| mid-probe | binary stale (nothing rebuilding) | the **emit/log file** growing |
+| mid-read-then-build | BOTH stale ~10 min | a later binary appearing |
+
+**Low load average is never a stall signal** — an agent reading files pins nothing. Check the
+emit file **and** the build artifacts before concluding anything, and note that the pair that
+discriminates changes with the phase: neither artifact alone is sufficient in all three shapes.
+
+### 🚨 The PID-poll idiom the playbook mandates is BLOCKED, and the block message routes you toward a yield
+
+The `until kill -0 $PID` form this playbook has been recommending is refused by the harness
+classifier, and the refusal text points at the **Monitor** tool. An agent followed that route
+and **died with its work uncommitted**, having ended its turn waiting on a notification that
+never reached it.
+
+⚠️ **State the mechanism, not a quotation.** This paragraph originally claimed Monitor's own
+description says *"do not poll or sleep"* — **it does not; that phrasing was mine, in quotation
+marks, and a review caught it.** What is true is the shape: the Bash refusal steers you to
+Monitor, Monitor is built to notify rather than be polled, and an agent bounced between the two
+lands on "wait for the notification" — which is the one thing that kills it. **A fabricated
+quotation is worse than a paraphrase**: it survives review by looking checkable.
+
+**The correct form is `run_in_background: true` on a SINGLE bounded command** — one command, no
+`&`, no wrapper loop, and never end a turn waiting on a notification. Put that form in the
+prompt itself; an agent handed the bare `until` loop will hit the block and then improvise.
+
+### ⚠️ A multi-round PR body is a LEDGER, and REVERTS DO NOT SELF-DRAIN FROM IT
+
+Rounds 2, 4 and 5 each caught the body's "helpers" section naming symbols that a **later revert
+had deleted**. Additions get written into the body as they land; removals do not remove
+themselves, so the body drifts in exactly one direction — toward claiming more than the diff
+contains, which is the direction a reader cannot detect.
+
+**After ANY revert, re-audit the body's symbol lists.** Better, and what finally worked here:
+**derive them from the selfproc LEG A golden** rather than writing them by hand — the golden is
+recut from the tree, so a reverted symbol disappears from it without anyone remembering to look.
+This is the PR-body-has-no-reviewer lesson (previous section) with a mechanical fix attached.

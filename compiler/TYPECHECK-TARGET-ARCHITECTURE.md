@@ -135,12 +135,68 @@ HM-core/dispatch file split.
 ### R — Identity (in `resolve.mdk`, upstream of typecheck)
 
 Resolve assigns every declaration a qualified identity `(originModule, name)` and
-resolves every occurrence to it, for **all** namespaces: values (already done via
-binder ids), types, aliases, interfaces, interface methods, records/fields,
-constructors. Two modules may declare the same name; the collision surfaces at a
-*use site* as an ambiguity diagnostic (`Ambiguous occurrence`), never at the
-declaration, never silently (decided: Haskell/Rust model). The AST carries the
-resolution — `DInterface`/`DImpl`/`TyCon` reference identities, not spellings.
+resolves every occurrence to it, for **all** namespaces: values, types, aliases,
+interfaces, interface methods, records/fields, constructors. Two modules may
+declare the same name; the collision surfaces at a *use site* as an ambiguity
+diagnostic (`Ambiguous occurrence`), never at the declaration, never silently
+(decided: Haskell/Rust model). The AST carries the resolution —
+`DInterface`/`DImpl`/`TyCon` reference identities, not spellings.
+
+🚨 **CORRECTION (2026-08-05): the value namespace is NOT already done, and the
+sentence above used to claim it was.** It read *"values (already done via binder
+ids), types, aliases, …"* — a parenthetical nobody re-derived, and the only
+namespace this document ever exempted from Stage A. Re-derived against `main`
+@ `73ceccdd`, what binder ids actually provide is **intra-module and per-run**
+identity, and nothing else:
+
+- They are sequential integers over one decl list, with **no module component**:
+  `stampBindingIds decls = let top = numberFrom 1 (dedup (topBinderNames decls))`
+  (`compiler/frontend/resolve.mdk:3402-3403`).
+- They are minted **inside typecheck**, not at resolve. The one call is
+  `let stampRes = stampBindingIds prog` (`compiler/types/typecheck.mdk:15447`),
+  in the body of `checkBodyImpl` (`compiler/types/typecheck.mdk:15432`) — and
+  `prog` there is the *current pass's* declaration list (on `Module`, one
+  module's decls; on `Flat`, `coreProg ++ prog0`), so two modules' bindings are
+  independently numbered from 1.
+
+**Per-run integers do not cross a module boundary.** The value namespace
+therefore has identity **within** a module and none **across** one — which is the
+only place any defect in family A lives.
+
+This document already said the true thing one paragraph down and never propagated
+it into the claim above: the *Honesty about scope* paragraph immediately
+following calls value binder ids "the one identity precedent" and records that
+they are "minted by `stampBindingIds` *inside* `checkBodyImpl`, per run".
+`docs/spec/DICT-SEMANTICS.md`'s §11 **I4** row states it at full strength — value
+binder ids "are per-run integers, not `(module, name)`"
+(`docs/spec/DICT-SEMANTICS.md:2138`). ⚠️ That row's own two line citations for it
+are stale (`compiler/frontend/resolve.mdk:3106`, `compiler/types/typecheck.mdk:13798`);
+the live ones are the two above, re-derived here exactly as §11's preamble
+instructs. The *claim* is correct; only its coordinates had rotted.
+
+**Two live defects are that seam failing in opposite directions**, which is the
+evidence they are one unit rather than two bugs: **#1326** (S1, `verified`) — a
+same-named cross-module binding's context is attributed to an *unconstrained*
+sibling, so a legal program is rejected at its own call site (fails **closed**);
+and the **re-export residual on #845** — a declared context is not found across
+one `export import` hop, so the obligation is never checked and `check` greens
+(fails **open**). Both ask *"which `(module, name)` does this local spelling
+denote?"* of **import syntax** rather than of resolve. Adjudications: the
+2026-08-05 comments on #1326, #845 and epic #1122.
+
+**Not this seam, and named here so the scope does not drift:** #1330 and the
+`Debug (Int -> Int)` residual on #792 are POLICY defects on channels whose keys
+are correct for their job, adjudicated 2026-08-05 onto B-3-ext (#1114). Identity
+work cannot drain either — #1330's dedup key has already been through A-2's
+re-key and still merges two predicates with the identical `TCon "__tuple2__"`
+head.
+
+**Why this is recorded as a correction rather than silently edited:** a wrong
+*"already done"* is worse than a missing entry. A missing entry gets noticed at
+scoping; an "already done" is the reason nobody looks. That is not a hypothetical
+here — the 2026-08-05 architecture audit adjudicated four defects and **two of
+them landed on no filed owner, both in this one gap** (#1122). §6's Stage A tail
+now carries the owed unit; §4 family A marks its drains ◇A-values.
 
 Honesty about scope: today resolve does **not** resolve type/interface names at
 all (`checkType` checks existence; type-name→origin resolution happens inside
@@ -206,8 +262,13 @@ keyed by qualified identity, **assembled once and never per-module**:
 
 **Why whole-graph is load-bearing, not a style choice.** C4 (single instance
 environment) and I2 (global `IE` after import resolution) are *spec clauses*.
-The current architecture approximates them by marshalling 14-cell universe
-snapshots per module (`loadDataUniverse`/`storeDataUniverse`/
+The current architecture approximates them by marshalling per-module universe
+snapshots — the cells are the `universe*`/`obUniv*` fields on the driver
+record; derive the count rather than trust a number here (23 as of this
+writing):
+`grep -rn '^\s*universe[A-Za-z0-9_]* *:' compiler/ stdlib/ | grep -v '\.md:'`
+plus `grep -rn '^\s*obUniv[A-Za-z0-9_]* *:' compiler/ --include=*.mdk`
+(`loadDataUniverse`/`storeDataUniverse`/
 `appendUniverseAccums`) — and the approximation is exactly where #1072 lives:
 a site's module sees only its own slice of `IE`, concludes there is no
 collision at a head, and stamps a bare-head key that the emitter then ORs into
@@ -672,20 +733,30 @@ marker drain at the family's own stage.
 
 | Family | Structural cause (today) | Design element (target) | Open issues drained |
 |---|---|---|---|
-| A. Bare-name cross-module collision | Identity never acquired at resolve; tables faithfully reflect a pre-collapsed namespace | L2/R: qualified identity substrate; K: identity-keyed environments; registry ratchet | #1047, #1069, #1070 (5 of 7 confirmed + method tables), #1092, #1090 (comment), #733, #756 |
+| A. Bare-name cross-module collision | Identity never acquired at resolve; tables faithfully reflect a pre-collapsed namespace | L2/R: qualified identity substrate; K: identity-keyed environments; registry ratchet | #1047, #1069, #1070 (5 of 7 confirmed + method tables), #1092, #1090 (comment), #733, #756; **the VALUE half** — #1326 ◇A-values, the `export import` residual on #845 — ⚠️ **MEASURED AND DRAINED by #1114/PR #1328**, not pending: it was listed here while its observable was still *predicted from a diff*; it has since been run (`check` 0 · `run` `unknown op '+'` · `build` **0, binary written** · that binary **139, segfault**) and repaired by attributing what a module RE-EXPORTS, at depth 1 and 2, pinned in `run_check_agreement_fixtures/`. **#1337 keeps #1326** and the wildcard read-key question; it no longer has a fails-open member (unit **#1337**; §2 R's correction; §6 Stage A tail) |
 | B. Dispatch key under-discriminates | Selection re-derived downstream from keys coarser than instance identity (bare head tycon; per-module `IE` slice; superset word-sets) | S: one `min⊑` selector at `inst`; evidence references stamped; frozen admissibility; K: global `IE`; emitter word-set retirement | #1072, #1071, #1062; #1046 ◇F-1, #1075 ◇F-1 (both reach dispatch through a local lambda — arg-tag survives at their sites until locals carry evidence); #1068 ◇B-2-wasm |
 | C. Locals not dict-abstracted | `gen` applied at only two binder kinds; interim pin merges rigid vars | L4/E: uniform `gen` at every binder (#1082, gated on S-2(f)) | #1040, #1043, #1052 (and the #866-interim pin retires; #866/#1045 themselves are CLOSED) |
 | D. Impl/default & Flat/Module forks | Two implementations of one judgment kept in sync by hand | L1/E: `MethodBodyKind` merge; one driver, one stamper order | #992, #873-class, #462 ◇E-2, map §7.6 (unfiled → task E-2) |
 | E. Supers flattened & re-resolved | No `entailSuper`; evidence is a flat slot list; 4 duplicate closure walks | L4/S: tree evidence, projection rung, one closure combinator | #993, #679, #741; #323 ◇B-1-scope (drains only if the evidence tree extends to *recursive instance-context* capture and both engines consume it — #993 as filed is supers-scoped; B-1's design doc must decide this) |
 | F. Effects rules with unreached arms | Row unifier's leniency is per-arm, position-blind; polarity not computed; coverage counts promises as charges | I/G: per-parameter polarity + index invariance; eliminator obligation; collection-domain fix | #1094-class (spec'd), #1098, #1100, #1103, #797 ◇D-1; #1095 ◇graded-arc (if #823 resolves to the uncharged-signature option, the launder stays representable and only the arc closes it) |
 | G. Laundering via method schemes | W3 checked with flexible vars in places; carve-out for Async | G: W3 rigid everywhere; #803 bound keeps pre-unify placement | #830 (gen-sig authority), #819 (adjacent); #817 ◇graded-arc, #825 ◇graded-arc (the arc is a peer, not a subtask — these drain there, not here) |
-| H. Obligation storage & deferral drift | 2 storage shapes, dead provenance arms, bespoke numlit channel; deferral policy per-channel by accident | I/S: #991 completion; ONE written deferral policy (B-3's scope); defaulting as specified quiescence step | #991, #563, #564; #845 ◇B-3 (selective-import spelling reaches the declared-obligation channel), #792 ◇B-3 (check-vs-build deferral policy) |
+| H. Obligation storage & deferral drift | 2 storage shapes, dead provenance arms, bespoke numlit channel; deferral policy per-channel by accident | I/S: #991 completion; ONE written deferral policy (B-3's scope — **LANDED as DICT-SEMANTICS §4.2 D1–D6 + its §11 rows**, #1114); defaulting as specified quiescence step | #991, #563, #564; **#845 and #792 DRAINED (#1114)** — pinned by `run_check_agreement` fixtures, two shapes each. ⚠️ **They are NOT one rule between them**, though a draft of this row said so ("both were D1 violations"): #792 is `DICT §4.2` **OD1** (a channel *discarded* a decidable predicate — one of OD1's four named discard mechanisms), whereas #845 is **OD2/OD6(a)** — no channel discarded anything, the cross-module *store* never held the predicate, which is a missing store rather than a discard. §6 B-3's own summary of the fix says the same thing in the implementation's vocabulary ("adds a store with a key" vs "changes a rollback's predicate"). ⚠️ **#845's mechanism as filed here and in the issue was wrong**, corrected by measurement rather than reading: the discriminator is **declared-vs-inferred context**, not the import spelling. A signed callee's `Num a =>` was already checked through `import m.{f}` before #1114; an *unsignatured* one was dropped through **every** cross-module spelling, because the store the check path read (`funConstraintsRef`, whose inferred half is `dictEligibleSetRef`-gated) holds only declared contexts. Independently, `import m.*` and `import m as A` dropped it for a **signed** callee too — so the real defect was a 2×3 matrix, and a fix matched to the filed spelling would have drained one cell of six |
 | I. Order-dependent results the spec forbids | Per-module env slices; promotion discard-and-redo; two stamper orders | L3/K/E: whole-graph env, scheduled marking, one order table — ◇S-2(b) (the commitment-timing rule is what makes the schedule order-free for non-generalized bindings) | #1072 (also B), letrec order (owed spec) |
 | J. Coherence condition mismatch | Enforced (a) global comparability vs spec'd (c) per-goal minimum | G: per-goal unique-minimum check at `inst` | #311, #614 |
 | K. Registry recurrence risk | Nothing prevents the next bare-name table | Registry ratchet (structural check, all bundles + engine frames) | #1070's "owed gate" |
 
 Hygiene items (#176 ref-growth probe, #480 duplicate loc-helpers) ride along
 with the stages that touch their code and are listed in §6 rather than here.
+
+⚠️ **#845 is deliberately SPLIT across families H and A, and reading either row
+alone misreports it.** Its filed subject — a cross-module constrained callee not
+obligation-checked at its call site — is a deferral-POLICY defect and belongs to
+family H / B-3-ext (#1114). Its **re-export residual** is a different mechanism
+in the same issue: the store's write key is the *definer* module and its read key
+is the module the *importer* spelled, so one `export import` hop misses. That is
+family A's keying defect one namespace over from #1283, and no policy rule
+decides which binding a local spelling denotes. Family H's cell governs the
+first; the ◇A-values marks above govern the second.
 
 **Explicitly NOT in this matrix (engine-realization defects — architecture
 cannot drain them, and claiming so would mislead §7's capture-ban logic):**
@@ -923,7 +994,7 @@ orders merges, and the plan does not pretend otherwise.
   *whether* a binder abstracts a dictionary parameter, not about how an
   identity key is represented, so it is dropped from this decision's
   grounds rather than stretched to cover it.) A-1's own PR answers the
-  standing five questions in `.claude/workstreams/TYPECHECK.md` as part of
+  standing questions in `.claude/workstreams/TYPECHECK.md` as part of
   making that decision, weighing the §2 bullet's three considerations —
   source safety, then L2 enforceability, then allocation — in that order.
 
@@ -968,8 +1039,14 @@ orders merges, and the plan does not pretend otherwise.
   selfproc-legA "additive-only" recapture rule is explicitly waived per-PR
   with justification where existing bindings' rendered schemes change.
   **Folded in from the withdrawn A-1a: identity must reach `Mono`/`TCon`,
-  not stop at the AST decl layer.** `compiler/types/typecheck.mdk`'s `Mono`
-  declares a bare `TCon String` arm, and #1070's own remedy states a shared
+  not stop at the AST decl layer.** ✅ **Landed as A-1 unit D (#1110):**
+  `compiler/types/typecheck.mdk`'s `Mono` declares `TCon String
+  TyConOrigin`, minted through four named helpers that
+  `test/typecheck_compiler_source.sh` pins as the only construction sites.
+  Carrier only — no comparison reads the field yet. The paragraph below
+  described the pre-unit-D state (`a bare TCon String arm`) and is kept
+  because its *bounding* argument is unaffected: #1070's own remedy states
+  a shared
   `(module, name)` keying helper is insufficient for five of its seven rows
   (`universeDataParamKinds`, `universeIfaceParamKinds`, `universeAliasTable`,
   `universeRecordByName`, `universeDataEnv`) — but #1070's own "precisely
@@ -1048,11 +1125,92 @@ orders merges, and the plan does not pretend otherwise.
   body**: its priority-1 remedy (reject-at-decl) is superseded by the decided
   use-site-ambiguity model. *Drains #1047/#1069/#1092/#1090; #1070 umbrella
   closes when its audit rows are all drained or reclassified.*
+- **A-values #1337 (A-2 tail). Cross-module identity for the VALUE namespace — a
+  SCOPING PASS, not an implementation plan.** Added 2026-08-05 with §2 R's
+  correction: values were the one namespace this document exempted from Stage A,
+  and the exemption was wrong. Peer of **#1319** (the constructor namespace,
+  filed the same day, likewise an A-2 follow-on); with #1280/#1317 (types and
+  the dispatch-key demand half) the two complete **the four-namespace set**.
+
+  **The pass's question, stated so it can be answered wrong:** *what makes a
+  value occurrence denote a `(module, name)` rather than a spelling, and which
+  read sites must consume it?* Members on the table at scoping: **#1326** (fails
+  closed — false reject) and the **`export import` residual on #845** (fails
+  open — dropped obligation). One un-keyed name-resolution seam producing a
+  false positive in one direction and a false negative in the other is the
+  argument for one unit rather than two patches; the pass's first job is to
+  confirm or refute it.
+
+  ⚠️ **UPDATE (#1114 / PR #1328): the fails-OPEN member is drained, and that is
+  evidence bearing on the one-seam hypothesis rather than merely a smaller
+  membership.** Its observable was recorded here as *predicted, not measured*; it
+  has now been measured and repaired — and repaired **without any occurrence →
+  module resolution work**, purely by making the *write* side's notion of what a
+  module contributes match the language's (declares ∪ re-exports), reusing the
+  import side's own spelling table. No new AST carrier, no change at the read
+  site. So the pass's question 1 is answered **for that member**, in the
+  negative, and the two members are not obviously one seam after all. **#1326 is
+  untouched and still reproduces** (re-confirmed with #1328's own lookup ablated
+  and with both bindings signatured), as does the wildcard read-key question —
+  `importDefinersOf` is still built from import syntax only, and every other
+  consumer of `currentImportDefinersRef` still has that blind spot.
+
+  **Deliberately open — do NOT pre-decide** (per the epic's 2026-08-05
+  instrument note, *"stop pre-clustering residuals into guessed units; scoping
+  passes partition them"*; the epic's own ledger records A-2's plan errors as
+  *"carriers predicted necessary weren't; a false dependency; defect scopes too
+  narrow"* — every prediction wrong in the same direction):
+  - whether a **new AST carrier** on value occurrences is needed at all, or the
+    resolution already reachable at the read site suffices;
+  - whether the remedy is a **keying** change (the tables ask for the wrong key)
+    or a **supply** change (nothing supplies an identity to key on) — types
+    needed both, split across #1280 and #1317;
+  - whether **#1326's live read site is one place or two.** ⚠️ This is an
+    *unresolved inference*, not a finding. Two candidates are named on the
+    issue: (1) `lookupSchemeObls x 0` degrading to `lookupSchemeOblsByName`, a
+    bare-name first-match scan (`compiler/types/typecheck.mdk:7228-7241`) taken
+    for cross-module occurrences because they carry no binder id; (2) the
+    promotion fixpoint's scratch joint typecheck, in which two modules' `h`
+    become two top-level `h`s in one program — this document's own
+    "bare-name shadow collisions in the joint program" (§2 E). The *class*
+    verdict is stable across both, which is why the unit can be scoped before
+    the settling experiment; **one instrumented build settling which route
+    records the predicate is owed work, and E-4 is not a substitute** (it
+    retires route (2) by construction, but per-run integer binder ids do not
+    become `(module, name)` because the flatten went away).
+
+  **Dependency on A-3 (#1112), derived rather than assumed: independent — this
+  unit neither precedes nor follows it.** A-3 supplies **no part** of value
+  identity, because none of its three environments holds a value binding: CE is
+  interfaces / method schemes / supers, IE is impls, DataEnv is datatypes /
+  constructor schemes / records / aliases (§2 K, and #1112's own body). A
+  binding's scheme and its deferred predicate set live in the obligation and
+  scheme stores — §3's L4 row homes those in I/S, i.e. B-3's storage, not K's.
+  Nor does A-3 *consume* value identity: what it keys on is type-head identity
+  (#1280/#1317's supply) and, for its ctor rows, constructor identity (#1319).
+  **The #1280-before-A-3 argument therefore does not transfer**: that ordering
+  exists because A-3's environments *are* keyed by type-head identity, so
+  building them under the transitional absence rule would bake it into the new
+  substrate — there is no value-keyed environment in K for this unit's absence
+  to be baked into. *The one thing that would overturn this verdict, stated so
+  it is checkable: if a scoping pass grows K to include a whole-graph **value**
+  environment (a global scheme environment), A-3 becomes a consumer and the
+  ordering must be re-derived. Neither §2 K nor #1112 proposes one today.*
+
+  *Otherwise unblocked and off the spine, exactly like #1319 — name identity,
+  not origin supply. Serialize only on the one-typecheck.mdk-PR-in-flight rule.
+  Severity-direction warning for whoever takes it: #1326 is an over-rejection,
+  and the tempting local fixes (widen the import-definer test; suppress the
+  bare-name fallback) convert a false reject into a dropped obligation — loud →
+  silent, a severity increase, and untestable from the diff by construction
+  since every existing fixture for this channel covers the rejecting case.*
 - **A-3. Whole-graph declaration analysis (K) — honest scope.** Build
   CE/IE/DataEnv once; the **Module path** reads K; the Flat fallback keeps a
-  marshalling **shim** (the 14-cell retirement completes at E-4, whose path is
-  the marshalling's only remaining consumer — teaching the fallback to read K
-  would mean editing the 20 mode branches E-2 deletes anyway). Impl
+  marshalling **shim** (the retirement of the universe-marshalling cells —
+  see §2 K above for how to derive their count rather than trust a bare
+  number — completes at E-4, whose path is the marshalling's only remaining
+  consumer — teaching the fallback to read K would mean editing the 20 mode
+  branches E-2 deletes anyway). Impl
   completeness + kind checks move to declaration time (**coordinate with #822**,
   which owns the kind machinery — one of the two arcs rewrites it, not both).
   Error-*ordering* golden drift is enumerated per family (this stage is
@@ -1187,6 +1345,13 @@ E-1 ⟶ E-2 ⟶ E-3 ⟶ E-4 ; B-3 anytime after S ; F-1 after C-1, E-2, and
 S-2(f) ; F-2/F-3 anytime after S. The graded arc (#822→#823→#824) runs as a
 peer, coordinating at A-3 (kind machinery) and D-3 (coverage rules).
 
+⚠️ **The spine above predates the 2026-08-05 audit, whose amendment on epic
+#1122 is authoritative over it** and refines Stage A's interior: `#1280 →
+#1317 → A-3 (#1112) → B-2 (#1113)`, with the two name-identity units — **#1319**
+(constructors) and **A-values (#1337)** (values, above) — running **parallel**, and
+#1114 parallel to the A-2 tail. Read the epic's stage table and its amendment
+comments, not this line, when sequencing new work.
+
 **Sizing honesty.** A is weeks of serialized work (every golden family moves at
 least once; "fleet-parallel" applies to development, not landing); B-1, B-2 and
 E-4 are the three design-first items; B-3/C-2/D-1/F-2/F-3 are single-PR sized.
@@ -1220,7 +1385,7 @@ whole arc.
   emitted IR (A at scale, B-2, F-1) runs the benchmark-emitter two-rebuild
   rule and the twice-run seed re-mint; a stale seed SEGFAULTing the fixpoint
   is a known failure mode, not a signal about the change.
-- **The standing five questions** (`.claude/workstreams/TYPECHECK.md`) apply to
+- **The standing questions** (`.claude/workstreams/TYPECHECK.md`) apply to
   every S0 fixed in passing; adversarial review is mandatory for every
   behavior-touching increment in B-1, B-2, E-2, E-4, F-1 (this seam produced
   confirmed S0s in three separate reviews during the #839/#840 arc).
@@ -1269,7 +1434,12 @@ whole arc.
   `docs/spec/SHADOW-SEMANTICS.md` — the governing semantics
 - `compiler/ARCH-REVIEW.md` (PASS 2), `compiler/DRIVER-COLLAPSE-PLAN.md` — prior
   structural verdicts this design keeps or completes
-- `.claude/workstreams/TYPECHECK.md` — the standing five-question gate
+- `.claude/workstreams/TYPECHECK.md` — the standing gate
 - Issues: **#1122 (the epic / stage tracker)**; #991–#995 (adopted),
   #1070/#1084 (family audits), #1082 (locals), #616 (conformance gate, adopted
-  into S-1), #820–#824 (graded arc, peer); filed by this arc: #1107–#1121
+  into S-1), #820–#824 (graded arc, peer); filed by this arc: #1107–#1121, plus
+  the 2026-08-05 audit's units — #1280/#1317 (type-side supply and demand),
+  #1318, #1319 (constructors) and **#1337** (values, §6's A-values). ⚠️ The
+  epic's own stage table and its amendment comments are authoritative over this
+  list and over §6's spine line; do not sequence from either without reading
+  them.

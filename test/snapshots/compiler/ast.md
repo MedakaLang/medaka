@@ -1,5 +1,5 @@
 # META
-source_lines=1254
+source_lines=1791
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted Medaka AST — mirror of lib/ast.ml's surface (pre-desugar) nodes,
@@ -62,8 +62,9 @@ public export data Loc = Loc String Int Int Int Int
 -- I6.3 corollary says a fabricated head must not be carried by the
 -- type-CONSTRUCTOR node at all — "carries no identity" has to be a structural
 -- fact about the node.  The surface AST already satisfies that: `TyVar` is a
--- separate constructor.  The violation the corollary names is at the `Mono`
--- level (`TCon String`, `types/typecheck.mdk`), which this PR does not touch.
+-- separate constructor.  The `Mono` level (`types/typecheck.mdk`) has since
+-- reached the same shape: #1110 PR "A" split `TRigid` out of `TCon`, and unit D
+-- gave `TCon` — and only `TCon` — a `TyConOrigin` field.
 --
 -- ⚠️ NOT an encoded/qualified string, and never renderable.  The printer
 -- projects a type through `tyConSurface` straight back into the user's source
@@ -87,10 +88,426 @@ public export data Loc = Loc String Int Int Int Int
 -- The inhabitant is reachable in the type and unreachable in the data; do not
 -- add a decl-layer producer for it, and do not read its absence as "cannot
 -- happen" at a consumer that also sees occurrence origins.
+--
+-- ── ALSO the INTERFACE-OCCURRENCE carrier (#1110 PR B) ───────────────────────
+-- `Constraint` / `Require` / `Super` / `DImpl` (below) each name an interface at
+-- a USE site, and they reuse this same type for the same reason the declaration
+-- layer does: `DInterface.ifaceOrigin` — the declaration these occurrences must
+-- eventually be compared AGAINST — is already a `TyConOrigin`, so a parallel
+-- `IfaceOrigin` would buy a conversion at exactly the seam (occurrence ↔ decl)
+-- that the comparison lives on.  `OriginBuiltin` is unreachable for an interface
+-- for the very same reason it is unreachable at the decl layer — an interface is
+-- always declared by some module (`Eq`/`Ord`/`Debug` by `stdlib/core.mdk`, i.e.
+-- `OriginModule "core"`) — so this widening adds no new dead inhabitant beyond
+-- the one the paragraph above already documents and accepts.
 public export data TyConOrigin =
   | OriginUnresolved
   | OriginBuiltin
   | OriginModule String
+
+-- ── the INTERFACE IDENTITY KEY (#1047, Stage A-2 unit A-2.9) ─────────────────
+-- §8 I4's `(originModule, name)` for an INTERFACE, rendered as ONE comparable
+-- string so the downstream registries (Core IR's `CImplDefault`, eval's default
+-- entries) can carry it in a plain `String` field rather than dragging
+-- `TyConOrigin` into `ir/`, `backend/` and `eval/`.  `::` cannot occur in a
+-- Medaka identifier, so `"b::Speak"` can never collide with a bare name — the
+-- same discipline as `resolve.ifaceKey`'s `iface:` tag and typecheck's
+-- `<iface>@<slot>`.
+--
+-- 🚨 `""` IS ABSENCE OF AN IDENTITY, NOT AN IDENTITY.  Resolve is explicit that
+-- no predicate may treat two `OriginUnresolved` origins as matching each other
+-- (`fillDeclOrigin`), and this function is the seam where that rule has to be
+-- enforced for every consumer at once — hence `ifaceIdMatches` right below it,
+-- which is the ONLY comparison any consumer may use.  `OriginBuiltin` is
+-- unreachable for an interface (the language provides none; `Eq`/`Ord`/`Debug`
+-- are declarations in `stdlib/core.mdk`), and it maps to absence for the same
+-- reason: there is no module to name.
+export ifaceIdentity : TyConOrigin -> String -> String
+ifaceIdentity (OriginModule m) name = "\{m}::\{name}"
+ifaceIdentity OriginUnresolved _ = ""
+ifaceIdentity OriginBuiltin _ = ""
+
+-- The ONLY legal comparison on two `ifaceIdentity` strings: absence never
+-- matches, not even itself.  A bare `==` would make two unstamped interfaces
+-- compare EQUAL, which is exactly the cross-module confusion the carrier exists
+-- to prevent (and which the flat/loader-less drivers would hit immediately,
+-- since they deliberately stamp nothing — see `stampFlatTyOrigins`).
+--
+-- ⚠️ `sameTyConHead` BELOW IS THE OPPOSITE RULE ON THE SAME ABSENCE, and the
+-- two are meant to be read together: this one answers a LOOKUP (a miss is
+-- loud, a false hit is silent), that one answers ACCEPTANCE (a false reject
+-- refuses a valid program).  Neither shape may be copied to the other site;
+-- the derivation is written at `sameTyConHead`.
+export ifaceIdMatches : String -> String -> Bool
+ifaceIdMatches a b = a != "" && a == b
+
+-- ── Cross-cutting identity substrate (#1111 A-2.0) ─────────────────────────
+-- `Ns` + `Ident` generalize `TyConOrigin` from "which module declared this
+-- TYPE head" to "which module declared this declaration, IN WHICH
+-- NAMESPACE" — the substrate the Stage A-2 table-conversion units (each its
+-- own PR) re-key their `universe*`/method/record/kind tables onto.  The
+-- `Registry`/`MultiRegistry`/`SetRegistry` combinators built on top of
+-- `Ident` live in `compiler/types/registry.mdk`: they need
+-- `support/ordmap.mdk`, a dependency this file has no other reason to gain.
+-- `Ns`/`IdentOrigin`/`Ident` are plain data with no such dependency, so they
+-- sit beside the `TyConOrigin` they are derived from.
+--
+-- ── Gate cost of that split — MEASURED 2026-08-03 ──────────────────────────
+-- ⚠️ DERIVE, do not trust these three numbers.  One command per path:
+--   PREFLIGHT_DRY=1 PREFLIGHT_CHANGED_FILE=<file naming ONE path> sh test/preflight.sh
+-- As measured on this tree: `compiler/frontend/ast.mdk` selects **16** gates;
+-- `compiler/types/registry.mdk` selects **25** — the byte-identical set that
+-- `compiler/types/typecheck.mdk` selects, so the new module costs a later
+-- A-2 unit NOTHING (each such unit edits `typecheck.mdk` anyway).
+-- `compiler/support/util.mdk` selects **103** (`test/preflight.sh`'s
+-- `mark_full` blast-radius arm), which is the actual reason the combinators
+-- are not in `compiler/support/`.
+-- 🚨 An earlier draft of this comment called `ast.mdk` a "~26-gate import
+-- surface" and `types/registry.mdk` "narrower".  Both numbers were invented
+-- and the COMPARISON WAS INVERTED — `ast.mdk` is the narrower of the two
+-- (16 < 25).  The split is therefore justified by the `support/` figure
+-- above and by the dependency direction, NOT by ast-vs-registry gate counts.
+--
+-- SIX namespaces, matching the six declaration kinds #1070 catalogs as
+-- distinct collision surfaces: a type name, an interface name, an interface
+-- method name, a data/newtype constructor name, a record field name, and an
+-- ordinary top-level value name are six independent spellings-may-collide
+-- domains.  MEASURED 2026-08-03, exit 0: `data Cfg = MkCfg { size : Int }`
+-- plus `interface Sizeable a where size : a -> Int` in one file checks
+-- clean — `size` names two different declarations, in the FIELD and METHOD
+-- namespaces, without colliding as declarations.  ONE `Ns`-tagged `Ident`
+-- type rather than six parallel identity types is deliberate: it means one
+-- comparator (`deriving (Eq, Ord, Debug)` below — ONE derivation, not six),
+-- one collision-free key renderer (`identKey`, `types/registry.mdk`), and
+-- one place a namespace tag can be forgotten.
+--
+-- `resolve.mdk` already pays for this at 2-namespace scale: the TYPE and
+-- IFACE namespaces share ONE `OrdMap TyConOrigin` separated by an
+-- `"iface:<Name>"` string tag (`ifaceKey` / `ownTyOrigin` / `ownIfaceOrigin`,
+-- `compiler/frontend/resolve.mdk:3936-3963`), and that comment states the
+-- witness itself — one file may declare both `data Foo = Foo` and
+-- `interface Foo a where …` and check clean, so the two populations must
+-- never meet on one key.
+-- ⚠️ `test/references_fixtures/iface_ty_collide/` is NOT the regression
+-- fixture for that tag, and an earlier draft of this comment cited it as if
+-- it were.  `resolve.mdk:758-774` says what it actually witnesses: that
+-- `typeAmbiguous` and `ifaceAmbiguous` are TWO SEPARATE TABLES — a design it
+-- explicitly CONTRASTS with the tag (*"Two tables get the same separation
+-- with no key encoding at all"*).  It pins the separation, not the encoding.
+public export data Ns =
+  | NsType
+  | NsIface
+  | NsMethod
+  | NsCtor
+  | NsField
+  | NsValue
+deriving (Eq, Ord, Debug)
+
+-- ── The origin half of an identity: NO "unresolved" inhabitant (§8 I6.3) ───
+-- `TyConOrigin` has THREE inhabitants and one of them, `OriginUnresolved`,
+-- is a PIPELINE-STAGE MARKER rather than an identity (see its doc-comment
+-- above).  `IdentOrigin` is the same fact minus that marker, and the absence
+-- is the whole point: `docs/spec/DICT-SEMANTICS.md` §8 I6.3 requires that an
+-- implementation of I4 "make the absent case **unrepresentable**", and
+-- `resolve.mdk`'s consumer rule — *"NO predicate may compare two
+-- `OriginUnresolved` heads equal, or treat one as matching anything"* — is
+-- exactly what a key-rendering identity type would violate: an
+-- `OriginUnresolved` renders to a CONSTANT, so every unresolved declaration
+-- would collide with every other one in any table keyed by it.
+--
+-- ⚠️ This is NOT the `Option`-shaped origin §8 I6.3 forbids.  The forbidden
+-- shape puts the optionality INSIDE the identity (`origin : Option String`),
+-- so every cross-module predicate must decide per call site what `None`
+-- means.  Here the origin field of an `Ident` is TOTAL — an `Ident` always
+-- names a real module or the language — and the `Option` sits on the
+-- CONVERSION (`identOriginOf`), i.e. on the question "can this
+-- `TyConOrigin` become an identity at all?".  That question is answered once,
+-- at the boundary, and a site holding an `OriginUnresolved` cannot construct
+-- an `Ident` to smuggle past it.
+--
+-- ⚠️ CONSEQUENCE FOR STAGE A-2, stated because it bounds what the arc
+-- delivers: on the FLAT / single-file driver path every user declaration
+-- still carries `OriginUnresolved` (`stampDeclOrigins`' comment below; the
+-- RESIDUAL section of `test/origin_fixtures/graph/agreement.golden`), so
+-- `identOriginOf` returns `None` there and no `Ident` can be built.  A-2's
+-- re-keying is therefore **Module-path-only**: the flat path keeps its
+-- bare-name tables until #1115 (E-1) gives it module ids.  That residual is
+-- real and must not be overstated — what it does NOT cost is the eight
+-- tracked defects A-2 exists to drain (S0: #1047, #1069, #1092, #1256;
+-- S1: #1257, #1258, #1259; S2: #1090 — read off the tracker 2026-08-03, not
+-- all "S0" as an earlier draft of this line said).  Every one of the eight
+-- is a TWO-UNRELATED-MODULES collision, i.e. a multi-module shape, and
+-- therefore on the module path.  A-1 deferred this type saying it "needs the distinct
+-- pre-resolve type §8 I6.3 really asks for (A-1's option 1), which is not
+-- reachable from a byte-identical PR"; A-2's bar is explicitly not
+-- byte-identical, so A-2 is where it belongs.
+--
+-- `IdentBuiltin` mirrors `OriginBuiltin`: the reserved origin of something
+-- the LANGUAGE provides rather than a module (§8 I6.2 (a)).  `IdentModule
+-- mid` is meant to carry a NON-EMPTY module id — I6.3's other half, "an
+-- identity whose module component is empty is not well-formed".
+--
+-- ⚠️ BOTH HALVES ARE ENFORCED BY THE TYPE, and the second half is why this
+-- declaration is `export data` and NOT `public export data`.  Dropping the
+-- "unresolved" inhabitant was always a fact about the type: no `IdentOrigin`
+-- exists for it, full stop.  Non-emptiness used to be weaker — the
+-- constructors were `public`, so `IdentModule ""` was spellable by hand, two
+-- such origins minted in UNRELATED modules compared `Eq`-equal and rendered
+-- to ONE key, and only a doctest in `types/registry.mdk` stood between that
+-- and a silent cross-module collision.  A doctest is not an invariant.  So
+-- the constructors are now MODULE-PRIVATE and `identOriginOf` below is the
+-- only way to obtain an `IdentOrigin` at all: it rejects `""`, therefore no
+-- `IdentOrigin` in the program has an empty module component, therefore no
+-- `Ident` does either.  §8 I6.3's "make the absent case unrepresentable" now
+-- holds for BOTH halves structurally, rather than for one half structurally
+-- and the other by test.
+--
+-- ⚠️ CONSEQUENCE: nothing outside this file may pattern-match an
+-- `IdentOrigin`.  `identOriginFold` below is the eliminator, and it is total
+-- and sentinel-free — a consumer says what a builtin origin renders to and
+-- what a module origin renders to, and cannot forget that there are two
+-- cases.  `types/registry.mdk`'s `originTag`/`originModuleOf` are written
+-- against it; that is the whole cost, measured at ONE accessor.
+export data IdentOrigin =
+  | IdentBuiltin
+  | IdentModule String
+deriving (Eq, Ord, Debug)
+
+-- The ONLY eliminator for an `IdentOrigin`, since the constructors above are
+-- module-private.  Total by construction: a consumer supplies the builtin
+-- answer and the module answer, so it cannot fall through to a sentinel or
+-- forget an inhabitant.  A third inhabitant added here would break every
+-- consumer at COMPILE time, which is the point.
+export identOriginFold : a -> (String -> a) -> IdentOrigin -> a
+identOriginFold onBuiltin _ IdentBuiltin = onBuiltin
+identOriginFold _ onModule (IdentModule mid) = onModule mid
+
+-- The one TOTAL mint, and the reason it is safe to be total: the builtin
+-- origin has no module component, so there is no well-formedness question to
+-- answer — `identOriginOf OriginBuiltin` can never be `None`.  A site that
+-- statically KNOWS it is naming something the language provides (a prelude
+-- tycon) uses this instead of unwrapping an `Option` that cannot be `None`.
+-- There is deliberately NO total counterpart for the module case: `""` is
+-- exactly what must stay unrepresentable, so a module origin is only ever
+-- obtainable from `identOriginOf`, which checks.
+export identOriginBuiltin : IdentOrigin
+identOriginBuiltin = IdentBuiltin
+
+-- `(namespace, origin, name)` — the full identity of a declaration, or of an
+-- occurrence naming one.
+--
+-- ⚠️ NO `Display` derivation, deliberately.  A derived `Display` would print
+-- the constructor spelling, and the moment a diagnostic interpolated an
+-- `Ident` that spelling would become user-facing text nobody chose.  How an
+-- identity is RENDERED to a user (module-qualified? bare? which of the six
+-- namespaces named?) is A-2.8's decision, made when the first diagnostic
+-- needs it.  `Debug` is derived because `debug` is already understood to be
+-- developer output, and it is what makes an `Ident` printable in a probe.
+--
+-- This constructor stays `public` on purpose even though `IdentOrigin`'s do
+-- not.  The well-formedness question is entirely about the ORIGIN, and that
+-- is where it is now answered: there is no ill-formed `IdentOrigin` to put in
+-- this field, so there is no ill-formed `Ident` to build out of one.  Keeping
+-- `Ident` matchable is what lets `types/registry.mdk` render a key and lets
+-- every later A-2 conversion destructure an identity without a per-field
+-- accessor tax, at zero cost to the invariant.
+public export data Ident = Ident Ns IdentOrigin String deriving (Eq, Ord, Debug)
+
+-- The ONE total conversion from the pipeline-stage-marked `TyConOrigin` to an
+-- identity origin.  `None` means "this thing has no identity yet" and the
+-- caller MUST handle it — that is the visibility §8 I6.3 asks for, in place
+-- of a silent collision inside a key renderer.
+--
+-- Two `None` cases, both honest absence:
+--   * `OriginUnresolved` — no identity was acquired (unbound name, or a flat
+--     driver with no module graph).  See `TyConOrigin` above.
+--   * `OriginModule ""` — I6.3: `""` is a sentinel meaning "origin not
+--     recorded", never an identity.  Refusing it here means no `Ident` can
+--     carry it, so no later unit has to re-litigate the empty-id question at
+--     its own call site.
+export identOriginOf : TyConOrigin -> Option IdentOrigin
+identOriginOf OriginUnresolved = None
+identOriginOf OriginBuiltin = Some IdentBuiltin
+identOriginOf (OriginModule mid) =
+  if mid == "" then
+    None
+  else
+    Some (IdentModule mid)
+
+-- The convenience form every conversion site will actually want: build an
+-- identity from the `(namespace, TyConOrigin, name)` triple a table's writer
+-- already has in hand, or `None` if that origin is not an identity.
+export mkIdent : Ns -> TyConOrigin -> String -> Option Ident
+mkIdent ns origin name = map (io => Ident ns io name) (identOriginOf origin)
+
+-- ── the TYPE-HEAD comparison seam (#1111 Stage A-2 unit A-2.10) ─────────────
+-- The ONE rule every "are these two type heads the SAME TYPE?" test in
+-- `types/typecheck.mdk` is written against — `unifyN`, `cohGoR`, `cohStep`,
+-- `cohEqR`, `matchStep`, `monoSameGiven`.  Stage A-1 landed the identity
+-- CARRIER on `Ty.TyCon`/`Mono.TCon`; until this unit every one of those sites
+-- bound the origin to `_` and compared the NAME alone, which is what made
+-- #1208/#1209 (two modules' unrelated same-named types unify, silently, exit 0)
+-- and what made a key computed from that field not a function of the type at
+-- all — which is why the dispatch-key half of A-2 had to ship spelling-keyed.
+--
+-- 🚨 THE RULE IS THE EXACT INVERSE OF `ifaceIdMatches` / `tabKeyEq`, AND THAT
+-- IS DERIVED, NOT AN OVERSIGHT.  Those two answer a LOOKUP question ("which
+-- row does this key select?"), where a MISS is loud and safe (`No impl of …`,
+-- `Unknown type …`) and a false HIT is silent wrongness — so absence must never
+-- match, not even itself (`tabKeyEq _ _ = False` across the two `TabKey`
+-- constructors, in BOTH directions).  This one answers an ACCEPTANCE question
+-- ("may this program be typed?"), where the safe direction INVERTS: a false
+-- REJECT refuses a valid program — loud, and a severity INCREASE by AGENTS.md's
+-- ladder — while a false ACCEPT is the status quo the arc is draining.  Absence
+-- must therefore be conservative in both, and "conservative" means opposite
+-- things.  Copying `tabKeyEq`'s shape here rejects the compiler's own prelude:
+-- measured on this tree before the rule was written, `stringLength "xy" < 2`
+-- reaches `unifyN` as `Int`(no identity, extern-sourced) ~ `Int`(`OriginBuiltin`).
+--
+-- ⚠️ THE CANONICAL STATEMENT OF THE CONSUMER RULE LIVES IN `frontend/resolve.mdk`
+-- (the `RESIDUAL INHABITANT` block, which this file's carrier comment cites as its
+-- authority), AND THIS UNIT FALSIFIED THE VERSION WRITTEN THERE.  It read "NO
+-- predicate may compare two `OriginUnresolved` heads equal, or treat one as
+-- matching anything" — `tyConIdsConflict` below does BOTH, correctly.  That
+-- statement has been split there by decision class (lookup vs acceptance) rather
+-- than patched here; reconciling one site and leaving the twin standing is the
+-- exact defect this unit fixed in `types/typecheck.mdk`'s `Mono` comment, so both
+-- are now reconciled.  Change either half in ONE place: this one.
+--
+-- SO: an ABSENT origin makes NO CLAIM, and two heads CONFLICT only when both
+-- carry an identity and the identities differ.  Stated honestly: within the
+-- identity-less population this is operationally a wildcard, and §8 I6.3 is
+-- right that that is not a resting place.  What it is NOT, and what I6.3's
+-- prohibition is actually about, is a wildcard IDENTITY: this predicate mints
+-- no `Ident`, selects no row, names no bucket, and is only ever consulted AFTER
+-- the name has already matched.  `identOriginOf` is still the sole gate to an
+-- `Ident` and still refuses — including for `OriginModule ""`, which is why
+-- this routes through it instead of hand-rolling a `TyConOrigin` equality that
+-- would compare the I6.3 empty id as a value.
+--
+-- ⚠️ THE RESIDUAL IS A SUPPLY GAP, AND CLOSING IT STRENGTHENS THIS RULE WITH NO
+-- FURTHER EDIT — that is the property that makes the transitional shape
+-- acceptable rather than a second sentinel.  ONE population has no identity
+-- today: the FLAT/loader-less driver's own user module (#1115 / E-1 —
+-- `stampFlatTyOrigins` deliberately claims nothing there).  When a producer starts
+-- supplying an origin, `identOriginOf` stops answering `None` for it and this
+-- predicate becomes strict equality on that population automatically.  At total
+-- supply it IS strict equality, which is I6.3's target state.
+--
+-- ✅ THE OTHER POPULATION IS CLOSED, AND THAT IS THE "NO FURTHER EDIT" CLAIM
+-- OBSERVED RATHER THAN PREDICTED.  `stdlib/runtime.mdk`'s EXTERN signatures used
+-- to reach a `Scheme` without entering the stamping walk on EITHER arm; #1280
+-- moved the walk inside `externSchemes` (`types/typecheck.mdk`), under
+-- `externTyOriginScope` (`frontend/resolve.mdk`, which owns the derivation of why
+-- that scope and not a uniform one).  NOTHING IN THIS FILE CHANGED, and #1279 —
+-- the bridge below — went from `check` exit 0 with zero diagnostics to a
+-- `T-TYPE-MISMATCH` naming both modules.  A probe walking every extern signature
+-- after the walk reported ZERO surviving `OriginUnresolved` heads on the four
+-- user-facing driver verbs (flat/module × check/run); stubbing the walk made it
+-- report hundreds, so the measurement could fail.  ⚠️ It is total on THOSE arms
+-- only: the prelude-FLATTENED internal passes have no prelude boundary and so
+-- leave `Option`/`Ordering`/`Result` absent — symmetrically, since the flattened
+-- prelude's own declarations are unstamped there too (`externSchemes`' comment
+-- carries that derivation and the call-site list).
+--
+-- 🚨 ABSENCE **COULD** BRIDGE TWO DISTINCT IDENTITIES — #1279, MEASURED, DRAINED
+-- BY #1280.  This stays because the MECHANISM is starved, not repealed:
+-- unification LINKS, so `a ~ T@absent` then `a ~ T@core` then `a ~ T@evil` still
+-- accepts a pairing the DIRECT comparison refuses, for ANY head that reaches a
+-- comparison with no identity.  What #1280 removed is the SUPPLY that produced
+-- the absent middle head in the one measured repro; population (a) can still
+-- furnish one, and no experiment here establishes that no other shape can.  What
+-- was measured on this tree, before and after:
+--   * the DIRECT form was already CLOSED — `unwrapEvil (Some 1)`, where
+--     `unwrapEvil` takes another module's own `Option`, is rejected with a
+--     `T-TYPE-MISMATCH` naming both modules;
+--   * the INDIRECT form was NOT.  `mid = stringIndexOf "zz" "a"` gave an
+--     `Option Int` head with NO origin; `isSome mid` linked it to `Option@core`,
+--     `unwrapEvil mid` to `Option@evil`, and `check` exited 0 with ZERO
+--     diagnostics (`run` printed `False`, then died with
+--     `E-NONEXHAUSTIVE-MATCH`).  It is now rejected.  The must-fail fixture is
+--     deleted, per that gate's own drain instruction; the permanent regression
+--     leg is `1280/reject-absent-origin-bridge` in
+--     `test/diff_compiler_check_cli_modules.sh`.
+--
+-- ⚠️ THIS PARAGRAPH USED TO ASSERT THE OPPOSITE, AND THE ARGUMENT WAS AN
+-- ENUMERATION.  It read: population (b)'s type names are `primitiveTypes` plus
+-- `{Option, Ordering, Result}` from `stdlib/core.mdk`, and `duplicateErrors`'
+-- `typeSeed = primitiveTypes ++ whenL seed (dataRecordNames preludeDecls)` makes
+-- every one of those UNDECLARABLE elsewhere — so no name has a SECOND present
+-- identity to bridge to.  The enumeration of the NAMES was right.  What it missed
+-- is that `seed` is not a constant: `seed = not (programIsCore prog)`, and
+-- `programIsCore` (`frontend/resolve.mdk`) is a purely SYNTACTIC SELF-TEST —
+-- `hasOrdering prog && hasFoldable prog`.  A module that declares `data Ordering`
+-- AND `interface Foldable` therefore collapses its OWN `typeSeed` to
+-- `primitiveTypes` alone and may declare its own `Option`.  The guard was read as
+-- a property of the prelude when it is a property of the DECL SHAPES in front of
+-- it, and any module can write those.
+--
+-- ⚠️ THE SEED FLIP ITSELF IS UNTOUCHED, and saying so is the point of keeping the
+-- paragraph above.  #1279 named two independent fix territories; #1280 took the
+-- SUPPLY one, so `programIsCore` is still a syntactic self-test and a module that
+-- writes those two decl shapes still collapses its own `typeSeed` and may still
+-- declare its own `Option`.  What that no longer buys it is a bridge through an
+-- extern.  Nothing here measures whether some OTHER route to an identity-less
+-- middle head exists — only the one repro was run, before and after.
+-- (`compiler/tools/test_cmd.mdk` carries a second copy of the predicate.)
+--
+-- ⚠️ NOT A REGRESSION FROM A-2.10, either.  Pre-A-2.10 `unifyN`'s `TCon`/`TCon`
+-- arm was `a == b`, so both forms were accepted; that unit closed the direct one
+-- and left the bridge, and #1280 closed the bridge by supply — neither is a change
+-- to this predicate, which is the "closing the supply gap strengthens this rule
+-- with no further edit" property, now observed rather than promised.
+--
+-- ⚠️ Re-derive the extern population's name set rather than trusting any list; a
+-- new extern naming a further prelude type moves it, and it is what
+-- `externTyOriginScope` has to keep covering.  The command is
+--   grep -E '^extern ' stdlib/runtime.mdk | sed -E 's/--.*$//; s/<[^>]*>//g' \
+--     | grep -oE '\b[A-Z][A-Za-z0-9_]*' | sort -u
+-- In population (a) nothing in the user module has an identity at all, so it
+-- supplies no second identity of its own.
+--
+-- ⚠️ `TRigid` is deliberately NOT routed here and needs no arm: it carries no
+-- origin by construction (§8 I6.1 ∧ I6.3's corollary), so the cross-population
+-- `TCon`/`TRigid` arms would compute "no conflict" and answer exactly what
+-- their present name-only test answers.  Their preserved forgery is #1243, a
+-- different clause, and this unit leaves it exactly where it was.
+--
+-- 🚨 THIS RULE IS ONLY AS CORRECT AS THE IDENTITY SUPPLY AT EACH PRODUCER, AND
+-- A WRONG SUPPLY BECOMES A FALSE REJECT.  Measured, not predicted: #1256's
+-- fixture is a valid program that this unit turned from `exit 0` into `Type
+-- mismatch: Cfg vs Cfg`.  Nothing about the comparison is wrong there — the
+-- *supply* is.  `recordByNameRef` (`types/typecheck.mdk`) is keyed by BARE
+-- record-type name and `omInsert` is last-write-wins across the whole import
+-- graph, so `lookupRecordByName "Cfg"` hands back a `RecordInfo` whose head is
+-- a perfectly well-formed identity BELONGING TO ANOTHER MODULE.  While nothing
+-- read the field, the two `Cfg`s were interchangeable and the program merely
+-- computed with the wrong field types; now the wrong identity is visible and
+-- the program is refused.
+--
+-- The class, stated so the next site is recognised rather than rediscovered:
+-- **a table keyed by a BARE NAME that STORES a type head is an identity-supply
+-- defect, and this rule converts each one from a silent wrong answer (S0) into
+-- a loud wrong rejection (S1).**  That is the direction `AGENTS.md`'s severity
+-- ladder calls progress, and it is NOT a fix — the fixture stays pinned, with
+-- its observable re-cut.  ⚠️ DERIVE the member set, do not read a list here: a
+-- member is a table that is keyed by a BARE NAME **and** stores a type head or a
+-- scheme containing one, which excludes the bare-name tables holding kinds or
+-- mere name-membership.  Two are known: #1256 (`recordByNameRef`, measured above)
+-- and #1259 (`universeDataEnv`, constructor schemes — already a false reject
+-- BEFORE this unit, which is why nothing about it moved here).  Whoever re-keys
+-- one drains a row in `test/must_fail_fixtures/` as well as fixing the table.
+export sameTyConHead : String -> TyConOrigin -> String -> TyConOrigin -> Bool
+sameTyConHead n1 o1 n2 o2 = n1 == n2 && not (tyConIdsConflict o1 o2)
+
+-- True iff BOTH origins are identities and they name DIFFERENT declarations.
+-- The `_ => False` arm is absence-makes-no-claim, derived above; it is written
+-- as an explicit pair match rather than a guard so that a reader sees the two
+-- absent cases collapse into one answer on purpose.
+tyConIdsConflict : TyConOrigin -> TyConOrigin -> Bool
+tyConIdsConflict o1 o2 = match (identOriginOf o1, identOriginOf o2)
+  (Some i1, Some i2) => i1 != i2
+  _ => False
 
 public export data Ty =
   -- `tyConOrigin` is the #1110 identity carrier described above; it is stripped
@@ -182,8 +599,43 @@ export tyConBuiltin : String -> Option Loc -> Ty
 tyConBuiltin n l =
   TyCon { tyConName = n, tyConLoc = l, tyConOrigin = OriginBuiltin }
 
--- an interface constraint `Iface arg…` on the LHS of a `=>` in a type
-public export data Constraint = Constraint String (List Ty)
+-- an interface constraint `Iface arg…` on the LHS of a `=>` in a type.
+--
+-- `constraintOrigin` is the #1110 interface-OCCURRENCE identity carrier: which
+-- module declared the interface this predicate names.  Stripped by every
+-- renderer (`ir/sexp.mdk`, `tools/printer.mdk`, `tools/doc.mdk`, `ppConstraint`
+-- in `types/typecheck.mdk`) exactly the way `ELoc` is, so dumps and printed
+-- source are byte-identical to the pre-#1110 tree.
+--
+-- 🚨 Named-field record, and the `constraint` PREFIX is LOAD-BEARING — the
+-- field-namespace rule stated in full on `Ty.TyCon` above.  A bare `head`/`args`
+-- would collide across records AND make this type's patterns match a `Require`
+-- (a record pattern matches by LABEL SET, not by constructor).  Positional was
+-- not an option: a positional widening re-churns every pattern site again at the
+-- next field, whereas a partial record pattern tolerates added fields for free.
+public export data Constraint =
+  | Constraint {
+      constraintHead : String,
+      constraintArgs : List Ty,
+      constraintOrigin : TyConOrigin,
+    }
+
+-- Build a `Constraint` whose interface identity has NOT been acquired yet
+-- (#1110).  The peer of `tyConUnresolved`, same contract: the ONE producer of an
+-- occurrence-layer `OriginUnresolved` for this node, so
+-- `grep -rw constraintUnresolved` is the exact worklist PR C drains when resolve
+-- starts stamping interface occurrences.
+--
+-- 🚨 NOT for REBUILDING an existing constraint — use record UPDATE
+-- (`Constraint { c | constraintArgs = … }`).  Re-synthesising from projected
+-- fields silently resets an acquired identity, and the stamper's immunity rule
+-- (fill in only a still-unresolved origin) makes that reset permanent.
+export constraintUnresolved : String -> List Ty -> Constraint
+constraintUnresolved iface args = Constraint {
+  constraintHead = iface,
+  constraintArgs = args,
+  constraintOrigin = OriginUnresolved,
+}
 
 -- ── Loc plumbing (issue 480) ──────────────────────────────────────────────
 -- These live HERE, beside `Loc`/`Ty`, because they are diagnostic-quality
@@ -571,8 +1023,45 @@ public export data PropParam = PropParam String Loc Ty
 -- interface / impl pieces
 public export data MethodDefault = MethodDefault (List Pat) Expr
 public export data IfaceMethod = IfaceMethod String Ty (Option MethodDefault)
-public export data Super = Super String (List String)
-public export data Require = Require String (List Ty)
+-- `interface Sub … : Sup a` — a SUPERINTERFACE occurrence.  `superOrigin` is the
+-- #1110 interface-occurrence identity of `Sup`; `superParams` are the subject
+-- interface's own type-parameter NAMES the superinterface is applied to (not
+-- `Ty`s), which is why this node has no `Ty` position at all.  Prefixed fields,
+-- stripped by every renderer — same contract as `Constraint` above.
+public export data Super =
+  | Super {
+      superHead : String,
+      superParams : List String,
+      superOrigin : TyConOrigin,
+    }
+
+-- `impl I (T a) requires Eq a` — one `requires` predicate.  Structurally a
+-- `Constraint` at a different syntactic site, and kept as its own type because
+-- the two print differently (`=>` vs `requires`) and the tree already separates
+-- them.  `requireOrigin`: #1110 interface-occurrence identity.
+public export data Require =
+  | Require {
+      requireHead : String,
+      requireArgs : List Ty,
+      requireOrigin : TyConOrigin,
+    }
+
+-- The `constraintUnresolved` peers.  See its comment for the full contract; the
+-- short version is: these are the ONLY producers of an unresolved occurrence
+-- identity for their node, and a REBUILD must use record update instead.
+export superUnresolved : String -> List String -> Super
+superUnresolved iface params = Super {
+  superHead = iface,
+  superParams = params,
+  superOrigin = OriginUnresolved,
+}
+
+export requireUnresolved : String -> List Ty -> Require
+requireUnresolved iface args = Require {
+  requireHead = iface,
+  requireArgs = args,
+  requireOrigin = OriginUnresolved,
+}
 public export data ImplMethod = ImplMethod String (List Pat) Expr
 
 -- data/record declarations
@@ -606,13 +1095,28 @@ public export data Decl =
   -- ── the four TYPE-DECLARATION forms carry module identity (#1110) ────────
   -- `DData`/`DNewtype`/`DTypeAlias`/`DInterface` each gained a `…Origin` field,
   -- stamped by resolve (`stampGraphTyOrigins`, `frontend/resolve.mdk`) with the
-  -- module the declaration was written in.  NOTHING READS IT YET — this PR is
-  -- deliberately byte-identical, exactly as #1211 (the `Ty.TyCon` carrier) and
-  -- #1219 (its stamper) were.  What it unblocks is enumerated in #1110's
-  -- scoping comment: `registerVariants` mints the head `Mono` for every user
-  -- data type from the `DData` alone, so the dispatch GOAL side cannot acquire
-  -- identity until the declaration has one; interface identity (#1047) needs
-  -- `DInterface`'s; constructor identity (#1070) needs `DData`'s variants'.
+  -- module the declaration was written in.
+  --
+  -- ⚠️ THESE FIELDS ARE READ, AND THE WORK THIS COMMENT LISTED AS FUTURE HAS
+  -- LANDED.  It said "NOTHING READS IT YET — this PR is deliberately
+  -- byte-identical", true when #1110 Stage A-1 wrote it and false since Stage
+  -- A-2: `DData.dataOrigin` reaches `registerVariants o` (`types/typecheck.mdk`),
+  -- so the dispatch GOAL side now DOES acquire identity from the declaration;
+  -- `DInterface.ifaceOrigin` is the write side of A-2.4's interface-namespace key
+  -- (`ifaceTabKey o name`, reached from `registerData` / `insertIfaceRequired` /
+  -- `insertMethodIdents` / `ownMethodIdent`) and of `lowerDeclImpl`'s
+  -- default-method identity (`ir/core_ir_lower.mdk`).  Derive the readers rather
+  -- than reading a list here:
+  --
+  --     grep -rn --include=*.mdk 'dataOrigin|ifaceOrigin|newtypeOrigin|tyAliasOrigin' \
+  --       compiler/types compiler/ir compiler/tools
+  --
+  -- ⚠️ FOUND BY GREPPING FOR THE OTHER SPELLINGS OF A CLAIM CORRECTED
+  -- ELSEWHERE (#1111 A-2.10's review), and that is the whole lesson: a "nothing
+  -- reads this" sentence is a NEGATIVE ABOUT THE WHOLE TREE, it expires the moment
+  -- any unit adds a reader, and no gate notices.  `types/typecheck.mdk`'s `Mono`
+  -- comment and `frontend/resolve.mdk`'s stamper comment carried the same sentence
+  -- about different fields and each had to be corrected separately.
   --
   -- 🚨 The three positional forms became NAMED-FIELD RECORDS in the same step,
   -- and the two halves are not separable: a positional widening re-churns every
@@ -718,12 +1222,26 @@ public export data Decl =
     }
   -- #1110 decl-layer identity.  Prefixed; the six above are the
   -- grandfathered bare names #1216 tracks, not a precedent to follow.
+  --
+  -- ⚠️ `implOrigin` is an OCCURRENCE carrier, not a decl-layer one: an `impl` is
+  -- not a declaration of the interface it names, it is a USE of one — which is
+  -- why `declHeadOf` (`compiler/entries/origin_agreement_main.mdk`) deliberately
+  -- has no `DImpl` arm and must not grow one.  It is the identity of `iface`,
+  -- the peer of `Constraint`/`Require`/`Super` above.  The identity of the
+  -- TYPE(s) being implemented is already carried by the `Ty`s in `tys`.
+  --
+  -- Free side benefit worth knowing: `implOrigin` is the first label on this
+  -- constructor that `DInterface` does not also have, so it is now available as
+  -- the unique discriminator the `Decl` comment above asks every record arm to
+  -- name.  Retrofitting the existing shared-label arms is #1217's business, not
+  -- this carrier's — but new arms have no excuse.
   | DImpl {
       pub : Bool,
       iface : String,
       tys : List Ty,
       reqs : List Require,
       methods : List ImplMethod,
+      implOrigin : TyConOrigin,
     }
   -- `tyAliasRhs` is the expansion; `tyAliasOrigin` is #1110 decl identity.
   | DTypeAlias {
@@ -798,6 +1316,23 @@ dInterfaceUnresolved pub isDefault n typarams supers methods = DInterface {
   supers = supers,
   methods = methods,
   ifaceOrigin = OriginUnresolved,
+}
+
+-- ⚠️ `DImpl` mints an OCCURRENCE carrier, not a decl-layer one (see its comment
+-- above), so this helper belongs to the `constraintUnresolved` family and NOT to
+-- the `d*Unresolved` decl-layer producer ratchet — the two are pinned separately
+-- in `test/typecheck_compiler_source.sh`.  Like `dInterfaceUnresolved` it buys no
+-- churn saving (`DImpl` was already a record); it exists so the parser and
+-- desugar do not have to NAME `OriginUnresolved`, which is what keeps that
+-- constructor's file set pinned at three.
+export dImplUnresolved : Bool -> String -> List Ty -> List Require -> List ImplMethod -> Decl
+dImplUnresolved pub iface tys reqs methods = DImpl {
+  pub = pub,
+  iface = iface,
+  tys = tys,
+  reqs = reqs,
+  methods = methods,
+  implOrigin = OriginUnresolved,
 }
 
 export dNewtypeUnresolved : Bool -> String -> List String -> String -> Ty -> List DeriveRef -> Decl
@@ -878,10 +1413,11 @@ mapTyListB f (t::ts) =
 
 mapConstraintsB : (Ty -> (Ty, Bool)) -> List Constraint -> (List Constraint, Bool)
 mapConstraintsB _ [] = ([], False)
-mapConstraintsB f ((Constraint iface tys)::rest) =
+-- #1110: record UPDATE, so an acquired occurrence identity survives the rewrite.
+mapConstraintsB f ((c@(Constraint { constraintArgs = tys }))::rest) =
   let (tys2, c1) = mapTyListB f tys
   let (rest2, c2) = mapConstraintsB f rest
-  (Constraint iface tys2 :: rest2, c1 || c2)
+  (Constraint { c | constraintArgs = tys2 }::rest2, c1 || c2)
 
 -- ── generic Decl traversal ───────────────────────────────────────────────────
 -- Threads `f` through EVERY Ty position of a decl (verified against ast.mdk):
@@ -1005,10 +1541,11 @@ mapIfaceMethodB f (IfaceMethod n ty (Some (MethodDefault ps e))) =
 
 mapRequiresB : (Ty -> (Ty, Bool)) -> List Require -> (List Require, Bool)
 mapRequiresB _ [] = ([], False)
-mapRequiresB f ((Require iface tys)::rest) =
+-- #1110: record UPDATE, so an acquired occurrence identity survives the rewrite.
+mapRequiresB f ((r@(Require { requireArgs = tys }))::rest) =
   let (tys2, c1) = mapTyListB f tys
   let (rest2, c2) = mapRequiresB f rest
-  (Require iface tys2 :: rest2, c1 || c2)
+  (Require { r | requireArgs = tys2 }::rest2, c1 || c2)
 
 mapImplMethodsB : (Ty -> (Ty, Bool)) -> List ImplMethod -> (List ImplMethod, Bool)
 mapImplMethodsB _ [] = ([], False)
@@ -1261,12 +1798,47 @@ mapKvsB f ((k, v)::rest) =
 (DImpl true "Eq" ((TyCon "Lit")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "LInt" (PVar "__a0")) (PCon "LInt" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "LFloat" (PVar "__a0")) (PCon "LFloat" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "LString" (PVar "__a0")) (PCon "LString" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "LChar" (PVar "__a0")) (PCon "LChar" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "LBool" (PVar "__a0")) (PCon "LBool" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "LUnit") (PCon "LUnit")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
 (DData Public "Loc" () ((variant "Loc" (ConPos (TyCon "String") (TyCon "Int") (TyCon "Int") (TyCon "Int") (TyCon "Int")))) ())
 (DData Public "TyConOrigin" () ((variant "OriginUnresolved" (ConPos)) (variant "OriginBuiltin" (ConPos)) (variant "OriginModule" (ConPos (TyCon "String")))) ())
+(DTypeSig true "ifaceIdentity" (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyCon "String"))))
+(DFunDef false "ifaceIdentity" ((PCon "OriginModule" (PVar "m")) (PVar "name")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "m"))) (ELit (LString "::"))) (EApp (EVar "display") (EVar "name"))) (ELit (LString ""))))
+(DFunDef false "ifaceIdentity" ((PCon "OriginUnresolved") PWild) (ELit (LString "")))
+(DFunDef false "ifaceIdentity" ((PCon "OriginBuiltin") PWild) (ELit (LString "")))
+(DTypeSig true "ifaceIdMatches" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
+(DFunDef false "ifaceIdMatches" ((PVar "a") (PVar "b")) (EBinOp "&&" (EBinOp "!=" (EVar "a") (ELit (LString ""))) (EBinOp "==" (EVar "a") (EVar "b"))))
+(DData Public "Ns" () ((variant "NsType" (ConPos)) (variant "NsIface" (ConPos)) (variant "NsMethod" (ConPos)) (variant "NsCtor" (ConPos)) (variant "NsField" (ConPos)) (variant "NsValue" (ConPos))) ())
+(DImpl true "Eq" ((TyCon "Ns")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "NsType") (PCon "NsType")) () (EVar "True")) (arm (PTuple (PCon "NsIface") (PCon "NsIface")) () (EVar "True")) (arm (PTuple (PCon "NsMethod") (PCon "NsMethod")) () (EVar "True")) (arm (PTuple (PCon "NsCtor") (PCon "NsCtor")) () (EVar "True")) (arm (PTuple (PCon "NsField") (PCon "NsField")) () (EVar "True")) (arm (PTuple (PCon "NsValue") (PCon "NsValue")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
+(DImpl true "Ord" ((TyCon "Ns")) () ((im "compare" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "NsType") (PCon "NsType")) () (EVar "Eq")) (arm (PTuple (PCon "NsType") (PCon "NsIface")) () (EVar "Lt")) (arm (PTuple (PCon "NsType") (PCon "NsMethod")) () (EVar "Lt")) (arm (PTuple (PCon "NsType") (PCon "NsCtor")) () (EVar "Lt")) (arm (PTuple (PCon "NsType") (PCon "NsField")) () (EVar "Lt")) (arm (PTuple (PCon "NsType") (PCon "NsValue")) () (EVar "Lt")) (arm (PTuple (PCon "NsIface") (PCon "NsType")) () (EVar "Gt")) (arm (PTuple (PCon "NsIface") (PCon "NsIface")) () (EVar "Eq")) (arm (PTuple (PCon "NsIface") (PCon "NsMethod")) () (EVar "Lt")) (arm (PTuple (PCon "NsIface") (PCon "NsCtor")) () (EVar "Lt")) (arm (PTuple (PCon "NsIface") (PCon "NsField")) () (EVar "Lt")) (arm (PTuple (PCon "NsIface") (PCon "NsValue")) () (EVar "Lt")) (arm (PTuple (PCon "NsMethod") (PCon "NsType")) () (EVar "Gt")) (arm (PTuple (PCon "NsMethod") (PCon "NsIface")) () (EVar "Gt")) (arm (PTuple (PCon "NsMethod") (PCon "NsMethod")) () (EVar "Eq")) (arm (PTuple (PCon "NsMethod") (PCon "NsCtor")) () (EVar "Lt")) (arm (PTuple (PCon "NsMethod") (PCon "NsField")) () (EVar "Lt")) (arm (PTuple (PCon "NsMethod") (PCon "NsValue")) () (EVar "Lt")) (arm (PTuple (PCon "NsCtor") (PCon "NsType")) () (EVar "Gt")) (arm (PTuple (PCon "NsCtor") (PCon "NsIface")) () (EVar "Gt")) (arm (PTuple (PCon "NsCtor") (PCon "NsMethod")) () (EVar "Gt")) (arm (PTuple (PCon "NsCtor") (PCon "NsCtor")) () (EVar "Eq")) (arm (PTuple (PCon "NsCtor") (PCon "NsField")) () (EVar "Lt")) (arm (PTuple (PCon "NsCtor") (PCon "NsValue")) () (EVar "Lt")) (arm (PTuple (PCon "NsField") (PCon "NsType")) () (EVar "Gt")) (arm (PTuple (PCon "NsField") (PCon "NsIface")) () (EVar "Gt")) (arm (PTuple (PCon "NsField") (PCon "NsMethod")) () (EVar "Gt")) (arm (PTuple (PCon "NsField") (PCon "NsCtor")) () (EVar "Gt")) (arm (PTuple (PCon "NsField") (PCon "NsField")) () (EVar "Eq")) (arm (PTuple (PCon "NsField") (PCon "NsValue")) () (EVar "Lt")) (arm (PTuple (PCon "NsValue") (PCon "NsType")) () (EVar "Gt")) (arm (PTuple (PCon "NsValue") (PCon "NsIface")) () (EVar "Gt")) (arm (PTuple (PCon "NsValue") (PCon "NsMethod")) () (EVar "Gt")) (arm (PTuple (PCon "NsValue") (PCon "NsCtor")) () (EVar "Gt")) (arm (PTuple (PCon "NsValue") (PCon "NsField")) () (EVar "Gt")) (arm (PTuple (PCon "NsValue") (PCon "NsValue")) () (EVar "Eq"))))))
+(DImpl true "Debug" ((TyCon "Ns")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "NsType") () (ELit (LString "NsType"))) (arm (PCon "NsIface") () (ELit (LString "NsIface"))) (arm (PCon "NsMethod") () (ELit (LString "NsMethod"))) (arm (PCon "NsCtor") () (ELit (LString "NsCtor"))) (arm (PCon "NsField") () (ELit (LString "NsField"))) (arm (PCon "NsValue") () (ELit (LString "NsValue")))))))
+(DData Abstract "IdentOrigin" () ((variant "IdentBuiltin" (ConPos)) (variant "IdentModule" (ConPos (TyCon "String")))) ())
+(DImpl true "Eq" ((TyCon "IdentOrigin")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "IdentBuiltin") (PCon "IdentBuiltin")) () (EVar "True")) (arm (PTuple (PCon "IdentModule" (PVar "__a0")) (PCon "IdentModule" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple PWild PWild) () (EVar "False"))))))
+(DImpl true "Ord" ((TyCon "IdentOrigin")) () ((im "compare" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "IdentBuiltin") (PCon "IdentBuiltin")) () (EVar "Eq")) (arm (PTuple (PCon "IdentBuiltin") (PCon "IdentModule" (PVar "__b0"))) () (EVar "Lt")) (arm (PTuple (PCon "IdentModule" (PVar "__a0")) (PCon "IdentBuiltin")) () (EVar "Gt")) (arm (PTuple (PCon "IdentModule" (PVar "__a0")) (PCon "IdentModule" (PVar "__b0"))) () (EApp (EApp (EVar "compare") (EVar "__a0")) (EVar "__b0")))))))
+(DImpl true "Debug" ((TyCon "IdentOrigin")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "IdentBuiltin") () (ELit (LString "IdentBuiltin"))) (arm (PCon "IdentModule" (PVar "__a0")) () (EBinOp "++" (ELit (LString "IdentModule ")) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a0")))))))))
+(DTypeSig true "identOriginFold" (TyFun (TyVar "a") (TyFun (TyFun (TyCon "String") (TyVar "a")) (TyFun (TyCon "IdentOrigin") (TyVar "a")))))
+(DFunDef false "identOriginFold" ((PVar "onBuiltin") PWild (PCon "IdentBuiltin")) (EVar "onBuiltin"))
+(DFunDef false "identOriginFold" (PWild (PVar "onModule") (PCon "IdentModule" (PVar "mid"))) (EApp (EVar "onModule") (EVar "mid")))
+(DTypeSig true "identOriginBuiltin" (TyCon "IdentOrigin"))
+(DFunDef false "identOriginBuiltin" () (EVar "IdentBuiltin"))
+(DData Public "Ident" () ((variant "Ident" (ConPos (TyCon "Ns") (TyCon "IdentOrigin") (TyCon "String")))) ())
+(DImpl true "Eq" ((TyCon "Ident")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "Ident" (PVar "__a0") (PVar "__a1") (PVar "__a2")) (PCon "Ident" (PVar "__b0") (PVar "__b1") (PVar "__b2"))) () (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EVar "eq") (EVar "__a1")) (EVar "__b1"))) (EApp (EApp (EVar "eq") (EVar "__a2")) (EVar "__b2"))))))))
+(DImpl true "Ord" ((TyCon "Ident")) () ((im "compare" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "Ident" (PVar "__a0") (PVar "__a1") (PVar "__a2")) (PCon "Ident" (PVar "__b0") (PVar "__b1") (PVar "__b2"))) () (EMatch (EApp (EApp (EVar "compare") (EVar "__a0")) (EVar "__b0")) (arm (PCon "Eq") () (EMatch (EApp (EApp (EVar "compare") (EVar "__a1")) (EVar "__b1")) (arm (PCon "Eq") () (EApp (EApp (EVar "compare") (EVar "__a2")) (EVar "__b2"))) (arm (PVar "__c") () (EVar "__c")))) (arm (PVar "__c") () (EVar "__c"))))))))
+(DImpl true "Debug" ((TyCon "Ident")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "Ident" (PVar "__a0") (PVar "__a1") (PVar "__a2")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Ident ")) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a0")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a1")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a2")))))))))
+(DTypeSig true "identOriginOf" (TyFun (TyCon "TyConOrigin") (TyApp (TyCon "Option") (TyCon "IdentOrigin"))))
+(DFunDef false "identOriginOf" ((PCon "OriginUnresolved")) (EVar "None"))
+(DFunDef false "identOriginOf" ((PCon "OriginBuiltin")) (EApp (EVar "Some") (EVar "IdentBuiltin")))
+(DFunDef false "identOriginOf" ((PCon "OriginModule" (PVar "mid"))) (EIf (EBinOp "==" (EVar "mid") (ELit (LString ""))) (EVar "None") (EApp (EVar "Some") (EApp (EVar "IdentModule") (EVar "mid")))))
+(DTypeSig true "mkIdent" (TyFun (TyCon "Ns") (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Ident"))))))
+(DFunDef false "mkIdent" ((PVar "ns") (PVar "origin") (PVar "name")) (EApp (EApp (EVar "map") (ELam ((PVar "io")) (EApp (EApp (EApp (EVar "Ident") (EVar "ns")) (EVar "io")) (EVar "name")))) (EApp (EVar "identOriginOf") (EVar "origin"))))
+(DTypeSig true "sameTyConHead" (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyCon "Bool"))))))
+(DFunDef false "sameTyConHead" ((PVar "n1") (PVar "o1") (PVar "n2") (PVar "o2")) (EBinOp "&&" (EBinOp "==" (EVar "n1") (EVar "n2")) (EApp (EVar "not") (EApp (EApp (EVar "tyConIdsConflict") (EVar "o1")) (EVar "o2")))))
+(DTypeSig false "tyConIdsConflict" (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "TyConOrigin") (TyCon "Bool"))))
+(DFunDef false "tyConIdsConflict" ((PVar "o1") (PVar "o2")) (EMatch (ETuple (EApp (EVar "identOriginOf") (EVar "o1")) (EApp (EVar "identOriginOf") (EVar "o2"))) (arm (PTuple (PCon "Some" (PVar "i1")) (PCon "Some" (PVar "i2"))) () (EBinOp "!=" (EVar "i1") (EVar "i2"))) (arm PWild () (EVar "False"))))
 (DData Public "Ty" () ((variant "TyCon" (ConNamed (field "tyConName" (TyCon "String")) (field "tyConLoc" (TyApp (TyCon "Option") (TyCon "Loc"))) (field "tyConOrigin" (TyCon "TyConOrigin")))) (variant "TyVar" (ConPos (TyCon "String"))) (variant "TyApp" (ConPos (TyCon "Ty") (TyCon "Ty"))) (variant "TyFun" (ConPos (TyCon "Ty") (TyCon "Ty"))) (variant "TyTuple" (ConPos (TyApp (TyCon "List") (TyCon "Ty")))) (variant "TyEffect" (ConPos (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyApp (TyCon "Option") (TyCon "String")) (TyCon "Ty"))) (variant "TyConstrained" (ConPos (TyApp (TyCon "List") (TyCon "Constraint")) (TyCon "Ty"))) (variant "TyRow" (ConPos (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyApp (TyCon "Option") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Loc"))))) ())
 (DTypeSig true "tyConUnresolved" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Ty"))))
 (DFunDef false "tyConUnresolved" ((PVar "n") (PVar "l")) (ERecordCreate "TyCon" ((fa "tyConName" (EVar "n")) (fa "tyConLoc" (EVar "l")) (fa "tyConOrigin" (EVar "OriginUnresolved")))))
 (DTypeSig true "tyConBuiltin" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Ty"))))
 (DFunDef false "tyConBuiltin" ((PVar "n") (PVar "l")) (ERecordCreate "TyCon" ((fa "tyConName" (EVar "n")) (fa "tyConLoc" (EVar "l")) (fa "tyConOrigin" (EVar "OriginBuiltin")))))
-(DData Public "Constraint" () ((variant "Constraint" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Ty"))))) ())
+(DData Public "Constraint" () ((variant "Constraint" (ConNamed (field "constraintHead" (TyCon "String")) (field "constraintArgs" (TyApp (TyCon "List") (TyCon "Ty"))) (field "constraintOrigin" (TyCon "TyConOrigin"))))) ())
+(DTypeSig true "constraintUnresolved" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyCon "Constraint"))))
+(DFunDef false "constraintUnresolved" ((PVar "iface") (PVar "args")) (ERecordCreate "Constraint" ((fa "constraintHead" (EVar "iface")) (fa "constraintArgs" (EVar "args")) (fa "constraintOrigin" (EVar "OriginUnresolved")))))
 (DTypeSig true "orElseLoc" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyApp (TyCon "Option") (TyCon "Loc")))))
 (DFunDef false "orElseLoc" ((PCon "Some" (PVar "l")) PWild) (EApp (EVar "Some") (EVar "l")))
 (DFunDef false "orElseLoc" ((PCon "None") (PVar "fallback")) (EVar "fallback"))
@@ -1309,8 +1881,12 @@ mapKvsB f ((k, v)::rest) =
 (DData Public "PropParam" () ((variant "PropParam" (ConPos (TyCon "String") (TyCon "Loc") (TyCon "Ty")))) ())
 (DData Public "MethodDefault" () ((variant "MethodDefault" (ConPos (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) ())
 (DData Public "IfaceMethod" () ((variant "IfaceMethod" (ConPos (TyCon "String") (TyCon "Ty") (TyApp (TyCon "Option") (TyCon "MethodDefault"))))) ())
-(DData Public "Super" () ((variant "Super" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))) ())
-(DData Public "Require" () ((variant "Require" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Ty"))))) ())
+(DData Public "Super" () ((variant "Super" (ConNamed (field "superHead" (TyCon "String")) (field "superParams" (TyApp (TyCon "List") (TyCon "String"))) (field "superOrigin" (TyCon "TyConOrigin"))))) ())
+(DData Public "Require" () ((variant "Require" (ConNamed (field "requireHead" (TyCon "String")) (field "requireArgs" (TyApp (TyCon "List") (TyCon "Ty"))) (field "requireOrigin" (TyCon "TyConOrigin"))))) ())
+(DTypeSig true "superUnresolved" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Super"))))
+(DFunDef false "superUnresolved" ((PVar "iface") (PVar "params")) (ERecordCreate "Super" ((fa "superHead" (EVar "iface")) (fa "superParams" (EVar "params")) (fa "superOrigin" (EVar "OriginUnresolved")))))
+(DTypeSig true "requireUnresolved" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyCon "Require"))))
+(DFunDef false "requireUnresolved" ((PVar "iface") (PVar "args")) (ERecordCreate "Require" ((fa "requireHead" (EVar "iface")) (fa "requireArgs" (EVar "args")) (fa "requireOrigin" (EVar "OriginUnresolved")))))
 (DData Public "ImplMethod" () ((variant "ImplMethod" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) ())
 (DData Public "DataVis" () ((variant "VisPrivate" (ConPos)) (variant "VisAbstract" (ConPos)) (variant "VisPublic" (ConPos))) ())
 (DData Public "Field" () ((variant "Field" (ConPos (TyCon "String") (TyCon "Ty")))) ())
@@ -1320,13 +1896,15 @@ mapKvsB f ((k, v)::rest) =
 (DData Public "DeriveRef" () ((variant "DeriveRef" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))))) ())
 (DTypeSig true "deriveRefName" (TyFun (TyCon "DeriveRef") (TyCon "String")))
 (DFunDef false "deriveRefName" ((PCon "DeriveRef" (PVar "n") PWild)) (EVar "n"))
-(DData Public "Decl" () ((variant "DTypeSig" (ConPos (TyCon "Bool") (TyCon "String") (TyCon "Ty"))) (variant "DExtern" (ConPos (TyCon "Bool") (TyCon "String") (TyCon "Ty"))) (variant "DFunDef" (ConPos (TyCon "Bool") (TyCon "String") (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr"))) (variant "DData" (ConNamed (field "dataVis" (TyCon "DataVis")) (field "dataName" (TyCon "String")) (field "dataParams" (TyApp (TyCon "List") (TyCon "String"))) (field "dataCtors" (TyApp (TyCon "List") (TyCon "Variant"))) (field "dataDerives" (TyApp (TyCon "List") (TyCon "DeriveRef"))) (field "dataOrigin" (TyCon "TyConOrigin")))) (variant "DUse" (ConPos (TyCon "Bool") (TyCon "UsePath") (TyCon "Loc"))) (variant "DEffect" (ConPos (TyCon "Bool") (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (variant "DProp" (ConPos (TyCon "Bool") (TyCon "String") (TyApp (TyCon "List") (TyCon "PropParam")) (TyCon "Expr"))) (variant "DTest" (ConPos (TyCon "Bool") (TyCon "String") (TyCon "Expr"))) (variant "DBench" (ConPos (TyCon "Bool") (TyCon "String") (TyCon "Expr"))) (variant "DInterface" (ConNamed (field "pub" (TyCon "Bool")) (field "def" (TyCon "Bool")) (field "name" (TyCon "String")) (field "typarams" (TyApp (TyCon "List") (TyCon "String"))) (field "supers" (TyApp (TyCon "List") (TyCon "Super"))) (field "methods" (TyApp (TyCon "List") (TyCon "IfaceMethod"))) (field "ifaceOrigin" (TyCon "TyConOrigin")))) (variant "DImpl" (ConNamed (field "pub" (TyCon "Bool")) (field "iface" (TyCon "String")) (field "tys" (TyApp (TyCon "List") (TyCon "Ty"))) (field "reqs" (TyApp (TyCon "List") (TyCon "Require"))) (field "methods" (TyApp (TyCon "List") (TyCon "ImplMethod"))))) (variant "DTypeAlias" (ConNamed (field "tyAliasPub" (TyCon "Bool")) (field "tyAliasName" (TyCon "String")) (field "tyAliasParams" (TyApp (TyCon "List") (TyCon "String"))) (field "tyAliasRhs" (TyCon "Ty")) (field "tyAliasOrigin" (TyCon "TyConOrigin")))) (variant "DNewtype" (ConNamed (field "newtypePub" (TyCon "Bool")) (field "newtypeName" (TyCon "String")) (field "newtypeParams" (TyApp (TyCon "List") (TyCon "String"))) (field "newtypeCtor" (TyCon "String")) (field "newtypeFieldTy" (TyCon "Ty")) (field "newtypeDerives" (TyApp (TyCon "List") (TyCon "DeriveRef"))) (field "newtypeOrigin" (TyCon "TyConOrigin")))) (variant "DLetGroup" (ConPos (TyCon "Bool") (TyApp (TyCon "List") (TyCon "LetBind")))) (variant "DAttrib" (ConPos (TyApp (TyCon "List") (TyCon "Attr")) (TyCon "Decl")))) ())
+(DData Public "Decl" () ((variant "DTypeSig" (ConPos (TyCon "Bool") (TyCon "String") (TyCon "Ty"))) (variant "DExtern" (ConPos (TyCon "Bool") (TyCon "String") (TyCon "Ty"))) (variant "DFunDef" (ConPos (TyCon "Bool") (TyCon "String") (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr"))) (variant "DData" (ConNamed (field "dataVis" (TyCon "DataVis")) (field "dataName" (TyCon "String")) (field "dataParams" (TyApp (TyCon "List") (TyCon "String"))) (field "dataCtors" (TyApp (TyCon "List") (TyCon "Variant"))) (field "dataDerives" (TyApp (TyCon "List") (TyCon "DeriveRef"))) (field "dataOrigin" (TyCon "TyConOrigin")))) (variant "DUse" (ConPos (TyCon "Bool") (TyCon "UsePath") (TyCon "Loc"))) (variant "DEffect" (ConPos (TyCon "Bool") (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (variant "DProp" (ConPos (TyCon "Bool") (TyCon "String") (TyApp (TyCon "List") (TyCon "PropParam")) (TyCon "Expr"))) (variant "DTest" (ConPos (TyCon "Bool") (TyCon "String") (TyCon "Expr"))) (variant "DBench" (ConPos (TyCon "Bool") (TyCon "String") (TyCon "Expr"))) (variant "DInterface" (ConNamed (field "pub" (TyCon "Bool")) (field "def" (TyCon "Bool")) (field "name" (TyCon "String")) (field "typarams" (TyApp (TyCon "List") (TyCon "String"))) (field "supers" (TyApp (TyCon "List") (TyCon "Super"))) (field "methods" (TyApp (TyCon "List") (TyCon "IfaceMethod"))) (field "ifaceOrigin" (TyCon "TyConOrigin")))) (variant "DImpl" (ConNamed (field "pub" (TyCon "Bool")) (field "iface" (TyCon "String")) (field "tys" (TyApp (TyCon "List") (TyCon "Ty"))) (field "reqs" (TyApp (TyCon "List") (TyCon "Require"))) (field "methods" (TyApp (TyCon "List") (TyCon "ImplMethod"))) (field "implOrigin" (TyCon "TyConOrigin")))) (variant "DTypeAlias" (ConNamed (field "tyAliasPub" (TyCon "Bool")) (field "tyAliasName" (TyCon "String")) (field "tyAliasParams" (TyApp (TyCon "List") (TyCon "String"))) (field "tyAliasRhs" (TyCon "Ty")) (field "tyAliasOrigin" (TyCon "TyConOrigin")))) (variant "DNewtype" (ConNamed (field "newtypePub" (TyCon "Bool")) (field "newtypeName" (TyCon "String")) (field "newtypeParams" (TyApp (TyCon "List") (TyCon "String"))) (field "newtypeCtor" (TyCon "String")) (field "newtypeFieldTy" (TyCon "Ty")) (field "newtypeDerives" (TyApp (TyCon "List") (TyCon "DeriveRef"))) (field "newtypeOrigin" (TyCon "TyConOrigin")))) (variant "DLetGroup" (ConPos (TyCon "Bool") (TyApp (TyCon "List") (TyCon "LetBind")))) (variant "DAttrib" (ConPos (TyApp (TyCon "List") (TyCon "Attr")) (TyCon "Decl")))) ())
 (DTypeSig true "dDataUnresolved" (TyFun (TyCon "DataVis") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Variant")) (TyFun (TyApp (TyCon "List") (TyCon "DeriveRef")) (TyCon "Decl")))))))
 (DFunDef false "dDataUnresolved" ((PVar "vis") (PVar "n") (PVar "params") (PVar "variants") (PVar "derives")) (ERecordCreate "DData" ((fa "dataVis" (EVar "vis")) (fa "dataName" (EVar "n")) (fa "dataParams" (EVar "params")) (fa "dataCtors" (EVar "variants")) (fa "dataDerives" (EVar "derives")) (fa "dataOrigin" (EVar "OriginUnresolved")))))
 (DTypeSig true "dTypeAliasUnresolved" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Ty") (TyCon "Decl"))))))
 (DFunDef false "dTypeAliasUnresolved" ((PVar "pub") (PVar "n") (PVar "params") (PVar "rhs")) (ERecordCreate "DTypeAlias" ((fa "tyAliasPub" (EVar "pub")) (fa "tyAliasName" (EVar "n")) (fa "tyAliasParams" (EVar "params")) (fa "tyAliasRhs" (EVar "rhs")) (fa "tyAliasOrigin" (EVar "OriginUnresolved")))))
 (DTypeSig true "dInterfaceUnresolved" (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Super")) (TyFun (TyApp (TyCon "List") (TyCon "IfaceMethod")) (TyCon "Decl"))))))))
 (DFunDef false "dInterfaceUnresolved" ((PVar "pub") (PVar "isDefault") (PVar "n") (PVar "typarams") (PVar "supers") (PVar "methods")) (ERecordCreate "DInterface" ((fa "pub" (EVar "pub")) (fa "def" (EVar "isDefault")) (fa "name" (EVar "n")) (fa "typarams" (EVar "typarams")) (fa "supers" (EVar "supers")) (fa "methods" (EVar "methods")) (fa "ifaceOrigin" (EVar "OriginUnresolved")))))
+(DTypeSig true "dImplUnresolved" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyFun (TyApp (TyCon "List") (TyCon "Require")) (TyFun (TyApp (TyCon "List") (TyCon "ImplMethod")) (TyCon "Decl")))))))
+(DFunDef false "dImplUnresolved" ((PVar "pub") (PVar "iface") (PVar "tys") (PVar "reqs") (PVar "methods")) (ERecordCreate "DImpl" ((fa "pub" (EVar "pub")) (fa "iface" (EVar "iface")) (fa "tys" (EVar "tys")) (fa "reqs" (EVar "reqs")) (fa "methods" (EVar "methods")) (fa "implOrigin" (EVar "OriginUnresolved")))))
 (DTypeSig true "dNewtypeUnresolved" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "Ty") (TyFun (TyApp (TyCon "List") (TyCon "DeriveRef")) (TyCon "Decl"))))))))
 (DFunDef false "dNewtypeUnresolved" ((PVar "pub") (PVar "n") (PVar "params") (PVar "con") (PVar "fty") (PVar "derives")) (ERecordCreate "DNewtype" ((fa "newtypePub" (EVar "pub")) (fa "newtypeName" (EVar "n")) (fa "newtypeParams" (EVar "params")) (fa "newtypeCtor" (EVar "con")) (fa "newtypeFieldTy" (EVar "fty")) (fa "newtypeDerives" (EVar "derives")) (fa "newtypeOrigin" (EVar "OriginUnresolved")))))
 (DTypeSig true "mapTyFull" (TyFun (TyFun (TyCon "Ty") (TyTuple (TyCon "Ty") (TyCon "Bool"))) (TyFun (TyCon "Ty") (TyTuple (TyCon "Ty") (TyCon "Bool")))))
@@ -1345,7 +1923,7 @@ mapKvsB f ((k, v)::rest) =
 (DFunDef false "mapTyListB" ((PVar "f") (PCons (PVar "t") (PVar "ts"))) (EBlock (DoLet false false (PTuple (PVar "t2") (PVar "c1")) (EApp (EApp (EVar "mapTyFull") (EVar "f")) (EVar "t"))) (DoLet false false (PTuple (PVar "ts2") (PVar "c2")) (EApp (EApp (EVar "mapTyListB") (EVar "f")) (EVar "ts"))) (DoExpr (ETuple (EBinOp "::" (EVar "t2") (EVar "ts2")) (EBinOp "||" (EVar "c1") (EVar "c2"))))))
 (DTypeSig false "mapConstraintsB" (TyFun (TyFun (TyCon "Ty") (TyTuple (TyCon "Ty") (TyCon "Bool"))) (TyFun (TyApp (TyCon "List") (TyCon "Constraint")) (TyTuple (TyApp (TyCon "List") (TyCon "Constraint")) (TyCon "Bool")))))
 (DFunDef false "mapConstraintsB" (PWild (PList)) (ETuple (EListLit) (EVar "False")))
-(DFunDef false "mapConstraintsB" ((PVar "f") (PCons (PCon "Constraint" (PVar "iface") (PVar "tys")) (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "tys2") (PVar "c1")) (EApp (EApp (EVar "mapTyListB") (EVar "f")) (EVar "tys"))) (DoLet false false (PTuple (PVar "rest2") (PVar "c2")) (EApp (EApp (EVar "mapConstraintsB") (EVar "f")) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (EApp (EApp (EVar "Constraint") (EVar "iface")) (EVar "tys2")) (EVar "rest2")) (EBinOp "||" (EVar "c1") (EVar "c2"))))))
+(DFunDef false "mapConstraintsB" ((PVar "f") (PCons (PAs "c" (PRec "Constraint" ((rf "constraintArgs" (PVar "tys"))) false)) (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "tys2") (PVar "c1")) (EApp (EApp (EVar "mapTyListB") (EVar "f")) (EVar "tys"))) (DoLet false false (PTuple (PVar "rest2") (PVar "c2")) (EApp (EApp (EVar "mapConstraintsB") (EVar "f")) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (EVariantUpdate "Constraint" (EVar "c") ((fa "constraintArgs" (EVar "tys2")))) (EVar "rest2")) (EBinOp "||" (EVar "c1") (EVar "c2"))))))
 (DTypeSig true "mapTyInDecl" (TyFun (TyFun (TyCon "Ty") (TyTuple (TyCon "Ty") (TyCon "Bool"))) (TyFun (TyCon "Decl") (TyTuple (TyCon "Decl") (TyCon "Bool")))))
 (DFunDef false "mapTyInDecl" ((PVar "f") (PCon "DTypeSig" (PVar "pub") (PVar "n") (PVar "t"))) (EBlock (DoLet false false (PTuple (PVar "t2") (PVar "c")) (EApp (EApp (EVar "mapTyFull") (EVar "f")) (EVar "t"))) (DoExpr (ETuple (EApp (EApp (EApp (EVar "DTypeSig") (EVar "pub")) (EVar "n")) (EVar "t2")) (EVar "c")))))
 (DFunDef false "mapTyInDecl" ((PVar "f") (PCon "DExtern" (PVar "pub") (PVar "n") (PVar "t"))) (EBlock (DoLet false false (PTuple (PVar "t2") (PVar "c")) (EApp (EApp (EVar "mapTyFull") (EVar "f")) (EVar "t"))) (DoExpr (ETuple (EApp (EApp (EApp (EVar "DExtern") (EVar "pub")) (EVar "n")) (EVar "t2")) (EVar "c")))))
@@ -1382,7 +1960,7 @@ mapKvsB f ((k, v)::rest) =
 (DFunDef false "mapIfaceMethodB" ((PVar "f") (PCon "IfaceMethod" (PVar "n") (PVar "ty") (PCon "Some" (PCon "MethodDefault" (PVar "ps") (PVar "e"))))) (EBlock (DoLet false false (PTuple (PVar "ty2") (PVar "c1")) (EApp (EApp (EVar "mapTyFull") (EVar "f")) (EVar "ty"))) (DoLet false false (PTuple (PVar "e2") (PVar "c2")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "e"))) (DoExpr (ETuple (EApp (EApp (EApp (EVar "IfaceMethod") (EVar "n")) (EVar "ty2")) (EApp (EVar "Some") (EApp (EApp (EVar "MethodDefault") (EVar "ps")) (EVar "e2")))) (EBinOp "||" (EVar "c1") (EVar "c2"))))))
 (DTypeSig false "mapRequiresB" (TyFun (TyFun (TyCon "Ty") (TyTuple (TyCon "Ty") (TyCon "Bool"))) (TyFun (TyApp (TyCon "List") (TyCon "Require")) (TyTuple (TyApp (TyCon "List") (TyCon "Require")) (TyCon "Bool")))))
 (DFunDef false "mapRequiresB" (PWild (PList)) (ETuple (EListLit) (EVar "False")))
-(DFunDef false "mapRequiresB" ((PVar "f") (PCons (PCon "Require" (PVar "iface") (PVar "tys")) (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "tys2") (PVar "c1")) (EApp (EApp (EVar "mapTyListB") (EVar "f")) (EVar "tys"))) (DoLet false false (PTuple (PVar "rest2") (PVar "c2")) (EApp (EApp (EVar "mapRequiresB") (EVar "f")) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (EApp (EApp (EVar "Require") (EVar "iface")) (EVar "tys2")) (EVar "rest2")) (EBinOp "||" (EVar "c1") (EVar "c2"))))))
+(DFunDef false "mapRequiresB" ((PVar "f") (PCons (PAs "r" (PRec "Require" ((rf "requireArgs" (PVar "tys"))) false)) (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "tys2") (PVar "c1")) (EApp (EApp (EVar "mapTyListB") (EVar "f")) (EVar "tys"))) (DoLet false false (PTuple (PVar "rest2") (PVar "c2")) (EApp (EApp (EVar "mapRequiresB") (EVar "f")) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (EVariantUpdate "Require" (EVar "r") ((fa "requireArgs" (EVar "tys2")))) (EVar "rest2")) (EBinOp "||" (EVar "c1") (EVar "c2"))))))
 (DTypeSig false "mapImplMethodsB" (TyFun (TyFun (TyCon "Ty") (TyTuple (TyCon "Ty") (TyCon "Bool"))) (TyFun (TyApp (TyCon "List") (TyCon "ImplMethod")) (TyTuple (TyApp (TyCon "List") (TyCon "ImplMethod")) (TyCon "Bool")))))
 (DFunDef false "mapImplMethodsB" (PWild (PList)) (ETuple (EListLit) (EVar "False")))
 (DFunDef false "mapImplMethodsB" ((PVar "f") (PCons (PCon "ImplMethod" (PVar "n") (PVar "ps") (PVar "e")) (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "e2") (PVar "c1")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "e"))) (DoLet false false (PTuple (PVar "rest2") (PVar "c2")) (EApp (EApp (EVar "mapImplMethodsB") (EVar "f")) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (EApp (EApp (EApp (EVar "ImplMethod") (EVar "n")) (EVar "ps")) (EVar "e2")) (EVar "rest2")) (EBinOp "||" (EVar "c1") (EVar "c2"))))))
@@ -1473,12 +2051,47 @@ mapKvsB f ((k, v)::rest) =
 (DImpl true "Eq" ((TyCon "Lit")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "LInt" (PVar "__a0")) (PCon "LInt" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "LFloat" (PVar "__a0")) (PCon "LFloat" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "LString" (PVar "__a0")) (PCon "LString" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "LChar" (PVar "__a0")) (PCon "LChar" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "LBool" (PVar "__a0")) (PCon "LBool" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "LUnit") (PCon "LUnit")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
 (DData Public "Loc" () ((variant "Loc" (ConPos (TyCon "String") (TyCon "Int") (TyCon "Int") (TyCon "Int") (TyCon "Int")))) ())
 (DData Public "TyConOrigin" () ((variant "OriginUnresolved" (ConPos)) (variant "OriginBuiltin" (ConPos)) (variant "OriginModule" (ConPos (TyCon "String")))) ())
+(DTypeSig true "ifaceIdentity" (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyCon "String"))))
+(DFunDef false "ifaceIdentity" ((PCon "OriginModule" (PVar "m")) (PVar "name")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "::"))) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString ""))))
+(DFunDef false "ifaceIdentity" ((PCon "OriginUnresolved") PWild) (ELit (LString "")))
+(DFunDef false "ifaceIdentity" ((PCon "OriginBuiltin") PWild) (ELit (LString "")))
+(DTypeSig true "ifaceIdMatches" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
+(DFunDef false "ifaceIdMatches" ((PVar "a") (PVar "b")) (EBinOp "&&" (EBinOp "!=" (EVar "a") (ELit (LString ""))) (EBinOp "==" (EVar "a") (EVar "b"))))
+(DData Public "Ns" () ((variant "NsType" (ConPos)) (variant "NsIface" (ConPos)) (variant "NsMethod" (ConPos)) (variant "NsCtor" (ConPos)) (variant "NsField" (ConPos)) (variant "NsValue" (ConPos))) ())
+(DImpl true "Eq" ((TyCon "Ns")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "NsType") (PCon "NsType")) () (EVar "True")) (arm (PTuple (PCon "NsIface") (PCon "NsIface")) () (EVar "True")) (arm (PTuple (PCon "NsMethod") (PCon "NsMethod")) () (EVar "True")) (arm (PTuple (PCon "NsCtor") (PCon "NsCtor")) () (EVar "True")) (arm (PTuple (PCon "NsField") (PCon "NsField")) () (EVar "True")) (arm (PTuple (PCon "NsValue") (PCon "NsValue")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
+(DImpl true "Ord" ((TyCon "Ns")) () ((im "compare" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "NsType") (PCon "NsType")) () (EVar "Eq")) (arm (PTuple (PCon "NsType") (PCon "NsIface")) () (EVar "Lt")) (arm (PTuple (PCon "NsType") (PCon "NsMethod")) () (EVar "Lt")) (arm (PTuple (PCon "NsType") (PCon "NsCtor")) () (EVar "Lt")) (arm (PTuple (PCon "NsType") (PCon "NsField")) () (EVar "Lt")) (arm (PTuple (PCon "NsType") (PCon "NsValue")) () (EVar "Lt")) (arm (PTuple (PCon "NsIface") (PCon "NsType")) () (EVar "Gt")) (arm (PTuple (PCon "NsIface") (PCon "NsIface")) () (EVar "Eq")) (arm (PTuple (PCon "NsIface") (PCon "NsMethod")) () (EVar "Lt")) (arm (PTuple (PCon "NsIface") (PCon "NsCtor")) () (EVar "Lt")) (arm (PTuple (PCon "NsIface") (PCon "NsField")) () (EVar "Lt")) (arm (PTuple (PCon "NsIface") (PCon "NsValue")) () (EVar "Lt")) (arm (PTuple (PCon "NsMethod") (PCon "NsType")) () (EVar "Gt")) (arm (PTuple (PCon "NsMethod") (PCon "NsIface")) () (EVar "Gt")) (arm (PTuple (PCon "NsMethod") (PCon "NsMethod")) () (EVar "Eq")) (arm (PTuple (PCon "NsMethod") (PCon "NsCtor")) () (EVar "Lt")) (arm (PTuple (PCon "NsMethod") (PCon "NsField")) () (EVar "Lt")) (arm (PTuple (PCon "NsMethod") (PCon "NsValue")) () (EVar "Lt")) (arm (PTuple (PCon "NsCtor") (PCon "NsType")) () (EVar "Gt")) (arm (PTuple (PCon "NsCtor") (PCon "NsIface")) () (EVar "Gt")) (arm (PTuple (PCon "NsCtor") (PCon "NsMethod")) () (EVar "Gt")) (arm (PTuple (PCon "NsCtor") (PCon "NsCtor")) () (EVar "Eq")) (arm (PTuple (PCon "NsCtor") (PCon "NsField")) () (EVar "Lt")) (arm (PTuple (PCon "NsCtor") (PCon "NsValue")) () (EVar "Lt")) (arm (PTuple (PCon "NsField") (PCon "NsType")) () (EVar "Gt")) (arm (PTuple (PCon "NsField") (PCon "NsIface")) () (EVar "Gt")) (arm (PTuple (PCon "NsField") (PCon "NsMethod")) () (EVar "Gt")) (arm (PTuple (PCon "NsField") (PCon "NsCtor")) () (EVar "Gt")) (arm (PTuple (PCon "NsField") (PCon "NsField")) () (EVar "Eq")) (arm (PTuple (PCon "NsField") (PCon "NsValue")) () (EVar "Lt")) (arm (PTuple (PCon "NsValue") (PCon "NsType")) () (EVar "Gt")) (arm (PTuple (PCon "NsValue") (PCon "NsIface")) () (EVar "Gt")) (arm (PTuple (PCon "NsValue") (PCon "NsMethod")) () (EVar "Gt")) (arm (PTuple (PCon "NsValue") (PCon "NsCtor")) () (EVar "Gt")) (arm (PTuple (PCon "NsValue") (PCon "NsField")) () (EVar "Gt")) (arm (PTuple (PCon "NsValue") (PCon "NsValue")) () (EVar "Eq"))))))
+(DImpl true "Debug" ((TyCon "Ns")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "NsType") () (ELit (LString "NsType"))) (arm (PCon "NsIface") () (ELit (LString "NsIface"))) (arm (PCon "NsMethod") () (ELit (LString "NsMethod"))) (arm (PCon "NsCtor") () (ELit (LString "NsCtor"))) (arm (PCon "NsField") () (ELit (LString "NsField"))) (arm (PCon "NsValue") () (ELit (LString "NsValue")))))))
+(DData Abstract "IdentOrigin" () ((variant "IdentBuiltin" (ConPos)) (variant "IdentModule" (ConPos (TyCon "String")))) ())
+(DImpl true "Eq" ((TyCon "IdentOrigin")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "IdentBuiltin") (PCon "IdentBuiltin")) () (EVar "True")) (arm (PTuple (PCon "IdentModule" (PVar "__a0")) (PCon "IdentModule" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple PWild PWild) () (EVar "False"))))))
+(DImpl true "Ord" ((TyCon "IdentOrigin")) () ((im "compare" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "IdentBuiltin") (PCon "IdentBuiltin")) () (EVar "Eq")) (arm (PTuple (PCon "IdentBuiltin") (PCon "IdentModule" (PVar "__b0"))) () (EVar "Lt")) (arm (PTuple (PCon "IdentModule" (PVar "__a0")) (PCon "IdentBuiltin")) () (EVar "Gt")) (arm (PTuple (PCon "IdentModule" (PVar "__a0")) (PCon "IdentModule" (PVar "__b0"))) () (EApp (EApp (EMethodRef "compare") (EVar "__a0")) (EVar "__b0")))))))
+(DImpl true "Debug" ((TyCon "IdentOrigin")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "IdentBuiltin") () (ELit (LString "IdentBuiltin"))) (arm (PCon "IdentModule" (PVar "__a0")) () (EBinOp "++" (ELit (LString "IdentModule ")) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a0")))))))))
+(DTypeSig true "identOriginFold" (TyFun (TyVar "a") (TyFun (TyFun (TyCon "String") (TyVar "a")) (TyFun (TyCon "IdentOrigin") (TyVar "a")))))
+(DFunDef false "identOriginFold" ((PVar "onBuiltin") PWild (PCon "IdentBuiltin")) (EVar "onBuiltin"))
+(DFunDef false "identOriginFold" (PWild (PVar "onModule") (PCon "IdentModule" (PVar "mid"))) (EApp (EVar "onModule") (EVar "mid")))
+(DTypeSig true "identOriginBuiltin" (TyCon "IdentOrigin"))
+(DFunDef false "identOriginBuiltin" () (EVar "IdentBuiltin"))
+(DData Public "Ident" () ((variant "Ident" (ConPos (TyCon "Ns") (TyCon "IdentOrigin") (TyCon "String")))) ())
+(DImpl true "Eq" ((TyCon "Ident")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "Ident" (PVar "__a0") (PVar "__a1") (PVar "__a2")) (PCon "Ident" (PVar "__b0") (PVar "__b1") (PVar "__b2"))) () (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EMethodRef "eq") (EVar "__a1")) (EVar "__b1"))) (EApp (EApp (EMethodRef "eq") (EVar "__a2")) (EVar "__b2"))))))))
+(DImpl true "Ord" ((TyCon "Ident")) () ((im "compare" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "Ident" (PVar "__a0") (PVar "__a1") (PVar "__a2")) (PCon "Ident" (PVar "__b0") (PVar "__b1") (PVar "__b2"))) () (EMatch (EApp (EApp (EMethodRef "compare") (EVar "__a0")) (EVar "__b0")) (arm (PCon "Eq") () (EMatch (EApp (EApp (EMethodRef "compare") (EVar "__a1")) (EVar "__b1")) (arm (PCon "Eq") () (EApp (EApp (EMethodRef "compare") (EVar "__a2")) (EVar "__b2"))) (arm (PVar "__c") () (EVar "__c")))) (arm (PVar "__c") () (EVar "__c"))))))))
+(DImpl true "Debug" ((TyCon "Ident")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "Ident" (PVar "__a0") (PVar "__a1") (PVar "__a2")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Ident ")) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a0")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a1")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a2")))))))))
+(DTypeSig true "identOriginOf" (TyFun (TyCon "TyConOrigin") (TyApp (TyCon "Option") (TyCon "IdentOrigin"))))
+(DFunDef false "identOriginOf" ((PCon "OriginUnresolved")) (EVar "None"))
+(DFunDef false "identOriginOf" ((PCon "OriginBuiltin")) (EApp (EVar "Some") (EVar "IdentBuiltin")))
+(DFunDef false "identOriginOf" ((PCon "OriginModule" (PVar "mid"))) (EIf (EBinOp "==" (EVar "mid") (ELit (LString ""))) (EVar "None") (EApp (EVar "Some") (EApp (EVar "IdentModule") (EVar "mid")))))
+(DTypeSig true "mkIdent" (TyFun (TyCon "Ns") (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Ident"))))))
+(DFunDef false "mkIdent" ((PVar "ns") (PVar "origin") (PVar "name")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "io")) (EApp (EApp (EApp (EVar "Ident") (EVar "ns")) (EVar "io")) (EVar "name")))) (EApp (EVar "identOriginOf") (EVar "origin"))))
+(DTypeSig true "sameTyConHead" (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyCon "Bool"))))))
+(DFunDef false "sameTyConHead" ((PVar "n1") (PVar "o1") (PVar "n2") (PVar "o2")) (EBinOp "&&" (EBinOp "==" (EVar "n1") (EVar "n2")) (EApp (EVar "not") (EApp (EApp (EVar "tyConIdsConflict") (EVar "o1")) (EVar "o2")))))
+(DTypeSig false "tyConIdsConflict" (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "TyConOrigin") (TyCon "Bool"))))
+(DFunDef false "tyConIdsConflict" ((PVar "o1") (PVar "o2")) (EMatch (ETuple (EApp (EVar "identOriginOf") (EVar "o1")) (EApp (EVar "identOriginOf") (EVar "o2"))) (arm (PTuple (PCon "Some" (PVar "i1")) (PCon "Some" (PVar "i2"))) () (EBinOp "!=" (EVar "i1") (EVar "i2"))) (arm PWild () (EVar "False"))))
 (DData Public "Ty" () ((variant "TyCon" (ConNamed (field "tyConName" (TyCon "String")) (field "tyConLoc" (TyApp (TyCon "Option") (TyCon "Loc"))) (field "tyConOrigin" (TyCon "TyConOrigin")))) (variant "TyVar" (ConPos (TyCon "String"))) (variant "TyApp" (ConPos (TyCon "Ty") (TyCon "Ty"))) (variant "TyFun" (ConPos (TyCon "Ty") (TyCon "Ty"))) (variant "TyTuple" (ConPos (TyApp (TyCon "List") (TyCon "Ty")))) (variant "TyEffect" (ConPos (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyApp (TyCon "Option") (TyCon "String")) (TyCon "Ty"))) (variant "TyConstrained" (ConPos (TyApp (TyCon "List") (TyCon "Constraint")) (TyCon "Ty"))) (variant "TyRow" (ConPos (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyApp (TyCon "Option") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Loc"))))) ())
 (DTypeSig true "tyConUnresolved" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Ty"))))
 (DFunDef false "tyConUnresolved" ((PVar "n") (PVar "l")) (ERecordCreate "TyCon" ((fa "tyConName" (EVar "n")) (fa "tyConLoc" (EVar "l")) (fa "tyConOrigin" (EVar "OriginUnresolved")))))
 (DTypeSig true "tyConBuiltin" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Ty"))))
 (DFunDef false "tyConBuiltin" ((PVar "n") (PVar "l")) (ERecordCreate "TyCon" ((fa "tyConName" (EVar "n")) (fa "tyConLoc" (EVar "l")) (fa "tyConOrigin" (EVar "OriginBuiltin")))))
-(DData Public "Constraint" () ((variant "Constraint" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Ty"))))) ())
+(DData Public "Constraint" () ((variant "Constraint" (ConNamed (field "constraintHead" (TyCon "String")) (field "constraintArgs" (TyApp (TyCon "List") (TyCon "Ty"))) (field "constraintOrigin" (TyCon "TyConOrigin"))))) ())
+(DTypeSig true "constraintUnresolved" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyCon "Constraint"))))
+(DFunDef false "constraintUnresolved" ((PVar "iface") (PVar "args")) (ERecordCreate "Constraint" ((fa "constraintHead" (EVar "iface")) (fa "constraintArgs" (EVar "args")) (fa "constraintOrigin" (EVar "OriginUnresolved")))))
 (DTypeSig true "orElseLoc" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyApp (TyCon "Option") (TyCon "Loc")))))
 (DFunDef false "orElseLoc" ((PCon "Some" (PVar "l")) PWild) (EApp (EVar "Some") (EVar "l")))
 (DFunDef false "orElseLoc" ((PCon "None") (PVar "fallback")) (EVar "fallback"))
@@ -1521,8 +2134,12 @@ mapKvsB f ((k, v)::rest) =
 (DData Public "PropParam" () ((variant "PropParam" (ConPos (TyCon "String") (TyCon "Loc") (TyCon "Ty")))) ())
 (DData Public "MethodDefault" () ((variant "MethodDefault" (ConPos (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) ())
 (DData Public "IfaceMethod" () ((variant "IfaceMethod" (ConPos (TyCon "String") (TyCon "Ty") (TyApp (TyCon "Option") (TyCon "MethodDefault"))))) ())
-(DData Public "Super" () ((variant "Super" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))) ())
-(DData Public "Require" () ((variant "Require" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Ty"))))) ())
+(DData Public "Super" () ((variant "Super" (ConNamed (field "superHead" (TyCon "String")) (field "superParams" (TyApp (TyCon "List") (TyCon "String"))) (field "superOrigin" (TyCon "TyConOrigin"))))) ())
+(DData Public "Require" () ((variant "Require" (ConNamed (field "requireHead" (TyCon "String")) (field "requireArgs" (TyApp (TyCon "List") (TyCon "Ty"))) (field "requireOrigin" (TyCon "TyConOrigin"))))) ())
+(DTypeSig true "superUnresolved" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Super"))))
+(DFunDef false "superUnresolved" ((PVar "iface") (PVar "params")) (ERecordCreate "Super" ((fa "superHead" (EVar "iface")) (fa "superParams" (EVar "params")) (fa "superOrigin" (EVar "OriginUnresolved")))))
+(DTypeSig true "requireUnresolved" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyCon "Require"))))
+(DFunDef false "requireUnresolved" ((PVar "iface") (PVar "args")) (ERecordCreate "Require" ((fa "requireHead" (EVar "iface")) (fa "requireArgs" (EVar "args")) (fa "requireOrigin" (EVar "OriginUnresolved")))))
 (DData Public "ImplMethod" () ((variant "ImplMethod" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) ())
 (DData Public "DataVis" () ((variant "VisPrivate" (ConPos)) (variant "VisAbstract" (ConPos)) (variant "VisPublic" (ConPos))) ())
 (DData Public "Field" () ((variant "Field" (ConPos (TyCon "String") (TyCon "Ty")))) ())
@@ -1532,13 +2149,15 @@ mapKvsB f ((k, v)::rest) =
 (DData Public "DeriveRef" () ((variant "DeriveRef" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))))) ())
 (DTypeSig true "deriveRefName" (TyFun (TyCon "DeriveRef") (TyCon "String")))
 (DFunDef false "deriveRefName" ((PCon "DeriveRef" (PVar "n") PWild)) (EVar "n"))
-(DData Public "Decl" () ((variant "DTypeSig" (ConPos (TyCon "Bool") (TyCon "String") (TyCon "Ty"))) (variant "DExtern" (ConPos (TyCon "Bool") (TyCon "String") (TyCon "Ty"))) (variant "DFunDef" (ConPos (TyCon "Bool") (TyCon "String") (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr"))) (variant "DData" (ConNamed (field "dataVis" (TyCon "DataVis")) (field "dataName" (TyCon "String")) (field "dataParams" (TyApp (TyCon "List") (TyCon "String"))) (field "dataCtors" (TyApp (TyCon "List") (TyCon "Variant"))) (field "dataDerives" (TyApp (TyCon "List") (TyCon "DeriveRef"))) (field "dataOrigin" (TyCon "TyConOrigin")))) (variant "DUse" (ConPos (TyCon "Bool") (TyCon "UsePath") (TyCon "Loc"))) (variant "DEffect" (ConPos (TyCon "Bool") (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (variant "DProp" (ConPos (TyCon "Bool") (TyCon "String") (TyApp (TyCon "List") (TyCon "PropParam")) (TyCon "Expr"))) (variant "DTest" (ConPos (TyCon "Bool") (TyCon "String") (TyCon "Expr"))) (variant "DBench" (ConPos (TyCon "Bool") (TyCon "String") (TyCon "Expr"))) (variant "DInterface" (ConNamed (field "pub" (TyCon "Bool")) (field "def" (TyCon "Bool")) (field "name" (TyCon "String")) (field "typarams" (TyApp (TyCon "List") (TyCon "String"))) (field "supers" (TyApp (TyCon "List") (TyCon "Super"))) (field "methods" (TyApp (TyCon "List") (TyCon "IfaceMethod"))) (field "ifaceOrigin" (TyCon "TyConOrigin")))) (variant "DImpl" (ConNamed (field "pub" (TyCon "Bool")) (field "iface" (TyCon "String")) (field "tys" (TyApp (TyCon "List") (TyCon "Ty"))) (field "reqs" (TyApp (TyCon "List") (TyCon "Require"))) (field "methods" (TyApp (TyCon "List") (TyCon "ImplMethod"))))) (variant "DTypeAlias" (ConNamed (field "tyAliasPub" (TyCon "Bool")) (field "tyAliasName" (TyCon "String")) (field "tyAliasParams" (TyApp (TyCon "List") (TyCon "String"))) (field "tyAliasRhs" (TyCon "Ty")) (field "tyAliasOrigin" (TyCon "TyConOrigin")))) (variant "DNewtype" (ConNamed (field "newtypePub" (TyCon "Bool")) (field "newtypeName" (TyCon "String")) (field "newtypeParams" (TyApp (TyCon "List") (TyCon "String"))) (field "newtypeCtor" (TyCon "String")) (field "newtypeFieldTy" (TyCon "Ty")) (field "newtypeDerives" (TyApp (TyCon "List") (TyCon "DeriveRef"))) (field "newtypeOrigin" (TyCon "TyConOrigin")))) (variant "DLetGroup" (ConPos (TyCon "Bool") (TyApp (TyCon "List") (TyCon "LetBind")))) (variant "DAttrib" (ConPos (TyApp (TyCon "List") (TyCon "Attr")) (TyCon "Decl")))) ())
+(DData Public "Decl" () ((variant "DTypeSig" (ConPos (TyCon "Bool") (TyCon "String") (TyCon "Ty"))) (variant "DExtern" (ConPos (TyCon "Bool") (TyCon "String") (TyCon "Ty"))) (variant "DFunDef" (ConPos (TyCon "Bool") (TyCon "String") (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr"))) (variant "DData" (ConNamed (field "dataVis" (TyCon "DataVis")) (field "dataName" (TyCon "String")) (field "dataParams" (TyApp (TyCon "List") (TyCon "String"))) (field "dataCtors" (TyApp (TyCon "List") (TyCon "Variant"))) (field "dataDerives" (TyApp (TyCon "List") (TyCon "DeriveRef"))) (field "dataOrigin" (TyCon "TyConOrigin")))) (variant "DUse" (ConPos (TyCon "Bool") (TyCon "UsePath") (TyCon "Loc"))) (variant "DEffect" (ConPos (TyCon "Bool") (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (variant "DProp" (ConPos (TyCon "Bool") (TyCon "String") (TyApp (TyCon "List") (TyCon "PropParam")) (TyCon "Expr"))) (variant "DTest" (ConPos (TyCon "Bool") (TyCon "String") (TyCon "Expr"))) (variant "DBench" (ConPos (TyCon "Bool") (TyCon "String") (TyCon "Expr"))) (variant "DInterface" (ConNamed (field "pub" (TyCon "Bool")) (field "def" (TyCon "Bool")) (field "name" (TyCon "String")) (field "typarams" (TyApp (TyCon "List") (TyCon "String"))) (field "supers" (TyApp (TyCon "List") (TyCon "Super"))) (field "methods" (TyApp (TyCon "List") (TyCon "IfaceMethod"))) (field "ifaceOrigin" (TyCon "TyConOrigin")))) (variant "DImpl" (ConNamed (field "pub" (TyCon "Bool")) (field "iface" (TyCon "String")) (field "tys" (TyApp (TyCon "List") (TyCon "Ty"))) (field "reqs" (TyApp (TyCon "List") (TyCon "Require"))) (field "methods" (TyApp (TyCon "List") (TyCon "ImplMethod"))) (field "implOrigin" (TyCon "TyConOrigin")))) (variant "DTypeAlias" (ConNamed (field "tyAliasPub" (TyCon "Bool")) (field "tyAliasName" (TyCon "String")) (field "tyAliasParams" (TyApp (TyCon "List") (TyCon "String"))) (field "tyAliasRhs" (TyCon "Ty")) (field "tyAliasOrigin" (TyCon "TyConOrigin")))) (variant "DNewtype" (ConNamed (field "newtypePub" (TyCon "Bool")) (field "newtypeName" (TyCon "String")) (field "newtypeParams" (TyApp (TyCon "List") (TyCon "String"))) (field "newtypeCtor" (TyCon "String")) (field "newtypeFieldTy" (TyCon "Ty")) (field "newtypeDerives" (TyApp (TyCon "List") (TyCon "DeriveRef"))) (field "newtypeOrigin" (TyCon "TyConOrigin")))) (variant "DLetGroup" (ConPos (TyCon "Bool") (TyApp (TyCon "List") (TyCon "LetBind")))) (variant "DAttrib" (ConPos (TyApp (TyCon "List") (TyCon "Attr")) (TyCon "Decl")))) ())
 (DTypeSig true "dDataUnresolved" (TyFun (TyCon "DataVis") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Variant")) (TyFun (TyApp (TyCon "List") (TyCon "DeriveRef")) (TyCon "Decl")))))))
 (DFunDef false "dDataUnresolved" ((PVar "vis") (PVar "n") (PVar "params") (PVar "variants") (PVar "derives")) (ERecordCreate "DData" ((fa "dataVis" (EVar "vis")) (fa "dataName" (EVar "n")) (fa "dataParams" (EVar "params")) (fa "dataCtors" (EVar "variants")) (fa "dataDerives" (EVar "derives")) (fa "dataOrigin" (EVar "OriginUnresolved")))))
 (DTypeSig true "dTypeAliasUnresolved" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Ty") (TyCon "Decl"))))))
 (DFunDef false "dTypeAliasUnresolved" ((PVar "pub") (PVar "n") (PVar "params") (PVar "rhs")) (ERecordCreate "DTypeAlias" ((fa "tyAliasPub" (EVar "pub")) (fa "tyAliasName" (EVar "n")) (fa "tyAliasParams" (EVar "params")) (fa "tyAliasRhs" (EVar "rhs")) (fa "tyAliasOrigin" (EVar "OriginUnresolved")))))
 (DTypeSig true "dInterfaceUnresolved" (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Super")) (TyFun (TyApp (TyCon "List") (TyCon "IfaceMethod")) (TyCon "Decl"))))))))
 (DFunDef false "dInterfaceUnresolved" ((PVar "pub") (PVar "isDefault") (PVar "n") (PVar "typarams") (PVar "supers") (PVar "methods")) (ERecordCreate "DInterface" ((fa "pub" (EVar "pub")) (fa "def" (EVar "isDefault")) (fa "name" (EVar "n")) (fa "typarams" (EVar "typarams")) (fa "supers" (EVar "supers")) (fa "methods" (EVar "methods")) (fa "ifaceOrigin" (EVar "OriginUnresolved")))))
+(DTypeSig true "dImplUnresolved" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyFun (TyApp (TyCon "List") (TyCon "Require")) (TyFun (TyApp (TyCon "List") (TyCon "ImplMethod")) (TyCon "Decl")))))))
+(DFunDef false "dImplUnresolved" ((PVar "pub") (PVar "iface") (PVar "tys") (PVar "reqs") (PVar "methods")) (ERecordCreate "DImpl" ((fa "pub" (EVar "pub")) (fa "iface" (EVar "iface")) (fa "tys" (EVar "tys")) (fa "reqs" (EVar "reqs")) (fa "methods" (EVar "methods")) (fa "implOrigin" (EVar "OriginUnresolved")))))
 (DTypeSig true "dNewtypeUnresolved" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "Ty") (TyFun (TyApp (TyCon "List") (TyCon "DeriveRef")) (TyCon "Decl"))))))))
 (DFunDef false "dNewtypeUnresolved" ((PVar "pub") (PVar "n") (PVar "params") (PVar "con") (PVar "fty") (PVar "derives")) (ERecordCreate "DNewtype" ((fa "newtypePub" (EVar "pub")) (fa "newtypeName" (EVar "n")) (fa "newtypeParams" (EVar "params")) (fa "newtypeCtor" (EVar "con")) (fa "newtypeFieldTy" (EVar "fty")) (fa "newtypeDerives" (EVar "derives")) (fa "newtypeOrigin" (EVar "OriginUnresolved")))))
 (DTypeSig true "mapTyFull" (TyFun (TyFun (TyCon "Ty") (TyTuple (TyCon "Ty") (TyCon "Bool"))) (TyFun (TyCon "Ty") (TyTuple (TyCon "Ty") (TyCon "Bool")))))
@@ -1557,7 +2176,7 @@ mapKvsB f ((k, v)::rest) =
 (DFunDef false "mapTyListB" ((PVar "f") (PCons (PVar "t") (PVar "ts"))) (EBlock (DoLet false false (PTuple (PVar "t2") (PVar "c1")) (EApp (EApp (EVar "mapTyFull") (EVar "f")) (EVar "t"))) (DoLet false false (PTuple (PVar "ts2") (PVar "c2")) (EApp (EApp (EVar "mapTyListB") (EVar "f")) (EVar "ts"))) (DoExpr (ETuple (EBinOp "::" (EVar "t2") (EVar "ts2")) (EBinOp "||" (EVar "c1") (EVar "c2"))))))
 (DTypeSig false "mapConstraintsB" (TyFun (TyFun (TyCon "Ty") (TyTuple (TyCon "Ty") (TyCon "Bool"))) (TyFun (TyApp (TyCon "List") (TyCon "Constraint")) (TyTuple (TyApp (TyCon "List") (TyCon "Constraint")) (TyCon "Bool")))))
 (DFunDef false "mapConstraintsB" (PWild (PList)) (ETuple (EListLit) (EVar "False")))
-(DFunDef false "mapConstraintsB" ((PVar "f") (PCons (PCon "Constraint" (PVar "iface") (PVar "tys")) (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "tys2") (PVar "c1")) (EApp (EApp (EVar "mapTyListB") (EVar "f")) (EVar "tys"))) (DoLet false false (PTuple (PVar "rest2") (PVar "c2")) (EApp (EApp (EVar "mapConstraintsB") (EVar "f")) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (EApp (EApp (EVar "Constraint") (EVar "iface")) (EVar "tys2")) (EVar "rest2")) (EBinOp "||" (EVar "c1") (EVar "c2"))))))
+(DFunDef false "mapConstraintsB" ((PVar "f") (PCons (PAs "c" (PRec "Constraint" ((rf "constraintArgs" (PVar "tys"))) false)) (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "tys2") (PVar "c1")) (EApp (EApp (EVar "mapTyListB") (EVar "f")) (EVar "tys"))) (DoLet false false (PTuple (PVar "rest2") (PVar "c2")) (EApp (EApp (EVar "mapConstraintsB") (EVar "f")) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (EVariantUpdate "Constraint" (EVar "c") ((fa "constraintArgs" (EVar "tys2")))) (EVar "rest2")) (EBinOp "||" (EVar "c1") (EVar "c2"))))))
 (DTypeSig true "mapTyInDecl" (TyFun (TyFun (TyCon "Ty") (TyTuple (TyCon "Ty") (TyCon "Bool"))) (TyFun (TyCon "Decl") (TyTuple (TyCon "Decl") (TyCon "Bool")))))
 (DFunDef false "mapTyInDecl" ((PVar "f") (PCon "DTypeSig" (PVar "pub") (PVar "n") (PVar "t"))) (EBlock (DoLet false false (PTuple (PVar "t2") (PVar "c")) (EApp (EApp (EVar "mapTyFull") (EVar "f")) (EVar "t"))) (DoExpr (ETuple (EApp (EApp (EApp (EVar "DTypeSig") (EVar "pub")) (EVar "n")) (EVar "t2")) (EVar "c")))))
 (DFunDef false "mapTyInDecl" ((PVar "f") (PCon "DExtern" (PVar "pub") (PVar "n") (PVar "t"))) (EBlock (DoLet false false (PTuple (PVar "t2") (PVar "c")) (EApp (EApp (EVar "mapTyFull") (EVar "f")) (EVar "t"))) (DoExpr (ETuple (EApp (EApp (EApp (EVar "DExtern") (EVar "pub")) (EVar "n")) (EVar "t2")) (EVar "c")))))
@@ -1594,7 +2213,7 @@ mapKvsB f ((k, v)::rest) =
 (DFunDef false "mapIfaceMethodB" ((PVar "f") (PCon "IfaceMethod" (PVar "n") (PVar "ty") (PCon "Some" (PCon "MethodDefault" (PVar "ps") (PVar "e"))))) (EBlock (DoLet false false (PTuple (PVar "ty2") (PVar "c1")) (EApp (EApp (EVar "mapTyFull") (EVar "f")) (EVar "ty"))) (DoLet false false (PTuple (PVar "e2") (PVar "c2")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "e"))) (DoExpr (ETuple (EApp (EApp (EApp (EVar "IfaceMethod") (EVar "n")) (EVar "ty2")) (EApp (EVar "Some") (EApp (EApp (EVar "MethodDefault") (EVar "ps")) (EVar "e2")))) (EBinOp "||" (EVar "c1") (EVar "c2"))))))
 (DTypeSig false "mapRequiresB" (TyFun (TyFun (TyCon "Ty") (TyTuple (TyCon "Ty") (TyCon "Bool"))) (TyFun (TyApp (TyCon "List") (TyCon "Require")) (TyTuple (TyApp (TyCon "List") (TyCon "Require")) (TyCon "Bool")))))
 (DFunDef false "mapRequiresB" (PWild (PList)) (ETuple (EListLit) (EVar "False")))
-(DFunDef false "mapRequiresB" ((PVar "f") (PCons (PCon "Require" (PVar "iface") (PVar "tys")) (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "tys2") (PVar "c1")) (EApp (EApp (EVar "mapTyListB") (EVar "f")) (EVar "tys"))) (DoLet false false (PTuple (PVar "rest2") (PVar "c2")) (EApp (EApp (EVar "mapRequiresB") (EVar "f")) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (EApp (EApp (EVar "Require") (EVar "iface")) (EVar "tys2")) (EVar "rest2")) (EBinOp "||" (EVar "c1") (EVar "c2"))))))
+(DFunDef false "mapRequiresB" ((PVar "f") (PCons (PAs "r" (PRec "Require" ((rf "requireArgs" (PVar "tys"))) false)) (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "tys2") (PVar "c1")) (EApp (EApp (EVar "mapTyListB") (EVar "f")) (EVar "tys"))) (DoLet false false (PTuple (PVar "rest2") (PVar "c2")) (EApp (EApp (EVar "mapRequiresB") (EVar "f")) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (EVariantUpdate "Require" (EVar "r") ((fa "requireArgs" (EVar "tys2")))) (EVar "rest2")) (EBinOp "||" (EVar "c1") (EVar "c2"))))))
 (DTypeSig false "mapImplMethodsB" (TyFun (TyFun (TyCon "Ty") (TyTuple (TyCon "Ty") (TyCon "Bool"))) (TyFun (TyApp (TyCon "List") (TyCon "ImplMethod")) (TyTuple (TyApp (TyCon "List") (TyCon "ImplMethod")) (TyCon "Bool")))))
 (DFunDef false "mapImplMethodsB" (PWild (PList)) (ETuple (EListLit) (EVar "False")))
 (DFunDef false "mapImplMethodsB" ((PVar "f") (PCons (PCon "ImplMethod" (PVar "n") (PVar "ps") (PVar "e")) (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "e2") (PVar "c1")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "e"))) (DoLet false false (PTuple (PVar "rest2") (PVar "c2")) (EApp (EApp (EVar "mapImplMethodsB") (EVar "f")) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (EApp (EApp (EApp (EVar "ImplMethod") (EVar "n")) (EVar "ps")) (EVar "e2")) (EVar "rest2")) (EBinOp "||" (EVar "c1") (EVar "c2"))))))

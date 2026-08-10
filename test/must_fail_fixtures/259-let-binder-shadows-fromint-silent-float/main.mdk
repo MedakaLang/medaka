@@ -1,0 +1,3 @@
+main =
+  let fromInt = intToFloat
+  println (1 + 1)

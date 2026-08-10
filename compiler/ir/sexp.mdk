@@ -92,7 +92,7 @@ tySexp (TyConstrained cs t) =
   node "TyConstrained" [slist (map constraintSexp cs), tySexp t]
 
 constraintSexp : Constraint -> String
-constraintSexp (Constraint iface args) =
+constraintSexp (Constraint { constraintHead = iface, constraintArgs = args }) =
   node "cstr" (escStr iface :: map tySexp args)
 
 export optStrSexp : Option String -> String
@@ -294,11 +294,11 @@ ifaceMethodSexp (IfaceMethod name ty def) =
   node "imethod" [escStr name, tySexp ty, methodDefaultSexp def]
 
 superSexp : Super -> String
-superSexp (Super iface params) =
+superSexp (Super { superHead = iface, superParams = params }) =
   node "super" [escStr iface, slist (map escStr params)]
 
 requireSexp : Require -> String
-requireSexp (Require iface tys) =
+requireSexp (Require { requireHead = iface, requireArgs = tys }) =
   node "req" [escStr iface, slist (map tySexp tys)]
 
 implMethodSexp : ImplMethod -> String

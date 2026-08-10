@@ -84,6 +84,20 @@ public export data Doc =
   -- comment travels with it.  Commented chains/blocks put an unconditional
   -- `Hardline` after each unit, so nothing is ever packed after the comment.
   | LineComment String
+  -- Fill sepFirst items: FILL (wrap-at-width) layout for a sequence.  When the
+  -- enclosing group is FLAT it is exactly `sepBy Line items` (one space between
+  -- items).  When BROKEN it packs greedily: each item goes on the current line
+  -- if it still fits `defaultWidth`, otherwise it starts a new line at the
+  -- current indent.  `sepFirst` says whether a separator precedes the FIRST
+  -- item of this (sub)sequence — the render loop re-pushes the unconsumed tail
+  -- as `Fill True rest`, which is how the packing decision is re-taken at the
+  -- column reached after each item.
+  --
+  -- Items must be BREAK-FREE (no Line/Softline/Hardline/LineComment inside):
+  -- they are rendered Flat, and a break inside one would make the packing
+  -- decision meaningless.  The only constructor is `filled` below, which is
+  -- gated on `isFillAtom` — numeric/char literals only — so this holds.
+  | Fill Bool (List Doc)
 
 text : String -> Doc
 text s = Text s
@@ -136,6 +150,49 @@ delimited open_ close_ items =
       (nest (Cat
         Softline
         (Cat (sepBy (Cat (text ",") Line) items) (trailingCommaFor items))))
+      (Cat Softline (text close_))))
+
+-- The FLAT expansion of a `Fill` — items separated by a single `Line` (a space
+-- in Flat mode), with a leading separator iff `sepFirst`.  Used by `fits`, by
+-- `go`'s Flat arm, and by `goFlat`, so all three agree on the flat measure.
+fillFlatDoc : Bool -> List Doc -> Doc
+fillFlatDoc _ [] = Nil
+fillFlatDoc False ds = sepBy Line ds
+fillFlatDoc True ds = Cat Line (sepBy Line ds)
+
+-- Glue a `,` onto every item but the last: the fill's SEPARATOR is whitespace
+-- only, so the comma has to travel with the item it follows or it could be
+-- pushed alone onto the next line.  The break-only trailing comma stays OUTSIDE
+-- the `Fill` (see `filled`), exactly as in `delimited`.
+commaJoinFill : List Doc -> List Doc
+commaJoinFill [] = []
+commaJoinFill [d] = [d]
+commaJoinFill (d::ds) = Cat d (text ",") :: commaJoinFill ds
+
+-- Like `delimited`, but the ITEMS pack (fill) instead of going one-per-line
+-- when the whole literal does not fit.  Same open/close/indent/trailing-comma
+-- convention as `delimited` — the ONLY difference is where the breaks fall:
+--
+--   delimited (today)          filled (this)
+--   [                          [
+--     1,                         1, 2, 3, 4, 5, 6, 7,
+--     2,                         8, 9,
+--     3,                       ]
+--     …
+--   ]
+--
+-- Deliberately NOT the leading-comma style: reusing `delimited`'s shape keeps
+-- one bracket convention in the formatter and keeps the broken form inside the
+-- set of layouts the cold-bootstrap seed parser already accepts.
+filled : String -> String -> List Doc -> Doc
+filled open_ close_ [] = Cat (text open_) (text close_)
+filled open_ close_ items =
+  flatGroup (Cat
+    (text open_)
+    (Cat
+      (nest (Cat
+        Softline
+        (Cat (Fill False (commaJoinFill items)) (trailingCommaFor items))))
       (Cat Softline (text close_))))
 
 -- like `delimited`, but width-triggered off the CURRENT column (`Group`, not
@@ -200,6 +257,8 @@ fits w ((Item i m (FlatAlt _ b))::z) = fits w (Item i m b :: z)
 -- so a comment never needs to force an enclosing group broken via `fits`; this
 -- arm just keeps a trailing comment from polluting a preceding group's measure.)
 fits _ ((Item _ _ (LineComment _))::_) = True
+-- fits always measures a FLAT layout → a Fill measures as its flat expansion.
+fits w ((Item i m (Fill sf ds))::z) = fits w (Item i m (fillFlatDoc sf ds) :: z)
 
 -- `n` spaces.
 spaces : Int -> String
@@ -245,6 +304,26 @@ go col ((Item i Break (FlatAlt a _))::z) = go col (Item i Break a :: z)
 -- output line.  Mode-independent.
 go col ((Item _ _ (LineComment s))::z) =
   "  " ++ s :: go (col + 2 + stringLength s) z
+-- Fill, Flat mode: identical to a plain space-separated sequence.
+go col ((Item i Flat (Fill sf ds))::z) =
+  go col (Item i Flat (fillFlatDoc sf ds) :: z)
+-- Fill, Break mode: greedy packing.  The FIRST item of the whole fill takes no
+-- separator and no fits-check — it is already at the fresh indent, and a lone
+-- over-wide item overflows there exactly as it does under `delimited`.  Every
+-- later item is preceded by a space if it still fits, else by a newline at the
+-- indent.  `reserve` holds back one column for the LAST item so the break-only
+-- trailing comma that follows the whole Fill cannot push the line past the
+-- width.  Items render Flat — they are break-free by construction (see `Fill`).
+go col ((Item _ Break (Fill _ []))::z) = go col z
+go col ((Item i Break (Fill False (d::ds)))::z) =
+  go col (Item i Flat d :: Item i Break (Fill True ds) :: z)
+go col ((Item i Break (Fill True (d::ds)))::z) =
+  let reserve = if isEmptyL ds then 1 else 0
+  let rest = Item i Flat d :: Item i Break (Fill True ds) :: z
+  if fits (defaultWidth - col - 1 - reserve) [Item i Flat d] then
+    " " :: go (col + 1) rest
+  else
+    newlineStr i :: go i rest
 
 export render : Doc -> String
 render doc = stringConcat (go 0 [Item 0 Break doc])
@@ -275,6 +354,7 @@ goFlat ((Group d)::z) = goFlat (d::z)
 goFlat ((FlatGroup d)::z) = goFlat (d::z)
 goFlat ((FlatAlt _ b)::z) = goFlat (b::z)
 goFlat ((LineComment s)::z) = "  " ++ s :: goFlat z
+goFlat ((Fill sf ds)::z) = goFlat (fillFlatDoc sf ds :: z)
 
 renderFlat : Doc -> String
 renderFlat d = stringConcat (goFlat [d])
@@ -409,8 +489,7 @@ effAtomDoc (l, None) = text l
 effAtomDoc (l, Some s) = text "\{l} \{escStringLit s}"
 
 printConstraint : Constraint -> Doc
-printConstraint (Constraint iface args) =
-  Cat (text iface) (concatD (map (a => Cat (text " ") (printTypeAtom a)) args))
+printConstraint (Constraint { constraintHead = iface, constraintArgs = args }) = Cat (text iface) (concatD (map (a => Cat (text " ") (printTypeAtom a)) args))
 
 printTypeAtom : Ty -> Doc
 printTypeAtom (TyCon { tyConName = n }) = text (tyConSurface n)
@@ -672,6 +751,54 @@ breakAtSepBody b = not (isBlockBody b)
 
 -- ── Expressions ───────────────────────────────────
 
+-- ── Fill-layout scope (#1303) ─────────────────────
+-- A list/array literal whose elements are all NUMERIC or CHARACTER literals is
+-- laid out FILLED (packed to the width) instead of one-element-per-line.  This
+-- is the binary/lookup-table shape: `gzip/lib/inflate.mdk` carries a 200-byte
+-- `.gz` fixture that one-per-line turns into 200+ lines.
+--
+-- The predicate is deliberately NARROW, and each exclusion is a choice:
+--   * ENumLit is the pre-desugar form of an integer in expression position
+--     (the formatter runs pre-desugar), and it carries the ORIGINAL lexeme, so
+--     `0xD800`/`1_000` fill just as well as `31`.  A source-level `-1` reaches
+--     the printer as `EUnOp "-"` over a literal (NOT as an ENumLit with n < 0,
+--     which only synthesized nodes carry), so unary minus gets its own arm —
+--     signed byte/delta tables are the same shape as unsigned ones.
+--   * STRINGS are excluded: a list of long strings packs two-per-line, which
+--     is worse to read and worse to diff than one-per-line.
+--   * BOOLEANS, identifiers, constructors and every compound expression are
+--     excluded.  They would mostly be improvements too, but each widens the
+--     reflow blast radius over every .mdk file in existence for no part of the
+--     reported problem.  Widening later is a one-line change to this predicate;
+--     un-widening after the tree has been reformatted is not.
+--   * PATTERNS are out of scope — `printPat` still uses `delimited`.  A literal
+--     list PATTERN long enough to wrap does not occur in practice.
+--
+-- Fill is unconditional above 1 element rather than threshold-gated: when the
+-- literal fits on one line the Doc is flat and nothing changes at all, and when
+-- it does not, packing is never worse than one-per-line.
+isFillAtom : Expr -> Bool
+isFillAtom (ELoc _ e) = isFillAtom e
+isFillAtom (ENumLit _ _ _ _) = True
+isFillAtom (ELit (LInt _)) = True
+isFillAtom (ELit (LFloat _)) = True
+isFillAtom (ELit (LChar _)) = True
+isFillAtom (EUnOp op e _) = op == "-" && isFillAtom e
+isFillAtom _ = False
+
+isFillable : List Expr -> Bool
+isFillable es = listLen es >= 2 && allList isFillAtom es
+
+-- `[…]` / `[|…|]`: filled when every element is a numeric/char literal, and
+-- otherwise laid out exactly as before.
+collectionDoc : String -> String -> List Expr -> Doc
+collectionDoc open_ close_ es =
+  let items = map (printExpr precTop) es
+  if isFillable es then
+    filled open_ close_ items
+  else
+    delimited open_ close_ items
+
 printExpr : Int -> Expr -> Doc
 printExpr minPrec e =
   let ep = exprPrec e
@@ -737,8 +864,8 @@ printExprRaw (EVariantUpdate c e fs) =
         (Cat
           (text " | ")
           (Cat (sepBy (text ", ") (map fieldAssignDoc fs)) (text " }")))))
-printExprRaw (EArrayLit es) = delimited "[|" "|]" (map (printExpr precTop) es)
-printExprRaw (EListLit es) = delimited "[" "]" (map (printExpr precTop) es)
+printExprRaw (EArrayLit es) = collectionDoc "[|" "|]" es
+printExprRaw (EListLit es) = collectionDoc "[" "]" es
 printExprRaw (EMapLit n kvs) =
   Cat
     (text n)
@@ -1830,7 +1957,7 @@ superDoc supers =
   Cat (text " requires ") (sepBy (text ", ") (map oneSuper supers))
 
 oneSuper : Super -> Doc
-oneSuper (Super n ps) =
+oneSuper (Super { superHead = n, superParams = ps }) =
   Cat (text n) (concatD (map (p => Cat (text " ") (text p)) ps))
 
 ifaceMethodDoc : IfaceMethod -> Doc
@@ -1851,7 +1978,7 @@ reqsDoc [] = Nil
 reqsDoc reqs = Cat (text " requires ") (sepBy (text ", ") (map oneReq reqs))
 
 oneReq : Require -> Doc
-oneReq (Require iface args) =
+oneReq (Require { requireHead = iface, requireArgs = args }) =
   Cat (text iface) (concatD (map (t => Cat (text " ") (printTypeAtom t)) args))
 
 implMethodDoc : ImplMethod -> Doc
@@ -1914,7 +2041,7 @@ effDeclHead True = text "export effect "
 effDeclHead False = text "effect "
 
 ppConstr : Constraint -> String
-ppConstr (Constraint iface args) =
+ppConstr (Constraint { constraintHead = iface, constraintArgs = args }) =
   if isEmptyL args then
     iface
   else

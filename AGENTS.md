@@ -107,6 +107,18 @@ access exists *only* via `as`). But it is **not** a no-op: **any** import of a m
 that module's `impl`s into scope for dispatch, which is the whole job of the bare form (e.g.
 `stdlib/json.mdk`'s bare `import array` — without it, `map (+ 1) [|1,2,3|]` is *"No impl of
 Mappable for Array"*).
+⚠️ **A `(..)` constructor import needs the DEFINING module to write `public export data`,
+not plain `export data`** — three agents lost probe rounds to this in one session, because
+the paragraph above never mentions the qualifier. Plain `export data` exports the type
+ABSTRACTLY: the type NAME is importable, its constructors are not, and the importer is
+rejected at exit 1 with *"'X' exports no constructors from module 'm' (exported
+abstractly). Remove '(..)' or export with 'public export'"*. Derive it on any binary — two
+`check` runs over the SAME importer, changing only the defining module's qualifier:
+```sh
+printf 'import m.{X(..)}\n\nmain = println 1\n' > /tmp/p/main.mdk
+printf 'export data X = X Int\n'        > /tmp/p/m.mdk; ./medaka check /tmp/p/main.mdk; echo "abstract -> $?"  # 1
+printf 'public export data X = X Int\n' > /tmp/p/m.mdk; ./medaka check /tmp/p/main.mdk; echo "public   -> $?"  # 0
+```
 `io.mdk` is the ergonomic layer over the `runtime.mdk` IO externs.
 
 ## 🚦 How work lands: `main` is PROTECTED — you cannot push to it
@@ -122,6 +134,18 @@ git push -u origin <topic>
 gh pr create --fill
 gh pr merge --auto --merge           # merges itself the moment every required check goes green
 ```
+
+🛠️ **For the write/verify half of that lifecycle, prefer the verified helper
+`scripts/pr.sh`** (`body` / `watch` / `enqueue` / `complete`) — see
+`docs/ops/PR-HELPER.md`. Hand-rolled `gh` writes and `gh pr merge` exit codes
+carry no signal for the shapes #1212/#1213 record (see the MERGE QUEUE bullet
+below), so the helper verifies resulting state instead of return codes: it
+byte-compares a body readback, prints only check transitions, confirms queue
+membership via GraphQL, and proves the head SHA landed on `main`. Each
+subcommand is independent — a body edit needs no full lifecycle. The raw
+commands remain documented below because the failure explanation still matters;
+the helper just makes the verified-correct sequence one command instead of a
+hand-rebuilt ritual.
 
 **Eleven required checks:** the **seven** `gates (…)` shards (engines · backend · tools · sqlite ·
 eval · frontend · types), `soundness`, `seed-health`, `inlang`, `wasm`. ⚠️ **A gate matching
@@ -160,7 +184,8 @@ Two things that are easy to get wrong:
   so what CI validates is the **merged result**, not your branch in isolation. That is not a
   formality: two green branches have merged cleanly into a **crashing** tree (git auto-merged a
   break it could not see — one branch had added a caller into machinery the other was re-signing,
-  on different lines, so no conflict marker).
+  on different lines, so no conflict marker). It is also why the queue, not the `pull_request`
+  run, is the real authority on gate coverage — see the `preflight`-is-a-filter warning below.
 
   **You do NOT need to keep your branch up to date with `main`.** "Strict" mode is OFF and
   `update-branch` kicks are obsolete — the queue handles staleness. If a doc tells you to babysit
@@ -246,6 +271,31 @@ warning; **`MEDAKA_STRICT=1`** promotes it to a hard `exit 1`, useful when you n
 you're not debugging or verifying against a stale binary (`checkSourceStaleness`,
 `compiler/driver/medaka_cli.mdk`).
 
+🚨 **THE WARNING GOES TO STDERR, NEVER STDOUT — so `2>/dev/null` HIDES IT and a probe that
+reads stdout will never see it.** `checkSourceStaleness` emits it with `ePutStrLn` and
+nothing else prints it (`grep -rn 'may be stale; rebuild' compiler/` finds one site,
+inside that function). Measured on a stale `medaka run`: **stdout is the program's value
+alone, exit 0**, and `head -1` on stdout returns that value, not the warning. This is
+load-bearing in both directions:
+- **Do not** design a freshness probe around stdout, or around a nonzero exit — without
+  `MEDAKA_STRICT=1` a stale binary still exits 0 and still prints the right-looking answer.
+  Set `MEDAKA_STRICT=1` and read the exit code, or read stderr.
+- **Do** suspect it when a gate asserting an EMPTY stderr goes red for no semantic reason
+  (#1421 — that is build freshness, not a regression), and when an MCP tool result grows a
+  `staleBinary` field: `sourceStalenessVerdict` is threaded into `runMcpServer` and
+  `attachStaleness` (`compiler/tools/mcp.mdk`) splices that field onto every tool result,
+  which is a second graded channel the same warning reaches.
+
+Forcing the stale state without editing compiler source — point `MEDAKA_ROOT` at a
+throwaway root whose `compiler/` differs from the one baked in (give it a `stdlib` symlink
+so the run still reaches the program):
+```sh
+mkdir -p /tmp/fake/compiler; printf 'x = 1\n' > /tmp/fake/compiler/bogus.mdk; ln -s "$PWD/stdlib" /tmp/fake/stdlib
+printf 'main = println 12345\n' > /tmp/hello.mdk
+MEDAKA_ROOT=/tmp/fake ./medaka run /tmp/hello.mdk 2>/dev/null   # 12345 — warning invisible, exit 0
+MEDAKA_ROOT=/tmp/fake ./medaka run /tmp/hello.mdk >/dev/null    # the warning, on stderr
+```
+
 **In a worktree:** the shell cwd resets between calls, so use
 `make -C /absolute/path/to/worktree medaka`. The `./medaka` binary lands in the worktree.
 
@@ -326,9 +376,19 @@ sh test/build_oracles.sh --for 'diff_compiler_*'     # ✅ fresh-worktree recipe
 sh test/build_oracles.sh --for --list '<pattern>'    # ✅ DERIVE ONLY — which oracle names a
                                                       #    pattern resolves to, builds nothing
 FORCE=1 JOBS=1 sh test/build_oracles.sh --build-one <name>   # ✅ exactly one
+sh test/build_oracles.sh --for '<pattern>' --list    # ❌ NOT derive-only — this BUILDS
 sh test/run_gates.sh                                 # ❌ all 83
 FORCE=1 sh test/build_oracles.sh                     # ❌ all 54 oracles. Almost never right.
 ```
+
+⚠️ **`--list` must come IMMEDIATELY after `--for`, and the reversed order fails SILENTLY
+into the expensive path.** The derive-only mode is a positional test on the first two args
+(`[ "$1" = "--for" ] && [ "$2" = "--list" ]`, `test/build_oracles.sh`); write `--for
+'<pattern>' --list` and that test is false, `--list` is consumed as *another gate pattern*
+(it resolves to no gate and contributes nothing), the real pattern still resolves — so the
+script proceeds to **compile the whole derived oracle set** while you are waiting for a
+list. There is no diagnostic, because nothing is malformed. Derive the rule rather than
+trusting this paragraph: `grep -n '"--for"' test/build_oracles.sh`.
 
 🚨 **On a `compiler/backend/*` diff, `make preflight` forces the self-compile fixpoint and the
 loop can exceed the 10-minute foreground tool ceiling — killed at 600s with `exit 143`
@@ -359,7 +419,35 @@ agent running the whole suite + a full oracle build takes the load average past 
 gets RESPAWNED by the harness** — it has killed several agents. Use the targeted forms.
 
 ⚠️ **`preflight` is a FILTER, NOT AN AUTHORITY.** It runs a subset and prints what it
-skipped. **CI on the PR is the authority. Nothing merges on a green preflight.**
+skipped. **The MERGE QUEUE is the authority — not a green `pull_request` check — and
+nothing merges on a green preflight.** That distinction matters because a green PR check
+does not by itself mean that shard ran anything: `ci.yml`'s "Plan this shard" step
+(`.github/workflows/ci.yml`, the `gates (…)` job) NARROWS each shard on a `pull_request`
+event to the intersection of that shard's patterns with the diff-derived gate set — its
+own `why=` string says so verbatim: *"pull_request — narrowed to the gates this diff
+touches (merge_group runs ALL of them)"*. A shard whose intersection is empty still
+reports SUCCESS having run nothing. **That is NOT a hole** — the planner fails closed
+(`::error::` + `exit 1`, same step) if a shard's *pattern* matches no gates in the whole
+tree, which is the actual "a gate silently never runs" hazard
+`diff_compiler_ci_shard_coverage.sh` (above) exists to catch; an empty per-PR
+*intersection* is the designed-for common case, not that failure. Real coverage for a
+narrowed-away gate runs later, in the merge queue's `merge_group` run, which is
+unnarrowed and tests the PR merged onto `main` (see the MERGE QUEUE bullet above) — that
+run is the authority, not the `pull_request` run.
+
+Measured instance: PR #1289 (a `compiler/frontend/resolve.mdk` change) reported all 12
+required checks green, but `gates (engines)`, `gates (sqlite)` and `gates (tools)` each
+had BOTH their `Build medaka` and `Gate shard — …` steps `skipped` — `engines` went green
+in 7 seconds having run nothing. Check whether a specific shard actually executed, rather
+than trusting the checkmark:
+```sh
+gh api repos/MedakaLang/medaka/actions/runs/<id>/jobs --paginate \
+  --jq '.jobs[] | "\(.name)\t" + ([.steps[]?|"\(.name)=\(.conclusion)"]|join(" | "))'
+```
+⚠️ **"CI green" is not corroboration of a PR-body claim about a specific gate's numbers.**
+Reading a green rollup as proof that a cited gate ran with the cited result is an invalid
+inference made — and caught only in review — during the 2026-08-05 A-2 session; verify
+with the command above, never with the checkmark.
 
 ⚠️ **On a BLAST-RADIUS path, `make preflight` IS the full suite — the two rules above
 collide, and this carve-out is the resolution** (#492). For `stdlib/*`, `compiler/support/*`,
@@ -497,7 +585,12 @@ on purpose). Re-install after a fresh clone:
 `cp .githooks/pre-commit "$(git rev-parse --git-common-dir)/hooks/pre-commit"`.
 
 - **Format** — `medaka fmt --check` rejects any staged unformatted `.mdk`. **Run `medaka fmt --write
-  <changed.mdk>` and re-`git add` before committing any `.mdk` edit.**
+  <changed.mdk>` and re-`git add` before committing any `.mdk` edit.** A bare `medaka fmt <file>`
+  (no flag) is READ-ONLY — it never writes, and behaves like `--check` (reports files that aren't
+  formatted, exit 1 if any). **`--write` is the only mode that mutates**, and it always prints a
+  one-line summary (`formatted N file(s)` / `already formatted`) so a write is never silent (#1348 —
+  the bare form used to default to writing, silently, with no output). `medaka fmt --help` (and
+  `--help`/`-h` on every other subcommand) prints that subcommand's flags.
   ⚠️ **The tree is NOT fmt-clean** (verified 2026-07-14): `sqlite/lib/varint.mdk` and
   `stdlib/byteparser.mdk` both fail `fmt --check`, so touching either drags an unrelated
   `.[`→`[` normalization into your diff. (This file claimed "the whole tree is clean". It isn't.)
@@ -556,6 +649,20 @@ for suggestion-bearing errors — a `help` string plus a machine-applicable
 programmatically, prefer `--json` and key off `code`** — it is the stable handle and doesn't
 move when wording changes.
 
+🚨 **BUT `check --json` HAS A SILENT-ACCEPT HOLE ON MULTI-MODULE PROJECTS (#1362, OPEN S0), AND
+`medaka mcp`'s `medaka_check` INHERITS IT.** On a multi-module project an internal-extern
+restriction violation is dropped entirely: **exit 0, empty diagnostics**, where the human
+`check` arm correctly rejects at exit 1. Confirmed over a real JSON-RPC call to the MCP tool
+(`isError: false`). Cause: `analyzeProject`'s `resolvePass` calls the unguarded `resolveModule`
+instead of the guarded `resolveModulesErrorsG` variant. **A green from the machine-readable arm
+is therefore not proof a project checks clean** — this is the one place the advice above bites
+you, and it is silent wrongness in the tool used to detect wrongness. Scope, derived rather
+than assumed: `env.internalGuard` has exactly one read site, so it is *this* restriction and not
+the whole diagnostic channel; a single file is unaffected (different code path); `run --json`
+does not share the omission. Pinned at `test/must_fail_fixtures/1362-*` — when that row drains,
+delete this paragraph. **Until then, corroborate an important `--json`/MCP green with human
+`check`.**
+
 **`medaka run --json` and `medaka lint --json` emit the SAME `Diag` JSON envelope** (same
 `code`/`kind`/`range`/`severity`/`message` schema as `check --json`) — so a RUNTIME panic, not
 just a compile-time error, is machine-parseable the same way.
@@ -607,12 +714,65 @@ stdout**, which handed a redirecting harness an empty artifact + apparent succes
 **nonexistent input file** or a **real typecheck error**, not just a wrong arity. `medaka build
 --keep-ir` remains the supported route.
 
+🚨 **`medaka build`'s EXIT CODE DOES NOT SURVIVE A PIPE — `... | tail`/`| head`/`| grep`
+reports the LAST stage's status, so a failing build reads as exit 0.** Two reviewers in one
+session nearly reported *"build fails at exit 0"* as a defect after piping the output to
+keep it short; the compiler was exiting 1 correctly the whole time. Same trap the must-fail
+suite's own header calls out for `run` (`test/diff_compiler_must_fail.sh`) — it applies to
+every verb, and it bites hardest on `build`, whose interesting output is on **stderr** and
+therefore invites a `2>&1 | tail`. **Redirect to a file and read `$?`, then read the file.**
+Derive it on the spot with any program that fails to build:
+```sh
+./medaka build broken.mdk -o /tmp/x > /tmp/x.log 2>&1; echo "direct: $?"   # 1
+./medaka build broken.mdk -o /tmp/x 2>&1 | tail -1;    echo "piped:  $?"   # 0 — tail's status
+```
+
 **`medaka run` and `medaka build` share the whole front end** — both typecheck with the
 **same binary**; they differ only in the execution engine (interpreter vs emitted native +
 runtime). So comparing `run` against `build` is a genuine test of **codegen and runtime**
 behavior (it is how several miscompiles were caught), but it is **NOT** two independent
 observations of anything at or before typecheck — a claim about resolve/typecheck-stage
 behavior gets exactly **one** observation from that pair, not two.
+
+⭐ **TWO-ARM DIFFERENTIAL REVIEW (base binary vs branch binary): a `medaka` binary resolves
+its emitter AND its stdlib from `exeDir` — the directory the BINARY sits in — not from the
+project root of the file it is compiling, and not from cwd.** `exeDir = dirOf
+(executablePath ())`, `defaultMedakaRoot = exeDir`, `defaultMedakaEmitter = joinPath exeDir
+"medaka_emitter"` (`compiler/driver/build_cmd.mdk`, the *"exe-relative install-layout
+defaults"* block); every `<root>/stdlib/...` read goes through `envOr "MEDAKA_ROOT"
+defaultMedakaRoot`. This is documented nowhere else and it is what makes a two-worktree
+comparison sound: **a base-arm binary invoked on files in a branch worktree still uses
+base's stdlib and base's emitter**, so the only variable is the compiler under test. It
+also means `MEDAKA_EMITTER`/`MEDAKA_ROOT`, if either is exported in your shell, silently
+CROSSES the arms — check for them before believing a differential. Verify from the
+consequence, not the source: copy `./medaka` alone into an empty directory and run it from
+inside a real checkout — it reports `cannot read the stdlib prelude at
+"<that-empty-dir>/stdlib/runtime.mdk"`, naming the binary's own directory, with cwd and the
+source file both elsewhere.
+```sh
+mkdir -p /tmp/alt && cp ./medaka /tmp/alt/            # cwd stays the repo root
+printf 'main = println 12345\n' > /tmp/hello.mdk
+/tmp/alt/medaka run /tmp/hello.mdk                    # exit 1: looks in /tmp/alt/stdlib
+MEDAKA_ROOT="$PWD" /tmp/alt/medaka run /tmp/hello.mdk # exit 0: 12345
+```
+⚠️ The miss diagnostic offers *"run from the project root"* as a remedy; measured, cwd
+being a directory that HAS `stdlib/` did **not** rescue it — only `MEDAKA_ROOT` or an
+exe-adjacent `stdlib/` did.
+⚠️ **Not every gate lets you point it at a second binary.** Some honour an override; most
+hardcode `$ROOT/medaka`, so a two-arm run means a second worktree.
+**DERIVE the set, do not trust a count — including this sentence's:**
+```sh
+grep -rln 'MEDAKA="${MEDAKA:-' test/*.sh     # the gates you CAN point at a second binary
+```
+⚠️ Run that through a script file, not inline: this harness mangles a `${…}` inside a
+quoted inline argument and returns zero matches for a pattern that is really there.
+`test/diff_compiler_shadow_semantics.sh` is the notable hardcoded one and is filed as
+**#1431** — check the gate before planning a differential around it.
+🚨 This paragraph said **"Four honour an override"** until 2026-08-09, *while citing the
+very command that returns more than twice that*. Nobody ran it — the number came from a
+report, was repeated into #1431, and reached this file unverified. **A claim that ships its
+own derivation is only honest if someone executed it**; that is the whole point of the rule
+and it failed at the last inch here.
 
 **Playground e2e:** `playground/e2e/` is a Playwright harness driving a real browser against
 the built CM6 playground (`cd playground/e2e && ./run.sh`). Needs **node v24+** and a
@@ -692,17 +852,49 @@ narrative lives at the link.
   next several, so `effvarCounter`'s comment finishes a clause begun on `inRigidityBodyRef`.
   This is a READING hazard baked into the committed source, not something `fmt` still does
   to you.
-  **The WRITING hazard this bullet used to describe is FIXED (#829, PR #1202) — retired
-  2026-08-01 after re-verifying both halves on a post-#1202 binary.** It claimed you could
-  not insert a standalone `--` line into the record (fmt would drag unrelated comments onto
-  the closing brace and leave a dangling fragment, with `fmt --check` passing on the damage),
-  and that a long trailing comment would wrap onto the NEXT field's line. Neither reproduces:
-  the root cause was `spliceInterior` mapping source→output lines 1:1 — true for a *trailing*
-  comment, false for a *standalone* one (consumes a line, produces none), so everything after
-  the first standalone comment drifted. Re-measured: inserting a standalone comment line, and
-  separately lengthening a trailing one past the line budget, each produce a whole-file `fmt
-  --write` diff containing **only the edit itself** — no drift, no wrap, no dangling fragment.
-  So edit comments there normally; just don't trust which field a pre-existing one belongs to.
+  🚨 **The WRITING hazard is NOT fixed. #829 is REOPENED (2026-08-05) — this bullet's
+  "FIXED, retired 2026-08-01" claim was itself wrong, and it sent an agent's mandatory
+  `fmt --write` into corrupting their own comment.** Re-verified first-hand on a fresh cold
+  `make medaka` of `origin/main` @ `f9db4fd2` (2026-08-05); both halves the retraction
+  claimed were fixed were re-tested independently and **both still reproduce**:
+  - **Standalone `--` block** (the issue's own two-line repro, `data Cfg =\n  | Cfg { … }`):
+    `fmt --write` collapses the header to `data Cfg = Cfg {` and drags the block onto the
+    field **two past** the one it described, with the block's second line dangling onto the
+    closing `}`.
+  - **Long trailing comment**: on the same header shape, a trailing comment on `alpha`
+    lands on `beta` after `fmt --write` — moved one field down.
+  - **On the real `PerRun` record**, with its header artificially put into the two-line
+    `data PerRun =\n | PerRun { … }` shape (the shape `DriverState`, in this same file, is
+    actually in today) and given ONE new field with a trailing comment plus one standalone
+    two-line block elsewhere in the body: `fmt --write` shifted **every one of the record's
+    ~60 trailing comments down by one field**, piling the last two onto the closing `}` line
+    — the whole-record cascade the reader-hazard paragraph above is a residue of.
+  - **In every case, `fmt --check` on the corrupted output exits 0** — it reports the damage
+    as already formatted, so the pre-commit hook (which gates on `fmt --check`, not a diff
+    against intent) lets it through. The corruption is a stable fixed point, not a slow leak:
+    a second `--write` reproduces the damaged file byte-for-byte, so it doesn't get worse,
+    but it also never self-heals.
+
+  **The trigger is the header shape, not the comment kind.** Both halves reproduce only when
+  the record's on-disk header is still the two-line `data X =\n  | X { … }` form (e.g.
+  `DriverState`, this file, today) — confirmed on that exact record: adding one field with a
+  trailing comment moved the comment onto the *next* field. Three things are safe, each
+  measured on this binary, not assumed:
+  - Adding a field with **no comment at all** is safe on either header shape — `fmt --write`
+    produces a byte-identical diff (only the added field line).
+  - Adding a comment to a record whose header is **already** the single-line `data X = X {
+    … }` form (PerRun's current shape) is safe — verified directly on `PerRun` as it stands
+    today: a new trailing-commented field and a new standalone two-line block each produced a
+    diff containing only the intended edit, and a second `fmt --write` was a no-op.
+  - If the header is still two-line, don't put the comment in the record at all — the
+    real-world workaround (PR #1296, still open, adding a new `Ref`-typed field to
+    `DriverState`): add the field bare and put the explanatory prose on the nearby function
+    that derives/populates it instead of as an interior record comment.
+
+  Check the shape before you decide: `grep -n '^data <Name> =$' -A1 compiler/types/typecheck.mdk`
+  — a hit followed by `  | <Name> {` is the unsafe two-line form; `data <Name> = <Name> {`
+  on one line is the safe collapsed form. Either way, don't trust `fmt --check` to catch a
+  misattached comment — diff the decl by eye after any comment-bearing record edit.
 - ⚠️ **A FIXTURE DIRECTORY IS A SHARED CORPUS.** Adding, moving, or deleting a fixture
   silently enrolls (or de-enrolls) you in gates you never named. Before touching one,
   **ENUMERATE every consumer, then run all of them.**
@@ -893,6 +1085,36 @@ output is correct is a rubber stamp, and the gate exists to prevent exactly that
 Add cases to the gate matching the stage you changed (parser change →
 `test/diff_compiler_parse*.sh` or `diff_compiler_check*.sh`).
 
+### ⚠️ Writing the SHELL half of a gate — two traps that make it pass for the wrong reason
+
+`/bin/sh` on this box is **dash**, not bash (`readlink -f /bin/sh`), and gates are run as
+`sh test/…`. Two consequences bite specifically when a gate manipulates **bytes** or
+**time** — i.e. exactly when it is testing a binary format or a hang.
+
+- **`printf '\xNN'` DOES NOT WORK IN DASH.** It emits the *literal characters*
+  `\xde\xad\xbe\xef`, not four bytes. Measured: appending that to a 219-byte file produced
+  **235** bytes, not 223. **Use octal — `printf '\336\255\276\357'`** — which POSIX
+  `printf` does interpret.
+  🚨 The failure mode is not a broken gate, it is a **gate that passes for the wrong
+  reason**. A `gzip/` oracle case meant to corrupt a 4-byte CRC field was instead appending
+  16 junk bytes and shifting the whole trailer; it still produced a CRC error, so it read
+  green, and only surfaced when a *sibling* ISIZE case failed with a CRC message that made
+  no sense. **If a gate rewrites a fixed-width field, assert the file LENGTH is unchanged
+  afterwards** — that one line converts this from silent to loud.
+- **`timeout` is coreutils and does NOT exist on macOS.** Every build/test script here must
+  run on both platforms, and nothing enforces it (all 11 CI jobs are `ubuntu-latest`, so a
+  macOS-only break ships with every check green). Use the shim already in
+  `test/diff_compiler_engines.sh`, labelled there *"portable timeout (no coreutils on mac)"*:
+  ```sh
+  run_t() { perl -e 'alarm shift; exec @ARGV' "$@"; }
+  ```
+  ⚠️ **Not a drop-in substitution** — the shim is killed by `SIGALRM` so the shell reports
+  **142** (128+14) where `timeout` reports **124**; real exit codes pass through unchanged.
+  Move every guard with it, or the guard silently stops detecting the thing it was added
+  for. Verify both, don't assume: `run_t 1 sleep 5; echo $?`.
+
+Both are worth checking in review rather than trusting: `grep -n "printf '\\\\x\|[^a-z]timeout " <gate>`.
+
 ## Task playbooks (skills)
 
 **Skills are planning inputs, not just implementation aids.** At task triage — including
@@ -919,7 +1141,7 @@ itself make a task typechecker-internal. If the fix threads through resolve/eval
 (`deriving`, desugar-rooted), Phase 72 (field-name reuse: added a type_error, but the bulk was
 a multimap threaded through resolve *and* typecheck), Phase 73 (bidirectional checking), and
 Phases 83/84 (dict-threading through AST + typecheck + dict_pass + eval). **Check where the fix
-actually lands before loading it.** Either way, a typechecker bug fix first answers the five
+actually lands before loading it.** Either way, a typechecker bug fix first answers the
 standing questions in `.claude/workstreams/TYPECHECK.md` — keyed to the `ws:typecheck` label, not
 to whichever skill you loaded, so the routing hazard above can't cause it to be missed.
 

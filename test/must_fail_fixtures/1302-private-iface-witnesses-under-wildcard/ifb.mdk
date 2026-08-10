@@ -1,0 +1,3 @@
+-- #1302: the interface the entry's `mth` occurrence actually names.
+export interface IB a where
+  mth : a -> Int

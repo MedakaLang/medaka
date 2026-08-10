@@ -1,0 +1,58 @@
+-- #1111 A-2.13 (#1319 unit 3) — #1377's NAMES-ONE-HOLDS-ANOTHER shape, with the
+-- collision made OBSERVABLE.  Sibling of `record_receiver_ident_named_vs_held/`,
+-- which asserts the same acceptance but CANNOT see a layout error: its two
+-- colliding records have one field each, so both layouts pick index 0.
+--
+-- 🚨 THIS PAIR IS THE ROUND-2 REVIEW'S STRUCTURAL FINDING TURNED INTO A GATE.  The
+-- review of PR #1381 observed that giving the colliding records disjoint or
+-- differently-typed fields — done to make a wrong pick LOUD at the FRONT end —
+-- is exactly what blinds the cell to a wrong pick in the BACK end.  Both records
+-- here declare `shared`, at index 1 (`armod`) and index 0 (`zrmod`), so a wrong
+-- pick is a wrong NUMBER on the executed binary.  Keep both cells: the single-field
+-- one still grades the acceptance and the `Field 'beta' does not belong` direction,
+-- and this one grades the layout.
+--
+-- ⚠️ EVAL IS A KNOWN-WRONG ORACLE FOR THE LAYOUT HALF, in the reassuring direction
+-- — the interpreter resolves fields by NAME at run time — so the golden is
+-- hand-derived and the cell is graded on the EXECUTED NATIVE (and WasmGC) BINARY by
+-- `diff_compiler_engines.sh`'s module arm.
+--
+-- 🚨 WHICH MECHANISM EACH HALF GRADES, DERIVED FROM THE TYPED CORE IR.
+-- `core_ir_typed_modules_dump_main.mdk` over this fixture prints:
+--
+--   CFieldAccess (CVar "armod__mkA" AGlobal) "alpha"  "armod__Cfg"
+--   CFieldAccess (CVar "armod__mkA" AGlobal) "shared" "armod__Cfg"
+--   CFieldAccess (CVar "zrmod__mkZ" AGlobal) "shared" "zrmod__Cfg"
+--   CFieldAccess (CVar "zrmod__mkZ" AGlobal) "beta"   "zrmod__Cfg"
+--
+-- The stamps are MANGLED, and unit 3's arm (a) stamps the UNMANGLED head name, so
+-- it cannot have produced them: the LAYOUT half re-grades PR #1395's
+-- receiver-identity narrowing in `lookupRecordByMangledHead`, not unit 3.  What
+-- grades unit 3 is the ACCEPTANCE half — with unit 3's selection stubbed back out
+-- this program is REFUSED at exit 1 (`Type mismatch: Cfg vs Cfg — … 'zrmod' …
+-- 'armod'` plus `Field 'beta' does not belong to record 'Cfg'`), measured.  Keep
+-- both: a regression in either mechanism reds this row.
+--
+-- Hand-derived from the sources, before any engine was run:
+--   `useA c = 0` by definition;
+--   `mkA = Cfg { alpha = 1, shared = 2 }` => `mkA.alpha = 1`, `mkA.shared = 2`;
+--   `mkZ = Cfg { shared = 7, beta = 5 }`  => `mkZ.shared = 7`, `mkZ.beta = 5`.
+-- so `0,1,2,7,5`.  Applying armod's layout to `mkZ` would print `…,5,…`.
+import remod.{Cfg, mkA}
+import zrmod.{mkZ}
+
+useA : Cfg -> Int
+useA c = 0
+
+main : <IO> Unit
+main =
+  putStrLn
+    (intToString (useA mkA)
+      ++ ","
+      ++ intToString mkA.alpha
+      ++ ","
+      ++ intToString mkA.shared
+      ++ ","
+      ++ intToString mkZ.shared
+      ++ ","
+      ++ intToString mkZ.beta)

@@ -1,0 +1,86 @@
+entry: main.mdk
+what: #1351 universeMethodDispatchIdxRef bare-method-name collision -- import-line
+what: order alone decides whether `mth "abc" 5 + af 0 + zf 0` type-errors at exit 1
+what: or types clean and prints 7 at exit 0.
+
+Sources are the three interface/standalone modules from #1351's own repro
+(`test/must_fail_fixtures/1351-methoddispatchidx-import-order-collision/`), copied
+byte-for-byte into this directory as `amodI.mdk` / `zmodI.mdk` / `fmodI.mdk` /
+`main.mdk` (not modified, not symlinked -- a genuinely separate corpus per the
+shared-corpus trap). `amodI.IA.mth : a -> Int -> Int` puts its typaram at dispatch
+index 0; `zmodI.IZ.mth : Int -> b -> Int` puts it at index 1 and carries the
+program's only impl (`impl IZ String`); `fmodI.mth : String -> Int -> Int` is an
+unrelated standalone with the same bare name, required so the occurrence routes
+through `methodDispatchIdx` at all (see the must-fail fixture's `claim.txt` "TRAP"
+note -- `recordRLocalSite` only reads the table when a standalone of the same bare
+name is in scope).
+
+`main.mdk` has three top-level import clauses (fmodI, amodI, zmodI), so this gate's
+permuter tries all 3! = 6 orderings.
+
+## HOW THE EXPECTED VALUES WERE ESTABLISHED
+
+⚠️ These are NOT adjudicated correct answers -- no spec ruling exists for what
+`mth "abc" 5` should mean when two unrelated interfaces share a bare method name at
+DIFFERING dispatch indices plus a standalone shadow. #1351's own body derives (by
+hand, from the declared signatures, independently of this gate) that `7` -- the
+body of `impl IZ String`, whose `mth` takes an `Int` first -- cannot be reached
+correctly by a call whose first argument is a `String`; but it explicitly does NOT
+settle whether the "right" answer is the standalone's `99` or a rejected program.
+**What this row pins is the DIVERGENCE, not a verdict on which side is correct.**
+
+The two signatures below are exactly what `sh test/diff_compiler_import_order.sh`
+itself printed for this case while UNLEDGERED, transcribed verbatim (not
+hand-derived from the header comment, per the ledger's own instruction) on a cold
+`make medaka` of this worktree at commit f21d26b9da967323e43415bf622533420a804ace,
+MEDAKA_STRICT=1:
+
+    check=0;codes=;schemes=main : Unit\n;run=0:7\n;build=0/0:7\n
+    check=1;codes=T-TYPE-MISMATCH;schemes=;run=1:;build=1/-:
+
+Independently re-derived by hand outside the gate (not from the gate's tally --
+each of the six `fmodI`/`amodI`/`zmodI` orderings run standalone with
+`medaka run`, MEDAKA_STRICT=1, same binary):
+
+    fmodI, amodI, zmodI  -> 7, exit 0        (main.mdk as shipped)
+    amodI, fmodI, zmodI  -> 7, exit 0
+    amodI, zmodI, fmodI  -> 7, exit 0
+    fmodI, zmodI, amodI  -> Type mismatch: Int vs String, 5:20, exit 1
+    zmodI, fmodI, amodI  -> Type mismatch: Int vs String, 5:20, exit 1
+    zmodI, amodI, fmodI  -> Type mismatch: Int vs String, 5:20, exit 1
+
+3 of the 6 orderings print 7 at exit 0 (whenever `amodI`'s clause precedes
+`zmodI`'s); the other 3 reject (whenever `zmodI`'s clause precedes `amodI`'s) --
+an exact 3/3 split on which of the two colliding interfaces' import clause comes
+first, consistent with the "first-match wins" mechanism #1351 names
+(`universeMethodDispatchIdxRef` / `methodDispatchIdx`, both accumulated by
+concatenation and read by first match). This matches the pair #1351's own issue
+body and its must-fail pin
+(`test/must_fail_fixtures/1351-methoddispatchidx-import-order-collision/`) report
+for their two named orderings (`main.mdk` = fmodI,amodI,zmodI here; `order-swapped`
+= fmodI,zmodI,amodI here). Both `run` and `build` were graded by this gate and agree
+with each other within every ordering, consistent with #1351's own "native arm"
+measurement that `medaka build` is not an independent observation of this defect
+(same shared front end).
+
+Ledgered in test/IMPORT-ORDER-LEDGER.txt against #1351 (OPEN). This case is the
+complementary graded instrument to the must-fail pin: that harness grades ONE
+command plus a control per fixture (its own header explains why), so it cannot pin
+the order-invariance half; this gate's permutation differential needs no ground
+truth and grades exactly that half.
+
+⚠️ RE-POINTED 2026-08-08 by #1354 unit A, and the ledger signatures were RE-CUT from
+the gate then. main.mdk's third clause changed from `zmodI.{zf}` to `zmodI.{IZ, zf}`.
+Under the OLD spelling this case CONVERGES on that unit's binary -- SHADOW-SEMANTICS
+S1's interface operand is now scoped to what the module can NAME, and with neither
+`IA` nor `IZ` nameable there `mth` stops being a shadow, so `methodDispatchIdx` (the
+bare-name first-match list this case exists to expose) is never consulted at all.
+That convergence is real, and it is NOT a fix for #1351: naming either interface in
+its own import restores the order-dependence unchanged, which is what the current
+member list does. Re-pointed rather than drained because draining would have left an
+OPEN, `verified`, S0 issue with no mechanical guard, on the strength of a spelling
+that had stopped reaching the defect.
+
+The not-nameable spelling did not go unguarded either: it is
+test/shadow_fixtures/i17_importer_two_ifaces_neither_nameable/, which pins the value
+99 on all three verbs and is the SEMANTIC companion to this case.

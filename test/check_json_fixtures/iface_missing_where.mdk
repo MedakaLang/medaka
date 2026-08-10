@@ -1,0 +1,4 @@
+interface Shape a
+  area : a -> Float
+
+main = println 1

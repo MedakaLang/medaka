@@ -1,0 +1,5 @@
+-- SHADOW-SEMANTICS cell I13 provider 4: the standalone main.mdk explicitly
+-- imports.  Its domain is `Int`, so it CANNOT accept a `Box` -- which is what
+-- makes this cell's wrong answer reachable only through the interface.
+export size : Int -> Int
+size n = n + 1

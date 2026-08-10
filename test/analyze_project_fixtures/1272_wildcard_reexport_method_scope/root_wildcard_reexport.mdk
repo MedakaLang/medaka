@@ -1,0 +1,29 @@
+-- #1111 A-2.5b (#1272): a method occurrence reached through a WILDCARD import of a
+-- RE-EXPORTING module must resolve its impl obligation to the interface the
+-- re-exporter actually re-exports.
+--
+-- EXPECTED VALUE DERIVED BY HAND from the language semantics, not captured from an
+-- engine: `msmth` reaches this module ONLY through `msmid`, which re-exports
+-- `msifb`'s (`export import msifb.{MSIB, msmth}`).  `import msifa.{MSIA}` names the
+-- INTERFACE and deliberately does not select `msmth`, so it brings no `msmth` into
+-- scope.  The occurrence therefore means `MSIB.msmth`, and `Blob` has no `MSIB`
+-- impl.  `check` must report exactly one error:
+--
+--   No impl of MSIB for Blob; write an 'impl MSIB Blob'.
+--
+-- 🚨 BEFORE A-2.5b this checked CLEAN at exit 0 and ran `MSIA`'s body (printing 1)
+-- for a call that names `MSIB` — #1272, an S0.  A-2.5's witness could not fire: a
+-- wildcard carries no member list, so the `usePathNamesMember` spelling test had
+-- nothing to match, and relaxing THAT test was not available (a wildcard 'names'
+-- every interface, so it would have witnessed every candidate and the two-matches
+-- guard would have no-op'd the override).  Asking the EXPORT GRAPH instead —
+-- 'does `msmid` export THIS declaration of `msmth`' — dissolves the dilemma.
+import msmid.*
+import msifa.{MSIA}
+
+public export data Blob = Blob
+
+export impl MSIA Blob where
+  msmth b = 1
+
+main = println (msmth Blob)

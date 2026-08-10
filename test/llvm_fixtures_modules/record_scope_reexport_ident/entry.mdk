@@ -1,0 +1,22 @@
+-- #1111 A-2.12 (#1319 unit 2) — #1283 Repro A's drain, on all three engines.
+--
+-- This is the shape that survived unit 1: the CONSTRUCTOR-scheme half was re-keyed
+-- there, but a record literal / pattern / `.field` access never reads that env — it
+-- reads `recordByNameRef`, which stayed bare-name and last-write-wins.  So Repro B
+-- (the bare-ctor-member spelling) drained in unit 1 and Repro A (this one, the
+-- RECORD spelling) did not.
+--
+-- Before: `Type mismatch: Cfg vs Cfg — … one comes from module 'armod', the other
+-- from module 'zrmod'` plus `Int vs Float`, exit 1 — a diagnostic naming TWO modules
+-- this file never mentions.  Measured on a binary cold-built from `main` @ 1443870c.
+--
+-- Hand-derived correct answer, independent of any engine: `entry` brings exactly ONE
+-- `Cfg` into scope — armod's, whose `fld` is an `Int` — and `zrf 0 = 0`, so `7`.
+import remod.{Cfg, mkA}
+import zrmod.{zrf}
+
+get : Cfg -> Int
+get c = c.fld
+
+main : <IO> Unit
+main = putStrLn (intToString (get mkA + zrf 0))

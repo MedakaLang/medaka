@@ -1,0 +1,23 @@
+-- THE PERMUTED HALF of `record_xmod_field_order/`.  This is `zrmod.mdk`'s
+-- declaration — fields `b` then `a` — under a module name that sorts FIRST instead
+-- of last.
+--
+-- 🚨 WHY THE PAIR EXISTS AND WHY IT IS NAMES AND NOT IMPORT CLAUSES.  Pre-fix the
+-- winner was `pairRecordByName (headL owners)` over `sortUniqS`ed owner keys, and
+-- on the emit path every key is `<mid>__<ctor>` — so the decision followed module
+-- NAME sort order.  Import-clause order is invariant to it, which is why permuting
+-- the import clauses in `entry.mdk` would have produced a differential that passes
+-- for the wrong reason.  Permuting the NAMES flips which module is the loser, so
+-- this cell and its sibling fail in COMPLEMENTARY halves before the fix and must
+-- both be fully correct after it.
+public export data Cfg = { b : Int, a : Int }
+
+mkAA : Cfg
+mkAA = Cfg { b = 33, a = 44 }
+
+-- projected INSIDE the declaring module: `b` is slot 0, `a` is slot 1.
+export aaA : Int
+aaA = mkAA.a
+
+export aaB : Int
+aaB = mkAA.b

@@ -1,0 +1,6 @@
+-- SHADOW-SEMANTICS cell I17 provider 3: the standalone shadow.  LOAD-BEARING, not
+-- decoration: the bare-name dispatch-index table's only reader is gated on
+-- `standaloneValuesRef`, so WITHOUT a standalone of the same name the table is never read
+-- and this graph would be immune to the defect it exists to exercise.
+export mth : String -> Int -> Int
+mth s n = 99

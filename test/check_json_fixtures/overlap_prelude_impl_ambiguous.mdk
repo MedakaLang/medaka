@@ -1,0 +1,6 @@
+impl Index (List Int) k Int where
+  index _ _ = 42
+
+main =
+  let a : Int = index [1, 2, 3] 0
+  println a

@@ -1,0 +1,26 @@
+-- One of two UNRELATED modules that each declare a record TYPE spelled `Cfg`.
+-- There is no import relationship between this module and `zrmod`, and neither
+-- ever projects the other's record.
+--
+-- Its two `Int` fields are in the OPPOSITE declaration order from zrmod's, which
+-- is the whole trigger: a same-name collision alone is harmless (the emitter's
+-- field-order table is keyed by the MANGLED ctor name `armod__Cfg` and is correct),
+-- what was wrong was the record IDENTITY typecheck stamped onto each projection.
+--
+-- ⚠️ THE MODULE NAME IS LOAD-BEARING.  Pre-fix, the loser was decided by
+-- `sortUniqS` over the owner keys `armod__Cfg` / `zrmod__Cfg`, i.e. by module-NAME
+-- sort order — so `armod` sorting FIRST is what made THIS module the one that
+-- stayed correct and zrmod the one that broke.  `record_xmod_field_order_permuted/`
+-- is the same two declarations with the names swapped, which flips which half
+-- breaks; keep the pair in step.
+public export data Cfg = { a : Int, b : Int }
+
+mkA : Cfg
+mkA = Cfg { a = 11, b = 22 }
+
+-- projected INSIDE the declaring module: `a` is slot 0, `b` is slot 1.
+export arA : Int
+arA = mkA.a
+
+export arB : Int
+arB = mkA.b

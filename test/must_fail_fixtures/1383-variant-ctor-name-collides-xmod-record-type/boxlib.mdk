@@ -1,0 +1,8 @@
+-- CONTROL half of issue #1383: byte-identical role to plainlib.mdk, except
+-- the record TYPE is named `Boxed` instead of `Plain` -- the ONE variable
+-- this isolates: the bare-name collision with ahold's `Plain` constructor is
+-- removed, everything else (an unrelated module, an unrelated record with an
+-- unrelated field `px`) stays.
+public export data Boxed = { px : Int }
+export mkP : Boxed
+mkP = Boxed { px = 1 }

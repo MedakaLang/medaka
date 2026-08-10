@@ -1,0 +1,39 @@
+-- THE UNRELATED MODULE.  It takes no part in the collision it is surrounded by: it
+-- declares its OWN named-field variant `Dup`, at its OWN type, and the binding
+-- asserted about (`bys`) has type `Int` — it mentions neither `RA` nor `RB`.
+--
+-- It nonetheless imports rcolla's constructors WITH `(..)`, which is what makes this
+-- able to fail rather than green by construction: rcolla's `Dup` is therefore in
+-- scope AND witnessed by an import of this module, so a record scope decision that
+-- omitted the own-declaration rung would find exactly ONE witnessed candidate and
+-- override this module's `Dup` to rcolla's.  `unPlain (Dup { px = 5 })` then does
+-- not typecheck.  (That is the A-2.6 layering regression — `import json.{Json,
+-- JNull}` clobbering a local `data Tok = JString String` — in the RECORD table.)
+--
+-- ⚠️ MEASURED, not reasoned: with `scopedRecordEntry`'s own-declaration rung stubbed
+-- out (`if False then None else …`) and nothing else changed, on a binary built from
+-- this branch, `entry.mdk` goes from `7`/`b`/`25` at exit 0 to exit 1 with SIX
+-- diagnostics, the first being `Field 'px' does not belong to record 'Dup'` followed
+-- by `Type mismatch: RA vs Plain`, both at `unPlain (Dup { px }) = px`.  This cell
+-- can fail.
+--
+-- ⚠️ It is NOT a drain cell: it prints `7`/`b`/`25` on the pre-change binary too
+-- (measured at `main` @ 1443870c).  That is the point — the assertion is that
+-- unrelated code is UNCHANGED, so a green here before and after is the property,
+-- and the stub above is what shows the green is not vacuous.
+--
+-- The rest of the rcolla import must keep working at the same time: `ACount` is not
+-- collided anywhere and is used here, so "the local record wins" cannot be bought by
+-- dropping the import.
+import rcolla.{RA(..), unRA}
+
+public export data Plain =
+  | Dup { px : Int }
+  | Skip
+
+unPlain : Plain -> Int
+unPlain (Dup { px }) = px
+unPlain Skip = 0
+
+export bys : Int
+bys = unPlain (Dup { px = 5 }) + unRA (ACount 2)

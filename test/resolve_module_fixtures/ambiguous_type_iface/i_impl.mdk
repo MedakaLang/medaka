@@ -1,0 +1,12 @@
+-- INTERFACE occurrence 2/4: the interface an `impl` is OF (`DImpl.iface`, via
+-- `checkImplIface`).  An `impl` is a USE of an interface, not a declaration of one.
+-- `speak` is spelled the same in both `ta` and `tb`, so this impl is method-valid
+-- whichever interface is bound and the row asserted is the ambiguity itself rather
+-- than a downstream MethodNotInInterface.
+import ta.{Speak}
+import tb.{Speak}
+
+data Local = Local Int
+
+impl Speak Local where
+  speak _ = "local"

@@ -1,0 +1,41 @@
+-- #1300 DRAIN: `import m.{Ctor(..)}` where `Ctor` names a CONSTRUCTOR, not a type.
+--
+-- `(..)` is a SUFFIX on an import member, not a separate syntactic form, so it is
+-- legal after any member — including one that names a constructor, where it simply
+-- has nothing to expand.  `backend/private_mangle.ctorMemberEntry` read it as a
+-- separate form: its wild branch looked `Jjw` up in a TYPE-keyed table, missed, and
+-- returned `[]`, so `Jjw` never entered the unit's constructor-rename map while
+-- qmodw's definition was renamed `qmodw__Jjw` as usual.
+--
+-- Expected output, derived by hand BEFORE any capture and independently of any
+-- engine: `Jjw` can only mean qmodw's `Jjw : Int -> QTW`, so `unQW (Jjw 5)` = `5`;
+-- `Kkw` is pmodw's arity-2 one, so `unPW (Kkw 1 2)` = `1 + 2` = `3`.  So `5` then `3`.
+--
+-- ⚠️ COUNTERFACTUAL, measured rather than asserted.  With
+-- `compiler/backend/private_mangle.mdk` restored to bfee53b4 and the binary rebuilt,
+-- this fixture is RED on the native arm:
+--     $ medaka build entry.mdk -o e
+--     error: emitter failed compiling entry.mdk
+--     runtime error [E-PANIC]: unbound variable 'Jjw' (not a local, ctor, or known fn)
+--     exit 1
+-- while `medaka run entry.mdk` prints `5` / `3` at exit 0.  So only an arm that
+-- GRADES THE BUILD can see this — which is why the fixture lives in a corpus
+-- `diff_compiler_engines.sh` reads.
+--
+-- ⚠️ THE SECOND ASSERTION IS THE BYSTANDER, and it is about the OPPOSITE direction.
+-- The cheap way to make a `(..)` member on a ctor bind something is to hand it every
+-- constructor of the named member's OWNING type.  That would put qmodw's NULLARY
+-- `Kkw` into the rename map, and the map is first-entry-wins over decls in source
+-- order (`omFromPairs (reverseL rmList)`, private_mangle.mdk), with qmodw's clause
+-- first — so `Kkw 1 2` would bind the nullary constructor instead of pmodw's arity-2
+-- one.  The clause ORDER is the trigger and must not be "tidied": qmodw must stay
+-- first.  The shipped fix does NOT expand at all on this path (it binds `Jjw` alone,
+-- mirroring `frontend/resolve.expandMemberNames`), so this half is green both before
+-- and after — it guards the next edit, not this one.
+import qmodw.{Jjw(..), unQW}
+import pmodw.{PW, Kkw, unPW}
+
+main : <IO> Unit
+main =
+  let _ = putStrLn (intToString (unQW (Jjw 5)))
+  putStrLn (intToString (unPW (Kkw 1 2)))
