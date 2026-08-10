@@ -11,6 +11,11 @@ reference compiler was removed 2026-06-26 (tag `oracle-frozen` preserves the las
 **This file is a *router*: maps, traps, and links.** It does not teach. For prose,
 rationale, and post-mortems, follow the links — and don't assume detail that isn't here.
 
+> **Claude project memories are available on this machine:**
+> `/root/.claude/projects/-root-medaka/memory/MEMORY.md`. Consult that index when durable
+> project decisions, historical context, or prior-session learnings are relevant; do not load it
+> automatically for every task.
+
 > ### ⚡ Editing `compiler/`? Read [`compiler/AGENTS.md`](compiler/AGENTS.md) first.
 > **How not to make the compiler slow.** It exists because *the agents who introduce
 > performance bugs here are not the ones hunting them* — every quadratic in this tree was
