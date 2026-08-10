@@ -2672,6 +2672,7 @@ data DeclEnvs = DeclEnvs {
     deOrdIndex : OrdMap Int,
     deAllDecls : List Decl,
     deData : DataEnv,  -- A-3.2a (#1112): CONSTRUCTION ONLY, NOT LIVE — see the block above `DataEnv`
+    deImpls : ImplEnv,
   }
 
 -- INITIAL construction only, exactly as `freshDriverState` is: a driver that never
@@ -2683,6 +2684,7 @@ emptyDeclEnvs = DeclEnvs {
   deOrdIndex = omEmpty,
   deAllDecls = [],
   deData = emptyDataEnv,
+  deImpls = emptyImplEnv,
 }
 
 -- Build the envelope from the prelude + the loader's dependency-first module list.
@@ -2699,6 +2701,20 @@ buildDeclEnvs coreDecls modules =
     deOrdIndex = declEnvOrdIndex (omInsert "" 0 omEmpty) mods,
     deAllDecls = allDecls,
     deData = buildDataEnv allDecls,
+    -- #1112 A-3.4: `IE`, built here so it inherits this function's ordering and its
+    -- must-run-after-`stampGraphTyOrigins` precondition.  See the IE block header.
+    --
+    -- ⚠️ A-3.2a's `deData` and this field landed independently and now share this
+    -- one constructor; they COMPOSE rather than interact, and that is a property
+    -- worth stating because nothing here would fail loudly if it stopped holding.
+    -- `buildDataEnv` reads the FLATTENED `allDecls`; `buildImplEnv` reads the
+    -- per-module `mods` rows, because `IE` needs each row's ordinal and module id
+    -- and the flattened list has neither.  Both are pure folds over the same
+    -- `declEnvModulesFrom` result, neither mutates a ref, and neither reads the
+    -- other's output — so the order of these two initialisers is not observable.
+    -- If a later unit gives either builder a side effect, that stops being true
+    -- and this comment is the thing it invalidates.
+    deImpls = buildImplEnv mods,
   }
 
 declEnvModulesFrom : Int -> List (String, List Decl) -> List DeclEnvModule
@@ -3000,6 +3016,496 @@ distinctIdentsIn2 _ = False
 -- ["Pt", "Pt"]
 -- > distinctIdentsIn2 (fromOption [] (omLookup "x" deFieldOwnerSameNameEnv.deFieldOwnerIdents))
 -- True
+
+-- 🚨 THE BLANK LINE ABOVE IS LOAD-BEARING — DO NOT CLOSE THE GAP.  A doctest's
+-- EXPECTED OUTPUT runs to the end of the contiguous comment run, so without it
+-- this banner is absorbed into A-3.2a's last doctest's expected value and that
+-- doctest FAILS with `expected: True / actual: True` plus this text spliced in.
+-- MEASURED when A-3.2a and A-3.4 first met in one tree: 13/14, and neither PR
+-- could have seen it alone — no conflict marker, two adjacent comment blocks,
+-- each correct in isolation.
+-- ═══ #1112 A-3.4: THE `IE` REGISTRY — IE-BLOCK-BEGIN ════════════════════════════
+-- 🚨 THE TWO BANNER LINES BOUNDING THIS BLOCK ARE READ BY A GATE.  Check 4
+-- of `test/registry_keying_ratchet.sh` (which runs inside
+-- `test/typecheck_compiler_source.sh`, inside the required `soundness` job)
+-- extracts exactly the text between them and FAILS if the extraction is EMPTY —
+-- so renaming or deleting either banner is loud, never a green that examined
+-- nothing.  Do not reword them without editing that check.
+--
+-- WHAT THIS IS.  Stage K's `IE`: one registry answering "what impls exist",
+-- replacing the three separate answers enumerated in
+-- `compiler/TYPECHECK-TARGET-ARCHITECTURE.md` §9.6.  Built once, whole-graph,
+-- inside `buildDeclEnvs`; every read filters through `declEnvVisibleAt` (the ONE
+-- ordinal predicate, whose body A-3.6 deletes).
+--
+-- 🚨 THE CONSTRAINT (§9.3), MECHANICALLY ENFORCED BY CHECK 4 ABOVE.  `IE` is
+-- keyed by IMPL IDENTITY.  An interface's default-method arm is a property of the
+-- INTERFACE declaration (`CE`, A-3a) and the emit-side method/default *word*
+-- namespace belongs to B-2 (#1113).  NO `IE` KEY COMPONENT MAY BE A METHOD NAME:
+-- a `(method, tag)`-keyed default registry here would rebuild #1265 in the new
+-- substrate, since that pair is exactly the key #1265 is the first-match over.
+-- A method name enters an `IE` row only as PAYLOAD (`ieMethods`).
+--
+-- ZERO READERS TODAY, deliberately (PR1 of a two-PR unit): the Module arm's
+-- obligation universe still comes from the three `obUniv*` accumulators, and the
+-- flip to `ieUniverseAt` is PR2, conditional on the §9.5 equality holding as a
+-- MEASUREMENT.  `ieShadowCompare` below is the temporary instrument that measures
+-- it.
+
+-- The INSTANCE IDENTITY this tree does not otherwise have.  `cohClassify`'s ledger
+-- records the gap verbatim — `bucketKeyEntriesFrom` restarts its numbering at 0 per
+-- module, so two distinct impls in different modules share an index.  Minted in
+-- exactly ONE place (`implRowsOf`, from the declaring module's id + ordinal + a
+-- sequence number within the whole-graph build), so two impls can never share one.
+-- READ BY NO JUDGMENT in this unit: it is A-3.7's (coherence) and B-2's (`InstId`)
+-- declared input, and it is a deliverable, not a behaviour change.
+-- 🚨 POSITIONAL, NOT A NAMED RECORD, AND THE REASON IS A MEASURED EMITTER TRAP —
+-- see `ImplRow` below, which carries the full derivation.  Fields, in order:
+-- the declaring module's loader id (the SCOPE), its ordinal, and the sequence
+-- number within the whole-graph build.
+--
+-- 🚨 UNIQUE WITHIN ONE COMPILE — AND **NOT STABLE ACROSS COMPILES**.  State both
+-- halves or the next author will read the first as the second, because this thing
+-- is advertised as "the instance identity this tree does not otherwise have" and
+-- is named as B-2's `InstId` input.
+--   * `seq` is a WHOLE-GRAPH running counter, so adding one `impl` to ANY earlier
+--     module renumbers every later impl in the program.
+--   * `ord` is the loader's dependency-first position, so reordering imports moves
+--     both components.
+-- Uniqueness within a compile is all that is claimed, and it is all A-3.7's
+-- coherence needs (it compares two rows of ONE graph).  ⚠️ B-2 is a different
+-- matter: it owns the emit-side WORD namespace, where an ordinal-derived serial is
+-- a poor name source — a symbol named from `seq` changes when an unrelated earlier
+-- module gains an impl, which is a reproducible-build and incremental-rebuild
+-- hazard, not a correctness one.  If B-2 wants a NAME, derive it from
+-- `(module id, interface identity, head)` — content, not position — and use
+-- `InstRef` only as the within-compile discriminator it is.
+data InstRef = InstRef String Int Int
+
+instRefMid : InstRef -> String
+instRefMid (InstRef m _ _) = m
+
+instRefSeq : InstRef -> Int
+instRefSeq (InstRef _ _ s) = s
+
+-- One impl, with what §2 K specifies — full head, context, method table — plus its
+-- identity and the scope its visibility is filtered on.
+--
+-- ⚠️ NO `ieLoc` FIELD, and that is a DEPARTURE from the §9.4 data shape with a
+-- derived reason rather than an omission: `Decl` carries no source location at all
+-- (`compiler/frontend/ast.mdk` has no `declLoc`/`dLoc`; `DImpl`'s six labels are
+-- `pub`/`iface`/`tys`/`reqs`/`methods`/`implOrigin`), so an `ieLoc : Option Loc`
+-- here could only ever be `None`.  A field that is structurally always-`None` is
+-- worse than an absent one — it reads as available to A-3.7 and is not.  Whoever
+-- needs it must first give `DImpl` a location (or derive one from a method body's
+-- `Expr`), which is its own unit.
+-- 🚨 POSITIONAL, NOT A NAMED RECORD — AND THIS IS A MEASURED EMITTER CONSTRAINT,
+-- NOT A STYLE CHOICE.  §9.4 spells the row with named fields; this is the one place
+-- that spelling cannot be honoured, so the reason is written here rather than left
+-- for the next reader to rediscover.
+--
+-- The LLVM emitter resolves a record field label to a positional index from a table
+-- it builds by SCANNING THE LOWERED PROGRAM FOR CONSTRUCTION SITES —
+-- `scanExprRecords` collects `(name, labels)` from `CRecord` nodes only, never from
+-- the `DData` declaration (`compiler/backend/llvm_emit.mdk:10178-10193`,
+-- `findFieldIdx`/`findRecordByLabel` at `:10148-10163`).  So a record whose
+-- CONSTRUCTION is dead-code-eliminated from an entry's closure while a FIELD ACCESS
+-- on it survives panics: `llvm: CFieldAccess: unknown field '<label>'`.
+--
+-- MEASURED on this branch, with the named-record spelling:
+--   ./medaka build compiler/entries/wasm_emit_typed_main.mdk   -> exit 1,
+--   runtime error [E-PANIC]: llvm: CFieldAccess: unknown field 'ieOrd'
+-- reproduced in CI on the `wasm` job, which cascaded `gates (backend)` into a
+-- phantom-skipped `diff_compiler_tmc_parity`.  That entry reaches `elaborateDict`
+-- (the FLAT path) and therefore `checkBodyImpl` — which contains `ieShadowCompare`,
+-- hence the accessor — but it never reaches `buildDeclEnvs`, hence never
+-- `implRowsOf`, the only `ImplRow` construction site.  A positional constructor is
+-- destructured by pattern match and consults no label table, so it cannot hit this.
+--
+-- ⚠️ `ImplEnv` below KEEPS its named fields, and that is not an inconsistency: its
+-- construction site `emptyImplEnv` is reachable from `emptyDeclEnvs` ←
+-- `freshDriverState`, which every driver builds — which is exactly why the panic
+-- named `ieOrd` and not `ieRows`.  A later editor who makes `emptyImplEnv`
+-- unreachable re-arms the same trap on `ImplEnv`.
+--
+-- Fields, in order: the declaring module's ordinal (A-3.1's `demOrd` — the scope);
+-- the instance identity; the interface identity; the full head; the context; and
+-- the method table, which is PAYLOAD ONLY (§9.3) and never a key component.
+--
+-- ⚠️ NO `Loc`, and that is a second DEPARTURE from the §9.4 data shape with a
+-- derived reason rather than an omission: `Decl` carries no source location at all
+-- (`compiler/frontend/ast.mdk` has no `declLoc`/`dLoc`; `DImpl`'s six labels are
+-- `pub`/`iface`/`tys`/`reqs`/`methods`/`implOrigin`), so an `Option Loc` here could
+-- only ever be `None`.  A field that is structurally always-`None` is worse than an
+-- absent one — it reads as available to A-3.7 and is not.  Whoever needs it must
+-- first give `DImpl` a location (or derive one from a method body's `Expr`), which
+-- is its own unit.
+data ImplRow =
+  | ImplRow Int InstRef IfaceRef (List Ty) (List Require) (List String)
+
+ieRowOrd : ImplRow -> Int
+ieRowOrd (ImplRow o _ _ _ _ _) = o
+
+ieRowInst : ImplRow -> InstRef
+ieRowInst (ImplRow _ i _ _ _ _) = i
+
+ieRowTriple : ImplRow -> (IfaceRef, List Ty, List Require)
+ieRowTriple (ImplRow _ _ ir tys reqs _) = (ir, tys, reqs)
+
+-- The registry.  `ieRows` is the POPULATION in build order (ordinal order across
+-- modules, `implDeclsWithReqs` order within one); the three buckets are the index —
+-- the same three the obligation channel already has, with the SAME keys, minted
+-- through the SAME `oblIfaceKeys`/`dispHeadTab` calls (see `ieInsertRow`), so `IE`
+-- mints no parallel keying scheme.
+data ImplEnv = ImplEnv {
+    ieRows : List ImplRow,  -- whole-graph, build order; the projection reads this
+    ieConcrete : MultiRegistry ImplRow,
+    ieHeadless : MultiRegistry ImplRow,
+    ieIfaceTags : Registry SetRegistry,
+  }
+
+emptyImplEnv : ImplEnv
+emptyImplEnv = ImplEnv {
+  ieRows = [],
+  ieConcrete = mregEmpty,
+  ieHeadless = mregEmpty,
+  ieIfaceTags = regEmpty,
+}
+
+-- Fold the envelope's modules, in ordinal order, into one whole-graph registry.
+-- The sequence number runs across the WHOLE build (not per module), which is what
+-- makes `InstRef` unique without relying on `(mid, ord)` being injective.
+buildImplEnv : List DeclEnvModule -> ImplEnv
+buildImplEnv mods = buildImplEnvGo mods 0 emptyImplEnv
+
+buildImplEnvGo : List DeclEnvModule -> Int -> ImplEnv -> ImplEnv
+buildImplEnvGo [] _ env = env
+buildImplEnvGo (m::rest) seq env =
+  let rows = implRowsOf m.demId m.demOrd seq (implDeclFacts m.demDecls)
+  buildImplEnvGo rest (seq + listLen rows) (ieAddRows rows env)
+
+-- ⚠️ LOCKSTEP WITH `implDeclsWithReqs` / `implDeclWithReqs`: same `DAttrib` unwrap,
+-- same single-`DImpl` arm, same order.  The two are kept separate rather than one
+-- being defined via the other because `implDeclsWithReqs` runs per module on the
+-- hot Module path and `check` is GC-bound — deriving it from this 4-tuple form
+-- would allocate a method-name list per impl on every compile.  The agreement is
+-- not left to the comment: `ieShadowCompare` MEASURES it (a population or order
+-- divergence is exactly what it panics on).
+--
+-- ⚠️ OWED, and it is an inconsistency in the paragraph above rather than a
+-- separate point: the reason given for keeping the two functions apart is "do not
+-- allocate a method-name list per impl on every compile" — and this function then
+-- allocates exactly that list, per impl, per compile, into `ieMethods`, which
+-- **nothing reads today**.  It is there because §2 K specifies the method table as
+-- `IE` content and A-3.5's impl-completeness relocation is its named consumer.  If
+-- A-3.5 slips, drop the field rather than carrying a per-compile allocation for a
+-- reader that never arrives.
+implDeclFacts : List Decl -> List (IfaceRef, List Ty, List Require, List String)
+implDeclFacts prog = flatMap implDeclFact prog
+
+implDeclFact : Decl -> List (IfaceRef, List Ty, List Require, List String)
+implDeclFact (DAttrib _ d) = implDeclFact d
+implDeclFact (DImpl { iface, tys, reqs, methods, implOrigin, ... }) = [
+  (
+    IfaceRef { irName = iface, irOrigin = implOrigin },
+    tys,
+    reqs,
+    map implMethodNameTc methods,
+  )
+]
+implDeclFact _ = []
+
+implRowsOf : String -> Int -> Int -> List (IfaceRef, List Ty, List Require, List String) -> List ImplRow
+implRowsOf _ _ _ [] = []
+implRowsOf mid ord seq ((iface, tys, reqs, ms)::rest) =
+  ImplRow ord (InstRef mid ord seq) iface tys reqs ms ::
+    implRowsOf mid ord (seq + 1) rest
+
+ieAddRows : List ImplRow -> ImplEnv -> ImplEnv
+ieAddRows [] env = env
+ieAddRows (r::rest) env = ieAddRows rest (ieInsertRow r env)
+
+-- The index insert, mirroring `insertUnivImplAt` arm-for-arm: the identity key plus
+-- the bare compatibility leg (`oblIfaceKeys`), concrete head → the `[ifk, hd]`
+-- bucket + the tag set, headless → the iface's headless bucket.  `mregAppendK`, not
+-- `mregAddK`: within one bucket the FORWARD declaration order is semantic.
+--
+-- ⚠️ OWED, RECORDED RATHER THAN FIXED UNDER REVIEW: `env.ieRows ++ [r]` is an
+-- append PER ROW, i.e. O(rows²) over the build.  It is small today — a tree-wide
+-- `impl` count in the low hundreds — but it is precisely the shape
+-- `compiler/AGENTS.md` forbids ("thirteen quadratics, all the same shape"), and
+-- §9.8 item 8's timing A/B is still OWED, so nothing has actually measured its
+-- cost.  The fix is one line: cons and `reverseL` once in `buildImplEnv`, which
+-- preserves build order.  Deliberately not done in a review round that is
+-- otherwise comment-only, so that the byte-identical claim keeps its evidence.
+ieInsertRow : ImplRow -> ImplEnv -> ImplEnv
+ieInsertRow (r@(ImplRow _ _ ir _ _ _)) env =
+  ieInsertRowKeys (oblIfaceKeys ir) r { env | ieRows = env.ieRows ++ [r] }
+
+ieInsertRowKeys : List TabKey -> ImplRow -> ImplEnv -> ImplEnv
+ieInsertRowKeys [] _ env = env
+ieInsertRowKeys (ifk::rest) r env =
+  ieInsertRowKeys rest r (ieInsertRowAt ifk r env)
+
+ieInsertRowAt : TabKey -> ImplRow -> ImplEnv -> ImplEnv
+ieInsertRowAt ifk (r@(ImplRow _ _ _ tys _ _)) env = match univReceiverTag tys
+  Some hk =>
+    let ifkey = regKeyOfTab ifk
+    let hd = dispHeadTab hk
+    ImplEnv { env | ieConcrete = mregAppendK (regKeyNTab [ifk, hd]) r env.ieConcrete, ieIfaceTags = regInsertK ifkey (sregAddK (regKeyOfTab hd) (fromOption sregEmpty (regLookupK ifkey env.ieIfaceTags))) env.ieIfaceTags }
+  None => ImplEnv { env | ieHeadless = mregAppendK (regKeyOfTab ifk) r env.ieHeadless }
+
+-- 🚨 THE ONE `IE` READ ACCESSOR.  Every consumer goes through here, and here is the
+-- only place `declEnvVisibleAt` is applied to `IE` — A-3.6 stays the deletion of
+-- that one predicate's body and nothing else.  Open-coding `<=` at a read site is
+-- the one thing this unit must not do.
+--
+-- The projection re-enters `growImplUniverse` — the SAME writer the accumulator
+-- uses — so the two cannot drift in key minting, and the equality reduces to
+-- population and order (§9.5's algebra + `DL`), which is what `ieShadowCompare`
+-- measures.  NO CALLER TODAY: PR2 is the flip of the Module arm's obligation
+-- universe onto this function.
+ieUniverseAt : Int -> ImplEnv -> ImplUniverse
+ieUniverseAt cur env =
+  growImplUniverse (ieTriplesUpTo cur env.ieRows) emptyImplUniverse
+
+ieTriplesUpTo : Int -> List ImplRow -> List (IfaceRef, List Ty, List Require)
+ieTriplesUpTo _ [] = []
+ieTriplesUpTo cur (r::rest)
+  | declEnvVisibleAt cur (ieRowOrd r) = ieRowTriple r :: ieTriplesUpTo cur rest
+  | otherwise = ieTriplesUpTo cur rest
+
+-- ⚠️ TEMPORARY INSTRUMENT — PR2 DELETES THIS AND ITS ONE CALL SITE.
+--
+-- WHY IT EXISTS.  With zero readers, a mis-built `IE` — wrong ordinal, dropped
+-- rows, wrong within-bucket order — is otherwise UNOBSERVABLE: check 4 grades
+-- namespace hygiene, the doctests grade the mints, and no golden looks at the
+-- POPULATION.  This is what makes PR1 fail-capable, and running it over the gate
+-- corpus is what discharges §9.5's fold algebra plus as much of `DL` as is
+-- actually true, as a MEASUREMENT, before PR2 commits to either.  An implementer
+-- who verifies only the algebra has verified the half that was never in doubt.
+-- Precedent: the #1277/#1317 work built the compiler with exactly this instrument.
+--
+-- 🚨 WHAT IT DOES **NOT** DISCHARGE, STATED FIRST BECAUSE THE OBVIOUS READING IS
+-- TOO STRONG AND A-3.2/A-3.3 WOULD INHERIT IT.  §9.5's `DL` is a decl-list
+-- IDENTITY — "`demDecls` at ordinal k IS the `prog` `appendUniverseAccums` was
+-- called with for module k".  On the elaborate path THAT IDENTITY IS FALSE, and
+-- not marginally: `elaborateModules` builds the envelope from the RAW `modules`
+-- (`buildDeclEnvs coreDecls modules`, `:24309`) while the sweeps run
+-- `elabModuleStamp` over the `prePassModulePairArg`-REWRITTEN `modules2a` /
+-- `modules2` (`:24374`, `:24422`) — so the `prog0` this instrument receives is a
+-- prePass-rewritten decl list, not `demDecls`.
+--
+-- What is therefore MEASURED is the weaker and sufficient proposition: **the
+-- IMPL-HEAD PROJECTION of the two lists agrees** — same `(iface identity, head,
+-- context)` triples, same order, at every ordinal.  That is exactly what `IE`'s
+-- consumer needs and all this unit claims.  It says NOTHING about any other decl
+-- kind: `prePassModulePairArg` demonstrably rewrites decls, and whether it
+-- preserves data/interface/value decls the way it preserves `DImpl` heads is
+-- UNMEASURED here.  A-3.2's `DataEnv` and A-3.3's `CE` must measure their own
+-- projections; they may not cite "`DL` is discharged".
+--
+-- 🚨 DELIBERATE DEPARTURE FROM §9.5, WHICH SPECIFIES A WHOLE-PREFIX PROJECTION
+-- COMPARED AGAINST THE ACCUMULATOR, "quadratic by construction".  This compares
+-- the PER-MODULE SLICE instead — `IE`'s rows at ordinal k against the triples
+-- `implDeclsWithReqs prog0` yields for module k — which is O(this module's impls),
+-- i.e. LINEAR overall, and is not weaker on the proposition above.  Induction:
+-- `ieRows` is built in ordinal order, so if every slice k equals the triple list
+-- module k contributed to the accumulator, the prefix at k is the concatenation
+-- the accumulator folded, and `growImplUniverse` is the same writer on both sides
+-- (`ieUniverseAt` calls it).  The quadratic form would have had to be gated off to
+-- be shippable; this one ships ON, which is the property that matters.
+--
+-- The digest compares the MINTED KEYS (`oblIfaceKeys`, both legs) and the rendered
+-- head/context, so a divergence in identity, in population, or in order all show.
+-- A HARD PANIC, not a diagnostic — a diagnostic would move goldens and be blessed
+-- away.  The tag bucket needs no comparison: `ieIfaceTags` and `obUnivIfaceTagsRef`
+-- are DERIVED from the same `(ifk, hd)` pairs (see `ieInsertRowAt` /
+-- `insertUnivImplAt`), so equal concrete rows imply equal tag sets.
+--
+-- 🚨 WHAT THIS INSTRUMENT ALREADY FOUND, AND WHY THE `mid == ""` ARM IS SKIPPED.
+-- MEASURED on this branch: with the comparison unconditional,
+-- `test/diff_compiler_check_modules.sh` panicked on 8 of its 9 fixtures — every one
+-- whose USER module declares an `impl` — with `mid = ''` (ordinal 0), `IE`'s slice
+-- being the PRELUDE's impls and the accumulator holding the user module's single
+-- impl.  The cause is DERIVED, not guessed: `checkModuleFull` (`:21974-21976`) calls
+-- `checkModuleFullImpl ""`, and `cmCheckWorker` (`:23835-23838`) DISCARDS its `_mid`
+-- and calls `checkModuleFull` — so on the `checkModules` driver EVERY user module
+-- reaches `checkBodyImpl`'s Module arm carrying `mid = ""`, which `declEnvsOrdOf`
+-- maps to ordinal 0, the prelude.
+--
+-- THAT IS A HARD PR2 BLOCKER, and it is the whole reason A-3.4 is staged in two
+-- PRs: a reader flip that projects `IE` at `declEnvsOrdOf mid` would hand every user
+-- module on that driver the PRELUDE'S impls alone.  It is not a PR1 defect — PR1 has
+-- no reader — and it is not the instrument being wrong: the instrument is correct and
+-- the premise it tests is false on that driver.  Recorded here rather than silently
+-- worked around, and the arm is skipped rather than the comparison weakened, so the
+-- instrument stays fully fail-capable everywhere a real module id IS carried
+-- (`elaborateModules` → `elabModuleStamp mid` → `checkModuleFullImpl mid`; MEASURED:
+-- a full `make medaka`, which drives the whole compiler graph through that path,
+-- completes with the instrument ON and never fires).
+ieShadowCompare : String -> List Decl -> Unit
+ieShadowCompare mid prog
+  | mid == "" = ()
+  | otherwise = ieShadowCompareGo mid prog
+
+ieShadowCompareGo : String -> List Decl -> Unit
+ieShadowCompareGo mid prog =
+  let envs = driverState.value.declEnvsRef.value
+  let ord = declEnvsOrdOf mid envs
+  let got = joinWith ";" (map ieRowDigest (ieRowsAtOrd ord envs.deImpls.ieRows))
+  let want = joinWith ";" (map ieTripleDigest (implDeclsWithReqs prog))
+  ieShadowVerdict mid ord got want
+
+ieShadowVerdict : String -> Int -> String -> String -> Unit
+ieShadowVerdict mid ord got want
+  | got == want = ()
+  | otherwise = panic "IE shadow-compare DISAGREES at module '\{mid}' (ordinal \{ord}):\n  IE  = \{got}\n  acc = \{want}"
+
+ieRowsAtOrd : Int -> List ImplRow -> List ImplRow
+ieRowsAtOrd _ [] = []
+ieRowsAtOrd ord (r::rest)
+  | ieRowOrd r == ord = r :: ieRowsAtOrd ord rest
+  | otherwise = ieRowsAtOrd ord rest
+
+ieRowDigest : ImplRow -> String
+ieRowDigest r = ieTripleDigest (ieRowTriple r)
+
+ieTripleDigest : (IfaceRef, List Ty, List Require) -> String
+ieTripleDigest (ir, tys, reqs) =
+  let ks = joinWith "+" (map (k => regKeyRender (regKeyOfTab k)) (oblIfaceKeys ir))
+  "\{ks}|\{joinWith " " (map ppTyAtom tys)}|\{joinWith " " (map ieReqDigest reqs)}"
+
+ieReqDigest : Require -> String
+ieReqDigest (Require { requireHead = h, requireArgs = ras, ... }) =
+  "\{h}(\{joinWith " " (map ppTyAtom ras)})"
+
+-- ── §9.7's scoping proofs, as ASSERTIONS rather than sentences ────────────────
+--
+-- 🚨 READ THIS BEFORE THE ASSERTIONS, OR THEY WILL TELL YOU SOMETHING FALSE.
+-- These doctests look ONLY at the IDENTITY leg, which is the leg that does not
+-- collapse.  **`IE` DOES STILL COLLAPSE SAME-SPELLED INTERFACES ON ITS OTHER
+-- LEG, DELIBERATELY.**  `ieInsertRow` indexes every row under `oblIfaceKeys`,
+-- which is TWO keys — the identity key AND the bare-spelling compatibility leg —
+-- so `amod.Same` and `zmod.Same` below share the bare bucket, exactly as the
+-- obligation channel does today.  That is inherited on purpose (see
+-- `insertUnivImplKeys` for the two `ifaceRefBare` goal producers that require it,
+-- and why removing it is #1482's drain, not this unit's), which is why #1438's
+-- pin still reproduces after A-3.4.
+--
+-- So do not read the assertions below as "IE has no collapse".  They assert the
+-- narrower true thing: the identity key is a SCOPE — it resolves to exactly one
+-- row where a bare key would answer with two — which is what A-3 is building
+-- toward and what `InstRef` and A-3.7 will consume.
+--
+-- `AGENTS.md` names the program-global table as this tree's most expensive shape
+-- and demands the key's scope be PROVEN.  The corpus below is the adversarial
+-- case: TWO UNRELATED MODULES that declare the same-spelled interface `Same` and
+-- each impl it at the same-spelled type `Blob`.  Under a bare-name key the two
+-- collapse into one bucket and one index — which is exactly the collapse A-3 is
+-- removing — so every assertion here is fail-capable in the direction that
+-- matters.
+ieTyBlob : String -> Ty
+ieTyBlob m =
+  TyCon { tyConName = "Blob", tyConLoc = None, tyConOrigin = OriginModule m }
+
+ieSameImplIn : String -> Decl
+ieSameImplIn m = DImpl {
+  pub = True,
+  iface = "Same",
+  tys = [ieTyBlob m],
+  reqs = [],
+  methods = [],
+  implOrigin = OriginModule m,
+}
+
+-- the concrete-bucket key module [m]'s own `impl Same Blob` is indexed under.
+-- Minted by the SAME calls `ieInsertRowAt` makes, so the assertions below test
+-- the real key rather than a re-spelling of it.
+ieProbeKey : String -> RegKey
+ieProbeKey m = regKeyNTab
+  [
+    oblIfaceKey IfaceRef { irName = "Same", irOrigin = OriginModule m },
+    dispHeadTab (headKeyOfCon (OriginModule m) "Blob"),
+  ]
+
+-- The COMPATIBILITY leg's key: bare interface spelling, and a head that is bare
+-- anyway (`dispHeadTab` is spelling-keyed by the #1317 T1 rule), so it is the
+-- SAME key for both modules — which is exactly why both rows land in it.
+ieProbeBareKey : RegKey
+ieProbeBareKey = regKeyNTab
+  [
+    TkBare NsIface "Same",
+    dispHeadTab (headKeyOfCon (OriginModule "amod") "Blob"),
+  ]
+
+-- ordinal 0 = `amod`, ordinal 1 = `zmod`; no import edge between them is needed
+-- or expressible here — that is the point of the shape.
+ieProbeEnv : ImplEnv
+ieProbeEnv = buildImplEnv
+  [
+    DeclEnvModule {
+      demOrd = 0,
+      demId = "amod",
+      demDecls = [ieSameImplIn "amod"],
+    },
+    DeclEnvModule {
+      demOrd = 1,
+      demId = "zmod",
+      demDecls = [ieSameImplIn "zmod"],
+    },
+  ]
+
+-- 1. THE INTERFACE HALF IS A SCOPE.  Two same-spelled interfaces in two modules
+--    land in DIFFERENT buckets: each identity key resolves to exactly ONE row.
+-- > listLen (mregLookupK (ieProbeKey "amod") ieProbeEnv.ieConcrete)
+-- 1
+-- > listLen (mregLookupK (ieProbeKey "zmod") ieProbeEnv.ieConcrete)
+-- 1
+--
+-- 1b. 🚨 AND THE BARE LEG STILL COLLAPSES THEM — asserted, not just admitted in
+--     the header above, because an assertion is fail-capable and prose is not.
+--     The SAME two rows also sit together under the bare-spelling key, which is
+--     the compatibility leg `oblIfaceKeys` mints for goals that cannot carry an
+--     identity.  Two rows, one bucket: that is #1438's shape, inherited on
+--     purpose, and #1482's to drain.  If this ever reads `1`, the leg was dropped
+--     and #1438's pin must have flipped with it.
+-- > listLen (mregLookupK ieProbeBareKey ieProbeEnv.ieConcrete)
+-- 2
+--
+-- 2. ROW IDENTITY.  The two same-spelled impls get DISTINCT `InstRef`s — the
+--    property `bucketKeyEntriesFrom`'s restart-at-0 numbering lacks, and the one
+--    A-3.7 and B-2 are waiting on.  Distinct in BOTH components, so neither the
+--    module scope nor the sequence is carrying it alone.
+--    ⚠️ OWED — this pair CANNOT discriminate an `ord`/`seq` swap: in a corpus of
+--    one impl per module `ord == seq == [0, 1]`, so a builder that wrote the two
+--    components the wrong way round would pass.  A discriminating corpus needs a
+--    module contributing TWO impls (then `ord = [0,0,1]` while `seq = [0,1,2]`).
+--    Not added here because it would also move the ordinal-filter counts in
+--    assertion 3, and this round is comment-only.
+-- > map (r => instRefMid (ieRowInst r)) ieProbeEnv.ieRows
+-- ["amod", "zmod"]
+-- > map (r => instRefSeq (ieRowInst r)) ieProbeEnv.ieRows
+-- [0, 1]
+--
+-- 3. TABLE SCOPE — the ordinal, applied through `declEnvVisibleAt` and nothing
+--    else.  At ordinal 0 only `amod`'s impl is visible; at 1, both.  This is the
+--    filter A-3.6 deletes, and it is LIVE.
+-- > listLen (ieTriplesUpTo 0 ieProbeEnv.ieRows)
+-- 1
+-- > listLen (ieTriplesUpTo 1 ieProbeEnv.ieRows)
+-- 2
+--
+-- 4. THE PROJECTION IS THE OBLIGATION CHANNEL'S OWN UNIVERSE, built by the SAME
+--    writer — so PR2's flip cannot drift in key minting, only in population and
+--    order, which is what `ieShadowCompare` measures.
+-- > listLen (mregLookupK (ieProbeKey "zmod") (ieUnivConcreteOf (ieUniverseAt 1 ieProbeEnv)))
+-- 1
+-- > listLen (mregLookupK (ieProbeKey "zmod") (ieUnivConcreteOf (ieUniverseAt 0 ieProbeEnv)))
+-- 0
+ieUnivConcreteOf : ImplUniverse -> MultiRegistry (List Ty, List Require)
+ieUnivConcreteOf (ImplUniverse conc _ _) = conc
+-- ═══ #1112 A-3.4: IE-BLOCK-END ═════════════════════════════════════════════════
 
 -- #158 PR5 / #176 closure: the ~18 RESIDUAL survivor Refs — governed until now by
 -- per-ref prose and clustered in NEITHER `resetState` (PerRun/Toggles) NOR
@@ -17269,7 +17775,22 @@ checkBodyImpl seed mode prog0 =
   -- untouched and rebuilds over its whole `prog` (already O(N)).
   let _ = match mode
     Flat _ => ()
-    Module _ _ _ => appendUniverseAccums prog0
+    Module mid _ _ =>
+      let _ = appendUniverseAccums prog0
+      -- #1112 A-3.4 PR1, TEMPORARY: compare `IE`'s rows at this module's ordinal
+      -- against the accumulator the line above just grew.
+      --
+      -- 🚨 THIS SHIPS **ON**, IN THE RELEASED COMPILER, AND IT PANICS ON
+      -- DISAGREEMENT.  There is NO env gate — an earlier version of this comment
+      -- claimed `MEDAKA_IE_SHADOW` gated it and that was never true (the string
+      -- appears nowhere else in the tree).  Price it accordingly: a hard `<Panic>`
+      -- is reachable from every Module path that carries a real module id, which
+      -- includes `medaka check` on a multi-module project, not just the emit path.
+      -- That is deliberate — a divergence here means `IE` and the universe the
+      -- compiler actually consumes disagree, and loud beats silent — but it is a
+      -- cost a reader must be able to see from this line.  PR2 deletes this call
+      -- and the instrument together.  See `ieShadowCompare`.
+      ieShadowCompare mid prog0
   -- (#4) shadows.  definerShadows uses the SHARED form — buildDefinerShadows over the
   -- full visible universe, scoped to THIS module's decls (prog0).  On Flat, prog0 =
   -- userProg and fullUniverse = prog, so this is exactly the old flat `buildDefinerShadows

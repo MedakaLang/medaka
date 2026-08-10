@@ -155,6 +155,8 @@ buildAliasGraphEntry : List String -> (TabKey, (List String, Ty)) -> (String, Li
 buildDataEnv : List Decl -> DataEnv
 buildDeclEnvs : List Decl -> List (String, List Decl) -> DeclEnvs
 buildDefinerShadows : List Decl -> List Decl -> List String
+buildImplEnv : List DeclEnvModule -> ImplEnv
+buildImplEnvGo : List DeclEnvModule -> Int -> ImplEnv -> ImplEnv
 buildImplTable : List Decl -> Map String (List ImplEntry)
 buildImplUniverse : List Decl -> ImplUniverse
 buildKeyTable : List Decl -> Map String (List KeyEntry)
@@ -529,6 +531,7 @@ emitValueShadowGate : String -> Bool
 emptyBuiltinClasses : BuiltinClassOrigins
 emptyDataEnv : DataEnv
 emptyDeclEnvs : DeclEnvs
+emptyImplEnv : ImplEnv
 emptyImplUniverse : ImplUniverse
 enclDictVarOf : Mono -> String -> Option String
 enclSlot : String -> Mono -> Option Int
@@ -695,6 +698,28 @@ holeFillParam : String -> List (String, Expr) -> Option Expr -> Param
 idConflictHelp : (String, TyConOrigin, TyConOrigin) -> String
 idsForIfaceSlots : List String -> List Int
 idsForIfaceSlotsGo : Int -> List String -> List Int
+ieAddRows : List ImplRow -> ImplEnv -> ImplEnv
+ieInsertRow : ImplRow -> ImplEnv -> ImplEnv
+ieInsertRowAt : TabKey -> ImplRow -> ImplEnv -> ImplEnv
+ieInsertRowKeys : List TabKey -> ImplRow -> ImplEnv -> ImplEnv
+ieProbeBareKey : RegKey
+ieProbeEnv : ImplEnv
+ieProbeKey : String -> RegKey
+ieReqDigest : Require -> String
+ieRowDigest : ImplRow -> String
+ieRowInst : ImplRow -> InstRef
+ieRowOrd : ImplRow -> Int
+ieRowTriple : ImplRow -> (IfaceRef, List Ty, List Require)
+ieRowsAtOrd : Int -> List ImplRow -> List ImplRow
+ieSameImplIn : String -> Decl
+ieShadowCompare : String -> List Decl -> Unit
+ieShadowCompareGo : String -> List Decl -> Unit
+ieShadowVerdict : String -> Int -> String -> String -> Unit
+ieTripleDigest : (IfaceRef, List Ty, List Require) -> String
+ieTriplesUpTo : Int -> List ImplRow -> List (IfaceRef, List Ty, List Require)
+ieTyBlob : String -> Ty
+ieUnivConcreteOf : ImplUniverse -> MultiRegistry (List Ty, List Require)
+ieUniverseAt : Int -> ImplEnv -> ImplUniverse
 ifaceAtMonoId : Int -> List Mono -> List String -> Option String
 ifaceDfsCycle : List Decl -> Ref (Map String Unit) -> List String -> String -> List String
 ifaceDfsCycleOneSuper : List Decl -> Ref (Map String Unit) -> List String -> String -> List String
@@ -729,6 +754,8 @@ implBodyLoc : Expr -> Option Loc
 implCompletenessMsgsOf : List Decl -> Decl -> List (Option Loc, String)
 implCompletenessMsgsOfMap : Registry (List String) -> Decl -> List (Option Loc, String)
 implCountForIfaceU : ImplUniverse -> IfaceRef -> Int
+implDeclFact : Decl -> List (IfaceRef, List Ty, List Require, List String)
+implDeclFacts : List Decl -> List (IfaceRef, List Ty, List Require, List String)
 implDeclWithReqs : Decl -> List (IfaceRef, List Ty, List Require)
 implDeclsWithReqs : List Decl -> List (IfaceRef, List Ty, List Require)
 implDefinesMethodAt : Map String (List ImplEntry) -> String -> String -> Bool
@@ -758,6 +785,7 @@ implMatchesSuper : String -> List Ty -> Decl -> Bool
 implMatchesU : ImplUniverse -> IfaceRef -> List Mono -> Bool
 implMethodName : ImplMethod -> String
 implMethodNameTc : ImplMethod -> String
+implRowsOf : String -> Int -> Int -> List (IfaceRef, List Ty, List Require, List String) -> List ImplRow
 implSubject : String -> String -> String
 implTupleHeadKindMsg : String -> Int -> List Kind -> String
 implTysIfMatch : String -> String -> Decl -> List (List Ty)
@@ -891,6 +919,8 @@ insertUnivImpl : ImplUniverse -> (IfaceRef, List Ty, List Require) -> ImplUniver
 insertUnivImplAt : TabKey -> List Ty -> List Require -> ImplUniverse -> ImplUniverse
 insertUnivImplKeys : List TabKey -> List Ty -> List Require -> ImplUniverse -> ImplUniverse
 insertVariantIdents : TcEnv -> String -> TyConOrigin -> List Variant -> (Map String (List (Ident, String, Scheme)), List String) -> (Map String (List (Ident, String, Scheme)), List String)
+instRefMid : InstRef -> String
+instRefSeq : InstRef -> Int
 instantiate : Scheme -> Mono
 instantiateRecord : RecordInfo -> (Mono, List (String, Mono))
 instantiateRecordShared : RecordInfo -> (List (Int, Mono), Mono)

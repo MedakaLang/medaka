@@ -206,7 +206,7 @@ driver_allowed='effectDomains -- effect-label -> domain-param registry; driver-s
 graphMethodExportsRef -- #1111 A-2.5b (#1272/#1275): module id -> the (name, declaring Ident) method pairs that a module row CARRIES, re-exports folded in dependency-first. ARGUED, not merely allowlisted, on five points. (1) NOT a bare-name-keyed cross-module table in the sense this ratchet pins: the OUTER key is the loader module id -- a SCOPE, whose absence is what makes such a table collide -- and the VALUE carries Ident, so a same-named interface in another module gets its own row under its own mid and its own identity. That is the collapse being removed, not a new one. (2) It is on DriverState and NOT on CrossRun DELIBERATELY, and that placement IS the fix for review finding F1. CrossRun is contracted as what a per-run reset clears; resetCrossModuleState swaps the whole bundle for freshCrossRun, and the elaborateModules promotion arm opens with a SECOND such reset. Every other universe* field is re-seeded after a reset by the core pass or by appendUniverseAccums; this one is derived once from the whole graph and has no re-seed path, so while it sat on CrossRun it silently emptied and check disagreed with run and build. DriverState has no reset point -- its own header says freshDriverState is the INITIAL construction only, and a grep for a whole-bundle setRef on driverState in compiler/types/typecheck.mdk has no hits -- so the clearing is now structurally impossible rather than patched. (3) THE SAFETY PROPERTY IS A CONJUNCTION -- state both halves or neither. (a) UNCONDITIONAL WHOLE-VALUE OVERWRITE at every Module-mode driver entry (checkModulesPreamble and elaborateModules, each setRef-ing a value derived from the graph of that compile; never omInsert, never a merge), AND (b) NO RESET POINT in between (DriverState has none). BOTH are necessary. Without (a) the index is omEmpty from freshDriverState and every candidate misses -- which IS the F1 symptom; without (b) the writes in (a) are present and correct and a reset still empties the field between write and read -- which IS how F1 actually happened, on CrossRun. An earlier version of this row said the property was liveness-at-every-entry and called that greppable, and dismissed the writer enumeration as the wrong question: both are wrong. Liveness is a DYNAMIC property; the greppable proposition is (b). The writer enumeration is (a), a NECESSARY conjunct, not a distraction -- it was correct when first derived and only INSUFFICIENT. An even earlier version claimed Built ONCE per compile and never grown per module; F1 falsified that too -- it is derived once per DRIVER ENTRY and a driver may run twice over one graph. (4) INTERIM, with a NAMED ABSORBING STAGE. resolve already derives this same fact (ModuleExports.expIfaceMethods / reExpIfaceMethods, and valueProvenance / ambiguousSet via publicIfaceMethodVals), so this is a THIRD implementation of it, and #1288 is an open S1 against the resolve copy. The long-term home is upstream: R / #1288 owns the fact and typecheck consumes it, and R / #1288 IS THE STAGE THAT DELETES THIS FIELD. It lands now only so that two S0s need not wait on a component that does not exist yet. (5) The row has NO pub filter, so export is the wrong verb for it: a private interface methods are in the row too. That is F3, filed as #1302, pre-existing, reproduces on main, and deliberately unfixed here because whether a private interface method is visible to dispatch is a language decision owed to the spec.
 graphCtorExportsRef -- #1111 A-2.11 (#1319 unit 1, drains #1284 / #1283-B / #733 item 1c): the CONSTRUCTOR peer of graphMethodExportsRef above -- module id -> the (ctor name, owning type name, declaring Ident) rows that a module row CARRIES, re-exports folded in dependency-first. All five of the points argued on that row apply here VERBATIM and are not restated: same outer-key-is-a-scope argument, same DriverState-not-CrossRun placement for the same F1 reason, same two-part conjunction (unconditional whole-value overwrite at BOTH Module-mode driver entries AND no reset point in between), same interim status with #1288 as the named absorbing stage. TWO differences, both narrowing: (1) the row carries the OWNING TYPE NAME as well, because a `(..)` member binds a constructor WITHOUT SPELLING IT -- usePathBindsName is not reusable for this namespace and reusing it would reproduce the #1272/#1275 class here; (2) the missing pub filter (F3 / #1302 on the method peer) cannot bite here, structurally rather than by promise: the CANDIDATES this index is matched against come from publicDataDecls, so a private declaration row entry can never equal a candidate Ident
 graphIfaceMethodsRef -- #1354 unit A (#1353/#1380): the TYPE-NAMESPACE peer of graphMethodExportsRef above -- module id -> the (interface name a module row CARRIES, that interface method names) rows, re-exports folded in dependency-first. All five of the points argued on the graphMethodExportsRef row apply here VERBATIM and are not restated: same outer-key-is-a-scope argument (the outer key is the loader module id, so a same-named interface in another module gets its own row under its own mid), same DriverState-not-CrossRun placement for the same F1 reason, same two-part conjunction (unconditional whole-value overwrite at BOTH Module-mode driver entries AND no reset point in between -- this field is written on the line immediately after its peer at both entries, so the two cannot drift), same interim status with #1288 as the named absorbing stage that DELETES it. WHY A SECOND INDEX RATHER THAN REUSING THE FIRST, which is the question a reviewer should ask: the method index cannot answer the question SHADOW-SEMANTICS 1.0 actually asks. That clause scopes S1 INTERFACE operand -- a TYPE-namespace question -- and asking the method index instead is wrong in BOTH directions, each MEASURED on a built compiler. TOO STRICT: a re-exporter row is folded by matching the export import member list against METHOD names, so the ordinary export import ifc.{Sizeable} yields an EMPTY row and the predicate answers not-nameable for an interface that is -- two entry files differing by one import line, the direct one printing 300 and the chained one REJECTED, which is the non-conformance S1-CHAIN enumerates by name. TOO LOOSE: any import of the declaring module admitted that module WHOLE method row, so import smod.{sf} made the interface nameable when writing impl Sizeable Blob in that same module is rejected Unknown interface: Sizeable. Both are guarded by test/shadow_fixtures/i14_importer_iface_via_reexport_chain and i15_importer_iface_one_hop_unbound. ONE DIFFERENCE from the peer, narrowing: the member filter (selectIfaceRows) is applied on the IMPORT side as well as the re-export side. ⚠️ It matches the interface name OR the method names, not the interface name alone -- this sentence said INTERFACE name only, and S1-NS (RULED 2026-08-08) made that stale before it shipped: selectIfaceRows NARROWS a row per METHOD, so a member list naming the interface admits the whole row, one naming only sibling methods admits exactly those methods, and only a bare import or a list naming neither admits nothing. The per-method half is what i19_importer_sibling_method_silent and d23_definer_sibling_method_silent grade; the admits-nothing half is i15_importer_iface_one_hop_unbound. SAME pub-filter gap as the peer (F3 / #1302), same fail-open direction, deliberately unfixed here
-declEnvsRef -- #1112 A-3.1: the whole-graph declaration ENVELOPE (stage K) -- the loader graph tagged with a module ordinal (prelude 0, then dependency-first), its module-id -> ordinal index, and the flattened decl list. Placed on DriverState beside the three graph*Ref peers above and under the IDENTICAL two-part conjunction they argue: (a) unconditional whole-value overwrite at BOTH Module-mode driver entries (checkModulesPreamble, elaborateModules), AND (b) no reset point in between (DriverState has none). Both halves are necessary here for the same F1 reason -- it is derived once from the whole graph and has no per-module re-seed path, so a CrossRun placement would silently empty it at resetCrossModuleState. NOT a bare-name-keyed cross-module table in the sense this ratchet pins: the key is the loader module id, i.e. a SCOPE, and the value is that module own decls. ENVELOPE + DataEnv CONSTRUCTION, STILL RETIRES NOTHING -- A-3.1 carried no CE/IE/DataEnv contents; A-3.2a (#1112) added the DataEnv slice (deTypes/deCtorIdents/deRecordIdents/deFieldOwnerIdents/deAliases) but populates it SYNTACTICALLY (raw decls, no elaborated Scheme/RecordInfo/Mono) and retires or re-keys NO universe*/obUniv* row -- no load/store call, no overlay removed. CE/IE remain owed to A-3.3/A-3.4. Only deAllDecls (and now deData, but deData has no reader) is read today; the ordinal filter declEnvVisibleAt STILL has NO reader after A-3.2a -- that unit`s DataEnv construction reads deAllDecls directly, unfiltered, and does not call declEnvsVisible/declEnvVisibleAt either. A-3.6 remains the deletion of that one predicate body, once something calls it. THE PROGRESS SIGNAL for the rest of A-3 is this row GROWING while cross_allowed above SHRINKS -- A-3.2a does NOT move that signal: it grew this row (DataEnv) but shrank nothing in cross_allowed, because it retires no universe* row. The retirement (absorbing #1319 unit 4) is a follow-on, A-3.2b -- THAT is the unit that should shrink cross_allowed
+declEnvsRef -- #1112 A-3.1: the whole-graph declaration ENVELOPE (stage K) -- the loader graph tagged with a module ordinal (prelude 0, then dependency-first), its module-id -> ordinal index, and the flattened decl list. Placed on DriverState beside the three graph*Ref peers above and under the IDENTICAL two-part conjunction they argue: (a) unconditional whole-value overwrite at BOTH Module-mode driver entries (checkModulesPreamble, elaborateModules), AND (b) no reset point in between (DriverState has none). Both halves are necessary here for the same F1 reason -- it is derived once from the whole graph and has no per-module re-seed path, so a CrossRun placement would silently empty it at resetCrossModuleState. NOT a bare-name-keyed cross-module table in the sense this ratchet pins: the key is the loader module id, i.e. a SCOPE, and the value is that module own decls. ENVELOPE + DataEnv CONSTRUCTION, STILL RETIRES NOTHING -- A-3.1 carried no CE/IE/DataEnv contents; A-3.2a (#1112) added the DataEnv slice (deTypes/deCtorIdents/deRecordIdents/deFieldOwnerIdents/deAliases) but populates it SYNTACTICALLY (raw decls, no elaborated Scheme/RecordInfo/Mono) and retires or re-keys NO universe*/obUniv* row -- no load/store call, no overlay removed. CE/IE remain owed to A-3.3/A-3.4. Only deAllDecls is read today (deData has no reader, and deImpls has none either outside the temporary ieShadowCompare instrument); the ordinal filter declEnvVisibleAt had NO reader at all after A-3.2a -- that unit`s DataEnv construction reads deAllDecls directly, unfiltered, and calls neither declEnvsVisible nor declEnvVisibleAt. ⚠️ A-3.4 CHANGES THAT HALFWAY, so state it precisely: ieTriplesUpTo (the ordinal filter on IE, reached through the single read accessor ieUniverseAt) DOES call declEnvVisibleAt, and the doctests at the IE builder exercise it -- so the predicate is no longer dead, but it still has NO PRODUCTION reader, because ieUniverseAt has no caller outside those doctests until A-3.4 PR2 flips the Module arm onto it. A-3.6 remains the deletion of that one predicate body. THE PROGRESS SIGNAL for the rest of A-3 is this row GROWING while cross_allowed above SHRINKS -- A-3.2a does NOT move that signal: it grew this row (DataEnv) but shrank nothing in cross_allowed, because it retires no universe* row. The retirement (absorbing #1319 unit 4) is a follow-on, A-3.2b -- THAT is the unit that should shrink cross_allowed #1112 A-3.4 ADDS deImpls -- IE, the whole-graph impl registry: every impl in the graph with its full head, context and method table, plus an InstRef instance identity and the declaring module ordinal its visibility filters on. THE INTERFACE HALF IS IDENTITY-KEYED and mints no parallel scheme: ieInsertRow calls the SAME oblIfaceKeys the obligation-channel writer calls, which is TWO keys -- the identity key AND the bare-spelling compatibility leg -- so IE inherits the same-spelled-interface collapse #1438 pins, deliberately, and that drain is #1482`s not this unit`s (asserted, not merely admitted: a doctest at the IE builder shows both same-spelled rows in ONE bare bucket). The head half stays BARE by the #1317 T1 rule that re-keying it re-introduces the closed S0 #1277. NO IE KEY COMPONENT IS A METHOD NAME -- check 4 below enforces that mechanically, because a (method, tag)-keyed default registry here would rebuild #1265 in the new substrate; a method name is PAYLOAD (ieMethods) only. A-3.4 does NOT move the progress signal either, for the SAME reason A-3.2a does not: PR1 has ZERO readers, so cross_allowed keeps all three obUniv* rows and this row grew without anything shrinking. A-3.4 PR2 is the unit that flips the Module arm`s obligation universe onto ieUniverseAt and takes obUnivConcreteRef/obUnivHeadlessRef/obUnivIfaceTagsRef out of cross_allowed -- THAT is A-3.4`s shrink, and it is blocked on #1508 (cmCheckWorker discards its module id, so every user module on the checkModules driver arrives at ordinal 0)
 abstractRecordTypesRef -- abstract (opaque) record TYPE names, seeded once over the whole module graph
 argDispatchIdxRef -- arg-position dispatch index list, seeded once over allDecls
 dictEligibleRef -- dict-eligible fn NAME list, module-path scratch set fresh per elaboration
@@ -225,8 +225,29 @@ sigNameSetRef -- signature NAME set, OrdMap membership mirror
 sigTyMapRef -- signature name -> Ty map
 implInferEnabled -- toggle: whether impl-body inference is active on this pass'
 
+# #1112 A-3.4: THE THIRD AND FOURTH ALLOWLISTS -- the `DeclEnvs` BUNDLE ITSELF.
+# Until A-3.4 this check pinned `CrossRun` and `DriverState` only, so `DeclEnvs`
+# -- the bundle `declEnvsRef` merely POINTS AT -- had its field set pinned by
+# NOTHING. That is the wrong side of the pointer: A-3's whole shape is universe*
+# rows LEAVING CrossRun and their contents arriving inside `DeclEnvs`, so without
+# these two lists each remaining A-3 unit would add a program-global table
+# OUTSIDE the very field ratchet that exists for that shape, and the gap would
+# widen per unit rather than being a one-off. A-3.2/A-3.3 add `CE`/`DataEnv`
+# fields here; A-3.5/3.6/3.7 edit the reasons.
+declenvs_allowed='deModules -- the loader graph as ordinal-tagged module rows (prelude 0, then dependency-first). Not bare-name-keyed: the row key is the loader module id, i.e. a SCOPE
+deOrdIndex -- module id -> ordinal index; the lookup `declEnvsOrdOf` uses, fail-CLOSED at -1
+deAllDecls -- the flattened whole-graph decl list; the same list value each driver used to build inline as `coreDecls ++ flatMap snd modules`
+deData -- #1112 A-3.2a: the `DataEnv` half of stage K -- an identity-keyed index over the RAW declarations (no elaborated Scheme/RecordInfo/Mono), built once from `deAllDecls`. CONSTRUCTION ONLY and NOT LIVE: nothing outside its own block populates or reads it. Allowlisted HERE, by A-3.4, rather than by the unit that added it -- A-3.2a landed `deData` while `DeclEnvs` was still pinned by NOTHING (check 1 covered only CrossRun and DriverState), and A-3.4 is the unit that extends the extraction to this record. That is the gap this extension exists to close, and its first act is to retro-pin a field that was already in the tree. ⚠️ Scope-of-key question deliberately left OPEN by A-3.2a and not settled here: `buildDataEnv` folds EVERY decl including private ones, making it a SUPERSET of what the live `universeDataEnv` (public-only) ever held -- harmless while nothing reads it, a real decision the moment something does
+deImpls -- #1112 A-3.4: the `IE` registry. Every impl in the graph with its full head, context and method table, plus an `InstRef` instance identity and the declaring module ordinal its visibility is filtered on. THE INTERFACE HALF IS IDENTITY-KEYED and mints no parallel scheme: `ieInsertRow` calls the SAME `oblIfaceKeys` the obligation-channel writer calls (identity key + the bare compatibility leg #1438 still rides on), and the head half stays BARE by the #1317 T1 rule that re-keying it re-introduces the closed S0 #1277. NO KEY COMPONENT IS A METHOD NAME -- check 4 below enforces that mechanically, because a (method, tag)-keyed default registry here would rebuild #1265 in the new substrate; a method name is PAYLOAD (`ieMethods`) only. ZERO READERS in PR1: the Module arm still reads the three obUniv* accumulators and the flip onto `ieUniverseAt` is PR2, so `cross_allowed` above has not shrunk yet -- that shrink is the progress signal this row is waiting to produce'
+
+declenvmodule_allowed='demOrd -- this module`s ordinal; 0 = the prelude
+demId -- the loader module id (the SCOPE the two rows above are keyed by)
+demDecls -- this module`s own decls'
+
 cross_expected=$(printf '%s\n' "$cross_allowed" | awk 'NF{print $1}' | LC_ALL=C sort)
 driver_expected=$(printf '%s\n' "$driver_allowed" | awk 'NF{print $1}' | LC_ALL=C sort)
+declenvs_expected=$(printf '%s\n' "$declenvs_allowed" | awk 'NF{print $1}' | LC_ALL=C sort)
+declenvmodule_expected=$(printf '%s\n' "$declenvmodule_allowed" | awk 'NF{print $1}' | LC_ALL=C sort)
 
 cross_actual=$(sed -n '/^data CrossRun = CrossRun {$/,/^  }$/p' "$TC" \
   | strip_comments \
@@ -239,14 +260,43 @@ driver_actual=$(sed -n '/^  | DriverState {$/,/^    }$/p' "$TC" \
   | grep -E '^[A-Za-z_][A-Za-z0-9_]*$' \
   | LC_ALL=C sort)
 
+declenvs_actual=$(sed -n '/^data DeclEnvs = DeclEnvs {$/,/^  }$/p' "$TC" \
+  | strip_comments \
+  | sed -E 's/^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*:.*/\1/' \
+  | grep -E '^[A-Za-z_][A-Za-z0-9_]*$' \
+  | LC_ALL=C sort)
+declenvmodule_actual=$(sed -n '/^data DeclEnvModule = DeclEnvModule {$/,/^  }$/p' "$TC" \
+  | strip_comments \
+  | sed -E 's/^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*:.*/\1/' \
+  | grep -E '^[A-Za-z_][A-Za-z0-9_]*$' \
+  | LC_ALL=C sort)
+
 cross_n=$(printf '%s\n' "$cross_actual" | grep -c .)
 driver_n=$(printf '%s\n' "$driver_actual" | grep -c .)
+declenvs_n=$(printf '%s\n' "$declenvs_actual" | grep -c .)
+declenvmodule_n=$(printf '%s\n' "$declenvmodule_actual" | grep -c .)
 if [ "$cross_n" -eq 0 ] || [ "$driver_n" -eq 0 ]; then
   echo "FAIL: check 1 extracted ZERO fields from CrossRun ($cross_n) or DriverState"
   echo "  ($driver_n). Either record was renamed/reshaped and the sed range markers"
   echo "  ('data CrossRun = CrossRun {' / '  | DriverState {') no longer match, or"
   echo "  this check just validated nothing. Update the range markers -- do NOT"
   echo "  treat a zero extraction as a pass."
+  exit 1
+fi
+# Same fail-closed rule for the two A-3 bundle records. A zero extraction here is
+# a BROKEN DELIMITER, never an empty answer -- and it is the likelier failure of
+# the two, because #829 can flip a record's header between the one-line
+# `data X = X {` form these ranges match and the two-line `data X =` / `| X {`
+# form they do not.
+if [ "$declenvs_n" -eq 0 ] || [ "$declenvmodule_n" -eq 0 ]; then
+  echo "FAIL: check 1 extracted ZERO fields from DeclEnvs ($declenvs_n) or"
+  echo "  DeclEnvModule ($declenvmodule_n). Either record was renamed/reshaped and"
+  echo "  the sed range markers ('data DeclEnvs = DeclEnvs {' /"
+  echo "  'data DeclEnvModule = DeclEnvModule {') no longer match -- note that"
+  echo "  losing a record's last interior comment flips its header to the two-line"
+  echo "  form, which these ranges do NOT match -- or this check just validated"
+  echo "  nothing. Update the range markers -- do NOT treat a zero extraction as a"
+  echo "  pass."
   exit 1
 fi
 
@@ -273,7 +323,31 @@ if [ "$driver_actual" != "$driver_expected" ]; then
   echo "  never widen this check."
   exit 1
 fi
-echo "  ok: $cross_n CrossRun field(s), $driver_n DriverState field(s), no new bundle field"
+if [ "$declenvs_actual" != "$declenvs_expected" ]; then
+  echo "FAIL: DeclEnvs' field set changed."
+  echo "  allowed:"
+  printf '%s\n' "$declenvs_expected" | sed 's/^/    /'
+  echo "  actual:"
+  printf '%s\n' "$declenvs_actual" | sed 's/^/    /'
+  echo "  DeclEnvs is stage K's whole-graph environment bundle: a field added here"
+  echo "  is a new PROGRAM-GLOBAL table, the shape AGENTS.md names as the most"
+  echo "  expensive in this tree. REMEDY: add it to declenvs_allowed above with a"
+  echo "  reason that PROVES its key's scope (what stops two same-spelled"
+  echo "  declarations in unrelated modules from colliding) -- never widen this"
+  echo "  check."
+  exit 1
+fi
+if [ "$declenvmodule_actual" != "$declenvmodule_expected" ]; then
+  echo "FAIL: DeclEnvModule's field set changed."
+  echo "  allowed:"
+  printf '%s\n' "$declenvmodule_expected" | sed 's/^/    /'
+  echo "  actual:"
+  printf '%s\n' "$declenvmodule_actual" | sed 's/^/    /'
+  echo "  REMEDY: add the field to declenvmodule_allowed above with a one-line"
+  echo "  reason -- never widen this check."
+  exit 1
+fi
+echo "  ok: $cross_n CrossRun field(s), $driver_n DriverState field(s), $declenvs_n DeclEnvs field(s), $declenvmodule_n DeclEnvModule field(s), no new bundle field"
 
 # ═══════════════════════════════════════════════════════════════════════════
 # CHECK 2 — the cross-module WRITER ratchet (load-bearing)
@@ -495,4 +569,97 @@ if [ "$ceval_cfo" -ne 1 ] || [ "$withA_cfo" -ne 0 ] || [ "$withB_cfo" -ne 0 ] ||
 fi
 echo "  ok: ctorFieldOrdersRef asymmetry unchanged (cevalModules-only, justified above)"
 
-echo "PASS: #1111 registry keying ratchet (CrossRun/DriverState fields, writer sites, three-driver frame parity)."
+# ═══════════════════════════════════════════════════════════════════════════
+# CHECK 4 — #1112 A-3.4: the `IE` NAMESPACE ratchet
+# ═══════════════════════════════════════════════════════════════════════════
+# THE PROPOSITION. `IE` is keyed by IMPL IDENTITY. An interface's default-method
+# arm is a property of the INTERFACE declaration (CE's content, A-3a) and the
+# emit-side method/default WORD namespace belongs to B-2 (#1113). No `IE` key
+# component may be a method name.
+#
+# WHY MECHANICALLY. A future `IE` that folded the default-body registry in and
+# keyed it (method, tag) would rebuild the OPEN S0 #1265 in the new substrate --
+# that pair is exactly the key #1265 is the first-match over. Prose in the
+# source would not hold anyone to this; a grep over a delimited block does.
+# TYPECHECK-TARGET-ARCHITECTURE.md §9.3 records that this design decision is
+# held OPEN to dissent; if it is ever overturned, this check is the artefact
+# that must be edited, which is the point.
+#
+# ⚠️ WHAT THIS ENFORCES IS A PROXY FOR THE PROPOSITION, NOT THE PROPOSITION.
+# Stated so nobody prices it higher than it is. The proposition is "no IE key
+# component is a method name". What is actually checked is "no NsMethod/NsField/
+# NsValue tag, and no reach into the named default-arm machinery, appears inside
+# the IE block". Those coincide for every mint shape in the tree today -- a
+# method name enters a TabKey through `tabKeyOf NsMethod` or an equivalent
+# NsMethod-tagged mint -- but they are not the same statement, and the gap is
+# constructible: a key built directly from the `ieMethods` payload strings, e.g.
+# `regKeyNTab` over TabKeys minted with an NsType/NsIface tag from a method name,
+# would satisfy this check and violate the proposition. Closing that needs a
+# taint-style check on what flows INTO a key mint, which is well beyond a grep.
+# The residual is accepted deliberately: this check's job is to make the design
+# decision expensive to reverse by accident, and it does that.
+#
+# Occurrence-level (`grep -oE`), never a per-line containment test -- the hole
+# this script's own header documents as "THE A-1 HOLE".
+#
+# 🔬 POSITIVE CONTROLS -- mutate compiler/types/typecheck.mdk, rerun, restore:
+#   G  add `tabKeyOf NsMethod o n` INSIDE the IE block          -> FAIL
+#   H  the same text in a COMMENT inside the block              -> pass
+#      (a mention is not a mint; comments are stripped first)
+#   I  the same text OUTSIDE the block                          -> pass
+#      (the delimiting works)
+#   J  delete/rename the IE-BLOCK-BEGIN banner so the block
+#      extracts EMPTY                                           -> FAIL
+#      <- THE LOAD-BEARING ONE. Without J this check carries this tree's
+#         signature failure mode built in: a later refactor moves or rewords a
+#         banner, the block extracts empty, and check 4 passes having examined
+#         nothing -- a green that tested less than it appears to. Check 1
+#         already solves exactly this; the fail-closed `-eq 0` guard below is
+#         that pattern copied.
+echo "checking #1112 A-3.4 IE namespace ratchet ..."
+
+ie_block=$(sed -n '/IE-BLOCK-BEGIN/,/IE-BLOCK-END/p' "$TC" | strip_comments)
+ie_n=$(printf '%s\n' "$ie_block" | grep -c . || true)
+if [ "$ie_n" -eq 0 ]; then
+  echo "FAIL: check 4 extracted ZERO lines for the IE block. Either the"
+  echo "  'IE-BLOCK-BEGIN' / 'IE-BLOCK-END' banner comments in"
+  echo "  compiler/types/typecheck.mdk were moved, reworded or deleted, or this"
+  echo "  check just validated nothing. A zero-length IE block is a BROKEN"
+  echo "  DELIMITER, never an empty answer. Restore the banners (or update this"
+  echo "  range) -- do NOT treat a zero extraction as a pass."
+  exit 1
+fi
+
+# The two families, kept separate so the failure message can say WHICH rule fired.
+#   (a) a key MINT naming a namespace that is not IE's. NsType/NsIface are IE's
+#       two; NsMethod/NsField/NsValue are not.
+#   (b) the default-arm registry and its selector, plus the emit-side method
+#       word table -- the specific machinery #1265 lives in and that B-2 owns.
+ie_ns_hits=$(printf '%s\n' "$ie_block" \
+  | grep -oE '\bNs(Method|Field|Value)\b' | LC_ALL=C sort -u || true)
+ie_default_hits=$(printf '%s\n' "$ie_block" \
+  | grep -oE '\b(defaultFnName|defaultFnNameW|defaultCellName|ifaceIdsAtTag|defaultOwnedBy|narrowDefaults|CImplDefault|methodIfaceTableRef|methodIfaceIndexRef)\b' \
+  | LC_ALL=C sort -u || true)
+
+if [ -n "$ie_ns_hits" ]; then
+  echo "FAIL: the IE block mints a key in a namespace that is not IE's:"
+  printf '%s\n' "$ie_ns_hits" | sed 's/^/    /'
+  echo "  IE's key components are NsIface (identity, via oblIfaceKey) and NsType"
+  echo "  (the head, bare by the #1317 T1 rule). A method/field/value component"
+  echo "  in an IE key is the (method, tag) shape that rebuilds #1265 here."
+  echo "  REMEDY: a method name belongs in an IE row as PAYLOAD (ieMethods), not"
+  echo "  in a key. If you believe IE genuinely needs a method-name key"
+  echo "  component, that is an owner-level re-adjudication of"
+  echo "  TYPECHECK-TARGET-ARCHITECTURE.md §9.3 -- not a widening of this check."
+  exit 1
+fi
+if [ -n "$ie_default_hits" ]; then
+  echo "FAIL: the IE block reaches into the default-arm / emit-word machinery:"
+  printf '%s\n' "$ie_default_hits" | sed 's/^/    /'
+  echo "  That registry and its selector are #1265's and B-2's (#1113), not IE's."
+  echo "  REMEDY: see the message above -- re-adjudicate §9.3 or move the code."
+  exit 1
+fi
+echo "  ok: IE block is $ie_n line(s), no non-IE namespace mint, no default-arm reach"
+
+echo "PASS: #1111 registry keying ratchet (CrossRun/DriverState/DeclEnvs fields, writer sites, three-driver frame parity, #1112 A-3.4 IE namespace)."
