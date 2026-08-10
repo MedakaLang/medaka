@@ -1,0 +1,10 @@
+-- As the sibling's `zmod`, plus its OWN `impl Sizer Int`: the goal `zmod.Sizer Int`
+-- now has exactly one candidate, and `bulk 3` = 10.
+export interface Sizer a where
+  bulk : a -> Int
+
+export impl Sizer Int where
+  bulk n = n + 7
+
+export useBulk : Sizer b => b -> Int
+useBulk x = bulk x

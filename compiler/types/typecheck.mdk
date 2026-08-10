@@ -3389,9 +3389,10 @@ ieReqDigest (Require { requireHead = h, requireArgs = ras, ... }) =
 -- which is TWO keys — the identity key AND the bare-spelling compatibility leg —
 -- so `amod.Same` and `zmod.Same` below share the bare bucket, exactly as the
 -- obligation channel does today.  That is inherited on purpose (see
--- `insertUnivImplKeys` for the two `ifaceRefBare` goal producers that require it,
--- and why removing it is #1482's drain, not this unit's), which is why #1438's
--- pin still reproduces after A-3.4.
+-- `insertUnivImplKeys` for the `ifaceRefBare` goal producers that require it —
+-- U1b (#1482) retired two of the three; the METHOD-OCCURRENCE one is #1507's, and
+-- removing the leg is that unit's drain, not this one's), which is why #1438's
+-- pin still reproduces after A-3.4 and after U1b.
 --
 -- So do not read the assertions below as "IE has no collapse".  They assert the
 -- narrower true thing: the identity key is a SCOPE — it resolves to exactly one
@@ -3832,15 +3833,74 @@ public export data IfaceRef = IfaceRef {
     irOrigin : TyConOrigin,  -- the I4 identity of the declaration this occurrence denotes
   }
 
--- an interface occurrence whose identity is not (yet) recoverable at the site.  The
--- TWO sites that mint this deliberately are `recordCallObligations` and
--- `recordSchemeCallObligations`, whose source tables (`funConstraintIfacesRef`,
--- `schemeObligationsRef` + their cross-module mirrors) are bare-name-keyed and sit
--- inside #1425's coupled dict-arity seam — widening them is that issue's work, not
--- this one's.  Everything else supplies a real origin; grep this name for the
--- residual worklist.
+-- an interface occurrence whose identity is not (yet) recoverable at the site.
+--
+-- ⚠️ U1b (#1482) RETIRED the two sites this comment used to name.
+-- `recordCallObligations` and `recordSchemeCallObligations` now carry an `IfaceRef`
+-- end to end (`funConstraintIfacesRef`'s payload is `List IfaceRef`,
+-- `schemeObligationsRef`'s is `List VecObl`), so neither mints a bare goal any more.
+-- What is LEFT — grep this name for the live worklist, do not trust this list:
+--   * `recordImplObligation`'s METHOD-OCCURRENCE goal, which is a decl-layer /
+--     occurrence-layer reconciliation and not a table widening.  Owned by #1507, and
+--     it is the LAST condition on deleting the bare compatibility leg;
+--   * `ifaceForInferredId`'s third fallback, which recovers a slot's interface from
+--     `pendingDictApps` — a SPELLING-keyed routing channel (see `resolveDictApps` /
+--     `dispHeadTab`) whose iface component must stay a route word, so the recovery is
+--     bare by construction rather than by omission.
 ifaceRefBare : String -> IfaceRef
 ifaceRefBare n = IfaceRef { irName = n, irOrigin = OriginUnresolved }
+
+-- U1b (#1482): the ABSENT-interface sentinel for the slot-parallel iface channels.
+-- `funConstraintIfacesRef` has always used `""` to mean "this slot has no recoverable
+-- interface" (see `ifaceForInferredId`), and every reader tests it and skips.  It is
+-- deliberately NOT spelled `ifaceRefBare ""`: that name is the residual worklist for a
+-- goal whose identity is UNRECOVERABLE, and "no interface at all" is a different fact
+-- that must not pollute the grep.
+ifaceRefNone : IfaceRef
+ifaceRefNone = IfaceRef { irName = "", irOrigin = OriginUnresolved }
+
+-- U1b (#1482): ONE vector obligation — one interface OCCURRENCE (identity-carrying,
+-- #1446 P1) applied to one vector of scheme-quantified tyvar ids.  This is the payload
+-- of `schemeObligationsRef` and of its three cross-module mirrors.
+--
+-- ⚠️ The point of the record is not ergonomics.  Before it, this payload was
+-- `(String, List Int)` — the SAME shape as `funConstraintsRef`'s `(fn name, slot ids)`
+-- entries, 58 lines of the file apart, with nothing but a convention keeping the two
+-- meanings from being passed to each other's readers.  Widening the interface half to
+-- `IfaceRef` removes M1 from that shape, which leaves the fn-name meaning as its only
+-- inhabitant: a cross-family mixup is now an ordinary type error in the compiler's own
+-- typechecker, defended by `make check-self` / `typecheck_compiler_source.sh` rather
+-- than by care.  The widening IS the disambiguation.
+data VecObl = VecObl { voIface : IfaceRef, voIds : List Int }
+
+-- U1b (#1482): ONE dict slot of a constrained callee — the interface the slot
+-- discharges, paired with the scheme-var id it is keyed on.
+--
+-- ⚠️ This exists so that NO consumer of a callee's constraint slots ever holds two
+-- parallel lists again.  `qualConstraintFor` used to return `(List Int, List String)`
+-- built from two INDEPENDENT table lookups each defaulting to `[]` — a hit on the ids
+-- table with a miss on the ifaces table produced a length mismatch BY CONSTRUCTION, not
+-- by corruption, which the downstream zips then silently truncated away.  `pairSlots`
+-- is now the single place an id list meets an iface list, and the mismatch policy lives
+-- there, once.
+data CSlot = CSlot { csIface : IfaceRef, csId : Int }
+
+-- THE pairing point — the only place in the tree where a slot-id list meets a
+-- slot-parallel interface list.
+--
+-- ⚠️ POLICY: truncate, exactly as the three zips it replaces did
+-- (`shatterVecObls`, `recordCallObligations`, `expandSupersEntry`'s `zipL`).  This is
+-- BEHAVIOUR, not tidiness: per the paragraph on `CSlot` a real mismatch is reachable,
+-- and today's answer is "drop the unpaired tail, never over-reject".  Diagnosing
+-- instead is only safe once someone has MEASURED that no real program reaches a
+-- mismatch (an instrumented build over the compiler's own source + `stdlib/`); until
+-- then the default is byte-identical truncation, and changing it is a separate,
+-- evidence-bearing change.
+pairSlots : List Int -> List IfaceRef -> List CSlot
+pairSlots [] _ = []
+pairSlots _ [] = []
+pairSlots (id::ids) (iface::ifs) =
+  CSlot { csIface = iface, csId = id } :: pairSlots ids ifs
 
 data Predicate = Predicate { iface : IfaceRef, args : List Mono }
 
@@ -3946,12 +4006,16 @@ recordAbsorptions (a::rest) cell =
 -- (registerLocalScheme/registerSchemeObligations/checkSigConstraintCoverage/
 -- checkDefaultMethodRigidity/checkImplMethodRigidity/numCallObls/…) that stay on the
 -- old shape this increment — only the storage + its own checker move in I1 (#838 §5.2).
--- ⚠️ Projects the interface back to its bare SPELLING on purpose: every consumer of
--- this tuple writes into (or reads from) `schemeObligationsRef` /
--- `funConstraintIfacesRef` and their cross-module mirrors, which are bare-name-keyed
--- and belong to #1425's dict-arity seam, not to this channel.  P1 stops here.
-oblAsTuple : UObligation -> (String, List Mono, Option Loc)
-oblAsTuple o = (o.pred.iface.irName, uOblArgs o, o.loc)
+-- ⚠️ U1b (#1482): this used to project the interface back to its bare SPELLING, on
+-- the stated ground that every consumer feeds `schemeObligationsRef` /
+-- `funConstraintIfacesRef`, which were bare-name-keyed.  They are not any more, and
+-- `forwardedVecObls` — an UNSIGNED constrained forwarder's whole scheme context —
+-- reaches `schemeObligationsRef` through exactly this tuple.  Keeping the projection
+-- would have left that one path minting bare goals inside a channel the rest of which
+-- carries identity.  Consumers that ask a SPELLING question (`numCallObls`'s `"Num"`
+-- test, the survivor-obligation diagnostics) read `.irName` at their own site.
+oblAsTuple : UObligation -> (IfaceRef, List Mono, Option Loc)
+oblAsTuple o = (o.pred.iface, uOblArgs o, o.loc)
 
 -- THE ONLY legal reader of an obligation's dispatch vector — total over both
 -- `OblProjection` arms.  See `OblProjection` for why the impl channel's projection
@@ -3962,7 +4026,7 @@ uOblArgs o = match o.oblProj
   OpMethodOcc typarams mty occ => dispatchMonosOf typarams mty occ
 
 -- the call channel's window, in the pre-#838 tuple shape (see oblAsTuple).
-callOblsWindow : Int -> List (String, List Mono, Option Loc)
+callOblsWindow : Int -> List (IfaceRef, List Mono, Option Loc)
 callOblsWindow mark = map oblAsTuple (wWindow perRun.value.obls mark)
 
 -- #1114 (DICT-SEMANTICS §4.2 D1): would `checkOneCallObligation` reach a VERDICT on this
@@ -4189,12 +4253,12 @@ data CrossRun = CrossRun {
     builtinClassesRef : Ref BuiltinClassOrigins,  -- #1446 P1 / DICT §8 I7: the four operator/literal classes' identities, read off the PRELUDE's own DInterface decls — see seedBuiltinClasses
     crossModuleFunConstraintsRef : Ref (List (String, List Int)),
     crossModuleFunConstraintsQualRef : Ref (List ((String, String), List Int)),
-    crossModuleFunConstraintIfacesRef : Ref (List (String, List String)),
-    crossModuleFunConstraintIfacesQualRef : Ref (List ((String, String), List String)),
+    crossModuleFunConstraintIfacesRef : Ref (List (String, List IfaceRef)),
+    crossModuleFunConstraintIfacesQualRef : Ref (List ((String, String), List IfaceRef)),
     crossModuleMethodConstraintsRef : Ref (List (String, List Int)),
     crossModuleMethodConstraintsQualRef : Ref (List ((String, String), List Int)),
-    coreSchemeObligationsRef : Ref (OrdMap (List (String, List Int))),  -- #673: core's OWN schemeObligationsRef, snapshotted after the core pass (see declaredCrossModuleObls)
-    crossModuleSchemeOblsQualRef : Ref (List ((String, String), List (String, List Int))),  -- #1114/#845: every USER module's schemeObligationsRef, (mid, name)-attributed (see attributeModuleSchemeObls)
+    coreSchemeObligationsRef : Ref (OrdMap (List VecObl)),  -- #673: core's OWN schemeObligationsRef, snapshotted after the core pass (see declaredCrossModuleObls)
+    crossModuleSchemeOblsQualRef : Ref (List ((String, String), List VecObl)),  -- #1114/#845: every USER module's schemeObligationsRef, (mid, name)-attributed (see attributeModuleSchemeObls)
   }
 
 -- Construct every field-Ref fresh (each reproduces its former top-level ref's initial).
@@ -4990,14 +5054,14 @@ data PerRun = PerRun {
     activeDictPreds : Ref (List (String, Mono, String)),
     funConstraintsRef : Ref (List (String, List Int)),
     funConstraintArgsRef : Ref (List (String, List (List Mono))),
-    funConstraintIfacesRef : Ref (List (String, List String)),
+    funConstraintIfacesRef : Ref (List (String, List IfaceRef)),
     currentImportDefinersRef : Ref (List (String, String)),
     currentImportOriginsRef : Ref (List (String, String)),
-    importedSchemeOblsRef : Ref (OrdMap (List (String, List Int))),  -- #1114/#845: this module's imported bindings' scheme contexts, keyed by LOCAL spelling (see importedSchemeOblEntries)
+    importedSchemeOblsRef : Ref (OrdMap (List VecObl)),  -- #1114/#845: this module's imported bindings' scheme contexts, keyed by LOCAL spelling (see importedSchemeOblEntries)
     dictApps : Windowed (Ref (List Route), List Mono, List String, List (List Mono), Option Loc),  -- #841: pendingDictApps/N, ported onto Windowed
     obls : Windowed UObligation,  -- #838 I1: the call channel (pendingCallObligations/N), ported onto Windowed
     absorptions : Windowed AbsorptionEvent,  -- #839 2a: row-unifier atom-discard trail (write-only in 2a); windowed per body by the existing obls brackets
-    schemeObligationsRef : Ref (List ((String, Int), List (String, List Int))),  -- #837: keyed by (binding-name, binding-id) — the id from resolve's
+    schemeObligationsRef : Ref (List ((String, Int), List VecObl)),  -- #837: keyed by (binding-name, binding-id) — the id from resolve's
     schemeDefIdsRef : Ref (OrdMap Int),  -- stampBindingIds, so a where-helper `g`'s obligations can no longer leak
     methodConstraintsRef : Ref (List (String, List Int)),  -- onto an unrelated top-level `g` (retires the three snapshot/restore windows).
     methodConstraintPositionsRef : Ref (List (String, List Int)),  -- id 0 = a local/where/cross-module binder → the bare-name fallback path.
@@ -5720,7 +5784,7 @@ ppScheme (Forall _ _ t) = ppMono t
 -- deduped for a stable display order.  Empty list ⇒ plain ppScheme (no `=>`).
 -- Single-vs-multiple form mirrors ppConstrDoc in tools/doc.mdk (`Num a =>` /
 -- `(Num a, Ord b) =>`).
-export ppSchemeCon : List (String, List Int) -> Scheme -> String
+export ppSchemeCon : List VecObl -> Scheme -> String
 ppSchemeCon [] s = ppScheme s
 ppSchemeCon cons (Forall _ _ t) =
   let ctx = Ref []
@@ -5735,10 +5799,14 @@ ppSchemeCon cons (Forall _ _ t) =
 -- a predicate renders with its WHOLE argument vector — `Ix a i =>`, not the
 -- `(Ix a, Ix i) =>` two-1-ary-facts rendering the shattered representation produced
 -- before #607.
-renderConstraintCtx : Ref (List (Int, String)) -> Ref Int -> List (String, List Int) -> List String
+-- ⚠️ Renders the SPELLING (`voIface.irName`).  U1b (#1482) gave this payload an
+-- identity-carrying interface half; every DISPLAY surface must keep printing the name
+-- the user wrote, or every `Num a => …` in `check --types`, LSP hover, inlay hints and
+-- the snapshot corpus moves.
+renderConstraintCtx : Ref (List (Int, String)) -> Ref Int -> List VecObl -> List String
 renderConstraintCtx _ _ [] = []
-renderConstraintCtx ctx cnt ((iface, ids)::rest) =
-  let s = joinWith " " (iface :: map (id => nameOf ctx cnt id) ids)
+renderConstraintCtx ctx cnt (o::rest) =
+  let s = joinWith " " (o.voIface.irName :: map (id => nameOf ctx cnt id) o.voIds)
   s :: renderConstraintCtx ctx cnt rest
 
 -- Render a binding's scheme WITH its inferred/declared constraint context, looked
@@ -6927,29 +6995,80 @@ inferDictAt env name routesRef = match lookupVar env name
 -- recursive call's route ref stays empty while dictPass still prepends the param → the
 -- call under-applies → dispatch fails.  Detect (2) as "no registered id is pinned by
 -- the instantiation subst" (mirrors the oracle's empty-`sub` self-recursion case).
--- WS-2/D2: a cross-module constrained callee's (dict ids, slot-parallel ifaces) by
+-- WS-2/D2: a cross-module constrained callee's dict SLOTS (id + interface, paired) by
 -- MODULE IDENTITY.  When [name] is an EXPLICITLY-imported value (currentImportDefinersRef)
 -- whose import SOURCE module owns a (source,name) entry in the qualified arity tables,
 -- return that entry — the definer-keyed arity, immune to the bare-name most-recent-prepend
 -- collision in the jointly-seeded funConstraintsRef.  None ⇒ local fn / wildcard import /
 -- re-export / check path (mid ""): inferDictAtFound falls back to the bare funConstraintsRef
--- + funConstraintIfacesRef path (today's behavior; byte-identical when no collision, since
+-- + funConstraintIfacesRef path (today's behavior; same slots when no collision, since
 -- the qual entry is the same module's same ids the bare first-match returns sans collision).
-qualConstraintFor : String -> Option (List Int, List String)
-qualConstraintFor name = match lookupAssoc name perRun.value.currentImportDefinersRef.value
+qualConstraintFor : String -> Option (List CSlot)
+qualConstraintFor name = match qualConstraintKey name
   None => None
-  Some src =>
-    -- #739 fix follow-up: resolve an aliased import's surface name to its ORIGINAL exported
-    -- name before keying the qual tables (they are attributed under the defining name).  A
-    -- plain import / non-alias defaults to the name itself.  Without this, `{set as hmSet}`
-    -- of a constrained `hash_map.set` misses (qual has `(hash_map, set)`, not `(hash_map,
-    -- hmSet)`), declaredConstraintSlots returns ([],[]) and inferDictAtFound DROPS the Hash
-    -- dict → `no matching impl for dispatch` at run/build.
-    let origin = fromOption name (lookupAssoc name perRun.value.currentImportOriginsRef.value)
-    map (ids => (
-      ids,
-      fromOption [] (lookupQualIfaces src origin crossRun.value.crossModuleFunConstraintIfacesQualRef.value),
-    )) (lookupQualArity src origin crossRun.value.crossModuleFunConstraintsQualRef.value)
+  Some (src, origin) =>
+    -- U1b (#1482): the two independent lookups still default to `[]` independently —
+    -- that is the manufacturable mismatch described on `CSlot` — but they now meet in
+    -- `pairSlots`, which owns the policy, instead of in three downstream zips.
+    map (ids => pairSlots ids
+      (fromOption [] (lookupQualIfaces src origin crossRun.value.crossModuleFunConstraintIfacesQualRef.value)))
+      (lookupQualArity src origin crossRun.value.crossModuleFunConstraintsQualRef.value)
+
+-- the (import-source module, ORIGINAL exported name) key a cross-module callee's qual
+-- entries live under; `None` ⇒ local fn / wildcard import / re-export / check path.
+--
+-- #739 fix follow-up: an aliased import's surface name is resolved to its ORIGINAL
+-- exported name before keying the qual tables (they are attributed under the defining
+-- name).  A plain import / non-alias defaults to the name itself.  Without this,
+-- `{set as hmSet}` of a constrained `hash_map.set` misses (qual has `(hash_map, set)`,
+-- not `(hash_map, hmSet)`), the slot lookup comes back empty and `inferDictAtFound`
+-- DROPS the Hash dict → `no matching impl for dispatch` at run/build.
+--
+-- ⚠️ FACTORED OUT BY U1b (#1482) so `qualConstraintFor` (slots) and
+-- `qualConstraintIds` (ids only) cannot drift on WHICH entry they resolve to.  Two
+-- readers of one table that re-derive the key independently is the shape this seam
+-- already pays for elsewhere; there is one derivation.
+qualConstraintKey : String -> Option (String, String)
+qualConstraintKey name = map
+  (src => (
+    src,
+    fromOption name (lookupAssoc name perRun.value.currentImportOriginsRef.value),
+  ))
+  (lookupAssoc name perRun.value.currentImportDefinersRef.value)
+
+-- the callee's registered dict-slot IDS, UNPAIRED and UNTRUNCATED — the exact list the
+-- pre-U1b `declaredConstraintSlots` returned as its first component.
+--
+-- 🚨 WHY THIS EXISTS, AND WHY IT IS NOT THE PARALLEL-LIST HAZARD `CSlot` REMOVED.
+-- `pairSlots` truncates to the SHORTER of (ids, ifaces), which is correct everywhere the
+-- result decides dict SLOTS — that is exactly what the zips it replaced did.  But two
+-- guards in `inferDictAtFound` and one in `shadowStandaloneDictSlotsAt` do not ask about
+-- slots; they ask *"is this callee registered as constrained at all"* and *"did the
+-- instantiation pin any of its constraint vars"*.  Reading a TRUNCATED list there changes
+-- the answer whenever the arity table HITS and the iface table MISSES — a mismatch this
+-- seam can manufacture by construction (see `CSlot`) — and the two arms then differ:
+-- one records an empty dict app, the other skips routing (and, at the standalone site,
+-- skips a `unify` side effect).  Nobody has built a witness, so the difference is
+-- unmeasured, which is precisely why this unit does not take it: an obligation-identity
+-- change must not smuggle in a routing change nobody asked for.
+--
+-- It is NOT zipped against an interface list anywhere — its only consumers are
+-- `isEmptyL` and `anyIdPinned` — so it cannot mispair with one.  That is the property
+-- `CSlot` protects, and it is preserved.
+declaredConstraintIds : String -> List Int
+declaredConstraintIds name = match qualConstraintIds name
+  Some ids => ids
+  -- same #739 source-exact discipline as `declaredConstraintSlots`' `None` arm below:
+  -- a known import with no qual entry is genuinely unconstrained, and must NOT fall
+  -- through to the source-blind bare-name table.
+  None =>
+    if hasImportDefiner name then []
+    else fromOption [] (lookupAssocSL2 name perRun.value.funConstraintsRef.value)
+
+qualConstraintIds : String -> Option (List Int)
+qualConstraintIds name = match qualConstraintKey name
+  None => None
+  Some (src, origin) => lookupQualArity src origin crossRun.value.crossModuleFunConstraintsQualRef.value
 
 lookupQualArity : String -> String -> List ((String, String), List Int) -> Option (List Int)
 lookupQualArity _ _ [] = None
@@ -6957,13 +7076,14 @@ lookupQualArity src name (((m, n), v)::rest)
   | m == src && n == name = Some v
   | otherwise = lookupQualArity src name rest
 
-lookupQualIfaces : String -> String -> List ((String, String), List String) -> Option (List String)
+lookupQualIfaces : String -> String -> List ((String, String), List IfaceRef) -> Option (List IfaceRef)
 lookupQualIfaces _ _ [] = None
 lookupQualIfaces src name (((m, n), v)::rest)
   | m == src && n == name = Some v
   | otherwise = lookupQualIfaces src name rest
 
--- WS-2/D2: a constrained callee's declared (constraint tyvar ids, iface names).  Prefer
+-- WS-2/D2: a constrained callee's declared dict slots (constraint tyvar id + interface
+-- occurrence, PAIRED — see `CSlot`; never two parallel lists).  Prefer
 -- the (import-source, name)-keyed QUAL table for a cross-module callee; fall back to the
 -- bare-name funConstraintsRef first-match for local / wildcard / re-export.
 -- S-1: shared with shadowStandaloneDictSlots — an IMPORTED constrained standalone that
@@ -6971,9 +7091,9 @@ lookupQualIfaces src name (((m, n), v)::rest)
 -- Reading only the bare-name table there left the importer shadow's dicts EMPTY on `run`
 -- (funConstraintsRef is reset per module and only re-seeded from the cross-module table
 -- on the EMIT path), so `build` was right and `run` was wrong — the inverse skew.
-declaredConstraintSlots : String -> (List Int, List String)
+declaredConstraintSlots : String -> List CSlot
 declaredConstraintSlots name = match qualConstraintFor name
-  Some (ids, ifs) => (ids, ifs)
+  Some slots => slots
   -- #739: source-exact fallback.  An EXPLICITLY-imported name (present in
   -- currentImportDefinersRef) whose (import-source, name) qual entry is ABSENT is
   -- genuinely UNCONSTRAINED in its source module — every module's constrained fns ARE
@@ -6989,11 +7109,10 @@ declaredConstraintSlots name = match qualConstraintFor name
   -- re-export / check-path (mid "") names — absent from currentImportDefinersRef — still
   -- take the bare-name path (byte-identical when there is no collision).
   None =>
-    if hasImportDefiner name then ([], [])
-    else (
-      fromOption [] (lookupAssocSL2 name perRun.value.funConstraintsRef.value),
-      fromOption [] (lookupAssocS name perRun.value.funConstraintIfacesRef.value),
-    )
+    if hasImportDefiner name then []
+    else pairSlots
+      (fromOption [] (lookupAssocSL2 name perRun.value.funConstraintsRef.value))
+      (fromOption [] (lookupAssocS name perRun.value.funConstraintIfacesRef.value))
 
 -- #739: is [name] an explicitly-imported value (has a known source module)?  A miss in
 -- the qual constraint table for such a name is authoritative ("unconstrained in its
@@ -7008,8 +7127,9 @@ inferDictAtFound : String -> Ref (List Route) -> (Mono, List (Int, Mono)) -> Mon
 inferDictAtFound name routesRef inst =
   let q = qualConstraintFor name
   let slots = declaredConstraintSlots name
-  let declaredIds = fst slots
-  let declaredIfaces = snd slots
+  -- ⚠️ UNTRUNCATED on purpose — `map (s => s.csId) slots` is NOT the same list when the
+  -- arity table hits and the iface table misses.  See `declaredConstraintIds`.
+  let declaredIds = declaredConstraintIds name
   let known = match q
         Some _ => True
         None => hasKeySL2 name perRun.value.funConstraintsRef.value
@@ -7028,17 +7148,19 @@ inferDictAtFound name routesRef inst =
     -- so this call site applies one dict per EXPANDED slot — matching the def params
     -- dictArityOf/dictPass will prepend from the expanded table.  Each super slot's id
     -- equals its sub slot's id (shared type param), still pinned in [snd inst].
-    let expanded = expandSupersPairs driverState.value.superDeclsRef.value (zipL declaredIfaces declaredIds)
-    let ids = map snd expanded
+    let expanded = expandSupersPairs driverState.value.superDeclsRef.value slots
+    let ids = map (s => s.csId) expanded
     let monos = constraintMonosOf ids (snd inst)
-    let ifaces = map fst expanded
-    let _ = pushDictApp (routesRef, monos, ifaces, callArgVecs (declaredConstraintArgs name) ids (snd inst), currentLoc.value)
+    -- the ROUTING goal stays a spelling (`resolveDictApps` asks the SPELLING-keyed
+    -- `KeyBuckets` a route-word question — see `dispHeadTab`); only the OBLIGATION goal
+    -- below carries identity.
+    let _ = pushDictApp (routesRef, monos, map (s => s.csIface.irName) expanded, callArgVecs (declaredConstraintArgs name) ids (snd inst), currentLoc.value)
     let _ = setRef perRun.value.dictAppFns (consSiteFn perRun.value.currentFn.value monos perRun.value.dictAppFns.value)
     -- #11 soundness: record this call's instantiated impl obligations (iface paired
     -- with the call's constraint mono), checked after inference by checkCallObligations.
     -- The iface list is slot-parallel to [monos]; a concrete-head mono with no impl
     -- (`Num String` from `f "hello"` where `f : Num a => a -> a`) becomes an error.
-    let _ = recordCallObligations ifaces monos
+    let _ = recordCallObligations expanded monos
     fst inst
   else
     let _ = setRef perRun.value.pendingRecDictApps (RecDictApp routesRef name perRun.value.currentFn.value (fst inst) :: perRun.value.pendingRecDictApps.value)
@@ -7058,11 +7180,11 @@ anyIdPinned (id::rest) subst = match lookupAssocI id subst
 -- pendingCallObligations.  Length-zips defensively (an iface list shorter than the
 -- mono list — e.g. a multi-param constraint whose ifaces weren't recorded — just
 -- stops, never over-rejecting).
-recordCallObligations : List String -> List Mono -> Unit
+recordCallObligations : List CSlot -> List Mono -> Unit
 recordCallObligations [] _ = ()
 recordCallObligations _ [] = ()
-recordCallObligations (iface::ifs) (mono::ms)
-  | iface == "" = recordCallObligations ifs ms
+recordCallObligations (s::ss) (mono::ms)
+  | s.csIface.irName == "" = recordCallObligations ss ms
   | otherwise =
     -- 1-ary by construction: these slots are funConstraintsRef's SHATTERED
     -- per-tyvar dict slots (`Ix a i` => two slots), so each carries one mono.
@@ -7077,14 +7199,14 @@ recordCallObligations (iface::ifs) (mono::ms)
     -- `declaredOblOne` → `constraintArgMonos`, which returns `None` for a non-tyvar
     -- argument on an ids-only payload.  That is #1161 symptom 2, pinned in
     -- test/must_fail_fixtures/1161-sig-constraint-unsatisfiable-accepted/.
-    -- P1 (#1446): `iface` comes from `funConstraintIfacesRef` (a bare-name-keyed
-    -- cross-module list inside #1425's coupled dict-arity seam), so this site records
-    -- `OriginUnresolved` — see `ifaceRefBare`.
-    let _ = recordObl (Predicate { iface = ifaceRefBare iface, args = [mono] }) 0 PCallSlot currentLoc.value
-    recordCallObligations ifs ms
+    -- P1 (#1446) / U1b (#1482): `funConstraintIfacesRef`'s payload is `List IfaceRef`,
+    -- so this site records the interface OCCURRENCE's identity instead of
+    -- `OriginUnresolved`.  It was one of the two `ifaceRefBare` producers.
+    let _ = recordObl (Predicate { iface = s.csIface, args = [mono] }) 0 PCallSlot currentLoc.value
+    recordCallObligations ss ms
 
 -- String-keyed assoc lookup over funConstraintIfacesRef (returns the iface name list).
-lookupAssocS : String -> List (String, List String) -> Option (List String)
+lookupAssocS : String -> List (String, List IfaceRef) -> Option (List IfaceRef)
 lookupAssocS _ [] = None
 lookupAssocS k ((k2, v)::rest)
   | k == k2 = Some v
@@ -7211,25 +7333,25 @@ expandSupersTable allDecls =
 
 -- as expandSupersTable but operates on the cross-module snapshot pair (so a
 -- cross-module constrained fn gets the same expansion — else it under-fills).
-expandSupersCross : List Decl -> List (String, List Int) -> List (String, List String) -> (List (String, List Int), List (String, List String))
+expandSupersCross : List Decl -> List (String, List Int) -> List (String, List IfaceRef) -> (List (String, List Int), List (String, List IfaceRef))
 expandSupersCross allDecls idsTbl ifacesTbl = (
   map (expandSupersEntry allDecls ifacesTbl) idsTbl,
   map (expandSupersIfaceEntry allDecls) ifacesTbl,
 )
 
 -- expand one (fn, ids) entry: the parallel iface list is looked up by fn name.
-expandSupersEntry : List Decl -> List (String, List String) -> (String, List Int) -> (String, List Int)
+expandSupersEntry : List Decl -> List (String, List IfaceRef) -> (String, List Int) -> (String, List Int)
 expandSupersEntry allDecls ifacesTbl (fn, ids) =
   let ifaces = fromOption [] (lookupAssocS fn ifacesTbl)
-  let pairs = expandSupersPairs allDecls (zipL ifaces ids)
-  (fn, map snd pairs)
+  let pairs = expandSupersPairs allDecls (pairSlots ids ifaces)
+  (fn, map (s => s.csId) pairs)
 
 -- expand one (fn, ifaces) entry the SAME way, returning the parallel iface names.
-expandSupersIfaceEntry : List Decl -> (String, List String) -> (String, List String)
+expandSupersIfaceEntry : List Decl -> (String, List IfaceRef) -> (String, List IfaceRef)
 expandSupersIfaceEntry allDecls (fn, ifaces) =
   let ids = idsForIfaceSlots ifaces
-  let pairs = expandSupersPairs allDecls (zipL ifaces ids)
-  (fn, map fst pairs)
+  let pairs = expandSupersPairs allDecls (pairSlots ids ifaces)
+  (fn, map (s => s.csIface) pairs)
 
 -- a synthetic id list parallel to the iface list when only the iface entry is in
 -- hand (the iface-entry expansion must produce the same iface SEQUENCE as the id
@@ -7238,10 +7360,10 @@ expandSupersIfaceEntry allDecls (fn, ifaces) =
 -- `requires` chain every slot in one fn's expansion shares its declared tyvar — but
 -- DISTINCT declared constraints get distinct synthetic ids, so two unrelated
 -- constraints sharing a super still dedup correctly per chain.
-idsForIfaceSlots : List String -> List Int
+idsForIfaceSlots : List IfaceRef -> List Int
 idsForIfaceSlots ifaces = idsForIfaceSlotsGo 0 ifaces
 
-idsForIfaceSlotsGo : Int -> List String -> List Int
+idsForIfaceSlotsGo : Int -> List IfaceRef -> List Int
 idsForIfaceSlotsGo _ [] = []
 idsForIfaceSlotsGo i (_::rest) = i :: idsForIfaceSlotsGo (i + 1) rest
 
@@ -7249,36 +7371,44 @@ idsForIfaceSlotsGo i (_::rest) = i :: idsForIfaceSlotsGo (i + 1) rest
 -- declared slots, repeatedly append direct supers of every current slot until no
 -- new (iface, id) pair appears.  Result is the declared slots first (order/indices
 -- preserved) then the appended supers, deduped by (iface, id).
-expandSupersPairs : List Decl -> List (String, Int) -> List (String, Int)
+expandSupersPairs : List Decl -> List CSlot -> List CSlot
 expandSupersPairs allDecls declared = expandSupersFix allDecls declared declared
 
-expandSupersFix : List Decl -> List (String, Int) -> List (String, Int) -> List (String, Int)
+expandSupersFix : List Decl -> List CSlot -> List CSlot -> List CSlot
 expandSupersFix allDecls acc frontier =
-  let next = dedupPairs (acc ++ flatMap (superSlotsOf allDecls) frontier)
+  let next = dedupSlots (acc ++ flatMap (superSlotsOf allDecls) frontier)
   if listLen next == listLen acc then
     acc
   else
-    expandSupersFix allDecls next (dropPairs (listLen acc) next)
+    expandSupersFix allDecls next (dropN (listLen acc) next)
 
 -- the direct super slots of one (iface, id) slot: look up iface's (typarams, supers);
 -- the super-param NAMES index into typarams, which map positionally to [id] (a single
 -- shared id since constraints in a `requires` chain are over the same type param).
-superSlotsOf : List Decl -> (String, Int) -> List (String, Int)
-superSlotsOf allDecls (iface, id)
-  | not (contains iface driverState.value.userIfaceNamesRef.value) = []   -- WS-1b: only expand USER interface supers (prelude chains stay arg-tag)
-  | otherwise = match ifaceSupersOf allDecls iface
+-- ⚠️ Both the user-interface gate and the `ifaceSupersOf` lookup ask a SPELLING
+-- question (`userIfaceNamesRef` is a name set, `ifaceSupersOf` scans `DInterface` by
+-- name).  U1b (#1482) did not re-key either: doing so would change which slots exist,
+-- i.e. dict ARITY, which is emitted-code shape and #1425's ground.  The slot's own
+-- identity comes from the `Super` occurrence that produced it.
+superSlotsOf : List Decl -> CSlot -> List CSlot
+superSlotsOf allDecls s
+  | not (contains s.csIface.irName driverState.value.userIfaceNamesRef.value) = []   -- WS-1b: only expand USER interface supers (prelude chains stay arg-tag)
+  | otherwise = match ifaceSupersOf allDecls s.csIface.irName
     None => []
     Some (typarams, supers) =>
-      let subst = zipL typarams (replicate (listLen typarams) id)
+      let subst = zipL typarams (replicate (listLen typarams) s.csId)
       flatMap (superSlotOf subst) supers
 
 -- one `Super superName params`: map each param name through subst → its id; emit the
 -- super slot only if ALL params resolved (matches the oracle's length guard).
-superSlotOf : List (String, Int) -> Super -> List (String, Int)
-superSlotOf subst (Super { superHead = superName, superParams = params }) =
+superSlotOf : List (String, Int) -> Super -> List CSlot
+superSlotOf subst (Super { superHead = superName, superParams = params, superOrigin = so }) =
   let mapped = filterMaybeIds (map (p => lookupAssoc p subst) params)
   if listLen mapped == listLen params then
-    (superName, firstOrZero mapped)::[]
+    CSlot {
+      csIface = IfaceRef { irName = superName, irOrigin = so },
+      csId = firstOrZero mapped,
+    }::[]
   else
     []
 
@@ -7292,12 +7422,14 @@ filterMaybeIds [] = []
 filterMaybeIds ((Some x)::rest) = x :: filterMaybeIds rest
 filterMaybeIds (None::rest) = filterMaybeIds rest
 
-dropPairs : Int -> List (String, Int) -> List (String, Int)
-dropPairs n xs
+-- U1b (#1482): one polymorphic drop, replacing the byte-identical `dropPairs` /
+-- `dropVecObls` pair (the payload widening would otherwise have made it three).
+dropN : Int -> List a -> List a
+dropN n xs
   | n <= 0 = xs
   | otherwise = match xs
     [] => []
-    _::rest => dropPairs (n - 1) rest
+    _::rest => dropN (n - 1) rest
 
 -- dedup (iface, id) pairs, keeping first occurrence (so declared slots stay leading).
 -- #242: routed through the canonical O(n·log n) `support.util.dedupBy` (was a
@@ -7308,6 +7440,17 @@ dedupPairs xs = dedupBy slotKey xs
 
 slotKey : (String, Int) -> String
 slotKey (iface, id) = lenKey iface ++ intToString id
+
+-- U1b (#1482): the `CSlot` analogue.  ⚠️ Keyed on the SPELLING, deliberately — this
+-- dedup decides how many dict slots a constrained fn has, so keying it on identity
+-- would give two same-spelled interfaces two slots where today they share one, moving
+-- emitted dict ARITY.  That is a separate judgment with a different blast radius
+-- (#1425's ground), and U1b does not make it.
+dedupSlots : List CSlot -> List CSlot
+dedupSlots xs = dedupBy cslotKey xs
+
+cslotKey : CSlot -> String
+cslotKey s = lenKey s.csIface.irName ++ intToString s.csId
 
 -- the type a method ultimately returns (strip its argument arrows); the impl is
 -- chosen by this type's head tycon (pure : a -> f a → f a; empty : f a → f a)
@@ -8786,9 +8929,9 @@ instantiateVarTrackedId x id s = match lookupSchemeObls x id perRun.value.scheme
 -- `importedSchemeOblEntries` ever emits one.  The populations are therefore disjoint by
 -- construction, and the one case where both could answer — a user module exporting a name
 -- core also defines — is exactly the case where the import-scoped answer is the right one.
-declaredCrossModuleObls : String -> Option (List (String, List Int))
+declaredCrossModuleObls : String -> Option (List VecObl)
 declaredCrossModuleObls x = match qualConstraintFor x
-  Some (ids, ifaces) => Some (shatterVecObls ifaces ids)
+  Some slots => Some (vecOblsOfSlots slots)
   None => match qualSchemeOblsFor x
     Some obs => Some obs
     None => omLookup x crossRun.value.coreSchemeObligationsRef.value
@@ -8810,17 +8953,23 @@ declaredCrossModuleObls x = match qualConstraintFor x
 -- spelling-matched, which is the shape #674/#1070 warn about.  Keying by the local
 -- spelling covers all three arms with one rule and no per-spelling branch at the
 -- READ site.
-qualSchemeOblsFor : String -> Option (List (String, List Int))
+qualSchemeOblsFor : String -> Option (List VecObl)
 qualSchemeOblsFor name = omLookup name perRun.value.importedSchemeOblsRef.value
 
--- pair each iface with its own single scheme-var id (the "shattered per-tyvar dict slots"
--- shape funConstraintsRef stores — see recordCallObligations), skipping unnamed ("") slots.
-shatterVecObls : List String -> List Int -> List (String, List Int)
-shatterVecObls [] _ = []
-shatterVecObls _ [] = []
-shatterVecObls (iface::ifs) (id::ids)
-  | iface == "" = shatterVecObls ifs ids
-  | otherwise = (iface, [id]) :: shatterVecObls ifs ids
+-- lift each already-paired dict slot to a 1-ary vector obligation (the "shattered
+-- per-tyvar dict slots" shape `funConstraintsRef` stores -- see
+-- `recordCallObligations`), skipping slots with no interface.
+--
+-- ⚠️ U1b (#1482) DELETED `shatterVecObls`, which is what used to stand here.  It took
+-- an iface list and an id list as two arguments and zipped them, truncating on a
+-- mismatch; the pairing now happens once, in `pairSlots`, so this function cannot be
+-- handed a mispaired input at all.
+vecOblsOfSlots : List CSlot -> List VecObl
+vecOblsOfSlots [] = []
+vecOblsOfSlots (s::rest)
+  | s.csIface.irName == "" = vecOblsOfSlots rest
+  | otherwise =
+    VecObl { voIface = s.csIface, voIds = [s.csId] } :: vecOblsOfSlots rest
 
 -- map each (iface, scheme-var-id VECTOR) through the instantiation subst to this
 -- call's monos, pushing ONE joint obligation per predicate onto the call channel
@@ -8830,14 +8979,16 @@ shatterVecObls (iface::ifs) (id::ids)
 -- read it without a second migration.  If ANY id is absent from the subst (shouldn't
 -- happen for a quantified var) the whole predicate is skipped — a partial vector would
 -- be a different predicate (#607).
-recordSchemeCallObligations : Int -> List (String, List Int) -> List (Int, Mono) -> Unit
+recordSchemeCallObligations : Int -> List VecObl -> List (Int, Mono) -> Unit
 recordSchemeCallObligations _ [] _ = ()
-recordSchemeCallObligations originId ((iface, ids)::rest) subst = match substMonos ids subst
+recordSchemeCallObligations originId (o::rest) subst = match substMonos o.voIds subst
   Some monos =>
-    -- P1 (#1446): `iface` comes from `schemeObligationsRef` / its cross-module
-    -- mirrors, bare-name-keyed inside #1425's seam — see `ifaceRefBare`.
+    -- P1 (#1446) / U1b (#1482): `schemeObligationsRef` and its cross-module mirrors
+    -- store `VecObl`, whose interface half is an identity-carrying `IfaceRef`, so this
+    -- site no longer records `OriginUnresolved`.  It was the second of the two
+    -- `ifaceRefBare` producers this unit retired.
     let _ = recordObl Predicate {
-      iface = ifaceRefBare iface,
+      iface = o.voIface,
       args = monos,
     } originId PSchemeReinst currentLoc.value
     recordSchemeCallObligations originId rest subst
@@ -8852,7 +9003,7 @@ substMonos (id::rest) subst = match lookupAssocI id subst
 
 -- #837: (name, id)-keyed lookup over schemeObligationsRef.  id != 0 keys the
 -- occurrence's binding EXACTLY; id == 0 falls to the bare-name scan (today's path).
-lookupSchemeObls : String -> Int -> List ((String, Int), List (String, List Int)) -> Option (List (String, List Int))
+lookupSchemeObls : String -> Int -> List ((String, Int), List VecObl) -> Option (List VecObl)
 lookupSchemeObls x 0 table = lookupSchemeOblsByName x table
 lookupSchemeObls _ _ [] = None
 lookupSchemeObls x id (((n2, i2), v)::rest)
@@ -8861,7 +9012,7 @@ lookupSchemeObls x id (((n2, i2), v)::rest)
 
 -- name-only scan (first match) — the bare-name fallback and the display readers
 -- (ppSchemeNamed / lookupSchemeIface) keep exactly this pre-#837 behaviour.
-lookupSchemeOblsByName : String -> List ((String, Int), List (String, List Int)) -> Option (List (String, List Int))
+lookupSchemeOblsByName : String -> List ((String, Int), List VecObl) -> Option (List VecObl)
 lookupSchemeOblsByName _ [] = None
 lookupSchemeOblsByName x (((n2, _), v)::rest)
   | n2 == x = Some v
@@ -8955,7 +9106,14 @@ recordImplObligation x mono
       -- corpus; base's built binary prints 300 on `po`).  That is a real capability
       -- given up.  It was never SOUND, though -- those verdicts were right only because
       -- the two layers happened to agree in those programs, and the repro above is the
-      -- counterexample proving the coincidence does not generalise.  Owed to #1482.
+      -- counterexample proving the coincidence does not generalise.
+      --
+      -- ⚠️ OWED TO #1507, NOT #1482.  This said "Owed to #1482" until U1b landed; the
+      -- repo owner's scope ruling on that issue put the METHOD-OCCURRENCE channel in
+      -- its own unit, precisely because the obstacle stated above is a ruling on which
+      -- LAYER governs, not a table widening.  U1b widened the other two channels and
+      -- deliberately did not touch this one; it is now the LAST condition on deleting
+      -- the bare compatibility leg (see `insertUnivImplKeys`) and on draining #1438.
       let _ = pushPendingObl (ifaceRefBare iface.irName) typarams mty mono PMethodOcc currentLoc.value
       -- #818 (#838 I3): also record each method-level `=>` constraint slot (e.g.
       -- `Ord b` on `peer : Ord b => a -> b -> b -> Bool`) as its OWN obligation, so an
@@ -9967,7 +10125,10 @@ shadowStandaloneDictSlotsAt mscheme key xt =
   -- the unconstrained standalone: nothing to solve, no unify, no perturbation at all.
   -- This short-circuit is what makes the change provably fixpoint-safe — all 5 of the
   -- compiler's own definer shadows are unconstrained and never reach the unify below.
-  if isEmptyL (fst slots) then ([], [])
+  -- ⚠️ Gated on the UNTRUNCATED id list, not on `slots`: this guard also decides whether
+  -- the `unify` below runs, so a truncation here would remove a unification side effect.
+  -- See `declaredConstraintIds`.
+  if isEmptyL (declaredConstraintIds key) then ([], [])
   else match mscheme
     None => ([], [])
     Some s =>
@@ -9984,12 +10145,14 @@ shadowStandaloneDictSlotsAt mscheme key xt =
 -- merely moved the arity disagreement.  Empty on the plain `check` path
 -- (funConstraintsRef is empty there) — check stamps no routes, so that is correct;
 -- recordStandaloneSigObligations is what gives `check` its reject direction.
-shadowStandaloneDictSlots : (List Int, List String) -> List (Int, Mono) -> (List Mono, List String)
+shadowStandaloneDictSlots : List CSlot -> List (Int, Mono) -> (List Mono, List String)
 shadowStandaloneDictSlots slots subst =
-  if isEmptyL (fst slots) then ([], [])
+  if isEmptyL slots then ([], [])
   else
-    let expanded = expandSupersPairs driverState.value.superDeclsRef.value (zipL (snd slots) (fst slots))
-    (constraintMonosOf (map snd expanded) subst, map fst expanded)
+    let expanded = expandSupersPairs driverState.value.superDeclsRef.value slots
+    -- the ROUTE half stays a SPELLING, exactly as `inferDictAtFound`'s `pushDictApp`
+    -- does — route words, not identities (see `dispHeadTab`).
+    (constraintMonosOf (map (sl => sl.csId) expanded) subst, map (sl => sl.csIface.irName) expanded)
 
 -- ── S-1, REJECT direction on the plain `check` path ───────────────────────────
 -- Record the standalone's declared `=>` constraints as CALL obligations, resolved from
@@ -11617,9 +11780,9 @@ dictAppMonoIds : (Ref (List Route), List Mono, List String, List (List Mono), Op
 dictAppMonoIds (_, monos, ifaces, _, _) =
   flatMap monoIdsWithIface (zipL monos ifaces)
 
-callOblMonoIds : (String, List Mono, Option Loc) -> List (Int, String)
+callOblMonoIds : (IfaceRef, List Mono, Option Loc) -> List (Int, String)
 callOblMonoIds (iface, monos, _) =
-  flatMap (m => monoIdsWithIface (m, iface)) monos
+  flatMap (m => monoIdsWithIface (m, iface.irName)) monos
 
 monoIdsWithIface : (Mono, String) -> List (Int, String)
 monoIdsWithIface (m, iface) = map (id => (id, iface)) (monoUnboundIds m)
@@ -12318,7 +12481,7 @@ promotedConstraints promoted entries =
   filterList (e => contains (fst e) promoted) entries
 
 -- iface-list analog of promotedConstraints (parallel filter for funConstraintIfacesRef).
-promotedConstraintIfaces : List String -> List (String, List String) -> List (String, List String)
+promotedConstraintIfaces : List String -> List (String, List IfaceRef) -> List (String, List IfaceRef)
 promotedConstraintIfaces promoted entries =
   filterList (e => contains (fst e) promoted) entries
 
@@ -18677,28 +18840,51 @@ insertUnivImpl univ (iface, tys, reqs) =
 -- hedge about the impl side: it is the only thing that keeps a goal whose identity
 -- is UNRECOVERABLE from missing every impl in the program.
 --
--- 🚨 MEASURED, and it is the finding that shaped this function.  Two obligation
--- producers cannot supply an identity today (`grep -n ifaceRefBare` — the
--- `funConstraintIfacesRef` and `schemeObligationsRef` channels; see `ifaceRefBare`).
--- With the identity index ALONE, every predicate re-instantiated through those two
--- tables keys `TkBare` while the prelude's own impls key `TkIdent core`, so the
--- lookup misses and the obligation is reported as `No impl` — a FALSE REJECT, not a
--- silent miss.  On this tree that was: `medaka check` of a file containing nothing
--- but `main = println 1` → exit 1 with 9 rejects (`No impl of Applicative for
--- Option`, `Mappable`, `Thenable`, …, all mislocated to line 1); `check
--- stdlib/core.mdk` → 7; `stdlib/list.mdk` → 8; `stdlib/map.mdk` → 7; `check
+-- 🚨 MEASURED, and it is the finding that shaped this function.  With the identity
+-- index ALONE, every predicate re-instantiated through a table with no identity keys
+-- `TkBare` while the prelude's own impls key `TkIdent core`, so the lookup misses and
+-- the obligation is reported as `No impl` — a FALSE REJECT, not a silent miss.  On
+-- this tree that was: `medaka check` of a file containing nothing but
+-- `main = println 1` → exit 1 with 9 rejects (`No impl of Applicative for Option`,
+-- `Mappable`, `Thenable`, …, all mislocated to line 1); `check stdlib/core.mdk` → 7;
+-- `stdlib/list.mdk` → 8; `stdlib/map.mdk` → 7; `check
 -- compiler/driver/medaka_cli.mdk` → 37; and #1438's OWN control fixture (a legal
 -- program the pin requires to keep working) rejected too.
 --
--- ⚠️ CONSEQUENCE FOR #1438, STATED PLAINLY RATHER THAN LEFT TO BE DISCOVERED: with
--- this leg present, a goal recorded at either `ifaceRefBare` site still matches ANY
--- same-spelled impl, i.e. exactly today's behaviour — so #1438's own repro is still
--- accepted and its `must_fail` pin still holds.  The drain is NOT this atom's; it is
--- the unit that gives those two tables an identity-carrying interface half
--- (`schemeObligationsRef`'s `(String, List Int)` vector and
--- `funConstraintIfacesRef`'s `List String`, coupled through `shatterVecObls`).  When
--- that lands, both `ifaceRefBare` call sites disappear, every goal carries identity,
--- and this leg becomes unreachable — delete it then, and #1438 drains with it.
+-- 🚨 THE DRAIN CONDITION, CORRECTED BY U1b (#1482) — READ IT BEFORE DELETING ANYTHING.
+-- This paragraph used to read "*both* `ifaceRefBare` call sites disappear … delete it
+-- then, and #1438 drains with it."  **It counted TWO against a set of THREE**, and it
+-- keyed a DESTRUCTIVE instruction on a condition that no single unit was going to
+-- satisfy.  U1b widened `schemeObligationsRef` (payload `List VecObl`) and
+-- `funConstraintIfacesRef` (payload `List IfaceRef`) and retired the two producers it
+-- named — and the leg is STILL LIVE, because a THIRD producer exists:
+-- `recordImplObligation`'s method-occurrence goal, which is a decl-layer /
+-- occurrence-layer reconciliation rather than a table widening and is owned by #1507.
+--
+-- ⚠️ So: **DO NOT DELETE THIS LEG YET.**  Withdrawing it while any producer still mints
+-- a bare goal reinstates the cascade measured above.  Do not trust this paragraph's
+-- census either — derive it: `grep -n ifaceRefBare compiler/types/typecheck.mdk`, and
+-- delete the leg only when every remaining hit is the definition itself.
+--
+-- ⚠️ CONSEQUENCE FOR #1438, AND THE SENTENCE THIS PARAGRAPH GOT WRONG.  It read
+-- "#1438's own repro is still accepted and its `must_fail` pin still holds; #1438
+-- drains at #1507, not at U1b" — written in the very commit that DELETED that pin.
+-- MEASURED on U1b's own branch build: #1438's repro uses a SIGNED forwarder
+-- (`useBulk : Sizer b => b -> Int`), so its goal comes from the signature `=>` slot,
+-- which is one of the two channels U1b widened; it now REJECTS
+-- (`No impl of Sizer for Int`, exit 1) and its pin drained.
+--
+-- 🚨 THE PINNED INSTANCE DRAINED; THE CLASS DID NOT, AND THAT IS THE DISTINCTION TO
+-- CARRY.  Delete the signature line from that repro and the goal is posed by a bare
+-- METHOD OCCURRENCE instead — the producer below that still mints `ifaceRefBare` —
+-- and it is a silent accept again: MEASURED on the same binary, `check` exit 0,
+-- `build` exit 0, and the built binary SEGFAULTS at 139.  So with this leg present a
+-- goal recorded at any REMAINING `ifaceRefBare` site still matches ANY same-spelled
+-- impl, exactly as before.  #1438 stays OPEN for that half; **the remaining reach
+-- drains at #1507**, which is also when this leg may be withdrawn.  The minimal pair
+-- is pinned at `test/must_fail_fixtures/1507-xmod-iface-name-collision-method-occurrence/`,
+-- and the drained half is guarded positively by
+-- `test/dict_fixtures/i4-xmod-sig-constraint-foreign-iface-rejected/`.
 --
 -- Order within a bucket is preserved per key (`mregAppendK` appends), so
 -- `findMatchingImplReqsU`'s declaration-order first-match is unchanged on either leg.
@@ -18761,8 +18947,9 @@ insertUnivImplAt ifk tys reqs (ImplUniverse conc hl tags) = match univReceiverTa
 -- same spelling.
 --
 -- ⚠️ AN IDENTITY-LESS GOAL IS STILL LEGAL AND STILL MATCHES BY SPELLING — see
--- `insertUnivImplKeys` for the compatibility leg, the two `ifaceRefBare` producers
--- that need it, and the condition under which it is deleted.
+-- `insertUnivImplKeys` for the compatibility leg, the `ifaceRefBare` producers that
+-- still need it (U1b/#1482 retired two of three; #1507 owns the last), and the
+-- corrected condition under which it is deleted.
 oblIfaceKey : IfaceRef -> TabKey
 oblIfaceKey ir = tabKeyOf NsIface ir.irOrigin ir.irName
 
@@ -20235,7 +20422,7 @@ effectLaunderMsg iface mname escaping = "Effect laundering in impl of '\{mname}'
 --                    preserving today's values exactly (impl: the real threaded flag;
 --                    default's own separate call: False) — 2a does NOT touch the
 --                    double-report.
-checkMethodRigidityCore : String -> String -> Ty -> List Mono -> List (String, Mono) -> List String -> List UObligation -> List (String, List Mono, Option Loc) -> Option (List (String, Ref Effvar), Bool, List (String, List Kind)) -> Option Loc -> Unit
+checkMethodRigidityCore : String -> String -> Ty -> List Mono -> List (String, Mono) -> List String -> List UObligation -> List (IfaceRef, List Mono, Option Loc) -> Option (List (String, Ref Effvar), Bool, List (String, List Kind)) -> Option Loc -> Unit
 checkMethodRigidityCore subject iface mty headMonos extraMap ownTyparams addedObls addedCallObls effInside loc =
   let pinned = map fst (filterList (p => not (isUnboundTvar (snd p))) extraMap)
   let _ = if isNonEmptyL pinned then pushTypeErrorOnceAt "T-IMPL-TOO-SPECIFIC" loc (pinsTyvarMsg subject mty pinned)
@@ -20252,7 +20439,7 @@ checkMethodRigidityCore subject iface mty headMonos extraMap ownTyparams addedOb
       checkImplEffVarRigidity subject gscope mty effMap launderFlagged loc
     None => ()
 
-checkImplMethodRigidity : String -> String -> Ty -> List Mono -> List (String, Mono) -> List (String, Ref Effvar) -> List UObligation -> List (String, List Mono, Option Loc) -> Bool -> List (String, List Kind) -> Option Loc -> Unit
+checkImplMethodRigidity : String -> String -> Ty -> List Mono -> List (String, Mono) -> List (String, Ref Effvar) -> List UObligation -> List (IfaceRef, List Mono, Option Loc) -> Bool -> List (String, List Kind) -> Option Loc -> Unit
 checkImplMethodRigidity iface mname mty headMonos extraMap effMap addedObls addedCallObls launderFlagged gscope loc = checkMethodRigidityCore (implSubject iface mname) iface mty headMonos extraMap [] addedObls addedCallObls (Some (effMap, launderFlagged, gscope)) loc
 
 -- B1 (adversarial review): the GENERIC default-method path is the checking seam
@@ -20269,7 +20456,7 @@ checkImplMethodRigidity iface mname mty headMonos extraMap effMap addedObls adde
 -- [tvs] is sigToSchemeTvs' name→scheme-var map; [subst] instantiateTracked's
 -- scheme-var-id→fresh-mono subst — crossing them recovers each declared name's
 -- post-unify mono, the same shape inferImplMethod's extraMap has.
-checkDefaultMethodRigidity : String -> List String -> String -> Ty -> List (String, Mono) -> List (Int, Mono) -> List UObligation -> List (String, List Mono, Option Loc) -> Option Loc -> Unit
+checkDefaultMethodRigidity : String -> List String -> String -> Ty -> List (String, Mono) -> List (Int, Mono) -> List UObligation -> List (IfaceRef, List Mono, Option Loc) -> Option Loc -> Unit
 checkDefaultMethodRigidity iface typarams mname mty tvs subst addedObls addedCallObls loc = checkMethodRigidityCore (defaultSubject iface mname) iface mty [] (defaultSurvivorMap tvs subst) typarams addedObls addedCallObls None loc
 
 defaultSurvivorMap : List (String, Mono) -> List (Int, Mono) -> List (String, Mono)
@@ -20321,10 +20508,10 @@ checkSurvivorObligations subject ownIface ownTyparams mty extraMap (o::rest) loc
 -- (no declared-type walk needed).  Same rule as checkSurvivorObligations: a
 -- predicate landing on a method-scheme var must be entailed by a declared
 -- method-level constraint under requires-closure.
-checkSurvivorCallObligations : String -> String -> List String -> Ty -> List (String, Mono) -> List (String, List Mono, Option Loc) -> Option Loc -> Unit
+checkSurvivorCallObligations : String -> String -> List String -> Ty -> List (String, Mono) -> List (IfaceRef, List Mono, Option Loc) -> Option Loc -> Unit
 checkSurvivorCallObligations _ _ _ _ _ [] _ = ()
 checkSurvivorCallObligations subject ownIface ownTyparams mty extraMap ((oiface, monos, _)::rest) loc =
-  let _ = checkSurvivorDispatchMonos subject ownIface ownTyparams mty extraMap oiface monos loc
+  let _ = checkSurvivorDispatchMonos subject ownIface ownTyparams mty extraMap oiface.irName monos loc
   checkSurvivorCallObligations
     subject
     ownIface
@@ -21194,9 +21381,9 @@ processSCCs env sigs grouped (scc::rest) =
 -- the rest mirror inferNumLitBare's placeholder shape.
 -- Num is 1-param, so its obligation vector is a singleton; a wider predicate can
 -- never be "Num" and is filtered out anyway.
-numCallObls : List (String, List Mono, Option Loc) -> List UObligation
+numCallObls : List (IfaceRef, List Mono, Option Loc) -> List UObligation
 numCallObls [] = []
-numCallObls ((iface, monos, loc)::rest) = match (iface, monos)
+numCallObls ((iface, monos, loc)::rest) = match (iface.irName, monos)
   ("Num", [mono]) => mkMethodOccObl (builtinIfaceRef BNum) ["a"] (TyVar "a") mono PNumLit loc :: numCallObls rest
   _ => numCallObls rest
 
@@ -21241,16 +21428,16 @@ numDictObls ((_, monos, ifaces, _, loc)::rest) = flatMap (p => if fst p == "Num"
 -- survives at every arity.  Identical at arity 1 (boundTyvarIds normalizes too), and it
 -- closes the UNSIGNED forwarding hole, which the declared-context path cannot reach
 -- (lookupSigTvMap is None for an unsigned binding).
-forwardedVecObls : List Int -> List (String, List Mono, Option Loc) -> List (String, List Int)
+forwardedVecObls : List Int -> List (IfaceRef, List Mono, Option Loc) -> List VecObl
 forwardedVecObls _ [] = []
 forwardedVecObls boundIds ((iface, monos, _)::rest) = forwardedVecOblOne boundIds iface monos
   ++ forwardedVecObls boundIds rest
 
-forwardedVecOblOne : List Int -> String -> List Mono -> List (String, List Int)
+forwardedVecOblOne : List Int -> IfaceRef -> List Mono -> List VecObl
 forwardedVecOblOne boundIds iface monos
-  | iface == "" = []
+  | iface.irName == "" = []
   | otherwise = match boundTyvarIds boundIds monos
-    Some ids => [(iface, ids)]
+    Some ids => [VecObl { voIface = iface, voIds = ids }]
     None => []
 
 -- FLAT-PATH SHADOW SCOPING (S1): a letrec group whose members are ALL prelude fns is a
@@ -21309,7 +21496,10 @@ processSCC env sigs grouped members =
   -- the duration of body inference, so a definer-shadow method occurrence on one of
   -- them (`neq x y = not (eq x y)` under `neq : Eq a => …`) is seen as a DISPATCH and
   -- not monomorphised to the shadowing standalone's declared domain.
-  let _ = setRef perRun.value.groupConstraintMonosRef (flatMap regIfaceMonosOf regs)
+  -- `groupConstraintMonosRef` answers a SPELLING question (`dictVarSatisfiesIface`
+  -- compares interface NAMES), so U1b (#1482) projects back to the name here rather than
+  -- widening a second ref for a reader that would only throw the identity away.
+  let _ = setRef perRun.value.groupConstraintMonosRef (flatMap (r => map ifaceMonoName (regIfaceMonosOf r)) regs)
   -- #837: the schemeObligationsRef snapshot/restore window is RETIRED.  It existed
   -- because registerLocalScheme entries were NAME-KEYED and body-scoped: a prelude
   -- where-helper named `g` (core's `find`) leaked obligations onto an unrelated
@@ -21391,7 +21581,7 @@ placeholderBinding (m, v) = (m, monoScheme v)
 -- slot-parallel predicate argument VECTORS).  The first two components are unchanged;
 -- the third is carried alongside, never instead of, so nothing downstream that sizes or
 -- orders dict slots can move.
-preunifySigsEx : List (String, Ty) -> List (String, Mono) -> (List (String, List (String, Mono), List (List Mono)), List (String, Ty, List (String, Mono)))
+preunifySigsEx : List (String, Ty) -> List (String, Mono) -> (List (String, List (IfaceRef, Mono), List (List Mono)), List (String, Ty, List (String, Mono)))
 preunifySigsEx _ [] = ([], [])
 preunifySigsEx sigs ((m, v)::rest) =
   let (restRegs, restTvs) = preunifySigsEx sigs rest
@@ -21418,12 +21608,15 @@ instantiateSigTracked ty =
 
 -- the (iface, tyvarName) pairs of a signature's `=>` constraints (each constraint
 -- argument that is a single type variable; multi-param/structured args skipped)
-sigConstraints : Ty -> List (String, String)
+sigConstraints : Ty -> List (IfaceRef, String)
 sigConstraints (TyConstrained cs _) = flatMap constraintTyVars cs
 sigConstraints _ = []
 
-constraintTyVars : Constraint -> List (String, String)
-constraintTyVars (Constraint { constraintHead = iface, constraintArgs = tys }) = map (n => (iface, n)) (tyVarArgNames tys)
+-- U1b (#1482): carries `constraintOrigin` (the #1110 interface-occurrence identity)
+-- alongside the spelling, so `registerMember`'s slot-parallel iface list — and hence
+-- every obligation `recordCallObligations` later mints from it — is identity-carrying.
+constraintTyVars : Constraint -> List (IfaceRef, String)
+constraintTyVars (Constraint { constraintHead = iface, constraintArgs = tys, constraintOrigin = co }) = map (n => (IfaceRef { irName = iface, irOrigin = co }, n)) (tyVarArgNames tys)
 
 tyVarArgNames : List Ty -> List String
 tyVarArgNames [] = []
@@ -21449,7 +21642,7 @@ constraintTyVarArgs (Constraint { constraintArgs = tys }) =
 
 -- like constraintVarMonos but KEEPS the iface name paired with each constraint var's
 -- mono (slot order preserved), so registerMember can register call-obligation ifaces.
-constraintVarIfaceMonos : List (String, String) -> List (String, Mono) -> List (String, Mono)
+constraintVarIfaceMonos : List (IfaceRef, String) -> List (String, Mono) -> List (IfaceRef, Mono)
 constraintVarIfaceMonos [] _ = []
 constraintVarIfaceMonos ((iface, name)::rest) tvMap = match lookupAssoc name tvMap
   Some mono => (iface, mono) :: constraintVarIfaceMonos rest tvMap
@@ -21467,7 +21660,7 @@ constraintVarIfaceMonos ((iface, name)::rest) tvMap = match lookupAssoc name tvM
 -- (`constraintArgVarNames`) is a full structural `tyVarNames` walk of each argument —
 -- so the interior `b` of `List b` is mapped, and fromAstType's unmapped-var → `TCon n`
 -- fallback is unreachable here.
-constraintVarArgMonos : List (String, String) -> List (List Ty) -> List (String, Mono) -> List (List Mono)
+constraintVarArgMonos : List (IfaceRef, String) -> List (List Ty) -> List (String, Mono) -> List (List Mono)
 constraintVarArgMonos [] _ _ = []
 constraintVarArgMonos _ [] _ = []
 constraintVarArgMonos ((_, name)::rest) (args::argsRest) tvMap = match lookupAssoc name tvMap
@@ -21480,7 +21673,7 @@ constraintVarArgMonos ((_, name)::rest) (args::argsRest) tvMap = match lookupAss
 -- in-body RDict routing) and per-fn in funConstraintsRef (for call-site dict
 -- application).  Done per group so a callee's constraints are known before its
 -- (later-group) callers infer.
-registerConstraintRegs : List (String, List (String, Mono), List (List Mono)) -> Unit
+registerConstraintRegs : List (String, List (IfaceRef, Mono), List (List Mono)) -> Unit
 registerConstraintRegs [] = ()
 registerConstraintRegs ((m, ifaceMonos, argVecs)::rest) =
   let _ = registerMember m ifaceMonos argVecs
@@ -21491,7 +21684,7 @@ registerConstraintRegs ((m, ifaceMonos, argVecs)::rest) =
 -- registerMemberSlots keeps a slot only when its mono is still an abstract TVar (a
 -- body-forced-concrete constraint takes no dict slot); the iface list is filtered the
 -- same way so it stays parallel to the id list.
-registerMember : String -> List (String, Mono) -> List (List Mono) -> Unit
+registerMember : String -> List (IfaceRef, Mono) -> List (List Mono) -> Unit
 -- An UNCONSTRAINED member (empty constraint list) gets NO funConstraintsRef /
 -- funConstraintIfacesRef entry.  These refs are keyed by BARE NAME and accumulate
 -- across the per-module elaboration; an unconstrained top-level fn that shares a
@@ -21515,7 +21708,7 @@ registerMember m ifaceMonos argVecs =
 -- #1161 (F-3a-ii): the argument vectors of the constraints registerMemberSlots KEEPS,
 -- in the same slot order — the keptConstraintIfaces filter applied to the parallel
 -- vector list, so funConstraintArgsRef stays slot-parallel to funConstraintsRef's ids.
-keptConstraintArgs : List (String, Mono) -> List (List Mono) -> List (List Mono)
+keptConstraintArgs : List (IfaceRef, Mono) -> List (List Mono) -> List (List Mono)
 keptConstraintArgs [] _ = []
 keptConstraintArgs _ [] = []
 keptConstraintArgs ((_, mono)::rest) (v::vs) = match normalize mono
@@ -21524,7 +21717,7 @@ keptConstraintArgs ((_, mono)::rest) (v::vs) = match normalize mono
 
 -- the iface names of the constraints registerMemberSlots KEEPS (mono still a TVar),
 -- in the same slot order — parallel to registerMember's id list.
-keptConstraintIfaces : List (String, Mono) -> List String
+keptConstraintIfaces : List (IfaceRef, Mono) -> List IfaceRef
 keptConstraintIfaces [] = []
 keptConstraintIfaces ((iface, mono)::rest) = match normalize mono
   TVar _ => iface :: keptConstraintIfaces rest
@@ -21826,7 +22019,7 @@ maybeInferConstraint sigs m sch
 -- #837: [memberDefIds] carries each TOP-LEVEL member's binding id (processSCC passes
 -- schemeDefIdsRef); the local/where call sites pass omEmpty so their members key under
 -- the sentinel id 0.  A member absent from [memberDefIds] is a local/where binder → 0.
-registerSchemeObligations : OrdMap Int -> List (String, Ty, List (String, Mono)) -> List (String, List Mono, Option Loc) -> List UObligation -> List (String, Scheme) -> Unit
+registerSchemeObligations : OrdMap Int -> List (String, Ty, List (String, Mono)) -> List (IfaceRef, List Mono, Option Loc) -> List UObligation -> List (String, Scheme) -> Unit
 registerSchemeObligations _ _ _ _ [] = ()
 registerSchemeObligations memberDefIds sigTvMaps callObls addedObls ((m, sch)::rest) =
   -- #838 I2 / #827: record this binding's QUANTIFIED (generalized) var ids as
@@ -21853,7 +22046,7 @@ registerSchemeObligations memberDefIds sigTvMaps callObls addedObls ((m, sch)::r
 -- dispatch + forwarded).  Signedness is `lookupSigTvMap … = Some` — true for any
 -- signed member, including a signed binding with an EMPTY `=>` (whose declared
 -- context is correctly empty), which is what distinguishes it from an unsigned one.
-schemeOblsForMember : List (String, Ty, List (String, Mono)) -> List (String, List Mono, Option Loc) -> List UObligation -> String -> Scheme -> List (String, List Int)
+schemeOblsForMember : List (String, Ty, List (String, Mono)) -> List (IfaceRef, List Mono, Option Loc) -> List UObligation -> String -> Scheme -> List VecObl
 schemeOblsForMember sigTvMaps callObls addedObls m sch = match lookupSigTvMap m sigTvMaps
   Some _ => declaredSchemeOblsFor sigTvMaps m (schemeIds sch)
   None => schemeObligationsOf (schemeIds sch) addedObls
@@ -21864,17 +22057,20 @@ schemeOblsForMember sigTvMaps callObls addedObls m sch = match lookupSigTvMap m 
 -- tyvar that instantiated to one of this scheme's quantified vars: a concrete-grounded
 -- argument (`Sz Int =>`) carries no per-use obligation here, and a partial vector would
 -- be a different predicate.  An unsigned member contributes nothing.
-declaredSchemeOblsFor : List (String, Ty, List (String, Mono)) -> String -> List Int -> List (String, List Int)
+declaredSchemeOblsFor : List (String, Ty, List (String, Mono)) -> String -> List Int -> List VecObl
 declaredSchemeOblsFor sigTvMaps m boundIds = match lookupSigTvMap m sigTvMaps
   None => []
   Some (ty, tvMap) =>
     flatMap (declaredOblOne boundIds tvMap) (sigConstraintsOf ty)
 
-declaredOblOne : List Int -> List (String, Mono) -> Constraint -> List (String, List Int)
-declaredOblOne boundIds tvMap (Constraint { constraintHead = iface, constraintArgs = args }) = match constraintArgMonos args tvMap
+declaredOblOne : List Int -> List (String, Mono) -> Constraint -> List VecObl
+declaredOblOne boundIds tvMap (Constraint { constraintHead = iface, constraintArgs = args, constraintOrigin = co }) = match constraintArgMonos args tvMap
   None => []
   Some monos => match boundTyvarIds boundIds monos
-    Some ids => [(iface, ids)]
+    -- U1b (#1482): `constraintOrigin` is the #1110 interface-OCCURRENCE identity of the
+    -- `=>` predicate as written in this module's scope — the same layer `DImpl.implOrigin`
+    -- is stamped in, which is what makes the goal and the impl comparable.
+    Some ids => [VecObl { voIface = IfaceRef { irName = iface, irOrigin = co }, voIds = ids }]
     None => []
 
 -- the monos a predicate's arguments resolve to under a tyvar-name -> mono map, in
@@ -21905,18 +22101,22 @@ lookupSigTvMap m ((n, ty, tvMap)::rest)
 -- private O(n²) `List`-as-a-set scan).  The iface name is length-prefixed and
 -- the id VECTOR is comma-joined — ints carry no comma, so the encoding is
 -- injective over both components.
-dedupVecObls : List (String, List Int) -> List (String, List Int)
+-- ⚠️ Keyed on the SPELLING (`voIface.irName`), deliberately: this dedup decides what a
+-- binding's DISPLAYED and re-instantiated scheme context is, and keying it on identity
+-- would split one printed `Num a =>` into two.  U1b (#1482) carries identity through the
+-- payload without changing what counts as the same entry.
+dedupVecObls : List VecObl -> List VecObl
 dedupVecObls xs = dedupBy vecOblKey xs
 
-vecOblKey : (String, List Int) -> String
-vecOblKey (iface, ids) = lenKey iface ++ joinWith "," (map intToString ids)
+vecOblKey : VecObl -> String
+vecOblKey o = lenKey o.voIface.irName ++ joinWith "," (map intToString o.voIds)
 
 -- membership of ONE vector in the DECLARED set (reportUncoveredVec) — not a
 -- dedup, and the declared set is a handful of entries, so it stays a scan.
-containsVecObl : (String, List Int) -> List (String, List Int) -> Bool
+containsVecObl : VecObl -> List VecObl -> Bool
 containsVecObl _ [] = False
-containsVecObl (i, ids) ((i2, ids2)::rest) = i == i2 && eqIntList ids ids2
-  || containsVecObl (i, ids) rest
+containsVecObl o (o2::rest) = o.voIface.irName == o2.voIface.irName && eqIntList o.voIds o2.voIds
+  || containsVecObl o rest
 
 eqIntList : List Int -> List Int -> Bool
 eqIntList [] [] = True
@@ -21925,17 +22125,20 @@ eqIntList _ _ = False
 
 -- the (iface, var-id VECTOR) entries of the obligations whose discriminating monos are
 -- all quantified ids of this scheme.  Deduped on (iface, ids).
-schemeObligationsOf : List Int -> List UObligation -> List (String, List Int)
+schemeObligationsOf : List Int -> List UObligation -> List VecObl
 schemeObligationsOf _ [] = []
 schemeObligationsOf boundIds (o::rest) = schemeOblOfOne boundIds o
   ++ schemeObligationsOf boundIds rest
 
 -- #991: the impl-channel arm only — a call-channel obligation is re-instantiated from
 -- `schemeObligationsRef` by its own path and contributes nothing here.
-schemeOblOfOne : List Int -> UObligation -> List (String, List Int)
+schemeOblOfOne : List Int -> UObligation -> List VecObl
 schemeOblOfOne boundIds o = match o.oblProj
   OpMethodOcc typarams mty occ =>
-    schemeObligationOne boundIds o.pred.iface.irName typarams mty occ
+    -- U1b (#1482): forward the whole `IfaceRef`, not `.irName` — the obligation already
+    -- carries its occurrence identity and this is the channel that hands it to every
+    -- later re-instantiation.
+    schemeObligationOne boundIds o.pred.iface typarams mty occ
   OpProjected => []
 
 -- a single obligation contributes ONE joint (iface, ids) entry iff EVERY one of its
@@ -21945,11 +22148,11 @@ schemeOblOfOne boundIds o = match o.oblProj
 -- obligation list, and `check` accepted it at exit 0 while the built binary did raw
 -- pointer arithmetic.  A non-var-headed dispatch mono is still skipped (left to the
 -- concrete-obligation checker), and an EMPTY dispatch list still contributes nothing.
-schemeObligationOne : List Int -> String -> List String -> Ty -> Mono -> List (String, List Int)
+schemeObligationOne : List Int -> IfaceRef -> List String -> Ty -> Mono -> List VecObl
 schemeObligationOne boundIds iface typarams mty occ = match dispatchMonosOf typarams mty occ
   [] => []
   ds => match boundTyvarIds boundIds ds
-    Some ids => [(iface, ids)]
+    Some ids => [VecObl { voIface = iface, voIds = ids }]
     None => []
 
 -- the tyvar ids of [monos], in order, iff EVERY mono is a TVar bound by this scheme;
@@ -21966,9 +22169,12 @@ schemeIds (Forall ids _ _) = ids
 
 -- shatter vector obligations into (iface, id) pairs — the currency of the
 -- coverage subset test.  See checkSigConstraintCoverage's header.
-pairsOfVecObls : List (String, List Int) -> List (String, Int)
+-- ⚠️ Drops to the SPELLING currency on purpose — the coverage (subset) test compares
+-- an INFERRED constraint against a DECLARED one written in the same signature, which is
+-- a "did you write this down" question, not an identity question.
+pairsOfVecObls : List VecObl -> List (String, Int)
 pairsOfVecObls [] = []
-pairsOfVecObls ((iface, ids)::rest) = map (id => (iface, id)) ids
+pairsOfVecObls (o::rest) = map (id => (o.voIface.irName, id)) o.voIds
   ++ pairsOfVecObls rest
 
 -- ── signature-constraint soundness check ─────────────────────────────────────
@@ -21996,13 +22202,13 @@ pairsOfVecObls ((iface, ids)::rest) = map (id => (iface, id)) ids
 -- (arity >= 2) whose EXACT argument vector is not among the declared vectors
 -- (vector-valued superclass closure, censusSuperCloseVec / superSlotVecOf) is
 -- uncovered, and is reported when the pair test did not already flag one of its args.
-checkSigConstraintCoverage : List (String, List (String, Mono), List (List Mono)) -> List (String, Ty) -> List (String, Ty, List (String, Mono)) -> List (String, List Mono, Option Loc) -> List UObligation -> List (String, Scheme) -> Unit
+checkSigConstraintCoverage : List (String, List (IfaceRef, Mono), List (List Mono)) -> List (String, Ty) -> List (String, Ty, List (String, Mono)) -> List (IfaceRef, List Mono, Option Loc) -> List UObligation -> List (String, Scheme) -> Unit
 checkSigConstraintCoverage _ _ _ _ _ [] = ()
 checkSigConstraintCoverage regs sigs sigTvMaps callObls addedObls ((m, sch)::rest) =
   let _ = checkSigConstraintOne regs sigs sigTvMaps callObls addedObls m sch
   checkSigConstraintCoverage regs sigs sigTvMaps callObls addedObls rest
 
-checkSigConstraintOne : List (String, List (String, Mono), List (List Mono)) -> List (String, Ty) -> List (String, Ty, List (String, Mono)) -> List (String, List Mono, Option Loc) -> List UObligation -> String -> Scheme -> Unit
+checkSigConstraintOne : List (String, List (IfaceRef, Mono), List (List Mono)) -> List (String, Ty) -> List (String, Ty, List (String, Mono)) -> List (IfaceRef, List Mono, Option Loc) -> List UObligation -> String -> Scheme -> Unit
 checkSigConstraintOne regs sigs sigTvMaps callObls addedObls m sch = match omLookup m driverState.value.sigTyMapRef.value
   None => ()   -- unsigned member: its inferred constraints are promoted, not checked
   Some _ =>
@@ -22023,31 +22229,39 @@ inferredIfacePairs m boundIds =
   flatMap (pairIface m) (inferredConstraintIds m boundIds)
 
 pairIface : String -> Int -> List (String, Int)
-pairIface m id = match ifaceForInferredId m id
-  "" => []
-  iface => [(iface, id)]
+pairIface m id =
+  let ir = ifaceForInferredId m id
+  match ir.irName
+    "" => []
+    iface => [(iface, id)]
 
 -- the declared (iface, id) constraint pairs of member m: each declared constraint
 -- mono normalized to its surviving tyvar id (single-param shape; concrete-grounded
 -- constraints — no tyvar — carry no dict slot and are skipped).
-declaredPairsFor : String -> List (String, List (String, Mono), List (List Mono)) -> List (String, Int)
+declaredPairsFor : String -> List (String, List (IfaceRef, Mono), List (List Mono)) -> List (String, Int)
 declaredPairsFor m regs = flatMap declaredPairOne (regIfaceMonosFor m regs)
 
 -- #1161 (F-3a-ii): a reg is a triple, so its (iface, mono) component needs a named
 -- accessor (`snd`/`lookupAssoc` no longer apply).  Both spellings — first-match by name,
 -- and the whole-list projection — are exactly what the two consumers used before.
-regIfaceMonosFor : String -> List (String, List (String, Mono), List (List Mono)) -> List (String, Mono)
+regIfaceMonosFor : String -> List (String, List (IfaceRef, Mono), List (List Mono)) -> List (IfaceRef, Mono)
 regIfaceMonosFor _ [] = []
 regIfaceMonosFor m ((n, ims, _)::rest)
   | m == n = ims
   | otherwise = regIfaceMonosFor m rest
 
-regIfaceMonosOf : (String, List (String, Mono), List (List Mono)) -> List (String, Mono)
+regIfaceMonosOf : (String, List (IfaceRef, Mono), List (List Mono)) -> List (IfaceRef, Mono)
 regIfaceMonosOf (_, ims, _) = ims
 
-declaredPairOne : (String, Mono) -> List (String, Int)
+-- U1b (#1482): project a reg's (interface occurrence, mono) pair back to the SPELLING
+-- for `groupConstraintMonosRef`, whose only reader (`dictVarSatisfiesIface`) compares
+-- interface NAMES.
+ifaceMonoName : (IfaceRef, Mono) -> (String, Mono)
+ifaceMonoName (ir, mono) = (ir.irName, mono)
+
+declaredPairOne : (IfaceRef, Mono) -> List (String, Int)
 declaredPairOne (iface, mono) = match normalize mono
-  TVar cell => [(iface, tyvarId cell)]
+  TVar cell => [(iface.irName, tyvarId cell)]
   _ => []
 
 -- UNGATED transitive super-closure over declared (iface, id) slots — mirrors
@@ -22065,14 +22279,19 @@ censusSuperCloseFix allDecls acc frontier =
   if listLen next == listLen acc then
     acc
   else
-    censusSuperCloseFix allDecls next (dropPairs (listLen acc) next)
+    censusSuperCloseFix allDecls next (dropN (listLen acc) next)
 
+-- ⚠️ Drops each super slot back to the SPELLING currency (`csIface.irName`): this
+-- closure only feeds the read-only coverage subset test, which asks "did the signature
+-- declare this", not an identity question.  See `pairsOfVecObls`.
 censusSuperSlotsOf : List Decl -> (String, Int) -> List (String, Int)
 censusSuperSlotsOf allDecls (iface, id) = match ifaceSupersOf allDecls iface
   None => []
   Some (typarams, supers) =>
     let subst = zipL typarams (replicate (listLen typarams) id)
-    flatMap (superSlotOf subst) supers
+    map
+      (sl => (sl.csIface.irName, sl.csId))
+      (flatMap (superSlotOf subst) supers)
 
 -- #619/#607 item 4: VECTOR-valued transitive super-closure over declared constraint
 -- vectors.  Unlike censusSuperClose (which collapses each predicate to per-arg pairs),
@@ -22080,56 +22299,57 @@ censusSuperSlotsOf allDecls (iface, id) = match ifaceSupersOf allDecls iface
 -- tested for membership as a unit — the exotic cross-pairing `Ix a d` is NOT a member
 -- of {`Ix a b`, `Ix c d`} even though every one of its args appears in some declared
 -- predicate.  Ungated (mirrors censusSuperClose) so prelude super chains are included.
-censusSuperCloseVec : List Decl -> List (String, List Int) -> List (String, List Int)
+censusSuperCloseVec : List Decl -> List VecObl -> List VecObl
 censusSuperCloseVec allDecls declared =
   censusSuperCloseVecFix allDecls declared declared
 
-censusSuperCloseVecFix : List Decl -> List (String, List Int) -> List (String, List Int) -> List (String, List Int)
+censusSuperCloseVecFix : List Decl -> List VecObl -> List VecObl -> List VecObl
 censusSuperCloseVecFix allDecls acc frontier =
   let next = dedupVecObls (acc ++ flatMap (censusSuperSlotsVecOf allDecls) frontier)
   if listLen next == listLen acc then
     acc
   else
-    censusSuperCloseVecFix allDecls next (dropVecObls (listLen acc) next)
+    censusSuperCloseVecFix allDecls next (dropN (listLen acc) next)
 
 -- the direct super vectors of one (iface, ids) predicate: the interface's typarams map
 -- POSITIONALLY onto ids (so a multi-param super carries the right per-arg ids, not a
 -- single shared one), and each `Super superName params` emits its own arg vector.
-censusSuperSlotsVecOf : List Decl -> (String, List Int) -> List (String, List Int)
-censusSuperSlotsVecOf allDecls (iface, ids) = match ifaceSupersOf allDecls iface
+censusSuperSlotsVecOf : List Decl -> VecObl -> List VecObl
+censusSuperSlotsVecOf allDecls o = match ifaceSupersOf allDecls o.voIface.irName
   None => []
   Some (typarams, supers) =>
-    let subst = zipL typarams ids
+    let subst = zipL typarams o.voIds
     flatMap (superSlotVecOf subst) supers
 
-superSlotVecOf : List (String, Int) -> Super -> List (String, List Int)
-superSlotVecOf subst (Super { superHead = superName, superParams = params }) =
+superSlotVecOf : List (String, Int) -> Super -> List VecObl
+superSlotVecOf subst (Super { superHead = superName, superParams = params, superOrigin = so }) =
   let mapped = filterMaybeIds (map (p => lookupAssoc p subst) params)
-  if listLen mapped == listLen params then [(superName, mapped)] else []
-
-dropVecObls : Int -> List (String, List Int) -> List (String, List Int)
-dropVecObls n xs
-  | n <= 0 = xs
-  | otherwise = match xs
-    [] => []
-    _::rest => dropVecObls (n - 1) rest
+  if listLen mapped == listLen params then
+    [
+      VecObl {
+        voIface = IfaceRef { irName = superName, irOrigin = so },
+        voIds = mapped,
+      }
+    ]
+  else
+    []
 
 -- one type_error per inferred JOINT vector (arity >= 2) whose exact vector the declared
 -- (super-closed) set does not contain.  Skipped when the pair test already flagged one
 -- of the vector's args (allPairsIn False) — so a genuinely absent constraint reports
 -- ONCE, via reportUncovered, and only the cross-pairing (all args present, joint
 -- vector absent) reports here.  Arity < 2 is fully handled by the pair test.
-reportUncoveredVec : String -> List (String, Ty, List (String, Mono)) -> List (String, Int) -> List (String, List Int) -> List (String, List Int) -> Unit
+reportUncoveredVec : String -> List (String, Ty, List (String, Mono)) -> List (String, Int) -> List VecObl -> List VecObl -> Unit
 reportUncoveredVec _ _ _ _ [] = ()
-reportUncoveredVec m sigTvMaps declaredPairs declaredVecs ((iface, ids)::rest) =
-  let _ = if listLen ids < 2 then
+reportUncoveredVec m sigTvMaps declaredPairs declaredVecs (o::rest) =
+  let _ = if listLen o.voIds < 2 then
     ()
-  else if containsVecObl (iface, ids) declaredVecs then
+  else if containsVecObl o declaredVecs then
     ()
-  else if not (allPairsIn iface ids declaredPairs) then
+  else if not (allPairsIn o.voIface.irName o.voIds declaredPairs) then
     ()
   else
-    pushTypeError "T-MISSING-CONSTRAINT" (missingConstraintVecMsg m iface (map (varNameForId sigTvMaps m) ids))
+    pushTypeError "T-MISSING-CONSTRAINT" (missingConstraintVecMsg m o.voIface.irName (map (varNameForId sigTvMaps m) o.voIds))
   reportUncoveredVec m sigTvMaps declaredPairs declaredVecs rest
 
 allPairsIn : String -> List Int -> List (String, Int) -> Bool
@@ -22221,17 +22441,25 @@ registerInferredFor m ids =
 --       monos/ifaces).  Scan it for the var at a slot whose iface is now known.
 -- Both run AFTER the callee's own constraints are registered (topological SCC order),
 -- so the forwarded callee's ifaces are populated.
-ifaceForInferredId : String -> Int -> String
+-- U1b (#1482): returns an `IfaceRef`, since `funConstraintIfacesRef` now stores one.
+-- Fallbacks (1) and (2) carry a real occurrence identity — `implObls` and
+-- `schemeObligationsRef` both hold one.  Fallback (3) CANNOT and does not pretend to:
+-- `pendingDictApps` stores a route WORD (see `resolveDictApps` / `dispHeadTab`), so its
+-- recovery is bare by construction.  `ifaceRefNone` is the "no interface here" sentinel,
+-- which is a different fact from "identity unrecoverable".
+ifaceForInferredId : String -> Int -> IfaceRef
 ifaceForInferredId m id =
   let direct = ifaceForConstraintId id
-  if direct != "" then direct
+  if direct.irName != "" then direct
   else match lookupSchemeIface m id perRun.value.schemeObligationsRef.value
-    Some s => s
-    None => ifaceFromDictApps id perRun.value.dictApps.items.value
+    Some ir => ir
+    None => match ifaceFromDictApps id perRun.value.dictApps.items.value
+      "" => ifaceRefNone
+      n => ifaceRefBare n
 
 -- #837: keyed by member NAME only (the id here is a SCHEME-VAR id, not a binding
 -- id) — match the name component of the (name, binding-id) key, first match wins.
-lookupSchemeIface : String -> Int -> List ((String, Int), List (String, List Int)) -> Option String
+lookupSchemeIface : String -> Int -> List ((String, Int), List VecObl) -> Option IfaceRef
 lookupSchemeIface _ _ [] = None
 lookupSchemeIface m id (((m2, _), obs)::rest)
   | m == m2 = match lookupIfaceById id obs
@@ -22244,10 +22472,10 @@ lookupSchemeIface m id (((m2, _), obs)::rest)
 -- This per-id recovery is inherently 1-ary — it answers "which interface constrains
 -- this var", which for a multi-param predicate has no single right answer; it feeds
 -- the dict-slot/route tables, whose per-tyvar shattering is punch-list item 3.
-lookupIfaceById : Int -> List (String, List Int) -> Option String
+lookupIfaceById : Int -> List VecObl -> Option IfaceRef
 lookupIfaceById _ [] = None
-lookupIfaceById id ((iface, oids)::rest)
-  | containsI id oids = Some iface
+lookupIfaceById id (o::rest)
+  | containsI id o.voIds = Some o.voIface
   | otherwise = lookupIfaceById id rest
 
 -- Scan pendingDictApps for [id] at a slot (bare-TVar mono) whose iface is non-empty.
@@ -22276,17 +22504,17 @@ ifaceAtMonoId id (m::ms) (i::is) = match normalize m
 -- matching impl head ⇒ it only fires for a CONCRETE-head mono whose iface genuinely had
 -- no impl, which for an inferred Num constraint is exactly the hole we close.  A still-
 -- polymorphic head defers regardless of iface, so a blank iface never over-rejects.
-ifaceForConstraintId : Int -> String
+ifaceForConstraintId : Int -> IfaceRef
 ifaceForConstraintId id =
   ifaceForConstraintIdGo id perRun.value.implObls.items.value
 
-ifaceForConstraintIdGo : Int -> List UObligation -> String
-ifaceForConstraintIdGo _ [] = ""
+ifaceForConstraintIdGo : Int -> List UObligation -> IfaceRef
+ifaceForConstraintIdGo _ [] = ifaceRefNone
 ifaceForConstraintIdGo id (o::rest) = match o.oblProj
   OpMethodOcc _ _ occ => match normalize occ
     TVar cell =>
       if tyvarId cell == id then
-        o.pred.iface.irName
+        o.pred.iface
       else
         ifaceForConstraintIdGo id rest
     _ => ifaceForConstraintIdGo id rest
@@ -23165,7 +23393,7 @@ importFormSchemes _ path depSchemes = match importedBindings path
 -- `UseWild` arm there would change what `funConstraintsRef` holds on the emit path, i.e.
 -- dict-passing arity — a different judgment, with a different blast radius, reached from
 -- here only by the coincidence that both read the same qual-table shape.
-importedSchemeOblEntries : List Decl -> List ((String, String), List (String, List Int)) -> List (String, List (String, List Int))
+importedSchemeOblEntries : List Decl -> List ((String, String), List VecObl) -> List (String, List VecObl)
 importedSchemeOblEntries [] _ = []
 importedSchemeOblEntries ((DAttrib _ d)::rest) qual = importedSchemeOblEntries [d] qual
   ++ importedSchemeOblEntries rest qual
@@ -23173,7 +23401,7 @@ importedSchemeOblEntries ((DUse _ path _)::rest) qual = schemeOblEntriesFor (use
   ++ importedSchemeOblEntries rest qual
 importedSchemeOblEntries (_::rest) qual = importedSchemeOblEntries rest qual
 
-schemeOblEntriesFor : String -> UsePath -> List ((String, String), List (String, List Int)) -> List (String, List (String, List Int))
+schemeOblEntriesFor : String -> UsePath -> List ((String, String), List VecObl) -> List (String, List VecObl)
 -- `import m as A` → every constrained binding m defines is written `A.<name>` here.
 schemeOblEntriesFor mid (UseAlias _ a) qual =
   flatMap (moduleAliasEntry mid a) qual
@@ -23185,12 +23413,12 @@ schemeOblEntriesFor mid (UseGroup _ ms) qual =
 -- `import m` binds NO names (it exists to bring m's impls into scope), so nothing here.
 schemeOblEntriesFor _ _ _ = []
 
-wildSchemeOblEntry : String -> ((String, String), List (String, List Int)) -> List (String, List (String, List Int))
+wildSchemeOblEntry : String -> ((String, String), List VecObl) -> List (String, List VecObl)
 wildSchemeOblEntry mid ((defMid, n), obs)
   | defMid == mid = [(n, obs)]
   | otherwise = []
 
-memberSchemeOblEntry : String -> List ((String, String), List (String, List Int)) -> UseMember -> List (String, List (String, List Int))
+memberSchemeOblEntry : String -> List ((String, String), List VecObl) -> UseMember -> List (String, List VecObl)
 memberSchemeOblEntry mid qual m =
   let local = useMemberLocal m
   let origin = useMemberOrigin m
@@ -25023,7 +25251,7 @@ attributeModuleArities mid prog entries =
 -- WS-2/D2: ifaces analog of attributeModuleArities — attribute each fn DEFINED in [prog]
 -- that carries a funConstraintIfacesRef entry to [mid], slot-parallel to the arity qual
 -- snapshot, so inferDictAtFound reads a callee's ids + ifaces from one (mid,name) source.
-attributeModuleArrIfaces : String -> List Decl -> List (String, List String) -> List ((String, String), List String)
+attributeModuleArrIfaces : String -> List Decl -> List (String, List IfaceRef) -> List ((String, String), List IfaceRef)
 -- Structural duplicate of `attributeModuleArities` above; deferred
 -- de-duplication — see #1201.
 -- lint-disable-next-line rule-duplicate-body
@@ -25070,7 +25298,7 @@ attributeModuleArrIfaces mid prog entries =
 --
 -- Re-export entries come SECOND so the module's own top-level binding wins the first-match
 -- dedup below if a module somehow both defines and re-exports one name.
-attributeModuleSchemeObls : String -> List Decl -> List ((String, String), List (String, List Int)) -> List ((String, Int), List (String, List Int)) -> List ((String, String), List (String, List Int))
+attributeModuleSchemeObls : String -> List Decl -> List ((String, String), List VecObl) -> List ((String, Int), List VecObl) -> List ((String, String), List VecObl)
 attributeModuleSchemeObls mid prog qual entries = attributeSchemeOblsGo mid (namesToSet (publicValNames prog) omEmpty) omEmpty entries
   ++ map (e => ((mid, fst e), snd e)) (reexportSchemeOblEntries prog qual)
 
@@ -25089,7 +25317,7 @@ attributeModuleSchemeObls mid prog qual entries = attributeSchemeOblsGo mid (nam
 -- ⚠️ `export import src as A` contributes entries keyed `A.<name>`, which no importer of
 -- THIS module can name (an alias is local to the file that writes it).  They are inert
 -- rather than wrong, and excluding them would mean a second spelling table.
-reexportSchemeOblEntries : List Decl -> List ((String, String), List (String, List Int)) -> List (String, List (String, List Int))
+reexportSchemeOblEntries : List Decl -> List ((String, String), List VecObl) -> List (String, List VecObl)
 reexportSchemeOblEntries [] _ = []
 reexportSchemeOblEntries ((DAttrib _ d)::rest) qual = reexportSchemeOblEntries [d] qual
   ++ reexportSchemeOblEntries rest qual
@@ -25097,7 +25325,7 @@ reexportSchemeOblEntries ((DUse True path _)::rest) qual = schemeOblEntriesFor (
   ++ reexportSchemeOblEntries rest qual
 reexportSchemeOblEntries (_::rest) qual = reexportSchemeOblEntries rest qual
 
-attributeSchemeOblsGo : String -> OrdMap Unit -> OrdMap Unit -> List ((String, Int), List (String, List Int)) -> List ((String, String), List (String, List Int))
+attributeSchemeOblsGo : String -> OrdMap Unit -> OrdMap Unit -> List ((String, Int), List VecObl) -> List ((String, String), List VecObl)
 attributeSchemeOblsGo _ _ _ [] = []
 attributeSchemeOblsGo mid progNames seen (e::rest)
   | not (omHasKey (fst (fst e)) progNames) =

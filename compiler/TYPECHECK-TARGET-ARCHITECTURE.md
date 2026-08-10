@@ -1995,6 +1995,124 @@ stays accepted, and A-3.7 (not A-3.4) is where it is at risk. Do not tidy it.
 
 ---
 
+## 10. U1b — the vector-obligation predicate's interface half: the naming contract
+
+Landed by the PR that implements **#1482**. This section exists so the contract is
+defended by `make docs-links` / `make agent-doc-symbols` instead of by an issue comment.
+
+### 10.1 Three meanings, one shape — and how the shape stopped being ambiguous
+
+Before U1b, `compiler/types/typecheck.mdk` used `(String, List Int)` for **two unrelated
+things**, 58 lines apart, with only a convention keeping them out of each other's readers:
+
+| | table | payload before | the `String` meant |
+|---|---|---|---|
+| **M1** | `schemeObligationsRef` (+ `coreSchemeObligationsRef`, `crossModuleSchemeOblsQualRef`, `importedSchemeOblsRef`) | `List (String, List Int)` | **interface name** + scheme-var id vector |
+| **M2** | `funConstraintsRef` (+ `methodConstraintsRef`, `scopeArities`, …) | `List (String, List Int)` | **function name** + its dict-slot ids |
+| **M3** | `funConstraintIfacesRef` (+ its two mirrors) | `List (String, List String)` | **function name** + slot-parallel interface names |
+
+U1b widens M1's and M3's **interface** half to the identity-carrying `IfaceRef` (#1446 P1):
+
+- **M1 → `VecObl { voIface : IfaceRef, voIds : List Int }`**;
+- **M3 payload → `List IfaceRef`** (no record: a bare list is already unambiguous);
+- **M2 → UNCHANGED.** It is #1425's substrate (`checkModuleFullImpl`'s bare seed,
+  `scopeArities`, `attributeModuleArities`); re-typing it under an open S1 mid-excavation
+  buys nothing here.
+
+**The widening IS the disambiguation.** With M1 out of `(String, List Int)`, the fn-name
+meaning is that shape's only inhabitant, so passing one family's value to the other
+family's reader is an ordinary type error in the compiler's own typechecker — defended by
+`make check-self` and `test/typecheck_compiler_source.sh`, not by a naming convention. No
+`type` alias was introduced: this file has none, and an alias carries no nominal identity
+the compiler could check.
+
+### 10.2 The pairing point — `CSlot` and `pairSlots`
+
+`qualConstraintFor` used to return `(List Int, List String)` built from **two independent
+table lookups, each defaulting to `[]`**, so a hit on one with a miss on the other produced
+a slot-parallel length mismatch **by construction**. Three separate downstream zips then
+truncated it away silently, each carrying a comment saying it did so — the comments were
+there and the family grew anyway.
+
+U1b makes the mismatch unrepresentable **downstream of one function**:
+
+- `data CSlot = CSlot { csIface : IfaceRef, csId : Int }`;
+- `pairSlots : List Int -> List IfaceRef -> List CSlot` is the ONLY place an id list meets
+  an interface list, and the mismatch policy lives there, once;
+- `qualConstraintFor : String -> Option (List CSlot)` and
+  `declaredConstraintSlots : String -> List CSlot`;
+- **`shatterVecObls` is deleted** (its zip is gone; `vecOblsOfSlots` lifts already-paired
+  slots), and `recordCallObligations` / `expandSupersEntry` / `shadowStandaloneDictSlots`
+  each lose one of their two parallel lists.
+
+**Policy: truncation is preserved byte-for-byte.** Diagnosing a mismatch instead is only
+safe once someone has MEASURED that no real program reaches one; that experiment is not
+done, so the default stands.
+
+### 10.3 What stays keyed by SPELLING, deliberately
+
+Carrying identity is not the same as *asking* an identity question. These readers keep
+comparing `irName`, and each would change behaviour if re-keyed:
+
+- every **display** surface (`ppSchemeCon` / `renderConstraintCtx`) — otherwise every
+  rendered `Num a =>` moves;
+- the **dedup/coverage** currency (`vecOblKey`, `containsVecObl`, `pairsOfVecObls`,
+  `cslotKey`, `censusSuperSlotsOf`) — `cslotKey` decides how many dict slots a constrained
+  fn has, so an identity key would move emitted dict **arity**;
+- the **routing** goal (`pushDictApp`'s iface component, `resolveDictApps`) — a route word
+  against the spelling-keyed `KeyBuckets`, kept that way by #1317 T1 / the closed S0 #1277;
+- `groupConstraintMonosRef`, whose only reader compares interface names.
+
+### 10.4 The bare compatibility leg: CORRECTED drain condition
+
+`insertUnivImplKeys`'s in-source comment said *"both `ifaceRefBare` call sites disappear …
+delete it then, and #1438 drains with it."* **It counted two against a set of three**, and
+keyed a destructive instruction on a condition no single unit would satisfy. U1b retires
+the two it named; **the leg stays**, because `recordImplObligation`'s method-occurrence
+goal still mints a bare `IfaceRef`. That producer is **#1507** — a decl-layer /
+occurrence-layer reconciliation, not a table widening. Do not delete the leg on a count in
+prose: `grep -n ifaceRefBare compiler/types/typecheck.mdk`, and delete it only when every
+remaining hit is the definition itself.
+
+### 10.5 Measured: #1438's PINNED INSTANCE drained at U1b; the CLASS did not
+
+The scope ruling on #1482 predicted #1438 would drain at #1507. **Half of that is false and
+half is true, and conflating them is the trap.** Both halves are MEASURED on a cold-built
+binary of the implementing branch.
+
+- **The pinned instance drained at U1b.** #1438's repro uses a SIGNED forwarder
+  (`useBulk : Sizer b => b -> Int`), so its goal comes from the signature `=>` slot —
+  `qualConstraintFor` → `declaredCrossModuleObls` → `recordSchemeCallObligations`, U1b's
+  channel. It now rejects (`No impl of Sizer for Int`, exit 1); its `must_fail` pin flipped
+  green and was replaced by the positive rows
+  `test/dict_fixtures/i4-xmod-sig-constraint-{foreign-iface-rejected,own-iface-control}`.
+- **The class did not.** Delete one line — the forwarder's signature — and the same program
+  is a silent accept again: `check` exit 0, `run` E-PANIC `unbound identifier: bulk`,
+  `build` exit 0, and **the built binary segfaults at 139**. The goal is then posed by a
+  bare METHOD OCCURRENCE, `recordImplObligation`'s producer, which #1507 owns and which
+  still mints `ifaceRefBare`. Pinned at
+  `test/must_fail_fixtures/1507-xmod-iface-name-collision-method-occurrence/` — the minimal
+  pair of the deleted fixture, and the only assertion of that S0 in the tree.
+
+⇒ **#1438 stays OPEN**, its remaining reach is guarded under #1507, and the bare
+compatibility leg may be withdrawn only when that unit lands.
+
+⚠️ This section originally read *"#1438 drained HERE, not at #1507"*. That came from a
+fixture flipping green, which is evidence about an instance and never about a class — the
+same distinction PR #1480's body drew for itself one unit earlier. It was caught in
+adversarial review by someone building the variant the fixtures did not cover, which is the
+cheapest check available and the one a green corpus cannot perform for you.
+
+### 10.6 Not settled here
+
+- **Coherence still keys the interface half by SPELLING** while the obligation channel now
+  keys it by identity, so the two checkers disagree about whether two same-spelled
+  interfaces are one class. A-3.7 owns it; U1b widens the gap rather than closing it.
+- The `ifaceForInferredId` fallback that recovers a slot's interface from `pendingDictApps`
+  is bare **by construction** — that channel stores route words (§10.3).
+
+---
+
 ## References
 
 - [`TYPECHECK-ARCHITECTURE.md`](TYPECHECK-ARCHITECTURE.md) — the derived map this design targets
