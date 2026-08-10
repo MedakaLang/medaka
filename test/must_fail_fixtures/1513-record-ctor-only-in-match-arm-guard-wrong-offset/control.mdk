@@ -1,0 +1,26 @@
+-- The control for #1513: byte-for-byte main.mdk with EXACTLY ONE variable
+-- flipped -- the `B { k = 7, q = 99 }` construction is moved out of the arm's
+-- GUARD and into the arm's BODY, which `scanArmsRecords` does scan.  `B` is
+-- therefore in the emitter's table, `getK` gets `B`'s own index 0, and the
+-- built binary prints the correct `7`.
+--
+-- Same records, same field names, same indices, same `getK`, same printer, same
+-- literals.  If THIS breaks, record field selection or the native build
+-- regressed generally -- that is CONTROL-BROKE, never "#1513 was fixed".
+data A = A { p : Int, k : Int }
+data B = B { k : Int, q : Int }
+
+getK : B -> Int
+getK b = b.k
+
+readK : Int -> Int
+readK n = match n
+  0 =>
+    let b = B { k = 7, q = 99 }
+    getK b
+  _ => 0
+
+main =
+  let a = A { p = 10, k = 5 }
+  let _ = println a.k
+  println (readK 0)
