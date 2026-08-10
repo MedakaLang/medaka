@@ -66,6 +66,8 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 EMITBIN="$ROOT/test/bin/llvm_emit_typed_main"
 RUNTIME="$ROOT/stdlib/runtime.mdk"
 FIXDIR="$ROOT/test/llvm_fixtures_typed"
+RT="$ROOT/runtime/medaka_rt.c"
+CC="${CC:-clang}"
 
 # ── Per-fixture worker (parallel fan-out target); shared state via env ─────────
 if [ "${1:-}" = "--one" ]; then
@@ -145,17 +147,35 @@ if [ "${CAPTURE:-0}" = "1" ]; then
 else
   printf '\nchecked %d, %d ok, %d failing\n' "$n_fixtures" "$pass" "$fail"
   [ "$fail" -eq 0 ] || exit 1
-  # Same-process P -> U -> P control.  The regular workers each launch a fresh
-  # process, so they cannot detect an ambient table surviving a prior emission.
-  # Reuse the first two typed fixtures rather than adding a shared-corpus fixture.
-  set -- $fixtures
-  p="$1"; u="$2"
-  [ -n "${u:-}" ] || { echo "FAIL: isolation control needs two typed fixtures"; exit 1; }
-  "$EMITBIN" --isolation "$RUNTIME" "$p" "$u" > "$WORK/isolation.ll" 2> "$WORK/isolation.err"
+  # Same-process P -> U -> P control. U overlaps P's interface/method namespace,
+  # while the positive program explicitly selects U and must print 11, not P's 7.
+  # These private temp files are not a shared fixture corpus.
+  command -v "$CC" >/dev/null 2>&1 || { echo "FAIL: no C compiler for isolation control"; exit 1; }
+  if command -v pkg-config >/dev/null 2>&1 && pkg-config --exists bdw-gc 2>/dev/null; then
+    GC_CFLAGS="$(pkg-config --cflags bdw-gc)"; GC_LIBS="$(pkg-config --libs bdw-gc)"
+  elif GC_PREFIX="$(brew --prefix bdw-gc 2>/dev/null)" && [ -n "$GC_PREFIX" ] && [ -f "$GC_PREFIX/include/gc.h" ]; then
+    GC_CFLAGS="-I$GC_PREFIX/include"; GC_LIBS="-L$GC_PREFIX/lib -lgc"
+  else
+    GC_CFLAGS=""; GC_LIBS="-lgc"
+  fi
+  ISO="$WORK/isolation"; mkdir "$ISO"
+  printf '%s\n' 'interface Mark a where' '  mark : a -> Int' 'data P = P' 'impl Mark P where' '  mark P = 7' 'main = mark P' > "$ISO/p.mdk"
+  printf '%s\n' 'interface Mark a where' '  mark : a -> Int' 'data U = U' 'impl Mark U where' '  mark U = 11' 'main = mark U' > "$ISO/u.mdk"
+  printf '%s\n' 'interface Mark a where' '  mark : a -> Int' 'data P = P' 'data U = U' 'impl Mark P where' '  mark P = 7' 'impl Mark U where' '  mark U = 11' 'main = mark U' > "$ISO/positive.mdk"
+  "$EMITBIN" --isolation "$RUNTIME" "$ISO/p.mdk" "$ISO/u.mdk" > "$ISO/isolation.ll" 2> "$ISO/isolation.err"
   isolation_rc=$?
   if [ "$isolation_rc" -ne 0 ]; then
-    printf 'FAIL: same-process EmitInput isolation control\n%s\n' "$(cat "$WORK/isolation.err")"
+    printf 'FAIL: same-process EmitInput isolation control\n%s\n' "$(cat "$ISO/isolation.err")"
     exit 1
   fi
-  printf 'checked same-process EmitInput isolation (%s -> %s -> %s)\n' "$(basename "$p")" "$(basename "$u")" "$(basename "$p")"
+  for n in p u positive; do
+    "$EMITBIN" "$RUNTIME" "$ISO/$n.mdk" > "$ISO/$n.ll" 2> "$ISO/$n.err" || { cat "$ISO/$n.err"; exit 1; }
+    "$CC" $GC_CFLAGS "$ISO/$n.ll" "$RT" $GC_LIBS -lm -o "$ISO/$n.bin" || exit 1
+  done
+  p_out="$("$ISO/p.bin")"; u_out="$("$ISO/u.bin")"; positive_out="$("$ISO/positive.bin")"
+  [ "$p_out" = 7 ] && [ "$u_out" = 11 ] && [ "$positive_out" = 11 ] || {
+    printf 'FAIL: isolation control expected P=7 U=11 P+U=11; got P=%s U=%s P+U=%s\n' "$p_out" "$u_out" "$positive_out"
+    exit 1
+  }
+  printf 'checked same-process EmitInput isolation (P -> U -> P; P=7, P+U=11)\n'
 fi

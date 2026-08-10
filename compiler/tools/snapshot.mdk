@@ -192,7 +192,7 @@ import types.typecheck.{
 import eval.eval.{evalOneOutput, funNamesOf, dropShadowedExp, noMainMsg}
 import backend.llvm_emit.{
   emitProgram,
-  EmitInput(..),
+  makeEmitInput,
   enableGapRecord,
   resetGaps,
   gapEvents,
@@ -203,6 +203,7 @@ import backend.llvm_emit.{
 -- shim that existed solely because Medaka had no import aliasing.)
 import backend.wasm_emit.{
   emitProgram as wasmText,
+  installMethodIface,
   installDeclRetTypes,
   installCtorFloatFields,
   enableGapRecordW,
@@ -627,20 +628,7 @@ emitBoth root sel runtimeDecls userDecls =
 
 llvmOf : List Decl -> List Decl -> CProgram -> String
 llvmOf runtimeDecls allDecls cp =
-  let input = EmitInput {
-    returnsSelf = returnsSelfTable allDecls,
-    selfFnParams = selfFnParamTable allDecls,
-    methodIfaces = methodIfaceTable allDecls,
-    methodConstraintIfaces = methodConstraintIfaces allDecls,
-    ctorFieldTypes = ctorFieldTypeNames allDecls,
-    declSigTypes = declSigTypeNames runtimeDecls ++ declSigTypeNames allDecls,
-    mainIsUnit = mainTypeIsUnit (),
-    mainIsFloat = mainTypeIsFloat (),
-    emitHalf = 0,
-    preludeBinds = [],
-    preludeImpls = [],
-    srcName = "",
-  }
+  let input = makeEmitInput (returnsSelfTable allDecls) (selfFnParamTable allDecls) (methodIfaceTable allDecls) (methodConstraintIfaces allDecls) (ctorFieldTypeNames allDecls) (declSigTypeNames runtimeDecls ++ declSigTypeNames allDecls) (mainTypeIsUnit ()) (mainTypeIsFloat ()) 0 [] [] ""
   let _ = resetGaps ()
   let _ = enableGapRecord ()
   let text = emitProgram input cp
@@ -648,6 +636,7 @@ llvmOf runtimeDecls allDecls cp =
 
 wasmOf : List Decl -> List Decl -> CProgram -> String
 wasmOf runtimeDecls allDecls cp =
+  let _ = installMethodIface (methodIfaceTable allDecls)
   let _ = installDeclRetTypes (declSigTypeNames runtimeDecls ++ declSigTypeNames allDecls)
   let _ = installCtorFloatFields (ctorFieldTypeNames allDecls)
   let _ = resetGapsW ()

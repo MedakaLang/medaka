@@ -42,7 +42,7 @@ import ir.core_ir_lower.{
   ctorFieldTypeNames,
   declSigTypeNames,
 }
-import backend.llvm_emit.{emitProgram, EmitInput(..)}
+import backend.llvm_emit.{emitProgram, makeEmitInput}
 import ir.dce.{dceFilter}
 import entries.entry_support.{driveModules, runEmitWith}
 
@@ -111,13 +111,11 @@ emitTail runtimeDecls coreD modules2 =
   let allDecls = if half == 0 then dceFilter allDecls0 else allDecls0
   let (preludeBinds, preludeImpls) = if half == 2 then preludeSymsOf coreD else ([], [])
   let _ = preludeReturnPosDictNames coreD allDecls ++ preludeArgPosDictNames coreD allDecls ++ constrainedSigNames allDecls
-  let input = EmitInput {
-    returnsSelf = returnsSelfTable allDecls, selfFnParams = selfFnParamTable allDecls,
-    methodIfaces = methodIfaceTable allDecls, methodConstraintIfaces = methodConstraintIfaces allDecls,
-    ctorFieldTypes = ctorFieldTypeNames allDecls, declSigTypes = declSigTypeNames runtimeDecls ++ declSigTypeNames allDecls,
-    mainIsUnit = mainTypeIsUnit (), mainIsFloat = mainTypeIsFloat (), emitHalf = half,
-    preludeBinds = preludeBinds, preludeImpls = preludeImpls, srcName = srcNameFromArgs (args ()),
-  }
+  let input = makeEmitInput
+    (returnsSelfTable allDecls) (selfFnParamTable allDecls) (methodIfaceTable allDecls)
+    (methodConstraintIfaces allDecls) (ctorFieldTypeNames allDecls)
+    (declSigTypeNames runtimeDecls ++ declSigTypeNames allDecls)
+    (mainTypeIsUnit ()) (mainTypeIsFloat ()) half preludeBinds preludeImpls (srcNameFromArgs (args ()))
   putStr (emitProgram input (lowerProgramEmit allDecls))
 -- Module-qualify module-PRIVATE top-level functions whose bare name collides
 -- across units, BEFORE elaborateModules flattens the boundaries away (same

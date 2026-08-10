@@ -59,7 +59,7 @@ import ir.core_ir_lower.{
 }
 import ir.dce.{dceFilter}
 import backend.private_mangle.{mangleUnits}
-import backend.llvm_emit.{emitProgram, EmitInput(..)}
+import backend.llvm_emit.{emitProgram, makeEmitInput}
 -- `backend.wasm_emit` is the SECOND backend, and it exports its own `emitProgram`,
 -- `installMethodIface` and `installMainIsFloatHint` — all three collide with the LLVM
 -- names above. Aliased on import, exactly as tools/snapshot.mdk does for the same
@@ -224,13 +224,12 @@ runStaged on targetPath rsrc csrc tsrc =
   let dictNames = preludeReturnPosDictNames livePrelude combined
         ++ preludeArgPosDictNames livePrelude combined
         ++ constrainedSigNames desugared
-  let input = EmitInput {
-    returnsSelf = returnsSelfTable combined, selfFnParams = selfFnParamTable combined,
-    methodIfaces = methodIfaceTable combined, methodConstraintIfaces = methodConstraintIfaces combined,
-    ctorFieldTypes = ctorFieldTypeNames combined, declSigTypes = declSigTypeNames rDecls ++ declSigTypeNames combined,
-    mainIsUnit = mainTypeIsUnit (), mainIsFloat = mainTypeIsFloat (), emitHalf = 0,
-    preludeBinds = [], preludeImpls = [], srcName = targetPath,
-  }
+  -- Input indexing is elaboration work; keep it outside the emit timer.
+  let input = makeEmitInput
+    (returnsSelfTable combined) (selfFnParamTable combined) (methodIfaceTable combined)
+    (methodConstraintIfaces combined) (ctorFieldTypeNames combined)
+    (declSigTypeNames rDecls ++ declSigTypeNames combined)
+    (mainTypeIsUnit ()) (mainTypeIsFloat ()) 0 [] [] targetPath
   let elaborated = elaborateDict rDecls dictNames userNames combined
   let tEl1 = now ()
   let _ = emitPhaseAO on "elaborate" (tEl1 - tEl0) (allocSnap () - aEl0) declsOp (opSnap () - oEl0)

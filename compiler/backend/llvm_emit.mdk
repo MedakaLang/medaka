@@ -264,8 +264,6 @@ import backend.emit_support.{
   bindEagerReach,
   bindNameMap,
   lazyGlobalNames,
-  methodIfaceOfIn,
-  methodArityOfIn,
   isDictParamName,
   ftPrefix,
   ftLabelOf,
@@ -520,6 +518,16 @@ lookupSelfFnParams iface method (((i, m), p)::rest)
 --     dispatch tag, so a partially-applied inner method lowers to a direct
 --     `@mdk_impl_<tag>_<method>` call instead of an un-dispatchable arg-tag site.
 -- Keyed by BARE method name (interface method names are distinct in the prelude).
+methodIfaceOfInput : Emit -> String -> String
+methodIfaceOfInput e method = match omLookup method e.input.methodIfaceIndex
+  Some (iface, _) => iface
+  None => ""
+
+methodArityOfInput : Emit -> String -> Int
+methodArityOfInput e method = match omLookup method e.input.methodIfaceIndex
+  Some (_, arity) => arity
+  None => 0
+
 -- ── method → method-level constraint INTERFACE names (native backend, G7) ────
 -- Per interface method that carries a method-level `=>` constraint, the interface
 -- names of those constraints IN SLOT ORDER (the order typecheck fills the method
@@ -539,22 +547,19 @@ methodConstraintIfacesOf e method = match lookupAssoc method e.input.methodConst
 -- `bindFields` reads it to type a match-bound field VARIABLE from the ctor's
 -- DECLARED field type rather than guessing from body-use (`paramUseTy`, which
 -- defaults a Float field to LTInt → integer arith on a boxed-Float pointer-word →
--- SIGSEGV; Gap E2).  Installed before emitProgram/emitProgramGaps (module-level
--- Ref, mirroring returnsSelfTableRef); empty default ⇒ no field is overridden ⇒
--- unchanged pre-change behaviour.
+-- SIGSEGV; Gap E2). Carried by the explicit EmitInput; its first-match OrdMap is
+-- built once by makeEmitInput before either emit entry point begins.
 -- #352: the table above has ONE ENTRY PER CONSTRUCTOR in the program, and
 -- `ctorFieldTypeNamesOf` is called from `bindPattern` for EVERY constructor pattern
 -- the emitter binds — so the `lookupAssoc` scan was O(patterns × ctors) = O(N²).
 -- Measured on an N-ctor / N-arm `match` shape (profile_main, emit stage, prelude
 -- constant subtracted): counted-op ratio r1=3.63 r2=3.80 per doubling at
 -- N=250/500/1000, and `perf --call-graph dwarf` names `bindPattern → lookupAssoc`
--- as the caller. Indexed at the SINGLE install point so it can never go stale;
--- `reverseL` makes the FIRST list entry win on a duplicate ctor name, matching the
--- `lookupAssoc` first-match it replaces. Uninstalled (None) it falls back to the
--- linear scan — identical answer either way, so the emitted IR is byte-identical.
+-- as the caller. `makeEmitInput` indexes it once with `reverseL`, preserving the
+-- FIRST entry on duplicate constructors exactly as `lookupAssoc` did.
 -- the declared field type-head names of a constructor, or [] if unknown.
 ctorFieldTypeNamesOf : Emit -> String -> List String
-ctorFieldTypeNamesOf e con = match omLookup con e.ctorFieldTypes
+ctorFieldTypeNamesOf e con = match omLookup con e.input.ctorFieldIndex
   Some names => names
   None => []
 
@@ -578,12 +583,10 @@ fieldNameToLTy _ = None
 -- type when it is a known scalar, winning over the body-use guess (`paramUseTy`,
 -- which for a literal-free annotated body like `double x = x + x` finds no Float
 -- anchor → LTInt → integer arith on a boxed-Float word → garbage; Gap E1).
--- Installed before emitProgram/emitProgramGaps (module-level Ref, mirroring
--- ctorFieldTypesRef); empty default ⇒ no fn is seeded ⇒ unchanged pre-change
--- behaviour.  ADDITIVE: only known-scalar declared params/returns override; an
+-- Carried by EmitInput and indexed once by makeEmitInput. ADDITIVE: only known-
+-- scalar declared params/returns override; an
 -- unannotated fn / non-scalar declared type falls through to the existing guess.
--- Index over `declSigTypesRef`, built at the single install point below so it can
--- never go stale. `reverseL` makes the FIRST list entry win on a duplicate key,
+-- The constructor's `reverseL` index makes the FIRST list entry win on a duplicate key,
 -- matching the `lookupAssoc` first-match it replaces (the table is
 -- `runtimeDecls ++ allDecls`, so a runtime decl shadows a same-named user decl —
 -- preserving that order is load-bearing). The table is set once per emit run and
@@ -593,7 +596,7 @@ fieldNameToLTy _ = None
 -- None when it has no annotation.  Falls back to the linear scan only when the
 -- index is uninstalled (mirrors `sigLookup`).
 declSigOf : Emit -> String -> Option (List String, String)
-declSigOf e name = omLookup name e.declSigTypes
+declSigOf e name = omLookup name e.input.declSigIndex
 
 nthName : List String -> Int -> Option String
 nthName (x::_) 0 = Some x
@@ -769,14 +772,15 @@ data LTy =
 -- All declaration-derived semantic facts required by LLVM emission.  Callers
 -- construct this immutable value for each program; LLVM never reads installed
 -- semantic state from a previous emission.
-public export data EmitInput =
-  | EmitInput {
+data EmitInputData =
+  | EmitInputData {
       returnsSelf : List ((String, String), Bool),
       selfFnParams : List ((String, String), List Int),
       methodIfaces : List (String, (String, Int)),
+      methodIfaceIndex : OrdMap (String, Int),
       methodConstraintIfaces : List (String, List String),
-      ctorFieldTypes : List (String, List String),
-      declSigTypes : List (String, (List String, String)),
+      ctorFieldIndex : OrdMap (List String),
+      declSigIndex : OrdMap (List String, String),
       mainIsUnit : Bool,
       mainIsFloat : Bool,
       emitHalf : Int,
@@ -785,21 +789,12 @@ public export data EmitInput =
       srcName : String,
     }
 
-export emptyEmitInput : EmitInput
-emptyEmitInput = EmitInput {
-  returnsSelf = [],
-  selfFnParams = [],
-  methodIfaces = [],
-  methodConstraintIfaces = [],
-  ctorFieldTypes = [],
-  declSigTypes = [],
-  mainIsUnit = False,
-  mainIsFloat = False,
-  emitHalf = emitHalfWhole,
-  preludeBinds = [],
-  preludeImpls = [],
-  srcName = "",
-}
+-- The constructor is intentionally private: callers supply raw declaration facts
+-- once, and this boundary builds the first-match indexes exactly once per emission.
+export type EmitInput = EmitInputData
+
+export makeEmitInput : List ((String, String), Bool) -> List ((String, String), List Int) -> List (String, (String, Int)) -> List (String, List String) -> List (String, List String) -> List (String, (List String, String)) -> Bool -> Bool -> Int -> List String -> List (String, String) -> String -> EmitInput
+makeEmitInput returnsSelf selfFnParams methodIfaces methodConstraintIfaces ctorFieldTypes declSigTypes mainIsUnit mainIsFloat emitHalf preludeBinds preludeImpls srcName = EmitInputData { returnsSelf = returnsSelf, selfFnParams = selfFnParams, methodIfaces = methodIfaces, methodIfaceIndex = omFromPairs (reverseL methodIfaces) omEmpty, methodConstraintIfaces = methodConstraintIfaces, ctorFieldIndex = omFromPairs (reverseL ctorFieldTypes) omEmpty, declSigIndex = omFromPairs (reverseL declSigTypes) omEmpty, mainIsUnit = mainIsUnit, mainIsFloat = mainIsFloat, emitHalf = emitHalf, preludeBinds = preludeBinds, preludeImpls = preludeImpls, srcName = srcName }
 
 data Emit =
   | Emit {
@@ -814,8 +809,6 @@ data Emit =
       implEntries : Ref (List CImplEntry),
       ctorTypes : Ref (List (String, String)),
       globalsReg : Ref (List (String, (Bool, LTy))),
-      ctorFieldTypes : OrdMap (List String),
-      declSigTypes : OrdMap (List String, String),
     }
 
 -- a function's inferred signature: its parameter types (in order) and its return
@@ -4323,7 +4316,7 @@ emitMethod e env name route implRoutes methRoutes argOps
   -- RDict/RDictFwd analogue.  The PAP captures the route's dict word(s) + the
   -- supplied args; its forwarder rebinds them and re-emits the saturated dispatch.
   | dictRoutedUnderApplied e route name argOps =
-      emitMethodPap e env name route implRoutes methRoutes argOps (methodArityOfIn e.input.methodIfaces name)
+      emitMethodPap e env name route implRoutes methRoutes argOps (methodArityOfInput e name)
 emitMethod e env name (RKey tag _) implRoutes methRoutes argOps = match implFor e name tag
   Some entry =>
     let dictWords = dictWordsOf e env (methRoutes ++ implRoutes)
@@ -4337,7 +4330,7 @@ emitMethod e env name (RKey tag _) implRoutes methRoutes argOps = match implFor 
       e
       (implFnName (implFnSymE e name entry) name)
       (dictWords ++ argOps)
-      (methodArityOfIn e.input.methodIfaces name + lengthS dictWords)
+      (methodArityOfInput e name + lengthS dictWords)
       resTy
   None => emitGeneralRKey e env name tag methRoutes implRoutes argOps
 emitMethod e env name (RDict d) implRoutes methRoutes argOps =
@@ -4439,8 +4432,8 @@ methValArity : Emit -> String -> Route -> Int
 methValArity e name (RLocal sym dicts) =
   let target = if sym == "" then name else sym
   let a = fnArity e target - listLen dicts
-  if a <= 0 then methodArityOfIn e.input.methodIfaces name else a
-methValArity e name _ = methodArityOfIn e.input.methodIfaces name
+  if a <= 0 then methodArityOfInput e name else a
+methValArity e name _ = methodArityOfInput e name
 
 -- the dict-witness param name(s) a route reads at runtime (the names whose words the
 -- value-closure must capture so the lifted body can rebind them).  Only RDict/
@@ -4538,9 +4531,9 @@ emitDictValDefine e lamName name nDicts valArity =
 -- paths, so they are excluded here and keep their existing lowering.)
 dictRoutedUnderApplied : Emit -> Route -> String -> List String -> Bool
 dictRoutedUnderApplied e (RDict _) name argOps =
-  lengthS argOps < methodArityOfIn e.input.methodIfaces name
+  lengthS argOps < methodArityOfInput e name
 dictRoutedUnderApplied e (RDictFwd _) name argOps =
-  lengthS argOps < methodArityOfIn e.input.methodIfaces name
+  lengthS argOps < methodArityOfInput e name
 dictRoutedUnderApplied _ _ _ _ = False
 
 -- E22: build the residual PAP closure for an under-applied dict-routed method.
@@ -4615,7 +4608,7 @@ emitDefaultRKey e env name tag methRoutes implRoutes argOps = match defaultForAt
     let fname = defaultFnName tag name
     let _ = ensureDefaultEmitted e fname tag name entry
     let dictWords = dictWordsOf e env (methRoutes ++ implRoutes)
-    let resTy = if methodReturnsSelf e (methodIfaceOfIn e.input.methodIfaces name) name then
+    let resTy = if methodReturnsSelf e (methodIfaceOfInput e name) name then
       tagToLTy tag
     else
       LTInt
@@ -4648,7 +4641,7 @@ emitGeneralRKey e env name tag methRoutes implRoutes argOps = match findByTag no
       e
       (implFnName (implFnSymE e name entry) name)
       (dictWords ++ argOps)
-      (methodArityOfIn e.input.methodIfaces name + lengthS dictWords)
+      (methodArityOfInput e name + lengthS dictWords)
       resTy
   None => emitDefaultRKey e env name tag methRoutes implRoutes argOps
 -- Native Gap C (parametric default-method dict-synthesis, 2026-06-12): a
@@ -4921,7 +4914,7 @@ soleImplDirect e name = match implsOf e name
 defaultReachesOtherTags : Emit -> String -> CImplEntry -> Bool
 defaultReachesOtherTags e name ent = match defaultFor e name
   None => False
-  Some _ => isNonEmptyL (tagsMinus (ifaceTags e (methodIfaceOfIn e.input.methodIfaces name)) (implEntryTags e [ent]))
+  Some _ => isNonEmptyL (tagsMinus (ifaceTags e (methodIfaceOfInput e name)) (implEntryTags e [ent]))
 
 -- The SITE-level form of the same test.  In prelude-object mode a dict-routed
 -- site must NOT bake an impl decision into its enclosing define, because that
@@ -5209,14 +5202,14 @@ emitDispatchBody e name dictPtr methWords argOps =
   let endL = "dispend" ++ intToString (freshLocal e)
   let _ = match impls
     [] => match defaultFor e name
-      Some entry => emitDefaultDispatchChain e dictPtr headTag (ifaceTags e (methodIfaceOfIn e.input.methodIfaces name)) name entry argOps slot endL
+      Some entry => emitDefaultDispatchChain e dictPtr headTag (ifaceTags e (methodIfaceOfInput e name)) name entry argOps slot endL
       None => emitDispatchChain e dictPtr headTag impls name methWords argOps slot endL
     _ => match defaultFor e name
       -- MIXED default+impls: append default-synthesis arms for interface tags with no
       -- explicit impl (derived-Ord ADTs inheriting `max`/`min` from the default).
       Some entry =>
         let covered = implEntryTags e impls
-        let uncovered = tagsMinus (ifaceTags e (methodIfaceOfIn e.input.methodIfaces name)) covered
+        let uncovered = tagsMinus (ifaceTags e (methodIfaceOfInput e name)) covered
         match uncovered
           [] => emitDispatchChain e dictPtr headTag impls name methWords argOps slot endL
           _ => emitDispatchChainDefaulted e dictPtr headTag impls uncovered name entry methWords argOps slot endL
@@ -5329,8 +5322,7 @@ emitDefaultDispatchChain e dictPtr headTag (tag::rest) name entry argOps slot en
 -- equals the number of per-instance `requires` dicts stored in the boxed dict cell
 -- (fields 1..count), so the chain loads exactly that many and prepends them.
 implReqCount : Emit -> String -> CImplEntry -> Int
-implReqCount e name ent =
-  listLen (implPats ent) - methodArityOfIn e.input.methodIfaces name
+implReqCount e name ent = listLen (implPats ent) - methodArityOfInput e name
 
 -- load `n` nested dict words from the boxed dict cell `dictPtr`.  The head tag is
 -- the cell header (offset 0); the nested req dicts are fields 0..n-1 (loadField i ⇒
@@ -5572,7 +5564,7 @@ emitMethodArgDispatch e method argOps =
   let groups = implGroupsForMethod e method
   match groups
     [] => emitDefaultArgTag e method argOps
-    [g] => emitImplCallSat e (implFnName (groupSymTag g) method) argOps (methodArityOfIn e.input.methodIfaces method) LTInt
+    [g] => emitImplCallSat e (implFnName (groupSymTag g) method) argOps (methodArityOfInput e method) LTInt
     _ => emitArgTagDispatch e method groups argOps
 
 -- E19: an arg-tag site for a method with NO tagged impl groups — an interface
@@ -5941,7 +5933,7 @@ emitDefaultDefine e fname tag method entry =
   let body0 = implBody entry
   let dictIfaces = methodConstraintIfacesOf e method
   let nDicts = listLen dictIfaces
-  let arity0 = maxInt (nDicts + methodArityOfIn e.input.methodIfaces method) (listLen pats0)
+  let arity0 = maxInt (nDicts + methodArityOfInput e method) (listLen pats0)
   let (pats1, body1) = etaExpand pats0 body0 arity0 (listLen pats0)
   let nReq = innerDefaultReqCount e method tag
   let reqPats = reqDictPats nReq 0
@@ -5955,7 +5947,7 @@ emitDefaultDefine e fname tag method entry =
   if e.input.emitHalf == emitHalfPrelude then
     emitGlobal e "declare i64 @\{fname}(\{implParamDecls arity 0})"
   else
-    let bodyS = restampIfaceDicts e.input.methodIfaces (methodIfaceOfIn e.input.methodIfaces method) tag (reqDictRoutes nReq 0) body1
+    let bodyS = restampIfaceDicts e.input.methodIfaces (methodIfaceOfInput e method) tag (reqDictRoutes nReq 0) body1
     let body = restampCrossIface e.input.methodIfaces method dictIfaces bodyS
     let saved = (bufRef e).value
     let _ = setRef (bufRef e) []
@@ -6562,7 +6554,7 @@ gatherGroup e entries (method, key) =
   -- (container dropped) → SIGSEGV no longer happens.  nDicts = 0 for a concrete impl
   -- ⇒ identical to the old `maxInt (clauseArity) (methodArityOf)`.
   let nDicts = leadingDictPats (firstClausePats cls0)
-  let arity = maxInt (clauseArity cls0) (methodArityOfIn e.input.methodIfaces method + nDicts)
+  let arity = maxInt (clauseArity cls0) (methodArityOfInput e method + nDicts)
   let cls = map (etaExpandClause arity) cls0
   ImplGroup method tag symTag positions arity cls
 
@@ -6987,8 +6979,8 @@ emitExternEtaClosure e name =
 emitMethodEtaClosure : Emit -> String -> (String, LTy)
 emitMethodEtaClosure e name =
   let lamName = "mdk_eta_\{name}_\{intToString (freshId e)}"
-  let _ = emitMethodEtaDefine e lamName name (methodArityOfIn e.input.methodIfaces name)
-  emitClosureAlloc e lamName (methodArityOfIn e.input.methodIfaces name) []
+  let _ = emitMethodEtaDefine e lamName name (methodArityOfInput e name)
+  emitClosureAlloc e lamName (methodArityOfInput e name) []
 
 -- the captureless method-eta forwarder `@mdk_etaN(i64 %clos, %arg…) { <inline
 -- arg-tag dispatch over %arg0..%arg(N-1)>; ret }` (mirror of emitExternEtaDefine).
@@ -8213,15 +8205,13 @@ leadingDictPats _ = 0
 methodBodyDeficit : Emit -> CExpr -> Int
 methodBodyDeficit e (CLet _ _ _ b) = methodBodyDeficit e b
 methodBodyDeficit e (CLetGroup _ b) = methodBodyDeficit e b
-methodBodyDeficit e (CMethod name _ _ _) =
-  methodArityOfIn e.input.methodIfaces name
+methodBodyDeficit e (CMethod name _ _ _) = methodArityOfInput e name
 methodBodyDeficit e (CDict name routes) =
   maxInt 0 (fnArity e name - listLen routes)
 methodBodyDeficit e app =
   let (hd, args) = flattenApp app []
   match hd
-    CMethod name _ _ _ =>
-      maxInt 0 (methodArityOfIn e.input.methodIfaces name - listLen args)
+    CMethod name _ _ _ => maxInt 0 (methodArityOfInput e name - listLen args)
     CDict name routes =>
       maxInt 0 (fnArity e name - listLen routes - listLen args)
     _ => 0
@@ -9738,7 +9728,7 @@ inferOneSig sigs dsig (CBind _ [CClause pats body]) =
 inferOneSig sigs dsig (CBind _ (c::rest)) = inferMultiSig sigs dsig (c::rest)
 inferOneSig _ _ _ = FnSig [] LTInt
 
--- E1: a DECLARED scalar param/return type (from `declSigTypesRef`, sourced from
+-- E1: a DECLARED scalar param/return type (from EmitInput, sourced from
 -- the fn's `DTypeSig`) WINS over the body-use guess.  `seedParamTy` overrides the
 -- i-th inferred param type with its declared scalar LTy when one is known (else
 -- keeps the guess); `seedRetTy` likewise for the return.  ADDITIVE: an
@@ -9960,7 +9950,7 @@ zipParamEnv _ _ = []
 
 -- one inference pass: recompute every function's signature using the prior table.
 -- (Gap E1: each binding's DECLARED signature, looked up by name in the installed
--- `declSigTypesRef` table, seeds its param/return types over the body-use guess.)
+-- declared-signature index, seeds its param/return types over the body-use guess.)
 inferPass : OrdMap (List String, String) -> OrdMap FnSig -> List CBind -> List (String, FnSig)
 inferPass _ _ [] = []
 inferPass decls sigs (b::rest) =
@@ -10795,7 +10785,7 @@ emitProgram input (CProgram groups ctorArs ctorTypes implEntries) =
     counter = Ref (if input.emitHalf == emitHalfProgram then programHalfIdBase else 0),
     buf = Ref [],
     fnNames = Ref (collectFns groups),
-    sigs = Ref (inferSigs (omFromPairs (reverseL input.declSigTypes) omEmpty) (fnBinds groups)),
+    sigs = Ref (inferSigs input.declSigIndex (fnBinds groups)),
     ctors = Ref ctorArs,
     lams = Ref [],
     recFields = Ref (collectRecords groups),
@@ -10809,8 +10799,6 @@ emitProgram input (CProgram groups ctorArs ctorTypes implEntries) =
       initGlobalsRegReady (valBinds groups)
     else
       initGlobalsReg (valBinds groups)),
-    ctorFieldTypes = omFromPairs (reverseL input.ctorFieldTypes) omEmpty,
-    declSigTypes = omFromPairs (reverseL input.declSigTypes) omEmpty,
   }
   let _ = resetDistinctTypeNames ()
   let _ = setRef dictConstCacheRef []
@@ -11124,22 +11112,20 @@ ctag _ = "?"
 -- real prelude/compiler module carries no `main`).  Emits every fn-bind, value
 -- bind, and impl group; returns the recorded gap events ("<binding>\t<reason>").
 -- The emitted LLVM text is discarded by the probe — only the gap log matters.
-export emitProgramGaps : CProgram -> List String
-emitProgramGaps (CProgram groups ctorArs ctorTypes implEntries) =
+export emitProgramGaps : EmitInput -> CProgram -> List String
+emitProgramGaps input (CProgram groups ctorArs ctorTypes implEntries) =
   let e = Emit {
-    input = emptyEmitInput,
+    input = input,
     counter = Ref 0,
     buf = Ref [],
     fnNames = Ref (collectFns groups),
-    sigs = Ref (inferSigs omEmpty (fnBinds groups)),
+    sigs = Ref (inferSigs input.declSigIndex (fnBinds groups)),
     ctors = Ref ctorArs,
     lams = Ref [],
     recFields = Ref (collectRecords groups),
     implEntries = Ref implEntries,
     ctorTypes = Ref ctorTypes,
     globalsReg = Ref (initGlobalsRegReady (valBinds groups)),
-    ctorFieldTypes = omEmpty,
-    declSigTypes = omEmpty,
   }
   let _ = resetDistinctTypeNames ()
   let _ = setRef dictConstCacheRef []
