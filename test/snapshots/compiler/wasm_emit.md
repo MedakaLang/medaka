@@ -1,5 +1,5 @@
 # META
-source_lines=9413
+source_lines=9414
 stages=DESUGAR,MARK
 # SOURCE
 -- WasmGC backend emitter — WASMGC-DESIGN.md §7.  Peer of `backend.llvm_emit`:
@@ -8015,7 +8015,8 @@ emitRecordRef prog env d name fields =
 
 -- field access `r.label`: cast to the record's ctor struct and struct.get the field
 -- at index (1 + its declared position).  The record ctor + its field order come from
--- the recFieldsRef table built in emitProgram.
+-- `recFieldTableW ()` — the DECLARED orders the driver installed, then the
+-- construction scan built in emitProgram behind them (#1513).
 emitFieldAccessRef : Prog -> List String -> Int -> CExpr -> String -> String -> List String
 emitFieldAccessRef prog env d ex label recName =
   match recByName (recFieldTableW ()) recName label
