@@ -1,0 +1,91 @@
+issue: 1513
+what: The LLVM emitter builds its record field-ORDER table by scanning the lowered
+what: program for CONSTRUCTION sites (`scanExprRecords`, compiler/backend/llvm_emit.mdk).
+what: A record type with no construction site in that scan is absent from the table, and
+what: `fieldIdxByName` then falls through to `findFieldIdx` -> `findRecordByLabel`, which
+what: answers with THE FIRST RECORD IN TABLE ORDER THAT OWNS THE LABEL -- a DIFFERENT
+what: record -- and emits that record's index.
+what: #1513 filed this with the wrong-offset half MEASURED AT THE IR ONLY, and stated as
+what: OWED a program in which the wrong offset is actually EXECUTED. THIS FIXTURE IS THAT
+what: PROGRAM. The gap it walks through is a SECOND hole in the scan, not the
+what: `CStringSlice` one the issue names: `scanArmsRecords` scans a match arm's BODY and
+what: never its GUARD qualifiers, so a record constructed only inside a match-arm guard
+what: exists at run time while being invisible to the table. That dissolves the tension
+what: that made an executing repro look impossible ("no construction site, yet a live
+what: value").
+what: `A.k` is at index 1 and `B.k` at index 0. `B` is constructed only in the guard, so
+what: the table holds `A` alone; `getK b = b.k` is emitted as `getelementptr i8, ptr %t0,
+what: i64 16` (index 1) instead of `i64 8` (index 0), and reads a `B` cell's `q`.
+what:
+what: MEASURED first-hand on a COLD `make medaka` of `main` @
+what: `0675ce16ad33ae1443af23858abe6cce988a71ef` (2026-08-10), each command redirected to
+what: a file with its exit code read from `$?` -- never through a pipe:
+what:   MEDAKA_STRICT=1 medaka check main.mdk    -> exit 0, no diagnostic
+what:   MEDAKA_STRICT=1 medaka run   main.mdk    -> exit 0, stdout "5\n7"   (CORRECT)
+what:   MEDAKA_STRICT=1 medaka build main.mdk    -> exit 0
+what:   the built binary                         -> exit 0, stdout "5\n99" (WRONG, SILENT)
+what: The correct answer is 5 then 7, hand-derived from the source before running
+what: anything: `a = A { p = 10, k = 5 }` so `a.k = 5`, and `B { k = 7, q = 99 }` so
+what: `getK b = 7`. `99` is `B`'s `q`, surfacing through `A`'s index for `k`.
+what: SAME DEFECT, MEMORY-UNSAFE SPELLING (measured, not pinned): with the colliding
+what: fields differently TYPED -- `data A = A { p : Int, s : String }` / `data B = B { s :
+what: String, q : Int }`, same guard shape -- the built binary dies with
+what: `runtime error [E-FATAL-SIGNAL]: fatal memory fault (segmentation fault)` at exit
+what: 139 while `medaka run` prints the correct answer at exit 0. An `Int` is read out of
+what: a slot holding a `String` pointer, from a clean typecheck. That spelling is not the
+what: pinned one only because a segfault is a coarser observable than exact bytes; the
+what: `Int` spelling pins the same defect deterministically.
+what: WASM IS NOT SILENT HERE (measured on this tree, `--target wasm` with
+what: test/bin/wasm_emit_modules_main, run under node v24 via test/wasm/run.js): the
+what: module BUILDS at exit 0 but TRAPS at run time with `instantiate failed: illegal
+what: cast` after printing `5`, because WasmGC's typed struct cast catches the wrong
+what: record type. Same table, same fallback, LOUD instead of silent -- so this pin is
+what: native-only by nature, not by omission.
+what: FIX SHAPE (from the issue): seed the table from the `DData` DECLARATIONS rather
+what: than from construction sites. The declaration is the authority on label order, it
+what: is always present, and it makes the table independent of DCE and of which
+what: expression positions the scan happens to walk. Patching `scanArmsRecords` to also
+what: scan guards would close THIS hole and leave the class open -- `scanExprRecords`'
+what: `CStringSlice` arm still binds `lo`/`hi` and scans neither, unlike its `CListSlice`
+what: and `CSlice` siblings.
+cmd: build-run main.mdk
+exit: 0
+stdout: 5
+stdout: 99
+control: build-run control.mdk
+why-fixture: SINGLE-FILE, prelude only, no module topology and no import closure. The
+why-fixture: defect needs exactly two record declarations sharing one label at different
+why-fixture: indices, plus one construction site placed where the scan does not look.
+why-fixture: `build-run` is FORCED, not preferred. `medaka run` gets this RIGHT (5 then
+why-fixture: 7, exit 0) because the interpreter resolves fields BY NAME at run time, so a
+why-fixture: `run` pin would assert the opposite of the defect. A `check` pin is useless
+why-fixture: for the same reason a correct program is: exit 0 with no diagnostic is what
+why-fixture: correct code also produces. Only the EXECUTED BINARY's stdout can see it.
+why-stdout: two lines, and BOTH are load-bearing. `5` is `a.k` through a record that IS in
+why-stdout: the table -- it proves record field selection still works generally, so this
+why-stdout: row cannot be satisfied by a compiler that broke projection outright. `99` is
+why-stdout: the defect itself, and it names WHICH slot was read: it is `B`'s `q`, reachable
+why-stdout: only through `A`'s index. Both numbers are literals in this file and nothing
+why-stdout: else in the repo can move those bytes.
+why-stdout: A FIX moves this row RED in either of the two ways a fix can land: the binary
+why-stdout: prints `5\n7` (correct offset), or `medaka build` starts rejecting/erroring
+why-stdout: (exit moves off 0, and `build-run` reports MALFORMED rather than passing).
+why-control: control.mdk flips EXACTLY ONE variable: the `B { k = 7, q = 99 }` construction
+why-control: moves from the arm's GUARD to the arm's BODY. Same two records, same field
+why-control: names, same indices, same `getK`, same printer, same literals, same arm
+why-control: structure. It is the scan's blindness to guard qualifiers, and nothing else,
+why-control: that separates the two files.
+why-control: MEASURED, and PROVEN ABLE TO FAIL rather than assumed: the control's binary
+why-control: prints `5\n7` at exit 0 -- the CORRECT answer, which `medaka run` gives for
+why-control: BOTH files. So the control is green because `B` reached the table, and the
+why-control: same program with the construction one line higher is wrong. If the control
+why-control: breaks, native record projection or the build regressed generally, and this
+why-control: gate says CONTROL-BROKE -- which can never be read as "#1513 was fixed".
+why-note: NOT a duplicate of #1468 (a `.field` selection whose receiver type has a SIBLING
+why-note: CONSTRUCTOR that does not declare the field). There the record IS in the table
+why-note: and the defect is a missing well-formedness check on the declaration; here the
+why-note: declaration is impeccable and the record is simply ABSENT from a table built by
+why-note: walking expressions. NOT a duplicate of #1382 (CLOSED) or #1216 either: those
+why-note: are bare-NAME COLLISIONS between two same-spelled records in different modules,
+why-note: i.e. the table holds the wrong entry under the right key. Here the key is
+why-note: unique and has NO entry at all, in a single file with no modules involved.
