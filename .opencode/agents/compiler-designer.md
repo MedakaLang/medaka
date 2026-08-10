@@ -31,7 +31,7 @@ For initial design:
 4. Separate observed facts from a root-cause model and state confidence.
 5. Produce an ordered implementation plan that corrects ownership, representation, or identity rather than adding narrow guards. Consider replacement versus incremental edits.
 6. Derive acceptance criteria and regression cases, including feature-plus-unrelated-code controls for global tables or AST constructors.
-7. Derive targeted verification obligations, including snapshot, selfproc LEG A, compiler-source typechecking, fixpoint, multi-engine, shared-corpus, and stale-oracle requirements where applicable.
+7. Derive targeted verification obligations, including snapshot, selfproc LEG A, compiler-source typechecking, fixpoint, multi-engine, shared-corpus, and stale-oracle requirements where applicable. For a new compiler-source snapshot, require the named snapshot gate's `--new` mode first; `--bless <path>` only rewrites an existing snapshot. For either mode, name the gate and source path, independently justify the output, inspect the generated diff, and rerun the gate.
 
 For a premise-changing replan, identify invalidated assumptions, retained work, work to revise or discard, candidate responses, and the resulting plan delta. Set `Language design decision required` to yes whenever progress requires choosing externally observable semantics not already fixed by authority; present alternatives and consequences without choosing policy for implementation convenience.
 
