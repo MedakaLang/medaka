@@ -272,14 +272,14 @@ git checkout -b <topic>
 # ... work; `make preflight` while iterating ...
 git push -u origin <topic>
 gh pr create --fill
-gh pr merge --auto --merge      # self-merges the moment all 9 checks go green
+gh pr merge --auto --merge      # self-merges when every required context is green
 ```
 
-**9 required checks:** six `gates (…)` shards, **`soundness`**, `seed-health`, `inlang`.
+**Required contexts come from the active ruleset** (derive them with the command in `AGENTS.md`).
 **0 approvals** — the checks are the gate, not a human. **No admin bypass.**
 
 - **`soundness` must never be dropped.** It runs the compiler-source typecheck + the
-  self-compile fixpoint. **All 83 gates pass on an ill-typed compiler** (`make medaka` does
+  self-compile fixpoint. **All differential gates pass on an ill-typed compiler** (`make medaka` does
   not gate on type errors) — that is exactly how a compiler with unbound constructors shipped
   to main today, with every gate green.
 - **There is a MERGE QUEUE (2026-07-13, MedakaLang org).** `gh pr merge --auto --merge` ENQUEUES; the queue tests **your

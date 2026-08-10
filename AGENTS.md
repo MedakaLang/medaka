@@ -147,11 +147,11 @@ commands remain documented below because the failure explanation still matters;
 the helper just makes the verified-correct sequence one command instead of a
 hand-rebuilt ritual.
 
-**Eleven required checks:** the **seven** `gates (…)` shards (engines · backend · tools · sqlite ·
-eval · frontend · types), `soundness`, `seed-health`, `inlang`, `wasm`. ⚠️ **A gate matching
+**Required checks are derived from the active ruleset.** They include the `gates (…)` shards plus
+soundness/product contexts. ⚠️ **A gate matching
 `test/diff_compiler_*.sh` but no shard pattern in `ci.yml` SILENTLY NEVER RUNS** —
 `diff_compiler_ci_shard_coverage.sh` catches it, and the merge queue will bounce you for it.
-⚠️ **Don't trust this count either — DERIVE it** (it said "Ten" while `wasm` was already required, #597):
+⚠️ **Derive the current set** (this used to claim "Ten" while `wasm` was already required, #597):
 ```sh
 gh api repos/MedakaLang/medaka/rulesets --jq '.[]|select(.enforcement=="active")|.id' | while read -r id; do
   gh api "repos/MedakaLang/medaka/rulesets/$id" \
