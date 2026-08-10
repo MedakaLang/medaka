@@ -267,7 +267,7 @@ fi
 
 export INNER_JOBS
 printf '%s\n' $gates \
-  | xargs -P "$JOBS" -n 1 -I{} sh "$0" --run-one {} "$RESULTDIR"
+  | xargs -P "$JOBS" -I{} sh "$0" --run-one {} "$RESULTDIR"
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 # status 9 = "phantom skip": the gate exited 2 because its oracle/binary was never

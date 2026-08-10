@@ -28,7 +28,8 @@ Read root and nested `AGENTS.md`. Optimize correctness signal per runtime. Use `
 For snapshots:
 
 - Establish expected output independently from accepted semantics and plan.
-- Bless only through `sh test/diff_compiler_snapshot_<suite>.sh --bless <path>` for a named path.
+- Create a missing compiler-source snapshot only through `sh test/diff_compiler_snapshot_<suite>.sh --new`; `--bless <path>` never creates one and only rewrites an existing named snapshot.
+- Bless an existing snapshot only through `sh test/diff_compiler_snapshot_<suite>.sh --bless <path>` for a named path.
 - Read every golden diff; reject unexplained output, locations, churn, or line movement.
 - Stage only explicitly authorized generated paths, never `git add -A`.
 - Rerun the gate and require an actual graded pass.
