@@ -55,8 +55,15 @@ gh pr merge --auto --merge       # enqueues; the merge queue does the rest
 > This generalizes past `gh`: the recurring failure is **a tool reporting success while nothing
 > happened**, and the uniform defense is to re-derive the resulting state.
 
-**Ten required checks:** the **seven** `gates (…)` shards, **`soundness`**, `seed-health`, `inlang`. Zero
-approvals — the *checks* are the gate, not a human, so an agent can self-merge on green.
+**Required checks are a ruleset, not a remembered count.** Derive their current contexts before making a
+claim or changing CI:
+```sh
+gh api repos/MedakaLang/medaka/rulesets --jq '.[]|select(.enforcement=="active")|.id' | while read -r id; do
+  gh api "repos/MedakaLang/medaka/rulesets/$id" \
+    --jq '.rules[]|select(.type=="required_status_checks")|.parameters.required_status_checks[].context'
+done
+```
+Zero approvals — the *checks* are the gate, not a human, so an agent can self-merge on green.
 
 **`soundness` is required ON PURPOSE and must never be dropped.** It runs the compiler-source
 typecheck + the self-compile fixpoint. **Every gate passes on an ill-typed compiler** (the build does
@@ -66,12 +73,18 @@ with every shard green.
 ### ✅ There is a MERGE QUEUE. Do not hand-manage staleness.
 
 The repo is in the **MedakaLang org**; the queue is **ON** and replaced `strict` mode. It builds a
-temp branch of *your PR merged onto current `main`, plus everything queued ahead of you*, runs all
-nine checks **on that**, and merges only if green — the guarantee `strict` crudely approximated, and
-the reason branch-only CI is not enough (two branches both touched `typecheck.mdk`, auto-merged fine,
-and their **goldens** diverged → `main` red). It batches up to 5 entries per run (`ALLGREEN`: a bad
-PR fails its group and is bisected out; 5-min window; a lone PR never waits). Config:
-`merge_method=MERGE`, `grouping_strategy=ALLGREEN`, batch 1–5, 60-min check timeout. **`ci.yml`'s
+temp branch of *your PR merged onto current `main`, plus everything queued ahead of you*, runs every
+required context **on that**, and merges only if green — the guarantee `strict` crudely approximated,
+and the reason branch-only CI is not enough (two branches both touched `typecheck.mdk`, auto-merged
+fine, and their **goldens** diverged → `main` red). Queue parameters also live in the active ruleset;
+derive rather than encode them:
+```sh
+gh api repos/MedakaLang/medaka/rulesets --jq '.[]|select(.enforcement=="active")|.id' | while read -r id; do
+  gh api "repos/MedakaLang/medaka/rulesets/$id" \
+    --jq '.rules[]|select(.type=="merge_queue")|.parameters'
+done
+```
+**`ci.yml`'s
 `merge_group:` trigger is what makes the checks run on the queue's temp branch — without it the queue
 deadlocks. Do not remove it.**
 
@@ -190,7 +203,9 @@ reproduce.
 After an edit, run targeted format and lint **before** rebuilding the compiler or building any oracle.
 That puts cheap mechanical failures ahead of the expensive path and avoids rebuilding again after a
 formatter rewrite. For a comment-bearing two-line record, follow AGENTS.md's formatter safety rule and
-inspect the declaration after `fmt --write`.
+inspect the declaration after `fmt --write`. When formatter/linter behavior or accepted syntax itself
+changed, rerun the relevant check with the freshly built binary and apply any owed reflow before using
+its result.
 
 Local verification should be the smallest fail-capable signal for the changed property, plus the
 non-negotiable compiler checks the diff requires (for example, source typechecking and the native
