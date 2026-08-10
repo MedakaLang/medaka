@@ -366,6 +366,11 @@ spawned in `runtime/medaka_rt.c`, not a link flag — so it runs fine under Linu
 **The full suite is CI's job.** Run the gates your change touches; push; let CI run the
 other 80 across six parallel hosted runners.
 
+**Order the cheap checks first:** after editing a `.mdk`, run targeted `medaka fmt --write` and
+`medaka lint` on the touched source **before** `make medaka`, oracle builds, or gates. Re-add any
+formatter change, inspect comment-bearing record declarations as required by the formatter warning
+below, then rebuild once from the formatted/linted source.
+
 ```sh
 PREFLIGHT_DRY=1 sh test/preflight.sh                 # ✅ FIRST STEP if unsure — derives the
                                                       #    gate set for free: builds/runs nothing

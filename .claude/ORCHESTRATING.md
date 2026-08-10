@@ -185,6 +185,20 @@ there anyway — it is decisive and CI is too late); a `compiler/support/*` or `
 (blast radius is everything); a merge of two branches touching one subsystem; a CI failure you cannot
 reproduce.
 
+### Fast local feedback; independent CI evidence
+
+After an edit, run targeted format and lint **before** rebuilding the compiler or building any oracle.
+That puts cheap mechanical failures ahead of the expensive path and avoids rebuilding again after a
+formatter rewrite. For a comment-bearing two-line record, follow AGENTS.md's formatter safety rule and
+inspect the declaration after `fmt --write`.
+
+Local verification should be the smallest fail-capable signal for the changed property, plus the
+non-negotiable compiler checks the diff requires (for example, source typechecking and the native
+fixpoint for an LLVM backend change). Do not reproduce CI's broad matrix locally just to accumulate a
+longer receipt. Push once that signal is adequate: CI executes the independent full/merge-group check,
+and the reviewer judges the diff and whether its tests can fail rather than re-running the author's
+suite.
+
 ### ⚠️ THE PREFLIGHT IS A FILTER, NOT AN AUTHORITY
 
 Green preflight = *the gates most likely to notice your change did not break*. Nothing more. **CI on
@@ -933,6 +947,18 @@ a list of defects to anyone. **Do not hand over prose. Hand over a script.**
   debugging depth matters. Default for the hottest/most-load-bearing files.
 - Escalate mid-pattern: a "simple" first step may be Sonnet; the general fix it ladders into is Opus.
 
+### A mechanic edits; it does not discover
+
+Use a mechanic only after a scout/designer has supplied a bounded edit packet: exact files and symbols,
+the invariant to preserve, known caller/mirror set, and the one or two commands that grade the slice.
+Its first substantive action should be an edit, not a fresh architecture census. Do not hand it a whole
+hot-file refactor and ask it to rediscover ownership, call chains, and tests; that is design work and
+will consume its bounded turn without producing a commit.
+
+If a mechanic returns without an edit, the conductor must immediately narrow the work to a closed
+ownership family, take over the mechanical change, or return to design. Retrying the same broad prompt
+or merely increasing a tool budget repeats the routing failure.
+
 ---
 
 ## Parallelism & file hygiene
@@ -952,6 +978,10 @@ that drift detector is exactly what proves the seed was not contaminated. Do thi
 > Work ONLY in your own worktree. Do NOT `cd` into `/root/medaka` or any
 > `.claude/worktrees/<other>` directory, and do NOT build there — the CLAUDE.md path in your
 > context may point at someone else's tree; ignore it and use your own cwd.
+
+Before creating that worktree, query the remote main tip and fetch it; pin the task to that fetched
+commit, not to `/root/medaka`'s possibly stale checked-out `main`. Shared worktrees can lag GitHub while
+other sessions advance refs, so a local `HEAD` alone is not a current-base proof.
 
 On your side: **never run `refresh_seed.sh`, `make medaka`, or `git add -A` in a tree you have not just
 confirmed clean** (`git status --short`). A shared worktree makes "capture my diff" unsound.
