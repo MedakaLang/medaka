@@ -6,9 +6,12 @@ variant: high
 steps: 52
 permission:
   "*": deny
-  read: allow
-  glob: allow
-  grep: allow
+  read:
+    "*": deny
+    "../../var/tmp/medaka-scratch/opencode/compiler-implementer/**": allow
+    "../compiler-implementer/**": allow
+  glob: deny
+  grep: deny
   edit:
     "*": deny
     "../../var/tmp/medaka-scratch/opencode/compiler-implementer/**": allow
