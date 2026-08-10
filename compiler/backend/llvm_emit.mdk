@@ -304,11 +304,9 @@ data GapMode = Strict | Record
 -- closure) falls to emitApplyAny, which reads the closure's RUNTIME arity from the
 -- cell header (field 0) and dispatches exact / partial (PAP) / over application via
 -- the runtime @mdk_apply — so an opaque under-application no longer miscompiles.
-closureArityRef : Ref (List (String, Int))
-closureArityRef = Ref []
 
 -- compile-time closure RETURN-TYPE table, keyed by the closure cell's SSA register.
--- ⚠️ Same `%tN` scoping hazard as closureArityRef above — also PER-DEFINE.
+-- ⚠️ Same `%tN` scoping hazard as `e.closureArity` above — also PER-DEFINE.
 -- Records LTFloat for a user lambda whose body EVIDENTLY returns a Float (a float
 -- literal or known-float capture flows to the result through arith/if/block — see
 -- bodyFloatRet, conservative).  Read at an indirect call site (indirectRetTy) so a
@@ -316,8 +314,6 @@ closureArityRef = Ref []
 -- `f 1.0 + f 2.0` (each `f _` result was LTInt → integer arith on boxed-float
 -- pointers → garbage).  Only LTFloat is ever recorded, so non-float closures keep
 -- the historical LTInt default → zero blast radius for them.
-closureRetTyRef : Ref (List (String, LTy))
-closureRetTyRef = Ref []
 
 -- is this CVar name the fall-through sentinel — either BARE (`__fallthrough__`, no
 -- enclosing clause chain) or LABELLED by emit_support's `labelFallthrough`
@@ -352,7 +348,7 @@ emitFallthrough e fname = match ftLabelOf fname
 -- and rets.  The self-call is NEVER emitted as a `call` — only its arg
 -- recomputation feeds the loop, which is what removes the stack-growing call.
 --
--- A module-level Ref carries the active context so the decision-tree leaf
+-- The per-emission context carries the active context so the decision-tree leaf
 -- (emitLeaf) and the single-clause CIf-tail descent (emitTrmcBody) both route into
 -- it without threading it through every emit arm.  (The fallthrough label was once
 -- carried the same way; it is now a plain emitTree parameter — issue #354.  This Ref
@@ -366,23 +362,17 @@ emitFallthrough e fname = match ftLabelOf fname
 -- leaf recomputes the recursion args into.
 data TrmcCtx = TrmcOff | TrmcOn SelfRef Int String String String (List String)
 
-trmcCtxRef : Ref TrmcCtx
-trmcCtxRef = Ref TrmcOff
-
 -- ── dispatch-graph (b′) TMC context (TMC-parity arc; TRMC-DESIGN §Phase 3) ────
 -- The active group context during a member-body emit: `GDispOn root members
 -- uslots destSlot exitL` — root/member names (the leaf redirect recognizes
 -- sanctioned tail edges), the U shared `alloca i64` param slots, the mutable
 -- destination slot (the SAME local-alloca protocol as TrmcOn — dest seeded to
 -- &hole, no globals), and the group define's shared exit label.  GDispOff =
--- ordinary codegen.  Mirrors trmcCtxRef (saved+cleared by emitDecision for an
+-- ordinary codegen.  Mirrors `e.trmcCtx` (saved+cleared by emitDecision for an
 -- expression-position match; kept LIVE across a tail-position CDecision).
 data GDispCtx =
   | GDispOff
   | GDispOn String (List String) (List String) String String
-
-gDispCtxRef : Ref GDispCtx
-gDispCtxRef = Ref GDispOff
 
 -- the detected (b′) groups (shared detection, backend/trmc_analysis.mdk), the fn
 -- binds they were detected over, and the fn-arity table with wasm's `progFnArity`
@@ -390,17 +380,9 @@ gDispCtxRef = Ref GDispOff
 -- would let a 0-arg call "saturate").  Computed once per emitProgram; reset (to
 -- empty) by emitProgramGaps so a prior program's groups can never leak into the
 -- gap-census path.
-gDispGroupsRef : Ref (List DispGroup)
-gDispGroupsRef = Ref []
-
-gDispBindsRef : Ref (List CBind)
-gDispBindsRef = Ref []
-
-gDispArsRef : Ref (List (String, Int))
-gDispArsRef = Ref []
 
 -- #990: the (fn-name -> arity) table above indexed into an OrdMap, built once beside
--- `gDispArsRef` in emitProgram.  `detectDispatchGroups` (the TMC group detection run
+-- `e.gDispArs` in emitProgram.  `detectDispatchGroups` (the TMC group detection run
 -- inside emitProgram) calls `gDispIsFn`/`gDispFnArity` PER referenced fn name, and each
 -- `lookupAssoc` scanned the WHOLE O(fns) list — O(refs·fns) = O(N²) `emit`-stage
 -- OP-COUNT on dispatch-heavy code (the residual LLVM-side emit-op quadratic #986 isolated
@@ -408,28 +390,25 @@ gDispArsRef = Ref []
 -- (`omFromPairs (reverseL …)` makes the FIRST pair win on a duplicate name, matching
 -- lookupAssoc), so the TMC grouping — and therefore the emitted IR — is byte-identical.
 -- Uninstalled (None) it FALLS BACK to the list scan, identical answer either way.
-gDispArMapRef : Ref (Option (OrdMap Int))
-gDispArMapRef = Ref None
-
-gDispIsFn : String -> Bool
-gDispIsFn n = match gDispArMapRef.value
+gDispIsFn : Emit -> String -> Bool
+gDispIsFn e n = match e.gDispArMap.value
   Some m => omHasKey n m
-  None => match lookupAssoc n gDispArsRef.value
+  None => match lookupAssoc n e.gDispArs.value
     Some _ => True
     None => False
 
-gDispFnArity : String -> Int
-gDispFnArity n = match gDispArMapRef.value
+gDispFnArity : Emit -> String -> Int
+gDispFnArity e n = match e.gDispArMap.value
   Some m => match omLookup n m
     Some a => a
     None => 0 - 1
-  None => match lookupAssoc n gDispArsRef.value
+  None => match lookupAssoc n e.gDispArs.value
     Some a => a
     None => 0 - 1
 
 -- is `n` a member (root included) of a detected group?
-gDispIsMember : String -> Bool
-gDispIsMember n = match dispGroupOf gDispGroupsRef.value n
+gDispIsMember : Emit -> String -> Bool
+gDispIsMember e n = match dispGroupOf e.gDispGroups.value n
   Some _ => True
   None => False
 
@@ -469,9 +448,9 @@ lookupReturnsSelf iface method (((i, m), b)::rest)
 -- from core_ir_lower's `selfFnParamTable`.  When emitting an impl method's body,
 -- the params at those positions are callbacks that yield the container (e.g.
 -- `andThen : m a -> (a -> m b) -> m b`, param 1 = `a -> m b`).  Before emitting a
--- group body, `curSelfFnParamsRef` is set to the NAMES of those params and
--- `curImplTagRef` to the impl's type-head tag; `emitIndirect` then types the
--- APPLICATION of such a param (`f x`) as `tagToLTy curImplTagRef` instead of the
+-- group body, `e.curSelfFnParams` is set to the NAMES of those params and
+-- `e.curImplTag` to the impl's type-head tag; `emitIndirect` then types the
+-- APPLICATION of such a param (`f x`) as `tagToLTy e.curImplTag` instead of the
 -- LTInt indirect-call default.  This closes `andThen@List`, whose `++` LEFT
 -- operand `f x` is an indirect call the method-call inference can't reach.
 selfFnParamPositions : Emit -> String -> String -> List Int
@@ -586,40 +565,31 @@ nthName [] _ = None
 
 -- the set of default fn names already lifted (one define per (method, tag)),
 -- reset at the start of each emit run so the two censuses don't share state.
-emittedDefaultsRef : Ref (List String)
-emittedDefaultsRef = Ref []
+resetEmittedDefaults : Emit -> Unit
+resetEmittedDefaults e = setRef e.emittedDefaults []
 
-resetEmittedDefaults : Unit -> Unit
-resetEmittedDefaults _ = setRef emittedDefaultsRef []
+markDefaultEmitted : Emit -> String -> Unit
+markDefaultEmitted e name =
+  setRef e.emittedDefaults (name::e.emittedDefaults.value)
 
-markDefaultEmitted : String -> Unit
-markDefaultEmitted name =
-  setRef emittedDefaultsRef (name::emittedDefaultsRef.value)
-
-defaultAlreadyEmitted : String -> Bool
-defaultAlreadyEmitted name = contains name emittedDefaultsRef.value
+defaultAlreadyEmitted : Emit -> String -> Bool
+defaultAlreadyEmitted e name = contains name e.emittedDefaults.value
 
 -- the impl currently being emitted: its type-head tag, and the NAMES of its
 -- params that are self-returning function callbacks (set in emitGroupBody).
-curImplTagRef : Ref String
-curImplTagRef = Ref ""
-
-curSelfFnParamsRef : Ref (List String)
-curSelfFnParamsRef = Ref []
-
 -- set the current-impl context for self-returning-fn-param typing; cleared after
 -- the group body so a following top-level fn body isn't mis-typed.
-setCurImplSelfFns : String -> List String -> Unit
-setCurImplSelfFns tag names =
-  let _ = setRef curImplTagRef tag in setRef curSelfFnParamsRef names
+setCurImplSelfFns : Emit -> String -> List String -> Unit
+setCurImplSelfFns e tag names =
+  let _ = setRef e.curImplTag tag in setRef e.curSelfFnParams names
 
-clearCurImplSelfFns : Unit -> Unit
-clearCurImplSelfFns _ =
-  let _ = setRef curImplTagRef "" in setRef curSelfFnParamsRef []
+clearCurImplSelfFns : Emit -> Unit
+clearCurImplSelfFns e =
+  let _ = setRef e.curImplTag "" in setRef e.curSelfFnParams []
 
 -- is `name` a self-returning function param of the impl currently being emitted?
-isCurSelfFnParam : String -> Bool
-isCurSelfFnParam name = contains name curSelfFnParamsRef.value
+isCurSelfFnParam : Emit -> String -> Bool
+isCurSelfFnParam e name = contains name e.curSelfFnParams.value
 
 -- gap helpers: when recording is on, log the reason + return a placeholder so
 -- emission continues; otherwise `panic` (the unchanged normal-path behaviour).
@@ -789,6 +759,36 @@ data Emit =
       gapMode : GapMode,
       gapLog : Ref (List String),
       curGapBind : Ref String,
+      defineCounter : Ref Int,
+      closureArity : Ref (List (String, Int)),
+      closureRetTy : Ref (List (String, LTy)),
+      trmcCtx : Ref TrmcCtx,
+      gDispCtx : Ref GDispCtx,
+      gDispGroups : Ref (List DispGroup),
+      gDispBinds : Ref (List CBind),
+      gDispArs : Ref (List (String, Int)),
+      gDispArMap : Ref (Option (OrdMap Int)),
+      emittedDefaults : Ref (List String),
+      curImplTag : Ref String,
+      curSelfFnParams : Ref (List String),
+      knownFnMap : Ref (Option (OrdMap Unit)),
+      lazyGlobalMap : Ref (Option (OrdMap Unit)),
+      ctorMap : Ref (Option (OrdMap Int)),
+      sigMap : Ref (Option (OrdMap FnSig)),
+      defArityMap : Ref (Option (OrdMap Int)),
+      recByName : Ref (Option (OrdMap (List String))),
+      recByLabel : Ref (Option (OrdMap (String, List String))),
+      implsByMethod : Ref (Option (OrdMap (List CImplEntry))),
+      implMethodSet : Ref (Option (OrdMap Unit)),
+      ctorTypeMap : Ref (Option (OrdMap String)),
+      ctorsByType : Ref (Option (OrdMap (List String))),
+      ctorOrdinalMap : Ref (Option (OrdMap Int)),
+      typeIdMap : Ref (Option (OrdMap Int)),
+      dispCache : Ref (List String),
+      dictConstCache : Ref (List (String, String)),
+      distinctTypeNamesCache : Ref (Option (List String)),
+      floatFwSet : Ref (List (String, (Int, List Int))),
+      floatClosureFns : Ref (List String),
     }
 
 -- a function's inferred signature: its parameter types (in order) and its return
@@ -810,7 +810,7 @@ data FnSig = FnSig (List LTy) LTy
 --     `@mdk_dc_N` constant dict cells, and every lifted-define name
 --     (`@mdk_lamN`, `@mdk_eta_*`, `@mdk_pap_*`, `@mdk_methval_*`, …).  NEVER reset.
 --
---   * `freshLocal` — the PER-DEFINE counter (`defineCounterRef`).  Feeds `%tN` SSA
+--   * `freshLocal` — the PER-DEFINE counter (`e.defineCounter`).  Feeds `%tN` SSA
 --     registers (`freshReg`) and block labels (`then{N}`, `divok{N}`, `clause{N}`,
 --     …).  Both are FUNCTION-scoped in LLVM, so restarting them at 0 in each
 --     `define` is legal — and it is what makes a define's text depend only on that
@@ -826,13 +826,10 @@ freshId e =
   let _ = setRef c (n + 1)
   n
 
-defineCounterRef : Ref Int
-defineCounterRef = Ref 0
-
 freshLocal : Emit -> Int
-freshLocal _ =
-  let n = defineCounterRef.value
-  let _ = setRef defineCounterRef (n + 1)
+freshLocal e =
+  let n = e.defineCounter.value
+  let _ = setRef e.defineCounter (n + 1)
   n
 
 freshReg : Emit -> String
@@ -840,8 +837,8 @@ freshReg e = "%t" ++ intToString (freshLocal e)
 
 -- ── the per-define gensym scope (issue #118) ────────────────────────────────
 -- Everything keyed on, or counting, a FUNCTION-SCOPED name: the `%tN`/label
--- counter plus the two tables keyed BY a `%tN` register — `closureArityRef` and
--- `closureRetTyRef`.  Once `%tN` restarts per define, a register name is only
+-- counter plus the two tables keyed BY a `%tN` register — `e.closureArity` and
+-- `e.closureRetTy`.  Once `%tN` restarts per define, a register name is only
 -- unique WITHIN a define, so those tables must be scoped the same way or `%t5` in
 -- one function would answer a lookup for `%t5` in another (a wrong closure arity
 -- at an indirect call = silent miscompile).  Scoping them per define is sound
@@ -854,20 +851,20 @@ data DefScope = DefScope Int (List (String, Int)) (List (String, LTy))
 
 -- start a fresh `define` scope, returning the enclosing one (for `endDefine`).
 beginDefine : Emit -> DefScope
-beginDefine _ =
-  let saved = DefScope defineCounterRef.value closureArityRef.value closureRetTyRef.value
-  let _ = setRef defineCounterRef 0
-  let _ = setRef closureArityRef []
-  let _ = setRef closureRetTyRef []
+beginDefine e =
+  let saved = DefScope e.defineCounter.value e.closureArity.value e.closureRetTy.value
+  let _ = setRef e.defineCounter 0
+  let _ = setRef e.closureArity []
+  let _ = setRef e.closureRetTy []
   saved
 
 -- restore the enclosing `define` scope (only needed where a define NESTS inside
 -- another's emission, i.e. at each bufRef save/restore swap).
 endDefine : Emit -> DefScope -> Unit
-endDefine _ (DefScope n ar rt) =
-  let _ = setRef defineCounterRef n
-  let _ = setRef closureArityRef ar
-  setRef closureRetTyRef rt
+endDefine e (DefScope n ar rt) =
+  let _ = setRef e.defineCounter n
+  let _ = setRef e.closureArity ar
+  setRef e.closureRetTy rt
 
 emit : Emit -> String -> Unit
 emit e line = let buf = e.buf in setRef buf (line::buf.value)
@@ -899,11 +896,8 @@ fnNames e = e.fnNames.value
 -- list REVERSED at the call sites below so the FIRST list entry wins on a
 -- duplicate key (matches lookupAssoc's first-match). For CONSTANT tables only.
 
-knownFnMapRef : Ref (Option (OrdMap Unit))
-knownFnMapRef = Ref None
-
-installKnownFnMap : List String -> Unit
-installKnownFnMap fns = setRef knownFnMapRef (Some (omFromNames fns omEmpty))
+installKnownFnMap : Emit -> List String -> Unit
+installKnownFnMap e fns = setRef e.knownFnMap (Some (omFromNames fns omEmpty))
 
 -- ── #561 PR-A: lazy value-global set (installed once per program) ────────────
 -- The value globals emit_support.lazyGlobalNames classifies as LAZY (reaching an
@@ -913,38 +907,29 @@ installKnownFnMap fns = setRef knownFnMapRef (Some (omFromNames fns omEmpty))
 -- 2 FORCED).  Everything else stays on the byte-identical eager prologue.  Installed
 -- (even empty) at EVERY emitProgram entry so a prior program's set can never leak
 -- across a same-process re-emit — the same discipline as installKnownFnMap.
-lazyGlobalMapRef : Ref (Option (OrdMap Unit))
-lazyGlobalMapRef = Ref None
-
-installLazyGlobalMap : List String -> Unit
+installLazyGlobalMap : Emit -> List String -> Unit
 -- Intentional cross-file duplicate of installLazyGlobalMapW in wasm_emit.mdk (#561 PR-B); not consolidating (tiny install helper over a backend-local Ref / divergent-by-design backend pair).
 -- lint-disable-next-line rule-duplicate-body
-installLazyGlobalMap names =
-  setRef lazyGlobalMapRef (Some (omFromNames names omEmpty))
+installLazyGlobalMap e names =
+  setRef e.lazyGlobalMap (Some (omFromNames names omEmpty))
 
-export isLazyGlobal : String -> Bool
+export isLazyGlobal : Emit -> String -> Bool
 -- Intentional cross-file duplicate of isLazyGlobalW in wasm_emit.mdk (#561 PR-B); not consolidating (tiny query over a backend-local Ref / divergent-by-design backend pair).
 -- lint-disable-next-line rule-duplicate-body
-isLazyGlobal x = match lazyGlobalMapRef.value
+isLazyGlobal e x = match e.lazyGlobalMap.value
   Some m => omHasKey x m
   None => False
 
 -- ctor-arity table index (ct field is set once at Emit construction, constant).
-ctorMapRef : Ref (Option (OrdMap Int))
-ctorMapRef = Ref None
-
-installCtorMap : List (String, Int) -> Unit
-installCtorMap t = setRef ctorMapRef (Some (omFromPairs (reverseL t) omEmpty))
+installCtorMap : Emit -> List (String, Int) -> Unit
+installCtorMap e t = setRef e.ctorMap (Some (omFromPairs (reverseL t) omEmpty))
 
 -- sig table index — the GLOBAL-`sigs` users (fnRetTy/fnArity) read the Emit's
 -- `sigs` field. That field is set once at construction and never mutated
 -- (constant), so a memo built from `sigTable e` is byte-identical to the old
 -- `lookupAssoc name sigs.value`.
-sigMapRef : Ref (Option (OrdMap FnSig))
-sigMapRef = Ref None
-
-installSigMap : List (String, FnSig) -> Unit
-installSigMap t = setRef sigMapRef (Some (omFromPairs (reverseL t) omEmpty))
+installSigMap : Emit -> List (String, FnSig) -> Unit
+installSigMap e t = setRef e.sigMap (Some (omFromPairs (reverseL t) omEmpty))
 
 -- Index an assoc sig table for the THREADED `sigs` parameter (the pure inference
 -- pass's own table, and the `sigTable e` handed to bindVarTy). `reverseL` makes
@@ -964,12 +949,9 @@ sigsToMap t = omFromPairs (reverseL t) omEmpty
 -- has `nDicts + sigValueArity` params (eta-saturated), while a fn whose body is a
 -- non-CLam expression keeps its bare clause arity (eta-saturate does not fire), so
 -- the two diverge and only the replayed arity tracks the real `@mdk_<fn>` define.
-defArityMapRef : Ref (Option (OrdMap Int))
-defArityMapRef = Ref None
-
 installDefArityMap : Emit -> List CBind -> Unit
 installDefArityMap e binds =
-  setRef defArityMapRef (Some (omFromPairs (defArityPairs e binds) omEmpty))
+  setRef e.defArityMap (Some (omFromPairs (defArityPairs e binds) omEmpty))
 
 defArityPairs : Emit -> List CBind -> List (String, Int)
 defArityPairs _ [] = []
@@ -984,13 +966,13 @@ defArityPair _ (CBind name []) = (name, 0)
 
 -- the recorded emitted define arity of `name` (None when the table is uninstalled
 -- or the name is absent — fall back to the unconditional direct call).
-defArityOf : String -> Option Int
-defArityOf name = match defArityMapRef.value
+defArityOf : Emit -> String -> Option Int
+defArityOf e name = match e.defArityMap.value
   Some m => omLookup name m
   None => None
 
 isKnownFn : Emit -> String -> Bool
-isKnownFn e name = match knownFnMapRef.value
+isKnownFn e name = match e.knownFnMap.value
   Some m => match omLookup name m
     Some _ => True
     None => False
@@ -1015,7 +997,7 @@ canonFnName e name =
     let mangled = "core__" ++ name
     if isKnownFn e mangled then mangled else name
 
--- O(log n) lookup into the CONSTANT global sig table (the `sigMapRef` index built
+-- O(log n) lookup into the CONSTANT global sig table (the `e.sigMap` index built
 -- from `sigTable e` at emitProgram). Byte-identical to `lookupAssoc name (sigTable
 -- e)`: the map is built with `reverseL` so the FIRST list entry wins on a duplicate
 -- key, matching lookupAssoc's first-match. Falls back to the linear scan only when
@@ -1025,16 +1007,16 @@ canonFnName e name =
 -- "augmented" with Float-propagation types. It is not: `sigs` is never consed,
 -- appended or iterated anywhere — only threaded and looked up.)
 sigLookup : Emit -> String -> Option FnSig
-sigLookup e name = match sigMapRef.value
+sigLookup e name = match e.sigMap.value
   Some m => omLookup name m
   None => lookupAssoc name (sigTable e)
 
 -- The GLOBAL sig table as a map, for the sites that thread `sigs` onward rather
 -- than look up a single name (bindVarTy → paramUseTy). Reuses the installed
--- `sigMapRef` index; rebuilds from `sigTable e` only when uninstalled, which is
+-- `e.sigMap` index; rebuilds from `sigTable e` only when uninstalled, which is
 -- the same fallback `sigLookup` takes and preserves first-match either way.
 sigMapOf : Emit -> OrdMap FnSig
-sigMapOf e = match sigMapRef.value
+sigMapOf e = match e.sigMap.value
   Some m => m
   None => sigsToMap (sigTable e)
 
@@ -1052,7 +1034,7 @@ ctorTable : Emit -> List (String, Int)
 ctorTable e = e.ctors.value
 
 isCtor : Emit -> String -> Bool
-isCtor e name = match ctorMapRef.value
+isCtor e name = match e.ctorMap.value
   Some m => match omLookup name m
     Some _ => True
     None => False
@@ -1084,23 +1066,17 @@ recFieldTable e = e.recFields.value
 -- counted-op ratio r1=3.39 r2=3.64 per doubling — quadratic.
 --
 -- Two maps, both built once at the single install point below:
---   `recByNameRef`  recName → labels (first entry wins ⇒ `lookupAssoc` first-match)
---   `recByLabelRef` label → (recName, labels) of the FIRST record in TABLE ORDER
+--   `e.recByName`  recName → labels (first entry wins ⇒ `lookupAssoc` first-match)
+--   `e.recByLabel` label → (recName, labels) of the FIRST record in TABLE ORDER
 --                   owning that label — exactly `findRecordByLabel`'s answer. Built
 --                   by folding the table in REVERSE so an earlier record overwrites
 --                   a later one, which is what makes "first in table order" win.
 -- Uninstalled (None) both readers fall back to the original scans, so a probe that
 -- constructs an `Emit` without going through emitProgram is unaffected.
-recByNameRef : Ref (Option (OrdMap (List String)))
-recByNameRef = Ref None
-
-recByLabelRef : Ref (Option (OrdMap (String, List String)))
-recByLabelRef = Ref None
-
-installRecFieldIndex : List (String, List String) -> Unit
-installRecFieldIndex t =
-  let _ = setRef recByNameRef (Some (omFromPairs (reverseL t) omEmpty))
-  setRef recByLabelRef (Some (recLabelIndex (reverseL t) omEmpty))
+installRecFieldIndex : Emit -> List (String, List String) -> Unit
+installRecFieldIndex e t =
+  let _ = setRef e.recByName (Some (omFromPairs (reverseL t) omEmpty))
+  setRef e.recByLabel (Some (recLabelIndex (reverseL t) omEmpty))
 
 -- fold the (already reversed) table, mapping every label of a record to that record.
 -- Later inserts win, and "later" here is EARLIER in the original table.
@@ -1118,7 +1094,7 @@ insertLabels owner (l::rest) acc =
 
 -- the record type named `recName`, index-backed (fallback: the raw list scan).
 recFieldsOfName : Emit -> String -> Option (List String)
-recFieldsOfName e recName = match recByNameRef.value
+recFieldsOfName e recName = match e.recByName.value
   Some m => omLookup recName m
   None => lookupAssoc recName (recFieldTable e)
 
@@ -1146,8 +1122,6 @@ implEntriesOf e = e.implEntries.value
 -- emitProgramGaps; a helper reaching the routing below without an install (a probe that
 -- never called emitProgram) FALLS BACK to the full list, which — being filtered by method
 -- downstream — gives the same output either way.  Mirrors wasm_emit's `implsByMethodW`.
-implsByMethodRef : Ref (Option (OrdMap (List CImplEntry)))
-implsByMethodRef = Ref None
 
 -- the interface method an impl entry implements (field 0).
 implEntryMethodOf : CImplEntry -> String
@@ -1171,15 +1145,15 @@ foldImplsByMethod (e::rest) m =
   let k = implEntryMethodOf e
   foldImplsByMethod rest (omInsert k (e :: orEmptyEntries (omLookup k m)) m)
 
-installImplIndex : List CImplEntry -> Unit
-installImplIndex entries =
-  setRef implsByMethodRef (Some (groupImplsByMethod entries))
+installImplIndex : Emit -> List CImplEntry -> Unit
+installImplIndex e entries =
+  setRef e.implsByMethod (Some (groupImplsByMethod entries))
 
 -- [method]'s impl entries from the index (original order); [fallback] (the full entry
 -- list) is used only when the index is uninstalled — downstream filters by method, so
 -- the answer is identical.  Every whole-`implEntries` per-method scan routes through this.
 methodEntries : Emit -> String -> List CImplEntry
-methodEntries e method = match implsByMethodRef.value
+methodEntries e method = match e.implsByMethod.value
   Some m => orEmptyEntries (omLookup method m)
   None => filterMethod method (implEntriesOf e)
 
@@ -1429,17 +1403,14 @@ taggedMethodNames (_::rest) = taggedMethodNames rest
 -- via map insertion (O(N log N)); membership is then O(log N) and the deduped rebuild
 -- is gone.  Same set as `contains … (dedupS (taggedMethodNames …))`, so byte-identical.
 -- Uninstalled (None) it FALLS BACK to the list scan, identical answer either way.
-implMethodSetRef : Ref (Option (OrdMap Unit))
-implMethodSetRef = Ref None
-
-installImplMethodSet : List CImplEntry -> Unit
-installImplMethodSet entries =
+installImplMethodSet : Emit -> List CImplEntry -> Unit
+installImplMethodSet e entries =
   setRef
-    implMethodSetRef
+    e.implMethodSet
     (Some (omFromNames (taggedMethodNames entries) omEmpty))
 
 isImplMethod : Emit -> String -> Bool
-isImplMethod e name = match implMethodSetRef.value
+isImplMethod e name = match e.implMethodSet.value
   Some m => omHasKey name m
   None => contains name (implMethodNames e)
 
@@ -1544,21 +1515,19 @@ ctorTypeTable e = e.ctorTypes.value
 -- first-match (`omFromPairs (reverseL …)` = first pair wins on a duplicate ctor name,
 -- matching lookupAssoc), so the composite tag — and the emitted IR — is byte-identical.
 -- Uninstalled (None) it FALLS BACK to the list scan, identical answer either way.
-ctorTypeMapRef : Ref (Option (OrdMap String))
-ctorTypeMapRef = Ref None
 
 -- #352: the THREE derived views of the SAME constant ctor→type table that #990 left
 -- as whole-table scans, all built at this one install point (so none can go stale):
 --
---   * `ctorsByTypeRef`   type → its constructors IN TABLE ORDER.  Replaces
+--   * `e.ctorsByType`   type → its constructors IN TABLE ORDER.  Replaces
 --     `ctorsOfTypeIn`, which filtered the WHOLE table on every call — and its
 --     callers run per ctor site (`ctorOrdinal` via `cellTag`), per refutable-let
 --     PCon (`ctorHasSiblings`) and per dispatch arm (`emitTagMatch`).
---   * `ctorOrdinalMapRef` ctor → its 0-based index within its type's ctor list.
+--   * `e.ctorOrdinalMap` ctor → its 0-based index within its type's ctor list.
 --     Replaces `indexOfStr name (ctorsOfType e ty)`, which is O(that type's ctors)
 --     AND allocates an `Option` per step (`map (+ 1)` recursion) — so on an N-ctor
 --     type this was O(N²) in TIME **and** in ALLOCATION.
---   * `typeIdMapRef`      type → its dense id (index among `distinctTypeNames`).
+--   * `e.typeIdMap`      type → its dense id (index among `distinctTypeNames`).
 --     Replaces `indexOfStr ty (distinctTypeNames e)`, O(types) per ctor site.
 --
 -- ORDER IS LOAD-BEARING and is preserved, not assumed: the buckets are built by a
@@ -1573,23 +1542,14 @@ ctorTypeMapRef = Ref None
 --
 -- Measured (profile_main emit stage, prelude constant subtracted, N=250/500/1000):
 -- the N-distinct-single-ctor-type shape read op r1=2.61 r2=2.93 before.
-ctorsByTypeRef : Ref (Option (OrdMap (List String)))
-ctorsByTypeRef = Ref None
-
-ctorOrdinalMapRef : Ref (Option (OrdMap Int))
-ctorOrdinalMapRef = Ref None
-
-typeIdMapRef : Ref (Option (OrdMap Int))
-typeIdMapRef = Ref None
-
-installCtorTypeMap : List (String, String) -> Unit
-installCtorTypeMap t =
+installCtorTypeMap : Emit -> List (String, String) -> Unit
+installCtorTypeMap e t =
   let byType = groupCtorsByType t
   let tys = nubStr (typeNamesOf t)
-  let _ = setRef ctorsByTypeRef (Some byType)
-  let _ = setRef ctorOrdinalMapRef (Some (omFromPairs (reverseL (ctorOrdinalPairs byType tys)) omEmpty))
-  let _ = setRef typeIdMapRef (Some (omFromPairs (reverseL (numberFrom 0 tys)) omEmpty))
-  setRef ctorTypeMapRef (Some (omFromPairs (reverseL t) omEmpty))
+  let _ = setRef e.ctorsByType (Some byType)
+  let _ = setRef e.ctorOrdinalMap (Some (omFromPairs (reverseL (ctorOrdinalPairs byType tys)) omEmpty))
+  let _ = setRef e.typeIdMap (Some (omFromPairs (reverseL (numberFrom 0 tys)) omEmpty))
+  setRef e.ctorTypeMap (Some (omFromPairs (reverseL t) omEmpty))
 
 -- one LEFT fold prepending each ctor to its type's bucket (O(1) per entry), then
 -- `omMapValues reverseL` restores TABLE order in each bucket — total O(entries).
@@ -1615,7 +1575,7 @@ numberFrom i (x::rest) = (x, i) :: numberFrom (i + 1) rest
 
 -- the type name owning constructor [name], index-backed (fallback: the raw list scan).
 ctorTypeOf : Emit -> String -> Option String
-ctorTypeOf e name = match ctorTypeMapRef.value
+ctorTypeOf e name = match e.ctorTypeMap.value
   Some m => omLookup name m
   None => lookupAssoc name (ctorTypeTable e)
 
@@ -1650,7 +1610,7 @@ dropAssoc k ((n, v)::rest) = if n == k then rest else (n, v) :: dropAssoc k rest
 -- exactly the old empty-filter case → the reserved fallback). Falls back to the full
 -- table filter when uninstalled; identical list, identical order, either way.
 ctorsOfType : Emit -> String -> List String
-ctorsOfType e ty = match ctorsByTypeRef.value
+ctorsOfType e ty = match e.ctorsByType.value
   Some m => match omLookup ty m
     Some cs => cs
     None => reservedCtorsOfType ty
@@ -1854,7 +1814,7 @@ lookupVarG e env x = match lookupAssoc x env
   -- `if`/print from the scrutinee/return type.  Verified: LAZY Bool/Float/String globals
   -- all print & compute == eval (fixtures eager_global_lazy_{bool,float,string}).  If a
   -- future consumer WERE to key off this returned LTy, those fixtures would fail the gate.
-  None => if isLazyGlobal x then
+  None => if isLazyGlobal e x then
       let r = freshReg e
       let _ = emit e "  \{r} = call i64 @mdk_force_\{x}()"
       (r, LTInt)
@@ -3127,7 +3087,7 @@ blockFloatRet env (_::rest) = blockFloatRet env rest
 recordFloatRet : Emit -> List (String, (String, LTy)) -> String -> CExpr -> Unit
 recordFloatRet e env w body =
   if bodyFloatRet env body then
-    setRef closureRetTyRef ((w, LTFloat)::closureRetTyRef.value)
+    setRef e.closureRetTy ((w, LTFloat)::e.closureRetTy.value)
   else
     ()
 
@@ -3270,9 +3230,9 @@ emitFloatLeaf e env ex = match floatFromIntArg ex
 -- args as doubles, others i64) and use the returned double — no box/unbox round-trip.
 emitFloatLeafN : Emit -> List (String, (String, LTy)) -> CExpr -> String
 emitFloatLeafN e env ex = match flattenApp ex []
-  (CVar f _, args) => match floatFwHas f (lengthS args) && not (isLocal env f)
+  (CVar f _, args) => match floatFwHas e f (lengthS args) && not (isLocal env f)
     True =>
-      let ops = emitWorkerArgs e env (floatFwFp f) 0 args
+      let ops = emitWorkerArgs e env (floatFwFp e f) 0 args
       let r = freshReg e
       let _ = emit e "  \{r} = call double @mdk_\{f}__fw(\{ops})"
       r
@@ -3286,14 +3246,14 @@ emitFloatLeafVar e env ex = match floatVarReg env ex
     let (w, _) = emitExpr e env ex
     unboxFloat e w
 
--- floatFwSetRef accessors: does `f` have a `$fw` of arity `n`, and its float positions.
-floatFwHas : String -> Int -> Bool
-floatFwHas f n = match lookupAssoc f floatFwSetRef.value
+-- `e.floatFwSet` accessors: does `f` have a `$fw` of arity `n`, and its float positions.
+floatFwHas : Emit -> String -> Int -> Bool
+floatFwHas e f n = match lookupAssoc f e.floatFwSet.value
   Some (ar, _) => ar == n
   None => False
 
-floatFwFp : String -> List Int
-floatFwFp f = match lookupAssoc f floatFwSetRef.value
+floatFwFp : Emit -> String -> List Int
+floatFwFp e f = match lookupAssoc f e.floatFwSet.value
   Some (_, fp) => fp
   None => []
 
@@ -4153,7 +4113,7 @@ emitIndirect : Emit -> List (String, (String, LTy)) -> CExpr -> List CExpr -> (S
 emitIndirect e env hd args =
   let (cw, _) = emitExpr e env hd
   let argOps = emitArgs e env args
-  match lookupAssoc cw closureArityRef.value
+  match lookupAssoc cw e.closureArity.value
     Some n =>
       if n > 0 && lengthS argOps > n then
         -- OVER-APPLICATION of a let-bound closure (`(g 7) 9`): saturate with the
@@ -4165,12 +4125,12 @@ emitIndirect e env hd args =
         -- partial-application closure over the inner closure value + supplied args.
         emitPapClosureIndirect e cw argOps n
       else
-        (emitIndirectCallWords e cw argOps, indirectRetTy cw hd)
+        (emitIndirectCallWords e cw argOps, indirectRetTy e cw hd)
     -- OPAQUE head (arity unknown at compile time — e.g. a closure PARAM `f` in
     -- `map f`, or a closure pulled from a container).  The supplied count may not
     -- match the closure's runtime arity, so dispatch arity-aware (emitApplyAny):
     -- exact ⇒ inline call; partial ⇒ runtime PAP; over ⇒ saturate + reapply.
-    None => (emitApplyAny e cw argOps, indirectRetTy cw hd)
+    None => (emitApplyAny e cw argOps, indirectRetTy e cw hd)
 
 -- the raw indirect call: load the closure's code_ptr (cell field 0) and `call` it
 -- with the closure word as the leading argument followed by `argOps`.
@@ -4185,21 +4145,21 @@ emitIndirectCallWords e cw argOps =
 
 -- the static result type of an indirect call: container when the head is a
 -- self-returning function param of the current impl, else LTInt (unchanged).
-indirectResultTy : CExpr -> LTy
-indirectResultTy (CVar f _) =
-  if isCurSelfFnParam f then
-    tagToLTy curImplTagRef.value
+indirectResultTy : Emit -> CExpr -> LTy
+indirectResultTy e (CVar f _) =
+  if isCurSelfFnParam e f then
+    tagToLTy e.curImplTag.value
   else
     LTInt
-indirectResultTy _ = LTInt
+indirectResultTy _ _ = LTInt
 
 -- the result type of an indirect call: a recorded float-returning closure (keyed by
 -- the closure word `cw`) types its result LTFloat; otherwise the historical
 -- indirectResultTy (self-fn-param container, else LTInt).
-indirectRetTy : String -> CExpr -> LTy
-indirectRetTy cw hd = match lookupAssoc cw closureRetTyRef.value
+indirectRetTy : Emit -> String -> CExpr -> LTy
+indirectRetTy e cw hd = match lookupAssoc cw e.closureRetTy.value
   Some t => t
-  None => indirectResultTy hd
+  None => indirectResultTy e hd
 
 hasArgs : List CExpr -> Bool
 hasArgs [] = False
@@ -5094,21 +5054,18 @@ dispFnName : String -> Int -> Int -> String
 dispFnName name nmw nargs =
   "mdk_disp_\{name}_\{intToString nmw}_\{intToString nargs}"
 
--- the dispatchers emitted so far, by symbol.  Module-level Ref (mirroring
--- `dictConstCacheRef`), reset per program by emitProgram/emitProgramGaps.
-dispCacheRef : Ref (List String)
-dispCacheRef = Ref []
+-- the dispatchers emitted so far, by symbol, scoped to this emission.
 
 ensureDispatcherEmitted : Emit -> String -> String -> Int -> Int -> Unit
 ensureDispatcherEmitted e fname name nmw nargs =
-  if contains fname dispCacheRef.value then
+  if contains fname e.dispCache.value then
     ()
   else
     -- REGISTER BEFORE EMITTING.  A default-synthesis arm lifts `@mdk_default_<m>_<tag>`
     -- on demand (ensureDefaultEmitted), and that body can itself reach a dict-routed
     -- site for the SAME method — which would re-enter here and recurse forever if the
     -- symbol were only recorded after the body was emitted.
-    let _ = setRef dispCacheRef (fname :: dispCacheRef.value)
+    let _ = setRef e.dispCache (fname :: e.dispCache.value)
     -- PRELUDE HALF: the dispatcher body enumerates every impl of the method in THIS
     -- program, so it is inherently per-program and must NOT be baked into the shared
     -- `prelude.o` — declare it and let the program half define it.  The program half
@@ -5415,7 +5372,7 @@ emitDispatchArmBody e dictPtr ent name methWords argOps slot endL =
   -- occurrence at that tag (matching eval's per-VTypedImpl memoThunk).  Each tag has
   -- its OWN `$memo` CAF ⇒ distinct tags memoise independently.
   if isEmptyL methWords && isEmptyL argOps && implEntryMemoisable ent
-      && isLazyGlobal (memoGlobalName symTag name) then
+      && isLazyGlobal e (memoGlobalName symTag name) then
     let rv = freshReg e
     let _ = emit e "  \{rv} = call i64 @mdk_force_\{memoGlobalName symTag name}()"
     let _ = emit e "  store i64 \{rv}, ptr \{slot}"
@@ -5677,7 +5634,7 @@ emitDictApp e env name routes argOps =
     -- residual PAP capturing the dict + supplied words.  Saturated sites (the only
     -- shape the compiler's own source produces) keep the byte-identical direct call
     -- below, so the self-compile fixpoint is unaffected.
-    match defArityOf name
+    match defArityOf e name
       Some n => if lengthS allWords < n then
           emitPapClosure e ("mdk_" ++ name) allWords n
         else emitDictAppDirect e name allWords
@@ -5750,8 +5707,6 @@ emitDictCell e headTag reqWords =
 -- per-invocation allocation that dominated dispatch-heavy polymorphic loops (~4×
 -- on a tight `Ord` loop; broad — every constant dict across stdlib/compiler/user
 -- code). Deduped by initializer content so identical dicts share one global.
-dictConstCacheRef : Ref (List (String, String))
-dictConstCacheRef = Ref []
 
 -- every dict word is a compile-time constant (not a runtime %register): a literal
 -- tag, "0" (RNone), or a `ptrtoint`-of-global constant-expr (a nested const dict).
@@ -5770,12 +5725,12 @@ emitConstDictCell : Emit -> Int -> List String -> String
 emitConstDictCell e headTag reqWords =
   let n = lengthS reqWords
   let initBody = "[\{intToString (n + 1)} x i64] [i64 \{intToString headTag}\{constDictReqInits reqWords}]"
-  match lookupAssoc initBody dictConstCacheRef.value
+  match lookupAssoc initBody e.dictConstCache.value
     Some gname => "ptrtoint (ptr @" ++ gname ++ " to i64)"
     None =>
       let gname = "mdk_dc_" ++ intToString (freshId e)
       let _ = emitGlobal e "@\{gname} = internal constant \{initBody}"
-      let _ = setRef dictConstCacheRef ((initBody, gname)::dictConstCacheRef.value)
+      let _ = setRef e.dictConstCache ((initBody, gname)::e.dictConstCache.value)
       "ptrtoint (ptr @" ++ gname ++ " to i64)"
 
 -- the operand word a dict parameter name is bound to in the emit env.
@@ -5831,16 +5786,16 @@ emitGroup e (ImplGroup method tag symTag positions arity clauses) =
   let fname = implFnName symTag method
   let iface = implGroupIface e method tag
   let selfFnPos = selfFnParamPositions e iface method
-  let _ = setCurImplSelfFns tag (selfFnParamNames clauses selfFnPos)
+  let _ = setCurImplSelfFns e tag (selfFnParamNames clauses selfFnPos)
   if trmcImplTry e fname method tag positions arity clauses then
-    let _ = clearCurImplSelfFns ()
+    let _ = clearCurImplSelfFns e
     ()
   else
     let _ = beginDefine e
     let _ = emit e "define i64 @\{fname}(\{implParamDecls arity 0}) {"
     let _ = emit e "entry:"
     let _ = emitGroupBody e fname tag positions arity clauses
-    let _ = clearCurImplSelfFns ()
+    let _ = clearCurImplSelfFns e
     let _ = emit e "}"
     emit e ""
 -- native backend: set the self-returning-fn-param context for this impl body so
@@ -5905,9 +5860,9 @@ trmcImplTry e fname method tag positions arity clauses =
 --     `compare m x` HAS the discriminating arg and dispatches at run time.
 ensureDefaultEmitted : Emit -> String -> String -> String -> CImplEntry -> Unit
 ensureDefaultEmitted e fname tag method entry =
-  if defaultAlreadyEmitted fname then ()
+  if defaultAlreadyEmitted e fname then ()
   else
-    let _ = markDefaultEmitted fname
+    let _ = markDefaultEmitted e fname
     emitDefaultDefine e fname tag method entry
 
 emitDefaultDefine : Emit -> String -> String -> String -> CImplEntry -> Unit
@@ -6626,14 +6581,14 @@ emitClosureCell e hdr fields =
   let _ = emit e "  \{w} = ptrtoint ptr \{p} to i64"
   (w, LTClosure)
 
--- emitClosureAlloc + record the closure's compile-time arity in closureArityRef
+-- emitClosureAlloc + record the closure's compile-time arity in `e.closureArity`
 -- (keyed by its SSA word) so an indirect over-application of this closure value can
 -- split saturate+apply-extra.  Used for user lambdas and let-group/method-value
 -- closures whose arity is statically known.
 emitClosureAllocA : Emit -> String -> Int -> List String -> (String, LTy)
 emitClosureAllocA e lamName arity captureWords =
   let (w, lty) = emitClosureAlloc e lamName arity captureWords
-  let _ = setRef closureArityRef ((w, arity)::closureArityRef.value)
+  let _ = setRef e.closureArity ((w, arity)::e.closureArity.value)
   (w, lty)
 
 -- emit a CLam: compute its captured set, lift its body to a top-level define, and
@@ -6778,7 +6733,7 @@ emitEtaClosure e fname =
 
 -- the inferred arity of a known top-level function (its signature's param count).
 fnArity : Emit -> String -> Int
-fnArity e fname = match sigMapRef.value
+fnArity e fname = match e.sigMap.value
   Some m => match omLookup fname m
     Some (FnSig ptys _) => lengthS ptys
     None => 0
@@ -6788,7 +6743,7 @@ fnArity e fname = match sigMapRef.value
 
 -- the declared arity of constructor `name` (its field count, from the ctor table).
 ctorArity : Emit -> String -> Int
-ctorArity e name = match ctorMapRef.value
+ctorArity e name = match e.ctorMap.value
   Some m => match omLookup name m
     Some n => n
     None => 0
@@ -7241,7 +7196,7 @@ ctorOrdinal e name = match ctorTypeOf e name
   -- #352: `ctorTypeOf name = Some ty` means `name` IS in the ctor→type table, so it
   -- is in `ty`'s bucket and therefore in the ordinal map — the map probe and the
   -- `indexOfStr` scan return the same Int. Fallback when uninstalled.
-  Some ty => match ctorOrdinalMapRef.value
+  Some ty => match e.ctorOrdinalMap.value
     Some m => orZero (omLookup name m)
     None => orZero (indexOfStr name (ctorsOfType e ty))
   None => if name == "Nil" then 1 else 0
@@ -7252,13 +7207,13 @@ ctorOrdinal e name = match ctorTypeOf e name
 -- so its composite tags can never collide with a user type's.
 ctorTypeId : Emit -> String -> Int
 ctorTypeId e name = match ctorTypeOf e name
-  -- #352: `typeIdMapRef` is built from the SAME `nubStr (typeNamesOf …)` list that
+  -- #352: `e.typeIdMap` is built from the SAME `nubStr (typeNamesOf …)` list that
   -- `distinctTypeNames` memoizes, numbered from 0 — so the probe and the
   -- `indexOfStr` scan agree, and `omSize` is that list's length (nubStr ⇒ distinct).
-  Some ty => match typeIdMapRef.value
+  Some ty => match e.typeIdMap.value
     Some m => orZero (omLookup ty m)
     None => orZero (indexOfStr ty (distinctTypeNames e))
-  None => match typeIdMapRef.value
+  None => match e.typeIdMap.value
     Some m => omSize m
     None => lengthS (distinctTypeNames e)
 
@@ -7268,20 +7223,17 @@ ctorTypeId e name = match ctorTypeOf e name
 -- `distinctTypeNames` is constant during a program's emission (the ctor→type
 -- table is set once), but `ctorTypeId` calls it per ADT-constructor emission and
 -- it recomputes the O(n²) `nubStr` each time. Memoize the result (a plain
--- List String — no hash container, so it self-compiles cleanly) in a module-level
--- ref, reset to None at each emitProgram/emitProgramGaps so batched emits recompute.
-distinctTypeNamesRef : Ref (Option (List String))
-distinctTypeNamesRef = Ref None
-
-resetDistinctTypeNames : Unit -> Unit
-resetDistinctTypeNames _ = setRef distinctTypeNamesRef None
+-- List String — no hash container, so it self-compiles cleanly) in the per-emission
+-- context, initialized to None so each emitProgram/emitProgramGaps recomputes.
+resetDistinctTypeNames : Emit -> Unit
+resetDistinctTypeNames e = setRef e.distinctTypeNamesCache None
 
 distinctTypeNames : Emit -> List String
-distinctTypeNames e = match distinctTypeNamesRef.value
+distinctTypeNames e = match e.distinctTypeNamesCache.value
   Some xs => xs
   None =>
     let xs = nubStr (typeNamesOf (ctorTypeTable e))
-    let _ = setRef distinctTypeNamesRef (Some xs)
+    let _ = setRef e.distinctTypeNamesCache (Some xs)
     xs
 
 typeNamesOf : List (String, String) -> List String
@@ -7416,17 +7368,17 @@ emitDecision e env scrut arms tree =
   let _ = emit e ("  " ++ slot ++ " = alloca i64")
   let endL = "decend" ++ intToString (freshLocal e)
   let rty = Ref LTInt
-  let savedTrmc = trmcCtxRef.value
-  let _ = setRef trmcCtxRef TrmcOff
-  let savedGDisp = gDispCtxRef.value
-  let _ = setRef gDispCtxRef GDispOff
+  let savedTrmc = e.trmcCtx.value
+  let _ = setRef e.trmcCtx TrmcOff
+  let savedGDisp = e.gDispCtx.value
+  let _ = setRef e.gDispCtx GDispOff
   -- "" = a miss in an expression-position match is a genuine non-exhaustive abort,
   -- NOT the enclosing clause chain's fallthrough (the clause's pattern already
   -- matched to get here).  Passing it as an argument replaces the old
   -- save+null+restore of fallthroughLabelRef (issue #354).
   let _ = emitTree e env [sv] arms [sv] slot endL "" rty tree
-  let _ = setRef trmcCtxRef savedTrmc
-  let _ = setRef gDispCtxRef savedGDisp
+  let _ = setRef e.trmcCtx savedTrmc
+  let _ = setRef e.gDispCtx savedGDisp
   let _ = emit e (endL ++ ":")
   let r = freshReg e
   let _ = emit e "  \{r} = load i64, ptr \{slot}"
@@ -7504,9 +7456,9 @@ emitLeaf : Emit -> List (String, (String, LTy)) -> List String -> List CArm -> I
 emitLeaf e env roots arms i slot endL rty = match nthArm arms i
   Some (CArm pat _ body) =>
     let env2 = bindArm e env pat roots body
-    match gDispCtxRef.value
+    match e.gDispCtx.value
       GDispOn _ _ _ _ _ => emitGDispBody e env2 body
-      GDispOff => match trmcCtxRef.value
+      GDispOff => match e.trmcCtx.value
         TrmcOn _ _ _ _ _ _ => emitTrmcBody e env2 body
         TrmcOff =>
           let (bv, bty) = emitExpr e env2 body
@@ -7517,7 +7469,7 @@ emitLeaf e env roots arms i slot endL rty = match nthArm arms i
 -- TRMC (TRMC-DESIGN.md): when a destination-passing loop is active (multi-clause
 -- eligible fn — emitClauseTree's clause-selection tree), the clause body is a
 -- TAIL leaf → descend it via emitTrmcBody (cons-into-dest+loop / store+exit)
--- instead of computing a value into `slot`.  trmcCtxRef is cleared inside any
+-- instead of computing a value into `slot`.  `e.trmcCtx` is cleared inside any
 -- expression-position `match` (emitDecision), so a nested match's arms still
 -- compute values normally.
 
@@ -7540,9 +7492,9 @@ emitGuardedArm e env roots arms occs pat guards body fail slot endL ftL rty =
   -- then `unreachable`) — runtime UB, a SILENT MISCOMPILE (native returned `[]`/0
   -- where the interpreter and WasmGC returned the right list; wasm's tail engine
   -- always handled guards).  Fixture: test/stack_fixtures/guard_arm_trmc.mdk.
-  let _ = match gDispCtxRef.value
+  let _ = match e.gDispCtx.value
     GDispOn _ _ _ _ _ => emitGDispBody e env3 body
-    GDispOff => match trmcCtxRef.value
+    GDispOff => match e.trmcCtx.value
       TrmcOn _ _ _ _ _ _ => emitTrmcBody e env3 body
       TrmcOff =>
         let (bv, bty) = emitExpr e env3 body
@@ -8019,7 +7971,7 @@ emitFns e (b::rest) =
 -- (v3/v4 prove nothing outside the group references it); the ROOT emits the whole
 -- group define at its own bind position (deterministic emission order).
 emitFn : Emit -> CBind -> Unit
-emitFn e (CBind name [CClause pats body]) = match dispGroupOf gDispGroupsRef.value name
+emitFn e (CBind name [CClause pats body]) = match dispGroupOf e.gDispGroups.value name
   Some grp => if dispRootOf grp == name then emitGDispGroup e grp else ()
   None =>
     let (pats2, body2) = etaSaturateMethodBody e name pats body
@@ -8029,7 +7981,7 @@ emitFn e (CBind name [CClause pats body]) = match dispGroupOf gDispGroupsRef.val
       emitFnClause e name pats2 body2
     else
       emitMultiClauseFn e name [(pats2, body2)]
-emitFn e (CBind name (c::rest)) = match dispGroupOf gDispGroupsRef.value name
+emitFn e (CBind name (c::rest)) = match dispGroupOf e.gDispGroups.value name
   Some grp => if dispRootOf grp == name then emitGDispGroup e grp else ()
   None =>
     let clauses = clausePairs (c::rest)
@@ -8261,7 +8213,7 @@ clausePairs ((CClause pats body)::rest) = (pats, body) :: clausePairs rest
 -- entry sets up the result hole + the mutable destination slot + the mutable
 -- param slots, then jumps to the loop head; the loop reloads the params, runs the
 -- ORDINARY param dispatch (single-clause: CIf-tail descent; multi-clause: the
--- decision-tree clause chain) whose LEAVES are redirected via trmcCtxRef:
+-- decision-tree clause chain) whose LEAVES are redirected via `e.trmcCtx`:
 --   • cons leaf:  alloc Cons cell, store head, link cell into `*dest`, advance
 --                 `dest` to the cell's tail slot (+16), recompute the recursion
 --                 args into the param slots, br loop.
@@ -8313,7 +8265,7 @@ emitTrmcHeader e defineName arity =
 -- emit the closing `}`).  Sets up the result hole + mutable destination slot +
 -- mutable param slots, jumps to the loop head, reloads the params, runs the
 -- ordinary param dispatch (single-clause: CIf-tail descent; multi-clause: the
--- decision-tree clause chain) with the LEAVES redirected via trmcCtxRef (TrmcOn
+-- decision-tree clause chain) with the LEAVES redirected via `e.trmcCtx` (TrmcOn
 -- carries the SelfRef so the cons/ctor leaf recognises the self-call — a CVar for
 -- a top-level fn, a CMethod for a dispatched impl method), then emits the exit
 -- block (load hole, ret).  `self` is the SelfRef the loop recurses on; `slotTys`
@@ -8332,10 +8284,10 @@ emitTrmcLoopBody e self arity slotTys clauses single singlePats singleBody =
   let _ = emit e ("  br label %" ++ loopL)
   let _ = emit e (loopL ++ ":")
   let reloaded = trmcReloadParams e pslots slotTys 0
-  let saved = trmcCtxRef.value
-  let _ = setRef trmcCtxRef (TrmcOn self arity destSlot loopL exitL pslots)
+  let saved = e.trmcCtx.value
+  let _ = setRef e.trmcCtx (TrmcOn self arity destSlot loopL exitL pslots)
   let _ = trmcEmitDispatch e reloaded arity clauses single singlePats reloaded singleBody
-  let _ = setRef trmcCtxRef saved
+  let _ = setRef e.trmcCtx saved
   let _ = emit e (exitL ++ ":")
   let r = freshReg e
   let _ = emit e "  \{r} = load i64, ptr \{hole}"
@@ -8376,7 +8328,7 @@ trmcTail (_::xs) = xs
 -- run the in-loop param dispatch.  Single-clause (all-PVar params): rename the
 -- reloaded `aK` env to the clause's PVar names and descend the body in tail
 -- position (emitTrmcBody).  Multi-clause: reuse emitClauseTree's decision-tree
--- chain verbatim — its emitLeaf is TRMC-aware via trmcCtxRef.
+-- chain verbatim — its emitLeaf is TRMC-aware via `e.trmcCtx`.
 trmcEmitDispatch : Emit -> List (String, (String, LTy)) -> Int -> List (List Pat, CExpr) -> Bool -> List Pat -> List (String, (String, LTy)) -> CExpr -> Unit
 trmcEmitDispatch e reloaded arity clauses single singlePats aenv singleBody =
   if single then
@@ -8422,7 +8374,7 @@ emitTrmcBody e env (CLetGroup binds b) =
   else emitTrmcLeaf e env (CLetGroup binds b)
 -- B-match-descent (TRMC-DESIGN §"Phase 2 sub-part 3"): a TAIL-position decision
 -- tree.  Emit the scrutinee, then walk the SAME decision-tree machinery as
--- emitDecision (emitTree) but keep trmcCtxRef LIVE — so each arm body is descended
+-- emitDecision (emitTree) but keep `e.trmcCtx` LIVE — so each arm body is descended
 -- as a TRMC tail leaf (cons-into-dest+loop / plain-tail-call+loop / base+exit) via
 -- emitLeaf's TrmcOn branch, NOT computed into a value slot.  This is the inverse of
 -- emitDecision's save+clear, which stays for an EXPRESSION-position match inside an
@@ -8443,7 +8395,7 @@ emitTrmcBody e env (CDecision scrut arms tree) =
   let r = freshReg e
   let _ = emit e "  \{r} = load i64, ptr \{slot}"
   emit e "  unreachable"
--- trmcCtxRef is INTENTIONALLY left LIVE across the tree (the tail arms cons/loop
+-- `e.trmcCtx` is INTENTIONALLY left LIVE across the tree (the tail arms cons/loop
 -- into the active destination); a nested EXPRESSION-position match within an arm
 -- body re-enters emitDecision, which saves+clears it for its own value arms.
 
@@ -8472,7 +8424,7 @@ trmcBindNullaryGroup _ env (_::rest) = env
 -- recomputes its args + loops with NO cell alloc + NO dest store (iterate on a
 -- shorter list); any other leaf stores its value into the destination + exits.
 emitTrmcLeaf : Emit -> List (String, (String, LTy)) -> CExpr -> Unit
-emitTrmcLeaf e env ex = match trmcCtxRef.value
+emitTrmcLeaf e env ex = match e.trmcCtx.value
   TrmcOff => emitValueRet e env ex
   TrmcOn self arity destSlot loopL exitL pslots =>
     if isCtorTail (isCtor e) (ctorArity e) self arity ex then
@@ -8576,7 +8528,7 @@ emitTrmcBase e env ex destSlot exitL =
 -- member, so the whole group INLINES into the root's single define:
 --   • one labeled entry block per member (`gdisp_<member>:`), its body emitted
 --     by the ORDINARY clause machinery (direct tail descent / emitClauseTree)
---     under a live gDispCtxRef, leaves redirected;
+--     under a live `e.gDispCtx`, leaves redirected;
 --   • every sanctioned tail edge = recompute the callee's args into fresh regs,
 --     store them into the shared param slots, `br %gdisp_<callee>` — a plain
 --     branch, no call, no musttail (the "heterogeneous member arities" obstacle
@@ -8605,9 +8557,9 @@ emitGDispGroup : Emit -> DispGroup -> Unit
 emitGDispGroup e grp =
   let root = dispRootOf grp
   let members = dispMembersOf grp
-  let binds = gDispBindsRef.value
-  let rootArity = gDispFnArity root
-  let u = gDispMaxArity members 0
+  let binds = e.gDispBinds.value
+  let rootArity = gDispFnArity e root
+  let u = gDispMaxArity e members 0
   let _ = tmcGroupMarkers e root members
   let _ = emitTrmcHeader e ("mdk_" ++ root) rootArity
   let uslots = gDispEmitSlots e u rootArity 0
@@ -8618,10 +8570,10 @@ emitGDispGroup e grp =
   let _ = emit e "  store ptr \{hole}, ptr \{destSlot}"
   let exitL = "gdispexit" ++ intToString (freshLocal e)
   let _ = emit e ("  br label %" ++ gDispLabel root)
-  let saved = gDispCtxRef.value
-  let _ = setRef gDispCtxRef (GDispOn root members uslots destSlot exitL)
+  let saved = e.gDispCtx.value
+  let _ = setRef e.gDispCtx (GDispOn root members uslots destSlot exitL)
   let _ = emitGDispMembers e binds members
-  let _ = setRef gDispCtxRef saved
+  let _ = setRef e.gDispCtx saved
   let _ = emit e (exitL ++ ":")
   let r = freshReg e
   let _ = emit e "  \{r} = load i64, ptr \{hole}"
@@ -8641,11 +8593,11 @@ gDispEmitSlots e u rootArity i
     let _ = emit e "  store i64 \{seed}, ptr \{slot}"
     slot :: gDispEmitSlots e u rootArity (i + 1)
 
-gDispMaxArity : List String -> Int -> Int
-gDispMaxArity [] acc = acc
-gDispMaxArity (m::rest) acc =
-  let a = gDispFnArity m
-  gDispMaxArity rest (maxInt a acc)
+gDispMaxArity : Emit -> List String -> Int -> Int
+gDispMaxArity _ [] acc = acc
+gDispMaxArity e (m::rest) acc =
+  let a = gDispFnArity e m
+  gDispMaxArity e rest (maxInt a acc)
 
 emitGDispMembers : Emit -> List CBind -> List String -> Unit
 emitGDispMembers _ _ [] = ()
@@ -8663,7 +8615,7 @@ emitGDispMembers e binds (m::rest) =
 -- gDispCtx-aware).  Each member's clause chain is emitted with "" as its outer
 -- fallthrough (each member manages its own fallthroughs).
 emitGDispMember : Emit -> CBind -> Unit
-emitGDispMember e (CBind name clauses) = match gDispCtxRef.value
+emitGDispMember e (CBind name clauses) = match e.gDispCtx.value
   GDispOff => gapU e "(b') member emit with no active group context"
   GDispOn _ _ uslots _ _ =>
     let arity = clauseArityOf clauses
@@ -8713,7 +8665,7 @@ emitGDispBody e env (CLet False PWild rhs b) =
   let _ = emitExpr e env rhs
   emitGDispBody e env b
 emitGDispBody e env (CBlock stmts) = emitGDispBlock e env stmts
--- tail-position decision tree: keep gDispCtxRef LIVE across the tree (each arm
+-- tail-position decision tree: keep `e.gDispCtx` LIVE across the tree (each arm
 -- body is a redirected tail leaf via emitLeaf/emitGuardedArm), save+null the
 -- fallthrough label (a non-exhaustive tail match's CTFail is a genuine abort).
 -- The result slot + end label are a DEAD block (no leaf stores there under an
@@ -8769,7 +8721,7 @@ emitGDispBlock e env stmts = emitGDispLeaf e env (CBlock stmts)
 --     detection guarantees it references no member, so no member symbol — which
 --     does not exist — can be emitted).
 emitGDispLeaf : Emit -> List (String, (String, LTy)) -> CExpr -> Unit
-emitGDispLeaf e env ex = match gDispCtxRef.value
+emitGDispLeaf e env ex = match e.gDispCtx.value
   GDispOff => emitValueRet e env ex
   GDispOn _ members uslots destSlot exitL => match gDispSpine e members ex
     Some (heads, f, args) =>
@@ -8778,7 +8730,7 @@ emitGDispLeaf e env ex = match gDispCtxRef.value
     None => match flattenApp ex []
       (CVar f0 _, args) =>
         let f = canonFnName e f0
-        let fa = gDispFnArity f
+        let fa = gDispFnArity e f
         if contains f members && fa >= 0 && listLen args == fa then
           emitGDispEdge e env f args uslots
         else
@@ -8790,8 +8742,8 @@ emitGDispLeaf e env ex = match gDispCtxRef.value
 gDispSpine : Emit -> List String -> CExpr -> Option (List CExpr, String, List CExpr)
 gDispSpine e members ex = dispSpineParts
   (n => canonFnName e n)
-  (n => gDispIsFn n)
-  (n => gDispFnArity n)
+  (n => gDispIsFn e n)
+  (n => gDispFnArity e n)
   (f => contains f members)
   ex
 
@@ -8866,11 +8818,14 @@ gDispMembersEtaStable e binds (m::rest) = match dispFindBind binds m
   None => False
 
 -- drop group members from the float worker-wrapper advertisement set.
-gDispDropMembers : List (String, (Int, List Int)) -> List (String, (Int, List Int))
-gDispDropMembers [] = []
-gDispDropMembers ((n, v)::rest) =
-  let isMember = gDispIsMember n
-  if isMember then gDispDropMembers rest else (n, v) :: gDispDropMembers rest
+gDispDropMembers : Emit -> List (String, (Int, List Int)) -> List (String, (Int, List Int))
+gDispDropMembers _ [] = []
+gDispDropMembers e ((n, v)::rest) =
+  let isMember = gDispIsMember e n
+  if isMember then
+    gDispDropMembers e rest
+  else
+    (n, v) :: gDispDropMembers e rest
 
 -- like implParamEnv, but types each synthetic `aK` scrutinee param from the fn's
 -- inferred signature param types (FnSig ts) instead of defaulting to LTInt.
@@ -8990,8 +8945,6 @@ floatFwEligible e name pats ptys body =
 -- module set of fns that have an emitted `@mdk_<name>__fw` (name → (arity, float
 -- param positions)), for emitFloatLeaf to reroute float-context calls. Built once
 -- per program (call sites may precede the callee's emission).
-floatFwSetRef : Ref (List (String, (Int, List Int)))
-floatFwSetRef = Ref []
 
 -- collect the float-fw set from the program's single-clause function binds.
 collectFloatFw : Emit -> List CBind -> List (String, (Int, List Int))
@@ -9010,11 +8963,9 @@ collectFloatFw e (_::rest) = collectFloatFw e rest
 -- clause body is a CLam whose body evidently returns Float, e.g.
 -- `mkAdd base = (x => x + base)`).  A SATURATED call to such a fn yields a closure
 -- whose own saturated call returns Float — so `recordFloatClosureResult` records the
--- call-result word in closureRetTyRef, letting indirectRetTy type `f 1.0` LTFloat
+-- call-result word in `e.closureRetTy`, letting indirectRetTy type `f 1.0` LTFloat
 -- for `let f = mkAdd 100.0`.  Closes the returned-from-fn case of the closure-call-
 -- result float-arith bug (the direct `let f = (x=>…)` case is handled at emitLam).
-floatClosureFnsRef : Ref (List String)
-floatClosureFnsRef = Ref []
 
 collectFloatClosureFns : Emit -> List CBind -> List String
 collectFloatClosureFns _ [] = []
@@ -9050,12 +9001,12 @@ isFloatClosureBody e name pats (CLam _ lamBody) =
 isFloatClosureBody e name pats _ = False
 
 -- after a SATURATED known-fn call whose callee returns a float-returning closure,
--- record the result word as a float-returning closure (closureRetTyRef) so a later
+-- record the result word as a float-returning closure (`e.closureRetTy`) so a later
 -- indirect call of it types its result LTFloat.
 recordFloatClosureResult : Emit -> String -> Int -> Int -> (String, LTy) -> Unit
 recordFloatClosureResult e fname argc arity (reg, _) =
-  if argc == arity && contains fname floatClosureFnsRef.value then
-    setRef closureRetTyRef ((reg, LTFloat)::closureRetTyRef.value)
+  if argc == arity && contains fname e.floatClosureFns.value then
+    setRef e.closureRetTy ((reg, LTFloat)::e.closureRetTy.value)
   else
     ()
 
@@ -9448,7 +9399,7 @@ emitGlobalDecls e (b::rest) =
   -- (0 UNFORCED / 1 FORCING / 2 FORCED).  The value cell stays a uniform i64.  In
   -- the PRELUDE half the flag is external (defined by the program half's force fn,
   -- alongside @mdk_g_*) and the force fn is declared so a prelude body can call it.
-  let _ = if isLazyGlobal (bindName b) then
+  let _ = if isLazyGlobal e (bindName b) then
       if e.input.emitHalf == emitHalfPrelude then
         let _ = emitGlobal e "@mdk_gs_\{bindName b} = external global i8"
         emitGlobal e "declare i64 @mdk_force_\{bindName b}()"
@@ -10151,11 +10102,11 @@ findFieldIdx e label = match findRecordByLabel e label
     None => panic ("llvm: field '" ++ label ++ "' not found in record (internal error)")
   None => panic ("llvm: CFieldAccess: unknown field '" ++ label ++ "'")
 
--- #352: index-backed — `recByLabelRef` already holds, per label, the FIRST record in
+-- #352: index-backed — `e.recByLabel` already holds, per label, the FIRST record in
 -- table order that owns it, which is exactly what the scan below returns. Fallback to
 -- the scan when uninstalled.
 findRecordByLabel : Emit -> String -> Option (String, List String)
-findRecordByLabel e label = match recByLabelRef.value
+findRecordByLabel e label = match e.recByLabel.value
   Some m => omLookup label m
   None => findRecordByLabelIn (recFieldTable e) label
 
@@ -10798,29 +10749,59 @@ emitProgramMode gapMode input (CProgram groups ctorArs ctorTypes implEntries) =
     gapMode = gapMode,
     gapLog = Ref [],
     curGapBind = Ref "?",
+    defineCounter = Ref 0,
+    closureArity = Ref [],
+    closureRetTy = Ref [],
+    trmcCtx = Ref TrmcOff,
+    gDispCtx = Ref GDispOff,
+    gDispGroups = Ref [],
+    gDispBinds = Ref [],
+    gDispArs = Ref [],
+    gDispArMap = Ref None,
+    emittedDefaults = Ref [],
+    curImplTag = Ref "",
+    curSelfFnParams = Ref [],
+    knownFnMap = Ref None,
+    lazyGlobalMap = Ref None,
+    ctorMap = Ref None,
+    sigMap = Ref None,
+    defArityMap = Ref None,
+    recByName = Ref None,
+    recByLabel = Ref None,
+    implsByMethod = Ref None,
+    implMethodSet = Ref None,
+    ctorTypeMap = Ref None,
+    ctorsByType = Ref None,
+    ctorOrdinalMap = Ref None,
+    typeIdMap = Ref None,
+    dispCache = Ref [],
+    dictConstCache = Ref [],
+    distinctTypeNamesCache = Ref None,
+    floatFwSet = Ref [],
+    floatClosureFns = Ref [],
   }
-  let _ = resetDistinctTypeNames ()
-  let _ = setRef dictConstCacheRef []
-  let _ = setRef dispCacheRef []
-  let _ = installKnownFnMap (collectFns groups)
+  let _ = resetDistinctTypeNames e
+  let _ = setRef e.dictConstCache []
+  let _ = setRef e.dispCache []
+  let _ = installKnownFnMap e (collectFns groups)
   -- #561 PR-A: classify LAZY value globals (dispatch-reaching / cyclic) once per
   -- program.  Reads of these lower to `call @mdk_force_<x>()`; every other global
   -- stays on the byte-identical eager prologue.
-  let _ = installLazyGlobalMap (lazyGlobalNames groups)
-  let _ = installCtorMap ctorArs
+  let _ = installLazyGlobalMap e (lazyGlobalNames groups)
+  let _ = installCtorMap e ctorArs
   -- #990: index the ctor→type table so cellTag's per-ctor ctorTypeId/ctorOrdinal/
   -- ctorHasSiblings lookups are O(log types) not O(types) — reverseL ⇒ first-wins.
-  let _ = installCtorTypeMap ctorTypes
+  let _ = installCtorTypeMap e ctorTypes
   -- #352: index the CONSTANT record field-order table (by name and by label) so every
   -- per-field-op probe is O(log records) not O(records) — same first-match answers.
-  let _ = installRecFieldIndex (recFieldTable e)
-  let _ = installSigMap (sigTable e)
+  let _ = installRecFieldIndex e (recFieldTable e)
+  let _ = installSigMap e (sigTable e)
   let _ = installDefArityMap e (fnBinds groups)
   -- #990: group the flat impl-entry list by interface method ONCE, so every per-site
   -- dispatch scan (implsOf/defaultFor/implFnSymE/implEntryRouteKeyE) is O(bucket) not
   -- O(impls) — byte-identical IR, O(N²)→O(N log N) emit on dispatch-heavy code.
-  let _ = installImplIndex implEntries
-  let _ = installImplMethodSet implEntries
+  let _ = installImplIndex e implEntries
+  let _ = installImplMethodSet e implEntries
   -- (b′) dispatch-graph TMC: run the SHARED detection (backend/trmc_analysis.mdk)
   -- before any fn emit, so emitFn can route group members/roots.  Hooks: the LLVM
   -- canonFnName + a clause-derived fn-arity table with wasm's progFnArity contract
@@ -10831,27 +10812,27 @@ emitProgramMode gapMode input (CProgram groups ctorArs ctorTypes implEntries) =
   -- clause-arity body would diverge from the ordinary define's ABI); dropped
   -- groups fall back to ordinary codegen, no transform, no regression.
   let gDispArs = gDispFnArsOf (fnBinds groups)
-  let _ = setRef gDispArsRef gDispArs
+  let _ = setRef e.gDispArs gDispArs
   -- #990: index the fn-arity table so detectDispatchGroups' per-ref gDispIsFn/
   -- gDispFnArity is O(log fns) not O(fns) — reverseL ⇒ first-pair-wins = lookupAssoc.
-  let _ = setRef gDispArMapRef (Some (omFromPairs (reverseL gDispArs) omEmpty))
-  let _ = setRef gDispBindsRef (fnBinds groups)
+  let _ = setRef e.gDispArMap (Some (omFromPairs (reverseL gDispArs) omEmpty))
+  let _ = setRef e.gDispBinds (fnBinds groups)
   let dispGroups0 = detectDispatchGroups
     (n => canonFnName e n)
-    (n => gDispIsFn n)
-    (n => gDispFnArity n)
+    (n => gDispIsFn e n)
+    (n => gDispFnArity e n)
     (nm ar cs => gDispStage1Claims e nm ar cs)
     (fnBinds groups)
     groups
     implEntries
-  let _ = setRef gDispGroupsRef (gDispKeepEtaStable e (fnBinds groups) dispGroups0)
+  let _ = setRef e.gDispGroups (gDispKeepEtaStable e (fnBinds groups) dispGroups0)
   -- a group member must never be ADVERTISED as having a float `__fw` worker (the
   -- group path emits no standalone defines, so a float-context caller would call
   -- a nonexistent symbol; v3/v4 make external float callers impossible anyway —
   -- belt and braces).
-  let _ = setRef floatFwSetRef (gDispDropMembers (collectFloatFw e (fnBinds groups)))
-  let _ = setRef floatClosureFnsRef (collectFloatClosureFns e (fnBinds groups))
-  let _ = resetEmittedDefaults ()
+  let _ = setRef e.floatFwSet (gDispDropMembers e (collectFloatFw e (fnBinds groups)))
+  let _ = setRef e.floatClosureFns (collectFloatClosureFns e (fnBinds groups))
+  let _ = resetEmittedDefaults e
   let _ = emitPreamble e
   let _ = emitGlobalDecls e (valBinds groups)
   -- issue #118: the PRELUDE half is a LIBRARY — it has no entry point, and the
@@ -10891,7 +10872,7 @@ emitProgramMain e groups =
   -- lazy (the compiler's own case).  A SAFE global's whole eager reach is SAFE (the
   -- taint is downward-closed over reads), so this prologue never calls a force fn.
   -- LAZY globals are initialised on first use by their @mdk_force_<x> defines below.
-  let _ = emitTopGlobals e (orderedValBinds groups (safeValBinds (valBinds groups)))
+  let _ = emitTopGlobals e (orderedValBinds groups (safeValBinds e (valBinds groups)))
   let (mv, mty) = emitExpr e [] mainRhs
   -- A Unit-returning `main` produces output ONLY through explicit print calls (or
   -- a panic); never auto-print its `()` result.  Detected by the DECLARED return
@@ -10964,12 +10945,12 @@ emitTopGlobals _ ((CBind name _)::_) =
 -- ── #561 PR-A: lazy value-global force functions ─────────────────────────────
 -- The SAFE (eager) value binds — those NOT classified lazy — kept on the byte-
 -- identical init prologue.  When no global is lazy this is the identity on valBinds.
-safeValBinds : List CBind -> List CBind
-safeValBinds bs = filterList (b => not (isLazyGlobal (bindName b))) bs
+safeValBinds : Emit -> List CBind -> List CBind
+safeValBinds e bs = filterList (b => not (isLazyGlobal e (bindName b))) bs
 
 -- the value binds classified LAZY — each emitted as an @mdk_force_<name> define.
-lazyValBinds : List CBind -> List CBind
-lazyValBinds bs = filterList (b => isLazyGlobal (bindName b)) bs
+lazyValBinds : Emit -> List CBind -> List CBind
+lazyValBinds e bs = filterList (b => isLazyGlobal e (bindName b)) bs
 
 -- emit an @mdk_force_<name> define for every LAZY value global (whole/program half
 -- only — the prelude half just declares them; see emitGlobalDecls).  A faithful
@@ -10981,7 +10962,7 @@ lazyValBinds bs = filterList (b => isLazyGlobal (bindName b)) bs
 -- anywhere else (a plain load for a SAFE dep — already eager-initialised by the
 -- prologue that ran first — or a nested @mdk_force_ for a LAZY dep).
 emitLazyForces : Emit -> List CBind -> Unit
-emitLazyForces e binds = emitLazyForcesGo e (lazyValBinds binds)
+emitLazyForces e binds = emitLazyForcesGo e (lazyValBinds e binds)
 
 emitLazyForcesGo : Emit -> List CBind -> Unit
 emitLazyForcesGo _ [] = ()
@@ -11128,34 +11109,64 @@ emitProgramGaps input (CProgram groups ctorArs ctorTypes implEntries) =
     gapMode = Record,
     gapLog = Ref [],
     curGapBind = Ref "?",
+    defineCounter = Ref 0,
+    closureArity = Ref [],
+    closureRetTy = Ref [],
+    trmcCtx = Ref TrmcOff,
+    gDispCtx = Ref GDispOff,
+    gDispGroups = Ref [],
+    gDispBinds = Ref [],
+    gDispArs = Ref [],
+    gDispArMap = Ref None,
+    emittedDefaults = Ref [],
+    curImplTag = Ref "",
+    curSelfFnParams = Ref [],
+    knownFnMap = Ref None,
+    lazyGlobalMap = Ref None,
+    ctorMap = Ref None,
+    sigMap = Ref None,
+    defArityMap = Ref None,
+    recByName = Ref None,
+    recByLabel = Ref None,
+    implsByMethod = Ref None,
+    implMethodSet = Ref None,
+    ctorTypeMap = Ref None,
+    ctorsByType = Ref None,
+    ctorOrdinalMap = Ref None,
+    typeIdMap = Ref None,
+    dispCache = Ref [],
+    dictConstCache = Ref [],
+    distinctTypeNamesCache = Ref None,
+    floatFwSet = Ref [],
+    floatClosureFns = Ref [],
   }
-  let _ = resetDistinctTypeNames ()
-  let _ = setRef dictConstCacheRef []
-  let _ = setRef dispCacheRef []
-  let _ = installKnownFnMap (collectFns groups)
+  let _ = resetDistinctTypeNames e
+  let _ = setRef e.dictConstCache []
+  let _ = setRef e.dispCache []
+  let _ = installKnownFnMap e (collectFns groups)
   -- #561 PR-A: the gap census emits every value bind ORDINARILY (eager load), so
   -- install an EMPTY lazy set — this also RESETS any prior emitProgram's set so it
   -- cannot leak into the census.
-  let _ = installLazyGlobalMap []
-  let _ = installCtorMap ctorArs
+  let _ = installLazyGlobalMap e []
+  let _ = installCtorMap e ctorArs
   -- #990: index the ctor→type table so cellTag's per-ctor ctorTypeId/ctorOrdinal/
   -- ctorHasSiblings lookups are O(log types) not O(types) — reverseL ⇒ first-wins.
-  let _ = installCtorTypeMap ctorTypes
+  let _ = installCtorTypeMap e ctorTypes
   -- #352: index the CONSTANT record field-order table (by name and by label) so every
   -- per-field-op probe is O(log records) not O(records) — same first-match answers.
-  let _ = installRecFieldIndex (recFieldTable e)
-  let _ = installSigMap (sigTable e)
+  let _ = installRecFieldIndex e (recFieldTable e)
+  let _ = installSigMap e (sigTable e)
   let _ = installDefArityMap e (fnBinds groups)
   -- #990: install the by-method impl index (see emitProgram) — resets any prior
   -- program's index so a same-process re-emit can never route through a stale bucket.
-  let _ = installImplIndex implEntries
-  let _ = installImplMethodSet implEntries
-  let _ = setRef floatFwSetRef (collectFloatFw e (fnBinds groups))
-  let _ = setRef floatClosureFnsRef (collectFloatClosureFns e (fnBinds groups))
+  let _ = installImplIndex e implEntries
+  let _ = installImplMethodSet e implEntries
+  let _ = setRef e.floatFwSet (collectFloatFw e (fnBinds groups))
+  let _ = setRef e.floatClosureFns (collectFloatClosureFns e (fnBinds groups))
   -- the gap census emits every bind ORDINARILY — reset the (b′) groups so a prior
   -- emitProgram's routing state can never leak into this path.
-  let _ = setRef gDispGroupsRef []
-  let _ = resetEmittedDefaults ()
+  let _ = setRef e.gDispGroups []
+  let _ = resetEmittedDefaults e
   let _ = emitPreamble e
   let _ = emitFnsGaps e (fnBinds groups)
   let _ = emitImplsGaps e implEntries

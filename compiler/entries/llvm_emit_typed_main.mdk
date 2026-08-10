@@ -44,7 +44,8 @@ main = match args ()
   _ => driveRuntime emit
 
 -- P -> P+U -> P in one interpreter process. The middle program reuses P's
--- interface/method spellings and adds U, so its input tables materially differ.
+-- interface/method spellings and adds U, so both semantic inputs and physical
+-- caches/counters materially differ between emissions.
 emitIsolation : String -> String -> String -> <IO> Unit
 emitIsolation runtimePath pPath pPlusUPath = match readFile runtimePath
   Err msg => failWith msg
@@ -60,11 +61,11 @@ emitIsolation runtimePath pPath pPlusUPath = match readFile runtimePath
         let pPlusU = runEmit runtimeDecls [] pPlusUDecls
         let p2 = runEmit runtimeDecls [] pDecls
         if p1 != p2 then
-          failWith "LLVM EmitInput isolation failure: P changed after same-process P+U emission"
+          failWith "LLVM emission isolation failure: P changed after same-process P+U emission"
         else if p1 == pPlusU then
-          failWith "LLVM EmitInput isolation failure: P+U did not produce distinct LLVM"
+          failWith "LLVM emission isolation failure: P+U did not produce distinct LLVM"
         else
-          putStr "EMIT_INPUT_ISOLATION_OK\n"
+          putStr "LLVM_EMIT_ISOLATION_OK\n"
 
 -- Record then strict-emit the same unsupported Core node in ONE process. The
 -- record marker reaches stdout before the strict panic; the shell control asserts
