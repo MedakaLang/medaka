@@ -623,10 +623,15 @@ source per unit of work**:
     turns `PRec "T" recFields open` → `PCon "T" [sub-pat per field IN DECLARED ORDER]`,
     where each declared field contributes the named `RecPatField`'s sub-pattern, `PVar
     label` for a pun (`None`), or `PWild` if unnamed (covers open `..`/subset). The
-    field-order map (`buildRecPatFieldOrders`) is DECLARED order from `DRecord` field
-    lists + `DData` `ConNamed` variants — the same order the emitter's record CELL layout
-    / `recFieldTable` use, so positional indices line up with the cell's stored field
-    offsets (records/named-field variants are heap cells `[tag|f0|f1|…]` exactly like
+    field-order map (`declaredRecordFieldOrders`, named `buildRecPatFieldOrders` until
+    #1513 exported it as the one authority both backends seed their tables from) is
+    DECLARED order from `DRecord` field lists + `DData` `ConNamed` variants — the same
+    order the emitter's record CELL layout / `recFieldTable` use, so positional indices
+    line up with the cell's stored field offsets. ⚠️ That last clause was an ASSERTION,
+    not an invariant, until #1513: nothing reordered a record LITERAL, so a literal
+    written out of declaration order laid the cell out in written order and every reader
+    indexed it by declared order (#1306). `core_ir_lower.normalizeRecordOrder` now
+    establishes it (records/named-field variants are heap cells `[tag|f0|f1|…]` exactly like
     ctors, allocated by `emitCtorAlloc`). The rewrite recurses into ALL nested forms
     (`PCon` args, `PCons`, `PTuple`, `PList`, `PAs`, nested `PRec`), is applied to every
     pattern position the lowered Core IR carries (match arms, clauses, `CLam`, `CLet`,
