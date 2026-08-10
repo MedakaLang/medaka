@@ -3016,6 +3016,14 @@ distinctIdentsIn2 _ = False
 -- ["Pt", "Pt"]
 -- > distinctIdentsIn2 (fromOption [] (omLookup "x" deFieldOwnerSameNameEnv.deFieldOwnerIdents))
 -- True
+
+-- 🚨 THE BLANK LINE ABOVE IS LOAD-BEARING — DO NOT CLOSE THE GAP.  A doctest's
+-- EXPECTED OUTPUT runs to the end of the contiguous comment run, so without it
+-- this banner is absorbed into A-3.2a's last doctest's expected value and that
+-- doctest FAILS with `expected: True / actual: True` plus this text spliced in.
+-- MEASURED when A-3.2a and A-3.4 first met in one tree: 13/14, and neither PR
+-- could have seen it alone — no conflict marker, two adjacent comment blocks,
+-- each correct in isolation.
 -- ═══ #1112 A-3.4: THE `IE` REGISTRY — IE-BLOCK-BEGIN ════════════════════════════
 -- 🚨 THE TWO BANNER LINES BOUNDING THIS BLOCK ARE READ BY A GATE.  Check 4
 -- of `test/registry_keying_ratchet.sh` (which runs inside
