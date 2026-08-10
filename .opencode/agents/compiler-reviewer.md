@@ -3,7 +3,7 @@ description: Independently reviews Medaka compiler changes for conformance, arch
 mode: subagent
 model: openai/gpt-5.6-sol
 variant: high
-steps: 28
+steps: 36
 permission:
   "*": deny
   read: allow

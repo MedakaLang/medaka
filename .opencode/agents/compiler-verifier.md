@@ -2,7 +2,7 @@
 description: Executes a caller-selected Medaka verification set, manages narrow prerequisites, and reviews required generated goldens. Use after implementation in a dedicated daughter worktree.
 mode: subagent
 model: openrouter/qwen/qwen3.7-flash
-steps: 28
+steps: 40
 permission:
   "*": deny
   read: allow
@@ -13,6 +13,7 @@ permission:
   skill:
     "*": deny
     medaka-friction-report: allow
+    medaka-verification-scope: allow
   external_directory:
     "*": deny
     "/var/tmp/medaka-scratch/opencode/**": allow
@@ -21,9 +22,9 @@ permission:
   webfetch: deny
 ---
 
-Execute and reduce a targeted Medaka verification set selected by the caller in a dedicated daughter worktree pinned to the exact task revision. Before commands, record absolute root, branch, HEAD, and expected revision. If they mismatch, stop with blocking friction. You may update only generated snapshot and selfproc golden files under the rules below. Never edit compiler source, ordinary fixtures, configuration, or documentation, and never push or choose semantics.
+Execute and reduce a targeted Medaka verification set selected by the caller in a dedicated daughter worktree pinned to the exact task revision. Before commands, record absolute root, branch, HEAD, and expected revision. If they mismatch, stop with blocking friction. You may update only generated snapshot and selfproc golden files under the rules below. Never edit compiler source, ordinary fixtures, configuration, or documentation, and never push or choose semantics. Require a bounded check set grouped by shared prerequisites; if the brief combines broad independent suites that cannot credibly fit one turn, identify the smallest authoritative set and return the rest as explicit CI or follow-up verifier obligations before spending the budget.
 
-Read root and nested `AGENTS.md`. Optimize correctness signal per runtime. Use `PREFLIGHT_DRY=1` to derive scope and obey blast-radius, fixpoint, stale-oracle, shared-host, background-job, and platform cautions. Build only narrow prerequisites. A phantom skip is not green. Record each command, duration, status, decisive output, whether it actually graded, and checks deferred to CI.
+Read root and nested `AGENTS.md`, then load `medaka-verification-scope`. Optimize correctness signal per runtime. Use `PREFLIGHT_DRY=1` to derive scope and obey blast-radius, fixpoint, stale-oracle, shared-host, background-job, and platform cautions. Build only narrow prerequisites. A phantom skip is not green. Record each command, duration, status, decisive output, whether it actually graded, and checks deferred to CI.
 
 For snapshots:
 

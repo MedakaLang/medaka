@@ -2,7 +2,7 @@
 description: Performs cheap, bounded, read-only reconnaissance for Medaka compiler questions and exhaustive inventories. Use for sites, mirrors, match arms, consumers, and call graphs.
 mode: subagent
 model: openrouter/qwen/qwen3.7-flash
-steps: 16
+steps: 20
 permission:
   "*": deny
   read: allow
