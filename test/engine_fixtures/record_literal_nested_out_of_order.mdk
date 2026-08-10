@@ -1,0 +1,42 @@
+-- #1513 / #1306 — this one tests THE FIX'S OWN MACHINERY, not the defect.
+--
+-- `core_ir_lower.normalizeRecordOrder` repairs an out-of-order record literal by
+-- binding its field expressions to temporaries named `$rf$<label>` IN WRITTEN ORDER
+-- and building the `CRecord` from those temporaries in DECLARED order.  That path
+-- did not exist before the fix, so nothing that existed before could exercise it:
+-- every pre-fix fixture covers the case where no temporaries are introduced at all.
+-- This is the "a fix that turns a path returning NOTHING into one returning
+-- SOMETHING ships an answer untested by construction" hazard, met head-on.
+--
+-- The sharp edge of that scheme is NAME COLLISION.  `P` and `Q` here declare the
+-- SAME TWO LABELS in OPPOSITE ORDER, so both literals are out of order and both
+-- mint `$rf$x` and `$rf$y` -- and the inner `P` literal sits INSIDE the outer `Q`
+-- literal's `x` field expression, where the outer's `$rf$x` is already bound.  The
+-- inner binding must shadow only within that expression and be gone again by the
+-- time the outer `CRecord` reads its own temporaries back.  If the scheme leaked in
+-- either direction, this is the shape that would show it.
+--
+-- EXPECTED VALUE, HAND-DERIVED from this source before any engine was run --
+-- pinned at test/engine_value_pins/engine/record_literal_nested_out_of_order.pin:
+--
+--   (5, 9, 9)
+--
+--   the inner literal is `P { y = 7, x = 5 }`, so `getX` of it is `5`;
+--   the outer is therefore `Q { x = 5, y = 9 }`, so `q.x = 5` and `q.y = 9`;
+--   the third component is `q.y` again, read by RECORD PATTERN rather than by
+--   projection -- a leak into the pattern reader would move it without moving the
+--   second.  `7` appearing anywhere is the inner literal's `y` surfacing through
+--   the wrong slot; a `9` in the first component is the outer's own labels crossed.
+
+data P = P { x : Int, y : Int }
+
+data Q = Q { y : Int, x : Int }
+
+getX : P -> Int
+getX p = p.x
+
+main =
+  let q = Q { x = getX (P { y = 7, x = 5 }), y = 9 }
+  let patY = match q
+    Q { y } => y
+  (q.x, q.y, patY)
