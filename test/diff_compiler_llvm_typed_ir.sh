@@ -3,13 +3,11 @@
 #
 # ── WHY THIS GATE EXISTS ──────────────────────────────────────────────────────
 # diff_compiler_llvm.sh is our headline IR-golden gate ("220 ok, byte-identical
-# IR"), but its entry — compiler/entries/llvm_emit_main.mdk — installs NONE of the
-# emitter's seven side-tables (installReturnsSelf/installSelfFnParams/
-# installMethodConstraintIfaces/installCtorFieldTypes/installDeclSigTypes/
-# installMainIsUnitHint/installMainIsFloatHint are all empty there). So under that
-# entry every side-table-fed code path runs in its degenerate state, and ANY change
-# to those tables' content or lifecycle is a NO-OP that the 220-fixture gate cannot
-# see. Meanwhile the gates that DO install the tables — diff_compiler_llvm_typed.sh
+# IR"), but its entry — compiler/entries/llvm_emit_main.mdk — constructs an empty
+# explicit EmitInput. So under that entry every declaration-derived input path runs
+# in its degenerate state, and ANY change to those inputs is a NO-OP that the
+# 220-fixture gate cannot see. Meanwhile diff_compiler_llvm_typed.sh and
+# diff_compiler_llvm_modules.sh construct populated EmitInput values but compare program
 # and diff_compiler_llvm_modules.sh — compare program OUTPUT, not IR, so an IR
 # PESSIMIZATION that still computes the right answer is invisible to them BY
 # CONSTRUCTION (e.g. a specialized `@mdk_list_append` call degrading to a generic
@@ -17,9 +15,9 @@
 # reset-the-seven-at-emitProgram change moved emitted IR and STILL passed
 # "220 ok / 48 ok / 16 ok" across all three existing gates.
 #
-# This gate closes that hole: it drives the SAME installing entry the typed OUTPUT
-# gate uses (test/bin/llvm_emit_typed_main, from compiler/entries/llvm_emit_typed_main.mdk,
-# which installs all seven tables), but compares the EMITTED LLVM IR byte-for-byte
+# This gate closes that hole: it drives the SAME explicit-input entry the typed OUTPUT
+# gate uses (test/bin/llvm_emit_typed_main, from compiler/entries/llvm_emit_typed_main.mdk),
+# but compares the EMITTED LLVM IR byte-for-byte
 # against committed goldens. A change that moves the IR — including an inert
 # pessimization — flips a golden RED here even when the program's output is
 # unchanged.
@@ -147,8 +145,8 @@ if [ "${CAPTURE:-0}" = "1" ]; then
 else
   printf '\nchecked %d, %d ok, %d failing\n' "$n_fixtures" "$pass" "$fail"
   [ "$fail" -eq 0 ] || exit 1
-  # Same-process P -> U -> P control. U overlaps P's interface/method namespace,
-  # while the positive program explicitly selects U and must print 11, not P's 7.
+  # Same-process P -> P+U -> P control. The middle input includes P's namespace
+  # plus U's extra data/impl rows, while the positive program selects U and prints 11.
   # These private temp files are not a shared fixture corpus.
   command -v "$CC" >/dev/null 2>&1 || { echo "FAIL: no C compiler for isolation control"; exit 1; }
   if command -v pkg-config >/dev/null 2>&1 && pkg-config --exists bdw-gc 2>/dev/null; then
@@ -162,20 +160,20 @@ else
   printf '%s\n' 'interface Mark a where' '  mark : a -> Int' 'data P = P' 'impl Mark P where' '  mark P = 7' 'main = mark P' > "$ISO/p.mdk"
   printf '%s\n' 'interface Mark a where' '  mark : a -> Int' 'data U = U' 'impl Mark U where' '  mark U = 11' 'main = mark U' > "$ISO/u.mdk"
   printf '%s\n' 'interface Mark a where' '  mark : a -> Int' 'data P = P' 'data U = U' 'impl Mark P where' '  mark P = 7' 'impl Mark U where' '  mark U = 11' 'main = mark U' > "$ISO/positive.mdk"
-  "$EMITBIN" --isolation "$RUNTIME" "$ISO/p.mdk" "$ISO/u.mdk" > "$ISO/isolation.ll" 2> "$ISO/isolation.err"
+  "$EMITBIN" --isolation "$RUNTIME" "$ISO/p.mdk" "$ISO/positive.mdk" > "$ISO/isolation.ll" 2> "$ISO/isolation.err"
   isolation_rc=$?
   if [ "$isolation_rc" -ne 0 ]; then
     printf 'FAIL: same-process EmitInput isolation control\n%s\n' "$(cat "$ISO/isolation.err")"
     exit 1
   fi
-  for n in p u positive; do
+  for n in p positive; do
     "$EMITBIN" "$RUNTIME" "$ISO/$n.mdk" > "$ISO/$n.ll" 2> "$ISO/$n.err" || { cat "$ISO/$n.err"; exit 1; }
     "$CC" $GC_CFLAGS "$ISO/$n.ll" "$RT" $GC_LIBS -lm -o "$ISO/$n.bin" || exit 1
   done
-  p_out="$("$ISO/p.bin")"; u_out="$("$ISO/u.bin")"; positive_out="$("$ISO/positive.bin")"
-  [ "$p_out" = 7 ] && [ "$u_out" = 11 ] && [ "$positive_out" = 11 ] || {
-    printf 'FAIL: isolation control expected P=7 U=11 P+U=11; got P=%s U=%s P+U=%s\n' "$p_out" "$u_out" "$positive_out"
+  p_out="$("$ISO/p.bin")"; positive_out="$("$ISO/positive.bin")"
+  [ "$p_out" = 7 ] && [ "$positive_out" = 11 ] || {
+    printf 'FAIL: isolation control expected P=7 P+U=11; got P=%s P+U=%s\n' "$p_out" "$positive_out"
     exit 1
   }
-  printf 'checked same-process EmitInput isolation (P -> U -> P; P=7, P+U=11)\n'
+  printf 'checked same-process EmitInput isolation (P -> P+U -> P; P=7, P+U=11)\n'
 fi

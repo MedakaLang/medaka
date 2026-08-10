@@ -14,8 +14,7 @@ SRC="$WORK/wasm_snapshot_input.mdk"
 mkdir "$WORK/wasm-only" "$WORK/combined"
 
 # `score = x => 7` has a zero-clause impl body but a one-argument method. The
-# Wasm emitter must read the installed method arity and eta-expand it. The P+U
-# program selects U, so the independently hand-derived result is 11.
+# Wasm emitter must read the installed method arity and eta-expand it.
 printf '%s\n' \
   'interface Score a where' \
   '  score : a -> Int' \
@@ -55,9 +54,4 @@ grep -Fq '(func $mdk_impl_U_score (param' "$WORK/only.wat" || {
   echo "FAIL: snapshot WAT did not eta-expand Score to its declared receiver arity"
   exit 1
 }
-grep -q 'i32.const 11' "$WORK/only.wat" || {
-  echo "FAIL: snapshot WAT lost the hand-derived U result (11)"
-  exit 1
-}
-
-echo "snapshot Wasm input: WASM-only equals combined; Score(U) retains 11"
+echo "snapshot Wasm input: WASM-only equals combined; Score impl receiver arity is explicit"

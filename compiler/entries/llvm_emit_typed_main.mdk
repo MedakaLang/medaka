@@ -36,30 +36,30 @@ import backend.llvm_emit.{emitProgram, makeEmitInput}
 import entries.entry_support.{driveRuntime, failWith}
 
 main = match args ()
-  ["--isolation", runtimePath, pPath, uPath] =>
-    emitIsolation runtimePath pPath uPath
+  ["--isolation", runtimePath, pPath, pPlusUPath] =>
+    emitIsolation runtimePath pPath pPlusUPath
   _ => driveRuntime emit
 
--- P -> U -> P in one interpreter process. U reuses P's interface and method
--- spellings but has a distinct data owner, so stale semantic tables are observable.
+-- P -> P+U -> P in one interpreter process. The middle program reuses P's
+-- interface/method spellings and adds U, so its input tables materially differ.
 emitIsolation : String -> String -> String -> <IO> Unit
-emitIsolation runtimePath pPath uPath = match readFile runtimePath
+emitIsolation runtimePath pPath pPlusUPath = match readFile runtimePath
   Err msg => failWith msg
   Ok runtimeSrc => match readFile pPath
     Err msg => failWith msg
-    Ok pSrc => match readFile uPath
+    Ok pSrc => match readFile pPlusUPath
       Err msg => failWith msg
-      Ok uSrc =>
+      Ok pPlusUSrc =>
         let runtimeDecls = desugar (parse runtimeSrc)
         let pDecls = desugar (parse pSrc)
-        let uDecls = desugar (parse uSrc)
+        let pPlusUDecls = desugar (parse pPlusUSrc)
         let p1 = runEmit runtimeDecls [] pDecls
-        let _ = runEmit runtimeDecls [] uDecls
+        let _ = runEmit runtimeDecls [] pPlusUDecls
         let p2 = runEmit runtimeDecls [] pDecls
         if p1 == p2 then
           putStr p1
         else
-          failWith "LLVM EmitInput isolation failure: P changed after same-process U emission"
+          failWith "LLVM EmitInput isolation failure: P changed after same-process P+U emission"
 
 emit : List Decl -> List Decl -> List Decl -> <IO> Unit
 emit runtimeDecls preludeDecls userDecls =
