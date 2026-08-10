@@ -2106,3 +2106,38 @@ as the dissenter*, which killed a tidy "the intervening merge (`fa9f7564`) chang
 anyone spent a run on it. And the settling report states its commit, its build provenance and its
 exit-code-reading method, so the next disagreement can be diffed against it instead of restarted.
 **Tiebreak by making the two experiments identical, not by adding a voter.**
+
+## Draining a pin, 2026-08-10/11 — a channel split is not a fixture verdict
+
+### ⭐⭐ A drained fixture is not a drained class
+
+PR #1520 (U1b) flipped issue #1438's `must_fail` pin green and its body proposed retiring
+the issue. The pinned repro posed its goal through a **signature `=>` slot**, which
+travels the exact channel U1b re-keyed. The minimal pair — same three modules, the
+forwarder left **unsigned** so the goal is posed by a **bare method occurrence** instead
+— was **identical on both arms**: `check` exit 0, `build` exit 0, **binary exit 139**.
+Half the class was still alive and the proposal would have closed an open S0 with no
+guard left in the tree.
+
+**The check is cheap and belongs in any review of a fix that drains a pin: construct the
+minimal pair that differs only in the mechanism the fix did not touch** — here, delete
+one signature line and nothing else. Bookkeeping corollary from the same incident: name
+the replacement fixture for **the unit that will drain the residual** (`1507-…`, after
+#1507), not for the original issue — a fixture filed as `#1438` would sit unowned the
+day #1507's fix lands, since #1507 is what actually closes it.
+
+### ⭐⭐ A structural ruling does not license a fixture-level prediction
+
+Same incident, my error. I derived a channel split from source — three bare obligation
+producers, two closed by U1b, one owned by a sibling unit — and that half survived the
+measurement unchanged. From it I *inferred* which unit issue #1438's own repro would
+drain at, and wrote that inference into #1482's title and #1507's body **as a flat
+statement**. One `check` run on the branch would have settled it before it shipped as
+fact.
+
+The verified structural half and the untested consequential half shipped in the same
+sentence at the same confidence. **The sharpest part: this happened inside a correction
+whose entire purpose was to stop an over-claim** — being in correction mode does not
+immunise the correction itself from the same failure it exists to fix. Ask, every time a
+derivation from source produces a claim about a SPECIFIC INSTANCE: has anyone actually
+run that instance, or only the class it's alleged to belong to?

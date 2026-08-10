@@ -1806,6 +1806,20 @@ per-module scoping already answers the question they exist to work around. **Tho
 are defects of the flatten, not legitimate 1-module behaviour**, and U2 is what makes
 that judgement rather than leaving it to taste.
 
+⚠️ **This enumeration was incomplete — there is a THIRD residual, not a defect of the
+flatten but of the *name* the single-target arm gives its own node.** `runSingle`
+stamps a single-target test file's declarations under a synthetic module id,
+`"__user__"`, hardcoded at four sites in `compiler/tools/test_cmd.mdk`
+(`:353`, `:450`, `:527`, `:677`), while `loadProgram` stamps the *same file* under its
+loader-derived id — so one declaration carries two identities across a single
+`medaka test <dir>` process (#1223, S2). This is not the flatten's residual: `runSingle`
+is already on the Module path (a genuine `elaborateModules … [(rootId, prog)]` call, a
+1-node graph satisfying U1), and the defect is entirely in *what string names that one
+node*, orthogonal to whether the prelude is flattened into it. #1521 (ARCH E-5) owns
+retiring the literal and giving the single-target driver its loader-derived id;
+until it lands, `"__user__"` is a third thing this section's enumeration owed and did
+not name.
+
 ⚠️ **U1/U2 are clauses, not a description of the current state, and that difference
 has already misled.** `compiler/DRIVER-COLLAPSE-PLAN.md` records U1 as its own
 governing invariant (*"the degenerate 1-module case automatically satisfies the flat
