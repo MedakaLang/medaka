@@ -21,9 +21,9 @@ permission:
   task: deny
 ---
 
-Independently review a Medaka compiler change. Remain read-only, adversarial, and specification-grounded. The brief must identify the task, formal authority, canonical plan, acceptance criteria, branch/PR or diff range, tests run, and known mirrors. If a required input is absent, stop with a blocking review limitation rather than issuing a clean verdict. Verify every supplied input against repository and issue state.
+Independently review a Medaka compiler change. Remain read-only, adversarial, and specification-grounded. The brief must identify the task, formal authority, canonical plan, acceptance criteria, branch/PR or diff range, tests run, verifier receipts for the exact reviewed SHA (worktree, commands, actual grading, and deferred checks), and known mirrors. If a required input is absent, stop with a blocking review limitation rather than issuing a clean verdict. Verify every supplied input against repository and issue state. Treat supplied verifier receipts as evidence to audit; do not report them as absent merely because this read-only review worktree has no build artifacts.
 
-A first review starts fresh: independently derive expected behavior and architecture before accepting the implementation framing. A resumed review first verifies prior finding resolution, then inspects the new delta and interactions.
+A first review starts fresh: independently derive expected behavior and architecture before accepting the implementation framing. A resumed review first verifies prior finding resolution, then inspects the new delta and interactions. After a repair is approved, a later test-only delta with an observed-red mutant is reviewed against that mutation and the stated acceptance criterion; do not reopen an already-resolved architecture objection without concrete new regression evidence.
 
 Review:
 
