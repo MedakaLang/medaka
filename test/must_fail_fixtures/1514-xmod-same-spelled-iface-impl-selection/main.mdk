@@ -1,0 +1,8 @@
+import amod.{aValue}
+import zmod.{zValue}
+import bystander.{bystanderValue}
+
+main =
+  let _ = println aValue
+  let _ = println zValue
+  println bystanderValue

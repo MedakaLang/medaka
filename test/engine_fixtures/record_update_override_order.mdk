@@ -1,0 +1,38 @@
+-- #1518: a record UPDATE `{ r | g = e1, f = e2 }` whose override expressions are
+-- written out of DECLARATION order evaluates them in WRITTEN order on eval and
+-- native, and in DECLARED order on WasmGC. The computed field VALUES agree on all
+-- three engines; only the SIDE-EFFECT ORDER (which `println` fires first) diverges,
+-- so this is invisible to any gate that only compares final values.
+--
+-- MECHANISM (from the issue, read off the two backends, not re-derived here):
+--   * llvm_emit's `emitRecordUpdate`/`emitUpdatePairs` walks the update's `List
+--     CField` AS WRITTEN, emitting each override expression in that order.
+--   * wasm_emit's `emitUpdateCopy` builds its `struct.new` argument list by walking
+--     the DECLARED labels, emitting each override expression at the point its label
+--     is reached in the declaration -- so an override written first but declared
+--     second is emitted second.
+--
+-- `g` is written first, `f` second; `R` declares `f` before `g`.
+--
+-- EXPECTED VALUE, HAND-DERIVED from this source before any engine was run -- the
+-- printed VALUES `10`/`20` are engine-independent and are what a `.pin` file would
+-- assert if one existed. It does not: eval/native print "g\nf\n10\n20\n" (WRITTEN
+-- order) and wasm prints "f\ng\n10\n20\n" (DECLARED order) -- the fixture is
+-- deliberately un-pinnable while ledgered, per test/engine_value_pins/README.md's
+-- "seed pins ONLY on clean fixtures" rule (a per-fixture pin has no way to except
+-- the one arm the ledger already documents as diverging). See
+-- test/engine_divergence.txt's `engine/record_update_override_order` row.
+
+data R = R { f : Int, g : Int }
+
+bump : String -> Int -> <IO> Int
+bump tag n =
+  println tag
+  n
+
+main : <IO> Unit
+main =
+  let base = R { f = 0, g = 0 }
+  let r = { base | g = bump "g" 20, f = bump "f" 10 }
+  println r.f
+  println r.g
