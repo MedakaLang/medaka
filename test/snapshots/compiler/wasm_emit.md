@@ -1,5 +1,5 @@
 # META
-source_lines=9371
+source_lines=9413
 stages=DESUGAR,MARK
 # SOURCE
 -- WasmGC backend emitter — WASMGC-DESIGN.md §7.  Peer of `backend.llvm_emit`:
@@ -973,11 +973,46 @@ containsInt _ [] = False
 containsInt x (y::ys) = x == y || containsInt x ys
 
 -- ctor name → field labels in DECLARED order, for every named-field record/variant
--- the program constructs (scanned from CRecord nodes, peer to llvm_emit.collectRecords).
--- Drives CFieldAccess's struct index + CRecordUpdate/CVariantUpdate's unchanged-field
--- copy.  Set once per program in emitProgram.
+-- the program CONSTRUCTS (scanned from CRecord nodes, peer to llvm_emit.collectRecords).
+-- Set once per program in emitProgram.  It is the FALLBACK half of the field-order
+-- table: every resolver reads `recFieldTableW ()` below, which puts the declarations
+-- in front of it.  The one reader that still consults the scan alone is the
+-- `$__rub` scratch-local gate, whose question really is "does this program build a
+-- record cell", not "does it declare a record type".
 recFieldsRef : Ref (List (String, List String))
 recFieldsRef = Ref []
+
+-- #1513: the declaration-sourced half of the table above
+-- (`core_ir_lower.declaredRecordFieldOrders`), installed by the emit driver before
+-- emitProgram — the WasmGC peer of the LLVM backend's `EmitInput.recordFieldOrders`,
+-- carried as an install hook for the same reason `methodIfaceTableRef` is (this
+-- backend has no EmitInput seam yet; X-W.H).
+--
+-- Why wasm needs it too, given its miss is LOUD.  A record absent from the scan
+-- makes `recByName` fall through to `findRecByField`, which answers with a DIFFERENT
+-- record that owns the label; on this backend that is a `ref.cast` to the other
+-- record's struct, so the module builds at exit 0 and TRAPS at instantiation
+-- ("illegal cast") instead of printing a wrong number.  That is a better failure than
+-- the native one, but it is still a legal program that does not run, and the *loud*
+-- half of #1513 — `gapL "CFieldAccess on unknown field"` on a record that is simply
+-- never constructed — is a legal program that does not BUILD.  Neither is acceptable
+-- because the native arm happens to be worse, and leaving the two backends' tables
+-- built from different authorities is how they drift apart again.
+-- Empty (never installed, e.g. the prelude-free W2/W5 entries) ⇒ the scan alone ⇒
+-- byte-identical WAT to the pre-#1513 behaviour.
+declRecFieldsRef : Ref (List (String, List String))
+declRecFieldsRef = Ref []
+
+-- install entry point for the emit drivers; peer of `installMethodIface`.
+export installRecFieldOrders : List (String, List String) -> Unit
+installRecFieldOrders t = setRef declRecFieldsRef t
+
+-- THE field-order table every resolver must read: declarations first, construction
+-- scan behind them.  Both halves are consulted first-match, so a declared record is
+-- answered by its declaration and an undeclared one (anonymous shape, or a probe
+-- entry that installs no declarations) still falls back to the scan.
+recFieldTableW : Unit -> List (String, List String)
+recFieldTableW _ = declRecFieldsRef.value ++ recFieldsRef.value
 
 -- intern a literal's bytes as a fresh passive data segment; returns its index.
 freshStrSeg : List Int -> Int
@@ -1780,7 +1815,14 @@ cFieldName (CField k _) = k
 -- A named-field record/variant ctor IS a user ctor (in the W3 ctor table); we only
 -- need its field ORDER to compute a CFieldAccess struct index + a record-update's
 -- unchanged-field copy.  Recover it from CRecord nodes (which carry fields in
--- declared order — lowering preserves it), peer to llvm_emit.collectRecords.
+-- declared order — `core_ir_lower.normalizeRecordOrder` now makes that true rather
+-- than merely asserting it), peer to llvm_emit.collectRecords.
+--
+-- #1513: this scan is the FALLBACK half of `recFieldTableW`, no longer the whole
+-- table, and its arms are deliberately not exhaustive — a record reached only
+-- through `CLetGroup`, a slice bound, or a match-arm guard is invisible here, which
+-- is exactly why the declarations go in front of it.  Do not "fix" the class by
+-- adding arms; any arm added later can be forgotten again.
 collectRecFields : List CBind -> List (String, List String)
 collectRecFields groups = dedupRecEntries (flatMap collectRecFieldsBind groups)
 
@@ -5414,7 +5456,7 @@ cexprIsFloat prog env (CApp f a) = match appHead (CApp f a)
 -- Look up the record ctor that owns `label` (by the stamped record name when
 -- available, else by label) and check if that field's 0-based index is in
 -- ctorFloatFieldsRef.
-cexprIsFloat prog env (CFieldAccess _ label recName) = match recByName recFieldsRef.value recName label
+cexprIsFloat prog env (CFieldAccess _ label recName) = match recByName (recFieldTableW ()) recName label
   Some (ctor, labels) =>
     isFloatCtorField ctor (orZeroIdx (indexOfL label labels))
   None => False
@@ -7976,7 +8018,7 @@ emitRecordRef prog env d name fields =
 -- the recFieldsRef table built in emitProgram.
 emitFieldAccessRef : Prog -> List String -> Int -> CExpr -> String -> String -> List String
 emitFieldAccessRef prog env d ex label recName =
-  match recByName recFieldsRef.value recName label
+  match recByName (recFieldTableW ()) recName label
     Some (ctor, labels) =>
       let idx = orZeroIdx (indexOfL label labels)
       emitRefExpr prog env d ex
@@ -7994,7 +8036,7 @@ emitFieldAccessRef prog env d ex label recName =
 emitRecordUpdateRef : Prog -> List String -> Int -> String -> CExpr -> List CField -> List String
 emitRecordUpdateRef prog env d recName base fields = match firstFieldLabel fields
   None => gapL "ref-mode: empty record update"
-  Some k0 => match recByName recFieldsRef.value recName k0
+  Some k0 => match recByName (recFieldTableW ()) recName k0
     Some (ctor, labels) => emitUpdateCopy prog env d ctor labels base fields
     None => gapL ("ref-mode: CRecordUpdate on unknown field '" ++ k0 ++ "'")
 
@@ -8023,7 +8065,7 @@ firstFieldLabel ((CField k _)::_) = Some k
 
 -- named-field variant update `Con { base | f = v … }`: same copy, ctor known.
 emitVariantUpdateRef : Prog -> List String -> Int -> String -> CExpr -> List CField -> List String
-emitVariantUpdateRef prog env d con base fields = match lookupAssoc con recFieldsRef.value
+emitVariantUpdateRef prog env d con base fields = match lookupAssoc con (recFieldTableW ())
   Some labels => emitUpdateCopy prog env d con labels base fields
   None =>
     gapL ("ref-mode: CVariantUpdate on unknown constructor '" ++ con ++ "'")
@@ -9585,6 +9627,12 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DFunDef false "containsInt" ((PVar "x") (PCons (PVar "y") (PVar "ys"))) (EBinOp "||" (EBinOp "==" (EVar "x") (EVar "y")) (EApp (EApp (EVar "containsInt") (EVar "x")) (EVar "ys"))))
 (DTypeSig false "recFieldsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "recFieldsRef" () (EApp (EVar "Ref") (EListLit)))
+(DTypeSig false "declRecFieldsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "declRecFieldsRef" () (EApp (EVar "Ref") (EListLit)))
+(DTypeSig true "installRecFieldOrders" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyCon "Unit")))
+(DFunDef false "installRecFieldOrders" ((PVar "t")) (EApp (EApp (EVar "setRef") (EVar "declRecFieldsRef")) (EVar "t")))
+(DTypeSig false "recFieldTableW" (TyFun (TyCon "Unit") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "recFieldTableW" (PWild) (EBinOp "++" (EFieldAccess (EVar "declRecFieldsRef") "value") (EFieldAccess (EVar "recFieldsRef") "value")))
 (DTypeSig false "freshStrSeg" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Int")))
 (DFunDef false "freshStrSeg" ((PVar "bytes")) (EBlock (DoLet false false (PVar "i") (EFieldAccess (EVar "strSegIdRef") "value")) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EVar "strSegIdRef")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EVar "strSegsRef")) (EBinOp "::" (ETuple (EVar "i") (EVar "bytes")) (EFieldAccess (EVar "strSegsRef") "value")))) (DoExpr (EVar "i"))))
 (DTypeSig false "freshLamId" (TyFun (TyCon "Unit") (TyCon "Int")))
@@ -10619,7 +10667,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DFunDef false "cexprIsFloat" ((PVar "prog") (PVar "env") (PCon "CBlock" (PVar "stmts"))) (EApp (EApp (EApp (EVar "cexprIsFloatBlock") (EVar "prog")) (EVar "env")) (EVar "stmts")))
 (DFunDef false "cexprIsFloat" ((PVar "prog") (PVar "env") (PCon "CIf" PWild (PVar "t") (PVar "f"))) (EBinOp "||" (EApp (EApp (EApp (EVar "cexprIsFloat") (EVar "prog")) (EVar "env")) (EVar "t")) (EApp (EApp (EApp (EVar "cexprIsFloat") (EVar "prog")) (EVar "env")) (EVar "f"))))
 (DFunDef false "cexprIsFloat" ((PVar "prog") (PVar "env") (PCon "CApp" (PVar "f") (PVar "a"))) (EMatch (EApp (EVar "appHead") (EApp (EApp (EVar "CApp") (EVar "f")) (EVar "a"))) (arm (PCon "CVar" (PVar "fn") PWild) () (EBinOp "&&" (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "fn")) (EVar "env"))) (EBinOp "||" (EApp (EApp (EVar "contains") (EVar "fn")) (EListLit (ELit (LString "intToFloat")) (ELit (LString "randomFloat")))) (EApp (EVar "fnReturnsFloat") (EVar "fn"))))) (arm PWild () (EVar "False"))))
-(DFunDef false "cexprIsFloat" ((PVar "prog") (PVar "env") (PCon "CFieldAccess" PWild (PVar "label") (PVar "recName"))) (EMatch (EApp (EApp (EApp (EVar "recByName") (EFieldAccess (EVar "recFieldsRef") "value")) (EVar "recName")) (EVar "label")) (arm (PCon "Some" (PTuple (PVar "ctor") (PVar "labels"))) () (EApp (EApp (EVar "isFloatCtorField") (EVar "ctor")) (EApp (EVar "orZeroIdx") (EApp (EApp (EVar "indexOfL") (EVar "label")) (EVar "labels"))))) (arm (PCon "None") () (EVar "False"))))
+(DFunDef false "cexprIsFloat" ((PVar "prog") (PVar "env") (PCon "CFieldAccess" PWild (PVar "label") (PVar "recName"))) (EMatch (EApp (EApp (EApp (EVar "recByName") (EApp (EVar "recFieldTableW") (ELit LUnit))) (EVar "recName")) (EVar "label")) (arm (PCon "Some" (PTuple (PVar "ctor") (PVar "labels"))) () (EApp (EApp (EVar "isFloatCtorField") (EVar "ctor")) (EApp (EVar "orZeroIdx") (EApp (EApp (EVar "indexOfL") (EVar "label")) (EVar "labels"))))) (arm (PCon "None") () (EVar "False"))))
 (DFunDef false "cexprIsFloat" ((PVar "prog") (PVar "env") PWild) (EVar "False"))
 (DTypeSig false "isArithOp" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isArithOp" ((PVar "op")) (EApp (EApp (EVar "contains") (EVar "op")) (EListLit (ELit (LString "+")) (ELit (LString "-")) (ELit (LString "*")) (ELit (LString "/")) (ELit (LString "%")))))
@@ -11155,16 +11203,16 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DTypeSig false "emitRecordRef" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CField")) (TyApp (TyCon "List") (TyCon "String"))))))))
 (DFunDef false "emitRecordRef" ((PVar "prog") (PVar "env") (PVar "d") (PVar "name") (PVar "fields")) (EBlock (DoLet false false (PVar "tagField") (EListLit (EBinOp "++" (ELit (LString "i32.const ")) (EApp (EVar "intToString") (EApp (EApp (EVar "ctorOrdinal") (EVar "prog")) (EVar "name")))))) (DoLet false false (PVar "argInstrs") (EApp (EApp (EVar "flatMap") (ELam ((PVar "f")) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EApp (EVar "cFieldExpr") (EVar "f"))))) (EVar "fields"))) (DoExpr (EBinOp "++" (EBinOp "++" (EVar "tagField") (EVar "argInstrs")) (EListLit (EBinOp "++" (ELit (LString "struct.new $")) (EApp (EVar "ctorStructName") (EVar "name"))))))))
 (DTypeSig false "emitFieldAccessRef" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "CExpr") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))))))
-(DFunDef false "emitFieldAccessRef" ((PVar "prog") (PVar "env") (PVar "d") (PVar "ex") (PVar "label") (PVar "recName")) (EMatch (EApp (EApp (EApp (EVar "recByName") (EFieldAccess (EVar "recFieldsRef") "value")) (EVar "recName")) (EVar "label")) (arm (PCon "Some" (PTuple (PVar "ctor") (PVar "labels"))) () (EBlock (DoLet false false (PVar "idx") (EApp (EVar "orZeroIdx") (EApp (EApp (EVar "indexOfL") (EVar "label")) (EVar "labels")))) (DoExpr (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "ex")) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "ref.cast (ref $")) (EApp (EVar "ctorStructName") (EVar "ctor"))) (ELit (LString ")"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "struct.get $")) (EApp (EVar "display") (EApp (EVar "ctorStructName") (EVar "ctor")))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EVar "intToString") (EBinOp "+" (EVar "idx") (ELit (LInt 1)))))) (ELit (LString "")))))))) (arm (PCon "None") () (EIf (EBinOp "==" (EVar "label") (ELit (LString "value"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "ex")) (EListLit (ELit (LString "ref.cast (ref $refbox)")) (ELit (LString "struct.get $refbox 0")))) (EApp (EVar "gapL") (EBinOp "++" (EBinOp "++" (ELit (LString "ref-mode: CFieldAccess on unknown field '")) (EVar "label")) (ELit (LString "' (no record ctor in the field-order table)"))))))))
+(DFunDef false "emitFieldAccessRef" ((PVar "prog") (PVar "env") (PVar "d") (PVar "ex") (PVar "label") (PVar "recName")) (EMatch (EApp (EApp (EApp (EVar "recByName") (EApp (EVar "recFieldTableW") (ELit LUnit))) (EVar "recName")) (EVar "label")) (arm (PCon "Some" (PTuple (PVar "ctor") (PVar "labels"))) () (EBlock (DoLet false false (PVar "idx") (EApp (EVar "orZeroIdx") (EApp (EApp (EVar "indexOfL") (EVar "label")) (EVar "labels")))) (DoExpr (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "ex")) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "ref.cast (ref $")) (EApp (EVar "ctorStructName") (EVar "ctor"))) (ELit (LString ")"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "struct.get $")) (EApp (EVar "display") (EApp (EVar "ctorStructName") (EVar "ctor")))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EVar "intToString") (EBinOp "+" (EVar "idx") (ELit (LInt 1)))))) (ELit (LString "")))))))) (arm (PCon "None") () (EIf (EBinOp "==" (EVar "label") (ELit (LString "value"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "ex")) (EListLit (ELit (LString "ref.cast (ref $refbox)")) (ELit (LString "struct.get $refbox 0")))) (EApp (EVar "gapL") (EBinOp "++" (EBinOp "++" (ELit (LString "ref-mode: CFieldAccess on unknown field '")) (EVar "label")) (ELit (LString "' (no record ctor in the field-order table)"))))))))
 (DTypeSig false "emitRecordUpdateRef" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyCon "CExpr") (TyFun (TyApp (TyCon "List") (TyCon "CField")) (TyApp (TyCon "List") (TyCon "String")))))))))
-(DFunDef false "emitRecordUpdateRef" ((PVar "prog") (PVar "env") (PVar "d") (PVar "recName") (PVar "base") (PVar "fields")) (EMatch (EApp (EVar "firstFieldLabel") (EVar "fields")) (arm (PCon "None") () (EApp (EVar "gapL") (ELit (LString "ref-mode: empty record update")))) (arm (PCon "Some" (PVar "k0")) () (EMatch (EApp (EApp (EApp (EVar "recByName") (EFieldAccess (EVar "recFieldsRef") "value")) (EVar "recName")) (EVar "k0")) (arm (PCon "Some" (PTuple (PVar "ctor") (PVar "labels"))) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitUpdateCopy") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "ctor")) (EVar "labels")) (EVar "base")) (EVar "fields"))) (arm (PCon "None") () (EApp (EVar "gapL") (EBinOp "++" (EBinOp "++" (ELit (LString "ref-mode: CRecordUpdate on unknown field '")) (EVar "k0")) (ELit (LString "'")))))))))
+(DFunDef false "emitRecordUpdateRef" ((PVar "prog") (PVar "env") (PVar "d") (PVar "recName") (PVar "base") (PVar "fields")) (EMatch (EApp (EVar "firstFieldLabel") (EVar "fields")) (arm (PCon "None") () (EApp (EVar "gapL") (ELit (LString "ref-mode: empty record update")))) (arm (PCon "Some" (PVar "k0")) () (EMatch (EApp (EApp (EApp (EVar "recByName") (EApp (EVar "recFieldTableW") (ELit LUnit))) (EVar "recName")) (EVar "k0")) (arm (PCon "Some" (PTuple (PVar "ctor") (PVar "labels"))) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitUpdateCopy") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "ctor")) (EVar "labels")) (EVar "base")) (EVar "fields"))) (arm (PCon "None") () (EApp (EVar "gapL") (EBinOp "++" (EBinOp "++" (ELit (LString "ref-mode: CRecordUpdate on unknown field '")) (EVar "k0")) (ELit (LString "'")))))))))
 (DTypeSig false "recByName" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))))
 (DFunDef false "recByName" ((PVar "table") (PVar "recName") (PVar "label")) (EIf (EBinOp "==" (EVar "recName") (ELit (LString ""))) (EApp (EApp (EVar "findRecByField") (EVar "table")) (EVar "label")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "recName")) (EVar "table")) (arm (PCon "Some" (PVar "labels")) () (EIf (EBinOp ">=" (EApp (EApp (EVar "indexOfL") (EVar "label")) (EVar "labels")) (ELit (LInt 0))) (EApp (EVar "Some") (ETuple (EVar "recName") (EVar "labels"))) (EApp (EApp (EVar "findRecByField") (EVar "table")) (EVar "label")))) (arm (PCon "None") () (EApp (EApp (EVar "findRecByField") (EVar "table")) (EVar "label"))))))
 (DTypeSig false "firstFieldLabel" (TyFun (TyApp (TyCon "List") (TyCon "CField")) (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "firstFieldLabel" ((PList)) (EVar "None"))
 (DFunDef false "firstFieldLabel" ((PCons (PCon "CField" (PVar "k") PWild) PWild)) (EApp (EVar "Some") (EVar "k")))
 (DTypeSig false "emitVariantUpdateRef" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyCon "CExpr") (TyFun (TyApp (TyCon "List") (TyCon "CField")) (TyApp (TyCon "List") (TyCon "String")))))))))
-(DFunDef false "emitVariantUpdateRef" ((PVar "prog") (PVar "env") (PVar "d") (PVar "con") (PVar "base") (PVar "fields")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "con")) (EFieldAccess (EVar "recFieldsRef") "value")) (arm (PCon "Some" (PVar "labels")) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitUpdateCopy") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "con")) (EVar "labels")) (EVar "base")) (EVar "fields"))) (arm (PCon "None") () (EApp (EVar "gapL") (EBinOp "++" (EBinOp "++" (ELit (LString "ref-mode: CVariantUpdate on unknown constructor '")) (EVar "con")) (ELit (LString "'")))))))
+(DFunDef false "emitVariantUpdateRef" ((PVar "prog") (PVar "env") (PVar "d") (PVar "con") (PVar "base") (PVar "fields")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "con")) (EApp (EVar "recFieldTableW") (ELit LUnit))) (arm (PCon "Some" (PVar "labels")) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitUpdateCopy") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "con")) (EVar "labels")) (EVar "base")) (EVar "fields"))) (arm (PCon "None") () (EApp (EVar "gapL") (EBinOp "++" (EBinOp "++" (ELit (LString "ref-mode: CVariantUpdate on unknown constructor '")) (EVar "con")) (ELit (LString "'")))))))
 (DTypeSig false "emitUpdateCopy" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "CExpr") (TyFun (TyApp (TyCon "List") (TyCon "CField")) (TyApp (TyCon "List") (TyCon "String"))))))))))
 (DFunDef false "emitUpdateCopy" ((PVar "prog") (PVar "env") (PVar "d") (PVar "ctor") (PVar "labels") (PVar "base") (PVar "fields")) (EBlock (DoLet false false (PVar "sfx") (EApp (EVar "intToString") (EVar "d"))) (DoLet false false (PVar "bL") (EBinOp "++" (ELit (LString "$__rub")) (EVar "sfx"))) (DoLet false false (PVar "baseI") (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "base")) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "ref.cast (ref $")) (EApp (EVar "ctorStructName") (EVar "ctor"))) (ELit (LString ")"))) (EBinOp "++" (ELit (LString "local.set ")) (EVar "bL"))))) (DoLet false false (PVar "tagField") (EListLit (EBinOp "++" (ELit (LString "i32.const ")) (EApp (EVar "intToString") (EApp (EApp (EVar "ctorOrdinal") (EVar "prog")) (EVar "ctor")))))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "baseI") (EVar "tagField")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "fieldInstrsWithLabels") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "ctor")) (EVar "bL")) (EVar "labels")) (EVar "fields"))) (EListLit (EBinOp "++" (ELit (LString "struct.new $")) (EApp (EVar "ctorStructName") (EVar "ctor"))))))))
 (DTypeSig false "fieldInstrsWithLabels" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "CField")) (TyApp (TyCon "List") (TyCon "String"))))))))))
@@ -11833,6 +11881,12 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DFunDef false "containsInt" ((PVar "x") (PCons (PVar "y") (PVar "ys"))) (EBinOp "||" (EBinOp "==" (EVar "x") (EVar "y")) (EApp (EApp (EVar "containsInt") (EVar "x")) (EVar "ys"))))
 (DTypeSig false "recFieldsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "recFieldsRef" () (EApp (EVar "Ref") (EListLit)))
+(DTypeSig false "declRecFieldsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "declRecFieldsRef" () (EApp (EVar "Ref") (EListLit)))
+(DTypeSig true "installRecFieldOrders" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyCon "Unit")))
+(DFunDef false "installRecFieldOrders" ((PVar "t")) (EApp (EApp (EVar "setRef") (EVar "declRecFieldsRef")) (EVar "t")))
+(DTypeSig false "recFieldTableW" (TyFun (TyCon "Unit") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "recFieldTableW" (PWild) (EBinOp "++" (EFieldAccess (EVar "declRecFieldsRef") "value") (EFieldAccess (EVar "recFieldsRef") "value")))
 (DTypeSig false "freshStrSeg" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Int")))
 (DFunDef false "freshStrSeg" ((PVar "bytes")) (EBlock (DoLet false false (PVar "i") (EFieldAccess (EVar "strSegIdRef") "value")) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EVar "strSegIdRef")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EVar "strSegsRef")) (EBinOp "::" (ETuple (EVar "i") (EVar "bytes")) (EFieldAccess (EVar "strSegsRef") "value")))) (DoExpr (EVar "i"))))
 (DTypeSig false "freshLamId" (TyFun (TyCon "Unit") (TyCon "Int")))
@@ -12867,7 +12921,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DFunDef false "cexprIsFloat" ((PVar "prog") (PVar "env") (PCon "CBlock" (PVar "stmts"))) (EApp (EApp (EApp (EVar "cexprIsFloatBlock") (EVar "prog")) (EVar "env")) (EVar "stmts")))
 (DFunDef false "cexprIsFloat" ((PVar "prog") (PVar "env") (PCon "CIf" PWild (PVar "t") (PVar "f"))) (EBinOp "||" (EApp (EApp (EApp (EVar "cexprIsFloat") (EVar "prog")) (EVar "env")) (EVar "t")) (EApp (EApp (EApp (EVar "cexprIsFloat") (EVar "prog")) (EVar "env")) (EVar "f"))))
 (DFunDef false "cexprIsFloat" ((PVar "prog") (PVar "env") (PCon "CApp" (PVar "f") (PVar "a"))) (EMatch (EApp (EVar "appHead") (EApp (EApp (EVar "CApp") (EVar "f")) (EVar "a"))) (arm (PCon "CVar" (PVar "fn") PWild) () (EBinOp "&&" (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "fn")) (EVar "env"))) (EBinOp "||" (EApp (EApp (EVar "contains") (EVar "fn")) (EListLit (ELit (LString "intToFloat")) (ELit (LString "randomFloat")))) (EApp (EVar "fnReturnsFloat") (EVar "fn"))))) (arm PWild () (EVar "False"))))
-(DFunDef false "cexprIsFloat" ((PVar "prog") (PVar "env") (PCon "CFieldAccess" PWild (PVar "label") (PVar "recName"))) (EMatch (EApp (EApp (EApp (EVar "recByName") (EFieldAccess (EVar "recFieldsRef") "value")) (EVar "recName")) (EVar "label")) (arm (PCon "Some" (PTuple (PVar "ctor") (PVar "labels"))) () (EApp (EApp (EVar "isFloatCtorField") (EVar "ctor")) (EApp (EVar "orZeroIdx") (EApp (EApp (EVar "indexOfL") (EVar "label")) (EVar "labels"))))) (arm (PCon "None") () (EVar "False"))))
+(DFunDef false "cexprIsFloat" ((PVar "prog") (PVar "env") (PCon "CFieldAccess" PWild (PVar "label") (PVar "recName"))) (EMatch (EApp (EApp (EApp (EVar "recByName") (EApp (EVar "recFieldTableW") (ELit LUnit))) (EVar "recName")) (EVar "label")) (arm (PCon "Some" (PTuple (PVar "ctor") (PVar "labels"))) () (EApp (EApp (EVar "isFloatCtorField") (EVar "ctor")) (EApp (EVar "orZeroIdx") (EApp (EApp (EVar "indexOfL") (EVar "label")) (EVar "labels"))))) (arm (PCon "None") () (EVar "False"))))
 (DFunDef false "cexprIsFloat" ((PVar "prog") (PVar "env") PWild) (EVar "False"))
 (DTypeSig false "isArithOp" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isArithOp" ((PVar "op")) (EApp (EApp (EVar "contains") (EVar "op")) (EListLit (ELit (LString "+")) (ELit (LString "-")) (ELit (LString "*")) (ELit (LString "/")) (ELit (LString "%")))))
@@ -13403,16 +13457,16 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DTypeSig false "emitRecordRef" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CField")) (TyApp (TyCon "List") (TyCon "String"))))))))
 (DFunDef false "emitRecordRef" ((PVar "prog") (PVar "env") (PVar "d") (PVar "name") (PVar "fields")) (EBlock (DoLet false false (PVar "tagField") (EListLit (EBinOp "++" (ELit (LString "i32.const ")) (EApp (EVar "intToString") (EApp (EApp (EVar "ctorOrdinal") (EVar "prog")) (EVar "name")))))) (DoLet false false (PVar "argInstrs") (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "f")) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EApp (EVar "cFieldExpr") (EVar "f"))))) (EVar "fields"))) (DoExpr (EBinOp "++" (EBinOp "++" (EVar "tagField") (EVar "argInstrs")) (EListLit (EBinOp "++" (ELit (LString "struct.new $")) (EApp (EVar "ctorStructName") (EVar "name"))))))))
 (DTypeSig false "emitFieldAccessRef" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "CExpr") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))))))
-(DFunDef false "emitFieldAccessRef" ((PVar "prog") (PVar "env") (PVar "d") (PVar "ex") (PVar "label") (PVar "recName")) (EMatch (EApp (EApp (EApp (EVar "recByName") (EFieldAccess (EVar "recFieldsRef") "value")) (EVar "recName")) (EVar "label")) (arm (PCon "Some" (PTuple (PVar "ctor") (PVar "labels"))) () (EBlock (DoLet false false (PVar "idx") (EApp (EVar "orZeroIdx") (EApp (EApp (EVar "indexOfL") (EVar "label")) (EVar "labels")))) (DoExpr (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "ex")) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "ref.cast (ref $")) (EApp (EVar "ctorStructName") (EVar "ctor"))) (ELit (LString ")"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "struct.get $")) (EApp (EMethodRef "display") (EApp (EVar "ctorStructName") (EVar "ctor")))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EBinOp "+" (EVar "idx") (ELit (LInt 1)))))) (ELit (LString "")))))))) (arm (PCon "None") () (EIf (EBinOp "==" (EVar "label") (ELit (LString "value"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "ex")) (EListLit (ELit (LString "ref.cast (ref $refbox)")) (ELit (LString "struct.get $refbox 0")))) (EApp (EVar "gapL") (EBinOp "++" (EBinOp "++" (ELit (LString "ref-mode: CFieldAccess on unknown field '")) (EVar "label")) (ELit (LString "' (no record ctor in the field-order table)"))))))))
+(DFunDef false "emitFieldAccessRef" ((PVar "prog") (PVar "env") (PVar "d") (PVar "ex") (PVar "label") (PVar "recName")) (EMatch (EApp (EApp (EApp (EVar "recByName") (EApp (EVar "recFieldTableW") (ELit LUnit))) (EVar "recName")) (EVar "label")) (arm (PCon "Some" (PTuple (PVar "ctor") (PVar "labels"))) () (EBlock (DoLet false false (PVar "idx") (EApp (EVar "orZeroIdx") (EApp (EApp (EVar "indexOfL") (EVar "label")) (EVar "labels")))) (DoExpr (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "ex")) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "ref.cast (ref $")) (EApp (EVar "ctorStructName") (EVar "ctor"))) (ELit (LString ")"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "struct.get $")) (EApp (EMethodRef "display") (EApp (EVar "ctorStructName") (EVar "ctor")))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EBinOp "+" (EVar "idx") (ELit (LInt 1)))))) (ELit (LString "")))))))) (arm (PCon "None") () (EIf (EBinOp "==" (EVar "label") (ELit (LString "value"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "ex")) (EListLit (ELit (LString "ref.cast (ref $refbox)")) (ELit (LString "struct.get $refbox 0")))) (EApp (EVar "gapL") (EBinOp "++" (EBinOp "++" (ELit (LString "ref-mode: CFieldAccess on unknown field '")) (EVar "label")) (ELit (LString "' (no record ctor in the field-order table)"))))))))
 (DTypeSig false "emitRecordUpdateRef" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyCon "CExpr") (TyFun (TyApp (TyCon "List") (TyCon "CField")) (TyApp (TyCon "List") (TyCon "String")))))))))
-(DFunDef false "emitRecordUpdateRef" ((PVar "prog") (PVar "env") (PVar "d") (PVar "recName") (PVar "base") (PVar "fields")) (EMatch (EApp (EVar "firstFieldLabel") (EVar "fields")) (arm (PCon "None") () (EApp (EVar "gapL") (ELit (LString "ref-mode: empty record update")))) (arm (PCon "Some" (PVar "k0")) () (EMatch (EApp (EApp (EApp (EVar "recByName") (EFieldAccess (EVar "recFieldsRef") "value")) (EVar "recName")) (EVar "k0")) (arm (PCon "Some" (PTuple (PVar "ctor") (PVar "labels"))) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitUpdateCopy") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "ctor")) (EVar "labels")) (EVar "base")) (EVar "fields"))) (arm (PCon "None") () (EApp (EVar "gapL") (EBinOp "++" (EBinOp "++" (ELit (LString "ref-mode: CRecordUpdate on unknown field '")) (EVar "k0")) (ELit (LString "'")))))))))
+(DFunDef false "emitRecordUpdateRef" ((PVar "prog") (PVar "env") (PVar "d") (PVar "recName") (PVar "base") (PVar "fields")) (EMatch (EApp (EVar "firstFieldLabel") (EVar "fields")) (arm (PCon "None") () (EApp (EVar "gapL") (ELit (LString "ref-mode: empty record update")))) (arm (PCon "Some" (PVar "k0")) () (EMatch (EApp (EApp (EApp (EVar "recByName") (EApp (EVar "recFieldTableW") (ELit LUnit))) (EVar "recName")) (EVar "k0")) (arm (PCon "Some" (PTuple (PVar "ctor") (PVar "labels"))) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitUpdateCopy") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "ctor")) (EVar "labels")) (EVar "base")) (EVar "fields"))) (arm (PCon "None") () (EApp (EVar "gapL") (EBinOp "++" (EBinOp "++" (ELit (LString "ref-mode: CRecordUpdate on unknown field '")) (EVar "k0")) (ELit (LString "'")))))))))
 (DTypeSig false "recByName" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))))
 (DFunDef false "recByName" ((PVar "table") (PVar "recName") (PVar "label")) (EIf (EBinOp "==" (EVar "recName") (ELit (LString ""))) (EApp (EApp (EVar "findRecByField") (EVar "table")) (EVar "label")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "recName")) (EVar "table")) (arm (PCon "Some" (PVar "labels")) () (EIf (EBinOp ">=" (EApp (EApp (EVar "indexOfL") (EVar "label")) (EVar "labels")) (ELit (LInt 0))) (EApp (EVar "Some") (ETuple (EVar "recName") (EVar "labels"))) (EApp (EApp (EVar "findRecByField") (EVar "table")) (EVar "label")))) (arm (PCon "None") () (EApp (EApp (EVar "findRecByField") (EVar "table")) (EVar "label"))))))
 (DTypeSig false "firstFieldLabel" (TyFun (TyApp (TyCon "List") (TyCon "CField")) (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "firstFieldLabel" ((PList)) (EVar "None"))
 (DFunDef false "firstFieldLabel" ((PCons (PCon "CField" (PVar "k") PWild) PWild)) (EApp (EVar "Some") (EVar "k")))
 (DTypeSig false "emitVariantUpdateRef" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyCon "CExpr") (TyFun (TyApp (TyCon "List") (TyCon "CField")) (TyApp (TyCon "List") (TyCon "String")))))))))
-(DFunDef false "emitVariantUpdateRef" ((PVar "prog") (PVar "env") (PVar "d") (PVar "con") (PVar "base") (PVar "fields")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "con")) (EFieldAccess (EVar "recFieldsRef") "value")) (arm (PCon "Some" (PVar "labels")) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitUpdateCopy") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "con")) (EVar "labels")) (EVar "base")) (EVar "fields"))) (arm (PCon "None") () (EApp (EVar "gapL") (EBinOp "++" (EBinOp "++" (ELit (LString "ref-mode: CVariantUpdate on unknown constructor '")) (EVar "con")) (ELit (LString "'")))))))
+(DFunDef false "emitVariantUpdateRef" ((PVar "prog") (PVar "env") (PVar "d") (PVar "con") (PVar "base") (PVar "fields")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "con")) (EApp (EVar "recFieldTableW") (ELit LUnit))) (arm (PCon "Some" (PVar "labels")) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitUpdateCopy") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "con")) (EVar "labels")) (EVar "base")) (EVar "fields"))) (arm (PCon "None") () (EApp (EVar "gapL") (EBinOp "++" (EBinOp "++" (ELit (LString "ref-mode: CVariantUpdate on unknown constructor '")) (EVar "con")) (ELit (LString "'")))))))
 (DTypeSig false "emitUpdateCopy" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "CExpr") (TyFun (TyApp (TyCon "List") (TyCon "CField")) (TyApp (TyCon "List") (TyCon "String"))))))))))
 (DFunDef false "emitUpdateCopy" ((PVar "prog") (PVar "env") (PVar "d") (PVar "ctor") (PVar "labels") (PVar "base") (PVar "fields")) (EBlock (DoLet false false (PVar "sfx") (EApp (EVar "intToString") (EVar "d"))) (DoLet false false (PVar "bL") (EBinOp "++" (ELit (LString "$__rub")) (EVar "sfx"))) (DoLet false false (PVar "baseI") (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "base")) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "ref.cast (ref $")) (EApp (EVar "ctorStructName") (EVar "ctor"))) (ELit (LString ")"))) (EBinOp "++" (ELit (LString "local.set ")) (EVar "bL"))))) (DoLet false false (PVar "tagField") (EListLit (EBinOp "++" (ELit (LString "i32.const ")) (EApp (EVar "intToString") (EApp (EApp (EVar "ctorOrdinal") (EVar "prog")) (EVar "ctor")))))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "baseI") (EVar "tagField")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "fieldInstrsWithLabels") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "ctor")) (EVar "bL")) (EVar "labels")) (EVar "fields"))) (EListLit (EBinOp "++" (ELit (LString "struct.new $")) (EApp (EVar "ctorStructName") (EVar "ctor"))))))))
 (DTypeSig false "fieldInstrsWithLabels" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "CField")) (TyApp (TyCon "List") (TyCon "String"))))))))))

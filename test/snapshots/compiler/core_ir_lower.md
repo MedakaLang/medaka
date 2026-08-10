@@ -1,5 +1,5 @@
 # META
-source_lines=1652
+source_lines=1732
 stages=DESUGAR,MARK
 # SOURCE
 -- elaborated-AST → Core IR lowering (STAGE2-DESIGN §2.1).  Consumes the SAME
@@ -555,17 +555,34 @@ lowerProgram prog =
 export lowerProgramEmit : List Decl -> CProgram
 lowerProgramEmit prog =
   hoistNullaryMemo (rewriteProgramRecPats
-    (buildRecPatFieldOrders prog)
+    (declaredRecordFieldOrders prog)
     (lowerProgram prog))
 
--- type/ctor name → [field label in declared order], from every DData named-field
+-- ── the ONE authority on a record's field order (#1513) ──────────────────────
+-- ctor name → [field label in declared order], from every DData named-field
 -- (`ConNamed`) variant — records are the `data X = { … }` short form, whose
 -- synthesized ctor is a ConNamed variant.  (`DInterface`/`DImpl` are themselves
 -- named-field variants of the AST's `Decl` type — declared in ast.mdk via `data
 -- Decl = … | DInterface { … }` — so a self-hosted compiler that destructures them
 -- gets their orders through the `DData ConNamed` branch when ast.mdk is in `prog`.)
-buildRecPatFieldOrders : List Decl -> List (String, List String)
-buildRecPatFieldOrders prog = flatMap recPatFieldOrderEntries prog
+--
+-- EXPORTED because both backends seed their field-order tables from it (#1513).
+-- Before that they built those tables by SCANNING the lowered program for `CRecord`
+-- construction sites, which is wrong in two independent directions and was silently
+-- wrong in both:
+--   * a record with no construction site the scan happens to walk is ABSENT, and the
+--     label-only fallback then answers with a DIFFERENT record that owns the label —
+--     a wrong `getelementptr` offset at exit 0, or a segfault when the colliding
+--     fields are differently typed;
+--   * the entry a scan does produce carries the FIRST CONSTRUCTION SITE's written
+--     label order, so `R { g = …, f = … }` installed `[g, f]` as the layout of `R`
+--     and every differently-ordered literal of `R` in the same program was laid out
+--     inconsistently with it.
+-- The declaration answers both: it is always present, it is independent of DCE and
+-- of which expression positions any scan walks, and it is the only thing all four
+-- record operations (create / access / update / pattern) can agree on.
+export declaredRecordFieldOrders : List Decl -> List (String, List String)
+declaredRecordFieldOrders prog = flatMap recPatFieldOrderEntries prog
 
 recPatFieldOrderEntries : Decl -> List (String, List String)
 recPatFieldOrderEntries (DData { dataCtors = variants }) =
@@ -677,7 +694,7 @@ rewriteExprRP fo (CUnOp op x) = CUnOp op (rewriteExprRP fo x)
 rewriteExprRP fo (CTuple es) = CTuple (map (rewriteExprRP fo) es)
 rewriteExprRP fo (CList es) = CList (map (rewriteExprRP fo) es)
 rewriteExprRP fo (CRecord name fields) =
-  CRecord name (map (rewriteFieldRP fo) fields)
+  normalizeRecordOrder fo name (map (rewriteFieldRP fo) fields)
 rewriteExprRP fo (CFieldAccess ex f n) = CFieldAccess (rewriteExprRP fo ex) f n
 rewriteExprRP fo (CRecordUpdate name base fields) =
   CRecordUpdate name (rewriteExprRP fo base) (map (rewriteFieldRP fo) fields)
@@ -730,6 +747,69 @@ rewriteStmtRP fo (CSAssign x e) = CSAssign x (rewriteExprRP fo e)
 
 rewriteFieldRP : List (String, List String) -> CField -> CField
 rewriteFieldRP fo (CField k e) = CField k (rewriteExprRP fo e)
+
+-- ── #1513: a record literal is laid out in DECLARED order, not written order ──
+-- Both emit backends store a record cell POSITIONALLY, in the order the `CRecord`
+-- node lists its fields, while every READER (`CFieldAccess`, `CRecordUpdate`, the
+-- `PRec`→`PCon` rewrite above) indexes by the DECLARED order.  Their in-source
+-- comments already assert the two coincide — "CRecord carries fields in DECLARED
+-- order (lowering preserves it)", wasm_emit `emitRecordRef` — but nothing
+-- established it: no pass reordered a literal, so `R { g = …, f = … }` built the
+-- cell `[g, f]` and `r.f` read slot 1.  MEASURED on `main` before this change: a
+-- program with `R { g = 20, f = 10 }` and `R { f = 30, g = 40 }` printed the
+-- correct `10 30` under `medaka run` and a silent `10 40` from the built binary.
+--
+-- The rewrite makes the asserted invariant TRUE at the one point every emit driver
+-- funnels through, so BOTH backends inherit it.  Field expressions are bound to
+-- temporaries IN WRITTEN ORDER first and the `CRecord` then refers to those
+-- temporaries, so an effectful field expression still runs when the source says it
+-- does — reordering the *nodes* would have made `run` and `build` disagree about
+-- evaluation order, trading one silent divergence for another.
+--
+-- Untouched, and byte-identical IR, when the literal is already in declared order
+-- (the overwhelmingly common case) or when the labels cannot be matched up against
+-- the declaration exactly once each — an anonymous record with no `data`, or a
+-- malformed literal that a diagnostic elsewhere owns.  It is not this pass's job to
+-- start dropping or duplicating fields on a shape it does not recognise.
+normalizeRecordOrder : List (String, List String) -> String -> List CField -> CExpr
+normalizeRecordOrder fo name fields = match lookupAssoc name fo
+  None => CRecord name fields
+  Some labels =>
+    let written = map cFieldLabel fields
+    if written == labels || !(isPermutationOf written labels) then
+      CRecord name fields
+    else
+      bindFieldTemps fields (CRecord name (map recTempField labels))
+
+-- every declared label appears exactly once among the written ones, and vice versa.
+-- Lengths equal + every declared label written ⇒ a permutation, because the
+-- typechecker already rejects a literal that names the same field twice
+-- (T-DUPLICATE-FIELD) or one the record does not declare (T-UNKNOWN-FIELD).
+isPermutationOf : List String -> List String -> Bool
+isPermutationOf written labels = listLen written == listLen labels
+  && allList (l => contains l written) labels
+
+cFieldLabel : CField -> String
+cFieldLabel (CField k _) = k
+
+-- `$rf$<label>` cannot collide with a user binder (`$` is not an identifier
+-- character) and is unique within one literal because its labels are.  A nested
+-- literal's temporaries shadow only inside the field expression that contains it,
+-- which is closed before the outer `CRecord` reads its own temporaries back.
+recTempName : String -> String
+recTempName label = "$rf$" ++ label
+
+recTempField : String -> CField
+recTempField label = CField label (CVar (recTempName label) AGlobal)
+
+bindFieldTemps : List CField -> CExpr -> CExpr
+bindFieldTemps [] body = body
+bindFieldTemps ((CField k ex)::rest) body =
+  CLet
+    False
+    (PVar (recTempName k) (Loc "" 0 0 0 0))
+    ex
+    (bindFieldTemps rest body)
 
 -- ── #719: nullary return-position impl-method CAF memoisation (emit backends) ──
 -- A point-free (nullary) RETURN-POSITION impl method at a fixed concrete type
@@ -1879,9 +1959,9 @@ nodeTag _ = "?"
 (DTypeSig true "lowerProgram" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "CProgram")))
 (DFunDef false "lowerProgram" ((PVar "prog")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "setRef") (EVar "ctorFieldOrdersRef")) (EApp (EVar "buildCtorFieldOrders") (EVar "prog")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "CProgram") (EApp (EVar "lowerGroups") (EVar "prog"))) (EApp (EVar "ctorArities") (EVar "prog"))) (EApp (EVar "buildCtorToType") (EVar "prog"))) (EApp (EVar "lowerImpls") (EVar "prog"))))))
 (DTypeSig true "lowerProgramEmit" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "CProgram")))
-(DFunDef false "lowerProgramEmit" ((PVar "prog")) (EApp (EVar "hoistNullaryMemo") (EApp (EApp (EVar "rewriteProgramRecPats") (EApp (EVar "buildRecPatFieldOrders") (EVar "prog"))) (EApp (EVar "lowerProgram") (EVar "prog")))))
-(DTypeSig false "buildRecPatFieldOrders" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "buildRecPatFieldOrders" ((PVar "prog")) (EApp (EApp (EVar "flatMap") (EVar "recPatFieldOrderEntries")) (EVar "prog")))
+(DFunDef false "lowerProgramEmit" ((PVar "prog")) (EApp (EVar "hoistNullaryMemo") (EApp (EApp (EVar "rewriteProgramRecPats") (EApp (EVar "declaredRecordFieldOrders") (EVar "prog"))) (EApp (EVar "lowerProgram") (EVar "prog")))))
+(DTypeSig true "declaredRecordFieldOrders" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "declaredRecordFieldOrders" ((PVar "prog")) (EApp (EApp (EVar "flatMap") (EVar "recPatFieldOrderEntries")) (EVar "prog")))
 (DTypeSig false "recPatFieldOrderEntries" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "recPatFieldOrderEntries" ((PRec "DData" ((rf "dataCtors" (PVar "variants"))) false)) (EApp (EApp (EVar "flatMap") (EVar "variantNamedOrder")) (EVar "variants")))
 (DFunDef false "recPatFieldOrderEntries" ((PCon "DAttrib" PWild (PVar "inner"))) (EApp (EVar "recPatFieldOrderEntries") (EVar "inner")))
@@ -1930,7 +2010,7 @@ nodeTag _ = "?"
 (DFunDef false "rewriteExprRP" ((PVar "fo") (PCon "CUnOp" (PVar "op") (PVar "x"))) (EApp (EApp (EVar "CUnOp") (EVar "op")) (EApp (EApp (EVar "rewriteExprRP") (EVar "fo")) (EVar "x"))))
 (DFunDef false "rewriteExprRP" ((PVar "fo") (PCon "CTuple" (PVar "es"))) (EApp (EVar "CTuple") (EApp (EApp (EVar "map") (EApp (EVar "rewriteExprRP") (EVar "fo"))) (EVar "es"))))
 (DFunDef false "rewriteExprRP" ((PVar "fo") (PCon "CList" (PVar "es"))) (EApp (EVar "CList") (EApp (EApp (EVar "map") (EApp (EVar "rewriteExprRP") (EVar "fo"))) (EVar "es"))))
-(DFunDef false "rewriteExprRP" ((PVar "fo") (PCon "CRecord" (PVar "name") (PVar "fields"))) (EApp (EApp (EVar "CRecord") (EVar "name")) (EApp (EApp (EVar "map") (EApp (EVar "rewriteFieldRP") (EVar "fo"))) (EVar "fields"))))
+(DFunDef false "rewriteExprRP" ((PVar "fo") (PCon "CRecord" (PVar "name") (PVar "fields"))) (EApp (EApp (EApp (EVar "normalizeRecordOrder") (EVar "fo")) (EVar "name")) (EApp (EApp (EVar "map") (EApp (EVar "rewriteFieldRP") (EVar "fo"))) (EVar "fields"))))
 (DFunDef false "rewriteExprRP" ((PVar "fo") (PCon "CFieldAccess" (PVar "ex") (PVar "f") (PVar "n"))) (EApp (EApp (EApp (EVar "CFieldAccess") (EApp (EApp (EVar "rewriteExprRP") (EVar "fo")) (EVar "ex"))) (EVar "f")) (EVar "n")))
 (DFunDef false "rewriteExprRP" ((PVar "fo") (PCon "CRecordUpdate" (PVar "name") (PVar "base") (PVar "fields"))) (EApp (EApp (EApp (EVar "CRecordUpdate") (EVar "name")) (EApp (EApp (EVar "rewriteExprRP") (EVar "fo")) (EVar "base"))) (EApp (EApp (EVar "map") (EApp (EVar "rewriteFieldRP") (EVar "fo"))) (EVar "fields"))))
 (DFunDef false "rewriteExprRP" ((PVar "fo") (PCon "CVariantUpdate" (PVar "con") (PVar "base") (PVar "fields"))) (EApp (EApp (EApp (EVar "CVariantUpdate") (EVar "con")) (EApp (EApp (EVar "rewriteExprRP") (EVar "fo")) (EVar "base"))) (EApp (EApp (EVar "map") (EApp (EVar "rewriteFieldRP") (EVar "fo"))) (EVar "fields"))))
@@ -1957,6 +2037,19 @@ nodeTag _ = "?"
 (DFunDef false "rewriteStmtRP" ((PVar "fo") (PCon "CSAssign" (PVar "x") (PVar "e"))) (EApp (EApp (EVar "CSAssign") (EVar "x")) (EApp (EApp (EVar "rewriteExprRP") (EVar "fo")) (EVar "e"))))
 (DTypeSig false "rewriteFieldRP" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyCon "CField") (TyCon "CField"))))
 (DFunDef false "rewriteFieldRP" ((PVar "fo") (PCon "CField" (PVar "k") (PVar "e"))) (EApp (EApp (EVar "CField") (EVar "k")) (EApp (EApp (EVar "rewriteExprRP") (EVar "fo")) (EVar "e"))))
+(DTypeSig false "normalizeRecordOrder" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CField")) (TyCon "CExpr")))))
+(DFunDef false "normalizeRecordOrder" ((PVar "fo") (PVar "name") (PVar "fields")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "name")) (EVar "fo")) (arm (PCon "None") () (EApp (EApp (EVar "CRecord") (EVar "name")) (EVar "fields"))) (arm (PCon "Some" (PVar "labels")) () (EBlock (DoLet false false (PVar "written") (EApp (EApp (EVar "map") (EVar "cFieldLabel")) (EVar "fields"))) (DoExpr (EIf (EBinOp "||" (EBinOp "==" (EVar "written") (EVar "labels")) (EUnOp "!" (EApp (EApp (EVar "isPermutationOf") (EVar "written")) (EVar "labels")))) (EApp (EApp (EVar "CRecord") (EVar "name")) (EVar "fields")) (EApp (EApp (EVar "bindFieldTemps") (EVar "fields")) (EApp (EApp (EVar "CRecord") (EVar "name")) (EApp (EApp (EVar "map") (EVar "recTempField")) (EVar "labels"))))))))))
+(DTypeSig false "isPermutationOf" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
+(DFunDef false "isPermutationOf" ((PVar "written") (PVar "labels")) (EBinOp "&&" (EBinOp "==" (EApp (EVar "listLen") (EVar "written")) (EApp (EVar "listLen") (EVar "labels"))) (EApp (EApp (EVar "allList") (ELam ((PVar "l")) (EApp (EApp (EVar "contains") (EVar "l")) (EVar "written")))) (EVar "labels"))))
+(DTypeSig false "cFieldLabel" (TyFun (TyCon "CField") (TyCon "String")))
+(DFunDef false "cFieldLabel" ((PCon "CField" (PVar "k") PWild)) (EVar "k"))
+(DTypeSig false "recTempName" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "recTempName" ((PVar "label")) (EBinOp "++" (ELit (LString "$rf$")) (EVar "label")))
+(DTypeSig false "recTempField" (TyFun (TyCon "String") (TyCon "CField")))
+(DFunDef false "recTempField" ((PVar "label")) (EApp (EApp (EVar "CField") (EVar "label")) (EApp (EApp (EVar "CVar") (EApp (EVar "recTempName") (EVar "label"))) (EVar "AGlobal"))))
+(DTypeSig false "bindFieldTemps" (TyFun (TyApp (TyCon "List") (TyCon "CField")) (TyFun (TyCon "CExpr") (TyCon "CExpr"))))
+(DFunDef false "bindFieldTemps" ((PList) (PVar "body")) (EVar "body"))
+(DFunDef false "bindFieldTemps" ((PCons (PCon "CField" (PVar "k") (PVar "ex")) (PVar "rest")) (PVar "body")) (EApp (EApp (EApp (EApp (EVar "CLet") (EVar "False")) (EApp (EApp (EVar "PVar") (EApp (EVar "recTempName") (EVar "k"))) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))))) (EVar "ex")) (EApp (EApp (EVar "bindFieldTemps") (EVar "rest")) (EVar "body"))))
 (DTypeSig false "memoRefsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
 (DFunDef false "memoRefsRef" () (EApp (EVar "Ref") (EListLit)))
 (DTypeSig false "memoKeys" (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
@@ -2514,9 +2607,9 @@ nodeTag _ = "?"
 (DTypeSig true "lowerProgram" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "CProgram")))
 (DFunDef false "lowerProgram" ((PVar "prog")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "setRef") (EVar "ctorFieldOrdersRef")) (EApp (EVar "buildCtorFieldOrders") (EVar "prog")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "CProgram") (EApp (EVar "lowerGroups") (EVar "prog"))) (EApp (EVar "ctorArities") (EVar "prog"))) (EApp (EVar "buildCtorToType") (EVar "prog"))) (EApp (EVar "lowerImpls") (EVar "prog"))))))
 (DTypeSig true "lowerProgramEmit" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "CProgram")))
-(DFunDef false "lowerProgramEmit" ((PVar "prog")) (EApp (EVar "hoistNullaryMemo") (EApp (EApp (EVar "rewriteProgramRecPats") (EApp (EVar "buildRecPatFieldOrders") (EVar "prog"))) (EApp (EVar "lowerProgram") (EVar "prog")))))
-(DTypeSig false "buildRecPatFieldOrders" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "buildRecPatFieldOrders" ((PVar "prog")) (EApp (EApp (EDictApp "flatMap") (EVar "recPatFieldOrderEntries")) (EVar "prog")))
+(DFunDef false "lowerProgramEmit" ((PVar "prog")) (EApp (EVar "hoistNullaryMemo") (EApp (EApp (EVar "rewriteProgramRecPats") (EApp (EVar "declaredRecordFieldOrders") (EVar "prog"))) (EApp (EVar "lowerProgram") (EVar "prog")))))
+(DTypeSig true "declaredRecordFieldOrders" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "declaredRecordFieldOrders" ((PVar "prog")) (EApp (EApp (EDictApp "flatMap") (EVar "recPatFieldOrderEntries")) (EVar "prog")))
 (DTypeSig false "recPatFieldOrderEntries" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "recPatFieldOrderEntries" ((PRec "DData" ((rf "dataCtors" (PVar "variants"))) false)) (EApp (EApp (EDictApp "flatMap") (EVar "variantNamedOrder")) (EVar "variants")))
 (DFunDef false "recPatFieldOrderEntries" ((PCon "DAttrib" PWild (PVar "inner"))) (EApp (EVar "recPatFieldOrderEntries") (EVar "inner")))
@@ -2565,7 +2658,7 @@ nodeTag _ = "?"
 (DFunDef false "rewriteExprRP" ((PVar "fo") (PCon "CUnOp" (PVar "op") (PVar "x"))) (EApp (EApp (EVar "CUnOp") (EVar "op")) (EApp (EApp (EVar "rewriteExprRP") (EVar "fo")) (EVar "x"))))
 (DFunDef false "rewriteExprRP" ((PVar "fo") (PCon "CTuple" (PVar "es"))) (EApp (EVar "CTuple") (EApp (EApp (EMethodRef "map") (EApp (EVar "rewriteExprRP") (EVar "fo"))) (EVar "es"))))
 (DFunDef false "rewriteExprRP" ((PVar "fo") (PCon "CList" (PVar "es"))) (EApp (EVar "CList") (EApp (EApp (EMethodRef "map") (EApp (EVar "rewriteExprRP") (EVar "fo"))) (EVar "es"))))
-(DFunDef false "rewriteExprRP" ((PVar "fo") (PCon "CRecord" (PVar "name") (PVar "fields"))) (EApp (EApp (EVar "CRecord") (EVar "name")) (EApp (EApp (EMethodRef "map") (EApp (EVar "rewriteFieldRP") (EVar "fo"))) (EVar "fields"))))
+(DFunDef false "rewriteExprRP" ((PVar "fo") (PCon "CRecord" (PVar "name") (PVar "fields"))) (EApp (EApp (EApp (EVar "normalizeRecordOrder") (EVar "fo")) (EVar "name")) (EApp (EApp (EMethodRef "map") (EApp (EVar "rewriteFieldRP") (EVar "fo"))) (EVar "fields"))))
 (DFunDef false "rewriteExprRP" ((PVar "fo") (PCon "CFieldAccess" (PVar "ex") (PVar "f") (PVar "n"))) (EApp (EApp (EApp (EVar "CFieldAccess") (EApp (EApp (EVar "rewriteExprRP") (EVar "fo")) (EVar "ex"))) (EVar "f")) (EVar "n")))
 (DFunDef false "rewriteExprRP" ((PVar "fo") (PCon "CRecordUpdate" (PVar "name") (PVar "base") (PVar "fields"))) (EApp (EApp (EApp (EVar "CRecordUpdate") (EVar "name")) (EApp (EApp (EVar "rewriteExprRP") (EVar "fo")) (EVar "base"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "rewriteFieldRP") (EVar "fo"))) (EVar "fields"))))
 (DFunDef false "rewriteExprRP" ((PVar "fo") (PCon "CVariantUpdate" (PVar "con") (PVar "base") (PVar "fields"))) (EApp (EApp (EApp (EVar "CVariantUpdate") (EVar "con")) (EApp (EApp (EVar "rewriteExprRP") (EVar "fo")) (EVar "base"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "rewriteFieldRP") (EVar "fo"))) (EVar "fields"))))
@@ -2592,6 +2685,19 @@ nodeTag _ = "?"
 (DFunDef false "rewriteStmtRP" ((PVar "fo") (PCon "CSAssign" (PVar "x") (PVar "e"))) (EApp (EApp (EVar "CSAssign") (EVar "x")) (EApp (EApp (EVar "rewriteExprRP") (EVar "fo")) (EVar "e"))))
 (DTypeSig false "rewriteFieldRP" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyCon "CField") (TyCon "CField"))))
 (DFunDef false "rewriteFieldRP" ((PVar "fo") (PCon "CField" (PVar "k") (PVar "e"))) (EApp (EApp (EVar "CField") (EVar "k")) (EApp (EApp (EVar "rewriteExprRP") (EVar "fo")) (EVar "e"))))
+(DTypeSig false "normalizeRecordOrder" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CField")) (TyCon "CExpr")))))
+(DFunDef false "normalizeRecordOrder" ((PVar "fo") (PVar "name") (PVar "fields")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "name")) (EVar "fo")) (arm (PCon "None") () (EApp (EApp (EVar "CRecord") (EVar "name")) (EVar "fields"))) (arm (PCon "Some" (PVar "labels")) () (EBlock (DoLet false false (PVar "written") (EApp (EApp (EMethodRef "map") (EVar "cFieldLabel")) (EVar "fields"))) (DoExpr (EIf (EBinOp "||" (EBinOp "==" (EVar "written") (EVar "labels")) (EUnOp "!" (EApp (EApp (EVar "isPermutationOf") (EVar "written")) (EVar "labels")))) (EApp (EApp (EVar "CRecord") (EVar "name")) (EVar "fields")) (EApp (EApp (EVar "bindFieldTemps") (EVar "fields")) (EApp (EApp (EVar "CRecord") (EVar "name")) (EApp (EApp (EMethodRef "map") (EVar "recTempField")) (EVar "labels"))))))))))
+(DTypeSig false "isPermutationOf" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
+(DFunDef false "isPermutationOf" ((PVar "written") (PVar "labels")) (EBinOp "&&" (EBinOp "==" (EApp (EVar "listLen") (EVar "written")) (EApp (EVar "listLen") (EVar "labels"))) (EApp (EApp (EVar "allList") (ELam ((PVar "l")) (EApp (EApp (EVar "contains") (EVar "l")) (EVar "written")))) (EVar "labels"))))
+(DTypeSig false "cFieldLabel" (TyFun (TyCon "CField") (TyCon "String")))
+(DFunDef false "cFieldLabel" ((PCon "CField" (PVar "k") PWild)) (EVar "k"))
+(DTypeSig false "recTempName" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "recTempName" ((PVar "label")) (EBinOp "++" (ELit (LString "$rf$")) (EVar "label")))
+(DTypeSig false "recTempField" (TyFun (TyCon "String") (TyCon "CField")))
+(DFunDef false "recTempField" ((PVar "label")) (EApp (EApp (EVar "CField") (EVar "label")) (EApp (EApp (EVar "CVar") (EApp (EVar "recTempName") (EVar "label"))) (EVar "AGlobal"))))
+(DTypeSig false "bindFieldTemps" (TyFun (TyApp (TyCon "List") (TyCon "CField")) (TyFun (TyCon "CExpr") (TyCon "CExpr"))))
+(DFunDef false "bindFieldTemps" ((PList) (PVar "body")) (EVar "body"))
+(DFunDef false "bindFieldTemps" ((PCons (PCon "CField" (PVar "k") (PVar "ex")) (PVar "rest")) (PVar "body")) (EApp (EApp (EApp (EApp (EVar "CLet") (EVar "False")) (EApp (EApp (EVar "PVar") (EApp (EVar "recTempName") (EVar "k"))) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))))) (EVar "ex")) (EApp (EApp (EVar "bindFieldTemps") (EVar "rest")) (EVar "body"))))
 (DTypeSig false "memoRefsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
 (DFunDef false "memoRefsRef" () (EApp (EVar "Ref") (EListLit)))
 (DTypeSig false "memoKeys" (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))

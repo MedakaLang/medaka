@@ -166,6 +166,7 @@ import frontend.marker.{markWithPrelude}
 import ir.sexp.{programToSexp}
 import ir.core_ir.{CProgram}
 import ir.core_ir_lower.{
+  declaredRecordFieldOrders,
   lowerProgram,
   lowerProgramEmit,
   returnsSelfTable,
@@ -197,6 +198,7 @@ import backend.llvm_emit.{emitProgramRecord, makeEmitInput}
 import backend.wasm_emit.{
   emitProgram as wasmText,
   installMethodIface,
+  installRecFieldOrders,
   installDeclRetTypes,
   installCtorFloatFields,
   enableGapRecordW,
@@ -621,13 +623,15 @@ emitBoth root sel runtimeDecls userDecls =
 
 llvmOf : List Decl -> List Decl -> CProgram -> String
 llvmOf runtimeDecls allDecls cp =
-  let input = makeEmitInput (returnsSelfTable allDecls) (selfFnParamTable allDecls) (methodIfaceTable allDecls) (methodConstraintIfaces allDecls) (ctorFieldTypeNames allDecls) (declSigTypeNames runtimeDecls ++ declSigTypeNames allDecls) (mainTypeIsUnit ()) (mainTypeIsFloat ()) 0 [] [] ""
+  let input = makeEmitInput (returnsSelfTable allDecls) (selfFnParamTable allDecls) (methodIfaceTable allDecls) (methodConstraintIfaces allDecls) (ctorFieldTypeNames allDecls) (declSigTypeNames runtimeDecls ++ declSigTypeNames allDecls) (mainTypeIsUnit ()) (mainTypeIsFloat ()) 0 [] [] "" (declaredRecordFieldOrders allDecls)
   let (text, gaps) = emitProgramRecord input cp
   withGaps ";" text gaps
 
 wasmOf : List Decl -> List Decl -> CProgram -> String
 wasmOf runtimeDecls allDecls cp =
   let _ = installMethodIface (methodIfaceTable allDecls)
+  -- #1513: the record field-order table, from the SAME decls that are lowered.
+  let _ = installRecFieldOrders (declaredRecordFieldOrders allDecls)
   let _ = installDeclRetTypes (declSigTypeNames runtimeDecls ++ declSigTypeNames allDecls)
   let _ = installCtorFloatFields (ctorFieldTypeNames allDecls)
   let _ = resetGapsW ()

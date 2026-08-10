@@ -38,13 +38,19 @@ import types.typecheck.{
   preludeReturnPosDictNames,
   preludeArgPosDictNames,
 }
-import ir.core_ir_lower.{lowerProgramEmit, methodIfaceTable, declSigTypeNames}
+import ir.core_ir_lower.{
+  lowerProgramEmit,
+  methodIfaceTable,
+  declSigTypeNames,
+  declaredRecordFieldOrders,
+}
 import backend.private_mangle.{mangleUnits}
 import ir.dce.{dceFilter}
 import backend.wasm_emit.{
   emitProgram,
   emitProgramGaps,
   installMethodIface,
+  installRecFieldOrders,
   installDeclRetTypes,
 }
 import entries.entry_support.{driveModules}
@@ -68,6 +74,8 @@ runEmit runtimeDecls coreDecls modules =
   -- identity`, `foldMap`, `filter`) to the method's full arity — the precise
   -- real-prelude MVP blocker.  Mirrors llvm_emit_modules_main's installMethodIface.
   let _ = installMethodIface (methodIfaceTable allDecls)
+  -- #1513: the record field-order table, from the SAME decls that are lowered.
+  let _ = installRecFieldOrders (declaredRecordFieldOrders allDecls)
   -- W9b: install declared return-type heads so a Unit-returning value main
   -- (`main = println …`) suppresses its auto-print (the trailing-`0` bug).
   let _ = installDeclRetTypes (declSigTypeNames runtimeDecls ++ declSigTypeNames allDecls)

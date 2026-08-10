@@ -969,11 +969,46 @@ containsInt _ [] = False
 containsInt x (y::ys) = x == y || containsInt x ys
 
 -- ctor name → field labels in DECLARED order, for every named-field record/variant
--- the program constructs (scanned from CRecord nodes, peer to llvm_emit.collectRecords).
--- Drives CFieldAccess's struct index + CRecordUpdate/CVariantUpdate's unchanged-field
--- copy.  Set once per program in emitProgram.
+-- the program CONSTRUCTS (scanned from CRecord nodes, peer to llvm_emit.collectRecords).
+-- Set once per program in emitProgram.  It is the FALLBACK half of the field-order
+-- table: every resolver reads `recFieldTableW ()` below, which puts the declarations
+-- in front of it.  The one reader that still consults the scan alone is the
+-- `$__rub` scratch-local gate, whose question really is "does this program build a
+-- record cell", not "does it declare a record type".
 recFieldsRef : Ref (List (String, List String))
 recFieldsRef = Ref []
+
+-- #1513: the declaration-sourced half of the table above
+-- (`core_ir_lower.declaredRecordFieldOrders`), installed by the emit driver before
+-- emitProgram — the WasmGC peer of the LLVM backend's `EmitInput.recordFieldOrders`,
+-- carried as an install hook for the same reason `methodIfaceTableRef` is (this
+-- backend has no EmitInput seam yet; X-W.H).
+--
+-- Why wasm needs it too, given its miss is LOUD.  A record absent from the scan
+-- makes `recByName` fall through to `findRecByField`, which answers with a DIFFERENT
+-- record that owns the label; on this backend that is a `ref.cast` to the other
+-- record's struct, so the module builds at exit 0 and TRAPS at instantiation
+-- ("illegal cast") instead of printing a wrong number.  That is a better failure than
+-- the native one, but it is still a legal program that does not run, and the *loud*
+-- half of #1513 — `gapL "CFieldAccess on unknown field"` on a record that is simply
+-- never constructed — is a legal program that does not BUILD.  Neither is acceptable
+-- because the native arm happens to be worse, and leaving the two backends' tables
+-- built from different authorities is how they drift apart again.
+-- Empty (never installed, e.g. the prelude-free W2/W5 entries) ⇒ the scan alone ⇒
+-- byte-identical WAT to the pre-#1513 behaviour.
+declRecFieldsRef : Ref (List (String, List String))
+declRecFieldsRef = Ref []
+
+-- install entry point for the emit drivers; peer of `installMethodIface`.
+export installRecFieldOrders : List (String, List String) -> Unit
+installRecFieldOrders t = setRef declRecFieldsRef t
+
+-- THE field-order table every resolver must read: declarations first, construction
+-- scan behind them.  Both halves are consulted first-match, so a declared record is
+-- answered by its declaration and an undeclared one (anonymous shape, or a probe
+-- entry that installs no declarations) still falls back to the scan.
+recFieldTableW : Unit -> List (String, List String)
+recFieldTableW _ = declRecFieldsRef.value ++ recFieldsRef.value
 
 -- intern a literal's bytes as a fresh passive data segment; returns its index.
 freshStrSeg : List Int -> Int
@@ -1776,7 +1811,14 @@ cFieldName (CField k _) = k
 -- A named-field record/variant ctor IS a user ctor (in the W3 ctor table); we only
 -- need its field ORDER to compute a CFieldAccess struct index + a record-update's
 -- unchanged-field copy.  Recover it from CRecord nodes (which carry fields in
--- declared order — lowering preserves it), peer to llvm_emit.collectRecords.
+-- declared order — `core_ir_lower.normalizeRecordOrder` now makes that true rather
+-- than merely asserting it), peer to llvm_emit.collectRecords.
+--
+-- #1513: this scan is the FALLBACK half of `recFieldTableW`, no longer the whole
+-- table, and its arms are deliberately not exhaustive — a record reached only
+-- through `CLetGroup`, a slice bound, or a match-arm guard is invisible here, which
+-- is exactly why the declarations go in front of it.  Do not "fix" the class by
+-- adding arms; any arm added later can be forgotten again.
 collectRecFields : List CBind -> List (String, List String)
 collectRecFields groups = dedupRecEntries (flatMap collectRecFieldsBind groups)
 
@@ -5410,7 +5452,7 @@ cexprIsFloat prog env (CApp f a) = match appHead (CApp f a)
 -- Look up the record ctor that owns `label` (by the stamped record name when
 -- available, else by label) and check if that field's 0-based index is in
 -- ctorFloatFieldsRef.
-cexprIsFloat prog env (CFieldAccess _ label recName) = match recByName recFieldsRef.value recName label
+cexprIsFloat prog env (CFieldAccess _ label recName) = match recByName (recFieldTableW ()) recName label
   Some (ctor, labels) =>
     isFloatCtorField ctor (orZeroIdx (indexOfL label labels))
   None => False
@@ -7972,7 +8014,7 @@ emitRecordRef prog env d name fields =
 -- the recFieldsRef table built in emitProgram.
 emitFieldAccessRef : Prog -> List String -> Int -> CExpr -> String -> String -> List String
 emitFieldAccessRef prog env d ex label recName =
-  match recByName recFieldsRef.value recName label
+  match recByName (recFieldTableW ()) recName label
     Some (ctor, labels) =>
       let idx = orZeroIdx (indexOfL label labels)
       emitRefExpr prog env d ex
@@ -7990,7 +8032,7 @@ emitFieldAccessRef prog env d ex label recName =
 emitRecordUpdateRef : Prog -> List String -> Int -> String -> CExpr -> List CField -> List String
 emitRecordUpdateRef prog env d recName base fields = match firstFieldLabel fields
   None => gapL "ref-mode: empty record update"
-  Some k0 => match recByName recFieldsRef.value recName k0
+  Some k0 => match recByName (recFieldTableW ()) recName k0
     Some (ctor, labels) => emitUpdateCopy prog env d ctor labels base fields
     None => gapL ("ref-mode: CRecordUpdate on unknown field '" ++ k0 ++ "'")
 
@@ -8019,7 +8061,7 @@ firstFieldLabel ((CField k _)::_) = Some k
 
 -- named-field variant update `Con { base | f = v … }`: same copy, ctor known.
 emitVariantUpdateRef : Prog -> List String -> Int -> String -> CExpr -> List CField -> List String
-emitVariantUpdateRef prog env d con base fields = match lookupAssoc con recFieldsRef.value
+emitVariantUpdateRef prog env d con base fields = match lookupAssoc con (recFieldTableW ())
   Some labels => emitUpdateCopy prog env d con labels base fields
   None =>
     gapL ("ref-mode: CVariantUpdate on unknown constructor '" ++ con ++ "'")
