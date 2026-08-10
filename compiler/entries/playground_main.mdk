@@ -112,6 +112,7 @@ import ir.core_ir_lower.{
   methodIfaceTable,
   declSigTypeNames,
   declaredRecordFieldOrders,
+  ctorFieldTypeNames,
 }
 import backend.private_mangle.{mangleUnits}
 import ir.dce.{dceFilter}
@@ -120,6 +121,7 @@ import backend.wasm_emit.{
   installMethodIface,
   installRecFieldOrders,
   installDeclRetTypes,
+  installCtorFloatFields,
   installMainIsFloatHint,
 }
 
@@ -332,6 +334,7 @@ runEmit runtimeDecls coreDecls modules =
   -- #1513: the record field-order table, from the SAME decls that are lowered.
   let _ = installRecFieldOrders (declaredRecordFieldOrders allDecls)
   let _ = installDeclRetTypes (declSigTypeNames runtimeDecls ++ declSigTypeNames allDecls)
+  let _ = installCtorFloatFields (ctorFieldTypeNames allDecls)
   let _ = installMainIsFloatHint (mainTypeIsFloat ())
   putStr (emitProgram (lowerProgramEmit allDecls))
 

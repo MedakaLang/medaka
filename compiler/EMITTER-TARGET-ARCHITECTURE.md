@@ -768,10 +768,12 @@ verification (#1101).
 
 Mirror X-N at the physical-contract level, not line-for-line. X-W.H can
 consolidate today's reset/input lifecycle and assert product input-set parity
-before AP, while preserving current behavior. In particular, reproduce the
-shipping playground's missing `installCtorFloatFields` consequence before
-equalizing it; source divergence alone does not establish an observable bug.
-X-W.C later validates reachable host requirements without weakening the complete
+before AP, while preserving current behavior. The shipping playground's former
+missing `installCtorFloatFields` was observed as P1 (record-field Float unary
+negation) and P2 (constructor-pattern Float unary negation) illegal-cast traps
+from parse-valid WAT. The focused repair installs the existing
+`ctorFieldTypeNames allDecls` producer immediately after declared return types;
+it does not close ambient input parity or X-W.H. X-W.C later validates reachable host requirements without weakening the complete
 capability manifest, decides scalar mode by the criterion in section 8.1,
 migrates both `wasm_emit_modules_main` and `playground_main`, and adds a
 behavior-level self-host assurance arm to tracker #384's linkage-only coverage.
