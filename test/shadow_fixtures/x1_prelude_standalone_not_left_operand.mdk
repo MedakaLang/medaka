@@ -1,0 +1,41 @@
+-- X1 (SHADOW-SEMANTICS S1-PRELUDE, ruled 2026-08-10; #1375 item 2)
+--
+-- THE DISCRIMINATING CELL for "can a PRELUDE standalone be S1's LEFT operand?".
+-- `isEven` is a prelude STANDALONE (`stdlib/core.mdk`: `export isEven : Int ->
+-- Bool`).  This module declares an interface METHOD of the same name, and the
+-- receiver `7` is at a head with NO `impl Parity` -- but squarely INSIDE the
+-- prelude standalone's domain.  The two candidate readings answer differently:
+--
+--   RULED (S1-PRELUDE (a)): the prelude standalone is NOT in S1's left operand,
+--     so `isEven` is NOT a shadow here and the bare name denotes the INTERFACE
+--     METHOD.  Ordinary method dispatch then finds no `impl Parity Int` =>
+--     LOCATED REJECT on all three verbs.  <== what this fixture pins.
+--   REJECTED reading (prelude standalone admitted as an IMPORTER shadow): S2's
+--     importer arm asks whether an impl exists at the receiver's head; none
+--     does, so it would fall back to the standalone and ACCEPT, printing
+--     `False`.
+--
+-- EXPECTED VALUE WAS HAND-DERIVED FROM THE RULING, NOT CAPTURED.  Deriving it
+-- was mandatory here and not a formality: the execution arms are KNOWN TO
+-- DISAGREE on neighbouring cells of this same collision (#1492, and the silent
+-- run-vs-binary split at SHADOW-SEMANTICS matrix row 49), so at most one of them
+-- could have served as an oracle and a captured golden could have enshrined the
+-- opposite denotation.  NO MECHANISM IS ASSERTED for that disagreement -- the
+-- "routes to the prelude standalone, yielding a partial application" account is
+-- measured FALSE (#1492: the symptom is arity-independent).  This cell is loud on
+-- all three verbs, which is why it is pinnable at all; the sibling shape where
+-- both denotations are well-typed at the SAME receiver is the live divergence and
+-- is DELIBERATELY NOT in this corpus (matrix row 49).
+--
+-- The `impl Parity Box` is load-bearing: it makes the interface non-vacuous, so
+-- the reject cannot be dismissed as "an interface with no impls at all".  Its
+-- zero-impl twin is x2.
+interface Parity c where
+  isEven : c -> Bool
+
+data Box = Box Int
+
+impl Parity Box where
+  isEven b = True
+
+main = println (isEven 7)

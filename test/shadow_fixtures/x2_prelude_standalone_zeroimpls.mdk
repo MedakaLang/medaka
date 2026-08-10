@@ -1,0 +1,17 @@
+-- X2 (SHADOW-SEMANTICS S1-PRELUDE) -- x1 with ZERO impls of the colliding
+-- interface, the `d1b`/`d19` move applied to the prelude cell.
+--
+-- Same ruling, same verdict, and it closes a different escape hatch: a candidate
+-- implementation that consulted the impl universe before deciding the NAME would
+-- answer x1 correctly for the wrong reason.  Here there is no impl to consult, so
+-- the only thing that can produce the reject is the interface method having taken
+-- the name outright -- which is exactly S1-PRELUDE (a)'s content ("no S2 arm
+-- applies; the impl universe is never consulted to decide the name").
+--
+-- EXPECTED VALUE HAND-DERIVED FROM THE RULING, NOT CAPTURED (see x1's note on
+-- why capturing is unsafe on this shape).  Under the rejected importer reading
+-- this ACCEPTS and prints `False`.
+interface Parity c where
+  isEven : c -> Bool
+
+main = println (isEven 7)

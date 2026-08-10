@@ -1,0 +1,28 @@
+-- X3 (SHADOW-SEMANTICS S1-PRELUDE) -- the ARITY-DIFFERING sibling of x1/x2.
+--
+-- x1 and x2 both collide with a prelude standalone whose arity MATCHES the
+-- interface method's, so a reader could conclude the rule is gated on the two
+-- signatures lining up.  It is not: `count` is a prelude standalone of arity 2
+-- (`stdlib/core.mdk`: `export count : Foldable t => (a -> <e> Bool) -> t a ->
+-- <e> Int`) against an interface method of arity 1, and the ruling still gives
+-- the name to the interface method.
+--
+-- Under the RULED reading the occurrence is the interface method, so applying it
+-- to two arguments is over-application AND the first argument (a function) has no
+-- `impl Sized` -- two located diagnostics, REJECT on all three verbs.
+-- Under the REJECTED importer reading no impl exists at the head of `(a -> Bool)`,
+-- so it would fall back to the prelude standalone, ACCEPT, and print `3`.
+--
+-- EXPECTED VALUE HAND-DERIVED FROM THE RULING, NOT CAPTURED (see x1).
+--
+-- The `impl Sized Box` keeps the interface non-vacuous, as in x1.
+interface Sized c where
+  count : c -> Int
+
+data Box = Box Int
+
+impl Sized Box where
+  count b = match b
+    Box n => n
+
+main = println (count (x => True) [1, 2, 3])

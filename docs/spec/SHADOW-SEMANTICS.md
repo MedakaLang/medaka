@@ -222,7 +222,7 @@ spelled out:
 | Term | Means | Used by |
 |---|---|---|
 | **nameable in `M`** | the declaration is one `M` may refer to by name: declared in `M`, **or** exported by a module `M` imports **AND ADMITTED BY THAT IMPORT PATH** (directly, or through a re-export chain — **RULED IN SCOPE 2026-08-07, [#1380](https://github.com/MedakaLang/medaka/issues/1380); see S1-CHAIN under S1**, which also says what is still deferred: the sub-predicate deciding when a declaration counts as *exported through* a chain), **or** declared in the implicit prelude. ⚠️ **The "and admitted by that import path" clause was ADDED 2026-08-08 by S1-NS**: this row previously said only *"exported by a module `M` imports"*, which is module-level and, read literally, is satisfied by `import smod.{sf}` — an import that names one unrelated function. That reading is exactly the too-loose one this document's own headline forbids, and it shipped as a bug. **What "admitted" means is S1-NS (a), which is the per-METHOD union of the two namespaces — see S1-NS under S1.** | S1's **interface** operand |
-| **defined in `M` or imported into `M`** | the two cases that assign a shadow its **kind** (definer / importer) — so this is also, exactly, S1's **standalone** operand | S1's **standalone** operand + the kind partition |
+| **defined in `M` or imported into `M`** | the two cases that assign a shadow its **kind** (definer / importer) — so this is also, exactly, S1's **standalone** operand. ⚠️ **The implicit prelude is NEITHER, and is therefore EXCLUDED from this row — RULED 2026-08-10, S1-PRELUDE under S1** ([#1375](https://github.com/MedakaLang/medaka/issues/1375) item 2). A standalone that reaches `M` only as an implicit prelude export contributes nothing here and creates no shadow in `M`. **The asymmetry with the interface row above — which names the prelude as INCLUDED — is deliberate, not an oversight**, and S1-PRELUDE carries the argument: the interface operand is the wider *nameable in `M`*, while this operand is pinned by the kind partition, because S2 is stated **per kind** and a standalone with no kind would leave an occurrence classified by S1 and undenoted by S2 | S1's **standalone** operand + the kind partition |
 | **graph-global** | ranges over **every** module of the loaded graph, whether or not any import path reaches it — `DICT-SEMANTICS.md` §8 **I5** | S2's **impl universe** only |
 
 ⚠️ **S1's two operands are NOT the same set, and that is deliberate.** The
@@ -696,22 +696,25 @@ Given an occurrence of bare name `N` in module `M`:
   >    [#1302](https://github.com/MedakaLang/medaka/issues/1302) export-visibility
   >    axis, whose own filed repro does not exercise S1 at all (see the ⚠️ under
   >    S1).
-  > 2. **Whether a PRELUDE standalone can be S1's left operand at all.** The kind
+  > 2. ✅ **RULED 2026-08-10 — NO. A prelude standalone is NOT S1's left operand.**
+  >    This item is **closed**; see **S1-PRELUDE** under S1 for the ruling, the
+  >    argument, the diagnostic it requires and its ⟲ overturn condition. What
+  >    remains of this item is only the record of why it was open: the kind
   >    partition admits only *defined in `M`* and *imported into `M`*, and the
-  >    implicit prelude is neither on its face; no cell in §2 exercises it (every
-  >    corpus unit's standalone is local or explicitly imported — **still true
+  >    implicit prelude is neither on its face; no cell in §2 exercised it (every
+  >    corpus unit's standalone was local or explicitly imported — **still true
   >    after rows 33–45**, which vary the *interface* operand and leave the
-  >    standalone operand alone). Nothing here turns on it, so nothing here
-  >    decides it.
+  >    standalone operand alone). Rows 46–48 are the cells that now exercise it.
   >
-  >    🚨 **The spec may leave this open; CODE CANNOT.** A per-module
+  >    🚨 **The spec may leave this open; CODE CANNOT** — this is the sentence that
+  >    forced the ruling. A per-module
   >    nameable-in-`M` predicate has to answer it the moment it is written, and if it gets
   >    answered **by accident** — as a fallthrough, a default arm, or whichever
   >    branch was convenient — that is the class of defect this whole pass exists
   >    to remove: an unwritten rule decided by implementation drift and then
   >    inherited as if intended. **Owed: the implementing unit must state which
   >    way it answers this and why, or this item must be ruled first.** Answering
-  >    it silently is not an option (#1375).
+  >    it silently is not an option (#1375). It was ruled first.
   >
   >    ⚠️ **Adjacent, and NOT the same question — but the nearest live evidence
   >    that the prelude boundary is load-bearing rather than theoretical:**
@@ -729,6 +732,203 @@ Given an occurrence of bare name `N` in module `M`:
   > text and from what kind of rule S1 is — **not** a finding about what the
   > author of "may live anywhere" intended, which was not established and is not
   > claimed. It was adopted as a decision on that basis (#1375).
+
+  > ### 🔒 S1-PRELUDE — RULED 2026-08-10 ([#1375](https://github.com/MedakaLang/medaka/issues/1375) item 2): a PRELUDE standalone is NOT S1's left operand, and the collision is NOT silent
+  >
+  > **The ruling, in two halves.**
+  >
+  > - **(a) Denotation — NO.** S1's **left** operand remains **exactly** the kind
+  >   partition of §1.0: *defined in `M`* / *imported into `M`*. The implicit
+  >   prelude is **neither**, so a standalone that reaches `M` only as an implicit
+  >   prelude export **contributes nothing to S1's left operand and creates no
+  >   shadow in `M`**. Consequently, where `M` declares an interface method named
+  >   `N` and the prelude exports a standalone `N`, a bare occurrence of `N` in `M`
+  >   denotes **the interface method** — not the prelude standalone, and not a
+  >   choice made by the receiver's type. There is no shadow, so **no S2 arm
+  >   applies**: neither the definer inversion nor the importer per-receiver rule,
+  >   and in particular **the impl universe is never consulted to decide the
+  >   name**. The occurrence is an ordinary interface-method occurrence and is
+  >   subject to the ordinary obligation that an `impl` exist at the receiver's
+  >   head; where none does, it is a **located reject**, exactly as it would be if
+  >   the prelude standalone did not exist at all.
+  > - **(b) Discoverability — a diagnostic is REQUIRED.** The collision **MUST NOT
+  >   be silent.** A conforming implementation emits a **warning** (`W-PRELUDE-METHOD-SHADOW`,
+  >   `compiler/DIAGNOSTIC-CODES-DESIGN.md`) at the declaration of the colliding
+  >   interface method, naming the prelude standalone that the declaration makes
+  >   unreachable by its bare name in `M`, and naming a recovery. A warning, **not**
+  >   an error: under (a) the program is well-defined and is **accepted today**
+  >   (measured — see Conformance), so rejecting it would be an
+  >   accept-narrowing of working programs for the sake of a message.
+  >
+  > **The argument, so it can be disagreed with rather than merely cited.**
+  >
+  > (a) is the conservative reading of the two operands §1.0 already separates. The
+  > left operand is not *chosen* — it is **pinned** by S1's own kind partition, and
+  > S1-SCOPE says why in its own words: S2 is stated **per kind**, so admitting a
+  > standalone that has no kind would let S1 classify an occurrence that S2 then
+  > gives **no denotation**. Admitting the prelude to the left operand therefore
+  > cannot be done by widening one set; it requires inventing a **third shadow
+  > kind** with its own S2 arm. That third reading was considered and **rejected**:
+  > nothing in this document needs it, and **no program has been exhibited that
+  > needs it** — the requirement any such reading would have to meet is (a)'s ⟲
+  > condition below.
+  >
+  > The rejected alternative worth naming explicitly is *"treat a prelude
+  > standalone as an **importer** shadow"* — the reading that reuses an existing
+  > kind rather than inventing one. It is rejected on its consequence, not on
+  > taxonomy: S2's importer arm decides the occurrence by asking whether **an impl
+  > happens to exist at the receiver's head**, over the **graph-global** instance
+  > universe (`DICT-SEMANTICS.md` §8 **I5**). Under that reading, whether a bare
+  > `N` in `M` means the user's interface method or a prelude function would move
+  > when **an unrelated module anywhere in the loaded graph adds an impl** — a
+  > program's meaning changing on an edit it has no import path to. S1-SCOPE
+  > already refuses to let the instance universe decide **names** (*"One is about
+  > **names**, the other about **instances**"*); this is that same refusal at the
+  > left operand.
+  >
+  > **Comparative rationale — CITED, NOT MEASURED.** ⚠️ These characterisations of
+  > other languages are **from knowledge and were NOT verified against a
+  > toolchain** (no `ghc`/`rustc` on the box where this was written). Read them as
+  > *cited comparative rationale, unverified* — they are an argument's supporting
+  > analogy and must not be re-cited elsewhere as measured fact.
+  > *Haskell* faces this exact question — class methods and free functions share
+  > one namespace and one call syntax — and answers it by keeping both candidates
+  > in scope and making every unqualified use an `Ambiguous occurrence` **error**,
+  > with qualification or `import Prelude hiding (…)` as the explicit repairs; it
+  > **deliberately refuses type-directed disambiguation of an ambiguous name**.
+  > *Rust* avoids the question structurally — trait methods are not free functions
+  > (`x.count()` / `Trait::count(x)`, never bare `count(x)`) — and its nearest
+  > analogue, two in-scope traits offering the same method for one receiver, is
+  > error **E0034**, requiring `<T as Trait>::count(x)`. Rust *does* let a local
+  > item silently shadow a prelude or glob import, but only because the shadowed
+  > item stays reachable **by path** (`std::option::Option`). **Neither language
+  > does anything resembling the rejected importer reading**, and the half Medaka
+  > departs from Haskell on is deliberate: Haskell errors because it has **no
+  > winner**, whereas under (a) Medaka has one. What Medaka must not borrow from
+  > Rust's silence is the silence itself — Rust can afford it because the path
+  > repair always exists, and (b) exists because Medaka's does not (see the
+  > recovery paragraph).
+  >
+  > **The recovery, MEASURED 2026-08-10 on a cold `make medaka` of this branch.**
+  > (b) obliges the diagnostic to name a repair, so the repair had to be measured
+  > before (b) could be written. **Two work; three plausible ones do not**, and the
+  > message must name only the working ones:
+  >
+  > | Spelling | Verdict |
+  > |---|---|
+  > | Rename the interface method (or the local use) | **WORKS** — and is the only repair that needs nothing new |
+  > | A shim module: a module that does **not** declare the colliding interface calls bare prelude `N` and exports it under a fresh name; `M` imports that | **WORKS** — `check` 0 / `run` correct / built binary correct. Follows directly from S1's per-module shadow-hood |
+  > | `import core as C` → `C.N` | **DOES NOT WORK** — `Unbound variable: C.N`, and it fails **with no collision present at all**, so aliasing the implicit prelude is simply unimplemented (contrast `import list as L` → `L.take`, which works). §1.1's table recorded this for `eq` in 2026-07-14; re-measured for `count` |
+  > | `import core.{N as pN}` → `pN` | **DOES NOT WORK** — `Unbound variable: pN. Did you mean 'N'` |
+  > | `import core.{N}` (plain, no rename) | **DOES NOT RECOVER** — the interface method still wins; writing the import explicitly changes nothing |
+  > | `import <shim> as S` → `S.N`, where the shim is `export import core.{N}` | **DOES NOT WORK, AND IS AN S0** — `check` exit 0 typing `S.N` as the *interface method*'s scheme, then a **SIGSEGV** from the built binary. Without the collision the same spelling builds a binary that prints the right answer, so the collision is the trigger. Filed separately; **do not name this spelling in any message** |
+  >
+  > **There is no `hiding`/exclusion syntax** — derived, not assumed: a
+  > case-insensitive word-bounded grep for `hiding` over `compiler/`, `stdlib/` and
+  > `docs/spec/` returns seven hits, **all** prose using the word in unrelated
+  > senses, and none a construct. So Haskell's `import Prelude hiding (…)` repair
+  > is unavailable here, which is precisely why (b) is a **warning that names a
+  > repair** rather than an error that demands one.
+  >
+  > **🚨 WHAT THIS LICENSES, AND WHAT IT COSTS.** Stated as a set, because a rule
+  > that quietly widens is invisible to a citation audit.
+  >
+  > - **Newly NON-CONFORMANT:** (1) An implementation that admits a prelude
+  >   standalone to S1's left operand — under any kind, or under a third kind of
+  >   its own invention. (2) An implementation that resolves the collision by
+  >   receiver type, i.e. answers *prelude standalone* for a receiver at a head
+  >   with no `impl` of the colliding interface and *interface method* for one that
+  >   has one. (3) An implementation that accepts the colliding **declaration**
+  >   with no diagnostic — (b) makes silence non-conformant.
+  > - **NOT newly accepted, and NOT newly rejected.** (a) is the reading the front
+  >   end already implements, so it changes **no** program's verdict and **no**
+  >   program's value. This ruling's entire behavioural delta is (b)'s warning.
+  >   That is deliberate: the alternative readings were the ones that would have
+  >   moved values, and each is refused above.
+  > - **The cost, stated as a cost.** A module that declares an interface method
+  >   named `N` **loses the prelude's `N` by its bare name, everywhere in that
+  >   module**, with no in-module repair — §1.1's *"rename your function"*, now
+  >   reaching the prelude's own 49 method-and-standalone surface. That is the same
+  >   cost §1.1 already charges for the definer inversion, and (b) is the whole of
+  >   the mitigation. It is a real cost and it is not disguised: the honest summary
+  >   is *the collision is cheap to hit, loud once (b) lands, and awkward to
+  >   repair.*
+  >
+  > **Conformance today — MEASURED 2026-08-10, cold `make medaka` on this branch,
+  > `MEDAKA_STRICT=1`, all three verbs plus the executed binary.**
+  >
+  > - **(a) HOLDS on `check` and on the built binary, and rows 46–48 are the
+  >   discriminating cells.** With `interface Parity c where isEven : c -> Bool`
+  >   colliding with the prelude standalone `isEven : Int -> Bool`, a receiver at a
+  >   head with **no** `impl Parity` is `No impl of Parity for Int` on all three
+  >   verbs — the interface method took the name, as (a) requires. The **rejected
+  >   importer reading would have ACCEPTED and printed the prelude's answer**
+  >   (`False`), because no impl exists at that head; that difference is what makes
+  >   these cells discriminating rather than merely present. The arity-differing
+  >   sibling (prelude `count`'s two arguments against an interface `count`'s one)
+  >   likewise rejects on all three, with an arity diagnostic.
+  > - 🚨 **THE EXECUTION ARMS DO NOT AGREE, AND THIS RULING IS WHAT MAKES THAT A
+  >   BUG RATHER THAN AN OPEN QUESTION.** Three shapes are known, all filed
+  >   separately and **deliberately NOT fixed here** — this note is their
+  >   **oracle**, not their patch. In each, under (a) the answer that agrees with
+  >   the interface method is the correct one.
+  >   - **LOUD —** [#1492](https://github.com/MedakaLang/medaka/issues/1492) (S1,
+  >     verified): `check` exit 0 clean, **`medaka run` exit 1 `E-PANIC
+  >     intToString: not an Int`**, `build` exit 0 and the executed binary prints
+  >     the **correct** value. An **S7** path-agreement violation: two verbs accept
+  >     and answer correctly, one dies. Pinned at
+  >     `test/must_fail_fixtures/1492-*`.
+  >   - **SILENT — row 49, and it is the one (a) most needs to be an oracle for.**
+  >     Make the two denotations *both* well-typed **at the same receiver** (an
+  >     `impl` of the colliding interface at the receiver's head, so the interface
+  >     method applies exactly where the prelude standalone also would): `check`
+  >     exits 0 clean, **`run` prints the prelude standalone's answer** and the
+  >     **built binary prints the interface method's answer** — two values, exit 0
+  >     both ways, no diagnostic on any verb. That is the `eq [1] [2]` erasure shape
+  >     reaching the *prelude* boundary. It is **not** #1492's shape (which is
+  >     loud) and **not** #1493's (which rejects on all three): #1492's own
+  >     negative S0 hunt varied **arity** and **result consumption**, whereas the
+  >     axis that produces silence is the receiver lying in **both** denotations'
+  >     domains.
+  >   - **PRELUDE-INTERNAL —** [#1493](https://github.com/MedakaLang/medaka/issues/1493)
+  >     (S1, verified): where the prelude's own bodies **call** the standalone, the
+  >     collision makes `stdlib/core.mdk` itself ill-typed and a legal program is
+  >     rejected on all three verbs with diagnostics about prelude internals.
+  >     **⚠️ That is the OPPOSITE DIRECTION from this ruling and S1-PRELUDE does
+  >     NOT decide it** — see the missing-arm note below. Pinned at
+  >     `test/must_fail_fixtures/1493-*`.
+  >
+  >   ⚠️ **No mechanism is asserted for any of the three.** A candidate account —
+  >   *"the occurrence routes to the prelude standalone, yielding a partial
+  >   application"* — is **measured FALSE** (#1492): the symptom is
+  >   arity-independent while that explanation is arity-dependent. Do not
+  >   reintroduce it, here or in a fix's rationale.
+  >
+  > **🕳️ A MISSING CLAUSE ARM, FLAGGED AND DELIBERATELY NOT FILLED.** This ruling
+  > governs an occurrence in a **user module** whose own interface method collides
+  > with a prelude standalone. The **opposite direction** — an occurrence **inside
+  > the prelude's own bodies**, where a *user* interface method's name collides
+  > with a standalone the prelude itself calls (#1493) — is **not decided by any
+  > clause here**. S1's *"the PRELUDE IS A MODULE"* sentence reads *"never a shadow
+  > of **a user standalone**"*: it is scoped to **standalones**, so it is **SILENT**
+  > about a user *interface method*, not violated by one. 🚨 **State it that way.**
+  > The honest finding is a **missing arm**, and an implementation answering #1493
+  > is not breaking an existing clause. Filling the arm is **owed and out of scope
+  > for this ruling** — nothing in S1-PRELUDE should be read as deciding it.
+  >
+  > **⟲ Overturn condition.** (a) is overturned by a program that (i) is written
+  > entirely against names its own module can name, (ii) is correct under the
+  > language's other rules, and (iii) can only be given its intended meaning if a
+  > **prelude** standalone participates in S1's left operand — which, per the
+  > argument above, means exhibiting the **third shadow kind** and the S2 arm that
+  > gives its occurrences a denotation, not merely asserting the operand should be
+  > wider. It is **not** overturned by the awkwardness of the repair (that is the
+  > cost this ruling charges itself, and (b) is its mitigation), nor by the `eval`
+  > divergence above (that is a conformance bug *measured against* this ruling, and
+  > citing it as an argument against the ruling inverts the direction of evidence).
+  > (b) is overturned by a demonstration that the warning fires on programs whose
+  > authors did not lose anything — in which case the fix is the **predicate**, not
+  > the requirement that the collision be observable.
 
 - **S2 (applied — THE INVERSION).** **[CHANGED 2026-07-14]**
 
@@ -1279,6 +1479,11 @@ three of run / build / check. Fixtures in `test/shadow_fixtures/`.
 | 43 | **importer** · interface nameable **only through a re-export chain** (`export import ifc.{Sizeable}`) · receiver **outside** the standalone's domain — the LOUD half · graded against a hop-free control | S1-CHAIN ([#1380](https://github.com/MedakaLang/medaka/issues/1380)) | the chain arm admits `Sizeable` → shadow → S2's importer arm, live `impl Sizeable Box` → **dispatch** → `300`; the control **must agree** | `i14_importer_iface_via_reexport_chain/` (`main.mdk` + `direct.mdk`) | 300 / 300 | 300 / 300 | accept | **OK** — the corpus contained **no `export import` at all** before this cell (derive: `grep -rl 'export import' test/shadow_fixtures/`), which is exactly how a first cut could build the predicate out of a method-name index, answer *not nameable* for a chain that names **no method**, and reject this program while `direct.mdk` printed `300`. The **control is the real assertion**: re-routing one import through a re-exporter cannot change a program's meaning, so the two rows must agree under **either** reading of the clause |
 | 44 | **importer** · same chain as row 43 · receiver **inside** the standalone's domain — the **SILENT** half · graded against a hop-free control | S1-CHAIN | shadow → dispatch → `7`; **not** the standalone's `99`; the control must agree | `i16_importer_iface_via_chain_silent/` (`main.mdk` + `direct.mdk`) | 7 / 7 | 7 / 7 | accept | **OK** — this is the cell S1-CHAIN's own 🕳️ paragraph recorded as **ungradeable by this corpus**, and it is now graded. Both readings **accept**; the answer is observable only as a value at exit 0 on every verb, so neither an ACCEPT/REJECT column nor cross-engine agreement can see it. A lost shadow here prints `99` silently — the `eq [1] [2]` erasure shape reaching the **importer** arm through a chain |
 | 45 | **importer** · **TWO** unrelated interfaces declare the same bare method name at **different** dispatch argument positions (`mth : a -> Int -> Int` and `mth : Int -> b -> Int`) · **neither** admitted · graded against an import-order permutation | S2-DECL (d), the **none-admitted** arm | the admitted set is **empty** → S1 says `mth` is not a shadow → the imported standalone → `99`; the order-swapped row **must agree** | `i17_importer_two_ifaces_neither_nameable/` (`main.mdk` + `order-swapped.mdk`) | 99 / 99 | 99 / 99 | accept | **OK** — the standalone `fmodI.mth` is **load-bearing**: the bare-name dispatch-index table's only reader is gated on the standalone-values set, so without it this graph never reaches the defect. **Value DERIVED, not captured** — hand-derived from S2-DECL before any fix. ⚠️ **Two orderings is not a permutation differential**: three clauses have six orderings and this pins two. The other four live in `test/import_order_fixtures/1351-methoddispatchidx-import-order-collision/`, which is **still ledgered KNOWN-BAD** under [#1351](https://github.com/MedakaLang/medaka/issues/1351) — 🚨 **do not "converge" it to make these rows agree**: with neither interface nameable the bare-name table is never consulted, so the old spelling stopped reaching a defect that is still open |
+
+| 46 | **PRELUDE standalone** as the candidate left operand · interface declared in `M` · receiver at a head with **no impl** of that interface but **inside** the prelude standalone's domain — the LOUD, discriminating cell | S1-PRELUDE (a) | the prelude is **not** in S1's left operand → **not a shadow** → the bare name is the **interface method** → ordinary dispatch finds no impl → **located REJECT** | `x1_prelude_standalone_not_left_operand.mdk` | reject | reject | reject | **OK** — the cell #1375 item 2 left open and **the corpus had none**: every other unit puts the standalone in `M` or imports it explicitly, so this axis graded nowhere. The **rejected** reading (admit a prelude standalone as an *importer* shadow) ACCEPTS the same source and prints `False`, because S2's importer arm falls back to the standalone when no impl sits at the head — that difference is what makes this cell discriminating. ⚠️ Value **hand-derived from the ruling, not captured**: `eval` is a known-wrong oracle on this collision (see row 49) |
+| 47 | row 46 with **ZERO impls** of the colliding interface | S1-PRELUDE (a) | same → **located REJECT** | `x2_prelude_standalone_zeroimpls.mdk` | reject | reject | reject | **OK** — the `d1b`/`d19` move applied to the prelude cell, and it closes a *different* escape hatch: an implementation that consulted the impl universe **before** deciding the name would answer row 46 correctly for the wrong reason. With no impl to consult, only the interface method having taken the name outright can produce this reject — which is (a)'s actual content (*"no S2 arm applies; the impl universe is never consulted to decide the name"*) |
+| 48 | row 46 at **ARITY-DIFFERING** width — prelude `count`'s two arguments against an interface `count`'s one | S1-PRELUDE (a) + S8 | same → **located REJECT** (over-application **and** no impl at the function argument's head) | `x3_prelude_standalone_arity_differ.mdk` | reject | reject | reject | **OK** — rows 46/47 both collide with an arity-**matching** standalone, so a reader could conclude the rule is gated on the signatures lining up. It is not. Under the rejected reading this ACCEPTS and prints `3` |
+| 49 | **PRELUDE standalone** collision where **BOTH denotations are well-typed at the SAME receiver** (an `impl` of the colliding interface at the receiver's head, so the interface method applies exactly where the prelude standalone also would) | S1-PRELUDE (a) + **S7** | (a) gives the **interface method**; `check`, `run` and the built binary must agree on it | — (**deliberately NOT in `test/shadow_fixtures/`**; issue number **owed** — **do not guess it**) | **the PRELUDE standalone's answer** | **the INTERFACE METHOD's answer** | accept, **0 diagnostics** | 🔴 **BUG — S0, silent.** Two different values, **exit 0 both ways**, no diagnostic on any verb: the `eq [1] [2]` erasure shape reaching the **prelude** boundary and splitting *between execution arms*. Under (a) the **built binary is right** and **`medaka run` is wrong**; before the 2026-08-10 ruling neither could be called wrong, which is what ruling it buys. **Measured with a rename control** (only the method's *name* differs; the control agrees on both arms). ⚠️ **Distinct from both filed siblings:** [#1492](https://github.com/MedakaLang/medaka/issues/1492) is the LOUD arm (`run` E-PANIC, binary correct) and [#1493](https://github.com/MedakaLang/medaka/issues/1493) rejects on all three verbs — #1492's own negative S0 hunt varied **arity** and **result consumption**, but the axis that produces *silence* is the receiver lying in **both** domains, which it did not vary. **No mechanism asserted** (see the ⚠️ under S1-PRELUDE's Conformance: the partial-application account is measured false). 🚨 **NOT capturable** — per this document's own corpus rule a golden here would enshrine one arm's wrong answer, so it is a matrix row plus a must-fail pin, never a `shadow_fixtures` value |
 
 **Tally — DERIVE IT, do not read it.** The status distribution moves with every
 row added, and the figure this line used to carry
