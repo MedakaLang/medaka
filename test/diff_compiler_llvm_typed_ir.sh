@@ -99,7 +99,8 @@ fi
 # X-N.H2 structural ratchet: every mutable physical cell belongs to `Emit`, whose
 # fields are indented. A top-level Ref declaration reintroduces process-global
 # emission state and must fail before an output golden can normalize it away.
-if LC_ALL=C grep -En '^[[:alnum:]_]+[[:space:]]*:[[:space:]]*Ref([[:space:](]|$)' "$EMITTER"; then
+if LC_ALL=C grep -En '^(export[[:space:]]+)?[[:alnum:]_]+[[:space:]]*:[[:space:]]*Ref([[:space:](]|$)' "$EMITTER" \
+  || LC_ALL=C grep -En '^[[:alnum:]_]+[[:space:]]*=[[:space:]]*Ref([[:space:](]|$)' "$EMITTER"; then
   echo 'FAIL: compiler/backend/llvm_emit.mdk declares module-level Ref state; move it into Emit'
   exit 1
 fi
