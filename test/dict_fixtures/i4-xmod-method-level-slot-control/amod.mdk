@@ -1,0 +1,11 @@
+-- The same-spelled foreign `Sizer` is STILL PRESENT, at head `Bool` rather than
+-- `Int`.  The head has to move for the same reason it moves in
+-- `i4-xmod-requires-own-iface-control/amod.mdk`: with both impls at `Int`, BOTH
+-- arms reject `T-CONFLICTING-IMPL`, because coherence still keys the interface half
+-- by SPELLING while the obligation channel now keys it by identity.  Recorded on
+-- #1482; not a property of this fixture.
+export interface Sizer a where
+  weight : a -> Int
+
+export impl Sizer Bool where
+  weight _ = 1

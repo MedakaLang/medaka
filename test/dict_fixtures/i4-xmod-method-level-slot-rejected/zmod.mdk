@@ -1,0 +1,21 @@
+-- The module that POSES the goal, through a METHOD-LEVEL `=>` slot.
+--
+-- `peek`'s `Sizer b =>` is a `Constraint` occurrence written inside `zmod`, where
+-- exactly one `Sizer` is in scope: `zmod`'s own (method `bulk`).  So it denotes
+-- `zmod.Sizer`, and by §8 I4 its identity is `(zmod, Sizer)`.  This is a DIFFERENT
+-- channel from an impl's `requires` and from a signature-level `=>`: it is
+-- `recordMethodLevelSlotObls`, reached via `methodLevelConstraintSlots` /
+-- `constraintSlotVarIface`, and it had NO fixture before this one.
+export interface Sizer a where
+  bulk : a -> Int
+
+export interface Holder h where
+  peek : Sizer b => h -> b -> Int
+
+public export data Cell = Cell
+
+export impl Holder Cell where
+  peek _ x = bulk x
+
+export useCell : Int -> Int
+useCell n = peek Cell n

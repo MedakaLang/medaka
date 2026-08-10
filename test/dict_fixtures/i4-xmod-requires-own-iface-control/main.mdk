@@ -1,0 +1,28 @@
+-- CONTROL for i4-xmod-requires-foreign-iface-rejected.  Two edits from the sibling,
+-- not one, and the second is forced rather than chosen: `zmod` gains its own
+-- `impl Sizer Int`, and `amod`'s impl moves from head `Int` to head `Bool` because
+-- otherwise COHERENCE rejects the file on both arms (`T-CONFLICTING-IMPL`) before the
+-- obligation channel is reached at all — see `amod.mdk`, where that is derived.
+-- Stated here too because "one-token control" is a claim this fixture CANNOT make.
+--
+-- SPEC ANSWER, HAND-DERIVED, and the VALUE is what makes this a control rather than a
+-- second copy: `match(IE, zmod.Sizer Int)` is now the singleton {`zmod`'s impl},
+-- trivially its own ⊑-minimum, so §3 `inst` selects it and `bulk 3` = 3 + 7 = 10.
+-- `debug (Wrap 3)` therefore prints `W10`.
+--
+-- 🚨 `W10` IS A VALUE ONLY `zmod`'s IMPL CAN PRODUCE, which is the half a
+-- verdict-only control cannot express.  If a future change makes the `requires`
+-- channel spelling-keyed again, the sibling flips to ACCEPT; this row would keep
+-- printing `W10` (its goal is unambiguous), so the PAIR separates "the reject was
+-- removed" from "the wrong impl was selected".
+--
+-- ⚠️ THIS ROW BEHAVES IDENTICALLY ON BOTH ARMS, deliberately, and stated so it is not
+-- mistaken for coverage of #1446: a program whose goal has exactly one candidate is
+-- not a witness to an identity re-key.  Its job is to rule out the duller readings of
+-- its sibling's reject — "a conditional instance cannot discharge `requires` across
+-- modules", "any same-spelled interface anywhere in the graph poisons the goal" —
+-- each of which predicts a reject HERE too, and neither survives `W10`.
+import amod
+import zmod.{Wrap(..)}
+
+main = println (debug (Wrap 3))

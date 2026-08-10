@@ -1,0 +1,42 @@
+-- §8 I4 — A CONDITIONAL INSTANCE'S `requires` MUST NAME ITS OWN CLASS, NOT A
+-- SAME-SPELLED FOREIGN ONE.  This is the #1438 collision shape reached through the
+-- `requires` channel, and it is THE arm-discriminating fixture for #1446's landing.
+--
+-- SPEC ANSWER, HAND-DERIVED FROM §3 BEFORE ANY BINARY WAS RUN — the derivation, not
+-- a description of the output:
+--   1. `zmod`'s `impl Debug (Wrap a) requires Sizer a` writes `Sizer` inside `zmod`,
+--      where exactly one `Sizer` is in scope: `zmod`'s own (method `bulk`).  So the
+--      `Require` denotes `zmod.Sizer`, and by §8 I4 its identity is
+--      `(zmod, Sizer)` — NOT the spelling `Sizer`.
+--   2. `main` poses the goal `Debug (Wrap Int)`.  `impl Debug (Wrap a)` matches with
+--      `a := Int`, so §3 discharges its `requires` at `zmod.Sizer Int`.
+--   3. `match(IE, zmod.Sizer Int)` is EMPTY.  The graph's only `impl Sizer Int`
+--      belongs to `amod.Sizer` — a different declaration, with a different method
+--      set (`weight`, not `bulk`).  An impl of one class is not an impl of another
+--      that merely shares a name.
+--   ⇒ REJECT, `No impl of Sizer for Int` (`T-NO-IMPL`), on all three verbs.  There
+--      is no value to pin: the program never runs.
+--
+-- 🚨 WHY THIS FIXTURE IS LOAD-BEARING RATHER THAN SUPPLEMENTARY.  It is the only
+-- new coverage in #1446 that BEHAVES DIFFERENTLY ON THE TWO ARMS — a 2704-file
+-- two-arm corpus differential over `test/` came back EMPTY, so nothing already in
+-- the tree can witness this change.  MEASURED on a `$BASE`-built binary in a
+-- pristine `MEDAKA_ROOT`, this exact program:
+--     check exit 0 ("main : Unit") — a SILENT ACCEPT
+--     run   exit 1
+--     build exit 0, and THE BUILT BINARY EXITS 1 with
+--           `runtime error [E-NONEXHAUSTIVE-MATCH]: non-exhaustive match`
+-- i.e. base ships a binary that dies, from a program `check` called clean, because
+-- `bulk` was discharged against a dictionary shaped for `amod.Sizer` (`{weight}`).
+-- If a later change re-widens the `requires` channel back to spelling, THIS ROW GOES
+-- GREEN-BY-ACCEPTING and the S0 is back; that is what it exists to prevent.
+--
+-- ⚠️ The `requires` channel keeps its identity BECAUSE `Require.requireOrigin` and
+-- `DImpl.implOrigin` are both OCCURRENCE-layer carriers, filled by the same
+-- `mapOriginsInDecl (…) (fillIfaceOccOrigin scope)` walk in the same scope, so they
+-- cannot disagree.  The METHOD-OCCURRENCE channel is NOT covered here and is
+-- deliberately not fixed by #1446 — see `recordImplObligation`'s comment and #1482.
+import amod
+import zmod.{Wrap(..)}
+
+main = println (debug (Wrap 3))

@@ -385,7 +385,27 @@ echo "  ok: $(printf '%s\n' "$originun_actual" | grep -c .) OriginUnresolved con
 # one); it is answered rather than omitted so that a future caller with a laxer
 # precondition gets prose instead of a non-exhaustive-match warning. Listed here
 # rather than the grep widened, per the remedy this ratchet's siblings state.
-tc_originun_allowed="originPhrase OriginUnresolved = \"an unknown module\"
+# ⚠️ #1446 (P1) ADDED SIX LINES, ALL AT THE INTERFACE-OCCURRENCE LAYER AND NONE AT
+# THE `Ty` LAYER — which is the distinction this pin exists to make, so they are
+# listed rather than the grep widened.
+#   * `ifaceRefBare` — the ONE mint for an interface occurrence whose identity is not
+#     recoverable at the site (`funConstraintIfacesRef` / `schemeObligationsRef`, both
+#     inside #1425's seam). Its two callers are the residual worklist; `grep -n
+#     ifaceRefBare compiler/types/typecheck.mdk` is the drain check.
+#   * `oblIfaceKeys`' `OriginUnresolved => [TkBare NsIface …]` arm — an ELIMINATOR,
+#     `OriginUnresolved` is on the LEFT. It constructs nothing.
+#   * `emptyBuiltinClasses`' four fields — the §8 I7 built-in-class table before any
+#     prelude has been seen. `OriginUnresolved` is the honest answer there (a
+#     prelude-free program declares none of the four and implements none of them), and
+#     it is the value a `Ty`-layer sentinel would be WRONG to have: nothing stamps this
+#     table, so there is no immunity rule to make a first write permanent.
+tc_originun_allowed="OriginUnresolved => [TkBare NsIface ir.irName]
+bcEq = OriginUnresolved,
+bcNum = OriginUnresolved,
+bcOrd = OriginUnresolved,
+bcSemigroup = OriginUnresolved,
+ifaceRefBare n = IfaceRef { irName = n, irOrigin = OriginUnresolved }
+originPhrase OriginUnresolved = \"an unknown module\"
 tconUnresolved n = TCon n OriginUnresolved"
 tc_originun_actual=$(grep -w 'OriginUnresolved' "$ROOT/compiler/types/typecheck.mdk" \
   | sed 's/^[[:space:]]*//' \

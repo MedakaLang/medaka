@@ -1,0 +1,25 @@
+-- The IMPORTED half of the RULE-3 fixture: an interface with TWO concrete-head
+-- impls, and a constrained producer whose result type is fixed by NOTHING at the
+-- call site.  Everything an identity-keyed `implCountForIfaceU` has to count lives
+-- HERE, in a module of its own, so the count is taken through a `TkIdent lib Mk`
+-- key rather than the `TkBare` one a same-file fixture would produce.
+public export data Widget = Widget Int
+
+public export data Gadget = Gadget Int
+
+export interface Mk a where
+  mk : Int -> a
+  tally : a -> Int
+
+export impl Mk Widget where
+  mk n = Widget (n * 3 + 1)
+  tally (Widget n) = n
+
+export impl Mk Gadget where
+  mk n = Gadget (n * 5)
+  tally (Gadget n) = n
+
+-- `a` is pinned by neither an argument nor the result, so no annotation anywhere
+-- in `main` can determine which `impl Mk` this dispatches to.
+export roundtrip : Mk a => Int -> Int
+roundtrip n = tally (mk n)

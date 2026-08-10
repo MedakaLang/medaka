@@ -1,0 +1,44 @@
+-- §8 I4 — A METHOD-LEVEL `=>` SLOT NAMES ITS OWN CLASS.  The FOURTH channel that
+-- discriminates under #1446, and the one that had no coverage at all until this
+-- fixture: `recordMethodLevelSlotObls` (via `methodLevelConstraintSlots` →
+-- `constraintSlotVarIface` → `Constraint.constraintOrigin`).  Occurrence-layer, so
+-- it keeps its identity for the same reason `requires` does.
+--
+-- SPEC ANSWER, HAND-DERIVED FROM §3 — the derivation, not a description of output:
+--   1. `peek : Sizer b => h -> b -> Int` is declared in `zmod`, where the only
+--      `Sizer` in scope is `zmod`'s (method `bulk`).  The `Constraint` therefore
+--      denotes `zmod.Sizer`; §8 I4 identity `(zmod, Sizer)`.
+--   2. `useCell n = peek Cell n` with `n : Int` instantiates the method-level slot
+--      at `b := Int`, posing the goal `zmod.Sizer Int`.
+--   3. `match(IE, zmod.Sizer Int)` is EMPTY.  The graph's only `impl Sizer Int`
+--      belongs to `amod.Sizer` — a different declaration with a disjoint method set
+--      (`weight`, not `bulk`).
+--   ⇒ REJECT, `No impl of Sizer for Int` (`T-NO-IMPL`).  No value to pin.
+--
+-- 🚨 BASE SHIPS A BINARY THAT SEGFAULTS.  MEASURED first-hand on a `$BASE`-built
+-- binary in a pristine `MEDAKA_ROOT`, this exact program:
+--     check exit 0  ("main : Unit")   — a SILENT ACCEPT
+--     build exit 0                    — a binary is produced
+--     ./out exit 139                  — `runtime error [E-FATAL-SIGNAL]: fatal
+--                                       memory fault (segmentation fault)`
+-- The method-level dict slot was discharged against a dictionary shaped for
+-- `amod.Sizer` (`{weight}`), and projecting `bulk` out of it reads a slot that is
+-- not there.  This is the WORST base behaviour of the four channels — `pl`/`po`
+-- return a wrong answer, this one corrupts memory — which is why it is the highest-
+-- value row of the set.
+--
+-- ⚠️ THE DIAGNOSTIC LANDS IN `zmod.mdk`, NOT HERE (at `useCell`'s body, where the
+-- slot is instantiated at a concrete `b`).  The entry file is still load-bearing: it
+-- is what makes `zmod` and `amod` two MODULES, and without it the collision is not
+-- expressible at all.
+--
+-- ⚠️ WHY THIS ROW EXISTS SEPARATELY FROM THE `i4-xmod-requires-*` PAIR: those pin
+-- the impl-`requires` channel (`reqToObligation` / `requireOrigin`).  This is a
+-- different producer with a different carrier, and a change that re-widened only
+-- this one would leave those two green.  An earlier version of the PR body claimed
+-- the `requires` fixtures pinned "signature `=>` constraints" as well; measured,
+-- they pin neither that nor this.
+import amod
+import zmod.{Cell(..), useCell}
+
+main = println (useCell 3)

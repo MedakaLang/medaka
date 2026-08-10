@@ -1,0 +1,19 @@
+-- Identical to the rejecting sibling except that `zmod` now provides its OWN
+-- `impl Sizer Int`, so the method-level slot's goal `zmod.Sizer Int` is satisfiable
+-- without reaching for `amod`'s same-spelled class.
+export interface Sizer a where
+  bulk : a -> Int
+
+export impl Sizer Int where
+  bulk n = n + 7
+
+export interface Holder h where
+  peek : Sizer b => h -> b -> Int
+
+public export data Cell = Cell
+
+export impl Holder Cell where
+  peek _ x = bulk x
+
+export useCell : Int -> Int
+useCell n = peek Cell n

@@ -1,0 +1,13 @@
+-- Identical to the rejecting sibling EXCEPT for the one added line: `zmod` now
+-- provides its OWN `impl Sizer Int`, so the goal `zmod.Sizer Int` is satisfiable
+-- without reaching for `amod`'s same-spelled class.
+export interface Sizer a where
+  bulk : a -> Int
+
+export impl Sizer Int where
+  bulk n = n + 7
+
+public export data Wrap a = Wrap a
+
+export impl Debug (Wrap a) requires Sizer a where
+  debug (Wrap x) = "W\{bulk x}"
