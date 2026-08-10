@@ -1467,7 +1467,7 @@ jobs:
       # COVERAGE note above). Run DIRECTLY, not via run_gates.sh: a direct exit 2 (a
       # toolchain skip) then FAILS the job instead of being reclassified as a skip — and
       # "a skip is not a pass" is the entire reason this gate coverage hole existed. All
-      # six run (|| rc=1) before the job fails, so one red gate never hides the others.
+      # all run (|| rc=1) before the job fails, so one red gate never hides the others.
       - name: WasmGC backend gates
         if: needs.detect.outputs.docs_only != 'true'
         run: |

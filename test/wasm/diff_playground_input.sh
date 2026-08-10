@@ -1,5 +1,5 @@
 #!/bin/sh
-# Product parity: a Float record field must compile through both Wasm products.
+# Product parity: Float record-field and constructor-pattern paths compile through both Wasm products.
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 RUNTIME="$ROOT/stdlib/runtime.mdk"; CORE="$ROOT/stdlib/core.mdk"

@@ -148,6 +148,7 @@ The two shipping Wasm compiler entries already install different subsets:
 | Hook | `wasm_emit_modules_main.emitTail` | `playground_main.runEmit` | Meaning |
 |---|---|---|---|
 | `installMethodIface` | yes | yes | shared method/interface and arity table |
+| `installRecFieldOrders` | yes | yes | logical record field order |
 | `installDeclRetTypes` | yes | yes | declared return-type facts |
 | `installCtorFloatFields` | yes | yes | Float field facts |
 | `installMainIsFloatHint` | yes | yes | auto-print classification |
