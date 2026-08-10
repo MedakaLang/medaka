@@ -369,7 +369,9 @@ other 80 across six parallel hosted runners.
 **Order the cheap checks first:** after editing a `.mdk`, run targeted `medaka fmt --write` and
 `medaka lint` on the touched source **before** `make medaka`, oracle builds, or gates. Re-add any
 formatter change, inspect comment-bearing record declarations as required by the formatter warning
-below, then rebuild once from the formatted/linted source.
+below, then rebuild once from the formatted/linted source. When the change affects formatter/linter
+behavior or accepted syntax, repeat the relevant check with the freshly built binary and apply any owed
+reflow before trusting it.
 
 ```sh
 PREFLIGHT_DRY=1 sh test/preflight.sh                 # ✅ FIRST STEP if unsure — derives the

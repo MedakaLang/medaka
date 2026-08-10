@@ -10,7 +10,7 @@ permission:
   glob: allow
   grep: allow
   bash:
-    "*": ask
+    "*": deny
     "git status*": allow
     "git diff*": allow
     "git log*": allow

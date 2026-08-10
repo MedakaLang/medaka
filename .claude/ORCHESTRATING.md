@@ -740,7 +740,7 @@ trap is treating "I'll remember it" as a fourth option — you won't.)
 **The merge flow is: adequate local signal → narrowed PR CI → independent reviewer → enqueue →
 merge-group CI. Never skip review.** An agent's own report is a claim, not a review — and a green CI on
 a bad diff is still a bad diff. On **every** agent-authored PR, spawn the configured read-only
-**`reviewer`** agent over the diff (playbook: **`.claude/skills/pr-review/SKILL.md`**) once the material
+**`compiler-reviewer`** agent over the diff (playbook: **`.claude/skills/pr-review/SKILL.md`**) once the material
 state is locally verified; it may run concurrently with PR CI. Enqueue only after it returns APPROVE.
 It reports; you decide; the *authoring* agent fixes (it has the context). **Gates provide evidence only
 for paths that actually ran; the reviewer judges test adequacy, discrimination, regressions, and craft.**
@@ -892,8 +892,8 @@ When two branches touch one subsystem:
   newly exposed). Both found in a 60-second hand-probe *after* the agents reported green. Ask: "what
   does this newly accept, and does it RUN *and* BUILD correctly across every instantiation (Int *and*
   Float)?" A clean fixpoint + green differentials do NOT cover behavior the corpus never had.
-- `git log $BASE..<branch>` + `git diff --stat $BASE...<branch>` — the commits exist and the surface
-  matches the report. **Use the pinned `$BASE` from STEP 0, never `main`/`origin/main`**: every worktree
+- `git log $TASK_BASE..<branch>` + `git diff --stat $TASK_BASE...<branch>` — the commits exist and the surface
+  matches the report. **Use the pinned `$TASK_BASE` from STEP 0, never `main`/`origin/main`**: every worktree
   on this box shares one `.git`, so those refs move under a sibling's `git fetch` mid-task and a moving
   ref is not a fixed point to diff against (#519).
 - **Pick the decisive check per change type.** Self-hosted emitter → the **fixpoint** (C3a/C3b): it
@@ -980,9 +980,10 @@ that drift detector is exactly what proves the seed was not contaminated. Do thi
 > `.claude/worktrees/<other>` directory, and do NOT build there — the CLAUDE.md path in your
 > context may point at someone else's tree; ignore it and use your own cwd.
 
-Before creating that worktree, query the remote main tip and fetch it; pin the task to that fetched
-commit, not to `/root/medaka`'s possibly stale checked-out `main`. Shared worktrees can lag GitHub while
-other sessions advance refs, so a local `HEAD` alone is not a current-base proof.
+For a task beginning from current main, query and fetch the remote tip before creating its worktree; pin
+the task to that fetched commit, not to `/root/medaka`'s possibly stale checked-out `main`. A deliberately
+stacked or last-known-green task instead uses its explicitly recorded parent SHA. Shared worktrees can lag
+GitHub while other sessions advance refs, so a local `HEAD` alone is not a current-base proof.
 
 On your side: **never run `refresh_seed.sh`, `make medaka`, or `git add -A` in a tree you have not just
 confirmed clean** (`git status --short`). A shared worktree makes "capture my diff" unsound.
@@ -1179,7 +1180,7 @@ to that issue **aimed at the wrong half**.
   agent's "small additive change" report means a stale base. ⚠️ A shifted `origin/main` is ALSO a cause
   of a spurious surface, not only a stale agent base — this box shares one `.git`, so `origin/main`
   advances under a running diff the instant any sibling agent fetches. **The fix is the same either
-  way: diff against the pinned `$BASE` from STEP 0, never a moving ref** (#519, and see HARNESS.md).
+   way: diff against the pinned `$TASK_BASE` from STEP 0, never a moving ref** (#519, and see HARNESS.md).
 - **Stale-binary footguns.** (1) `make medaka`'s `find -newer` short-circuit can leave `./medaka` NOT
   carrying a lexer/compiler-graph change → `FORCE_EMITTER_REBUILD=1 make medaka` to verify one. (2) The
   `test/bin/*` oracles: `test/build_oracles.sh` **mtime-skips rebuilds**, so after a
