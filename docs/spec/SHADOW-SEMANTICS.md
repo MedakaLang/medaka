@@ -793,7 +793,7 @@ Given an occurrence of bare name `N` in module `M`:
   > analogy and must not be re-cited elsewhere as measured fact.
   > *Haskell* faces this exact question — class methods and free functions share
   > one namespace and one call syntax — and answers it by keeping both candidates
-  > in scope and making every unqualified use an `Ambiguous occurrence` **error**,
+  > eligible and making every unqualified use an `Ambiguous occurrence` **error**,
   > with qualification or `import Prelude hiding (…)` as the explicit repairs; it
   > **deliberately refuses type-directed disambiguation of an ambiguous name**.
   > *Rust* avoids the question structurally — trait methods are not free functions
