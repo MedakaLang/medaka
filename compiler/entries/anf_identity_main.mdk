@@ -24,19 +24,28 @@ renderMint input = match mintStableNodeId input
 
 invalidInput : String -> StableNodeIdInput
 invalidInput "absolute" =
-  StableNodeIdInput "/tmp/main.mdk" 0 0 0 1 [0] RoleLiftedLambda
+  StableNodeIdInput "/tmp/main.mdk" 1 0 1 1 [0] RoleLiftedLambda
 invalidInput "parent" =
-  StableNodeIdInput "../main.mdk" 0 0 0 1 [0] RoleLiftedLambda
+  StableNodeIdInput "../main.mdk" 1 0 1 1 [0] RoleLiftedLambda
+invalidInput "interior-parent" =
+  StableNodeIdInput "src/../main.mdk" 1 0 1 1 [0] RoleLiftedLambda
+invalidInput "alias" =
+  StableNodeIdInput "./src/main.mdk" 1 0 1 1 [0] RoleLiftedLambda
 invalidInput "span" =
   StableNodeIdInput "src/main.mdk" 2 4 2 3 [0] RoleLiftedLambda
+invalidInput "line-zero" =
+  StableNodeIdInput "src/main.mdk" 0 0 1 1 [0] RoleLiftedLambda
 invalidInput "child" =
-  StableNodeIdInput "src/main.mdk" 0 0 0 1 [-1] RoleLiftedLambda
-invalidInput _ = StableNodeIdInput "" 0 0 0 1 [0] RoleLiftedLambda
+  StableNodeIdInput "src/main.mdk" 1 0 1 1 [-1] RoleLiftedLambda
+invalidInput _ = StableNodeIdInput "" 1 0 1 1 [0] RoleLiftedLambda
 
 report : String -> String
 report "absolute" = renderMint (invalidInput "absolute")
 report "parent" = renderMint (invalidInput "parent")
+report "interior-parent" = renderMint (invalidInput "interior-parent")
+report "alias" = renderMint (invalidInput "alias")
 report "span" = renderMint (invalidInput "span")
+report "line-zero" = renderMint (invalidInput "line-zero")
 report "child" = renderMint (invalidInput "child")
 report "empty-path" = renderMint (invalidInput "")
 report _ = node "stable-node-ids" (map renderMint canonicalInputs)

@@ -19,6 +19,7 @@ errorSexp : StableNodeIdError -> String
 errorSexp EmptyProjectPath = "empty-project-path"
 errorSexp AbsoluteProjectPath = "absolute-project-path"
 errorSexp ParentProjectPath = "parent-project-path"
+errorSexp NonCanonicalProjectPath = "noncanonical-project-path"
 errorSexp InvalidSourceSpan = "invalid-source-span"
 errorSexp NegativeStructuralIndex = "negative-structural-index"
 

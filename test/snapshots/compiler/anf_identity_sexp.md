@@ -1,5 +1,5 @@
 # META
-source_lines=31
+source_lines=32
 stages=DESUGAR,MARK
 # SOURCE
 -- Stable, lossless rendering for X-A's preparatory StableNodeId substrate.
@@ -23,6 +23,7 @@ errorSexp : StableNodeIdError -> String
 errorSexp EmptyProjectPath = "empty-project-path"
 errorSexp AbsoluteProjectPath = "absolute-project-path"
 errorSexp ParentProjectPath = "parent-project-path"
+errorSexp NonCanonicalProjectPath = "noncanonical-project-path"
 errorSexp InvalidSourceSpan = "invalid-source-span"
 errorSexp NegativeStructuralIndex = "negative-structural-index"
 
@@ -46,6 +47,7 @@ stableNodeIdErrorToSexp err = node "stable-node-id-error" [errorSexp err]
 (DFunDef false "errorSexp" ((PCon "EmptyProjectPath")) (ELit (LString "empty-project-path")))
 (DFunDef false "errorSexp" ((PCon "AbsoluteProjectPath")) (ELit (LString "absolute-project-path")))
 (DFunDef false "errorSexp" ((PCon "ParentProjectPath")) (ELit (LString "parent-project-path")))
+(DFunDef false "errorSexp" ((PCon "NonCanonicalProjectPath")) (ELit (LString "noncanonical-project-path")))
 (DFunDef false "errorSexp" ((PCon "InvalidSourceSpan")) (ELit (LString "invalid-source-span")))
 (DFunDef false "errorSexp" ((PCon "NegativeStructuralIndex")) (ELit (LString "negative-structural-index")))
 (DTypeSig true "stableNodeIdToSexp" (TyFun (TyCon "StableNodeId") (TyCon "String")))
@@ -65,6 +67,7 @@ stableNodeIdErrorToSexp err = node "stable-node-id-error" [errorSexp err]
 (DFunDef false "errorSexp" ((PCon "EmptyProjectPath")) (ELit (LString "empty-project-path")))
 (DFunDef false "errorSexp" ((PCon "AbsoluteProjectPath")) (ELit (LString "absolute-project-path")))
 (DFunDef false "errorSexp" ((PCon "ParentProjectPath")) (ELit (LString "parent-project-path")))
+(DFunDef false "errorSexp" ((PCon "NonCanonicalProjectPath")) (ELit (LString "noncanonical-project-path")))
 (DFunDef false "errorSexp" ((PCon "InvalidSourceSpan")) (ELit (LString "invalid-source-span")))
 (DFunDef false "errorSexp" ((PCon "NegativeStructuralIndex")) (ELit (LString "negative-structural-index")))
 (DTypeSig true "stableNodeIdToSexp" (TyFun (TyCon "StableNodeId") (TyCon "String")))

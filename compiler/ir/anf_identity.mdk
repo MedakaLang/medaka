@@ -4,7 +4,7 @@
 -- stable source-node/role component that X-A will later use after V exists.
 -- No shipping emitter may import this module.
 
-import support.util.{startsWith}
+import support.util.{splitOnChar, startsWith}
 
 public export data StableGeneratedRole =
   | RoleLiftedLambda
@@ -20,6 +20,7 @@ public export data StableNodeIdError =
   | EmptyProjectPath
   | AbsoluteProjectPath
   | ParentProjectPath
+  | NonCanonicalProjectPath
   | InvalidSourceSpan
   | NegativeStructuralIndex
 deriving (Eq, Debug)
@@ -34,9 +35,35 @@ allNonNegative : List Int -> Bool
 allNonNegative [] = True
 allNonNegative (n::ns) = n >= 0 && allNonNegative ns
 
+canonicalPathComponents : List String -> Bool
+canonicalPathComponents [] = False
+canonicalPathComponents (component::rest) = component != ""
+  && component != "."
+  && component != ".."
+  && canonicalPathComponentsGo rest
+
+canonicalPathComponentsGo : List String -> Bool
+canonicalPathComponentsGo [] = True
+canonicalPathComponentsGo (component::rest) = component != ""
+  && component != "."
+  && component != ".."
+  && canonicalPathComponentsGo rest
+
+hasChar : String -> String -> Int -> Bool
+hasChar needle text i
+  | i >= stringLength text = False
+  | stringSlice i (i + 1) text == needle = True
+  | otherwise = hasChar needle text (i + 1)
+
+canonicalProjectPath : String -> Bool
+canonicalProjectPath path = canonicalPathComponents (splitOnChar '/' path)
+  && not (hasChar "\\" path 0)
+  && not (hasChar ":" path 0)
+
 validSpan : Int -> Int -> Int -> Int -> Bool
-validSpan startLine startCol endLine endCol = startLine >= 0
+validSpan startLine startCol endLine endCol = startLine >= 1
   && startCol >= 0
+  && endLine >= 1
   && endLine >= startLine
   && endCol >= 0
   && (endLine != startLine || endCol >= startCol)
@@ -46,6 +73,7 @@ mintStableNodeId (StableNodeIdInput path startLine startCol endLine endCol child
   | path == "" = Err EmptyProjectPath
   | startsWith "/" path = Err AbsoluteProjectPath
   | startsWith "../" path = Err ParentProjectPath
+  | not (canonicalProjectPath path) = Err NonCanonicalProjectPath
   | not (validSpan startLine startCol endLine endCol) = Err InvalidSourceSpan
   | not (allNonNegative childPath) = Err NegativeStructuralIndex
   | otherwise =

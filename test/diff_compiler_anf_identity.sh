@@ -12,7 +12,7 @@ if [ ! -x "$SELF" ]; then
   exit 1
 fi
 
-out="$($SELF 2>&1)"
+out="$("$SELF" 2>&1)"
 rc=$?
 if [ "$rc" -ne 0 ]; then
   echo "FAIL: canonical StableNodeId probe exited $rc"
@@ -30,12 +30,15 @@ else
   exit 1
 fi
 
-for case in absolute parent span child empty-path; do
+for case in absolute parent interior-parent alias span line-zero child empty-path; do
   expected=""
   case "$case" in
     absolute) expected="absolute-project-path" ;;
     parent) expected="parent-project-path" ;;
+    interior-parent) expected="noncanonical-project-path" ;;
+    alias) expected="noncanonical-project-path" ;;
     span) expected="invalid-source-span" ;;
+    line-zero) expected="invalid-source-span" ;;
     child) expected="negative-structural-index" ;;
     empty-path) expected="empty-project-path" ;;
   esac
