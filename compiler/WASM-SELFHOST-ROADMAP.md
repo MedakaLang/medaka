@@ -1,9 +1,8 @@
 # WASM-SELFHOST-ROADMAP.md — driving the WasmGC backend to compile the compiler
 
 **Status:** IMPLEMENTED — census progress 1428 → 0, every category ✅ DONE, in-browser
-WAT assembly resolved, playground wired (all 2026-06-22). Most recently touched
-2026-07-13 as part of a proactive documentation-hygiene sweep (`95496ecc`) — the healthiest
-maintenance pattern found across this doc family.
+WAT assembly resolved, playground wired (all 2026-06-22). The census lifecycle
+was most recently updated by X-W.H2b.1 (`2cbd85c8`).
 
 > **Goal:** run the Medaka compiler *itself*, compiled to WasmGC, in a browser — a
 > frontend-only playground with **no server-side compilation**. This is the
@@ -15,8 +14,8 @@ maintenance pattern found across this doc family.
 
 ## How the census works (the measurement loop)
 
-`compiler/entries/wasm_emit_gaps_main.mdk` runs the WasmGC emitter in **gap-record
-mode** (`enableGapRecordW`) over the whole compiler source graph
+`compiler/entries/wasm_emit_gaps_main.mdk` calls `emitProgramGaps`, which creates
+fresh **gap-record mode** state for the whole compiler source graph
 (`all_modules_entry.mdk` + `compiler` root), recording every node/extern it can't
 lower instead of panicking. Re-run after each gap-close to measure progress:
 

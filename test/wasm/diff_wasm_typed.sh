@@ -54,8 +54,20 @@ for sym in \
     exit 1
   }
 done
-grep -F '  | Prog WasmProgramIndex (List String) (List String) Bool (List CImplEntry) WasmEmitInput' "$WASM_SRC" >/dev/null || {
-  echo "FAIL wasm typed index ratchet: Prog must retain exactly six fields"
+gap_legacy_state='gapRecordEnabledW|gapLogW|curGapBindW'
+gap_legacy_control='enableGapRecordW|resetGapsW|gapEventsW|setGapBindW'
+if grep -E "^($gap_legacy_state)[[:space:]]*:|^export ($gap_legacy_control)[[:space:]]*:" "$WASM_SRC" >/dev/null; then
+  echo "FAIL wasm typed gap ratchet: retired gap authority remains"
+  exit 1
+fi
+for sym in WGapMode WasmEmit freshWasmEmit emitProgramRecord; do
+  grep -E "^$sym[[:space:]]*:|^data $sym|^export $sym[[:space:]]*:" "$WASM_SRC" >/dev/null || {
+    echo "FAIL wasm typed gap ratchet: missing lifecycle carrier/API $sym"
+    exit 1
+  }
+done
+grep -F '  | Prog WasmProgramIndex (List String) (List String) Bool (List CImplEntry) WasmEmitInput WasmEmit' "$WASM_SRC" >/dev/null || {
+  echo "FAIL wasm typed index ratchet: Prog must retain its index fields plus one WasmEmit field"
   exit 1
 }
 
@@ -212,6 +224,75 @@ cmp -s "$INPUT_WORK/p1.wat" "$INPUT_WORK/p2.wat" || {
 }
 cmp -s "$INPUT_WORK/p1.wat" "$INPUT_WORK/u.wat" && {
   echo "FAIL wasm typed state isolation: P/U positive control did not differ"
+  exit 1
+}
+
+# X-W.H2b.1: record and census emissions must not leak mode, events, or
+# attribution into a following strict emission in the same process.
+GAP_OUT="$($EMITBIN --reemit-gap-state)" || {
+  echo "FAIL wasm typed same-process gap lifecycle harness"
+  exit 1
+}
+GAP_MARKERS="$(printf '%s\n' "$GAP_OUT" | awk '/^GAP_(P1|RECORD_WAT|RECORD_EVENTS|CENSUS_EVENTS|P2)_(BEGIN|END)$/ { print }')"
+GAP_EXPECTED_MARKERS="$(printf 'GAP_P1_BEGIN\nGAP_P1_END\nGAP_RECORD_WAT_BEGIN\nGAP_RECORD_WAT_END\nGAP_RECORD_EVENTS_BEGIN\nGAP_RECORD_EVENTS_END\nGAP_CENSUS_EVENTS_BEGIN\nGAP_CENSUS_EVENTS_END\nGAP_P2_BEGIN\nGAP_P2_END')"
+[ "$GAP_MARKERS" = "$GAP_EXPECTED_MARKERS" ] || {
+  echo "FAIL wasm typed gap lifecycle: expected exactly ten ordered markers"
+  exit 1
+}
+gap_capture() {
+  awk -v begin="$1" -v end="$2" '
+    $0 == begin { capture = 1; next }
+    $0 == end { exit }
+    capture { print }
+  ' <<<"$GAP_OUT"
+}
+gap_capture GAP_P1_BEGIN GAP_P1_END > "$INPUT_WORK/gap-p1.wat"
+gap_capture GAP_RECORD_WAT_BEGIN GAP_RECORD_WAT_END > "$INPUT_WORK/gap-record.wat"
+gap_capture GAP_RECORD_EVENTS_BEGIN GAP_RECORD_EVENTS_END > "$INPUT_WORK/gap-record.events"
+gap_capture GAP_CENSUS_EVENTS_BEGIN GAP_CENSUS_EVENTS_END > "$INPUT_WORK/gap-census.events"
+gap_capture GAP_P2_BEGIN GAP_P2_END > "$INPUT_WORK/gap-p2.wat"
+for gap_capture_file in gap-p1.wat gap-record.wat gap-record.events gap-census.events gap-p2.wat; do
+  [ -s "$INPUT_WORK/$gap_capture_file" ] || {
+    echo "FAIL wasm typed gap lifecycle: empty $gap_capture_file"
+    exit 1
+  }
+done
+cmp -s "$INPUT_WORK/gap-p1.wat" "$INPUT_WORK/gap-p2.wat" || {
+  echo "FAIL wasm typed gap lifecycle: strict P changed after record and census emissions"
+  exit 1
+}
+for gap_p in gap-p1 gap-p2; do
+  wasm-tools parse "$INPUT_WORK/$gap_p.wat" -o "$INPUT_WORK/$gap_p.wasm" || {
+    echo "FAIL wasm typed gap lifecycle: wasm-tools parse $gap_p"
+    exit 1
+  }
+  wasm-tools validate --features=all "$INPUT_WORK/$gap_p.wasm" || {
+    echo "FAIL wasm typed gap lifecycle: wasm-tools validate $gap_p"
+    exit 1
+  }
+done
+[ "$(wc -l < "$INPUT_WORK/gap-record.events")" -eq 2 ] &&
+  sed -n '1p' "$INPUT_WORK/gap-record.events" | grep -F $'?\tunbound variable '\''missingGapB' >/dev/null &&
+  sed -n '2p' "$INPUT_WORK/gap-record.events" | grep -F $'?\tunbound variable '\''missingGapA' >/dev/null || {
+    echo "FAIL wasm typed gap lifecycle: record events lost order or freshness"
+    exit 1
+  }
+[ "$(wc -l < "$INPUT_WORK/gap-census.events")" -eq 2 ] &&
+  sed -n '1p' "$INPUT_WORK/gap-census.events" | grep -F $'val gapA\tunbound variable '\''missingGapA' >/dev/null &&
+  sed -n '2p' "$INPUT_WORK/gap-census.events" | grep -F $'val gapB\tunbound variable '\''missingGapB' >/dev/null || {
+    echo "FAIL wasm typed gap lifecycle: census events lost binding attribution or order"
+    exit 1
+  }
+if "$EMITBIN" --reemit-gap-strict >"$INPUT_WORK/strict-gap.out" 2>"$INPUT_WORK/strict-gap.err"; then
+  echo "FAIL wasm typed gap lifecycle: same-process strict gap unexpectedly recorded"
+  exit 1
+fi
+grep -Fx "GAP_STRICT_AFTER_RECORD_CENSUS" "$INPUT_WORK/strict-gap.out" >/dev/null || {
+  echo "FAIL wasm typed gap lifecycle: record/census setup did not precede strict gap"
+  exit 1
+}
+grep -F "unbound variable 'missingGapB'" "$INPUT_WORK/strict-gap.err" >/dev/null || {
+  echo "FAIL wasm typed gap lifecycle: same-process strict gap lost its loud diagnostic"
   exit 1
 }
 
