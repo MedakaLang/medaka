@@ -162,7 +162,7 @@ reemitStateInput runtimeDecls decls =
     (declaredRecordFieldOrders decls)
 
 reemitStateP : String
-reemitStateP = "interface Mark a where\n  mark : a -> Int\n\ndata Thing = First Int | Second\n\ndata FirstRec = FirstRec { shared : Int, pFirst : Int }\n\ndata R = R { shared : Int, pOnly : Int }\n\npFn x = x\n\nuseFn = pFn\n\nfirstRecord = FirstRec { shared = 3, pFirst = 4 }\n\neagerValue = 1\n\nlazyValue = mark Second\n\nimpl Mark Thing where\n  mark _ = 7\n\nmain = (R { shared = 1, pOnly = 2 }).shared\n"
+reemitStateP = "interface Mark a where\n  mark : a -> Int\n\ndata H2StateSubject = First Int | Second\n\ndata FirstRec = FirstRec { shared : Int, pFirst : Int }\n\ndata R = R { shared : Int, pOnly : Int }\n\npFn x = x\n\nuseFn = pFn\n\nfirstRecord = FirstRec { shared = 3, pFirst = 4 }\n\neagerValue = 1\n\nlazyValue = mark Second\n\nimpl Mark H2StateSubject where\n  mark _ = 7\n\nmain = (R { shared = 1, pOnly = 2 }).shared\n"
 
 reemitStateU : String
-reemitStateU = "interface Mark a where\n  mark : a -> Int -> Int\n\ndata Thing = Second | First Int\n\ndata FirstRec = FirstRec { uFirst : Int, shared : Int }\n\ndata R = R { uOnly : Int, shared : Int }\n\npFn x y = x\n\nuseFn = pFn\n\nfirstRecord = FirstRec { uFirst = 4, shared = 3 }\n\neagerValue = 2\n\nlazyValue = mark Second 0\n\nimpl Mark Thing where\n  mark _ _ = 9\n\nmain = (R { uOnly = 2, shared = 1 }).shared\n"
+reemitStateU = "interface Mark a where\n  mark : a -> Int -> Int\n\ndata H2StateSubject = Second | First Int\n\ndata FirstRec = FirstRec { uFirst : Int, shared : Int }\n\ndata R = R { uOnly : Int, shared : Int }\n\npFn x y = x\n\nuseFn = pFn\n\nfirstRecord = FirstRec { uFirst = 4, shared = 3 }\n\neagerValue = 2\n\nlazyValue = mark Second 0\n\nimpl Mark H2StateSubject where\n  mark _ _ = 9\n\nmain = (R { uOnly = 2, shared = 1 }).shared\n"
