@@ -27,16 +27,17 @@ For each field, name:
 - the output or failure that reader controls;
 - any fallback route that must be forced by omitting the preferred input.
 
-Run P → U → P in one process. For census/mode APIs, include the alternate route
-between the two P emissions. Require first and last P byte-identical.
+For a reader that returns, run P → U → P in one process. For census/mode APIs,
+include the alternate route between the two P emissions. Both P executions must
+exercise the migrated reader; require first and last P byte-identical.
 
-The final P must actually execute the migrated reader. A gap-free, cache-free,
-or otherwise insensitive P cannot detect contaminated mode/state even when its
-bytes remain identical. If the required P behavior aborts, panics, or otherwise
-cannot return, run record/census setup first and make the sensitive P the final
-operation in that same process. Require a pre-P marker, direct nonzero status,
-and the expected diagnostic. A separate-process negative control proves only
-fresh-process defaults and is invalid evidence for same-process isolation.
+An aborting or panicking sensitive reader uses a replacement shape, not the
+returning P → U → P byte-identity rule: run any non-aborting setup/control,
+exercise the alternate U/record/census route, print a pre-P marker, then make the
+sensitive P the final operation in that same process. Require direct nonzero
+status and the expected diagnostic after the marker. A gap-free, cache-free, or
+otherwise insensitive P cannot substitute for the sensitive final reader, and a
+separate-process negative control proves only fresh-process defaults.
 
 `P != U` alone proves almost nothing: ordinary bodies may differ while a migrated
 field remains constant or unread. Add family-specific assertions proving P and U

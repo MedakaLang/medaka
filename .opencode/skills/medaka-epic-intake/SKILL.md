@@ -10,11 +10,14 @@ compiler architecture epic. Tracker state is a lead, not proof: a stage issue ma
 remain open after a sub-milestone landed, and migration order may describe a
 future fan-in that does not block independent hygiene work.
 
-## 1. Pin and isolate intake
+## 1. Receive and verify isolated intake
 
-Fetch `origin/main`, record immutable `TASK_BASE`, and create a detached intake
-worktree at that revision. Perform issue/history/source readiness reads there.
-Do not use a stale shared checkout or a moving branch ref as current-main proof.
+The conductor fetches `origin/main`, records immutable `TASK_BASE`, and creates
+the detached intake worktree. A read-only scout receives that absolute path and
+revision; it verifies `git rev-parse HEAD` equals the supplied base before any
+readiness claim. Stop on mismatch. Do not attempt to fetch, create or remove a
+worktree from the scout, and do not use a stale shared checkout or moving branch
+ref as current-main proof.
 
 ## 2. Derive readiness from three authorities
 
