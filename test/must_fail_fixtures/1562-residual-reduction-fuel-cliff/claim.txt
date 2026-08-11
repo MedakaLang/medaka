@@ -1,0 +1,82 @@
+issue: 1562
+what: reduction of a `requires` residual is bounded by a depth-32 fuel
+what: (`residualReduceFuel`, compiler/types/typecheck.mdk), and EXHAUSTING IT IS
+what: SILENT: `residualPredsOf` returns [] -- the same value it returns for the
+what: legitimate "no matching impl" case -- so the predicate is dropped from the
+what: inferred context and from the `lambda d-bar` prefix, landing back in issue
+what: 1549's exact S0 one level of nesting further out.
+what: main.mdk nests `Wrap` 32 deep; control.mdk nests it 31 deep. That single
+what: token of difference is the whole fixture.
+what: THIS IS A RESIDUAL OF 1549, NOT A REGRESSION FROM ITS FIX. Before PR 1552
+what: EVERY depth behaved the way main.mdk does -- that is what 1549 was. 1552
+what: fixes depths 1..31 and leaves >= 32 exactly as it found them.
+what: THE CORRECT ANSWER for main.mdk is `deep : Tag a => a -> String`, the same
+what: scheme control.mdk gets, and a binary that prints
+what: w*32 ++ "int" at exit 0. The pinned `deep : a -> String` is THE BUG
+what: asserted to still reproduce, never a claim that it is right.
+what: Measured first-hand on a binary built from PR 1552's head in an isolated
+what: worktree, MEDAKA_STRICT=1 on every call, every exit code read from a FILE
+what: REDIRECT and never from a pipe:
+what:   depth 30 -> `deep : Tag a => a -> String`, binary exit 0
+what:   depth 31 -> `deep : Tag a => a -> String`, binary exit 0   <- control
+what:   depth 32 -> `deep : a -> String`, check exit 0, build exit 0,
+what:               binary exit 139 (segmentation fault)           <- main
+what:   depth 33 -> identical to 32
+what: So the maximum usable reduction depth is 31 and crossing it is
+what: indistinguishable from correctness at the CLI.
+cmd: check-types main.mdk
+exit: 0
+stdout-line: deep : a -> String
+stdout-line: main : Unit
+control: build-run control.mdk
+why-verb: `check-types` rather than `run` or `build-run`, because on THIS shape
+why-verb: those two are not discriminating: the interpreter needs no dictionary,
+why-verb: so `run` prints the CORRECT value at exit 0 whether or not the
+why-verb: predicate was deferred, and `medaka build` also exits 0 (only the
+why-verb: BINARY crashes). The defect is visible at `check` as a MISSING
+why-verb: CONSTRAINT in the printed scheme, so that is what is graded. The
+why-verb: binary's 139 is transcribed above, measured by hand.
+why-stdout: `exit: 0` alone asserts nothing here -- the CORRECT program also
+why-stdout: exits 0 from `check --types`. The whole discrimination lives in the
+why-stdout: `stdout-line` pins, and `check --types` prints the ~130-line prelude
+why-stdout: corpus, which moves whenever the prelude does -- so this pins two
+why-stdout: EXACT WHOLE LINES rather than the dump.
+why-stdout:  - `deep : a -> String` is the BUG: the residual `Tag a` absent from
+why-stdout:    the scheme. WHAT ELSE COULD MOVE THIS STRING? Only whether the
+why-stdout:    predicate reached `deep`'s context. Renaming `deep`, changing its
+why-stdout:    arity, or breaking the dump entirely all make the line ABSENT,
+why-stdout:    which FAILS the pin rather than passing it.
+why-stdout:  - `main : Unit` is the proof-of-life line: it shows the command
+why-stdout:    still ran and still produced a scheme dump, so a dump that broke
+why-stdout:    wholesale cannot read as a drain.
+why-stdout: THERE IS EXACTLY ONE DRAIN DIRECTION: making exhaustion non-silent
+why-stdout: (or unbounded) gives `deep` its `Tag a =>` context, which deletes the
+why-stdout: first pinned line -- or rejects the program outright, which changes
+why-stdout: the exit code. No partial fix leaves this scheme in place.
+why-control: control.mdk is main.mdk with ONE FEWER `Wrap` -- depth 31, the last
+why-control: depth the fuel covers. It is graded as `build-run`, i.e. built and
+why-control: EXECUTED, because that is the only arm on which the two depths
+why-control: differ observably: at 31 the dict parameter is abstracted and the
+why-control: binary prints its answer at exit 0; at 32 it is not and the binary
+why-control: segfaults at 139. Per #1144 this harness grades a control on its
+why-control: EXIT CODE ONLY, and for `build-run` that exit code is the BINARY's,
+why-control: which is exactly the bit that matters.
+why-control: So the control proves BOTH halves at once: that the machinery works
+why-control: (a `requires` residual IS deferred and IS abstracted), and that the
+why-control: single flipped dimension is the DEPTH. It also breaks loudly if the
+why-control: usable depth ever regresses below 31 -- a change to
+why-control: `residualReduceFuel` in either direction is caught by one of these
+why-control: two files.
+why-note: NOT A DUPLICATE of issue 1560 (a MIXED argument vector -- concrete-
+why-note: headed plus bare tyvar -- which never reduces at ANY depth) or of
+why-note: issue 1561 (a `let`/`where`-local binding, which never abstracts a
+why-note: dict at any depth). Both of those reproduce at depth 1; this one needs
+why-note: depth >= 32 and an all-bound residual vector.
+why-note: RAISING THE CONSTANT IS NOT A FIX -- any finite fuel has the same
+why-note: cliff, one deeper. The fix shape recorded on the issue is to make
+why-note: exhaustion LOUD: `residualPredsOf` already receives the recording
+why-note: site's span through `goalSiteLoc`, so a located reject is available,
+why-note: and it needs only a code in compiler/DIAGNOSTIC-CODES-DESIGN.md.
+why-note: The fuel itself is NOT the defect and must not be removed: a cyclic
+why-note: instance (`impl C (Box a) requires C (Box a)`) reduces forever without
+why-note: it. The defect is that crossing it is silent.

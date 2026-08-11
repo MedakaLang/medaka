@@ -22127,10 +22127,10 @@ forwardedVecObls boundIds callObls =
 -- the (interface, argument-vector) predicate a constrained-callee call-delta entry
 -- carries.  An entry whose interface name is unrecoverable contributes nothing: the
 -- name is what a VecObl is keyed and displayed by.
-callPredOf : (IfaceRef, List Mono, Option Loc) -> List (IfaceRef, List Mono)
-callPredOf (iface, monos, _)
+callPredOf : (IfaceRef, List Mono, Option Loc) -> List (IfaceRef, List Mono, Option Loc)
+callPredOf (iface, monos, loc)
   | iface.irName == "" = []
-  | otherwise = [(iface, monos)]
+  | otherwise = [(iface, monos, loc)]
 
 -- FLAT-PATH SHADOW SCOPING (S1): a letrec group whose members are ALL prelude fns is a
 -- CORE group — no user standalone is a shadow inside it.  Empty group ⇒ not core (it
@@ -22839,11 +22839,14 @@ schemeObligationsOf boundIds obls =
 -- U1b (#1482): forwards the whole `IfaceRef`, not `.irName` — the obligation already
 -- carries its occurrence identity and this is the channel that hands it to every later
 -- re-instantiation.  An EMPTY dispatch vector contributes nothing.
-oblPredOf : UObligation -> List (IfaceRef, List Mono)
+-- The obligation's own `loc` travels WITH the predicate — see `residualVecObls`, whose
+-- reduction poses a goal to the min⊑ selector and must attribute it to the recording
+-- site rather than to whatever `currentLoc` holds at a group's close.
+oblPredOf : UObligation -> List (IfaceRef, List Mono, Option Loc)
 oblPredOf o = match o.oblProj
   OpMethodOcc typarams mty occ => match dispatchMonosOf typarams mty occ
     [] => []
-    ds => [(o.pred.iface, ds)]
+    ds => [(o.pred.iface, ds, o.loc)]
   OpProjected => []
 
 -- a single recorded predicate contributes ONE joint (iface, ids) entry iff EVERY one of
@@ -22857,10 +22860,10 @@ oblPredOf o = match o.oblProj
 -- residual that reduction leaves over this scheme's own quantified vars is deferred
 -- here.  Dropping it outright is what severed `nest x = tagOf (Wrap x)` from its
 -- `Tag a` (DICT-SEMANTICS §4 `gen` / §4.2 OD2).
-vecOblOfPred : List Int -> (IfaceRef, List Mono) -> List VecObl
-vecOblOfPred boundIds (iface, ds) = match boundTyvarIds boundIds ds
+vecOblOfPred : List Int -> (IfaceRef, List Mono, Option Loc) -> List VecObl
+vecOblOfPred boundIds (iface, ds, loc) = match boundTyvarIds boundIds ds
   Some ids => [VecObl { voIface = iface, voIds = ids }]
-  None => residualVecObls boundIds iface ds
+  None => residualVecObls boundIds iface ds loc
 
 -- ── #1549: residual reduction at `gen` ──────────────────────────────────────
 -- DICT-SEMANTICS §4 `gen` makes a binding's principal context `P'` = "the predicates
@@ -22882,11 +22885,32 @@ vecOblOfPred boundIds (iface, ds) = match boundTyvarIds boundIds ds
 -- residual over them either (grounding is monotone), and is rejected by the cheap guard
 -- before any impl lookup — that keeps the common ground obligation (`Display String`)
 -- off the reduction path entirely.
-residualVecObls : List Int -> IfaceRef -> List Mono -> List VecObl
-residualVecObls boundIds iface ds
+--
+-- 🚨 [loc] IS LOAD-BEARING AND IS NOT DECORATION — DROPPING IT MOVES A DIAGNOSTIC.
+-- `residualPredsOf` reaches `findMatchingImplReqsU`, which asks the min⊑ selector WHICH
+-- impl matched — so this is a SECOND goal-posing site outside the five resolver drains
+-- (the first is `checkNestedReqs`, whose header says the same thing).  When the goal is
+-- ambiguous the selector calls `reportAmbiguousOverlap`, which reads `goalSiteLoc` and
+-- falls back to `currentLoc` when it is `None`.  At a generalized group's close
+-- `currentLoc` points at the LAST expression inferred, not at the site that recorded the
+-- predicate; and because `pushTypeErrorOnceAt` dedups on the message, that badly-located
+-- push WINS over the well-located one a later resolver drain would emit.
+-- MEASURED on `test/dict_fixtures/s6-c1-rigid-goal-no-call-discriminator.mdk`
+-- (`firstRow xss = index xss 0`): with the recorded loc dropped, the caret moved off the
+-- `index` call at 29:15 onto the literal `0` at 29:25 — same code, same message, worse
+-- span, and NO gate saw it because the dict-semantics gate asserted the code alone.
+-- So publish the obligation's OWN snapshotted span for the duration of the reduction and
+-- restore `None` after, exactly as `checkNestedReqs` does, per `goalSiteLoc`'s scoping
+-- rule (outside a drain the selector must fall back rather than inherit a stale span).
+residualVecObls : List Int -> IfaceRef -> List Mono -> Option Loc -> List VecObl
+residualVecObls boundIds iface ds loc
   | isSome (boundTyvarIds boundIds ds) = []
   | not (anyIn (flatMap monoUnboundIds ds) boundIds) = []
-  | otherwise = flatMap (keepBoundResidual boundIds) (residualPredsOf residualReduceFuel iface ds)
+  | otherwise =
+    let _ = setRef goalSiteLoc loc
+    let preds = residualPredsOf residualReduceFuel iface ds
+    let _ = setRef goalSiteLoc None
+    flatMap (keepBoundResidual boundIds) preds
 
 keepBoundResidual : List Int -> (IfaceRef, List Mono) -> List VecObl
 keepBoundResidual boundIds (iface, args) = match boundTyvarIds boundIds args
@@ -22899,9 +22923,23 @@ keepBoundResidual boundIds (iface, args) = match boundTyvarIds boundIds args
 -- substituted `requires`, recursively.  No matching impl ⇒ no residual: the goal is
 -- unsatisfiable and `checkOneCallObligation`/`checkReqOne` own that diagnostic — this
 -- function must never invent a second one.
--- The fuel bounds a cyclic instance (`impl C (Box a) requires C (Box a)`), which would
--- otherwise reduce forever; exhausting it drops the residual, i.e. degrades to exactly
--- the pre-#1549 behaviour rather than to a wrong answer.
+-- ⚠️ `allConcreteHeads` is ALL-OR-NOTHING, so a MIXED argument vector — one argument
+-- concrete-headed, another a bare tyvar, e.g. `Conv (Wrap t) u` — takes the first arm
+-- and is returned UNREDUCED, whereupon `keepBoundResidual` drops it.  That cell is
+-- issue 1560, filed separately and MEASURED IDENTICAL on this branch and on its base:
+-- reducing a partially-ground vector needs `findMatchingImplReqsU` to match with a free
+-- argument, which is a change to the matcher, not to this walk.
+-- ⚠️ The fuel bounds a cyclic instance (`impl C (Box a) requires C (Box a)`), which
+-- would otherwise reduce forever.  EXHAUSTING IT IS SILENT AND THAT IS ISSUE 1562, an
+-- S0: `[]` here is also what "no matching impl" returns, so the predicate is dropped and
+-- the program lands back in 1549's exact defect — MEASURED, `requires`-nesting depth 31
+-- is fixed and depth 32 gives `deep : a -> String`, check exit 0, binary 139.  Say it
+-- plainly rather than as "degrades to the old behaviour": THE OLD BEHAVIOUR IS THE S0.
+-- It is a residual of 1549 rather than a regression from it (before the fix EVERY depth
+-- behaved that way), and raising the constant is not a fix — any finite fuel has the
+-- same cliff.  The fix shape recorded on 1562 is to make exhaustion LOUD, which needs a
+-- code registered in `compiler/DIAGNOSTIC-CODES-DESIGN.md`.  Pinned at
+-- `test/must_fail_fixtures/1562-residual-reduction-fuel-cliff/`.
 residualPredsOf : Int -> IfaceRef -> List Mono -> List (IfaceRef, List Mono)
 residualPredsOf fuel iface args
   | fuel <= 0 = []
@@ -22930,8 +22968,9 @@ residualInferredIds boundIds callObls addedObls = flatMap
     (residualVecOblOfPred boundIds)
     (flatMap oblPredOf addedObls ++ flatMap callPredOf callObls))
 
-residualVecOblOfPred : List Int -> (IfaceRef, List Mono) -> List VecObl
-residualVecOblOfPred boundIds (iface, ds) = residualVecObls boundIds iface ds
+residualVecOblOfPred : List Int -> (IfaceRef, List Mono, Option Loc) -> List VecObl
+residualVecOblOfPred boundIds (iface, ds, loc) =
+  residualVecObls boundIds iface ds loc
 
 -- the tyvar ids of [monos], in order, iff EVERY mono is a TVar bound by this scheme;
 -- None otherwise (a partial vector is a different predicate — never over-reject).

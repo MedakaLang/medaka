@@ -1,0 +1,9 @@
+-- The CONDITIONAL instance, in a module of its own.  `nest.mdk` -- which defines the
+-- unsignatured binding whose scheme the residual must reach -- does NOT import this
+-- module, so the impl that produces the residual is NOT VISIBLE where the binding is
+-- generalized.  `main.mdk` imports both, which is what puts the impl in the graph's
+-- universe by the time `nest`'s group closes.
+import iface.{Tag, tagOf, Wrap}
+
+export impl Tag (Wrap a) requires Tag a where
+  tagOf (Wrap x) = "wrap(\{tagOf x})"

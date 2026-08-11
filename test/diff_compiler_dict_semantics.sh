@@ -388,6 +388,7 @@ s4-gen-residual-inferred-context.mdk|§4 `gen` + §4.2 OD2 -- THE ISSUE 1549 DRA
 s4-gen-residual-unwitnessed-caller-rejected.mdk|§4 `var` over the SAME residual: once `Tag a` is in the scheme a caller must discharge it, and `Tag NoTag` has no instance. Pre-fix all three verbs exited 0 and run printed `wrap(int)` -- `NoTag` dispatched through `impl Tag Int` by declaration order (adding `impl Tag Bool` above it printed `wrap(bool)`, measured). This is the half a scheme-display assertion cannot reach: displaying the context without POSING the goal keeps the sibling green and still accepts this file|REJECT|REJECT|REJECT|NONE||T-NO-IMPL
 s4-gen-residual-no-requires-control.mdk|THE ONE-TOKEN CONTROL + FALSE-REJECT CANARY for the two rows above: identical except the `Wrap` impl drops its `requires`. With no residual, `P` is EMPTY, `nest : a -> String` is the CORRECT principal scheme and `nest NoTag` is LEGAL. A reducer that deferred the goals own free vars instead of the matched instances residual would invent `Tag a` here; the section-2 row asserts the context stays empty, which the value cannot see|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|wrap|
 s4-gen-sig-residual-uncovered-rejected.mdk|§4 `gen-sig` side condition with `Q_sig` EMPTY and the inferred predicate arriving as a `requires` RESIDUAL -- the SIGNATURED cell of issue 1549. Pre-fix accepted at exit 0 with a segfaulting binary, because the coverage check reads the same inferred-obligation projection that dropped it. ⚠️ Distinct from s4-gen-sig-body-needs-more-rejected: that predicate is inferred DIRECTLY, so a checker testing the RECORDED `Tag (Wrap a)` finds no bare-tyvar argument at all and stays silent here|REJECT|REJECT|REJECT|NONE||T-MISSING-CONSTRAINT
+s4-gen-residual-xmod/main.mdk|§4 `gen` + §4.2 OD6(a) ACROSS A MODULE BOUNDARY -- the MULTI-MODULE cell of issue 1549, and the only fixture here that can see a scheme context or a dict arity failing to CROSS one. The residual is produced in wrapimpl.mdk, deferred into a scheme in nest.mdk, and discharged by `var` in main.mdk. Pre-fix: check 0, run `wrap(int)`, build 0, BINARY 139 -- the single-file cells reached through the module path. ⚠️ No section-2 row is possible: bare `check` filters the scheme dump to the ENTRY`s own bindings and `nest` is not one, so the section-3 dict-arity row carries the discrimination|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|wrap(int)|
 s4-gen-sig-residual-covered-control.mdk|THE ACCEPT-SIDE CONTROL for the row above -- without it that reject cannot be told from "gen-sig rejects EVERY residual under a signature". Three legitimate coverings in one file: the residual IS the declared predicate; the residual `Eq a` is entailed by the declared `Ord a` through `interface Ord a requires Eq a` and is DROPPED not merged (section 2 asserts the scheme stays `Ord a =>`); and a CONCRETE argument whose reduction bottoms out ground, leaving no residual at all|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|wrap(int)\nTrue\nwrap(int)|
 s4-gen-rec-shared-dict-params.mdk|§4 `gen-rec` (#44 vein): a mutually-recursive group shares ONE `λ d̄.` prefix; recursive occurrences reuse the group`s dict params instead of re-entering entailment|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|True\nTrue|
 s4-gen-rec-inferred-context.mdk|§4 `gen-rec` with the context INFERRED rather than ascribed -- the `gen` sourcing, a different code path from its `gen-sig` twin per #610`s mechanism note. ⚠️ BOTH bodies dispatch, so this row does NOT discriminate group sourcing from per-binding sourcing (an earlier revision wrongly claimed it did); it is a regression guard on the schemes and values. The discriminating form is the asymmetric row below|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|True\nTrue|
@@ -461,6 +462,7 @@ IRS='s4-gen-sig-declared-context-kept.mdk|§4 `gen` a declared-but-never-dispatc
 s4-gen-residual-inferred-context.mdk|ISSUE 1549 MECHANISM PIN 1/3: `gen` abstracts a dict for the RESIDUAL, so `nest` is arity 2 (1 dict + 1 value) for a 1-argument source function. THIS IS THE ROW THAT SEES THE SEGFAULT: pre-fix the definition was arity 1 while the impl it calls needs an element dict, and no behavioural assertion could tell the difference because run printed `wrap(int)` either way|HAS|^define i64 @mdk_s4_gen_residual_inferred_context__nest\(i64 %arg0, i64 %arg1\)
 s4-gen-residual-inferred-context.mdk|ISSUE 1549 MECHANISM PIN 2/3: the abstracted dict is FORWARDED to the conditional impl as its element dict -- `%arg0`, the parameter, not a constant rebuilt at the site. An arity-2 definition that ignored its dict param would keep PIN 1/3 green|HAS|call i64 @mdk_impl_Wrap_tagOf\(i64 %arg0,
 s4-gen-residual-inferred-context.mdk|ISSUE 1549 MECHANISM PIN 3/3: the CALL SITE supplies that dict (a `ptrtoint` of a dict constant). Pins the `var`/`gen` arity agreement §4 requires of producer and consumer -- a caller still applying one argument is the under-application that crashed|HAS|call i64 @mdk_s4_gen_residual_inferred_context__nest\(i64 ptrtoint
+s4-gen-residual-xmod/main.mdk|ISSUE 1549 CROSS-MODULE MECHANISM PIN: the dict `gen` abstracts for the residual survives the module boundary -- `nest`, defined in nest.mdk, is emitted at arity 2 (dict + value). This is the row that would have caught a fix that worked single-file and dropped the context at an import, and it is the ONLY assertion available for this fixture`s scheme (see its TABLE row)|HAS|^define i64 @mdk_nest__nest\(i64 %arg0, i64 %arg1\)
 s8-i1-samename-independent-dict-arity/main.mdk|§8 I1 the CONSTRAINED same-named binding abstracts ONE dict: arity 2|HAS|^define i64 @mdk_lefty__widget\(i64 %arg0, i64 %arg1\)
 s8-i1-samename-independent-dict-arity/main.mdk|§8 I1 the UNCONSTRAINED same-named binding abstracts NONE: arity 1. A bare-name arity table would force a phantom dict param here and the call site would over-apply|HAS|^define i64 @mdk_righty__widget\(i64 %arg0\)
 s3-min-subsumes.mdk|§3 the ground goal resolves STATICALLY to the specific impl -- a direct call, no runtime arm-matching|HAS|call i64 @mdk_impl_Int_dflt\(
@@ -1206,6 +1208,60 @@ printf '%s\n' "$VERBS" | while IFS='|' read -r entry label verb assertion; do
   fi
 done
 
+# ── Section 6: diagnostic SPANS ──────────────────────────────────────────────
+# WHY THIS SECTION EXISTS, AND WHAT IT COST TO LEARN.
+#
+# Section 1 pins the diagnostic CODE; nothing pinned WHERE the caret lands. During
+# adversarial review of issue 1549's fix (PR 1552) a reviewer found that two
+# pre-existing fixtures below had silently changed output between the base and the fix:
+# same verdict, same code, same message prose, caret moved from the `index` call onto
+# the literal `0` -- `29:15` to `29:25`, and `46:15` to `46:25`. THIS GATE WAS GREEN
+# THROUGH THE WHOLE MOVE, because a code is not a span.
+#
+# The mechanism is worth stating, because it says which fixtures belong here: the
+# ambiguity reject reads `goalSiteLoc`, a `Ref` republished by whichever resolver drain
+# ran last, and falls back to `currentLoc` when it is `None`. Any NEW site that poses a
+# goal to the min-most-specific selector -- 1549's residual reducer became the second
+# one, after `checkNestedReqs` -- inherits that fallback, and because the push dedups on
+# the message, the FIRST, badly-located push wins over the well-located one. So a
+# diagnostic's span is a property that a change nowhere near the diagnostic can move.
+#
+# ⚠️ PIN THE SPAN, NOT THE MESSAGE. The prose is free to change (DIAGNOSTIC-CODES-DESIGN
+# and the must-fail suite both make the same split: code + range stable, prose not).
+# The assertion is the literal `<line>:<col>:` prefix `medaka check` prints, matched
+# against the FIRST diagnostic line for that entry.
+#
+# entry | label | expected `line:col`
+SPANS='s6-c1-rigid-goal-no-call-discriminator.mdk|#1155 the rigid-goal ambiguity reject lands on the `index` CALL, not on its literal argument -- the PR-1552 regression pin (moved to 29:25 while every section above stayed green)|29:15
+s6-c1-rigid-goal-no-minimum.mdk|the same span guarantee for the no-minimum sibling (moved to 46:25 in the same regression)|46:15
+s4-gen-residual-unwitnessed-caller-rejected.mdk|issue 1549: a residual that reached the scheme is discharged AT THE CALL SITE, so the reject lands there -- not at the definition, and not on `main`|36:16
+s4-gen-sig-residual-uncovered-rejected.mdk|issue 1549 gen-sig: the uncovered-residual reject lands at the DEFINITION (the body expression that needs it), which is the half a call-site span cannot distinguish|36:15'
+
+echo
+echo '=== 6. diagnostic SPANS (a code is not a caret — PR 1552 moved two of these with every other section green) ==='
+printf '%s\n' "$SPANS" | while IFS='|' read -r entry label want; do
+  [ -z "$entry" ] && continue
+  entrypath="$FIXDIR/$entry"
+  base="$(printf '%s' "$entry" | sed 's#/main\.mdk$##' | tr '/.' '__')"
+  if [ ! -f "$entrypath" ]; then
+    printf 'FAIL span   %-44s MISSING FIXTURE FILE\n' "$entry"
+    echo "FAIL" >>"$TMP/v6"
+    continue
+  fi
+  bound "$MEDAKA" check "$entrypath" >"$TMP/$base.span.out" 2>&1
+  # the first `<file>:<line>:<col>:` prefix check printed, reduced to line:col
+  got="$(sed -n 's/^.*\.mdk:\([0-9][0-9]*:[0-9][0-9]*\):.*$/\1/p' "$TMP/$base.span.out" | head -1)"
+  [ -n "$got" ] || got='(no located diagnostic)'
+  if [ "$got" = "$want" ]; then
+    printf 'ok   span   %-44s %s\n' "$entry" "$want"
+    echo "PASS" >>"$TMP/v6"
+  else
+    printf 'FAIL span   %-44s want %s, got %s\n' "$entry" "$want" "$got"
+    printf '                 %s\n' "$label"
+    echo "FAIL" >>"$TMP/v6"
+  fi
+done
+
 # ── Tally ────────────────────────────────────────────────────────────────────
 # The `printf | while read` loops above run in a SUBSHELL under dash/ash (POSIX
 # permits it and dash does fork the last pipeline stage), so shell variables
@@ -1213,7 +1269,7 @@ done
 # FILE, which does, and the totals are derived from that -- never from a
 # variable, and never from an exit code.
 #
-# The verdicts are kept in SIX files, one per section, because "did this gate
+# The verdicts are kept in SEVEN files, one per section, because "did this gate
 # run?" is a PER-SECTION question. A single global count cannot tell a gutted
 # section-3 table from a gate that never had one, and would report `checked 36,
 # 0 failed` over an IR section that made zero observations. Counting per section
@@ -1225,10 +1281,11 @@ p2="$(cnt v2 PASS)"; f2="$(cnt v2 FAIL)"
 p3="$(cnt v3 PASS)"; f3="$(cnt v3 FAIL)"
 p4="$(cnt v4 PASS)"; f4="$(cnt v4 FAIL)"
 p5="$(cnt v5 PASS)"; f5="$(cnt v5 FAIL)"
-n0=$((p0+f0)); n1=$((p1+f1)); n2=$((p2+f2)); n3=$((p3+f3)); n4=$((p4+f4)); n5=$((p5+f5))
-pass=$((p0+p1+p2+p3+p4+p5))
-fail=$((f0+f1+f2+f3+f4+f5))
-asserts=$((n0+n1+n2+n3+n4+n5))
+p6="$(cnt v6 PASS)"; f6="$(cnt v6 FAIL)"
+n0=$((p0+f0)); n1=$((p1+f1)); n2=$((p2+f2)); n3=$((p3+f3)); n4=$((p4+f4)); n5=$((p5+f5)); n6=$((p6+f6))
+pass=$((p0+p1+p2+p3+p4+p5+p6))
+fail=$((f0+f1+f2+f3+f4+f5+f6))
+asserts=$((n0+n1+n2+n3+n4+n5+n6))
 
 if [ -s "$TMP/failnotes" ]; then
   echo
@@ -1238,7 +1295,7 @@ fi
 
 echo
 printf '%s: checked %d assertions -- %d passed, %d failed\n' "$(basename "$0")" "$asserts" "$pass" "$fail"
-printf '  coverage-audit %d | verdict+value+code %d | schemes %d | emitted-IR %d | decl-order-perm %d | per-verb-warning %d\n' "$n0" "$n1" "$n2" "$n3" "$n4" "$n5"
+printf '  coverage-audit %d | verdict+value+code %d | schemes %d | emitted-IR %d | decl-order-perm %d | per-verb-warning %d | diag-spans %d\n' "$n0" "$n1" "$n2" "$n3" "$n4" "$n5" "$n6"
 
 # ⚠️ AN EMPTY SECTION IS A FAILURE, NOT A PASS. Three gates in this tree once
 # shelled out to a tool that was not installed, printed `skipping`, and exited 0
@@ -1257,6 +1314,7 @@ empty=0
 [ "$n3" -eq 0 ] && { echo "FAIL: section 3 (emitted IR) made ZERO assertions -- it did not run." >&2; empty=1; }
 [ "$n4" -eq 0 ] && { echo "FAIL: section 4 (decl-order-perm) made ZERO assertions -- the derived qualifying set was empty." >&2; empty=1; }
 [ "$n5" -eq 0 ] && { echo "FAIL: section 5 (per-verb warning surface) made ZERO assertions -- it did not run." >&2; empty=1; }
+[ "$n6" -eq 0 ] && { echo "FAIL: section 6 (diagnostic spans) made ZERO assertions -- it did not run." >&2; empty=1; }
 [ "$empty" -eq 0 ] || exit 1
 
 [ "$fail" -eq 0 ]

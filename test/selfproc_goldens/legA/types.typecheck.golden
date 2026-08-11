@@ -173,7 +173,7 @@ builtinIfaceRef : BuiltinClass -> IfaceRef
 callArgVecs : List (List Mono) -> List Int -> List (Int, Mono) -> List (List Mono)
 callOblMonoIds : (IfaceRef, List Mono, Option Loc) -> List (Int, String)
 callOblsWindow : Int -> List (IfaceRef, List Mono, Option Loc)
-callPredOf : (IfaceRef, List Mono, Option Loc) -> List (IfaceRef, List Mono)
+callPredOf : (IfaceRef, List Mono, Option Loc) -> List (IfaceRef, List Mono, Option Loc)
 candidateBucket : Map String (List KeyEntry) -> HeadKey -> List KeyEntry
 candsOneIface : List KeyEntry -> Option String
 ceAddRows : List CeRow -> ClassEnv -> ClassEnv
@@ -1187,7 +1187,7 @@ oblDispatchMonosGo : String -> List String -> Ty -> Mono -> List Mono
 oblIfaceKey : IfaceRef -> TabKey
 oblIfaceKeys : IfaceRef -> List TabKey
 oblKeyParts : Int -> List (Option HeadKey) -> (List TabKey, List Int)
-oblPredOf : UObligation -> List (IfaceRef, List Mono)
+oblPredOf : UObligation -> List (IfaceRef, List Mono, Option Loc)
 occursAdjust : Int -> Int -> Mono -> Unit
 occursAdjustUnbound : Int -> Int -> Ref Tyvar -> Int -> Int -> Unit
 occursAdjustVar : Int -> Int -> Ref Tyvar -> Unit
@@ -1434,8 +1434,8 @@ residualInferredIds : List Int -> List (IfaceRef, List Mono, Option Loc) -> List
 residualPredOne : Int -> (IfaceRef, List Mono) -> List (IfaceRef, List Mono)
 residualPredsOf : Int -> IfaceRef -> List Mono -> List (IfaceRef, List Mono)
 residualReduceFuel : Int
-residualVecOblOfPred : List Int -> (IfaceRef, List Mono) -> List VecObl
-residualVecObls : List Int -> IfaceRef -> List Mono -> List VecObl
+residualVecOblOfPred : List Int -> (IfaceRef, List Mono, Option Loc) -> List VecObl
+residualVecObls : List Int -> IfaceRef -> List Mono -> Option Loc -> List VecObl
 resolveArgStamp : Map String (List ImplEntry) -> Map String (List KeyEntry) -> String -> Ref Route -> Ref (List Route) -> Mono -> Mono -> String -> Unit
 resolveArgStamps : Map String (List ImplEntry) -> Map String (List KeyEntry) -> List PendingEntry -> Unit
 resolveArithSite : Ref Route -> Mono -> Unit
@@ -1709,7 +1709,7 @@ variantFieldTailNames : Variant -> List String
 variantIdentRow : String -> TyConOrigin -> Variant -> List (String, String, Ident)
 variantNamed : String -> List Variant -> Bool
 vecOblKey : VecObl -> String
-vecOblOfPred : List Int -> (IfaceRef, List Mono) -> List VecObl
+vecOblOfPred : List Int -> (IfaceRef, List Mono, Option Loc) -> List VecObl
 vecOblsOfSlots : List CSlot -> List VecObl
 vectorGoal : String -> List Mono -> Option (Mono, List Mono)
 wMark : Windowed a -> Int

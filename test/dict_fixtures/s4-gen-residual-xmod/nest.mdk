@@ -1,0 +1,9 @@
+-- The UNSIGNATURED binding, in a module of its own.  Its body poses `Tag (Wrap t)`; the
+-- residual `Tag t` must become its inferred principal context (§4 `gen`) and its dict
+-- parameter, and both must survive being READ FROM ANOTHER MODULE (§4.2 OD6(a)).
+-- The `import wrapimpl` is BARE on purpose: it binds no names, and its whole job is to
+-- bring that module's `impl` into scope for dispatch (AGENTS.md).
+import iface.{Tag, tagOf, Wrap}
+import wrapimpl
+
+export nest x = tagOf (Wrap x)

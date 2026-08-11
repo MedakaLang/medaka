@@ -1,0 +1,43 @@
+-- §4 `gen` + §4.2 OD6(a) ACROSS A MODULE BOUNDARY -- the MULTI-MODULE cell of issue
+-- 1549.  Every other `s4-gen-residual-*` fixture is single-file, and OD6(a) is explicit
+-- that a deferred predicate is part of the binding's SCHEME and "holds across a module
+-- boundary exactly as it does within one".  A regression test for a dispatch class must
+-- exercise the multi-module path (AGENTS.md), so this one does.
+--
+-- LAYOUT:
+--   iface.mdk     -- interface Tag, data Wrap, impl Tag Int
+--   wrapimpl.mdk  -- impl Tag (Wrap a) requires Tag a          <- the residual's source
+--   nest.mdk      -- nest x = tagOf (Wrap x)                   <- the generalizing binder
+--   main.mdk      -- calls nest at Int
+-- The residual is produced in one module, deferred into a scheme in a second, and
+-- discharged by `var` in a third -- so this is the cross-module analogue of the
+-- single-file headline, and it is the only fixture here that can see a scheme context or
+-- a dict arity that fails to cross a module boundary.
+--
+-- HAND-DERIVED FROM THE SPEC: `nest : Tag a => a -> String` (§4 `gen` over the residual
+-- `Tag t` of `impl Tag (Wrap a) requires Tag a`); `main` instantiates at `a = Int`, §4
+-- `var` discharges `Tag Int` against `impl Tag Int`, so `tagOf (Wrap 5)` is
+-- "wrap(" ++ "int" ++ ")".
+-- EXPECTED: wrap(int)
+--
+-- BEFORE THE FIX: check exit 0 reporting `nest : a -> String`, run `wrap(int)`, build
+-- exit 0, and the BUILT BINARY SEGFAULTED at 139 -- the same cells as the single-file
+-- headline, reached through the module path.
+--
+-- ⚠️ WHY `nest.mdk` BARE-IMPORTS `wrapimpl` RATHER THAN LEAVING THE IMPL INVISIBLE.
+-- The hostile variant -- `nest.mdk` importing ONLY `iface`, with `main.mdk` importing
+-- `wrapimpl` -- was built and MEASURED, and it is IMPORT-ORDER SENSITIVE for reasons
+-- that have nothing to do with issue 1549: with `import wrapimpl` written BEFORE
+-- `import nest` in main.mdk it checks clean at exit 0, and with it written AFTER, the
+-- obligation checker rejects `nest.mdk` outright with `No impl of Tag for Wrap a` --
+-- the conditional impl is simply not in the accumulated universe yet when `nest`'s
+-- group closes.  Both orders behave the same way on this branch as on its base; the
+-- sensitivity is in the module pipeline, not in the reducer.  Shipping that variant
+-- here would enrol a PRE-EXISTING order defect into `diff_compiler_import_order.sh`,
+-- whose unit is a DIRECTORY and which permutes exactly these clauses -- reddening an
+-- unrelated gate on someone else's bug.  So this fixture uses the order-invariant
+-- layout, and the finding above is recorded rather than pinned.
+import iface.{Tag, tagOf, Wrap}
+import nest.{nest}
+
+main = println (nest 5)
