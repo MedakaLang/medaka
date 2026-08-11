@@ -26,6 +26,13 @@ Execute and reduce a targeted Medaka verification set selected by the caller in 
 
 Read root and nested `AGENTS.md`, then load `medaka-verification-scope`. Optimize correctness signal per runtime. Use `PREFLIGHT_DRY=1` to derive scope and obey blast-radius, fixpoint, stale-oracle, shared-host, background-job, and platform cautions. Build only narrow prerequisites. A phantom skip is not green. Record each command, duration, status, decisive output, whether it actually graded, and checks deferred to CI.
 
+The caller must identify checks assigned to sibling verifier groups. Treat those
+as explicitly owned elsewhere, not missing verification or friction. Report only
+an actual hole in the combined packet. When several checks in this worktree need
+the same cold compiler or oracle prerequisite, build it once and group those
+checks here; do not request parallel daughters merely to restate independent
+receipts.
+
 For snapshots:
 
 - Establish expected output independently from accepted semantics and plan.

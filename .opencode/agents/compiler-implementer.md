@@ -44,6 +44,15 @@ mirror remains partial.
 
 Keep implementation and verification separate. The conductor owns formatting, linting, builds, tests, golden adjudication, staging, and commits after inspecting your uncommitted daughter-worktree diff. Do not run preflight, fixpoint, multi-engine suites, oracle builds, snapshot blessing, selfproc recapture, or any other verification command. Never bless output because it changed.
 
+You do not have a trustworthy daughter-local compiler binary or stateless Medaka
+check tool. Do not substitute a parent/shared binary or describe that intended
+isolation boundary as tooling friction. Once the executable caller set is
+compile-coherent by inspection, return a checkpoint if type feedback is needed.
+The conductor must run the stateless source check against the daughter diff and
+resume you with exact diagnostics for implementation-conforming repairs before
+integration. Fix those diagnostics without widening scope. Prefer this explicit
+feedback loop over leaving speculative call-site repairs for later verification.
+
 Never stage, commit, or push. If the step budget is becoming tight, stop at a
 coherent edit boundary: leave the worktree parseable when possible and return a
 checkpoint naming completed files/symbols, unfinished files/symbols, known

@@ -36,6 +36,11 @@ Read back title, body, state, head branch, and `headRefOid`. The body should
 separate exact-revision local receipts from checks deferred to CI and must not
 present captured output as semantic authority.
 
+The body write and its readback are dependent operations. Never run them in
+parallel: a concurrent read can return the previous body while the verified
+helper is still writing, manufacturing a false no-op or stale-state report.
+Finish the helper call first, then perform any additional GitHub readback.
+
 ## 3. Watch PR CI without duplicating it
 
 Run independent review and narrowed PR CI concurrently. Use:

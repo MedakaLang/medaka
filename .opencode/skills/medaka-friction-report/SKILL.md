@@ -19,3 +19,10 @@ For each item report:
 - `suggested_disposition`: `fix_now`, `file_issue`, or `discard`.
 
 Do not fix or file friction unless the assigned task grants that authority. The conductor owns duplicate search and final disposition.
+
+Expected assignment boundaries are not durable friction: a read-only agent
+lacking build artifacts, a verifier omitting checks explicitly assigned to a
+sibling, or an implementer returning for conductor-owned compile feedback should
+normally be `discard`, not `file_issue`. Report friction only when the boundary
+is undocumented, contradictory, or prevents the intended workflow from making
+progress.
