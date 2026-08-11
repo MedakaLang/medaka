@@ -1,0 +1,35 @@
+-- §8 I4 -- A NEW INSTANCE OF #1438s CLASS: the METHOD occurrence and the
+-- INTERFACE-NAME occurrence a foreign impl resolves to arrive from TWO
+-- DIFFERENT modules, neither of which is `u.mdk` itself. Every prior row in
+-- this corpus (and #1438s own repro) had the goal-posing method declared in
+-- the SAME module as the constrained call site; this one separates that too.
+--
+-- `u.mdk` imports `pmth` (a value, from `p.Same`) and the TYPE `Same` (from
+-- `g.Same`) -- never `p.Same` the type at all, so there is only ONE `Same` in
+-- `u.mdk`s own scope: `g.Same`. `impl Same P where gmth _ = 7` therefore
+-- unambiguously resolves to `g.Same` (its ONLY candidate), giving
+-- `implOrigin = g`. `export use1 x = pmth x` calls the imported `pmth`, whose
+-- OWN declaring interface -- read off `methodIfaceParamsRef`, stamped at
+-- `pmth`s declaration in `p.mdk` -- is `p.Same`, not `g.Same`.
+--
+-- SPEC ANSWER, HAND-DERIVED FROM DICT-SEMANTICS §8 I4, not read off a binary:
+-- `use1 (P 3)` instantiates `pmth`s occurrence at `P`, posing the goal
+-- `p.Same P`. `match(IE, p.Same P)` is EMPTY -- the graphs only `impl Same _`
+-- is `g.Same P`, a DIFFERENT declaration whose method set (`gmth`) is
+-- disjoint from `p.Same`s (`pmth`). REJECT, `No impl of Same for P`.
+--
+-- 🚨 MEASURED ON A main-BUILT BINARY BEFORE U1c (#1507): `check` exit 0
+-- (`main : Unit`, SILENT ACCEPT) -- the bare `ifaceRefBare "Same"` goal
+-- matched `g.Same`s impl by SPELLING ALONE -- and the built binary SEGFAULTS
+-- at 139 (dict-passing handed `use1` a dictionary shaped for `g.Same`, i.e.
+-- `{gmth}`, and projecting `pmth` out of it read past it). See the sibling
+-- `-control` row for the positive half.
+import p.{pmth}
+import g.{Same}
+
+public export data P = P Int
+
+export impl Same P where
+  gmth _ = 7
+
+export use1 x = pmth x

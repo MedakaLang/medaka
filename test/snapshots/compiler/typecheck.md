@@ -1,5 +1,5 @@
 # META
-source_lines=25682
+source_lines=25792
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted typecheck stage — port of lib/typecheck.ml's HM core.  SLICE 1:
@@ -9050,15 +9050,57 @@ recordImplObligation x mono
   | otherwise = match omLookup x perRun.value.methodIfaceParamsRef.value
     None => mono
     Some (iface, typarams, mty, _) =>
-      -- 🚨 `ifaceRefBare`, NOT `iface` — DO NOT "RESTORE" THE IDENTITY HERE.  The impl
-      -- side of every `ImplUniverse` bucket keys on the OCCURRENCE layer
-      -- (`DImpl.implOrigin`); `methodIfaceParamsRef` stores `DInterface.ifaceOrigin`,
-      -- which is the DECL layer.  Those are filled by two different stampers answering
-      -- two different questions -- `stampDeclOrigin` ("which module DECLARES this
-      -- interface") versus one shared `mapOriginsInDecl (…) (fillIfaceOccOrigin scope)`
-      -- walk ("what did this occurrence RESOLVE to, in this module's scope").  They
-      -- coincide only while resolution is unambiguous, so comparing across them is not
-      -- a re-key, it is a category error.
+      -- U1c (#1507): `iface`, NOT `ifaceRefBare iface.irName` — RESTORED, per the repo
+      -- owner's ratified ruling.  The class a method-occurrence goal names is the
+      -- interface that DECLARES the method the occurrence resolved to, carrying that
+      -- `interface` declaration's I4 identity `(originModule, name)`
+      -- (`docs/spec/DICT-SEMANTICS.md` §8 I4, `:1864`: identity is "assigned once
+      -- where it is declared", and every occurrence is "resolved to one such identity"
+      -- before entailment runs).  There is no competing "occurrence layer": an
+      -- interface-name occurrence is *resolved to* a declaration identity, so
+      -- `DImpl.implOrigin` and `DInterface.ifaceOrigin` are the SAME layer — one
+      -- ASSIGNED once at the interface's own `interface` decl, one RESOLVED-TO at each
+      -- occurrence (including this method's declaring interface, right here) — and
+      -- comparing them is not a category error.
+      --
+      -- 🚨 A DO-NOT-RESTORE ban stood at this exact site from #1480 (withdrawn
+      -- deliberately) until U1c landed.  Its premise was that `stampDeclOrigin`
+      -- ("which module DECLARES this interface") and `fillIfaceOccOrigin`
+      -- ("what did this occurrence RESOLVE to") are two stampers answering two
+      -- INCOMPARABLE questions.  That premise was wrong: they answer the SAME
+      -- question — "which interface declaration does this name denote" — from two
+      -- vantage points that PRODUCE THE SAME VALUE wherever resolution has a unique
+      -- answer, which `fillIfaceOccOrigin` (via `mapOriginsInDecl`, run in the same
+      -- scope as every other occurrence stamp) guarantees for exactly the programs
+      -- that reach this line.
+      --
+      -- ⚠️ "RESOLVE diagnoses every ambiguous case" is FALSE AS A BLANKET CLAIM, and an
+      -- earlier revision of this paragraph said it anyway — refuted in one experiment,
+      -- which is exactly the shape that licenses reinstating the ban, so the carve-out
+      -- has to be explicit. MEASURED, both arms, two modules each declaring an
+      -- interface with the same method name (`p.IP.mth`, `g.IG.mth`), merged into a
+      -- third module via `export import p.{IP,mth}` + `export import g.{IG,mth}`: a
+      -- DIRECT double import of the same name is what resolve catches
+      -- (`Ambiguous occurrence: 'mth' is exported by both …`, `importedMethodEntry`'s
+      -- own comment below); a RE-EXPORT MERGE of the same collision is not caught by
+      -- resolve at all — `check` exits 0 or 1 depending on nothing but which of the two
+      -- `export import` lines comes first in the re-exporting module, with NO
+      -- diagnostic from resolve either way. In that shape `scopedMethodEntry` cannot
+      -- decide it (`importedMethodEntry` sees two import-witnessed candidates, which
+      -- is the SAME two-candidates shape the direct-import case rejects — but nothing
+      -- upstream rejects it here), so `overrideScopedMethods` keeps the FLOOR's
+      -- arbitrary last-registered answer, and this site silently inherits it. So: the
+      -- two values disagree only in the ambiguous case, unambiguous cases genuinely
+      -- agree, and a DIRECT import ambiguity genuinely is rejected upstream — but a
+      -- RE-EXPORT-MERGE ambiguity is not, and reaches this site as the floor's
+      -- arbitrary identity rather than as a diagnostic. The RULING survives this
+      -- carve-out (an unambiguous occurrence's identity is still correct here, which is
+      -- the property U1c is about); the flat "already rejected upstream" sentence does
+      -- not, and is corrected to say so. Do NOT reinstate the ban on a bare assertion
+      -- that the two layers are "different" — but do not cite "resolve already
+      -- rejects the ambiguous case" as blanket cover either; it doesn't, for this
+      -- shape. (Adjacent to the open #1288 re-export-merge family; not this unit's to
+      -- fix.)
       --
       -- ⚠️ THIS IS NOT THE ONLY DECL-LAYER GOAL SITE, AND AN EARLIER VERSION OF THIS
       -- COMMENT SAID IT WAS ("the ONE goal producer … the other three are all
@@ -9098,27 +9140,30 @@ recordImplObligation x mono
       -- goal-WITHOUT-identity against impl-WITH-identity, and this is
       -- goal-with-identity against impl-with-a-DIFFERENT-identity.
       --
-      -- The other three goal producers (`recordSigConstraintObls`,
+      -- Two OTHER goal producers (`recordSigConstraintObls`,
       -- `recordMethodLevelSlotObls` via `constraintOrigin`, `reqToObligation` via
-      -- `requireOrigin`) are all OCCURRENCE layer, filled by the SAME walk in the SAME
-      -- scope as `implOrigin`, so they cannot disagree with it and they keep their
-      -- identity.  Only this site crosses layers.
+      -- `requireOrigin`) already carried identity before U1c (they never went through
+      -- the bare-name detour this site did) -- filled by the SAME walk in the SAME
+      -- scope as `implOrigin`, so they agree with it by construction. This site is the
+      -- THIRD, and last, of the `ifaceRefBare` producers -- U1b retired the other two
+      -- (`schemeObligationsRef`, `funConstraintIfacesRef`); see the census a few lines
+      -- above and re-derive it with `grep -n ifaceRefBare` rather than trust a count.
+      -- ⚠️ THAT IS NOT A CLAIM THAT THE `ImplUniverse` CHANNEL HAS ONLY THREE OR FOUR
+      -- GOAL PRODUCERS TOTAL. It does not: `recordCallObligations`'s `PCallSlot`
+      -- predicate (:7205, above), the `builtinIfaceRef`-derived sites named a few
+      -- paragraphs up, and others besides all push a `Predicate` into the same channel
+      -- -- a derived count of the WHOLE set is at least six. "Last of the three" here
+      -- means only "last of the sites that ever minted `ifaceRefBare`", the narrow
+      -- claim the census actually supports -- do not read it as "last of N total
+      -- producers" for any N not independently re-derived.
       --
-      -- ⚠️ COST, recorded rather than glossed: this withdraws the discrimination for
-      -- METHOD-OCCURRENCE goals, so the #1438 collision shape reached through a bare
-      -- method call goes back to being silently accepted (`p/pl`, `p/po` in the review
-      -- corpus; base's built binary prints 300 on `po`).  That is a real capability
-      -- given up.  It was never SOUND, though -- those verdicts were right only because
-      -- the two layers happened to agree in those programs, and the repro above is the
-      -- counterexample proving the coincidence does not generalise.
-      --
-      -- ⚠️ OWED TO #1507, NOT #1482.  This said "Owed to #1482" until U1b landed; the
-      -- repo owner's scope ruling on that issue put the METHOD-OCCURRENCE channel in
-      -- its own unit, precisely because the obstacle stated above is a ruling on which
-      -- LAYER governs, not a table widening.  U1b widened the other two channels and
-      -- deliberately did not touch this one; it is now the LAST condition on deleting
-      -- the bare compatibility leg (see `insertUnivImplKeys`) and on draining #1438.
-      let _ = pushPendingObl (ifaceRefBare iface.irName) typarams mty mono PMethodOcc currentLoc.value
+      -- U1c (#1507) closes the capability gap the retired ban's COST paragraph
+      -- recorded: this site now discriminates METHOD-OCCURRENCE goals the same way
+      -- the other three always did, so the #1438 collision shape reached through a
+      -- bare method call (`p/pl`, `p/po` in the review corpus) is REJECTED, not
+      -- silently accepted.  See `test/dict_fixtures/i4-xmod-method-occurrence-*` for
+      -- the positive pair and `test/must_fail_fixtures/1507-…` (drained, removed).
+      let _ = pushPendingObl iface typarams mty mono PMethodOcc currentLoc.value
       -- #818 (#838 I3): also record each method-level `=>` constraint slot (e.g.
       -- `Ord b` on `peer : Ord b => a -> b -> b -> Bool`) as its OWN obligation, so an
       -- unsatisfiable slot (`Ord NoOrd`) is rejected by the unified checker at check
@@ -14303,9 +14348,22 @@ scopedMethodEntry prog n cs = match ownMethodIdent prog n
 importedMethodEntry : List Decl -> String -> List (Ident, (IfaceRef, List String, Ty, List (String, List Kind))) -> Option (IfaceRef, List String, Ty, List (String, List Kind))
 importedMethodEntry prog n cs = match filterList (c => methodCandImported prog n c) cs
   -- exactly one of this name's declarations is reachable through an import of THIS
-  -- module: that is what the occurrence names.  Two would be an ambiguous occurrence,
-  -- which resolve already rejects (`Ambiguous occurrence: 'mth' is exported by both …`),
-  -- so falling back to the floor there costs nothing an accepted program can observe.
+  -- module: that is what the occurrence names.  A DIRECT double import of the same
+  -- name is an ambiguous occurrence resolve already rejects (`Ambiguous occurrence:
+  -- 'mth' is exported by both …`), so falling back to the floor costs nothing an
+  -- accepted program can observe THROUGH THAT PATH.
+  --
+  -- ⚠️ NOT EVERY TWO-CANDIDATE CASE IS CAUGHT UPSTREAM — MEASURED, both arms: a
+  -- RE-EXPORT MERGE of the same collision (two modules each declaring an interface
+  -- with method `n`, both re-exported into a third module via two `export import`
+  -- lines) also lands here with two candidates, but resolve emits NOTHING for it —
+  -- `check` silently accepts or rejects depending only on which `export import` line
+  -- is declared first, with no diagnostic either way. This function still falls
+  -- through to `preludeMethodEntry`/`None` and the caller keeps the FLOOR's
+  -- arbitrary last-registered answer for that shape, exactly as it does for a
+  -- genuinely 0-candidate case — the fallback is not wrong, but the comment above
+  -- must not be read as "every 2+ candidate case is already an upstream reject".
+  -- Adjacent to the open #1288 re-export-merge family; not owned here.
   [only] => Some (snd only)
   _ => preludeMethodEntry n cs
 
@@ -18855,40 +18913,92 @@ insertUnivImpl univ (iface, tys, reqs) =
 -- compiler/driver/medaka_cli.mdk` → 37; and #1438's OWN control fixture (a legal
 -- program the pin requires to keep working) rejected too.
 --
--- 🚨 THE DRAIN CONDITION, CORRECTED BY U1b (#1482) — READ IT BEFORE DELETING ANYTHING.
--- This paragraph used to read "*both* `ifaceRefBare` call sites disappear … delete it
--- then, and #1438 drains with it."  **It counted TWO against a set of THREE**, and it
--- keyed a DESTRUCTIVE instruction on a condition that no single unit was going to
--- satisfy.  U1b widened `schemeObligationsRef` (payload `List VecObl`) and
--- `funConstraintIfacesRef` (payload `List IfaceRef`) and retired the two producers it
--- named — and the leg is STILL LIVE, because a THIRD producer exists:
--- `recordImplObligation`'s method-occurrence goal, which is a decl-layer /
--- occurrence-layer reconciliation rather than a table widening and is owned by #1507.
+-- 🚨 THE DRAIN CONDITION, CORRECTED AGAIN BY U1c (#1507) — READ IT BEFORE DELETING
+-- ANYTHING.  This paragraph used to read "both `ifaceRefBare` call sites disappear …
+-- delete it then" (a count of TWO against a set of THREE), then "delete the leg only
+-- when every remaining `ifaceRefBare` hit is the definition itself" once U1b named the
+-- third producer (`recordImplObligation`'s method-occurrence goal).  **U1c retires that
+-- third producer** — `recordImplObligation` now records `iface`, the identity-carrying
+-- `IfaceRef` `methodIfaceParamsRef` already held, instead of stripping it via
+-- `ifaceRefBare iface.irName` — so by the census rule stated then, every REMAINING
+-- `ifaceRefBare` call site IS the definition (`:3850-3851`) or the deliberately-bare
+-- `pendingDictApps` route-word fallback in `ifaceForInferredId` (§10.3).
 --
--- ⚠️ So: **DO NOT DELETE THIS LEG YET.**  Withdrawing it while any producer still mints
--- a bare goal reinstates the cascade measured above.  Do not trust this paragraph's
--- census either — derive it: `grep -n ifaceRefBare compiler/types/typecheck.mdk`, and
--- delete the leg only when every remaining hit is the definition itself.
+-- ⚠️ THAT FALLBACK IS NOT SAFELY DISMISSED AS "A ROUTE WORD, NOT A GOAL PRODUCER" —
+-- an earlier revision of this paragraph said so and it was not established, only
+-- assumed from the fallback's OWN call site (`pushDictApp`'s routing arg). TRACED,
+-- not instrumented: `ifaceForInferredId`'s result is written by `registerInferredFor`
+-- directly into `funConstraintIfacesRef` (`map (ifaceForInferredId m) ids`); that
+-- table is read by `declaredConstraintSlots`'s `None` arm (when `qualConstraintFor`
+-- misses); `declaredConstraintSlots` feeds `inferDictAtFound`, which calls
+-- `recordCallObligations`, which calls `recordObl (Predicate { iface = s.csIface, … })
+-- 0 PCallSlot …` — an `ImplUniverse` goal, unconditionally, for any slot whose
+-- `csIface.irName != ""`. So the SAME value this fallback mints reaches BOTH a
+-- routing site AND a goal-producing one, through two different readers of
+-- `funConstraintIfacesRef`. Bare BY CONSTRUCTION (this channel stores route words,
+-- §10.3's still-true half) — but that is a FOURTH reason the leg stays, not evidence
+-- the fallback is goal-producer-free. Not independently re-derived whether a program
+-- can actually DRIVE this path to a bare, non-"" `csIface` at a live call site
+-- (`ifaceForConstraintId`/`lookupSchemeIface` are tried first and may already cover
+-- every reachable case) — flag this as unresolved rather than assume either answer.
 --
--- ⚠️ CONSEQUENCE FOR #1438, AND THE SENTENCE THIS PARAGRAPH GOT WRONG.  It read
--- "#1438's own repro is still accepted and its `must_fail` pin still holds; #1438
--- drains at #1507, not at U1b" — written in the very commit that DELETED that pin.
--- MEASURED on U1b's own branch build: #1438's repro uses a SIGNED forwarder
--- (`useBulk : Sizer b => b -> Int`), so its goal comes from the signature `=>` slot,
--- which is one of the two channels U1b widened; it now REJECTS
--- (`No impl of Sizer for Int`, exit 1) and its pin drained.
+-- ⚠️ 🚨 **AND THE LEG STILL MAY NOT BE DELETED — MEASURED, NOT INFERRED FROM THE
+-- CENSUS ABOVE.**  Zero remaining `ifaceRefBare` *goal-producer* call sites does not by
+-- itself mean zero remaining *bare* goals: `methodIfaceParamsRef` itself can hold an
+-- `IfaceRef` whose `irOrigin` is `OriginUnresolved` — not because a producer stripped
+-- it, but because nothing upstream ever stamped one — and `recordImplObligation`
+-- forwarding that value FAITHFULLY (which is the whole point of U1c) still produces a
+-- bare goal in that case.  Two such sources, one closed by construction and one that
+-- is NOT:
+--   * The compatibility leg's OWN worked example above (`main = println 1`,
+--     `check stdlib/core.mdk`, …) is CLOSED as of #1227 for the ordinary "user program
+--     imports the prelude" shape: `stampFlatTyOrigins`'s occurrence layer stamps a
+--     prelude interface occurrence `core` even in flat/no-module-graph mode
+--     (`flatTyOriginScope` carries the prelude's own interfaces), and
+--     `checkProgramSeededSplit` additionally calls `stampDeclOrigins "core" coreProgTy`
+--     — so goal and impl agree on identity `core` and no bare goal is minted at all.
+--     MEASURED on this branch (post-U1c): `check` of `main = println 1` and of
+--     `compiler/driver/medaka_cli.mdk` are BOTH clean with the leg *removed* — this
+--     shape genuinely needs no leg any more.
+--   * `medaka check stdlib/core.mdk` **directly** (the prelude checking ITSELF, not a
+--     user program importing it) is a DIFFERENT shape and is NOT closed.  Checking
+--     `core.mdk` as the entry file reaches `checkProgramSeeded` with `coreProg0 = []`
+--     (the "prelude is already flattened into `prog`" arm — see this file's own
+--     `checkProgramSeededSplit` comment), so `core.mdk`'s OWN interfaces and impls are
+--     stamped with a scope that does not include core.mdk's own declarations at all —
+--     they never get an identity, on EITHER layer.  MEASURED, on this branch, with the
+--     leg *removed* (a throwaway experiment, reverted — not landed):
+--     `medaka check stdlib/core.mdk` regresses from a clean exit 0 to **exit 1 with 32
+--     `No impl of <Iface> for <Ty>` false rejects** (re-derive with `grep -c 'No impl'`
+--     on the check output rather than trust this number; `Ord`/`Eq`/`Foldable`/`Mappable`/…,
+--     the exact cascade shape this leg's worked example predicted). With the leg
+--     restored it is clean again. `compiler/driver/medaka_cli.mdk` and
+--     `main = println 1` stayed clean in BOTH arms of this experiment — the residual is
+--     narrower than the pre-#1227 cascade, but it is real and it is live TODAY, after
+--     U1c, not a hypothetical.
 --
--- 🚨 THE PINNED INSTANCE DRAINED; THE CLASS DID NOT, AND THAT IS THE DISTINCTION TO
--- CARRY.  Delete the signature line from that repro and the goal is posed by a bare
--- METHOD OCCURRENCE instead — the producer below that still mints `ifaceRefBare` —
--- and it is a silent accept again: MEASURED on the same binary, `check` exit 0,
--- `build` exit 0, and the built binary SEGFAULTS at 139.  So with this leg present a
--- goal recorded at any REMAINING `ifaceRefBare` site still matches ANY same-spelled
--- impl, exactly as before.  #1438 stays OPEN for that half; **the remaining reach
--- drains at #1507**, which is also when this leg may be withdrawn.  The minimal pair
--- is pinned at `test/must_fail_fixtures/1507-xmod-iface-name-collision-method-occurrence/`,
--- and the drained half is guarded positively by
--- `test/dict_fixtures/i4-xmod-sig-constraint-foreign-iface-rejected/`.
+-- ⚠️ So: **DO NOT DELETE THIS LEG.**  U1c closes the THIRD `ImplUniverse` goal
+-- producer, which is a real and necessary step, but it is NOT the sole remaining
+-- condition — a self-checking flat prelude is a fourth source of bare goals this leg
+-- protects, independent of any producer, and it has no owner yet. Do not trust a census
+-- of `ifaceRefBare` call sites to answer this question by itself; re-run the experiment
+-- above (temporarily drop the bare key from `oblIfaceKeys`'s non-`OriginUnresolved`
+-- arm, rebuild, `check stdlib/core.mdk`) before believing the leg is dead weight.
+--
+-- ⚠️ CONSEQUENCE FOR #1438.  U1b drained the PINNED INSTANCE (a signed forwarder,
+-- reached through the signature `=>` slot channel U1b widened); the CLASS did not
+-- drain with it — deleting one signature line reposed the same goal through the bare
+-- METHOD OCCURRENCE producer this file no longer has, and it was a silent accept
+-- (`check` exit 0, `build` exit 0, built binary SEGFAULTS at 139) right up to U1c. U1c
+-- closes that remaining reach: the minimal pair that used to live at
+-- `test/must_fail_fixtures/1507-xmod-iface-name-collision-method-occurrence/` now
+-- REJECTS and the pin is retired, replaced by the positive pair
+-- `test/dict_fixtures/i4-xmod-method-occurrence-{foreign-iface-rejected,
+-- own-iface-control}` (alongside U1b's own
+-- `i4-xmod-sig-constraint-{foreign-iface-rejected,own-iface-control}`). **#1438 itself
+-- stays open** pending confirmation that no other reach of the same collision survives
+-- (see #1507's own issue thread) — this comment records the obligation-channel half,
+-- not the whole issue.
 --
 -- Order within a bucket is preserved per key (`mregAppendK` appends), so
 -- `findMatchingImplReqsU`'s declaration-order first-match is unchanged on either leg.
@@ -27327,7 +27437,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "lookupSchemeOblsByName" (PWild (PList)) (EVar "None"))
 (DFunDef false "lookupSchemeOblsByName" ((PVar "x") (PCons (PTuple (PTuple (PVar "n2") PWild) (PVar "v")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "n2") (EVar "x")) (EApp (EVar "Some") (EVar "v")) (EIf (EVar "otherwise") (EApp (EApp (EVar "lookupSchemeOblsByName") (EVar "x")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "recordImplObligation" (TyFun (TyCon "String") (TyFun (TyCon "Mono") (TyCon "Mono"))))
-(DFunDef false "recordImplObligation" ((PVar "x") (PVar "mono")) (EIf (EBinOp "||" (EApp (EApp (EVar "contains") (EVar "x")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "definerShadowNamesRef") "value")) (EApp (EApp (EVar "contains") (EVar "x")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "standaloneValuesRef") "value"))) (EVar "mono") (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "omLookup") (EVar "x")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "methodIfaceParamsRef") "value")) (arm (PCon "None") () (EVar "mono")) (arm (PCon "Some" (PTuple (PVar "iface") (PVar "typarams") (PVar "mty") PWild)) () (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EApp (EVar "pushPendingObl") (EApp (EVar "ifaceRefBare") (EFieldAccess (EVar "iface") "irName"))) (EVar "typarams")) (EVar "mty")) (EVar "mono")) (EVar "PMethodOcc")) (EFieldAccess (EVar "currentLoc") "value"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "recordMethodLevelObls") (EVar "typarams")) (EVar "mty")) (EVar "mono"))) (DoExpr (EVar "mono"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "recordImplObligation" ((PVar "x") (PVar "mono")) (EIf (EBinOp "||" (EApp (EApp (EVar "contains") (EVar "x")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "definerShadowNamesRef") "value")) (EApp (EApp (EVar "contains") (EVar "x")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "standaloneValuesRef") "value"))) (EVar "mono") (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "omLookup") (EVar "x")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "methodIfaceParamsRef") "value")) (arm (PCon "None") () (EVar "mono")) (arm (PCon "Some" (PTuple (PVar "iface") (PVar "typarams") (PVar "mty") PWild)) () (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EApp (EVar "pushPendingObl") (EVar "iface")) (EVar "typarams")) (EVar "mty")) (EVar "mono")) (EVar "PMethodOcc")) (EFieldAccess (EVar "currentLoc") "value"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "recordMethodLevelObls") (EVar "typarams")) (EVar "mty")) (EVar "mono"))) (DoExpr (EVar "mono"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "recordMethodObligationGuarded" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyCon "Scheme") (TyFun (TyCon "Mono") (TyCon "Mono"))))))
 (DFunDef false "recordMethodObligationGuarded" ((PVar "env") (PVar "name") (PVar "s") (PVar "mono")) (EIf (EBinOp "||" (EApp (EApp (EVar "lookupLocalFlag") (EVar "env")) (EVar "name")) (EApp (EVar "isMonoScheme") (EVar "s"))) (EVar "mono") (EApp (EApp (EVar "recordImplObligation") (EVar "name")) (EVar "mono"))))
 (DTypeSig false "recordMethodLevelObls" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Ty") (TyFun (TyCon "Mono") (TyCon "Unit")))))
@@ -32088,7 +32198,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "lookupSchemeOblsByName" (PWild (PList)) (EVar "None"))
 (DFunDef false "lookupSchemeOblsByName" ((PVar "x") (PCons (PTuple (PTuple (PVar "n2") PWild) (PVar "v")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "n2") (EVar "x")) (EApp (EVar "Some") (EVar "v")) (EIf (EVar "otherwise") (EApp (EApp (EVar "lookupSchemeOblsByName") (EVar "x")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "recordImplObligation" (TyFun (TyCon "String") (TyFun (TyCon "Mono") (TyCon "Mono"))))
-(DFunDef false "recordImplObligation" ((PVar "x") (PVar "mono")) (EIf (EBinOp "||" (EApp (EApp (EVar "contains") (EVar "x")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "definerShadowNamesRef") "value")) (EApp (EApp (EVar "contains") (EVar "x")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "standaloneValuesRef") "value"))) (EVar "mono") (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "omLookup") (EVar "x")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "methodIfaceParamsRef") "value")) (arm (PCon "None") () (EVar "mono")) (arm (PCon "Some" (PTuple (PVar "iface") (PVar "typarams") (PVar "mty") PWild)) () (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EApp (EVar "pushPendingObl") (EApp (EVar "ifaceRefBare") (EFieldAccess (EVar "iface") "irName"))) (EVar "typarams")) (EVar "mty")) (EVar "mono")) (EVar "PMethodOcc")) (EFieldAccess (EVar "currentLoc") "value"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "recordMethodLevelObls") (EVar "typarams")) (EVar "mty")) (EVar "mono"))) (DoExpr (EVar "mono"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "recordImplObligation" ((PVar "x") (PVar "mono")) (EIf (EBinOp "||" (EApp (EApp (EVar "contains") (EVar "x")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "definerShadowNamesRef") "value")) (EApp (EApp (EVar "contains") (EVar "x")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "standaloneValuesRef") "value"))) (EVar "mono") (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "omLookup") (EVar "x")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "methodIfaceParamsRef") "value")) (arm (PCon "None") () (EVar "mono")) (arm (PCon "Some" (PTuple (PVar "iface") (PVar "typarams") (PVar "mty") PWild)) () (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EApp (EVar "pushPendingObl") (EVar "iface")) (EVar "typarams")) (EVar "mty")) (EVar "mono")) (EVar "PMethodOcc")) (EFieldAccess (EVar "currentLoc") "value"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "recordMethodLevelObls") (EVar "typarams")) (EVar "mty")) (EVar "mono"))) (DoExpr (EVar "mono"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "recordMethodObligationGuarded" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyCon "Scheme") (TyFun (TyCon "Mono") (TyCon "Mono"))))))
 (DFunDef false "recordMethodObligationGuarded" ((PVar "env") (PVar "name") (PVar "s") (PVar "mono")) (EIf (EBinOp "||" (EApp (EApp (EVar "lookupLocalFlag") (EVar "env")) (EVar "name")) (EApp (EVar "isMonoScheme") (EVar "s"))) (EVar "mono") (EApp (EApp (EVar "recordImplObligation") (EVar "name")) (EVar "mono"))))
 (DTypeSig false "recordMethodLevelObls" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Ty") (TyFun (TyCon "Mono") (TyCon "Unit")))))

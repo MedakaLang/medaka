@@ -1,0 +1,5 @@
+-- An UNRELATED interface that merely shares the spelling `Same`. Its method
+-- (`gmth`) is disjoint from `p.Same`s (`pmth`), and it is the module `u.mdk`
+-- gets its ONLY `impl Same P` from.
+export interface Same a where
+  gmth : a -> Int

@@ -1,0 +1,53 @@
+-- §8 I4 -- A BARE METHOD OCCURRENCE NAMES ITS OWN CLASS, NOT A SAME-SPELLED FOREIGN
+-- ONE. This is the SURVIVING half of #1438 after U1b (#1482) drained the
+-- signature-`=>` half (`i4-xmod-sig-constraint-foreign-iface-rejected`), and it is
+-- the positive guard `test/must_fail_fixtures/1507-xmod-iface-name-collision-
+-- method-occurrence` owed when U1c (#1507) drained it -- a pin asserts a bug still
+-- reproduces, so a fix removes it and the S0 has NO guard unless a positive row
+-- replaces it.
+--
+-- SPEC ANSWER, HAND-DERIVED FROM DICT-SEMANTICS §8 I4, not read off a binary:
+--   1. `zmod` declares its own `interface Sizer a where bulk`, imports nothing, so
+--      the `bulk x` occurrence inside `useBulk`'s own body unambiguously denotes
+--      `zmod.Sizer` (§8 I4 qualification 1: a same-module declaration wins, and
+--      there is nothing else in scope to compete with it anyway).
+--   2. `main` calls `useBulk 3`, instantiating the method occurrence's dispatch
+--      type at `Int`, posing the goal `zmod.Sizer Int`.
+--   3. `match(IE, zmod.Sizer Int)` is EMPTY. The graph's only `impl Sizer Int`
+--      belongs to `amod.Sizer` -- a different declaration whose method set
+--      (`weight`) is disjoint from `zmod.Sizer`'s (`bulk`). An impl of one class is
+--      not an impl of another that merely shares a spelling.
+--   => REJECT, `No impl of Sizer for Int` (T-NO-IMPL). There is no value to pin --
+--      the program never runs.
+--
+-- 🚨 WHAT THIS ROW GUARDS, MEASURED ON A main-BUILT BINARY BEFORE U1c: `check`
+-- exit 0 printing `main : Unit` (SILENT ACCEPT); `run` E-PANIC `unbound
+-- identifier: bulk` (dict-passing handed `useBulk` a dictionary shaped for
+-- `amod.Sizer`, i.e. `{weight}`, and projecting `bulk` out of it found nothing);
+-- `build` exit 0 with a binary that SEGFAULTS at 139. That was #1438's surviving
+-- reach. If a later change re-widens the METHOD-OCCURRENCE channel
+-- (`recordImplObligation`) back to a bare spelling, THIS ROW GOES
+-- GREEN-BY-ACCEPTING and the S0 is back -- which is exactly what it exists to
+-- stop.
+--
+-- ⚠️ MECHANISM CORRECTION: an earlier revision of this row claimed the goal is
+-- "posed and elaborated when `zmod` is processed", by analogy with the
+-- signature-constraint sibling. MEASURED, that is not where the diagnostic lands:
+-- `check` reports it at `main.mdk:48:16`, not in `zmod.mdk`. `useBulk` here is
+-- UNSIGNED, so its constraint is inferred and generalized into `useBulk`'s own
+-- scheme rather than fixed at a declared `=>` slot; the obligation entailment fires
+-- where the scheme is instantiated, i.e. at the `useBulk 3` call in `main`. The
+-- row's DISCRIMINATION is real and measured (base: silent accept + segfault;
+-- branch: reject) -- only the "posed at `zmod`, by construction" mechanism claim
+-- was wrong, and is dropped rather than repeated.
+--
+-- ⚠️ Distinct from `i4-xmod-sig-constraint-foreign-iface-rejected` (the sibling
+-- row): that one reaches the collision through a constrained BINDING's `=>` slot
+-- (`funConstraintIfacesRef` + `schemeObligationsRef`, U1b's channel). This one
+-- reaches it through the bare METHOD OCCURRENCE itself
+-- (`recordImplObligation`'s `pushPendingObl`, U1c's channel) -- `useBulk` here
+-- carries no signature at all, so there is no `=>` slot for U1b's fix to touch.
+import amod
+import zmod.{useBulk}
+
+main = println (useBulk 3)

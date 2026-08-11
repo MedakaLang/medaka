@@ -1,0 +1,14 @@
+-- CONTROL for the row above, and the VALUE is what makes it one: `zmod` gains its
+-- own `impl Sizer Int` (`bulk n = n + 7`), so `match(IE, zmod.Sizer Int)` is the
+-- singleton {zmod's impl} and `useBulk 3` = 10. `10` is a value ONLY `zmod`'s
+-- impl can produce (`amod`'s `weight n = 100` is a different interface entirely
+-- and is never reached at this receiver), so the PAIR separates "the reject was
+-- removed" from "the wrong impl was selected" -- a verdict-only control could
+-- not. It rules out the duller readings of the sibling's reject ("a bare
+-- cross-module method occurrence cannot dispatch at all"; "any same-spelled
+-- interface in the graph poisons the goal"), each of which predicts a reject
+-- here too.
+import amod
+import zmod.{useBulk}
+
+main = println (useBulk 3)

@@ -1,0 +1,22 @@
+-- CONTROL for the sibling `-rejected` row, and the VALUE is what makes it
+-- one: `use1` now calls `gmth` (also imported, alongside `Same`, from `g`)
+-- instead of `pmth`. `gmth`s own declaring interface is `g.Same`, which
+-- matches `impl Same P`s `implOrigin = g` exactly, so `match(IE, g.Same P)`
+-- is the singleton {this impl} and `use1 (P 3)` = `gmth (P 3)` = 7. `7` is a
+-- value ONLY this impl can produce, so the PAIR separates "the reject was
+-- removed" from "the wrong impl was selected" -- a verdict-only control
+-- could not. It rules out the duller readings of the siblings reject ("a
+-- method imported from one module and an impl resolved via another can never
+-- discharge together"; "any same-spelled interface in the graph poisons the
+-- goal"), each of which predicts a reject here too. `pmth` is still imported
+-- (unused) to keep the two files a ONE-TOKEN diff (`pmth x` -> `gmth x`) from
+-- the sibling.
+import p.{pmth}
+import g.{Same, gmth}
+
+public export data P = P Int
+
+export impl Same P where
+  gmth _ = 7
+
+export use1 x = gmth x

@@ -1,8 +1,0 @@
--- An UNRELATED interface that merely shares the spelling `Sizer`.  Its method is
--- `weight`, disjoint from `zmod.Sizer`'s `bulk`, and it owns the graph's only
--- `impl Sizer Int`.
-export interface Sizer a where
-  weight : a -> Int
-
-export impl Sizer Int where
-  weight n = n * 100

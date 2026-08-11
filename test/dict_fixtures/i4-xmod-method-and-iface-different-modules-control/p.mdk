@@ -1,0 +1,3 @@
+-- As the sibling row's p.mdk.
+export interface Same a where
+  pmth : a -> Int
