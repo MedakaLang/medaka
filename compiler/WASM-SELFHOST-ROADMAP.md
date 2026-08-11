@@ -1,8 +1,9 @@
 # WASM-SELFHOST-ROADMAP.md — driving the WasmGC backend to compile the compiler
 
 **Status:** IMPLEMENTED — census progress 1428 → 0, every category ✅ DONE, in-browser
-WAT assembly resolved, playground wired (all 2026-06-22). The census lifecycle
-was most recently updated by X-W.H2b.1 (`2cbd85c8`).
+WAT assembly resolved, playground wired (all 2026-06-22). The lifecycle is current
+through X-W.H2b.2: H2b.1 moved gap mode/log/attribution into `WasmEmit`; H2b.2 adds
+passive string-segment state. H2b remains open.
 
 > **Goal:** run the Medaka compiler *itself*, compiled to WasmGC, in a browser — a
 > frontend-only playground with **no server-side compilation**. This is the

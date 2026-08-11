@@ -661,8 +661,8 @@ funcRefsSetW = Ref omEmpty
 -- segments for string literals (one `(data $strseg_N "…")` per literal OCCURRENCE — #383:
 -- `freshStrSeg` allocates a fresh segment id on every call with no dedup by content,
 -- so the SAME literal appearing twice in source gets two segments; "per distinct
--- literal" was aspirational, not what `freshStrSeg`/`emitLitRef (LString s)` (~line
--- 4201) actually do — init'd via `array.new_data`, the §11-preferred non-const-array
+-- literal" was aspirational, not what `freshStrSeg`/`emitLitRef emit (LString s)`
+-- actually do — init'd via `array.new_data`, the §11-preferred non-const-array
 -- scheme). Segment state belongs to each fresh `WasmEmit`; `useStrRef` remains ambient.
 useStrRef : Ref Bool
 useStrRef = Ref False

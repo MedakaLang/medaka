@@ -33,6 +33,7 @@ FIXDIR="$ROOT/test/wasm/fixtures_typed"
 RUNJS="$ROOT/test/wasm/run.js"
 CC="${CC:-clang}"
 WASM_SRC="$ROOT/compiler/backend/wasm_emit.mdk"
+TYPED_ENTRY="$ROOT/compiler/entries/wasm_emit_typed_main.mdk"
 
 # X-W.H2a structural ratchet. Keep this before every toolchain/binary skip: the
 # private program index is source structure, not a capability of wasm-tools.
@@ -74,12 +75,38 @@ if grep -E '^(strSegsRef|strSegIdRef)[[:space:]]*:' "$WASM_SRC" >/dev/null; then
   echo "FAIL wasm typed string-state ratchet: retired ambient segment authority remains"
   exit 1
 fi
+EXPECTED_MODULE_REFS="$(printf '%s\n' \
+  lamIdRef liftedFnsRef liftedNamesRef funcRefsRef liftedNamesSetW funcRefsSetW \
+  useStrRef curBindRef useListRef useArrayRef useRefBoxRef useRecUpdateRef \
+  useStrLeafRef useRngRef useHashRef useEPutRef useTrapImport useDivGuardRef \
+  useFloatRef useFloatHashRef useMathRef useFloatRngRef useFloatStrRef \
+  useStrSearchRef useValueCmpRef useValueArithRef numPolyLocalsRef useStrCodecRef \
+  useCharFromCodeRef useCharClassRef useIORef useArgsRef useFileBytesRef \
+  floatLocalsRef floatGlobalsRef tupleAritiesRef emittedDefaultsWRef \
+  emittedDefaultsSetW defaultDefsWRef wTrmcCtxRef implSelfCtxRef wDispCtxRef \
+  wDispGroupsRef)"
+ACTUAL_MODULE_REFS="$(awk '
+  /^[A-Za-z][A-Za-z0-9_]*[[:space:]]*:[[:space:]]*Ref([[:space:]]|$)/ { print $1 }
+' "$WASM_SRC")"
+[ "$ACTUAL_MODULE_REFS" = "$EXPECTED_MODULE_REFS" ] || {
+  echo "FAIL wasm typed string-state ratchet: top-level Ref authority set changed"
+  printf '  observed:\n%s\n' "$ACTUAL_MODULE_REFS"
+  exit 1
+}
 for required in \
   'stringSegments : Ref (List (Int, List Int))' \
   'nextStringSegmentId : Ref Int' \
   'freshStrSeg : WasmEmit -> List Int -> Int' \
   'emitDataSegs : WasmEmit -> List String' \
   'emitLitRef : WasmEmit -> Lit -> List String' \
+  'let i = emit.nextStringSegmentId.value' \
+  'setRef emit.nextStringSegmentId (i + 1)' \
+  'setRef emit.stringSegments ((i, bytes)::emit.stringSegments.value)' \
+  'reverseL emit.stringSegments.value' \
+  'emitProgram input cp = emitProgramWith (freshWasmEmit WGapStrict) input cp' \
+  'emitProgramRecord input cp =' \
+  'emitProgramGaps input (CProgram groups ctorArs ctorTypes impls) =' \
+  'let emit = freshWasmEmit WGapRecord' \
   'let dataSegs = emitDataSegs (progEmit prog)' \
   'emitRefExpr prog env d (CLit l) = emitLitRef (progEmit prog) l'; do
   grep -F -- "$required" "$WASM_SRC" >/dev/null || {
@@ -87,11 +114,28 @@ for required in \
     exit 1
   }
 done
+[ "$(grep -F 'let emit = freshWasmEmit WGapRecord' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 2 ] || {
+  echo "FAIL wasm typed string-state ratchet: record and census must each own one fresh WasmEmit"
+  exit 1
+}
 for required_call in \
   'emitLitRef (progEmit prog) (LString s)' \
   'emitLitRef (progEmit prog) l'; do
   [ "$(grep -F -- "$required_call" "$WASM_SRC" | wc -l | tr -d ' ')" -ge 1 ] || {
     echo "FAIL wasm typed string-state ratchet: missing routed call $required_call"
+    exit 1
+  }
+done
+[ "$(grep -F 'emitLitRef (progEmit prog) (LString s)' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 3 ] || {
+  echo "FAIL wasm typed string-state ratchet: incomplete string-literal routing"
+  exit 1
+}
+for required in \
+  'stringCensusProgram : CProgram' \
+  'CBind "censusString" [CClause [] (CLit (LString "census-string"))]' \
+  'let censusEvents = emitProgramGaps gapStateInput stringCensusProgram'; do
+  grep -F -- "$required" "$TYPED_ENTRY" >/dev/null || {
+    echo "FAIL wasm typed string-state ratchet: dedicated string census is absent"
     exit 1
   }
 done
@@ -498,12 +542,30 @@ for string_wat in string-p1 string-u string-p2; do
     exit 1
   }
 done
-STRING_P_RESULT="$($NODE "$RUNJS" "$WORK/string-p1.wasm" 2>"$WORK/string-p1.run.err")"
+if ! STRING_P_RESULT="$($NODE "$RUNJS" "$WORK/string-p1.wasm" 2>"$WORK/string-p1.run.err")"; then
+  echo "FAIL wasm typed string-state lifecycle: strict P execution failed"
+  cat "$WORK/string-p1.run.err"
+  exit 1
+fi
+[ ! -s "$WORK/string-p1.run.err" ] || {
+  echo "FAIL wasm typed string-state lifecycle: strict P wrote stderr"
+  cat "$WORK/string-p1.run.err"
+  exit 1
+}
 [ "$STRING_P_RESULT" = "71" ] || {
   echo "FAIL wasm typed string-state lifecycle: strict P output was $STRING_P_RESULT"
   exit 1
 }
-STRING_U_RESULT="$($NODE "$RUNJS" "$WORK/string-u.wasm" 2>"$WORK/string-u.run.err")"
+if ! STRING_U_RESULT="$($NODE "$RUNJS" "$WORK/string-u.wasm" 2>"$WORK/string-u.run.err")"; then
+  echo "FAIL wasm typed string-state lifecycle: record U execution failed"
+  cat "$WORK/string-u.run.err"
+  exit 1
+fi
+[ ! -s "$WORK/string-u.run.err" ] || {
+  echo "FAIL wasm typed string-state lifecycle: record U wrote stderr"
+  cat "$WORK/string-u.run.err"
+  exit 1
+}
 [ "$STRING_U_RESULT" = "82" ] || {
   echo "FAIL wasm typed string-state lifecycle: record U output was $STRING_U_RESULT"
   exit 1

@@ -214,7 +214,7 @@ reemitStringState _ =
   let uProgram = typedProgram [] [] uDecls
   let p1 = emitProgram pInput pProgram
   let (u, _) = emitProgramRecord uInput uProgram
-  let censusEvents = emitProgramGaps gapStateInput gapStateProgram
+  let censusEvents = emitProgramGaps gapStateInput stringCensusProgram
   let p2 = emitProgram pInput pProgram
   let _ = printCapture "STRING_P1" p1
   let _ = printCapture "STRING_RECORD_U" u
@@ -255,6 +255,17 @@ gapStateProgram = CProgram
     CBind "gapA" [CClause [] (CVar "missingGapA" AGlobal)],
     CBind "gapB" [CClause [] (CVar "missingGapB" AGlobal)],
     CBind "main" [CClause [] (CLit (LInt 0))],
+  ]
+  []
+  []
+  []
+
+stringCensusProgram : CProgram
+stringCensusProgram = CProgram
+  [
+    CBind "censusString" [CClause [] (CLit (LString "census-string"))],
+    CBind "gapA" [CClause [] (CVar "missingGapA" AGlobal)],
+    CBind "gapB" [CClause [] (CVar "missingGapB" AGlobal)],
   ]
   []
   []
