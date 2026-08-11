@@ -475,6 +475,19 @@ cmp -s "$WORK/string-p1.wat" "$WORK/string-u.wat" && {
   echo "FAIL wasm typed string-state lifecycle: P/U positive control did not differ"
   exit 1
 }
+# Check the segment namespace before parsing so duplicate or missing declarations
+# fail at this ownership assertion rather than being masked by wasm-tools.
+for string_spec in "string-p1 11" "string-u 2" "string-p2 11"; do
+  string_name="${string_spec% *}"
+  string_count="${string_spec#* }"
+  string_ids="$(awk '/^[[:space:]]*\(data \$strseg_[0-9]+ "/ { id = $0; sub(/^.*\$strseg_/, "", id); sub(/[[:space:]].*$/, "", id); print id }' "$WORK/$string_name.wat")"
+  expected_ids="$(awk -v count="$string_count" 'BEGIN { for (i = 0; i < count; i++) print i }')"
+  [ "$string_ids" = "$expected_ids" ] || {
+    echo "FAIL wasm typed string-state lifecycle: $string_name segment ids/cardinality changed"
+    printf '%s\n' "$string_ids"
+    exit 1
+  }
+done
 for string_wat in string-p1 string-u string-p2; do
   wasm-tools parse "$WORK/$string_wat.wat" -o "$WORK/$string_wat.wasm" || {
     echo "FAIL wasm typed string-state lifecycle: wasm-tools parse $string_wat"
