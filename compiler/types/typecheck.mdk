@@ -2673,6 +2673,7 @@ data DeclEnvs = DeclEnvs {
     deAllDecls : List Decl,
     deData : DataEnv,  -- A-3.2a (#1112): CONSTRUCTION ONLY, NOT LIVE — see the block above `DataEnv`
     deImpls : ImplEnv,
+    deIfaces : ClassEnv,  -- A-3.3 (#1519): CONSTRUCTION ONLY, NOT LIVE — see the `CE` block above
   }
 
 -- INITIAL construction only, exactly as `freshDriverState` is: a driver that never
@@ -2685,6 +2686,7 @@ emptyDeclEnvs = DeclEnvs {
   deAllDecls = [],
   deData = emptyDataEnv,
   deImpls = emptyImplEnv,
+  deIfaces = emptyClassEnv,
 }
 
 -- Build the envelope from the prelude + the loader's dependency-first module list.
@@ -2715,6 +2717,10 @@ buildDeclEnvs coreDecls modules =
     -- If a later unit gives either builder a side effect, that stops being true
     -- and this comment is the thing it invalidates.
     deImpls = buildImplEnv mods,
+    -- #1519 A-3.3: `CE`, same shape as `deImpls` immediately above — a pure fold
+    -- over the SAME `mods` (per-module rows, ordinal-tagged), composing rather
+    -- than interacting with the other two initialisers for the identical reason.
+    deIfaces = buildClassEnv mods,
   }
 
 declEnvModulesFrom : Int -> List (String, List Decl) -> List DeclEnvModule
@@ -3507,6 +3513,360 @@ ieProbeEnv = buildImplEnv
 ieUnivConcreteOf : ImplUniverse -> MultiRegistry (List Ty, List Require)
 ieUnivConcreteOf (ImplUniverse conc _ _) = conc
 -- ═══ #1112 A-3.4: IE-BLOCK-END ═════════════════════════════════════════════════
+
+-- ── #1519 (ARCH A-3.3): THE `CE` REGISTRY ────────────────────────────────────
+-- §2 K: *"CE (class environment): interfaces with declared parameter kinds …,
+-- method schemes, superclass predicates …"*  Built once, whole-graph, inside
+-- `buildDeclEnvs`; every read filters through `declEnvVisibleAt` (A-3.6 deletes
+-- its body).
+--
+-- 🚨 SYNTACTIC, NOT ELABORATED — the Step 0 ruling this unit inherits rather
+-- than re-derives: *"CE's declaration environments hold the DECLARATION as
+-- declared, not as elaborated.  CE stores raw Ty/Variant/Field keyed by
+-- identity.  Elaboration to Scheme/Mono/RecordInfo stays where it is today."*
+-- Re-confirmed against this tree before writing a line of this block: every
+-- LIVE CE-side table already stores raw `Ty` —
+-- `universeMethodIfaceParamsRef : Ref (OrdMap (IfaceRef, List String, Ty, List
+-- (String, List Kind)))`, `universeMethodIdentsRef`, `universeIfaceRequiredRef
+-- : Ref (Registry (List String))`, `universeIfaceParamKinds : Ref (List
+-- (RegKey, List Kind))`, `universeRegisteredIfacesRef : Ref (OrdMap Unit)`,
+-- `superDeclsRef : Ref (List Decl)` — zero `Scheme`, zero `Mono`, zero
+-- `RecordInfo`.  `ifaceMethodTy` (§ elsewhere in this file) returns raw `Ty`
+-- and every use site elaborates on demand via `fromAstTypeE`.  This
+-- construction mirrors that exactly, and hits the identical wall A-3.2a's
+-- `DataEnv` construction hit: elaborating a method signature would call
+-- `fromAstTypeE`/`registerRecordInfoKeyed`-shaped machinery, which mints fresh
+-- tyvar ids off the global counter and mutates `perRun` refs — machinery that
+-- does not exist yet in the driver PREAMBLE, before the per-module walk that
+-- owns that counter.  So this index is deliberately SYNTACTIC: raw `Ty`/
+-- `Super`/`Kind` values, keyed by identity, no elaboration performed — see the
+-- "WHY NOT JUST CALL registerAllData/…" block above `DataEnv` for the full
+-- derivation, which applies here unchanged.
+--
+-- EXCLUDES `universeMethodDispatchIdxRef` and `universeIfaceMethodsRef` —
+-- lifted bare and unchanged, NEVER keyed here (#1112's decomposition row,
+-- re-grounded in #1519's own bookkeeping comment 2026-08-11 after #1353
+-- closed): `universeIfaceMethodsRef` belongs to #1354's method-namespace unit
+-- (OPEN) — its own inventory table names this table *"never touched by any
+-- unit"*, and the S1-NS ruling (#1353, ADOPTED 2026-08-08) is implemented as a
+-- FILTER AT THE READ (`nameableIfaceShadows` narrowing the graph-global set
+-- per module), not a re-keying of the table, so keying it here would build a
+-- second, differently-shaped answer to a question that already has one live
+-- decision point.  `universeMethodDispatchIdxRef` is #1351's (OPEN S0), and
+-- `TYPECHECK-TARGET-ARCHITECTURE.md` §9 independently routes it to `IE`/
+-- RLocal-site channels, not `CE`.
+--
+-- ⚠️ `universeIfaceParamKinds` COORDINATION, named rather than silently
+-- absorbed: it is one of the FIVE tables `loadDataUniverse`/`storeDataUniverse`
+-- marshal in lockstep (recordByName, fieldOwners, dataParamKinds,
+-- ifaceParamKinds, aliasTable) — a `DataEnv`-shaped neighbourhood by
+-- CO-LOCATION — but its CONTENT is interface parameter kinds, which is `CE`'s
+-- per §2 K ("declared parameter kinds"), not `DataEnv`'s.  This unit's
+-- `ceParamKinds` (below) is the syntactic construction of that same content,
+-- built the identical way (`declGradedScope`/`ifaceParamKindsOf`, pure,
+-- no ref reads).  This PR does NOT retire or touch the live
+-- `universeIfaceParamKinds` ref — construction only, zero readers, same bar as
+-- `deData`/`deImpls`.  Posted in writing on #1519 and #1512: A-3.2b's
+-- retirement of the `loadDataUniverse`/`storeDataUniverse` ladder should
+-- EXCLUDE `universeIfaceParamKinds` from what it retires under `DataEnv`'s
+-- name — its eventual retirement is this unit's (`CE`'s) to route, on whatever
+-- PR first gives `ceParamKinds` a live reader, not A-3.2b's to fold in by
+-- accident of which function happens to marshal it today.
+--
+-- ZERO READERS, deliberately (construction only, per #1519's bar) — nothing
+-- outside this block populates or reads `deIfaces`.  "Byte-identical" is
+-- therefore WEAK evidence for this PR, exactly as A-3.2a's own header says of
+-- `deData`: nothing reads the new field, so nothing could have moved a
+-- judgment even if the construction were wrong.  The load-bearing checks are
+-- the doctests below, which exercise the fold's output directly against a
+-- discriminating two-module same-spelled-interface corpus (mirroring `IE`'s
+-- `ieProbeEnv`), not the differential gates.
+--
+-- 🚨 POSITIONAL, NOT A NAMED RECORD — the SAME measured emitter constraint
+-- `ImplRow` documents above, not a style echo of it.  `CeRow`'s construction
+-- site (`buildDeclEnvs` → `buildClassEnv`) is reachable from every driver
+-- entry exactly as `implRowsOf`'s is, while a named-record spelling's field
+-- ACCESS can still be linked into an entry whose construction was DCE'd (the
+-- `ieOrd`/`wasm_emit_typed_main.mdk` panic `ImplRow`'s comment reproduces).  A
+-- positional constructor is destructured by pattern match and consults no
+-- label table, so it cannot hit this.  `ClassEnv` below KEEPS named fields,
+-- for the identical reason `ImplEnv` does: its construction site
+-- (`emptyClassEnv`) is reachable from `emptyDeclEnvs` ← `freshDriverState`,
+-- which every driver builds.
+--
+-- Fields, in order: this interface's identity key (`ifaceTabKey` lifted
+-- through `regKeyOfTab`, the same mint `oblIfaceKeys`/`ifaceSlotKey` use);
+-- the declaring module's ordinal (A-3.1's `demOrd`, the scope); the interface
+-- reference (spelling + identity); its declared type parameters, by name and
+-- position; its methods as `(name, raw Ty, graded scope)` triples — the scope
+-- is `declGradedScope typarams methods`, computed ONCE per interface exactly
+-- as `insertMethodIfaceParams`/`insertMethodIdents` already do, not re-derived
+-- per method; its raw `Super` list, unelaborated; and its per-typaram kind
+-- signature, POSITIONAL with `ceTyparams` — `ifaceParamKindsOf p methods` for
+-- each `p`, the SAME pure computation `registerIfaceParamKindsGo` performs
+-- per slot, so a graded interface's `KRow` inference cannot drift between the
+-- live universe and this table.
+--
+-- ⚠️ NO `ceLoc` FIELD, and that is a deliberate departure from a literal
+-- reading of this unit's row sketch, for the SAME reason `ImplRow` carries no
+-- `ieLoc`: `DInterface` has no `Loc` field at all
+-- (`compiler/frontend/ast.mdk`'s `DInterface` record — `pub`/`def`/`name`/
+-- `typarams`/`supers`/`methods`/`ifaceOrigin`, nothing carrying a source
+-- position), so a `ceLoc : Option Loc` here could only ever be `None`.  A
+-- field that is structurally always-`None` is worse than an absent one — it
+-- reads as available to a consumer and is not.  Whoever needs it must first
+-- give `DInterface` a location, which is its own unit.
+data CeRow =
+  | CeRow RegKey Int IfaceRef (List String) (List (String, Ty, List (String, List Kind))) (List Super) (List (List Kind))
+
+ceRowKey : CeRow -> RegKey
+ceRowKey (CeRow k _ _ _ _ _ _) = k
+
+ceRowOrd : CeRow -> Int
+ceRowOrd (CeRow _ o _ _ _ _ _) = o
+
+ceRowIface : CeRow -> IfaceRef
+ceRowIface (CeRow _ _ ir _ _ _ _) = ir
+
+ceRowTyparams : CeRow -> List String
+ceRowTyparams (CeRow _ _ _ tp _ _ _) = tp
+
+ceRowMethods : CeRow -> List (String, Ty, List (String, List Kind))
+ceRowMethods (CeRow _ _ _ _ ms _ _) = ms
+
+ceRowSupers : CeRow -> List Super
+ceRowSupers (CeRow _ _ _ _ _ sups _) = sups
+
+ceRowParamKinds : CeRow -> List (List Kind)
+ceRowParamKinds (CeRow _ _ _ _ _ _ pk) = pk
+
+-- The registry.  `ceRows` is the population in build order (ordinal order
+-- across modules, declaration order within one); `ceByKey` is the single
+-- identity-keyed index — CE's read shape is "what does interface I mean
+-- here", a single-row lookup, not IE's "every impl matching a goal"
+-- candidate-set collection, so ONE `Registry` (not a `MultiRegistry`)
+-- suffices: an interface identity resolves to exactly one declaration.
+data ClassEnv = ClassEnv { ceRows : List CeRow, ceByKey : Registry CeRow }
+
+emptyClassEnv : ClassEnv
+emptyClassEnv = ClassEnv { ceRows = [], ceByKey = regEmpty }
+
+-- Fold the envelope's modules, in ordinal order, into one whole-graph
+-- registry.  Builds in REVERSE and reverses once at the end — unlike
+-- `ieInsertRow`'s per-row `++`, which that block's own comment records as an
+-- OWED O(rows²) cost — because this is new code with no byte-identical
+-- history to preserve, so there is no reason to start it with the same
+-- quadratic shape `compiler/AGENTS.md` names as this tree's most expensive.
+buildClassEnv : List DeclEnvModule -> ClassEnv
+buildClassEnv mods = classEnvFinish (buildClassEnvGo mods emptyClassEnv)
+
+classEnvFinish : ClassEnv -> ClassEnv
+classEnvFinish env = ClassEnv { env | ceRows = reverseL env.ceRows }
+
+buildClassEnvGo : List DeclEnvModule -> ClassEnv -> ClassEnv
+buildClassEnvGo [] env = env
+buildClassEnvGo (m::rest) env =
+  let rows = classEnvRowsOf m.demOrd (classEnvDeclFacts m.demDecls)
+  buildClassEnvGo rest (ceAddRows rows env)
+
+-- One interface decl's raw facts: name, typarams, methods, supers, identity.
+classEnvDeclFacts : List Decl -> List (String, List String, List IfaceMethod, List Super, TyConOrigin)
+classEnvDeclFacts prog = flatMap classEnvDeclFact prog
+
+classEnvDeclFact : Decl -> List (String, List String, List IfaceMethod, List Super, TyConOrigin)
+classEnvDeclFact (DAttrib _ d) = classEnvDeclFact d
+classEnvDeclFact (DInterface { name, typarams, supers, methods, ifaceOrigin, ... }) = [(name, typarams, methods, supers, ifaceOrigin)]
+classEnvDeclFact _ = []
+
+classEnvRowsOf : Int -> List (String, List String, List IfaceMethod, List Super, TyConOrigin) -> List CeRow
+classEnvRowsOf _ [] = []
+classEnvRowsOf ord ((name, typarams, methods, supers, o)::rest) =
+  let scope = declGradedScope typarams methods
+  let row = CeRow (regKeyOfTab (ifaceTabKey o name)) ord IfaceRef {
+    irName = name,
+    irOrigin = o,
+  } typarams (map (ceMethodOf scope) methods) supers (map (p => ifaceParamKindsOf p methods) typarams)
+  row :: classEnvRowsOf ord rest
+
+ceMethodOf : List (String, List Kind) -> IfaceMethod -> (String, Ty, List (String, List Kind))
+ceMethodOf scope (IfaceMethod n ty _) = (n, ty, scope)
+
+ceAddRows : List CeRow -> ClassEnv -> ClassEnv
+ceAddRows [] env = env
+ceAddRows (r::rest) env = ceAddRows rest (ceInsertRow r env)
+
+ceInsertRow : CeRow -> ClassEnv -> ClassEnv
+ceInsertRow r env = ClassEnv { env | ceRows = r::env.ceRows, ceByKey = regInsertK (ceRowKey r) r env.ceByKey }
+
+-- 🚨 THE ONE `CE` READ ACCESSOR — the ordinal-filtered lookup routed through
+-- `declEnvVisibleAt`, exactly as `ieUniverseAt`/`ieTriplesUpTo` are the one
+-- read path for `IE`.  Looks up by IDENTITY rather than collecting a
+-- candidate set, per the shape argued at `ClassEnv` above.  NO CALLER TODAY —
+-- construction only, per this unit's bar.
+ceLookupAt : RegKey -> Int -> ClassEnv -> Option CeRow
+ceLookupAt key cur env = match regLookupK key env.ceByKey
+  None => None
+  Some r => if declEnvVisibleAt cur (ceRowOrd r) then Some r else None
+
+-- ── doctests — a discriminating two-module, same-spelled-interface corpus ───
+-- Mirrors `IE`'s `ieProbeEnv` shape deliberately: `AGENTS.md` demands a program
+-- -global table's key be PROVEN scoped, and the proof is the adversarial case —
+-- TWO UNRELATED MODULES declaring the SAME-SPELLED interface `Same`, each with
+-- DIFFERENT content, so a bare-name (last-write-wins) construction would
+-- collapse them and every assertion below would read the WRONG module's
+-- content.  Every assertion here is fail-capable in that direction.
+ceMethodFoo : IfaceMethod
+ceMethodFoo =
+  IfaceMethod "foo" (TyFun (TyVar "a") (tyConBuiltin "Int" None)) None
+
+ceMethodBar : IfaceMethod
+ceMethodBar =
+  IfaceMethod "bar" (TyFun (TyVar "a") (tyConBuiltin "String" None)) None
+
+ceSuperEq : Super
+ceSuperEq = Super {
+  superHead = "Eq",
+  superParams = ["a"],
+  superOrigin = OriginModule "core",
+}
+
+ceSameDeclIn : String -> List IfaceMethod -> Decl
+ceSameDeclIn m methods = DInterface {
+  pub = True,
+  def = False,
+  name = "Same",
+  typarams = ["a"],
+  supers = [ceSuperEq],
+  methods = methods,
+  ifaceOrigin = OriginModule m,
+}
+
+-- ordinal 0 = amod, ordinal 1 = zmod; no import edge between them, exactly as
+-- `ieProbeEnv` needs none — the point of the shape is that identity alone,
+-- not any resolve-level relationship, keeps the two rows apart.
+ceProbeEnv : ClassEnv
+ceProbeEnv = buildClassEnv
+  [
+    DeclEnvModule {
+      demOrd = 0,
+      demId = "amod",
+      demDecls = [ceSameDeclIn "amod" [ceMethodFoo]],
+    },
+    DeclEnvModule {
+      demOrd = 1,
+      demId = "zmod",
+      demDecls = [ceSameDeclIn "zmod" [ceMethodBar]],
+    },
+  ]
+
+ceProbeKey : String -> RegKey
+ceProbeKey m = regKeyOfTab (ifaceTabKey (OriginModule m) "Same")
+
+ceRowMethodNames : CeRow -> List String
+ceRowMethodNames r = map ceMethodName (ceRowMethods r)
+
+ceMethodName : (String, Ty, List (String, List Kind)) -> String
+ceMethodName (n, _, _) = n
+
+ceSuperHead : Super -> String
+ceSuperHead (Super { superHead = h, ... }) = h
+
+-- lookup-and-project in one call, so the doctest lines below stay one
+-- expression each (this file's doctest extraction is single-line-per-`>`).
+ceRowMethodNamesAt : String -> Int -> ClassEnv -> List String
+ceRowMethodNamesAt m cur env = match ceLookupAt (ceProbeKey m) cur env
+  None => []
+  Some r => ceRowMethodNames r
+
+ceRowTyparamsAt : String -> Int -> ClassEnv -> List String
+ceRowTyparamsAt m cur env = match ceLookupAt (ceProbeKey m) cur env
+  None => []
+  Some r => ceRowTyparams r
+
+ceRowSuperHeadsAt : String -> Int -> ClassEnv -> List String
+ceRowSuperHeadsAt m cur env = match ceLookupAt (ceProbeKey m) cur env
+  None => []
+  Some r => map ceSuperHead (ceRowSupers r)
+
+ceRowIfaceNameAt : String -> Int -> ClassEnv -> String
+ceRowIfaceNameAt m cur env = match ceLookupAt (ceProbeKey m) cur env
+  None => ""
+  Some r => (ceRowIface r).irName
+
+-- 1. WHOLE-GRAPH POPULATION: two rows, build order.
+-- > listLen ceProbeEnv.ceRows
+-- 2
+
+-- 2. THE INTERFACE HALF IS A SCOPE — amod's identity-keyed lookup returns
+--    amod's OWN row (method "foo"), never zmod's (method "bar").  Under a
+--    bare-name key this would read ["bar"] for BOTH modules, since zmod is
+--    registered last.
+-- > ceRowMethodNamesAt "amod" 1 ceProbeEnv
+-- ["foo"]
+-- > ceRowMethodNamesAt "zmod" 1 ceProbeEnv
+-- ["bar"]
+
+-- 3. TABLE SCOPE — the ordinal, applied through `declEnvVisibleAt` and
+--    nothing else.  At ordinal 0 only amod is visible; zmod's row (declared
+--    at ordinal 1) is not yet in scope.  This is the filter A-3.6 deletes.
+-- > ceRowMethodNamesAt "zmod" 0 ceProbeEnv
+-- []
+-- > ceRowMethodNamesAt "zmod" 1 ceProbeEnv
+-- ["bar"]
+
+-- 4. TYPARAMS and SUPERS are carried unelaborated, per-row, per-module (not
+--    shared or collapsed either).
+-- > ceRowTyparamsAt "amod" 1 ceProbeEnv
+-- ["a"]
+-- > ceRowSuperHeadsAt "zmod" 1 ceProbeEnv
+-- ["Eq"]
+-- > ceRowIfaceNameAt "zmod" 1 ceProbeEnv
+-- "Same"
+
+-- ── a graded fixture: KRow inference must match `registerIfaceParamKindsGo` ──
+-- `run : f e a -> <e> a` — typaram `f`'s slot-0 argument is the bare tyvar
+-- `e`, which the SAME signature's return type also uses in an effect-tail
+-- position (`<e> a`), so slot 0 must infer `KRow` and slot 1 (`a`, never a
+-- tail) must infer `KType` — the identical inference `ifaceParamKindsOf`
+-- performs for the live `universeIfaceParamKinds` table.
+ceGradedMethod : IfaceMethod
+ceGradedMethod =
+  IfaceMethod
+    "run"
+    (TyFun
+      (TyApp (TyApp (TyVar "f") (TyVar "e")) (TyVar "a"))
+      (TyEffect [] (Some "e") (TyVar "a")))
+    None
+
+ceGradedIface : Decl
+ceGradedIface = DInterface {
+  pub = True,
+  def = False,
+  name = "Async",
+  typarams = ["f"],
+  supers = [],
+  methods = [ceGradedMethod],
+  ifaceOrigin = OriginModule "gmod",
+}
+
+ceGradedEnv : ClassEnv
+ceGradedEnv = buildClassEnv
+  [DeclEnvModule { demOrd = 0, demId = "gmod", demDecls = [ceGradedIface] }]
+
+kindTag : Kind -> String
+kindTag KType = "T"
+kindTag KRow = "R"
+
+ceGradedParamKindTags : ClassEnv -> List (List String)
+ceGradedParamKindTags env = match ceLookupAt (regKeyOfTab (ifaceTabKey (OriginModule "gmod") "Async")) 0 env
+  None => []
+  Some r => map (ks => map kindTag ks) (ceRowParamKinds r)
+
+-- 5. GRADED KIND INFERENCE, positional with `ceTyparams` (here `["f"]`):
+--    slot 0 (f's first argument, `e`) is `KRow`; slot 1 (`a`) is `KType`.
+-- > ceGradedParamKindTags ceGradedEnv
+-- [["R", "T"]]
+-- ── #1519 A-3.3: CE-BLOCK-END ─────────────────────────────────────────────────
 
 -- #158 PR5 / #176 closure: the ~18 RESIDUAL survivor Refs — governed until now by
 -- per-ref prose and clustered in NEITHER `resetState` (PerRun/Toggles) NOR
