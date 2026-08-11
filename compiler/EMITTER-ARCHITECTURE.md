@@ -1,6 +1,6 @@
 # Emitter Architecture - the derived current map
 
-**Status:** CURRENT - source-derived LLVM/WasmGC emitter map through X-W.H2b.1 at `2cbd85c8`.
+**Status:** CURRENT - source-derived LLVM/WasmGC emitter map through X-W.H2b.2.
 This is a description of the current
 implementation, not the target design. The target is
 [`EMITTER-TARGET-ARCHITECTURE.md`](EMITTER-TARGET-ARCHITECTURE.md), and the
@@ -140,10 +140,10 @@ or omitted values rather than being equalized. Declaration-order first-match
 indexes are built once in the input.
 
 The old Wasm install hooks and the shared `emit_support` method-metadata Refs are
-gone. A fresh private `WasmEmit` now owns gap mode, event logging, and binding
-attribution for each strict, record, or census invocation. Other physical mutable
-state, feature flags, caches, counters, and buffers remain for X-W.H2. This does
-not complete #1407.
+gone. X-W.H2b.1 moved gap mode, event logging, and binding attribution into a
+fresh private `WasmEmit`; X-W.H2b.2 adds passive string-segment state for each
+strict, record, or census invocation. Forty-three ambient cells remain; H2b and
+#1407 remain open.
 
 ### 3.3 Per-program derived indexes
 
@@ -228,8 +228,9 @@ pristine state. Within one process:
 
 - LLVM constructs a fresh `Emit` record but also resets/installs external refs;
 - Wasm creates a fresh `WasmEmit` for strict, record, and gap-census calls, while
-  manually resetting the remaining feature flags, lifted-function tables,
-  strings, and lambdas at `emitProgram` entry;
+  manually resetting the remaining feature flags, lifted-function tables, and
+  lambdas at `emitProgram` entry; passive string segments are fresh with the
+  `WasmEmit` instead;
 - gap-census paths own a separate gap lifecycle but still duplicate the remaining
   physical setup;
 - X-W.H2 still owns the remaining physical-state lifecycle.

@@ -307,11 +307,18 @@ data WasmEmit =
       gapMode : WGapMode,
       gapLog : Ref (List String),
       curGapBind : Ref String,
+      stringSegments : Ref (List (Int, List Int)),
+      nextStringSegmentId : Ref Int,
     }
 
 freshWasmEmit : WGapMode -> WasmEmit
-freshWasmEmit mode =
-  WasmEmit { gapMode = mode, gapLog = Ref [], curGapBind = Ref "?" }
+freshWasmEmit mode = WasmEmit {
+  gapMode = mode,
+  gapLog = Ref [],
+  curGapBind = Ref "?",
+  stringSegments = Ref [],
+  nextStringSegmentId = Ref 0,
+}
 
 -- Declaration-derived semantic input. Raw lists retain table order where a full
 -- table is required; indexes preserve lookupAssoc's first-match result.
@@ -650,22 +657,15 @@ funcRefsSetW = Ref omEmpty
 -- byte-level IO externs (putStr/putStrLn/…), or a String-returning extern
 -- (intToString/charToStr/stringConcat/…) — any of which forces the §3.3 `$str`
 -- aggregate + the byte-write runtime into the module (and ref-mode, since a String
--- is a boxed (ref eq) value).  `strSegsRef` accumulates the passive data segments
--- for string literals (one `(data $strseg_N "…")` per literal OCCURRENCE — #383:
+-- is a boxed (ref eq) value).  `WasmEmit.stringSegments` accumulates the passive data
+-- segments for string literals (one `(data $strseg_N "…")` per literal OCCURRENCE — #383:
 -- `freshStrSeg` allocates a fresh segment id on every call with no dedup by content,
 -- so the SAME literal appearing twice in source gets two segments; "per distinct
--- literal" was aspirational, not what `freshStrSeg`/`emitLitRef (LString s)` (~line
--- 4201) actually do — init'd via `array.new_data`, the §11-preferred non-const-array
--- scheme).  Both reset per program in `emitProgram`.
+-- literal" was aspirational, not what `freshStrSeg`/`emitLitRef emit (LString s)`
+-- actually do — init'd via `array.new_data`, the §11-preferred non-const-array
+-- scheme). Segment state belongs to each fresh `WasmEmit`; `useStrRef` remains ambient.
 useStrRef : Ref Bool
 useStrRef = Ref False
-
--- each entry: (segment index, the byte list of that literal).  Drained at module end.
-strSegsRef : Ref (List (Int, List Int))
-strSegsRef = Ref []
-
-strSegIdRef : Ref Int
-strSegIdRef = Ref 0
 
 curBindRef : Ref String
 curBindRef = Ref "?"
@@ -1011,11 +1011,11 @@ containsInt x (y::ys) = x == y || containsInt x ys
 -- undeclared anonymous shape, or a probe with empty input, still uses the scan.
 
 -- intern a literal's bytes as a fresh passive data segment; returns its index.
-freshStrSeg : List Int -> Int
-freshStrSeg bytes =
-  let i = strSegIdRef.value
-  let _ = setRef strSegIdRef (i + 1)
-  let _ = setRef strSegsRef ((i, bytes)::strSegsRef.value)
+freshStrSeg : WasmEmit -> List Int -> Int
+freshStrSeg emit bytes =
+  let i = emit.nextStringSegmentId.value
+  let _ = setRef emit.nextStringSegmentId (i + 1)
+  let _ = setRef emit.stringSegments ((i, bytes)::emit.stringSegments.value)
   i
 
 freshLamId : Unit -> Int
@@ -1068,8 +1068,6 @@ emitProgramWith emit input (CProgram groups ctorArs ctorTypes impls) =
   let _ = setRef funcRefsRef []
   let _ = setRef funcRefsSetW omEmpty
   let _ = setRef useStrRef (programUsesStr groups)
-  let _ = setRef strSegsRef []
-  let _ = setRef strSegIdRef 0
   -- W7: scan the program for collection usage (gates type-section decls + forces
   -- ref-mode — every collection is a boxed (ref eq) value).
   let _ = setRef useListRef False
@@ -1144,8 +1142,6 @@ emitProgramGaps input (CProgram groups ctorArs ctorTypes impls) =
   let _ = setRef funcRefsRef []
   let _ = setRef funcRefsSetW omEmpty
   let _ = setRef useStrRef (programUsesStr groups)
-  let _ = setRef strSegsRef []
-  let _ = setRef strSegIdRef 0
   let _ = setRef useListRef False
   let _ = setRef useArrayRef False
   let _ = setRef useRefBoxRef False
@@ -2472,7 +2468,7 @@ emitRefProgram prog groups =
   let elemDecl = if progUseClos prog then [emitElemDeclare ()] else []
   -- W6: the byte-write IO runtime (int/bool printers always; the $str-dependent
   -- string runtime only when strings are used) + the string-literal passive data
-  -- segments (drained from strSegsRef, in segment-index order).
+  -- segments (drained from this Prog's WasmEmit, in segment-index order).
   let ioRt = ioRuntimeLines ++ (if useStrRef.value then ioStrRuntimeLines else [])
   -- W8: the pure-WAT string LEAF ops, stderr runtime, RNG, and hashers — each gated
   -- by its use ref.  strConcat needs the W7 cons list types ($C_Cons), so it is gated
@@ -2524,11 +2520,11 @@ emitRefProgram prog groups =
   -- stage-D: the byte-clean file I/O bodies ($mdk_read_file_bytes_io / _write_).  Needs
   -- ioHostRt in scope ($mdk_push_path / $mdk_io_result_to_str) + the $arr rep.
   let fileBytesRt = if useFileBytesRef.value then fileBytesRuntimeLines else []
-  let dataSegs = emitDataSegs ()
+  let dataSegs = emitDataSegs (progEmit prog)
   -- B5: the stderr byte-write import — for ePutStr (useEPutRef) OR a coded runtime trap
   -- (useTrapImport, set during the body emit above).  Emitted ONCE.  This binding is
   -- forced after all body-emit bindings (strict `let`), so useTrapImport is visible;
-  -- `dataSegs` above already relies on that same after-body ordering (strSegsRef).
+  -- `dataSegs` above already relies on that same after-body ordering.
   let trapImport = if useEPutRef.value || useTrapImport.value then stderrByteImportLines else []
   joinNl (header ++ typeSection ++ imports ++ trapImport ++ elemDecl ++ globals
             ++ fns ++ implFns ++ defaultDefs ++ lifted ++ applyRt ++ ioRt ++ strLeafRt ++ strConcatRt ++ appendRt ++ valueCmpRt ++ valueArithRt
@@ -2541,9 +2537,9 @@ emitRefProgram prog groups =
 -- literal OCCURRENCE (#383: no content-dedup, see the `useStrRef` section above for
 -- the correction), emitted in segment-index order.  `array.new_data` reads from
 -- these (the §11-preferred non-const-array init scheme; no active memory needed).
-emitDataSegs : Unit -> List String
-emitDataSegs _ =
-  let segs = sortSegsByIdx (reverseL strSegsRef.value)
+emitDataSegs : WasmEmit -> List String
+emitDataSegs emit =
+  let segs = sortSegsByIdx (reverseL emit.stringSegments.value)
   map oneDataSeg segs
 
 oneDataSeg : (Int, List Int) -> String
@@ -3372,7 +3368,7 @@ patTestBind prog (PLit (LString s)) occ clLabel env =
   let _ = setRef useStrLeafRef True
   let _ = setRef useStrRef True
   (
-    occ ++ ["ref.cast (ref $str)"] ++ emitLitRef (LString s) ++ cmpSuffix,
+    occ ++ ["ref.cast (ref $str)"] ++ emitLitRef (progEmit prog) (LString s) ++ cmpSuffix,
     [],
     env,
   )
@@ -4832,7 +4828,7 @@ posMod n m = (n % m + m) % m
 -- the body's max depth (`maxRefDepth`).  No mutable counter needed → re-derivable.
 
 emitRefExpr : Prog -> List String -> Int -> CExpr -> List String
-emitRefExpr prog env d (CLit l) = emitLitRef l
+emitRefExpr prog env d (CLit l) = emitLitRef (progEmit prog) l
 emitRefExpr prog env d (CVar x _) = emitVarRef prog env d x
 emitRefExpr prog env d (CBinPrim op l r tag) = emitBinRef prog env d op l r tag
 emitRefExpr prog env d (CUnOp op x) = emitUnRef prog env d op x
@@ -4875,14 +4871,14 @@ emitRefExpr prog env d other =
 
 -- a scalar literal → an i31 immediate.  Int: ref.i31 of the value.  Bool: 1/0.
 -- Unit: i31 0 (a placeholder immediate; Unit is never inspected in this slice).
-emitLitRef : Lit -> List String
-emitLitRef (LInt n) =
+emitLitRef : WasmEmit -> Lit -> List String
+emitLitRef _ (LInt n) =
   -- layer-17 §2.1: in-range Ints stay i31 immediates (byte-identical to before);
   -- literals outside ±2^30 box into $boxint via the i64 seam so they don't truncate.
   if n >= (0 - 1073741824) && n < 1073741824 then ["i32.const " ++ intToString n, "ref.i31"]
   else ["i64.const " ++ intToString n, "call $mdk_box_int"]
-emitLitRef (LBool b) = [if b then "i32.const 1" else "i32.const 0", "ref.i31"]
-emitLitRef LUnit = ["i32.const 0", "ref.i31"]
+emitLitRef _ (LBool b) = [if b then "i32.const 1" else "i32.const 0", "ref.i31"]
+emitLitRef _ LUnit = ["i32.const 0", "ref.i31"]
 -- W8b: a Float literal in ref-mode boxes the double into a `(struct $float (f64))`.
 -- The f64.const text is `floatToString f` — the SAME rendering (shortest-round-trip
 -- since #57, NOT `%.12g`) that the LLVM oracle bakes into its IR const, so clang and
@@ -4891,17 +4887,17 @@ emitLitRef LUnit = ["i32.const 0", "ref.i31"]
 -- as TWO FLAT instructions (not the folded `struct.new $float (f64.const …)`) so it
 -- composes with the surrounding flat instruction stream (a folded form mid-stream breaks
 -- wasm-tools' stack tracking).
-emitLitRef (LFloat f) = ["f64.const " ++ floatToString f, "struct.new $float"]
+emitLitRef _ (LFloat f) = ["f64.const " ++ floatToString f, "struct.new $float"]
 -- W6: a String literal is a §3.3 `$str` boxed value.  Its UTF-8 bytes go in a
 -- passive data segment (the §11-preferred non-const-array init), read at run time by
 -- `array.new_data`; the cached cp_count is computed at emit time (UTF-8 codepoint
 -- count == source Char count).  Stack: push cp_count (i32), build the byte array via
 -- array.new_data, then struct.new $str.
-emitLitRef (LString s) =
+emitLitRef emit (LString s) =
   let bytes = strBytesW s
   let cpc = stringLength s
   let n = listLen bytes
-  let seg = freshStrSeg bytes
+  let seg = freshStrSeg emit bytes
   [
     "i32.const " ++ intToString cpc,
     "i32.const 0",
@@ -4912,7 +4908,7 @@ emitLitRef (LString s) =
 -- W6: a Char literal is its Unicode codepoint as an i31 immediate (matching the
 -- native rep: a Char is a tagged codepoint, not a boxed string).  `LChar` carries a
 -- one-char String, so take the codepoint of its sole char (peer to llvm_emit).
-emitLitRef (LChar c) = [
+emitLitRef _ (LChar c) = [
   "i32.const " ++ intToString (charCode (arrayGetUnsafe 0 (stringToChars c))),
   "ref.i31",
 ]
@@ -7408,13 +7404,7 @@ emitLitSwitchTail prog env arity d root foc rest arms ((CTBranch (HLit (LString 
   let _ = setRef useStrSearchRef True
   let _ = setRef useStrLeafRef True
   let _ = setRef useStrRef True
-  indentBy idt (foc ++ ["ref.cast (ref $str)"] ++ emitLitRef (LString s) ++ [
-      "call $mdk_str_compare",
-      "ref.cast (ref i31)",
-      "i31.get_u",
-      "i32.const 1",
-      "i32.eq",
-    ] ++ ["if"])
+  indentBy idt (foc ++ ["ref.cast (ref $str)"] ++ emitLitRef (progEmit prog) (LString s) ++ ["call $mdk_str_compare", "ref.cast (ref i31)", "i31.get_u", "i32.const 1", "i32.eq"] ++ ["if"])
     ++ indentBy (idt + 1) (emitTreeTail prog env arity d root rest arms sub)
     ++ indentBy idt ["else"]
     ++ emitLitSwitchTail prog env arity d root foc rest arms more dft (idt + 1)
@@ -8389,13 +8379,7 @@ emitLitSwitchRef prog env d decLabel root foc rest arms ((CTBranch (HLit (LStrin
   let _ = setRef useStrSearchRef True
   let _ = setRef useStrLeafRef True
   let _ = setRef useStrRef True
-  indentBy idt (foc ++ ["ref.cast (ref $str)"] ++ emitLitRef (LString s) ++ [
-      "call $mdk_str_compare",
-      "ref.cast (ref i31)",
-      "i31.get_u",
-      "i32.const 1",
-      "i32.eq",
-    ] ++ ["if"])
+  indentBy idt (foc ++ ["ref.cast (ref $str)"] ++ emitLitRef (progEmit prog) (LString s) ++ ["call $mdk_str_compare", "ref.cast (ref i31)", "i31.get_u", "i32.const 1", "i32.eq"] ++ ["if"])
     ++ indentBy (idt + 1) (emitTreeRef prog env d decLabel root rest arms sub)
     ++ indentBy idt ["else"]
     ++ emitLitSwitchRef prog env d decLabel root foc rest arms more dft (idt + 1)

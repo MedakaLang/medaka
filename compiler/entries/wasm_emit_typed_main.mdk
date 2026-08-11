@@ -57,6 +57,7 @@ main = match args ()
   "--reemit-state"::runtimePath::_ => reemitState runtimePath
   "--reemit-gap-state"::_ => reemitGapState ()
   "--reemit-gap-strict"::_ => reemitGapStrict ()
+  "--reemit-string-state"::_ => reemitStringState ()
   _ => driveRuntime emit
 
 emit : List Decl -> List Decl -> List Decl -> <IO> Unit
@@ -200,6 +201,33 @@ reemitGapStrict _ =
   let _ = putStrLn "GAP_STRICT_AFTER_RECORD_CENSUS"
   putStr (emitProgram gapStateInput gapStateProgram)
 
+-- X-W.H2b.2: string segments belong to the fresh WasmEmit of each strict,
+-- record, and census call. P covers expression, clause-pattern, and tail/non-tail
+-- decision-tree string readers; U differs in both segment count and payload.
+reemitStringState : Unit -> <IO> Unit
+reemitStringState _ =
+  let pDecls = desugar (parse reemitStringStateP)
+  let uDecls = desugar (parse reemitStringStateU)
+  let pInput = typedInput [] [] pDecls
+  let uInput = typedInput [] [] uDecls
+  let pProgram = typedProgram [] [] pDecls
+  let uProgram = typedProgram [] [] uDecls
+  let p1 = emitProgram pInput pProgram
+  let (u, _) = emitProgramRecord uInput uProgram
+  let censusEvents = emitProgramGaps gapStateInput stringCensusProgram
+  let p2 = emitProgram pInput pProgram
+  let _ = printCapture "STRING_P1" p1
+  let _ = printCapture "STRING_RECORD_U" u
+  let _ = printEvents "STRING_CENSUS_EVENTS" censusEvents
+  printCapture "STRING_P2" p2
+
+reemitStringStateP : String
+reemitStringStateP = "pExpr _ = \"p-expr\"\n\npRepeat _ = \"p-expr\"\n\npClause \"p-clause\" = \"p-clause-body\"\npClause _ = \"p-clause-other\"\n\npTail x = match x\n  \"p-tail\" => \"p-tail-body\"\n  _ => \"p-tail-other\"\n\npNonTail x =\n  let y = match x\n    \"p-non-tail\" => \"p-non-tail-body\"\n    _ => \"p-non-tail-other\"\n  y\n\nmain = 71\n"
+
+reemitStringStateU : String
+reemitStringStateU =
+  "uExpr _ = \"u-expr\"\n\nuOther _ = \"u-other\"\n\nmain = 82\n"
+
 printCapture : String -> String -> <IO> Unit
 printCapture name text =
   let _ = putStrLn (name ++ "_BEGIN")
@@ -227,6 +255,17 @@ gapStateProgram = CProgram
     CBind "gapA" [CClause [] (CVar "missingGapA" AGlobal)],
     CBind "gapB" [CClause [] (CVar "missingGapB" AGlobal)],
     CBind "main" [CClause [] (CLit (LInt 0))],
+  ]
+  []
+  []
+  []
+
+stringCensusProgram : CProgram
+stringCensusProgram = CProgram
+  [
+    CBind "censusString" [CClause [] (CLit (LString "census-string"))],
+    CBind "gapA" [CClause [] (CVar "missingGapA" AGlobal)],
+    CBind "gapB" [CClause [] (CVar "missingGapB" AGlobal)],
   ]
   []
   []
