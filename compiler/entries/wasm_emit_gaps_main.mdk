@@ -23,11 +23,10 @@
 --   medaka run compiler/entries/wasm_emit_modules_main.mdk <runtime.mdk> <core.mdk> <entry.mdk> [root ...]
 --   (or, OCaml-free: the compiled binary test/bin/wasm_emit_modules_main <runtime.mdk> <core.mdk> <entry.mdk> [root ...])
 --
--- NOTE vs the LLVM modules entry: wasm_emit exposes ONE install* hook —
--- installMethodIface (W9b), feeding the method→declared-arity table wasm_emit needs
--- to eta-expand the real prelude's point-free impls.  The other llvm install* hooks
--- (installReturnsSelf / installSelfFnParams / installCtorFieldTypes / …) feed
--- llvm-specific mutable state with no wasm analogue and stay omitted.  Everything up
+-- NOTE vs the LLVM modules entry: makeWasmEmitInput carries the Wasm semantic
+-- prerequisites, including the method arity needed to eta-expand the real prelude's
+-- point-free impls. LLVM's additional returns-self, callback-position, and split-half
+-- inputs have no Wasm analogue and stay omitted. Everything up
 -- to lowerProgramEmit (loader, mangle, elaborateModules, dceFilter) is identical to
 -- the LLVM modules driver.
 
@@ -46,13 +45,7 @@ import ir.core_ir_lower.{
 }
 import backend.private_mangle.{mangleUnits}
 import ir.dce.{dceFilter}
-import backend.wasm_emit.{
-  emitProgram,
-  emitProgramGaps,
-  installMethodIface,
-  installRecFieldOrders,
-  installDeclRetTypes,
-}
+import backend.wasm_emit.{emitProgramGaps, makeWasmEmitInput}
 import entries.entry_support.{driveModules}
 
 main : <IO> Unit
@@ -69,17 +62,13 @@ runEmit runtimeDecls coreDecls modules =
   -- graph to measure every node, so keep all decls.
   let allDecls = allDecls0
   let _ = preludeReturnPosDictNames coreD allDecls ++ preludeArgPosDictNames coreD allDecls ++ constrainedSigNames allDecls
-  -- W9b: install the method → declared-interface-arity table so wasm_emit can
-  -- eta-expand the REAL prelude's point-free impls (`length = fold g 0`, `toList =
-  -- identity`, `foldMap`, `filter`) to the method's full arity — the precise
-  -- real-prelude MVP blocker.  Mirrors llvm_emit_modules_main's installMethodIface.
-  let _ = installMethodIface (methodIfaceTable allDecls)
-  -- #1513: the record field-order table, from the SAME decls that are lowered.
-  let _ = installRecFieldOrders (declaredRecordFieldOrders allDecls)
-  -- W9b: install declared return-type heads so a Unit-returning value main
-  -- (`main = println …`) suppresses its auto-print (the trailing-`0` bug).
-  let _ = installDeclRetTypes (declSigTypeNames runtimeDecls ++ declSigTypeNames allDecls)
-  let gaps = emitProgramGaps (lowerProgramEmit allDecls)
+  let input = makeWasmEmitInput
+    (methodIfaceTable allDecls)
+    (declSigTypeNames runtimeDecls ++ declSigTypeNames allDecls)
+    []
+    False
+    (declaredRecordFieldOrders allDecls)
+  let gaps = emitProgramGaps input (lowerProgramEmit allDecls)
   printGaps gaps
 
 printGaps : List String -> <IO> Unit

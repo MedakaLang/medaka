@@ -25,6 +25,8 @@
 -- dispatch nodes the emitter can lower.
 
 import frontend.ast.{Decl}
+import frontend.parser.{parse}
+import frontend.desugar.{desugar}
 import types.typecheck.{
   elaborateDict,
   constrainedSigNames,
@@ -32,21 +34,21 @@ import types.typecheck.{
   preludeArgPosDictNames,
 }
 import eval.eval.{funNamesOf, dropShadowedExp}
+import ir.core_ir.{CProgram}
 import ir.core_ir_lower.{
   lowerProgramEmit,
   declSigTypeNames,
   ctorFieldTypeNames,
   declaredRecordFieldOrders,
+  methodIfaceTable,
 }
-import backend.wasm_emit.{
-  emitProgram,
-  installDeclRetTypes,
-  installCtorFloatFields,
-  installRecFieldOrders,
-}
+import backend.wasm_emit.{WasmEmitInput, emitProgram, makeWasmEmitInput}
 import entries.entry_support.{driveRuntime}
 
-main = driveRuntime emit
+main = match args ()
+  "--reemit-input"::runtimePath::pPath::uPath::_ =>
+    reemitInput runtimePath pPath uPath
+  _ => driveRuntime emit
 
 emit : List Decl -> List Decl -> List Decl -> <IO> Unit
 emit runtimeDecls preludeDecls userDecls =
@@ -54,18 +56,64 @@ emit runtimeDecls preludeDecls userDecls =
 
 runEmit : List Decl -> List Decl -> List Decl -> String
 runEmit runtimeDecls preludeDecls userDecls =
+  emitProgram
+    (typedInput runtimeDecls preludeDecls userDecls)
+    (typedProgram runtimeDecls preludeDecls userDecls)
+
+typedInput : List Decl -> List Decl -> List Decl -> WasmEmitInput
+typedInput runtimeDecls preludeDecls userDecls =
+  let userNames = funNamesOf userDecls
+  let livePrelude = dropShadowedExp userNames preludeDecls
+  let combined = livePrelude ++ userDecls
+  makeWasmEmitInput
+    []
+    (declSigTypeNames runtimeDecls ++ declSigTypeNames combined)
+    (ctorFieldTypeNames combined)
+    False
+    (declaredRecordFieldOrders combined)
+
+typedProgram : List Decl -> List Decl -> List Decl -> CProgram
+typedProgram runtimeDecls preludeDecls userDecls =
   let userNames = funNamesOf userDecls
   let livePrelude = dropShadowedExp userNames preludeDecls
   let combined = livePrelude ++ userDecls
   let dictNames = preludeReturnPosDictNames livePrelude combined ++ preludeArgPosDictNames livePrelude combined ++ constrainedSigNames userDecls
-  -- W-SQLITE-4: install declared sig type-heads for the float-return / float-param
-  -- registries (this typed scalar entry previously installed nothing).
-  let _ = installDeclRetTypes (declSigTypeNames runtimeDecls ++ declSigTypeNames combined)
-  -- W-SQLITE-4 stage 2: install ctor/record field Float indices.
-  let _ = installCtorFloatFields (ctorFieldTypeNames combined)
-  -- #1513: the record field-ORDER table, from the SAME decls that are lowered.
-  -- The W5 gate oracle for test/wasm/diff_wasm_typed.sh; see the note in the sibling
-  -- wasm_emit_main.mdk on why a gate-only driver must seed too.
-  let _ = installRecFieldOrders (declaredRecordFieldOrders combined)
-  emitProgram
-    (lowerProgramEmit (elaborateDict runtimeDecls dictNames userNames combined))
+  lowerProgramEmit (elaborateDict runtimeDecls dictNames userNames combined)
+
+-- Same-process input-isolation harness for X-W.H1. It lowers P once, then emits
+-- that exact CProgram with P's complete input, one U-derived field at a time, and
+-- P's input again. The markers prove re-entrant isolation and that each input
+-- family affects the physical plan independently.
+reemitInput : String -> String -> String -> <IO> Unit
+reemitInput runtimePath pPath uPath = match readFile runtimePath
+  Err msg => ePutStrLn msg
+  Ok runtimeSrc => match readFile pPath
+    Err msg => ePutStrLn msg
+    Ok pSrc => match readFile uPath
+      Err msg => ePutStrLn msg
+      Ok uSrc =>
+        let runtimeDecls = desugar (parse runtimeSrc)
+        let pDecls = desugar (parse pSrc)
+        let uDecls = desugar (parse uSrc)
+        let pProgram = typedProgram runtimeDecls [] pDecls
+        let pMethods = methodIfaceTable pDecls
+        let pSigs = declSigTypeNames runtimeDecls ++ declSigTypeNames pDecls
+        let pCtors = ctorFieldTypeNames pDecls
+        let pRecords = declaredRecordFieldOrders pDecls
+        let pInput = makeWasmEmitInput pMethods pSigs pCtors False pRecords
+        let p1 = emitProgram pInput pProgram
+        let methodWat = emitProgram (makeWasmEmitInput (methodIfaceTable uDecls) pSigs pCtors False pRecords) pProgram
+        let sigWat = emitProgram (makeWasmEmitInput pMethods (declSigTypeNames runtimeDecls ++ declSigTypeNames uDecls) pCtors False pRecords) pProgram
+        let ctorWat = emitProgram (makeWasmEmitInput pMethods pSigs (ctorFieldTypeNames uDecls) False pRecords) pProgram
+        let recordWat = emitProgram (makeWasmEmitInput pMethods pSigs pCtors False (declaredRecordFieldOrders uDecls)) pProgram
+        let mainDecls = desugar (parse "data Dummy = Dummy\n\nmain = 1\n")
+        let mainProgram = typedProgram runtimeDecls [] mainDecls
+        let mainBase = emitProgram (typedInput runtimeDecls [] mainDecls) mainProgram
+        let mainWat = emitProgram (makeWasmEmitInput [] (declSigTypeNames runtimeDecls ++ declSigTypeNames mainDecls) (ctorFieldTypeNames mainDecls) True (declaredRecordFieldOrders mainDecls)) mainProgram
+        let pLast = emitProgram pInput pProgram
+        let _ = putStrLn (if p1 == pLast then "P_EQ_PLAST" else "P_NE_PLAST")
+        let _ = putStrLn (if p1 != methodWat then "P_NE_METHOD" else "P_EQ_METHOD")
+        let _ = putStrLn (if p1 != sigWat then "P_NE_SIG" else "P_EQ_SIG")
+        let _ = putStrLn (if p1 != ctorWat then "P_NE_CTOR" else "P_EQ_CTOR")
+        let _ = putStrLn (if mainBase != mainWat then "P_NE_MAIN" else "P_EQ_MAIN")
+        putStrLn (if p1 != recordWat then "P_NE_RECORD" else "P_EQ_RECORD")

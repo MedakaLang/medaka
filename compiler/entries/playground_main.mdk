@@ -116,14 +116,7 @@ import ir.core_ir_lower.{
 }
 import backend.private_mangle.{mangleUnits}
 import ir.dce.{dceFilter}
-import backend.wasm_emit.{
-  emitProgram,
-  installMethodIface,
-  installRecFieldOrders,
-  installDeclRetTypes,
-  installCtorFloatFields,
-  installMainIsFloatHint,
-}
+import backend.wasm_emit.{emitProgram, makeWasmEmitInput}
 
 -- ARG CONTRACT (Stage 3): the FIRST arg is a MODE, dispatched below.
 --   compile  <runtime> <core> <entry> [root ...]      → analyze→emit (today's behavior)
@@ -330,13 +323,8 @@ runEmit runtimeDecls coreDecls modules =
   let allDecls0 = coreD ++ flatMap snd modules2
   let allDecls = dceFilter allDecls0
   let _ = preludeReturnPosDictNames coreD allDecls ++ preludeArgPosDictNames coreD allDecls ++ constrainedSigNames allDecls
-  let _ = installMethodIface (methodIfaceTable allDecls)
-  -- #1513: the record field-order table, from the SAME decls that are lowered.
-  let _ = installRecFieldOrders (declaredRecordFieldOrders allDecls)
-  let _ = installDeclRetTypes (declSigTypeNames runtimeDecls ++ declSigTypeNames allDecls)
-  let _ = installCtorFloatFields (ctorFieldTypeNames allDecls)
-  let _ = installMainIsFloatHint (mainTypeIsFloat ())
-  putStr (emitProgram (lowerProgramEmit allDecls))
+  let input = makeWasmEmitInput (methodIfaceTable allDecls) (declSigTypeNames runtimeDecls ++ declSigTypeNames allDecls) (ctorFieldTypeNames allDecls) (mainTypeIsFloat ()) (declaredRecordFieldOrders allDecls)
+  putStr (emitProgram input (lowerProgramEmit allDecls))
 
 -- ── diagnostics emit helpers ──────────────────────────────────────────────────
 -- Print the marker then the one-line JSON, then exit 0 (NO trap).

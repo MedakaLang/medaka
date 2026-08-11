@@ -19,8 +19,8 @@ Original header (predates the fix): **Status:** DESIGN (read-mostly scoping). No
 scopes the residual left after the two signature-driven fixes closed the anchored
 cases: the native "arith on type-lost floats" arc (`project_arith_on_typelost_floats_bug`,
 7 fixes 2026-06-18) and the wasm W-SQLITE-4 stages 1-2 (`WASM-FLOAT-TYPING-DESIGN.md`,
-`floatRetFnsRef`/`floatParamsRef`/`ctorFloatFieldsRef` — **verified landed in this
-worktree: 7 source markers, `sq : Float -> Float` works on wasm**).
+the declaration-signature and constructor-field facts now carried by
+`WasmEmitInput`; `sq : Float -> Float` works on wasm).
 
 Reproduced at BASE_OK (`git merge-base --is-ancestor 2d321af HEAD` = true), native
 build green, wasm oracle rebuilt (`test/wasm/build_wasm_oracle.sh`), Node v24.17.0,

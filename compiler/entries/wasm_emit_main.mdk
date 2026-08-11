@@ -26,12 +26,7 @@ import ir.core_ir_lower.{
   ctorFieldTypeNames,
   declaredRecordFieldOrders,
 }
-import backend.wasm_emit.{
-  emitProgram,
-  installDeclRetTypes,
-  installCtorFloatFields,
-  installRecFieldOrders,
-}
+import backend.wasm_emit.{emitProgram, makeWasmEmitInput}
 
 main = match args ()
   [targetPath] => withTarget targetPath
@@ -41,18 +36,6 @@ withTarget : String -> <IO> Unit
 withTarget targetPath = match readFile targetPath
   Ok targetSrc =>
     let decls = desugar (parse targetSrc)
-    -- W-SQLITE-4: install declared sig type-heads so the emitter's float-return /
-    -- float-param registries see through type-erased Float arith (this scalar entry
-    -- previously installed nothing; mirrors llvm_emit_modules_main's install hook).
-    let _ = installDeclRetTypes (declSigTypeNames decls)
-    -- W-SQLITE-4 stage 2: install ctor/record field Float indices.
-    let _ = installCtorFloatFields (ctorFieldTypeNames decls)
-    -- #1513: the record field-ORDER table, from the SAME decls that are lowered.
-    -- EVERY wasm driver must install this, not just the user-facing ones: an
-    -- un-seeded driver silently keeps the pre-fix authority (the construction-site
-    -- scan), and this one is the W1-W4 gate oracle for test/wasm/diff_wasm.sh — a
-    -- gate corpus running the OLD authority is a mask for the next regression, even
-    -- though no user build routes through here.
-    let _ = installRecFieldOrders (declaredRecordFieldOrders decls)
-    putStr (emitProgram (lowerProgramEmit (annotateProgram decls)))
+    let input = makeWasmEmitInput [] (declSigTypeNames decls) (ctorFieldTypeNames decls) False (declaredRecordFieldOrders decls)
+    putStr (emitProgram input (lowerProgramEmit (annotateProgram decls)))
   Err msg => ePutStrLn msg

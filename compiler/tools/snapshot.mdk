@@ -197,10 +197,7 @@ import backend.llvm_emit.{emitProgramRecord, makeEmitInput}
 -- shim that existed solely because Medaka had no import aliasing.)
 import backend.wasm_emit.{
   emitProgram as wasmText,
-  installMethodIface,
-  installRecFieldOrders,
-  installDeclRetTypes,
-  installCtorFloatFields,
+  makeWasmEmitInput,
   enableGapRecordW,
   resetGapsW,
   gapEventsW,
@@ -629,14 +626,10 @@ llvmOf runtimeDecls allDecls cp =
 
 wasmOf : List Decl -> List Decl -> CProgram -> String
 wasmOf runtimeDecls allDecls cp =
-  let _ = installMethodIface (methodIfaceTable allDecls)
-  -- #1513: the record field-order table, from the SAME decls that are lowered.
-  let _ = installRecFieldOrders (declaredRecordFieldOrders allDecls)
-  let _ = installDeclRetTypes (declSigTypeNames runtimeDecls ++ declSigTypeNames allDecls)
-  let _ = installCtorFloatFields (ctorFieldTypeNames allDecls)
+  let input = makeWasmEmitInput (methodIfaceTable allDecls) (declSigTypeNames runtimeDecls ++ declSigTypeNames allDecls) (ctorFieldTypeNames allDecls) False (declaredRecordFieldOrders allDecls)
   let _ = resetGapsW ()
   let _ = enableGapRecordW ()
-  let text = wasmText cp
+  let text = wasmText input cp
   withGaps ";;" text (gapEventsW ())
 
 withGaps : String -> String -> List String -> String

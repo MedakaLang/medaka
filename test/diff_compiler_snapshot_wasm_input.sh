@@ -1,6 +1,6 @@
 #!/bin/sh
-# Snapshot's Wasm arm is independently stateful during X-W.H.  This verifies that
-# a WASM-only render installs the method-arity table, rather than inheriting it
+# Snapshot's Wasm arm must construct its own explicit input. This verifies that a
+# WASM-only render receives the method-arity table rather than inheriting state
 # from the preceding LLVM render in a combined snapshot.
 set -u
 
@@ -8,13 +8,26 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MEDAKA="${MEDAKA:-$ROOT/medaka}"
 [ -x "$MEDAKA" ] || { echo "build the compiler first: make medaka"; exit 2; }
 
+WASM_EMIT="$ROOT/compiler/backend/wasm_emit.mdk"
+EMIT_SUPPORT="$ROOT/compiler/backend/emit_support.mdk"
+grep -Fq 'export makeWasmEmitInput' "$WASM_EMIT" \
+  && grep -Fq 'export emitProgram : WasmEmitInput -> CProgram -> String' "$WASM_EMIT" \
+  && grep -Fq 'export emitProgramGaps : WasmEmitInput -> CProgram -> List String' "$WASM_EMIT" \
+  || { echo "FAIL: WasmEmitInput API is incomplete"; exit 1; }
+for legacy in installMethodIface installDeclRetTypes installCtorFloatFields installMainIsFloatHint installRecFieldOrders methodIfaceTableRef methodIfaceIndexRef setMethodIfaceTable methodIfaceOf methodArityOf mainIsFloatHintRef declRetTypesRef declRetTypesMapW ctorFloatFieldsRef declRecFieldsRef recFieldTableW; do
+  if grep -Eq "^(export )?$legacy([ :]|$)" "$WASM_EMIT" "$EMIT_SUPPORT"; then
+    echo "FAIL: legacy Wasm semantic hook remains: $legacy"
+    exit 1
+  fi
+done
+
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 SRC="$WORK/wasm_snapshot_input.mdk"
 mkdir "$WORK/wasm-only" "$WORK/combined"
 
 # `score = x => 7` has a zero-clause impl body but a one-argument method. The
-# Wasm emitter must read the installed method arity and eta-expand it.
+# Wasm emitter must read the explicit method arity and eta-expand it.
 printf '%s\n' \
   'interface Score a where' \
   '  score : a -> Int' \

@@ -1,6 +1,6 @@
 # Emitter Architecture - the derived current map
 
-**Status:** CURRENT - source-derived LLVM/WasmGC emitter map at `f4fbcd0a`.
+**Status:** CURRENT - source-derived LLVM/WasmGC emitter map through X-W.H1 at `bdf58945`.
 This is a description of the current
 implementation, not the target design. The target is
 [`EMITTER-TARGET-ARCHITECTURE.md`](EMITTER-TARGET-ARCHITECTURE.md), and the
@@ -56,7 +56,7 @@ The Wasm product emitter is built separately from
 for itself; an unset/missing path is an actionable error.
 
 `playground_main.runEmit` is a third product consumer and currently repeats the
-mangle -> elaborate -> DCE -> install -> `lowerProgramEmit` -> `emitProgram`
+mangle -> elaborate -> DCE -> input construction -> `lowerProgramEmit` -> `emitProgram`
 sequence instead of using `entry_support.runEmitWith`. It is built by the
 playground Wasm build scripts. Any contract migration that updates only
 `wasm_emit_modules_main` leaves the browser compiler on the old seam.
@@ -117,62 +117,38 @@ does not consume that form.
 ## 3. The hidden emitter input
 
 `CProgram` is not the whole product-emitter input. Each module driver computes
-additional facts from the elaborated declarations and installs them through
-ambient hooks before calling `emitProgram`.
+additional facts from the elaborated declarations and passes an immutable
+backend input beside `CProgram`.
 
-### 3.1 LLVM install surface
+### 3.1 LLVM semantic input
 
-The LLVM product entry installs:
+X-N.H replaced the LLVM install surface with immutable `llvm_emit.EmitInput`.
+Every LLVM product/probe constructs it from the declaration-derived method,
+constraint, constructor, signature, main-kind, split-half, prelude-symbol, source,
+and record-order facts that route already produced. `emitProgram`, record mode,
+and the gap census require that value; one fresh per-emission `Emit` context owns
+the remaining physical state.
 
-| Hook | Producer / meaning |
-|---|---|
-| `installReturnsSelf` | `returnsSelfTable`: method-result recovery |
-| `installSelfFnParams` | `selfFnParamTable`: self-returning callback positions |
-| `installMethodIface` | `methodIfaceTable`: method-to-interface plus declared arrow-spine arity |
-| `installMethodConstraintIfaces` | `methodConstraintIfaces`: method-level dictionary prefix |
-| `installCtorFieldTypes` | `ctorFieldTypeNames`: field-type recovery |
-| `installDeclSigTypes` | `declSigTypeNames`: declaration parameter/return types |
-| `installMainIsUnitHint` | auto-print classification |
-| `installMainIsFloatHint` | auto-print scalar classification |
-| `installEmitHalf` / `installPreludeSyms` | `prelude.o` split |
-| `installEmitSrcName` | source name for diagnostics |
+### 3.2 Wasm semantic input
 
-All rows except `installEmitSrcName` are installed by
-`llvm_emit_modules_main.emitTail`; `installEmitSrcName` is installed by that
-entry's `main` before `driveModules`.
+X-W.H1 is complete: `wasm_emit.makeWasmEmitInput` builds one immutable
+`WasmEmitInput` from method-interface metadata, declaration signatures,
+constructor field types, the main-Float hint, and record field orders. Both
+`emitProgram` and `emitProgramGaps` receive it explicitly; `Prog` carries it to
+the semantic readers. Product and probe entries retain their previous populated
+or omitted values rather than being equalized. Declaration-order first-match
+indexes are built once in the input.
 
-### 3.2 Wasm install surface
-
-The two shipping Wasm compiler entries already install different subsets:
-
-| Hook | `wasm_emit_modules_main.emitTail` | `playground_main.runEmit` | Meaning |
-|---|---|---|---|
-| `installMethodIface` | yes | yes | shared method/interface and arity table |
-| `installRecFieldOrders` | yes | yes | logical record field order |
-| `installDeclRetTypes` | yes | yes | declared return-type facts |
-| `installCtorFloatFields` | yes | yes | Float field facts |
-| `installMainIsFloatHint` | yes | yes | auto-print classification |
-
-The Wasm entry explicitly omits LLVM-only tables. This is legitimate where the
-fact is physical, but several omitted or parallel facts are semantic. The
-product behavior therefore depends on which entry happened to call which hook;
-closed #587 demonstrated that a probe entry without the product hook set can
-give a false architecture result. The shipping browser compiler formerly omitted
-`installCtorFloatFields`, which feeds `cexprIsFloat` field access and
-constructor-pattern Float binder seeding. That omission was observed as P1
-(record-field Float unary negation) and P2 (constructor-pattern Float unary
-negation): both produced parse-valid WAT that trapped on an illegal cast. The
-focused repair installs `ctorFieldTypeNames allDecls` immediately after declared
-return types in `playground_main.runEmit`; the ambient input-set parity problem
-remains open.
+The old Wasm install hooks and the shared `emit_support` method-metadata Refs are
+gone. Physical mutable emitter state, feature flags, caches, counters, buffers,
+and gap mode remain for X-W.H2. This does not complete #1407.
 
 ### 3.3 Per-program derived indexes
 
-`llvm_emit.emitProgram` also builds indexes such as `knownFnMapRef`,
-`lazyGlobalMapRef`, `ctorMapRef`, `sigMapRef`, `defArityMapRef`,
-`ctorTypeMapRef`, `recByNameRef`, `recByLabelRef`, and implementation-group
-indexes. Wasm builds a parallel `Prog` value plus module-level indexes and
-feature flags.
+`llvm_emit.emitProgram` also builds indexes in its per-emission `Emit` context,
+including `knownFnMap`, `lazyGlobalMap`, `ctorMap`, `sigMap`, `defArityMap`,
+`ctorTypeMap`, `recByName`, `recByLabel`, and implementation-group indexes.
+Wasm builds a parallel `Prog` value plus module-level indexes and feature flags.
 
 These indexes improve asymptotic behavior when they are caches of authoritative
 data. They become semantic authorities when the underlying fact was absent from
@@ -183,7 +159,7 @@ Core. That distinction is not represented in their types.
 | Judgment | LLVM implementation | Wasm implementation | Shared/upstream fragment |
 |---|---|---|---|
 | Scalar/runtime type | `LTy`, `inferSigs`, `typeOf`, `paramUseTy`, inline `emitExpr` recovery | `WTy`, `cexprIsFloat`, `refMainKind`, Float registries | partial `CBinPrim` stamp |
-| Method/source arity | `methodArityOf`, definition/call helpers | `methodArityOf`, closure eta/application helpers | arrow-spine table from `core_ir_lower` |
+| Method/source arity | `methodArityOf`, definition/call helpers | `methodArityOfW`, closure eta/application helpers | arrow-spine table from `core_ir_lower` |
 | Exact/PAP/over-application | `emitApp`/`emitOverApp` plus `emitPapClosure`/`emitMethodPap`/`emitCtorPap` families | closure arity plus `$mdk_apply` branches | none |
 | Record field slot | bare-name record and label indexes | `recFieldsRef` and record-name lookup | record-name strings on some nodes |
 | Dispatch arm/default | `implEntryRouteWords`, dispatch/default chain synthesis | `implEntryRouteKeyW`, dispatch chains, incomplete default synthesis | `Route` plus incomplete `CImplEntry` set |
@@ -204,7 +180,7 @@ Three existing modules establish the useful boundary:
 | Module | Shared decision | Backend-specific realization |
 |---|---|---|
 | `backend/trmc_analysis.mdk` | TRMC eligibility and dispatch groups | LLVM destination/GEP lowering versus Wasm mutable struct/`return_call` lowering |
-| `backend/emit_support.mdk` | eager reachability, lazy-global classification, fallthrough labels, shared method index | force-cell layouts, blocks, calls, and text |
+| `backend/emit_support.mdk` | eager reachability, lazy-global classification, fallthrough labels | force-cell layouts, blocks, calls, and text |
 | `backend/private_mangle.mdk` | pre-flatten module disambiguation | final LLVM/WAT symbol legality and collision domains |
 
 The #553/#561 global-init arc is both precedent and warning. Sharing the
@@ -241,17 +217,18 @@ preserved merely because it exists or removed merely because it duplicates code.
 ## 7. State lifecycle and determinism
 
 Both emitters rely on module-level `Ref`s. Some are ordinary local mutation
-(output buffers, counters), some are scoped emission contexts, and some are
-semantic tables installed before `emitProgram`.
+(output buffers, counters) and some are scoped emission contexts. Wasm
+declaration-derived semantic input is no longer installed through Refs (X-W.H1);
+its remaining physical state is deferred to X-W.H2.
 
 The product driver shells out to a fresh emitter process specifically to obtain
 pristine state. Within one process:
 
 - LLVM constructs a fresh `Emit` record but also resets/installs external refs;
 - Wasm manually resets feature flags, lifted-function tables, strings, lambdas,
-  and indexes at `emitProgram` entry;
+  and physical indexes at `emitProgram` entry;
 - gap-census paths duplicate parts of setup;
-- install-once tables do not all share one lifecycle.
+- X-W.H2 still owns the remaining physical-state lifecycle.
 
 Fresh-process isolation is a useful defense, not proof that emission is a pure
 function. The current architecture cannot express `emit : Program -> Output`

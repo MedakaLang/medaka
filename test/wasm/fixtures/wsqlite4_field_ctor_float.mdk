@@ -1,6 +1,6 @@
 -- W-SQLITE-4 stage 2: Float stored in a record field or constructor payload —
 -- `cexprIsFloat` now recognises CFieldAccess whose field is declared Float (via
--- ctorFloatFieldsRef, seeded from ctorFieldTypeNames), and ctor-payload match
+-- constructor field types in `WasmEmitInput`), and ctor-payload match
 -- binders (PCon arms in both emitLeafRef/emitLeafTail).  Before this fix both
 -- cases trapped at instantiate with `illegal cast` (an i31 unbox on a $float box).
 --

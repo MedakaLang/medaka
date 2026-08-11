@@ -1,9 +1,8 @@
 # WASM-FLOAT-TYPING-DESIGN — the principled fix for W-SQLITE-4
 
-**Status:** IMPLEMENTED — stage 1 `b5eb9606`, stage 2 `2d321af6`, 2026-06-30. Verified
-live: `floatRetFnsRef`/`floatParamsRef`/`ctorFloatFieldsRef` all present in
-`compiler/backend/wasm_emit.mdk` (7 source markers, matching this doc's own and
-`SHARED-FLOAT-RESIDUAL-DESIGN.md`'s claims). Header below predates the fix.
+**Status:** IMPLEMENTED — stage 1 `b5eb9606`, stage 2 `2d321af6`, 2026-06-30.
+X-W.H1 later moved these declaration-derived facts into explicit immutable
+`WasmEmitInput`; the original design below predates both changes.
 
 Original header (predates the fix): **Status:** DESIGN (read-mostly scoping). No emitter/lib source changed. Bug =
 `EMITTER-GAPS.md` §W-SQLITE-4: type-erased Float arithmetic on WasmGC miscompiles
