@@ -61,19 +61,12 @@ import ir.core_ir_lower.{
 import ir.dce.{dceFilter}
 import backend.private_mangle.{mangleUnits}
 import backend.llvm_emit.{emitProgram, makeEmitInput}
--- `backend.wasm_emit` is the SECOND backend, and it exports its own `emitProgram`,
--- `installMethodIface` and `installMainIsFloatHint` — all three collide with the LLVM
+-- `backend.wasm_emit` is the SECOND backend, and it exports its own `emitProgram` —
+-- that name collides with the LLVM
 -- names above. Aliased on import, exactly as tools/snapshot.mdk does for the same
 -- clash. The `W` suffix marks the WasmGC peer; the un-suffixed names stay LLVM's, so
 -- an unqualified `emitProgram` in this file still means what it has always meant.
-import backend.wasm_emit.{
-  emitProgram as wasmText,
-  installMethodIface as installMethodIfaceW,
-  installRecFieldOrders as installRecFieldOrdersW,
-  installMainIsFloatHint as installMainIsFloatHintW,
-  installDeclRetTypes,
-  installCtorFloatFields,
-}
+import backend.wasm_emit.{emitProgram as wasmText, makeWasmEmitInput}
 import tools.fmt.{formatSource}
 import frontend.exhaust.{checkGuardExhaustivenessWith}
 import support.timer.{
@@ -289,8 +282,8 @@ runStaged on targetPath rsrc csrc tsrc =
   -- llvm row and vice versa.
   --
   -- Mirrors entries/wasm_emit_modules_main.mdk's `emitTail` (the REAL wasm build
-  -- path): same four install* hooks, in the same order, fed from the SAME post-DCE
-  -- decls (`live`), then emitProgram over the Core IR.
+  -- path): the same WasmEmitInput producers fed from the SAME post-DCE decls
+  -- (`live`), then emitProgram over the Core IR.
   --
   -- `cprog` IS REUSED FROM THE `lower` STAGE ABOVE — deliberately, and it is not a
   -- shortcut. Core IR is backend-agnostic (both llvm_emit_modules_main and
@@ -298,8 +291,8 @@ runStaged on targetPath rsrc csrc tsrc =
   -- re-lowering would time lowering twice and fold it into a stage named "wasm-emit".
   -- Rule 1 of the gate: grade a stage, never a sum.
   --
-  -- The install* calls sit OUTSIDE the timer, as the LLVM arm's do: they are
-  -- table-building, not emission. The same caveats as `lower`/`emit` apply verbatim —
+  -- WasmEmitInput construction sits OUTSIDE the timer: it is table-building, not
+  -- emission. The same caveats as `lower`/`emit` apply verbatim —
   -- DCE exercised, prelude constant NOT subtracted, single-file/no-link — so read a
   -- ratio here as a LOWER BOUND on the true exponent.
   --
@@ -316,7 +309,7 @@ runStaged on targetPath rsrc csrc tsrc =
   -- (engines)`, ~5.8 min, is)" — both halves of that premise have since gone stale, and
   -- the conclusion with them. Shards are scheduled by COST, so a stage that outgrows its
   -- shard's budget has to be re-priced, not grandfathered.
-  let _ = wasmStage on (perfWasmEnabled ()) cprog live rDecls declsOp
+  let _ = wasmStage on (perfWasmEnabled ()) rDecls live cprog declsOp
   -- fmt: the whole comment-preserving format pass (collectComments +
   -- parseWithPositions + formatProgram).  Profiled because it was NOT before, and
   -- an unprofiled pass is where a quadratic hides: the comment side-channel's
@@ -362,22 +355,17 @@ runStaged on targetPath rsrc csrc tsrc =
 -- Every argument is ALREADY FORCED by the caller (cprog from the `lower` stage, live
 -- from dceFilter, rDecls from parse-prelude), so passing them costs nothing when off.
 --
--- The install* calls sit inside the off-switch but outside the timer, mirroring the
--- LLVM arm: they are table-building, not emission, and they are wasm_emit's own hooks
--- (the `W`-suffixed peers) — nothing else in this driver reads them, so skipping them
--- when the stage is off cannot perturb the LLVM rows.
-wasmStage : Bool -> Bool -> CProgram -> List Decl -> List Decl -> String -> <IO> Unit
+-- Input construction sits inside the off-switch but outside the timer. Nothing else
+-- in this driver reads these Wasm-only indexes, so skipping them cannot perturb the
+-- LLVM rows or the total allocation when MEDAKA_PERF_WASM is disabled.
+wasmStage : Bool -> Bool -> List Decl -> List Decl -> CProgram -> String -> <IO> Unit
 wasmStage _ False _ _ _ _ = ()
-wasmStage on True cprog live rDecls declsOp =
-  let _ = installMethodIfaceW (methodIfaceTable live)
-  let _ = installRecFieldOrdersW (declaredRecordFieldOrders live)
-  let _ = installDeclRetTypes (declSigTypeNames rDecls ++ declSigTypeNames live)
-  let _ = installCtorFloatFields (ctorFieldTypeNames live)
-  let _ = installMainIsFloatHintW (mainTypeIsFloat ())
+wasmStage on True runtimeDecls live cprog declsOp =
+  let input = makeWasmEmitInput (methodIfaceTable live) (declSigTypeNames runtimeDecls ++ declSigTypeNames live) (ctorFieldTypeNames live) (mainTypeIsFloat ()) (declaredRecordFieldOrders live)
   let tWe0 = now ()
   let aWe0 = allocSnap ()
   let oWe0 = opSnap ()
-  let _ = wasmText cprog
+  let _ = wasmText input cprog
   let tWe1 = now ()
   emitPhaseAO
     on

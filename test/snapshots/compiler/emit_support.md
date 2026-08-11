@@ -1,5 +1,5 @@
 # META
-source_lines=600
+source_lines=552
 stages=DESUGAR,MARK
 # SOURCE
 -- BACKEND-NEUTRAL EMIT SUPPORT — helpers shared verbatim by BOTH the LLVM
@@ -446,54 +446,6 @@ lazyGlobalNames binds =
   let tainted = foldTaintSCCs adj methodSet (tarjanSCCs allNames adj) omEmpty
   filterList (n => n != "main" && omHasKey n tainted) (valGlobalNames binds)
 
--- ── interface-method dispatch metadata (Wasm legacy state) ───────────────────
--- method → (interface, declared-full-arity), from the program's `DInterface`
--- decls. LLVM carries this fact in EmitInput; Wasm retains this install hook until
--- X-W.H migrates its input seam.
-export methodIfaceTableRef : Ref (List (String, (String, Int)))
-methodIfaceTableRef = Ref []
-
--- ── method→iface INDEX (perf #986 — the #971/#985 memo model) ─────────────────
--- `methodIfaceOf`/`methodArityOf` `lookupAssoc`'d the program-growing table above on
--- EVERY dispatch call site → O(sites · methods) in BOTH backends and ON the
--- self-compile fixpoint path (#382/#985).  This memo holds the SAME table as an
--- O(log n) OrdMap keyed by method name (value = (interface, declared-arity)), built
--- ONCE when the table is installed (`setMethodIfaceTable`, both backends).
--- `omFromPairs (reverseL t)` reproduces `lookupAssoc`'s FIRST-match exactly
--- (`omFromPairs` folds left / last-write-wins, so reversing keeps the first pair for a
--- duplicate method) — the same discipline as the fn-index / impl-index memos.  When the
--- memo is None (a probe that installs nothing) both readers FALL BACK to the linear
--- `lookupAssoc` over the raw table, so every emitted byte is identical either way.
-export methodIfaceIndexRef : Ref (Option (OrdMap (String, Int)))
-methodIfaceIndexRef = Ref None
-
--- install point shared by both backends' `installMethodIface`: sets the raw table (still
--- read whole by `restampIfaceDicts`/`restampCrossIface`) AND its method-name index.
-export setMethodIfaceTable : List (String, (String, Int)) -> Unit
-setMethodIfaceTable t =
-  let _ = setRef methodIfaceTableRef t
-  setRef methodIfaceIndexRef (Some (omFromPairs (reverseL t) omEmpty))
-
--- the interface a method name belongs to ("" = not an interface method).
-export methodIfaceOf : String -> String
-methodIfaceOf method = match methodIfaceIndexRef.value
-  Some m => match omLookup method m
-    Some (iface, _) => iface
-    None => ""
-  None => match lookupAssoc method methodIfaceTableRef.value
-    Some (iface, _) => iface
-    None => ""
-
--- the declared full arity of an interface method (0 = not found).
-export methodArityOf : String -> Int
-methodArityOf method = match methodIfaceIndexRef.value
-  Some m => match omLookup method m
-    Some (_, arity) => arity
-    None => 0
-  None => match lookupAssoc method methodIfaceTableRef.value
-    Some (_, arity) => arity
-    None => 0
-
 -- ── dict-witness parameter names (shared by BOTH backends) ───────────────────
 -- `$dict_<fn>_<slot>` — a dict witness param that dict_pass/elaborateModules PREPENDS
 -- to a `=>`-constrained fn's source params.  Both backends must recognize one, for the
@@ -778,16 +730,6 @@ rngBound _ = 0
 (DFunDef false "foldTaintSCCs" ((PVar "adj") (PVar "methodSet") (PCons (PVar "scc") (PVar "rest")) (PVar "acc")) (EBlock (DoLet false false (PVar "cyclic") (EBinOp "||" (EApp (EVar "lengthGt1") (EVar "scc")) (EApp (EApp (EVar "anySelfLoop") (EVar "scc")) (EVar "adj")))) (DoLet false false (PVar "direct") (EApp (EApp (EVar "anyKeyIn") (EVar "scc")) (EVar "methodSet"))) (DoLet false false (PVar "succ") (EApp (EApp (EVar "anyKeyIn") (EApp (EApp (EVar "sccCallees") (EVar "scc")) (EVar "adj"))) (EVar "acc"))) (DoLet false false (PVar "acc2") (EIf (EBinOp "||" (EBinOp "||" (EVar "cyclic") (EVar "direct")) (EVar "succ")) (EApp (EApp (EVar "insertAllKeys") (EVar "scc")) (EVar "acc")) (EVar "acc"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "foldTaintSCCs") (EVar "adj")) (EVar "methodSet")) (EVar "rest")) (EVar "acc2")))))
 (DTypeSig true "lazyGlobalNames" (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "lazyGlobalNames" ((PVar "binds")) (EBlock (DoLet false false (PVar "allNames") (EApp (EVar "bindNames") (EVar "binds"))) (DoLet false false (PVar "nameSet") (EApp (EApp (EVar "omFromNames") (EVar "allNames")) (EVar "omEmpty"))) (DoLet false false (PVar "adj") (EApp (EApp (EVar "eagerCalleesMap") (EVar "nameSet")) (EVar "binds"))) (DoLet false false (PVar "methodSet") (EApp (EVar "methodTaintSet") (EVar "binds"))) (DoLet false false (PVar "tainted") (EApp (EApp (EApp (EApp (EVar "foldTaintSCCs") (EVar "adj")) (EVar "methodSet")) (EApp (EApp (EVar "tarjanSCCs") (EVar "allNames")) (EVar "adj"))) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EBinOp "&&" (EBinOp "!=" (EVar "n") (ELit (LString "main"))) (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "tainted"))))) (EApp (EVar "valGlobalNames") (EVar "binds"))))))
-(DTypeSig true "methodIfaceTableRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "Int"))))))
-(DFunDef false "methodIfaceTableRef" () (EApp (EVar "Ref") (EListLit)))
-(DTypeSig true "methodIfaceIndexRef" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "Int"))))))
-(DFunDef false "methodIfaceIndexRef" () (EApp (EVar "Ref") (EVar "None")))
-(DTypeSig true "setMethodIfaceTable" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "Int")))) (TyCon "Unit")))
-(DFunDef false "setMethodIfaceTable" ((PVar "t")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "setRef") (EVar "methodIfaceTableRef")) (EVar "t"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "methodIfaceIndexRef")) (EApp (EVar "Some") (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EVar "t"))) (EVar "omEmpty")))))))
-(DTypeSig true "methodIfaceOf" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "methodIfaceOf" ((PVar "method")) (EMatch (EFieldAccess (EVar "methodIfaceIndexRef") "value") (arm (PCon "Some" (PVar "m")) () (EMatch (EApp (EApp (EVar "omLookup") (EVar "method")) (EVar "m")) (arm (PCon "Some" (PTuple (PVar "iface") PWild)) () (EVar "iface")) (arm (PCon "None") () (ELit (LString ""))))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "method")) (EFieldAccess (EVar "methodIfaceTableRef") "value")) (arm (PCon "Some" (PTuple (PVar "iface") PWild)) () (EVar "iface")) (arm (PCon "None") () (ELit (LString "")))))))
-(DTypeSig true "methodArityOf" (TyFun (TyCon "String") (TyCon "Int")))
-(DFunDef false "methodArityOf" ((PVar "method")) (EMatch (EFieldAccess (EVar "methodIfaceIndexRef") "value") (arm (PCon "Some" (PVar "m")) () (EMatch (EApp (EApp (EVar "omLookup") (EVar "method")) (EVar "m")) (arm (PCon "Some" (PTuple PWild (PVar "arity"))) () (EVar "arity")) (arm (PCon "None") () (ELit (LInt 0))))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "method")) (EFieldAccess (EVar "methodIfaceTableRef") "value")) (arm (PCon "Some" (PTuple PWild (PVar "arity"))) () (EVar "arity")) (arm (PCon "None") () (ELit (LInt 0)))))))
 (DTypeSig true "isDictParamName" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isDictParamName" ((PVar "x")) (EBinOp "&&" (EBinOp ">=" (EApp (EVar "stringLength") (EVar "x")) (ELit (LInt 5))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (ELit (LInt 5))) (EVar "x")) (ELit (LString "$dict")))))
 (DTypeSig true "ftPrefix" (TyCon "String"))
@@ -992,16 +934,6 @@ rngBound _ = 0
 (DFunDef false "foldTaintSCCs" ((PVar "adj") (PVar "methodSet") (PCons (PVar "scc") (PVar "rest")) (PVar "acc")) (EBlock (DoLet false false (PVar "cyclic") (EBinOp "||" (EApp (EVar "lengthGt1") (EVar "scc")) (EApp (EApp (EVar "anySelfLoop") (EVar "scc")) (EVar "adj")))) (DoLet false false (PVar "direct") (EApp (EApp (EVar "anyKeyIn") (EVar "scc")) (EVar "methodSet"))) (DoLet false false (PVar "succ") (EApp (EApp (EVar "anyKeyIn") (EApp (EApp (EVar "sccCallees") (EVar "scc")) (EVar "adj"))) (EVar "acc"))) (DoLet false false (PVar "acc2") (EIf (EBinOp "||" (EBinOp "||" (EVar "cyclic") (EVar "direct")) (EVar "succ")) (EApp (EApp (EVar "insertAllKeys") (EVar "scc")) (EVar "acc")) (EVar "acc"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "foldTaintSCCs") (EVar "adj")) (EVar "methodSet")) (EVar "rest")) (EVar "acc2")))))
 (DTypeSig true "lazyGlobalNames" (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "lazyGlobalNames" ((PVar "binds")) (EBlock (DoLet false false (PVar "allNames") (EApp (EVar "bindNames") (EVar "binds"))) (DoLet false false (PVar "nameSet") (EApp (EApp (EVar "omFromNames") (EVar "allNames")) (EVar "omEmpty"))) (DoLet false false (PVar "adj") (EApp (EApp (EVar "eagerCalleesMap") (EVar "nameSet")) (EVar "binds"))) (DoLet false false (PVar "methodSet") (EApp (EVar "methodTaintSet") (EVar "binds"))) (DoLet false false (PVar "tainted") (EApp (EApp (EApp (EApp (EVar "foldTaintSCCs") (EVar "adj")) (EVar "methodSet")) (EApp (EApp (EVar "tarjanSCCs") (EVar "allNames")) (EVar "adj"))) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EBinOp "&&" (EBinOp "!=" (EVar "n") (ELit (LString "main"))) (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "tainted"))))) (EApp (EVar "valGlobalNames") (EVar "binds"))))))
-(DTypeSig true "methodIfaceTableRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "Int"))))))
-(DFunDef false "methodIfaceTableRef" () (EApp (EVar "Ref") (EListLit)))
-(DTypeSig true "methodIfaceIndexRef" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "Int"))))))
-(DFunDef false "methodIfaceIndexRef" () (EApp (EVar "Ref") (EVar "None")))
-(DTypeSig true "setMethodIfaceTable" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "Int")))) (TyCon "Unit")))
-(DFunDef false "setMethodIfaceTable" ((PVar "t")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "setRef") (EVar "methodIfaceTableRef")) (EVar "t"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "methodIfaceIndexRef")) (EApp (EVar "Some") (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EVar "t"))) (EVar "omEmpty")))))))
-(DTypeSig true "methodIfaceOf" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "methodIfaceOf" ((PVar "method")) (EMatch (EFieldAccess (EVar "methodIfaceIndexRef") "value") (arm (PCon "Some" (PVar "m")) () (EMatch (EApp (EApp (EVar "omLookup") (EVar "method")) (EVar "m")) (arm (PCon "Some" (PTuple (PVar "iface") PWild)) () (EVar "iface")) (arm (PCon "None") () (ELit (LString ""))))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "method")) (EFieldAccess (EVar "methodIfaceTableRef") "value")) (arm (PCon "Some" (PTuple (PVar "iface") PWild)) () (EVar "iface")) (arm (PCon "None") () (ELit (LString "")))))))
-(DTypeSig true "methodArityOf" (TyFun (TyCon "String") (TyCon "Int")))
-(DFunDef false "methodArityOf" ((PVar "method")) (EMatch (EFieldAccess (EVar "methodIfaceIndexRef") "value") (arm (PCon "Some" (PVar "m")) () (EMatch (EApp (EApp (EVar "omLookup") (EVar "method")) (EVar "m")) (arm (PCon "Some" (PTuple PWild (PVar "arity"))) () (EVar "arity")) (arm (PCon "None") () (ELit (LInt 0))))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "method")) (EFieldAccess (EVar "methodIfaceTableRef") "value")) (arm (PCon "Some" (PTuple PWild (PVar "arity"))) () (EVar "arity")) (arm (PCon "None") () (ELit (LInt 0)))))))
 (DTypeSig true "isDictParamName" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isDictParamName" ((PVar "x")) (EBinOp "&&" (EBinOp ">=" (EApp (EVar "stringLength") (EVar "x")) (ELit (LInt 5))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (ELit (LInt 5))) (EVar "x")) (ELit (LString "$dict")))))
 (DTypeSig true "ftPrefix" (TyCon "String"))

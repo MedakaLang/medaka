@@ -65,6 +65,83 @@ command -v "$CC" >/dev/null 2>&1 || { echo "no C compiler ($CC) — skipping W5 
 [ -x "$MEDAKA" ] || { echo "build the native compiler first: make medaka (missing $MEDAKA)"; exit 2; }
 [ -x "$EMITBIN" ] || { echo "build the wasm typed emitter: sh test/wasm/build_wasm_oracle.sh (missing $EMITBIN)"; exit 2; }
 
+# X-W.H1: one process emits one lowered P program with P's complete input, each
+# U-derived field in isolation, then P's input again. This distinguishes explicit
+# inputs from CProgram changes and proves the final P is not contaminated.
+INPUT_WORK="$(mktemp -d)"
+trap 'rm -rf "$INPUT_WORK"' EXIT
+cat > "$INPUT_WORK/p.mdk" <<'EOF'
+interface Score a where
+  score : a -> Int
+
+data P = P
+
+impl Score P where
+  score = x => 7
+
+data R = R { i : Int, f : Float }
+
+negR : R -> Float
+negR r = -r.f
+
+dbl : Float -> Float
+dbl x = x + x
+
+data Cell = CInt Int | CFloat Float
+
+cellNumF : Cell -> Float
+cellNumF c = match c
+  CInt n => intToFloat n
+  CFloat f => f
+
+sumCells : List Cell -> Float
+sumCells cells = match cells
+  [] => 0.0
+  c :: rest => cellNumF c + sumCells rest
+
+asFloat : Int -> Float
+asFloat n = intToFloat n
+
+data Box = Box Float
+
+negBox : Box -> Float
+negBox b = match b
+  Box f => -f
+
+main = asFloat 1
+EOF
+cat > "$INPUT_WORK/u.mdk" <<'EOF'
+interface Score a where
+  score : a -> Int -> Int
+
+data R = R { f : Float, i : Int }
+
+negR : R -> Int
+negR _ = 0
+
+dbl : Int -> Int
+dbl x = x + x
+
+cellNumF : Cell -> Int
+cellNumF _ = 0
+
+sumCells : List Cell -> Int
+sumCells _ = 0
+
+asFloat : Int -> Int
+asFloat n = n
+
+data Box = Box Int
+EOF
+REEMIT_OUT="$($EMITBIN --reemit-input "$RUNTIME" "$INPUT_WORK/p.mdk" "$INPUT_WORK/u.mdk")" || {
+  echo "FAIL wasm typed same-process input harness"
+  exit 1
+}
+[ "$REEMIT_OUT" = $'P_EQ_PLAST\nP_NE_METHOD\nP_NE_SIG\nP_NE_CTOR\nP_NE_MAIN\nP_NE_RECORD' ] || {
+  echo "FAIL wasm typed input isolation: an explicit field did not discriminate: $REEMIT_OUT"
+  exit 1
+}
+
 # ── Node >= 22 selection (finalized WasmGC encoding — see test/wasm/w1.sh) ─────
 NODE=node
 major=$("$NODE" -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)
@@ -83,7 +160,7 @@ fi
 
 WORK="$(mktemp -d)"
 RESULTS="$(mktemp -d)"
-trap 'rm -rf "$WORK" "$RESULTS"' EXIT
+trap 'rm -rf "$INPUT_WORK" "$WORK" "$RESULTS"' EXIT
 
 JOBS="${JOBS:-$(sysctl -n hw.logicalcpu 2>/dev/null || nproc 2>/dev/null || echo 4)}"
 NODE_ABS="$(command -v "$NODE" 2>/dev/null || echo "$NODE")"

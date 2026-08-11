@@ -258,16 +258,17 @@ boundaries, last-write-wins, silent on loss*. Every issue in the arc enumerated 
 grep on `universe*`. Those are not the same set, and multiple "the set is complete" claims rest on the
 prefix.
 
-Re-derived 2026-08-09: **~20 shape-members sit outside both prefix greps**, in `types/`
-(`DriverState`), `backend/`, `ir/` and `eval/` — including `argDispatchIdxRef`, and
-`methodIfaceTableRef` / `methodIfaceIndexRef` in `backend/emit_support.mdk`, which **both backends
-read**. A `types/`-anchored enumeration structurally cannot reach them.
+Re-derived 2026-08-09: **~20 shape-members sat outside both prefix greps**, in `types/`
+(`DriverState`), `backend/`, `ir/` and `eval/` — including `argDispatchIdxRef` and the former
+shared method-interface table/index Refs in `backend/emit_support.mdk`. X-N.H and X-W.H1 later
+moved those method facts into backend input values, but the derivation lesson remains: a
+`types/`-anchored enumeration structurally cannot reach backend members.
 
 The leverage is that `OrdMap a = Map String a` (`compiler/support/ordmap.mdk`), so *bare-`String`-keyed*
 is a **type** fact and therefore greppable. 🚨 **And the obvious shape grep is itself a trap:** anchoring
 on `^ident :` silently drops every `export`-prefixed declaration — measured **65 rows anchored vs 75
-prefixed**, and the 10 missed include `methodIfaceTableRef` and `methodIfaceIndexRef` themselves. The
-derivation that fixes a scope error can re-commit it one level down. Full command + graded table: the
+prefixed**, and the missed rows included both former exported method-interface Refs. The derivation
+that fixes a scope error can re-commit it one level down. Full command + graded table: the
 2026-08-09 audit comment on #1070.
 
 ### 13. A FALSE REJECT can be LOAD-BEARING — draining one exposes what it was hiding

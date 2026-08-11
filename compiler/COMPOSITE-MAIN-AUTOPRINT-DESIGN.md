@@ -116,7 +116,7 @@ Main type threaded via `mainSchemeRef` (`typecheck.mdk:2150`); queries
 ### Wasm (playground path)
 `wasm_emit.mdk` mirrors it: `emitRefMain` (`:2294`) → `refMainKind` (`:2377`,
 scalar kinds only) → `refPrintFor` (`:2462`, scalar imports only);
-`mainBodyIsUnit` (`:2317`); `mainIsFloatHintRef` (`:306`). No composite print →
+`mainBodyIsUnit` (`:2317`); `WasmEmitInput`'s main-Float hint. No composite print →
 composite main gaps/misprints. Playground entry `runEmit`
 (`entries/playground_main.mdk:283-295`).
 

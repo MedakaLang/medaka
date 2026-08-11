@@ -374,9 +374,10 @@ test, every candidate through native build AND wasm build AND `medaka run`). The
   the node (`labelFallthrough`), which is WHY wasm never had the refutable-guard
   miscompile. The reference design, per EMITTER-SEMANTICS.
 - **The playground does NOT reuse compiler instances across compiles** (fresh
-  instantiate per run, module-level Refs reborn) — no stale-Ref-across-programs hazard
-  there today. The LATENT cousin: `emitProgram` never resets a handful of install-once
-  Refs and there is no disable for the census-mode gap flag; process-per-emit masks it.
+  instantiate per run, module-level Refs reborn). X-W.H1 nevertheless removed the
+  declaration-derived install Refs: every Wasm emission now receives immutable
+  `WasmEmitInput`. Physical module Refs, including the census-mode gap flag with no
+  disable, remain X-W.H2 work.
 - **`$boxint` equality/compare through a poly HOF is by VALUE** (no ref-identity bug).
 - **NaN `compare`/`min`/`max` are engine-UNIFORM today** (all three engines: `Eq`,
   `nan`, `nan`, `1.0`, `1.0`, probe-run) — the N6 interim bar holds there. The HOF-routed

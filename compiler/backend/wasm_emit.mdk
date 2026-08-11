@@ -2,7 +2,7 @@
 -- consumes the SAME backend-neutral Core IR (`ir.core_ir`) the LLVM emitter
 -- consumes (lowered by the SAME `core_ir_lower.lowerProgramEmit`) and produces a
 -- complete WAT text module (assembled by `wasm-tools parse`, run under a WasmGC
--- engine).  `emitProgram : CProgram -> String`.
+-- engine).  `emitProgram : WasmEmitInput -> CProgram -> String`.
 --
 -- ── W2 SCOPE (immediates + arithmetic) ─────────────────────────────
 -- Scalar / arithmetic subset on raw i32: CLit Int/Bool/Unit, CVar (fn/global/
@@ -252,10 +252,6 @@ import backend.emit_support.{
   bindEagerReach,
   bindNameMap,
   lazyGlobalNames,
-  methodIfaceTableRef,
-  setMethodIfaceTable,
-  methodArityOf,
-  methodIfaceOf,
   isDictParamName,
   ftPrefix,
   labelFallthrough,
@@ -302,6 +298,32 @@ import backend.wasm_preamble.{
 -- ── static value kind (scalar-mode only; for the auto-print routing) ─────────
 data WTy = WInt | WBool | WUnit | WStr | WRef | WChar | WFloat
 
+-- Declaration-derived semantic input. Raw lists retain table order where a full
+-- table is required; indexes preserve lookupAssoc's first-match result.
+data WasmEmitInputData =
+  | WasmEmitInputData (List (String, (String, Int))) (OrdMap (String, Int)) (List (String, (List String, String))) (OrdMap (List String, String)) (List (String, List String)) (OrdMap (List Int)) Bool (List (String, List String)) (OrdMap (List String)) (OrdMap (String, List String))
+
+export type WasmEmitInput = WasmEmitInputData
+
+export makeWasmEmitInput : List (String, (String, Int)) -> List (String, (List String, String)) -> List (String, List String) -> Bool -> List (String, List String) -> WasmEmitInput
+makeWasmEmitInput methodIfaces declSigTypes ctorFieldTypes mainIsFloat recordFieldOrders = WasmEmitInputData methodIfaces (omFromPairs (reverseL methodIfaces) omEmpty) declSigTypes (omFromPairs (reverseL declSigTypes) omEmpty) ctorFieldTypes (omFromPairs (reverseL (map ctorToFloatIdxs ctorFieldTypes)) omEmpty) mainIsFloat recordFieldOrders (omFromPairs (reverseL recordFieldOrders) omEmpty) (recordLabelIndex recordFieldOrders omEmpty)
+
+inputMainIsFloat : WasmEmitInput -> Bool
+inputMainIsFloat (WasmEmitInputData _ _ _ _ _ _ isFloat _ _ _) = isFloat
+
+recordLabelIndex : List (String, List String) -> OrdMap (String, List String) -> OrdMap (String, List String)
+recordLabelIndex [] m = m
+recordLabelIndex ((ctor, labels)::rest) m =
+  recordLabelIndex rest (recordLabelIndexOne ctor labels labels m)
+
+recordLabelIndexOne : String -> List String -> List String -> OrdMap (String, List String) -> OrdMap (String, List String)
+recordLabelIndexOne _ _ [] m = m
+recordLabelIndexOne ctor allLabels (label::rest) m = recordLabelIndexOne
+  ctor
+  allLabels
+  rest
+  (if omHasKey label m then m else omInsert label (ctor, allLabels) m)
+
 -- ── program info threaded through the ref-mode emitter ───────────────────────
 -- ctorArs: ctor name → arity.  ctorTypes: ctor name → owning type name.
 -- typeNames: distinct user type names in declaration order (for per-type ids).
@@ -316,25 +338,28 @@ data WTy = WInt | WBool | WUnit | WStr | WRef | WChar | WFloat
 --   Threaded so the CMethod/CDict dispatch arms can resolve candidate impls
 --   (RDict runtime switch needs the full candidate set; RKey the single match).
 data Prog =
-  | Prog (List (String, Int)) (List (String, String)) (List String) Bool (List String) (List String) (List (String, Int)) Bool (List CImplEntry)
+  | Prog (List (String, Int)) (List (String, String)) (List String) Bool (List String) (List String) (List (String, Int)) Bool (List CImplEntry) WasmEmitInput
 
 progFnNames : Prog -> List String
-progFnNames (Prog _ _ _ _ fns _ _ _ _) = fns
+progFnNames (Prog _ _ _ _ fns _ _ _ _ _) = fns
 
 progValNames : Prog -> List String
-progValNames (Prog _ _ _ _ _ vals _ _ _) = vals
+progValNames (Prog _ _ _ _ _ vals _ _ _ _) = vals
 
 progFnArs : Prog -> List (String, Int)
-progFnArs (Prog _ _ _ _ _ _ ars _ _) = ars
+progFnArs (Prog _ _ _ _ _ _ ars _ _ _) = ars
 
 progUseClos : Prog -> Bool
-progUseClos (Prog _ _ _ _ _ _ _ uc _) = uc
+progUseClos (Prog _ _ _ _ _ _ _ uc _ _) = uc
 
 -- W5: the lowered typeclass impl entries (CProgram's 4th field).
 progImpls : Prog -> List CImplEntry
-progImpls (Prog _ _ _ _ _ _ _ _ impls) = impls
+progImpls (Prog _ _ _ _ _ _ _ _ impls _) = impls
 
--- ── method → DECLARED interface arity table (W9b — port of llvm_emit's) ───────
+progInput : Prog -> WasmEmitInput
+progInput (Prog _ _ _ _ _ _ _ _ _ input) = input
+
+-- ── declaration-derived semantic input readers ────────────────────────────────
 -- The REAL prelude carries POINT-FREE impls whose source clause arity is LESS than
 -- the method's declared user arity: `length = fold g 0` (clause arity 0, method
 -- arity 1), `toList = identity` (0 vs 1), `foldMap f = fold …` (1 vs 2), `filter p
@@ -346,76 +371,38 @@ progImpls (Prog _ _ _ _ _ _ _ _ impls) = impls
 -- define and the call sites agree.
 --
 -- This table maps a BARE method name to its DECLARED interface arity (the true USER
--- arity, SEPARATE from the forwarded `requires`/method-level dict params the dict-
--- pass prepends).  Keyed by bare method name (interface method names are distinct in
--- the prelude).  A max-clause-arity heuristic is WRONG: a `Debug (List a) requires
--- Debug a` impl's leading requires-dict inflates the apparent arity, so the separation
--- via methodArityOf + implReqCount is load-bearing.  Installed from the modules entry
--- (installMethodIface) before emitProgram; an empty table (the prelude-free W2/W5
--- entries never install it) ⇒ methodArityOf returns 0 ⇒ eta-expansion is a no-op ⇒
--- byte-identical to the pre-W9b behaviour.
--- The table Ref + the `methodArityOf`/`methodIfaceOf` readers live in
--- `backend.emit_support` (shared with the LLVM emitter); `installMethodIface`
--- stays here as the WasmGC-side install entry point the emit drivers import.
-export installMethodIface : List (String, (String, Int)) -> Unit
-installMethodIface t = setMethodIfaceTable t
+-- arity, separate from forwarded dict params).  Every index is built once by
+-- makeWasmEmitInput, preserving first-match list semantics.
+inputMethodIfaces : WasmEmitInput -> List (String, (String, Int))
+inputMethodIfaces (WasmEmitInputData xs _ _ _ _ _ _ _ _ _) = xs
 
--- C4 (SHARED-FLOAT-RESIDUAL-DESIGN §6): hint from the driver: True when typecheck
--- resolved main's inferred return type to Float (e.g. via a polymorphic HOF like
--- `fold` whose result specialises to Float with no explicit annotation).  When set,
--- `emitRefMain` overrides the structural `refMainKind` (which defaults to WInt on
--- type-erased returns) and emits the WFloat auto-print path.  Set by the emit driver
--- after elaborateModules via installMainIsFloatHint; False in prelude-free entries.
-mainIsFloatHintRef : Ref Bool
-mainIsFloatHintRef = Ref False
+methodIfaceOfW : Prog -> String -> String
+methodIfaceOfW prog name = match progInput prog
+  WasmEmitInputData _ methodIndex _ _ _ _ _ _ _ _ => match omLookup name methodIndex
+    Some (iface, _) => iface
+    None => ""
 
-export installMainIsFloatHint : Bool -> Unit
-installMainIsFloatHint b = setRef mainIsFloatHintRef b
+methodArityOfW : Prog -> String -> Int
+methodArityOfW prog name = match progInput prog
+  input => methodArityOfInput input name
 
--- ── decl → DECLARED return type-head name table (W9b — for Unit-main detection) ─
--- `declSigTypeNames` maps a top-level binding name to (param-type-heads, return-type-
--- head).  A value main `main = println (10 + 5)` whose head function `println` is
--- declared `Display a => a -> <IO> Unit` must NOT auto-print its Unit result (the
--- "Unit main no auto-print" contract — the trailing `0` bug); a structural-only
--- `refMainKind` can't see through the `println` wrapper to the Unit, so it routes the
--- result to the Int printer.  Installed from the modules entry (installDeclRetTypes);
--- empty (prelude-free entries) ⇒ declRetTypeOf returns "" ⇒ unchanged.
-declRetTypesRef : Ref (List (String, (List String, String)))
-declRetTypesRef = Ref []
+methodArityOfInput : WasmEmitInput -> String -> Int
+methodArityOfInput (WasmEmitInputData _ methodIndex _ _ _ _ _ _ _ _) name = match omLookup name methodIndex
+  Some (_, arity) => arity
+  None => 0
 
--- perf #382: the SAME (paramTys, retTy) table as an O(log n) OrdMap.  `declRetTypeOf`/
--- `declParamTypesOf`/`fnReturnsFloat` are consulted per CApp reached by `cexprIsFloat`,
--- and each `lookupAssoc name declRetTypesRef.value` is O(#decls), so on decl-count ×
--- float-arith-density code the Float analysis degrades to O(nodes · decls) (#382, the
--- #351 twin).  Built ONCE in `installDeclRetTypes` (the single writer), keyed the same
--- first-match way as `lookupAssoc`: `omFromPairs (reverseL t)` so a duplicate name keeps
--- its FIRST value (omFromPairs folds left / last-write-wins).  None ⇒ the table was never
--- installed (a prelude-free entry) ⇒ each lookup falls back to the original list scan, so
--- the answer — Int vs Float, and thus every emitted byte — is identical either way.
-declRetTypesMapW : Ref (Option (OrdMap (List String, String)))
-declRetTypesMapW = Ref None
+-- Declared parameter/return type heads drive Unit-main and Float recovery.
+declRetLookupW : Prog -> String -> Option (List String, String)
+declRetLookupW prog name = match progInput prog
+  WasmEmitInputData _ _ _ declIndex _ _ _ _ _ _ => omLookup name declIndex
 
-export installDeclRetTypes : List (String, (List String, String)) -> Unit
-installDeclRetTypes t =
-  let _ = setRef declRetTypesRef t
-  setRef declRetTypesMapW (Some (omFromPairs (reverseL t) omEmpty))
-
--- (paramTys, retTy) for a top-level binding, via the memo (falls back to the list scan
--- when the table is uninstalled) — the SAME first-match answer as `lookupAssoc`.
-declRetLookupW : String -> Option (List String, String)
-declRetLookupW name = match declRetTypesMapW.value
-  Some m => omLookup name m
-  None => lookupAssoc name declRetTypesRef.value
-
--- the declared return type-head name of a top-level binding ("" = unknown).
-declRetTypeOf : String -> String
-declRetTypeOf name = match declRetLookupW name
+declRetTypeOf : Prog -> String -> String
+declRetTypeOf prog name = match declRetLookupW prog name
   Some (_, ret) => ret
   None => ""
 
--- W-SQLITE-4: the declared param type-head names of a top-level fn ([] = unknown).
-declParamTypesOf : String -> List String
-declParamTypesOf name = match declRetLookupW name
+declParamTypesOf : Prog -> String -> List String
+declParamTypesOf prog name = match declRetLookupW prog name
   Some (ps, _) => ps
   None => []
 
@@ -424,8 +411,8 @@ declParamTypesOf name = match declRetLookupW name
 -- user fn returning Float (`acc + cellNumF c`, `cellNumF : Cell -> Float`) is
 -- recognized even with no co-located Float literal — the analog of the native
 -- emitter's `declRetLTy`.  Additive: an unknown/Int-returning fn stays the Int path.
-fnReturnsFloat : String -> Bool
-fnReturnsFloat name = match declRetLookupW name
+fnReturnsFloat : Prog -> String -> Bool
+fnReturnsFloat prog name = match declRetLookupW prog name
   Some (_, ret) => ret == "Float"
   None => False
 
@@ -766,7 +753,7 @@ useRefBoxRef = Ref False
 --
 -- It used to be gated on `isNonEmptyList recFieldsRef.value`, i.e. on the
 -- CONSTRUCTION-SITE scan, which asks a different question and got it wrong the
--- moment the resolvers started reading the declaration-seeded `recFieldTableW ()`:
+-- moment the resolvers started reading declaration-seeded WasmEmitInput indexes:
 -- a program whose only record is constructed somewhere `scanRecFields` does not
 -- walk (a match-arm guard) but which UPDATES that record emitted `local.set
 -- $__rub0` with no `(local $__rub0 …)` to match. MEASURED on this branch before
@@ -952,17 +939,6 @@ floatLocalsRef = Ref []
 floatGlobalsRef : Ref (List String)
 floatGlobalsRef = Ref []
 
--- W-SQLITE-4 stage 2: ctor name → field INDICES declared as Float (from
--- ctorFieldTypeNames; installed by installCtorFloatFields from each wasm entry).
--- Drives cexprIsFloat's CFieldAccess arm and ctor-payload Float binder seeding.
--- Empty at startup (programs with no data decls stay unaffected).
-ctorFloatFieldsRef : Ref (List (String, List Int))
-ctorFloatFieldsRef = Ref []
-
-export installCtorFloatFields : List (String, List String) -> Unit
-installCtorFloatFields entries =
-  setRef ctorFloatFieldsRef (map ctorToFloatIdxs entries)
-
 -- convert one ctorFieldTypeNames entry to (ctorName, [floatFieldIndex, …]).
 ctorToFloatIdxs : (String, List String) -> (String, List Int)
 ctorToFloatIdxs (ctor, typeNames) = (ctor, floatFieldIndices typeNames 0)
@@ -974,10 +950,11 @@ floatFieldIndices ("Float"::rest) i = i :: floatFieldIndices rest (i + 1)
 floatFieldIndices (_::rest) i = floatFieldIndices rest (i + 1)
 
 -- true iff the ctor's field at the given 0-based index has declared type Float.
-isFloatCtorField : String -> Int -> Bool
-isFloatCtorField ctor idx = match lookupAssoc ctor ctorFloatFieldsRef.value
-  Some idxs => containsInt idx idxs
-  None => False
+isFloatCtorField : Prog -> String -> Int -> Bool
+isFloatCtorField prog ctor idx = match progInput prog
+  WasmEmitInputData _ _ _ _ _ ctorFloatIndex _ _ _ _ => match omLookup ctor ctorFloatIndex
+    Some idxs => containsInt idx idxs
+    None => False
 
 -- the distinct tuple arities used anywhere in the program (construction or match).
 tupleAritiesRef : Ref (List Int)
@@ -997,18 +974,16 @@ containsInt x (y::ys) = x == y || containsInt x ys
 -- ctor name → field labels in DECLARED order, for every named-field record/variant
 -- the program CONSTRUCTS (scanned from CRecord nodes, peer to llvm_emit.collectRecords).
 -- Set once per program in emitProgram.  It is the FALLBACK half of the field-order
--- table: EVERY reader goes through `recFieldTableW ()` below, which puts the
--- declarations in front of it.  (The `$__rub` scratch-local gate used to read this
+-- table: EVERY reader checks WasmEmitInput before the fallback scan. (The `$__rub`
+-- scratch-local gate used to read this
 -- table directly; it now reads `useRecUpdateRef`, because its question was never
 -- about field order at all — see that Ref's note.)
 recFieldsRef : Ref (List (String, List String))
 recFieldsRef = Ref []
 
--- #1513: the declaration-sourced half of the table above
--- (`core_ir_lower.declaredRecordFieldOrders`), installed by the emit driver before
--- emitProgram — the WasmGC peer of the LLVM backend's `EmitInput.recordFieldOrders`,
--- carried as an install hook for the same reason `methodIfaceTableRef` is (this
--- backend has no EmitInput seam yet; X-W.H).
+-- #1513: the declaration-sourced half of the table above comes from
+-- WasmEmitInput.recordFieldOrders.  The physical construction scan remains its
+-- fallback for entries that intentionally omit declaration facts.
 --
 -- Why wasm needs it too, given its miss is LOUD.  A record absent from the scan
 -- makes `recByName` fall through to `findRecByField`, which answers with a DIFFERENT
@@ -1022,19 +997,9 @@ recFieldsRef = Ref []
 -- built from different authorities is how they drift apart again.
 -- Empty (never installed, e.g. the prelude-free W2/W5 entries) ⇒ the scan alone ⇒
 -- byte-identical WAT to the pre-#1513 behaviour.
-declRecFieldsRef : Ref (List (String, List String))
-declRecFieldsRef = Ref []
-
--- install entry point for the emit drivers; peer of `installMethodIface`.
-export installRecFieldOrders : List (String, List String) -> Unit
-installRecFieldOrders t = setRef declRecFieldsRef t
-
--- THE field-order table every resolver must read: declarations first, construction
--- scan behind them.  Both halves are consulted first-match, so a declared record is
--- answered by its declaration and an undeclared one (anonymous shape, or a probe
--- entry that installs no declarations) still falls back to the scan.
-recFieldTableW : Unit -> List (String, List String)
-recFieldTableW _ = declRecFieldsRef.value ++ recFieldsRef.value
+-- `recordFieldsOf` and `recordByField` consult declaration indexes first and the
+-- construction scan second. A declared record is answered by its declaration; an
+-- undeclared anonymous shape, or a probe with empty input, still uses the scan.
 
 -- intern a literal's bytes as a fresh passive data segment; returns its index.
 freshStrSeg : List Int -> Int
@@ -1071,8 +1036,8 @@ noteFuncRef nm =
     let _ = setRef funcRefsSetW (omInsert nm () funcRefsSetW.value)
     setRef funcRefsRef (nm::funcRefsRef.value)
 
-export emitProgram : CProgram -> String
-emitProgram (CProgram groups ctorArs ctorTypes impls) =
+export emitProgram : WasmEmitInput -> CProgram -> String
+emitProgram input (CProgram groups ctorArs ctorTypes impls) =
   let _ = setRef lamIdRef 0
   let _ = setRef liftedFnsRef []
   let _ = setRef liftedNamesRef []
@@ -1122,7 +1087,7 @@ emitProgram (CProgram groups ctorArs ctorTypes impls) =
   let _ = if useFloatRef.value then setRef useStrRef True else ()
   let fnNames = collectFnNames groups
   let valNames = collectValNames groups
-  let fnArs = collectFnArities groups
+  let fnArs = collectFnArities input groups
   -- perf #382/#664: index the fn/val name sets + arity map ONCE, before the whole-program
   -- scans below (and every later emit) route their membership/arity lookups through it.
   let _ = installFnIndexW fnNames valNames fnArs
@@ -1131,7 +1096,7 @@ emitProgram (CProgram groups ctorArs ctorTypes impls) =
   -- only that method's entries instead of the whole `progImpls` list per site.
   let _ = installImplIndexW impls
   let _ = setFnsUsedAsValuesW (scanFnValueUses fnNames fnArs ctorArs groups ++ scanImplValueUses fnNames fnArs ctorArs impls)
-  let useClos = programUsesClosures groups ctorArs
+  let useClos = programUsesClosures input groups ctorArs
   -- closures force the uniform (ref eq) rep (a closure captures heterogeneous
   -- values); so does ANY dispatch — an impl method / method occurrence threads
   -- (ref eq) impl args + i31 dict witnesses, the W5 §8.6 uniform rep.  Strings
@@ -1149,7 +1114,7 @@ emitProgram (CProgram groups ctorArs ctorTypes impls) =
   -- stays on the byte-identical eager prologue.  Installed even when empty (the common
   -- case) so a prior program's set never leaks across a same-process re-emit.
   let _ = installLazyGlobalMapW (lazyGlobalNames groups)
-  let prog = Prog ctorArs ctorTypes typeNames useRef fnNames valNames fnArs useClos impls
+  let prog = Prog ctorArs ctorTypes typeNames useRef fnNames valNames fnArs useClos impls input
   if useRef then emitRefProgram prog groups
   else emitScalarProgram fnNames valNames groups
 
@@ -1161,8 +1126,8 @@ emitProgram (CProgram groups ctorArs ctorTypes impls) =
 -- ADT/string/closure-heavy, so ref-mode is the representative path) and never
 -- calls the main-requiring emitRefMain.  Each binding is wrapped with setGapBindW
 -- so a recorded gap is attributed to its source binding.
-export emitProgramGaps : CProgram -> List String
-emitProgramGaps (CProgram groups ctorArs ctorTypes impls) =
+export emitProgramGaps : WasmEmitInput -> CProgram -> List String
+emitProgramGaps input (CProgram groups ctorArs ctorTypes impls) =
   let _ = setRef lamIdRef 0
   let _ = setRef liftedFnsRef []
   let _ = setRef liftedNamesRef []
@@ -1207,7 +1172,7 @@ emitProgramGaps (CProgram groups ctorArs ctorTypes impls) =
   let _ = if useFloatRef.value then setRef useStrRef True else ()
   let fnNames = collectFnNames groups
   let valNames = collectValNames groups
-  let fnArs = collectFnArities groups
+  let fnArs = collectFnArities input groups
   -- perf #382/#664: index the fn/val name sets + arity map ONCE, before the whole-program
   -- scans below (and every later emit) route their membership/arity lookups through it.
   let _ = installFnIndexW fnNames valNames fnArs
@@ -1216,18 +1181,18 @@ emitProgramGaps (CProgram groups ctorArs ctorTypes impls) =
   -- only that method's entries instead of the whole `progImpls` list per site.
   let _ = installImplIndexW impls
   let _ = setFnsUsedAsValuesW (scanFnValueUses fnNames fnArs ctorArs groups ++ scanImplValueUses fnNames fnArs ctorArs impls)
-  let useClos = programUsesClosures groups ctorArs
+  let useClos = programUsesClosures input groups ctorArs
   -- force the ref path: the census measures the full (ref eq) emitter surface.
   let typeNames = distinctTypeNames ctorTypes
   let _ = installCtorTablesW ctorArs ctorTypes
   -- #561 PR-B: the gap census emits every value bind ORDINARILY (eager set), so install
   -- an EMPTY lazy set — this also RESETS any prior emitProgram's set so it cannot leak.
   let _ = installLazyGlobalMapW []
-  let prog = Prog ctorArs ctorTypes typeNames True fnNames valNames fnArs useClos impls
+  let prog = Prog ctorArs ctorTypes typeNames True fnNames valNames fnArs useClos impls input
   let _ = resetGapsW ()
   let _ = enableGapRecordW ()
   let _ = emitFnsGapsW prog (userFnBinds groups)
-  let _ = emitImplsGapsW prog (implGroups impls)
+  let _ = emitImplsGapsW prog (implGroups prog impls)
   let _ = emitValsGapsW prog (filterList isValBind groups)
   gapEventsW ()
 
@@ -1270,22 +1235,22 @@ isNonEmptyList xs = not (isEmptyList xs)
 -- under-applied and builds a malformed value closure that calls the 4-param define with
 -- 3 operands ("nothing on stack").  etaSaturateFnClause is a no-op (deficit 0) for every
 -- fn whose body tail is not an under-applied CMethod, so only those arities change.
-collectFnArities : List CBind -> List (String, Int)
-collectFnArities groups = map bindArity (userFnBinds groups)
+collectFnArities : WasmEmitInput -> List CBind -> List (String, Int)
+collectFnArities input groups = map (bindArity input) (userFnBinds groups)
 
-bindArity : CBind -> (String, Int)
-bindArity (CBind n clauses) =
-  (n, clauseArityOf (map etaSaturateFnClause clauses))
+bindArity : WasmEmitInput -> CBind -> (String, Int)
+bindArity input (CBind n clauses) =
+  (n, clauseArityOf (map (etaSaturateFnClause input) clauses))
 
 -- a program uses CLOSURES if any body contains a CLam, any application head is a
 -- non-ctor / non-top-level-fn variable or a non-variable (an indirect/HOF call),
 -- any top-level fn is multi-clause or has a non-PVar param (clause-dispatch
 -- coalescing, W4), OR any top-level fn is referenced as a VALUE (passed/returned —
 -- needs a closure wrapper).  Detected structurally over the whole program.
-programUsesClosures : List CBind -> List (String, Int) -> Bool
-programUsesClosures groups ctorArs =
+programUsesClosures : WasmEmitInput -> List CBind -> List (String, Int) -> Bool
+programUsesClosures input groups ctorArs =
   let fnNames = collectFnNames groups
-  let fnArs = collectFnArities groups
+  let fnArs = collectFnArities input groups
   anyBind (bindUsesClosures fnNames fnArs ctorArs) groups
 
 anyBind : (CBind -> Bool) -> List CBind -> Bool
@@ -1844,7 +1809,7 @@ cFieldName (CField k _) = k
 -- declared order — `core_ir_lower.normalizeRecordOrder` now makes that true rather
 -- than merely asserting it), peer to llvm_emit.collectRecords.
 --
--- #1513: this scan is the FALLBACK half of `recFieldTableW`, no longer the whole
+-- #1513: this scan is the fallback behind WasmEmitInput, no longer the whole
 -- table, and its arms are deliberately not exhaustive — a record reached only
 -- through `CLetGroup`, a slice bound, or a match-arm guard is invisible here, which
 -- is exactly why the declarations go in front of it.  Do not "fix" the class by
@@ -2687,7 +2652,7 @@ tupleTypeDecl n =
 -- with their ctor list.  Reserved types are handled separately so they are never
 -- double-declared.
 userTypesWithCtors : Prog -> List String
-userTypesWithCtors (Prog _ ctorTypes typeNames _ _ _ _ _ _) =
+userTypesWithCtors (Prog _ ctorTypes typeNames _ _ _ _ _ _ _) =
   filterList (t => not (isReservedType t)) typeNames
 
 -- per-type: a root struct (just the i32 tag) + one struct per PAYLOAD ctor (tag +
@@ -2932,7 +2897,7 @@ emitRefMain prog groups = match findMain groups
     -- value mains (e.g. `main = fold (acc x => acc + x) 0.0 [1.0, 2.0, 3.0]`)
     -- auto-print via the Float formatter instead of reinterpreting bits as an Int.
     let k = if mainBodyIsUnit prog body then WUnit
-            else if mainIsFloatHintRef.value then WFloat
+            else if inputMainIsFloat (progInput prog) then WFloat
             else refMainKind prog body
     -- a Unit main (a `putStrLn …` etc.) has already produced its IO effect; drop its
     -- i31-0 result and auto-print NOTHING (the "Unit main no auto-print" contract).
@@ -2948,15 +2913,15 @@ emitRefMain prog groups = match findMain groups
 -- Reads the installed declared-return-type table; empty ⇒ "" ⇒ False (unchanged).
 mainBodyIsUnit : Prog -> CExpr -> Bool
 mainBodyIsUnit prog (CApp f _) = match appHead f
-  CVar fn _ => declRetTypeOf fn == "Unit"
+  CVar fn _ => declRetTypeOf prog fn == "Unit"
   -- `println`/`print` are `Display a =>` constrained → the dict-pass rewrites the
   -- head to a CDict (or CMethod) carrying the routes; recover the bare name.
-  CDict fn _ => declRetTypeOf fn == "Unit"
-  CMethod fn _ _ _ => declRetTypeOf fn == "Unit"
+  CDict fn _ => declRetTypeOf prog fn == "Unit"
+  CMethod fn _ _ _ => declRetTypeOf prog fn == "Unit"
   _ => False
-mainBodyIsUnit prog (CVar fn _) = declRetTypeOf fn == "Unit"
-mainBodyIsUnit prog (CDict fn _) = declRetTypeOf fn == "Unit"
-mainBodyIsUnit prog (CMethod fn _ _ _) = declRetTypeOf fn == "Unit"
+mainBodyIsUnit prog (CVar fn _) = declRetTypeOf prog fn == "Unit"
+mainBodyIsUnit prog (CDict fn _) = declRetTypeOf prog fn == "Unit"
+mainBodyIsUnit prog (CMethod fn _ _ _) = declRetTypeOf prog fn == "Unit"
 mainBodyIsUnit prog (CLet _ _ _ b) = mainBodyIsUnit prog b
 -- the native branch-(2) equivalent: an UNANNOTATED `main = match … { … }` whose
 -- Unit-ness is only knowable from its inferred body type (e.g. check_main's
@@ -3048,7 +3013,7 @@ refMainKind prog (CApp f a) = match appHead f
     -- W8b: a Float-returning extern main (intToFloat/randomFloat) auto-prints as Float.
     else if contains fn ["intToFloat", "randomFloat"] then WFloat
     -- W-SQLITE-4: a call to a user fn whose declared sig returns Float (`main = f 2.5`).
-    else if fnReturnsFloat fn then WFloat
+    else if fnReturnsFloat prog fn then WFloat
     else if isUnitExtern fn then WUnit
     -- composite-autoprint parity: a bare `main = myeq a b` calls a dispatched
     -- interface method whose Bool result is type-erased at this CApp (→ WInt →
@@ -3063,7 +3028,7 @@ refMainKind prog (CApp f a) = match appHead f
   CDict fn _ => if methodReturnsBoolW prog fn then WBool else WInt
   h => refMainKind prog h
 -- W-SQLITE-4: a nullary Float-typed binding used as a value main (`main = h`, `h : Float`).
-refMainKind prog (CVar x _) = if fnReturnsFloat x then WFloat else WInt
+refMainKind prog (CVar x _) = if fnReturnsFloat prog x then WFloat else WInt
 refMainKind prog other = WInt
 
 -- True iff EVERY lowered impl clause of dispatched method `fn` conclusively renders
@@ -3173,15 +3138,15 @@ emitRefFnBind prog (CBind name clauses0) =
   -- W9b: a single-clause point-free constrained fn (`elem a = fold g False`) whose
   -- body is an under-applied CMethod gets eta-saturated to the method's full arity
   -- so the emitted dispatch call pushes every operand (else a validate underflow).
-  let clauses = map etaSaturateFnClause clauses0
+  let clauses = map (etaSaturateFnClause (progInput prog)) clauses0
   -- W-SQLITE-4: seed (and reset) floatLocalsRef with this fn's declared Float
   -- params before emitting its body, so type-erased Float arith on a param lowers
   -- to f64 ops (mirrors emitImplGroup's `impl … Float` seeding, generalized).
-  let _ = setRef floatLocalsRef (floatParamNames name clauses)
+  let _ = setRef floatLocalsRef (floatParamNames prog name clauses)
   -- A1 (poly-`Num`-on-Float): seed the polymorphic-`Num`/`Ord` param names so this fn's
   -- bare-CVar arithmetic on a type-var param routes to the runtime value-dispatch helper
   -- (mirrors floatLocalsRef, and native's LTNum seed).  [] resets for monomorphic fns.
-  let _ = setRef numPolyLocalsRef (numPolyParamNames name clauses)
+  let _ = setRef numPolyLocalsRef (numPolyParamNames prog name clauses)
   let arity = clauseArityOf clauses
   let params = synthParams arity
   -- Stage-2/3 (b′): a member of a detected dispatch-TMC group emits via the dest-passing
@@ -3819,7 +3784,7 @@ loadReqDict dpar i = ["local.get $" ++ gname dpar, "ref.test (ref i31)", "if (re
 implReqDictCount : Prog -> String -> String -> Int -> Int
 implReqDictCount prog method tag _userArgs =
   let raw = implArityFor prog method tag
-  let ua = methodArityOf method
+  let ua = methodArityOfW prog method
   if raw > ua then raw - ua else 0
 
 implArityFor : Prog -> String -> String -> Int
@@ -3982,7 +3947,7 @@ methodValArity prog name _ = methodValArityByName prog name
 -- #324 safety invariant (do NOT "fix" the `tag` below to be findByTagW-matchable):
 -- the `methodImpls` fallback is reached ONLY when `methodArityOf name == 0`, and that
 -- table holds `listLen (methodArgTys sig)` for EVERY interface (user + prelude,
--- installed by installMethodIface) — so reaching here means the method's true VALUE
+-- carried by WasmEmitInput) — so reaching here means the method's true VALUE
 -- arity IS 0.  `methodImpls`'s first pair carries the SYMBOL tag, which for an
 -- overlapping (C7) impl is a SANITIZED key (`Def__Box_a__`) matching neither raw `t`
 -- nor raw `k` in `implClauseFor` → `implGroupArity [] = 0` — the correct answer here.
@@ -3992,7 +3957,7 @@ methodValArity prog name _ = methodValArityByName prog name
 -- (e.g. `def`'s `Box a` clause `[$dict]` → 1) — WRONG for a nullary method value.
 methodValArityByName : Prog -> String -> Int
 methodValArityByName prog name =
-  let viaTable = methodArityOf name
+  let viaTable = methodArityOfW prog name
   if viaTable > 0 then viaTable
   else match methodImpls prog name
     (tag, _)::_ => implArityFor prog name tag
@@ -4108,7 +4073,8 @@ headTagForKeyW method key (_::rest) = headTagForKeyW method key rest
 -- via the SAME clause machinery top-level fns use (emitClausesRef).  Multi-clause
 -- impls (`eq Red Red = …; eq _ _ = …`) coalesce into a fall-through chain.
 emitImplFns : Prog -> List String
-emitImplFns prog = flatMap (emitImplGroup prog) (implGroups (progImpls prog))
+emitImplFns prog =
+  flatMap (emitImplGroup prog) (implGroups prog (progImpls prog))
 
 -- (method, tag, arity, clauses) per distinct impl key, in first-seen order.
 -- (method, headTag, key, arity, clauses) per distinct canonical impl key.  #324:
@@ -4118,15 +4084,16 @@ emitImplFns prog = flatMap (emitImplGroup prog) (implGroups (progImpls prog))
 -- (headTagUniqueW ⇒ symbol == headTag), so existing output is byte-identical.
 data ImplG = ImplG String String String Int (List CClause)
 
-implGroups : List CImplEntry -> List ImplG
-implGroups entries = mapGatherGroups entries (distinctImplKeys entries)
+implGroups : Prog -> List CImplEntry -> List ImplG
+implGroups prog entries =
+  mapGatherGroups prog entries (distinctImplKeys entries)
 
 -- map gatherImplGroup (a <Mut> fn — it reads the iface-arity table) over the keys.
-mapGatherGroups : List CImplEntry -> List (String, String) -> List ImplG
-mapGatherGroups _ [] = []
-mapGatherGroups entries (k::rest) =
-  let g = gatherImplGroup entries k
-  g :: mapGatherGroups entries rest
+mapGatherGroups : Prog -> List CImplEntry -> List (String, String) -> List ImplG
+mapGatherGroups _ _ [] = []
+mapGatherGroups prog entries (k::rest) =
+  let g = gatherImplGroup prog entries k
+  g :: mapGatherGroups prog entries rest
 
 -- the (method, canonical-key) groups present, first-seen order.  #324: key on the
 -- CANONICAL KEY (field 2), not the head tycon — so two overlapping same-head impls
@@ -4169,8 +4136,8 @@ dedupPairsGo (p::rest) seen acc =
   else
     dedupPairsGo rest (omInsert k () seen) (p::acc)
 
-gatherImplGroup : List CImplEntry -> (String, String) -> ImplG
-gatherImplGroup entries (m, key) =
+gatherImplGroup : Prog -> List CImplEntry -> (String, String) -> ImplG
+gatherImplGroup prog entries (m, key) =
   let mEntries = methodEntriesW entries m
   let headTag = headTagForKeyW m key mEntries
   let clauses = flatMap (implClauseFor m key) mEntries
@@ -4190,7 +4157,7 @@ gatherImplGroup entries (m, key) =
   -- validate fails at `$mdk_impl_List_foldMap` (expected (ref eq) but nothing on stack).
   -- nDicts = 0 for a dict-free impl (`length`/`toList`) ⇒ identical to the old maxI.
   let nDicts = wLeadingDictPats (firstImplClausePats clauses)
-  let arity = maxI (implGroupArity clauses) (methodArityOf m + nDicts)
+  let arity = maxI (implGroupArity clauses) (methodArityOfW prog m + nDicts)
   let clauses2 = map (etaExpandClause arity) clauses
   ImplG m headTag key arity clauses2
 
@@ -4245,9 +4212,9 @@ etaExpandTo pats body arity have
 -- whose body tail is not an under-applied CMethod.  Mirrors the LLVM method-spine
 -- deficit; the #12 CLam-compose case (sig-arity deficit) is not yet a wasm fixture
 -- so we key only on the method-spine signal (the load-bearing one for the prelude).
-etaSaturateFnClause : CClause -> CClause
-etaSaturateFnClause (CClause pats body) =
-  let deficit = methodBodyDeficitW body
+etaSaturateFnClause : WasmEmitInput -> CClause -> CClause
+etaSaturateFnClause input (CClause pats body) =
+  let deficit = methodBodyDeficitW input body
   if deficit <= 0 then CClause pats body
   else
     let (pats2, body2) = applyEtaTailW pats body deficit (listLen pats)
@@ -4257,14 +4224,14 @@ etaSaturateFnClause (CClause pats body) =
 -- (0 = saturated / not a method head).  Transparent through CLet/CLetGroup tail
 -- wrappers (a method spine can be the let-body tail).  Mirror of llvm_emit's
 -- methodBodyDeficit.
-methodBodyDeficitW : CExpr -> Int
-methodBodyDeficitW (CLet _ _ _ b) = methodBodyDeficitW b
-methodBodyDeficitW (CLetGroup _ b) = methodBodyDeficitW b
-methodBodyDeficitW (CMethod name _ _ _) = methodArityOf name
-methodBodyDeficitW app =
+methodBodyDeficitW : WasmEmitInput -> CExpr -> Int
+methodBodyDeficitW input (CLet _ _ _ b) = methodBodyDeficitW input b
+methodBodyDeficitW input (CLetGroup _ b) = methodBodyDeficitW input b
+methodBodyDeficitW input (CMethod name _ _ _) = methodArityOfInput input name
+methodBodyDeficitW input app =
   let (hd, args) = flattenApp app []
   match hd
-    CMethod name _ _ _ => maxI 0 (methodArityOf name - listLen args)
+    CMethod name _ _ _ => maxI 0 (methodArityOfInput input name - listLen args)
     _ => 0
 
 -- append `n` fresh eta params (numbered after `start`) and APPLY them to the body
@@ -4359,8 +4326,8 @@ clausePatVars (CClause pats _) = flatMap patVars pats
 -- co-located literal — generalizing the `impl … Float` seeding at emitImplGroup to
 -- any sig'd top-level fn.  Empty (no sig / no Float param) resets floatLocalsRef,
 -- preserving the reset-before-body discipline.
-floatParamNames : String -> List CClause -> List String
-floatParamNames name clauses = match declParamTypesOf name
+floatParamNames : Prog -> String -> List CClause -> List String
+floatParamNames prog name clauses = match declParamTypesOf prog name
   [] => []
   ptys => dedupKeep (flatMap (floatClausePatVars ptys) clauses)
 
@@ -4390,8 +4357,8 @@ floatPatsAt _ _ = []
 --     is only known at runtime, so it must dispatch (native seeds LTNum identically).
 -- A param declared with a concrete scalar (`: Int`/`: Float`) stays on the static fast
 -- path.  Unioned across clauses.  `paramUsedInArith` keeps `id x = x` off the list.
-numPolyParamNames : String -> List CClause -> List String
-numPolyParamNames name clauses = match declParamTypesOf name
+numPolyParamNames : Prog -> String -> List CClause -> List String
+numPolyParamNames prog name clauses = match declParamTypesOf prog name
   [] => dedupKeep (flatMap noSigNumPolyPatVars clauses)
   ptys => dedupKeep (flatMap (numPolyClausePatVars ptys) clauses)
 
@@ -4691,7 +4658,7 @@ emitDefaultDefineW prog fname tag method entry =
   -- cross-interface `empty` and the inner same-interface `fold` are already routed by the
   -- dict-pass / restampIfaceDictsW (an unconstrained default ⇒ nDicts = 0 ⇒ byte-identical).
   let nDicts = wLeadingDictPats pats0
-  let arity0 = maxI (listLen pats0) (methodArityOf method + nDicts)
+  let arity0 = maxI (listLen pats0) (methodArityOfW prog method + nDicts)
   let (pats1, body1) = etaExpandTo pats0 body0 arity0 (listLen pats0)
   -- #718 (peer of llvm_emit's emitDefaultDefine reqDict path): the element-`requires`
   -- dict count of the inner same-interface method this default reduces to (Ord's lt/gt/…
@@ -4702,7 +4669,7 @@ emitDefaultDefineW prog fname tag method entry =
   let nReq = innerDefaultReqCountW prog method tag
   let pats2 = reqDictPatsW nReq ++ pats1
   let arity = arity0 + nReq
-  let body = restampIfaceDictsW methodIfaceTableRef.value (methodIfaceOf method) tag (reqDictRoutesW nReq) body1
+  let body = restampIfaceDictsW (inputMethodIfaces (progInput prog)) (methodIfaceOfW prog method) tag (reqDictRoutesW nReq) body1
   emitDefaultDefnGroup prog fname tag method arity [CClause pats2 body]
 
 -- the element-`requires` dict count of the inner same-interface method a relational
@@ -5476,15 +5443,15 @@ cexprIsFloat prog env (CIf _ t f) = cexprIsFloat prog env t
 -- externs, so a co-located literal is no longer required to detect Float arith.
 cexprIsFloat prog env (CApp f a) = match appHead (CApp f a)
   CVar fn _ => not (contains fn env)
-    && (contains fn ["intToFloat", "randomFloat"] || fnReturnsFloat fn)
+    && (contains fn ["intToFloat", "randomFloat"] || fnReturnsFloat prog fn)
   _ => False
 -- W-SQLITE-4 stage 2: a record field access whose field is declared Float.
 -- Look up the record ctor that owns `label` (by the stamped record name when
 -- available, else by label) and check if that field's 0-based index is in
--- ctorFloatFieldsRef.
-cexprIsFloat prog env (CFieldAccess _ label recName) = match recByName (recFieldTableW ()) recName label
+-- WasmEmitInput's constructor-Float index.
+cexprIsFloat prog env (CFieldAccess _ label recName) = match recByName prog recName label
   Some (ctor, labels) =>
-    isFloatCtorField ctor (orZeroIdx (indexOfL label labels))
+    isFloatCtorField prog ctor (orZeroIdx (indexOfL label labels))
   None => False
 cexprIsFloat prog env _ = False
 
@@ -5495,13 +5462,14 @@ isArithOp op = contains op ["+", "-", "*", "/", "%"]
 
 -- W-SQLITE-4 stage 2: collect the PVar names that bind Float ctor-payload fields in
 -- a PCon pattern.  For `PCon c [PVar x, …]`, for each field index i where ctor c is
--- declared Float (via ctorFloatFieldsRef), collect x if the i-th sub-pattern is a
+-- declared Float (via WasmEmitInput), collect x if the i-th sub-pattern is a
 -- PVar.  Used by emitLeafRef/emitGuardArmRef to seed floatLocalsRef for the arm body.
-ctorPatFloatBinders : Pat -> List String
-ctorPatFloatBinders (PCon c args) = match lookupAssoc c ctorFloatFieldsRef.value
-  Some floatIdxs => ctorPatFloatBindersGo c floatIdxs args 0
-  None => []
-ctorPatFloatBinders _ = []
+ctorPatFloatBinders : Prog -> Pat -> List String
+ctorPatFloatBinders prog (PCon c args) = match progInput prog
+  WasmEmitInputData _ _ _ _ _ ctorFloatIndex _ _ _ _ => match omLookup c ctorFloatIndex
+    Some floatIdxs => ctorPatFloatBindersGo c floatIdxs args 0
+    None => []
+ctorPatFloatBinders _ _ = []
 
 ctorPatFloatBindersGo : String -> List Int -> List Pat -> Int -> List String
 ctorPatFloatBindersGo _ _ [] _ = []
@@ -5529,9 +5497,9 @@ ctorPatFloatBindersGo c floatIdxs (_::rest) i =
 -- — the WasmGC peers of those very helpers — so BOTH backends now runtime-dispatch the
 -- SAME nodes.  On an Int instantiation $mdk_value_* is byte-identical to the inline int
 -- path, so only correctness changes, never a value.
-armNumPolyBinders : Pat -> CExpr -> List String
-armNumPolyBinders pat body =
-  let floatBinders = ctorPatFloatBinders pat
+armNumPolyBinders : Prog -> Pat -> CExpr -> List String
+armNumPolyBinders prog pat body =
+  let floatBinders = ctorPatFloatBinders prog pat
   filterList
     (x => notIn floatBinders x && paramUsedInNumBinop x body)
     (patVars pat)
@@ -7358,7 +7326,7 @@ emitLeafTail : Prog -> List String -> Int -> List String -> List CArm -> Int -> 
 emitLeafTail prog env arity root arms i = match nthArm arms i
   Some (CArm pat _ body) =>
     let (binds, env2) = bindPatRef prog env pat root
-    let savedNum = seedArmNumEnv pat body
+    let savedNum = seedArmNumEnv prog pat body
     let bodyCode = emitRefTail prog env2 arity body
     let _ = restoreArmNumEnv savedNum
     binds ++ bodyCode
@@ -7372,7 +7340,7 @@ emitLeafTail prog env arity root arms i = match nthArm arms i
 emitGuardArmTail : Prog -> List String -> Int -> Int -> List String -> List (List String) -> List CArm -> Int -> CTree -> List String
 emitGuardArmTail prog env arity d root occs arms i fail = match nthArm arms i
   Some (CArm pat guards body) =>
-    let savedNum = seedArmNumEnv pat body
+    let savedNum = seedArmNumEnv prog pat body
     let gLabel = "$gt" ++ intToString d
     let (tests, binds, env2) = patTestBind prog pat root gLabel env
     -- #379: guards now thread the env (a CGBind binds names the body can see), so the
@@ -8041,11 +8009,11 @@ emitRecordRef prog env d name fields =
 
 -- field access `r.label`: cast to the record's ctor struct and struct.get the field
 -- at index (1 + its declared position).  The record ctor + its field order come from
--- `recFieldTableW ()` — the DECLARED orders the driver installed, then the
--- construction scan built in emitProgram behind them (#1513).
+-- WasmEmitInput's declared indexes, with the construction scan built in
+-- emitProgram as fallback (#1513).
 emitFieldAccessRef : Prog -> List String -> Int -> CExpr -> String -> String -> List String
 emitFieldAccessRef prog env d ex label recName =
-  match recByName (recFieldTableW ()) recName label
+  match recByName prog recName label
     Some (ctor, labels) =>
       let idx = orZeroIdx (indexOfL label labels)
       emitRefExpr prog env d ex
@@ -8063,7 +8031,7 @@ emitFieldAccessRef prog env d ex label recName =
 emitRecordUpdateRef : Prog -> List String -> Int -> String -> CExpr -> List CField -> List String
 emitRecordUpdateRef prog env d recName base fields = match firstFieldLabel fields
   None => gapL "ref-mode: empty record update"
-  Some k0 => match recByName (recFieldTableW ()) recName k0
+  Some k0 => match recByName prog recName k0
     Some (ctor, labels) => emitUpdateCopy prog env d ctor labels base fields
     None => gapL ("ref-mode: CRecordUpdate on unknown field '" ++ k0 ++ "'")
 
@@ -8075,16 +8043,16 @@ emitRecordUpdateRef prog env d recName base fields = match firstFieldLabel field
 -- wrong ctor: a `ref.cast` to the other record's struct (instantiation-time
 -- "illegal cast") and, where the cast happened to pass, the wrong slot written
 -- (bug #38, peer of the LLVM backend's recordByName).
-recByName : List (String, List String) -> String -> String -> Option (String, List String)
-recByName table recName label =
-  if recName == "" then findRecByField table label
-  else match lookupAssoc recName table
+recByName : Prog -> String -> String -> Option (String, List String)
+recByName prog recName label =
+  if recName == "" then recordByField prog label
+  else match recordFieldsOf prog recName
     Some labels =>
       if indexOfL label labels >= 0 then
         Some (recName, labels)
       else
-        findRecByField table label
-    None => findRecByField table label
+        recordByField prog label
+    None => recordByField prog label
 
 firstFieldLabel : List CField -> Option String
 firstFieldLabel [] = None
@@ -8092,7 +8060,7 @@ firstFieldLabel ((CField k _)::_) = Some k
 
 -- named-field variant update `Con { base | f = v … }`: same copy, ctor known.
 emitVariantUpdateRef : Prog -> List String -> Int -> String -> CExpr -> List CField -> List String
-emitVariantUpdateRef prog env d con base fields = match lookupAssoc con (recFieldTableW ())
+emitVariantUpdateRef prog env d con base fields = match recordFieldsOf prog con
   Some labels => emitUpdateCopy prog env d con labels base fields
   None =>
     gapL ("ref-mode: CVariantUpdate on unknown constructor '" ++ con ++ "'")
@@ -8146,6 +8114,18 @@ findRecByField ((ctor, labels)::rest) label =
     Some (ctor, labels)
   else
     findRecByField rest label
+
+recordFieldsOf : Prog -> String -> Option (List String)
+recordFieldsOf prog ctor = match progInput prog
+  WasmEmitInputData _ _ _ _ _ _ _ _ recordIndex _ => match omLookup ctor recordIndex
+    Some labels => Some labels
+    None => lookupAssoc ctor recFieldsRef.value
+
+recordByField : Prog -> String -> Option (String, List String)
+recordByField prog label = match progInput prog
+  WasmEmitInputData _ _ _ _ _ _ _ _ _ labelIndex => match omLookup label labelIndex
+    Some entry => Some entry
+    None => findRecByField recFieldsRef.value label
 
 -- ── match lowering: CDecision → discriminant + br_table + field extraction ───
 -- The scrutinee is a (ref eq).  The decision tree (CTree) is walked into a nest of
@@ -8207,12 +8187,12 @@ emitTreeRef prog env d decLabel root occs arms (CTSwitch branches dft) =
 --     on a boxed $float (see armNumPolyBinders).
 -- emitBinRef consults floatLocalsRef first, so a declared-Float binder keeps its static
 -- path and only genuinely type-lost operands pay for dispatch.
-seedArmNumEnv : Pat -> CExpr -> (List String, List String)
-seedArmNumEnv pat body =
+seedArmNumEnv : Prog -> Pat -> CExpr -> (List String, List String)
+seedArmNumEnv prog pat body =
   let savedFloat = floatLocalsRef.value
   let savedNumPoly = numPolyLocalsRef.value
-  let _ = setRef floatLocalsRef (ctorPatFloatBinders pat ++ savedFloat)
-  let _ = setRef numPolyLocalsRef (armNumPolyBinders pat body ++ savedNumPoly)
+  let _ = setRef floatLocalsRef (ctorPatFloatBinders prog pat ++ savedFloat)
+  let _ = setRef numPolyLocalsRef (armNumPolyBinders prog pat body ++ savedNumPoly)
   (savedFloat, savedNumPoly)
 
 restoreArmNumEnv : (List String, List String) -> Unit
@@ -8227,7 +8207,7 @@ emitLeafRef : Prog -> List String -> Int -> String -> List String -> List CArm -
 emitLeafRef prog env d decLabel root arms i = match nthArm arms i
   Some (CArm pat _ body) =>
     let (binds, env2) = bindPatRef prog env pat root
-    let savedNum = seedArmNumEnv pat body
+    let savedNum = seedArmNumEnv prog pat body
     let bodyCode = emitRefExpr prog env2 d body
     let _ = restoreArmNumEnv savedNum
     binds ++ bodyCode ++ ["br " ++ decLabel]
@@ -8247,7 +8227,7 @@ emitLeafRef prog env d decLabel root arms i = match nthArm arms i
 emitGuardArmRef : Prog -> List String -> Int -> String -> List String -> List (List String) -> List CArm -> Int -> CTree -> List String
 emitGuardArmRef prog env d decLabel root occs arms i fail = match nthArm arms i
   Some (CArm pat guards body) =>
-    let savedNum = seedArmNumEnv pat body
+    let savedNum = seedArmNumEnv prog pat body
     let gLabel = "$g" ++ intToString d
     let (tests, binds, env2) = patTestBind prog pat root gLabel env
     -- #379: guards now thread the env (a CGBind binds names the body can see), so the
@@ -8703,7 +8683,7 @@ binOpTy op =
 -- ── ctor / type info (ref mode) ──────────────────────────────────────────────
 
 isCtor : Prog -> String -> Bool
-isCtor (Prog ctorArs _ _ _ _ _ _ _ _) name = isSome (ctorArLookupW ctorArs name)
+isCtor (Prog ctorArs _ _ _ _ _ _ _ _ _) name = isSome (ctorArLookupW ctorArs name)
   || isReservedCtor name
   || isSyntheticCtor name
 
@@ -8864,7 +8844,7 @@ ctorsOfTypeIxW tcm ty =
   ctorsOfTypeDispatchW (t => orEmptyCtors (omLookup t tcm)) ty
 
 ctorArity : Prog -> String -> Int
-ctorArity (Prog ctorArs _ _ _ _ _ _ _ _) name = match ctorArLookupW ctorArs name
+ctorArity (Prog ctorArs _ _ _ _ _ _ _ _ _) name = match ctorArLookupW ctorArs name
   Some a => a
   None =>
     if isSyntheticCtor name then
@@ -8880,7 +8860,7 @@ ctorArLookupW ctorArs name = match ctorArMapW.value
 -- a ctor's owning type name (user types via the ctor→type map; reserved ctors map
 -- to their fixed type names; W7 synthetic ctors to their synthetic types).
 ctorTypeName : Prog -> String -> String
-ctorTypeName (Prog _ ctorTypes _ _ _ _ _ _ _) name = match ctorTyLookupW ctorTypes name
+ctorTypeName (Prog _ ctorTypes _ _ _ _ _ _ _ _) name = match ctorTyLookupW ctorTypes name
   Some ty => ty
   None =>
     if isSyntheticCtor name then
@@ -8955,7 +8935,7 @@ tupleTypeArity : String -> Int
 tupleTypeArity ty = trailingIntOf ty
 
 ctorsOfTypeUser : Prog -> String -> List String
-ctorsOfTypeUser (Prog _ ctorTypes _ _ _ _ _ _ _) ty = match typeCtorsMapW.value
+ctorsOfTypeUser (Prog _ ctorTypes _ _ _ _ _ _ _ _) ty = match typeCtorsMapW.value
   Some m => orEmptyCtors (omLookup ty m)
   None => map fstPair (filterList (e => eqStr (sndPair e) ty) ctorTypes)
 
