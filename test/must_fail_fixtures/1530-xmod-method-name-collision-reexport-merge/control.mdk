@@ -1,0 +1,8 @@
+import midctl.{IG, mth}
+
+data W a = MkW a
+
+impl IG W where
+  mth w = 5
+
+main = println (mth (MkW 1))

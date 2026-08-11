@@ -1,0 +1,84 @@
+issue: 1530
+what: `p` and `g` each declare their OWN, DIFFERENTLY-NAMED interface (`IP`, `IG`) that
+what: happens to share a METHOD name, `mth`. `mid.mdk` re-exports both SELECTIVELY
+what: (`export import g.{IG,mth}` then `export import p.{IP,mth}` -- no wildcard
+what: involved) into one merged module. `main.mdk` imports `mid` (a single direct
+what: import), declares `data W`, writes `impl IG W where mth w = 5`, and calls
+what: `mth (MkW 1)`.
+what: `impl IG W` is the ONLY impl anywhere in the graph and `mth` is the ONLY method
+what: `main.mdk` names, references, or implements. Dropping the `p.{IP,mth}` re-export
+what: line from `mid.mdk` (see control.mdk/midctl.mdk below) leaves the identical
+what: `main.mdk` body compiling clean and printing 5 -- so the collision, not anything
+what: about `main.mdk` itself, is entirely causal.
+what: Observed: REJECTED at exit 1 with `No impl of IP for W; write an 'impl IP W'.`
+what: -- naming `IP`, an interface `main.mdk` never mentions anywhere, instead of `IG`,
+what: the interface the file's own `impl` block actually implements.
+what: This is one arm of a two-arm defect (issue #1530 has both). The SIBLING arm --
+what: swap the two `export import` lines in `mid.mdk` (nothing else) -- makes the
+what: SAME main.mdk SILENTLY ACCEPT: exit 0, zero diagnostics anywhere in
+what: `check --json`, and `run` executes and prints 5. That arm is a true silent
+what: accept and is deliberately NOT the one pinned here (a `must_fail` claim asserts
+what: one verb/cmd's exit+stdout; an "exit 0, prints a plausible-looking value" arm is
+what: a strictly worse regression to pin as a positive number, since a wrong FIX could
+what: make the reject arm swap value without draining the class -- see AGENTS.md's
+what: "a fix that makes a defect QUIETER is a severity increase" -- so the REJECT arm,
+what: the one whose wrongness is legible from a single exit code plus a diagnostic
+what: naming the wrong interface, is pinned instead, per the task brief that filed
+what: this issue).
+what: MECHANISM (confirmed by reading `compiler/types/typecheck.mdk`,
+what: `importedMethodEntry`, ~line 14299): its own comment claims "two imported
+what: candidates ⇒ ambiguous occurrence, which resolve already rejects... so falling
+what: back to the floor costs nothing an accepted program can observe." That premise
+what: is false for THIS shape: `main.mdk` has exactly ONE direct import (`mid`), so
+what: resolve's `ifaceAmbiguousSet` (which walks `usePathsOf prog`, i.e. `main.mdk`'s
+what: own direct use-paths) never sees two provenances and stays silent -- but
+what: `methodCandImported`/`anyUsePathBinds` DOES see both `IP.mth` and `IG.mth` as
+what: reachable through `mid`'s merge, so `importedMethodEntry`'s "exactly one"
+what: candidate check fails, and `scopedMethodEntry`/`overrideScopedMethods` fall back
+what: to `universeMethodIdentsRef`'s bare-name LAST-WRITE-WINS floor -- a property of
+what: module processing order, not of the occurrence. Whichever interface's
+what: `insertMethodIdents` walk ran last wins the floor and becomes the obligation
+what: goal, independent of which impl the file actually wrote.
+cmd: check-json main.mdk
+exit: 1
+diag: T-NO-IMPL 7:16-7:19 No impl of IP for W; write an 'impl IP W'.
+control: check-json control.mdk
+why-verb: `check-json` rather than plain `check`/`run`: the human `check` output
+why-verb: embeds the file path AS PASSED, and the harness passes an ABSOLUTE path,
+why-verb: so a `stdout:`/`stdout-line:` pin on it would encode this machine's
+why-verb: directory layout (same reasoning #1228/#1063 give for the same verb
+why-verb: choice). `run` additionally puts this diagnostic on STDERR, not stdout
+why-verb: (verified: `run main.mdk >stdout 2>stderr` leaves stdout empty), so it
+why-verb: cannot supply a path-independent pin at all. `diag:` (not `diag-code:`)
+why-verb: is used because THE MESSAGE IS THE DEFECT here: the substantive claim is
+why-verb: not merely "rejects" but "rejects naming the WRONG interface (`IP`) for
+why-verb: the impl block the file actually wrote (`impl IG W`)" -- a `diag-code:`
+why-verb: pin (code+range only) would still pass if the message started naming the
+why-verb: right interface while still spuriously rejecting, which would hide half
+why-verb: of what is wrong here.
+why-control: control.mdk imports `midctl` (`export import g.{IG,mth}` only) instead
+why-control: of `mid` (that line PLUS `export import p.{IP,mth}`) -- midctl.mdk is
+why-control: mid.mdk with the `p.{IP,mth}` re-export removed, so `IG`/`mth` can only
+why-control: ever mean `g`'s declarations; no merge, no collision. Everything else
+why-control: (g.mdk, the impl, the entry body) is byte-identical between main.mdk and
+why-control: control.mdk. Must be diagnostic-free at exit 0 under check-json --
+why-control: verified (also verified with `run`: prints 5, exit 0). If this breaks,
+why-control: plain re-export or ordinary impl resolution broke, not #1530.
+why-note: NOT #1288 (open, verified distinct in the issue body): #1288 is a WILDCARD
+why-note: re-export (`export import p.*` + `export import g.*`) merging two
+why-note: SAME-SPELLED interfaces (`Same`/`Same`) at RESOLVE's export-table
+why-note: construction (`ModuleExports.expInterfaces`/`reExpInterfacesFrom`), always
+why-note: rejecting via `T-INCOMPLETE-IMPL`. This fixture uses SELECTIVE re-export
+why-note: (`.{IP,mth}`/`.{IG,mth}`, no wildcard) of two DIFFERENTLY-NAMED interfaces
+why-note: that share a METHOD name, and the defect lives one layer downstream, in
+why-note: TYPECHECK's `universeMethodIdentsRef`/`importedMethodEntry`
+why-note: (`compiler/types/typecheck.mdk`) -- a different table, a different key
+why-note: (method name, not interface name), and an order-DEPENDENT verdict rather
+why-note: than an unconditional reject.
+why-note: A fix drains this row when `check main.mdk` no longer names the wrong
+why-note: interface for the impl block the file actually wrote -- which, per the
+why-note: severity-increase trap this claim's `what:` section already flags, must be
+why-note: verified to mean "correctly rejects as ambiguous, or correctly resolves to
+why-note: IG", NOT merely "the reject arm's message text changed to something that
+why-note: still passes this row's stdout-line by accident of matching a different
+why-note: wrong string".
