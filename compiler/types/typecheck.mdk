@@ -2665,6 +2665,7 @@ data DeclEnvModule = DeclEnvModule {
     demOrd : Int,  -- 0 = the prelude; then the loader's dependency-first order
     demId : String,
     demDecls : List Decl,
+    demPubDecls : List Decl,  -- A-3.2b (#1512): `publicDataDecls demDecls`, MEMOIZED — see `declEnvRowVisible`
   }
 
 data DeclEnvs = DeclEnvs {
@@ -2726,8 +2727,25 @@ buildDeclEnvs coreDecls modules =
 declEnvModulesFrom : Int -> List (String, List Decl) -> List DeclEnvModule
 declEnvModulesFrom _ [] = []
 declEnvModulesFrom k ((mid, decls)::rest) =
-  DeclEnvModule { demOrd = k, demId = mid, demDecls = decls } ::
-    declEnvModulesFrom (k + 1) rest
+  declEnvModule k mid decls :: declEnvModulesFrom (k + 1) rest
+
+-- 🚨 THE ONLY WAY TO BUILD A ROW.  A-3.2b (#1512) added `demPubDecls`, which is a
+-- MEMO of `demDecls` and must never disagree with it; a record literal at a second
+-- site is exactly how the two would come to.  Every construction — the graph builder
+-- above and the `CE`/`IE` doctest probes below — goes through here.
+--
+-- `demPubDecls` is the publicity conjunct of `declEnvVisibleTo`, evaluated ONCE per
+-- module rather than per decl at every read.  It is a MEMO, not a filtered
+-- population: `demDecls` still holds the row's decls unfiltered, which is what the
+-- ruling's "K is the whole graph, visibility is a predicate at the READ" requires —
+-- the two projections sit side by side and `declEnvRowVisible` picks between them.
+declEnvModule : Int -> String -> List Decl -> DeclEnvModule
+declEnvModule k mid decls = DeclEnvModule {
+  demOrd = k,
+  demId = mid,
+  demDecls = decls,
+  demPubDecls = publicDataDecls decls,
+}
 
 declEnvOrdIndex : OrdMap Int -> List DeclEnvModule -> OrdMap Int
 declEnvOrdIndex acc [] = acc
@@ -2770,6 +2788,69 @@ declEnvsUpToGo cur (m::rest)
 -- every topo-earlier module.  NO CALLER IN THIS UNIT — see the block header.
 export declEnvsVisible : String -> DeclEnvs -> List DeclEnvModule
 declEnvsVisible mid envs = declEnvsUpTo (declEnvsOrdOf mid envs) envs
+
+-- 🚨 THE SECOND VISIBILITY PREDICATE — A-3.2b (#1512), the interim rule RATIFIED by
+-- the repo owner on that issue for K's declaration environments.  `DataEnv` keeps its
+-- unfiltered whole-graph population (K is the whole graph, that is the point) and
+-- visibility is applied HERE, at the READ, never open-coded at a read site — exactly
+-- the discipline `declEnvVisibleAt` already imposes for the ordinal axis.
+--
+-- 🚨 THE TWO CONJUNCTS MUST STAY SEPARABLE, and that is the whole reason this is one
+-- function taking `entryIsPublic` rather than a widened `declEnvVisibleAt`:
+--   * the ORDINAL conjunct is transitional scaffolding for a spec'd widening (§5 R2 /
+--     C4-I2 global candidacy) and **A-3.6 deletes it** (`declEnvVisibleAt`'s body
+--     becomes `True`);
+--   * the PUBLICITY conjunct is NOT transitional — it is the language's export
+--     semantics, and under the target it MIGRATES TO R (§3 row L7), it does not
+--     vanish.
+-- Folding them together means A-3.6 silently deletes export semantics along with the
+-- scaffolding.  Check the factoring survives that deletion before editing this: with
+-- `declEnvVisibleAt ≡ True` the two `declEnvRowVisible` arms below still read
+-- "own row ⇒ every decl, any other row ⇒ its public projection", which is what R
+-- inherits.
+--
+-- WHY A PREDICATE IS NEEDED AT ALL (MEASURED on this tree, not argued): an unfiltered
+-- whole-graph population used as the field-owner source turns a program that compiles
+-- into `T-AMBIGUOUS-FIELD`, because a PRIVATE record in an unrelated module starts
+-- voting in `resolveFieldByOwners`' ambiguity test.  That is a silent acceptance
+-- NARROWING — false rejects on legal programs — and §5 R2's two enumerated exceptions
+-- are both WIDENINGS carried by a could-not-pass-before fixture.  A narrowing cannot
+-- meet that bar.
+declEnvVisibleTo : Int -> Int -> Bool -> Bool
+declEnvVisibleTo cur entryOrd entryIsPublic = declEnvVisibleAt cur entryOrd
+  && (entryOrd == cur || entryIsPublic)
+
+-- The decls of row [m] that a reader at ordinal [cur] may see — `declEnvVisibleTo`
+-- applied at the only granularity at which its publicity conjunct is CONSTANT over a
+-- row: the reader's own row (publicity irrelevant, every decl visible) versus any
+-- earlier row (visible only in its public projection).  Both arms go through the
+-- predicate; neither open-codes `<=` or a `pub` test.
+--
+-- ZERO ALLOCATION: both arms return a list the envelope already holds
+-- (`demDecls` / the `demPubDecls` memo).  That is a MEASURED perf contract, not
+-- style — see `importedCtorTypeDecls`, whose walk over this result runs once per
+-- ctor-naming import member of every module, i.e. O(modules x universe).
+-- Materialising a filtered pool here would convert that TIME term into an
+-- ALLOCATION term of the same order, which is what the perf gate's `modules` shape
+-- grades.
+declEnvRowVisible : Int -> DeclEnvModule -> List Decl
+declEnvRowVisible cur m
+  | declEnvVisibleTo cur m.demOrd False = m.demDecls
+  | declEnvVisibleTo cur m.demOrd True = m.demPubDecls
+  | otherwise = []
+
+-- ── doctests ─────────────────────────────────────────────────────────────
+-- Both conjuncts, each shown to be separately load-bearing: a LATER row is invisible
+-- whatever its publicity (ordinal conjunct), and an EARLIER row is visible only
+-- publicly while the reader's OWN row is visible privately (publicity conjunct).
+-- > declEnvVisibleTo 1 2 True
+-- False
+-- > declEnvVisibleTo 1 0 False
+-- False
+-- > declEnvVisibleTo 1 0 True
+-- True
+-- > declEnvVisibleTo 1 1 False
+-- True
 
 -- ── A-3.2a (#1112): the `DataEnv` slice — CONSTRUCTION ONLY, NOT LIVE ────────
 -- §2 K: *"`DataEnv`: datatypes, constructor schemes, records and field
@@ -3463,16 +3544,8 @@ ieProbeBareKey = regKeyNTab
 ieProbeEnv : ImplEnv
 ieProbeEnv = buildImplEnv
   [
-    DeclEnvModule {
-      demOrd = 0,
-      demId = "amod",
-      demDecls = [ieSameImplIn "amod"],
-    },
-    DeclEnvModule {
-      demOrd = 1,
-      demId = "zmod",
-      demDecls = [ieSameImplIn "zmod"],
-    },
+    declEnvModule 0 "amod" [ieSameImplIn "amod"],
+    declEnvModule 1 "zmod" [ieSameImplIn "zmod"],
   ]
 
 -- 1. THE INTERFACE HALF IS A SCOPE.  Two same-spelled interfaces in two modules
@@ -3787,16 +3860,8 @@ ceSameDeclIn m methods = DInterface {
 ceProbeEnv : ClassEnv
 ceProbeEnv = buildClassEnv
   [
-    DeclEnvModule {
-      demOrd = 0,
-      demId = "amod",
-      demDecls = [ceSameDeclIn "amod" [ceMethodFoo]],
-    },
-    DeclEnvModule {
-      demOrd = 1,
-      demId = "zmod",
-      demDecls = [ceSameDeclIn "zmod" [ceMethodBar]],
-    },
+    declEnvModule 0 "amod" [ceSameDeclIn "amod" [ceMethodFoo]],
+    declEnvModule 1 "zmod" [ceSameDeclIn "zmod" [ceMethodBar]],
   ]
 
 ceProbeKey : String -> RegKey
@@ -3997,8 +4062,7 @@ ceGradedIface = DInterface {
 }
 
 ceGradedEnv : ClassEnv
-ceGradedEnv = buildClassEnv
-  [DeclEnvModule { demOrd = 0, demId = "gmod", demDecls = [ceGradedIface] }]
+ceGradedEnv = buildClassEnv [declEnvModule 0 "gmod" [ceGradedIface]]
 
 ceGradedKey : RegKey
 ceGradedKey = regKeyOfTab (ifaceTabKey (OriginModule "gmod") "Async")
@@ -4035,8 +4099,7 @@ ceFunctorIface = DInterface {
 }
 
 ceFunctorEnv : ClassEnv
-ceFunctorEnv = buildClassEnv
-  [DeclEnvModule { demOrd = 0, demId = "fmod", demDecls = [ceFunctorIface] }]
+ceFunctorEnv = buildClassEnv [declEnvModule 0 "fmod" [ceFunctorIface]]
 
 ceFunctorKey : RegKey
 ceFunctorKey = regKeyOfTab (ifaceTabKey (OriginModule "fmod") "Functor")
@@ -4792,7 +4855,11 @@ data CrossRun = CrossRun {
     universeDataEnv : Ref TcEnv,
     universeCtorIdentsRef : Ref (OrdMap (List (Ident, String, Scheme))),  -- #1111 A-2.11 (#1319 unit 1): the identity-keyed COMPANION of universeDataEnv's ctor map — see insertCtorIdents
     universeCtorCollidedRef : Ref (List String),  -- #1111 A-2.11: the ctor NAMES the line above holds ≥2 distinct identities for (normally EMPTY)
-    universeDataDecls : Ref (List Decl),  -- #674: prior modules' PUBLIC data DECLS (universeDataEnv is a lossy bare-name ctor env) — see appendDataUniverse
+    -- ⚠️ `universeDataDecls` was HERE and is RETIRED by A-3.2b (#1512, #1319 unit 4).
+    -- It was #674's positional `List Decl` of prior modules' public data decls, the
+    -- overlay pool; both its consumers now read stage K's `DeclEnvs.deModules` at the
+    -- reader's own ordinal.  Do not re-add a cross-run decl accumulator: the envelope
+    -- already holds the whole graph, keyed by loader module id and ordinal.
     obUnivConcreteRef : Ref (MultiRegistry (List Ty, List Require)),
     obUnivHeadlessRef : Ref (MultiRegistry (List Ty, List Require)),
     obUnivIfaceTagsRef : Ref (Registry SetRegistry),
@@ -4864,7 +4931,6 @@ freshCrossRun env = CrossRun {
   universeDataEnv = Ref env,
   universeCtorIdentsRef = Ref omEmpty,
   universeCtorCollidedRef = Ref [],
-  universeDataDecls = Ref [],
   obUnivConcreteRef = Ref mregEmpty,
   obUnivHeadlessRef = Ref mregEmpty,
   obUnivIfaceTagsRef = Ref regEmpty,
@@ -18679,7 +18745,9 @@ checkBodyImpl seed mode prog0 =
   -- over `accData ++ prog0` produced.  Per module O(|prog0|); total O(N).  Flat is unchanged.
   let dataEnv = match mode
     Flat _ => registerAllData initialEnv prog
-    Module _ _ _ =>
+    -- A-3.2b (#1512): `mid` is BOUND here now — the overlay pool below is read at this
+    -- module's own ordinal, so the arm can no longer discard it.
+    Module mid _ _ =>
       let _ = loadDataUniverse ()
       -- #674: OVERLAY the ctors of the types THIS module imports so a bare ctor name
       -- resolves to the module the unit imports it from, not the universe's load-order
@@ -18742,8 +18810,25 @@ checkBodyImpl seed mode prog0 =
       -- same reason `applyCtorScopeOverrides` wraps that call.  They are statements rather
       -- than an env transform only because those two tables are per-run REFS, not `TcEnv`
       -- fields; the ladder they implement is identical.  See applyRecordScopeOverrides.
+      -- #1112 A-3.2b (#1512), absorbing #1319 unit 4: THE OVERLAY POOL IS NOW STAGE K.
+      -- `crossRun.universeDataDecls` — a positional `List Decl` accumulated by
+      -- `appendDataUniverse`, carrying no key at all — is RETIRED; the pool is the
+      -- whole-graph envelope read at THIS module's ordinal through
+      -- `declEnvRowVisible`/`declEnvVisibleTo`.
+      --
+      -- 🚨 THE READ KEY IS `mid`, THE LOADER'S MODULE ID — the same string
+      -- `buildDeclEnvs` indexed the row under, threaded here by the driver
+      -- (`elabModuleStamp mid` on the emit path; `cmCheckWorker mid` since #1508).  It
+      -- is NOT re-derived from import syntax, which is why the emit path's
+      -- `private_mangle` rewriting cannot break it: mangling renames top-level
+      -- bindings, never a loader module id, and the decls in the pool are the very
+      -- objects the accumulator held before.  (Re-deriving a read key by re-walking
+      -- `DUse` syntax is what made #1425's four-site change resolve on eval and MISS on
+      -- emit — `DUse` decls are never mangled.  This key does not go through that
+      -- channel.)
+      let envs = driverState.value.declEnvsRef.value
       let base = registerAllData crossRun.value.universeDataEnv.value
-                   (importedCtorTypeDecls prog0 crossRun.value.universeDataDecls.value)
+                   (importedCtorTypeDecls prog0 (declEnvsOrdOf mid envs) envs.deModules)
       let env0 = registerAllData base prog0
       let _ = applyRecordScopeOverrides prog0
       applyCtorScopeOverrides prog0 env0
@@ -23733,13 +23818,14 @@ appendDataUniverse prog0 =
   -- objects the bare tables hold instead of minting a second set.  See insertRecordIdents.
   let recAcc = insertRecordIdents pubDecls (crossRun.value.universeRecordIdentsRef.value, crossRun.value.universeRecordCollidedRef.value)
   let _ = setRef crossRun.value.universeRecordIdentsRef (fst recAcc)
-  let _ = setRef crossRun.value.universeRecordCollidedRef (snd recAcc)
-  -- #674: keep the DECLS too (universeDataEnv is a bare-name ctor env — last-write-wins,
-  -- LOSSY across a duplicate ctor name — so it cannot recover a SPECIFIC module's ctor
-  -- for the import-scoped overlay).  checkBodyImpl re-registers the ctors of the types
-  -- THIS module imports with `(..)` from these decls; available on BOTH the check path
-  -- AND the elaborate/emit path (where the Module `accData` field is dead `[]`, #154 PR-C).
-  setRef crossRun.value.universeDataDecls (crossRun.value.universeDataDecls.value ++ pubDecls)
+  -- ⚠️ A-3.2b (#1512): a `setRef crossRun.value.universeDataDecls (… ++ pubDecls)` used
+  -- to follow the line below — #674's overlay pool, kept here because
+  -- `universeDataEnv` is a lossy bare-name ctor env and could not recover a SPECIFIC
+  -- module's ctor.  It is RETIRED: stage K's `DeclEnvs` already holds every module's
+  -- decls tagged with the module id and ordinal that lossiness was the absence of, so
+  -- the overlay reads the envelope directly (`importedCtorTypeDecls`) instead of a
+  -- second, unkeyed copy of the same declarations grown one module at a time.
+  setRef crossRun.value.universeRecordCollidedRef (snd recAcc)
 
 -- #804/#1028: an OPAQUE type publishes its PARAMETER KINDS, and nothing else.
 --
@@ -24015,19 +24101,31 @@ buildStandaloneShadowsGraph allDecls userDecls =
 -- literal's Num obligation finds no matching impl head and is spuriously rejected).
 -- registerAllData and buildOracle read only DData, so the extra DInterface/
 -- DImpl entries are inert for them.
+-- A-3.2b (#1512): the PREDICATE half, split out so `declEnvVisibleTo`'s publicity
+-- conjunct and this filter cannot drift.  The ruling on #1512 requires the flag be
+-- `publicDataDecls`' predicate VERBATIM, `DNewtype`'s absence included; the way to
+-- guarantee "verbatim" is not to copy it but to make `publicDataDecls` itself the
+-- filter over this one function, which is what the two lines below do.
+--
+-- ⚠️ `DNewtype`'s ABSENCE IS DELIBERATE, not an oversight to be tidied up: a newtype
+-- constructor is module-private by design (`public` is a parse error on `newtype`),
+-- and admitting one here would leak newtype constructors across module boundaries —
+-- draining #1311/#1305 in the loud→silent direction, i.e. a severity INCREASE.
+-- `DAttrib` is absent for the same reason it always was: an attributed decl is not
+-- unwrapped here, so it does not publish.  Neither absence may be "fixed" without
+-- owning those issues.
+publicDataDecl : Decl -> Bool
+publicDataDecl (DData { dataVis = VisPublic }) = True
+publicDataDecl (DInterface { pub = True, ... }) = True
+publicDataDecl (DImpl { pub = True, ... }) = True
+publicDataDecl (DTypeAlias { tyAliasPub = True }) = True
+publicDataDecl _ = False
+
+-- #1110: the decl passes THROUGH rather than being rebuilt, or the acquired
+-- `dataOrigin` is dropped on the export path — `filterList` preserves that by
+-- construction, where the old per-arm `d :: …` form preserved it by remembering to.
 publicDataDecls : List Decl -> List Decl
-publicDataDecls [] = []
--- #1110: pass the decl THROUGH rather than rebuilding it, or the acquired
--- `dataOrigin` is dropped on the export path.  Matches the arms below.
-publicDataDecls ((d@(DData { dataVis = VisPublic }))::rest) =
-  d :: publicDataDecls rest
-publicDataDecls ((d@(DInterface { pub = True, ... }))::rest) =
-  d :: publicDataDecls rest
-publicDataDecls ((d@(DImpl { pub = True, ... }))::rest) =
-  d :: publicDataDecls rest
-publicDataDecls ((d@(DTypeAlias { tyAliasPub = True }))::rest) =
-  d :: publicDataDecls rest
-publicDataDecls (_::rest) = publicDataDecls rest
+publicDataDecls decls = filterList publicDataDecl decls
 
 -- WS-1a fix: every impl in scope, EXPORT OR NOT.  Instances are GLOBAL (coherence
 -- + dispatch leak across module boundaries regardless of `export`), so the
@@ -24981,15 +25079,36 @@ importSeed (_::rest) depEnv = importSeed rest depEnv
 -- allocation 306/744/2013 MB against `main`'s 242/491/1010.  A cheaper bound is
 -- available if it is ever needed — index `pool` by owning module id, which would make
 -- the owned passes O(log n) — but it does not exist today, so do not cite one.
-importedCtorTypeDecls : List Decl -> List Decl -> List Decl
-importedCtorTypeDecls unitDecls pool =
-  flatMap (importOverlayDecls pool) unitDecls
+--
+-- 🚨 A-3.2b (#1512, absorbing #1319 unit 4): THE POOL IS NO LONGER A MATERIALISED
+-- ACCUMULATOR.  It used to be `crossRun.universeDataDecls` — a bare `List Decl`
+-- grown by `appendDataUniverse` one module at a time, with NO record of which module
+-- contributed what and no key at all beyond list position.  It is now the whole-graph
+-- envelope (`DeclEnvs.deModules`, stage K) read at the READER'S OWN ORDINAL through
+-- `declEnvRowVisible`, i.e. through `declEnvVisibleTo`'s two conjuncts.  `cur` is
+-- `declEnvsOrdOf mid` for the module being checked — a LOADER-derived identity, not a
+-- spelling re-derived from import syntax, which is what makes it survive the emit path
+-- (see the call site in `checkBodyImpl`).
+--
+-- ⚠️ THE POPULATION IS NOT BYTE-IDENTICAL TO THE OLD ACCUMULATOR, and the difference
+-- is exactly one row: the READER'S OWN module.  The accumulator held only STRICTLY
+-- EARLIER modules' public decls (`appendDataUniverse` runs at the END of a module's
+-- own pass); `declEnvVisibleTo` admits the reader's own row too, privately, because
+-- `entryOrd == cur` short-circuits the publicity conjunct.  That is the ruled
+-- predicate and it is deliberately not special-cased away here.  Its reach is
+-- bounded: `ownedType`/`ownedCtor` are scoped by `declOwnedBy mid` where `mid` comes
+-- from a `DUse` path, and no module imports itself, so an own-module decl can only
+-- ever fill the `bareType` fallback — LAST in a FIRST-wins walk, so it can only add a
+-- candidate where every earlier row supplied none, never displace one.
+importedCtorTypeDecls : List Decl -> Int -> List DeclEnvModule -> List Decl
+importedCtorTypeDecls unitDecls cur rows =
+  flatMap (importOverlayDecls cur rows) unitDecls
 
-importOverlayDecls : List Decl -> Decl -> List Decl
-importOverlayDecls pool (DAttrib _ d) = importOverlayDecls pool d
-importOverlayDecls pool (DUse _ (p@(UseGroup _ ms)) _) =
-  flatMap (memberOverlayDecl pool (usePathModuleId p)) ms
-importOverlayDecls _ _ = []
+importOverlayDecls : Int -> List DeclEnvModule -> Decl -> List Decl
+importOverlayDecls cur rows (DAttrib _ d) = importOverlayDecls cur rows d
+importOverlayDecls cur rows (DUse _ (p@(UseGroup _ ms)) _) =
+  flatMap (memberOverlayDecl cur rows (usePathModuleId p)) ms
+importOverlayDecls _ _ _ = []
 
 -- One member's overlay decl.  The bare-name fallback is kept for the `(..)` spelling
 -- ALONE, so no overlay that fired before #1111 A-2.6 is lost where the identity cannot
@@ -24998,8 +25117,8 @@ importOverlayDecls _ _ = []
 -- unscoped guess there would be the load-order coin flip this unit is removing.
 -- (The fallback is not a second pass over `pool` — `overlayScan` collects it in the
 -- same walk as the two identity-scoped candidates; see `findOverlayDecl`.)
-memberOverlayDecl : List Decl -> String -> UseMember -> List Decl
-memberOverlayDecl pool mid (UseMember n ctors _ _) = match findOverlayDecl mid n ctors pool
+memberOverlayDecl : Int -> List DeclEnvModule -> String -> UseMember -> List Decl
+memberOverlayDecl cur rows mid (UseMember n ctors _ _) = match findOverlayDecl mid n ctors cur rows
   Some d => [d]
   None => []
 
@@ -25030,8 +25149,8 @@ memberOverlayDecl pool mid (UseMember n ctors _ _) = match findOverlayDecl mid n
 -- three candidates in a SINGLE walk (their predicates are independent, so first-wins
 -- per candidate is unchanged) and stops the instant the DECIDING candidate is found,
 -- which is the early exit the three-pass form had.  See `overlayScan`.
-findOverlayDecl : String -> String -> Bool -> List Decl -> Option Decl
-findOverlayDecl mid n ctors pool = match overlayScan mid n ctors (None, None, None) pool
+findOverlayDecl : String -> String -> Bool -> Int -> List DeclEnvModule -> Option Decl
+findOverlayDecl mid n ctors cur rows = match overlayScanRows mid n ctors cur (None, None, None) rows
   (ownedType, ownedCtor, bareType) =>
     if ctors then
       orElseOpt (orElseOpt ownedType ownedCtor) bareType
@@ -25057,6 +25176,25 @@ findOverlayDecl mid n ctors pool = match overlayScan mid n ctors (None, None, No
 -- walk; WITHOUT `(..)` only `ownedCtor` is ever read, so exiting on `ownedType` would
 -- abandon the walk before the answer was found.  Exiting on "all three filled" is
 -- likewise wrong for the second case.
+-- A-3.2b (#1512): the OUTER half of the same one-traversal walk, over the envelope's
+-- per-module rows in ORDINAL order — which is the identical decl order the old
+-- accumulator was appended in (`appendDataUniverse` ran once per module, dependency
+-- first), so every FIRST-wins candidate below sees the same sequence it saw before.
+--
+-- 🚨 THE EARLY EXIT MUST BE CHECKED AT BOTH LEVELS.  `overlayScan` stops mid-row on
+-- the deciding candidate; without the identical test here the walk would continue into
+-- every LATER row having already decided, which is the O(modules x universe) term this
+-- whole neighbourhood is written to avoid.  `declEnvRowVisible` allocates nothing, so
+-- a skipped row costs one comparison.
+overlayScanRows : String -> String -> Bool -> Int -> (Option Decl, Option Decl, Option Decl) -> List DeclEnvModule -> (Option Decl, Option Decl, Option Decl)
+overlayScanRows _ _ _ _ acc [] = acc
+overlayScanRows mid n ctors cur acc (m::rest) =
+  let acc2 = overlayScan mid n ctors acc (declEnvRowVisible cur m)
+  if overlayDecided ctors acc2 then
+    acc2
+  else
+    overlayScanRows mid n ctors cur acc2 rest
+
 overlayScan : String -> String -> Bool -> (Option Decl, Option Decl, Option Decl) -> List Decl -> (Option Decl, Option Decl, Option Decl)
 overlayScan _ _ _ acc [] = acc
 overlayScan mid n ctors acc (d::rest) =
@@ -25455,7 +25593,12 @@ checkModuleFullDiags mid seedVars accData accAll prog =
   -- zero-allocation traversal per member).  Do not restate it as "no O(N²)" here: this
   -- call site is the SECOND per-module scan of the same pool, so it doubles whatever
   -- that constant is.
-  let _ = seedCheckRun (prog ++ importedCtorTypeDecls prog crossRun.value.universeDataDecls.value ++ accData)
+  -- A-3.2b (#1512): the SECOND consumer of the retired `universeDataDecls`, re-pointed
+  -- at stage K in lockstep with the `dataEnv` overlay — the two must stay on the same
+  -- pool ("keeps the two overlays in lockstep", above), and `mid` is this function's
+  -- own parameter, so the same loader-derived key reaches both.
+  let declEnvsHere = driverState.value.declEnvsRef.value
+  let _ = seedCheckRun (prog ++ importedCtorTypeDecls prog (declEnvsOrdOf mid declEnvsHere) declEnvsHere.deModules ++ accData)
   -- Bug C: pass the cumulative full impl universe (core + earlier modules) as
   -- implDecls (was checkModuleFull, i.e. implDecls=[]) so buildStandaloneShadows sees
   -- an imported standalone funDef that shadows an interface method (`map`'s `toList`

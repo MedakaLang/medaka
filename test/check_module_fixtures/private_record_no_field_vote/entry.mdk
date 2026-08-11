@@ -1,0 +1,37 @@
+-- #1512 (ARCH A-3.2b) — THE `universeFieldOwners` FIXTURE issue 1112's decomposition
+-- table calls for ("+ a `universeFieldOwners` fixture (it has none)").
+--
+-- WHAT IT PINS.  A bare field access `.x` resolves through `resolveFieldByOwners`,
+-- whose owner list comes from a table grown from `publicDataDecls` ONLY.  One owner
+-- resolves; TWO owners with an unbound receiver raise `T-AMBIGUOUS-FIELD`.  `m.mdk`
+-- declares a PRIVATE record that also has a field `x` — so this program is legal
+-- exactly because the private record does not vote, and `getx` infers `Local -> Int`.
+--
+-- 🚨 IT IS A FORWARD GUARD, NOT A DISCRIMINATOR FOR A-3.2b'S OWN DIFF, and saying so
+-- is the point.  A-3.2b retires the OVERLAY pool (`universeDataDecls`) and leaves the
+-- field-owner table alone, so this fixture passes both before and after that diff.
+-- What it guards is the ruling A-3.2b lands the machinery for: `DataEnv` holds the
+-- whole graph UNFILTERED, and visibility is a predicate at the READ
+-- (`declEnvVisibleTo`).  The next unit to point the field-owner table at `DataEnv`
+-- gets exactly two outcomes here — keep the publicity conjunct and this stays green,
+-- drop it and this program is REJECTED:
+--
+--     entry.mdk:N:C: Ambiguous field access: '.x' is declared by Hidden, Local;
+--     the record type is undetermined.
+--
+-- MEASURED on this tree by flipping ONLY `m.mdk`'s qualifier (the discriminator the
+-- ruling recorded): `data Hidden` → exit 0, `getx : Local -> Int`; `public export
+-- data Hidden` → exit 1 with the diagnostic above, `entry.mdk` byte-identical in both
+-- arms.  That is a silent acceptance NARROWING — a false reject on a legal program —
+-- which is why the predicate exists at all.
+--
+-- ⚠️ DO NOT "SIMPLIFY" `m.mdk` BY DELETING `Hidden`, and do not make it public: the
+-- fixture is nothing without a same-named field in a module the entry has no import
+-- path to.
+import m.{mk}
+
+data Local = Local { x : Int }
+
+getx r = r.x
+
+main = println (getx (Local { x = 7 }) + mk 1)
