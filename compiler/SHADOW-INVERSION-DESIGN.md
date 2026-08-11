@@ -297,6 +297,26 @@ garbage. S-1 therefore *improves* this cell; the residual is the leftover `run` 
 Changed clauses are marked **[CHANGED]**. Everything else is carried over verbatim so
 the two docs can be diffed.
 
+> ⚠️ **This section is the 2026-07-14 RECORD, and its S1 is stated in vocabulary that has
+> since been RETIRED. Do not implement a predicate from it.** The clause text below is left
+> as written — it is the design record, and rewriting it would falsify what was decided
+> then — but the adjective **"visible"**, used twice in the S1 bullet, was found on
+> 2026-08-06 to be undefined and to carry **three different scopes** across S1–S2. It is
+> now retired document-wide from the normative spec, and S1's two operands are **different
+> sets**, each named: the standalone operand is *defined in `M` or imported into `M`*, the
+> interface operand is the wider *nameable in `M`*, and S2's impl universe alone is
+> *graph-global*. `docs/spec/SHADOW-SEMANTICS.md` **§1.0** defines all three; the ruling and
+> its overturn condition are the **S1-SCOPE** note under S1
+> ([#1375](https://github.com/MedakaLang/medaka/issues/1375)).
+>
+> The difference is not cosmetic and it changed behaviour: reading S1's interface operand as
+> graph-global made an interface reachable *only* transitively — one a module can neither
+> name, call, import, nor write an `impl` for — capture a standalone that module had
+> explicitly imported, silently, at exit 0 on all three verbs
+> ([#1353](https://github.com/MedakaLang/medaka/issues/1353), S0, since fixed and graded by
+> §2 rows 33–35). A second later ruling excludes the implicit **prelude** from the
+> standalone operand (**S1-PRELUDE**), which this section's S1 does not distinguish either.
+
 * **S1 (shadow-hood). [CHANGED — tightened]** `N` is a **definer shadow** in module `M`
   iff `N` ∈ funDef-names(`M`) ∩ iface-method-names(visible interfaces), and `N` is not
   bound by a local pattern at the occurrence. **Shadow-hood is per-module, per-name, and
