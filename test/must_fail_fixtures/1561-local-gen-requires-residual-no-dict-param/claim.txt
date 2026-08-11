@@ -1,0 +1,79 @@
+issue: 1561
+what: a LET-LOCAL binding whose inferred context is the RESIDUAL of a
+what: `requires` discharge gets NO DICT PARAMETER, so the emitted code reads
+what: a dict word that was never passed and the binary faults.
+what: THIS PROGRAM IS LEGAL AND ITS CORRECT OUTPUT IS "start" THEN
+what: "wrap(int)" AT EXIT 0. `tagOf (Wrap z)` poses `Tag (Wrap t)`; the only
+what: matching instance is `impl Tag (Wrap a) requires Tag a`, whose
+what: discharge leaves the residual `Tag t`; `inner` generalizes over `t`,
+what: so `inner : Tag a => a -> String` and DICT-SEMANTICS §4 `gen` must
+what: abstract one dict for it. `useLocal 5` instantiates at `a = Int` and
+what: `impl Tag Int` answers "int".
+what: The pinned exit 139 is THE BUG asserted to still reproduce, never a
+what: claim that crashing is correct.
+what: MEASURED FIRST-HAND on two binaries built in one isolated worktree,
+what: MEDAKA_STRICT=1 on every call, every exit code read from a FILE
+what: REDIRECT and never a pipe -- and measured IDENTICALLY on both arms of
+what: a one-variable differential (a binary from `main`, and a binary from
+what: PR 1552's head, which fixes the TOP-LEVEL cell, issue 1549):
+what:   `medaka check main.mdk`       -> exit 0. On `main` the scheme is
+what:                `useLocal : a -> String`; on PR 1552's head it is
+what:                `useLocal : Tag a => a -> String` -- CORRECT -- while
+what:                the emitted definition still takes NO dict parameter.
+what:   `medaka run main.mdk`         -> exit 0, `start` + `wrap(int)`
+what:   `medaka build main.mdk -o b`  -> exit 0, binary written, no diagnostic
+what:   `./b`                         -> exit 139, stdout `start`,
+what:                `runtime error [E-FATAL-SIGNAL]: fatal memory fault`
+what: THE EMITTED CODE IS THE DISAGREEMENT (`medaka build --keep-ir`):
+what:   define i64 @mdk_<mod>__useLocal(i64 %arg0)      <- arity 1, NO dict
+what:   %t1 = call i64 @mdk_<mod>__useLocal(i64 %t0)    <- caller agrees
+what: so post-1552 the compiler REPORTS a scheme whose calling convention
+what: its own codegen does not implement.
+what: NOT INTRODUCED BY PR 1552 and NOT FIXED BY IT -- this row reproduces
+what: identically with and without that change, which repairs the top-level
+what: `gen` channel only (`registerInferredConstraints` at the SCC close).
+control: build-run control.mdk
+cmd: build-run main.mdk
+exit: 139
+stdout: start
+why-verb: `build-run` builds to a per-process temp binary and grades THAT
+why-verb: binary's exit and stdout -- the only verb that can see this cell.
+why-verb: `run` exits 0 printing the CORRECT value, and post-PR-1552 `check`
+why-verb: exits 0 printing the CORRECT scheme, so BOTH would be green today
+why-verb: and green forever. `build` is wrong too: `medaka build` itself
+why-verb: SUCCEEDS at exit 0; the fault belongs to the produced binary.
+why-verb: ⚠️ Issue 1394 (the build-run classifier never reads the
+why-verb: distinctive 126 of a FAILING `medaka build`, mis-grading it as
+why-verb: DRAINED) does NOT apply as long as this program builds, which it
+why-verb: does on both arms -- verified, not assumed. Should a future change
+why-verb: make it fail to BUILD, this row would mis-grade as DRAINED rather
+why-verb: than MALFORMED; that is issue 1394's defect, not this fixture's.
+why-stdout: exit 139 ALONE would match a crash from any unrelated cause,
+why-stdout: including one at startup before any of this program's own code
+why-stdout: ran -- this gate's "NEVER pin NONZERO / IT CRASHED" rule applied
+why-stdout: one level deeper. `main` therefore prints a `start` marker
+why-stdout: BEFORE the constrained call, so the pinned observation is "the
+why-stdout: binary ran, emitted its first line, and THEN faulted at the
+why-stdout: local binding's call". A startup crash yields empty stdout and
+why-stdout: fails this row rather than matching it.
+why-stdout: WHAT ELSE COULD MOVE THIS STRING? Only `println "start"` itself
+why-stdout: breaking, which the control (same marker, exit 0, `start` +
+why-stdout: `int`) independently contradicts.
+why-stdout: THERE IS EXACTLY ONE DRAIN DIRECTION: abstracting the local
+why-stdout: binding's dict makes the binary print `start` + `wrap(int)` at
+why-stdout: exit 0 -- a different exit AND different bytes.
+why-control: control.mdk flips exactly ONE dimension -- the local binding's
+why-control: constraint arrives DIRECTLY (`let inner z = tagOf z`) instead
+why-control: of as a `requires` residual. Same `let`-local binder, same
+why-control: local generalization, same call shape, same interface, same
+why-control: marker. MEASURED exit 0 with stdout `start` + `int` on BOTH
+why-control: arms.
+why-control: THIS ROW IS ALSO THE ISSUE'S DISCRIMINATOR, not merely an
+why-control: environment guard. PR 1552's body attributes this cell to the
+why-control: broad local-`gen` gap of issue 1082 ("a `let`/`where` binding
+why-control: still gets no dict parameter"). This control refutes that: the
+why-control: local path DOES abstract a dict for a direct constraint, on
+why-control: the very same build. The defect is specific to the `requires`
+why-control: RESIDUAL, so the fix belongs with issue 1549's reduction at the
+why-control: LOCAL binder -- not in a general local-binder rework.
+why-note: when this row goes red, close issue 1561 and delete this fixture.

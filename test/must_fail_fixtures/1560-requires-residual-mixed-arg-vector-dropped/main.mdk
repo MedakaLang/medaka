@@ -1,0 +1,37 @@
+-- Issue 1560: a `requires` residual whose ARGUMENT VECTOR MIXES a concrete-headed
+-- argument with a bare type variable is dropped from the inferred context, so no dict
+-- is abstracted and the built binary faults.  THIS PROGRAM IS LEGAL.
+--
+-- HAND-DERIVED FROM THE SPEC, BEFORE THE BINARY WAS ASKED (DICT-SEMANTICS §3 `inst`,
+-- §4 `gen`, §4.2 OD2):
+--   `conv (Wrap x) y` poses the goal `Conv (Wrap t) u`.  The only matching instance is
+--   `impl Conv (Wrap a) b requires Conv a b`, whose discharge leaves the RESIDUAL
+--   `Conv t u`.  Both `t` and `u` are generalizable, so OD2 defers the residual and
+--   `gen` makes it the principal context, abstracting one dict for it:
+--       f : Conv a b => a -> b -> String
+--   `main` instantiates at `a = Int`, `b = Bool`; `impl Conv Int Bool` answers
+--   "int-bool"; so the CORRECT behaviour is to print
+--       start
+--       w:int-bool
+--   at exit 0.  The pinned `exit: 139` with stdout `start` is THE BUG, never a claim
+--   that crashing is right.
+--
+-- The "start" marker is printed BEFORE the constrained call on purpose: it makes the
+-- pinned observation "the binary ran, produced its first line, and then faulted AT the
+-- residual call", which a crash from any unrelated cause at startup would not match.
+main =
+  let _ = println "start"
+  println (f 5 True)
+
+data Wrap a = Wrap a
+
+interface Conv a b where
+  conv : a -> b -> String
+
+impl Conv Int Bool where
+  conv _ _ = "int-bool"
+
+impl Conv (Wrap a) b requires Conv a b where
+  conv (Wrap x) y = "w:\{conv x y}"
+
+f x y = conv (Wrap x) y
