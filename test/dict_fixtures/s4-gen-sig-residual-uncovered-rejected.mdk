@@ -1,0 +1,38 @@
+-- §4 `gen-sig` side condition `Q_sig ⊩ P'ᵢ` where the inferred `P'ᵢ` arrives as a
+-- `requires` RESIDUAL and `Q_sig` is EMPTY.  Issue 1549, the signatured cell.
+--
+-- HAND-DERIVED FROM THE SPEC:
+--   The body poses `Tag (Wrap t)`; §3 `inst` reduces it through
+--   `impl Tag (Wrap a) requires Tag a` to the residual `Tag t`, and `t` is the
+--   signature's own quantified variable.  The declared context is empty, and
+--   ∅ ⊮ `Tag a`, so §4 `gen-sig` REJECTS at the definition site -- "a signature
+--   is a contract the body must satisfy, not a floor it can raise".  It is never
+--   silently widened to `Q_sig ∪ P'ᵢ`.
+-- EXPECTED: reject at the DEFINITION, T-MISSING-CONSTRAINT
+--   ("Could not deduce 'Tag a' from the signature of 'nest'").
+--
+-- BEFORE THE FIX this file was ACCEPTED at exit 0 by all three verbs, `run`
+-- printed the correct `wrap(int)`, and the built binary SEGFAULTED -- the
+-- coverage check never saw the residual either, because it reads the same
+-- inferred-obligation projection.
+--
+-- ⚠️ DISTINCT FROM `s4-gen-sig-body-needs-more-rejected.mdk`, which pins the same
+-- clause for a predicate the body infers DIRECTLY.  This one only becomes visible
+-- once the recorded predicate is REDUCED; a checker that tested the recorded
+-- `Tag (Wrap a)` against the declared set would find no bare-tyvar argument at
+-- all and stay silent.
+data Wrap a = Wrap a
+
+interface Tag t where
+  tagOf : t -> String
+
+impl Tag Int where
+  tagOf _ = "int"
+
+impl Tag (Wrap a) requires Tag a where
+  tagOf (Wrap x) = "wrap(\{tagOf x})"
+
+nest : a -> String
+nest x = tagOf (Wrap x)
+
+main = println (nest 5)

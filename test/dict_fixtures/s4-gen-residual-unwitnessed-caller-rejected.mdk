@@ -1,0 +1,36 @@
+-- §4 `gen` + `var`: once the residual is in the scheme, a caller must DISCHARGE
+-- it.  Issue 1549 (S0), the rejecting cell.
+--
+-- HAND-DERIVED FROM THE SPEC:
+--   As in the sibling fixture, `nest : Tag a => a -> String` (§4 `gen` over the
+--   residual `Tag t` of `impl Tag (Wrap a) requires Tag a`).  `main` instantiates
+--   at `a = NoTag`; §4 `var` must discharge `Tag NoTag`, and §3 offers neither
+--   `assum` (no ambient predicate) nor `inst` (`impl Tag Int` does not match, and
+--   `impl Tag (Wrap a)` matches only a `Wrap`).  So the program is REJECTED.
+-- EXPECTED: reject, `No impl of Tag for NoTag` (T-NO-IMPL).
+--
+-- BEFORE THE FIX all three verbs exited 0 and `run` printed `wrap(int)` --
+-- `NoTag` silently dispatched through `impl Tag Int` because no dict was passed
+-- and the fallback picks by declaration order.  Adding `impl Tag Bool` above
+-- `impl Tag Int` made it print `wrap(bool)` instead (measured).
+--
+-- ⚠️ NOT a duplicate of the sibling: this is the half that requires the residual
+-- to reach a CALLER's obligation, which a scheme-display assertion alone cannot
+-- establish -- a compiler that displayed `Tag a =>` without posing the goal would
+-- keep the sibling's section-2 row green and still accept this file.
+data Wrap a = Wrap a
+
+data NoTag = NoTag
+
+interface Tag t where
+  tagOf : t -> String
+
+impl Tag Int where
+  tagOf _ = "int"
+
+impl Tag (Wrap a) requires Tag a where
+  tagOf (Wrap x) = "wrap(\{tagOf x})"
+
+nest x = tagOf (Wrap x)
+
+main = println (nest NoTag)

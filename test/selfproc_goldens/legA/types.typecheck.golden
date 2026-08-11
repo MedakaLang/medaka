@@ -173,6 +173,7 @@ builtinIfaceRef : BuiltinClass -> IfaceRef
 callArgVecs : List (List Mono) -> List Int -> List (Int, Mono) -> List (List Mono)
 callOblMonoIds : (IfaceRef, List Mono, Option Loc) -> List (Int, String)
 callOblsWindow : Int -> List (IfaceRef, List Mono, Option Loc)
+callPredOf : (IfaceRef, List Mono, Option Loc) -> List (IfaceRef, List Mono, Option Loc)
 candidateBucket : Map String (List KeyEntry) -> HeadKey -> List KeyEntry
 candsOneIface : List KeyEntry -> Option String
 ceAddRows : List CeRow -> ClassEnv -> ClassEnv
@@ -665,7 +666,6 @@ foldModules : Bool -> Bool -> (String -> List (String, Scheme) -> List Decl -> L
 foldRowSlotArgs : List (String, Ref Effvar) -> List (String, Mono) -> Mono -> List Ty -> Mono
 foldrFun : List Mono -> Mono -> Mono
 foreachUnit : (a -> Unit) -> List a -> Unit
-forwardedVecOblOne : List Int -> IfaceRef -> List Mono -> List VecObl
 forwardedVecObls : List Int -> List (IfaceRef, List Mono, Option Loc) -> List VecObl
 freeEffvars : Mono -> List Int
 freeGenVars : Int -> Mono -> List Int
@@ -1000,6 +1000,7 @@ isUnboundTvar : Mono -> Bool
 joinAnd : List String -> String
 joinAxis : List (String, Param) -> List (String, Param) -> String -> (String, Param)
 keepBetterField : String -> Int -> Option (String, Int) -> Option (String, Int)
+keepBoundResidual : List Int -> (IfaceRef, List Mono) -> List VecObl
 keepGroupNames : Map String Unit -> List String -> List String
 keptConstraintArgs : List (IfaceRef, Mono) -> List (List Mono) -> List (List Mono)
 keptConstraintIfaces : List (IfaceRef, Mono) -> List IfaceRef
@@ -1079,7 +1080,7 @@ matchingEntries : Map String (List KeyEntry) -> String -> List Mono -> List KeyE
 matchingEntriesByIface : Map String (List KeyEntry) -> String -> List Mono -> List KeyEntry
 matchingEntriesByIfaceGo : List KeyEntry -> String -> List Mono -> List KeyEntry
 matchingEntriesGo : List KeyEntry -> String -> List Mono -> List KeyEntry
-maybeInferConstraint : List (String, Ty) -> String -> Scheme -> Unit
+maybeInferConstraint : List (String, Ty) -> List (IfaceRef, List Mono, Option Loc) -> List UObligation -> String -> Scheme -> Unit
 maybeStandaloneValueMono : String -> Option Mono
 maybeStandaloneValueMonoEmit : TcEnv -> String -> Ref Route -> Option Mono
 memberAliasEntry : String -> List ((String, String), List a) -> UseMember -> List (String, List a)
@@ -1186,6 +1187,7 @@ oblDispatchMonosGo : String -> List String -> Ty -> Mono -> List Mono
 oblIfaceKey : IfaceRef -> TabKey
 oblIfaceKeys : IfaceRef -> List TabKey
 oblKeyParts : Int -> List (Option HeadKey) -> (List TabKey, List Int)
+oblPredOf : UObligation -> List (IfaceRef, List Mono, Option Loc)
 occursAdjust : Int -> Int -> Mono -> Unit
 occursAdjustUnbound : Int -> Int -> Ref Tyvar -> Int -> Int -> Unit
 occursAdjustVar : Int -> Int -> Ref Tyvar -> Unit
@@ -1379,7 +1381,7 @@ registerImplMethodDictOne : String -> Int -> String -> List (String, Mono) -> Un
 registerImplMethodDicts : String -> List String -> Ty -> List (String, Mono) -> Unit
 registerImplMethodDictsGo : String -> Int -> List String -> List (String, Mono) -> Unit
 registerImplRequires : List (String, Mono) -> List String -> List Require -> List ImplMethod -> Unit
-registerInferredConstraints : List (String, Ty) -> List (String, Scheme) -> Unit
+registerInferredConstraints : List (String, Ty) -> List (IfaceRef, List Mono, Option Loc) -> List UObligation -> List (String, Scheme) -> Unit
 registerInferredFor : String -> List Int -> Unit
 registerLocalScheme : String -> Scheme -> Int -> Int -> Int -> Unit
 registerMember : String -> List (IfaceRef, Mono) -> List (List Mono) -> Unit
@@ -1428,6 +1430,12 @@ requiredMethodNames : List IfaceMethod -> List String
 resetCrossModuleState : Unit -> Unit
 resetState : Unit -> Unit
 resetTypeErrorsSticky : Unit -> Unit
+residualInferredIds : List Int -> List (IfaceRef, List Mono, Option Loc) -> List UObligation -> List Int
+residualPredOne : Int -> (IfaceRef, List Mono) -> List (IfaceRef, List Mono)
+residualPredsOf : Int -> IfaceRef -> List Mono -> List (IfaceRef, List Mono)
+residualReduceFuel : Int
+residualVecOblOfPred : List Int -> (IfaceRef, List Mono, Option Loc) -> List VecObl
+residualVecObls : List Int -> IfaceRef -> List Mono -> Option Loc -> List VecObl
 resolveArgStamp : Map String (List ImplEntry) -> Map String (List KeyEntry) -> String -> Ref Route -> Ref (List Route) -> Mono -> Mono -> String -> Unit
 resolveArgStamps : Map String (List ImplEntry) -> Map String (List KeyEntry) -> List PendingEntry -> Unit
 resolveArithSite : Ref Route -> Mono -> Unit
@@ -1491,8 +1499,6 @@ schemeIds : Scheme -> List Int
 schemeLines : List (String, Scheme) -> List String
 schemeMono : Scheme -> Mono
 schemeOblEntriesFor : String -> UsePath -> List ((String, String), List VecObl) -> List (String, List VecObl)
-schemeOblOfOne : List Int -> UObligation -> List VecObl
-schemeObligationOne : List Int -> IfaceRef -> List String -> Ty -> Mono -> List VecObl
 schemeObligationsOf : List Int -> List UObligation -> List VecObl
 schemeOblsForMember : List (String, Ty, List (String, Mono)) -> List (IfaceRef, List Mono, Option Loc) -> List UObligation -> String -> Scheme -> List VecObl
 scopeArities : List ((String, String), List Int) -> Map String Unit -> List Decl -> List (String, List Int)
@@ -1703,6 +1709,7 @@ variantFieldTailNames : Variant -> List String
 variantIdentRow : String -> TyConOrigin -> Variant -> List (String, String, Ident)
 variantNamed : String -> List Variant -> Bool
 vecOblKey : VecObl -> String
+vecOblOfPred : List Int -> (IfaceRef, List Mono, Option Loc) -> List VecObl
 vecOblsOfSlots : List CSlot -> List VecObl
 vectorGoal : String -> List Mono -> Option (Mono, List Mono)
 wMark : Windowed a -> Int
