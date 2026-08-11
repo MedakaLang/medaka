@@ -140,8 +140,10 @@ or omitted values rather than being equalized. Declaration-order first-match
 indexes are built once in the input.
 
 The old Wasm install hooks and the shared `emit_support` method-metadata Refs are
-gone. Physical mutable emitter state, feature flags, caches, counters, buffers,
-and gap mode remain for X-W.H2. This does not complete #1407.
+gone. A fresh private `WasmEmit` now owns gap mode, event logging, and binding
+attribution for each strict, record, or census invocation. Other physical mutable
+state, feature flags, caches, counters, and buffers remain for X-W.H2. This does
+not complete #1407.
 
 ### 3.3 Per-program derived indexes
 
@@ -225,9 +227,11 @@ The product driver shells out to a fresh emitter process specifically to obtain
 pristine state. Within one process:
 
 - LLVM constructs a fresh `Emit` record but also resets/installs external refs;
-- Wasm manually resets feature flags, lifted-function tables, strings, lambdas,
-  and physical indexes at `emitProgram` entry;
-- gap-census paths duplicate parts of setup;
+- Wasm creates a fresh `WasmEmit` for strict, record, and gap-census calls, while
+  manually resetting the remaining feature flags, lifted-function tables,
+  strings, and lambdas at `emitProgram` entry;
+- gap-census paths own a separate gap lifecycle but still duplicate the remaining
+  physical setup;
 - X-W.H2 still owns the remaining physical-state lifecycle.
 
 Fresh-process isolation is a useful defense, not proof that emission is a pure

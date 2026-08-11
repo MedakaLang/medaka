@@ -376,8 +376,9 @@ test, every candidate through native build AND wasm build AND `medaka run`). The
 - **The playground does NOT reuse compiler instances across compiles** (fresh
   instantiate per run, module-level Refs reborn). X-W.H1 nevertheless removed the
   declaration-derived install Refs: every Wasm emission now receives immutable
-  `WasmEmitInput`. Physical module Refs, including the census-mode gap flag with no
-  disable, remain X-W.H2 work.
+  `WasmEmitInput`. X-W.H2b.1 moved gap mode, event logging, and binding attribution
+  into a fresh `WasmEmit` per strict, record, or census emission. The output,
+  feature, numeric-scope, TRMC, and dispatch module Refs remain X-W.H2 work.
 - **`$boxint` equality/compare through a poly HOF is by VALUE** (no ref-identity bug).
 - **NaN `compare`/`min`/`max` are engine-UNIFORM today** (all three engines: `Eq`,
   `nan`, `nan`, `1.0`, `1.0`, probe-run) — the N6 interim bar holds there. The HOF-routed

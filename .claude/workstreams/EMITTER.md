@@ -91,8 +91,9 @@ Ref (#354; see the "PLAIN PARAMETER, not ambient state" comment at its signature
 write-then-read Refs; carry the decision on the node/parameter (wasm threads the label as an
 argument — the reference design, which LLVM emit now matches for both halves). LLVM's former
 install-once semantic tables enter through `EmitInput`; X-W.H1 gives Wasm the corresponding
-immutable `WasmEmitInput`. Wasm's physical Refs remain X-W.H2 work. Do not add new ambient
-semantic-input siblings to either lifecycle.
+immutable `WasmEmitInput`. X-W.H2b.1 puts Wasm gap mode, events, and attribution in a
+fresh per-emission `WasmEmit`; its other physical Refs remain X-W.H2 work. Do not add new
+ambient semantic-input or gap-lifecycle siblings.
 
 ### 8. Probes: `main` must be a zero-arg Unit value, and `do` is monadic
 `main () = …` is a silent no-op; `medaka run` rejects non-Unit value-mains with a diagnostic
