@@ -1,0 +1,23 @@
+-- #1223/#1521 (ARCH E-5) NESTED-LAYOUT corpus — the ENTRY, at this fixture's
+-- own root, sitting BESIDE `medaka.toml`.
+--
+-- `Leaf` is declared in `src/leaf.mdk`, BELOW this fixture's own `medaka.toml`.
+-- That is the shape blocker 1 of the #1526 adversarial review needed and the
+-- pre-existing `graph`/`ifaces`/`unresolved` corpora could not exercise: every
+-- one of them is a SINGLE-ROOT layout, where plain `moduleIdOfPath` (first
+-- containing root) and `canonicalModId`'s convention (LAST containing root)
+-- trivially agree because there is only one root to pick. Here there are two —
+-- `src/` (this module's own directory) and this fixture's root (found by
+-- walking up to `medaka.toml`) — and only the LAST-root convention
+-- (`canonicalPathId`, mirroring `canonicalModId`) computes the same id
+-- (`src.leaf`) a sibling's `import src.leaf` canonicalizes to. The FIRST-root
+-- convention (plain `moduleIdOfPath`) computes `leaf` instead — a real,
+-- measured CONFLICT before ARCH E-5's second pass, and the reason this fixture
+-- exists rather than trusting `graph`/`ifaces`/`unresolved` to cover it.
+
+import src.leaf.{Leaf(..), leafValue}
+
+boxed : Leaf
+boxed = Leaf 7
+
+main = println (leafValue boxed)

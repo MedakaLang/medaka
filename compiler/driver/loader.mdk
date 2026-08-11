@@ -692,6 +692,38 @@ canonicalModId deps roots m = match findModuleFile deps roots m
             let c = moduleIdOfPath [cr] cPath
             if canonRoundTrips deps roots c cPath then c else m
 
+-- Exported for the test driver (ARCH E-5, #1521/#1223) and its origin-agreement
+-- probe: the id THIS FILE would receive if some OTHER module in the project
+-- reached it through an unqualified import — `canonicalModId`'s non-dep branch
+-- (`canonRootFor`: the LAST containing root, not the first; round-trip guarded),
+-- generalized from an import STRING to a raw file PATH, since a single-file test
+-- target has no import spelling to canonicalize.
+--
+-- Plain `moduleIdOfPath roots path` (first-root) is NOT equivalent to this, and
+-- that gap is exactly what #1223 still showed after a first pass at its fix used
+-- `moduleIdOfPath` directly: the two conventions agree only when a project has
+-- ONE root, and diverge the moment a target sits below its own `medaka.toml` —
+-- `moduleIdOfPath` keeps the file's own directory (`paa`), while a sibling's
+-- `import paa` canonicalizes through `canonicalModId` to the project-root-relative
+-- spelling (`src.paa`).
+--
+-- Falls back to `moduleIdOfPath roots path` (the SAME first-root convention
+-- `loadProgramFilesE` uses for an ENTRY's own id — see the ⚠️ two paragraphs
+-- above `canonicalModId`, a documented, deliberately-unfixed loader residual) when
+-- no root canonically contains the path, or the canonical candidate does not
+-- round-trip back to this file (the exact guard `canonicalModId` uses; a bare
+-- path has no import spelling `m` to fall back to the way `canonicalModId` does,
+-- and its first-root id is the closest analogue).
+export canonicalPathId : List (String, String) -> List String -> String -> <IO> String
+canonicalPathId deps roots path =
+  let cPath = canonicalizePath path
+  let fallback = moduleIdOfPath roots path
+  match canonRootFor roots cPath
+    None => fallback
+    Some cr =>
+      let c = moduleIdOfPath [cr] cPath
+      if canonRoundTrips deps roots c cPath then c else fallback
+
 -- rewrite a UsePath so its `importModId` yields the canonical id `c`, preserving
 -- the imported member list / wildcard / alias / single name.  (For UseName the
 -- imported NAME is the last segment; the module path is the prefix — so appending

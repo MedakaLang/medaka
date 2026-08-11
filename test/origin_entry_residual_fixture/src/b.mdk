@@ -1,0 +1,4 @@
+import a.{Box(..), boxValue}
+
+export useBox : Box -> Int
+useBox b = boxValue b

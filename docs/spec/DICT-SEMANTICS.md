@@ -1806,19 +1806,53 @@ per-module scoping already answers the question they exist to work around. **Tho
 are defects of the flatten, not legitimate 1-module behaviour**, and U2 is what makes
 that judgement rather than leaving it to taste.
 
-⚠️ **This enumeration was incomplete — there is a THIRD residual, not a defect of the
-flatten but of the *name* the single-target arm gives its own node.** `runSingle`
-stamps a single-target test file's declarations under a synthetic module id,
-`"__user__"`, hardcoded at four sites in `compiler/tools/test_cmd.mdk`
-(`:353`, `:450`, `:527`, `:677`), while `loadProgram` stamps the *same file* under its
-loader-derived id — so one declaration carries two identities across a single
-`medaka test <dir>` process (#1223, S2). This is not the flatten's residual: `runSingle`
-is already on the Module path (a genuine `elaborateModules … [(rootId, prog)]` call, a
-1-node graph satisfying U1), and the defect is entirely in *what string names that one
-node*, orthogonal to whether the prelude is flattened into it. #1521 (ARCH E-5) owns
-retiring the literal and giving the single-target driver its loader-derived id;
-until it lands, `"__user__"` is a third thing this section's enumeration owed and did
-not name.
+⚠️ **This enumeration was incomplete — there was a THIRD residual, not a defect of the
+flatten but of the *name* the single-target arm gave its own node — PARTIALLY fixed
+by #1521 (ARCH E-5), which owns #1223 but does not close it.** `runSingle` used to
+stamp a single-target test file's declarations under a synthetic module id,
+`"__user__"`, hardcoded at four sites in `compiler/tools/test_cmd.mdk`, while
+`loadProgram` stamped the *same file* under its loader-derived id — so one
+declaration carried two identities across a single `medaka test <dir>` process
+(#1223, S2). This was not the flatten's residual: `runSingle` was already on the
+Module path (a genuine `elaborateModules … [(rootId, prog)]` call, a 1-node graph
+satisfying U1), and the defect was entirely in *what string named that one node*,
+orthogonal to whether the prelude is flattened into it. #1521 retired the literal —
+`runSingle`/`runPropsSingle`/`runTestDeclsSingle`/`propsReportSingle` now compute
+`canonicalPathId` (`compiler/driver/loader.mdk`), the SAME last-containing-root,
+round-trip-guarded convention `canonicalModId` uses to canonicalize a sibling's
+import of this file — **not** plain `moduleIdOfPath` (first-root), which a first
+pass at this fix used and which still diverged from the loader whenever the target
+sat below its own `medaka.toml` (caught in adversarial review, #1526). This holds
+REGARDLESS of whether the single-target file and the sibling that depends on it
+share a directory: `canonicalPathId`'s last-containing-root convention depends only
+on the SET OF ROOTS each file's own `entrySearchRoots` walk reaches (both walk up
+to the SAME `medaka.toml`), not on the two files living in one directory —
+`test/origin_fixtures/nested` is the cross-directory witness (`main_nested.mdk` at
+the fixture root, `src/leaf.mdk` a directory below it, and the two AGREE). So the
+single-target arm's node now carries the same identity a sibling's graph load would
+assign it.
+
+⚠️ **That closes #1223's ORIGINAL repro, not the general property, and #1223 stays
+OPEN.** `compiler/driver/loader.mdk:662-669` documents a SEPARATE, pre-existing
+residual, untouched by this fix: an ENTRY module's own id is `moduleIdOfPath`
+(first-containing-root — `loadProgramFilesE` never routes it through
+`canonicalModId`), while the SAME module reached as a DEPENDENCY of a DIFFERENT
+target's graph is `canonicalModId` (last-containing-root). For an IMPORT-BEARING
+file — which goes through `runMulti`, never through the single-file drivers E-5
+changed — that asymmetry still stamps one declaration with two ids. **MEASURED**
+in #1526's adversarial review, directly: `test/origin_entry_residual_fixture/src/a.mdk`
+(which imports a sibling, so it is multi-regime), driven through the probe as its
+OWN entry in one process, reads `mod:a`; driven again, in a SEPARATE process, as
+`src/b.mdk`'s dependency, the SAME declaration reads `mod:src.a`. **DERIVED, not
+separately measured:** `medaka test <dir>` would exhibit the identical divergence
+within ONE process, since `medaka_cli.mdk`'s `testFilesGo` loops over every
+expanded target file and calls `loadProgram` (or the single-file path) fresh per
+file, in the same process, with no state shared between iterations — so the two
+probe invocations above are a faithful stand-in for two iterations of that loop.
+This is pinned as a dedicated section of `test/diff_compiler_origin_agreement.sh`
+(`entry_residual`), not in `test/must_fail_fixtures/` — see that suite's
+`test/MUST-FAIL-NOT-PINNABLE.txt` entry for #1223 for why no `medaka` CLI verb can
+express it.
 
 ⚠️ **U1/U2 are clauses, not a description of the current state, and that difference
 has already misled.** `compiler/DRIVER-COLLAPSE-PLAN.md` records U1 as its own

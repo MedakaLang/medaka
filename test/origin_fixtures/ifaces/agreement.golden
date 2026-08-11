@@ -1,33 +1,33 @@
 === ORIGIN AGREEMENT (#1110) ===
 # <slot> <head> <flat~graph> <single~graph> <flat~single>
-alpha Cat R-ONLY CONFLICT R-ONLY
-alpha Ghost R-ONLY CONFLICT R-ONLY
+alpha Cat R-ONLY AGREE R-ONLY
+alpha Ghost R-ONLY AGREE R-ONLY
 alpha Int AGREE AGREE AGREE
 alpha String AGREE AGREE AGREE
-alpha decl:Boxed R-ONLY CONFLICT R-ONLY
-alpha decl:Cat R-ONLY CONFLICT R-ONLY
-alpha decl:Echo R-ONLY CONFLICT R-ONLY
-alpha decl:Ghost R-ONLY CONFLICT R-ONLY
-alpha decl:Loud R-ONLY CONFLICT R-ONLY
-alpha decl:Plain R-ONLY CONFLICT R-ONLY
-alpha decl:Quiet R-ONLY CONFLICT R-ONLY
-alpha decl:Speak R-ONLY CONFLICT R-ONLY
-alpha decl:Sub R-ONLY CONFLICT R-ONLY
-alpha decl:Tagged R-ONLY CONFLICT R-ONLY
-alpha iface:Boxed R-ONLY CONFLICT R-ONLY
-alpha iface:Loud R-ONLY CONFLICT R-ONLY
-alpha iface:Plain R-ONLY CONFLICT R-ONLY
-alpha iface:Quiet R-ONLY CONFLICT R-ONLY
-alpha iface:Speak R-ONLY CONFLICT R-ONLY
-alpha iface:Tagged R-ONLY CONFLICT R-ONLY
-beta Dog R-ONLY CONFLICT R-ONLY
-beta Kennel R-ONLY CONFLICT R-ONLY
+alpha decl:Boxed R-ONLY AGREE R-ONLY
+alpha decl:Cat R-ONLY AGREE R-ONLY
+alpha decl:Echo R-ONLY AGREE R-ONLY
+alpha decl:Ghost R-ONLY AGREE R-ONLY
+alpha decl:Loud R-ONLY AGREE R-ONLY
+alpha decl:Plain R-ONLY AGREE R-ONLY
+alpha decl:Quiet R-ONLY AGREE R-ONLY
+alpha decl:Speak R-ONLY AGREE R-ONLY
+alpha decl:Sub R-ONLY AGREE R-ONLY
+alpha decl:Tagged R-ONLY AGREE R-ONLY
+alpha iface:Boxed R-ONLY AGREE R-ONLY
+alpha iface:Loud R-ONLY AGREE R-ONLY
+alpha iface:Plain R-ONLY AGREE R-ONLY
+alpha iface:Quiet R-ONLY AGREE R-ONLY
+alpha iface:Speak R-ONLY AGREE R-ONLY
+alpha iface:Tagged R-ONLY AGREE R-ONLY
+beta Dog R-ONLY AGREE R-ONLY
+beta Kennel R-ONLY AGREE R-ONLY
 beta String AGREE AGREE AGREE
-beta decl:Dog R-ONLY CONFLICT R-ONLY
-beta decl:Echo R-ONLY CONFLICT R-ONLY
-beta decl:Kennel R-ONLY CONFLICT R-ONLY
-beta decl:Speak R-ONLY CONFLICT R-ONLY
-beta iface:Speak R-ONLY CONFLICT R-ONLY
+beta decl:Dog R-ONLY AGREE R-ONLY
+beta decl:Echo R-ONLY AGREE R-ONLY
+beta decl:Kennel R-ONLY AGREE R-ONLY
+beta decl:Speak R-ONLY AGREE R-ONLY
+beta iface:Speak R-ONLY AGREE R-ONLY
 core Array AGREE AGREE AGREE
 core Bool AGREE AGREE AGREE
 core Char AGREE AGREE AGREE
@@ -93,59 +93,39 @@ core iface:Slice AGREE AGREE AGREE
 core iface:Thenable AGREE AGREE AGREE
 core iface:Traversable AGREE AGREE AGREE
 deep Int AGREE AGREE AGREE
-deep decl:Baton R-ONLY CONFLICT R-ONLY
-deep decl:Relay R-ONLY CONFLICT R-ONLY
+deep decl:Baton R-ONLY AGREE R-ONLY
+deep decl:Relay R-ONLY AGREE R-ONLY
 main_ifaces Baton R-ONLY R-ONLY NEITHER
 main_ifaces Int AGREE AGREE AGREE
-main_ifaces Pair R-ONLY CONFLICT R-ONLY
+main_ifaces Pair R-ONLY AGREE R-ONLY
 main_ifaces String AGREE AGREE AGREE
-main_ifaces decl:Pair R-ONLY CONFLICT R-ONLY
+main_ifaces decl:Pair R-ONLY AGREE R-ONLY
 main_ifaces iface:Echo R-ONLY R-ONLY NEITHER
 main_ifaces iface:Relay R-ONLY R-ONLY NEITHER
 main_ifaces iface:Speak R-ONLY R-ONLY NEITHER
-mid Baton R-ONLY CONFLICT R-ONLY
+mid Baton R-ONLY AGREE R-ONLY
 mid Int AGREE AGREE AGREE
-mid decl:Baton R-ONLY CONFLICT R-ONLY
-mid decl:Relay R-ONLY CONFLICT R-ONLY
+mid decl:Baton R-ONLY AGREE R-ONLY
+mid decl:Relay R-ONLY AGREE R-ONLY
 === CONFLICTS ===
-# PINNED, #1223 (medaka test <dir>: one declaration, two module ids, one process).
-# ⚠️ THESE ROWS DRAIN BY REVIEW, NOT MECHANICALLY. The `single` arm's "__user__" is
-# a SHAPE MODEL spelled in this probe, not read from compiler/tools/test_cmd.mdk,
-# so unifying the drivers will NOT flip these rows on its own. Whoever fixes #1223
-# must delete them here by hand. (Sourcing the id from the driver would make it
-# mechanical; that is a change to test_cmd.mdk and is deliberately not in this PR.)
-alpha Cat flat=- single=mod:__user__ graph=mod:alpha
-alpha Ghost flat=- single=mod:__user__ graph=mod:alpha
-alpha decl:Boxed flat=- single=mod:__user__ graph=mod:alpha
-alpha decl:Cat flat=- single=mod:__user__ graph=mod:alpha
-alpha decl:Echo flat=- single=mod:__user__ graph=mod:alpha
-alpha decl:Ghost flat=- single=mod:__user__ graph=mod:alpha
-alpha decl:Loud flat=- single=mod:__user__ graph=mod:alpha
-alpha decl:Plain flat=- single=mod:__user__ graph=mod:alpha
-alpha decl:Quiet flat=- single=mod:__user__ graph=mod:alpha
-alpha decl:Speak flat=- single=mod:__user__ graph=mod:alpha
-alpha decl:Sub flat=- single=mod:__user__ graph=mod:alpha
-alpha decl:Tagged flat=- single=mod:__user__ graph=mod:alpha
-alpha iface:Boxed flat=- single=mod:__user__ graph=mod:alpha
-alpha iface:Loud flat=- single=mod:__user__ graph=mod:alpha
-alpha iface:Plain flat=- single=mod:__user__ graph=mod:alpha
-alpha iface:Quiet flat=- single=mod:__user__ graph=mod:alpha
-alpha iface:Speak flat=- single=mod:__user__ graph=mod:alpha
-alpha iface:Tagged flat=- single=mod:__user__ graph=mod:alpha
-beta Dog flat=- single=mod:__user__ graph=mod:beta
-beta Kennel flat=- single=mod:__user__ graph=mod:beta
-beta decl:Dog flat=- single=mod:__user__ graph=mod:beta
-beta decl:Echo flat=- single=mod:__user__ graph=mod:beta
-beta decl:Kennel flat=- single=mod:__user__ graph=mod:beta
-beta decl:Speak flat=- single=mod:__user__ graph=mod:beta
-beta iface:Speak flat=- single=mod:__user__ graph=mod:beta
-deep decl:Baton flat=- single=mod:__user__ graph=mod:deep
-deep decl:Relay flat=- single=mod:__user__ graph=mod:deep
-main_ifaces Pair flat=- single=mod:__user__ graph=mod:main_ifaces
-main_ifaces decl:Pair flat=- single=mod:__user__ graph=mod:main_ifaces
-mid Baton flat=- single=mod:__user__ graph=mod:mid
-mid decl:Baton flat=- single=mod:__user__ graph=mod:mid
-mid decl:Relay flat=- single=mod:__user__ graph=mod:mid
+# ARCH E-5 (#1521) PARTIALLY fixed #1223 — the NO-IMPORT case only.
+# compiler/tools/test_cmd.mdk's single-file drivers now compute
+# `canonicalPathId` (last-containing-root, round-trip-guarded) instead of a
+# hardcoded "__user__" literal, via the EXPORTED `singleRootId`. This probe's
+# `single` arm CALLS that same exported function directly (not by reusing the
+# graph arm's `mid` as its elaboration id, which would manufacture AGREE and
+# prove nothing — see singleArm's own comment) — so a genuine single~graph
+# CONFLICT is still REACHABLE here, and the DRIVER regressing back to plain
+# `moduleIdOfPath` inside `singleRootId` would flip this gate red.
+# ⚠️ THE ROOTS LIST FED TO `singleRootId` IS STILL THIS ARM'S OWN MODEL of
+# `testFilesGo` (`entrySearchRoots (dirOf path) ++ [stdlibDir]`), not a call
+# to it — see `singleArm`'s comment for what that residual gap covers.
+# The rows #1223 pinned (single-root corpus) read AGREE, and a nested-project
+# row (test/origin_fixtures/nested) requires the last-root convention to
+# agree, REGARDLESS of directory nesting (that fixture is cross-directory).
+# #1223 stays OPEN: an IMPORT-BEARING file's ENTRY-vs-DEPENDENCY id asymmetry
+# (loader.mdk:662-669, never touched by this fix) still reproduces — pinned in
+# this gate's dedicated entry_residual section, not this table.
 === RESIDUAL ===
 # <arm> <slot> <head> — an `OriginUnresolved` head that SURVIVED stamping.
 # NOT necessarily a defect; NOT necessarily empty. Read the section comment.
@@ -296,4 +276,4 @@ iface-occs-implOrigin 124
 heads 107
 claims 321
 residual 40
-conflicts 32
+conflicts 0

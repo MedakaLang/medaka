@@ -66,17 +66,27 @@ core iface:Thenable AGREE AGREE AGREE
 core iface:Traversable AGREE AGREE AGREE
 main_unresolved Int AGREE AGREE AGREE
 main_unresolved Missing NEITHER NEITHER NEITHER
-main_unresolved Parcel R-ONLY CONFLICT R-ONLY
-main_unresolved decl:Parcel R-ONLY CONFLICT R-ONLY
+main_unresolved Parcel R-ONLY AGREE R-ONLY
+main_unresolved decl:Parcel R-ONLY AGREE R-ONLY
 === CONFLICTS ===
-# PINNED, #1223 (medaka test <dir>: one declaration, two module ids, one process).
-# ⚠️ THESE ROWS DRAIN BY REVIEW, NOT MECHANICALLY. The `single` arm's "__user__" is
-# a SHAPE MODEL spelled in this probe, not read from compiler/tools/test_cmd.mdk,
-# so unifying the drivers will NOT flip these rows on its own. Whoever fixes #1223
-# must delete them here by hand. (Sourcing the id from the driver would make it
-# mechanical; that is a change to test_cmd.mdk and is deliberately not in this PR.)
-main_unresolved Parcel flat=- single=mod:__user__ graph=mod:main_unresolved
-main_unresolved decl:Parcel flat=- single=mod:__user__ graph=mod:main_unresolved
+# ARCH E-5 (#1521) PARTIALLY fixed #1223 — the NO-IMPORT case only.
+# compiler/tools/test_cmd.mdk's single-file drivers now compute
+# `canonicalPathId` (last-containing-root, round-trip-guarded) instead of a
+# hardcoded "__user__" literal, via the EXPORTED `singleRootId`. This probe's
+# `single` arm CALLS that same exported function directly (not by reusing the
+# graph arm's `mid` as its elaboration id, which would manufacture AGREE and
+# prove nothing — see singleArm's own comment) — so a genuine single~graph
+# CONFLICT is still REACHABLE here, and the DRIVER regressing back to plain
+# `moduleIdOfPath` inside `singleRootId` would flip this gate red.
+# ⚠️ THE ROOTS LIST FED TO `singleRootId` IS STILL THIS ARM'S OWN MODEL of
+# `testFilesGo` (`entrySearchRoots (dirOf path) ++ [stdlibDir]`), not a call
+# to it — see `singleArm`'s comment for what that residual gap covers.
+# The rows #1223 pinned (single-root corpus) read AGREE, and a nested-project
+# row (test/origin_fixtures/nested) requires the last-root convention to
+# agree, REGARDLESS of directory nesting (that fixture is cross-directory).
+# #1223 stays OPEN: an IMPORT-BEARING file's ENTRY-vs-DEPENDENCY id asymmetry
+# (loader.mdk:662-669, never touched by this fix) still reproduces — pinned in
+# this gate's dedicated entry_residual section, not this table.
 === RESIDUAL ===
 # <arm> <slot> <head> — an `OriginUnresolved` head that SURVIVED stamping.
 # NOT necessarily a defect; NOT necessarily empty. Read the section comment.
@@ -165,4 +175,4 @@ iface-occs-implOrigin 117
 heads 68
 claims 204
 residual 5
-conflicts 2
+conflicts 0

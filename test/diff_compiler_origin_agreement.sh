@@ -31,7 +31,12 @@
 #
 #   flat    checkProgramSchemesWithRuntime   (`check` on a no-import file, LSP, doc,
 #                                             repl, playground)
-#   single  elaborateModules … [("__user__", …)]   (`medaka test <file>`, snapshot)
+#   single  elaborateModules … [(rootId, …)]         (`medaka test <file>` only —
+#                                             NOT the snapshot driver, which has its
+#                                             own separate `"__user__"` call site,
+#                                             untouched by ARCH E-5 and unmodelled
+#                                             here; see origin_agreement_main.mdk's
+#                                             `singleArm` comment)
 #   graph   elaborateModules … <loader graph>      (`run` / `build` / `test <dir>`)
 #
 # — and reads back what THEY produced.
@@ -59,23 +64,47 @@
 # rule. So the gate distinguishes "silent" from "wrong", and only the second is a
 # defect.
 #
-# ── the CONFLICT rows in the committed golden are a PINNED OPEN DEFECT (#1223) ─
-# The `single` arm elaborates a file under the driver's own `"__user__"` label while
-# the `graph` arm elaborates the same file under its loader id — which is precisely
-# what `medaka test <dir>` does to one declaration in one process (#1223). Those rows
-# are committed as CONFLICT on purpose, as test/must_fail_fixtures/ pins a live bug.
+# ── #1223 (single~graph CONFLICT) — PARTIALLY FIXED by ARCH E-5 (#1521) ───────
+# Until #1521, the `single` arm elaborated a no-import file under the driver's
+# own `"__user__"` label while the `graph` arm elaborated the same file under
+# its loader id — exactly what `medaka test <dir>` did to one declaration in
+# one process, and the golden used to carry the resulting CONFLICT rows as a
+# PINNED open defect. E-5 changed `compiler/tools/test_cmd.mdk`'s single-file
+# (no-import) drivers (`runSingle`/`runPropsSingle`/`runTestDeclsSingle`/
+# `propsReportSingle`) to compute `canonicalPathId` (`driver/loader.mdk`) —
+# `canonicalModId`'s last-containing-root, round-trip-guarded convention,
+# generalized from an import spelling to a raw path — instead of hardcoding
+# `"__user__"`, via the newly EXPORTED `singleRootId`. This probe's `single`
+# arm was updated to CALL that exported function directly (`import
+# tools.test_cmd.{singleRootId}`), rather than reimplementing the id derivation
+# independently — never by reusing the graph arm's `mid` as its elaboration id
+# — see `singleArm`'s own comment for why that reuse would have manufactured
+# AGREE and proven nothing (caught in adversarial review, #1526 blocker 2).
+# Calling the export means a regression in the DRIVER's id derivation is caught
+# HERE mechanically: reverting `test_cmd.mdk`'s `singleRootId` to plain
+# `moduleIdOfPath` reds this gate. ⚠️ ONE SLICE STILL DRAINS BY REVIEW, NOT
+# MECHANICALLY: the ROOTS this arm feeds `singleRootId` are its OWN model of
+# `medaka_cli.mdk`'s `testFilesGo` (`entrySearchRoots (dirOf path) ++
+# [stdlibDir]`), not a call to it — if `testFilesGo` ever changes how it derives
+# a target's roots, this arm would silently stop matching that part. The
+# single~graph CONFLICT rows for the ORIGINAL (no-import) repro collapsed to
+# AGREE in the committed goldens, REGARDLESS of whether the two files share a
+# directory (`test/origin_fixtures/nested` is the cross-directory witness —
+# `canonicalPathId`'s last-root convention depends on the shared `medaka.toml`
+# each file's `entrySearchRoots` walk reaches, not on directory adjacency).
 #
-# ⚠️ BUT THEY DRAIN BY REVIEW, NOT MECHANICALLY, AND AN EARLIER DRAFT OF THIS HEADER
-# CLAIMED OTHERWISE. The `single` arm spells `"__user__"` in the PROBE, not in
-# compiler/tools/test_cmd.mdk where the real driver spells it — so unifying the
-# drivers will NOT flip these rows: the probe will keep passing `"__user__"`, keep
-# producing three CONFLICTs, and this gate will stay green against a stale golden.
-# Whoever fixes #1223 must delete them here by hand; the golden's own header says so,
-# and #1223 carries the caveat. Making it mechanical means exporting the id from
-# test_cmd.mdk and importing it here — a change to a shipping driver, deliberately
-# not bundled into a gate-only PR. This is the same hazard the probe argues against
-# for the stampers ("a probe that hand-picks its arguments re-encodes the assumption
-# it exists to test"), turned on one of its own arms; naming it is the minimum.
+# ⚠️ THIS IS NOT A FULL FIX, AND #1223 STAYS OPEN. `loader.mdk:662-669`
+# documents a SEPARATE, pre-existing residual for IMPORT-BEARING files (which go
+# through `runMulti`, never touched by E-5): an entry's own id is first-root
+# (`moduleIdOfPath`), while the SAME file reached as a dependency of ANOTHER
+# `medaka test <dir>` target is last-root (`canonicalModId`) — still two ids for
+# one declaration. MEASURED directly via two SEPARATE probe invocations (see the
+# `entry_residual` section below); DERIVED, not separately measured, that
+# `medaka test <dir>` reproduces the identical divergence within ONE process,
+# since `testFilesGo` calls `loadProgram`/the single-file path fresh per target
+# file with no state shared across iterations. See the dedicated
+# `entry_residual` section below, which pins that survivor (it is NOT expressible
+# as a `test/must_fail_fixtures/` row — see that ledger's #1223 entry for why).
 #
 # ── THREE LAYERS: `<Name>` occurrence, `decl:<Name>` declaration, `iface:<Name>` ─
 # They are stamped by DIFFERENT functions on DIFFERENT paths — `stampTyOrigins`
@@ -416,9 +445,66 @@ for dir in "$FIXDIR"/*/; do
   fi
 done
 
+# ⚠️ THIS CHECK MUST STAY HERE, BEFORE the entry_residual section below — not
+# folded into the final summary. `fixtures` is this loop's OWN vacuity signal
+# ("did the $FIXDIR corpus glob match anything"); the entry_residual section
+# below has ITS OWN, SEPARATE counters (er_pass/er_fail) so it cannot inflate
+# this one. Checking `fixtures` only here, before anything else can touch it,
+# is what keeps "the whole $FIXDIR corpus vanished" a hard FAIL rather than a
+# silent pass propped up by an unrelated section still running (#1526 blocker 3
+# — measured: moving test/origin_fixtures/ aside used to still exit 0 once a
+# later section incremented a SHARED counter after this point).
 if [ "$fixtures" -eq 0 ]; then
   echo "FAIL: no fixtures under $FIXDIR — this gate checked NOTHING."
   exit 1
+fi
+
+# ── ENTRY-vs-DEPENDENCY residual (loader.mdk:662-669) — PINNED, NOT #1223's fix ──
+# ARCH E-5 (#1521) closed #1223 for NO-IMPORT single-target files (`runSingle` and
+# friends now compute `canonicalPathId`, matching the loader's dependency
+# convention). It does NOT reach the loader's OWN pre-existing, documented
+# residual: an ENTRY module's id is `moduleIdOfPath` (first-root), while the SAME
+# module reached as a DEPENDENCY of another target's graph is `canonicalModId`
+# (last-root) — `loader.mdk:662-669`'s own words, "pinned nowhere" until this
+# section. Verified in adversarial review of #1526: driving the SAME
+# import-bearing file (`test/origin_entry_residual_fixture/src/a.mdk` — it HAS
+# imports, so it is `runMulti`, never touched by ARCH E-5's fix) as its OWN entry
+# vs. as a sibling's dependency yields two DIFFERENT ids TODAY. Unrelated to and
+# unfixed by ARCH E-5; #1223 stays OPEN for this half.
+#
+# NOT pinned in `test/must_fail_fixtures/`: no `medaka` CLI verb's exit code or
+# stdout differs because of this — the divergence is only observable ACROSS TWO
+# SEPARATE PROCESS invocations of this probe, never within one `medaka
+# check`/`run`/`build` (each graph load is internally self-consistent; nothing
+# cross-checks one load's id for a module against another load's), so there is no
+# exact CLI observable that harness's verb-based format can grade. NOT the
+# fixture loop above either — that compares arms WITHIN one graph load; this
+# compares GRAPH-arm claims ACROSS two SEPARATE loads. Hence a dedicated section.
+ERFIX="$ROOT/test/origin_entry_residual_fixture"
+# This section's OWN vacuity guard — deliberately NOT the `fixtures` counter
+# above (#1526 blocker 3): a shared counter let this section's mere presence
+# mask the main corpus vanishing. `er_ran` is local to this section only.
+er_ran=0
+if [ -f "$ERFIX/src/a.mdk" ] && [ -f "$ERFIX/src/b.mdk" ]; then
+  er_a="$("$SELF" "$RT" "$CORE" "$ERFIX/src/a.mdk" "$ERFIX/src" "$ERFIX" 2>&1 | grep '^Box ')"
+  er_b="$("$SELF" "$RT" "$CORE" "$ERFIX/src/b.mdk" "$ERFIX/src" "$ERFIX" 2>&1 | grep '^Box ')"
+  er_ran=1
+fi
+if [ "$er_ran" -ne 1 ]; then
+  echo "FAIL entry_residual: fixture missing at $ERFIX — this section checked NOTHING (infra failure, not the pin itself)"
+  fail=$((fail + 1))
+elif [ -z "${er_a:-}" ] || [ -z "${er_b:-}" ]; then
+  echo "FAIL entry_residual: probe produced no 'Box' HEAD SPREAD line (probe broke — this is an infra failure, not the pin itself)"
+  fail=$((fail + 1))
+elif [ "$er_a" = "$er_b" ]; then
+  echo "entry_residual DRAINED: loader.mdk:662-669's entry-vs-dependency id residual"
+  echo "  no longer reproduces (both reads: '$er_a'). Go verify — if genuinely fixed,"
+  echo "  update loader.mdk's comment, DICT-SEMANTICS.md/AGENTS.md's ARCH E-5 notes,"
+  echo "  and re-derive whether #1223 can finally close in full."
+  fail=$((fail + 1))
+else
+  echo "ok   entry_residual (loader.mdk:662-669 still reproduces, as pinned: entry=a -> '$er_a', entry=b(dep) -> '$er_b')"
+  pass=$((pass + 1))
 fi
 
 printf '\n%d ok, %d failing (%d fixture(s), %d conflicting head(s) pinned)\n' \
