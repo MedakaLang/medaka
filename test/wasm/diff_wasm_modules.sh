@@ -45,7 +45,7 @@ RUNJS="$ROOT/test/wasm/run.js"
 CC="${CC:-clang}"
 
 # ── Per-fixture worker (parallel fan-out target) ───────────────────────────────
-# Re-invoked as `sh "$0" --one <name> <entry> <root>` under an xargs -P pool.
+# Re-invoked as `bash "$0" --one <name> <entry> <root>` under an xargs -P pool.
 # Writes an outcome code to $RESULTDIR/<name>.status: 0=ok, 1=FAIL (real
 # divergence / build / parse / TMC-assert), 2=GAP (known MVP emit/validate gap —
 # NOT a failure). Shared state via env; per-fixture .err (no shared scratch).
@@ -163,7 +163,7 @@ NODE_ABS="$(command -v "$NODE" 2>/dev/null || echo "$NODE")"
 MEDAKA="$MEDAKA" EMITBIN="$EMITBIN" RUNTIME="$RUNTIME" CORE="$CORE" \
 MEDAKA_EMITTER="${MEDAKA_EMITTER:-$EMITTER}" NODE="$NODE_ABS" RUNJS="$RUNJS" \
 WORKDIR="$WORK" RESULTDIR="$RESULTS" \
-  xargs -P "$JOBS" -n 3 sh "$0" --one < "$WORK/worklist.tsv"
+  xargs -P "$JOBS" -n 3 bash "$0" --one < "$WORK/worklist.tsv"
 
 pass=0; fail=0; gap=0
 for s in "$RESULTS"/*.status; do

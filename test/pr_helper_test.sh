@@ -219,6 +219,34 @@ MOCK_CHECKRUNS="" run_contains \
   watch --number 7 --interval 1 --timeout 2 --repo MedakaLang/medaka
 
 # ---------------------------------------------------------------------------
+# receipt
+# ---------------------------------------------------------------------------
+
+jobs="gates (types)	success	Plan this shard=success | Build medaka=success | Gate shard — types=success
+gates (engines)	success	Plan this shard=success | Build medaka=skipped | Gate shard — engines=skipped"
+MOCK_HEAD=deadbeef MOCK_RUN_META="deadbeef	pull_request	completed	success" MOCK_JOBS="$jobs" run_contains \
+  "receipt reports exact head and skipped steps" 0 "Build medaka=skipped" \
+  receipt --number 7 --run 123 --repo MedakaLang/medaka
+
+MOCK_RUN_META="cafebabe	pull_request	completed	success" MOCK_JOBS="$jobs" run_contains \
+  "receipt rejects run for another head" 1 "does not match expected head" \
+  receipt --number 7 --run 123 --repo MedakaLang/medaka
+
+MOCK_RUN_META="deadbeef	pull_request	completed	failure" MOCK_JOBS="$jobs" run_contains \
+  "receipt rejects failed run after printing evidence" 1 "did not succeed" \
+  receipt --sha deadbeef --run 123 --repo MedakaLang/medaka
+
+: >"$MOCK_LOG"
+MOCK_RUN_META="deadbeef	merge_group	completed	success" MOCK_JOBS="$jobs" run_expect \
+  "receipt accepts explicit merge-group sha" 0 \
+  receipt --sha deadbeef --run 456 --repo MedakaLang/medaka
+if grep -q 'actions/runs/456/jobs?per_page=100 --paginate' "$MOCK_LOG"; then
+  pass=$((pass + 1))
+else
+  fail=$((fail + 1)); echo "FAIL: receipt did not paginate the selected run's jobs" >&2
+fi
+
+# ---------------------------------------------------------------------------
 # complete
 # ---------------------------------------------------------------------------
 

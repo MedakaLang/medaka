@@ -1,7 +1,7 @@
 # PR-HELPER.md — `scripts/pr.sh`, the verified PR lifecycle helper
 
-**Status:** IMPLEMENTED — issue #1414, PR 2026-08-08. Ships four independent
-subcommands (`body` / `watch` / `enqueue` / `complete`) that wrap the raw `gh`
+**Status:** IMPLEMENTED — issue #1414, PR 2026-08-08. Ships five independent
+subcommands (`body` / `watch` / `receipt` / `enqueue` / `complete`) that wrap the raw `gh`
 sequences behind AGENTS.md's standing rule — *read the state back, never the
 return code* — because `gh`'s write exit codes carry no signal for the shapes
 #1212 and #1213 record.
@@ -18,6 +18,9 @@ hand, and the underlying tools demonstrably lie about success:
 - **Concise check watch** — reprinting the whole check matrix every poll obscures
   state changes and floods logs. And a **stale** check-run is indistinguishable
   from a fresh one by name alone (#1213).
+- **Compact CI receipt** — a green checkmark does not prove a narrowed PR shard
+  executed its grading steps. The selected workflow run must match the intended
+  head, and its job-step conclusions must remain visible to review.
 - **Verified enqueue** — `gh pr merge --auto --merge`'s banner and exit code
   carry no signal either way, and `autoMergeRequest` reads `null` while queued;
   the only reliable signal is `isInMergeQueue` via GraphQL. #1212.
@@ -36,6 +39,7 @@ POSIX sh; `gh` and `git` only. Runs on Linux and macOS.
 ```sh
 scripts/pr.sh body      --number N [--issue] --file F        [--repo OWNER/REPO]
 scripts/pr.sh watch     --number N [--interval S] [--timeout S]
+scripts/pr.sh receipt   (--number N | --sha SHA) --run ID
 scripts/pr.sh enqueue   --number N [--interval S] [--timeout S]
 scripts/pr.sh complete  --number N --sha SHA  [--interval S] [--timeout S]
 ```
@@ -43,7 +47,7 @@ scripts/pr.sh complete  --number N --sha SHA  [--interval S] [--timeout S]
 - `--repo OWNER/REPO` (default: `$GH_REPO`, else your git `origin`).
 - Tests substitute a mock via `$GH` (default `gh`); they never touch a repo.
 
-## The four operations
+## The five operations
 
 ### 1. `body` — verified body write
 
@@ -71,7 +75,17 @@ gh api "repos/OWNER/REPO/commits/$SHA/check-runs" \
   --jq '.check_runs[] | "\(.name) \(.conclusion) \(.started_at)"'
 ```
 
-### 3. `enqueue` — verified auto-merge request
+### 3. `receipt` — compact exact-head CI evidence
+
+Reads one selected Actions workflow run, verifies its `head_sha` against either
+the current head of `--number N` or an explicit `--sha SHA`, and prints one TSV
+line for the run plus one TSV line per job. Each job line includes every step's
+conclusion, making green-but-skipped narrowed shards explicit without copying the
+full Actions response. It exits nonzero for a head mismatch, an incomplete run,
+or a non-successful conclusion. Use the explicit SHA form for a `merge_group`
+run, whose tested revision is not the PR branch head.
+
+### 4. `enqueue` — verified auto-merge request
 
 Requests `gh pr merge --auto --merge` (ignoring its exit code and banner), then
 polls a single GraphQL read of `{isInMergeQueue state}` — the only reliable
@@ -80,7 +94,7 @@ MERGED` (the race where a green PR merges before queue membership is ever
 observable — documented in the helper, handled here). Fails loudly if neither
 holds within the timeout.
 
-### 4. `complete` — verified completion
+### 5. `complete` — verified completion
 
 Waits for the PR to reach `MERGED`, then proves the intended head commit is an
 **ancestor of the repo's `main`** (fetched authoritatively into a throwaway git
@@ -93,7 +107,7 @@ be fetched (never guesses).
 
 ## Testing
 
-`sh test/pr_helper_test.sh` runs all four subcommands against the mock
+`sh test/pr_helper_test.sh` runs all five subcommands against the mock
 (`test/fixtures/pr_mock_gh.sh`), verifying command construction from the mock's
 argv log and state interpretation from canned responses — including the tricky
 body, the `-F`-vs-`-f` distinction, GraphQL queue/state, and multi-poll check

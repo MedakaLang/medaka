@@ -14,6 +14,7 @@
 # Usage:
 #   pr.sh body      --number N [--issue] --file F        [--repo OWNER/REPO]
 #   pr.sh watch     --number N [--interval S] [--timeout S]
+#   pr.sh receipt   (--number N | --sha SHA) --run ID
 #   pr.sh enqueue   --number N [--interval S] [--timeout S]
 #   pr.sh complete  --number N --sha SHA [--interval S] [--timeout S]
 #
@@ -21,7 +22,7 @@
 # origin remote of the current git repo). Tests may override the gh binary via
 # $GH (default "gh") so they can substitute a mock without touching a repo.
 #
-# The four operations are intentionally independent: a body edit must not
+# The five operations are intentionally independent: a body edit must not
 # require running the whole lifecycle.
 
 set -u
@@ -117,6 +118,76 @@ cmd_body() {
   rm -f "$tmp"
   bytes="$(wc -c <"$file" | tr -d ' ')"
   echo "ok: body of $kind $num updated and verified ($bytes bytes)"
+}
+
+# ---------------------------------------------------------------------------
+# receipt — compact, exact-head CI evidence
+# ---------------------------------------------------------------------------
+# Produces one stable line for the workflow run followed by one line per job.
+# Each job line includes every step's conclusion, so a green-but-skipped
+# narrowed PR shard is visible without copying the verbose Actions UI matrix.
+cmd_receipt() {
+  num=''
+  expected=''
+  run=''
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --number) num="$2"; shift 2 ;;
+      --sha) expected="$2"; shift 2 ;;
+      --run) run="$2"; shift 2 ;;
+      --repo) REPO_FLAG="$2"; shift 2 ;;
+      *) die "receipt: unknown argument: $1" ;;
+    esac
+  done
+  [ -n "$run" ] || die "receipt: --run ID is required"
+  if [ -n "$num" ] && [ -n "$expected" ]; then
+    die "receipt: pass exactly one of --number N or --sha SHA"
+  fi
+  if [ -n "$num" ]; then
+    derive_repo
+    expected=$($GH pr view "$num" --repo "$REPO" --json headRefOid --jq .headRefOid 2>/dev/null) \
+      || die "receipt: cannot resolve head commit for PR $num"
+    expected="$(printf '%s' "$expected" | tr -d '"')"
+  else
+    [ -n "$expected" ] || die "receipt: pass exactly one of --number N or --sha SHA"
+    derive_repo
+  fi
+
+  meta=$($GH api "repos/$REPO/actions/runs/$run" \
+    --jq '[.head_sha, .event, .status, (.conclusion // "")] | @tsv' 2>/dev/null) \
+    || die "receipt: cannot read workflow run $run"
+  old_ifs=$IFS
+  IFS="$TAB"
+  set -- $meta
+  IFS=$old_ifs
+  actual="${1:-}"
+  event="${2:-}"
+  status="${3:-}"
+  conclusion="${4:-}"
+  [ -n "$actual" ] || die "receipt: workflow run $run returned no head SHA"
+  [ "$actual" = "$expected" ] \
+    || die "receipt: run $run head $actual does not match expected head $expected"
+
+  jobs="$(mktemp "${TMPDIR:-/tmp}/pr-receipt.XXXXXX")"
+  if ! $GH api "repos/$REPO/actions/runs/$run/jobs?per_page=100" --paginate \
+    --jq '.jobs[] | [.name, (.conclusion // .status // ""), ([.steps[]? | (.name + "=" + (.conclusion // .status // ""))] | join(" | "))] | @tsv' \
+    >"$jobs" 2>/dev/null; then
+    rm -f "$jobs"
+    die "receipt: cannot read jobs for workflow run $run"
+  fi
+  [ -s "$jobs" ] || { rm -f "$jobs"; die "receipt: workflow run $run returned no jobs"; }
+
+  printf 'receipt\thead=%s\trun=%s\tevent=%s\tstatus=%s\tconclusion=%s\n' \
+    "$actual" "$run" "$event" "$status" "$conclusion"
+  while IFS="$TAB" read -r job job_conclusion steps; do
+    printf 'job\t%s\t%s\t%s\n' "$job" "$job_conclusion" "$steps"
+  done <"$jobs"
+  rm -f "$jobs"
+
+  [ "$status" = completed ] \
+    || die "receipt: workflow run $run is not completed (status=$status)"
+  [ "$conclusion" = success ] \
+    || die "receipt: workflow run $run did not succeed (conclusion=${conclusion:-none})"
 }
 
 # ---------------------------------------------------------------------------
@@ -342,7 +413,7 @@ cmd="${1:-}"
 [ $# -gt 0 ] && shift
 
 case "$cmd" in
-  body|watch|enqueue|complete) "cmd_$cmd" "$@" ;;
+  body|watch|receipt|enqueue|complete) "cmd_$cmd" "$@" ;;
   -h|--help|help) usage ;;
   *) usage ;;
 esac

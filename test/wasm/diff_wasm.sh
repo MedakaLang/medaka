@@ -28,7 +28,7 @@ RUNJS="$ROOT/test/wasm/run.js"
 CC="${CC:-clang}"
 
 # ── Per-fixture worker (parallel fan-out target) ───────────────────────────────
-# Re-invoked as `sh "$0" --one <fixture>` under an xargs -P pool. All shared state
+# Re-invoked as `bash "$0" --one <fixture>` under an xargs -P pool. All shared state
 # (MEDAKA/EMITBIN/NODE-abs-path/RUNJS/WORKDIR/RESULTDIR/MEDAKA_EMITTER) arrives via
 # env, so the worker skips the one-time tool + Node-version setup below.
 # Per-fixture .err files (no shared scratch) so N run concurrently.
@@ -99,7 +99,7 @@ ls "$FIXDIR"/*.mdk 2>/dev/null \
   | MEDAKA="$MEDAKA" EMITBIN="$EMITBIN" NODE="$NODE_ABS" RUNJS="$RUNJS" \
     MEDAKA_EMITTER="${MEDAKA_EMITTER:-$EMITTER}" WASM_ORACLE_OPT="${WASM_ORACLE_OPT:-}" \
     WORKDIR="$WORK" RESULTDIR="$RESULTS" \
-    xargs -P "$JOBS" -n 1 -I{} sh "$0" --one {}
+    xargs -P "$JOBS" -n 1 -I{} bash "$0" --one {}
 
 pass=0; fail=0
 for s in "$RESULTS"/*.status; do
