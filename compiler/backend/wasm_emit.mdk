@@ -325,18 +325,10 @@ recordLabelIndexOne ctor allLabels (label::rest) m = recordLabelIndexOne
   (if omHasKey label m then m else omInsert label (ctor, allLabels) m)
 
 -- ── program info threaded through the ref-mode emitter ───────────────────────
--- ctorArs: ctor name → arity.  ctorTypes: ctor name → owning type name.
--- typeNames: distinct user type names in declaration order (for per-type ids).
--- useRef: whether this program uses any ADT (→ the §8.6 (ref eq) rep).
--- fnNames / valNames: top-level functions / value-globals (as in W2).
--- fnArs: top-level fn name → param count (its arity, for closure wrappers + the
---   over/under-application decision at a known-fn application site).
--- useClos: whether this program uses closures / higher-order application / a
---   multi-clause-or-pattern-param fn (→ the §4 closure ABI + universal apply, and
---   forces ref-mode since a closure captures heterogeneous values).
--- impls (W5): the lowered typeclass impl/default entries (CProgram's 4th field).
---   Threaded so the CMethod/CDict dispatch arms can resolve candidate impls
---   (RDict runtime switch needs the full candidate set; RKey the single match).
+-- WasmProgramIndex owns the declaration-derived function, value, constructor,
+-- record-fallback, lazy-global, and per-method-impl lookup tables for this emission.
+-- Prog retains only the remaining ordered carriers: user type names, value-global
+-- names, closure-use flag, impl entries, and declaration-derived input.
 data WasmFnImplIndex =
   | WasmFnImplIndex {
       fnNames : OrdMap Unit,
@@ -368,23 +360,23 @@ data WasmProgramIndex =
     }
 
 data Prog =
-  | Prog WasmProgramIndex (List (String, Int)) (List (String, String)) (List String) Bool (List String) (List String) (List (String, Int)) Bool (List CImplEntry) WasmEmitInput
+  | Prog WasmProgramIndex (List String) (List String) Bool (List CImplEntry) WasmEmitInput
 
 progValNames : Prog -> List String
-progValNames (Prog _ _ _ _ _ _ vals _ _ _ _) = vals
+progValNames (Prog _ _ vals _ _ _) = vals
 
 progUseClos : Prog -> Bool
-progUseClos (Prog _ _ _ _ _ _ _ _ uc _ _) = uc
+progUseClos (Prog _ _ _ uc _ _) = uc
 
 -- W5: the lowered typeclass impl entries (CProgram's 4th field).
 progImpls : Prog -> List CImplEntry
-progImpls (Prog _ _ _ _ _ _ _ _ _ impls _) = impls
+progImpls (Prog _ _ _ _ impls _) = impls
 
 progInput : Prog -> WasmEmitInput
-progInput (Prog _ _ _ _ _ _ _ _ _ _ input) = input
+progInput (Prog _ _ _ _ _ input) = input
 
 progIndex : Prog -> WasmProgramIndex
-progIndex (Prog index _ _ _ _ _ _ _ _ _ _) = index
+progIndex (Prog index _ _ _ _ _) = index
 
 indexFnNamesW : WasmProgramIndex -> OrdMap Unit
 indexFnNamesW index = index.fnImpl.fnNames
@@ -1114,7 +1106,7 @@ emitProgram input (CProgram groups ctorArs ctorTypes impls) =
     || useRngRef.value || useHashRef.value || useFloatRef.value || useStrSearchRef.value
     || useCharClassRef.value || useIORef.value
   let typeNames = distinctTypeNames ctorTypes
-  let prog = Prog index ctorArs ctorTypes typeNames useRef fnNames valNames fnArs useClos impls input
+  let prog = Prog index typeNames valNames useClos impls input
   if useRef then emitRefProgram prog groups
   else emitScalarProgram fnNames valNames groups
 
@@ -1176,7 +1168,7 @@ emitProgramGaps input (CProgram groups ctorArs ctorTypes impls) =
   let useClos = programUsesClosures index groups ctorArs
   -- force the ref path: the census measures the full (ref eq) emitter surface.
   let typeNames = distinctTypeNames ctorTypes
-  let prog = Prog index ctorArs ctorTypes typeNames True fnNames valNames fnArs useClos impls input
+  let prog = Prog index typeNames valNames useClos impls input
   let _ = resetGapsW ()
   let _ = enableGapRecordW ()
   let _ = emitFnsGapsW prog (userFnBinds groups)
@@ -2633,7 +2625,7 @@ tupleTypeDecl n =
 -- with their ctor list.  Reserved types are handled separately so they are never
 -- double-declared.
 userTypesWithCtors : Prog -> List String
-userTypesWithCtors (Prog _ _ ctorTypes typeNames _ _ _ _ _ _ _) =
+userTypesWithCtors (Prog _ typeNames _ _ _ _) =
   filterList (t => not (isReservedType t)) typeNames
 
 -- per-type: a root struct (just the i32 tag) + one struct per PAYLOAD ctor (tag +
@@ -3486,16 +3478,9 @@ oneClauseLocals (CClause pats body) = flatMap patVars pats
 clausesMaxDepth : List CClause -> Int
 clausesMaxDepth clauses = foldMaxDepth (flatMap clauseBody clauses)
 
--- whether a top-level fn must get a closure wrapper: it is referenced as a VALUE
--- anywhere in the program (bare CVar in non-call position, or partially applied).
--- Conservative + cheap: scan if the name occurs in any value position.  We compute
--- this lazily per fn (the program is small); the fnNeedsValue scan is in `Prog`-free
--- form so it can run here.  For this slice we wrap EVERY top-level fn lazily only
--- when noted via noteFuncRef during emission — but a value-ref to a fn that's never
--- emitted-as-value wouldn't note it.  So instead: wrap a fn iff its name appears as
--- a value-ref somewhere (detected by the same exprUsesClosures value-position rule).
--- Membership is served by the invocation-private OrdMap, so `needsClosWrapper` is O(log n)
--- per emitted function without ambient state.
+-- whether a top-level fn needs its closure wrapper. The pre-emission program-index
+-- build scans value positions once and stores the immutable membership set in this
+-- Prog's invocation-private index; lookup is O(log n) with no ambient authority.
 needsClosWrapper : Prog -> String -> Bool
 needsClosWrapper prog name =
   omHasKey name (indexFnsUsedAsValuesW (progIndex prog))

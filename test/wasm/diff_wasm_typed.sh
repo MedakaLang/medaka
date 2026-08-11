@@ -22,7 +22,7 @@
 #
 # Reports N/M; non-zero exit on any divergence.  Opt-in skip (exit 2) when the
 # toolchain (wasm-tools / Node>=22 / clang) is unavailable.
-set -u
+set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 MEDAKA="$ROOT/medaka"
@@ -43,12 +43,21 @@ if grep -E "^($legacy_state)[[:space:]]*:" "$WASM_SRC" >/dev/null ||
   echo "FAIL wasm typed index ratchet: legacy Wasm state authority remains"
   exit 1
 fi
-for sym in WasmProgramIndex progIndex makeWasmProgramIndex indexFnNamesW indexImplsByMethodW indexLazyGlobalsW indexCtorOrdinalsW; do
+for sym in \
+  WasmFnImplIndex WasmRecordValueIndex WasmCtorIndex WasmProgramIndex Prog \
+  progIndex makeWasmProgramIndex makeWasmProgramIndexGaps makeWasmProgramIndexWithLazy \
+  indexFnNamesW indexValNamesW indexFnAritiesW indexImplsByMethodW indexLazyGlobalsW \
+  indexRecFieldsW indexFnsUsedAsValuesW indexCtorAritiesW indexCtorTypesW \
+  indexCtorOrdinalsW indexTypeCtorsW; do
   grep -E "^$sym[[:space:]]*:|^data $sym" "$WASM_SRC" >/dev/null || {
     echo "FAIL wasm typed index ratchet: missing private carrier/accessor $sym"
     exit 1
   }
 done
+grep -F '  | Prog WasmProgramIndex (List String) (List String) Bool (List CImplEntry) WasmEmitInput' "$WASM_SRC" >/dev/null || {
+  echo "FAIL wasm typed index ratchet: Prog must retain exactly six fields"
+  exit 1
+}
 
 # ── Per-fixture worker (parallel fan-out target); shared state via env ─────────
 # Oracle at -O2 (not -O0): TCO fixtures need clang tail-call opt to avoid overflow.
@@ -166,24 +175,140 @@ STATE_OUT="$($EMITBIN --reemit-state "$RUNTIME")" || {
   echo "FAIL wasm typed same-process state harness"
   exit 1
 }
-state_capture() {
-  printf '%s\n' "$STATE_OUT" | sed -n "/^$1$/,/^$2$/p" | sed '1d;$d'
+STATE_MARKERS="$(printf '%s\n' "$STATE_OUT" | awk '/^REEMIT_(P1_BEGIN|P1_END|U_BEGIN|U_END|P2_BEGIN|P2_END)$/ { print }')"
+STATE_EXPECTED_MARKERS="$(printf 'REEMIT_P1_BEGIN\nREEMIT_P1_END\nREEMIT_U_BEGIN\nREEMIT_U_END\nREEMIT_P2_BEGIN\nREEMIT_P2_END')"
+[ "$STATE_MARKERS" = "$STATE_EXPECTED_MARKERS" ] || {
+  echo "FAIL wasm typed state isolation: expected exactly six ordered markers"
+  printf '  observed markers:\n%s\n' "${STATE_MARKERS:-<none>}"
+  exit 1
 }
-P1_WAT="$(state_capture REEMIT_P1_BEGIN REEMIT_P1_END)"
-U_WAT="$(state_capture REEMIT_U_BEGIN REEMIT_U_END)"
-P2_WAT="$(state_capture REEMIT_P2_BEGIN REEMIT_P2_END)"
-[ -n "$P1_WAT" ] && [ -n "$U_WAT" ] && [ -n "$P2_WAT" ] || {
+state_capture() {
+  awk -v begin="$1" -v end="$2" '
+    $0 == begin { capture = 1; next }
+    $0 == end { exit }
+    capture { print }
+  ' <<<"$STATE_OUT"
+}
+state_capture REEMIT_P1_BEGIN REEMIT_P1_END > "$INPUT_WORK/p1.wat"
+state_capture REEMIT_U_BEGIN REEMIT_U_END > "$INPUT_WORK/u.wat"
+state_capture REEMIT_P2_BEGIN REEMIT_P2_END > "$INPUT_WORK/p2.wat"
+[ -s "$INPUT_WORK/p1.wat" ] && [ -s "$INPUT_WORK/u.wat" ] && [ -s "$INPUT_WORK/p2.wat" ] || {
   echo "FAIL wasm typed state isolation: empty capture"
   exit 1
 }
-[ "$P1_WAT" = "$P2_WAT" ] || {
+for state_wat in p1 u p2; do
+  wasm-tools parse "$INPUT_WORK/$state_wat.wat" -o "$INPUT_WORK/$state_wat.wasm" || {
+    echo "FAIL wasm typed state isolation: wasm-tools parse $state_wat"
+    exit 1
+  }
+  wasm-tools validate --features=all "$INPUT_WORK/$state_wat.wasm" || {
+    echo "FAIL wasm typed state isolation: wasm-tools validate $state_wat"
+    exit 1
+  }
+done
+cmp -s "$INPUT_WORK/p1.wat" "$INPUT_WORK/p2.wat" || {
   echo "FAIL wasm typed state isolation: P changed after U and gap U"
   exit 1
 }
-[ "$P1_WAT" != "$U_WAT" ] || {
+cmp -s "$INPUT_WORK/p1.wat" "$INPUT_WORK/u.wat" && {
   echo "FAIL wasm typed state isolation: P/U positive control did not differ"
   exit 1
 }
+
+state_family_fail() {
+  echo "FAIL wasm typed state isolation [$1]: $2"
+  exit 1
+}
+require_wat() {
+  grep -F -- "$3" "$2" >/dev/null || state_family_fail "$1" "missing $3"
+}
+forbid_wat() {
+  grep -F -- "$3" "$2" >/dev/null && state_family_fail "$1" "unexpected $3"
+}
+require_fn_arity() {
+  awk -v name="$2" -v want="$3" '
+    $0 ~ "^  \\(func \\$" name {
+      n = gsub(/\(param /, "&")
+      if (n == want) found = 1
+    }
+    END { exit !found }
+  ' "$4" || state_family_fail "$1" "expected $2 arity $3"
+}
+require_ctor_fields() {
+  awk -v want="$2" '
+    /\(type \$C_SharedCtor / {
+      n = gsub(/\(field /, "&")
+      if (n == want) found = 1
+    }
+    END { exit !found }
+  ' "$3" || state_family_fail "$1" "expected SharedCtor field count $2"
+}
+require_ctor_ordinal() {
+  awk -v want="$2" '
+    {
+      line = $0
+      sub(/^[[:space:]]+/, "", line)
+      sub(/[[:space:]]+$/, "", line)
+      if (line == "i32.const 0" || line == "i32.const 1") last = line
+      if (line == "struct.new $C_SharedCtor") {
+        found = 1
+        if (last != "i32.const " want) mismatch = 1
+      }
+    }
+    END { exit !(found && !mismatch) }
+  ' "$3" || state_family_fail "$1" "expected every SharedCtor construction to use ordinal $2"
+}
+
+P1_WAT="$INPUT_WORK/p1.wat"
+U_WAT="$INPUT_WORK/u.wat"
+require_wat fn-names "$P1_WAT" 'call $pOnlyFn'
+forbid_wat fn-names "$P1_WAT" 'call $uOnlyFn'
+require_wat fn-names "$U_WAT" 'call $uOnlyFn'
+forbid_wat fn-names "$U_WAT" 'call $pOnlyFn'
+require_wat value-names "$P1_WAT" 'global.get $pOnlyValue'
+forbid_wat value-names "$P1_WAT" 'global.get $uOnlyValue'
+require_wat value-names "$U_WAT" 'global.get $uOnlyValue'
+forbid_wat value-names "$U_WAT" 'global.get $pOnlyValue'
+require_fn_arity fn-arity sharedArity 1 "$P1_WAT"
+require_wat fn-arity "$P1_WAT" 'call $sharedArity'
+require_fn_arity fn-arity sharedArity 2 "$U_WAT"
+require_wat fn-arity "$U_WAT" 'call $sharedArity'
+require_wat impl-buckets "$P1_WAT" '(func $mdk_impl_PSubject_mark'
+require_wat impl-buckets "$P1_WAT" 'call $mdk_impl_PSubject_mark'
+require_wat impl-buckets "$U_WAT" '(func $mdk_impl_USubject_mark'
+require_wat impl-buckets "$U_WAT" 'call $mdk_impl_USubject_mark'
+require_wat lazy-globals "$P1_WAT" '(global $gs_pLazy'
+require_wat lazy-globals "$P1_WAT" '(func $force_pLazy'
+require_wat lazy-globals "$P1_WAT" 'call $force_pLazy'
+require_wat lazy-globals "$U_WAT" '(global $gs_uLazy'
+require_wat lazy-globals "$U_WAT" '(func $force_uLazy'
+require_wat lazy-globals "$U_WAT" 'call $force_uLazy'
+require_wat record-fallback-field-slots "$P1_WAT" 'struct.get $C_SharedRecord 2'
+require_wat record-fallback-field-slots "$U_WAT" 'struct.get $C_SharedRecord 1'
+require_wat function-value-wrappers "$P1_WAT" '(func $mdk_w_sharedArity'
+require_wat function-value-wrappers "$P1_WAT" 'ref.func $mdk_w_sharedArity'
+require_wat function-value-wrappers "$U_WAT" '(func $mdk_w_sharedArity'
+require_wat function-value-wrappers "$U_WAT" 'ref.func $mdk_w_sharedArity'
+require_wat function-value-wrappers "$P1_WAT" '(func $mdk_w_sharedValueFn'
+require_wat function-value-wrappers "$P1_WAT" 'ref.func $mdk_w_sharedValueFn'
+forbid_wat function-value-wrappers "$U_WAT" '(func $mdk_w_sharedValueFn'
+require_wat function-value-wrappers "$U_WAT" 'call $sharedValueFn'
+require_ctor_fields ctor-arity 2 "$P1_WAT"
+require_wat ctor-arity "$P1_WAT" 'struct.new $C_SharedCtor'
+require_ctor_fields ctor-arity 3 "$U_WAT"
+require_wat ctor-arity "$U_WAT" 'struct.new $C_SharedCtor'
+require_wat ctor-owner-type "$P1_WAT" '(type $C_SharedCtor (sub $T_PSubject'
+require_wat ctor-owner-type "$P1_WAT" 'ref.cast (ref $T_PSubject)'
+require_wat ctor-owner-type "$U_WAT" '(type $C_SharedCtor (sub $T_USubject'
+require_wat ctor-owner-type "$U_WAT" 'ref.cast (ref $T_USubject)'
+require_ctor_ordinal ctor-ordinal 1 "$P1_WAT"
+require_ctor_ordinal ctor-ordinal 0 "$U_WAT"
+require_wat type-to-ctors "$P1_WAT" '(type $T_PSubject (sub (struct (field i32)))'
+forbid_wat type-to-ctors "$P1_WAT" '(type $T_USubject (sub (struct (field i32)))'
+require_wat type-to-ctors "$P1_WAT" 'ref.cast (ref $T_PSubject)'
+require_wat type-to-ctors "$U_WAT" '(type $T_USubject (sub (struct (field i32)))'
+forbid_wat type-to-ctors "$U_WAT" '(type $T_PSubject (sub (struct (field i32)))'
+require_wat type-to-ctors "$U_WAT" 'ref.cast (ref $T_USubject)'
 
 # ── Node >= 22 selection (finalized WasmGC encoding — see test/wasm/w1.sh) ─────
 NODE=node
@@ -207,17 +332,29 @@ trap 'rm -rf "$INPUT_WORK" "$WORK" "$RESULTS"' EXIT
 
 JOBS="${JOBS:-$(sysctl -n hw.logicalcpu 2>/dev/null || nproc 2>/dev/null || echo 4)}"
 NODE_ABS="$(command -v "$NODE" 2>/dev/null || echo "$NODE")"
-ls "$FIXDIR"/*.mdk 2>/dev/null \
+fixtures=("$FIXDIR"/*.mdk)
+[ -e "${fixtures[0]}" ] || { echo "FAIL wasm typed gate: no fixtures in $FIXDIR"; exit 1; }
+fixture_count="${#fixtures[@]}"
+if ! printf '%s\n' "${fixtures[@]}" \
   | MEDAKA="$MEDAKA" EMITBIN="$EMITBIN" RUNTIME="$RUNTIME" NODE="$NODE_ABS" RUNJS="$RUNJS" \
     MEDAKA_EMITTER="${MEDAKA_EMITTER:-$EMITTER}" WASM_ORACLE_OPT="${WASM_ORACLE_OPT:-}" \
     WORKDIR="$WORK" RESULTDIR="$RESULTS" \
-    xargs -P "$JOBS" -n 1 -I{} sh "$0" --one {}
+    xargs -P "$JOBS" -I{} sh "$0" --one {}; then
+  echo "FAIL wasm typed gate: fixture worker pipeline"
+  exit 1
+fi
 
 pass=0; fail=0
 for s in "$RESULTS"/*.status; do
   [ -f "$s" ] || continue
   if [ "$(cat "$s")" = 0 ]; then pass=$((pass+1)); else fail=$((fail+1)); fi
 done
+
+status_count=$((pass + fail))
+[ "$status_count" -eq "$fixture_count" ] || {
+  echo "FAIL wasm typed gate: expected $fixture_count statuses, found $status_count"
+  exit 1
+}
 
 printf '\n%d ok, %d failing\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
