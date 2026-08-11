@@ -444,7 +444,21 @@ for f in $changed; do
       # #1319 unit 0: typecheck.mdk owns universeDataEnv, universeRecordByName and
       # the A-2.6 import-scoped overlay — the tables whose keying decides which
       # declaration an import clause's constructor name lands on.
-      add 'diff_compiler_import_order' ;;
+      add 'diff_compiler_import_order'
+      # (found deriving this row) diff_compiler_analyze_project pins DIAGNOSTICS —
+      # analyzeProject's per-file bucketed severity/message output, the channel the
+      # value-golden gates above (typecheck*/check*/eval_typed*) cannot see because
+      # they compare a computed VALUE, not what got reported and to which file. It
+      # exercises analyzeProject (compiler/driver/diagnostics.mdk), a driver distinct
+      # from both checkProgramSeededSplit and elaborateModules, through its own
+      # per-module resolve+typecheck+exhaust-oracle-seed call site with no
+      # A-2.11/A-2.12 override above it. It hosts the #1554 control
+      # (analyze_project_fixtures/1554_ctor_overlay_oracle_control) for the
+      # import-scoped ctor overlay this arm's #1319 note above already flags as
+      # typecheck.mdk-owned — that regression went undetected by every gate this
+      # arm already listed. Listed in ci.yml's `types` shard pattern, so it runs at
+      # the merge queue; missing here it ran neither locally nor on the PR check.
+      add 'diff_compiler_analyze_project' ;;
 
     # ── THE THREE ENGINES ─────────────────────────────────────────────────────
     #
@@ -524,7 +538,16 @@ for f in $changed; do
       add 'diff_compiler_check*'; add 'diff_compiler_diagnostics'; add 'diff_compiler_build'
       add 'diff_compiler_import_order'
       add 'diff_compiler_dict_semantics'
-      add 'diff_compiler_fmt_write_safety' ;;
+      add 'diff_compiler_fmt_write_safety'
+      # driver/diagnostics.mdk is where analyzeProject/analyzeProjectToLines are
+      # DEFINED (not just called) — the driver diff_compiler_analyze_project diffs
+      # against the OCaml oracle. Narrower than the compiler/types/* row's reason
+      # (that arm gets it because typecheck.mdk STAMPS what analyzeProject reports;
+      # this row gets it because this file IS analyzeProject's own implementation) ;
+      # still absent from this arm before this change for the same reason it was
+      # absent from types/* — grep 'analyze_project' test/preflight.sh (pre-fix) had
+      # zero hits.
+      add 'diff_compiler_analyze_project' ;;
     compiler/tools/lint*.mdk)      add 'diff_compiler_lint*' ;;
     compiler/tools/fmt.mdk|compiler/tools/printer.mdk) add 'diff_compiler_fmt'; add 'diff_compiler_snapshot*' ;;
     compiler/tools/lsp.mdk)        add 'diff_compiler_lsp*' ;;
