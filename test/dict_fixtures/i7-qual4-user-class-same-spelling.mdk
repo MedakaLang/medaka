@@ -1,0 +1,33 @@
+-- DICT-SEMANTICS §8 I7 qualification 2 + 4 (issue 1539) -- THE U1 DISCRIMINATOR.
+--
+-- ⚠️ THIS ROW PINS A PROTECTION, NOT A RULE, AND IT IS SUPPOSED TO GO RED ONE DAY.
+--
+-- I7 qualification 2 says in as many words: "A user MAY declare an interface spelled
+-- `Num`, `Eq`, `Ord` or `Semigroup`, and it is never rejected for that." The tree does
+-- reject it -- `Duplicate interface: Num`, `R-DUPLICATE-DEF`, exit 1 on every verb --
+-- and NOT because any rule says so: the prelude's declarations are flattened into the
+-- user's own declaration list, so the collision reads as a within-module duplicate
+-- (`compiler/frontend/resolve.mdk`, which depends on this in writing). §7.1 U1 makes
+-- the prelude its own module node; at that moment two MODULES declare `Num`, I4 makes
+-- that legal, and this reject evaporates.
+--
+-- SO WHAT THIS ROW IS FOR. Until #1539 the I7 gate asked `ifaceRegistered "Num"` -- "is
+-- SOME interface spelled Num registered" -- over a table this very declaration writes
+-- to. That question was unanswerable-differently only because of the reject above. The
+-- gate now asks `builtinClassPresent BNum`, a projection of a closed record populated
+-- from the PRELUDE's declarations alone, so the answer no longer depends on this file.
+--
+-- WHOEVER LANDS U1 OWNS THIS ROW. When it goes RED (verdict flips REJECT -> ACCEPT),
+-- do not re-bless it to ACCEPT and move on. Re-pin it as the I7 conformance
+-- discriminator it becomes: the program must be ACCEPTED, `frobnicate` must resolve to
+-- the USER's class, and `1 + 1` on the last line must still demand the PRELUDE's `Num`
+-- and print 2 -- i.e. the user's `Num` must NOT capture the operator. If instead the
+-- operator picks up the user's class the result is `No impl of Num for Int` (loud) or a
+-- silently mis-dispatched `+` (the I7 capture itself), and that is the finding.
+--
+-- Expected TODAY, hand-derived from the mechanism above rather than captured: REJECT on
+-- check/run/build, code R-DUPLICATE-DEF, no located range (so no section-6 span row).
+interface Num a where
+  frobnicate : a -> a
+
+main = println (1 + 1)

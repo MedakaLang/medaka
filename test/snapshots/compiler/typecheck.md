@@ -1,5 +1,5 @@
 # META
-source_lines=26673
+source_lines=26767
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted typecheck stage — port of lib/typecheck.ml's HM core.  SLICE 1:
@@ -2275,8 +2275,9 @@ public export data PendingEntry =
 -- names cannot collide across modules (#1115 / E-1 is what would change that).
 
 -- #147: cached SET of iface names with ≥1 method registered above, so
--- `ifaceRegistered` is an O(log n) membership test instead of a full linear scan
--- of the method table per operator/numeric-literal.  A separate key (iface name,
+-- `ifaceRegistered` was an O(log n) membership test instead of a full linear scan
+-- of the method table per operator/numeric-literal.  ⚠️ #1539 deleted that reader —
+-- this set is WRITE-ONLY now; see the `ifaceRegistered` TOMBSTONE.  A separate key (iface name,
 -- not method name) and NOT derived from the method map: two interfaces sharing a
 -- method name collapse to one entry in the (name-keyed) map, but BOTH must stay
 -- registered here — matching the old full-List scan.  Maintained in lockstep at
@@ -2403,8 +2404,9 @@ routeLocalSym _ = ""
 --     the Module arm OVERLAYS this map, for the (normally zero) COLLIDED names only, with
 --     what each name resolves to in THIS module's scope (applyMethodScopeOverrides); every
 --     other name still takes the shared map unchanged.  Spellings the overlay does not
---     reach are open and derived, not a closed set — #1272 / #1275 / #1276.--   • the SET of interface names with ≥1 method registered.  Read only by ifaceRegistered's
---     omHasKey existence check (core's Num/Eq/Ord are seeded on both paths, so identical).
+--     reach are open and derived, not a closed set — #1272 / #1275 / #1276.--   • the SET of interface names with ≥1 method registered.  Was read only by
+--     ifaceRegistered's omHasKey existence check (core's Num/Eq/Ord are seeded on both
+--     paths, so identical); #1539 deleted that reader and the set is now WRITE-ONLY.
 -- #154 PR3 (sites #6/#7): the PERSISTENT keyed impl universe for the obligation
 -- checkers (checkImplObligations / checkCallObligations).  The Module arm used to
 -- REBUILD `implDeclsWithReqs fullUniverse` + `implHeadsOf fullUniverse` (two flatMaps
@@ -4867,7 +4869,7 @@ data CrossRun = CrossRun {
     obUnivConcreteRef : Ref (MultiRegistry (List Ty, List Require)),
     obUnivHeadlessRef : Ref (MultiRegistry (List Ty, List Require)),
     obUnivIfaceTagsRef : Ref (Registry SetRegistry),
-    builtinClassesRef : Ref BuiltinClassOrigins,  -- #1446 P1 / DICT §8 I7: the four operator/literal classes' identities, read off the PRELUDE's own DInterface decls — see seedBuiltinClasses
+    builtinClassesRef : Ref BuiltinClasses,  -- #1446 P1 + #1539 / DICT §8 I7: the four operator/literal classes' identities AND presence, read off the PRELUDE's own DInterface decls — see seedBuiltinClasses
     crossModuleFunConstraintsRef : Ref (List (String, List Int)),
     crossModuleFunConstraintsQualRef : Ref (List ((String, String), List Int)),
     crossModuleFunConstraintIfacesRef : Ref (List (String, List IfaceRef)),
@@ -7315,7 +7317,7 @@ infer _ (ELit l) = litType l
 -- [a], and stash (a, fref, n, dref) in numlitRefs so the post-HM setNumlitFloats can
 -- decide concrete-Float / concrete-Int / still-poly.  Recording the obligation here
 -- AND (when under `+`) in numArithOp is harmless: both unify the same var, both
--- demand `Num`.  Without the prelude (bare-HM oracle, `ifaceRegistered` False)
+-- demand `Num`.  Without the prelude (bare-HM oracle, `builtinClassPresent BNum` False)
 -- `fromInt` is unbound: fall back to a plain fresh var, dref stays RNone (⇒ Int).
 infer env (ENumLit n fref dref _) = inferNumLit env n fref dref
 infer env (EVar x) = inferVar env x
@@ -8947,10 +8949,10 @@ inferBinop op _ _ = panic ("typecheck: unsupported operator " ++ op)
 -- is what keeps core.mdk's `foldMap f = fold (acc x => acc ++ f x) empty` typing).
 -- A still-polymorphic operand defers to the caller, exactly like Num/Eq/Ord.
 --
--- Gated on the `Semigroup` interface being REGISTERED (prelude loaded), via
--- ifaceRegistered: the bare-HM no-prelude oracle (tc_probe /
--- typecheck_main.mdk) has no `Semigroup` class, so recording the obligation only
--- when it exists keeps those drivers byte-identical while `medaka check` rejects.
+-- Gated on the PRELUDE's `Semigroup` being present, via `builtinClassPresent` (#1539;
+-- it was `ifaceRegistered "Semigroup"` before): the bare-HM no-prelude oracle (tc_probe
+-- / typecheck_main.mdk) has no `Semigroup` class, so recording the obligation only when
+-- it exists keeps those drivers byte-identical while `medaka check` rejects.
 appendOp : Mono -> Mono -> Mono
 appendOp lt rt =
   let _ = unify lt rt
@@ -8961,16 +8963,24 @@ appendOp lt rt =
 -- `-`), comparison (`== != < > <= >=`) and append (`++`) operators each carry an
 -- interface obligation on their (unified) operand type via pushPendingObl — a
 -- synthetic obligation with a bare iface-param declared type (`TyVar "a"`, typaram
--- ["a"]) so dispatchMonosOf recovers exactly the operand mono.  Gated on that
--- interface being REGISTERED (prelude loaded): the bare-HM no-prelude oracle
--- (tc_probe / typecheck_main.mdk) registers none of Num/Eq/Ord/Semigroup, so
--- recording only when the interface exists keeps those drivers byte-identical while
--- full check_main (prelude) rejects, matching `medaka check`.  Callers:
--- numArithOp/negateOp ("Num"), eqCompareOp ("Eq"), ordCompareOp ("Ord"), appendOp
--- ("Semigroup").
+-- ["a"]) so dispatchMonosOf recovers exactly the operand mono.  Gated on the PRELUDE's
+-- copy of that class being present: the bare-HM no-prelude oracle (tc_probe /
+-- typecheck_main.mdk) declares none of Num/Eq/Ord/Semigroup, so recording only when the
+-- class exists keeps those drivers byte-identical while full check_main (prelude)
+-- rejects, matching `medaka check`.  Callers: numArithOp/negateOp (BNum), eqCompareOp
+-- (BEq), ordCompareOp (BOrd), appendOp (BSemigroup).
+--
+-- #1539 / DICT §8 I7 qualification 4: the gate is `builtinClassPresent c`, NOT
+-- `ifaceRegistered (builtinClassName c)`.  The latter asked whether SOME interface
+-- spelled `Num` is registered — a table any user declaration writes to — so under §7.1
+-- U1 (prelude becomes a node, and a user `interface Num` stops being a within-module
+-- duplicate) a user's class would be the thing that TRIGGERS the operator's obligation.
+-- That is the capture I7 qualification 4 forbids, reached through the gate rather than
+-- through the payload, and it is the same reason the payload half already refuses to
+-- read that table (see `ifaceRegistered`'s ledger).
 recordIfaceObligation : BuiltinClass -> Mono -> Unit
 recordIfaceObligation c lt
-  | ifaceRegistered (builtinClassName c) = pushPendingObl (builtinIfaceRef c) ["a"] (TyVar "a") lt POperator currentLoc.value
+  | builtinClassPresent c = pushPendingObl (builtinIfaceRef c) ["a"] (TyVar "a") lt POperator currentLoc.value
   | otherwise = ()
 
 -- ── §8 I7: THE BUILT-IN CLASSES, AND WHY THEY ARE A CLOSED ENUM ─────────────────
@@ -9006,27 +9016,46 @@ builtinClassName BEq = "Eq"
 builtinClassName BOrd = "Ord"
 builtinClassName BSemigroup = "Semigroup"
 
--- The four classes' identities, read off the PRELUDE's own `DInterface.ifaceOrigin`.
--- Plain `TyConOrigin` rather than `Option TyConOrigin` because `OriginUnresolved` is
--- the honest answer in both of the cases an `Option` would distinguish — a prelude-free
--- program (nothing declares the class, and nothing implements it either, so any key
--- answers the same) and a prelude whose declarations this pass sees unstamped (the
--- prelude-FLATTENED internal passes) — and in both the impl side keys `TkBare` too, so
--- writer and reader stay symmetric.  No sentinel, no per-site decision about an empty
--- origin (§8 I6.3).
-data BuiltinClassOrigins = BuiltinClassOrigins {
+-- The four classes' identities AND their PRESENCE, read off the PRELUDE's own
+-- `DInterface` declarations.  (Named `…Origins` until #1539; it carries the presence
+-- half too now, so the name would have lied.)
+--
+-- Origin: plain `TyConOrigin` rather than `Option TyConOrigin` because
+-- `OriginUnresolved` is the honest answer in both of the cases an `Option` would
+-- distinguish — a prelude-free program (nothing declares the class, and nothing
+-- implements it either, so any key answers the same) and a prelude whose declarations
+-- this pass sees unstamped (the prelude-FLATTENED internal passes) — and in both the
+-- impl side keys `TkBare` too, so writer and reader stay symmetric.  No sentinel, no
+-- per-site decision about an empty origin (§8 I6.3).
+--
+-- 🚨 PRESENCE IS A SEPARATE FIELD AND CANNOT BE DERIVED FROM THE ORIGIN (#1539).  The
+-- second bullet above is exactly why: on the prelude-FLATTENED arms a PRESENT prelude
+-- declares `Num` with `OriginUnresolved`, so `bcNum == OriginUnresolved` does NOT mean
+-- "no prelude".  A gate that read the origin as a presence test would answer False with
+-- the prelude loaded and switch every operator's obligation OFF — no golden would move,
+-- because a check that stops firing moves no output, which `AGENTS.md` grades as a
+-- severity INCREASE.  The two questions are independent; keep two fields.
+data BuiltinClasses = BuiltinClasses {
     bcNum : TyConOrigin,  -- one field per BuiltinClass constructor; keep these two comments (#829)
     bcEq : TyConOrigin,
     bcOrd : TyConOrigin,
-    bcSemigroup : TyConOrigin,  -- adding a member means adding a constructor AND a field here
+    bcSemigroup : TyConOrigin,
+    bcNumPresent : Bool,
+    bcEqPresent : Bool,
+    bcOrdPresent : Bool,
+    bcSemigroupPresent : Bool,  -- adding a member means adding a constructor AND two fields here
   }
 
-emptyBuiltinClasses : BuiltinClassOrigins
-emptyBuiltinClasses = BuiltinClassOrigins {
+emptyBuiltinClasses : BuiltinClasses
+emptyBuiltinClasses = BuiltinClasses {
   bcNum = OriginUnresolved,
   bcEq = OriginUnresolved,
   bcOrd = OriginUnresolved,
   bcSemigroup = OriginUnresolved,
+  bcNumPresent = False,
+  bcEqPresent = False,
+  bcOrdPresent = False,
+  bcSemigroupPresent = False,
 }
 
 builtinClassOrigin : BuiltinClass -> TyConOrigin
@@ -9036,35 +9065,66 @@ builtinClassOrigin BOrd = crossRun.value.builtinClassesRef.value.bcOrd
 builtinClassOrigin BSemigroup =
   crossRun.value.builtinClassesRef.value.bcSemigroup
 
+-- #1539 / DICT §8 I7 qualification 4: THE GATE.  True iff the declaration list this
+-- pass treats as the PRELUDE declares this built-in class (with ≥1 method — see
+-- `builtinClassesGo`).  This is the question I7 qualification 4 requires before a
+-- synthetic operator/literal predicate may be synthesized at all; `ifaceRegistered`,
+-- which the three gate sites asked until #1539, answers the *different* question "is
+-- SOME interface spelled `Num` registered anywhere in this program", over a table any
+-- user declaration writes to.
+--
+-- ⚠️ It is a record projection, so it is strictly CHEAPER than the `omHasKey` it
+-- replaces — `ifaceRegistered`'s own doc-comment records that it is on the
+-- per-operator / per-numeric-literal hot path (#147), and this change moves it from
+-- O(log n) to O(1) rather than the other way.
+builtinClassPresent : BuiltinClass -> Bool
+builtinClassPresent BNum = crossRun.value.builtinClassesRef.value.bcNumPresent
+builtinClassPresent BEq = crossRun.value.builtinClassesRef.value.bcEqPresent
+builtinClassPresent BOrd = crossRun.value.builtinClassesRef.value.bcOrdPresent
+builtinClassPresent BSemigroup =
+  crossRun.value.builtinClassesRef.value.bcSemigroupPresent
+
 -- the identity-carrying interface reference a synthetic occurrence records.
 builtinIfaceRef : BuiltinClass -> IfaceRef
 builtinIfaceRef c =
   IfaceRef { irName = builtinClassName c, irOrigin = builtinClassOrigin c }
 
 -- ONE walk over a PRELUDE declaration list, picking up each built-in class's declared
--- origin.  Only `DInterface` decls contribute, and only the four fixed spellings — so
--- the population is closed even though the walk is over a decl list.
-builtinClassesOf : List Decl -> BuiltinClassOrigins
+-- origin and its presence.  Only `DInterface` decls contribute, and only the four fixed
+-- spellings — so the population is closed even though the walk is over a decl list.
+builtinClassesOf : List Decl -> BuiltinClasses
 builtinClassesOf decls = builtinClassesGo decls emptyBuiltinClasses
 
-builtinClassesGo : List Decl -> BuiltinClassOrigins -> BuiltinClassOrigins
+-- 🚨 THE PRESENCE BIT MIRRORS `registerMethodIfaceParamsMethods` EXACTLY, and that is
+-- what makes the #1539 gate switch behaviour-preserving rather than merely plausible.
+-- That function — the sole writer of `registeredIfacesRef`, the table the three gates
+-- read until #1539 — recurses over `methods` and inserts ONCE PER METHOD, so a
+-- METHODLESS `interface Num a` registers NOTHING.  Reading `≥1 method` here rather than
+-- `≥1 declaration` keeps the two populations equal decl-for-decl on the seed list; a
+-- bare `declsNonEmpty`-shaped test would flip the gate ON for a methodless declaration
+-- that today leaves it OFF.  The ORIGIN is still set unconditionally, because the origin
+-- half's population is #1446's and is not what this issue re-decides.
+builtinClassesGo : List Decl -> BuiltinClasses -> BuiltinClasses
 builtinClassesGo [] acc = acc
 builtinClassesGo ((DAttrib _ d)::rest) acc =
   builtinClassesGo rest (builtinClassesGo [d] acc)
-builtinClassesGo ((DInterface { name, ifaceOrigin = o, ... })::rest) acc =
-  builtinClassesGo rest (builtinClassSet name o acc)
+builtinClassesGo ((DInterface { name, ifaceOrigin = o, methods, ... })::rest) acc = builtinClassesGo rest (builtinClassSet name o (isNonEmptyL methods) acc)
 builtinClassesGo (_::rest) acc = builtinClassesGo rest acc
 
 -- the CLOSED spelling→member map, written once.  A name that is not one of the four
 -- contributes nothing, which is what makes `builtinClassesGo` safe to run over a decl
 -- list that may contain user declarations (the flattened-prelude arm).
-builtinClassSet : String -> TyConOrigin -> BuiltinClassOrigins -> BuiltinClassOrigins
-builtinClassSet "Num" o acc = BuiltinClassOrigins { acc | bcNum = o }
-builtinClassSet "Eq" o acc = BuiltinClassOrigins { acc | bcEq = o }
-builtinClassSet "Ord" o acc = BuiltinClassOrigins { acc | bcOrd = o }
-builtinClassSet "Semigroup" o acc =
-  BuiltinClassOrigins { acc | bcSemigroup = o }
-builtinClassSet _ _ acc = acc
+-- Presence accumulates with `||`: two declarations of one spelling can only ever ADD
+-- presence, so a methodless second declaration cannot un-present a real one.
+builtinClassSet : String -> TyConOrigin -> Bool -> BuiltinClasses -> BuiltinClasses
+builtinClassSet "Num" o p acc =
+  BuiltinClasses { acc | bcNum = o, bcNumPresent = acc.bcNumPresent || p }
+builtinClassSet "Eq" o p acc =
+  BuiltinClasses { acc | bcEq = o, bcEqPresent = acc.bcEqPresent || p }
+builtinClassSet "Ord" o p acc =
+  BuiltinClasses { acc | bcOrd = o, bcOrdPresent = acc.bcOrdPresent || p }
+builtinClassSet "Semigroup" o p acc = BuiltinClasses { acc | bcSemigroup = o, bcSemigroupPresent = acc.bcSemigroupPresent || p }
+builtinClassSet _ _ _ acc = acc
 
 -- Seed the table from the declaration list THIS pass treats as the prelude, so that a
 -- synthetic occurrence's key and the prelude's own `impl Num Int` key agree.
@@ -9124,10 +9184,26 @@ seedBuiltinClasses (Module mid _ _) prog =
   else
     ()
 
--- True iff `iface` is registered (has ≥1 method registered from the DInterface
--- decls — present once core.mdk is loaded).  #147: an O(log n) membership test on
--- the cached registeredIfacesRef set, replacing the old full linear scan of the
--- method table per operator/numeric-literal.
+-- ── TOMBSTONE: `ifaceRegistered`, the RETIRED I7 gate (#147 → #1539) ────────────
+-- 🪦 THE FUNCTION IS GONE; THIS LEDGER IS NOT, because every reason below is a reason
+-- about `registeredIfacesRef` — which still exists — and because the route it argues
+-- against is the one a later reader will re-propose.  `ifaceRegistered iface = omHasKey
+-- iface perRun.value.registeredIfacesRef.value` was True iff `iface` had ≥1 method
+-- registered from the `DInterface` decls (present once core.mdk is loaded); #147 made it
+-- an O(log n) membership test in place of a full linear scan of the method table per
+-- operator / numeric literal.  Its only three callers were the I7 GATES, and #1539 moved
+-- all three to `builtinClassPresent` (above), leaving it unreachable — `rule-dead-code`
+-- says delete an unreachable private binding, so it is deleted rather than kept warm.
+--
+-- ⚠️ `registeredIfacesRef` / `universeRegisteredIfacesRef` are consequently WRITE-ONLY
+-- as of #1539: `registerMethodIfaceParamsMethods` and `insertIfaceMethodsAcc` still
+-- populate them, the Module arm still copies the universe one into the per-run one, and
+-- NOTHING reads either.  Retiring the table is deliberately NOT in #1539's diff — that
+-- edits the `PerRun`/`CrossRun` layout and the `insertMethodIfaceParams` accumulator
+-- type, which two other in-flight `typecheck.mdk` branches sit on top of — and is filed
+-- as its own atom, **#1569**.  Derive the claim rather than trusting this note:
+--   grep -n 'registeredIfacesRef' compiler/types/typecheck.mdk
+-- every hit should be a write, an init, a field declaration, or a comment.
 --
 -- 🚨 `registeredIfacesRef` / `universeRegisteredIfacesRef` STAY BARE-NAME-KEYED,
 -- and this is a DERIVED refusal, not a gap for a later reader to "finish".  Two
@@ -9186,13 +9262,22 @@ seedBuiltinClasses (Module mid _ _) prog =
 -- table for their interface — they read `builtinIfaceRef`.  What this table still
 -- answers, and answers correctly by a bare name, is the PRESENCE question ("is the
 -- prelude loaded at all"), which is why it is not a half-migration.
--- ⚠️ RESIDUAL, greppable: the two GATE sites (`inferNumLit`, `checkOneCallObligation`)
--- still ask `ifaceRegistered "Num"` rather than "is the PRELUDE's Num present".  I7
--- qualification 4 wants the latter.  Switching them is behaviour-preserving only if
--- `builtinClassesRef`'s population and this table's agree in every reachable
--- configuration, which #1446 did not measure — so it is OWED, not done.
-ifaceRegistered : String -> Bool
-ifaceRegistered iface = omHasKey iface perRun.value.registeredIfacesRef.value
+-- ✅ #1539 DRAINED THE RESIDUAL, AND IT DID SO BY DELETING THE READER RATHER THAN
+-- RE-KEYING THE TABLE.  All THREE gate sites (`recordIfaceObligation`, `inferNumLit`,
+-- `checkOneCallObligation`) now ask `builtinClassPresent`.  The paragraph that stood
+-- here said switching them is behaviour-preserving only if `builtinClassesRef`'s
+-- population and this table's agree in every reachable configuration, "which #1446 did
+-- not measure".  #1539 MEASURED it, two ways: (a) `builtinClassesGo` was made to mirror
+-- this table's sole writer decl-for-decl on the seed list (`≥1 method` — see its own
+-- note), and (b) a disagreement tripwire compiled into the checker reported ZERO
+-- disagreements at any of the three sites across the whole gate corpus.
+--
+-- 🚨 DO NOT "RESTORE" A PRELUDE-PRESENCE READER OVER THIS TABLE.  Asking it "is the
+-- prelude loaded" is the I7 qualification 4 mistake: it is a bare-NAME membership test
+-- over a table `registerMethodIfaceParamsMethods` writes for EVERY interface, prelude or
+-- user, so a user `interface Num` satisfies it.  The presence question has a closed,
+-- prelude-only answer now — `builtinClassPresent`.
+-- ────────────────────────────────────────────────────────────────────────────────
 
 -- G2: arithmetic `+ - * / %` carry a `Num` obligation on their (unified) operand
 -- type — mirrors the oracle's `No impl of Num for <T>` reject (lib/typecheck.ml).
@@ -9225,12 +9310,17 @@ numArithOp lt rt =
 -- PLAN.md #11 soundness arm: model an integer literal as a `fromInt n` method
 -- occurrence so its route cell [dref] gets stamped (RKey ground / RDictFwd poly) by
 -- resolveSites — exactly like core.mdk's `fromInt 0` in `sum`.  Direct mirror of
--- lib/typecheck.ml's ENumLit infer arm.  Gated on the prelude (`Num` registered AND
+-- lib/typecheck.ml's ENumLit infer arm.  Gated on the prelude (the PRELUDE's `Num`
+-- present — `builtinClassPresent BNum` since #1539, was `ifaceRegistered "Num"` — AND
 -- `fromInt` bound): with no prelude (bare-HM oracle) fall back to a plain fresh
 -- Num-obligated var, leaving [dref] RNone (⇒ a static Int literal at rewrite time).
+-- ⚠️ #1539 converts the GATE only.  The `lookupVar env "fromInt"` on the next line is
+-- the OTHER, larger I7 divergence (§11's "I7 (literals)" row): the literal's method is
+-- still anchored by a bare name in the USER's term scope, so a user binding spelled
+-- `fromInt` still re-anchors every literal in the module.  That is untouched here.
 inferNumLit : TcEnv -> Int -> Ref (Option Float) -> Ref Route -> Mono
 inferNumLit env n fref dref
-  | ifaceRegistered "Num" = match lookupVar env "fromInt"
+  | builtinClassPresent BNum = match lookupVar env "fromInt"
     None => inferNumLitBare n fref
     Some _ =>
       -- inferMethodAt records the Num impl obligation + a pendingSite on [dref].
@@ -9251,7 +9341,7 @@ inferNumLit env n fref dref
 -- an AMBIGUOUS literal var to Int (`nums = [1,2,3] : List Int`) so the no-prelude
 -- `typecheck_main` matches the prelude-aware oracle golden.  The matching reject is
 -- SUPPRESSED no-prelude in checkOneImplObligation (no-prelude imposes no Num impl
--- constraint — see its `ifaceRegistered` guard), so a literal still types Int
+-- constraint — see its `builtinClassPresent BNum` guard), so a literal still types Int
 -- without a spurious `No impl of Num for Int`.
 inferNumLitBare : Int -> Ref (Option Float) -> Mono
 inferNumLitBare n fref =
@@ -9376,8 +9466,8 @@ tagLitLocsWithRoot id kind ((mv, l)::rest) =
 -- obligation via `ordCompareOp` below.  `!=` shares this seam and lowers to
 -- `not (eq …)` at the dict layer (binopMethodApp), so it does not double-report.
 --
--- Gated on the `Eq` interface being REGISTERED (prelude loaded), mirroring
--- `ifaceRegistered`: the bare-HM no-prelude oracle (tc_probe / typecheck_main)
+-- Gated on the PRELUDE's `Eq` being present (`builtinClassPresent BEq`, #1539): the
+-- bare-HM no-prelude oracle (tc_probe / typecheck_main)
 -- has no `Eq` class, so recording the obligation only when Eq exists keeps those
 -- drivers byte-identical while full check_main (prelude) rejects.
 eqCompareOp : Mono -> Mono -> Mono
@@ -9399,8 +9489,7 @@ eqCompareOp lt rt =
 -- caller — exactly the Eq/Num behaviour.  NO change to eval/emit: `<` still lowers
 -- to `EMethodAt "lt"` at the dict layer, so runtime/emit dispatch is unchanged.
 --
--- Gated on the `Ord` interface being REGISTERED (prelude loaded), mirroring
--- `ifaceRegistered`.
+-- Gated on the PRELUDE's `Ord` being present (`builtinClassPresent BOrd`, #1539).
 ordCompareOp : Mono -> Mono -> Mono
 ordCompareOp lt rt =
   let _ = unify lt rt
@@ -20226,10 +20315,15 @@ checkOneCallObligation deferNonGround univ iface occs loc =
   else if anyListM monoIsFunction args && not (implMatchesArgsU univ iface args) then
     pushNoImplError iface.irName loc args
   -- #838 I4 (was checkOneImplObligation step 4): no-prelude Num skip.  A grounded
-  -- `Num Int` literal in a prelude-free program (bare-HM oracle, `ifaceRegistered "Num"`
-  -- False) has no `impl Num Int`; without this guard the ground path below reports a
+  -- `Num Int` literal in a prelude-free program (bare-HM oracle, the prelude's `Num`
+  -- absent) has no `impl Num Int`; without this guard the ground path below reports a
   -- spurious `No impl of Num for Int`, breaking `typecheck_main`/tc_probe oracle parity.
-  else if iface.irName == "Num" && not (ifaceRegistered "Num") then ()
+  -- #1539: the PRESENCE half is now `builtinClassPresent BNum` (was `ifaceRegistered
+  -- "Num"`), per DICT §8 I7 qualification 4 — see `recordIfaceObligation`.  The SPELLING
+  -- half (`iface.irName == "Num"`) deliberately stays a spelling test, exactly as the
+  -- ⚠️ note above requires: the two halves ask different questions, and only the
+  -- presence half is what #1539 owns.
+  else if iface.irName == "Num" && not (builtinClassPresent BNum) then ()
   -- #838 I4: the ONE per-channel branch (see checkCallObligations).  IMPL channel
   -- (deferNonGround) defers a non-ground obligation unconditionally — byte-identical to
   -- the retired checkOneImplObligation step 7; its genuine ambiguities arrive via the
@@ -27466,7 +27560,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "uOblIsDecidableNow" ((PVar "o")) (EBlock (DoLet false false (PVar "args") (EApp (EApp (EVar "map") (EVar "normalize")) (EApp (EVar "uOblArgs") (EVar "o")))) (DoExpr (EBinOp "&&" (EApp (EVar "isNonEmptyL") (EVar "args")) (EBinOp "||" (EApp (EVar "allConcreteHeads") (EVar "args")) (EApp (EApp (EVar "anyListM") (EVar "monoIsFunction")) (EVar "args")))))))
 (DTypeSig false "pushDictApp" (TyFun (TyTuple (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Route"))) (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Mono"))) (TyApp (TyCon "Option") (TyCon "Loc"))) (TyCon "Unit")))
 (DFunDef false "pushDictApp" ((PVar "app")) (EApp (EApp (EVar "wPush") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "dictApps")) (EVar "app")))
-(DData Private "CrossRun" () ((variant "CrossRun" (ConNamed (field "universeIfaceMethodsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (field "universeFunNamesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (field "universeKeyBucketsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "KeyEntry"))))) (field "universeIfaceRequiredRef" (TyApp (TyCon "Ref") (TyApp (TyCon "Registry") (TyApp (TyCon "List") (TyCon "String"))))) (field "universeMethodIfaceParamsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))))))) (field "universeMethodIdentsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))))))))) (field "universeMethodCollidedRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "universeRegisteredIfacesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (field "universeMethodDispatchIdxRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))))) (field "universeRecordByName" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "RecordInfo")))) (field "universeRecordIdentsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String") (TyCon "RecordInfo")))))) (field "universeRecordCollidedRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "universeFieldOwners" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))))) (field "universeDataParamKinds" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Kind")))))) (field "universeIfaceParamKinds" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "RegKey") (TyApp (TyCon "List") (TyCon "Kind")))))) (field "universeAliasTable" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty")))))) (field "universeDataEnv" (TyApp (TyCon "Ref") (TyCon "TcEnv"))) (field "universeCtorIdentsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String") (TyCon "Scheme")))))) (field "universeCtorCollidedRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "obUnivConcreteRef" (TyApp (TyCon "Ref") (TyApp (TyCon "MultiRegistry") (TyTuple (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "List") (TyCon "Require")))))) (field "obUnivHeadlessRef" (TyApp (TyCon "Ref") (TyApp (TyCon "MultiRegistry") (TyTuple (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "List") (TyCon "Require")))))) (field "obUnivIfaceTagsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "Registry") (TyCon "SetRegistry")))) (field "builtinClassesRef" (TyApp (TyCon "Ref") (TyCon "BuiltinClassOrigins"))) (field "crossModuleFunConstraintsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Int")))))) (field "crossModuleFunConstraintsQualRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int")))))) (field "crossModuleFunConstraintIfacesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "IfaceRef")))))) (field "crossModuleFunConstraintIfacesQualRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "IfaceRef")))))) (field "crossModuleMethodConstraintsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Int")))))) (field "crossModuleMethodConstraintsQualRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int")))))) (field "coreSchemeObligationsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "VecObl"))))) (field "crossModuleSchemeOblsQualRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "VecObl"))))))))) ())
+(DData Private "CrossRun" () ((variant "CrossRun" (ConNamed (field "universeIfaceMethodsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (field "universeFunNamesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (field "universeKeyBucketsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "KeyEntry"))))) (field "universeIfaceRequiredRef" (TyApp (TyCon "Ref") (TyApp (TyCon "Registry") (TyApp (TyCon "List") (TyCon "String"))))) (field "universeMethodIfaceParamsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))))))) (field "universeMethodIdentsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))))))))) (field "universeMethodCollidedRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "universeRegisteredIfacesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (field "universeMethodDispatchIdxRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))))) (field "universeRecordByName" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "RecordInfo")))) (field "universeRecordIdentsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String") (TyCon "RecordInfo")))))) (field "universeRecordCollidedRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "universeFieldOwners" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))))) (field "universeDataParamKinds" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Kind")))))) (field "universeIfaceParamKinds" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "RegKey") (TyApp (TyCon "List") (TyCon "Kind")))))) (field "universeAliasTable" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty")))))) (field "universeDataEnv" (TyApp (TyCon "Ref") (TyCon "TcEnv"))) (field "universeCtorIdentsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String") (TyCon "Scheme")))))) (field "universeCtorCollidedRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "obUnivConcreteRef" (TyApp (TyCon "Ref") (TyApp (TyCon "MultiRegistry") (TyTuple (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "List") (TyCon "Require")))))) (field "obUnivHeadlessRef" (TyApp (TyCon "Ref") (TyApp (TyCon "MultiRegistry") (TyTuple (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "List") (TyCon "Require")))))) (field "obUnivIfaceTagsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "Registry") (TyCon "SetRegistry")))) (field "builtinClassesRef" (TyApp (TyCon "Ref") (TyCon "BuiltinClasses"))) (field "crossModuleFunConstraintsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Int")))))) (field "crossModuleFunConstraintsQualRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int")))))) (field "crossModuleFunConstraintIfacesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "IfaceRef")))))) (field "crossModuleFunConstraintIfacesQualRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "IfaceRef")))))) (field "crossModuleMethodConstraintsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Int")))))) (field "crossModuleMethodConstraintsQualRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int")))))) (field "coreSchemeObligationsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "VecObl"))))) (field "crossModuleSchemeOblsQualRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "VecObl"))))))))) ())
 (DTypeSig false "freshCrossRun" (TyFun (TyCon "TcEnv") (TyCon "CrossRun")))
 (DFunDef false "freshCrossRun" ((PVar "env")) (ERecordCreate "CrossRun" ((fa "universeIfaceMethodsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "universeFunNamesRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "universeKeyBucketsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "universeIfaceRequiredRef" (EApp (EVar "Ref") (EVar "regEmpty"))) (fa "universeMethodIfaceParamsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "universeMethodIdentsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "universeMethodCollidedRef" (EApp (EVar "Ref") (EListLit))) (fa "universeRegisteredIfacesRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "universeMethodDispatchIdxRef" (EApp (EVar "Ref") (EListLit))) (fa "universeRecordByName" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "universeRecordIdentsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "universeRecordCollidedRef" (EApp (EVar "Ref") (EListLit))) (fa "universeFieldOwners" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "universeDataParamKinds" (EApp (EVar "Ref") (EListLit))) (fa "universeIfaceParamKinds" (EApp (EVar "Ref") (EListLit))) (fa "universeAliasTable" (EApp (EVar "Ref") (EListLit))) (fa "universeDataEnv" (EApp (EVar "Ref") (EVar "env"))) (fa "universeCtorIdentsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "universeCtorCollidedRef" (EApp (EVar "Ref") (EListLit))) (fa "obUnivConcreteRef" (EApp (EVar "Ref") (EVar "mregEmpty"))) (fa "obUnivHeadlessRef" (EApp (EVar "Ref") (EVar "mregEmpty"))) (fa "obUnivIfaceTagsRef" (EApp (EVar "Ref") (EVar "regEmpty"))) (fa "builtinClassesRef" (EApp (EVar "Ref") (EVar "emptyBuiltinClasses"))) (fa "crossModuleFunConstraintsRef" (EApp (EVar "Ref") (EListLit))) (fa "crossModuleFunConstraintsQualRef" (EApp (EVar "Ref") (EListLit))) (fa "crossModuleFunConstraintIfacesRef" (EApp (EVar "Ref") (EListLit))) (fa "crossModuleFunConstraintIfacesQualRef" (EApp (EVar "Ref") (EListLit))) (fa "crossModuleMethodConstraintsRef" (EApp (EVar "Ref") (EListLit))) (fa "crossModuleMethodConstraintsQualRef" (EApp (EVar "Ref") (EListLit))) (fa "coreSchemeObligationsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "crossModuleSchemeOblsQualRef" (EApp (EVar "Ref") (EListLit))))))
 (DTypeSig false "crossRun" (TyApp (TyCon "Ref") (TyCon "CrossRun")))
@@ -28309,45 +28403,48 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "appendOp" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Mono"))))
 (DFunDef false "appendOp" ((PVar "lt") (PVar "rt")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "unify") (EVar "lt")) (EVar "rt"))) (DoLet false false PWild (EApp (EApp (EVar "recordIfaceObligation") (EVar "BSemigroup")) (EVar "lt"))) (DoExpr (EVar "lt"))))
 (DTypeSig false "recordIfaceObligation" (TyFun (TyCon "BuiltinClass") (TyFun (TyCon "Mono") (TyCon "Unit"))))
-(DFunDef false "recordIfaceObligation" ((PVar "c") (PVar "lt")) (EIf (EApp (EVar "ifaceRegistered") (EApp (EVar "builtinClassName") (EVar "c"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "pushPendingObl") (EApp (EVar "builtinIfaceRef") (EVar "c"))) (EListLit (ELit (LString "a")))) (EApp (EVar "TyVar") (ELit (LString "a")))) (EVar "lt")) (EVar "POperator")) (EFieldAccess (EVar "currentLoc") "value")) (EIf (EVar "otherwise") (ELit LUnit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "recordIfaceObligation" ((PVar "c") (PVar "lt")) (EIf (EApp (EVar "builtinClassPresent") (EVar "c")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "pushPendingObl") (EApp (EVar "builtinIfaceRef") (EVar "c"))) (EListLit (ELit (LString "a")))) (EApp (EVar "TyVar") (ELit (LString "a")))) (EVar "lt")) (EVar "POperator")) (EFieldAccess (EVar "currentLoc") "value")) (EIf (EVar "otherwise") (ELit LUnit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DData Public "BuiltinClass" () ((variant "BNum" (ConPos)) (variant "BEq" (ConPos)) (variant "BOrd" (ConPos)) (variant "BSemigroup" (ConPos))) ())
 (DTypeSig false "builtinClassName" (TyFun (TyCon "BuiltinClass") (TyCon "String")))
 (DFunDef false "builtinClassName" ((PCon "BNum")) (ELit (LString "Num")))
 (DFunDef false "builtinClassName" ((PCon "BEq")) (ELit (LString "Eq")))
 (DFunDef false "builtinClassName" ((PCon "BOrd")) (ELit (LString "Ord")))
 (DFunDef false "builtinClassName" ((PCon "BSemigroup")) (ELit (LString "Semigroup")))
-(DData Private "BuiltinClassOrigins" () ((variant "BuiltinClassOrigins" (ConNamed (field "bcNum" (TyCon "TyConOrigin")) (field "bcEq" (TyCon "TyConOrigin")) (field "bcOrd" (TyCon "TyConOrigin")) (field "bcSemigroup" (TyCon "TyConOrigin"))))) ())
-(DTypeSig false "emptyBuiltinClasses" (TyCon "BuiltinClassOrigins"))
-(DFunDef false "emptyBuiltinClasses" () (ERecordCreate "BuiltinClassOrigins" ((fa "bcNum" (EVar "OriginUnresolved")) (fa "bcEq" (EVar "OriginUnresolved")) (fa "bcOrd" (EVar "OriginUnresolved")) (fa "bcSemigroup" (EVar "OriginUnresolved")))))
+(DData Private "BuiltinClasses" () ((variant "BuiltinClasses" (ConNamed (field "bcNum" (TyCon "TyConOrigin")) (field "bcEq" (TyCon "TyConOrigin")) (field "bcOrd" (TyCon "TyConOrigin")) (field "bcSemigroup" (TyCon "TyConOrigin")) (field "bcNumPresent" (TyCon "Bool")) (field "bcEqPresent" (TyCon "Bool")) (field "bcOrdPresent" (TyCon "Bool")) (field "bcSemigroupPresent" (TyCon "Bool"))))) ())
+(DTypeSig false "emptyBuiltinClasses" (TyCon "BuiltinClasses"))
+(DFunDef false "emptyBuiltinClasses" () (ERecordCreate "BuiltinClasses" ((fa "bcNum" (EVar "OriginUnresolved")) (fa "bcEq" (EVar "OriginUnresolved")) (fa "bcOrd" (EVar "OriginUnresolved")) (fa "bcSemigroup" (EVar "OriginUnresolved")) (fa "bcNumPresent" (EVar "False")) (fa "bcEqPresent" (EVar "False")) (fa "bcOrdPresent" (EVar "False")) (fa "bcSemigroupPresent" (EVar "False")))))
 (DTypeSig false "builtinClassOrigin" (TyFun (TyCon "BuiltinClass") (TyCon "TyConOrigin")))
 (DFunDef false "builtinClassOrigin" ((PCon "BNum")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "builtinClassesRef") "value") "bcNum"))
 (DFunDef false "builtinClassOrigin" ((PCon "BEq")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "builtinClassesRef") "value") "bcEq"))
 (DFunDef false "builtinClassOrigin" ((PCon "BOrd")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "builtinClassesRef") "value") "bcOrd"))
 (DFunDef false "builtinClassOrigin" ((PCon "BSemigroup")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "builtinClassesRef") "value") "bcSemigroup"))
+(DTypeSig false "builtinClassPresent" (TyFun (TyCon "BuiltinClass") (TyCon "Bool")))
+(DFunDef false "builtinClassPresent" ((PCon "BNum")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "builtinClassesRef") "value") "bcNumPresent"))
+(DFunDef false "builtinClassPresent" ((PCon "BEq")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "builtinClassesRef") "value") "bcEqPresent"))
+(DFunDef false "builtinClassPresent" ((PCon "BOrd")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "builtinClassesRef") "value") "bcOrdPresent"))
+(DFunDef false "builtinClassPresent" ((PCon "BSemigroup")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "builtinClassesRef") "value") "bcSemigroupPresent"))
 (DTypeSig false "builtinIfaceRef" (TyFun (TyCon "BuiltinClass") (TyCon "IfaceRef")))
 (DFunDef false "builtinIfaceRef" ((PVar "c")) (ERecordCreate "IfaceRef" ((fa "irName" (EApp (EVar "builtinClassName") (EVar "c"))) (fa "irOrigin" (EApp (EVar "builtinClassOrigin") (EVar "c"))))))
-(DTypeSig false "builtinClassesOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "BuiltinClassOrigins")))
+(DTypeSig false "builtinClassesOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "BuiltinClasses")))
 (DFunDef false "builtinClassesOf" ((PVar "decls")) (EApp (EApp (EVar "builtinClassesGo") (EVar "decls")) (EVar "emptyBuiltinClasses")))
-(DTypeSig false "builtinClassesGo" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "BuiltinClassOrigins") (TyCon "BuiltinClassOrigins"))))
+(DTypeSig false "builtinClassesGo" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "BuiltinClasses") (TyCon "BuiltinClasses"))))
 (DFunDef false "builtinClassesGo" ((PList) (PVar "acc")) (EVar "acc"))
 (DFunDef false "builtinClassesGo" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "builtinClassesGo") (EVar "rest")) (EApp (EApp (EVar "builtinClassesGo") (EListLit (EVar "d"))) (EVar "acc"))))
-(DFunDef false "builtinClassesGo" ((PCons (PRec "DInterface" ((rf "name" None) (rf "ifaceOrigin" (PVar "o"))) true) (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "builtinClassesGo") (EVar "rest")) (EApp (EApp (EApp (EVar "builtinClassSet") (EVar "name")) (EVar "o")) (EVar "acc"))))
+(DFunDef false "builtinClassesGo" ((PCons (PRec "DInterface" ((rf "name" None) (rf "ifaceOrigin" (PVar "o")) (rf "methods" None)) true) (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "builtinClassesGo") (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "builtinClassSet") (EVar "name")) (EVar "o")) (EApp (EVar "isNonEmptyL") (EVar "methods"))) (EVar "acc"))))
 (DFunDef false "builtinClassesGo" ((PCons PWild (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "builtinClassesGo") (EVar "rest")) (EVar "acc")))
-(DTypeSig false "builtinClassSet" (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "BuiltinClassOrigins") (TyCon "BuiltinClassOrigins")))))
-(DFunDef false "builtinClassSet" ((PLit (LString "Num")) (PVar "o") (PVar "acc")) (EVariantUpdate "BuiltinClassOrigins" (EVar "acc") ((fa "bcNum" (EVar "o")))))
-(DFunDef false "builtinClassSet" ((PLit (LString "Eq")) (PVar "o") (PVar "acc")) (EVariantUpdate "BuiltinClassOrigins" (EVar "acc") ((fa "bcEq" (EVar "o")))))
-(DFunDef false "builtinClassSet" ((PLit (LString "Ord")) (PVar "o") (PVar "acc")) (EVariantUpdate "BuiltinClassOrigins" (EVar "acc") ((fa "bcOrd" (EVar "o")))))
-(DFunDef false "builtinClassSet" ((PLit (LString "Semigroup")) (PVar "o") (PVar "acc")) (EVariantUpdate "BuiltinClassOrigins" (EVar "acc") ((fa "bcSemigroup" (EVar "o")))))
-(DFunDef false "builtinClassSet" (PWild PWild (PVar "acc")) (EVar "acc"))
+(DTypeSig false "builtinClassSet" (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "Bool") (TyFun (TyCon "BuiltinClasses") (TyCon "BuiltinClasses"))))))
+(DFunDef false "builtinClassSet" ((PLit (LString "Num")) (PVar "o") (PVar "p") (PVar "acc")) (EVariantUpdate "BuiltinClasses" (EVar "acc") ((fa "bcNum" (EVar "o")) (fa "bcNumPresent" (EBinOp "||" (EFieldAccess (EVar "acc") "bcNumPresent") (EVar "p"))))))
+(DFunDef false "builtinClassSet" ((PLit (LString "Eq")) (PVar "o") (PVar "p") (PVar "acc")) (EVariantUpdate "BuiltinClasses" (EVar "acc") ((fa "bcEq" (EVar "o")) (fa "bcEqPresent" (EBinOp "||" (EFieldAccess (EVar "acc") "bcEqPresent") (EVar "p"))))))
+(DFunDef false "builtinClassSet" ((PLit (LString "Ord")) (PVar "o") (PVar "p") (PVar "acc")) (EVariantUpdate "BuiltinClasses" (EVar "acc") ((fa "bcOrd" (EVar "o")) (fa "bcOrdPresent" (EBinOp "||" (EFieldAccess (EVar "acc") "bcOrdPresent") (EVar "p"))))))
+(DFunDef false "builtinClassSet" ((PLit (LString "Semigroup")) (PVar "o") (PVar "p") (PVar "acc")) (EVariantUpdate "BuiltinClasses" (EVar "acc") ((fa "bcSemigroup" (EVar "o")) (fa "bcSemigroupPresent" (EBinOp "||" (EFieldAccess (EVar "acc") "bcSemigroupPresent") (EVar "p"))))))
+(DFunDef false "builtinClassSet" (PWild PWild PWild (PVar "acc")) (EVar "acc"))
 (DTypeSig false "seedBuiltinClasses" (TyFun (TyCon "CheckMode") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit"))))
 (DFunDef false "seedBuiltinClasses" ((PCon "Flat" (PVar "coreProg")) (PVar "prog")) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "builtinClassesRef")) (EApp (EVar "builtinClassesOf") (EIf (EApp (EVar "declsNonEmpty") (EVar "coreProg")) (EVar "coreProg") (EVar "prog")))))
 (DFunDef false "seedBuiltinClasses" ((PCon "Module" (PVar "mid") PWild PWild) (PVar "prog")) (EIf (EBinOp "||" (EBinOp "==" (EVar "mid") (ELit (LString "core"))) (EBinOp "==" (EVar "mid") (ELit (LString "")))) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "builtinClassesRef")) (EApp (EVar "builtinClassesOf") (EVar "prog"))) (ELit LUnit)))
-(DTypeSig false "ifaceRegistered" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "ifaceRegistered" ((PVar "iface")) (EApp (EApp (EVar "omHasKey") (EVar "iface")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "registeredIfacesRef") "value")))
 (DTypeSig false "numArithOp" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Mono"))))
 (DFunDef false "numArithOp" ((PVar "lt") (PVar "rt")) (EBlock (DoLet false false PWild (EApp (EVar "markNumlitOpTaint") (EVar "lt"))) (DoLet false false PWild (EApp (EVar "markNumlitOpTaint") (EVar "rt"))) (DoLet false false PWild (EApp (EApp (EVar "unify") (EVar "lt")) (EVar "rt"))) (DoLet false false PWild (EApp (EApp (EVar "recordIfaceObligation") (EVar "BNum")) (EVar "lt"))) (DoExpr (EVar "lt"))))
 (DTypeSig false "inferNumLit" (TyFun (TyCon "TcEnv") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "Float"))) (TyFun (TyApp (TyCon "Ref") (TyCon "Route")) (TyCon "Mono"))))))
-(DFunDef false "inferNumLit" ((PVar "env") (PVar "n") (PVar "fref") (PVar "dref")) (EIf (EApp (EVar "ifaceRegistered") (ELit (LString "Num"))) (EMatch (EApp (EApp (EVar "lookupVar") (EVar "env")) (ELit (LString "fromInt"))) (arm (PCon "None") () (EApp (EApp (EVar "inferNumLitBare") (EVar "n")) (EVar "fref"))) (arm (PCon "Some" PWild) () (EBlock (DoLet false false (PVar "fromIntTy") (EApp (EApp (EApp (EApp (EApp (EVar "inferMethodAt") (EVar "env")) (ELit (LString "fromInt"))) (EVar "dref")) (EApp (EVar "Ref") (EListLit))) (EApp (EVar "Ref") (EListLit)))) (DoLet false false (PVar "a") (EApp (EVar "freshVar") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "unify") (EVar "fromIntTy")) (EApp (EApp (EApp (EVar "TFun") (EApp (EVar "tconBuiltin") (ELit (LString "Int")))) (EApp (EVar "openRow") (ELit LUnit))) (EVar "a")))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "numlitRefs")) (EBinOp "::" (ETuple (EVar "a") (EVar "fref") (EVar "n") (EVar "dref")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "numlitRefs") "value")))) (DoLet false false PWild (EApp (EVar "recordNumlitLoc") (EVar "a"))) (DoExpr (EVar "a"))))) (EIf (EVar "otherwise") (EApp (EApp (EVar "inferNumLitBare") (EVar "n")) (EVar "fref")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "inferNumLit" ((PVar "env") (PVar "n") (PVar "fref") (PVar "dref")) (EIf (EApp (EVar "builtinClassPresent") (EVar "BNum")) (EMatch (EApp (EApp (EVar "lookupVar") (EVar "env")) (ELit (LString "fromInt"))) (arm (PCon "None") () (EApp (EApp (EVar "inferNumLitBare") (EVar "n")) (EVar "fref"))) (arm (PCon "Some" PWild) () (EBlock (DoLet false false (PVar "fromIntTy") (EApp (EApp (EApp (EApp (EApp (EVar "inferMethodAt") (EVar "env")) (ELit (LString "fromInt"))) (EVar "dref")) (EApp (EVar "Ref") (EListLit))) (EApp (EVar "Ref") (EListLit)))) (DoLet false false (PVar "a") (EApp (EVar "freshVar") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "unify") (EVar "fromIntTy")) (EApp (EApp (EApp (EVar "TFun") (EApp (EVar "tconBuiltin") (ELit (LString "Int")))) (EApp (EVar "openRow") (ELit LUnit))) (EVar "a")))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "numlitRefs")) (EBinOp "::" (ETuple (EVar "a") (EVar "fref") (EVar "n") (EVar "dref")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "numlitRefs") "value")))) (DoLet false false PWild (EApp (EVar "recordNumlitLoc") (EVar "a"))) (DoExpr (EVar "a"))))) (EIf (EVar "otherwise") (EApp (EApp (EVar "inferNumLitBare") (EVar "n")) (EVar "fref")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "inferNumLitBare" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "Float"))) (TyCon "Mono"))))
 (DFunDef false "inferNumLitBare" ((PVar "n") (PVar "fref")) (EBlock (DoLet false false (PVar "a") (EApp (EVar "freshVar") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EApp (EVar "pushPendingObl") (EApp (EVar "builtinIfaceRef") (EVar "BNum"))) (EListLit (ELit (LString "a")))) (EApp (EVar "TyVar") (ELit (LString "a")))) (EVar "a")) (EVar "PNumLit")) (EFieldAccess (EVar "currentLoc") "value"))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "numlitRefs")) (EBinOp "::" (ETuple (EVar "a") (EVar "fref") (EVar "n") (EApp (EVar "Ref") (EVar "RNone"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "numlitRefs") "value")))) (DoLet false false PWild (EApp (EVar "recordNumlitLoc") (EVar "a"))) (DoExpr (EVar "a"))))
 (DTypeSig false "recordNumlitLoc" (TyFun (TyCon "Mono") (TyCon "Unit")))
@@ -30334,7 +30431,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "checkCallObligationsU" (PWild PWild PWild PWild (PList)) (ELit LUnit))
 (DFunDef false "checkCallObligationsU" ((PVar "deferNonGround") (PVar "dedup") (PVar "univ") (PVar "seen") (PCons (PVar "o") (PVar "rest"))) (EBlock (DoLet false false (PVar "iface") (EFieldAccess (EFieldAccess (EVar "o") "pred") "iface")) (DoLet false false (PVar "occs") (EApp (EVar "uOblArgs") (EVar "o"))) (DoLet false false (PVar "loc") (EFieldAccess (EVar "o") "loc")) (DoLet false false (PVar "key") (EApp (EApp (EVar "oblDedupKey") (EVar "iface")) (EVar "occs"))) (DoExpr (EIf (EBinOp "&&" (EVar "dedup") (EApp (EApp (EVar "contains") (EVar "key")) (EVar "seen"))) (EApp (EApp (EApp (EApp (EApp (EVar "checkCallObligationsU") (EVar "deferNonGround")) (EVar "dedup")) (EVar "univ")) (EVar "seen")) (EVar "rest")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "checkOneCallObligation") (EVar "deferNonGround")) (EVar "univ")) (EVar "iface")) (EVar "occs")) (EVar "loc"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "checkCallObligationsU") (EVar "deferNonGround")) (EVar "dedup")) (EVar "univ")) (EBinOp "::" (EVar "key") (EVar "seen"))) (EVar "rest"))))))))
 (DTypeSig false "checkOneCallObligation" (TyFun (TyCon "Bool") (TyFun (TyCon "ImplUniverse") (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Unit")))))))
-(DFunDef false "checkOneCallObligation" ((PVar "deferNonGround") (PVar "univ") (PVar "iface") (PVar "occs") (PVar "loc")) (EBlock (DoLet false false (PVar "args") (EApp (EApp (EVar "map") (EVar "normalize")) (EVar "occs"))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EVar "args")) (ELit LUnit) (EIf (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "iface") "irName") (ELit (LString "Num"))) (EApp (EApp (EVar "anyListM") (EVar "numUnimplementableHead")) (EVar "args"))) (EApp (EApp (EApp (EVar "pushNoImplError") (EFieldAccess (EVar "iface") "irName")) (EVar "loc")) (EVar "args")) (EIf (EBinOp "&&" (EApp (EApp (EVar "anyListM") (EVar "monoIsFunction")) (EVar "args")) (EApp (EVar "not") (EApp (EApp (EApp (EVar "implMatchesArgsU") (EVar "univ")) (EVar "iface")) (EVar "args")))) (EApp (EApp (EApp (EVar "pushNoImplError") (EFieldAccess (EVar "iface") "irName")) (EVar "loc")) (EVar "args")) (EIf (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "iface") "irName") (ELit (LString "Num"))) (EApp (EVar "not") (EApp (EVar "ifaceRegistered") (ELit (LString "Num"))))) (ELit LUnit) (EIf (EApp (EVar "not") (EApp (EVar "allConcreteHeads") (EVar "args"))) (EIf (EVar "deferNonGround") (ELit LUnit) (EApp (EApp (EApp (EApp (EVar "checkUndeterminedObligations") (EVar "univ")) (EVar "iface")) (EVar "args")) (EVar "loc"))) (EIf (EApp (EApp (EApp (EVar "implMatchesArgsU") (EVar "univ")) (EVar "iface")) (EVar "args")) (EApp (EApp (EApp (EApp (EVar "checkNestedReqs") (EVar "univ")) (EVar "iface")) (EVar "args")) (EVar "loc")) (EApp (EApp (EApp (EVar "reportNumOrNoImpl") (EFieldAccess (EVar "iface") "irName")) (EVar "args")) (EVar "loc")))))))))))
+(DFunDef false "checkOneCallObligation" ((PVar "deferNonGround") (PVar "univ") (PVar "iface") (PVar "occs") (PVar "loc")) (EBlock (DoLet false false (PVar "args") (EApp (EApp (EVar "map") (EVar "normalize")) (EVar "occs"))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EVar "args")) (ELit LUnit) (EIf (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "iface") "irName") (ELit (LString "Num"))) (EApp (EApp (EVar "anyListM") (EVar "numUnimplementableHead")) (EVar "args"))) (EApp (EApp (EApp (EVar "pushNoImplError") (EFieldAccess (EVar "iface") "irName")) (EVar "loc")) (EVar "args")) (EIf (EBinOp "&&" (EApp (EApp (EVar "anyListM") (EVar "monoIsFunction")) (EVar "args")) (EApp (EVar "not") (EApp (EApp (EApp (EVar "implMatchesArgsU") (EVar "univ")) (EVar "iface")) (EVar "args")))) (EApp (EApp (EApp (EVar "pushNoImplError") (EFieldAccess (EVar "iface") "irName")) (EVar "loc")) (EVar "args")) (EIf (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "iface") "irName") (ELit (LString "Num"))) (EApp (EVar "not") (EApp (EVar "builtinClassPresent") (EVar "BNum")))) (ELit LUnit) (EIf (EApp (EVar "not") (EApp (EVar "allConcreteHeads") (EVar "args"))) (EIf (EVar "deferNonGround") (ELit LUnit) (EApp (EApp (EApp (EApp (EVar "checkUndeterminedObligations") (EVar "univ")) (EVar "iface")) (EVar "args")) (EVar "loc"))) (EIf (EApp (EApp (EApp (EVar "implMatchesArgsU") (EVar "univ")) (EVar "iface")) (EVar "args")) (EApp (EApp (EApp (EApp (EVar "checkNestedReqs") (EVar "univ")) (EVar "iface")) (EVar "args")) (EVar "loc")) (EApp (EApp (EApp (EVar "reportNumOrNoImpl") (EFieldAccess (EVar "iface") "irName")) (EVar "args")) (EVar "loc")))))))))))
 (DTypeSig false "implMatchesArgsU" (TyFun (TyCon "ImplUniverse") (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "Bool")))))
 (DFunDef false "implMatchesArgsU" ((PVar "univ") (PVar "iface") (PList (PVar "a"))) (EApp (EApp (EApp (EVar "implMatchesReceiverU") (EVar "univ")) (EVar "iface")) (EVar "a")))
 (DFunDef false "implMatchesArgsU" ((PVar "univ") (PVar "iface") (PVar "args")) (EApp (EApp (EApp (EVar "implMatchesU") (EVar "univ")) (EVar "iface")) (EVar "args")))
@@ -32352,7 +32449,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "uOblIsDecidableNow" ((PVar "o")) (EBlock (DoLet false false (PVar "args") (EApp (EApp (EMethodRef "map") (EVar "normalize")) (EApp (EVar "uOblArgs") (EVar "o")))) (DoExpr (EBinOp "&&" (EApp (EVar "isNonEmptyL") (EVar "args")) (EBinOp "||" (EApp (EVar "allConcreteHeads") (EVar "args")) (EApp (EApp (EVar "anyListM") (EVar "monoIsFunction")) (EVar "args")))))))
 (DTypeSig false "pushDictApp" (TyFun (TyTuple (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Route"))) (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Mono"))) (TyApp (TyCon "Option") (TyCon "Loc"))) (TyCon "Unit")))
 (DFunDef false "pushDictApp" ((PVar "app")) (EApp (EApp (EVar "wPush") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "dictApps")) (EVar "app")))
-(DData Private "CrossRun" () ((variant "CrossRun" (ConNamed (field "universeIfaceMethodsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (field "universeFunNamesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (field "universeKeyBucketsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "KeyEntry"))))) (field "universeIfaceRequiredRef" (TyApp (TyCon "Ref") (TyApp (TyCon "Registry") (TyApp (TyCon "List") (TyCon "String"))))) (field "universeMethodIfaceParamsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))))))) (field "universeMethodIdentsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))))))))) (field "universeMethodCollidedRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "universeRegisteredIfacesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (field "universeMethodDispatchIdxRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))))) (field "universeRecordByName" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "RecordInfo")))) (field "universeRecordIdentsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String") (TyCon "RecordInfo")))))) (field "universeRecordCollidedRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "universeFieldOwners" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))))) (field "universeDataParamKinds" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Kind")))))) (field "universeIfaceParamKinds" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "RegKey") (TyApp (TyCon "List") (TyCon "Kind")))))) (field "universeAliasTable" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty")))))) (field "universeDataEnv" (TyApp (TyCon "Ref") (TyCon "TcEnv"))) (field "universeCtorIdentsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String") (TyCon "Scheme")))))) (field "universeCtorCollidedRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "obUnivConcreteRef" (TyApp (TyCon "Ref") (TyApp (TyCon "MultiRegistry") (TyTuple (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "List") (TyCon "Require")))))) (field "obUnivHeadlessRef" (TyApp (TyCon "Ref") (TyApp (TyCon "MultiRegistry") (TyTuple (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "List") (TyCon "Require")))))) (field "obUnivIfaceTagsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "Registry") (TyCon "SetRegistry")))) (field "builtinClassesRef" (TyApp (TyCon "Ref") (TyCon "BuiltinClassOrigins"))) (field "crossModuleFunConstraintsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Int")))))) (field "crossModuleFunConstraintsQualRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int")))))) (field "crossModuleFunConstraintIfacesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "IfaceRef")))))) (field "crossModuleFunConstraintIfacesQualRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "IfaceRef")))))) (field "crossModuleMethodConstraintsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Int")))))) (field "crossModuleMethodConstraintsQualRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int")))))) (field "coreSchemeObligationsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "VecObl"))))) (field "crossModuleSchemeOblsQualRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "VecObl"))))))))) ())
+(DData Private "CrossRun" () ((variant "CrossRun" (ConNamed (field "universeIfaceMethodsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (field "universeFunNamesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (field "universeKeyBucketsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "KeyEntry"))))) (field "universeIfaceRequiredRef" (TyApp (TyCon "Ref") (TyApp (TyCon "Registry") (TyApp (TyCon "List") (TyCon "String"))))) (field "universeMethodIfaceParamsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))))))) (field "universeMethodIdentsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))))))))) (field "universeMethodCollidedRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "universeRegisteredIfacesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (field "universeMethodDispatchIdxRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))))) (field "universeRecordByName" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "RecordInfo")))) (field "universeRecordIdentsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String") (TyCon "RecordInfo")))))) (field "universeRecordCollidedRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "universeFieldOwners" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))))) (field "universeDataParamKinds" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Kind")))))) (field "universeIfaceParamKinds" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "RegKey") (TyApp (TyCon "List") (TyCon "Kind")))))) (field "universeAliasTable" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty")))))) (field "universeDataEnv" (TyApp (TyCon "Ref") (TyCon "TcEnv"))) (field "universeCtorIdentsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String") (TyCon "Scheme")))))) (field "universeCtorCollidedRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))) (field "obUnivConcreteRef" (TyApp (TyCon "Ref") (TyApp (TyCon "MultiRegistry") (TyTuple (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "List") (TyCon "Require")))))) (field "obUnivHeadlessRef" (TyApp (TyCon "Ref") (TyApp (TyCon "MultiRegistry") (TyTuple (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "List") (TyCon "Require")))))) (field "obUnivIfaceTagsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "Registry") (TyCon "SetRegistry")))) (field "builtinClassesRef" (TyApp (TyCon "Ref") (TyCon "BuiltinClasses"))) (field "crossModuleFunConstraintsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Int")))))) (field "crossModuleFunConstraintsQualRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int")))))) (field "crossModuleFunConstraintIfacesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "IfaceRef")))))) (field "crossModuleFunConstraintIfacesQualRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "IfaceRef")))))) (field "crossModuleMethodConstraintsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Int")))))) (field "crossModuleMethodConstraintsQualRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int")))))) (field "coreSchemeObligationsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "VecObl"))))) (field "crossModuleSchemeOblsQualRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "VecObl"))))))))) ())
 (DTypeSig false "freshCrossRun" (TyFun (TyCon "TcEnv") (TyCon "CrossRun")))
 (DFunDef false "freshCrossRun" ((PVar "env")) (ERecordCreate "CrossRun" ((fa "universeIfaceMethodsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "universeFunNamesRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "universeKeyBucketsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "universeIfaceRequiredRef" (EApp (EVar "Ref") (EVar "regEmpty"))) (fa "universeMethodIfaceParamsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "universeMethodIdentsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "universeMethodCollidedRef" (EApp (EVar "Ref") (EListLit))) (fa "universeRegisteredIfacesRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "universeMethodDispatchIdxRef" (EApp (EVar "Ref") (EListLit))) (fa "universeRecordByName" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "universeRecordIdentsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "universeRecordCollidedRef" (EApp (EVar "Ref") (EListLit))) (fa "universeFieldOwners" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "universeDataParamKinds" (EApp (EVar "Ref") (EListLit))) (fa "universeIfaceParamKinds" (EApp (EVar "Ref") (EListLit))) (fa "universeAliasTable" (EApp (EVar "Ref") (EListLit))) (fa "universeDataEnv" (EApp (EVar "Ref") (EVar "env"))) (fa "universeCtorIdentsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "universeCtorCollidedRef" (EApp (EVar "Ref") (EListLit))) (fa "obUnivConcreteRef" (EApp (EVar "Ref") (EVar "mregEmpty"))) (fa "obUnivHeadlessRef" (EApp (EVar "Ref") (EVar "mregEmpty"))) (fa "obUnivIfaceTagsRef" (EApp (EVar "Ref") (EVar "regEmpty"))) (fa "builtinClassesRef" (EApp (EVar "Ref") (EVar "emptyBuiltinClasses"))) (fa "crossModuleFunConstraintsRef" (EApp (EVar "Ref") (EListLit))) (fa "crossModuleFunConstraintsQualRef" (EApp (EVar "Ref") (EListLit))) (fa "crossModuleFunConstraintIfacesRef" (EApp (EVar "Ref") (EListLit))) (fa "crossModuleFunConstraintIfacesQualRef" (EApp (EVar "Ref") (EListLit))) (fa "crossModuleMethodConstraintsRef" (EApp (EVar "Ref") (EListLit))) (fa "crossModuleMethodConstraintsQualRef" (EApp (EVar "Ref") (EListLit))) (fa "coreSchemeObligationsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "crossModuleSchemeOblsQualRef" (EApp (EVar "Ref") (EListLit))))))
 (DTypeSig false "crossRun" (TyApp (TyCon "Ref") (TyCon "CrossRun")))
@@ -33195,45 +33292,48 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "appendOp" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Mono"))))
 (DFunDef false "appendOp" ((PVar "lt") (PVar "rt")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "unify") (EMethodRef "lt")) (EVar "rt"))) (DoLet false false PWild (EApp (EApp (EVar "recordIfaceObligation") (EVar "BSemigroup")) (EMethodRef "lt"))) (DoExpr (EMethodRef "lt"))))
 (DTypeSig false "recordIfaceObligation" (TyFun (TyCon "BuiltinClass") (TyFun (TyCon "Mono") (TyCon "Unit"))))
-(DFunDef false "recordIfaceObligation" ((PVar "c") (PVar "lt")) (EIf (EApp (EVar "ifaceRegistered") (EApp (EVar "builtinClassName") (EVar "c"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "pushPendingObl") (EApp (EVar "builtinIfaceRef") (EVar "c"))) (EListLit (ELit (LString "a")))) (EApp (EVar "TyVar") (ELit (LString "a")))) (EMethodRef "lt")) (EVar "POperator")) (EFieldAccess (EVar "currentLoc") "value")) (EIf (EVar "otherwise") (ELit LUnit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "recordIfaceObligation" ((PVar "c") (PVar "lt")) (EIf (EApp (EVar "builtinClassPresent") (EVar "c")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "pushPendingObl") (EApp (EVar "builtinIfaceRef") (EVar "c"))) (EListLit (ELit (LString "a")))) (EApp (EVar "TyVar") (ELit (LString "a")))) (EMethodRef "lt")) (EVar "POperator")) (EFieldAccess (EVar "currentLoc") "value")) (EIf (EVar "otherwise") (ELit LUnit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DData Public "BuiltinClass" () ((variant "BNum" (ConPos)) (variant "BEq" (ConPos)) (variant "BOrd" (ConPos)) (variant "BSemigroup" (ConPos))) ())
 (DTypeSig false "builtinClassName" (TyFun (TyCon "BuiltinClass") (TyCon "String")))
 (DFunDef false "builtinClassName" ((PCon "BNum")) (ELit (LString "Num")))
 (DFunDef false "builtinClassName" ((PCon "BEq")) (ELit (LString "Eq")))
 (DFunDef false "builtinClassName" ((PCon "BOrd")) (ELit (LString "Ord")))
 (DFunDef false "builtinClassName" ((PCon "BSemigroup")) (ELit (LString "Semigroup")))
-(DData Private "BuiltinClassOrigins" () ((variant "BuiltinClassOrigins" (ConNamed (field "bcNum" (TyCon "TyConOrigin")) (field "bcEq" (TyCon "TyConOrigin")) (field "bcOrd" (TyCon "TyConOrigin")) (field "bcSemigroup" (TyCon "TyConOrigin"))))) ())
-(DTypeSig false "emptyBuiltinClasses" (TyCon "BuiltinClassOrigins"))
-(DFunDef false "emptyBuiltinClasses" () (ERecordCreate "BuiltinClassOrigins" ((fa "bcNum" (EVar "OriginUnresolved")) (fa "bcEq" (EVar "OriginUnresolved")) (fa "bcOrd" (EVar "OriginUnresolved")) (fa "bcSemigroup" (EVar "OriginUnresolved")))))
+(DData Private "BuiltinClasses" () ((variant "BuiltinClasses" (ConNamed (field "bcNum" (TyCon "TyConOrigin")) (field "bcEq" (TyCon "TyConOrigin")) (field "bcOrd" (TyCon "TyConOrigin")) (field "bcSemigroup" (TyCon "TyConOrigin")) (field "bcNumPresent" (TyCon "Bool")) (field "bcEqPresent" (TyCon "Bool")) (field "bcOrdPresent" (TyCon "Bool")) (field "bcSemigroupPresent" (TyCon "Bool"))))) ())
+(DTypeSig false "emptyBuiltinClasses" (TyCon "BuiltinClasses"))
+(DFunDef false "emptyBuiltinClasses" () (ERecordCreate "BuiltinClasses" ((fa "bcNum" (EVar "OriginUnresolved")) (fa "bcEq" (EVar "OriginUnresolved")) (fa "bcOrd" (EVar "OriginUnresolved")) (fa "bcSemigroup" (EVar "OriginUnresolved")) (fa "bcNumPresent" (EVar "False")) (fa "bcEqPresent" (EVar "False")) (fa "bcOrdPresent" (EVar "False")) (fa "bcSemigroupPresent" (EVar "False")))))
 (DTypeSig false "builtinClassOrigin" (TyFun (TyCon "BuiltinClass") (TyCon "TyConOrigin")))
 (DFunDef false "builtinClassOrigin" ((PCon "BNum")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "builtinClassesRef") "value") "bcNum"))
 (DFunDef false "builtinClassOrigin" ((PCon "BEq")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "builtinClassesRef") "value") "bcEq"))
 (DFunDef false "builtinClassOrigin" ((PCon "BOrd")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "builtinClassesRef") "value") "bcOrd"))
 (DFunDef false "builtinClassOrigin" ((PCon "BSemigroup")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "builtinClassesRef") "value") "bcSemigroup"))
+(DTypeSig false "builtinClassPresent" (TyFun (TyCon "BuiltinClass") (TyCon "Bool")))
+(DFunDef false "builtinClassPresent" ((PCon "BNum")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "builtinClassesRef") "value") "bcNumPresent"))
+(DFunDef false "builtinClassPresent" ((PCon "BEq")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "builtinClassesRef") "value") "bcEqPresent"))
+(DFunDef false "builtinClassPresent" ((PCon "BOrd")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "builtinClassesRef") "value") "bcOrdPresent"))
+(DFunDef false "builtinClassPresent" ((PCon "BSemigroup")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "builtinClassesRef") "value") "bcSemigroupPresent"))
 (DTypeSig false "builtinIfaceRef" (TyFun (TyCon "BuiltinClass") (TyCon "IfaceRef")))
 (DFunDef false "builtinIfaceRef" ((PVar "c")) (ERecordCreate "IfaceRef" ((fa "irName" (EApp (EVar "builtinClassName") (EVar "c"))) (fa "irOrigin" (EApp (EVar "builtinClassOrigin") (EVar "c"))))))
-(DTypeSig false "builtinClassesOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "BuiltinClassOrigins")))
+(DTypeSig false "builtinClassesOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "BuiltinClasses")))
 (DFunDef false "builtinClassesOf" ((PVar "decls")) (EApp (EApp (EVar "builtinClassesGo") (EVar "decls")) (EVar "emptyBuiltinClasses")))
-(DTypeSig false "builtinClassesGo" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "BuiltinClassOrigins") (TyCon "BuiltinClassOrigins"))))
+(DTypeSig false "builtinClassesGo" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "BuiltinClasses") (TyCon "BuiltinClasses"))))
 (DFunDef false "builtinClassesGo" ((PList) (PVar "acc")) (EVar "acc"))
 (DFunDef false "builtinClassesGo" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "builtinClassesGo") (EVar "rest")) (EApp (EApp (EVar "builtinClassesGo") (EListLit (EVar "d"))) (EVar "acc"))))
-(DFunDef false "builtinClassesGo" ((PCons (PRec "DInterface" ((rf "name" None) (rf "ifaceOrigin" (PVar "o"))) true) (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "builtinClassesGo") (EVar "rest")) (EApp (EApp (EApp (EVar "builtinClassSet") (EVar "name")) (EVar "o")) (EVar "acc"))))
+(DFunDef false "builtinClassesGo" ((PCons (PRec "DInterface" ((rf "name" None) (rf "ifaceOrigin" (PVar "o")) (rf "methods" None)) true) (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "builtinClassesGo") (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "builtinClassSet") (EVar "name")) (EVar "o")) (EApp (EVar "isNonEmptyL") (EVar "methods"))) (EVar "acc"))))
 (DFunDef false "builtinClassesGo" ((PCons PWild (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "builtinClassesGo") (EVar "rest")) (EVar "acc")))
-(DTypeSig false "builtinClassSet" (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "BuiltinClassOrigins") (TyCon "BuiltinClassOrigins")))))
-(DFunDef false "builtinClassSet" ((PLit (LString "Num")) (PVar "o") (PVar "acc")) (EVariantUpdate "BuiltinClassOrigins" (EVar "acc") ((fa "bcNum" (EVar "o")))))
-(DFunDef false "builtinClassSet" ((PLit (LString "Eq")) (PVar "o") (PVar "acc")) (EVariantUpdate "BuiltinClassOrigins" (EVar "acc") ((fa "bcEq" (EVar "o")))))
-(DFunDef false "builtinClassSet" ((PLit (LString "Ord")) (PVar "o") (PVar "acc")) (EVariantUpdate "BuiltinClassOrigins" (EVar "acc") ((fa "bcOrd" (EVar "o")))))
-(DFunDef false "builtinClassSet" ((PLit (LString "Semigroup")) (PVar "o") (PVar "acc")) (EVariantUpdate "BuiltinClassOrigins" (EVar "acc") ((fa "bcSemigroup" (EVar "o")))))
-(DFunDef false "builtinClassSet" (PWild PWild (PVar "acc")) (EVar "acc"))
+(DTypeSig false "builtinClassSet" (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "Bool") (TyFun (TyCon "BuiltinClasses") (TyCon "BuiltinClasses"))))))
+(DFunDef false "builtinClassSet" ((PLit (LString "Num")) (PVar "o") (PVar "p") (PVar "acc")) (EVariantUpdate "BuiltinClasses" (EVar "acc") ((fa "bcNum" (EVar "o")) (fa "bcNumPresent" (EBinOp "||" (EFieldAccess (EVar "acc") "bcNumPresent") (EVar "p"))))))
+(DFunDef false "builtinClassSet" ((PLit (LString "Eq")) (PVar "o") (PVar "p") (PVar "acc")) (EVariantUpdate "BuiltinClasses" (EVar "acc") ((fa "bcEq" (EVar "o")) (fa "bcEqPresent" (EBinOp "||" (EFieldAccess (EVar "acc") "bcEqPresent") (EVar "p"))))))
+(DFunDef false "builtinClassSet" ((PLit (LString "Ord")) (PVar "o") (PVar "p") (PVar "acc")) (EVariantUpdate "BuiltinClasses" (EVar "acc") ((fa "bcOrd" (EVar "o")) (fa "bcOrdPresent" (EBinOp "||" (EFieldAccess (EVar "acc") "bcOrdPresent") (EVar "p"))))))
+(DFunDef false "builtinClassSet" ((PLit (LString "Semigroup")) (PVar "o") (PVar "p") (PVar "acc")) (EVariantUpdate "BuiltinClasses" (EVar "acc") ((fa "bcSemigroup" (EVar "o")) (fa "bcSemigroupPresent" (EBinOp "||" (EFieldAccess (EVar "acc") "bcSemigroupPresent") (EVar "p"))))))
+(DFunDef false "builtinClassSet" (PWild PWild PWild (PVar "acc")) (EVar "acc"))
 (DTypeSig false "seedBuiltinClasses" (TyFun (TyCon "CheckMode") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit"))))
 (DFunDef false "seedBuiltinClasses" ((PCon "Flat" (PVar "coreProg")) (PVar "prog")) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "builtinClassesRef")) (EApp (EVar "builtinClassesOf") (EIf (EApp (EVar "declsNonEmpty") (EVar "coreProg")) (EVar "coreProg") (EVar "prog")))))
 (DFunDef false "seedBuiltinClasses" ((PCon "Module" (PVar "mid") PWild PWild) (PVar "prog")) (EIf (EBinOp "||" (EBinOp "==" (EVar "mid") (ELit (LString "core"))) (EBinOp "==" (EVar "mid") (ELit (LString "")))) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "builtinClassesRef")) (EApp (EVar "builtinClassesOf") (EVar "prog"))) (ELit LUnit)))
-(DTypeSig false "ifaceRegistered" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "ifaceRegistered" ((PVar "iface")) (EApp (EApp (EVar "omHasKey") (EVar "iface")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "registeredIfacesRef") "value")))
 (DTypeSig false "numArithOp" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Mono"))))
 (DFunDef false "numArithOp" ((PVar "lt") (PVar "rt")) (EBlock (DoLet false false PWild (EApp (EVar "markNumlitOpTaint") (EMethodRef "lt"))) (DoLet false false PWild (EApp (EVar "markNumlitOpTaint") (EVar "rt"))) (DoLet false false PWild (EApp (EApp (EVar "unify") (EMethodRef "lt")) (EVar "rt"))) (DoLet false false PWild (EApp (EApp (EVar "recordIfaceObligation") (EVar "BNum")) (EMethodRef "lt"))) (DoExpr (EMethodRef "lt"))))
 (DTypeSig false "inferNumLit" (TyFun (TyCon "TcEnv") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "Float"))) (TyFun (TyApp (TyCon "Ref") (TyCon "Route")) (TyCon "Mono"))))))
-(DFunDef false "inferNumLit" ((PVar "env") (PVar "n") (PVar "fref") (PVar "dref")) (EIf (EApp (EVar "ifaceRegistered") (ELit (LString "Num"))) (EMatch (EApp (EApp (EVar "lookupVar") (EVar "env")) (ELit (LString "fromInt"))) (arm (PCon "None") () (EApp (EApp (EVar "inferNumLitBare") (EVar "n")) (EVar "fref"))) (arm (PCon "Some" PWild) () (EBlock (DoLet false false (PVar "fromIntTy") (EApp (EApp (EApp (EApp (EApp (EVar "inferMethodAt") (EVar "env")) (ELit (LString "fromInt"))) (EVar "dref")) (EApp (EVar "Ref") (EListLit))) (EApp (EVar "Ref") (EListLit)))) (DoLet false false (PVar "a") (EApp (EVar "freshVar") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "unify") (EVar "fromIntTy")) (EApp (EApp (EApp (EVar "TFun") (EApp (EVar "tconBuiltin") (ELit (LString "Int")))) (EApp (EVar "openRow") (ELit LUnit))) (EVar "a")))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "numlitRefs")) (EBinOp "::" (ETuple (EVar "a") (EVar "fref") (EVar "n") (EVar "dref")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "numlitRefs") "value")))) (DoLet false false PWild (EApp (EVar "recordNumlitLoc") (EVar "a"))) (DoExpr (EVar "a"))))) (EIf (EVar "otherwise") (EApp (EApp (EVar "inferNumLitBare") (EVar "n")) (EVar "fref")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "inferNumLit" ((PVar "env") (PVar "n") (PVar "fref") (PVar "dref")) (EIf (EApp (EVar "builtinClassPresent") (EVar "BNum")) (EMatch (EApp (EApp (EVar "lookupVar") (EVar "env")) (ELit (LString "fromInt"))) (arm (PCon "None") () (EApp (EApp (EVar "inferNumLitBare") (EVar "n")) (EVar "fref"))) (arm (PCon "Some" PWild) () (EBlock (DoLet false false (PVar "fromIntTy") (EApp (EApp (EApp (EApp (EApp (EVar "inferMethodAt") (EVar "env")) (ELit (LString "fromInt"))) (EVar "dref")) (EApp (EVar "Ref") (EListLit))) (EApp (EVar "Ref") (EListLit)))) (DoLet false false (PVar "a") (EApp (EVar "freshVar") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "unify") (EVar "fromIntTy")) (EApp (EApp (EApp (EVar "TFun") (EApp (EVar "tconBuiltin") (ELit (LString "Int")))) (EApp (EVar "openRow") (ELit LUnit))) (EVar "a")))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "numlitRefs")) (EBinOp "::" (ETuple (EVar "a") (EVar "fref") (EVar "n") (EVar "dref")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "numlitRefs") "value")))) (DoLet false false PWild (EApp (EVar "recordNumlitLoc") (EVar "a"))) (DoExpr (EVar "a"))))) (EIf (EVar "otherwise") (EApp (EApp (EVar "inferNumLitBare") (EVar "n")) (EVar "fref")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "inferNumLitBare" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "Float"))) (TyCon "Mono"))))
 (DFunDef false "inferNumLitBare" ((PVar "n") (PVar "fref")) (EBlock (DoLet false false (PVar "a") (EApp (EVar "freshVar") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EApp (EVar "pushPendingObl") (EApp (EVar "builtinIfaceRef") (EVar "BNum"))) (EListLit (ELit (LString "a")))) (EApp (EVar "TyVar") (ELit (LString "a")))) (EVar "a")) (EVar "PNumLit")) (EFieldAccess (EVar "currentLoc") "value"))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "numlitRefs")) (EBinOp "::" (ETuple (EVar "a") (EVar "fref") (EVar "n") (EApp (EVar "Ref") (EVar "RNone"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "numlitRefs") "value")))) (DoLet false false PWild (EApp (EVar "recordNumlitLoc") (EVar "a"))) (DoExpr (EVar "a"))))
 (DTypeSig false "recordNumlitLoc" (TyFun (TyCon "Mono") (TyCon "Unit")))
@@ -35220,7 +35320,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "checkCallObligationsU" (PWild PWild PWild PWild (PList)) (ELit LUnit))
 (DFunDef false "checkCallObligationsU" ((PVar "deferNonGround") (PVar "dedup") (PVar "univ") (PVar "seen") (PCons (PVar "o") (PVar "rest"))) (EBlock (DoLet false false (PVar "iface") (EFieldAccess (EFieldAccess (EVar "o") "pred") "iface")) (DoLet false false (PVar "occs") (EApp (EVar "uOblArgs") (EVar "o"))) (DoLet false false (PVar "loc") (EFieldAccess (EVar "o") "loc")) (DoLet false false (PVar "key") (EApp (EApp (EVar "oblDedupKey") (EVar "iface")) (EVar "occs"))) (DoExpr (EIf (EBinOp "&&" (EVar "dedup") (EApp (EApp (EVar "contains") (EVar "key")) (EVar "seen"))) (EApp (EApp (EApp (EApp (EApp (EVar "checkCallObligationsU") (EVar "deferNonGround")) (EVar "dedup")) (EVar "univ")) (EVar "seen")) (EVar "rest")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "checkOneCallObligation") (EVar "deferNonGround")) (EVar "univ")) (EVar "iface")) (EVar "occs")) (EVar "loc"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "checkCallObligationsU") (EVar "deferNonGround")) (EVar "dedup")) (EVar "univ")) (EBinOp "::" (EVar "key") (EVar "seen"))) (EVar "rest"))))))))
 (DTypeSig false "checkOneCallObligation" (TyFun (TyCon "Bool") (TyFun (TyCon "ImplUniverse") (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Unit")))))))
-(DFunDef false "checkOneCallObligation" ((PVar "deferNonGround") (PVar "univ") (PVar "iface") (PVar "occs") (PVar "loc")) (EBlock (DoLet false false (PVar "args") (EApp (EApp (EMethodRef "map") (EVar "normalize")) (EVar "occs"))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EVar "args")) (ELit LUnit) (EIf (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "iface") "irName") (ELit (LString "Num"))) (EApp (EApp (EVar "anyListM") (EVar "numUnimplementableHead")) (EVar "args"))) (EApp (EApp (EApp (EVar "pushNoImplError") (EFieldAccess (EVar "iface") "irName")) (EVar "loc")) (EVar "args")) (EIf (EBinOp "&&" (EApp (EApp (EVar "anyListM") (EVar "monoIsFunction")) (EVar "args")) (EApp (EVar "not") (EApp (EApp (EApp (EVar "implMatchesArgsU") (EVar "univ")) (EVar "iface")) (EVar "args")))) (EApp (EApp (EApp (EVar "pushNoImplError") (EFieldAccess (EVar "iface") "irName")) (EVar "loc")) (EVar "args")) (EIf (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "iface") "irName") (ELit (LString "Num"))) (EApp (EVar "not") (EApp (EVar "ifaceRegistered") (ELit (LString "Num"))))) (ELit LUnit) (EIf (EApp (EVar "not") (EApp (EVar "allConcreteHeads") (EVar "args"))) (EIf (EVar "deferNonGround") (ELit LUnit) (EApp (EApp (EApp (EApp (EVar "checkUndeterminedObligations") (EVar "univ")) (EVar "iface")) (EVar "args")) (EVar "loc"))) (EIf (EApp (EApp (EApp (EVar "implMatchesArgsU") (EVar "univ")) (EVar "iface")) (EVar "args")) (EApp (EApp (EApp (EApp (EVar "checkNestedReqs") (EVar "univ")) (EVar "iface")) (EVar "args")) (EVar "loc")) (EApp (EApp (EApp (EVar "reportNumOrNoImpl") (EFieldAccess (EVar "iface") "irName")) (EVar "args")) (EVar "loc")))))))))))
+(DFunDef false "checkOneCallObligation" ((PVar "deferNonGround") (PVar "univ") (PVar "iface") (PVar "occs") (PVar "loc")) (EBlock (DoLet false false (PVar "args") (EApp (EApp (EMethodRef "map") (EVar "normalize")) (EVar "occs"))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EVar "args")) (ELit LUnit) (EIf (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "iface") "irName") (ELit (LString "Num"))) (EApp (EApp (EVar "anyListM") (EVar "numUnimplementableHead")) (EVar "args"))) (EApp (EApp (EApp (EVar "pushNoImplError") (EFieldAccess (EVar "iface") "irName")) (EVar "loc")) (EVar "args")) (EIf (EBinOp "&&" (EApp (EApp (EVar "anyListM") (EVar "monoIsFunction")) (EVar "args")) (EApp (EVar "not") (EApp (EApp (EApp (EVar "implMatchesArgsU") (EVar "univ")) (EVar "iface")) (EVar "args")))) (EApp (EApp (EApp (EVar "pushNoImplError") (EFieldAccess (EVar "iface") "irName")) (EVar "loc")) (EVar "args")) (EIf (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "iface") "irName") (ELit (LString "Num"))) (EApp (EVar "not") (EApp (EVar "builtinClassPresent") (EVar "BNum")))) (ELit LUnit) (EIf (EApp (EVar "not") (EApp (EVar "allConcreteHeads") (EVar "args"))) (EIf (EVar "deferNonGround") (ELit LUnit) (EApp (EApp (EApp (EApp (EVar "checkUndeterminedObligations") (EVar "univ")) (EVar "iface")) (EVar "args")) (EVar "loc"))) (EIf (EApp (EApp (EApp (EVar "implMatchesArgsU") (EVar "univ")) (EVar "iface")) (EVar "args")) (EApp (EApp (EApp (EApp (EVar "checkNestedReqs") (EVar "univ")) (EVar "iface")) (EVar "args")) (EVar "loc")) (EApp (EApp (EApp (EVar "reportNumOrNoImpl") (EFieldAccess (EVar "iface") "irName")) (EVar "args")) (EVar "loc")))))))))))
 (DTypeSig false "implMatchesArgsU" (TyFun (TyCon "ImplUniverse") (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "Bool")))))
 (DFunDef false "implMatchesArgsU" ((PVar "univ") (PVar "iface") (PList (PVar "a"))) (EApp (EApp (EApp (EVar "implMatchesReceiverU") (EVar "univ")) (EVar "iface")) (EVar "a")))
 (DFunDef false "implMatchesArgsU" ((PVar "univ") (PVar "iface") (PVar "args")) (EApp (EApp (EApp (EVar "implMatchesU") (EVar "univ")) (EVar "iface")) (EVar "args")))
