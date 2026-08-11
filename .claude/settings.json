@@ -2,18 +2,20 @@
   "enabledMcpjsonServers": ["medaka"],
   "permissions": {
     "allow": [
-      "Bash(dune build)",
-      "Bash(dune build *)",
-      "Bash(dune build @thorough)",
-      "Bash(./_build/default/test/*.exe *)",
-      "Bash(./_build/default/dev/debug.exe *)",
-      "Bash(./_build/default/dev/tc_debug.exe *)",
-      "Bash(./_build/default/bin/main.exe check *)",
       "Bash(git log *)",
       "Bash(git status *)",
       "Bash(git diff *)",
-      "Bash(opam list *)",
-      "Bash(opam exec *)"
+      "Bash(git fetch *)",
+      "Bash(git grep *)",
+      "Bash(git worktree list *)",
+      "Bash(./medaka check *)",
+      "Bash(./medaka lint *)",
+      "Bash(./medaka fmt --check *)",
+      "Bash(sh test/must_fail_census.sh)",
+      "Bash(make docs-links)",
+      "Bash(make agent-doc-symbols)",
+      "Bash(make check-self)",
+      "Bash(make snapshot-check)"
     ],
     "deny": [
       "Read(./tree-sitter-medaka/src/parser.c)",
