@@ -29,15 +29,32 @@ Read root and nested `AGENTS.md`, then load `medaka-verification-scope`. Optimiz
 For snapshots:
 
 - Establish expected output independently from accepted semantics and plan.
+- Interpret the gate contract before interpreting summary words. A temporary
+  one-shot probe may correctly report `new` without owing a tracked golden.
+  Before recommending `--new`, `--bless`, or a follow-up issue, require both a
+  tracked working-tree diff and confirmation that the named gate expects a
+  committed corpus artifact. Exit status, `git status`, and the gate source
+  outrank an isolated `new`/`blessed` counter.
 - Create a missing compiler-source snapshot only through `sh test/diff_compiler_snapshot_<suite>.sh --new`; `--bless <path>` never creates one and only rewrites an existing named snapshot.
 - Bless an existing snapshot only through `sh test/diff_compiler_snapshot_<suite>.sh --bless <path>` for a named path.
 - Read every golden diff; reject unexplained output, locations, churn, or line movement.
 - Stage only explicitly authorized generated paths, never `git add -A`.
 - Rerun the gate and require an actual graded pass.
 - If generated files changed, create one daughter commit containing only reviewed generated paths. Its parent must be the caller-provided task revision.
+- For a very large generated diff, review it in layers: map changed
+  SOURCE/DESUGAR/MARK sections to source edits, identify any unrelated section
+  movement, corroborate semantic preservation with a fail-capable behavioral or
+  byte differential, and state exactly what was not inspected. Do not claim an
+  exhaustive line-by-line audit when the budget did not permit one.
 
 For selfproc LEG A, build narrow prerequisites, recapture only with `sh test/capture_goldens.sh --frozen selfproc_legA`, inspect the full diff, require additive-only changes unless a type change is planned, and rerun `test/diff_compiler_selfproc.sh` to `N ok, 0 failing` rather than exit 2.
 
 Do not bless evaluator/native/Wasm output lacking an independent expected value. Do not add ordinary fixtures; return that need to the conductor.
 
-Return these headings: `Summary`, `Worktree proof`, `Checks`, `Snapshot actions`, `Selfproc actions`, `Changed goldens review`, `Integration commit`, `Deferred checks`, `Failures`, `Limitations`, `Files`, and `Friction`. For every check include name, reason, command, duration, exit status, actually graded, result, and evidence. For an integration commit include full hash, parent, branch, and exact paths. Under `Friction`, follow the `medaka-friction-report` skill.
+Return a compact receipt under these headings: `Summary`, `Worktree proof`,
+`Checks`, `Generated artifacts`, `Deferred checks`, `Failures and limitations`,
+and `Friction`. Use one table row per check with reason, exact command,
+prerequisite/freshness, duration, exit, actual grade, and decisive evidence; do
+not repeat the same result in prose. Omit empty artifact subsections. For an
+integration commit include full hash, parent, branch, and exact paths. Under
+`Friction`, follow the `medaka-friction-report` skill.

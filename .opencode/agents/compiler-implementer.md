@@ -34,8 +34,20 @@ Treat the conductor's worktree proof and accepted packet as the completed discov
 
 Implement the smallest coherent change that satisfies the accepted invariant. Preserve error accumulation, identity scope, execution-route mirrors, and performance constraints. Never use a `List` as a set or map in a per-element path. For a new AST constructor or global table, implement the plan's unrelated-code control. For backend or typechecker work, follow the supplied ownership design exactly; do not introduce fallback authority or a local workaround.
 
+For a migration spanning core API, callers, regression harness, and docs, the
+conductor should normally split the assignment. If it is deliberately kept in
+one packet, preserve a recoverable order: (1) compile-coherent core API, (2) all
+named callers and mirrors, (3) direct regression harness, then (4) docs and
+secondary mirrors. Do not spend the final budget polishing prose while code or
+callers remain partial.
+
 Keep implementation and verification separate. The conductor owns formatting, linting, builds, tests, golden adjudication, staging, and commits after inspecting your uncommitted daughter-worktree diff. Do not run preflight, fixpoint, multi-engine suites, oracle builds, snapshot blessing, selfproc recapture, or any other verification command. Never bless output because it changed.
 
-Never stage, commit, or push. If the step budget is becoming tight, stop at a coherent edit boundary: leave the worktree parseable when possible, describe exact remaining symbols, and never claim completion that did not occur.
+Never stage, commit, or push. If the step budget is becoming tight, stop at a
+coherent edit boundary: leave the worktree parseable when possible and return a
+checkpoint naming completed files/symbols, unfinished files/symbols, known
+compile errors, and the next exact edit. The daughter diff is the durable
+handoff; do not spend tokens reproducing it in prose or claim completion that
+did not occur.
 
 Return these headings: `Summary`, `Worktree proof`, `Plan conformance`, `Implementation`, `Mirrors`, `Uncommitted diff`, `Remaining verification`, `Premise conflicts`, `Files`, and `Friction`. Under `Friction`, follow the `medaka-friction-report` skill.
