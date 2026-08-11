@@ -5617,6 +5617,7 @@ data PerRun = PerRun {
     currentImplBody : Ref Bool,  -- reads it to tag a top-level member's obligations with its binding id.
     methodSiteFns : Ref (OrdMap (List Mono)),
     dictAppFns : Ref (OrdMap (List (List Mono))),
+    residualUnivRef : Ref ImplUniverse,
     promotedRef : Ref (List String),
     methodShadowNamesRef : Ref (OrdMap Unit),
     flatShadowScopingRef : Ref Bool,
@@ -5695,6 +5696,7 @@ freshPerRun _ = PerRun {
   currentImplBody = Ref False,
   methodSiteFns = Ref omEmpty,
   dictAppFns = Ref omEmpty,
+  residualUnivRef = Ref emptyImplUniverse,
   promotedRef = Ref [],
   methodShadowNamesRef = Ref omEmpty,
   flatShadowScopingRef = Ref False,
@@ -18576,6 +18578,18 @@ checkBodyImpl seed mode prog0 =
       -- cost a reader must be able to see from this line.  PR2 deletes this call
       -- and the instrument together.  See `ieShadowCompare`.
       ieShadowCompare mid prog0
+  -- #1549: stash the impl universe the RESIDUAL REDUCER entails against
+  -- (`residualPredsOf`, called from each generalizing group's close).  This is NOT a
+  -- third source: it is the SAME two arm-gated sources the end-of-body obligation
+  -- checkers already consume — `buildImplUniverse prog` on Flat, the persistent keyed
+  -- accumulator on Module (grown by the `appendUniverseAccums` immediately above, so it
+  -- already carries this module's own impls).  Built ONCE per module rather than per
+  -- group: rebuilding it inside the reducer would be O(decls) per SCC, i.e. quadratic.
+  let _ = setRef
+    perRun.value.residualUnivRef
+    (match mode
+      Flat _ => buildImplUniverse prog
+      Module _ _ _ => ImplUniverse crossRun.value.obUnivConcreteRef.value crossRun.value.obUnivHeadlessRef.value crossRun.value.obUnivIfaceTagsRef.value)
   -- (#4) shadows.  definerShadows uses the SHARED form — buildDefinerShadows over the
   -- full visible universe, scoped to THIS module's decls (prog0).  On Flat, prog0 =
   -- userProg and fullUniverse = prog, so this is exactly the old flat `buildDefinerShadows
@@ -22102,17 +22116,21 @@ numDictObls ((_, monos, ifaces, _, loc)::rest) = flatMap (p => if fst p == "Num"
 -- survives at every arity.  Identical at arity 1 (boundTyvarIds normalizes too), and it
 -- closes the UNSIGNED forwarding hole, which the declared-context path cannot reach
 -- (lookupSigTvMap is None for an unsigned binding).
+-- #1549: both scheme-obligation channels now project their entry to a PREDICATE
+-- (`callPredOf` / `oblPredOf`) and map it through the ONE `vecOblOfPred` — so the
+-- residual reduction §4 `gen` requires cannot be present on one channel and absent
+-- from the other (this file's signature failure mode).
 forwardedVecObls : List Int -> List (IfaceRef, List Mono, Option Loc) -> List VecObl
-forwardedVecObls _ [] = []
-forwardedVecObls boundIds ((iface, monos, _)::rest) = forwardedVecOblOne boundIds iface monos
-  ++ forwardedVecObls boundIds rest
+forwardedVecObls boundIds callObls =
+  flatMap (vecOblOfPred boundIds) (flatMap callPredOf callObls)
 
-forwardedVecOblOne : List Int -> IfaceRef -> List Mono -> List VecObl
-forwardedVecOblOne boundIds iface monos
+-- the (interface, argument-vector) predicate a constrained-callee call-delta entry
+-- carries.  An entry whose interface name is unrecoverable contributes nothing: the
+-- name is what a VecObl is keyed and displayed by.
+callPredOf : (IfaceRef, List Mono, Option Loc) -> List (IfaceRef, List Mono)
+callPredOf (iface, monos, _)
   | iface.irName == "" = []
-  | otherwise = match boundTyvarIds boundIds monos
-    Some ids => [VecObl { voIface = iface, voIds = ids }]
-    None => []
+  | otherwise = [(iface, monos)]
 
 -- FLAT-PATH SHADOW SCOPING (S1): a letrec group whose members are ALL prelude fns is a
 -- CORE group — no user standalone is a shadow inside it.  Empty group ⇒ not core (it
@@ -22227,7 +22245,7 @@ processSCC env sigs grouped members =
   -- → wrong-dictionary dispatch (a silent wrong answer).  Reject at the def-site.
   -- Runs on every path; the census over compiler+stdlib+sqlite was 0 new failures.
   let _ = checkSigConstraintCoverage regs sigs sigTvMaps callOblsDelta addedObls schemes
-  let _ = registerInferredConstraints sigs schemes
+  let _ = registerInferredConstraints sigs callOblsDelta addedObls schemes
   -- FLAT-PATH SHADOW FIX (facet 1): thread forward only the NON-method-shadowing
   -- schemes, so a method name a user fn shadows keeps resolving to the METHOD
   -- (base env / globalS) for later prelude bindings.  The shadowing scheme is still
@@ -22651,17 +22669,30 @@ ppConstraint (Constraint { constraintHead = iface, constraintArgs = tys }) =
 -- prepends a dict param; and record it in promotedRef so elaborateDict marks its
 -- occurrences EDictAt on the next pass.  Signatured members are skipped (their
 -- constraints came from preunifySigs); prelude fns are skipped (not eligible).
-registerInferredConstraints : List (String, Ty) -> List (String, Scheme) -> Unit
-registerInferredConstraints _ [] = ()
-registerInferredConstraints sigs ((m, sch)::rest) =
-  let _ = maybeInferConstraint sigs m sch
-  registerInferredConstraints sigs rest
+-- #1549: the deltas are threaded in so an inferred constraint that arrived as a
+-- `requires` RESIDUAL (`nest x = tagOf (Wrap x)`) gets its dict parameter too.
+-- `inferredConstraintIds` reads `methodSiteFns`/`dictAppFns`, which store a bare mono
+-- with no interface attached, so a compound receiver (`Wrap t`) cannot be reduced
+-- there; `residualInferredIds` reduces the SAME predicates the scheme-obligation
+-- channel just deferred.  Without this the scheme carries `Tag a` while the body
+-- abstracts no dict — `check` would reject the bad call and an ORDINARY correct
+-- program's binary would still read an unpassed dict word (issue 1549's second cell).
+registerInferredConstraints : List (String, Ty) -> List (IfaceRef, List Mono, Option Loc) -> List UObligation -> List (String, Scheme) -> Unit
+registerInferredConstraints _ _ _ [] = ()
+registerInferredConstraints sigs callObls addedObls ((m, sch)::rest) =
+  let _ = maybeInferConstraint sigs callObls addedObls m sch
+  registerInferredConstraints sigs callObls addedObls rest
 
-maybeInferConstraint : List (String, Ty) -> String -> Scheme -> Unit
-maybeInferConstraint sigs m sch
+maybeInferConstraint : List (String, Ty) -> List (IfaceRef, List Mono, Option Loc) -> List UObligation -> String -> Scheme -> Unit
+maybeInferConstraint sigs callObls addedObls m sch
   | not (omHasKey m driverState.value.dictEligibleSetRef.value) = ()
   | omHasKey m driverState.value.sigNameSetRef.value = ()
-  | otherwise = registerInferredFor m (inferredConstraintIds m (schemeIds sch))
+  | otherwise =
+    let boundIds = schemeIds sch
+    registerInferredFor
+      m
+      (dedupI
+        (inferredConstraintIds m boundIds ++ residualInferredIds boundIds callObls addedObls))
 
 -- #11 soundness (ALWAYS-ON): for each generalized member, record the deferred impl
 -- obligations it quantifies over — an addedObls entry whose discriminating mono is a
@@ -22800,34 +22831,107 @@ eqIntList _ _ = False
 -- the (iface, var-id VECTOR) entries of the obligations whose discriminating monos are
 -- all quantified ids of this scheme.  Deduped on (iface, ids).
 schemeObligationsOf : List Int -> List UObligation -> List VecObl
-schemeObligationsOf _ [] = []
-schemeObligationsOf boundIds (o::rest) = schemeOblOfOne boundIds o
-  ++ schemeObligationsOf boundIds rest
+schemeObligationsOf boundIds obls =
+  flatMap (vecOblOfPred boundIds) (flatMap oblPredOf obls)
 
 -- #991: the impl-channel arm only — a call-channel obligation is re-instantiated from
 -- `schemeObligationsRef` by its own path and contributes nothing here.
-schemeOblOfOne : List Int -> UObligation -> List VecObl
-schemeOblOfOne boundIds o = match o.oblProj
-  OpMethodOcc typarams mty occ =>
-    -- U1b (#1482): forward the whole `IfaceRef`, not `.irName` — the obligation already
-    -- carries its occurrence identity and this is the channel that hands it to every
-    -- later re-instantiation.
-    schemeObligationOne boundIds o.pred.iface typarams mty occ
+-- U1b (#1482): forwards the whole `IfaceRef`, not `.irName` — the obligation already
+-- carries its occurrence identity and this is the channel that hands it to every later
+-- re-instantiation.  An EMPTY dispatch vector contributes nothing.
+oblPredOf : UObligation -> List (IfaceRef, List Mono)
+oblPredOf o = match o.oblProj
+  OpMethodOcc typarams mty occ => match dispatchMonosOf typarams mty occ
+    [] => []
+    ds => [(o.pred.iface, ds)]
   OpProjected => []
 
--- a single obligation contributes ONE joint (iface, ids) entry iff EVERY one of its
--- dispatch monos is a bound tyvar of the scheme.  Before #607 the multi-mono case fell
--- into a `_ => []` wildcard and the obligation was DISCARDED — which is why an
+-- a single recorded predicate contributes ONE joint (iface, ids) entry iff EVERY one of
+-- its dispatch monos is a bound tyvar of the scheme.  Before #607 the multi-mono case
+-- fell into a `_ => []` wildcard and the obligation was DISCARDED — which is why an
 -- unsatisfiable `Ix a i =>` reached neither the displayed scheme nor any caller's
 -- obligation list, and `check` accepted it at exit 0 while the built binary did raw
--- pointer arithmetic.  A non-var-headed dispatch mono is still skipped (left to the
--- concrete-obligation checker), and an EMPTY dispatch list still contributes nothing.
-schemeObligationOne : List Int -> IfaceRef -> List String -> Ty -> Mono -> List VecObl
-schemeObligationOne boundIds iface typarams mty occ = match dispatchMonosOf typarams mty occ
-  [] => []
-  ds => match boundTyvarIds boundIds ds
-    Some ids => [VecObl { voIface = iface, voIds = ids }]
+-- pointer arithmetic.
+-- #1549: a predicate whose argument vector is NOT all bare bound tyvars is no longer
+-- simply discarded — it is first REDUCED by §3 entailment (`residualVecObls`), and the
+-- residual that reduction leaves over this scheme's own quantified vars is deferred
+-- here.  Dropping it outright is what severed `nest x = tagOf (Wrap x)` from its
+-- `Tag a` (DICT-SEMANTICS §4 `gen` / §4.2 OD2).
+vecOblOfPred : List Int -> (IfaceRef, List Mono) -> List VecObl
+vecOblOfPred boundIds (iface, ds) = match boundTyvarIds boundIds ds
+  Some ids => [VecObl { voIface = iface, voIds = ids }]
+  None => residualVecObls boundIds iface ds
+
+-- ── #1549: residual reduction at `gen` ──────────────────────────────────────
+-- DICT-SEMANTICS §4 `gen` makes a binding's principal context `P'` = "the predicates
+-- DEFERRED to this binding", and §4.2 OD2 says a non-ground predicate defers to the
+-- binder that quantifies its variables.  A predicate like `Tag (Wrap t)` is neither
+-- deferrable as written (its head is concrete, so it is not `P'`) nor dischargeable
+-- (its `t` is generalizable): §3 `inst` reduces it against `impl Tag (Wrap a) requires
+-- Tag a`, and the RESIDUAL `Tag t` is what defers.  Reducing here is what makes the
+-- deferral OD2 already performs on the CHECK side (checkUndeterminedObligation RULE 2
+-- defers `Tag t` "to the caller") actually reach a caller: without the residual in the
+-- scheme there is no context for `(var)` to discharge and no `λd̄.` for `gen` to
+-- abstract, so `check` was silent, `run` fell back to declaration order, and the built
+-- binary read a dict word that was never passed (issue 1549, S0).
+--
+-- Deliberately the FALLBACK arm only: when every argument is already a bound tyvar the
+-- predicate IS its own residual and the direct path above owns it, so this returns []
+-- for that case and the behaviour of every predicate that reached a VecObl before is
+-- unchanged.  A predicate mentioning none of this scheme's quantified vars can have no
+-- residual over them either (grounding is monotone), and is rejected by the cheap guard
+-- before any impl lookup — that keeps the common ground obligation (`Display String`)
+-- off the reduction path entirely.
+residualVecObls : List Int -> IfaceRef -> List Mono -> List VecObl
+residualVecObls boundIds iface ds
+  | isSome (boundTyvarIds boundIds ds) = []
+  | not (anyIn (flatMap monoUnboundIds ds) boundIds) = []
+  | otherwise = flatMap (keepBoundResidual boundIds) (residualPredsOf residualReduceFuel iface ds)
+
+keepBoundResidual : List Int -> (IfaceRef, List Mono) -> List VecObl
+keepBoundResidual boundIds (iface, args) = match boundTyvarIds boundIds args
+  Some ids => [VecObl { voIface = iface, voIds = ids }]
+  None => []
+
+-- §3 `inst`, run for its RESIDUAL rather than for a verdict.  A predicate whose
+-- arguments are not all concrete-headed is itself the residual (OD2 defers it); a
+-- concrete-headed one is matched against the impl universe and replaced by that impl's
+-- substituted `requires`, recursively.  No matching impl ⇒ no residual: the goal is
+-- unsatisfiable and `checkOneCallObligation`/`checkReqOne` own that diagnostic — this
+-- function must never invent a second one.
+-- The fuel bounds a cyclic instance (`impl C (Box a) requires C (Box a)`), which would
+-- otherwise reduce forever; exhausting it drops the residual, i.e. degrades to exactly
+-- the pre-#1549 behaviour rather than to a wrong answer.
+residualPredsOf : Int -> IfaceRef -> List Mono -> List (IfaceRef, List Mono)
+residualPredsOf fuel iface args
+  | fuel <= 0 = []
+  | not (allConcreteHeads args) = [(iface, args)]
+  | otherwise = match findMatchingImplReqsU perRun.value.residualUnivRef.value iface args
     None => []
+    Some (subst, reqs) =>
+      flatMap (residualPredOne fuel) (map (reqToObligation subst) reqs)
+
+residualPredOne : Int -> (IfaceRef, List Mono) -> List (IfaceRef, List Mono)
+residualPredOne fuel (iface, args) = residualPredsOf (fuel - 1) iface args
+
+-- reduction depth fuse.  Matches the depth-32 bound the WS-4b entailment fuse (#217)
+-- already uses for the same reason; no real instance chain approaches it.
+residualReduceFuel : Int
+residualReduceFuel = 32
+
+-- the residual predicates a group's recorded deltas leave over [boundIds] — the ids
+-- half of what `vecOblOfPred` just deferred into the scheme, for the DICT-ABSTRACTION
+-- channel (`registerInferredFor`).  Reads the same two deltas through the same two
+-- projections, so the two channels cannot see different predicates.
+residualInferredIds : List Int -> List (IfaceRef, List Mono, Option Loc) -> List UObligation -> List Int
+residualInferredIds boundIds callObls addedObls = flatMap
+  (o => o.voIds)
+  (flatMap
+    (residualVecOblOfPred boundIds)
+    (flatMap oblPredOf addedObls ++ flatMap callPredOf callObls))
+
+residualVecOblOfPred : List Int -> (IfaceRef, List Mono) -> List VecObl
+residualVecOblOfPred boundIds (iface, ds) = residualVecObls boundIds iface ds
 
 -- the tyvar ids of [monos], in order, iff EVERY mono is a TVar bound by this scheme;
 -- None otherwise (a partial vector is a different predicate — never over-reject).

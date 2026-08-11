@@ -1,0 +1,38 @@
+-- §4 `gen`: the RESIDUAL of a `requires` discharge is part of the inferred
+-- principal context `P'`, so it is deferred into the scheme AND abstracted as a
+-- dict parameter.  Issue 1549 (S0), the LEGAL cell.
+--
+-- HAND-DERIVED FROM THE SPEC, BEFORE THE BINARY WAS ASKED:
+--   `Wrap x : Wrap t`, and `tagOf : Tag t => t -> String`, so the body poses the
+--   goal `Tag (Wrap t)`.  §3 `inst`: the only matching instance is
+--   `impl Tag (Wrap a) requires Tag a`, and discharging it leaves the RESIDUAL
+--   `Tag t`.  `t` is generalizable, so §4.2 OD2 defers it to the binder that
+--   quantifies it, and §4 `gen` makes it the principal context:
+--       nest : Tag a => a -> String
+--   `gen` then abstracts one dict parameter per predicate of `P'`
+--   (`λ(d₁:π₁)…(dₘ:πₘ)`), so `nest` is emitted with arity 2 (1 dict + 1 value).
+--   `main` instantiates at `a = Int`; §4 `var` discharges `Tag Int` against
+--   `impl Tag Int`, whose `tagOf` answers "int", so `tagOf (Wrap 5)` is
+--   "wrap(" ++ "int" ++ ")".
+-- EXPECTED: wrap(int)
+--
+-- BEFORE THE FIX the residual was dropped entirely: `check` printed
+-- `nest : a -> String` at exit 0, `run` printed the right value for the wrong
+-- reason (declaration-order fallback), and the BUILT BINARY SEGFAULTED at 139 --
+-- the dropped predicate is also the dict parameter that was never abstracted.
+-- The section-3 IR row is the assertion that can see that half; no behavioural
+-- assertion can, because `run` was already printing "wrap(int)".
+data Wrap a = Wrap a
+
+interface Tag t where
+  tagOf : t -> String
+
+impl Tag Int where
+  tagOf _ = "int"
+
+impl Tag (Wrap a) requires Tag a where
+  tagOf (Wrap x) = "wrap(\{tagOf x})"
+
+nest x = tagOf (Wrap x)
+
+main = println (nest 5)

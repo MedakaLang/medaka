@@ -1,0 +1,35 @@
+-- THE ONE-TOKEN CONTROL for the two `s4-gen-residual-*` rows, and the
+-- FALSE-REJECT canary for the narrowing they encode.  Byte-identical to
+-- `s4-gen-residual-unwitnessed-caller-rejected.mdk` except that the `Wrap` impl
+-- drops its `requires Tag a` (and its body no longer routes through the element
+-- dict).
+--
+-- HAND-DERIVED FROM THE SPEC:
+--   The goal `Tag (Wrap t)` still matches `impl Tag (Wrap a)`, but that instance
+--   is now unconditional, so §3 `inst` discharges it leaving NO residual.  `P'`
+--   is empty, so §4 `gen` gives `nest : a -> String` with NO dict parameter, and
+--   `nest NoTag` is a LEGAL program answering "wrap".
+-- EXPECTED: wrap
+--
+-- ⚠️ This is what makes the sibling rows observations rather than "the checker
+-- got stricter": the single flipped dimension is the `requires`.  A residual
+-- reducer that over-fired -- deferring the goal's own free variables instead of
+-- the residual of the matched instance -- would invent `Tag a` here and reject a
+-- legal program; the section-2 scheme row asserts the context stays EMPTY, which
+-- a verdict-only row could not see (the value is "wrap" either way).
+data Wrap a = Wrap a
+
+data NoTag = NoTag
+
+interface Tag t where
+  tagOf : t -> String
+
+impl Tag Int where
+  tagOf _ = "int"
+
+impl Tag (Wrap a) where
+  tagOf _ = "wrap"
+
+nest x = tagOf (Wrap x)
+
+main = println (nest NoTag)
