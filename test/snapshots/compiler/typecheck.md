@@ -1,5 +1,5 @@
 # META
-source_lines=26358
+source_lines=26387
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted typecheck stage — port of lib/typecheck.ml's HM core.  SLICE 1:
@@ -9031,6 +9031,13 @@ builtinClassSet _ _ acc = acc
 --     lands on the impl.  In other words the clobber was masked by the very leg U1b/#1507
 --     are draining, which is precisely why it had to be fixed before that leg goes: the
 --     fix simply stops the write, restoring the invariant this bullet always claimed.
+--     ⚠️ There is a SECOND, independent reason it was unobservable, and it is the one
+--     that bounds the severity: `checkModules` — the ONLY driver on which the clobber
+--     occurred — harvests no diagnostics at all (`cmCheckWorker`, "no diagnostics
+--     harvest"; `perRun.typeErrors` is discarded), so even a false reject produced by an
+--     `OriginUnresolved` key had no channel to reach a caller. Both reasons are needed:
+--     the compatibility leg explains why dispatch still resolved, the discarded error
+--     list explains why a failure to resolve would have been silent anyway.
 seedBuiltinClasses : CheckMode -> List Decl -> Unit
 seedBuiltinClasses (Flat coreProg) prog = setRef
   crossRun.value.builtinClassesRef
@@ -25188,6 +25195,28 @@ checkModulesPreamble runtimeDecls coreDecls modules =
 -- It calls `checkModuleFullImpl` directly rather than `checkModuleFull` so the id can be
 -- threaded — everything else (`accData`, the `[]` implDecls that keep the #154 PR-C perf
 -- property) is byte-identically what `checkModuleFull` passed.
+--
+-- 🚨 THIS IS NOT ATTRIBUTION-ONLY, AND THE FIRST DRAFT OF THIS COMMENT SAID IT WAS.
+-- The `""` key made `crossModuleSchemeOblsQualRef` and its three sibling qual tables
+-- unreadable on this driver — their readers derive `src` from a real import path
+-- (`usePathModuleId`), so they missed universally — which means an INFERRED
+-- cross-module obligation was SILENTLY DROPPED from the importer's scheme.  MEASURED,
+-- two arms, same fixture and `MEDAKA_ROOT`, only the probe differing:
+--
+--   p.mdk      export f x = "\{x}!"        -- Display a, INFERRED (no signature)
+--   entry.mdk  import p.{f} / g v = f v
+--
+--   before:  g : a -> String              ← the `Display a =>` context is GONE
+--   after:   g : Display a => a -> String  (and `medaka check`, an untouched driver
+--                                           routing through `analyzeProject`, agrees)
+--
+-- That reached users through `projectEntrySchemes` — LSP project hover reported the
+-- unconstrained type.  Pinned at
+-- `test/check_module_fixtures/inferred_cross_module_obligation/`, whose header records
+-- why the other eight fixtures were blind to the shape (all signatured or
+-- interface-method-typed, so their contexts are DECLARED and ride the module seed).
+-- An under-claimed fix is one nobody writes a test for, which is exactly what happened
+-- between this comment's first draft and adversarial review.
 cmCheckWorker : String -> List (String, Scheme) -> List Decl -> List Decl -> List Decl -> (List (String, Scheme), List (String, Scheme))
 cmCheckWorker mid seed accData _accAll prog =
   let schemes = checkModuleFullImpl mid seed accData [] prog

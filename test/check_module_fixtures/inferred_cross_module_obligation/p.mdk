@@ -1,0 +1,5 @@
+-- An exported, UNSIGNATURED function whose obligation is INFERRED, not declared:
+-- string interpolation forces `Display a`.  No type signature on purpose — a
+-- signature would put the context in the module seed and hide the bug this
+-- fixture pins (#1508).
+export f x = "\{x}!"
