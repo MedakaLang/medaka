@@ -1,7 +1,7 @@
 ---
 description: Conducts complex Medaka compiler features, bug fixes, and refactors through specification, implementation, verification, review, and landing. Use for non-mechanical compiler work.
 mode: primary
-model: openai/gpt-5.6-terra
+model: openai/gpt-5.6-sol
 variant: high
 permission:
   task: allow
