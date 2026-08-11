@@ -75,6 +75,12 @@ the fixture's consumers and independently justify every moved location/golden.
 
 For a long mandatory check, background and poll it as repository guidance requires; do not replace it with several redundant foreground checks.
 
+Treat cold compiler/oracle construction as a shared prerequisite when allocating
+verifier worktrees. Prefer one daughter and one build for several bounded groups
+when the combined commands fit its turn. Split into parallel daughters only when
+the wall-clock gain justifies duplicate cold builds and shared-box load; each
+brief must name the sibling-owned checks so neither agent reports them as gaps.
+
 ## 5. Push once local signal is adequate
 
 Do not wait for broad local duplication before opening the PR. Push after the direct acceptance property, cheap source hygiene, and mandatory local obligations are green. Let narrowed PR CI and independent review run concurrently; let merge-queue CI grade the full integrated tree.

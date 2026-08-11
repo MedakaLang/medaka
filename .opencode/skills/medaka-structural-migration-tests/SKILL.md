@@ -30,6 +30,14 @@ For each field, name:
 Run P → U → P in one process. For census/mode APIs, include the alternate route
 between the two P emissions. Require first and last P byte-identical.
 
+The final P must actually execute the migrated reader. A gap-free, cache-free,
+or otherwise insensitive P cannot detect contaminated mode/state even when its
+bytes remain identical. If the required P behavior aborts, panics, or otherwise
+cannot return, run record/census setup first and make the sensitive P the final
+operation in that same process. Require a pre-P marker, direct nonzero status,
+and the expected diagnostic. A separate-process negative control proves only
+fresh-process defaults and is invalid evidence for same-process isolation.
+
 `P != U` alone proves almost nothing: ordinary bodies may differ while a migrated
 field remains constant or unread. Add family-specific assertions proving P and U
 differ in each field and that the relevant reader affected a parse-valid artifact.
@@ -71,6 +79,11 @@ Use `compiler-mutation-verifier` for a fixed, caller-designed matrix. A timeout,
 phantom skip, unrelated compile failure, or empty output is not observed-red
 credit unless it is the explicitly relevant consequence. Finish by rebuilding
 restored source and rerunning clean green.
+
+For mode/reset migrations, include a renamed-authority mutant rather than only
+mutating the retired symbol names: reintroduce an ambient cell, make the alternate
+route write it, and make the final sensitive P read it. The behavioral assertion,
+not an exact-name ratchet, must go red.
 
 ## 6. Preserve behavior and performance
 
