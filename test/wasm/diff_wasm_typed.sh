@@ -84,15 +84,24 @@ EXPECTED_MODULE_REFS="$(printf '%s\n' \
   useCharFromCodeRef useCharClassRef useIORef useArgsRef useFileBytesRef \
   floatLocalsRef floatGlobalsRef tupleAritiesRef emittedDefaultsWRef \
   emittedDefaultsSetW defaultDefsWRef wTrmcCtxRef implSelfCtxRef wDispCtxRef \
-  wDispGroupsRef)"
-ACTUAL_MODULE_REFS="$(awk '
-  /^[A-Za-z][A-Za-z0-9_]*[[:space:]]*:[[:space:]]*Ref([[:space:]]|$)/ { print $1 }
-' "$WASM_SRC")"
-[ "$ACTUAL_MODULE_REFS" = "$EXPECTED_MODULE_REFS" ] || {
+  wDispGroupsRef | LC_ALL=C sort -u)"
+ACTUAL_MODULE_REF_SIGS="$(awk '
+  /^[A-Za-z_][A-Za-z0-9_]*[[:space:]]*:[[:space:]]*Ref([[:space:]]|$)/ { print $1 }
+  /^export[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]*:[[:space:]]*Ref([[:space:]]|$)/ { print $2 }
+  /^public[[:space:]]+export[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]*:[[:space:]]*Ref([[:space:]]|$)/ { print $3 }
+' "$WASM_SRC" | LC_ALL=C sort -u)"
+ACTUAL_MODULE_REF_DEFS="$(awk '
+  /^[A-Za-z_][A-Za-z0-9_]*[[:space:]]*=[[:space:]]*Ref([[:space:]]|$)/ { print $1 }
+  /^export[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]*=[[:space:]]*Ref([[:space:]]|$)/ { print $2 }
+  /^public[[:space:]]+export[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]*=[[:space:]]*Ref([[:space:]]|$)/ { print $3 }
+' "$WASM_SRC" | LC_ALL=C sort -u)"
+if [ "$ACTUAL_MODULE_REF_SIGS" != "$EXPECTED_MODULE_REFS" ] ||
+   [ "$ACTUAL_MODULE_REF_DEFS" != "$EXPECTED_MODULE_REFS" ]; then
   echo "FAIL wasm typed string-state ratchet: top-level Ref authority set changed"
-  printf '  observed:\n%s\n' "$ACTUAL_MODULE_REFS"
+  printf '  observed signatures:\n%s\n' "$ACTUAL_MODULE_REF_SIGS"
+  printf '  observed definitions:\n%s\n' "$ACTUAL_MODULE_REF_DEFS"
   exit 1
-}
+fi
 for required in \
   'stringSegments : Ref (List (Int, List Int))' \
   'nextStringSegmentId : Ref Int' \
