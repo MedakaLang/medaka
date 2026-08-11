@@ -3810,18 +3810,31 @@ ceSuperHead (Super { superHead = h, ... }) = h
 -- The module id, for a ROW rather than a lookup result — the row-ORDER
 -- assertion below needs the identity of EACH row in `ceRows`, not a
 -- single keyed lookup, exactly as `instRefMid`/`ieRowInst` give `IE`'s
--- doctests the same thing.  The non-module origins never occur on a `CeRow`
+-- doctests the same thing.  The non-module arms never occur on a `CeRow`
 -- built from a real `DInterface` (its `ifaceOrigin` is threaded straight
 -- from the decl, and this doctest corpus stamps every fixture
--- `OriginModule _`) — the wildcard arm exists only so the match stays
--- total, deliberately NOT naming the other two `TyConOrigin` constructors:
--- `test/typecheck_compiler_source.sh`'s §8 I6.3 producer ratchet pins the
--- exact SET of lines in this file allowed to mention the sentinel one, and
--- a wildcard is a real total match, not a workaround for the ratchet.
+-- `OriginModule _`).
+--
+-- ⚠️ NAMED, NOT A WILDCARD — this tree's documented convention for a closed
+-- sum like `TyConOrigin`, not a style preference of this block's.
+-- `resolve.mdk:3783/3894/4087` and `originPhrase` (`typecheck.mdk`, pinned in
+-- `tc_originun_allowed` below) all enumerate `TyConOrigin`'s three
+-- inhabitants explicitly *"so a fourth inhabitant is MADE TO SHOW UP"* at
+-- every match, rather than being silently absorbed by a wildcard — a
+-- wildcard here would still be TOTAL, but totality is not what the
+-- convention is protecting; DISCOVERABILITY of a future fourth constructor
+-- is.  (An earlier revision of this comment argued the wildcard on totality
+-- grounds and left the convention unstated — wrong question: the tree
+-- already answers it the other way in five places, and a comment settling
+-- it unilaterally forecloses the one a future editor needs to see.)  Per the
+-- documented remedy those five sites use, these two eliminator arms are
+-- listed in `test/typecheck_compiler_source.sh`'s `tc_originun_allowed`
+-- rather than the ratchet's grep being widened.
 ceRowOriginTag : CeRow -> String
 ceRowOriginTag r = match (ceRowIface r).irOrigin
   OriginModule m => m
-  _ => "<non-module>"
+  OriginBuiltin => "<builtin>"
+  OriginUnresolved => "<unresolved>"
 
 -- lookup-and-project in one call, so the doctest lines below stay one
 -- expression each (this file's doctest extraction is single-line-per-`>`).
@@ -3852,9 +3865,13 @@ ceRowSuperHeadsAt m cur env = match ceLookupAt (ceProbeKey m) cur env
 ceSuperParams : Super -> List String
 ceSuperParams (Super { superParams = ps, ... }) = ps
 
+-- NAMED, NOT A WILDCARD — same convention, same reason, as `ceRowOriginTag`
+-- above; see its comment. Both eliminator arms are pinned in
+-- `tc_originun_allowed` alongside `ceRowOriginTag`'s.
 ceSuperOrigin : Super -> String
 ceSuperOrigin (Super { superOrigin = (OriginModule m), ... }) = m
-ceSuperOrigin (Super { superOrigin = _, ... }) = "<non-module>"
+ceSuperOrigin (Super { superOrigin = OriginBuiltin, ... }) = "<builtin>"
+ceSuperOrigin (Super { superOrigin = OriginUnresolved, ... }) = "<unresolved>"
 
 ceRowSuperParamsAt : String -> Int -> ClassEnv -> List String
 ceRowSuperParamsAt m cur env = match ceLookupAt (ceProbeKey m) cur env
