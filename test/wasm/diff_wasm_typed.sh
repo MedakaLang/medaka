@@ -70,6 +70,31 @@ grep -F '  | Prog WasmProgramIndex (List String) (List String) Bool (List CImplE
   echo "FAIL wasm typed index ratchet: Prog must retain its index fields plus one WasmEmit field"
   exit 1
 }
+if grep -E '^(strSegsRef|strSegIdRef)[[:space:]]*:' "$WASM_SRC" >/dev/null; then
+  echo "FAIL wasm typed string-state ratchet: retired ambient segment authority remains"
+  exit 1
+fi
+for required in \
+  'stringSegments : Ref (List (Int, List Int))' \
+  'nextStringSegmentId : Ref Int' \
+  'freshStrSeg : WasmEmit -> List Int -> Int' \
+  'emitDataSegs : WasmEmit -> List String' \
+  'emitLitRef : WasmEmit -> Lit -> List String' \
+  'let dataSegs = emitDataSegs (progEmit prog)' \
+  'emitRefExpr prog env d (CLit l) = emitLitRef (progEmit prog) l'; do
+  grep -F -- "$required" "$WASM_SRC" >/dev/null || {
+    echo "FAIL wasm typed string-state ratchet: missing $required"
+    exit 1
+  }
+done
+for required_call in \
+  'emitLitRef (progEmit prog) (LString s)' \
+  'emitLitRef (progEmit prog) l'; do
+  [ "$(grep -F -- "$required_call" "$WASM_SRC" | wc -l | tr -d ' ')" -ge 1 ] || {
+    echo "FAIL wasm typed string-state ratchet: missing routed call $required_call"
+    exit 1
+  }
+done
 
 # ── Per-fixture worker (parallel fan-out target); shared state via env ─────────
 # Oracle at -O2 (not -O0): TCO fixtures need clang tail-call opt to avoid overflow.
@@ -410,6 +435,120 @@ fi
 WORK="$(mktemp -d)"
 RESULTS="$(mktemp -d)"
 trap 'rm -rf "$INPUT_WORK" "$WORK" "$RESULTS"' EXIT
+
+# X-W.H2b.2: one process emits strict P, record U, a non-vacuous census, then
+# strict P again. The exact payload/segment table makes this fail independently
+# for a suppressed id increment, append, or a renamed ambient authority.
+STRING_OUT="$($EMITBIN --reemit-string-state)" || {
+  echo "FAIL wasm typed same-process string-segment lifecycle harness"
+  exit 1
+}
+STRING_MARKERS="$(printf '%s\n' "$STRING_OUT" | awk '/^STRING_(P1|RECORD_U|CENSUS_EVENTS|P2)_(BEGIN|END)$/ { print }')"
+STRING_EXPECTED_MARKERS="$(printf 'STRING_P1_BEGIN\nSTRING_P1_END\nSTRING_RECORD_U_BEGIN\nSTRING_RECORD_U_END\nSTRING_CENSUS_EVENTS_BEGIN\nSTRING_CENSUS_EVENTS_END\nSTRING_P2_BEGIN\nSTRING_P2_END')"
+[ "$STRING_MARKERS" = "$STRING_EXPECTED_MARKERS" ] || {
+  echo "FAIL wasm typed string-state lifecycle: expected exactly eight ordered markers"
+  printf '  observed markers:\n%s\n' "${STRING_MARKERS:-<none>}"
+  exit 1
+}
+string_capture() {
+  awk -v begin="$1" -v end="$2" '
+    $0 == begin { capture = 1; next }
+    $0 == end { exit }
+    capture { print }
+  ' <<<"$STRING_OUT"
+}
+string_capture STRING_P1_BEGIN STRING_P1_END > "$WORK/string-p1.wat"
+string_capture STRING_RECORD_U_BEGIN STRING_RECORD_U_END > "$WORK/string-u.wat"
+string_capture STRING_CENSUS_EVENTS_BEGIN STRING_CENSUS_EVENTS_END > "$WORK/string-census.events"
+string_capture STRING_P2_BEGIN STRING_P2_END > "$WORK/string-p2.wat"
+for string_capture_file in string-p1.wat string-u.wat string-census.events string-p2.wat; do
+  [ -s "$WORK/$string_capture_file" ] || {
+    echo "FAIL wasm typed string-state lifecycle: empty $string_capture_file"
+    exit 1
+  }
+done
+cmp -s "$WORK/string-p1.wat" "$WORK/string-p2.wat" || {
+  echo "FAIL wasm typed string-state lifecycle: P changed after record U and census"
+  exit 1
+}
+cmp -s "$WORK/string-p1.wat" "$WORK/string-u.wat" && {
+  echo "FAIL wasm typed string-state lifecycle: P/U positive control did not differ"
+  exit 1
+}
+for string_wat in string-p1 string-u string-p2; do
+  wasm-tools parse "$WORK/$string_wat.wat" -o "$WORK/$string_wat.wasm" || {
+    echo "FAIL wasm typed string-state lifecycle: wasm-tools parse $string_wat"
+    exit 1
+  }
+  wasm-tools validate --features=all "$WORK/$string_wat.wasm" || {
+    echo "FAIL wasm typed string-state lifecycle: wasm-tools validate $string_wat"
+    exit 1
+  }
+done
+STRING_P_RESULT="$($NODE "$RUNJS" "$WORK/string-p1.wasm" 2>"$WORK/string-p1.run.err")"
+[ "$STRING_P_RESULT" = "71" ] || {
+  echo "FAIL wasm typed string-state lifecycle: strict P output was $STRING_P_RESULT"
+  exit 1
+}
+STRING_U_RESULT="$($NODE "$RUNJS" "$WORK/string-u.wasm" 2>"$WORK/string-u.run.err")"
+[ "$STRING_U_RESULT" = "82" ] || {
+  echo "FAIL wasm typed string-state lifecycle: record U output was $STRING_U_RESULT"
+  exit 1
+}
+[ "$(wc -l < "$WORK/string-census.events")" -eq 2 ] || {
+  echo "FAIL wasm typed string-state lifecycle: census was vacuous or incomplete"
+  exit 1
+}
+sed -n '1p' "$WORK/string-census.events" | grep -F $'val gapA\tunbound variable '\''missingGapA' >/dev/null &&
+  sed -n '2p' "$WORK/string-census.events" | grep -F $'val gapB\tunbound variable '\''missingGapB' >/dev/null || {
+    echo "FAIL wasm typed string-state lifecycle: census event order changed"
+    exit 1
+  }
+string_segments() {
+  awk '
+    /^[[:space:]]*\(data \$strseg_[0-9]+ "/ {
+      seg_id = $0
+      sub(/^.*\$strseg_/, "", seg_id)
+      sub(/[[:space:]].*$/, "", seg_id)
+      payload = $0
+      sub(/^.*\$strseg_[0-9]+ "/, "", payload)
+      sub(/"\)$/, "", payload)
+      print seg_id "\t" payload
+    }
+  ' "$1"
+}
+string_references() {
+  awk '
+    /array\.new_data \$u8arr \$strseg_[0-9]+/ {
+      seg_id = $0
+      sub(/^.*\$strseg_/, "", seg_id)
+      sub(/[^0-9].*$/, "", seg_id)
+      print seg_id
+    }
+  ' "$1"
+}
+assert_string_segments() {
+  local name="$1" wat="$2" expected_segments="$3" expected_refs="$4"
+  string_segments "$wat" > "$WORK/$name.segments"
+  string_references "$wat" > "$WORK/$name.refs"
+  [ "$(cat "$WORK/$name.segments")" = "$expected_segments" ] || {
+    echo "FAIL wasm typed string-state lifecycle: $name segment ids/payloads changed"
+    cat "$WORK/$name.segments"
+    exit 1
+  }
+  [ "$(cat "$WORK/$name.refs")" = "$expected_refs" ] || {
+    echo "FAIL wasm typed string-state lifecycle: $name segment references are not exact/contiguous"
+    cat "$WORK/$name.refs"
+    exit 1
+  }
+}
+P_SEGMENTS="$(printf '0\t\\70\\2d\\6e\\6f\\6e\\2d\\74\\61\\69\\6c\n1\t\\70\\2d\\6e\\6f\\6e\\2d\\74\\61\\69\\6c\\2d\\62\\6f\\64\\79\n2\t\\70\\2d\\6e\\6f\\6e\\2d\\74\\61\\69\\6c\\2d\\6f\\74\\68\\65\\72\n3\t\\70\\2d\\74\\61\\69\\6c\n4\t\\70\\2d\\74\\61\\69\\6c\\2d\\62\\6f\\64\\79\n5\t\\70\\2d\\74\\61\\69\\6c\\2d\\6f\\74\\68\\65\\72\n6\t\\70\\2d\\63\\6c\\61\\75\\73\\65\n7\t\\70\\2d\\63\\6c\\61\\75\\73\\65\\2d\\62\\6f\\64\\79\n8\t\\70\\2d\\63\\6c\\61\\75\\73\\65\\2d\\6f\\74\\68\\65\\72\n9\t\\70\\2d\\65\\78\\70\\72\n10\t\\70\\2d\\65\\78\\70\\72')"
+P_REFS="$(printf '10\n9\n6\n7\n8\n3\n4\n5\n0\n1\n2')"
+U_SEGMENTS="$(printf '0\t\\75\\2d\\6f\\74\\68\\65\\72\n1\t\\75\\2d\\65\\78\\70\\72')"
+U_REFS="$(printf '1\n0')"
+assert_string_segments string-p1 "$WORK/string-p1.wat" "$P_SEGMENTS" "$P_REFS"
+assert_string_segments string-u "$WORK/string-u.wat" "$U_SEGMENTS" "$U_REFS"
+assert_string_segments string-p2 "$WORK/string-p2.wat" "$P_SEGMENTS" "$P_REFS"
 
 JOBS="${JOBS:-$(sysctl -n hw.logicalcpu 2>/dev/null || nproc 2>/dev/null || echo 4)}"
 NODE_ABS="$(command -v "$NODE" 2>/dev/null || echo "$NODE")"
