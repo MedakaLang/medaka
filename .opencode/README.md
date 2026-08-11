@@ -9,7 +9,22 @@ The project agents in `agents/` are an OpenCode adaptation of Medaka's complex-c
 - `bug-capture` uses DeepSeek for isolated issue and pin mechanics.
 - `medaka-friction-report` keeps a shared return contract for workflow friction.
 - `medaka-verification-scope` selects the smallest trustworthy local signal and records broad checks deferred to authoritative merge-queue CI.
+- `medaka-pr-lifecycle` provides the phase-specific verified PR, CI,
+  merge-queue, tracker-handoff, and cleanup sequence without keeping all of that
+  mechanics in every child brief.
+
+The model split is deliberate: Sol owns semantic design and adversarial review;
+Terra receives implementation-ready edits; Qwen handles bounded inventories,
+reproductions, verification execution, and log reduction. Do not compensate for
+an over-broad assignment by spending a more expensive model on it. Split the
+packet, preserve exact receipts, and keep child returns delta-oriented rather
+than repeating issue history and command transcripts.
 
 OpenCode does not provide Polytoken facet phases, fallback model lists, transclusion, or schema-enforced subagent exits. The primary agent therefore tracks phases in its correctness ledger, while each subagent prompt specifies a structured Markdown response contract.
+
+For configuration validation, prefer `opencode debug agent <name>` for each
+touched agent. `opencode agent list` and `opencode debug skill` expand every
+resolved permission or full skill body and create a large, mostly redundant
+transcript; use them only when validating the complete discovered set.
 
 OpenCode loads agent and skill definitions at startup. Quit and restart it after changing these files.
