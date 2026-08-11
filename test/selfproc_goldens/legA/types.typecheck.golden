@@ -436,9 +436,12 @@ declCtorIdents : List Decl -> List (String, String, Ident)
 declCtorIdentsOf : Decl -> List (String, String, Ident)
 declCtorNamed : String -> Decl -> Bool
 declEnvDeclsOf : List DeclEnvModule -> List Decl
+declEnvModule : Int -> String -> List Decl -> DeclEnvModule
 declEnvModulesFrom : Int -> List (String, List Decl) -> List DeclEnvModule
 declEnvOrdIndex : Map String Int -> List DeclEnvModule -> Map String Int
+declEnvRowVisible : Int -> DeclEnvModule -> List Decl
 declEnvVisibleAt : Int -> Int -> Bool
+declEnvVisibleTo : Int -> Int -> Bool -> Bool
 declEnvsOrdOf : String -> DeclEnvs -> Int
 declEnvsUpTo : Int -> DeclEnvs -> List DeclEnvModule
 declEnvsUpToGo : Int -> List DeclEnvModule -> List DeclEnvModule
@@ -643,7 +646,7 @@ findImplEntry : Map String (List ImplEntry) -> String -> String -> Mono -> Optio
 findImplEntryGo : List ImplEntry -> String -> String -> Mono -> Option ImplEntry
 findMatchingImplReqsU : ImplUniverse -> IfaceRef -> List Mono -> Option (List (String, Mono), List Require)
 findMostSpecificEntry : List KeyEntry -> List KeyEntry -> Option KeyEntry
-findOverlayDecl : String -> String -> Bool -> List Decl -> Option Decl
+findOverlayDecl : String -> String -> Bool -> Int -> List DeclEnvModule -> Option Decl
 findSigTvMap : String -> List (String, Ty, List (String, Mono)) -> Option (List (String, Mono))
 findTupleCand : String -> List (Mono, String, Option (Loc, String)) -> Option (String, Option (Loc, String))
 findTvName : Int -> List (String, Mono) -> Option String
@@ -843,11 +846,11 @@ implTysIfMatch : String -> String -> Decl -> List (List Ty)
 importDefinersOf : List Decl -> List (String, String)
 importFormSchemes : String -> UsePath -> List (String, Scheme) -> List (String, Scheme)
 importOriginsOf : List Decl -> List (String, String)
-importOverlayDecls : List Decl -> Decl -> List Decl
+importOverlayDecls : Int -> List DeclEnvModule -> Decl -> List Decl
 importSeed : List Decl -> List (String, List (String, Scheme)) -> List (String, Scheme)
 importedBindings : UsePath -> Option (List (String, String))
 importedCtorEntry : List Decl -> String -> List (Ident, String, Scheme) -> Option Scheme
-importedCtorTypeDecls : List Decl -> List Decl -> List Decl
+importedCtorTypeDecls : List Decl -> Int -> List DeclEnvModule -> List Decl
 importedMethodEntry : List Decl -> String -> List (Ident, (IfaceRef, List String, Ty, List (String, List Kind))) -> Option (IfaceRef, List String, Ty, List (String, List Kind))
 importedRecordEntry : List Decl -> String -> List (Ident, String, RecordInfo) -> Option RecordInfo
 importedSchemeOblEntries : List Decl -> List ((String, String), List VecObl) -> List (String, List VecObl)
@@ -1089,7 +1092,7 @@ memberBindsCtorName : String -> String -> UseMember -> Bool
 memberClauseIsValue : (List Pat, Expr) -> Bool
 memberDictName : List String -> UseMember -> List String
 memberMethodRename : List String -> UseMember -> List (String, String)
-memberOverlayDecl : List Decl -> String -> UseMember -> List Decl
+memberOverlayDecl : Int -> List DeclEnvModule -> String -> UseMember -> List Decl
 memberPeelSource : List (String, Ty) -> String -> Mono -> Option Mono
 memberSchemeOblEntry : String -> List ((String, String), List VecObl) -> UseMember -> List (String, List VecObl)
 memberSigIsFun : List (String, Ty) -> String -> Mono -> Bool
@@ -1201,6 +1204,7 @@ overlayDecided : Bool -> (Option Decl, Option Decl, Option Decl) -> Bool
 overlayNote : String -> String -> String -> TyConOrigin -> Decl -> (Option Decl, Option Decl, Option Decl) -> (Option Decl, Option Decl, Option Decl)
 overlayScan : String -> String -> Bool -> (Option Decl, Option Decl, Option Decl) -> List Decl -> (Option Decl, Option Decl, Option Decl)
 overlayScanOne : String -> String -> (Option Decl, Option Decl, Option Decl) -> Decl -> (Option Decl, Option Decl, Option Decl)
+overlayScanRows : String -> String -> Bool -> Int -> (Option Decl, Option Decl, Option Decl) -> List DeclEnvModule -> (Option Decl, Option Decl, Option Decl)
 overrideScopedCtors : List Decl -> Map String (List (Ident, String, Scheme)) -> List String -> TcEnv -> TcEnv
 overrideScopedMethods : List Decl -> Map String (List (Ident, (IfaceRef, List String, Ty, List (String, List Kind)))) -> List String -> Map String (IfaceRef, List String, Ty, List (String, List Kind)) -> Map String (IfaceRef, List String, Ty, List (String, List Kind))
 overrideScopedRecords : List Decl -> Map String (List (Ident, String, RecordInfo)) -> List String -> Unit
@@ -1287,6 +1291,7 @@ promotedConstraintIfaces : List String -> List (String, List IfaceRef) -> List (
 promotedConstraints : List String -> List (String, List Int) -> List (String, List Int)
 propParamName : PropParam -> String
 propParamNamesTc : List PropParam -> List String
+publicDataDecl : Decl -> Bool
 publicDataDecls : List Decl -> List Decl
 publicValNames : List Decl -> List String
 pureRow : EffRow

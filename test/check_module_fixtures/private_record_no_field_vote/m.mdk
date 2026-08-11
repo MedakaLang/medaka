@@ -1,0 +1,8 @@
+-- The unrelated module.  `Hidden` is PRIVATE (no `public export`), and `entry.mdk`
+-- neither imports it nor mentions its type or field.  `mk` exists only to give the
+-- entry a reason to import this module at all — the shape needs the two modules in
+-- one graph, not a use of `Hidden`.
+data Hidden = Hidden { x : Int }
+
+export mk : Int -> Int
+mk n = n
