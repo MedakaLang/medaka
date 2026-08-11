@@ -1,0 +1,10 @@
+-- The module that POSES the goal.  UNLIKE the `i4-xmod-sig-constraint-*` sibling,
+-- `useBulk` carries NO signature -- there is no `=>` slot to entail at all, so the
+-- goal is posed purely by the bare METHOD OCCURRENCE `bulk x`, read out of
+-- `methodIfaceParamsRef` by `recordImplObligation` (#1507's producer). This module
+-- imports nothing, so `bulk` unambiguously denotes the `Sizer` declared three lines
+-- up (§8 I4 qualification 1).
+export interface Sizer a where
+  bulk : a -> Int
+
+export useBulk x = bulk x

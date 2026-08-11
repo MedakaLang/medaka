@@ -1,0 +1,3 @@
+import u.{use1, P}
+
+main = println (use1 (P 3))

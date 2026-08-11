@@ -1,8 +1,0 @@
--- UNSIGNED on purpose, and that single edit is the whole fixture.  With no
--- `useBulk : Sizer b => b -> Int` signature there is no `=>` slot to entail, so the
--- goal is posed by the bare METHOD OCCURRENCE `bulk x` — `recordImplObligation`'s
--- producer (#1507), not the signature-constraint producer U1b (#1482) gave identity.
-export interface Sizer a where
-  bulk : a -> Int
-
-export useBulk x = bulk x

@@ -1,0 +1,12 @@
+-- An UNRELATED interface that merely shares the spelling `Sizer`. Its impl moves
+-- to head `Bool` here (not `Int`, unlike the sibling row's amod) -- with both
+-- `zmod.Sizer` and `amod.Sizer` claiming `impl Sizer Int`, COHERENCE (which still
+-- keys the interface half by SPELLING, not identity -- #1317 T1, out of scope for
+-- U1c) would reject BOTH arms with `T-CONFLICTING-IMPL` before the obligation
+-- channel is ever reached. Moving this impl to a disjoint head keeps the
+-- obligation channel the only thing this row exercises.
+export interface Sizer a where
+  weight : a -> Int
+
+export impl Sizer Bool where
+  weight n = 100

@@ -1,0 +1,4 @@
+-- The module that OWNS the method occurrence in `u.mdk`. Its `Same` is a
+-- completely different declaration from `g.mdk`s, sharing only the spelling.
+export interface Same a where
+  pmth : a -> Int

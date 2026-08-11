@@ -1,0 +1,11 @@
+-- As the sibling's `zmod`, plus its OWN `impl Sizer Int`: the goal `zmod.Sizer
+-- Int` now has exactly one candidate, and `bulk 3` = 10. Still UNSIGNED --
+-- `useBulk` carries no `=>` slot, so the goal is still posed by the bare method
+-- occurrence, not by a signature.
+export interface Sizer a where
+  bulk : a -> Int
+
+export impl Sizer Int where
+  bulk n = n + 7
+
+export useBulk x = bulk x

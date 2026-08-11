@@ -1,4 +1,0 @@
-import amod
-import zmod.{useBulk}
-
-main = println (useBulk 3)

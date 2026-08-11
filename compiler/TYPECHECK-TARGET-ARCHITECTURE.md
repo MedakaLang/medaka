@@ -2063,7 +2063,7 @@ comparing `irName`, and each would change behaviour if re-keyed:
   against the spelling-keyed `KeyBuckets`, kept that way by #1317 T1 / the closed S0 #1277;
 - `groupConstraintMonosRef`, whose only reader compares interface names.
 
-### 10.4 The bare compatibility leg: CORRECTED drain condition
+### 10.4 The bare compatibility leg: CORRECTED drain condition (superseded by §10.7)
 
 `insertUnivImplKeys`'s in-source comment said *"both `ifaceRefBare` call sites disappear …
 delete it then, and #1438 drains with it."* **It counted two against a set of three**, and
@@ -2074,7 +2074,11 @@ occurrence-layer reconciliation, not a table widening. Do not delete the leg on 
 prose: `grep -n ifaceRefBare compiler/types/typecheck.mdk`, and delete it only when every
 remaining hit is the definition itself.
 
-### 10.5 Measured: #1438's PINNED INSTANCE drained at U1b; the CLASS did not
+⚠️ **U1c (#1507) closes that producer — and the drain condition is STILL not met.** See
+§10.7: a census of `ifaceRefBare` call sites is not the same question as "does this leg
+still catch a live bare goal", and a MEASURED experiment on U1c's own branch shows it does.
+
+### 10.5 Measured: #1438's PINNED INSTANCE drained at U1b; the CLASS did not (until U1c)
 
 The scope ruling on #1482 predicted #1438 would drain at #1507. **Half of that is false and
 half is true, and conflating them is the trap.** Both halves are MEASURED on a cold-built
@@ -2086,22 +2090,40 @@ binary of the implementing branch.
   channel. It now rejects (`No impl of Sizer for Int`, exit 1); its `must_fail` pin flipped
   green and was replaced by the positive rows
   `test/dict_fixtures/i4-xmod-sig-constraint-{foreign-iface-rejected,own-iface-control}`.
-- **The class did not.** Delete one line — the forwarder's signature — and the same program
-  is a silent accept again: `check` exit 0, `run` E-PANIC `unbound identifier: bulk`,
-  `build` exit 0, and **the built binary segfaults at 139**. The goal is then posed by a
-  bare METHOD OCCURRENCE, `recordImplObligation`'s producer, which #1507 owns and which
-  still mints `ifaceRefBare`. Pinned at
+- **The class did not drain at U1b.** Delete one line — the forwarder's signature — and the
+  same program was a silent accept again: `check` exit 0, `run` E-PANIC `unbound
+  identifier: bulk`, `build` exit 0, and **the built binary segfaulted at 139**. The goal
+  was posed by a bare METHOD OCCURRENCE, `recordImplObligation`'s producer, which still
+  minted `ifaceRefBare` on the U1b branch. Pinned at
   `test/must_fail_fixtures/1507-xmod-iface-name-collision-method-occurrence/` — the minimal
-  pair of the deleted fixture, and the only assertion of that S0 in the tree.
+  pair of the deleted fixture, and (until U1c) the only assertion of that S0 in the tree.
+- **U1c (#1507) closes this remaining reach.** `recordImplObligation` now records `iface`
+  (already identity-carrying, read straight off `methodIfaceParamsRef`) instead of
+  `ifaceRefBare iface.irName`. MEASURED, on U1c's own cold-built binary: the pinned repro
+  above now REJECTS (`No impl of Sizer for Int`, exit 1) on `check`/`run`/`build` alike; the
+  `must_fail` pin is retired and replaced by the positive pair
+  `test/dict_fixtures/i4-xmod-method-occurrence-{foreign-iface-rejected,own-iface-control}`.
+  A THIRD instance of the same class — the method occurrence and the foreign impl's
+  interface-name occurrence arriving from two DIFFERENT modules, neither the call site's own
+  — was built fresh for this unit (not merely predicted) and MEASURED identically: silent
+  accept + SIGSEGV(139) on `main` before U1c, `No impl of Same for P` after. See
+  `test/dict_fixtures/i4-xmod-method-and-iface-different-modules-{rejected,control}`.
 
-⇒ **#1438 stays OPEN**, its remaining reach is guarded under #1507, and the bare
-compatibility leg may be withdrawn only when that unit lands.
+⇒ **#1438's obligation-channel reach is now fully guarded.** Whether the issue itself
+closes is a separate call for its own thread (other reach through this same collision may
+still exist outside the `ImplUniverse` obligation channel — e.g. coherence, §10.6's first
+bullet, keys the interface half by spelling and was explicitly out of scope for both U1b and
+U1c).
 
 ⚠️ This section originally read *"#1438 drained HERE, not at #1507"*. That came from a
 fixture flipping green, which is evidence about an instance and never about a class — the
 same distinction PR #1480's body drew for itself one unit earlier. It was caught in
 adversarial review by someone building the variant the fixtures did not cover, which is the
-cheapest check available and the one a green corpus cannot perform for you.
+cheapest check available and the one a green corpus cannot perform for you. The correction
+made then (splitting §10.5 into "instance vs class") is why §10.7 below insists on the same
+discipline for the compatibility leg's drain condition: a producer census answers a
+different question than "is there still a live bare goal", and only the second one decides
+whether the leg is dead weight.
 
 ### 10.6 Not settled here
 
@@ -2110,6 +2132,90 @@ cheapest check available and the one a green corpus cannot perform for you.
   interfaces are one class. A-3.7 owns it; U1b widens the gap rather than closing it.
 - The `ifaceForInferredId` fallback that recovers a slot's interface from `pendingDictApps`
   is bare **by construction** — that channel stores route words (§10.3).
+
+### 10.7 U1c — the method-occurrence goal, Step 0's ruling, and the drain condition's real state
+
+Landed by the PR that implements **#1507**, sequenced after U1b (§10).
+
+**Step 0 — the decl-layer / occurrence-layer ruling.** #1507's own thread records a design
+pass, ratified by the repo owner: *the class a method-occurrence goal names is the
+interface that DECLARES the method the occurrence resolved to, carrying that `interface`
+declaration's I4 identity `(originModule, name)`.* There is no competing "occurrence
+layer" — an interface-name occurrence is *resolved to* a declaration identity, so
+`DImpl.implOrigin` and `DInterface.ifaceOrigin` are the SAME layer (one assigned at the
+`interface` decl, one resolved-to at each occurrence), and comparing them is not the
+category error the retired ban at `recordImplObligation` (`compiler/types/typecheck.mdk`,
+in-source, from #1480 through U1b) asserted. Full argument, kept in-source rather than only
+here so a future reader hits it before reinstating the ban: `grep -n 'U1c (#1507)'
+compiler/types/typecheck.mdk`.
+
+**The change is one token.** `recordImplObligation`'s `pushPendingObl (ifaceRefBare
+iface.irName) …` becomes `pushPendingObl iface …` — `iface` is already the identity-carrying
+`IfaceRef` `methodIfaceParamsRef` held; the retired code was discarding it.
+
+**Census check, done rather than assumed:** after this change exactly one `ifaceRefBare`
+call site remains besides its own definition — `ifaceForInferredId`'s `pendingDictApps`
+fallback (§10.3). That site stores a ROUTE WORD against the spelling-keyed `KeyBuckets`, not
+an `ImplUniverse` goal, so it was never one of the three producers this leg's drain
+condition is about.
+
+**⚠️ The drain condition is NOT met, and a census of `ifaceRefBare` is the wrong instrument
+to answer that question — MEASURED, not inferred.** §10.4's "delete the leg once every
+remaining `ifaceRefBare` hit is the definition" was itself imprecise: it conflated "no
+producer strips identity" with "no bare goal can arise", and those are different claims.
+`methodIfaceParamsRef` can hold an `IfaceRef` whose `irOrigin` is `OriginUnresolved` because
+nothing upstream ever stamped one — not because a producer discarded it — and
+`recordImplObligation` forwarding that value faithfully (the entire point of this unit)
+still mints a bare goal in that case. Two sources were checked, on this branch's cold-built
+binary, by temporarily dropping the bare key from `oblIfaceKeys`'s identity-bearing arm
+(`_ => [oblIfaceKey ir, TkBare NsIface ir.irName]` → `_ => [oblIfaceKey ir]`), rebuilding,
+and reverting — not landed:
+
+- **`main = println 1` and `compiler/driver/medaka_cli.mdk`** (a user program importing the
+  prelude, in flat/no-module-graph mode) — CLEAN with the leg removed. #1227 already closed
+  this shape: `stampFlatTyOrigins`'s occurrence layer stamps a prelude interface occurrence
+  `core` even with no module graph, and `checkProgramSeededSplit` separately stamps the
+  prelude's OWN declarations `core` too, so goal and impl already agree on identity without
+  the leg.
+- **`medaka check stdlib/core.mdk` directly** (the prelude checking ITSELF as the entry
+  file) — REGRESSED from exit 0 to **exit 1 with ~30 `No impl of <Iface> for <Ty>` false
+  rejects** (`Ord`, `Eq`, `Foldable`, `Mappable`, …) with the leg removed; clean again with
+  it restored. Checking `core.mdk` as the entry reaches `checkProgramSeeded` with
+  `coreProg0 = []` (the "prelude already flattened into `prog`" arm), so `core.mdk`'s own
+  interfaces and impls are stamped against a scope that never includes `core.mdk`'s own
+  declarations — no identity on either layer, for either side of the match.
+
+⇒ **The bare compatibility leg stays.** U1c retires the third and last `ImplUniverse`
+GOAL-PRODUCER, which is real progress and is what closes #1438's remaining reach (§10.5).
+It does not retire every SOURCE of a bare goal — the flat prelude self-check is a fourth,
+producer-independent source, has no owner, and is live today. Whoever attempts to delete
+this leg next must re-run the `stdlib/core.mdk` experiment above (or a stronger one) and get
+a clean result, not just grep for `ifaceRefBare`.
+
+**Fixtures.** The retired pin
+`test/must_fail_fixtures/1507-xmod-iface-name-collision-method-occurrence/` is replaced by
+the positive pair `test/dict_fixtures/i4-xmod-method-occurrence-{foreign-iface-rejected,
+own-iface-control}`. A second, freshly-built pair covers the class instance where the method
+occurrence and the foreign impl's interface-name occurrence arrive from two different
+modules, neither the call site's own module:
+`test/dict_fixtures/i4-xmod-method-and-iface-different-modules-{rejected,control}`.
+
+**The false-reject risk this unit specifically owed a check.** A collided method name whose
+`scopedMethodEntry` (`compiler/types/typecheck.mdk`) returns `None` falls back to
+`overrideScopedMethods`'s floor entry — an ARBITRARY winner among the colliding
+declarations, picked before this unit existed. Restoring `iface`'s identity in
+`recordImplObligation` means that arbitrary winner's identity now reaches the obligation
+goal where it previously didn't. Built and MEASURED (two modules `p`/`g` each declaring an
+interface with the SAME method name `mth`, imported into a third module transitively through
+a re-export merge so `scopedMethodEntry` cannot decide it and the floor's answer governs): a
+program shaped this way is REJECTED with the SAME message, at the SAME location, on BOTH the
+pre-U1c and post-U1c binary (`No impl of IG for W`, `check`/`run` exit 1). This is a
+PRE-EXISTING false reject, not one this unit introduces — the floor's arbitrary identity was
+already reaching some OTHER dispatch-relevant consumer of `methodIfaceParamsRef` before this
+change; `recordImplObligation` merely stopped being the one place that discarded it. Filed
+nowhere yet; out of scope for #1507 (the collision is really `scopedMethodEntry`'s own class,
+adjacent to the OPEN #1288 re-export-merge family), noted here so it is not rediscovered
+as "caused by U1c".
 
 ---
 
