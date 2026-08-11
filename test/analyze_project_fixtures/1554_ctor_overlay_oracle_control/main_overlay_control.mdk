@@ -1,0 +1,65 @@
+-- #1554: the DISCRIMINATING control for the import-scoped constructor overlay
+-- (`importedCtorTypeDecls`, compiler/types/typecheck.mdk — #674 / #1111 A-2.6).
+--
+-- 🚨 WHY THIS FIXTURE EXISTS, since an all-clean oracle looks like a fixture that
+-- tests nothing.  It was MEASURED, on two cold-built binaries from the same tree,
+-- that the entire committed `ctor_scope_*` corpus — 15 `llvm_fixtures_modules/`
+-- projects, `eval_typed_modules_fixtures/ctor_scope_load_order`, and
+-- `engine_fixtures/ctor_scope_local_ctor_beats_stdlib_import` — is BYTE-IDENTICAL
+-- on stdout, stderr, exit code AND `check --json` when `importedCtorTypeDecls` is
+-- stubbed to `[]`.  Not one of them can fail when the mechanism is removed.  This
+-- file is the shape that CAN: stubbing the overlay makes this project emit a
+-- spurious `W-NONEXHAUSTIVE` against the empty oracle below, and this gate reds.
+--
+-- THREE things have to line up, and every existing ctor_scope fixture misses at
+-- least one:
+--
+--  1. THE OBSERVABLE IS A DIAGNOSTIC, NOT A VALUE.  `main` prints `7` then `1` with
+--     the overlay ON and with it OFF — identically.  A value-golden corpus
+--     (`llvm_fixtures_modules/`, whose gate diffs `entry.eval.golden` byte-for-byte)
+--     is structurally incapable of seeing this class.  Hence `analyze_project_
+--     fixtures/`, which pins per-file diagnostics.
+--
+--  2. THE LOAD ORDER MUST BE ADVERSE.  The data-universe pool is appended in LOAD
+--     order and `buildOracle`'s tables are bare-name FIRST-wins (`oracleMap =
+--     omFromPairs (reverseL pairs)`, frontend/exhaust.mdk), so the overlay only
+--     decides anything when the WANTED module is loaded SECOND.  Every
+--     `llvm_fixtures_modules/ctor_scope_*` fixture imports its wanted module FIRST
+--     (e.g. `ctor_scope_ctor_name` takes `amodd` before the colliding `zmodd`), so
+--     the universe's own order already lands on the right answer with the overlay
+--     gone.  Here `aacfg` is imported first and `zzcfg` — the one this file means —
+--     second, so the two orders disagree.
+--
+--  3. IT MUST REACH THE ORACLE, NOT THE SCHEME TABLES.  A-2.11
+--     (`applyCtorScopeOverrides`) and A-2.12 (`applyRecordScopeOverrides`) are a
+--     FIFTH layer sitting ABOVE the overlay: they re-point COLLIDED constructor and
+--     record names at the declaration this module's import scope selects, which is
+--     why value answers no longer move when the overlay is removed.  The
+--     exhaustiveness oracle has NO such override — it is seeded once from a flat
+--     list at `seedCheckRun (prog ++ importedCtorTypeDecls prog … ++ accData)` — so
+--     it is the one place the overlay still decides an answer.  A `match` is
+--     therefore mandatory here; `ctor_scope_load_order`, which does get the load
+--     order right, has none.
+--
+-- EXPECTED RESULT, DERIVED BY HAND (not captured — this corpus has no regen script,
+-- and capturing from a stubbed engine would enshrine the bug): `Cfg` in this file
+-- can only mean `zzcfg.Cfg`, the sole `Cfg` this file imports, whose sole
+-- constructor is `CZ`.  The single-arm `match` is therefore EXHAUSTIVE, `f v` is
+-- `7`, `aaf 1` is `1`, and every file in the graph publishes ZERO diagnostics.
+-- With the overlay stubbed the oracle instead reads `aacfg.Cfg`'s ctor set and
+-- reports `non-exhaustive match of 'Cfg'. Missing case: 'CA'` — a warning about a
+-- constructor this file cannot name.
+import aacfg.{aaf}
+import zzcfg.{Cfg, CZ}
+
+v : Cfg
+v = CZ
+
+f : Cfg -> Int
+f x = match x
+  CZ => 7
+
+main : <IO> Unit
+main =
+  let _ = println (f v)
+  println (aaf 1)

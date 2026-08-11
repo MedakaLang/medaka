@@ -1,0 +1,7 @@
+-- Loaded FIRST (it is the entry's first import), so its `Cfg` is also the FIRST
+-- `Cfg` in the data-universe decl pool the exhaustiveness oracle is seeded from.
+-- The entry never imports this `Cfg`, and never mentions `CA`/`CB`.
+public export data Cfg = CA | CB
+
+export aaf : Int -> Int
+aaf n = n
