@@ -1,0 +1,35 @@
+-- §3 `inst` REDUCTION DEPTH -- THE AT-LIMIT CONTROL for the issue 1562 reject, and the
+-- false-reject canary for making exhaustion loud.
+--
+-- `deep` nests `Wrap` 32 deep: exactly the reducer's bound (`residualReduceFuel` = 32),
+-- one step shallower than its `…-exceeded-rejected.mdk` sibling.  The reduction bottoms
+-- out on `impl Tag Int`, leaves the residual `Tag t`, and `gen` abstracts its dict, so
+-- this file must ACCEPT and its BUILT BINARY must print
+--     wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwint
+-- (32 `w`s, hand-counted from the nesting depth) at exit 0.
+--
+-- ⚠️ THIS ROW IS HALF THE ASSERTION.  A change that rejected every deep residual, or
+-- that lowered the bound, would satisfy the sibling's `T-REQUIRES-DEPTH` row on its own;
+-- only an at-limit control that is EXECUTED can tell "the bound is now loud" from "the
+-- bound moved".  The pair pins the boundary from both sides, so a change to
+-- `residualReduceFuel` in EITHER direction reds one of these two files.
+--
+-- ⚠️ The usable depth is 32, not the 31 issue 1562 measured, and that is deliberate: the
+-- terminal test in `residualPredsOf` now runs BEFORE the fuel test, so a predicate that
+-- is ALREADY fully reduced when the fuel runs out is returned as the residual it is
+-- rather than reported as too deep.  Ordering them the other way rejected a chain whose
+-- very next step was the answer.
+data Wrap a = Wrap a
+
+interface Tag t where
+  tagOf : t -> String
+
+impl Tag Int where
+  tagOf _ = "int"
+
+impl Tag (Wrap a) requires Tag a where
+  tagOf (Wrap x) = "w\{tagOf x}"
+
+deep x = tagOf (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap  x))))))))))))))))))))))))))))))))
+
+main = println (deep 5)

@@ -1,0 +1,35 @@
+-- §3 `inst` REDUCTION DEPTH -- THE ISSUE 1562 DRAIN, reject half.
+--
+-- `deep` nests `Wrap` 33 deep, so discharging `Tag (Wrap^33 t)` needs 33 `requires`
+-- steps and the reducer's bound (`residualReduceFuel` = 32) is crossed.
+--
+-- WHAT WAS WRONG (issue 1562, S0): exhaustion was SILENT.  `residualPredsOf` returned
+-- `[]` -- the same value it returns for the legitimate "no matching impl" case -- so the
+-- predicate was dropped from the inferred context AND from the `lambda d-bar` prefix, and
+-- the program landed back in issue 1549's exact defect: `check --types` printed
+-- `deep : a -> String` at exit 0, `build` exited 0, and the BUILT BINARY SEGFAULTED at
+-- 139.  Crossing the bound was indistinguishable from correctness at the CLI.
+--
+-- THE CORRECT BEHAVIOUR is to say so: a bound the compiler cannot see past is a REJECT
+-- (`T-REQUIRES-DEPTH`), located at the call site that posed the goal.  Raising the
+-- constant would not have been a fix -- any finite fuel has the same cliff, one deeper.
+-- The at-limit sibling (`…-at-limit-control.mdk`, depth 32) is the row that keeps this
+-- from being satisfied by rejecting EVERY residual, and it is built and EXECUTED.
+--
+-- ⚠️ The reject fires on all three verbs because they share the front end.  It is graded
+-- on the CODE, and its SPAN is pinned in section 6 -- a moved caret is a real regression
+-- that a code assertion cannot see (see that section's header).
+data Wrap a = Wrap a
+
+interface Tag t where
+  tagOf : t -> String
+
+impl Tag Int where
+  tagOf _ = "int"
+
+impl Tag (Wrap a) requires Tag a where
+  tagOf (Wrap x) = "w\{tagOf x}"
+
+deep x = tagOf (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap  x)))))))))))))))))))))))))))))))))
+
+main = println (deep 5)
