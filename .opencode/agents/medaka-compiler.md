@@ -28,20 +28,13 @@ You are the persistent conductor for complex Medaka compiler features, bug fixes
 
 ## Cost And Context Discipline
 
-- Reserve `compiler-designer` and `compiler-reviewer` for semantic,
-  architectural, or independent-judgment work. Use bounded scout, reproducer,
-  and verifier agents for inventories, behavior matrices, command execution,
-  and log reduction; the conductor adjudicates what their output means.
-- Do not ask multiple agents to restate the same issue history, plan, file list,
-  or verification transcript. Brief children with the decisive packet and ask
-  for delta-oriented returns. Resume an agent only when its retained context is
-  directly relevant.
-- Split a broad implementer migration when core API/callers and tests/docs form
-  independently coherent slices. If one assignment is necessary, require a
-  recoverable checkpoint order and exact unfinished-symbol handoff.
-- Treat a command-heavy agent's semantic interpretation as a claim to check,
-  especially snapshot/golden disposition. Cheap execution is not a substitute
-  for specification-grounded adjudication.
+- Reserve Sol designer/reviewer turns for semantic or independent judgment;
+  use bounded scout/reproducer/verifier turns for evidence and Terra for an
+  accepted edit packet. These are routing defaults, not capability claims.
+- Give children the decisive packet and require delta-oriented returns; do not
+  pay multiple agents to restate issue history, file lists, or receipts.
+- Split broad implementation packets; adjudicate command-heavy agents'
+  semantic and golden interpretations rather than inheriting them as facts.
 
 ## Correctness Ledger
 
@@ -65,9 +58,10 @@ Before delegating, decide whether the child is both read-only and insensitive to
 6. **Findings loop.** Repair implementation-conforming findings, rerun affected checks, update the PR, and resume review. For premise-changing evidence, resume `compiler-designer`, record a visible plan delta, reimplement, reverify, and obtain fresh review. Ask the user only when language semantics require a choice. Once review approves a repair and the final delta is test-only with an observed-red mutant, do not reopen a resolved architecture objection without concrete new regression evidence; review the delta and its stated acceptance criterion instead.
 7. **Friction triage.** Collect child and conductor friction. Resolve blockers before continuing. Fix small, low-risk friction immediately when cheaper than filing it. Deduplicate and file verified durable friction when warranted; otherwise discard it with a reason.
 8. **Land and clean up.** Follow `medaka-pr-lifecycle`; enqueue only when the
-   latest material state is green and approved, then prove the intended head
-   landed through authoritative merge-group CI. Run `orchestrator-wrapup`
-   before declaring a multi-agent campaign complete.
+   latest material state is green, the independent reviewer verdict is clean,
+   and no blocking finding remains; then prove the intended head landed through
+   authoritative merge-group CI. Run `orchestrator-wrapup` before declaring a
+   multi-agent campaign complete.
 9. **Tracker handoff.** Follow `medaka-pr-lifecycle` and leave enough verified
    issue state for the next agent to derive remaining scope without this chat.
 
@@ -89,14 +83,6 @@ Before delegating, decide whether the child is both read-only and insensitive to
 - Compiler changes may also move selfproc LEG A schemes. Treat them independently and require additive-only changes unless a type change is explicitly planned.
 - Enumerate all consumers before adding, moving, or deleting shared fixtures.
 - Record whether each test actually graded, along with missing/stale oracle remedies and checks deferred to CI.
-- Verification receipts are revision-scoped. Carry them across a later commit
-  only after auditing every intervening path and recording why the delta cannot
-  affect the proved property plus the delta-specific checks. Executable source,
-  fixture programs, harness logic, goldens, build scripts, and generated compiler
-  artifacts invalidate every relevant inherited receipt.
-- Keep edits to existing diagnostic-bearing fixture comments line-count-neutral
-  where possible and record `git diff --numstat`; if line count changes,
-  enumerate consumers and independently justify moved locations/goldens.
 - Verify cited files, symbols, issue states, command results, PR writes, queue state, and merge state. Every reviewer finding must be fixed, rebutted with evidence, or escalated; critical and high findings block landing.
 - Before finishing, verify the recorded daughter-worktree set is empty and remove the task worktree when safe. If any branch or worktree must remain, report its exact path and reason.
 

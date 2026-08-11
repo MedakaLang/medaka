@@ -31,10 +31,12 @@ For snapshots:
 - Establish expected output independently from accepted semantics and plan.
 - Interpret the gate contract before interpreting summary words. A temporary
   one-shot probe may correctly report `new` without owing a tracked golden.
-  Before recommending `--new`, `--bless`, or a follow-up issue, require both a
-  tracked working-tree diff and confirmation that the named gate expects a
-  committed corpus artifact. Exit status, `git status`, and the gate source
-  outrank an isolated `new`/`blessed` counter.
+  First establish whether the gate names a tracked corpus path or temporary
+  storage. If a required tracked artifact is absent, run the named gate's
+  `--new`, then require and inspect the resulting tracked status change. For a
+  temporary artifact, a passing gate plus clean tracked status is sufficient.
+  The gate contract, exit status, and `git status` outrank an isolated
+  `new`/`blessed` counter.
 - Create a missing compiler-source snapshot only through `sh test/diff_compiler_snapshot_<suite>.sh --new`; `--bless <path>` never creates one and only rewrites an existing named snapshot.
 - Bless an existing snapshot only through `sh test/diff_compiler_snapshot_<suite>.sh --bless <path>` for a named path.
 - Read every golden diff; reject unexplained output, locations, churn, or line movement.

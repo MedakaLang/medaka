@@ -69,6 +69,10 @@ changes, run `make docs-index`, inspect and stage the generated
 applicable. Links and symbol checks do not prove that the generated index is
 fresh; finish by requiring no regeneration diff in `docs/README.md`.
 
+Keep prose-only edits to existing diagnostic-bearing fixtures line-count-neutral
+where possible and record `git diff --numstat`. If line count changes, enumerate
+the fixture's consumers and independently justify every moved location/golden.
+
 For a long mandatory check, background and poll it as repository guidance requires; do not replace it with several redundant foreground checks.
 
 ## 5. Push once local signal is adequate
@@ -99,10 +103,12 @@ Never summarize a phantom skip as green, a narrowed-away PR shard as coverage, o
 
 Snapshot summary labels are not artifact disposition. A focused gate may
 intentionally create a temporary one-shot snapshot and report `new` while
-passing with a clean tracked tree. Before prescribing `--new`, `--bless`, or a
-tracking issue, check the gate contract and require a tracked diff. For a large
-generated snapshot, report layered section-to-source adjudication and any
-uninspected remainder instead of claiming exhaustive review.
+passing with a clean tracked tree. First derive whether the gate owns a tracked
+corpus path or temporary storage. If a required tracked artifact is absent, run
+that gate's `--new` and require the resulting tracked status change; if the gate
+explicitly uses temporary storage, a passing result and clean tracked tree owe
+no golden. For a large generated snapshot, report layered section-to-source
+adjudication and any uninspected remainder instead of claiming exhaustive review.
 
 Receipts are revision-scoped. A later delta may inherit one only when every
 intervening path is audited and cannot affect the property; record both SHAs,

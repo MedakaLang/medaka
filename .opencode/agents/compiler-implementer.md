@@ -36,10 +36,11 @@ Implement the smallest coherent change that satisfies the accepted invariant. Pr
 
 For a migration spanning core API, callers, regression harness, and docs, the
 conductor should normally split the assignment. If it is deliberately kept in
-one packet, preserve a recoverable order: (1) compile-coherent core API, (2) all
-named callers and mirrors, (3) direct regression harness, then (4) docs and
-secondary mirrors. Do not spend the final budget polishing prose while code or
-callers remain partial.
+one packet, preserve a recoverable order: (1) make the core API, every executable
+caller, and every semantic/route mirror repository-compile-coherent; (2) add the
+direct regression harness; then (3) update documentation and non-executable
+collateral. Do not spend the final budget polishing prose while code or a route
+mirror remains partial.
 
 Keep implementation and verification separate. The conductor owns formatting, linting, builds, tests, golden adjudication, staging, and commits after inspecting your uncommitted daughter-worktree diff. Do not run preflight, fixpoint, multi-engine suites, oracle builds, snapshot blessing, selfproc recapture, or any other verification command. Never bless output because it changed.
 

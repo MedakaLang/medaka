@@ -8,7 +8,12 @@ description: Runs Medaka's verified PR, CI, merge-queue, tracker-handoff, and cl
 Use this phase skill after adequate local signal. It centralizes state-readback
 rules so conductor and child prompts do not need to repeat GitHub mechanics.
 Repository instructions and the user's requested lifecycle remain authoritative:
-never commit, push, open a PR, or enqueue unless the task authorizes that action.
+before acting, record which phases and mutations the user or governing workflow
+explicitly authorizes. Execute only those phases. Readbacks are always safe;
+commit, push, PR create/edit/enqueue, issue comment/edit/close, and local
+worktree/branch/scratch deletion each require authorization. A governing
+compiler workflow's mandatory tracker handoff or cleanup rule counts as explicit
+authorization for that named action, not for unrelated mutations.
 
 ## 1. Preflight the exact head
 
@@ -55,8 +60,9 @@ affected property.
 
 ## 5. Enqueue and prove completion
 
-Only after the latest head is PR-CI green, approved, and free of blocking
-findings, use the verified helper rather than interpreting `gh` exit codes:
+Only after the latest head is PR-CI green, the independent compiler-reviewer
+verdict is clean, and no blocking findings remain, use the verified helper
+rather than interpreting `gh` exit codes:
 
 ```sh
 sh scripts/pr.sh enqueue --number N --interval 10 --timeout 300
@@ -70,13 +76,15 @@ authority.
 
 ## 6. Tracker and cleanup
 
-Read every referenced issue before writing. Close only an issue whose reported
+Perform this section only when tracker writes are authorized. Read every
+referenced issue before writing. Close only an issue whose reported
 behavior and acceptance criteria are satisfied. Otherwise leave a verified
 handoff comment containing PR/commit, evidence, remaining scope, deferred work,
 and next action; read the comment and issue state back.
 
-Reap only task-owned daughter and topic worktrees after their evidence is
-integrated. Remove disposable local branches and task scratch files, but leave
+Perform destructive cleanup only when authorized. Reap only task-owned daughter
+and topic worktrees after their evidence is integrated. Remove disposable local
+branches and task scratch files, but leave
 unattributed sibling worktrees and processes untouched. Report any retained
 path and reason.
 
