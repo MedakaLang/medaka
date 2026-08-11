@@ -2141,3 +2141,42 @@ whose entire purpose was to stop an over-claim** — being in correction mode do
 immunise the correction itself from the same failure it exists to fix. Ask, every time a
 derivation from source produces a claim about a SPECIFIC INSTANCE: has anyone actually
 run that instance, or only the class it's alleged to belong to?
+
+## The typecheck session, 2026-08-11 — ask whether the test COULD have failed, not whether it passes
+
+### ⭐⭐ Every PR that entered adversarial review at 12/12 green came back with a real finding, and none was wrong code
+
+Three PRs, four findings, zero wrong-code defects. The pattern across all four: a test that
+looked like coverage was actually structurally unable to fail on the bug it claimed to guard.
+
+- **#1526 round 1 — a gate that could not fail on the code it graded.**
+  `origin_agreement_main`'s `single` probe arm **modelled** `test_cmd.mdk`'s id derivation
+  instead of importing and calling it. Reverting the driver to its old buggy derivation left
+  the gate fully green, because the gate was never reading the driver — it was reading its own
+  copy of the driver's logic. The fix (export `singleRootId`, call it from the probe) was
+  verified by the same swap-and-revert: revert the driver, gate goes red; restore, green. That
+  swap-and-revert is what proves the probe is sensitive to the *driver*, not to its own model of
+  it — a different property, and only the second one is a regression test.
+- **#1527 — doctests that missed the field the ruling was about.** Six mutations run against
+  29 doctests for `CE` construction; three passed clean (undetected): replacing **every
+  method's raw `Ty`** — the entire subject of the Step-0 syntactic-vs-elaborated ruling this
+  unit implements — with a bogus constant, garbling `superParams`/`superOrigin`, and deleting
+  `classEnvFinish`'s row-order `reverseL`. All three were fixed and re-verified as positive
+  controls (mutate → confirm red → restore → confirm 29/29 green) before merge.
+- **#1526 round 2 — a vacuity tripwire disarmed by the pin meant to strengthen it.** The new
+  `entry_residual` gate section shared the main loop's `fixtures` counter, so moving the whole
+  `test/origin_fixtures/` corpus aside still exited 0 — the addition meant to catch a residual
+  bug had silently defeated the check that catches an empty corpus. Fixed with a section-local
+  guard, verified by moving the corpus aside and confirming exit 1 ("checked NOTHING").
+- **#1526 round 2 — a live closing keyword in a commit message**, surviving after the PR body,
+  the source fix, and the docs it touched all already said "does not close #1223." `gh` reads
+  commit messages for closing keywords same as PR bodies (see the closing-keyword bullets
+  above) — a sweep that stops at the visible prose misses the string GitHub actually parses.
+  Fixed by squashing to one commit with no closing keyword anywhere.
+
+**The actionable rule for a review brief:** don't ask the reviewer "does this test pass" — ask
+them to **construct the wrong implementation and confirm the test notices**, and to **re-run
+the tests that already passed as positive controls**, not just the new one. A green result is
+otherwise indistinguishable from "the suite stopped running." And ask explicitly **which
+fields no test observes** — an honest "unobserved, not asserted" recorded in the code (as
+#1527's own doctest block did for one field) is fine; silence on it is not.
