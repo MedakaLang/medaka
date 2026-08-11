@@ -1,5 +1,5 @@
 # META
-source_lines=26430
+source_lines=26491
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted typecheck stage — port of lib/typecheck.ml's HM core.  SLICE 1:
@@ -3333,25 +3333,37 @@ ieTriplesUpTo cur (r::rest)
 -- are DERIVED from the same `(ifk, hd)` pairs (see `ieInsertRowAt` /
 -- `insertUnivImplAt`), so equal concrete rows imply equal tag sets.
 --
--- 🚨 WHAT THIS INSTRUMENT ALREADY FOUND, AND WHY THE `mid == ""` ARM IS SKIPPED.
--- MEASURED on this branch: with the comparison unconditional,
--- `test/diff_compiler_check_modules.sh` panicked on 8 of its 9 fixtures — every one
--- whose USER module declares an `impl` — with `mid = ''` (ordinal 0), `IE`'s slice
--- being the PRELUDE's impls and the accumulator holding the user module's single
--- impl.  The cause is DERIVED, not guessed: `checkModuleFull` (`:21974-21976`) calls
--- `checkModuleFullImpl ""`, and `cmCheckWorker` (`:23835-23838`) DISCARDS its `_mid`
--- and calls `checkModuleFull` — so on the `checkModules` driver EVERY user module
--- reaches `checkBodyImpl`'s Module arm carrying `mid = ""`, which `declEnvsOrdOf`
--- maps to ordinal 0, the prelude.
+-- 🚨 WHAT THIS INSTRUMENT ALREADY FOUND, AND WHAT THE `mid == ""` ARM COVERS NOW.
+-- HISTORY (A-3.4 PR1, and the reason #1508 existed).  MEASURED then: with the
+-- comparison unconditional, `test/diff_compiler_check_modules.sh` panicked on 8 of
+-- its 9 fixtures — every one whose USER module declares an `impl` — with `mid = ''`
+-- (ordinal 0), `IE`'s slice being the PRELUDE's impls and the accumulator holding
+-- the user module's single impl.  The cause was DERIVED, not guessed: `cmCheckWorker`
+-- DISCARDED its `_mid` and called `checkModuleFull`, which is
+-- `checkModuleFullImpl ""` — so on the `checkModules` driver EVERY user module
+-- reached `checkBodyImpl`'s Module arm carrying `mid = ""`, which `declEnvsOrdOf`
+-- maps to ordinal 0, the prelude.  (Anchor on the NAMES, not on line numbers: the two
+-- citations this paragraph used to carry, `:21974-21976` and `:23835-23838`, had both
+-- rotted to unrelated code by the time #1508 was picked up.)
 --
--- THAT IS A HARD PR2 BLOCKER, and it is the whole reason A-3.4 is staged in two
--- PRs: a reader flip that projects `IE` at `declEnvsOrdOf mid` would hand every user
--- module on that driver the PRELUDE'S impls alone.  It is not a PR1 defect — PR1 has
--- no reader — and it is not the instrument being wrong: the instrument is correct and
--- the premise it tests is false on that driver.  Recorded here rather than silently
--- worked around, and the arm is skipped rather than the comparison weakened, so the
--- instrument stays fully fail-capable everywhere a real module id IS carried
--- (`elaborateModules` → `elabModuleStamp mid` → `checkModuleFullImpl mid`; MEASURED:
+-- FIXED by #1508 (U2a): `cmCheckWorker` now threads its real `mid` into
+-- `checkModuleFullImpl`, so the `checkModules` driver attributes each user module to
+-- ITSELF.  The consequence is directly observable HERE — the arm below no longer
+-- skips a single user module on that driver, and the whole gate that used to panic
+-- 8/9 now reads `9 ok, 0 failing` with the instrument live on every one of them.
+--
+-- WHAT THE SKIP STILL COVERS: only the genuine PRELUDE pass, which both Module-mode
+-- drivers spell `""` (`checkModulesPreamble` → `checkModuleFull` → `checkModuleFullImpl
+-- ""`; `elabModuleStamp ""`).  MEASURED on the #1508 branch, not assumed: replacing
+-- the guard with `False` (i.e. comparing the prelude arm too) leaves
+-- `diff_compiler_check_modules` at 9 ok / 0 failing AND completes a full
+-- `make medaka` — so the arm is REMOVABLE, and it is retained only because widening a
+-- shipped hard-`panic` surface is not #1508's unit and PR2 deletes the instrument
+-- outright.  Do not re-derive that measurement as a blocker; it is not one.
+--
+-- The instrument stays fully fail-capable everywhere a real module id is carried
+-- (`elaborateModules` → `elabModuleStamp mid` → `checkModuleFullImpl mid`, and now
+-- `checkModules` → `cmCheckWorker` → `checkModuleFullImpl mid` as well; MEASURED:
 -- a full `make medaka`, which drives the whole compiler graph through that path,
 -- completes with the instrument ON and never fires).
 ieShadowCompare : String -> List Decl -> Unit
@@ -9010,6 +9022,24 @@ builtinClassSet _ _ acc = acc
 --     with the flatten.
 --   * `Module` — only the PRELUDE's own pass writes, and it writes once; later modules
 --     read the surviving `CrossRun` value.  A user module is never the source.
+--     ⚠️ That last sentence became TRUE ON BOTH DRIVERS only with #1508 (U2a).  Before
+--     it, `cmCheckWorker` handed every user module `mid = ""`, so on the `checkModules`
+--     driver each one re-entered this arm and OVERWROTE the table with
+--     `builtinClassesOf` of its own decls — normally `emptyBuiltinClasses`, i.e. it
+--     wiped the prelude's four origins to `OriginUnresolved` for every module after the
+--     first.  It was survivable — and therefore invisible to every gate — only because
+--     `oblIfaceKeys` indexes each impl under its identity key AND a bare-spelling
+--     COMPATIBILITY leg, so an `OriginUnresolved` synthetic goal keys `TkBare` and still
+--     lands on the impl.  In other words the clobber was masked by the very leg U1b/#1507
+--     are draining, which is precisely why it had to be fixed before that leg goes: the
+--     fix simply stops the write, restoring the invariant this bullet always claimed.
+--     ⚠️ There is a SECOND, independent reason it was unobservable, and it is the one
+--     that bounds the severity: `checkModules` — the ONLY driver on which the clobber
+--     occurred — harvests no diagnostics at all (`cmCheckWorker`, "no diagnostics
+--     harvest"; `perRun.typeErrors` is discarded), so even a false reject produced by an
+--     `OriginUnresolved` key had no channel to reach a caller. Both reasons are needed:
+--     the compatibility leg explains why dispatch still resolved, the discarded error
+--     list explains why a failure to resolve would have been silent anyway.
 seedBuiltinClasses : CheckMode -> List Decl -> Unit
 seedBuiltinClasses (Flat coreProg) prog = setRef
   crossRun.value.builtinClassesRef
@@ -25260,9 +25290,40 @@ checkModulesPreamble runtimeDecls coreDecls modules =
 -- worker: plain per-module typecheck (no diagnostics harvest, no accAll).  Surfaces
 -- `schemes` twice — once as the pubV source foldModules needs, once as the payload
 -- checkModules collects.
+--
+-- #1508 (U2a): this worker used to call `checkModuleFull`, i.e. `checkModuleFullImpl ""`,
+-- DISCARDING the module id `foldModules` hands it — so on the `checkModules` driver every
+-- USER module reached `checkBodyImpl`'s Module arm claiming to be the prelude (`""`,
+-- `declEnvsOrdOf` ordinal 0).  Its two sibling workers (`cmDiagsWorker`, `cmEntryWorker`)
+-- always passed the real `mid` through `checkModuleFullDiags`; this one was the outlier.
+-- It calls `checkModuleFullImpl` directly rather than `checkModuleFull` so the id can be
+-- threaded — everything else (`accData`, the `[]` implDecls that keep the #154 PR-C perf
+-- property) is byte-identically what `checkModuleFull` passed.
+--
+-- 🚨 THIS IS NOT ATTRIBUTION-ONLY, AND THE FIRST DRAFT OF THIS COMMENT SAID IT WAS.
+-- The `""` key made `crossModuleSchemeOblsQualRef` and its three sibling qual tables
+-- unreadable on this driver — their readers derive `src` from a real import path
+-- (`usePathModuleId`), so they missed universally — which means an INFERRED
+-- cross-module obligation was SILENTLY DROPPED from the importer's scheme.  MEASURED,
+-- two arms, same fixture and `MEDAKA_ROOT`, only the probe differing:
+--
+--   p.mdk      export f x = "\{x}!"        -- Display a, INFERRED (no signature)
+--   entry.mdk  import p.{f} / g v = f v
+--
+--   before:  g : a -> String              ← the `Display a =>` context is GONE
+--   after:   g : Display a => a -> String  (and `medaka check`, an untouched driver
+--                                           routing through `analyzeProject`, agrees)
+--
+-- That reached users through `projectEntrySchemes` — LSP project hover reported the
+-- unconstrained type.  Pinned at
+-- `test/check_module_fixtures/inferred_cross_module_obligation/`, whose header records
+-- why the other eight fixtures were blind to the shape (all signatured or
+-- interface-method-typed, so their contexts are DECLARED and ride the module seed).
+-- An under-claimed fix is one nobody writes a test for, which is exactly what happened
+-- between this comment's first draft and adversarial review.
 cmCheckWorker : String -> List (String, Scheme) -> List Decl -> List Decl -> List Decl -> (List (String, Scheme), List (String, Scheme))
-cmCheckWorker _mid seed accData _accAll prog =
-  let schemes = checkModuleFull seed accData prog
+cmCheckWorker mid seed accData _accAll prog =
+  let schemes = checkModuleFullImpl mid seed accData [] prog
   (schemes, schemes)
 
 -- check every module in dependency order against a shared prelude + runtime.
@@ -31181,7 +31242,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "checkModulesPreamble" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))))))
 (DFunDef false "checkModulesPreamble" ((PVar "runtimeDecls") (PVar "coreDecls") (PVar "modules")) (EBlock (DoLet false false PWild (EApp (EVar "resetCrossModuleState") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "graphMethodExportsRef")) (EApp (EApp (EVar "graphMethodExports") (EVar "coreDecls")) (EVar "modules")))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "graphIfaceMethodsRef")) (EApp (EApp (EVar "graphIfaceMethods") (EVar "coreDecls")) (EVar "modules")))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "graphCtorExportsRef")) (EApp (EApp (EVar "graphCtorExports") (EVar "coreDecls")) (EVar "modules")))) (DoLet false false (PVar "declEnvs") (EApp (EApp (EVar "buildDeclEnvs") (EVar "coreDecls")) (EVar "modules"))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "declEnvsRef")) (EVar "declEnvs"))) (DoLet false false PWild (EApp (EVar "populateEffectDomains") (EFieldAccess (EVar "declEnvs") "deAllDecls"))) (DoLet false false (PVar "runtimeSeed") (EApp (EApp (EVar "externSchemes") (EApp (EVar "externTyOriginScope") (EVar "coreDecls"))) (EVar "runtimeDecls"))) (DoLet false false PWild (EApp (EApp (EVar "seedAbstractRecordTypes") (EVar "coreDecls")) (EVar "modules"))) (DoLet false false (PVar "coreSchemes") (EApp (EApp (EApp (EVar "checkModuleFull") (EVar "runtimeSeed")) (EListLit)) (EVar "coreDecls"))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "coreSchemeObligationsRef")) (EApp (EApp (EVar "omFromPairs") (EApp (EApp (EVar "map") (ELam ((PVar "kv")) (ETuple (EApp (EVar "fst") (EApp (EVar "fst") (EVar "kv"))) (EApp (EVar "snd") (EVar "kv"))))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "schemeObligationsRef") "value"))) (EVar "omEmpty")))) (DoExpr (ETuple (EVar "runtimeSeed") (EVar "coreSchemes")))))
 (DTypeSig false "cmCheckWorker" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))))))))
-(DFunDef false "cmCheckWorker" ((PVar "_mid") (PVar "seed") (PVar "accData") (PVar "_accAll") (PVar "prog")) (EBlock (DoLet false false (PVar "schemes") (EApp (EApp (EApp (EVar "checkModuleFull") (EVar "seed")) (EVar "accData")) (EVar "prog"))) (DoExpr (ETuple (EVar "schemes") (EVar "schemes")))))
+(DFunDef false "cmCheckWorker" ((PVar "mid") (PVar "seed") (PVar "accData") (PVar "_accAll") (PVar "prog")) (EBlock (DoLet false false (PVar "schemes") (EApp (EApp (EApp (EApp (EApp (EVar "checkModuleFullImpl") (EVar "mid")) (EVar "seed")) (EVar "accData")) (EListLit)) (EVar "prog"))) (DoExpr (ETuple (EVar "schemes") (EVar "schemes")))))
 (DTypeSig true "checkModules" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))))))))
 (DFunDef false "checkModules" ((PVar "runtimeDecls") (PVar "coreDecls0") (PVar "modules0")) (EBlock (DoLet false false (PTuple (PVar "coreDecls") (PVar "modules")) (EApp (EApp (EVar "stampGraphTyOrigins") (EVar "coreDecls0")) (EVar "modules0"))) (DoLet false false (PTuple (PVar "runtimeSeed") (PVar "coreSchemes")) (EApp (EApp (EApp (EVar "checkModulesPreamble") (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "modules"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "foldModules") (EVar "False")) (EVar "False")) (EVar "cmCheckWorker")) (ELam ((PVar "_last") (PVar "mid") (PVar "schemes") (PVar "rest")) (EBinOp "::" (ETuple (EVar "mid") (EVar "schemes")) (EVar "rest")))) (EListLit)) (EBinOp "++" (EVar "runtimeSeed") (EVar "coreSchemes"))) (EVar "coreSchemes")) (EListLit)) (EListLit)) (EListLit)) (EVar "modules")))))
 (DTypeSig true "checkModuleFullDiags" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag")))))))))
@@ -36057,7 +36118,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "checkModulesPreamble" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))))))
 (DFunDef false "checkModulesPreamble" ((PVar "runtimeDecls") (PVar "coreDecls") (PVar "modules")) (EBlock (DoLet false false PWild (EApp (EVar "resetCrossModuleState") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "graphMethodExportsRef")) (EApp (EApp (EVar "graphMethodExports") (EVar "coreDecls")) (EVar "modules")))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "graphIfaceMethodsRef")) (EApp (EApp (EVar "graphIfaceMethods") (EVar "coreDecls")) (EVar "modules")))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "graphCtorExportsRef")) (EApp (EApp (EVar "graphCtorExports") (EVar "coreDecls")) (EVar "modules")))) (DoLet false false (PVar "declEnvs") (EApp (EApp (EVar "buildDeclEnvs") (EVar "coreDecls")) (EVar "modules"))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "declEnvsRef")) (EVar "declEnvs"))) (DoLet false false PWild (EApp (EVar "populateEffectDomains") (EFieldAccess (EVar "declEnvs") "deAllDecls"))) (DoLet false false (PVar "runtimeSeed") (EApp (EApp (EVar "externSchemes") (EApp (EVar "externTyOriginScope") (EVar "coreDecls"))) (EVar "runtimeDecls"))) (DoLet false false PWild (EApp (EApp (EVar "seedAbstractRecordTypes") (EVar "coreDecls")) (EVar "modules"))) (DoLet false false (PVar "coreSchemes") (EApp (EApp (EApp (EVar "checkModuleFull") (EVar "runtimeSeed")) (EListLit)) (EVar "coreDecls"))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "coreSchemeObligationsRef")) (EApp (EApp (EVar "omFromPairs") (EApp (EApp (EMethodRef "map") (ELam ((PVar "kv")) (ETuple (EApp (EVar "fst") (EApp (EVar "fst") (EVar "kv"))) (EApp (EVar "snd") (EVar "kv"))))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "schemeObligationsRef") "value"))) (EVar "omEmpty")))) (DoExpr (ETuple (EVar "runtimeSeed") (EVar "coreSchemes")))))
 (DTypeSig false "cmCheckWorker" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))))))))
-(DFunDef false "cmCheckWorker" ((PVar "_mid") (PVar "seed") (PVar "accData") (PVar "_accAll") (PVar "prog")) (EBlock (DoLet false false (PVar "schemes") (EApp (EApp (EApp (EVar "checkModuleFull") (EVar "seed")) (EVar "accData")) (EVar "prog"))) (DoExpr (ETuple (EVar "schemes") (EVar "schemes")))))
+(DFunDef false "cmCheckWorker" ((PVar "mid") (PVar "seed") (PVar "accData") (PVar "_accAll") (PVar "prog")) (EBlock (DoLet false false (PVar "schemes") (EApp (EApp (EApp (EApp (EApp (EVar "checkModuleFullImpl") (EVar "mid")) (EVar "seed")) (EVar "accData")) (EListLit)) (EVar "prog"))) (DoExpr (ETuple (EVar "schemes") (EVar "schemes")))))
 (DTypeSig true "checkModules" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))))))))
 (DFunDef false "checkModules" ((PVar "runtimeDecls") (PVar "coreDecls0") (PVar "modules0")) (EBlock (DoLet false false (PTuple (PVar "coreDecls") (PVar "modules")) (EApp (EApp (EVar "stampGraphTyOrigins") (EVar "coreDecls0")) (EVar "modules0"))) (DoLet false false (PTuple (PVar "runtimeSeed") (PVar "coreSchemes")) (EApp (EApp (EApp (EVar "checkModulesPreamble") (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "modules"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "foldModules") (EVar "False")) (EVar "False")) (EVar "cmCheckWorker")) (ELam ((PVar "_last") (PVar "mid") (PVar "schemes") (PVar "rest")) (EBinOp "::" (ETuple (EVar "mid") (EVar "schemes")) (EVar "rest")))) (EListLit)) (EBinOp "++" (EVar "runtimeSeed") (EVar "coreSchemes"))) (EVar "coreSchemes")) (EListLit)) (EListLit)) (EListLit)) (EVar "modules")))))
 (DTypeSig true "checkModuleFullDiags" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag")))))))))
