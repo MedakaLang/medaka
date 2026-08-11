@@ -30,11 +30,16 @@
 -- GREEN-BY-ACCEPTING and the S0 is back -- which is exactly what it exists to
 -- stop.
 --
--- ⚠️ TOPOLOGICALLY DISCRIMINATING BY CONSTRUCTION, same reasoning as the
--- signature-constraint sibling: the goal is posed and elaborated when `zmod` is
--- processed; `amod`'s foreign impl lives in a module `zmod` does not import. A
--- shape whose goal is posed only in `main` would be a false null, because `main`
--- is always topologically LAST and therefore always sees the whole universe.
+-- ⚠️ MECHANISM CORRECTION: an earlier revision of this row claimed the goal is
+-- "posed and elaborated when `zmod` is processed", by analogy with the
+-- signature-constraint sibling. MEASURED, that is not where the diagnostic lands:
+-- `check` reports it at `main.mdk:48:16`, not in `zmod.mdk`. `useBulk` here is
+-- UNSIGNED, so its constraint is inferred and generalized into `useBulk`'s own
+-- scheme rather than fixed at a declared `=>` slot; the obligation entailment fires
+-- where the scheme is instantiated, i.e. at the `useBulk 3` call in `main`. The
+-- row's DISCRIMINATION is real and measured (base: silent accept + segfault;
+-- branch: reject) -- only the "posed at `zmod`, by construction" mechanism claim
+-- was wrong, and is dropped rather than repeated.
 --
 -- ⚠️ Distinct from `i4-xmod-sig-constraint-foreign-iface-rejected` (the sibling
 -- row): that one reaches the collision through a constrained BINDING's `=>` slot

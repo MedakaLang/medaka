@@ -2131,33 +2131,51 @@ whether the leg is dead weight.
   keys it by identity, so the two checkers disagree about whether two same-spelled
   interfaces are one class. A-3.7 owns it; U1b widens the gap rather than closing it.
 - The `ifaceForInferredId` fallback that recovers a slot's interface from `pendingDictApps`
-  is bare **by construction** — that channel stores route words (§10.3).
+  is bare **by construction** — that channel stores route words (§10.3). ⚠️ It is NOT
+  established that this fallback is goal-producer-free: TRACED (not instrumented) in
+  §10.7's revised census note, its value is written into `funConstraintIfacesRef`, which
+  `declaredConstraintSlots` reads and `recordCallObligations` turns into a `PCallSlot`
+  `ImplUniverse` goal. A fourth reason the leg stays, not a closed question.
 
 ### 10.7 U1c — the method-occurrence goal, Step 0's ruling, and the drain condition's real state
 
 Landed by the PR that implements **#1507**, sequenced after U1b (§10).
 
-**Step 0 — the decl-layer / occurrence-layer ruling.** #1507's own thread records a design
-pass, ratified by the repo owner: *the class a method-occurrence goal names is the
+**Step 0 — the decl-layer / occurrence-layer ruling.** Ratified by the repo owner on
+#1507: [issuecomment-5248859630](https://github.com/MedakaLang/medaka/issues/1507#issuecomment-5248859630)
+— *the class a method-occurrence goal names is the
 interface that DECLARES the method the occurrence resolved to, carrying that `interface`
 declaration's I4 identity `(originModule, name)`.* There is no competing "occurrence
 layer" — an interface-name occurrence is *resolved to* a declaration identity, so
 `DImpl.implOrigin` and `DInterface.ifaceOrigin` are the SAME layer (one assigned at the
 `interface` decl, one resolved-to at each occurrence), and comparing them is not the
 category error the retired ban at `recordImplObligation` (`compiler/types/typecheck.mdk`,
-in-source, from #1480 through U1b) asserted. Full argument, kept in-source rather than only
-here so a future reader hits it before reinstating the ban: `grep -n 'U1c (#1507)'
-compiler/types/typecheck.mdk`.
+in-source, from #1480 through U1b) asserted. That same ruling carries the re-export-merge
+carve-out §10.7's own census note records below, and an explicit scope limit: the ruling
+does not by itself license deleting the bare compatibility leg (§10.4/§10.5 remain the
+authority on that). Full argument, kept in-source rather than only here so a future reader
+hits it before reinstating the ban: `grep -n 'U1c (#1507)' compiler/types/typecheck.mdk`.
 
 **The change is one token.** `recordImplObligation`'s `pushPendingObl (ifaceRefBare
 iface.irName) …` becomes `pushPendingObl iface …` — `iface` is already the identity-carrying
 `IfaceRef` `methodIfaceParamsRef` held; the retired code was discarding it.
 
-**Census check, done rather than assumed:** after this change exactly one `ifaceRefBare`
-call site remains besides its own definition — `ifaceForInferredId`'s `pendingDictApps`
-fallback (§10.3). That site stores a ROUTE WORD against the spelling-keyed `KeyBuckets`, not
-an `ImplUniverse` goal, so it was never one of the three producers this leg's drain
-condition is about.
+**Census check, done rather than assumed — and narrower than an earlier revision claimed.**
+After this change exactly one `ifaceRefBare` call site remains besides its own definition —
+`ifaceForInferredId`'s `pendingDictApps` fallback (§10.3). That site is bare BY
+CONSTRUCTION (§10.3's route-word discipline), but **it is not established that it is
+goal-producer-free**: TRACED, the value it mints is written by `registerInferredFor`
+into `funConstraintIfacesRef`, which `declaredConstraintSlots`'s `None` arm reads,
+which `inferDictAtFound` turns into a `recordCallObligations` call, which pushes a
+`PCallSlot` `ImplUniverse` `Predicate` for any slot whose `csIface.irName != ""` — the
+same channel this whole unit is about. Not independently verified whether a live call
+site can actually drive this exact path to a non-`""` bare iface (the two fallbacks tried
+before it may already cover every reachable case) — recorded as open, not resolved either
+way. §10.6's parallel note carries the same correction.
+
+⚠️ **This census answers "which sites still mint `ifaceRefBare`", not "is the leg still
+needed" — those are different questions, and §10.7's next paragraph exists because
+conflating them is exactly the mistake this section corrects.**
 
 **⚠️ The drain condition is NOT met, and a census of `ifaceRefBare` is the wrong instrument
 to answer that question — MEASURED, not inferred.** §10.4's "delete the leg once every
@@ -2178,8 +2196,9 @@ and reverting — not landed:
   prelude's OWN declarations `core` too, so goal and impl already agree on identity without
   the leg.
 - **`medaka check stdlib/core.mdk` directly** (the prelude checking ITSELF as the entry
-  file) — REGRESSED from exit 0 to **exit 1 with ~30 `No impl of <Iface> for <Ty>` false
-  rejects** (`Ord`, `Eq`, `Foldable`, `Mappable`, …) with the leg removed; clean again with
+  file) — REGRESSED from exit 0 to **exit 1 with 32 `No impl of <Iface> for <Ty>` false
+  rejects** (re-derive with `grep -c 'No impl'` rather than trust this number;
+  `Ord`, `Eq`, `Foldable`, `Mappable`, …) with the leg removed; clean again with
   it restored. Checking `core.mdk` as the entry reaches `checkProgramSeeded` with
   `coreProg0 = []` (the "prelude already flattened into `prog`" arm), so `core.mdk`'s own
   interfaces and impls are stamped against a scope that never includes `core.mdk`'s own

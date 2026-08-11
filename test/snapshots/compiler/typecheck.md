@@ -1,5 +1,5 @@
 # META
-source_lines=25730
+source_lines=25792
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted typecheck stage — port of lib/typecheck.ml's HM core.  SLICE 1:
@@ -9072,13 +9072,35 @@ recordImplObligation x mono
       -- vantage points that PRODUCE THE SAME VALUE wherever resolution has a unique
       -- answer, which `fillIfaceOccOrigin` (via `mapOriginsInDecl`, run in the same
       -- scope as every other occurrence stamp) guarantees for exactly the programs
-      -- that reach this line.  Where resolution is genuinely ambiguous, RESOLVE itself
-      -- diagnoses it as a separate error before typecheck ever sees the occurrence —
-      -- it is not silently coerced into an entailment mismatch here.  So the two
-      -- values disagree only in the ambiguous case, and that case is already rejected
-      -- upstream by a different, dedicated diagnostic.  Do NOT reinstate this ban
-      -- without meeting that argument — a bare assertion that the two are "different
-      -- layers" is exactly the premise this paragraph refutes.
+      -- that reach this line.
+      --
+      -- ⚠️ "RESOLVE diagnoses every ambiguous case" is FALSE AS A BLANKET CLAIM, and an
+      -- earlier revision of this paragraph said it anyway — refuted in one experiment,
+      -- which is exactly the shape that licenses reinstating the ban, so the carve-out
+      -- has to be explicit. MEASURED, both arms, two modules each declaring an
+      -- interface with the same method name (`p.IP.mth`, `g.IG.mth`), merged into a
+      -- third module via `export import p.{IP,mth}` + `export import g.{IG,mth}`: a
+      -- DIRECT double import of the same name is what resolve catches
+      -- (`Ambiguous occurrence: 'mth' is exported by both …`, `importedMethodEntry`'s
+      -- own comment below); a RE-EXPORT MERGE of the same collision is not caught by
+      -- resolve at all — `check` exits 0 or 1 depending on nothing but which of the two
+      -- `export import` lines comes first in the re-exporting module, with NO
+      -- diagnostic from resolve either way. In that shape `scopedMethodEntry` cannot
+      -- decide it (`importedMethodEntry` sees two import-witnessed candidates, which
+      -- is the SAME two-candidates shape the direct-import case rejects — but nothing
+      -- upstream rejects it here), so `overrideScopedMethods` keeps the FLOOR's
+      -- arbitrary last-registered answer, and this site silently inherits it. So: the
+      -- two values disagree only in the ambiguous case, unambiguous cases genuinely
+      -- agree, and a DIRECT import ambiguity genuinely is rejected upstream — but a
+      -- RE-EXPORT-MERGE ambiguity is not, and reaches this site as the floor's
+      -- arbitrary identity rather than as a diagnostic. The RULING survives this
+      -- carve-out (an unambiguous occurrence's identity is still correct here, which is
+      -- the property U1c is about); the flat "already rejected upstream" sentence does
+      -- not, and is corrected to say so. Do NOT reinstate the ban on a bare assertion
+      -- that the two layers are "different" — but do not cite "resolve already
+      -- rejects the ambiguous case" as blanket cover either; it doesn't, for this
+      -- shape. (Adjacent to the open #1288 re-export-merge family; not this unit's to
+      -- fix.)
       --
       -- ⚠️ THIS IS NOT THE ONLY DECL-LAYER GOAL SITE, AND AN EARLIER VERSION OF THIS
       -- COMMENT SAID IT WAS ("the ONE goal producer … the other three are all
@@ -9118,12 +9140,22 @@ recordImplObligation x mono
       -- goal-WITHOUT-identity against impl-WITH-identity, and this is
       -- goal-with-identity against impl-with-a-DIFFERENT-identity.
       --
-      -- The other three goal producers (`recordSigConstraintObls`,
+      -- Two OTHER goal producers (`recordSigConstraintObls`,
       -- `recordMethodLevelSlotObls` via `constraintOrigin`, `reqToObligation` via
       -- `requireOrigin`) already carried identity before U1c (they never went through
       -- the bare-name detour this site did) -- filled by the SAME walk in the SAME
-      -- scope as `implOrigin`, so they agree with it by construction.  This was the
-      -- LAST of the four `ImplUniverse` goal producers to carry identity.
+      -- scope as `implOrigin`, so they agree with it by construction. This site is the
+      -- THIRD, and last, of the `ifaceRefBare` producers -- U1b retired the other two
+      -- (`schemeObligationsRef`, `funConstraintIfacesRef`); see the census a few lines
+      -- above and re-derive it with `grep -n ifaceRefBare` rather than trust a count.
+      -- ⚠️ THAT IS NOT A CLAIM THAT THE `ImplUniverse` CHANNEL HAS ONLY THREE OR FOUR
+      -- GOAL PRODUCERS TOTAL. It does not: `recordCallObligations`'s `PCallSlot`
+      -- predicate (:7205, above), the `builtinIfaceRef`-derived sites named a few
+      -- paragraphs up, and others besides all push a `Predicate` into the same channel
+      -- -- a derived count of the WHOLE set is at least six. "Last of the three" here
+      -- means only "last of the sites that ever minted `ifaceRefBare`", the narrow
+      -- claim the census actually supports -- do not read it as "last of N total
+      -- producers" for any N not independently re-derived.
       --
       -- U1c (#1507) closes the capability gap the retired ban's COST paragraph
       -- recorded: this site now discriminates METHOD-OCCURRENCE goals the same way
@@ -14316,9 +14348,22 @@ scopedMethodEntry prog n cs = match ownMethodIdent prog n
 importedMethodEntry : List Decl -> String -> List (Ident, (IfaceRef, List String, Ty, List (String, List Kind))) -> Option (IfaceRef, List String, Ty, List (String, List Kind))
 importedMethodEntry prog n cs = match filterList (c => methodCandImported prog n c) cs
   -- exactly one of this name's declarations is reachable through an import of THIS
-  -- module: that is what the occurrence names.  Two would be an ambiguous occurrence,
-  -- which resolve already rejects (`Ambiguous occurrence: 'mth' is exported by both …`),
-  -- so falling back to the floor there costs nothing an accepted program can observe.
+  -- module: that is what the occurrence names.  A DIRECT double import of the same
+  -- name is an ambiguous occurrence resolve already rejects (`Ambiguous occurrence:
+  -- 'mth' is exported by both …`), so falling back to the floor costs nothing an
+  -- accepted program can observe THROUGH THAT PATH.
+  --
+  -- ⚠️ NOT EVERY TWO-CANDIDATE CASE IS CAUGHT UPSTREAM — MEASURED, both arms: a
+  -- RE-EXPORT MERGE of the same collision (two modules each declaring an interface
+  -- with method `n`, both re-exported into a third module via two `export import`
+  -- lines) also lands here with two candidates, but resolve emits NOTHING for it —
+  -- `check` silently accepts or rejects depending only on which `export import` line
+  -- is declared first, with no diagnostic either way. This function still falls
+  -- through to `preludeMethodEntry`/`None` and the caller keeps the FLOOR's
+  -- arbitrary last-registered answer for that shape, exactly as it does for a
+  -- genuinely 0-candidate case — the fallback is not wrong, but the comment above
+  -- must not be read as "every 2+ candidate case is already an upstream reject".
+  -- Adjacent to the open #1288 re-export-merge family; not owned here.
   [only] => Some (snd only)
   _ => preludeMethodEntry n cs
 
@@ -18877,9 +18922,25 @@ insertUnivImpl univ (iface, tys, reqs) =
 -- `IfaceRef` `methodIfaceParamsRef` already held, instead of stripping it via
 -- `ifaceRefBare iface.irName` — so by the census rule stated then, every REMAINING
 -- `ifaceRefBare` call site IS the definition (`:3850-3851`) or the deliberately-bare
--- `pendingDictApps` route-word fallback in `ifaceForInferredId` (§10.3 — a ROUTING key
--- against the spelling-keyed `KeyBuckets`, not an `ImplUniverse` goal producer, so it is
--- not one of the three this leg was ever about).
+-- `pendingDictApps` route-word fallback in `ifaceForInferredId` (§10.3).
+--
+-- ⚠️ THAT FALLBACK IS NOT SAFELY DISMISSED AS "A ROUTE WORD, NOT A GOAL PRODUCER" —
+-- an earlier revision of this paragraph said so and it was not established, only
+-- assumed from the fallback's OWN call site (`pushDictApp`'s routing arg). TRACED,
+-- not instrumented: `ifaceForInferredId`'s result is written by `registerInferredFor`
+-- directly into `funConstraintIfacesRef` (`map (ifaceForInferredId m) ids`); that
+-- table is read by `declaredConstraintSlots`'s `None` arm (when `qualConstraintFor`
+-- misses); `declaredConstraintSlots` feeds `inferDictAtFound`, which calls
+-- `recordCallObligations`, which calls `recordObl (Predicate { iface = s.csIface, … })
+-- 0 PCallSlot …` — an `ImplUniverse` goal, unconditionally, for any slot whose
+-- `csIface.irName != ""`. So the SAME value this fallback mints reaches BOTH a
+-- routing site AND a goal-producing one, through two different readers of
+-- `funConstraintIfacesRef`. Bare BY CONSTRUCTION (this channel stores route words,
+-- §10.3's still-true half) — but that is a FOURTH reason the leg stays, not evidence
+-- the fallback is goal-producer-free. Not independently re-derived whether a program
+-- can actually DRIVE this path to a bare, non-"" `csIface` at a live call site
+-- (`ifaceForConstraintId`/`lookupSchemeIface` are tried first and may already cover
+-- every reachable case) — flag this as unresolved rather than assume either answer.
 --
 -- ⚠️ 🚨 **AND THE LEG STILL MAY NOT BE DELETED — MEASURED, NOT INFERRED FROM THE
 -- CENSUS ABOVE.**  Zero remaining `ifaceRefBare` *goal-producer* call sites does not by
@@ -18907,8 +18968,9 @@ insertUnivImpl univ (iface, tys, reqs) =
 --     stamped with a scope that does not include core.mdk's own declarations at all —
 --     they never get an identity, on EITHER layer.  MEASURED, on this branch, with the
 --     leg *removed* (a throwaway experiment, reverted — not landed):
---     `medaka check stdlib/core.mdk` regresses from a clean exit 0 to **exit 1 with ~30
---     `No impl of <Iface> for <Ty>` false rejects** (`Ord`/`Eq`/`Foldable`/`Mappable`/…,
+--     `medaka check stdlib/core.mdk` regresses from a clean exit 0 to **exit 1 with 32
+--     `No impl of <Iface> for <Ty>` false rejects** (re-derive with `grep -c 'No impl'`
+--     on the check output rather than trust this number; `Ord`/`Eq`/`Foldable`/`Mappable`/…,
 --     the exact cascade shape this leg's worked example predicted). With the leg
 --     restored it is clean again. `compiler/driver/medaka_cli.mdk` and
 --     `main = println 1` stayed clean in BOTH arms of this experiment — the residual is
