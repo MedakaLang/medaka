@@ -1687,5 +1687,106 @@ else
   fail=$((fail+1)); printf 'FAIL 1280/bystander-build (native build failed)\n'
 fi
 
+# 20. #1112 A-3.4 PR2 — THE `IE` PROJECTION IS FILTERED AT THE *READING MODULE'S*
+#     ORDINAL.  This is the one property the flip made live and that nothing in the
+#     tree covered before it, and the reason is structural: through A-3.4 PR1 the
+#     `IE` registry had ZERO readers, so every existing fixture graded the INERT
+#     case.  A fixture built from coverage would therefore have found nothing to
+#     add; this one is built from the spec instead (`compiler/TYPECHECK-TARGET-
+#     ARCHITECTURE.md` §9.2/§9.5, `docs/spec/DICT-SEMANTICS.md` §8 I5).
+#
+#     `checkBodyImpl`'s Module arm now builds its obligation universe as
+#     `ieUniverseAt (declEnvsOrdOf mid envs) envs.deImpls` — a whole-graph table
+#     projected down to the ordinal PREFIX of the module being checked.  Two ways
+#     to get that ordinal wrong, and the two legs below are chosen to catch one
+#     each, so neither can pass for the other's reason:
+#
+#       (a) TOO SMALL (the #1508 shape: every user module arrives at ordinal 0)
+#           — an impl in an imported, topologically EARLIER module goes missing
+#           and a valid program is rejected.  Leg `earlier-visible` fails.
+#       (b) TOO LARGE (projecting the whole graph, i.e. doing A-3.6 early by
+#           accident) — an impl in a topologically LATER module the goal's module
+#           never imports becomes a candidate, and a program today's compiler
+#           rejects is SILENTLY ACCEPTED.  Leg `later-invisible` fails.
+#
+#     The two legs are the SAME three modules with the SAME text; only the entry's
+#     two `import` lines are swapped, which is what moves `amod` across `midmod` in
+#     the loader's dependency-first order.  Holding everything else constant is the
+#     point — `midmod` imports only `zsizer` in both arms and never imports `amod`
+#     in either, so an import-SCOPE explanation is excluded and the deciding
+#     variable is the ordinal.  (Same construction as #1112's A/A2 measurement.)
+#
+# 🚨 READ BEFORE "FIXING" THE `later-invisible` LEG.  It pins a TRANSITIONAL
+#     answer, not a correct one.  `DICT-SEMANTICS.md` §8 I5 says instance candidacy
+#     is GRAPH-GLOBAL — import scoping filters NAMES, never instances — so the
+#     spec-correct verdict for BOTH arms is the same one, and the fact that these
+#     two arms disagree at all is a live S1 filed as issue 1564 (§11's I5 row is
+#     graded 🔴 PARTIAL for exactly this).  This gate does not endorse that; it
+#     pins that A-3.4 PR2 did not MOVE it.  MEASURED both arms on the base binary
+#     (`main` @ 7c562b14) and on the flipped one: identical verdicts, identical
+#     diagnostics.  The unit licensed to change this leg is **A-3.6** (issue 1558),
+#     the candidacy flip, which deletes `declEnvVisibleAt`'s body — and per #1482's
+#     measurement it may only do so once obligation goals stop keying by bare
+#     spelling, or the accept arm generalizes into #1438's silent accept.  If you
+#     are here because this leg went red, the question is not "what wording do I
+#     update" but "am I A-3.6, and did I bring its fixtures".
+cat > "$TMP/zsizer.mdk" <<'EOF'
+export interface Sizer x where
+  size : x -> Int
+EOF
+cat > "$TMP/midmod.mdk" <<'EOF'
+import zsizer.{Sizer, size}
+
+export goalVal : Int
+goalVal = size 5
+EOF
+cat > "$TMP/amod.mdk" <<'EOF'
+import zsizer.{Sizer, size}
+
+impl Sizer Int where
+  size n = n
+EOF
+# (a) `amod` first ⇒ order zsizer, amod, midmod, main ⇒ the impl's ordinal is
+#     BELOW midmod's ⇒ visible ⇒ accept, and `run` yields the impl's own answer.
+cat > "$TMP/ord_earlier.mdk" <<'EOF'
+import amod
+import midmod.{goalVal}
+
+main = println goalVal
+EOF
+# (b) `midmod` first ⇒ order zsizer, midmod, amod, main ⇒ the impl's ordinal is
+#     ABOVE midmod's ⇒ filtered out ⇒ reject, located in midmod.
+cat > "$TMP/ord_later.mdk" <<'EOF'
+import midmod.{goalVal}
+import amod
+
+main = println goalVal
+EOF
+ord_e_out="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check "$TMP/ord_earlier.mdk" 2>&1)"
+ord_e_code=$?
+if [ "$ord_e_code" -eq 0 ]; then
+  pass=$((pass+1)); printf 'ok   1112-A34/earlier-visible (impl at a lower ordinal reaches the goal)\n'
+else
+  fail=$((fail+1)); printf 'FAIL 1112-A34/earlier-visible (ordinal too small — valid program rejected, exit %d: [%s])\n' "$ord_e_code" "$ord_e_out"
+fi
+ord_e_run="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" run "$TMP/ord_earlier.mdk" 2>&1)"
+ord_e_run_code=$?
+if [ "$ord_e_run_code" -eq 0 ] && [ "$ord_e_run" = "5" ]; then
+  pass=$((pass+1)); printf 'ok   1112-A34/earlier-visible-run (5)\n'
+else
+  fail=$((fail+1)); printf 'FAIL 1112-A34/earlier-visible-run (exit %d, got [%s], want 5)\n' "$ord_e_run_code" "$ord_e_run"
+fi
+ord_l_out="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check "$TMP/ord_later.mdk" 2>&1)"
+ord_l_code=$?
+case "$ord_l_out" in
+  *midmod.mdk:*:*"No impl of Sizer for Int"*)
+    if [ "$ord_l_code" -eq 1 ]; then
+      pass=$((pass+1)); printf 'ok   1112-A34/later-invisible (ordinal filter still ON; see the issue-1564 note above)\n'
+    else
+      fail=$((fail+1)); printf 'FAIL 1112-A34/later-invisible (right diagnostic, wrong exit %d)\n' "$ord_l_code"
+    fi ;;
+  *) fail=$((fail+1)); printf 'FAIL 1112-A34/later-invisible (ordinal too large — a topologically LATER impl became a candidate, exit %d: [%s])\n' "$ord_l_code" "$ord_l_out" ;;
+esac
+
 printf '\n%d ok, %d failing\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
