@@ -45,7 +45,7 @@ RUNJS="$ROOT/test/wasm/run.js"
 CC="${CC:-clang}"
 
 # ── Per-fixture worker (parallel fan-out target) ───────────────────────────────
-# Re-invoked as `sh "$0" --one <name> <entry> <root>` under an xargs -P pool.
+# Re-invoked as `bash "$0" --one <name> <entry> <root>` under an xargs -P pool.
 # Writes an outcome code to $RESULTDIR/<name>.status: 0=ok, 1=FAIL (real
 # divergence / build / parse / TMC-assert), 2=GAP (known MVP emit/validate gap —
 # NOT a failure). Shared state via env; per-fixture .err (no shared scratch).

@@ -28,7 +28,7 @@ RUNJS="$ROOT/test/wasm/run.js"
 CC="${CC:-clang}"
 
 # ── Per-fixture worker (parallel fan-out target) ───────────────────────────────
-# Re-invoked as `sh "$0" --one <fixture>` under an xargs -P pool. All shared state
+# Re-invoked as `bash "$0" --one <fixture>` under an xargs -P pool. All shared state
 # (MEDAKA/EMITBIN/NODE-abs-path/RUNJS/WORKDIR/RESULTDIR/MEDAKA_EMITTER) arrives via
 # env, so the worker skips the one-time tool + Node-version setup below.
 # Per-fixture .err files (no shared scratch) so N run concurrently.

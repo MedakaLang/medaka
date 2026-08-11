@@ -22,7 +22,7 @@
 # origin remote of the current git repo). Tests may override the gh binary via
 # $GH (default "gh") so they can substitute a mock without touching a repo.
 #
-# The four operations are intentionally independent: a body edit must not
+# The five operations are intentionally independent: a body edit must not
 # require running the whole lifecycle.
 
 set -u
