@@ -1,6 +1,7 @@
 # Emitter Architecture - the derived current map
 
-**Status:** CURRENT - source-derived LLVM/WasmGC emitter map at `f4fbcd0a`.
+**Status:** CURRENT - source-derived LLVM/WasmGC emitter map through X-W.H1 at
+`bdf58945`.
 This is a description of the current
 implementation, not the target design. The target is
 [`EMITTER-TARGET-ARCHITECTURE.md`](EMITTER-TARGET-ARCHITECTURE.md), and the
@@ -145,11 +146,10 @@ and gap mode remain for X-W.H2. This does not complete #1407.
 
 ### 3.3 Per-program derived indexes
 
-`llvm_emit.emitProgram` also builds indexes such as `knownFnMapRef`,
-`lazyGlobalMapRef`, `ctorMapRef`, `sigMapRef`, `defArityMapRef`,
-`ctorTypeMapRef`, `recByNameRef`, `recByLabelRef`, and implementation-group
-indexes. Wasm builds a parallel `Prog` value plus module-level indexes and
-feature flags.
+`llvm_emit.emitProgram` also builds indexes in its per-emission `Emit` context,
+including `knownFnMap`, `lazyGlobalMap`, `ctorMap`, `sigMap`, `defArityMap`,
+`ctorTypeMap`, `recByName`, `recByLabel`, and implementation-group indexes.
+Wasm builds a parallel `Prog` value plus module-level indexes and feature flags.
 
 These indexes improve asymptotic behavior when they are caches of authoritative
 data. They become semantic authorities when the underlying fact was absent from
@@ -160,7 +160,7 @@ Core. That distinction is not represented in their types.
 | Judgment | LLVM implementation | Wasm implementation | Shared/upstream fragment |
 |---|---|---|---|
 | Scalar/runtime type | `LTy`, `inferSigs`, `typeOf`, `paramUseTy`, inline `emitExpr` recovery | `WTy`, `cexprIsFloat`, `refMainKind`, Float registries | partial `CBinPrim` stamp |
-| Method/source arity | `methodArityOf`, definition/call helpers | `methodArityOf`, closure eta/application helpers | arrow-spine table from `core_ir_lower` |
+| Method/source arity | `methodArityOf`, definition/call helpers | `methodArityOfW`, closure eta/application helpers | arrow-spine table from `core_ir_lower` |
 | Exact/PAP/over-application | `emitApp`/`emitOverApp` plus `emitPapClosure`/`emitMethodPap`/`emitCtorPap` families | closure arity plus `$mdk_apply` branches | none |
 | Record field slot | bare-name record and label indexes | `recFieldsRef` and record-name lookup | record-name strings on some nodes |
 | Dispatch arm/default | `implEntryRouteWords`, dispatch/default chain synthesis | `implEntryRouteKeyW`, dispatch chains, incomplete default synthesis | `Route` plus incomplete `CImplEntry` set |
