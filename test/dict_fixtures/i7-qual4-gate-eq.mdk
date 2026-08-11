@@ -1,0 +1,15 @@
+-- DICT-SEMANTICS §8 I7 qualification 4 (issue 1539) -- THE GATE, class `Eq`.
+-- Sibling of i7-qual4-gate-num.mdk; read that file's header for the derivation, the
+-- shape rules, and the honest limit on what these four fixtures can discriminate.
+--
+-- HAND-DERIVED: I7's table binds `==` / `!=` to `Eq τ`. The prelude is present, so the
+-- `Eq Blob` predicate IS synthesized; `Blob` derives nothing and has no `impl Eq`, so
+-- the program is REJECTED, `T-NO-IMPL`. `Blob` is deliberately NOT `deriving Eq` -- an
+-- impl would discharge the obligation and the row would pass whether or not the gate
+-- fired, which is the shape that makes a fixture unable to fail.
+data Blob = Blob Int
+
+same : Blob -> Blob -> Bool
+same a b = a == b
+
+main = println 1

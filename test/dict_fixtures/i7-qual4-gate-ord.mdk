@@ -1,0 +1,15 @@
+-- DICT-SEMANTICS §8 I7 qualification 4 (issue 1539) -- THE GATE, class `Ord`.
+-- Sibling of i7-qual4-gate-num.mdk; read that file's header for the derivation, the
+-- shape rules, and the honest limit on what these four fixtures can discriminate.
+--
+-- HAND-DERIVED: I7's table binds `<` `>` `<=` `>=` to `Ord τ`. The prelude is present,
+-- so the `Ord Blob` predicate IS synthesized; `Blob` has no `impl Ord`, so the program
+-- is REJECTED, `T-NO-IMPL`. ⚠️ `interface Ord a requires Eq a`, so a reader should
+-- expect the superclass to be demanded too; the FIRST diagnostic is the `Ord` one,
+-- which is what section 6's span row pins.
+data Blob = Blob Int
+
+less : Blob -> Blob -> Bool
+less a b = a < b
+
+main = println 1

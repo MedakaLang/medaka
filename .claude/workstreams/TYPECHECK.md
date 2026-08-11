@@ -159,7 +159,7 @@ documents, in gate-verified steps.
 | Module fold loops ×4 | ✅ LANDED (#151): unified into one `foldModules` (worker + isLast-aware collector) — the four drivers are now thin worker/collector pairs (`cmCheckWorker`/`cmDiagsWorker`/`cmEntryWorker`+`cmEntryCollect`/`elabWorker`); the three `check*` preambles share `checkModulesPreamble` |
 | Impl resolution ×6 | `resolveSite`, `resolveOpSite` (the #145-unified binop/unop resolver), `routeOf` (already unifies what were three separate routeOfMono/routeOfMonoTop/routeOfMonoEncl arms), `findImplEntry`, arg-position mirrors (#156) |
 | Structural matchers ×4 | `cohOverlap`'s unifier, `cohSubsumes`, `tySubsumesV`, `matchTyMono` (#156 stage 1) |
-| Operator seams ×4 | LANDED #146 → collapsed to `recordIfaceObligation`/`ifaceRegistered` (the 12 clones `record{Num,Eq,Ord,Semigroup}Obligation` + `*IfaceRegistered` guards + `*Entry` predicates are retired). LANDED #147 → `methodIfaceParamsRef` is now an `OrdMap` keyed by method name + a cached `registeredIfacesRef` iface-name set; `ifaceRegistered` is `omHasKey` (the old ifaceEntryMatches full-scan predicate is retired) |
+| Operator seams ×4 | LANDED #146 → collapsed to `recordIfaceObligation`/`ifaceRegistered` (the 12 clones `record{Num,Eq,Ord,Semigroup}Obligation` + `*IfaceRegistered` guards + `*Entry` predicates are retired). LANDED #147 → `methodIfaceParamsRef` is now an `OrdMap` keyed by method name + a cached `registeredIfacesRef` iface-name set; `ifaceRegistered` is `omHasKey` (the old ifaceEntryMatches full-scan predicate is retired). LANDED #1539 → the seam's gate is `builtinClassPresent`, a projection of the prelude-seeded `BuiltinClasses` record (DICT §8 I7 qual. 4), so no user-writable table decides whether an operator's obligation is synthesized; `ifaceRegistered` had no callers left and is DELETED, leaving `registeredIfacesRef` write-only pending its own retirement atom (#1569) |
 | Binop/unop twins ×4 pairs | ✅ LANDED (#145): collapsed into one `isBinop`-flagged set — `resolveOpSites`/`resolveOpSite`/`opDictVarOf`/`stampOpRouteVal` (a later extraction pulled the pure Route-returning core out of the original stampOpRoute into stampOpRouteVal) |
 
 ---
@@ -232,7 +232,10 @@ same golden files. And never `git add -A` (see `.claude/workstreams/HARNESS.md`)
 Two arguments in this arc were built on *predicted silence*, and the prediction was backwards.
 
 - A **GATE** table is consulted for **permission**. Its value is often `Unit`; a missed lookup means
-  *the check vanishes* — genuinely silent. `universeRegisteredIfacesRef` / `ifaceRegistered` is one.
+  *the check vanishes* — genuinely silent. `universeRegisteredIfacesRef` / `ifaceRegistered` was one
+  (#1539 deleted that reader; the gate it fed is now `builtinClassPresent`, and the same GATE-shaped
+  hazard transfers to it verbatim — a presence bit that answers False switches every operator's
+  obligation OFF and moves no golden).
 - A **PAYLOAD** table is consulted for **content**. A missed lookup means *"no impl exists"* — which
   is a **reject**, i.e. deafening. `oblIfaceKey` / `ImplUniverse` is one.
 

@@ -1,0 +1,13 @@
+-- DICT-SEMANTICS §8 I7 qualification 4 (issue 1539) -- THE GATE, class `Semigroup`.
+-- Sibling of i7-qual4-gate-num.mdk; read that file's header for the derivation, the
+-- shape rules, and the honest limit on what these four fixtures can discriminate.
+--
+-- HAND-DERIVED: I7's table binds `++` to `Semigroup τ`. The prelude is present, so the
+-- `Semigroup Blob` predicate IS synthesized; `Blob` has no `impl Semigroup`, so the
+-- program is REJECTED, `T-NO-IMPL`.
+data Blob = Blob Int
+
+cat : Blob -> Blob -> Blob
+cat a b = a ++ b
+
+main = println 1

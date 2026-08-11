@@ -1,0 +1,38 @@
+-- DICT-SEMANTICS §8 I7 qualification 4 (issue 1539) -- THE GATE, class `Num`.
+--
+-- EXPECTED VALUE HAND-DERIVED FROM THE SPEC, NOT CAPTURED. I7: "the class its
+-- synthesized predicate names is a fixed constant of the language, denoting the
+-- PRELUDE's declaration of that class". Qualification 4: absent the prelude the
+-- predicate is "not merely undischarged -- not synthesized", and the gate that decides
+-- that MUST be "is the PRELUDE's class present". This program HAS the prelude, so the
+-- `Num Blob` predicate IS synthesized; `Blob` has no `impl Num`, so §3 cannot discharge
+-- it and the program is REJECTED, `T-NO-IMPL`. That derivation fixes the verdict before
+-- any binary was run.
+--
+-- WHY THIS FIXTURE CAN FAIL, which is the only reason to add it (#1554): the gate is
+-- the ONLY thing standing between this file and exit 0. Switch `builtinClassPresent
+-- BNum` off and no obligation is recorded, `check` ACCEPTS, and the row flips
+-- REJECT->ACCEPT. Measured, not assumed: a stubbed `builtinClassPresent _ = False`
+-- build accepts this file at exit 0.
+--
+-- ⚠️ SHAPE NOTES, each of which is load-bearing and was arrived at by a failed draft:
+--   * the operator's operands are a SIGNATURE-typed parameter, never a numeric literal.
+--     `Blob 1 + Blob 2` instead reports `Type mismatch: Int literal vs Blob` from the
+--     numlit-taint reframe -- a diagnostic the unify raises whether or not the gate
+--     fired, so that shape cannot discriminate the gate at all.
+--   * `main` does not `println` a `Blob`, which would add an unrelated `No impl of
+--     Display for Blob` and let the row pass on the wrong diagnostic.
+--   * `main = println 1` keeps a numeric literal in the file on purpose: it is the
+--     `inferNumLit` gate's own path, and it must stay ACCEPTED.
+--
+-- ⚠️ These four sibling fixtures (num/eq/ord/semigroup) discriminate a PER-CLASS gate
+-- that has gone off. They do NOT discriminate a swapped presence FIELD (bcOrdPresent
+-- read where bcEqPresent was meant): in any prelude-loaded program all four bits are
+-- True together, so a swap is unobservable here by construction. Nothing in this tree
+-- can see that swap while the prelude is the only source of the four classes.
+data Blob = Blob Int
+
+twice : Blob -> Blob
+twice x = x + x
+
+main = println 1
