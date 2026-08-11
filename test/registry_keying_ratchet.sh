@@ -663,4 +663,74 @@ if [ -n "$ie_default_hits" ]; then
 fi
 echo "  ok: IE block is $ie_n line(s), no non-IE namespace mint, no default-arm reach"
 
-echo "PASS: #1111 registry keying ratchet (CrossRun/DriverState/DeclEnvs fields, writer sites, three-driver frame parity, #1112 A-3.4 IE namespace)."
+# ═══════════════════════════════════════════════════════════════════════════
+# CHECK 5 — #1519 A-3.3: the `CE` construction ratchet
+# ═══════════════════════════════════════════════════════════════════════════
+# THE PROPOSITION, two-part, mirroring check 4's shape for the constraint this
+# unit actually has (CE's defining rule is not a shared key namespace with a
+# sibling table -- it is SYNTACTIC CONSTRUCTION plus a NAMED EXCLUSION):
+#   (a) CE is built SYNTACTICALLY -- no call into the elaboration machinery
+#       (fromAstTypeE / registerRecordInfoKeyed / freshVars / freshEffvar) may
+#       appear inside the block. Those mint fresh tyvar ids from the global
+#       counter and mutate perRun refs from the driver PREAMBLE, before the
+#       per-module walk that owns that counter -- see the Step 0 derivation
+#       in the block's own header.
+#   (b) CE never reaches `universeMethodDispatchIdxRef` or
+#       `universeIfaceMethodsRef` -- lifted bare and unchanged, deliberately
+#       excluded (#1354's method-namespace unit, OPEN, owns both; keying
+#       either here would build a second, differently-shaped answer to a
+#       question #1353's S1-NS ruling already decided at the read).
+#
+# 🔬 POSITIVE CONTROLS -- mutate compiler/types/typecheck.mdk, rerun, restore:
+#   K  add a call to `fromAstTypeE` INSIDE the CE block               -> FAIL
+#   L  the same text in a COMMENT inside the block                    -> pass
+#   M  the same text OUTSIDE the block                                -> pass
+#   N  reference `universeIfaceMethodsRef` INSIDE the CE block        -> FAIL
+#   O  delete/rename the CE-BLOCK-BEGIN banner so the block extracts
+#      EMPTY                                                          -> FAIL
+echo "checking #1519 A-3.3 CE construction ratchet ..."
+
+ce_block=$(sed -n '/CE-BLOCK-BEGIN/,/CE-BLOCK-END/p' "$TC" | strip_comments)
+ce_n=$(printf '%s\n' "$ce_block" | grep -c . || true)
+if [ "$ce_n" -eq 0 ]; then
+  echo "FAIL: check 5 extracted ZERO lines for the CE block. Either the"
+  echo "  'CE-BLOCK-BEGIN' / 'CE-BLOCK-END' banner comments in"
+  echo "  compiler/types/typecheck.mdk were moved, reworded or deleted, or this"
+  echo "  check just validated nothing. A zero-length CE block is a BROKEN"
+  echo "  DELIMITER, never an empty answer. Restore the banners (or update this"
+  echo "  range) -- do NOT treat a zero extraction as a pass."
+  exit 1
+fi
+
+ce_elab_hits=$(printf '%s\n' "$ce_block" \
+  | grep -oE '\b(fromAstTypeE|registerRecordInfoKeyed|freshVars|freshEffvar)\b' \
+  | LC_ALL=C sort -u || true)
+ce_excluded_hits=$(printf '%s\n' "$ce_block" \
+  | grep -oE '\b(universeMethodDispatchIdxRef|universeIfaceMethodsRef)\b' \
+  | LC_ALL=C sort -u || true)
+
+if [ -n "$ce_elab_hits" ]; then
+  echo "FAIL: the CE block calls elaboration machinery:"
+  printf '%s\n' "$ce_elab_hits" | sed 's/^/    /'
+  echo "  CE is built SYNTACTICALLY (raw Ty/Super/Kind, no Scheme/Mono/RecordInfo)"
+  echo "  -- the Step 0 ruling this unit's header derives and re-confirms. These"
+  echo "  calls mint fresh tyvar ids and mutate perRun refs from the driver"
+  echo "  PREAMBLE, before the per-module walk that owns that state."
+  echo "  REMEDY: elaborate on demand at the READ site, not at construction --"
+  echo "  or this is an owner-level re-adjudication of the Step 0 ruling, not a"
+  echo "  widening of this check."
+  exit 1
+fi
+if [ -n "$ce_excluded_hits" ]; then
+  echo "FAIL: the CE block reaches a table #1519 excludes:"
+  printf '%s\n' "$ce_excluded_hits" | sed 's/^/    /'
+  echo "  universeMethodDispatchIdxRef and universeIfaceMethodsRef are lifted"
+  echo "  bare and unchanged, never keyed here -- both belong to #1354's"
+  echo "  method-namespace unit (OPEN)."
+  echo "  REMEDY: see the message above -- re-adjudicate the exclusion with"
+  echo "  #1354's owner or move the code there, not a widening of this check."
+  exit 1
+fi
+echo "  ok: CE block is $ce_n line(s), no elaboration-machinery call, no excluded-table reach"
+
+echo "PASS: #1111 registry keying ratchet (CrossRun/DriverState/DeclEnvs fields, writer sites, three-driver frame parity, #1112 A-3.4 IE namespace, #1519 A-3.3 CE construction)."

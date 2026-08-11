@@ -176,16 +176,21 @@ callOblsWindow : Int -> List (IfaceRef, List Mono, Option Loc)
 candidateBucket : Map String (List KeyEntry) -> HeadKey -> List KeyEntry
 candsOneIface : List KeyEntry -> Option String
 ceAddRows : List CeRow -> ClassEnv -> ClassEnv
+ceFunctorEnv : ClassEnv
+ceFunctorIface : Decl
+ceFunctorKey : RegKey
+ceFunctorMethod : IfaceMethod
 ceGradedEnv : ClassEnv
 ceGradedIface : Decl
+ceGradedKey : RegKey
 ceGradedMethod : IfaceMethod
-ceGradedParamKindTags : ClassEnv -> List (List String)
 ceInsertRow : CeRow -> ClassEnv -> ClassEnv
 ceLookupAt : RegKey -> Int -> ClassEnv -> Option CeRow
 ceMethodBar : IfaceMethod
 ceMethodFoo : IfaceMethod
 ceMethodName : (String, Ty, List (String, List Kind)) -> String
 ceMethodOf : List (String, List Kind) -> IfaceMethod -> (String, Ty, List (String, List Kind))
+ceMethodTyStr : (String, Ty, List (String, List Kind)) -> String
 ceProbeEnv : ClassEnv
 ceProbeKey : String -> RegKey
 ceRowIface : CeRow -> IfaceRef
@@ -193,16 +198,23 @@ ceRowIfaceNameAt : String -> Int -> ClassEnv -> String
 ceRowKey : CeRow -> RegKey
 ceRowMethodNames : CeRow -> List String
 ceRowMethodNamesAt : String -> Int -> ClassEnv -> List String
+ceRowMethodTysAt : String -> Int -> ClassEnv -> List String
 ceRowMethods : CeRow -> List (String, Ty, List (String, List Kind))
 ceRowOrd : CeRow -> Int
+ceRowOriginTag : CeRow -> String
+ceRowParamKindNamesAt : RegKey -> Int -> ClassEnv -> List (List String)
 ceRowParamKinds : CeRow -> List (List Kind)
 ceRowSuperHeadsAt : String -> Int -> ClassEnv -> List String
+ceRowSuperOriginAt : String -> Int -> ClassEnv -> String
+ceRowSuperParamsAt : String -> Int -> ClassEnv -> List String
 ceRowSupers : CeRow -> List Super
 ceRowTyparams : CeRow -> List String
 ceRowTyparamsAt : String -> Int -> ClassEnv -> List String
 ceSameDeclIn : String -> List IfaceMethod -> Decl
 ceSuperEq : Super
 ceSuperHead : Super -> String
+ceSuperOrigin : Super -> String
+ceSuperParams : Super -> List String
 censusSuperClose : List Decl -> List (String, Int) -> List (String, Int)
 censusSuperCloseFix : List Decl -> List (String, Int) -> List (String, Int) -> List (String, Int)
 censusSuperCloseVec : List Decl -> List VecObl -> List VecObl
@@ -998,7 +1010,6 @@ keyForSite : Map String (List KeyEntry) -> String -> List Mono -> Option String
 keyForSiteByIface : Map String (List KeyEntry) -> String -> List Mono -> Option String
 kindArgMono : List (String, Ref Effvar) -> List (String, Mono) -> Kind -> Ty -> Mono
 kindName : Kind -> String
-kindTag : Kind -> String
 kindsEq : List Kind -> List Kind -> Bool
 kpLcp : String -> String -> KP
 krowArgVarNames : List Kind -> List Ty -> List String
