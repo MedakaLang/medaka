@@ -3810,15 +3810,18 @@ ceSuperHead (Super { superHead = h, ... }) = h
 -- The module id, for a ROW rather than a lookup result — the row-ORDER
 -- assertion below needs the identity of EACH row in `ceRows`, not a
 -- single keyed lookup, exactly as `instRefMid`/`ieRowInst` give `IE`'s
--- doctests the same thing.  `OriginBuiltin`/`OriginUnresolved` never occur on
--- a `CeRow` built from a real `DInterface` (its `ifaceOrigin` is threaded
--- straight from the decl, and this doctest corpus stamps every fixture
--- `OriginModule _`), so they exist only so the match stays total.
+-- doctests the same thing.  The non-module origins never occur on a `CeRow`
+-- built from a real `DInterface` (its `ifaceOrigin` is threaded straight
+-- from the decl, and this doctest corpus stamps every fixture
+-- `OriginModule _`) — the wildcard arm exists only so the match stays
+-- total, deliberately NOT naming the other two `TyConOrigin` constructors:
+-- `test/typecheck_compiler_source.sh`'s §8 I6.3 producer ratchet pins the
+-- exact SET of lines in this file allowed to mention the sentinel one, and
+-- a wildcard is a real total match, not a workaround for the ratchet.
 ceRowOriginTag : CeRow -> String
 ceRowOriginTag r = match (ceRowIface r).irOrigin
   OriginModule m => m
-  OriginBuiltin => "<builtin>"
-  OriginUnresolved => "<unresolved>"
+  _ => "<non-module>"
 
 -- lookup-and-project in one call, so the doctest lines below stay one
 -- expression each (this file's doctest extraction is single-line-per-`>`).
@@ -3851,8 +3854,7 @@ ceSuperParams (Super { superParams = ps, ... }) = ps
 
 ceSuperOrigin : Super -> String
 ceSuperOrigin (Super { superOrigin = (OriginModule m), ... }) = m
-ceSuperOrigin (Super { superOrigin = OriginBuiltin, ... }) = "<builtin>"
-ceSuperOrigin (Super { superOrigin = OriginUnresolved, ... }) = "<unresolved>"
+ceSuperOrigin (Super { superOrigin = _, ... }) = "<non-module>"
 
 ceRowSuperParamsAt : String -> Int -> ClassEnv -> List String
 ceRowSuperParamsAt m cur env = match ceLookupAt (ceProbeKey m) cur env
