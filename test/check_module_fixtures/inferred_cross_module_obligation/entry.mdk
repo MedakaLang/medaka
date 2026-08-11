@@ -1,0 +1,26 @@
+-- #1508 REGRESSION PIN — an INFERRED cross-module obligation must survive into the
+-- importer's own inferred scheme on the `checkModules` driver.
+--
+-- 🚨 WHY THIS FIXTURE EXISTS, AND WHY THE OTHER EIGHT COULD NOT CATCH IT.  Every
+-- other fixture in this corpus gives its entry bindings an explicit signature or an
+-- interface-method type, so the entry's context is DECLARED and reaches the importer
+-- through the module seed.  None of them exercises an obligation that is INFERRED on
+-- the exporting side and must be carried across the boundary by
+-- `crossModuleSchemeOblsQualRef` — the table `cmCheckWorker` was keying under `""`.
+-- The corpus was blind to this shape by construction, which is exactly how 9/9 stayed
+-- green through a change that alters the answer this driver gives.
+--
+-- MEASURED, both arms, same `MEDAKA_ROOT` and same fixture, only the probe differing:
+--   before #1508:  g : a -> String            ← the `Display a =>` obligation is DROPPED
+--   after  #1508:  g : Display a => a -> String
+-- and the independent oracle `medaka check` (which routes through `analyzeProject`,
+-- an untouched driver that always carried the real module id) agrees with the second.
+--
+-- `g` is deliberately UNSIGNATURED: its whole job is to make the checker infer the
+-- context from `f`'s imported scheme.  Do not add a signature to it — that would
+-- restore the blindness this fixture exists to remove.
+import p.{f}
+
+g v = f v
+
+main = println (g 3)

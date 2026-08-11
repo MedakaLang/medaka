@@ -1,0 +1,2 @@
+g : Display a => a -> String
+main : Unit
