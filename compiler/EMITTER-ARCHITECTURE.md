@@ -1,6 +1,6 @@
 # Emitter Architecture - the derived current map
 
-**Status:** CURRENT - source-derived LLVM/WasmGC emitter map through X-W.H1 at `bdf58945`.
+**Status:** CURRENT - source-derived LLVM/WasmGC emitter map through X-W.H2b.1 at `2cbd85c8`.
 This is a description of the current
 implementation, not the target design. The target is
 [`EMITTER-TARGET-ARCHITECTURE.md`](EMITTER-TARGET-ARCHITECTURE.md), and the

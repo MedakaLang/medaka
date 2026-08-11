@@ -283,12 +283,16 @@ done
     echo "FAIL wasm typed gap lifecycle: census events lost binding attribution or order"
     exit 1
   }
-if "$EMITBIN" --strict-gap >"$INPUT_WORK/strict-gap.out" 2>"$INPUT_WORK/strict-gap.err"; then
-  echo "FAIL wasm typed gap lifecycle: strict gap unexpectedly recorded"
+if "$EMITBIN" --reemit-gap-strict >"$INPUT_WORK/strict-gap.out" 2>"$INPUT_WORK/strict-gap.err"; then
+  echo "FAIL wasm typed gap lifecycle: same-process strict gap unexpectedly recorded"
   exit 1
 fi
+grep -Fx "GAP_STRICT_AFTER_RECORD_CENSUS" "$INPUT_WORK/strict-gap.out" >/dev/null || {
+  echo "FAIL wasm typed gap lifecycle: record/census setup did not precede strict gap"
+  exit 1
+}
 grep -F "unbound variable 'missingGapB'" "$INPUT_WORK/strict-gap.err" >/dev/null || {
-  echo "FAIL wasm typed gap lifecycle: strict gap lost its loud diagnostic"
+  echo "FAIL wasm typed gap lifecycle: same-process strict gap lost its loud diagnostic"
   exit 1
 }
 

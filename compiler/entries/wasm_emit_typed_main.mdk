@@ -56,7 +56,7 @@ main = match args ()
     reemitInput runtimePath pPath uPath
   "--reemit-state"::runtimePath::_ => reemitState runtimePath
   "--reemit-gap-state"::_ => reemitGapState ()
-  "--strict-gap"::_ => putStr (emitProgram gapStateInput gapStateProgram)
+  "--reemit-gap-strict"::_ => reemitGapStrict ()
   _ => driveRuntime emit
 
 emit : List Decl -> List Decl -> List Decl -> <IO> Unit
@@ -189,6 +189,16 @@ reemitGapState _ =
   let _ = printEvents "GAP_RECORD_EVENTS" recordEvents
   let _ = printEvents "GAP_CENSUS_EVENTS" censusEvents
   printCapture "GAP_P2" p2
+
+-- The final strict emission is deliberately gap-bearing and last: the expected
+-- panic proves that record/census mode cannot contaminate a later call in this
+-- same process.
+reemitGapStrict : Unit -> <IO> Unit
+reemitGapStrict _ =
+  let _ = emitProgramRecord gapStateInput gapStateProgram
+  let _ = emitProgramGaps gapStateInput gapStateProgram
+  let _ = putStrLn "GAP_STRICT_AFTER_RECORD_CENSUS"
+  putStr (emitProgram gapStateInput gapStateProgram)
 
 printCapture : String -> String -> <IO> Unit
 printCapture name text =
