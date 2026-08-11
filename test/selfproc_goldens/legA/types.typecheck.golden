@@ -152,6 +152,8 @@ bucketOfHead : Option HeadKey -> Map String (List KeyEntry) -> List KeyEntry
 bucketRecvMatch : List (List Ty, List Require) -> Mono -> Bool
 buildAdj : List String -> Map String Unit -> Map String (List (List Pat, Expr)) -> Map String (List String) -> Map String (List String)
 buildAliasGraphEntry : List String -> (TabKey, (List String, Ty)) -> (String, List String)
+buildClassEnv : List DeclEnvModule -> ClassEnv
+buildClassEnvGo : List DeclEnvModule -> ClassEnv -> ClassEnv
 buildDataEnv : List Decl -> DataEnv
 buildDeclEnvs : List Decl -> List (String, List Decl) -> DeclEnvs
 buildDefinerShadows : List Decl -> List Decl -> List String
@@ -173,6 +175,34 @@ callOblMonoIds : (IfaceRef, List Mono, Option Loc) -> List (Int, String)
 callOblsWindow : Int -> List (IfaceRef, List Mono, Option Loc)
 candidateBucket : Map String (List KeyEntry) -> HeadKey -> List KeyEntry
 candsOneIface : List KeyEntry -> Option String
+ceAddRows : List CeRow -> ClassEnv -> ClassEnv
+ceGradedEnv : ClassEnv
+ceGradedIface : Decl
+ceGradedMethod : IfaceMethod
+ceGradedParamKindTags : ClassEnv -> List (List String)
+ceInsertRow : CeRow -> ClassEnv -> ClassEnv
+ceLookupAt : RegKey -> Int -> ClassEnv -> Option CeRow
+ceMethodBar : IfaceMethod
+ceMethodFoo : IfaceMethod
+ceMethodName : (String, Ty, List (String, List Kind)) -> String
+ceMethodOf : List (String, List Kind) -> IfaceMethod -> (String, Ty, List (String, List Kind))
+ceProbeEnv : ClassEnv
+ceProbeKey : String -> RegKey
+ceRowIface : CeRow -> IfaceRef
+ceRowIfaceNameAt : String -> Int -> ClassEnv -> String
+ceRowKey : CeRow -> RegKey
+ceRowMethodNames : CeRow -> List String
+ceRowMethodNamesAt : String -> Int -> ClassEnv -> List String
+ceRowMethods : CeRow -> List (String, Ty, List (String, List Kind))
+ceRowOrd : CeRow -> Int
+ceRowParamKinds : CeRow -> List (List Kind)
+ceRowSuperHeadsAt : String -> Int -> ClassEnv -> List String
+ceRowSupers : CeRow -> List Super
+ceRowTyparams : CeRow -> List String
+ceRowTyparamsAt : String -> Int -> ClassEnv -> List String
+ceSameDeclIn : String -> List IfaceMethod -> Decl
+ceSuperEq : Super
+ceSuperHead : Super -> String
 censusSuperClose : List Decl -> List (String, Int) -> List (String, Int)
 censusSuperCloseFix : List Decl -> List (String, Int) -> List (String, Int) -> List (String, Int)
 censusSuperCloseVec : List Decl -> List VecObl -> List VecObl
@@ -260,6 +290,10 @@ checkUndeterminedObligation : ImplUniverse -> IfaceRef -> Mono -> Option Loc -> 
 checkUndeterminedObligations : ImplUniverse -> IfaceRef -> List Mono -> Option Loc -> Unit
 checkUndeterminedRetEffVars : List Decl -> Unit
 checkUndeterminedRetEffVarsDecl : Decl -> Unit
+classEnvDeclFact : Decl -> List (String, List String, List IfaceMethod, List Super, TyConOrigin)
+classEnvDeclFacts : List Decl -> List (String, List String, List IfaceMethod, List Super, TyConOrigin)
+classEnvFinish : ClassEnv -> ClassEnv
+classEnvRowsOf : Int -> List (String, List String, List IfaceMethod, List Super, TyConOrigin) -> List CeRow
 clauseEagerlyRefsGroup : List String -> FunClause -> Bool
 clauseImplDictUser : Int -> ImplMethod -> List String
 clauseIsNonFunction : FunClause -> Bool
@@ -531,6 +565,7 @@ elaborateOne : List Decl -> List Decl -> (String, List Decl) -> List Decl
 emitCyclicAliasErrors : List String -> Unit
 emitValueShadowGate : String -> Bool
 emptyBuiltinClasses : BuiltinClassOrigins
+emptyClassEnv : ClassEnv
 emptyDataEnv : DataEnv
 emptyDeclEnvs : DeclEnvs
 emptyImplEnv : ImplEnv
@@ -963,6 +998,7 @@ keyForSite : Map String (List KeyEntry) -> String -> List Mono -> Option String
 keyForSiteByIface : Map String (List KeyEntry) -> String -> List Mono -> Option String
 kindArgMono : List (String, Ref Effvar) -> List (String, Mono) -> Kind -> Ty -> Mono
 kindName : Kind -> String
+kindTag : Kind -> String
 kindsEq : List Kind -> List Kind -> Bool
 kpLcp : String -> String -> KP
 krowArgVarNames : List Kind -> List Ty -> List String

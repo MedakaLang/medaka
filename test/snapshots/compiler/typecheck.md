@@ -1,5 +1,5 @@
 # META
-source_lines=26042
+source_lines=26050
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted typecheck stage — port of lib/typecheck.ml's HM core.  SLICE 1:
@@ -3870,6 +3870,14 @@ ceGradedParamKindTags env = match ceLookupAt (regKeyOfTab (ifaceTabKey (OriginMo
 --    slot 0 (f's first argument, `e`) is `KRow`; slot 1 (`a`) is `KType`.
 -- > ceGradedParamKindTags ceGradedEnv
 -- [["R", "T"]]
+
+-- 🚨 THE BLANK LINE ABOVE IS LOAD-BEARING — DO NOT CLOSE THE GAP.  Same trap
+-- A-3.2a's own banner documents: a doctest's expected output runs to the end
+-- of the contiguous comment run, so without this blank line the CE-BLOCK-END
+-- banner is absorbed into the graded-kind doctest's expected value and it
+-- FAILS with `expected: [["R", "T"]] / actual: [["R", "T"]]` plus this banner
+-- spliced in.  MEASURED on this branch while writing this unit — not a
+-- borrowed warning.
 -- ── #1519 A-3.3: CE-BLOCK-END ─────────────────────────────────────────────────
 
 -- #158 PR5 / #176 closure: the ~18 RESIDUAL survivor Refs — governed until now by
