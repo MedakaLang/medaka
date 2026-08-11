@@ -1166,6 +1166,13 @@ jobs:
       - name: No script may prescribe the bare build_oracles.sh
         run: sh test/check_no_banned_oracle_cmd.sh
 
+      # A Bash launcher that re-enters itself through `sh "$0"` changes the
+      # interpreter under its own feet. It may pass the outer setup and then
+      # fail on Bash syntax deep in a worker path, wasting an entire gate turn.
+      # Pure text analysis with fail-capable controls; keep it unguarded.
+      - name: Bash scripts must preserve their interpreter when self-invoking
+        run: sh test/check_recursive_shell_interpreter.sh
+
       # Also unguarded, and for the same reason. docs/README.md is GENERATED from the
       # docs' `**Status:**` banners — the whole point being that a hand-maintained index
       # rots (AGENTS.md's own doc-index table sat mislabelling a doc as "IN PROGRESS"

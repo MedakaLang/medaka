@@ -163,7 +163,7 @@ NODE_ABS="$(command -v "$NODE" 2>/dev/null || echo "$NODE")"
 MEDAKA="$MEDAKA" EMITBIN="$EMITBIN" RUNTIME="$RUNTIME" CORE="$CORE" \
 MEDAKA_EMITTER="${MEDAKA_EMITTER:-$EMITTER}" NODE="$NODE_ABS" RUNJS="$RUNJS" \
 WORKDIR="$WORK" RESULTDIR="$RESULTS" \
-  xargs -P "$JOBS" -n 3 sh "$0" --one < "$WORK/worklist.tsv"
+  xargs -P "$JOBS" -n 3 bash "$0" --one < "$WORK/worklist.tsv"
 
 pass=0; fail=0; gap=0
 for s in "$RESULTS"/*.status; do

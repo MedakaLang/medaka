@@ -48,6 +48,16 @@ if [ "$1" = api ] && printf '%s' "$*" | grep -q 'check-runs'; then
   exit 0
 fi
 
+# --- receipt: workflow metadata and jobs TSV (already post-jq) ---
+if [ "$1" = api ] && printf '%s' "$*" | grep -q 'actions/runs/.*/jobs'; then
+  [ -n "${MOCK_JOBS:-}" ] && printf '%s\n' "$MOCK_JOBS"
+  exit 0
+fi
+if [ "$1" = api ] && printf '%s' "$*" | grep -q 'actions/runs/'; then
+  printf '%s\n' "${MOCK_RUN_META:-deadbeef	pull_request	completed	success}"
+  exit 0
+fi
+
 # --- complete: resolve clone URL for $REPO ---
 if [ "$1" = repo ] && [ "$2" = view ]; then
   printf '%s' "${MOCK_REPO_URL:-}"

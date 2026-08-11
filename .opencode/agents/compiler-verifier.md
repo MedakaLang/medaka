@@ -59,4 +59,6 @@ and `Friction`. Use one table row per check with reason, exact command,
 prerequisite/freshness, duration, exit, actual grade, and decisive evidence; do
 not repeat the same result in prose. Omit empty artifact subsections. For an
 integration commit include full hash, parent, branch, and exact paths. Under
-`Friction`, follow the `medaka-friction-report` skill.
+`Friction`, follow the `medaka-friction-report` skill. Keep ordinary receipts
+under 120 lines; summarize command output to the decisive grade instead of
+replaying logs.

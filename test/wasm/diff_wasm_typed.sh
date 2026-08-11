@@ -89,7 +89,7 @@ fi
 command -v wasm-tools >/dev/null 2>&1 || { echo "wasm-tools not on PATH — skipping W5 gate"; exit 2; }
 command -v "$CC" >/dev/null 2>&1 || { echo "no C compiler ($CC) — skipping W5 gate"; exit 2; }
 [ -x "$MEDAKA" ] || { echo "build the native compiler first: make medaka (missing $MEDAKA)"; exit 2; }
-[ -x "$EMITBIN" ] || { echo "build the wasm typed emitter: sh test/wasm/build_wasm_oracle.sh (missing $EMITBIN)"; exit 2; }
+[ -x "$EMITBIN" ] || { echo "build the wasm typed emitter: sh test/wasm/build_wasm_oracle.sh --typed-only (missing $EMITBIN)"; exit 2; }
 
 # X-W.H1: one process emits one lowered P program with P's complete input, each
 # U-derived field in isolation, then P's input again. This distinguishes explicit
