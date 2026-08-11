@@ -1,28 +1,5 @@
 === ORIGIN AGREEMENT (#1110) ===
 # <slot> <head> <flat~graph> <single~graph> <flat~single>
-alpha Bool AGREE AGREE AGREE
-alpha Crate R-ONLY AGREE R-ONLY
-alpha CrateId R-ONLY AGREE R-ONLY
-alpha Int AGREE AGREE AGREE
-alpha Option AGREE AGREE AGREE
-alpha Ordering AGREE AGREE AGREE
-alpha String AGREE AGREE AGREE
-alpha Tag R-ONLY AGREE R-ONLY
-alpha Weight R-ONLY AGREE R-ONLY
-alpha decl:Crate R-ONLY AGREE R-ONLY
-alpha decl:CrateId R-ONLY AGREE R-ONLY
-alpha decl:Tag R-ONLY AGREE R-ONLY
-alpha decl:Weighable R-ONLY AGREE R-ONLY
-alpha decl:Weight R-ONLY AGREE R-ONLY
-alpha iface:Weighable R-ONLY AGREE R-ONLY
-beta Crate R-ONLY R-ONLY NEITHER
-beta Int AGREE AGREE AGREE
-beta Result AGREE AGREE AGREE
-beta Shipment R-ONLY AGREE R-ONLY
-beta String AGREE AGREE AGREE
-beta Tag R-ONLY R-ONLY NEITHER
-beta decl:Shipment R-ONLY AGREE R-ONLY
-beta iface:Weighable R-ONLY R-ONLY NEITHER
 core Array AGREE AGREE AGREE
 core Bool AGREE AGREE AGREE
 core Char AGREE AGREE AGREE
@@ -87,12 +64,10 @@ core iface:Semigroup AGREE AGREE AGREE
 core iface:Slice AGREE AGREE AGREE
 core iface:Thenable AGREE AGREE AGREE
 core iface:Traversable AGREE AGREE AGREE
-main_graph Crate R-ONLY R-ONLY NEITHER
-main_graph Int AGREE AGREE AGREE
-main_graph Option AGREE AGREE AGREE
-main_graph Shipment R-ONLY R-ONLY NEITHER
-main_graph String AGREE AGREE AGREE
-main_graph Tag R-ONLY R-ONLY NEITHER
+main_nested Leaf R-ONLY R-ONLY NEITHER
+src.leaf Int AGREE AGREE AGREE
+src.leaf Leaf R-ONLY AGREE R-ONLY
+src.leaf decl:Leaf R-ONLY AGREE R-ONLY
 === CONFLICTS ===
 # ARCH E-5 (#1521) PARTIALLY fixed #1223 — the NO-IMPORT case only.
 # compiler/tools/test_cmd.mdk's single-file drivers now compute
@@ -115,58 +90,32 @@ main_graph Tag R-ONLY R-ONLY NEITHER
 === RESIDUAL ===
 # <arm> <slot> <head> — an `OriginUnresolved` head that SURVIVED stamping.
 # NOT necessarily a defect; NOT necessarily empty. Read the section comment.
-flat alpha Crate
-flat alpha CrateId
-flat alpha Tag
-flat alpha Weight
-flat alpha decl:Crate
-flat alpha decl:CrateId
-flat alpha decl:Tag
-flat alpha decl:Weighable
-flat alpha decl:Weight
-flat alpha iface:Weighable
-flat beta Crate
-flat beta Shipment
-flat beta Tag
-flat beta decl:Shipment
-flat beta iface:Weighable
-flat main_graph Crate
-flat main_graph Shipment
-flat main_graph Tag
-single beta Crate
-single beta Tag
-single beta iface:Weighable
-single main_graph Crate
-single main_graph Shipment
-single main_graph Tag
+flat main_nested Leaf
+flat src.leaf Leaf
+flat src.leaf decl:Leaf
+single main_nested Leaf
 === HEAD SPREAD ===
 # <head> <distinct graph-arm origins across ALL slots> <the origins themselves>
 Array 1 builtin
 Bool 1 builtin
 Char 1 builtin
-Crate 1 mod:alpha
-CrateId 1 mod:alpha
 Float 1 builtin
 Int 1 builtin
+Leaf 1 mod:src.leaf
 List 1 builtin
 Option 1 mod:core
 Ordering 1 mod:core
 RField 1 mod:core
 Rep 1 mod:core
 Result 1 mod:core
-Shipment 1 mod:beta
 String 1 builtin
-Tag 1 mod:alpha
 Unit 1 builtin
-Weight 1 mod:alpha
 __tuple2__ 1 builtin
 decl:Alternative 1 mod:core
 decl:Applicative 1 mod:core
 decl:Arbitrary 1 mod:core
 decl:Bimappable 1 mod:core
 decl:Bounded 1 mod:core
-decl:Crate 1 mod:alpha
-decl:CrateId 1 mod:alpha
 decl:Debug 1 mod:core
 decl:Display 1 mod:core
 decl:Eq 1 mod:core
@@ -177,6 +126,7 @@ decl:Generic 1 mod:core
 decl:Hashable 1 mod:core
 decl:Index 1 mod:core
 decl:IndexMut 1 mod:core
+decl:Leaf 1 mod:src.leaf
 decl:Mappable 1 mod:core
 decl:Monoid 1 mod:core
 decl:Num 1 mod:core
@@ -187,13 +137,9 @@ decl:RField 1 mod:core
 decl:Rep 1 mod:core
 decl:Result 1 mod:core
 decl:Semigroup 1 mod:core
-decl:Shipment 1 mod:beta
 decl:Slice 1 mod:core
-decl:Tag 1 mod:alpha
 decl:Thenable 1 mod:core
 decl:Traversable 1 mod:core
-decl:Weighable 1 mod:alpha
-decl:Weight 1 mod:alpha
 iface:Alternative 1 mod:core
 iface:Applicative 1 mod:core
 iface:Arbitrary 1 mod:core
@@ -216,17 +162,16 @@ iface:Semigroup 1 mod:core
 iface:Slice 1 mod:core
 iface:Thenable 1 mod:core
 iface:Traversable 1 mod:core
-iface:Weighable 1 mod:alpha
 === SUMMARY ===
-modules 3
-graph-modules 3
-flat-segments 6
-decl-heads 34
+modules 2
+graph-modules 2
+flat-segments 4
+decl-heads 29
 iface-occs-constraintOrigin 43
 iface-occs-superOrigin 10
 iface-occs-requireOrigin 93
-iface-occs-implOrigin 119
-heads 93
-claims 279
-residual 24
+iface-occs-implOrigin 117
+heads 68
+claims 204
+residual 4
 conflicts 0

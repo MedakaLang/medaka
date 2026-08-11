@@ -1,0 +1,9 @@
+-- #1223/#1521 (ARCH E-5) NESTED-LAYOUT corpus — the DEFINING module, nested
+-- under `src/`, below the fixture's own `medaka.toml`.  See main_nested.mdk's
+-- header comment for why this file's DIRECTORY, not just its declarations, is
+-- the point of this fixture.
+
+public export data Leaf = Leaf Int
+
+export leafValue : Leaf -> Int
+leafValue (Leaf n) = n

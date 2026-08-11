@@ -1,0 +1,4 @@
+public export data Widget = Widget Int
+
+export widgetValue : Widget -> Int
+widgetValue (Widget n) = n

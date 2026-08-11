@@ -1,5 +1,5 @@
 # META
-source_lines=1000
+source_lines=1032
 stages=DESUGAR,MARK
 # SOURCE
 -- Port of lib/loader.ml: parse a root .mdk file's transitive imports and return
@@ -696,6 +696,38 @@ canonicalModId deps roots m = match findModuleFile deps roots m
             let c = moduleIdOfPath [cr] cPath
             if canonRoundTrips deps roots c cPath then c else m
 
+-- Exported for the test driver (ARCH E-5, #1521/#1223) and its origin-agreement
+-- probe: the id THIS FILE would receive if some OTHER module in the project
+-- reached it through an unqualified import — `canonicalModId`'s non-dep branch
+-- (`canonRootFor`: the LAST containing root, not the first; round-trip guarded),
+-- generalized from an import STRING to a raw file PATH, since a single-file test
+-- target has no import spelling to canonicalize.
+--
+-- Plain `moduleIdOfPath roots path` (first-root) is NOT equivalent to this, and
+-- that gap is exactly what #1223 still showed after a first pass at its fix used
+-- `moduleIdOfPath` directly: the two conventions agree only when a project has
+-- ONE root, and diverge the moment a target sits below its own `medaka.toml` —
+-- `moduleIdOfPath` keeps the file's own directory (`paa`), while a sibling's
+-- `import paa` canonicalizes through `canonicalModId` to the project-root-relative
+-- spelling (`src.paa`).
+--
+-- Falls back to `moduleIdOfPath roots path` (the SAME first-root convention
+-- `loadProgramFilesE` uses for an ENTRY's own id — see the ⚠️ two paragraphs
+-- above `canonicalModId`, a documented, deliberately-unfixed loader residual) when
+-- no root canonically contains the path, or the canonical candidate does not
+-- round-trip back to this file (the exact guard `canonicalModId` uses; a bare
+-- path has no import spelling `m` to fall back to the way `canonicalModId` does,
+-- and its first-root id is the closest analogue).
+export canonicalPathId : List (String, String) -> List String -> String -> <IO> String
+canonicalPathId deps roots path =
+  let cPath = canonicalizePath path
+  let fallback = moduleIdOfPath roots path
+  match canonRootFor roots cPath
+    None => fallback
+    Some cr =>
+      let c = moduleIdOfPath [cr] cPath
+      if canonRoundTrips deps roots c cPath then c else fallback
+
 -- rewrite a UsePath so its `importModId` yields the canonical id `c`, preserving
 -- the imported member list / wildcard / alias / single name.  (For UseName the
 -- imported NAME is the last segment; the module path is the prefix — so appending
@@ -1121,6 +1153,8 @@ loadProgramFilesLocatedCachedE parseCacheRef read entry roots =
 (DFunDef false "canonRoundTrips" ((PVar "deps") (PVar "roots") (PVar "c") (PVar "cPath")) (EMatch (EApp (EApp (EApp (EVar "findModuleFile") (EVar "deps")) (EVar "roots")) (EVar "c")) (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" (PTuple (PVar "p2") PWild)) () (EBinOp "==" (EApp (EVar "canonicalizePath") (EVar "p2")) (EVar "cPath")))))
 (DTypeSig false "canonicalModId" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "String"))))))
 (DFunDef false "canonicalModId" ((PVar "deps") (PVar "roots") (PVar "m")) (EMatch (EApp (EApp (EApp (EVar "findModuleFile") (EVar "deps")) (EVar "roots")) (EVar "m")) (arm (PCon "None") () (EVar "m")) (arm (PCon "Some" (PTuple (PVar "path") (PVar "owningRoot"))) () (EBlock (DoLet false false (PVar "cOwn") (EApp (EVar "canonicalizePath") (EVar "owningRoot"))) (DoExpr (EMatch (EApp (EApp (EVar "revLookupRoot") (EVar "cOwn")) (EVar "deps")) (arm (PCon "Some" (PVar "depName")) () (EApp (EVar "stringConcat") (EListLit (EVar "depName") (ELit (LString ".")) (EApp (EApp (EVar "moduleIdOfPath") (EListLit (EVar "cOwn"))) (EApp (EVar "canonicalizePath") (EVar "path")))))) (arm (PCon "None") () (EBlock (DoLet false false (PVar "cPath") (EApp (EVar "canonicalizePath") (EVar "path"))) (DoExpr (EMatch (EApp (EApp (EVar "canonRootFor") (EVar "roots")) (EVar "cPath")) (arm (PCon "None") () (EVar "m")) (arm (PCon "Some" (PVar "cr")) () (EBlock (DoLet false false (PVar "c") (EApp (EApp (EVar "moduleIdOfPath") (EListLit (EVar "cr"))) (EVar "cPath"))) (DoExpr (EIf (EApp (EApp (EApp (EApp (EVar "canonRoundTrips") (EVar "deps")) (EVar "roots")) (EVar "c")) (EVar "cPath")) (EVar "c") (EVar "m")))))))))))))))
+(DTypeSig true "canonicalPathId" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "String"))))))
+(DFunDef false "canonicalPathId" ((PVar "deps") (PVar "roots") (PVar "path")) (EBlock (DoLet false false (PVar "cPath") (EApp (EVar "canonicalizePath") (EVar "path"))) (DoLet false false (PVar "fallback") (EApp (EApp (EVar "moduleIdOfPath") (EVar "roots")) (EVar "path"))) (DoExpr (EMatch (EApp (EApp (EVar "canonRootFor") (EVar "roots")) (EVar "cPath")) (arm (PCon "None") () (EVar "fallback")) (arm (PCon "Some" (PVar "cr")) () (EBlock (DoLet false false (PVar "c") (EApp (EApp (EVar "moduleIdOfPath") (EListLit (EVar "cr"))) (EVar "cPath"))) (DoExpr (EIf (EApp (EApp (EApp (EApp (EVar "canonRoundTrips") (EVar "deps")) (EVar "roots")) (EVar "c")) (EVar "cPath")) (EVar "c") (EVar "fallback")))))))))
 (DTypeSig false "rewriteUsePath" (TyFun (TyCon "String") (TyFun (TyCon "UsePath") (TyCon "UsePath"))))
 (DFunDef false "rewriteUsePath" ((PVar "c") (PCon "UseName" (PVar "ns"))) (EApp (EVar "UseName") (EBinOp "++" (EApp (EVar "splitDot") (EVar "c")) (EListLit (EApp (EApp (EVar "lastOr") (ELit (LString ""))) (EVar "ns"))))))
 (DFunDef false "rewriteUsePath" ((PVar "c") (PCon "UseGroup" PWild (PVar "ms"))) (EApp (EApp (EVar "UseGroup") (EApp (EVar "splitDot") (EVar "c"))) (EVar "ms")))
@@ -1298,6 +1332,8 @@ loadProgramFilesLocatedCachedE parseCacheRef read entry roots =
 (DFunDef false "canonRoundTrips" ((PVar "deps") (PVar "roots") (PVar "c") (PVar "cPath")) (EMatch (EApp (EApp (EApp (EVar "findModuleFile") (EVar "deps")) (EVar "roots")) (EVar "c")) (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" (PTuple (PVar "p2") PWild)) () (EBinOp "==" (EApp (EVar "canonicalizePath") (EVar "p2")) (EVar "cPath")))))
 (DTypeSig false "canonicalModId" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "String"))))))
 (DFunDef false "canonicalModId" ((PVar "deps") (PVar "roots") (PVar "m")) (EMatch (EApp (EApp (EApp (EVar "findModuleFile") (EVar "deps")) (EVar "roots")) (EVar "m")) (arm (PCon "None") () (EVar "m")) (arm (PCon "Some" (PTuple (PVar "path") (PVar "owningRoot"))) () (EBlock (DoLet false false (PVar "cOwn") (EApp (EVar "canonicalizePath") (EVar "owningRoot"))) (DoExpr (EMatch (EApp (EApp (EVar "revLookupRoot") (EVar "cOwn")) (EVar "deps")) (arm (PCon "Some" (PVar "depName")) () (EApp (EVar "stringConcat") (EListLit (EVar "depName") (ELit (LString ".")) (EApp (EApp (EVar "moduleIdOfPath") (EListLit (EVar "cOwn"))) (EApp (EVar "canonicalizePath") (EVar "path")))))) (arm (PCon "None") () (EBlock (DoLet false false (PVar "cPath") (EApp (EVar "canonicalizePath") (EVar "path"))) (DoExpr (EMatch (EApp (EApp (EVar "canonRootFor") (EVar "roots")) (EVar "cPath")) (arm (PCon "None") () (EVar "m")) (arm (PCon "Some" (PVar "cr")) () (EBlock (DoLet false false (PVar "c") (EApp (EApp (EVar "moduleIdOfPath") (EListLit (EVar "cr"))) (EVar "cPath"))) (DoExpr (EIf (EApp (EApp (EApp (EApp (EVar "canonRoundTrips") (EVar "deps")) (EVar "roots")) (EVar "c")) (EVar "cPath")) (EVar "c") (EVar "m")))))))))))))))
+(DTypeSig true "canonicalPathId" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "String"))))))
+(DFunDef false "canonicalPathId" ((PVar "deps") (PVar "roots") (PVar "path")) (EBlock (DoLet false false (PVar "cPath") (EApp (EVar "canonicalizePath") (EVar "path"))) (DoLet false false (PVar "fallback") (EApp (EApp (EVar "moduleIdOfPath") (EVar "roots")) (EVar "path"))) (DoExpr (EMatch (EApp (EApp (EVar "canonRootFor") (EVar "roots")) (EVar "cPath")) (arm (PCon "None") () (EVar "fallback")) (arm (PCon "Some" (PVar "cr")) () (EBlock (DoLet false false (PVar "c") (EApp (EApp (EVar "moduleIdOfPath") (EListLit (EVar "cr"))) (EVar "cPath"))) (DoExpr (EIf (EApp (EApp (EApp (EApp (EVar "canonRoundTrips") (EVar "deps")) (EVar "roots")) (EVar "c")) (EVar "cPath")) (EVar "c") (EVar "fallback")))))))))
 (DTypeSig false "rewriteUsePath" (TyFun (TyCon "String") (TyFun (TyCon "UsePath") (TyCon "UsePath"))))
 (DFunDef false "rewriteUsePath" ((PVar "c") (PCon "UseName" (PVar "ns"))) (EApp (EVar "UseName") (EBinOp "++" (EApp (EVar "splitDot") (EVar "c")) (EListLit (EApp (EApp (EVar "lastOr") (ELit (LString ""))) (EVar "ns"))))))
 (DFunDef false "rewriteUsePath" ((PVar "c") (PCon "UseGroup" PWild (PVar "ms"))) (EApp (EApp (EVar "UseGroup") (EApp (EVar "splitDot") (EVar "c"))) (EVar "ms")))

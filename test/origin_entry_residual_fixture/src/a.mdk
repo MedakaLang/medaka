@@ -1,0 +1,15 @@
+-- The ENTRY-vs-DEPENDENCY residual fixture (loader.mdk:662-669, cited in ARCH E-5
+-- / #1521 / #1223's adversarial review, #1526). This file is IMPORT-BEARING
+-- (multi-regime: `runMulti`, not `runSingle`), so ARCH E-5's fix — which only
+-- touches the single-file (no-import) drivers — does NOT reach it.
+--
+-- Declares its own type, `Box`, so the module's identity is directly observable
+-- in the origin-agreement probe's HEAD SPREAD section under whichever id THIS
+-- module happens to carry in a given graph load.
+
+import helper.{Widget(..), widgetValue}
+
+public export data Box = Box Widget
+
+export boxValue : Box -> Int
+boxValue (Box w) = widgetValue w

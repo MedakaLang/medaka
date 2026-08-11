@@ -35,9 +35,25 @@
 --                                            still reads the DECL trees, because
 --                                            the schemes only cover heads that
 --                                            reach a top-level binding's type.)
---   single  elaborateModules … [("__user__", …)]
---                                            `medaka test <file>` / the snapshot
---                                            driver (compiler/tools/test_cmd.mdk).
+--   single  elaborateModules … [(id, …)]      `medaka test <file>`
+--                                            (compiler/tools/test_cmd.mdk's
+--                                            `runSingle`/`runPropsSingle`/
+--                                            `runTestDeclsSingle`/
+--                                            `propsReportSingle` — NOT the
+--                                            snapshot driver, `tools/snapshot.mdk`,
+--                                            which has its own SEPARATE
+--                                            `"__user__"` call site, untouched by
+--                                            ARCH E-5 and unmodelled by this arm).
+--                                            `id` is a DIRECT CALL to
+--                                            `test_cmd.mdk`'s own EXPORTED
+--                                            `singleRootId`, over roots this arm
+--                                            still independently derives from
+--                                            THIS module's own file path (see
+--                                            `singleArm`'s comment for what that
+--                                            residual review-dependence covers)
+--                                            — since ARCH E-5 (#1521) retired the
+--                                            synthetic `"__user__"` literal
+--                                            (#1223).
 --   graph   elaborateModules … <loader graph>
 --                                            `medaka run` / `medaka build` /
 --                                            `medaka test <dir>`.  Reads the trees
@@ -100,6 +116,8 @@
 -- comment further down).  Only the pinning is the assertion.
 
 import frontend.ast.{Decl(..), Ty(..), TyConOrigin(..)}
+import frontend.parser.{parse}
+import frontend.desugar.{desugar}
 import frontend.resolve.{
   setOriginTrace,
   takeOriginTrace,
@@ -107,8 +125,11 @@ import frontend.resolve.{
   ifaceKey,
 }
 import types.typecheck.{elaborateModules, checkProgramSchemesWithRuntime}
-import entries.entry_support.{driveModules}
+import entries.entry_support.{failWith, usageModules}
+import driver.loader.{loadProgramFilesE, loadErrorMessage, entrySearchRoots}
+import tools.test_cmd.{singleRootId}
 import support.util.{listLen}
+import support.path.{dirOf}
 
 -- ── claims ───────────────────────────────────────────────────────────────────
 
@@ -136,14 +157,48 @@ originKey OriginBuiltin = "builtin"
 originKey (OriginModule m) = "mod:\{m}"
 
 -- ── driver ───────────────────────────────────────────────────────────────────
-
+--
+-- ⚠️ NOT `entries.entry_support.driveModules` — deliberately, since ARCH E-5
+-- (#1521/#1223 blocker 2 review).  `driveModules` calls `loadProgram`, which
+-- drops each module's FILE PATH, keeping only (mid, decls).  The `single` arm
+-- below needs the real path to compute its id the way `test_cmd.mdk`'s fixed
+-- `singleRootId` does (`entrySearchRoots (dirOf path)` — recomputed PER MODULE,
+-- mirroring `medaka_cli.mdk`'s `testFilesGo`, which derives each test target's
+-- roots from THAT target's own directory, not the probe's outer CLI roots) — so
+-- this driver calls `loadProgramFilesE` directly, the path-preserving loader
+-- entry point `loadProgram` itself wraps, and threads the (mid, path, decls)
+-- triples through to `singleArm` instead of discarding the path.
 main : <IO> Unit
-main = driveModules report
+main = match args ()
+  runtimeP::coreP::entry::roots0 =>
+    driveGo runtimeP coreP entry (rootsOrDefaultHere entry roots0)
+  _ => failWith usageModules
 
-report : List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit
-report runtimeDecls coreDecls modules =
+-- Local copy of entry_support's private `rootsOrDefault` (not exported there).
+rootsOrDefaultHere : String -> List String -> List String
+rootsOrDefaultHere entry [] = [dirOf entry]
+rootsOrDefaultHere _ roots = roots
+
+driveGo : String -> String -> String -> List String -> <IO> Unit
+driveGo runtimeP coreP entry roots = match readFile runtimeP
+  Err e => failWith e
+  Ok rsrc => match readFile coreP
+    Err e => failWith e
+    Ok csrc => match loadProgramFilesE (_ => None) entry roots
+      Err e => failWith (loadErrorMessage e)
+      Ok triples => report (dirOf runtimeP) (desugar (parse rsrc)) (desugar (parse csrc)) (map desugarTriple triples)
+
+desugarTriple : (String, String, List Decl) -> (String, String, List Decl)
+desugarTriple (mid, path, p) = (mid, path, desugar p)
+
+dropPath : (String, String, List Decl) -> (String, List Decl)
+dropPath (mid, _, decls) = (mid, decls)
+
+report : String -> List Decl -> List Decl -> List (String, String, List Decl) -> <IO> Unit
+report stdlibDir runtimeDecls coreDecls triples =
+  let modules = map dropPath triples
   let (segments, flatClaims) = flatArm runtimeDecls coreDecls modules
-  let singleClaims = singleArm runtimeDecls coreDecls modules
+  let singleClaims = singleArm runtimeDecls coreDecls stdlibDir triples
   let (graphMods, graphDecls, graphIfaces, graphClaims) = graphArm runtimeDecls coreDecls modules
   let allClaims = flatClaims ++ singleClaims ++ graphClaims
   let uniq = dedupAdj sameClaim (sortByCmp cmpClaim allClaims)
@@ -153,12 +208,24 @@ report runtimeDecls coreDecls modules =
   let _ = putStr "# <slot> <head> <flat~graph> <single~graph> <flat~single>\n"
   let _ = putStr table
   let _ = putStr "=== CONFLICTS ===\n"
-  let _ = putStr "# PINNED, #1223 (medaka test <dir>: one declaration, two module ids, one process).\n"
-  let _ = putStr "# ⚠️ THESE ROWS DRAIN BY REVIEW, NOT MECHANICALLY. The `single` arm's \"__user__\" is\n"
-  let _ = putStr "# a SHAPE MODEL spelled in this probe, not read from compiler/tools/test_cmd.mdk,\n"
-  let _ = putStr "# so unifying the drivers will NOT flip these rows on its own. Whoever fixes #1223\n"
-  let _ = putStr "# must delete them here by hand. (Sourcing the id from the driver would make it\n"
-  let _ = putStr "# mechanical; that is a change to test_cmd.mdk and is deliberately not in this PR.)\n"
+  let _ = putStr "# ARCH E-5 (#1521) PARTIALLY fixed #1223 — the NO-IMPORT case only.\n"
+  let _ = putStr "# compiler/tools/test_cmd.mdk's single-file drivers now compute\n"
+  let _ = putStr "# `canonicalPathId` (last-containing-root, round-trip-guarded) instead of a\n"
+  let _ = putStr "# hardcoded \"__user__\" literal, via the EXPORTED `singleRootId`. This probe's\n"
+  let _ = putStr "# `single` arm CALLS that same exported function directly (not by reusing the\n"
+  let _ = putStr "# graph arm's `mid` as its elaboration id, which would manufacture AGREE and\n"
+  let _ = putStr "# prove nothing — see singleArm's own comment) — so a genuine single~graph\n"
+  let _ = putStr "# CONFLICT is still REACHABLE here, and the DRIVER regressing back to plain\n"
+  let _ = putStr "# `moduleIdOfPath` inside `singleRootId` would flip this gate red.\n"
+  let _ = putStr "# ⚠️ THE ROOTS LIST FED TO `singleRootId` IS STILL THIS ARM'S OWN MODEL of\n"
+  let _ = putStr "# `testFilesGo` (`entrySearchRoots (dirOf path) ++ [stdlibDir]`), not a call\n"
+  let _ = putStr "# to it — see `singleArm`'s comment for what that residual gap covers.\n"
+  let _ = putStr "# The rows #1223 pinned (single-root corpus) read AGREE, and a nested-project\n"
+  let _ = putStr "# row (test/origin_fixtures/nested) requires the last-root convention to\n"
+  let _ = putStr "# agree, REGARDLESS of directory nesting (that fixture is cross-directory).\n"
+  let _ = putStr "# #1223 stays OPEN: an IMPORT-BEARING file's ENTRY-vs-DEPENDENCY id asymmetry\n"
+  let _ = putStr "# (loader.mdk:662-669, never touched by this fix) still reproduces — pinned in\n"
+  let _ = putStr "# this gate's dedicated entry_residual section, not this table.\n"
   let _ = putStr conflicts
   let _ = putStr "=== RESIDUAL ===\n"
   let _ = putStr "# <arm> <slot> <head> — an `OriginUnresolved` head that SURVIVED stamping.\n"
@@ -218,33 +285,56 @@ flatSlot : String -> String -> String
 flatSlot _ "core" = "core"
 flatSlot mid _ = mid
 
--- SINGLE: `medaka test <file>` and the snapshot driver elaborate ONE file as a
--- 1-module graph under the driver's own `"__user__"` label.  Driven here over the
--- SAME decls the graph arm gets, which is precisely the `medaka test <dir>`
--- situation: one declaration, two module ids, one process (#1223).
+-- SINGLE: `medaka test <file>` elaborates ONE file as a 1-module graph.  Driven
+-- here over the SAME decls the graph arm gets, which is precisely the
+-- `medaka test <dir>` situation: one declaration, and — before ARCH E-5 (#1521)
+-- fixed it — two module ids in one process (#1223).
 --
--- ⚠️ THIS ARM HAND-PICKS ITS ARGUMENT, AND THAT IS A REAL WEAKNESS, NOT A DETAIL.
--- The literal `"__user__"` below is spelled HERE, not read from
--- compiler/tools/test_cmd.mdk where the real driver spells it — so this arm MODELS
--- the driver rather than observing it, and it is the exact hazard this file's header
--- argues against for the stampers, turned on one of its own arms.  Two consequences,
--- both stated rather than papered over:
---   * the CONFLICT rows it produces do NOT self-drain.  Unify the drivers and this
---     probe keeps saying `"__user__"`, keeps producing them, and the gate stays
---     green against a stale golden.  The golden says so in its own header.
---   * if `test_cmd.mdk` changed the id to something else tomorrow, this arm would
---     silently stop modelling anything real.
--- The `flat` arm earns its keep through the tap and `graph` reads its own call;
--- this one is the shape model.  Making it mechanical means exporting the id from
--- `test_cmd.mdk` and importing it here — a change to a shipping driver, out of
--- scope for a gate-only PR.
-singleArm : List Decl -> List Decl -> List (String, List Decl) -> List Claim
-singleArm _ _ [] = []
-singleArm rt core ((mid, decls)::rest) =
-  let (coreD, mods) = elaborateModules rt core [("__user__", decls)]
+-- ⚠️ A probe that hand-picks its own argument here re-encodes the assumption it
+-- exists to test and reports green — this is the same hazard the stampers'
+-- header argues against, turned on one of this probe's own arms, and it is
+-- exactly what the PREVIOUS version of this arm did: it reused `mid`, the
+-- GRAPH arm's own bookkeeping id, as BOTH the slot AND the elaboration id, which
+-- manufactures AGREE by construction (single's claim and graph's claim are then
+-- both `mod:{mid}`, always, regardless of what `test_cmd.mdk` actually computes)
+-- and can never produce a CONFLICT — caught in review (#1526 blocker 2).
+--
+-- Fixed (#1526 blocker 2, PREFERRED remedy — call the driver, don't model it):
+-- this arm now calls `tools.test_cmd.singleRootId` DIRECTLY — the SAME exported
+-- function `runSingle`/`runPropsSingle`/`runTestDeclsSingle`/`propsReportSingle`
+-- call — over roots freshly derived from the module's OWN file path
+-- (`entrySearchRoots (dirOf path) ++ [stdlibDir]`, mirroring `medaka_cli.mdk`'s
+-- `testFilesGo`, which computes each test target's roots from THAT target's own
+-- directory) — using `mid` ONLY as the table SLOT (the probe's bookkeeping key,
+-- shared with flat/graph so their claims about the same structural module land
+-- in one row), never as the computed id itself.
+--
+-- ⚠️ THIS ARM STILL DOES NOT CALL `test_cmd.mdk` END TO END, AND THAT RESIDUE IS
+-- NAMED RATHER THAN HIDDEN. It calls the driver's OWN id-derivation function, so
+-- a future change to HOW THE ID IS COMPUTED is caught automatically (mechanical,
+-- not review-dependent, for that half). It still INDEPENDENTLY RECOMPUTES THE
+-- ROOTS LIST above — mirroring `testFilesGo` rather than calling it — so a
+-- future change to HOW ROOTS ARE DERIVED for a test target (e.g. a third search
+-- path added to `entrySearchRoots` or `testFilesGo` itself) would NOT be caught
+-- here automatically; that slice still drains by review, not mechanically.
+--
+-- This arm can genuinely disagree with the graph arm, and does whenever a module
+-- sits below its own `medaka.toml`, regardless of directory nesting
+-- (`test/origin_fixtures/nested`, added alongside the underlying fix because the
+-- pre-existing corpus — all single-root — could not exercise the divergence
+-- `canonicalPathId` exists to close; see that fixture's own comment).
+-- `stdlibDir` is `dirOf runtimeP`, this probe's own first CLI arg
+-- (`stdlib/runtime.mdk` in every real invocation, so its `dirOf` is exactly the
+-- same `stdlibDir` the real CLI computes independently).
+singleArm : List Decl -> List Decl -> String -> List (String, String, List Decl) -> <IO> List Claim
+singleArm _ _ _ [] = []
+singleArm rt core stdlibDir ((mid, path, decls)::rest) =
+  let sRoots = entrySearchRoots (dirOf path) ++ [stdlibDir]
+  let rootId = singleRootId sRoots path
+  let (coreD, mods) = elaborateModules rt core [(rootId, decls)]
   claimsOf "single" "core" coreD
     ++ claimsOf "single" mid (flatMap snd mods)
-    ++ singleArm rt core rest
+    ++ singleArm rt core stdlibDir rest
 
 -- GRAPH: the loader's whole module graph, elaborated once — `run` / `build`.
 -- Returns (module count, DECL-LAYER carriers seen, PER-CARRIER interface-occurrence
