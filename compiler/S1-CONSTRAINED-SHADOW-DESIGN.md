@@ -10,6 +10,16 @@ the source, not taken from the filing. **Peer docs:** `SHADOW-SEMANTICS.md` (the
 conformance spec + decision matrix), `SHADOW-INVERSION-DESIGN.md` (the S2 inversion, for
 which this fix is a hard prerequisite), `.claude/workstreams/COMPILER-SOUNDNESS.md`.
 
+⚠️ **Scope vocabulary: this document predates the S1 scope ruling and used the retired
+adjective "visible" for S1's interface operand.** That adjective was found on 2026-08-06 to
+be undefined and to carry three different scopes; it is retired document-wide from the
+normative spec. S1's operands are now named separately — *defined in `M` or imported into
+`M`* for the standalone, *nameable in `M`* for the interface — with S2's impl universe alone
+*graph-global*. Definitions: `docs/spec/SHADOW-SEMANTICS.md` **§1.0**; ruling and overturn
+condition: the **S1-SCOPE** note under S1
+([#1375](https://github.com/MedakaLang/medaka/issues/1375)). **S9 itself is unaffected** —
+its subject is the standalone's own `=>` dicts, not either operand's scope.
+
 ---
 
 ## 0. Verdict on the filed root cause
@@ -80,7 +90,7 @@ Every row probed on **all three paths**. `size 3` must be `4` in every broken ro
 
 | ingredient | load-bearing? | evidence |
 |---|---|---|
-| **the shadow** (name collides with a visible interface-method name) | **YES** | B, E are green; only name-collision rows break |
+| **the shadow** (name collides with an interface-method name **nameable in `M`** — this cell read "a *visible* interface-method name" until 2026-08-06; that adjective is retired, see the status block) | **YES** | B, E are green; only name-collision rows break |
 | **a constraint on the standalone** | **YES** | D (same program, unconstrained standalone) is green |
 | a **declared signature** | **NO** | H (unsignatured, *inferred* `Num a =>`) is equally broken. *The filing's "not a missing signature" is right but for the wrong reason: an unsignatured standalone that **infers** a constraint breaks too.* |
 | **`Num` specifically** | **NO** | F (`Dbl a =>`, a user interface) is equally broken |
