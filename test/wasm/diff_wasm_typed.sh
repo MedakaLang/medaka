@@ -339,7 +339,7 @@ if ! printf '%s\n' "${fixtures[@]}" \
   | MEDAKA="$MEDAKA" EMITBIN="$EMITBIN" RUNTIME="$RUNTIME" NODE="$NODE_ABS" RUNJS="$RUNJS" \
     MEDAKA_EMITTER="${MEDAKA_EMITTER:-$EMITTER}" WASM_ORACLE_OPT="${WASM_ORACLE_OPT:-}" \
     WORKDIR="$WORK" RESULTDIR="$RESULTS" \
-    xargs -P "$JOBS" -I{} sh "$0" --one {}; then
+    xargs -P "$JOBS" -I{} bash "$0" --one {}; then
   echo "FAIL wasm typed gate: fixture worker pipeline"
   exit 1
 fi
