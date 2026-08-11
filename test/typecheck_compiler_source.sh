@@ -412,11 +412,26 @@ echo "  ok: $(printf '%s\n' "$originun_actual" | grep -c .) OriginUnresolved con
 # as the six #1446 lines applies: listed here rather than the grep widened. It mints
 # no identity a `stampTyHead` immunity rule could make permanent — the value is never
 # compared for identity, only for `irName == ""`.
-tc_originun_allowed="OriginUnresolved => [TkBare NsIface ir.irName]
+# ⚠️ #1519 (ARCH A-3.3) ADDED TWO LINES, BOTH ELIMINATOR ARMS, SAME SHAPE AS
+# `originPhrase`'s ABOVE. `ceRowOriginTag`/`ceSuperOrigin` (`CE`'s doctest-only
+# projections of `IfaceRef.irOrigin`/`Super.superOrigin`) enumerate all three
+# `TyConOrigin` inhabitants rather than closing the match with a wildcard — a
+# wildcard would still be TOTAL (an earlier revision of that code argued
+# exactly that and was corrected in review), but totality is not what this
+# ratchet's convention protects: DISCOVERABILITY of a fourth inhabitant is,
+# per `originPhrase`'s own comment ("MADE TO SHOW UP"). Neither arm
+# CONSTRUCTS — `OriginUnresolved`/`OriginBuiltin` are on the LEFT in both — and
+# neither is reachable on any `CeRow`/`Super` this unit's fixtures build (every
+# fixture stamps `OriginModule _`); they exist only so the match stays total
+# AND discoverable, exactly as `originPhrase`'s arm does. Listed here rather
+# than the grep widened, per the remedy this ratchet's other entries state.
+tc_originun_allowed="OriginUnresolved => \"<unresolved>\"
+OriginUnresolved => [TkBare NsIface ir.irName]
 bcEq = OriginUnresolved,
 bcNum = OriginUnresolved,
 bcOrd = OriginUnresolved,
 bcSemigroup = OriginUnresolved,
+ceSuperOrigin (Super { superOrigin = OriginUnresolved, ... }) = \"<unresolved>\"
 ifaceRefBare n = IfaceRef { irName = n, irOrigin = OriginUnresolved }
 ifaceRefNone = IfaceRef { irName = \"\", irOrigin = OriginUnresolved }
 originPhrase OriginUnresolved = \"an unknown module\"

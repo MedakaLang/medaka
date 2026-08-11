@@ -238,7 +238,8 @@ declenvs_allowed='deModules -- the loader graph as ordinal-tagged module rows (p
 deOrdIndex -- module id -> ordinal index; the lookup `declEnvsOrdOf` uses, fail-CLOSED at -1
 deAllDecls -- the flattened whole-graph decl list; the same list value each driver used to build inline as `coreDecls ++ flatMap snd modules`
 deData -- #1112 A-3.2a: the `DataEnv` half of stage K -- an identity-keyed index over the RAW declarations (no elaborated Scheme/RecordInfo/Mono), built once from `deAllDecls`. CONSTRUCTION ONLY and NOT LIVE: nothing outside its own block populates or reads it. Allowlisted HERE, by A-3.4, rather than by the unit that added it -- A-3.2a landed `deData` while `DeclEnvs` was still pinned by NOTHING (check 1 covered only CrossRun and DriverState), and A-3.4 is the unit that extends the extraction to this record. That is the gap this extension exists to close, and its first act is to retro-pin a field that was already in the tree. ⚠️ Scope-of-key question deliberately left OPEN by A-3.2a and not settled here: `buildDataEnv` folds EVERY decl including private ones, making it a SUPERSET of what the live `universeDataEnv` (public-only) ever held -- harmless while nothing reads it, a real decision the moment something does
-deImpls -- #1112 A-3.4: the `IE` registry. Every impl in the graph with its full head, context and method table, plus an `InstRef` instance identity and the declaring module ordinal its visibility is filtered on. THE INTERFACE HALF IS IDENTITY-KEYED and mints no parallel scheme: `ieInsertRow` calls the SAME `oblIfaceKeys` the obligation-channel writer calls (identity key + the bare compatibility leg #1438 still rides on), and the head half stays BARE by the #1317 T1 rule that re-keying it re-introduces the closed S0 #1277. NO KEY COMPONENT IS A METHOD NAME -- check 4 below enforces that mechanically, because a (method, tag)-keyed default registry here would rebuild #1265 in the new substrate; a method name is PAYLOAD (`ieMethods`) only. ZERO READERS in PR1: the Module arm still reads the three obUniv* accumulators and the flip onto `ieUniverseAt` is PR2, so `cross_allowed` above has not shrunk yet -- that shrink is the progress signal this row is waiting to produce'
+deImpls -- #1112 A-3.4: the `IE` registry. Every impl in the graph with its full head, context and method table, plus an `InstRef` instance identity and the declaring module ordinal its visibility is filtered on. THE INTERFACE HALF IS IDENTITY-KEYED and mints no parallel scheme: `ieInsertRow` calls the SAME `oblIfaceKeys` the obligation-channel writer calls (identity key + the bare compatibility leg #1438 still rides on), and the head half stays BARE by the #1317 T1 rule that re-keying it re-introduces the closed S0 #1277. NO KEY COMPONENT IS A METHOD NAME -- check 4 below enforces that mechanically, because a (method, tag)-keyed default registry here would rebuild #1265 in the new substrate; a method name is PAYLOAD (`ieMethods`) only. ZERO READERS in PR1: the Module arm still reads the three obUniv* accumulators and the flip onto `ieUniverseAt` is PR2, so `cross_allowed` above has not shrunk yet -- that shrink is the progress signal this row is waiting to produce
+deIfaces -- #1519 (ARCH A-3.3): the `CE` registry. Interfaces with declared parameter kinds, method schemes (raw Ty, unelaborated -- same Step 0 ruling deData rests on), superclass predicates. Keyed by interface IDENTITY (RegKey via ifaceTabKey/regKeyOfTab), one row per declaration, so two same-spelled interfaces in unrelated modules get DISTINCT rows rather than a last-write-wins collapse -- the doctests at the CE block assert this directly on a two-module same-spelled-interface corpus mirroring ieProbeEnv. EXCLUDES universeMethodDispatchIdxRef and universeIfaceMethodsRef -- lifted bare and unchanged, never keyed here (#1354s method-namespace unit, OPEN, owns both). ZERO READERS: construction only, same bar as deData/deImpls'
 
 declenvmodule_allowed='demOrd -- this module`s ordinal; 0 = the prelude
 demId -- the loader module id (the SCOPE the two rows above are keyed by)
@@ -662,4 +663,74 @@ if [ -n "$ie_default_hits" ]; then
 fi
 echo "  ok: IE block is $ie_n line(s), no non-IE namespace mint, no default-arm reach"
 
-echo "PASS: #1111 registry keying ratchet (CrossRun/DriverState/DeclEnvs fields, writer sites, three-driver frame parity, #1112 A-3.4 IE namespace)."
+# ═══════════════════════════════════════════════════════════════════════════
+# CHECK 5 — #1519 A-3.3: the `CE` construction ratchet
+# ═══════════════════════════════════════════════════════════════════════════
+# THE PROPOSITION, two-part, mirroring check 4's shape for the constraint this
+# unit actually has (CE's defining rule is not a shared key namespace with a
+# sibling table -- it is SYNTACTIC CONSTRUCTION plus a NAMED EXCLUSION):
+#   (a) CE is built SYNTACTICALLY -- no call into the elaboration machinery
+#       (fromAstTypeE / registerRecordInfoKeyed / freshVars / freshEffvar) may
+#       appear inside the block. Those mint fresh tyvar ids from the global
+#       counter and mutate perRun refs from the driver PREAMBLE, before the
+#       per-module walk that owns that counter -- see the Step 0 derivation
+#       in the block's own header.
+#   (b) CE never reaches `universeMethodDispatchIdxRef` or
+#       `universeIfaceMethodsRef` -- lifted bare and unchanged, deliberately
+#       excluded (#1354's method-namespace unit, OPEN, owns both; keying
+#       either here would build a second, differently-shaped answer to a
+#       question #1353's S1-NS ruling already decided at the read).
+#
+# 🔬 POSITIVE CONTROLS -- mutate compiler/types/typecheck.mdk, rerun, restore:
+#   K  add a call to `fromAstTypeE` INSIDE the CE block               -> FAIL
+#   L  the same text in a COMMENT inside the block                    -> pass
+#   M  the same text OUTSIDE the block                                -> pass
+#   N  reference `universeIfaceMethodsRef` INSIDE the CE block        -> FAIL
+#   O  delete/rename the CE-BLOCK-BEGIN banner so the block extracts
+#      EMPTY                                                          -> FAIL
+echo "checking #1519 A-3.3 CE construction ratchet ..."
+
+ce_block=$(sed -n '/CE-BLOCK-BEGIN/,/CE-BLOCK-END/p' "$TC" | strip_comments)
+ce_n=$(printf '%s\n' "$ce_block" | grep -c . || true)
+if [ "$ce_n" -eq 0 ]; then
+  echo "FAIL: check 5 extracted ZERO lines for the CE block. Either the"
+  echo "  'CE-BLOCK-BEGIN' / 'CE-BLOCK-END' banner comments in"
+  echo "  compiler/types/typecheck.mdk were moved, reworded or deleted, or this"
+  echo "  check just validated nothing. A zero-length CE block is a BROKEN"
+  echo "  DELIMITER, never an empty answer. Restore the banners (or update this"
+  echo "  range) -- do NOT treat a zero extraction as a pass."
+  exit 1
+fi
+
+ce_elab_hits=$(printf '%s\n' "$ce_block" \
+  | grep -oE '\b(fromAstTypeE|registerRecordInfoKeyed|freshVars|freshEffvar)\b' \
+  | LC_ALL=C sort -u || true)
+ce_excluded_hits=$(printf '%s\n' "$ce_block" \
+  | grep -oE '\b(universeMethodDispatchIdxRef|universeIfaceMethodsRef)\b' \
+  | LC_ALL=C sort -u || true)
+
+if [ -n "$ce_elab_hits" ]; then
+  echo "FAIL: the CE block calls elaboration machinery:"
+  printf '%s\n' "$ce_elab_hits" | sed 's/^/    /'
+  echo "  CE is built SYNTACTICALLY (raw Ty/Super/Kind, no Scheme/Mono/RecordInfo)"
+  echo "  -- the Step 0 ruling this unit's header derives and re-confirms. These"
+  echo "  calls mint fresh tyvar ids and mutate perRun refs from the driver"
+  echo "  PREAMBLE, before the per-module walk that owns that state."
+  echo "  REMEDY: elaborate on demand at the READ site, not at construction --"
+  echo "  or this is an owner-level re-adjudication of the Step 0 ruling, not a"
+  echo "  widening of this check."
+  exit 1
+fi
+if [ -n "$ce_excluded_hits" ]; then
+  echo "FAIL: the CE block reaches a table #1519 excludes:"
+  printf '%s\n' "$ce_excluded_hits" | sed 's/^/    /'
+  echo "  universeMethodDispatchIdxRef and universeIfaceMethodsRef are lifted"
+  echo "  bare and unchanged, never keyed here -- both belong to #1354's"
+  echo "  method-namespace unit (OPEN)."
+  echo "  REMEDY: see the message above -- re-adjudicate the exclusion with"
+  echo "  #1354's owner or move the code there, not a widening of this check."
+  exit 1
+fi
+echo "  ok: CE block is $ce_n line(s), no elaboration-machinery call, no excluded-table reach"
+
+echo "PASS: #1111 registry keying ratchet (CrossRun/DriverState/DeclEnvs fields, writer sites, three-driver frame parity, #1112 A-3.4 IE namespace, #1519 A-3.3 CE construction)."
