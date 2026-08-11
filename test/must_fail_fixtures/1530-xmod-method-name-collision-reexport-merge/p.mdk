@@ -1,0 +1,5 @@
+export interface IP f where
+  mth : f a -> Int
+
+export pdummy : Int -> Int
+pdummy n = n
