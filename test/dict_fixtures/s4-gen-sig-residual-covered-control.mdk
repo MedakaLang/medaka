@@ -1,0 +1,42 @@
+-- THE ACCEPT-SIDE CONTROL for `s4-gen-sig-residual-uncovered-rejected.mdk`.
+-- Without it that row cannot tell "gen-sig correctly rejects an UNDECLARED
+-- residual" from "gen-sig rejects EVERY residual under a signature" -- an
+-- implementation that did the second would keep the reject row green while
+-- breaking every legal signed program whose body reaches a conditional instance.
+--
+-- HAND-DERIVED FROM THE SPEC.  Three ways a residual is legitimately covered:
+--   sig1 -- the residual `Tag a` IS the declared predicate: §4 `gen-sig`s side
+--           condition `Q_sig ⊩ P'ᵢ` holds by `assum`.            => wrap(int)
+--   sig2 -- the body infers `Eq a` (residual of `impl Eq (List a) requires Eq a`)
+--           while the signature declares `Ord a`.  §3 `super` entails it through
+--           `interface Ord a requires Eq a`, so §4 `gen-sig` DROPS it rather than
+--           merging it -- the scheme must still print `Ord a =>`, not
+--           `(Eq a, Ord a) =>`.                                  => True
+--   sig3 -- the argument is CONCRETE, so reduction bottoms out at the ground
+--           `Tag Int` and there is no residual over a quantified var at all;
+--           the declared context is correctly empty.             => wrap(int)
+-- EXPECTED: wrap(int)\nTrue\nwrap(int), all three schemes as declared.
+data Wrap a = Wrap a
+
+interface Tag t where
+  tagOf : t -> String
+
+impl Tag Int where
+  tagOf _ = "int"
+
+impl Tag (Wrap a) requires Tag a where
+  tagOf (Wrap x) = "wrap(\{tagOf x})"
+
+sig1 : Tag a => a -> String
+sig1 x = tagOf (Wrap x)
+
+sig2 : Ord a => a -> Bool
+sig2 x = [x] == [x]
+
+sig3 : Int -> String
+sig3 n = tagOf (Wrap n)
+
+main =
+  println (sig1 5)
+  println (sig2 5)
+  println (sig3 5)
