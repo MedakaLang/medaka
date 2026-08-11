@@ -32,6 +32,23 @@ RUNTIME="$ROOT/stdlib/runtime.mdk"
 FIXDIR="$ROOT/test/wasm/fixtures_typed"
 RUNJS="$ROOT/test/wasm/run.js"
 CC="${CC:-clang}"
+WASM_SRC="$ROOT/compiler/backend/wasm_emit.mdk"
+
+# X-W.H2a structural ratchet. Keep this before every toolchain/binary skip: the
+# private program index is source structure, not a capability of wasm-tools.
+legacy_state='fnNameSetW|valNameSetW|fnArMapW|implsByMethodW|lazyGlobalMapRef|recFieldsRef|fnsUsedAsValuesRef|fnsUsedAsValuesSetW|ctorArMapW|ctorTyMapW|ctorOrdMapW|typeCtorsMapW'
+legacy_installer='installFnIndexW|installImplIndexW|setFnsUsedAsValuesW|installLazyGlobalMapW|installCtorTablesW'
+if grep -E "^($legacy_state)[[:space:]]*:" "$WASM_SRC" >/dev/null ||
+   grep -E "^($legacy_installer)[[:space:]]*:" "$WASM_SRC" >/dev/null; then
+  echo "FAIL wasm typed index ratchet: legacy Wasm state authority remains"
+  exit 1
+fi
+for sym in WasmProgramIndex progIndex makeWasmProgramIndex indexFnNamesW indexImplsByMethodW indexLazyGlobalsW indexCtorOrdinalsW; do
+  grep -E "^$sym[[:space:]]*:|^data $sym" "$WASM_SRC" >/dev/null || {
+    echo "FAIL wasm typed index ratchet: missing private carrier/accessor $sym"
+    exit 1
+  }
+done
 
 # ── Per-fixture worker (parallel fan-out target); shared state via env ─────────
 # Oracle at -O2 (not -O0): TCO fixtures need clang tail-call opt to avoid overflow.
@@ -137,8 +154,34 @@ REEMIT_OUT="$($EMITBIN --reemit-input "$RUNTIME" "$INPUT_WORK/p.mdk" "$INPUT_WOR
   echo "FAIL wasm typed same-process input harness"
   exit 1
 }
-[ "$REEMIT_OUT" = $'P_EQ_PLAST\nP_NE_METHOD\nP_NE_SIG\nP_NE_CTOR\nP_NE_MAIN\nP_NE_RECORD' ] || {
+REEMIT_EXPECTED="$(printf 'P_EQ_PLAST\nP_NE_METHOD\nP_NE_SIG\nP_NE_CTOR\nP_NE_MAIN\nP_NE_RECORD')"
+[ "$REEMIT_OUT" = "$REEMIT_EXPECTED" ] || {
   echo "FAIL wasm typed input isolation: an explicit field did not discriminate: $REEMIT_OUT"
+  exit 1
+}
+
+# X-W.H2a: sequence normal P -> normal U -> gap U -> normal P in one process.
+# Compare complete captures in the shell so a marker-only driver cannot satisfy this.
+STATE_OUT="$($EMITBIN --reemit-state "$RUNTIME")" || {
+  echo "FAIL wasm typed same-process state harness"
+  exit 1
+}
+state_capture() {
+  printf '%s\n' "$STATE_OUT" | sed -n "/^$1$/,/^$2$/p" | sed '1d;$d'
+}
+P1_WAT="$(state_capture REEMIT_P1_BEGIN REEMIT_P1_END)"
+U_WAT="$(state_capture REEMIT_U_BEGIN REEMIT_U_END)"
+P2_WAT="$(state_capture REEMIT_P2_BEGIN REEMIT_P2_END)"
+[ -n "$P1_WAT" ] && [ -n "$U_WAT" ] && [ -n "$P2_WAT" ] || {
+  echo "FAIL wasm typed state isolation: empty capture"
+  exit 1
+}
+[ "$P1_WAT" = "$P2_WAT" ] || {
+  echo "FAIL wasm typed state isolation: P changed after U and gap U"
+  exit 1
+}
+[ "$P1_WAT" != "$U_WAT" ] || {
+  echo "FAIL wasm typed state isolation: P/U positive control did not differ"
   exit 1
 }
 

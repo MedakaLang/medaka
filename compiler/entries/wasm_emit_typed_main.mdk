@@ -42,12 +42,18 @@ import ir.core_ir_lower.{
   declaredRecordFieldOrders,
   methodIfaceTable,
 }
-import backend.wasm_emit.{WasmEmitInput, emitProgram, makeWasmEmitInput}
+import backend.wasm_emit.{
+  WasmEmitInput,
+  emitProgram,
+  emitProgramGaps,
+  makeWasmEmitInput,
+}
 import entries.entry_support.{driveRuntime}
 
 main = match args ()
   "--reemit-input"::runtimePath::pPath::uPath::_ =>
     reemitInput runtimePath pPath uPath
+  "--reemit-state"::runtimePath::_ => reemitState runtimePath
   _ => driveRuntime emit
 
 emit : List Decl -> List Decl -> List Decl -> <IO> Unit
@@ -117,3 +123,46 @@ reemitInput runtimePath pPath uPath = match readFile runtimePath
         let _ = putStrLn (if p1 != ctorWat then "P_NE_CTOR" else "P_EQ_CTOR")
         let _ = putStrLn (if mainBase != mainWat then "P_NE_MAIN" else "P_EQ_MAIN")
         putStrLn (if p1 != recordWat then "P_NE_RECORD" else "P_EQ_RECORD")
+
+-- X-W.H2a: the selected Wasm physical indexes must belong to one private Prog, not
+-- module state. P and U deliberately reuse names while changing every selected index
+-- family; a gap-mode U sits between the two normal P emissions.
+reemitState : String -> <IO> Unit
+reemitState runtimePath = match readFile runtimePath
+  Err msg => ePutStrLn msg
+  Ok runtimeSrc =>
+    let runtimeDecls = desugar (parse runtimeSrc)
+    let pDecls = desugar (parse reemitStateP)
+    let uDecls = desugar (parse reemitStateU)
+    let pInput = reemitStateInput runtimeDecls pDecls
+    let uInput = reemitStateInput runtimeDecls uDecls
+    let pProgram = typedProgram runtimeDecls [] pDecls
+    let uProgram = typedProgram runtimeDecls [] uDecls
+    let p1 = emitProgram pInput pProgram
+    let u = emitProgram uInput uProgram
+    let _ = emitProgramGaps uInput uProgram
+    let p2 = emitProgram pInput pProgram
+    let _ = putStrLn "REEMIT_P1_BEGIN"
+    let _ = putStrLn p1
+    let _ = putStrLn "REEMIT_P1_END"
+    let _ = putStrLn "REEMIT_U_BEGIN"
+    let _ = putStrLn u
+    let _ = putStrLn "REEMIT_U_END"
+    let _ = putStrLn "REEMIT_P2_BEGIN"
+    let _ = putStrLn p2
+    putStrLn "REEMIT_P2_END"
+
+reemitStateInput : List Decl -> List Decl -> WasmEmitInput
+reemitStateInput runtimeDecls decls =
+  makeWasmEmitInput
+    (methodIfaceTable decls)
+    (declSigTypeNames runtimeDecls ++ declSigTypeNames decls)
+    (ctorFieldTypeNames decls)
+    False
+    (declaredRecordFieldOrders decls)
+
+reemitStateP : String
+reemitStateP = "interface Mark a where\n  mark : a -> Int\n\ndata Thing = First Int | Second\n\ndata FirstRec = FirstRec { shared : Int, pFirst : Int }\n\ndata R = R { shared : Int, pOnly : Int }\n\npFn x = x\n\nuseFn = pFn\n\nfirstRecord = FirstRec { shared = 3, pFirst = 4 }\n\neagerValue = 1\n\nlazyValue = mark Second\n\nimpl Mark Thing where\n  mark _ = 7\n\nmain = (R { shared = 1, pOnly = 2 }).shared\n"
+
+reemitStateU : String
+reemitStateU = "interface Mark a where\n  mark : a -> Int -> Int\n\ndata Thing = Second | First Int\n\ndata FirstRec = FirstRec { uFirst : Int, shared : Int }\n\ndata R = R { uOnly : Int, shared : Int }\n\npFn x y = x\n\nuseFn = pFn\n\nfirstRecord = FirstRec { uFirst = 4, shared = 3 }\n\neagerValue = 2\n\nlazyValue = mark Second 0\n\nimpl Mark Thing where\n  mark _ _ = 9\n\nmain = (R { uOnly = 2, shared = 1 }).shared\n"
