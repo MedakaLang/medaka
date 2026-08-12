@@ -4319,6 +4319,31 @@ ieRowsVisibleAt : Int -> ImplEnv -> List ImplRow
 ieRowsVisibleAt cur env =
   filterList (r => declEnvVisibleAt cur (ieRowOrd r)) env.ieRows
 
+-- #1559 A-3.7: the POPULATION reads coherence takes — the whole graph, and one
+-- module's OWN rows.  Peers of `CE`'s `ceRowsVisibleAt`/`ceRowsOwnedBy`, and they read
+-- `ieRows` for the same reason the snapshot fold does.
+--
+-- 🚨 READ `ieRows`.  NEVER THE BUCKETS.  `ieConcrete`/`ieHeadless` already group rows
+-- by (interface, head), so "iterate the buckets instead of the O(pairs) scan" is the
+-- obvious optimization and it is a BUG: `ieInsertRow` indexes every row under
+-- `oblIfaceKeys`, which is TWO keys — the identity key AND the bare-spelling
+-- compatibility leg — so a bucket walk sees every row TWICE and, in the bare bucket,
+-- pairs impls of two DIFFERENT interfaces that merely share a spelling.  That
+-- rebuilds #1438's false reject (the one `cohSameIface` was added to fix) inside the
+-- new substrate, and double-reports every pair besides.  The collapse is asserted
+-- live by this block's own doctests — the bare bucket reads 2, deliberately.  Only
+-- `ieRows` is keyless, and only a keyless population can be scanned pairwise.
+ieRowsAll : ImplEnv -> List ImplRow
+ieRowsAll env = env.ieRows
+
+-- ⚠️ `ieRowOrd r == cur`, NOT `declEnvVisibleAt cur (ieRowOrd r)`.  The latter is the
+-- ordinal PREFIX — every earlier module too — which is a different set and the wrong
+-- one for a per-module sweep; it would also hand `declEnvVisibleAt` another reader,
+-- which A-3.6 (#1558) is counting.  `ceRowsOwnedBy` writes `== cur` for the identical
+-- reason; keep the two spellings the same.
+ieRowsOwnedBy : Int -> ImplEnv -> List ImplRow
+ieRowsOwnedBy cur env = filterList (r => ieRowOrd r == cur) env.ieRows
+
 -- ── §9.7's scoping proofs, as ASSERTIONS rather than sentences ────────────────
 --
 -- 🚨 READ THIS BEFORE THE ASSERTIONS, OR THEY WILL TELL YOU SOMETHING FALSE.
@@ -15295,10 +15320,15 @@ implDefinesMethodAtGo ((ImplEntry tag2 methodNames _ _ _ _)::rest) method tag
 -- increase.
 public export data CohImpl = CohImpl IfaceRef (List Mono) String (Option Loc)
 
-cohImplsOf : Decl -> List CohImpl
-cohImplsOf d = cohImplsOfMid "" d
-
--- module-tagged variant: stamp every harvested CohImpl with [mid].
+-- 🪦 RETIRED 2026-08-12 (#1559 A-3.7 bite 3.7-9): `cohImplsOf` / `cohImplsOfMid` —
+-- the decl-walking adapters that built `CohImpl`s straight off `DImpl` nodes, and
+-- `cohCollectImpls` / `cohCollectModuleImpls`, their two list drivers.  Coherence's
+-- input is now a projection of `IE`'s rows (`cohImplOfRow`), so both sweeps read the
+-- registry the rest of stage K reads instead of re-walking decls.  Zero tree-wide
+-- callers at deletion time (`grep -rn 'cohCollectImpls\|cohCollectModuleImpls\|
+-- cohImplsOf' --include=*.mdk .` → definitions and comments only).  The `#414` span
+-- derivation they carried is preserved below, because `cohImplOfRow` still calls
+-- `firstTyLocList` on the row's raw head and inherits every word of it.
 --
 -- #414: the span to blame for an impl comes from its head types, via
 -- `firstTyLocList` (`frontend/ast.mdk`), which folds `firstTyLoc` — that inner
@@ -15318,23 +15348,13 @@ cohImplsOf d = cohImplsOfMid "" d
 -- `DeclPos` side-table threaded into typecheck; both are out of proportion to an
 -- S3 diagnostic-quality fix.  Every head naming a CONCRETE type is covered.
 --
--- #1559 A-3.7 OCCURRENCE MINT: `implOrigin` is destructured in the SAME record
--- pattern as `iface`, and the `IfaceRef` is built from that pair right here — the
--- discipline `implCompletenessMsgsOfMap` states for itself and the identical
--- expression `implDeclFact` uses to build `ImplRow`'s interface half.  Written this
--- way so the two constructions cannot drift: when this adapter is retired in favour
--- of a projection of `IE`'s rows, the interface half it yields must already be the
--- same value.
-cohImplsOfMid : String -> Decl -> List CohImpl
-cohImplsOfMid mid (DAttrib _ d) = cohImplsOfMid mid d
-cohImplsOfMid mid (DImpl { iface, tys, implOrigin, ... }) = [
-  CohImpl IfaceRef {
-    irName = iface,
-    irOrigin = implOrigin,
-  } (cohFreshTys tys) mid (firstTyLocList tys)
-]
-cohImplsOfMid _ _ = []
-
+-- #1559 A-3.7 OCCURRENCE MINT, and the retirement above is the reason it worked:
+-- the deleted adapter destructured `implOrigin` in the SAME record pattern as `iface`
+-- and built the `IfaceRef` from that pair on the spot, using the identical expression
+-- `implDeclFact` uses to build `ImplRow`'s interface half.  Because the two
+-- constructions could not drift, replacing the adapter with a projection of `IE`'s
+-- rows yields the same interface half by construction rather than by assertion.
+--
 -- the impl's head args → monos under ONE shared fresh-var map (so a var reused
 -- across args, e.g. `Conv a a`, is the SAME fresh tyvar — the oracle shares one
 -- tbl across the whole impl head; distinct impls get distinct ids).
@@ -15343,6 +15363,60 @@ cohFreshTys tys =
   let names = dedup (flatMap tyVarNames tys)
   let tvs = freshTvMap names
   map (fromAstType tvs) tys
+
+-- #1559 A-3.7: THE `IE`→`CohImpl` ADAPTER — coherence's input, relocated off the decl
+-- walk.  Every one of the four things coherence judges on comes out of the row:
+--   * the interface half is `ieRowTriple`'s `IfaceRef` — the SAME value
+--     `cohImplsOfMid` built by hand from `iface`+`implOrigin`, because `implDeclFact`
+--     builds it with the identical expression.  That is why this relocation is not an
+--     acceptance change: `cohSameIface` (3.7-4) sees the same pair of `IfaceRef`s.
+--   * the head is `cohFreshTys` of the row's raw `List Ty`, the same call the decl
+--     adapter made.  Effectful (fresh tyvars), exactly as the decl adapter was.
+--   * the owner module id is `instRefMid` of the row's `InstRef` — this is where
+--     `InstRef` acquires its FIRST judgment reader in this tree.
+--   * the blame span is `firstTyLocList` of that same raw head.
+-- ⚠️ `ieLoc` IS NOT OWED FOR THIS.  `ImplRow`'s "no location field" note argues from
+-- `Decl` carrying no `Loc`, which is true and beside the point: the row carries the
+-- raw `List Ty`, and the parser stamps every `TyCon` leaf with its span, so the span
+-- coherence uses today is recoverable with no new field and no `DImpl` change.
+cohImplOfRow : ImplRow -> CohImpl
+cohImplOfRow r = match ieRowTriple r
+  (ir, tys, _) => CohImpl ir (cohFreshTys tys) (instRefMid (ieRowInst r)) (firstTyLocList tys)
+
+-- #1559 A-3.7: 🚨 THE PRELUDE CARVE-OUT, AND [hasPrelude] IS THE WHOLE POINT OF IT.
+-- Coherence has never seen prelude impls: a user `impl Eq Int` deliberately overrides
+-- the prelude's and is α-equal to it, so pairing the two would reject
+-- `test/lint_fixtures/derivable_needs_datadecl.mdk` and every program like it.  Both
+-- old adapters got this for free — `checkCoherence` was handed the driver-staged USER
+-- decls and `cohCollectModuleImpls` walked USER modules only.  An `IE` built by
+-- `buildDeclEnvs` contains the prelude, so the exclusion has to be made explicit.
+--
+-- The prelude is ALWAYS ordinal 0 on the Module arm, structurally: `buildDeclEnvs`
+-- builds `declEnvModulesFrom 0 (("core", coreDecls)::modules)`, so nothing else can be.
+--
+-- ⚠️ AND A HARDCODED `!= 0` WOULD BE WRONG — IT IS THE MOST DANGEROUS LINE IN THIS
+-- UNIT.  `flatImplEnvOf` builds its ONE user module at ordinal 0, so on the Flat arm
+-- `!= 0` drops EVERY row and turns every flat coherence rejection into a silent
+-- accept.  Flat's prelude/user boundary is carried by the decl list the driver hands
+-- in (`coherenceUserDecls`), not by an ordinal, so Flat passes `False` here and there
+-- is nothing to filter.  Module passes `True`.
+cohRowVisible : Bool -> ImplRow -> Bool
+cohRowVisible hasPrelude r = not (hasPrelude && ieRowOrd r == 0)
+
+-- the whole-graph sweep's population (`globalCoherenceConflict`).  The filter runs
+-- BEFORE the caller's `reverseL`, so the surviving list's head is the first USER
+-- module — which is exactly what the decl-walking adapter's list was.
+cohRowsOf : Bool -> ImplEnv -> List ImplRow
+cohRowsOf hasPrelude env = filterList (cohRowVisible hasPrelude) (ieRowsAll env)
+
+-- the per-module sweep's population (`checkCoherence`).  The carve-out is composed in
+-- rather than assumed away: on Module [cur] is a user module's ordinal and so never 0,
+-- and on Flat [hasPrelude] is `False` — so this filter removes nothing on either live
+-- arm.  It is written anyway because "0 is never both" is a property of the callers,
+-- not of this function, and a fourth caller would not inherit it.
+cohRowsOwnedBy : Int -> Bool -> ImplEnv -> List ImplRow
+cohRowsOwnedBy cur hasPrelude env =
+  filterList (cohRowVisible hasPrelude) (ieRowsOwnedBy cur env)
 
 -- impls_overlap: do two impl head-arg lists share a common instance?  Every
 -- TVar (fresh per impl, so distinct ids) is a unification wildcard with a shared
@@ -15608,14 +15682,23 @@ cohOverlapMsg iface xs ys = match cohPpPair xs ys
 data CohScan =
   | CohScan (Option (String, Option Loc)) (Option (String, Option Loc))
 
-cohScan : List CohImpl -> CohScan
-cohScan impls = cohScanOuter impls (CohScan None None)
+-- #1559 A-3.7: WHICH SWEEP IS RUNNING, threaded as a value instead of inferred from
+-- the shape of the module ids.  `cohSoftInScope` used to answer "am I the per-module
+-- sweep?" by testing `mid1 == "" && mid2 == ""`, which was only ever a PROXY: the
+-- per-module input was built by `cohImplsOf`, which stamped `""` because it had no
+-- module id to stamp.  The proxy is correct exactly while that holds and silently
+-- wrong the moment the per-module sweep is fed rows that carry a real id — which is
+-- what pointing it at `IE` does.  See `cohSoftInScope` for the failure it prevents.
+data CohSweep = CohSweepOwn | CohSweepGlobal
 
-cohScanOuter : List CohImpl -> CohScan -> CohScan
-cohScanOuter [] acc = acc
-cohScanOuter (e::rest) acc
+cohScan : CohSweep -> List CohImpl -> CohScan
+cohScan sweep impls = cohScanOuter sweep impls (CohScan None None)
+
+cohScanOuter : CohSweep -> List CohImpl -> CohScan -> CohScan
+cohScanOuter _ [] acc = acc
+cohScanOuter sweep (e::rest) acc
   | cohScanDone acc = acc
-  | otherwise = cohScanOuter rest (cohScanInner e rest acc)
+  | otherwise = cohScanOuter sweep rest (cohScanInner sweep e rest acc)
 
 -- both classes already witnessed ⇒ nothing later can change what is reported.
 cohScanDone : CohScan -> Bool
@@ -15650,13 +15733,13 @@ cohScanDone _ = False
 cohSameIface : IfaceRef -> IfaceRef -> Bool
 cohSameIface a b = sameTyConHead a.irName a.irOrigin b.irName b.irOrigin
 
-cohScanInner : CohImpl -> List CohImpl -> CohScan -> CohScan
-cohScanInner _ [] acc = acc
-cohScanInner (e1@(CohImpl if1 xs mid1 _)) ((CohImpl if2 ys mid2 _)::rest) acc
+cohScanInner : CohSweep -> CohImpl -> List CohImpl -> CohScan -> CohScan
+cohScanInner _ _ [] acc = acc
+cohScanInner sweep (e1@(CohImpl if1 xs mid1 _)) ((CohImpl if2 ys mid2 _)::rest) acc
   | cohScanDone acc = acc
   | cohSameIface if1 if2 && cohOverlap xs ys =
-    cohScanInner e1 rest (cohClassify e1 xs ys mid1 mid2 acc)
-  | otherwise = cohScanInner e1 rest acc
+    cohScanInner sweep e1 rest (cohClassify sweep e1 xs ys mid1 mid2 acc)
+  | otherwise = cohScanInner sweep e1 rest acc
 
 -- classify ONE overlapping pair.  A strict specialization either way is coherent
 -- (most-specific-wins ranks it) and contributes nothing.  The remaining two cases
@@ -15682,27 +15765,41 @@ cohScanInner (e1@(CohImpl if1 xs mid1 _)) ((CohImpl if2 ys mid2 _)::rest) acc
 -- work.  Until it exists, the declaration site is the only place this class is
 -- caught at all.
 --
--- 🚨 CARRY-FORWARD FOR A-3 (#1112), and it is a NARROWING nobody currently owns.
--- `checkCoherence`'s input is USER DECLS ONLY, so the HARD arm's reach is
--- user-vs-user: a user `impl Eq Int` shadowing the PRELUDE's is α-equal and is NOT
--- rejected today (`test/lint_fixtures/derivable_needs_datadecl.mdk` checks clean at
--- exit 0 — #1162's equal-head second symptom, which F-3d neither fixes nor worsens).
--- When A-3 widens coherence's input to the global `IE`, this arm will start
--- rejecting every such program, INCLUDING that in-tree fixture.  §5 R2 does not
--- license a narrowing, and G-11's disposition is written about (a)-violations and
--- does not cover a C1 hard arm.  Revisit this arm as part of that widening rather
--- than discovering it from a red gate.
-cohClassify : CohImpl -> List Mono -> List Mono -> String -> String -> CohScan -> CohScan
-cohClassify e1 xs ys mid1 mid2 (CohScan hard soft)
+-- 🚨 THE A-3 CARRY-FORWARD, DISCHARGED BY A-3.7 (#1559) — AND THE RESIDUE IT NAMES
+-- SURVIVES, so this note is rewritten rather than deleted.
+--
+-- What it warned about: the HARD arm's reach is user-vs-user only, because
+-- `checkCoherence`'s input was USER DECLS ONLY.  A user `impl Eq Int` shadowing the
+-- PRELUDE's is α-equal to it and so is NOT rejected — `test/lint_fixtures/
+-- derivable_needs_datadecl.mdk` checks clean at exit 0 (#1162's equal-head second
+-- symptom, which F-3d neither fixes nor worsens).  Widening coherence's input to the
+-- global `IE` would have made this arm reject every such program, including that
+-- in-tree fixture: a mass NARROWING §5 R2 does not license.
+--
+-- How A-3.7 discharged it: coherence now DOES read `IE`, and `cohRowVisible` carves
+-- the prelude out of both sweeps explicitly — `hasPrelude` on the Module arm drops
+-- ordinal 0 (structurally the prelude, per `buildDeclEnvs`), and the Flat arm keeps
+-- its prelude boundary in the decl list the driver stages (`coherenceUserDecls`),
+-- which is why that field does NOT retire in this unit.  Both probes were measured
+-- across the relocation: a user `impl Eq Int` α-equal to the prelude's checks at exit
+-- 0 on the Flat path AND on the Module path, before and after.
+--
+-- ⚠️ THE RESIDUE IS DELIBERATELY PRESERVED, NOT FIXED.  With the carve-out in place a
+-- user impl shadowing a prelude impl stays UNCHECKED rather than merely accepted.
+-- Whether it SHOULD be rejected is a language question (#1162's equal-head second
+-- symptom), not a substrate one, and A-3.7 relocated the input without re-adjudicating
+-- it.  Do not "tidy" this by dropping the carve-out; that is the narrowing above.
+cohClassify : CohSweep -> CohImpl -> List Mono -> List Mono -> String -> String -> CohScan -> CohScan
+cohClassify sweep e1 xs ys mid1 mid2 (CohScan hard soft)
   | cohStrictlyMoreSpecific xs ys = CohScan hard soft
   | cohStrictlyMoreSpecific ys xs = CohScan hard soft
   | cohMutuallySubsumes xs ys = CohScan (cohKeepFirst hard (Some (cohHardMsg e1 xs ys mid1 mid2, cohImplLoc e1))) soft
-  | not (cohSoftInScope mid1 mid2) = CohScan hard soft
+  | not (cohSoftInScope sweep mid1 mid2) = CohScan hard soft
   | otherwise = CohScan hard (cohKeepFirst soft (Some (cohIncomparableMsg (cohImplIfaceName e1) xs ys mid1 mid2, cohImplLoc e1)))
 
 -- Which sweep OWNS a soft (⊑-incomparable) pair.  Two sweeps run over overlapping
--- inputs: `checkCoherence` per module (mids are "", since `cohImplsOf` records none)
--- and `globalCoherenceConflict` over every user module's impls (real mids).  A pair
+-- inputs: `checkCoherence` over ONE module's own impls and `globalCoherenceConflict`
+-- over every user module's impls (real mids).  A pair
 -- whose two impls live in the SAME module is seen by BOTH — the per-module one with a
 -- real span, the global one span-less (#414) — so recording it in both makes
 -- `run`/`build` print it TWICE where `check` prints it once.  The global sweep's
@@ -15713,9 +15810,34 @@ cohClassify e1 xs ys mid1 mid2 (CohScan hard soft)
 -- way, and that is PRE-EXISTING — it did so as a `T-CONFLICTING-IMPL` error before
 -- F-3d, on these same two paths — so narrowing it here would be an unrelated
 -- behaviour change riding this one, and one that moves error goldens.
-cohSoftInScope : String -> String -> Bool
-cohSoftInScope "" "" = True
-cohSoftInScope mid1 mid2 = cohIsCrossModule mid1 mid2
+-- 🚨 #1559 A-3.7: SWEEP-SCOPED, NOT MID-SHAPE-SCOPED, AND THE DIFFERENCE IS A
+-- LOUD→SILENT REGRESSION THIS FUNCTION USED TO BE ONE COMMIT AWAY FROM.
+-- The body was:
+--     cohSoftInScope "" ""   = True
+--     cohSoftInScope m1 m2   = cohIsCrossModule m1 m2
+-- i.e. it asked "are both mids empty?" as a stand-in for "am I the per-module
+-- sweep?".  That proxy held only because the per-module sweep's input came from
+-- `cohImplsOf`, which had no module id to stamp and so stamped `""`.  Pointing that
+-- sweep at `IE` gives every row a REAL id (`instRefMid`), so an intra-module pair
+-- arrives as `(m, m)` with `m != ""` — the first arm stops matching, `cohIsCrossModule
+-- m m` is `False`, and EVERY intra-module `W-INCOMPARABLE-IMPLS` silently stops being
+-- reported.  Diagnostic-only, so no value golden in this tree could see it.
+--
+-- The sweep tag says outright what the mid shapes were being read to infer:
+--   * `CohSweepOwn` — the per-module sweep.  Its input is ONE module's own rows, so
+--     every pair it sees is intra-module BY CONSTRUCTION and it owns all of them.
+--     Answering `True` unconditionally is exactly what the old `"" ""` arm did for
+--     the only input that sweep ever had.
+--   * `CohSweepGlobal` — the whole-graph sweep.  It owns only the pair that SPANS two
+--     modules; the intra-module ones already belong to the sweep above.  The `"" ""`
+--     arm is retained HERE (and only here) because it is behaviour-preserving for a
+--     degenerate global input in which both ids are blank — a shape this function
+--     answered `True` for before A-3.7, and one this bite deliberately does not
+--     re-adjudicate.
+cohSoftInScope : CohSweep -> String -> String -> Bool
+cohSoftInScope CohSweepOwn _ _ = True
+cohSoftInScope CohSweepGlobal "" "" = True
+cohSoftInScope CohSweepGlobal mid1 mid2 = cohIsCrossModule mid1 mid2
 
 -- each head matches the other, i.e. they are α-equal up to renaming (`cohSubsumes`
 -- is one-sided matching, so mutual matching means each is an instance of the other).
@@ -15806,8 +15928,23 @@ pushCoherenceWarning loc msg =
 -- declaration order to mirror the oracle, whose env.impls is built by prepending each
 -- entry (`entry :: !(env.impls)`) — so the conflict message names the later-declared
 -- impl as the first head, byte-identical.
-checkCoherence : List Decl -> Unit
-checkCoherence userDecls = match cohScan (reverseL (cohCollectImpls userDecls))
+-- #1559 A-3.7: the input is `IE`'s rows for THIS module, not a decl list.
+-- [cur] is the reading module's ordinal and [hasPrelude] says whether this env
+-- contains the prelude at ordinal 0 — see `cohRowVisible`, whose header carries the
+-- fail-direction for both arms.
+--
+-- POPULATION EQUALITY, derived rather than assumed (it is the one thing that could
+-- silently change what gets checked).  The Module caller used to pass `prog`, the
+-- module's own desugared decls as `foldModules` holds them.  `ieRowsOwnedBy ordHere`
+-- returns the rows `implRowsOf` built from `demDecls` at that ordinal.  Those are the
+-- same list VALUE: `checkModulesDiags` stamps once (`stampGraphTyOrigins`) and hands
+-- the SAME `modules` to `checkModulesPreamble` → `buildDeclEnvs` and to `foldModules`,
+-- and `foldModules` passes each `(mid, prog)` pair's `prog` to the worker verbatim —
+-- no transform on either side.  Harvest equality holds too: `implDeclFact` and the
+-- retired `cohImplsOfMid` match arm-for-arm (unwrap `DAttrib`, take `DImpl`, drop
+-- everything else) and both are a `flatMap` in decl order.
+checkCoherence : ImplEnv -> Int -> Bool -> Unit
+checkCoherence env cur hasPrelude = match cohScan CohSweepOwn (reverseL (map cohImplOfRow (cohRowsOwnedBy cur hasPrelude env)))
   CohScan hard soft =>
     let _ = cohPushHard hard
     cohPushSoft soft
@@ -17028,9 +17165,16 @@ checkInterfaceCycles ce cur =
 -- ordinal.  [cycDecls] itself is retained because `checkInterfaceCycles`' comment
 -- above derives the root-set equality from it and a later unit will want that
 -- derivation to still have its subject.
-runFinalChecks : List Decl -> List Decl -> ClassEnv -> ClassEnv -> ImplEnv -> Int -> Unit
-runFinalChecks cohDecls _cycDecls ownCe cycCe cycIe cur =
-  let _ = checkCoherence cohDecls
+-- #1559 A-3.7: coherence now reads stage K too, so this helper carries TWO `IE`s for
+-- the same reason A-3.5c gave it two `CE`s — [cohIe] is the env over the population
+-- [cohDecls] names (the USER boundary, trap #5) and [cycIe] is the env over the
+-- whole-universe population [cycDecls] names.  They are the same env only on the paths
+-- where those two decl lists were already the same.  [hasPrelude] rides with [cohIe]:
+-- it is a property of THAT env, not of the caller's mode, and `cohRowVisible` states
+-- what each arm must pass and what happens if it passes the other one.
+runFinalChecks : List Decl -> List Decl -> ClassEnv -> ClassEnv -> ImplEnv -> ImplEnv -> Int -> Bool -> Unit
+runFinalChecks cohDecls _cycDecls ownCe cycCe cohIe cycIe cur hasPrelude =
+  let _ = checkCoherence cohIe cur hasPrelude
   let _ = checkInterfaceCycles cycCe cur
   let _ = checkPhantomMethods ownCe cur
   checkSuperImpls cohDecls cycCe cycIe cur
@@ -17258,13 +17402,8 @@ tyMatchesAst (TyConstrained _ t1) t2 = tyMatchesAst t1 t2
 tyMatchesAst t1 (TyConstrained _ t2) = tyMatchesAst t1 t2
 tyMatchesAst _ _ = False
 
--- effectful concatMap of cohImplsOf (astTypeFresh allocates fresh tyvars → <Mut>)
-cohCollectImpls : List Decl -> List CohImpl
-cohCollectImpls [] = []
-cohCollectImpls (d::rest) = cohImplsOf d ++ cohCollectImpls rest
-
 -- ── D3 / WS-2 part-2: GLOBAL (cross-module) coherence ──────────────────────
--- Per-module coherence (checkCoherence prog) accepts two DIFFERENT modules that
+-- Per-module coherence accepts two DIFFERENT modules that
 -- each define `impl C T` for the SAME instance — each module is locally coherent,
 -- but jointly they are incoherent (silent dispatch ambiguity).  This pass scans
 -- the joint impl set over ALL USER modules (prelude EXCLUDED — a user `impl Eq Int`
@@ -17275,11 +17414,10 @@ cohCollectImpls (d::rest) = cohImplsOf d ++ cohCollectImpls rest
 -- no occurrence-dedup needed.  A conflict between two distinct modules is reported
 -- naming BOTH (cohCrossModuleMsg via cohHardMsg's cross-module branch, or the
 -- `(defined in …)` suffix `cohWhereSuffix` adds to the F-3d soft warning).
-cohCollectModuleImpls : List (String, List Decl) -> List CohImpl
-cohCollectModuleImpls [] = []
-cohCollectModuleImpls ((mid, prog)::rest) = flatMap (cohImplsOfMid mid) prog
-  ++ cohCollectModuleImpls rest
-
+-- #1559 A-3.7: "the joint impl set over ALL USER modules" is now `cohRowsOf True` over
+-- the whole-graph `IE` — the prelude exclusion is the `True`, and the one-entry-per-
+-- definition property is `ieRows`' by construction (imports copy no rows either).
+--
 -- the first cross-module coherence conflict of EACH CLASS (if any) as bare messages
 -- — `(hard, soft)`, the same split `checkCoherence` reports, so the cross-module path
 -- demotes the ⊑-incomparable class exactly as the per-module one does (F-3d).
@@ -17299,8 +17437,20 @@ cohCollectModuleImpls ((mid, prog)::rest) = flatMap (cohImplsOfMid mid) prog
 -- names BOTH owning modules, which is the locating information that actually helps
 -- here.  Attaching a real span needs the renderers to honour `Loc`'s own filename
 -- (a driver/diagnostics.mdk change, well beyond an S3 caret fix).
-globalCoherenceConflict : List (String, List Decl) -> (Option String, Option String)
-globalCoherenceConflict modules = match cohScan (reverseL (cohCollectModuleImpls modules))
+-- #1559 A-3.7: the input is the whole-graph `IE`, prelude carved out, not the driver's
+-- per-module decl pairs.
+--
+-- ORDER IS THE THING THIS BITE COULD MOVE, because `cohScanInner` keeps the FIRST pair
+-- per class over a `reverseL`-ed list and the wording names `e1` first.  The two orders
+-- agree, term by term: the old list was `flatMap (cohImplsOfMid mid) prog` over the
+-- driver's `modules` in dependency-first order; `ieRows` is built by `buildImplEnvGo`
+-- over the same modules in ORDINAL order (which is that same order, offset by the
+-- prelude at 0) and within a module by `implDeclFacts = flatMap implDeclFact prog`, in
+-- decl order.  The one difference is the prelude, which `cohRowsOf True` removes
+-- BEFORE the `reverseL` below — so the filtered list's head is the first user module,
+-- which is exactly what the old list's head was.
+globalCoherenceConflict : ImplEnv -> (Option String, Option String)
+globalCoherenceConflict env = match cohScan CohSweepGlobal (reverseL (map cohImplOfRow (cohRowsOf True env)))
   CohScan hard soft => (map fst hard, map fst soft)
 
 -- the USER decls a driver wants coherence-checked.  Set by single-file drivers
@@ -24476,8 +24626,11 @@ keepBoundResidual boundIds (iface, args) = match boundTyvarIds boundIds args
 -- §3 `inst`, run for its RESIDUAL rather than for a verdict.  A predicate whose
 -- arguments are not all concrete-headed is itself the residual (OD2 defers it); a
 -- concrete-headed one is matched against the impl universe and replaced by that impl's
--- substituted `requires`, recursively.  No matching impl ⇒ no residual, and this
--- function must never invent a diagnostic of its own.
+-- substituted `requires`, recursively.  No matching impl ⇒ no residual.
+-- ⚠️ This used to add *"and this function must never invent a diagnostic of its own"*.
+-- That has NOT been true since #1562 (`T-REQUIRES-DEPTH`, the fuel arm below) and is no
+-- longer true of the `None` arm either: `unroutedResidual` splits it, and rejects the
+-- half where an impl DOES match but its evidence cannot be routed — see its header.
 -- 🚨 BUT DO NOT READ THE `None` ARM AS "SOMEONE ELSE REPORTS IT".  This comment used to
 -- say the goal is *"unsatisfiable and `checkOneCallObligation`/`checkReqOne` own that
 -- diagnostic"*, and that premise is FALSE for a PARTIALLY-GROUND vector — precisely the
@@ -24491,7 +24644,10 @@ keepBoundResidual boundIds (iface, args) = match boundTyvarIds boundIds args
 -- — and `build` exit 1 on an emitter `E-PANIC: no impl of method 'conv' for type 'Wrap'`.
 -- `[]` here is therefore still the same representational conflation issue 1562 was about
 -- ("no residual" and "no answer" are one value), one shape over; it is filed as issue
--- 1578 and is NOT this function's to fix silently.
+-- 1578 and is NOT this function's to fix silently.  ⚠️ That shape has NO `Wrap`-headed
+-- impl anywhere, so `unroutedResidual`'s existence test is False for it and it still
+-- takes the silent `[]`: 1578 is untouched by Door 4, which splits off only the case
+-- where an impl DOES match the goal.
 -- ⚠️ A SECOND thing this arm's neighbourhood does NOT own: when the goal IS matched but
 -- only the GENERAL member of a specific-vs-general overlap can match a partially-free
 -- vector, committing to that impl's `requires` saddles the binding with a constraint its
@@ -24542,9 +24698,64 @@ residualPredsOf fuel iface args
     let _ = pushTypeErrorOnceAt "T-REQUIRES-DEPTH" goalSiteLoc.value (requiresDepthMsg iface args)
     []
   | otherwise = match findMatchingImplReqsU perRun.value.residualUnivRef.value iface args
-    None => []
+    None => unroutedResidual iface args
     Some (subst, reqs) =>
       flatMap (residualPredOne fuel) (map (reqToObligation subst) reqs)
+
+-- ── #1564 / Stage A "Door 4": the un-plumbed case is a LOUD reject ────────────
+-- `residualPredsOf`'s `None` arm conflates TWO facts, and since the instance axis went
+-- graph-global (ARCH A-3.6, issue 1112) they are no longer the same fact:
+--   (a) NO impl of this interface matches these arguments anywhere — the ordinary
+--       "nothing to reduce against" terminal, owned by the call/req checkers (and, for
+--       the partially-ground shape, still under-reported: issue 1578).  Unchanged: [].
+--   (b) an impl DOES match — `implMatchesU` says so over the very same `ImplUniverse`
+--       this arm just consulted — but `findMatchingImplReqsU` could not hand back its
+--       `requires`, because its concrete leg (`concreteReqMatchByIface`) does not read
+--       that universe at all: it reads `shadowKeyTableRef`, copied per module from the
+--       CUMULATIVE `universeKeyBucketsRef` accumulator.  So candidacy spans the whole
+--       module graph while the EVIDENCE registry is still a topological prefix, and a
+--       goal whose impl is declared in a module that sorts LATER than the goal's own is
+--       admitted with no requires, no residual, no `λd̄.` slot and no route dict.
+-- (b) used to be impossible: before A-3.6 the same import order that starved the
+-- evidence registry also starved candidacy, so the program was REJECTED (that is
+-- issue 1564's false reject).  Afterwards it was ACCEPTED and MISCOMPILED — MEASURED on
+-- `test/must_fail_fixtures/1564-import-order-decides-conditional-impl-candidacy`:
+-- `check` exit 0 (`main : Unit`), `run` exit 1 `E-PANIC: putStrLn: not a String`,
+-- `build` exit 0, and the built binary exit **139**, because `@mdk_impl_Wrap_tagOf` is
+-- emitted arity-2 and called arity-1: the value cell lands in the dict slot and the impl
+-- loads a function pointer out of it.
+-- 🚨 SO THIS ARM MUST NOT FALL THROUGH TO `[]`.  Returning "no residual" for (b) is
+-- exactly issue 1549's drop and exactly issue 1562's cliff, one cause over — and the
+-- precedent for the remedy is `T-REQUIRES-DEPTH` on this same function, whose own note
+-- states the principle: only making the cliff LOUD removes the silent wrongness.
+-- ⚠️ WHAT THIS IS NOT.  It does not route the evidence and it does not make
+-- DICT-SEMANTICS C4/I2 true — C4 is a conjunction ("consult the same instance set AND
+-- produce the same evidence"), and only the first conjunct is delivered.  Repointing the
+-- reader at `IE`, or re-keying `universeKeyBucketsRef`, are both DEFERRED to B-2 by name
+-- (`TYPECHECK-TARGET-ARCHITECTURE.md:1814-1815`).  This converts a segfault into a
+-- located reject and nothing more; it drains when the reader moves, not before.
+-- ⚠️ WHY THE TEST IS `implMatchesU` OVER THE SAME `univ`, and not a broader one: it is
+-- the EXISTENCE twin of the matcher that just failed (same buckets, same
+-- `implHeadMatchesArgs`/`implHeadSubst` success condition, same headless fallback), so
+-- True-here-with-None-there isolates precisely the two-registry disagreement.  When both
+-- registries agree that nothing matches, this is silent and (a)'s behaviour is
+-- byte-identical to before.
+unroutedResidual : IfaceRef -> List Mono -> List (IfaceRef, List Mono)
+unroutedResidual iface args
+  | implMatchesU perRun.value.residualUnivRef.value iface args =
+    let _ = pushTypeErrorOnceAt "T-REQUIRES-UNROUTED" goalSiteLoc.value (requiresUnroutedMsg iface args)
+    []
+  | otherwise = []
+
+-- `T-REQUIRES-UNROUTED` (issue 1564).  Root-cause-honest: it must NOT say the impl is
+-- missing, because it is not — saying so would send the reader off to write an `impl`
+-- that already exists.  It names the impl as present, names the limitation as the
+-- compiler's, and gives the one edit that actually works today: import the defining
+-- module where the constraint is generalized (MEASURED on 1564's fixture — adding
+-- `import wrapimpl` to `nest.mdk` alone restores the dict parameter and the program
+-- prints `wrap(int)`).
+requiresUnroutedMsg : IfaceRef -> List Mono -> String
+requiresUnroutedMsg iface args = "Cannot pass a dictionary for `\{iface.irName} \{ppPredArgsShared args}`: a matching `impl \{iface.irName} …` does exist in this program and is a candidate here, but this compiler cannot yet route its evidence into the module where this binding is generalized — the impl is declared in a module that this one does not import. This is a compiler limitation, not a missing impl: accepting it would build a program that reads a dictionary that was never passed. Add an `import` of the module that declares that impl to the module containing this binding, or move the binding into a module that already imports it"
 
 -- does at least ONE argument carry a concrete head tycon?  The per-argument twin of
 -- `allConcreteHeads`: `False` means the whole vector is head-free, hence terminal for
@@ -25006,7 +25217,12 @@ checkToLines prog =
   let schemes = checkProgramSchemes [] prog
   let progCe = flatClassEnvOf prog
   let progIe = flatImplEnvOf prog
-  let _ = runFinalChecks prog prog progCe progCe progIe 0
+  -- #1559 A-3.7: ONE `IE`, passed for both roles — this path is prelude-free (see the
+  -- note below), so its coherence population and its cycle/super population are the
+  -- same `prog`, exactly as the two `CE` arguments already were.  `hasPrelude = False`:
+  -- `flatImplEnvOf` puts this single module at ordinal 0, so filtering ordinal 0 here
+  -- would drop every row and silently switch flat coherence off.
+  let _ = runFinalChecks prog prog progCe progCe progIe progIe 0 False
   let errs = reverseL perRun.value.typeErrors.items.value
   match errs
     [] => joinNl (schemeLines schemes)
@@ -25051,7 +25267,15 @@ seedAndCheckSplit runtimeDecls coreProg userProg =
   -- as [cycDecls], i.e. the whole seeded universe the super-existence query used to
   -- scan — so the population question is "does IE over that list equal that list",
   -- not a new one.
-  let _ = runFinalChecks userDecls prog (flatClassEnvOf userDecls) (flatClassEnvOf prog) (flatImplEnvOf prog) 0
+  -- #1559 A-3.7: TWO `IE`s, because the two decl lists differ here — the same split
+  -- the two `CE`s above already carry.  Coherence's env is built from [userDecls], the
+  -- driver-staged USER boundary (trap #5); handing it `flatImplEnvOf prog` instead
+  -- would feed it the seeded prelude and false-positive on the stdlib itself.
+  -- `hasPrelude = False` on both counts: there is no prelude in [userDecls], and
+  -- `flatImplEnvOf` seats its one module at ordinal 0, which the carve-out must not
+  -- filter.  This is the Flat arm's prelude boundary, and it is a DECL LIST, which is
+  -- why `coherenceUserDecls` does not retire in this unit.
+  let _ = runFinalChecks userDecls prog (flatClassEnvOf userDecls) (flatClassEnvOf prog) (flatImplEnvOf userDecls) (flatImplEnvOf prog) 0 False
   schemes
 
 -- like checkToLines but seeds runtime.mdk's externs (for typechecking core.mdk,
@@ -27265,7 +27489,12 @@ checkModuleFullDiags mid seedVars accData accAll prog =
   let ordHere = declEnvsOrdOf mid declEnvsHere
   -- #1557 A-3.5b: the whole-graph `IE`, read at the SAME `ordHere` — the same key
   -- `ceHere` and `moduleImplUniv` (`checkBodyImpl`) already read at.
-  let _ = runFinalChecks prog (accAll ++ accData ++ prog) ceHere ceHere declEnvsHere.deImpls ordHere
+  -- #1559 A-3.7: coherence reads the SAME whole-graph `IE` at the SAME `ordHere`, and
+  -- takes this module's OWN rows from it (`cohRowsOwnedBy`) — the population `prog`
+  -- named, derived in `checkCoherence`'s header.  `hasPrelude = True`: this env came
+  -- from `buildDeclEnvs`, which seats the prelude at ordinal 0, and coherence has never
+  -- seen prelude impls.
+  let _ = runFinalChecks prog (accAll ++ accData ++ prog) ceHere ceHere declEnvsHere.deImpls declEnvsHere.deImpls ordHere True
   (
     schemes,
     reverseL perRun.value.typeErrors.items.value,
@@ -27334,7 +27563,9 @@ checkModulesDiags runtimeDecls coreDecls0 modules0 =
   -- #414: no span — see globalCoherenceConflict (the entry module it attaches to is
   -- not the module the span would name, and the renderer keys the file by group).
   -- F-3d: the ⊑-incomparable half rides the WARNING list of the same module.
-  match globalCoherenceConflict modules
+  -- #1559 A-3.7: the whole-graph `IE` the preamble built above; `cohRowsOf True` is
+  -- what excludes the prelude, replacing "walk the user `modules` list".
+  match globalCoherenceConflict driverState.value.declEnvsRef.value.deImpls
     (hard, soft) => attachEntryWarnOpt soft (attachEntryDiagOpt hard perMod)
 
 attachEntryDiagOpt : Option String -> List (String, (List TcDiag, List TcDiag)) -> List (String, (List TcDiag, List TcDiag))
@@ -27406,7 +27637,9 @@ checkModulesEntryFull runtimeDecls coreDecls0 modules0 =
   -- Prepend any conflict (dependency-first, ahead of the entry's own errors).
   -- #414: no span — see globalCoherenceConflict.
   -- F-3d: the ⊑-incomparable half is prepended to `warns` instead of `errs`.
-  match globalCoherenceConflict modules
+  -- #1559 A-3.7: the whole-graph `IE` the preamble built above; `cohRowsOf True` is
+  -- what excludes the prelude, replacing "walk the user `modules` list".
+  match globalCoherenceConflict driverState.value.declEnvsRef.value.deImpls
     (hard, soft) => (schemes, prependDiagOpt "T-CONFLICTING-IMPL" 1 None hard errs, prependDiagOpt "W-INCOMPARABLE-IMPLS" 2 (Some cohIncomparableHelp) soft warns)
 
 -- prepend an optional bare-message diagnostic (code, severity, help) to a TcDiag list.

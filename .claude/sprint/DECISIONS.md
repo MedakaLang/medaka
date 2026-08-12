@@ -1183,3 +1183,254 @@ scope:      🚩 **A THIRD contaminated must-fail reading**, reported by A-3.7 a
             📌 The instability is itself the tell, and it is worth more than the reading: a genuine
             drain set is *stable*. Two runs a minute apart disagreeing is proof the tree, not the
             suite, is moving. Any future drain claim should be run twice before it is believed.
+
+## RUN-042 — A-3.6 LANDED — one path flipped, seven held; and RUN-006's falsifier was the WRONG PIN
+
+question:   Did the split flip land, and did RUN-006's checkpoint validate it?
+ruling:     **Landed: exactly ONE reader path flipped.** But **RUN-006's premise was
+            mechanistically wrong** — the 1072 pin cannot test this unit. The orchestrator adopted
+            the wrong falsifier; the implementer found the right one.
+derivation: RELAYED from A-3.6, binary confirmed fresh (`MEDAKA_STRICT=1` exit 0), reader set
+            re-derived by grep because A-3.5a had moved every line number in P0-C's list:
+            **FLIPPED (1)** — `ieSnapAt` → `checkBodyImpl:moduleImplUniv`, behind a new
+            `ieCandidacyVisibleAt _ _ = True`. **KEPT (7)** — `ceLookupAt` ×2, `ceRowsVisibleAt`,
+            `declEnvRowVisible` ×2, `declEnvRowKindEntries`, `aliasVisibleTo`. The argument for the
+            seven is uniform and checkable: each reaches the ordinal test **only** through
+            `declEnvVisibleAt`, whose body is byte-identical — `grep 'entryOrd <= cur'` still
+            matches it.
+            **C-2 DISSOLVED** under the split: performing it would have been exactly the field-owner
+            NARROWING RUN-010 was taken to prevent. P0-C says so itself.
+            🚩 **RUN-006 was wrong.** #1072's claim names `KeyBuckets`/`implEntryRouteWords`, and
+            `buildKeyTable : List Decl -> KeyBuckets` is **emitter-side** — a different substrate
+            from `IE`. A-3.6 cannot reach it; it was REPRO at RUN-033's baseline and is REPRO now.
+            **The real falsifier is `1564-import-order-decides-conditional-impl-candidacy`, whose
+            claim quotes I5 verbatim — and it DRAINED**, attributed by **single-variable revert**
+            (re-guard `declEnvVisibleAt` → exit 1 with the identical diagnostic; restore → exit 0).
+scope:      📌 The orchestrator adopted RUN-006 from the Fable consult without checking which
+            substrate #1072 names. **A falsifier is a claim about a mechanism and needs the same
+            derivation as any other claim** — "this pin tests this unit" is exactly the plausible,
+            precise, unverified assertion this run has caught eleven times in the arc's prose. It
+            was caught here only because the implementer checked.
+            ⭐ **C-1 was proven fail-capable rather than argued**: applying the ratchet's *"hand
+            every row the FINAL accumulator"* instruction takes the file **52/52 → 48/52 with
+            exactly those four lines failing and no others** — a doctest set demonstrably covering
+            what nothing else covered. That instruction is now retracted in-source AND in the
+            ratchet with an explicit DO-NOT (RUN-009 discharged).
+            🚩 **A NINTH reader path exists that RUN-013 could not have seen**: Lane B's
+            `ieRowsVisibleAt` — an IE reader, but a decl-time **existence** query, not candidacy.
+            Left on `declEnvVisibleAt`. **UNRULED and UNOWNED**, and it is the same question as
+            RUN-039. Two independent agents have now surfaced it.
+
+## RUN-043 — 🚨 THE WIDENING IS HALF LANDED: a compile-time rejection became a SEGFAULT
+
+question:   Does A-3.6's flip work end to end?
+ruling:     **No. It is a REGRESSION this sprint introduced**, reproduced first-hand by the
+            orchestrator on every arm rather than relayed. Escalated; owner ruled for investigation
+            over revert (RUN-044).
+derivation: Orchestrator, at `5efc8525`, on `test/must_fail_fixtures/1564-…/main.mdk`:
+            - `MEDAKA_STRICT=1 medaka check main.mdk` → **exit 0** (`main : Unit`). Was exit 1.
+            - `MEDAKA_STRICT=1 medaka run main.mdk` → **exit 1**,
+              `runtime error [E-PANIC]: putStrLn: not a String`.
+            - `medaka build … -o out` → exit 0 (read from a FILE, never a pipe); running `out` →
+              **exit 139**, `runtime error [E-FATAL-SIGNAL]: fatal memory fault (segmentation fault)`.
+            - control `medaka run control.mdk` → **exit 0**, prints `wrap(int)`. Clean on all arms.
+            ⇒ **Candidacy went graph-global; the evidence plumbing did not follow.**
+scope:      Loud in both engines, so **not S0** — but a compile-time diagnostic became a runtime
+            segfault: the error moved later and got worse in kind.
+            🚨 **In no unit's bite list** — not A-3.6's, not A-3.7's. Emergent from the flip.
+            🚨 **#1564's pin grades `check` ONLY, so it reports a CLEAN DRAIN for HALF A DRAIN.
+            DO NOT close #1564 on that signal.** A concrete instance of the standing hazard that a
+            pin measures the arm it was written for and is silent about every other arm — and here
+            the silent arm is a segfault.
+            The suspicion P0-H is dispatched to settle: **graph-global candidacy may not be a
+            self-contained A-3 deliverable**, since the epic places route/evidence work in B-2. If
+            so, "Stage A done" is not achievable alone, and RUN-005's C4/I2 verdict needs
+            re-reading — C4's own sentence requires two modules to *"produce the same evidence"*,
+            not merely to see the same instance set.
+
+## RUN-044 — ⚖️ OWNER RULINGS: investigate the scope question; finish A-3.7 now
+
+question:   Two decisions put to the owner after the stage landed.
+ruling:     **(1) Investigate the plumbing scope question NOW**, declining both "leave it to the
+            repair round" and "revert the flip". **(2) Re-dispatch A-3.7's remainder now** on the
+            quiescent tree.
+derivation: Owner decisions, 2026-08-12, on RUN-043 and RUN-041.
+scope:      P0-H (read-only) answers one question: is the plumbing fixable inside A-3 or does it
+            require B-2 — and does C4/I2 survive candidacy-global-but-evidence-not. Pointed at
+            `compiler/entries/core_ir_typed_modules_dump_main.mdk` per `AGENTS.md` (the highest-value
+            probe for any dispatch/dict-routing question), and warned off `core_ir_dump_main.mdk`,
+            which is prelude-free and typecheck-free and would show a clean tree with no route.
+            The A-3.7 completion agent owns 3.7-7/8/9/10 and re-examines 3.7-1/5/6, priority on
+            **3.7-5's armed `cohSoftInScope "" ""` hazard**, with a before/after proof that
+            `W-INCOMPARABLE-IMPLS` still fires.
+            ⚠️ Both briefs state concurrency **honestly** per RUN-038: neither promises exclusivity;
+            each names the other agent and what it may do.
+
+## RUN-045 — 🔴 VERDICT: **NEEDS-B-2.** C4/I2 does NOT survive. Revert was the better call
+
+question:   Is A-3.6's evidence plumbing fixable inside A-3, and does C4/I2 still hold?
+ruling:     **NEEDS-B-2. C4/I2-by-construction is NOT delivered by this stage.** P0-H, all results
+            against `5efc8525`, tree **clean** at every measurement, `MEDAKA_STRICT=1` throughout
+            (never fired). RELAYED, with the orchestrator's own spot-checks noted below.
+mechanism (DERIVED by P0-H from the typed Core IR + emitted LLVM, not from source reading):
+            Candidacy worked; **evidence did not**. Both import orders stamp the SAME route head
+            `RKey "Wrap"`; they differ only in payload —
+              main:    `CClause ((PVar "x"))` · route `(RKey "Wrap" ()) ()` · call `CVar "nest__nest"`
+              control: `CClause ((PVar "$dict_…") (PVar "x"))` · route `((RDict "$dict_…"))` ·
+                       call `CDict "nest__nest" ((RKey "Int"))`
+            At the ABI `@mdk_impl_Wrap_tagOf` is **arity-2 in both**, but main calls it **arity-1**:
+            the `Wrap` cell lands in the dict slot, the impl loads a function pointer out of it,
+            gets the tag word `21474836480`, and jumps. **That is the segfault.** Main also never
+            builds the `Tag Int` dict constant at all.
+            **Cause:** `residualPredsOf:24544` → `findMatchingImplReqsU:21453` →
+            `concreteReqMatchByIface:21471`, which **ignores its `univ` argument** and reads
+            `shadowKeyTableRef` ← `universeKeyBucketsRef` (`:20105`), a **cumulative** accumulator
+            (`:25314`). A-3.6 globalized `IE`; the evidence reader consults a **second, still
+            cumulative registry**.
+            **Discriminating probe (experiment, not code reading):** keep the rejecting import order
+            but add `import wrapimpl` to `nest.mdk` alone → arity 2 restored, prints `wrap(int)`.
+why not A-3 — three doors, all closed BY THE EPIC:
+            1. Re-key that table — `TYPECHECK-TARGET-ARCHITECTURE.md:1814`: *"DEFERRED → B-2, by
+               DELETION. Must not appear in the diff."* It also feeds `implExistsForHead`/shadow
+               semantics (#616), so touching it is an unbudgeted widening.
+            2. Repoint the reader at `IE` — `:1815`: *"IE supplies the data, B-2 moves the reader."*
+            3. Move only the checker's leg — **already measured** in-tree at `:24514-24526` (#1560):
+               `argReqRoute` → `RNone`, *"and the binary still faults."*
+            **Door 4**, if the flip is kept: make the un-plumbed case a **located reject** rather
+            than a silent drop — precedent `T-REQUIRES-DEPTH` (#1562) on this exact function.
+            A-3-sized, restores loudness, does not pre-empt B-2 — **and still does not make C4/I2
+            true.**
+scope:      **C4 is a CONJUNCTION** — *"consult the same instance set AND produce the same evidence"*
+            (`DICT-SEMANTICS.md:1312-1314`). A-3.6 delivers conjunct 1 and **measurably breaks
+            conjunct 2**. I2 is **newly violated**: one `import` line now changes emitted
+            **evidence**, where before it changed only acceptance.
+            📌 The sharpest sentence in P0-H's report, and the reason this matters beyond one bug:
+            **"A-3.6 moved the order-dependence out of the acceptance channel and into the evidence
+            channel, where nothing observes it."** That is a loud→silent relocation of the very
+            defect the unit was meant to remove.
+            ⇒ **Stage A can claim the global instance ENVIRONMENT. It cannot claim
+            C4/I2-by-construction.** RUN-005's YES-BUT is superseded: the "BUT" turned out to be
+            load-bearing in a way the consult could not have seen, because the breakage is two
+            stages downstream of where it looked.
+            🚨 **`test/must_fail_fixtures/1564-…` asserts `exit: 1` and should be RED now**, and its
+            stated drain criterion (*"when candidacy becomes graph-global"*) is **WRONG** — the
+            drain condition is **evidence**, not candidacy. Both need fixing regardless of the
+            revert decision.
+
+## RUN-046 — 🪞 P0-H AUDITED THIS LEDGER. Two hits, one miss — and the miss was verified, not waved off
+
+question:   P0-H reported three defects in the sprint's own DECISIONS.md and in my brief to it. Do
+            they hold?
+ruling:     **Two are CORRECT and are my errors. The third is WRONG**, and is corrected here — an
+            agent's correction gets the same verification as an agent's claim.
+derivation: 1. ✅ **CORRECT — my brief misattributed a citation.** I wrote *"`DICT-SEMANTICS.md` §2 K
+               reportedly says…"*, relaying P0-D's phrasing without checking it. Verified:
+               `grep -c 'B-2' docs/spec/DICT-SEMANTICS.md` → **0**. That file has no §2 K and zero
+               B-2 mentions. The sentence is `TYPECHECK-TARGET-ARCHITECTURE.md:321` (*"K's IE is the
+               single environment both must read, and that consolidation is still…"*) with the
+               deferral at `:1815`. **I did to P0-H exactly what this run has caught the arc's prose
+               doing eleven times** — passed on a precise-looking citation I had not opened.
+            2. ✅ **CORRECT — RUN-042/043 did not exist when P0-H read the file.** My commit message
+               for `5efc8525` cited "RUN-037..043" while DECISIONS.md ended at RUN-041; my first
+               attempt to write them had failed on a string mismatch and I did not re-check before
+               committing. **A commit message is a claim about the ledger and needs the same
+               verification.** They exist now; the commit message was ahead of the record.
+            3. ❌ **WRONG — RUN-005's line numbers are correct.** P0-H reported both as wrong.
+               Verified by the orchestrator: `sed -n '1312p;1881p' docs/spec/DICT-SEMANTICS.md` →
+               `1312: **C4 — Single instance environment.**` and
+               `1881: **I2 — Global instance environment after import resolution.**` Both point at
+               their clause's opening line; the C4 quote simply spans `1312-1314`, so citing the
+               head line is normal practice, not an error.
+scope:      📌 **The meta-point, which is the one worth keeping:** P0-H audited my ledger unprompted
+               and was right twice — the ledger enforcing derivation on everyone else had two
+               underived claims of its own, both mine, both the exact failure mode it polices. And
+               it was wrong once, which is why its audit got checked rather than accepted. **A
+               correction is a claim.** Neither reflex — defend the ledger, or defer to the auditor —
+               survives contact with `sed -n '1312p'`.
+               P0-H reports **seven** prose defects in total (§6 of its file); the arc-wide tally is
+               now **eighteen**, of which two are the orchestrator's own.
+
+## RUN-047 — ⚖️ OWNER RULING: DOOR 4 — keep the flip, make the un-plumbed case a LOCATED REJECT
+
+question:   Given RUN-045 (NEEDS-B-2, C4/I2 not delivered, revert judged better): revert, Door 4,
+            or ship the segfault?
+ruling:     **DOOR 4.** Keep A-3.6's flip; make the case where candidacy admits an impl but the
+            evidence channel cannot route a dict a **located, coded reject at `check` time** instead
+            of a silent accept. Owner (Val), 2026-08-12, declining both revert and ship-as-is.
+derivation: Owner decision on P0-H's four options. Door 4 is P0-H's own proposal for the
+            keep-the-flip case: A-3-sized, restores loudness, does not pre-empt B-2's deletion, and
+            follows an existing precedent on the very same function — `T-REQUIRES-DEPTH` (#1562),
+            which made requires-reduction depth exhaustion loud in this exact area.
+scope:      **What Door 4 does and does not buy, stated so the final report cannot overclaim:**
+            ✅ Removes the regression: `check` exit 0 → segfault becomes `check` exit 1 with a
+               located diagnostic. The severity increase RUN-043 recorded is undone.
+            ✅ Keeps the global instance environment, which is real and is A-3's genuine delivery.
+            ❌ **Does NOT make C4/I2 true.** C4's conjunction still fails on *"produce the same
+               evidence"*. The binding reporting constraint from RUN-005 is REPLACED by a stricter
+               one: **Stage A delivers the global instance ENVIRONMENT and is LOUD where evidence
+               cannot follow.** Any claim of C4/I2-by-construction is false and must not appear in
+               a PR body, a commit message, or the epic's closure.
+            ⚠️ **The risk direction INVERTS for this unit.** Every other unit in this sprint risked
+            a silent widening; Door 4 risks a **NARROWING** — a too-broad reject turns working
+            programs into false rejects, which `typecheck.mdk:2902-2908` records cannot meet §5 R2's
+            bar. The brief therefore requires the control plus two further legitimate
+            conditional-impl programs to be proven still compiling, named individually.
+            📌 Fixture consequence worth anticipating: Door 4 **restores exit 1** on #1564's
+            `main.mdk`, so that pin REPROs again — **but for a different reason than its claim
+            states.** P0-H found its stated drain criterion (*"when candidacy becomes graph-global"*)
+            is wrong: the true condition is **evidence**, not candidacy. Rewriting that criterion is
+            in scope for Door 4, because a pin that reproduces for the wrong stated reason is a pin
+            that will be drained by the wrong change.
+
+## RUN-048 — A-3.7 COMPLETE (7 further bites) — and 3.7-5's silent hazard is PROVEN, then disarmed
+
+question:   Did the A-3.7 residue land, and was 3.7-5's `cohSoftInScope` hazard real?
+ruling:     **Complete — coherence now reads `IE` on both sweeps and the decl walk is gone.** The
+            hazard was **real, was armed by 3.7-7, and is disarmed by 3.7-5a** — demonstrated with a
+            positive control rather than argued.
+derivation: RELAYED. Landed: `3.7-5a`, `3.7-1`, `3.7-5b`, `3.7-6`, `3.7-7`, `3.7-8`, `3.7-9`,
+            `3.7-10`.
+            ⭐ **3.7-5's proof, measured in both directions.** Corpus: `impl C (Pair Int a)` /
+            `impl C (Pair b Bool)` in one module. BEFORE (base binary @ `5efc8525`): warns on Flat
+            `check` and on Module `check`/`run`. AFTER: byte-identical text and caret on both arms.
+            **POSITIVE CONTROL** (built, run, then reverted): restoring `cohSoftInScope CohSweepOwn`
+            to its old mid-shape body makes the **Module warning vanish entirely** (`main : Unit`,
+            exit 0) while Flat still warns. That is the loud→silent regression the sprint's deferred
+            posture cannot see, caught by building the broken version on purpose.
+            ⭐ **A silent wrong-reuse avoided.** P0-D said `runFinalChecks` *"grows the same three
+            parameters"*. Lane B had already given it `cycIe : ImplEnv` + `cur : Int`, and **reusing
+            `cycIe` would have been wrong and silent**: at `seedAndCheckSplit` it is
+            `flatImplEnvOf prog`, the **seeded** universe, which false-positives on the stdlib. It
+            grew a *second* `ImplEnv` (`cohIe`/`cycIe`, mirroring `ownCe`/`cycCe`) plus `hasPrelude`,
+            and `seedAndCheckSplit` now builds `flatImplEnvOf userDecls`. Call order untouched.
+            ⭐ **P0-D's #1 OWED item DERIVED**: `prog` at `:27268` == `ieRowsOwnedBy ordHere` — one
+            `stampGraphTyOrigins`, the same `modules` to both `buildDeclEnvs` and `foldModules`,
+            `foldModules` passes `prog` verbatim, and `implDeclFact` matches the deleted
+            `cohImplsOfMid` arm-for-arm.
+            **3.7-1/5/6's earlier declination was HALF OVERTURNED, correctly**: `ieRowsAll`,
+            `ieRowsOwnedBy`, `cohImplOfRow`, `cohRowsOf` all acquired real readers once 3.7-7
+            landed, so they left the RUN-031 shape. P0-D's `ieRowIface`/`ieRowTys` **stay declined** —
+            still dead code. Re-examining a refusal when its premise changes is the right behaviour
+            in both directions.
+            Baselines held: `impl Eq Int` α-equal to prelude → exit 0 on Flat AND Module, before and
+            after; genuine cross-module conflict → exit 1, byte-identical wording;
+            `s6-1c-multimodule-overlap` unchanged. Ratchet PASS, unchanged (zero shrink, as RUN-021
+            predicted). `check-self`, `docs-links`, `agent-doc-symbols` PASS; fmt/lint clean.
+scope:      🚩 **FOURTH contaminated must-fail reading** — run 1: `93 reproduce, 6 DRAINED`; run 2
+            minutes later: `98 reproduce, 1 DRAINED`. Cause correctly diagnosed on the spot: the
+            **Door 4 agent** holds uncommitted edits in the same file and is running `make medaka`.
+            Regions were disjoint, so stop-don't-adapt was not triggered and nothing of this unit's
+            changed under it — but **every build and `check-self` above is a green of the MERGED
+            tree**, not of this unit alone.
+            ⭐ The agent then did the right thing instead of reporting noise: it took a **clean
+            pre-edit baseline on the COMMITTED binary, stable across two runs** — **99 fixtures, 97
+            reproduce, 2 DRAINED (`1438-*`, `1564-*`), 0 control-broke, 0 malformed** — and observed
+            that **`1438-*` reads DRAINED in all four readings**, which is the one claim the
+            instability cannot have manufactured. #1438 stays open (RUN-021).
+            ⚠️ `1564-*` reading DRAINED is the **half-drain** of RUN-043, not a fix. Door 4 restores
+            exit 1 and it should return to REPRO.
+            🚨 **Biggest hole, self-reported: 3.7-8's two-arm permutation differential was NOT run** —
+            no base-arm binary exists in this in-place worktree. Both arms agree byte-for-byte at the
+            un-permuted order; **the permuted order was measured on the new arm only.** A permutation
+            differential is the specific check for a widening, so this is exactly the gap the repair
+            round must close, and it is owed a second worktree.

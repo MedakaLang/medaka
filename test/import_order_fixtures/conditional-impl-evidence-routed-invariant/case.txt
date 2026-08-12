@@ -1,0 +1,19 @@
+entry: main.mdk
+what: POSITIVE CONTROL — a conditional impl whose evidence DOES route, invariantly
+
+This is the shape that must never be rejected. `nest.mdk` imports `wrapimpl`, so the
+conditional `impl Tag (Wrap a) requires Tag a` is reachable by BOTH the candidacy
+environment and the evidence registry where `nest`/`twice` are generalized: the residual
+`Tag a` reaches each scheme, each binding gets its dict parameter, and every ordering of
+the entry's three import clauses checks clean and prints `wrap(int)` then
+`wrap(wrap(int))`.
+
+It is the control for evidence-unroutable-invariant/ in this same corpus. That row pins
+the `T-REQUIRES-UNROUTED` reject (#1564); this one is what proves the reject is NARROW —
+if a change to the unroutable-evidence guard ever over-rejects, this case turns from a
+clean invariant run into an invariant REJECT, and its signature no longer matches the
+one recorded here. `twice` is deliberately a two-level nesting, so the row also covers a
+`requires` chain that must reduce more than one step before it bottoms out on
+`impl Tag Int`.
+
+Nothing here is expected to be order-sensitive; it is unledgered and must stay so.

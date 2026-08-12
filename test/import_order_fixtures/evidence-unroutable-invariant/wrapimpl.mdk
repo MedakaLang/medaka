@@ -1,0 +1,9 @@
+-- Declares the conditional impl, and imports `nest` so that this module can never
+-- sort earlier than `nest` in the loader's topological order.
+import iface.{Tag, tagOf, Wrap}
+import nest.{nest}
+
+export impl Tag (Wrap a) requires Tag a where
+  tagOf (Wrap x) = "wrap(\{tagOf x})"
+
+export label = nest 1

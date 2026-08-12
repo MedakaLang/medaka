@@ -1,0 +1,5 @@
+import iface.{Tag, tagOf, Wrap}
+import nest.{nest}
+import wrapimpl.{label}
+
+main = println (nest 5)

@@ -1,0 +1,8 @@
+-- The generalizing module DOES import the conditional impl, so the evidence registry
+-- can reach it and the residual `Tag a` survives into `nest`'s scheme.
+import iface.{Tag, tagOf, Wrap}
+import wrapimpl
+
+export nest x = tagOf (Wrap x)
+
+export twice x = tagOf (Wrap (Wrap x))

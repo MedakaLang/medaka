@@ -1655,7 +1655,12 @@ and method table"* — plus an instance identity:
 - `ieIface : IfaceRef` — reused, not re-invented (P1's carrier).
 - `ieTys : List Ty` · `ieReqs : List Require` — the full head and context.
 - `ieMethods : List String` — the method table, **payload only** (§9.3).
-- `ieLoc : Option Loc` — for A-3.7's diagnostics.
+- ~~`ieLoc : Option Loc` — for A-3.7's diagnostics.~~ 🪦 **NOT BUILT, and A-3.7 did not
+  need it.** The row carries the raw `ieTys`, and the parser stamps every `TyCon` leaf
+  with its span, so `firstTyLocList` recovers from the head exactly the blame span
+  coherence used when it walked decls — no new field, no `DImpl` change. `ImplRow`'s own
+  header argues the omission from `Decl` having no `Loc`, which is true and beside the
+  point for any consumer that can read the head.
 
 Index: the same three buckets the obligation channel already has, with the same
 keys — `MultiRegistry` for concrete heads keyed `regKeyNTab [oblIfaceKey ir,
@@ -1814,7 +1819,7 @@ reach. Run the three commands rather than trusting this table's membership.
 | `universeKeyBucketsRef` / `buildKeyTable` / `keyEntryOf` / `matchingEntries*` / `keyForSite*` / `headCollides*` / `implExistsForHead` (`KeyBuckets`) | route-word registry, head half bare by design | **DEFERRED → B-2, by DELETION.** Must not appear in the diff |
 | `buildImplTable` / `implEntryOf` / `findImplEntry` (`ImplBuckets`, 2 build sites: `:11369`, `:24576`) | per-run bucket table keyed by bare iface+tag, consumed by `entail`/`routeOf` | **DEFERRED → B-2.** §2 K's *"K's IE is the single environment both must read"* consolidation stays owed; `IE` supplies the data, B-2 moves the reader (its blast list already owns `Route`) |
 | **`implKeyOf` (`compiler/eval/eval.mdk:481-483`) and its per-impl dict-registry family** — `declImplEntries`/`declImplIfaceIdRow` (`eval.mdk:305`, `:2001`), `lowerDeclImpl` → `CImplEntry`'s `key` field (`compiler/ir/core_ir_lower.mdk:1293-1313`, `:1221`), `distinctImplKeys` (`compiler/backend/wasm_emit.mdk:4066-4070`) | the **engine-side** per-impl dict-cell registry: `implKeyOf iface tys nm = "\{iface}\|…"`, a **bare-iface-name** key rendered into a runtime cell/symbol name, consumed by all three engines | **NOT `IE` → B-2 (#1113), with `Route`.** Verdict given explicitly because it is literally an answer to *"what impls exist"* and a re-deriving implementer will hit it: it is a **route-word** registry, not a declaration environment — same class as the `KeyBuckets` row above, and identity-keying it re-runs #1317's measured T1 failure (`typecheck.mdk:15253-15261`, where re-keying the *counting* scans alone reproduced #1277's S0 — and `:15263-15272` records why the question is *inherently* spelling-scoped: three engines re-derive the same uniqueness test from a bare `String` tag). Its **typecheck-side twin `implKeyTc` (`typecheck.mdk:14598-14599`) IS covered** — `keyEntryOf` (`:14582-14590`) → `KeyBuckets` → B-2, byte-identical output by that function's own doc-comment, which is the whole reason the two must move together. ⚠️ Do not confuse `implKeyOf` with wasm's *homonym* at `wasm_emit.mdk:4068` (`CImplEntry -> List (String, String)`, a different function that merely projects the key this one minted) |
-| `cohCollectImpls` / `cohCollectModuleImpls` / `cohImplsOf` (`:12590-12591`) / `cohImplsOfMid` (`:12612-12616`) / `CohImpl` / `coherenceUserDecls` | user-decls-only list, class identity a bare `String` (`:12588`, compared at `:12909`) | **DEFERRED → A-3.7**, which also inherits the two-checkers-disagree gap; A-3.4 supplies `InstRef` |
+| `cohCollectImpls` / `cohCollectModuleImpls` / `cohImplsOf` (`:12590-12591`) / `cohImplsOfMid` (`:12612-12616`) / `CohImpl` / `coherenceUserDecls` | user-decls-only list, class identity a bare `String` (`:12588`, compared at `:12909`) | ✅ **LANDED at A-3.7 (#1559)**, with one carve-out. `CohImpl`'s interface half is an `IfaceRef` compared by `cohSameIface` (`sameTyConHead`), and both sweeps now read `IE`: `checkCoherence` takes `cohRowsOwnedBy cur hasPrelude`, `globalCoherenceConflict` takes `cohRowsOf True`, both projected through `cohImplOfRow` — which is where `InstRef` gets its FIRST judgment reader (`instRefMid`). The four decl-walking adapters (`cohCollectImpls`/`cohCollectModuleImpls`/`cohImplsOf`/`cohImplsOfMid`) are **deleted**. ⚠️ **`coherenceUserDecls` does NOT retire** and A-3.7 shrinks `driver_allowed` by **zero** rows: on the Flat arm there is no ordinal-0 prelude row to filter (`flatImplEnvOf` seats its one user module at ordinal 0), so that field *is* the Flat arm's prelude carve-out. Retiring it needs the flat path to gain a prelude node (§7.1 U1 / E-4) |
 | `implCompletenessMsgsOf` / `implCompletenessMsgsOfMap` | per-decl scans; the Flat arm scanned a decl list by BARE NAME (`ifaceRequiredMethods`), the Map arm read `universeIfaceRequiredRef` | ✅ **LANDED at A-3.5a (#1557).** The two checkers are now ONE (`checkImplCompletenessMap`, kept under its historical `Map` name to avoid stranding this citation and three others), reading `CE` at the reading module's ordinal via `ceRequiredAt` → `ceLookupAt`. Retires `universeIfaceRequiredRef` + its writer `insertIfaceRequired`; `cross_allowed` **24 → 23**, derived on this unit's own base — do not quote that pair elsewhere without re-deriving (`sh test/registry_keying_ratchet.sh` prints it). ⚠️ **NOT byte-identical, and the delta is confined to the FLAT arm**: the Module arm's key does not move (`regKeyOfTab (ifaceTabKey implOrigin iface)` on both sides, and `classEnvRowsOf` mints `CeRow`'s key from the same `ifaceTabKey ifaceOrigin name`), so that arm is a population/lifetime move; the Flat arm's bare first-match scan → identity lookup **is** the re-key, per the owner ruling on #1557 OWED 1 |
 | `superImplMsgsOf` / `implMatchesSuper` (`:14193-14251`) | scan of `allDecls` for a super's impl | **DEFERRED → A-3.5** |
 | `checkInterfaceCycles` / `ifaceDfsCycle*` · `checkPhantomMethods` · `checkGradedImplHeads` / `checkGradedImplTys` | bare-name decl scans (cycles) · per-decl scan (phantom) · `ifaceParamKindsRef` lookup (kinds) | ✅ **LANDED at A-3.5c (#1557).** All three read `CE` at the reading module's ordinal — `ceRowsVisibleAt` (cycles, with super edges now followed by IDENTITY), `ceRowsOwnedBy` (phantom), `ceSlotKindsAt` (kinds). Retires `universeIfaceParamKinds` + `ifaceParamKindsRef`; `cross_allowed` **27 → 26** — this row said `28 → 27`, which is the PRIOR unit's transition (#1588, A-3.2b residual 1); re-derived 2026-08-12 by counting the `cross_allowed` allowlist at each merge commit (#1588 `257d7e79` 28→27, #1592 `6775679a` 27→26, #1590 `dc3e8bd5` 26→24; live value 24). NOT byte-identical, by owner ruling — see §9.9 |
@@ -1951,6 +1956,9 @@ stays accepted, and A-3.7 (not A-3.4) is where it is at risk. Do not tidy it.
    `MEDAKA_REQUIRE_WASM=1` — an unlabelled engines number is a two-engine number.
 6. F1–F7 above; zero must-fail flips, declared in advance.
 7. `InstRef` exists and is read by no judgment, documented as A-3.7/B-2's input.
+   ⚠️ **No longer true as of A-3.7 (#1559)** — `cohImplOfRow` reads `instRefMid`, so
+   `InstRef` now has one judgment reader. Kept as the A-3.4 exit bar it was; do not
+   re-derive today's state from it.
 8. 🚨 **An INTERLEAVED wall-clock A/B on the self-compile is a LIVE REQUIREMENT,
    not a blocked bar.** This item read *"BLOCKED, not satisfied: its only
    instrument (`test/bench.sh`) does not run on this project's Linux box
@@ -2152,9 +2160,16 @@ whether the leg is dead weight.
 
 ### 10.6 Not settled here
 
-- **Coherence still keys the interface half by SPELLING** while the obligation channel now
-  keys it by identity, so the two checkers disagree about whether two same-spelled
-  interfaces are one class. A-3.7 owns it; U1b widens the gap rather than closing it.
+- ~~**Coherence still keys the interface half by SPELLING**~~ — ✅ **SETTLED at A-3.7
+  (#1559).** `CohImpl`'s first field is an `IfaceRef` and `cohScanInner` compares it with
+  `cohSameIface` = `sameTyConHead`, so the two checkers now agree about whether two
+  same-spelled interfaces are one class. ⚠️ **This drains coherence's REACH of #1438; it
+  does NOT drain #1438**, whose obligation-channel bare-spelling leg is #1482/U1b's and
+  stays (`insertUnivImplKeys`' DO-NOT-DELETE block). **#1438 remains OPEN** — its
+  must-fail pin, authored inside A-3.7 and observed reproducing pre-fix, is drained by
+  the coherence half alone. Note also which predicate: `sameTyConHead`, never
+  `ifaceIdMatches` — coherence is an ACCEPTANCE question, so an absent origin must make
+  no claim; the inverse would turn every unstamped-origin conflict into a silent accept.
 - The `ifaceForInferredId` fallback that recovers a slot's interface from `pendingDictApps`
   is bare **by construction** — that channel stores route words (§10.3). ⚠️ It is NOT
   established that this fallback is goal-producer-free: TRACED (not instrumented) in

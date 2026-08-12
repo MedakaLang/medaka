@@ -1155,3 +1155,330 @@ unchecked:  ⚠️ **It has ZERO consumers, which is the `deFieldOwnerIdents` an
             rather than leaving it to be discovered. If the testing round decides an inert
             directory is worse than none, deleting it costs nothing — but the measured
             before/after and the attribution method should be preserved somewhere.
+
+### 3.7-5a — A-3.7 — `cohSoftInScope` re-cut SWEEP-SCOPED (the armed loud→silent hazard)
+sites:      `compiler/types/typecheck.mdk` — new `data CohSweep = CohSweepOwn | CohSweepGlobal`
+            beside `CohScan`; `cohScan`/`cohScanOuter`/`cohScanInner`/`cohClassify`/
+            `cohSoftInScope` each take the tag as a leading parameter; the two sweep entries
+            (`checkCoherence`, `globalCoherenceConflict`) pass `CohSweepOwn`/`CohSweepGlobal`.
+            ~30-line header on `cohSoftInScope` carrying the derivation.
+transform:  `cohSoftInScope "" "" = True` was a PROXY for "am I the per-module sweep?", correct
+            only while that sweep's input came from `cohImplsOf` (which stamped `""` for want of
+            an id). Replaced by the fact itself: `CohSweepOwn` owns every pair it sees (its
+            input is one module's rows, so every pair is intra-module by construction);
+            `CohSweepGlobal` owns only cross-module pairs. The `"" ""` arm is RETAINED under
+            `CohSweepGlobal` alone, behaviour-preserving for a degenerate blank-id global input.
+could move: **`W-INCOMPARABLE-IMPLS` — every intra-module one, on the Module arm.** That is the
+            whole point: without this re-cut, 3.7-7's real mids make `cohSoftInScope m m` fall to
+            `cohIsCrossModule m m = False` and the warning stops being emitted, at exit 0, with
+            no value golden able to see it. **MEASURED IN BOTH DIRECTIONS, not argued:**
+            * BEFORE (base binary @ `5efc8525`): an intra-module ⊑-incomparable pair
+              (`impl C (Pair Int a)` / `impl C (Pair b Bool)`) warns on Flat `check` AND on
+              Module `check`/`run`.
+            * AFTER (3.7-5a + 3.7-7): byte-identical warning text and caret on both arms.
+            * POSITIVE CONTROL, built and run: `cohSoftInScope CohSweepOwn` temporarily
+              restored to the old mid-shape body, full rebuild → the MODULE arm's warning is
+              **gone** (`main : Unit`, exit 0, nothing printed) while Flat still warns. The
+              hazard was real, it was armed by 3.7-7, and this bite is what disarms it. Edit
+              reverted and rebuilt.
+            Secondary: the global sweep's ownership rule is unchanged for every non-blank id
+            pair, so `test/dict_fixtures/s6-1c-multimodule-overlap` still reports its
+            intra-module pair once (with span) and its cross-module pair once (span-less,
+            naming both modules) — run, unchanged.
+unchecked:  * The degenerate `CohSweepGlobal "" ""` arm is preserved rather than re-derived. I
+              did not establish whether a user module id can ever be `""` (the prelude's `""`
+              spelling never reaches this sweep). If it cannot, that arm is dead and should be
+              dropped — but dropping it is an ownership change, not a tidy, so it is out of
+              this bite.
+            * The HARD class's double-report is untouched and still pre-existing, as
+              `cohSoftInScope`'s own header says. Real mids do not change it: `cohHardMsg` and
+              `cohWhereSuffix` both route through `cohIsCrossModule`, which answers `False` for
+              an intra-module pair whether the ids are `("","")` or `(m,m)` — so the HARD
+              wording on the per-module sweep is byte-identical under 3.7-7. Reasoned from the
+              two function bodies, and corroborated by the unchanged `xmod` conflict wording.
+
+### 3.7-1 — A-3.7 — `IE` population accessors (`ieRowsAll`, `ieRowsOwnedBy`)
+sites:      `compiler/types/typecheck.mdk`, IE block, immediately after `ieRowsVisibleAt`.
+transform:  Added `ieRowsAll : ImplEnv -> List ImplRow` = `env.ieRows` and
+            `ieRowsOwnedBy : Int -> ImplEnv -> List ImplRow` =
+            `filterList (r => ieRowOrd r == cur) env.ieRows`, modelled on `CE`'s
+            `ceRowsVisibleAt`/`ceRowsOwnedBy`. Both carry the 🚨 READ `ieRows`, NEVER THE
+            BUCKETS comment with its derivation (two-key indexing ⇒ a bucket walk sees every
+            row twice and pairs two different interfaces sharing a spelling, rebuilding #1438's
+            false reject inside the new substrate).
+            ⚠️ **P0-D's `ieRowIface`/`ieRowTys` were DECLINED as readerless.** `cohImplOfRow`
+            destructures `ieRowTriple` in one `match`, which is the only consumer; adding two
+            more projections nothing calls is the RUN-031 shape and a `rule-dead-code` risk.
+            The earlier declination is re-affirmed for those two, not overturned: 3.7-1's OTHER
+            half acquired a reader (3.7-6/3.7-7), these two did not.
+could move: **Nothing on its own — but `ieRowsOwnedBy` is one keystroke from a real change.**
+            Written `== cur`, deliberately, NOT `declEnvVisibleAt cur (ieRowOrd r)`: the latter
+            is the ordinal PREFIX (every earlier module too), a different and much larger set,
+            and it would hand `declEnvVisibleAt` another reader that A-3.6 is counting. Grep
+            confirms the body reads `==`.
+unchecked:  Ratchet check 4's IE-block scan re-run: PASS, block grew 125 → 129 lines, no
+            namespace mint (these accessors mint no key at all), no default-arm reach.
+
+### 3.7-5b — A-3.7 — `cohImplOfRow`, the `IE`→`CohImpl` adapter (`InstRef`'s first reader)
+sites:      `compiler/types/typecheck.mdk`, coherence block, after `cohFreshTys`.
+transform:  `cohImplOfRow r = match ieRowTriple r; (ir, tys, _) => CohImpl ir (cohFreshTys tys)
+            (instRefMid (ieRowInst r)) (firstTyLocList tys)`. All four judgment inputs come off
+            the row; no new IE field. **This is where `InstRef` acquires its first judgment
+            reader in this tree.**
+could move: **The interface half, if the two constructions had drifted — they had not.**
+            `implDeclFact` builds `ImplRow`'s `IfaceRef` with the identical expression the
+            deleted `cohImplsOfMid` used (`irName = iface`, `irOrigin = implOrigin`, from the
+            same record pattern), so `cohSameIface` sees the same pair of `IfaceRef`s before
+            and after. The head is the same `cohFreshTys` call on the same raw `List Ty`; the
+            span is the same `firstTyLocList` call on the same list. The ONE field that
+            genuinely changes value is the module id — `""` → the loader mid on the Module arm
+            — and that is 3.7-5a's subject.
+unchecked:  `ieLoc` was NOT added and is NOT owed (recorded in TARGET-ARCHITECTURE §9.4): the
+            row carries the raw head and the parser stamps every `TyCon` leaf, so
+            `firstTyLocList` recovers exactly the span coherence used. Verified by the spans in
+            the AFTER probes being byte-identical to the BEFORE ones, not by reading the parser.
+
+### 3.7-6 — A-3.7 — the prelude carve-out (`cohRowVisible`/`cohRowsOf`/`cohRowsOwnedBy`)
+sites:      `compiler/types/typecheck.mdk`, coherence block, beside `cohImplOfRow`.
+transform:  `cohRowVisible hasPrelude r = not (hasPrelude && ieRowOrd r == 0)`, wrapped by
+            `cohRowsOf hasPrelude env` (whole graph, for the global sweep) and
+            `cohRowsOwnedBy cur hasPrelude env` (one module's own rows, for the per-module
+            sweep). The ordinal-0 fact is structural: `buildDeclEnvs` builds
+            `declEnvModulesFrom 0 (("core", coreDecls)::modules)`.
+could move: **BOTH directions are mass acceptance changes, and both were probed.**
+            * **Too narrow (prelude leaks in):** a user `impl Eq Int` α-equal to the prelude's
+              starts being rejected as `T-CONFLICTING-IMPL`, taking
+              `test/lint_fixtures/derivable_needs_datadecl.mdk` with it — the narrowing §5 R2
+              does not license, and the exact thing `cohClassify`'s carry-forward warned about.
+              MEASURED: exit 0 on Flat AND Module, before and after.
+            * **Too wide (a hardcoded `!= 0` on Flat):** `flatImplEnvOf` seats its ONE user
+              module at ordinal 0, so `!= 0` there drops EVERY row and turns every flat
+              coherence rejection into a silent accept. This is why `hasPrelude` is a
+              PARAMETER; Flat passes `False`. MEASURED: the flat soft warning still fires and
+              the flat hard reject still rejects.
+unchecked:  * P0-D listed five HARD-arm coverage fixtures and verified only one. I ran the
+              `medaka check` arm of `test/dict_fixtures/s6-1c-multimodule-overlap` and the
+              `lint_fixtures` probe by proxy (the `impl Eq Int` shape), NOT
+              `typecheck_error_fixtures/{dup_impl,overlapping_impls}`,
+              `check_json_fixtures/conflicting_impl_duplicate`,
+              `dict_fixtures/s6-c1-duplicate-heads-rejected` or
+              `run_check_agreement_fixtures/p0_1_overlapping_impls`. Those are the
+              testing round's first attack list for this bite.
+            * The residue is deliberately preserved: a user impl shadowing a prelude impl stays
+              UNCHECKED, not merely accepted. Whether it should be rejected is #1162's
+              equal-head second symptom, a language question, and was not re-adjudicated.
+
+### 3.7-7 — A-3.7 — repoint `checkCoherence` (Flat + Module), and the `runFinalChecks` delta
+sites:      `compiler/types/typecheck.mdk` — `checkCoherence` (`List Decl -> Unit` →
+            `ImplEnv -> Int -> Bool -> Unit`); `runFinalChecks` (gains a `cohIe : ImplEnv` and a
+            `hasPrelude : Bool`); its three call sites — `checkToLines`, `seedAndCheckSplit`,
+            `checkModuleFullDiags`.
+transform:  Body becomes `cohScan CohSweepOwn (reverseL (map cohImplOfRow (cohRowsOwnedBy cur
+            hasPrelude env)))`. Call order inside `runFinalChecks` is UNCHANGED (coherence →
+            cycles → phantom → super-impls), per A-3.5c's binding constraint.
+            🚩 **THE P0-D-vs-TREE DELTA, since Lane B moved under P0-D's text.** P0-D specified
+            `runFinalChecks` "grows the same three parameters". The tree already had TWO of
+            them from A-3.5b/c — `cycIe : ImplEnv` and `cur : Int` — so the arity was
+            `List Decl -> List Decl -> ClassEnv -> ClassEnv -> ImplEnv -> Int -> Unit`, not
+            P0-D's. **Reusing `cycIe` for coherence would have been WRONG and silent:** at
+            `seedAndCheckSplit` that env is `flatImplEnvOf prog`, the SEEDED universe, and
+            feeding it to coherence false-positives on the stdlib itself (trap #5). So the
+            function grew a SECOND `ImplEnv` — the `cohIe`/`cycIe` split mirroring the existing
+            `ownCe`/`cycCe` split — plus `hasPrelude`, ending at 8 parameters.
+            `seedAndCheckSplit` now builds `flatImplEnvOf userDecls` alongside
+            `flatImplEnvOf prog`.
+could move: **The per-module POPULATION — P0-D's highest-value OWED item, now DERIVED.**
+            The Module caller used to pass `prog`; it now passes `ieRowsOwnedBy ordHere`. These
+            are the same decls: `checkModulesDiags`/`checkModulesEntryFull` stamp once
+            (`stampGraphTyOrigins`) and hand the SAME `modules` list to `checkModulesPreamble` →
+            `buildDeclEnvs` and to `foldModules`, and `foldModules` passes each pair's `prog` to
+            the worker **verbatim** — read at both ends, no transform on either side. Harvest
+            equality: `implDeclFact` and the deleted `cohImplsOfMid` match arm-for-arm (unwrap
+            `DAttrib`, take `DImpl`, `_ => []`) and both are a `flatMap` in decl order.
+            Second thing that could move: a NEW `flatImplEnvOf userDecls` build now runs on
+            every seeded flat `check`. `buildImplEnv` is O(rows²) in its `ieRows` append (the IE
+            block records that as OWED) — small for one file, but not free, and it is work the
+            flat path did not do before. **Not measured.**
+unchecked:  * `declEnvsOrdOf` returns **-1** on a miss, and `ieRowsOwnedBy (-1)` is EMPTY — i.e.
+              a miss is a silent accept, not a loud one. I did not prove `ordHere` cannot miss;
+              I relied on `mid` coming from the same `modules` list `buildDeclEnvs` indexed.
+              The identical exposure already exists for `ceRowsOwnedBy ordHere` (A-3.5c), so
+              this bite does not create the class — but it does add a member.
+            * No golden, snapshot or differential gate was run (sprint posture).
+
+### 3.7-8 — A-3.7 — repoint `globalCoherenceConflict` (the cross-module sweep)
+sites:      `compiler/types/typecheck.mdk` — `globalCoherenceConflict`
+            (`List (String, List Decl) -> …` → `ImplEnv -> …`), body becomes
+            `cohScan CohSweepGlobal (reverseL (map cohImplOfRow (cohRowsOf True env)))`; both
+            call sites (`checkModulesDiags`, `checkModulesEntryFull`) now pass
+            `driverState.value.declEnvsRef.value.deImpls`.
+            Landed and probed SEPARATELY from 3.7-7 (a build + the full baseline probe set ran
+            between the two) so the Flat-arm delta stays attributable to 3.7-7 alone; this bite
+            has no Flat exposure at all — both call sites are Module-mode drivers.
+could move: **SCAN ORDER, which decides WHICH pair is reported and how the message reads.**
+            `cohScanInner` keeps the FIRST pair per class over a `reverseL`-ed list, and `e1` is
+            the later-declared impl the message names first. Argued equal term by term: the old
+            list was `flatMap (cohImplsOfMid mid) prog` over the driver's dependency-first
+            `modules`; `ieRows` is `buildImplEnvGo` over the same modules in ordinal order (the
+            same order, offset by the prelude at 0) and `implDeclFacts` in decl order within a
+            module. The prelude is removed by `cohRowsOf True` BEFORE the `reverseL`, so the
+            filtered head is the first user module — what the old head was.
+unchecked:  🚨 **THE PERMUTATION DIFFERENTIAL P0-D SPECIFIED WAS NOT RUN IN ITS TWO-ARM FORM,
+            and that is the biggest hole in this unit.** No base-arm binary exists in this
+            worktree (the build is in-place), so I could only measure the NEW arm at two
+            permutations. What I have: at the un-permuted import order both arms agree
+            byte-for-byte (`Conflicting \`impl Same\`. Defined in amod and zmod`, exit 1, on
+            `check` and `run` — measured on the base binary before any edit and on the final
+            binary after). Permuting the entry's imports swaps the named modules to
+            `zmod and amod` on the new arm — consistent with loader-order sensitivity that
+            pre-dates this bite, but **that is an argument, not a measurement**: I did not run
+            the permuted order on a base binary. The testing round should run the two-arm form
+            over a corpus with a real cross-module conflict.
+            Also unchecked: whether `checkModulesEntryFull` has any consumer outside
+            typecheck.mdk (P0-D's grep found none, which would make one of these two call sites
+            dead). Not chased.
+
+### 3.7-9 — A-3.7 — retire the four decl-walking adapters
+sites:      `compiler/types/typecheck.mdk` — deleted `cohImplsOf`, `cohImplsOfMid`,
+            `cohCollectImpls`, `cohCollectModuleImpls`; a 🪦 tombstone left in their place, and
+            the `#414` span derivation + the OCCURRENCE MINT note rewritten to point at
+            `cohImplOfRow`, which inherits both.
+transform:  Deletion, after 3.7-7 and 3.7-8 were each built and probed green. Unreachability
+            re-derived rather than inherited from the design doc:
+            `grep -rn 'cohCollectImpls\|cohCollectModuleImpls\|cohImplsOf' --include=*.mdk .` →
+            comments only, zero definitions and zero call sites. `medaka lint` (which is where
+            `rule-dead-code` would fire) exits 0.
+could move: **Nothing executable — but it removes the fallback.** Any divergence found after
+            this point has nothing to compare against inside the tree; the comparison arm is
+            now `git show 5efc8525`. That is the reason it landed last.
+unchecked:  🚩 **`coherenceUserDecls` does NOT retire, and `driver_allowed` shrinks by ZERO
+            rows.** Confirmed, not assumed: `sh test/registry_keying_ratchet.sh` → PASS,
+            unchanged, before and after. On the Flat arm there is no ordinal-0 prelude row to
+            filter, so that decl list IS the Flat prelude boundary; `seedAndCheckSplit` still
+            reads it and now builds `flatImplEnvOf` FROM it. Do not grade A-3.7 on the ratchet
+            progress signal.
+            One stale reference deliberately left: `test/dict_fixtures/
+            s6-c1-hard-and-soft-in-one-file.mdk:18` names `cohCollectImpls` in a comment. A
+            fixture's line count is load-bearing and editing it risks moving a golden this run
+            is forbidden to bless; the testing round should re-word it to `cohRowsOwnedBy`.
+
+### 3.7-10 — A-3.7 — ledger updates
+sites:      `test/registry_keying_ratchet.sh` (`deImpls` row); `compiler/types/typecheck.mdk`
+            (`cohClassify`'s 🚨 CARRY-FORWARD FOR A-3); `compiler/TYPECHECK-TARGET-ARCHITECTURE.md`
+            (§9.4 `ieLoc`, the A-3.7 deferral row in the relocation table, exit bar 7, §10.6
+            first bullet).
+transform:  * Ratchet: *"Still payload-only, for A-3.7/B-2: `ieInst`/`InstRef` and `ieMethods`
+              are read by no judgment"* was about to become FALSE. Re-cut to record that
+              `ieInst`/`InstRef` acquired its first judgment reader here (`cohImplOfRow` →
+              `instRefMid`) and that `ieMethods` is still payload-only with **A-3.5**, not
+              A-3.7/B-2, as its named consumer (`implDeclFacts`' own note is the more specific
+              ledger; the pairing in this row was the seventh recorded ratchet defect).
+            * `cohClassify`'s carry-forward is DISCHARGED, not deleted — rewritten to say how
+              (`cohRowVisible` + the Flat decl-list boundary), to record that both probes were
+              measured across the relocation, and to keep the residue it names.
+            * §10.6's *"Coherence still keys the interface half by SPELLING"* → SETTLED, with
+              **#1438 explicitly NOT closed** (only its coherence reach drains; the
+              obligation-channel bare leg is #1482/U1b's).
+could move: **Nothing executable.** ⚠️ But `make agent-doc-symbols` does NOT scan `test/*.sh`
+            (#1574), so the ratchet edit is unchecked by construction — every symbol in it
+            (`cohImplOfRow`, `instRefMid`, `ieRowInst`, `implDeclFacts`, `ieMethods`) was
+            grepped by hand in this tree. `make docs-links` → PASS. `sh
+            test/registry_keying_ratchet.sh` → PASS after the edit.
+unchecked:  P0-D also names `compiler/TYPECHECK-ARCH-BUG-FIT.md` (the #1162 / G-11 rows at
+            `:95`, `:1458`, `:1664`, `:2147-2153`) and `compiler/ARCH-REVIEW.md:172`. **NOT
+            EDITED** — they still name `cohCollectImpls`/`cohCollectModuleImpls` as unrelocated
+            and still count `coherenceUserDecls` among the path-mode flags. Two of the three
+            named functions are now deleted; the `coherenceUserDecls` line is still TRUE but
+            should say why it survives A-3.7. Left owed rather than done badly under a
+            concurrently-edited tree.
+
+### 3.7-CONTAMINATION — A-3.7 — 🚩 a FOURTH unstable must-fail reading; another lane is live in this file
+sites:      none — a reading, not an edit.
+transform:  none.
+could move: **nothing.** Recorded so the numbers below are not mistaken for a drain set.
+            While A-3.7's residue was being implemented, a second lane held UNCOMMITTED edits in
+            `compiler/types/typecheck.mdk` (`residualPredsOf`'s `None` arm → a new
+            `unroutedResidual`, "Door 4" for #1564), plus `compiler/DIAGNOSTIC-CODES-DESIGN.md`,
+            `.claude/sprint/DECISIONS.md` and a new `.claude/sprint/phase0/P0-H-plumbing-scope.md`
+            — and was running `make medaka` in this same worktree (`medaka_emitter`'s mtime
+            landed 34 s AFTER `medaka`'s, and `fmt`/`lint` reported the staleness warning
+            immediately after a clean build of mine).
+            **Its region is disjoint from A-3.7's** (residual predicates ~`:24600-24750` vs the
+            IE block / coherence block / `runFinalChecks` / four call sites), so the
+            stop-don't-adapt rule was NOT triggered — nothing of mine changed under me. But two
+            consequences must be carried forward:
+            1. **Every build and `check-self` in the A-3.7 rows above included that lane's
+               uncommitted work.** The greens are greens of the MERGED tree, not of A-3.7 alone.
+            2. **`sh test/diff_compiler_must_fail.sh`, run twice, DISAGREED with itself**:
+               run 1 = *97 repro, 6 DRAINED* (1003, 1014, 1026, 1027, 1438, 1564 — reported as
+               `93 still reproduce, 6 DRAINED`), run 2 minutes later = *`98 still reproduce,
+               1 DRAINED`*. Same shape as RUN-032/033/041, same cause. **DO NOT ACT ON EITHER
+               READING.** The quiescent pre-edit baseline, taken on the committed binary at
+               `5efc8525` and STABLE across two runs, is *99 fixtures, 97 reproduce, 2 DRAINED
+               (`1438-*`, `1564-*`), 0 control-broke, 0 malformed*.
+unchecked:  The only must-fail claim A-3.7 makes is that **`1438-*` stays DRAINED** — true in
+            both clean baseline runs and in both contaminated runs, i.e. in all four readings,
+            which is the one thing the instability cannot have manufactured. Everything else in
+            those two runs is owed a re-derivation on a quiescent tree. **#1438 stays OPEN.**
+
+### D4-1 — Door 4 — the un-plumbed evidence case is now a LOCATED REJECT (`T-REQUIRES-UNROUTED`), not a segfault
+sites:      `compiler/types/typecheck.mdk` — `residualPredsOf`'s `None` arm (one call-site
+            word: `[]` → `unroutedResidual iface args`); two new top-level functions beside it,
+            `unroutedResidual` and `requiresUnroutedMsg`; and THREE in-source comment re-cuts on
+            the same function (the "must never invent a diagnostic of its own" line, which was
+            already false since #1562 and is now false twice; a pointer added to the #1578
+            paragraph saying that shape is untouched; the new header on `unroutedResidual`).
+            `compiler/DIAGNOSTIC-CODES-DESIGN.md` — one new `T-REQUIRES-UNROUTED` row.
+            `test/must_fail_fixtures/1564-…/claim.txt` — `diag-code` re-pointed, a
+            `what-changed-2026-08-12:` block added, and the WRONG drain criterion rewritten.
+            `test/import_order_fixtures/evidence-unroutable-invariant/` (new, 4 `.mdk` + `case.txt`)
+            and `test/import_order_fixtures/conditional-impl-evidence-routed-invariant/` (new,
+            4 `.mdk` + `case.txt`).
+transform:  `residualPredsOf`'s `None` arm conflated "no impl matches anywhere" with "an impl
+            matches but its `requires` could not be recovered". `unroutedResidual` splits it on
+            `implMatchesU perRun.value.residualUnivRef.value iface args` — the EXISTENCE twin of
+            the matcher that just failed, over the SAME `ImplUniverse` (`IE`). True ⇒ push
+            `T-REQUIRES-UNROUTED` at `goalSiteLoc.value` and return `[]` (fail-closed: the
+            accumulated error rejects at `check`); False ⇒ `[]`, byte-identical to before.
+            The shape and the location plumbing are copied from `T-REQUIRES-DEPTH` (#1562) on
+            this same function, per the standing instruction to match that precedent.
+could move: 🚨 **THE NARROWING RISK, NAMED.** Any program in which (a) the global `IE` says an
+            impl matches a partially-generalized goal, (b) `findMatchingImplReqsU` returns
+            `None`, and (c) the program was nevertheless ACCEPTED AND CORRECT before, is now
+            rejected. Concretely that means a binding whose residual would have been dropped by
+            `keepBoundResidual` anyway, or whose dictionary is in fact supplied by a different
+            channel (the direct `funConstraintsRef`/`methodSiteFns` route, or a hand-written
+            signature context that already declares the predicate) — in those the dropped
+            residual was harmless and the reject is new and false. I found no such program:
+            the two-registry disagreement that makes (b) true is exactly the state in which no
+            dict is built, and the three probes below all route their evidence and stay clean.
+            But I cannot rule the class out, and it is the failure direction to look for.
+            Secondary: the code is pushed through `pushTypeErrorOnceAt`, which dedups on MESSAGE,
+            so two distinct unroutable goals rendering identically report once — a
+            silent-undercount of diagnostics, never a silent accept.
+unchecked:  (1) The full gate suite — only `diff_compiler_import_order.sh` (14/14 ok),
+            `diff_compiler_must_fail.sh` (twice, byte-identical) and `make check-self` were run;
+            goldens, snapshots and selfproc LEG A are deferred to the testing round per §5 and
+            ZERO were blessed. (2) Whether the new reject can fire inside the PRELUDE or inside
+            `compiler/` itself — `check-self` passing is evidence it does not, but that is one
+            program, not the class. (3) The `Flat` (single-file) path: `residualUnivRef` there is
+            `buildImplUniverse prog`, one registry, so the split should be inert — argued, not
+            measured, because no single-file program can exhibit the disagreement. (4) I did NOT
+            re-measure P0-H's Door-3 claim (#1560) — it is relayed from the tree's own note.
+
+### D4-2 — Door 4 — what this does NOT deliver, recorded so no later reader infers it
+sites:      none (a reporting constraint, not an edit)
+transform:  none.
+could move: nothing — but the claim this row constrains WOULD move the arc's reporting if left
+            unsaid. **Door 4 does not make DICT-SEMANTICS C4 or I2 true**, and no comment,
+            message or row written here says it does. C4 is a conjunction ("consult the same
+            instance set AND produce the same evidence"); ARCH A-3.6 delivers the first conjunct
+            and Door 4 does not touch the second. Import order still decides which programs are
+            ACCEPTED (`main.mdk` rejects, `control.mdk` compiles) — Door 4 only moves that
+            decision back out of the evidence channel, where nothing observed it, into the
+            acceptance channel, where the diagnostic does. The honest Stage A claim remains:
+            **the global instance environment, and a loud reject where evidence cannot follow.**
+            Re-keying `universeKeyBucketsRef` and repointing the evidence reader at `IE` are
+            both deferred to B-2 by name (`TYPECHECK-TARGET-ARCHITECTURE.md:1814-1815`);
+            `T-REQUIRES-UNROUTED` drains when that lands, not before, and #1564 stays OPEN.
+unchecked:  nothing to check — this row asserts no measurement.

@@ -1,0 +1,28 @@
+entry: main.mdk
+what: The UNROUTABLE-EVIDENCE reject must be INVARIANT — it is not an order defect
+
+This is the ORDER-FREE twin of test/must_fail_fixtures/1564-import-order-decides-
+conditional-impl-candidacy/, and it exists to separate two things that fixture cannot
+separate on its own.
+
+`nest.mdk` generalizes `nest x = tagOf (Wrap x)`, whose goal `Tag (Wrap a)` is matched
+by the conditional `impl Tag (Wrap a) requires Tag a` in `wrapimpl.mdk`. Since ARCH
+A-3.6 (#1112) that impl IS a candidate at nest's goal — instance candidacy is
+graph-global. What still does not follow it is the EVIDENCE: the residual reducer's
+concrete lookup reads the cumulative key-bucket registry, not the global instance
+environment, so it cannot recover that impl's `requires`, and the binding is generalized
+with no residual, no dict parameter and no route dict. Left silent, that compiled to an
+arity-2 impl called arity-1 and the built binary faulted (exit 139); it is now the
+located reject `T-REQUIRES-UNROUTED` (#1564). It drains when ARCH B-2 moves the reader
+onto `IE` — at which point every ordering here starts printing `wrap(int)`, still
+invariantly, and this row keeps passing.
+
+Unlike #1564's fixture, this graph has NO accepting order: `wrapimpl` imports `nest`, so
+`wrapimpl` can never sort earlier than `nest` whatever the entry writes. That is the
+point of the row. It asserts the reject is a property of the module GRAPH, not of the
+entry's import-clause order — so if a future change ever makes this verdict depend on
+clause order, the signature splits and this unledgered case fails as a NEW bug.
+
+Its positive control is conditional-impl-evidence-routed-invariant/ in this same corpus:
+the same conditional-impl machinery with the impl module imported where the constraint
+is generalized, which must stay clean and print `wrap(int)` in every ordering.

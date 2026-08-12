@@ -1,0 +1,7 @@
+import iface.{Tag, tagOf, Wrap}
+import nest.{nest, twice}
+import wrapimpl
+
+main =
+  let _ = println (nest 5)
+  println (twice 7)
