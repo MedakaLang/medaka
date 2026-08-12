@@ -267,8 +267,11 @@ keyed by qualified identity, **assembled once and never per-module**:
 environment) and I2 (global `IE` after import resolution) are *spec clauses*.
 The current architecture approximates them by marshalling per-module universe
 snapshots — the cells are the `universe*`/`obUniv*` fields on the driver
-record; derive the count rather than trust a number here (23 as of this
-writing):
+record; derive the count rather than trust a number here — this parenthetical
+said `23`, and re-derived 2026-08-12 with the two commands below it reads
+**15 `universe*` + 0 `obUniv*`** (A-3.4 PR2 deleted all three `obUniv*`
+accumulators; #1512 and #1557 retired four more `universe*` rows). It will rot
+again; run the commands:
 `grep -rn '^\s*universe[A-Za-z0-9_]* *:' compiler/ stdlib/ | grep -v '\.md:'`
 plus `grep -rn '^\s*obUniv[A-Za-z0-9_]* *:' compiler/ --include=*.mdk`
 (`loadDataUniverse`/`storeDataUniverse`/
@@ -1800,7 +1803,7 @@ reach. Run the three commands rather than trusting this table's membership.
 | `cohCollectImpls` / `cohCollectModuleImpls` / `cohImplsOf` (`:12590-12591`) / `cohImplsOfMid` (`:12612-12616`) / `CohImpl` / `coherenceUserDecls` | user-decls-only list, class identity a bare `String` (`:12588`, compared at `:12909`) | **DEFERRED → A-3.7**, which also inherits the two-checkers-disagree gap; A-3.4 supplies `InstRef` |
 | `implCompletenessMsgsOf` / `implCompletenessMsgsOfMap` (`:13125-13212`) | per-decl scans; the map arm reads `universeIfaceRequiredRef` (CE) | **DEFERRED → A-3.5** (decl-time relocation). Behaviour inherited **verbatim**; see §9.9 |
 | `superImplMsgsOf` / `implMatchesSuper` (`:14193-14251`) | scan of `allDecls` for a super's impl | **DEFERRED → A-3.5** |
-| `checkInterfaceCycles` / `ifaceDfsCycle*` · `checkPhantomMethods` · `checkGradedImplHeads` / `checkGradedImplTys` | bare-name decl scans (cycles) · per-decl scan (phantom) · `ifaceParamKindsRef` lookup (kinds) | ✅ **LANDED at A-3.5c (#1557).** All three read `CE` at the reading module's ordinal — `ceRowsVisibleAt` (cycles, with super edges now followed by IDENTITY), `ceRowsOwnedBy` (phantom), `ceSlotKindsAt` (kinds). Retires `universeIfaceParamKinds` + `ifaceParamKindsRef`; `cross_allowed` 28 → 27. NOT byte-identical, by owner ruling — see §9.9 |
+| `checkInterfaceCycles` / `ifaceDfsCycle*` · `checkPhantomMethods` · `checkGradedImplHeads` / `checkGradedImplTys` | bare-name decl scans (cycles) · per-decl scan (phantom) · `ifaceParamKindsRef` lookup (kinds) | ✅ **LANDED at A-3.5c (#1557).** All three read `CE` at the reading module's ordinal — `ceRowsVisibleAt` (cycles, with super edges now followed by IDENTITY), `ceRowsOwnedBy` (phantom), `ceSlotKindsAt` (kinds). Retires `universeIfaceParamKinds` + `ifaceParamKindsRef`; `cross_allowed` **27 → 26** — this row said `28 → 27`, which is the PRIOR unit's transition (#1588, A-3.2b residual 1); re-derived 2026-08-12 by counting the `cross_allowed` allowlist at each merge commit (#1588 `257d7e79` 28→27, #1592 `6775679a` 27→26, #1590 `dc3e8bd5` 26→24; live value 24). NOT byte-identical, by owner ruling — see §9.9 |
 | `implTysIfMatch` · `implHeadTagForIface` · `implHeadGround` · `implHeadParametric` · `declMethodNamesOf` · `argImplRequiresRoutesRecD`'s decl walk | per-call decl-list scans, no ref — invisible to every prefix grep | **DEFERRED**: they become `IE` readers where the read is authoritative (A-3.5/3.6), not here |
 | `superDeclsRef`, `argDispatchIdxRef`, `methodDispatchIdxRef` | `DriverState`, interface/method-side | **NOT `IE`** — CE-side or RLocal-site channels (#1351); A-3.3 excludes the latter two deliberately |
 | `methodIfaceTableRef` / `methodIfaceIndexRef` (`compiler/backend/emit_support.mdk:449-464`, read by both backends) | emit-side method→(iface, arity) assoc list | **NOT `IE`** — #1112 §1 row 7: belongs with B-2 |

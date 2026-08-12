@@ -611,3 +611,95 @@ scope:      #1354 bookkeeping is stale: **#1353 is CLOSED** (unit A / PR #1419) 
             `TYPECHECK-TARGET-ARCHITECTURE.md:1806`, and in #1354's scoping pass, **do not exist** —
             that file has zero `methodIface` hits. The claim they support is true; the citation is
             fabricated. Same class as #1574, in a doc the symbol gate cannot see.
+
+## RUN-023 — ⚖️ OWNER RULING: the field-owner re-key ENTERS SCOPE as Unit F (resolves RUN-016)
+
+question:   RUN-016's orphan — file it, scope it, or note it?
+ruling:     **Scoped in, as a fourth unit ("Unit F").** Ruled by the owner (Val), 2026-08-12,
+            declining both "file a tracking issue" and "note in handoff". The sprint will **drain**
+            #1216 (S0) and #1383 (S1) rather than record them.
+derivation: Owner decision on RUN-016's escalation.
+scope:      ⚠️ **Unit F is UNDESIGNED — no bites exist for it**, so it cannot be dispatched under
+            §1's premise (pre-cut mechanical bites). A dedicated Opus architecture pass is
+            launched for it immediately, running CONCURRENTLY with the ledger-repair commit and
+            Lane A/B rather than serialized ahead of them.
+            Known hazards it inherits, from the ratchet and RUN-008: the owner list is **bare-keyed**
+            and its candidate set is **every PUBLIC record in the visible prefix**, so a record the
+            importer has no import path to still votes. The predicate that fixes it is a **type
+            REACHABILITY** test, which every prior unit deferred. ⚠️ RUN-008 measured that the
+            naive whole-graph population NARROWS acceptance (`T-AMBIGUOUS-FIELD` on programs that
+            compile) — so Unit F is the one unit in this sprint whose characteristic failure is a
+            **false reject**, not a silent accept. Its bites must be graded accordingly.
+            `deFieldOwnerIdents` (built, doctested, ratchet-allowlisted, ZERO readers) is the
+            table Unit F is expected to give its first reader.
+
+## RUN-024 — ⚖️ OWNER RULING: M-2 DEFERRED out of the sprint; M-1 proceeds
+
+question:   RUN-022's escalation: attempt M-2 (#1276 + #1265 + #1386) or defer it?
+ruling:     **M-2 is deferred out of the sprint.** M-1 (#1351) proceeds — 6 bites. Ruled by the
+            owner, 2026-08-12.
+derivation: Owner decision, on P0-E's first-hand root-cause derivation (RUN-022): the adopted fix
+            is an **AST occurrence carrier**, `add-language-feature` scale, which fails §4's bite
+            test the same way #1593 did (RUN-011). Consistent with this run's premise.
+scope:      **#1276 stays OPEN and its must-fail pin stays RED — unchanged by this ruling**, since
+            §1's closure policy never permitted closing it anyway. Do not let the deferral be
+            reported as a regression or as a drain. The root-cause chain P0-E derived
+            (`renameAliasedMethods` → `elaborateModules:27014` → `implInferEnabled := True` `:13743`
+            → obligation check gated off at `:19946-19951`) is preserved in
+            `.claude/sprint/phase0/P0-E-namespace.md` for whoever takes it — that derivation is the
+            expensive part and must not be re-paid.
+
+## RUN-025 — ⚖️ OWNER RULING: A-3.7 authors the missing #1438 pin, inside the unit
+
+question:   `test/must_fail_fixtures/1438-*` does not exist (orchestrator-verified). Where does it
+            get authored?
+ruling:     **Inside A-3.7's bite list, BEFORE the widening bite (3.7-4) lands.** Ruled by the
+            owner, 2026-08-12; "pin it now" and "leave it to the testing round" both declined.
+derivation: Owner decision on RUN-021's finding. The standing rules it satisfies: a probe must be
+            **able to fail**, and a discriminating probe must **succeed pre-fix** — P0-D already
+            holds the reproducing program (two unrelated modules each declaring their own `Same`,
+            each `impl Same Int` → *"Conflicting `impl Same`"*, exit 1 on both `check` and `run`)
+            **and its positive control** (rename one to `Other` → exit 0).
+scope:      ⚠️ The ordering is the whole ruling: the pin must be authored and observed RED **before**
+            3.7-4 flips it, or it is a probe shaped to fit its own fix. A-3.7's sub-orchestrator
+            owns enforcing that ordering, and it is the one place in this sprint where §5's
+            "run no gates" posture is explicitly overridden for a single fixture.
+            Do **not** close #1438 when the pin flips — RUN-021 records that A-3.7 drains only its
+            *coherence reach*; the identity collapse itself belongs to #1482/#1507.
+
+## RUN-026 — ledger-repair — LANDED; and the LEG A golden will move as a **DELETION**
+
+question:   Did RUN-019 step 0 land clean, and does it leave the testing round anything unusual?
+ruling:     **Landed and verified.** One unusual item, recorded here so the testing round does not
+            reject it as a rule violation: **bite C-0 moves the selfproc LEG A golden as a
+            DELETION** — three top-level bindings removed — which is NOT the additive-only shape
+            the standing re-cut rule expects.
+derivation: Orchestrator-verified before committing, not taken on report:
+            - `git diff --stat` → 5 files, +350/−44; the only compiler-source file touched is
+              `compiler/types/typecheck.mdk`. Scope matches the brief. ✅
+            - `grep -rn 'declEnvsVisible|declEnvsUpTo' --include=*.mdk .` → **6 hits, ALL comment
+              lines** (a `🪦 RETIRED` tombstone at `:2871-2876` plus back-references). Zero
+              definitions, zero call sites: the dead path is genuinely gone. ✅
+            - `make check-self` → **PASS**: *"medaka_cli.mdk closure is type-clean"*. ✅
+            The implementer's own re-derivations, which the orchestrator accepts:
+            C-0's dead-code check independently confirmed (whole-worktree grep incl. doctest text);
+            RUN-015's count independently re-derived per-commit as **27 → 26**, *agreeing with
+            P0-F* — `0240af59` 28 → `257d7e79` (#1588) 27 → `6775679a` (#1592) 26 → `dc3e8bd5`
+            (#1590) 24, HEAD 24 matching the live ratchet. The gated doc had mis-attributed
+            **#1588's** transition to A-3.5c. No disagreement to adjudicate.
+scope:      🚨 **For the testing round's golden re-cut:** the standing rule is that a LEG A re-cut
+            must be **additive-only** — *"no EXISTING binding's inferred type may change; if one
+            did, the fix changed types."* C-0 legitimately violates the letter of that rule by
+            **removing** three bindings (`declEnvsVisible`, `declEnvsUpTo`, `declEnvsUpToGo`). That
+            is the intended effect of a deliberate dead-code retirement, not evidence of a type
+            change. **Expected LEG A delta: exactly three deletions, zero modifications.** If any
+            *surviving* binding's scheme moved, that is a real finding and this entry does not
+            excuse it.
+            ⭐ Implementer self-correction, recorded because it is the behaviour the ledgers exist
+            to reward: a first draft of the RUN-014 comment claimed the seed runs *before*
+            `loadDataUniverse` in `checkBodyImpl`'s Module arm. The implementer checked instead of
+            shipping it — **false**, `loadDataUniverse cur` is at `:19733` and the seed at `:19780`
+            — and removed the claim rather than repairing it into something defensible.
+            Ninth stale reference logged, not acted on (out of scope by brief):
+            `test/registry_keying_ratchet.sh` still names `declEnvsVisible` in prose.
+            #991 **DRAINS** with this commit (ask 3 was the last live one).

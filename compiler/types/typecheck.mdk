@@ -1815,7 +1815,10 @@ checkGradedImplHeadDecl _ _ _ = ()
 -- WAS: `lookupReg (ifaceSlotKey o iface i) perRun.ifaceParamKindsRef.value` — a
 -- per-run assoc list grown by `registerIfaceParamKindsGo` during each module's own
 -- pass and carried ACROSS modules by `crossRun.universeIfaceParamKinds`, one of the
--- five tables `loadDataUniverse`/`storeDataUniverse` marshalled in lockstep.  Both
+-- five tables `loadDataUniverse`/`storeDataUniverse` marshalled in lockstep AT THE
+-- TIME THIS UNIT LANDED.  ⚠️ THAT "five" IS HISTORY, NOT THE LIVE SHAPE — #1512
+-- slices 2+3 retired two more cells immediately afterwards.  DERIVE the survivors
+-- from the two bodies (see their own header, which says the same thing).  Both
 -- of those cells are GONE, not merely unread: this was their ONLY reader, so leaving
 -- them would have left two sources of truth for "what kind is this interface's slot"
 -- (design law L1) and the `cross_allowed` ratchet would still carry the row this
@@ -2684,15 +2687,15 @@ toggles = Ref (freshToggles ())
 -- driver entries, and `deAllDecls` supplies the whole-graph decl list each of them
 -- previously concatenated inline, so a mis-built envelope is LOUD
 -- (`populateEffectDomains` would miss a module's `effect` decls) rather than
--- silent.  NOT LIVE: the filter.  `declEnvsVisible` has no caller in this unit,
--- and STILL has none after A-3.2a (#1112) — that unit's `DataEnv` construction
--- reads `deAllDecls` directly, unfiltered, and does not call `declEnvsVisible`
--- either.  (This paragraph used to name "A-3.2/A-3.3/A-3.4's table reads" as
--- the callers; A-3.2a falsified that for its own slice — it builds `DataEnv`
--- but does not wire a consumer, ordinal-filtered or not.  Correct rather than
--- trust: whichever unit first calls `declEnvsVisible` should update this line
--- to name itself.)  It is `export`ed to keep `rule-dead-code` off the
--- unreached block, NOT because anything outside this module consumes it.
+-- silent.  NOT LIVE IN THIS UNIT: the filter.  ⚠️ THE ROW ACCESSOR THIS PARAGRAPH
+-- USED TO TRACK IS GONE — `declEnvsVisible`/`declEnvsUpTo`/`declEnvsUpToGo` were
+-- RETIRED 2026-08-12 (bite C-0, see their tombstone further down) with zero callers,
+-- ever: A-3.2a read `deAllDecls` unfiltered, and A-3.2b/A-3.4/A-3.5c each built their
+-- own read-side path (`declEnvRowVisible`, `ieSnapAt`, `ceLookupAt`) instead.  The
+-- filter itself IS live now, through those readers — but never through a pre-filtered
+-- row list.  (This paragraph originally named "A-3.2/A-3.3/A-3.4's table reads" as the
+-- accessor's future callers.  Every one of them declined it; the prediction was wrong
+-- four times running, which is why the accessor is a tombstone rather than a TODO.)
 --
 -- ORDINALS.  The prelude is 0; then each module of the loader's dependency-first
 -- list, in that order.  The prelude is indexed under BOTH `"core"` — the spelling
@@ -2865,19 +2868,17 @@ declEnvsOrdOf mid envs = match omLookup mid envs.deOrdIndex
   Some k => k
   None => 0 - 1
 
-declEnvsUpTo : Int -> DeclEnvs -> List DeclEnvModule
-declEnvsUpTo cur envs = declEnvsUpToGo cur envs.deModules
-
-declEnvsUpToGo : Int -> List DeclEnvModule -> List DeclEnvModule
-declEnvsUpToGo _ [] = []
-declEnvsUpToGo cur (m::rest)
-  | declEnvVisibleAt cur m.demOrd = m :: declEnvsUpToGo cur rest
-  | otherwise = declEnvsUpToGo cur rest
-
--- The graph as [mid] may see it under the transitional ordinal rule: itself plus
--- every topo-earlier module.  NO CALLER IN THIS UNIT — see the block header.
-export declEnvsVisible : String -> DeclEnvs -> List DeclEnvModule
-declEnvsVisible mid envs = declEnvsUpTo (declEnvsOrdOf mid envs) envs
+-- 🪦 RETIRED 2026-08-12 (A-3.6 bite C-0): `declEnvsVisible` / `declEnvsUpTo` /
+-- `declEnvsUpToGo` — the whole-ROW accessor path ("the graph as [mid] may see it").
+-- A-3.1 shipped them speculatively and `export`ed `declEnvsVisible` only to keep
+-- `rule-dead-code` off the unreached block; A-3.2a, A-3.2b, A-3.4 and A-3.5c each
+-- then built their own visibility path and NONE of them used it.  Zero tree-wide
+-- callers at deletion time (`grep -rn 'declEnvsVisible\|declEnvsUpTo' --include=*.mdk .`
+-- → definitions and comments only).  It was also one of the direct call sites of
+-- `declEnvVisibleAt`, so removing it makes that predicate's reader set entirely LIVE
+-- before A-3.6 reasons about it — which is the point of retiring it first.
+-- Do NOT re-add: the live shape is a predicate applied at the READ
+-- (`declEnvVisibleTo` / `declEnvRowVisible` below), not a pre-filtered row list.
 
 -- 🚨 THE SECOND VISIBILITY PREDICATE — A-3.2b (#1512), the interim rule RATIFIED by
 -- the repo owner on that issue for K's declaration environments.  `DataEnv` keeps its
@@ -3215,8 +3216,9 @@ deKindRow1 = declEnvModule 1 "m" deKindFixtureDecls
 -- RAW declarations, built once from `DeclEnvs`'s own ordinal-tagged decl
 -- list.  It carries NO elaborated `Scheme`/`RecordInfo`/`Mono` — see why
 -- below — and it is NOT LIVE: no caller outside this block populates or
--- reads `deData`, for the identical reason `declEnvsVisible` above has no
--- caller.  "Byte-identical" is therefore WEAK evidence for this PR — nothing
+-- reads `deData`, for the identical reason the retired `declEnvsVisible`
+-- accessor above had no caller (bite C-0, 2026-08-12 — it never gained one and
+-- was deleted).  "Byte-identical" is therefore WEAK evidence for this PR — nothing
 -- reads the new field, so nothing could have moved a judgment even if the
 -- construction were wrong.  The load-bearing checks are the STATIC ones (the
 -- doctests below) and the additive-only golden diffs, not the differential
@@ -3250,13 +3252,41 @@ deKindRow1 = declEnvModule 1 "m" deKindFixtureDecls
 -- Every one of those reads or writes `perRun`/`crossRun` REFS as a side effect
 -- (`recordParamKinds`, `registerRecordInfoKeyed`, `lookupCtor`,
 -- `lookupRecordByName`), and elaborating a ctor's field types
--- (`fromAstTypeE`) resolves aliases through `perRun.value.aliasTableRef` and
--- MINTS FRESH TYVAR IDS (`mintParamReprs` → `freshVars`) from a global
--- monotonic counter.  `buildDeclEnvs` runs in the driver PREAMBLE, before the
--- per-module walk that owns that counter — calling any of those functions
--- here would either corrupt the real tables the live walk depends on, or (if
--- carefully isolated) still shift every later tyvar id and move every scheme
--- this PR must NOT move.  So this index is deliberately SYNTACTIC: raw
+-- (`fromAstTypeE`) resolves aliases through `perRun.value.aliasTableRef`.
+--
+-- 🚨 THE TYVAR-COUNTER ARGUMENT THAT USED TO STAND HERE IS FALSE — DELETED
+-- 2026-08-12, and recorded rather than silently dropped because `:4254` below
+-- routes every future `CE`/`DataEnv` implementer to THIS block as "the full
+-- derivation", so the falsified version was steering them into a wall that is
+-- not there.  It said tyvar ids are minted "from a global monotonic counter"
+-- owned by the per-module walk.  DERIVED false: `tyvarCounter` is a `PerRun`
+-- field (see `data PerRun`), `freshPerRun` initialises it `Ref 0`, and
+-- `resetState` mints a whole fresh `PerRun` PER MODULE.  The counter is
+-- per-module.  Schemes in the data universe already cross module boundaries
+-- carrying ids minted under a different counter epoch, and that is already
+-- tolerated, because every consumer re-instantiates (`freshSubst`,
+-- `instantiateRecord`) — a `Scheme`'s quantified ids are scheme-local.
+--
+-- THE WALLS THAT ARE REAL, AND THEY ARE WHY THE CONCLUSION BELOW IS UNCHANGED:
+--   (a) EFFECTS.  Those functions WRITE `perRun` refs — `registerData`'s
+--       `DTypeAlias` arm (`aliasTableRef`), `recordParamKinds`
+--       (`dataParamKindsRef`), `registerRecordInfoKeyed` (`recordByNameRef` +
+--       `fieldOwnersRef`).  `buildDeclEnvs` runs in the driver PREAMBLE, so
+--       calling them here corrupts the tables the live per-module walk depends
+--       on unless each write is separately isolated.
+--   (b) DIAGNOSTICS — RELAYED from P0-A (`.claude/sprint/phase0/`), NOT
+--       re-derived at this line; treat as the first thing to check, not as
+--       established.  `fromAstTypeE` EMITS type errors: `T-ALIAS-ARITY` and
+--       `T-ROW-KIND-MISMATCH`, both through `pushTypeErrorOnce`/`…At`, whose
+--       `Once` dedupe reads `perRun.typeErrors` — a bundle `resetState`
+--       re-mints per module.  Elaborating in the preamble would MERGE that
+--       dedupe scope across the whole module graph (one diagnostic per compile
+--       where there is one per importing module today) and RELOCATE the push
+--       outside any module's harvest window.  Both directions are strictly
+--       FEWER diagnostics on a program that is rejected today — loud → silent,
+--       which this repo's ladder counts as a severity INCREASE.
+--
+-- So this index is deliberately SYNTACTIC: raw
 -- `Variant`/`Field`/`Ty` nodes, keyed by identity, no elaboration performed.
 data DataTypeDecl = DataTypeDecl {
     dtKey : TabKey,
@@ -4246,10 +4276,14 @@ ieUnivConcreteOf (ImplUniverse conc _ _) = conc
 -- and every use site elaborates on demand via `fromAstTypeE`.  This
 -- construction mirrors that exactly, and hits the identical wall A-3.2a's
 -- `DataEnv` construction hit: elaborating a method signature would call
--- `fromAstTypeE`/`registerRecordInfoKeyed`-shaped machinery, which mints fresh
--- tyvar ids off the global counter and mutates `perRun` refs — machinery that
--- does not exist yet in the driver PREAMBLE, before the per-module walk that
--- owns that counter.  So this index is deliberately SYNTACTIC: raw `Ty`/
+-- `fromAstTypeE`/`registerRecordInfoKeyed`-shaped machinery, which MUTATES
+-- `perRun` refs and EMITS diagnostics through a `perRun`-scoped dedupe —
+-- machinery that does not exist yet in the driver PREAMBLE.  ⚠️ This sentence
+-- used to say that machinery "mints fresh tyvar ids off the global counter";
+-- that is FALSE (`tyvarCounter` is a `PerRun` field, reset per module) and it
+-- was corrected 2026-08-12 — see the "WHY NOT JUST CALL registerAllData/…"
+-- block above `DataEnv` for the corrected walls.
+-- So this index is deliberately SYNTACTIC: raw `Ty`/
 -- `Super`/`Kind` values, keyed by identity, no elaboration performed — see the
 -- "WHY NOT JUST CALL registerAllData/…" block above `DataEnv` for the full
 -- derivation, which applies here unchanged.
@@ -4274,8 +4308,11 @@ ieUnivConcreteOf (ImplUniverse conc _ _) = conc
 -- today."*  A-3.5c is that PR.  `ceParamKinds` has a production reader
 -- (`ceSlotKindsAt` ← `checkGradedImplTys`), and BOTH the `universeIfaceParamKinds`
 -- CrossRun cell and the `ifaceParamKindsRef` PerRun ref it marshalled are DELETED,
--- along with their writer — so `loadDataUniverse`/`storeDataUniverse` now marshal
--- THREE tables (recordByName, fieldOwners, dataParamKinds) -- A-3.2b's residual slice 1
+-- along with their writer — so `loadDataUniverse`/`storeDataUniverse` marshal one
+-- fewer table than before this unit.  ⚠️ DO NOT WRITE THE COUNT HERE: this line said
+-- *"THREE tables (recordByName, fieldOwners, dataParamKinds)"* and #1512 slices 2+3
+-- retired two of those three the same day.  DERIVE the survivors from the two bodies,
+-- whose own header (`loadDataUniverse`) states the same rule.  A-3.2b's residual slice 1
 -- took `aliasTable` out just before this unit took `ifaceParamKinds`, and
 -- the `DataEnv`-by-CO-LOCATION confusion the original note was guarding against no
 -- longer has a table to attach to.  A-3.2b's slices retire the remaining rows under
@@ -6363,7 +6400,7 @@ data PerRun = PerRun {
     methodIfaceParamsRef : Ref (OrdMap (IfaceRef, List String, Ty, List (String, List Kind))),
     registeredIfacesRef : Ref (OrdMap Unit),
     implObls : Windowed UObligation,  -- #841: pendingImplObligations/N, ported onto Windowed; #991: onto UObligation
-    numlitRefs : Ref (List (Mono, Ref (Option Float), Int, Ref Route)),
+    numlitRefs : Ref (List (Mono, Ref (Option Float), Int, Ref Route)),  -- #991 ask 3, RULED: the numeric-literal channel STAYS BESPOKE — it is Float-DEFAULTING machinery (`setNumlitFloats`), not obligation checking, so it is deliberately NOT ported onto `UObligation` like `implObls` above was
     poisonedVars : Ref (List Int),
     deferrableVarIds : Ref (List Int),  -- #838 I2: QUANTIFIED (forwarded) var ids of every generalized scheme — RULE 2 defers these
     tupleCallCandidates : Ref (List (Mono, String, Option (Loc, String))),
@@ -24872,10 +24909,17 @@ appendUniverseAccums prog =
 --     ELABORATED `RecordInfo`, which the Step-0 ruling keeps OUT of syntactic K, so
 --     it stays a marshalled cell until a dedicated elaboration-cache unit.
 --   * STAGE-K half — a PROJECTION at the reader's own ordinal, which has NO inverse
---     here by construction.  Three tables are now on this side:
+--     here by construction.  ⚠️ ONLY ONE OF THE THREE IS SEEDED IN THE BODY BELOW.
+--     This bullet said "three tables are now on this side", which reads as three
+--     lines of `loadDataUniverse`; two of them are seeded at a DIFFERENT call site —
+--     the ONE call of `declEnvSeedDataUniverse mid envs`, in `checkBodyImpl`'s Module
+--     arm, further down that arm than this function's own call.  Anchor on the seeder,
+--     not on a line number or on this bullet's ordering:
 --       `aliasTableRef`      ← `aliasUniverseAt cur … .deData.deAliases`  (#1512 residual 1)
+--                              — HERE, in `loadDataUniverse`'s body
 --       `dataParamKindsRef`  ← `declEnvSeedDataUniverse mid …`            (#1512 slice 2)
 --       `fieldOwnersRef`     ← `declEnvSeedDataUniverse mid …`            (#1512 slice 3)
+--                              — both at that function's ONE call site, not here
 --     and `ifaceParamKindsRef` left the pair entirely with #1557 A-3.5c (its reader
 --     sources `ceSlotKindsAt` from `deIfaces`).
 -- Do NOT re-add a `setRef crossRun.… perRun.value.<any of those>.value` "for
