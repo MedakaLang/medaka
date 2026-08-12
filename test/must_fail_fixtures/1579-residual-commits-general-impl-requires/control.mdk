@@ -1,0 +1,26 @@
+-- CONTROL for issue 1579: main.mdk with the ONE distinguishing feature removed -- the
+-- GENERAL impl no longer carries a `requires`, so there is nothing for the reducer to
+-- commit to and no constraint can be invented.  The overlap itself is unchanged: both
+-- impls are still present, still ⊑-comparable, still accepted by coherence.  This must
+-- check clean; if it does not, the environment broke and the gate says CONTROL-BROKE
+-- rather than letting an unrelated failure read as the bug.
+data Wrap a = Wrap a
+
+interface Tag t where
+  tagOf : t -> String
+
+interface Show2 t where
+  show2 : t -> String
+
+impl Show2 Int where
+  show2 _ = "i"
+
+impl Tag (Wrap a) where
+  tagOf (Wrap _) = "genericW"
+
+impl Tag (Wrap Bool) where
+  tagOf _ = "specificW"
+
+nest x = tagOf (Wrap x)
+
+main = println (nest True)

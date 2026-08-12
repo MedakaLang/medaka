@@ -1,0 +1,18 @@
+-- CONTROL for issue 1575: main.mdk with the ONE distinguishing feature removed -- the
+-- `requires C (Box a)` clause that names its own head.  Everything else is identical,
+-- byte for byte.  This must build clean; if it does not, the environment broke and the
+-- gate says CONTROL-BROKE rather than letting an unrelated failure read as the bug.
+data Box a = Box a
+
+interface C t where
+  cm : t -> String
+
+impl C Int where
+  cm _ = "i"
+
+impl C (Box a) where
+  cm (Box _) = "box"
+
+g x = cm (Box x)
+
+main = println (g 5)

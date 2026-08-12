@@ -1,0 +1,28 @@
+-- Issue 1579: `nest True` poses `Tag (Wrap Bool)`, whose MOST SPECIFIC match is
+-- `impl Tag (Wrap Bool)` -- which carries no `requires` and needs no witness.  The
+-- program is LEGAL and must print `specificW`.  Measured: the residual reducer commits
+-- to the GENERAL `impl Tag (Wrap a) requires Show2 a` while `t` is still free, so
+-- `nest` is saddled with `Show2 a` and the call is falsely rejected.
+--
+-- ⚠️ THIS FIXTURE'S LINE NUMBERS ARE LOAD-BEARING: claim.txt pins the reject's 0-based
+-- LSP range, so a comment-only edit here moves the pin.  Keep edits line-count-neutral.
+data Wrap a = Wrap a
+
+interface Tag t where
+  tagOf : t -> String
+
+interface Show2 t where
+  show2 : t -> String
+
+impl Show2 Int where
+  show2 _ = "i"
+
+impl Tag (Wrap a) requires Show2 a where
+  tagOf (Wrap x) = "genericW\{show2 x}"
+
+impl Tag (Wrap Bool) where
+  tagOf _ = "specificW"
+
+nest x = tagOf (Wrap x)
+
+main = println (nest True)
