@@ -22084,10 +22084,81 @@ implDeclWithReqs _ = []
 -- binding to each `Require`'s type args.  No matching impl / no reqs → [].
 -- #154 PR3: the FIRST-match impl lookup is now the keyed `findMatchingImplReqsU`
 -- (bucket by iface|tag, headless fallback) instead of a flat scan over every impl.
+-- ⚠️ THE `None` ARM IS NOT "NOTHING TO CHECK" — it is Door 4's `None` arm, one
+-- consumer over.  See `unroutedGroundReqs` directly below for why it rejects.
 reqObligationsFor : ImplUniverse -> IfaceRef -> List Mono -> List (IfaceRef, List Mono)
 reqObligationsFor univ iface args = match findMatchingImplReqsU univ iface args
-  None => []
+  None => unroutedGroundReqs univ iface args
   Some (subst, reqs) => map (reqToObligation subst) reqs
+
+-- ── SA-1 / "Door 4b": the GROUND goal's un-plumbed case is a LOUD reject too ──
+-- Door 4 (`unroutedResidual`, on `residualPredsOf`'s `None` arm) made the
+-- two-registry disagreement loud for a DEFERRED goal.  It has exactly one call site,
+-- and a goal that never becomes a residual predicate never reaches it: a GROUND goal
+-- (`Tag (Wrap Int)` — from a type signature, or from literal defaulting on a nullary
+-- binding) is discharged here instead, by the end-of-body obligation checker
+-- (`checkOneCallObligation` -> `checkNestedReqs` -> this function), which has the SAME
+-- split.  `implMatchesArgsU` accepts over the graph-global `IE` while
+-- `findMatchingImplReqsU`'s concrete leg (`concreteReqMatchByIface`) reads
+-- `shadowKeyTableRef`, the CUMULATIVE `universeKeyBucketsRef` prefix — so the impl's
+-- `requires` are never recovered, no dict is built, and the emitted call is one
+-- argument short of the impl it dispatches to.
+-- MEASURED at `0b953165` on #1564's own four files with `export nest : Int -> String`
+-- added to `nest.mdk` and NOTHING else changed: `check` exit 0 (`main : Unit`),
+-- `run` exit 1 `E-PANIC: putStrLn: not a String`, `build` exit 0, and the built binary
+-- exit **139** (segmentation fault); the control (the two import lines swapped) is
+-- clean on all four arms and prints `wrap(int)`.  Same defect, same mechanism, one
+-- signature away from the reproduction Door 4 was verified against.
+-- 🚨 REJECT, DO NOT ROUTE.  Handing this arm the `requires` from `univ` would be
+-- "move only the checker's leg" — `TYPECHECK-TARGET-ARCHITECTURE.md:1814-1815` defers
+-- both the re-key and the reader move to B-2 BY NAME, and the tree has already MEASURED
+-- that desynchronizing the checker from the router yields an `argReqRoute` of `RNone`
+-- and a binary that still faults (`residualPredsOf`'s header, #1560).  So this reads
+-- `univ` for a yes/no REJECT PREDICATE only: no obligation is discharged from it, no
+-- scheme and no route changes, and both arms still return `[]`.
+-- ⚠️ WHY THE TEST IS NARROWER THAN DOOR 4'S.  `unroutedResidual` fires on
+-- `implMatchesU` alone, which does not ask whether the matched impl HAS a `requires`
+-- (that over-fire is R5-F2 / SA-4, owned separately and owner-ruled because relaxing it
+-- is an accept-widening).  This site cannot afford it: EVERY ground obligation in every
+-- program reaches here, including a no-`requires` impl whose evidence is a bare route
+-- word and needs no dict at all (MEASURED by R5: `define i64 @mdk_nest__nest(i64
+-- %arg0)`, arity 1, no dict) — rejecting those would be a false reject on programs that
+-- run correctly.  So the predicate is "some impl that MATCHES these args carries a
+-- non-empty `requires`", i.e. exactly "a dictionary would have to be passed here".
+-- The disjunctive form (ANY matching impl, not the selected one) is the LOUD fail
+-- direction: the selector that would name the winner is the registry that just failed.
+-- 🚨 THE MESSAGE IS `requiresUnroutedMsg` — DOOR 4'S OWN, VERBATIM, AND THAT SHARING IS
+-- LOAD-BEARING, NOT LAZINESS.  A DEFERRED goal reaches BOTH guards (this checker runs on
+-- `Tag (Wrap a)` too — `allConcreteHeads` is about head TYCONS, so a partially-free
+-- vector still gets here), so a second, differently-worded message would DOUBLE-REPORT
+-- the same defect at the same span.  MEASURED: with a bespoke ground-shaped message,
+-- `check --json` on #1564's own `main.mdk` emitted TWO `T-REQUIRES-UNROUTED`
+-- diagnostics at range 2:16-2:21 and the must-fail pin flipped to DRAINED on a live
+-- bug.  `pushTypeErrorOnceAt` dedups on the MESSAGE, so identical text collapses the
+-- pair to one report by construction.  ⚠️ Consequence for SA-5 / item 4: the wording
+-- now serves two sites, and its *"the module where this binding is generalized"* clause
+-- is inaccurate on THIS one (nothing is generalized at a ground use site).  Reword it
+-- for both, and do not fix that by re-splitting the text.
+unroutedGroundReqs : ImplUniverse -> IfaceRef -> List Mono -> List (IfaceRef, List Mono)
+unroutedGroundReqs univ iface args
+  | implMatchesWithReqsU univ iface args =
+    let _ = pushTypeErrorOnceAt "T-REQUIRES-UNROUTED" goalSiteLoc.value (requiresUnroutedMsg iface args)
+    []
+  | otherwise = []
+
+-- does SOME impl of [iface] matching [args] carry a non-empty `requires`?  The
+-- reqs-aware twin of `implMatchesU`: same buckets, same concrete-then-headless order,
+-- same `implHeadMatchesArgs` success condition, so True-here-with-`findMatchingImplReqsU`-None
+-- isolates precisely the two-registry disagreement on a goal that needs a dict.
+implMatchesWithReqsU : ImplUniverse -> IfaceRef -> List Mono -> Bool
+implMatchesWithReqsU _ _ [] = False
+implMatchesWithReqsU univ iface (a0::rest) = bucketArgsMatchReqs (univConcreteBucket univ iface (headTyconMono a0)) (a0::rest)
+  || bucketArgsMatchReqs (univHeadless univ iface) (a0::rest)
+
+bucketArgsMatchReqs : List (List Ty, List Require) -> List Mono -> Bool
+bucketArgsMatchReqs [] _ = False
+bucketArgsMatchReqs ((tys, reqs)::rest) args = isNonEmptyL reqs && implHeadMatchesArgs tys args
+  || bucketArgsMatchReqs rest args
 
 reqToObligation : List (String, Mono) -> Require -> (IfaceRef, List Mono)
 reqToObligation subst (Require { requireHead = ifaceR, requireArgs = tysR, requireOrigin = o }) = (IfaceRef { irName = ifaceR, irOrigin = o }, map (reqTyToMono subst) tysR)

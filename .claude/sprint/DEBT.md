@@ -1482,3 +1482,112 @@ could move: nothing — but the claim this row constrains WOULD move the arc's r
             both deferred to B-2 by name (`TYPECHECK-TARGET-ARCHITECTURE.md:1814-1815`);
             `T-REQUIRES-UNROUTED` drains when that lands, not before, and #1564 stays OPEN.
 unchecked:  nothing to check — this row asserts no measurement.
+
+### SA-1 — Door 4b — the GROUND goal's unrouted-evidence case is a LOCATED REJECT too
+sites:      `compiler/types/typecheck.mdk` — `reqObligationsFor`'s `None` arm (one call-site
+            word: `[]` → `unroutedGroundReqs univ iface args`, plus a two-line ⚠️ header saying
+            that arm is not "nothing to check"); three new top-level functions beside it,
+            `unroutedGroundReqs`, `implMatchesWithReqsU` and `bucketArgsMatchReqs`. NO new
+            diagnostic code and NO new message: it pushes `T-REQUIRES-UNROUTED` with Door 4's
+            own `requiresUnroutedMsg`, verbatim (see `could move:`, second paragraph).
+            `test/diff_compiler_check_cli_modules.sh` — four new legs (`D4b/…`) at the end.
+            Door 4's own `unroutedResidual` / `requiresUnroutedMsg` are UNTOUCHED, and so are
+            `universeKeyBucketsRef`, `shadowKeyTableRef`, `concreteReqMatchByIface` and every
+            route-lowering site: all three A-3 doors stay closed (`P0-H-plumbing-scope.md`).
+transform:  Door 4 has exactly ONE call site — `residualPredsOf`'s `None` arm — so a goal that
+            never becomes a residual predicate never reaches it. A GROUND goal (`Tag (Wrap Int)`,
+            from a declared signature or from literal defaulting) is discharged instead by the
+            end-of-body obligation checker, `checkOneCallObligation` → `checkNestedReqs` →
+            `reqObligationsFor`, which has the SAME `IE`-vs-`shadowKeyTableRef` split: candidacy
+            accepts over the graph-global `IE` while `findMatchingImplReqsU`'s concrete leg reads
+            the cumulative prefix and returns `None`, so the impl's `requires` are never
+            recovered, no dict is built, and the emitted call is one argument short of the impl
+            it dispatches to. `unroutedGroundReqs` splits that `None` exactly as Door 4 splits
+            its own: fire iff SOME impl in `univ` that MATCHES these args carries a non-empty
+            `requires` (`implMatchesWithReqsU` — same buckets, same concrete-then-headless order,
+            same `implHeadMatchesArgs` success condition as `implMatchesU`), push
+            `T-REQUIRES-UNROUTED` at `goalSiteLoc.value`, return `[]`. Fail-closed; the accumulated
+            error rejects at `check`. Nothing is discharged FROM `univ` — it is read as a yes/no
+            reject predicate only, so this is not Door 3 (moving the checker's leg), which the
+            tree has already measured still faults (`argReqRoute` → `RNone`, #1560).
+could move: 🚨 **THE NARROWING RISK, NAMED — this is an acceptance narrowing by construction and
+            the legal programs it could plausibly eat are these.** (1) **A goal whose SELECTED
+            (most-specific) impl needs no dict, while a less-specific matching sibling carries a
+            `requires` and is unroutable.** The test is disjunctive — ANY matching impl, not the
+            winner — because the selector that would name the winner IS the registry that just
+            failed. MEASURED, and it is not hypothetical: R1's `p4` (`impl Show2 (Box T)` beside
+            `impl Show2 (Box a) requires Show2 a`) is now rejected in all six import orders,
+            where 3 of 6 previously produced a correct binary printing `5`. The other 3 of 6
+            segfaulted, BASE rejects all six, and the alternative (test the selected impl only)
+            leaves those 3 segfaulting — a silent arm, which the severity rule forbids.
+            (2) **A multi-parameter interface's conditional impl in a non-imported later
+            module** — the call-obligation vector reaches this checker in full, so `p2p`
+            (`impl Conv (Wrap a) Bool requires Conv a Bool`) now rejects; its control still
+            prints `wrap(int-bool)`. (3) Anything where the dict is in fact supplied by a
+            different channel (a declared signature context, the direct `funConstraintsRef`
+            route) while `findMatchingImplReqsU` still returns `None`: D4-1 names this class for
+            the residual path and it applies here unchanged. I found no instance — the
+            three-corpus sweep, `check-self`, and the five legal programs below all stay clean —
+            but I cannot rule the class out.
+            **Second, on the MESSAGE.** The two guards share `requiresUnroutedMsg` byte-for-byte
+            and that is load-bearing, not laziness: a DEFERRED goal reaches BOTH (this checker
+            runs on `Tag (Wrap a)` too — `allConcreteHeads` is about head TYCONS), and
+            `pushTypeErrorOnceAt` dedups on the MESSAGE, so identical text collapses the pair to
+            one report. MEASURED: with a bespoke second message, `check --json` on #1564's own
+            `main.mdk` emitted TWO `T-REQUIRES-UNROUTED` diagnostics at the same range and the
+            must-fail suite reported `1564-…` **DRAINED on a live bug** — a defect made invisible
+            by a duplicate. ⚠️ Consequence for SA-5 / item 4: the shared wording's *"the module
+            where this binding is generalized"* clause is inaccurate at a ground use site. Reword
+            it FOR BOTH; do not fix it by re-splitting the text.
+            **Third, the SEVERITY DIRECTION, stated plainly:** this makes strictly MORE programs
+            fail, loudly, at `check`. It does not route evidence, does not make C4 or I2 true,
+            and D4-2's reporting constraint stands unchanged.
+unchecked:  (1) **The nearest program this does NOT cover, CONSTRUCTED AND MEASURED — a live S0
+            that survives.** `p4b`: the conditional `gen` IS reachable from the goal's module
+            (so `findMatchingImplReqsU` returns `Some` and this guard cannot fire) while the more
+            specific `impl Show2 (Box T)` is not. `check` **0**, `build` **0**, the binary prints
+            **1003 — the WRONG value** (correct is `5`), and `run` exits 1
+            `E-NOT-A-FUNCTION: applied non-function: 5`. Identical in both import orders. This is
+            the same two-registry disagreement in its *which-impl* form rather than its *no-impl*
+            form; my diff is confined to the `None` arm so it cannot have caused or cured it
+            (DERIVED from the diff's shape; whether BASE accepts it is OWED). **File it — it is
+            not fixable without B-2's reader move.** (2) The synthesis's own candidate — "an impl
+            in a non-imported module that sorts EARLIER" — was constructed and is #1564's
+            `control`: the prefix already contains it, neither channel disagrees, and it compiles,
+            runs and executes correctly. Nothing to cover there. (3) The `medaka test` single-file
+            arm, whose driver differs, was not probed. (4) **wasm was not probed, by anyone, on
+            any of this**; no engine differential was run. (5) The must-fail pin the brief asked
+            for is NOT CONSTRUCTIBLE and this row is where that is recorded: the `build-run` verb
+            needs a binary, and post-fix `medaka build` correctly refuses (that verb returns 126
+            MALFORMED, never a gradeable observation), while re-using `issue: 1564` trips the
+            suite's one-fixture-per-issue check. The regression assertion is the four `D4b/…`
+            legs instead — including the built-binary arm on the control. (6) Gates run:
+            `check-self`, `diff_compiler_must_fail` (twice, identical: 98 REPRO / 1 DRAINED),
+            `diff_compiler_check_cli_modules` (75 ok / 1 pre-existing red — `1112-A34/later-invisible`,
+            which A-3.6 was licensed to flip and which its own header says A-3.6 owed a fixture
+            for; it fails by ACCEPTING, so this diff cannot be its cause),
+            `diff_compiler_dict_semantics` (161/161), `diff_compiler_import_order` (14/14),
+            `diff_compiler_typecheck_errors` (124/124). **ZERO goldens blessed**; snapshots and
+            selfproc LEG A are item 7's.
+
+### SA-2 — the six-permutation `run`≠`build` segfault is SUBSUMED by SA-1, not separately fixed
+sites:      none (no edit of its own — this row records the derivation)
+transform:  none. R1's `p4` corpus was re-measured first-hand on `cdd8e9d4` before the fix
+            (3 of 6 orders: `check`/`run`/`build` all 0, `run` prints the correct `5`, the built
+            binary **139**; the other 3 clean — single variable `import gen` before `import spec`)
+            and again on the fixed binary: **all six orders now reject identically** at `check`
+            exit 1 with `T-REQUIRES-UNROUTED` in `user.mdk`, which is also what BASE `7aae8b83`
+            did (it rejected all six with `No impl of Show2 for Box T`). The mechanism is SA-1's,
+            not a codegen one: `user.mdk` is the FIRST import in every permutation, so at its
+            ordinal the evidence prefix contains NO `Box` impl at all — `findMatchingImplReqsU`
+            returns `None` in all six — while graph-global candidacy admits `gen`'s conditional
+            impl. The order-dependence was downstream, in which impl the ROUTER then committed
+            to. So the front-end reject fires uniformly and the order-sensitivity is gone.
+could move: the same three classes as SA-1 (this is SA-1's guard firing), and specifically the
+            3 previously-clean orders of `p4` itself: they printed a correct `5` on HEAD and are
+            now refused. That is the disjunctive-test cost named in SA-1's `could move:` (1), it
+            matches BASE's verdict, and the alternative leaves 3 orders silently segfaulting.
+unchecked:  the IR-level derivation the plan mandated for a codegen-side outcome was NOT needed
+            and NOT taken — the defect is front-end and is closed at `check`, so there is no
+            emitted IR to diff. If SA-2 is ever reopened on a *different* corpus, that mandate
+            still stands. `p4` under **wasm** was not probed.

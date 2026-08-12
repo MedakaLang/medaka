@@ -1728,3 +1728,31 @@ scope:      **Adjudicated findings, re-labelled SA-1…SA-12** (full list in
             `checkSuperImpls` to match candidacy, or keep it prefix-scoped and accept the
             contradiction) and SA-4 (Door 4 firing where nothing needs routing — the fix is an
             accept-widening). Neither is the orchestrator's to take.
+
+## RUN-055 — ⚖️ OWNER RULINGS on the two blocking items: WIDEN SA-3, TIGHTEN SA-4
+
+question:   The two decisions the fix plan could not proceed without.
+ruling:     **SA-3: WIDEN `checkSuperImpls` to match candidacy.** **SA-4: TIGHTEN Door 4's guard**
+            so it only fires when the matched impl actually carries `requires`. Owner (Val),
+            2026-08-12.
+derivation: Owner decisions on SYNTHESIS.md's escalations.
+scope:      ⚠️ **BOTH are acceptance WIDENINGS**, and that is the unifying constraint on how they
+            land. §5 R2's two enumerated exceptions are both widenings **carried by a
+            could-not-pass-before fixture** — so each owes one: a program that is rejected today and
+            compiles after, pinned as the positive evidence of the change. A widening without such a
+            fixture is untested by construction, because every pre-existing test covered the
+            rejecting case.
+            **SA-3** additionally carries the standing soundness-review obligation: it changes what
+            the compiler accepts on the dispatch axis, so it wants the adversarial review gate every
+            soundness change in this repo gets, not merely a green build.
+            **SA-4** is the easier of the two: it *restores* behaviour BASE had (BASE did not fire
+            `T-REQUIRES-UNROUTED` at all), so its could-not-pass-before fixture is a direct
+            base-vs-head comparison rather than a novel construction.
+            **SA-5** (the remedy text being wrong for the declared-given shape — it advises adding
+            an import, which then yields a different error) rides with SA-4 as a wording fix, but is
+            deliberately NOT bundled into the same change as the guard: an acceptance change and a
+            message change in one commit are separately reviewable only if they are separate.
+            📌 Sequencing, per the plan and per the sprint's own hard-won rule that **fixes land
+            SERIALLY**: SA-1/SA-2 first (they are S0 and share a root cause), then SA-3 + SA-4/SA-5,
+            then SA-6 and the ledger re-cuts, then the golden re-cut **alone, terminal**, then
+            re-run the round's evidence.

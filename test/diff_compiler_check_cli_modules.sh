@@ -1875,5 +1875,117 @@ else
   fail=$((fail+1)); printf 'FAIL 1512-A32b/alias-cycle-importer (exit %d, definer hits=%s importer hits=%s: [%s])\n' "$cyc_code" "$cyc_lib" "$cyc_ent" "$cyc_out"
 fi
 
+# ── Stage A "Door 4b": a GROUND unrouted-evidence goal is a LOUD reject ──────
+#
+# 🚨 THIS LEG EXISTS BECAUSE THE MUST-FAIL PIN FOR IT CANNOT BE WRITTEN.  The defect
+# it guards is #1564's segfault ONE TYPE SIGNATURE AWAY from #1564's own fixture:
+# with `export nest : Int -> String` the goal `Tag (Wrap Int)` is GROUND, never
+# becomes a residual predicate, and so never reaches Door 4's guard
+# (`unroutedResidual`, whose single call site is `residualPredsOf`'s `None` arm).
+# MEASURED at `0b953165`: `check` exit 0, `build` exit 0, and the built binary exit
+# **139**.  A `must_fail_fixtures/` row could not carry it once fixed — its
+# `build-run` verb needs a binary, and after the fix `medaka build` correctly refuses
+# (that verb returns 126 MALFORMED, never a gradeable observation), while re-using
+# `issue: 1564` would trip that suite's one-fixture-per-issue check.  So the
+# regression assertion lives here, where ACCEPTANCE and the BUILT BINARY are both
+# observable in one gate.
+#
+# ⚠️ THE THIRD LEG IS THE LOAD-BEARING ONE.  Legs 1-2 only say "still rejects", which
+# a too-broad reject also satisfies; leg 3 is the NARROWING guard — the control order
+# must still build AND its binary must still print `wrap(int)`.  A guard that ate the
+# control would be the false-reject direction RUN-047 names as this unit's inverted
+# risk.
+mkdir -p "$TMP/d4b"
+cat > "$TMP/d4b/iface.mdk" <<'EOF'
+public export data Wrap a = Wrap a
+
+export interface Tag t where
+  tagOf : t -> String
+
+export impl Tag Int where
+  tagOf _ = "int"
+EOF
+cat > "$TMP/d4b/wrapimpl.mdk" <<'EOF'
+import iface.{Tag, tagOf, Wrap}
+
+export impl Tag (Wrap a) requires Tag a where
+  tagOf (Wrap x) = "wrap(\{tagOf x})"
+EOF
+# The ONLY delta vs #1564's nest.mdk: a declared signature, which grounds the goal.
+cat > "$TMP/d4b/nest.mdk" <<'EOF'
+import iface.{Tag, tagOf, Wrap}
+
+export nest : Int -> String
+nest x = tagOf (Wrap x)
+EOF
+cat > "$TMP/d4b/main.mdk" <<'EOF'
+import iface.{Tag, tagOf, Wrap}
+import nest.{nest}
+import wrapimpl
+
+main = println (nest 5)
+EOF
+cat > "$TMP/d4b/control.mdk" <<'EOF'
+import iface.{Tag, tagOf, Wrap}
+import wrapimpl
+import nest.{nest}
+
+main = println (nest 5)
+EOF
+d4b_out="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check --json "$TMP/d4b/main.mdk" 2>&1)"
+d4b_code=$?
+d4b_hits="$(printf '%s\n' "$d4b_out" | grep -c 'T-REQUIRES-UNROUTED')"
+if [ "$d4b_code" -eq 1 ] && [ "$d4b_hits" -ge 1 ]; then
+  pass=$((pass+1)); printf 'ok   D4b/ground-goal-unrouted-rejects (T-REQUIRES-UNROUTED, exit 1)\n'
+else
+  fail=$((fail+1)); printf 'FAIL D4b/ground-goal-unrouted-rejects (exit %d, code hits=%s: [%s])\n' "$d4b_code" "$d4b_hits" "$d4b_out"
+fi
+# The build arm, separately: `check` and `build` must agree.  A `check` reject with a
+# `build` accept is the split that produced the 139 in the first place.  Its exit code
+# is read from a variable, never through a pipe.
+MEDAKA_ROOT="$ROOT" bound "$MEDAKA" build "$TMP/d4b/main.mdk" -o "$TMP/d4b.bin" >"$TMP/d4b.buildlog" 2>&1
+d4b_bcode=$?
+if [ "$d4b_bcode" -ne 0 ] && [ ! -x "$TMP/d4b.bin" ]; then
+  pass=$((pass+1)); printf 'ok   D4b/ground-goal-unrouted-build-agrees (build refuses, no binary)\n'
+else
+  fail=$((fail+1)); printf 'FAIL D4b/ground-goal-unrouted-build-agrees (build exit %d, binary present=%s — the 139 shape is back)\n' "$d4b_bcode" "$([ -x "$TMP/d4b.bin" ] && echo yes || echo no)"
+fi
+d4b_cchk="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check "$TMP/d4b/control.mdk" 2>&1)"
+d4b_ccode=$?
+if MEDAKA_ROOT="$ROOT" bound "$MEDAKA" build "$TMP/d4b/control.mdk" -o "$TMP/d4bc.bin" >/dev/null 2>&1 && [ -x "$TMP/d4bc.bin" ]; then
+  d4b_cbld="$("$TMP/d4bc.bin" 2>/dev/null | head -1)"
+else
+  d4b_cbld="!!BUILD-FAILED"
+fi
+if [ "$d4b_ccode" -eq 0 ] && [ "$d4b_cbld" = "wrap(int)" ]; then
+  pass=$((pass+1)); printf 'ok   D4b/ground-goal-control-still-compiles (binary prints wrap(int))\n'
+else
+  fail=$((fail+1)); printf 'FAIL D4b/ground-goal-control-still-compiles (check exit %d, binary [%s], want wrap(int): [%s])\n' "$d4b_ccode" "$d4b_cbld" "$d4b_cchk"
+fi
+# The OTHER narrowing direction, and the one that decides how broad the new guard is:
+# a matching impl in the SAME unimported later module but with NO `requires` needs no
+# dictionary at all (R5 measured `define i64 @mdk_nest__nest(i64 %arg0)`, arity 1), so
+# it must still compile and RUN.  `unroutedGroundReqs` is deliberately narrower than
+# Door 4's own guard for exactly this program.
+mkdir -p "$TMP/d4c"
+cp "$TMP/d4b/iface.mdk" "$TMP/d4c/iface.mdk"
+cp "$TMP/d4b/nest.mdk"  "$TMP/d4c/nest.mdk"
+cp "$TMP/d4b/main.mdk"  "$TMP/d4c/main.mdk"
+cat > "$TMP/d4c/wrapimpl.mdk" <<'EOF'
+import iface.{Tag, tagOf, Wrap}
+
+export impl Tag (Wrap Int) where
+  tagOf _ = "wrap-noreq"
+EOF
+d4c_chk="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check "$TMP/d4c/main.mdk" 2>&1)"
+d4c_code=$?
+d4c_run="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" run "$TMP/d4c/main.mdk" 2>&1)"
+d4c_rcode=$?
+if [ "$d4c_code" -eq 0 ] && [ "$d4c_rcode" -eq 0 ] && [ "$d4c_run" = "wrap-noreq" ]; then
+  pass=$((pass+1)); printf 'ok   D4b/no-requires-impl-still-accepted (nothing to route, nothing rejected)\n'
+else
+  fail=$((fail+1)); printf 'FAIL D4b/no-requires-impl-still-accepted (check %d, run %d [%s]) — the guard is too broad\n' "$d4c_code" "$d4c_rcode" "$d4c_run"
+fi
+
 printf '\n%d ok, %d failing\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
