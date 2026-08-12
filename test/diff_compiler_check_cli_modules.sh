@@ -1716,6 +1716,24 @@ fi
 #     in either, so an import-SCOPE explanation is excluded and the deciding
 #     variable is the ordinal.  (Same construction as #1112's A/A2 measurement.)
 #
+# ✅ A-3.6 LANDED (2026-08-13) AND FLIPPED THIS LEG, EXACTLY AS LICENSED BELOW.
+#     `later-invisible` is now `later-visible`: both arms accept, both run `5`, and
+#     the leg asserts they AGREE.  That agreement is I5's own rule — import scoping
+#     filters NAMES, never instances — so the arms disagreeing WAS the defect.
+#     ⚠️ The precondition the note below attaches was CHECKED, not assumed.  There is
+#     exactly ONE `interface Sizer` here (declared in `zsizer`, imported by both
+#     modules), so no same-spelled collision exists and this accept cannot be
+#     #1438's silent accept.  And it is a REAL accept, not a candidacy-only one:
+#     `check`, `run` AND the built binary were each measured at `5` before this leg
+#     was rewritten.  `impl Sizer Int` carries no `requires`, so no dictionary needs
+#     routing and the direct channel answers.  A CONDITIONAL impl in the same
+#     position still rejects, loudly, with `T-REQUIRES-UNROUTED` — see
+#     `must_fail_fixtures/1564-*`.
+#     📌 This gate's own instruction is what made the flip checkable rather than a
+#     judgement call, so the historical note is kept verbatim below.  It also caught
+#     a real error: this red was twice reported as "pre-existing, not ours" before
+#     anyone read these lines.  It is ours, and it is correct.
+#
 # 🚨 READ BEFORE "FIXING" THE `later-invisible` LEG.  It pins a TRANSITIONAL
 #     answer, not a correct one.  `DICT-SEMANTICS.md` §8 I5 says instance candidacy
 #     is GRAPH-GLOBAL — import scoping filters NAMES, never instances — so the
@@ -1778,15 +1796,24 @@ else
 fi
 ord_l_out="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check "$TMP/ord_later.mdk" 2>&1)"
 ord_l_code=$?
-case "$ord_l_out" in
-  *midmod.mdk:*:*"No impl of Sizer for Int"*)
-    if [ "$ord_l_code" -eq 1 ]; then
-      pass=$((pass+1)); printf 'ok   1112-A34/later-invisible (ordinal filter still ON; see the issue-1564 note above)\n'
-    else
-      fail=$((fail+1)); printf 'FAIL 1112-A34/later-invisible (right diagnostic, wrong exit %d)\n' "$ord_l_code"
-    fi ;;
-  *) fail=$((fail+1)); printf 'FAIL 1112-A34/later-invisible (ordinal too large — a topologically LATER impl became a candidate, exit %d: [%s])\n' "$ord_l_code" "$ord_l_out" ;;
-esac
+if [ "$ord_l_code" -eq 0 ]; then
+  pass=$((pass+1)); printf 'ok   1112-A34/later-visible (A-3.6: candidacy is graph-global, the ordinal no longer decides)\n'
+else
+  fail=$((fail+1)); printf 'FAIL 1112-A34/later-visible (a topologically LATER impl was filtered out — A-3.6 regressed, exit %d: [%s])\n' "$ord_l_code" "$ord_l_out"
+fi
+# An exit-0 assertion ALONE would not be enough here, and that is the whole lesson
+# of the repair round: A-3.6 widened CANDIDACY, and where the evidence channel does
+# not follow, a program accepts and then SEGFAULTS (SA-1, found one type signature
+# away from a fix that had been verified against its own repro).  So grade the
+# VALUE, on the engine, and require the two import orders to AGREE — agreement is
+# the property I5 actually asserts, and it is what an exit code cannot see.
+ord_l_run="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" run "$TMP/ord_later.mdk" 2>&1)"
+ord_l_run_code=$?
+if [ "$ord_l_run_code" -eq 0 ] && [ "$ord_l_run" = "5" ] && [ "$ord_l_run" = "$ord_e_run" ]; then
+  pass=$((pass+1)); printf 'ok   1112-A34/later-visible-run (5, and BOTH import orders agree)\n'
+else
+  fail=$((fail+1)); printf 'FAIL 1112-A34/later-visible-run (exit %d, got [%s], want 5 and equal to the earlier arm [%s])\n' "$ord_l_run_code" "$ord_l_run" "$ord_e_run"
+fi
 
 # 9. #1512 (ARCH A-3.2b residual, slice 1/3): THE CROSS-MODULE TYPE-ALIAS TABLE IS
 #    STAGE K.  `crossRun.universeAliasTable` — the per-module-grown accumulator
