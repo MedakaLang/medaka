@@ -1434,3 +1434,297 @@ scope:      🚩 **FOURTH contaminated must-fail reading** — run 1: `93 reprod
             un-permuted order; **the permuted order was measured on the new arm only.** A permutation
             differential is the specific check for a widening, so this is exactly the gap the repair
             round must close, and it is owed a second worktree.
+
+## RUN-049 — REPAIR ROUND opened: 5 adversarial reviewers, then synthesis, then fixes
+
+question:   How is the repair round structured, and what is its ordering discipline?
+ruling:     **Three strictly serial phases**, owner-directed: **(R1) parallel adversarial review →
+            (R2) a single synthesis + plan → (R3) implement the plan and re-verify.**
+            🚨 **NO FIX LANDS UNTIL EVERY REVIEWER IS BACK.** Owner instruction, and it is
+            load-bearing rather than tidy — see scope.
+derivation: Owner (Val), 2026-08-12. Baseline pinned at `0b953165`, tree clean, 41 DEBT rows.
+            **RUN-036's suspension of the quiescence rule is hereby REVERSED**, exactly as that
+            ruling required: *"it must be REINSTATED the moment any gate is run again."* The repair
+            round is nothing but measurement, so quiescence is back in force.
+            **Reviewers dispatched (all Opus):**
+            - **R1** — the two-arm permutation differential the sprint never ran. In an **isolated
+              worktree** so it can build a BASE arm at `7aae8b83` alongside HEAD; a permutation
+              differential is *the* check for a widening, and RUN-048 recorded its absence as the
+              round's biggest hole.
+            - **R2** — works `DEBT.md`'s `could move:` column (§8's named entry point) and
+              re-derives load-bearing rulings, RUN-035's LEG A attribution first.
+            - **R3** — hunts **false rejects** against Door 4, the one unit whose risk direction is
+              inverted.
+            - **R4** — hunts **diagnostics that stopped firing** — invisible to every value golden.
+            - **R5** — audits **cross-unit seams**: five units in one file, three concurrent.
+scope:      ⭐ **Reviewers parallelize safely BECAUSE they do not edit.** Every one of the four
+            contaminated measurements in this run traced to concurrent WRITES, never to concurrent
+            work. Five read-only agents leave the tree quiescent and their probes are therefore
+            trustworthy in a way the implementers' mid-flight ones were not. Each brief forbids
+            rebuilding the binary — a rebuild is the single action that would break quiescence for
+            all five at once.
+            ⚠️ **Hazards the SYNTHESIS agent must be briefed on** (recorded now, while they are
+            fresh, so the brief does not have to be reconstructed later):
+            1. **Reviewers will contradict each other, and a reviewer can be wrong.** P0-H audited
+               this ledger and was right twice, wrong once — its third "defect" evaporated under one
+               `sed`. Synthesis must **adjudicate, not concatenate**, and re-derive anything
+               load-bearing that two reviewers dispute.
+            2. **Intended delta vs regression.** A-3.6's candidacy flip, A-3.7's coherence widening
+               and Door 4's reject are all **deliberate**. A reviewer reporting them as findings is
+               not wrong to report them; the synthesis must classify against RUN-010/040/043/045/047
+               rather than treat every behavioural change as damage.
+            3. **Ours vs pre-existing.** Some findings will live on `main` and predate the sprint.
+               ⚠️ **RUN-050 is the first live instance of this hazard — read it before synthesising.**
+               The dispositions differ completely — a regression we introduced must be fixed here; a
+               pre-existing bug is a tracker item and closing it is out of scope. **Attribution by
+               single-variable revert, or by running the BASE arm, is the discriminator** — not
+               plausibility.
+            4. **The golden re-cut is still owed and is an EDIT.** Snapshots and selfproc LEG A must
+               be re-cut ONCE from the final binary. It is deliberately held until after the
+               reviewers, and it must not be folded into a fix commit — a golden re-cut mixed with a
+               behavioural change is unreviewable.
+
+## RUN-050 — 🚨 CORRECTION: RUN-047's "the regression is undone" is FALSE. The segfault SURVIVES Door 4
+
+question:   RUN-047 recorded that Door 4 *"Removes the regression: `check` exit 0 → segfault becomes
+            `check` exit 1."* Is that true?
+ruling:     **NO. It is undone ONLY for the DEFERRED goal.** For a **ground** goal the segfault is
+            fully live: `check` exit 0, `build` exit 0, and the built binary **segfaults**. RUN-047's
+            scope claim is corrected here; do not rely on it as written.
+derivation: RELAYED from R3 as finding F1, then **reproduced first-hand by the orchestrator** at
+            `0b953165` on a copy of #1564's own fixture with **one line added** —
+            `export nest : Int -> String` — and nothing else changed (same four files, same
+            rejecting import order):
+              `MEDAKA_STRICT=1 medaka check /var/tmp/f1/main.mdk`  → **exit 0**, `main : Unit`
+              `medaka build … -o /var/tmp/f1/out`                  → **exit 0** (read from a FILE)
+              `/var/tmp/f1/out`                                    → **exit 139**,
+                                                                     `E-FATAL-SIGNAL: fatal memory
+                                                                      fault (segmentation fault)`
+            R3 additionally reports `check --json` → exit 0 with `"diagnostics":[]` on all four
+            files, and a positive control (the two import lines swapped) clean on all arms.
+mechanism:  RELAYED from R3, and it explains why Door 4 missed it: **the trigger is goal
+            GROUNDNESS, not the annotation.** R3's unsignatured twin (`export nestg = tagOf (Wrap 5)`,
+            ground by literal defaulting) behaves identically. A ground goal never reaches
+            `residualPredsOf`, so `unroutedResidual` — Door 4's entire mechanism — is never called.
+            Ground goals go through the **end-of-body obligation checker**, which has **the same
+            `IE`-vs-`shadowKeyTableRef` split** that Door 4 patched in the residual reducer alone.
+scope:      🚩 **Attribution is OWED, and must not be assumed.** R3's "a pre-sprint binary rejects
+            this" oracle was `/root/medaka`'s **stale** binary — R3 labelled that OWED itself, which
+            is the right call. **R1 holds a real BASE arm at `7aae8b83` and is the instrument that
+            can settle whether this is ours or pre-existing.** Do not write it up as a
+            sprint-introduced regression until R1 answers; the disposition differs completely
+            (RUN-049 hazard 3).
+            🚩 **#1564's pin CANNOT see this.** It grades the deferred shape only. A grading pin for
+            F1 needs the **ground** variant graded on the **built binary's exit code**, not on
+            `check`. This is the same half-drain shape RUN-043 recorded — a pin that reports clean
+            for the arm it was written for while a segfault lives one signature away.
+            📌 **The general lesson, which outranks the bug:** Door 4 was verified against the
+            reproduction it was given, and that reproduction was the *deferred* shape. Nobody asked
+            *"what is the nearest program this fix does NOT cover?"* — one added type signature.
+            **A fix verified only against its own repro is verified against the bug report, not
+            against the defect.**
+
+## RUN-051 — R5 seam audit: the UNRULED seam is now DERIVED and LIVE; `runFinalChecks` CLEARS
+
+question:   Do the five concurrently-built units cohere, and was the unruled visibility seam real?
+ruling:     **Three findings, two live.** The seam RUN-039/RUN-042 recorded as UNRULED **is real and
+            is now DERIVED, not relayed.** `runFinalChecks` — the orchestrator's top blend
+            suspicion — **clears.**
+derivation: RELAYED from R5; binary identity checked before probing (`T-REQUIRES-UNROUTED` present
+            in `strings`, confirming the `0b953165` build), `MEDAKA_STRICT=1` throughout.
+            **R5-F1 — LIVE, S1/S2 — `checkSuperImpls` vs candidacy.** Two entry files differing
+            **only in the order of two import lines**: one rejects with *"'impl Sub W' requires a
+            superinterface 'impl Sup W', which is missing"*, the other runs and prints 42. That is
+            the #1564 shape **on a fresh axis**. Sharper still: in ONE program (`useSup w = bump w`
+            added to the same module) exactly one diagnostic fires — **the `Sup W` goal resolves
+            while the check beside it calls that impl missing.** Candidacy and the diagnostic
+            contradict each other in the same module. Positive control isolates it.
+            Fail direction is **loud** (a prefix can only under-report), so no silent accept.
+            **Units in conflict: A-3.5b (super existence, prefix-scoped) vs A-3.6 (candidacy,
+            graph-global).** Exactly the seam two agents flagged independently and nobody ruled on.
+            **R5-F2 — LIVE, S2 — Door 4 fires where there is nothing to route.** #1564's fixture
+            with ONE variable changed (the impl carries **no `requires`**) rejects with
+            `T-REQUIRES-UNROUTED`, yet the control compiles to
+            `define i64 @mdk_nest__nest(i64 %arg0)` — **arity 1, no dict** — so no dictionary is
+            ever passed for that shape and the message's own claim is false there. Code-side:
+            `unroutedResidual`'s guard is `implMatchesU` **alone** and never asks whether the impl
+            *has* requires, converting a case whose correct answer is `[]` into a hard error.
+            **Not a regression against `main`** — an incoherence between the guard and its claim.
+            **R5-F3 — LATENT.** At `ordHere == -1`, `checkSuperImpls` fails loud while A-3.7's
+            `cohRowsOwnedBy -1` makes coherence check **nothing** — a silent arm under a sentinel
+            the arc documents as fail-closed. Unreachable today; a fourth Module-mode driver makes
+            it live.
+            ✅ **`runFinalChecks` CLEARS.** All three call sites pass the right env to the right
+            check despite two adjacent `ClassEnv` and two adjacent `ImplEnv` params;
+            `globalCoherenceConflict`'s new `declEnvsRef` source is the same `modules` value both
+            callers already walked. Confirmed behaviourally, not by reading: intra-module hard
+            conflicts still reject in a non-entry AND in the entry module, and
+            `s6-1c-multimodule-overlap` reports both warnings exactly once on `check` and `run` —
+            so A-3.7's `CohSweep` fix holds under audit.
+scope:      🚩 **Ledger defects, all grepped by R5** — the ratchet is stale again in the direction
+            that hides F1: it still says *"A-3.5b remains owed and DOES read IE"* (falsified twice
+            over), **`ieRowsVisibleAt` appears ZERO times in it**, so its post-A-3.6 enumeration of
+            which readers kept the ordinal filter **omits the one IE reader that did** — precisely
+            F1's seam. `flatImplEnvOf` likewise zero, and the Flat paragraph still reads *"all three
+            relocated checks build a single-module ClassEnv"*. **A-3.7 has no ratchet row at all.**
+            ✅ **No `DECISIONS.md` ruling falsified** by R5 (RUN-050 stands as this round's only
+            ledger correction so far).
+            ⚠️ **NAMING COLLISION for the synthesis agent: R3's "F1" and R5's "F1" are DIFFERENT
+            findings** — R3-F1 is the surviving ground-goal segfault (S0); R5-F1 is the
+            super-existence seam. Re-label them globally before planning; two findings sharing an id
+            is exactly how one of them gets silently dropped from a plan.
+
+## RUN-052 — 🚨 R1 DIFFERENTIAL: attribution SETTLED. Two S0 REGRESSIONS, both ours
+
+question:   RUN-050 left attribution OWED — is the surviving segfault class ours or pre-existing?
+ruling:     **OURS.** R1 built a real BASE arm and the discriminator is unambiguous: **BASE rejects
+            at `check` exit 1; HEAD accepts at exit 0 and segfaults.** Both S0s below are
+            sprint-introduced regressions, not inherited defects. RUN-050's OWED label is discharged.
+derivation: RELAYED from R1, whose method is worth recording because it is what makes the result
+            usable: **both arms cold-built in its own isolated worktree** (BASE `7aae8b83`, HEAD
+            `0b953165`, only `typecheck.mdk` differing in code), staged self-contained as
+            `armbase/`/`armhead/`; **no `MEDAKA_ROOT`/`MEDAKA_EMITTER` exported** (either would
+            silently cross the arms); `MEDAKA_STRICT=1` throughout, never fired.
+            ⭐ **Positive controls run FIRST, so a clean result could not be vacuous**: A-3.6's
+            widening visible (BASE rejects `p2`, HEAD runs it), Door 4 live, HEAD still catching a
+            genuine coherence conflict. A differential that cannot see known-present deltas proves
+            nothing, and R1 established it could see them before reporting what it could not.
+            **R1-FINDING-1 — S0, REGRESSION.** Conditional `impl Show2 (Box a) requires Show2 a` in
+            an unimported module, with an **unsignatured, NON-GENERALIZED** binding
+            `export useIt = show2 (Box T)`:
+              BASE: `check` 1 (`No impl of Show2 for Box T`) · `build` 1, no binary
+              HEAD: `check` **0** · `run` 1 `E-PANIC: intToString: not an Int` · `build` **0** ·
+                    executing the binary → **139 segfault**
+            Single-variable flip **measured both ways**: make the binding generalized
+            (`useIt x = show2 (Box x)`) and HEAD correctly fires `T-REQUIRES-UNROUTED` exit 1; add
+            the import and both arms agree. Depth-independent. Mechanism DERIVED by grep: Door 4 has
+            exactly ONE call site — `residualPredsOf`'s `None` arm → `unroutedResidual`
+            (`typecheck.mdk:24701`/`:24743`) — the **residual-predicate path, which a fully concrete
+            goal never reaches.** ⇒ **Independently corroborates R3-F1 (RUN-050) by a different
+            route**: R3 reached it via goal groundness from a signature, R1 via non-generalization.
+            Same defect, two discovery paths, one mechanism.
+            **R1-FINDING-2 — S0, REGRESSION, and worse in kind: IMPORT ORDER decides whether the
+            BINARY SEGFAULTS.** 6-way permutation of three import lines. HEAD: `check`/`run`/`build`
+            **all exit 0 in all six**, and `run` answers `5` — the CORRECT value — in all six; but
+            the **built binary segfaults in 3 of 6**, deterministic across 3 re-runs. Single
+            variable: **`import gen` before `import spec` ⇒ segfault.** BASE rejects all six
+            identically, so the order-sensitivity is **new**.
+            🚨 This is NOT licensed by RUN-047. That ruling licenses import order deciding
+            **acceptance via a diagnostic**. Here acceptance is **uniform and clean**, `run` gives
+            the right answer, and **only codegen diverges — silently.** `run` and `build` share the
+            whole front end, so this is a genuine codegen/runtime split, not a second view of one
+            typecheck observation.
+            **R1-FINDING-3 — INTENDED, not a regression.** Two modules each declaring their own
+            same-spelled `Show2`: BASE emits a false-positive `Conflicting impl Show2`; HEAD accepts
+            and answers correctly. That is A-3.7/#1438's intended drain (RUN-040), and R1 confirmed
+            **it did not eat the true positive.**
+scope:      **Permuted and CLEAN:** module topological depth (1 vs 2 behind a chain), declaration
+            order within a module for the coherence pair scan, and adding an unrelated module never
+            changed a **name** resolution — the A-3.6 split's central safety claim, tested and held.
+            ⚠️ **R1 could NOT exhibit RUN-039's super-impl hazard; R5 DID.** These do not conflict —
+            R1 probed a sibling-module `impl Sub`/`impl Sup` shape that rejects identically on both
+            arms *before* dispatch can contradict it, while R5-F1 used a four-module configuration.
+            R1 labelled its own result *"failed to exhibit ≠ disproved"*, which is the correct
+            reading. **R5's exhibit stands.**
+            **NOT covered by R1, and therefore still open:** wasm; the **Flat** single-file path;
+            the prelude/`compiler/` self-check; `import m.*` / `as` / rename forms; graphs >5
+            modules; A-3.5a/A-3.5b required-method shapes (one probe only); `check --json` vs human
+            `check`. No gate, golden, snapshot or LEG A was run or blessed.
+
+## RUN-053 — R2 ledger audit: 14 of 17 testable rows SURVIVE; RUN-035 holds and extends
+
+question:   Were the `could move:` claims checked or merely asserted, and does RUN-035 still hold
+            after three further units landed?
+ruling:     **The ledger largely holds.** 17 of 41 rows carried testable claims; **14 survived, 3
+            findings** (one S2, two S3). **RUN-035 HOLDS, re-derived and extended. RUN-042 holds.**
+derivation: RELAYED from R2, read-only throughout (no build, no bless).
+            ⭐ **RUN-035 re-derivation, by the gate's own method, blessing nothing**: of 13 LEG A
+            modules **only `types.typecheck` moved**; 1758 → 1764 schemes, **60 changed lines = 18
+            added / 12 deleted / 15 re-typed**, and **all 45 attributable to a named bite — ZERO
+            unattributed.** No surviving binding's type moved beyond the 15 specified in advance.
+            Caveats R2 states itself: `check_all_main` is one commit stale (the corpus is current —
+            it surfaced D4-1's bindings), and LEG A grades 13 of 33 dumped modules.
+            **RUN-042 holds**: `declEnvVisibleAt`'s body byte-identical, four direct callers, and
+            `ieCandidacyVisibleAt` has exactly **one** reader (`ieSnapAt`) — the split is as claimed.
+            **R2-F1 — S3, asserted-unchecked-and-FALSE.** `A5a-4`'s row calls the flat
+            "user interface shadows a prelude one by spelling" delta *"a real Flat acceptance delta,
+            in BOTH directions … the testing round's first target."* **That shape cannot exist** —
+            resolve rejects it first: `interface Debug a where dbg/dbg2` + `impl Debug Foo` → exit 1
+            `Duplicate interface: Debug`, identically for `Eq`. `resolve.mdk` is untouched by the
+            sprint, so BASE behaves the same. ⇒ **Retire the target; do not write that fixture.**
+            A worked example of the round's purpose: an attack list is itself a claim.
+            **R2-F2 — S2 — an INDEPENDENT reproducer for the unruled seam.** `impl Sup Bar` in a
+            topologically LATER module is a graph-global dispatch candidate post-A-3.6, yet
+            `checkSuperImpls` (still on `declEnvVisibleAt`) reports it missing: exit 1
+            *"'impl Sub Bar' requires a superinterface 'impl Sup Bar', which is missing"*. **Not a
+            regression — BASE rejected too — but the INCONSISTENCY is new**, and P0-B §4.3(4)'s
+            long-missing fixture now has a program.
+            **R2-F3 — S3, asserted-unchecked-and-TRUE.** 3.7-6's five owed HARD-arm fixtures all
+            re-run at HEAD (post 3.7-7/8/9, not merely at 3.7-4): all exit 1, wording unchanged.
+            Attack list discharged. **R2-F4 — S3**: `dict_fixtures/s6-c1-hard-and-soft-in-one-file.mdk:18`
+            still names the deleted `cohCollectImpls`; no gate can see it.
+            Also DERIVED: **D4-1's segfault is closed on all three arms for the DEFERRED shape**
+            (check exit 1 at the pinned range, run 1, build 1) — the row had left run/build
+            unmeasured. The ledger-repair commit really is comment-only plus C-0's deletion; #829
+            did not fire. Ratchet, `docs-links`, `agent-doc-symbols` all PASS.
+            ⚠️ **The `None => []` identity-miss hunt FAILED to produce a miss** across four shapes
+            (prelude iface, same-spelled ifaces, permuted order, same-spelled `Sub` with a super).
+            Combined with R4's independent failure to find one, the A-3.5a/b headline hazard is
+            **not exhibited** — which is evidence, not proof.
+scope:      🔗 **CORROBORATION MAP — each headline finding was reached twice, independently:**
+            • **The surviving segfault**: R3-F1 (via goal groundness from a signature) ≡ R1-FINDING-1
+              (via non-generalization). Same defect, two discovery routes, one mechanism.
+            • **The super-existence seam**: R5-F1 (four-module, with an in-program contradiction)
+              ≡ R2-F2 (topologically-later impl). Both land on `checkSuperImpls` vs A-3.6.
+            Two independent derivations agreeing is materially stronger than either alone — and the
+            one place they disagreed (R1 could not exhibit the seam) was correctly self-labelled
+            *"failed to exhibit ≠ disproved"* rather than as a refutation.
+            **Untestable read-only, still owed:** the `DL` population set-equality (A5a-3/A5b-3 —
+            needs an instrumented build; R2 calls it the most load-bearing owed item), D4-1's
+            narrowing class and 3.7-8's permutation differential (both need a base arm), all
+            alloc/perf items, and C-5's 14 prose re-cuts.
+
+## RUN-054 — SYNTHESIS delivered; an ORCHESTRATOR PROCESS ERROR caught, and SA-2 now DERIVED
+
+question:   Does the synthesis hold, and is its blocking input gap real?
+ruling:     **Synthesis accepted. Its input gap was REAL and was my error — now closed.** SA-2 is
+            **reproduced first-hand by the orchestrator** and no longer rests on a relay.
+derivation: 🚨 **The gap:** synthesis reported `R1-permutation.md` **did not exist** in
+            `.claude/sprint/repair/`. Correct. **R1 ran in an ISOLATED worktree** (I gave it
+            `isolation: "worktree"` so it could build a BASE arm) and wrote its report to
+            `<its own worktree>/.claude/sprint/repair/`, which the trunk never sees. My brief even
+            said *"also report your findings in your return message — I read the return, not your
+            worktree"*, so I half-anticipated this and then **never retrieved the file.** For a
+            period, the round's worst finding existed only as a summary of a summary.
+            **Closed**: R1's 191-line report recovered from
+            `/root/medaka/.claude/worktrees/agent-a03a28eda256bd47d/` into the trunk. Its probe
+            corpora survive at `/var/tmp/medaka-scratch/r1/`, which is **not** worktree-scoped.
+            📌 **Process rule for any future isolated agent: an isolated worktree is DESTROYED or
+            orphaned when the agent ends. Its deliverable must be copied out, or it does not
+            exist.** A return message is a summary, not an artifact.
+            ⭐ **SA-2 REPRODUCED FIRST-HAND** at `0b953165` on R1's `p4` corpus, using the trunk
+            binary (which *is* the HEAD arm), single variable = the order of two import lines:
+              `import spec` before `import gen` → check 0 · build 0 · exec **0**, prints `5`
+              `import gen` before `import spec` → check 0 · **run 0, prints `5` (CORRECT)** ·
+                                                  build 0 · exec **139**, `E-FATAL-SIGNAL:
+                                                  fatal memory fault (segmentation fault)`
+            **Acceptance is uniform, the interpreter is right, and only the emitted binary faults.**
+            R1's BASE arm rejects all six permutations identically, so the order-sensitivity is new.
+scope:      **Adjudicated findings, re-labelled SA-1…SA-12** (full list in
+            `.claude/sprint/repair/SYNTHESIS.md`). Headlines: **SA-1** S0 ours (segfault survives
+            Door 4 whenever the goal never residualizes — R3-F1 ≡ R1-F1, one mechanism, two routes);
+            **SA-2** S0 ours (the above, and worse in kind); **SA-3** S1 + architectural
+            contradiction (`checkSuperImpls` prefix-scoped vs graph-global candidacy — R5-F1 ≡
+            R2-F2, and synthesis **re-derived it on a THIRD construction** with a discriminating
+            control, site `:15992 ieRowsVisibleAt cur ie`). **SA-12 is INTENDED, not defects.**
+            ✅ **Survived audit — do not re-open**: `runFinalChecks`, RUN-035, RUN-042, must-fail
+            quiescent 98/99. Only RUN-047's scope sentence was ever falsified (corrected at RUN-050).
+            🚩 **SA-10 is a GATE BLIND SPOT, newly found**: a dead `cohCollectImpls` sits in
+            `docs/spec/DICT-SEMANTICS.md:2524` **while `check_agent_doc_symbols.sh` reports
+            `dead: 0`** — the gate cannot see the `` `name:LINE` `` citation form. That is the same
+            class as #1574 in a *different* gate, and it means the doc-symbol gate's green is
+            narrower than it reads.
+            **Two OWNER RULINGS are required before the plan can complete** — SA-3 (widen
+            `checkSuperImpls` to match candidacy, or keep it prefix-scoped and accept the
+            contradiction) and SA-4 (Door 4 firing where nothing needs routing — the fix is an
+            accept-widening). Neither is the orchestrator's to take.
