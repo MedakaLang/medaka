@@ -1,0 +1,7 @@
+-- #1438 -- the control entry. Identical to `main.mdk` except that the second module
+-- is `omod` (interface `Other`) rather than `zmod` (interface `Same`). Two impls at
+-- the same head `Int`, two interfaces, one spelling apart.
+import amod.{foo}
+import omod.{baz}
+
+main = println (foo 1 + baz 2)

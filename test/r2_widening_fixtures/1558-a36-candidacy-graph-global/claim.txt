@@ -1,0 +1,72 @@
+issue: 1558
+unit: A-3.6 (#1558) — the instance-candidacy flip (DICT §8 I5, C4/I2)
+kind: R2 COULD-NOT-PASS-BEFORE fixture. This asserts an acceptance WIDENING, i.e. the
+kind: inverse of a must_fail pin: `main.mdk` must be REJECTED before A-3.6 and ACCEPTED
+kind: after. §5 R2's two enumerated exceptions are both widenings and each is required
+kind: to carry a fixture of exactly this shape; `docs/spec/DICT-SEMANTICS.md:1959`
+kind: records that A-3's was OWED and did not exist. This is it.
+
+status: 🚧 AUTHORED, NOT WIRED. There is no runner for this directory yet — see OWED.
+status: RUN-006 requires A-3.6 to AUTHOR this fixture, "even if it is only executed in
+status: the testing round". Everything below was MEASURED on the trunk binary during
+status: A-3.6; nothing here is inferred.
+
+what: `nest.mdk` writes `nest x = tagOf (Wrap x)` and does NOT import `wrapimpl`, so the
+what: conditional `impl Tag (Wrap a) requires Tag a` is not NAMEABLE where `nest` is
+what: defined and generalized. Under the pre-A-3.6 prefix rule that impl reached the
+what: candidate set only if its module happened to sort earlier in the loader's
+what: topological order — which is decided by import-line order in a THIRD module. So
+what: `main.mdk` and `control.mdk`, which differ ONLY in the order of two import lines,
+what: disagreed on whether a legal program compiles.
+what: DICT-SEMANTICS §8 I5 rules that candidacy is graph-global — "import scoping
+what: filters NAMES, never instances" — so `main.mdk`'s rejection was a FALSE REJECT and
+what: A-3.6 is the unit licensed to remove it.
+
+before: `medaka check main.mdk` -> exit 1
+before:   ./nest.mdk:3:16: No impl of Tag for Wrap a; write an 'impl Tag Wrap'.
+after:  `medaka check main.mdk` -> exit 0, `main : Unit`, zero diagnostics.
+
+control: `control.mdk` is `main.mdk` with the two import lines SWAPPED and nothing else
+control: changed. It was accepted BEFORE and must stay accepted AFTER, printing
+control: `wrap(int)` at exit 0 on eval. It is the discriminator in both directions: it
+control: rules out "the fixture has a typo" (a typo would break it too), and it breaks
+control: the day the already-accepting order stops accepting.
+
+how-attributed: single-variable revert, MEASURED, not inferred. `ieSnapAt`'s guard was
+how-attributed: pointed back at `declEnvVisibleAt`, the compiler rebuilt, and `check
+how-attributed: main.mdk` returned to exit 1 with the identical diagnostic; restoring
+how-attributed: `ieCandidacyVisibleAt` returned it to exit 0. No other edit was made
+how-attributed: between the two builds. That is what establishes this fixture grades
+how-attributed: A-3.6's flip and not some neighbouring change.
+
+🚨 THE WIDENING IS ONLY HALF LANDED, AND THIS FIXTURE MUST NOT BE READ AS PROOF IT IS
+🚨 COMPLETE. `check` accepts, but the program does not RUN:
+🚨   `medaka run   main.mdk` -> exit 1, `runtime error [E-PANIC]: putStrLn: not a String`
+🚨   `medaka build main.mdk` -> exit 0, and the BINARY SEGFAULTS (exit 139)
+🚨   `medaka run   control.mdk` -> exit 0, `wrap(int)`   (the control is clean on both)
+🚨 Both measured on the trunk binary at A-3.6. So A-3.6 widened CANDIDACY (typecheck's
+🚨 answer to "which impls exist") without widening the EVIDENCE PLUMBING (dict
+🚨 construction and route stamping for a site whose own module cannot name the impl).
+🚨 `nest` is generalized against an obligation discharged by an impl no dict reaches.
+🚨 Neither engine is silently wrong — eval panics, native faults, both LOUD — so this is
+🚨 not S0. But a compile-time diagnostic became a segfault, which is a real shape change
+🚨 and it is A-3.6's. The correct end state is `main.mdk` behaving exactly like
+🚨 `control.mdk`: exit 0, `wrap(int)`, on eval AND native.
+
+⚠️ WHY `must_fail_fixtures/1564-*` READS AS A CLEAN DRAIN WHEN IT IS HALF A DRAIN: that
+⚠️ row's `cmd:` is `check-json main.mdk` with `exit: 1`, so it grades the CHECK arm
+⚠️ alone. The run and build arms were never pinned there and the harness cannot see
+⚠️ them. Do not close #1564 on that drain alone.
+
+OWED, and deliberately NOT done inside A-3.6:
+owed: 1. A RUNNER. This directory has no consumer. Wiring one means a new `test/*.sh`,
+owed:    which must ALSO be added to a shard pattern in `.github/workflows/ci.yml` or
+owed:    `diff_compiler_ci_shard_coverage.sh` reds the merge queue. That was explicitly
+owed:    out of A-3.6's scope (it is bite C-4, dropped for exactly this reason).
+owed:    Until it is wired, this directory is inert — reproduce by hand with the four
+owed:    commands above.
+owed: 2. The `after:` line for `run`/`build` cannot be written as `wrap(int)` yet,
+owed:    because it is not true yet. When the evidence-plumbing half lands, replace the
+owed:    🚨 block with the run/build expectations and this becomes a full R2 fixture.
+owed: 3. An owner ruling on WHO owns the evidence-plumbing half. It is in no unit's
+owed:    bite list as of A-3.6 and it is not A-3.7's (coherence).

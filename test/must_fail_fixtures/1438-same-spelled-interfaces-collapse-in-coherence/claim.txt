@@ -1,0 +1,63 @@
+issue: 1438
+what: Coherence keys the interface half of an impl by SPELLING, so two UNRELATED
+what: modules that each declare their OWN interface named `Same` -- different
+what: methods, no import edge between them -- are reported as conflicting the
+what: moment each impls it at a shared head (`Int`). This is a FALSE REJECT on a
+what: legal program: `amod.Same` and `zmod.Same` are two distinct classes.
+what: Mechanism: `CohImpl`'s first field is a bare `String` and `cohScanInner`
+what: compares it with `if1 == if2` (compiler/types/typecheck.mdk, the `coh*`
+what: block). The obligation channel already keys interfaces by IDENTITY, so the
+what: two checkers disagree about whether two same-spelled interfaces are one
+what: class -- TYPECHECK-TARGET-ARCHITECTURE.md 10.6 records that gap and assigns
+what: it to A-3.7.
+what: The head half is NOT implicated: `cohGoR`'s `TCon` arm already routes
+what: through `sameTyConHead` (A-2.10). MEASURED -- give the two modules their own
+what: module-local `data Blob` heads instead of `Int` and the same program is exit
+what: 0. The shared head is what exposes the interface-half collapse.
+cmd: check-json main.mdk
+exit: 1
+diag: T-CONFLICTING-IMPL None:None-None:None Conflicting `impl Same`. Defined in amod and zmod
+control: check-json control.mdk
+why-fixture: the observable is a DIAGNOSTIC on a program that would otherwise print
+why-fixture: a value, so `check-json` is the only verb that can see it. `run` shows
+why-fixture: the identical message at exit 1 (the front end is shared), so nothing
+why-fixture: is lost by grading the check path.
+why-fixture: `diag:` rather than the default `diag-code:` -- DELIBERATE, and the
+why-fixture: reason is that the range is `null` here. This diagnostic is pushed by
+why-fixture: `cohPushHard` from the cross-module arm, which drops the span on
+why-fixture: purpose (#414: a span is only useful to a consumer that files against
+why-fixture: the span's own file). So `diag-code:` would degenerate to the bare code
+why-fixture: `T-CONFLICTING-IMPL None:None-None:None` and would assert nothing about
+why-fixture: WHICH conflict was found. The message is where the whole claim lives:
+why-fixture: it names the interface `Same` and BOTH owning modules, which is exactly
+why-fixture: the assertion "these two were treated as one class". Cost of that
+why-fixture: choice, stated so it is not a surprise: an error-quality PR that rewords
+why-fixture: `cohCrossModuleMsg` drains this row spuriously. That wording has been
+why-fixture: stable and is itself byte-pinned by error goldens, so the trade is worth
+why-fixture: it here; if it is reworded, re-derive this line rather than deleting it.
+why-fixture: RANGE-INSENSITIVE, unlike most rows in this suite: the pin carries no
+why-fixture: line:col, so the comment headers in these four modules are free to move.
+why-control: `control.mdk` is `main.mdk` with ONE variable changed -- the second
+why-control: module's interface is spelled `Other` instead of `Same`. Everything else
+why-control: is held fixed: still two unrelated modules, still no import edge between
+why-control: them, still two impls at the SAME head `Int`, still one method used from
+why-control: each. MEASURED at exit 0 with an empty diagnostic list. That isolates the
+why-control: defect to the interface SPELLING and rules out "two impls at Int" as the
+why-control: cause. If the control goes red, coherence or the loader broke -- not
+why-control: #1438.
+why-note: THIS ROW PINS ONLY #1438's COHERENCE REACH. A-3.7 (#1559) re-keys
+why-note: `CohImpl`'s interface half to an `IfaceRef` compared with `sameTyConHead`,
+why-note: which drains exactly this row. It does NOT drain #1438: the obligation
+why-note: channel's bare compatibility leg (`oblIfaceKeys`' second key, and
+why-note: `insertUnivImplKeys`' DO-NOT-DELETE block) survives, is pinned separately by
+why-note: fixture 1514, and belongs to #1482/#1507.
+why-note: ==> WHEN THIS ROW DRAINS, DELETE THIS DIRECTORY BUT DO NOT CLOSE #1438.
+why-note: Say in the PR that coherence's reach drained and the identity collapse did
+why-note: not. RUN-021/RUN-025 in .claude/sprint/DECISIONS.md record that ruling.
+why-note: The predicate the fix must use is `sameTyConHead`, NEVER `ifaceIdMatches`:
+why-note: coherence answers an ACCEPTANCE question, so an ABSENT origin must match
+why-note: anything (a false reject refuses a valid program), which is the inversion
+why-note: `recordCandIsType`'s header states. `ifaceIdMatches` in that position would
+why-note: turn every unstamped-origin conflict into a SILENT ACCEPT -- a severity
+why-note: increase, and one this row would not catch, since this row's shape is the
+why-note: one that is supposed to go green.

@@ -1830,8 +1830,11 @@ checkGradedImplHeadDecl _ _ _ = ()
 --
 -- NOW: `ceSlotKindsAt` — the whole-graph `CE`, filtered to THIS module's ordinal
 -- prefix through `ceLookupAt`, the ONE `CE` read accessor and the ONE place
--- `declEnvVisibleAt` is applied to `CE`.  A-3.6 remains the deletion of that
--- predicate's body; the filter stays ON here.
+-- `declEnvVisibleAt` is applied to `CE`.  ⚠️ This said "A-3.6 remains the deletion
+-- of that predicate's body"; A-3.6 (#1558) SPLIT the predicate instead and `CE`
+-- KEPT ITS ORDINAL FILTER — `CE` is an interface-IDENTITY axis, not I5's instance
+-- axis, and only the latter was licensed to go graph-global.  The filter stays ON
+-- here, now permanently rather than transitionally.
 --
 -- WHY THIS IS JUDGMENT-PRESERVING, and where it is NOT.  The KEY does not move:
 -- `ifaceSlotKey` was already `regKeyTabAt (ifaceTabKey o iface) i` since A-2.4, and
@@ -2680,10 +2683,17 @@ toggles = Ref (freshToggles ())
 -- decomposition (2026-08-08) therefore stages that: every entry carries the
 -- ordinal of the module that declared it, and every read filters
 -- `entryOrd <= currentOrd`, which reproduces today's prior-modules-plus-me
--- universe.  The semantics change then becomes the DELETION OF ONE FILTER —
--- `declEnvVisibleAt`, and nothing else — which is A-3.6: one reviewable diff with
--- an attributable golden delta.  Route every future ordinal test through that one
--- predicate; open-coding `<=` at a read site silently costs that property.
+-- universe.  ⚠️ THIS PARAGRAPH THEN PREDICTED THE SEMANTICS CHANGE WOULD BE "THE
+-- DELETION OF ONE FILTER — `declEnvVisibleAt`, AND NOTHING ELSE", AND THAT
+-- PREDICTION WAS WRONG.  A-3.6 (#1558) found the one predicate had grown readers on
+-- structurally different subjects — instance candidacy, but also the alias table,
+-- the ctor overlay pool, the field-owner multimap, the data param-kind table and
+-- `CE` — so one deletion would have widened five things where the spec licenses
+-- one.  By owner ruling the predicate SPLIT: `ieCandidacyVisibleAt` carries the
+-- instance axis (graph-global, C4/I2), this one keeps the ordinal body for the name
+-- axis.  What survives of the design is the ROUTING rule, which is what made the
+-- split cheap: route every ordinal test through the predicate matching its SUBJECT,
+-- and never open-code `<=` at a read site.
 --
 -- ⚠️ WHAT IS LIVE TODAY, AND WHAT IS NOT — this unit's bar is BYTE-IDENTICAL, so
 -- it may not move a judgment.  LIVE: `buildDeclEnvs` runs at both Module-mode
@@ -2835,10 +2845,61 @@ declEnvDeclsOf : List DeclEnvModule -> List Decl
 declEnvDeclsOf [] = []
 declEnvDeclsOf (m::rest) = m.demDecls ++ declEnvDeclsOf rest
 
--- 🚨 THE ONE ORDINAL FILTER.  A-3.6 is the deletion of this predicate's body (it
--- becomes `True`) and nothing else.
+-- 🚨 THE ORDINAL FILTER FOR THE **NAME/DECLARATION** AXIS.  It is LIVE and it is
+-- STAYING — A-3.6 did NOT delete it.
+--
+-- ⚠️ THIS BLOCK SAID "THE ONE ORDINAL FILTER … A-3.6 is the deletion of this
+-- predicate's body and nothing else" UNTIL 2026-08-12, AND THAT DESIGN WAS
+-- OVERRULED.  The arc had assumed one body, one semantics change.  It is not:
+-- this one predicate is read by an instance-candidacy path AND by four
+-- name/data-scoping tables (the alias table, the ctor overlay pool, the
+-- field-owner multimap, the data param-kind table, plus `CE`'s two lookups).
+-- Deleting the body would have applied an INSTANCE-candidacy licence to all of
+-- them, and `docs/spec/DICT-SEMANTICS.md` forbids exactly that reading by name:
+-- *"I5 does NOT extend that price to NAMES … I5's subject is `match(IE, C τ̄)`."*
+-- Worse, one of the four is a NARROWING, not a widening — the paragraph on
+-- `declEnvVisibleTo` below records it MEASURED on this tree — and §5 R2's two
+-- enumerated exceptions are both widenings.  A narrowing cannot meet that bar.
+--
+-- So the predicate SPLIT, by owner ruling: A-3.6 flips the instance axis through
+-- `ieCandidacyVisibleAt` below, and this one keeps its ordinal body for every
+-- name-scoping reader.  The invariant that survives is NOT "there is one body" —
+-- it is "there is one body PER AXIS, and no read site open-codes `<=`".  Route a
+-- new ordinal test through whichever of the two matches its SUBJECT, and if you
+-- cannot tell which, that is the question to escalate rather than the choice to
+-- guess.  Widening any of this predicate's readers is a separate unit with its
+-- own fixtures; it is not a side effect of anything.
 declEnvVisibleAt : Int -> Int -> Bool
 declEnvVisibleAt cur entryOrd = entryOrd <= cur
+
+-- 🚨 THE INSTANCE-CANDIDACY AXIS — A-3.6 (#1558), and this is the C4/I2 flip.
+-- Which impls may be CANDIDATES for a goal at a reading ordinal.  Graph-global by
+-- construction: every instance declared in every loaded module is a candidate
+-- everywhere, so this predicate holds unconditionally and the ordinal arguments
+-- exist only so the read sites do not move.
+--
+-- WHY IT IS `True` RATHER THAN DELETED.  `DICT-SEMANTICS.md` §8 I5 / §7 C4 / I2:
+-- *"`match(IE, C τ̄)` ranges over every instance declared in every module … Import
+-- scoping decides which NAMES a module may write.  It never decides which
+-- instances exist."*  Keeping a named predicate rather than open-coding `True` at
+-- the read site keeps the axis greppable and keeps the C4/I2 guarantee attached
+-- to a symbol a later unit can find; it is the same discipline the name axis
+-- above is under, pointed the other way.
+--
+-- ⚠️ THE PARAMETERS ARE DELIBERATELY UNUSED AND MUST STAY.  `ieSnapAt` walks
+-- ordinal-ordered snapshots and keeps the LAST one this admits; with `True` that
+-- is the final snapshot, i.e. the whole graph, which is exactly the intended
+-- semantics.  Re-introducing an ordinal test here re-instates the prefix rule and
+-- silently un-does A-3.6 — the cheapest structural check that the flip is still
+-- landed is that `grep 'entryOrd <= cur'` finds the name axis and NOT this one.
+--
+-- 🚨 WHAT THIS DOES NOT COVER.  `ieRowsVisibleAt` (A-3.5b) is also an `IE` reader
+-- but answers a DECL-TIME EXISTENCE question (`checkSuperImpls`), not a candidacy
+-- question, and it deliberately still reads `declEnvVisibleAt`.  Whether the
+-- super-existence check should see the whole graph is a real question and it is
+-- NOT ruled here — A-3.6's licence is I5's subject and nothing wider.
+ieCandidacyVisibleAt : Int -> Int -> Bool
+ieCandidacyVisibleAt _ _ = True
 
 -- The ordinal of [mid], or `0 - 1` when the envelope holds no row for it.
 -- FAIL-CLOSED deliberately: at `-1` `declEnvVisibleAt` rejects every entry, so a
@@ -2891,17 +2952,23 @@ declEnvsOrdOf mid envs = match omLookup mid envs.deOrdIndex
 --
 -- 🚨 THE TWO CONJUNCTS MUST STAY SEPARABLE, and that is the whole reason this is one
 -- function taking `entryIsPublic` rather than a widened `declEnvVisibleAt`:
---   * the ORDINAL conjunct is transitional scaffolding for a spec'd widening (§5 R2 /
---     C4-I2 global candidacy) and **A-3.6 deletes it** (`declEnvVisibleAt`'s body
---     becomes `True`);
---   * the PUBLICITY conjunct is NOT transitional — it is the language's export
---     semantics, and under the target it MIGRATES TO R (§3 row L7), it does not
---     vanish.
--- Folding them together means A-3.6 silently deletes export semantics along with the
--- scaffolding.  Check the factoring survives that deletion before editing this: with
--- `declEnvVisibleAt ≡ True` the two `declEnvRowVisible` arms below still read
--- "own row ⇒ every decl, any other row ⇒ its public projection", which is what R
--- inherits.
+--   * the ORDINAL conjunct was described here as "transitional scaffolding for a
+--     spec'd widening (§5 R2 / C4-I2 global candidacy)" that **A-3.6 deletes**.
+--     ⚠️ IT DID NOT.  A-3.6 (#1558) split the predicate and flipped the INSTANCE
+--     axis only (`ieCandidacyVisibleAt`); this conjunct reads `declEnvVisibleAt`,
+--     which kept its body, so the ordinal conjunct here is LIVE and not scheduled
+--     for deletion by any unit that currently exists.  The MEASURED paragraph two
+--     down is why — it is this reader's own narrowing that made the split
+--     necessary.  If a later unit does widen the name axis, it is that unit's
+--     acceptance delta with that unit's fixtures.
+--   * the PUBLICITY conjunct is NOT transitional either — it is the language's
+--     export semantics, and under the target it MIGRATES TO R (§3 row L7), it does
+--     not vanish.
+-- The factoring is still what keeps the two answerable separately, and that is now
+-- a permanent property rather than a deletion-safety measure: the two
+-- `declEnvRowVisible` arms below read "own row ⇒ every decl, any other row ⇒ its
+-- public projection", which is what R inherits, and neither conjunct can be widened
+-- by editing the other.
 --
 -- WHY A PREDICATE IS NEEDED AT ALL (MEASURED on this tree, not argued): an unfiltered
 -- whole-graph population used as the field-owner source turns a program that compiles
@@ -2955,7 +3022,9 @@ declEnvRowVisible cur m
 -- WHOM" — the question §2 K exists to make askable.  The seed now comes from the
 -- whole-graph envelope, projected at the reading module's own ordinal through the
 -- SAME two predicates the overlay pool reads (`declEnvVisibleAt` /
--- `declEnvVisibleTo`), so A-3.6 keeps its one-body deletion.
+-- `declEnvVisibleTo`).  ⚠️ This clause used to end "so A-3.6 keeps its one-body
+-- deletion"; A-3.6 (#1558) SPLIT the predicate rather than deleting it, and this
+-- seed — a NAME/data-scoping table — kept its ordinal filter unchanged.
 --
 -- 🚨 THE SEED EXCLUDES THE READER'S OWN ROW, AND THAT IS NOT AN ORDINAL
 -- STATEMENT.  A module registers its own decls directly, immediately after this
@@ -2983,20 +3052,40 @@ declEnvRowVisible cur m
 -- shares structure and costs O(whole graph) for the entire run.  The read is one
 -- `omLookup` and allocates nothing.
 --
--- 🚨 A-3.6 EDITS HERE, and this note is what makes that an edit rather than a
--- hunt.  The chain ENCODES `declEnvVisibleAt`'s prefix shape — that is the whole
--- source of the sharing — even though each step still routes its PROJECTION
--- through `declEnvRowKindEntries`/`declEnvRowVisible` (hence through
--- `declEnvVisibleTo`, hence through `declEnvVisibleAt`).  When A-3.6 makes
--- `declEnvVisibleAt ≡ True`, every reader must see the WHOLE chain instead of its
--- own prefix: hand every row the FINAL accumulator in `declEnvSeedChain` below.
--- The publicity conjunct is untouched by that edit, which is the property
--- `declEnvVisibleTo`'s two-conjunct factoring exists to preserve.
+-- 🚨 A-3.6 DID NOT EDIT HERE, AND THE INSTRUCTION THIS NOTE USED TO CARRY WAS A
+-- LIVE REGRESSION.  It read: *"When A-3.6 makes `declEnvVisibleAt ≡ True`, every
+-- reader must see the WHOLE chain instead of its own prefix: hand every row the
+-- FINAL accumulator in `declEnvSeedChain` below."*  `test/registry_keying_ratchet.sh`
+-- still says the same thing in its `declEnvsRef` and `deKindsBefore` rows.  **Do
+-- not do it**, for two independent reasons:
+--
+--   1. THE FINAL ACCUMULATOR INCLUDES THE READER'S OWN ROW, and the own-row
+--      exclusion is structural and mandatory — the 🚨 note above says so, and the
+--      SAME ratchet row says so two sentences before instructing the edit that
+--      destroys it.  A module re-registers its own decls immediately after this
+--      seed via `registerAllData … prog0`, so seeding them here too doubles an
+--      owner key that `mangledHeadCandidates` reads RAW, turning its singleton
+--      gate into the give-up arm — live during inference.  That is now PINNED:
+--      see the four `deSeedChainProbe` doctests below `deKindRow1`, which were
+--      added by A-3.6 bite C-1 specifically as a tripwire on this edit and which
+--      were confirmed to be the only assertions in this file that fire on it.
+--   2. THE PREMISE IS FALSE ANYWAY.  A-3.6 (#1558) did not make
+--      `declEnvVisibleAt ≡ True`; it split the predicate and flipped only the
+--      instance axis (`ieCandidacyVisibleAt`).  These two seeds are name/data
+--      scoping and keep the prefix rule.  Widening the field-owner half was in
+--      fact the specific thing the owner ruling declined, because
+--      `declEnvVisibleTo`'s MEASURED paragraph shows it NARROWS acceptance.
+--
+-- What the chain is, unchanged: it ENCODES `declEnvVisibleAt`'s prefix shape —
+-- that is the whole source of the structure sharing — while each step still routes
+-- its PROJECTION through `declEnvRowKindEntries`/`declEnvRowVisible`, hence through
+-- `declEnvVisibleTo`'s two conjuncts.
 
 -- The kind entries of row [m] that a reader at ordinal [cur] may see — the exact
 -- peer of `declEnvRowVisible` one projection over, and composed from the same two
 -- predicates rather than from an open-coded `<=` (see `declEnvVisibleTo`'s 🚨
--- note: an open-coded comparison here would silently survive A-3.6's deletion).
+-- note: an open-coded comparison here would be invisible to any future re-scoping
+-- of the name axis, exactly as it would have been to A-3.6's had it landed here).
 -- The own-row arm is unfiltered because a module's own kinds are: `registerData`'s
 -- `DData` arm calls `recordParamKinds` regardless of `dataVis`.
 declEnvRowKindEntries : Int -> DeclEnvModule -> List (TabKey, List Kind)
@@ -3046,8 +3135,8 @@ declEnvKindEntries (_::rest) = declEnvKindEntries rest
 -- the smallest such reader is the projection every later reader sees.  Doing it
 -- this way keeps the projection defined in exactly one place —
 -- `declEnvRowKindEntries` / `declEnvRowVisible` — instead of open-coding
--- `m.demKindEntries` / `m.demPubDecls` here, which is the drift A-3.6 would then
--- have to find twice.
+-- `m.demKindEntries` / `m.demPubDecls` here, which is drift a later re-scoping of
+-- the name axis would then have to find twice.
 --
 -- The field-owner population is `declEnvRowVisible` walked through the SAME
 -- `Variant`/`ConNamed` filter `registerVariants` → `registerNamedFieldVariants` →
@@ -3194,6 +3283,55 @@ deKindRow0 = declEnvModule 0 "m" deKindFixtureDecls
 
 deKindRow1 : DeclEnvModule
 deKindRow1 = declEnvModule 1 "m" deKindFixtureDecls
+
+-- ── A-3.6 bite C-1: THE OWN-ROW EXCLUSION, ASSERTED RATHER THAN INCIDENTAL ────
+-- `declEnvSeedChain` stamps row [m]'s id with the accumulators as they stand
+-- BEFORE [m] is folded in, so [m]'s seed is "every row strictly earlier than
+-- [m]" and never [m] itself.  That is a STRUCTURAL property of the fold order —
+-- there is no ordinal test to find and none to keep — and until now it was
+-- asserted only in prose two hundred lines up.  Prose is not fail-capable, and
+-- the exclusion is load-bearing in a way an ordinal statement is not: a module
+-- registers its OWN decls a second time, immediately after this seed, through
+-- `registerAllData … prog0`.  Seeding the own row here too would put the same
+-- `cname` key in `fieldOwnersRef` twice, `addFieldOwners` does not dedupe, and
+-- `mangledHeadCandidates` reads that multimap RAW — so a doubled owner key turns
+-- `lookupRecordByMangledHead`'s `[pair]` singleton gate into its give-up arm,
+-- LIVE during inference rather than inertly after it.
+--
+-- 🚨 SO THESE FOUR LINES ARE A TRIPWIRE ON A SPECIFIC WRONG EDIT, and it is one
+-- an implementer can arrive here already instructed to make:
+-- `test/registry_keying_ratchet.sh`'s `declEnvsRef` row tells A-3.6 to *"hand
+-- every row the FINAL accumulator"*.  Doing that destroys the exclusion the same
+-- row calls structural.  Every assertion below moves if it is done — that is the
+-- fail-capability argument, and it is by construction, not by hope:
+--   * `deSeedChainProbe` is a TWO-row chain, so the final accumulator differs
+--     from every row's prefix.  Row "m" is FIRST, so its correct seed is EMPTY
+--     while the final accumulator holds both rows: 0 → 6 kinds, `[]` → two
+--     owners.  Row "n" is LAST, so its correct seed is row "m" alone while the
+--     final accumulator adds "n"'s own identical `Pt`: 3 → 6 kinds, and
+--     `["Pt"]` → `["Pt", "Pt"]` — the doubled key itself, named.
+--   * A ONE-row chain could not discriminate any of that (prefix and final
+--     accumulator coincide at the only row), which is why the probe carries two
+--     rows with DISTINCT ids rather than reusing `deKindRow0`/`deKindRow1`.
+-- > listLen (fromOption [] (omLookup "m" (fst deSeedChainProbe)))
+-- 0
+-- > fromOption [] (omLookup "x" (fromOption omEmpty (omLookup "m" (snd deSeedChainProbe))))
+-- []
+-- > listLen (fromOption [] (omLookup "n" (fst deSeedChainProbe)))
+-- 3
+-- > fromOption [] (omLookup "x" (fromOption omEmpty (omLookup "n" (snd deSeedChainProbe))))
+-- ["Pt"]
+
+-- Row "n" carries the SAME decls as `deKindRow0` at ordinal 1 under a DIFFERENT
+-- module id.  Same decls is deliberate: it makes the own-row contribution and the
+-- earlier row's contribution identical values, so the only thing the assertions
+-- above can be reading is WHICH ROWS were folded, never which decls.
+deSeedRowN : DeclEnvModule
+deSeedRowN = declEnvModule 1 "n" deKindFixtureDecls
+
+deSeedChainProbe : (OrdMap (List (TabKey, List Kind)), OrdMap (OrdMap (List String)))
+deSeedChainProbe =
+  declEnvSeedChain [deKindRow0, deSeedRowN] [] omEmpty omEmpty omEmpty
 
 -- ── A-3.2a (#1112): the `DataEnv` slice ─────────────────────────────────────
 -- ⚠️ This banner read "CONSTRUCTION ONLY, NOT LIVE" and that lapsed with A-3.2b
@@ -3526,15 +3664,22 @@ addAliasDecl name o params rhs ord pub att env =
 --
 --   1. `declEnvVisibleTo cur ad.adOrd ad.adPub` — BOTH ratified conjuncts, the
 --      ordinal one and the publicity one, applied through the ONE predicate.
---      This is the third production reader of `declEnvVisibleAt` (after
---      `declEnvRowVisible` and `ieSnapAt`); the ratchet's `declEnvsRef` row
---      records all three, because that row is the arc's account of what A-3.6
---      is licensed to delete.
---   2. `ad.adOrd != cur` — the OWN-ROW EXCLUSION.  ⚠️ THIS ONE IS STRUCTURAL,
---      NOT TRANSITIONAL, AND IT MUST SURVIVE A-3.6.  A-3.6 deletes
+--      This is a production reader of `declEnvVisibleAt`.  ⚠️ It used to say "the
+--      THIRD (after `declEnvRowVisible` and `ieSnapAt`); the ratchet's
+--      `declEnvsRef` row records all three".  BOTH halves are now wrong: the
+--      ratchet's count was measured wrong in both directions (RUN-007/RUN-013 —
+--      it is eight leaf read paths, not three), and `ieSnapAt` is no longer a
+--      reader of this predicate at all, having moved to `ieCandidacyVisibleAt` at
+--      A-3.6.  DERIVE the set; do not carry a count.
+--   2. `ad.adOrd != cur` — the OWN-ROW EXCLUSION.  ⚠️ THIS ONE IS STRUCTURAL, NOT
+--      TRANSITIONAL.  This clause used to justify itself by "A-3.6 deletes
 --      `declEnvVisibleAt`'s body, at which point condition 1 reduces to the
---      publicity conjunct alone and this line is the only thing still keeping
---      the reader's own row out.  It is not an ordinal FILTER wearing an
+--      publicity conjunct alone and this line is the only thing still keeping the
+--      reader's own row out."  A-3.6 did NOT delete that body (it split the
+--      predicate and flipped the instance axis only), so condition 1 still
+--      carries the ordinal — but the conclusion is UNCHANGED and does not depend
+--      on the premise: this condition is structural on its own terms.  It is not
+--      an ordinal FILTER wearing an
 --      ordinal's clothes: the retired accumulator held the public aliases of
 --      every module whose arm had ALREADY FINISHED (`appendDataUniverse` is the
 --      last statement of a module's arm), so a reader at ordinal k saw
@@ -3542,9 +3687,13 @@ addAliasDecl name o params rhs ord pub att env =
 --      arrive by a route this unit does not touch (`registerAllData … prog0`
 --      conses them onto the front of the working `aliasTableRef`).  Dropping
 --      this would double-register every public alias the reader declares.
---      Conditions 1 ∧ 2 are today exactly the `<` the accumulator had
---      (`<=` ∧ `!=`); under A-3.6 they reduce to `adPub && adOrd != cur`, which
---      is the intended end state.
+--      Conditions 1 ∧ 2 are exactly the `<` the accumulator had (`<=` ∧ `!=`).
+--      ⚠️ This used to add "under A-3.6 they reduce to `adPub && adOrd != cur`,
+--      which is the intended end state".  They do NOT: A-3.6 left the alias table
+--      — a NAME-scoping table — on `declEnvVisibleAt`, deliberately, because
+--      `DICT-SEMANTICS.md`'s I5 boundary clause says its price does not extend to
+--      names.  That reduction is owed to whichever unit widens the name axis, if
+--      one ever is; it is not scheduled.
 --   3. `not ad.adAttrib` — the attributed-alias drop, applied HERE at the read
 --      rather than in the population.  See the 🚨 note on `dataEnvAddDecl` for
 --      why, and for the condition under which #1228/#1586 must delete it.
@@ -3585,8 +3734,12 @@ aliasUniverseAt cur ((key, ad)::rest)
   | otherwise = aliasUniverseAt cur rest
 
 -- The three conditions of the block above, in that order.  Split out so each is
--- separately readable and separately greppable — A-3.6 edits condition 1's
--- predicate and must leave conditions 2 and 3 standing.
+-- separately readable and separately greppable.  ⚠️ This said "A-3.6 edits
+-- condition 1's predicate and must leave conditions 2 and 3 standing".  A-3.6
+-- (#1558) edited NONE of the three — the alias table is a NAME-scoping table and
+-- the split ruling left the whole name axis alone.  All three conditions stand as
+-- written; the split-out shape is what will make a future name-axis unit cheap, and
+-- conditions 2 and 3 remain structural whatever happens to condition 1.
 aliasVisibleTo : Int -> AliasDecl -> Bool
 aliasVisibleTo cur ad = declEnvVisibleTo cur ad.adOrd ad.adPub
   && ad.adOrd != cur
@@ -3769,8 +3922,12 @@ distinctIdentsIn2 _ = False
 -- WHAT THIS IS.  Stage K's `IE`: one registry answering "what impls exist",
 -- replacing the three separate answers enumerated in
 -- `compiler/TYPECHECK-TARGET-ARCHITECTURE.md` §9.6.  Built once, whole-graph,
--- inside `buildDeclEnvs`; every read filters through `declEnvVisibleAt` (the ONE
--- ordinal predicate, whose body A-3.6 deletes).
+-- inside `buildDeclEnvs`.  ⚠️ This said "every read filters through
+-- `declEnvVisibleAt` (the ONE ordinal predicate, whose body A-3.6 deletes)".
+-- Since A-3.6 (#1558) `IE`'s two reads DIVERGE: the candidacy read (`ieUniverseAt`
+-- → `ieSnapAt`) goes through `ieCandidacyVisibleAt` and is GRAPH-GLOBAL — that is
+-- C4/I2 — while the decl-time existence read (`ieRowsVisibleAt`) still filters
+-- through `declEnvVisibleAt`.  See both predicates' headers.
 --
 -- 🚨 THE CONSTRAINT (§9.3), MECHANICALLY ENFORCED BY CHECK 4 ABOVE.  `IE` is
 -- keyed by IMPL IDENTITY.  An interface's default-method arm is a property of the
@@ -4078,10 +4235,22 @@ ieInsertRowAt ifk (r@(ImplRow _ _ _ tys _ _)) env = match univReceiverTag tys
     ImplEnv { env | ieConcrete = mregAppendK (regKeyNTab [ifk, hd]) r env.ieConcrete, ieIfaceTags = regInsertK ifkey (sregAddK (regKeyOfTab hd) (fromOption sregEmpty (regLookupK ifkey env.ieIfaceTags))) env.ieIfaceTags }
   None => ImplEnv { env | ieHeadless = mregAppendK (regKeyOfTab ifk) r env.ieHeadless }
 
--- 🚨 THE ONE `IE` READ ACCESSOR.  Every consumer goes through here, and here is the
--- only place `declEnvVisibleAt` is applied to `IE` — A-3.6 stays the deletion of
--- that one predicate's body and nothing else.  Open-coding `<=` at a read site is
--- the one thing this unit must not do.
+-- 🚨 THE `IE` *UNIVERSE* READ ACCESSOR.  Every consumer that wants an
+-- `ImplUniverse` goes through here.  Open-coding `<=` at a read site is the one
+-- thing this unit must not do.
+--
+-- ⚠️ THIS IS NO LONGER THE ONLY `IE` READ, and it is no longer ordinal-filtered.
+-- There are TWO `IE` reads and they answer different questions — this one (via
+-- `ieSnapAt`) selects a candidacy UNIVERSE; `ieRowsVisibleAt` below selects rows for
+-- a decl-time existence check.  ⚠️ THEY NO LONGER SHARE A PREDICATE, and this
+-- comment claimed they did until A-3.6 (#1558): the predicate SPLIT by owner ruling,
+-- this one now reads `ieCandidacyVisibleAt` (graph-global, `True`) while
+-- `ieRowsVisibleAt` still reads `declEnvVisibleAt` (the ordinal name axis).  "One
+-- body to delete" was never the invariant that mattered; "no read site open-codes
+-- `<=`" is, and it still holds.  DERIVE the current set rather than trusting this
+-- sentence: `grep -n 'declEnvVisibleAt\|ieCandidacyVisibleAt' compiler/types/typecheck.mdk`
+-- and separate code from commentary; the ratchet's `declEnvsRef` row has been measured
+-- wrong on this count in both directions (RUN-007/RUN-013).
 --
 -- The snapshots this SELECTS from are built by `insertUnivImpl` — the SAME writer
 -- `growImplUniverse` (and so the retired accumulator) uses — so the two cannot drift
@@ -4105,16 +4274,50 @@ ieInsertRowAt ifk (r@(ImplRow _ _ _ tys _ _)) env = match univReceiverTag tys
 ieUniverseAt : Int -> ImplEnv -> ImplUniverse
 ieUniverseAt cur env = ieSnapAt cur env.ieUnivSnaps emptyImplUniverse
 
--- Walk the ordinal-ordered snapshots and keep the LAST visible one.  The ONE place
--- `declEnvVisibleAt` is applied to `IE`, preserved deliberately through the snapshot
--- rewrite: A-3.6 turning that predicate's body into `True` makes this select the final
--- snapshot — the whole graph — which is precisely A-3.6's semantics, unchanged.
--- Allocates nothing, and stops at the first invisible ordinal.
+-- Walk the ordinal-ordered snapshots and keep the LAST admitted one.  This is THE
+-- instance-candidacy read, and since A-3.6 (#1558) it goes through
+-- `ieCandidacyVisibleAt` — not `declEnvVisibleAt`, which kept its ordinal body for
+-- the name axis when the predicate split (see both headers).  The predicate is `True`,
+-- so this selects the FINAL snapshot — the whole graph — which is C4/I2's global
+-- instance environment reached without changing the shape of the walk.
+--
+-- ⚠️ IT IS STILL A WALK, AND THAT IS NOT AN OVERSIGHT.  A constant predicate makes
+-- `last` the obvious "simplification", and the two are equal only while
+-- `ieUnivSnaps` is ordinal-ordered and non-empty-tailed.  The walk keeps this
+-- function's shape identical to its pre-flip self, so the flip's diff is one
+-- predicate name and the acceptance delta is attributable to that alone; and it
+-- leaves one line to change if candidacy is ever scoped again.  Allocates nothing.
 ieSnapAt : Int -> List (Int, ImplUniverse) -> ImplUniverse -> ImplUniverse
 ieSnapAt _ [] acc = acc
 ieSnapAt cur ((o, u)::rest) acc
-  | declEnvVisibleAt cur o = ieSnapAt cur rest u
+  | ieCandidacyVisibleAt cur o = ieSnapAt cur rest u
   | otherwise = acc
+
+-- #1557 A-3.5b: the ROW-SET read at an ordinal — the exact peer of `CE`'s
+-- `ceRowsVisibleAt`, reading `declEnvVisibleAt`, the NAME/declaration axis.
+-- ⚠️ THIS SENTENCE SAID "routed through the SAME ONE predicate so A-3.6 still has a
+-- single body to delete" WHEN A-3.5b LANDED, AND A-3.6 (#1558) THEN SPLIT THE
+-- PREDICATE by owner ruling — so the "one body" framing is retired, not merely
+-- reworded.  This read stayed on `declEnvVisibleAt` while `ieSnapAt` moved to
+-- `ieCandidacyVisibleAt`: A-3.6's licence is I5's subject, `match(IE, C τ̄)`, and a
+-- decl-time EXISTENCE query is not that.  Whether super-existence should see the
+-- whole graph is a real question and is NOT ruled — see `ieCandidacyVisibleAt`, which
+-- says the same thing from the other side.  `ieUniverseAt` above answers "what does the obligation
+-- channel know about impls here"; this answers "which impl DECLARATIONS are visible
+-- here", which is what a decl-time check (`checkSuperImpls`) needs — it must keep
+-- matching AST `Ty`s with `tyMatchesAst`, and an `ImplUniverse` holds `Mono`s matched
+-- by `matchStep`.  Routing the super-existence query through `ieUniverseAt` would
+-- therefore swap the MATCHER as well as the table, which is a second, unbudgeted
+-- acceptance delta on top of the intended re-key.
+--
+-- 🚨 PERF: THIS IS O(rows) PER CALL AND ITS CALLER RUNS PER (impl x super).  Bind it
+-- ONCE per whole-module check and thread the list; calling it inside `superMsgFor`
+-- would be O(user impls x supers x all impls) — the same class as A-3.4 PR2's first
+-- cut, which `diff_compiler_perf_scaling.sh` caught at r2=3.35 on the `modules` shape
+-- (see `ieUnivSnaps`).  `checkSuperImpls` is the one binding site; keep it that way.
+ieRowsVisibleAt : Int -> ImplEnv -> List ImplRow
+ieRowsVisibleAt cur env =
+  filterList (r => declEnvVisibleAt cur (ieRowOrd r)) env.ieRows
 
 -- ── §9.7's scoping proofs, as ASSERTIONS rather than sentences ────────────────
 --
@@ -4217,21 +4420,29 @@ ieProbeEnv = buildImplEnv
 -- > map (r => instRefSeq (ieRowInst r)) ieProbeEnv.ieRows
 -- [0, 1]
 --
--- 3. TABLE SCOPE — the ordinal, applied through `declEnvVisibleAt` and nothing
---    else.  There is one snapshot per distinct ordinal, and selection keeps the LAST
---    VISIBLE one: at ordinal 0 only `amod`'s impl is in the selected universe, at 1
---    both.  This is the filter A-3.6 deletes, and it is LIVE.  The fail-CLOSED miss
---    arm is asserted too — at `declEnvsOrdOf`'s `-1` for an unknown module id nothing
---    is visible, so an unknown reader LOSES declarations (loud reject) rather than
---    gaining the whole graph (silent accept).
---    ⚠️ WHICH LINE DISCRIMINATES WHAT, stated because an earlier draft of this item
---    asserted the `amod` bucket at BOTH ordinals — the same value twice — and so
---    graded nothing about the filter.  `amod` (ordinal 0) is the MONOTONICITY half:
---    an earlier module stays visible as the ordinal rises, and it is what a filter
---    that is too NARROW breaks.  `zmod` (ordinal 1) is the FILTER half: 0 at ordinal
---    0 and 1 at ordinal 1 is the only pair here that changes with the ordinal, and it
---    is what a filter that is too WIDE breaks.  Both are needed; neither alone is a
---    test of `declEnvVisibleAt`.
+-- 3. 🚨 TABLE SCOPE — AND SINCE A-3.6 (#1558) THE ASSERTION IS THE OPPOSITE ONE.
+--    This item used to pin the prefix rule: `zmod` invisible at ordinal 0, visible at
+--    1, and nothing at all at `declEnvsOrdOf`'s `-1` miss.  A-3.6 flipped candidacy
+--    onto `ieCandidacyVisibleAt`, so what is asserted now is the C4/I2 property
+--    itself: **the selected universe is INVARIANT IN THE READING ORDINAL.**  Every
+--    impl declared anywhere in the graph is a candidate everywhere, which is what
+--    *"import scoping never decides which instances exist"* means operationally.
+--    ⚠️ WHICH LINE DISCRIMINATES WHAT, kept from the pre-flip version because the
+--    hazard it names inverted rather than went away.  The pairs that grade the flip
+--    are the ones whose expected value CHANGED: `zmod` at ordinal 0 (1, was 0) and
+--    `amod` at the `-1` miss (1, was 0).  If the prefix filter is ever re-instated on
+--    this path — by re-pointing `ieSnapAt` at `declEnvVisibleAt`, or by giving
+--    `ieCandidacyVisibleAt` an ordinal body — both of those fall back to 0 and this
+--    block goes red.  The unchanged lines (`amod` at 0 and 1, `zmod` at 1) grade
+--    nothing about the flip on their own and are kept only as the monotonicity floor:
+--    they are what a candidacy predicate that is accidentally too NARROW breaks.
+--    ⚠️ The `-1` line is no longer a fail-CLOSED assertion.  It cannot be: an
+--    unknown module id now sees the WHOLE graph instead of nothing, so on this axis
+--    the miss sentinel is VACUOUS.  That is a real severity change and it is
+--    A-3.6's, recorded here rather than left for someone to rediscover from a `0`
+--    that quietly became a `1`.  The sentinel is still live and still fail-CLOSED for
+--    the NAME axis — see `declEnvsOrdOf`, and the `declEnvVisibleTo` doctests far
+--    above, which assert the ordinal conjunct is still doing work there.
 -- > listLen ieProbeEnv.ieUnivSnaps
 -- 2
 -- > listLen (mregLookupK (ieProbeKey "amod") (ieUnivConcreteOf (ieUniverseAt 0 ieProbeEnv)))
@@ -4239,21 +4450,24 @@ ieProbeEnv = buildImplEnv
 -- > listLen (mregLookupK (ieProbeKey "amod") (ieUnivConcreteOf (ieUniverseAt 1 ieProbeEnv)))
 -- 1
 -- > listLen (mregLookupK (ieProbeKey "zmod") (ieUnivConcreteOf (ieUniverseAt 0 ieProbeEnv)))
--- 0
+-- 1
 -- > listLen (mregLookupK (ieProbeKey "zmod") (ieUnivConcreteOf (ieUniverseAt 1 ieProbeEnv)))
 -- 1
 -- > listLen (mregLookupK (ieProbeKey "amod") (ieUnivConcreteOf (ieUniverseAt (0 - 1) ieProbeEnv)))
--- 0
+-- 1
 --
 -- 4. THE PROJECTION IS THE OBLIGATION CHANNEL'S OWN UNIVERSE, built by the SAME
 --    writer — so A-3.4 PR2's flip could not drift in key minting, only in
 --    population and order, which is what both shadow instruments measured.  Since
---    that flip these two lines are no longer a claim about a table nobody reads:
---    they exercise the projection the compiler actually dispatches on.
+--    that flip this is no longer a claim about a table nobody reads: it exercises the
+--    projection the compiler actually dispatches on.
+--    ⚠️ This item used to assert `zmod` at ordinals 1 and 0 as `1` and `0`.  Post-flip
+--    both read `1`, i.e. the same value twice — which by item 3's own rule grades
+--    nothing — so the redundant line is DELETED rather than left in place looking like
+--    a test.  The surviving line still discriminates key minting: a row indexed under a
+--    mis-minted concrete key answers `0` here at every ordinal.
 -- > listLen (mregLookupK (ieProbeKey "zmod") (ieUnivConcreteOf (ieUniverseAt 1 ieProbeEnv)))
 -- 1
--- > listLen (mregLookupK (ieProbeKey "zmod") (ieUnivConcreteOf (ieUniverseAt 0 ieProbeEnv)))
--- 0
 ieUnivConcreteOf : ImplUniverse -> MultiRegistry (List Ty, List Require)
 ieUnivConcreteOf (ImplUniverse conc _ _) = conc
 -- ═══ #1112 A-3.4: IE-BLOCK-END ═════════════════════════════════════════════════
@@ -4261,8 +4475,11 @@ ieUnivConcreteOf (ImplUniverse conc _ _) = conc
 -- ═══ #1519 A-3.3: THE `CE` REGISTRY — CE-BLOCK-BEGIN ═══════════════════════════
 -- §2 K: *"CE (class environment): interfaces with declared parameter kinds …,
 -- method schemes, superclass predicates …"*  Built once, whole-graph, inside
--- `buildDeclEnvs`; every read filters through `declEnvVisibleAt` (A-3.6 deletes
--- its body).
+-- `buildDeclEnvs`; every read filters through `declEnvVisibleAt`.  ⚠️ This used to
+-- add "(A-3.6 deletes its body)".  It does not: A-3.6 (#1558) split the predicate
+-- and flipped the INSTANCE axis only.  `CE` is interface IDENTITY, not instance
+-- candidacy, so every `CE` read keeps its ordinal filter — permanently, unless some
+-- later unit argues the name/identity axis on its own merits.
 --
 -- 🚨 SYNTACTIC, NOT ELABORATED — the Step 0 ruling this unit inherits rather
 -- than re-derives: *"CE's declaration environments hold the DECLARATION as
@@ -4499,8 +4716,8 @@ ceInsertRow : CeRow -> ClassEnv -> ClassEnv
 ceInsertRow r env = ClassEnv { env | ceRows = r::env.ceRows, ceByKey = regInsertK (ceRowKey r) r env.ceByKey }
 
 -- 🚨 THE ONE `CE` READ ACCESSOR — the ordinal-filtered lookup routed through
--- `declEnvVisibleAt`, exactly as `ieUniverseAt`/`ieSnapAt` are the one
--- read path for `IE`.  Looks up by IDENTITY rather than collecting a
+-- `declEnvVisibleAt`, exactly as `ieUniverseAt`/`ieSnapAt` and `ieRowsVisibleAt`
+-- (A-3.5b) are for `IE`.  Looks up by IDENTITY rather than collecting a
 -- candidate set, per the shape argued at `ClassEnv` above.
 --
 -- ⚠️ This said "NO CALLER TODAY — construction only, per this unit's bar" while it was
@@ -4508,7 +4725,9 @@ ceInsertRow r env = ClassEnv { env | ceRows = r::env.ceRows, ceByKey = regInsert
 -- (graded impl-head kinds), and `ifaceDfsCycleOneSuper` following a superinterface
 -- edge by identity; `ceRowsVisibleAt`/`ceRowsOwnedBy` are its population peers on the
 -- same ordinal predicate.  Anything reaching `ceByKey` directly instead of through
--- here would bypass `declEnvVisibleAt` and silently perform A-3.6's widening early.
+-- here would bypass `declEnvVisibleAt` and silently widen the `CE` axis — which
+-- A-3.6 deliberately did NOT widen, so there is now no unit such a bypass could be
+-- mistaken for finishing early.
 ceLookupAt : RegKey -> Int -> ClassEnv -> Option CeRow
 ceLookupAt key cur env = match regLookupK key env.ceByKey
   None => None
@@ -4518,8 +4737,10 @@ ceLookupAt key cur env = match regLookupK key env.ceByKey
 -- `ceLookupAt` above answers "what does interface I mean here"; the two
 -- relocated SCANS (W1 acyclicity, phantom methods) instead need a POPULATION,
 -- and they need two DIFFERENT ones.  Both go through `declEnvVisibleAt` — the
--- ONE ordinal predicate, per A-3.1's routing rule — so A-3.6 still has a
--- single body to delete.
+-- name-axis ordinal predicate, per A-3.1's routing rule.  ⚠️ This used to end "so
+-- A-3.6 still has a single body to delete"; A-3.6 (#1558) split the predicate
+-- instead, and `CE` stayed on this one.  The routing rule is what survived and it
+-- is why the split cost nothing here.
 --
 -- 🚨 THE TWO ARE NOT INTERCHANGEABLE, and picking the wrong one is a silent
 -- widening rather than a loud one.  `ceRowsVisibleAt` is the reading module's
@@ -4557,9 +4778,12 @@ ceSlotKindsAt key cur i env = match ceLookupAt key cur env
 -- (Module arm) and of `ifaceRequiredMethods`' bare first-match scan (Flat arm).
 --
 -- 🚨 IT MUST GO THROUGH `ceLookupAt`, NOT `regLookupK … env.ceByKey`.  A second
--- open-coded path to `ceByKey` would bypass `declEnvVisibleAt` and silently perform
--- A-3.6's widening early, and A-3.6 depends on there being exactly ONE ordinal
--- predicate to split.  `ceLookupAt`'s own header states the rule.
+-- open-coded path to `ceByKey` would bypass `declEnvVisibleAt` and silently widen
+-- the `CE` axis.  ⚠️ This said "perform A-3.6's widening early, and A-3.6 depends on
+-- there being exactly ONE ordinal predicate to split".  A-3.6 (#1558) has landed and
+-- split the predicate; `CE` was NOT the axis it flipped, so the hazard is now an
+-- unlicensed widening with no unit behind it at all.  `ceLookupAt`'s own header
+-- states the rule.
 --
 -- MISS POLICY, and it is the unit's primary hazard: `None` means "no interface of
 -- that IDENTITY is visible here", and `implCompletenessMsgsOf`'s `None` arm is `[]`
@@ -4767,7 +4991,12 @@ ceRowParamKindNamesAt key cur env = match ceLookupAt key cur env
 
 -- 3. TABLE SCOPE — the ordinal, applied through `declEnvVisibleAt` and
 --    nothing else.  At ordinal 0 only amod is visible; zmod's row (declared
---    at ordinal 1) is not yet in scope.  This is the filter A-3.6 deletes.
+--    at ordinal 1) is not yet in scope.  ⚠️ This said "the filter A-3.6 deletes".
+--    A-3.6 (#1558) did not delete it: `CE` kept its ordinal filter when the
+--    predicate split, so these two lines are a LIVE assertion of a live rule, not
+--    a countdown.  The `IE` block's item 3 asserts the OPPOSITE property for the
+--    same shape — that is the split, visible as two doctests that disagree on
+--    purpose.
 -- > ceRowMethodNamesAt "zmod" 0 ceProbeEnv
 -- []
 -- > ceRowMethodNamesAt "zmod" 1 ceProbeEnv
@@ -15055,7 +15284,16 @@ implDefinesMethodAtGo ((ImplEntry tag2 methodNames _ _ _ _)::rest) method tag
 -- the impl's head type constructor (#414), so a conflict can point AT an impl instead
 -- of fabricating a file-start caret; `None` for a synthesized impl with no source
 -- span (e.g. desugar's `deriving` lowering, which builds `tyConUnresolved tyName None`).
-public export data CohImpl = CohImpl String (List Mono) String (Option Loc)
+--
+-- #1559 A-3.7: the 1st field is an `IfaceRef` — the interface's SPELLING plus its
+-- I4 identity — not a bare `String`.  It was a bare `String` compared with
+-- `if1 == if2` until this unit, which is why two UNRELATED modules that each
+-- declared their own interface spelled `Same` and each impl'd it at a shared head
+-- were reported as conflicting (#1438's coherence reach; the false reject is
+-- pinned, pre-fix, at `test/must_fail_fixtures/1438-*`).  See `cohSameIface` for
+-- WHICH identity predicate is correct here and why the other one is a severity
+-- increase.
+public export data CohImpl = CohImpl IfaceRef (List Mono) String (Option Loc)
 
 cohImplsOf : Decl -> List CohImpl
 cohImplsOf d = cohImplsOfMid "" d
@@ -15079,10 +15317,22 @@ cohImplsOf d = cohImplsOfMid "" d
 -- `TyVar` (an ast.mdk change rippling through every `Ty` consumer) or the parser's
 -- `DeclPos` side-table threaded into typecheck; both are out of proportion to an
 -- S3 diagnostic-quality fix.  Every head naming a CONCRETE type is covered.
+--
+-- #1559 A-3.7 OCCURRENCE MINT: `implOrigin` is destructured in the SAME record
+-- pattern as `iface`, and the `IfaceRef` is built from that pair right here — the
+-- discipline `implCompletenessMsgsOfMap` states for itself and the identical
+-- expression `implDeclFact` uses to build `ImplRow`'s interface half.  Written this
+-- way so the two constructions cannot drift: when this adapter is retired in favour
+-- of a projection of `IE`'s rows, the interface half it yields must already be the
+-- same value.
 cohImplsOfMid : String -> Decl -> List CohImpl
 cohImplsOfMid mid (DAttrib _ d) = cohImplsOfMid mid d
-cohImplsOfMid mid (DImpl { iface, tys, ... }) =
-  [CohImpl iface (cohFreshTys tys) mid (firstTyLocList tys)]
+cohImplsOfMid mid (DImpl { iface, tys, implOrigin, ... }) = [
+  CohImpl IfaceRef {
+    irName = iface,
+    irOrigin = implOrigin,
+  } (cohFreshTys tys) mid (firstTyLocList tys)
+]
 cohImplsOfMid _ _ = []
 
 -- the impl's head args → monos under ONE shared fresh-var map (so a var reused
@@ -15372,11 +15622,39 @@ cohScanDone : CohScan -> Bool
 cohScanDone (CohScan (Some _) (Some _)) = True
 cohScanDone _ = False
 
+-- #1559 A-3.7: DO TWO IMPL OCCURRENCES NAME THE SAME INTERFACE?
+--
+-- 🚨 `sameTyConHead`, NEVER `ifaceIdMatches`, AND THE TWO ARE EXACT INVERSES.  This
+-- is the whole substance of the bite, so the derivation is here rather than in a
+-- ledger:
+--   * `sameTyConHead n1 o1 n2 o2 = n1 == n2 && not (tyConIdsConflict o1 o2)`
+--     (`frontend/ast.mdk`) — name equality, and an ABSENT origin makes NO CLAIM, so
+--     it matches anything.
+--   * `ifaceIdMatches a b = a != "" && a == b` (`frontend/ast.mdk`) — absence NEVER
+--     matches, not even itself.
+-- `recordCandIsType`'s header states which to use when, and the rule is about the
+-- QUESTION being asked, not about the table: `sameTyConHead` belongs where a false
+-- REJECT would refuse a valid program (an ACCEPTANCE question); `ifaceIdMatches`
+-- belongs where a false HIT is silent wrongness (a LOOKUP).
+--
+-- Coherence is an ACCEPTANCE question — it decides whether to reject a program — so
+-- `sameTyConHead` is correct, and it is also the FAIL-LOUD direction here: an impl
+-- whose `implOrigin` is still `OriginUnresolved` compares by name exactly as it did
+-- before this unit, so no live rejection can silently vanish.  `ifaceIdMatches` in
+-- this position would turn every unstamped-origin conflict into a SILENT ACCEPT,
+-- which is a severity INCREASE and one no fixture in the tree would catch.
+--
+-- ⚠️ NOT a re-keying of the HEAD half.  Coherence's head comparison already routes
+-- through `sameTyConHead` (`cohGoR`'s `TCon` arm, A-2.10) and is untouched, so the
+-- #1317 T1 rule and closed S0 #1277 are not in scope for this unit.
+cohSameIface : IfaceRef -> IfaceRef -> Bool
+cohSameIface a b = sameTyConHead a.irName a.irOrigin b.irName b.irOrigin
+
 cohScanInner : CohImpl -> List CohImpl -> CohScan -> CohScan
 cohScanInner _ [] acc = acc
 cohScanInner (e1@(CohImpl if1 xs mid1 _)) ((CohImpl if2 ys mid2 _)::rest) acc
   | cohScanDone acc = acc
-  | if1 == if2 && cohOverlap xs ys =
+  | cohSameIface if1 if2 && cohOverlap xs ys =
     cohScanInner e1 rest (cohClassify e1 xs ys mid1 mid2 acc)
   | otherwise = cohScanInner e1 rest acc
 
@@ -15420,7 +15698,7 @@ cohClassify e1 xs ys mid1 mid2 (CohScan hard soft)
   | cohStrictlyMoreSpecific ys xs = CohScan hard soft
   | cohMutuallySubsumes xs ys = CohScan (cohKeepFirst hard (Some (cohHardMsg e1 xs ys mid1 mid2, cohImplLoc e1))) soft
   | not (cohSoftInScope mid1 mid2) = CohScan hard soft
-  | otherwise = CohScan hard (cohKeepFirst soft (Some (cohIncomparableMsg (cohImplIface e1) xs ys mid1 mid2, cohImplLoc e1)))
+  | otherwise = CohScan hard (cohKeepFirst soft (Some (cohIncomparableMsg (cohImplIfaceName e1) xs ys mid1 mid2, cohImplLoc e1)))
 
 -- Which sweep OWNS a soft (⊑-incomparable) pair.  Two sweeps run over overlapping
 -- inputs: `checkCoherence` per module (mids are "", since `cohImplsOf` records none)
@@ -15453,8 +15731,9 @@ cohKeepFirst None y = y
 -- coherence case, D3/WS-2 — which is exactly the duplicate-instance class).
 cohHardMsg : CohImpl -> List Mono -> List Mono -> String -> String -> String
 cohHardMsg e1 xs ys mid1 mid2
-  | cohIsCrossModule mid1 mid2 = cohCrossModuleMsg (cohImplIface e1) mid1 mid2
-  | otherwise = cohOverlapMsg (cohImplIface e1) xs ys
+  | cohIsCrossModule mid1 mid2 =
+    cohCrossModuleMsg (cohImplIfaceName e1) mid1 mid2
+  | otherwise = cohOverlapMsg (cohImplIfaceName e1) xs ys
 
 cohIsCrossModule : String -> String -> Bool
 cohIsCrossModule mid1 mid2 = mid1 != "" && mid2 != "" && mid1 != mid2
@@ -15495,8 +15774,16 @@ cohCrossModuleMsg : String -> String -> String -> String
 cohCrossModuleMsg iface mid1 mid2 =
   "Conflicting `impl \{iface}`. Defined in \{mid2} and \{mid1}"
 
-cohImplIface : CohImpl -> String
+cohImplIface : CohImpl -> IfaceRef
 cohImplIface (CohImpl i _ _ _) = i
+
+-- #1559 A-3.7: the SPELLING, for the message renderers alone.  Every `coh*Msg`
+-- below keeps its `String` parameter deliberately — the rendered wording is pinned
+-- byte-for-byte by error goldens, and this unit moves no diagnostic text.  Reading
+-- `.irName` through a named projection rather than at each call site keeps the
+-- "identity decides, spelling only prints" split visible.
+cohImplIfaceName : CohImpl -> String
+cohImplIfaceName e = (cohImplIface e).irName
 
 cohImplLoc : CohImpl -> Option Loc
 cohImplLoc (CohImpl _ _ _ l) = l
@@ -15544,13 +15831,31 @@ cohPushSoft (Some (msg, loc)) = pushCoherenceWarning loc msg
 -- the oracle's `is_concrete` gate); a parametric head like `impl Monoid (Bag a)`
 -- (free tyvar) is deferred exactly as the oracle defers it.  Error wording is
 -- byte-identical to the oracle's MissingSuperImpl message.
--- [userDecls] = the impls to check; [allDecls] = prelude + user, for both the
--- interface-supers lookup AND super-impl existence.
-checkSuperImpls : List Decl -> List Decl -> Unit
-checkSuperImpls userDecls allDecls =
+-- [userDecls] = the impls to check.
+--
+-- #1557 A-3.5b: the two BARE-NAME lookups this check used to make over a decl list
+-- are relocated onto stage K.  WAS: `ifaceSupersOf allDecls iface` (a first-match scan
+-- keyed `name == target`) for the supers, and `superImplExists allDecls superName`
+-- (whose impl test was the bare `iface == superName`) for existence.  NOW: the supers
+-- come from `ceLookupAt` at the reading ordinal, keyed by the naming `DImpl`'s
+-- `implOrigin` — the SAME mint `implCompletenessMsgsOfMap` (A-3.5a) and
+-- `ifaceDfsCycleOneSuper` (A-3.5c) use — and existence is a query over `IE`'s rows
+-- visible at that ordinal, comparing the row's own `IfaceRef` identity against the
+-- SUPER's `superOrigin`.
+--
+-- 🚨 `ieRowsVisibleAt` IS BOUND HERE, ONCE, AND THAT IS A PERF REQUIREMENT.  It is
+-- O(rows); `superImplExists` runs per (impl x super).  See its header.
+--
+-- ⚠️ The visible-row list replaces [allDecls] for EXISTENCE only.  `ifaceSupersOf`
+-- itself is NOT deleted — it has four surviving callers outside this check
+-- (constraint solving, `directSupers`, and the two census helpers), and re-keying or
+-- removing it would silently move all four.
+checkSuperImpls : List Decl -> ClassEnv -> ImplEnv -> Int -> Unit
+checkSuperImpls userDecls ce ie cur =
+  let rows = ieRowsVisibleAt cur ie
   foreachUnit
     (pushTypeError "T-MISSING-SUPER-IMPL")
-    (flatMap (superImplMsgsOf allDecls) userDecls)
+    (flatMap (superImplMsgsOf ce cur rows) userDecls)
 
 foreachUnit : (a -> Unit) -> List a -> Unit
 foreachUnit _ [] = ()
@@ -16695,8 +17000,9 @@ checkInterfaceCycles ce cur =
 -- #152: the whole-program final-checks tail, shared by all five entry points
 -- (checkToLines / checkToLinesWithRuntime / checkErrorsWithRuntime /
 -- checkProgramDiags / checkModuleFullDiags).  [cohDecls] feeds coherence AND
--- checkSuperImpls's first argument; [cycDecls] feeds checkSuperImpls's second
--- (whole-universe) argument.  ⚠️ trap #5: coherence must see USER decls only, so
+-- checkSuperImpls's impl-iteration argument; [cycDecls] USED to feed checkSuperImpls's
+-- second (whole-universe) argument and no longer does — see the A-3.5b note below.
+-- ⚠️ trap #5: coherence must see USER decls only, so
 -- this helper has NO access to `prog` — the caller decides [cohDecls] explicitly
 -- (never a `prog` fallback).  Call ORDER is load-bearing (all push into typeErrors).
 --
@@ -16713,12 +17019,21 @@ checkInterfaceCycles ce cur =
 -- then super-impls, so no diagnostic changes rank against another family.  Whichever
 -- unit lands A-3.5a/A-3.5b inherits this constraint — pulling a member OUT of this
 -- sequence re-orders every accumulated diagnostic after it.
-runFinalChecks : List Decl -> List Decl -> ClassEnv -> ClassEnv -> Int -> Unit
-runFinalChecks cohDecls cycDecls ownCe cycCe cur =
+-- #1557 A-3.5b: [cycDecls] is now consumed by coherence's peer alone — the
+-- super-impl check reads stage K instead, taking [cycCe] (the CE peer of the very
+-- list it used to be handed) and [cycIe] (the IE peer, at the same ordinal).  Both
+-- envs must be built from the SAME decl population [cycDecls] carries, which is why
+-- the Flat callers below pass `flatImplEnvOf` of exactly the list they pass as
+-- [cycDecls] and the Module caller passes the whole-graph `deImpls` with its own
+-- ordinal.  [cycDecls] itself is retained because `checkInterfaceCycles`' comment
+-- above derives the root-set equality from it and a later unit will want that
+-- derivation to still have its subject.
+runFinalChecks : List Decl -> List Decl -> ClassEnv -> ClassEnv -> ImplEnv -> Int -> Unit
+runFinalChecks cohDecls _cycDecls ownCe cycCe cycIe cur =
   let _ = checkCoherence cohDecls
   let _ = checkInterfaceCycles cycCe cur
   let _ = checkPhantomMethods ownCe cur
-  checkSuperImpls cohDecls cycDecls
+  checkSuperImpls cohDecls cycCe cycIe cur
 
 -- #1557 A-3.5c: the FLAT arm's single-module `CE`.  `buildDeclEnvs` runs only at the
 -- two Module-mode driver entries, so `driverState.declEnvsRef` is `emptyDeclEnvs` on
@@ -16728,6 +17043,17 @@ runFinalChecks cohDecls cycDecls ownCe cycCe cur =
 -- correct: a flat program is exactly one module.
 flatClassEnvOf : List Decl -> ClassEnv
 flatClassEnvOf decls = buildClassEnv [declEnvModule 0 "" decls]
+
+-- #1557 A-3.5b: `flatClassEnvOf`'s `IE` peer, and it exists for the SAME reason and
+-- with the same fail-direction.  `buildDeclEnvs` runs only at the two Module-mode
+-- driver entries, so `driverState.declEnvsRef.deImpls` is `emptyImplEnv` on every flat
+-- path — handing that to `checkSuperImpls` would make every super-existence query miss,
+-- and a miss there reports a superinterface as MISSING.  So the failure on Flat is a
+-- false REJECT of every `impl Sub T`, not a silent accept; loud either way, but wrong.
+-- Ordinal 0 with `cur = 0` makes "visible at" and "owned by" coincide, which is
+-- correct: a flat program is exactly one module.
+flatImplEnvOf : List Decl -> ImplEnv
+flatImplEnvOf decls = buildImplEnv [declEnvModule 0 "" decls]
 
 checkOneIfaceCycle : ClassEnv -> Int -> Ref (OrdMap Unit) -> CeRow -> Unit
 checkOneIfaceCycle ce cur done row =
@@ -16794,25 +17120,44 @@ cyclicSuperIfaceMsg path = "Cyclic superinterface: "
 
 -- the missing-superinterface error messages for one user decl (a DImpl, possibly
 -- wrapped in DAttrib); [] for any non-impl decl or when every super impl exists.
-superImplMsgsOf : List Decl -> Decl -> List String
-superImplMsgsOf allDecls (DAttrib _ d) = superImplMsgsOf allDecls d
-superImplMsgsOf allDecls DImpl { iface, tys, ... } =
-  match ifaceSupersOf allDecls iface
+--
+-- OCCURRENCE MINT (#1110/#1111 A-2.4, the `implCompletenessMsgsOfMap` discipline):
+-- `implOrigin` is destructured beside `iface` in the SAME record pattern, so the
+-- identity and the name it qualifies cannot drift apart.
+--
+-- ⚠️ THE MISS ARM IS AN ABSTENTION AND IT IS THE ONE LOUD→SILENT RISK HERE.  A
+-- `ceLookupAt` miss yields `[]` — no diagnostic — where the bare scan found the
+-- interface by spelling regardless.  This is deliberately the SAME disposition
+-- `ifaceSupersOf`'s `None` arm had ("unknown interface, reported elsewhere") and the
+-- same one A-3.5a/A-3.5c took at their peers; making it loud instead would be a new
+-- rejection class (an acceptance NARROWING) that no ruling licenses.  What guards it
+-- is that a super-bearing impl MUST still reject: flat and 2-module
+-- `T-MISSING-SUPER-IMPL` were measured before and after this relocation, and an
+-- identity miss turns both GREEN, which is the direction that matters.
+superImplMsgsOf : ClassEnv -> Int -> List ImplRow -> Decl -> List String
+superImplMsgsOf ce cur rows (DAttrib _ d) = superImplMsgsOf ce cur rows d
+superImplMsgsOf ce cur rows DImpl { iface, tys, implOrigin = o, ... } =
+  match ceLookupAt (regKeyOfTab (ifaceTabKey o iface)) cur ce
     None => []   -- unknown interface (already reported elsewhere) → skip
-    Some (typarams, supers) =>
-      if listLen typarams == listLen tys && allList tyIsConcrete tys then
-        flatMap (superMsgFor allDecls iface tys (zipL typarams tys)) supers
+    Some r =>
+      if listLen (ceRowTyparams r) == listLen tys && allList tyIsConcrete tys then
+        flatMap (superMsgFor rows iface tys (zipL (ceRowTyparams r) tys)) (ceRowSupers r)
       else
         []   -- arity mismatch, or a non-concrete head (deferred, like the oracle)
-superImplMsgsOf _ _ = []
+superImplMsgsOf _ _ _ _ = []
 
 -- check one `Super superName params` against the substitution: map each super
 -- param name through [subst] to its concrete Ty; if every param mapped, all are
 -- concrete, AND no matching `impl superName <concrete>` exists, emit the error.
-superMsgFor : List Decl -> String -> List Ty -> List (String, Ty) -> Super -> List String
-superMsgFor allDecls iface implTys subst (Super { superHead = superName, superParams = params }) =
+--
+-- #1557 A-3.5b: the super's IDENTITY key is minted ONCE here, from `superOrigin` —
+-- the same field and the same `ifaceTabKey` mint A-3.5c's cycle walk uses, which is
+-- the point: two units, one key discipline.  `Super` has carried `superOrigin` since
+-- #1110 Stage A-1.
+superMsgFor : List ImplRow -> String -> List Ty -> List (String, Ty) -> Super -> List String
+superMsgFor rows iface implTys subst (Super { superHead = superName, superParams = params, superOrigin = so }) =
   let concrete = substParams params subst
-  if listLen concrete == listLen params && allList tyIsConcrete concrete && not (superImplExists allDecls superName concrete) then
+  if listLen concrete == listLen params && allList tyIsConcrete concrete && not (superImplExists rows (ifaceTabKey so superName) superName concrete) then
     [missingSuperImplMsg iface implTys superName concrete]
   else
     []
@@ -16845,17 +17190,40 @@ ifaceSupersOf (_::rest) target = ifaceSupersOf rest target
 -- does any `impl superName <head>` with a head matching [concrete] exist? (head
 -- may be parametric — a free tyvar in the impl head matches any concrete arg,
 -- mirroring the oracle's mono_matches: pattern=impl head, concrete=super args.)
-superImplExists : List Decl -> String -> List Ty -> Bool
-superImplExists allDecls superName concrete =
-  anyList (implMatchesSuper superName concrete) allDecls
+--
+-- #1557 A-3.5b: [rows] are `IE`'s rows VISIBLE AT the reading ordinal, bound once by
+-- `checkSuperImpls`; [superKey] is the super's identity and [superName] its bare
+-- spelling.  This replaced a scan of the whole decl list whose interface test was the
+-- bare `iface == superName`.
+--
+-- 🚨 IT COMPARES THE IDENTITY LEG, NEVER THE BUCKETS.  `ieInsertRow` indexes every row
+-- under `oblIfaceKeys`, which mints TWO keys — the identity key AND a bare-spelling
+-- compatibility leg that #1438 still rides on.  Looking [superKey] up in
+-- `ieConcrete`/`ieHeadless` would therefore answer with BOTH same-spelled interfaces'
+-- rows, rebuilding in the new substrate exactly the collapse this relocation removes.
+-- Reading `ieRows` and testing each row's own `IfaceRef` cannot reach the bare bucket.
+--
+-- ⚠️ AND IT KEEPS `tyMatchesAst`.  The head match is unchanged, deliberately: `IE`'s
+-- rows carry AST `Ty`s (`ImplRow`'s 4th position), so the existing predicate applies
+-- verbatim.  Routing this through `ImplUniverse`/`matchStep` instead would carry a
+-- second, unbudgeted acceptance delta on top of the intended re-key.
+superImplExists : List ImplRow -> TabKey -> String -> List Ty -> Bool
+superImplExists rows superKey superName concrete =
+  anyList (implRowMatchesSuper superKey superName concrete) rows
 
-implMatchesSuper : String -> List Ty -> Decl -> Bool
-implMatchesSuper superName concrete (DAttrib _ d) =
-  implMatchesSuper superName concrete d
-implMatchesSuper superName concrete (DImpl { iface, tys, ... }) = iface == superName
+-- NAME FIRST, then IDENTITY — the discipline `tabKeyEq` states for itself in
+-- `types/registry.mdk`, applied here for a second reason: `ifaceTabKey` ALLOCATES (it
+-- goes through `mkIdent`), and this runs once per visible row per (impl x super) in a
+-- GC-bound stage.  Bare-name equality is a NECESSARY condition for key equality —
+-- `tabKeyOf` puts the same [name] into both the `TkIdent` and the `TkBare` arm — so
+-- gating on it is sound, and it bounds the minting to the set the OLD bare scan already
+-- let through.  The DECIDING test is still the identity compare; the name test decides
+-- nothing on its own.
+implRowMatchesSuper : TabKey -> String -> List Ty -> ImplRow -> Bool
+implRowMatchesSuper superKey superName concrete (ImplRow _ _ ir tys _ _) = ir.irName == superName
   && listLen tys == listLen concrete
+  && ifaceTabKey ir.irOrigin ir.irName == superKey
   && allList (p => tyMatchesAst (fst p) (snd p)) (zipL tys concrete)
-implMatchesSuper _ _ _ = False
 
 -- a Ty is concrete iff it contains no TyVar (mirror of the oracle's is_concrete,
 -- which treats effect rows as transparent — TyEffect ignores its row).
@@ -19631,13 +19999,37 @@ checkBodyImpl seed mode prog0 =
   -- law L1) and the `cross_allowed` ratchet would still carry three rows this unit
   -- exists to retire.
   --
-  -- NOW: a projection of the whole-graph `IE`, filtered to this module's ordinal
-  -- prefix through `ieUniverseAt` — the ONE read accessor, the ONE place
-  -- `declEnvVisibleAt` is applied to `IE`.  A-3.6 remains the deletion of that
-  -- predicate's body and nothing else; the filter stays ON here (it must — #1482's
-  -- measurement showed topological prefix scoping is accidentally load-bearing for
-  -- #1438's shape, so widening candidacy is A-3.6's unit with A-3.6's fixtures, not a
-  -- side effect of this flip).
+  -- NOW: a projection of the whole-graph `IE` through `ieUniverseAt`, the universe
+  -- read accessor (A-3.5b added a second `IE` read, `ieRowsVisibleAt`; see that
+  -- function's header, and do not re-instate "the ONE place" here).
+  --
+  -- 🚨 AND SINCE A-3.6 (#1558) IT IS NO LONGER FILTERED TO THIS MODULE'S ORDINAL
+  -- PREFIX.  This paragraph said "filtered to this module's ordinal prefix … the
+  -- filter stays ON here (it must)", which was A-3.4 PR2 correctly refusing to do
+  -- A-3.6's job early.  A-3.6 has now done it: `ieSnapAt` routes through
+  -- `ieCandidacyVisibleAt`, which is `True`, so this binding is the WHOLE GRAPH's
+  -- impl universe regardless of `mid`'s ordinal.  **This line is where A-3's
+  -- headline C4/I2 claim is cashed** — everything an obligation check on the
+  -- multi-module path knows about which impls exist comes from here, and it now
+  -- knows the same thing in every module, which is what *"import scoping never
+  -- decides which instances exist"* means operationally.
+  --
+  -- ⚠️ `declEnvsOrdOf mid` IS STILL PASSED AND IS NOW INERT ON THIS PATH.  It is
+  -- kept so the call site does not move and so re-scoping candidacy later is a
+  -- one-line change; do not "simplify" it away, and do not read its presence as
+  -- evidence a filter is still applied.  Its `-1` miss sentinel is likewise vacuous
+  -- here — an unknown module id now gains the whole graph rather than losing
+  -- everything, the opposite of the fail-CLOSED story `declEnvsOrdOf` documents for
+  -- the NAME axis.
+  --
+  -- ⚠️ WHAT THIS WIDENS, said out loud rather than left to be discovered: #1482's
+  -- measurement showed topological prefix scoping was accidentally load-bearing for
+  -- #1438's same-spelled-interface shape, so #1438's reach grows here.  That is
+  -- expected and licensed (§8 I5), not a regression — but it is an acceptance delta,
+  -- and the pin that grades it is
+  -- `test/must_fail_fixtures/1072-overlap-xmod-bare-head-arm-order`, which A-3.6
+  -- flips: `main.mdk` must now print `specific` with `control.mdk` STILL `specific`.
+  -- Red on both legs is a real regression, not the drain.
   --
   -- 🚨 BOUND ONCE, READ TWICE, AND THE "ONCE" IS LOAD-BEARING.  There are TWO Module-arm
   -- consumers — `residualUnivRef` (#1549) just below, and the end-of-body obligation
@@ -24613,7 +25005,8 @@ export checkToLines : List Decl -> String
 checkToLines prog =
   let schemes = checkProgramSchemes [] prog
   let progCe = flatClassEnvOf prog
-  let _ = runFinalChecks prog prog progCe progCe 0
+  let progIe = flatImplEnvOf prog
+  let _ = runFinalChecks prog prog progCe progCe progIe 0
   let errs = reverseL perRun.value.typeErrors.items.value
   match errs
     [] => joinNl (schemeLines schemes)
@@ -24654,7 +25047,11 @@ seedAndCheckSplit runtimeDecls coreProg userProg =
   -- coherence sees), the cycle walk sees the whole seeded `prog` so a user interface
   -- can close a cycle through a PRELUDE superinterface.
   let userDecls = driverState.value.coherenceUserDecls.value
-  let _ = runFinalChecks userDecls prog (flatClassEnvOf userDecls) (flatClassEnvOf prog) 0
+  -- #1557 A-3.5b: the `IE` peer is built from `prog` — the SAME list this call passes
+  -- as [cycDecls], i.e. the whole seeded universe the super-existence query used to
+  -- scan — so the population question is "does IE over that list equal that list",
+  -- not a new one.
+  let _ = runFinalChecks userDecls prog (flatClassEnvOf userDecls) (flatClassEnvOf prog) (flatImplEnvOf prog) 0
   schemes
 
 -- like checkToLines but seeds runtime.mdk's externs (for typechecking core.mdk,
@@ -26866,7 +27263,9 @@ checkModuleFullDiags mid seedVars accData accAll prog =
   -- which population they take from it (`ceRowsOwnedBy` vs `ceRowsVisibleAt`).
   let ceHere = declEnvsHere.deIfaces
   let ordHere = declEnvsOrdOf mid declEnvsHere
-  let _ = runFinalChecks prog (accAll ++ accData ++ prog) ceHere ceHere ordHere
+  -- #1557 A-3.5b: the whole-graph `IE`, read at the SAME `ordHere` — the same key
+  -- `ceHere` and `moduleImplUniv` (`checkBodyImpl`) already read at.
+  let _ = runFinalChecks prog (accAll ++ accData ++ prog) ceHere ceHere declEnvsHere.deImpls ordHere
   (
     schemes,
     reverseL perRun.value.typeErrors.items.value,

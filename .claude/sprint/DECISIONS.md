@@ -1040,3 +1040,146 @@ scope:      **A-3.6 and A-3.7 were found NOT to be serial**, contradicting RUN-0
             agent and a re-dispatch**, which is loud and cheap. The failure this trades against is
             an agent that adapts instead of stopping — so if any unit reports having "worked around"
             a region that moved, treat its diff as suspect first, not last.
+
+## RUN-037 — A-3.5b LANDED — and the implementer correctly REFUSED a brief instruction
+
+question:   Did Lane B land, and did it follow the brief?
+ruling:     **Landed, four bites.** And it **declined one brief instruction, correctly.** The
+            orchestrator accepts the refusal; the brief was wrong.
+derivation: RELAYED from Lane B. Five baselines measured before and after, `MEDAKA_STRICT=1`, exit
+            codes read from a file and never a pipe — **all byte-identical in message AND location**
+            (flat local / flat prelude-iface `T-INCOMPLETE-IMPL`; flat and 2-module
+            `T-MISSING-SUPER-IMPL`; 2-module Module-arm completeness). Fail-capability confirmed in
+            the direction that matters: an identity miss turns these **green**, not red.
+            Two positive controls added, both exit 0: flat super-satisfied, and a 2-module case
+            where the satisfying `impl Sup Zed` sits in the imported module and is **not**
+            `export`-marked — the WS-1a *"every impl in scope, EXPORT OR NOT"* property, derived
+            from `buildImplEnvGo` reading `m.demDecls` (full list) rather than `demPubDecls`.
+            `ifaceSupersOf` caller set re-derived by grep: four code sites outside this check
+            (constraint solving, `directSupers`, `censusSuperSlotsOf`, `censusSuperSlotsVecOf`),
+            matching P0-B's four. Function untouched; only `superImplMsgsOf`'s use re-pointed.
+            `tyMatchesAst` kept, identity leg compared, buckets never read. Ratchet 23, PASS —
+            unchanged as specified. `check-self` PASS.
+🚩 THE REFUSAL, and why it is right:
+            The brief said *"every miss path must fail closed and loud, never to an empty result."*
+            Lane B **did not** make lookup 1's miss fail loud, on the grounds that doing so is an
+            acceptance **NARROWING** — unlicensed by R2 — and that **both sibling relocations
+            (A-3.5a, A-3.5c) and `ifaceSupersOf`'s own `None` arm keep the abstention.** Its
+            position: rule it for all three or none. Lookup 2's miss is already loud.
+            **The orchestrator's brief over-generalised a real rule.** "Fail closed and loud" is
+            correct for a miss that would otherwise become a silent ACCEPT; it is wrong for a miss
+            whose loud form is a false REJECT. Those are opposite directions and the brief collapsed
+            them. Recorded as an OWED cross-unit ruling, not resolved here.
+scope:      OWED, carried to the repair round: (a) the abstain-vs-loud question above, to be ruled
+            across A-3.5a/A-3.5c/A-3.5b together; (b) the `DL` population equality (IE rows at `cur`
+            vs `accAll ++ accData ++ prog`) — **the baselines are widening tripwires only, not a
+            proof**; (c) P0-B §4.3(4)'s A-3.6 tripwire fixture was not written.
+
+## RUN-038 — 🚨 MY BRIEF ASSERTED QUIESCENCE THAT I HAD ALREADY DESTROYED
+
+question:   Lane B's brief opened *"You are the ONLY agent live — the worktree is quiescent and
+            yours alone."* Was that true?
+ruling:     **No. It was false when written, by my own subsequent action.** Fourth
+            contaminated-scheduling event of the run, and the first where the **brief itself
+            asserted the false premise** rather than merely failing to warn about it.
+derivation: RELAYED from Lane B, which checked rather than trusting the brief: mid-run it observed
+            HEAD at `f3d7f747`, a concurrent `make medaka`, a concurrent
+            `diff_compiler_must_fail.sh`, A-3.7's untracked `1438-*` pin, and **A-3.6's uncommitted
+            predicate split in the same file, shifting every line by ~109.**
+            Lane B's measurements are **still valid**: it established by a line-anchor grep taken
+            after its ratchet run that all five baselines predate those edits, and it deliberately
+            re-measured nothing afterwards per RUN-033.
+scope:      The sequence was mine: I dispatched Lane B with a quiescence promise, then ~immediately
+            dispatched A-3.6 and A-3.7 into the same worktree under RUN-036. **An agent that had
+            trusted that sentence instead of checking would have reported contaminated baselines as
+            clean ones** — and under the deferred-verification posture nothing downstream would have
+            caught it.
+            📌 Standing correction for every future brief in this run: **state the concurrency
+            situation as it will be, not as it is at dispatch, and never promise exclusivity in a
+            worktree the orchestrator intends to fill.** Lane B's habit of verifying the brief's
+            own premise is the behaviour that saved this, and it should be asked for explicitly.
+
+## RUN-039 — 🚩 NEW UNRULED SEMANTICS from the split predicate: candidacy vs super-EXISTENCE
+
+question:   Under RUN-010's split, instance candidacy becomes graph-global while name-scoped reads
+            keep their prefix filter. Is `checkSuperImpls` on the right side of that line?
+ruling:     **UNRULED — nobody has decided this, and it is a genuine consequence of the split that
+            neither the owner ruling nor P0-C anticipated.** Recorded, not resolved.
+derivation: RELAYED from Lane B, and it follows directly: if candidacy is graph-global but super
+            **existence** stays prefix-scoped, then an `impl Sup T` in a topologically LATER module
+            satisfies dispatch while `checkSuperImpls` still reports it **missing** — a diagnostic
+            that contradicts the engine's own behaviour.
+scope:      This is exactly the class the deferred posture is blind to: **diagnostic-only, and
+            invisible to value goldens.** It is also a *new* question created by this run rather
+            than inherited, which is the kind most likely to be lost. Escalate in the repair round.
+            Related and also from Lane B: **A-3.6's split makes `ieRowsVisibleAt` the ONE remaining
+            ordinal-scoped IE read.** Lane B re-cut its own function's header to retire the
+            now-false "one body to delete" claim, and **correctly left two further false clauses
+            alone** — the `ceLookupAt` header and `checkBodyImpl`'s `moduleImplUniv` note — because
+            both sit inside A-3.6's declared re-cut region and editing them risked a silent blend.
+            **That is stop-don't-adapt working exactly as designed** (RUN-036), and those two
+            clauses are hereby handed to A-3.6.
+
+## RUN-040 — A-3.7 — ⭐ #1438's COHERENCE REACH DRAINS, with RUN-025's ordering MEASURED
+
+question:   Did the #1438 pin get authored BEFORE its fix, observed red, and then drained?
+ruling:     **Yes — the ordering was honoured and measured, exactly as RUN-025 required.** This is
+            the run's first genuine drain, and it is properly witnessed rather than asserted.
+derivation: RELAYED from A-3.7, with the sequence stated as measured:
+            1. Authored `test/must_fail_fixtures/1438-same-spelled-interfaces-collapse-in-coherence/`
+               (5 `.mdk` + `claim.txt`) — the pin that **did not exist in this tree**.
+            2. `sh test/diff_compiler_must_fail.sh` on the **pre-3.7-4 binary** → **`REPRO`**,
+               confirmed twice.
+            3. Landed 3.7-4 (the widening) **alone, with its own build and `check-self`**, then
+               re-ran → **`DRAINED 1438-… (issue #1438)`**.
+            **#1438 NOT closed**, per RUN-021 — `claim.txt` carries that instruction. A-3.7 drains
+            only the *coherence reach*; the identity collapse belongs to #1482/#1507.
+            Bites landed: **3.7-0** (the pin), **3.7-3** (`cohSameIface` on `sameTyConHead`, with
+            the `ifaceIdMatches`-is-the-inverse derivation written in-source), **3.7-4**
+            (`CohImpl`'s first field `String → IfaceRef`; `cohScanInner`'s `if1 == if2` →
+            `cohSameIface`). **No `coh*` judgment function and no diagnostic wording moved**, as
+            P0-D scoped it.
+            Baseline held: user `impl Eq Int` α-equal to the prelude's → exit 0 on **both** Flat and
+            Module, before and after. Fail-capability confirmed: a *genuine* cross-module conflict
+            still rejects at exit 1 with byte-identical wording, and all five HARD-arm fixtures P0-D
+            left OWED were not merely `ls`-verified but **run**, unchanged.
+            Two OWED items discharged first-hand: Flat *does* stamp `implOrigin`
+            (`stampFlatTyOrigins`) but its scope excludes `prog`, so both sides of a flat pair carry
+            the same origin ⇒ **Flat is behaviourally inert** here; and `Duplicate interface: Same`
+            is a **resolve-side unconditional reject** ⇒ the widening is **cross-module-only**.
+            Ratchet PASS, unchanged — zero `driver_allowed` shrink, exactly as RUN-021 predicted.
+scope:      ⚠️ **3.7-5's `cohSoftInScope "" ""` hazard is still ARMED and still OWED** — it silently
+            drops every intra-module `W-INCOMPARABLE-IMPLS` once rows carry real mids.
+            Diagnostic-only, invisible to value goldens. Highest-priority A-3.7 residue.
+
+## RUN-041 — 📊 THE CONCURRENCY EXPERIMENT'S FIRST DATA: the collision happened; the guard held
+
+question:   RUN-036 accepted collisions as the price of max throughput, with stop-don't-adapt as the
+            sole guard. What actually happened?
+ruling:     **The collision happened, the guard held, and it cost ~4 bites of rework plus 1 bite of
+            duplicated work.** Recorded as evidence for the owner's experiment, not as an argument
+            against it.
+derivation: RELAYED from A-3.7, whose own accounting distinguishes four different reasons for its
+            7 unlanded bites — a distinction worth preserving, because only one of them is a
+            concurrency cost:
+            - **3.7-7 — BLOCKED by collision.** Lane B had already re-signatured `runFinalChecks`
+              and all three call sites, **uncommitted**, while A-3.7 was live. A-3.7 **stopped
+              rather than adapting onto a half-applied edit.** 3.7-5/6/9 serialise behind it.
+              ⇒ genuine concurrency cost: **~4 bites** now owed a re-dispatch.
+            - **3.7-2 — DUPLICATED.** `flatImplEnvOf` had already been landed by Lane B as A5b-2.
+              Two units were briefed to build the same function; the design pass did not catch it.
+              ⇒ genuine concurrency cost: **1 bite of wasted work**. Re-attribute to A-3.5b.
+            - **3.7-1/5/6 — DECLINED ON MERIT**, not blocked: readerless additions, the RUN-031
+              shape plus the tree's own `rule-dead-code` lint. These were **never real work**, and
+              would have been declined under any posture.
+            - **3.7-8/10 — not reached**, downstream of the above.
+            Net for the concurrent round: **Lane B 4/4 complete; A-3.7 3 landed, ~4 owed, 1 wasted,
+            3 correctly declined.** The most valuable bite in the whole unit (the pin + widening,
+            with its ordering) **did** land.
+scope:      🚩 **A THIRD contaminated must-fail reading**, reported by A-3.7 and correctly refused
+            rather than used: **5–6 unrelated DRAINs, UNSTABLE across two runs a minute apart.**
+            Same RUN-032/033 shape, same cause — two lanes holding uncommitted edits. **Do not act
+            on it.** Owed: one re-derivation on a quiescent tree.
+            📌 The instability is itself the tell, and it is worth more than the reading: a genuine
+            drain set is *stable*. Two runs a minute apart disagreeing is proof the tree, not the
+            suite, is moving. Any future drain claim should be run twice before it is believed.

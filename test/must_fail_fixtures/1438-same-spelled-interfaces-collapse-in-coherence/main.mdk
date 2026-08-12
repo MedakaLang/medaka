@@ -1,0 +1,6 @@
+-- #1438 -- the entry. It puts `amod` and `zmod` in ONE module graph and uses one
+-- method from each, so neither import can be dead-code-argued away.
+import amod.{foo}
+import zmod.{bar}
+
+main = println (foo 1 + bar 2)

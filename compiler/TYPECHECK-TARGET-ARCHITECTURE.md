@@ -1534,8 +1534,22 @@ reach and is correctly gated on #1482.
 
 **Consequence for this unit, non-negotiable:** every `IE` read goes through
 `declEnvVisibleAt` (`compiler/types/typecheck.mdk:2712-2713`) via one accessor.
-A-3.4 does not delete, weaken, or open-code that predicate. A-3.6 remains the
-deletion of its body and nothing else.
+A-3.4 does not delete, weaken, or open-code that predicate.
+
+> ⚠️ **This paragraph ended "A-3.6 remains the deletion of its body and nothing
+> else." A-3.6 (#1558) has landed and it was NOT that.** By owner ruling
+> (2026-08-12) the predicate **split**: `ieCandidacyVisibleAt` carries the
+> INSTANCE-candidacy axis and is unconditionally `True` (graph-global — this is
+> where A-3's C4/I2 claim is cashed), while `declEnvVisibleAt` **keeps its ordinal
+> body** for every NAME-scoping reader (the alias table, the ctor overlay pool, the
+> field-owner multimap, the data param-kind table, and both `CE` lookups). One
+> deletion would have applied an instance-candidacy licence to five structurally
+> different subjects, which `docs/spec/DICT-SEMANTICS.md`'s I5 boundary clause
+> forbids by name — and one of them (field owners) would have NARROWED acceptance,
+> which §5 R2's two exceptions, both widenings, cannot carry.
+> `ieRowsVisibleAt` (A-3.5b) is an `IE` reader that deliberately stayed on the name
+> axis: it answers a decl-time EXISTENCE question, not a candidacy one. Whether it
+> should also widen is open and unruled.
 
 ### 9.3 THE CONSTRAINT: `IE` is keyed by impl identity; the default-arm word namespace is NOT `IE`'s
 
@@ -1896,7 +1910,11 @@ stays accepted, and A-3.7 (not A-3.4) is where it is at risk. Do not tidy it.
 ### 9.8 Exit criteria, and the bar
 
 1. `IE` is built once, inside `buildDeclEnvs`, ordinal-tagged, every read through
-   `declEnvVisibleAt`; the filter is ON and A-3.6 remains one predicate body.
+   `declEnvVisibleAt`; the filter is ON. ⚠️ This item ended "and A-3.6 remains one
+   predicate body" — see the retraction in §9.2: A-3.6 (#1558) SPLIT the predicate,
+   so `IE`'s candidacy read is now `ieCandidacyVisibleAt` (graph-global) while its
+   decl-time existence read stays on `declEnvVisibleAt`. A-3.4's own exit criterion
+   is unaffected; only the sentence about A-3.6's future shape was wrong.
 2. Ratchet check 4 live, with its **four** positive controls **G/H/I/J**
    (§9.3 leg 2) executed and their results reported in the PR body — not reasoned
    about. **J is the load-bearing one**: delete the banner, and check 4 must FAIL

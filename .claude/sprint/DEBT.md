@@ -545,3 +545,613 @@ unchecked:  I did not run the ratchet's sibling gates, nor `make agent-doc-symbo
             A-3.7/B-2. ⚠️ RUN-021 independently reports that **A-3.7 gives `ieMethods` no reader
             either** (coherence compares `(iface, head)` only), so "re-point it at A-3.7" is not
             a free answer.
+
+---
+
+> 🚨 **LINE NUMBERS IN THE FOUR ROWS BELOW ARE DELIBERATELY ABSENT — cite by SYMBOL.**
+> These bites were written and measured while `compiler/types/typecheck.mdk` was quiescent
+> at `f3d7f747`; A-3.6 then inserted ~109 lines above line 4144 **while this report was
+> being written**, shifting every number by a non-uniform amount. Every anchor here is a
+> symbol name, greppable at whatever HEAD you read this. See the operational note at the
+> end of A5b-3's `unchecked:`.
+
+### A5b-1 — A-3.5b — `IE` gains a row-set read at an ordinal (`ieRowsVisibleAt`)
+sites:      `compiler/types/typecheck.mdk` — new `ieRowsVisibleAt` + header, immediately after
+            `ieSnapAt`. Three comment re-cuts forced by its arrival, each of which asserted a
+            fact this bite falsifies: the `ieUniverseAt` header (*"here is the only place
+            `declEnvVisibleAt` is applied to `IE`"*), the `ieSnapAt` header (*"The ONE place
+            …"*), and `checkBodyImpl`'s Module-arm note at the `moduleImplUniv` binding (*"the
+            ONE read accessor, the ONE place …"*). Plus the `ceLookupAt` header, which cited
+            `ieUniverseAt`/`ieSnapAt` as *"the one read path for `IE`"*.
+transform:  `filterList (r => declEnvVisibleAt cur (ieRowOrd r)) env.ieRows` — the exact peer of
+            `ceRowsVisibleAt`. As written it was routed through the ONE predicate on the stated
+            grounds that A-3.6 would still have a single body to delete.
+            🚩 **THAT GROUND WAS REMOVED BY A-3.6 WHILE THIS ROW WAS BEING WRITTEN**, and the
+            row is corrected rather than left standing: A-3.6 SPLIT the predicate by owner
+            ruling (RUN-010), moving `ieSnapAt` onto a new `ieCandidacyVisibleAt` (`True`) while
+            `ieRowsVisibleAt` stayed on `declEnvVisibleAt`. That is the RIGHT outcome for this
+            function — A-3.6's licence is I5's subject, `match(IE, C τ̄)`, and a decl-time
+            EXISTENCE query is not that — but it means the two `IE` reads no longer share a
+            predicate. `ieRowsVisibleAt`'s header was re-cut in place to say so and to retire the
+            "one body" framing; A-3.6's own `ieCandidacyVisibleAt` header states the same thing
+            from the other side and explicitly records that whether super-existence should see
+            the whole graph is **NOT ruled**.
+could move: **Nothing on its own — no caller until `A5b-3`.** What is NOT nothing is the arc's
+            bookkeeping: `declEnvVisibleAt` gained one more production reader than RUN-013's
+            enumeration of eight records. That enumeration is A-3.6's checklist for *"prove each
+            of the seven I left alone was left alone"*, so **A-3.6 must re-derive it rather than
+            reuse RUN-013's number** — this bite added a ninth path after that census was taken.
+            🚩 **OWED, and it is a real open question, not bookkeeping:** under the split,
+            super-existence is the ONE `IE` reader still ordinal-scoped. If instance candidacy is
+            graph-global (C4/I2) but the super-EXISTENCE gate is prefix-scoped, then an
+            `impl Sup T` in a topologically LATER module satisfies dispatch while still being
+            reported missing by `checkSuperImpls`. Nobody has ruled whether that is intended.
+            P0-B §4.3(4) asks for a fixture pinning exactly this shape and **it was not written**
+            (see `unchecked:` in A5b-3).
+unchecked:  Allocation was not measured. The function allocates a fresh list per call where the
+            old code allocated nothing (`anyList` over a decl list is a pure traversal) — a
+            constant-factor alloc increase in a GC-bound stage, which `perf_scaling`'s
+            growth-ratio grading is structurally blind to (`compiler/AGENTS.md`, "the exception
+            that IS one"). It is bound ONCE per whole-module check, so it is O(rows) per check
+            and not per (impl × super) — the shape A-3.4 PR2 was caught for. §5 defers
+            `perf_scaling`.
+
+### A5b-2 — A-3.5b — the Flat `ImplEnv` (`flatImplEnvOf`)
+sites:      `compiler/types/typecheck.mdk` — new `flatImplEnvOf` + header, immediately after
+            `flatClassEnvOf`.
+transform:  `buildImplEnv [declEnvModule 0 "" decls]` — the exact peer of `flatClassEnvOf`.
+            **The Flat arm, answered explicitly:** `buildDeclEnvs` runs only at the two
+            Module-mode driver entries, so `driverState.declEnvsRef.deImpls` is `emptyImplEnv` on
+            every flat path; `A5b-4` therefore passes this, never `declEnvsRef`.
+could move: **Nothing on its own — no caller until `A5b-4`.** Recorded anyway because it INVERTS
+            the sibling hazard and a reader will assume otherwise: reading the empty envelope
+            here would NOT be a silent accept. A miss in the super-EXISTENCE query makes
+            `superImplExists` return `False`, which REPORTS a missing superinterface — so the
+            Flat failure mode is a false REJECT of every `impl Sub T` on `medaka check <one
+            file>`: loud, but wrong. (The silent-accept direction lives in `A5b-3`'s *other*
+            lookup.) The header states this rather than copying `flatClassEnvOf`'s wording.
+unchecked:  Not measured: `buildImplEnv` over the flat `prog` is a second whole-program fold
+            beside `flatClassEnvOf`'s, on every flat `check`/`run`. Flat `prog` on the seeded
+            entries is `coreProg ++ userProg`, i.e. the whole prelude, so this is a
+            per-invocation constant, not per-module. No alloc A/B was run (§5).
+
+### A5b-3 — A-3.5b — relocate both `T-MISSING-SUPER-IMPL` lookups onto stage K
+sites:      `compiler/types/typecheck.mdk` — `checkSuperImpls` (+ header), `superImplMsgsOf`
+            (+ header), `superMsgFor`, `superImplExists` (+ header), and `implMatchesSuper` →
+            renamed **`implRowMatchesSuper`** (+ header).
+            `ifaceSupersOf` is READ-unchanged and **NOT deleted**.
+transform:  Lookup 1 (supers): `ifaceSupersOf allDecls iface` → `ceLookupAt (regKeyOfTab
+            (ifaceTabKey implOrigin iface)) cur ce`, taking `(ceRowTyparams r, ceRowSupers r)`.
+            Occurrence mint — `implOrigin` destructured beside `iface` in one record pattern, the
+            `implCompletenessMsgsOfMap` discipline. Lookup 2 (existence): a scan of `allDecls`
+            whose iface test was the bare `iface == superName` → a scan of the pre-bound visible
+            `List ImplRow`, testing each row's OWN `IfaceRef` against the super's `superOrigin`
+            key.
+            **The three non-negotiables, each verified then honoured:**
+            (1) `ifaceSupersOf` SURVIVES. Caller set RE-DERIVED (`grep -rn ifaceSupersOf
+            --include=*.mdk .`): four code sites outside this check — `:8822` (constraint
+            solving), `:11270` (`directSupers`, reading `superDeclsRef`), `:24365`
+            (`censusSuperSlotsOf`), `:24395` (`censusSuperSlotsVecOf`) — plus its own recursion
+            and one fixture comment. Matches P0-B's four exactly, at shifted lines. Only
+            `superImplMsgsOf`'s use was re-pointed.
+            (2) `tyMatchesAst` KEPT, `ImplUniverse` NOT used. `ImplRow`'s 4th position is
+            `List Ty` (AST), so the predicate applies verbatim; `ieRowsVisibleAt` exists precisely
+            so this check need not go through `ieUniverseAt`, whose `Mono`/`matchStep` matcher
+            would be a second unbudgeted acceptance delta.
+            (3) IDENTITY LEG ONLY. The query reads `ieRows` and tests each row's `IfaceRef`; it
+            never looks the super's key up in `ieConcrete`/`ieHeadless`, whose `oblIfaceKeys` mint
+            adds the bare-spelling compatibility leg #1438 rides on. Reading a bucket would have
+            rebuilt that collapse in the new substrate.
+            Perf: `ieRowsVisibleAt cur ie` is bound ONCE in `checkSuperImpls` and threaded; it is
+            never called inside `superMsgFor`. `implRowMatchesSuper` tests the bare NAME first and
+            the IDENTITY key second — bare-name equality is a NECESSARY condition for key equality
+            (`tabKeyOf` puts the same name into both the `TkIdent` and the `TkBare` arm), so the
+            gate is sound and it bounds `ifaceTabKey`'s per-row allocation to the set the OLD bare
+            scan already let through. The DECIDING test is still the identity compare; the name
+            test decides nothing on its own.
+could move: 1. **🚨 The unit's primary hazard, unchanged and NOT eliminated: lookup 1's miss arm
+               is an ABSTENTION.** A `ceLookupAt` miss yields `[]` — no diagnostic — where the
+               bare scan found the interface by spelling regardless. `OriginUnresolved` is a legal
+               inhabitant, so this is not hypothetical. **I deliberately did NOT make it fail
+               loud** — see `unchecked:`. The tripwires are the two measured baselines below, and
+               an identity miss turns both GREEN, which is the direction that matters.
+            2. **Same-spelled interfaces, both directions** (P0-B §4.3(2), now live): (a) a super
+               requirement satisfied today by an impl of a *different, same-spelled* interface now
+               correctly REJECTS — a NEW rejection on programs that compile today, hand-derivable
+               but with no fixture; (b) `ifaceSupersOf`'s first match could return the wrong
+               interface's `supers` list entirely, so the SET of supers checked can change.
+            3. **Population.** Lookup 2's candidate set moves from `allDecls` (Module:
+               `accAll ++ accData ++ prog`) to IE's rows at `cur`. **OWED and not closed here** —
+               see `unchecked:`.
+            4. **Message and ORDER unchanged by construction.** Iteration still walks `cohDecls`
+               (`userDecls`) in the same order, `missingSuperImplMsg` is untouched, and
+               `runFinalChecks`' call order (coherence → cycles → phantom → super-impls) is
+               unmoved, so no diagnostic re-ranks against another family.
+            MEASURED, before and after, `MEDAKA_STRICT=1`, exit codes read from a file and never
+            from a pipe — all five baselines byte-identical across the change, message AND
+            location: flat local `T-INCOMPLETE-IMPL` (exit 1, `'impl Loc Bar' … 'lf'`); flat
+            prelude-interface (exit 1, `'impl Eq Foo' … 'eq'`); flat `T-MISSING-SUPER-IMPL`
+            (exit 1 at `10:9`); 2-module `T-MISSING-SUPER-IMPL` on `check` AND `run` (exit 1 at
+            `main.mdk:6:9` both — ONE observation of a typecheck-stage change, not two); 2-module
+            Module-arm completeness (exit 1, `missing method 'lg'` at `7:15`).
+            POSITIVE CONTROLS, both exit 0 after the change: flat `impl Sup Bar` + `impl Sub Bar`
+            accepted; and a 2-module graph where the satisfying `impl Sup Zed` lives in the
+            IMPORTED module and is **not** `export`-marked — the property the `pickSchemes`
+            header makes load-bearing (*"WS-1a fix: every impl in scope, EXPORT OR NOT"*) —
+            accepted on `check` and `run`.
+unchecked:  🚩 **DISAGREEMENT WITH THE BRIEF, reported rather than silently resolved.** The brief
+            states *"Every miss path must fail closed and loud, never to an empty result."* I did
+            not do that for lookup 1. Making it loud is a NEW rejection class — an acceptance
+            NARROWING — and the standing argument in `declEnvVisibleAt`'s own header block (R2's
+            two exceptions are both WIDENINGS carried by a could-not-pass-before fixture;
+            `grep -n 'narrowing cannot meet that bar'`) says that needs a licence nobody has
+            issued. Both sibling relocations kept
+            the abstention: A-3.5c's `ifaceDfsCycleOneSuper` (`None => []`) and A-3.5a's
+            `implCompletenessMsgsOfMap` (`None => []`), and `ifaceSupersOf`'s own pre-existing
+            `None` arm did too. **If the owner wants fail-loud, it should be ruled for all three
+            at once, not smuggled in here.** Lookup 2's miss direction is already loud (a miss ⇒
+            report missing), so only lookup 1 is at issue.
+            🚩 **The `DL` population equality is OWED and I did not measure it** (P0-B §4.3(3)):
+            is IE's visible row set at `cur` the same impl SET as `accAll ++ accData ++ prog`?
+            One necessary half was DERIVED rather than assumed, because the `pickSchemes` WS-1a
+            header makes it load-bearing: `buildImplEnvGo` reads `m.demDecls` — the module's FULL
+            decl list, not `demPubDecls` (`declEnvModule`) — so non-`export` impls reach IE, and the
+            2-module positive control corroborates it end-to-end. The remaining half — that no
+            impl in `accAll ++ accData ++ prog` is MISSING from IE at `cur` — is a measurement of
+            A-3.4 PR2's shape and is not done. Note the asymmetry: the baselines are tripwires for
+            a WIDENING (a wider set silences a rejection); a NARROWING would keep them red and is
+            unpinned.
+            🚩 **`runFinalChecks`' `cycDecls` parameter is now DEAD** — I left it as `_cycDecls`
+            rather than removing it, to avoid deleting the subject of `checkInterfaceCycles`'
+            root-set derivation and to keep the diff minimal. Consequence: the Module caller still
+            computes `accAll ++ accData ++ prog` for a parameter nobody reads. A later unit can
+            retire both; recorded so it is not mistaken for a live population.
+            No gate beyond `registry_keying_ratchet.sh` and `check-self` was run (§5). Snapshot
+            and selfproc LEG A are expected red for the run; `ieRowsVisibleAt`, `flatImplEnvOf`
+            and `implRowMatchesSuper` are three ADDED bindings, `implMatchesSuper` one DELETED,
+            and four schemes RE-TYPED — so the LEG A delta will be neither additive-only nor
+            pure-deletion.
+            🚩 **P0-B §4.3(4)'s A-3.6 TRIPWIRE FIXTURE WAS NOT WRITTEN** — a fixture asserting
+            that a topologically LATER impl still does NOT satisfy a super requirement. #1557's
+            own bar asks for it and it is now MORE load-bearing than when it was specified,
+            because A-3.6 has since split the predicate and left this the only ordinal-scoped
+            `IE` read (see A5b-1's `could move:`). Construction warning, RELAYED from #1112's
+            2026-08-10 comment and reportedly worth two agents' false nulls: the goal must be
+            elaborated in a module topologically EARLIER than the impl's — a fixture whose goal
+            lives in `main` cannot discriminate, because `main` is always last.
+            🚨 **OPERATIONAL — the measurements above are clean, but only just, and the
+            provenance is worth recording.** The brief for this unit stated *"You are the ONLY
+            agent live — the worktree is quiescent and yours alone."* That was already false, or
+            became false during the unit: HEAD is `f3d7f747` *"switch to max-throughput posture;
+            whole remaining stage in flight"*, and while these rows were being written `ps`
+            showed a concurrent `make medaka`, a concurrent `diff_compiler_must_fail.sh`, an
+            untracked `test/must_fail_fixtures/1438-…` (A-3.7's pin, RUN-025) and A-3.6's
+            uncommitted predicate split in this same file. **Everything measured in this unit —
+            the build, all five baselines, both positive controls and the ratchet — was taken
+            BEFORE those edits reached disk**, established not by assumption but by a line-anchor
+            grep taken after the ratchet run that still showed the pre-split layout. Nothing
+            after that point was re-measured, deliberately: RUN-033 records that a mid-edit tree
+            reported five phantom drains. **This is the fourth contaminated-scheduling event of
+            the run** (RUN-028, RUN-032, RUN-033, this) and the first where an implementer's
+            brief actively asserted quiescence that did not hold.
+
+### A5b-4 — A-3.5b — thread the `ImplEnv` through `runFinalChecks` and its three call sites
+sites:      `compiler/types/typecheck.mdk` — `runFinalChecks` (signature, body and header);
+            callers `checkToLines`, `seedAndCheckSplit`, `checkModuleFullDiags`.
+transform:  One more parameter, `ImplEnv`, placed after `cycCe` and before `cur`.
+            **Which env each caller passes, and why it is the peer of what it replaced:**
+            `checkToLines` and `seedAndCheckSplit` pass `flatImplEnvOf` of *exactly the list they
+            already pass as `cycDecls`* (`prog` in both) — the same list the super-existence scan
+            used to be handed, so the population question is *"does IE over that list equal that
+            list"*, which is `A5b-3`'s owed measurement and not a new one.
+            `checkModuleFullDiags` passes the whole-graph `declEnvsHere.deImpls` at `ordHere`;
+            both were already bound at that site, so nothing new is derived and the ordinal is
+            the SAME key `ceHere` and `moduleImplUniv` (`checkBodyImpl`) read at.
+            `checkSuperImpls` is handed `cycCe`, **not** `ownCe`: `cycCe` is the CE peer of
+            `cycDecls`, the list the check used to read. On Module both are `ceHere`; on the split
+            Flat entry they genuinely differ (`flatClassEnvOf userDecls` vs `flatClassEnvOf prog`)
+            and the whole-universe one is the correct choice.
+could move: **Nothing from the plumbing itself** — a parameter added and passed. The behavioural
+            content is entirely `A5b-3`'s. Two things that COULD have moved and were checked
+            rather than assumed: the call ORDER inside `runFinalChecks` is untouched (RUN-021 and
+            the site's own comment make it load-bearing), and no caller was given an env built
+            from a different list than the one it already passed as `cycDecls`.
+unchecked:  ⚠️ This bite touches the exact three call sites A-3.5c last edited. The region had NOT
+            changed under me — all three were where A-3.5c left them, with A-3.5c's comments
+            intact — so §4's STOP-and-report rule was not triggered. The caller set is DERIVED:
+            `grep -rn runFinalChecks --include=*.mdk .` → exactly three call sites, all in
+            `typecheck.mdk` (in `checkToLines`, `seedAndCheckSplit` and `checkModuleFullDiags`);
+            every other hit is a comment. A caller
+            reached through a re-export was not separately excluded beyond that grep and
+            `check-self`.
+
+### 3.7-0 — A-3.7 — author the missing #1438 pin, and observe it REPRO before the widening
+sites:      `test/must_fail_fixtures/1438-same-spelled-interfaces-collapse-in-coherence/`
+            (new: `amod.mdk`, `zmod.mdk`, `main.mdk`, `omod.mdk`, `control.mdk`, `claim.txt`)
+transform:  new must-fail row. `amod` and `zmod` are two UNRELATED modules (no import edge)
+            that each declare their OWN interface spelled `Same` — different methods — and each
+            `impl Same Int`. `main.mdk` puts both in one graph and uses one method from each.
+            Pinned: `check-json main.mdk` / `exit: 1` / `diag: T-CONFLICTING-IMPL
+            None:None-None:None Conflicting ...`. Control: `check-json control.mdk` — the SAME
+            program with the second module's interface spelled `Other`, measured exit 0 with an
+            empty diagnostic list.
+            RUN-025's ORDERING WAS HONOURED AND MEASURED, not asserted:
+              * pin authored, then `sh test/diff_compiler_must_fail.sh` on the pre-3.7-4 binary
+                (built from `f66198c2`) → **`REPRO 1438-same-spelled-interfaces-collapse-in-coherence`**;
+              * 3.7-4 landed and the tree rebuilt → **`DRAINED 1438-... (issue #1438)`**.
+            `diag:` rather than the default `diag-code:` is DELIBERATE and derived: this
+            diagnostic is pushed by the cross-module arm, which drops its span on purpose
+            (#414), so the JSON `range` is `null` and `diag-code:` would degenerate to the bare
+            code — asserting nothing about WHICH conflict was found. The message is where the
+            claim lives: it names the interface and BOTH owning modules.
+could move: **The pin's own verdict, by design — and that is the deliverable, not a break.**
+            Beyond that: nothing executable. It adds one directory to a corpus whose member set
+            is `ls test/must_fail_fixtures/` (the gate encodes no table and no count), so it
+            enrols in exactly one consumer — `test/diff_compiler_must_fail.sh`, which runs in
+            the `soundness` job, not a gate shard.
+            ⚠️ `diag:` pins the full message, so an unrelated error-quality PR that rewords
+            `cohCrossModuleMsg` drains this row SPURIOUSLY. The trade is stated in `claim.txt`
+            with the instruction to re-derive rather than delete.
+            🚨 **DO NOT CLOSE #1438 on this drain.** It drains only #1438's *coherence reach*;
+            the obligation channel's bare compatibility leg survives, is pinned separately by
+            fixture 1514, and belongs to #1482/#1507. Written into `claim.txt`'s `why-note:` so
+            the instruction travels with the fixture rather than only with this ledger.
+unchecked:  The suite was run against a NON-QUIESCENT tree — Lane B and A-3.6 both held
+            uncommitted edits throughout — so the run's OTHER rows are contaminated in exactly
+            the RUN-032/RUN-033 shape: 5–6 unrelated rows reported DRAINED, and the count was
+            UNSTABLE across two runs one minute apart (5, then 6, with my row REPRO in both).
+            **Those are not mine and must not be acted on**; they need re-derivation on a
+            quiescent tree. My row's verdict is unaffected by that instability — it read REPRO
+            in both pre-fix runs and DRAINED in the post-fix run, which is the only signal
+            claimed here.
+            Not verified: that `run`'s exit/message stay in step with `check`'s after 3.7-4
+            (they did before — measured, exit 1, identical text). The pin grades `check-json`.
+
+### 3.7-3 — A-3.7 — `cohSameIface`, the acceptance-direction interface identity predicate
+sites:      `compiler/types/typecheck.mdk` — new `cohSameIface : IfaceRef -> IfaceRef -> Bool`
+            immediately above `cohScanInner`, with a ~24-line derivation comment.
+transform:  `cohSameIface a b = sameTyConHead a.irName a.irOrigin b.irName b.irOrigin`.
+            The comment states WHY `ifaceIdMatches` is wrong here, because that is the function
+            a reader reaches for: the two are exact inverses — `sameTyConHead` lets an ABSENT
+            origin match anything, `ifaceIdMatches` (`a != "" && a == b`) lets absence match
+            nothing, not even itself. Coherence answers an ACCEPTANCE question, so absence must
+            make no claim; `ifaceIdMatches` in this position would convert every
+            unstamped-origin conflict into a SILENT ACCEPT — a severity increase.
+could move: **Nothing on its own** — at the moment of this edit it had no reader; it becomes
+            live in 3.7-4, and 3.7-4's row owns the acceptance delta. The one way this bite
+            alone could move behaviour is by picking the wrong predicate, which is precisely
+            what its comment exists to prevent a later editor from "fixing".
+unchecked:  `sameTyConHead`'s own semantics were read (`compiler/frontend/ast.mdk`, the
+            `n1 == n2 && not (tyConIdsConflict o1 o2)` body and `tyConIdsConflict`'s
+            absence-makes-no-claim `_ => False` arm) but not re-tested in isolation; it is a
+            pre-existing, already-exercised predicate (coherence's HEAD half has routed through
+            it via `cohGoR`'s `TCon` arm since A-2.10).
+
+### 3.7-4 — A-3.7 — 🚨 THE ACCEPTANCE WIDENING: `CohImpl` carries `IfaceRef`, compared by identity
+sites:      `compiler/types/typecheck.mdk`, six sites, all in the `coh*` block:
+            `CohImpl`'s declaration (1st field `String` → `IfaceRef`, + a `#1559` header note);
+            `cohImplsOfMid` (builds the `IfaceRef` from `implOrigin`, destructured in the SAME
+            record pattern as `iface` — the OCCURRENCE MINT discipline, identical to the
+            expression `implDeclFact` uses); `cohScanInner` (`if1 == if2` → `cohSameIface if1
+            if2`); `cohImplIface` (return type → `IfaceRef`) plus a new `cohImplIfaceName`
+            projection; `cohHardMsg` ×2 and `cohClassify` ×1 now read `cohImplIfaceName`.
+            The 33 `coh*` judgment functions are UNTOUCHED and no diagnostic wording moved —
+            `cohOverlapMsg` / `cohIncomparableMsg` / `cohCrossModuleMsg` keep their `String`
+            parameter, which is why `cohImplIfaceName` exists rather than `.irName` inline.
+            **Landed ALONE, with its own build + `check-self` checkpoint**, per RUN-021.
+transform:  the interface half of coherence's key stops being a bare spelling and becomes an
+            identity compared with `sameTyConHead`.
+could move: **YES — a DELIBERATE acceptance WIDENING, and it is this unit's headline.**
+            * Two same-spelled but DISTINCT interfaces impl'd at a shared head are no longer a
+              conflict. MEASURED, on the pin: `check main.mdk` **exit 1 → exit 0**.
+            * The widening is confined to CROSS-MODULE pairs, and that is DERIVED, not argued:
+              a single module cannot declare two interfaces of one name — `Duplicate interface:
+              Same`, exit 1, measured first-hand on a single-file probe, and it is a
+              resolve-side `DuplicateDefinition`. So no single-file program's acceptance moves.
+            * Fail-capability CHECKED rather than assumed — a widening that turned the check off
+              entirely would produce the same green on the pin. A GENUINE cross-module conflict
+              (one interface declared once in `imod`, impl'd at `Int` by two importers) still
+              rejects at exit 1 with byte-identical wording: `Conflicting ...impl One...
+              Defined in amod and zmod`.
+            * The five HARD-arm coverage fixtures P0-D listed as OWED were `ls`-verified AND
+              run; all five behave as before: `typecheck_error_fixtures/dup_impl.mdk` exit 1,
+              `overlapping_impls.mdk` exit 1, `dict_fixtures/s6-c1-duplicate-heads-rejected.mdk`
+              exit 1, `check_json_fixtures/conflicting_impl_duplicate.mdk` exit 1, all with
+              unchanged `Overlapping impls of …` wording; and
+              `lint_fixtures/derivable_needs_datadecl.mdk` exit 0.
+            * BASELINE HELD: a user `impl Eq Int` α-equal to the prelude's is **exit 0 on Flat
+              AND on the Module path**, before and after (measured both times).
+            * Direction check against ratified decisions: most-specific-wins is untouched
+              (`cohClassify`'s first two guards), F-3d's (a)=warning ruling is untouched (the
+              hard/soft split is untouched), and this MINTS no identity — it CONSUMES
+              `implOrigin`, which resolve stamps.
+            * P0-D's OWED "does any Flat path stamp `implOrigin`" is DISCHARGED, and the answer
+              is YES-but-inert: `checkProgramSeededSplit` calls `stampFlatTyOrigins` on both the
+              prelude and the user program. Its scope (`flatTyOriginScope coreDecls`) covers
+              builtins and the PRELUDE's types/interfaces only — deliberately no `prog` term —
+              so a flat program's OWN interface stays `OriginUnresolved` and a prelude interface
+              is `mod:core`. Either way both sides of any flat pair carry the SAME origin, and
+              `sameTyConHead` degenerates to today's name equality. Flat is behaviourally inert.
+unchecked:  * **No goldens, snapshots or LEG A schemes were re-cut or inspected** (§5: bless
+              zero). `CohImpl`'s constructor arity is unchanged but its 1st field's TYPE moved,
+              and `cohImplIface`'s scheme moved (`-> String` → `-> IfaceRef`), so the selfproc
+              LEG A `types.typecheck` golden WILL move, and `cohImplIfaceName`/`cohSameIface`
+              are NEW bindings in it. Expected LEG A delta from bites 3.7-3+3.7-4: 2 additions
+              (`cohSameIface`, `cohImplIfaceName`) and 1 re-type (`cohImplIface`). Any OTHER
+              surviving binding whose scheme moved is a real finding this bite does not excuse.
+            * The `run` and `build` engines were not re-measured after the fix. `run` shared the
+              defect before (measured, exit 1, same message); they share the front end, so the
+              widening should reach both, but that is an inference, not a measurement.
+            * `cohClassify`'s 🚨 CARRY-FORWARD FOR A-3 comment is deliberately LEFT IN PLACE.
+              It describes the input WIDENING to the global `IE` (bite 3.7-6), which did NOT
+              land — see 3.7-STOPPED. Discharging it belongs to whoever lands 3.7-6.
+            * No permutation differential was run. P0-D specifies one for 3.7-8 (scan order);
+              this bite changes no order, but the two same-spelled interfaces' relative position
+              in the scan was not varied.
+
+### 3.7-STOPPED — A-3.7 — bites 3.7-1/2/5/6/7/8/9/10 NOT landed; region contention + a dead-code bar
+sites:      none — no edit made.
+transform:  none.
+could move: **nothing, because nothing was written.** Recorded so the unit's residue is not
+            mistaken for completeness: A-3.7 shipped its pin (3.7-0), its predicate (3.7-3) and
+            its acceptance change (3.7-4). The IE INPUT RELOCATION did not ship. Coherence still
+            reads `cohCollectImpls` / `cohCollectModuleImpls` over decl lists.
+            Reasons, per bite:
+            * **3.7-2 was already done by Lane B.** `flatImplEnvOf : List Decl -> ImplEnv =
+              buildImplEnv [declEnvModule 0 "" decls]` exists beside `flatClassEnvOf`, with
+              A-3.5b's own header. Duplicating it was declined; the sub-orchestrator should
+              re-attribute the bite rather than expect it in A-3.7's diff.
+            * **3.7-7 sits inside a region another lane had ALREADY re-signatured, uncommitted.**
+              Lane B changed `runFinalChecks`' arity and all three of its call sites while I was
+              live. §4's STOP-and-report rule applies: I did not adapt on top of a half-applied
+              edit. 3.7-5/3.7-6 exist only to feed 3.7-7, and 3.7-9 deletes the fallback 3.7-7
+              replaces, so the whole tail serialises behind it.
+            * **3.7-1/3.7-5/3.7-6 were declined as READERLESS ADDITIONS.** Landing them without
+              3.7-7 puts unreachable helpers in the tree — the shape RUN-031 refused F-3 for,
+              and a `rule-dead-code` risk besides.
+            * **3.7-10 (ledger updates) is premature.** Its edits assert relocations that did
+              not happen. The ONE claim it could have landed honestly — the ratchet's `deImpls`
+              row *"`ieInst` is read by no judgment"* — is STILL TRUE, because `instRefMid`
+              acquires its first judgment reader in 3.7-5, which did not land.
+            ⚠️ **3.7-5's `cohSoftInScope` hazard is therefore STILL ARMED and still owed.**
+              `cohSoftInScope "" "" = True` is untouched, which is correct while every
+              per-module mid is still `""`. The moment 3.7-5 lands and Module-arm rows carry
+              real mids, every intra-module `W-INCOMPARABLE-IMPLS` is silently dropped. That is
+              diagnostic-only and invisible to every value golden. Re-cut it sweep-scoped.
+unchecked:  A-3.6 was concurrently editing the IE block (`ieSnapAt`, `declEnvVisibleAt`, the IE
+            doctests) throughout. 3.7-1's accessors would have landed in that exact region.
+            Their eventual implementer must re-derive `ieRowsAll`/`ieRowsOwnedBy` against
+            whatever A-3.6 leaves, and must write `ieRowOrd r == cur` — NOT `declEnvVisibleAt
+            cur (ieRowOrd r)`, which is the prefix, a different set, and would give A-3.6's
+            predicate another reader.
+            🚩 **CONFIRMED UNCHANGED, per RUN-021's warning not to chase it:** `sh
+            test/registry_keying_ratchet.sh` → PASS. A-3.7 shrinks `driver_allowed` by ZERO
+            rows and `coherenceUserDecls` does not retire. Nothing in this unit's diff was
+            expected to move that signal and nothing did.
+
+### C-1 — A-3.6 — the seed chain's own-row exclusion, asserted as fail-capable doctests
+sites:      `compiler/types/typecheck.mdk` — 4 doctests + 2 fixtures (`deSeedRowN`,
+            `deSeedChainProbe`) added after `deKindRow1`; a ~40-line header stating the
+            fail-capability argument. No code path changed.
+transform:  `declEnvSeedChain` stamps row k's id with the accumulators as they stand BEFORE
+            k is folded in, so k's seed excludes k. That was asserted only in prose. Now a
+            TWO-row chain (`deKindRow0` id "m" ord 0, `deSeedRowN` id "n" ord 1, same decls)
+            pins: seed("m") = 0 kinds / no owners; seed("n") = 3 kinds / `["Pt"]` — one "Pt",
+            not two. Two rows with distinct ids is required: a one-row chain cannot
+            discriminate, since prefix and final accumulator coincide at the only row.
+could move: **Nothing — additive doctests over existing fixtures, zero production code
+            touched.** `deSeedRowN`/`deSeedChainProbe` are new top-level bindings, so the
+            selfproc LEG A golden gains two ADDITIONS (expected debt, do not bless).
+            The doctests themselves are new assertions and can only fail on a genuine break.
+unchecked:  Nothing material. **Fail-capability was MEASURED, not argued**: `declEnvSeedChain`
+            was temporarily edited to stamp the POST-fold accumulators (the own-row-inclusive
+            shape the ratchet's *"hand every row the FINAL accumulator"* instruction produces),
+            and `medaka test compiler/types/typecheck.mdk` went 52/52 → 48/52 with **exactly
+            these four lines failing and no others**. That second half is the load-bearing
+            part: it shows C-1 added coverage that did not already exist anywhere in the file,
+            rather than duplicating an existing assertion. The edit was reverted and 52/52
+            restored (verified by re-run, not by assumption).
+
+### C-2 — A-3.6 — NOT PERFORMED. Dissolved by RUN-010; performing it was the ruled-out option
+sites:      none.
+transform:  none. P0-C §4 cut C-2 as "`declEnvSeedChain`: whole graph MINUS own row", gated on
+            ruling (A). RUN-010 is ruling (B) — SPLIT — and P0-C's own text says "under ruling
+            (B) this bite does not exist". The seeds feed `dataParamKindsRef` and
+            `fieldOwnersRef`, both NAME-scoping, which RUN-010 leaves on the ordinal filter.
+            Doing it anyway would have widened the field-owner population — the acceptance
+            NARROWING (`typecheck.mdk`'s MEASURED `T-AMBIGUOUS-FIELD` paragraph) that the owner
+            ruling was taken specifically to avoid.
+could move: **Nothing — no edit made.** Recorded as a row rather than omitted because a
+            silently-skipped bite and a deliberately-declined one are indistinguishable from
+            the diff, and the testing round needs to know this was a decision.
+unchecked:  n/a.
+
+### C-3 — A-3.6 — the candidacy flip: `ieCandidacyVisibleAt`, instance axis only
+sites:      `compiler/types/typecheck.mdk` — new `ieCandidacyVisibleAt : Int -> Int -> Bool`
+            (`_ _ = True`) beside `declEnvVisibleAt`; `ieSnapAt`'s guard re-pointed to it;
+            the IE §9.7 doctest items 3 and 4 re-cut (2 expected values moved 0 → 1, one
+            now-vacuous duplicate line deleted); surrounding headers re-cut.
+transform:  `declEnvVisibleAt` KEEPS its ordinal body. Only the instance-candidacy read moves,
+            so `ieUniverseAt`/`ieSnapAt` now select the FINAL snapshot — the whole graph —
+            which is C4/I2. Parameters kept on both predicates so no call site moves.
+            Reachability discharged per RUN-031: `ieUniverseAt` has exactly ONE production
+            caller, `moduleImplUniv` in `checkBodyImpl`'s Module arm, feeding both the
+            end-of-body obligation universe and #1549's `residualUnivRef`. Not dead code.
+could move: **Per reader — the 8-path checklist, re-derived by grep at edit time, plus a 9th
+            that did not exist when RUN-013 enumerated them:**
+            1. `ieSnapAt` → `checkBodyImpl` — **FLIPPED.** Everything below is downstream.
+            2. `ceLookupAt` ← `checkGradedImplTys` — unchanged: still reads
+               `declEnvVisibleAt`, whose body I did not touch. No edit in its call chain.
+            3. `ceLookupAt` ← `ifaceDfsCycleOneSuper` — same, same reason.
+            4. `ceRowsVisibleAt` ← `checkInterfaceCycles` — same. (The duplicated-cycle-report
+               risk P0-C §2.5 raised does NOT arise: it was a consequence of widening CE,
+               which did not happen.)
+            5. `declEnvRowVisible` ← `overlayScanRows` — unchanged; reads
+               `declEnvVisibleTo` → `declEnvVisibleAt`, both bodies intact.
+            6. `declEnvRowVisible` ← `declEnvSeedChain` — unchanged; C-2 not performed.
+            7. `declEnvRowKindEntries` ← `declEnvSeedChain` — unchanged; C-2 not performed.
+            8. `aliasVisibleTo` ← `loadDataUniverse` — unchanged. Its own-row exclusion
+               (`adOrd != cur`) and attributed-alias drop (`not adAttrib`) are separate `&&`
+               terms and were not touched.
+            For 2–8 the argument is uniform and mechanical: each reaches the ordinal test
+            ONLY through `declEnvVisibleAt`, and `declEnvVisibleAt`'s body is byte-identical
+            to its pre-bite form (`grep 'entryOrd <= cur'` still matches it). No reader was
+            re-pointed except `ieSnapAt`.
+            9. 🚩 **`ieRowsVisibleAt` — a NINTH path, added by Lane B (A-3.5b) DURING this
+               unit and absent from RUN-013's enumeration.** It is an `IE` reader, so it is on
+               the instance axis by table, but it answers a DECL-TIME EXISTENCE question for
+               `checkSuperImpls`, not a candidacy question. **Left on `declEnvVisibleAt`** —
+               RUN-010's licence is I5's subject, `match(IE, C τ̄)`, and that is not this.
+               ⚠️ **Whether super-existence should also see the whole graph is UNRULED and
+               nobody owns it.** It is now the only `IE` read that is ordinal-scoped, which is
+               a genuine asymmetry a reader will trip over.
+            **What actually moves, measured, not predicted:**
+            * `must_fail_fixtures/1564-import-order-decides-conditional-impl-candidacy`
+              **DRAINED** — attributed to this bite by single-variable revert (see unchecked).
+            * `must_fail_fixtures/1438-same-spelled-interfaces-collapse-in-coherence`
+              **DRAINED** — NOT attributed; see unchecked.
+            * `1072-overlap-xmod-bare-head-arm-order` **still REPROs**, and RUN-006's premise
+              that it must flip is **mechanistically wrong**: its claim names `KeyBuckets` /
+              `implEntryRouteWords` (`llvm_emit.mdk`), and `buildKeyTable : List Decl ->
+              KeyBuckets` is built from a decl list on the emitter path — a different
+              substrate from `IE`. A-3.6's flip cannot reach it. It was REPRO at RUN-033's
+              quiescent baseline and is REPRO now: unchanged, not worsened.
+            * Diagnostic-only changes invisible to every value golden: new/removed
+              exhaustiveness warnings via the overlay pool's downstream `seedCheckRun`, and
+              I5 classes (2) and (4) — new C1 ambiguity rejections, and rejections via an
+              unsatisfiable context from an interface the author never imported. **Both
+              unpinned in both directions.**
+            * `declEnvsOrdOf`'s `-1` fail-CLOSED sentinel is now **VACUOUS on this path** — an
+              unknown module id gains the whole graph instead of losing everything. It remains
+              live and fail-closed for the name axis. Commented at both sites, not tidied away.
+            * 🚨 **THE BIG ONE — THE WIDENING IS HALF LANDED AND THE SECOND HALF IS UNOWNED.**
+              On #1564's `main.mdk`, measured on the trunk binary:
+              `check` → **exit 0** (the R2 widening, correct); `run` → **exit 1, E-PANIC
+              "putStrLn: not a String"**; `build` → exit 0 and the binary **SEGFAULTS (139)**.
+              `control.mdk` is clean on all three (`wrap(int)`, exit 0). So typecheck's
+              CANDIDACY went graph-global while the EVIDENCE PLUMBING — dict construction and
+              route stamping for a site whose own module cannot name the impl — did not.
+              `nest` is generalized against an obligation discharged by an impl no dict
+              reaches. **Neither engine is silently wrong (eval panics, native faults, both
+              LOUD), so this is not S0** — but a compile-time diagnostic became a segfault,
+              and that is this bite's. It does not violate the loud→quiet rule; it does mean
+              **A-3.6 alone does not deliver a working program for the shape it now accepts.**
+              The correct end state is `main.mdk` behaving like `control.mdk`. This is in no
+              unit's bite list and is not A-3.7's (coherence). **Escalated, not absorbed.**
+unchecked:  🚨 **THE MUST-FAIL RUN WAS CONTAMINATED and must be re-derived on a quiescent
+            tree before anyone acts on the two drains — this is RUN-033's rule, exactly.**
+            Lane B held uncommitted edits to `typecheck.mdk` (`checkSuperImpls`,
+            `implMatchesSuper`, `ieRowsVisibleAt`) throughout; a third agent also modified the
+            file mid-session (several Edits reported "modified on disk since you last read
+            it"). Reading: `checked 99 fixtures: 97 reproduce, 2 DRAINED, 0 control-broke, 0
+            malformed`. Note the corpus is **99, not RUN-033's 98** — a fixture was added by
+            another lane during the run, so even the denominator is not the baseline's.
+            * **#1564's drain IS attributed to me and is NOT contaminated**, because it was
+              established by a single-variable revert rather than by the gate: `ieSnapAt`'s
+              guard was pointed back at `declEnvVisibleAt`, the compiler rebuilt, and `check
+              main.mdk` returned to **exit 1 with the identical original diagnostic**;
+              restoring `ieCandidacyVisibleAt` returned it to exit 0. Nothing else changed
+              between the two builds.
+            * **#1438's drain is NOT attributed.** I did not revert-test it and its mechanism
+              (coherence) is not obviously reachable from candidacy. RUN-021 verified that
+              fixture did not exist; it now does, so another lane authored it during this run.
+              ⚠️ **A newly-authored pin that reads DRAINED on its first run is either a real
+              early drain or a probe that never reproduced** — RUN-025's hazard. Its author
+              owes the discrimination; I am not it.
+            * ⚠️ **DO NOT CLOSE #1564 ON ITS DRAIN.** That row's `cmd:` is `check-json
+              main.mdk` / `exit: 1`, so it grades the CHECK arm ALONE. The run and build arms
+              were never pinned there and the harness is structurally blind to them — which is
+              why it reports a clean drain for what is measurably half a drain (see the 🚨
+              above). This is the "partial identity reads as done from any single table" shape.
+            NOT run, per §5: snapshot, selfproc LEG A, engines, perf_scaling, the differential
+            gates. **Zero goldens blessed.** Snapshot and LEG A are expected red.
+            **Perf:** no fold was introduced at any read site. `ieSnapAt` still SELECTS and
+            still allocates nothing; its walk was deliberately NOT "simplified" to `last`
+            despite the predicate now being constant, so the diff is one predicate name.
+            Not measured — `perf_scaling` is deferred — but the shape that has twice gone
+            quadratic here is structurally absent.
+
+### C-4 — A-3.6 — NOT PERFORMED (out of brief)
+sites:      none.
+transform:  none. The permutation differential needs a new `test/*.sh`, which needs a shard
+            pattern in `.github/workflows/ci.yml` or `diff_compiler_ci_shard_coverage.sh` reds
+            the merge queue. Explicitly excluded from this implementer's brief.
+could move: **Nothing — no edit made.** ⚠️ But its ABSENCE is load-bearing debt: it is the one
+            instrument that can see I5 class (3) — a silent answer change — without knowing
+            the right answer in advance, and class (3) is precisely what this run's deferred
+            posture cannot see. C-3's re-cut IE doctest item 3 is a weak in-source substitute:
+            it asserts the selected universe is INVARIANT in the reading ordinal, which is the
+            same property the permutation differential would test, but over one hand-built
+            two-module `ImplEnv` rather than over a real fixture corpus under permuted loader
+            order.
+unchecked:  n/a.
+
+### C-5 — A-3.6 — the comment re-cut: A-3.6 stops being future tense, and one instruction is retracted
+sites:      `compiler/types/typecheck.mdk` — 14 comment regions (anchored on strings, not line
+            numbers; the set was re-derived with `grep -n 'A-3\.6'` at edit time, since A-3.5a
+            had moved every line number in P0-C's list).
+            `test/registry_keying_ratchet.sh` — 7 substitutions across the `declEnvsRef`,
+            `deKindsBefore` and `demKindEntries` rows.
+            `compiler/TYPECHECK-TARGET-ARCHITECTURE.md` — §9.2 consequence paragraph and §9.8
+            exit criterion 1.
+transform:  Every "A-3.6 deletes this body" / "A-3.6 keeps its one-body deletion" / "A-3.6
+            still has a single body to delete" claim was re-cut to state what actually
+            happened: the predicate SPLIT, the instance axis flipped, the name axis did not.
+            Each retraction QUOTES the sentence it replaces rather than silently overwriting
+            it, so a reader who remembers the old claim can see it was retired deliberately.
+            🚨 **The highest-value edit is the retraction of a LIVE REGRESSION INSTRUCTION.**
+            `typecheck.mdk`'s `declEnvSeedChain` header and the ratchet's `deKindsBefore` row
+            both told A-3.6 to *"hand every row the FINAL accumulator"*. That destroys the
+            own-row exclusion the SAME rows call structural two sentences earlier (RUN-009).
+            Both now carry an explicit **DO NOT DO THIS**, both give the mechanism (doubled
+            owner key → `mangledHeadCandidates` reads the multimap RAW → singleton gate
+            becomes the give-up arm, live during inference), and both point at C-1's
+            `deSeedChainProbe` doctests as the tripwire.
+            PRESERVED as required: `declEnvVisibleTo`'s two separable conjuncts and the
+            publicity conjunct's migration to R; `aliasVisibleTo`'s conditions 2 and 3; the
+            zero-allocation contracts; the `-1` sentinel's NEW (vacuous-on-candidacy,
+            live-on-names) meaning.
+could move: **Nothing in behaviour — comments only, in `.mdk`, `.sh` and `.md`.** The `.mdk`
+            comment diff moves the **snapshot** golden (`test/snapshots/compiler/typecheck.md`)
+            and, because C-1 and C-3 add bindings, the **selfproc LEG A** golden. Both are
+            expected red for the run; **zero blessed**.
+            ⚠️ One real risk worth naming: a comment can only be verified by reading it, and I
+            re-cut 14 regions of prose asserting things about code I did not run. Each claim is
+            grounded in the same greps recorded under C-3's `could move:`, but this is the
+            unit's largest surface of unverifiable-by-gate assertion — which is what #1574 is
+            about, and this file is where #1574's fabrications happened.
+unchecked:  `sh test/registry_keying_ratchet.sh` → PASS after the ratchet edits (its rows are
+            prose fields inside a checked structure, so a malformed edit would have failed it).
+            `make docs-links` → PASS. `make agent-doc-symbols` → **FAIL, 1 dead symbol:
+            `universeIfaceRequiredRef` at `docs/spec/DICT-SEMANTICS.md:2517`. NOT MINE** — that
+            symbol was retired by Lane A (A-3.5a) and the doc was not re-cut with it. I did not
+            touch `DICT-SEMANTICS.md`. Owed to Lane A or the ledger-repair pass.
+            `#829` respected: no interior record comment was added to any record; the two
+            records in this region (`DeclEnvModule`, `DeclEnvs`) already carry their
+            deliberate load-bearing interior comments and were not touched.
+            `medaka fmt --write` → "already formatted"; `medaka lint` → rc 0 (both re-run after
+            the final edit; note `lint | grep` reports grep's status, so rc was read direct).
+
+### R2 fixture — A-3.6 — the could-not-pass-before fixture RUN-006 requires
+sites:      `test/r2_widening_fixtures/1558-a36-candidacy-graph-global/` — 5 `.mdk` files
+            (copied from #1564's verified-discriminating corpus) + `claim.txt`.
+transform:  Authored, NOT wired and NOT run as a gate — which is what RUN-006 asks for
+            ("even if it is only executed in the testing round"). `claim.txt` records the
+            measured before/after (`check main.mdk`: exit 1 with `T-NO-IMPL` → exit 0), the
+            control (`control.mdk`, two import lines swapped, clean both sides), the
+            single-variable revert that attributes it to A-3.6, and the 🚨 block recording
+            that `run` panics and `build` segfaults so the fixture cannot be read as proof the
+            widening is complete.
+could move: **Nothing.** Verified inert before leaving it: `grep -ln 'r2_widening_fixtures'
+            test/*.sh` → no hits, and `diff_compiler_snapshot_frontend.sh` enumerates its
+            corpus directories by NAME (`parse_fixtures`, `parse_only_fixtures`,
+            `comment_fixtures`, `positions_fixtures`, `diff_fixtures`) rather than walking
+            `test/`, so a new directory cannot silently enroll. That check was done because
+            adding a fixture directory is the shared-corpus trap.
+unchecked:  ⚠️ **It has ZERO consumers, which is the `deFieldOwnerIdents` anti-pattern** — a
+            table that is built, documented and read by nothing. Accepted deliberately here
+            because RUN-006 mandates authoring it and wiring it requires the new `test/*.sh` +
+            CI shard pattern that C-4 was dropped for. `claim.txt` states this as OWED item 1
+            rather than leaving it to be discovered. If the testing round decides an inert
+            directory is worse than none, deleting it costs nothing — but the measured
+            before/after and the attribution method should be preserved somewhere.

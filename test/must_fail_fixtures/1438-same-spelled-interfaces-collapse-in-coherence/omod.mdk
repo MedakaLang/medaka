@@ -1,0 +1,9 @@
+-- #1438 -- the CONTROL's second module. Byte-for-byte `zmod.mdk`'s shape with ONE
+-- thing varied: the interface is spelled `Other` instead of `Same`. Its method name
+-- differs too, but only because a method name cannot be shared across two interfaces
+-- in one graph -- the method spelling is not what is under test.
+export interface Other a where
+  baz : a -> Int
+
+export impl Other Int where
+  baz x = x

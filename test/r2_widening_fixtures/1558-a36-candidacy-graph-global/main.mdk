@@ -1,0 +1,12 @@
+-- Issue 1564 — ORDER 2 (the REJECTING order): `wrapimpl` is imported AFTER `nest`.
+--
+-- Identical to control.mdk except that the `nest` and `wrapimpl` import lines are
+-- SWAPPED. This order rejects at exit 1 with T-NO-IMPL pointing into nest.mdk.
+--
+-- ⚠️ Do NOT add or remove lines in nest.mdk — claim.txt pins the diagnostic's RANGE
+-- (0-based LSP 2:16-2:21), which is a position in THAT file, not in this one.
+import iface.{Tag, tagOf, Wrap}
+import nest.{nest}
+import wrapimpl
+
+main = println (nest 5)

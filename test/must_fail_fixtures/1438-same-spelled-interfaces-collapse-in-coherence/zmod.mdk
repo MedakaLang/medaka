@@ -1,0 +1,10 @@
+-- #1438 -- the other unrelated module. A DIFFERENT interface that merely shares the
+-- spelling `Same`, with a DIFFERENT method `bar`, impl'd at the same head `Int`.
+-- The shared head is load-bearing: coherence's HEAD half is already identity-aware
+-- (`cohGoR`'s `TCon` arm routes through `sameTyConHead`, A-2.10), so two distinct
+-- module-local heads would mask the interface-half collapse entirely.
+export interface Same a where
+  bar : a -> Int
+
+export impl Same Int where
+  bar x = x
