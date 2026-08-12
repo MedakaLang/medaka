@@ -312,6 +312,8 @@ data WasmEmit =
       stringSegments : Ref (List (Int, List Int)),
       nextStringSegmentId : Ref Int,
       implSelfCtx : Ref ImplSelfCtx,
+      emittedDefaultNames : Ref (OrdMap Unit),
+      defaultDefinitions : Ref (List (List String)),
     }
 
 freshWasmEmit : WGapMode -> WasmEmit
@@ -322,6 +324,8 @@ freshWasmEmit mode = WasmEmit {
   stringSegments = Ref [],
   nextStringSegmentId = Ref 0,
   implSelfCtx = Ref ImplSelfOff,
+  emittedDefaultNames = Ref omEmpty,
+  defaultDefinitions = Ref [],
 }
 
 -- Declaration-derived semantic input. Raw lists retain table order where a full
@@ -1066,9 +1070,6 @@ emitProgramWith emit input (CProgram groups ctorArs ctorTypes impls) =
   let _ = setRef liftedFnsRef []
   let _ = setRef liftedNamesRef []
   let _ = setRef liftedNamesSetW omEmpty
-  let _ = setRef emittedDefaultsWRef []
-  let _ = setRef emittedDefaultsSetW omEmpty
-  let _ = setRef defaultDefsWRef []
   let _ = setRef funcRefsRef []
   let _ = setRef funcRefsSetW omEmpty
   let _ = setRef useStrRef (programUsesStr groups)
@@ -1140,9 +1141,6 @@ emitProgramGaps input (CProgram groups ctorArs ctorTypes impls) =
   let _ = setRef liftedFnsRef []
   let _ = setRef liftedNamesRef []
   let _ = setRef liftedNamesSetW omEmpty
-  let _ = setRef emittedDefaultsWRef []
-  let _ = setRef emittedDefaultsSetW omEmpty
-  let _ = setRef defaultDefsWRef []
   let _ = setRef funcRefsRef []
   let _ = setRef funcRefsSetW omEmpty
   let _ = setRef useStrRef (programUsesStr groups)
@@ -1186,6 +1184,10 @@ emitProgramGaps input (CProgram groups ctorArs ctorTypes impls) =
   let _ = emitFnsGapsW prog (userFnBinds groups)
   let _ = emitImplsGapsW prog (implGroups prog impls)
   let _ = emitValsGapsW prog (filterList isValBind groups)
+  -- Default requests in the census still synthesize into this fresh emission;
+  -- consume the accumulated blocks in the same reverse/flatten order as the WAT
+  -- path before reporting events, without requiring a complete module or main.
+  let _ = flatMap (x => x) (reverseL emit.defaultDefinitions.value)
   gapEventsOfW emit
 
 emitFnsGapsW : Prog -> List CBind -> Unit
@@ -2465,7 +2467,7 @@ emitRefProgram prog groups =
   -- value binding / `main` (emitRefInit), so this drain must follow initLines too.
   -- Each default's inner lambda already drained into liftedFnsRef, so this precedes
   -- the `lifted` concat.  Drained UNCONDITIONALLY (a default define is a plain fn).
-  let defaultDefs = flatMap (x => x) (reverseL defaultDefsWRef.value)
+  let defaultDefs = flatMap (x => x) (reverseL (progEmit prog).defaultDefinitions.value)
   -- now drain the lifted-lambda defs + the closure-apply runtime + elem-declare.
   let lifted = if progUseClos prog then flatMap (x => x) (reverseL liftedFnsRef.value) else []
   let applyRt = if progUseClos prog then closApplyLines else []
@@ -4567,37 +4569,30 @@ emitDefaultRKeyRef prog dictWords argInstrs name tag = match findByTagW name non
       dictWords ++ argInstrs ++ ["call $" ++ fname]
     None => gapLP prog "wasm layer-15: no impl of method '\{name}' for type '\{tag}'"
 
--- a module-level set of already-synthesized default symbols (dedup like
--- llvm_emit's emittedDefaultsRef) + the accumulated define line-blocks, drained
--- UNCONDITIONALLY in emitProgram (a default define is a plain fn, not closure-gated).
-emittedDefaultsWRef : Ref (List String)
-emittedDefaultsWRef = Ref []
+-- Per-emission set of synthesized default symbols plus their accumulated define
+-- blocks. The ordered name list was duplicate authority; membership alone preserves
+-- first-encounter dedup while definitions retain their prepend/reverse emission order.
+defaultAlreadyEmittedW : WasmEmit -> String -> Bool
+defaultAlreadyEmittedW emit name = omHasKey name emit.emittedDefaultNames.value
 
--- perf #382: companion O(log n) membership set for the `contains`-per-insert registry
--- above; reset alongside `emittedDefaultsWRef` in the emit drivers.
-emittedDefaultsSetW : Ref (OrdMap Unit)
-emittedDefaultsSetW = Ref omEmpty
+markDefaultEmittedW : WasmEmit -> String -> Unit
+markDefaultEmittedW emit name =
+  setRef
+    emit.emittedDefaultNames
+    (omInsert name () emit.emittedDefaultNames.value)
 
-defaultDefsWRef : Ref (List (List String))
-defaultDefsWRef = Ref []
-
-defaultAlreadyEmittedW : String -> Bool
-defaultAlreadyEmittedW name = omHasKey name emittedDefaultsSetW.value
-
-markDefaultEmittedW : String -> Unit
-markDefaultEmittedW name =
-  let _ = setRef emittedDefaultsSetW (omInsert name () emittedDefaultsSetW.value)
-  setRef emittedDefaultsWRef (name::emittedDefaultsWRef.value)
-
-addDefaultDefW : List String -> Unit
-addDefaultDefW def = setRef defaultDefsWRef (def::defaultDefsWRef.value)
+addDefaultDefW : WasmEmit -> List String -> Unit
+addDefaultDefW emit def =
+  setRef emit.defaultDefinitions (def::emit.defaultDefinitions.value)
 
 ensureDefaultEmittedW : Prog -> String -> String -> String -> CImplEntry -> Unit
 ensureDefaultEmittedW prog fname tag method entry =
-  if defaultAlreadyEmittedW fname then ()
+  if defaultAlreadyEmittedW (progEmit prog) fname then ()
   else
-    let _ = markDefaultEmittedW fname
-    addDefaultDefW (emitDefaultDefineW prog fname tag method entry)
+    let _ = markDefaultEmittedW (progEmit prog) fname
+    addDefaultDefW
+      (progEmit prog)
+      (emitDefaultDefineW prog fname tag method entry)
 
 -- synthesize `$mdk_default_<method>_<tag>` from the interface default body.  Mirror
 -- of llvm_emit's emitDefaultDefine: eta-expand the (point-free) default body to the
