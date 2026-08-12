@@ -17,7 +17,10 @@ The project agents in `agents/` are an OpenCode adaptation of Medaka's complex-c
   mechanics in every child brief.
 - `medaka-structural-migration-tests` defines per-field same-process controls,
   structural ratchets, and observed-red mutation matrices for ambient-state and
-registry ownership migrations.
+  registry ownership migrations.
+- `medaka-emitter-state-migration` specializes that discipline for X-N.H/X-W.H
+  emitter continuation slices, including family selection, inert hand-built
+  probes, source-derived controls, and residual-state handoffs.
 
 Designer packets must pass an implementer-sized-slice test before Terra receives
 them. Implementers remain build-free; the conductor supplies exact isolation
@@ -31,6 +34,12 @@ normal-exit and trappable-signal handlers restore and hash-check source inside
 the same command that applies and grades the mutant. Hard interruptions such as
 `SIGKILL` or host loss require the conductor to discard and recreate the isolated
 daughter before reuse.
+For one-source rows, prefer `scripts/mutation_transaction.sh`; it centralizes
+normal/signal restoration, baseline hashing, direct expected-red grading, and
+compact receipts without moving mutant design into the executor.
+Long verification campaigns may pass reviewers one task-owned, hash-identified
+final-state receipt file instead of repeating the same command ledger in several
+prompts; the reviewer still audits the exact revision and decisive evidence.
 
 The model split is deliberate: Sol owns semantic design and adversarial review;
 Terra receives implementation-ready edits and evidence-sensitive

@@ -107,6 +107,13 @@ For every deferred check record:
 
 Never summarize a phantom skip as green, a narrowed-away PR shard as coverage, or captured output as semantic authority.
 
+For a multi-agent task with several exact-head checks, the conductor may write a
+compact task-owned receipt file under its unique scratch directory and give the
+reviewer that absolute path plus the receipt SHA-256. Keep it final-state only:
+reviewed revision/worktree, exact commands, actual grades, generated-artifact
+disposition, deferred checks, and inheritance rationale. Do not commit receipt
+files or replace independent reviewer inspection with a transcript dump.
+
 Snapshot summary labels are not artifact disposition. A focused gate may
 intentionally create a temporary one-shot snapshot and report `new` while
 passing with a clean tracked tree. First derive whether the gate owns a tracked

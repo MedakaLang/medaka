@@ -1173,6 +1173,9 @@ jobs:
       - name: Bash scripts must preserve their interpreter when self-invoking
         run: sh test/check_recursive_shell_interpreter.sh
 
+      - name: Mutation transactions must restore on red and interruption
+        run: sh test/check_mutation_transaction.sh
+
       # Also unguarded, and for the same reason. docs/README.md is GENERATED from the
       # docs' `**Status:**` banners — the whole point being that a hand-maintained index
       # rots (AGENTS.md's own doc-index table sat mislabelling a doc as "IN PROGRESS"

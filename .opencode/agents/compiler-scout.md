@@ -20,6 +20,7 @@ permission:
   edit: deny
   bash:
     "*": deny
+    "git status*": allow
     "git log*": allow
     "git show*": allow
     "git rev-parse*": allow
@@ -41,6 +42,12 @@ checked independently. Keep tracker/history readiness separate from a large
 implementation census unless the caller proves both fit this bounded turn. If
 both cannot fit, finish readiness evidence and return the exact source-census
 follow-up rather than exhausting the step budget halfway through both.
+
+Use the narrowest GitHub payload that proves the intake premise. Prefer
+`gh ... --json` plus `--jq` selecting issue state/body, the latest handoff, and
+the relevant merge/head identities over returning every historical comment or
+check object. Raw tracker history is evidence storage, not a useful return
+format.
 
 An exhaustive claim must first return the raw member set and only then its count
 and grouping. Reconcile the count against the listed members before reporting;
