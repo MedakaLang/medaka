@@ -1,5 +1,39 @@
 # Next-orchestrator handoff — Medaka (2026-07-17)
 
+---
+
+## 🟥 KNOWN-RED FOR THE DURATION — Stage A sprint, opened 2026-08-12
+
+**Branch `arch/stage-a-sprint`, worktree `.claude/worktrees/wiggly-giggling-nygaard`, BASE
+`7aae8b83`.** Contract: `.claude/STAGE-A-SPRINT.md`. Ledgers: `.claude/sprint/DECISIONS.md`,
+`.claude/sprint/DEBT.md`.
+
+This run **deliberately defers verification** to a testing round that happens after
+implementation. The following are **red BY DESIGN** on this branch and are **not your break**:
+
+| Expected red | Why |
+|---|---|
+| `diff_compiler_snapshot_*` | Compiler sources are in the snapshot corpus; every source bite moves its own golden. **Zero goldens are blessed for the entire run** (§5) — they are re-cut ONCE, from the final binary, in the testing round. |
+| `test/selfproc_goldens/legA/*` (`diff_compiler_selfproc.sh`) | Same cause: added/renamed/re-typed top-level bindings move the LEG A scheme goldens. Deferred with the snapshots. |
+| `diff_compiler_must_fail.sh` | #1276 and #1351 are being **drained but not closed** (§1 issue-closure policy). Their pins flipping red is *the deliverable* — it is the testing round's attack list — not a break. |
+| Differential / engines / capability-matrix / doc gates | Not run mid-sprint at all. |
+
+**The ONLY signal this run takes mid-flight** is, per unit:
+`make -C <trunk> medaka && make -C <trunk> check-self`, plus a backgrounded
+`sh test/preflight.sh` + `sh test/selfcompile_fixpoint.sh` at each integration checkpoint.
+A tree that does not self-typecheck is a real break — everything above is not.
+
+🚨 **Do not bless a golden on this branch.** Mid-run blessing enshrines an intermediate state and
+produces N conflicting re-cuts of one file, which three-way-merge with no conflict marker and no
+red gate. Goldens are re-cut once, from the final binary, never merged, never hand-resolved.
+
+**Commit with `PRECOMMIT_SNAPSHOT_DEFER=1 git commit …`** — *not* `--no-verify`, which would
+also drop fmt, lint, and lextok, all of which stay live for the duration.
+
+*(Delete this section when the sprint's testing round completes.)*
+
+---
+
 ## 🗂️ TRIAGE + SELF-DRAIN SESSION — 2026-07-16/17. The tracker was re-triaged end to end, the 0.1.0 floor was re-derived, and the tracker now **drains itself**.
 
 ### 🚦 The four things that change what you do today
