@@ -460,7 +460,24 @@ transform:  Both arms now call `checkImplCompletenessMap (fst classEnvHere) (snd
 could move: **This is the bite that carries the unit's acceptance delta, and it is confined to
             the FLAT arm.** Under the owner ruling on #1557 OWED 1 (re-key; CE grows no
             bare-spelling compatibility leg), the delta is:
-            1. 🚩 **A flat program where a USER interface shadows a PRELUDE one by spelling.**
+            1. 🪦 **RETIRED 2026-08-12 (repair-round SA-11 / R2-F1) — THE SHAPE CANNOT EXIST.
+               DO NOT WRITE THIS FIXTURE.** The row below asserted a real Flat acceptance
+               delta and nominated it as *"the testing round's first target"*; nobody ran it.
+               **RESOLVE REJECTS THE PROGRAM BEFORE ANY COMPLETENESS CHECK RUNS**, so there is
+               no delta in either direction and nothing for a fixture to grade. DERIVED
+               first-hand on this binary, not relayed — a one-file program declaring
+               `interface Debug` (and again `interface Eq`) with a partial `impl` over the
+               implicit prelude gives, both times, `<unknown location>: Duplicate interface:
+               Debug` + `Method 'm1' is not part of interface 'Debug'`, **exit 1**. And it is
+               BASE behaviour too: `git diff 176feb50 HEAD -- compiler/frontend/resolve.mdk` is
+               EMPTY, so no unit of this sprint could have moved it. What the row got right is
+               that the deleted head-first scan WOULD have preferred the prelude's row — the
+               error is asserting a reachable program on top of that reading. ⚠️ Item 2 below
+               already stated the governing rule (*resolve rejects `Duplicate interface` within
+               a module*) and item 1 contradicted it two lines up; the two were never
+               reconciled because item 1 was never executed. **The original text is preserved
+               verbatim below so the claim can be audited, not because it stands:**
+               ~~**A flat program where a USER interface shadows a PRELUDE one by spelling.**
                On the split entry `prog = coreProg ++ userProg`, the deleted scan walked that
                list HEAD-FIRST, so a user `interface Eq a` lost to the prelude's `Eq` and the
                PRELUDE's required set was returned for a user impl. Under identity the impl's
@@ -468,7 +485,7 @@ could move: **This is the bite that carries the unit's acceptance delta, and it 
                with no existing fixture, in BOTH directions** (an impl that was rejected for
                missing the prelude's method may now pass; one that silently passed may now be
                rejected). **I did not hand-derive the expected value from DICT §8 and I did not
-               write the fixture.** This is the testing round's first target for A-3.5a.
+               write the fixture.** This is the testing round's first target for A-3.5a.~~
             2. Two same-spelled interfaces in ONE flat file cannot occur — resolve rejects
                `Duplicate interface` within a module. RELAYED from P0-B, not re-derived. So the
                #1258 class has no intra-file flat instance; item 1 is the flat instance that does.
@@ -1688,3 +1705,254 @@ unchecked:  (1) 🎯 **THE NEAREST PROGRAM THIS DOES NOT COVER, constructed and 
             **ZERO goldens blessed**; snapshots and selfproc LEG A remain item 7's, terminal.
             (7) This does **not** make C4/I2 true — it makes ONE diagnostic agree with the
             candidacy read; the evidence/routing side is untouched and is still B-2's.
+
+### SA-4 — Door 4 only fires where a dictionary would actually have to be passed (owner ruling RUN-055)
+sites:      `compiler/types/typecheck.mdk` — ONE expression: `unroutedResidual`'s guard,
+            `implMatchesU` → `implMatchesWithReqsU`, over the same
+            `perRun.value.residualUnivRef.value`. **Nothing was invented**: SA-1 had already
+            added `implMatchesWithReqsU` (and its `bucketArgsMatchReqs` walk) at the sibling
+            ground site `unroutedGroundReqs`, deliberately narrower than Door 4's, and this bite
+            just points the older guard at it — so the two doors are now one predicate
+            (grep-verified: `implMatchesWithReqsU` has one definition and exactly two callers).
+            `implMatchesU` itself is NOT deleted — it keeps three unrelated readers
+            (`implMatchesArgsU`, and two guards in the nested-`requires` checker). Comment
+            re-cuts: `unroutedResidual`'s "WHY THE TEST IS `implMatchesU`" block (falsified by
+            this edit), `unroutedGroundReqs`' "WHY THE TEST IS NARROWER THAN DOOR 4'S" block
+            (the asymmetry it describes is gone), `implMatchesWithReqsU`'s header (two callers
+            now, and why they must stay one predicate), and `compiler/DIAGNOSTIC-CODES-DESIGN.md`'s
+            `T-REQUIRES-UNROUTED` row. Fixture: three new legs (24 a/b/c) at the tail of
+            `test/diff_compiler_check_cli_modules.sh`.
+transform:  Door 4 shipped guarded on bare EXISTENCE: does SOME impl match these args. It never
+            asked whether that impl carries a `requires`, so it converted the case whose correct
+            answer is `[]` on BOTH arms into a hard error, under a message asserting *"accepting
+            it would build a program that reads a dictionary that was never passed"* — false for
+            that shape. Not a regression (pre-A-3.6 the same program was `T-NO-IMPL`), an
+            incoherence between the guard and its own claim. The new predicate is exactly "a
+            dictionary would have to be passed here".
+            🚨 **THE FORM IS DISJUNCTIVE ON PURPOSE — ANY matching impl carries reqs, not the
+            SELECTED one.** The selector that would name the winner is `findMatchingImplReqsU`,
+            the registry that just failed; asking it again would be asking the broken channel to
+            adjudicate its own failure. Disjunction is the LOUD direction, and its cost is a
+            retained false reject, pinned as leg (c) rather than left to be rediscovered.
+could move: **This is an acceptance WIDENING and it RESTORES what BASE did** — BASE never
+            reached this code at all, so the base-vs-head comparison IS the justification RUN-055
+            asked for. The could-not-pass-before fixture, MEASURED on both binaries, four modules
+            differing from #1564's only in that `impl Tag (Wrap a)` carries no `requires` and
+            `nest` no signature (so the goal DEFERS and reaches `unroutedResidual`, not SA-1's
+            ground site): on `e9f917f2` `check` exit **1** at `nest.mdk:3:16`; after,
+            `check`/`run`/`build` all exit **0** and the built binary prints `wrap`.
+            **The accepted program is CORRECT, not merely accepted, and that was re-derived on
+            THIS binary rather than inherited from R5's (whose IR read was of the CONTROL order):
+            `build --keep-ir` on the previously-REJECTING order emits `define i64
+            @mdk_nest__nest(i64 %arg0)` and `define i64 @mdk_impl_Wrap_tagOf(i64 %arg0)` — arity
+            1 on both sides, no dict parameter anywhere in the module.** So there is no evidence
+            to mis-route and nothing for the narrowing to protect.
+            Generally: every program where the only impls matching an unroutable goal carry no
+            `requires` now compiles, where before it was rejected. Every program where such an
+            impl DOES carry `requires` still rejects, unchanged — legs (b) (#1564's own program)
+            and the four pre-existing D4b legs.
+            🎯 **NEAREST PROGRAM THIS DOES NOT COVER — constructed and MEASURED, not reasoned:**
+            two impls in the unimported later module, `impl Tag (Wrap a) requires Tag a` AND the
+            more specific `impl Tag (Wrap Int)`. The control order selects the specific one and
+            prints `wrap-int-specific`, so NO dictionary is needed — and the rejecting order
+            still rejects, because the guard is disjunctive. A retained false reject, in the loud
+            direction, now asserted as leg (c) so that flipping it is a deliberate act. Second
+            nearest: an impl with an empty-but-written `requires` — not constructible, the parser
+            has no empty-context form; and a 2-deep chain where the outer impl has no `requires`
+            and an inner one does, which is unreachable from this arm because reduction commits
+            to the outer impl's (empty) context and never descends.
+unchecked:  wasm untested; no engine differential. `check --json` was exercised only through the
+            new legs (b)/(c) and #1564's pin, not on every shape (#1362 is an OPEN S0 on that
+            arm). Perf unmeasured: `implMatchesWithReqsU` adds one `isNonEmptyL` per bucket entry
+            over `implMatchesU`, argued negligible and not measured. **ZERO goldens blessed** —
+            snapshots and selfproc LEG A are still item 7's, terminal.
+
+### SA-5 — `T-REQUIRES-UNROUTED`'s remedy was wrong for the declared-given shape (wording only)
+sites:      `compiler/types/typecheck.mdk` — `requiresUnroutedMsg`'s string, plus its header;
+            the quoted fragment in `compiler/DIAGNOSTIC-CODES-DESIGN.md`. **Deliberately NOT the
+            same concern as SA-4** (RUN-055: an acceptance change and a message change are
+            separately reviewable only if they are separate).
+transform:  Two clauses were wrong, both measured wrong rather than argued.
+            (1) *"route its evidence into the module where this binding is GENERALIZED"* — false
+            at the ground site, where nothing is generalized; that site has shared this string
+            since SA-1. Now "to this code".
+            (2) The remedy sent the DECLARED-GIVEN shape to a dead end. MEASURED on
+            `export nest : Tag (Wrap a) => a -> String`: taking the advice and adding
+            `import wrapimpl` to `nest.mdk` does not compile the program — it yields a DIFFERENT
+            error, *"Could not deduce 'Tag a' from the signature of 'nest'. Its body requires it;
+            add 'Tag a =>' to the declared type"*. The import is necessary and IS progress; it is
+            not sufficient when the signature is hand-written. Saying only the first half reads
+            as "do this and it works", so the reader concludes the advice failed. The text now
+            says the import may not be enough for a signatured binding and that the next error
+            names the missing constraint — which is what actually happens.
+            🚨 **ONE STRING, TWO CALL SITES, AND THAT IS LOAD-BEARING.** `pushTypeErrorOnceAt`
+            dedups on MESSAGE TEXT and a deferred goal reaches BOTH guards, so a per-shape
+            wording DOUBLE-REPORTS at one span — SA-1's implementer measured exactly that (two
+            `T-REQUIRES-UNROUTED` diagnostics at range 2:16-2:21, and #1564's pin flipped to
+            DRAINED on a live bug). The new wording is conditional ("if this binding carries a
+            hand-written signature") precisely so it can be true of all three shapes at once.
+            VERIFIED after the edit: `check --json` on #1564's own `main.mdk` emits **exactly
+            one** diagnostic object, code `T-REQUIRES-UNROUTED`, range `2:16-2:21` — the pinned
+            range, unmoved — and the pin still reads REPRO.
+could move: **Any consumer keying on the message TEXT.** Derived rather than assumed: the only
+            place in the tree that quotes it is `compiler/DIAGNOSTIC-CODES-DESIGN.md` (updated in
+            this bite); #1564's pin keys on `diag-code` (code + range) precisely because, in its
+            own words, *"the message embeds a rendered type and a remedy sentence whose prose can
+            legitimately be reworded"*, and no `.tc.golden` or `check_json_fixtures` entry
+            contains it (grepped across `test/`, `docs/`, `compiler/`). No behaviour moves:
+            `check`/`run`/`build` verdicts and locations are byte-unchanged.
+unchecked:  The wording was not run past `compiler/ERROR-QUALITY.md`'s rubric line by line, and
+            no user read it. Whether the follow-on *"add 'Tag a =>'"* error is itself the right
+            next diagnostic is a separate question this bite does not open.
+
+### SA-6 — `runFinalChecks`' `-1` ordinal sentinel is LOUD instead of a silent accept
+sites:      `compiler/types/typecheck.mdk` — one new call at the head of `runFinalChecks`
+            (`ordinalSentinelGuard cur`) and three new top-level bindings beside it:
+            `ordinalSentinelGuard`, `ordinalIsSentinel` (with doctests) and
+            `ordinalSentinelMsg`. New diagnostic code `T-INTERNAL-ORDINAL`, registered in
+            `compiler/DIAGNOSTIC-CODES-DESIGN.md`. Ratchet row: the A-3.7 paragraph added to
+            `test/registry_keying_ratchet.sh` under SA-9 carries the fail-direction. Fixture:
+            leg 25 of `test/diff_compiler_check_cli_modules.sh` (the false-positive half) plus
+            `ordinalIsSentinel`'s doctests (the true half).
+transform:  `declEnvsOrdOf`'s miss value is `0 - 1` and its own header calls a miss fail-CLOSED,
+            saying in so many words that the remedy for a stray id belongs at the READER —
+            *"abstain loudly / fail the pass"*, never a sentinel meaning "everything". At `-1`
+            all four members of the tail instead abstain QUIETLY: `checkCoherence` takes
+            `cohRowsOwnedBy -1` (no rows, where the pre-A-3.7 decl-list walk was unconditional);
+            `checkInterfaceCycles`/`checkPhantomMethods` take `ceRowsVisibleAt -1`/
+            `ceRowsOwnedBy -1`; and `checkSuperImpls`, whose row read SA-3 widened to
+            `ieCandidacyVisibleAt`, now sees every row but finds no SUPERS (`ceLookupAt … -1`)
+            and so also reports nothing. The whole tail degrades to a silent accept — the
+            loud→silent transition this repo ranks as a severity increase.
+            ⚠️ **Written as a GUARDED function, not `whenL`.** Medaka is strict: `whenL (cur < 0)
+            (pushTypeError …)` evaluates the push on EVERY call. That is the documented
+            not-a-stub trap and it would have made this a live regression on every program.
+could move: **Nothing today, by construction, and that is asserted rather than assumed.** The
+            three drivers pass either a literal `0` (both Flat entries — `checkToLines` and
+            `seedAndCheckSplit`) or `declEnvsOrdOf mid` over the very list `buildDeclEnvs`
+            indexed (`checkModuleFullDiags`), so no live path reaches `-1`; `cur < 0` is exactly
+            and only the miss sentinel, and no caller can construct a negative ordinal otherwise.
+            What moves the day a FOURTH Module-mode driver lands: a located `T-INTERNAL-ORDINAL`
+            where the tail used to accept in silence. Leg 25 is the tripwire in the direction
+            that would actually hurt users — it fails if the guard EVER fires on the Module or
+            Flat arm.
+            🎯 **NEAREST PROGRAMS THIS DOES NOT COVER, stated because unreachability is not
+            coverage:** (1) a driver threading a VALID-but-WRONG ordinal — some other module's —
+            is undetectable here, since the sentinel is the only self-identifying failure and a
+            wrong-but-in-range ordinal produces a plausible row set; (2) `globalCoherenceConflict`
+            takes NO ordinal at all (`cohRowsOf True`, whole graph), so it is outside this guard
+            entirely and cannot be protected by it; (3) the LSP and MCP drivers were not
+            enumerated — R5 could not determine whether `-1` is reachable through them, and this
+            bite does not answer it either, it only makes the arrival loud wherever it comes from.
+unchecked:  The `-1` arm was **not executed** — it cannot be, from this tree, which is the whole
+            premise. `ordinalIsSentinel`'s doctests assert the predicate, not the diagnostic; no
+            fixture exercises `T-INTERNAL-ORDINAL` end to end and none can until a driver can
+            produce it. The message text was not reviewed against `ERROR-QUALITY.md`'s rubric
+            (it is an internal-error class the rubric does not cover). Perf: three bindings and
+            one `Int` comparison per `runFinalChecks` call, not measured.
+
+### SA-9 — the registry ratchet was stale exactly where it hid SA-3
+sites:      `test/registry_keying_ratchet.sh`, the `declEnvsRef` row (four edits) — no code.
+transform:  Four falsified or missing claims, each DERIVED by grep on this tree, not relayed:
+            (1) *"A-3.5b remains owed and DOES read IE"* — A-3.5b landed in `5efc8525`; the row
+            carried the sentence for a day. Re-cut to state what A-3.5b's IE read actually is
+            (`ieRowsVisibleAt`, bound once by `checkSuperImpls`, decided by
+            `implRowMatchesSuper` on interface IDENTITY).
+            (2) 🚨 **THE LOAD-BEARING ONE.** The row's post-A-3.6 enumeration of who KEPT the
+            ordinal filter listed six name-scoping readers and **omitted `ieRowsVisibleAt`, the
+            one IE reader that kept it** — so the ledger read as if the instance axis were
+            already entirely graph-global, i.e. as if SA-3 could not exist. `ieRowsVisibleAt`,
+            `flatImplEnvOf` and `cohSameIface` each appeared **ZERO** times in the file. Added,
+            with SA-3's measurement and RUN-055's ruling, and with the note that
+            `declEnvVisibleAt` now has NO IE reader at all.
+            (3) *"all three relocated checks build a single-module ClassEnv"* — it is FOUR
+            checks and TWO env kinds since A-3.7; corrected, naming `flatImplEnvOf` and its
+            twice-per-seeded-flat-check cost.
+            (4) **A-3.7 had no row at all.** Added: `cohRowsOwnedBy`/`ieRowsOwnedBy` (per-module),
+            `cohRowsOf`/`ieRowsAll` (whole graph), `cohRowVisible`'s prelude carve-out,
+            `cohImplOfRow`/`instRefMid`, `cohSameIface`, `cohScan`'s two sweep modes, the
+            read-`ieRows`-never-the-buckets rule, and SA-6's fail direction. The stale
+            *"`deImpls` has none [no reader] outside the temporary `ieShadowCompare` instrument"*
+            is marked HISTORY rather than deleted (the units below still argue against it) and
+            corrected to four production readers.
+            Also deleted: the *"under A-3.6 they reduce to `adPub && adOrd != cur`"* prediction
+            that sat immediately before its own retraction (R5's item 5).
+could move: **Nothing executes.** The ratchet's assertions are the mechanical checks at its
+            tail (CrossRun field set, writer sites, frame parity, IE/CE block shape) and none of
+            them read this prose; `sh test/registry_keying_ratchet.sh` PASSED before these edits
+            and PASSES after, which is the point — **no gate can see any of this**, which is
+            #1574's shape recurring, so the verification here is READING. What could move is a
+            later agent's decision: the omission in (2) is what let three separate reviewers
+            each rediscover SA-3 independently instead of reading it off the ledger.
+unchecked:  **Every symbol written into this row was grepped against `typecheck.mdk` before
+            committing** (`ieRowsVisibleAt`, `ieCandidacyVisibleAt`, `declEnvVisibleAt`,
+            `flatImplEnvOf`, `flatClassEnvOf`, `cohSameIface`, `cohRowsOwnedBy`, `cohRowsOf`,
+            `ieRowsAll`, `ieRowsOwnedBy`, `cohRowVisible`, `cohImplOfRow`, `instRefMid`,
+            `cohScan`, `checkCoherence`, `globalCoherenceConflict`, `checkSuperImpls`,
+            `superImplMsgsOf`, `implRowMatchesSuper`, `ceLookupAt`, `ceRowsVisibleAt`,
+            `ceRowsOwnedBy`, `checkPhantomMethods`, `checkInterfaceCycles`, `declEnvsOrdOf`,
+            `runFinalChecks`, `ordinalSentinelGuard`, `ordinalIsSentinel`) — this file has
+            shipped a FABRICATED symbol before (#1574) and it is outside every symbol gate. I did
+            NOT re-derive the rest of the row's older claims; only the four above.
+
+### SA-10 — a dead symbol, and the doc gate's blind spot that let it live (mechanism now DERIVED)
+sites:      `docs/spec/DICT-SEMANTICS.md` (the §8 I6.3 reachability cell) and
+            `test/dict_fixtures/s6-c1-hard-and-soft-in-one-file.mdk:18`. No code.
+transform:  Both cited two collectors deleted by A-3.7. The spec cell is re-cut to today's two
+            `cohScan` call sites — `checkCoherence` (`CohSweepOwn`, over `cohRowsOwnedBy`) and
+            `globalCoherenceConflict` (`CohSweepGlobal`, over `cohRowsOf`) — and the row is
+            STRENGTHENED, not merely repaired: the retired per-module collector stamped every mid
+            `""`, so a `("", real)` pair was avoided only by the two collectors never meeting,
+            whereas both populations now take their mid from one producer, `instRefMid
+            (ieRowInst r)` via `cohImplOfRow`. The fixture comment is re-worded
+            **line-count-neutrally** (`git diff --numstat` reads `1 1`; the file is 67 lines
+            before and after) because a fixture's line count is load-bearing.
+            🚨 **THE GATE'S BLIND SPOT IS NOW DERIVED, and by consequence rather than by reading
+            the tokenizer.** SYNTHESIS left the mechanism OWED. With the two names in the
+            `` `name:LINE` `` citation form, `make agent-doc-symbols` reported `dead: 0` over
+            1034 claims and PASSED; deleting **only the `:LINE` suffixes**, changing nothing
+            else, made the SAME two names report `DEAD` immediately and the gate FAIL. So a
+            backticked symbol carrying a line number is invisible to the gate, on a corpus
+            (`docs/spec/*.md`) it otherwise scans in full — a one-variable derivation, not an
+            inference. The two retired names are consequently left **unquoted** in the re-cut
+            cell, since a dead symbol in bare backticks now correctly fails.
+could move: **`make agent-doc-symbols`' verdict on this file changes character.** It PASSED
+            before these edits *while a dead symbol sat in the corpus*, and it PASSES after —
+            but for the first time honestly, and any future `:LINE`-free dead symbol in this cell
+            will now red it. That is the only mechanical movement. Nothing behavioural: both
+            files are comments. ⚠️ The fixture is in `test/dict_fixtures/`, a shared corpus, so
+            the edit was deliberately confined to one comment line with no line-count change —
+            `diff_compiler_dict_semantics.sh` re-run after it, 161/161.
+unchecked:  **The gate was NOT widened and must not be, as part of this round** — that is a
+            `ws:tooling` unit of its own and is owed an issue (adjacent to #1574, which is the
+            sibling case: `test/*.sh` is outside the corpus entirely; do not re-file that one).
+            I did not trace `check_agent_doc_symbols.sh`'s tokenizer, so WHERE the `:LINE` form
+            is dropped is still unread; only the behaviour is established. I did not sweep the
+            rest of `docs/spec/*.md` for other `` `name:LINE` `` citations of dead symbols — that
+            sweep is exactly what the widened gate would do, and doing it by hand would produce
+            a count with no derivation.
+
+### SA-11 — retire an attack-list target that cannot exist (`A5a-4` item 1)
+sites:      `.claude/sprint/DEBT.md`, the `A5a-4` row's `could move:` item 1. No code.
+transform:  The row nominated *"a flat program where a USER interface shadows a PRELUDE one by
+            spelling"* as **"the testing round's first target"**, asserting a real Flat
+            acceptance delta in both directions — and nobody ran it. The shape cannot exist:
+            **resolve rejects the program before any completeness check runs.** RE-DERIVED
+            first-hand rather than relayed from R2: a one-file program declaring `interface
+            Debug` (and again `interface Eq`) with a partial `impl` over the implicit prelude
+            gives, both times, `<unknown location>: Duplicate interface: Debug` + `Method 'm1' is
+            not part of interface 'Debug'`, **exit 1**. It is BASE behaviour too —
+            `git diff 176feb50 HEAD -- compiler/frontend/resolve.mdk` is EMPTY, so no unit of
+            this sprint could have moved it. The item is struck through rather than deleted, with
+            the derivation attached, so the claim stays auditable. ⚠️ Item 2 of the same list
+            already stated the governing rule (*resolve rejects `Duplicate interface` within a
+            module*) two lines below; the row contradicted itself and nobody noticed, because
+            item 1 was never executed.
+could move: **Work, downward only — it removes a fixture nobody should now write.** No code, no
+            gate, no behaviour. The residual risk is the opposite one and is worth naming: a
+            reader who takes "retired" to mean "A-3.5a has no Flat acceptance delta at all" would
+            over-read it. Items 2 and 3 of that list are untouched and item 3 (`None => []`, a
+            key that MISSES where the old bare scan HIT) remains a live loud→silent question that
+            this retirement does not answer.
+unchecked:  I re-derived only item 1. Items 2 (RELAYED from P0-B) and 3 (loud→silent) were not
+            re-run, and the row's MEASURED flat baselines were not re-taken on this binary.

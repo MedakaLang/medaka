@@ -15,7 +15,7 @@
 --     warning. SOFT.
 --
 -- WHY THE DECLARATION ORDER IS LOAD-BEARING (do not reorder these four blocks).
--- `checkCoherence` scans `reverseL (cohCollectImpls …)`, i.e. LATEST-DECLARED
+-- `checkCoherence` scans `reverseL (… cohRowsOwnedBy …)`, i.e. LATEST-DECLARED
 -- FIRST, and takes each element against the rest. With the duplicates declared
 -- FIRST and the incomparable pair LAST, the outer element is `Tag (Pair a Int)`
 -- and its very first comparison is the SOFT one; the HARD pair is not reached

@@ -17212,12 +17212,61 @@ checkInterfaceCycles ce cur =
 -- where those two decl lists were already the same.  [hasPrelude] rides with [cohIe]:
 -- it is a property of THAT env, not of the caller's mode, and `cohRowVisible` states
 -- what each arm must pass and what happens if it passes the other one.
+--
+-- 🚨 SA-6 (sprint repair round): THE `-1` SENTINEL IS FAIL-CLOSED HERE, AND IT HAS TO BE
+-- ANNOUNCED AT THIS READER.  [cur] is `declEnvsOrdOf mid` on the Module arm, whose miss
+-- value is `0 - 1` (see that function: a miss is documented fail-CLOSED, and it says in
+-- so many words that the remedy for a stray id is at the READER — "abstain loudly / fail
+-- the pass" — never a sentinel that means "everything").  All four members below take
+-- [cur], and at `-1` they abstain in OPPOSITE directions: `checkCoherence` takes
+-- `cohRowsOwnedBy -1` → no rows → **it checks nothing, silently**, where pre-A-3.7 it
+-- walked the decl list unconditionally; `checkInterfaceCycles`/`checkPhantomMethods` take
+-- `ceRowsVisibleAt -1`/`ceRowsOwnedBy -1` → likewise nothing; and `checkSuperImpls`,
+-- whose row read SA-3 just widened to `ieCandidacyVisibleAt`, still finds no SUPERS
+-- (`ceLookupAt … -1`) and so also reports nothing.  So the whole tail degrades to a
+-- SILENT ACCEPT — a loud→silent transition, which this repo ranks as a severity increase
+-- even while unreachable.
+-- ⚠️ UNREACHABLE TODAY, AND THE GUARD IS STILL RIGHT.  The three drivers pass either a
+-- literal `0` (both Flat entries) or `declEnvsOrdOf mid` over the very list
+-- `buildDeclEnvs` indexed, so no live path can arrive at `-1`; a fourth Module-mode
+-- driver, or any path stamping a mid `buildDeclEnvs` did not index, makes it live.  It
+-- cannot fire spuriously, because `cur < 0` is exactly and only the miss sentinel and no
+-- caller can construct a negative ordinal otherwise.
+-- 🎯 WHAT THIS DOES *NOT* COVER, stated because it is the near miss: a driver that
+-- threads a VALID-but-WRONG ordinal (some other module's) is undetectable here — the
+-- sentinel is the only self-identifying failure — and `globalCoherenceConflict` takes no
+-- ordinal at all (`cohRowsOf True`, whole graph), so it is outside this guard entirely.
 runFinalChecks : List Decl -> List Decl -> ClassEnv -> ClassEnv -> ImplEnv -> ImplEnv -> Int -> Bool -> Unit
 runFinalChecks cohDecls _cycDecls ownCe cycCe cohIe cycIe cur hasPrelude =
+  let _ = ordinalSentinelGuard cur
   let _ = checkCoherence cohIe cur hasPrelude
   let _ = checkInterfaceCycles cycCe cur
   let _ = checkPhantomMethods ownCe cur
   checkSuperImpls cohDecls cycCe cycIe cur
+
+-- SA-6's guard, split out so the arm is a GUARD and not a `whenL`.  ⚠️ Medaka is strict:
+-- `whenL (cur < 0) (pushTypeError …)` would evaluate the push on EVERY call — the
+-- documented not-a-stub trap.  A guarded function does not.
+ordinalSentinelGuard : Int -> Unit
+ordinalSentinelGuard cur
+  | ordinalIsSentinel cur =
+    pushTypeError "T-INTERNAL-ORDINAL" ordinalSentinelMsg
+  | otherwise = ()
+
+-- is [cur] `declEnvsOrdOf`'s miss sentinel?  A real ordinal is an index into the list
+-- `buildDeclEnvs` was handed, so it is >= 0 by construction; `0 - 1` is the only negative
+-- value any producer in this file yields.
+-- > ordinalIsSentinel (0 - 1)
+-- True
+-- > ordinalIsSentinel 0
+-- False
+-- > ordinalIsSentinel 3
+-- False
+ordinalIsSentinel : Int -> Bool
+ordinalIsSentinel cur = cur < 0
+
+ordinalSentinelMsg : String
+ordinalSentinelMsg = "internal error: the whole-program final checks (coherence, interface cycles, phantom methods, superinterface existence) were reached with an unknown module ordinal, so they cannot say what is in scope here. This is a compiler bug, not a problem with this program — please report it. The checks below this point may be incomplete"
 
 -- #1557 A-3.5c: the FLAT arm's single-module `CE`.  `buildDeclEnvs` runs only at the
 -- two Module-mode driver entries, so `driverState.declEnvsRef` is `emptyDeclEnvs` on
@@ -22160,10 +22209,11 @@ reqObligationsFor univ iface args = match findMatchingImplReqsU univ iface args
 -- and a binary that still faults (`residualPredsOf`'s header, #1560).  So this reads
 -- `univ` for a yes/no REJECT PREDICATE only: no obligation is discharged from it, no
 -- scheme and no route changes, and both arms still return `[]`.
--- ⚠️ WHY THE TEST IS NARROWER THAN DOOR 4'S.  `unroutedResidual` fires on
--- `implMatchesU` alone, which does not ask whether the matched impl HAS a `requires`
--- (that over-fire is R5-F2 / SA-4, owned separately and owner-ruled because relaxing it
--- is an accept-widening).  This site cannot afford it: EVERY ground obligation in every
+-- ⚠️ WHY THE TEST IS THIS ONE.  It shipped NARROWER than Door 4's, which fired on
+-- `implMatchesU` alone and so did not ask whether the matched impl HAS a `requires`.
+-- 🪦 THAT ASYMMETRY IS GONE: SA-4 (owner ruling RUN-055) moved `unroutedResidual` onto
+-- this same predicate, so both guards now read `implMatchesWithReqsU`.  This site could
+-- never have afforded the bare twin: EVERY ground obligation in every
 -- program reaches here, including a no-`requires` impl whose evidence is a bare route
 -- word and needs no dict at all (MEASURED by R5: `define i64 @mdk_nest__nest(i64
 -- %arg0)`, arity 1, no dict) — rejecting those would be a false reject on programs that
@@ -22194,6 +22244,12 @@ unroutedGroundReqs univ iface args
 -- reqs-aware twin of `implMatchesU`: same buckets, same concrete-then-headless order,
 -- same `implHeadMatchesArgs` success condition, so True-here-with-`findMatchingImplReqsU`-None
 -- isolates precisely the two-registry disagreement on a goal that needs a dict.
+-- ⚠️ TWO CALLERS, and they must stay the same predicate: `unroutedGroundReqs` (the ground
+-- obligation site, SA-1) and `unroutedResidual` (Door 4's residual site, moved here by
+-- SA-4 / RUN-055).  They share `requiresUnroutedMsg` verbatim because
+-- `pushTypeErrorOnceAt` dedups on message text and a deferred goal reaches BOTH; if the
+-- two guards ever disagree about what counts as a match, one of them starts reporting a
+-- defect the other has already ruled out.
 implMatchesWithReqsU : ImplUniverse -> IfaceRef -> List Mono -> Bool
 implMatchesWithReqsU _ _ [] = False
 implMatchesWithReqsU univ iface (a0::rest) = bucketArgsMatchReqs (univConcreteBucket univ iface (headTyconMono a0)) (a0::rest)
@@ -24849,15 +24905,37 @@ residualPredsOf fuel iface args
 -- reader at `IE`, or re-keying `universeKeyBucketsRef`, are both DEFERRED to B-2 by name
 -- (`TYPECHECK-TARGET-ARCHITECTURE.md:1814-1815`).  This converts a segfault into a
 -- located reject and nothing more; it drains when the reader moves, not before.
--- ⚠️ WHY THE TEST IS `implMatchesU` OVER THE SAME `univ`, and not a broader one: it is
--- the EXISTENCE twin of the matcher that just failed (same buckets, same
+-- ⚠️ WHY THE TEST IS OVER THE SAME `univ`, and not a broader one: it is the EXISTENCE
+-- twin of the matcher that just failed (same buckets, same
 -- `implHeadMatchesArgs`/`implHeadSubst` success condition, same headless fallback), so
 -- True-here-with-None-there isolates precisely the two-registry disagreement.  When both
 -- registries agree that nothing matches, this is silent and (a)'s behaviour is
 -- byte-identical to before.
+--
+-- ⚖️ RUN-055 (SA-4), owner ruling, 2026-08-12: THE TEST IS `implMatchesWithReqsU`, NOT
+-- `implMatchesU`.  It shipped on the bare existence twin, which never asks whether the
+-- matched impl HAS a `requires` — so it also converted the case where the correct answer
+-- is `[]` on BOTH arms into a hard error.  MEASURED (R5-F2, and re-derived on this
+-- change's own before/after arms): #1564's fixture with ONE variable changed — `impl Tag
+-- (Wrap a)` carrying no `requires` — rejected with `T-REQUIRES-UNROUTED` while the
+-- control order compiled to `define i64 @mdk_nest__nest(i64 %arg0)`, arity 1, with no
+-- dict parameter anywhere.  For that shape the message's own claim ("accepting it would
+-- build a program that reads a dictionary that was never passed") is simply false: no
+-- dictionary is passed on either order.
+-- 🚨 THIS IS AN ACCEPTANCE WIDENING and it RESTORES what BASE did — BASE never reached
+-- this code at all.  Its could-not-pass-before fixture is leg 24 of
+-- `test/diff_compiler_check_cli_modules.sh`.  The narrowing half is what must not move:
+-- an impl that DOES carry `requires` still rejects (legs 24b/24c), and the disjunctive
+-- form — ANY matching impl carries reqs, not the selected one — is the LOUD direction,
+-- because the selector that would name the winner is the registry that just failed.
+-- ⚠️ `implMatchesWithReqsU` is SA-1's, added at the sibling ground site
+-- (`unroutedGroundReqs`) and reused verbatim here rather than re-derived: same buckets,
+-- same concrete-then-headless order, same `implHeadMatchesArgs` success condition, one
+-- extra `isNonEmptyL reqs` conjunct.  The two guards are now the SAME predicate, which is
+-- also what keeps the shared message honest at both sites.
 unroutedResidual : IfaceRef -> List Mono -> List (IfaceRef, List Mono)
 unroutedResidual iface args
-  | implMatchesU perRun.value.residualUnivRef.value iface args =
+  | implMatchesWithReqsU perRun.value.residualUnivRef.value iface args =
     let _ = pushTypeErrorOnceAt "T-REQUIRES-UNROUTED" goalSiteLoc.value (requiresUnroutedMsg iface args)
     []
   | otherwise = []
@@ -24865,12 +24943,36 @@ unroutedResidual iface args
 -- `T-REQUIRES-UNROUTED` (issue 1564).  Root-cause-honest: it must NOT say the impl is
 -- missing, because it is not — saying so would send the reader off to write an `impl`
 -- that already exists.  It names the impl as present, names the limitation as the
--- compiler's, and gives the one edit that actually works today: import the defining
--- module where the constraint is generalized (MEASURED on 1564's fixture — adding
--- `import wrapimpl` to `nest.mdk` alone restores the dict parameter and the program
--- prints `wrap(int)`).
+-- compiler's, and gives the edit that actually works today: import the defining module
+-- (MEASURED on 1564's fixture — adding `import wrapimpl` to `nest.mdk` alone restores the
+-- dict parameter and the program prints `wrap(int)`).
+--
+-- 🚨 ONE STRING, TWO CALL SITES, AND THAT SHARING IS LOAD-BEARING — see
+-- `unroutedGroundReqs`.  `pushTypeErrorOnceAt` dedups on MESSAGE TEXT and a DEFERRED goal
+-- reaches both guards, so any wording that differs between them DOUBLE-REPORTS at one
+-- span (MEASURED: two `T-REQUIRES-UNROUTED` diagnostics at range 2:16-2:21, and #1564's
+-- must-fail pin flipped to DRAINED on a live bug).  Reword it here or not at all.
+--
+-- ⚖️ SA-5 (RUN-055) — TWO CLAUSES WERE WRONG, and both were measured wrong, not argued:
+--  1. *"route its evidence into the module where this binding is GENERALIZED"* is false
+--     at the ground site: nothing is generalized at a fully-concrete use site, and that
+--     site has reached this text since SA-1.  It now says "to this code".
+--  2. The remedy sent the DECLARED-GIVEN shape to a dead end.  MEASURED on
+--     `export nest : Tag (Wrap a) => a -> String`: adding the advised `import wrapimpl`
+--     to `nest.mdk` does not make the program compile — it produces a DIFFERENT error,
+--     *"Could not deduce 'Tag a' from the signature of 'nest' … add 'Tag a =>'"*.  The
+--     import is necessary and is real progress; it is just not sufficient when the
+--     signature is hand-written, because a declared context must carry every constraint
+--     the body needs.  Saying only the first half reads as "do this and it works", so the
+--     reader concludes the advice failed.  The text now says the import may not be enough
+--     for a signatured binding and that the next error names the missing constraint —
+--     which is what actually happens.
+-- ⚠️ Do NOT fix (2) by splitting the text per shape.  That is exactly the double-report
+-- above.  The wording must be true of the residual, ground and declared-given shapes at
+-- once, which is why it is conditional ("if this binding carries a signature") rather
+-- than shape-specific.
 requiresUnroutedMsg : IfaceRef -> List Mono -> String
-requiresUnroutedMsg iface args = "Cannot pass a dictionary for `\{iface.irName} \{ppPredArgsShared args}`: a matching `impl \{iface.irName} …` does exist in this program and is a candidate here, but this compiler cannot yet route its evidence into the module where this binding is generalized — the impl is declared in a module that this one does not import. This is a compiler limitation, not a missing impl: accepting it would build a program that reads a dictionary that was never passed. Add an `import` of the module that declares that impl to the module containing this binding, or move the binding into a module that already imports it"
+requiresUnroutedMsg iface args = "Cannot pass a dictionary for `\{iface.irName} \{ppPredArgsShared args}`: a matching `impl \{iface.irName} …` does exist in this program and is a candidate here, but this compiler cannot yet route its evidence to this code — the impl is declared in a module that this one does not import. This is a compiler limitation, not a missing impl: accepting it would build a program that reads a dictionary that was never passed. Add an `import` of the module that declares that impl to THIS module, or move this code into a module that already imports it. If this binding carries a hand-written type signature, that import is necessary but may not be sufficient: the signature must also declare every constraint its body needs, and the next error will name the missing one"
 
 -- does at least ONE argument carry a concrete head tycon?  The per-argument twin of
 -- `allConcreteHeads`: `False` means the whole vector is head-free, hence terminal for
