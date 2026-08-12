@@ -24,7 +24,7 @@
 -- resolves every route, and the lowered program pulls in NOTHING but scalar/ADT/
 -- dispatch nodes the emitter can lower.
 
-import frontend.ast.{Decl, Lit(..), Addr(..)}
+import frontend.ast.{Decl, Lit(..), Loc(..), Pat(..), Addr(..), Route(..)}
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
 import types.typecheck.{
@@ -34,7 +34,14 @@ import types.typecheck.{
   preludeArgPosDictNames,
 }
 import eval.eval.{funNamesOf, dropShadowedExp}
-import ir.core_ir.{CProgram(..), CBind(..), CClause(..), CExpr(..)}
+import ir.core_ir.{
+  CProgram(..),
+  CBind(..),
+  CClause(..),
+  CExpr(..),
+  CImplEntry(..),
+  CImplBody(..),
+}
 import ir.core_ir_lower.{
   lowerProgramEmit,
   declSigTypeNames,
@@ -52,6 +59,7 @@ import backend.wasm_emit.{
 import entries.entry_support.{driveRuntime}
 
 main = match args ()
+  "--reemit-impl-self-state"::_ => reemitImplSelfState ()
   "--reemit-input"::runtimePath::pPath::uPath::_ =>
     reemitInput runtimePath pPath uPath
   "--reemit-state"::runtimePath::_ => reemitState runtimePath
@@ -172,6 +180,48 @@ reemitStateP = "interface Mark a where\n  mark : a -> Int\n\ndata PSubject = PZe
 
 reemitStateU : String
 reemitStateU = "interface Mark a where\n  mark : a -> Int -> Int\n\ndata USubject = SharedCtor Int Int | UZero\n\ndata SharedRecord = SharedRecord { common : Int, uLast : Int }\n\nsharedArity x y = x\n\nuOnlyFn x = x\n\nsharedValueFn x y = x\n\napply f x y = f x y\n\nchoose x _ = x\n\nsubjectCode subject = match subject\n  SharedCtor first second => first + second\n  UZero => 0\n\nuOnlyValue = 2\n\nuOnlyProbe = uOnlyFn uOnlyValue\n\nuArityValue = sharedArity\n\nuArityProbe = apply uArityValue 1 2\n\nuFnProbe = sharedValueFn 2 3\n\nuRecordProbe = (SharedRecord { common = 3, uLast = 4 }).common\n\nuLazy = mark (SharedCtor 7 8) 0\n\nimpl Mark USubject where\n  mark _ _ = 9\n\nmain = choose uLazy (subjectCode (SharedCtor 7 8))\n"
+
+reemitImplSelfState : Unit -> <IO> Unit
+reemitImplSelfState _ =
+  let pProgram = implSelfProgram "PLoop" 17 3
+  let uProgram = implSelfProgram "ULoop" 29 4
+  let p1 = emitProgram implSelfInput pProgram
+  let _ = printCapture "IMPL_SELF_P1" p1
+  let (u, _) = emitProgramRecord implSelfInput uProgram
+  let _ = printCapture "IMPL_SELF_RECORD_U" u
+  let censusEvents = emitProgramGaps implSelfInput (implSelfCensusProgram uProgram)
+  let _ = printEvents "IMPL_SELF_CENSUS_U_GAP" censusEvents
+  printCapture "IMPL_SELF_P2" (emitProgram implSelfInput pProgram)
+
+implSelfInput : WasmEmitInput
+implSelfInput = makeWasmEmitInput [("walk", ("Loop", 2))] [] [] False []
+
+implSelfLoc : Loc
+implSelfLoc = Loc "<impl-self-state>" 1 1 1 1
+
+implSelfProgram : String -> Int -> Int -> CProgram
+implSelfProgram tag base depth =
+  let self = CVar "self" (ALocal 0 0)
+  let n = CVar "n" (ALocal 0 1)
+  let recurse = CApp (CApp (CMethod "walk" (RKey tag []) [] []) self) (CBinPrim "-" n (CLit (LInt 1)) "Int")
+  let body = CIf (CBinPrim "==" n (CLit (LInt 0)) "Int") (CLit (LInt base)) recurse
+  CProgram
+    [CBind "main" [CClause [] (CLit (LInt depth))]]
+    [(tag, 0)]
+    [(tag, tag)]
+    [
+      CImplEntry "walk" 0 (CImplTagged tag tag "Loop" [0] [PVar "self" implSelfLoc, PVar "n" implSelfLoc] body)
+    ]
+
+implSelfCensusProgram : CProgram -> CProgram
+implSelfCensusProgram (CProgram groups ctorArs ctorTypes impls) =
+  CProgram
+    (groups ++ [
+      CBind "implSelfIntentionalGap" [CClause [] (CVar "missingImplSelfGap" AGlobal)]
+    ])
+    ctorArs
+    ctorTypes
+    impls
 
 -- X-W.H2b.1: strict, record, and census emissions each own a fresh gap
 -- lifecycle. The hand-built Core program deliberately reaches the same two

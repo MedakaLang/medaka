@@ -75,6 +75,10 @@ if grep -E '^(strSegsRef|strSegIdRef)[[:space:]]*:' "$WASM_SRC" >/dev/null; then
   echo "FAIL wasm typed string-state ratchet: retired ambient segment authority remains"
   exit 1
 fi
+if grep -F 'implSelfCtxRef' "$WASM_SRC" >/dev/null; then
+  echo "FAIL wasm typed impl-self-state ratchet: retired ambient authority remains"
+  exit 1
+fi
 EXPECTED_MODULE_REFS="$(printf '%s\n' \
   lamIdRef liftedFnsRef liftedNamesRef funcRefsRef liftedNamesSetW funcRefsSetW \
   useStrRef curBindRef useListRef useArrayRef useRefBoxRef useRecUpdateRef \
@@ -83,7 +87,7 @@ EXPECTED_MODULE_REFS="$(printf '%s\n' \
   useStrSearchRef useValueCmpRef useValueArithRef numPolyLocalsRef useStrCodecRef \
   useCharFromCodeRef useCharClassRef useIORef useArgsRef useFileBytesRef \
   floatLocalsRef floatGlobalsRef tupleAritiesRef emittedDefaultsWRef \
-  emittedDefaultsSetW defaultDefsWRef wTrmcCtxRef implSelfCtxRef wDispCtxRef \
+  emittedDefaultsSetW defaultDefsWRef wTrmcCtxRef wDispCtxRef \
   wDispGroupsRef | LC_ALL=C sort -u)"
 ACTUAL_MODULE_REF_SIGS="$(awk '
   /^[A-Za-z_][A-Za-z0-9_]*[[:space:]]*:[[:space:]]*Ref([[:space:]]|$)/ { print $1 }
@@ -108,6 +112,12 @@ for required in \
   'freshStrSeg : WasmEmit -> List Int -> Int' \
   'emitDataSegs : WasmEmit -> List String' \
   'emitLitRef : WasmEmit -> Lit -> List String' \
+  'implSelfCtx : Ref ImplSelfCtx' \
+  'implSelfCtx = Ref ImplSelfOff' \
+  'let savedImplSelf = (progEmit prog).implSelfCtx.value' \
+  'let _ = setRef (progEmit prog).implSelfCtx (ImplSelfOn method headTag arity)' \
+  'let _ = setRef (progEmit prog).implSelfCtx savedImplSelf' \
+  'implSelfReturnCall prog env name route methRoutes implRoutes app args = match (progEmit prog).implSelfCtx.value' \
   'let i = emit.nextStringSegmentId.value' \
   'setRef emit.nextStringSegmentId (i + 1)' \
   'setRef emit.stringSegments ((i, bytes)::emit.stringSegments.value)' \
@@ -123,6 +133,103 @@ for required in \
     exit 1
   }
 done
+for required in \
+  '"--reemit-impl-self-state"::_' \
+  'reemitImplSelfState : Unit -> <IO> Unit' \
+  'let p1 = emitProgram implSelfInput pProgram' \
+  'let (u, _) = emitProgramRecord implSelfInput uProgram' \
+  'let censusEvents = emitProgramGaps implSelfInput (implSelfCensusProgram uProgram)' \
+  'printCapture "IMPL_SELF_P2" (emitProgram implSelfInput pProgram)' \
+  'printCapture "IMPL_SELF_P1" p1' \
+  'printCapture "IMPL_SELF_RECORD_U" u' \
+  'printEvents "IMPL_SELF_CENSUS_U_GAP" censusEvents' \
+  'implSelfIntentionalGap' \
+  'missingImplSelfGap'; do
+  grep -F -- "$required" "$TYPED_ENTRY" >/dev/null || {
+    echo "FAIL wasm typed impl-self-state ratchet: missing $required"
+    exit 1
+  }
+done
+run_impl_self_check() {
+  IMPL_SELF_OUT="$($EMITBIN --reemit-impl-self-state 2>"$INPUT_WORK/impl-self.emit.err")" || {
+    echo "FAIL wasm typed impl-self-state harness"
+    cat "$INPUT_WORK/impl-self.emit.err"
+    exit 1
+  }
+  [ ! -s "$INPUT_WORK/impl-self.emit.err" ] || {
+    echo "FAIL wasm typed impl-self-state harness wrote stderr"
+    cat "$INPUT_WORK/impl-self.emit.err"
+    exit 1
+  }
+  IMPL_SELF_MARKERS="$(printf '%s\n' "$IMPL_SELF_OUT" | awk '/^IMPL_SELF_(P1|RECORD_U|CENSUS_U_GAP|P2)_(BEGIN|END)$/ { print }')"
+  IMPL_SELF_EXPECTED_MARKERS="$(printf 'IMPL_SELF_P1_BEGIN\nIMPL_SELF_P1_END\nIMPL_SELF_RECORD_U_BEGIN\nIMPL_SELF_RECORD_U_END\nIMPL_SELF_CENSUS_U_GAP_BEGIN\nIMPL_SELF_CENSUS_U_GAP_END\nIMPL_SELF_P2_BEGIN\nIMPL_SELF_P2_END')"
+  [ "$IMPL_SELF_MARKERS" = "$IMPL_SELF_EXPECTED_MARKERS" ] || {
+    echo "FAIL wasm typed impl-self-state lifecycle: expected exactly eight ordered markers"
+    exit 1
+  }
+  impl_self_capture() {
+    awk -v begin="$1" -v end="$2" '
+      $0 == begin { capture = 1; next }
+      $0 == end { exit }
+      capture { print }
+    ' <<<"$IMPL_SELF_OUT"
+  }
+  impl_self_capture IMPL_SELF_P1_BEGIN IMPL_SELF_P1_END > "$INPUT_WORK/impl-self-p1.wat"
+  impl_self_capture IMPL_SELF_RECORD_U_BEGIN IMPL_SELF_RECORD_U_END > "$INPUT_WORK/impl-self-u.wat"
+  impl_self_capture IMPL_SELF_CENSUS_U_GAP_BEGIN IMPL_SELF_CENSUS_U_GAP_END > "$INPUT_WORK/impl-self-census.events"
+  impl_self_capture IMPL_SELF_P2_BEGIN IMPL_SELF_P2_END > "$INPUT_WORK/impl-self-p2.wat"
+  for impl_self_file in impl-self-p1.wat impl-self-u.wat impl-self-census.events impl-self-p2.wat; do
+    [ -s "$INPUT_WORK/$impl_self_file" ] || {
+      echo "FAIL wasm typed impl-self-state lifecycle: empty $impl_self_file"
+      exit 1
+    }
+  done
+  cmp -s "$INPUT_WORK/impl-self-p1.wat" "$INPUT_WORK/impl-self-p2.wat" || {
+    echo "FAIL wasm typed impl-self-state lifecycle: P changed after record U and census"
+    exit 1
+  }
+  cmp -s "$INPUT_WORK/impl-self-p1.wat" "$INPUT_WORK/impl-self-u.wat" && {
+    echo "FAIL wasm typed impl-self-state lifecycle: P/U positive control did not differ"
+    exit 1
+  }
+  for impl_self_spec in "p1 PLoop 3" "u ULoop 4" "p2 PLoop 3"; do
+    impl_self_name="${impl_self_spec%% *}"
+    impl_self_rest="${impl_self_spec#* }"
+    impl_self_tag="${impl_self_rest%% *}"
+    impl_self_expected="${impl_self_rest#* }"
+    impl_self_wat="$INPUT_WORK/impl-self-$impl_self_name.wat"
+    [ "$(grep -F "return_call \$mdk_impl_${impl_self_tag}_walk" "$impl_self_wat" | wc -l | tr -d '[:space:]')" -eq 1 ] || {
+      echo "FAIL wasm typed impl-self-state lifecycle: $impl_self_name recursive return_call changed"
+      exit 1
+    }
+    [ "$(grep -F "call \$mdk_impl_${impl_self_tag}_walk" "$impl_self_wat" | grep -v 'return_call' | wc -l | tr -d '[:space:]')" -eq 0 ] || {
+      echo "FAIL wasm typed impl-self-state lifecycle: $impl_self_name gained plain recursive call"
+      exit 1
+    }
+    wasm-tools parse "$impl_self_wat" -o "$INPUT_WORK/impl-self-$impl_self_name.wasm" || {
+      echo "FAIL wasm typed impl-self-state lifecycle: wasm-tools parse $impl_self_name"
+      exit 1
+    }
+    wasm-tools validate --features=all "$INPUT_WORK/impl-self-$impl_self_name.wasm" || {
+      echo "FAIL wasm typed impl-self-state lifecycle: wasm-tools validate $impl_self_name"
+      exit 1
+    }
+    IMPL_SELF_RESULT="$($NODE "$RUNJS" "$INPUT_WORK/impl-self-$impl_self_name.wasm" 2>"$INPUT_WORK/impl-self-$impl_self_name.run.err")" || {
+      echo "FAIL wasm typed impl-self-state lifecycle: execution failed for $impl_self_name"
+      cat "$INPUT_WORK/impl-self-$impl_self_name.run.err"
+      exit 1
+    }
+    [ ! -s "$INPUT_WORK/impl-self-$impl_self_name.run.err" ] && [ "$IMPL_SELF_RESULT" = "$impl_self_expected" ] || {
+      echo "FAIL wasm typed impl-self-state lifecycle: execution changed for $impl_self_name"
+      exit 1
+    }
+  done
+  [ "$(wc -l < "$INPUT_WORK/impl-self-census.events")" -eq 1 ] &&
+    grep -F $'val implSelfIntentionalGap\tunbound variable '\''missingImplSelfGap' "$INPUT_WORK/impl-self-census.events" >/dev/null || {
+      echo "FAIL wasm typed impl-self-state lifecycle: census event changed"
+      exit 1
+    }
+}
 [ "$(grep -F 'let emit = freshWasmEmit WGapRecord' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 2 ] || {
   echo "FAIL wasm typed string-state ratchet: record and census must each own one fresh WasmEmit"
   exit 1
@@ -482,6 +589,7 @@ if [ "$major" -lt 22 ]; then
   echo "W5 SKIP  Node >= 22 required for the finalized WasmGC encoding (have $($NODE --version 2>/dev/null))"
   exit 2
 fi
+run_impl_self_check
 
 [ -x "$EMITTER" ] && export MEDAKA_EMITTER="$EMITTER"
 

@@ -1,6 +1,6 @@
 # Emitter Architecture - the derived current map
 
-**Status:** CURRENT - source-derived LLVM/WasmGC emitter map through X-W.H2b.2.
+**Status:** CURRENT - source-derived LLVM/WasmGC emitter map through X-W.H2b.3.
 This is a description of the current
 implementation, not the target design. The target is
 [`EMITTER-TARGET-ARCHITECTURE.md`](EMITTER-TARGET-ARCHITECTURE.md), and the
@@ -141,9 +141,10 @@ indexes are built once in the input.
 
 The old Wasm install hooks and the shared `emit_support` method-metadata Refs are
 gone. X-W.H2b.1 moved gap mode, event logging, and binding attribution into a
-fresh private `WasmEmit`; X-W.H2b.2 adds passive string-segment state for each
-strict, record, or census invocation. Forty-three ambient cells remain; H2b and
-#1407 remain open.
+fresh private `WasmEmit`; X-W.H2b.2 adds passive string-segment state, and
+X-W.H2b.3 adds the scoped impl-self tail-emission context for each strict,
+record, or census invocation. Forty-two ambient cells remain; H2b and #1407
+remain open.
 
 ### 3.3 Per-program derived indexes
 

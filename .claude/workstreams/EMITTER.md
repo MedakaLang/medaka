@@ -92,8 +92,9 @@ write-then-read Refs; carry the decision on the node/parameter (wasm threads the
 argument — the reference design, which LLVM emit now matches for both halves). LLVM's former
 install-once semantic tables enter through `EmitInput`; X-W.H1 gives Wasm the corresponding
 immutable `WasmEmitInput`. X-W.H2b.1 puts Wasm gap mode, events, and attribution in a fresh
-per-emission `WasmEmit`; X-W.H2b.2 adds passive string-segment state. Forty-three ambient cells
-remain and H2b/#1407 stay open. Its other physical Refs remain X-W.H2 work. Do not add new
+per-emission `WasmEmit`; X-W.H2b.2 adds passive string-segment state; X-W.H2b.3 adds the
+scoped impl-self tail-emission context. Forty-two ambient cells remain and H2b/#1407 stay
+open. Its other physical Refs remain X-W.H2 work. Do not add new
 ambient semantic-input or gap-lifecycle siblings.
 
 ### 8. Probes: `main` must be a zero-arg Unit value, and `do` is monadic
