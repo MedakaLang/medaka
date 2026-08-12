@@ -86,6 +86,8 @@ scripts/medaka-mcp-wrapper     stdio launch shim that .mcp.json execs into `meda
 scripts/pr                     the verified PR-lifecycle helper (#1414): `body`/`watch`/`enqueue`/
                                `complete` over gh — a dev tool, not a gate. Its test
                                (test/pr_helper_test.sh) is in the `tools` shard and exercises it.
+scripts/mutation_transaction   one-source expected-red transaction helper; its focused test
+                               runs unguarded in the soundness job.
 test/fixtures/pr_mock_gh       mock `gh` used ONLY by test/pr_helper_test.sh (which is in the
                                `tools` shard); running it directly proves nothing.
 

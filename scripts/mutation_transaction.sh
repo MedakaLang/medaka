@@ -40,6 +40,26 @@ hash_file() {
 baseline_hash=$(hash_file "$source_path") || exit 2
 work=$(mktemp -d "${TMPDIR:-/tmp}/medaka-mutation.XXXXXX") || exit 2
 check_log=$work/check.log
+child_pid=
+
+descendants_of() {
+  parent=$1
+  children=$(ps -e -o pid= -o ppid= | while read -r pid ppid; do
+    [ "$ppid" = "$parent" ] && printf '%s\n' "$pid"
+  done)
+  for child in $children; do
+    printf '%s\n' "$child"
+    descendants_of "$child"
+  done
+}
+
+stop_check() {
+  [ -n "$child_pid" ] || return 0
+  descendants=$(descendants_of "$child_pid")
+  kill -TERM "$child_pid" $descendants 2>/dev/null || true
+  wait "$child_pid" 2>/dev/null || true
+  child_pid=
+}
 
 restore() {
   git -C "$repo" checkout HEAD -- "$rel" >/dev/null 2>&1 || return 1
@@ -49,6 +69,7 @@ restore() {
 on_exit() {
   status=$?
   trap - EXIT HUP INT TERM
+  stop_check
   restore || { echo "transaction $label: RESTORE FAILED for $rel" >&2; rm -rf "$work"; exit 125; }
   rm -rf "$work"
   exit "$status"
@@ -56,6 +77,7 @@ on_exit() {
 on_signal() {
   sig=$1
   trap - EXIT HUP INT TERM
+  stop_check
   restore || { echo "transaction $label: RESTORE FAILED after $sig for $rel" >&2; rm -rf "$work"; exit 125; }
   rm -rf "$work"
   trap - "$sig"
@@ -78,10 +100,11 @@ after_mutation_status=$(git -C "$repo" status --porcelain)
   echo "transaction $label: mutation changed nothing" >&2; exit 3;
 }
 
-set +e
-(cd "$repo" && sh -c "$check_cmd") >"$check_log" 2>&1
+(cd "$repo" && sh -c "$check_cmd") >"$check_log" 2>&1 &
+child_pid=$!
+wait "$child_pid"
 check_status=$?
-set -e
+child_pid=
 [ "$check_status" -ne 0 ] || { echo "transaction $label: check unexpectedly passed" >&2; exit 4; }
 grep -E -- "$expect_regex" "$check_log" >/dev/null || {
   echo "transaction $label: expected-red pattern not found: $expect_regex" >&2

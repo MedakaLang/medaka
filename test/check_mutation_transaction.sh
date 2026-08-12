@@ -28,7 +28,7 @@ clean() {
   [ -z "$(git -C "$REPO" status --porcelain)" ] || fail "source not restored"
 }
 
-MUTATE='python3 -c '\''import os, pathlib; p=pathlib.Path(os.environ["MUTATION_SOURCE"]); p.write_text(p.read_text().replace("# Medaka OpenCode Workflows", "# MUTANT OpenCode Workflows", 1))'\'''
+MUTATE='printf "# MUTANT OpenCode Workflows\n" > "$MUTATION_SOURCE"'
 CHECK='grep -q "^# MUTANT OpenCode Workflows$" source.txt && { echo TXN-EXPECTED-RED; exit 17; }'
 
 "$HELPER" --source "$SOURCE" --mutate "$MUTATE" --check "$CHECK" \
@@ -45,7 +45,7 @@ grep -F 'expected-red pattern not found' "$WORK/mismatch.err" >/dev/null || fail
 clean
 
 "$HELPER" --source "$SOURCE" --mutate "$MUTATE" \
-  --check "touch '$WORK/check.started'; sleep 5; exit 23" --expect '^NEVER$' --label signal \
+  --check "echo \$\$ > '$WORK/check.pid'; trap 'touch '\''$WORK/orphan.write'\''; exit 23' TERM; touch '$WORK/check.started'; sleep 30; touch '$WORK/delayed.write'; exit 23" --expect '^NEVER$' --label signal \
   >"$WORK/signal.out" 2>"$WORK/signal.err" &
 pid=$!
 i=0
@@ -55,11 +55,18 @@ while [ "$i" -lt 100 ] && [ ! -f "$WORK/check.started" ]; do
 done
 [ "$i" -lt 100 ] || { kill -TERM "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true; fail "signal setup did not reach check"; }
 kill -TERM "$pid" || fail "could not signal helper"
+signal_start=$(date +%s)
 set +e
 wait "$pid"
 signal_status=$?
 set -e
+signal_elapsed=$(($(date +%s) - signal_start))
 [ "$signal_status" -eq 143 ] || fail "TERM status was $signal_status, expected 143"
+[ "$signal_elapsed" -lt 3 ] || fail "TERM restoration took ${signal_elapsed}s"
+check_pid=$(cat "$WORK/check.pid")
+kill -0 "$check_pid" 2>/dev/null && fail "check process survived TERM"
+sleep 0.2
+[ ! -e "$WORK/delayed.write" ] || fail "check wrote after TERM restoration"
 clean
 
-echo "PASS: mutation transaction helper restores on expected red, mismatch, and TERM"
+echo "PASS: mutation transaction helper restores on expected red, mismatch, and prompt TERM"
