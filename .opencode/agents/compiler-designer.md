@@ -25,7 +25,8 @@ Act as the read-only specification and architecture authority for complex Medaka
 
 When the conductor supplies direct command output captured immediately before
 dispatch proving the absolute worktree path, exact HEAD, branch or detached
-state, and empty porcelain status, treat that receipt as authoritative. Rerun
+state, and empty porcelain status, plus parent/daughter branch and path
+distinction where applicable, treat that receipt as authoritative. Rerun
 Git admission only when your tool surface permits it; lack of shell/Git access
 is not a blocker and must not consume a stop-and-resume turn. Stop only when the
 receipt is missing, stale by the conductor's own revision ledger, or contradicted

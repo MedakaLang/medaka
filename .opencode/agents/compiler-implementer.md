@@ -67,8 +67,9 @@ On a resumed **repair mode** assignment, accept the conductor's exact diagnostic
 and changed-path boundary as the complete packet. Touch only previously
 authorized paths, fix only the listed implementation-conforming failures, keep
 canonical formatting already applied, and return the delta. Do not repeat
-discovery, restate the design, or reopen semantics unless the diagnostics expose
-a concrete premise contradiction.
+discovery or restate the design. Preserve the general escalation rule: stop if
+the diagnostics, source, requested repair, or its required consequences
+contradict semantics, architecture, ownership, scope, or another plan premise.
 
 Never stage, commit, or push. If the step budget is becoming tight, stop at a
 coherent edit boundary: leave the worktree parseable when possible and return a

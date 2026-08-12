@@ -5,20 +5,24 @@ description: Builds compact derived packets for staged Medaka compiler continuat
 
 # Medaka Continuation Receipt
 
-Use one task-owned scratch receipt as the compact state carrier for an already
-established compiler epic. This is a template, not a new architecture authority.
-Derive every set, count, SHA, issue state, and result from current source, Git,
-GitHub, or an exact command receipt; never copy a prior handoff's number forward.
+Use a task-owned scratch receipt as a disposable, revision-and-phase-scoped
+projection of the conductor's authoritative conversation ledger for an already
+established compiler epic. It is a template, never a state carrier or a new
+architecture/workflow authority. Generate it immediately before one named use;
+never use it to update the ledger. Derive every set, count, SHA, issue state, and
+result from the current ledger plus source, Git, GitHub, or an exact command
+receipt; never copy a prior handoff's number forward.
 
 ## 1. Admission
 
-Record direct command output captured immediately before dispatch:
+Record commands and their actual direct output captured immediately before
+dispatch:
 
-- absolute worktree path and owner;
-- pinned base and exact HEAD;
-- branch or detached state;
+- parent and daughter absolute worktree paths and owners where applicable;
+- pinned base and exact HEAD for each relevant worktree;
+- branch or detached state for each relevant worktree;
 - empty porcelain status;
-- daughter/parent path distinction when applicable.
+- explicit no-shared-worktree and no-shared-branch conclusion.
 
 Agents without Git tools accept this receipt rather than spending a turn asking
 the conductor to repeat it.
@@ -65,6 +69,13 @@ Generate concise, consistent subsets from the same receipt:
 - PR body: outcome, semantics, verification, deferrals, inheritance;
 - tracker handoff: landed carrier, authoritative merge-group run, residual set,
   and next bounded derivation question.
+
+Before each projection, compare the receipt's revision and phase with the
+conversation ledger. After any rebase, repair, plan delta, implementation
+revision, verification revision, review finding, or tracker-state change,
+discard and regenerate the mutable projection. A valid SHA-256 proves only byte
+integrity, never freshness. Keep immutable command/verifier receipts separate so
+they can inherit only under the explicit revision rules.
 
 Store the receipt under a unique task scratch path, provide its SHA-256 to the
 reviewer, never commit it, and delete it during wrap-up.
