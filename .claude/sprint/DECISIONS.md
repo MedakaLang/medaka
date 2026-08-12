@@ -994,3 +994,49 @@ scope:      **Zero unattributed hunks.** RUN-026's "expected LEG A delta" is dis
             golden moved because something moved that we did not intend" — the two are
             indistinguishable from a red gate alone, which is exactly why a red gate is not
             evidence either way.
+
+## RUN-036 — ⚖️ OWNER RULING: MAX THROUGHPUT. The §2 per-unit checkpoint is SUSPENDED
+
+question:   After checkpoint 1 the orchestrator recommended keeping the serial checkpoint and
+            trading away concurrency instead. The owner ruled the opposite way.
+ruling:     **Throughput is the priority for the remainder of the stage. The §2 per-unit
+            integration checkpoint is SUSPENDED.** Land the whole stage, then repair. Owner (Val),
+            2026-08-12, explicitly framed as an experiment, reversible if it goes badly.
+derivation: Owner decision. Rationale, in the owner's words: *"it might make it easier to have the
+            whole thing 'done' but maybe a bit broken in places rather than stopping constantly to
+            verify before the end."*
+what changed:
+            - **Dropped**: the per-unit `preflight` + `selfcompile_fixpoint` checkpoint (the serial
+              cost). Gate-level verification moves wholesale to the post-stage round.
+            - **Dropped**: the RUN-033 quiescence rule, *because its premise is gone.* That rule
+              existed to stop **measurements** being taken against half-applied edits. With no
+              mid-run measurements, there is nothing to contaminate. ⚠️ It must be **REINSTATED the
+              moment any gate is run again** — including at the start of the repair round, whose
+              first act must be a measurement on a quiescent tree.
+            - **Kept**: `make medaka && make check-self`, batched. This is NOT verification — it is
+              the substrate. §5 already draws this line: every downstream implementer inherits this
+              base, and a tree that does not compile makes subsequent work neither buildable nor
+              bisectable. Dropping it would cost throughput, not buy it.
+            - **Kept**: §4's **stop-don't-adapt** rule, hard, in all three live briefs. This is the
+              single load-bearing safety property under concurrency. A stopped agent is cheap and
+              retriable; a plausible blend of two agents' edits is invisible to every gate and
+              survives into the repair round undetected. **Throughput may be traded for anything
+              except this.**
+            - **Kept**: RUN-006's 1072 checkpoint and RUN-025's #1438 pin-first ordering. Both are
+              single `sh` runs inside a unit, both bless nothing, and both are *falsifiers of
+              specific claims* rather than general verification — RUN-025's is an ORDERING
+              constraint (author and observe RED before the fix), which cannot be recovered
+              afterwards at any price.
+scope:      **A-3.6 and A-3.7 were found NOT to be serial**, contradicting RUN-019's ordering. The
+            dependency was assumed semantic and is not: A-3.6 edits the IE **visibility filter**
+            (`declEnvVisibleAt`/`ieSnapAt`); A-3.7 relocates **coherence inputs**
+            (`cohCollectImpls`/`checkCoherence`) and reads `ieRows`, which A-3.6 does not touch.
+            ⇒ Lane B, A-3.6 and A-3.7 dispatched CONCURRENTLY — the entire remaining stage in
+            flight. Each brief carries the other two agents' regions explicitly so an agent can
+            recognise a foreign edit rather than adapt to it.
+            📌 **Accepted risk, stated plainly so the repair round can look for it:** three agents
+            edit one 28k-line file with adjacent regions (Lane B `:15465`/`:16770`, A-3.7 `:15438`/
+            `:16809`). Collisions are EXPECTED. The designed outcome of a collision is a **stopped
+            agent and a re-dispatch**, which is loud and cheap. The failure this trades against is
+            an agent that adapts instead of stopping — so if any unit reports having "worked around"
+            a region that moved, treat its diff as suspect first, not last.
