@@ -1,5 +1,5 @@
 # META
-source_lines=1998
+source_lines=2021
 stages=DESUGAR,MARK
 # SOURCE
 -- Identity + registry substrate — Stage A-2 unit A-2.0
@@ -151,10 +151,15 @@ stages=DESUGAR,MARK
 -- about which `Ns` the thing is in. So `RegKey` is the key type and `Ident`
 -- is its one-element case:
 --
+--   ⚠️ #1112 A-3.4 PR2 renamed one row's ANCHOR, not its key: the concrete
+--   obligation bucket used to be cited as `obUnivConcreteRef`, a `CrossRun`
+--   accumulator that unit DELETED. The key is unchanged; it is minted by
+--   `insertUnivImplAt` into `ImplUniverse`, which the Module path now gets
+--   from `ieUniverseAt` and the Flat path from `buildImplUniverse`.
 --   | table                            | key                      | site          |
 --   |----------------------------------|--------------------------|---------------|
 --   | `universeIfaceParamKinds`        | TabKey × Int  ✅ A-2.4    | typecheck.mdk |
---   | `obUnivConcreteRef`              | Ident × Ident            | typecheck.mdk |
+--   | `ImplUniverse` concrete bucket   | Ident × Ident            | typecheck.mdk |
 --   | `checkCallObligationsU` dedup    | Ident × [Option Ident]   | typecheck.mdk |
 --   | `methodReqCountRef`              | Ident × Ident            | eval.mdk      |
 --   | `ifaceDispatchRef`               | Ident × Ident            | eval.mdk      |
@@ -449,8 +454,9 @@ ordKey n = lenKey "\{n}"
 --     regression `AGENTS.md` grades as a severity INCREASE, and it is invisible
 --     to every golden, because a check that stops firing moves no output that
 --     any fixture asserts.
---   * A-2.2b's is every dispatch key below — `obUniv*`, `KeyBuckets`,
---     `checkCallObligationsU`'s dedup key — each of which projects a head
+--   * A-2.2b's is every dispatch key below — the `obUniv*` accumulators (whose
+--     buckets are `ImplUniverse`'s; the refs themselves were retired by #1112
+--     A-3.4 PR2), `KeyBuckets`, `checkCallObligationsU`'s dedup key — each of which projects a head
 --     through `headTyconTy`/`headTyconMono`, and those projections answer
 --     `TkBare` on the flat path for exactly the reason A-2.3 gives. Keying them
 --     by `Ident` alone is not merely lossy, it is unconstructible.
@@ -482,7 +488,7 @@ deriving (Eq, Ord, Debug)
 export regKeyOf : Ident -> RegKey
 regKeyOf ident = RegKey [TkIdent ident] []
 
--- An identity TUPLE (`obUnivConcreteRef`, `ifaceDispatchRef`,
+-- An identity TUPLE (`ImplUniverse`'s concrete bucket, `ifaceDispatchRef`,
 -- `checkCallObligationsU`'s dedup key).
 export regKeyN : List Ident -> RegKey
 regKeyN idents = RegKey (map TkIdent idents) []
@@ -518,10 +524,11 @@ export regKeyTabAt : TabKey -> Int -> RegKey
 regKeyTabAt key slot = RegKey [key] [slot]
 
 -- The `TabKey` peer of `regKeyN` — an identity TUPLE whose members may or may
--- not carry identity. `obUnivConcreteRef`'s `(interface, receiver head)` pair
--- is the first table that needs it: its interface half is bare by derivation
--- (`Predicate` carries no origin — see `ifaceRegistered` in
--- `types/typecheck.mdk`) while its head half is whatever `headTyconTy`
+-- not carry identity. `ImplUniverse`'s concrete bucket `(interface, receiver head)`
+-- pair is the first table that needs it: its interface half is bare by derivation
+-- (`Predicate` carries no origin — see `builtinClassPresent` in
+-- `types/typecheck.mdk`, and the `ifaceRegistered` TOMBSTONE beside it: #1539
+-- retired that gate, so cite the live name) while its head half is whatever `headTyconTy`
 -- projected, so ONE key genuinely mixes the two populations.
 export regKeyNTab : List TabKey -> RegKey
 regKeyNTab keys = RegKey keys []
@@ -654,24 +661,39 @@ export mregAdd : Ident -> v -> MultiRegistry v -> MultiRegistry v
 mregAdd ident v mr = mregAddK (regKeyOf ident) v mr
 
 -- ⚠️ APPEND, not `mregAddK`'s prepend, and the difference is load-bearing for
--- ONE of the two tables that needs it. Attributing it to both
--- (`obUnivConcreteRef`/`obUnivHeadlessRef`, `types/typecheck.mdk`) overstates
--- it, so name which is which:
+-- ONE of the two buckets that needs it. Attributing it to both overstates it, so
+-- name which is which.
 --
---   * `obUnivHeadlessRef` — THIS is the first-match reader.
+-- 🚨 ANCHOR: the two buckets are `ImplUniverse`'s, written by `insertUnivImplAt`
+-- (`types/typecheck.mdk`). Until #1112 A-3.4 PR2 this paragraph named their
+-- CARRIERS instead — the `obUnivConcreteRef`/`obUnivHeadlessRef` `CrossRun`
+-- accumulators — and those three fields are now DELETED: the Module path's
+-- universe is a projection of stage K's `IE` (`ieUniverseAt`, selecting from the
+-- per-ordinal `ieUnivSnaps`), and the Flat path still calls `buildImplUniverse`.
+-- The property below is unchanged and still live; only the names it can be
+-- grepped by moved, from the retired refs to the value they held.
+--
+--   * the HEADLESS bucket (`univHeadless`) — THIS is the first-match reader.
 --     `findMatchingImplReqsU` reaches it directly, on both its clauses, as
 --     `firstReqMatch (univHeadless …)`, and its own doc-comment records that
 --     the order is a deliberate soundness/conformance property and not an
 --     order-immaterial coherence argument. A prepend here would silently
 --     invert which impl's `requires` get discharged.
---   * `obUnivConcreteRef` — NOT read first-match, and not read by
---     `findMatchingImplReqsU` at all. That function's concrete arm goes through
---     `concreteReqMatchByIface` → `selectImplEntryByIface`, which reads
---     `shadowKeyTableRef` — a DIFFERENT table. `obUnivConcreteRef`'s own
+--   * the CONCRETE bucket (`univConcreteBucket`) — NOT read first-match, and not
+--     read by `findMatchingImplReqsU` at all. That function's concrete arm goes
+--     through `concreteReqMatchByIface` → `selectImplEntryByIface`, which reads
+--     `shadowKeyTableRef` — a DIFFERENT table. The concrete bucket's own
 --     readers are `univConcreteBucket`'s two, `implMatchesU` and
 --     `implMatchesReceiverU`, and both are boolean EXISTENCE tests
 --     (`bucketArgsMatch`/`bucketRecvMatch`, `||`-folded), for which bucket
 --     order is immaterial.
+--
+-- ⚠️ A-3.4 PR2 ADDED A THIRD WRITER OF THE SAME ORDER PROPERTY, so it is now a
+-- SET of three and not a pair: `ieBuildSnapsGo` folds `insertUnivImpl` over the
+-- ordinal-ordered `ieRows` to build each prefix snapshot. It reaches this same
+-- append through `insertUnivImplAt`, so the order is preserved by construction
+-- rather than by a second spelling — but a future edit that gives `IE` its own
+-- insert path owes this paragraph a re-read.
 --
 -- Both writers have always spelled `bucketOf k ++ [x]`; this is that spelling,
 -- once, inside the abstraction, at the same O(bucket) cost per add. Keeping the
@@ -1046,7 +1068,7 @@ headKeyName (HkRigid name) = name
 -- bare-name lookup returned. See `bucketOfHead` (`types/typecheck.mdk`).
 -- The DECLARATION half of a projected head, or `None` when the projection is
 -- the §8 I6.1 rigid residual. The peer of `headBucketKey` for a key that is a
--- TUPLE — `obUnivConcreteRef`'s `(interface, receiver head)` pair, and
+-- TUPLE — `ImplUniverse`'s concrete-bucket `(interface, receiver head)` pair, and
 -- `checkCallObligationsU`'s argument vector — where the head is one COMPONENT
 -- of the key rather than the whole of it, so a `RegKey` is the wrong return
 -- type.
@@ -1147,8 +1169,9 @@ dispKeyRender base rigids = lenKey (regKeyRender base)
 --     ordering guarantee from this module at all. The bullet stands for the
 --     NEXT conversion that does swap a representation.
 --   * NO `mregDelete` — no target table removes a value from a multi-bucket
---     (`obUnivConcreteRef`, `ifaceDispatchRef` and `methodReqCountRef` are
---     grow-only within a run and cleared wholesale by `resetState`).
+--     (`ImplUniverse`'s buckets, `ifaceDispatchRef` and `methodReqCountRef` are
+--     grow-only within a run; the first is rebuilt per read/build rather than
+--     reset, the other two cleared wholesale by `resetState`).
 
 -- ── Doctest fixtures ───────────────────────────────────────────────────────
 -- These `Ident`s exist only to give the doctests below short, readable

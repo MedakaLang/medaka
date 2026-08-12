@@ -1,8 +1,8 @@
 -- §8 I7 / §7.1 — THE FLATTEN-ARM / MODULE-ARM PARTITION, PINNED.
 --
 -- WHAT THIS IS A TRIPWIRE FOR, and it is not this file's own behaviour.  #1446's
--- scoping pass named one risk it could not reach: `obUnivConcreteRef` and its two
--- siblings are per-RUN accumulators that SURVIVE the per-module `resetState`, and
+-- scoping pass named one risk it could not reach: the Module arm's `ImplUniverse` is
+-- whole-graph and outlives the per-module `resetState` (A-3.4 PR2 retired `obUniv*`), and
 -- the five prelude-FLATTENED internal passes (`elaborateDict`, `discoverPromoted`,
 -- `discoverPromotedJoint`, `checkBodyImpl`, `checkMatchToLines` — grep
 -- `externTyOriginScope []`) have no prelude boundary.  A row WRITTEN with an

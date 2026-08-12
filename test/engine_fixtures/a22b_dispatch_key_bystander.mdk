@@ -44,7 +44,7 @@
 --      `requires` is the whole repair, and an honestly-labelled untestable key
 --      is still an untestable key.
 --   B  skew the READER's DECLARATION bucket key (`bucketOfHead`'s `Some` arm)
---   C  skew the READER's `obUnivConcreteRef` key (`univConcreteBucket`)
+--   C  skew the READER's concrete-bucket key (`univConcreteBucket`)
 --                                              → **NEITHER PRODUCES A BINARY**.
 --      Both fail during `make medaka` stage A with a clang error on the emitted
 --      IR (`use of undefined value '@mdk_isEmpty'`) — a mis-dispatched
