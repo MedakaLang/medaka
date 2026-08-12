@@ -1924,7 +1924,7 @@ checkGradedImplHeadCon iface o n loc nApplied want = match headRemainingKinds o 
 -- knowable here" (an alias or a builtin), which the caller treats as an abstention.
 -- ⚠️ An abstractly-exported type was in that bucket until #804/#1028 and is NOT any
 -- more — `kindPublicDataDecl`'s `VisAbstract` arm gives it a real `dataParamKindsRef`
--- entry (via `declEnvParamKindsSeed`), so it returns `Some` and is judged exactly like
+-- entry (via `declEnvSeedChain`), so it returns `Some` and is judged exactly like
 -- a `public export` one.
 -- `key` is minted ONCE and shared by both guard arms via the `where` (#1111
 -- A-2.3 follow-up): the first guard ALWAYS evaluates it (Medaka is strict, and
@@ -2726,6 +2726,8 @@ data DeclEnvs = DeclEnvs {
     deData : DataEnv,  -- A-3.2a (#1112) built it; A-3.2b residual 1 (#1512) made it LIVE — `aliasUniverseAt` reads `deAliases`
     deImpls : ImplEnv,
     deIfaces : ClassEnv,  -- A-3.3 (#1519) built it; A-3.5c (#1557) made it LIVE — three readers, see the `CE` block
+    deKindsBefore : OrdMap (List (TabKey, List Kind)),
+    deOwnersBefore : OrdMap (OrdMap (List String)),
   }
 
 -- INITIAL construction only, exactly as `freshDriverState` is: a driver that never
@@ -2739,6 +2741,8 @@ emptyDeclEnvs = DeclEnvs {
   deData = emptyDataEnv,
   deImpls = emptyImplEnv,
   deIfaces = emptyClassEnv,
+  deKindsBefore = omEmpty,
+  deOwnersBefore = omEmpty,
 }
 
 -- Build the envelope from the prelude + the loader's dependency-first module list.
@@ -2750,6 +2754,11 @@ buildDeclEnvs : List Decl -> List (String, List Decl) -> DeclEnvs
 buildDeclEnvs coreDecls modules =
   let mods = declEnvModulesFrom 0 (("core", coreDecls)::modules)
   let allDecls = declEnvDeclsOf mods
+  -- A-3.2b (#1512) slices 2+3: the DATA-UNIVERSE SEED CHAIN, built once here for the
+  -- whole graph so the per-module read is one `omLookup` and allocates nothing.  The
+  -- `""` seeds mirror `declEnvOrdIndex`'s: the core pass arrives under that spelling
+  -- and its seed is empty because nothing precedes ordinal 0.  See `declEnvSeedChain`.
+  let seeds = declEnvSeedChain mods [] omEmpty (omInsert "" [] omEmpty) (omInsert "" omEmpty omEmpty)
   DeclEnvs {
     deModules = mods,
     deOrdIndex = declEnvOrdIndex (omInsert "" 0 omEmpty) mods,
@@ -2774,6 +2783,8 @@ buildDeclEnvs coreDecls modules =
     -- over the SAME `mods` (per-module rows, ordinal-tagged), composing rather
     -- than interacting with the other two initialisers for the identical reason.
     deIfaces = buildClassEnv mods,
+    deKindsBefore = fst seeds,
+    deOwnersBefore = snd seeds,
   }
 
 declEnvModulesFrom : Int -> List (String, List Decl) -> List DeclEnvModule
@@ -2950,31 +2961,33 @@ declEnvRowVisible cur m
 -- the own row a second time would not merely duplicate work: `addFieldOwners`
 -- does not dedupe, and `mangledHeadCandidates` reads that multimap RAW (no
 -- `sortUniqS`), so a doubled owner key turns its `[pair]` singleton gate into the
--- give-up arm — `Some pair` becomes `None`.  So `declEnvSeedRowsGo` drops the
--- reader's own row by IDENTITY (`m.demOrd == cur`), a test that survives A-3.6
--- unchanged and correctly, and the ordinal question proper stays in
--- `declEnvVisibleAt`.
+-- give-up arm — `Some pair` becomes `None`.
 --
--- ALLOCATION.  Both folds below are O(entries visible to this module) per module,
--- i.e. O(modules x universe) allocation over a run, where the retired ref-copy
--- was O(1).  That is deliberate and it is why the per-ROW halves are MEMOS
--- (`demKindEntries`, `demPubDecls`): `inferParamKinds` and `publicDataDecls` run
--- once per decl for the whole run, and the per-module cost is cons cells and
--- `omInsert` spine, not re-derivation.  See the PR body for the measured
--- `perf_scaling` `modules` numbers — the growth RATIO is what that gate grades,
--- and a term of this order must be shown not to move it rather than assumed.
-declEnvSeedRows : Int -> DeclEnvs -> List DeclEnvModule
-declEnvSeedRows cur envs = declEnvSeedRowsGo cur envs.deModules
-
--- Ascending ordinal order is PRESERVED — both consumers below fold left over this
--- list and depend on it (kinds end up highest-ordinal-FIRST for `lookupTab`'s
--- first-match; owners end up highest-ordinal-first for `addFieldOwners`' cons).
-declEnvSeedRowsGo : Int -> List DeclEnvModule -> List DeclEnvModule
-declEnvSeedRowsGo _ [] = []
-declEnvSeedRowsGo cur (m::rest)
-  | m.demOrd == cur = declEnvSeedRowsGo cur rest
-  | declEnvVisibleAt cur m.demOrd = m :: declEnvSeedRowsGo cur rest
-  | otherwise = declEnvSeedRowsGo cur rest
+-- 🚨 IT IS A CHAIN, NOT A PER-READ FOLD, AND THAT IS A MEASURED REQUIREMENT.  The
+-- first cut of this unit folded the visible rows AT EVERY READ: O(universe) work
+-- and allocation once per module, i.e. the "rebuild the whole thing once per
+-- element" shape `compiler/AGENTS.md` opens with.  CI caught it —
+-- `diff_compiler_perf_scaling`'s `modules` shape put `typecheck` TIME at
+-- 0.299s/0.675s/1.872s over N=100/200/400 where the row's own note says the stage
+-- has been UNDER the 200 ms floor since #154 PR-C, and the shape's climbing rule
+-- (`r2 > r1 * 1.15 && r2 > 2.45`) failed it.  The ALLOC arm called the same run
+-- `ok` at 2.24/2.42, which is exactly the second rule in `compiler/AGENTS.md`: a
+-- quadratic that allocates little is invisible to the allocation arm.
+--
+-- So the seeds are built ONCE, in `buildDeclEnvs`, as a PREFIX CHAIN: reader k's
+-- seed is reader (k-1)'s seed with row (k-1)'s public projection folded in, which
+-- shares structure and costs O(whole graph) for the entire run.  The read is one
+-- `omLookup` and allocates nothing.
+--
+-- 🚨 A-3.6 EDITS HERE, and this note is what makes that an edit rather than a
+-- hunt.  The chain ENCODES `declEnvVisibleAt`'s prefix shape — that is the whole
+-- source of the sharing — even though each step still routes its PROJECTION
+-- through `declEnvRowKindEntries`/`declEnvRowVisible` (hence through
+-- `declEnvVisibleTo`, hence through `declEnvVisibleAt`).  When A-3.6 makes
+-- `declEnvVisibleAt ≡ True`, every reader must see the WHOLE chain instead of its
+-- own prefix: hand every row the FINAL accumulator in `declEnvSeedChain` below.
+-- The publicity conjunct is untouched by that edit, which is the property
+-- `declEnvVisibleTo`'s two-conjunct factoring exists to preserve.
 
 -- The kind entries of row [m] that a reader at ordinal [cur] may see — the exact
 -- peer of `declEnvRowVisible` one projection over, and composed from the same two
@@ -3018,34 +3031,35 @@ declEnvKindEntries (_::rest) = declEnvKindEntries rest
 -- at which point first-match means "last registered wins" again and the
 -- #1069/#1070/#1090 family returns.  It costs a fold direction.  (INFERRED, argued
 -- from the keying and the purity, not from a differential run.)
-declEnvParamKindsSeed : Int -> DeclEnvs -> List (TabKey, List Kind)
-declEnvParamKindsSeed cur envs =
-  declEnvParamKindsSeedGo cur [] (declEnvSeedRows cur envs)
-
-declEnvParamKindsSeedGo : Int -> List (TabKey, List Kind) -> List DeclEnvModule -> List (TabKey, List Kind)
-declEnvParamKindsSeedGo _ acc [] = acc
-declEnvParamKindsSeedGo cur acc (m::rest) =
-  declEnvParamKindsSeedGo cur (declEnvRowKindEntries cur m ++ acc) rest
-
--- `fieldOwnersRef`'s cross-module seed.  Same fold, same ascending order; the
--- per-row population is `declEnvRowVisible` (unchanged, the `demPubDecls` arm for
--- every row here) walked through the SAME `Variant`/`ConNamed` filter
--- `registerVariants` → `registerNamedFieldVariants` → `registerRecordInfoKeyed`
--- applies, so the owner string is the same `Variant` constructor name off the same
--- `Decl` node.  `DNewtype` contributes nothing (its payload is always a synthesised
--- `ConPos`), which is why there is no arm for it, and `DAttrib` has none for the
--- #1586 reason recorded on `declEnvKindEntries`.
-declEnvFieldOwnersSeed : Int -> DeclEnvs -> OrdMap (List String)
-declEnvFieldOwnersSeed cur envs =
-  declEnvFieldOwnersSeedGo cur omEmpty (declEnvSeedRows cur envs)
-
-declEnvFieldOwnersSeedGo : Int -> OrdMap (List String) -> List DeclEnvModule -> OrdMap (List String)
-declEnvFieldOwnersSeedGo _ acc [] = acc
-declEnvFieldOwnersSeedGo cur acc (m::rest) =
-  declEnvFieldOwnersSeedGo
-    cur
-    (declEnvDeclFieldOwners (declEnvRowVisible cur m) acc)
+-- The chain itself, walked ONCE over the ordinal-ascending rows.  Before folding
+-- row [m] in, both accumulators hold exactly "every row strictly earlier than
+-- [m]", which IS [m]'s own seed — so it is stamped under [m]'s module id here and
+-- read back by one `omLookup` per module.
+--
+-- ⚠️ THE PROJECTION IS READ AT `m.demOrd + 1`, THE ORDINAL OF THE NEXT READER, and
+-- that is not a trick: `declEnvVisibleTo`'s publicity conjunct is CONSTANT over
+-- every `cur > m.demOrd` (all of them take the non-own arm), so one evaluation at
+-- the smallest such reader is the projection every later reader sees.  Doing it
+-- this way keeps the projection defined in exactly one place —
+-- `declEnvRowKindEntries` / `declEnvRowVisible` — instead of open-coding
+-- `m.demKindEntries` / `m.demPubDecls` here, which is the drift A-3.6 would then
+-- have to find twice.
+--
+-- The field-owner population is `declEnvRowVisible` walked through the SAME
+-- `Variant`/`ConNamed` filter `registerVariants` → `registerNamedFieldVariants` →
+-- `registerRecordInfoKeyed` applies, so the owner string is the same `Variant`
+-- constructor name off the same `Decl` node.  `DNewtype` contributes nothing (its
+-- payload is always a synthesised `ConPos`), which is why there is no arm for it,
+-- and `DAttrib` has none for the #1586 reason recorded on `declEnvKindEntries`.
+declEnvSeedChain : List DeclEnvModule -> List (TabKey, List Kind) -> OrdMap (List String) -> OrdMap (List (TabKey, List Kind)) -> OrdMap (OrdMap (List String)) -> (OrdMap (List (TabKey, List Kind)), OrdMap (OrdMap (List String)))
+declEnvSeedChain [] _ _ km om = (km, om)
+declEnvSeedChain (m::rest) kacc oacc km om =
+  declEnvSeedChain
     rest
+    (declEnvRowKindEntries (m.demOrd + 1) m ++ kacc)
+    (declEnvDeclFieldOwners (declEnvRowVisible (m.demOrd + 1) m) oacc)
+    (omInsert m.demId kacc km)
+    (omInsert m.demId oacc om)
 
 declEnvDeclFieldOwners : List Decl -> OrdMap (List String) -> OrdMap (List String)
 declEnvDeclFieldOwners [] acc = acc
@@ -3067,10 +3081,21 @@ fieldNameOf (Field fn _) = fn
 -- The ONE call site of the two seeds, so a future third table cannot be added on
 -- one side only — the same "one body per direction" property `loadDataUniverse`
 -- was factored for, which is what these two lines LEFT.
-declEnvSeedDataUniverse : Int -> DeclEnvs -> Unit
-declEnvSeedDataUniverse cur envs =
-  let _ = setRef perRun.value.dataParamKindsRef (declEnvParamKindsSeed cur envs)
-  setRef perRun.value.fieldOwnersRef (declEnvFieldOwnersSeed cur envs)
+--
+-- Keyed by the loader MODULE ID, the same string `buildDeclEnvs` stamped the chain
+-- under, so no ordinal arithmetic happens at the read.  A MISS yields the empty
+-- seed, which is fail-CLOSED in the same direction as `declEnvsOrdOf`'s `-1`: a
+-- reader with an unknown id LOSES cross-module kinds and owners and produces a
+-- reject (loud), never a silent accept.  The core pass arrives as `""` — the
+-- spelling both drivers pass for it — and `buildDeclEnvs` registers that key
+-- explicitly, exactly as `declEnvOrdIndex` does, so ordinal 0's empty seed is a
+-- HIT rather than a miss that happens to agree.
+declEnvSeedDataUniverse : String -> DeclEnvs -> Unit
+declEnvSeedDataUniverse mid envs =
+  let _ = setRef perRun.value.dataParamKindsRef (fromOption [] (omLookup mid envs.deKindsBefore))
+  setRef
+    perRun.value.fieldOwnersRef
+    (fromOption omEmpty (omLookup mid envs.deOwnersBefore))
 
 -- ── doctests ─────────────────────────────────────────────────────────────
 -- The three arms of `kindPublicDataDecl` that `publicDataDecl` does NOT have are
@@ -3183,7 +3208,7 @@ deKindRow1 = declEnvModule 1 "m" deKindFixtureDecls
 -- included, and `deFieldOwnerIdents` is therefore a SUPERSET of what the
 -- retired `universeFieldOwners` ever held (which accumulated only `pubDecls`,
 -- plus a separate opaque-kind-only pass for the kind half).  That is why the
--- field-owner seed (`declEnvFieldOwnersSeed`) is built from `declEnvRowVisible`
+-- field-owner seed (`declEnvSeedChain`) is built from `declEnvRowVisible`
 -- over the per-module ROWS and NOT from this flat table: `DataEnv` is
 -- ordinal-free, so it cannot answer a visibility question at all, and reading
 -- it unfiltered would let a PRIVATE record in an unrelated module vote in
@@ -19730,10 +19755,10 @@ checkBodyImpl seed mode prog0 =
       -- #1112 A-3.2b (#1512) slices 2+3: the KIND and FIELD-OWNER halves of the seed
       -- `loadDataUniverse` used to copy out of two `crossRun` accumulators.  Same
       -- position in the ladder (it is the UNIVERSE layer, under the overlay and under
-      -- `prog0`), same content, one ordinal-aware source.  See `declEnvSeedRows` for
+      -- `prog0`), same content, one ordinal-aware source.  See `declEnvSeedChain` for
       -- why the reader's OWN row is excluded here and registered by the two
       -- `registerAllData` calls below instead.
-      let _ = declEnvSeedDataUniverse cur envs
+      let _ = declEnvSeedDataUniverse mid envs
       let base = registerAllData crossRun.value.universeDataEnv.value
                    (importedCtorTypeDecls prog0 cur envs.deModules)
       let env0 = registerAllData base prog0
@@ -25184,7 +25209,7 @@ publicDataDecls decls = filterList publicDataDecl decls
 --     `T-ROW-KIND-MISMATCH` (#1090).  Same table, same collision, opposite symptoms.
 --   * The flat/single-file path is NOT re-keyed and still competes by bare name; that is
 --     the Module-path-only bound recorded on `tyTabKey`, drained by #1115 (E-1).  It is
---     also why `declEnvParamKindsSeed`'s fold direction is reproduced but currently
+--     also why `declEnvSeedChain`'s fold direction is reproduced but currently
 --     unobservable — see its note.
 kindPublicDataDecl : Decl -> Bool
 kindPublicDataDecl (DData { dataVis = VisPublic }) = True

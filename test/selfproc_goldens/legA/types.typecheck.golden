@@ -461,19 +461,14 @@ declCtorIdentsOf : Decl -> List (String, String, Ident)
 declCtorNamed : String -> Decl -> Bool
 declEnvDeclFieldOwners : List Decl -> Map String (List String) -> Map String (List String)
 declEnvDeclsOf : List DeclEnvModule -> List Decl
-declEnvFieldOwnersSeed : Int -> DeclEnvs -> Map String (List String)
-declEnvFieldOwnersSeedGo : Int -> Map String (List String) -> List DeclEnvModule -> Map String (List String)
 declEnvKindEntries : List Decl -> List (TabKey, List Kind)
 declEnvModule : Int -> String -> List Decl -> DeclEnvModule
 declEnvModulesFrom : Int -> List (String, List Decl) -> List DeclEnvModule
 declEnvOrdIndex : Map String Int -> List DeclEnvModule -> Map String Int
-declEnvParamKindsSeed : Int -> DeclEnvs -> List (TabKey, List Kind)
-declEnvParamKindsSeedGo : Int -> List (TabKey, List Kind) -> List DeclEnvModule -> List (TabKey, List Kind)
 declEnvRowKindEntries : Int -> DeclEnvModule -> List (TabKey, List Kind)
 declEnvRowVisible : Int -> DeclEnvModule -> List Decl
-declEnvSeedDataUniverse : Int -> DeclEnvs -> Unit
-declEnvSeedRows : Int -> DeclEnvs -> List DeclEnvModule
-declEnvSeedRowsGo : Int -> List DeclEnvModule -> List DeclEnvModule
+declEnvSeedChain : List DeclEnvModule -> List (TabKey, List Kind) -> Map String (List String) -> Map String (List (TabKey, List Kind)) -> Map String (Map String (List String)) -> (Map String (List (TabKey, List Kind)), Map String (Map String (List String)))
+declEnvSeedDataUniverse : String -> DeclEnvs -> Unit
 declEnvVariantFieldOwners : List Variant -> Map String (List String) -> Map String (List String)
 declEnvVisibleAt : Int -> Int -> Bool
 declEnvVisibleTo : Int -> Int -> Bool -> Bool
