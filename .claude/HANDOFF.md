@@ -2,6 +2,23 @@
 
 ---
 
+## ✅ RESOLVED 2026-08-13 — the Stage A sprint's known-red set is EMPTY. Nothing below is still red.
+
+The goldens were re-cut once from the final binary in a terminal commit (`46c551c0`).
+**Verified after the re-cut:** `diff_compiler_selfproc` **16 ok / 0 failing** (was 15/1);
+`diff_compiler_snapshot_frontend` **201/201 compared and matching** (was 200/1).
+`must_fail` is **98 REPRO / 1 DRAINED** — the one drain is `1438-*`, witnessed RED before its
+fix and drained after; **#1438 is deliberately still OPEN** (only its coherence reach drained).
+
+⚠️ **One pre-existing red is NOT ours and is NOT resolved**: `check_cli_modules`'
+`1112-A34/later-invisible` leg, which fails by **ACCEPTING** — so no diff that only adds a
+reject can have caused it. Do not attribute it to this work.
+
+The section below is kept as the record of what was deliberately deferred and why. **It is
+history, not a live warning.**
+
+<details><summary>Original known-red declaration (historical)</summary>
+
 ## 🟥 KNOWN-RED FOR THE DURATION — Stage A sprint, opened 2026-08-12
 
 **Branch `arch/stage-a-sprint`, worktree `.claude/worktrees/wiggly-giggling-nygaard`, BASE
@@ -33,6 +50,8 @@ red gate. Goldens are re-cut once, from the final binary, never merged, never ha
 also drop fmt, lint, and lextok, all of which stay live for the duration.
 
 *(Delete this section when the sprint's testing round completes.)*
+
+</details>
 
 ---
 

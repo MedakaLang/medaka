@@ -1,8 +1,0 @@
--- #1438 -- one of the two UNRELATED modules. It declares its OWN interface, which
--- happens to be SPELLED `Same`, with its own method `foo`, and impls it at `Int`.
--- It does not import `zmod` and `zmod` does not import it.
-export interface Same a where
-  foo : a -> Int
-
-export impl Same Int where
-  foo x = x

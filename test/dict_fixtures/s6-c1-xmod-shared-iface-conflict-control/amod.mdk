@@ -1,0 +1,7 @@
+-- First impl of the SHARED class at head `Int`.
+import idef.{Same, foo}
+
+export impl Same Int where
+  foo x = x * 100
+
+export useA = foo 1

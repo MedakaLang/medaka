@@ -1,0 +1,7 @@
+-- The control entry: same module topology as the accepting sibling (one entry, two
+-- impl modules, one head `Int`), with ONE thing varied -- the interface is declared
+-- once and shared instead of twice and same-spelled.
+import amod.{useA}
+import zmod.{useZ}
+
+main = println (useA + useZ)

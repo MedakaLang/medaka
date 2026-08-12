@@ -24,7 +24,16 @@ what: A-3.6 is the unit licensed to remove it.
 
 before: `medaka check main.mdk` -> exit 1
 before:   ./nest.mdk:3:16: No impl of Tag for Wrap a; write an 'impl Tag Wrap'.
-after:  `medaka check main.mdk` -> exit 0, `main : Unit`, zero diagnostics.
+after:  ⚠️ SUPERSEDED 2026-08-13 by the repair round — RE-MEASURED, do not trust the
+after:  line this replaced. `medaka check main.mdk` -> exit 1, T-REQUIRES-UNROUTED at
+after:  ./nest.mdk:3:16. A-3.6 DID make candidacy graph-global (the flip is real and is
+after:  still in the tree), but SA-1/Door 4 then made the un-routable case a LOCATED
+after:  REJECT rather than an accept-then-segfault. So the observable end state for this
+after:  program is still a rejection — a better one: honest, located, at check time.
+after:  ⇒ THIS FIXTURE NO LONGER DEMONSTRATES A COMPLETED WIDENING. It demonstrates a
+after:  CHANGED DIAGNOSTIC. It becomes a true R2 could-not-pass-before fixture only when
+after:  the evidence-plumbing half lands (B-2), at which point `after:` becomes exit 0
+after:  and the run/build arms become `wrap(int)`.
 
 control: `control.mdk` is `main.mdk` with the two import lines SWAPPED and nothing else
 control: changed. It was accepted BEFORE and must stay accepted AFTER, printing
@@ -39,19 +48,22 @@ how-attributed: `ieCandidacyVisibleAt` returned it to exit 0. No other edit was 
 how-attributed: between the two builds. That is what establishes this fixture grades
 how-attributed: A-3.6's flip and not some neighbouring change.
 
-🚨 THE WIDENING IS ONLY HALF LANDED, AND THIS FIXTURE MUST NOT BE READ AS PROOF IT IS
-🚨 COMPLETE. `check` accepts, but the program does not RUN:
-🚨   `medaka run   main.mdk` -> exit 1, `runtime error [E-PANIC]: putStrLn: not a String`
-🚨   `medaka build main.mdk` -> exit 0, and the BINARY SEGFAULTS (exit 139)
-🚨   `medaka run   control.mdk` -> exit 0, `wrap(int)`   (the control is clean on both)
-🚨 Both measured on the trunk binary at A-3.6. So A-3.6 widened CANDIDACY (typecheck's
-🚨 answer to "which impls exist") without widening the EVIDENCE PLUMBING (dict
-🚨 construction and route stamping for a site whose own module cannot name the impl).
-🚨 `nest` is generalized against an obligation discharged by an impl no dict reaches.
-🚨 Neither engine is silently wrong — eval panics, native faults, both LOUD — so this is
-🚨 not S0. But a compile-time diagnostic became a segfault, which is a real shape change
-🚨 and it is A-3.6's. The correct end state is `main.mdk` behaving exactly like
-🚨 `control.mdk`: exit 0, `wrap(int)`, on eval AND native.
+🚨 THE WIDENING IS ONLY HALF LANDED — STILL TRUE, but the SYMPTOM CHANGED 2026-08-13.
+🚨 As authored (at A-3.6) this program checked clean and then died: `run` panicked with
+🚨 `E-PANIC: putStrLn: not a String` and the BUILT BINARY SEGFAULTED (exit 139). That
+🚨 was a compile-time diagnostic becoming a segfault, and it was A-3.6's.
+🚨 The repair round closed it: `reqObligationsFor`'s None arm now rejects the
+🚨 un-routable GROUND obligation (SA-1), and Door 4 already covered the deferred one.
+🚨 RE-MEASURED on the fixed binary: `check` exit 1 (located), `build` exit 1 (NO binary
+🚨 produced, so the segfault is unreachable), `control.mdk` unchanged at exit 0 printing
+🚨 `wrap(int)` on eval AND native.
+🚨 What has NOT changed is the underlying split: candidacy consults the graph-global IE
+🚨 while evidence consults a cumulative registry. The compiler is now LOUD about it
+🚨 instead of wrong about it. The correct end state is still `main.mdk` behaving exactly
+🚨 like `control.mdk` — exit 0, `wrap(int)`, on both engines — and reaching it is B-2's
+🚨 (#1113), per compiler/TYPECHECK-TARGET-ARCHITECTURE.md:1815 "IE supplies the data,
+🚨 B-2 moves the reader". Tracked at #1564; the wrong-impl form of the same split is
+🚨 #1599 and is PRE-EXISTING, not caused by A-3.
 
 ⚠️ WHY `must_fail_fixtures/1564-*` READS AS A CLEAN DRAIN WHEN IT IS HALF A DRAIN: that
 ⚠️ row's `cmd:` is `check-json main.mdk` with `exit: 1`, so it grades the CHECK arm
@@ -68,5 +80,7 @@ owed:    commands above.
 owed: 2. The `after:` line for `run`/`build` cannot be written as `wrap(int)` yet,
 owed:    because it is not true yet. When the evidence-plumbing half lands, replace the
 owed:    🚨 block with the run/build expectations and this becomes a full R2 fixture.
-owed: 3. An owner ruling on WHO owns the evidence-plumbing half. It is in no unit's
-owed:    bite list as of A-3.6 and it is not A-3.7's (coherence).
+owed: 3. RESOLVED 2026-08-13: the evidence-plumbing half is B-2's (#1113), ruled on
+owed:    P0-H's investigation — all three A-3 doors are closed by the epic's own words
+owed:    and one was measured in-tree as still faulting. Tracked at #1564 (missing dict)
+owed:    and #1599 (wrong dict, pre-existing).

@@ -1956,3 +1956,58 @@ could move: **Work, downward only — it removes a fixture nobody should now wri
             this retirement does not answer.
 unchecked:  I re-derived only item 1. Items 2 (RELAYED from P0-B) and 3 (loud→silent) were not
             re-run, and the row's MEASURED flat baselines were not re-taken on this binary.
+
+### SA-12 — #1438's drained coherence pin converted to a positive row (the guard, not the issue)
+sites:      `test/diff_compiler_dict_semantics.sh` (+2 TABLE rows), new
+            `test/dict_fixtures/s6-c1-xmod-same-spelled-ifaces-accepted/` and
+            `…/s6-c1-xmod-shared-iface-conflict-control/`, deleted
+            `test/must_fail_fixtures/1438-same-spelled-interfaces-collapse-in-coherence/`.
+transform:  A-3.7 (bite 3.7-4) re-keyed `CohImpl`'s interface half to an `IfaceRef` compared
+            through `cohSameIface`/`sameTyConHead` (DERIVED — read at
+            `compiler/types/typecheck.mdk:15350,15762-15771`), which DRAINED that pin and reddened
+            `diff_compiler_must_fail.sh`. A pin asserts a bug still reproduces, so draining it
+            leaves the S0 with NO guard unless a positive row replaces it — the idiom this file's
+            neighbours in `diff_compiler_dict_semantics.sh` already state three times. The pin's
+            program is now an ACCEPT row (two unrelated modules, each declaring its own
+            `interface Same a` with disjoint methods and no import edge, each impling at head
+            `Int`; `109`, `!T-CONFLICTING-IMPL`), and the pin's `Other`-spelled control is
+            REPLACED by a stronger one: a shared `Same` declared once in `idef.mdk` and imported
+            by both impl modules, which is a genuine C1 violation and must still REJECT.
+            🚨 #1438 IS NOT CLOSED and this row does not ask for it to be — only its coherence
+            reach drained; the identity collapse in the obligation channel's bare compatibility
+            leg survives, is pinned separately, and is #1482/#1507 territory (RELAYED from the
+            deleted `claim.txt`'s `why-note`, which recorded the RUN-021/RUN-040 ruling).
+            FAIL-CAPABILITY IS MEASURED, not asserted: on the pre-A-3.7 BASE arm
+            (`/root/medaka/.claude/worktrees/agent-a03a28eda256bd47d/armbase/medaka`, cold-built
+            at `7aae8b83`) the ACCEPT fixture rejects at check/run/build exit 1 with
+            ``T-CONFLICTING-IMPL … Conflicting `impl Same`. Defined in amod and zmod``, and on the
+            trunk binary all three verbs accept at `109`.
+could move: **Down, and the direction is a false-reject canary, which is the risky half.** The
+            ACCEPT row is the only in-tree assertion that a legal same-spelled-interface program
+            is accepted, so a future change that re-narrows coherence reds here rather than
+            shipping — but the same property makes it the row most likely to red on a change that
+            is CORRECT in some other dimension, and a reader who "fixes" that by relaxing the row
+            silently restores the S0. Two named risks: (1) `cohSameIface` is `sameTyConHead`, which
+            lets an ABSENT origin match ANYTHING — a program shape whose impls carry no stamped
+            origin still collapses by spelling, and NEITHER new row exercises that shape, so the
+            accepting row's green is not evidence about unstamped origins; (2) the control asserts
+            only the CODE, not the span (the cross-module arm drops it on purpose, #414), so an
+            error-quality PR rewording `cohCrossModuleMsg` moves nothing here but a change that
+            stops emitting the cross-module conflict ENTIRELY is caught only by the control's
+            verdict — which is exactly why the control exists.
+unchecked:  I did not run the wasm arm, the engines differential, or any gate beyond
+            `diff_compiler_dict_semantics.sh`, `diff_compiler_must_fail.sh` (twice),
+            `diff_compiler_fixture_corpus_coverage.sh` and `make check-self`. I did not re-derive
+            the deleted pin's other claims (its `omod.mdk` `Other`-spelled control, and its
+            "give the two modules module-local `data Blob` heads and the program is exit 0"
+            measurement) — those are RELAYED from the `claim.txt` I deleted and are recoverable
+            from git history, not re-taken on this binary. Other consumers of the deleted
+            directory: DERIVED by grepping the tree for `1438-same-spelled` across `*.sh`/`*.md`/
+            `*.txt`/`*.yml` — no `test/*.sh` names it but `diff_compiler_must_fail.sh` (which
+            globs the corpus rather than naming rows). The surviving hits are sprint PROSE
+            (`.claude/sprint/DECISIONS.md:1129`, `DEBT.md:786,797,1028`), left as the historical
+            record and deliberately NOT rewritten; they now cite a path that no longer exists,
+            which is exactly the ungated-ledger-prose hazard this sprint has already been bitten
+            by. `make docs-links` PASSES with them (DERIVED, `dead: 0`): the gate cites only
+            paths carrying a real extension, and a fixture DIRECTORY has none — so nothing
+            mechanical will ever tell a reader those three lines went stale.
