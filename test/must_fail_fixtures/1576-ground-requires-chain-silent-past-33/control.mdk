@@ -1,0 +1,16 @@
+data Wrap a = Wrap a
+
+interface Tag t where
+  tagOf : t -> String
+
+impl Tag Int where
+  tagOf _ = "int"
+
+impl Tag (Wrap a) requires Tag a where
+  tagOf (Wrap x) = "w\{tagOf x}"
+
+deepv = tagOf (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap 5)))))))))))))))))))))))))))))))))
+
+main =
+  let _ = println "ALIVE"
+  println deepv

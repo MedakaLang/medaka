@@ -1,0 +1,73 @@
+issue: 1579
+what: the residual reducer COMMITS to one impl's `requires` while the goal's arguments
+what: are still free. Coherence deliberately accepts a specific-vs-general overlap
+what: (most-specific-wins), so the impl actually selected once the variable is ground
+what: can be a DIFFERENT, more specific one carrying NO `requires` at all -- and the
+what: binding is saddled with a constraint its real instance never demanded. The result
+what: is a FALSE REJECT of a legal program.
+what: main.mdk: `nest True` poses `Tag (Wrap Bool)`, whose most-specific match is
+what: `impl Tag (Wrap Bool)` -- no `requires`, nothing to witness. THE CORRECT ANSWER
+what: is `specificW` at exit 0. Measured instead: `No impl of Show2 for Bool`, exit 1,
+what: on check, run and build alike. The pinned T-NO-IMPL is THE BUG asserted to still
+what: reproduce, never a claim that the reject is right.
+what: MECHANISM: `residualPredsOf` reduces `Tag (Wrap t)` with `t` free.
+what: `findMatchingImplReqsU`'s min-specificity selector can only return the GENERAL
+what: impl here, because `matchStep` correctly MFails the specific `impl Tag (Wrap
+what: Bool)` head against an unbound goal variable. Selecting the only impl that CAN
+what: match a partially-free goal is right; committing to its `requires` as though the
+what: choice were final is not. `findMatchingImplReqsU`'s own header already names this
+what: hazard in the reverse direction ("Selecting the WRONG one's requires is a
+what: soundness hole"); issue 326 settled it for a CONCRETE goal, and this is the same
+what: question for a goal that is not concrete yet.
+what: LIVE ON `main`, NOT INTRODUCED BY PR 1573. Measured byte-identical -- same code,
+what: same range, same message -- on a binary built from that PR's merge-base
+what: (8379bcd7) and on one built from its head (573e08db). It arrived with issue
+what: 1549's residual reducer, which is what first made a `requires` residual reach an
+what: inferred context at all.
+what: Measured first-hand, both arms, every exit code read from a DIRECT invocation and
+what: never from a pipeline.
+cmd: check-json main.mdk
+exit: 1
+diag-code: T-NO-IMPL 27:16-27:20
+control: check-json control.mdk
+why-verb: `check-json`, not `check`. The defect IS a diagnostic, so it must be asserted
+why-verb: as one, and only the JSON arm carries a stable `code` and a real 0-based LSP
+why-verb: range. Feeding the HUMAN `check` output to this harness's `render_diags`
+why-verb: yields `!!UNPARSEABLE-JSON`, which matches no pin and would report the row as
+why-verb: DRAINED -- i.e. "somebody fixed it" -- on a bug that is fully alive. Getting
+why-verb: this verb wrong is a silent false drain, so it is called out here.
+why-diag: `diag-code` (code + RANGE only), not `diag` (which also pins the message).
+why-diag: Per docs/ops/TESTING-DESIGN.md section 4.5 code+range is the stable pair and
+why-diag: the prose is free to change; the defect here is THAT A LEGAL PROGRAM IS
+why-diag: REJECTED AT THIS SPAN, not the particular wording of `No impl of Show2 for
+why-diag: Bool`. A rewording of T-NO-IMPL has no relation to this bug and must not
+why-diag: drain the row.
+why-diag: THE RANGE IS 0-BASED LSP, as `check --json` emits it -- line 27, characters
+why-diag: 16..20 -- which is the `nest` token on the LAST line of main.mdk. It is NOT
+why-diag: the 1-based line:col the human `check` output prints; transcribing that
+why-diag: instead would never match. Because the range is pinned, main.mdk's LINE COUNT
+why-diag: IS LOAD-BEARING: a comment-only edit to that file moves this pin, and its own
+why-diag: header says so.
+why-diag: The full diagnostic list is asserted, so a CASCADE -- one root cause emitting
+why-diag: several errors -- also fails this row rather than matching it.
+why-diag: THERE IS EXACTLY ONE DRAIN DIRECTION: deferring the commitment (DICT-SEMANTICS
+why-diag: section 6.2 T4's quiescence pass, or any narrower repair) makes the program
+why-diag: ACCEPT, which empties the diagnostic list and changes the exit code.
+why-control: control.mdk is main.mdk with the ONE distinguishing feature removed -- the
+why-control: GENERAL impl's `requires Show2 a`. THE OVERLAP ITSELF IS DELIBERATELY
+why-control: UNCHANGED: both impls are still present, still comparable, still accepted
+why-control: by coherence. So the control isolates the commitment, not the overlap: it
+why-control: proves that two overlapping impls over one head are fine on their own, and
+why-control: that the single flipped dimension is whether the general one carries a
+why-control: `requires` for the reducer to commit to. Measured: exit 0, zero
+why-control: diagnostics.
+why-note: RELATED TO BUT NOT A DUPLICATE OF issue 1183, which is a COMPARABILITY-FAILING
+why-note: overlap at a non-closed goal, committing by DECLARATION ORDER and producing a
+why-note: WRONG VALUE at exit 0 (warned, per F-3d). This one is a comparable
+why-note: specific-vs-general overlap, the commitment happens in the RESIDUAL REDUCER at
+why-note: generalization, and the symptom is a FALSE REJECT. Both are instances of "the
+why-note: implementation commits where DICT-SEMANTICS section 6.2 T4 says to defer to
+why-note: quiescence", so a T4 pass would likely drain both -- worth fixing once.
+why-note: Also adjacent: issue 1125 (min-specificity winner carrying a `requires` with
+why-note: an overlapping sibling), which is an eval/native divergence rather than a
+why-note: check-time reject.

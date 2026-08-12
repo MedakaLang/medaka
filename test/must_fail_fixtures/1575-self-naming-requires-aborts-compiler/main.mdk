@@ -1,0 +1,14 @@
+data Box a = Box a
+
+interface C t where
+  cm : t -> String
+
+impl C Int where
+  cm _ = "i"
+
+impl C (Box a) requires C (Box a) where
+  cm (Box _) = "box"
+
+g x = cm (Box x)
+
+main = println (g 5)

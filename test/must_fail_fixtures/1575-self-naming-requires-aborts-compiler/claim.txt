@@ -1,0 +1,83 @@
+issue: 1575
+what: an `impl` whose `requires` names its OWN HEAD --
+what: `impl C (Box a) requires C (Box a)` -- makes the COMPILER ABORT with a stack
+what: overflow instead of producing a diagnostic. `check`, `run` and `build` all die
+what: identically at exit 134 (SIGABRT), with no file:line:col, no stable code, and
+what: nothing a `--json` consumer can parse. Per compiler/ERROR-QUALITY.md section 3 a
+what: raw abort in place of a positioned diagnostic is an automatic 0 on Located and 0
+what: on Correct: the reader gets nothing usable.
+what: LIVE ON `main`, NOT INTRODUCED BY PR 1573. Measured byte-identical on a binary
+what: built from that PR's merge-base (8379bcd7) and on one built from its head
+what: (573e08db) -- neither caused nor fixed by it.
+what: IT IS NOT THE RESIDUAL REDUCER. `residualPredsOf` is fuel-bounded
+what: (`residualReduceFuel` = 32) and cannot diverge; after PR 1573 crossing that bound
+what: is a located `T-REQUIRES-DEPTH` reject. Something UPSTREAM recurses without a
+what: fuse on this shape. A ground-goal variant (`main = println (cm (Box 5))`, no
+what: generalizing binder anywhere) aborts identically, so it is not the residual path.
+what: THE CORRECT ANSWER is a located reject at the `impl`: a `requires` naming its own
+what: head cannot be satisfied by any finite chain, which is a decidability condition on
+what: the instance declaration, not a property of any use site.
+what: Measured first-hand, both arms, every exit code read from a DIRECT invocation and
+what: never from a pipeline:
+what:   check main.mdk  -> 134, stderr "runtime error [E-STACK-OVERFLOW]: ..."
+what:   run   main.mdk  -> 134, same single line
+what:   build main.mdk  -> 134, same single line
+cmd: build main.mdk
+exit: 134
+stdout-line: runtime error [E-STACK-OVERFLOW]: stack overflow (recursion too deep)
+control: build control.mdk
+why-verb: `build` rather than `check`, for ONE mechanical reason: the abort text lands
+why-verb: on STDERR, and `build` is the only verb in this harness whose graded stream is
+why-verb: stdout and stderr COMBINED (`run_verb`: `>"$_out" 2>&1`). Under `check` or
+why-verb: `check-json` the graded stdout is EMPTY and the pin would degrade to a bare
+why-verb: "it exited 134", which is exactly the "NO ASSERTION IS EVER 'NONZERO' OR 'IT
+why-verb: CRASHED'" failure this suite's header forbids -- any unrelated abort would
+why-verb: match it. `check-json` is additionally wrong here: there is no JSON at all on
+why-verb: an abort, so `render_diags` would print `!!UNPARSEABLE-JSON` and a `diag-code`
+why-verb: pin could never match. The defect is identical under all three verbs; this one
+why-verb: is chosen because it is the one that can be asserted narrowly.
+why-stdout: `stdout-line` (this EXACT WHOLE LINE must be present), NOT `stdout` (the
+why-stdout: exact whole stream) -- AND THAT CHOICE IS LOAD-BEARING, MEASURED, NOT
+why-stdout: STYLISTIC. This verb's graded stream is stdout and stderr COMBINED, and the
+why-stdout: staleness guard writes `warning: this ./medaka was built from compiler
+why-stdout: source that differs from <root>/compiler ...` to STDERR
+why-stdout: (`checkSourceStaleness`, compiler/driver/medaka_cli.mdk). So an exact
+why-stdout: whole-stream pin FALSELY DRAINS for anyone whose ./medaka is a rebuild
+why-stdout: behind their tree: the bug still reproduces, the E-STACK-OVERFLOW line is
+why-stdout: still right there, and the row nonetheless reports "issue 1575 APPEARS
+why-stdout: FIXED". This was not reasoned about -- it was OBSERVED, on the first run
+why-stdout: with a deliberately mismatched binary, and the pin was changed because of
+why-stdout: it. A false drain is worse than no fixture: someone closes a live bug.
+why-stdout: The three OTHER fixtures filed alongside this one are NOT exposed, because
+why-stdout: `run`, `check-json` and `build-run` all grade stdout ALONE (stderr goes to
+why-stdout: a separate file, and under `build-run` the graded stdout is the produced
+why-stdout: BINARY's, which no compiler warning can reach). Only the `build` verb
+why-stdout: merges the two streams. If you add a `build`-verb fixture, do this.
+why-stdout: DISCRIMINATION IS UNCHANGED where it matters: a successful build carries a
+why-stdout: `built <in> -> <out>` line and NOT this one; an ordinary type error carries
+why-stdout: a `file:line:col:` diagnostic and NOT this one; a DIFFERENT runtime fault
+why-stdout: carries a different `[E-...]` tag. WHAT ELSE COULD PRODUCE THIS STRING?
+why-stdout: Only the compiler running out of stack while compiling this file. The line
+why-stdout: contains NO PATH, so the pin is location-independent and does not bake this
+why-stdout: worktree into the corpus. The exit code is pinned EXACTLY (134) alongside
+why-stdout: it, so this is two independent observations, not one loose one.
+why-stdout: THERE IS EXACTLY ONE DRAIN DIRECTION: fixing this replaces the abort with a
+why-stdout: located diagnostic (or accepts the program), either of which deletes this
+why-stdout: line AND changes the exit code.
+why-control: control.mdk is main.mdk with the ONE distinguishing feature removed -- the
+why-control: `requires C (Box a)` clause. Everything else is byte-identical, including
+why-control: the same interface, the same two impls' bodies, the same `g` and the same
+why-control: `main`. It builds at exit 0. So the control proves the shape around the
+why-control: bug is fine and the single flipped dimension is the self-naming `requires`.
+why-control: Per issue 1144 this harness grades a control on its EXIT CODE ONLY, which
+why-control: is right here: the control's stdout carries absolute paths that differ per
+why-control: worktree and must never be pinned.
+why-note: NOT A DUPLICATE of issue 1562 (fuel exhaustion on the RESIDUAL path, which is
+why-note: bounded and now loud), of issue 1576 (a GROUND chain silently accepted past
+why-note: depth 33, which reaches a binary), or of issue 1578 (a mixed vector with no
+why-note: matching impl). Those three all COMPLETE compilation; this one never returns.
+why-note: LOAD-BEARING FOR A DOC FIX: PR 1573's `T-REQUIRES-DEPTH` message, and its row
+why-note: in compiler/DIAGNOSTIC-CODES-DESIGN.md, both state that a self-naming
+why-note: `requires` is one of the two shapes that REACH that diagnostic. Measured, it
+why-note: does not -- the compiler aborts first, on both arms. When this row goes red,
+why-note: close issue 1575, delete this fixture, AND re-check that claim.
