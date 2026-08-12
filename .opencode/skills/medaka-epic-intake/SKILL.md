@@ -33,9 +33,9 @@ Open/closed issue state alone is insufficient. A merged PR title alone is
 insufficient. A source symbol alone does not prove its acceptance criteria or
 authoritative merge-group result.
 
-## 3. Select the milestone
+## 3. Recommend, then select the milestone
 
-Choose the earliest candidate that is both:
+The scout recommends the earliest candidate that is both:
 
 - **uncompleted:** its acceptance carrier or residual is absent in current
   source/history; and
@@ -46,9 +46,15 @@ Do not infer “blocked” merely because later canonical stages remain open. Do
 duplicate a landed hygiene slice or begin a consumption/cutover slice before its
 validated producer exists.
 
+The conductor owns the final selection. It must independently check the
+recommendation's decisive latest-handoff, merged-history, and source-carrier
+premises. If any disagree, do not average them: resolve the discrepancy before
+creating implementation scope. A low-cost readiness report is evidence, not
+delegated architecture authority.
+
 ## 4. Keep readiness bounded
 
-Return the selected milestone, completed siblings with immutable evidence,
+Return the recommended milestone, completed siblings with immutable evidence,
 blocked candidates and why, the source carrier checked, and the exact next
 source-census question. Do not combine this readiness derivation with an
 exhaustive implementation call graph unless both demonstrably fit the assigned
@@ -57,7 +63,8 @@ than one that exhausts its budget halfway through both.
 
 ## Required packet
 
-Record: pinned base and intake path; selected milestone; tracker/history/source
+Record: pinned base and intake path; recommended milestone; tracker/history/source
 evidence; completed siblings; blocked prerequisites; observations versus
-inferences; unresolved uncertainty; recommended next bounded assignment; and
-friction under `medaka-friction-report`.
+inferences; the decisive premises the conductor must check; unresolved
+uncertainty; recommended next bounded assignment; and friction under
+`medaka-friction-report`.

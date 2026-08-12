@@ -5,7 +5,8 @@ The project agents in `agents/` are an OpenCode adaptation of Medaka's complex-c
 - `medaka-compiler` is the primary conductor for complex compiler work.
 - `compiler-designer` and `compiler-reviewer` use Sol at high reasoning effort for semantic and architectural judgment.
 - `compiler-implementer` uses Terra for an accepted, bounded implementation packet in an isolated daughter worktree; it does not choose semantics or own broad verification.
-- `compiler-scout`, `compiler-reproducer`, and `compiler-verifier` use Qwen for bounded evidence work.
+- `compiler-scout` uses Terra at medium reasoning for evidence-sensitive readiness and exhaustive inventories; `compiler-reproducer` uses Terra at high reasoning for discriminating behavior matrices.
+- `compiler-verifier` uses Qwen for bounded command execution and log reduction.
 - `compiler-mutation-verifier` uses Qwen to execute an already-designed, reversible expected-red mutant matrix in a fixed isolated worktree.
 - `bug-capture` uses DeepSeek for isolated issue and pin mechanics.
 - `medaka-friction-report` keeps a shared return contract for workflow friction.
@@ -25,11 +26,11 @@ integration. Verification daughters should share cold prerequisites unless a
 measured wall-clock reason justifies duplicate builds.
 
 The model split is deliberate: Sol owns semantic design and adversarial review;
-Terra receives implementation-ready edits; Qwen handles bounded inventories,
-reproductions, verification execution, and log reduction. Do not compensate for
-an over-broad assignment by spending a more expensive model on it. Split the
-packet, preserve exact receipts, and keep child returns delta-oriented rather
-than repeating issue history and command transcripts.
+Terra receives implementation-ready edits and evidence-sensitive
+readiness/reproduction work; Qwen handles caller-designed verification execution
+and log reduction. Model choice does not excuse broad packets: split the work,
+preserve exact receipts, and keep child returns delta-oriented rather than
+repeating issue history and command transcripts.
 
 OpenCode does not provide Polytoken facet phases, fallback model lists, transclusion, or schema-enforced subagent exits. The primary agent therefore tracks phases in its correctness ledger, while each subagent prompt specifies a structured Markdown response contract.
 

@@ -31,6 +31,12 @@ For a reader that returns, run P → U → P in one process. For census/mode API
 include the alternate route between the two P emissions. Both P executions must
 exercise the migrated reader; require first and last P byte-identical.
 
+Every named route must be non-vacuous for the selected field. A census that
+records real gaps but never reads or writes the migrated buffer/counter is still
+vacuous for that migration. When an API returns only events rather than the
+selected state, pair a field-sensitive input with a structural freshness check
+and a route-specific renamed-authority mutant.
+
 An aborting or panicking sensitive reader uses a replacement shape, not the
 returning P → U → P byte-identity rule: run any non-aborting setup/control,
 exercise the alternate U/record/census route, print a pre-P marker, then make the
@@ -53,6 +59,8 @@ Require:
 - a P/U positive control;
 - parsing and validation of generated IR/WAT where applicable;
 - execution when the migration can affect runtime behavior;
+- direct zero status, expected stdout, and empty stderr for successful subprocess
+  controls (capturing stdout alone does not preserve status);
 - nonzero fixture enrollment and exact fixture/result accounting.
 
 A worker pipeline must fail closed. If a Bash script recursively invokes itself,
@@ -61,9 +69,13 @@ preserve the interpreter with `bash "$0"`, not `sh "$0"`.
 ## 4. Ratchet structure as a set
 
 Reject every retired state and installer symbol, not a count. Positively require
-the new carrier, builders, and every field accessor. Ensure all shipping, probe,
-snapshot, profile, census, and playground callers reach the same public seam.
-Structural checks complement behavior; they do not replace it.
+the new carrier, builders, actual field readers/writers, and every route's fresh
+construction. Ensure all shipping, probe, snapshot, profile, census, and
+playground callers reach the same public seam. If exclusive ownership rests on
+an allowlisted declaration set, derive both top-level signatures and direct
+definitions; cover every legal identifier start (including `_`) and visibility
+prefix; normalize as a sorted unique set rather than source order. Structural
+checks complement behavior; they do not replace it.
 
 ## 5. Mutation-test every semantic field
 
@@ -81,10 +93,19 @@ phantom skip, unrelated compile failure, or empty output is not observed-red
 credit unless it is the explicitly relevant consequence. Finish by rebuilding
 restored source and rerunning clean green.
 
-For mode/reset migrations, include a renamed-authority mutant rather than only
-mutating the retired symbol names: reintroduce an ambient cell, make the alternate
-route write it, and make the final sensitive P read it. The behavioral assertion,
-not an exact-name ratchet, must go red.
+For mode/reset migrations, include renamed-authority mutants rather than only
+mutating retired names. One mutant restores the old reset choreography so output
+remains conformant while exclusive ownership is wrong; the normalized authority
+set must reject it. A second route-specific mutant moves only a non-rendering
+census/mode route onto a renamed ambient authority. Also retain a no-reset mutant
+when cross-call contamination is behaviorally observable. Use a legal adversarial
+name such as an underscore-prefixed identifier. Name in advance whether structural
+or behavioral assertion must go red.
+
+Mutation receipts are revision-scoped to the executable harness. Any later change
+to fixture source, assertions, ordering, subprocess handling, or structural
+ratchets invalidates affected rows. Prefer independent review of a new harness
+before paying for one final exact-head matrix; do not accumulate superseded runs.
 
 ## 6. Preserve behavior and performance
 
