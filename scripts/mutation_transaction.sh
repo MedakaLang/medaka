@@ -44,11 +44,13 @@ child_pid=
 check_pgid=
 
 group_alive() {
-  ps -e -o pgid= -o stat= | while read -r pgid stat; do
+  process_table=$work/process-table
+  ps -e -o pgid= -o stat= >"$process_table" || return 0
+  while read -r pgid stat; do
     case "$stat" in Z*) continue ;; esac
-    [ "$pgid" = "$check_pgid" ] && exit 0
-  done
-  [ "$?" -eq 0 ]
+    [ "$pgid" = "$check_pgid" ] && return 0
+  done <"$process_table"
+  return 1
 }
 
 stop_check() {

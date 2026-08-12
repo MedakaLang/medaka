@@ -21,6 +21,17 @@ hash_file() {
   fi
 }
 BASE_HASH=$(hash_file "$SOURCE")
+REAL_PS=$(command -v ps)
+mkdir "$WORK/bin" || exit 1
+cat > "$WORK/bin/ps" <<'EOF'
+#!/bin/sh
+"$REAL_PS" "$@" || exit $?
+# An unrelated final zombie row catches group-liveness code that mistakes the
+# loop's incidental final status for a matching live process group.
+case " $* " in *" -e "*) printf '999999 Z\n' ;; esac
+EOF
+chmod +x "$WORK/bin/ps"
+export REAL_PS PATH="$WORK/bin:$PATH"
 
 fail() { echo "FAIL mutation transaction helper: $*" >&2; exit 1; }
 clean() {
