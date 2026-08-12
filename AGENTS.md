@@ -765,6 +765,27 @@ MEDAKA_ROOT="$PWD" /tmp/alt/medaka run /tmp/hello.mdk # exit 0: 12345
 ⚠️ The miss diagnostic offers *"run from the project root"* as a remedy; measured, cwd
 being a directory that HAS `stdlib/` did **not** rescue it — only `MEDAKA_ROOT` or an
 exe-adjacent `stdlib/` did.
+🚨 **`stdlib/` is NOT the whole exe-adjacent layout — `medaka build` also needs `runtime/`
+there, and the gap bites only on the FIRST `build`.** The complete set beside the binary is
+`medaka` + `medaka_emitter` + `stdlib/` + **`runtime/`**: `runBuildNativeRoots`
+(`compiler/driver/build_cmd.mdk`) computes `rtC = joinPath root "runtime/medaka_rt.c"` off
+that same `root`, and hands it to `clangLink` as a **clang input**, so a binary with only
+`stdlib/` beside it *checks and runs perfectly* and then dies at the link step. Derive the
+mechanism rather than trusting this paragraph — `grep -n 'medaka_rt.c' compiler/driver/build_cmd.mdk`
+shows the `joinPath root` site and the `clangLink cc rtC …` call. **The timing is the trap:**
+`check` and `run` succeeding "prove" the alt-dir arm is wired up, and the first `build` — which
+is usually where a two-arm differential gets interesting — is where it isn't. Two reviewers hit
+this in one 2026-08-11 session. Extending the probe above, one symlink at a time (measured):
+```sh
+mkdir -p /tmp/alt && cp ./medaka ./medaka_emitter /tmp/alt/ && ln -s "$PWD/stdlib" /tmp/alt/stdlib
+/tmp/alt/medaka run   /tmp/hello.mdk                                   # exit 0: 12345 — looks complete
+/tmp/alt/medaka build /tmp/hello.mdk -o /tmp/alt/hello > /tmp/alt/b.log 2>&1; echo "build: $?"
+cat /tmp/alt/b.log   # exit 1 — clang: error: no such file or directory: '/tmp/alt/runtime/medaka_rt.c'
+ln -s "$PWD/runtime" /tmp/alt/runtime
+/tmp/alt/medaka build /tmp/hello.mdk -o /tmp/alt/hello > /tmp/alt/b.log 2>&1; echo "build: $?"   # 0
+```
+⚠️ Note the redirect-then-read: `medaka build`'s exit code does **not** survive a pipe (the
+`build`-piped-exit-code trap above), so do not shorten that to `| tail`.
 ⚠️ **Not every gate lets you point it at a second binary.** Some honour an override; most
 hardcode `$ROOT/medaka`, so a two-arm run means a second worktree.
 **DERIVE the set, do not trust a count — including this sentence's:**
@@ -954,6 +975,25 @@ narrative lives at the link.
   `driver.loader`, `eval.eval`, `ir.sexp`, `tools.check` — **not** `ir.core_ir_lower`, **not**
   `backend/*`. Three perf PRs reddened only this shard on 2026-07-24 by blessing the snapshot
   but forgetting this golden.
+  🚨 **A REBASE WILL AUTO-MERGE THAT GOLDEN CLEANLY — a clean apply is NOT evidence the
+  golden is right.** It is an ordinary ~1700-line text file with no merge driver
+  (`git check-attr merge -- test/selfproc_goldens/legA/types.typecheck.golden` → `merge:
+  unspecified`), so two agents' re-cuts that land in different regions three-way-merge with
+  **no conflict marker at all**. That happened **three times in one 2026-08-11 session, to
+  three different agents, on that exact file**. The result is a *blend of two derivations*,
+  and **no gate can flag it**: the golden IS the oracle, so a plausible-looking blend simply
+  becomes the new expected output — the same rubber-stamp hazard as blessing a red gate, but
+  arriving with no red gate and no prompt to bless. **Remedy on any rebase: never hand-resolve
+  a golden and never accept the clean auto-merge — take the base's version of BOTH moved
+  golden families and RE-DERIVE from the rebuilt binary**, then read both diffs:
+  ```sh
+  BASE=$(git rev-parse origin/main)        # pin it — origin/main moves under you (see worktree traps)
+  git checkout "$BASE" -- test/selfproc_goldens/legA test/snapshots
+  make -C "$PWD" medaka                    # the golden must come from the REBASED source
+  sh test/capture_goldens.sh --frozen selfproc_legA
+  sh test/diff_compiler_snapshot_frontend.sh --bless <the source file you moved>
+  git diff -- test/selfproc_goldens/legA test/snapshots   # additive-only, as above
+  ```
 - **The compiler MAY import `stdlib/`** — deliberately, per module (policy changed
   2026-06-29; the old blanket ban is retired). **Weigh it per module, don't import
   reflexively.** Measured:
