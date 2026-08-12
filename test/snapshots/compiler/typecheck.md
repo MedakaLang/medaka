@@ -1,5 +1,5 @@
 # META
-source_lines=27151
+source_lines=27153
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted typecheck stage — port of lib/typecheck.ml's HM core.  SLICE 1:
@@ -3127,7 +3127,9 @@ addAliasDecl name o params rhs ord pub env =
 -- reproduces that exactly — it filters on visibility only.  A future edit that
 -- "helpfully" pre-drops cyclic aliases here would silence the second and later
 -- modules' `T-RECURSIVE-ALIAS`, which is a loud → silent severity increase.
--- Pinned by `test/check_module_fixtures/cyclic_alias_cross_module`.
+-- Pinned by the `1512-A32b/alias-cycle-importer` leg of
+-- `test/diff_compiler_check_cli_modules.sh`, which requires the diagnostic to
+-- name BOTH the declaring module and the importer.
 aliasUniverseAt : Int -> List (TabKey, AliasDecl) -> List (TabKey, (List String, Ty))
 aliasUniverseAt _ [] = []
 aliasUniverseAt cur ((key, ad)::rest)
