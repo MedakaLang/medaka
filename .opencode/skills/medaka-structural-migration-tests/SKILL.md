@@ -93,6 +93,19 @@ phantom skip, unrelated compile failure, or empty output is not observed-red
 credit unless it is the explicitly relevant consequence. Finish by rebuilding
 restored source and rerunning clean green.
 
+Before naming expected-red evidence, inspect assertion order and identify the
+**earliest applicable assertion**. Prefer a stable rule identifier such as
+`H2B3-IMPL-SELF-AUTHORITY` in the failure text. When several assertions directly
+prove the same forbidden property, the caller may provide an explicit regex/set
+of acceptable identifiers; do not use a broad substring that could accept an
+unrelated failure. An earlier directly-equivalent authority rejection is valid
+credit, but an unrelated early exit is not.
+
+For a one-source mutation, prefer `scripts/mutation_transaction.sh` so EXIT and
+HUP/INT/TERM restoration, baseline hash proof, direct check status, expected-red
+matching, and final clean-state proof are one transaction. Use custom shell only
+for a shape the helper cannot express, and retain the same guarantees.
+
 For mode/reset migrations, include renamed-authority mutants rather than only
 mutating retired names. One mutant restores the old reset choreography so output
 remains conformant while exclusive ownership is wrong; the normalized authority

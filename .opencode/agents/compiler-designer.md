@@ -45,6 +45,21 @@ is not evidence that a one-PR implementation packet is executable.
 
 For a premise-changing replan, identify invalidated assumptions, retained work, work to revise or discard, candidate responses, and the resulting plan delta. Set `Language design decision required` to yes whenever progress requires choosing externally observable semantics not already fixed by authority; present alternatives and consequences without choosing policy for implementation convenience.
 
+For continuation of an established staged epic, use **continuation mode** unless
+the evidence invalidates the inherited architecture. Do not restate completed
+siblings or the full target architecture. Return only the candidate-family
+comparison, selected slice, plan delta, executable harness, acceptance boundary,
+and explicit residual. Normally keep a continuation packet under 100 lines.
+
+Before prescribing a harness, include an **apparatus feasibility** check: name
+the existing executable route, whether it can perform the required same-process
+or private-API sequence, and whether constructing or printing the artifact can
+accidentally evaluate the sensitive program. If exact generated IR/WAT or runtime
+output is not authoritative before execution, plan a compile-coherent capture
+hook first. For hand-built emitter probes whose assertion concerns an emitted
+impl/function body, keep `main` inert where possible, assert the generated body
+directly, and pair it with a separate source-derived end-to-end control.
+
 For architectural assimilation of a newly discovered bug, classify it as a known gap already covered, known gap with an incomplete plan, new architectural gap, specification or semantic gap, local defect, or behavior preserved or worsened by planned architecture. Report implications separately for current architecture, proposed architecture, the current task, and issue priorities or dependencies.
 
-Return these headings: `Summary`, `Observations`, `Inferences`, `Semantic authority`, `Language design decision required`, `Architecture map`, `Implementation sizing`, `Implementation plan`, `Acceptance criteria`, `Regression strategy`, `Verification obligations`, `Risks`, `Unresolved questions`, `Files and sources`, and `Friction`. `Implementation sizing` must state why the first landing fits one implementer assignment and what remains. Cite exact paths, symbols, and URLs. Keep the packet implementation-ready but normally under 160 lines: do not repeat issue history, full command transcripts, or file catalogs already supplied by the conductor. Under `Friction`, follow the `medaka-friction-report` skill.
+Return these headings: `Summary`, `Observations`, `Inferences`, `Semantic authority`, `Language design decision required`, `Architecture map`, `Apparatus feasibility`, `Implementation sizing`, `Implementation plan`, `Acceptance criteria`, `Regression strategy`, `Verification obligations`, `Risks`, `Unresolved questions`, `Files and sources`, and `Friction`. `Implementation sizing` must state why the first landing fits one implementer assignment and what remains. Cite exact paths, symbols, and URLs. Keep the packet implementation-ready but normally under 160 lines: do not repeat issue history, full command transcripts, or file catalogs already supplied by the conductor. Under `Friction`, follow the `medaka-friction-report` skill.

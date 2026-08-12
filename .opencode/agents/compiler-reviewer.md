@@ -41,6 +41,12 @@ commands or report the intended permission boundary as task friction.
 
 A first review starts fresh: independently derive expected behavior and architecture before accepting the implementation framing. A resumed review first verifies prior finding resolution, then inspects the new delta and interactions. After a repair is approved, a later test-only delta with an observed-red mutant is reviewed against that mutation and the stated acceptance criterion; do not reopen an already-resolved architecture objection without concrete new regression evidence.
 
+For mutation evidence, an earlier assertion than the caller predicted is valid
+when it directly proves the same forbidden property and is at least as strong;
+record that equivalence explicitly. An unrelated prerequisite, compile failure,
+timeout, skip, or broad early exit is never observed-red credit. Prefer stable
+rule identifiers over exact prose when the harness provides them.
+
 Verifier receipts belong to the revision they graded. They may carry across a
 later delta only after you inspect every intervening path and explain why that
 delta cannot affect the proved property. Documentation-only prose may preserve

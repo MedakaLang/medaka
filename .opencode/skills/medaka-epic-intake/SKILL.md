@@ -29,6 +29,11 @@ For each candidate sub-milestone, collect:
 3. **Source:** the claimed carrier, retired authority, or consumer is present or
    absent at `TASK_BASE`.
 
+Query tracker state compactly. Select only the issue state/body, latest relevant
+handoff comment, and immutable PR merge/head/check identity needed for the
+decision. Do not load or return every comment and full check-rollup when one
+latest handoff and one merged carrier decide readiness.
+
 Open/closed issue state alone is insufficient. A merged PR title alone is
 insufficient. A source symbol alone does not prove its acceptance criteria or
 authoritative merge-group result.
