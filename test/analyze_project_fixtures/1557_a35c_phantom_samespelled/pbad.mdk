@@ -1,0 +1,11 @@
+-- #1557 A-3.5c phantom-method attribution, module 2 of 2: a PHANTOM `Same`, spelled
+-- identically to `pgood`'s. `pbadm : Int` mentions the interface parameter `a`
+-- nowhere, so no argument or result can select an impl -- T-PHANTOM-METHOD, and it
+-- belongs to THIS file's bucket and to no other.
+import pgood.{pfn}
+
+export interface Same a where
+  pbadm : Int
+
+export qfn : Int -> Int
+qfn n = pfn n

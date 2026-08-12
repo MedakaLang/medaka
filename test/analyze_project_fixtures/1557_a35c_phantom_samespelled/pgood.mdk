@@ -1,0 +1,8 @@
+-- #1557 A-3.5c phantom-method attribution, module 1 of 2: a WELL-FORMED `Same`.
+-- Its method mentions the interface parameter, so it is dispatchable and must draw
+-- no diagnostic -- the same-spelled control for `pbad.mdk`'s row.
+export interface Same a where
+  pgoodm : a -> Int
+
+export pfn : Int -> Int
+pfn n = n + 1

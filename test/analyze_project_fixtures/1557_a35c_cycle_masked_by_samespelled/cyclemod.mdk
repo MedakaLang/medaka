@@ -1,0 +1,19 @@
+-- #1557 A-3.5c: the GUILTY module. `Alpha requires Beta` and `Beta requires Alpha`,
+-- both declared HERE -- a genuine W1 violation, and exactly the shape
+-- `test/typecheck_error_fixtures/cyclic_superinterface.mdk` rejects in a single file.
+--
+-- It imports only `ofn` from `othermod`, which does two things: it never brings
+-- `othermod`'s same-spelled `Alpha`/`Beta` into scope here (so this is not a
+-- duplicate-declaration program), and it forces `othermod` EARLIER in the loader's
+-- dependency-first order, so `othermod`'s two public interface decls sit in the
+-- `accAll` prefix by the time this module is checked.
+import othermod.{ofn}
+
+export interface Alpha a requires Beta a where
+  cafoo : a -> Int
+
+export interface Beta a requires Alpha a where
+  cbfoo : a -> Int
+
+export cfn : Int -> Int
+cfn n = ofn n

@@ -1,0 +1,27 @@
+-- #1557 A-3.5c -- phantom-method relocation: the ATTRIBUTION assertion.
+--
+-- `checkPhantomMethods` moved off a decl list and onto stage K's `CE`. The row set
+-- it takes is `ceRowsOwnedBy cur` -- the READING module's own interfaces -- and this
+-- fixture is what makes that choice fail-capable rather than a comment. Reading
+-- `ceRowsVisibleAt` instead (the whole ordinal prefix, which is what the relocated
+-- CYCLE walk correctly takes) would be an easy and invisible mistake: the check
+-- would still fire, the drain fixture would still pass, and every importer of a
+-- phantom-bearing module would re-report its diagnostic.
+--
+-- EXPECTED, HAND-DERIVED before running anything:
+--   * `pbad.mdk`  -- EXACTLY ONE T-PHANTOM-METHOD, naming `pbadm` and `Same`.
+--   * `pgood.mdk` -- `[]`. Its same-spelled `Same` is well-formed; a row set keyed
+--     on the SPELLING rather than on identity could report one interface's phantom
+--     method against the other's name.
+--   * `main_phantom.mdk` -- `[]`, and this is the load-bearing one. `pbad` sits at a
+--     STRICTLY EARLIER ordinal than this file, so its row is visible here; only the
+--     own-ordinal filter keeps the diagnostic from being re-reported once per
+--     importer.
+--
+-- The pre-A-3.5c arm agrees on all three (the old check was handed this module's own
+-- `prog`), which is the point: this relocation carries NO acceptance delta, and the
+-- fixture exists to keep it that way rather than to record a change.
+import pgood.{pfn}
+import pbad.{qfn}
+
+main = println (qfn (pfn 1))

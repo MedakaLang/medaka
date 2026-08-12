@@ -715,7 +715,7 @@ Keyed to the map's §4 layers. "Kept" means structurally unchanged.
 | L4a RLocal pinning (#1040/#1052/#1043/#1082) | E | Locals dict-abstracted (L4); pin machinery retired |
 | L5 coherence | G | Kept pure; condition (a)→(c) |
 | L5 field/record registry (`recordByNameRef` LWW) | K | Identity-keyed `DataEnv`; LWW impossible |
-| L5 kind checks (`checkGradedImplHeads`) | K + G | Declared kinds (EFFECTS §6.1–§6.5, #822) checked at declaration — **coordinate: #822 owns this machinery; see §8** |
+| L5 kind checks (`checkGradedImplHeads`) | K + G | ✅ **LANDED at A-3.5c (#1557).** Declared kinds (EFFECTS §6.1–§6.5) are read from `CE` at the reading module's ordinal (`ceSlotKindsAt`); the `ifaceParamKindsRef`/`universeIfaceParamKinds` pair and its writer are retired. ⚠️ The "**coordinate: #822 owns this machinery**" caveat that stood here is a **stale premise, not a live gate** — #822 CLOSED 2026-07-25. The impl-HEAD walk deliberately still iterates `prog`, not `IE.ieRows`: that is the mechanical condition under which A-3.5c is an A-3a unit at all |
 | L6 shadow machinery (both kinds) | R (detect) + S (route) | Surface-name detection at resolve, resolved pair recorded; routing per SHADOW S1–S9, single decision point |
 | L7 `checkBodyImpl` spine, `CheckMode`, promotion fixpoint | E | One driver, one mode; fixpoint → scheduled marking (staged: consumers → collapse → schedule) |
 | L7 universe marshalling (`load`/`store`/`appendUniverse*`) | K | Retired at E-4 (the marshalling serves the fallback path; a shim survives until then) |
@@ -1056,10 +1056,11 @@ orders merges, and the plan does not pretend otherwise.
   because those read sites only ever hold a bare head-tycon string" reasoning
   is **wrong for at least three of the five**, not one, and all three wrong
   ones land outside `TCon`'s own identity space:
-  - `universeIfaceParamKinds` is not read off a head tycon at all: its key
-    is built by `ifaceSlotKey` from an interface name and a slot index
-    (`typecheck.mdk:8504-8505`), and its one read site, `checkGradedImplTys`,
-    is called as `checkGradedImplTys iface 0 tys` from
+  - `universeIfaceParamKinds` is not read off a head tycon at all (⚠️ **and it no
+    longer exists — A-3.5c/#1557 retired the row, its `perRun` half and its writer;
+    the content is `CE`'s `ceRowParamKinds`**): its key was built from an interface
+    name and a slot index, and its one read site, `checkGradedImplTys`,
+    was called as `checkGradedImplTys iface 0 tys` from
     `checkGradedImplHeadDecl (DImpl { iface, tys, ... })`
     (`typecheck.mdk:1332-1333`) — an **interface name** off a `DImpl`, not a
     `TCon`. The code's own neighboring comment already says so: re-keying it
@@ -1214,8 +1215,10 @@ orders merges, and the plan does not pretend otherwise.
   number — completes at E-4, whose path is the marshalling's only remaining
   consumer — teaching the fallback to read K would mean editing the 20 mode
   branches E-2 deletes anyway). Impl
-  completeness + kind checks move to declaration time (**coordinate with #822**,
-  which owns the kind machinery — one of the two arcs rewrites it, not both).
+  completeness + kind checks move to declaration time. ⚠️ **"coordinate with #822,
+  which owns the kind machinery — one of the two arcs rewrites it, not both" stood
+  here and is now a STALE PREMISE: #822 CLOSED 2026-07-25**, so A-3 takes the kind
+  machinery. The kind half landed at **A-3.5c** (#1557); completeness is A-3.5a.
   Error-*ordering* golden drift is enumerated per family (this stage is
   explicitly not byte-identical). Carries the global-candidacy
   could-not-pass-before fixture (R2). *Depends on A-1/A-2; serialize against
@@ -1797,6 +1800,7 @@ reach. Run the three commands rather than trusting this table's membership.
 | `cohCollectImpls` / `cohCollectModuleImpls` / `cohImplsOf` (`:12590-12591`) / `cohImplsOfMid` (`:12612-12616`) / `CohImpl` / `coherenceUserDecls` | user-decls-only list, class identity a bare `String` (`:12588`, compared at `:12909`) | **DEFERRED → A-3.7**, which also inherits the two-checkers-disagree gap; A-3.4 supplies `InstRef` |
 | `implCompletenessMsgsOf` / `implCompletenessMsgsOfMap` (`:13125-13212`) | per-decl scans; the map arm reads `universeIfaceRequiredRef` (CE) | **DEFERRED → A-3.5** (decl-time relocation). Behaviour inherited **verbatim**; see §9.9 |
 | `superImplMsgsOf` / `implMatchesSuper` (`:14193-14251`) | scan of `allDecls` for a super's impl | **DEFERRED → A-3.5** |
+| `checkInterfaceCycles` / `ifaceDfsCycle*` · `checkPhantomMethods` · `checkGradedImplHeads` / `checkGradedImplTys` | bare-name decl scans (cycles) · per-decl scan (phantom) · `ifaceParamKindsRef` lookup (kinds) | ✅ **LANDED at A-3.5c (#1557).** All three read `CE` at the reading module's ordinal — `ceRowsVisibleAt` (cycles, with super edges now followed by IDENTITY), `ceRowsOwnedBy` (phantom), `ceSlotKindsAt` (kinds). Retires `universeIfaceParamKinds` + `ifaceParamKindsRef`; `cross_allowed` 28 → 27. NOT byte-identical, by owner ruling — see §9.9 |
 | `implTysIfMatch` · `implHeadTagForIface` · `implHeadGround` · `implHeadParametric` · `declMethodNamesOf` · `argImplRequiresRoutesRecD`'s decl walk | per-call decl-list scans, no ref — invisible to every prefix grep | **DEFERRED**: they become `IE` readers where the read is authoritative (A-3.5/3.6), not here |
 | `superDeclsRef`, `argDispatchIdxRef`, `methodDispatchIdxRef` | `DriverState`, interface/method-side | **NOT `IE`** — CE-side or RLocal-site channels (#1351); A-3.3 excludes the latter two deliberately |
 | `methodIfaceTableRef` / `methodIfaceIndexRef` (`compiler/backend/emit_support.mdk:449-464`, read by both backends) | emit-side method→(iface, arity) assoc list | **NOT `IE`** — #1112 §1 row 7: belongs with B-2 |
