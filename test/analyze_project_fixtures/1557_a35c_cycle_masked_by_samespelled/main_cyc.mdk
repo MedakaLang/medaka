@@ -1,0 +1,33 @@
+-- #1557 A-3.5c -- THE DRAIN FIXTURE for the relocated W1 acyclicity check, and the
+-- reason this unit could not hold a byte-identical bar.
+--
+-- WHAT IT PINS. `cyclemod.mdk` declares a genuine superinterface cycle
+-- (`Alpha requires Beta`, `Beta requires Alpha`). It must be rejected with
+-- T-CYCLIC-SUPERINTERFACE, attributed to `cyclemod.mdk`.
+--
+-- WHY IT COULD NOT BE, BEFORE. `checkInterfaceCycles` was handed a DECL LIST
+-- (`accAll ++ accData ++ prog`) and resolved every superinterface edge with
+-- `ifaceSupersOf`, a FIRST-MATCH BARE-NAME scan of that list. `accAll` carries the
+-- public decls of every earlier module, so when `cyclemod` was checked the names
+-- `Alpha` and `Beta` resolved to `othermod`'s LEAF declarations -- which have no
+-- `requires` at all. The DFS visited two leaves, found no back edge, and the program
+-- was ACCEPTED AT EXIT 0. That is silent wrongness, not a missing feature: the cycle
+-- is real, no impl of either interface can ever be constructed, and nothing said so.
+--
+-- MEASURED, both arms, same source tree (see this fixture's PR body):
+--   base  `medaka check main_cyc.mdk` -> exit 0, no diagnostic   (the bug)
+--   A-3.5c                            -> exit 1, T-CYCLIC-SUPERINTERFACE on cyclemod
+--
+-- WHAT FIXES IT. A-3.5c relocates the walk onto stage K's `CE` and follows a super
+-- edge by IDENTITY -- `ceLookupAt (regKeyOfTab (ifaceTabKey superOrigin superHead))`
+-- -- so `cyclemod.Alpha` and `othermod.Alpha` are two nodes, not one, and the back
+-- edge survives to be found.
+--
+-- 🚨 FAIL-CAPABLE IN BOTH DIRECTIONS, and the OTHER direction is a separate fixture,
+-- not a paragraph: `1557_a35c_samespelled_iface_bystander/` is a graph with the same
+-- collision and NO cycle, whose every bucket must stay `[]`. A change that made this
+-- one pass by reporting a cycle wherever two interfaces share a name would fail that
+-- one. Neither fixture is the assertion; the pair is.
+import cyclemod.{cfn}
+
+main = println (cfn 1)

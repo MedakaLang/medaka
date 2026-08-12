@@ -1,0 +1,19 @@
+-- #1557 A-3.5c bystander, module 2 of 2. Same two SPELLINGS as `pmod`, opposite
+-- edge: `Base requires Same`, both declared HERE. Importing only `pfn` forces `pmod`
+-- earlier in load order without bringing either of its interfaces into scope.
+--
+-- Collapse the four declarations onto their two bare names and the edges read
+-- `Same -> Base` and `Base -> Same`: a cycle. Keep them apart by identity and there
+-- are two independent one-edge chains, each ending on a leaf. Every bucket must be
+-- `[]`, on BOTH arms -- this is the direction
+-- `1557_a35c_cycle_masked_by_samespelled/` cannot cover.
+import pmod.{pfn}
+
+export interface Same a where
+  qsf : a -> Int
+
+export interface Base a requires Same a where
+  qbf : a -> Int
+
+export qfn : Int -> Int
+qfn n = pfn n

@@ -82,8 +82,7 @@ import types.registry.{
   RegKey,
   Registry,
   regKeyOfTab,
-  regKeyTabAt,
-  lookupReg,
+  regKeyRender,
   regEmpty,
   regInsertK,
   regLookupK,
@@ -1614,9 +1613,11 @@ tyTabKey : TyConOrigin -> String -> TabKey
 tyTabKey o n = tabKeyOf NsType o n
 
 -- ── #1111 A-2.4: the INTERFACE-namespace table key ────────────────────────
--- `tyTabKey`'s peer for the `NsIface` namespace, and the ONE place a key for
--- `universeIfaceRequiredRef` or `ifaceParamKindsRef` is minted — on both the
--- write side and the read side.
+-- `tyTabKey`'s peer for the `NsIface` namespace, and the ONE place a key in that
+-- namespace is minted — on both the write side and the read side.  ⚠️ #1557 A-3.5c:
+-- `ifaceParamKindsRef` was one of the two tables named here and is RETIRED; the
+-- surviving consumers are `universeIfaceRequiredRef` and stage K's `CE`
+-- (`ceRowKey`/`ceLookupAt`, and `ifaceDfsCycleOneSuper`'s superinterface edge).
 --
 -- ── The two sides, and WHY they meet ──────────────────────────────────────
 -- The WRITE side always passes a `DInterface`'s `ifaceOrigin`: the DECLARATION
@@ -1651,9 +1652,10 @@ tyTabKey o n = tabKeyOf NsType o n
 --
 -- ── THE IDENTITY-LESS PATH ────────────────────────────────────────────────
 -- 🚨 Same MODULE-PATH-ONLY bound A-2.3 recorded, and for the interface
--- namespace it bites HARDER, because `ifaceParamKindsRef` is read on BOTH
--- driver arms: `checkGradedImplHeads` is called from `checkBodyImpl`, which
--- Flat and Module share.  On the FLAT path `checkProgramSeededSplit` runs
+-- namespace it bites HARDER, because this key is minted on BOTH driver arms:
+-- `checkGradedImplHeads` is called from `checkBodyImpl`, which Flat and Module
+-- share, and since #1557 A-3.5c the relocated cycle walk mints it on both arms too
+-- (`flatClassEnvOf` on Flat, `deIfaces` on Module).  On the FLAT path `checkProgramSeededSplit` runs
 -- `stampDeclOrigins "core" coreProgTy`, so the PRELUDE's interfaces are
 -- `TkIdent`; every flat USER interface is `OriginUnresolved` and keys
 -- `TkBare`, and so does a flat user `impl`'s `implOrigin` — the two halves
@@ -1681,7 +1683,7 @@ tyTabKey o n = tabKeyOf NsType o n
 -- fixture cannot witness it: it declares its OWN `interface Graded`, so what it
 -- exercises is a `TkBare` ↔ `TkBare` meeting, not the `TkIdent … core` ↔
 -- `TkIdent … core` one this paragraph is about.  No fixture witnesses this
--- shape, and today none CAN: the FLAT arm reads only `ifaceParamKindsRef` (the
+-- shape, and today none CAN: the FLAT arm reads only the graded slot kinds (the
 -- completeness table is Module-only — see the mode switch feeding
 -- `checkImplCompletenessMap`), and there a HIT on a non-graded prelude row and
 -- an outright MISS both take `checkGradedImplTys`' `_ => ()` arm.  A prelude
@@ -1774,33 +1776,73 @@ effectUndeterminedMsg iface mname vars = "Under-determined effect variable \{ren
 -- complaint: the impl would be ACCEPTED and its grade would mean nothing — every
 -- index a caller reads off the result would be a fabrication.
 --
--- Only interfaces that actually HAVE a graded slot are inspected (ifaceParamKindsRef
--- records nothing else), so an ordinary interface is untouched.  Runs on BOTH
--- whole-program paths: its one call site is in checkBodyImpl, shared by Flat and
--- Module, immediately after registerAllData has populated both kind tables.
-checkGradedImplHeads : List Decl -> Unit
-checkGradedImplHeads [] = ()
-checkGradedImplHeads (d::rest) =
-  let _ = checkGradedImplHeadDecl d
-  checkGradedImplHeads rest
+-- Only interfaces that actually HAVE a graded slot are JUDGED — the `anyKRow want`
+-- guard below is what does that, not the table: every slot of every interface is
+-- recorded (it always was, and `ceRowParamKinds` keeps doing so), and an all-`KType`
+-- row falls into the same `_ => ()` arm an outright miss does.  ⚠️ This paragraph
+-- read *"only interfaces that actually HAVE a graded slot are inspected
+-- (ifaceParamKindsRef records nothing else)"* until #1557 A-3.5c, and the
+-- parenthetical was false of the retired table too.  Runs on BOTH whole-program
+-- paths: its one call site is in checkBodyImpl, shared by Flat and Module,
+-- immediately after `dataEnv` has populated the head-constructor kind table.
+--
+-- 🚨 #1557 A-3.5c: IT STILL ITERATES `prog`, AND THAT IS THE UNIT'S DEFINING
+-- CONDITION, not an implementation detail.  The owner ruling that split A-3.5c
+-- out of the A-3b lane (issue #1557, 2026-08-12) is CONDITIONAL: this check
+-- qualifies as CE-only *"only if the graded impl-head kind check keeps
+-- iterating `prog` rather than `IE.ieRows`"*.  The impl HEADS come from the
+-- decl list; only the interface's declared slot kinds come from stage K's `CE`.
+-- Whoever re-points this walk at `IE.ieRows` has re-classified the unit as A-3b
+-- by construction — that is a routing decision, not a refactor.
+checkGradedImplHeads : ClassEnv -> Int -> List Decl -> Unit
+checkGradedImplHeads _ _ [] = ()
+checkGradedImplHeads ce cur (d::rest) =
+  let _ = checkGradedImplHeadDecl ce cur d
+  checkGradedImplHeads ce cur rest
 
 -- OCCURRENCE MINT (#1110/#1111 A-2.4): `implOrigin` is the identity the
 -- interface NAME in `impl <iface> …` acquired at resolve — read off the same record
 -- pattern as the name itself so the two cannot drift apart, exactly as A-2.3 reads
 -- `tyConOrigin` beside `tyConName`.
-checkGradedImplHeadDecl : Decl -> Unit
-checkGradedImplHeadDecl (DAttrib _ d) = checkGradedImplHeadDecl d
-checkGradedImplHeadDecl (DImpl { iface, tys, implOrigin = o, ... }) =
-  checkGradedImplTys o iface 0 tys
-checkGradedImplHeadDecl _ = ()
+checkGradedImplHeadDecl : ClassEnv -> Int -> Decl -> Unit
+checkGradedImplHeadDecl ce cur (DAttrib _ d) = checkGradedImplHeadDecl ce cur d
+checkGradedImplHeadDecl ce cur (DImpl { iface, tys, implOrigin = o, ... }) =
+  checkGradedImplTys ce cur o iface 0 tys
+checkGradedImplHeadDecl _ _ _ = ()
 
--- ⚠️ THE ONLY reader of `ifaceParamKindsRef`, and it is a DIAGNOSTIC.
--- 🚨 RE-DERIVED FOR A-2.4, NOT INHERITED: `grep -n 'ifaceParamKindsRef' ` this file
--- gives the field's declaration + initializer (PerRun), the writer
--- (`insertIfaceParamKinds`), the two whole-ref copies into/out of the cross-run
--- universe (`checkBodyImpl`'s Module arm) and this ONE `lookupReg`.  No elaboration
--- seam reads it — see the next paragraph for why that is load-bearing rather than
--- incidental.
+-- 🚨 #1557 A-3.5c — THE `CE` READER FLIP, and the retirement it pays for.
+--
+-- WAS: `lookupReg (ifaceSlotKey o iface i) perRun.ifaceParamKindsRef.value` — a
+-- per-run assoc list grown by `registerIfaceParamKindsGo` during each module's own
+-- pass and carried ACROSS modules by `crossRun.universeIfaceParamKinds`, one of the
+-- five tables `loadDataUniverse`/`storeDataUniverse` marshalled in lockstep.  Both
+-- of those cells are GONE, not merely unread: this was their ONLY reader, so leaving
+-- them would have left two sources of truth for "what kind is this interface's slot"
+-- (design law L1) and the `cross_allowed` ratchet would still carry the row this
+-- unit exists to retire.  The `CE` block's own header assigned that retirement to
+-- *"whatever PR first gives `ceParamKinds` a live reader"* — this line is it, and
+-- `CE` stops being shelf-ware here.
+--
+-- NOW: `ceSlotKindsAt` — the whole-graph `CE`, filtered to THIS module's ordinal
+-- prefix through `ceLookupAt`, the ONE `CE` read accessor and the ONE place
+-- `declEnvVisibleAt` is applied to `CE`.  A-3.6 remains the deletion of that
+-- predicate's body; the filter stays ON here.
+--
+-- WHY THIS IS JUDGMENT-PRESERVING, and where it is NOT.  The KEY does not move:
+-- `ifaceSlotKey` was already `regKeyTabAt (ifaceTabKey o iface) i` since A-2.4, and
+-- `ceRowKey` is `regKeyOfTab (ifaceTabKey o name)` with the slot supplied
+-- positionally — same identity, same mint, so this relocation carries NO #1258-class
+-- acceptance delta of its own (unlike A-3.5b's, whose lookup is bare-name today).
+-- The CONTENT does not move either: `ceRowParamKinds` is `map (p => ifaceParamKindsOf
+-- p methods) typarams`, the identical pure computation the retired writer performed
+-- per slot.  What DOES move is the POPULATION's provenance — the marshalled prefix
+-- becomes the ordinal-filtered prefix — and those two agree because ordinals are
+-- assigned in the loader's dependency-first order, the same order `foldModules`
+-- grows the accumulator in.  The `Flat` arm keeps its own single-module `CE` built
+-- from the very decl list `registerAllData` used to walk, so nothing switched off
+-- there: see `gradedClassEnv` at the call site, and note that silently switching this
+-- check OFF for a no-import `medaka check` is exactly the loud→silent regression the
+-- ordinal machinery would otherwise have caused (`declEnvsRef` is EMPTY on Flat).
 --
 -- ⚠️ THE PARAGRAPH THAT USED TO BE HERE IS NOW WRONG IN ITS CONCLUSION, so it is
 -- corrected rather than deleted — a reader who remembers it would otherwise think
@@ -1828,13 +1870,13 @@ checkGradedImplHeadDecl _ = ()
 -- in unrelated modules — the impl was judged against whichever registered LAST, so
 -- `impl Same P` (naming `pmod.Same`, ungraded) was rejected with T-IMPL-KIND-MISMATCH
 -- for failing `gmod.Same`'s `Row -> Type -> Type`.  Import order selected the symptom.
-checkGradedImplTys : TyConOrigin -> String -> Int -> List Ty -> Unit
-checkGradedImplTys _ _ _ [] = ()
-checkGradedImplTys o iface i (t::rest) =
-  let _ = match lookupReg (ifaceSlotKey o iface i) perRun.value.ifaceParamKindsRef.value
+checkGradedImplTys : ClassEnv -> Int -> TyConOrigin -> String -> Int -> List Ty -> Unit
+checkGradedImplTys _ _ _ _ _ [] = ()
+checkGradedImplTys ce cur o iface i (t::rest) =
+  let _ = match ceSlotKindsAt (regKeyOfTab (ifaceTabKey o iface)) cur i ce
     Some want if anyKRow want => checkGradedImplHead iface t want
     _ => ()
-  checkGradedImplTys o iface (i + 1) rest
+  checkGradedImplTys ce cur o iface (i + 1) rest
 
 -- [want] is the interface slot's kind list.
 --
@@ -2677,9 +2719,9 @@ data DeclEnvs = DeclEnvs {
     deModules : List DeclEnvModule,  -- ordinal order, prelude first
     deOrdIndex : OrdMap Int,
     deAllDecls : List Decl,
-    deData : DataEnv,  -- A-3.2a (#1112): CONSTRUCTION ONLY, NOT LIVE — see the block above `DataEnv`
+    deData : DataEnv,  -- A-3.2a (#1112) built it; A-3.2b residual 1 (#1512) made it LIVE — `aliasUniverseAt` reads `deAliases`
     deImpls : ImplEnv,
-    deIfaces : ClassEnv,  -- A-3.3 (#1519): CONSTRUCTION ONLY, NOT LIVE — see the `CE` block above
+    deIfaces : ClassEnv,  -- A-3.3 (#1519) built it; A-3.5c (#1557) made it LIVE — three readers, see the `CE` block
   }
 
 -- INITIAL construction only, exactly as `freshDriverState` is: a driver that never
@@ -2776,6 +2818,26 @@ declEnvVisibleAt cur entryOrd = entryOrd <= cur
 -- reject (loud), instead of gaining the whole graph early and producing a silent
 -- accept.  `buildDeclEnvs` registers the prelude's `""` spelling, so the miss is
 -- unreachable from the two drivers that exist today.
+--
+-- 🚨 "FAIL-CLOSED" IS A CLAIM ABOUT THE READER, NOT ABOUT THIS FUNCTION, AND SINCE
+-- #1557 A-3.5c THERE ARE READERS OF THE OPPOSITE POLARITY.  The argument above holds
+-- for a reader that CONSUMES declarations to build something — losing them shrinks a
+-- universe and the missing entry is reported.  It INVERTS for a reader that consumes
+-- declarations to CHECK them: at `cur = -1`, `ceRowsVisibleAt`/`ceRowsOwnedBy` return
+-- `[]` and `ceLookupAt` misses everything, so W1 acyclicity, phantom-method rejection
+-- and the graded impl-head kind check all have nothing to iterate and become SILENT
+-- ACCEPTS.  Same `-1`, opposite severity direction.
+--
+-- SUSPECTED-UNPROVEN, and recorded rather than fixed because it is not reachable
+-- today: the ids come from the very list `buildDeclEnvs` indexed, within one driver
+-- invocation, so a checking reader cannot arrive with an id the envelope never saw.
+-- Probed against the #1223 nested-root shape (`test/origin_fixtures/nested`) — the
+-- one place a module id has historically disagreed with itself — and all three checks
+-- fire identically on both arms.  A-3.5a/A-3.5b relocate MORE checking readers behind
+-- this same ordinal; whoever writes them must not read the paragraph above as a
+-- blanket safety property.  If a driver ever threads an id `buildDeclEnvs` did not
+-- index, the remedy is at the READER (abstain loudly / fail the pass), not here — a
+-- sentinel that means "everything" would break the consuming readers symmetrically.
 declEnvsOrdOf : String -> DeclEnvs -> Int
 declEnvsOrdOf mid envs = match omLookup mid envs.deOrdIndex
   Some k => k
@@ -2858,7 +2920,14 @@ declEnvRowVisible cur m
 -- > declEnvVisibleTo 1 1 False
 -- True
 
--- ── A-3.2a (#1112): the `DataEnv` slice — CONSTRUCTION ONLY, NOT LIVE ────────
+-- ── A-3.2a (#1112): the `DataEnv` slice ─────────────────────────────────────
+-- ⚠️ This banner read "CONSTRUCTION ONLY, NOT LIVE" and that lapsed with A-3.2b
+-- residual 1 (#1512), which gave `deAliases` a production reader (`aliasUniverseAt`,
+-- called from `loadDataUniverse`).  The prose below is A-3.2a's own bar, kept as the
+-- derivation of why this slice is SYNTACTIC; it is no longer a statement about
+-- liveness.  Corrected here by #1557 A-3.5c because its sibling `deIfaces` was being
+-- fixed one line over and leaving this one would have made the record read
+-- "DataEnv inert, CE live" — inverted in the other direction.
 -- §2 K: *"`DataEnv`: datatypes, constructor schemes, records and field
 -- ownership, aliases with cycle rejection."*  #1112's own decomposition table
 -- describes A-3.2 as retiring `load`/`store` (`loadDataUniverse`/
@@ -3921,23 +3990,29 @@ ieUnivConcreteOf (ImplUniverse conc _ _) = conc
 -- `TYPECHECK-TARGET-ARCHITECTURE.md` §9 independently routes it to `IE`/
 -- RLocal-site channels, not `CE`.
 --
--- ⚠️ `universeIfaceParamKinds` COORDINATION, named rather than silently
--- absorbed: it is one of the FOUR tables `loadDataUniverse`/`storeDataUniverse`
--- still marshal in lockstep (recordByName, fieldOwners, dataParamKinds,
--- ifaceParamKinds — the fifth, aliasTable, LEFT with A-3.2b's residual and is
--- now a stage-K projection) — a `DataEnv`-shaped neighbourhood by
--- CO-LOCATION — but its CONTENT is interface parameter kinds, which is `CE`'s
--- per §2 K ("declared parameter kinds"), not `DataEnv`'s.  This unit's
--- `ceParamKinds` (below) is the syntactic construction of that same content,
--- built the identical way (`declGradedScope`/`ifaceParamKindsOf`, pure,
--- no ref reads).  This PR does NOT retire or touch the live
--- `universeIfaceParamKinds` ref — construction only, zero readers, same bar as
--- `deData`/`deImpls`.  Posted in writing on #1519 and #1512: A-3.2b's
--- retirement of the `loadDataUniverse`/`storeDataUniverse` ladder should
--- EXCLUDE `universeIfaceParamKinds` from what it retires under `DataEnv`'s
--- name — its eventual retirement is this unit's (`CE`'s) to route, on whatever
--- PR first gives `ceParamKinds` a live reader, not A-3.2b's to fold in by
--- accident of which function happens to marshal it today.
+-- ✅ `universeIfaceParamKinds` COORDINATION — DISCHARGED by #1557 A-3.5c, which is
+-- the PR this paragraph was addressed to.  A-3.3 wrote: *"its eventual retirement is
+-- this unit's (`CE`'s) to route, on whatever PR first gives `ceParamKinds` a live
+-- reader, not A-3.2b's to fold in by accident of which function happens to marshal it
+-- today."*  A-3.5c is that PR.  `ceParamKinds` has a production reader
+-- (`ceSlotKindsAt` ← `checkGradedImplTys`), and BOTH the `universeIfaceParamKinds`
+-- CrossRun cell and the `ifaceParamKindsRef` PerRun ref it marshalled are DELETED,
+-- along with their writer — so `loadDataUniverse`/`storeDataUniverse` now marshal
+-- THREE tables (recordByName, fieldOwners, dataParamKinds) -- A-3.2b's residual slice 1
+-- took `aliasTable` out just before this unit took `ifaceParamKinds`, and
+-- the `DataEnv`-by-CO-LOCATION confusion the original note was guarding against no
+-- longer has a table to attach to.  A-3.2b's slices retire the remaining rows under
+-- `DataEnv`'s own name.
+--
+-- ⚠️ ZERO READERS NO LONGER HOLDS, and that is the whole point of A-3.5c under
+-- RULING 1 (*"A-3a is complete when `CE` and `DataEnv` each have at least one
+-- PRODUCTION reader AND the corresponding `universe*` rows are retired"*).  #1519
+-- landed this block construction-only and therefore INERT; the three readers are now
+-- `ceSlotKindsAt` (graded impl-head kinds), `ceRowsOwnedBy` (phantom methods) and
+-- `ceRowsVisibleAt` + `ceLookupAt` (W1 acyclicity, following superinterface edges by
+-- identity).  What follows was written when nothing read `deIfaces`; the caveat it
+-- states is now historical, kept because the doctests it justifies are still the
+-- sharpest evidence this block has:
 --
 -- ZERO READERS, deliberately (construction only, per #1519's bar) — nothing
 -- outside this block populates or reads `deIfaces`.  "Byte-identical" is
@@ -4095,12 +4170,62 @@ ceInsertRow r env = ClassEnv { env | ceRows = r::env.ceRows, ceByKey = regInsert
 -- 🚨 THE ONE `CE` READ ACCESSOR — the ordinal-filtered lookup routed through
 -- `declEnvVisibleAt`, exactly as `ieUniverseAt`/`ieSnapAt` are the one
 -- read path for `IE`.  Looks up by IDENTITY rather than collecting a
--- candidate set, per the shape argued at `ClassEnv` above.  NO CALLER TODAY —
--- construction only, per this unit's bar.
+-- candidate set, per the shape argued at `ClassEnv` above.
+--
+-- ⚠️ This said "NO CALLER TODAY — construction only, per this unit's bar" while it was
+-- #1519's.  Since #1557 A-3.5c it has THREE production callers: `ceSlotKindsAt`
+-- (graded impl-head kinds), and `ifaceDfsCycleOneSuper` following a superinterface
+-- edge by identity; `ceRowsVisibleAt`/`ceRowsOwnedBy` are its population peers on the
+-- same ordinal predicate.  Anything reaching `ceByKey` directly instead of through
+-- here would bypass `declEnvVisibleAt` and silently perform A-3.6's widening early.
 ceLookupAt : RegKey -> Int -> ClassEnv -> Option CeRow
 ceLookupAt key cur env = match regLookupK key env.ceByKey
   None => None
   Some r => if declEnvVisibleAt cur (ceRowOrd r) then Some r else None
+
+-- ── #1557 A-3.5c: the ROW-SET reads, and why there are exactly two ─────────
+-- `ceLookupAt` above answers "what does interface I mean here"; the two
+-- relocated SCANS (W1 acyclicity, phantom methods) instead need a POPULATION,
+-- and they need two DIFFERENT ones.  Both go through `declEnvVisibleAt` — the
+-- ONE ordinal predicate, per A-3.1's routing rule — so A-3.6 still has a
+-- single body to delete.
+--
+-- 🚨 THE TWO ARE NOT INTERCHANGEABLE, and picking the wrong one is a silent
+-- widening rather than a loud one.  `ceRowsVisibleAt` is the reading module's
+-- whole PREFIX (prelude + every earlier module + itself) — it reproduces what
+-- `checkInterfaceCycles` is handed today (`accAll ++ accData ++ prog`).
+-- `ceRowsOwnedBy` is the reading module ALONE — it reproduces what
+-- `checkPhantomMethods` is handed today (`prog` on the Module arm, the
+-- driver-staged USER decls on Flat).  Feeding the prefix to phantom-methods
+-- would re-report every imported interface's phantom method once per importing
+-- module; feeding own-only to the cycle scan would drop a cycle that closes
+-- through an imported superinterface.
+ceRowsVisibleAt : Int -> ClassEnv -> List CeRow
+ceRowsVisibleAt cur env =
+  filterList (r => declEnvVisibleAt cur (ceRowOrd r)) env.ceRows
+
+ceRowsOwnedBy : Int -> ClassEnv -> List CeRow
+ceRowsOwnedBy cur env = filterList (r => ceRowOrd r == cur) env.ceRows
+
+-- Slot [i]'s declared kind signature for interface [key], at the reading
+-- module's ordinal.  `ceRowParamKinds` is POSITIONAL with `ceTyparams` and
+-- holds `ifaceParamKindsOf p methods` per slot — the SAME pure computation the
+-- retired `ifaceParamKindsRef` writer (`registerIfaceParamKindsGo`) performed
+-- per slot under an `ifaceSlotKey o iface i` key, so indexing this list by `i`
+-- and looking that key up are the same question.  An out-of-range slot ABSTAINS
+-- (`None`), which is the pre-existing miss policy: `checkGradedImplTys`' own
+-- `_ => ()` arm already covered "an interface with fewer parameters than the
+-- impl has type arguments".
+ceSlotKindsAt : RegKey -> Int -> Int -> ClassEnv -> Option (List Kind)
+ceSlotKindsAt key cur i env = match ceLookupAt key cur env
+  None => None
+  Some r => nthKindList i (ceRowParamKinds r)
+
+nthKindList : Int -> List (List Kind) -> Option (List Kind)
+nthKindList _ [] = None
+nthKindList i (k::rest)
+  | i == 0 = Some k
+  | otherwise = nthKindList (i - 1) rest
 
 -- ── doctests — a discriminating two-module, same-spelled-interface corpus ───
 -- Mirrors `IE`'s `ieProbeEnv` shape deliberately: `AGENTS.md` demands a program
@@ -4316,12 +4441,13 @@ ceRowParamKindNamesAt key cur env = match ceLookupAt key cur env
 -- > ceRowIfaceNameAt "zmod" 1 ceProbeEnv
 -- "Same"
 
--- ── a graded fixture: KRow inference must match `registerIfaceParamKindsGo` ──
+-- ── a graded fixture: KRow inference must match `ifaceParamKindsOf` ──────────
 -- `run : f e a -> <e> a` — typaram `f`'s slot-0 argument is the bare tyvar
 -- `e`, which the SAME signature's return type also uses in an effect-tail
 -- position (`<e> a`), so slot 0 must infer `KRow` and slot 1 (`a`, never a
--- tail) must infer `KType` — the identical inference `ifaceParamKindsOf`
--- performs for the live `universeIfaceParamKinds` table.
+-- tail) must infer `KType`.  Until #1557 A-3.5c this asserted agreement with the
+-- live `universeIfaceParamKinds` table; that table is retired and `ceParamKinds` IS
+-- the answer now, so these doctests grade the production computation directly.
 ceGradedMethod : IfaceMethod
 ceGradedMethod =
   IfaceMethod
@@ -4353,9 +4479,12 @@ ceGradedKey = regKeyOfTab (ifaceTabKey (OriginModule "gmod") "Async")
 -- > ceRowParamKindNamesAt ceGradedKey 0 ceGradedEnv
 -- [["Row", "Type"]]
 
--- ── an UNGRADED fixture: every slot is still RECORDED, per this block's own
--- comment above `registerIfaceParamKindsGo` ("EVERY slot is recorded, graded
--- or not").  `fmap : f a -> f a` applies `f` but never puts its argument in an
+-- ── an UNGRADED fixture: every slot is still RECORDED ("EVERY slot is recorded,
+-- graded or not" — the retired writer's rule, which `ceParamKinds` keeps because
+-- `checkGradedImplTys`' `anyKRow` guard, not the table, is what filters).  ⚠️ #1557
+-- A-3.5c makes this fixture LOAD-BEARING rather than descriptive: `ceParamKinds` is
+-- now the production answer, so dropping non-`KRow` rows would shift every later
+-- slot's index and mis-judge a graded impl head.  `fmap : f a -> f a` applies `f` but never puts its argument in an
 -- effect-tail position anywhere in the signature, so slot 0 must infer
 -- `KType`, not be DROPPED from the row.  This is the fixture the reviewer's
 -- mutation (b) — deleting non-`KRow` rows from `ceParamKinds` — needs to be
@@ -5131,7 +5260,15 @@ data CrossRun = CrossRun {
     universeRecordCollidedRef : Ref (List String),  -- #1111 A-2.12: the registry KEYS the line above holds ≥2 distinct identities for (normally EMPTY)
     universeFieldOwners : Ref (OrdMap (List String)),
     universeDataParamKinds : Ref (List (TabKey, List Kind)),  -- #1111 A-2.3: identity-keyed (TabKey), not bare name — see tyTabKey
-    universeIfaceParamKinds : Ref (List (RegKey, List Kind)),  -- #822 iface half of the kind universe; #1111 A-2.4: identity×slot-keyed (RegKey), not "<iface>@<slot>" — see ifaceSlotKey
+    -- ⚠️ `universeIfaceParamKinds` was HERE and is RETIRED by A-3.5c (#1557).
+    -- It was #822's iface half of the kind universe, identity×slot-keyed since
+    -- #1111 A-2.4 and marshalled beside `universeAliasTable` above by the same
+    -- `loadDataUniverse`/`storeDataUniverse` pair.  Its one reader
+    -- (`checkGradedImplTys`) now sources from stage K: `declEnvsRef.deIfaces`,
+    -- projected at the reader's own ordinal by `ceSlotKindsAt`.  Its `perRun` half
+    -- (`ifaceParamKindsRef`) and its writer went with it -- do not re-add either.
+    -- A cross-run copy beside K is two answers to "what kind is this interface's
+    -- slot", and the copy is the one whose population depends on marshalling order.
     -- ⚠️ `universeAliasTable` was HERE and is RETIRED by A-3.2b's residual (#1512).
     -- It was the per-module-grown cross-run copy of the type-ALIAS table, marshalled
     -- by `loadDataUniverse`/`storeDataUniverse`.  Its readers now source from stage
@@ -5220,7 +5357,6 @@ freshCrossRun env = CrossRun {
   universeRecordCollidedRef = Ref [],
   universeFieldOwners = Ref omEmpty,
   universeDataParamKinds = Ref [],
-  universeIfaceParamKinds = Ref [],
   universeDataEnv = Ref env,
   universeCtorIdentsRef = Ref omEmpty,
   universeCtorCollidedRef = Ref [],
@@ -5984,10 +6120,14 @@ data PerRun = PerRun {
     errorsDetected : Ref Int,  -- issue 1146: the CONTROL signal split out of it — see recordTypeError / erredDuring
     occursCheckFailed : Ref Bool,
     currentLevel : Ref Int,
-    ifaceParamKindsRef : Ref (List (RegKey, List Kind)),  -- #822 (graded interfaces): INTERFACE type-parameter slot kinds — dataParamKindsRef's
-    pinnedLocals : Ref (List (Mono, String, String, Option Loc)),  -- sibling for an ABSTRACT head.  See registerIfaceParamKinds; read by ONE seam
-  }  -- (checkGradedImplTys, a diagnostic) — the elaborators carry their scope instead.  -- declined, as (the pinned tyvar AS A MONO, binding name, the interface whose
--- #866: one entry per LOCAL binding whose generalization dictForwardedIds
+    pinnedLocals : Ref (List (Mono, String, String, Option Loc)),  -- #866: one entry per LOCAL binding whose
+  }  -- generalization dictForwardedIds declined, as (the pinned tyvar AS A MONO, binding name, the interface whose
+
+-- ⚠️ #1557 A-3.5c REMOVED `ifaceParamKindsRef` from this record, and with it the
+-- `universeIfaceParamKinds` CrossRun cell that marshalled it between modules.  Its
+-- one reader (`checkGradedImplTys`) reads stage K's `CE` instead; the writer
+-- (`registerIfaceParamKinds`) is gone too, since a table nobody reads is not a
+-- second source of truth worth keeping (design law L1).
 
 -- dict it forwards, the binding's own loc).  Read ONLY by pinnedLocalExplain,
 -- to turn the downstream `Type mismatch` such a pin causes into a diagnostic
@@ -5996,7 +6136,19 @@ data PerRun = PerRun {
 -- on the (hot, allocation-sensitive) unify path.  Per-module by construction:
 -- freshPerRun re-mints it, so a stale entry cannot label a later module.
 
--- Construct all 64 field-Refs fresh (each reproduces its former top-level ref's initial).
+-- Construct every field fresh (each reproduces its former top-level ref's initial).
+-- ⚠️ NO COUNT HERE, deliberately.  This line read "all 64 field-Refs" and was wrong on
+-- `main` before #1557 A-3.5c touched it (the record had 65 fields, only 60 of them
+-- `Ref` — the other 5 are `Windowed`), so decrementing it to 63 propagated an
+-- inherited error with a fresh-looking number.  Derive it instead:
+--   sed -n '/^data PerRun = PerRun {$/,/^  }/p' compiler/types/typecheck.mdk \
+--     | grep -cE '^    [a-zA-Z][A-Za-z0-9_]* : '            # fields
+--   ... | grep -cE '^    [a-zA-Z][A-Za-z0-9_]* : Ref '      # of which Refs
+-- ⚠️ `/^  }/`, NOT `/^  }$/` — this record's closing brace carries a trailing comment
+-- (`}  -- generalization dictForwardedIds declined, as …`), so the anchored form does
+-- not match it, the sed range runs on to the next record and the count comes back
+-- inflated.  Measured while writing this comment: the anchored form says 73, the
+-- correct one 65.  A derivation is only honest if someone ran it.
 freshPerRun : Unit -> PerRun
 freshPerRun _ = PerRun {
   tyvarCounter = Ref 0,
@@ -6063,7 +6215,6 @@ freshPerRun _ = PerRun {
   errorsDetected = Ref 0,
   occursCheckFailed = Ref False,
   currentLevel = Ref 0,
-  ifaceParamKindsRef = Ref [],
   pinnedLocals = Ref [],
 }
 
@@ -12036,18 +12187,15 @@ registerData env (DTypeAlias { tyAliasName = name, tyAliasParams = params, tyAli
   let _ = setRef perRun.value.aliasTableRef ((tyTabKey o name, (params, rhs))::perRun.value.aliasTableRef.value)
   env
 registerData env (DNewtype { newtypeName = name, newtypeParams = params, newtypeCtor = con, newtypeFieldTy = fty, newtypeOrigin = o }) = registerVariants o env name params [Variant con (ConPos [fty])]
--- #822 (graded interfaces): an interface type-parameter carries slot kinds too, and
--- unlike a data type's they are inferred from the METHOD SIGNATURES.  Registered here
--- rather than at interface-method registration because every consumer (rowArgNames /
--- fromAstTypeE / the impl-head kind check) must see the table BEFORE the first
--- signature is elaborated, which is exactly registerAllData's slot.
--- DECLARATION MINT (#1110/#1111 A-2.4): `ifaceOrigin` is this interface's own
--- identity, stamped by `stampDeclOrigins` at the module that declared it — the same
--- source, and the same must-not-be-ambient reason, as the `dataOrigin`/
--- `newtypeOrigin`/`tyAliasOrigin` arms above.
-registerData env (DInterface { name, typarams, methods, ifaceOrigin = o, ... }) =
-  let _ = registerIfaceParamKinds o name typarams methods
-  env
+-- ⚠️ #1557 A-3.5c: THE `DInterface` ARM IS GONE, and its absence is the point.
+-- #822 registered each interface type-parameter's slot kinds here, into
+-- `ifaceParamKindsRef`, *"because every consumer must see the table BEFORE the first
+-- signature is elaborated, which is exactly registerAllData's slot"*.  That timing
+-- constraint dissolved with the table: neither surviving consumer reads a ref at all
+-- — `declGradedScope` computes the kinds from the very declaration it is elaborating,
+-- and stage K's `CE` computes them once in the driver PREAMBLE, before any module
+-- walks.  An interface therefore contributes nothing to `registerData` and falls
+-- through to the catch-all below.
 registerData env _ = env
 
 -- ── record metadata registration & instantiation ──────────────────────────
@@ -12185,58 +12333,16 @@ fieldTyOf (Field _ ty) = ty
 -- per-interface union matters: `gpure : a -> f e a` alone would infer slot 0 as
 -- KType, and disagreeing slot kinds across two methods of one interface would
 -- elaborate the same index to a row in one and a tyvar in the other.
-registerIfaceParamKinds : TyConOrigin -> String -> List String -> List IfaceMethod -> Unit
-registerIfaceParamKinds o iface typarams methods =
-  registerIfaceParamKindsGo o iface 0 typarams methods
-
-registerIfaceParamKindsGo : TyConOrigin -> String -> Int -> List String -> List IfaceMethod -> Unit
-registerIfaceParamKindsGo _ _ _ [] _ = ()
-registerIfaceParamKindsGo o iface i (p::ps) methods =
-  -- ⚠️ EVERY slot is recorded, graded or not.  Since #1111 A-2.4 that is VESTIGIAL,
-  -- not load-bearing — and THIS COMMENT HAS NOW BEEN WRONG TWICE about why, so it
-  -- records what was actually checked instead of offering a third rationale.
-  --
-  -- THE ORIGINAL WHY (S1, review round 2) — real at the time.  An all-KType entry
-  -- was a SHADOW: `ifaceParamKindsRef` is copied into the data universe, which is
-  -- not import-scoped, so under the old bare `"<iface>@<slot>"` key an ORDINARY
-  -- interface sharing a name with a graded one anywhere in the graph found the
-  -- GRADED row and had its impl rejected with T-IMPL-KIND-MISMATCH, order-
-  -- dependently; recording its own all-KType row as a front overlay shadowed that.
-  -- A-2.4 gives the two interfaces DIFFERENT keys, so the ordinary one never reaches
-  -- the graded row at all (#1257, drained here) — the shadow has nothing to shadow.
-  --
-  -- ⚠️ THE REPLACEMENT WHY WAS ALSO FALSE, in both of its conjuncts, and is
-  -- RETRACTED here rather than silently reworded.  It said every slot is still
-  -- needed (a) for the FLAT path, "where two same-named interfaces both key
-  -- `TkBare` — the shadow is the only defence there", and (b) because
-  -- `checkGradedImplTys` must tell an ungraded row from an absent one.  Both were
-  -- refuted by running the binary, not by reading:
-  --   (a) UNREACHABLE.  No ACCEPTED flat program holds two `TkBare` rows of one
-  --       interface name.  Declaring `interface Same` twice in one file is
-  --       `Duplicate interface: Same`, exit 1; re-declaring a prelude name is
-  --       `Duplicate interface: Eq`, exit 1 (`duplicateErrors`,
-  --       `compiler/frontend/resolve.mdk`, whose `ifaceSeed` seeds the prelude's
-  --       interface names for any non-core program).  And a flat USER interface
-  --       keys `TkBare` while a prelude one keys `TkIdent … core`, so that pair
-  --       never shares a key either.  `stampFlatTyOrigins`' own comment reaches the
-  --       same unreachability for the type layer.
-  --   (b) FALSE.  `checkGradedImplTys` is `Some want if anyKRow want => …` / `_ =>
-  --       ()`: an all-KType row FAILS `anyKRow` and falls into `_`, and a miss is
-  --       `None` and falls into `_`.  The two are indistinguishable to the only
-  --       reader — `grep -rn lookupReg compiler/` outside `types/registry.mdk`
-  --       gives exactly ONE call site; every other hit is the import list or a
-  --       comment (this one included, which is why the count is not written down).
-  --
-  -- So recording every slot is dead weight on BOTH arms.  It is kept because
-  -- removing it is a separate behaviour-preserving change with its own goldens, not
-  -- because anything reads it.  What IS still load-bearing here: a module's own
-  -- decls are registered as a FRONT overlay during its own pass and `lookupReg` is
-  -- first-match, so a local entry still shadows the universe's — which is what makes
-  -- a row re-registered from the universe (same key, same value) a no-op rather than
-  -- a second, competing answer.
-  let _ = insertIfaceParamKinds o iface i p (ifaceParamKindsOf p methods)
-  registerIfaceParamKindsGo o iface (i + 1) ps methods
-
+--
+-- ⚠️ #1557 A-3.5c RETIRED THE TABLE, NOT THE INFERENCE.  `registerIfaceParamKinds`/
+-- `registerIfaceParamKindsGo` and the `ifaceParamKindsRef`/`universeIfaceParamKinds`
+-- pair they wrote into are GONE.  The inference above is unchanged and now has
+-- exactly two consumers, both of which call `ifaceParamKindsOf` directly on the
+-- DECLARATION they are elaborating: `declGradedScope` (the per-method scope) and
+-- `classEnvRowsOf`'s `ceParamKinds` (stage K's `CE`, which is what
+-- `checkGradedImplTys` now reads).  The retired writer's own comment already said the
+-- table was dead weight kept only because *"removing it is a separate
+-- behaviour-preserving change with its own goldens"* — this is that change.
 anyKRow : List Kind -> Bool
 anyKRow [] = False
 anyKRow (KRow::_) = True
@@ -12248,6 +12354,14 @@ kindsEq (KType::a) (KType::b) = kindsEq a b
 kindsEq (KRow::a) (KRow::b) = kindsEq a b
 kindsEq _ _ = False
 
+-- ── #1557 A-3.5c: `insertIfaceParamKinds`/`ifaceSlotKey` STOOD HERE ──────────
+-- The table they wrote is retired (see the note above `anyKRow`); the KEY SHAPE
+-- they minted survives in stage K's `CE` — `ceRowKey` is `regKeyOfTab (ifaceTabKey
+-- o name)` and the slot is supplied POSITIONALLY by `ceRowParamKinds`, which is
+-- the same (identity, slot) pair without a composite key to mint.  The history
+-- below is kept because it is the derivation behind `declGradedScope` carrying
+-- its scope as an argument, and that is still live.
+--
 -- ONE key shape: the interface's IDENTITY plus the slot ORDINAL
 -- (`regKeyTabAt (ifaceTabKey o iface) i`, #1111 A-2.4).  It was the bare string
 -- `"\{iface}@\{i}"` until this unit, which is #1257: an ordinary interface and a
@@ -12273,18 +12387,9 @@ kindsEq _ _ = False
 -- `registerData`'s record pattern.  Same source, same reason, as
 -- `recordParamKinds`' `dataOrigin`: it must not come from ambient state, because
 -- `registerAllData` also runs over OTHER modules' decls.)
-insertIfaceParamKinds : TyConOrigin -> String -> Int -> String -> List Kind -> Unit
-insertIfaceParamKinds o iface i _ kinds =
-  setRef
-    perRun.value.ifaceParamKindsRef
-    ((ifaceSlotKey o iface i, kinds)::perRun.value.ifaceParamKindsRef.value)
-
-ifaceSlotKey : TyConOrigin -> String -> Int -> RegKey
-ifaceSlotKey o iface i = regKeyTabAt (ifaceTabKey o iface) i
-
--- The scope derived STRAIGHT FROM THE DECLARATION being elaborated: same inference as
--- registerIfaceParamKinds runs, on the very methods whose signatures are about to be
--- built.  No name, no table, no lookup — structurally unforgeable.
+-- The scope derived STRAIGHT FROM THE DECLARATION being elaborated: the same
+-- `ifaceParamKindsOf` inference stage K's `ceParamKinds` runs, on the very methods
+-- whose signatures are about to be built.  No name, no table, no lookup — structurally unforgeable.
 declGradedScope : List String -> List IfaceMethod -> List (String, List Kind)
 declGradedScope [] _ = []
 declGradedScope (p::ps) methods =
@@ -16082,20 +16187,35 @@ missingImplMethodMsg iface tys method = "'impl \{iface} \{joinWith " " (map ppTy
 -- return-position methods like `pure : a -> f a` or `minBound : a` are NOT
 -- flagged.  Multi-param interfaces: phantom iff ALL params absent.
 
-checkPhantomMethods : List Decl -> Unit
-checkPhantomMethods decls =
+-- #1557 A-3.5c: relocated onto stage K's `CE`.  The row set is
+-- `ceRowsOwnedBy` — the READING module's OWN interfaces, which is exactly the
+-- decl list this check was handed before (`prog` on the Module arm, the
+-- driver-staged USER decls on Flat), NOT the visible prefix: an imported
+-- interface's phantom method is reported once, at the module that declares it,
+-- not once per importer.  See `ceRowsVisibleAt`/`ceRowsOwnedBy` for why the two
+-- populations are kept apart.
+--
+-- Reading `CE` rather than re-destructuring `DInterface` also drops the
+-- `DAttrib` unwrapping this check used to open with: `classEnvDeclFact` already
+-- peels it, so an attributed interface reaches `CE` as a row like any other.
+checkPhantomMethods : ClassEnv -> Int -> Unit
+checkPhantomMethods ce cur =
   foreachUnit
     (pushTypeError "T-PHANTOM-METHOD")
-    (flatMap phantomMethodMsgs decls)
+    (flatMap phantomMethodMsgs (ceRowsOwnedBy cur ce))
 
-phantomMethodMsgs : Decl -> List String
-phantomMethodMsgs (DAttrib _ d) = phantomMethodMsgs d
-phantomMethodMsgs (DInterface { name, typarams, methods, ... }) =
-  flatMap (phantomMethodMsg name typarams) methods
-phantomMethodMsgs _ = []
+phantomMethodMsgs : CeRow -> List String
+phantomMethodMsgs r =
+  flatMap
+    (phantomMethodMsg (ceRowIfaceName r) (ceRowTyparams r))
+    (ceRowMethods r)
 
-phantomMethodMsg : String -> List String -> IfaceMethod -> List String
-phantomMethodMsg ifaceName typarams (IfaceMethod mname mty _) =
+ceRowIfaceName : CeRow -> String
+ceRowIfaceName r = match ceRowIface r
+  IfaceRef { irName = n, ... } => n
+
+phantomMethodMsg : String -> List String -> (String, Ty, List (String, List Kind)) -> List String
+phantomMethodMsg ifaceName typarams (mname, mty, _) =
   if isEmptyL typarams then
     []
   else if anyMember (tyVarNames mty) typarams then
@@ -16118,41 +16238,133 @@ intercalateComma (x::rest) = "'\{x}', \{intercalateComma rest}"
 -- Runs over ALL interfaces in scope (prelude + user) — a prelude cycle would
 -- be equally ill-formed.  The `done` ref tracks fully-explored nodes to avoid
 -- redundant traversal and re-reporting multi-root cycles.
-checkInterfaceCycles : List Decl -> Unit
-checkInterfaceCycles allDecls =
-  let ifaceNames = collectIfaceNames allDecls
+-- 🚨 #1557 A-3.5c: relocated onto stage K's `CE`, AND RE-KEYED — this is the
+-- unit's #1258-class acceptance delta, the one the owner ruling of 2026-08-12
+-- accepts by name (*"re-keying a bare-name table does not create wrongness, it
+-- creates VISIBILITY"*).
+--
+-- WAS: `collectIfaceNames allDecls` for the roots and `ifaceSupersOf allDecls
+-- <name>` for every edge — BOTH bare-name scans of a decl list, so a superinterface
+-- edge resolved to whichever same-spelled interface appeared FIRST in
+-- `accAll ++ accData ++ prog`.  Two unrelated modules each declaring `Same` collapsed
+-- into one node: `mod_a.Same requires mod_b.Same` could be reported as a self-cycle it
+-- is not, and a genuine cycle could be masked by the other module's row winning the
+-- scan.  Import order selected the symptom, exactly as it did for `#1257`'s kind rows.
+--
+-- NOW: nodes are `CeRow`s and an edge is followed by IDENTITY —
+-- `ceLookupAt (regKeyOfTab (ifaceTabKey superOrigin superHead))`.  `Super` has carried
+-- `superOrigin` since #1110 Stage A-1 and `resolve.mdk` stamps it through the SAME
+-- `mapSuperOcc`/`tyOriginScope` walk that stamps a `DImpl`'s `implOrigin`, so the
+-- occurrence and the `DInterface`'s `ifaceOrigin` declaration layer meet for the same
+-- reason `ifaceTabKey`'s header argues for the impl-head key.  The `done` set and the
+-- DFS `path` are keyed on `regKeyRender` rather than the bare name for the identical
+-- reason.
+--
+-- ⚠️ THE MISS ARM IS AN ABSTENTION, AND IT IS THE ONE PLACE THIS COULD GO
+-- LOUD→SILENT.  An edge whose target is not in `CE` at this ordinal yields `None` and
+-- the walk stops — the same disposition `ifaceSupersOf`'s `None` arm already had
+-- ("unknown interface, reported elsewhere"), and resolve rejects an interface naming
+-- an unknown superinterface before typecheck runs.  What is NEW is that a super whose
+-- identity failed to resolve would now MISS where a bare name used to hit.  That is
+-- why the abstention arm needs a POSITIVE control -- a shape whose edge MUST still be
+-- followed -- rather than only a negative one.
+--
+-- 🚨 CITE FIXTURES THAT EXIST, AND CHECK THE GATE CONSUMES THEM.  This sentence named
+-- `test/typecheck_error_fixtures/cyclic_superinterface_modules/` until adversarial
+-- review, and that path was wrong TWICE OVER: no such directory, and
+-- `diff_compiler_typecheck_errors.sh` iterates `"$FIXDIR"/*.mdk` -- FILES -- so a
+-- directory fixture there could not be consumed even if someone created one.  No gate
+-- catches this: `make docs-links` and `make agent-doc-symbols` do not scan compiler
+-- comments.  It matters more than a typo because this is the one sentence answering
+-- "is the abstention arm covered?", and a citation like that gets relayed into the
+-- next unit's design as an established fact.  The real controls, both verified to
+-- reject on this binary:
+--   * MULTI-MODULE: `test/analyze_project_fixtures/1557_a35c_cycle_masked_by_samespelled/`
+--     (consumed by `diff_compiler_analyze_project.sh`) -- its edge must resolve BY
+--     IDENTITY for the fixture to pass at all, so an abstention that swallowed a real
+--     edge reds it.
+--   * FLAT: `test/dict_fixtures/s3-w1-cyclic-superinterface-rejected.mdk` (no imports)
+--     and `test/typecheck_error_fixtures/cyclic_superinterface.mdk`.
+-- The negative direction -- an edge that must NOT be followed -- is
+-- `1557_a35c_samespelled_iface_bystander/`.  The set is the assertion; no member is.
+--
+-- ROOTS are `ceRowsVisibleAt` — the reading module's whole ordinal prefix — and that
+-- reproduces the OLD root set EXACTLY, members and order.  Derive it from
+-- `foldModules` rather than from this sentence: `accAll` is seeded with the WHOLE
+-- `coreDecls` and grown `accAll ++ prog` (not `publicDataDecls prog` — only `accData`
+-- is public-filtered), and every driver that reaches `runFinalChecks` passes
+-- `wantAll = True`, so `accAll ++ accData ++ prog` is exactly {prelude} ∪ {every
+-- earlier module in full} ∪ {this module} — with `accData` contributing only
+-- duplicates, which `done` prunes.  `CE` at this ordinal is the same set in the same
+-- ordinal order.
+--
+-- ⚠️ AN EARLIER CUT OF THIS COMMENT CLAIMED A DELIBERATE WIDENING HERE — *"`accAll`/
+-- `accData` carry only `publicDataDecls`, so a PRIVATE interface of an earlier module
+-- was never a root"* — and it was simply WRONG about `accAll`, so the widening it
+-- conceded does not exist.  Measured on two binaries rather than argued: a module
+-- declaring a PRIVATE cyclic interface pair has that cycle reported in a sibling
+-- module with NO import path to it, on the pre-relocation arm too, byte-identical.
+-- Do not reinstate the hedge; the relocation is root-set-preserving.
+checkInterfaceCycles : ClassEnv -> Int -> Unit
+checkInterfaceCycles ce cur =
   -- #973: `done` is an OrdMap-backed SET (omHasKey/omInsert), NOT a growing `List` scanned
-  -- by `contains`.  The membership test (`contains ifaceName done` at checkOneIfaceCycle,
-  -- `contains superName done` at ifaceDfsCycleOneSuper) ran once per interface over the
-  -- fully-explored set, which grows to the interface count → O(interfaces^2), the flat-path
+  -- by `contains`.  The membership test ran once per interface over the fully-explored
+  -- set, which grows to the interface count → O(interfaces^2), the flat-path
   -- `manyifaces:typecheck` op-count quadratic (independent of use sites — it surfaces on a
-  -- file of N cycle-free interfaces).  Keyed into a set it is O(log n) with BYTE-IDENTICAL
-  -- behavior: `done` only prunes already-explored nodes (set membership is order-insensitive),
-  -- and the DFS order + cycle messages are driven by `path`/`ifaceNames`, both unchanged.
+  -- file of N cycle-free interfaces).  Keyed into a set it is O(log n): `done` only prunes
+  -- already-explored nodes (set membership is order-insensitive), and the DFS order +
+  -- cycle messages are driven by `path`/the root list.  A-3.5c keeps the shape and only
+  -- changes the KEY from a bare name to `regKeyRender`.
   let done = Ref omEmpty
-  foreachUnit (checkOneIfaceCycle allDecls done) ifaceNames
+  foreachUnit (checkOneIfaceCycle ce cur done) (ceRowsVisibleAt cur ce)
 
 -- #152: the whole-program final-checks tail, shared by all five entry points
 -- (checkToLines / checkToLinesWithRuntime / checkErrorsWithRuntime /
 -- checkProgramDiags / checkModuleFullDiags).  [cohDecls] feeds coherence AND
--- phantom-methods; [cycDecls] feeds interface-cycles AND checkSuperImpls's second
+-- checkSuperImpls's first argument; [cycDecls] feeds checkSuperImpls's second
 -- (whole-universe) argument.  ⚠️ trap #5: coherence must see USER decls only, so
 -- this helper has NO access to `prog` — the caller decides [cohDecls] explicitly
 -- (never a `prog` fallback).  Call ORDER is load-bearing (all push into typeErrors).
-runFinalChecks : List Decl -> List Decl -> Unit
-runFinalChecks cohDecls cycDecls =
+--
+-- #1557 A-3.5c: two of the four members now read stage K's `CE` instead of a decl
+-- list.  [ownCe]/[cycCe] are the class environments the caller is entitled to read
+-- and [cur] is the READING module's ordinal — Module passes the whole-graph
+-- `deIfaces` twice with its own ordinal; Flat passes two single-module envs built
+-- from the very lists it used to hand `checkPhantomMethods`/`checkInterfaceCycles`,
+-- at ordinal 0, because `declEnvsRef` is EMPTY on the Flat arm and reading it there
+-- would switch both checks silently OFF.
+--
+-- ⚠️ CALL ORDER IS UNCHANGED AND THAT IS DELIBERATE.  A-3.5c moves two members'
+-- SOURCE, not their position: coherence still runs first, then cycles, then phantom,
+-- then super-impls, so no diagnostic changes rank against another family.  Whichever
+-- unit lands A-3.5a/A-3.5b inherits this constraint — pulling a member OUT of this
+-- sequence re-orders every accumulated diagnostic after it.
+runFinalChecks : List Decl -> List Decl -> ClassEnv -> ClassEnv -> Int -> Unit
+runFinalChecks cohDecls cycDecls ownCe cycCe cur =
   let _ = checkCoherence cohDecls
-  let _ = checkInterfaceCycles cycDecls
-  let _ = checkPhantomMethods cohDecls
+  let _ = checkInterfaceCycles cycCe cur
+  let _ = checkPhantomMethods ownCe cur
   checkSuperImpls cohDecls cycDecls
 
-checkOneIfaceCycle : List Decl -> Ref (OrdMap Unit) -> String -> Unit
-checkOneIfaceCycle allDecls done ifaceName =
-  if not (omHasKey ifaceName done.value) then
-    foreachUnit (pushTypeError "T-CYCLIC-SUPERINTERFACE") (ifaceDfsCycle allDecls done [ifaceName] ifaceName)
+-- #1557 A-3.5c: the FLAT arm's single-module `CE`.  `buildDeclEnvs` runs only at the
+-- two Module-mode driver entries, so `driverState.declEnvsRef` is `emptyDeclEnvs` on
+-- every flat path — reading it here would make `ceLookupAt` miss on every interface
+-- and turn two live rejections into silent accepts on `medaka check <one file>`.
+-- Ordinal 0 with `cur = 0` makes "visible at" and "owned by" coincide, which is
+-- correct: a flat program is exactly one module.
+flatClassEnvOf : List Decl -> ClassEnv
+flatClassEnvOf decls = buildClassEnv [declEnvModule 0 "" decls]
+
+checkOneIfaceCycle : ClassEnv -> Int -> Ref (OrdMap Unit) -> CeRow -> Unit
+checkOneIfaceCycle ce cur done row =
+  if not (omHasKey (ceRowDoneKey row) done.value) then
+    foreachUnit (pushTypeError "T-CYCLIC-SUPERINTERFACE") (ifaceDfsCycle ce cur done [row] row)
   else
     ()
 
+-- WS-1b: the user-interface name set (`userIfaceNamesRef`, which gates
+-- super-expansion) still reads this bare-name collector.  A-3.5c stopped using it
+-- for the CYCLE walk only; re-pointing that set at `CE` is not this unit's.
 collectIfaceNames : List Decl -> List String
 collectIfaceNames [] = []
 collectIfaceNames ((DInterface { name, ... })::rest) =
@@ -16160,34 +16372,46 @@ collectIfaceNames ((DInterface { name, ... })::rest) =
 collectIfaceNames ((DAttrib _ d)::rest) = collectIfaceNames (d::rest)
 collectIfaceNames (_::rest) = collectIfaceNames rest
 
--- DFS from [current]; [path] is the stack of names visited so far (including
+-- The `done`/`path` identity, rendered once.  `regKeyRender` is `RegKey`'s own
+-- collision-free renderer, so two same-spelled interfaces in unrelated modules
+-- get DIFFERENT set members — which is the whole point of the re-key.
+ceRowDoneKey : CeRow -> String
+ceRowDoneKey r = regKeyRender (ceRowKey r)
+
+-- DFS from [current]; [path] is the stack of ROWS visited so far (including
 -- [current] as its last element, used to reconstruct the cycle message).
 -- Marks [current] as done after all its supers are explored.
-ifaceDfsCycle : List Decl -> Ref (OrdMap Unit) -> List String -> String -> List String
-ifaceDfsCycle allDecls done path current = match ifaceSupersOf allDecls current
-  None =>
-    let _ = setRef done (omInsert current () done.value)
-    []
-  Some (_, supers) =>
-    let msgs = ifaceDfsCycleSupers allDecls done path supers
-    let _ = setRef done (omInsert current () done.value)
-    msgs
+ifaceDfsCycle : ClassEnv -> Int -> Ref (OrdMap Unit) -> List CeRow -> CeRow -> List String
+ifaceDfsCycle ce cur done path current =
+  let msgs = ifaceDfsCycleSupers ce cur done path (ceRowSupers current)
+  let _ = setRef done (omInsert (ceRowDoneKey current) () done.value)
+  msgs
 
-ifaceDfsCycleSupers : List Decl -> Ref (OrdMap Unit) -> List String -> List Super -> List String
-ifaceDfsCycleSupers _ _ _ [] = []
-ifaceDfsCycleSupers allDecls done path ((Super { superHead = superName })::rest) =
-  let msgs1 = ifaceDfsCycleOneSuper allDecls done path superName
-  msgs1 ++ ifaceDfsCycleSupers allDecls done path rest
+ifaceDfsCycleSupers : ClassEnv -> Int -> Ref (OrdMap Unit) -> List CeRow -> List Super -> List String
+ifaceDfsCycleSupers _ _ _ _ [] = []
+ifaceDfsCycleSupers ce cur done path ((Super { superHead = superName, superOrigin = so })::rest) =
+  let msgs1 = ifaceDfsCycleOneSuper ce cur done path so superName
+  msgs1 ++ ifaceDfsCycleSupers ce cur done path rest
 
--- check one super edge: cycle if superName is on the DFS path; skip if done; else recurse.
-ifaceDfsCycleOneSuper : List Decl -> Ref (OrdMap Unit) -> List String -> String -> List String
-ifaceDfsCycleOneSuper allDecls done path superName =
-  if contains superName path then
-    [cyclicSuperIfaceMsg (path ++ [superName])]
-  else if omHasKey superName done.value then
-    []
+-- check one super edge: cycle if the super's IDENTITY is on the DFS path; skip if
+-- done; else recurse into the row that identity names.  A super naming no visible
+-- interface abstains (see the miss-arm note at `checkInterfaceCycles`).
+ifaceDfsCycleOneSuper : ClassEnv -> Int -> Ref (OrdMap Unit) -> List CeRow -> TyConOrigin -> String -> List String
+ifaceDfsCycleOneSuper ce cur done path so superName =
+  let key = regKeyOfTab (ifaceTabKey so superName)
+  let rendered = regKeyRender key
+  if containsRowKey rendered path then [cyclicSuperIfaceMsg (map ceRowIfaceName path ++ [superName])]
   else
-    ifaceDfsCycle allDecls done (path ++ [superName]) superName
+    if omHasKey rendered done.value then []
+    else match ceLookupAt key cur ce
+      None => []
+      Some r => ifaceDfsCycle ce cur done (path ++ [r]) r
+
+containsRowKey : String -> List CeRow -> Bool
+containsRowKey _ [] = False
+containsRowKey k (r::rest)
+  | ceRowDoneKey r == k = True
+  | otherwise = containsRowKey k rest
 
 -- e.g. ["A", "B", "A"] → "cyclic superinterface: A requires B requires A"
 cyclicSuperIfaceMsg : List String -> String
@@ -19269,10 +19493,19 @@ checkBodyImpl seed mode prog0 =
   -- (`Async e a`, pins the effect) from a type-kinded one (`List e`, does not).
   let _ = checkUndeterminedRetEffVars prog
   -- #822: instance-head kind check for graded interfaces.  Same placement rationale
-  -- as the line above — it reads BOTH kind tables (ifaceParamKindsRef for the
-  -- interface slot, dataParamKindsRef for the head constructor), which `dataEnv`
-  -- above has just populated.
-  let _ = checkGradedImplHeads prog
+  -- as the line above for the HEAD-constructor half, which still reads
+  -- `dataParamKindsRef` that `dataEnv` above has just populated.
+  -- #1557 A-3.5c: the INTERFACE-slot half no longer reads a per-run table at all —
+  -- it reads stage K's `CE` at this module's ordinal, mirroring `moduleImplUniv`'s
+  -- arm-gated shape exactly.  The Flat arm builds its own single-module `CE` from
+  -- `prog`, the very list `registerAllData initialEnv prog` walked to fill the
+  -- retired table, so the check does not go silent on a no-import `medaka check`.
+  let gradedClassEnv = match mode
+    Flat _ => (flatClassEnvOf prog, 0)
+    Module mid _ _ =>
+      let envs = driverState.value.declEnvsRef.value
+      (envs.deIfaces, declEnvsOrdOf mid envs)
+  let _ = checkGradedImplHeads (fst gradedClassEnv) (snd gradedClassEnv) prog
   let _ = rejectCyclicAliases ()
   -- #1280: `prog` reached here through a driver's stamping walk already, and
   -- `stampTyHead` is first-write-immune, so the builtins-only scope can only fill
@@ -23984,7 +24217,8 @@ typeErrorLines (e::rest) = "TYPE ERROR: " ++ e :: typeErrorLines rest
 export checkToLines : List Decl -> String
 checkToLines prog =
   let schemes = checkProgramSchemes [] prog
-  let _ = runFinalChecks prog prog
+  let progCe = flatClassEnvOf prog
+  let _ = runFinalChecks prog prog progCe progCe 0
   let errs = reverseL perRun.value.typeErrors.items.value
   match errs
     [] => joinNl (schemeLines schemes)
@@ -24020,7 +24254,12 @@ seedAndCheckSplit runtimeDecls coreProg userProg =
   let _ = seedCheckRun prog
   -- #1280: prelude boundary in hand — see `checkProgramSchemesWithRuntime`.
   let schemes = checkProgramSeededSplit (externSchemes (externTyOriginScope coreProg) runtimeDecls) coreProg userProg
-  let _ = runFinalChecks driverState.value.coherenceUserDecls.value prog
+  -- #1557 A-3.5c: TWO envs, because the two decl lists differ here and always have —
+  -- phantom-methods sees the driver-staged USER decls (trap #5, the same set
+  -- coherence sees), the cycle walk sees the whole seeded `prog` so a user interface
+  -- can close a cycle through a PRELUDE superinterface.
+  let userDecls = driverState.value.coherenceUserDecls.value
+  let _ = runFinalChecks userDecls prog (flatClassEnvOf userDecls) (flatClassEnvOf prog) 0
   schemes
 
 -- like checkToLines but seeds runtime.mdk's externs (for typechecking core.mdk,
@@ -24313,7 +24552,8 @@ appendUniverseAccums prog =
 -- plus, since #804/#1028, the PARAM KINDS (and nothing else) of the module's OPAQUE types,
 -- see registerOpaqueParamKinds.
 -- #415 item 3: the cross-module DATA universe ⇄ per-run working tables copy, which was
--- open-coded as a 5-way lockstep mirror at THREE sites (the Module arm of the data-env
+-- open-coded as a 5-way lockstep mirror at THREE sites (a 4-way one since #1557
+-- A-3.5c retired the `ifaceParamKinds` pair) (the Module arm of the data-env
 -- setup + appendDataUniverse's load and its store-back).  Adding a further universe table
 -- meant remembering all three — the "silently absent from the other side" shape.  It now
 -- has one body per direction, and the two are exact inverses of each other.
@@ -24337,22 +24577,26 @@ loadDataUniverse cur =
   let _ = setRef perRun.value.recordByNameRef crossRun.value.universeRecordByName.value
   let _ = setRef perRun.value.fieldOwnersRef crossRun.value.universeFieldOwners.value
   let _ = setRef perRun.value.dataParamKindsRef crossRun.value.universeDataParamKinds.value
-  let _ = setRef perRun.value.ifaceParamKindsRef crossRun.value.universeIfaceParamKinds.value
   setRef
     perRun.value.aliasTableRef
     (aliasUniverseAt cur driverState.value.declEnvsRef.value.deData.deAliases)
 
--- the exact inverse of loadDataUniverse for the four CROSS-RUN tables it copies
--- (same four, same order).  The alias seed has no inverse here by construction —
--- see the note above.
+-- 🚨 THE MIRROR INVARIANT, and it is SILENT when it breaks — no compile error, no
+-- gate, just a table that stops crossing a module boundary.  State it as the two
+-- separable halves it now is, because two units in a row have edited these bodies:
+--   * CROSS-RUN half: `loadDataUniverse` copies THREE `crossRun` cells in
+--     (recordByName, fieldOwners, dataParamKinds) and `storeDataUniverse` copies the
+--     SAME THREE back out, in the SAME ORDER.  That is the inverse-pair property.
+--   * STAGE-K half: the alias seed is a PROJECTION (`aliasUniverseAt cur`), not a
+--     copy, so it has no inverse here by construction — A-3.2b residual 1 (#1512).
+-- ⚠️ #1557 A-3.5c dropped the `ifaceParamKinds` pair from BOTH bodies, one unit after
+-- A-3.2b residual 1 dropped `aliasTable`'s store half.  After any rebase, read the two
+-- bodies side by side and check the cross-run half agrees in SET and in ORDER.
 storeDataUniverse : Unit -> Unit
 storeDataUniverse _ =
   let _ = setRef crossRun.value.universeRecordByName perRun.value.recordByNameRef.value
   let _ = setRef crossRun.value.universeFieldOwners perRun.value.fieldOwnersRef.value
-  let _ = setRef crossRun.value.universeDataParamKinds perRun.value.dataParamKindsRef.value
-  setRef
-    crossRun.value.universeIfaceParamKinds
-    perRun.value.ifaceParamKindsRef.value
+  setRef crossRun.value.universeDataParamKinds perRun.value.dataParamKindsRef.value
 
 -- ⚠️ Takes THIS MODULE'S WHOLE decl list, not a pre-filtered one: it owns BOTH halves
 -- of what a module publishes to the data universe — `publicDataDecls` (ctors + records +
@@ -26187,7 +26431,13 @@ checkModuleFullDiags mid seedVars accData accAll prog =
   -- source-exact keying makes it MISS for a genuinely-unconstrained same-name import
   -- (#739's `q.f`, attributed nowhere), so no over-rejection is reintroduced.
   let schemes = checkModuleFullImpl mid seedVars accData accAll prog
-  let _ = runFinalChecks prog (accAll ++ accData ++ prog)
+  -- #1557 A-3.5c: the whole-graph `CE`, read at THIS module's ordinal — the same
+  -- `declEnvsOrdOf mid` key `seedCheckRun`'s overlay pool above and `moduleImplUniv`
+  -- (`checkBodyImpl`) already read at.  ONE env for both members; they differ only in
+  -- which population they take from it (`ceRowsOwnedBy` vs `ceRowsVisibleAt`).
+  let ceHere = declEnvsHere.deIfaces
+  let ordHere = declEnvsOrdOf mid declEnvsHere
+  let _ = runFinalChecks prog (accAll ++ accData ++ prog) ceHere ceHere ordHere
   (
     schemes,
     reverseL perRun.value.typeErrors.items.value,

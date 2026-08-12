@@ -204,7 +204,9 @@ ceMethodOf : List (String, List Kind) -> IfaceMethod -> (String, Ty, List (Strin
 ceMethodTyStr : (String, Ty, List (String, List Kind)) -> String
 ceProbeEnv : ClassEnv
 ceProbeKey : String -> RegKey
+ceRowDoneKey : CeRow -> String
 ceRowIface : CeRow -> IfaceRef
+ceRowIfaceName : CeRow -> String
 ceRowIfaceNameAt : String -> Int -> ClassEnv -> String
 ceRowKey : CeRow -> RegKey
 ceRowMethodNames : CeRow -> List String
@@ -221,7 +223,10 @@ ceRowSuperParamsAt : String -> Int -> ClassEnv -> List String
 ceRowSupers : CeRow -> List Super
 ceRowTyparams : CeRow -> List String
 ceRowTyparamsAt : String -> Int -> ClassEnv -> List String
+ceRowsOwnedBy : Int -> ClassEnv -> List CeRow
+ceRowsVisibleAt : Int -> ClassEnv -> List CeRow
 ceSameDeclIn : String -> List IfaceMethod -> Decl
+ceSlotKindsAt : RegKey -> Int -> Int -> ClassEnv -> Option (List Kind)
 ceSuperEq : Super
 ceSuperHead : Super -> String
 ceSuperOrigin : Super -> String
@@ -251,16 +256,16 @@ checkEffectParamsTys : List Ty -> Unit
 checkErrorsWithRuntime : List Decl -> List Decl -> List Decl -> Bool
 checkGradedImplHead : String -> Ty -> List Kind -> Unit
 checkGradedImplHeadCon : String -> TyConOrigin -> String -> Option Loc -> Int -> List Kind -> Unit
-checkGradedImplHeadDecl : Decl -> Unit
+checkGradedImplHeadDecl : ClassEnv -> Int -> Decl -> Unit
 checkGradedImplHeadKinds : String -> String -> Option Loc -> Int -> List Kind -> List Kind -> Unit
-checkGradedImplHeads : List Decl -> Unit
-checkGradedImplTys : TyConOrigin -> String -> Int -> List Ty -> Unit
+checkGradedImplHeads : ClassEnv -> Int -> List Decl -> Unit
+checkGradedImplTys : ClassEnv -> Int -> TyConOrigin -> String -> Int -> List Ty -> Unit
 checkIfaceMethodEffs : String -> List (String, List Kind) -> List IfaceMethod -> Unit
 checkImplCompleteness : List Decl -> List Decl -> Unit
 checkImplCompletenessMap : Registry (List String) -> List Decl -> Unit
 checkImplEffVarRigidity : String -> List (String, List Kind) -> Ty -> List (String, Ref Effvar) -> Bool -> Option Loc -> Unit
 checkImplMethodRigidity : String -> String -> Ty -> List Mono -> List (String, Mono) -> List (String, Ref Effvar) -> List UObligation -> List (IfaceRef, List Mono, Option Loc) -> Bool -> List (String, List Kind) -> Option Loc -> Unit
-checkInterfaceCycles : List Decl -> Unit
+checkInterfaceCycles : ClassEnv -> Int -> Unit
 checkLetBind : String -> List FunClause -> Unit
 checkLetBinds : List LetBind -> Unit
 checkLetGroupBindsGo : List LetBind -> Unit
@@ -286,8 +291,8 @@ checkNestedReqs : ImplUniverse -> IfaceRef -> List Mono -> Option Loc -> Unit
 checkOneAxis : String -> String -> Param -> Unit
 checkOneCallObligation : Bool -> ImplUniverse -> IfaceRef -> List Mono -> Option Loc -> Unit
 checkOneEffectParam : String -> String -> Unit
-checkOneIfaceCycle : List Decl -> Ref (Map String Unit) -> String -> Unit
-checkPhantomMethods : List Decl -> Unit
+checkOneIfaceCycle : ClassEnv -> Int -> Ref (Map String Unit) -> CeRow -> Unit
+checkPhantomMethods : ClassEnv -> Int -> Unit
 checkProductAxes : String -> Param -> Unit
 checkProductAxesGo : String -> List (String, Param) -> Unit
 checkProgramDiags : List Decl -> List Decl -> List Decl -> (List TcDiag, List TcDiag)
@@ -413,6 +418,7 @@ containerArgMsg : Option String -> String -> String
 containerParamScalarArg : Mono -> Mono -> Option String
 containsI : Int -> List Int -> Bool
 containsPair : (String, Int) -> List (String, Int) -> Bool
+containsRowKey : String -> List CeRow -> Bool
 containsVecObl : VecObl -> List VecObl -> Bool
 countHead : Map String (List KeyEntry) -> String -> Option HeadKey -> Int
 countHeadByIface : Map String (List KeyEntry) -> String -> Option HeadKey -> Int
@@ -674,6 +680,7 @@ firstPredForEncl : String -> Mono -> String -> List (String, Mono, String) -> Op
 firstReqMatch : List (List Ty, List Require) -> List Mono -> Option (List (String, Mono), List Require)
 firstTupleCallHint : List Mono -> Option (String, Option (Loc, String))
 firstTvar : Mono -> Mono -> Int -> Option Mono
+flatClassEnvOf : List Decl -> ClassEnv
 flatGroupIsCore : List String -> Bool
 foldAppFallback : List (String, Ref Effvar) -> List (String, Mono) -> Mono -> List Ty -> Mono
 foldAppKinds : List (String, Ref Effvar) -> List (String, Mono) -> Mono -> List Kind -> List Ty -> Mono
@@ -781,9 +788,9 @@ ieTyBlob : String -> Ty
 ieUnivConcreteOf : ImplUniverse -> MultiRegistry (List Ty, List Require)
 ieUniverseAt : Int -> ImplEnv -> ImplUniverse
 ifaceAtMonoId : Int -> List Mono -> List String -> Option String
-ifaceDfsCycle : List Decl -> Ref (Map String Unit) -> List String -> String -> List String
-ifaceDfsCycleOneSuper : List Decl -> Ref (Map String Unit) -> List String -> String -> List String
-ifaceDfsCycleSupers : List Decl -> Ref (Map String Unit) -> List String -> List Super -> List String
+ifaceDfsCycle : ClassEnv -> Int -> Ref (Map String Unit) -> List CeRow -> CeRow -> List String
+ifaceDfsCycleOneSuper : ClassEnv -> Int -> Ref (Map String Unit) -> List CeRow -> TyConOrigin -> String -> List String
+ifaceDfsCycleSupers : ClassEnv -> Int -> Ref (Map String Unit) -> List CeRow -> List Super -> List String
 ifaceDictPassDefault : String -> Ty -> List Pat -> Expr -> Int -> IfaceMethod
 ifaceDictPassMethod : IfaceMethod -> IfaceMethod
 ifaceForConstraintId : Int -> IfaceRef
@@ -807,7 +814,6 @@ ifaceRefBare : String -> IfaceRef
 ifaceRefNone : IfaceRef
 ifaceRequiredMethods : List Decl -> String -> Option (List String)
 ifaceSelfAndSupers : String -> List String
-ifaceSlotKey : TyConOrigin -> String -> Int -> RegKey
 ifaceSlotKinds : Int -> Int -> List (List Ty, List String) -> List Kind
 ifaceSupersOf : List Decl -> String -> Option (List String, List Super)
 ifaceTabKey : TyConOrigin -> String -> TabKey
@@ -970,7 +976,6 @@ insertAxis : (String, Param) -> List (String, Param) -> List (String, Param)
 insertCtorIdents : TcEnv -> List Decl -> (Map String (List (Ident, String, Scheme)), List String) -> (Map String (List (Ident, String, Scheme)), List String)
 insertIfaceMethodIdents : String -> List String -> List (String, List Kind) -> TyConOrigin -> List IfaceMethod -> (Map String (List (Ident, (IfaceRef, List String, Ty, List (String, List Kind)))), List String) -> (Map String (List (Ident, (IfaceRef, List String, Ty, List (String, List Kind)))), List String)
 insertIfaceMethodsAcc : IfaceRef -> List String -> List (String, List Kind) -> List IfaceMethod -> (Map String (IfaceRef, List String, Ty, List (String, List Kind)), Map String Unit) -> (Map String (IfaceRef, List String, Ty, List (String, List Kind)), Map String Unit)
-insertIfaceParamKinds : TyConOrigin -> String -> Int -> String -> List Kind -> Unit
 insertIfaceRequired : List Decl -> Registry (List String) -> Registry (List String)
 insertMethodIdents : List Decl -> (Map String (List (Ident, (IfaceRef, List String, Ty, List (String, List Kind)))), List String) -> (Map String (List (Ident, (IfaceRef, List String, Ty, List (String, List Kind)))), List String)
 insertMethodIfaceParams : List Decl -> (Map String (IfaceRef, List String, Ty, List (String, List Kind)), Map String Unit) -> (Map String (IfaceRef, List String, Ty, List (String, List Kind)), Map String Unit)
@@ -1179,6 +1184,7 @@ noteNumlitCtx : Mono -> Mono -> String -> Unit
 noteTypeErrorDetected : Unit -> Unit
 nthArgMono : Int -> Mono -> Option Mono
 nthInt : Int -> List Int -> Int
+nthKindList : Int -> List (List Kind) -> Option (List Kind)
 nthTy : Int -> List Ty -> Option Ty
 numArithOp : Mono -> Mono -> Mono
 numCallObls : List (IfaceRef, List Mono, Option Loc) -> List UObligation
@@ -1230,8 +1236,8 @@ peelOntoParams : Option Mono -> List Mono -> List Pat -> Unit
 perRun : Ref PerRun
 performEffect : Ref EffRow -> EffRow -> Unit
 performLink : Ref Effvar -> Ref Effvar -> Unit
-phantomMethodMsg : String -> List String -> IfaceMethod -> List String
-phantomMethodMsgs : Decl -> List String
+phantomMethodMsg : String -> List String -> (String, Ty, List (String, List Kind)) -> List String
+phantomMethodMsgs : CeRow -> List String
 pickMostSpecificEntry : List Mono -> List KeyEntry -> Option KeyEntry
 pickSchemes : List String -> List (String, Scheme) -> List (String, Scheme)
 pickStandaloneSchemes : List String -> List (String, Scheme) -> List (String, Scheme)
@@ -1387,8 +1393,6 @@ registerData : TcEnv -> Decl -> TcEnv
 registerDispatchMonos : IfaceRef -> List Mono -> Option Loc -> Int -> List Int -> List Int -> Unit
 registerEachActive : List Int -> String -> Unit
 registerEffectDomain : String -> Option String -> Unit
-registerIfaceParamKinds : TyConOrigin -> String -> List String -> List IfaceMethod -> Unit
-registerIfaceParamKindsGo : TyConOrigin -> String -> Int -> List String -> List IfaceMethod -> Unit
 registerImplMethodDictOne : String -> Int -> String -> List (String, Mono) -> Unit
 registerImplMethodDicts : String -> List String -> Ty -> List (String, Mono) -> Unit
 registerImplMethodDictsGo : String -> Int -> List String -> List (String, Mono) -> Unit
@@ -1503,7 +1507,7 @@ rowBoundByMember : UseMember -> (String, String, Ident) -> Bool
 rowFreeEffvars : EffRow -> List Int
 rowKindMismatchMsg : List (String, Option String) -> Option String -> String
 rowSlotArgMono : List (String, Ref Effvar) -> List (String, Mono) -> Ty -> Mono
-runFinalChecks : List Decl -> List Decl -> Unit
+runFinalChecks : List Decl -> List Decl -> ClassEnv -> ClassEnv -> Int -> Unit
 sameRootId : Int -> Mono -> Bool
 sameSpellingHint : Mono -> Mono -> Option String
 sccSchemes : List (String, Ty) -> Map String (List (List Pat, Expr)) -> Bool -> List (String, Mono) -> List (String, Scheme)

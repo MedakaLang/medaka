@@ -1,0 +1,13 @@
+-- #1557 A-3.5c: the INNOCENT module. It declares `Alpha` and `Beta` as ordinary
+-- leaf interfaces (no `requires`), and it is loaded BEFORE `cyclemod` because
+-- `cyclemod` imports `ofn` from it -- a function, never an interface. Those two
+-- public interface declarations are what the pre-A-3.5c bare-name cycle walk found
+-- first, and finding them is what silently masked `cyclemod`'s real cycle.
+export interface Alpha a where
+  afoo : a -> Int
+
+export interface Beta a where
+  bfoo : a -> Int
+
+export ofn : Int -> Int
+ofn n = n + 1

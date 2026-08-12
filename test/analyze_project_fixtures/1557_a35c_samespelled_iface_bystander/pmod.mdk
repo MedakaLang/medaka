@@ -1,0 +1,9 @@
+-- #1557 A-3.5c bystander, module 1 of 2. `Same requires Base`, both declared here.
+export interface Base a where
+  pbf : a -> Int
+
+export interface Same a requires Base a where
+  psf : a -> Int
+
+export pfn : Int -> Int
+pfn n = n + 1

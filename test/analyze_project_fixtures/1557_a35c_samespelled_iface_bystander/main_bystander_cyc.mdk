@@ -1,0 +1,28 @@
+-- #1557 A-3.5c -- THE BYSTANDER, the half no drain fixture can cover.
+--
+-- AGENTS.md's rule for any change that re-keys a program-global table: the required
+-- fixture is *"feature + UNRELATED code still behaves"*, not *"feature works"*. This
+-- graph contains exactly the collision A-3.5c's cycle walk was re-keyed for -- two
+-- unrelated modules, each declaring an interface `Same` AND an interface `Base` --
+-- and it is entirely well-formed. Every file's bucket must be `[]`.
+--
+-- HOW EACH ARM CAN FAIL, which is what makes this an assertion rather than a
+-- decoration:
+--   * Collapse the four interfaces onto their two bare names and the super edges
+--     read `Same -> Base` (from `pmod`) and `Base -> Same` (from `qmod`): a cycle
+--     that does not exist. A re-key that keyed on the SPELLING, or a `done`/`path`
+--     set still keyed on a bare name, gains a spurious T-CYCLIC-SUPERINTERFACE here.
+--   * Nothing below mentions `Same`, `Base`, `psf`, `pbf`, `qsf` or `qbf`. Only the
+--     two functions are imported, so this file answers AGENTS.md's *"what happens to
+--     a program that never touches the table"* directly.
+--
+-- 🚨 WHAT IT CANNOT CATCH, stated so it is not read as covering more than it does:
+-- it detects an edge that WRONGLY MEETS another module's row. It cannot detect an
+-- edge that NEVER MEETS its own row -- a write-side/read-side identity disagreement
+-- would leave the walk finding nothing and every bucket here `[]`. That direction is
+-- `1557_a35c_cycle_masked_by_samespelled/`, which goes silent exactly when this one
+-- cannot. The set is the assertion; no single member is.
+import pmod.{pfn}
+import qmod.{qfn}
+
+main = println (qfn (pfn 1))
