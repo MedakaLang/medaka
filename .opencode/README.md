@@ -21,11 +21,14 @@ The project agents in `agents/` are an OpenCode adaptation of Medaka's complex-c
 - `medaka-emitter-state-migration` specializes that discipline for X-N.H/X-W.H
   emitter continuation slices, including family selection, inert hand-built
   probes, source-derived controls, and residual-state handoffs.
+- `medaka-continuation-receipt` provides one compact derive-don't-encode packet
+  for staged continuation dispatch, review, PR prose, and tracker handoff.
 
 Designer packets must pass an implementer-sized-slice test before Terra receives
 them. Implementers remain build-free; the conductor supplies exact isolation
-proof up front and runs stateless source checks on coherent daughter diffs before
-integration. Verification daughters should share cold prerequisites unless a
+proof up front, which read-only/no-shell agents accept without a redundant stop,
+and runs stateless source checks on coherent daughter diffs before integration.
+Verification daughters should share cold prerequisites unless a
 measured wall-clock reason justifies duplicate builds.
 
 Reproducers receive a unique conductor-owned scratch directory outside every

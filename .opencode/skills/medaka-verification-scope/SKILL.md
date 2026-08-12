@@ -55,13 +55,18 @@ Do not build an oracle solely for a check already deferred to CI. Do not turn a 
 
 Run in this order and stop when the questions are answered:
 
-1. static inspection, targeted format/lint, `sh -n`, documentation gates, or MCP checks;
+1. static inspection, targeted format/lint, interpreter-correct shell syntax checks, documentation gates, or MCP checks;
 2. one fast compile/typecheck or direct reproduction/control;
 3. the focused regression gate with only its narrow prerequisites;
 4. mandatory compiler-source, snapshot, selfproc, or fixpoint obligations;
 5. additional expensive local suites only when a named uncertainty survives.
 
 Use `PREFLIGHT_DRY=1 sh test/preflight.sh` to derive candidate gates, not as an instruction to run all of them. Remember that dry mode does not reveal the forced backend fixpoint, and blast-radius paths can turn preflight into the prohibited full local suite. Prefer targeted `run_gates.sh` patterns or let CI parallelize genuine breadth.
+
+Derive a script's interpreter before syntax-checking it. Use `bash -n` for Bash
+scripts (including scripts using arrays, `[[`, or here-strings) and `sh -n` only
+for POSIX-shell scripts. Do not infer the interpreter from the fact that many
+repository gates are commonly invoked with `sh`.
 
 Documentation checks are complementary. If a Markdown `**Status:**` banner
 changes, run `make docs-index`, inspect and stage the generated
