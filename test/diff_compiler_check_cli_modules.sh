@@ -1796,10 +1796,18 @@ esac
 #
 #    (a) alias-visible.  An imported `export type Sec = Int` must still EXPAND in the
 #    importer: `use : Sec -> Int` renders as `Int -> Int` and `s + 1` typechecks.
-#    ⚠️ THIS LEG CAN FAIL, which is the point — an alias the table does not hold stays
-#    an opaque `TCon`, and the SAME program then draws `No impl of Num for Sec` at exit
-#    1 (measured directly on this tree by wrapping the alias in an attribute, the one
-#    shape `registerData` drops).  So an empty or mis-ordinalled K seed reds this leg.
+#
+#    ⚠️ FAIL-CAPABILITY, DERIVED RATHER THAN ASSERTED — and an earlier draft of this
+#    comment named a mechanism that does NOT occur in this leg's own configuration
+#    (`No impl of Num for Sec`; cross-module, wrapping the alias in an attribute
+#    instead gives a resolve-stage `has no exported name`, and the `No impl` shape
+#    only appears single-module).  The real derivation: force `aliasUniverseAt` to
+#    return `[]` — the one-line degradation this whole retirement risks — rebuild,
+#    and run this gate.  MEASURED on that binary: all THREE legs below go red,
+#    alias-visible and -run with `Type mismatch: Int vs Sec` at exit 1 (the alias
+#    stayed an opaque `TCon`), and alias-cycle-importer with `definer hits=2
+#    importer hits=0` — i.e. failing in exactly the loud→silent direction it exists
+#    to guard.  An empty, mis-ordinalled, or over-filtered K seed reds these legs.
 cat > "$TMP/aliaslib.mdk" <<'EOF'
 export type Sec = Int
 

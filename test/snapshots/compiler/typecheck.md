@@ -1,5 +1,5 @@
 # META
-source_lines=27153
+source_lines=27242
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted typecheck stage — port of lib/typecheck.ml's HM core.  SLICE 1:
@@ -2924,16 +2924,32 @@ data DataTypeDecl = DataTypeDecl {
     dtVariants : List Variant,
   }
 
--- A-3.2b residual (#1512): `adOrd`/`adPub` are the two conjuncts of
--- `declEnvVisibleTo`, carried ON THE ROW rather than re-derived at the read.
--- They are here — and not on `DataTypeDecl` — because THIS is the row that has
--- a production reader: `aliasUniverseAt` is the whole-graph replacement for the
--- retired `crossRun.universeAliasTable`, and it must answer "which aliases can
--- a reader at ordinal k see" without walking every module's decls again (the
--- per-module × per-decl shape `importedCtorTypeDecls` already pays once).
--- `adPub` is `tyAliasPub` VERBATIM — the same field `publicDataDecl`'s
--- `DTypeAlias` arm tests — so the alias projection and `demPubDecls` cannot
--- come to disagree about what "public" means.
+-- A-3.2b residual (#1512): `adOrd`/`adPub` are the two INPUTS `declEnvVisibleTo`
+-- takes, carried ON THE ROW rather than re-derived at the read.  They are here —
+-- and not on `DataTypeDecl` — because THIS is the row that has a production
+-- reader: `aliasUniverseAt` is the whole-graph replacement for the retired
+-- `crossRun.universeAliasTable`, and it must answer "which aliases can a reader
+-- at ordinal k see" without walking every module's decls again (the per-module ×
+-- per-decl shape `importedCtorTypeDecls` already pays once).
+--
+-- 🚨 THEY ARE THE PREDICATE'S ARGUMENTS, NOT A SECOND COPY OF ITS BODY.  Both
+-- are consumed by `aliasUniverseAt` through `declEnvVisibleTo` itself; nothing
+-- here open-codes `<=` or a `pub` test, which this file prohibits in four places
+-- (`grep -n 'open-cod' compiler/types/typecheck.mdk`) — see `declEnvRowVisible`,
+-- whose own comment is *"Both arms go through the predicate; neither open-codes
+-- `<=` or a `pub` test."*
+--
+-- ⚠️ `adPub` IS A CALL, NOT A COPIED FIELD.  It is `publicDataDecl` applied to
+-- the alias's own `Decl` — the SAME predicate `demPubDecls`
+-- (`publicDataDecls decls`) routes through, and deliberately not a verbatim
+-- `tyAliasPub` read.  `declEnvModule`'s note says a second construction site
+-- *"is exactly how the two would come to disagree"*; storing the field would
+-- make `deAliases` the one publicity decision in `DeclEnvs` that a future edit
+-- to `publicDataDecl`'s `DTypeAlias` arm silently leaves behind.
+--
+-- `adAttrib` records that this alias was reached THROUGH a `DAttrib` wrapper.
+-- It is POPULATION-NEUTRAL on purpose — see `aliasUniverseAt`, which applies it
+-- at the READ, and the 🚨 note on `dataEnvAddDecl`.
 data AliasDecl = AliasDecl {
     adKey : TabKey,
     adName : String,  -- identity key, `tyTabKey o adName` — same family as the retired `universeAliasTable`
@@ -2941,6 +2957,7 @@ data AliasDecl = AliasDecl {
     adRhs : Ty,
     adOrd : Int,
     adPub : Bool,
+    adAttrib : Bool,
   }
 
 -- `deFieldOwnerIdents` is the NEW identity-keyed table: `universeFieldOwners`
@@ -2995,34 +3012,51 @@ dataEnvFromRowsGo (m::rest) acc =
 
 dataEnvFromDeclsGo : Int -> List Decl -> DataEnv -> DataEnv
 dataEnvFromDeclsGo _ [] acc = acc
--- 🚨 THE `DAttrib` UNWRAP DOES NOT REACH THE ALIAS ARM, AND THAT ASYMMETRY IS
--- LOAD-BEARING.  `registerData` has no `DAttrib` arm (it falls to
+dataEnvFromDeclsGo ord (d::rest) acc =
+  dataEnvFromDeclsGo ord rest (dataEnvAddDecl ord False d acc)
+
+-- ONE decl into the index.  [att] is True once a `DAttrib` wrapper has been
+-- unwrapped on the way here; nested wrappers recurse (the parser can produce
+-- `DAttrib [a] (DAttrib [b] d)`).
+--
+-- 🚨 THE `DAttrib` UNWRAP IS UNIFORM ACROSS ALL FIVE TABLES, AND THE ATTRIBUTED
+-- ALIAS IS DROPPED AT THE *READ*, NOT HERE.  That split is the point, and an
+-- earlier draft of this unit got it backwards.
+--
+-- The fact being recorded: `registerData` has no `DAttrib` arm (it falls to
 -- `registerData env _ = env`) and neither does `publicDataDecl`, so an
 -- ATTRIBUTED type alias — `@deprecated "…"` / `type X = Int` — is invisible to
--- the live alias table in BOTH directions today: it is not registered in its own
--- module and it never entered the retired `universeAliasTable`.  MEASURED on
--- this tree: that program is rejected `Type mismatch: Int vs X` + `No impl of
--- Num for X`, i.e. `X` stays an opaque `TCon`.  Unwrapping here would put it in
--- `deAliases`, and `aliasUniverseAt` would then expand it in IMPORTERS while it
--- stays opaque where it was declared — an acceptance WIDENING, incoherent
--- besides, and not one this unit has any licence to make.
--- The DATA half keeps the unwrap A-3.2a gave it: `deTypes`/`deCtorIdents` have
--- no live reader, so their contents are not this unit's to move either way.
-dataEnvFromDeclsGo ord ((DAttrib _ d)::rest) acc =
-  dataEnvFromDeclsGo ord rest (dataEnvAttribGo ord d acc)
-dataEnvFromDeclsGo ord ((DData { dataName, dataParams, dataCtors, dataOrigin, ... })::rest) acc = dataEnvFromDeclsGo ord rest (addDataTypeDecl dataName dataOrigin dataParams dataCtors acc)
-dataEnvFromDeclsGo ord ((DNewtype { newtypeName, newtypeParams, newtypeCtor, newtypeFieldTy, newtypeOrigin, ... })::rest) acc = dataEnvFromDeclsGo ord rest (addDataTypeDecl newtypeName newtypeOrigin newtypeParams [Variant newtypeCtor (ConPos [newtypeFieldTy])] acc)
-dataEnvFromDeclsGo ord ((DTypeAlias { tyAliasName, tyAliasParams, tyAliasRhs, tyAliasOrigin, tyAliasPub, ... })::rest) acc = dataEnvFromDeclsGo ord rest (addAliasDecl tyAliasName tyAliasOrigin tyAliasParams tyAliasRhs ord tyAliasPub acc)
-dataEnvFromDeclsGo ord (_::rest) acc = dataEnvFromDeclsGo ord rest acc
-
--- One decl reached THROUGH an attribute wrapper.  Identical to
--- `dataEnvFromDeclsGo` except that the alias arm is DROPPED — see the 🚨 note
--- above it for why.  Nested wrappers recurse (the parser can produce
--- `DAttrib [a] (DAttrib [b] d)`).
-dataEnvAttribGo : Int -> Decl -> DataEnv -> DataEnv
-dataEnvAttribGo ord (DAttrib _ d) acc = dataEnvAttribGo ord d acc
-dataEnvAttribGo _ (DTypeAlias { ... }) acc = acc
-dataEnvAttribGo ord d acc = dataEnvFromDeclsGo ord [d] acc
+-- the LIVE alias table in both directions today.  MEASURED on this tree: that
+-- program is rejected `Type mismatch: Int vs X` + `No impl of Num for X`, i.e.
+-- `X` stays an opaque `TCon`.  Letting it into `aliasUniverseAt`'s result would
+-- expand it in IMPORTERS while it stayed opaque where it was declared — an
+-- acceptance WIDENING, incoherent besides, and not one this unit may make.
+--
+-- ⚠️ WHY THE POPULATION KEEPS IT ANYWAY.  `deTypes`/`deCtorIdents`/
+-- `deRecordIdents`/`deFieldOwnerIdents` all keep A-3.2a's unwrap and are strict
+-- supersets on this axis.  Filtering the alias row out of the POPULATION would
+-- make two rows of one record answer "does an attributed decl count?" by
+-- opposite mechanisms, which is worse than either choice alone — and #1512's
+-- own precondition comment requires slice 3 to solve the identical problem with
+-- a READ-side guard.  So `adAttrib` is recorded here and applied there.
+--
+-- 🚨 THE RE-ADD CONDITION, STATED SO A LATER FIXER CANNOT GET IT HALF-RIGHT.
+-- This drop exists ONLY because the live table has no attributed aliases in it.
+-- #1228/#1586 are the issues that would change that: whoever gives `registerData`
+-- (and `publicDataDecl`) a `DAttrib` arm so an attributed alias expands where it
+-- is DECLARED **must delete `adAttrib`'s conjunct in `aliasUniverseAt` in the
+-- same diff.** Leaving this guard in place then produces the MIRROR of the
+-- widening it was added to prevent — expands locally, opaque in importers — and
+-- no fixture in the tree would catch that, because every fixture here asserts the
+-- current, both-directions-invisible state.
+dataEnvAddDecl : Int -> Bool -> Decl -> DataEnv -> DataEnv
+dataEnvAddDecl ord _ (DAttrib _ d) acc = dataEnvAddDecl ord True d acc
+dataEnvAddDecl ord _ (DData { dataName, dataParams, dataCtors, dataOrigin, ... }) acc = addDataTypeDecl dataName dataOrigin dataParams dataCtors acc
+dataEnvAddDecl ord _ (DNewtype { newtypeName, newtypeParams, newtypeCtor, newtypeFieldTy, newtypeOrigin, ... }) acc = addDataTypeDecl newtypeName newtypeOrigin newtypeParams [Variant newtypeCtor (ConPos [newtypeFieldTy])] acc
+-- `publicDataDecl d` — the shared predicate applied to the alias's own decl, not
+-- a `tyAliasPub` read.  See `AliasDecl`'s ⚠️ note.
+dataEnvAddDecl ord att (d@(DTypeAlias { tyAliasName, tyAliasParams, tyAliasRhs, tyAliasOrigin, ... })) acc = addAliasDecl tyAliasName tyAliasOrigin tyAliasParams tyAliasRhs ord (publicDataDecl d) att acc
+dataEnvAddDecl _ _ _ acc = acc
 
 addDataTypeDecl : String -> TyConOrigin -> List String -> List Variant -> DataEnv -> DataEnv
 addDataTypeDecl name o params variants env =
@@ -3088,8 +3122,8 @@ addFieldOwnerIdents ident cn ((Field fn _)::rest) env =
 -- `rejectCyclicAliases` builds its graph from this list in list order and
 -- `emitCyclicAliasErrors` renders in that order into goldens.  See
 -- `aliasUniverseAt`, which filters this list and therefore preserves it.
-addAliasDecl : String -> TyConOrigin -> List String -> Ty -> Int -> Bool -> DataEnv -> DataEnv
-addAliasDecl name o params rhs ord pub env =
+addAliasDecl : String -> TyConOrigin -> List String -> Ty -> Int -> Bool -> Bool -> DataEnv -> DataEnv
+addAliasDecl name o params rhs ord pub att env =
   let key = tyTabKey o name
   let ad = AliasDecl {
     adKey = key,
@@ -3098,6 +3132,7 @@ addAliasDecl name o params rhs ord pub env =
     adRhs = rhs,
     adOrd = ord,
     adPub = pub,
+    adAttrib = att,
   }
   DataEnv { env | deAliases = (key, ad)::env.deAliases }
 
@@ -3108,14 +3143,36 @@ addAliasDecl name o params rhs ord pub env =
 -- round trip.  It is GONE; this is its whole-graph replacement, and it is a
 -- projection of K rather than a second copy of the same fact.
 --
--- 🚨 STRICT `<`, NOT `declEnvVisibleTo`'s `<=`, AND THAT IS DELIBERATE.  The
--- accumulator held the public aliases of every module whose arm had ALREADY
--- FINISHED (`appendDataUniverse` is the last statement of a module's arm), so a
--- reader at ordinal k saw ordinals 0..k-1 and never its own row.  Its own
--- aliases — public AND private — arrive by a different route that is unchanged
--- by this unit: `registerAllData … prog0` conses them onto the front of the
--- working `aliasTableRef`.  Using `<=` here would double-register every public
--- alias the reader declares itself.
+-- 🚨 THREE SEPARATELY NAMED CONDITIONS, AND THE SPLIT IS THE WHOLE DESIGN.
+-- They are NOT one fused `adPub && adOrd < cur` test — this file prohibits
+-- open-coding the filter in four places (`grep -n 'open-cod'`), and
+-- `declEnvRowVisible`'s own comment is *"Both arms go through the predicate;
+-- neither open-codes `<=` or a `pub` test."*
+--
+--   1. `declEnvVisibleTo cur ad.adOrd ad.adPub` — BOTH ratified conjuncts, the
+--      ordinal one and the publicity one, applied through the ONE predicate.
+--      This is the third production reader of `declEnvVisibleAt` (after
+--      `declEnvRowVisible` and `ieSnapAt`); the ratchet's `declEnvsRef` row
+--      records all three, because that row is the arc's account of what A-3.6
+--      is licensed to delete.
+--   2. `ad.adOrd != cur` — the OWN-ROW EXCLUSION.  ⚠️ THIS ONE IS STRUCTURAL,
+--      NOT TRANSITIONAL, AND IT MUST SURVIVE A-3.6.  A-3.6 deletes
+--      `declEnvVisibleAt`'s body, at which point condition 1 reduces to the
+--      publicity conjunct alone and this line is the only thing still keeping
+--      the reader's own row out.  It is not an ordinal FILTER wearing an
+--      ordinal's clothes: the retired accumulator held the public aliases of
+--      every module whose arm had ALREADY FINISHED (`appendDataUniverse` is the
+--      last statement of a module's arm), so a reader at ordinal k saw
+--      0..k-1 and never itself, and its own aliases — public AND private —
+--      arrive by a route this unit does not touch (`registerAllData … prog0`
+--      conses them onto the front of the working `aliasTableRef`).  Dropping
+--      this would double-register every public alias the reader declares.
+--      Conditions 1 ∧ 2 are today exactly the `<` the accumulator had
+--      (`<=` ∧ `!=`); under A-3.6 they reduce to `adPub && adOrd != cur`, which
+--      is the intended end state.
+--   3. `not ad.adAttrib` — the attributed-alias drop, applied HERE at the read
+--      rather than in the population.  See the 🚨 note on `dataEnvAddDecl` for
+--      why, and for the condition under which #1228/#1586 must delete it.
 --
 -- ⚠️ THE CYCLIC-ALIAS REMOVAL IS PRESERVED BY DOING NOTHING.
 -- `rejectCyclicAliases` DELETES cyclic entries from the per-run
@@ -3130,12 +3187,35 @@ addAliasDecl name o params rhs ord pub env =
 -- Pinned by the `1512-A32b/alias-cycle-importer` leg of
 -- `test/diff_compiler_check_cli_modules.sh`, which requires the diagnostic to
 -- name BOTH the declaring module and the importer.
+-- ⚠️ ALLOCATION SHAPE, RECORDED BECAUSE THE PERF GATE CANNOT SEE IT.  The line
+-- this replaced in `loadDataUniverse` was a pointer copy (`setRef … .value`);
+-- this MATERIALISES a filtered list, and it runs twice per module (the arm's
+-- own reload and `appendDataUniverse`'s).  That is the allocation term
+-- `declEnvRowVisible`'s "ZERO ALLOCATION … MEASURED perf contract" note forbids
+-- for its sibling — and `diff_compiler_perf_scaling.sh`'s `gen_modules` shape
+-- declares no type aliases at all, so the gate is BLIND to it (derive, don't
+-- trust: `grep -n 'type ' test/diff_compiler_perf_scaling.sh`).
+-- It is immaterial at this size and that was MEASURED, not assumed — but by PR
+-- #1588's independent reviewer, not by me, so it is RELAYED: with 24 aliases,
+-- 40 modules 864 → 824 ms and 80 modules 3489 → 3462 ms (interleaved, min of 3),
+-- i.e. inside the noise.  The reason it stays immaterial is that `deAliases` is
+-- SMALL — 11 type aliases in the whole tree today.  If a future graph makes
+-- aliases numerous, the fix is the per-ordinal snapshot `ieUnivSnaps` already
+-- uses for `IE`, not a wider filter.
 aliasUniverseAt : Int -> List (TabKey, AliasDecl) -> List (TabKey, (List String, Ty))
 aliasUniverseAt _ [] = []
 aliasUniverseAt cur ((key, ad)::rest)
-  | ad.adPub && ad.adOrd < cur =
+  | aliasVisibleTo cur ad =
     (key, (ad.adParams, ad.adRhs)) :: aliasUniverseAt cur rest
   | otherwise = aliasUniverseAt cur rest
+
+-- The three conditions of the block above, in that order.  Split out so each is
+-- separately readable and separately greppable — A-3.6 edits condition 1's
+-- predicate and must leave conditions 2 and 3 standing.
+aliasVisibleTo : Int -> AliasDecl -> Bool
+aliasVisibleTo cur ad = declEnvVisibleTo cur ad.adOrd ad.adPub
+  && ad.adOrd != cur
+  && not ad.adAttrib
 
 -- Fixture for the doctests below: a PUBLIC alias in the prelude row (ordinal 0),
 -- a PRIVATE one beside it, and a public one in a later module (ordinal 1).
@@ -3167,8 +3247,9 @@ aliasFixturePubM = DTypeAlias {
 }
 
 -- PUBLIC, but wrapped in an attribute — the shape `registerData` and
--- `publicDataDecl` both drop.  See the 🚨 note on `dataEnvFromDeclsGo`'s
--- `DAttrib` arm.
+-- `publicDataDecl` both drop.  It IS in the population (`deAliases` holds four
+-- rows, asserted below) and is dropped at the READ by `aliasVisibleTo`'s third
+-- condition.  See the 🚨 note on `dataEnvAddDecl`.
 aliasFixtureAttribCore : Decl
 aliasFixtureAttribCore = DAttrib
   [AttrDeprecated "old"]
@@ -3211,6 +3292,14 @@ aliasNamesAt cur =
 -- Fail-CLOSED at `declEnvsOrdOf`'s miss sentinel, exactly as `declEnvVisibleAt`.
 -- > aliasNamesAt (0 - 1)
 -- []
+
+-- POPULATION NEUTRALITY of the attributed-alias drop: all FOUR aliases are in
+-- `deAliases` — including the attributed one and the private one — and it is the
+-- READ that narrows.  This is the assertion that fails if a later edit "tidies"
+-- the guard back into the fold, re-creating the two-rows-one-record divergence
+-- `dataEnvAddDecl`'s note exists to prevent.
+-- > listLen aliasFixtureEnv.deAliases
+-- 4
 
 -- Fixture for the doctests below: two DIFFERENT modules ("m", "n") each
 -- declaring a record named-field variant with field "x".
@@ -27666,7 +27755,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "declEnvRowVisible" (TyFun (TyCon "Int") (TyFun (TyCon "DeclEnvModule") (TyApp (TyCon "List") (TyCon "Decl")))))
 (DFunDef false "declEnvRowVisible" ((PVar "cur") (PVar "m")) (EIf (EApp (EApp (EApp (EVar "declEnvVisibleTo") (EVar "cur")) (EFieldAccess (EVar "m") "demOrd")) (EVar "False")) (EFieldAccess (EVar "m") "demDecls") (EIf (EApp (EApp (EApp (EVar "declEnvVisibleTo") (EVar "cur")) (EFieldAccess (EVar "m") "demOrd")) (EVar "True")) (EFieldAccess (EVar "m") "demPubDecls") (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DData Private "DataTypeDecl" () ((variant "DataTypeDecl" (ConNamed (field "dtKey" (TyCon "TabKey")) (field "dtName" (TyCon "String")) (field "dtOrigin" (TyCon "TyConOrigin")) (field "dtParams" (TyApp (TyCon "List") (TyCon "String"))) (field "dtVariants" (TyApp (TyCon "List") (TyCon "Variant")))))) ())
-(DData Private "AliasDecl" () ((variant "AliasDecl" (ConNamed (field "adKey" (TyCon "TabKey")) (field "adName" (TyCon "String")) (field "adParams" (TyApp (TyCon "List") (TyCon "String"))) (field "adRhs" (TyCon "Ty")) (field "adOrd" (TyCon "Int")) (field "adPub" (TyCon "Bool"))))) ())
+(DData Private "AliasDecl" () ((variant "AliasDecl" (ConNamed (field "adKey" (TyCon "TabKey")) (field "adName" (TyCon "String")) (field "adParams" (TyApp (TyCon "List") (TyCon "String"))) (field "adRhs" (TyCon "Ty")) (field "adOrd" (TyCon "Int")) (field "adPub" (TyCon "Bool")) (field "adAttrib" (TyCon "Bool"))))) ())
 (DData Private "DataEnv" () ((variant "DataEnv" (ConNamed (field "deTypes" (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyCon "DataTypeDecl")))) (field "deCtorIdents" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String") (TyCon "Variant"))))) (field "deRecordIdents" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String") (TyApp (TyCon "List") (TyCon "Field")))))) (field "deFieldOwnerIdents" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String"))))) (field "deAliases" (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyCon "AliasDecl"))))))) ())
 (DTypeSig false "emptyDataEnv" (TyCon "DataEnv"))
 (DFunDef false "emptyDataEnv" () (ERecordCreate "DataEnv" ((fa "deTypes" (EListLit)) (fa "deCtorIdents" (EVar "omEmpty")) (fa "deRecordIdents" (EVar "omEmpty")) (fa "deFieldOwnerIdents" (EVar "omEmpty")) (fa "deAliases" (EListLit)))))
@@ -27677,15 +27766,13 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "dataEnvFromRowsGo" ((PCons (PVar "m") (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "dataEnvFromRowsGo") (EVar "rest")) (EApp (EApp (EApp (EVar "dataEnvFromDeclsGo") (EFieldAccess (EVar "m") "demOrd")) (EFieldAccess (EVar "m") "demDecls")) (EVar "acc"))))
 (DTypeSig false "dataEnvFromDeclsGo" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "DataEnv") (TyCon "DataEnv")))))
 (DFunDef false "dataEnvFromDeclsGo" (PWild (PList) (PVar "acc")) (EVar "acc"))
-(DFunDef false "dataEnvFromDeclsGo" ((PVar "ord") (PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EVar "dataEnvFromDeclsGo") (EVar "ord")) (EVar "rest")) (EApp (EApp (EApp (EVar "dataEnvAttribGo") (EVar "ord")) (EVar "d")) (EVar "acc"))))
-(DFunDef false "dataEnvFromDeclsGo" ((PVar "ord") (PCons (PRec "DData" ((rf "dataName" None) (rf "dataParams" None) (rf "dataCtors" None) (rf "dataOrigin" None)) true) (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EVar "dataEnvFromDeclsGo") (EVar "ord")) (EVar "rest")) (EApp (EApp (EApp (EApp (EApp (EVar "addDataTypeDecl") (EVar "dataName")) (EVar "dataOrigin")) (EVar "dataParams")) (EVar "dataCtors")) (EVar "acc"))))
-(DFunDef false "dataEnvFromDeclsGo" ((PVar "ord") (PCons (PRec "DNewtype" ((rf "newtypeName" None) (rf "newtypeParams" None) (rf "newtypeCtor" None) (rf "newtypeFieldTy" None) (rf "newtypeOrigin" None)) true) (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EVar "dataEnvFromDeclsGo") (EVar "ord")) (EVar "rest")) (EApp (EApp (EApp (EApp (EApp (EVar "addDataTypeDecl") (EVar "newtypeName")) (EVar "newtypeOrigin")) (EVar "newtypeParams")) (EListLit (EApp (EApp (EVar "Variant") (EVar "newtypeCtor")) (EApp (EVar "ConPos") (EListLit (EVar "newtypeFieldTy")))))) (EVar "acc"))))
-(DFunDef false "dataEnvFromDeclsGo" ((PVar "ord") (PCons (PRec "DTypeAlias" ((rf "tyAliasName" None) (rf "tyAliasParams" None) (rf "tyAliasRhs" None) (rf "tyAliasOrigin" None) (rf "tyAliasPub" None)) true) (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EVar "dataEnvFromDeclsGo") (EVar "ord")) (EVar "rest")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "addAliasDecl") (EVar "tyAliasName")) (EVar "tyAliasOrigin")) (EVar "tyAliasParams")) (EVar "tyAliasRhs")) (EVar "ord")) (EVar "tyAliasPub")) (EVar "acc"))))
-(DFunDef false "dataEnvFromDeclsGo" ((PVar "ord") (PCons PWild (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EVar "dataEnvFromDeclsGo") (EVar "ord")) (EVar "rest")) (EVar "acc")))
-(DTypeSig false "dataEnvAttribGo" (TyFun (TyCon "Int") (TyFun (TyCon "Decl") (TyFun (TyCon "DataEnv") (TyCon "DataEnv")))))
-(DFunDef false "dataEnvAttribGo" ((PVar "ord") (PCon "DAttrib" PWild (PVar "d")) (PVar "acc")) (EApp (EApp (EApp (EVar "dataEnvAttribGo") (EVar "ord")) (EVar "d")) (EVar "acc")))
-(DFunDef false "dataEnvAttribGo" (PWild (PRec "DTypeAlias" () true) (PVar "acc")) (EVar "acc"))
-(DFunDef false "dataEnvAttribGo" ((PVar "ord") (PVar "d") (PVar "acc")) (EApp (EApp (EApp (EVar "dataEnvFromDeclsGo") (EVar "ord")) (EListLit (EVar "d"))) (EVar "acc")))
+(DFunDef false "dataEnvFromDeclsGo" ((PVar "ord") (PCons (PVar "d") (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EVar "dataEnvFromDeclsGo") (EVar "ord")) (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "dataEnvAddDecl") (EVar "ord")) (EVar "False")) (EVar "d")) (EVar "acc"))))
+(DTypeSig false "dataEnvAddDecl" (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyFun (TyCon "Decl") (TyFun (TyCon "DataEnv") (TyCon "DataEnv"))))))
+(DFunDef false "dataEnvAddDecl" ((PVar "ord") PWild (PCon "DAttrib" PWild (PVar "d")) (PVar "acc")) (EApp (EApp (EApp (EApp (EVar "dataEnvAddDecl") (EVar "ord")) (EVar "True")) (EVar "d")) (EVar "acc")))
+(DFunDef false "dataEnvAddDecl" ((PVar "ord") PWild (PRec "DData" ((rf "dataName" None) (rf "dataParams" None) (rf "dataCtors" None) (rf "dataOrigin" None)) true) (PVar "acc")) (EApp (EApp (EApp (EApp (EApp (EVar "addDataTypeDecl") (EVar "dataName")) (EVar "dataOrigin")) (EVar "dataParams")) (EVar "dataCtors")) (EVar "acc")))
+(DFunDef false "dataEnvAddDecl" ((PVar "ord") PWild (PRec "DNewtype" ((rf "newtypeName" None) (rf "newtypeParams" None) (rf "newtypeCtor" None) (rf "newtypeFieldTy" None) (rf "newtypeOrigin" None)) true) (PVar "acc")) (EApp (EApp (EApp (EApp (EApp (EVar "addDataTypeDecl") (EVar "newtypeName")) (EVar "newtypeOrigin")) (EVar "newtypeParams")) (EListLit (EApp (EApp (EVar "Variant") (EVar "newtypeCtor")) (EApp (EVar "ConPos") (EListLit (EVar "newtypeFieldTy")))))) (EVar "acc")))
+(DFunDef false "dataEnvAddDecl" ((PVar "ord") (PVar "att") (PAs "d" (PRec "DTypeAlias" ((rf "tyAliasName" None) (rf "tyAliasParams" None) (rf "tyAliasRhs" None) (rf "tyAliasOrigin" None)) true)) (PVar "acc")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "addAliasDecl") (EVar "tyAliasName")) (EVar "tyAliasOrigin")) (EVar "tyAliasParams")) (EVar "tyAliasRhs")) (EVar "ord")) (EApp (EVar "publicDataDecl") (EVar "d"))) (EVar "att")) (EVar "acc")))
+(DFunDef false "dataEnvAddDecl" (PWild PWild PWild (PVar "acc")) (EVar "acc"))
 (DTypeSig false "addDataTypeDecl" (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Variant")) (TyFun (TyCon "DataEnv") (TyCon "DataEnv")))))))
 (DFunDef false "addDataTypeDecl" ((PVar "name") (PVar "o") (PVar "params") (PVar "variants") (PVar "env")) (EBlock (DoLet false false (PVar "key") (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "name"))) (DoLet false false (PVar "dt") (ERecordCreate "DataTypeDecl" ((fa "dtKey" (EVar "key")) (fa "dtName" (EVar "name")) (fa "dtOrigin" (EVar "o")) (fa "dtParams" (EVar "params")) (fa "dtVariants" (EVar "variants"))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "addVariantIdentsRaw") (EVar "name")) (EVar "o")) (EVar "variants")) (EVariantUpdate "DataEnv" (EVar "env") ((fa "deTypes" (EBinOp "::" (ETuple (EVar "key") (EVar "dt")) (EFieldAccess (EVar "env") "deTypes")))))))))
 (DTypeSig false "addVariantIdentsRaw" (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyFun (TyApp (TyCon "List") (TyCon "Variant")) (TyFun (TyCon "DataEnv") (TyCon "DataEnv"))))))
@@ -27698,11 +27785,13 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "addFieldOwnerIdents" (TyFun (TyCon "Ident") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Field")) (TyFun (TyCon "DataEnv") (TyCon "DataEnv"))))))
 (DFunDef false "addFieldOwnerIdents" (PWild PWild (PList) (PVar "env")) (EVar "env"))
 (DFunDef false "addFieldOwnerIdents" ((PVar "ident") (PVar "cn") (PCons (PCon "Field" (PVar "fn") PWild) (PVar "rest")) (PVar "env")) (EBlock (DoLet false false (PVar "next") (EBinOp "++" (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "fn")) (EFieldAccess (EVar "env") "deFieldOwnerIdents"))) (EListLit (ETuple (EVar "ident") (EVar "cn"))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "addFieldOwnerIdents") (EVar "ident")) (EVar "cn")) (EVar "rest")) (EVariantUpdate "DataEnv" (EVar "env") ((fa "deFieldOwnerIdents" (EApp (EApp (EApp (EVar "omInsert") (EVar "fn")) (EVar "next")) (EFieldAccess (EVar "env") "deFieldOwnerIdents")))))))))
-(DTypeSig false "addAliasDecl" (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Ty") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyFun (TyCon "DataEnv") (TyCon "DataEnv")))))))))
-(DFunDef false "addAliasDecl" ((PVar "name") (PVar "o") (PVar "params") (PVar "rhs") (PVar "ord") (PVar "pub") (PVar "env")) (EBlock (DoLet false false (PVar "key") (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "name"))) (DoLet false false (PVar "ad") (ERecordCreate "AliasDecl" ((fa "adKey" (EVar "key")) (fa "adName" (EVar "name")) (fa "adParams" (EVar "params")) (fa "adRhs" (EVar "rhs")) (fa "adOrd" (EVar "ord")) (fa "adPub" (EVar "pub"))))) (DoExpr (EVariantUpdate "DataEnv" (EVar "env") ((fa "deAliases" (EBinOp "::" (ETuple (EVar "key") (EVar "ad")) (EFieldAccess (EVar "env") "deAliases"))))))))
+(DTypeSig false "addAliasDecl" (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Ty") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyCon "DataEnv") (TyCon "DataEnv"))))))))))
+(DFunDef false "addAliasDecl" ((PVar "name") (PVar "o") (PVar "params") (PVar "rhs") (PVar "ord") (PVar "pub") (PVar "att") (PVar "env")) (EBlock (DoLet false false (PVar "key") (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "name"))) (DoLet false false (PVar "ad") (ERecordCreate "AliasDecl" ((fa "adKey" (EVar "key")) (fa "adName" (EVar "name")) (fa "adParams" (EVar "params")) (fa "adRhs" (EVar "rhs")) (fa "adOrd" (EVar "ord")) (fa "adPub" (EVar "pub")) (fa "adAttrib" (EVar "att"))))) (DoExpr (EVariantUpdate "DataEnv" (EVar "env") ((fa "deAliases" (EBinOp "::" (ETuple (EVar "key") (EVar "ad")) (EFieldAccess (EVar "env") "deAliases"))))))))
 (DTypeSig false "aliasUniverseAt" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyCon "AliasDecl"))) (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty")))))))
 (DFunDef false "aliasUniverseAt" (PWild (PList)) (EListLit))
-(DFunDef false "aliasUniverseAt" ((PVar "cur") (PCons (PTuple (PVar "key") (PVar "ad")) (PVar "rest"))) (EIf (EBinOp "&&" (EFieldAccess (EVar "ad") "adPub") (EBinOp "<" (EFieldAccess (EVar "ad") "adOrd") (EVar "cur"))) (EBinOp "::" (ETuple (EVar "key") (ETuple (EFieldAccess (EVar "ad") "adParams") (EFieldAccess (EVar "ad") "adRhs"))) (EApp (EApp (EVar "aliasUniverseAt") (EVar "cur")) (EVar "rest"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "aliasUniverseAt") (EVar "cur")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "aliasUniverseAt" ((PVar "cur") (PCons (PTuple (PVar "key") (PVar "ad")) (PVar "rest"))) (EIf (EApp (EApp (EVar "aliasVisibleTo") (EVar "cur")) (EVar "ad")) (EBinOp "::" (ETuple (EVar "key") (ETuple (EFieldAccess (EVar "ad") "adParams") (EFieldAccess (EVar "ad") "adRhs"))) (EApp (EApp (EVar "aliasUniverseAt") (EVar "cur")) (EVar "rest"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "aliasUniverseAt") (EVar "cur")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "aliasVisibleTo" (TyFun (TyCon "Int") (TyFun (TyCon "AliasDecl") (TyCon "Bool"))))
+(DFunDef false "aliasVisibleTo" ((PVar "cur") (PVar "ad")) (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EApp (EVar "declEnvVisibleTo") (EVar "cur")) (EFieldAccess (EVar "ad") "adOrd")) (EFieldAccess (EVar "ad") "adPub")) (EBinOp "!=" (EFieldAccess (EVar "ad") "adOrd") (EVar "cur"))) (EApp (EVar "not") (EFieldAccess (EVar "ad") "adAttrib"))))
 (DTypeSig false "aliasFixturePubCore" (TyCon "Decl"))
 (DFunDef false "aliasFixturePubCore" () (ERecordCreate "DTypeAlias" ((fa "tyAliasPub" (EVar "True")) (fa "tyAliasName" (ELit (LString "PubCore"))) (fa "tyAliasParams" (EListLit)) (fa "tyAliasRhs" (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))) (fa "tyAliasOrigin" (EApp (EVar "OriginModule") (ELit (LString "core")))))))
 (DTypeSig false "aliasFixturePrivCore" (TyCon "Decl"))
@@ -32576,7 +32665,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "declEnvRowVisible" (TyFun (TyCon "Int") (TyFun (TyCon "DeclEnvModule") (TyApp (TyCon "List") (TyCon "Decl")))))
 (DFunDef false "declEnvRowVisible" ((PVar "cur") (PVar "m")) (EIf (EApp (EApp (EApp (EVar "declEnvVisibleTo") (EVar "cur")) (EFieldAccess (EVar "m") "demOrd")) (EVar "False")) (EFieldAccess (EVar "m") "demDecls") (EIf (EApp (EApp (EApp (EVar "declEnvVisibleTo") (EVar "cur")) (EFieldAccess (EVar "m") "demOrd")) (EVar "True")) (EFieldAccess (EVar "m") "demPubDecls") (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DData Private "DataTypeDecl" () ((variant "DataTypeDecl" (ConNamed (field "dtKey" (TyCon "TabKey")) (field "dtName" (TyCon "String")) (field "dtOrigin" (TyCon "TyConOrigin")) (field "dtParams" (TyApp (TyCon "List") (TyCon "String"))) (field "dtVariants" (TyApp (TyCon "List") (TyCon "Variant")))))) ())
-(DData Private "AliasDecl" () ((variant "AliasDecl" (ConNamed (field "adKey" (TyCon "TabKey")) (field "adName" (TyCon "String")) (field "adParams" (TyApp (TyCon "List") (TyCon "String"))) (field "adRhs" (TyCon "Ty")) (field "adOrd" (TyCon "Int")) (field "adPub" (TyCon "Bool"))))) ())
+(DData Private "AliasDecl" () ((variant "AliasDecl" (ConNamed (field "adKey" (TyCon "TabKey")) (field "adName" (TyCon "String")) (field "adParams" (TyApp (TyCon "List") (TyCon "String"))) (field "adRhs" (TyCon "Ty")) (field "adOrd" (TyCon "Int")) (field "adPub" (TyCon "Bool")) (field "adAttrib" (TyCon "Bool"))))) ())
 (DData Private "DataEnv" () ((variant "DataEnv" (ConNamed (field "deTypes" (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyCon "DataTypeDecl")))) (field "deCtorIdents" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String") (TyCon "Variant"))))) (field "deRecordIdents" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String") (TyApp (TyCon "List") (TyCon "Field")))))) (field "deFieldOwnerIdents" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String"))))) (field "deAliases" (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyCon "AliasDecl"))))))) ())
 (DTypeSig false "emptyDataEnv" (TyCon "DataEnv"))
 (DFunDef false "emptyDataEnv" () (ERecordCreate "DataEnv" ((fa "deTypes" (EListLit)) (fa "deCtorIdents" (EVar "omEmpty")) (fa "deRecordIdents" (EVar "omEmpty")) (fa "deFieldOwnerIdents" (EVar "omEmpty")) (fa "deAliases" (EListLit)))))
@@ -32587,15 +32676,13 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "dataEnvFromRowsGo" ((PCons (PVar "m") (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "dataEnvFromRowsGo") (EVar "rest")) (EApp (EApp (EApp (EVar "dataEnvFromDeclsGo") (EFieldAccess (EVar "m") "demOrd")) (EFieldAccess (EVar "m") "demDecls")) (EVar "acc"))))
 (DTypeSig false "dataEnvFromDeclsGo" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "DataEnv") (TyCon "DataEnv")))))
 (DFunDef false "dataEnvFromDeclsGo" (PWild (PList) (PVar "acc")) (EVar "acc"))
-(DFunDef false "dataEnvFromDeclsGo" ((PVar "ord") (PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EVar "dataEnvFromDeclsGo") (EVar "ord")) (EVar "rest")) (EApp (EApp (EApp (EVar "dataEnvAttribGo") (EVar "ord")) (EVar "d")) (EVar "acc"))))
-(DFunDef false "dataEnvFromDeclsGo" ((PVar "ord") (PCons (PRec "DData" ((rf "dataName" None) (rf "dataParams" None) (rf "dataCtors" None) (rf "dataOrigin" None)) true) (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EVar "dataEnvFromDeclsGo") (EVar "ord")) (EVar "rest")) (EApp (EApp (EApp (EApp (EApp (EVar "addDataTypeDecl") (EVar "dataName")) (EVar "dataOrigin")) (EVar "dataParams")) (EVar "dataCtors")) (EVar "acc"))))
-(DFunDef false "dataEnvFromDeclsGo" ((PVar "ord") (PCons (PRec "DNewtype" ((rf "newtypeName" None) (rf "newtypeParams" None) (rf "newtypeCtor" None) (rf "newtypeFieldTy" None) (rf "newtypeOrigin" None)) true) (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EVar "dataEnvFromDeclsGo") (EVar "ord")) (EVar "rest")) (EApp (EApp (EApp (EApp (EApp (EVar "addDataTypeDecl") (EVar "newtypeName")) (EVar "newtypeOrigin")) (EVar "newtypeParams")) (EListLit (EApp (EApp (EVar "Variant") (EVar "newtypeCtor")) (EApp (EVar "ConPos") (EListLit (EVar "newtypeFieldTy")))))) (EVar "acc"))))
-(DFunDef false "dataEnvFromDeclsGo" ((PVar "ord") (PCons (PRec "DTypeAlias" ((rf "tyAliasName" None) (rf "tyAliasParams" None) (rf "tyAliasRhs" None) (rf "tyAliasOrigin" None) (rf "tyAliasPub" None)) true) (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EVar "dataEnvFromDeclsGo") (EVar "ord")) (EVar "rest")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "addAliasDecl") (EVar "tyAliasName")) (EVar "tyAliasOrigin")) (EVar "tyAliasParams")) (EVar "tyAliasRhs")) (EVar "ord")) (EVar "tyAliasPub")) (EVar "acc"))))
-(DFunDef false "dataEnvFromDeclsGo" ((PVar "ord") (PCons PWild (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EVar "dataEnvFromDeclsGo") (EVar "ord")) (EVar "rest")) (EVar "acc")))
-(DTypeSig false "dataEnvAttribGo" (TyFun (TyCon "Int") (TyFun (TyCon "Decl") (TyFun (TyCon "DataEnv") (TyCon "DataEnv")))))
-(DFunDef false "dataEnvAttribGo" ((PVar "ord") (PCon "DAttrib" PWild (PVar "d")) (PVar "acc")) (EApp (EApp (EApp (EVar "dataEnvAttribGo") (EVar "ord")) (EVar "d")) (EVar "acc")))
-(DFunDef false "dataEnvAttribGo" (PWild (PRec "DTypeAlias" () true) (PVar "acc")) (EVar "acc"))
-(DFunDef false "dataEnvAttribGo" ((PVar "ord") (PVar "d") (PVar "acc")) (EApp (EApp (EApp (EVar "dataEnvFromDeclsGo") (EVar "ord")) (EListLit (EVar "d"))) (EVar "acc")))
+(DFunDef false "dataEnvFromDeclsGo" ((PVar "ord") (PCons (PVar "d") (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EVar "dataEnvFromDeclsGo") (EVar "ord")) (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "dataEnvAddDecl") (EVar "ord")) (EVar "False")) (EVar "d")) (EVar "acc"))))
+(DTypeSig false "dataEnvAddDecl" (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyFun (TyCon "Decl") (TyFun (TyCon "DataEnv") (TyCon "DataEnv"))))))
+(DFunDef false "dataEnvAddDecl" ((PVar "ord") PWild (PCon "DAttrib" PWild (PVar "d")) (PVar "acc")) (EApp (EApp (EApp (EApp (EVar "dataEnvAddDecl") (EVar "ord")) (EVar "True")) (EVar "d")) (EVar "acc")))
+(DFunDef false "dataEnvAddDecl" ((PVar "ord") PWild (PRec "DData" ((rf "dataName" None) (rf "dataParams" None) (rf "dataCtors" None) (rf "dataOrigin" None)) true) (PVar "acc")) (EApp (EApp (EApp (EApp (EApp (EVar "addDataTypeDecl") (EVar "dataName")) (EVar "dataOrigin")) (EVar "dataParams")) (EVar "dataCtors")) (EVar "acc")))
+(DFunDef false "dataEnvAddDecl" ((PVar "ord") PWild (PRec "DNewtype" ((rf "newtypeName" None) (rf "newtypeParams" None) (rf "newtypeCtor" None) (rf "newtypeFieldTy" None) (rf "newtypeOrigin" None)) true) (PVar "acc")) (EApp (EApp (EApp (EApp (EApp (EVar "addDataTypeDecl") (EVar "newtypeName")) (EVar "newtypeOrigin")) (EVar "newtypeParams")) (EListLit (EApp (EApp (EVar "Variant") (EVar "newtypeCtor")) (EApp (EVar "ConPos") (EListLit (EVar "newtypeFieldTy")))))) (EVar "acc")))
+(DFunDef false "dataEnvAddDecl" ((PVar "ord") (PVar "att") (PAs "d" (PRec "DTypeAlias" ((rf "tyAliasName" None) (rf "tyAliasParams" None) (rf "tyAliasRhs" None) (rf "tyAliasOrigin" None)) true)) (PVar "acc")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "addAliasDecl") (EVar "tyAliasName")) (EVar "tyAliasOrigin")) (EVar "tyAliasParams")) (EVar "tyAliasRhs")) (EVar "ord")) (EApp (EVar "publicDataDecl") (EVar "d"))) (EVar "att")) (EVar "acc")))
+(DFunDef false "dataEnvAddDecl" (PWild PWild PWild (PVar "acc")) (EVar "acc"))
 (DTypeSig false "addDataTypeDecl" (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Variant")) (TyFun (TyCon "DataEnv") (TyCon "DataEnv")))))))
 (DFunDef false "addDataTypeDecl" ((PVar "name") (PVar "o") (PVar "params") (PVar "variants") (PVar "env")) (EBlock (DoLet false false (PVar "key") (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "name"))) (DoLet false false (PVar "dt") (ERecordCreate "DataTypeDecl" ((fa "dtKey" (EVar "key")) (fa "dtName" (EVar "name")) (fa "dtOrigin" (EVar "o")) (fa "dtParams" (EVar "params")) (fa "dtVariants" (EVar "variants"))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "addVariantIdentsRaw") (EVar "name")) (EVar "o")) (EVar "variants")) (EVariantUpdate "DataEnv" (EVar "env") ((fa "deTypes" (EBinOp "::" (ETuple (EVar "key") (EVar "dt")) (EFieldAccess (EVar "env") "deTypes")))))))))
 (DTypeSig false "addVariantIdentsRaw" (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyFun (TyApp (TyCon "List") (TyCon "Variant")) (TyFun (TyCon "DataEnv") (TyCon "DataEnv"))))))
@@ -32608,11 +32695,13 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "addFieldOwnerIdents" (TyFun (TyCon "Ident") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Field")) (TyFun (TyCon "DataEnv") (TyCon "DataEnv"))))))
 (DFunDef false "addFieldOwnerIdents" (PWild PWild (PList) (PVar "env")) (EVar "env"))
 (DFunDef false "addFieldOwnerIdents" ((PVar "ident") (PVar "cn") (PCons (PCon "Field" (PVar "fn") PWild) (PVar "rest")) (PVar "env")) (EBlock (DoLet false false (PVar "next") (EBinOp "++" (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "fn")) (EFieldAccess (EVar "env") "deFieldOwnerIdents"))) (EListLit (ETuple (EVar "ident") (EVar "cn"))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "addFieldOwnerIdents") (EVar "ident")) (EVar "cn")) (EVar "rest")) (EVariantUpdate "DataEnv" (EVar "env") ((fa "deFieldOwnerIdents" (EApp (EApp (EApp (EVar "omInsert") (EVar "fn")) (EVar "next")) (EFieldAccess (EVar "env") "deFieldOwnerIdents")))))))))
-(DTypeSig false "addAliasDecl" (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Ty") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyFun (TyCon "DataEnv") (TyCon "DataEnv")))))))))
-(DFunDef false "addAliasDecl" ((PVar "name") (PVar "o") (PVar "params") (PVar "rhs") (PVar "ord") (PVar "pub") (PVar "env")) (EBlock (DoLet false false (PVar "key") (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "name"))) (DoLet false false (PVar "ad") (ERecordCreate "AliasDecl" ((fa "adKey" (EVar "key")) (fa "adName" (EVar "name")) (fa "adParams" (EVar "params")) (fa "adRhs" (EVar "rhs")) (fa "adOrd" (EVar "ord")) (fa "adPub" (EVar "pub"))))) (DoExpr (EVariantUpdate "DataEnv" (EVar "env") ((fa "deAliases" (EBinOp "::" (ETuple (EVar "key") (EVar "ad")) (EFieldAccess (EVar "env") "deAliases"))))))))
+(DTypeSig false "addAliasDecl" (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Ty") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyCon "DataEnv") (TyCon "DataEnv"))))))))))
+(DFunDef false "addAliasDecl" ((PVar "name") (PVar "o") (PVar "params") (PVar "rhs") (PVar "ord") (PVar "pub") (PVar "att") (PVar "env")) (EBlock (DoLet false false (PVar "key") (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "name"))) (DoLet false false (PVar "ad") (ERecordCreate "AliasDecl" ((fa "adKey" (EVar "key")) (fa "adName" (EVar "name")) (fa "adParams" (EVar "params")) (fa "adRhs" (EVar "rhs")) (fa "adOrd" (EVar "ord")) (fa "adPub" (EVar "pub")) (fa "adAttrib" (EVar "att"))))) (DoExpr (EVariantUpdate "DataEnv" (EVar "env") ((fa "deAliases" (EBinOp "::" (ETuple (EVar "key") (EVar "ad")) (EFieldAccess (EVar "env") "deAliases"))))))))
 (DTypeSig false "aliasUniverseAt" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyCon "AliasDecl"))) (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty")))))))
 (DFunDef false "aliasUniverseAt" (PWild (PList)) (EListLit))
-(DFunDef false "aliasUniverseAt" ((PVar "cur") (PCons (PTuple (PVar "key") (PVar "ad")) (PVar "rest"))) (EIf (EBinOp "&&" (EFieldAccess (EVar "ad") "adPub") (EBinOp "<" (EFieldAccess (EVar "ad") "adOrd") (EVar "cur"))) (EBinOp "::" (ETuple (EVar "key") (ETuple (EFieldAccess (EVar "ad") "adParams") (EFieldAccess (EVar "ad") "adRhs"))) (EApp (EApp (EVar "aliasUniverseAt") (EVar "cur")) (EVar "rest"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "aliasUniverseAt") (EVar "cur")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "aliasUniverseAt" ((PVar "cur") (PCons (PTuple (PVar "key") (PVar "ad")) (PVar "rest"))) (EIf (EApp (EApp (EVar "aliasVisibleTo") (EVar "cur")) (EVar "ad")) (EBinOp "::" (ETuple (EVar "key") (ETuple (EFieldAccess (EVar "ad") "adParams") (EFieldAccess (EVar "ad") "adRhs"))) (EApp (EApp (EVar "aliasUniverseAt") (EVar "cur")) (EVar "rest"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "aliasUniverseAt") (EVar "cur")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "aliasVisibleTo" (TyFun (TyCon "Int") (TyFun (TyCon "AliasDecl") (TyCon "Bool"))))
+(DFunDef false "aliasVisibleTo" ((PVar "cur") (PVar "ad")) (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EApp (EVar "declEnvVisibleTo") (EVar "cur")) (EFieldAccess (EVar "ad") "adOrd")) (EFieldAccess (EVar "ad") "adPub")) (EBinOp "!=" (EFieldAccess (EVar "ad") "adOrd") (EVar "cur"))) (EApp (EVar "not") (EFieldAccess (EVar "ad") "adAttrib"))))
 (DTypeSig false "aliasFixturePubCore" (TyCon "Decl"))
 (DFunDef false "aliasFixturePubCore" () (ERecordCreate "DTypeAlias" ((fa "tyAliasPub" (EVar "True")) (fa "tyAliasName" (ELit (LString "PubCore"))) (fa "tyAliasParams" (EListLit)) (fa "tyAliasRhs" (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))) (fa "tyAliasOrigin" (EApp (EVar "OriginModule") (ELit (LString "core")))))))
 (DTypeSig false "aliasFixturePrivCore" (TyCon "Decl"))

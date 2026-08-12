@@ -3,7 +3,7 @@ activeDictPredOf : String -> Mono -> String -> Option String
 activeDictVarForEncl : Mono -> String -> Option String
 activeDictVarOf : Mono -> Option String
 activeDictVarOfEncl : Mono -> String -> Option String
-addAliasDecl : String -> TyConOrigin -> List String -> Ty -> Int -> Bool -> DataEnv -> DataEnv
+addAliasDecl : String -> TyConOrigin -> List String -> Ty -> Int -> Bool -> Bool -> DataEnv -> DataEnv
 addCtor : TcEnv -> String -> Scheme -> TcEnv
 addCtorIdentCand : TcEnv -> String -> TyConOrigin -> String -> (Map String (List (Ident, String, Scheme)), List String) -> (Map String (List (Ident, String, Scheme)), List String)
 addCtorIdentRaw : String -> TyConOrigin -> String -> ConPayload -> DataEnv -> DataEnv
@@ -39,6 +39,7 @@ aliasNamesAt : Int -> List String
 aliasSchemeEntry : String -> String -> (String, Scheme) -> (String, Scheme)
 aliasSchemes : String -> String -> List (String, Scheme) -> List (String, Scheme)
 aliasUniverseAt : Int -> List (TabKey, AliasDecl) -> List (TabKey, (List String, Ty))
+aliasVisibleTo : Int -> AliasDecl -> Bool
 alignedMethodConstraintIds : String -> List (Int, Mono) -> Option (List Int)
 allArrowEffs : Mono -> List EffRow
 allConcreteHeads : List Mono -> Bool
@@ -430,7 +431,7 @@ currentLocalSchemes : Unit -> List (String, Scheme)
 currentMethodMismatch : Ref (Option String)
 currentSeedSchemes : Unit -> List (String, Scheme)
 cyclicSuperIfaceMsg : List String -> String
-dataEnvAttribGo : Int -> Decl -> DataEnv -> DataEnv
+dataEnvAddDecl : Int -> Bool -> Decl -> DataEnv -> DataEnv
 dataEnvFromDeclsGo : Int -> List Decl -> DataEnv -> DataEnv
 dataEnvFromRowsGo : List DeclEnvModule -> DataEnv -> DataEnv
 deAliasMethodImports : List (String, List String) -> Decl -> List Decl
