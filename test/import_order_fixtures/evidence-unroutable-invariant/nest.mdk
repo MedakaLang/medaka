@@ -1,0 +1,5 @@
+-- The generalizing module. It cannot name `wrapimpl`, and `wrapimpl` DEPENDS ON IT,
+-- so no import order anywhere can put `wrapimpl` ahead of this module.
+import iface.{Tag, tagOf, Wrap}
+
+export nest x = tagOf (Wrap x)

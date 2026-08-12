@@ -1,5 +1,60 @@
 # Next-orchestrator handoff — Medaka (2026-07-17)
 
+---
+
+## ✅ RESOLVED 2026-08-13 — the Stage A sprint's known-red set is EMPTY. Nothing below is still red.
+
+The goldens were re-cut once from the final binary in a terminal commit (`46c551c0`).
+**Verified after the re-cut:** `diff_compiler_selfproc` **16 ok / 0 failing** (was 15/1);
+`diff_compiler_snapshot_frontend` **201/201 compared and matching** (was 200/1).
+`must_fail` is **98 REPRO / 1 DRAINED** — the one drain is `1438-*`, witnessed RED before its
+fix and drained after; **#1438 is deliberately still OPEN** (only its coherence reach drained).
+
+⚠️ **One pre-existing red is NOT ours and is NOT resolved**: `check_cli_modules`'
+`1112-A34/later-invisible` leg, which fails by **ACCEPTING** — so no diff that only adds a
+reject can have caused it. Do not attribute it to this work.
+
+The section below is kept as the record of what was deliberately deferred and why. **It is
+history, not a live warning.**
+
+<details><summary>Original known-red declaration (historical)</summary>
+
+## 🟥 KNOWN-RED FOR THE DURATION — Stage A sprint, opened 2026-08-12
+
+**Branch `arch/stage-a-sprint`, worktree `.claude/worktrees/wiggly-giggling-nygaard`, BASE
+`7aae8b83`.** Contract: `.claude/STAGE-A-SPRINT.md`. Ledgers: `.claude/sprint/DECISIONS.md`,
+`.claude/sprint/DEBT.md`.
+
+This run **deliberately defers verification** to a testing round that happens after
+implementation. The following are **red BY DESIGN** on this branch and are **not your break**:
+
+| Expected red | Why |
+|---|---|
+| `diff_compiler_snapshot_*` | Compiler sources are in the snapshot corpus; every source bite moves its own golden. **Zero goldens are blessed for the entire run** (§5) — they are re-cut ONCE, from the final binary, in the testing round. |
+| `test/selfproc_goldens/legA/*` (`diff_compiler_selfproc.sh`) | Same cause: added/renamed/re-typed top-level bindings move the LEG A scheme goldens. Deferred with the snapshots. |
+| `diff_compiler_must_fail.sh` | #1276 and #1351 are being **drained but not closed** (§1 issue-closure policy). Their pins flipping red is *the deliverable* — it is the testing round's attack list — not a break. |
+| Differential / engines / capability-matrix / doc gates | Not run mid-sprint at all. |
+| `test/must_fail_fixtures/1597-unimported-record-votes-in-field-owners/` — **NOT red; listed so it is not misread** | Unit F bite F-0. Pins #1597 (field-owner false reject on a module that imports nothing). #1597 is **deferred out of the sprint** (RUN-027/RUN-029), so nothing here fixes it and this row must read **REPRO** for the whole run — the *inverse* of the two rows above it. If it flips to DRAINED, someone changed the field-owner seed; that is a finding, not a deliverable. ⚠️ Its `diag-code:` range is line-sensitive to `bmod.mdk`'s comment header — a comment-only edit there moves the pin. |
+| `diff_compiler_check_modules.sh` / `check_cli_modules.sh` — **UNMOVED, and that is the point** | Unit F bite F-3 (`DAttrib` arm on `declEnvDeclFieldOwners`) was **NOT landed**: it is unreachable dead code as scoped, so #1586 is **not drained** and `attributed_record_no_field_vote/oracle.tcmod` does **not** move. See `DEBT.md` F-3. Anyone expecting these two gates to go red from Unit F should not. |
+
+**The ONLY signal this run takes mid-flight** is, per unit:
+`make -C <trunk> medaka && make -C <trunk> check-self`, plus a backgrounded
+`sh test/preflight.sh` + `sh test/selfcompile_fixpoint.sh` at each integration checkpoint.
+A tree that does not self-typecheck is a real break — everything above is not.
+
+🚨 **Do not bless a golden on this branch.** Mid-run blessing enshrines an intermediate state and
+produces N conflicting re-cuts of one file, which three-way-merge with no conflict marker and no
+red gate. Goldens are re-cut once, from the final binary, never merged, never hand-resolved.
+
+**Commit with `PRECOMMIT_SNAPSHOT_DEFER=1 git commit …`** — *not* `--no-verify`, which would
+also drop fmt, lint, and lextok, all of which stay live for the duration.
+
+*(Delete this section when the sprint's testing round completes.)*
+
+</details>
+
+---
+
 ## 🗂️ TRIAGE + SELF-DRAIN SESSION — 2026-07-16/17. The tracker was re-triaged end to end, the 0.1.0 floor was re-derived, and the tracker now **drains itself**.
 
 ### 🚦 The four things that change what you do today

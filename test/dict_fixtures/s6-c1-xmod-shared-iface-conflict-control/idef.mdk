@@ -1,0 +1,4 @@
+-- CONTROL corpus: the interface is declared ONCE here and IMPORTED by both impl
+-- modules, so `amod`'s and `zmod`'s `impl Same Int` name the SAME class.
+export interface Same a where
+  foo : a -> Int

@@ -333,7 +333,7 @@ lack. (SHADOW §6 is a *residuals bug list*, not governing semantics — do not 
 | Per-module fold | `foldModules` | 10 / 201 / **0** | — |
 | Multi-module check drivers | `checkModules`, `checkModuleFullImpl`, `checkProgramSeededSplit` + the `check*` tails | ~590 lines | — |
 | Typed elaboration | `elaborateModules` → `elabHarvestWorker` → `elabWorker` → `elabModuleStamp`; `elaborateDict` | 53 / 892 / 30 | DICT §4, §8 |
-| Cross-module universe marshalling | `loadDataUniverse` (14 cells), `storeDataUniverse` (14), `appendUniverseAccums` (11) | 3 fns | DICT §6 C4, §8 I2 |
+| Cross-module universe marshalling | `loadDataUniverse`, `storeDataUniverse`, `appendUniverseAccums` — ⚠️ **derive the cell counts from the three bodies, never from this table**: it said `14`/`14`/`11`, and #1512 slices 1–3 plus #1557 A-3.5c retired cells out of the first two inside four days | 3 fns | DICT §6 C4, §8 I2 |
 | Import seeding / aliasing / ctor overlay | `importFormSchemes`, `aliasSchemes`, `aliasConstraintEntries` | ~370 lines | DICT §8 I2 |
 
 ### Layer 8 — Diagnostics and error-path analysis

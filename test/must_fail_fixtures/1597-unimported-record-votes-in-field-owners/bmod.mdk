@@ -1,0 +1,16 @@
+-- THE MODULE THAT IMPORTS NOTHING -- and the CONTROL, unchanged, as itself.
+--
+-- 🚨 `readTag` MUST STAY UNSIGNATURED.  With `readTag : Wye -> Int` the annotation
+-- pins the receiver, `resolveFieldRecord` takes its known-head arm, and the field
+-- OWNERS path -- the only thing this fixture tests -- is never consulted: the
+-- program then checks at exit 0 whether or not the bug is present.  MEASURED before
+-- #1597 was filed: the signatured form was the first attempt and it FAILED to
+-- reproduce.  A probe "clarified" with a type signature stops testing the bug,
+-- silently.
+--
+-- 🚨 DO NOT ADD A `main` HERE.  A use of `readTag` draws a second, downstream
+-- `T-AMBIGUOUS-INSTANCE` on `Display`, and `diag-code:` asserts the WHOLE ordered
+-- list -- so an unrelated change to instance resolution would drain this row.
+public export data Wye = Wye { tag : Int }
+
+readTag w = w.tag

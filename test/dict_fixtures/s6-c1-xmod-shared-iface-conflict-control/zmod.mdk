@@ -1,0 +1,8 @@
+-- Second impl of the SAME class at the SAME head `Int` -- a genuine C1 violation
+-- split across two modules, which only the whole-graph coherence sweep can see.
+import idef.{Same, foo}
+
+export impl Same Int where
+  foo x = x + 7
+
+export useZ = foo 2

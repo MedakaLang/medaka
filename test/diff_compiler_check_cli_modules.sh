@@ -1716,6 +1716,24 @@ fi
 #     in either, so an import-SCOPE explanation is excluded and the deciding
 #     variable is the ordinal.  (Same construction as #1112's A/A2 measurement.)
 #
+# ✅ A-3.6 LANDED (2026-08-13) AND FLIPPED THIS LEG, EXACTLY AS LICENSED BELOW.
+#     `later-invisible` is now `later-visible`: both arms accept, both run `5`, and
+#     the leg asserts they AGREE.  That agreement is I5's own rule — import scoping
+#     filters NAMES, never instances — so the arms disagreeing WAS the defect.
+#     ⚠️ The precondition the note below attaches was CHECKED, not assumed.  There is
+#     exactly ONE `interface Sizer` here (declared in `zsizer`, imported by both
+#     modules), so no same-spelled collision exists and this accept cannot be
+#     #1438's silent accept.  And it is a REAL accept, not a candidacy-only one:
+#     `check`, `run` AND the built binary were each measured at `5` before this leg
+#     was rewritten.  `impl Sizer Int` carries no `requires`, so no dictionary needs
+#     routing and the direct channel answers.  A CONDITIONAL impl in the same
+#     position still rejects, loudly, with `T-REQUIRES-UNROUTED` — see
+#     `must_fail_fixtures/1564-*`.
+#     📌 This gate's own instruction is what made the flip checkable rather than a
+#     judgement call, so the historical note is kept verbatim below.  It also caught
+#     a real error: this red was twice reported as "pre-existing, not ours" before
+#     anyone read these lines.  It is ours, and it is correct.
+#
 # 🚨 READ BEFORE "FIXING" THE `later-invisible` LEG.  It pins a TRANSITIONAL
 #     answer, not a correct one.  `DICT-SEMANTICS.md` §8 I5 says instance candidacy
 #     is GRAPH-GLOBAL — import scoping filters NAMES, never instances — so the
@@ -1778,15 +1796,24 @@ else
 fi
 ord_l_out="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check "$TMP/ord_later.mdk" 2>&1)"
 ord_l_code=$?
-case "$ord_l_out" in
-  *midmod.mdk:*:*"No impl of Sizer for Int"*)
-    if [ "$ord_l_code" -eq 1 ]; then
-      pass=$((pass+1)); printf 'ok   1112-A34/later-invisible (ordinal filter still ON; see the issue-1564 note above)\n'
-    else
-      fail=$((fail+1)); printf 'FAIL 1112-A34/later-invisible (right diagnostic, wrong exit %d)\n' "$ord_l_code"
-    fi ;;
-  *) fail=$((fail+1)); printf 'FAIL 1112-A34/later-invisible (ordinal too large — a topologically LATER impl became a candidate, exit %d: [%s])\n' "$ord_l_code" "$ord_l_out" ;;
-esac
+if [ "$ord_l_code" -eq 0 ]; then
+  pass=$((pass+1)); printf 'ok   1112-A34/later-visible (A-3.6: candidacy is graph-global, the ordinal no longer decides)\n'
+else
+  fail=$((fail+1)); printf 'FAIL 1112-A34/later-visible (a topologically LATER impl was filtered out — A-3.6 regressed, exit %d: [%s])\n' "$ord_l_code" "$ord_l_out"
+fi
+# An exit-0 assertion ALONE would not be enough here, and that is the whole lesson
+# of the repair round: A-3.6 widened CANDIDACY, and where the evidence channel does
+# not follow, a program accepts and then SEGFAULTS (SA-1, found one type signature
+# away from a fix that had been verified against its own repro).  So grade the
+# VALUE, on the engine, and require the two import orders to AGREE — agreement is
+# the property I5 actually asserts, and it is what an exit code cannot see.
+ord_l_run="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" run "$TMP/ord_later.mdk" 2>&1)"
+ord_l_run_code=$?
+if [ "$ord_l_run_code" -eq 0 ] && [ "$ord_l_run" = "5" ] && [ "$ord_l_run" = "$ord_e_run" ]; then
+  pass=$((pass+1)); printf 'ok   1112-A34/later-visible-run (5, and BOTH import orders agree)\n'
+else
+  fail=$((fail+1)); printf 'FAIL 1112-A34/later-visible-run (exit %d, got [%s], want 5 and equal to the earlier arm [%s])\n' "$ord_l_run_code" "$ord_l_run" "$ord_e_run"
+fi
 
 # 9. #1512 (ARCH A-3.2b residual, slice 1/3): THE CROSS-MODULE TYPE-ALIAS TABLE IS
 #    STAGE K.  `crossRun.universeAliasTable` — the per-module-grown accumulator
@@ -1874,6 +1901,439 @@ if [ "$cyc_code" -eq 1 ] && [ "$cyc_lib" -ge 1 ] && [ "$cyc_ent" -ge 1 ]; then
 else
   fail=$((fail+1)); printf 'FAIL 1512-A32b/alias-cycle-importer (exit %d, definer hits=%s importer hits=%s: [%s])\n' "$cyc_code" "$cyc_lib" "$cyc_ent" "$cyc_out"
 fi
+
+# ── Stage A "Door 4b": a GROUND unrouted-evidence goal is a LOUD reject ──────
+#
+# 🚨 THIS LEG EXISTS BECAUSE THE MUST-FAIL PIN FOR IT CANNOT BE WRITTEN.  The defect
+# it guards is #1564's segfault ONE TYPE SIGNATURE AWAY from #1564's own fixture:
+# with `export nest : Int -> String` the goal `Tag (Wrap Int)` is GROUND, never
+# becomes a residual predicate, and so never reaches Door 4's guard
+# (`unroutedResidual`, whose single call site is `residualPredsOf`'s `None` arm).
+# MEASURED at `0b953165`: `check` exit 0, `build` exit 0, and the built binary exit
+# **139**.  A `must_fail_fixtures/` row could not carry it once fixed — its
+# `build-run` verb needs a binary, and after the fix `medaka build` correctly refuses
+# (that verb returns 126 MALFORMED, never a gradeable observation), while re-using
+# `issue: 1564` would trip that suite's one-fixture-per-issue check.  So the
+# regression assertion lives here, where ACCEPTANCE and the BUILT BINARY are both
+# observable in one gate.
+#
+# ⚠️ THE THIRD LEG IS THE LOAD-BEARING ONE.  Legs 1-2 only say "still rejects", which
+# a too-broad reject also satisfies; leg 3 is the NARROWING guard — the control order
+# must still build AND its binary must still print `wrap(int)`.  A guard that ate the
+# control would be the false-reject direction RUN-047 names as this unit's inverted
+# risk.
+mkdir -p "$TMP/d4b"
+cat > "$TMP/d4b/iface.mdk" <<'EOF'
+public export data Wrap a = Wrap a
+
+export interface Tag t where
+  tagOf : t -> String
+
+export impl Tag Int where
+  tagOf _ = "int"
+EOF
+cat > "$TMP/d4b/wrapimpl.mdk" <<'EOF'
+import iface.{Tag, tagOf, Wrap}
+
+export impl Tag (Wrap a) requires Tag a where
+  tagOf (Wrap x) = "wrap(\{tagOf x})"
+EOF
+# The ONLY delta vs #1564's nest.mdk: a declared signature, which grounds the goal.
+cat > "$TMP/d4b/nest.mdk" <<'EOF'
+import iface.{Tag, tagOf, Wrap}
+
+export nest : Int -> String
+nest x = tagOf (Wrap x)
+EOF
+cat > "$TMP/d4b/main.mdk" <<'EOF'
+import iface.{Tag, tagOf, Wrap}
+import nest.{nest}
+import wrapimpl
+
+main = println (nest 5)
+EOF
+cat > "$TMP/d4b/control.mdk" <<'EOF'
+import iface.{Tag, tagOf, Wrap}
+import wrapimpl
+import nest.{nest}
+
+main = println (nest 5)
+EOF
+d4b_out="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check --json "$TMP/d4b/main.mdk" 2>&1)"
+d4b_code=$?
+d4b_hits="$(printf '%s\n' "$d4b_out" | grep -c 'T-REQUIRES-UNROUTED')"
+if [ "$d4b_code" -eq 1 ] && [ "$d4b_hits" -ge 1 ]; then
+  pass=$((pass+1)); printf 'ok   D4b/ground-goal-unrouted-rejects (T-REQUIRES-UNROUTED, exit 1)\n'
+else
+  fail=$((fail+1)); printf 'FAIL D4b/ground-goal-unrouted-rejects (exit %d, code hits=%s: [%s])\n' "$d4b_code" "$d4b_hits" "$d4b_out"
+fi
+# The build arm, separately: `check` and `build` must agree.  A `check` reject with a
+# `build` accept is the split that produced the 139 in the first place.  Its exit code
+# is read from a variable, never through a pipe.
+MEDAKA_ROOT="$ROOT" bound "$MEDAKA" build "$TMP/d4b/main.mdk" -o "$TMP/d4b.bin" >"$TMP/d4b.buildlog" 2>&1
+d4b_bcode=$?
+if [ "$d4b_bcode" -ne 0 ] && [ ! -x "$TMP/d4b.bin" ]; then
+  pass=$((pass+1)); printf 'ok   D4b/ground-goal-unrouted-build-agrees (build refuses, no binary)\n'
+else
+  fail=$((fail+1)); printf 'FAIL D4b/ground-goal-unrouted-build-agrees (build exit %d, binary present=%s — the 139 shape is back)\n' "$d4b_bcode" "$([ -x "$TMP/d4b.bin" ] && echo yes || echo no)"
+fi
+d4b_cchk="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check "$TMP/d4b/control.mdk" 2>&1)"
+d4b_ccode=$?
+if MEDAKA_ROOT="$ROOT" bound "$MEDAKA" build "$TMP/d4b/control.mdk" -o "$TMP/d4bc.bin" >/dev/null 2>&1 && [ -x "$TMP/d4bc.bin" ]; then
+  d4b_cbld="$("$TMP/d4bc.bin" 2>/dev/null | head -1)"
+else
+  d4b_cbld="!!BUILD-FAILED"
+fi
+if [ "$d4b_ccode" -eq 0 ] && [ "$d4b_cbld" = "wrap(int)" ]; then
+  pass=$((pass+1)); printf 'ok   D4b/ground-goal-control-still-compiles (binary prints wrap(int))\n'
+else
+  fail=$((fail+1)); printf 'FAIL D4b/ground-goal-control-still-compiles (check exit %d, binary [%s], want wrap(int): [%s])\n' "$d4b_ccode" "$d4b_cbld" "$d4b_cchk"
+fi
+# The OTHER narrowing direction, and the one that decides how broad the new guard is:
+# a matching impl in the SAME unimported later module but with NO `requires` needs no
+# dictionary at all (R5 measured `define i64 @mdk_nest__nest(i64 %arg0)`, arity 1), so
+# it must still compile and RUN.  `unroutedGroundReqs` is deliberately narrower than
+# Door 4's own guard for exactly this program.
+mkdir -p "$TMP/d4c"
+cp "$TMP/d4b/iface.mdk" "$TMP/d4c/iface.mdk"
+cp "$TMP/d4b/nest.mdk"  "$TMP/d4c/nest.mdk"
+cp "$TMP/d4b/main.mdk"  "$TMP/d4c/main.mdk"
+cat > "$TMP/d4c/wrapimpl.mdk" <<'EOF'
+import iface.{Tag, tagOf, Wrap}
+
+export impl Tag (Wrap Int) where
+  tagOf _ = "wrap-noreq"
+EOF
+d4c_chk="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check "$TMP/d4c/main.mdk" 2>&1)"
+d4c_code=$?
+d4c_run="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" run "$TMP/d4c/main.mdk" 2>&1)"
+d4c_rcode=$?
+if [ "$d4c_code" -eq 0 ] && [ "$d4c_rcode" -eq 0 ] && [ "$d4c_run" = "wrap-noreq" ]; then
+  pass=$((pass+1)); printf 'ok   D4b/no-requires-impl-still-accepted (nothing to route, nothing rejected)\n'
+else
+  fail=$((fail+1)); printf 'FAIL D4b/no-requires-impl-still-accepted (check %d, run %d [%s]) — the guard is too broad\n' "$d4c_code" "$d4c_rcode" "$d4c_run"
+fi
+
+# 23. SA-3 (sprint repair round, owner ruling RUN-055) — THE SUPERINTERFACE-EXISTENCE
+#     CHECK IS GRAPH-GLOBAL, LIKE CANDIDACY.  A-3.6 made instance candidacy
+#     graph-global on the INSTANCE axis alone; `checkSuperImpls` kept scanning `IE`'s
+#     rows at the reading module's ORDINAL, so the two channels disagreed inside one
+#     program: an `impl Sup W` in a topologically LATER module was a dispatch
+#     candidate AND was reported missing by the check beside it.  Ruled: widen the
+#     check (`ieRowsVisibleAt` → `ieCandidacyVisibleAt`).
+#
+#     🚨 THIS IS AN ACCEPTANCE WIDENING, so leg (a) is a COULD-NOT-PASS-BEFORE
+#     program — rejected at exit 1 by the binary at 06d13c3a, exit 0 and printing 42
+#     after.  Every pre-existing fixture covered the rejecting case, so nothing else
+#     in this tree can fail if the widening is wrong in the accepting direction.
+#     Legs (b)-(d) are the must-not-move half: the check must still be ABLE to fail,
+#     on BOTH driver arms, or the widening deleted it rather than fixing it.
+#
+#       (a) later-super-accepted   — the widening itself (Module arm).
+#       (b) super-absent-rejects   — Module arm, the super exists NOWHERE in the
+#           graph: `T-MISSING-SUPER-IMPL` must still fire.
+#       (c) flat-super-absent      — the FLAT arm, which reaches this check through
+#           `flatImplEnvOf` at ordinal 0 with `cur = 0`.  There "visible at" and
+#           "candidacy" already coincided, so the widening is a NO-OP on Flat by
+#           construction; this leg is what makes that claim falsifiable rather than
+#           argued, and it is the arm where an accidental widening would turn a live
+#           rejection into a silent accept.
+#       (d) same-spelled-super     — 🎯 THE NEAREST MISS.  Identical to (a) except
+#           that the later module's `impl Sup W` implements a DIFFERENT `Sup`, from
+#           an unrelated module, that merely shares the spelling.  It must STILL
+#           reject: `implRowMatchesSuper` decides on the IDENTITY key
+#           (`ifaceTabKey ir.irOrigin ir.irName`), and the bare-spelling leg exists
+#           only in `IE`'s buckets, which this query never reads.  If (d) ever goes
+#           green the widening leaked onto the spelling axis and rebuilt #1438 here.
+mkdir -p "$TMP/sa3"
+cat > "$TMP/sa3/iface.mdk" <<'EOF'
+export interface Sup a where
+  sf : a -> Int
+
+export interface Sub a requires Sup a where
+  ufn : a -> Int
+
+public export data W = W
+EOF
+cat > "$TMP/sa3/subimpl.mdk" <<'EOF'
+import iface.{Sup, sf, Sub, ufn, W}
+
+export impl Sub W where
+  ufn x = sf x + 35
+EOF
+cat > "$TMP/sa3/supimpl.mdk" <<'EOF'
+import iface.{Sup, sf, W}
+
+export impl Sup W where
+  sf _ = 7
+EOF
+# `subimpl` first ⇒ loader order iface, subimpl, supimpl, main ⇒ the super impl sits
+# at a HIGHER ordinal than the `impl Sub W` that needs it.  That is the whole variable.
+cat > "$TMP/sa3/main.mdk" <<'EOF'
+import iface.{W, ufn}
+import subimpl
+import supimpl
+
+main = println (ufn W)
+EOF
+sa3_chk="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check "$TMP/sa3/main.mdk" 2>&1)"
+sa3_code=$?
+sa3_run="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" run "$TMP/sa3/main.mdk" 2>&1)"
+sa3_rcode=$?
+if [ "$sa3_code" -eq 0 ] && [ "$sa3_rcode" -eq 0 ] && [ "$sa3_run" = "42" ]; then
+  pass=$((pass+1)); printf 'ok   SA-3/later-super-accepted (existence is graph-global; runs, prints 42)\n'
+else
+  fail=$((fail+1)); printf 'FAIL SA-3/later-super-accepted (check %d [%s], run %d [%s], want exit 0 / 42)\n' "$sa3_code" "$sa3_chk" "$sa3_rcode" "$sa3_run"
+fi
+
+# (b) the same graph with `supimpl` deleted: the super is in NO module.
+mkdir -p "$TMP/sa3b"
+cp "$TMP/sa3/iface.mdk"   "$TMP/sa3b/iface.mdk"
+cp "$TMP/sa3/subimpl.mdk" "$TMP/sa3b/subimpl.mdk"
+cat > "$TMP/sa3b/main.mdk" <<'EOF'
+import iface.{W, ufn}
+import subimpl
+
+main = println (ufn W)
+EOF
+sa3b_out="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check "$TMP/sa3b/main.mdk" 2>&1)"
+sa3b_code=$?
+case "$sa3b_out" in
+  *"requires a superinterface 'impl Sup W', which is missing"*)
+    if [ "$sa3b_code" -eq 1 ]; then
+      pass=$((pass+1)); printf 'ok   SA-3/super-absent-rejects (the check can still fail — Module arm)\n'
+    else
+      fail=$((fail+1)); printf 'FAIL SA-3/super-absent-rejects (right diagnostic, wrong exit %d)\n' "$sa3b_code"
+    fi ;;
+  *) fail=$((fail+1)); printf 'FAIL SA-3/super-absent-rejects (T-MISSING-SUPER-IMPL gone — the widening DELETED the check, exit %d: [%s])\n' "$sa3b_code" "$sa3b_out" ;;
+esac
+
+# (c) FLAT arm: one file, no imports, super missing.
+cat > "$TMP/sa3flat.mdk" <<'EOF'
+interface Sup a where
+  sf : a -> Int
+
+interface Sub a requires Sup a where
+  ufn : a -> Int
+
+data W = W
+
+impl Sub W where
+  ufn x = sf x + 35
+
+main = println 1
+EOF
+sa3f_out="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check "$TMP/sa3flat.mdk" 2>&1)"
+sa3f_code=$?
+case "$sa3f_out" in
+  *"requires a superinterface 'impl Sup W', which is missing"*)
+    if [ "$sa3f_code" -eq 1 ]; then
+      pass=$((pass+1)); printf 'ok   SA-3/flat-super-absent (the check can still fail — Flat arm)\n'
+    else
+      fail=$((fail+1)); printf 'FAIL SA-3/flat-super-absent (right diagnostic, wrong exit %d)\n' "$sa3f_code"
+    fi ;;
+  *) fail=$((fail+1)); printf 'FAIL SA-3/flat-super-absent (live rejection became a silent accept on Flat, exit %d: [%s])\n' "$sa3f_code" "$sa3f_out" ;;
+esac
+
+# (d) the nearest miss: a same-spelled `Sup` from an unrelated module.
+mkdir -p "$TMP/sa3d"
+cp "$TMP/sa3/iface.mdk"   "$TMP/sa3d/iface.mdk"
+cp "$TMP/sa3/subimpl.mdk" "$TMP/sa3d/subimpl.mdk"
+cat > "$TMP/sa3d/otheriface.mdk" <<'EOF'
+export interface Sup a where
+  osf : a -> Int
+EOF
+cat > "$TMP/sa3d/supimpl.mdk" <<'EOF'
+import otheriface.{Sup, osf}
+import iface.{W}
+
+export impl Sup W where
+  osf _ = 7
+EOF
+cat > "$TMP/sa3d/main.mdk" <<'EOF'
+import iface.{W, ufn}
+import subimpl
+import supimpl
+
+main = println (ufn W)
+EOF
+sa3d_out="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check "$TMP/sa3d/main.mdk" 2>&1)"
+sa3d_code=$?
+case "$sa3d_out" in
+  *"requires a superinterface 'impl Sup W', which is missing"*)
+    if [ "$sa3d_code" -eq 1 ]; then
+      pass=$((pass+1)); printf 'ok   SA-3/same-spelled-super (identity decides; the spelling does not)\n'
+    else
+      fail=$((fail+1)); printf 'FAIL SA-3/same-spelled-super (right diagnostic, wrong exit %d)\n' "$sa3d_code"
+    fi ;;
+  *) fail=$((fail+1)); printf 'FAIL SA-3/same-spelled-super (a DIFFERENT interface sharing the spelling satisfied the super — #1438 rebuilt, exit %d: [%s])\n' "$sa3d_code" "$sa3d_out" ;;
+esac
+
+# 24. SA-4 (sprint repair round, owner ruling RUN-055) — DOOR 4 ONLY FIRES WHERE A
+#     DICTIONARY WOULD ACTUALLY HAVE TO BE PASSED.  Door 4's guard shipped as
+#     `implMatchesU` alone: bare EXISTENCE, never asking whether the matched impl
+#     carries a `requires`.  So it also rejected the case whose correct answer is `[]`
+#     on BOTH arms — a matching impl with NO `requires` needs no dict at all, and the
+#     message's own claim ("accepting it would build a program that reads a dictionary
+#     that was never passed") is false for it.  Ruled: test `implMatchesWithReqsU`, the
+#     predicate SA-1 already added at the sibling ground site.
+#
+#     🚨 ACCEPTANCE WIDENING, so leg (a) is a COULD-NOT-PASS-BEFORE program.  MEASURED
+#     on the binary at e9f917f2: `check` exit 1 with `T-REQUIRES-UNROUTED` at
+#     `nest.mdk:3:16`.  After: check/run/build exit 0 and the built binary prints
+#     `wrap`.  It RESTORES what BASE did — BASE never reached this code at all — which
+#     is why a base-vs-head comparison is this widening's justification.
+#     The accepted program is CORRECT, not merely accepted: `build --keep-ir` on the
+#     previously-rejecting order emits `define i64 @mdk_nest__nest(i64 %arg0)` and
+#     `define i64 @mdk_impl_Wrap_tagOf(i64 %arg0)` — arity 1 on both sides, no dict
+#     parameter anywhere, so there is nothing to mis-route.  (Re-taken on THIS binary;
+#     R5's original read was on the control order.)
+#
+#       (a) no-requires-residual-accepted — the widening itself.  The DEFERRED goal
+#           (no signature on `nest`), which is the arm `unroutedResidual` owns; the
+#           GROUND arm of the same shape is already covered by D4b/no-requires above.
+#       (b) requires-impl-still-rejects  — the must-not-move half.  Same four modules,
+#           same import order, the impl given back its `requires`: this is #1564's own
+#           program and it must STILL reject.  A widening that cannot fail deleted the
+#           check rather than fixing it.
+#       (c) 🎯 THE NEAREST MISS, and it is a KNOWN RETAINED FALSE REJECT — asserted so
+#           it is recorded rather than discovered.  `implMatchesWithReqsU` is
+#           DISJUNCTIVE: "some impl matching these args carries reqs", not "the impl
+#           that would be SELECTED does".  With BOTH `impl Tag (Wrap a) requires Tag a`
+#           and the more specific `impl Tag (Wrap Int)` in the unimported later module,
+#           a ground `Tag (Wrap Int)` goal still rejects — even though the control
+#           order selects the specific one and prints `wrap-int-specific`, needing no
+#           dictionary.  That is deliberate and it is the LOUD direction: the selector
+#           that would name the winner is the very registry that just failed, so the
+#           guard cannot ask which impl wins without re-introducing the split it is
+#           reporting.  If (c) ever flips to accepting, someone taught the guard to
+#           pick a winner from the starved registry — check what it emits before
+#           calling that a fix.
+mkdir -p "$TMP/sa4"
+cat > "$TMP/sa4/iface.mdk" <<'EOF'
+public export data Wrap a = Wrap a
+
+export interface Tag t where
+  tagOf : t -> String
+
+export impl Tag Int where
+  tagOf _ = "int"
+EOF
+cat > "$TMP/sa4/wrapimpl.mdk" <<'EOF'
+import iface.{Tag, tagOf, Wrap}
+
+export impl Tag (Wrap a) where
+  tagOf _ = "wrap"
+EOF
+cat > "$TMP/sa4/nest.mdk" <<'EOF'
+import iface.{Tag, tagOf, Wrap}
+
+export nest x = tagOf (Wrap x)
+EOF
+# `nest` before `wrapimpl` ⇒ the impl's module sorts LATER than the goal's own.  That
+# is the whole variable; every other file is byte-identical to #1564's fixture.
+cat > "$TMP/sa4/main.mdk" <<'EOF'
+import iface.{Tag, tagOf, Wrap}
+import nest.{nest}
+import wrapimpl
+
+main = println (nest 5)
+EOF
+sa4_chk="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check "$TMP/sa4/main.mdk" 2>&1)"
+sa4_code=$?
+MEDAKA_ROOT="$ROOT" bound "$MEDAKA" build "$TMP/sa4/main.mdk" -o "$TMP/sa4.bin" >"$TMP/sa4.buildlog" 2>&1
+sa4_bcode=$?
+if [ "$sa4_bcode" -eq 0 ] && [ -x "$TMP/sa4.bin" ]; then
+  sa4_exec="$("$TMP/sa4.bin" 2>/dev/null | head -1)"
+else
+  sa4_exec="!!BUILD-FAILED"
+fi
+if [ "$sa4_code" -eq 0 ] && [ "$sa4_exec" = "wrap" ]; then
+  pass=$((pass+1)); printf 'ok   SA-4/no-requires-residual-accepted (no dict to route; binary prints wrap)\n'
+else
+  fail=$((fail+1)); printf 'FAIL SA-4/no-requires-residual-accepted (check %d [%s], build %d, binary [%s], want exit 0 / wrap)\n' "$sa4_code" "$sa4_chk" "$sa4_bcode" "$sa4_exec"
+fi
+
+# (b) the same graph with the `requires` put back — #1564's own program.
+mkdir -p "$TMP/sa4b"
+cp "$TMP/sa4/iface.mdk" "$TMP/sa4/nest.mdk" "$TMP/sa4/main.mdk" "$TMP/sa4b/"
+cat > "$TMP/sa4b/wrapimpl.mdk" <<'EOF'
+import iface.{Tag, tagOf, Wrap}
+
+export impl Tag (Wrap a) requires Tag a where
+  tagOf (Wrap x) = "wrap(\{tagOf x})"
+EOF
+sa4b_out="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check --json "$TMP/sa4b/main.mdk" 2>&1)"
+sa4b_code=$?
+sa4b_hits="$(printf '%s\n' "$sa4b_out" | grep -c 'T-REQUIRES-UNROUTED')"
+if [ "$sa4b_code" -eq 1 ] && [ "$sa4b_hits" -ge 1 ]; then
+  pass=$((pass+1)); printf 'ok   SA-4/requires-impl-still-rejects (the guard can still fire)\n'
+else
+  fail=$((fail+1)); printf 'FAIL SA-4/requires-impl-still-rejects (exit %d, hits=%s — the tightening DELETED Door 4: [%s])\n' "$sa4b_code" "$sa4b_hits" "$sa4b_out"
+fi
+
+# (c) the nearest miss: both impls present, the SELECTED one needs no dict, and the
+#     disjunctive guard rejects anyway.  Asserted as REJECTING, on purpose.
+mkdir -p "$TMP/sa4c"
+cp "$TMP/sa4/iface.mdk" "$TMP/sa4/main.mdk" "$TMP/sa4c/"
+cat > "$TMP/sa4c/nest.mdk" <<'EOF'
+import iface.{Tag, tagOf, Wrap}
+
+export nest : Int -> String
+nest x = tagOf (Wrap x)
+EOF
+cat > "$TMP/sa4c/wrapimpl.mdk" <<'EOF'
+import iface.{Tag, tagOf, Wrap}
+
+export impl Tag (Wrap a) requires Tag a where
+  tagOf (Wrap x) = "wrap(\{tagOf x})"
+
+export impl Tag (Wrap Int) where
+  tagOf _ = "wrap-int-specific"
+EOF
+cat > "$TMP/sa4c/control.mdk" <<'EOF'
+import iface.{Tag, tagOf, Wrap}
+import wrapimpl
+import nest.{nest}
+
+main = println (nest 5)
+EOF
+sa4c_out="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check --json "$TMP/sa4c/main.mdk" 2>&1)"
+sa4c_code=$?
+sa4c_hits="$(printf '%s\n' "$sa4c_out" | grep -c 'T-REQUIRES-UNROUTED')"
+sa4c_run="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" run "$TMP/sa4c/control.mdk" 2>&1)"
+sa4c_rcode=$?
+if [ "$sa4c_code" -eq 1 ] && [ "$sa4c_hits" -ge 1 ] && [ "$sa4c_rcode" -eq 0 ] && [ "$sa4c_run" = "wrap-int-specific" ]; then
+  pass=$((pass+1)); printf 'ok   SA-4/overlap-still-rejects (known retained false reject; the guard is disjunctive)\n'
+else
+  fail=$((fail+1)); printf 'FAIL SA-4/overlap-still-rejects (check %d hits=%s, control run %d [%s], want exit 1 / wrap-int-specific)\n' "$sa4c_code" "$sa4c_hits" "$sa4c_rcode" "$sa4c_run"
+fi
+
+# 25. SA-6 (sprint repair round) — `runFinalChecks`' `-1` ordinal sentinel is LOUD.
+#     `declEnvsOrdOf`'s miss value reaches all four final checks, and at `-1` every one
+#     of them abstains: coherence takes `cohRowsOwnedBy -1` (no rows), cycles/phantom
+#     take `ceRowsVisibleAt -1`/`ceRowsOwnedBy -1`, and super-existence finds no SUPERS
+#     through `ceLookupAt … -1`.  The tail degraded to a SILENT ACCEPT, which is the
+#     loud→silent transition this repo ranks as a severity increase.  It is unreachable
+#     from the three current drivers, so what this leg can assert is the FALSE-POSITIVE
+#     direction — the half that would actually break users.  `ordinalIsSentinel`'s
+#     doctests carry the true half.
+#     🎯 NOT COVERED, stated rather than implied: a driver threading a VALID-but-WRONG
+#     ordinal is undetectable (only the sentinel self-identifies), and
+#     `globalCoherenceConflict` takes no ordinal at all.
+sa6_out="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check "$TMP/sa3/main.mdk" 2>&1)"
+sa6_code=$?
+sa6_flat="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check "$TMP/sa3flat.mdk" 2>&1)"
+case "$sa6_out$sa6_flat" in
+  *T-INTERNAL-ORDINAL*|*"unknown module ordinal"*)
+    fail=$((fail+1)); printf 'FAIL SA-6/sentinel-does-not-fire (the guard fires on a LIVE driver — spurious: [%s][%s])\n' "$sa6_out" "$sa6_flat" ;;
+  *)
+    if [ "$sa6_code" -eq 0 ]; then
+      pass=$((pass+1)); printf 'ok   SA-6/sentinel-does-not-fire (Module and Flat arms both reach a real ordinal)\n'
+    else
+      fail=$((fail+1)); printf 'FAIL SA-6/sentinel-does-not-fire (Module arm stopped checking clean, exit %d: [%s])\n' "$sa6_code" "$sa6_out"
+    fi ;;
+esac
 
 printf '\n%d ok, %d failing\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
