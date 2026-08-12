@@ -3083,13 +3083,33 @@ fieldNameOf (Field fn _) = fn
 -- was factored for, which is what these two lines LEFT.
 --
 -- Keyed by the loader MODULE ID, the same string `buildDeclEnvs` stamped the chain
--- under, so no ordinal arithmetic happens at the read.  A MISS yields the empty
--- seed, which is fail-CLOSED in the same direction as `declEnvsOrdOf`'s `-1`: a
--- reader with an unknown id LOSES cross-module kinds and owners and produces a
--- reject (loud), never a silent accept.  The core pass arrives as `""` — the
--- spelling both drivers pass for it — and `buildDeclEnvs` registers that key
--- explicitly, exactly as `declEnvOrdIndex` does, so ordinal 0's empty seed is a
+-- under, so no ordinal arithmetic happens at the read.  The core pass arrives as
+-- `""` — the spelling both drivers pass for it — and `buildDeclEnvs` registers that
+-- key explicitly, exactly as `declEnvOrdIndex` does, so ordinal 0's empty seed is a
 -- HIT rather than a miss that happens to agree.
+--
+-- 🚨 A MISS YIELDS THE EMPTY SEED, AND THE TWO HALVES THEN FAIL IN OPPOSITE
+-- DIRECTIONS.  Do not read this as one fail-CLOSED story — an earlier version of
+-- this comment did, and it contradicted this same PR's own analysis two functions
+-- up:
+--   * OWNERS — fail-CLOSED, loud.  Zero owners makes `resolveFieldByOwners` take its
+--     `[]` arm, `pushUnknownField`, exit 1.  A reader with an unknown id LOSES
+--     cross-module owners and REJECTS; it cannot silently accept.
+--   * KINDS — fail-SILENT.  A missing param-kind entry makes `fromAstTypeApp` fall
+--     to `appFallback` instead of `foldAppKinds`, so a written row in a `KRow` slot
+--     elaborates as an ordinary TYPE and the effect is erased at exit 0.  That is
+--     #1069, the silent face of #804/#1028, and `opaque_export_row_kind_import`'s
+--     own header calls it out.
+--
+-- ⚠️ THE SILENT DIRECTION IS NEW HERE, and saying so is the point of this note.
+-- Before A-3.2b, `loadDataUniverse` copied the kind universe with NO KEY AT ALL, so
+-- an unknown `mid` could not lose kinds — there was nothing to miss.  This unit
+-- converted a key-free copy into a keyed lookup whose miss is `[]`.  The
+-- REACHABILITY of an unknown `mid` is SUSPECTED-UNPROVEN in both directions
+-- (nobody has constructed one, and the identical `declEnvsOrdOf` → `-1` dependency
+-- already gates #1553's shipped ctor overlay, so the exposure is shared rather than
+-- created here) — but the exposure's SEVERITY on the kind half is not the same as
+-- the owner half's, and a future reader must not infer "loud" from this site.
 declEnvSeedDataUniverse : String -> DeclEnvs -> Unit
 declEnvSeedDataUniverse mid envs =
   let _ = setRef perRun.value.dataParamKindsRef (fromOption [] (omLookup mid envs.deKindsBefore))
@@ -24891,6 +24911,28 @@ storeDataUniverse _ =
 -- of the whole graph (`kindPublicDataDecl`) rather than a second pass here.  The parameter
 -- stays unfiltered because filtering at the CALL SITE is what let the opaque half go
 -- missing for as long as it did, and a future third half would land here again.
+--
+-- 🚨 WHAT `fieldOwnersRef` AND `dataParamKindsRef` CONTAIN WHEN THIS RUNS CHANGED WITH
+-- A-3.2b, AND THE OLD "the working refs are DEAD here" NOTE DOES NOT COVER IT.  That
+-- note is about WHEN (this module's inference is finished; the next module's
+-- `resetState` wipes them) and it still holds.  What changed is WHAT they hold on
+-- ENTRY.  `loadDataUniverse` used to RESET both refs from the cross-run universe as
+-- its first act; it no longer touches either, so they arrive holding the K seed PLUS
+-- everything this module registered during inference — and `registerAllData … pubDecls`
+-- below then registers this module's PUBLIC decls a SECOND time.  `addFieldOwners`
+-- conses without dedupe, so every own public record is DOUBLE-listed in
+-- `fieldOwnersRef` from that line until the next `resetState`.
+--
+-- ⚠️ UNOBSERVABLE TODAY, AND ONLY BECAUSE NOTHING READS IT IN BETWEEN — verified, not
+-- assumed: `insertRecordIdents`/`insertCtorIdents` below read `recordByNameRef` (an
+-- `omInsert` map, idempotent under re-registration), never the owner multimap.  But a
+-- doubled owner key is EXACTLY the shape `declEnvSeedChain`'s own-row 🚨 exists to
+-- prevent: `mangledHeadCandidates` reads this multimap RAW (no `sortUniqS`), so a key
+-- appearing twice turns its `[pair]` singleton gate into the give-up arm and `Some
+-- pair` becomes `None`.  ⇒ DO NOT ADD A READ OF `fieldOwnersRef` AFTER THIS POINT
+-- without either de-duplicating first or restoring a reset.  (`dataParamKindsRef` gets
+-- the same doubling; it is inert there because `lookupTab` is first-match over
+-- identity-bearing keys whose two copies are equal.)
 appendDataUniverse : String -> List Decl -> Unit
 appendDataUniverse mid prog0 =
   let pubDecls = publicDataDecls prog0
