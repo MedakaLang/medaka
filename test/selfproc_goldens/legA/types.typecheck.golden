@@ -752,24 +752,20 @@ idConflictHelp : (String, TyConOrigin, TyConOrigin) -> String
 idsForIfaceSlots : List IfaceRef -> List Int
 idsForIfaceSlotsGo : Int -> List IfaceRef -> List Int
 ieAddRows : List ImplRow -> ImplEnv -> ImplEnv
+ieBuildSnaps : List ImplRow -> List (Int, ImplUniverse)
+ieBuildSnapsEmit : ImplRow -> List ImplRow -> ImplUniverse -> List (Int, ImplUniverse)
+ieBuildSnapsGo : List ImplRow -> ImplUniverse -> List (Int, ImplUniverse)
 ieInsertRow : ImplRow -> ImplEnv -> ImplEnv
 ieInsertRowAt : TabKey -> ImplRow -> ImplEnv -> ImplEnv
 ieInsertRowKeys : List TabKey -> ImplRow -> ImplEnv -> ImplEnv
 ieProbeBareKey : RegKey
 ieProbeEnv : ImplEnv
 ieProbeKey : String -> RegKey
-ieReqDigest : Require -> String
-ieRowDigest : ImplRow -> String
 ieRowInst : ImplRow -> InstRef
 ieRowOrd : ImplRow -> Int
 ieRowTriple : ImplRow -> (IfaceRef, List Ty, List Require)
-ieRowsAtOrd : Int -> List ImplRow -> List ImplRow
 ieSameImplIn : String -> Decl
-ieShadowCompare : String -> List Decl -> Unit
-ieShadowCompareGo : String -> List Decl -> Unit
-ieShadowVerdict : String -> Int -> String -> String -> Unit
-ieTripleDigest : (IfaceRef, List Ty, List Require) -> String
-ieTriplesUpTo : Int -> List ImplRow -> List (IfaceRef, List Ty, List Require)
+ieSnapAt : Int -> List (Int, ImplUniverse) -> ImplUniverse -> ImplUniverse
 ieTyBlob : String -> Ty
 ieUnivConcreteOf : ImplUniverse -> MultiRegistry (List Ty, List Require)
 ieUniverseAt : Int -> ImplEnv -> ImplUniverse

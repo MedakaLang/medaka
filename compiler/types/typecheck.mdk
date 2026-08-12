@@ -3135,11 +3135,20 @@ distinctIdentsIn2 _ = False
 -- substrate, since that pair is exactly the key #1265 is the first-match over.
 -- A method name enters an `IE` row only as PAYLOAD (`ieMethods`).
 --
--- ZERO READERS TODAY, deliberately (PR1 of a two-PR unit): the Module arm's
--- obligation universe still comes from the three `obUniv*` accumulators, and the
--- flip to `ieUniverseAt` is PR2, conditional on the §9.5 equality holding as a
--- MEASUREMENT.  `ieShadowCompare` below is the temporary instrument that measures
--- it.
+-- 🚨 LIVE SINCE A-3.4 PR2 — `IE` IS NOW READ, AND IT DECIDES ACCEPTANCE.  This
+-- block said "ZERO READERS TODAY, deliberately" through PR1; that is no longer
+-- true and the distinction is worth a sentence, because "the registry exists" and
+-- "the registry answers" are the two halves the arc's progress metric separates.
+-- The Module arm's obligation universe — the table `checkCallObligationsU` asks
+-- "does an impl exist for this goal", i.e. the table behind every `No impl of X
+-- for Y` on the multi-module path — is a projection of `IE` at the reader's
+-- ordinal, through the ONE accessor `ieUniverseAt`.  The three `obUniv*`
+-- accumulators that used to answer it are RETIRED (deleted from `CrossRun`, not
+-- left unread), which is this unit's `cross_allowed` shrink.
+--
+-- WHAT IS STILL NOT READ: `ieInst`/`InstRef` and `ieMethods`, both payload for
+-- A-3.7 (coherence) and B-2.  The Flat path is untouched and still builds its own
+-- `buildImplUniverse` over its whole program — that shim retires at E-4, not here.
 
 -- The INSTANCE IDENTITY this tree does not otherwise have.  `cohClassify`'s ledger
 -- records the gap verbatim — `bucketKeyEntriesFrom` restarts its numbering at 0 per
@@ -3206,8 +3215,10 @@ instRefSeq (InstRef _ _ s) = s
 --   runtime error [E-PANIC]: llvm: CFieldAccess: unknown field 'ieOrd'
 -- reproduced in CI on the `wasm` job, which cascaded `gates (backend)` into a
 -- phantom-skipped `diff_compiler_tmc_parity`.  That entry reaches `elaborateDict`
--- (the FLAT path) and therefore `checkBodyImpl` — which contains `ieShadowCompare`,
--- hence the accessor — but it never reaches `buildDeclEnvs`, hence never
+-- (the FLAT path) and therefore `checkBodyImpl` — which contains the `IE` accessor
+-- (`ieShadowCompare` at the time this was measured, `ieUniverseAt` since A-3.4 PR2;
+-- either way `checkBodyImpl` mentions `ImplRow`'s fields and the entry's closure
+-- therefore contains the field ACCESS) — but it never reaches `buildDeclEnvs`, hence never
 -- `implRowsOf`, the only `ImplRow` construction site.  A positional constructor is
 -- destructured by pattern match and consults no label table, so it cannot hit this.
 --
@@ -3247,10 +3258,35 @@ ieRowTriple (ImplRow _ _ ir tys reqs _) = (ir, tys, reqs)
 -- through the SAME `oblIfaceKeys`/`dispHeadTab` calls (see `ieInsertRow`), so `IE`
 -- mints no parallel keying scheme.
 data ImplEnv = ImplEnv {
-    ieRows : List ImplRow,  -- whole-graph, build order; the projection reads this
+    ieRows : List ImplRow,  -- whole-graph, build order; the snapshot fold reads this
     ieConcrete : MultiRegistry ImplRow,
     ieHeadless : MultiRegistry ImplRow,
     ieIfaceTags : Registry SetRegistry,
+    -- 🚨 A-3.4 PR2, AND IT IS A PERFORMANCE INVARIANT, NOT A CACHE.  One entry per
+    -- distinct module ordinal, in ordinal order: `(o, universe of every row with
+    -- ordinal <= o)`.  `ieUniverseAt` SELECTS from this; it does not rebuild.
+    --
+    -- WHY IT EXISTS — MEASURED, and it is the tree's signature mistake caught in its
+    -- own gate.  The first cut of this unit had `ieUniverseAt` fold the whole visible
+    -- prefix on EVERY read, i.e. once per module: O(modules x impls) where the
+    -- accumulator it replaced was O(impls) TOTAL.  That is exactly the
+    -- "rescan the accumulated universe once per module" quadratic #154 PR-C removed
+    -- and `diff_compiler_perf_scaling.sh` promoted the `modules` shape OUT of its
+    -- ledger for — and it put it straight back: net alloc 730 MB -> 2191 MB -> 7345 MB,
+    -- r1=3.00 r2=3.35, ** SUPERLINEAR (ALLOC) ** against a 3.0 ceiling and a
+    -- documented FLAT ~2.0 expectation.
+    --
+    -- The fix costs nothing because the registries are PERSISTENT: a snapshot retains
+    -- structure that is already shared, so this is M pointers, not M copies.  Built by
+    -- ONE left fold over `ieRows` (already in ordinal order), so the whole table is
+    -- O(impls) to construct and a read is a walk of visible ordinals with no
+    -- allocation at all.
+    --
+    -- ⚠️ The values are IDENTICAL to the per-read rebuild, by construction rather than
+    -- by assertion: `ieRows` is in ordinal order, so "every row with ordinal <= cur" is
+    -- a PREFIX of `ieRows`, and inserting a prefix in order through the same
+    -- `growImplUniverse` writer is the same value the filtered rebuild produced.
+    ieUnivSnaps : List (Int, ImplUniverse),
   }
 
 emptyImplEnv : ImplEnv
@@ -3259,13 +3295,16 @@ emptyImplEnv = ImplEnv {
   ieConcrete = mregEmpty,
   ieHeadless = mregEmpty,
   ieIfaceTags = regEmpty,
+  ieUnivSnaps = [],
 }
 
 -- Fold the envelope's modules, in ordinal order, into one whole-graph registry.
 -- The sequence number runs across the WHOLE build (not per module), which is what
 -- makes `InstRef` unique without relying on `(mid, ord)` being injective.
 buildImplEnv : List DeclEnvModule -> ImplEnv
-buildImplEnv mods = buildImplEnvGo mods 0 emptyImplEnv
+buildImplEnv mods =
+  let env = buildImplEnvGo mods 0 emptyImplEnv
+  ImplEnv { env | ieUnivSnaps = ieBuildSnaps env.ieRows }
 
 buildImplEnvGo : List DeclEnvModule -> Int -> ImplEnv -> ImplEnv
 buildImplEnvGo [] _ env = env
@@ -3273,13 +3312,37 @@ buildImplEnvGo (m::rest) seq env =
   let rows = implRowsOf m.demId m.demOrd seq (implDeclFacts m.demDecls)
   buildImplEnvGo rest (seq + listLen rows) (ieAddRows rows env)
 
+-- The per-ordinal prefix universes, in ONE left fold over the ordinal-ordered rows.
+-- See `ieUnivSnaps` for why this is a performance invariant rather than a cache.
+-- Emits one entry per DISTINCT ordinal (a module declaring no impl contributes no
+-- entry, which is why `ieSnapAt` selects the LAST visible entry rather than indexing).
+ieBuildSnaps : List ImplRow -> List (Int, ImplUniverse)
+ieBuildSnaps rows = ieBuildSnapsGo rows emptyImplUniverse
+
+ieBuildSnapsGo : List ImplRow -> ImplUniverse -> List (Int, ImplUniverse)
+ieBuildSnapsGo [] _ = []
+ieBuildSnapsGo (r::rest) univ =
+  ieBuildSnapsEmit r rest (insertUnivImpl univ (ieRowTriple r))
+
+-- Emit a snapshot only when the NEXT row starts a new ordinal (or there is none), so
+-- one module's several impls fold into a single entry.
+ieBuildSnapsEmit : ImplRow -> List ImplRow -> ImplUniverse -> List (Int, ImplUniverse)
+ieBuildSnapsEmit r [] univ = [(ieRowOrd r, univ)]
+ieBuildSnapsEmit r (r2::rest2) univ
+  | ieRowOrd r2 == ieRowOrd r = ieBuildSnapsGo (r2::rest2) univ
+  | otherwise = (ieRowOrd r, univ) :: ieBuildSnapsGo (r2::rest2) univ
+
 -- ⚠️ LOCKSTEP WITH `implDeclsWithReqs` / `implDeclWithReqs`: same `DAttrib` unwrap,
 -- same single-`DImpl` arm, same order.  The two are kept separate rather than one
 -- being defined via the other because `implDeclsWithReqs` runs per module on the
 -- hot Module path and `check` is GC-bound — deriving it from this 4-tuple form
 -- would allocate a method-name list per impl on every compile.  The agreement is
--- not left to the comment: `ieShadowCompare` MEASURES it (a population or order
--- divergence is exactly what it panics on).
+-- not left to the comment: A-3.4 PR1's `ieShadowCompare` measured it per module
+-- slice, and PR2 measured it again at the whole-prefix level over the compiler's
+-- own graph and 193 multi-module fixture projects before flipping the reader.  Both
+-- instruments are now deleted, so the standing defence is the flip itself: a
+-- divergence between these two walks is no longer a silent second table, it is the
+-- obligation universe being wrong, which the differential gates grade directly.
 --
 -- ⚠️ OWED, and it is an inconsistency in the paragraph above rather than a
 -- separate point: the reason given for keeping the two functions apart is "do not
@@ -3310,6 +3373,29 @@ implRowsOf mid ord seq ((iface, tys, reqs, ms)::rest) =
   ImplRow ord (InstRef mid ord seq) iface tys reqs ms ::
     implRowsOf mid ord (seq + 1) rest
 
+-- 🚨 UPDATES `ieRows` AND THE THREE INDEX BUCKETS. DOES **NOT** UPDATE `ieUnivSnaps`.
+-- Read that as the design-law hazard it is, not as a note.
+--
+-- `ieUnivSnaps` is a SECOND REPRESENTATION of `ieRows` — the per-ordinal prefix
+-- universes `ieUniverseAt` selects from — and it is maintained in exactly ONE place,
+-- `buildImplEnv`, AFTER this fold has finished. Inserting into an already-built
+-- `ImplEnv` therefore leaves a snapshot table that silently disagrees with the rows,
+-- and because `ieUniverseAt` reads the SNAPSHOT, the consequence is a wrong
+-- obligation universe with no diagnostic: an impl that exists is invisible to
+-- dispatch, or a retired one still answers. That is a silent-wrongness shape.
+--
+-- ⚠️ It is INERT TODAY only because there is exactly one construction site
+-- (`buildImplEnv`, called once per driver from `buildDeclEnvs`) — derive that before
+-- trusting it: `grep -n 'ieAddRows\|ieInsertRow' compiler/types/typecheck.mdk`.
+--
+-- 🚨 AND IT IS THIS UNIT'S OWN DESIGN LAW, ONE FIELD OVER. A-3.4 PR2 deleted three
+-- `CrossRun` fields precisely to stop two structures answering "what impls exist"
+-- (law L1), and this pair is that same shape at a smaller scale. It is accepted here
+-- because the alternative — folding a snapshot per insert — is the O(modules x impls)
+-- quadratic this unit was reddened by `diff_compiler_perf_scaling.sh` for and fixed.
+-- So: if you need to insert into a built `ImplEnv`, RE-DERIVE the snapshots
+-- (`ieUnivSnaps = ieBuildSnaps env.ieRows`) once at the end of your fold, exactly as
+-- `buildImplEnv` does. Do not add a second maintainer, and do not insert without one.
 ieAddRows : List ImplRow -> ImplEnv -> ImplEnv
 ieAddRows [] env = env
 ieAddRows (r::rest) env = ieAddRows rest (ieInsertRow r env)
@@ -3327,6 +3413,9 @@ ieAddRows (r::rest) env = ieAddRows rest (ieInsertRow r env)
 -- cost.  The fix is one line: cons and `reverseL` once in `buildImplEnv`, which
 -- preserves build order.  Deliberately not done in a review round that is
 -- otherwise comment-only, so that the byte-identical claim keeps its evidence.
+-- 🚨 DOES NOT MAINTAIN `ieUnivSnaps` — the table `ieUniverseAt` actually reads.  Only
+-- `buildImplEnv` derives that, after all inserts are done.  Full hazard, and what to do
+-- if you need to insert into a built `ImplEnv`, at `ieAddRows` above.
 ieInsertRow : ImplRow -> ImplEnv -> ImplEnv
 ieInsertRow (r@(ImplRow _ _ ir _ _ _)) env =
   ieInsertRowKeys (oblIfaceKeys ir) r { env | ieRows = env.ieRows ++ [r] }
@@ -3349,137 +3438,38 @@ ieInsertRowAt ifk (r@(ImplRow _ _ _ tys _ _)) env = match univReceiverTag tys
 -- that one predicate's body and nothing else.  Open-coding `<=` at a read site is
 -- the one thing this unit must not do.
 --
--- The projection re-enters `growImplUniverse` — the SAME writer the accumulator
--- uses — so the two cannot drift in key minting, and the equality reduces to
--- population and order (§9.5's algebra + `DL`), which is what `ieShadowCompare`
--- measures.  NO CALLER TODAY: PR2 is the flip of the Module arm's obligation
--- universe onto this function.
+-- The snapshots this SELECTS from are built by `insertUnivImpl` — the SAME writer
+-- `growImplUniverse` (and so the retired accumulator) uses — so the two cannot drift
+-- in key minting, and the equality reduces to population and order (§9.5's algebra +
+-- `DL`) — which A-3.4 PR1's `ieShadowCompare` measured per module slice, and which
+-- PR2 re-measured at the whole-prefix level, at the read site, before flipping onto
+-- this function.
+--
+-- 🚨 IT SELECTS, IT DOES NOT REBUILD, AND THAT IS A MEASURED REQUIREMENT.  The first
+-- cut folded the visible prefix on every read — once per module — and put back the
+-- exact O(modules x impls) quadratic #154 PR-C removed, reddening
+-- `diff_compiler_perf_scaling.sh`'s `modules` shape at r2=3.35 against a documented
+-- FLAT ~2.0.  See `ieUnivSnaps`.  A future reader "simplifying" this back into a fold
+-- over `ieRows` re-introduces that; the gate will catch it, but the comment is cheaper.
+--
+-- 🚨 THE PRODUCTION CALLERS (A-3.4 PR2) ARE `checkBodyImpl`'s Module arm — the
+-- end-of-body obligation universe and #1549's `residualUnivRef`, which share ONE
+-- binding (`moduleImplUniv`). Everything an obligation check on the multi-module path
+-- knows about which impls exist comes through here. Add a caller only if it genuinely
+-- needs the same ordinal-filtered answer — and never open-code the filter to get it.
 ieUniverseAt : Int -> ImplEnv -> ImplUniverse
-ieUniverseAt cur env =
-  growImplUniverse (ieTriplesUpTo cur env.ieRows) emptyImplUniverse
+ieUniverseAt cur env = ieSnapAt cur env.ieUnivSnaps emptyImplUniverse
 
-ieTriplesUpTo : Int -> List ImplRow -> List (IfaceRef, List Ty, List Require)
-ieTriplesUpTo _ [] = []
-ieTriplesUpTo cur (r::rest)
-  | declEnvVisibleAt cur (ieRowOrd r) = ieRowTriple r :: ieTriplesUpTo cur rest
-  | otherwise = ieTriplesUpTo cur rest
-
--- ⚠️ TEMPORARY INSTRUMENT — PR2 DELETES THIS AND ITS ONE CALL SITE.
---
--- WHY IT EXISTS.  With zero readers, a mis-built `IE` — wrong ordinal, dropped
--- rows, wrong within-bucket order — is otherwise UNOBSERVABLE: check 4 grades
--- namespace hygiene, the doctests grade the mints, and no golden looks at the
--- POPULATION.  This is what makes PR1 fail-capable, and running it over the gate
--- corpus is what discharges §9.5's fold algebra plus as much of `DL` as is
--- actually true, as a MEASUREMENT, before PR2 commits to either.  An implementer
--- who verifies only the algebra has verified the half that was never in doubt.
--- Precedent: the #1277/#1317 work built the compiler with exactly this instrument.
---
--- 🚨 WHAT IT DOES **NOT** DISCHARGE, STATED FIRST BECAUSE THE OBVIOUS READING IS
--- TOO STRONG AND A-3.2/A-3.3 WOULD INHERIT IT.  §9.5's `DL` is a decl-list
--- IDENTITY — "`demDecls` at ordinal k IS the `prog` `appendUniverseAccums` was
--- called with for module k".  On the elaborate path THAT IDENTITY IS FALSE, and
--- not marginally: `elaborateModules` builds the envelope from the RAW `modules`
--- (`buildDeclEnvs coreDecls modules`, `:24309`) while the sweeps run
--- `elabModuleStamp` over the `prePassModulePairArg`-REWRITTEN `modules2a` /
--- `modules2` (`:24374`, `:24422`) — so the `prog0` this instrument receives is a
--- prePass-rewritten decl list, not `demDecls`.
---
--- What is therefore MEASURED is the weaker and sufficient proposition: **the
--- IMPL-HEAD PROJECTION of the two lists agrees** — same `(iface identity, head,
--- context)` triples, same order, at every ordinal.  That is exactly what `IE`'s
--- consumer needs and all this unit claims.  It says NOTHING about any other decl
--- kind: `prePassModulePairArg` demonstrably rewrites decls, and whether it
--- preserves data/interface/value decls the way it preserves `DImpl` heads is
--- UNMEASURED here.  A-3.2's `DataEnv` and A-3.3's `CE` must measure their own
--- projections; they may not cite "`DL` is discharged".
---
--- 🚨 DELIBERATE DEPARTURE FROM §9.5, WHICH SPECIFIES A WHOLE-PREFIX PROJECTION
--- COMPARED AGAINST THE ACCUMULATOR, "quadratic by construction".  This compares
--- the PER-MODULE SLICE instead — `IE`'s rows at ordinal k against the triples
--- `implDeclsWithReqs prog0` yields for module k — which is O(this module's impls),
--- i.e. LINEAR overall, and is not weaker on the proposition above.  Induction:
--- `ieRows` is built in ordinal order, so if every slice k equals the triple list
--- module k contributed to the accumulator, the prefix at k is the concatenation
--- the accumulator folded, and `growImplUniverse` is the same writer on both sides
--- (`ieUniverseAt` calls it).  The quadratic form would have had to be gated off to
--- be shippable; this one ships ON, which is the property that matters.
---
--- The digest compares the MINTED KEYS (`oblIfaceKeys`, both legs) and the rendered
--- head/context, so a divergence in identity, in population, or in order all show.
--- A HARD PANIC, not a diagnostic — a diagnostic would move goldens and be blessed
--- away.  The tag bucket needs no comparison: `ieIfaceTags` and `obUnivIfaceTagsRef`
--- are DERIVED from the same `(ifk, hd)` pairs (see `ieInsertRowAt` /
--- `insertUnivImplAt`), so equal concrete rows imply equal tag sets.
---
--- 🚨 WHAT THIS INSTRUMENT ALREADY FOUND, AND WHAT THE `mid == ""` ARM COVERS NOW.
--- HISTORY (A-3.4 PR1, and the reason #1508 existed).  MEASURED then: with the
--- comparison unconditional, `test/diff_compiler_check_modules.sh` panicked on 8 of
--- its 9 fixtures — every one whose USER module declares an `impl` — with `mid = ''`
--- (ordinal 0), `IE`'s slice being the PRELUDE's impls and the accumulator holding
--- the user module's single impl.  The cause was DERIVED, not guessed: `cmCheckWorker`
--- DISCARDED its `_mid` and called `checkModuleFull`, which is
--- `checkModuleFullImpl ""` — so on the `checkModules` driver EVERY user module
--- reached `checkBodyImpl`'s Module arm carrying `mid = ""`, which `declEnvsOrdOf`
--- maps to ordinal 0, the prelude.  (Anchor on the NAMES, not on line numbers: the two
--- citations this paragraph used to carry, `:21974-21976` and `:23835-23838`, had both
--- rotted to unrelated code by the time #1508 was picked up.)
---
--- FIXED by #1508 (U2a): `cmCheckWorker` now threads its real `mid` into
--- `checkModuleFullImpl`, so the `checkModules` driver attributes each user module to
--- ITSELF.  The consequence is directly observable HERE — the arm below no longer
--- skips a single user module on that driver, and the whole gate that used to panic
--- 8/9 now reads `9 ok, 0 failing` with the instrument live on every one of them.
---
--- WHAT THE SKIP STILL COVERS: only the genuine PRELUDE pass, which both Module-mode
--- drivers spell `""` (`checkModulesPreamble` → `checkModuleFull` → `checkModuleFullImpl
--- ""`; `elabModuleStamp ""`).  MEASURED on the #1508 branch, not assumed: replacing
--- the guard with `False` (i.e. comparing the prelude arm too) leaves
--- `diff_compiler_check_modules` at 9 ok / 0 failing AND completes a full
--- `make medaka` — so the arm is REMOVABLE, and it is retained only because widening a
--- shipped hard-`panic` surface is not #1508's unit and PR2 deletes the instrument
--- outright.  Do not re-derive that measurement as a blocker; it is not one.
---
--- The instrument stays fully fail-capable everywhere a real module id is carried
--- (`elaborateModules` → `elabModuleStamp mid` → `checkModuleFullImpl mid`, and now
--- `checkModules` → `cmCheckWorker` → `checkModuleFullImpl mid` as well; MEASURED:
--- a full `make medaka`, which drives the whole compiler graph through that path,
--- completes with the instrument ON and never fires).
-ieShadowCompare : String -> List Decl -> Unit
-ieShadowCompare mid prog
-  | mid == "" = ()
-  | otherwise = ieShadowCompareGo mid prog
-
-ieShadowCompareGo : String -> List Decl -> Unit
-ieShadowCompareGo mid prog =
-  let envs = driverState.value.declEnvsRef.value
-  let ord = declEnvsOrdOf mid envs
-  let got = joinWith ";" (map ieRowDigest (ieRowsAtOrd ord envs.deImpls.ieRows))
-  let want = joinWith ";" (map ieTripleDigest (implDeclsWithReqs prog))
-  ieShadowVerdict mid ord got want
-
-ieShadowVerdict : String -> Int -> String -> String -> Unit
-ieShadowVerdict mid ord got want
-  | got == want = ()
-  | otherwise = panic "IE shadow-compare DISAGREES at module '\{mid}' (ordinal \{ord}):\n  IE  = \{got}\n  acc = \{want}"
-
-ieRowsAtOrd : Int -> List ImplRow -> List ImplRow
-ieRowsAtOrd _ [] = []
-ieRowsAtOrd ord (r::rest)
-  | ieRowOrd r == ord = r :: ieRowsAtOrd ord rest
-  | otherwise = ieRowsAtOrd ord rest
-
-ieRowDigest : ImplRow -> String
-ieRowDigest r = ieTripleDigest (ieRowTriple r)
-
-ieTripleDigest : (IfaceRef, List Ty, List Require) -> String
-ieTripleDigest (ir, tys, reqs) =
-  let ks = joinWith "+" (map (k => regKeyRender (regKeyOfTab k)) (oblIfaceKeys ir))
-  "\{ks}|\{joinWith " " (map ppTyAtom tys)}|\{joinWith " " (map ieReqDigest reqs)}"
-
-ieReqDigest : Require -> String
-ieReqDigest (Require { requireHead = h, requireArgs = ras, ... }) =
-  "\{h}(\{joinWith " " (map ppTyAtom ras)})"
+-- Walk the ordinal-ordered snapshots and keep the LAST visible one.  The ONE place
+-- `declEnvVisibleAt` is applied to `IE`, preserved deliberately through the snapshot
+-- rewrite: A-3.6 turning that predicate's body into `True` makes this select the final
+-- snapshot — the whole graph — which is precisely A-3.6's semantics, unchanged.
+-- Allocates nothing, and stops at the first invisible ordinal.
+ieSnapAt : Int -> List (Int, ImplUniverse) -> ImplUniverse -> ImplUniverse
+ieSnapAt _ [] acc = acc
+ieSnapAt cur ((o, u)::rest) acc
+  | declEnvVisibleAt cur o = ieSnapAt cur rest u
+  | otherwise = acc
 
 -- ── §9.7's scoping proofs, as ASSERTIONS rather than sentences ────────────────
 --
@@ -3583,16 +3573,38 @@ ieProbeEnv = buildImplEnv
 -- [0, 1]
 --
 -- 3. TABLE SCOPE — the ordinal, applied through `declEnvVisibleAt` and nothing
---    else.  At ordinal 0 only `amod`'s impl is visible; at 1, both.  This is the
---    filter A-3.6 deletes, and it is LIVE.
--- > listLen (ieTriplesUpTo 0 ieProbeEnv.ieRows)
--- 1
--- > listLen (ieTriplesUpTo 1 ieProbeEnv.ieRows)
+--    else.  There is one snapshot per distinct ordinal, and selection keeps the LAST
+--    VISIBLE one: at ordinal 0 only `amod`'s impl is in the selected universe, at 1
+--    both.  This is the filter A-3.6 deletes, and it is LIVE.  The fail-CLOSED miss
+--    arm is asserted too — at `declEnvsOrdOf`'s `-1` for an unknown module id nothing
+--    is visible, so an unknown reader LOSES declarations (loud reject) rather than
+--    gaining the whole graph (silent accept).
+--    ⚠️ WHICH LINE DISCRIMINATES WHAT, stated because an earlier draft of this item
+--    asserted the `amod` bucket at BOTH ordinals — the same value twice — and so
+--    graded nothing about the filter.  `amod` (ordinal 0) is the MONOTONICITY half:
+--    an earlier module stays visible as the ordinal rises, and it is what a filter
+--    that is too NARROW breaks.  `zmod` (ordinal 1) is the FILTER half: 0 at ordinal
+--    0 and 1 at ordinal 1 is the only pair here that changes with the ordinal, and it
+--    is what a filter that is too WIDE breaks.  Both are needed; neither alone is a
+--    test of `declEnvVisibleAt`.
+-- > listLen ieProbeEnv.ieUnivSnaps
 -- 2
+-- > listLen (mregLookupK (ieProbeKey "amod") (ieUnivConcreteOf (ieUniverseAt 0 ieProbeEnv)))
+-- 1
+-- > listLen (mregLookupK (ieProbeKey "amod") (ieUnivConcreteOf (ieUniverseAt 1 ieProbeEnv)))
+-- 1
+-- > listLen (mregLookupK (ieProbeKey "zmod") (ieUnivConcreteOf (ieUniverseAt 0 ieProbeEnv)))
+-- 0
+-- > listLen (mregLookupK (ieProbeKey "zmod") (ieUnivConcreteOf (ieUniverseAt 1 ieProbeEnv)))
+-- 1
+-- > listLen (mregLookupK (ieProbeKey "amod") (ieUnivConcreteOf (ieUniverseAt (0 - 1) ieProbeEnv)))
+-- 0
 --
 -- 4. THE PROJECTION IS THE OBLIGATION CHANNEL'S OWN UNIVERSE, built by the SAME
---    writer — so PR2's flip cannot drift in key minting, only in population and
---    order, which is what `ieShadowCompare` measures.
+--    writer — so A-3.4 PR2's flip could not drift in key minting, only in
+--    population and order, which is what both shadow instruments measured.  Since
+--    that flip these two lines are no longer a claim about a table nobody reads:
+--    they exercise the projection the compiler actually dispatches on.
 -- > listLen (mregLookupK (ieProbeKey "zmod") (ieUnivConcreteOf (ieUniverseAt 1 ieProbeEnv)))
 -- 1
 -- > listLen (mregLookupK (ieProbeKey "zmod") (ieUnivConcreteOf (ieUniverseAt 0 ieProbeEnv)))
@@ -3814,7 +3826,7 @@ ceInsertRow : CeRow -> ClassEnv -> ClassEnv
 ceInsertRow r env = ClassEnv { env | ceRows = r::env.ceRows, ceByKey = regInsertK (ceRowKey r) r env.ceByKey }
 
 -- 🚨 THE ONE `CE` READ ACCESSOR — the ordinal-filtered lookup routed through
--- `declEnvVisibleAt`, exactly as `ieUniverseAt`/`ieTriplesUpTo` are the one
+-- `declEnvVisibleAt`, exactly as `ieUniverseAt`/`ieSnapAt` are the one
 -- read path for `IE`.  Looks up by IDENTITY rather than collecting a
 -- candidate set, per the shape argued at `ClassEnv` above.  NO CALLER TODAY —
 -- construction only, per this unit's bar.
@@ -4862,9 +4874,16 @@ data CrossRun = CrossRun {
     -- overlay pool; both its consumers now read stage K's `DeclEnvs.deModules` at the
     -- reader's own ordinal.  Do not re-add a cross-run decl accumulator: the envelope
     -- already holds the whole graph, keyed by loader module id and ordinal.
-    obUnivConcreteRef : Ref (MultiRegistry (List Ty, List Require)),
-    obUnivHeadlessRef : Ref (MultiRegistry (List Ty, List Require)),
-    obUnivIfaceTagsRef : Ref (Registry SetRegistry),
+    --
+    -- ⚠️ AND SO WERE `obUnivConcreteRef`/`obUnivHeadlessRef`/`obUnivIfaceTagsRef` —
+    -- the per-module-grown obligation impl universe, RETIRED by A-3.4 PR2 (#1112).
+    -- Not merely unread: stage K's `IE` (`declEnvsRef.deImpls`, projected at the
+    -- reader's ordinal by `ieUniverseAt`) is now the single answer to "what impls
+    -- exist" on the Module path, and keeping a second still-written copy is exactly
+    -- the two-sources-of-truth divergence design law L1 removes.  Note the shape
+    -- these two retirements share: BOTH replaced a cross-run accumulator with an
+    -- ordinal-filtered read of the one whole-graph envelope.  That is the arc, and
+    -- the `cross_allowed` count is what records it.
     builtinClassesRef : Ref BuiltinClasses,  -- #1446 P1 + #1539 / DICT §8 I7: the four operator/literal classes' identities AND presence, read off the PRELUDE's own DInterface decls — see seedBuiltinClasses
     crossModuleFunConstraintsRef : Ref (List (String, List Int)),
     crossModuleFunConstraintsQualRef : Ref (List ((String, String), List Int)),
@@ -4933,9 +4952,6 @@ freshCrossRun env = CrossRun {
   universeDataEnv = Ref env,
   universeCtorIdentsRef = Ref omEmpty,
   universeCtorCollidedRef = Ref [],
-  obUnivConcreteRef = Ref mregEmpty,
-  obUnivHeadlessRef = Ref mregEmpty,
-  obUnivIfaceTagsRef = Ref regEmpty,
   builtinClassesRef = Ref emptyBuiltinClasses,
   crossModuleFunConstraintsRef = Ref [],
   crossModuleFunConstraintsQualRef = Ref [],
@@ -9227,9 +9243,14 @@ seedBuiltinClasses (Module mid _ _) prog =
 --      moves, because a check that stops firing moves no output: the
 --      `loud → silent` transition `AGENTS.md` grades as a severity INCREASE.
 --   3. THE QUESTION IT GATES IS NAME-KEYED DOWNSTREAM ANYWAY.  What it gates is
---      `pushPendingObl (iface, …)`, and the whole obligation channel
---      (`obUnivConcreteRef` / `obUnivHeadlessRef` / `obUnivIfaceTagsRef`) still
---      keys its interface half by the bare NAME.  ⚠️ A-2.4's own draft of this
+--      `pushPendingObl (iface, …)`, and the whole obligation channel — the three
+--      `ImplUniverse` buckets, written by `insertUnivImplAt` and reached on the
+--      Module path through `ieUniverseAt` and on the Flat path through
+--      `buildImplUniverse` — still indexes its interface half under the bare NAME
+--      as well as the identity one.  ⚠️ ANCHOR: this named the three
+--      `obUnivConcreteRef`/`obUnivHeadlessRef`/`obUnivIfaceTagsRef` accumulators
+--      until #1112 A-3.4 PR2 DELETED them; the buckets and the property survived
+--      the carriers, so re-read this on the value, not on the retired refs.  ⚠️ A-2.4's own draft of this
 --      reason said that channel is keyed `"<iface>|<tag>"`, and that "when A-2.2
 --      lands, this gate is worth revisiting THEN".  BOTH are now out of date, and
 --      by A-2.2b's own doing: the string splice is gone, replaced by a structured
@@ -18717,34 +18738,77 @@ checkBodyImpl seed mode prog0 =
   -- untouched and rebuilds over its whole `prog` (already O(N)).
   let _ = match mode
     Flat _ => ()
+    -- #1112 A-3.4 PR2: `ieShadowCompare mid prog0` stood here, and the hard `panic`
+    -- surface it put in the released compiler is GONE with it — that instrument had
+    -- exactly one job, measuring the §9.5 equality before the flip committed to it,
+    -- and the flip has now been made on a strictly stronger measurement (see
+    -- `moduleImplUniv` just below for what was measured and how it was shown
+    -- fail-capable).  `appendUniverseAccums` no longer grows an impl universe either,
+    -- so there is nothing left here for `IE` to be compared against.
+    Module _ _ _ => appendUniverseAccums prog0
+  -- 🚨 #1112 A-3.4 PR2 — THE `IE` READER FLIP.  THIS IS THE ONE PRODUCTION READ OF
+  -- STAGE K's `IE`, and it is what makes the registry real rather than shelf-ware.
+  --
+  -- WAS (#154 PR3, retired here): `ImplUniverse obUnivConcreteRef.value
+  -- obUnivHeadlessRef.value obUnivIfaceTagsRef.value` — three `CrossRun` accumulators
+  -- grown one module at a time by the `appendUniverseAccums prog0` immediately above.
+  -- Those three fields are GONE, not merely unread: these were their only readers, so
+  -- leaving them would have left two sources of truth for "what impls exist" (design
+  -- law L1) and the `cross_allowed` ratchet would still carry three rows this unit
+  -- exists to retire.
+  --
+  -- NOW: a projection of the whole-graph `IE`, filtered to this module's ordinal
+  -- prefix through `ieUniverseAt` — the ONE read accessor, the ONE place
+  -- `declEnvVisibleAt` is applied to `IE`.  A-3.6 remains the deletion of that
+  -- predicate's body and nothing else; the filter stays ON here (it must — #1482's
+  -- measurement showed topological prefix scoping is accidentally load-bearing for
+  -- #1438's shape, so widening candidacy is A-3.6's unit with A-3.6's fixtures, not a
+  -- side effect of this flip).
+  --
+  -- 🚨 BOUND ONCE, READ TWICE, AND THE "ONCE" IS LOAD-BEARING.  There are TWO Module-arm
+  -- consumers — `residualUnivRef` (#1549) just below, and the end-of-body obligation
+  -- `obUniv` — and A-3.4's own design was written when there was only ONE.  Do not
+  -- re-derive the projection at the second site: it is a whole-prefix rebuild, so a
+  -- second call doubles this unit's already-measured per-module cost for a value that
+  -- cannot have changed (both `ord` and `IE` are immutable for the whole module; the
+  -- accumulator these replaced was likewise grown once, above, and read at both sites).
+  -- A third consumer should take this binding too, or say in writing why it needs a
+  -- different ordinal.
+  --
+  -- WHY THIS IS EQUALITY-PRESERVING, MEASURED AND NOT ASSUMED.  §9.5's argument is the
+  -- conjunction of (a) a fold algebra — `growImplUniverse` is the SAME writer on both
+  -- sides, over triples from the SAME `implDeclsWithReqs` — and (b) `DL`, the decl-list
+  -- identity, which the algebra assumes rather than shows.  PR1's `ieShadowCompare`
+  -- measured the per-module SLICE.  This PR measured the strictly stronger proposition
+  -- the flip actually rests on: the WHOLE PREFIX universe at the read site, both
+  -- `MultiRegistry` buckets and the tag `Registry`, digested key-by-key and
+  -- entry-by-entry in bucket order, `IE` against the accumulator, panicking on any
+  -- disagreement.  Run over the compiler's own graph (both the `checkModules` and the
+  -- `elaborateModules` driver), `make check-self`, the multi-module differential gates,
+  -- and 193 multi-module fixture projects: ZERO disagreements.  Fail-capable in two
+  -- directions, both executed: projecting at `ord - 1` panicked with the prelude's whole
+  -- population on one side and an empty universe on the other, and a name-triggered
+  -- control proved `medaka check` on a two-module project reaches this line carrying a
+  -- real module id at a real ordinal.  The instrument is deleted with `ieShadowCompare`;
+  -- the measurement is the reason this binding is allowed to exist.
+  let moduleImplUniv = match mode
+    Flat _ => emptyImplUniverse
     Module mid _ _ =>
-      let _ = appendUniverseAccums prog0
-      -- #1112 A-3.4 PR1, TEMPORARY: compare `IE`'s rows at this module's ordinal
-      -- against the accumulator the line above just grew.
-      --
-      -- 🚨 THIS SHIPS **ON**, IN THE RELEASED COMPILER, AND IT PANICS ON
-      -- DISAGREEMENT.  There is NO env gate — an earlier version of this comment
-      -- claimed `MEDAKA_IE_SHADOW` gated it and that was never true (the string
-      -- appears nowhere else in the tree).  Price it accordingly: a hard `<Panic>`
-      -- is reachable from every Module path that carries a real module id, which
-      -- includes `medaka check` on a multi-module project, not just the emit path.
-      -- That is deliberate — a divergence here means `IE` and the universe the
-      -- compiler actually consumes disagree, and loud beats silent — but it is a
-      -- cost a reader must be able to see from this line.  PR2 deletes this call
-      -- and the instrument together.  See `ieShadowCompare`.
-      ieShadowCompare mid prog0
+      let envs = driverState.value.declEnvsRef.value
+      ieUniverseAt (declEnvsOrdOf mid envs) envs.deImpls
   -- #1549: stash the impl universe the RESIDUAL REDUCER entails against
   -- (`residualPredsOf`, called from each generalizing group's close).  This is NOT a
   -- third source: it is the SAME two arm-gated sources the end-of-body obligation
-  -- checkers already consume — `buildImplUniverse prog` on Flat, the persistent keyed
-  -- accumulator on Module (grown by the `appendUniverseAccums` immediately above, so it
-  -- already carries this module's own impls).  Built ONCE per module rather than per
-  -- group: rebuilding it inside the reducer would be O(decls) per SCC, i.e. quadratic.
+  -- checkers consume — `buildImplUniverse prog` on Flat, and since A-3.4 PR2 the `IE`
+  -- projection on Module (which carries this module's own impls, its ordinal being
+  -- included by `declEnvVisibleAt`, exactly as the retired accumulator did after the
+  -- `appendUniverseAccums` above).  Built ONCE per module rather than per group:
+  -- rebuilding it inside the reducer would be O(decls) per SCC, i.e. quadratic.
   let _ = setRef
     perRun.value.residualUnivRef
     (match mode
       Flat _ => buildImplUniverse prog
-      Module _ _ _ => ImplUniverse crossRun.value.obUnivConcreteRef.value crossRun.value.obUnivHeadlessRef.value crossRun.value.obUnivIfaceTagsRef.value)
+      Module _ _ _ => moduleImplUniv)
   -- (#4) shadows.  definerShadows uses the SHARED form — buildDefinerShadows over the
   -- full visible universe, scoped to THIS module's decls (prog0).  On Flat, prog0 =
   -- userProg and fullUniverse = prog, so this is exactly the old flat `buildDefinerShadows
@@ -19062,16 +19126,16 @@ checkBodyImpl seed mode prog0 =
       let _ = setNumlitFloats ()   -- PLAN.md #11: stamp Float-typed int literals
       ()
     Module _ _ _ =>
-      -- #154 PR3: consume the PERSISTENT keyed impl universe (grown per module in
-      -- appendUniverseAccums) — NO per-module `implDeclsWithReqs`/`implHeadsOf` rebuild
-      -- over the growing `fullUniverse`.  The accumulator holds the SAME impls; existence/
-      -- count reads are byte-identical, and findMatchingImplReqsU's most-specific-first
-      -- requires-selection is a deliberate soundness fix (see its doc-comment).  Site #8
-      -- (groundMultiParamObligations groundUniverse) is left on the list path above
-      -- because groundUniverse = implDecls EXCLUDES this module's prog0, which the
-      -- accumulator (appended before this point) includes — and it is a no-op for the
-      -- single-param obligations the perf `modules` shape exercises.
-      let obUniv = ImplUniverse crossRun.value.obUnivConcreteRef.value crossRun.value.obUnivHeadlessRef.value crossRun.value.obUnivIfaceTagsRef.value
+      -- #1112 A-3.4 PR2: the obligation universe is now the `IE` projection bound ONCE
+      -- as `moduleImplUniv` far above (see its block for the flip, the measurement, and
+      -- why re-deriving it here would be a second whole-prefix rebuild for a value that
+      -- cannot have changed).  The three `obUniv*` accumulators this used to read are
+      -- deleted from `CrossRun`.
+      --
+      -- Site #8 (`groundMultiParamObligations groundUniverse`) is still on the list path
+      -- above, unchanged: `groundUniverse = implDecls` EXCLUDES this module's `prog0`,
+      -- which this projection (like the accumulator before it) includes.
+      let obUniv = moduleImplUniv
       let _ = if not driverState.value.implInferEnabled.value then
                 -- #838 I4: unified checker, same `obUniv`, same `not implInferEnabled`
                 -- gate and same order relative to setNumlitFloats as the retired checker.
@@ -19600,12 +19664,20 @@ inferDefaultMethodBody mname subject defLoc env expectedTy pats body =
 -- call on a type WITH an impl is satisfied; a default-method call on a type with
 -- NO impl is rejected — both matching the oracle.
 -- #154 PR3: the KEYED impl universe consumed by the obligation checkers below.  Bundles
--- the three accumulator refs' contents (see obUnivConcreteRef): concrete-head impls
+-- the three buckets `insertUnivImplAt` writes (#1112 A-3.4 PR2 deleted the three
+-- `CrossRun` refs this line used to name; the buckets are unchanged): concrete-head impls
 -- keyed "iface|tag", HEADLESS-receiver impls keyed by iface (matched against ANY
 -- receiver), and iface→concrete-head-tag SET (for implCountForIfaceU).  The FLAT path
 -- builds one from its whole `prog` via `buildImplUniverse` (O(N) once — the same cost
 -- as the old `implDeclsWithReqs`+`implHeadsOf` it replaces); the Module path passes the
--- PERSISTENT accumulator (grown one module at a time in appendUniverseAccums).
+-- ⚠️ #1112 A-3.4 PR2: NO LONGER A PERSISTENT ACCUMULATOR.  This block's header used
+-- to read "PERSISTENT accumulator (grown one module at a time in
+-- appendUniverseAccums)"; those three `CrossRun` refs are deleted.  The Module path
+-- now PROJECTS this value out of stage K's `IE` at the reading module's ordinal
+-- (`ieUniverseAt`, selecting from the per-ordinal `ieUnivSnaps` built once by
+-- `ieBuildSnapsGo`); the Flat path still builds its own with `buildImplUniverse`.
+-- Everything below about the KEYS is unchanged — the same `insertUnivImplAt` writer
+-- mints them on both paths, which is what made that flip equality-preserving.
 -- A-2.2b (#1111): all three buckets are IDENTITY-KEYED registries.  What each
 -- key carries, and what it deliberately does NOT:
 --   * the INTERFACE half is an IDENTITY key on both the writer and every reader
@@ -19945,13 +20017,17 @@ oblIfaceKey ir = tabKeyOf NsIface ir.irOrigin ir.irName
 --     sequencing "`#1280` → `#1317` → B-2" recorded on #1113 is INVERTED for them.
 --   * **T2 HAS MOVED** — #1446, landed with #991: `Predicate` grew an interface
 --     identity and `oblIfaceKey` moved with it, so the channel is not half-migrated.
---     The named `obUnivConcreteRef` risk (a per-RUN accumulator read from a
---     prelude-FLATTENED pass, which would MISS under an identity key) did NOT
+--     The named accumulator risk (a per-RUN `obUnivConcreteRef` read from a
+--     prelude-FLATTENED pass, which would MISS under an identity key — that ref is
+--     since retired by #1112 A-3.4 PR2, and the argument now reads on the
+--     `ieUniverseAt` projection that replaced it) did NOT
 --     reproduce, and the reason is structural rather than statistical: there are
 --     exactly TWO `ImplUniverse` sources and they are ARM-GATED — the `Flat` arm
 --     builds a fresh `buildImplUniverse prog`, only the `Module` arm reads the
---     CrossRun accumulator, and all five `externTyOriginScope []` prelude-flattened
---     sites route to `Flat`.  ⚠️ That separation is now load-bearing, and E-1 (#1115)
+--     whole-graph one (since #1112 A-3.4 PR2 that is `ieUniverseAt`'s projection of
+--     `IE`, not the retired `CrossRun` accumulator; still ONE source, still
+--     arm-gated, which is why this argument survived the flip unchanged), and all
+--     five `externTyOriginScope []` prelude-flattened sites route to `Flat`.  ⚠️ That separation is now load-bearing, and E-1 (#1115)
 --     is exactly the unit that would break it by migrating Flat consumers onto the
 --     Module path; `test/dict_fixtures/i7-flatten-arm-fresh-universe/` pins it.
 --   * **#1115 is NOT this unit's blocker.**  It is still open and still worth
@@ -20114,8 +20190,9 @@ implCountForIfaceU (ImplUniverse _ _ tags) iface =
 
 -- the concrete "iface|tag" bucket (empty when the tag is None / no such impl).
 -- A-2.2 (#1111): the GOAL-side head arrives as a `HeadKey` that CAN carry
--- identity — this is the row `obUnivConcreteRef`'s `"<iface>|<tag>"` key is
--- built from, on both sides (`insertUnivImpl` is the impl side).  The tag is
+-- identity — this is the row the concrete bucket's `"<iface>|<tag>"` key is
+-- built from, on both sides (`insertUnivImpl` is the impl side; the bucket used to
+-- be cited as `obUnivConcreteRef`, retired by #1112 A-3.4 PR2).  The tag is
 -- still that key's bare NAME, so every bucket lookup answers exactly as before.
 -- A-2.2b (#1111): the `"\{iface}|\{tag}"` string splice is gone — this is a
 -- structured two-component key (`RegKey`), so a `|` inside either half can no
@@ -23838,16 +23915,15 @@ appendUniverseAccums prog =
   -- old `argDispatchIndices (accAll ++ prog)` flatMap produced; the sole reader is a
   -- first-wins lookupAssoc, so a prior-module entry this module never names is never queried.
   let _ = setRef crossRun.value.universeMethodDispatchIdxRef (crossRun.value.universeMethodDispatchIdxRef.value ++ argDispatchIndices prog)
-  -- #154 PR3 (sites #6/#7): grow the keyed obligation impl universe by THIS module's
-  -- impls (append to keep forward declaration order within each bucket).  Uses the
-  -- SAME `implDeclsWithReqs` (iface, tys, reqs) triples the old rebuild consumed, so
-  -- the accumulated buckets are entry-for-entry that per-module `fullUniverse` rebuild.
-  let obUni = growImplUniverse (implDeclsWithReqs prog) (ImplUniverse crossRun.value.obUnivConcreteRef.value crossRun.value.obUnivHeadlessRef.value crossRun.value.obUnivIfaceTagsRef.value)
-  match obUni
-    ImplUniverse c h t =>
-      let _ = setRef crossRun.value.obUnivConcreteRef c
-      let _ = setRef crossRun.value.obUnivHeadlessRef h
-      setRef crossRun.value.obUnivIfaceTagsRef t
+  -- #1112 A-3.4 PR2: the #154 PR3 leg that grew the three `obUniv*` obligation-universe
+  -- accumulators here is GONE.  Its consumer — the Module arm's `obUniv` — now projects
+  -- stage K's `IE` at the reader's ordinal instead (`ieUniverseAt`), so this fold was
+  -- building a second copy of a table nothing reads.  Note what that makes this function:
+  -- it no longer answers "what impls exist" at all; every remaining line here is an
+  -- interface/method/name-side accumulator.  Do not re-add an impl accumulator — the whole
+  -- point of the flip is that `IE` is the one answer, and a second one is design law L1's
+  -- divergence.
+  ()
 
 -- #154 PR-A: grow the persistent DATA-universe by [pubDecls] (THIS module's public data).
 -- `registerData` / `registerVariants` hardcode the six working table refs, so grow by
