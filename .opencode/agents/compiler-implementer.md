@@ -34,13 +34,16 @@ Treat the conductor's worktree proof and accepted packet as the completed discov
 
 Implement the smallest coherent change that satisfies the accepted invariant. Preserve error accumulation, identity scope, execution-route mirrors, and performance constraints. Never use a `List` as a set or map in a per-element path. For a new AST constructor or global table, implement the plan's unrelated-code control. For backend or typechecker work, follow the supplied ownership design exactly; do not introduce fallback authority or a local workaround.
 
-For a migration spanning core API, callers, regression harness, and docs, the
-conductor should normally split the assignment. If it is deliberately kept in
-one packet, preserve a recoverable order: (1) make the core API, every executable
-caller, and every semantic/route mirror repository-compile-coherent; (2) add the
-direct regression harness; then (3) update documentation and non-executable
-collateral. Do not spend the final budget polishing prose while code or a route
-mirror remains partial.
+For a migration spanning core API, callers, regression harness, and docs, split
+the assignment whenever the harness embeds source text, hard-codes generated
+IR/WAT ordering, or needs execution to discover a correct expectation. The first
+assignment reaches a compile-coherent core/caller boundary and, at most, adds a
+capture-only hook. The conductor executes and independently adjudicates that
+capture before a later bounded assignment adds exact assertions. If an all-in-one
+packet is safe because every expected byte is already authoritative, preserve a
+recoverable order: (1) core API and all executable mirrors; (2) direct harness;
+(3) documentation. Do not spend the final budget polishing prose while code or
+a route mirror remains partial.
 
 Keep implementation and verification separate. The conductor owns formatting, linting, builds, tests, golden adjudication, staging, and commits after inspecting your uncommitted daughter-worktree diff. Do not run preflight, fixpoint, multi-engine suites, oracle builds, snapshot blessing, selfproc recapture, or any other verification command. Never bless output because it changed.
 
