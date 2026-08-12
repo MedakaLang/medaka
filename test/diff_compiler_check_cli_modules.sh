@@ -1788,5 +1788,84 @@ case "$ord_l_out" in
   *) fail=$((fail+1)); printf 'FAIL 1112-A34/later-invisible (ordinal too large — a topologically LATER impl became a candidate, exit %d: [%s])\n' "$ord_l_code" "$ord_l_out" ;;
 esac
 
+# 9. #1512 (ARCH A-3.2b residual, slice 1/3): THE CROSS-MODULE TYPE-ALIAS TABLE IS
+#    STAGE K.  `crossRun.universeAliasTable` — the per-module-grown accumulator
+#    `loadDataUniverse`/`storeDataUniverse` marshalled — is retired; the per-run
+#    `aliasTableRef` is now seeded by `aliasUniverseAt cur declEnvsRef.deData.deAliases`,
+#    i.e. the public aliases of every module at a STRICTLY LOWER ordinal.
+#
+#    (a) alias-visible.  An imported `export type Sec = Int` must still EXPAND in the
+#    importer: `use : Sec -> Int` renders as `Int -> Int` and `s + 1` typechecks.
+#    ⚠️ THIS LEG CAN FAIL, which is the point — an alias the table does not hold stays
+#    an opaque `TCon`, and the SAME program then draws `No impl of Num for Sec` at exit
+#    1 (measured directly on this tree by wrapping the alias in an attribute, the one
+#    shape `registerData` drops).  So an empty or mis-ordinalled K seed reds this leg.
+cat > "$TMP/aliaslib.mdk" <<'EOF'
+export type Sec = Int
+
+export mk : Int -> Sec
+mk n = n
+EOF
+cat > "$TMP/aliasuse.mdk" <<'EOF'
+import aliaslib.{Sec, mk}
+
+use : Sec -> Int
+use s = s + 1
+
+main = println (use (mk 41))
+EOF
+alias_out="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check "$TMP/aliasuse.mdk" 2>&1)"
+alias_code=$?
+case "$alias_out" in
+  *"use : Int -> Int"*) if [ "$alias_code" -eq 0 ]; then pass=$((pass+1)); printf 'ok   1512-A32b/alias-visible (imported alias expands; K seed live)\n'
+                  else fail=$((fail+1)); printf 'FAIL 1512-A32b/alias-visible (expanded but exit %d)\n' "$alias_code"; fi ;;
+  *) fail=$((fail+1)); printf 'FAIL 1512-A32b/alias-visible (imported alias did not expand, exit %d: [%s])\n' "$alias_code" "$alias_out" ;;
+esac
+alias_run="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" run "$TMP/aliasuse.mdk" 2>&1)"
+alias_run_code=$?
+if [ "$alias_run_code" -eq 0 ] && [ "$alias_run" = "42" ]; then
+  pass=$((pass+1)); printf 'ok   1512-A32b/alias-visible-run (42)\n'
+else
+  fail=$((fail+1)); printf 'FAIL 1512-A32b/alias-visible-run (exit %d, got [%s], want 42)\n' "$alias_run_code" "$alias_run"
+fi
+
+#    (b) alias-cycle-importer.  🚨 THE LOUD→SILENT GUARD, and the reason it is a gate
+#    leg rather than a comment.  `rejectCyclicAliases` DELETES cyclic entries from the
+#    per-run table so the expansion seam cannot recurse — but that deletion never
+#    reached the retired accumulator (`appendDataUniverse` RELOADS the working ref
+#    before it registers and stores), so the cross-module alias source has always
+#    carried cyclic entries and EVERY module re-detects them through its own
+#    `rejectCyclicAliases` call.  `aliasUniverseAt` reproduces that by filtering on
+#    visibility ONLY.  A future edit that pre-drops cyclic aliases from the K
+#    projection would silence the IMPORTER's `T-RECURSIVE-ALIAS` while leaving the
+#    declaring module's — a defect made quieter, i.e. a severity increase.  This leg
+#    requires the diagnostic to name BOTH files, and `bound` proves termination (a
+#    seam that recursed would hit the alarm instead).
+cat > "$TMP/cyclib.mdk" <<'EOF'
+export type A = B
+
+export type B = A
+
+export mk : Int -> Int
+mk n = n
+EOF
+cat > "$TMP/cycuse.mdk" <<'EOF'
+import cyclib.{A, mk}
+
+use : A -> Int
+use s = mk 1
+
+main = println (use 3)
+EOF
+cyc_out="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check "$TMP/cycuse.mdk" 2>&1)"
+cyc_code=$?
+cyc_lib="$(printf '%s\n' "$cyc_out" | grep -c 'cyclib.mdk:.*Recursive type alias')"
+cyc_ent="$(printf '%s\n' "$cyc_out" | grep -c 'cycuse.mdk:.*Recursive type alias')"
+if [ "$cyc_code" -eq 1 ] && [ "$cyc_lib" -ge 1 ] && [ "$cyc_ent" -ge 1 ]; then
+  pass=$((pass+1)); printf 'ok   1512-A32b/alias-cycle-importer (both modules diagnose; no recursion)\n'
+else
+  fail=$((fail+1)); printf 'FAIL 1512-A32b/alias-cycle-importer (exit %d, definer hits=%s importer hits=%s: [%s])\n' "$cyc_code" "$cyc_lib" "$cyc_ent" "$cyc_out"
+fi
+
 printf '\n%d ok, %d failing\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
