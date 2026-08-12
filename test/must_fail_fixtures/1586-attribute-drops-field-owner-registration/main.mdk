@@ -1,0 +1,8 @@
+data A = A { s : Int }
+
+@deprecated "old"
+data B = B { s : Int }
+
+g r = r.s
+
+main = println (g (A { s = 1 }))

@@ -1,0 +1,56 @@
+issue: 1586
+what: A decl ATTRIBUTE (`@deprecated "old"`) on a data declaration that shares a field
+what: name with an UNATTRIBUTED sibling record silently REMOVES that record from field-
+what: owner registration, so a genuinely ambiguous field access resolves to the sibling
+what: alone and CHECKS CLEAN -- exit 0, no diagnostic anywhere -- where the correct
+what: behavior (proven by the byte-similar control below with the attribute removed) is
+what: to REJECT it as ambiguous ("Ambiguous field access: '.s' is declared by A, B").
+what: `registerData` (compiler/types/typecheck.mdk) matches `DData`/`DTypeAlias`/
+what: `DNewtype`/`DInterface` directly and falls through its trailing wildcard for
+what: anything else, including a `DAttrib`-wrapped decl -- so `B`'s `registerVariants`
+what: call never runs and `fieldOwnersRef["s"]` only ever contains `A`. The ambiguity
+what: check (`ambiguousFieldMsg`, typecheck.mdk) has nothing to be ambiguous about and
+what: silently picks `A`. Sibling of #1228 (S2, registerData, ctor/alias-only matrix)
+what: but strictly worse: #1228's own matrix states "No cell in this matrix is silent"
+what: -- this is the silent cell that matrix never tested, because it only exercised a
+what: declaration's own ctor/type usage, never a field-owner collision with a sibling.
+cmd: check-types main.mdk
+exit: 0
+stdout-line: g : A -> Int
+stdout-line: main : Unit
+control: check-json control.mdk
+why-fixture: this is the issue's own filed repro, verbatim, run on a fresh
+why-fixture: cold-bootstrapped binary (no borrowed emitter) built from this branch.
+why-cmd: `check-types` (not `check-json`) is the verb here, deliberately, because the
+why-cmd: DEFECT ITSELF is that `check --json` reports NOTHING (empty diagnostics list,
+why-cmd: exit 0) -- an empty list is not a distinguishing pin, since a genuinely correct
+why-cmd: program ALSO reports an empty list. What makes this row discriminating is the
+why-cmd: WRONG INFERRED SCHEME the silent narrowing produces: `g : A -> Int` instead of
+why-cmd: a rejection. `check --types` is the only verb that surfaces that scheme, so it
+why-cmd: is what is pinned. `main : Unit` is pinned alongside it (same idiom as #93's
+why-cmd: fixture) to prove the dump still ran to completion rather than stopping early.
+why-control: control.mdk keeps the SAME attribute on B (unlike #1228's control, which
+why-control: deletes the attribute) because deleting it here would NOT produce a green
+why-control: control -- the correct behavior for the byte-identical unattributed program
+why-control: is REJECTION (exit 1, "Ambiguous field access"), which the must-fail harness
+why-control: cannot accept as a control (control must be exit 0 and diagnostic-free).
+why-control: Instead, control.mdk isolates the ONE feature actually under test -- the
+why-control: FIELD-NAME COLLISION between the attributed record and its sibling -- by
+why-control: renaming B's field from `s` to `t`. Same attribute, same two records, same
+why-control: `g`/`main`, but no collision: this must (and does) check clean, proving the
+why-control: attributed record and the unrelated machinery around it are otherwise fine,
+why-control: and the defect is specifically the silently-dropped ambiguity check.
+why-note: the issue also verifies two MISLEADING (not silent) siblings of this same
+why-note: root-cause family, not pinned in this row to keep the pin narrow: accessing the
+why-note: attributed record's OWN field via record-create syntax rejects with a
+why-note: misleading R-ABSTRACT-FIELD ("exported abstractly" when never exported) --
+why-note: that gap lives in a DIFFERENT function, `fieldOwnersOf` (compiler/frontend/
+why-note: resolve.mdk), same missing-DAttrib-arm shape; and constructing the attributed
+why-note: record directly and reading its field through the ambiguous `g` rejects with
+why-note: a misleading "Record 'B' has no field 's'" (same `fieldOwnersRef` gap, a
+why-note: different call path than the ambiguity check). See the issue body for both.
+why-note: fix shape per the issue: add a `DAttrib` unwrap-and-recurse arm to
+why-note: `registerData` (compiler/types/typecheck.mdk), the same shape as PR #1058's
+why-note: DAttrib-unwrap cleanup in `lowerDeclImpl`, and separately to `fieldOwnersOf`
+why-note: (compiler/frontend/resolve.mdk) for the resolve-stage sibling. Close #1586 and
+why-note: delete this fixture when it drains.
