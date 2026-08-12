@@ -1,0 +1,23 @@
+-- ⚠️ WHAT THIS GATE SEES, and why that is enough here.
+-- `diff_compiler_check_modules.sh` diffs the entry's inferred SCHEMES and discards
+-- stderr and the exit code — so this fixture guards the SILENT face of a lost
+-- cross-module param kind: with no `(nt, Wrap)` kind entry, `fromAstTypeApp` falls to
+-- `appFallback` instead of `foldAppKinds`, the written row is elaborated as an ordinary
+-- TYPE, and the golden reads `Wrap Unit -> Int` with nothing on stderr.
+--
+-- 🚨 IT IS FAIL-CAPABLE, AND THAT WAS MEASURED, NOT ASSUMED.  A positive control with
+-- `m.mdk` changed so `e` is NOT in effect-tail position (`export newtype Wrap e = Wrap
+-- (List e)`, slot kind `KType`) REJECTS this same `entry.mdk` at exit 1:
+--
+--     entry.mdk:L:C: A row <Stdout> was written here, but this type-argument position
+--     isn't row-kinded ...
+--
+-- So the pass below is attributable to the `KRow` entry for `(nt, Wrap)` reaching this
+-- module, and losing that entry produces either that reject or the erased-row golden —
+-- never a silent green.
+import nt.{Wrap}
+
+f : Wrap <Stdout> -> Int
+f _ = 1
+
+main = println 1

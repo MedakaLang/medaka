@@ -1,0 +1,14 @@
+-- #1512 (ARCH A-3.2b, slice 2) — THE PUBLIC-NEWTYPE ARM of `kindPublicDataDecl`.
+--
+-- A newtype's constructor is module-private BY DESIGN (`public` is a parse error on
+-- `newtype`), so `publicDataDecls` has no `DNewtype` arm and `Wrap` publishes NO
+-- constructor scheme to an importer.  Its PARAMETER KINDS must travel anyway — `e`
+-- here is Row-kinded, because it appears in the field's effect tail — and that is the
+-- half `kindPublicDataDecl`'s third arm carries.  A KIND IS NOT A FIELD: "slot 0 of
+-- `Wrap` has kind Row" says nothing about the constructor, so this leaks nothing.
+--
+-- Sibling of `opaque_export_row_kind_import/`, which covers the OTHER arm
+-- (`DData VisAbstract`) of the same projection.  Both arms are decls `publicDataDecl`
+-- REJECTS, which is exactly why the kind projection is a PEER of that predicate and
+-- never a widening of it.
+export newtype Wrap e = Wrap (Unit -> <e> Int)

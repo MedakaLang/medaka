@@ -1,0 +1,31 @@
+-- #1512 (ARCH A-3.2b, slice 3) — THE ATTRIBUTED-RECORD POPULATION GUARD.
+--
+-- WHAT IT PINS.  Slice 3 retires `crossRun.universeFieldOwners` and rebuilds the
+-- field→owners seed out of stage K.  The one way that flip can NARROW acceptance is by
+-- widening the POPULATION: `DataEnv`'s `dataEnvFromDeclsGo` unwraps `DAttrib`, while
+-- `publicDataDecls` and `registerData` do NOT, so an attributed record is present in
+-- `deFieldOwnerIdents` and absent from the bare table it replaces.  Give it a vote it
+-- does not have today and this legal program becomes
+--
+--     entry.mdk:L:C: Ambiguous field access: '.s' is declared by B, Local;
+--     the record type is undetermined.
+--
+-- — false rejects on programs that compile, which §5 R2's widening-only exception
+-- cannot license.  The seed is therefore built from `declEnvRowVisible` over the
+-- per-module ROWS (whose non-own arm is the `publicDataDecls` memo, `DAttrib`-blind by
+-- construction) and NOT from the flat `deFieldOwnerIdents`, which is also ordinal-free
+-- and so could not answer the visibility question either.
+--
+-- ⚠️ THE UNDERLYING `DAttrib` GAP IS A REAL DEFECT AND IS NOT FIXED HERE.  `registerData`
+-- has no `DAttrib` arm and falls through its `registerData env _ = env` catch-all; that
+-- is #1586 (S0), it spans resolve and typecheck, and a retirement whose bar is
+-- neutrality must INHERIT it rather than drain it.  When #1586 lands, this fixture is
+-- expected to MOVE (`B` starts voting and the program is rightly ambiguous) — that is a
+-- deliberate behaviour change owned by that issue, not a regression in this one.
+import m.{mk}
+
+data Local = Local { s : Int }
+
+gets r = r.s
+
+main = println (gets (Local { s = 7 }) + mk 1)

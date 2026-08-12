@@ -1,0 +1,15 @@
+-- The unrelated module.  `B` is `public export` — so its constructor and fields WOULD
+-- travel — but it is `DAttrib`-WRAPPED, and neither `publicDataDecls` nor `registerData`
+-- unwraps a `DAttrib`.  So `B` publishes nothing at all today: no ctor scheme, no
+-- `RecordInfo`, no field-owner vote.  `mk` exists only to give the entry a reason to
+-- import this module — the shape needs the two modules in one graph, not a use of `B`.
+--
+-- 🚨 DO NOT DELETE THE ATTRIBUTE TO "TIDY" THIS.  Without it `B` is an ordinary public
+-- record and the entry below is legitimately REJECTED (`T-AMBIGUOUS-FIELD` on `.s`,
+-- owners `B, Local`) — that rejection is the fixture's own positive control and it was
+-- measured, not assumed.
+@deprecated "old"
+public export data B = B { s : Int }
+
+export mk : Int -> Int
+mk n = n

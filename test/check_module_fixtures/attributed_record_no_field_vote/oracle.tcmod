@@ -1,0 +1,2 @@
+gets : Local -> Int
+main : Unit
