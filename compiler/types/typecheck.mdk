@@ -24596,7 +24596,9 @@ storeDataUniverse : Unit -> Unit
 storeDataUniverse _ =
   let _ = setRef crossRun.value.universeRecordByName perRun.value.recordByNameRef.value
   let _ = setRef crossRun.value.universeFieldOwners perRun.value.fieldOwnersRef.value
-  setRef crossRun.value.universeDataParamKinds perRun.value.dataParamKindsRef.value
+  setRef
+    crossRun.value.universeDataParamKinds
+    perRun.value.dataParamKindsRef.value
 
 -- ⚠️ Takes THIS MODULE'S WHOLE decl list, not a pre-filtered one: it owns BOTH halves
 -- of what a module publishes to the data universe — `publicDataDecls` (ctors + records +
