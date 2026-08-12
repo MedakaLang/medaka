@@ -2180,3 +2180,64 @@ the tests that already passed as positive controls**, not just the new one. A gr
 otherwise indistinguishable from "the suite stopped running." And ask explicitly **which
 fields no test observes** — an honest "unobserved, not asserted" recorded in the code (as
 #1527's own doctest block did for one field) is fine; silence on it is not.
+
+## Watching a long job, 2026-08-11/12 — two watcher patterns that report the WRONG thing
+
+Neither is about the compiler. Both produced a confident wrong reading of *done*, and they
+compound: the first supplies a premature "completed" notification, the second removes the
+waiter that would have contradicted it.
+
+### ⭐⭐ A background launch notifies you when the LAUNCHER exits, not when the JOB finishes
+
+`nohup … &` — and `run_in_background` wrapped around any command that itself backgrounds its
+real work — returns as soon as the **launcher** returns. Measured repeatedly this session: a
+*"background command completed (exit 0)"* notification arrived **within seconds** while the
+real work ran for another **~40 minutes**. An orchestrator that treats that notification as
+the completion signal reads a half-finished sweep as final; an agent doing the same reported
+a gate result from a build that had not yet promoted its binary (`test/build_native_medaka.sh`
+writes `*.new.$$` and `mv`s into place, so the **binary's own appearance** is the completion
+fact — not the launcher's exit code, which is about a process that is no longer doing the
+work).
+
+**`run_in_background: true` is correct only on a SINGLE command that itself runs to
+completion** — no `&`, no `nohup`, no wrapper that spawns and returns. Then its exit *is* the
+job's exit. This is the same rule the PID-poll bullet above reaches, from the other side.
+
+### 🚨 `until ! pgrep -f <script>` NEVER EXITS — `pgrep -f` matches the WAITER's own command line
+
+`-f` matches the full argv of every process, and the waiting shell's argv **contains the
+pattern you are searching for**. The loop is therefore true forever with **no such job running
+at all**. An agent lost three waiters to this in one session; the premature launcher
+notifications above then looked like completed work, because nothing was left to disagree.
+Derive it in two lines — neither job name exists anywhere on the box:
+
+```sh
+sh -c 'pgrep -f zzq_no_such_job;     echo "plain:     $?"'   # prints PIDs, exit 0 — it matched ITSELF
+sh -c 'pgrep -f "[z]zq_no_such_job"; echo "bracketed: $?"'   # exit 1 — the regex cannot match its own literal
+```
+
+### ⭐⭐ The positive form: a predicate true ONLY on completion that CANNOT match the waiter
+
+For "tell me when X finishes", write a condition on an **artifact**, not on a process:
+
+- a **sentinel the job writes on exit** — `until [ -f /path/to/done ]; do sleep 5; done` — or
+  the job's own output artifact, e.g. `until [ -x <worktree>/medaka ]; do sleep 5; done`
+  (used successfully this session to wait out a cold bootstrap). Both are POSITIVE matches on
+  the value that means done, which is exactly the rule the failed-read poll bullet above
+  states; a process-absence test is the negative form and is what lets a self-match lie.
+- if you genuinely need `pgrep`, **bracket the pattern** (above) or filter the waiter out.
+
+**And when watching a MERGE QUEUE, watch `isInMergeQueue` + `mergeStateStatus` — NOT `state`.**
+A **dequeued** PR stays `state: OPEN`, which is byte-identical to healthy waiting; measured
+this session, a PR was bounced as `DIRTY`/`CONFLICTING` and a `state`-only watcher saw nothing
+happen at all. Read all three together (`--json` does not expose `isInMergeQueue`; see the
+merge-queue bullets in `AGENTS.md`):
+
+```sh
+gh api graphql -f query='{repository(owner:"MedakaLang",name:"medaka"){pullRequest(number:N){isInMergeQueue mergeStateStatus state}}}' \
+  --jq '.data.repository.pullRequest'
+```
+
+⚠️ `mergeStateStatus` reads `UNKNOWN` on an already-merged PR, so it is a signal about a LIVE
+PR only — don't build a completion test on it. For "did it land", `scripts/pr.sh complete`
+(which proves the head SHA is on `main`) remains the answer.

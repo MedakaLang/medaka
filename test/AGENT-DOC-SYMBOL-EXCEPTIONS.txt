@@ -94,6 +94,7 @@ SYM	UserPromptSubmit	AGENTS.md names the Claude Code hook event UserPromptSubmit
 SYM	GC_malloc_kind	AGENTS.md/PERF.md reference this ONLY as the Boehm GC internal allocation-tag function `perf script` attributes samples to for profiling — it is part of libgc, never defined in this repo's compiler/stdlib/runtime source
 SYM	autoMergeRequest	AGENTS.md's merge-queue trap references this as a GitHub GraphQL PullRequest field (reads `null` while a PR is queued, not a reliable signal) — a GitHub API field, never defined in this repo's compiler/stdlib/runtime source
 SYM	isInMergeQueue	AGENTS.md's merge-queue trap references this as the GitHub GraphQL PullRequest field that IS the reliable "queued" signal — a GitHub API field, never defined in this repo's compiler/stdlib/runtime source
+SYM	mergeStateStatus	.claude/ORCHESTRATING.md's 2026-08-11/12 watcher lesson names this as the GitHub GraphQL PullRequest field that (with isInMergeQueue) distinguishes a DEQUEUED PR from healthy waiting — `state` stays OPEN for both — a GitHub API field, never defined in this repo's compiler/stdlib/runtime source
 SYM	mergedAt	.claude/ORCHESTRATING.md's 2026-08-10 completion-poll lesson names this as the GitHub GraphQL/`gh --json` PullRequest field a merge-completion poll reads (a poll keyed on `mergedAt != "null"` passes on an EMPTY API response) — a GitHub API field, never defined in this repo's compiler/stdlib/runtime source
 
 # ── SYM: naming-convention shorthand / meta-syntactic placeholder, not a literal citation ─
