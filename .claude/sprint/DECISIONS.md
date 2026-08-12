@@ -703,3 +703,117 @@ scope:      🚨 **For the testing round's golden re-cut:** the standing rule is
             Ninth stale reference logged, not acted on (out of scope by brief):
             `test/registry_keying_ratchet.sh` still names `declEnvsVisible` in prose.
             #991 **DRAINS** with this commit (ask 3 was the last live one).
+
+## RUN-027 — Unit F — designed, and it SPLITS: 3 bites ship, 2 need their own gated round
+
+question:   RUN-023 scoped Unit F in undesigned. What is it, and is it feasible under §5?
+ruling:     **Feasibility: SPLIT.** F-0/F-3/F-4 are sprint-safe and **drain #1383 (S1) and #1586
+            (S0)** — Val's stated intent in scoping it in. **F-1/F-2 are NOT sprint-safe** and are
+            recommended out, as a new ARCH node with F-0's fixture already red and the predicate
+            pre-derived. Orchestrator adopts the split; the residue is escalated in the report.
+derivation: RELAYED from P0-G (`.claude/sprint/phase0/P0-G-unitF-fieldowners.md`).
+            The reachability predicate, DERIVED: for reader `m` at ordinal `cur`, record `d` in
+            module `k` at ordinal `o` is a candidate iff `(o == cur)` — own row, unchanged — or
+            `(o < cur ∧ publicDataDecl d ∧ k ∈ depClosure(m))`, where `depClosure` is the transitive
+            closure of `m`'s own `DUse` module ids (`usePathModuleId`) plus the prelude. It must be
+            **module** reachability, not name-visibility: a module can hold a value of a type it
+            never imports by name, and dropping it yields `[]` → `T-UNKNOWN-FIELD` or a silent
+            singleton. **On a closure miss, fall back to today's prefix — never to `[]`**
+            (`typecheck.mdk:3095-3099`: the owner half fails closed and loud). Not an invention —
+            `:25356` already does import-scoped per-module seeding for schemes; the field-owner
+            seed is the only one still on a topological prefix.
+            Why F-1/F-2 cannot ship under §5, three independent reasons: the failure is
+            **diagnostic-only** and invisible to every deferred gate; the one gate that *can* see
+            F-2's risk is `perf_scaling`, which §5 defers and **which already caught this exact
+            function's first cut**; and the safety argument ("a module cannot hold a value of an
+            unreachable type") is adversarial-review material, not fixture material.
+scope:      🚩 **#1216 IS NOT UNIT F'S — recommend re-assigning it to `ws:emitter`.** P0-G ran three
+            discriminating probes: typecheck resolves it **correctly** (`probe : String`) while the
+            same build is wrong; a 3-field rival moves the read to slot 2; single-file and
+            one-module-on-the-Module-path controls are both correct. The loss is `fieldIdxByName`'s
+            silent fall-through to `findFieldIdx` on a key-space miss
+            (`compiler/backend/llvm_emit.mdk:10023`). ⚠️ This means **RUN-016's orphan cluster was
+            mis-scoped when the owner ruled on it** — see the escalation.
+            🚩 **A NEW, UNFILED, MEASURED false reject is the actual Unit F bug**: `bmod.mdk`
+            imports *nothing*, yet `amod`'s `Zed` votes in it purely because `amod` is
+            topologically earlier — exit 1 on a legal program. Two positive controls clean, and
+            `v1` (rival genuinely imported) correctly stays red, so the fix is discriminating.
+            F-0 pins it. **Not filed** — the orchestrator does not file on an agent's report
+            without owner confirmation.
+            🚩 **`deFieldOwnerIdents` is NOT fit and Unit F must not read it** — contradicting the
+            widespread expectation that it is what Unit F finally reads. Ordinal-free and
+            `DAttrib`-unwrapping (as the ratchet says), **plus a third reason nobody wrote down: it
+            is FLAT**, so a reader filters the whole table per read — the exact quadratic CI already
+            caught on this function (`:3054`). Unit F needs none of it.
+            🚩 **The orphan splits THREE ways; only one third is the re-key.** #1468 is a missing
+            per-constructor totality check; #1456 is `fieldOwnerNames`' per-access `sortUniqS`
+            (`:8992`), a perf item. RUN-016 treated the cluster as one unit of work.
+            ⚠️ **F-4 is GATED on #1216's assignment**: it changes the selected `RecordInfo` while
+            the stamp stays bare-keyed, and #1383's own body says that converts the S1 into #1382's
+            S0. Do not dispatch F-4 until #1216 is re-assigned or ruled on.
+            **Pin contradiction RESOLVED** (RUN-016 vs P0-G): the ratchet row
+            (`registry_keying_ratchet.sh:236`) is a **neutrality claim about A-3.2b slice 3** — *"so
+            they reproduce unchanged, and the predicate is owed to a later unit."* The census
+            dropped the "so" and the deferral, turning a unit-scoped statement into a permanent
+            tripwire. **Classification is UNIT-RELATIVE**: `1383-*` and `1586-*` are FLIP-EXPECTED
+            for Unit F only; `1216-*` stays non-flip, for the different reason that Unit F does not
+            reach it.
+            **Order**: after the ledger-repair commit (FORCED — D2 sits on `declEnvSeedChain:3054`,
+            which is F-2's site), concurrent with Lanes A/B, **before A-3.6** (whose owed comment
+            re-cut at `:2891`/`:2987` is inside Unit F's region).
+
+## RUN-028 — operations — a concurrent implementer INVALIDATED a read-only agent's probes
+
+question:   Is it safe to run read-only design agents concurrently with implementers?
+ruling:     **Only with the base pinned.** P0-G reported that `MEDAKA_STRICT=1` **stopped passing
+            mid-session** because the ledger-repair implementer edited `typecheck.mdk` underneath
+            it; its probe results are valid against `176feb50`'s source, not against HEAD.
+derivation: RELAYED from P0-G, which disclosed it unprompted and stated which commit its results
+            hold against — the honest handling, and the reason the results are still usable.
+scope:      The staleness guard did its job: it converted a silent wrong-binary hazard into a loud
+            failure, exactly as designed. But the orchestrator's Phase-0-concurrent-with-Phase-1
+            scheduling (RUN-023) is what created the race. **Standing rule for the rest of the run:
+            any agent running probes concurrently with a live lane must (a) pin and report the
+            commit its results hold against, and (b) treat a `MEDAKA_STRICT` failure as a signal to
+            re-derive, never to drop the guard.** Do not "fix" this by unsetting `MEDAKA_STRICT` —
+            that trades a loud failure for a silently wrong answer, which is the trade this whole
+            sprint's posture is least able to absorb.
+
+## RUN-029 — ⚖️ OWNER RULINGS EXECUTED: #1597 filed; #1216 needed no re-label
+
+question:   Execute RUN-027's two escalations — re-assign #1216, and file F-1/F-2 as an ARCH node.
+ruling:     **F-1/F-2 filed as #1597.** **#1216 required NO re-label — the recommendation rested on
+            a false premise, caught before the write.** A corroborating comment was posted instead.
+derivation: Orchestrator, before writing anything:
+            - `gh issue view 1216 --json labels,title` → **already** labelled `S0: silent wrongness,
+              verified, ws:emitter`, with a title that already reads *"makes the native emitter read
+              the WRONG SLOT — run != build"*. P0-G's *"recommend re-assigning it out"* and the
+              owner ruling taken on it were both premised on a mis-assignment **that does not exist
+              in the tracker**. The mis-attribution is in `test/registry_keying_ratchet.sh`'s prose,
+              which files the bug under the typecheck-side field-owner re-key. A relabel would have
+              been a **no-op write dressed as a fix**. ✅ Comment posted instead
+              (`#1216#issuecomment-5270713229`), carrying the three discriminating probes and the
+              routing correction.
+            - **The #1597 repro was re-run FIRST-HAND before filing**, per the standing
+              reproduce-before-you-file rule, and the first attempt **FAILED**:
+              a signatured receiver (`readTag : Wye -> Int`) checks at **exit 0**, because the
+              annotation pins the receiver and the ambiguity test never runs. Only the
+              **unsignatured** form reproduces. ⚠️ **That negative is now recorded in #1597's body**,
+              because a probe "clarified" with a type signature silently stops testing the bug —
+              the same shape as a probe that cannot fail.
+              Confirmed repro at `f37b2562`: `main.mdk` (imports amod + bmod) → **exit 1**,
+              *"Ambiguous field access: '.tag' is declared by Wye, Zed"*; positive control
+              `bmod.mdk` **alone** → **exit 0**, `readTag : Wye -> Int`. `bmod` imports nothing.
+            - Write verified by readback, not by exit code: `gh issue view 1597` returns the
+              expected title and all three labels, and 6 distinctive body markers all resolve
+              (`UNSIGNATURED`, `depClosure`, `fails closed and loud`, `PRODUCER-side`,
+              `llvm_emit.mdk:10023`, `P0-G-unitF`). A 31-byte length delta vs the local file is
+              newline normalisation, not content loss.
+scope:      📌 **Method note.** Two escalations were taken to the owner as a pair; one of them was
+            built on a premise nobody had checked, including me — I relayed P0-G's recommendation
+            into an owner question without verifying the tracker state it asserted. The owner ruled
+            correctly on the information given, and the information was wrong. **Checking took one
+            `gh issue view`.** The rule this violates is the one this run has invoked most often:
+            a precise claim is not a verified one, and an orchestrator's brief is not a relay.
+            Unit F's remaining sprint scope is unchanged: **F-0, F-3, F-4** (F-4 still gated on
+            #1216, which is now simply "not ours" rather than "awaiting re-assignment").
