@@ -1,0 +1,7 @@
+-- The DEFINING module.  `Pt` is `public export`, so it is in `publicDataDecls` and its
+-- constructor `Pt` is registered as an owner of the field `px`.  `mkPt` exists only so the
+-- entry has a value-level reason to import this module — the entry never names `Pt`.
+public export data Pt = Pt { px : Int }
+
+export mkPt : Int -> Pt
+mkPt n = Pt { px = n }
