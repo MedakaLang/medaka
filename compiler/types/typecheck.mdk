@@ -3191,7 +3191,6 @@ deKindRow0 = declEnvModule 0 "m" deKindFixtureDecls
 deKindRow1 : DeclEnvModule
 deKindRow1 = declEnvModule 1 "m" deKindFixtureDecls
 
-
 -- ── A-3.2a (#1112): the `DataEnv` slice ─────────────────────────────────────
 -- ⚠️ This banner read "CONSTRUCTION ONLY, NOT LIVE" and that lapsed with A-3.2b
 -- residual 1 (#1512), which gave `deAliases` a production reader (`aliasUniverseAt`,
