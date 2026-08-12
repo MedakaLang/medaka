@@ -7,14 +7,15 @@
 -- declares a PRIVATE record that also has a field `x` — so this program is legal
 -- exactly because the private record does not vote, and `getx` infers `Local -> Int`.
 --
--- 🚨 IT IS A FORWARD GUARD, NOT A DISCRIMINATOR FOR A-3.2b'S OWN DIFF, and saying so
--- is the point.  A-3.2b retires the OVERLAY pool (`universeDataDecls`) and leaves the
--- field-owner table alone, so this fixture passes both before and after that diff.
--- What it guards is the ruling A-3.2b lands the machinery for: `DataEnv` holds the
--- whole graph UNFILTERED, and visibility is a predicate at the READ
--- (`declEnvVisibleTo`).  The next unit to point the field-owner table at `DataEnv`
--- gets exactly two outcomes here — keep the publicity conjunct and this stays green,
--- drop it and this program is REJECTED:
+-- 🚨 IT WAS A FORWARD GUARD; SINCE A-3.2b SLICE 3 IT IS A LIVE DISCRIMINATOR.  This
+-- header used to say "NOT a discriminator for A-3.2b's OWN diff", and that was true of
+-- the FIRST slice, which retired the overlay pool (`universeDataDecls`) and left the
+-- field-owner table alone.  Slice 3 is the unit it was waiting for: `crossRun.
+-- universeFieldOwners` is retired and the field→owners seed is now built from
+-- `declEnvRowVisible` over the per-module rows — whose non-own arm is the
+-- `publicDataDecls` memo.  Keep that publicity conjunct and this stays green; drop it
+-- (or read the flat, ordinal-free `deFieldOwnerIdents` instead, which holds the whole
+-- graph private-included) and this program is REJECTED:
 --
 --     entry.mdk:N:C: Ambiguous field access: '.x' is declared by Hidden, Local;
 --     the record type is undetermined.

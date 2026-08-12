@@ -1,0 +1,2 @@
+getpx : Pt -> Int
+main : Unit

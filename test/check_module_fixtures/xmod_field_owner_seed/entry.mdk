@@ -1,0 +1,20 @@
+-- #1512 (ARCH A-3.2b, slice 3) — THE POSITIVE CONTROL FOR THE FIELD-OWNER SEED.
+--
+-- 🚨 WHY THIS EXISTS ALONGSIDE THE TWO NEUTRALITY FIXTURES.  `private_record_no_field_vote`
+-- and `attributed_record_no_field_vote` both assert that a record does NOT vote — and both
+-- would still pass if the cross-module seed were EMPTY, because the owner they do resolve to
+-- comes from the entry's own module.  A retirement that simply lost the seed would look
+-- green in both.  This fixture is the other direction: the ONLY way `getpx` below can infer
+-- `Pt -> Int` is for `Pt` to be in the field→owners table as the sole owner of `px`, and the
+-- only way `Pt` gets there is the cross-module seed — the entry never names the type, never
+-- imports it, and never applies `getpx` to anything.
+--
+-- `r` is a bare function parameter, so at `.px` the receiver is still an unsolved tyvar and
+-- `resolveFieldRecord` falls to `resolveFieldByOwners`.  Zero owners there is not a silent
+-- wrong answer, it is `unknown field` at exit 1 — so losing the seed is LOUD here, which is
+-- exactly what a positive control should be.
+import m.{mkPt}
+
+getpx r = r.px
+
+main = println (mkPt 1).px

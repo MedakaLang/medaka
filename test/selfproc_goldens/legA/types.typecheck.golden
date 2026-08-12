@@ -448,16 +448,28 @@ deFieldOwnerFixtureB : Decl
 deFieldOwnerFixtureC : Decl
 deFieldOwnerSameNameEnv : DataEnv
 deFieldOwnerSingleEnv : DataEnv
+deKindAbstractFixture : Decl
+deKindFixtureDecls : List Decl
+deKindNewtypeFixture : Decl
+deKindPrivateFixture : Decl
+deKindRow0 : DeclEnvModule
+deKindRow1 : DeclEnvModule
 declBodyVars : String -> List Decl -> List String
 declBodyVarsOf : String -> Decl -> List String
 declCtorIdents : List Decl -> List (String, String, Ident)
 declCtorIdentsOf : Decl -> List (String, String, Ident)
 declCtorNamed : String -> Decl -> Bool
+declEnvDeclFieldOwners : List Decl -> Map String (List String) -> Map String (List String)
 declEnvDeclsOf : List DeclEnvModule -> List Decl
+declEnvKindEntries : List Decl -> List (TabKey, List Kind)
 declEnvModule : Int -> String -> List Decl -> DeclEnvModule
 declEnvModulesFrom : Int -> List (String, List Decl) -> List DeclEnvModule
 declEnvOrdIndex : Map String Int -> List DeclEnvModule -> Map String Int
+declEnvRowKindEntries : Int -> DeclEnvModule -> List (TabKey, List Kind)
 declEnvRowVisible : Int -> DeclEnvModule -> List Decl
+declEnvSeedChain : List DeclEnvModule -> List (TabKey, List Kind) -> Map String (List String) -> Map String (List (TabKey, List Kind)) -> Map String (Map String (List String)) -> (Map String (List (TabKey, List Kind)), Map String (Map String (List String)))
+declEnvSeedDataUniverse : String -> DeclEnvs -> Unit
+declEnvVariantFieldOwners : List Variant -> Map String (List String) -> Map String (List String)
 declEnvVisibleAt : Int -> Int -> Bool
 declEnvVisibleTo : Int -> Int -> Bool -> Bool
 declEnvsOrdOf : String -> DeclEnvs -> Int
@@ -651,6 +663,7 @@ fieldAssignEVars : FieldAssign -> List String
 fieldAssignNamePair : FieldAssign -> (String, Unit)
 fieldAssignSites : FieldAssign -> List (Ref Route)
 fieldFixFrom : Option Loc -> String -> Option (Loc, String)
+fieldNameOf : Field -> String
 fieldOwnerNames : String -> List String
 fieldTyOf : Field -> Ty
 fieldTypeE : List (String, Ref Effvar) -> List (String, Mono) -> Field -> Mono
@@ -1026,6 +1039,7 @@ keyForSite : Map String (List KeyEntry) -> String -> List Mono -> Option String
 keyForSiteByIface : Map String (List KeyEntry) -> String -> List Mono -> Option String
 kindArgMono : List (String, Ref Effvar) -> List (String, Mono) -> Kind -> Ty -> Mono
 kindName : Kind -> String
+kindPublicDataDecl : Decl -> Bool
 kindsEq : List Kind -> List Kind -> Bool
 kpLcp : String -> String -> KP
 krowArgVarNames : List Kind -> List Ty -> List String
@@ -1410,7 +1424,6 @@ registerMethodIfaceParamsMethods : IfaceRef -> List String -> List (String, List
 registerNamedFieldVariants : TyConOrigin -> String -> List String -> List Variant -> Unit
 registerOneAmbiguous : IfaceRef -> List String -> Ty -> Mono -> Option Loc -> Int -> List Int -> List Int -> Unit
 registerOneMethodDict : String -> Int -> Int -> List (Int, Mono) -> Unit
-registerOpaqueParamKinds : List Decl -> Unit
 registerPredGiven : String -> List Mono -> String -> Unit
 registerRecordInfoKeyed : TyConOrigin -> String -> String -> List String -> List Field -> Unit
 registerReqSlots : String -> List (String, Mono) -> Int -> List Require -> Unit

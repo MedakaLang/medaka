@@ -1891,9 +1891,11 @@ checkGradedImplTys ce cur o iface i (t::rest) =
 --     ⚠️ An ABSTRACTLY-exported data type (`export data Asy e a`) USED to land here too,
 --     cross-module, and the abstention was load-bearing for it: judging it reported a
 --     correct program rejected and told the author to add a `Row` parameter the type
---     ALREADY HAD.  #804/#1028 fixed that at the source — registerOpaqueParamKinds
---     publishes an opaque type's kinds — so an abstract head is now judged on its REAL
---     kinds like any other, and this arm no longer covers for it.
+--     ALREADY HAD.  #804/#1028 fixed that at the source — an opaque type's kinds are
+--     published cross-module (`kindPublicDataDecl`'s `VisAbstract` arm; it was
+--     `registerOpaqueParamKinds` until A-3.2b retired the kind universe) — so an
+--     abstract head is now judged on its REAL kinds like any other, and this arm no
+--     longer covers for it.
 -- A head that is not a TyCon spine at all is judged where it can be: a saturated
 -- TUPLE is kind `Type`, which is never a graded slot's kind, so it is reported; a bare
 -- tyvar head carries no kind and is left to the checks that already reject it.
@@ -1921,8 +1923,9 @@ checkGradedImplHeadCon iface o n loc nApplied want = match headRemainingKinds o 
 -- applies (`impl I (Async e)` supplies one).  `None` = "this head's kind is not
 -- knowable here" (an alias or a builtin), which the caller treats as an abstention.
 -- ⚠️ An abstractly-exported type was in that bucket until #804/#1028 and is NOT any
--- more — `registerOpaqueParamKinds` gives it a real `dataParamKindsRef` entry, so it
--- returns `Some` and is judged exactly like a `public export` one.
+-- more — `kindPublicDataDecl`'s `VisAbstract` arm gives it a real `dataParamKindsRef`
+-- entry (via `declEnvSeedChain`), so it returns `Some` and is judged exactly like
+-- a `public export` one.
 -- `key` is minted ONCE and shared by both guard arms via the `where` (#1111
 -- A-2.3 follow-up): the first guard ALWAYS evaluates it (Medaka is strict, and
 -- a `where` scoping over guard arms lowers to `ELetGroup (..key..) (EGuards
@@ -2182,7 +2185,7 @@ public export data Kind = KType | KRow
 -- per-module accumulator.  An abstract export brings the type NAME into scope but
 -- never registers its fields (publicDataDecls drops VisAbstract decls, so they never
 -- reach the record registry in an importer — its PARAM KINDS do travel, since #804/#1028, via
--- registerOpaqueParamKinds, but a kind is not a field).  A dot-access on
+-- kindPublicDataDecl's VisAbstract arm, but a kind is not a field).  A dot-access on
 -- such a type therefore lands at resolveFieldRecord's `head known but no record
 -- info` branch with the type name still recoverable as the receiver's head tycon;
 -- membership here distinguishes that case (clear abstract-export diagnostic) from a
@@ -2713,6 +2716,7 @@ data DeclEnvModule = DeclEnvModule {
     demId : String,
     demDecls : List Decl,
     demPubDecls : List Decl,  -- A-3.2b (#1512): `publicDataDecls demDecls`, MEMOIZED — see `declEnvRowVisible`
+    demKindEntries : List (TabKey, List Kind),  -- A-3.2b slice 2 (#1512): the KIND-public projection's entries, MEMOIZED — see `declEnvRowKindEntries`
   }
 
 data DeclEnvs = DeclEnvs {
@@ -2722,6 +2726,8 @@ data DeclEnvs = DeclEnvs {
     deData : DataEnv,  -- A-3.2a (#1112) built it; A-3.2b residual 1 (#1512) made it LIVE — `aliasUniverseAt` reads `deAliases`
     deImpls : ImplEnv,
     deIfaces : ClassEnv,  -- A-3.3 (#1519) built it; A-3.5c (#1557) made it LIVE — three readers, see the `CE` block
+    deKindsBefore : OrdMap (List (TabKey, List Kind)),
+    deOwnersBefore : OrdMap (OrdMap (List String)),
   }
 
 -- INITIAL construction only, exactly as `freshDriverState` is: a driver that never
@@ -2735,6 +2741,8 @@ emptyDeclEnvs = DeclEnvs {
   deData = emptyDataEnv,
   deImpls = emptyImplEnv,
   deIfaces = emptyClassEnv,
+  deKindsBefore = omEmpty,
+  deOwnersBefore = omEmpty,
 }
 
 -- Build the envelope from the prelude + the loader's dependency-first module list.
@@ -2746,6 +2754,11 @@ buildDeclEnvs : List Decl -> List (String, List Decl) -> DeclEnvs
 buildDeclEnvs coreDecls modules =
   let mods = declEnvModulesFrom 0 (("core", coreDecls)::modules)
   let allDecls = declEnvDeclsOf mods
+  -- A-3.2b (#1512) slices 2+3: the DATA-UNIVERSE SEED CHAIN, built once here for the
+  -- whole graph so the per-module read is one `omLookup` and allocates nothing.  The
+  -- `""` seeds mirror `declEnvOrdIndex`'s: the core pass arrives under that spelling
+  -- and its seed is empty because nothing precedes ordinal 0.  See `declEnvSeedChain`.
+  let seeds = declEnvSeedChain mods [] omEmpty (omInsert "" [] omEmpty) (omInsert "" omEmpty omEmpty)
   DeclEnvs {
     deModules = mods,
     deOrdIndex = declEnvOrdIndex (omInsert "" 0 omEmpty) mods,
@@ -2770,6 +2783,8 @@ buildDeclEnvs coreDecls modules =
     -- over the SAME `mods` (per-module rows, ordinal-tagged), composing rather
     -- than interacting with the other two initialisers for the identical reason.
     deIfaces = buildClassEnv mods,
+    deKindsBefore = fst seeds,
+    deOwnersBefore = snd seeds,
   }
 
 declEnvModulesFrom : Int -> List (String, List Decl) -> List DeclEnvModule
@@ -2787,12 +2802,19 @@ declEnvModulesFrom k ((mid, decls)::rest) =
 -- population: `demDecls` still holds the row's decls unfiltered, which is what the
 -- ruling's "K is the whole graph, visibility is a predicate at the READ" requires —
 -- the two projections sit side by side and `declEnvRowVisible` picks between them.
+--
+-- `demKindEntries` is the SAME discipline for the THIRD projection A-3.2b slice 2
+-- needed (see `kindPublicDataDecl`): a memo of the row's kind-public entries, not a
+-- filtered population.  It is entries rather than decls because the read side wants
+-- `(TabKey, List Kind)` pairs and `inferParamKinds` is pure — computing it here runs
+-- it ONCE PER DECL for the whole run instead of once per (decl, reading module).
 declEnvModule : Int -> String -> List Decl -> DeclEnvModule
 declEnvModule k mid decls = DeclEnvModule {
   demOrd = k,
   demId = mid,
   demDecls = decls,
   demPubDecls = publicDataDecls decls,
+  demKindEntries = declEnvKindEntries (filterList kindPublicDataDecl decls),
 }
 
 declEnvOrdIndex : OrdMap Int -> List DeclEnvModule -> OrdMap Int
@@ -2920,6 +2942,255 @@ declEnvRowVisible cur m
 -- > declEnvVisibleTo 1 1 False
 -- True
 
+-- ── A-3.2b (#1512) slices 2+3: THE DATA-UNIVERSE SEED, READ OUT OF K ─────────
+-- `crossRun.universeDataParamKinds` and `crossRun.universeFieldOwners` are
+-- RETIRED.  Both were the same machine: a cell grown one module at a time by
+-- `appendDataUniverse` and copied into a per-run working ref by
+-- `loadDataUniverse` at the top of every module's `checkBodyImpl` Module arm.
+-- Neither carried a module id or an ordinal, so neither could answer "as seen by
+-- WHOM" — the question §2 K exists to make askable.  The seed now comes from the
+-- whole-graph envelope, projected at the reading module's own ordinal through the
+-- SAME two predicates the overlay pool reads (`declEnvVisibleAt` /
+-- `declEnvVisibleTo`), so A-3.6 keeps its one-body deletion.
+--
+-- 🚨 THE SEED EXCLUDES THE READER'S OWN ROW, AND THAT IS NOT AN ORDINAL
+-- STATEMENT.  A module registers its own decls directly, immediately after this
+-- seed, via `registerAllData … prog0` — which is also what the retired
+-- accumulator did (`appendDataUniverse` runs at the END of a module's arm, so the
+-- universe a module LOADS holds every EARLIER module and never itself).  Seeding
+-- the own row a second time would not merely duplicate work: `addFieldOwners`
+-- does not dedupe, and `mangledHeadCandidates` reads that multimap RAW (no
+-- `sortUniqS`), so a doubled owner key turns its `[pair]` singleton gate into the
+-- give-up arm — `Some pair` becomes `None`.
+--
+-- 🚨 IT IS A CHAIN, NOT A PER-READ FOLD, AND THAT IS A MEASURED REQUIREMENT.  The
+-- first cut of this unit folded the visible rows AT EVERY READ: O(universe) work
+-- and allocation once per module, i.e. the "rebuild the whole thing once per
+-- element" shape `compiler/AGENTS.md` opens with.  CI caught it —
+-- `diff_compiler_perf_scaling`'s `modules` shape put `typecheck` TIME at
+-- 0.299s/0.675s/1.872s over N=100/200/400 where the row's own note says the stage
+-- has been UNDER the 200 ms floor since #154 PR-C, and the shape's climbing rule
+-- (`r2 > r1 * 1.15 && r2 > 2.45`) failed it.  The ALLOC arm called the same run
+-- `ok` at 2.24/2.42, which is exactly the second rule in `compiler/AGENTS.md`: a
+-- quadratic that allocates little is invisible to the allocation arm.
+--
+-- So the seeds are built ONCE, in `buildDeclEnvs`, as a PREFIX CHAIN: reader k's
+-- seed is reader (k-1)'s seed with row (k-1)'s public projection folded in, which
+-- shares structure and costs O(whole graph) for the entire run.  The read is one
+-- `omLookup` and allocates nothing.
+--
+-- 🚨 A-3.6 EDITS HERE, and this note is what makes that an edit rather than a
+-- hunt.  The chain ENCODES `declEnvVisibleAt`'s prefix shape — that is the whole
+-- source of the sharing — even though each step still routes its PROJECTION
+-- through `declEnvRowKindEntries`/`declEnvRowVisible` (hence through
+-- `declEnvVisibleTo`, hence through `declEnvVisibleAt`).  When A-3.6 makes
+-- `declEnvVisibleAt ≡ True`, every reader must see the WHOLE chain instead of its
+-- own prefix: hand every row the FINAL accumulator in `declEnvSeedChain` below.
+-- The publicity conjunct is untouched by that edit, which is the property
+-- `declEnvVisibleTo`'s two-conjunct factoring exists to preserve.
+
+-- The kind entries of row [m] that a reader at ordinal [cur] may see — the exact
+-- peer of `declEnvRowVisible` one projection over, and composed from the same two
+-- predicates rather than from an open-coded `<=` (see `declEnvVisibleTo`'s 🚨
+-- note: an open-coded comparison here would silently survive A-3.6's deletion).
+-- The own-row arm is unfiltered because a module's own kinds are: `registerData`'s
+-- `DData` arm calls `recordParamKinds` regardless of `dataVis`.
+declEnvRowKindEntries : Int -> DeclEnvModule -> List (TabKey, List Kind)
+declEnvRowKindEntries cur m
+  | declEnvVisibleTo cur m.demOrd False = declEnvKindEntries m.demDecls
+  | declEnvVisibleTo cur m.demOrd True = m.demKindEntries
+  | otherwise = []
+
+-- 🚨 THE POPULATION HALF, AND IT MIRRORS `registerData`/`registerVariants` ARM FOR
+-- ARM — including the arms they DO NOT have.  There is no `DAttrib` arm, because
+-- `registerData` has none either (it falls through its `registerData env _ = env`
+-- catch-all).  That gap is a real defect — #1586, S0 — but it spans resolve and
+-- typecheck and is a deliberate behaviour change; a RETIREMENT whose bar is
+-- neutrality must inherit it, not drain it.  Adding a `DAttrib` arm here would
+-- give an attributed data type param kinds it does not have today and move
+-- judgments (#1069/#1090 territory) inside a PR that claims to move none.
+declEnvKindEntries : List Decl -> List (TabKey, List Kind)
+declEnvKindEntries [] = []
+declEnvKindEntries ((DData { dataName = n, dataParams = ps, dataCtors = vs, dataOrigin = o })::rest) = (tyTabKey o n, inferParamKinds ps vs) :: declEnvKindEntries rest
+declEnvKindEntries ((DNewtype { newtypeName = n, newtypeParams = ps, newtypeCtor = con, newtypeFieldTy = fty, newtypeOrigin = o })::rest) = (tyTabKey o n, inferParamKinds ps [Variant con (ConPos [fty])]) :: declEnvKindEntries rest
+declEnvKindEntries (_::rest) = declEnvKindEntries rest
+
+-- `dataParamKindsRef`'s cross-module seed.  `deModules` is ASCENDING, and each
+-- row's entries go on the LEFT of the accumulator, so the highest visible ordinal
+-- ends up FIRST — which is what `recordParamKinds`' prepend / `lookupTab`'s
+-- first-match ordering means (the reader's own registrations are then prepended
+-- ON TOP of this by `registerAllData … prog0`, so the live list still reads
+-- [prog0, overlay, universe]).
+--
+-- ⚠️ THAT ORDERING IS CURRENTLY UNOBSERVABLE, AND IS REPRODUCED ANYWAY.  Since
+-- A-2.3 a `TabKey` is identity-bearing and `tabKeyEq` never equates `TkIdent` with
+-- `TkBare`, so two modules' same-named types cannot share a key: the only
+-- duplicate key is ONE declaration seen twice, whose two values are equal because
+-- `inferParamKinds` is pure over the same inputs.  It goes live the moment a BARE
+-- key can enter the same list — the flat-path population, drained by #1115 (E-1) —
+-- at which point first-match means "last registered wins" again and the
+-- #1069/#1070/#1090 family returns.  It costs a fold direction.  (INFERRED, argued
+-- from the keying and the purity, not from a differential run.)
+-- The chain itself, walked ONCE over the ordinal-ascending rows.  Before folding
+-- row [m] in, both accumulators hold exactly "every row strictly earlier than
+-- [m]", which IS [m]'s own seed — so it is stamped under [m]'s module id here and
+-- read back by one `omLookup` per module.
+--
+-- ⚠️ THE PROJECTION IS READ AT `m.demOrd + 1`, THE ORDINAL OF THE NEXT READER, and
+-- that is not a trick: `declEnvVisibleTo`'s publicity conjunct is CONSTANT over
+-- every `cur > m.demOrd` (all of them take the non-own arm), so one evaluation at
+-- the smallest such reader is the projection every later reader sees.  Doing it
+-- this way keeps the projection defined in exactly one place —
+-- `declEnvRowKindEntries` / `declEnvRowVisible` — instead of open-coding
+-- `m.demKindEntries` / `m.demPubDecls` here, which is the drift A-3.6 would then
+-- have to find twice.
+--
+-- The field-owner population is `declEnvRowVisible` walked through the SAME
+-- `Variant`/`ConNamed` filter `registerVariants` → `registerNamedFieldVariants` →
+-- `registerRecordInfoKeyed` applies, so the owner string is the same `Variant`
+-- constructor name off the same `Decl` node.  `DNewtype` contributes nothing (its
+-- payload is always a synthesised `ConPos`), which is why there is no arm for it,
+-- and `DAttrib` has none for the #1586 reason recorded on `declEnvKindEntries`.
+declEnvSeedChain : List DeclEnvModule -> List (TabKey, List Kind) -> OrdMap (List String) -> OrdMap (List (TabKey, List Kind)) -> OrdMap (OrdMap (List String)) -> (OrdMap (List (TabKey, List Kind)), OrdMap (OrdMap (List String)))
+declEnvSeedChain [] _ _ km om = (km, om)
+declEnvSeedChain (m::rest) kacc oacc km om =
+  declEnvSeedChain
+    rest
+    (declEnvRowKindEntries (m.demOrd + 1) m ++ kacc)
+    (declEnvDeclFieldOwners (declEnvRowVisible (m.demOrd + 1) m) oacc)
+    (omInsert m.demId kacc km)
+    (omInsert m.demId oacc om)
+
+declEnvDeclFieldOwners : List Decl -> OrdMap (List String) -> OrdMap (List String)
+declEnvDeclFieldOwners [] acc = acc
+declEnvDeclFieldOwners ((DData { dataCtors = vs })::rest) acc =
+  declEnvDeclFieldOwners rest (declEnvVariantFieldOwners vs acc)
+declEnvDeclFieldOwners (_::rest) acc = declEnvDeclFieldOwners rest acc
+
+declEnvVariantFieldOwners : List Variant -> OrdMap (List String) -> OrdMap (List String)
+declEnvVariantFieldOwners [] acc = acc
+declEnvVariantFieldOwners ((Variant cn (ConNamed fields _))::rest) acc =
+  declEnvVariantFieldOwners
+    rest
+    (addFieldOwners cn (map fieldNameOf fields) acc)
+declEnvVariantFieldOwners (_::rest) acc = declEnvVariantFieldOwners rest acc
+
+fieldNameOf : Field -> String
+fieldNameOf (Field fn _) = fn
+
+-- The ONE call site of the two seeds, so a future third table cannot be added on
+-- one side only — the same "one body per direction" property `loadDataUniverse`
+-- was factored for, which is what these two lines LEFT.
+--
+-- Keyed by the loader MODULE ID, the same string `buildDeclEnvs` stamped the chain
+-- under, so no ordinal arithmetic happens at the read.  The core pass arrives as
+-- `""` — the spelling both drivers pass for it — and `buildDeclEnvs` registers that
+-- key explicitly, exactly as `declEnvOrdIndex` does, so ordinal 0's empty seed is a
+-- HIT rather than a miss that happens to agree.
+--
+-- 🚨 A MISS YIELDS THE EMPTY SEED, AND THE TWO HALVES THEN FAIL IN OPPOSITE
+-- DIRECTIONS.  Do not read this as one fail-CLOSED story — an earlier version of
+-- this comment did, and it contradicted this same PR's own analysis two functions
+-- up:
+--   * OWNERS — fail-CLOSED, loud.  Zero owners makes `resolveFieldByOwners` take its
+--     `[]` arm, `pushUnknownField`, exit 1.  A reader with an unknown id LOSES
+--     cross-module owners and REJECTS; it cannot silently accept.
+--   * KINDS — fail-SILENT.  A missing param-kind entry makes `fromAstTypeApp` fall
+--     to `appFallback` instead of `foldAppKinds`, so a written row in a `KRow` slot
+--     elaborates as an ordinary TYPE and the effect is erased at exit 0.  That is
+--     #1069, the silent face of #804/#1028, and `opaque_export_row_kind_import`'s
+--     own header calls it out.
+--
+-- ⚠️ THE SILENT DIRECTION IS NEW HERE, and saying so is the point of this note.
+-- Before A-3.2b, `loadDataUniverse` copied the kind universe with NO KEY AT ALL, so
+-- an unknown `mid` could not lose kinds — there was nothing to miss.  This unit
+-- converted a key-free copy into a keyed lookup whose miss is `[]`.  The
+-- REACHABILITY of an unknown `mid` is SUSPECTED-UNPROVEN in both directions
+-- (nobody has constructed one, and the identical `declEnvsOrdOf` → `-1` dependency
+-- already gates #1553's shipped ctor overlay, so the exposure is shared rather than
+-- created here) — but the exposure's SEVERITY on the kind half is not the same as
+-- the owner half's, and a future reader must not infer "loud" from this site.
+declEnvSeedDataUniverse : String -> DeclEnvs -> Unit
+declEnvSeedDataUniverse mid envs =
+  let _ = setRef perRun.value.dataParamKindsRef (fromOption [] (omLookup mid envs.deKindsBefore))
+  setRef
+    perRun.value.fieldOwnersRef
+    (fromOption omEmpty (omLookup mid envs.deOwnersBefore))
+
+-- ── doctests ─────────────────────────────────────────────────────────────
+-- The three arms of `kindPublicDataDecl` that `publicDataDecl` does NOT have are
+-- each load-bearing here: `deKindRow0`'s decls are public data, ABSTRACT data,
+-- PRIVATE data and a PUBLIC NEWTYPE, so the kind-public projection is 3 (drop the
+-- private one) while the own-row projection is all 4.  Drop the `VisAbstract` arm
+-- or the `DNewtype` arm and the first number falls to 2 or 1.
+-- > listLen deKindRow0.demKindEntries
+-- 3
+-- > listLen (declEnvKindEntries deKindRow0.demDecls)
+-- 4
+
+-- Both conjuncts, on the kind projection: own row ⇒ everything; earlier row ⇒ the
+-- kind-public projection; later row ⇒ nothing.
+-- > listLen (declEnvRowKindEntries 0 deKindRow0)
+-- 4
+-- > listLen (declEnvRowKindEntries 1 deKindRow0)
+-- 3
+-- > listLen (declEnvRowKindEntries 0 deKindRow1)
+-- 0
+
+-- The field-owner population: only a `ConNamed` variant votes, and it votes under
+-- its CONSTRUCTOR name.
+-- > fromOption [] (omLookup "x" (declEnvDeclFieldOwners [deFieldOwnerFixtureA] omEmpty))
+-- ["Pt"]
+-- > fromOption [] (omLookup "x" (declEnvDeclFieldOwners [deKindNewtypeFixture] omEmpty))
+-- []
+
+-- Fixtures for the doctests above.  `deKindRow1` is the SAME decls at ordinal 1,
+-- which is how the later-row arm is exercised without a second decl set.
+deKindAbstractFixture : Decl
+deKindAbstractFixture = DData {
+  dataVis = VisAbstract,
+  dataName = "Opq",
+  dataParams = [],
+  dataCtors = [Variant "MkOpq" (ConPos [tyConBuiltin "Int" None])],
+  dataDerives = [],
+  dataOrigin = OriginModule "m",
+}
+
+deKindPrivateFixture : Decl
+deKindPrivateFixture = DData {
+  dataVis = VisPrivate,
+  dataName = "Priv",
+  dataParams = [],
+  dataCtors = [Variant "MkPriv" (ConPos [tyConBuiltin "Int" None])],
+  dataDerives = [],
+  dataOrigin = OriginModule "m",
+}
+
+deKindNewtypeFixture : Decl
+deKindNewtypeFixture = DNewtype {
+  newtypePub = True,
+  newtypeName = "Wrap",
+  newtypeParams = [],
+  newtypeCtor = "Wrap",
+  newtypeFieldTy = tyConBuiltin "Int" None,
+  newtypeDerives = [],
+  newtypeOrigin = OriginModule "m",
+}
+
+deKindFixtureDecls : List Decl
+deKindFixtureDecls = [
+  deFieldOwnerFixtureA,
+  deKindAbstractFixture,
+  deKindPrivateFixture,
+  deKindNewtypeFixture,
+]
+
+deKindRow0 : DeclEnvModule
+deKindRow0 = declEnvModule 0 "m" deKindFixtureDecls
+
+deKindRow1 : DeclEnvModule
+deKindRow1 = declEnvModule 1 "m" deKindFixtureDecls
+
 -- ── A-3.2a (#1112): the `DataEnv` slice ─────────────────────────────────────
 -- ⚠️ This banner read "CONSTRUCTION ONLY, NOT LIVE" and that lapsed with A-3.2b
 -- residual 1 (#1512), which gave `deAliases` a production reader (`aliasUniverseAt`,
@@ -2951,14 +3222,20 @@ declEnvRowVisible cur m
 -- doctests below) and the additive-only golden diffs, not the differential
 -- gates.
 --
--- ⚠️ VISIBILITY DIVERGENCE, for whoever consumes this next: `buildDataEnv`
--- folds EVERY decl in `deAllDecls`, private included.  `universeFieldOwners`/
--- `universeDataEnv` (the live crossRun tables) accumulate only `pubDecls`
--- (`publicDataDecls prog0` at `appendDataUniverse`'s call site) plus a
--- separate opaque-kind-only pass (`registerOpaqueParamKinds`).  `DataEnv`
--- here is therefore a SUPERSET of what the live universe ever held — fine
--- while nothing reads it, a real design question (filter to public at
--- construction, or filter at the read site?) once something does.
+-- ⚠️ VISIBILITY DIVERGENCE, and A-3.2b ANSWERED IT AT THE READ SITE rather
+-- than here: `buildDataEnv` still folds EVERY decl in `deAllDecls`, private
+-- included, and `deFieldOwnerIdents` is therefore a SUPERSET of what the
+-- retired `universeFieldOwners` ever held (which accumulated only `pubDecls`,
+-- plus a separate opaque-kind-only pass for the kind half).  That is why the
+-- field-owner seed (`declEnvSeedChain`) is built from `declEnvRowVisible`
+-- over the per-module ROWS and NOT from this flat table: `DataEnv` is
+-- ordinal-free, so it cannot answer a visibility question at all, and reading
+-- it unfiltered would let a PRIVATE record in an unrelated module vote in
+-- `resolveFieldByOwners`' ambiguity test — a `T-AMBIGUOUS-FIELD` on a program
+-- that compiles today, i.e. an acceptance NARROWING.  `deFieldOwnerIdents`
+-- still has no reader; what it uniquely states (two SAME-NAMED owners kept
+-- apart by identity) is the thing the bare seed cannot, and it is owed to the
+-- unit that re-keys the owner list rather than to this retirement.
 --
 -- ⚠️ LATENT DIVERGENCE, noted rather than fixed: `addCtorIdentRaw` (below)
 -- upserts unconditionally, unlike `addCtorIdentCand`'s upsert-by-identity
@@ -5258,8 +5535,20 @@ data CrossRun = CrossRun {
     universeRecordByName : Ref (OrdMap RecordInfo),
     universeRecordIdentsRef : Ref (OrdMap (List (Ident, String, RecordInfo))),  -- #1111 A-2.12 (#1319 unit 2): the identity-keyed COMPANION of the line above — see insertRecordIdents
     universeRecordCollidedRef : Ref (List String),  -- #1111 A-2.12: the registry KEYS the line above holds ≥2 distinct identities for (normally EMPTY)
-    universeFieldOwners : Ref (OrdMap (List String)),
-    universeDataParamKinds : Ref (List (TabKey, List Kind)),  -- #1111 A-2.3: identity-keyed (TabKey), not bare name — see tyTabKey
+    -- ⚠️ `universeFieldOwners` was HERE and is RETIRED by A-3.2b slice 3 (#1512).
+    -- It was the per-module-grown cross-run field-name → owning-registry-key multimap,
+    -- marshalled by `loadDataUniverse`/`storeDataUniverse`.  The per-module seed now
+    -- comes from stage K: `declEnvsRef.deOwnersBefore`, one `omLookup` by loader module
+    -- id over the prefix chain `declEnvSeedChain` builds.  Do not re-add it — a cross-run
+    -- copy beside K is two answers to "which records can this module see a field of", and
+    -- the copy is the one whose population depends on marshalling order.
+    -- ⚠️ `universeDataParamKinds` was HERE and is RETIRED by A-3.2b slice 2 (#1512).
+    -- Same machine one projection over: the cross-run data-type param-KIND list
+    -- (identity-keyed since #1111 A-2.3).  Its seed is `declEnvsRef.deKindsBefore`, and
+    -- the projection that fills it is `kindPublicDataDecl` — a PEER of `publicDataDecl`,
+    -- admitting `VisAbstract` and public `DNewtype` too, because those are the decls
+    -- `registerOpaqueParamKinds` used to publish separately (#804/#1028).  That pass is
+    -- gone with this cell; do not re-add either.
     -- ⚠️ `universeIfaceParamKinds` was HERE and is RETIRED by A-3.5c (#1557).
     -- It was #822's iface half of the kind universe, identity×slot-keyed since
     -- #1111 A-2.4 and marshalled beside `universeAliasTable` above by the same
@@ -5355,8 +5644,6 @@ freshCrossRun env = CrossRun {
   universeRecordByName = Ref omEmpty,
   universeRecordIdentsRef = Ref omEmpty,
   universeRecordCollidedRef = Ref [],
-  universeFieldOwners = Ref omEmpty,
-  universeDataParamKinds = Ref [],
   universeDataEnv = Ref env,
   universeCtorIdentsRef = Ref omEmpty,
   universeCtorCollidedRef = Ref [],
@@ -12285,9 +12572,11 @@ registerVariants o env name params variants =
   addVariants env tvs etbl paramTyIds rowEffvarIds result variants
 
 -- The sole place that ADDS AN ENTRY to `dataParamKindsRef`.  (It is not the ref's only
--- writer: `loadDataUniverse` replaces the whole list from the cross-run universe, and
--- `freshPerRun`/`resetState` re-init it to `[]`.  Those set the TABLE; this is the only
--- thing that registers a TYPE.)  Prepends, so a later registration shadows an earlier one
+-- writer: `declEnvSeedDataUniverse` replaces the whole list with stage K's projection at
+-- the reading module's ordinal — it was `loadDataUniverse` copying a `crossRun`
+-- accumulator until A-3.2b — and `freshPerRun`/`resetState` re-init it to `[]`.  Those set
+-- the TABLE; this is the only thing that registers a TYPE.)  Prepends, so a later
+-- registration shadows an earlier one
 -- under `lookupAssoc`'s first-match — the module's own decls are registered as a FRONT
 -- overlay over the data universe and therefore win, which is the ordering every reader
 -- assumes (see the `dataEnv` binding in checkBodyImpl).
@@ -19482,6 +19771,13 @@ checkBodyImpl seed mode prog0 =
       -- `DUse` syntax is what made #1425's four-site change resolve on eval and MISS on
       -- emit — `DUse` decls are never mangled.  This key does not go through that
       -- channel.)
+      -- #1112 A-3.2b (#1512) slices 2+3: the KIND and FIELD-OWNER halves of the seed
+      -- `loadDataUniverse` used to copy out of two `crossRun` accumulators.  Same
+      -- position in the ladder (it is the UNIVERSE layer, under the overlay and under
+      -- `prog0`), same content, one ordinal-aware source.  See `declEnvSeedChain` for
+      -- why the reader's OWN row is excluded here and registered by the two
+      -- `registerAllData` calls below instead.
+      let _ = declEnvSeedDataUniverse mid envs
       let base = registerAllData crossRun.value.universeDataEnv.value
                    (importedCtorTypeDecls prog0 cur envs.deModules)
       let env0 = registerAllData base prog0
@@ -24541,70 +24837,101 @@ appendUniverseAccums prog =
   ()
 
 -- #154 PR-A: grow the persistent DATA-universe by [pubDecls] (THIS module's public data).
--- `registerData` / `registerVariants` hardcode the six working table refs, so grow by
+-- `registerData` / `registerVariants` hardcode the working table refs, so grow by
 -- pointing those refs at the persistent values, registering pubDecls over the accumulated
--- ctor env, and snapshotting all seven results back.  Called at the END of checkBodyImpl's
+-- ctor env, and snapshotting the results back.  ⚠️ DERIVE HOW MANY from `loadDataUniverse`
+-- below rather than trusting a count here — this sentence said "six"/"seven" while A-3.2b
+-- was taking the pair to three.  Called at the END of checkBodyImpl's
 -- Module arm, where the working table refs are DEAD (this module's inference is done and the
 -- next module's resetState wipes them), so the clobber is invisible.  Registers each public
 -- decl exactly ONCE across the whole run — the O(N) replacing the Module arm's old
 -- per-module O(|accData|) re-registration.  Only publicDataDecls are folded in (private data
--- stays module-local), matching foldModules' `accData ++ publicDataDecls prog` threading —
--- plus, since #804/#1028, the PARAM KINDS (and nothing else) of the module's OPAQUE types,
--- see registerOpaqueParamKinds.
+-- stays module-local), matching foldModules' `accData ++ publicDataDecls prog` threading.
+-- ⚠️ #804/#1028's OPAQUE-type param kinds used to be published from here too, by a second
+-- pass (`registerOpaqueParamKinds`) whose ONLY purpose was to reach the kind universe.
+-- That universe is retired (see below) and the opaque arms live on `kindPublicDataDecl`,
+-- so the pass is GONE rather than left writing a table nothing reads.
 -- #415 item 3: the cross-module DATA universe ⇄ per-run working tables copy, which was
--- open-coded as a 5-way lockstep mirror at THREE sites (a 4-way one since #1557
--- A-3.5c retired the `ifaceParamKinds` pair) (the Module arm of the data-env
+-- open-coded as an N-way lockstep mirror at THREE sites (the Module arm of the data-env
 -- setup + appendDataUniverse's load and its store-back).  Adding a further universe table
 -- meant remembering all three — the "silently absent from the other side" shape.  It now
--- has one body per direction, and the two are exact inverses of each other.
+-- has one body per direction.  ⚠️ N IS DELIBERATELY NOT A NUMBER HERE: it was 5, then 4
+-- (#1557 A-3.5c), then 1 (#1512 slices 2+3), inside three successive PRs — derive it from
+-- the two bodies below, which are what the invariant note there tells you to read.
 -- ⚠️ universeDataEnv is deliberately NOT copied here: it is threaded through
 -- `registerAllData` by the CALLER (it is that call's env argument and its result), so it
 -- has no meaning as a blind copy.
 --
--- 🚨 A-3.2b residual (#1512): FOUR TABLES, NOT FIVE — AND THE FIFTH IS NOT
--- SILENTLY DROPPED.  `aliasTableRef`'s cross-module seed no longer comes from a
--- cross-run accumulator at all: `crossRun.universeAliasTable` is RETIRED and the
--- seed is a projection of stage K, `aliasUniverseAt cur … .deData.deAliases`,
--- taken at the READER'S OWN ORDINAL.  That is why this function now takes one.
--- `storeDataUniverse` therefore has no alias line to invert — there is exactly
--- one source of truth for "which aliases can this module see", which is design
--- law L1 and the whole point of the retirement.  Do NOT re-add a
--- `setRef crossRun.… perRun.value.aliasTableRef.value` "for symmetry": that
--- would make K and a cross-run copy two answers to one question, and the copy
--- would be the one holding `rejectCyclicAliases`' deletions.
+-- 🚨 THE CROSS-RUN HALF IS NOW ONE CELL, AND THE OTHERS ARE NOT SILENTLY DROPPED.
+-- Three units in a row have edited these two bodies, so read them as TWO SEPARABLE
+-- HALVES rather than as a table count (a count here rots on contact — this comment
+-- has said "five", "four" and "three" in three successive PRs; DERIVE it from the
+-- bodies below):
+--   * CROSS-RUN half — a copy IN and the exact inverse copy OUT, same set, same
+--     order.  `universeRecordByName` is what is left of it: its payload is an
+--     ELABORATED `RecordInfo`, which the Step-0 ruling keeps OUT of syntactic K, so
+--     it stays a marshalled cell until a dedicated elaboration-cache unit.
+--   * STAGE-K half — a PROJECTION at the reader's own ordinal, which has NO inverse
+--     here by construction.  Three tables are now on this side:
+--       `aliasTableRef`      ← `aliasUniverseAt cur … .deData.deAliases`  (#1512 residual 1)
+--       `dataParamKindsRef`  ← `declEnvSeedDataUniverse mid …`            (#1512 slice 2)
+--       `fieldOwnersRef`     ← `declEnvSeedDataUniverse mid …`            (#1512 slice 3)
+--     and `ifaceParamKindsRef` left the pair entirely with #1557 A-3.5c (its reader
+--     sources `ceSlotKindsAt` from `deIfaces`).
+-- Do NOT re-add a `setRef crossRun.… perRun.value.<any of those>.value` "for
+-- symmetry".  That is design law L1's divergence: K and a cross-run copy become two
+-- answers to one question, and the copy is always the one that drifts — it would
+-- carry `rejectCyclicAliases`' per-module alias deletions, and it would carry the
+-- DOUBLED owner keys `appendDataUniverse` now leaves behind (see its own note).
+--
+-- ⚠️ WHEN THIS INVARIANT BREAKS IT IS SILENT — no compile error, no gate, just a
+-- table that stops crossing a module boundary.  After ANY rebase, read the two
+-- bodies side by side and check the cross-run half agrees in SET and in ORDER, and
+-- that each body still has exactly one tail expression and no dangling `let _ =`.
 loadDataUniverse : Int -> Unit
 loadDataUniverse cur =
   let _ = setRef perRun.value.recordByNameRef crossRun.value.universeRecordByName.value
-  let _ = setRef perRun.value.fieldOwnersRef crossRun.value.universeFieldOwners.value
-  let _ = setRef perRun.value.dataParamKindsRef crossRun.value.universeDataParamKinds.value
   setRef
     perRun.value.aliasTableRef
     (aliasUniverseAt cur driverState.value.declEnvsRef.value.deData.deAliases)
 
--- 🚨 THE MIRROR INVARIANT, and it is SILENT when it breaks — no compile error, no
--- gate, just a table that stops crossing a module boundary.  State it as the two
--- separable halves it now is, because two units in a row have edited these bodies:
---   * CROSS-RUN half: `loadDataUniverse` copies THREE `crossRun` cells in
---     (recordByName, fieldOwners, dataParamKinds) and `storeDataUniverse` copies the
---     SAME THREE back out, in the SAME ORDER.  That is the inverse-pair property.
---   * STAGE-K half: the alias seed is a PROJECTION (`aliasUniverseAt cur`), not a
---     copy, so it has no inverse here by construction — A-3.2b residual 1 (#1512).
--- ⚠️ #1557 A-3.5c dropped the `ifaceParamKinds` pair from BOTH bodies, one unit after
--- A-3.2b residual 1 dropped `aliasTable`'s store half.  After any rebase, read the two
--- bodies side by side and check the cross-run half agrees in SET and in ORDER.
+-- The exact inverse of `loadDataUniverse`'s CROSS-RUN half — see the invariant above.
+-- It is one line because that half is one cell; the other three seeds are stage-K
+-- projections and have nothing to invert.
 storeDataUniverse : Unit -> Unit
 storeDataUniverse _ =
-  let _ = setRef crossRun.value.universeRecordByName perRun.value.recordByNameRef.value
-  let _ = setRef crossRun.value.universeFieldOwners perRun.value.fieldOwnersRef.value
-  setRef
-    crossRun.value.universeDataParamKinds
-    perRun.value.dataParamKindsRef.value
+  setRef crossRun.value.universeRecordByName perRun.value.recordByNameRef.value
 
--- ⚠️ Takes THIS MODULE'S WHOLE decl list, not a pre-filtered one: it owns BOTH halves
--- of what a module publishes to the data universe — `publicDataDecls` (ctors + records +
--- kinds, for a `public export` type) and `registerOpaqueParamKinds` (kinds ONLY, for an
--- opaque one).  Filtering at the call site is what let the opaque half go missing for as
--- long as it did (#804/#1028); there is now nothing to remember.
+-- ⚠️ STILL TAKES THIS MODULE'S WHOLE decl list, not a pre-filtered one, even though the
+-- second half it owned has moved.  It used to own BOTH halves of what a module publishes
+-- to the data universe — `publicDataDecls` (ctors + records + kinds, for a `public export`
+-- type) and `registerOpaqueParamKinds` (kinds ONLY, for an opaque one, #804/#1028).
+-- A-3.2b (#1512) slice 2 retired the kind universe, so the opaque half is now a projection
+-- of the whole graph (`kindPublicDataDecl`) rather than a second pass here.  The parameter
+-- stays unfiltered because filtering at the CALL SITE is what let the opaque half go
+-- missing for as long as it did, and a future third half would land here again.
+--
+-- 🚨 WHAT `fieldOwnersRef` AND `dataParamKindsRef` CONTAIN WHEN THIS RUNS CHANGED WITH
+-- A-3.2b, AND THE OLD "the working refs are DEAD here" NOTE DOES NOT COVER IT.  That
+-- note is about WHEN (this module's inference is finished; the next module's
+-- `resetState` wipes them) and it still holds.  What changed is WHAT they hold on
+-- ENTRY.  `loadDataUniverse` used to RESET both refs from the cross-run universe as
+-- its first act; it no longer touches either, so they arrive holding the K seed PLUS
+-- everything this module registered during inference — and `registerAllData … pubDecls`
+-- below then registers this module's PUBLIC decls a SECOND time.  `addFieldOwners`
+-- conses without dedupe, so every own public record is DOUBLE-listed in
+-- `fieldOwnersRef` from that line until the next `resetState`.
+--
+-- ⚠️ UNOBSERVABLE TODAY, AND ONLY BECAUSE NOTHING READS IT IN BETWEEN — verified, not
+-- assumed: `insertRecordIdents`/`insertCtorIdents` below read `recordByNameRef` (an
+-- `omInsert` map, idempotent under re-registration), never the owner multimap.  But a
+-- doubled owner key is EXACTLY the shape `declEnvSeedChain`'s own-row 🚨 exists to
+-- prevent: `mangledHeadCandidates` reads this multimap RAW (no `sortUniqS`), so a key
+-- appearing twice turns its `[pair]` singleton gate into the give-up arm and `Some
+-- pair` becomes `None`.  ⇒ DO NOT ADD A READ OF `fieldOwnersRef` AFTER THIS POINT
+-- without either de-duplicating first or restoring a reset.  (`dataParamKindsRef` gets
+-- the same doubling; it is inert there because `lookupTab` is first-match over
+-- identity-bearing keys whose two copies are equal.)
 appendDataUniverse : String -> List Decl -> Unit
 appendDataUniverse mid prog0 =
   let pubDecls = publicDataDecls prog0
@@ -24616,8 +24943,6 @@ appendDataUniverse mid prog0 =
   -- exactly as it always did.
   let _ = loadDataUniverse (declEnvsOrdOf mid driverState.value.declEnvsRef.value)
   let env2 = registerAllData crossRun.value.universeDataEnv.value pubDecls
-  -- #804/#1028: kinds travel even when the constructors do not.
-  let _ = registerOpaqueParamKinds prog0
   let _ = storeDataUniverse ()
   let _ = setRef crossRun.value.universeDataEnv env2
   -- #1111 A-2.11 (#1319 unit 1): the identity-keyed companion of `universeDataEnv`'s ctor
@@ -24641,73 +24966,6 @@ appendDataUniverse mid prog0 =
   -- the overlay reads the envelope directly (`importedCtorTypeDecls`) instead of a
   -- second, unkeyed copy of the same declarations grown one module at a time.
   setRef crossRun.value.universeRecordCollidedRef (snd recAcc)
-
--- #804/#1028: an OPAQUE type publishes its PARAMETER KINDS, and nothing else.
---
--- `export data Async e a = Done a | Suspend (Unit -> <e> Async e a)` — constructors
--- PRIVATE, the standard opacity pattern (`docs/spec/language-design.md`: "export exposes
--- only the type name; use public export to additionally expose constructors"), and
--- exactly how `stdlib/async.mdk` declares `Async`.  `publicDataDecls` drops such a decl,
--- so before this an importer had NO `dataParamKindsRef` entry for the type: every reader
--- that asks "is slot i row-kinded?" missed, and each one failed differently —
---   * `fromAstTypeApp` fell to `appFallback` instead of `foldAppKinds`/`kindArgMono`, so
---     a written row in the KRow slot elaborated as an ordinary TYPE.  Silent:
---     `seed : Async (<IO> Unit) Int` printed back as `Async Unit Int`, with the row gone
---     from the scheme the user reads to confirm the effect survived inference;
---   * post-#1004 the bare-row spelling instead drew T-ROW-KIND-MISMATCH — a false
---     positive telling the author the slot "isn't row-kinded" when it is;
---   * `rowArgNames` reported no row-kinded argument, so #784's `checkUndeterminedRetEffVars`
---     could not see `Async e a` pinning `<e>` and rejected the method with
---     T-EFFECT-UNDETERMINED;
---   * downstream of those, `Type mismatch: a vs Unit` where the same program written in
---     ONE module reports T-EFFECT-LEAK.
--- A `public export` clone of the same type behaved correctly throughout — constructor
--- visibility was the whole difference.
---
--- A KIND IS NOT A FIELD.  "Slot 0 of `Async` has kind Row" says nothing about `Done` or
--- `Suspend`; the abstraction `export` buys is intact.  So this registers the kinds and
--- deliberately NOT `registerVariants` — no ctor schemes, no `fieldOwnersRef`
--- entries, no named-field registration.  Promoting the decl to `VisPublic` in
--- `publicDataDecls` would have been a one-line "fix" that leaks the constructors.
---
--- `export newtype` is in the same bucket and has no workaround at all: `public` is a
--- parse error on `newtype`, so its constructor is unconditionally module-private.
---
--- NOT `VisPrivate`: a private type's name is not in scope for an importer, and the
--- universe kind table is not import-scoped, so publishing it could only collide a name
--- nobody can spell against one they can.
---
--- ⚠️ THIS PARAGRAPH USED TO SAY `dataParamKindsRef` IS KEYED BY BARE NAME, and to
--- excuse the resulting cross-module clash with a guard that does not do the job.  Both
--- halves are now corrected rather than deleted, because the second half was FALSE and a
--- reader who believed it would conclude there is nothing here to fix:
---   * KEYING.  Since #1111 A-2.3 the key is a `TabKey` (see `tyTabKey`), so an opaque
---     type's kinds are registered under ITS OWN module's identity and are reachable only
---     from an occurrence that resolved to that module.  Two same-named types in
---     unrelated modules no longer share a key on the module path.  The prepend /
---     first-match / own-module-overlay ordering is unchanged.
---   * THE GUARD.  The old text claimed "every hot reader additionally guards on
---     `listLen kinds == listLen args`, so a same-name/different-arity clash abstains
---     rather than mis-kinds".  It does not.  A 2×5 matrix (shadower arity 0/1/2/3 plus a
---     control × the row spelled WRAPPED `Box (<Stdout> Unit) Int` or BARE
---     `Bx <Stdout> Int` at the use site) moved the outcome in NEITHER direction: on the
---     guard-PASSING path the winning entry's kinds are all-`KType`, so `foldAppKinds`
---     erases the row exactly as `appFallback` does.  What actually selected
---     silent-vs-loud was the SPELLING of the row at the use site — `fromAstTypeE`'s
---     `TyEffect` arm unwraps a wrapped row to a real type and keeps inferring silently
---     (#1069), while its `TyRow` arm has no wrapped type and raises
---     `T-ROW-KIND-MISMATCH` (#1090).  Same table, same collision, opposite symptoms.
---   * The flat/single-file path is NOT re-keyed and still competes by bare name; that is
---     the Module-path-only bound recorded on `tyTabKey`, drained by #1115 (E-1).
-registerOpaqueParamKinds : List Decl -> Unit
-registerOpaqueParamKinds [] = ()
-registerOpaqueParamKinds ((DData { dataVis = VisAbstract, dataName = n, dataParams = ps, dataCtors = vs, dataOrigin = o })::rest) =
-  let _ = recordParamKinds o n (inferParamKinds ps vs)
-  registerOpaqueParamKinds rest
-registerOpaqueParamKinds ((DNewtype { newtypePub = True, newtypeName = n, newtypeParams = ps, newtypeCtor = con, newtypeFieldTy = fty, newtypeOrigin = o })::rest) =
-  let _ = recordParamKinds o n (inferParamKinds ps [Variant con (ConPos [fty])])
-  registerOpaqueParamKinds rest
-registerOpaqueParamKinds (_::rest) = registerOpaqueParamKinds rest
 
 -- #154 PR1: buildDefinerShadows with the `allIfaceMethodNames fullUniverse` scan
 -- replaced by the persistent interface-method membership SET.  `direct` still filters
@@ -24941,6 +25199,64 @@ publicDataDecl _ = False
 -- construction, where the old per-arm `d :: …` form preserved it by remembering to.
 publicDataDecls : List Decl -> List Decl
 publicDataDecls decls = filterList publicDataDecl decls
+
+-- 🚨 A-3.2b (#1512) slice 2: THE THIRD PROJECTION, AND IT IS A PEER OF
+-- `publicDataDecl`, NEVER A WIDENING OF IT.  What a module published to the RETIRED
+-- `crossRun.universeDataParamKinds` was NOT `publicDataDecls`: it was `publicDataDecls`
+-- (whose only kind-bearing arm is `DData VisPublic`) PLUS a second, kinds-only pass
+-- over `DData VisAbstract` and `DNewtype { newtypePub = True }`.  Reusing
+-- `publicDataDecl` for the kind seed would therefore LOSE an opaque type's parameter
+-- kinds cross-module, which is #804/#1028 exactly: every reader that asks "is slot i
+-- row-kinded?" misses, and each one fails differently — `fromAstTypeApp` erases a
+-- written row SILENTLY, the bare-row spelling draws a FALSE `T-ROW-KIND-MISMATCH`, and
+-- #784's `checkUndeterminedRetEffVars` cannot see `Async e a` pin `<e>` and rejects the
+-- method.  `stdlib/async.mdk`'s `Async` is that shape; `test/check_module_fixtures/
+-- opaque_param_kinds_xmod/` and its `_newtype` sibling are the fixtures.
+--
+-- A KIND IS NOT A FIELD, which is why this may be wider than `publicDataDecl` without
+-- leaking anything: "slot 0 of `Async` has kind Row" says nothing about `Done` or
+-- `Suspend`, so the abstraction `export` buys is intact.  Only `declEnvKindEntries`
+-- consumes this projection, and it mints kinds and NOTHING else — no ctor schemes, no
+-- `RecordInfo`, no `fieldOwnersRef` entry.  Promoting these decls in `publicDataDecl`
+-- instead would have been the one-line "fix" that leaks the constructors (and drains
+-- #1311/#1305 loud→silent).
+--
+-- ⚠️ NOT `VisPrivate`: a private type's name is not in scope for an importer and the
+-- kind table is not import-scoped, so publishing it could only collide a name nobody
+-- can spell against one they can.  ⚠️ NO `DAttrib` ARM: neither source it replaces had
+-- one — see `declEnvKindEntries` and #1586.  ⚠️ `export newtype` is in the same bucket
+-- as `VisAbstract` and has no workaround at all: `public` is a parse error on `newtype`,
+-- so its constructor is unconditionally module-private, which is why the third arm keys
+-- on `newtypePub` and not on a visibility that does not exist.
+--
+-- ⚠️ WHAT THE IDENTITY KEY DOES AND DOES NOT BUY — inherited verbatim from
+-- `registerOpaqueParamKinds`, which this projection replaced (A-3.2b), because a reader
+-- who believes the retired version of the second bullet concludes there is nothing here
+-- to fix:
+--   * KEYING.  Since #1111 A-2.3 the key is a `TabKey` (see `tyTabKey`), so an opaque
+--     type's kinds are registered under ITS OWN module's identity and are reachable only
+--     from an occurrence that resolved to that module.  Two same-named types in
+--     unrelated modules no longer share a key on the module path.
+--   * THE GUARD.  An older note claimed "every hot reader additionally guards on
+--     `listLen kinds == listLen args`, so a same-name/different-arity clash abstains
+--     rather than mis-kinds".  It does NOT.  A 2×5 matrix (shadower arity 0/1/2/3 plus a
+--     control × the row spelled WRAPPED `Box (<Stdout> Unit) Int` or BARE
+--     `Bx <Stdout> Int` at the use site) moved the outcome in NEITHER direction: on the
+--     guard-PASSING path the winning entry's kinds are all-`KType`, so `foldAppKinds`
+--     erases the row exactly as `appFallback` does.  What actually selected
+--     silent-vs-loud was the SPELLING of the row at the use site — `fromAstTypeE`'s
+--     `TyEffect` arm unwraps a wrapped row to a real type and keeps inferring silently
+--     (#1069), while its `TyRow` arm has no wrapped type and raises
+--     `T-ROW-KIND-MISMATCH` (#1090).  Same table, same collision, opposite symptoms.
+--   * The flat/single-file path is NOT re-keyed and still competes by bare name; that is
+--     the Module-path-only bound recorded on `tyTabKey`, drained by #1115 (E-1).  It is
+--     also why `declEnvSeedChain`'s fold direction is reproduced but currently
+--     unobservable — see its note.
+kindPublicDataDecl : Decl -> Bool
+kindPublicDataDecl (DData { dataVis = VisPublic }) = True
+kindPublicDataDecl (DData { dataVis = VisAbstract }) = True
+kindPublicDataDecl (DNewtype { newtypePub = True }) = True
+kindPublicDataDecl _ = False
 
 -- WS-1a fix: every impl in scope, EXPORT OR NOT.  Instances are GLOBAL (coherence
 -- + dispatch leak across module boundaries regardless of `export`), so the

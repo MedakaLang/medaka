@@ -3279,7 +3279,8 @@ modExportCells (ModExports cells _) = cells
 -- `types/typecheck.publicDataDecls` (`:20153`) publishes `DData VisPublic`,
 -- `DInterface pub`, `DImpl pub` and `DTypeAlias pub` to the data universe and has
 -- **no `DNewtype` arm at all**, so a newtype's constructor scheme is never published.
--- `registerOpaqueParamKinds`'s note states the rule outright (`:20020`):
+-- `kindPublicDataDecl`'s note states the rule outright (it was
+-- `registerOpaqueParamKinds`'s until #1512 A-3.2b retired that pass):
 --   "`export newtype` is in the same bucket and has no workaround at all: `public`
 --    is a parse error on `newtype`, so its constructor is unconditionally
 --    module-private."
