@@ -1616,8 +1616,10 @@ tyTabKey o n = tabKeyOf NsType o n
 -- `tyTabKey`'s peer for the `NsIface` namespace, and the ONE place a key in that
 -- namespace is minted — on both the write side and the read side.  ⚠️ #1557 A-3.5c:
 -- `ifaceParamKindsRef` was one of the two tables named here and is RETIRED; the
--- surviving consumers are `universeIfaceRequiredRef` and stage K's `CE`
--- (`ceRowKey`/`ceLookupAt`, and `ifaceDfsCycleOneSuper`'s superinterface edge).
+-- other was `universeIfaceRequiredRef`, RETIRED in turn by #1557 A-3.5a.  The
+-- surviving consumer is stage K's `CE` alone — `ceRowKey`/`ceLookupAt`, and through
+-- it `ceRequiredAt` (impl completeness), `ceSlotKindsAt` (graded impl heads) and
+-- `ifaceDfsCycleOneSuper`'s superinterface edge.
 --
 -- ── The two sides, and WHY they meet ──────────────────────────────────────
 -- The WRITE side always passes a `DInterface`'s `ifaceOrigin`: the DECLARATION
@@ -1843,7 +1845,8 @@ checkGradedImplHeadDecl _ _ _ = ()
 -- assigned in the loader's dependency-first order, the same order `foldModules`
 -- grows the accumulator in.  The `Flat` arm keeps its own single-module `CE` built
 -- from the very decl list `registerAllData` used to walk, so nothing switched off
--- there: see `gradedClassEnv` at the call site, and note that silently switching this
+-- there: see `classEnvHere` at the call site (named `gradedClassEnv` until #1557
+-- A-3.5a gave it a second consumer, impl-completeness), and note that silently switching this
 -- check OFF for a no-import `medaka check` is exactly the loud→silent regression the
 -- ordinal machinery would otherwise have caused (`declEnvsRef` is EMPTY on Flat).
 --
@@ -4266,7 +4269,12 @@ ieUnivConcreteOf (ImplUniverse conc _ _) = conc
 -- declared, not as elaborated.  CE stores raw Ty/Variant/Field keyed by
 -- identity.  Elaboration to Scheme/Mono/RecordInfo stays where it is today."*
 -- Re-confirmed against this tree before writing a line of this block: every
--- LIVE CE-side table already stores raw `Ty` —
+-- LIVE CE-side table already stores raw `Ty` —  ⚠️ THE LIST BELOW IS A DATED
+-- SNAPSHOT, NOT A LIVE INVENTORY: `universeIfaceParamKinds` was retired by A-3.5c
+-- and `universeIfaceRequiredRef` by A-3.5a (both #1557).  It is kept unedited
+-- because the CLAIM it supports — no CE-side table stores an elaborated
+-- `Scheme`/`Mono`/`RecordInfo` — is what mattered and is still true of the
+-- survivors; derive the live set from `CrossRun` rather than reading it here.
 -- `universeMethodIfaceParamsRef : Ref (OrdMap (IfaceRef, List String, Ty, List
 -- (String, List Kind)))`, `universeMethodIdentsRef`, `universeIfaceRequiredRef
 -- : Ref (Registry (List String))`, `universeIfaceParamKinds : Ref (List
@@ -4370,11 +4378,17 @@ ieUnivConcreteOf (ImplUniverse conc _ _) = conc
 -- position; its methods as `(name, raw Ty, graded scope)` triples — the scope
 -- is `declGradedScope typarams methods`, computed ONCE per interface exactly
 -- as `insertMethodIfaceParams`/`insertMethodIdents` already do, not re-derived
--- per method; its raw `Super` list, unelaborated; and its per-typaram kind
+-- per method; its raw `Super` list, unelaborated; its per-typaram kind
 -- signature, POSITIONAL with `ceTyparams` — `ifaceParamKindsOf p methods` for
 -- each `p`, the SAME pure computation `registerIfaceParamKindsGo` performs
 -- per slot, so a graded interface's `KRow` inference cannot drift between the
--- live universe and this table.
+-- live universe and this table; and, since #1557 A-3.5a, its REQUIRED-method
+-- names — `requiredMethodNames methods`, the SAME pure computation the retired
+-- `universeIfaceRequiredRef` writer (`insertIfaceRequired`) stored under the
+-- SAME `regKeyOfTab (ifaceTabKey ifaceOrigin name)` key, so relocating
+-- impl-completeness onto this row is a population/lifetime move on the Module
+-- arm and not a re-key (the re-key is confined to the Flat arm, which was on a
+-- bare first-match scan).
 --
 -- ⚠️ NO `ceLoc` FIELD, and that is a deliberate departure from a literal
 -- reading of this unit's row sketch, for the SAME reason `ImplRow` carries no
@@ -4400,28 +4414,31 @@ ieUnivConcreteOf (ImplUniverse conc _ _) = conc
 -- consumer to derive an independent assertion from beyond re-stating
 -- `declGradedScope`'s own definition under a different name.
 data CeRow =
-  | CeRow RegKey Int IfaceRef (List String) (List (String, Ty, List (String, List Kind))) (List Super) (List (List Kind))
+  | CeRow RegKey Int IfaceRef (List String) (List (String, Ty, List (String, List Kind))) (List Super) (List (List Kind)) (List String)
 
 ceRowKey : CeRow -> RegKey
-ceRowKey (CeRow k _ _ _ _ _ _) = k
+ceRowKey (CeRow k _ _ _ _ _ _ _) = k
 
 ceRowOrd : CeRow -> Int
-ceRowOrd (CeRow _ o _ _ _ _ _) = o
+ceRowOrd (CeRow _ o _ _ _ _ _ _) = o
 
 ceRowIface : CeRow -> IfaceRef
-ceRowIface (CeRow _ _ ir _ _ _ _) = ir
+ceRowIface (CeRow _ _ ir _ _ _ _ _) = ir
 
 ceRowTyparams : CeRow -> List String
-ceRowTyparams (CeRow _ _ _ tp _ _ _) = tp
+ceRowTyparams (CeRow _ _ _ tp _ _ _ _) = tp
 
 ceRowMethods : CeRow -> List (String, Ty, List (String, List Kind))
-ceRowMethods (CeRow _ _ _ _ ms _ _) = ms
+ceRowMethods (CeRow _ _ _ _ ms _ _ _) = ms
 
 ceRowSupers : CeRow -> List Super
-ceRowSupers (CeRow _ _ _ _ _ sups _) = sups
+ceRowSupers (CeRow _ _ _ _ _ sups _ _) = sups
 
 ceRowParamKinds : CeRow -> List (List Kind)
-ceRowParamKinds (CeRow _ _ _ _ _ _ pk) = pk
+ceRowParamKinds (CeRow _ _ _ _ _ _ pk _) = pk
+
+ceRowRequired : CeRow -> List String
+ceRowRequired (CeRow _ _ _ _ _ _ _ req) = req
 
 -- The registry.  `ceRows` is the population in build order (ordinal order
 -- across modules, declaration order within one); `ceByKey` is the single
@@ -4468,7 +4485,7 @@ classEnvRowsOf ord ((name, typarams, methods, supers, o)::rest) =
   let row = CeRow (regKeyOfTab (ifaceTabKey o name)) ord IfaceRef {
     irName = name,
     irOrigin = o,
-  } typarams (map (ceMethodOf scope) methods) supers (map (p => ifaceParamKindsOf p methods) typarams)
+  } typarams (map (ceMethodOf scope) methods) supers (map (p => ifaceParamKindsOf p methods) typarams) (requiredMethodNames methods)
   row :: classEnvRowsOf ord rest
 
 ceMethodOf : List (String, List Kind) -> IfaceMethod -> (String, Ty, List (String, List Kind))
@@ -4534,6 +4551,24 @@ ceSlotKindsAt : RegKey -> Int -> Int -> ClassEnv -> Option (List Kind)
 ceSlotKindsAt key cur i env = match ceLookupAt key cur env
   None => None
   Some r => nthKindList i (ceRowParamKinds r)
+
+-- #1557 A-3.5a: interface [key]'s REQUIRED-method names at the reading module's
+-- ordinal — the relocation target of `universeIfaceRequiredRef`'s registry lookup
+-- (Module arm) and of `ifaceRequiredMethods`' bare first-match scan (Flat arm).
+--
+-- 🚨 IT MUST GO THROUGH `ceLookupAt`, NOT `regLookupK … env.ceByKey`.  A second
+-- open-coded path to `ceByKey` would bypass `declEnvVisibleAt` and silently perform
+-- A-3.6's widening early, and A-3.6 depends on there being exactly ONE ordinal
+-- predicate to split.  `ceLookupAt`'s own header states the rule.
+--
+-- MISS POLICY, and it is the unit's primary hazard: `None` means "no interface of
+-- that IDENTITY is visible here", and `implCompletenessMsgsOf`'s `None` arm is `[]`
+-- — i.e. a miss produces NO diagnostic, a silent accept.  That is a severity
+-- INCREASE relative to a wrong-but-loud answer, so the population equality this
+-- lookup rests on is what the unit owes evidence for, not the key (which does not
+-- move on the Module arm — see `CeRow`'s field paragraph).
+ceRequiredAt : RegKey -> Int -> ClassEnv -> Option (List String)
+ceRequiredAt key cur env = map ceRowRequired (ceLookupAt key cur env)
 
 nthKindList : Int -> List (List Kind) -> Option (List Kind)
 nthKindList _ [] = None
@@ -5563,7 +5598,6 @@ data CrossRun = CrossRun {
     universeIfaceMethodsRef : Ref (OrdMap Unit),
     universeFunNamesRef : Ref (OrdMap Unit),
     universeKeyBucketsRef : Ref (OrdMap (List KeyEntry)),  -- = KeyBuckets, inlined: that alias is defined below this record, so it wouldn't expand in a field-type projection
-    universeIfaceRequiredRef : Ref (Registry (List String)),  -- #1111 A-2.4: identity-keyed (RegKey over an iface Ident), not bare name — see ifaceTabKey
     universeMethodIfaceParamsRef : Ref (OrdMap (IfaceRef, List String, Ty, List (String, List Kind))),
     universeMethodIdentsRef : Ref (OrdMap (List (Ident, (IfaceRef, List String, Ty, List (String, List Kind))))),  -- #1111 A-2.5 (#1092): the identity-keyed COMPANION of the line above — see methodIdentOf
     universeMethodCollidedRef : Ref (List String),  -- #1111 A-2.5: the method NAMES the line above holds ≥2 distinct identities for (normally EMPTY)
@@ -5586,6 +5620,20 @@ data CrossRun = CrossRun {
     -- admitting `VisAbstract` and public `DNewtype` too, because those are the decls
     -- `registerOpaqueParamKinds` used to publish separately (#804/#1028).  That pass is
     -- gone with this cell; do not re-add either.
+    -- ⚠️ `universeIfaceRequiredRef` was HERE and is RETIRED by A-3.5a (#1557).
+    -- It was the per-module-grown iface → required-method-names `Registry` that
+    -- impl-completeness read on the Module arm, identity-keyed since #1111 A-2.4
+    -- (`regKeyOfTab (ifaceTabKey ifaceOrigin name)`).  Stage K's `CE` already holds
+    -- exactly that value under exactly that key (`ceRowRequired`, minted by
+    -- `classEnvRowsOf` from the same `requiredMethodNames`), so the cell was a second
+    -- copy of a stage-K projection — the dual-write shape design law L1 removes.  Its
+    -- one reader (`implCompletenessMsgsOfMap`) now calls `ceRequiredAt` at the reading
+    -- module's ordinal, and the FLAT arm's separate bare-name scan
+    -- (`ifaceRequiredMethods`) went with it: there is now ONE checker for both modes.
+    -- Its writer `insertIfaceRequired` and that writer's `appendUniverseAccums` call
+    -- are gone too.  ⚠️ It was NOT in the `loadDataUniverse`/`storeDataUniverse`
+    -- ladder (it was written only from `appendUniverseAccums`), so unlike A-3.5c this
+    -- retirement does not touch that marshalling pair and cannot desynchronize it.
     -- ⚠️ `universeIfaceParamKinds` was HERE and is RETIRED by A-3.5c (#1557).
     -- It was #822's iface half of the kind universe, identity×slot-keyed since
     -- #1111 A-2.4 and marshalled beside `universeAliasTable` above by the same
@@ -5672,7 +5720,6 @@ freshCrossRun env = CrossRun {
   universeIfaceMethodsRef = Ref omEmpty,
   universeFunNamesRef = Ref omEmpty,
   universeKeyBucketsRef = Ref omEmpty,
-  universeIfaceRequiredRef = Ref regEmpty,
   universeMethodIfaceParamsRef = Ref omEmpty,
   universeMethodIdentsRef = Ref omEmpty,
   universeMethodCollidedRef = Ref [],
@@ -15530,34 +15577,24 @@ foreachUnit f (x::xs) =
 --   • desugar's fillImplDefaults has synthesized same-module default clauses INTO
 --     the impl — which only ADDS to the defined set, never removes a required one,
 --     so it cannot mask a genuinely-missing required method.
--- [lookupDecls] (prelude + accumulated modules + this module) resolves the
--- interface decl even when it is imported; [iterDecls] (this module's own decls)
--- are the impls to check.  Unknown interface (not in scope) → skip (a distinct
--- error is reported elsewhere), mirroring superImplMsgsOf.
-checkImplCompleteness : List Decl -> List Decl -> Unit
-checkImplCompleteness lookupDecls iterDecls =
-  foreachUnit
-    pushIncompleteImpl
-    (flatMap (implCompletenessMsgsOf lookupDecls) iterDecls)
-
+-- The interface decl is resolved out of stage K's `CE` at the reading module's
+-- ordinal (`ceRequiredAt`), so an IMPORTED interface resolves exactly as a local one
+-- does; [iterDecls] (this module's own decls) are the impls to check.  Unknown
+-- interface (not in scope) → skip (a distinct error is reported elsewhere),
+-- mirroring superImplMsgsOf.
+--
+-- #1557 A-3.5a: there is now ONE checker for both driver modes.  There used to be
+-- two — `checkImplCompleteness`, whose Flat arm looked the interface up by a BARE
+-- first-match scan over the decl list, and `checkImplCompletenessMap` below.  The
+-- Flat arm's deletion is the unit's only genuine RE-KEY (owner RULING on #1557 OWED
+-- 1, 2026-08-12: re-key, accept the acceptance delta, no bare-spelling compatibility
+-- leg on CE).  Its one observable consequence: on a flat program where a USER
+-- interface shadows a prelude one by spelling, the bare scan walked
+-- `coreProg ++ userProg` head-first and returned the PRELUDE's required set for a
+-- user impl; under identity the impl's own `implOrigin` decides, which is the
+-- correct answer.
 pushIncompleteImpl : (Option Loc, String) -> Unit
 pushIncompleteImpl (loc, msg) = pushTypeErrorOnceAt "T-INCOMPLETE-IMPL" loc msg
-
--- the missing-required-method errors for one decl (a DImpl, possibly DAttrib-
--- wrapped); [] for a non-impl decl, an unknown interface, or a complete impl.
-implCompletenessMsgsOf : List Decl -> Decl -> List (Option Loc, String)
-implCompletenessMsgsOf lookupDecls (DAttrib _ d) =
-  implCompletenessMsgsOf lookupDecls d
-implCompletenessMsgsOf lookupDecls DImpl { iface, tys, methods, ... } =
-  match ifaceRequiredMethods lookupDecls iface
-    None => []   -- unknown interface (reported elsewhere) → skip
-    Some required =>
-      let defined = map implMethodName methods
-      let loc = firstImplMethodLoc methods
-      map
-        (m => (loc, missingImplMethodMsg iface tys m))
-        (filter (m => not (contains m defined)) required)
-implCompletenessMsgsOf _ _ = []
 
 implMethodName : ImplMethod -> String
 implMethodName (ImplMethod n _ _) = n
@@ -15568,18 +15605,10 @@ firstImplMethodLoc : List ImplMethod -> Option Loc
 firstImplMethodLoc [] = None
 firstImplMethodLoc ((ImplMethod _ _ body)::_) = exprLoc body
 
--- the names of interface [target]'s REQUIRED methods (those whose merged
--- IfaceMethod carries NO default body); None if no such interface is in scope.
-ifaceRequiredMethods : List Decl -> String -> Option (List String)
-ifaceRequiredMethods [] _ = None
-ifaceRequiredMethods ((DAttrib _ d)::rest) target = match ifaceRequiredMethods [d] target
-  Some r => Some r
-  None => ifaceRequiredMethods rest target
-ifaceRequiredMethods ((DInterface { name, methods, ... })::rest) target
-  | name == target = Some (requiredMethodNames methods)
-  | otherwise = ifaceRequiredMethods rest target
-ifaceRequiredMethods (_::rest) target = ifaceRequiredMethods rest target
-
+-- the names of an interface's REQUIRED methods (those whose merged IfaceMethod
+-- carries NO default body).  Since #1557 A-3.5a this is called ONCE PER INTERFACE at
+-- `CeRow` construction (`classEnvRowsOf`) rather than once per impl-check, and it is
+-- the same pure computation the retired `insertIfaceRequired` writer stored.
 requiredMethodNames : List IfaceMethod -> List String
 requiredMethodNames [] = []
 requiredMethodNames ((IfaceMethod n _ None)::rest) =
@@ -15587,6 +15616,14 @@ requiredMethodNames ((IfaceMethod n _ None)::rest) =
 requiredMethodNames ((IfaceMethod _ _ (Some _))::rest) =
   requiredMethodNames rest
 
+-- ⚠️ THE `Map` SUFFIX IS HISTORICAL and is kept deliberately: it named the
+-- `Registry` this function used to take, which #1557 A-3.5a replaced with `CE`.  The
+-- name is NOT renamed because it is cited from `compiler/frontend/resolve.mdk`, from
+-- `compiler/TYPECHECK-TARGET-ARCHITECTURE.md` and from three comment blocks in this
+-- file, and a rename would strand all of them — the stale-symbol failure this arc has
+-- already paid for repeatedly.  Since A-3.5a there is no non-`Map` sibling; this is
+-- the ONE impl-completeness checker, for both driver modes.
+--
 -- #154 PR1: the multi-module analogue of checkImplCompleteness — identical, but the
 -- per-impl `ifaceRequiredMethods fullUniverse iface` O(N) scan is replaced by an O(log N)
 -- lookup in the persistent iface→required-methods registry (universeIfaceRequiredRef).
@@ -15612,19 +15649,33 @@ requiredMethodNames ((IfaceMethod _ _ (Some _))::rest) =
 -- methods of the interface the impl actually names.  `Registry` is still
 -- last-write-wins and still O(log N) — what changed is only WHAT COUNTS AS THE SAME
 -- KEY, which is the entire defect.
-checkImplCompletenessMap : Registry (List String) -> List Decl -> Unit
-checkImplCompletenessMap reqMap iterDecls =
+--
+-- #1557 A-3.5a: the SOURCE of that lookup moves from the per-run
+-- `universeIfaceRequiredRef` accumulator to stage K's whole-graph `CE`, read at the
+-- reading module's ordinal through `ceRequiredAt`.  🚨 THE KEY DOES NOT MOVE — it is
+-- `regKeyOfTab (ifaceTabKey o iface)` on both sides, and `CeRow`'s own key is minted
+-- by `classEnvRowsOf` from the SAME `ifaceTabKey ifaceOrigin name`, so this arm
+-- carries no re-keying acceptance delta.  What moves is the POPULATION's provenance:
+-- an accumulator grown by `appendUniverseAccums prog0` earlier in this same body
+-- (ordinals 0..cur inclusive) becomes the whole-graph table filtered by
+-- `declEnvVisibleAt cur o`, which is `entryOrd <= cur` — the same prefix.
+-- Required-ness is prePass-INVARIANT: `requiredMethodNames` reads only the
+-- `Some`/`None` presence of `IfaceMethod`'s third position, and the prePass rewrite
+-- touches only a `Some (…, e)` arm's body, so building `CE` from raw `demDecls` while
+-- this body may hold prePass-rewritten decls cannot change the answer.
+checkImplCompletenessMap : ClassEnv -> Int -> List Decl -> Unit
+checkImplCompletenessMap ce cur iterDecls =
   foreachUnit
     pushIncompleteImpl
-    (flatMap (implCompletenessMsgsOfMap reqMap) iterDecls)
+    (flatMap (implCompletenessMsgsOfMap ce cur) iterDecls)
 
 -- OCCURRENCE MINT (#1110/#1111 A-2.4): `implOrigin` beside `iface` in the same
 -- record pattern, so the identity and the name it qualifies cannot drift apart.
-implCompletenessMsgsOfMap : Registry (List String) -> Decl -> List (Option Loc, String)
-implCompletenessMsgsOfMap reqMap (DAttrib _ d) =
-  implCompletenessMsgsOfMap reqMap d
-implCompletenessMsgsOfMap reqMap DImpl { iface, tys, methods, implOrigin = o, ... } =
-  match regLookupK (regKeyOfTab (ifaceTabKey o iface)) reqMap
+implCompletenessMsgsOfMap : ClassEnv -> Int -> Decl -> List (Option Loc, String)
+implCompletenessMsgsOfMap ce cur (DAttrib _ d) =
+  implCompletenessMsgsOfMap ce cur d
+implCompletenessMsgsOfMap ce cur DImpl { iface, tys, methods, implOrigin = o, ... } =
+  match ceRequiredAt (regKeyOfTab (ifaceTabKey o iface)) cur ce
     None => []   -- unknown interface (reported elsewhere) → skip
     Some required =>
       let defined = map implMethodName methods
@@ -15632,18 +15683,15 @@ implCompletenessMsgsOfMap reqMap DImpl { iface, tys, methods, implOrigin = o, ..
       map
         (m => (loc, missingImplMethodMsg iface tys m))
         (filter (m => not (contains m defined)) required)
-implCompletenessMsgsOfMap _ _ = []
+implCompletenessMsgsOfMap _ _ _ = []
 
--- #154 PR1: fold each interface in [prog] into the required-methods registry.  Mirrors
--- ifaceRequiredMethods' DAttrib-unwrapping + `requiredMethodNames methods` value.
--- DECLARATION MINT (#1110/#1111 A-2.4): `ifaceOrigin`, the declaring module's stamp.
-insertIfaceRequired : List Decl -> Registry (List String) -> Registry (List String)
-insertIfaceRequired [] m = m
-insertIfaceRequired ((DAttrib _ d)::rest) m =
-  insertIfaceRequired rest (insertIfaceRequired [d] m)
-insertIfaceRequired ((DInterface { name, methods, ifaceOrigin = o, ... })::rest) m = insertIfaceRequired rest (regInsertK (regKeyOfTab (ifaceTabKey o name)) (requiredMethodNames methods) m)
-insertIfaceRequired (_::rest) m = insertIfaceRequired rest m
-
+-- 🪦 RETIRED 2026-08-12 (A-3.5a, #1557): `insertIfaceRequired`, the DECLARATION-MINT
+-- writer of `universeIfaceRequiredRef` (see that cell's tombstone in `CrossRun`).  Its
+-- job is done by `classEnvRowsOf`, which mints the SAME key from the SAME
+-- `ifaceOrigin` and stores the SAME `requiredMethodNames methods` value on `CeRow`.
+-- Its DAttrib-unwrapping is preserved too: `classEnvDeclFact` unwraps `DAttrib` on the
+-- way into `CE`, so an attributed interface decl still contributes a row.
+--
 -- #154 PR2 (site #3): fold [prog]'s interface decls into the pair of accumulators that
 -- feed methodIfaceParamsRef / registeredIfacesRef.  A PURE mirror of
 -- registerMethodIfaceParamsAll (DAttrib-unwrap → per-method `omInsert mname (iface,
@@ -19524,8 +19572,11 @@ checkBodyImpl seed mode prog0 =
   -- completeness / obligations): Flat = whole flattened program; Module = imported
   -- data + impl universe + this module.
   -- #154 PR-A: every consumer of `fullUniverse` is a `Flat _ =>` arm (grep confirms:
-  -- buildDefinerShadows / buildKeyTable / registerMethodIfaceParamsAll / checkImplCompleteness
-  -- / checkImplObligations / checkCallObligations — all Flat).  Medaka is STRICT, so the
+  -- buildDefinerShadows / buildKeyTable / registerMethodIfaceParamsAll
+  -- / checkImplObligations / checkCallObligations — all Flat).  #1557 A-3.5a removed
+  -- `checkImplCompleteness` from that list: impl-completeness no longer takes a decl
+  -- list on either arm, it reads `classEnvHere` (whose Flat arm is built from `prog`,
+  -- which IS this binding on that arm).  Medaka is STRICT, so the
   -- Module arm's `accData ++ implDecls ++ prog0` allocated an O(|accData|) list every module
   -- and discarded it unread — a dead per-module O(N) concat.  Bind `[]` on Module.
   let fullUniverse = match mode
@@ -19833,12 +19884,19 @@ checkBodyImpl seed mode prog0 =
   -- arm-gated shape exactly.  The Flat arm builds its own single-module `CE` from
   -- `prog`, the very list `registerAllData initialEnv prog` walked to fill the
   -- retired table, so the check does not go silent on a no-import `medaka check`.
-  let gradedClassEnv = match mode
+  -- #1557 A-3.5a: this pair is now BOUND ONCE and read by TWO consumers — the graded
+  -- impl-head check here and impl-completeness at the end of the body — hence the
+  -- neutral name.  Binding once is not a style choice: `flatClassEnvOf` folds the whole
+  -- decl list into a registry, so a second construction at the completeness site would
+  -- pay that fold twice per flat compile, and the two copies could drift.  On Flat
+  -- `fullUniverse = prog` (see its binding above), so `flatClassEnvOf prog` IS the
+  -- `flatClassEnvOf fullUniverse` the completeness relocation calls for.
+  let classEnvHere = match mode
     Flat _ => (flatClassEnvOf prog, 0)
     Module mid _ _ =>
       let envs = driverState.value.declEnvsRef.value
       (envs.deIfaces, declEnvsOrdOf mid envs)
-  let _ = checkGradedImplHeads (fst gradedClassEnv) (snd gradedClassEnv) prog
+  let _ = checkGradedImplHeads (fst classEnvHere) (snd classEnvHere) prog
   let _ = rejectCyclicAliases ()
   -- #1280: `prog` reached here through a driver's stamping walk already, and
   -- `stampTyHead` is first-write-immune, so the builtins-only scope can only fill
@@ -19948,11 +20006,15 @@ checkBodyImpl seed mode prog0 =
           ++ crossRun.value.crossModuleSchemeOblsQualRef.value)
       ()
   let _ = groundMultiParamObligations groundUniverse perRun.value.implObls.items.value
-  -- P0-17: impl missing a required method.  #154 PR1: the Module path looks the required
-  -- methods up in the accumulated iface→required map instead of rescanning fullUniverse.
-  let _ = match mode
-    Flat _ => checkImplCompleteness fullUniverse prog
-    Module _ _ _ => checkImplCompletenessMap crossRun.value.universeIfaceRequiredRef.value prog
+  -- P0-17: impl missing a required method.  #1557 A-3.5a: ONE call, both modes — the
+  -- arm split is gone because `classEnvHere` above already carries the mode's `CE` and
+  -- its reading ordinal (Flat: a single-module `CE` over `prog`, which IS `fullUniverse`
+  -- on that arm, at ordinal 0; Module: stage K's whole-graph `deIfaces` at this module's
+  -- ordinal).  🚨 It must NOT read `declEnvsRef` unconditionally: that envelope is
+  -- `emptyDeclEnvs` on every Flat path, so a Flat read would make `ceRequiredAt` miss on
+  -- every interface, and the miss arm is `[]` — every live rejection here would become a
+  -- silent accept.  `classEnvHere`'s `Flat _` arm is what prevents that.
+  let _ = checkImplCompletenessMap (fst classEnvHere) (snd classEnvHere) prog
   -- (#5 / BREAK #2) obligation gate.  FLAT runs checkImplObligations + setNumlitFloats
   -- UNCONDITIONALLY (flat-emit via elaborateDict needs the Float int-literal stamp — its
   -- resolve chain doesn't redo it).  MODULE runs them iff `not implInferEnabled` (the emit
@@ -24834,20 +24896,25 @@ buildDefinerShadows implDecls prog =
     None => []) localNames
   removeAllS (localBoundNames prog) (dedup (direct ++ bares))
 
--- #154 PR1: fold THIS module's decls into the four persistent universe accumulators
+-- #154 PR1: fold THIS module's decls into the persistent universe accumulators
 -- (see their declarations near shadowKeyTableRef).  Called from checkBodyImpl's Module
--- arm BEFORE the shadow/key/completeness reads, so this module's own decls are visible
+-- arm BEFORE the shadow/key reads, so this module's own decls are visible
 -- there — exactly as `fullUniverse` (which appended prog0) was.  keyEntryOf/bucketKeyEntries
--- and requiredMethodNames are the SAME builders buildKeyTable / ifaceRequiredMethods use,
--- so the accumulated tables are entry-for-entry the per-module rebuild.
+-- are the SAME builders buildKeyTable uses, so the accumulated tables are entry-for-entry
+-- the per-module rebuild.
+-- ⚠️ #1557 A-3.5a REMOVED THE COMPLETENESS LINE from this fold, with the
+-- `universeIfaceRequiredRef` cell and its `insertIfaceRequired` writer.  The ordering
+-- guarantee this comment records ("this module's own decls are visible at the read")
+-- is no longer what impl-completeness depends on: it reads stage K's `CE`, whose rows
+-- carry their declaring module's ordinal, and `declEnvVisibleAt cur o` (`o <= cur`)
+-- admits the reader's OWN row — the same 0..cur-inclusive prefix the accumulator held
+-- here.  Do not re-add a completeness accumulator to restore an ordering property that
+-- has moved onto the ordinal predicate.
 appendUniverseAccums : List Decl -> Unit
 appendUniverseAccums prog =
   let _ = setRef crossRun.value.universeIfaceMethodsRef (namesToSet (allIfaceMethodNames prog) crossRun.value.universeIfaceMethodsRef.value)
   let _ = setRef crossRun.value.universeFunNamesRef (namesToSet (map fst (funDefs prog)) crossRun.value.universeFunNamesRef.value)
   let _ = setRef crossRun.value.universeKeyBucketsRef (bucketKeyEntries (flatMap keyEntryOf prog) crossRun.value.universeKeyBucketsRef.value)
-  let _ = setRef
-    crossRun.value.universeIfaceRequiredRef
-    (insertIfaceRequired prog crossRun.value.universeIfaceRequiredRef.value)
   -- #154 PR2 (site #3): grow the methodIfaceParams / registeredIfaces accumulators by
   -- THIS module's interfaces, in lockstep (one decl walk).
   let acc = insertMethodIfaceParams prog (crossRun.value.universeMethodIfaceParamsRef.value, crossRun.value.universeRegisteredIfacesRef.value)
@@ -26716,7 +26783,7 @@ checkModules runtimeDecls coreDecls0 modules0 =
 --
 -- ⚠️ PRECONDITION (#154 PR1/PR2): this is per-module, and the Module path now consults
 -- the persistent universe accumulators (universeIfaceMethodsRef / universeKeyBucketsRef /
--- universeIfaceRequiredRef / universeMethodIfaceParamsRef / …) which SURVIVE the
+-- universeMethodIfaceParamsRef / …) which SURVIVE the
 -- per-module resetState.  They are grown by `appendUniverseAccums prog0` per module but
 -- must be CLEARED once per run by `resetCrossModuleState` (and seeded by the core pass)
 -- BEFORE the first module.  Every existing caller goes through a driver that does exactly

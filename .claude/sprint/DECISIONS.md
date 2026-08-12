@@ -817,3 +817,97 @@ scope:      📌 **Method note.** Two escalations were taken to the owner as a p
             a precise claim is not a verified one, and an orchestrator's brief is not a relay.
             Unit F's remaining sprint scope is unchanged: **F-0, F-3, F-4** (F-4 still gated on
             #1216, which is now simply "not ours" rather than "awaiting re-assignment").
+
+## RUN-030 — Unit F — **F-4 DROPPED**: a downstream consequence of the #1216 ruling
+
+question:   RUN-029 left F-4 "gated on #1216, which is now not ours." Does F-4 still ship?
+ruling:     **No. F-4 is dropped from the sprint.** Unit F ships **F-0 + F-3 only**. It therefore
+            drains **#1586 (S0)** but **NOT #1383 (S1)**.
+derivation: P0-G's ordering constraint, stated as a constraint and not a note: F-4 changes the
+            selected `RecordInfo` while `inferFieldAccess` still stamps a **bare** key, and #1383's
+            own body says that conversion turns the S1 into **#1382's S0**. P0-G: *"F-4 must not
+            land before the stamp [fix]."* The stamp fix is #1216, ruled out of scope (RUN-029).
+            ⇒ Landing F-4 alone would trade a **loud S1 for a silent S0** — a severity INCREASE,
+            and precisely the loud→quiet regression this repo's ladder forbids.
+scope:      ⚠️ **This is a chained consequence, not a new judgement**: the owner ruled only on
+            #1216's assignment, and F-4's fate followed from it two steps later. Recorded because
+            an unrecorded chained consequence is how scope silently shrinks — the sprint would
+            otherwise report "Unit F landed" while the S1 it was scoped to drain stayed live.
+            **Revised Unit F outcome: #1586 drains, #1383 does not.** #1383 now needs the same
+            treatment as F-1/F-2 — it is blocked on an emitter fix, and nothing in the typecheck
+            lane can unblock it. Its pin stays non-flip for this sprint.
+            📌 The dependency is worth stating plainly for the handoff: **#1383's typecheck half
+            cannot land until #1216's emitter half does.** That coupling is not recorded on either
+            issue.
+
+## RUN-031 — Unit F — **F-3 REFUSED: the briefed site is unreachable dead code.** Unit F drains NOTHING
+
+question:   Did F-3 land, and does Unit F deliver the S0/S1 drain RUN-027 promised?
+ruling:     **F-3 did NOT land, correctly.** The implementer refused it and proved the briefed
+            transformation is a no-op. **Unit F ships F-0 (a pin) ONLY, and drains NEITHER #1586
+            NOR #1383.** RUN-027's *"F-0/F-3/F-4 drain #1383 and #1586"* **is not achievable as
+            scoped** and is hereby superseded.
+derivation: RELAYED from the Unit F implementer as a **closed chain of grepped readings**, which is
+            why it is accepted rather than re-litigated:
+            `declEnvDeclFieldOwners` has ONE production caller — `declEnvSeedChain:3061` — which
+            passes `declEnvRowVisible (m.demOrd + 1) m`; at that `cur`, `declEnvRowVisible:2927-2931`
+            + `declEnvVisibleTo:2911-2913` **always** take the `m.demPubDecls` arm;
+            `declEnvModule:2819` sets `demPubDecls = publicDataDecls decls`; and
+            `publicDataDecl:25234-25239` has **no `DAttrib` arm** (`_ = False`).
+            ⇒ **A `DAttrib` can never reach the briefed function.** Adding an arm there is
+            unreachable code.
+            ⭐ The tree already said so, and three passes over this territory missed it:
+            `test/check_module_fixtures/attributed_record_no_field_vote/entry.mdk` calls that arm
+            *"the `publicDataDecls` memo, `DAttrib`-blind by construction."*
+            **#1586 is LIVE**, re-measured with a discriminating control: single-file repro → exit 0,
+            silent `g : A -> Int`; positive control (only the `@deprecated "old"` line removed) →
+            exit 1, `T-AMBIGUOUS-FIELD`. Its real sites are `registerData:12504-12523` (the
+            Flat/own-row half, where the headline S0 lives — `declEnvDeclFieldOwners` is **not on the
+            Flat path at all**), `resolve.mdk`'s `fieldOwnersOf`, and for the cross-module arm
+            **`publicDataDecl` itself** — which is neither small nor pre-licensed:
+            `typecheck.mdk:3398-3405` calls letting an attributed decl through it *"an acceptance
+            WIDENING, incoherent besides."*
+scope:      **Revised Unit F outcome: one pin, zero drains.** Everything the owner scoped Unit F in
+            to achieve (RUN-023: *"drain the S0/S1 rather than record them"*) has now been shown
+            unreachable within this sprint's posture — #1216 is an emitter bug, #1383 is blocked
+            behind it, #1597 was deferred, and #1586's real fix is an explicitly-unlicensed widening.
+            ⇒ **#1586 needs the same treatment as F-1/F-2**: a re-scope with its true sites named.
+            Escalated to the owner rather than absorbed.
+            📌 **The pattern, now three-for-three:** every Unit F bite failed for the same reason —
+            *the design named a plausible site that the code cannot reach*. F-3's site is
+            `DAttrib`-blind by construction; F-4's precondition lives in another subsystem; F-1/F-2's
+            gate is deferred. A bite list is only as good as its **reachability** claims, and
+            "grep-verified the symbol exists" does not establish that the symbol is *on the path*.
+            That distinction is the cheapest lesson available from this unit.
+
+## RUN-032 — Unit F — F-0 landed, and it MOVED HARNESS on measured evidence
+
+question:   P0-G specified F-0 as a `check_module_fixtures` cell. Was that right?
+ruling:     **No — moved to `test/must_fail_fixtures/1597-unimported-record-votes-in-field-owners/`,
+            on MEASURED evidence.** Accepted.
+derivation: RELAYED. The implementer **built the `check_module_fixtures` cell first**, then measured
+            it blind: `diff_compiler_check_modules.sh` diffs only the **entry** module's sorted
+            scheme dump, and `check_modules_main … entry.mdk <root>` over the exact #1597 graph
+            prints `main : Unit` at **exit 0** — because the rejection lives in `bmod.mdk`, whose
+            schemes that dump never contains, and stderr is discarded. **Positive control on its own
+            invocation**: the same command on `attributed_record_no_field_vote/` reproduced that
+            cell's committed `oracle.tcmod` byte-for-byte — so the harness was working and the
+            corpus genuinely cannot see this bug.
+            It is also inexpressible there in principle: the reader must import **nothing** while the
+            rival is in the graph, and the entry must import **everything**.
+            Pin as landed: `check-json main.mdk` / `exit: 1` / `diag-code: T-AMBIGUOUS-FIELD
+            15:12-15:13`; control is `bmod.mdk` **as its own entry, byte-for-byte** — only graph
+            membership varies (exit 0, zero diagnostics). That is the right control: it varies the
+            single thing under test and nothing else.
+            Shared-corpus check done properly (word-bound, per the standing trap): the real iterator
+            of `check_module_fixtures/` is **`diff_compiler_check_modules.sh` ONLY** —
+            `diff_compiler_check_cli_modules.sh` has no `FIXDIR` and references it in prose only.
+            Moot in the end, since that corpus was left untouched.
+scope:      ⚠️ **One reading in that report is CONTAMINATED and must not be carried forward.** The
+            implementer ran `diff_compiler_must_fail.sh` → *"93 still reproduce, 5 DRAINED"* and
+            reports the 5 drains as pre-existing. **Lane A was editing `typecheck.mdk` concurrently
+            and uncommitted throughout that run**, so that measurement was taken against a tree
+            nobody has a clean name for. **The 5 drains are OWED a re-derivation on a quiescent
+            tree** before anyone acts on them — if genuine, they are five already-fixed bugs whose
+            issues are still open, which is a real finding, but not one that can be claimed from a
+            contaminated run. Same root cause as RUN-028.
