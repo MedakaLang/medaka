@@ -37,6 +37,18 @@ vacuous for that migration. When an API returns only events rather than the
 selected state, pair a field-sensitive input with a structural freshness check
 and a route-specific renamed-authority mutant.
 
+Separate two claims for event-only routes:
+
+- **data correctness:** the migrated values/order are correct where an observable
+  renderer or capture consumes them;
+- **ownership correctness:** every route receives fresh exclusive authority.
+
+A route-specific renamed-authority mutant can prove ownership even when that
+route exposes no selected data, but it does not prove the hidden contents. A
+computed read whose result is discarded proves neither contents nor externally
+observable behavior; call it structurally exercised, not behaviorally observed.
+For each event-only mutant, name the single claim it proves.
+
 An aborting or panicking sensitive reader uses a replacement shape, not the
 returning P → U → P byte-identity rule: run any non-aborting setup/control,
 exercise the alternate U/record/census route, print a pre-P marker, then make the

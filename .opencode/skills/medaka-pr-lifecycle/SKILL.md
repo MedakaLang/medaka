@@ -63,6 +63,12 @@ delta and delta-specific checks. Carry an older receipt forward only under the
 revision-inheritance rule in `medaka-verification-scope`; otherwise reverify the
 affected property.
 
+When receipts carry across a final non-executable delta, make the inheritance
+explicit in both the review brief and PR body: name the fully verified SHA, the
+final head SHA, enumerate every intervening path, state why none can affect the
+graded property, and list the delta-specific checks. Never label the older SHA
+as the final exact-head verification or silently imply that all commands reran.
+
 ## 5. Enqueue and prove completion
 
 Only after the latest head is PR-CI green, the independent compiler-reviewer

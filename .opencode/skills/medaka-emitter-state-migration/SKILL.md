@@ -24,6 +24,20 @@ signature breadth, recursive call-graph breadth, semantic facts, executable
 routes, and harness cost. Select the smallest family that can land
 compile-coherently with no duplicate authority.
 
+For an established continuation, return this compact derivation rather than a
+history recap:
+
+1. normalized ambient-authority set derived from signatures and definitions;
+2. candidate families grouped by semantic fact;
+3. selected family plus rejected candidates and the deciding cost;
+4. exact declarations, readers, writers, drains, reset/scope sites, and routes;
+5. route classification: rendering, event-only, or aborting;
+6. capture/mutation evidence chosen before implementation;
+7. retired authorities, acceptance boundary, and re-derived residual set.
+
+Use `medaka-continuation-receipt` when the conductor needs a compact derived
+packet for dispatch, review, PR prose, and tracker handoff.
+
 ## 2. Preserve the ownership boundary
 
 - Semantic inputs stay in immutable `EmitInput`/`WasmEmitInput` or validated
@@ -52,7 +66,9 @@ end-to-end fixture that proves real lowering reaches the same mechanism.
 Require ordered nonempty captures, P1=P2, a field-sensitive P/U distinction,
 parse/validation, execution where meaningful, direct status, and empty stderr.
 When census returns only events, pair its non-vacuous event with structural
-freshness and a route-specific renamed-authority mutant.
+freshness and a route-specific renamed-authority mutant. A discarded read is not
+an observable census result; state that the mutant proves route ownership, while
+rendering/capture routes prove data correctness.
 
 ## 4. Ratchet and mutate
 
