@@ -3,7 +3,7 @@ activeDictPredOf : String -> Mono -> String -> Option String
 activeDictVarForEncl : Mono -> String -> Option String
 activeDictVarOf : Mono -> Option String
 activeDictVarOfEncl : Mono -> String -> Option String
-addAliasDecl : String -> TyConOrigin -> List String -> Ty -> DataEnv -> DataEnv
+addAliasDecl : String -> TyConOrigin -> List String -> Ty -> Int -> Bool -> Bool -> DataEnv -> DataEnv
 addCtor : TcEnv -> String -> Scheme -> TcEnv
 addCtorIdentCand : TcEnv -> String -> TyConOrigin -> String -> (Map String (List (Ident, String, Scheme)), List String) -> (Map String (List (Ident, String, Scheme)), List String)
 addCtorIdentRaw : String -> TyConOrigin -> String -> ConPayload -> DataEnv -> DataEnv
@@ -27,11 +27,19 @@ aliasDictNamesOfDecl : List String -> List (String, List Decl) -> Decl -> List S
 aliasDictNamesOfPath : List String -> List (String, List Decl) -> String -> UsePath -> List String
 aliasDictNamesOfUnit : List String -> List (String, List Decl) -> List Decl -> List String
 aliasEntriesFor : String -> UsePath -> List ((String, String), List a) -> List (String, List a)
+aliasFixtureAttribCore : Decl
+aliasFixtureEnv : DataEnv
+aliasFixturePrivCore : Decl
+aliasFixturePubCore : Decl
+aliasFixturePubM : Decl
 aliasMethodRenames : List (String, List String) -> List Decl -> List (String, String)
 aliasMethodRenamesOf : List (String, List String) -> Decl -> List (String, String)
 aliasMethodRenamesOfPath : List String -> UsePath -> List (String, String)
+aliasNamesAt : Int -> List String
 aliasSchemeEntry : String -> String -> (String, Scheme) -> (String, Scheme)
 aliasSchemes : String -> String -> List (String, Scheme) -> List (String, Scheme)
+aliasUniverseAt : Int -> List (TabKey, AliasDecl) -> List (TabKey, (List String, Ty))
+aliasVisibleTo : Int -> AliasDecl -> Bool
 alignedMethodConstraintIds : String -> List (Int, Mono) -> Option (List Int)
 allArrowEffs : Mono -> List EffRow
 allConcreteHeads : List Mono -> Bool
@@ -72,7 +80,7 @@ appArgLoc : Expr -> Option Loc
 appFallback : List (String, Ref Effvar) -> List (String, Mono) -> TyConOrigin -> String -> List Ty -> Mono
 appSpineArgCount : Expr -> Int
 appSpineName : Expr -> Option String
-appendDataUniverse : List Decl -> Unit
+appendDataUniverse : String -> List Decl -> Unit
 appendOp : Mono -> Mono -> Mono
 appendUniverseAccums : List Decl -> Unit
 applyCtorScopeOverrides : List Decl -> TcEnv -> TcEnv
@@ -155,7 +163,7 @@ buildAdj : List String -> Map String Unit -> Map String (List (List Pat, Expr)) 
 buildAliasGraphEntry : List String -> (TabKey, (List String, Ty)) -> (String, List String)
 buildClassEnv : List DeclEnvModule -> ClassEnv
 buildClassEnvGo : List DeclEnvModule -> ClassEnv -> ClassEnv
-buildDataEnv : List Decl -> DataEnv
+buildDataEnv : List DeclEnvModule -> DataEnv
 buildDeclEnvs : List Decl -> List (String, List Decl) -> DeclEnvs
 buildDefinerShadows : List Decl -> List Decl -> List String
 buildImplEnv : List DeclEnvModule -> ImplEnv
@@ -423,7 +431,9 @@ currentLocalSchemes : Unit -> List (String, Scheme)
 currentMethodMismatch : Ref (Option String)
 currentSeedSchemes : Unit -> List (String, Scheme)
 cyclicSuperIfaceMsg : List String -> String
-dataEnvFromDeclsGo : List Decl -> DataEnv -> DataEnv
+dataEnvAddDecl : Int -> Bool -> Decl -> DataEnv -> DataEnv
+dataEnvFromDeclsGo : Int -> List Decl -> DataEnv -> DataEnv
+dataEnvFromRowsGo : List DeclEnvModule -> DataEnv -> DataEnv
 deAliasMethodImports : List (String, List String) -> Decl -> List Decl
 deAliasMethodMember : List String -> UseMember -> UseMember
 deFieldOwnerCollisionEnv : DataEnv
@@ -1034,7 +1044,7 @@ letters : String
 litType : Lit -> Mono
 liveNumVarGo : Int -> List UObligation -> Option Mono
 liveTailId : Ref Effvar -> Int
-loadDataUniverse : Unit -> Unit
+loadDataUniverse : Int -> Unit
 locEq : Loc -> Loc -> Bool
 locSameFileAsError : Option Loc -> Bool
 lookupAssocI : Int -> List (Int, a) -> Option a

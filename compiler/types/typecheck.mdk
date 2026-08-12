@@ -13,6 +13,9 @@
 
 import frontend.ast.{
   Lit(..),
+  -- A-3.2b residual (#1512): named ONLY by `aliasFixtureAttribCore`, the doctest
+  -- fixture that pins `dataEnvFromDeclsGo`'s deliberate `DAttrib` asymmetry.
+  Attr(..),
   Ty(..),
   TyConOrigin(..),
   Ns(..),
@@ -2705,18 +2708,19 @@ buildDeclEnvs coreDecls modules =
     deModules = mods,
     deOrdIndex = declEnvOrdIndex (omInsert "" 0 omEmpty) mods,
     deAllDecls = allDecls,
-    deData = buildDataEnv allDecls,
+    deData = buildDataEnv mods,
     -- #1112 A-3.4: `IE`, built here so it inherits this function's ordering and its
     -- must-run-after-`stampGraphTyOrigins` precondition.  See the IE block header.
     --
     -- ⚠️ A-3.2a's `deData` and this field landed independently and now share this
     -- one constructor; they COMPOSE rather than interact, and that is a property
     -- worth stating because nothing here would fail loudly if it stopped holding.
-    -- `buildDataEnv` reads the FLATTENED `allDecls`; `buildImplEnv` reads the
-    -- per-module `mods` rows, because `IE` needs each row's ordinal and module id
-    -- and the flattened list has neither.  Both are pure folds over the same
-    -- `declEnvModulesFrom` result, neither mutates a ref, and neither reads the
-    -- other's output — so the order of these two initialisers is not observable.
+    -- Both read the per-module `mods` rows (A-3.2b's residual moved `buildDataEnv`
+    -- off the flattened `allDecls`, because `deAliases` now carries the declaring
+    -- module's ORDINAL and the flattened list has none — the very reason `IE` took
+    -- rows from the start).  Both are pure folds over the same `declEnvModulesFrom`
+    -- result, neither mutates a ref, and neither reads the other's output — so the
+    -- order of these two initialisers is not observable.
     -- If a later unit gives either builder a side effect, that stops being true
     -- and this comment is the thing it invalidates.
     deImpls = buildImplEnv mods,
@@ -2916,11 +2920,40 @@ data DataTypeDecl = DataTypeDecl {
     dtVariants : List Variant,
   }
 
+-- A-3.2b residual (#1512): `adOrd`/`adPub` are the two INPUTS `declEnvVisibleTo`
+-- takes, carried ON THE ROW rather than re-derived at the read.  They are here —
+-- and not on `DataTypeDecl` — because THIS is the row that has a production
+-- reader: `aliasUniverseAt` is the whole-graph replacement for the retired
+-- `crossRun.universeAliasTable`, and it must answer "which aliases can a reader
+-- at ordinal k see" without walking every module's decls again (the per-module ×
+-- per-decl shape `importedCtorTypeDecls` already pays once).
+--
+-- 🚨 THEY ARE THE PREDICATE'S ARGUMENTS, NOT A SECOND COPY OF ITS BODY.  Both
+-- are consumed by `aliasUniverseAt` through `declEnvVisibleTo` itself; nothing
+-- here open-codes `<=` or a `pub` test, which this file prohibits in four places
+-- (`grep -n 'open-cod' compiler/types/typecheck.mdk`) — see `declEnvRowVisible`,
+-- whose own comment is *"Both arms go through the predicate; neither open-codes
+-- `<=` or a `pub` test."*
+--
+-- ⚠️ `adPub` IS A CALL, NOT A COPIED FIELD.  It is `publicDataDecl` applied to
+-- the alias's own `Decl` — the SAME predicate `demPubDecls`
+-- (`publicDataDecls decls`) routes through, and deliberately not a verbatim
+-- `tyAliasPub` read.  `declEnvModule`'s note says a second construction site
+-- *"is exactly how the two would come to disagree"*; storing the field would
+-- make `deAliases` the one publicity decision in `DeclEnvs` that a future edit
+-- to `publicDataDecl`'s `DTypeAlias` arm silently leaves behind.
+--
+-- `adAttrib` records that this alias was reached THROUGH a `DAttrib` wrapper.
+-- It is POPULATION-NEUTRAL on purpose — see `aliasUniverseAt`, which applies it
+-- at the READ, and the 🚨 note on `dataEnvAddDecl`.
 data AliasDecl = AliasDecl {
     adKey : TabKey,
-    adName : String,  -- identity key, `tyTabKey o adName` — same family as `universeAliasTable`
+    adName : String,  -- identity key, `tyTabKey o adName` — same family as the retired `universeAliasTable`
     adParams : List String,
     adRhs : Ty,
+    adOrd : Int,
+    adPub : Bool,
+    adAttrib : Bool,
   }
 
 -- `deFieldOwnerIdents` is the NEW identity-keyed table: `universeFieldOwners`
@@ -2944,7 +2977,7 @@ data DataEnv = DataEnv {
     deCtorIdents : OrdMap (List (Ident, String, Variant)),
     deRecordIdents : OrdMap (List (Ident, String, List Field)),
     deFieldOwnerIdents : OrdMap (List (Ident, String)),
-    deAliases : List (TabKey, AliasDecl),  -- NEW — no bare-name table has an identity companion for field ownership today
+    deAliases : List (TabKey, AliasDecl),  -- A-3.2b residual (#1512): LIVE — the sole cross-module alias source, read by `aliasUniverseAt`
   }
 
 emptyDataEnv : DataEnv
@@ -2956,18 +2989,70 @@ emptyDataEnv = DataEnv {
   deAliases = [],
 }
 
--- Build the whole-graph `DataEnv` from the SAME decl list `deAllDecls` holds
--- (ordinal order, prelude first) — one left fold, no re-traversal per module.
-buildDataEnv : List Decl -> DataEnv
-buildDataEnv decls = dataEnvFromDeclsGo decls emptyDataEnv
+-- Build the whole-graph `DataEnv` from the per-module rows — the SAME rows
+-- `deImpls`/`deIfaces` fold, visiting the same decls in the same order the
+-- flattened `deAllDecls` holds them (`declEnvDeclsOf` is those rows' `demDecls`
+-- concatenated in ordinal order), so nothing about the four bare-name-free
+-- tables below moves by taking rows instead of the flat list.
+--
+-- A-3.2b residual (#1512) TOOK THE ROWS for one reason: `deAliases` now carries
+-- the declaring module's ORDINAL, and the flattened list has no ordinal in it —
+-- the same reason `buildImplEnv` has always read rows (see `buildDeclEnvs`).
+buildDataEnv : List DeclEnvModule -> DataEnv
+buildDataEnv rows = dataEnvFromRowsGo rows emptyDataEnv
 
-dataEnvFromDeclsGo : List Decl -> DataEnv -> DataEnv
-dataEnvFromDeclsGo [] acc = acc
-dataEnvFromDeclsGo ((DAttrib _ d)::rest) acc = dataEnvFromDeclsGo (d::rest) acc
-dataEnvFromDeclsGo ((DData { dataName, dataParams, dataCtors, dataOrigin, ... })::rest) acc = dataEnvFromDeclsGo rest (addDataTypeDecl dataName dataOrigin dataParams dataCtors acc)
-dataEnvFromDeclsGo ((DNewtype { newtypeName, newtypeParams, newtypeCtor, newtypeFieldTy, newtypeOrigin, ... })::rest) acc = dataEnvFromDeclsGo rest (addDataTypeDecl newtypeName newtypeOrigin newtypeParams [Variant newtypeCtor (ConPos [newtypeFieldTy])] acc)
-dataEnvFromDeclsGo ((DTypeAlias { tyAliasName, tyAliasParams, tyAliasRhs, tyAliasOrigin, ... })::rest) acc = dataEnvFromDeclsGo rest (addAliasDecl tyAliasName tyAliasOrigin tyAliasParams tyAliasRhs acc)
-dataEnvFromDeclsGo (_::rest) acc = dataEnvFromDeclsGo rest acc
+dataEnvFromRowsGo : List DeclEnvModule -> DataEnv -> DataEnv
+dataEnvFromRowsGo [] acc = acc
+dataEnvFromRowsGo (m::rest) acc =
+  dataEnvFromRowsGo rest (dataEnvFromDeclsGo m.demOrd m.demDecls acc)
+
+dataEnvFromDeclsGo : Int -> List Decl -> DataEnv -> DataEnv
+dataEnvFromDeclsGo _ [] acc = acc
+dataEnvFromDeclsGo ord (d::rest) acc =
+  dataEnvFromDeclsGo ord rest (dataEnvAddDecl ord False d acc)
+
+-- ONE decl into the index.  [att] is True once a `DAttrib` wrapper has been
+-- unwrapped on the way here; nested wrappers recurse (the parser can produce
+-- `DAttrib [a] (DAttrib [b] d)`).
+--
+-- 🚨 THE `DAttrib` UNWRAP IS UNIFORM ACROSS ALL FIVE TABLES, AND THE ATTRIBUTED
+-- ALIAS IS DROPPED AT THE *READ*, NOT HERE.  That split is the point, and an
+-- earlier draft of this unit got it backwards.
+--
+-- The fact being recorded: `registerData` has no `DAttrib` arm (it falls to
+-- `registerData env _ = env`) and neither does `publicDataDecl`, so an
+-- ATTRIBUTED type alias — `@deprecated "…"` / `type X = Int` — is invisible to
+-- the LIVE alias table in both directions today.  MEASURED on this tree: that
+-- program is rejected `Type mismatch: Int vs X` + `No impl of Num for X`, i.e.
+-- `X` stays an opaque `TCon`.  Letting it into `aliasUniverseAt`'s result would
+-- expand it in IMPORTERS while it stayed opaque where it was declared — an
+-- acceptance WIDENING, incoherent besides, and not one this unit may make.
+--
+-- ⚠️ WHY THE POPULATION KEEPS IT ANYWAY.  `deTypes`/`deCtorIdents`/
+-- `deRecordIdents`/`deFieldOwnerIdents` all keep A-3.2a's unwrap and are strict
+-- supersets on this axis.  Filtering the alias row out of the POPULATION would
+-- make two rows of one record answer "does an attributed decl count?" by
+-- opposite mechanisms, which is worse than either choice alone — and #1512's
+-- own precondition comment requires slice 3 to solve the identical problem with
+-- a READ-side guard.  So `adAttrib` is recorded here and applied there.
+--
+-- 🚨 THE RE-ADD CONDITION, STATED SO A LATER FIXER CANNOT GET IT HALF-RIGHT.
+-- This drop exists ONLY because the live table has no attributed aliases in it.
+-- #1228/#1586 are the issues that would change that: whoever gives `registerData`
+-- (and `publicDataDecl`) a `DAttrib` arm so an attributed alias expands where it
+-- is DECLARED **must delete `adAttrib`'s conjunct in `aliasUniverseAt` in the
+-- same diff.** Leaving this guard in place then produces the MIRROR of the
+-- widening it was added to prevent — expands locally, opaque in importers — and
+-- no fixture in the tree would catch that, because every fixture here asserts the
+-- current, both-directions-invisible state.
+dataEnvAddDecl : Int -> Bool -> Decl -> DataEnv -> DataEnv
+dataEnvAddDecl ord _ (DAttrib _ d) acc = dataEnvAddDecl ord True d acc
+dataEnvAddDecl ord _ (DData { dataName, dataParams, dataCtors, dataOrigin, ... }) acc = addDataTypeDecl dataName dataOrigin dataParams dataCtors acc
+dataEnvAddDecl ord _ (DNewtype { newtypeName, newtypeParams, newtypeCtor, newtypeFieldTy, newtypeOrigin, ... }) acc = addDataTypeDecl newtypeName newtypeOrigin newtypeParams [Variant newtypeCtor (ConPos [newtypeFieldTy])] acc
+-- `publicDataDecl d` — the shared predicate applied to the alias's own decl, not
+-- a `tyAliasPub` read.  See `AliasDecl`'s ⚠️ note.
+dataEnvAddDecl ord att (d@(DTypeAlias { tyAliasName, tyAliasParams, tyAliasRhs, tyAliasOrigin, ... })) acc = addAliasDecl tyAliasName tyAliasOrigin tyAliasParams tyAliasRhs ord (publicDataDecl d) att acc
+dataEnvAddDecl _ _ _ acc = acc
 
 addDataTypeDecl : String -> TyConOrigin -> List String -> List Variant -> DataEnv -> DataEnv
 addDataTypeDecl name o params variants env =
@@ -3021,16 +3106,196 @@ addFieldOwnerIdents ident cn ((Field fn _)::rest) env =
     rest
     DataEnv { env | deFieldOwnerIdents = omInsert fn next env.deFieldOwnerIdents }
 
-addAliasDecl : String -> TyConOrigin -> List String -> Ty -> DataEnv -> DataEnv
-addAliasDecl name o params rhs env =
+-- 🚨 THE PREPEND IS THE ORDER CONTRACT, not an implementation detail.  Rows are
+-- folded in ASCENDING ordinal, decls in declaration order, and each row is
+-- CONSED — so `deAliases` reads back DESCENDING by ordinal, and within one
+-- module in reverse declaration order.  That is byte-for-byte the order the
+-- retired `crossRun.universeAliasTable` had: `loadDataUniverse` seeded module
+-- k's working table from the universe and `registerAllData` consed module k's
+-- own public aliases onto its FRONT before `storeDataUniverse` wrote it back,
+-- so the accumulator was `[k rev] ++ [k-1 rev] ++ … ++ [0 rev]` too.
+-- Order is observable twice over: `lookupTab` is FIRST-match, and
+-- `rejectCyclicAliases` builds its graph from this list in list order and
+-- `emitCyclicAliasErrors` renders in that order into goldens.  See
+-- `aliasUniverseAt`, which filters this list and therefore preserves it.
+addAliasDecl : String -> TyConOrigin -> List String -> Ty -> Int -> Bool -> Bool -> DataEnv -> DataEnv
+addAliasDecl name o params rhs ord pub att env =
   let key = tyTabKey o name
   let ad = AliasDecl {
     adKey = key,
     adName = name,
     adParams = params,
     adRhs = rhs,
+    adOrd = ord,
+    adPub = pub,
+    adAttrib = att,
   }
   DataEnv { env | deAliases = (key, ad)::env.deAliases }
+
+-- ── A-3.2b residual (#1512): the alias universe, sourced from stage K ──────
+--
+-- THE RETIREMENT.  `crossRun.universeAliasTable` was a cross-run accumulator
+-- grown one module at a time by `appendDataUniverse`'s load/register/store
+-- round trip.  It is GONE; this is its whole-graph replacement, and it is a
+-- projection of K rather than a second copy of the same fact.
+--
+-- 🚨 THREE SEPARATELY NAMED CONDITIONS, AND THE SPLIT IS THE WHOLE DESIGN.
+-- They are NOT one fused `adPub && adOrd < cur` test — this file prohibits
+-- open-coding the filter in four places (`grep -n 'open-cod'`), and
+-- `declEnvRowVisible`'s own comment is *"Both arms go through the predicate;
+-- neither open-codes `<=` or a `pub` test."*
+--
+--   1. `declEnvVisibleTo cur ad.adOrd ad.adPub` — BOTH ratified conjuncts, the
+--      ordinal one and the publicity one, applied through the ONE predicate.
+--      This is the third production reader of `declEnvVisibleAt` (after
+--      `declEnvRowVisible` and `ieSnapAt`); the ratchet's `declEnvsRef` row
+--      records all three, because that row is the arc's account of what A-3.6
+--      is licensed to delete.
+--   2. `ad.adOrd != cur` — the OWN-ROW EXCLUSION.  ⚠️ THIS ONE IS STRUCTURAL,
+--      NOT TRANSITIONAL, AND IT MUST SURVIVE A-3.6.  A-3.6 deletes
+--      `declEnvVisibleAt`'s body, at which point condition 1 reduces to the
+--      publicity conjunct alone and this line is the only thing still keeping
+--      the reader's own row out.  It is not an ordinal FILTER wearing an
+--      ordinal's clothes: the retired accumulator held the public aliases of
+--      every module whose arm had ALREADY FINISHED (`appendDataUniverse` is the
+--      last statement of a module's arm), so a reader at ordinal k saw
+--      0..k-1 and never itself, and its own aliases — public AND private —
+--      arrive by a route this unit does not touch (`registerAllData … prog0`
+--      conses them onto the front of the working `aliasTableRef`).  Dropping
+--      this would double-register every public alias the reader declares.
+--      Conditions 1 ∧ 2 are today exactly the `<` the accumulator had
+--      (`<=` ∧ `!=`); under A-3.6 they reduce to `adPub && adOrd != cur`, which
+--      is the intended end state.
+--   3. `not ad.adAttrib` — the attributed-alias drop, applied HERE at the read
+--      rather than in the population.  See the 🚨 note on `dataEnvAddDecl` for
+--      why, and for the condition under which #1228/#1586 must delete it.
+--
+-- ⚠️ THE CYCLIC-ALIAS REMOVAL IS PRESERVED BY DOING NOTHING.
+-- `rejectCyclicAliases` DELETES cyclic entries from the per-run
+-- `aliasTableRef`, and that deletion never reached the accumulator either:
+-- `appendDataUniverse` opens by RELOADING the working ref from the universe,
+-- discarding the filtered value, before it registers and stores.  So the
+-- cross-module alias source has always held cyclic entries and every module
+-- re-detects them through its own `rejectCyclicAliases` call.  This function
+-- reproduces that exactly — it filters on visibility only.  A future edit that
+-- "helpfully" pre-drops cyclic aliases here would silence the second and later
+-- modules' `T-RECURSIVE-ALIAS`, which is a loud → silent severity increase.
+-- Pinned by the `1512-A32b/alias-cycle-importer` leg of
+-- `test/diff_compiler_check_cli_modules.sh`, which requires the diagnostic to
+-- name BOTH the declaring module and the importer.
+-- ⚠️ ALLOCATION SHAPE, RECORDED BECAUSE THE PERF GATE CANNOT SEE IT.  The line
+-- this replaced in `loadDataUniverse` was a pointer copy (`setRef … .value`);
+-- this MATERIALISES a filtered list, and it runs twice per module (the arm's
+-- own reload and `appendDataUniverse`'s).  That is the allocation term
+-- `declEnvRowVisible`'s "ZERO ALLOCATION … MEASURED perf contract" note forbids
+-- for its sibling — and `diff_compiler_perf_scaling.sh`'s `gen_modules` shape
+-- declares no type aliases at all, so the gate is BLIND to it (derive, don't
+-- trust: `grep -n 'type ' test/diff_compiler_perf_scaling.sh`).
+-- It is immaterial at this size and that was MEASURED, not assumed — but by PR
+-- #1588's independent reviewer, not by me, so it is RELAYED: with 24 aliases,
+-- 40 modules 864 → 824 ms and 80 modules 3489 → 3462 ms (interleaved, min of 3),
+-- i.e. inside the noise.  The reason it stays immaterial is that `deAliases` is
+-- SMALL — 11 type aliases in the whole tree today.  If a future graph makes
+-- aliases numerous, the fix is the per-ordinal snapshot `ieUnivSnaps` already
+-- uses for `IE`, not a wider filter.
+aliasUniverseAt : Int -> List (TabKey, AliasDecl) -> List (TabKey, (List String, Ty))
+aliasUniverseAt _ [] = []
+aliasUniverseAt cur ((key, ad)::rest)
+  | aliasVisibleTo cur ad =
+    (key, (ad.adParams, ad.adRhs)) :: aliasUniverseAt cur rest
+  | otherwise = aliasUniverseAt cur rest
+
+-- The three conditions of the block above, in that order.  Split out so each is
+-- separately readable and separately greppable — A-3.6 edits condition 1's
+-- predicate and must leave conditions 2 and 3 standing.
+aliasVisibleTo : Int -> AliasDecl -> Bool
+aliasVisibleTo cur ad = declEnvVisibleTo cur ad.adOrd ad.adPub
+  && ad.adOrd != cur
+  && not ad.adAttrib
+
+-- Fixture for the doctests below: a PUBLIC alias in the prelude row (ordinal 0),
+-- a PRIVATE one beside it, and a public one in a later module (ordinal 1).
+aliasFixturePubCore : Decl
+aliasFixturePubCore = DTypeAlias {
+  tyAliasPub = True,
+  tyAliasName = "PubCore",
+  tyAliasParams = [],
+  tyAliasRhs = tyConBuiltin "Int" None,
+  tyAliasOrigin = OriginModule "core",
+}
+
+aliasFixturePrivCore : Decl
+aliasFixturePrivCore = DTypeAlias {
+  tyAliasPub = False,
+  tyAliasName = "PrivCore",
+  tyAliasParams = [],
+  tyAliasRhs = tyConBuiltin "Int" None,
+  tyAliasOrigin = OriginModule "core",
+}
+
+aliasFixturePubM : Decl
+aliasFixturePubM = DTypeAlias {
+  tyAliasPub = True,
+  tyAliasName = "PubM",
+  tyAliasParams = [],
+  tyAliasRhs = tyConBuiltin "Int" None,
+  tyAliasOrigin = OriginModule "m",
+}
+
+-- PUBLIC, but wrapped in an attribute — the shape `registerData` and
+-- `publicDataDecl` both drop.  It IS in the population (`deAliases` holds four
+-- rows, asserted below) and is dropped at the READ by `aliasVisibleTo`'s third
+-- condition.  See the 🚨 note on `dataEnvAddDecl`.
+aliasFixtureAttribCore : Decl
+aliasFixtureAttribCore = DAttrib
+  [AttrDeprecated "old"]
+  DTypeAlias {
+    tyAliasPub = True,
+    tyAliasName = "AttribCore",
+    tyAliasParams = [],
+    tyAliasRhs = tyConBuiltin "Int" None,
+    tyAliasOrigin = OriginModule "core",
+  }
+
+aliasFixtureEnv : DataEnv
+aliasFixtureEnv = buildDataEnv
+  [
+    declEnvModule 0 "core" [aliasFixturePubCore, aliasFixturePrivCore, aliasFixtureAttribCore],
+    declEnvModule 1 "m" [aliasFixturePubM],
+  ]
+
+aliasNamesAt : Int -> List String
+aliasNamesAt cur =
+  map (e => tabKeyName (fst e)) (aliasUniverseAt cur aliasFixtureEnv.deAliases)
+
+-- ── doctests ─────────────────────────────────────────────────────────────
+-- The prelude reader (ordinal 0) sees NOTHING — not even its own public alias.
+-- > aliasNamesAt 0
+-- []
+
+-- A reader at ordinal 1 sees the prelude's PUBLIC alias — and NOT its private
+-- one, and NOT its ATTRIBUTED public one, which the live table never held in
+-- either direction.
+-- > aliasNamesAt 1
+-- ["PubCore"]
+
+-- A reader at ordinal 2 sees both public aliases, DESCENDING by ordinal — the
+-- order the retired accumulator produced, which `lookupTab`'s first-match and
+-- `emitCyclicAliasErrors`' render order both observe.
+-- > aliasNamesAt 2
+-- ["PubM", "PubCore"]
+
+-- Fail-CLOSED at `declEnvsOrdOf`'s miss sentinel, exactly as `declEnvVisibleAt`.
+-- > aliasNamesAt (0 - 1)
+-- []
+
+-- POPULATION NEUTRALITY of the attributed-alias drop: all FOUR aliases are in
+-- `deAliases` — including the attributed one and the private one — and it is the
+-- READ that narrows.  This is the assertion that fails if a later edit "tidies"
+-- the guard back into the fold, re-creating the two-rows-one-record divergence
+-- `dataEnvAddDecl`'s note exists to prevent.
+-- > listLen aliasFixtureEnv.deAliases
+-- 4
 
 -- Fixture for the doctests below: two DIFFERENT modules ("m", "n") each
 -- declaring a record named-field variant with field "x".
@@ -3074,15 +3339,16 @@ deFieldOwnerFixtureC = DData {
 }
 
 deFieldOwnerCollisionEnv : DataEnv
-deFieldOwnerCollisionEnv =
-  buildDataEnv [deFieldOwnerFixtureA, deFieldOwnerFixtureB]
+deFieldOwnerCollisionEnv = buildDataEnv
+  [declEnvModule 0 "m" [deFieldOwnerFixtureA, deFieldOwnerFixtureB]]
 
 deFieldOwnerSingleEnv : DataEnv
-deFieldOwnerSingleEnv = buildDataEnv [deFieldOwnerFixtureA]
+deFieldOwnerSingleEnv =
+  buildDataEnv [declEnvModule 0 "m" [deFieldOwnerFixtureA]]
 
 deFieldOwnerSameNameEnv : DataEnv
-deFieldOwnerSameNameEnv =
-  buildDataEnv [deFieldOwnerFixtureA, deFieldOwnerFixtureC]
+deFieldOwnerSameNameEnv = buildDataEnv
+  [declEnvModule 0 "m" [deFieldOwnerFixtureA, deFieldOwnerFixtureC]]
 
 -- Two-element owner list, DISTINCT `Ident`s (never a fixed answer): the
 -- property a bare-name multimap cannot state, since two `String`s "Pt"/"Pt"
@@ -3656,9 +3922,10 @@ ieUnivConcreteOf (ImplUniverse conc _ _) = conc
 -- RLocal-site channels, not `CE`.
 --
 -- ⚠️ `universeIfaceParamKinds` COORDINATION, named rather than silently
--- absorbed: it is one of the FIVE tables `loadDataUniverse`/`storeDataUniverse`
--- marshal in lockstep (recordByName, fieldOwners, dataParamKinds,
--- ifaceParamKinds, aliasTable) — a `DataEnv`-shaped neighbourhood by
+-- absorbed: it is one of the FOUR tables `loadDataUniverse`/`storeDataUniverse`
+-- still marshal in lockstep (recordByName, fieldOwners, dataParamKinds,
+-- ifaceParamKinds — the fifth, aliasTable, LEFT with A-3.2b's residual and is
+-- now a stage-K projection) — a `DataEnv`-shaped neighbourhood by
 -- CO-LOCATION — but its CONTENT is interface parameter kinds, which is `CE`'s
 -- per §2 K ("declared parameter kinds"), not `DataEnv`'s.  This unit's
 -- `ceParamKinds` (below) is the syntactic construction of that same content,
@@ -4865,7 +5132,13 @@ data CrossRun = CrossRun {
     universeFieldOwners : Ref (OrdMap (List String)),
     universeDataParamKinds : Ref (List (TabKey, List Kind)),  -- #1111 A-2.3: identity-keyed (TabKey), not bare name — see tyTabKey
     universeIfaceParamKinds : Ref (List (RegKey, List Kind)),  -- #822 iface half of the kind universe; #1111 A-2.4: identity×slot-keyed (RegKey), not "<iface>@<slot>" — see ifaceSlotKey
-    universeAliasTable : Ref (List (TabKey, (List String, Ty))),  -- #1111 A-2.3: identity-keyed (TabKey), not bare name — see tyTabKey
+    -- ⚠️ `universeAliasTable` was HERE and is RETIRED by A-3.2b's residual (#1512).
+    -- It was the per-module-grown cross-run copy of the type-ALIAS table, marshalled
+    -- by `loadDataUniverse`/`storeDataUniverse`.  Its readers now source from stage
+    -- K: `declEnvsRef.deData.deAliases`, projected at the reader's own ordinal by
+    -- `aliasUniverseAt`.  Do not re-add it — a cross-run copy beside K is two
+    -- answers to "which aliases can this module see", and the copy is the one that
+    -- would silently carry `rejectCyclicAliases`' per-module deletions.
     universeDataEnv : Ref TcEnv,
     universeCtorIdentsRef : Ref (OrdMap (List (Ident, String, Scheme))),  -- #1111 A-2.11 (#1319 unit 1): the identity-keyed COMPANION of universeDataEnv's ctor map — see insertCtorIdents
     universeCtorCollidedRef : Ref (List String),  -- #1111 A-2.11: the ctor NAMES the line above holds ≥2 distinct identities for (normally EMPTY)
@@ -4948,7 +5221,6 @@ freshCrossRun env = CrossRun {
   universeFieldOwners = Ref omEmpty,
   universeDataParamKinds = Ref [],
   universeIfaceParamKinds = Ref [],
-  universeAliasTable = Ref [],
   universeDataEnv = Ref env,
   universeCtorIdentsRef = Ref omEmpty,
   universeCtorCollidedRef = Ref [],
@@ -15701,8 +15973,9 @@ dropRecordIdentCand ident ((c@(i, _, _))::rest)
 --
 -- 🚨 THE SCOPED VIEW MUST NOT REACH THE UNIVERSE, and it does not — but only because of
 -- where `appendDataUniverse` reloads.  The overlay mutates the PER-RUN ref, and
--- `appendDataUniverse` (the end of this module's arm) opens with `loadDataUniverse ()`,
--- which overwrites that ref from the cross-run universe BEFORE this module's public decls
+-- `appendDataUniverse` (the end of this module's arm) opens with `loadDataUniverse`,
+-- which overwrites that ref from the cross-run universe — and, for the alias table,
+-- from stage K at this module's ordinal — BEFORE this module's public decls
 -- are registered into it.  So one module's scope decision is invisible to the next.
 -- Moving the reload, or growing the universe from the per-run refs as they stand at the
 -- end of the arm, would make module A's import scope decide module B's records.
@@ -18901,7 +19174,13 @@ checkBodyImpl seed mode prog0 =
     -- A-3.2b (#1512): `mid` is BOUND here now — the overlay pool below is read at this
     -- module's own ordinal, so the arm can no longer discard it.
     Module mid _ _ =>
-      let _ = loadDataUniverse ()
+      -- A-3.2b residual (#1512): `envs`/`cur` are bound BEFORE the reload, not
+      -- after, because the reload's alias half is now a projection of `envs` at
+      -- `cur`.  Both bindings are pure reads of `driverState`, so hoisting them
+      -- above `loadDataUniverse` changes nothing else.
+      let envs = driverState.value.declEnvsRef.value
+      let cur = declEnvsOrdOf mid envs
+      let _ = loadDataUniverse cur
       -- #674: OVERLAY the ctors of the types THIS module imports so a bare ctor name
       -- resolves to the module the unit imports it from, not the universe's load-order
       -- winner.  Reads the persistent universe DECLS (not the Module `accData` field —
@@ -18979,9 +19258,8 @@ checkBodyImpl seed mode prog0 =
       -- `DUse` syntax is what made #1425's four-site change resolve on eval and MISS on
       -- emit — `DUse` decls are never mangled.  This key does not go through that
       -- channel.)
-      let envs = driverState.value.declEnvsRef.value
       let base = registerAllData crossRun.value.universeDataEnv.value
-                   (importedCtorTypeDecls prog0 (declEnvsOrdOf mid envs) envs.deModules)
+                   (importedCtorTypeDecls prog0 cur envs.deModules)
       let env0 = registerAllData base prog0
       let _ = applyRecordScopeOverrides prog0
       applyCtorScopeOverrides prog0 env0
@@ -19154,7 +19432,9 @@ checkBodyImpl seed mode prog0 =
   -- which are DEAD here (the next module's resetState wipes them).  Flat leaves it untouched.
   let _ = match mode
     Flat _ => ()
-    Module _ _ _ => appendDataUniverse prog0
+    -- A-3.2b residual (#1512): `mid` is BOUND here now — `appendDataUniverse`'s
+    -- reload reads the alias universe at this module's own ordinal.
+    Module mid _ _ => appendDataUniverse mid prog0
   globalS ++ topSchemes
 -- D2: check top-level `let rec` bindings for non-function members before
 -- type-checking the DFunDef groups (mirrors oracle's LetRecNonFunction guard,
@@ -24040,32 +24320,55 @@ appendUniverseAccums prog =
 -- ⚠️ universeDataEnv is deliberately NOT copied here: it is threaded through
 -- `registerAllData` by the CALLER (it is that call's env argument and its result), so it
 -- has no meaning as a blind copy.
-loadDataUniverse : Unit -> Unit
-loadDataUniverse _ =
+--
+-- 🚨 A-3.2b residual (#1512): FOUR TABLES, NOT FIVE — AND THE FIFTH IS NOT
+-- SILENTLY DROPPED.  `aliasTableRef`'s cross-module seed no longer comes from a
+-- cross-run accumulator at all: `crossRun.universeAliasTable` is RETIRED and the
+-- seed is a projection of stage K, `aliasUniverseAt cur … .deData.deAliases`,
+-- taken at the READER'S OWN ORDINAL.  That is why this function now takes one.
+-- `storeDataUniverse` therefore has no alias line to invert — there is exactly
+-- one source of truth for "which aliases can this module see", which is design
+-- law L1 and the whole point of the retirement.  Do NOT re-add a
+-- `setRef crossRun.… perRun.value.aliasTableRef.value` "for symmetry": that
+-- would make K and a cross-run copy two answers to one question, and the copy
+-- would be the one holding `rejectCyclicAliases`' deletions.
+loadDataUniverse : Int -> Unit
+loadDataUniverse cur =
   let _ = setRef perRun.value.recordByNameRef crossRun.value.universeRecordByName.value
   let _ = setRef perRun.value.fieldOwnersRef crossRun.value.universeFieldOwners.value
   let _ = setRef perRun.value.dataParamKindsRef crossRun.value.universeDataParamKinds.value
   let _ = setRef perRun.value.ifaceParamKindsRef crossRun.value.universeIfaceParamKinds.value
-  setRef perRun.value.aliasTableRef crossRun.value.universeAliasTable.value
+  setRef
+    perRun.value.aliasTableRef
+    (aliasUniverseAt cur driverState.value.declEnvsRef.value.deData.deAliases)
 
--- the exact inverse of loadDataUniverse (same five tables, same order).
+-- the exact inverse of loadDataUniverse for the four CROSS-RUN tables it copies
+-- (same four, same order).  The alias seed has no inverse here by construction —
+-- see the note above.
 storeDataUniverse : Unit -> Unit
 storeDataUniverse _ =
   let _ = setRef crossRun.value.universeRecordByName perRun.value.recordByNameRef.value
   let _ = setRef crossRun.value.universeFieldOwners perRun.value.fieldOwnersRef.value
   let _ = setRef crossRun.value.universeDataParamKinds perRun.value.dataParamKindsRef.value
-  let _ = setRef crossRun.value.universeIfaceParamKinds perRun.value.ifaceParamKindsRef.value
-  setRef crossRun.value.universeAliasTable perRun.value.aliasTableRef.value
+  setRef
+    crossRun.value.universeIfaceParamKinds
+    perRun.value.ifaceParamKindsRef.value
 
 -- ⚠️ Takes THIS MODULE'S WHOLE decl list, not a pre-filtered one: it owns BOTH halves
 -- of what a module publishes to the data universe — `publicDataDecls` (ctors + records +
 -- kinds, for a `public export` type) and `registerOpaqueParamKinds` (kinds ONLY, for an
 -- opaque one).  Filtering at the call site is what let the opaque half go missing for as
 -- long as it did (#804/#1028); there is now nothing to remember.
-appendDataUniverse : List Decl -> Unit
-appendDataUniverse prog0 =
+appendDataUniverse : String -> List Decl -> Unit
+appendDataUniverse mid prog0 =
   let pubDecls = publicDataDecls prog0
-  let _ = loadDataUniverse ()
+  -- A-3.2b residual (#1512): the reload takes THIS module's ordinal, because the
+  -- alias half of it is now a stage-K projection rather than a cross-run copy.
+  -- Same ordinal the arm's own `dataEnv` reload used, and it must stay strictly
+  -- BELOW-this-module (`aliasUniverseAt`'s `<`): `registerAllData … pubDecls`
+  -- immediately below is what puts this module's own public aliases in front,
+  -- exactly as it always did.
+  let _ = loadDataUniverse (declEnvsOrdOf mid driverState.value.declEnvsRef.value)
   let env2 = registerAllData crossRun.value.universeDataEnv.value pubDecls
   -- #804/#1028: kinds travel even when the constructors do not.
   let _ = registerOpaqueParamKinds prog0
