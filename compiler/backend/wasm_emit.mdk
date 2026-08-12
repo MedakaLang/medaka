@@ -302,6 +302,8 @@ data WTy = WInt | WBool | WUnit | WStr | WRef | WChar | WFloat
 -- continues with placeholders while preserving first-observed event order.
 data WGapMode = WGapStrict | WGapRecord
 
+data ImplSelfCtx = ImplSelfOff | ImplSelfOn String String Int
+
 data WasmEmit =
   | WasmEmit {
       gapMode : WGapMode,
@@ -309,6 +311,7 @@ data WasmEmit =
       curGapBind : Ref String,
       stringSegments : Ref (List (Int, List Int)),
       nextStringSegmentId : Ref Int,
+      implSelfCtx : Ref ImplSelfCtx,
     }
 
 freshWasmEmit : WGapMode -> WasmEmit
@@ -318,6 +321,7 @@ freshWasmEmit mode = WasmEmit {
   curGapBind = Ref "?",
   stringSegments = Ref [],
   nextStringSegmentId = Ref 0,
+  implSelfCtx = Ref ImplSelfOff,
 }
 
 -- Declaration-derived semantic input. Raw lists retain table order where a full
@@ -4277,10 +4281,10 @@ emitImplGroup prog (ImplG method headTag key arity clauses) =
       -- "List")`) lowers to `return_call $mdk_impl_List_fold` (constant stack) rather than a
       -- recursive `call`.  Disarmed immediately after (default defines + everything else
       -- must NOT see it).
-      let savedImplSelf = implSelfCtxRef.value
-      let _ = setRef implSelfCtxRef (ImplSelfOn method headTag arity)
+      let savedImplSelf = (progEmit prog).implSelfCtx.value
+      let _ = setRef (progEmit prog).implSelfCtx (ImplSelfOn method headTag arity)
       let bodyLines = emitClausesImpl prog fnName params arity clauses
-      let _ = setRef implSelfCtxRef savedImplSelf
+      let _ = setRef (progEmit prog).implSelfCtx savedImplSelf
       let _ = setRef floatLocalsRef []
       let allLocals = clauseLocals clauses
       let extraLocals = filterList (notIn params) (dedupKeep allLocals)
@@ -6406,11 +6410,6 @@ wTrmcCtxRef = Ref WTrmcOff
 -- case is handled separately by wTrmcImplTry (it never reaches this path); a NON-tail
 -- self-call never reaches emitAppTail (it goes through emitRefExpr), so it stays a plain
 -- `call` — the safety net.
-data ImplSelfCtx = ImplSelfOff | ImplSelfOn String String Int
-
-implSelfCtxRef : Ref ImplSelfCtx
-implSelfCtxRef = Ref ImplSelfOff
-
 -- the loop-local names used by the destination-passing emit.  `$__tmc_head` holds the
 -- first cell (the result returned at exit); `$__tmc_dest` holds the cell whose recursive
 -- slot the NEXT leaf must fill; `$__tmc_first` is 1 until the first cell is built.
@@ -7150,7 +7149,7 @@ emitWDispBase prog env root e =
 -- AND `isSelfSatApp (SelfByMethod …)`: a different-method/tag, unsaturated, or non-self
 -- call fails the gate and stays ordinary; a non-tail self-call never reaches here.
 implSelfReturnCall : Prog -> List String -> String -> Route -> List Route -> List Route -> CExpr -> List CExpr -> Option (List String)
-implSelfReturnCall prog env name route methRoutes implRoutes app args = match implSelfCtxRef.value
+implSelfReturnCall prog env name route methRoutes implRoutes app args = match (progEmit prog).implSelfCtx.value
   ImplSelfOff => None
   ImplSelfOn method tag arity => if name == method && isSelfSatApp (SelfByMethod method tag) arity app then match route
     RKey rtag _ => match implForW prog name rtag
