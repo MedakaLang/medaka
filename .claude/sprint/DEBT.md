@@ -1591,3 +1591,100 @@ unchecked:  the IR-level derivation the plan mandated for a codegen-side outcome
             and NOT taken — the defect is front-end and is closed at `check`, so there is no
             emitted IR to diff. If SA-2 is ever reopened on a *different* corpus, that mandate
             still stands. `p4` under **wasm** was not probed.
+
+### SA-3 — the superinterface-EXISTENCE check is graph-global, like candidacy (owner ruling RUN-055)
+sites:      `compiler/types/typecheck.mdk` — ONE expression: `ieRowsVisibleAt`'s filter
+            (`declEnvVisibleAt cur (ieRowOrd r)` → `ieCandidacyVisibleAt cur (ieRowOrd r)`), the
+            sole `IE` read still on the ordinal axis. It has exactly ONE caller,
+            `checkSuperImpls`, which binds it ONCE (grep-verified: `grep -n ieRowsVisibleAt
+            compiler/types/typecheck.mdk` → one definition, one call site, the rest comments), so
+            the blast radius is that one decl-time check and nothing else. Comment re-cuts in the
+            same commit, all of them clauses this edit FALSIFIES: `ieCandidacyVisibleAt`'s
+            "WHAT THIS DOES NOT COVER" block, `ieRowsVisibleAt`'s own header, `ieUniverseAt`'s
+            "THEY NO LONGER SHARE A PREDICATE", `ceLookupAt`'s "exactly as … `ieRowsVisibleAt`",
+            the `IE` banner block, `checkSuperImpls`' header and `superImplExists`' `[rows]` note.
+            Fixture: four new legs at the tail of `test/diff_compiler_check_cli_modules.sh`.
+transform:  A-3.6 flipped instance CANDIDACY graph-global (RUN-010's split: instance axis only).
+            `checkSuperImpls` — the `T-MISSING-SUPER-IMPL` check A-3.5b had just relocated onto
+            `IE` — kept reading rows at the reading module's ordinal, so the two `IE` reads
+            answered at two scopes. MEASURED contradiction, first-hand on `06d13c3a` before the
+            edit: with `impl Sub W` in `subimpl` and `impl Sup W` in a topologically LATER
+            `supimpl`, `check` emits **exactly one** diagnostic — the super-existence one — and
+            **not** `No impl of Sup for W`, i.e. candidacy resolves the very impl the check beside
+            it calls missing. Widening the predicate makes both channels read the same population.
+            🚨 **ONLY THE SCOPE MOVED.** The supers still come from `CE` at the reading ordinal
+            (`ceLookupAt … cur` in `superImplMsgsOf` — the name axis, which RUN-010 and
+            `docs/spec/DICT-SEMANTICS.md:2025-2033` keep ordinal-filtered); the table is still
+            `ieRows` (never the buckets — a bucket walk pairs two interfaces sharing a spelling
+            and rebuilds #1438 here); the matcher is still `tyMatchesAst`, not `ImplUniverse`'s
+            `matchStep`; `ifaceSupersOf` is untouched (its four callers outside this check —
+            grep-verified — do not move). No fold was added at a read site: the list is bound once
+            per `checkSuperImpls` call exactly as before, and `filterList` over `ieRows` is the
+            same O(rows) it already was — a constant-`True` predicate cannot be slower.
+            **FLAT ARM, answered explicitly rather than assumed:** `buildDeclEnvs` runs only at the
+            two Module-mode driver entries, so the Flat path never reads `declEnvsRef`; it builds
+            `flatImplEnvOf decls` = one module seated at ordinal 0 and passes `cur = 0`, where
+            `entryOrd <= cur` was ALREADY true of every row. The widening is therefore a **no-op on
+            Flat by construction**, and it is measured as one (legs (c), and the flat positive
+            control still runs and prints 42) — not "probably fine": had it been a widening there,
+            it would have turned live rejections into silent accepts, a severity INCREASE.
+            **Latent side effect, stated because it is a fail-DIRECTION change:** at the `-1`
+            sentinel (`declEnvsOrdOf`'s miss, R5-F3 / SA-6) this check no longer sees zero rows and
+            so no longer reports every super missing; it sees the graph and answers correctly.
+            That arm is unreachable from today's three drivers and this does NOT discharge SA-6 —
+            SA-6's silent arm is `checkCoherence`/`cohRowsOwnedBy`, which this edit does not touch.
+could move: **The could-not-pass-before fixture IS the answer to "what does this now accept":** a
+            program whose `impl Sub T` sits in an EARLIER module than a matching `impl Sup T`, with
+            no import edge between them. Rejected at exit 1 on `06d13c3a`
+            (`subimpl.mdk:4:17: 'impl Sub W' requires a superinterface 'impl Sup W', which is
+            missing`), exit 0 after, `run` prints **42**. Generally: every `impl Sub T` whose super
+            impl exists anywhere in the module graph at any ordinal is now accepted, where before
+            only a super at or below the reading ordinal was — and since candidacy already reached
+            those impls, the accepted programs are exactly the ones dispatch was already prepared
+            to run. Import ORDER no longer decides this diagnostic.
+            🚨 **What could be accepted that SHOULD NOT — named, not waved at.** (1) **Privacy is
+            consulted on neither axis.** `IE` holds every impl in the graph, `export`-marked or
+            not, and now so does this check. That is deliberate and pre-dates this row (see
+            `pickSchemes`' WS-1a note: instances are global), but the widening extends it from a
+            *private impl in an IMPORTED module* to *any private impl anywhere in the graph* — a
+            super can now be satisfied by an impl in a module the impl's own module has no import
+            path to. This is consistent with candidacy, which is the ruling; it is NOT
+            independently justified, and if I5's global-instance premise is ever narrowed both
+            reads must narrow together. (2) **Reachability is not consulted either** — same shape,
+            one level up: nothing asks whether the super impl's module is reachable from the
+            checking module, so a sibling subtree's impl votes. (3) The check remains blind to
+            whether the super impl will still be there under separate compilation, which nothing
+            in this tree models. **What CANNOT be accepted, and is measured so:** a super whose
+            impl belongs to a DIFFERENT interface that merely shares the spelling — leg (d).
+unchecked:  (1) 🎯 **THE NEAREST PROGRAM THIS DOES NOT COVER, constructed and measured — and it
+            STILL REJECTS, correctly.** `p4`: leg (a)'s graph with one variable changed — the later
+            module's `impl Sup W` implements a same-spelled `Sup` declared in an unrelated
+            `otheriface.mdk`. `check` **exit 1**, BOTH diagnostics (`No impl of Sup for W` and
+            `T-MISSING-SUPER-IMPL`), identical before and after. It is correct that it rejects:
+            `implRowMatchesSuper` decides on `ifaceTabKey ir.irOrigin ir.irName` — the IDENTITY leg
+            — and the bare-spelling leg lives only in `IE`'s buckets, which this query never reads.
+            The two diagnostics agreeing here is the discriminator: on leg (a) only ONE fired,
+            which is what proved the channels disagreed. Pinned as leg (d) so a future widening
+            onto the spelling axis reds a gate. **Second-nearest, also still rejecting and also
+            correct:** a super impl that exists in NO module (legs (b)/(c)) — the check kept its
+            ability to fail on both arms, which is the difference between fixing it and deleting
+            it. **Third:** a super whose INTERFACE is not visible at the reading ordinal —
+            `ceLookupAt` misses and the check abstains, unchanged, because the name axis did not
+            move. (2) **A transitive 2-hop super chain (`Sub` requires `Mid` requires `Sup`) was
+            NOT constructed** — SYNTHESIS names it as untested by every reviewer and it remains so.
+            (3) **wasm was not probed**, and no engine differential was run. (4) `check --json` /
+            MCP were not probed on any leg (#1362 is an OPEN S0 on that arm). (5) Perf was not
+            re-measured: the argument above is structural (same call count, same list, constant
+            predicate), not a `perf_scaling` run. (6) Gates run on the fixed binary: `check-self`
+            PASS, `registry_keying_ratchet` PASS, `diff_compiler_must_fail` **twice, byte-identical**
+            (99 fixtures, 98 REPRO, 1 DRAINED — `1438-*`, pre-existing this round; **#1438 stays
+            open**, no NEW drain), `diff_compiler_check_cli_modules` 79 ok / 1 failing — the known
+            pre-existing `1112-A34/later-invisible` red, which fails by ACCEPTING and so cannot be
+            caused by a check that only ever rejects — `diff_compiler_check_modules` PASS,
+            `diff_compiler_dict_semantics` PASS, R2-F3's six coherence fixtures unchanged
+            (exit 1, same `Overlapping impls of …` wording) plus `derivable_needs_datadecl` exit 0,
+            `s6-1c-multimodule-overlap` still reporting the intra- and cross-module
+            `W-INCOMPARABLE-IMPLS` once each with value 11, and `T-INCOMPLETE-IMPL` still firing.
+            **ZERO goldens blessed**; snapshots and selfproc LEG A remain item 7's, terminal.
+            (7) This does **not** make C4/I2 true — it makes ONE diagnostic agree with the
+            candidacy read; the evidence/routing side is untouched and is still B-2's.

@@ -2893,11 +2893,22 @@ declEnvVisibleAt cur entryOrd = entryOrd <= cur
 -- silently un-does A-3.6 — the cheapest structural check that the flip is still
 -- landed is that `grep 'entryOrd <= cur'` finds the name axis and NOT this one.
 --
--- 🚨 WHAT THIS DOES NOT COVER.  `ieRowsVisibleAt` (A-3.5b) is also an `IE` reader
--- but answers a DECL-TIME EXISTENCE question (`checkSuperImpls`), not a candidacy
--- question, and it deliberately still reads `declEnvVisibleAt`.  Whether the
--- super-existence check should see the whole graph is a real question and it is
--- NOT ruled here — A-3.6's licence is I5's subject and nothing wider.
+-- 🚨 THE SECOND READER, AND IT IS NOW RULED.  `ieRowsVisibleAt` (A-3.5b) is the
+-- other `IE` reader; it answers a DECL-TIME EXISTENCE question (`checkSuperImpls`)
+-- rather than a candidacy one, and when A-3.6 landed it was left on
+-- `declEnvVisibleAt` with that question recorded as OPEN.  It was then MEASURED
+-- open: with candidacy graph-global and existence prefix-scoped, an `impl Sup T` in
+-- a topologically LATER module satisfies dispatch in the very module where
+-- `checkSuperImpls` reports the same impl missing — one program, two channels, one
+-- of them wrong.  ⚖️ OWNER RULING (Val, 2026-08-12, sprint `DECISIONS.md` RUN-055,
+-- finding SA-3): WIDEN the existence check to match candidacy.  `ieRowsVisibleAt`
+-- now reads THIS predicate, so both `IE` reads answer at the same scope and the
+-- diagnostic cannot contradict the engine.
+-- ⚠️ THE NAME AXIS IS UNTOUCHED BY THAT RULING.  RUN-010 split the predicate
+-- precisely so the name-scoping tables keep their ordinal filter, and
+-- `DICT-SEMANTICS.md:2025-2033` forbids extending I5's licence to names.  The
+-- SUPERS themselves still come from `CE` at the reading ordinal (`ceLookupAt` in
+-- `superImplMsgsOf`); only the row set the existence query scans moved.
 ieCandidacyVisibleAt : Int -> Int -> Bool
 ieCandidacyVisibleAt _ _ = True
 
@@ -3924,10 +3935,12 @@ distinctIdentsIn2 _ = False
 -- `compiler/TYPECHECK-TARGET-ARCHITECTURE.md` §9.6.  Built once, whole-graph,
 -- inside `buildDeclEnvs`.  ⚠️ This said "every read filters through
 -- `declEnvVisibleAt` (the ONE ordinal predicate, whose body A-3.6 deletes)".
--- Since A-3.6 (#1558) `IE`'s two reads DIVERGE: the candidacy read (`ieUniverseAt`
--- → `ieSnapAt`) goes through `ieCandidacyVisibleAt` and is GRAPH-GLOBAL — that is
--- C4/I2 — while the decl-time existence read (`ieRowsVisibleAt`) still filters
--- through `declEnvVisibleAt`.  See both predicates' headers.
+-- Since A-3.6 (#1558) `IE`'s two reads went through TWO predicates, and under
+-- RUN-055 (SA-3) they are back on ONE: both the candidacy read (`ieUniverseAt` →
+-- `ieSnapAt`) and the decl-time existence read (`ieRowsVisibleAt`) go through
+-- `ieCandidacyVisibleAt` and are GRAPH-GLOBAL — that is C4/I2 on the first and the
+-- ruled agreement of diagnostic-with-engine on the second.  `declEnvVisibleAt` is
+-- now the NAME axis alone and has no `IE` reader.  See all three headers.
 --
 -- 🚨 THE CONSTRAINT (§9.3), MECHANICALLY ENFORCED BY CHECK 4 ABOVE.  `IE` is
 -- keyed by IMPL IDENTITY.  An interface's default-method arm is a property of the
@@ -4242,12 +4255,13 @@ ieInsertRowAt ifk (r@(ImplRow _ _ _ tys _ _)) env = match univReceiverTag tys
 -- ⚠️ THIS IS NO LONGER THE ONLY `IE` READ, and it is no longer ordinal-filtered.
 -- There are TWO `IE` reads and they answer different questions — this one (via
 -- `ieSnapAt`) selects a candidacy UNIVERSE; `ieRowsVisibleAt` below selects rows for
--- a decl-time existence check.  ⚠️ THEY NO LONGER SHARE A PREDICATE, and this
--- comment claimed they did until A-3.6 (#1558): the predicate SPLIT by owner ruling,
--- this one now reads `ieCandidacyVisibleAt` (graph-global, `True`) while
--- `ieRowsVisibleAt` still reads `declEnvVisibleAt` (the ordinal name axis).  "One
--- body to delete" was never the invariant that mattered; "no read site open-codes
--- `<=`" is, and it still holds.  DERIVE the current set rather than trusting this
+-- a decl-time existence check.  They shared a predicate before A-3.6 (#1558), which
+-- SPLIT it by owner ruling and moved this one alone to `ieCandidacyVisibleAt`; under
+-- RUN-055 (SA-3) the existence read followed, so the two share a predicate again —
+-- `ieCandidacyVisibleAt`, the WIDE one.  They are still two functions answering two
+-- questions over two shapes (`ImplUniverse` vs `ImplRow`), and re-scoping either one
+-- is still a one-line, one-name change.  "One body to delete" was never the
+-- invariant that mattered; "no read site open-codes `<=`" is, and it still holds.  DERIVE the current set rather than trusting this
 -- sentence: `grep -n 'declEnvVisibleAt\|ieCandidacyVisibleAt' compiler/types/typecheck.mdk`
 -- and separate code from commentary; the ratchet's `declEnvsRef` row has been measured
 -- wrong on this count in both directions (RUN-007/RUN-013).
@@ -4293,22 +4307,35 @@ ieSnapAt cur ((o, u)::rest) acc
   | ieCandidacyVisibleAt cur o = ieSnapAt cur rest u
   | otherwise = acc
 
--- #1557 A-3.5b: the ROW-SET read at an ordinal — the exact peer of `CE`'s
--- `ceRowsVisibleAt`, reading `declEnvVisibleAt`, the NAME/declaration axis.
--- ⚠️ THIS SENTENCE SAID "routed through the SAME ONE predicate so A-3.6 still has a
--- single body to delete" WHEN A-3.5b LANDED, AND A-3.6 (#1558) THEN SPLIT THE
--- PREDICATE by owner ruling — so the "one body" framing is retired, not merely
--- reworded.  This read stayed on `declEnvVisibleAt` while `ieSnapAt` moved to
--- `ieCandidacyVisibleAt`: A-3.6's licence is I5's subject, `match(IE, C τ̄)`, and a
--- decl-time EXISTENCE query is not that.  Whether super-existence should see the
--- whole graph is a real question and is NOT ruled — see `ieCandidacyVisibleAt`, which
--- says the same thing from the other side.  `ieUniverseAt` above answers "what does the obligation
--- channel know about impls here"; this answers "which impl DECLARATIONS are visible
--- here", which is what a decl-time check (`checkSuperImpls`) needs — it must keep
--- matching AST `Ty`s with `tyMatchesAst`, and an `ImplUniverse` holds `Mono`s matched
--- by `matchStep`.  Routing the super-existence query through `ieUniverseAt` would
--- therefore swap the MATCHER as well as the table, which is a second, unbudgeted
--- acceptance delta on top of the intended re-key.
+-- #1557 A-3.5b: the ROW-SET read for the decl-time EXISTENCE check — built as the
+-- peer of `CE`'s `ceRowsVisibleAt` on the NAME/declaration axis.
+-- ⚠️ IT IS NO LONGER ON THAT AXIS.  Two retractions, in order, because the second
+-- only makes sense against the first: A-3.5b's original claim that this read is
+-- "routed through the SAME ONE predicate so A-3.6 still has a single body to
+-- delete" died when A-3.6 (#1558) SPLIT the predicate instead of deleting it; the
+-- successor claim — that this read "stayed on `declEnvVisibleAt`", because a
+-- decl-time EXISTENCE query is not I5's subject — is retired by ⚖️ OWNER RULING
+-- (Val, 2026-08-12, sprint `DECISIONS.md` RUN-055, finding SA-3).  The two-scope
+-- arrangement was measured to make the diagnostic contradict the engine inside ONE
+-- program (an `impl Sup T` in a topologically LATER module dispatches while this
+-- check calls it missing), so this read now takes `ieCandidacyVisibleAt` — the same
+-- graph-global predicate `ieSnapAt` takes.  Both `IE` reads are back on ONE
+-- predicate, but by widening this one, not by narrowing that one.
+-- ⚠️ THE NAME STAYS `…VisibleAt`, AND THE PARAMETER STAYS.  Same reason
+-- `ieCandidacyVisibleAt` keeps its two unused arguments: the flip's whole diff is
+-- one predicate name, so the acceptance delta is attributable to that alone, and
+-- one line changes back if super-existence is ever re-scoped.  `cur` is still LIVE
+-- in this check's other half — `superImplMsgsOf` resolves the interface and its
+-- supers through `ceLookupAt … cur`, which is name-scoped and did NOT move.
+-- ⚠️ WHAT DID NOT MOVE EITHER, and must not: this returns `ImplRow`s, not an
+-- `ImplUniverse`.  `ieUniverseAt` above answers "what does the obligation channel
+-- know about impls here"; this answers "which impl DECLARATIONS exist", and its
+-- consumer matches AST `Ty`s with `tyMatchesAst` where an `ImplUniverse` holds
+-- `Mono`s matched by `matchStep`.  Routing this through `ieUniverseAt` to reach the
+-- same scope would swap the MATCHER as well as the table — a second, unbudgeted
+-- acceptance delta riding on the ruled one.  Widen the PREDICATE, never the table.
+-- ⚠️ AND IT READS `ieRows`, NEVER THE BUCKETS — see `ieRowsAll` for why the bucket
+-- walk rebuilds #1438 in this substrate.
 --
 -- 🚨 PERF: THIS IS O(rows) PER CALL AND ITS CALLER RUNS PER (impl x super).  Bind it
 -- ONCE per whole-module check and thread the list; calling it inside `superMsgFor`
@@ -4317,7 +4344,7 @@ ieSnapAt cur ((o, u)::rest) acc
 -- (see `ieUnivSnaps`).  `checkSuperImpls` is the one binding site; keep it that way.
 ieRowsVisibleAt : Int -> ImplEnv -> List ImplRow
 ieRowsVisibleAt cur env =
-  filterList (r => declEnvVisibleAt cur (ieRowOrd r)) env.ieRows
+  filterList (r => ieCandidacyVisibleAt cur (ieRowOrd r)) env.ieRows
 
 -- #1559 A-3.7: the POPULATION reads coherence takes — the whole graph, and one
 -- module's OWN rows.  Peers of `CE`'s `ceRowsVisibleAt`/`ceRowsOwnedBy`, and they read
@@ -4741,8 +4768,10 @@ ceInsertRow : CeRow -> ClassEnv -> ClassEnv
 ceInsertRow r env = ClassEnv { env | ceRows = r::env.ceRows, ceByKey = regInsertK (ceRowKey r) r env.ceByKey }
 
 -- 🚨 THE ONE `CE` READ ACCESSOR — the ordinal-filtered lookup routed through
--- `declEnvVisibleAt`, exactly as `ieUniverseAt`/`ieSnapAt` and `ieRowsVisibleAt`
--- (A-3.5b) are for `IE`.  Looks up by IDENTITY rather than collecting a
+-- `declEnvVisibleAt`.  ⚠️ It is the ordinal filter's LAST substrate: `IE`'s two
+-- reads (`ieUniverseAt`/`ieSnapAt` under A-3.6, `ieRowsVisibleAt` under RUN-055)
+-- have both moved to `ieCandidacyVisibleAt`, so `CE` and the name tables are what
+-- keeps this predicate live.  Looks up by IDENTITY rather than collecting a
 -- candidate set, per the shape argued at `ClassEnv` above.
 --
 -- ⚠️ This said "NO CALLER TODAY — construction only, per this unit's bar" while it was
@@ -15976,11 +16005,22 @@ cohPushSoft (Some (msg, loc)) = pushCoherenceWarning loc msg
 -- (whose impl test was the bare `iface == superName`) for existence.  NOW: the supers
 -- come from `ceLookupAt` at the reading ordinal, keyed by the naming `DImpl`'s
 -- `implOrigin` — the SAME mint `implCompletenessMsgsOfMap` (A-3.5a) and
--- `ifaceDfsCycleOneSuper` (A-3.5c) use — and existence is a query over `IE`'s rows
--- visible at that ordinal, comparing the row's own `IfaceRef` identity against the
--- SUPER's `superOrigin`.
+-- `ifaceDfsCycleOneSuper` (A-3.5c) use — and existence is a query over `IE`'s rows,
+-- comparing the row's own `IfaceRef` identity against the SUPER's `superOrigin`.
 --
--- 🚨 `ieRowsVisibleAt` IS BOUND HERE, ONCE, AND THAT IS A PERF REQUIREMENT.  It is
+-- ⚖️ RUN-055 (SA-3), owner ruling, 2026-08-12: THE EXISTENCE QUERY IS GRAPH-GLOBAL.
+-- It used to scan `IE`'s rows visible at the reading ORDINAL while A-3.6 had already
+-- made instance CANDIDACY graph-global, and the two scopes were measured to
+-- contradict each other inside one program: with `impl Sub W` in an earlier module
+-- and `impl Sup W` in a later one, a `Sup W` goal RESOLVES beside this check
+-- reporting that same impl missing.  Both channels now read `ieCandidacyVisibleAt`.
+-- ⚠️ ONLY THE SCOPE MOVED.  The supers still come from `CE` at the reading ordinal
+-- ([cur] → `ceLookupAt` in `superImplMsgsOf`), the head test is still `tyMatchesAst`
+-- over `ImplRow`'s AST `Ty`s, and the interface test is still the IDENTITY leg.  The
+-- widening therefore accepts exactly the programs whose super impl EXISTS in the
+-- graph and matches by identity — never one that merely shares a spelling.
+--
+-- 🚨 THE ROW LIST IS BOUND HERE, ONCE, AND THAT IS A PERF REQUIREMENT.  It is
 -- O(rows); `superImplExists` runs per (impl x super).  See its header.
 --
 -- ⚠️ The visible-row list replaces [allDecls] for EXISTENCE only.  `ifaceSupersOf`
@@ -17335,10 +17375,14 @@ ifaceSupersOf (_::rest) target = ifaceSupersOf rest target
 -- may be parametric — a free tyvar in the impl head matches any concrete arg,
 -- mirroring the oracle's mono_matches: pattern=impl head, concrete=super args.)
 --
--- #1557 A-3.5b: [rows] are `IE`'s rows VISIBLE AT the reading ordinal, bound once by
--- `checkSuperImpls`; [superKey] is the super's identity and [superName] its bare
--- spelling.  This replaced a scan of the whole decl list whose interface test was the
--- bare `iface == superName`.
+-- #1557 A-3.5b: [rows] are `IE`'s rows, bound once by `checkSuperImpls`; [superKey]
+-- is the super's identity and [superName] its bare spelling.  This replaced a scan of
+-- the whole decl list whose interface test was the bare `iface == superName`.
+-- ⚠️ [rows] WAS "the rows visible at the reading ordinal" until RUN-055 (SA-3) widened
+-- the scope to the whole graph, to match instance candidacy.  Nothing in THIS function
+-- changed: it was and is a scan of whatever population its caller binds, and the two
+-- tests below (identity, then `tyMatchesAst`) are what keep the wider population from
+-- admitting a super it should not.
 --
 -- 🚨 IT COMPARES THE IDENTITY LEG, NEVER THE BUCKETS.  `ieInsertRow` indexes every row
 -- under `oblIfaceKeys`, which mints TWO keys — the identity key AND a bare-spelling

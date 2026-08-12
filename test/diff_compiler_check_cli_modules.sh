@@ -1987,5 +1987,160 @@ else
   fail=$((fail+1)); printf 'FAIL D4b/no-requires-impl-still-accepted (check %d, run %d [%s]) — the guard is too broad\n' "$d4c_code" "$d4c_rcode" "$d4c_run"
 fi
 
+# 23. SA-3 (sprint repair round, owner ruling RUN-055) — THE SUPERINTERFACE-EXISTENCE
+#     CHECK IS GRAPH-GLOBAL, LIKE CANDIDACY.  A-3.6 made instance candidacy
+#     graph-global on the INSTANCE axis alone; `checkSuperImpls` kept scanning `IE`'s
+#     rows at the reading module's ORDINAL, so the two channels disagreed inside one
+#     program: an `impl Sup W` in a topologically LATER module was a dispatch
+#     candidate AND was reported missing by the check beside it.  Ruled: widen the
+#     check (`ieRowsVisibleAt` → `ieCandidacyVisibleAt`).
+#
+#     🚨 THIS IS AN ACCEPTANCE WIDENING, so leg (a) is a COULD-NOT-PASS-BEFORE
+#     program — rejected at exit 1 by the binary at 06d13c3a, exit 0 and printing 42
+#     after.  Every pre-existing fixture covered the rejecting case, so nothing else
+#     in this tree can fail if the widening is wrong in the accepting direction.
+#     Legs (b)-(d) are the must-not-move half: the check must still be ABLE to fail,
+#     on BOTH driver arms, or the widening deleted it rather than fixing it.
+#
+#       (a) later-super-accepted   — the widening itself (Module arm).
+#       (b) super-absent-rejects   — Module arm, the super exists NOWHERE in the
+#           graph: `T-MISSING-SUPER-IMPL` must still fire.
+#       (c) flat-super-absent      — the FLAT arm, which reaches this check through
+#           `flatImplEnvOf` at ordinal 0 with `cur = 0`.  There "visible at" and
+#           "candidacy" already coincided, so the widening is a NO-OP on Flat by
+#           construction; this leg is what makes that claim falsifiable rather than
+#           argued, and it is the arm where an accidental widening would turn a live
+#           rejection into a silent accept.
+#       (d) same-spelled-super     — 🎯 THE NEAREST MISS.  Identical to (a) except
+#           that the later module's `impl Sup W` implements a DIFFERENT `Sup`, from
+#           an unrelated module, that merely shares the spelling.  It must STILL
+#           reject: `implRowMatchesSuper` decides on the IDENTITY key
+#           (`ifaceTabKey ir.irOrigin ir.irName`), and the bare-spelling leg exists
+#           only in `IE`'s buckets, which this query never reads.  If (d) ever goes
+#           green the widening leaked onto the spelling axis and rebuilt #1438 here.
+mkdir -p "$TMP/sa3"
+cat > "$TMP/sa3/iface.mdk" <<'EOF'
+export interface Sup a where
+  sf : a -> Int
+
+export interface Sub a requires Sup a where
+  ufn : a -> Int
+
+public export data W = W
+EOF
+cat > "$TMP/sa3/subimpl.mdk" <<'EOF'
+import iface.{Sup, sf, Sub, ufn, W}
+
+export impl Sub W where
+  ufn x = sf x + 35
+EOF
+cat > "$TMP/sa3/supimpl.mdk" <<'EOF'
+import iface.{Sup, sf, W}
+
+export impl Sup W where
+  sf _ = 7
+EOF
+# `subimpl` first ⇒ loader order iface, subimpl, supimpl, main ⇒ the super impl sits
+# at a HIGHER ordinal than the `impl Sub W` that needs it.  That is the whole variable.
+cat > "$TMP/sa3/main.mdk" <<'EOF'
+import iface.{W, ufn}
+import subimpl
+import supimpl
+
+main = println (ufn W)
+EOF
+sa3_chk="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check "$TMP/sa3/main.mdk" 2>&1)"
+sa3_code=$?
+sa3_run="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" run "$TMP/sa3/main.mdk" 2>&1)"
+sa3_rcode=$?
+if [ "$sa3_code" -eq 0 ] && [ "$sa3_rcode" -eq 0 ] && [ "$sa3_run" = "42" ]; then
+  pass=$((pass+1)); printf 'ok   SA-3/later-super-accepted (existence is graph-global; runs, prints 42)\n'
+else
+  fail=$((fail+1)); printf 'FAIL SA-3/later-super-accepted (check %d [%s], run %d [%s], want exit 0 / 42)\n' "$sa3_code" "$sa3_chk" "$sa3_rcode" "$sa3_run"
+fi
+
+# (b) the same graph with `supimpl` deleted: the super is in NO module.
+mkdir -p "$TMP/sa3b"
+cp "$TMP/sa3/iface.mdk"   "$TMP/sa3b/iface.mdk"
+cp "$TMP/sa3/subimpl.mdk" "$TMP/sa3b/subimpl.mdk"
+cat > "$TMP/sa3b/main.mdk" <<'EOF'
+import iface.{W, ufn}
+import subimpl
+
+main = println (ufn W)
+EOF
+sa3b_out="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check "$TMP/sa3b/main.mdk" 2>&1)"
+sa3b_code=$?
+case "$sa3b_out" in
+  *"requires a superinterface 'impl Sup W', which is missing"*)
+    if [ "$sa3b_code" -eq 1 ]; then
+      pass=$((pass+1)); printf 'ok   SA-3/super-absent-rejects (the check can still fail — Module arm)\n'
+    else
+      fail=$((fail+1)); printf 'FAIL SA-3/super-absent-rejects (right diagnostic, wrong exit %d)\n' "$sa3b_code"
+    fi ;;
+  *) fail=$((fail+1)); printf 'FAIL SA-3/super-absent-rejects (T-MISSING-SUPER-IMPL gone — the widening DELETED the check, exit %d: [%s])\n' "$sa3b_code" "$sa3b_out" ;;
+esac
+
+# (c) FLAT arm: one file, no imports, super missing.
+cat > "$TMP/sa3flat.mdk" <<'EOF'
+interface Sup a where
+  sf : a -> Int
+
+interface Sub a requires Sup a where
+  ufn : a -> Int
+
+data W = W
+
+impl Sub W where
+  ufn x = sf x + 35
+
+main = println 1
+EOF
+sa3f_out="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check "$TMP/sa3flat.mdk" 2>&1)"
+sa3f_code=$?
+case "$sa3f_out" in
+  *"requires a superinterface 'impl Sup W', which is missing"*)
+    if [ "$sa3f_code" -eq 1 ]; then
+      pass=$((pass+1)); printf 'ok   SA-3/flat-super-absent (the check can still fail — Flat arm)\n'
+    else
+      fail=$((fail+1)); printf 'FAIL SA-3/flat-super-absent (right diagnostic, wrong exit %d)\n' "$sa3f_code"
+    fi ;;
+  *) fail=$((fail+1)); printf 'FAIL SA-3/flat-super-absent (live rejection became a silent accept on Flat, exit %d: [%s])\n' "$sa3f_code" "$sa3f_out" ;;
+esac
+
+# (d) the nearest miss: a same-spelled `Sup` from an unrelated module.
+mkdir -p "$TMP/sa3d"
+cp "$TMP/sa3/iface.mdk"   "$TMP/sa3d/iface.mdk"
+cp "$TMP/sa3/subimpl.mdk" "$TMP/sa3d/subimpl.mdk"
+cat > "$TMP/sa3d/otheriface.mdk" <<'EOF'
+export interface Sup a where
+  osf : a -> Int
+EOF
+cat > "$TMP/sa3d/supimpl.mdk" <<'EOF'
+import otheriface.{Sup, osf}
+import iface.{W}
+
+export impl Sup W where
+  osf _ = 7
+EOF
+cat > "$TMP/sa3d/main.mdk" <<'EOF'
+import iface.{W, ufn}
+import subimpl
+import supimpl
+
+main = println (ufn W)
+EOF
+sa3d_out="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check "$TMP/sa3d/main.mdk" 2>&1)"
+sa3d_code=$?
+case "$sa3d_out" in
+  *"requires a superinterface 'impl Sup W', which is missing"*)
+    if [ "$sa3d_code" -eq 1 ]; then
+      pass=$((pass+1)); printf 'ok   SA-3/same-spelled-super (identity decides; the spelling does not)\n'
+    else
+      fail=$((fail+1)); printf 'FAIL SA-3/same-spelled-super (right diagnostic, wrong exit %d)\n' "$sa3d_code"
+    fi ;;
+  *) fail=$((fail+1)); printf 'FAIL SA-3/same-spelled-super (a DIFFERENT interface sharing the spelling satisfied the super — #1438 rebuilt, exit %d: [%s])\n' "$sa3d_code" "$sa3d_out" ;;
+esac
+
 printf '\n%d ok, %d failing\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
