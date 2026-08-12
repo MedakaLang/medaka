@@ -911,3 +911,86 @@ scope:      ⚠️ **One reading in that report is CONTAMINATED and must not be 
             tree** before anyone acts on them — if genuine, they are five already-fixed bugs whose
             issues are still open, which is a real finding, but not one that can be claimed from a
             contaminated run. Same root cause as RUN-028.
+
+## RUN-033 — checkpoint — the quarantined "5 DRAINED" was a PHANTOM. Quiescence is not optional
+
+question:   RUN-032 quarantined a mid-flight reading of *"93 still reproduce, 5 DRAINED"* pending a
+            clean re-derivation. What is the truth?
+ruling:     **There were ZERO drains.** The 5 were entirely an artifact of measuring against Lane A's
+            uncommitted, half-applied edits. The quarantine was correct and the reading is discarded.
+derivation: Orchestrator ran `sh test/diff_compiler_must_fail.sh` on the quiescent tree at
+            `433bcffe`, with no agent live and nothing uncommitted:
+            **`checked 98 fixtures: 98 still reproduce, 0 DRAINED, 0 control-broke, 0 malformed`**.
+            Corroborating detail: `1597-*` REPRO (the new pin works) and `1586-*` REPRO (still live,
+            consistent with RUN-031's refusal of F-3). Fixture count reconciles: the contaminated run
+            saw 93 + 5 = 98.
+scope:      🚨 **This is the sprint's sharpest operational lesson and it generalises past this run.**
+            Mid-edit, the compiler passed through a state in which **five separate pinned bugs
+            appeared FIXED**. Had that reading been trusted, the sprint would have reported five
+            spurious drains — and the natural next action on a drain is to CLOSE the issue, so the
+            failure would have propagated straight into the tracker as five wrongly-closed bugs, in
+            a run whose closure policy exists precisely to prevent that.
+            **A must-fail run is only meaningful on a quiescent tree.** It is not a cheap check that
+            can be slipped in beside live work; the drain/repro verdict is exactly the thing that
+            a half-applied edit perturbs.
+            📌 Standing rule for the rest of the run, and the reason the §2 checkpoint is run
+            SERIALLY rather than beside a lane: **no gate is measured while any implementer holds
+            uncommitted edits.** The cost is idle wall-clock; the alternative is a confidently wrong
+            answer, which this sprint's deferred-verification posture has no second chance to catch.
+            This is now the THIRD contaminated measurement traceable to orchestrator-scheduled
+            concurrency (RUN-028 stale binary, RUN-032 quarantined drains, and this one's
+            resolution). The pattern is mine, not the agents'.
+
+## RUN-034 — CHECKPOINT 1 (after A-3.5a + F-0) — PASSED. Red is entirely the designed debt
+
+question:   §2's integration checkpoint after the first units. Is the tree sound?
+ruling:     **PASSED.** `sh test/preflight.sh` exits 1, and **both failures are the designed red**
+            already in `.claude/HANDOFF.md`'s table. No unexpected gate moved.
+derivation: Orchestrator, on the quiescent tree at `433bcffe`, nothing uncommitted, no agent live:
+            - `FAIL diff_compiler_snapshot_frontend` — **201 fixtures, 200 compared, exactly 1
+              failed**: `compiler/types/typecheck.mdk` (sections SOURCE, DESUGAR, MARK). The only
+              file this run has edited. Every other corpus (parse, positions, comment, stdlib,
+              diff_fixtures) is 100% green.
+            - `FAIL diff_compiler_selfproc` — **15 ok, 1 failing**: only `types.typecheck`. All
+              twelve sibling LEG A modules match reference, and **LEG B / C / D all pass** — the
+              self-hosted eval, the typed Parser-monad stage and the typed TYPECHECKER stage all
+              execute correctly. That last one matters: the engine still runs its own typechecker.
+            - `sh test/diff_compiler_must_fail.sh` → **98/98 reproduce, 0 drained** (RUN-033).
+            - `sh test/registry_keying_ratchet.sh` → PASS, **23** CrossRun fields.
+            - `make check-self` → PASS.
+scope:      Blast radius is exactly the file we edited. Preflight's own footer records what it did
+            NOT run (`diff_compiler_engines`, `selfcompile_fixpoint`, and 153 other gates) — it is a
+            filter, not an authority, and this entry claims only what it measured.
+
+## RUN-035 — CHECKPOINT 1 — the LEG A delta VERIFIED line by line: zero unexplained scheme moves
+
+question:   RUN-026 promised that the moved LEG A golden would be checked, not waved at: does any
+            SURVIVING binding's inferred type change?
+ruling:     **No. Every one of the 8 changed lines is attributable to a named bite, and nothing
+            else in 1758 lines moved.** The strongest verification this sprint's posture permits.
+derivation: Orchestrator reproduced the gate's own comparison **read-only, blessing nothing** —
+            ran `test/bin/check_all_main` over the same closure, extracted the `types.typecheck`
+            section with the gate's own `awk` marker logic, `LC_ALL=C sort`ed both sides, and
+            diffed against the committed golden (script: `/var/tmp/uf/legadiff.sh`).
+            Golden 1758 lines → now 1753. Complete delta:
+            **ADDED (2)** — `ceRequiredAt : RegKey -> Int -> ClassEnv -> Option (List String)`
+            (A5a-2); `ceRowRequired : CeRow -> List String` (A5a-1).
+            **DELETED (6)** — `declEnvsUpTo`, `declEnvsUpToGo`, `declEnvsVisible` (C-0, exactly the
+            three RUN-026 predicted); `ifaceRequiredMethods` (A5a-4); `insertIfaceRequired` (A5a-5);
+            `checkImplCompleteness` + `implCompletenessMsgsOf` (A5a-4's unification of the two
+            checkers).
+            **RE-TYPED (2)** — `checkImplCompletenessMap : Registry (List String) -> List Decl -> Unit`
+            → `ClassEnv -> Int -> List Decl -> Unit`; `implCompletenessMsgsOfMap` likewise. Both are
+            A5a-3's specified transform verbatim (*"takes `ClassEnv -> Int` in place of
+            `Registry (List String)`"*).
+scope:      **Zero unattributed hunks.** RUN-026's "expected LEG A delta" is discharged and extended:
+            the predicted three deletions are present, and the five further changes are each owned by
+            a bite. The standing additive-only rule is deliberately violated in the retirement
+            direction, as ruled — but the property that rule protects (*no existing binding's
+            inferred type silently changed*) **holds**, since both re-typings were specified in
+            advance rather than discovered in the golden.
+            📌 Method note: this check cost one 12-line script and no build. It is the cheap,
+            available discriminator between "the golden moved because we changed things" and "the
+            golden moved because something moved that we did not intend" — the two are
+            indistinguishable from a red gate alone, which is exactly why a red gate is not
+            evidence either way.
