@@ -1,0 +1,13 @@
+-- Issue 1564 — ORDER 1 (the ACCEPTING order): `wrapimpl` is imported BEFORE `nest`.
+--
+-- Identical to main.mdk except that the `nest` and `wrapimpl` import lines are
+-- SWAPPED. This order checks clean at exit 0 and the program prints `wrap(int)`.
+--
+-- This is the control, and it is what makes the pin discriminating: the two entry
+-- files differ ONLY in the order of two import lines, so "the fixture has a typo"
+-- cannot explain main.mdk's rejection — a typo would break this file too.
+import iface.{Tag, tagOf, Wrap}
+import wrapimpl
+import nest.{nest}
+
+main = println (nest 5)

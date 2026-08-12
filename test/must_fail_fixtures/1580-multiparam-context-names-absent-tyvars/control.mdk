@@ -1,0 +1,25 @@
+-- Control for issue 1580. Byte-for-byte main.mdk except for ONE feature: `h`'s call
+-- is DIRECT (`conv x y`) instead of going through the conditional impl's residual
+-- (`conv (Wrap x) (Wrap y)`). Same multi-parameter interface, same impls, same arity.
+--
+-- The direct channel renders the SAME predicate correctly — `h : Conv a b => a -> b
+-- -> String`, the constraint's letters being the type's own letters — which is what
+-- isolates the defect to the residual-reduction channel's letter allocation rather
+-- than to multi-parameter interfaces as such, or to the renderer in general.
+--
+-- If THIS line stops rendering `Conv a b`, the renderer or the prelude moved and the
+-- environment broke; that is CONTROL-BROKE, not a fix for 1580.
+data Wrap a = Wrap a
+
+interface Conv a b where
+  conv : a -> b -> String
+
+impl Conv Int Bool where
+  conv _ _ = "int-bool"
+
+impl Conv (Wrap a) (Wrap b) requires Conv a b where
+  conv (Wrap x) (Wrap y) = "w:\{conv x y}"
+
+h x y = conv x y
+
+main = println (h 5 True)
