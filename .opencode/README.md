@@ -25,6 +25,12 @@ proof up front and runs stateless source checks on coherent daughter diffs befor
 integration. Verification daughters should share cold prerequisites unless a
 measured wall-clock reason justifies duplicate builds.
 
+Reproducers receive a unique conductor-owned scratch directory outside every
+worktree. Mutation rows are caller-designed transactional shell commands: an
+EXIT/signal trap restores and hash-checks source inside the same command that
+applies and grades the mutant, so an interrupted agent turn cannot strand a
+partial edit.
+
 The model split is deliberate: Sol owns semantic design and adversarial review;
 Terra receives implementation-ready edits and evidence-sensitive
 readiness/reproduction work; Qwen handles caller-designed verification execution
