@@ -42,22 +42,27 @@ work=$(mktemp -d "${TMPDIR:-/tmp}/medaka-mutation.XXXXXX") || exit 2
 check_log=$work/check.log
 child_pid=
 
-descendants_of() {
-  parent=$1
-  children=$(ps -e -o pid= -o ppid= | while read -r pid ppid; do
-    [ "$ppid" = "$parent" ] && printf '%s\n' "$pid"
-  done)
-  for child in $children; do
-    printf '%s\n' "$child"
-    descendants_of "$child"
-  done
-}
-
 stop_check() {
   [ -n "$child_pid" ] || return 0
-  descendants=$(descendants_of "$child_pid")
-  kill -TERM "$child_pid" $descendants 2>/dev/null || true
+  # The check runs in a private session/process group led by child_pid. Kill the
+  # group, not a racy process-tree snapshot: descendants that fork during TERM
+  # remain in the group. After a short grace period, KILL any holdout before
+  # restoration. A deliberately self-daemonizing check can escape any supervisor;
+  # mutation commands are trusted caller-designed code in a disposable worktree.
+  kill -TERM "-$child_pid" 2>/dev/null || true
+  grace=0
+  while [ "$grace" -lt 20 ] && kill -0 "-$child_pid" 2>/dev/null; do
+    sleep 0.05
+    grace=$((grace + 1))
+  done
+  if kill -0 "-$child_pid" 2>/dev/null; then
+    kill -KILL "-$child_pid" 2>/dev/null || true
+  fi
   wait "$child_pid" 2>/dev/null || true
+  if kill -0 "-$child_pid" 2>/dev/null; then
+    echo "transaction $label: check process group survived termination" >&2
+    return 1
+  fi
   child_pid=
 }
 
@@ -100,7 +105,10 @@ after_mutation_status=$(git -C "$repo" status --porcelain)
   echo "transaction $label: mutation changed nothing" >&2; exit 3;
 }
 
-(cd "$repo" && sh -c "$check_cmd") >"$check_log" 2>&1 &
+# Perl/POSIX::setsid is the same portable process-control substrate used by the
+# repository's macOS-safe timeout shim. exec preserves the session-leader PID.
+perl -MPOSIX -e 'POSIX::setsid() >= 0 or die "setsid: $!"; exec @ARGV or die "exec: $!"' \
+  sh -c "cd \"\$1\" && sh -c \"\$2\"" sh "$repo" "$check_cmd" >"$check_log" 2>&1 &
 child_pid=$!
 wait "$child_pid"
 check_status=$?
