@@ -66,6 +66,7 @@ main = match args ()
   "--reemit-gap-state"::_ => reemitGapState ()
   "--reemit-gap-strict"::_ => reemitGapStrict ()
   "--reemit-string-state"::_ => reemitStringState ()
+  "--reemit-default-state"::_ => reemitDefaultState ()
   _ => driveRuntime emit
 
 emit : List Decl -> List Decl -> List Decl -> <IO> Unit
@@ -277,6 +278,70 @@ reemitStringStateP = "pExpr _ = \"p-expr\"\n\npRepeat _ = \"p-expr\"\n\npClause 
 reemitStringStateU : String
 reemitStringStateU =
   "uExpr _ = \"u-expr\"\n\nuOther _ = \"u-other\"\n\nmain = 82\n"
+
+-- X-W.H2b.4: synthesized defaults are physical per-emission state. P has two
+-- unexecuted call sites for one inherited default, exercising membership, mark,
+-- definition append, and drain without relying on interface-ID narrowing. U differs
+-- in its explicit default body; its census adds one attributed gap between P runs.
+reemitDefaultState : Unit -> <IO> Unit
+reemitDefaultState _ =
+  let p1 = emitProgram defaultStateInputP defaultStateProgramP
+  let (u, _) = emitProgramRecord defaultStateInputU defaultStateProgramU
+  let censusEvents = emitProgramGaps defaultStateInputU defaultStateCensusProgramU
+  let _ = printCapture "DEFAULT_P1" p1
+  let _ = printCapture "DEFAULT_RECORD_U" u
+  let _ = printEvents "DEFAULT_CENSUS_U_EVENTS" censusEvents
+  printCapture
+    "DEFAULT_P2"
+    (emitProgram defaultStateInputP defaultStateProgramP)
+
+defaultStateLoc : Loc
+defaultStateLoc = Loc "<default-state>" 1 1 1 1
+
+defaultStateInputP : WasmEmitInput
+defaultStateInputP =
+  makeWasmEmitInput [("synthDefault", ("DefaultFace", 1))] [] [] False []
+
+defaultStateInputU : WasmEmitInput
+defaultStateInputU =
+  makeWasmEmitInput [("synthDefault", ("DefaultFace", 1))] [] [] False []
+
+defaultStateCall : String -> CExpr
+defaultStateCall tag =
+  CApp (CMethod "synthDefault" (RKey tag []) [] []) (CLit LUnit)
+
+defaultStateProgram : String -> Int -> CProgram
+defaultStateProgram tag bodyConstant = CProgram
+  [
+    CBind "defaultRequestOne" [CClause [PVar "one" defaultStateLoc] (defaultStateCall tag)],
+    CBind "defaultRequestTwo" [CClause [PVar "two" defaultStateLoc] (defaultStateCall tag)],
+    CBind "main" [CClause [] (CLit (LInt 0))],
+  ]
+  []
+  []
+  [
+    CImplEntry "synthDefault" 0 (CImplDefault "DefaultFace" [PVar "value" defaultStateLoc] (CLit (LInt bodyConstant)))
+  ]
+
+defaultStateProgramP : CProgram
+defaultStateProgramP = defaultStateProgram "PDefault" 17
+
+defaultStateProgramU : CProgram
+defaultStateProgramU = defaultStateProgram "UDefault" 29
+
+defaultStateCensusProgramU : CProgram
+defaultStateCensusProgramU = CProgram
+  [
+    CBind "defaultRequestOne" [CClause [PVar "one" defaultStateLoc] (defaultStateCall "UDefault")],
+    CBind "defaultRequestTwo" [CClause [PVar "two" defaultStateLoc] (defaultStateCall "UDefault")],
+    CBind "defaultCensusGap" [CClause [] (CVar "missingDefaultCensus" AGlobal)],
+    CBind "main" [CClause [] (CLit (LInt 0))],
+  ]
+  []
+  []
+  [
+    CImplEntry "synthDefault" 0 (CImplDefault "DefaultFace" [PVar "value" defaultStateLoc] (CLit (LInt 29)))
+  ]
 
 printCapture : String -> String -> <IO> Unit
 printCapture name text =

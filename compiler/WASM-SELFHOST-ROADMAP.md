@@ -2,9 +2,9 @@
 
 **Status:** IMPLEMENTED — census progress 1428 → 0, every category ✅ DONE, in-browser
 WAT assembly resolved, playground wired (all 2026-06-22). The lifecycle is current
-through X-W.H2b.3: H2b.1 moved gap mode/log/attribution into `WasmEmit`; H2b.2 adds
-passive string-segment state; H2b.3 adds scoped impl-self tail-emission state.
-H2b remains open.
+through X-W.H2b.4: H2b.1 moved gap mode/log/attribution into `WasmEmit`; H2b.2 adds
+passive string-segment state; H2b.3 adds scoped impl-self tail-emission state; H2b.4
+adds synthesized-default membership and definition blocks. H2b remains open.
 
 > **Goal:** run the Medaka compiler *itself*, compiled to WasmGC, in a browser — a
 > frontend-only playground with **no server-side compilation**. This is the

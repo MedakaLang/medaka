@@ -1,6 +1,6 @@
 # Emitter Architecture - the derived current map
 
-**Status:** CURRENT - source-derived LLVM/WasmGC emitter map through X-W.H2b.3.
+**Status:** CURRENT - source-derived LLVM/WasmGC emitter map through X-W.H2b.4.
 This is a description of the current
 implementation, not the target design. The target is
 [`EMITTER-TARGET-ARCHITECTURE.md`](EMITTER-TARGET-ARCHITECTURE.md), and the
@@ -142,9 +142,17 @@ indexes are built once in the input.
 The old Wasm install hooks and the shared `emit_support` method-metadata Refs are
 gone. X-W.H2b.1 moved gap mode, event logging, and binding attribution into a
 fresh private `WasmEmit`; X-W.H2b.2 adds passive string-segment state, and
-X-W.H2b.3 adds the scoped impl-self tail-emission context for each strict,
-record, or census invocation. Forty-two ambient cells remain; H2b and #1407
-remain open.
+X-W.H2b.3 adds the scoped impl-self tail-emission context. X-W.H2b.4 moves the
+two synthesized-default facts (seen names and definition blocks) from three
+ambient cells into that same context; the ordered name list was duplicate
+authority and was removed. `emitProgram`, `emitProgramRecord`, and
+`emitProgramGaps` each mint the context, `Prog` routes default membership/writes,
+and `emitRefProgram` drains its definitions in the existing reverse/flatten
+order. `wasm_emit_typed_main --reemit-default-state` and
+`test/wasm/diff_wasm_typed.sh` cover strict P → record U → census U → strict P.
+Thirty-nine ambient cells remain; H2b and #1407 remain open. The next H2b.5
+census question is which remaining Ref family has a complete per-emission
+ownership boundary without changing its physical order.
 
 ### 3.3 Per-program derived indexes
 
@@ -228,10 +236,11 @@ The product driver shells out to a fresh emitter process specifically to obtain
 pristine state. Within one process:
 
 - LLVM constructs a fresh `Emit` record but also resets/installs external refs;
-- Wasm creates a fresh `WasmEmit` for strict, record, and gap-census calls, while
-  manually resetting the remaining feature flags, lifted-function tables, and
-  lambdas at `emitProgram` entry; passive string segments are fresh with the
-  `WasmEmit` instead;
+- Wasm creates a fresh `WasmEmit` for strict, record, and gap-census calls; gap
+  lifecycle, passive string segments, impl-self scope, and synthesized-default
+  membership/definition buffers belong there; it still manually resets the
+  remaining feature flags, lifted-function tables, and lambdas at `emitProgram`
+  entry;
 - gap-census paths own a separate gap lifecycle but still duplicate the remaining
   physical setup;
 - X-W.H2 still owns the remaining physical-state lifecycle.

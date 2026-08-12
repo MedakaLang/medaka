@@ -378,8 +378,13 @@ test, every candidate through native build AND wasm build AND `medaka run`). The
   declaration-derived install Refs: every Wasm emission now receives immutable
   `WasmEmitInput`. X-W.H2b.1 moved gap mode, event logging, and binding attribution into
   a fresh `WasmEmit`; X-W.H2b.2 adds passive string-segment state and X-W.H2b.3 adds the
-  scoped impl-self tail-emission context per strict, record, or census emission. Forty-two
-  ambient cells remain; H2b and #1407 stay open. The output,
+  scoped impl-self tail-emission context per strict, record, or census emission. X-W.H2b.4
+  moves synthesized-default membership and definition blocks from three ambient cells into
+  that context and deletes the ordered-name duplicate authority: `Prog` routes the helper
+  reads/writes and `emitRefProgram` preserves the reverse/flatten drain order. The typed
+  entry's default-state P → record-U → census-U → P harness and `diff_wasm_typed.sh` ratchet
+  those routes. Thirty-nine ambient cells remain; H2b and #1407 stay open; H2b.5 asks which
+  remaining Ref family has a complete per-emission ownership boundary. The output,
   feature, numeric-scope, TRMC, and dispatch module Refs remain X-W.H2 work.
 - **`$boxint` equality/compare through a poly HOF is by VALUE** (no ref-identity bug).
 - **NaN `compare`/`min`/`max` are engine-UNIFORM today** (all three engines: `Eq`,

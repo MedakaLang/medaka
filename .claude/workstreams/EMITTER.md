@@ -93,8 +93,12 @@ argument — the reference design, which LLVM emit now matches for both halves).
 install-once semantic tables enter through `EmitInput`; X-W.H1 gives Wasm the corresponding
 immutable `WasmEmitInput`. X-W.H2b.1 puts Wasm gap mode, events, and attribution in a fresh
 per-emission `WasmEmit`; X-W.H2b.2 adds passive string-segment state; X-W.H2b.3 adds the
-scoped impl-self tail-emission context. Forty-two ambient cells remain and H2b/#1407 stay
-open. Its other physical Refs remain X-W.H2 work. Do not add new
+scoped impl-self tail-emission context; and X-W.H2b.4 moves synthesized-default membership
+and definition blocks from three ambient cells into that context (the ordered-name duplicate
+authority is deleted). `emitProgram`/record/census mint it, `Prog` routes the helpers, and
+the typed Wasm default-state harness covers strict P → record U → census U → strict P without
+changing WAT order. Thirty-nine ambient cells remain and H2b/#1407 stay open. H2b.5 asks which
+remaining Ref family has a complete per-emission ownership boundary. Its other physical Refs remain X-W.H2 work. Do not add new
 ambient semantic-input or gap-lifecycle siblings.
 
 ### 8. Probes: `main` must be a zero-arg Unit value, and `do` is monadic

@@ -85,9 +85,8 @@ EXPECTED_MODULE_REFS="$(printf '%s\n' \
   useStrLeafRef useRngRef useHashRef useEPutRef useTrapImport useDivGuardRef \
   useFloatRef useFloatHashRef useMathRef useFloatRngRef useFloatStrRef \
   useStrSearchRef useValueCmpRef useValueArithRef numPolyLocalsRef useStrCodecRef \
-  useCharFromCodeRef useCharClassRef useIORef useArgsRef useFileBytesRef \
-  floatLocalsRef floatGlobalsRef tupleAritiesRef emittedDefaultsWRef \
-  emittedDefaultsSetW defaultDefsWRef wTrmcCtxRef wDispCtxRef \
+   useCharFromCodeRef useCharClassRef useIORef useArgsRef useFileBytesRef \
+   floatLocalsRef floatGlobalsRef tupleAritiesRef wTrmcCtxRef wDispCtxRef \
   wDispGroupsRef | LC_ALL=C sort -u)"
 ACTUAL_MODULE_REF_SIGS="$(awk '
   /^[A-Za-z_][A-Za-z0-9_]*[[:space:]]*:[[:space:]]*Ref([[:space:]]|$)/ { print $1 }
@@ -101,7 +100,7 @@ ACTUAL_MODULE_REF_DEFS="$(awk '
 ' "$WASM_SRC" | LC_ALL=C sort -u)"
 if [ "$ACTUAL_MODULE_REF_SIGS" != "$EXPECTED_MODULE_REFS" ] ||
    [ "$ACTUAL_MODULE_REF_DEFS" != "$EXPECTED_MODULE_REFS" ]; then
-  echo "FAIL wasm typed string-state ratchet: top-level Ref authority set changed"
+  echo "FAIL H2B4-AUTHORITY-SET: top-level Ref authority set changed"
   printf '  observed signatures:\n%s\n' "$ACTUAL_MODULE_REF_SIGS"
   printf '  observed definitions:\n%s\n' "$ACTUAL_MODULE_REF_DEFS"
   exit 1
@@ -230,6 +229,40 @@ run_impl_self_check() {
       exit 1
     }
 }
+if grep -E '^[[:space:]]*_?(emittedDefaultsWRef|emittedDefaultsSetW|defaultDefsWRef)[[:space:]]*[:=]' "$WASM_SRC" >/dev/null; then
+  echo "FAIL H2B4-AUTHORITY-SET: retired default authority remains ambient"
+  exit 1
+fi
+for required in \
+  'emittedDefaultNames : Ref (OrdMap Unit)' \
+  'defaultDefinitions : Ref (List (List String))' \
+  'emittedDefaultNames = Ref omEmpty' \
+  'defaultDefinitions = Ref []' \
+  'defaultAlreadyEmittedW : WasmEmit -> String -> Bool' \
+  'defaultAlreadyEmittedW emit name = omHasKey name emit.emittedDefaultNames.value' \
+  'markDefaultEmittedW : WasmEmit -> String -> Unit' \
+  'emit.emittedDefaultNames' \
+  '(omInsert name () emit.emittedDefaultNames.value)' \
+  'addDefaultDefW : WasmEmit -> List String -> Unit' \
+  'setRef emit.defaultDefinitions (def::emit.defaultDefinitions.value)' \
+  'defaultAlreadyEmittedW (progEmit prog) fname' \
+  'markDefaultEmittedW (progEmit prog) fname' \
+  'addDefaultDefW' \
+  '(emitDefaultDefineW prog fname tag method entry)' \
+  'reverseL (progEmit prog).defaultDefinitions.value'; do
+  grep -F -- "$required" "$WASM_SRC" >/dev/null || {
+    case "$required" in
+      *emittedDefaultNames*|*defaultAlreadyEmittedW*|*markDefaultEmittedW*) id=H2B4-DEFAULT-NAMES ;;
+      *) id=H2B4-DEFAULT-DEFS ;;
+    esac
+    echo "FAIL $id: missing routed default-state authority $required"
+    exit 1
+  }
+done
+[ "$(grep -F 'flatMap (x => x) (reverseL ' "$WASM_SRC" | grep -F 'defaultDefinitions.value' | wc -l | tr -d '[:space:]')" -eq 2 ] || {
+  echo "FAIL H2B4-DEFAULT-DEFS: strict and census default drains must both preserve reverse/flatten order"
+  exit 1
+}
 [ "$(grep -F 'let emit = freshWasmEmit WGapRecord' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 2 ] || {
   echo "FAIL wasm typed string-state ratchet: record and census must each own one fresh WasmEmit"
   exit 1
@@ -252,6 +285,29 @@ for required in \
   'let censusEvents = emitProgramGaps gapStateInput stringCensusProgram'; do
   grep -F -- "$required" "$TYPED_ENTRY" >/dev/null || {
     echo "FAIL wasm typed string-state ratchet: dedicated string census is absent"
+    exit 1
+  }
+done
+for required in \
+  '"--reemit-default-state"::_' \
+  'reemitDefaultState : Unit -> <IO> Unit' \
+  'let p1 = emitProgram defaultStateInputP defaultStateProgramP' \
+  'let (u, _) = emitProgramRecord defaultStateInputU defaultStateProgramU' \
+  'let censusEvents = emitProgramGaps defaultStateInputU defaultStateCensusProgramU' \
+  '"DEFAULT_P2"' \
+  '(emitProgram defaultStateInputP defaultStateProgramP)' \
+  'defaultStateProgramP = defaultStateProgram "PDefault" 17' \
+  'defaultStateProgramU = defaultStateProgram "UDefault" 29' \
+  'CBind "defaultRequestOne"' \
+  'CBind "defaultRequestTwo"' \
+  'defaultStateCensusProgramU : CProgram' \
+  'CBind "defaultRequestOne" [CClause [PVar "one" defaultStateLoc] (defaultStateCall "UDefault")]' \
+  'CBind "defaultRequestTwo" [CClause [PVar "two" defaultStateLoc] (defaultStateCall "UDefault")]' \
+  'CBind "defaultCensusGap" [CClause [] (CVar "missingDefaultCensus" AGlobal)]' \
+  'CBind "main" [CClause [] (CLit (LInt 0))]' \
+  'CImplEntry "synthDefault" 0 (CImplDefault "DefaultFace" [PVar "value" defaultStateLoc] (CLit (LInt 29)))'; do
+  grep -F -- "$required" "$TYPED_ENTRY" >/dev/null || {
+    echo "FAIL H2B4-DEFAULT-DEFS: default-state harness is missing $required"
     exit 1
   }
 done
@@ -741,6 +797,107 @@ U_REFS="$(printf '1\n0')"
 assert_string_segments string-p1 "$WORK/string-p1.wat" "$P_SEGMENTS" "$P_REFS"
 assert_string_segments string-u "$WORK/string-u.wat" "$U_SEGMENTS" "$U_REFS"
 assert_string_segments string-p2 "$WORK/string-p2.wat" "$P_SEGMENTS" "$P_REFS"
+
+# X-W.H2b.4: strict P -> record U -> non-vacuous U census -> strict P. The two
+# P request sites must produce one synthesized default definition in first-encounter
+# order, and the extractor delimits that named function rather than a body constant.
+DEFAULT_OUT="$($EMITBIN --reemit-default-state 2>"$WORK/default.emit.err")" || {
+  echo "FAIL H2B4-DEFAULT-DEFS: same-process default-state harness"
+  cat "$WORK/default.emit.err"
+  exit 1
+}
+[ ! -s "$WORK/default.emit.err" ] || {
+  echo "FAIL H2B4-DEFAULT-DEFS: harness wrote stderr"
+  cat "$WORK/default.emit.err"
+  exit 1
+}
+DEFAULT_MARKERS="$(printf '%s\n' "$DEFAULT_OUT" | awk '/^DEFAULT_(P1|RECORD_U|CENSUS_U_EVENTS|P2)_(BEGIN|END)$/ { print }')"
+DEFAULT_EXPECTED_MARKERS="$(printf 'DEFAULT_P1_BEGIN\nDEFAULT_P1_END\nDEFAULT_RECORD_U_BEGIN\nDEFAULT_RECORD_U_END\nDEFAULT_CENSUS_U_EVENTS_BEGIN\nDEFAULT_CENSUS_U_EVENTS_END\nDEFAULT_P2_BEGIN\nDEFAULT_P2_END')"
+[ "$DEFAULT_MARKERS" = "$DEFAULT_EXPECTED_MARKERS" ] || {
+  echo "FAIL H2B4-DEFAULT-DEFS: expected exactly eight ordered markers"
+  exit 1
+}
+default_capture() {
+  awk -v begin="$1" -v end="$2" '
+    $0 == begin { capture = 1; next }
+    $0 == end { exit }
+    capture { print }
+  ' <<<"$DEFAULT_OUT"
+}
+default_capture DEFAULT_P1_BEGIN DEFAULT_P1_END > "$WORK/default-p1.wat"
+default_capture DEFAULT_RECORD_U_BEGIN DEFAULT_RECORD_U_END > "$WORK/default-u.wat"
+default_capture DEFAULT_CENSUS_U_EVENTS_BEGIN DEFAULT_CENSUS_U_EVENTS_END > "$WORK/default-census.events"
+default_capture DEFAULT_P2_BEGIN DEFAULT_P2_END > "$WORK/default-p2.wat"
+for default_capture_file in default-p1.wat default-u.wat default-census.events default-p2.wat; do
+  [ -s "$WORK/$default_capture_file" ] || {
+    echo "FAIL H2B4-DEFAULT-DEFS: empty $default_capture_file"
+    exit 1
+  }
+done
+cmp -s "$WORK/default-p1.wat" "$WORK/default-p2.wat" || {
+  echo "FAIL H2B4-DEFAULT-DEFS: P changed after record U and census"
+  exit 1
+}
+cmp -s "$WORK/default-p1.wat" "$WORK/default-u.wat" && {
+  echo "FAIL H2B4-DEFAULT-DEFS: P/U positive control did not differ"
+  exit 1
+}
+default_function() {
+  awk -v name="$2" '
+    $0 ~ "^  \\(func \\$" name "([[:space:]]|\\()" {
+      capture = 1
+    }
+    capture {
+      print
+      opens = gsub(/\(/, "&")
+      closes = gsub(/\)/, "&")
+      depth += opens - closes
+      if (depth == 0) exit
+    }
+  ' "$1"
+}
+for default_spec in "p1 PDefault 17" "u UDefault 29" "p2 PDefault 17"; do
+  default_name="${default_spec%% *}"
+  default_rest="${default_spec#* }"
+  default_tag="${default_rest%% *}"
+  default_constant="${default_rest#* }"
+  default_wat="$WORK/default-$default_name.wat"
+  default_symbol="mdk_default_synthDefault_$default_tag"
+  [ "$(grep -F "(func \$$default_symbol" "$default_wat" | wc -l | tr -d '[:space:]')" -eq 1 ] || {
+    echo "FAIL H2B4-DEFAULT-NAMES: $default_name must contain exactly one named synthesized default"
+    exit 1
+  }
+  default_function "$default_wat" "$default_symbol" > "$WORK/default-$default_name.function"
+  [ -s "$WORK/default-$default_name.function" ] &&
+    grep -F "(func \$$default_symbol" "$WORK/default-$default_name.function" >/dev/null &&
+    grep -F "i32.const $default_constant" "$WORK/default-$default_name.function" >/dev/null &&
+    grep -F 'ref.i31' "$WORK/default-$default_name.function" >/dev/null || {
+      echo "FAIL H2B4-DEFAULT-DEFS: $default_name generated default body constant changed"
+      exit 1
+    }
+  wasm-tools parse "$default_wat" -o "$WORK/default-$default_name.wasm" || {
+    echo "FAIL H2B4-DEFAULT-DEFS: wasm-tools parse $default_name"
+    exit 1
+  }
+  wasm-tools validate --features=all "$WORK/default-$default_name.wasm" || {
+    echo "FAIL H2B4-DEFAULT-DEFS: wasm-tools validate $default_name"
+    exit 1
+  }
+  if ! DEFAULT_RUN_RESULT="$($NODE "$RUNJS" "$WORK/default-$default_name.wasm" 2>"$WORK/default-$default_name.run.err")"; then
+    echo "FAIL H2B4-DEFAULT-DEFS: inert main execution failed for $default_name"
+    cat "$WORK/default-$default_name.run.err"
+    exit 1
+  fi
+  [ "$DEFAULT_RUN_RESULT" = "0" ] && [ ! -s "$WORK/default-$default_name.run.err" ] || {
+    echo "FAIL H2B4-DEFAULT-DEFS: inert main output/stderr changed for $default_name"
+    exit 1
+  }
+done
+[ "$(wc -l < "$WORK/default-census.events")" -eq 1 ] &&
+  grep -F $'val defaultCensusGap\tunbound variable '\''missingDefaultCensus' "$WORK/default-census.events" >/dev/null || {
+    echo "FAIL H2B4-DEFAULT-DEFS: census event attribution changed"
+    exit 1
+  }
 
 JOBS="${JOBS:-$(sysctl -n hw.logicalcpu 2>/dev/null || nproc 2>/dev/null || echo 4)}"
 NODE_ABS="$(command -v "$NODE" 2>/dev/null || echo "$NODE")"
