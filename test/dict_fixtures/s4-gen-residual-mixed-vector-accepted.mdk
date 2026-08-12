@@ -1,0 +1,47 @@
+-- §4 `gen` -- THE ISSUE 1560 CELL, accept half, at the one residual ARITY whose dict the
+-- routing machinery can actually honour today.
+--
+-- HAND-DERIVED FROM THE SPEC BEFORE THE BINARY WAS ASKED:
+--   `conv (Wrap x) y` poses `Conv (Wrap t) u` -- again a MIXED vector, one concrete head
+--   and one bare variable.  The only matching instance is
+--   `impl Conv (Wrap a) b requires Tag a`, whose discharge leaves the SINGLE-parameter
+--   residual `Tag t`.  `t` is generalizable, so `gen` defers it and `f` abstracts one
+--   dict for it: `f : Tag a => a -> b -> String`.  `f 5 True` instantiates at `a = Int`,
+--   `impl Tag Int` answers `int`, and the program prints
+--       start
+--       w:int
+--   at exit 0.
+--
+-- ⚠️ ITS VALUE ROW IS INERT AND SAYS SO.  `run` printed `w:int` before this fix too, and
+-- so did the built binary -- with no dict passed, the impl body's `tagOf x` happened to
+-- land on `impl Tag Int` by arg-tag fallback.  The DISCRIMINATING assertion is the
+-- section-3 dict arity: `f` is emitted at arity 3 (one dict + two values) and the call
+-- site supplies the dict.  Pre-fix it was arity 2 and no dict existed, because the mixed
+-- vector was dropped before it could become either a context or a `lambda d-bar` slot.
+-- The value row is kept as a false-reject canary: this program must keep RUNNING.
+--
+-- ⚠️ NO SECTION-2 SCHEME ROW, DELIBERATELY.  `check` renders this context as
+-- `f : Tag c => a -> b -> String` -- the constraint variable is named for an id the
+-- rendered body did not assign a letter to, at every multi-parameter interface, and on
+-- `main` as well as here (`h : Conv c d => a -> b -> String` reproduces with no residual
+-- reduction involved at all).  That is a display defect of the n-ary dict-slot class
+-- (issue 1318), not something to enshrine in a golden.
+data Wrap a = Wrap a
+
+interface Tag t where
+  tagOf : t -> String
+
+interface Conv a b where
+  conv : a -> b -> String
+
+impl Tag Int where
+  tagOf _ = "int"
+
+impl Conv (Wrap a) b requires Tag a where
+  conv (Wrap x) _ = "w:\{tagOf x}"
+
+f x y = conv (Wrap x) y
+
+main =
+  let _ = println "start"
+  println (f 5 True)

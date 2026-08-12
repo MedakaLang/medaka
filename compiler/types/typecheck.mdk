@@ -23176,40 +23176,116 @@ keepBoundResidual boundIds (iface, args) = match boundTyvarIds boundIds args
 -- §3 `inst`, run for its RESIDUAL rather than for a verdict.  A predicate whose
 -- arguments are not all concrete-headed is itself the residual (OD2 defers it); a
 -- concrete-headed one is matched against the impl universe and replaced by that impl's
--- substituted `requires`, recursively.  No matching impl ⇒ no residual: the goal is
--- unsatisfiable and `checkOneCallObligation`/`checkReqOne` own that diagnostic — this
--- function must never invent a second one.
--- ⚠️ `allConcreteHeads` is ALL-OR-NOTHING, so a MIXED argument vector — one argument
--- concrete-headed, another a bare tyvar, e.g. `Conv (Wrap t) u` — takes the first arm
--- and is returned UNREDUCED, whereupon `keepBoundResidual` drops it.  That cell is
--- issue 1560, filed separately and MEASURED IDENTICAL on this branch and on its base:
--- reducing a partially-ground vector needs `findMatchingImplReqsU` to match with a free
--- argument, which is a change to the matcher, not to this walk.
+-- substituted `requires`, recursively.  No matching impl ⇒ no residual, and this
+-- function must never invent a diagnostic of its own.
+-- 🚨 BUT DO NOT READ THE `None` ARM AS "SOMEONE ELSE REPORTS IT".  This comment used to
+-- say the goal is *"unsatisfiable and `checkOneCallObligation`/`checkReqOne` own that
+-- diagnostic"*, and that premise is FALSE for a PARTIALLY-GROUND vector — precisely the
+-- class the `anyConcreteHead` widening newly admits here.  A fully-ground goal is indeed
+-- owned by those checkers; a goal like `Conv (Wrap t) u` with no `Wrap`-headed impl is
+-- not unsatisfiable-and-reported, it is UNRESOLVED AND SILENT.  MEASURED, and
+-- byte-identical on this branch and on its base (so it is NOT a regression from this
+-- change, and NOT something this change repairs): with `impl Conv Int Bool` as the only
+-- impl, `h x y = conv (Wrap x) y` gives `check` exit 0, `run` exit 0 printing
+-- `int-bool` — a `Wrap`-headed goal answered by `impl Conv Int Bool`, i.e. a WRONG VALUE
+-- — and `build` exit 1 on an emitter `E-PANIC: no impl of method 'conv' for type 'Wrap'`.
+-- `[]` here is therefore still the same representational conflation issue 1562 was about
+-- ("no residual" and "no answer" are one value), one shape over; it is filed as issue
+-- 1578 and is NOT this function's to fix silently.
+-- ⚠️ A SECOND thing this arm's neighbourhood does NOT own: when the goal IS matched but
+-- only the GENERAL member of a specific-vs-general overlap can match a partially-free
+-- vector, committing to that impl's `requires` saddles the binding with a constraint its
+-- real (more specific, `requires`-free) instance never demanded — a FALSE REJECT, issue
+-- 1579, likewise measured byte-identical before and after the `anyConcreteHead` widening.
+-- ⚠️ #1560: the terminal test is `anyConcreteHead`, NOT `allConcreteHeads`, and the
+-- difference is an S0.  `allConcreteHeads` is ALL-OR-NOTHING on the vector, so a MIXED
+-- argument vector — one argument concrete-headed, another a bare tyvar, e.g.
+-- `Conv (Wrap t) u` — took the terminal arm, came back UNREDUCED, and was then dropped
+-- by `keepBoundResidual` (whose `boundTyvarIds` rejects the non-bare `Wrap t`): exactly
+-- 1549's drop, one shape over.  It needed no change to the matcher, which was the
+-- reason recorded for deferring it: `matchStep` ALREADY matches per-argument and is
+-- already safe on a free goal argument — an impl-head `TyVar` binds whatever is at that
+-- position (`MVar`), while a CONCRETE impl-head pattern against an unbound goal var
+-- takes `matchStep`'s `_ => MFail` arm.  So an impl is selected only when it is generic
+-- exactly where the goal is still free, which is the per-argument reduction OD2 wants;
+-- `impl Conv Int Bool` cannot be committed to for a goal `Conv (Wrap t) u`.  A vector
+-- with NO concrete head anywhere is still terminal — it is its own residual (OD2), and
+-- that arm is unchanged.
+-- 🚨 THIS FIXES THE DROP, AND THE DROP IS ONLY LAYER 1 OF ISSUE 1560'S OWN REPRO.  When
+-- the RESIDUAL is itself n-ary (n >= 2, `Conv t u`), the predicate now reaches the
+-- scheme and the dict prefix — but `funConstraintsRef`'s dict slots are SHATTERED PER
+-- TYVAR (`recordCallObligations`: *"1-ary by construction … Widening this to a joint
+-- vector is the dict-slot=predicate change (#607 punch-list item 3), which moves emitted
+-- arity and is deliberately NOT done here"*), so the conditional impl's `requires Conv a
+-- b` has no JOINT dict to route to and `argReqRoute` resolves it to `RNone` — a literal
+-- null element dict, and the binary still faults.  MEASURED, and INDEPENDENT of this
+-- reduction and of every inference channel: write the context out by hand
+-- (`f : Conv a b => a -> b -> String ; f x y = conv (Wrap x) y`) and a binary built from
+-- `main` faults identically, while the same program with a SINGLE-parameter residual
+-- (`impl Conv (Wrap a) b requires Tag a`) runs correctly on that same binary.  So issue
+-- 1560's pin does not drain on this change and is deliberately retained.
 -- ⚠️ The fuel bounds a cyclic instance (`impl C (Box a) requires C (Box a)`), which
--- would otherwise reduce forever.  EXHAUSTING IT IS SILENT AND THAT IS ISSUE 1562, an
--- S0: `[]` here is also what "no matching impl" returns, so the predicate is dropped and
--- the program lands back in 1549's exact defect — MEASURED, `requires`-nesting depth 31
--- is fixed and depth 32 gives `deep : a -> String`, check exit 0, binary 139.  Say it
--- plainly rather than as "degrades to the old behaviour": THE OLD BEHAVIOUR IS THE S0.
--- It is a residual of 1549 rather than a regression from it (before the fix EVERY depth
--- behaved that way), and raising the constant is not a fix — any finite fuel has the
--- same cliff.  The fix shape recorded on 1562 is to make exhaustion LOUD, which needs a
--- code registered in `compiler/DIAGNOSTIC-CODES-DESIGN.md`.  Pinned at
--- `test/must_fail_fixtures/1562-residual-reduction-fuel-cliff/`.
+-- would otherwise reduce forever.  EXHAUSTING IT USED TO BE SILENT (issue 1562, an S0):
+-- `[]` is also what "no matching impl" returns, so the predicate was dropped and the
+-- program landed back in 1549's exact defect — MEASURED, depth 31 fixed, depth 32 gave
+-- `deep : a -> String`, check exit 0, binary 139.  It is now a located REJECT
+-- (`T-REQUIRES-DEPTH`).  Raising the constant would not have been a fix — any finite
+-- fuel has the same cliff; only making the cliff LOUD removes the silent wrongness.
+-- ⚠️ THE GUARD ORDER IS LOAD-BEARING: the terminal test runs BEFORE the fuel test, so a
+-- predicate that is ALREADY fully reduced when the fuel runs out is returned as the
+-- residual it is rather than reported as too deep.  Ordering the fuel first would
+-- reject a chain whose very next step was the answer.
 residualPredsOf : Int -> IfaceRef -> List Mono -> List (IfaceRef, List Mono)
 residualPredsOf fuel iface args
-  | fuel <= 0 = []
-  | not (allConcreteHeads args) = [(iface, args)]
+  | not (anyConcreteHead args) = [(iface, args)]
+  | fuel <= 0 =
+    let _ = pushTypeErrorOnceAt "T-REQUIRES-DEPTH" goalSiteLoc.value (requiresDepthMsg iface args)
+    []
   | otherwise = match findMatchingImplReqsU perRun.value.residualUnivRef.value iface args
     None => []
     Some (subst, reqs) =>
       flatMap (residualPredOne fuel) (map (reqToObligation subst) reqs)
 
+-- does at least ONE argument carry a concrete head tycon?  The per-argument twin of
+-- `allConcreteHeads`: `False` means the whole vector is head-free, hence terminal for
+-- §3 reduction (nothing to match an impl head against).  See `residualPredsOf` for why
+-- the vector test must be ANY and not ALL — issue 1560.
+anyConcreteHead : List Mono -> Bool
+anyConcreteHead args = anyListM (m => isSome (headTyconNameMono m)) args
+
+-- `T-REQUIRES-DEPTH` (issue 1562).  Named in the user's own vocabulary — the thing they
+-- wrote is a `requires` clause, not a "residual reduction fuel" — and it states the
+-- limit, the goal STILL OUTSTANDING after that many steps, and what to change.  This is
+-- a REJECT, not a warning: continuing would drop the predicate from the binding's
+-- context AND from its dict prefix, which is the S0 this replaces.
+-- ⚠️ It renders the goal AT THE POINT OF EXHAUSTION, not the goal originally posed — at
+-- depth 33 that reads `Tag (Wrap a)`, one level, which looks trivially shallow unless
+-- the message says what it is.  Hence "still needed … after N steps"; the original goal
+-- is not threaded here because doing so re-signs this helper for prose alone.
+-- 🚨 ONE SHAPE REACHES THIS, NOT TWO.  An earlier revision (and the codes doc) claimed a
+-- `requires` clause NAMING ITS OWN HEAD was a second reaching shape.  MEASURED, it is
+-- not: `impl C (Box a) requires C (Box a)` makes `check`/`run`/`build` all abort at exit
+-- 134 with `E-STACK-OVERFLOW`, identically on this branch and on its base — something
+-- upstream of this fuel-bounded walk diverges first, so this diagnostic never fires for
+-- it and advice written for that user is never delivered.  The crash is pre-existing and
+-- is filed as issue 1575.  The only shape observed to reach here is genuine nesting
+-- deeper than the bound, which is why the message no longer offers the self-naming
+-- remedy.
+-- ⚠️ Nor does this reject cover every deep chain: a GROUND `requires` chain past the same
+-- depth never reaches this reducer at all (it is not deferred over a bound tyvar) and is
+-- still silently accepted — issue 1562's shape on the path this fix cannot reach, filed
+-- as issue 1576.  "1562 is fixed" means the DEFERRED cell, not every deep chain.
+requiresDepthMsg : IfaceRef -> List Mono -> String
+requiresDepthMsg iface args = "Cannot resolve this constraint: following the `requires` clauses of the matching impls exceeded the maximum depth of \{intToString residualReduceFuel}, and still needed `\{iface.irName} \{ppPredArgsShared args}` after \{intToString residualReduceFuel} steps. Each conditional `impl \{iface.irName} … requires …` discharged along the way adds one level. Reduce the nesting at this call site, or add a direct `impl \{iface.irName} …` for one of the types in the chain so resolution bottoms out sooner"
+
 residualPredOne : Int -> (IfaceRef, List Mono) -> List (IfaceRef, List Mono)
 residualPredOne fuel (iface, args) = residualPredsOf (fuel - 1) iface args
 
 -- reduction depth fuse.  Matches the depth-32 bound the WS-4b entailment fuse (#217)
--- already uses for the same reason; no real instance chain approaches it.
+-- already uses for the same reason; no real instance chain approaches it.  Since #1562
+-- crossing it is a REJECT (`T-REQUIRES-DEPTH`, `requiresDepthMsg`), never a silent
+-- drop, so this constant is a reported limit rather than a hidden cliff — and it is
+-- named in the message, so changing it changes user-visible text.
 residualReduceFuel : Int
 residualReduceFuel = 32
 
@@ -23217,12 +23293,32 @@ residualReduceFuel = 32
 -- half of what `vecOblOfPred` just deferred into the scheme, for the DICT-ABSTRACTION
 -- channel (`registerInferredFor`).  Reads the same two deltas through the same two
 -- projections, so the two channels cannot see different predicates.
+-- ⚠️ ONE ID PER RESIDUAL PREDICATE — its RECEIVER (`vecOblLeadId`), not every id in the
+-- vector.  `registerInferredFor` opens one dict SLOT per id it is handed
+-- (`registerActiveDictVars m 0 ids`), and the DIRECT channel next to it contributes one
+-- id per predicate by construction: `methodSiteFns` stores the site's single dispatch
+-- mono, so an inferred `Conv a b` from `g x y = conv x y` opens exactly ONE slot holding
+-- the whole `Conv` dictionary.  Flat-mapping `voIds` here opened one slot PER ARGUMENT
+-- instead — the residual channel disagreeing with the direct channel about what a dict
+-- slot IS — which at n >= 2 gave the binding two dict parameters, left the conditional
+-- impl's `requires` with no slot keyed on the receiver var to route to, and emitted a
+-- NULL element dict.  MEASURED before/after on built binaries.  This is deliberately
+-- NOT the "a dict slot is a predicate" change (#1318 / #607 item 3): it makes the
+-- residual channel match the cardinality the direct channel already has, it does not
+-- change that cardinality.
 residualInferredIds : List Int -> List (IfaceRef, List Mono, Option Loc) -> List UObligation -> List Int
-residualInferredIds boundIds callObls addedObls = flatMap
-  (o => o.voIds)
-  (flatMap
-    (residualVecOblOfPred boundIds)
-    (flatMap oblPredOf addedObls ++ flatMap callPredOf callObls))
+residualInferredIds boundIds callObls addedObls =
+  flatMap
+    vecOblLeadId
+    (flatMap
+      (residualVecOblOfPred boundIds)
+      (flatMap oblPredOf addedObls ++ flatMap callPredOf callObls))
+
+-- the receiver id of a deferred predicate — the one this scheme opens a dict slot for.
+vecOblLeadId : VecObl -> List Int
+vecOblLeadId o = match o.voIds
+  id::_ => [id]
+  [] => []
 
 residualVecOblOfPred : List Int -> (IfaceRef, List Mono, Option Loc) -> List VecObl
 residualVecOblOfPred boundIds (iface, ds, loc) =

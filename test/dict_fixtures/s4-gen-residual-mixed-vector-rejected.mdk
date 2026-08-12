@@ -1,0 +1,45 @@
+-- §4 `gen` / §4.2 OD2 / §3 `inst` -- THE ISSUE 1560 CELL, reject half.
+--
+-- HAND-DERIVED FROM THE SPEC BEFORE THE BINARY WAS ASKED:
+--   `conv (Wrap x) y` poses the goal `Conv (Wrap t) u`.  Its argument vector MIXES a
+--   concrete-headed argument (`Wrap t`) with a bare type variable (`u`).  §3 `inst`
+--   matches it against `impl Conv (Wrap a) b requires Conv a b` -- the sibling
+--   `impl Conv Int Bool` cannot match, since `Int` is not `Wrap t` -- and the discharge
+--   leaves the RESIDUAL `Conv t u`.  Both variables are generalizable, so OD2 defers the
+--   residual and §4 `gen` makes it `f`'s principal context.  §4 `var` then RESTRICTS
+--   every caller: `f NoConv True` needs `Conv NoConv Bool`, which no impl witnesses, so
+--   the program must be REJECTED at the call site.
+--
+-- WHAT WAS WRONG (issue 1560, S0): `residualPredsOf` refused to reduce unless EVERY
+-- argument was concrete-headed (`allConcreteHeads`), so this vector came back UNREDUCED
+-- and `keepBoundResidual` discarded it.  The goal was never posed at all: all three
+-- verbs exited 0, `run` printed `w:int-bool` by declaration-order fallback, and the
+-- built binary segfaulted at 139.  The guard is now per-argument (`anyConcreteHead`);
+-- the reduction itself already matched per-argument, because `matchStep` MFails a
+-- concrete impl-head pattern against an unbound goal variable and so can only select an
+-- impl that is generic exactly where the goal is still free.
+--
+-- ⚠️ THIS FIXTURE, NOT ITS LEGAL SIBLING, IS WHAT DRAINS ON THIS CHANGE.  The legal
+-- cell of 1560 (`f 5 True`, whose correct answer is `w:int-bool` at exit 0) is still
+-- blocked by a SEPARATE, PRE-EXISTING class: at a multi-parameter interface the
+-- conditional impl's `requires` is routed to a NULL element dict, so the binary faults
+-- regardless of this reduction.  Measured independently of every inference channel --
+-- writing the context out by hand (`f : Conv a b => a -> b -> String`) faults identically
+-- on a binary built from `main`.  That is issue 1318 / #1161 (a dict slot is a
+-- PREDICATE, #607 item 3), and issue 1560's own pin is deliberately retained for it.
+data Wrap a = Wrap a
+
+data NoConv = NoConv
+
+interface Conv a b where
+  conv : a -> b -> String
+
+impl Conv Int Bool where
+  conv _ _ = "int-bool"
+
+impl Conv (Wrap a) b requires Conv a b where
+  conv (Wrap x) y = "w:\{conv x y}"
+
+f x y = conv (Wrap x) y
+
+main = println (f NoConv True)

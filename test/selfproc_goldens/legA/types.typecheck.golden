@@ -53,6 +53,7 @@ ambiguousOverlapMsg : String -> List Mono -> List KeyEntry -> String
 annotTooGeneralMsg : Ty -> String
 anyArgMentions : List String -> List Ty -> Bool
 anyClauseEagerlyRefsGroup : List String -> List FunClause -> Bool
+anyConcreteHead : List Mono -> Bool
 anyContainsI : List Int -> List Int -> Bool
 anyDepReaches : List String -> List String -> String -> List (String, List Decl) -> Bool
 anyHoleAtom : List Atom -> Bool
@@ -1428,6 +1429,7 @@ reqObligationsFor : ImplUniverse -> IfaceRef -> List Mono -> List (IfaceRef, Lis
 reqToObligation : List (String, Mono) -> Require -> (IfaceRef, List Mono)
 reqTyToMono : List (String, Mono) -> Ty -> Mono
 requiredMethodNames : List IfaceMethod -> List String
+requiresDepthMsg : IfaceRef -> List Mono -> String
 resetCrossModuleState : Unit -> Unit
 resetState : Unit -> Unit
 resetTypeErrorsSticky : Unit -> Unit
@@ -1710,6 +1712,7 @@ variantFieldTailNames : Variant -> List String
 variantIdentRow : String -> TyConOrigin -> Variant -> List (String, String, Ident)
 variantNamed : String -> List Variant -> Bool
 vecOblKey : VecObl -> String
+vecOblLeadId : VecObl -> List Int
 vecOblOfPred : List Int -> (IfaceRef, List Mono, Option Loc) -> List VecObl
 vecOblsOfSlots : List CSlot -> List VecObl
 vectorGoal : String -> List Mono -> Option (Mono, List Mono)

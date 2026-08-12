@@ -87,3 +87,24 @@ why-control: evidence about issue 1560.
 why-note: a fix must reduce the reducible ARGUMENTS of a mixed vector
 why-note: rather than requiring every argument to be concrete-headed. When
 why-note: this row goes red, close issue 1560 and delete this fixture.
+why-note: ⚠️ UPDATE (the PR that drained 1562): THE REDUCTION HALF OF THIS
+why-note: DEFECT IS NOW FIXED and this row STILL REPRODUCES, so do not read a
+why-note: green here as "nobody has looked at 1560". `residualPredsOf`'s guard
+why-note: is now per-argument (`anyConcreteHead`, not `allConcreteHeads`), the
+why-note: mixed vector IS reduced, the residual `Conv a b` DOES reach `f`'s
+why-note: context, and a caller that cannot witness it is now REJECTED
+why-note: (`f NoConv True` -> `No impl of Conv for NoConv Bool`, exit 1 on all
+why-note: three verbs; pinned positively at
+why-note: test/dict_fixtures/s4-gen-residual-mixed-vector-rejected.mdk).
+why-note: WHAT STILL FAULTS IS A SECOND, INDEPENDENT LAYER: at a MULTI-PARAMETER
+why-note: interface the conditional impl's `requires` is routed to a NULL
+why-note: element dict, so the binary reads an unpassed dict word whatever the
+why-note: scheme says. MEASURED INDEPENDENT OF EVERY INFERENCE CHANNEL -- write
+why-note: this file's context out BY HAND (`f : Conv a b => a -> b -> String`)
+why-note: and a binary built from `main` faults identically, while the same
+why-note: program whose residual is SINGLE-parameter
+why-note: (`impl Conv (Wrap a) b requires Tag a`) runs correctly on that same
+why-note: binary. That layer is issue 1318 / #1161 ("a dict slot is a
+why-note: PREDICATE", #607 item 3), which explicitly owns moving the dict-param
+why-note: cardinality for a predicate with >= 2 variable arguments. THIS ROW
+why-note: DRAINS WITH THAT WORK, NOT WITH THE REDUCTION FIX.

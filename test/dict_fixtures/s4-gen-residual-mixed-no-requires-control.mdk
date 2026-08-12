@@ -1,0 +1,27 @@
+-- THE ONE-TOKEN CONTROL + FALSE-REJECT CANARY for the two mixed-vector rows.
+-- Byte-identical in shape to the two `…-mixed-vector-…` fixtures except the conditional
+-- impl carries NO `requires`.  With no `requires` the reduction leaves NO residual, `P'`
+-- is EMPTY, `f : a -> b -> String` is the CORRECT principal scheme (section 2 asserts
+-- exactly that -- the value cannot see it), and the program prints
+--     start
+--     w
+-- at exit 0.
+--
+-- This is the row that fails if the widened guard (`anyConcreteHead`) deferred the
+-- GOAL's own free variables instead of the MATCHED INSTANCE's residual: it would invent
+-- `Conv a b` here, and `f 5 True` would then be rejected for want of an
+-- `impl Conv Int Bool` that is deliberately NOT written -- so a false reject is loud
+-- rather than accidentally witnessed.
+data Wrap a = Wrap a
+
+interface Conv a b where
+  conv : a -> b -> String
+
+impl Conv (Wrap a) b where
+  conv _ _ = "w"
+
+f x y = conv (Wrap x) y
+
+main =
+  let _ = println "start"
+  println (f 5 True)
