@@ -1,0 +1,58 @@
+issue: 1597
+what: A module that imports NOTHING is rejected because an unrelated, topologically
+what: EARLIER module's public record votes in the field-owner ambiguity test.
+what: `bmod.mdk` declares `Wye { tag : Int }` and reads `w.tag` through an
+what: UNSIGNATURED binder; `amod.mdk` declares `Zed { tag : String }`. Neither
+what: imports the other. Checked ALONE, `bmod.mdk` is exit 0 (`readTag : Wye -> Int`).
+what: Checked through `main.mdk` -- whose only content is `import amod` /
+what: `import bmod` and a `println 1` that touches neither -- `bmod.mdk` is REJECTED
+what: with T-AMBIGUOUS-FIELD naming `Wye, Zed`. `Zed` is in `bmod`'s field-owner
+what: seed purely because `amod` sorts first: `declEnvSeedChain` builds that seed
+what: from `declEnvRowVisible (m.demOrd + 1) m` over the whole ordinal PREFIX, and
+what: "earlier in the topological order" is not "reachable". This is a FALSE REJECT
+what: on a legal program -- the opposite failure direction from the rest of the
+what: field-owner family (#1216/#1383/#1586), which are silent-wrongness.
+cmd: check-json main.mdk
+exit: 1
+diag-code: T-AMBIGUOUS-FIELD 15:12-15:13
+control: check-json bmod.mdk
+why-fixture: the observable is a DIAGNOSTIC on a program whose values never change,
+why-fixture: so `check-json` is the only verb that can see it. It is also why this
+why-fixture: row is HERE and not in test/check_module_fixtures/, where the sprint's
+why-fixture: own design pass (.claude/sprint/phase0/P0-G-unitF-fieldowners.md, bite
+why-fixture: F-0) placed it: MEASURED, that harness diffs only the ENTRY module's
+why-fixture: sorted scheme dump, and `test/bin/check_modules_main` on this exact
+why-fixture: three-module graph prints `main : Unit` AT EXIT 0 -- the rejection
+why-fixture: happens in `bmod.mdk`, whose schemes that dump never contains. A cell
+why-fixture: there would read GREEN both before and after the fix, i.e. pin nothing.
+why-fixture: `diag-code:` rather than `diag:`: the discriminating content really is
+why-fixture: in the prose (`declared by Wye, Zed` -- `Zed` is the intruder), but the
+why-fixture: whole message is
+why-fixture:   Ambiguous field access: '.tag' is declared by Wye, Zed; the record
+why-fixture:   type is undetermined. Add a type annotation (e.g. '(r : Wye).tag')
+why-fixture: and its suggestion clause is shared diagnostics prose that an unrelated
+why-fixture: error-quality PR may reword. At this range T-AMBIGUOUS-FIELD cannot
+why-fixture: arise from fewer than two owners, so code+range already carries the
+why-fixture: claim. A fix removes the diagnostic entirely (exit 0, empty list), so
+why-fixture: BOTH the exit and the diag assertion move together on a drain.
+why-fixture: ⚠️ THE RANGE IS LINE-SENSITIVE: 15:12 is `w.tag` in bmod.mdk, 0-based.
+why-fixture: A comment-only edit to bmod.mdk's header moves it. Keep bmod.mdk's
+why-fixture: header line-count-neutral, or re-derive this pin.
+why-control: bmod.mdk ITSELF, byte-for-byte, checked as its own entry. That is the
+why-control: sharpest control available here: the fixture and the control are the
+why-control: SAME SOURCE TEXT, and the only variable is whether `amod` is in the
+why-control: module graph at all. It must stay exit 0 AND diagnostic-free (the
+why-control: harness asserts both for a check-json control). If it goes red, field
+why-control: access or the loader broke -- not #1597.
+why-note: DELIBERATELY NOT the negative control. The fix must NOT over-suppress: a
+why-note: `bmod` that genuinely says `import amod` must STAY rejected (P0-G §1d's
+why-note: `/var/tmp/pf/v1` shape, measured red today). This harness runs one entry
+why-note: per directory and one fixture per issue, so that arm cannot live here; it
+why-note: is OWED to #1597's fix, which must land it as a permanent regression test
+why-note: (a drained must-fail leaves nothing behind). Named here so it is not lost.
+why-note: The predicate #1597 needs is derived in P0-G §2: an earlier row votes only
+why-note: if its module is in the reader's transitive `DUse` closure, and a closure
+why-note: MISS falls back to today's prefix, never to `[]` (the owner half fails
+why-note: closed and loud -- compiler/types/typecheck.mdk, `declEnvSeedDataUniverse`'s
+why-note: header). When #1597 is fixed this row drains: close it and delete this
+why-note: directory.

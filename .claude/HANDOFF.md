@@ -17,6 +17,8 @@ implementation. The following are **red BY DESIGN** on this branch and are **not
 | `test/selfproc_goldens/legA/*` (`diff_compiler_selfproc.sh`) | Same cause: added/renamed/re-typed top-level bindings move the LEG A scheme goldens. Deferred with the snapshots. |
 | `diff_compiler_must_fail.sh` | #1276 and #1351 are being **drained but not closed** (§1 issue-closure policy). Their pins flipping red is *the deliverable* — it is the testing round's attack list — not a break. |
 | Differential / engines / capability-matrix / doc gates | Not run mid-sprint at all. |
+| `test/must_fail_fixtures/1597-unimported-record-votes-in-field-owners/` — **NOT red; listed so it is not misread** | Unit F bite F-0. Pins #1597 (field-owner false reject on a module that imports nothing). #1597 is **deferred out of the sprint** (RUN-027/RUN-029), so nothing here fixes it and this row must read **REPRO** for the whole run — the *inverse* of the two rows above it. If it flips to DRAINED, someone changed the field-owner seed; that is a finding, not a deliverable. ⚠️ Its `diag-code:` range is line-sensitive to `bmod.mdk`'s comment header — a comment-only edit there moves the pin. |
+| `diff_compiler_check_modules.sh` / `check_cli_modules.sh` — **UNMOVED, and that is the point** | Unit F bite F-3 (`DAttrib` arm on `declEnvDeclFieldOwners`) was **NOT landed**: it is unreachable dead code as scoped, so #1586 is **not drained** and `attributed_record_no_field_vote/oracle.tcmod` does **not** move. See `DEBT.md` F-3. Anyone expecting these two gates to go red from Unit F should not. |
 
 **The ONLY signal this run takes mid-flight** is, per unit:
 `make -C <trunk> medaka && make -C <trunk> check-self`, plus a backgrounded
