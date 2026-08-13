@@ -1956,3 +1956,152 @@ optimise the split instead of the work — and the work is the point.
 ---
 
 *(Blocking the drain: F1's probe, now correctly labelled PROVISIONAL. `B-2.1-a3` still in flight.)*
+
+---
+
+## RUN-B-030 — ✅ `B-2.1-a4`: **R1's F1 is BENIGN. The drain is UN-GATED. Zero lines of compiler source changed.**
+
+**Bite:** `B-2.1-a4`, at `HEAD` = `23f4da83`, on the binary already built there
+(`MEDAKA_STRICT=1` clean). Debt row: `DEBT.md` → `### B-2.1-a4`, and a THIRD `nearest miss:`
+paragraph added to the `B-2.1-a2` row, where F1 was absent. Question asked, verbatim from R1:
+*"if the Flat goal side also mints bare-only, F1 collapses to a non-issue and you have gated
+`B-2.1-b` on nothing; if it doesn't, F1 is an S0 waiting for the repoint."* **It mints bare-only.**
+
+### The mechanism is REAL and UNCHANGED. Only its reachability was open, and it is nil.
+
+Nothing in R1's F1 derivation is retracted. `oblIfaceKeys` (`typecheck.mdk:21733-21736`) *is*
+arm-asymmetric; `flatTyOriginScope` (`resolve.mdk:4271-4272`) *does* deliberately omit the user's own
+declarations; a user-declared interface's impls *do* file bare-only on Flat and under both keys on
+Module; `bodyImplEnvRef` *is* one ref carrying two keyings. **The inference that breaks is one
+clause** — F1 says the risk is that *"the goal/lookup side uses the identity key on Flat"*. It does
+not. It uses `oblIfaceKey`, and `oblIfaceKey` **IS the bare key** whenever the goal is identity-less,
+which on Flat it is, for the very same reason the impl is.
+
+### Leg 1 — the write side is a **SUPERSET** of the read side. Structural, one line.
+
+`oblIfaceKeys` returns `[TkBare NsIface irName]` or `[oblIfaceKey ir, TkBare NsIface irName]` — the
+bare key is in **both** arms. The goal side mints exactly **ONE** key, `oblIfaceKey ir = tabKeyOf
+NsIface ir.irOrigin ir.irName` (`:21787-21788`), at all three universe readers:
+`implCountForIfaceU` (`:22085-22089`), `univConcreteBucket` (`:22101-22103`), `univHeadless`
+(`:22106-22108`). And `tabKeyOf` maps an identity-less origin to the bare key —
+`registry.mdk:1754`, a committed doctest: `tabKeyOf NsType OriginUnresolved "Box" == TkBare NsType
+"Box"`. **Therefore the only lookup that can miss is `identity-bearing goal × identity-less impl`.**
+F1's premise supplies the *opposite* pairing (identity-less impl on Flat, and — leg 2 — an
+identity-less goal to match it). The asymmetry is in the direction that is already covered, and that
+coverage has a name in the source: the *bare compatibility leg*, whose own header
+(`:21730-21732`) says *"an identity-less occurrence mints the bare key from `tabKeyOf` already"*.
+
+### Leg 2 — the dangerous pairing has **NO PRODUCER**, and the invariant was already written down.
+
+`typecheck.mdk:1591-1602` calls it **per-population stamping agreement**: *"an occurrence and the
+declaration it names are always stamped by the SAME pass reading the SAME scope, so a `TkIdent`
+occurrence never meets a `TkBare` declaration of the same name, or vice versa."* Re-derived here at
+source rather than cited: `stampTyOrigins` runs ONE walk, `mapOriginsInDecl (stampTyHead scope)
+(fillIfaceOccOrigin scope)` (`resolve.mdk:3780`), and `mapIfaceOccDeclLocal` (`resolve.mdk`) applies
+that **same** `f` to `DImpl.implOrigin` *and* to every `Require` occurrence in one arm:
+`DImpl { d | implOrigin = f "implOrigin" n o, reqs = map (mapRequireOcc f) reqs }`. So for a given
+interface NAME the impl side and the constraint/goal side cannot disagree. On Flat: a user-declared
+interface is absent from `flatTyOriginScope` on **both** sides ⇒ bare/bare ⇒ hit. A prelude interface
+is present on both ⇒ identity/identity, plus the impl's bare leg ⇒ hit. A user `DInterface`'s own
+`ifaceOrigin` also stays `OriginUnresolved` on Flat (`stampDeclOrigins "core"` is applied to
+`coreProgTy` only), so goals sourced from the *declaration* layer agree too.
+
+### Leg 3 — 🚨 **F1 IS NOT A PROPERTY OF `bodyImplEnvRef` AT ALL. It is the shipped, measured design of the goal-side `ImplUniverse`, live on BOTH arms today.**
+
+This is the leg that actually un-gates the drain, and it is the one neither R1 nor I had. Read the
+arm gate at `typecheck.mdk:20649-20666`:
+
+```
+let moduleImplUniv = match mode
+  Flat _ => emptyImplUniverse
+  Module mid _ _ => ieUniverseAt (declEnvsOrdOf mid envs) envs.deImpls
+… setRef perRun.value.residualUnivRef (match mode
+    Flat _ => buildImplUniverse prog
+    Module _ _ _ => moduleImplUniv)
+```
+
+The **Module** arm already reads an **`IE`-projected** universe; the **Flat** arm reads
+`buildImplUniverse prog`. Both are filed by `insertUnivImpl` → `insertUnivImplKeys (oblIfaceKeys
+iface)` (`:21615-21617`) and read by `oblIfaceKey`. **That is exactly the "one question, two
+keyings, selected by driver arm" structure F1 describes — and it is what `medaka check` has been
+doing on every no-import file for months.** `ieConcrete`/`ieHeadless` are not a new hazard; they are
+a re-spelling of that universe with the *same* mint on both sides of the seam. So repointing a reader
+from the universe onto them inherits **no new keying risk whatsoever**. ⚠️ This also means the
+paragraph in the `a3` row that says *"`ieConcrete`/`ieHeadless` are still F1-affected"* is true as
+written but reads as more alarming than it is: they are affected in exactly the way the universe they
+mirror is already affected, and benignly.
+
+### The probe: 11 rows, 4 discriminators, both directions fail-capable
+
+`check` on a no-import file = Flat (`checkProgramSeededSplit`); `check` on an import-bearing file and
+`run` (the 1-module wrapper) = Module. Exit codes read from `$?` after a redirect, never through a
+pipe; `MEDAKA_ROOT`/`MEDAKA_EMITTER` unset so the arms cannot cross.
+
+| row | arm | shape | exit | observed |
+|---|---|---|---|---|
+| `p1` | **Flat** | **USER-declared `Sizer`** + `impl Sizer Blob`, concrete call | **0** | `ok` — impl filed bare-only, goal **HIT** |
+| `p2` | Flat | ✅ **positive control**: prelude `Debug` (impl mints BOTH keys) | 0 | `ok` |
+| `p3` | **Flat** | ✅ **fail-capability**: same user `Sizer`, call at a head with **no impl** | **1** | `No impl of Sizer for Other` |
+| `p4` | Flat | fail-capability control, prelude arm | 1 | `No impl of Debug for Other` |
+| `p1`/`p3` | Module (`run`) | same two files via the 1-module wrapper | 0 / 1 | `7` · same reject, same span |
+| `m1`/`m3` | Module (`check` + import) | same two shapes, graph driver | 0 / 1 | `ok` · same reject |
+| `p5` | **Flat** | 🚨 the **SILENT** sub-case: user `Sizer`, **two** impls, undetermined goal | **1** | `Ambiguous instance for \`Sizer\`` |
+| `p6` | Flat | ✅ control for `p5`: identical shape, **ONE** impl | 0 | `ok` — so the diagnostic is count-driven |
+| `m5` | Module | `p5` through the graph driver | 1 | identical diagnostic |
+
+**Why `p5`/`p6` matter more than `p1`.** `:21773-21775` names one sub-case of a missed universe
+lookup that is **silent, not loud**: `checkUndeterminedObligation`'s RULE 3 is guarded on
+`implCountForIfaceU >= 2`, so a missed count reads **0** and `T-AMBIGUOUS-INSTANCE` simply stops
+being emitted — a `loud → silent` severity increase with no golden moving. `p5` fires it on Flat for
+a bare-keyed user-declared interface, i.e. the tags `Registry` hit through the bare key; `p6` proves
+the guard is genuinely count-driven rather than shape-driven. **An absence probe could not have
+answered this** — that is memory's "absence probes cannot see undercount bugs", and it is why the
+count-gated path was probed at all.
+
+**What else would produce this output?** Enumerated before believing it: *(a)* the obligation check
+is never consulted for user-declared interfaces on Flat — refuted by `p3`, same file shape, same arm,
+same interface, rejects; *(b)* the goal side falls back to a linear bare-name scan rather than a
+keyed lookup — `findMatchingImplReqsU` reaches only `univConcreteBucket` then `univHeadless`, both
+keyed, no scan; and if it did, keying would not be load-bearing and F1 would be benign anyway;
+*(c)* dispatch was resolved before the universe was consulted — refuted by `p3` and `p5`, which reach
+it from the same syntax; *(d)* a stale binary printing plausible output — `MEDAKA_STRICT=1` exported,
+and it would have exited 1 on stderr.
+
+### What this does **NOT** license — two of them, and the first is the one that will bite
+
+1. ⚠️ **This is not "the keying is uniform".** The asymmetry is still there and still arm-selected.
+   What is established is that it is *unobservable through a keyed lookup*. A bite that compares two
+   `TabKey`s for **equality**, or **renders** one into a diagnostic / S-expr / golden / cross-arm
+   set-difference, re-opens F1 immediately — `tabKeyEq` never equates `TkIdent` with `TkBare`
+   (`:1604-1607`). **F1 is dormant, not absent.**
+2. ⚠️ **"Make the two arms file under the same keys" is a REGRESSION, not a tidy-up.** Dropping the
+   bare leg is measured to break `medaka check stdlib/core.mdk` with 32 false `No impl of …` rejects
+   (`:21683-21706`, ending *"DO NOT DELETE THIS LEG"*). Giving the Flat arm real identity is
+   **#1115 (E-1)**, a different owner. **Neither arm was weakened and no fix was manufactured** — the
+   brief's instruction, honoured.
+
+### Consequences for the plan
+
+* 🟢 **`B-2.1-b2` is UN-GATED.** RUN-B-029's provisional gate on F1 is **discharged**.
+* 🔴 **`B-2.1-b2` now OWES a gate row that F1's own absence exposed.**
+  `diff_compiler_flat_vs_onemodule.sh`'s 9 rows use only *prelude* interfaces or accept/reject —
+  which is precisely why the gate could not see this question. Land `p1`/`p3`/`p5`/`p6` as rows
+  **with** the repoint: at that moment the substrate acquires its first reader, and a BENIGN verdict
+  that no gate defends is the shape that rots silently. `a4` did not add them (a gate row moves a
+  golden and would have cost the build cycle a doc-only bite has no other reason to spend).
+* 🟡 **`univHeadless` / `ieHeadless` (`tys = []`) is corroborated only STRUCTURALLY.** I could not
+  produce a `tys = []` impl from surface syntax — already one of RUN-B-017's five owed items. Same
+  mint as the tags registry `p5` exercised, so the keying argument covers it; the behavioural
+  evidence does not.
+* 🟡 R1's **F2** fix (amend `DECISIONS.md:1366`) is still owed by whoever owns that line; `a4`
+  touched only the `a2` **debt** row's `nearest miss:`, which is the half the brief assigned.
+
+### Gates: NONE RUN, deliberately
+
+`git diff --numstat -- compiler test` is **empty** — two `.md` files under `.claude/` changed, read by
+no gate (snapshot corpus is `.mdk`; `fmt`/`lint` reject `.md`; all four pre-commit checks are
+`.mdk`-scoped). `make medaka` / `check-self` / `selfcompile_fixpoint` /
+`diff_compiler_flat_vs_onemodule` were **not** run: they grade compiler behaviour against compiler
+source, none changed, and the binary the probe ran is the one the fixpoint certified when `a3`
+landed. Spending a ~10-minute fixpoint to prove two Markdown edits moved no IR is the avoidable
+build cycle the brief asks me to report rather than pay. **Nothing committed.**

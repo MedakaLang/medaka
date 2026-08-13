@@ -449,6 +449,27 @@ nearest miss, and it is NOT covered: **a `Module`-mode driver that stamps a modu
 `-1` miss is vacuous under `ieCandidacyVisibleAt`, so such a driver reads the whole graph rather
 than failing closed. `:17231` asserts no live path does this; I did not re-derive that assertion.
 
+⭐ **THIRD nearest miss, ADDED BY `a4` (RUN-B-030) — it was ABSENT and R1's F1 is exactly it:
+`bodyImplEnvRef` is ONE ref under TWO interface KEYINGS, selected by driver arm.** `oblIfaceKeys`
+(`typecheck.mdk:21733-21736`) mints **one** key (`TkBare NsIface irName`) for an
+`OriginUnresolved` interface and **two** (identity + bare) otherwise, and `flatTyOriginScope`
+(`resolve.mdk:4271-4272`) deliberately holds no entry for the user's own declarations — so a
+**user-declared** interface's impls file **bare-only** on Flat and under **both** keys on Module,
+on the ref this row unifies. The `tys = []` miss above names a *population* difference; this is a
+*keying* difference and it is the sharper one, because `B-2.1-b2` repoints a **lookup** onto it.
+**`a4` ADJUDICATED IT BENIGN** — three legs, and the drain is **UN-GATED**. Full derivation and the
+11-row probe: `DECISIONS.md` **RUN-B-030**. The one-line reason: the write side is a **superset** of
+the read side (`oblIfaceKeys` *always* contains the bare key; the goal side mints exactly one,
+`oblIfaceKey`, which **is** the bare key when the goal is identity-less — `registry.mdk:1754`), so
+the only shape that can miss is *identity-bearing goal, identity-less impl*, which is the OPPOSITE
+pairing and has **no producer** under the stamping-agreement invariant already recorded at
+`typecheck.mdk:1591-1602`. ⚠️ **Do not read this as "the keying is uniform" — it is not, and the
+asymmetry is still there.** What is established is that it is *unobservable through a keyed lookup*.
+A future bite that compares two `TabKey`s for EQUALITY, or renders one into a diagnostic, an S-expr
+or a golden, re-opens it immediately: `tabKeyEq` never equates `TkIdent` with `TkBare`
+(`typecheck.mdk:1604-1607`), so such a bite would see Flat and Module disagree on a user-declared
+interface. **That, not the lookup, is where F1 will bite.**
+
 engines:    **NONE OF THE FOUR MOVED — reason, not word, per arm:**
 * **LLVM** (`backend/llvm_emit.mdk`) — untouched. No route word, no `KeyEntry`, no dict arity, no
   symbol name changes: the bite adds a ref nothing reads and mints no new emitted name. Positively
@@ -949,3 +970,97 @@ unchecked:
   is R1's objection to `a2` applied to this bite, and it is accepted for exactly ONE bite: if
   `B-2.1-b2` does not land, this field is +495 KB per compile for nothing and should be reverted,
   not carried.
+
+---
+
+### `B-2.1-a4` — Phase 2′ (B-2.1 precondition) — **R1's F1 ADJUDICATED: BENIGN. Zero compiler-source change; the drain is UN-GATED.**
+
+🔗 **Ledger cross-reference: `DECISIONS.md` RUN-B-030** (the verdict, the three legs, the 11-row
+probe table, and the two things it does NOT license). This row is the debt view; that entry is the
+derivation. Also `review/R1-landed-work.md` **F1** (the finding) and RUN-B-027/029 (why it was
+provisional).
+
+sites:      **NO `compiler/` OR `test/` PATH TOUCHED. `git diff --numstat -- compiler test` is
+empty.** Two ledger files only:
+* `.claude/sprint-b/DEBT.md` — a THIRD `nearest miss:` paragraph on the `B-2.1-a2` row (F1 was
+  absent from it; that absence is what the brief sent this bite to fix) + this row.
+* `.claude/sprint-b/DECISIONS.md` — RUN-B-030.
+No `.mdk` changed ⇒ no snapshot, no LEG A golden, no seed, no fixpoint. See `unchecked:`.
+
+transform:  **None.** The bite's output is a VERDICT plus its evidence. F1's mechanism was never in
+doubt (`oblIfaceKeys` is arm-asymmetric for a user-declared interface, and it still is); its
+*reachability* was, and reachability is what gates `B-2.1-b2`. The brief's own instruction was that
+either answer is a complete bite and a fix must not be manufactured; the answer is BENIGN, so the
+correct diff to `compiler/` is the empty one. ⚠️ Recorded because a later reader will be tempted:
+**"make the two arms file under the same keys" would be a REGRESSION, not a tidy-up.** Dropping the
+bare leg from `oblIfaceKeys`' non-`OriginUnresolved` arm is measured to break `medaka check
+stdlib/core.mdk` with 32 false `No impl of …` rejects (`typecheck.mdk:21683-21706`, and that
+paragraph ends *"DO NOT DELETE THIS LEG"*). Adding identity to the Flat arm is **#1115 (E-1)**, a
+different owner.
+
+could move: **NOTHING — no compiled byte exists to move.** The two edited files are Markdown under
+`.claude/`, read by no gate: the snapshot corpus is `.mdk` only, `fmt`/`lint` do not accept `.md`,
+and the pre-commit hook's four checks are all `.mdk`-scoped (fmt, lint, snapshot, lextok). Derive it
+rather than trust it: `git diff --numstat` lists exactly two `.md` paths, and
+`git diff --numstat -- '*.mdk' '*.c' '*.sh'` is empty.
+
+nearest miss: **The nearest program this adjudication does NOT cover: one that compares two
+`TabKey`s for EQUALITY, or RENDERS one, instead of using one as a lookup key.** The whole verdict
+rests on write-side ⊇ read-side, which is a property of *lookup*. `tabKeyEq` never equates
+`TkIdent` with `TkBare` (`typecheck.mdk:1604-1607`) and `regKeyRender` builds a string that carries
+the origin — so a bite that puts a `TabKey` into a diagnostic message, an S-expr dump, a golden, or
+a set-difference between two arms will see Flat and Module disagree on a user-declared interface,
+**loudly and correctly**. F1 is dormant, not absent.
+**Second nearest miss, and it is UNCHECKED rather than argued away: `univHeadless` / `ieHeadless`
+(`tys = []`).** The probe exercised `univConcreteBucket` (p1/p3) and `implCountForIfaceU` (p5/p6)
+but NOT the headless bucket, because I could not produce a `tys = []` impl from surface syntax —
+which is itself one of RUN-B-017's five owed items and the `a2` row's own first nearest miss.
+Structurally it is the same key mint as the tags registry that p5 exercised (`regKeyOfTab ifk` on
+write, `regKeyOfTab (oblIfaceKey iface)` on read), so the *keying* argument covers it; the
+*behavioural* corroboration does not. **Third:** a Flat program declaring an interface whose
+spelling COLLIDES with a prelude interface's. Both would key `TkBare NsIface "<Name>"` on Flat and
+the buckets would MERGE — that is #1438/#1507's collision class, pre-existing, arm-independent,
+and not created or worsened by anything here. Not probed.
+
+engines:    **FOUR-arm ledger. NONE MOVED, and the reason is the same for all four, so it is stated
+once and then discharged per arm rather than padded:** this bite emits no compiled byte at all.
+* **LLVM** (`backend/llvm_emit.mdk`) — untouched. No `medaka` binary was rebuilt: the probe ran the
+  binary that was already at `HEAD` = `23f4da83`, `MEDAKA_STRICT=1` clean (the staleness guard
+  would have exited 1 on stderr had it lagged the tree — that is the arm's positive control here,
+  and it is why `MEDAKA_STRICT=1` is exported in the probe script rather than assumed).
+* **wasm** (`backend/wasm_emit.mdk`) — untouched, and **no peer arm is OWED.** `B-2.1-b2` still owes
+  one (per the `a3` row); this bite does not move the day it comes due either way.
+* **`eval.mdk`** — untouched. ⚠️ It is nonetheless an *instrument* here: probe rows `p1_run_MODWRAP`
+  / `p3_run_MODWRAP` are `medaka run`, i.e. the eval-driven 1-module wrapper (the MODULE arm), and
+  they are two of the four rows that make the cross-arm comparison a comparison at all.
+* **`core_ir_eval.mdk`** — untouched, and **no lockstep peer is owed**: the `evalModules` ‖
+  `cevalModules` law is about module-frame semantics and nothing here adds a frame, a cell or a
+  name. `grep -n 'oblIfaceKeys\|bodyImplEnvRef\|ImplEnv' compiler/ir/core_ir_eval.mdk` returns
+  nothing, so there is no peer site to mirror — same derivation the `a2` and `a3` rows give.
+
+unchecked:
+* **`make medaka` / `check-self` / `selfcompile_fixpoint` / `diff_compiler_flat_vs_onemodule` NOT
+  RUN, and that is the deliberate answer to the brief's "if you change no code, say which gates you
+  skipped and why."** All four grade compiler behaviour against compiler source; no compiler source
+  changed (`git diff --numstat -- compiler test` empty). Running a ~10-minute fixpoint to prove that
+  two Markdown edits did not move the emitted IR is the "avoidable build cycle" the brief's own
+  accounting section asks me to report, so it was not spent. The binary the probe RAN is the one the
+  fixpoint already certified when `a3` landed.
+* **`fmt --check` / `lint` NOT RUN** — neither accepts `.md`; there is no staged `.mdk`.
+* **No fixture, no golden, no `--bless`, no must-fail pin.** ⚠️ Flagged, not waved away: a BENIGN
+  verdict is exactly the shape that rots silently, because no gate defends it. The right pin is
+  **not** a must-fail fixture (nothing is broken) but a **row on
+  `test/diff_compiler_flat_vs_onemodule.sh` using a USER-DECLARED interface** — R1's F1 notes the
+  gate's existing 9 rows use only prelude interfaces or accept/reject, which is why the gate was
+  blind to this question in the first place. Probe programs `p1`/`p3`/`p5`/`p6` are ready-made rows.
+  **`B-2.1-b2` should land them WITH the repoint** — that converts this adjudication from prose into
+  a gate at the exact moment the substrate acquires its first reader. **This bite did not add them**
+  (a new gate row moves a golden and would have needed the build cycle above); it is owed, and it is
+  the single most valuable follow-up here.
+* **The probe cannot observe `ieConcrete`/`ieHeadless` DIRECTLY, because nothing reads them yet.**
+  It observes the structurally identical `ImplUniverse` — same `oblIfaceKeys` write mint, same
+  `oblIfaceKey` read mint, same arm gate (`typecheck.mdk:20649-20666`, where Module already reads
+  `ieUniverseAt … deImpls` and Flat reads `buildImplUniverse prog`). That substitution is the ONE
+  inferential step in the verdict and it is named as such in RUN-B-030 rather than buried: the
+  behavioural evidence is about the universe, the transfer to `IE` is by shared mint.
+* **`test/diff_compiler_perf_scaling.sh` NOT run** — no code changed; nothing to grade.
