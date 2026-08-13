@@ -216,4 +216,144 @@ oracle with no golden**, so it cannot be silently blessed away.
 
 ---
 
-*(Rulings from P0-A/B/C/D/P and the Fable consult are appended below as they land.)*
+## RUN-B-007 — Phase 0 returns: **the contract itself was wrong in three places.** Amendments.
+
+P0-A, P0-C and the Fable consult have landed. All three **refused part of their brief**, which is
+what they were briefed to do, and between them they corrected the sprint doc's §1 scope table in
+three independent places. **The contract is amended below.** Primary sources — read these, not this
+summary: `phase0/P0-A-reader.md`, `phase0/P0-C-engines.md`, `phase0/P0-FABLE-c4i2.md`.
+
+### AMENDMENT 1 — §1's B-2.1 row overreaches. `keyForSite*` is NOT B-2.1's to delete.
+
+**P0-A refused it, derived.** `grep -n 'keyForSite' compiler/types/typecheck.mdk` → `15286`,
+`17872-17873`, `18557-18558`, `19011`, `19039`, `19054`. **Every one takes its table as the
+threaded `keyTable` parameter — none reads `shadowKeyTableRef` or `universeKeyBucketsRef`.**
+`keyForSite*` is the ROUTE-WORD source and retires with the route change (B-2.2) and the engine
+word-set retirement (B-2.4). The tree says so twice: `TYPECHECK-TARGET-ARCHITECTURE.md`'s
+`KeyBuckets` row (*"DEFERRED → B-2, by DELETION"* — B-2, not B-2.1) and `typecheck.mdk:21557-21561`
+(*"T1's counters retire WITH #1113 (B-2) … alongside the emitter word-set retirement"*).
+
+**Ruling: ACCEPTED.** B-2.1's deletion budget is exactly `universeKeyBucketsRef` +
+`shadowKeyTableRef`. `KeyBuckets`/`buildKeyTable`/`keyEntryOf`/`matchingEntries*`/`candidateBucket`/
+`mergeByDeclIdx`/`keyForSite*`/`headCollides*` **all survive B-2.1** and retire at B-2.2/B-2.4.
+An implementer who deletes them in Phase 2 has broken the route path.
+
+### AMENDMENT 2 — §1's *"wasm peer arm"* is FALSE for two of the six B-2.4 bites.
+
+**P0-C refused it, derived:** wasm has **no arg-tag dispatcher** and **no interface-default arms**.
+So bite `d` (disjoint default-tag namespace) and bite `f` (consume frozen admissibility at the
+arg-tag sites) have **no wasm arm at all** — `d` because of #1020 (out of scope), `f` because
+`RNone` is a `gapLP` there.
+
+**Ruling: ACCEPTED.** This matters more than a scope trim: a blanket *"wasm peer arm"* instruction
+would have sent an implementer hunting a wasm site that does not exist, and the honest outcome of
+that hunt is either a fabricated arm or a silent "done". The `engines:` triple is now **per bite**,
+not per unit — `a/c/e` are three-armed, `b` is name-peers only, `d/f` are LLVM+eval only.
+
+### AMENDMENT 3 — 🚨 §1's engine list OMITS AN ENGINE. `core_ir_eval.mdk` is IN.
+
+**P0-C flagged this as outside its brief and refused to absorb it, asking for an explicit ruling.
+That was correct and it is the most valuable thing in its report.** §1's B-2.4 row names LLVM,
+wasm, `eval.mdk`, and `Route`/`core_ir_lower` — and omits `compiler/ir/core_ir_eval.mdk`.
+
+**Derived first-hand, because the rule of thumb alone is not evidence:**
+`grep -n 'hasTag\|implMethodEntry\|CImplEntry\|CImplDefault\|dispatch' compiler/ir/core_ir_eval.mdk`
+shows it is a **genuine dispatch arm**, not a bystander:
+- `:23-24` — *"SLICE 5: typeclass dispatch — impls/interface-defaults are lowered (Ty-free) and
+  installed into the driver's env as **arg-tag-dispatched `VMulti`s**"*
+- `:444` — `cImplEntryValue env (CImplEntry name score body)`: **it reads the specificity `score`**
+- `:448` — `cImplEntryValues env (CImplEntry name score (CImplDefault ifaceId pats body))`:
+  it consumes the **interface-default registry with its iface identity**
+- `:420-422` — it folds same-named candidates into one `VMulti`, *"the arg-tag-dispatched value"*
+
+So **every axis B-2.4 moves — identity, specificity score, default-arm keying, arg-tag
+admissibility — reaches this file.** It also has live gates: `diff_compiler_core_ir.sh`,
+`diff_compiler_core_ir_modules.sh`.
+
+**Ruling: `core_ir_eval.mdk` is a REQUIRED arm of B-2.4.** `AGENTS.md` states the rule —
+*"`evalModules` and `cevalModules` are PARALLEL module drivers — fix module-frame semantics in
+LOCKSTEP"* — and states the precedent: the **P0-9 cross-module ctor-collision fix shipped patching
+only `eval.mdk`, leaving `core_ir_eval.mdk` broken for months.** The shared-corpus trap is the
+mechanism: `test/eval_modules_fixtures/*/` feeds **both** `diff_compiler_eval_modules.sh` **and**
+`diff_compiler_core_ir_modules.sh`, and *"P0-9 shipped 'green' having run only the first."*
+
+⚠️ **Consequence for the deferred-verification posture: this arm is the one most likely to ship
+silently broken**, because its gates are deferred to the repair round *and* its corpus is shared
+with an arm that will look green. Every B-2.4 `engines:` field must therefore read as a
+**four-arm** ledger (LLVM · wasm · eval · core_ir_eval), with "none needed" spelled out and
+justified rather than left blank.
+
+### AMENDMENT 4 — the C4/I2 verdict: **⚠️ CONJUNCT-2-ONLY as written**, gap at `ImplBuckets`
+
+The Fable consult's verdict on the sprint's headline claim. The gap is a **second cumulative
+table the sprint doc never names**: `ImplBuckets`, built per module from the same cumulative prefix
+(*"core + every EARLIER module + this module"*, `typecheck.mdk:28667`; order-observable `:28065`),
+with a first-match iface-`""` fallback (`:17578-17580`), omitting no-`requires` impls
+(`:17613-16`), consumed by `routeOf` and **all five `resolve*` stampers**. Identity stamped at
+`inst` from *that* table is **order-sensitive identity — RUN-045's exact shape recurring one organ
+downstream.** Worse: the stampers' existing min⊑ (`matchedEntry`/`selectImplEntryByIface`) runs on
+`KeyBuckets`, the table B-2.1 deletes.
+
+**Ruling: IN, as a scope STATEMENT rather than new scope** — the arch doc `:1820` already assigns
+`ImplBuckets` to B-2, so naming it is recording what the arc already owns. **Written down
+explicitly**, because §1's silence on it is exactly the unstated-(a)-reads-as-unfinished-(b) hazard
+the doc warns about for `SupersPath`.
+
+### AMENDMENT 5 — **B-1 stays OUT. The scope ruling is CORRECT** — conditional on one bite.
+
+The question Stage A got wrong late, asked early and answered: **NOT `NEEDS-B-1`.** The
+conjunction is achievable without B-1, **conditional on one named bite**:
+`expandSupersTable`'s premise that *"the super slot's route is identical to the sub slot's"*
+(`:9027-9030`) holds **only while dict words are bare tags**, and **B-2 falsifies that premise** —
+so the supers fill must become **per-slot entailment at the construction site**. That is
+flat-representation work, not B-1's evidence tree.
+
+**Ruling: `SupersPath` presumption (a) HOLDS** (two-constructor route, `SupersPath` deferred to
+B-1 by name) **plus the `expandSupersTable` fill bite, which is now IN scope and must be
+explicitly owned.** P0-B has been asked whether it sits in B-2.2 or wants its own unit.
+⚠️ P0-C's bites are cut against presumption (a); **choosing (b) would force bites `a` and `c` to be
+re-cut.**
+
+### AMENDMENT 6 — #1068's filed fix direction is **WRONG**, and it is subsumed, not ordered
+
+**P0-C, in those words.** #1068 asks wasm to **build the superset-OR arm that bite `B-2.4-a`
+deletes** — the same construction PR #1058 put in LLVM and that #1072 documents as a live S0.
+Same site (`wasm_emit.mdk:4034-4039` + caller `:4459`), **opposite direction**. This vindicates the
+contract's coordination note that sequential is the wrong answer.
+
+Two riders, both owed in the same PR: #1068 has **no must-fail pin** (only
+`test/engine_divergence.txt:159-160`) — P0-P is authoring one — and **those two ledger rows
+themselves encode the retired design** (*"PROMOTE when wasm accepts the route-word set"*), so they
+must be re-worded rather than left to teach the deleted architecture to the next agent.
+
+---
+
+## RUN-B-008 — 🚨 OPEN STRUCTURAL QUESTION: is Phase 2 separable from Phase 3?
+
+**Two independent derivations converged on one seam, which is why this is a phase-structure
+question and not a footnote.**
+
+- **P0-A**, calling it *"the sharpest risk in the whole unit"*: B-2.1-b moves the **checker's** leg
+  while `argReqRoute`/`selectReqImpl` (`:19311`, `:19380`) still select the winner on the
+  **router** side over `KeyBuckets`. **#1560 measured that desync as `RNone` + "the binary still
+  faults"** (`:22205-22211`). So if the two legs disagree about the winner, **B-2.1-b reproduces
+  #1560** — the run would introduce the S0 it is trying to drain.
+- **Fable**, from the other direction: the stampers' min⊑ runs on `KeyBuckets`, the table B-2.1
+  deletes.
+
+P0-A's own reading: B-2.1-b can land alone **iff** both legs compute min⊑ over populations that
+agree — *"which is exactly what the whole-prefix measurement at `:20287-20302` established for
+candidacy and what **nothing** has established for these two."*
+
+**Status: UNRESOLVED, referred to P0-B** (which owns the router/stamper side) with the question
+stated as an attackable claim. **This is the STOP-AND-LAND gate's real content** — the gate was
+written as "is the tree stable"; its actual first question is now *"can Phase 2 land without Phase
+3 at all?"* If the answer is no, Phases 2 and 3 merge into one unit and the gate moves after them.
+
+⚠️ **Not decided by an implementer, and not absorbed silently by enlarging a bite.** Recorded here
+open, per the contract's own instruction that an unstated ruling reads to a later agent as an
+unfinished one.
+
+---
+
+*(Rulings from P0-B, P0-D and P0-P are appended below as they land.)*
