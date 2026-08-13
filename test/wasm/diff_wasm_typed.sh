@@ -362,6 +362,18 @@ run_trmc_state_check() {
   trmc_capture TRMC_RECORD_U_BEGIN TRMC_RECORD_U_END > "$INPUT_WORK/trmc-u.wat"
   trmc_capture TRMC_CENSUS_U_GAP_BEGIN TRMC_CENSUS_U_GAP_END > "$INPUT_WORK/trmc-census.events"
   trmc_capture TRMC_P2_BEGIN TRMC_P2_END > "$INPUT_WORK/trmc-p2.wat"
+  trmc_named_body() {
+    awk -v name="$1" '
+      $0 ~ "\\(func \\$" name "( |\\))" { take = 1 }
+      take {
+        print
+        opens = gsub(/\(/, "(")
+        closes = gsub(/\)/, ")")
+        depth += opens - closes
+        if (depth == 0) exit
+      }
+    ' "$2"
+  }
   for trmc_file in trmc-p1.wat trmc-u.wat trmc-census.events trmc-p2.wat; do
     [ -s "$INPUT_WORK/$trmc_file" ] || {
       echo "FAIL H2B6-WTRMC-P-SHAPE: empty $trmc_file"
@@ -391,8 +403,10 @@ run_trmc_state_check() {
         echo "FAIL H2B6-WTRMC-P-SHAPE: $trmc_name missing TMC loop markers"
         exit 1
       }
-    [ "$(grep -F "call \$$trmc_fn" "$trmc_wat" | wc -l | tr -d '[:space:]')" -eq 0 ] &&
-      [ "$(grep -F "return_call \$$trmc_fn" "$trmc_wat" | wc -l | tr -d '[:space:]')" -eq 0 ] || {
+    trmc_named_body "$trmc_fn" "$trmc_wat" > "$INPUT_WORK/trmc-$trmc_name.body"
+    [ -s "$INPUT_WORK/trmc-$trmc_name.body" ] &&
+      [ "$(grep -F "call \$$trmc_fn" "$INPUT_WORK/trmc-$trmc_name.body" | wc -l | tr -d '[:space:]')" -eq 0 ] &&
+      [ "$(grep -F "return_call \$$trmc_fn" "$INPUT_WORK/trmc-$trmc_name.body" | wc -l | tr -d '[:space:]')" -eq 0 ] || {
         echo "FAIL H2B6-WTRMC-P-SHAPE: $trmc_name gained recursive call"
         exit 1
       }
@@ -404,12 +418,16 @@ run_trmc_state_check() {
       echo "FAIL H2B6-WTRMC-P-SHAPE: wasm-tools validate $trmc_name"
       exit 1
     }
+    grep -F "i32.const $trmc_expected" "$trmc_wat" >/dev/null || {
+      echo "FAIL H2B6-WTRMC-P-SHAPE: $trmc_name missing named result marker $trmc_expected"
+      exit 1
+    }
     TRMC_RESULT="$($NODE "$RUNJS" "$INPUT_WORK/trmc-$trmc_name.wasm" 2>"$INPUT_WORK/trmc-$trmc_name.run.err")" || {
       echo "FAIL H2B6-WTRMC-P-SHAPE: execution failed $trmc_name"
       cat "$INPUT_WORK/trmc-$trmc_name.run.err"
       exit 1
     }
-    [ ! -s "$INPUT_WORK/trmc-$trmc_name.run.err" ] && [ "$TRMC_RESULT" = 0 ] || {
+    [ ! -s "$INPUT_WORK/trmc-$trmc_name.run.err" ] && [ "$TRMC_RESULT" = "$trmc_expected" ] || {
       echo "FAIL H2B6-WTRMC-P-SHAPE: execution changed $trmc_name"
       exit 1
     }

@@ -213,7 +213,9 @@ trmcStateProgram name marker =
   CProgram
     [
       CBind name [CClause [PVar "n" trmcStateLoc] body],
-      CBind "main" [CClause [] (CLit (LInt 0))],
+      CBind "main" [
+        CClause [] (CLet False PWild (CApp (CVar name AGlobal) (CLit (LInt 3))) (CLit (LInt marker)))
+      ],
     ]
     []
     []

@@ -635,11 +635,9 @@ canonFn prog n =
     n
 
 -- ── program entry ────────────────────────────────────────────────────────────
--- W4 module-level state for lambda lifting.  `lamIdRef` is the fresh-id counter for
--- lifted-lambda names (`$mdk_lamN`); `liftedFnsRef` accumulates the lifted top-level
--- function definitions emitted by `emitClosure`, drained at the end of the module
--- (peer to the LLVM emitter's defs list).  `funcRefsRef` accumulates the names that
--- must be `(elem declare func …)`'d so `ref.func` validates.  Reset per program.
+-- W4 module-level lambda/output state is presently ambient: the fresh-id counter
+-- names lifted lambdas; lifted definitions drain at module end; function references
+-- feed `(elem declare func …)`. Each register resets per program.
 lamIdRef : Ref Int
 lamIdRef = Ref 0
 
