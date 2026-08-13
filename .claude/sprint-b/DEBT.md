@@ -1275,3 +1275,185 @@ unchecked:
 * **NOT COMMITTED**, per the brief. Working tree holds all five files; the three restore points
   (`mine/`, `baseB/`, `postB/`) are in scratch outside the worktree, so both arms of every
   measurement above can be reproduced with a `cp` and no rebuild.
+
+---
+
+### `B-2.1-c` — Phase 2′ (B-2.1) — 🛑 **REFUSED AND REVERTED: moving the SHADOW existence reads without the ROUTE-time one is an S0. MEASURED: garbage value at exit 0.**
+
+**Nothing landed. `compiler/types/typecheck.mdk` is byte-identical to `1e7cbbbb`.** The transform
+was written, built, and measured; **as briefed it produces silent wrongness** and is parked as
+`scratchpad/c-REFUSED.patch` (+128/−25). The measurement is the deliverable.
+
+🔗 **`DECISIONS.md RUN-B-0xx`** — the orchestrator's ledger owns the entry; this row is its
+evidence half. The ruling it needs: **the three existence reads are ONE bite, and that bite reaches
+the evidence path.**
+
+sites:      **Implemented and then reverted** — `compiler/types/typecheck.mdk`:
+            `ieImplExistsForHead` / `ieImplExistsForHeadGo` (new, beside `headTabOf`; the `IE` peer
+            of `implExistsForHead`, retest kept spelling-keyed through `headTabIs`/`dispHeadTab` per
+            the `#1111` MEASURED block); repointed the **two importer-shadow** reads —
+            `inferShadowApp` and `definerReceiverDispatches` — from
+            `implExistsForHead perRun.value.shadowKeyTableRef.value` to
+            `ieImplExistsForHead perRun.value.bodyImplEnvRef.value`. `resolveRLocalSite` left on its
+            threaded `keyTable`, per the brief's ruling. Plus five prose corrections (below).
+            **On disk now: nothing.**
+
+transform:  Re-base `implExistsForHead`'s importer-shadow callers off the cumulative key table onto
+            the graph-global substrate. Licensed as a CONFORMANCE FIX by
+            `docs/spec/SHADOW-SEMANTICS.md:183-186` (the live-impl/no-impl test is taken *"against
+            S2's **graph-global** impl universe (§1.0), never filtered by what `M` can name"*),
+            `:226` (graph-global *"ranges over **every** module of the loaded graph, whether or not
+            any import path reaches it"*), `:36-37` (*"S1's interface operand is scoped to what the
+            module can NAME; **S2's impl universe stays graph-global**"*), and `:228-245` (the two
+            operands are separately scoped; `:242-245` **retires** *"local ∪ imported ∪ prelude"* as
+            a false synonym for graph-global). **No signature change** to `implExistsForHead`, which
+            is what kept `resolveRLocalSite` off the diff — the brief's hard constraint was met
+            without a pass-through parameter.
+
+could move: 🔴 **IT MOVED, AND IT IS AN S0. THIS IS THE FINDING — and the brief's own scoping
+            ruling is its cause.** Five files, `main.mdk` importing two independent siblings; the
+            only difference between the two importer arms is **the order of two `import` lines in a
+            third module**. Measured on freshly built binaries, base = `1e7cbbbb`:
+
+            | arm | verb | base `1e7cbbbb` | after the two-site repoint |
+            |---|---|---|---|
+            | `c-imp` (`import m` first) | `check` | **1**, located `Type mismatch: Int vs Box` | **0**, `main : Unit` |
+            | `c-imp` | `run` | 1 (same reject) | **1**, `E-PANIC: unknown op '+'` |
+            | `c-imp` | `build` | 1 (same reject) | **0** |
+            | `c-imp` | **built binary** | — | **0**, prints **`70018059149297`** |
+            | `c-imp2` (imports SWAPPED) | all four | **0**, `300` | **0**, `300` |
+            | `c-def` (definer shadow) | `check`/`run` | 1, located reject | **1, unchanged** ✅ |
+
+            A **loud located reject became exit 0 printing a garbage pointer** — `AGENTS.md`'s *"a
+            fix that makes a defect QUIETER is a severity INCREASE"*, arriving as the `check`-exit-0
+            over-a-broken-binary shape RUN-B-023 already measured once at the selection legs.
+
+            **Mechanism PROVEN from the emitted IR, not inferred** (`build --keep-ir`, `mv`'s
+            forcing thunk, same source both arms):
+            * `c-imp`  → `%t6 = call i64 @mdk_prov__size(i64 %t5)` — **the standalone** `Int -> Int`,
+              handed a `Box` pointer, so `n + 1` is pointer arithmetic ⇒ `70018059149297`.
+            * `c-imp2` → `%t6 = call i64 @mdk_impl_Box_size(i64 %t5)` — the impl ⇒ `300`.
+            `@mdk_impl_Box_size` is **defined in both** IRs, so the impl was emitted and simply not
+            routed to: a ROUTE defect, not an availability one.
+
+            **Why: I split ONE decision across TWO TIMES.** The widening moved the
+            **inference-time** existence read; the **route-time** existence read
+            (`resolveRLocalSite`, still on the topological-prefix `keyTable`) did not move. So
+            typecheck answers *"an impl exists → type against the METHOD scheme"* while the route
+            resolver answers *"no impl in my prefix → stamp `RLocal` → the standalone."* Type and
+            route disagree. **That invariant is written down at the violated site**, in
+            `resolveRLocalSite`'s own header: *"Routing here on a gate the typing entry points do not
+            share would route a site whose TYPE came from the dispatch path — route and type
+            disagreeing is exactly the P0-20 bug class. **Keep the two gates identical.**"*
+
+            🚨 **The brief and `P-c-packet.md` both saw the tension and resolved it the wrong way.**
+            The packet's §2 offered two resolutions and the brief ruled (i): *"this bite covers
+            `11548` and `11835` ONLY … `15352` is deferred."* Its stated reason — that the two
+            inference sites *"have **NO** sibling selection read"* — **is true and is not
+            sufficient.** They have a sibling **existence** read, at a different phase, and P0-20 is
+            about exactly that pairing. The packet's hazard was *"existence global, selection
+            prefix, at ONE site"*; the actual defect is *"existence global at typecheck, existence
+            prefix at routing, across TWO sites."* Same desync, one organ over, and the deferral
+            **created** it rather than avoiding it.
+
+            **⇒ Correct scoping, for the re-cut:** all **three** existence reads move together, and
+            `resolveRLocalSite` can only move together with its own sibling selection read
+            (`routesOfMonosTop … keyTable` → `entail (EKNestedTop keyTable)`). That is the packet's
+            resolution **(ii)**, which reaches the evidence path the brief walled this bite off
+            from. **There is no two-site version of this bite.** The alternative — leave the tree in
+            live divergence from `SHADOW-SEMANTICS.md:183-186` — is what `1e7cbbbb` already does,
+            and it is a **false reject** (loud), not silent wrongness, so deferring costs nothing
+            that this attempt would not have made worse.
+
+            ⚠️ **`c-imp2` is why nobody would have caught this from the fixture corpus.** The
+            widening's *intended* effect (order-invariance) and its *defect* are the same edit; the
+            accepting order was already correct before the change, so every arm that looks right
+            still looks right. The discriminator is the **pair**, not either member.
+
+nearest miss: **(a) definer shadow, receiver's impl in a NON-PREFIX module — WRITTEN AND RUN, and it
+            is the control that held.** Five files (`ifc`/`m`/`q`/`main`, packet §5(a));
+            `m`'s `size` is `m`'s own top-level fn, the `Sizeable Box` impl lives in sibling `q`,
+            which `m` does not import. Base and post-change agree: **located reject
+            `m.mdk:4:9: Type mismatch: Int vs Box`, exit 1, on `check` and `run`** — S2's inversion,
+            unchanged. ✅ **So the widening did NOT reach the definer arm**, as briefed: both moved
+            reads short-circuit on `isDefinerShadow` first. That is the one outcome that would have
+            made this an S0 *of a second kind* (silently re-erasing a user's own top-level function)
+            and it did not occur. **The S0 above is on the IMPORTER arm, which is where the brief
+            said the widening lands.**
+            **(b) an `import`-less module (S1 vs S2 separation) — NOT WRITTEN, ALREADY COVERED.**
+            `test/shadow_fixtures/i13_importer_not_nameable_liveimpl` (5 modules) is exactly this
+            cell; siblings `i12`, `i17`, `i18`, `i21`, `d24_definer_return_pos_not_nameable` sit on
+            the same axis. It cannot regress **structurally**, not merely by fixture: shadow-hood is
+            computed *before* any existence read, from a **different substrate**
+            (`crossRun.universeIfaceMethodsRef` through `nameableIfaceShadows`), and the impl table
+            is not an input to it at all. S1's operand and S2's operand are **separately computed**,
+            not merely separately documented (`SHADOW-SEMANTICS.md:228-245`). Graded by
+            `test/diff_compiler_shadow_semantics.sh`.
+            **(c) the nearest program the CORRECT (three-leg) fix will still not cover — stated
+            now so the re-cut inherits it:** `resolveRLocalSite`'s **`None` arm** (ungrounded
+            receiver). It consults no impl table at all, so an importer shadow whose receiver never
+            grounds is left untouched on any substrate; widening cannot reach it, and no arm of
+            `c-imp`/`c-imp2`/`c-def` exercises it.
+
+engines:    **ONE LINE, and then it is not one line.** No compiled byte of the four arms changed
+            (LLVM `llvm_emit` · WasmGC `wasm_emit` · `eval` · `core_ir_eval` are untouched source).
+            🚨 **But the bite changed the `Route` — `RKey` vs `RLocal` — which all four consume, and
+            two of them were MEASURED disagreeing about it:** `eval` said `E-PANIC: unknown op '+'`
+            (loud) where **LLVM said exit 0 with a garbage integer** (silent). Same program, same
+            route, opposite severities — so on the re-cut each arm owes an explicit reading:
+            `eval`/`core_ir_eval` must be checked in **lockstep** (parallel module drivers), and
+            `wasm` was never observed here at all. `diff_compiler_engines` is exactly the gate that
+            would grade it and it was **not run** (~6 min, foreground-unsafe, owned by CI).
+
+unchecked:  * **`make medaka` — RUN, exit 0** on the transform (stage A + stage B, no anomaly), and
+              again after the revert to restore a `1e7cbbbb`-faithful binary. **2 build cycles for
+              the experiment, 1 to restore; none avoidable.**
+            * **`make check-self`, `diff_compiler_flat_vs_onemodule.sh` (13 rows), the gate suite:
+              NOT RUN — deliberately abandoned the moment the S0 was measured.** Running a
+              conformance floor over a diff already known to emit a garbage value would spend ~10
+              min of a shared box to grade something that is being reverted. The IR read is the
+              stronger evidence and it is in hand. **⇒ The transform's effect on those gates is
+              UNKNOWN, and the patch must not be re-applied on the strength of this row alone.**
+            * **`test/diff_compiler_shadow_semantics.sh` NOT RUN even single-armed** (#1431: it
+              hardcodes `$ROOT/medaka`, so a base-vs-branch shadow differential needs a second
+              worktree — cost restated, not paid). The base arm above came from the **pre-edit
+              binary already in the trunk**, which is the same information a second worktree buys
+              for this bite, at zero build cost. Worth generalizing: **capture the base arm before
+              the first `fmt`/build, not after.**
+            * **`selfcompile_fixpoint.sh`, `typecheck_compiler_source.sh`, corpus sweeps, seed
+              re-mint: NOT RUN**, per the reduced floor. Moot — nothing landed.
+            * **No goldens moved and none re-cut** (snapshot corpus, `selfproc_legA`) — the file is
+              byte-identical to `1e7cbbbb`. The re-cut bite will owe both.
+            * **`could move:`'s base column is one binary, not two.** The pre-edit `./medaka` in the
+              trunk was built by the previous bite; I did not independently re-derive that it was
+              built from `1e7cbbbb` source rather than something near it. Every base reading is
+              corroborated by the post-revert rebuild agreeing, but that is agreement, not proof.
+            * **FIVE PROSE CORRECTIONS WERE WRITTEN AND ARE IN THE PATCH, UNLANDED — they are true
+              independently of the transform and the tree is still wrong without them:**
+              1. **Both** stale defence comments rewritten (not deleted), per the retired-synonym
+                 rule — `inferDefinerShadowApp`'s P0-19 d8 note and the `#415 item 2` block. Note
+                 `grep -n 'local ∪ imported'` finds both; the longer phrase finds only one.
+              2. 🚨 **`#415 item 2`'s premise *"there is no second table in scope to drift TO"* is
+                 ALREADY FALSE at `1e7cbbbb`** — `bodyImplEnvRef` is a second impl table, in scope
+                 from anywhere, and B-2.1-b2 already moved three selection legs onto it. **That
+                 sentence is what licensed this bite's scoping**, so it is not cosmetic debt.
+              3. **`"nothing reads bodyImplEnvRef yet"` appears TWICE and both are false at
+                 `1e7cbbbb`** (B-2.1-b2's five readers) — `buildFlatImplEnv`'s header and
+                 `checkBodyImpl`'s seeding block. Pre-existing, not mine.
+              4. The `headTyconMono`-widening block's **derive-grep would go stale** under any
+                 split of the three existence reads across two function names. Fixed form:
+                 `grep -nwE '(ie)?[Ii]mplExistsForHead' … | grep -vE '^[0-9]+:[[:space:]]*--' | grep -vE '^[0-9]+:(ie)?[Ii]mplExistsForHead'`.
+              5. **Discovered, and it is the re-cut's cheapest win:** the transform makes
+                 `shadowKeyTableRef` **WRITE-ONLY** (zero code readers), and with it its whole
+                 supply chain — `universeKeyBucketsRef` is read at exactly ONE site, the copy into
+                 `shadowKeyTableRef`, so `bucketKeyEntries`' per-module append and `buildKeyTable
+                 fullUniverse` on the Flat arm both become pure waste. **Not deleted**: retiring
+                 the ref means editing the `PerRun` record, which carries the **#829** interior-
+                 comment `fmt --write` corruption hazard (REOPENED). Verify the header shape before
+                 touching it.
+            * **`fmt --check` / `lint` clean on the transform** (`already formatted`, 0 findings) —
+              run **before** the build, per the brief; no post-build reflow, no wasted cycle.
+            * **NOT COMMITTED**, per the brief. Working tree holds **this row only**; the transform
+              is `scratchpad/c-REFUSED.patch`, and `scratchpad/c-{def,imp,imp2}/` + `c-probe.sh` +
+              `c-build-probe.sh` + `c-ir-probe.sh` + `c-before.txt` + `c-after.txt` reproduce every
+              reading above against any binary (`sh c-probe.sh <medaka> <label>`).
