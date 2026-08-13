@@ -7,6 +7,36 @@ golden/differential verification deferred to a repair round that runs *after* im
 changes emitted IR and those two cannot be deferred safely.**
 **This document is the contract.** Every agent in the fleet reads it before acting.
 
+> # 🚨 THIS DOCUMENT IS AMENDED. READ `.claude/sprint-b/DECISIONS.md` FIRST.
+>
+> Phase 0 ran and **corrected this contract in six places.** Where they differ,
+> **`DECISIONS.md` WINS** — it carries the derivations, this file carries the original plan. The
+> amendments are not editorial; four of them would have caused a wrong or non-compiling change if
+> an implementer had followed §1 or §2 literally.
+>
+> | what this doc says | what is actually true | where |
+> |---|---|---|
+> | §2's phases: Phase 2 = B-2.1, Phase 3 = B-2.2 | **RE-CUT. Phase 2 is NOT separable from Phase 3** — `typecheck.mdk:22205-22211` records it MEASURED (checker leg alone ⇒ `argReqRoute` `RNone` + *"a binary that still faults"*). Now **Phase 2′ = POPULATION unification** (both legs together, payload stays a `String`; the S0 drain) and **Phase 3′ = payload IDENTITY.** | RUN-B-009 |
+> | §1: B-2.1 retires `keyForSite*` "by DELETION" | **NOT B-2.1's.** All 6 sites take the table as a threaded parameter; the deletion couples to B-2.2/B-2.4. B-2.1's budget is exactly `universeKeyBucketsRef` + `shadowKeyTableRef`. | RUN-B-007 AM-1 |
+> | §1: B-2.4 has a "wasm peer arm" | **FALSE for 2 of 6 bites** — wasm has no arg-tag dispatcher and no interface-default arms. `engines:` is **per bite**, not per unit. | RUN-B-007 AM-2 |
+> | §1's engine list (LLVM · wasm · `eval` · `Route`/`core_ir_lower`) | **OMITS AN ENGINE.** `compiler/ir/core_ir_eval.mdk` is a **required FOURTH arm** — it reads the specificity `score` and the `CImplDefault` iface identity. | RUN-B-007 AM-3 |
+> | §1 never mentions `ImplBuckets` | **It is IN, as a scope statement** (the arch doc already assigns it to B-2). Plus a **THIRD** population, `stampKeyTable` (`:28682`), and **SEVEN** table-consuming stampers — *not* the five the arc's prose says; that count came from a stale comment. | RUN-B-007 AM-4, RUN-B-009 |
+> | §1: #991 is in scope for B-3 | **Already implemented.** All three clauses of its title verified false. Desk close, deferred to the repair round. | RUN-B-010, RUN-B-015 |
+> | §2: B-3 is a "byte-identical" calibration unit | **Both halves wrong.** Full fusion is *not* byte-identical (took #994's paired-write-op fallback), and one B-3 bite could **change dict arity** — not mechanically visible in a diff. **The fixpoint runs at the end of Phase 1 too.** | RUN-B-010, RUN-B-014 |
+> | §1: #1265 is OUT | **SPLIT** — keying **IN** (bite `B-2.4-k`), denotation **OUT**. Boundary: *can the key express two distinct answers?* No ⇒ representation ⇒ IN. | RUN-B-011 |
+> | §1's premise that B-1 might be needed | **Answered before implementing: NOT `NEEDS-B-1`.** C4/I2 is achievable without it, conditional on one `expandSupersTable` fill bite. ⚠️ But **as written the cut delivers CONJUNCT 2 ONLY.** | RUN-B-007 AM-4/AM-5 |
+> | §1 lists #1071 and #1062 as separate drains | **#1071 is a DUPLICATE of #1062** — same mechanism; its only stated discriminator was **measured false.** One fix drains both; counting them separately **inflates this run's output by one.** | RUN-B-012 |
+> | §1 lists #1075 as a drain target with a pin owed | **Its filed observable does not exist on `main`** — measured on unmerged PR #1074. Not pinnable; stays OUT (F-1). | RUN-B-012 |
+>
+> **Also amended:** §1's `§4.2 D1–D6` uses a spelling `docs/spec/DICT-SEMANTICS.md:790` **forbids** —
+> it is **OD1–OD6** (fixed in the spec and the arch doc by B-3-e; this line is the last instance,
+> left as evidence that the run doc, the design doc and the spec had all drifted apart).
+>
+> **Unchanged and still binding:** §1's issue-closure policy (implement, do not close) · §4's bite
+> protocol and the mandatory `could move:` / `nearest miss:` / `engines:` fields · §5's quiescence
+> protocol, the zero-goldens rule and the in-band fixpoint · §3's **parallelize readers, serialize
+> writers.** Those are the parts that have held up without correction all run.
+
 > ⚠️ **This run trades verification latency for implementation throughput. That trade is only
 > safe because the debt is WRITTEN DOWN.** An agent that skips a `DEBT.md` row has not saved
 > time — it has converted a deferred check into a check nobody will ever know to make.
