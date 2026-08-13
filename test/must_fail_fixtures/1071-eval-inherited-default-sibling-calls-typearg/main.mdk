@@ -1,0 +1,34 @@
+-- issue #1071: two impls of `Described` share the head tycon `Box` and differ only in
+-- the type ARGUMENT (`Box Int` vs `Box String`). Both DEFINE `tagOf` and `sizeOf`; only
+-- `describe` is INHERITED from the interface default, and its body calls both siblings.
+-- The interpreter resolves those inner sibling calls to the FIRST impl at head `Box` for
+-- every receiver, so eval prints `int/31` TWICE.
+--
+-- HOW THE CORRECT ANSWER WAS DERIVED -- from DICT-SEMANTICS, not from an engine.
+-- A method call's evidence is the instance selected for the receiver's FULL applied type,
+-- not its head tycon: `useD (Box "v")` discharges `Described (Box String)`, so the dict
+-- forwarded into `describe` is `Box String`'s, and a sibling call inside the default body
+-- must read ITS OWN dict's slots -- `tagOf` = "str", `sizeOf` = 7. Hence line 2 is
+-- "str" ++ "/" ++ intToString (7 * 10 + 1) = `str/71`. Line 1 is `int/31` by the same
+-- rule (3 * 10 + 1 = 31). This is the value the NATIVE backend independently produces
+-- (measured, see claim.txt) -- but the derivation above is what makes it correct; eval is
+-- a KNOWN-WRONG oracle on exactly this shape, so its output is the bug, never the
+-- expectation.
+import dface.{Described(..), tagOf, sizeOf, describe}
+
+data Box a = Box a
+
+impl Described (Box Int) where
+  tagOf _ = "int"
+  sizeOf _ = 3
+
+impl Described (Box String) where
+  tagOf _ = "str"
+  sizeOf _ = 7
+
+useD : Described a => a -> String
+useD x = describe x
+
+main =
+  let _ = println (useD (Box (1 : Int)))
+  println (useD (Box "v"))

@@ -1,0 +1,14 @@
+interface Mk a where
+  mk : Int -> a
+  un : a -> Int
+data T a = T a
+impl Mk (T Int) where
+  mk n = T (n + 1)
+  un (T n) = n
+impl Mk (T Bool) where
+  mk n = T (n > 0)
+  un (T b) = if b then 777 else 888
+roundtrip : Mk a => Int -> Int
+roundtrip n = un (mk n)
+main : <IO> Unit
+main = putStrLn (intToString (roundtrip 10))

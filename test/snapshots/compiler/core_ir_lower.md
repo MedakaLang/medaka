@@ -1,5 +1,5 @@
 # META
-source_lines=1732
+source_lines=1738
 stages=DESUGAR,MARK
 # SOURCE
 -- elaborated-AST → Core IR lowering (STAGE2-DESIGN §2.1).  Consumes the SAME
@@ -1261,8 +1261,8 @@ lowerImpls prog =
 -- direct call to the `Box Int` body — `use (Box "s")` printed "boxint".
 --
 -- It is also what the emitter needs to AGREE WITH THE TYPECHECKER on the runtime
--- dict word.  typecheck's `keyForSiteByIface`/`headCollidesByIface` are INTERFACE-
--- keyed and count every DECLARED impl (`matchingEntriesByIface` filters on the
+-- dict word.  typecheck's `keyForSiteByIface`/`ieHeadCollidesByIface` are INTERFACE-
+-- keyed and count every DECLARED impl (`ieEntriesForIface` filters on the
 -- impl's iface, not on method-name membership — "so a specific impl that inherits a
 -- method via a DEFAULT is still seen"), so it stamps the canonical key
 -- `Speak|(Box Int)|` into the caller's dict cell.  The emitter's `headTagUnique`
@@ -1353,7 +1353,13 @@ declRouteKey tag key unique = if unique then tag else key
 -- #1036: is [tag] the head of exactly ONE declared impl of [iface]?  Counts
 -- DISTINCT canonical keys (a re-imported prelude impl appears in the joint decl
 -- list twice under ONE key), mirroring the emitter's `distinctKeysAtHead` and
--- typecheck's `countHeadByIface`.  An UNINSTALLED table answers True — the
+-- typecheck's `ieCountHeadByIface`.  ⚠️ Until ARCH B-2.1-b2 that side counted a
+-- TOPOLOGICAL PREFIX of the program's impls while THIS side has always counted
+-- `lowerProgramEmit allDecls` — the whole program — so the two could reach opposite
+-- collision verdicts on a cross-module program.  It now counts the graph-global
+-- `IE`, i.e. the same population.  The arithmetic still differs and that difference
+-- is pre-existing: this side counts DISTINCT canonical keys, that side counts rows.
+-- An UNINSTALLED table answers True — the
 -- pre-#1036 bare-head behaviour — so a driver that never lowered through
 -- `lowerImpls` degrades to today's output rather than mis-keying.
 export ifaceDeclHeadUnique : String -> String -> Bool

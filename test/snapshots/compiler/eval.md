@@ -1441,7 +1441,7 @@ applyMethodDicts env name route narrowed fwdReqs0 implRoutes methodRoutes =
 -- is simply not conditional on having somewhere to send them — the generic body
 -- declares no impl-dict params whatever it calls.  It is currently UNREACHABLE, and
 -- the reason is worth recording, because it is not obvious: [implRoutes] is stamped
--- for `dictMethod = if implDefinesMethodAt … then method else innerDefaultMethod
+-- for `dictMethod = if ieDefinesReqMethodAt … then method else innerDefaultMethod
 -- method` (typecheck.mdk stampOpRouteVal), i.e. for exactly the sibling this
 -- function shadows.  So "no dict-taking sibling" and "no impl dicts stamped" are the
 -- same fact, and the isEmptyL guard above already returns None first.  Written this

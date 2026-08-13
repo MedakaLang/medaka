@@ -1,8 +1,0 @@
--- issue #1072: OVERLAPPING impls at one head tycon, where the dict-routed CALL SITE'S
--- MODULE can see only the GENERAL one.  a.mdk holds the site and `impl Speak (Box a)`;
--- b.mdk holds the strictly more specific `impl Speak (Box Int)`; a does NOT import b.
--- Most-specific-wins requires `specific`; the native binary prints `general`.
-import a.{callA}
-import b
-
-main = println callA

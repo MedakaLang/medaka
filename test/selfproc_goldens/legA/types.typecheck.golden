@@ -158,7 +158,6 @@ bucketImplEntries : List ImplEntry -> Map String (List ImplEntry) -> Map String 
 bucketKeyEntries : List KeyEntry -> Map String (List KeyEntry) -> Map String (List KeyEntry)
 bucketKeyEntriesFrom : Int -> List KeyEntry -> Map String (List KeyEntry) -> Map String (List KeyEntry)
 bucketOf : String -> Map String (List a) -> List a
-bucketOfHead : Option HeadKey -> Map String (List KeyEntry) -> List KeyEntry
 bucketRecvMatch : List (List Ty, List Require) -> Mono -> Bool
 buildAdj : List String -> Map String Unit -> Map String (List (List Pat, Expr)) -> Map String (List String) -> Map String (List String)
 buildAliasGraphEntry : List String -> (TabKey, (List String, Ty)) -> (String, List String)
@@ -167,6 +166,7 @@ buildClassEnvGo : List DeclEnvModule -> ClassEnv -> ClassEnv
 buildDataEnv : List DeclEnvModule -> DataEnv
 buildDeclEnvs : List Decl -> List (String, List Decl) -> DeclEnvs
 buildDefinerShadows : List Decl -> List Decl -> List String
+buildFlatImplEnv : List Decl -> ImplEnv
 buildImplEnv : List DeclEnvModule -> ImplEnv
 buildImplEnvGo : List DeclEnvModule -> Int -> ImplEnv -> ImplEnv
 buildImplTable : List Decl -> Map String (List ImplEntry)
@@ -185,7 +185,6 @@ callArgVecs : List (List Mono) -> List Int -> List (Int, Mono) -> List (List Mon
 callOblMonoIds : (IfaceRef, List Mono, Option Loc) -> List (Int, String)
 callOblsWindow : Int -> List (IfaceRef, List Mono, Option Loc)
 callPredOf : (IfaceRef, List Mono, Option Loc) -> List (IfaceRef, List Mono, Option Loc)
-candidateBucket : Map String (List KeyEntry) -> HeadKey -> List KeyEntry
 candsOneIface : List KeyEntry -> Option String
 ceAddRows : List CeRow -> ClassEnv -> ClassEnv
 ceFunctorEnv : ClassEnv
@@ -424,10 +423,6 @@ containsI : Int -> List Int -> Bool
 containsPair : (String, Int) -> List (String, Int) -> Bool
 containsRowKey : String -> List CeRow -> Bool
 containsVecObl : VecObl -> List VecObl -> Bool
-countHead : Map String (List KeyEntry) -> String -> Option HeadKey -> Int
-countHeadByIface : Map String (List KeyEntry) -> String -> Option HeadKey -> Int
-countHeadByIfaceGo : List KeyEntry -> String -> Option TabKey -> Int
-countHeadGo : List KeyEntry -> String -> Option TabKey -> Int
 countInSubst : List Int -> List (Int, Mono) -> Int
 crossRun : Ref CrossRun
 cslotKey : CSlot -> String
@@ -765,9 +760,8 @@ hasImportDefiner : String -> Bool
 hasKeySL2 : String -> List (String, List Int) -> Bool
 hasMethodLevelConstraint : List String -> Ty -> Bool
 headAnnotTy : Ty -> Mono
+headBucketKey : Option HeadKey -> RegKey
 headBucketRender : Option HeadKey -> String
-headCollides : Map String (List KeyEntry) -> String -> Option HeadKey -> Bool
-headCollidesByIface : Map String (List KeyEntry) -> String -> Option HeadKey -> Bool
 headKeyNameOr : String -> Option HeadKey -> String
 headL : List String -> String
 headMonoNode : Mono -> Mono
@@ -791,19 +785,51 @@ ieBuildSnaps : List ImplRow -> List (Int, ImplUniverse)
 ieBuildSnapsEmit : ImplRow -> List ImplRow -> ImplUniverse -> List (Int, ImplUniverse)
 ieBuildSnapsGo : List ImplRow -> ImplUniverse -> List (Int, ImplUniverse)
 ieCandidacyVisibleAt : Int -> Int -> Bool
+ieCandidatesForIface : ImplEnv -> HeadKey -> String -> List Mono -> List KeyEntry
+ieCandidatesForMethod : ImplEnv -> HeadKey -> String -> List Mono -> List KeyEntry
+ieCountHeadByIface : ImplEnv -> String -> Option HeadKey -> Int
+ieCountHeadByIfaceGo : List ImplRow -> String -> Option TabKey -> Int
+ieCountHeadByMethod : ImplEnv -> String -> Option HeadKey -> Int
+ieCountHeadByMethodGo : List ImplRow -> String -> Option TabKey -> Int
+ieDefinesReqMethodAt : ImplEnv -> String -> Option HeadKey -> Bool
+ieDefinesReqMethodAtGo : List ImplRow -> String -> Option TabKey -> Bool
+ieEntriesForIface : List ImplRow -> String -> List Mono -> List KeyEntry
+ieEntriesForMethod : List ImplRow -> String -> List Mono -> List KeyEntry
+ieFileRow : ImplRow -> ImplEnv -> ImplEnv
+ieFileRowByHead : ImplRow -> ImplEnv -> ImplEnv
+ieGenImplIn : String -> Decl
+ieHeadCollidesByIface : ImplEnv -> String -> Option HeadKey -> Bool
+ieHeadCollidesByMethod : ImplEnv -> String -> Option HeadKey -> Bool
+ieHeadProbeAmod : List Decl
+ieHeadProbeDecls : List Decl
+ieHeadProbeEnv : ImplEnv
+ieHeadProbeZmod : List Decl
+ieHeadRows : Option HeadKey -> ImplEnv -> List ImplRow
+ieImplExistsForHead : ImplEnv -> String -> HeadKey -> Bool
+ieImplExistsForHeadGo : List ImplRow -> String -> TabKey -> Bool
+ieIndexRows : List ImplRow -> ImplEnv -> ImplEnv
 ieInsertRow : ImplRow -> ImplEnv -> ImplEnv
 ieInsertRowAt : TabKey -> ImplRow -> ImplEnv -> ImplEnv
 ieInsertRowKeys : List TabKey -> ImplRow -> ImplEnv -> ImplEnv
+ieLooseImplIn : String -> Decl
+ieOtherImplIn : String -> Decl
 ieProbeBareKey : RegKey
+ieProbeBlobHead : HeadKey
 ieProbeEnv : ImplEnv
 ieProbeKey : String -> RegKey
+ieRowHeadMatches : List Ty -> List Mono -> Bool
+ieRowHeadTriple : Option ImplRow -> Option (Ty, List Ty, List Require)
 ieRowInst : ImplRow -> InstRef
+ieRowOfEntry : ImplEnv -> Option KeyEntry -> Option ImplRow
 ieRowOrd : ImplRow -> Int
 ieRowTriple : ImplRow -> (IfaceRef, List Ty, List Require)
+ieRowWithSeq : List ImplRow -> Int -> Option ImplRow
 ieRowsAll : ImplEnv -> List ImplRow
 ieRowsOwnedBy : Int -> ImplEnv -> List ImplRow
 ieRowsVisibleAt : Int -> ImplEnv -> List ImplRow
 ieSameImplIn : String -> Decl
+ieSelectRowByIface : ImplEnv -> String -> List Mono -> Option ImplRow
+ieSelectRowByMethod : ImplEnv -> String -> List Mono -> Option ImplRow
 ieSnapAt : Int -> List (Int, ImplUniverse) -> ImplUniverse -> ImplUniverse
 ieTyBlob : String -> Ty
 ieUnivConcreteOf : ImplUniverse -> MultiRegistry (List Ty, List Require)
@@ -844,15 +870,11 @@ implDeclFact : Decl -> List (IfaceRef, List Ty, List Require, List String)
 implDeclFacts : List Decl -> List (IfaceRef, List Ty, List Require, List String)
 implDeclWithReqs : Decl -> List (IfaceRef, List Ty, List Require)
 implDeclsWithReqs : List Decl -> List (IfaceRef, List Ty, List Require)
-implDefinesMethodAt : Map String (List ImplEntry) -> String -> String -> Bool
-implDefinesMethodAtGo : List ImplEntry -> String -> String -> Bool
 implDictNames : String -> Int -> List String
 implDictPassMethods : Int -> List ImplMethod -> List ImplMethod
 implDictRoutesForFull : Map String (List ImplEntry) -> Map String (List KeyEntry) -> String -> String -> String -> Mono -> List Mono -> List Route
 implEntryFromTys : String -> List Ty -> List Require -> List ImplMethod -> List ImplEntry
 implEntryOf : Decl -> List ImplEntry
-implExistsForHead : Map String (List KeyEntry) -> String -> HeadKey -> Bool
-implExistsForHeadGo : List KeyEntry -> String -> TabKey -> Bool
 implHeadGround : Decl -> Bool
 implHeadKindClause : String -> Int -> List Kind -> String
 implHeadLabel : String -> KeyEntry -> String
@@ -871,6 +893,7 @@ implMatchesU : ImplUniverse -> IfaceRef -> List Mono -> Bool
 implMatchesWithReqsU : ImplUniverse -> IfaceRef -> List Mono -> Bool
 implMethodName : ImplMethod -> String
 implMethodNameTc : ImplMethod -> String
+implRowHasReqs : List Require -> Bool
 implRowMatchesSuper : TabKey -> String -> List Ty -> ImplRow -> Bool
 implRowsOf : String -> Int -> Int -> List (IfaceRef, List Ty, List Require, List String) -> List ImplRow
 implSubject : String -> String -> String
@@ -1037,12 +1060,12 @@ keepBetterField : String -> Int -> Option (String, Int) -> Option (String, Int)
 keepBoundResidual : List Int -> (IfaceRef, List Mono) -> List VecObl
 keepGroupNames : Map String Unit -> List String -> List String
 keptConstraintArgs : List (IfaceRef, Mono) -> List (List Mono) -> List (List Mono)
-keptConstraintIfaces : List (IfaceRef, Mono) -> List IfaceRef
 keyEntryIdx : KeyEntry -> Int
 keyEntryIface : KeyEntry -> String
 keyEntryOf : Decl -> List KeyEntry
-keyForSite : Map String (List KeyEntry) -> String -> List Mono -> Option String
-keyForSiteByIface : Map String (List KeyEntry) -> String -> List Mono -> Option String
+keyEntryOfRow : ImplRow -> List KeyEntry
+keyForSite : String -> List Mono -> Option String
+keyForSiteByIface : String -> List Mono -> Option String
 kindArgMono : List (String, Ref Effvar) -> List (String, Mono) -> Kind -> Ty -> Mono
 kindName : Kind -> String
 kindPublicDataDecl : Decl -> Bool
@@ -1110,11 +1133,6 @@ matchOneSided : (a -> b -> MStep c a b) -> (c -> c -> Bool) -> (b -> b -> Bool) 
 matchStep : Ty -> Mono -> MStep String Ty Mono
 matchTyMono : Ty -> Mono -> Option (List (String, Mono))
 matchTyMonos : List Ty -> List Mono -> Option (List (String, Mono))
-matchedEntry : Map String (List KeyEntry) -> String -> List Mono -> Option KeyEntry
-matchingEntries : Map String (List KeyEntry) -> String -> List Mono -> List KeyEntry
-matchingEntriesByIface : Map String (List KeyEntry) -> String -> List Mono -> List KeyEntry
-matchingEntriesByIfaceGo : List KeyEntry -> String -> List Mono -> List KeyEntry
-matchingEntriesGo : List KeyEntry -> String -> List Mono -> List KeyEntry
 maybeInferConstraint : List (String, Ty) -> List (IfaceRef, List Mono, Option Loc) -> List UObligation -> String -> Scheme -> Unit
 maybeStandaloneValueMono : String -> Option Mono
 maybeStandaloneValueMonoEmit : TcEnv -> String -> Ref Route -> Option Mono
@@ -1424,7 +1442,7 @@ registerInferredConstraints : List (String, Ty) -> List (IfaceRef, List Mono, Op
 registerInferredFor : String -> List Int -> Unit
 registerLocalScheme : String -> Scheme -> Int -> Int -> Int -> Unit
 registerMember : String -> List (IfaceRef, Mono) -> List (List Mono) -> Unit
-registerMemberSlots : String -> Int -> List Mono -> List Int
+registerMemberSlots : String -> Int -> List (IfaceRef, Mono) -> List CSlot
 registerMethodConstraints : List String -> String -> Ty -> List (String, Mono) -> List Int -> Unit
 registerMethodDictSlots : String -> Int -> List Int -> List (Int, Mono) -> Unit
 registerMethodIfaceParamsAll : List Decl -> Unit
@@ -1556,13 +1574,16 @@ seedBuiltinClasses : CheckMode -> List Decl -> Unit
 seedCheckRun : List Decl -> Unit
 seedEffectDomains : Unit -> Unit
 selectIfaceRows : UsePath -> List (String, List String) -> List (String, List String)
-selectImplEntryByIface : Map String (List KeyEntry) -> String -> List Mono -> Option KeyEntry
-selectReqImpl : Map String (List KeyEntry) -> Map String (List ImplEntry) -> String -> String -> Mono -> List Mono -> Option (Ty, List Ty, List Require)
+selectReqImpl : Map String (List ImplEntry) -> String -> String -> Mono -> List Mono -> Option (Ty, List Ty, List Require)
 selfBinding : String -> (String, String)
 setCardCap : Int
 setCoherenceUserDecls : List Decl -> Unit
+setCrossFunConstraintTables : (List (String, List Int), List (String, List IfaceRef)) -> Unit
 setDictEligible : List String -> Unit
+setFunConstraintEntry : String -> List CSlot -> Option (List (List Mono)) -> Unit
+setFunConstraintTables : (List (String, List Int), List (String, List IfaceRef)) -> Unit
 setLocIfSome : Option Loc -> Unit
+setMethodConstraintEntry : String -> List Int -> List Int -> Unit
 setNumlitFloats : Unit -> Unit
 setNumlitFloatsGo : List (Mono, Ref (Option Float), Int, Ref Route) -> Unit
 shadowBareName : List (String, String) -> String -> String

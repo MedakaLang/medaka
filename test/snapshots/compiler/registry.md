@@ -1,5 +1,5 @@
 # META
-source_lines=2021
+source_lines=2024
 stages=DESUGAR,MARK
 # SOURCE
 -- Identity + registry substrate — Stage A-2 unit A-2.0
@@ -681,8 +681,11 @@ mregAdd ident v mr = mregAddK (regKeyOf ident) v mr
 --     invert which impl's `requires` get discharged.
 --   * the CONCRETE bucket (`univConcreteBucket`) — NOT read first-match, and not
 --     read by `findMatchingImplReqsU` at all. That function's concrete arm goes
---     through `concreteReqMatchByIface` → `selectImplEntryByIface`, which reads
---     `shadowKeyTableRef` — a DIFFERENT table. The concrete bucket's own
+--     through `concreteReqMatchByIface` → `ieSelectRowByIface`, which reads
+--     `bodyImplEnvRef` — a DIFFERENT table (and a DIFFERENT population: ARCH
+--     B-2.1-b2 repointed this leg off the topological-prefix `shadowKeyTableRef`
+--     onto the graph-global `IE`; the order argument here is unaffected, since
+--     neither table is this bucket). The concrete bucket's own
 --     readers are `univConcreteBucket`'s two, `implMatchesU` and
 --     `implMatchesReceiverU`, and both are boolean EXISTENCE tests
 --     (`bucketArgsMatch`/`bucketRecvMatch`, `||`-folded), for which bucket

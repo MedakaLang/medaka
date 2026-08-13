@@ -425,6 +425,26 @@ echo "  ok: $(printf '%s\n' "$originun_actual" | grep -c .) OriginUnresolved con
 # fixture stamps `OriginModule _`); they exist only so the match stays total
 # AND discoverable, exactly as `originPhrase`'s arm does. Listed here rather
 # than the grep widened, per the remedy this ratchet's other entries state.
+# ⚠️ ARCH B-2.1-a3 (Stage B sprint) ADDED ONE LINE, AND IT IS THE FIRST ENTRY ON THIS
+# LIST THAT *CONSTRUCTS* — stated plainly because that is a stronger claim than every
+# entry above it. `implOrigin = OriginUnresolved,` is inside `ieLooseImplIn`, a
+# DOCTEST FIXTURE in the `IE` doctest block (grep `ieLooseImplIn`), not a production
+# mint: the #1519 entries above have `OriginUnresolved` on the LEFT of an eliminator
+# arm, whereas this one puts it on the right.
+#
+# Why the fixture needs it, and why widening the grep would be wrong: the fixture's
+# whole purpose is to exercise the IDENTITY-LESS case. `oblIfaceKeys` mints ONE key
+# (the bare leg) for an identity-less interface where every identity-bearing sibling
+# gets two, and `ieByHead`'s partition is keyed on the receiver HEAD with no interface
+# component — so the fixture proves a head-keyed index files `impl Loose Blob` beside
+# its siblings REGARDLESS of that asymmetry. That is the property distinguishing
+# `ieByHead` from `ieConcrete`/`ieHeadless`, which remain asymmetric (see the F1
+# investigation, `.claude/sprint-b/DECISIONS.md` RUN-B-027/RUN-B-030: the asymmetry is
+# DORMANT, not absent — it re-opens for anything that compares `TabKey`s for equality
+# or renders one). Deleting the fixture would delete the only in-tree proof of that.
+# Listed here rather than the grep widened, per the remedy this ratchet's other
+# entries state — a widened grep would stop reporting a FOURTH inhabitant, which is
+# the discoverability this ratchet exists to protect.
 tc_originun_allowed="OriginUnresolved => \"<unresolved>\"
 OriginUnresolved => [TkBare NsIface ir.irName]
 bcEq = OriginUnresolved,
@@ -434,6 +454,7 @@ bcSemigroup = OriginUnresolved,
 ceSuperOrigin (Super { superOrigin = OriginUnresolved, ... }) = \"<unresolved>\"
 ifaceRefBare n = IfaceRef { irName = n, irOrigin = OriginUnresolved }
 ifaceRefNone = IfaceRef { irName = \"\", irOrigin = OriginUnresolved }
+implOrigin = OriginUnresolved,
 originPhrase OriginUnresolved = \"an unknown module\"
 tconUnresolved n = TCon n OriginUnresolved"
 tc_originun_actual=$(grep -w 'OriginUnresolved' "$ROOT/compiler/types/typecheck.mdk" \

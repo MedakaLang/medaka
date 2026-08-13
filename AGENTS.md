@@ -163,11 +163,19 @@ exactly like "nothing is required here".** Required checks live in a repo **RULE
 branch protection. That 404 is also why `git push origin main` fails with `GH013: Repository rule
 violations` — a *rules* message. **That single 404 is why `ci.yml` (x2) and this file all said
 `wasm` was advisory for two days while it was required**, and it misrouted #597's whole design.
-Shards are scheduled by **cost, not theme**: put a new gate where there is ROOM. ⚠️ **`gates
-(engines)` is NOT the critical path** — that claim (`~5.8 min`) rotted when the shard was given
-the whole runner (`full_cores`, `ci.yml`), and it misrouted #597's design; measured across three
-real runs in July 2026, `gates (types)` was the pole and `engines` the cheapest heavy shard.
-**Numbers here rot — read them off a run instead:**
+Shards are scheduled by **cost, not theme**: put a new gate where there is ROOM. 🚨 **DO NOT
+trust any shard-cost ranking written here — including the ones this paragraph used to give.
+DERIVE it, every time, with the command below.** This sentence has now been wrong **three
+times**, each time in a way that misrouted real work: `~5.8 min` for `engines` rotted when that
+shard was given the whole runner (`full_cores`, `ci.yml`) and misrouted #597's design; the
+replacement claim — *"`gates (types)` was the pole and `engines` the cheapest heavy shard"*,
+from three July 2026 runs — **was measurably false by 2026-08-13**, and a Stage B orchestrator
+repeated it out of this file into an implementer's brief instead of running the command two
+lines below. Measured on two consecutive green `merge_group` runs (`31655422530`,
+`31653614351`): **`engines` is the POLE (373s/364s) and `eval` the CHEAPEST (149s/151s)**;
+`types` 322/324 · `frontend` 289/291 · `tools` 202/213 · `sqlite` 185/191 · `backend` 165/160.
+**Those numbers are recorded to show the ranking INVERTED, not for you to reuse** — a ranking
+is an encoded fact with no derivation and no expiry, and the derivation is one command:
 `gh run view <id> --json jobs --jq '.jobs[]|select(.name|startswith("gates"))|{name,s:((.completedAt|fromdate)-(.startedAt|fromdate))}'`
 **Zero approvals required** — the *checks* are the gate, not a human, so an agent can
 self-merge on green. The repo is org-owned (MedakaLang), so a **merge queue is live** — see above; `--auto` enqueues.

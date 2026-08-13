@@ -1,0 +1,10 @@
+-- issue #1071: `describe` is the INHERITED default. Its body makes TWO sibling-method
+-- calls -- `tagOf x` (a String) and `sizeOf x` (an Int, consumed through arithmetic).
+-- Both sibling calls are the ones the interpreter fails to re-narrow by the canonical
+-- impl key when the receiver's head tycon collides across two impls differing only in
+-- their type ARGUMENT. Taken verbatim from the issue body.
+export interface Described a where
+  tagOf : a -> String
+  sizeOf : a -> Int
+  describe : a -> String
+  describe x = tagOf x ++ "/" ++ intToString (sizeOf x * 10 + 1)
