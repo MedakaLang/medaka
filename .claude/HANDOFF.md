@@ -37,6 +37,42 @@ with the guard live and with it dead.
 
 ---
 
+## 🚨 NEW S0-SHAPED FINDING, REPRODUCED AND UNFILED — needs an owner (2026-08-13)
+
+**Pre-existing, NOT caused by this sprint.** Surfaced incidentally by `AD-1`'s D8 discriminator and
+then **independently re-verified by the orchestrator on the certified binary at `89a9536b`, with a
+control.** Programs kept at `/var/tmp/ad1p/` (⚠️ `/tmp`-family, **not durable** — re-create from below).
+
+**A genuine ambiguity is SILENTLY RESOLVED when the two candidate impls share a tycon head.**
+
+```medaka
+interface Mk a where
+  mk : Int -> a
+  un : a -> Int
+data T a = T a
+impl Mk (T Int)  where  mk n = T (n + 1);  un (T n) = n
+impl Mk (T Bool) where  mk n = T (n > 0);  un (T b) = if b then 777 else 888
+roundtrip : Mk a => Int -> Int          -- `a` occurs in NEITHER the argument NOR the return type
+roundtrip n = un (mk n)
+main = putStrLn (intToString (roundtrip 10))
+```
+
+| program | the ONE thing changed | `check` | outcome |
+|---|---|---|---|
+| as above — both impls at head `T` | — | **exit 0** | **runs, prints `11`** (silently picks `T Int`) |
+| **control:** `impl Mk (T Int)` + `impl Mk (U Bool)` | heads made **distinct** | **exit 1** | correctly rejected |
+
+**So the discriminating variable is *same tycon head* vs *distinct heads*** — the head **dedup** collapses
+two concrete same-tycon heads to a count of 1, so the ambiguity check never fires. `a` is unresolvable by
+construction, both impls apply equally, and the compiler commits to one **with no diagnostic**.
+
+**Owner needed.** `AD-1` assesses it as an **unfiled second variant of #1180's class** (`#1122` F-3c
+territory). ⛔ **Not filed** — this run's policy is implement-and-record; tracker writes happen at the
+adversarial review gate. **The repair round should file it**, citing this block. ⚠️ **Do not assume it is
+#1180** without checking — a *"same class"* claim needs the same proof as a filing.
+
+---
+
 ## ✅ STAGE B SPRINT — PHASE 2′ CLOSED AND CERTIFIED (2026-08-13). **Safe to review. NOT ready to merge.**
 
 **Branch `arch/stage-b-sprint`, draft PR #1605, BASE `2b9dc798`.** The **UNSAFE** marking is **REMOVED** —
