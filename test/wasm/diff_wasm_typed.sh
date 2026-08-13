@@ -81,7 +81,7 @@ if grep -F 'implSelfCtxRef' "$WASM_SRC" >/dev/null; then
 fi
 EXPECTED_MODULE_REFS="$(printf '%s\n' \
   lamIdRef liftedFnsRef liftedNamesRef funcRefsRef liftedNamesSetW funcRefsSetW \
-  useStrRef curBindRef useListRef useArrayRef useRefBoxRef useRecUpdateRef \
+  useStrRef useListRef useArrayRef useRefBoxRef useRecUpdateRef \
   useStrLeafRef useRngRef useHashRef useEPutRef useTrapImport useDivGuardRef \
   useFloatRef useFloatHashRef useMathRef useFloatRngRef useFloatStrRef \
   useStrSearchRef useValueCmpRef useValueArithRef numPolyLocalsRef useStrCodecRef \
@@ -99,12 +99,52 @@ ACTUAL_MODULE_REF_DEFS="$(awk '
   /^public[[:space:]]+export[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]*=[[:space:]]*Ref([[:space:]]|$)/ { print $3 }
 ' "$WASM_SRC" | LC_ALL=C sort -u)"
 if [ "$ACTUAL_MODULE_REF_SIGS" != "$EXPECTED_MODULE_REFS" ] ||
-   [ "$ACTUAL_MODULE_REF_DEFS" != "$EXPECTED_MODULE_REFS" ]; then
-  echo "FAIL H2B4-AUTHORITY-SET: top-level Ref authority set changed"
+    [ "$ACTUAL_MODULE_REF_DEFS" != "$EXPECTED_MODULE_REFS" ]; then
+  echo "FAIL H2B5-AUTHORITY-SET: top-level Ref authority set changed"
   printf '  observed signatures:\n%s\n' "$ACTUAL_MODULE_REF_SIGS"
   printf '  observed definitions:\n%s\n' "$ACTUAL_MODULE_REF_DEFS"
   exit 1
 fi
+for required in \
+  'currentBinding : Ref String' \
+  'currentBinding = Ref "?"' \
+  'currentBindingOfW : WasmEmit -> String' \
+  'currentBindingOfW emit = emit.currentBinding.value' \
+  'setCurrentBindingOfW : WasmEmit -> String -> Unit' \
+  'setCurrentBindingOfW emit name = setRef emit.currentBinding name'; do
+  [ "$(grep -F -- "$required" "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] || {
+    echo "FAIL H2B5-CARRIER: missing $required"
+    exit 1
+  }
+done
+if grep -E '^curBindRef[[:space:]]*[:=]' "$WASM_SRC" >/dev/null; then
+  echo "FAIL H2B5-AUTHORITY-SET: retired current-binding authority remains ambient"
+  exit 1
+fi
+[ "$(grep -F 'setCurrentBindingOfW (progEmit prog)' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 2 ] || {
+  echo "FAIL H2B5-ROUTES: expected exactly two current-binding setter call sites"
+  exit 1
+}
+[ "$(grep -F 'currentBindingOfW (progEmit prog)' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 2 ] &&
+  [ "$(grep -F '++ currentBindingOfW emit ++' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
+  [ "$(grep -F 'currentBindingOfW' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 5 ] &&
+  [ "$(grep -F 'setCurrentBindingOfW' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 4 ] || {
+  echo "FAIL H2B5-ROUTES: expected exactly three current-binding getter call sites"
+  exit 1
+}
+grep -F 'patName emit _ =' "$WASM_SRC" >/dev/null &&
+  grep -F 'currentBindingOfW emit ++ "]")' "$WASM_SRC" >/dev/null || {
+  echo "FAIL H2B5-PATNAME-STRUCTURAL: patName fallback is not routed through WasmEmit"
+  exit 1
+}
+if grep -E 'let (saved|old|prior|previous)[A-Za-z0-9_]*[[:space:]]*=[[:space:]]*currentBindingOfW|setCurrentBindingOfW.*(saved|old|prior|previous)' "$WASM_SRC" >/dev/null; then
+  echo "FAIL H2B5-NO-RESTORE: current-binding save/restore is forbidden"
+  exit 1
+fi
+[ "$(grep -F 'emit.currentBinding' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 2 ] || {
+  echo "FAIL H2B5-NO-RESTORE: current-binding alias/reset/restore route added"
+  exit 1
+}
 for required in \
   'stringSegments : Ref (List (Int, List Int))' \
   'nextStringSegmentId : Ref Int' \
@@ -146,6 +186,25 @@ for required in \
   'missingImplSelfGap'; do
   grep -F -- "$required" "$TYPED_ENTRY" >/dev/null || {
     echo "FAIL wasm typed impl-self-state ratchet: missing $required"
+    exit 1
+  }
+done
+for required in \
+  '"--capture-current-binding"::row::_' \
+  'captureCurrentBinding : String -> <IO> Unit' \
+  'bindingLoc : Loc' \
+  'bindingInput : WasmEmitInput' \
+  'bindingEventCaptures : String -> CProgram -> <IO> Unit' \
+  'bindingUnsupported = CMatch (CLit (LInt 0)) []' \
+  'bindingWriterProgram : CProgram' \
+  'emitProgram bindingInput bindingNoWriterProgram' \
+  'CBIND_TOP_STRICT' \
+  'CBIND_LIFT_STRICT' \
+  'CBIND_NOWRITER_STRICT' \
+  'CBIND_POSTLIFT_STRICT' \
+  'CBIND_MALFORMED_REF_ROUTE'; do
+  grep -F -- "$required" "$TYPED_ENTRY" >/dev/null || {
+    echo "FAIL CBIND-CAPTURE-MARKERS: missing $required"
     exit 1
   }
 done
@@ -344,11 +403,177 @@ command -v "$CC" >/dev/null 2>&1 || { echo "no C compiler ($CC) — skipping W5 
 [ -x "$MEDAKA" ] || { echo "build the native compiler first: make medaka (missing $MEDAKA)"; exit 2; }
 [ -x "$EMITBIN" ] || { echo "build the wasm typed emitter: sh test/wasm/build_wasm_oracle.sh --typed-only (missing $EMITBIN)"; exit 2; }
 
+# ── Node >= 22 selection (finalized WasmGC encoding — see test/wasm/w1.sh) ─────
+NODE=node
+major=$("$NODE" -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)
+if [ "$major" -lt 22 ]; then
+  export NVM_DIR="$HOME/.nvm"
+  # shellcheck disable=SC1091
+  [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh" >/dev/null 2>&1 && nvm use 24 >/dev/null 2>&1 || true
+  major=$("$NODE" -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)
+fi
+if [ "$major" -lt 22 ]; then
+  echo "W5 SKIP  Node >= 22 required for the finalized WasmGC encoding (have $($NODE --version 2>/dev/null))"
+  exit 2
+fi
+
+INPUT_WORK="$(mktemp -d)"
+trap 'rm -rf "$INPUT_WORK"' EXIT
+
+# Sprint 01 current-binding capture apparatus. The expected events and strict
+# diagnostics pin the emission-owned authority and its two write routes.
+cbind_capture() {
+  awk -v begin="$1" -v end="$2" '
+    $0 == begin { seenBegin++; capture = 1; next }
+    $0 == end { seenEnd++; capture = 0; next }
+    capture { print }
+    END { if (seenBegin != 1 || seenEnd != 1) exit 1 }
+  ' "$3"
+}
+cbind_exact_capture() {
+  local begin="$1" end="$2" file="$3" begins ends
+  begins="$(grep -Fxc "$begin" "$file" || true)"
+  ends="$(grep -Fxc "$end" "$file" || true)"
+  [ "$begins" -eq 1 ] && [ "$ends" -eq 1 ] || return 1
+  cbind_capture "$begin" "$end" "$file"
+}
+cbind_require_markers() {
+  local rule="$1" out="$2" expected="$3" prefix="$4" observed
+  observed="$(awk -v prefix="$prefix" '
+    $0 == "CBIND_NOWRITER_SETUP_WAT_BEGIN" ||
+    $0 == "CBIND_NOWRITER_SETUP_WAT_END" ||
+    $0 == "CBIND_NOWRITER_SETUP_OK" ||
+    $0 == "CBIND_" prefix "_RECORD_WAT_BEGIN" ||
+    $0 == "CBIND_" prefix "_RECORD_WAT_END" ||
+    $0 == "CBIND_" prefix "_RECORD_EVENTS_BEGIN" ||
+    $0 == "CBIND_" prefix "_RECORD_EVENTS_END" ||
+    $0 == "CBIND_" prefix "_CENSUS_EVENTS_BEGIN" ||
+    $0 == "CBIND_" prefix "_CENSUS_EVENTS_END" ||
+    $0 == "CBIND_" prefix "_STRICT" { print }
+  ' "$out")"
+  [ "$observed" = "$expected" ] || {
+    echo "FAIL $rule: marker cardinality/order"
+    printf '  observed markers:\n%s\n' "${observed:-<none>}"
+    exit 1
+  }
+}
+
+"$EMITBIN" --capture-current-binding control >"$INPUT_WORK/cbind-control.out" 2>"$INPUT_WORK/cbind-control.err"
+CBIND_CONTROL_STATUS=$?
+[ "$CBIND_CONTROL_STATUS" -eq 0 ] && [ ! -s "$INPUT_WORK/cbind-control.err" ] || {
+  echo "FAIL CBIND-CONTROL-WAT: control direct status/stderr"
+  exit 1
+}
+cbind_exact_capture CBIND_CONTROL_WAT_BEGIN CBIND_CONTROL_WAT_END "$INPUT_WORK/cbind-control.out" >"$INPUT_WORK/cbind-control.wat" || {
+  echo "FAIL CBIND-CONTROL-WAT: exact control markers"
+  exit 1
+}
+[ -s "$INPUT_WORK/cbind-control.wat" ] || { echo "FAIL CBIND-CONTROL-WAT: empty WAT"; exit 1; }
+wasm-tools parse "$INPUT_WORK/cbind-control.wat" -o "$INPUT_WORK/cbind-control.wasm" || {
+  echo "FAIL CBIND-CONTROL-WAT: wasm-tools parse"; exit 1;
+}
+wasm-tools validate --features=all "$INPUT_WORK/cbind-control.wasm" || {
+  echo "FAIL CBIND-CONTROL-WAT: wasm-tools validate"; exit 1;
+}
+"$NODE" "$RUNJS" "$INPUT_WORK/cbind-control.wasm" >"$INPUT_WORK/cbind-control.run.out" 2>"$INPUT_WORK/cbind-control.run.err"
+CBIND_CONTROL_RUN_STATUS=$?
+[ "$CBIND_CONTROL_RUN_STATUS" -eq 0 ] && [ ! -s "$INPUT_WORK/cbind-control.run.err" ] && [ "$(cat "$INPUT_WORK/cbind-control.run.out")" = 0 ] || {
+  echo "FAIL CBIND-CONTROL-RUN: inert control did not run as 0"
+  exit 1
+}
+
+cbind_abort_row() {
+  local row="$1" rule="$2" marker="$3" setup="$4" binding="$5" census_prefix="$6" expected prefix upper
+  case "$row" in
+    top) upper=TOP ;;
+    lifted) upper=LIFT ;;
+    no-writer) upper=NOWRITER ;;
+    post-lift) upper=POSTLIFT ;;
+    *) echo "FAIL $rule: unknown capture row"; exit 1 ;;
+  esac
+  "$EMITBIN" --capture-current-binding "$row" >"$INPUT_WORK/cbind-$row.out" 2>"$INPUT_WORK/cbind-$row.err"
+  CBIND_ROW_STATUS=$?
+  [ "$CBIND_ROW_STATUS" -eq 1 ] || { echo "FAIL $rule: strict status was $CBIND_ROW_STATUS, expected 1"; exit 1; }
+  prefix="${setup:+$setup$'\n'}"
+  expected="${prefix}CBIND_${upper}_RECORD_WAT_BEGIN
+CBIND_${upper}_RECORD_WAT_END
+CBIND_${upper}_RECORD_EVENTS_BEGIN
+CBIND_${upper}_RECORD_EVENTS_END
+CBIND_${upper}_CENSUS_EVENTS_BEGIN
+CBIND_${upper}_CENSUS_EVENTS_END
+$marker"
+  cbind_require_markers "$rule" "$INPUT_WORK/cbind-$row.out" "$expected" "$upper"
+  cbind_exact_capture "CBIND_${upper}_RECORD_EVENTS_BEGIN" "CBIND_${upper}_RECORD_EVENTS_END" "$INPUT_WORK/cbind-$row.out" >"$INPUT_WORK/cbind-$row-record.events" &&
+    cbind_exact_capture "CBIND_${upper}_CENSUS_EVENTS_BEGIN" "CBIND_${upper}_CENSUS_EVENTS_END" "$INPUT_WORK/cbind-$row.out" >"$INPUT_WORK/cbind-$row-census.events" || {
+      echo "FAIL $rule: malformed event capture"; exit 1;
+    }
+  cbind_exact_events "$rule" "$INPUT_WORK/cbind-$row-record.events" '?' "$binding"
+  cbind_exact_events "$rule" "$INPUT_WORK/cbind-$row-census.events" "$census_prefix" "$binding"
+  grep -F 'usage:' "$INPUT_WORK/cbind-$row.out" "$INPUT_WORK/cbind-$row.err" >/dev/null && { echo "FAIL $rule: usage error"; exit 1; }
+  grep -Ei 'parse error|type error|type mismatch|setup error' "$INPUT_WORK/cbind-$row.out" "$INPUT_WORK/cbind-$row.err" >/dev/null && {
+    echo "FAIL $rule: setup/type failure"
+    exit 1
+  }
+  [ "$(wc -l < "$INPUT_WORK/cbind-$row.err")" -eq 1 ] &&
+    [ "$(cat "$INPUT_WORK/cbind-$row.err")" = "runtime error [E-PANIC]: $(cbind_unbound "$binding")" ] || {
+    echo "FAIL $rule: strict stderr was not the exact unbound panic"
+    exit 1
+  }
+  [ "$(tail -n 1 "$INPUT_WORK/cbind-$row.out")" = "$marker" ] || {
+    echo "FAIL $rule: strict marker was not last"
+    exit 1
+  }
+}
+
+cbind_unbound() {
+  printf "unbound variable 'missingCurrentBinding' (not a local, global value, constructor, or known function) [in %s]" "$1"
+}
+cbind_unsupported() {
+  printf 'ref-mode: unsupported Core IR node CMatch (ordered-arm match — needs the decision-tree form) [in %s]' "$1"
+}
+cbind_exact_events() {
+  local rule="$1" file="$2" prefix="$3" binding="$4" expected
+  expected="$(printf '%s\t%s\n%s\t%s' "$prefix" "$(cbind_unbound "$binding")" "$prefix" "$(cbind_unsupported "$binding")")"
+  [ "$(wc -l < "$file")" -eq 2 ] && [ "$(cat "$file")" = "$expected" ] || {
+    echo "FAIL $rule: event lines/order/attribution changed"
+    exit 1
+  }
+}
+
+cbind_abort_row top H2B5-TOP-EXACT CBIND_TOP_STRICT '' P 'fn P'
+cbind_abort_row lifted H2B5-LIFT-EXACT CBIND_LIFT_STRICT '' 'lg:P' 'fn outer'
+cbind_abort_row no-writer H2B5-NOWRITER-EXACT CBIND_NOWRITER_STRICT $'CBIND_NOWRITER_SETUP_WAT_BEGIN\nCBIND_NOWRITER_SETUP_WAT_END\nCBIND_NOWRITER_SETUP_OK' '?' 'val P'
+cbind_abort_row post-lift H2B5-POSTLIFT-EXACT CBIND_POSTLIFT_STRICT '' 'lg:L' 'fn P'
+
+"$EMITBIN" --capture-current-binding malformed >"$INPUT_WORK/cbind-malformed.out" 2>"$INPUT_WORK/cbind-malformed.err"
+CBIND_MALFORMED_STATUS=$?
+grep -Fx CBIND_MALFORMED_REF_ROUTE "$INPUT_WORK/cbind-malformed.out" >/dev/null || {
+  echo "FAIL CBIND-MALFORMED-NONREADER: missing ref-route classification"; exit 1;
+}
+[ "$(grep -Fxc CBIND_MALFORMED_REF_ROUTE "$INPUT_WORK/cbind-malformed.out" || true)" -eq 1 ] || {
+  echo "FAIL CBIND-MALFORMED-NONREADER: route marker cardinality"; exit 1;
+}
+grep -F 'only PVar/PWild parameters' "$INPUT_WORK/cbind-malformed.err" >/dev/null && {
+  echo "FAIL CBIND-MALFORMED-NONREADER: malformed route reached patName"; exit 1;
+}
+[ "$CBIND_MALFORMED_STATUS" -eq 0 ] && [ ! -s "$INPUT_WORK/cbind-malformed.err" ] || {
+  echo "FAIL CBIND-MALFORMED-NONREADER: ref-route did not emit cleanly"
+  exit 1
+}
+cbind_exact_capture CBIND_MALFORMED_WAT_BEGIN CBIND_MALFORMED_WAT_END "$INPUT_WORK/cbind-malformed.out" >"$INPUT_WORK/cbind-malformed.wat" || {
+  echo "FAIL CBIND-MALFORMED-NONREADER: malformed WAT markers"; exit 1;
+}
+[ -s "$INPUT_WORK/cbind-malformed.wat" ] || { echo "FAIL CBIND-MALFORMED-NONREADER: empty malformed WAT"; exit 1; }
+wasm-tools parse "$INPUT_WORK/cbind-malformed.wat" -o "$INPUT_WORK/cbind-malformed.wasm" || {
+  echo "FAIL CBIND-MALFORMED-NONREADER: wasm-tools parse"; exit 1;
+}
+wasm-tools validate --features=all "$INPUT_WORK/cbind-malformed.wasm" || {
+  echo "FAIL CBIND-MALFORMED-NONREADER: wasm-tools validate"; exit 1;
+}
+
 # X-W.H1: one process emits one lowered P program with P's complete input, each
 # U-derived field in isolation, then P's input again. This distinguishes explicit
 # inputs from CProgram changes and proves the final P is not contaminated.
-INPUT_WORK="$(mktemp -d)"
-trap 'rm -rf "$INPUT_WORK"' EXIT
 cat > "$INPUT_WORK/p.mdk" <<'EOF'
 interface Score a where
   score : a -> Int
@@ -632,19 +857,6 @@ require_wat type-to-ctors "$U_WAT" '(type $T_USubject (sub (struct (field i32)))
 forbid_wat type-to-ctors "$U_WAT" '(type $T_PSubject (sub (struct (field i32)))'
 require_wat type-to-ctors "$U_WAT" 'ref.cast (ref $T_USubject)'
 
-# ── Node >= 22 selection (finalized WasmGC encoding — see test/wasm/w1.sh) ─────
-NODE=node
-major=$("$NODE" -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)
-if [ "$major" -lt 22 ]; then
-  export NVM_DIR="$HOME/.nvm"
-  # shellcheck disable=SC1091
-  [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh" >/dev/null 2>&1 && nvm use 24 >/dev/null 2>&1 || true
-  major=$("$NODE" -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)
-fi
-if [ "$major" -lt 22 ]; then
-  echo "W5 SKIP  Node >= 22 required for the finalized WasmGC encoding (have $($NODE --version 2>/dev/null))"
-  exit 2
-fi
 run_impl_self_check
 
 [ -x "$EMITTER" ] && export MEDAKA_EMITTER="$EMITTER"

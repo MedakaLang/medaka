@@ -67,6 +67,7 @@ main = match args ()
   "--reemit-gap-strict"::_ => reemitGapStrict ()
   "--reemit-string-state"::_ => reemitStringState ()
   "--reemit-default-state"::_ => reemitDefaultState ()
+  "--capture-current-binding"::row::_ => captureCurrentBinding row
   _ => driveRuntime emit
 
 emit : List Decl -> List Decl -> List Decl -> <IO> Unit
@@ -342,6 +343,120 @@ defaultStateCensusProgramU = CProgram
   [
     CImplEntry "synthDefault" 0 (CImplDefault "DefaultFace" [PVar "value" defaultStateLoc] (CLit (LInt 29)))
   ]
+
+-- Current-binding observation harness.  These rows deliberately only drive the
+-- existing record/census/strict APIs; they do not change emitter ownership or
+-- recover from a strict failure.  Every sensitive strict call is last.
+bindingLoc : Loc
+bindingLoc = Loc "<current-binding>" 1 1 1 1
+
+bindingInput : WasmEmitInput
+bindingInput = makeWasmEmitInput [] [] [] False []
+
+bindingMain : CBind
+bindingMain = CBind "main" [CClause [] (CLit (LInt 0))]
+
+bindingUnsupported : CExpr
+bindingUnsupported = CMatch (CLit (LInt 0)) []
+
+-- Exercise both sensitive ref readers in one reachable expression.  Record and
+-- census retain both events; strict stops at the first existing failure.
+bindingSensitiveExpr : CExpr
+bindingSensitiveExpr =
+  CLet False PWild (CVar "missingCurrentBinding" AGlobal) bindingUnsupported
+
+bindingRefCtorArs : List (String, Int)
+bindingRefCtorArs = [("CurrentBindingForceRef", 0)]
+
+bindingRefCtorTypes : List (String, String)
+bindingRefCtorTypes = [("CurrentBindingForceRef", "CurrentBindingForceRef")]
+
+-- The dummy constructor table selects ref-mode without placing a constructor
+-- expression in a row; the row's sensitive reader is therefore the Core gap.
+bindingProgram : List CBind -> CProgram
+bindingProgram groups = CProgram groups bindingRefCtorArs bindingRefCtorTypes []
+
+bindingSensitiveProgram : String -> CProgram
+bindingSensitiveProgram name = bindingProgram
+  [CBind name [CClause [PVar "x" bindingLoc] bindingSensitiveExpr], bindingMain]
+
+bindingNoWriterProgram : CProgram
+bindingNoWriterProgram =
+  bindingProgram [CBind "P" [CClause [] bindingSensitiveExpr], bindingMain]
+
+bindingWriterProgram : CProgram
+bindingWriterProgram = bindingProgram
+  [
+    CBind "U" [CClause [PVar "x" bindingLoc] (CVar "x" (ALocal 0 0))],
+    bindingMain,
+  ]
+
+bindingEventCaptures : String -> CProgram -> <IO> Unit
+bindingEventCaptures name program =
+  let (recordWat, recordEvents) = emitProgramRecord bindingInput program
+  let censusEvents = emitProgramGaps bindingInput program
+  let _ = printCapture (name ++ "_RECORD_WAT") recordWat
+  let _ = printEvents (name ++ "_RECORD_EVENTS") recordEvents
+  printEvents (name ++ "_CENSUS_EVENTS") censusEvents
+
+captureCurrentBinding : String -> <IO> Unit
+captureCurrentBinding "control" =
+  let decls = desugar (parse bindingControlSource)
+  printCapture
+    "CBIND_CONTROL_WAT"
+    (emitProgram (typedInput [] [] decls) (typedProgram [] [] decls))
+captureCurrentBinding "top" =
+  let program = bindingSensitiveProgram "P"
+  let _ = bindingEventCaptures "CBIND_TOP" program
+  let _ = putStrLn "CBIND_TOP_STRICT"
+  putStr (emitProgram bindingInput program)
+captureCurrentBinding "lifted" =
+  -- emitLetGroupRef calls emitLgLifted before it emits this group's use-site
+  -- body, so the sensitive local member is reached while currentBinding is lg:P.
+  let program = bindingProgram [
+    CBind "outer" [CClause [PVar "x" bindingLoc]
+      (CLetGroup [CBind "P" [CClause [PVar "y" bindingLoc] bindingSensitiveExpr]]
+        (CApp (CVar "P" (ALocal 0 0)) (CLit (LInt 0))))],
+    bindingMain,
+  ]
+  let _ = bindingEventCaptures "CBIND_LIFT" program
+  let _ = putStrLn "CBIND_LIFT_STRICT"
+  putStr (emitProgram bindingInput program)
+captureCurrentBinding "no-writer" =
+  let writerWat = emitProgram bindingInput bindingWriterProgram
+  let _ = printCapture "CBIND_NOWRITER_SETUP_WAT" writerWat
+  let _ = putStrLn "CBIND_NOWRITER_SETUP_OK"
+  let _ = bindingEventCaptures "CBIND_NOWRITER" bindingNoWriterProgram
+  let _ = putStrLn "CBIND_NOWRITER_STRICT"
+  putStr (emitProgram bindingInput bindingNoWriterProgram)
+captureCurrentBinding "post-lift" =
+  -- The local member L emits successfully before the enclosing body reaches the
+  -- unsupported argument; the final strict call observes whichever binding the
+  -- existing backend leaves current, without choosing a verdict here.
+  let program = bindingProgram [
+    CBind "P" [CClause [PVar "x" bindingLoc]
+      (CLetGroup [CBind "L" [CClause [PVar "y" bindingLoc] (CVar "y" (ALocal 0 0))]]
+        (CApp (CVar "L" (ALocal 0 0)) bindingSensitiveExpr))],
+    bindingMain,
+  ]
+  let _ = bindingEventCaptures "CBIND_POSTLIFT" program
+  let _ = putStrLn "CBIND_POSTLIFT_STRICT"
+  putStr (emitProgram bindingInput program)
+captureCurrentBinding "malformed" =
+  -- A literal parameter selects clause-dispatch/ref mode structurally; this is
+  -- intentionally a route boundary, not scalar patName coverage.
+  let program = bindingProgram [
+    CBind "Malformed" [CClause [PLit (LInt 0)] (CLit (LInt 1))],
+    bindingMain,
+  ]
+  let _ = putStrLn "CBIND_MALFORMED_REF_ROUTE"
+  printCapture "CBIND_MALFORMED_WAT" (emitProgram bindingInput program)
+captureCurrentBinding _ =
+  putStrLn
+    "usage: --capture-current-binding <control|top|lifted|no-writer|post-lift|malformed>"
+
+bindingControlSource : String
+bindingControlSource = "data ControlRef = ControlRef Int\n\ncontrol value = match value\n  ControlRef n => n\n\nmain = control (ControlRef 0)\n"
 
 printCapture : String -> String -> <IO> Unit
 printCapture name text =

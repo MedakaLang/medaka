@@ -1,6 +1,6 @@
 # Emitter Architecture - the derived current map
 
-**Status:** CURRENT - source-derived LLVM/WasmGC emitter map through X-W.H2b.4.
+**Status:** CURRENT - source-derived LLVM/WasmGC emitter map through X-W.H2b.5.
 This is a description of the current
 implementation, not the target design. The target is
 [`EMITTER-TARGET-ARCHITECTURE.md`](EMITTER-TARGET-ARCHITECTURE.md), and the
@@ -148,11 +148,13 @@ ambient cells into that same context; the ordered name list was duplicate
 authority and was removed. `emitProgram`, `emitProgramRecord`, and
 `emitProgramGaps` each mint the context, `Prog` routes default membership/writes,
 and `emitRefProgram` drains its definitions in the existing reverse/flatten
-order. `wasm_emit_typed_main --reemit-default-state` and
-`test/wasm/diff_wasm_typed.sh` cover strict P → record U → census U → strict P.
-Thirty-nine ambient cells remain; H2b and #1407 remain open. The next H2b.5
-census question is which remaining Ref family has a complete per-emission
-ownership boundary without changing its physical order.
+order. X-W.H2b.5 moves current diagnostic-binding attribution into `WasmEmit`:
+fresh calls start at `?`; top-level `P`, nested `lg:P`, and the existing post-lift
+`lg:L` dynamic extent remain explicit. `wasm_emit_typed_main` and
+`test/wasm/diff_wasm_typed.sh` grade strict, record, census, and no-writer
+isolation, and derive the remaining ambient signature/definition set. H2b and
+#1407 remain open; the output, lifting, feature, numeric-scope, TRMC, and dispatch
+families remain future X-W.H2 work.
 
 ### 3.3 Per-program derived indexes
 
