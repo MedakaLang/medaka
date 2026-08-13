@@ -365,8 +365,18 @@ the site: `typecheck.mdk:22205-22211` — *"REJECT, DO NOT ROUTE … move only t
 So P0-A's proposed `iff` (*"can land alone iff both legs compute min⊑ over populations that
 agree"*) is **derivably false** — P0-B gives three grounds. And the failure direction is not merely
 a fault: it is a **severity increase**. The define side gains dict params that **no call site
-fills** — `ast.mdk:706-712`'s S-1 under-application. A run whose purpose is draining S0s would
-have introduced one.
+fills** — the **S-1 under-application** shape: *"`check` green, `run` type-confused, `build` prints
+a raw PAP pointer."* A run whose purpose is draining S0s would have introduced one.
+
+⚠️ **CORRECTED 2026-08-13 (P0-Q probe 5, verified by me at `compiler/frontend/ast.mdk:700-715`).**
+This entry originally cited `ast.mdk:706-712` as the authority, inheriting the citation from
+`P0-B-routes.md`. **That passage is scoped to `RLocal`, not `RDict`** — it documents the dict list a
+*shadowing standalone* carries under SHADOW clause S9. The **failure class it describes is exactly
+right** and is quoted above verbatim, but it is not a general authority for dict-arity skew on the
+route path. **The under-application argument stands on its own mechanics; the citation was
+over-scoped.** Recorded rather than silently edited, because I repeated it twice — this is the
+*"a precise citation is not a verified one"* failure occurring inside the ledger whose whole
+purpose is to prevent it.
 
 ### The ruling: **do NOT collapse Phase 2 and Phase 3 — re-cut the AXIS.**
 
@@ -782,8 +792,14 @@ second time ⇒ **double-expanded super slots ⇒ changed dict arity.**
 it mutates the table refs *"at ONE finalization point … so EVERY reader — define-side `dictArityOf`
 and call-side `recRoutes`/`recRoute`/`inferDictAtFound` — sees identical expanded entries."* Break
 the symmetry and the define side binds a different number of dict params than the call side applies:
-**`ast.mdk:706-712`'s S-1 under-application** — the same failure class RUN-B-009 rejected for
-Phase 2. The two highest-risk items in this sprint are now the same shape.
+the **S-1 under-application** shape (*"`check` green, `run` type-confused, `build` prints a raw PAP
+pointer"*) — the same failure class RUN-B-009 rejected for Phase 2. The two highest-risk items in
+this sprint are now the same shape.
+
+⚠️ **Same citation correction as RUN-B-009:** this entry also originally cited `ast.mdk:706-712`,
+which is scoped to **`RLocal`**. The *shape* is right and is quoted; the citation was over-scoped.
+The argument here does not depend on it at all — it rests on `expandSupersTable`'s own header
+(`:9032-9034`), which I read first-hand.
 
 **Consequences for the brief, and they change the bite:**
 
@@ -877,4 +893,147 @@ cannot fuse the writes), `c` (clean), `d` (declined), `e` (docs).
 
 ---
 
-*(P0-Q's probes are appended below when they land.)*
+## RUN-B-017 — the owed probes, discharged. **One reverses a bite's risk direction.**
+
+Three design agents worked before the binary existed and each owed probes rather than guessing —
+correct behaviour that P0-Q has now settled. Full evidence: `phase0/P0-Q-probes.md`.
+
+### 🚨 Probe 3 — `B-2.1-a` is **LOAD-BEARING**, and the risk runs the **OPPOSITE** way from P0-A's
+
+P0-A's `B-2.1-a` `could move:` predicted that on Flat *"the reader's substrate changes table but not
+content."* **Measured, and that is wrong in the dangerous direction:**
+
+> **#1564 flattened to ONE no-import file `check`s CLEAN and prints `wrap(int)`; the four-module
+> version REJECTS with `T-REQUIRES-UNROUTED`.**
+
+**Flat is already whole-program, and therefore already CORRECT on the very shape this sprint exists
+to fix.** So repointing the evidence reader onto an **empty** Flat `IE` is not a neutral substrate
+swap — it is a **correct → broken regression**, and it lands on the busiest verbs. The Flat path is
+reached by `medaka check <no-import file>`, **`lsp`**, **`repl`**, `doc`, `lint`-policy, `snapshot`,
+single-file diagnostics, **and `llvm_emit_typed_main`/`wasm_emit_typed_main`** (via `elaborateDict`).
+
+**Ruling: `B-2.1-a` is promoted from "enabling plumbing" to a HARD PRECONDITION of Phase 2′.** No
+bite may repoint the evidence reader until Flat has a populated `ImplEnv`. An implementer who takes
+P0-A's `could move:` at face value ships an `lsp`/`repl`/`check` regression that **no deferred golden
+would catch**, because the goldens for those verbs are exactly the ones this run stops running.
+
+⭐ This is the *"ask what the nearest program a fix does NOT cover"* discipline paying out: the
+nearest program was **the single-file case**, and it was already right.
+
+### Probe 2 — P0-A §4.3's hazard **does not exist**; the real one is its mirror image
+
+`univReceiverTag (headTy::_) = headTyconTy headTy` — **the two projections cannot disagree**; one
+calls the other. P0-A's owed derivation was aimed at a non-existent hazard.
+
+**The real asymmetry is membership on EMPTY `tys`:** `keyEntryOf` emits **nothing**, while
+`ieInsertRowAt` **inserts into `ieHeadless`**. That is a **widening** — the *opposite* hazard from
+the false-`T-NO-IMPL` narrowing P0-A warned about. **Re-point the owed derivation accordingly.**
+
+Behavioural sweep covered `Int`, `String`, 2- and 3-tuples, multi-arg `Pair Int Bool`, `List Int`.
+**NOT covered, and stated as such: bare tyvar head, rigid head.** One divergence surfaced —
+**alias-headed impls are accepted at declaration and unreachable from every goal** — but it is
+impl-vs-*goal* and **symmetric across both tables**, so not a B-2.1 delta. Logged for the repair
+round, not filed.
+
+### Probe 1 — the definer-arm widening is **SAFE**. ✅ P0-A's load-bearing unprobeable claim holds.
+
+A discriminating pair on identical modules/interface/method/impl: importer shadow → `IMPL`, definer
+shadow → `STANDALONE`, **with the impl directly imported by the definer's own module** (i.e. the
+maximal universe). Since widening can only flip `implExistsForHead` False→True, **an already-True
+universe still yielding the standalone proves the arm is inert to widening.** Agrees on `run` and
+native `build`. Source corroborates twice: `definerReceiverDispatches:11499` guards on
+`isDefinerShadow` **first**, and `resolveRLocalSite:15014` carries the same short-circuit on the
+**route** side — a site P0-A never cited.
+
+**So `B-2.1-c` does not re-erase a user's function.** That was the one claim capable of making the
+SHADOW re-basing an S0, and it is now positively established rather than assumed.
+
+### 🚨 Probe 1's rider — **P0-A's `B-2.1-c` site list is INCOMPLETE, and the tree will not compile**
+
+Verified by me:
+```
+grep -n 'implExistsForHead' compiler/types/typecheck.mdk   # code lines only
+→ 11216 · 11503 · 14857/14858/14862 (def) · 14891-14895 (go) · 15014
+```
+`:15014` — `(not (isDefinerShadow name) && implExistsForHead keyTable name tag)` — is a **FOURTH
+call site**, and `B-2.1-c` **changes that function's signature**, so omitting it is a **compile
+error**, not a subtle miss. It is also the **route-side** gate, so it must read the **same
+population** as `:11503` or the two legs disagree.
+
+⭐ **Why P0-A missed it, and it is instructive rather than careless:** P0-A enumerated readers of the
+**REF** (`shadowKeyTableRef`) and got exactly the right answer — **three**. `:15014` takes its table
+as the threaded **`keyTable` parameter**, so it is not a ref reader. **But the bite changes the
+FUNCTION's signature, and the function has four callers.** *The set you enumerate must be the set
+your transformation acts on* — ref-readers and function-callers are different sets, and this bite
+spans both. Exactly the *"a table lookup inherits the table's keying"* family of error.
+
+### Probe 4 — the ratchet, derived: **23 rows**, gate PASS, nothing built
+
+`universeKeyBucketsRef` **is** an allowlist row ⇒ **`B-2.1-d` shrinks it to 22.** `shadowKeyTableRef`
+is `PerRun` and moves no ratchet number. **Derive at the bite, do not quote 23 from here.**
+
+⭐ **And it re-verified P0-A's reader sets as still exactly `{11216, 11503, 21715}` and `{20348}`** —
+so **no region has drifted** since Phase 0 opened. That is `B-2.1-d`'s own `nearest miss:` ("a fourth
+reader introduced between Phase 0 and Phase 2 ⇒ STOP") discharged as of now, and it must be re-run
+immediately before that bite.
+
+### Probe 5 — RDict skew: coupling **REAL**; "silent" **understated**, "live" **over-read**
+
+The chain's exhaustion arm is **`unreachable` — LLVM undefined behaviour, not `@mdk_oob`** — i.e.
+**worse** than P0-B stated. But two masking tiers P0-B omits absorb exactly the tag↔key skew:
+`implEntryRouteWords` (#1036 leg 2) already emits an arm per **union** word, and the general-entry
+catch-all covers the headless case `typecheck.mdk:17865`'s own example lives in. **So the coupling is
+real and must be honoured, but it is currently masked** — P0-B's bites `b`/`e` stay coupled, and the
+`could move:` must say *"today masked by two tiers; unmasked the arm is UB."* Source-reading only,
+and labelled as such.
+
+### 🚨 A missing instrument: `diff_flat_vs_onemodule.sh` **does not exist**
+
+`typecheck.mdk:14076` asserts it does. Verified by me — `find . -name 'diff_flat_vs_onemodule*'`
+returns **nothing**. **It is precisely the instrument a `B-2.1-a` implementer would reach for**, and
+given probe 3 that implementer is now working on the sprint's highest-risk precondition with a
+phantom tool cited in the source.
+
+**Invisible to both doc gates by construction:** `make agent-doc-symbols` does not scan `.mdk`, and
+`make docs-links` checks docs, not source comments. **Owner: Phase 2′** — either build the
+Flat-vs-one-module differential (it is the natural grader for `B-2.1-a`) or delete the false claim.
+Do not leave it asserting a tool that is not there.
+
+### Still owed (5 items, in `P0-Q-probes.md`) — carried into Phase 2′/3′, not dropped
+
+Chiefly: **a real observed route-word skew** (needs a two-arm build; not constructible read-only),
+the **tyvar/rigid-head** sweep arm, and whether **empty-`tys` is surface-reachable**. The first is a
+genuine two-worktree cost and belongs in Phase 3′'s plan rather than being discovered by an
+implementer.
+
+---
+
+## RUN-B-018 — ✅ **PHASE 0 GATE: MET.** Phase 1 opens.
+
+The gate (§2) is *"every in-scope unit has a written bite list, or it is deferred out of the
+sprint."* Discharged:
+
+| unit | bites | status |
+|---|---|---|
+| **B-3** (#994; #991 desk-closed) | `a`, `b`, `c`, `e` (`d` **declined**) | ✅ all five **site-verified by me** (RUN-B-014, RUN-B-016) |
+| **Phase 2′** population | `B-2.1-a`…`e` + `ImplBuckets`/`stampKeyTable`/7 stampers + `B-2.4-a`,`b` | ✅ cut; `B-2.1-a` now a hard precondition |
+| **Phase 3′** identity | `B2.2-a`…`f` + `B-2.4-c`,`d`,`e` | ✅ cut |
+| **Phase 4** admissibility | `B-2.3-a`,`b`,`d`,`e` + carrier **ruled** (C-2 ∧ C-1) | ✅ cut; `c` unblocked by the carrier ruling |
+| **Phase 5** engines | `B-2.4-a`…`f` + **`k`**, over **four** arms | ✅ cut |
+
+Also delivered: `SupersPath` **(a)** with its premise verified verbatim · the declaration-index
+defect ruled **(b) fixed-by-deletion** · **#1114 CLOSE** / **#1265 SPLIT** / **#1597 OUT** ·
+C4/I2 answered **before** implementing (⚠️ conjunct-2-only as written, gap named and closable
+in-scope, **NOT `NEEDS-B-1`**) · one pin authored and **proven fail-capable**, two refused with
+written reasons · six contract amendments.
+
+**Cost:** 8 agents, all read-only but one narrow fixture writer. **Zero compiler-source writers, so
+zero contaminated measurements and zero region collisions** — the Stage A failure mode did not
+recur. Every agent that lacked evidence **said so** rather than guessing, and four of them corrected
+either the contract, a peer, or me.
+
+**Phase 1 dispatches now: ONE implementer, on B-3.**
+
+---
+
+*(Phase 1 bite rows land in `DEBT.md`; further rulings continue below.)*
