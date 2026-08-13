@@ -65,6 +65,59 @@ with the guard live and with it dead.
 
 ---
 
+## 🛑 STATUS DOWNGRADED: **NOT SAFE TO MERGE — a CONFIRMED S1 REGRESSION** (F1, 2026-08-13)
+
+**`.claude/sprint-b/repair/F1-verdicts.md`.** The repair round's discriminators were **run**. Two
+regressions **CONFIRMED**, one drain **confirmed genuine**, two **not reproduced**, one **still
+unreached**.
+
+### 🚨 F1-1 — R3's P1: CONFIRMED **S1**, and it is a LOUD→QUIETER severity increase
+
+- **BASE: refused at compile time**, with a precise diagnostic (*"impl in a module you don't import"*).
+- **BRANCH: builds it at exit 0** and hands you a binary that **dies at runtime**
+  (`E-NONEXHAUSTIVE-MATCH`).
+- **R3's positive control converges on the branch while P1 does not** ⇒ root cause **CONFIRMED**, not
+  incidental.
+- 🚨 **C4 IS STILL ORDER-VIOLATED ON THE BRANCH: a 589-line IR diff between two import orders.**
+
+**This is the same shape the sprint already fixed once** (a loud reject becoming exit 0 over a broken
+binary) — recurring at a different site. ⛔ **The branch must not merge in this state**, and the
+earlier *"safe to review"* framing is hereby **downgraded**: safe to *read*, not safe to *ship*.
+
+### 🚨 F1-2 — R6's D1: CONFIRMED **S1** coverage gap, with a wrong answer behind it
+
+`eval` and native print `boxstr` ✓; **`core_ir_eval` prints `boxint` ✗** — **and `boxint` for the
+control too**, i.e. it is doing **arg-tag first-impl-wins**. ⚠️ **The only gate that runs that driver is
+UNTYPED and structurally cannot tell a correct route word from no route word at all.** So this arm has
+been wrong and unwatched.
+
+### F1-3 — R4's D1 arm (b): CONFIRMED **S2**, and it is *correct behaviour*, unrecorded
+
+Base accepts at exit 0; branch rejects `T-AMBIGUOUS-INSTANCE`. **But base's acceptance was itself
+import-order-dependent and the branch is order-invariant**, so the new reject is **right** under
+C3/C4 — it is an **unrecorded acceptance regression**, not wrongness. Record it; do not revert it.
+⚠️ **Arm (c) — the silent S0 — is STILL UNVERIFIED**: a non-closed incomparable goal could not be
+constructed. **Recorded as UNREACHED, not refuted.**
+
+### F1-4 — R4-D2 / R6-F1: **NOT REPRODUCED**
+
+All six arms exit 0 with the correct value, and graded on **mechanism**: base and branch `.ll` are
+**byte-identical**. The grader was shown **fail-capable** (119-line main-vs-control diff).
+⚠️ **This clears the SHAPE, not the CLASS** — the module-arm duplicate-key case could not be built.
+
+### ✅ F1-5 — #1072: the probe DISCRIMINATES; the drain is **CONFIRMED GENUINE**
+
+Base and pre-drain binaries print `general` (**wrong**); the branch prints `DEFAULT`. The flattened
+control prints `DEFAULT` on **all three**, isolating the cross-module axis exactly as R5 demanded.
+**So my earlier probe was sound — fail-capability is now established, and #1072's drain stands.**
+
+### ⚠️ Still owed
+
+**R4's D4 — the base-vs-branch CORPUS differential — has never been run by anyone.** It is the
+instrument the sprint lacks, and `EX-3`'s nearest-miss wrongly named the engines gate in its place.
+
+---
+
 ## 🚨🚨 LEDGER AUDIT (R7) — READ THIS BEFORE TRUSTING ANY CLAIM BELOW
 
 `.claude/sprint-b/repair/R7-ledger-audit.md`. **It audited my prose and found real defects. Corrections
