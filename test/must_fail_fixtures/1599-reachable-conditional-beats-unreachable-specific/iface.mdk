@@ -1,5 +1,0 @@
-public export data T = T
-public export data Box a = Box a
-
-export interface Show2 a where
-  show2 : a -> Int

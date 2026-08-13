@@ -1,7 +1,0 @@
-public export data Wrap a = Wrap a
-
-export interface Tag t where
-  tagOf : t -> String
-
-export impl Tag Int where
-  tagOf _ = "int"

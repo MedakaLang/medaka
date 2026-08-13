@@ -1,4 +1,0 @@
-import iface.{Tag, tagOf, Wrap}
-
-export impl Tag (Wrap a) requires Tag a where
-  tagOf (Wrap x) = "wrap(\{tagOf x})"

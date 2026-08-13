@@ -1,3 +1,0 @@
-import iface.{Tag, tagOf, Wrap}
-
-export nest x = tagOf (Wrap x)
