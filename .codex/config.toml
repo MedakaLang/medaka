@@ -6,7 +6,7 @@ default_subagent_reasoning_effort = "high"
 
 [mcp_servers.medaka]
 command = "./scripts/medaka-mcp-wrapper.sh"
-cwd = ".."
+cwd = "."
 required = true
 startup_timeout_sec = 30
 tool_timeout_sec = 120
@@ -53,40 +53,4 @@ enabled = true
 
 [[skills.config]]
 path = "../.claude/skills/pr-review/SKILL.md"
-enabled = true
-
-[[skills.config]]
-path = "plugins/medaka-workflows/skills/medaka-continuation-receipt/SKILL.md"
-enabled = true
-
-[[skills.config]]
-path = "plugins/medaka-workflows/skills/medaka-emitter-sprint/SKILL.md"
-enabled = true
-
-[[skills.config]]
-path = "plugins/medaka-workflows/skills/medaka-throughput-sprint/SKILL.md"
-enabled = true
-
-[[skills.config]]
-path = "plugins/medaka-workflows/skills/medaka-emitter-state-migration/SKILL.md"
-enabled = true
-
-[[skills.config]]
-path = "plugins/medaka-workflows/skills/medaka-epic-intake/SKILL.md"
-enabled = true
-
-[[skills.config]]
-path = "plugins/medaka-workflows/skills/medaka-friction-report/SKILL.md"
-enabled = true
-
-[[skills.config]]
-path = "plugins/medaka-workflows/skills/medaka-pr-lifecycle/SKILL.md"
-enabled = true
-
-[[skills.config]]
-path = "plugins/medaka-workflows/skills/medaka-structural-migration-tests/SKILL.md"
-enabled = true
-
-[[skills.config]]
-path = "plugins/medaka-workflows/skills/medaka-verification-scope/SKILL.md"
 enabled = true
