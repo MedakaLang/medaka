@@ -1,0 +1,683 @@
+# Stage B / Phase 3′ (`B-2.2`) — DECISIONS
+
+Append-only. The orchestrator is the single writer. Every entry carries its **derivation**, not
+just its conclusion. Contract: `.claude/STAGE-B-PHASE3-SPRINT.md`; inherited protocol:
+`.claude/STAGE-B-SPRINT.md` §3–§7.
+
+**Branch:** `arch/stage-b-phase3-b22`. **BASE pin:** `68f84bf1` (`main`, 2026-08-14).
+
+---
+
+## RUN-P3-001 — sprint opened; branch and pin
+
+- `BASE=68f84bf1458681b2599e73f039a592a32de3183a`, branch `arch/stage-b-phase3-b22` cut from it.
+- Records live here (`.claude/sprint-phase3/`), never in `.claude/sprint-b/` (frozen, cited by the
+  Stage B PR) — audit template delta 5.
+- Trunk worktree: `/root/medaka/.claude/worktrees/expressive-prancing-minsky`. Binary cold-built
+  from `compiler/seed/emitter.ll.gz` (no emitter borrowed — the borrow path re-runs stages A and B
+  anyway and can cost an isolated agent its session). Smoke: `MEDAKA_STRICT=1 ./medaka run` on a
+  `println` probe → `12345`, exit 0.
+
+## RUN-P3-002 — sole-occupancy check (§9 delta), DERIVED
+
+`git worktree list` shows two live sibling sprints. Neither touches this unit's owned set
+(`compiler/types/typecheck.mdk`, `compiler/frontend/ast.mdk`, `compiler/ir/core_ir_lower.mdk`,
+`compiler/eval/eval.mdk`):
+
+- `sprint/1398-h2b6-wtrmc` and `sprint/1398-h2b7-lambda-v2` (opencode emitter sprint #1398):
+  `git diff --stat main...<branch>` → `compiler/backend/wasm_emit.mdk` ·
+  `compiler/entries/wasm_emit_typed_main.mdk` · `test/wasm/diff_wasm_typed.sh` **only**.
+
+⚠️ **Coordination item, not a collision.** `B-2.2-a` changes `RKey`'s field type, and the
+compiler-enumerated error set that follows **reaches `wasm_emit.mdk` and `llvm_emit.mdk` as
+consumers** — files §9 explicitly says this unit does NOT own (they are Phase 5's). The resolution
+is: touch them **only** as far as the type change forces (make the tree compile carrying today's
+word); no word-set or superset-OR work there. A mechanical conflict with #1398's `wasm_emit.mdk`
+diff is possible at merge; it is a rebase cost, not a semantic one.
+
+## RUN-P3-003 — Q2 answered (P0-2, read-only, DERIVED at `68f84bf1`)
+
+**All nine `B-2.2-e` sites survive unchanged in SHAPE**; only line numbers moved (~+400–520 in
+`typecheck.mdk`, less elsewhere). `core_ir_eval.mdk:453-455`'s `VTypedImpl` producer — the arm D1
+flagged as historically omitted (the P0-9 shape) — **is present** and mirrors `eval.mdk`'s
+`implMethodEntry`; it carries `(tag, key)` through `CImplTagged` and **never re-derives the key**.
+
+**The identity-drop mechanism is confirmed, and D1's wording undersells it.** At
+`core_ir_lower.mdk:1301` (`ifaceImplHeadEntries`) and `eval.mdk:305` (`declImplIfaceIdRow`),
+`ifaceIdentity o ifaceName` **is** computed — and *retained one tuple slot over*, for a documented
+sibling purpose (#1047 default-body qualification / `ifaceIdsAtTag`). It is the **key mint** that
+never sees it: `implKeyOf`/`implKeyTc` take a bare `String` iface and the word begins with the bare
+name by construction. So identity is not "lost" — it is **present and unthreaded**, which is
+#1182's mechanism and makes `e`'s substitution local rather than a plumbing job.
+
+### 🚨 FINDING — D1's nine-site list is INCOMPLETE, and the two extra sites are in files §9 says we do NOT own
+
+1. **`compiler/backend/llvm_emit.mdk:1486-1492` — `implEntryRouteKey`**: a **second, module-scoped**
+   route-key decision, deliberately not the same population as `declRouteKey`. Its own comment
+   (`:1480-1485`) says the emitter *cannot* recompute typecheck's global verdict because that
+   verdict is a property of **the site's module** — the same impl may legitimately be stamped `"Box"`
+   by one module and `"Speak|(Box Int)|"` by another. Its sibling `implEntryRouteWords:1512-1518`
+   **unions** the key with the bare tag `t` so that `RDict` acceptance cannot bet on one word —
+   which is the direct mechanism behind the tree's *"silent on the direct-call path, live on the
+   `RDict` path"* warning. A third local decision follows at `:5225`/`:5239`
+   (`ifaceTags`→`declTagOrKey`).
+2. **`compiler/backend/wasm_emit.mdk:4092-4094`** — a *locally-named* `implKeyOf` (name collision
+   with eval's; a different function) that extracts the already-stamped key, plus an independently
+   written uniqueness family (`headTagUniqueW`, `distinctKeysAtHeadW`, `headTagForKeyW`,
+   `methodImplKey`, `findByTagW`). **`ifaceImplRouteKeys`/`ifaceDeclHeadUnique` have ZERO hits in
+   `wasm_emit.mdk`** — wasm does not consume the shared decl-level table LLVM uses.
+
+**Orchestrator ruling (RULED, not deferred):** `B-2.2-e`'s bite stays scoped to the nine sites, i.e.
+to the **mint**. The two extra sites are **consumers of the minted word, not producers of it**, and
+`implEntryRouteWords`' superset-OR is explicitly **Phase 5's deletion** (D1 §1: those ORs are
+deletable only *after* `B-2.2-a/b/e`). Touching them here would be doing Phase 5 inside Phase 3′.
+**But they are now named**, which changes two things this sprint owns:
+
+- `e`'s `engines:` row must state that LLVM's `implEntryRouteKey`/`implEntryRouteWords` and wasm's
+  independent family are **owed peers**, not silent.
+- The repair round's engine leg must check the mint against **both** consumers, since a word that
+  changes shape can be accepted by the union arm while the direct arm diverges — precisely the
+  channel that hides a skew.
+
+⚠️ Relayed onward as a standing arc risk (not this sprint's to fix): if wasm truly has no consumer
+of the shared table, wasm's method-less-impl default-dispatch coverage rests entirely on a
+separately-maintained parallel family — a lockstep hazard of the `evalModules`/`cevalModules` kind.
+
+## RUN-P3-004 — the refresh: **GO on shape** (P0-1, DERIVED at `68f84bf1`)
+
+**The RKey site set is 6 construct + 2 destructure, at byte-identical line numbers to the relay**
+(`15726 · 19720 · 19748 · 19773 · 19900 · 20161` construct; `20287 · 20454` destructure). Zero
+drift. **No stop-the-sprint condition.** Also confirmed first-hand, not relayed:
+
+- **Categories unchanged:** 4 selecting arms (D3/D4/D5/D6, each with `keyForSite*` in the path) and
+  2 selector-free (D8 `implHeadTagsForIface … prog`, D9 `headTyconNameMono`). **AD-1's premise
+  stands unfalsified.**
+- **`data Route` unchanged** — 6 constructors, `RKey`'s first field still `String`
+  (`ast.mdk:722-728`).
+- **`ieSelectRowByIface` / `ieSelectRowByMethod` both `ImplEnv -> String -> List Mono -> Option
+  ImplRow`** (`:19041`, `:19049`). D1 §5's precondition — the one it said 3′ *stops* without — **is
+  met.** Identity is reachable with no new plumbing: `ImplRow`'s 2nd field is `InstRef`, accessor
+  `ieRowInst:4073`. `keyForSite` currently destructures it and throws it away.
+- **`data CSlot` is single-line** (`:5843`), so `B-2.2-f`'s commented field is in #829's
+  measured-safe class. Sprint §3 item 5's *"re-check on the day"* is discharged.
+- ⚠️ `:20287` **destructures and re-constructs on one line** — one line, two edits for `a`.
+
+## RUN-P3-005 — 🚨 RULING: `B-2.2-a`'s blast radius vs §9's ownership list
+
+**The finding (DERIVED).** `Route` is consumed **positionally, tree-wide**. Word-bounded
+`grep -rn '\bRKey\b' compiler/ --include=*.mdk` (comments dropped) — an unbounded pattern also
+matches `CRKey` and inflates every number below:
+
+```
+8 typecheck.mdk (owned) · 7 wasm_emit.mdk · 4 llvm_emit.mdk · 3 core_ir_sexp.mdk
+3 core_ir_lower.mdk · 3 eval.mdk · 2 entries/wasm_emit_typed_main.mdk
+1 core_ir_sexp_parse.mdk · 1 ast.mdk · 1 trmc_analysis.mdk
+```
+
+**25 non-typecheck sites in 9 files.** §9 gives this unit four files and says the two emitters are
+Phase 5's. **As written, §9 is not satisfiable by bite `a`.** This is an architecture divergence, so
+it is ruled here rather than worked around silently.
+
+**RULED — three parts:**
+
+1. **§9 lends bite `a` the six non-owned files for MECHANICALLY-FORCED edits only**: make the tree
+   compile carrying **today's word**. No word-set change, no superset-OR touch, no re-keying. §9's
+   purpose — keep Phase 5's *semantic* engine work out of Phase 3′ — survives intact; only its
+   letter is amended, and the amendment is recorded so a later reader does not mistake the edits for
+   Phase 5 work started early.
+2. **The payload is a CARRIER TYPE on field 1, not a third positional field.** This is D1 §5's own
+   wording (*"change `RKey`'s first field type … to a two-component carrier"*) and it is materially
+   cheaper: a third positional field breaks **every destructure** (`RKey tag reqs` → arity 3),
+   whereas a carrier leaves destructure arity alone and breaks only where the bound word is *used*
+   as a `String` — a one-accessor mechanical fix per site. AD-1's constraint is satisfied either
+   way (a field becoming optional, **not** a new `Route` constructor), so `SupersPath`/presumption
+   (a) stays undisturbed.
+3. **The S-expr channel is `a`'s owned decision, and the default is RENDER.** `core_ir_sexp.mdk:57`
+   renders `RKey` (`node "RKey" [escStr k, slist …]`) and `core_ir_sexp_parse.mdk:239` parses back
+   **only the no-reqs form** — so the round-trip is already incomplete and will be more so at the
+   new payload. Rendering identity moves the `core_ir` S-expr goldens (fine — goldens are re-cut
+   once at the close-out anyway); **NOT rendering it blinds `core_ir_typed_modules_dump_main`, the
+   probe `AGENTS.md` calls the highest-value instrument for any dispatch/dict-routing question — and
+   that probe is the repair round's primary instrument for this very change.** A change whose only
+   observation channel cannot see it is the shape this arc keeps paying for. `a` renders identity,
+   and states in `unchecked:` what the round-trip parser does or does not accept.
+
+## RUN-P3-006 — CORRECTION to sprint §3 item 2: `keyForSite` is not a pure projection
+
+Sprint §3 (*"already settled — do NOT re-derive"*) calls `keyForSite` a **6-line pure projection**.
+DERIVED at the pin, it is **10 non-comment lines and runs a SECOND `IE` query**: after selecting the
+row it calls `ieHeadCollidesByMethod env name (univReceiverTag tys)` (`:18435`) and stamps
+`implKeyTc ir.irName tys` on collision (`:18440`) versus `headKeyNameOr noneHeadTag …` otherwise
+(`:18449`). `keyForSiteByIface` is the same shape via `ieHeadCollidesByIface` (`:19115`).
+
+**Consequence for `b1`, which must go in its `transform:` row:** the cheap shape is *select once,
+project `ieRowInst` for identity **and carry the collision gate on that row***. If `b1` calls
+`ieSelectRowByMethod` for identity while leaving the `keyForSite` call in place, that is **three**
+`IE` traversals per arm (select-for-word · collision-count · select-for-identity) — re-buying
+RUN-B-023's +17% `check-self` cost that §3 item 2 was written to retire. **`b1` carries the
+collision gate; it is not a projection.** The conclusion of §3 item 2 (3′ does not stop) is
+unaffected; its *shape* is corrected.
+
+## RUN-P3-007 — Q1 answered: the residue is INERT, and `B-2.2` does NOT retire it
+
+**Census, DERIVED (the doc's `86`/`91` are RELAYED and both are miscut):** `KeyBuckets` = 86 *lines
+including comments*; the **code** count is 34. `keyTable` = 91 — but that is a `\bkeyTable\b` count
+and **MISSES the second binder**: the multi-module path (`elabModuleStamp:29508-29517`) names its
+table **`stampKeyTable`**, 8 more code lines. **True residue = 99 lines across 2 binders.** Anyone
+sizing this deletion off "91" misses the multi-module half — the half that matters. (Third instance
+this arc of a relayed count whose *derivation scope* was itself an unstated encoded fact.)
+`shadowKeyTableRef`/`universeKeyBucketsRef` have **zero non-comment occurrences** — `EX-1`'s
+deletions are real.
+
+**Do any of them DECIDE? NONE.** Derived by inverting the search — grep the **reader primitive**,
+not the table. The only `OrdMap` read is `bucketOf` (`:18066`), with exactly three call sites
+(`:18083`, `:18242`, `:19583`), and **not one is applied to a threaded `keyTable`**. Every one of
+the 99 lines is a binder or an argument position; the four `EntailKind` constructors carry the field
+purely to ferry it into `entailInst`, which rebinds and passes it on.
+
+⚠️ **The in-tree comment at `implDictRoutesForFull:19397` — which sprint §4 Q1 cites as the
+residue's justification — is STALE.** It claims the threading is live for the nested-`requires`
+re-bucketing; following that recursion (`argImplReqRoutes` → `argReqRoute` → `routeOfD` → `entail
+EKNestedTop` → `entailInst` → `argImplRequiresRoutes` → `selectReqImpl`) ends at a function that
+**does not take `keyTable` at all** (`:20031`). Its own sibling at `:20025-20027` already records the
+truth (*"the `KeyBuckets` parameter is REMOVED rather than ignored — it had exactly one reader, this
+arm"*). That was the last reader. **`routeUndeterminedTop`'s `KeyBuckets` parameter is likewise
+DEAD** — AD-1's *"never stamps"* and *"never decides"* are two independent facts and both hold.
+
+**RULED — the deletion is OUT of Phase 3′, and this is not the default answer, it is a derived one.**
+It is behaviour-free, confined to `typecheck.mdk`, and would even remove two `O(decls)` table builds
+per elaborate. It is nonetheless **out**, because its 99 positions run straight through the `entail`
+ladder, the four `EntailKind` constructors and `entailInst`'s arms — **the exact region four of six
+bites edit.** A 99-position sweep interleaved with `b1`/`b2`/`c` is a region-collision generator, and
+region collisions are what the serialize-writers rule exists to prevent. Filed as a named follow-up
+carrying P0-1's derivation **and the `stampKeyTable` correction**, so Phase 5 does not size it off
+the wrong count.
+
+**Correction to `B-2.2-c`'s scope (cheap, and it is the right owner):** `c` is the comment-only
+bite. It now also **corrects `:19397`'s stale comment**, since `c`'s whole job is leaving behind
+sentences the next refactor cannot silently violate — and this one currently misleads in the
+opposite direction.
+
+## RUN-P3-008 — 🚨 FINDING: there IS a second surviving deciding population — `ImplBuckets`, not `KeyBuckets`
+
+Both halves of Q1's dichotomy are true of *different things*. `KeyBuckets`/`keyTable` is 100% inert;
+**`ImplBuckets`/`implTable` rides the same parameter positions and DOES decide**:
+
+```
+selectReqImpl implTable iface tag m goals                                    :20031
+  | iface == "" = map (…) (findImplEntry implTable iface tag m)              :20033  ← decides over ImplBuckets
+  | otherwise   = ieRowHeadTriple (ieSelectRowByIface …bodyImplEnvRef… iface goals)  :20034
+```
+
+`findImplEntry` (`:19582`) is a **first-match, head-tag-bucketed linear scan** — declaration order,
+not `min⊑`/`pickMostSpecificEntry`. It is a **different population** (`buildImplTable:18071` omits
+no-requires impls per the tree's own comment at `:20015`) selected by a **different rule**. And it is
+**reachable**: `routesOfMonosTop*`/`routesOfMonos` call `routeOf implTable keyTable "" "" …` with
+`iface = ""` (`:19848`, `:19882`, `:19934`), which threads that `""` down to this arm. `findImplEntry`
+is also the sole surviving `bucketOf` reader outside the two builders.
+
+**Not filed as a bug** — P0-1 built no discriminating program, the `iface == ""` arm is documented as
+deliberate at `:20017`, and this repo does not file unreproduced claims. **Assigned to the repair
+round** (Phase 3): build the discriminating program — swap two impl blocks with no other change and
+see whether the answer moves (the #1154 shape) — and file only if it reproduces.
+
+**Binding on this sprint's prose, effective now:** any sentence of the form *"the route selectors now
+all read one graph-global population"* is **FALSE at `68f84bf1`**. It may not appear in a `DEBT.md`
+row, a commit message, the PR body, or the #1113 close-out. This is exactly the claim-reaching-past-
+its-evidence shape the audit flagged, caught before it was written rather than after.
+
+## RUN-P3-009 — the `D2 §3` carrier escalation is RULED. Full text: `AD2-carrier-ruling.md`
+
+**Ruling in one line:** RUN-B-013's C-2 (a **5th positional `CProgram` field**) **stands** — the
+escalation and the ruling were about orthogonal axes, and the brief's "positional vs two-valued"
+framing was a **false dilemma** the companion refused. What is ruled is the field's **type**: it is
+**two-valued**, spelled **`CAdmis = CAdmisAbsent | CAdmisTable <rows>`**, **not** `Option`.
+
+Why `Option` loses, and it is the only asymmetry between the spellings (both cost the same 24
+sites, both make `absent ≡ []` a type error, neither trips the wildcard trap): RUN-B-013's
+condition 1 forbids *"a single `Option`-with-default"* **by name**, and `fromOption` is
+auto-prelude with **99 uses in `compiler/`** — so the forbidden collapse is `fromOption [] admis`,
+one idiomatic token, invisible in review. `CAdmisAbsent` has **no prelude eliminator** and is a
+**token that exists nowhere else in the tree**, so the anti-collapse tripwire is one grep.
+
+**The escalation's premise was corrected, not just confirmed** (this matters, because Phase 4 will
+inherit the argument): `lowerProgram` is the **shared** path, not the *untyped* one — **2 of its 7
+probe-driver callers are typed**, and a **user-facing verb (`medaka snapshot`) reaches it**. So D2's
+argument (*"the untyped drivers have no table"*) invites the rebuttal *"thread the table on them
+too"*. The load-bearing reason is different and durable: **the `lowerProgram`/`lowerProgramEmit`
+split does not partition callers by whether a table exists**, so no call site can be inferred to
+mean "absent" and absence must live in the value.
+
+**Three counts in `D2-phase5-engines.md` §3 are refuted** (fourth, fifth and sixth mis-stated counts
+recorded in this arc): "nine probe drivers" → **7 drivers**; "`CProgram` is constructed at exactly
+ONE site" → **13**; and RUN-B-013's *"no user-facing verb reaches the untyped path"* is true of
+`cevalModules`/`cevalProgram` but **false of `lowerProgram`**, so it does not transfer to the
+carrier and Phase 4's `DEBT.md` row may not repeat it.
+
+### ⚠️ Cross-link that binds THIS sprint, not Phase 4
+
+AD-2 §5.2 derives, for the carrier, the same serialization dilemma RUN-P3-005 part 3 ruled for
+`RKey` — and it adds the fact that makes the ruling sharper:
+**`core_ir_roundtrip_main.mdk:28-30` lowers → serializes → RE-PARSES → evaluates.** So a field that
+is *rendered but not round-tripped* **silently becomes ABSENT after a round trip**. Applied to bite
+`a`: rendering identity into the S-expr is not sufficient — **`core_ir_sexp_parse.mdk` must
+round-trip it, or the roundtrip probe silently observes an identity-free program and reports
+success.** That is a returns-nothing→returns-something hazard inside the very channel the repair
+round uses to observe this change. **Added to `a`'s packet as a required, not optional, sub-item.**
+
+## RUN-P3-010 — Q4 answered, and it RE-OPENS `B-2.2-f`'s sizing on a NEW axis
+
+Sites re-derived (⚠️ the packet's `25049`/`26089` are **stale**; grep by symbol):
+`data CSlot:5843` (**single-line — safe for a commented field**, #829 does not trigger) ·
+`pairSlots:5860` · `superSlotOf:9463` · `registerMemberSlots:25102` · `registerInferredFor:26142`.
+Four mints, one file (`grep -rln CSlot --include=*.mdk` → `typecheck.mdk` only).
+
+| mint | verdict |
+|---|---|
+| `superSlotOf:9463` | `False` — the sprint's premise holds |
+| `registerInferredFor:26142` | **`True`**, DERIVED — the fn's own inferred `=>` context (`inferredConstraintIds` keeps only ids in `schemeIds sch`), minted during generalization, i.e. **strictly upstream of `expandSupersTable`**, whose only two live call sites are `:14487` and `:21363` |
+| `registerMemberSlots:25102` | **`True`** — declared signature context, upstream of expansion |
+| `pairSlots:5860` | 🚨 **NOT `True` as ruled** |
+
+**The `pairSlots` defect.** `csDeclared` is in **neither table payload**
+(`setFunConstraintEntry:25043-25046` writes ids and ifaces only), and the sole rebuild path is
+`expandSupersEntry:9398` / `expandSupersIfaceEntry:9405`, both `expandSupersPairs allDecls
+(pairSlots ids ifaces)`. On the **Module** path `checkBodyImpl` seeds `perRun` from the cross-module
+refs at `:21105-21106`, expands at `:21363`, and snapshots the **post-expansion** value back at
+`:21364` — so module *N* is seeded from a snapshot taken **after** module *N−1*'s expansion, and
+`:21363` feeds already-appended slots back through `pairSlots`. Today this is **invisible**
+(`expandSupersPairs` dedups by `cslotKey = spelling ++ id`, so re-expansion is content-idempotent
+and dict arity is unchanged). **Under `f` it silently re-marks appended slots `True` — the flag goes
+vacuous exactly where the bug lives.** And id value can never discriminate: `superSlotsOf:9453`
+gives the appended slot the **same integer** as its sub slot.
+
+**This is independent of the D9 dependency** D1 §6.3 made `f`'s ❌ conditional on. AD-1 discharged
+D9; this axis was never considered. **Escalated to a dedicated architecture agent (P0-6) before any
+ruling**, because the obvious remedy — have `pairSlots`' callers pass `False` — is *not* the
+conservative choice it appears to be: if a rebuilt entry's **declared prefix** also loses its `True`,
+then on the Module path (where every cross-module entry is rebuilt) identity is withheld
+**everywhere**, and `B-2.2` delivers nothing cross-module — which is precisely where C4/I2, the
+arc's headline claim, lives. A "safe under-stamp" that is vacuous there is not safe, it is empty.
+**Answering that by reasoning is the exact move that became an S0 twice in Stage B; it gets a build.**
+
+## RUN-P3-011 — Q5: the P4 tripwire is `b1`'s, and R3's P4 program was NOT VALID
+
+**Owner ruled: `B-2.2-b1` owns the P4 tripwire.** The falsifying event is a **stamp**, not a mark —
+with `f` landed and `b1` not, every route word is still a bare tag and P4 stays green for the reason
+it is green today. `f` owns the **availability of the discriminator** (including RUN-P3-010's
+defect): if `f` ships with `pairSlots` minting `True`, `b1`'s gate reads a flag that is `True` for
+appended slots on the Module path and the gate is **vacuous exactly where the bug lives**.
+
+**The tripwire, in one testable sentence:** for a call to a `Deriv a =>`-constrained function at a
+concrete receiver, the dict word applied at the **appended `Base` super slot** is byte-identical to
+the word at the **declared `Deriv` slot**, and that is correct *only* because the word is a bare tag
+carrying no interface and no impl-row identity. **MEASURED at IR level, not inferred:**
+`call i64 @mdk_use__both(i64 …@mdk_dc_0…, i64 …@mdk_dc_0…, i64 42949672961)` — the **same**
+`@mdk_dc_0` passed to both dict params, and `@mdk_dc_0 = internal constant [1 x i64] [i64 177657]`,
+one bare word. The tree states the premise itself at `typecheck.mdk:9365-9369`: *"Because the dict
+VALUE is just a type tag (VDict "Widget"), the super slot's route is identical to the sub slot's."*
+That sentence is what Phase 3′ falsifies.
+
+⚠️ **REFINEMENT to R3's F-4, MEASURED: the tripwire has ≥3 copy sites and R3 names the wrong one for
+the common case.** `resolveRecMono:20159` is the **recursive-call** arm; a non-recursive cross-module
+call never reaches it. The common case copies at **`inferDictAtFound:9170-9176`** (appended slot
+shares the sub's `csId`, so `constraintMonosOf` yields the same mono twice and both slots resolve
+against it); `shadowStandaloneDictSlots:12374` is a third instance of the same shape. **A bite scoped
+to `resolveRecMono` alone leaves the common case uncovered.**
+
+### 🚨 R3's P4 program is unrunnable, and once made to parse it tests something else entirely
+
+1. `public export interface` is a **hard parse error** (*"`public` only applies to `data`
+   declarations"*, exit 1) — R3 ran nothing, so this was never going to surface there.
+2. After fixing (1), its method name **`sub` collides with the prelude's `Num.sub`**
+   (`stdlib/core.mdk:699`) and the program exhibits a **native miscompile** instead of testing
+   organ 4: `run` prints `201`, the built binary prints `7001350344291201`, exit 0 both.
+
+**⇒ Any prior "P4 green" reading taken from that program is unsound in both directions.** A valid P4
+was reconstructed (`interface Base` / `interface Deriv a requires Base a`, distinct bodies `1`/`2`,
+`both x = dtag x * 100 + btag x`, split across four modules) and **MEASURED GREEN at this pin**:
+`check`/`run`/`build`/native all `201`, in **both** import orders. Recorded per R3's own instruction
+as *"green because dict words are still bare tags"* — **proven** by the `@mdk_dc_0`-twice IR
+reading — and never as *"organ 4 is fine"*. Controls, all measured: **PC1** delete `impl Base T` →
+exit 1 with the missing-superinterface diagnostic (the obligation is live); **PC2**
+`define i64 @mdk_use__both(i64, i64, i64)` — three params for a one-argument function, so the
+appended slot really is threaded; **PC3** distinct bodies make a copied route *observable* (`202`
+vs `201`), so this is not an absence probe.
+
+### The watching artifact — TWO assertions, because a value golden cannot see this bug
+
+- **(A) value fixture** (`test/dict_fixtures/`, graded by the dict-semantics gate): expected **`201`
+  hand-derived from the semantics**, never captured. ⚠️ `must_fail_fixtures/` is the **wrong home** —
+  that corpus asserts a bug *still reproduces*, and there is no bug here today; a row there would be
+  a false claim that reds as "drained" with nothing having changed.
+- **(B) MECHANISM assertion — the one that actually watches the tripwire.** A value golden is blind
+  to identity *inside* the word: a wrong-identity word that still selects the right row prints `201`
+  anyway. Assert on the IR (`--keep-ir`, redirected — the exit code does not survive a pipe). Today:
+  `@mdk_dc_0` twice. **The moment `b1` lands, the expected IR is itself the deliverable `b1` must
+  move deliberately, and blessing that diff is the review gate.**
+- **(C)** keep PC1 live as a negative: if a `b1` regression makes the super slot *vanish* rather than
+  mis-resolve, (A) and (B) both still pass.
+
+**What a still-green P4 after `b1` would NOT mean** (recorded now, so it cannot be over-read later):
+not that the appended slot carries `Base`'s identity (one impl per interface ⇒ a wrongly-stamped
+identity can still land on the right row via the fallback tier — **only (B) discriminates**); not
+that the other two copy sites are covered; not that transitive chains are covered (P4 is depth 1,
+`expandSupersFix:9433` is a fixpoint and `Top requires Mid requires Base` forges two slots); not that
+`f`'s flag is non-vacuous (RUN-P3-010 — and P4's `both` lives in a module whose entry **is** re-minted,
+so P4 is also the program where that defect first bites); not that #1127 is drained.
+
+## RUN-P3-012 — a live S0 cell found in passing, REPRODUCED first-hand by the orchestrator
+
+Not an agent's claim relayed: independently re-authored and run on the sprint binary, one identifier
+apart, `MEDAKA_STRICT=1`, exit codes from redirects.
+
+```medaka
+interface Zub a where
+  zub : a -> Int          -- and the variant with `zub` renamed to `sub` throughout
+data T = T
+impl Zub T where
+  zub _ = 2
+both : Zub a => a -> Int
+both x = zub x
+main = println (both T)
+```
+
+```
+zub: check=0 run=0 [2] build=0 exec=0 [2]
+sub: check=0 run=0 [2] build=0 exec=0 [69934889740256]
+```
+
+**`run` prints 2; the BUILT BINARY prints a leaked pointer, exit 0, no diagnostic.** `sub` is a
+method of the prelude interface `Num` (`stdlib/core.mdk:699`, arity 2) and the user interface
+declares it at arity 1.
+
+**Routing — an ADDITIONAL CELL on #1450, not a new issue.** #1450 is *"two modules sharing an
+interface METHOD NAME make the emitter define an impl with the OTHER interface's arity — check 0,
+run correct, built binary prints a leaked pointer"*. Same symptom, same mechanism; what is new is
+that **the colliding partner can be the auto-prelude itself**, so the repro needs **one file and no
+imports at all** (#1450's needs three files and an import-order swap), and every user interface
+method named for a `Num`/prelude-interface method — `add`, `sub`, `mul`, `div`, `negate`, `abs`,
+`signum`, `fromInt` — is exposed with no import. Filed to #1450 as a comment at the exit phase.
+**Out of scope for this sprint's implementation** — recorded because a `B-2.2` probe that names a
+method after a prelude method will silently measure this instead of what it meant to.
+
+## RUN-P3-013 — 🚨 Q3 answered, and it AMENDS `B-2.2-b1`'s stated mechanism
+
+This is the question the sprint doc called `b1`'s real risk, and it was right to. **The design's
+premise is false, and the tree's own comment is what misled it.**
+
+### The tree's warning names the WRONG TIER (DERIVED + MEASURED)
+
+`typecheck.mdk:18354-18360` warns that behaviour surviving this IR change is *"EMPIRICAL, not
+structural … it rests on the emitter's general-instance fallback tier: `emitGeneralRKey` →
+`findByTag noneHeadTag`"*. That has now been relayed through two design documents. **Derived on a
+build for the first time: the `None` arm cannot reach `emitGeneralRKey` by construction.** A
+headless general that provides the method is *always* a candidate for `ieSelectRowByMethod`, so
+whenever a general exists `keyForSite` returns `Some`; the `None` arm fires only when there is **no**
+general — exactly the condition under which `emitGeneralRKey` misses. Measured: a headless impl
+emits a **direct** `call @mdk_impl___none___sz`, i.e. the ordinary direct-hit path, because the
+general is itself registered under `__none__`. **The named tier is the tier that used to be needed,
+before F-3b moved the word.**
+
+### What actually catches the `None` arm — and it is keyed on the thing `b1` was going to delete
+
+The live `None`-arm population is **one shape**: a **cross-module method-less impl inheriting an
+interface default**. `ieEntriesForMethod` requires `contains name ms`, and `fillImplDefaults` is
+**same-module only** by its own comment (`desugar.mdk:838-841`) — so a cross-module method-less impl
+carries an empty method list and can never be a candidate. That population is **large**: any user
+impl of a prelude interface is this shape.
+
+Measured discriminator — the one shape where the two arms emit *different symbols*:
+
+```
+e1_same  (same-module)  → call i64 @mdk_impl_Box_sz(i64 %t3)          -- Some "Box"
+e2_cross (cross-module) → call i64 @mdk_default_sz_Box(i64 %arg0)     -- None
+```
+
+`@mdk_default_sz_Box` is reachable only via `implFor` miss → `emitGeneralRKey` **miss** →
+`emitDefaultRKey`, whose symbol is `mdk_default_<method>_<TAG>`. **That `<TAG>` is supplied by
+`fromOption tag`.** Controls, measured: delete the interface default and the program is rejected
+loudly at exit 1 on all three verbs (so the population really is bounded to the default-inheriting
+shape); distinct method names make the collision case order-invariant (so the flip below is caused
+by the shared name).
+
+### ⇒ THE AMENDMENT, and it is the sprint's most important Phase 0 result
+
+> **`fromOption tag` is not "a head-tag hedge over a selector result". At the sites where it fires
+> it is the ONLY source of the head tag the default-dispatch symbol is keyed on, and the selector
+> was never going to speak there.**
+
+`b1`'s transform as written — *"`fromOption tag` disappears"* — would break **every cross-module
+default-inheritance call site**. `b1` is still statable, but its mechanism is amended to:
+
+- mint identity **from the row** where a row exists (unchanged), **and**
+- on the **no-row** arm, **preserve the concrete head tag as the word** and carry the identity as
+  **absent**. The tag is available at the arm: `entailInst` is reached *only* when
+  `headTyconNameMono m` is `Some tag` (`typecheck.mdk:19663`).
+
+**Convergence worth naming:** the absent-identity state AD-1 required for D8/D9 is the *same* state
+`b1`'s no-row arm needs. Three sites, one mechanism — an independent second route to AD-1's
+`Option`-valued field, and confirmation that `a`'s payload shape is right.
+
+**`b1` also inherits #1182 rather than fixing it.** The row it mints identity from is chosen by
+`ieCandidatesForMethod`, keyed `(method name, head)` with **no interface component**; two interfaces
+sharing a method name give incomparable rows and `pickMostSpecificEntry` returns the head of the
+`mergeByDeclIdx` list. Measured at this pin, in a *sharpened* form: with the call site explicitly
+typed at `Beta`, impl-block order alone flips the answer `11` ↔ `22`, check 0, build 0, and the
+emitted dispatcher **loads the runtime dict tag and never compares it**
+(`%t1 = load i64, ptr %t0` … `call @mdk_impl_Alpha_a__ping`). Today the head-tag hedge sometimes
+masks this; after `b1` the wrong instance's identity is stamped directly — **a quieter→different
+transition on an already-open S0.** `b1`'s `nearest miss:` must say so.
+
+### The fixture `b1` owes — built from the spec, because no existing fixture can fail
+
+Every existing fixture covers the *substituted* case. Three assertions:
+1. the cross-module default-inheritance pair (same-module vs cross-module, same value `42`) **plus
+   an IR assertion** on `@mdk_default_sz_Box` — an exit-code-graded control cannot see this, since
+   the shape exits 0 today and would exit 0 with a wrong symbol too, right up until the link fails;
+2. the no-default negative, which must keep its good diagnostic at exit 1 and must not degrade if
+   `b1` makes the `None` arm loud;
+3. the #1182 permutation pair as a **must-fail** row, so a change from wrong to *differently* wrong
+   is visible — a value-golden gate is structurally blind to that.
+
+**Ordered, not keyed, on all three engines** (`findByTag` first-match over `implsOf` in program
+order; `firstGeneralImplW` a literal first-match; eval's `pickTagFallback` → `oneOrMultiV` which
+**punts to the untyped arg-tag path** on multiple candidates). ⚠️ LLVM takes the first and eval
+punts — **the two engine families resolve a multi-candidate `__none__` bucket by different rules.**
+That is a divergence surface, recorded for the repair round's engine leg.
+
+**Correction owed in the tree:** `typecheck.mdk:18354-18360` must be fixed in place by whichever
+bite lands there, not relayed a third time.
+
+## RUN-P3-014 — 🚨 SECOND live S0/S1 found in passing, REPRODUCED first-hand with my own control
+
+Root cause is one wildcard arm — `headTyconTy`'s `_ => None` (`typecheck.mdk:19310-19314`) — so a
+**function-typed impl head** (`impl Sz (Int -> Int)`) is filed into the *same* `noneHeadTag` bucket
+as a fully-general `impl Sz a`. This is `AGENTS.md`'s new-constructor-swallowed-by-a-wildcard trap
+one substrate over: `noneHeadTag` is documented as *"a type VARIABLE head has no head tycon"*, but
+the arm really means **anything that is not a `TyCon` and not a `TyTuple`**.
+
+Independently re-authored and run on the sprint binary (`ab`/`ba` differ only in impl-block order;
+`ctl` is my own control substituting two `data` types for the two function types):
+
+```
+ab:  check=0 run=0 [(5, 5)] build=1 exec=NOBIN
+ba:  check=0 run=0 [(9, 9)] build=1 exec=NOBIN
+ctl: check=0 run=0 [(5, 9)] build=0 exec=0 [(5, 9)]
+error: emitter failed compiling ab.mdk
+runtime error [E-PANIC]: arg-tag dispatch on impl type that owns no constructors
+                         (primitive receiver carries no cell tag)
+```
+
+Correct answer is `(5, 9)`, derived from the source before running. **`run` is wrong in BOTH
+permutations, exit 0, check clean — S0.** **`build` exits 1 with a compiler E-PANIC rather than a
+diagnostic — S1, plus an eval/native divergence.** The control builds and prints correctly, so the
+trigger is the function-typed head, not two-impls-per-interface.
+
+**Not this sprint's to fix.** Filed at the exit phase after an independent dedup check; recorded
+here because it constrains this sprint's probes — any `B-2.2` fixture using a function-typed impl
+head is measuring this defect, not dispatch identity.
+
+## RUN-P3-015 — `B-2.2-f` RE-SIZED: a declared-prefix COUNT sidecar. Options (1) and (2) both REJECTED
+
+The architecture agent (P0-6) verified RUN-P3-010's chain and ruled. The ruling stands, with **its
+one unmeasured premise now MEASURED by the orchestrator** (RUN-P3-016 below).
+
+**The decisive question was:** at each fill site, is the slot list computed from a *local declared*
+list, or does it arrive *already appended* out of a table? Both non-recursive fill sites
+(`inferDictAtFound:9152`, `shadowStandaloneDictSlots:12362`) take their input from **the same
+accessor**, `declaredConstraintSlots:9111`, which resolves through `qualConstraintFor` or the bare
+`funConstraintsRef` — **every source is a table.** So the answer is purely a question of *when the
+table was last expanded relative to the fill*:
+
+| path | table state at the fill | boundary intact? |
+|---|---|---|
+| **Flat** (`elaborateDict:14487`) | `expandSupersTable` runs *after* `checkProgramSeeded` | **YES** |
+| **Module**, callee in **this** module | registered during this module's inference; `:21363` has not run | **YES** |
+| **Module**, callee in an **EARLIER** module | seeded `:21105-21108` from a `crossRun` snapshot taken *after* module N−1's `:21363` | 🚨 **NO — destroyed** |
+
+⇒ **Option (2) — mint the flag at the fill sites, no table change — is correct on Flat and on
+same-module calls and WRONG on exactly the cross-module case `B-2.2` exists for.** It would mint
+`True` on every appended super slot that crossed a module boundary. **REJECTED.**
+
+⇒ **Option (1) — `pairSlots`' callers pass `False` — REJECTED, and it is worse than "conservative".**
+`expandSupersTable:9382` → `setFunConstraintTables:9345` rewrites `perRun.funConstraintsRef`
+*itself*, and `:21364`/`:21366` immediately snapshot that value into the `crossRun` bare **and qual**
+mirrors. So every entry in the snapshot — **declared prefix included** — would be `False`, and module
+N ≥ 2 is seeded entirely from it: **identity withheld on 100% of cross-module constrained calls.**
+That is "works single-file, vacuous multi-module" — an empty feature wearing a safety label, and
+structurally the same shape as the live S1 one layer up (#1457).
+
+### RULED — option (3), in a form materially cheaper than D1 priced it
+
+**A per-entry scalar: the DECLARED PREFIX LENGTH `k`, carried alongside the IDS table**, mirrored
+into `crossRun` bare + qual. **Not** a payload widening of `funConstraintsRef`; **not** a per-slot
+parallel list. `csDeclared` is then minted at the fill sites as `index < k`.
+
+**Why a count is sound here** (and D1 §6.1 item 2's objection does not apply): `expandSupersPairs =
+expandSupersFix allDecls declared declared` starts `acc = declared` and only ever **appends**, and
+`dedupSlots` keeps the **first** occurrence — its own comment: *"declared slots stay leading"*. So
+the declared slots occupy `[0,k)` **permanently**, across arbitrarily many re-expansions. D1's
+objection was that `k` is unrecoverable *by recomputation*; it is being **recorded**, which is
+exactly what D1 §6.1 item 2 says the correct move is.
+
+**Cost RE-DERIVED, not relayed** (D1's "~20 sites / two allowlist rows" priced the payload-widening
+variant and is wrong for this shape in both directions):
+`grep -c 'perRun.value.funConstraintsRef.value'` → **13 reads, of which a sidecar changes ZERO.**
+Writes owed: the whole-table replacements only — `21105/21107` (seed), `21364/21366` (snapshot),
+`25045` (entry append); `29056/29088` is a **count-only reader** and can be omitted.
+**`test/registry_keying_ratchet.sh` owes FOUR rows, not two** — 2 CrossRun fields in check 1 **plus**
+2 `setRef crossRun.value.*` writer rows in check 2 (`:187-190` shows the existing four tables).
+
+**Pre-empting the obvious review objection:** a sidecar looks like the "two parallel lists" shape
+`CSlot`'s own header was written to abolish. It is not — `k` is a **per-entry scalar**, not a
+per-slot list, so there is no zip and no truncation policy; a mismatch degrades to an out-of-range
+count, which clamps loudly rather than silently dropping a tail.
+
+**`b1` remains statable unchanged.** Its gate reads `csDeclared`, now correct on Flat, same-module
+and cross-module alike. **The sprint proceeds as cut, with `f` re-sized.**
+
+### ⚠️ Correction B — `expandSupersIfaceEntry` is NOT idempotent, and it constrains the design
+
+RUN-P3-010's *"content-idempotent"* premise is **half false**. The ids entry (`expandSupersEntry`)
+*is* idempotent — it pairs against real ids. `expandSupersIfaceEntry` is **not**: it fabricates
+synthetic ids (`idsForIfaceSlots:9412-9422`, `0,1,2,…`), so re-expanding `[Subq, Sup]` yields a
+frontier `Subq@0 → Sup@0` that `cslotKey` treats as distinct from the existing `Sup@1` — **the
+ifaces entry grows by one per subsequent module.** `pairSlots`' truncate-to-shorter policy
+(`:5857-5858`) masks it, so slots stay correct and it is unobservable in IR.
+
+**Consequence, and it is why the sidecar rides the ids table:** any boundary marker stored on the
+**ifaces** table is unsound by construction. DERIVED, not measured (truncation hides it). **Owed its
+own pin, separately from this bite** — added to the exit-phase filing list.
+
+### One zero-cost variant considered and rejected on principle, not cost
+
+Recovering declaredness at the fill site from the callee's scheme context
+(`importedSchemeOblsRef` / `crossModuleSchemeOblsQualRef`) fails because `typecheck.mdk:12343-12347`
+records that the two stores live in **different id spaces** — *"mapping the latter's ids through the
+former's substitution silently finds nothing."* The only remaining join key is the interface
+**SPELLING**, which is precisely what B-2 exists to stop keying dispatch on, and which is ambiguous
+in exactly the two-same-spelled-interfaces shape. Recorded so nobody re-proposes it as free.
+
+## RUN-P3-016 — 🚨 I MEASURED the one premise the ruling rested on source-reading for
+
+P0-6 stated its limit honestly: the *pre-expansion-at-fill-time* fact is not observable in IR
+(re-expansion of the ids entry is idempotent, so arity and route words are identical either way), it
+rested on reading the `:21105`/`:21363`/`:21364` ordering, and it explicitly said **"don't take my
+source read as a measurement"** and named the one-line instrumented build that would settle it.
+
+**That is the exact situation Stage B's retrospective says became an S0 twice — a prep pass asking a
+question only a build can answer, and an orchestrator answering it by reasoning. So I ran the
+build.** `let _ = if name == "processq" then panic (…listLen slots… listLen (expandSupersPairs …))`
+at `inferDictAtFound:9152`, `make medaka`, both arms, then reverted (⚠️ a first attempt routed the
+value through `pushTypeError` and produced **nothing on either arm** — the diagnostic never
+surfaced. A silent probe proves nothing; `panic` is unfilterable, which is why it was the right
+instrument):
+
+```
+== /var/tmp/p3/p06/two/main.mdk (2 modules)  exit=1
+runtime error [E-PANIC]: PROBE-P3 callee=processq slotsIn=2 expandedOut=2
+== /var/tmp/p3/p06/iso/a.mdk  (single file)  exit=1
+runtime error [E-PANIC]: PROBE-P3 callee=processq slotsIn=1 expandedOut=2
+```
+
+**Same function name, same body, single variable = one file vs two modules.** Cross-module, the
+slots arrive at the fill site **already expanded** (`slotsIn=2`: declared `Subq` + appended `Sup`);
+single-file they arrive **declared-only** (`slotsIn=1`) and expansion happens locally.
+
+**The probe was fail-capable and it discriminated** — it returned *different* numbers on the two
+arms, which is the whole point; a probe that printed `2` on both would have proven nothing.
+
+⇒ **RUN-P3-015's rejection of option (2) is now MEASURED, not derived**, and the sidecar is ruled on
+evidence. `typecheck.mdk` was restored to pristine (`git diff` clean) and the binary rebuilt from
+unmodified source before any implementation work.
+
+## RUN-P3-017 — sequencing: #1457 bounds `f`'s population TODAY and will widen it
+
+Re-derived first-hand by P0-6 while building its probe: a module-level fn whose **body** calls a
+**superclass** method is **FALSE-REJECTED on the multi-module path** (*"Could not deduce 'Sup a'
+from the signature of 'processq'"*), while byte-identical code is accepted single-file and by
+`test/build_diff_fixtures/super_method.mdk`. That is **#1457** (OPEN, `verified`, `S1: loud
+breakage`) — not new, not filed again.
+
+**Its bearing on this sprint:** today the population of cross-module appended super slots is
+restricted to callees that declare a super-implied constraint but **never call the super method**
+(P0-6's probe had to be reshaped into exactly that to get past it). **`f` is still required** — the
+slot exists and is passed; measured, `@mdk_b__processq` takes **two** dict params against
+`@mdk_onlysup`'s one, and both arguments are the **byte-identical** `@mdk_dc_0`, so the appended
+slot is indistinguishable from the declared one at the call site by any means other than a boundary
+marker. But **`f`'s blast radius grows the moment #1457 is fixed, and a fixture written before that
+fix will not exercise the shape that matters after it.** Goes in `b1`'s brief verbatim.
+
+---
+
+# RUN-P3-018 — PHASE 0 GATE: **GO.** Bite order holds; two bites are amended and one is re-sized
+
+Phase 0 ran six read-only agents plus one orchestrator-run instrumented build. **No stop condition
+fired.** The refresh found zero drift in the site set, and D1 §5's precondition — the one it said 3′
+stops without — is met. **Order stands: `a` → `f` → `b1`+`e` → `b2` → `c`.**
+
+| bite | state after Phase 0 | statable? |
+|---|---|---|
+| `a` | **WIDENED.** Carrier type on `RKey`'s field 1 (not a 3rd positional field); §9 lends it 6 non-owned files for mechanically-forced arity/accessor edits; **must render identity into the S-expr AND round-trip it** (`core_ir_roundtrip_main` re-parses, so rendered-but-not-round-tripped silently reads as ABSENT) | ✅ 2 sites + a compiler-enumerated error set + the sexp pair |
+| `f` | 🚨 **RE-SIZED** — a per-entry declared-prefix count `k` sidecar on the ids table, mirrored to `crossRun` bare + qual; `csDeclared` minted at the fill sites as `index < k`. **+4 ratchet allowlist rows.** No longer "~7-9 sites, one file" | ✅ but it is now **the risk bite** |
+| `b1` | **AMENDED twice** — carries the collision gate (not a projection); **preserves the concrete head tag on the no-row arm** (deleting `fromOption tag` outright breaks every cross-module default-inheritance site). Owns the P4 tripwire; inherits #1182 | ✅ 4 arms, one helper |
+| `e` | unchanged, 9 sites, **lands with `b1`**; `engines:` now owes LLVM's `implEntryRouteKey`/`implEntryRouteWords` and wasm's independent family as named peers | ✅ |
+| `b2` | unchanged, 2 named pairs. **First to be dropped if the sprint needs to shed scope** — it is an optimization (the only bite RUN-B-023's +17% argues *for*), not a soundness bite | ✅ |
+| `c` | unchanged **plus two comment corrections it now owns**: `:19397`'s stale nested-`requires` justification (RUN-P3-007) and `:18354-18360`'s wrong-tier warning (RUN-P3-013) | ✅ 5 sites + 2 |
+
+**`a` and `f` are independent of each other** (`f` touches no `Route` payload; `a` stamps nothing);
+both must precede `b1`. The stated order is kept because serializing writers is the rule regardless.
+
+**Deferred out, each with its reason:** the `keyTable`/`KeyBuckets` deletion (RUN-P3-007 — inert, but
+its 99 positions run through the region four bites edit). **Filed at the exit phase:** the
+`expandSupersIfaceEntry` non-idempotence pin (RUN-P3-015 Correction B); the prelude-method-name cell
+on #1450 (RUN-P3-012); the function-typed-impl-head S0/S1 (RUN-P3-014); the `ImplBuckets` second
+deciding population, **only if the repair round reproduces it** (RUN-P3-008).
+
+**Phase 0 cost:** 6 read-only agents, ~48 min wall clock, plus 2 orchestrator builds for the
+instrumented measurement. **It amended two bites, re-sized a third, refuted six counts across three
+design documents, corrected two in-tree comments, and surfaced two live defects.** The design-ahead
+rework rate the audit measured at 75% held: of the six bites, **three were changed by Phase 0** —
+and one of those changes (`b1`'s `fromOption tag`) would otherwise have shipped as a break in every
+cross-module default-inheritance program.
