@@ -97,10 +97,15 @@ scoped impl-self tail-emission context; and X-W.H2b.4 moves synthesized-default 
 and definition blocks from three ambient cells into that context (the ordered-name duplicate
 authority is deleted). X-W.H2b.5 adds current diagnostic-binding attribution: every
 strict/record/census call starts at `?`, while top-level `P`, nested `lg:P`, and the existing
-post-lift `lg:L` extent remain pinned. `emitProgram`/record/census mint the context and `Prog`
-routes these helpers without changing successful WAT order. The residual ambient authority
-set is derived by `diff_wasm_typed.sh`; H2b/#1407 stay open. Its other physical Refs remain X-W.H2 work. Do not add new
-ambient semantic-input or gap-lifecycle siblings.
+post-lift `lg:L` extent remain pinned. X-W.H2b.6 adds per-emission Stage-1 TRMC
+context (`WasmEmit`'s `trmcCtx`). X-W.H2b.7 adds per-emission lambda IDs, ordered lifted
+definitions, named-lift de-duplication, and function-reference list/set state;
+former lifted-name Ref was unread duplicate authority and is retired. X-W.H2b.8 adds the
+coded stderr-trap import event (`WasmEmit`'s `trapImportNeeded`). `emitProgram`/record/census
+mint the context and `Prog` routes these helpers without changing successful WAT order.
+`diff_wasm_typed.sh` re-derives 30 remaining ambient top-level `Ref`s: output, feature,
+numeric, and dispatch. H2b/#1407 stay open. Do not add new ambient semantic-input or
+gap-lifecycle siblings.
 
 ### 8. Probes: `main` must be a zero-arg Unit value, and `do` is monadic
 `main () = …` is a silent no-op; `medaka run` rejects non-Unit value-mains with a diagnostic

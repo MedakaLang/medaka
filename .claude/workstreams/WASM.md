@@ -382,11 +382,14 @@ test, every candidate through native build AND wasm build AND `medaka run`). The
   moves synthesized-default membership and definition blocks from three ambient cells into
   that context and deletes the ordered-name duplicate authority: `Prog` routes the helper
   reads/writes and `emitRefProgram` preserves the reverse/flatten drain order. X-W.H2b.5
-  adds current diagnostic-binding attribution to the same fresh context. The typed entry
-  pins top-level, nested-lift, fresh no-writer, and post-lift attribution across strict,
-  record, and census routes; `diff_wasm_typed.sh` derives the residual ambient set. H2b and
-  #1407 stay open. The output,
-  feature, numeric-scope, TRMC, and dispatch module Refs remain X-W.H2 work.
+  adds current diagnostic-binding attribution to the same fresh context. H2b.6 adds
+  Stage-1 TRMC context (`WasmEmit`'s `trmcCtx`). H2b.7 adds lambda IDs, ordered lifted
+  definitions, named-lift de-duplication, and function-reference list/set state;
+  former lifted-name Ref was unread duplicate authority and is retired. H2b.8 adds coded
+  stderr-trap import state (`WasmEmit`'s `trapImportNeeded`). The typed entry pins top-level,
+  nested-lift, fresh no-writer, post-lift attribution, and trap-import isolation across
+  strict, record, and census routes; `diff_wasm_typed.sh` re-derives 30 remaining ambient
+  top-level `Ref`s: output, feature, numeric, and dispatch. H2b and #1407 stay open.
 - **`$boxint` equality/compare through a poly HOF is by VALUE** (no ref-identity bug).
 - **NaN `compare`/`min`/`max` are engine-UNIFORM today** (all three engines: `Eq`,
   `nan`, `nan`, `1.0`, `1.0`, probe-run) — the N6 interim bar holds there. The HOF-routed
