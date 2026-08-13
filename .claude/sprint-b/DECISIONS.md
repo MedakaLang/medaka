@@ -1036,4 +1036,140 @@ either the contract, a peer, or me.
 
 ---
 
-*(Phase 1 bite rows land in `DEBT.md`; further rulings continue below.)*
+## RUN-B-019 — ✅ **PHASE 1 (B-3) LANDED AND VERIFIED.** Four bites, plus a probe the fixpoint could not give.
+
+### Gates, run by me on a freshly built binary
+
+| gate | result |
+|---|---|
+| `make medaka` | ✅ built (stage A rebuilt the emitter from current source, stage B relinked) |
+| `make check-self` | ✅ `PASS: medaka_cli.mdk closure is type-clean` |
+| **`sh test/selfcompile_fixpoint.sh`** | ✅ **C3a YES · C3b YES** — byte-for-byte, fixpoint holds |
+| `make agent-doc-symbols` | ✅ PASS — 996 live, 0 dead |
+| `make docs-links` | ✅ PASS after a ratchet entry (below) |
+
+### 🚨 The fixpoint does NOT discriminate the B-3-b hazard. I built a probe that does.
+
+The implementer's own *"sharpest residual"* was: *"I could find no fixture that would discriminate a
+1× from a 2× super expansion. If B-3-b is wrong, the fixpoint is the only local signal."*
+
+**On inspection the fixpoint is NOT that signal, and believing it was would have been the error.**
+C3a compares IR1 against a seed-bootstrapped reference **both built from current source**, and C3b
+compares two current-source generations. **A UNIFORM super-slot doubling is self-consistent** — the
+define side binds 2× dict params, every call site applies 2×, the compiler compiles itself, and both
+arms of the comparison carry the doubling equally. **It would pass green.** *(This is the standing
+lesson that a passing probe answering the wrong question is worse than no probe.)*
+
+**So I built the discriminating probe — emitted-IR dict arity, read directly.**
+`medaka build --keep-ir`, counting the dict words on a `requires`-constrained function:
+
+| program | declared + supers | dicts predicted if CORRECT | if DOUBLED | **observed** | value |
+|---|---|---|---|---|---|
+| `Mid a requires Base a`, `useMid : Mid a => …` | Mid + Base | **2** | 3+ | **2** (`%arg0,%arg1` + value) | `3` ✅ |
+| `Top ⇒ Mid ⇒ Base`, `useTop : Top a => …` | Top + Mid + Base | **3** | 5+ | **3** (`%arg0..%arg2` + value) | `7` ✅ |
+
+**Both fail-capable and both discriminating**: the predicted counts differ between the correct and
+doubled hypotheses, so the observation selects between them rather than merely being consistent with
+one. The **second** program is the load-bearing one — it exercises the **transitive** fixpoint
+(`Top` reaches `Base` through `Mid`, the `chain3b` case `expandSupersTable`'s own header names), which
+is precisely where a re-expansion bug would bite and where the one-level case is uninformative. And
+**call-site arity equals definition arity** in both (2=2, 3=3), so the S-1 under-application shape
+this bite risked is positively excluded, not merely un-crashed.
+
+**Ruling: B-3-b is verified by construction AND by observation.** By construction because I read the
+diff — `expandSupersTable` now delegates to `expandSupersCross`, whose two `.value` reads are both
+*arguments*, so the pre-expansion ifaces table is what both projections see, identical to the old
+sequence. The implementer's solution is **stronger than my brief asked for**: I asked for an ordered
+interior, it made the double-expansion **unrepresentable at the site** and collapsed the two forms
+into one expansion implementation, so the required lockstep is now structural.
+
+### Independent corroboration of B-3-a's one soundness claim
+
+`registerInferredFor` now evaluates `ifaceForInferredId` **before** the `funConstraintsRef` write
+(Medaka is strict, so the `map` completes before the op is called). Sound only if that closure reads
+no fn-constraint table. I checked all seven functions the implementer named — `ifaceForInferredId`,
+`ifaceForConstraintId`, `ifaceForConstraintIdGo`, `lookupSchemeIface`, `lookupIfaceById`,
+`ifaceFromDictApps`, `ifaceAtMonoId` — **no `funConstraint*` read in any of them.**
+
+⚠️ **Honest scope of my check:** I verified **the set the implementer named**, which *corroborates*
+its claim. I did **not** independently derive that the callee set is complete, so an eighth callee
+reached indirectly would escape both of us. Stated because "I checked it" and "I checked the set
+someone handed me" are different claims.
+
+### What the implementer got right that I want on the record
+
+- **Reused the existing `CSlot`** (`:5537`, U1b/#1482) rather than inventing a slot type — its own
+  header says it exists *"so that NO consumer … ever holds two parallel lists again"*, and this bite
+  extends that to the **producers**. `registerMemberSlots` now emits `(iface, id)` in **one
+  traversal**, so the second traversal (`keptConstraintIfaces`) is **deleted**. It explicitly did
+  **not** zip two independently-computed lists — which would have preserved the convention *and*
+  added a truncation-on-mismatch dict-arity risk. **That is the difference between the property
+  becoming a type fact and a diff that reads correct and buys nothing** (RUN-B-016).
+- **Found an independent third reason the `Option` is required**, not in my brief:
+  `keptConstraintArgs`' second clause stops when its vector list runs out and its producer
+  `constraintVarArgMonos` (`:24285`) drops constraints absent from the tvs map — so the args payload
+  is legitimately a **PREFIX** of the slots. Folding it into `CSlot` would have had to truncate the
+  id list (**a dict-arity change**) or invent a vector.
+- **B-3-c used entry-ABSENCE rather than `Option`** — strictly safer, since absence cannot be
+  collapsed by a later default, and it verified first-hand that `methodConstraintPositionsRef` has
+  exactly one writer and one reader whose fallback arm absence selects.
+- **The hazard reasoning is now IN THE TREE** — `setFunConstraintTables`' header states that a
+  simultaneous fusion is FORBIDDEN and names the dict-arity mechanism. That is what stops a later
+  agent reintroducing it; a `DEBT.md` row alone would not have.
+
+### `docs-links`: a real red, ours, and correctly resolved by a ratchet entry
+
+`.claude/sprint-b/phase0/P0-Q-probes.md:429` cites `test/diff_flat_vs_onemodule.sh` — the gate
+**that does not exist** and whose absence that report was written to document. **Both the gate and
+the report are correct**; this is the one case `check_doc_links.sh` cannot distinguish, since citing
+a path to say *"this is missing"* is textually a citation.
+
+Added one `REF` line to `test/DOC-LINK-EXCEPTIONS.txt` naming the owner (Phase 2′). **It self-drains
+both ways** by the ledger's own design: building the gate trips **STALE REF**, removing the citation
+trips **ORPHAN REF**. `make docs-links` → **exit 0, 0 dead.** Not silenced — ratcheted.
+
+⚠️ **Process note against myself:** my first read of this gate ran `make … | tail` and printed
+`exit: 0` — **`tail`'s** status, not `make`'s, while the output said `Error 1`. The
+pipe-eats-exit-code trap, committed by me in the same session I warned an agent about it. The `make`
+line in the output was the real signal. **Redirect to a file and read `$?`.**
+
+### The four unclaimed co-write sites: **DEFERRED to Phase 2′**, not dropped
+
+The implementer flagged rather than absorbed (correct) four `funConstraintsRef` co-write sites
+outside its brief: `:20399-20404` (the Module arm restoring both tables from `crossRun`, then
+prepending `aliasConstraintEntries` — **two** pairs), `:20657-20662` (the reverse snapshot into
+`crossRun`), and `:28310`/`:28342` (`scopeArities` reseeds, **ids-only**).
+
+**Ruling, and the two groups get different answers:**
+
+- **`:20399-20404` and `:20657-20662` → owed to PHASE 2′, not to B-3.** They are whole-table
+  co-write pairs and `setFunConstraintTables` is exactly their shape, so they are genuinely inside
+  #994's stated subject ("fuse the slot-parallel lockstep table pairs"). **But Phase 2′ rewrites the
+  POPULATION of these very tables** — `:20399` *is* the Module arm, squarely RUN-B-009's territory —
+  so doing them now would be rework in a region Phase 2′ reopens. Deferred to avoid touching one
+  region twice, which is the collision cost Stage A paid ~4 bites for.
+- **`:28310`/`:28342` → OUT, permanently, and the reason must be stated rather than left implicit.**
+  They write ids and **deliberately leave ifaces alone**, so a *pair* op cannot serve them without
+  inventing data. **Consequence: "every ids entry has a parallel ifaces entry" is STILL FALSE
+  program-wide**, and a reader assuming otherwise is no safer than before this unit. B-3 narrowed
+  the property; it did not establish it.
+
+### Deferred debt from Phase 1, per §5
+
+**Two golden families moved and NEITHER was blessed** (zero goldens for the whole run):
+`test/snapshots/compiler/typecheck.md`, and selfproc LEG A `types.typecheck.golden`.
+⚠️ **The LEG A move is NOT additive-only this time** — `keptConstraintIfaces` is **deleted** and
+`registerMemberSlots` is **re-typed**. So the standing "additive-only" check does not apply; the
+re-cut must show *exactly* that one binding gone and that one signature changed, **and no other
+existing binding re-typed.** Written here because the re-cut happens in a later round by someone
+who did not watch this land.
+
+Also still open from B-3-e's neighbourhood, reported by the implementer and **not swept**:
+`typecheck.mdk:20697` still says *"(projected via `implOblToU`)"* — the same dead-symbol defect
+B-3-e fixed in the spec, but **in source**, and **invisible to both doc gates by construction**
+(`agent-doc-symbols` does not scan `.mdk`). And `.claude/STAGE-B-SPRINT.md:67` — the contract
+itself — still writes `§4.2 D1–D6`, the spelling `DICT-SEMANTICS.md:790` forbids.
+
+---
+
+*(Phase 1 bite rows are in `DEBT.md`. Phase 2′ opens next.)*

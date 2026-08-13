@@ -9016,6 +9016,35 @@ lookupAssocSL2 k ((k2, v)::rest)
   | k == k2 = Some v
   | otherwise = lookupAssocSL2 k rest
 
+-- #994 (B-3-b): THE write op for the per-run fn-constraint table PAIR, and its
+-- cross-module twin below.  `funConstraintsRef` and `funConstraintIfacesRef` are
+-- slot-parallel per entry and index-parallel across entries; every whole-table
+-- replacement of one owes the matching replacement of the other, and until this op
+-- existed that pairing was a convention each site re-established by hand.
+--
+-- 🚨 It takes the two tables as ONE tuple — the shape `expandSupersCross` already
+-- returns — because a "write both members simultaneously" fusion is FORBIDDEN for these
+-- tables.  The id expansion READS the pre-expansion iface table (`expandSupersEntry`
+-- pairs ids with ifaces before closing over supers), so expanding ids against an
+-- ALREADY-expanded iface list appends every super slot a SECOND time and changes dict
+-- ARITY: the define side (`dictArityOf`) would bind more dict params than the call side
+-- (`recRoutes`/`recRoute`/`inferDictAtFound`) applies.  A pure function that consumes
+-- both tables and returns both results makes both reads happen before either write, so
+-- the ordering constraint is discharged by the TYPE rather than by statement order in a
+-- caller that a later edit can reshuffle.
+setFunConstraintTables : (List (String, List Int), List (String, List IfaceRef)) -> Unit
+setFunConstraintTables tables =
+  let _ = setRef perRun.value.funConstraintsRef (fst tables)
+  setRef perRun.value.funConstraintIfacesRef (snd tables)
+
+-- the same op for the CROSS-module snapshot pair (`crossModuleFunConstraintsRef` /
+-- `crossModuleFunConstraintIfacesRef`), so the snapshot `expandSupersCross` produces is
+-- never unbundled into two locals that a later edit could write independently.
+setCrossFunConstraintTables : (List (String, List Int), List (String, List IfaceRef)) -> Unit
+setCrossFunConstraintTables tables =
+  let _ = setRef crossRun.value.crossModuleFunConstraintsRef (fst tables)
+  setRef crossRun.value.crossModuleFunConstraintIfacesRef (snd tables)
+
 -- ── WS-1b: superclass-evidence flatten (port of lib/typecheck.ml expand_supers) ──
 -- A `=>`-constrained fn whose body calls a SUPERCLASS method (e.g. `build : Sub a =>`
 -- calls `mk`, a Sup method, where `Sub a requires Sup a`) needs an honest super-dict
@@ -9034,11 +9063,18 @@ lookupAssocSL2 k ((k2, v)::rest)
 -- recRoutes/recRoute/inferDictAtFound — sees identical expanded entries automatically.
 -- Transitive: a fixpoint over the constraint set (the WS-4a acyclic-supers guard makes
 -- it terminate), so `Top` reaches `Base` through `Mid` (chain3b).
+--
+-- #994 (B-3-b): the expansion itself is `expandSupersCross` — the SAME pure function the
+-- cross-module snapshot uses — so the two forms cannot drift apart (they must stay in
+-- lockstep or a cross-module constrained fn under-fills), and reading both tables as its
+-- arguments is what keeps the old iface table visible to the id expansion.  See
+-- `setFunConstraintTables` for why writing the two members simultaneously is forbidden.
 expandSupersTable : List Decl -> Unit
 expandSupersTable allDecls =
-  let _ = setRef perRun.value.funConstraintsRef (map (expandSupersEntry allDecls perRun.value.funConstraintIfacesRef.value) perRun.value.funConstraintsRef.value)
-  let _ = setRef perRun.value.funConstraintIfacesRef (map (expandSupersIfaceEntry allDecls) perRun.value.funConstraintIfacesRef.value)
-  ()
+  setFunConstraintTables (expandSupersCross
+    allDecls
+    perRun.value.funConstraintsRef.value
+    perRun.value.funConstraintIfacesRef.value)
 
 -- as expandSupersTable but operates on the cross-module snapshot pair (so a
 -- cross-module constrained fn gets the same expansion — else it under-fills).
@@ -14235,15 +14271,15 @@ discoverPromotedModules runtimeDecls coreDecls modules rpNames argNames =
   let snapshotIfaces = promotedConstraintIfaces promoted perRun.value.funConstraintIfacesRef.value
   -- WS-1b: expand the cross-module snapshot's super slots too, so a cross-module
   -- constrained fn reached from another module under-fills exactly like clamp would.
+  -- #994 (B-3-a): kept as ONE tuple from here to the write (`setCrossFunConstraintTables`)
+  -- rather than unbundled into two locals.  ⚠️ The expansion must be computed HERE, before
+  -- `resetState`, and only the WRITE moved past it.
   let expandedPair = expandSupersCross joint snapshot snapshotIfaces
-  let snapshotE = fst expandedPair
-  let snapshotIfacesE = snd expandedPair
   let _ = resetState ()
   let _ = setRef typeErrorsSticky savedSticky
   let _ = wRestore perRun.value.typeErrors savedErrSnap
   let _ = setRef perRun.value.errorsDetected savedDetected
-  let _ = setRef crossRun.value.crossModuleFunConstraintsRef snapshotE
-  let _ = setRef crossRun.value.crossModuleFunConstraintIfacesRef snapshotIfacesE
+  let _ = setCrossFunConstraintTables expandedPair
   promoted
 -- DRIVER-COLLAPSE Phase 2: discovery is a SCRATCH joint typecheck (see below); its
 -- type-error side effects must NOT leak into the STICKY accumulator that gates the
@@ -23697,12 +23733,29 @@ methodSchemesPure scope ((IfaceMethod mname mty _)::rest) =
 registerMethodConstraints : List String -> String -> Ty -> List (String, Mono) -> List Int -> Unit
 registerMethodConstraints typarams mname mty tvs fullIds =
   let ids = methodConstraintSlotIds typarams mty tvs
-  if isEmptyL ids || hasAssocSL2 mname perRun.value.methodConstraintsRef.value then ()
+  if isEmptyL ids || hasAssocSL2 mname perRun.value.methodConstraintsRef.value then
+    ()
   else
-    let _ = setRef perRun.value.methodConstraintsRef ((mname, ids)::perRun.value.methodConstraintsRef.value)
-    setRef
-      perRun.value.methodConstraintPositionsRef
-      ((mname, map (id => indexOfInt id fullIds) ids)::perRun.value.methodConstraintPositionsRef.value)
+    setMethodConstraintEntry mname fullIds ids
+
+-- #994 (B-3-c): THE write op for the method-constraint table pair — the sole site that
+-- writes both.  The positions entry is DERIVED inside the op from the same [ids] list the
+-- op stores, so the two tables cannot be given different lengths or a different slot
+-- order; previously the caller held one list and mapped it into the second table itself,
+-- which is the same convention `funConstraintsRef`/`funConstraintIfacesRef` carried.
+--
+-- ⚠️ Deliberately NOT a single record-valued table.  `methodConstraintsRef` also has
+-- ids-ONLY writers (the cross-module reseeds at `checkModuleFullImpl` / `scopeMethodArities`),
+-- and positions-ABSENCE selects a fallback arm in `alignedMethodConstraintIds` — so a fused
+-- table would need `Option` positions, and a non-optional field would change WHICH ARM RUNS,
+-- not merely invent data.  Keeping the tables separate keeps absence representable by there
+-- being no positions entry at all.
+setMethodConstraintEntry : String -> List Int -> List Int -> Unit
+setMethodConstraintEntry mname fullIds ids =
+  let _ = setRef perRun.value.methodConstraintsRef ((mname, ids)::perRun.value.methodConstraintsRef.value)
+  setRef
+    perRun.value.methodConstraintPositionsRef
+    ((mname, map (id => indexOfInt id fullIds) ids)::perRun.value.methodConstraintPositionsRef.value)
 
 -- index of [x] in [xs] (0-based; -1 if absent — absent shouldn't happen, slot ids
 -- are always quantified ids of the same scheme).
@@ -24248,11 +24301,32 @@ registerConstraintRegs ((m, ifaceMonos, argVecs)::rest) =
   let _ = registerMember m ifaceMonos argVecs
   registerConstraintRegs rest
 
+-- #994 (B-3-a): THE per-entry write op for the fn-constraint tables.  `CSlot` (U1b,
+-- #1482) stopped every CONSUMER of a callee's constraint slots from holding two parallel
+-- lists; this stops the two PRODUCERS — `registerMember` and `registerInferredFor` —
+-- from holding them either.  Both projections come off ONE `CSlot` list, so
+-- `funConstraintsRef`'s ids and `funConstraintIfacesRef`'s ifaces are slot-parallel by
+-- TYPE here, not by a filter each writer re-derives and keeps in step by hand.
+--
+-- ⚠️ [argsOpt] is `None` for a writer that registers no `funConstraintArgsRef` entry at
+-- all (`registerInferredFor`), and that is why the arg vectors CANNOT join `CSlot`:
+-- `keptConstraintArgs` stops when its vector list runs out, so the args payload is
+-- legitimately a PREFIX of the slots, and folding it in per-slot would either truncate
+-- the id list (a dict-ARITY change) or invent a vector.  Entry-ABSENCE is also
+-- meaningful — an ids-only entry is a distinct state from an entry with empty args.
+setFunConstraintEntry : String -> List CSlot -> Option (List (List Mono)) -> Unit
+setFunConstraintEntry m slots argsOpt =
+  let _ = setRef perRun.value.funConstraintsRef ((m, map (s => s.csId) slots)::perRun.value.funConstraintsRef.value)
+  let _ = setRef perRun.value.funConstraintIfacesRef ((m, map (s => s.csIface) slots)::perRun.value.funConstraintIfacesRef.value)
+  match argsOpt
+    Some args => setRef perRun.value.funConstraintArgsRef ((m, args)::perRun.value.funConstraintArgsRef.value)
+    None => ()
+
 -- register a member's constraints: ids into funConstraintsRef + activeDictVars (the
 -- kept/abstract slots), and the SLOT-ALIGNED iface names into funConstraintIfacesRef.
 -- registerMemberSlots keeps a slot only when its mono is still an abstract TVar (a
--- body-forced-concrete constraint takes no dict slot); the iface list is filtered the
--- same way so it stays parallel to the id list.
+-- body-forced-concrete constraint takes no dict slot); it emits the (iface, id) pair in
+-- ONE traversal, so the iface list cannot be filtered differently from the id list.
 registerMember : String -> List (IfaceRef, Mono) -> List (List Mono) -> Unit
 -- An UNCONSTRAINED member (empty constraint list) gets NO funConstraintsRef /
 -- funConstraintIfacesRef entry.  These refs are keyed by BARE NAME and accumulate
@@ -24266,17 +24340,17 @@ registerMember : String -> List (IfaceRef, Mono) -> List (List Mono) -> Unit
 -- no entry (mirrors registerInferredFor's empty-ids guard).
 registerMember _ [] _ = ()
 registerMember m ifaceMonos argVecs =
-  let ids = registerMemberSlots m 0 (map snd ifaceMonos)
-  let keptIfaces = keptConstraintIfaces ifaceMonos
-  let _ = setRef perRun.value.funConstraintsRef ((m, ids)::perRun.value.funConstraintsRef.value)
-  let _ = setRef perRun.value.funConstraintArgsRef ((m, keptConstraintArgs ifaceMonos argVecs)::perRun.value.funConstraintArgsRef.value)
-  setRef
-    perRun.value.funConstraintIfacesRef
-    ((m, keptIfaces)::perRun.value.funConstraintIfacesRef.value)
+  let slots = registerMemberSlots m 0 ifaceMonos
+  setFunConstraintEntry m slots (Some (keptConstraintArgs ifaceMonos argVecs))
 
 -- #1161 (F-3a-ii): the argument vectors of the constraints registerMemberSlots KEEPS,
--- in the same slot order — the keptConstraintIfaces filter applied to the parallel
+-- in the same slot order — the same `normalize`-is-a-TVar filter applied to the parallel
 -- vector list, so funConstraintArgsRef stays slot-parallel to funConstraintsRef's ids.
+-- ⚠️ It is a PREFIX, not a full parallel list, when [argVecs] is shorter than the
+-- constraint list (`constraintVarArgMonos` drops constraints absent from the tvs map):
+-- the second clause stops early.  That is why #994's fusion keeps this payload
+-- entry-level and OPTIONAL instead of folding it into `CSlot` — see
+-- `setFunConstraintEntry`.
 keptConstraintArgs : List (IfaceRef, Mono) -> List (List Mono) -> List (List Mono)
 keptConstraintArgs [] _ = []
 keptConstraintArgs _ [] = []
@@ -24284,24 +24358,25 @@ keptConstraintArgs ((_, mono)::rest) (v::vs) = match normalize mono
   TVar _ => v :: keptConstraintArgs rest vs
   _ => keptConstraintArgs rest vs
 
--- the iface names of the constraints registerMemberSlots KEEPS (mono still a TVar),
--- in the same slot order — parallel to registerMember's id list.
-keptConstraintIfaces : List (IfaceRef, Mono) -> List IfaceRef
-keptConstraintIfaces [] = []
-keptConstraintIfaces ((iface, mono)::rest) = match normalize mono
-  TVar _ => iface :: keptConstraintIfaces rest
-  _ => keptConstraintIfaces rest
-
 -- [kept] is the next dict-param slot; a constraint variable forced concrete by the
 -- body takes no dict and doesn't advance the slot (so param names stay 0..k-1,
 -- matching dict_pass).
-registerMemberSlots : String -> Int -> List Mono -> List Int
+--
+-- #994 (B-3-a): emits `CSlot`s, not a bare id list.  The iface half used to be recovered
+-- by a SECOND traversal (`keptConstraintIfaces`, deleted) applying the identical
+-- `normalize mono` is-a-`TVar` filter to the identical list; one traversal carrying the
+-- pair makes "the iface list is filtered the same way" unrepresentable-otherwise instead
+-- of a comment two functions apart.
+registerMemberSlots : String -> Int -> List (IfaceRef, Mono) -> List CSlot
 registerMemberSlots _ _ [] = []
-registerMemberSlots m kept (mono::rest) = match normalize mono
+registerMemberSlots m kept ((iface, mono)::rest) = match normalize mono
   TVar cell =>
     let id = tyvarId cell
     let _ = setRef perRun.value.activeDictVars ((id, dictParamName m kept)::perRun.value.activeDictVars.value)
-    id :: registerMemberSlots m (kept + 1) rest
+    CSlot {
+      csIface = iface,
+      csId = id,
+    } :: registerMemberSlots m (kept + 1) rest
   _ => registerMemberSlots m kept rest
 
 -- Pass B: infer each member's clauses, unifying with its placeholder.
@@ -25317,8 +25392,13 @@ boundTvarId boundIds mono = match normalize mono
 registerInferredFor : String -> List Int -> Unit
 registerInferredFor _ [] = ()
 registerInferredFor m ids =
-  let _ = setRef perRun.value.funConstraintsRef ((m, ids)::perRun.value.funConstraintsRef.value)
-  let _ = setRef perRun.value.funConstraintIfacesRef ((m, map (ifaceForInferredId m) ids)::perRun.value.funConstraintIfacesRef.value)
+  -- #994 (B-3-a): one `CSlot` per id, so the iface list is a `map` over the very list
+  -- that is stored and cannot differ from it in length or order.  ⚠️ This moves
+  -- `ifaceForInferredId`'s evaluation BEFORE the `funConstraintsRef` write (it used to
+  -- sit in the second `setRef`'s argument, i.e. after it); that is sound only because it
+  -- reads `implObls` / `schemeObligationsRef` / `dictApps` and NEITHER fn-constraint
+  -- table — checked, since a recovery that consulted them would change answers here.
+  let _ = setFunConstraintEntry m (map (id => CSlot { csIface = ifaceForInferredId m id, csId = id }) ids) None
   let _ = registerActiveDictVars m 0 ids
   setRef perRun.value.promotedRef (m::perRun.value.promotedRef.value)
 
