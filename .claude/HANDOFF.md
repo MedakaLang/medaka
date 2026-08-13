@@ -2,6 +2,52 @@
 
 ---
 
+## 🟥 KNOWN-RED FOR THE DURATION — **Stage B sprint, opened 2026-08-13**
+
+**Branch `arch/stage-b-sprint`, worktree `.claude/worktrees/giggly-tinkering-rainbow`, BASE
+`2b9dc798`.** Contract: `.claude/STAGE-B-SPRINT.md`. Ledgers: `.claude/sprint-b/DECISIONS.md`,
+`.claude/sprint-b/DEBT.md`.
+
+Scope: **B-3 (#991, #994) + B-2 (#1113)**. **B-1 (#993) is OUT.** This run **deliberately defers**
+golden/differential verification to a repair round that runs *after* implementation. The following
+are red **BY DESIGN** on this branch and are **not your break**:
+
+| Expected red | Why |
+|---|---|
+| `diff_compiler_snapshot_*` | Compiler sources are in the snapshot corpus, so every source bite moves its own golden. **Zero goldens are blessed for the entire run** (§5) — re-cut ONCE from the final binary in the repair round. |
+| `test/selfproc_goldens/legA/*` (`diff_compiler_selfproc.sh`) | Same cause: added/renamed/re-typed top-level bindings move the LEG A scheme goldens. Deferred with the snapshots. **CI-only signal** — stays green locally. |
+| `diff_compiler_llvm_typed_ir` (the IR-text golden) | B-2 changes emitted IR **by design** — that is the stage's whole content. |
+| `diff_compiler_must_fail.sh` | Drain targets are being **drained but not closed** (§1 issue-closure policy): #1564, #1599, #1560, #1072, #1071, #1062, #1068, #1182. **Their pins flipping red is THE deliverable** — it is the repair round's attack list — not a break. |
+| Differential / engines / capability-matrix / doc gates | Not run mid-sprint at all. |
+
+**Rows that must NOT move — listed so a flip is read as a finding, not a deliverable:**
+
+| Must stay put | Why |
+|---|---|
+| `test/must_fail_fixtures/1597-*` | #1597 is **adjudicated out** (presumption OUT; Stage A Unit F, whose F-3 bite was refused as unreachable dead code, RUN-031). Nothing here fixes it, so it must read **REPRO** all run. If it flips DRAINED, **someone changed the field-owner seed — that is a finding.** ⚠️ Its `diag-code:` range is line-sensitive to `bmod.mdk`'s comment header; a comment-only edit there moves the pin. |
+| the #1075 pin (authored this run) | #1075 is **OUT of scope** (F-1 residual, #1046's class — its site reaches dispatch through a **local lambda**, so arg-tag survives until locals carry evidence). Pinned for falsifiability only. A still-RED #1075 is **correct**, not a Stage B failure. |
+| #1046 | Same F-1 routing. A B-2 that "drains" #1046 or #1075 has done something **out of scope** — investigate rather than celebrate. |
+
+⚠️ **One pre-existing red is NOT ours**: `check_cli_modules`' `1112-A34/later-invisible` leg, which
+fails by **ACCEPTING** — so no diff that only adds a reject can have caused it. Inherited from
+before Stage B.
+
+**The ONLY signals this run takes mid-flight**, per unit boundary:
+`make medaka` → `make check-self` → **`sh test/selfcompile_fixpoint.sh`**. The fixpoint is
+**in-band from Phase 2 on and cannot be deferred** — B-2 changes emitted IR and the fixpoint is the
+only in-run signal that codegen still converges.
+
+🚨 **Seed discipline: `test/refresh_seed.sh` is NOT idempotent after a codegen change — run it
+TWICE.** A **stale seed can SEGFAULT the fixpoint on a perfectly correct change**; an agent who
+does not know that will spend a session debugging a phantom.
+
+🚨 **Before calling any red here "pre-existing", READ the gate that produced it.** In Stage A one
+red was reported as pre-existing by two agents, repeated by the orchestrator in two commit
+messages and a PR body, and was in fact the run's own **licensed deliverable** — the gate header
+said so six lines above the assertion.
+
+---
+
 ## ✅ RESOLVED 2026-08-13 — the Stage A sprint's known-red set is EMPTY. Nothing below is still red.
 
 The goldens were re-cut once from the final binary in a terminal commit (`46c551c0`).
