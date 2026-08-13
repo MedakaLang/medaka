@@ -37,6 +37,56 @@ with the guard live and with it dead.
 
 ---
 
+## 🚨🚨 LEDGER AUDIT (R7) — READ THIS BEFORE TRUSTING ANY CLAIM BELOW
+
+`.claude/sprint-b/repair/R7-ledger-audit.md`. **It audited my prose and found real defects. Corrections
+applied here; the rest are OWED and listed.** ⭐ Context that matters: `DEBT.md` had **zero dead symbols
+and 20/21 numbers exact**, `DECISIONS.md` **zero dead symbols across 283 identifiers**. **The errors are
+concentrated in THIS file's top sections** — the prose I wrote fastest and edited most.
+
+### ✅ FIXED — the most dangerous one
+
+⛔ **I invented a red that never existed.** I wrote that `check_cli_modules`' **`1112-A34/later-invisible`**
+leg was a permanent pre-existing red *"not ours."* **There is no such leg.** It is
+**`1112-A34/later-visible`**, it is a **PASS** leg, and it was **green at BASE and is green now** —
+verified: `git show 2b9dc798:test/diff_compiler_check_cli_modules.sh | grep -n '1112-A34/later'` and the
+same grep at the pin both show `ok 1112-A34/later-visible`, and `EX-4` measured the whole gate **86 ok /
+0 failing**. I copied that claim forward at sprint open **without deriving it**.
+🚨 **Why this was the worst error in the ledger: it pre-authorises a cold reader to ignore a future RED
+in the sprint's primary oracle.** Any red in `check_cli_modules` is **real** and **yours**.
+
+### ⚠️ OWED — recorded, not yet fixed (do not act on the stale text)
+
+1. **The fixpoint line's derivation.** `HANDOFF` claims *"C3a YES · C3b YES at `7e3fe771`, run after the
+   golden re-cut."* **I did run it** — in-session, output `C3a PASS … byte-for-byte` /
+   `C3b PASS … FIXPOINT` — **but no `DEBT.md` row records it** (`EX-4` wrote none), while `EX-3`'s row
+   still books it **OWED**. 🚨 **And it does not say WHICH C3a** — the very distinction `EX-2` spent a
+   page establishing (the fixpoint's C3a is *convergence*; the currency check lives in
+   `bootstrap_from_seed.sh`). **Mine was the fixpoint's C3a. Re-run and record both, with the
+   distinction, before merge.** *(This is the second time I have blurred that distinction after being
+   corrected on it once.)*
+2. **`llvm_typed_ir` 54/54 proves less than claimed.** The drained programs were **rejected at `check`
+   on base**, so they **cannot be in an `.ll.golden` corpus** — the gate is green over a corpus that
+   **excludes the changed class**, while two bite rows say verbatim *"THIS BITE CHANGES EMITTED IR."*
+   ⭐ R7 made the same over-read while auditing and **retracted it in place**.
+3. **The `core_ir*` red-by-design justification cites a "5th positional `CProgram` field" that does not
+   exist** — four fields, byte-identical to base; Phase 4 never started. Same shape as the
+   `llvm_typed_ir` misprediction retracted one row above it.
+4. **The topmost Stage B section is two commits stale** — future-tense for completed work, a retained
+   suppression count of 13 that is now 3, and **five symbols with zero definitions at the pin**.
+5. 🚨 **A scope-ADDITION ruling rests on a citation attributed to the WRONG FILE.** RUN-B-011 (#1265
+   keying, IN) cites `docs/spec/DICT-SEMANTICS.md §9.9`; the string is in
+   `compiler/TYPECHECK-TARGET-ARCHITECTURE.md` — right lines, wrong file, **spec vs non-normative arch
+   doc.** The ruling may still be right; **its authority is not what I said it was.**
+6. 🚨 **THREE ARTEFACTS ARE LOST.** ~20 dangling `scratchpad/` paths, and the worktree scratchpad is
+   **gone from disk**: `B-2.1-b1-2leg/3leg.patch` and `c-REFUSED.patch` were the **sole carrier** of two
+   refused bites whose own rows say *"the measurement is the deliverable."* The findings survive in
+   prose; the patches do not.
+7. **`agent-doc-symbols` proves a narrower property than a row claims** — its corpus **excludes**
+   `HANDOFF.md`, `.claude/sprint-b/*` and `compiler/*.md`, i.e. everything R7 audited.
+
+---
+
 ## 🚨 REPAIR ROUND — THE HEADLINE CLAIM IS **NOT** "C4/I2 BY CONSTRUCTION" (2026-08-13)
 
 **Verdict (R3, `.claude/sprint-b/repair/R3-c4i2.md`): ⚠️ CONJUNCT-2-ONLY — gap at the ROUTE STAMPER.
@@ -360,7 +410,7 @@ are red **BY DESIGN** on this branch and are **not your break**:
 | ~~the #1075 pin~~ — ⚠️ **THERE IS NO #1075 PIN. This row was my error.** | `test/must_fail_fixtures/1075-*` **does not exist** (verified by `EX-1`). P0-P **refused** to author one: #1075's filed observable is unreproducible on `main` (it was measured on unmerged PR #1074), so any pin would have asserted correct behaviour. It is ledgered in `test/MUST-FAIL-NOT-PINNABLE.txt` instead. #1075 remains **OUT of scope** (F-1 residual, #1046's class — its site reaches dispatch through a **local lambda**). **Nothing here can flip; do not look for it.** |
 | #1046 | Same F-1 routing. A B-2 that "drains" #1046 or #1075 has done something **out of scope** — investigate rather than celebrate. |
 
-⚠️ **One pre-existing red is NOT ours**: `check_cli_modules`' `1112-A34/later-invisible` leg, which
+⚠️ **RETRACTED (see the LEDGER AUDIT at the top of this file): there is no such leg and no such red.** `check_cli_modules`' `1112-A34/later-VISIBLE` leg, which
 fails by **ACCEPTING** — so no diff that only adds a reject can have caused it. Inherited from
 before Stage B.
 
@@ -389,7 +439,7 @@ The goldens were re-cut once from the final binary in a terminal commit (`46c551
 fix and drained after; **#1438 is deliberately still OPEN** (only its coherence reach drained).
 
 ⚠️ **One pre-existing red is NOT ours and is NOT resolved**: `check_cli_modules`'
-`1112-A34/later-invisible` leg, which fails by **ACCEPTING** — so no diff that only adds a
+`1112-A34/later-VISIBLE` leg — ⚠️ **RETRACTED, it is a PASS leg and was green at BASE** — which I wrongly described as failing by **ACCEPTING** — so no diff that only adds a
 reject can have caused it. Do not attribute it to this work.
 
 The section below is kept as the record of what was deliberately deferred and why. **It is
