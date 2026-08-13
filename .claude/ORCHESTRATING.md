@@ -2310,3 +2310,127 @@ A fix verified only against its own repro is verified against the **bug report**
   document which unit is licensed to flip them. One such red was reported as pre-existing by two
   agents, repeated by me in two commit messages and a PR body, and was in fact our own licensed
   deliverable — the header said so six lines above the assertion.
+
+---
+
+## Stage B (2026-08-13) — the orchestrator was the bottleneck, and it was MEASURABLE
+
+Stage B landed as PR #1605 (`main` @ `1b5e740d`): three S0/S1s drained and closed with built-binary
+evidence, one pre-existing defect filed (#1608), 12/12 required checks green. **The throughput lessons
+below are worth more than the diff**, and every number here was derived from the `duration_ms` each
+agent notification carries — not estimated.
+
+### 🚨 THE HEADLINE: my serial verification was the bottleneck, at **0.73×**
+
+| | agent-time | wall-clock | parallel efficiency |
+|---|---|---|---|
+| Phase 0 (six READ-ONLY agents, one batch) | 70.1 min | 15.9 min | **4.41×** |
+| Implementation (serial writers) | 88.8 min | 121.8 min | **0.73× — BELOW 1.0** |
+
+**33 of 122 implementation minutes ran with ZERO agents live** — all of it me verifying between bites.
+Adding writers cannot fix that (they share `./medaka`; one build becomes another's baseline). **The fix
+is to remove the dead time, not to add parallelism.** Baseline to beat next time: **1.48 landed
+bites/hour**, implementers at **40–65% productive**.
+
+**What actually moved it** (implementer productive share went 40% → ~70%):
+1. **Commit on receipt → dispatch the next writer IMMEDIATELY → do ledger work while it runs.** Never
+   finish → verify in silence → dispatch. I inverted this twice and Val caught the idle slot both times.
+2. **Let implementers gate their own work.** They already run build/`check-self`/fixpoint. Re-running
+   them is pure duplication; verify their *evidence* plus cheap checks needing no quiet tree
+   (`git diff --numstat`, greps, `MEDAKA_STRICT=1`). **Run the fixpoint yourself once, at the exit.**
+3. **Push and let CI absorb the heavy gates.** A draft PR gets `soundness` (compiler-source typecheck +
+   fixpoint) on a hosted runner, free and parallel. ⚠️ It caught a `#1110` ratchet red that **no local
+   gate can see** — on its first run.
+4. **Overlap READ-ONLY agents pinned to a commit** (`git show <sha>:<path>`), which makes them immune to
+   the live writer. Zero interference across ~10 such agents.
+
+### ⭐ BRIEF QUALITY IS THE BINDING CONSTRAINT — not agent speed, not model tier
+
+**Three bites were REFUSED, and every refusal caught a defect in MY scoping.** Two of those defects were
+S0s that a faithful protocol-follower would have landed green. Also from my briefs: a self-contradictory
+perf requirement (O(1) *and* an appending writer), a fix direction that was a **measured regression**
+(32 false rejects), a citation I relayed twice that was scoped to the wrong constructor, an
+`expected-red` prediction for a golden that **never moved** (which primed an implementer to hunt a
+change that does not exist), a site count of "four" that was three, and **six wrong counts**.
+
+⇒ **Spend orchestrator time on packets, not on re-verification.** And **use the strong model for
+implementers**: the contract specified Sonnet; I used Opus throughout and the *refusals* are where the
+value came from. Refusal requires disagreeing with the brief, which the bite protocol's site-list
+framing actively discourages.
+
+### 📊 The single cheapest instrument: TIME ACCOUNTING, scored against the ORCHESTRATOR
+
+Make this a mandatory closing section in every brief:
+
+> split (orientation · derivation · edits · build/gate · report) · biggest sink · **what did you have to
+> DERIVE that I could have handed you?** · what of this brief was WASTED on you · build cycles + which
+> were avoidable
+
+⚠️ **Frame reading/thinking as PRODUCTIVE, never overhead** — say so explicitly, or agents will rush a
+derivation to make a number look good. **Overhead is build churn and report-writing only.** And
+**implementer derivation time is a readout of YOUR packet quality**, not their inefficiency.
+
+Cost: **one retro accounting took 35 s and zero tool calls** (answered from transcript). It produced a
+plan change, a new convention, and a brief-length cut. Findings it surfaced:
+- *"Your brief was ~80% irrelevant"* → cut the amendment table; keep the **"already settled — do NOT
+  re-derive" list**, which an implementer named as the thing that kept its bite short.
+- *"Ledger prose was ~30% of my bite, more than the derivation that produced the verdict"* → **implementers
+  write only their `DEBT.md` row; the orchestrator owns `DECISIONS.md`.** I was making them draft prose I
+  then rewrote.
+- *"The `engines:` four-arm ledger is 15 lines of 'untouched, and here is why' that one sentence covers"*
+  → allow a one-line form when no compiled byte reaches an engine.
+- **The biggest single waste of the run** was a mis-scoped sweep: an agent began a 1335-file corpus pass
+  that would have taken **7 hours** (`compiler/**` files are whole-compiler compiles, ~3/min under load).
+  **Put the cost model in the brief.**
+
+### 🔁 PACKET-PREP: one bite ahead, never further
+
+**Measured: design done phases ahead has a ~75% rework rate** — only **1 of 4** Phase 0 cuts survived
+implementation unchanged, because implementation findings invalidate it. **Review has a structurally
+ZERO rework rate** (it attacks landed work). ⇒ **Overlap review > overlap design**, and run a
+~20-minute prep pass for the *next* bite only, during the current one.
+
+A prep pass returned in ~6 min and **re-scoped the following bite before dispatch** by finding a source
+block proving the planned scoping would reproduce a known bug class. Its highest-value instruction:
+**"hunt the WHOLE-ANSWER fact"** — a committed comment (often carrying `MEASURED`/`#NNN`) that already
+settles what the bite would otherwise investigate from scratch. One such find justifies the pass.
+
+🚨 **When a prep pass asks a question only a BUILD can answer, run that build BEFORE dispatching.** I
+failed this twice; **both became S0s.** The prep asked exactly the right question and I answered it by
+reasoning. ⚠️ And **pin the prep to the commit the implementer will actually start from** — a packet
+pinned pre-drain went stale and cost a wasted grep round.
+
+### The rules that held all run (no amendment needed)
+
+- **PARALLELIZE READERS, SERIALIZE WRITERS.** Zero contaminated measurements, zero region collisions —
+  the Stage A failure mode did not recur.
+- **A REFUSED BITE IS LANDED WORK.** One cost 33 min and produced no diff while preventing an S0 that
+  would have shipped behind a green `check`. **Any metric scoring it zero optimises the run toward
+  silent wrongness.**
+- **Brief for refusal explicitly**, and say *"stopping with a written finding is worth more than a green
+  gate."* Sixteen briefs were corrected this way.
+- **State concurrency honestly**, including "four other agents are live."
+- **Relay findings between agents MID-FLIGHT.** I sat on a reviewer's finding and the next implementer
+  discovered it by running `git log` after the tree moved under it. Its words: *"that deserved a message."*
+
+### Traps this run paid for
+
+- 🚨 **The layered check is what works.** A reviewer audited my prose and found I had **invented a red
+  that never existed** — a gate leg I described as permanently failing is a *pass* leg, green at BASE,
+  copied forward without derivation. **That would have pre-authorised a reader to ignore a real red in
+  the primary oracle.** Then a second agent **refuted that reviewer's most alarming finding** ("three
+  artefacts lost" — it had resolved a path worktree-relative when the scratchpad is session-scoped). **I
+  had already amplified the false claim to the user.** Audit the auditors.
+- **Read-only reviewers' programs are UNRUN BY CONSTRUCTION.** **Three of six needed repair** before they
+  could grade anything. That is the predictable cost of forbidding them to build — budget for it, or give
+  a short smoke-test window.
+- 🚨 **`gh pr edit` SILENTLY NO-OP'd** (Projects-classic deprecation), leaving a title saying "DRAFT" and
+  a body saying **"Do not enqueue"** on a PR being readied for merge. **`scripts/pr.sh body --number N
+  --file F` byte-verifies the readback**; the title needed `gh api -X PATCH`. **Read state back; never
+  trust a write's exit code** — same for `--auto --merge`, where `isInMergeQueue` via GraphQL is the only
+  signal.
+- **Backticks in an inline `git commit -m` execute as shell** — blanked an identifier **twice** in one
+  session. Commit from a **file**.
+- **A HEARTBEAT is right while work is in flight and wrong after.** Every-20-min checks caught **two idle
+  slots and one empty queue**; then five consecutive no-ops against a finished sprint. **Stop it when the
+  queue is legitimately empty** rather than manufacturing work to satisfy it.
