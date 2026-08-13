@@ -1398,4 +1398,221 @@ the latter **additive-only** this time (new bindings, nothing deleted or re-type
 
 ---
 
-*(Phase 2′ continues. Next: the reader repoint + the router/stamper population, which RUN-B-009 requires to move TOGETHER.)*
+## RUN-B-022 — stop-and-land input: **P0-B's "7 stampers" CONFIRMED. The tree's comment says "five" and is STALE.**
+
+Derived by me from `git show 2b9dc798:compiler/types/typecheck.mdk` (BASE, the commit P0-B read),
+counting **call sites**, not prose:
+
+```
+grep -c 'stampImplTable stampKeyTable' → 7
+```
+`resolveSites` · `resolveOpSites True` · `resolveOpSites False` · `resolveArgStamps` ·
+`resolveRLocalSites` · `resolveDictApps` · `resolveMethodDicts`.
+
+**But `stampKeyTable`'s own comment (BASE `:28678-28681`) says otherwise, twice:** *"was rebuilt from
+`implDecls` at each of the **five** resolve\* sites below … one build feeds all **five**
+byte-identically."* **Two sites (`resolveDictApps`, `resolveMethodDicts`) were added after that
+comment was written and it was never updated.**
+
+So the chain of custody on this number is now fully established:
+- the **tree's comment**: five — **STALE**;
+- the **Fable consult**: five — **inherited the stale comment**, as P0-B diagnosed;
+- **P0-B**: seven — **CORRECT, and now independently confirmed.**
+
+⚠️ **Consequence for a later Phase 2′ bite:** the comment is *demonstrably wrong prose sitting on the
+exact line a Phase 2′ implementer will edit.* **Fix it when that region is touched** — leaving
+"five" is precisely how the next agent re-derives a wrong number, which is how it reached the Fable
+consult in the first place.
+
+### ⭐ An architectural finding that CORROBORATES my `B-2.1-b1` scope ruling
+
+Both router-side populations are built at **ONE point**, in `checkModuleFullImpl`'s tail
+(BASE `:28677` and `:28682`):
+```
+let stampImplTable = buildImplTable implDecls
+let stampKeyTable  = buildKeyTable  implDecls
+```
+…and then **threaded** to all 7 stampers. **So the router leg's population has a SINGLE construction
+site, not 49.** P0-B's ~49-signature figure measures the *threading surface*, which is real but is
+**cosmetic cleanup**, not the semantic change.
+
+**This is direct evidence for the scope refinement I made when dispatching `B-2.1-b1`:** unifying
+the population requires changing **what the selection points consult**, not re-signing every caller.
+I had reasoned it out; this confirms it from the code. It also means the eventual signature cleanup
+is genuinely deferrable without leaving the two legs disagreeing — which was the whole risk
+RUN-B-009 identified.
+
+### ⚠️ My own error, recorded because it is the exact trap I brief others about
+
+My first attempt read **`:28679` in `HEAD`** to check a citation P0-B made at **BASE** — and this
+branch has added **~226 lines above it** (Phase 1 +150, `a1` +6, `a2` +70). I landed in an unrelated
+comment about eval dict-set convergence and briefly took that as evidence the citation was wrong.
+**It was my line number that was wrong, not P0-B's citation.** I have told three implementers this
+run that Phase 0's line numbers are stale and must be re-derived; the same applies to *checking* a
+citation — **read it at the commit the claim was made against**, which is what `git show <sha>:<path>`
+is for. Two derivations disagreeing does not mean one is wrong; here they were reading different
+files.
+
+**Stop-and-land bearing:** the remaining Phase 2′ bite list is **still believed** — the stamper set
+is as P0-B described, the third population (`stampKeyTable`) exists as claimed, and its single
+construction site makes the remaining work smaller than the arc's prose implies.
+
+---
+
+## RUN-B-023 — 🛑 `B-2.1-b1` **REFUSED AND REVERTED.** My scope was wrong: two legs produce an S0.
+
+**This is the most valuable result of the run, and it is a refusal.** Nothing landed;
+`compiler/types/typecheck.mdk` is **byte-identical to `5d499dfb`** (verified by me:
+`git diff --stat 5d499dfb -- compiler/types/typecheck.mdk` → empty).
+
+### What I got wrong
+
+I scoped the bite as *"both legs, in one bite"* — checker (`concreteReqMatchByIface`) + router
+(`selectReqImpl`/`argReqRoute`) — and called it non-negotiable. **There are THREE legs.** Measured
+four-arm on #1564's own fixture:
+
+| arm | base `5d499dfb` | **two legs, AS I BRIEFED** | three legs |
+|---|---|---|---|
+| `check main.mdk` | 1, `T-REQUIRES-UNROUTED` | **0**, `main : Unit` | 0 |
+| `run main.mdk` | 1 | **1**, `E-PANIC: putStrLn: not a String` | 0, `wrap(int)` |
+| built binary | — | **139, MEMORY FAULT** | 0, `wrap(int)` |
+
+**My scope converts a loud, located reject into `check` exit 0 plus a segfaulting binary** — a
+**severity increase**, #1560's under-application shape, and precisely what `AGENTS.md` and this
+contract forbid. **#1564's own `claim.txt` predicted it** — *"a clean drain for half a drain."*
+
+**Emitted IR is the proof, not the inference:** the checker leg *did* move — `@mdk_nest__nest`
+becomes arity-2 and its caller passes `@mdk_dc_0` — but one level in,
+`call i64 @mdk_impl_Wrap_tagOf(i64 %t2)` is an **arity-1 call to an arity-2 define.** That is the
+139.
+
+### 🚨 THE MUST-FAIL PIN WOULD HAVE REPORTED "DRAINED"
+
+**The pin grades `check` only.** So on my two-leg scope it would have flipped to **DRAINED** — i.e.
+reported #1564 **fixed** — while the built binary segfaults. That is the *"loud → silent is a
+regression, and it will look like progress"* failure, arriving with a **green drain signal.**
+
+⭐ **It was caught by `diff_compiler_flat_vs_onemodule.sh`'s VALUE clause** — RUN-B-020's assert
+choice, earning itself on the **first real change it ever saw.** The implementer who built it argued
+*"an assertion satisfied by the failure it guards is not an instrument"* and chose to grade values
+rather than acceptance-agreement. **Acceptance-agreement would have called this green.** This is the
+single strongest vindication in the run of paying for a discriminating instrument up front.
+
+### The third leg, derived — and my site list was also wrong
+
+`argReqRoute` **performs no selection at all** — it is a `routeOfD` adapter. The real selection sits
+in `entailInst`'s `EKNestedTop` arm, which calls **`keyForSiteByIface … iface (m::rest)`** for the
+route WORD *and* `argImplRequiresRoutes … m rest` → `selectReqImpl` for the `requires` — **the same
+selection, on the same iface and the same goal vector, computed twice.** Moving one without the other
+is a **DICT §6 C2 break**, so `keyForSiteByIface` and its collision retest had to move too.
+
+**The actual third leg is the METHOD-keyed one:** the element dict comes from
+`implDictRoutesForFull` / `argImplDictRoutesForEncl`, gated on
+`matchedEntry keyTable name goals` → `matchingEntries` → `candidateBucket`, **over the prefix
+`stampKeyTable`.** Proven, not inferred: making `matchingEntries`' population graph-global as a
+throwaway experiment took #1564 to `wrap(int)` on **all four arms**, with the flat gate **passing
+with 1 drain notice** — the deliverable state.
+
+**But that experiment is unshippable as written:** an **O(rows) per-goal scan in "the checker's
+hottest selector"**, measured **`check-self` 21.5 s → 25.1 s (+17%)** — exactly the shape
+`compiler/AGENTS.md` forbids, and the shape that put thirteen quadratics in this tree.
+
+### RULING 1 — cut a new bite: an `ImplEnv` index keyed by head **ACROSS interfaces**
+
+Not a widening of `stampKeyTable`: that re-creates design law **L1's two-registry hazard** (two
+answers to *"does an impl exist"* in one compile) which P0-A explicitly rejected as an end state, and
+which `B-2.1-a2` just retired by seating **one** ref on both arms. Going back on that to save a bite
+would be trading an architectural property for a schedule.
+
+**Placement is derived and is the design content:** the index **cannot** live in `ieInsertRowAt`,
+which is entered **once per `oblIfaceKeys` element** ⇒ **double-filing**. It must go in
+`ieInsertRow` / `ieIndexRows`. **New bite `B-2.1-a3`, and it is a precondition of the drain.**
+
+### RULING 2 — AM-1 is AMENDED, narrowly. The four `…ByIface` variants may die with the repoint.
+
+Verified by me — live callers only, comments excluded:
+- `selectImplEntryByIface` (`:18628`) ← **exactly the three legs being repointed**:
+  `keyForSiteByIface` (`:18659`), `selectReqImpl` (`:19415`), `concreteReqMatchByIface` (`:21827`).
+- `matchingEntriesByIface` (`:18638`) ← only `selectImplEntryByIface`.
+- `headCollidesByIface` (`:18669`) ← only `keyForSiteByIface`. `countHeadByIface` (`:18675`) ← only
+  `headCollidesByIface`.
+
+So once the three legs move, **all four are genuinely dead, and their non-`ByIface` siblings
+(`matchedEntry`, `matchingEntries`, `countHead`, `headCollides`, `keyForSite`) stay LIVE on the
+method-keyed leg.** AM-1 protected that machinery *because it serves the route path* — these four do
+not. **Delete them; do NOT carry `lint-disable` comments.** A suppression outlives the reason it was
+added and becomes a lie; a deletion is checkable. ⚠️ `keyForSiteByIface` itself is **repointed, not
+deleted**, so AM-1 still holds for the `keyForSite*` family.
+
+*(Recorded because it is real and cost the implementer a measurement: `-- lint-disable-next-line` must
+sit above the **equation**, not the signature.)*
+
+### RULING 3 — my own quiescence slip, owned
+
+The implementer flagged that `.claude/sprint-b/DECISIONS.md` was **uncommitted (`M`) during its
+measurement window** — my RUN-B-022 entry. §5 says *"no gate, probe, or drain claim is measured while
+any agent holds uncommitted edits,"* **and I was the agent holding them.** It is doc-only, so the
+drain readings genuinely stand — but *"harmless in fact"* is exactly the judgment the rule exists to
+stop me making unilaterally mid-measurement. **It flagged rather than assumed it away, which is
+correct.** Committing before every future measurement window.
+
+### What the implementer did that no brief asked for
+
+- **Refused a bite I called non-negotiable**, and reverted rather than landing a green `check`.
+- **Corrected my site list** by deriving that `argReqRoute` selects nothing.
+- **Proved the root cause** with a throwaway experiment instead of asserting it, *then measured its
+  cost and refused it too* — two refusals in one bite.
+- **Parked both patches** (`…-2leg-AS-BRIEFED.patch`, marked *do not land alone*, and
+  `…-3leg-EXPERIMENT.patch`) in `/var/tmp/.../scratchpad/`, outside the worktree, so the work survives.
+- Noted **neither parked patch has fixpoint evidence** — the restored tree is byte-identical to a
+  commit already verified, so it correctly did **not** claim the fixpoint covered either patch.
+
+---
+
+## RUN-B-024 — 🛑 **STOP-AND-LAND GATE: TRIGGERED. Land what is green; re-plan the drain.**
+
+The contract's gate asks three questions in writing before Phase 3. Answered:
+
+| question | answer |
+|---|---|
+| **Is the tree stable?** | ✅ **Yes** — byte-identical to `5d499dfb`, which I verified green. |
+| **Is the fixpoint green?** | ✅ **Yes** — C3a/C3b YES at `5d499dfb`, on my own run. |
+| **Is the remaining bite list still believed?** | 🔴 **NO.** The drain needs a **third leg** and a **new `B-2.1-a3` index bite with real design content**, neither of which Phase 0 cut. |
+
+**One "no" is the trigger, and the contract's instruction is explicit: *"land Phases 1–2 and
+re-plan."* Doing exactly that.**
+
+**Landing (all verified, fixpoint green, zero regressions):**
+- **Phase 1 / B-3 (#994)** — fn- and method-constraint write ops fused; slot-parallelism made a type
+  fact at the producers; the dict-arity hazard made unrepresentable.
+- **`B-2.1-a1`** — the Flat-vs-Module grader, built *before* the change it grades. **It has already
+  paid for itself** by catching the S0 above.
+- **`B-2.1-a2`** — a populated `ImplEnv` on **both** arms; one ref, retiring L1's two-registry
+  hazard; the quadratic avoided by construction.
+
+**NOT landing, and stated plainly: no S0 is drained yet.** #1564/#1599/#1072/#1560/#1182 remain open
+and their pins remain **REPRO** (must-fail: **100/100 reproduce, 0 DRAINED, run twice, both runs
+agreeing** — a genuinely quiescent reading, unlike Stage A's five phantoms).
+
+**Why that is the right outcome rather than a shortfall:** the run's own contract ranks *"a fix that
+makes a defect QUIETER is a severity INCREASE"* above throughput. The drain was **available** — the
+three-leg patch produces the correct answer on all four arms — and it was **declined on a measured
++17% regression in the checker's hottest selector.** Landing it would have traded an S0 for a
+quadratic; landing my two-leg scope would have traded a loud reject for a **segfault reported as a
+drain.**
+
+**Re-plan, in order:**
+1. **`B-2.1-a3`** — the head-across-interfaces `ImplEnv` index, in `ieInsertRow`/`ieIndexRows`.
+   Precondition of the drain. Graded on **allocation** (deterministic), not wall-clock.
+2. **`B-2.1-b2`** — the drain: repoint **all three** legs onto the unified substrate, with
+   `B-2.1-a3` making the method-keyed leg affordable. Delete the four dead `…ByIface` variants.
+3. Then `B-2.1-c` (SHADOW readers — **remember the fourth caller** at `resolveRLocalSite`), `B-2.1-d`
+   (delete the two refs), `B-2.1-e` (Door-4 verify-unreachable), and the moved `B-2.4-a`/`b`.
+
+⚠️ **A hard requirement carried forward from RUN-B-023: the must-fail pin for #1564 grades `check`
+only, so it CANNOT certify this drain.** Any future drain claim on it must show the **built binary**
+too — and the flat gate's value clause is the instrument that does.
+
+---
+
+*(Phase 2′ re-planned. `B-2.1-a3` is next.)*

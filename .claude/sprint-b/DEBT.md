@@ -556,3 +556,226 @@ grep — which is the failure this tree calls *"a probe that cannot fail is not 
 stripped source**, and every gate above was re-run on that clean binary (the audit-build results
 were not carried over). `git diff` on the handed-back tree is 70 insertions / 0 deletions with no
 `ieAudit` symbol anywhere.
+
+---
+
+### `B-2.1-b1` — Phase 2′ (B-2.1) — 🛑 **REFUSED AND REVERTED: the bite needs a THIRD leg. Two is a severity INCREASE.**
+
+**Nothing landed. `compiler/types/typecheck.mdk` is byte-identical to `5d499dfb`.** The transform was
+written, built and measured; it is **not shippable as briefed** and is parked as two patches in the
+scratchpad (paths at the bottom of this row). What follows is the measurement, because the
+measurement is the deliverable.
+
+sites:      **Implemented and then reverted** — `compiler/types/typecheck.mdk`:
+            `keyEntryOfRow` (new, beside `keyEntryOf`); `ieCandidateEntries` / `ieConcreteEntries` /
+            `ieHeadlessEntries` / `ieIfaceBareTab` (new, beside `candidateBucket`/`mergeByDeclIdx`);
+            `selectImplEntryByIfaceIE` / `matchingEntriesByIfaceIE` / `bodyImplEnv` (new, beside
+            `matchingEntriesByIfaceGo`); `headCollidesByIfaceIE` / `countHeadByIfaceIE` /
+            `ieBucketEntriesFor` (new, beside `countHeadByIfaceGo`); repointed
+            `concreteReqMatchByIface`, `selectReqImpl` (iface-known arm) and `keyForSiteByIface`.
+            +206/−11 before the experiment. **On disk now: nothing.**
+
+transform:  Repoint every caller of the **iface-keyed** min⊑ selector off `KeyBuckets` (a
+            topological PREFIX on the Module path — `shadowKeyTableRef` ← `universeKeyBucketsRef`
+            on the checker's leg, `stampKeyTable = buildKeyTable implDecls` on the router's) onto the
+            graph-global `perRun.value.bodyImplEnvRef` that `B-2.1-a2` seated. One adapter
+            (`keyEntryOfRow`, index field = `instRefSeq`), one accessor pair over
+            `ieConcrete`/`ieHeadless` keyed through the **bare** `oblIfaceKeys` leg (the only key a
+            bare-`String` caller can mint, and the leg that reproduces `matchingEntriesByIfaceGo`'s
+            `ifn == iface` spelling filter exactly), `candidateBucket`'s empty-headless fast path
+            preserved, `mergeByDeclIdx` reused, `pickMostSpecificEntry` reused, **no second
+            selector.** All `KeyBuckets`/`ImplBuckets` parameters retained (`_`-prefixed) per
+            RUN-B-007 AM-1.
+
+            ⭐ **ONE DERIVED ADDITION TO THE BRIEFED SITE LIST, and it is not optional.** The brief
+            named `selectReqImpl` and `argReqRoute` as the router leg. **`argReqRoute` performs no
+            selection at all** — it is a `routeOfD` adapter; its selection happens downstream in
+            `entailInst`'s `EKNestedTop` arm, which calls `keyForSiteByIface … iface (m::rest)` for
+            the route WORD and `argImplRequiresRoutes … m rest` (→ `selectReqImpl`) for the
+            `requires`, **on the same interface and the same goal vector — one selection computed
+            twice.** Repointing one and not the other attaches impl A's dictionary to impl B's route
+            word: a §6 C2 violation, i.e. the bite's own failure mode one organ over. So
+            `keyForSiteByIface` and its collision retest (`headCollidesByIface`/`countHeadByIface`,
+            which would otherwise miss a collision that exists only in a later module and stamp the
+            bare head word where the canonical key is required) moved with it.
+
+could move: 🔴 **IT DID MOVE, AND THE DIRECTION IS A SEVERITY INCREASE. This is the finding.**
+            On #1564's own fixture, measured four-arm on a freshly built binary:
+
+            | arm | `5d499dfb` (base) | two legs (as briefed) | three legs (experiment) |
+            |---|---|---|---|
+            | `check main.mdk` | **1**, `T-REQUIRES-UNROUTED` | **0**, `main : Unit` | **0** |
+            | `run main.mdk` | 1 (rejected) | **1**, `E-PANIC: putStrLn: not a String` | **0**, `wrap(int)` |
+            | `build main.mdk` | 1 (rejected) | **0** | **0** |
+            | built binary | — | **139**, `fatal memory fault` | **0**, `wrap(int)` |
+            | `control.mdk` (all four) | clean, `wrap(int)` | clean, `wrap(int)` | clean, `wrap(int)` |
+
+            The two-leg move converts a **loud located reject into `check` exit 0 plus a segfaulting
+            binary** — `AGENTS.md`'s *"a fix that makes a defect QUIETER is a severity INCREASE"*,
+            and #1560's S-1 under-application shape verbatim. **#1564's own `claim.txt` predicted
+            exactly this state** (*"this pin grades `check` ONLY … a clean drain for half a drain.
+            Re-run `medaka run main.mdk` and the built binary before closing"*), and the must-fail
+            pin **would have reported it as DRAINED**. It was caught by
+            `diff_compiler_flat_vs_onemodule.sh`'s VALUE clause, not by the pin — which is precisely
+            the assert choice RUN-B-020 recorded, doing the job it was built for on its first real
+            change.
+
+            **EMITTED-IR EVIDENCE, the same fixture, `medaka build --keep-ir`:**
+            - base/control (correct): `define i64 @mdk_impl_Wrap_tagOf(i64 %arg0, i64 %arg1)` called
+              as `call i64 @mdk_impl_Wrap_tagOf(i64 %arg0, i64 %t2)` from inside
+              `@mdk_nest__nest` — `%arg0` is `nest`'s own dict param, **forwarded**.
+            - two legs: the *define* is still arity-2 and `@mdk_nest__nest` is still arity-2 and the
+              caller still passes `@mdk_dc_0` — **so the checker leg DID move: the scheme gained its
+              `λd̄.` slot and the call site fills it.** What is missing is one level in:
+              `call i64 @mdk_impl_Wrap_tagOf(i64 %t2)` — **arity-1 call to an arity-2 define.** The
+              value cell lands in the dict slot and the impl loads a function pointer out of it.
+              That is the 139.
+
+            🚨 **ROOT CAUSE, PROVEN BY EXPERIMENT RATHER THAN INFERRED — THE THIRD LEG.** The
+            element-dict routes that forward `nest`'s dict into the impl come from the
+            **METHOD-keyed** selector: `implDictRoutesForFull` / `argImplDictRoutesForEncl` are both
+            gated on `matchedEntry keyTable name goals` → `matchingEntries` → `candidateBucket`, over
+            the **prefix** `stampKeyTable`. At `nest.mdk`'s module that table cannot see
+            `wrapimpl`'s impl (it sorts later), so `matchedEntry` answers `None`, the element-route
+            list is `[]`, and the primary route word is still right only by `entailInst`'s `tag`
+            fallback. I had reasoned this leg was safe to leave because its word and its element
+            routes both read one prefix table and are therefore *consistent with each other* — true,
+            and **irrelevant**: they are consistent with each other and inconsistent with the
+            *scheme arity* the checker leg now produces. **Measured, not argued:** with
+            `matchingEntries`' population made graph-global (a throwaway O(rows) scan over `ieRows`),
+            #1564 goes to `wrap(int)` on **all four arms**, identical to the control, and
+            `diff_compiler_flat_vs_onemodule.sh` **PASSES with 1 drain notice** — the exact
+            deliverable state the brief describes.
+
+            **Why that experiment is not the fix.** It is an O(rows) scan per goal in what
+            `candidateBucket`'s own header calls *"the checker's hottest selector"*, and
+            `ieRowsVisibleAt`'s 🚨 PERF banner forbids a per-goal `ieRows` caller by name.
+            Measured cost on the compiler's own closure: `make check-self` **21.5 s → 25.1 s real,
+            32.5 s → 38.2 s user (+17%)** — a real regression in a GC-bound stage, and the shape
+            `compiler/AGENTS.md` forbids (*"thirteen quadratics, all the same shape"*). A shippable
+            third leg needs an **`ImplEnv` index keyed by head ACROSS interfaces** (plus an
+            all-interfaces headless bucket), because `matchingEntries` buckets by head alone and
+            `IE`'s concrete key is `[iface, head]`. ⚠️ That index **cannot** be written inside
+            `ieInsertRowAt`: `ieInsertRowKeys` enters it once per `oblIfaceKeys` element, so every
+            row would be filed twice. It has to be written one level up, in `ieInsertRow` /
+            `ieIndexRows` — i.e. it touches the insert path RUN-B-021 deliberately left alone, and
+            it needs its own ascending-`instRefSeq` argument. **That is a new bite with real design
+            content, not a mechanical repoint** — back to the architecture companion per contract §4.
+            (Note the alternative, widening `stampKeyTable` to the whole graph, re-creates design
+            law L1's two-registry hazard P0-A ruled against as an END state; it is a decision, not
+            an implementer's choice.)
+
+            Two further deltas the reverted patch would have carried, recorded so a re-landing does
+            not have to re-derive them:
+            - **The tie-break at a non-closed, no-unique-minimum multi-module goal changes from
+              "deterministic but arbitrary"** (`universeKeyBucketsRef`'s per-module restarting
+              indices, descending slices) **to GRAPH-GLOBAL DECLARATION ORDER** (`instRefSeq`,
+              duplicate-free and ascending within every bucket by construction). Strictly an
+              improvement in the direction `diff_compiler_dict_semantics.sh` §4 can see, and **not**
+              licence to implement T4 (DICT §11: *"T4 MUST NOT be implemented before I5"*).
+            - **Global min⊑ can pick a MORE SPECIFIC winner than prefix min⊑** where a later module
+              declares the specific sibling — changing an existing route on a program that already
+              compiled. Spec-correct (§3 `inst` over the global `IE`), and an observable delta.
+
+            **`fmt`/`lint` note, for whoever re-lands:** repointing the three iface-keyed callers
+            makes `selectImplEntryByIface`, `matchingEntriesByIface`, `headCollidesByIface` and
+            `countHeadByIface` **genuinely dead**, and `medaka lint`'s `rule-dead-code` flags all
+            four — which the pre-commit MAX RATCHET fails on. Deleting them contradicts the brief's
+            own do-not-delete list (`matchingEntries*`, `headCollides*`) and RUN-B-007 AM-1, so the
+            patch carries four `-- lint-disable-next-line rule-dead-code` comments with a
+            time-bounded justification. ⚠️ **The suppression must sit above the EQUATION, not above
+            the type signature** — above the signature it does not fire (measured; lint still
+            reported all four). **This needs the orchestrator's ruling: suppress, or amend AM-1 to
+            let these four `…ByIface` variants die now while their method-keyed peers stay.**
+
+nearest miss: 1. **An impl carrying NO `requires` — TESTED, and it is the control that shows the
+                 two-leg move touched the right thing.** `all_visible`'s three rows and
+                 `no_impl_anywhere`'s two rows in `diff_compiler_flat_vs_onemodule.sh` were
+                 **byte-for-byte unchanged** across base → two legs → three legs (`wrap(int)` /
+                 `T-NO-IMPL`), and `control.mdk` — the same four modules under the other import
+                 order — was clean on all four arms in every configuration. No dict was needed, so
+                 nothing observable moved: the delta is confined to goals that need a dictionary,
+                 which is what `unroutedGroundReqs`' `implMatchesWithReqsU` predicate isolates.
+              2. 🚨 **THE HEADLESS LEG IS NOT REPOINTED, and this is where a "drained" claim
+                 over-reaches.** `findMatchingImplReqsU`'s fallback `firstReqMatch (univHeadless
+                 univ iface)` still reads its `ImplUniverse` argument, and the `args == []` arm
+                 reaches *only* that fallback. So **a goal answerable only by a HEADLESS impl
+                 (`impl C a requires …`) declared in a topologically later module remains
+                 unroutable.** Note the sub-class boundary precisely: headless rows ARE candidates
+                 on the repointed concrete leg (`ieCandidateEntries` unions `ieHeadless`, as
+                 `candidateBucket` does — `concreteReqMatchByIface` has been able to return a
+                 headless winner since #1128), so what is NOT drained is the **empty-goal-vector
+                 arm** and the fallback path taken when the concrete leg answers `None`.
+              3. **#1564 SUB-CLASS ACCOUNTING, since the brief asked for it.** Even the three-leg
+                 experiment drains only the shape #1564's fixture pins: a **concrete-headed**
+                 conditional impl in a later module, reached through a **method occurrence in a
+                 module-level generalized binding**. NOT drained by any configuration tried here:
+                 the headless sub-class above; #1046/#1075's local-lambda sites (F-1, out of scope
+                 by ruling); and #1560's own pin, whose second layer is `funConstraintsRef`'s
+                 per-tyvar SHATTERED dict slots (`residualPredsOf`'s header measures that an n≥2
+                 joint residual has no joint dict to route to **independently of any reduction
+                 change**) — that is #607 punch-list item 3, not this bite. **#1560's pin still
+                 reproduced in both configurations.**
+              4. **A `Module`-mode driver whose `mid` `buildDeclEnvs` never indexed** would read an
+                 empty `deImpls` and the repointed selector would answer `None` everywhere — a false
+                 `T-NO-IMPL`/`T-REQUIRES-UNROUTED` storm. Not directly probed; `make check-self`
+                 PASSing on the compiler's own multi-module graph in both configurations is
+                 indirect evidence that no live driver does this, and `:17231-17232` asserts it.
+
+engines:    **FOUR arms, none EDITED by the reverted patch, and that is the point — all four consume
+            changed evidence, so the repair round owes each of them work the moment this lands.**
+            - **LLVM (`backend/llvm_emit.mdk`)** — nothing to change; it *realizes* the delta. The
+              arity-1-call/arity-2-define skew above is emitted LLVM, and `--keep-ir` is the only
+              instrument that showed it. Owes: an IR-text differential on #1564's pair (the value
+              goldens are structurally blind to a dict-arity change on a program that used to be
+              rejected).
+            - **wasm (`backend/wasm_emit.mdk`)** — no arg-tag dispatcher and no interface-default
+              arms (RUN-B-007 AM-2), so no peer site. Owes: confirmation that the cross-module
+              same-name collision fixtures #1418 added are still present and still exercised before
+              a green wasm arm is read as corroboration.
+            - **eval (`eval/eval.mdk`)** — no edit; it dispatches by runtime arg tag and therefore
+              **recovers from exactly this defect**, which is why `medaka run` printed a *panic*
+              rather than the wrong value here and why base `run` and `build` disagreed. ⚠️ eval is a
+              **known-wrong oracle** on these shapes (#1071/#1062): **no golden was captured** and no
+              engine-agreement claim is made anywhere in this row.
+            - **`ir/core_ir_eval.mdk`** — no edit, and it is the arm most likely to ship silently
+              broken: it reads the specificity `score` and the `CImplDefault` iface identity
+              (RUN-B-007 AM-3), its gates are deferred, and its corpus
+              (`test/eval_modules_fixtures/*`) is **shared** with `diff_compiler_eval_modules.sh`,
+              which will look green. Owes: `diff_compiler_core_ir_modules.sh` run explicitly, not
+              inferred from its sibling.
+
+unchecked:  - **`sh test/selfcompile_fixpoint.sh` — NOT RUN, deliberately, and the reason is that
+              nothing changed.** The handed-back tree is byte-identical to `5d499dfb`, whose fixpoint
+              RUN-B-021 verified C3a/C3b YES two commits ago; re-running it would grade that commit
+              again, not this bite. **It was also not run on either measured configuration** — so
+              *neither* patch has fixpoint evidence, and the three-leg experiment in particular
+              changed emitted IR and must not be re-landed without it.
+            - **No seed re-mint, and none needed** (`refresh_seed.sh` not run): no compiled byte
+              differs from `5d499dfb`. Re-flag when a real patch lands.
+            - **No golden blessed, no snapshot blessed** (§5). Because nothing landed, the snapshot
+              and `selfproc_legA` goldens are **also unmoved** — unlike every other row in this file.
+            - **Perf: only `check-self` wall/user time**, not allocation, and not
+              `diff_compiler_perf_scaling.sh`. The two-leg configuration measured **21.8 s real vs a
+              21.5 s base (+1.5%, noise)** — so `keyEntryOfRow`'s per-lookup `implKeyTc` string build
+              is **not** a measurable cost at this scale, which is the one perf question the patch
+              itself raised. The +17% figure above belongs to the throwaway `ieRows` scan alone.
+            - **§4.3's owed substrate derivation is DISCHARGED and it is a non-issue:**
+              `univReceiverTag (headTy::_) = headTyconTy headTy` is *literally* `keyEntryOf`'s own
+              projection, so the impl-side head keying of `IE` and `KeyBuckets` cannot disagree.
+              Read it, don't take it from here:
+              `grep -n '^univReceiverTag' -A2 compiler/types/typecheck.mdk`.
+            - **Quiescence caveat:** `.claude/sprint-b/DECISIONS.md` was **uncommitted (M) for the
+              whole session** — the orchestrator's own RUN-B-021 entry. It is a doc no gate reads, so
+              the two must-fail runs (100/100 reproduce, 0 DRAINED, twice, agreeing) stand; recorded
+              rather than assumed away.
+            - **Not probed:** whether the identity (rather than bare) `oblIfaceKeys` leg would change
+              acceptance — deliberately out of scope (#1507's drain), and the patch's own comment
+              says so at the accessor.
+
+**Parked patches** (apply from the worktree root; neither is shippable as-is):
+`/var/tmp/medaka-scratch/claude-0/-root-medaka/2f0cc56c-30c4-4612-bcb1-04d9e4d0a7e5/scratchpad/B-2.1-b1-2leg-AS-BRIEFED.patch` — the bite exactly as briefed (+ the derived
+`keyForSiteByIface` site). Produces the severity increase above. **Do not land alone.**
+`/var/tmp/medaka-scratch/claude-0/-root-medaka/2f0cc56c-30c4-4612-bcb1-04d9e4d0a7e5/scratchpad/B-2.1-b1-3leg-EXPERIMENT.patch` — the same plus the throwaway global `matchingEntries`
+scan. Behaviourally correct on #1564's four arms; carries the +17% `check` regression. **Land only
+after the head-across-interfaces `ImplEnv` index bite is cut.**
