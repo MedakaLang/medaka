@@ -68,6 +68,7 @@ main = match args ()
   "--reemit-gap-strict"::_ => reemitGapStrict ()
   "--reemit-string-state"::_ => reemitStringState ()
   "--reemit-default-state"::_ => reemitDefaultState ()
+  "--reemit-lambda-state"::_ => reemitLambdaState ()
   "--capture-current-binding"::row::_ => captureCurrentBinding row
   _ => driveRuntime emit
 
@@ -245,6 +246,51 @@ reemitImplSelfState _ =
   let censusEvents = emitProgramGaps implSelfInput (implSelfCensusProgram uProgram)
   let _ = printEvents "IMPL_SELF_CENSUS_U_GAP" censusEvents
   printCapture "IMPL_SELF_P2" (emitProgram implSelfInput pProgram)
+
+-- X-W.H2b.7: fresh WasmEmit owns the lambda-id counter, lifted-definition drain,
+-- named eta dedup, and `ref.func` declaration registry. P→U→census→P shares one
+-- process while every emission allocates exclusive carrier state.
+reemitLambdaState : Unit -> <IO> Unit
+reemitLambdaState _ =
+  let p1 = emitProgram lambdaStateInput (lambdaStateProgram 17)
+  let (u, _) = emitProgramRecord lambdaStateInput (lambdaStateProgram 29)
+  let censusEvents = emitProgramGaps lambdaStateInput lambdaStateCensusProgram
+  let _ = printCapture "LAMBDA_P1" p1
+  let _ = printCapture "LAMBDA_RECORD_U" u
+  let _ = printEvents "LAMBDA_CENSUS_U_GAP" censusEvents
+  printCapture
+    "LAMBDA_P2"
+    (emitProgram lambdaStateInput (lambdaStateProgram 17))
+
+lambdaStateInput : WasmEmitInput
+lambdaStateInput = makeWasmEmitInput [] [] [("Pair", ["Int", "Int"])] False []
+
+lambdaStateLoc : Loc
+lambdaStateLoc = Loc "<lambda-state>" 1 1 1 1
+
+lambdaStateProgram : Int -> CProgram
+lambdaStateProgram result =
+  let arg = PVar "arg" lambdaStateLoc
+  let local = PVar "local" lambdaStateLoc
+  let nestedName = PVar "nested" lambdaStateLoc
+  let identity = CLam [arg] (CVar "arg" (ALocal 0 0))
+  let nested = CLam [arg] (CApp (CVar "local" (ALocal 0 0)) (CVar "arg" (ALocal 0 0)))
+  let lambdaBody = if result == 17 then
+    CLet False local identity (CApp (CVar "local" (ALocal 0 0)) (CLit (LInt result)))
+  else
+    CLet False local identity (CLet False nestedName nested (CApp (CVar "nested" (ALocal 0 0)) (CLit (LInt result))))
+  let body = CLet False PWild (CVar "Pair" AGlobal) (CLet False PWild (CVar "Pair" AGlobal) lambdaBody)
+  CProgram [CBind "main" [CClause [] body]] [("Pair", 2)] [("Pair", "Pair")] []
+
+lambdaStateCensusProgram : CProgram
+lambdaStateCensusProgram = CProgram
+  [
+    CBind "lambdaCensus" [CClause [] (CLam [PVar "x" lambdaStateLoc] (CVar "x" (ALocal 0 0)))],
+    CBind "lambdaIntentionalGap" [CClause [] (CVar "missingLambdaCensus" AGlobal)],
+  ]
+  [("Pair", 2)]
+  [("Pair", "Pair")]
+  []
 
 implSelfInput : WasmEmitInput
 implSelfInput = makeWasmEmitInput [("walk", ("Loop", 2))] [] [] False []

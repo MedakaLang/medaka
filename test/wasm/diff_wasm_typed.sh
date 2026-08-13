@@ -116,8 +116,53 @@ grep -F 'wDispCtxRef' "$WASM_SRC" >/dev/null || {
   echo "FAIL H2B6-WTRMC-CLEAR-ROUTES: nearest-miss wDispCtxRef changed"
   exit 1
 }
+if grep -E '^(lamIdRef|liftedFnsRef|liftedNamesRef|funcRefsRef|liftedNamesSetW|funcRefsSetW)[[:space:]]*[:=]' "$WASM_SRC" >/dev/null; then
+  echo "FAIL H2B7-AUTHORITY-SET: retired lambda authority remains ambient"
+  exit 1
+fi
+for required in \
+  'nextLambdaId : Ref Int' \
+  'liftedDefinitions : Ref (List (List String))' \
+  'liftedDefinitionNames : Ref (OrdMap Unit)' \
+  'functionReferences : Ref (List String)' \
+  'functionReferenceNames : Ref (OrdMap Unit)' \
+  'nextLambdaId = Ref 0' \
+  'liftedDefinitions = Ref []' \
+  'liftedDefinitionNames = Ref omEmpty' \
+  'functionReferences = Ref []' \
+  'functionReferenceNames = Ref omEmpty' \
+  'freshLamId : WasmEmit -> Int' \
+  'addLifted : WasmEmit -> List String -> Unit' \
+  'addLiftedNamed : WasmEmit -> String -> List String -> Unit' \
+  'noteFuncRef : WasmEmit -> String -> Unit' \
+  'emitElemDeclare : WasmEmit -> String' \
+  'let n = freshLamId (progEmit prog)' \
+  'let gid = freshLamId (progEmit prog)' \
+  'addLifted (progEmit prog) (emitLamDefine prog lamName pats captured body)' \
+  'addLifted (progEmit prog) def' \
+  'let lifted = if progUseClos prog then flatMap (x => x) (reverseL (progEmit prog).liftedDefinitions.value) else []' \
+  'let names = "$mdk_pap" :: reverseL emit.functionReferences.value' \
+  'emitProgram input cp = emitProgramWith (freshWasmEmit WGapStrict) input cp' \
+  'let emit = freshWasmEmit WGapRecord'; do
+  grep -F -- "$required" "$WASM_SRC" >/dev/null || {
+    echo "FAIL H2B7-CARRIER: missing $required"
+    exit 1
+  }
+done
+[ "$(grep -F 'freshLamId (progEmit prog)' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 3 ] || {
+  echo "FAIL H2B7-ROUTES: expected three lambda-id routes"
+  exit 1
+}
+[ "$(grep -F 'addLiftedNamed (progEmit prog)' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 2 ] &&
+  [ "$(grep -F 'noteFuncRef (progEmit prog)' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 6 ] || {
+  echo "FAIL H2B7-ROUTES: named lifts or function-reference routes changed"
+  exit 1
+}
+grep -F 'emitScalarProgram emit fnNames valNames groups' "$WASM_SRC" >/dev/null || {
+  echo "FAIL H2B7-NEAREST-MISS: scalar emission route changed"
+  exit 1
+}
 EXPECTED_MODULE_REFS="$(printf '%s\n' \
-  lamIdRef liftedFnsRef liftedNamesRef funcRefsRef liftedNamesSetW funcRefsSetW \
   useStrRef useListRef useArrayRef useRefBoxRef useRecUpdateRef \
   useStrLeafRef useRngRef useHashRef useEPutRef useTrapImport useDivGuardRef \
   useFloatRef useFloatHashRef useMathRef useFloatRngRef useFloatStrRef \
@@ -137,7 +182,7 @@ ACTUAL_MODULE_REF_DEFS="$(awk '
 ' "$WASM_SRC" | LC_ALL=C sort -u)"
 if [ "$ACTUAL_MODULE_REF_SIGS" != "$EXPECTED_MODULE_REFS" ] ||
     [ "$ACTUAL_MODULE_REF_DEFS" != "$EXPECTED_MODULE_REFS" ]; then
-  echo "FAIL H2B6-AUTHORITY-SET: top-level Ref authority set changed"
+  echo "FAIL H2B7-AUTHORITY-SET: top-level Ref authority set changed"
   printf '  observed signatures:\n%s\n' "$ACTUAL_MODULE_REF_SIGS"
   printf '  observed definitions:\n%s\n' "$ACTUAL_MODULE_REF_DEFS"
   exit 1
@@ -518,6 +563,22 @@ for required in \
   'CImplEntry "synthDefault" 0 (CImplDefault "DefaultFace" [PVar "value" defaultStateLoc] (CLit (LInt 29)))'; do
   grep -F -- "$required" "$TYPED_ENTRY" >/dev/null || {
     echo "FAIL H2B4-DEFAULT-DEFS: default-state harness is missing $required"
+    exit 1
+  }
+done
+for required in \
+  '"--reemit-lambda-state"::_' \
+  'reemitLambdaState : Unit -> <IO> Unit' \
+  'let p1 = emitProgram lambdaStateInput (lambdaStateProgram 17)' \
+  'let (u, _) = emitProgramRecord lambdaStateInput (lambdaStateProgram 29)' \
+  'let censusEvents = emitProgramGaps lambdaStateInput lambdaStateCensusProgram' \
+  '"LAMBDA_P2"' \
+  '(emitProgram lambdaStateInput (lambdaStateProgram 17))' \
+  'lambdaStateProgram : Int -> CProgram' \
+  'CBind "lambdaCensus"' \
+  'CBind "lambdaIntentionalGap"'; do
+  grep -F -- "$required" "$TYPED_ENTRY" >/dev/null || {
+    echo "FAIL H2B7-LAMBDA-HARNESS: missing $required"
     exit 1
   }
 done
@@ -1010,6 +1071,82 @@ require_wat type-to-ctors "$U_WAT" 'ref.cast (ref $T_USubject)'
 
 run_impl_self_check
 run_trmc_state_check
+
+LAMBDA_OUT="$($EMITBIN --reemit-lambda-state 2>"$INPUT_WORK/lambda.emit.err")" || {
+  echo "FAIL H2B7-LAMBDA-LIFECYCLE: lambda state harness"
+  cat "$INPUT_WORK/lambda.emit.err"
+  exit 1
+}
+[ ! -s "$INPUT_WORK/lambda.emit.err" ] || {
+  echo "FAIL H2B7-LAMBDA-LIFECYCLE: harness wrote stderr"
+  cat "$INPUT_WORK/lambda.emit.err"
+  exit 1
+}
+LAMBDA_MARKERS="$(printf '%s\n' "$LAMBDA_OUT" | awk '/^LAMBDA_(P1|RECORD_U|CENSUS_U_GAP|P2)_(BEGIN|END)$/ { print }')"
+LAMBDA_EXPECTED_MARKERS="$(printf 'LAMBDA_P1_BEGIN\nLAMBDA_P1_END\nLAMBDA_RECORD_U_BEGIN\nLAMBDA_RECORD_U_END\nLAMBDA_CENSUS_U_GAP_BEGIN\nLAMBDA_CENSUS_U_GAP_END\nLAMBDA_P2_BEGIN\nLAMBDA_P2_END')"
+[ "$LAMBDA_MARKERS" = "$LAMBDA_EXPECTED_MARKERS" ] || {
+  echo "FAIL H2B7-LAMBDA-LIFECYCLE: ordered capture markers"
+  exit 1
+}
+lambda_capture() {
+  awk -v begin="$1" -v end="$2" '
+    $0 == begin { capture = 1; next }
+    $0 == end { exit }
+    capture { print }
+  ' <<<"$LAMBDA_OUT"
+}
+lambda_capture LAMBDA_P1_BEGIN LAMBDA_P1_END > "$INPUT_WORK/lambda-p1.wat"
+lambda_capture LAMBDA_RECORD_U_BEGIN LAMBDA_RECORD_U_END > "$INPUT_WORK/lambda-u.wat"
+lambda_capture LAMBDA_CENSUS_U_GAP_BEGIN LAMBDA_CENSUS_U_GAP_END > "$INPUT_WORK/lambda-census.events"
+lambda_capture LAMBDA_P2_BEGIN LAMBDA_P2_END > "$INPUT_WORK/lambda-p2.wat"
+for lambda_file in lambda-p1.wat lambda-u.wat lambda-census.events lambda-p2.wat; do
+  [ -s "$INPUT_WORK/$lambda_file" ] || {
+    echo "FAIL H2B7-LAMBDA-LIFECYCLE: empty $lambda_file"
+    exit 1
+  }
+done
+cmp -s "$INPUT_WORK/lambda-p1.wat" "$INPUT_WORK/lambda-p2.wat" || {
+  echo "FAIL H2B7-LAMBDA-LIFECYCLE: P changed after record U and census"
+  exit 1
+}
+cmp -s "$INPUT_WORK/lambda-p1.wat" "$INPUT_WORK/lambda-u.wat" && {
+  echo "FAIL H2B7-LAMBDA-LIFECYCLE: P/U positive control did not differ"
+  exit 1
+}
+for lambda_spec in 'p1 17 1' 'u 29 2' 'p2 17 1'; do
+  lambda_name="${lambda_spec%% *}"
+  lambda_rest="${lambda_spec#* }"
+  lambda_result="${lambda_rest%% *}"
+  lambda_count="${lambda_rest#* }"
+  lambda_wat="$INPUT_WORK/lambda-$lambda_name.wat"
+  [ "$(grep -E '^  \(func \$mdk_lam[0-9]+' "$lambda_wat" | wc -l | tr -d '[:space:]')" -eq "$lambda_count" ] &&
+    [ "$(grep -E '^  \(elem declare func .*\$mdk_lam0' "$lambda_wat" | wc -l | tr -d '[:space:]')" -eq 1 ] || {
+      echo "FAIL H2B7-LAMBDA-LIFECYCLE: $lambda_name lambda definition/ref declaration changed"
+      exit 1
+    }
+  wasm-tools parse "$lambda_wat" -o "$INPUT_WORK/lambda-$lambda_name.wasm" || {
+    echo "FAIL H2B7-LAMBDA-LIFECYCLE: wasm-tools parse $lambda_name"
+    exit 1
+  }
+  wasm-tools validate --features=all "$INPUT_WORK/lambda-$lambda_name.wasm" || {
+    echo "FAIL H2B7-LAMBDA-LIFECYCLE: wasm-tools validate $lambda_name"
+    exit 1
+  }
+  LAMBDA_RESULT="$($NODE "$RUNJS" "$INPUT_WORK/lambda-$lambda_name.wasm" 2>"$INPUT_WORK/lambda-$lambda_name.run.err")" || {
+    echo "FAIL H2B7-LAMBDA-LIFECYCLE: execution failed $lambda_name"
+    cat "$INPUT_WORK/lambda-$lambda_name.run.err"
+    exit 1
+  }
+  [ ! -s "$INPUT_WORK/lambda-$lambda_name.run.err" ] && [ "$LAMBDA_RESULT" = "$lambda_result" ] || {
+    echo "FAIL H2B7-LAMBDA-LIFECYCLE: execution changed $lambda_name"
+    exit 1
+  }
+done
+[ "$(wc -l < "$INPUT_WORK/lambda-census.events")" -eq 1 ] &&
+  grep -F $'val lambdaIntentionalGap\tunbound variable '\''missingLambdaCensus' "$INPUT_WORK/lambda-census.events" >/dev/null || {
+  echo "FAIL H2B7-LAMBDA-LIFECYCLE: census event attribution"
+  exit 1
+}
 
 [ -x "$EMITTER" ] && export MEDAKA_EMITTER="$EMITTER"
 

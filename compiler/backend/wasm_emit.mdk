@@ -320,6 +320,11 @@ data WasmEmit =
       nextStringSegmentId : Ref Int,
       implSelfCtx : Ref ImplSelfCtx,
       trmcCtx : Ref WTrmcCtx,
+      nextLambdaId : Ref Int,
+      liftedDefinitions : Ref (List (List String)),
+      liftedDefinitionNames : Ref (OrdMap Unit),
+      functionReferences : Ref (List String),
+      functionReferenceNames : Ref (OrdMap Unit),
       emittedDefaultNames : Ref (OrdMap Unit),
       defaultDefinitions : Ref (List (List String)),
     }
@@ -334,6 +339,11 @@ freshWasmEmit mode = WasmEmit {
   nextStringSegmentId = Ref 0,
   implSelfCtx = Ref ImplSelfOff,
   trmcCtx = Ref WTrmcOff,
+  nextLambdaId = Ref 0,
+  liftedDefinitions = Ref [],
+  liftedDefinitionNames = Ref omEmpty,
+  functionReferences = Ref [],
+  functionReferenceNames = Ref omEmpty,
   emittedDefaultNames = Ref omEmpty,
   defaultDefinitions = Ref [],
 }
@@ -635,38 +645,15 @@ canonFn prog n =
     n
 
 -- ── program entry ────────────────────────────────────────────────────────────
--- W4 module-level lambda/output state is presently ambient: the fresh-id counter
--- names lifted lambdas; lifted definitions drain at module end; function references
--- feed `(elem declare func …)`. Each register resets per program.
-lamIdRef : Ref Int
-lamIdRef = Ref 0
-
-liftedFnsRef : Ref (List (List String))
-liftedFnsRef = Ref []
-
 -- Names of lifted defines whose body is fully determined by the name (the eta-wrap
 -- ctor `$mdk_wctor_<C>` and extern `$mdk_ext_<name>` closures) — used to dedup so a
 -- ctor/extern referenced point-free at MORE THAN ONE site emits its lifted (func …)
 -- ONCE.  `noteFuncRef` already deduped the matching `(elem declare)`, but `addLifted`
 -- did not dedup the define, so a second use-site duplicated the func → "duplicate func
 -- identifier" at wasm-tools assembly (`$mdk_lamN` names are unique, so they still route
--- through the plain `addLifted`).  Reset per program alongside `liftedFnsRef`.
-liftedNamesRef : Ref (List String)
-liftedNamesRef = Ref []
-
-funcRefsRef : Ref (List String)
-funcRefsRef = Ref []
-
--- perf #382: companion OrdMap SETS for the two `contains`-per-insert registries above
--- (`addLiftedNamed`/`noteFuncRef` deduped by a linear list scan on EVERY insert ⇒ O(refs ·
--- distinct)).  Membership now routes through these O(log n) sets; the lists still carry
--- insertion order (`funcRefsRef` is drained in order at emit end).  Reset to `omEmpty`
--- alongside their lists in emitProgram/emitProgramGaps so no set leaks across a re-emit.
-liftedNamesSetW : Ref (OrdMap Unit)
-liftedNamesSetW = Ref omEmpty
-
-funcRefsSetW : Ref (OrdMap Unit)
-funcRefsSetW = Ref omEmpty
+-- through the plain `addLifted`).  Per-emission `WasmEmit` state owns its dedup set.
+-- perf #382: both named-lift and function-reference sets preserve O(log n) membership;
+-- companion lists retain insertion order for their module-end drains.
 
 -- ── W6 string state ──────────────────────────────────────────────────────────
 -- `useStrRef` records whether the program uses any String/Char literal, the
@@ -1037,32 +1024,32 @@ freshStrSeg emit bytes =
   let _ = setRef emit.stringSegments ((i, bytes)::emit.stringSegments.value)
   i
 
-freshLamId : Unit -> Int
-freshLamId _ =
-  let n = lamIdRef.value
-  let _ = setRef lamIdRef (n + 1)
+freshLamId : WasmEmit -> Int
+freshLamId emit =
+  let n = emit.nextLambdaId.value
+  let _ = setRef emit.nextLambdaId (n + 1)
   n
 
-addLifted : List String -> Unit
-addLifted def = setRef liftedFnsRef (def::liftedFnsRef.value)
+addLifted : WasmEmit -> List String -> Unit
+addLifted emit def =
+  setRef emit.liftedDefinitions (def::emit.liftedDefinitions.value)
 
--- addLifted, but keyed by a unique define name (see `liftedNamesRef`): a second call
+-- addLifted, but keyed by a unique define name: a second call
 -- with an already-seen name is a no-op, so a point-free ctor/extern used at N sites
 -- lifts its (func …) exactly once.
-addLiftedNamed : String -> List String -> Unit
-addLiftedNamed name def =
-  if omHasKey name liftedNamesSetW.value then ()
+addLiftedNamed : WasmEmit -> String -> List String -> Unit
+addLiftedNamed emit name def =
+  if omHasKey name emit.liftedDefinitionNames.value then ()
   else
-    let _ = setRef liftedNamesSetW (omInsert name () liftedNamesSetW.value)
-    let _ = setRef liftedNamesRef (name::liftedNamesRef.value)
-    addLifted def
+    let _ = setRef emit.liftedDefinitionNames (omInsert name () emit.liftedDefinitionNames.value)
+    addLifted emit def
 
-noteFuncRef : String -> Unit
-noteFuncRef nm =
-  if omHasKey nm funcRefsSetW.value then ()
+noteFuncRef : WasmEmit -> String -> Unit
+noteFuncRef emit nm =
+  if omHasKey nm emit.functionReferenceNames.value then ()
   else
-    let _ = setRef funcRefsSetW (omInsert nm () funcRefsSetW.value)
-    setRef funcRefsRef (nm::funcRefsRef.value)
+    let _ = setRef emit.functionReferenceNames (omInsert nm () emit.functionReferenceNames.value)
+    setRef emit.functionReferences (nm::emit.functionReferences.value)
 
 export emitProgram : WasmEmitInput -> CProgram -> String
 emitProgram input cp = emitProgramWith (freshWasmEmit WGapStrict) input cp
@@ -1077,12 +1064,6 @@ emitProgramRecord input cp =
 
 emitProgramWith : WasmEmit -> WasmEmitInput -> CProgram -> String
 emitProgramWith emit input (CProgram groups ctorArs ctorTypes impls) =
-  let _ = setRef lamIdRef 0
-  let _ = setRef liftedFnsRef []
-  let _ = setRef liftedNamesRef []
-  let _ = setRef liftedNamesSetW omEmpty
-  let _ = setRef funcRefsRef []
-  let _ = setRef funcRefsSetW omEmpty
   let _ = setRef useStrRef (programUsesStr groups)
   -- W7: scan the program for collection usage (gates type-section decls + forces
   -- ref-mode — every collection is a boxed (ref eq) value).
@@ -1148,12 +1129,6 @@ emitProgramWith emit input (CProgram groups ctorArs ctorTypes impls) =
 export emitProgramGaps : WasmEmitInput -> CProgram -> List String
 emitProgramGaps input (CProgram groups ctorArs ctorTypes impls) =
   let emit = freshWasmEmit WGapRecord
-  let _ = setRef lamIdRef 0
-  let _ = setRef liftedFnsRef []
-  let _ = setRef liftedNamesRef []
-  let _ = setRef liftedNamesSetW omEmpty
-  let _ = setRef funcRefsRef []
-  let _ = setRef funcRefsSetW omEmpty
   let _ = setRef useStrRef (programUsesStr groups)
   let _ = setRef useListRef False
   let _ = setRef useArrayRef False
@@ -2462,7 +2437,7 @@ emitRefProgram prog groups =
   -- (0 UNFORCED / 1 FORCING / 2 FORCED); the value cell $g_<name> stays (ref null eq).
   let lazyStateGlobals = map oneGlobalState (filterList (isLazyGlobalW prog) valNames)
   let globals = rngGlobal ++ dispGlobals ++ map oneGlobalRef valNames ++ lazyStateGlobals
-  -- emit user fns FIRST (this is what accumulates lifted lambdas into liftedFnsRef).
+  -- emit user fns FIRST (this accumulates lifted lambdas into this WasmEmit).
   let fns = flatMap (emitRefFnBind prog) (userFnBinds groups)
   -- W5: the typeclass impl functions ($mdk_impl_<tag>_<method>), emitted as ordinary
   -- (ref eq) functions the RKey direct call / RDict if-chain dispatch into.
@@ -2476,13 +2451,13 @@ emitRefProgram prog groups =
   -- layer-15: the synthesized interface-default defines ($mdk_default_<method>_<tag>),
   -- accumulated during fns/implFns/INIT body emission — a `filter` call may live in a
   -- value binding / `main` (emitRefInit), so this drain must follow initLines too.
-  -- Each default's inner lambda already drained into liftedFnsRef, so this precedes
+  -- Each default's inner lambda already drained into this WasmEmit, so this precedes
   -- the `lifted` concat.  Drained UNCONDITIONALLY (a default define is a plain fn).
   let defaultDefs = flatMap (x => x) (reverseL (progEmit prog).defaultDefinitions.value)
   -- now drain the lifted-lambda defs + the closure-apply runtime + elem-declare.
-  let lifted = if progUseClos prog then flatMap (x => x) (reverseL liftedFnsRef.value) else []
+  let lifted = if progUseClos prog then flatMap (x => x) (reverseL (progEmit prog).liftedDefinitions.value) else []
   let applyRt = if progUseClos prog then closApplyLines else []
-  let elemDecl = if progUseClos prog then [emitElemDeclare ()] else []
+  let elemDecl = if progUseClos prog then [emitElemDeclare (progEmit prog)] else []
   -- W6: the byte-write IO runtime (int/bool printers always; the $str-dependent
   -- string runtime only when strings are used) + the string-literal passive data
   -- segments (drained from this Prog's WasmEmit, in segment-index order).
@@ -2578,10 +2553,10 @@ insertSeg (i, b) ((j, c)::rest) =
 
 -- the `(elem declare func …)` line listing every fn `ref.func`'d (lifted lambdas,
 -- the PAP code, and any top-level fn used as a value) — required so `ref.func`
--- validates.  Drained from `funcRefsRef` after all bodies are emitted.
-emitElemDeclare : Unit -> String
-emitElemDeclare _ =
-  let names = "$mdk_pap" :: reverseL funcRefsRef.value
+-- validates.  Drained from WasmEmit after all bodies are emitted.
+emitElemDeclare : WasmEmit -> String
+emitElemDeclare emit =
+  let names = "$mdk_pap" :: reverseL emit.functionReferences.value
   "  (elem declare func " ++ joinWith " " names ++ ")"
 
 oneGlobalRef : String -> String
@@ -3528,7 +3503,7 @@ needsClosWrapper prog name =
 -- at the value-reference site (emitVarRef) so partial application threads its arity.
 emitFnClosWrapper : Prog -> String -> Int -> List String
 emitFnClosWrapper prog name arity =
-  let _ = noteFuncRef ("$mdk_w_" ++ name)
+  let _ = noteFuncRef (progEmit prog) ("$mdk_w_" ++ name)
   let argLoads = flatMap (i => [
     "local.get $args",
     "i32.const " ++ intToString i,
@@ -5075,7 +5050,7 @@ emitVarRefPlain prog env d x =
   else if isDeferredFloatExternW x then floatExternStub x
   else if isUnimplStrExternW x then floatExternStub x
   else if progFnMemberW prog x then
-    let _ = noteFuncRef ("$mdk_w_" ++ x)
+    let _ = noteFuncRef (progEmit prog) ("$mdk_w_" ++ x)
     ["ref.func $mdk_w_" ++ x, "i32.const " ++ intToString (progFnArity prog x),
      "array.new_fixed $argarr 0", "struct.new $clos"]
   -- W9: a bare prelude reference synthesized post-mangle (string-interp / `!=`) →
@@ -5093,8 +5068,8 @@ emitExternEtaClosure : Prog -> String -> List String
 emitExternEtaClosure prog name =
   let arity = externArityW name
   let lamName = "$mdk_ext_" ++ name
-  let _ = noteFuncRef lamName
-  let _ = addLiftedNamed lamName (emitExternEtaDefine prog lamName name arity)
+  let _ = noteFuncRef (progEmit prog) lamName
+  let _ = addLiftedNamed (progEmit prog) lamName (emitExternEtaDefine prog lamName name arity)
   [
     "ref.func " ++ lamName,
     "i32.const " ++ intToString arity,
@@ -5151,8 +5126,8 @@ emitCtorEtaClosure : Prog -> String -> List String
 emitCtorEtaClosure prog ctor =
   let arity = ctorArity prog ctor
   let lamName = "$mdk_wctor_" ++ gname ctor
-  let _ = noteFuncRef lamName
-  let _ = addLiftedNamed lamName (emitCtorEtaDefine prog lamName ctor arity)
+  let _ = noteFuncRef (progEmit prog) lamName
+  let _ = addLiftedNamed (progEmit prog) lamName (emitCtorEtaDefine prog lamName ctor arity)
   [
     "ref.func " ++ lamName,
     "i32.const " ++ intToString arity,
@@ -7421,15 +7396,15 @@ emitLitSwitchTail prog _ _ _ _ _ _ _ _ _ _ =
 -- never consults a name-keyed table.
 emitClosure : Prog -> List String -> Int -> List Pat -> CExpr -> List String
 emitClosure prog env d pats body =
-  let n = freshLamId ()
+  let n = freshLamId (progEmit prog)
   let lamName = "$mdk_lam" ++ intToString n
   -- W2/cat2: a param may be a destructuring pattern (tuple/ctor); its BOUND vars
   -- (patVars) — not a single synthetic name — are what the body's free-var set
   -- subtracts, so the captures are computed over the real bound names.
   let boundVars = flatMap patVars pats
   let captured = filterList (c => contains c env) (dedupKeep (freeVarsExpr boundVars body))
-  let _ = noteFuncRef lamName
-  let _ = addLifted (emitLamDefine prog lamName pats captured body)
+  let _ = noteFuncRef (progEmit prog) lamName
+  let _ = addLifted (progEmit prog) (emitLamDefine prog lamName pats captured body)
   -- build the closure struct at the use site: ref.func, arity, env array of captures.
   let capInstrs = flatMap (c => ["local.get $" ++ gname c]) captured
   ["ref.func " ++ lamName, "i32.const " ++ intToString (listLen pats)]
@@ -7558,7 +7533,7 @@ argLoadAt (p, i) = [
 -- of the block.  Peer of the native emitter's `emitRecLam` route in emitBlock.
 emitSelfRecLocalBind : Prog -> List String -> String -> List Pat -> CExpr -> List String
 emitSelfRecLocalBind prog env x pats body =
-  let gid = freshLamId ()
+  let gid = freshLamId (progEmit prog)
   let bind = CBind x [CClause pats body]
   let groupCaps = filterList (c => contains c env) (dedupKeep (filterList (notIn [x]) (freeVarsClauses [] bind)))
   let _ = emitLgLifted prog gid [x] groupCaps [bind] bind
@@ -7566,7 +7541,7 @@ emitSelfRecLocalBind prog env x pats body =
 
 emitLetGroupRef : Prog -> List String -> Int -> List CBind -> CExpr -> List String
 emitLetGroupRef prog env d binds body =
-  let gid = freshLamId ()
+  let gid = freshLamId (progEmit prog)
   let valBinds = filterList isLgValBind binds
   let fnBinds = filterList (b => not (isLgValBind b)) binds
   let valNames = map lgBindName valBinds
@@ -7622,7 +7597,7 @@ emitLgLifted : Prog -> Int -> List String -> List String -> List CBind -> CBind 
 emitLgLifted prog gid names groupCaps binds (CBind name clauses) =
   let _ = setCurrentBindingOfW (progEmit prog) ("lg:" ++ name)
   let lamName = "$mdk_lg\{intToString gid}_\{gname name}"
-  let _ = noteFuncRef lamName
+  let _ = noteFuncRef (progEmit prog) lamName
   let arity = clauseArityOf clauses
   let params = synthParams arity
   let capPrologue = flatMap (capLoadAt) (zipIdx groupCaps 0)
@@ -7650,7 +7625,7 @@ emitLgLifted prog gid names groupCaps binds (CBind name clauses) =
     ++ map ("  " ++ _) localLines
     ++ indent (setup ++ capPrologue ++ memberRebuilds ++ argPrologue ++ bodyLines)
     ++ ["  )"]
-  addLifted def
+  addLifted (progEmit prog) def
 
 -- rebuild ONE member's closure value (ref.func + arity + $argarr of groupCaps) and
 -- bind it to its local `$<name>`.  Used BOTH at the use site and inside each lifted
