@@ -18,7 +18,7 @@ stops the bite. Two of the four scope premises I was handed are wrong.
 | **#991** | *"`implObls` still carries the pre-#838 tuple, three `Provenance` arms are dead, the numlit descope is unrecorded"* | 🚨 **ALL THREE CLAUSES ARE FALSE ON THIS TREE. #991 IS A DESK CLOSE, NOT A BITE LIST.** Landed in `fa9f7564` + `f37b2562`, both ancestors of BASE. |
 | **#994** | *"fuse the slot-parallel lockstep table pairs … into single record-valued tables"* | ✅ **NOT landed — real work.** But it is **not three pairs**: pair 1 is now a **triple**, and pair 3 has **nothing to fuse** (its invariant is already a type fact). Full fusion is **not byte-identical** at six whole-table replacement sites. Bites below are cut to the byte-identical subset. |
 | **#1114** | *"already LANDED … verify and close"* | ✅ **CLOSE, with two stale-citation repairs owed.** Policy half landed; #845/#792 both CLOSED with fixtures in tree. Closing comment drafted in §4. |
-| **#1265** | ambiguous, adjudicate | ⛔ **OUT.** The pull-in rests on a **name coincidence**, derived and refuted in §5. Not the same defect as #1182 — both issues say so and name the discriminator. |
+| **#1265** | ambiguous, adjudicate | ⚖️ **SPLIT — Fable's third option ACCEPTED, on a corrected reason.** Default-arm **KEYING is IN** (new bite `B-2.4-k`); the method-namespace lane stays **OUT**. ⚠️ **Fable's stated ground — *"B-2.4's row already claims it"* — is FALSE**, and relaying it would produce the exact half-delivery Fable warns about (§5). The boundary is stated in terms of *what is keyed*, per the orchestrator's instruction. |
 | **#1597** | presumption OUT | ⛔ **OUT**, presumption upheld. Pin exists and is well-formed. ⚠️ The brief's *"whose F-3 bite was refused"* is a **conflation** — see §6. |
 
 **Consequence for the run's shape:** Phase 1 (B-3) is roughly **half the size the sprint doc
@@ -550,13 +550,31 @@ Both closed **before** BASE. The design doc's *"#845/#792 both CLOSED"* is accur
 
 ---
 
-# 5. ADJUDICATION 2 — #1265: **OUT.** The pull-in is a name coincidence.
+# 5. ADJUDICATION 2 — #1265: **SPLIT.** Default-arm KEYING is IN; the method-namespace lane is OUT.
 
 `gh issue view 1265` → **OPEN**, `S0: silent wrongness, verified, ws:soundness, ws:typecheck`.
 
-## 5.1 §9.3, quoted
+> ## 🔄 THIS SECTION WAS REVISED AFTER THE FABLE CONSULT. Read the revision honestly.
+>
+> My first ruling was **OUT**, on the derivation in §5.3: B-2.4's charter phrase *"disjoint
+> default-tag namespace"* does **not** mean #1265's fix, so the pull-in I had been given was a name
+> coincidence. **That derivation stands and is not retracted** — it is now load-bearing for the
+> *opposite* conclusion, see §5.6.
+>
+> What changed my ruling is that the orchestrator's brief framed #1265 as binary, and Fable supplied
+> a **third argument I was not given and did not derive myself**: default arms are a **fourth
+> discharge kind**, so an order-sensitive default-arm selector is an **order-sensitive evidence
+> organ**, and leaving one standing means the run cannot claim C4/I2 as a conjunction. That is an
+> argument from the property the sprint claims to deliver, not from B-2.4's wording. It is right, and
+> it defeats my OUT.
+>
+> ⚠️ **Fable's own stated ground for the split is FALSE** (*"B-2.4's row already claims it"*), and if
+> that wording reaches an implementer verbatim the bite is delivered as nothing. §5.6 is why. So the
+> split is accepted and its *justification is rewritten*.
 
-The pull-in rests on `compiler/TYPECHECK-TARGET-ARCHITECTURE.md:1829`, the §9.6 disposition table:
+## 5.1 §9.3, quoted — and verified in the source, not only in the doc
+
+The disposition under adjudication is `compiler/TYPECHECK-TARGET-ARCHITECTURE.md:1829`, the §9.6 table:
 
 > | `ifaceImplHeadsRef` / `ifaceIdsAtTag` / `defaultOwnedBy` / `narrowDefaults` / `CImplDefault`
 > (`compiler/ir/core_ir_lower.mdk`, both emitters), `defaultCellName` cells
@@ -577,103 +595,259 @@ and immediately (`:1567-1569`):
 > would rebuild #1265 in the new substrate: that pair is exactly the key whose two survivors #1265 is
 > the first-match over.
 
-## 5.2 The two readings, and which one §9.3's own text supports
+The constraint is also enforced **in the compiler source itself**, at the `IE` block. P0-A relayed
+this and the orchestrator asked me to verify it first-hand rather than accept the relay. **Confirmed
+verbatim**, `compiler/types/typecheck.mdk:3945-3951`:
 
-- **Reading R1 (in):** the disposition column says *"— B-2 / #1265"*, therefore #1265 is B-2's to fix.
-- **Reading R2 (out):** §9.3 is a **prohibition on `IE`**. Its disposition column answers *"is this
-  table becoming part of `IE`?"* — answer *"no, and here is which stage's blast radius it sits in
-  instead."* **#1265 is named as the ANTI-GOAL** — the thing §9.3 exists to avoid rebuilding — not as
-  a work item.
+```
+-- 🚨 THE CONSTRAINT (§9.3), MECHANICALLY ENFORCED BY CHECK 4 ABOVE.  `IE` is
+-- keyed by IMPL IDENTITY.  An interface's default-method arm is a property of the
+-- INTERFACE declaration (`CE`, A-3a) and the emit-side method/default *word*
+-- namespace belongs to B-2 (#1113).  NO `IE` KEY COMPONENT MAY BE A METHOD NAME:
+-- a `(method, tag)`-keyed default registry here would rebuild #1265 in the new
+-- substrate, since that pair is exactly the key #1265 is the first-match over.
+-- A method name enters an `IE` row only as PAYLOAD (`ieMethods`).
+```
 
-**I rely on R2, and three things in §9.3 decide it:**
+P0-A's reading is correct, and its conclusion — *B-2.1 adds no method-keyed `IE` component, so it does
+not prejudge this adjudication* — follows: the constraint binds **`IE`'s key**, and it names B-2 as
+the owner of the **emit-side** namespace in the same breath. It constrains where the default-arm
+registry may **not** go; it does not forbid fixing the registry where it is.
 
-1. **Leg 3 is a declared NON-FLIP.** `:1615-1620`: *"`test/must_fail_fixtures/1265-two-ifaces-same-method-one-type-default-collapse` must stay RED
-   across A-3.4 … It is the *observable* of this constraint: if A-3.4 changed the default-arm answer
-   in any direction, the pin flips and the must-fail gate reds naming #1265."* A design that assigned
-   #1265's fix to a stage would not make its pin an unflipped tripwire; it would schedule the flip.
-2. **The whole section is about what `IE`'s key may contain**, enforced by a greppable ratchet
-   (`:1580-1588`: check 4 fails if any of `defaultFnName`, `defaultCellName`, `ifaceIdsAtTag`,
-   `defaultOwnedBy`, `narrowDefaults`, `CImplDefault`, `methodIfaceTableRef` appears inside `IE`'s
-   block). That is a **prohibition on mentioning these symbols in the new substrate** — the opposite
-   of a mandate to rewrite them.
-3. **The table's other rows use the same column the same way.** `:1829`'s neighbours read
-   *"**NOT `IE`** — #1112 §1 row 7: belongs with B-2"* and *"**DEFERRED → B-2, by DELETION**"*. The
-   column names **which stage's blast radius owns the table**, and pairs it with the issue that lives
-   there. It is a routing note.
+## 5.2 The three readings of §9.3, and which the text supports
 
-## 5.3 The pull-in is a NAME COINCIDENCE — derived
+- **Reading R1 (fully in):** the disposition column says *"— B-2 / #1265"*, therefore #1265 is B-2's
+  to fix, entire.
+- **Reading R2 (fully out):** §9.3 is a **prohibition on `IE`**. Its disposition column answers *"is
+  this table becoming part of `IE`?"* — *"no, and here is whose blast radius it sits in instead."*
+  #1265 is the **anti-goal**, not a work item.
+- **Reading R3 (split — ADOPTED):** §9.3 partitions the *substrate*, not the *work*: `IE` = impls ·
+  `CE` = interface defaults · **B-2 = the emit-side default/method word namespace**. It therefore says
+  where #1265's fix belongs — **B-2's emit side** — while forbidding the one place it must not go
+  (`IE`'s key). It rules on **location**, and is silent on **schedule**.
 
-The strongest case for R1 is that the sprint doc's **B-2.4** charter says *"disjoint default-tag
-namespace"* (`STAGE-B-SPRINT.md:71`), which looks like #1265's first fix bullet (*"emit
-`mdk_default_<ifaceId>_<method>_<tag>`"*). **It is not.** #1113's body defines the phrase
-parenthetically — `gh issue view 1113 --json body`, blast list:
+**R3 is what the text says, and §9.9 makes it decisive.** R2 was my first reading and it over-reads
+the section: §9.3's legs constrain *A-3.4's own diff*, and the section's normative sentence
+(`typecheck.mdk:3948`, arch `:1560-1565`) hands the emit-side namespace **to B-2 by name**. The
+falsifier list settles the schedule question explicitly — `TYPECHECK-TARGET-ARCHITECTURE.md:2011-2012`:
+
+> - **#1265's pin flips.** `IE` absorbed the default arm, or the emit words moved.
+>   **Revert; that is B-2's.**
+
+Read the two disjuncts. A flip because *"`IE` absorbed the default arm"* violates §9.3. A flip because
+*"the emit words moved"* does not — and **"Revert; that is B-2's"** says the flip is forbidden *in
+A-3.4* precisely **because it belongs to B-2**. A design that meant #1265 to stay untouched forever
+would say "revert; that is out of scope", not "that is B-2's". **This is the citation that overturns
+my OUT**, and I had read §9.9 for the pin's status without reading its second clause — the *"read six
+lines up"* failure, one line down.
+
+**What survives from R2, and why it still matters:** three things in §9.3 that are genuinely about
+A-3.4 and must not be re-read as scheduling #1265's fix:
+
+1. **Leg 3's non-flip is scoped to A-3.4, by its own words.** `:1615-1620`: *"must stay RED **across
+   A-3.4** … if **A-3.4** changed the default-arm answer in any direction, the pin flips."* Stage A is
+   landed. **The declaration has expired**, and reading it as a standing prohibition — which I did —
+   is the *"a deliberate cost note has a stale premise"* shape. §9.9's *"Revert; that is B-2's"* is the
+   same sentence read forward instead of backward.
+2. **The ratchet's forbidden-symbol list constrains `IE`'s BLOCK, not the tree.** `:1580-1588`: check 4
+   fails if `defaultFnName`, `defaultCellName`, `ifaceIdsAtTag`, `defaultOwnedBy`, `narrowDefaults`,
+   `CImplDefault` or `methodIfaceTableRef` appears **inside `IE`'s delimited block**. It is
+   occurrence-scoped to that block (*"Occurrence-level extraction (`grep -oE`), never a per-line
+   containment test"*). **Editing those symbols where they live is unaffected** — check 4 cannot see
+   `llvm_emit.mdk`. ⚠️ This is a real constraint on `B-2.4-k`'s shape all the same: the fix must not
+   route the interface identity **through `IE`**.
+3. **The table's other rows use the column the same way** — `:1829`'s neighbours read *"**NOT `IE`** —
+   #1112 §1 row 7: belongs with B-2"* and *"**DEFERRED → B-2, by DELETION**"*. The column names the
+   owning stage. Under R3 that is an **assignment**, which is how the two `DEFERRED → B-2` rows are
+   already being read by this very sprint (B-2.1 deletes `KeyBuckets` because of that column).
+   Reading the same column as a mere routing note **only** for the `#1265` row was special pleading on
+   my part, and it is the inconsistency that broke my OUT.
+
+## 5.3 ⚠️ Fable's stated ground is FALSE. The split must be written as an ADDITION, not a clarification.
+
+Fable's item 3 justifies the split with *"B-2.4's row **already claims it**"*, and §5's own
+contradiction table (`P0-FABLE-c4i2.md:47`) reads *"B-2.4's row DOES claim 'disjoint default-tag word
+namespace' (sprint line 71; arch `:1250-1252`) — **which is the keying fix**"*. **That identification
+is wrong, and I derived it independently before reading the consult.**
+
+`gh issue view 1113 --json body` defines the phrase **parenthetically, at its origin**:
 
 > LLVM emitter `implEntryRouteWords` superset-OR retirement + `noneHeadTag` catch-all re-key + the
 > **disjoint default-tag word namespace** (*synthesized default-method arms exist for receiver tags
 > with no impl — do not collapse them into the instance namespace*)
 
-So B-2.4's namespace is the **route-word** set: *default arms vs impl arms* must not collide as
-dispatch words. #1265's collision is in the **emitted symbol / eval cell name**: two *different
-interfaces'* default bodies for the same method at the same tag collide on
+So B-2.4's namespace is the **route-word / dispatch-arm** set: *default arms vs impl arms* must not
+collide **as dispatch words**. #1265's collision is in the **emitted symbol and eval cell name**: two
+*different interfaces'* default bodies for one method at one tag collide on
 `mdk_default_<method>_<tag>` (`defaultFnName`, `llvm_emit.mdk:1342`; `defaultFnNameW`,
-`wasm_emit.mdk:4516`; eval's cell keyed the same way). **Different namespaces, different symbols,
-different sites.** Two things sharing the word "default" and the word "namespace" is not a scope
-overlap, and this is precisely the *"a precise citation is not a verified one"* failure — the phrase
-matches, the referent does not.
+`wasm_emit.mdk:4516`; eval's cell keyed the same way). Different namespace, different symbols,
+different sites.
 
-## 5.4 #1265 vs #1182 — NOT the same defect. The "out" ruling is therefore stable.
+🚨 **And here is the mechanism of Fable's error, which matters more than the error.** The two sources
+it cites are not equivalent: `TYPECHECK-TARGET-ARCHITECTURE.md:1250-1252` reproduces #1113's blast list
+**with the parenthetical gloss stripped out** —
 
-The brief correctly flags that if these were one defect at two granularities, then #1182 being on the
-drain list (`STAGE-B-SPRINT.md:75`) would destabilize an "out" on #1265. **They are not.** Both issue
-bodies state the discriminator, and they agree with each other:
+```
+compiler/TYPECHECK-TARGET-ARCHITECTURE.md:1250-1252
+  `implEntryRouteWords` superset-OR retirement + `noneHeadTag` catch-all
+  re-key + the disjoint default-tag word namespace, `wasm_emit`'s peer arm
+```
 
-| | **#1265** | **#1182** |
+— and `STAGE-B-SPRINT.md:71` copies *that*. So the phrase reached both the sprint doc and Fable
+**without its definition**, and the only reading left available is the wrong one. Fable read the
+document it was given correctly; the document had lost the gloss two hops upstream.
+
+**Consequence for how the ruling is written, and this is the whole point of the correction:** if the
+split lands as *"B-2.4 already claims this, just do it"*, an implementer opens B-2.4's row, finds it
+means **route-words**, delivers the superset-OR retirement, and reports the row complete — having
+touched no default symbol. That is verbatim the failure Fable itself names in its own Disagreements
+section: *"a cut whose written form permits the same half-delivery it exists to prevent."*
+**Therefore `B-2.4-k` below is a NEW, SEPARATELY NAMED BITE with its own sites**, not a clarification
+of line 71, and the sprint doc's line 71 needs the gloss restored.
+
+## 5.4 #1265 vs #1182 — NOT the same defect, and the discriminator is *what is keyed*
+
+The orchestrator asked for the boundary in terms of **what is keyed**, not which issue number it is.
+Here it is, and it comes from #1265's own body rather than from me:
+
+> **"Filtering harder cannot fix this: with one name for two bodies, the narrowing has no
+> representable answer to narrow to."**
+
+That sentence is the boundary.
+
+| | **#1265 — a REPRESENTATION defect** | **#1182 — a SELECTION defect** |
 |---|---|---|
-| impls | **method-LESS** (`impl Speak Dog where`, empty) | **method-BEARING** (`m _ = 1`) |
-| defective machinery | the Core IR **untagged-default registry** — `ifaceIdsAtTag` (`core_ir_lower.mdk:1233-1240`), `narrowDefaults`/`defaultOwnedBy` (`llvm_emit.mdk:1321-1327`), `narrowDefaultsW` (`wasm_emit.mdk:4502-4508`), `pickDefaultCand` (`eval.mdk:1045-1060`) | the **shared front end** — `matchingEntries` selects by method-name membership, `pickMostSpecificEntry` ranks across interfaces |
-| trigger | one TAG carries two interfaces; name resolution unambiguous (each call site has only one interface in scope) | two interfaces in ONE file; `impl` block ORDER decides |
-| correct answer | **not in dispute** — DICT §5/§5.1 M1 + §8 I4 settle it (`A-default|B-default`) | **in dispute** — #1182's own "Disposition" offers two viable semantics |
-| fix sites | 3 **engine** sites, in lockstep | 1 **typecheck** selector |
+| what is keyed wrong | the key **evidence is STORED under**: the emitted symbol / eval cell (`mdk_default_<method>_<tag>`) | the key the **selector's CANDIDATE SET is gathered by**: method-name membership in `matchingEntries` |
+| is the right answer representable today? | **No.** One symbol, two bodies — `grep -c "B-default" entry_native.ll` → **0**; the losing default body is *absent from the emitted program* | **Yes.** Both impls are emitted and distinct; the wrong one is *ranked* |
+| does fixing it require a semantics ruling? | **No.** DICT §5/§5.1 M1 + §8 I4 fix the answer; #1265's Control 2 shows the machinery is already correct when the two tags differ | **Yes.** Which interface a same-named occurrence *denotes* — #1182's own Disposition offers two viable options, one of them a narrowing needing a declared flip list |
+| impls | method-**LESS** | method-**BEARING** |
+| sites | 3 **engine** sites in lockstep — `ifaceIdsAtTag` (`core_ir_lower.mdk:1233-1240`), `narrowDefaults`/`defaultOwnedBy` (`llvm_emit.mdk:1321-1327`), `narrowDefaultsW` (`wasm_emit.mdk:4502-4508`), `pickDefaultCand` (`eval.mdk:1045-1060`) | 1 **typecheck** selector (`matchingEntries` / `pickMostSpecificEntry`) |
 
-And #1265's own *"Not a duplicate"* section states the closing fact: **"Fixing #1182's selector would
-not touch `narrowDefaults`."** #1182's Control also confirms its own mechanism is cross-interface
-min⊑ ranking (a strictly-more-specific impl declared *second* still wins), which is a selector
-property, not a symbol-name property.
+**The boundary, stated so an implementer cannot land on the wrong side of it by proximity:**
 
-> They are two members of the same **family** (#1070, bare-name keys with no interface component) at
-> two different **tables**. Draining #1182's selector leaves #1265's symbol collision untouched, so
-> #1182 ∈ scope and #1265 ∉ scope is coherent.
-> ⭐ Per the standing rule *a drained fixture is not a drained class*: if B-2 lands a #1182 fix, the
-> `1265-*` pin **must still read REPRO**. If it flips, something touched the default-arm registry and
-> that is a finding.
+> ### At any site, ask: **can the key I am looking at even EXPRESS two distinct answers?**
+>
+> - **No — two distinct pieces of evidence share one key.** That is a **representation** defect.
+>   **IN.** Add the interface identity to the key. No semantics ruling is needed, because there is no
+>   choice being made yet — there is nowhere to put the answer.
+> - **Yes — the answers are distinct and stored, but the wrong one is chosen.** That is a **selection**
+>   defect, and choosing requires deciding *which interface a method occurrence denotes*.
+>   **OUT — #1354 M-2.** STOP and escalate; do not pick a winner inside a B-2 bite.
+
+This keeps both sides stable, which the bare in/out did not:
+
+- #1182 stays on the **drain list** (`STAGE-B-SPRINT.md:75`) as the run's business, and its *disputed*
+  half — the denotation question — is still M-2's. An implementer who reaches "which interface does
+  this `m` mean?" has crossed the boundary and must stop, whatever issue number they started from.
+- #1265's keying comes **IN** without importing the denotation question at all, because **#1265's own
+  repro has unambiguous name resolution**: *"`sayA` / `sayB` each call `speak` inside the module where
+  **only one** of the two interfaces is in scope, so name resolution is unambiguous."* The interface
+  identity already exists at the site — #1265: *"the marker already stamps a resolved impl key per call
+  site"*. `B-2.4-k` **carries an identity that is already determined**; it never decides one.
+
+⭐ **So: same FAMILY (#1070, a key with no interface component), two different tables, two different
+kinds of defect.** Not the same defect at different granularity — and now the reason is a property
+(*is the answer representable?*), not an issue number. #1265's *"Fixing #1182's selector would not
+touch `narrowDefaults`"* is the same fact from the other end.
+
+## 5.4a Why leaving it out is not neutral — Fable's actual argument, restated
+
+Fable's enumeration is what earns the split, so I state it in my own words and say whether I agree.
+
+**The claim:** the sprint's three discharge kinds (`inst`, `assum`, `super`) are incomplete. A dict's
+`methods` slot can be filled **from the class default**, which is a **fourth** way a goal's resolution
+is realized (`P0-FABLE-c4i2.md:102-104`). C4/I2 is a **conjunction** — *consult the same instance set
+**and** produce the same evidence* (`STAGE-B-SPRINT.md:136-137`). A default arm selected by first-match
+over two survivors is evidence whose value **depends on import order** — #1265's Control 1 is exactly a
+permutation differential: one order prints `A-default|A-default`, the swap prints `B-default|B-default`,
+and the correct `A-default|B-default` *is produced by neither*. **So an unfixed organ 6 is an
+order-dependent evidence producer, and conjunct 2 fails there regardless of what B-2.1–B-2.4 achieve
+elsewhere.**
+
+**I agree, and I could not find a way out of it.** I looked for two:
+
+1. *Is a default arm really evidence, or just a method body?* It is evidence: it fills a **dictionary
+   slot**, and DICT §5/§5.1 M1 makes a method a projection **out of the selected instance's
+   dictionary**. Two interfaces' dictionaries for one type must hold two different function pointers
+   in that slot; today they hold the same one (`llvm_emit`'s single
+   `define i64 @mdk_default_speak_Dog`, called from both `mdk_ca__sayA` and `mdk_cb__sayB`). That is
+   evidence, and it is wrong.
+2. *Is it out of reach in this run's posture?* No — it is **three engine sites in the three files
+   B-2.4 already opens** (`llvm_emit.mdk`, `wasm_emit.mdk`, `eval.mdk`), and its golden cost is the
+   IR-text golden that is **already declared red for the whole run** (`STAGE-B-SPRINT.md:370`,
+   `diff_compiler_llvm_typed_ir`) under a blanket *"bless zero goldens"* (`:320`). The marginal
+   verification cost is near zero **in this posture specifically**.
+
+Had either answer gone the other way, I would have kept the OUT and recorded the gap. Neither did.
+
+**One thing I do NOT adopt from the consult:** its phrase *"disjoint per-interface default-tag
+namespace"* (`:123`) fuses two distinct namespaces under one name and would re-create the §5.3
+ambiguity in the ruling that fixes it. `B-2.4-k` below says *interface-identity-keyed default symbol*
+and names the six functions, so there is nothing left to interpret.
 
 ## 5.5 RULING
 
-> ## ⛔ #1265 is OUT of the Stage B sprint.
+> ## ⚖️ #1265 SPLITS. Default-arm **KEYING is IN**; the method-**namespace** lane is **OUT**.
 >
-> §9.3, on **reading R2**, does not assign it to B-2: it *prohibits* `IE` from acquiring a method-name
-> key component and makes #1265's pin the **unflipped observable** of that prohibition (`:1615-1620`).
-> The apparent assignment via B-2.4's *"disjoint default-tag namespace"* is a **name coincidence** —
-> #1113 defines that phrase as *default arms vs impl arms in the route-word set*, whereas #1265 is a
-> collision in the emitted **symbol name** `mdk_default_<method>_<tag>` (§5.3). It stays in the
-> **method-namespace lane (#1354 M-2)**, deferred out of Stage A by RUN-024, exactly as
-> `STAGE-B-SPRINT.md:86` has it.
+> **Reading of §9.3 relied on: R3.** §9.3 partitions the *substrate* (`IE` = impls · `CE` = interface
+> defaults · **B-2 = the emit-side method/default word namespace**, `typecheck.mdk:3948`, verified
+> first-hand) and forbids the one place the fix must not go — `IE`'s key. It rules on **location**, not
+> schedule. §9.9's falsifier settles the schedule: *"**#1265's pin flips.** `IE` absorbed the default
+> arm, or the emit words moved. **Revert; that is B-2's**"* (`:2011-2012`) — the flip is forbidden *in
+> A-3.4* **because it belongs to B-2**.
 >
-> **Two obligations this ruling creates, both cheap, and B-2.4 owes them:**
-> 1. **`test/must_fail_fixtures/1265-two-ifaces-same-method-one-type-default-collapse` is a DECLARED
->    NON-FLIP for this whole run.** It goes in `.claude/HANDOFF.md`'s expected-state set as
->    *"must read REPRO"*, **not** in the expected-red set. If it flips, B-2 changed the default-arm
->    answer and the bite that did so has escaped its brief. Per §9.3 leg 3, that is the designed
->    tripwire.
-> 2. **B-2.4's `engines:` row must state which default-arm symbols it touched.** Its charter reaches
->    `llvm_emit.mdk`, `wasm_emit.mdk` and `eval.mdk` — the same three files that hold #1265's fix
->    sites. Naming `defaultFnName`/`defaultCellName`/`narrowDefaults` as **untouched** is how the
->    non-flip stays checkable rather than hoped-for.
+> ### IN — new bite `B-2.4-k`, landing with B-2.4's engine work
 >
-> **Overturn criterion, stated so it can be exercised:** if a B-2.4 bite finds it *cannot* retire the
-> superset word-set arm without also re-keying `defaultFnName`/`defaultCellName`, then #1265 comes in
-> **as a consequence** — and that is a Phase-0-level escalation, not an implementer's call, because
-> #1265's second fix half (*select by the interface identity the call site resolved to*) is M-2's axis.
+> The **key evidence is stored under** gains the interface identity, so two interfaces' default bodies
+> for one method at one tag become two entities that *cannot* collapse. Named sites, all to move in
+> lockstep (the `evalModules`‖`cevalModules` hazard applies, and #1265's own body says so):
+> `defaultFnName` (`llvm_emit.mdk:1342`) · `narrowDefaults`/`defaultOwnedBy` (`llvm_emit.mdk:1321-1327`)
+> · `defaultFnNameW` (`wasm_emit.mdk:4516`) · `narrowDefaultsW`/`defaultOwnedByW`
+> (`wasm_emit.mdk:4502-4508`) · `pickDefaultCand`/`defaultCellName` (`eval.mdk:1045-1060`) ·
+> `ifaceIdsAtTag` (`core_ir_lower.mdk:1233-1240`). ⚠️ **Line numbers are #1265's, as of `2a8c4905`;
+> grep the symbols.** The identity is **carried, never decided** — #1265's repro resolves
+> unambiguously and the marker already stamps a resolved impl key per call site.
+>
+> ### OUT — #1354 M-2 (#1276 / #1386 / #1351), unchanged
+>
+> Deciding **which interface a same-named method OCCURRENCE denotes** when two are in scope. That
+> needs a semantics ruling and a declared flip list, and it is the disputed half of **#1182**.
+>
+> ### The boundary, in terms of what is keyed — the test an implementer applies at the site
+>
+> **Can the key even EXPRESS two distinct answers?** *No* → representation defect → **IN**, add the
+> interface identity. *Yes, but the wrong one is chosen* → selection defect → **OUT, STOP, escalate.**
+> #1265's own sentence is the authority: *"with one name for two bodies, the narrowing has no
+> representable answer to narrow to."* This is why **#1182 ∈ drain list and #1265's denotation half ∉
+> scope** remain simultaneously coherent, and why an implementer cannot land on the wrong side of it by
+> proximity: the test names a property of the key in front of them, not an issue number.
+>
+> ### Three obligations this ruling creates
+>
+> 1. 🚨 **`test/must_fail_fixtures/1265-two-ifaces-same-method-one-type-default-collapse` FLIPS, and
+>    the flip is a DELIVERABLE.** It moves **out** of the declared-non-flip set and **into** the
+>    expected-red set in `.claude/HANDOFF.md`, named to `B-2.4-k`. ⚠️ **Per the issue-closure policy
+>    (`STAGE-B-SPRINT.md:100-103`) the run does NOT close #1265** — a flipped pin is the repair round's
+>    attack list, and closure needs the adversarial review every soundness fix here gets. **The
+>    flipped pin's expected new value must be the hand-derived `A-default|B-default`, from DICT §5/§5.1
+>    M1 + §8 I4 — never captured from an engine**, since all three engines are equally wrong today and
+>    `diff_compiler_engines` is structurally blind to it.
+> 2. **`STAGE-B-SPRINT.md:71` and `TYPECHECK-TARGET-ARCHITECTURE.md:1250-1252` need #1113's
+>    parenthetical gloss restored** (§5.3). Without it, "disjoint default-tag namespace" reads as
+>    `B-2.4-k` to one reader and as the route-word arm to the next, and the sprint doc's §1 contradiction
+>    (line 71 vs lines 86-89) stays live for whoever reads it after us.
+> 3. **`B-2.4-k` must not route the identity through `IE`.** `registry_keying_ratchet.sh` check 4 fails
+>    on `defaultFnName`/`defaultCellName`/`ifaceIdsAtTag`/`defaultOwnedBy`/`narrowDefaults`/
+>    `CImplDefault`/`methodIfaceTableRef` appearing inside `IE`'s block (§9.3 leg 2). Editing them
+>    where they live is fine; reaching them *from* `IE` is the prohibited shape and reds a required job.
+>
+> ### Overturn criterion
+>
+> If `B-2.4-k` turns out to need the **denotation** answer for any program in the sprint's corpus — not
+> #1265's repro, which resolves unambiguously, but a site where two interfaces with the method are in
+> scope — then the boundary has been crossed and it is a **Phase-0 escalation**, not an implementer's
+> call. That case is M-2's, and the honest outcome is `B-2.4-k` landing the keying and **declaring the
+> denotation cell unfixed** in `DEBT.md`'s `nearest miss:` row.
 
 ---
 
@@ -794,10 +968,20 @@ Its control is `bmod.mdk` **as its own entry, byte-for-byte** — only graph mem
 | **B-3-e** | #991/#1114 | ✅ bite (docs) — dead `implOblToU` citation (`DICT-SEMANTICS.md:2491`, `typecheck.mdk:20661`); `D1–D6` → `OD1–OD6` (`TYPECHECK-TARGET-ARCHITECTURE.md:749`). |
 | **B-3-f** | #991 | ✅ desk — post the drafted closing comment, close #991. **No implementation.** |
 | **A-1** | #1114 | ✅ **CLOSE** (desk). Comment drafted §4. Two repairs ride in B-3-e. |
-| **A-2** | #1265 | ⛔ **OUT.** Reading R2 of §9.3. Pin is a DECLARED NON-FLIP; B-2.4 owes the `engines:` statement. |
+| **A-2** | #1265 | ⚖️ **SPLIT** on **reading R3** of §9.3 (§9.9 `:2011-2012`, *"Revert; that is B-2's"*). Keying **IN** as new bite **`B-2.4-k`** (6 symbols, 4 files); denotation **OUT** (M-2). Pin **FLIPS as a deliverable**; run does **not** close #1265. ⚠️ Fable's stated ground is false — write the bite by name, not as a clarification of line 71. |
 | **A-3** | #1597 | ⛔ **OUT.** Pin present, well-formed, DECLARED NON-FLIP. Brief's F-3 framing corrected. |
 
+**Also owed by the `B-2.4-k` ruling** (§5.5), listed here so it is not lost in prose:
+`.claude/HANDOFF.md` moves the `1265-*` pin from non-flip to **expected-red, attributed to `B-2.4-k`**;
+`STAGE-B-SPRINT.md:71` and `TYPECHECK-TARGET-ARCHITECTURE.md:1250-1252` get #1113's parenthetical gloss
+restored; `B-2.4-k`'s new expected value is **hand-derived (`A-default|B-default`), never captured**.
+
 **Unresolved, escalated rather than settled:**
+0. **`B-2.4-k` is a scope ADDITION to B-2.4, not a clarification of it** (§5.3). The orchestrator
+   should record it in `.claude/sprint-b/DECISIONS.md` as its own row with its six named symbols. If
+   the sprint declines the addition, then the run must **scope its C4/I2 claim** to exclude default
+   arms in writing — Fable's item 4 — rather than leave a fourth discharge kind order-sensitive under
+   an unqualified headline. **Those are the only two honest options; silence is the Stage A failure.**
 1. **B-3's budgeted size is roughly halved** (#991 + #1114 are both desk items). Whether Phase 1 is
    still worth running as a *separate* calibration phase, or should be folded into Phase 2's opening,
    is the orchestrator's call. My recommendation: **keep it separate** — B-3-b is the one bite in the

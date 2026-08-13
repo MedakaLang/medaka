@@ -356,4 +356,281 @@ unfinished one.
 
 ---
 
-*(Rulings from P0-B, P0-D and P0-P are appended below as they land.)*
+## RUN-B-009 — 🚨 THE PHASE STRUCTURE IS RE-CUT. Phase 2 is NOT separable from Phase 3.
+
+**RUN-B-008's open question is CLOSED, and the answer was already measured in the tree.** P0-B found
+the site: `typecheck.mdk:22205-22211` — *"REJECT, DO NOT ROUTE … move only the checker's leg …
+**MEASURED** … `argReqRoute` of `RNone` and a binary that still faults."*
+
+So P0-A's proposed `iff` (*"can land alone iff both legs compute min⊑ over populations that
+agree"*) is **derivably false** — P0-B gives three grounds. And the failure direction is not merely
+a fault: it is a **severity increase**. The define side gains dict params that **no call site
+fills** — `ast.mdk:706-712`'s S-1 under-application. A run whose purpose is draining S0s would
+have introduced one.
+
+### The ruling: **do NOT collapse Phase 2 and Phase 3 — re-cut the AXIS.**
+
+P0-B proposed a better third option than the two I was weighing (land-alone vs merge), and I am
+adopting it:
+
+| new phase | content | why it is a coherent unit |
+|---|---|---|
+| **Phase 2′** | **population unification** — the checker leg AND the router/stamper leg move onto one substrate together; the route payload **stays a `String`** | This is where the **S0 drain** lives. Both legs move, so the desync above cannot arise |
+| **Phase 3′** | **payload identity** — the route payload becomes identity-bearing | Separable *because* the population is already unified |
+
+**Why this beats merging:** merging would produce one enormous unit whose goldens no bisect could
+attribute — precisely the failure the design doc names at F-3 (*"bundling them makes CI unable to
+say which half moved a golden"*). The re-cut **preserves the STOP-AND-LAND gate** and preserves
+golden attribution, while making the fault above structurally impossible rather than
+merely-avoided-by-ordering.
+
+**The STOP-AND-LAND gate stays where it is**, after Phase 2′ — and it now has real content: Phase
+2′ alone drains the S0s and is a coherent landable PR.
+
+### The `ImplBuckets` population is WIDER than the Fable consult stated — two corrections
+
+P0-B derived both, and both enlarge Phase 2′:
+
+1. **There is a THIRD `KeyBuckets` population**: `stampKeyTable = buildKeyTable implDecls`
+   (`:28682`), sitting beside `ImplBuckets` — and **it is where #203 put the stampers' min⊑.**
+   Neither the sprint doc nor the Fable consult reaches it.
+2. **There are SEVEN table-consuming stampers, not five.** ⚠️ **The Fable consult inherited the
+   tree's own stale comment at `:28679`** to get five. This is the standing rule biting inside
+   Phase 0 itself: **a count is an encoded fact with no derivation and no expiry.** Derive; never
+   quote — including from this ledger.
+
+Sizing, derived: **49 signatures, one file** — Sonnet-sized *as threading*, with the iface-`""`
+first-match fallback **carved out as a separate semantic bite** (it is a semantics change, not
+threading).
+
+### `SupersPath`: presumption **(a) CONFIRMED**, premise verified verbatim — and (a) is NOT free
+
+P0-B quoted `expandSupersTable:9037-9042`: *"APPENDS, per entry, one extra slot … Appended AFTER
+the declared slots … **Because the dict VALUE is just a type tag, the super slot's route is
+identical to the sub slot's.**"* Corroborated independently: `entail:18953` is a three-rung ladder
+with **no `super` arm**. So there is genuinely no path to reference and (a) is right.
+
+⚠️ **But (a) is not nothing:** identity-stamping **falsifies that header's own premise**, so B-2.2
+must **withhold** identity from appended slots — and **the tree destroys the boundary needed to do
+so.** Hence bite `B2.2-f` (preserve the declared/appended super-slot boundary). **#1127 is NOT
+drained** — its legs 1–2 are B-1's.
+
+⚠️ **The Fable consult's *mechanism* for this was wrong and P0-B corrected it:** nothing copies.
+The per-slot iface **exists** (`:9060-9064`); the real defect is that **two of three** fill paths
+are iface-blind (`routesOfMonos:19221` passes `""` → first-match; `recRoutes:19421` has no iface
+param at all). **Smaller fix, same verdict** — folded into `B2.2-d′`. Recorded because the right
+conclusion defended by wrong reasoning is a defect in its own right.
+
+### DICT §5, verbatim at last (`docs/spec/DICT-SEMANTICS.md:957-960`)
+
+> Inspecting a runtime value's constructor to select an impl is sound **iff** the class parameter
+> occurs in an argument position whose head constructor uniquely determines the **most-specific
+> matching instance** (§3), *and* that argument is evaluated.
+
+P0-B reports honestly that the brief and #1113 add two quantifiers the doc leaves implicit
+(*"every reachable constructor"*, *"every goal reaching the site"*), finds **no conflict**, and
+adopts the stronger reading explicitly. **Ruling: the stronger reading is the sprint's bar.** The
+weaker paraphrase this contract warned about (*"no overlap below the head"*) remains forbidden — it
+licenses an S0 at zero overlap.
+
+---
+
+## RUN-B-010 — B-3 SHRINKS: **#991 is already implemented.** And its "byte-identical" bar is wrong.
+
+### 🚨 #991 — **DESK CLOSE. All three clauses of its title are FALSE.**
+
+P0-D verified each at the stamp sites rather than from the enum's own comment — the distinction
+matters, because a comment is exactly what would have preserved the stale claim:
+
+- *"`implObls` still carries the pre-#838 tuple"* → **false.** `implObls : Windowed UObligation`
+  (`typecheck.mdk:6732`).
+- *"three `Provenance` arms are dead"* → **false.** All **six** arms have real producers:
+  `:10072`, `:10443`, `:10981`, `:8914`, `:10812`, `:11045`.
+- *"the numlit descope is unrecorded"* → **false.** Recorded at `:6733`.
+- `implOblToU` has **zero definitions and zero call sites**; three comments record its removal
+  (`:5257`, `:21764`).
+
+**Landed in `fa9f7564` as a rider on #1446's PR** — which is why no issue link closed it. This is
+the third time this arc that **the tracker lagged the tree**, and it is a *good* outcome: closing
+an issue as already-fixed is real progress. **No implementation; a desk close.**
+
+### #994 — bites take its **own fallback**, not its headline. The contract's bar was wrong.
+
+🚨 **Full fusion into single record-valued tables is NOT byte-identical** — six sites replace one
+member alone. So the contract's framing of B-3 as *"byte-identical bar"* does not survive contact
+with #994's headline. **Ruling: take #994's documented fallback — a fused paired *write op*** —
+which *is* mechanically checkable, preserving B-3's actual purpose as the calibration unit.
+
+- **B-3-a** — one fused write op for the fn-constraint **TRIPLE** (`:24268`, `:25317`,
+  `:14234`/`:14245`). #994's body predates `funConstraintArgsRef` (#1161), so the issue describes a
+  pair where the tree has a triple. `Option` args payload preserves `registerInferredFor`'s
+  asymmetry.
+- **B-3-b** — `expandSupersTable` (`:9037`) **+ `expandSupersCross` (`:9045`)**.
+  🚨 **THE ONE B-3 BITE THAT CAN MISCOMPILE:** `:9039` reads the **old** ifaces table before
+  `:9040` overwrites it. **Inverting that order double-expands super slots and changes dict
+  arity.** So much for "mechanically visible" — this bite gets the same care as a B-2 bite, and its
+  `could move:` must name dict arity explicitly.
+- **B-3-c** — fused write op at `registerMethodConstraints` (`:23700`), the sole co-write site. The
+  five ids-only reseed sites are **explicit non-sites**: positions-absence selects a fallback arm
+  (`:5845`, `:8614-8622`), so a non-`Option` fused field **changes behaviour**.
+- **B-3-d — DECLINED.** crossModule bare/Qual: different key types (`:5955-5956`), different
+  lifecycles (`:20621-20626`), and the invariant is **already a type fact** via `freshCrossRun`
+  (`:5870-5876`). Fusing would buy nothing and cost a type-level guarantee.
+- **B-3-e** — docs: the dead `implOblToU` citation in DICT §11's OD4 row (`:2491`); and `D1–D6` →
+  **`OD1–OD6`**, since the spec **forbids** the `D1–D6` spelling at `DICT-SEMANTICS.md:790` — a
+  spelling **this sprint doc and the design doc both use.**
+
+---
+
+## RUN-B-011 — the three adjudications, settled
+
+### #1114 — **CLOSE.** §4.2 OD1–OD6 (`:782`) + six §11 rows (`:2488-2493`); #845/#792 both CLOSED
+2026-08-05, with four `run_check_agreement_fixtures/` cells. Conformance is 🟡/🔴 in places but
+every residual is **re-homed to #1330/#1326/#1337**, so nothing is dropped by closing. Closing
+comment **drafted, not posted** — as instructed. Closure happens after the adversarial review gate,
+with the rest.
+
+### #1265 — **SPLIT: keying IN, denotation OUT.** And the agent revised its own ruling.
+
+P0-D **first ruled OUT**, then overturned itself on finding
+`docs/spec/DICT-SEMANTICS.md` §9.9 `:2011-2012`: *"#1265's pin flips … Revert; **that is B-2's**"* —
+i.e. the revert was forbidden in A-3.4 **precisely because** it is B-2's work. That is authority for
+IN, and it is the opposite of what proximity would have suggested.
+
+- **Keying → IN**, as new bite **`B-2.4-k`** (6 symbols, 4 files).
+- **Denotation → OUT** (the method-namespace lane, #1354 M-2).
+- **The boundary, stated in terms of what is keyed** — so an implementer cannot land on the wrong
+  side of it by proximity: ***can the key express two distinct answers?*** **No** → representation
+  → **IN**. **Yes, but the wrong one is chosen** → selection → **OUT**. That keeps #1182-in and
+  #1265-denotation-out coherent, which was the instability I asked about.
+- **#1265 and #1182 are NOT the same defect.** #1265's own line: *"the narrowing has no
+  representable answer to narrow to."*
+- ⚠️ **The Fable consult's ground for the split was FALSE, and the split is still right.** B-2.4's
+  *"disjoint default-tag namespace"* means **route-words** (#1113's parenthetical), and
+  `TYPECHECK-TARGET-ARCHITECTURE.md:1250-1252` **stripped that gloss** before this sprint doc copied
+  it — which is how Fable misread it. Written as a mere clarification the split delivers nothing;
+  written as keying it delivers the fourth discharge kind. **Right answer, wrong reasoning, caught
+  by a second agent.**
+- P0-A's `typecheck.mdk:3945-3951` quote (*"NO `IE` KEY COMPONENT MAY BE A METHOD NAME"*) was
+  **verified verbatim** by P0-D. My relay of it is now corroborated rather than trusted.
+
+**Ruling on the scope addition: `B-2.4-k` is ACCEPTED IN.** Reasons: §9.9 already assigns it to
+B-2, so this records existing ownership rather than growing scope; it is 6 symbols across 4 files;
+and it closes the **fourth discharge kind**, without which this run's headline C4/I2 claim would
+need a written caveat. **#1265 is NOT closed by this run** — only its keying half moves, and its
+pin flipping is a deliverable.
+
+⚠️ P0-D escalated rather than absorbing this, and was right to: *"if declined, the run must scope
+its C4/I2 claim to exclude default arms **in writing**; silence is the Stage A failure."*
+
+### #1597 — **OUT.** Presumption upheld.
+
+`DataEnv`/record territory, not evidence. Already adjudicated out in Stage A with its pin as the
+deliverable. Decisive added reason: RUN-030 documents a **loud-S1 → silent-S0** hazard there, which
+makes a **deferred-golden sprint the worst possible place** to touch it. Pin exists and is
+well-formed (3 modules + `claim.txt`).
+
+⚠️ **My brief was WRONG and P0-D corrected it:** #1597 is Stage A's **F-1/F-2** (filed and
+deferred, RUN-029). The bite **refused as unreachable dead code** was **F-3**, which belonged to
+**#1586's `DAttrib` arm** — a different node. I propagated that error from the sprint doc's §1;
+noted here so it does not propagate further.
+
+⭐ **P0-D declined to run the must-fail gate**, citing four live agents and a running build as
+*"the exact non-quiescence that made Stage A's '5 DRAINED' a phantom (RUN-033)."* **That is the
+quiescence protocol working without being asked** — the agent refused a measurement rather than
+producing a contaminated one.
+
+---
+
+## RUN-B-012 — the pins: one authored and PROVEN fail-capable, two refused with reasons
+
+P0-P closed the falsifiability hole, and refused two of the three rather than manufacturing pins
+that would have passed for the wrong reason. **All three outcomes are correct.**
+
+### #1071 — **PINNED and observed RED**, and ⭐ **proven fail-capable**
+
+`test/must_fail_fixtures/1071-eval-inherited-default-sibling-calls-typearg/`. `run main.mdk` → exit
+0, stdout `int/31`/`int/31` where `int/31`/`str/71` is correct. Row reads **REPRO** in
+`sh test/diff_compiler_must_fail.sh` (100 fixtures, **0 DRAINED, 0 control-broke, 0 malformed**,
+suite exit 0).
+
+⭐ **It did the thing this repo keeps getting burned for skipping:** it **proved the pin can fail**
+— temporarily asserted the *correct* `str/71`, confirmed the row flips to **DRAINED**, then
+reverted. A pin authored but never witnessed failing is indistinguishable from a malformed one, and
+**a malformed pin reports DRAINED, which reads as a benign verdict.** That has happened three times
+here. This one is now known to be live in both directions.
+
+Correct answer derived from **DICT semantics** (the dict is selected for the full applied type →
+`str/71`), with native's independent output as **corroboration only** — the right ordering, given
+eval is the known-wrong oracle on exactly this shape.
+
+### 🚨 #1071 is a DUPLICATE of #1062 — adjudicated by me, on the evidence
+
+P0-P flagged this and explicitly did **not** resolve it. Resolved here, having read both issue
+bodies first-hand rather than relaying the flag:
+
+| axis | #1062 | #1071 |
+|---|---|---|
+| engine | eval-only (native correct since #1058) | eval-only (native correct since #1058) |
+| shape | sibling-method call **inside an interface default body** | sibling-method call **inside an interface default body** |
+| collision | `Box Int` / `Box String` — head tycon shared, differ only in type args | `Box Int` / `Box String` — identical |
+| symptom | inner call resolves to the first impl at that head, for every receiver | inherited default's sibling calls dispatch to the sibling's type |
+
+**They are the same mechanism.** The only proposed distinction was #1071's sibling-call count
+(`tagOf` + `sizeOf`, two, vs #1062's `speak`, one) — and **P0-P MEASURED the one-sibling-call
+variant of #1071 reproducing identically**, so the call count is not the trigger. **#1071's own
+stated discriminator is false.**
+
+**Consequence for drain accounting, which is why this had to be settled now:** a single fix drains
+**both**. Anyone counting #1062 and #1071 as two drained S0s is **inflating this run's output by
+one**. Recorded in the fixture's own `why-note:`. ⚠️ **Neither is closed here** — closure is the
+repair round's, after the adversarial gate; this ruling only prevents double-counting.
+
+### #1068 — **NOT PINNABLE by this harness.** Ledgered, and the gap named honestly.
+
+Wasm-only, and `run_verb` has **no wasm engine** (verbs: check / check-json / check-types / run /
+build / build-run / fmt-write / mcp-call), while **eval and native are both correct** — so any pin
+this harness could write **would assert correct behaviour**, i.e. a fixture that passes for the
+wrong reason. Correctly refused.
+
+Coverage that does exist: **two self-draining `test/engine_divergence.txt` rows** naming it, with
+the shape-A (empty-stdout) / shape-B (partial-then-trap) asymmetry kept precise, and
+`diff_compiler_engines.sh` **hard-fails on PROMOTE**.
+
+⚠️ **NOT witnessed RED first-hand, and it says so plainly**: there is no `test/bin/` in this
+worktree, so the wasm oracle is unbuilt, and it **declined to build one under quiescence** — the
+right call. **Re-measuring both shapes is OWED to B-2.4** and is now that unit's entry condition,
+not an optional extra. This is also where AMENDMENT 6 bites: those two ledger rows **encode the
+retired design** (*"PROMOTE when wasm accepts the route-word set"*) and must be re-worded in the
+same PR that deletes the arm.
+
+### 🚨 #1075 — **NOT PINNABLE: the filed observable DOES NOT EXIST on this tree.**
+
+Measured: the issue's **verbatim** repro gives `build` **exit 0** and a binary printing
+`meow|meow` at **exit 0** — i.e. the **#1046** mechanism, **not** #1075's claimed exit-1
+`[E-PANIC]`. Cause: **#1075's observable was measured on unmerged PR #1074.**
+
+**This is a tracker defect, not a sprint finding:** #1075 carries the `verified` label while its
+stated observable is unreproducible on `main`. Both candidate pins would have been **false drains**
+— one flips when #1074 merely makes #1075 *reachable*, the other duplicates #1046's row. Refused,
+and ledgered in `test/MUST-FAIL-NOT-PINNABLE.txt` with the reason. Independently matches commit
+`17f3c185`, whose reasoning had lived **only in a commit message**; the ledger line now puts it
+where the must-fail census can see it.
+
+#1075 stays labelled **out of scope for Stage B** (F-1, with #1046).
+
+### Two items routed OUT of the sprint's critical path, recorded so they are not lost
+
+1. **An unfiled S1-shaped observation from P0-P**, preserved in `phase0/P0-P-pins.md`: *an impl that
+   **defines** a method at a primitive head makes the **emitter itself** `E-PANIC` at build time
+   (`arg-tag dispatch on impl type that owns no constructors`) on a program that `check`/`run`
+   **accept**.* P0-P did **no dedup search** and said so, so it is deliberately **not filed** —
+   filing an undeduped claim is the failure mode this ledger exists to prevent. **Owner: the repair
+   round**, whose first job is to dedup it against the #1046/#1075/F-1 family and file or fold it.
+2. **P0-P edited `test/MUST-FAIL-NOT-PINNABLE.txt`**, outside the `test/must_fail_fixtures/` path
+   its brief named — the brief authorized it explicitly, and it **flagged the excursion so it is
+   visible in the diff rather than discovered.** Noted as authorized.
+
+---
+
+*(P0-C's carrier ruling and P0-Q's probes are appended below as they land.)*

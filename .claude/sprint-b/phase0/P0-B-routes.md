@@ -601,3 +601,209 @@ Titles read from the tracker (`gh issue list`), all **OPEN**:
    behaviour surviving the route-word move rests **empirically** on the `noneHeadTag` fallback
    tier — is the tree's own warning, relayed, and it is exactly what B2.2-b's implementer must
    re-derive on a build.
+
+---
+
+## 7. ADDENDUM — answering the orchestrator's three questions (P0-FABLE + P0-A convergence)
+
+Added after reading `.claude/sprint-b/phase0/P0-FABLE-c4i2.md` (organ 2, organ 4) and
+`.claude/sprint-b/phase0/P0-A-reader.md` (`B-2.1-b`'s third `nearest miss:`). **I re-derived every
+citation I rely on below rather than relaying either file.** Where I correct them I say so.
+
+### 7.1 Does `ImplBuckets` belong in MY bite list? — **NO. It is B-2.1's axis. But it BLOCKS B-2.2, and the gap is BIGGER than Fable states.**
+
+**Fable's derivation is correct on every point I checked**, and two of its citations are the
+sharpest facts in this whole Phase 0:
+
+- `implEntryOf` (`typecheck.mdk:17611-17616`) — verbatim body: `match reqs` → **`[] => []`** →
+  `_ => implEntryFromTys …`. **`ImplBuckets` omits every impl that has no `requires`.** ✅
+- `ImplBuckets`' own header, `:17574-17585`, verbatim: *"The forward intra-bucket order is
+  load-bearing for the **RESIDUAL first-match consumer** (`findImplEntry`, the iface-unknown `""`
+  fallback) … (#203: the element/requires routers that USED to first-match this table … **now
+  select the most-specific impl over `KeyBuckets`** via `matchedEntry`/`selectImplEntryByIface`;
+  forward order still decides their tie-break when no unique min⊑ exists.)"* ✅ — i.e. **the
+  stampers' min⊑ runs on the table B-2.1 deletes.** Fable is right that this is the gap.
+- `stampImplTable = buildImplTable implDecls` at **`:28677`**, `implDecls` = *"core + every EARLIER
+  module + this module"* (`:28666-28668`), order-observable comment at `:28065-28066`. ✅
+
+**Three sharpenings, all derived, all of which make the gap wider than Fable's row 2 states:**
+
+1. 🚨 **It is a PAIR of tables, not one — and the second one is a THIRD `KeyBuckets`
+   population that nobody has named.** Beside `stampImplTable` at `:28677` sits
+   **`stampKeyTable = buildKeyTable implDecls` at `:28682`** — built from the *same cumulative
+   prefix*. So the min⊑ that `#203` moved onto `KeyBuckets` runs on **`stampKeyTable`**, which is
+   **not** the population B-2.1 repoints. Derived populations of `KeyBuckets`, all three:
+   - `crossRun.universeKeyBucketsRef` — cumulative accumulator (`:25755`);
+   - `perRun.shadowKeyTableRef` — **Flat**: `buildKeyTable fullUniverse` (`:20347`); **Module**:
+     a wholesale copy of the cumulative accumulator (`:20348`). *This* is what
+     `concreteReqMatchByIface` (`:21715`) and the two SHADOW readers (`:11216`, `:11503`) read,
+     and it is the only one line 68 of the sprint doc names;
+   - **`stampKeyTable` (`:28682`) + its Flat peer `keyTable = buildKeyTable prog2` (`:14123`)** —
+     what every route stamper reads. **Unnamed in the sprint doc, unnamed in Fable's row 2.**
+
+   Consequence, stated as the thing to attack: **deleting `universeKeyBucketsRef` does not by
+   itself move a single stamper's min⊑.** An implementer could execute line 68 to the letter,
+   see the reader repointed, and leave the entire stamping side on a cumulative prefix.
+2. **Count correction — it is SEVEN table-consuming stampers, not five.** Fable says "all five
+   resolve\* stampers"; that number is inherited from the tree's own stale comment at `:28679`
+   (*"was rebuilt from `implDecls` at each of the five resolve\* sites below"*). Derived:
+   `grep -n 'stampImplTable\|stampKeyTable' compiler/types/typecheck.mdk` → the pair is consumed
+   at **`:28683` `:28684` `:28685` `:28687` `:28688` `:28690` `:28691`** (`resolveSites`,
+   `resolveOpSites True`, `resolveOpSites False`, `resolveArgStamps`, `resolveRLocalSites`,
+   `resolveDictApps`, `resolveMethodDicts`). `resolveArithSites`/`realizeRecDictApps` take no
+   tables. **A bite list that says "five" leaves two stampers on the old population** — and one
+   of the two it would leave is `resolveRLocalSites`, which is SHADOW territory (#616) and needs
+   that spec cited. This is `DERIVE, don't encode` failing inside a file that enforces it; I am
+   not scoring a point, I am removing a number from a bite list.
+3. **The order-sensitivity is Module-path-only, exactly mirroring the reader's asymmetry.**
+   `buildImplTable` has **two** call sites (`grep -n buildImplTable`): `:14122` (Flat, over the
+   whole `prog2`) and `:28677` (Module, cumulative prefix). Same shape as `:20347` vs `:20348`.
+   So "the stamper reproduces the reader's Flat/Module split" is a derived statement, not an
+   analogy — which also means the **Flat path is not where a repro will come from**, and a
+   single-file fixture cannot exercise this gap at all.
+
+**Ownership ruling I am asking you to make, with my recommendation.** `ImplBuckets`/`stampKeyTable`
+are a **population** change (which instances a selector may see). B-2.2 is a **payload** change
+(what the route says about the instance selected). Those are different axes and the arch doc
+assigns the population one to the reader unit (`TYPECHECK-TARGET-ARCHITECTURE.md:1820`: *"`IE`
+supplies the data, B-2 moves the reader"*). **So: NOT in my bite list — it belongs to B-2.1's.**
+But it is a **hard prerequisite** for B2.2-b: identity minted at `inst` from a cumulative-prefix,
+no-requires-omitting population is *order-sensitive identity*, i.e. RUN-045's defect with a more
+authoritative-looking payload. **Stamping identity on top of that population is worse than not
+stamping it**, because every consumer is then taught to trust the word.
+
+**Can it be cut Sonnet-sized under §4's test? YES — as threading, with one semantic bite carved
+out, and the cost is volume not judgement.** Derived cost:
+`grep -n "^[a-zA-Z][a-zA-Z0-9']* :.*\(ImplBuckets\|KeyBuckets\)" compiler/types/typecheck.mdk | wc -l`
+→ **49** top-level signatures thread one or both. Both are `export type`s
+(`:17588-17589`) but **no other `.mdk` file uses them** — the only out-of-file hits are comments
+in `llvm_emit.mdk:1481`, `:5313` and `registry.mdk:455`
+(`grep -rn 'ImplBuckets\|KeyBuckets' --include=*.mdk compiler/ | grep -v typecheck.mdk`). So the
+blast radius is **one file, ~49 signatures**. Cut it as:
+- **(threading, mechanical, Sonnet-safe):** replace the two table params with one `IE`-derived
+  accessor across the 49 signatures + the 7 stamper calls + the Flat peer (`:14122-14131`).
+- **(semantic, NOT Sonnet-safe — hand it to the sub-orchestrator):** the iface-`""` **first-match**
+  fallback in `findImplEntry` (`:18874-18883`, header at `:17578-17580`) must become min⊑ over
+  `IE` **or** a located reject (Door-4 precedent). Fable's item 1 says the same; I agree and add
+  the reason it must be separate: it is the only part of the change that can move a **verdict**.
+
+### 7.2 The separability question — my claim, stated so you can attack it
+
+> **CLAIM: NO. `B-2.1-b` cannot land alone AS A DRAIN, and the tree has already measured exactly
+> that. Worse, landing it alone risks a severity INCREASE rather than a partial fix.**
+
+**Leg 1 — the tree already ran this experiment and wrote down the answer.**
+`typecheck.mdk:22205-22211`, verbatim, in the source (not in a ledger):
+
+> 🚨 **REJECT, DO NOT ROUTE.** Handing this arm the `requires` from `univ` would be **"move only
+> the checker's leg"** — `TYPECHECK-TARGET-ARCHITECTURE.md:1814-1815` defers both the re-key and
+> the reader move to B-2 BY NAME, and **the tree has already MEASURED that desynchronizing the
+> checker from the router yields an `argReqRoute` of `RNone` and a binary that still faults**
+> (`residualPredsOf`'s header, #1560).
+
+`.claude/sprint/DECISIONS.md:1297-1298` records the same as RUN-045's **door 3**, *"already
+measured … `argReqRoute` → `RNone`, and the binary still faults."* **This is not an open question;
+it is a closed door being reopened without its measurement.**
+
+**Leg 2 — P0-A's `iff` condition does not merely lack evidence; it is DERIVABLY FALSE.** P0-A
+writes *"it can land alone iff both legs compute min⊑ over populations that agree — which nothing
+has established for these two."* I can state it stronger, which is the useful direction:
+
+1. After `B-2.1-b` the checker's population is **graph-global `IE`**; the router's is the
+   **cumulative prefix** `implDecls` (`:28677`, `:28682`). Not equal by construction.
+2. The router's `ImplBuckets` **omits every no-requires impl** (`:17613-17615`). The two are not
+   even the same *kind* of set, so no ordering fix could make them agree.
+3. The router's min⊑ reads **`stampKeyTable`** (`:28682`) — a population `B-2.1-b` does not
+   touch (§7.1 sharpening 1).
+
+**⇒ the `iff` fails on three independent grounds. P0-A's reading is right and its hedge is too
+weak: this is an established negative, not an unestablished positive.**
+
+**Leg 3 — the direction of the failure, which is the part that decides your phase question.**
+`B-2.1-b` alone makes the **checker** recover an impl's `requires` where the **router** still
+does not. The checker's leg is what gives a definition its leading dict **parameters**
+(`dict_pass`); the router's leg is what makes a call site pass dict **words**. `ast.mdk:706-712`,
+verbatim, on exactly that skew:
+
+> `dict_pass` gives such a definition leading dict PARAMETERS, so the call site must supply the
+> matching dict WORDS or it silently **UNDER-APPLIES** (`check` green, `run` type-confused,
+> `build` prints a raw PAP pointer — the S-1 miscompile).
+
+So the risk is not "drains less than claimed"; it is **"creates new under-application sites"** —
+a fix that makes a defect quieter/wider, which `AGENTS.md` ranks as a severity increase. That is
+why I would not let this land alone even with the drain claim withdrawn.
+
+**Recommendation (yours to rule; I am not ruling on phase structure).** Do **not** collapse Phase
+2 into Phase 3 — that loses the STOP-AND-LAND gate *and* the attribution the deferred-golden
+posture depends on. **Re-cut the boundary along the axis instead:**
+
+| | new phase | content | bar |
+|---|---|---|---|
+| **Phase 2′** | **population unification** | ONE graph-global `IE`-derived population for **every** min⊑ consumer: the reader (`:21715`), the 7 stampers (`:28683`…`:28691`), the Flat peer (`:14122-14131`). Delete `ImplBuckets` + `KeyBuckets` + `keyForSite*`. **Route payload stays a `String` word.** | acceptance + emitted evidence move where a module prefix hid the winner — **this is the drain**, and both legs move together, satisfying `:22205-22211` |
+| **Phase 3′** | **payload identity** (my B2.2-a/b/e) | the word becomes an identity; no population changes | symbol renames, seed + goldens move; **no** acceptance change |
+
+Two properties this cut buys that collapsing does not: (i) the STOP-AND-LAND gate lands on a
+coherent, landable, drain-complete PR; (ii) the repair round can attribute a moved golden to
+*population* or to *representation* by which commit it appeared in — the F-3 attribution property
+the sprint doc protects for B-1/B-2 and would otherwise lose inside B-2.
+
+### 7.3 The `expandSupersTable` fill bite — **INSIDE B-2.2. It largely collapses into my B2.2-d, and Fable's MECHANISM is wrong in a way that changes the fix.**
+
+**Verdict first: Fable's organ-4 gap is REAL, in-scope, not B-1, and one bite — I agree with all
+four.** I take it, as **B2.2-d′** below. But I disagree with its mechanism, and the disagreement
+makes the bite cheaper and better targeted.
+
+**Fable says the fill "copies the sub slot's route" and the remedy is per-slot independent
+entailment of every appended slot. DERIVED: nothing copies, and the per-slot iface is already
+available.** `expandSupersIfaceEntry` (`:9060-9064`) maintains `funConstraintIfacesRef` **in
+parallel** with the id list, so **each appended slot records its own super interface.** Whether
+the fill is per-slot therefore depends entirely on which fill path runs, and there are **three**:
+
+| fill path | site | per-slot iface? | what it stamps |
+|---|---|---|---|
+| `routesOfMonosTop` / `routesOfMonosTopV` / `topRouteV` | `:19166-19173`, `:19129-19137`, `:19148-19149` | ✅ **YES** — the iface list is threaded and reaches `routeOf … iface …` | already a per-slot entailment; **organ 4 does not apply here** |
+| `routesOfMonos` | `:19218-19222`, one caller at `:19405` | ❌ **NO** — passes `routeOf implTable keyTable **""** ""` | iface unknown ⇒ the `findImplEntry` iface-`""` **first-match** fallback (`:17578-17580`) |
+| `recRoutes` → `recRoute` → `resolveRecMono` | `:19421-19439` | ❌ **NO** — the signature has no iface parameter at all (`recRoutes : String -> Mono -> List Int -> List Route`) | `RKey tag []` from the bare head — **my D9** |
+
+**So organ 4 is not "the fill copies"; it is "two of the three fill paths are iface-BLIND", and
+the appended super slot is indistinguishable from its sub slot only on those two.** That matters
+because Fable's remedy ("re-resolve each appended slot") would rewrite a path that is already
+correct, while the two that are wrong are wrong for a *nameable* reason with a *smaller* fix.
+
+**B2.2-d′ (folded into B2.2-d, not a new unit):**
+
+- **sites:** `routesOfMonos:19218-19222` + its caller `:19405` · `recRoutes:19421-19423` ·
+  `recRoute:19430-19433` · `resolveRecMono:19435-19439` (the D9 stamp).
+- **transform:** thread the per-slot interface (already in `funConstraintIfacesRef`) into both
+  iface-blind paths, so each slot — declared or appended-super — is entailed **at its own
+  interface**. `resolveRecMono`'s `Some tag => RKey tag []` then goes through the one selector
+  instead of minting a bare head tag, which is the same edit D9 already needs.
+- **why this is C2, not an optimization:** `DICT-SEMANTICS.md:1281-1297` — `supers.D` must be the
+  evidence of the **most-specific** `D`-instance at the construction goal. An iface-blind fill
+  cannot express that, and B-2.2 is the change that makes the wrongness *nameable* (an identity
+  that says "the sub's impl" where a `D`-dict is required).
+- **could move:** the dict word at every `=>`-constrained call whose function has ≥1 appended
+  super slot, and at every recursive constrained call. **Diagnostics can move too** (an
+  iface-blind first-match becoming a min⊑ can surface `T-AMBIGUOUS-INSTANCE`).
+- **nearest miss:** Fable's is right and I adopt it — a `Sub a requires Sup a` chain where sub and
+  super have **different** most-specific impls at the goal. **Mine to add, because it is the one
+  this bite does NOT fix:** #1127's **leg 2** — `activeDictVars` is keyed by **tyvar id alone**
+  and `expandSupersFix` gives the appended slot the **same id** as its sub slot, so a goal
+  discharged by the **`assum`** rung still cannot tell the two slots apart. Fill-path iface
+  threading does not touch the `assum` rung. **⇒ #1127 remains undrained (consistent with §1.4),
+  and any claim otherwise is wrong.**
+- **engines:** all three (route words move). Owes P0-C the same seam as B2.2-e.
+- **INVARIANT (a-i) remains the fallback, not the plan:** for any fill path whose per-slot iface
+  is *not* threaded in this sprint, that path's slots **must not be identity-stamped** (§1.3).
+  B2.2-f still buys the boundary that makes (a-i) expressible.
+
+### 7.4 Disagreements, consolidated (per the brief: I would rather record these than a consensus)
+
+| # | With | Claim | My verdict |
+|---|---|---|---|
+| 1 | P0-FABLE | "all **five** resolve\* stampers" | **Wrong count, 7.** Inherited from the tree's stale comment `:28679`. Derivation in §7.1-2. |
+| 2 | P0-FABLE | the gap is `ImplBuckets` | **Understated.** It is `ImplBuckets` **and** `stampKeyTable` (`:28682`), a third `KeyBuckets` population the sprint doc's line 68 does not reach. §7.1-1. |
+| 3 | P0-FABLE | organ 4: the fill "copies the sub slot's route"; remedy = re-resolve every appended slot | **Mechanism wrong; verdict right.** The per-slot iface exists (`:9060-9064`); **two of three** fill paths are iface-blind (`:19218-19222`, `:19421-19439`). Smaller, better-targeted fix. §7.3. |
+| 4 | P0-A | "can land alone **iff** populations agree — which nothing has established" | **Too weak, same direction.** Derivably FALSE on three grounds. §7.2 leg 2. |
+| 5 | sprint doc §1 line 68 | B-2.1's site list | **Incomplete** — agrees with Fable, and wider than Fable says (item 2). |
+| 6 | — | anything measured | **Nothing in this addendum is measured.** No binary was available to me. Every claim is source-derived at BASE `2b9dc798`, and #1560's fault behaviour is the tree's own recorded measurement, relayed with its citation. |
