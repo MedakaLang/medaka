@@ -65,6 +65,44 @@ with the guard live and with it dead.
 
 ---
 
+## ✅ BASE-vs-BRANCH DIFFERENTIAL RUN — **ZERO unintended differences** (FX-2, 2026-08-13)
+
+**The instrument this sprint lacked has now been run.** `.claude/sprint-b/repair/FX2-differential.md`.
+**BASE `2b9dc798` vs BRANCH `2ac5120b`, 250 programs × 4 channels × 2 arms** (must_fail 100 ·
+llvm_fixtures_modules 56 · sqlite 41 · stdlib 29 · import_order 14 · eval_modules 11).
+**Excluded and stated, not silently truncated:** `compiler/**` (~1335 files ≈ 7 h), wasm entirely,
+sqlite's build channel, import-clause permutation.
+
+⭐ **The control proves the instrument can detect a difference** — 4 known differences, all flagged.
+🚨 **Two of them (#1599, #1072) have IDENTICAL EXIT CODES on both arms in EVERY channel** and were
+caught **only on the built binary's stdout.** **An exit-code-graded harness would have called them
+clean** — which is precisely how this sprint's earlier S0 hid.
+
+**ZERO UNINTENDED DIFFERENCES.** All four real differences are **INTENDED drains**, each adjudicated
+against **DICT semantics** (never engine agreement), with each fixture's own control re-run on both arms
+and holding: **#1564** (reject → `wrap(int)`, a **full** drain including the built binary — its
+`claim.txt` had warned that check-only was previously a half-drain at 139) · **#1599** (`1003` → `5`) ·
+**#1072** (`general` → `specific`) · `evidence-unroutable-invariant` (whose `case.txt` predicted this
+verbatim).
+
+⭐ **It discarded TWO harness artifacts rather than report them**, including one that looked exactly like
+the shape it was told to flag hardest — *"base rejects 15 stdlib modules, branch exits 0."* Not a
+compiler change: the guard is **exe-root-relative** and the failure is **symmetric** (branch rejects
+base's byte-identical copy just as loudly; per-arm re-run **29/29 clean**). The second artifact — the
+`-o` path carrying the arm name into `build`'s output line — collapsed **152 of 176** "differences" to 4.
+
+### ⚖️ Fourth engine arm: **PRE-EXISTING, not ours — FILE, do not fix**
+
+Base and branch are **identical in all four cells**, and **base is already wrong** (`boxint` where
+`boxstr` is correct). **Mechanism established, not inferred:** swapping the two import lines flips
+**both** answers, so it selects by **import order and ignores the receiver type.**
+⚠️ **CORRECTION TO MY OWN BRIEF:** I relayed *"and wrong on the control too."* **That does not
+reproduce** — the control is **right, for the wrong reason**, and taken at face value my phrasing points
+at a **different mechanism.** I passed along a reviewer's *proposed, never-run* recipe as though it were
+measured; its `medaka run` form **overflows the stack on both arms** and cannot reach the code at all.
+
+---
+
 ## ✅ S1 BLOCKER CLOSED (`B-2.1-h` / FX-1, 2026-08-13) — status restored to **safe to review**
 
 **The confirmed S1 below is FIXED, and it did NOT require #1113 / Phase 3′.** The defect was the

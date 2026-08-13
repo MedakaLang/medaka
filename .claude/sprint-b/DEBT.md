@@ -2899,3 +2899,61 @@ R3's *"pending #1113"* qualifier on conjunct 2 therefore still stands after this
 is that organ 2's **prefix reader is gone**, so `R3`'s organ table row 2 ("🔴 THE GAP") can be
 re-graded, and the `ImplBuckets` readers are down to two (`findImplEntry`'s `iface == ""`
 first-match arm and `argImplDictRoutesFor`) — both enumerated in the `#1128` audit bullet I updated.
+
+---
+
+
+```
+### FX-2 — repair/differential — base-vs-branch behavioural differential over 250 programs; 0 unintended differences
+sites:        no source touched. One file written:
+              .claude/sprint-b/repair/FX2-differential.md
+transform:    none — measurement only. BASE 2b9dc798 (pre-existing scratchpad/sprintbase arm,
+              not rebuilt) vs BRANCH 2ac5120b, both MEDAKA_STRICT=1 clean, MEDAKA_ROOT/
+              MEDAKA_EMITTER unset. 250 programs (must_fail 100, llvm_fixtures_modules 56,
+              import_order 14, eval_modules 11, stdlib 29, sqlite 41) x 4 channels
+              (check exit+diagnostic text, run, build, BUILT BINARY exit+stdout) x 2 arms.
+              This is the check DEBT rows have been recording as "did not run the full corpus
+              (CI owns it)" since B-2 landed. It is now run.
+could move:   Nothing — no source changed. What the MEASUREMENT moves is the sprint's evidence
+              base: the acceptance change is now bounded by observation rather than by argument.
+              Exactly 4 programs differ between the arms, all INTENDED, each independently
+              adjudicated against DICT semantics (never against engine agreement) and each with
+              its fixture's own control re-run on BOTH arms and holding:
+                #1564  reject exit 1 -> exit 0 wrap(int); FULL drain incl. built binary
+                       (claim.txt demands this: check-only was previously a half-drain at 139)
+                evidence-unroutable-invariant  same drain; its case.txt predicted it verbatim
+                #1599  built binary 1003 -> 5   (build exits 0 on BOTH arms)
+                #1072  built binary general -> specific  (check/run/build exit 0 on BOTH arms)
+              The last two are invisible to every exit code in the tree.
+nearest miss: **The class this instrument CANNOT see: a defect present identically in BOTH arms.**
+              A differential subtracts it out by construction. I found two members only by
+              looking directly: (1) `core_ir_eval` is wrong on both arms (see engines:), and
+              (2) must_fail/1575 aborts exit 134 on both arms. Nearest UNCOVERED program:
+              any import-clause PERMUTATION of a corpus fixture — I ran each fixture in the
+              order it ships with and did not permute, so a shared order-dependence is outside
+              this instrument. `diff_compiler_import_order.sh` is the gate that owns that axis.
+              Second nearest: `compiler/**` as a corpus (~1335 files, ~7 h) — NOT RUN; the
+              fixpoint + typecheck_compiler_source.sh are the right instruments and CI owns them.
+engines:      * eval / LLVM native — BOTH measured on both arms across all 250 programs. Agree
+                everywhere except the 4 intended rows. ⚠️ Not offered as corroboration of each
+                other; each row's correct answer was derived from the spec first.
+              * wasm — ⚠️ NOT MEASURED on either arm. Owed: build_wasm_oracle.sh +
+                diff_wasm_modules.sh, twice. This is the one engine this round did not observe.
+              * core_ir_eval (fourth arm) — MEASURED on both arms, natively (the `medaka run`
+                route dies E-STACK-OVERFLOW at depth 25000 on BOTH arms, so R6's recipe cannot
+                reach it). VERDICT: **PRE-EXISTING, NOT OURS.** Identical in all 4 cells on
+                base and branch. Mechanism established, not inferred: swapping the two import
+                lines flips BOTH answers, so it selects by import order and ignores the
+                receiver type. FILE IT; do not fix in this round. ⚠️ The brief's premise that
+                it was "wrong on the control too" does NOT reproduce — the control is right
+                (for the wrong reason), which points at a different mechanism if taken at face.
+unchecked:    * wasm (above). * compiler/** corpus (above). * import-clause permutation (above).
+              * sqlite build + built-binary channels — check/run only for those 41.
+              * ⚠️ TWO HARNESS ARTIFACTS were found and DISCARDED, both proven symmetric; anyone
+                repeating a two-arm differential will hit them: (a) the internal-extern guard is
+                exe-root-relative, so a base binary checking BRANCH's stdlib rejects 15 modules
+                at exit 1 — this reads exactly like "the branch stopped enforcing an S0 guard"
+                and is not (branch rejects base's byte-identical copy just as loudly; re-run
+                per-arm: 29/29 clean). (b) `build`'s own `built X -> Y` line embeds the -o path,
+                which carried the arm name: 152/176 "differing" collapsed to 18, then to 4.
+```
