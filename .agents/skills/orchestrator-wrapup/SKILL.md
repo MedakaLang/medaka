@@ -151,13 +151,13 @@ Reaping order matters:
 The friction reports and the surprises you hit are worth more than the fixes. Route each
 durable one to where it will actually be found:
 
-- **`.Codex/ORCHESTRATING.md`** — a *role* learning (a watcher pattern that lied, a
+- **`.claude/ORCHESTRATING.md`** — a *role* learning (a watcher pattern that lied, a
   merge-queue nuance, a false-bounce race, "reproduce before you trust the diagnosis"
   confirmed again). This is the orchestrator's own log — append here.
 - **`AGENTS.md` / `compiler/AGENTS.md`** — a *codebase* trap (a gate that silently no-ops, a
   golden family a change moves, a stale doc claim an agent hit). Fix the claim, don't just
   note it; a wrong doc re-arms itself for every next reader.
-- **memories** (`/root/.Codex/projects/-root-medaka/memory/`) — a durable decision or a
+- **memories** (`/root/.claude/projects/-root-medaka/memory/`) — a durable decision or a
   hard-won operational fact (e.g. a settled semantics decision, a seed/fixpoint gotcha).
   One fact per file + a one-line `MEMORY.md` pointer. Don't record what the repo already
   encodes.

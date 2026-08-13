@@ -183,5 +183,5 @@ consumers. Capture the golden with `CAPTURE=1` on the specific gate.
   `test/lsp_harness.sh`.
 - For multi-module bugs, run `bash test/diff_compiler_check_modules.sh` and
   `bash test/diff_compiler_eval_modules.sh` to isolate the loader path.
-- Before blaming the compiler, check `.Codex/HANDOFF.md` — it lists known-red
+- Before blaming the compiler, check `.claude/HANDOFF.md` — it lists known-red
   gates. A red gate is often already known and not your bug.
