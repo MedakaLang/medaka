@@ -2,6 +2,43 @@
 
 ---
 
+## 🚨 UPDATE after `B-2.1-f`: the S0's DANGEROUS half is closed (S0 → S2). Branch STILL UNSAFE.
+
+`B-2.1-f` re-armed a loud reject (`T-ROUTE-WORD-AMBIGUOUS`, a new code — the impl min⊑ selects here
+needs no dictionary, so `T-REQUIRES-UNROUTED`'s *"Cannot pass a dictionary"* would have misnamed the
+cause). **`SA-4c`'s class no longer produces a binary at all**: `build` 1, `run` 1, no executable,
+control order still builds and prints `wrap-int-specific`. `check_cli_modules` → **86 ok, 0 failing.**
+**The segfault-at-exit-0 is gone.**
+
+**⚠️ TWO residual defects, both LOUD, both owned by `B-2.1-g`:**
+
+1. **`check` still exits 0 and no verb reports a location** — `build` says *"Run `medaka check` for
+   details"* and `check` then reports nothing. **Derived, not guessed:** `keyForSite` is reached only
+   from the five `resolve*` stamp passes inside `elaborateModules`, and `check`'s multi-module route
+   never stamps a route; worse, `pendingSites` is **empty** on the check path because `EMethodAt` nodes
+   are minted by the MARK pass, also elaborate-only. `f` built the obvious fix, measured it **inert**,
+   and removed it rather than ship dead code that claims to guard something. Pinned as its own gate leg
+   (`SA-4/overlap-check-blind-to-route-word`), which fails loudly if the split changes.
+2. 🚨 **#1514 IS A CAPABILITY REGRESSION — a legal program that BUILT CORRECTLY now refuses to build.**
+   Its binary printed `11`/`110`/`7`; `build` now rejects it. The guard is **spelling-keyed by design**
+   (`countHead` derives why, and `#1111` records that a *structural* compare re-opens an S0), so two
+   unrelated modules each declaring their own type spelled `Thing` count as **two impls at one head**.
+   #1397 is also newly rejected, but that one is silent→loud (it was silently picking an impl) — an
+   improvement.
+
+**RULING (orchestrator, under standing authority, 2026-08-13):** `f` is **accepted as a documented
+intermediate**, because reverting it restores the *silent* segfault, which is strictly worse than a loud
+false reject. **But `B-2.1-g` MUST clear #1514's capability loss** — if `g` cannot, `f` and the drain
+should be reverted together rather than shipping a build-refusal on a working program. **The branch does
+not merge in this state.**
+
+⛔ **Do NOT close #1397 or #1514.** Neither is fixed; the compiler refuses instead of mis-selecting.
+`must_fail` is now **95 REPRO / 5 DRAINED** (twice, identical, 0 control-broke): #1564/#1599/#1072 are
+the intended drains; **#1397 and #1514 are over-fire, not progress.** ⚠️ **Check drained NAMES, never
+the count** — "5 DRAINED" would stay true if an intended drain silently swapped out.
+
+---
+
 ## 🚨🚨 BRANCH `arch/stage-b-sprint` IS UNSAFE AS OF `95359281`. DO NOT MERGE. DO NOT ENQUEUE.
 
 **`B-2.1-b2` (the drain, `1e7cbbbb`) drained #1564/#1599/#1072 AND INTRODUCED AN S0.** Measured by

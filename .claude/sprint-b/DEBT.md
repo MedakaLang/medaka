@@ -1457,3 +1457,201 @@ unchecked:  * **`make medaka` — RUN, exit 0** on the transform (stage A + stag
               is `scratchpad/c-REFUSED.patch`, and `scratchpad/c-{def,imp,imp2}/` + `c-probe.sh` +
               `c-build-probe.sh` + `c-ir-probe.sh` + `c-before.txt` + `c-after.txt` reproduce every
               reading above against any binary (`sh c-probe.sh <medaka> <label>`).
+
+---
+
+### `B-2.1-f` — Phase 2′ (B-2.1) — the drain's Item-4 residual RE-ARMED as a loud reject. **The 139 is gone; `check` is still blind, and that is pinned, not hidden.**
+
+🔗 **Ledger cross-reference: `DECISIONS.md` RUN-B-0xx** (the orchestrator composes it from this
+row + my report). Predecessors: RUN-B-031 (`B-2.1-b2`, the drain that introduced the S0 while
+genuinely draining three others) and `B-2.1-e`'s STOP, which measured it and refused to edit.
+
+sites:        `compiler/types/typecheck.mdk` — `keyForSite` (both BARE-WORD arms now call the
+guard; the canonical-key arm is untouched) · SIX new top-level bindings beside
+`ieCountHeadByIface`: `ieCountHeadByMethod` / `ieCountHeadByMethodGo` /
+`ieHeadCollidesByMethod` / `routeWordHeadSkew` / `reportRouteWordSkew` /
+`routeWordAmbiguousMsg` · the `B-2.1-b2` block's leg-3 paragraph, corrected in place (its
+"that residual is a *naming* skew" wording is quoted and retracted rather than deleted).
+`compiler/DIAGNOSTIC-CODES-DESIGN.md` — the `T-REQUIRES-UNROUTED` row's CAUSE sentence
+corrected (it still named `shadowKeyTableRef`/`universeKeyBucketsRef`, false since the drain
+bite) and marked DRAINED for those causes; one new row, `T-ROUTE-WORD-AMBIGUOUS`.
+`test/diff_compiler_check_cli_modules.sh` — `D4b` legs 1-2 and `SA-4b` re-cut as DRAIN
+assertions that grade the BUILT BINARY's output; `SA-4c` re-cut as a reject on `build` + a
+new row pinning the verb split.
+**No `lint-disable` anywhere; `medaka lint` exits 0 on the touched source, `fmt --check` clean
+(run BEFORE every build).**
+
+transform:    ONE guard, ONE substrate, on the ONE unsafe direction. `keyForSite` stamps a
+BARE head word whenever its prefix table says the goal's head is unique. That word is a NAME
+three engines re-derive graph-globally, so it is only correct if the whole graph agrees the
+head is unique. The guard is exactly that disagreement — `not (headCollides prefix …) &&
+ieHeadCollidesByMethod graph …` — pushed as a new code `T-ROUTE-WORD-AMBIGUOUS` located
+through `goalSiteLoc` (the span the five `resolve*` loops already republish per site).
+`ieCountHeadByMethod` is the method-name-keyed peer of `ieCountHeadByIface`, spelling-keyed
+through `headTabOf`/`headTabEq` for the reason derived in full on `countHead` (its consumer is
+a byte-for-byte agreement with a bare-`String` namespace; an identity comparison is wrong
+there at any supply level).
+**NOT `T-REQUIRES-UNROUTED`, and that was a judgement call I own:** Door 4's message opens
+*"Cannot pass a dictionary for …"*, and the impl min⊑ actually selects for this shape
+(`impl Tag (Wrap Int)`) carries no `requires` and needs no dictionary — the dictionary only
+appears because the ambiguous word resolves to the WRONG, conditional impl. Reusing the code
+would have kept `SA-4c`'s existing assertion green at the price of a message that misnames its
+own cause. ⚠️ **The cost of that choice is that `SA-4c`'s assertion had to move anyway**, so
+the code choice bought nothing in gate churn — it was made on ERROR-QUALITY grounds alone.
+
+could move:   **A REJECT-WIDENING, deliberately, and here is the named set.**
+* **Newly rejected:** any *method*-keyed site (return-position, arg-position or operator —
+  every kind that reaches `keyForSite`) whose goal has a head tycon `T`, where the module's
+  topological prefix holds **0 or 1** impls defining that method at `T` and the **whole
+  graph** holds **2 or more**. Concretely: two impls of one interface at one head, declared
+  in a module that sorts after the goal's own module — **and, because the count is
+  SPELLING-keyed, two unrelated modules each declaring their own distinct type of the SAME
+  NAME with an impl of the same interface method** (the `#1397`/`#1514` shape below; this half
+  was not in the brief and I did not predict it either). Nothing else — the guard's other
+  count-pairs (1-vs-1, 2-vs-2, 2-vs-3, and every prefix that already collides) are inert.
+* 🚨 **YES, LEGAL PROGRAMS ARE NOW FALSELY REJECTED, and this is the set.** A specific/general
+  overlap where the SELECTED (most-specific) impl needs no dictionary is a legal, correct
+  program — the control import order compiles it and its binary prints the right answer — and
+  it is now rejected in the other import order. That is `SA-4c` itself. The reject is
+  recoverable by adding one `import`; the state it replaces was a binary at **139**. `B-2.1-g`
+  drains this whole set when it repoints the word.
+* **NOT moved, verified rather than assumed:** the canonical-key arm of `keyForSite` (a
+  colliding prefix stamps a key that names one impl on any substrate), `keyForSiteByIface`
+  (already graph-global since the drain), the headless-winner word `noneHeadTag`, and every
+  goal with no head tycon.
+* 🚨 **TWO MORE MUST-FAIL PINS DRAINED, AND NOT BY BEING FIXED — BY BEING REJECTED. THIS IS
+  THE BITE'S BIGGEST FINDING AND IT WAS NOT PREDICTED BY THE BRIEF.** `must_fail` reports
+  **95 REPRO / 5 DRAINED / 0 control-broke / 0 malformed**, run TWICE with identical counts.
+  Three are the expected `#1564`/`#1599`/`#1072`. The other two are **`#1397`** and
+  **`#1514`**, and they are MINE: both are cross-module **same-SPELLED** collisions, and this
+  guard is spelling-keyed (through `headTabOf`/`dispHeadTab`, deliberately — `countHead`
+  derives why at length: the route word's consumer is a bare-`String` namespace three engines
+  re-derive, so an identity comparison is wrong there at any supply level). Two unrelated
+  modules each declaring their OWN type spelled `Thing` therefore count as **two impls at one
+  head** graph-globally while each module's prefix sees one ⇒ the guard fires.
+  Measured on both fixtures: `run main.mdk` **exit 1** (was exit 0 with a wrong value),
+  `check main.mdk` **exit 0** (the same blindness as item 1), and **both controls still pass**
+  (`aamod|zzmod`; `11`/`110`/`7`).
+  ⛔ **DO NOT CLOSE #1397 OR #1514 ON THE STRENGTH OF THIS DRAIN.** Neither is fixed. #1397's
+  own IR proof — ONE `@mdk_impl_Thing_label` where there must be two — is still true; the
+  compiler simply now refuses to emit the program instead of silently picking one impl. For
+  #1397 the refusal is arguably *correct* (that shape has no correct emission today).
+  🚨 **For #1514 it is a genuine CAPABILITY LOSS: its `medaka build` BINARY WAS CORRECT**
+  (`11`/`110`/`7`, per its own claim.txt) **and `build` now refuses it.** That is the sharpest
+  instance of this bite's false-reject surface and the orchestrator's call, not mine.
+* **The three expected drains hold.** `#1564` and `#1599` declare ONE impl at the head, so the graph
+  count is 1 and the guard cannot fire; `#1072`'s method site is `speak x` at a bare tyvar,
+  which keys no bucket at all. Measured, not reasoned — `must_fail` names all five drains.
+
+**MEASURED, four verbs, before vs after, on the `SA-4c` program:**
+
+| arm | `1e7cbbbb`…`3ba7817b` (the S0) | this bite |
+|---|---|---|
+| `check` (human) | 0, `main : Unit` | **0, `main : Unit`** ⚠️ unchanged |
+| `check --json` | 0, empty diagnostics | **0, empty diagnostics** ⚠️ unchanged |
+| `build` | 0 | **1, no binary produced** |
+| `run` | 0, `wrap-int-specific` (eval was right) — ⚠️ **RELAYED from `.claude/HANDOFF.md`, not measured by me on the base binary**; every other base cell in this table I measured first-hand before touching the source | **1** |
+| **built binary** | **139, `E-FATAL-SIGNAL`** | **none exists** |
+| control order, built binary | 0, `wrap-int-specific` | **0, `wrap-int-specific`** |
+
+nearest miss: **🚨 ITEM 1 IS THE BITE'S OWN FAILURE AND IT IS THE HEADLINE, NOT A FOOTNOTE:
+`medaka check` STILL EXITS 0, and the reject carries NO LOCATION on any verb.** The brief's
+evidence item 1 (a located diagnostic from human `check` **and** `--json`) is **NOT
+DELIVERED**. What the user sees on `build`/`run` is `error: type error in main.mdk. Run
+`medaka check` for details` — and `check` then reports nothing. So the compiler contradicts
+itself, and this is an ERROR-QUALITY *Located* regression sitting on top of a genuine severity
+DECREASE (no wrong binary can be produced).
+
+**WHY, derived on the binary, two independent causes either of which alone suffices:**
+1. `keyForSite` is reached ONLY from the five `resolve*` stamp passes, which run in
+   `elabModuleStamp` — inside `elaborateModules`. `medaka check` on a multi-module project
+   goes `analyzeProject` → `typecheckPass` → `checkModulesDiags` → `checkModuleFullDiags`,
+   which typechecks and never stamps a route. (Door 4's guards reach `check` because they fire
+   in the OBLIGATION channel, during typecheck proper.)
+2. Even given the pass there is nothing to stamp: pending route sites are recorded by
+   `inferMethodAt`, which only ever sees an `EMethodAt` node, and those are minted by the MARK
+   pass (`markModules`/`prePassDict`) — likewise called only from `elaborateModules`. The check
+   driver's method occurrences go through `inferVarPlainId`, so `pendingSites`/
+   `pendingArgStamps` are **EMPTY** on that path.
+
+**I WROTE, BUILT AND MEASURED THE FIX FOR THIS AND THEN REMOVED IT** — an `auditRouteWords`
+pass at the tail of `checkBodyImpl`, the one function both drivers share, over
+`shadowKeyTableRef`. It is **INERT**, for cause 2, and dead code that claims to guard something
+is worse than no code: removed, with the whole derivation recorded in place on the guard block
+so `B-2.1-g` inherits it instead of re-paying for it. **Two build cycles went to establishing
+this; both were necessary and neither is repeatable from the source alone.**
+
+⚠️ **TWO WRONG FIXES, NAMED so nobody spends a session on them.** (a) The check route DOES run
+`elaborateModules` once — inside `mainShapeWarnings` (`driver/medaka_cli.mdk`, `checkRoute`'s
+multi-module arm) — and DISCARDS its type errors, keeping only warnings. Same family as #1362.
+Surfacing them narrows acceptance for every program in the tree; that is not a bite, it is a
+sprint. (b) Re-deriving the skew in the OBLIGATION channel is keyed by INTERFACE over
+`residualUnivRef` where this one is keyed by METHOD NAME over `KeyBuckets` — not the same count
+(an impl inheriting the method via a DEFAULT is in one population, not the other), so it would
+be a SECOND selector disagreeing with the first. DICT §11 forbids that, and RUN-B-023 and
+`B-2.1-c` each produced an S0 by splitting one decision across two reads.
+
+**Item 2 — the shape the guard does NOT catch, and it is a real residual.** A prefix that
+ALREADY collides (count ≥ 2) stamps the canonical key of the **prefix's** min⊑ winner. If the
+graph holds a *third*, strictly more specific impl at that head, the counts agree (both > 1),
+the guard is silent, and the stamped key names the wrong impl. Not tested — I did not build the
+three-impl fixture, and I am not claiming it reproduces; it is the next program to attack.
+**Item 3** — the `noneHeadTag` (headless-winner) word: excluded on purpose, its correctness
+rests on the emitter's general-instance fallback tier rather than on this count.
+**Item 4** — a site inside an `impl` body: those are inferred only under `implInferEnabled`
+(emit path), so on `check` they are not even recorded. Subsumed by item 1's cause 2.
+
+engines:      **One line, then it is not one line.** No engine source changed — `llvm_emit`,
+`wasm_emit`, `eval`, `core_ir_eval` are byte-identical. But the guard's whole subject matter is
+the **route WORD**, which all four consume: `core_ir_lower.declRouteKey`/`ifaceDeclHeadUnique`,
+`llvm_emit.headTagUnique`/`distinctKeysAtHead`, and `eval.pickTagFallback`'s peer arm each
+re-derive the same uniqueness test from a bare `String`. This bite changes **no** word — it
+refuses to stamp an untrustworthy one — so no engine's derivation moves and no lockstep peer is
+owed. ⚠️ What it DOES owe is a `diff_compiler_engines` reading, because `run` (eval) now
+rejects a program eval used to execute CORRECTLY (`wrap-int-specific`): eval was the one engine
+that was right about this shape, and the guard silences it too. That is the accepted cost of a
+type-level reject, but it is a genuine eval behaviour change and `diff_compiler_engines` is what
+would grade it. NOT RUN (~6 min, foreground-unsafe, owned by CI).
+
+gates run:    `diff_compiler_check_cli_modules.sh` **86 ok, 0 failing** (was 81/4 — +1 row: I
+split `D4b`'s build leg into a binary-OUTPUT assertion and added the verb-split pin).
+⚠️ The inherited `1112-A34/later-invisible` red that `.claude/HANDOFF.md` calls
+"pre-existing, not ours" is **also green now** — it was not red on this binary at all, so that
+HANDOFF line is stale as of this bite; I did not chase why, and it is not something this diff
+could have fixed (it failed by ACCEPTING). · `diff_compiler_must_fail.sh` **twice, 95/5/0/0
+both runs, same five names** · `diff_compiler_flat_vs_onemodule.sh` **13 rows, PASS** (1 drain
+notice) · `make check-self` **PASS** — ⚠️ and it is a WEAK signal here by construction: it
+runs `./medaka check`, the one verb this guard is invisible to (item 1). · `make
+agent-doc-symbols` **PASS** (0 dead) · `make docs-links` **PASS** (0 dead) · `medaka fmt
+--check` clean and `medaka lint` 0 findings on the touched source, both BEFORE each build.
+**Breadth check for over-firing, since the false-reject surface is the whole risk:** all **39**
+`sqlite/*_demo.mdk` + `*_probe.mdk` programs (a real multi-module project) `check` and `run`
+with no route-word refusal, and `must_fail`'s **0 control-broke** means 100 control programs
+still behave. So the over-fire set really is the same-spelled/overlap shape and not something
+broad.
+
+unchecked:
+* **`selfcompile_fixpoint.sh` NOT RUN** — brief-assigned to CI's `soundness` shard. This bite
+  emits no IR change by construction (it adds a reject; it never changes a stamped word), and
+  `make medaka` completed cleanly twice on the final source, which is the two-stage self-compile
+  in miniature. That is evidence, not the gate.
+* **Snapshot and `selfproc_legA` goldens NOT re-cut, both owed.** This diff adds **six** new
+  top-level bindings (`ieCountHeadByMethod`, `ieCountHeadByMethodGo`, `ieHeadCollidesByMethod`,
+  `routeWordHeadSkew`, `reportRouteWordSkew`, `routeWordAmbiguousMsg`), renames none and
+  re-signatures none — so the legA diff must read **purely additive**. Derive rather than trust:
+  `git diff -U0 compiler/types/typecheck.mdk | grep '^[+-][a-zA-Z]' | grep ' : '`.
+* **`diff_compiler_engines.sh`, `diff_compiler_perf_scaling.sh`, `typecheck_compiler_source.sh`,
+  `diff_compiler_shadow_semantics.sh`, corpus sweeps, the full suite: NOT RUN**, per the brief's
+  reduced floor.
+* **PERF: one extra graph-global bucket scan per bare-word stamp, and it is NOT free by
+  construction.** `&&` short-circuits only the case where the prefix ALREADY collides, which is
+  the rare one — so the common path does pay one `ieHeadRows` lookup plus one bucket walk on the
+  checker's hottest selector. It allocates only the single `headTabOf` key. Graded by
+  `make check-self` (see below); **not** interleaved, wall-clock only, on a shared box.
+* **The `SA-4c` verb-split row I added asserts a KNOWN-WRONG state.** It is fail-capable in both
+  directions (it reds if `check` learns to see the channel, and it reds if `check` starts
+  rejecting for some other reason), and it names `B-2.1-g` as its drain. But it is a pin of an
+  S2, and a reader who greps this gate for "does `check` reject" will get "no" and be right.
+* **NOT COMMITTED**, per the brief. Working tree holds four files (three source/gate/doc +
+  this row); `scratchpad/sa4c/` + `probe.sh` reproduce every reading above against any binary
+  (`sh probe.sh <medaka> <root> <label>`), and `probe4.sh` reproduces the #1397/#1514 readings.

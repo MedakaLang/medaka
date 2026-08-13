@@ -18235,8 +18235,19 @@ keyForSite table name goals = match matchedEntry table name goals
       -- stay that way here for a second, independent reason: what the checker
       -- stamps into the dict cell has to keep matching
       -- `core_ir_lower.declRouteKey` byte for byte.
+      -- ARCH B-2.1-f: …and it is that byte-for-byte agreement which FAILS when
+      -- this table's collision count disagrees with the whole graph's.  See
+      -- `reportRouteWordSkew` — the bare word below is the one that is unsafe.
+      let _ = reportRouteWordSkew table name goals
       Some (headKeyNameOr noneHeadTag hd)
-  None => None
+  None =>
+    -- ARCH B-2.1-f: `None` is NOT a safe arm — every caller answers it with
+    -- `fromOption tag (…)`, i.e. with the SAME bare goal-head word the
+    -- non-colliding arm above stamps, so it carries the identical skew.  This
+    -- is in fact the arm `SA-4c` takes: the prefix table holds no entry at the
+    -- goal's head at all, so the count there is 0 while the graph's is 2.
+    let _ = reportRouteWordSkew table name goals
+    None
 
 -- the head tycon that buckets a goal vector: the spine head of its FIRST component
 -- (the receiver).  Unchanged from the pre-#609 scalar bucketing — widening the
@@ -18912,6 +18923,14 @@ countHeadGo ((KeyEntry methodNames hd2 _ _ _ _ _ _)::rest) name goal
 --      prefix-vs-global difference is a head-collision COUNT.  That residual is
 --      stated as a `nearest miss` in DEBT.md `B-2.1-b2` rather than moved here,
 --      because moving it renames route words and moves the seed.
+--      🚨 ARCH B-2.1-f: THAT RESIDUAL IS NOT A NAMING SKEW, IT IS A MISCOMPILE — an
+--      arity-2 conditional impl called with ONE argument, `check` exit 0 and the built
+--      binary at 139 (`SA-4c`, `test/diff_compiler_check_cli_modules.sh`).  The route
+--      word is still prefix-read here, by design; what changed is that the
+--      disagreement is now a LOUD located reject (`T-ROUTE-WORD-AMBIGUOUS`) instead of
+--      a silent wrong call.  `reportRouteWordSkew` / `ieCountHeadByMethod` own that
+--      guard and derive it in full.  It is a deliberate FALSE-REJECT widening and it
+--      retires WITH the repoint, not before.
 --
 -- ⚠️ ONE min⊑ SELECTOR, NOT TWO.  DICT §11 / §6 *uniform resolution* forbids a
 -- second one, so every entry point below funnels through the SAME
@@ -19121,6 +19140,171 @@ ieCountHeadByIfaceGo ((ImplRow _ _ ir tys _ _)::rest) iface goal
   | ir.irName == iface && headTabEq (univReceiverTag tys) goal =
     1 + ieCountHeadByIfaceGo rest iface goal
   | otherwise = ieCountHeadByIfaceGo rest iface goal
+
+-- ── ARCH B-2.1-f: the METHOD-keyed route word's prefix-vs-graph skew, MADE LOUD ──
+-- 🚨 THIS IS A DELIBERATE FALSE-REJECT WIDENING, AND IT IS THE POINT.  `B-2.1-b2`
+-- moved the three SELECTION legs onto the graph-global `IE` and left the method-keyed
+-- ROUTE WORD (`keyForSite` → `matchedEntry` → `matchingEntries`) on the topological
+-- prefix table, by design (AM-1): moving it renames route words and moves the seed.
+-- Its own `nearest miss:` Item 4 named the residual — *"a method-keyed site whose
+-- head-collision count differs between prefix and whole graph can still stamp the bare
+-- word where the emitter derives the canonical key"* — and MEASURED, that residual is
+-- not a naming skew, it is a MISCOMPILE:
+--
+--   `test/diff_compiler_check_cli_modules.sh`'s `SA-4c` program — `impl Tag (Wrap a)
+--   requires Tag a` plus the more specific `impl Tag (Wrap Int)`, both in a module the
+--   goal's own module does not import, the goal ground at `Tag (Wrap Int)` — gave
+--   `check` **exit 0** (human AND `--json`), `build` exit 0, and a **built binary at
+--   139**.  Read off `build --keep-ir`: `define @mdk_impl_Tag__Wrap_a___tagOf(i64
+--   %arg0, i64 %arg1)` is arity 2 (its `requires` dict), `@mdk_impl_Tag__Wrap_Int___tagOf`
+--   is arity 1, and the site emitted `call @mdk_impl_Tag__Wrap_a___tagOf(i64 %t2)` — an
+--   **arity-2 call with ONE argument**, so the value cell lands in the dict slot and is
+--   dereferenced.  WRONG IMPL and WRONG ARITY.
+--
+-- The mechanism, and it is exactly the count this predicate takes twice: the prefix
+-- table at the goal's module holds NO `Wrap`-headed impl, so `headCollides` is False and
+-- `keyForSite` stamps the BARE head word `Wrap`; the emitter counts the whole program,
+-- finds TWO impls at that head, and resolves the bare word by declaration order to the
+-- GENERAL one.  In the accepting import order the same module's topological prefix DOES
+-- contain both, `headCollides` is True, and the canonical key of the min⊑ winner is
+-- stamped — which is why the discriminator is the import ORDER and nothing else.
+--
+-- ⚠️ ONE DIRECTION ONLY, and the asymmetry is the whole safety argument.  The unsafe
+-- state is *prefix says unique → stamp a bare word* while *the graph says the word names
+-- two or more impls*.  When the prefix already collides, `keyForSite` stamps a canonical
+-- key, which names one impl on any substrate — nothing to report.  When the graph agrees
+-- the head is unique, the bare word is correct — nothing to report.  So a program whose
+-- prefix count and graph count are 0-vs-1, 1-vs-1, 2-vs-2 or 2-vs-3 is UNTOUCHED, which
+-- is what keeps `B-2.1-b2`'s three drains (#1564, #1599, #1072) drained: #1564's and
+-- #1599's programs declare ONE impl at the head, so the graph count is 1 and this cannot
+-- fire, and #1072's method site is headless (`speak x` at a bare tyvar), which keys no
+-- bucket at all.
+--
+-- ⚠️ WHY THIS IS A REJECT AND NOT A REPOINT.  Repointing the route word onto `IE` is the
+-- real fix and it is a SEPARATE bite: the word is a NAME the emitter and both other
+-- engines re-derive independently (`core_ir_lower.declRouteKey`/`ifaceDeclHeadUnique`,
+-- `llvm_emit.headTagUnique`, `eval.pickTagFallback`), so changing which word is stamped
+-- renames symbols, moves every IR golden and re-mints the seed.  Until that lands, this
+-- contract ranks *a fix that makes a defect QUIETER* as a severity INCREASE — and a
+-- located false reject is recoverable by adding one `import`, where a segfault at exit 0
+-- is not.  Retire this guard WITH the repoint, not before.
+--
+-- The `IE` peer of `countHead`, method-name-keyed exactly as `countHeadGo` is
+-- (membership in the impl's method set, NOT its interface — so a specific impl that
+-- inherits the method via a DEFAULT is still counted, which is what makes the two counts
+-- comparable at all).  Spelling-keyed through `headTabOf`/`headTabEq`, for the reason
+-- derived in full on `countHead`: this count's consumer is a byte-for-byte agreement with
+-- a bare-`String` namespace three engines re-derive, so an identity comparison would be
+-- wrong here at ANY supply level.
+ieCountHeadByMethod : ImplEnv -> String -> Option HeadKey -> Int
+ieCountHeadByMethod env name hd =
+  -- goal-side key projected ONCE, here — see `headTabOf`.
+  ieCountHeadByMethodGo (ieHeadRows hd env) name (headTabOf hd)
+
+ieCountHeadByMethodGo : List ImplRow -> String -> Option TabKey -> Int
+ieCountHeadByMethodGo [] _ _ = 0
+ieCountHeadByMethodGo ((ImplRow _ _ _ tys _ ms)::rest) name goal
+  | contains name ms && headTabEq (univReceiverTag tys) goal =
+    1 + ieCountHeadByMethodGo rest name goal
+  | otherwise = ieCountHeadByMethodGo rest name goal
+
+ieHeadCollidesByMethod : ImplEnv -> String -> Option HeadKey -> Bool
+ieHeadCollidesByMethod env name hd = ieCountHeadByMethod env name hd > 1
+
+-- Is the BARE route word `keyForSite` is about to stamp for [name] at [goals]
+-- ambiguous over the whole program while the prefix table says it is unique?
+-- Keyed on the GOAL's head (`goalHeadCon`, the same projection `matchingEntries`
+-- buckets by), never on the winning entry's — the word at stake is the goal head's
+-- bare name, and on the `None` arm there is no winning entry to read a head off.
+-- A headless goal keys no bucket on either substrate and is excluded: it stamps
+-- `noneHeadTag`, a different word, whose correctness rests on the emitter's
+-- general-instance fallback tier rather than on this count.
+--
+-- ⚠️ The prefix conjunct is written FIRST so `&&` short-circuits the graph-global
+-- bucket scan away at every site whose prefix already collides.  It cannot be
+-- reordered to skip the scan in the common non-colliding case — that case is
+-- precisely the one that has to be checked — so this predicate does add one
+-- `ieHeadRows` lookup plus one bucket walk per bare-word stamp.  Measured on
+-- `make check-self`, that is inside the run-to-run noise of a shared box (see
+-- DEBT.md `B-2.1-f`); it allocates only the single `headTabOf` key.
+routeWordHeadSkew : KeyBuckets -> String -> List Mono -> Bool
+routeWordHeadSkew table name goals = match goalHeadCon goals
+  Some hk => not (headCollides table name (Some hk))
+    && ieHeadCollidesByMethod perRun.value.bodyImplEnvRef.value name (Some hk)
+  None => False
+
+-- Push `T-ROUTE-WORD-AMBIGUOUS` when the skew above holds.  Located through
+-- `goalSiteLoc`, exactly as `T-REQUIRES-DEPTH` and `T-REQUIRES-UNROUTED` are: all four
+-- resolve passes that reach `keyForSite` (`resolveSites`, `resolveArgStamps`,
+-- `resolveOpSites`, `resolveDictApps`) set that ref from the pending entry's own `loc`
+-- before dispatching and clear it at the end of the list, so the caret lands on the
+-- method occurrence rather than on whatever `currentLoc` last held.
+-- `pushTypeErrorOnceAt` dedups on message text, so a site reached twice by two passes
+-- reports once.
+reportRouteWordSkew : KeyBuckets -> String -> List Mono -> Unit
+reportRouteWordSkew table name goals
+  | routeWordHeadSkew table name goals = pushTypeErrorOnceAt "T-ROUTE-WORD-AMBIGUOUS" goalSiteLoc.value (routeWordAmbiguousMsg name goals)
+  | otherwise = ()
+
+-- 🚨 THE VERB SPLIT THIS GUARD LEAVES BEHIND, MEASURED AND DERIVED — READ THIS BEFORE
+-- "FIXING" `check`.  With the guard above, `build` and `run` reject at exit 1 and NO
+-- binary is produced (the 139 is gone), but `medaka check` on the same project still
+-- exits **0** with an EMPTY diagnostic list — human AND `--json` agreeing, so #1362 is
+-- not confounding it.  So the compiler currently says *"type error … Run `medaka check`
+-- for details"* and `check` then reports nothing, and the reject carries no location on
+-- any verb.  That is a severity DECREASE against the 139 it replaces (no wrong binary
+-- can be built) and an ERROR-QUALITY *Located* regression at the same time; it is
+-- recorded here rather than papered over.
+--
+-- WHY, derived rather than guessed — two independent reasons, either alone sufficient:
+--  1. `keyForSite` is reached ONLY from the five `resolve*` stamp passes, and those run
+--     in `elabModuleStamp`, i.e. inside `elaborateModules`.  `medaka check` on a
+--     multi-module project goes `analyzeProject` → `typecheckPass` →
+--     `checkModulesDiags` → `checkModuleFullDiags`, which typechecks and never stamps a
+--     route.  (Door 4's two guards DO reach `check` because they fire during typecheck
+--     proper, in the obligation channel.)
+--  2. Even given the pass, there would be nothing to stamp: the pending route sites are
+--     recorded by `inferMethodAt`, which only ever sees an `EMethodAt` node — and those
+--     are minted by the MARK pass (`markModules`/`prePassDict`), also called only from
+--     `elaborateModules`.  The check driver's method occurrences go through
+--     `inferVarPlainId`, so `pendingSites`/`pendingArgStamps` are EMPTY on that path.
+--     An audit at the tail of `checkBodyImpl` (the one function both drivers share) was
+--     written, built and measured for exactly this: it is INERT, for this reason, and
+--     was removed rather than left in place claiming to do something.
+--
+-- ⚠️ The check route DOES run `elaborateModules` once — inside `mainShapeWarnings`
+-- (`driver/medaka_cli.mdk`, the `checkRoute` multi-module arm) — and DISCARDS its type
+-- errors, keeping only warnings.  That is the same family as #1362, and it is the
+-- cheapest-looking fix and the wrong one for a single bite: surfacing every
+-- elaborate-only type error on the `check` route narrows acceptance for every program
+-- in the tree.
+--
+-- ⚠️ AND DO NOT ANSWER IT BY RE-DERIVING THE SKEW IN THE OBLIGATION CHANNEL.  That
+-- channel is keyed by INTERFACE over a different substrate (`residualUnivRef`, the
+-- universe projected at this module's ordinal) where this one is keyed by METHOD NAME
+-- over `KeyBuckets`; the two are not the same count (an impl inheriting the method via a
+-- DEFAULT is in one population and not the other), so it would be a SECOND selector
+-- disagreeing with the first — DICT §11 forbids exactly that, and RUN-B-023 / B-2.1-c
+-- each produced an S0 by splitting one decision across two reads.  The right fix is the
+-- one AM-1 deferred: repoint the route word itself (ARCH B-2.1-g / #1113), at which
+-- point there is one count, one channel, and this guard is deleted.
+
+-- 🚨 ROOT-CAUSE-HONEST, AND DELIBERATELY NOT `requiresUnroutedMsg`.  Door 4's message
+-- opens *"Cannot pass a dictionary for …"*, and that claim is FALSE for this shape: the
+-- impl that most-specific-wins actually selects here (`impl Tag (Wrap Int)`) carries no
+-- `requires` and needs no dictionary at all — the dictionary only appears because the
+-- ambiguous bare word resolves to the WRONG, conditional impl.  Reusing that code would
+-- have kept `SA-4c`'s existing assertion green at the price of a message that misnames
+-- its own cause, which is the trade `compiler/ERROR-QUALITY.md` forbids.  It is also a
+-- genuinely different cause: Door 4 reports *"an impl matched and its `requires` could
+-- not be recovered"*; this reports *"the word naming the selected impl is not unique"*.
+--
+-- The remedy is real and MEASURED, not a guess: adding an `import` of the declaring
+-- module to THIS module puts both impls in this module's own prefix, `headCollides` goes
+-- True, and the canonical key of the min⊑ winner is stamped — which is exactly what the
+-- accepting import order already does.
+routeWordAmbiguousMsg : String -> List Mono -> String
+routeWordAmbiguousMsg name goals = "Cannot route the call to `\{name}` at `\{ppPredArgsShared goals}`: two or more impls that define `\{name}` share this receiver's head type constructor, and they are declared in modules that this one does not import — so this compiler cannot tell which of them this call selects. It would stamp the bare head name, a word that names more than one impl, and the emitted code would then pick one of them by declaration order — reading a dictionary that was never passed if the one it picks carries a `requires`. This is a compiler limitation, not an ambiguous program: add an `import` of the module that declares the other impl to THIS module, or move this code into a module that already imports it"
 
 -- the head node of an (unelaborated) AST type's left-nested `TyApp` spine.
 -- Total (every `Ty` has a head) and ALLOCATION-FREE (it returns a node that
