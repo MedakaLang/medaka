@@ -2,7 +2,14 @@
 
 The project agents in `agents/` are an OpenCode adaptation of Medaka's complex-compiler Polytoken workflow.
 
+Two additive workflow families are available:
+
+- `medaka-compiler` and `compiler-*` preserve the conservative, serialized workflow described below.
+- `sprint-conductor` and `sprint-*` optimize sustained implementation throughput with isolated parallel writers, parallel verification/research/review, minimum writer checks, measured dynamic tuning, and a recurring throughput heartbeat. Their shared contract is `medaka-throughput-sprint`.
+
 - `medaka-compiler` is the primary conductor for complex compiler work.
+- `sprint-conductor` is the primary conductor for throughput-first compiler sprints; use it only when the user selects the faster rolling workflow.
+- `sprint-implementer` writes one admitted slice with a bounded minimum check, `sprint-verifier` grades checkpoints in parallel, and `sprint-throughput-reviewer` audits both compiler quality and orchestration throughput.
 - `compiler-designer` and `compiler-reviewer` use Sol at high reasoning effort for semantic and architectural judgment.
 - `compiler-implementer` uses Terra for an accepted, bounded implementation packet in an isolated daughter worktree; it does not choose semantics or own broad verification.
 - `compiler-scout` uses Terra at medium reasoning for evidence-sensitive readiness and exhaustive inventories; `compiler-reproducer` uses Terra at high reasoning for discriminating behavior matrices.
@@ -64,3 +71,8 @@ resolved permission or full skill body and create a large, mostly redundant
 transcript; use them only when validating the complete discovered set.
 
 OpenCode loads agent and skill definitions at startup. Quit and restart it after changing these files.
+
+The sprint heartbeat uses the pinned `opencode-reminders@1.0.1` plugin. The
+conductor creates a session-scoped recurring reminder through `reminderadd`; no
+host daemon is required. Reminder state is local and ignored under
+`.opencode/reminders/`. Restart OpenCode after pulling configuration changes.

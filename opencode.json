@@ -3,6 +3,7 @@
   "skills": {
     "paths": [".claude/skills"]
   },
+  "plugin": ["opencode-reminders@1.0.1"],
   "permission": {
     "bash": {
       "*": "allow",

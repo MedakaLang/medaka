@@ -40,3 +40,6 @@ _build/
 # hash, rooted at the project root. Regenerable by definition — a missing or stale
 # shard is a cache MISS, which just re-lints the file.
 /.medaka/
+
+# Session-scoped state created by the opencode-reminders sprint heartbeat.
+/.opencode/reminders/
