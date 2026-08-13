@@ -378,3 +378,181 @@ no GNU-only flags.
 (5) The two-arm `MEDAKA=` override path is implemented and was exercised only via the
 fail-capability harness and a nonexistent-binary probe (exit 2), **not** against a genuine second
 worktree.
+
+---
+
+### `B-2.1-a2` — Phase 2′ (B-2.1) — seat a real `ImplEnv` on the FLAT arm (hard precondition)
+
+sites:      `compiler/types/typecheck.mdk`, four edits, +70 lines, **all additive** (no line
+deleted, no existing expression changed — `git diff` is 70 insertions, 0 deletions):
+* `:4130-4185` — NEW `buildFlatImplEnv : List Decl -> ImplEnv` (`:4175`) + NEW `ieIndexRows`
+  (`:4182`), placed
+  immediately after `buildImplEnvGo` (the Module-arm peer they mirror).
+* `:6784` — NEW `PerRun` field `bodyImplEnvRef : Ref ImplEnv`, between `shadowKeyTableRef` and
+  `pendingBinopSites`. **Added BARE, no trailing comment**, per the #829 record-comment hazard:
+  `PerRun`'s header is the collapsed single-line `data PerRun = PerRun {` (the measured-safe
+  form) *and* its side comments are a column-wise prose river, so the prose went on
+  `buildFlatImplEnv` instead. `git diff` confirms no existing trailing comment moved.
+* `:6880` — the matching `freshPerRun` initialiser `bodyImplEnvRef = Ref emptyImplEnv` (the
+  record constructor makes this non-optional, which is `PerRun`'s own stated design).
+* `:20450-20460` — NEW `let _ = match mode` **beside**, not replacing, the existing
+  `shadowKeyTableRef` arm gate: `Flat _ => buildFlatImplEnv fullUniverse`;
+  `Module _ _ _ => driverState.value.declEnvsRef.value.deImpls` (a pointer copy, not a re-derive).
+
+transform:  Give the FLAT path the impl population it never had, on `IE`'s shape, and seat both
+arms on ONE ref so `B-2.1-b` repoints one substrate instead of an arm gate. `buildImplEnv` needs a
+`List DeclEnvModule` envelope that only the graph drivers build, so FLAT had `emptyImplEnv`; the
+new builder takes the decl list the FLAT arm already has in hand (`fullUniverse`, the same list
+`buildKeyTable` is handed one line above) and folds it through the *same* `implDeclFacts` /
+`implRowsOf` / `ieInsertRowKeys` / `ieInsertRowAt` / `ieBuildSnaps` the Module arm uses. One flat
+program is one scope ⇒ every row takes ordinal 0 and mid `""`; `seq` still runs across the whole
+program so identities stay unique within the compile.
+**`shadowKeyTableRef` and its THREE readers (`:11252`, `:11539`, `:21751` pre-edit numbering) are
+untouched**, as briefed — nothing was repointed, nothing deleted. **`ieInsertRow`'s known
+`ieRows ++ [r]` quadratic was NOT "fixed"**: `buildFlatImplEnv` is linear BY DESIGN instead (rows
+are already one forward-ordered list, so `ieRows` is SET once and only the buckets are folded via
+the index-only `ieIndexRows`), which imports no quadratic into the single-file path *and* leaves
+RUN-B-007's ascending-`instRefSeq` order on the shared Module path completely alone.
+
+could move: **NOTHING, and here is the argument rather than the assertion.** Three independent
+grounds, in increasing strength:
+1. **No reader.** `grep -rn bodyImplEnvRef compiler/` returns 6 hits: **four code sites** — the
+   field (`:6784`), its initialiser (`:6880`), and the two `setRef` arms (`:20459-20460`) — plus
+   two prose mentions in comments. **Every code site is a WRITE.** There is no read site anywhere
+   in the tree, so no judgment can consult it. (Derive it; do not trust this count.)
+2. **No existing expression changed.** The diff is 70 insertions / 0 deletions; the
+   `shadowKeyTableRef` arm gate above it is byte-identical, and the new `let _ = match mode` is a
+   sibling statement, not a rewrite.
+3. **Measured, not reasoned:** `make check-self` PASS · `selfcompile_fixpoint` **C3a YES / C3b
+   YES byte-for-byte** · `diff_compiler_flat_vs_onemodule` 9/9 as pinned, **0 drain notices** ·
+   355 single-file `medaka check` runs with the equivalence audit armed, **0 findings** — across
+   `test/{eval,eval_list,eval_dict,parse,llvm}_fixtures/*.mdk` + `stdlib/*.mdk`. ⚠️ Stated
+   honestly: **330 of the 355 are no-import files and therefore the FLAT arm**; the other 25 take
+   the MODULE arm, where the audit is a no-op. Two globs I wrote (`test/check_fixtures`,
+   `test/types_fixtures`) **do not exist** and contributed nothing — the sweep's `-f` guard
+   skipped them silently, which is exactly why the file COUNT is printed by the harness rather
+   than assumed.
+⚠️ The one thing that DID move and is not a behaviour: **per-Flat-compile work**. See `unchecked:`
+item 3 for exactly what was and was not measured about it.
+
+nearest miss: **An impl whose head type list is EMPTY (`tys = []`).** This is the ONE place the
+two populations are known to disagree, and the disagreement is a **widening in `IE`'s favour**
+(RUN-B-017 probe 2, re-derived here from the source): `keyEntryOf`'s `[] => []` arm emits
+**nothing**, while `implDeclFact` keeps the row and `univReceiverTag [] = None` files it in
+`ieHeadless`. So the Flat `ImplEnv` this bite seats can contain a row the FLAT `KeyBuckets` does
+not. **Today that is unobservable** — nothing reads the ref — and it did not occur once in the
+330-flat-program audit corpus (the row-level check is exact element-wise equality, so it would have
+panicked; kt=118 / ie=118 on the probe). **But `B-2.1-b` inherits it the moment it repoints**, and
+whether `tys = []` is surface-reachable at all is still one of RUN-B-017's five owed items. Second
+nearest miss, and it is NOT covered: **a `Module`-mode driver that stamps a module id
+`buildDeclEnvs` never indexed** — it now also seats `deImpls` on this ref, and `declEnvsOrdOf`'s
+`-1` miss is vacuous under `ieCandidacyVisibleAt`, so such a driver reads the whole graph rather
+than failing closed. `:17231` asserts no live path does this; I did not re-derive that assertion.
+
+engines:    **NONE OF THE FOUR MOVED — reason, not word, per arm:**
+* **LLVM** (`backend/llvm_emit.mdk`) — untouched. No route word, no `KeyEntry`, no dict arity, no
+  symbol name changes: the bite adds a ref nothing reads and mints no new emitted name. Positively
+  corroborated rather than asserted: `selfcompile_fixpoint` **C3a PASS byte-for-byte against the
+  seed-bootstrapped reference**, i.e. the emitter's own emitted IR converged exactly as before.
+* **wasm** (`backend/wasm_emit.mdk`) — untouched, same reason. ⚠️ Note the *consumer* side: the
+  `wasm_emit_typed_main` entry reaches `checkBodyImpl` via `elaborateDict` on the **FLAT** arm, so
+  it now BUILDS a Flat `ImplEnv` — but it cannot read one, so no wasm arm is owed. It is also the
+  entry whose closure produced the measured `CFieldAccess: unknown field 'ieOrd'` panic when
+  `ImplRow` was a named record; **`ImplRow` was not touched and stays positional**, and this
+  entry's path was exercised: `check-self` PASS, and the emit entries are the FLAT path the
+  audit sweep covered (330 no-import programs).
+* **eval** (`eval/eval.mdk`) — untouched. Dispatch is unchanged; `IE` construction is
+  typecheck-internal. Corroborated: the flat gate's `value` column comes from `medaka run` (the
+  eval-driven MODULE path) and both accepting cases still print `wrap(int)`.
+* **`core_ir_eval.mdk`** (AMENDMENT 3's required fourth arm) — untouched, and **no lockstep peer
+  is owed**: the `evalModules` ‖ `cevalModules` law is about MODULE-FRAME semantics, and this bite
+  adds no frame, no env cell and no name — it seats a typecheck-internal ref before inference. Not
+  reasoned only: `grep -n 'ImplEnv\|ieRows\|bodyImplEnvRef' compiler/ir/core_ir_eval.mdk` returns
+  nothing, so there is no peer site to mirror.
+**Owed by later bites, not this one:** `B-2.1-b`'s repoint is the first change that can move any
+engine, because it is the first thing that READS this ref.
+
+unchecked:  (1) **Goldens/snapshots, deliberately.** `test/snapshots/compiler/typecheck.md` moves
+(+70 lines of compiler source, all below existing lines) and `test/selfproc_goldens/legA/types.typecheck.golden`
+gains `buildFlatImplEnv` / `ieIndexRows` (LEG A includes `types.typecheck`, and the golden is
+additive-only here — no existing binding's inferred scheme can have changed, since no existing
+signature was touched). **Blessed by nobody**, per contract §5. Both are expected-red for the run.
+(2) **No seed re-mint run and, in my judgement, none needed** — `test/refresh_seed.sh` was NOT
+executed, per the brief. The evidence: `selfcompile_fixpoint` C3a passed **byte-for-byte against
+the seed-bootstrapped converged reference**, which is precisely the comparison a stale seed fails.
+Orchestrator's call, flagged rather than assumed.
+(3) **PERF: no A/B was measured, and the brief did not require one.** Its measurement clause was
+conditional on using `ieAddRows`, which this construction deliberately does not. What IS derived
+(from the audit's own positive-control output on a minimal no-import program): the FLAT arm now
+does **118 rows → 235 distinct index keys** of work per compile — one `flatMap` over the decls
+(the same walk `buildKeyTable fullUniverse` already makes one line above), 118 `InstRef` mints,
+235 `mregAppendK`/`regInsertK` inserts, and 118 `insertUnivImpl`s producing exactly ONE
+`ieUnivSnaps` entry (all rows share ordinal 0). All linear; the Module arm already pays the same
+per-row cost for the same population. **Not measured: net allocation, and no wall-clock A/B** — a
+base-arm binary would have cost two extra 75 s builds plus a source swap, and wall-clock on this
+shared box cannot resolve a delta this size. A two-worktree allocation differential is the honest
+instrument and belongs to the repair round.
+(4) **The equivalence check's discrimination axis.** It compares
+`iface-name | ppTyAtom heads | requires | method-names`, which is the axis `KeyBuckets` itself
+keys on (`implKeyTc`). It therefore does **NOT** discriminate `IfaceRef.irOrigin` — `IE`'s extra
+identity precision, which `KeyBuckets` has no peer field for — nor `InstRef`, nor `ieIfaceTags`,
+nor `ieUnivSnaps` contents (the snapshot table was checked only structurally, by the reasoning at
+`buildFlatImplEnv`, not digested). Two genuinely distinct impls could render identically only if
+they shared iface name, head spelling, requires and method names, i.e. were duplicate impls.
+(5) **The audit is not committed and cannot regress-guard.** It was temporary instrumentation in
+`typecheck.mdk`, removed before handoff (`grep -n 'ieAudit\|TEMP-AUDIT' compiler/types/typecheck.mdk`
+→ nothing). Re-deriving it is ~60 lines; the probes are at
+`/var/tmp/medaka-scratch/.../scratchpad/probe/`, which is session-scoped and will be reaped.
+(6) **`make preflight`, the differential gates, must-fail and the doc gates were not run**, per
+the run's deferred-verification posture. Only `check-self`, the fixpoint, the flat gate,
+`fmt --check`, per-file `lint`, and the whole-project `lint compiler stdlib sqlite` (0 findings)
+were executed.
+
+#### `B-2.1-a2`'s own equivalence check — and why the gates could not have supplied it
+
+**An additive population nothing reads is UNOBSERVABLE**, so `make medaka` + green gates prove
+nothing about whether the Flat `ImplEnv` is *correctly* populated — and RUN-B-020 already recorded
+that `diff_compiler_flat_vs_onemodule` **cannot** see it either (a NARROWER Flat env is right
+acceptance with a wrong selected impl and passes all 9 rows). A silently-empty or silently-narrow
+env would therefore have passed everything in this tree and detonated in `B-2.1-b`.
+
+So the bite carried its own grader: **temporary instrumentation inside `typecheck.mdk`**, armed on
+the FLAT arm only, panicking on disagreement — the retired `ieShadowCompare` idiom. **Two
+independent checks, both element-wise and order-sensitive, neither a count:**
+
+1. **POPULATION vs `buildKeyTable`'s own source.** `map render (flatMap keyEntryOf fullUniverse)`
+   compared as an ordered `List String` against `map render ieRows`, where `render` is
+   `iface | ppTyAtom heads | requires | method-names`. Same walk `buildKeyTable` makes, same
+   program, same order. Catches undercount, overcount, reordering, and a wrong head/requires/method
+   payload.
+2. **INDEX vs ROWS.** For every distinct registry key derived from the rows
+   (`regKeyNTab [ifk, dispHeadTab hk]` into `ieConcrete`, `regKeyOfTab ifk` into `ieHeadless`, one
+   per `oblIfaceKeys` element), the bucket's contents compared element-wise against the rows that
+   key into it. **This is the check for the narrow-env gap RUN-B-020 named**, and being
+   order-sensitive it is also the check for RUN-B-007's ascending-`instRefSeq` bucket order.
+
+**POSITIVE CONTROL — the audit is provably not a no-op.** A sentinel arm makes it loud on a program
+declaring `interface IeAuditPing`: `medaka check` on such a file panicked
+`IEAUDIT OK rows=118 keys=235 ping=IeAuditPing|Int||pingv` — so on a minimal no-import program the
+Flat env holds **118 rows under 235 distinct index keys**, includes the user's own impl, and *both*
+checks had already passed (they panic earlier than the verdict). Without this, "no panic over 330
+programs" would have been indistinguishable from "the audit never ran".
+
+**FAIL-CAPABILITY — PROVEN, BOTH CHECKS, not asserted.** Two further ping-gated mutations were
+compiled into the same audit binary and each observed RED:
+| mutation | observed |
+|---|---|
+| index built from `tail rows` (rows intact) | `IEAUDIT BUCKET MISMATCH key=1:25:iface6:module4:core2:Eq4:type4:bare0:3:Int` · `expected=Eq\|Int\|\|eq` · `actual=` |
+| `ieRows` set to `tail rows` (index intact) | `IEAUDIT ROWS MISMATCH kt=118 ie=117` |
+So the row check catches a missing row and the bucket check independently catches a row that is
+present but unindexed — **the exact narrow-env failure the flat gate is blind to.**
+
+**AND THE SWEEP HARNESS ITSELF WAS CONTROLLED.** `corpus.sh` reported `files=355
+audit_findings=0`; the identical detection path pointed at the two mutation probes reported
+`files=2 audit_findings=2`. A zero from that script is therefore a clean corpus, not a broken
+grep — which is the failure this tree calls *"a probe that cannot fail is not evidence."*
+
+**Then the instrumentation and both mutation hooks were removed and the binary rebuilt from the
+stripped source**, and every gate above was re-run on that clean binary (the audit-build results
+were not carried over). `git diff` on the handed-back tree is 70 insertions / 0 deletions with no
+`ieAudit` symbol anywhere.

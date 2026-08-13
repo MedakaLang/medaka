@@ -1303,4 +1303,99 @@ change emitted IR and it was green at `03ef6c47` two commits ago.
 
 ---
 
-*(Phase 2′ continues: `B-2.1-a2` seats the Flat `ImplEnv`, graded by this gate AND on emitted evidence.)*
+## RUN-B-021 — ✅ `B-2.1-a2` LANDED: Phase 2′'s hard precondition is discharged
+
+**+70 insertions, 0 deletions** in `compiler/types/typecheck.mdk`. Purely additive, as briefed.
+
+**Verified by me, independently:**
+
+| check | result |
+|---|---|
+| `git diff --numstat` | **`70 0`** — additive, zero deletions |
+| `git diff \| grep shadowKeyTableRef` | **empty** — the existing table and its three readers are genuinely untouched |
+| `MEDAKA_STRICT=1 ./medaka --version` | ✅ exit 0 — binary provably built from the source on disk |
+| `grep -rn 'ieAudit\|IEAUDIT' compiler/` | **empty** — all instrumentation removed |
+| `make check-self` | ✅ PASS |
+| `sh test/diff_compiler_flat_vs_onemodule.sh` | ✅ exit 0 — 9/9 as pinned, **0 drain notices** |
+| **`sh test/selfcompile_fixpoint.sh`** | ✅ **C3a YES · C3b YES**, byte-for-byte |
+
+⚠️ Note on one grep: `ieShadowCompare` **does** still appear three times — as **pre-existing comments**
+citing A-3.4's historical idiom (`:4034`, `:4212`, `:4329`), not leftover instrumentation. Checking
+`ieAudit`/`IEAUDIT` is what discriminates; a lazier grep would have produced a false alarm here.
+
+### What landed
+
+- **`buildFlatImplEnv : List Decl -> ImplEnv`** (`:4175`) + **`ieIndexRows`** (`:4182`) — the Flat peer
+  of `buildImplEnv`, folding the decl list the Flat arm already holds (`fullUniverse`) through the
+  **same** `implDeclFacts` / `implRowsOf` / `ieInsertRowKeys` / `ieInsertRowAt` / `ieBuildSnaps` the
+  Module arm uses. One flat program = one scope ⇒ ordinal 0, mid `""`, `seq` still whole-program.
+- **`PerRun.bodyImplEnvRef`** (`:6784`) + its `freshPerRun` initialiser (`:6880`).
+- **A new SIBLING `let _ = match mode`** (`:20450-20460`) *beside*, not replacing, the
+  `shadowKeyTableRef` gate: `Flat _ =>` the new builder; `Module _ _ _ =>` a **pointer copy** of
+  `deImpls` (deliberately not re-deriving, citing `moduleImplUniv`'s own reason).
+
+⭐ **An architectural win I did not specify and should have:** it is **ONE ref on BOTH arms**, so the
+repoint in `B-2.1-b` gets **a single substrate rather than an arm gate.** That retires design law
+L1's two-registry hazard — the thing P0-A explicitly ruled against as an END state (*"two answers to
+'does an impl exist' in one compile"*) — instead of deferring it.
+
+### ⭐ It avoided the quadratic BY CONSTRUCTION rather than fixing it
+
+I warned that `ieInsertRow`'s `env.ieRows ++ [r]` is a known O(rows²) (`:4223`, *"OWED, RECORDED
+RATHER THAN FIXED"*) but that **`ieRows` order is load-bearing** for RUN-B-007's declaration-index
+ruling, so a cons+reverse "fix" could silently change a tie-break the phase rests on.
+
+**It did neither — it made the quadratic unreachable on the new path.** `buildFlatImplEnv` computes
+`rows` **once** as a forward list, then `ieIndexRows` folds **only the buckets** — sharing
+`ieInsertRowKeys`, so Flat and Module keying **cannot diverge** — and sets `ieRows = rows` in one
+assignment. `ieUnivSnaps` is re-derived via `ieBuildSnaps` (correct: `ieAddRows` does **not**
+maintain the snapshot table). So: **no quadratic imported into the single-file path, `ieInsertRow`
+untouched, ascending-`instRefSeq` order on the shared Module path untouched.** This is the right
+shape — *don't fix the hazard, don't inherit it either.*
+
+### ⭐ The equivalence check — this was the deliverable I most doubted, and it is sound
+
+The problem: an additive population **nothing reads** is unobservable, and RUN-B-020 records that the
+new grader **cannot** see a narrow env (*"right acceptance, wrong selected impl passes all 9 rows"*).
+So "it builds and gates are green" proves nothing.
+
+What it built: temporary Flat-arm instrumentation running **two order-sensitive, ELEMENT-WISE** checks
+— **not counts** (I had warned that equal sizes can hide different contents):
+1. **population** — `map render (flatMap keyEntryOf fullUniverse)` vs `map render ieRows`;
+2. **index vs rows** — every registry key derived from the rows, bucket contents compared element-wise
+   against the rows keying into it. **This is precisely the check for the narrow-env gap the flat
+   gate is blind to.**
+
+Evidence, in the order that makes it credible:
+- **Positive control**: a sentinel-gated verdict panicked `IEAUDIT OK rows=118 keys=235
+  ping=IeAuditPing|Int||pingv` — proving **the audit actually ran** rather than silently no-op'ing.
+- **Fail-capability, both checks, observed RED**: index built from `tail rows` → `BUCKET MISMATCH …
+  expected=Eq|Int||eq actual=`; `ieRows = tail rows` → `ROWS MISMATCH kt=118 ie=117`.
+- **Corpus sweep**: `files=355 audit_findings=0`, **330 of them no-import ⇒ FLAT**.
+- ⭐ **The sweep harness was ITSELF controlled**: the same detection path over the two mutation probes
+  → `files=2 audit_findings=2`. **It verified that its detector detects** — the step that separates a
+  real sweep from a green one that was never wired up.
+- Instrumentation and both mutation hooks **removed**, rebuilt from stripped source, **all gates
+  re-run on the clean binary** (which is the binary I then verified above).
+
+### Refusals and deviations, all correct
+
+- **No perf A/B measured** — and the brief did not require one: that clause was conditional on using
+  `ieAddRows`, which it deliberately avoided. Derived instead: **118 rows → 235 index keys** per Flat
+  compile, all linear, one `ieUnivSnaps` entry.
+- **Two globs in its sweep script (`test/check_fixtures`, `test/types_fixtures`) do not exist** and
+  contributed nothing — **recorded in the row rather than left to inflate the corpus claim.** That is
+  the *"a sweep scope is itself an encoded fact"* discipline, applied unprompted to its own evidence.
+- **Seed re-mint: judged unnecessary and FLAGGED rather than assumed.** I agree, and the reasoning is
+  right: **C3a passed byte-for-byte against the seed-bootstrapped converged reference, which is
+  exactly the comparison a stale seed fails.** `refresh_seed.sh` not run.
+
+### Deferred debt
+
+`test/snapshots/compiler/typecheck.md` and `test/selfproc_goldens/legA/types.typecheck.golden` —
+the latter **additive-only** this time (new bindings, nothing deleted or re-typed), unlike Phase 1's.
+**Blessed by nobody.**
+
+---
+
+*(Phase 2′ continues. Next: the reader repoint + the router/stamper population, which RUN-B-009 requires to move TOGETHER.)*

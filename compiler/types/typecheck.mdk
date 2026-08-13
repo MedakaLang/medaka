@@ -4127,6 +4127,63 @@ buildImplEnvGo (m::rest) seq env =
   let rows = implRowsOf m.demId m.demOrd seq (implDeclFacts m.demDecls)
   buildImplEnvGo rest (seq + listLen rows) (ieAddRows rows env)
 
+-- ── ARCH B-2.1-a2 (Stage B sprint): the FLAT arm's `ImplEnv` ─────────────────
+--
+-- `buildImplEnv` above needs an ENVELOPE (`List DeclEnvModule`), which only the
+-- graph drivers build (`buildDeclEnvs` ← `checkModulesPreamble` / `elaborateModules`).
+-- The FLAT path — `checkProgramSeededSplit` → `checkBodyImpl (Flat coreProg)`, reached
+-- by `medaka check <no-import file>`, `lsp`, `repl`, `doc`, `lint`'s policy pass,
+-- `snapshot`, and the `llvm_emit_typed_main` / `wasm_emit_typed_main` entries via
+-- `elaborateDict` — never calls it, so `declEnvsRef.deImpls` is `emptyImplEnv` there.
+-- That emptiness is the hazard DECISIONS.md RUN-B-017 probe 3 MEASURED: FLAT is
+-- already whole-program and already CORRECT on #1564's shape (it accepts and prints
+-- `wrap(int)` where the four-module program rejects), so a later bite that repoints
+-- the evidence reader onto an EMPTY Flat `IE` is a correct→broken regression on the
+-- busiest verbs in the CLI.  This function removes that emptiness FIRST, additively:
+-- nothing reads `bodyImplEnvRef` yet.
+--
+-- One flat program is ONE scope, so every row takes ordinal 0 and mid `""` — there
+-- is no loader module id on this path (the prelude prefix carries `core` *origins*
+-- on its decls, but no module id), and `""` is the same spelling `declEnvOrdIndex`
+-- already seeds ordinal 0 with.  `InstRef`'s `seq` still runs across the whole
+-- program, so identities stay unique within the compile, exactly as on Module.
+-- ⚠️ Consequence, stated rather than left to be found: `instRefMid` cannot
+-- distinguish a prelude impl from a user impl on FLAT.  B-2's route naming must not
+-- key on `mid` for that reason — which is what the `InstRef` header already says
+-- ("derive a NAME from (module id, interface identity, head) — content, not
+-- position"), one path further.
+--
+-- 🚨 LINEAR BY DESIGN, AND THAT IS WHY IT DOES NOT CALL `ieAddRows`.  `ieInsertRow`
+-- does `env.ieRows ++ [r]` per row — O(rows²) over the build, self-documented as
+-- OWED at `ieInsertRow` — and `compiler/AGENTS.md` forbids importing a known
+-- quadratic into a new path ("thirteen quadratics, all the same shape").  The rows
+-- are already in hand as one forward-ordered list here, so `ieRows` is SET once and
+-- only the three index buckets are folded, through the SAME `ieInsertRowKeys` /
+-- `ieInsertRowAt` the Module arm uses.  `ieInsertRow` is left exactly as it is: it
+-- is the Module arm's shared path, and RUN-B-007's declaration-index ruling depends
+-- on `ieRows` and every bucket being ASCENDING by `instRefSeq`, so a cons+reverse
+-- rewrite of that function would put a load-bearing order on the line for no gain
+-- here.  This construction yields the same value `ieAddRows rows emptyImplEnv`
+-- would: appending left-to-right produces `rows`, and the bucket writer is
+-- unchanged and still `mregAppendK` (forward order within a bucket).
+--
+-- ⚠️ `ieUnivSnaps` IS RE-DERIVED, per `ieAddRows`'s 🚨: it is a second
+-- representation of `ieRows` maintained in exactly one place, and `ieUniverseAt`
+-- reads the SNAPSHOT.  All rows share ordinal 0, so `ieBuildSnaps` emits exactly one
+-- entry and `ieUniverseAt` returns the whole flat program's universe for any
+-- argument — which is the correct answer on a path that has no import graph to scope.
+buildFlatImplEnv : List Decl -> ImplEnv
+buildFlatImplEnv prog =
+  let rows = implRowsOf "" 0 0 (implDeclFacts prog)
+  let indexed = ieIndexRows rows emptyImplEnv
+  ImplEnv { indexed | ieRows = rows, ieUnivSnaps = ieBuildSnaps rows }
+
+-- The index-only half of `ieInsertRow`: same keys, same writer, no `ieRows` append.
+ieIndexRows : List ImplRow -> ImplEnv -> ImplEnv
+ieIndexRows [] env = env
+ieIndexRows ((r@(ImplRow _ _ ir _ _ _))::rest) env =
+  ieIndexRows rest (ieInsertRowKeys (oblIfaceKeys ir) r env)
+
 -- The per-ordinal prefix universes, in ONE left fold over the ordinal-ordered rows.
 -- See `ieUnivSnaps` for why this is a performance invariant rather than a cache.
 -- Emits one entry per DISTINCT ordinal (a module declaring no impl contributes no
@@ -6724,6 +6781,7 @@ data PerRun = PerRun {
     definerShadowNamesRef : Ref (List String),
     definerShadowSigsRef : Ref (List (String, Ty)),
     shadowKeyTableRef : Ref (OrdMap (List KeyEntry)),
+    bodyImplEnvRef : Ref ImplEnv,
     pendingBinopSites : Ref (List PendingEntry),
     pendingUnopSites : Ref (List PendingEntry),
     pendingArithSites : Ref (List (Ref Route, Mono)),
@@ -6819,6 +6877,7 @@ freshPerRun _ = PerRun {
   definerShadowNamesRef = Ref [],
   definerShadowSigsRef = Ref [],
   shadowKeyTableRef = Ref omEmpty,
+  bodyImplEnvRef = Ref emptyImplEnv,
   pendingBinopSites = Ref [],
   pendingUnopSites = Ref [],
   pendingArithSites = Ref [],
@@ -20388,6 +20447,17 @@ checkBodyImpl seed mode prog0 =
   let _ = match mode
     Flat _ => setRef perRun.value.shadowKeyTableRef (buildKeyTable fullUniverse)
     Module _ _ _ => setRef perRun.value.shadowKeyTableRef crossRun.value.universeKeyBucketsRef.value
+  -- ARCH B-2.1-a2: the SAME impl population, seated on `IE`'s shape, on BOTH arms —
+  -- one ref, so the evidence reader B-2.1-b repoints has one substrate rather than an
+  -- arm gate.  ADDITIVE AND BEHAVIOUR-NEUTRAL BY CONSTRUCTION: nothing reads
+  -- `bodyImplEnvRef` yet, which is the whole point of landing it as its own bite —
+  -- the repoint that follows gets a substrate it can trust on a path where `IE` was
+  -- empty (see `buildFlatImplEnv` for the measured hazard, RUN-B-017 probe 3).
+  -- The Module arm is a pointer copy of the env `buildDeclEnvs` already built; it
+  -- deliberately does NOT re-derive, for the reason `moduleImplUniv` gives above.
+  let _ = match mode
+    Flat _ => setRef perRun.value.bodyImplEnvRef (buildFlatImplEnv fullUniverse)
+    Module _ _ _ => setRef perRun.value.bodyImplEnvRef driverState.value.declEnvsRef.value.deImpls
   -- (#4 + #3-restore) mode-specific pre-inference ref setup (all pure/independent of the
   -- register+globalS block below, so order-safe).  Flat arms the per-body shadow-scoping
   -- toggles; Module installs importer-shadow state and restores the cross-module dict
