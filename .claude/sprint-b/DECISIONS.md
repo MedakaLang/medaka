@@ -753,4 +753,57 @@ prevent. The implementer runs those two greps.
 
 ---
 
+## RUN-B-014 — B-3-b, verified first-hand: **#994's headline is in DIRECT TENSION with this function**
+
+P0-D flagged `B-3-b` as *"the one B-3 bite that can miscompile."* I read the site myself rather than
+briefing an implementer off a flag, and **the hazard is sharper than the flag says.**
+
+`expandSupersTable` (`typecheck.mdk:9037-9041`), the whole body:
+
+```
+expandSupersTable allDecls =
+  let _ = setRef perRun.value.funConstraintsRef      (map (expandSupersEntry allDecls perRun.value.funConstraintIfacesRef.value) perRun.value.funConstraintsRef.value)
+  let _ = setRef perRun.value.funConstraintIfacesRef (map (expandSupersIfaceEntry allDecls) perRun.value.funConstraintIfacesRef.value)
+  ()
+```
+
+**The first write READS the second table, before the second write overwrites it.** `:9039` passes
+`funConstraintIfacesRef.value` — the **pre-expansion** ifaces list — into `expandSupersEntry`, which
+at `:9055` does `expandSupersPairs allDecls (pairSlots ids ifaces)`. `:9040` then replaces that
+table with its **expanded** form.
+
+**So the sequence is load-bearing, and here is why it is a trap specifically for a FUSION bite:**
+#994's headline asks for the two parallel tables to be **fused into one record-valued table and
+written together** — and *writing them together is precisely the operation this function cannot
+survive.* Feed `expandSupersEntry` an already-expanded ifaces list and `expandSupersPairs` expands a
+second time ⇒ **double-expanded super slots ⇒ changed dict arity.**
+
+**Why a dict-arity change is not a cosmetic defect here** — the function's own header, `:9032-9034`:
+it mutates the table refs *"at ONE finalization point … so EVERY reader — define-side `dictArityOf`
+and call-side `recRoutes`/`recRoute`/`inferDictAtFound` — sees identical expanded entries."* Break
+the symmetry and the define side binds a different number of dict params than the call side applies:
+**`ast.mdk:706-712`'s S-1 under-application** — the same failure class RUN-B-009 rejected for
+Phase 2. The two highest-risk items in this sprint are now the same shape.
+
+**Consequences for the brief, and they change the bite:**
+
+1. **Fuse the STORAGE, not the WRITE SEQUENCE.** The fused write op must preserve "expand ids
+   against the *old* ifaces, then expand ifaces" as an ordered interior. A single simultaneous
+   record update is **forbidden** here, and the implementer must be told this in the bite text — it
+   is the natural, obvious implementation of the issue as written.
+2. `expandSupersCross` (`:9045-9049`) has the **same shape and is safe by construction** — it takes
+   both tables as parameters and returns a tuple, so the caller's `idsTbl` is unaliased. It is
+   `expandSupersTable`'s *ref-mutating* form that is fragile. **Both must move together** (P0-D)
+   but only one carries the ordering hazard.
+3. **`could move:` for this bite must name DICT ARITY explicitly**, not "table representation."
+4. ⭐ **This retires the contract's framing of Phase 1 as a safe calibration unit.** §2 bills B-3 as
+   work *"where a mistake is mechanically visible."* A double-expanded super slot is **not**
+   mechanically visible in a diff — it is visible only as a dict-arity mismatch downstream.
+   **The self-compile fixpoint is the gate that would catch it**, so — contrary to §5, which puts
+   the fixpoint in-band only "from Phase 2 on" — **the fixpoint runs at the end of Phase 1 too.**
+   Cheap (it is green at BASE, RUN-B-005) and it is the only thing standing between this bite and a
+   silent miscompile.
+
+---
+
 *(P0-Q's probes are appended below when they land.)*
