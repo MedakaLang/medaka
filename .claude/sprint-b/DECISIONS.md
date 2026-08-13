@@ -1615,4 +1615,267 @@ too — and the flat gate's value clause is the instrument that does.
 
 ---
 
-*(Phase 2′ re-planned. `B-2.1-a3` is next.)*
+## RUN-B-025 — throughput, MEASURED. The bottleneck is me, not agent count.
+
+Derived from the `duration_ms` every agent notification carries — not estimated.
+
+| | Phase 0 (one batch of 6 readers) | Implementation (serial writers) |
+|---|---|---|
+| sum of agent time | **70.1 min** | **88.8 min** |
+| my verification (zero agents live) | — | **33.0 min** |
+| wall-clock | **15.9 min** | **121.8 min** |
+| **parallel efficiency** | **4.41×** | **0.73× — BELOW 1.0** |
+| landed bites/hour | — | **1.48** (3 landed of 4 attempted) |
+
+### Finding 1 — the dominant loss is **my serial verification**, not a shortage of agents
+
+**33 of 121.8 implementation minutes — 27% — ran with ZERO agents live.** That is what drags
+efficiency below 1.0. Adding writers cannot fix it (they are serialized by the shared `./medaka`);
+only removing my dead time or filling it can.
+
+**Removable, and I am removing it:**
+- **3 duplicate `make medaka` runs (~15 min).** The implementer already built; `MEDAKA_STRICT=1`
+  exit 0 proves the binary matches source on disk, which is what my rebuild was really checking.
+- **2 duplicate fixpoint runs (~8 min).** For an **additive typecheck** bite my run adds nothing over
+  the implementer's. **Keep running it myself when the bite can change emitted IR** — Phase 5 —
+  where it is the decisive gate.
+
+~23 of 33 min removable ⇒ wall-clock ≈ 99 min ⇒ **1.48 → ~1.8 landed bites/hour (+23%) from this
+alone.**
+
+### 🚨 Finding 2 — design done far ahead of implementation has a ~75% REWORK RATE
+
+This is the uncomfortable one, and it undercuts the naive case for parallel design. **Measured
+against Phase 0's four design cuts:**
+
+| Phase 0 cut | survived to implementation? |
+|---|---|
+| P0-D (B-3) | ✅ **intact** — landed as cut |
+| P0-A (B-2.1) | 🔶 structure survived; **`could move:` had the risk direction backwards**, site list **missed a 4th caller**, and its **two-leg model was wrong** (RUN-B-023) |
+| P0-B (Phase 3′) | 🔴 **needs refresh** — the 2′/3′ re-cut and the third leg invalidated much of it (why D1 is dispatched) |
+| P0-C (Phase 5) | 🔴 **needs refresh** — two bites changed phase, `core_ir_eval` producer sites were missing |
+
+**Only 1 of 4 survived intact.** Design N phases ahead is invalidated by implementation findings —
+and *the further ahead, the worse.* So **overlapping design buys less than its wall-clock suggests**,
+because part of the output is thrown away.
+
+**Corollary, and it changes what I overlap:** ⭐ **overlapping REVIEW is strictly better than
+overlapping design.** R1 attacks work **already landed** — no future finding can invalidate it, so
+its rework rate is structurally **zero**. Stage A's equivalent pass found 2 S0 regressions, an
+architectural contradiction and a pre-existing S0.
+
+**Applied:** of the three agents I just launched, **R1 (review) is the high-confidence bet; D1/D2
+(design) are the speculative ones** — and I deliberately scoped both D-agents to *refresh an existing
+cut against measured findings* rather than design from scratch, which is the cheap half.
+
+### Finding 3 — the realistic ceiling is **+25% to +50%, not a multiple**
+
+Writers are serialized by the shared `./medaka` and that is a **hard floor**. Phase 0's 4.41× was
+achievable only because *nothing was being written*. Honest projection: verification cuts (+23%)
+plus filled dead time, against a design-rework discount ⇒ **~1.8–2.2 landed bites/hour vs 1.48.**
+Anyone claiming a multiple here is counting agent-minutes, not landed work.
+
+### The forward metric (three numbers, because one can be gamed)
+
+1. **Parallel efficiency** = Σ agent time ÷ wall-clock. **Diagnostic only** — ten readers producing
+   nothing score beautifully.
+2. **Landed bites/hour** — **the result.** Baseline **1.48**.
+3. **Design survival rate** — fraction of design output that reaches implementation unchanged.
+   Baseline **1 of 4 (25%)**. This is the number that says whether overlap is real or busywork.
+
+⚠️ **A bite REFUSED counts as landed work, not waste.** `b1` cost 33 min and produced no diff, but it
+**prevented an S0 that my own scope would have shipped with a green drain signal.** Any throughput
+metric that scores it as zero is measuring the wrong thing — which is exactly how a run optimises
+itself into shipping silent wrongness.
+
+---
+
+## RUN-B-026 — D2 (Phase 5 refresh): 7 bites cut, and **three of my rulings corrected**
+
+Deliverable: `.claude/sprint-b/design/D2-phase5-engines.md`. All sites `@604278bb`. Read-only, from
+pinned copies — **no build, no gate, no `./medaka`**, so it cost the live writer nothing.
+
+### Accepted ruling — **`B-2.4-a`/`b` are NOT admissible at Phase 2′. They stay in Phase 5.**
+
+RUN-B-013 moved them to 2′ on a mechanical criterion (*"admissible iff all 7 stampers +
+`stampImplTable`/`stampKeyTable` + the Flat peer are whole-graph"*). **D2 evaluated it and it fails —
+because of MY OWN RULING 2.** The superset-OR hedge's variance comes from the **collision test**,
+`headCollides` → `countHead` (`:18532-18533`, `:18606-18609`), which reads `bucketOfHead`
+**directly**. That is a **sibling of `matchedEntry`, not one of `B-2.1-b2`'s three legs** — and
+RUN-B-023 RULING 2 **explicitly kept it LIVE.** Three of four route-word sites (`:15387`, `:19112`,
+`:19155`) therefore keep a prefix verdict, and `a3` indexes `ImplEnv` without widening
+`buildKeyTable`.
+
+**Accepted.** The overturn criterion was under-specified — it enumerated stampers and tables but not
+the **collision test**; D2 amended it. It also flags the cheap recovery: repoint those two gates in
+2′. ⭐ Worth noting the shape: **a ruling I made in one entry silently changed the phase placement
+decided in another.** That is what a criterion is for, and it only caught it because the criterion
+was mechanical rather than a judgement.
+
+### 🚨 Accepted correction — the carrier **as I ruled it cannot satisfy my own condition 1**
+
+RUN-B-013 assented to the untyped-eval carve-out on four conditions, the load-bearing one being that
+*table present but **no row*** (fail closed) and *table **structurally absent*** (today's behaviour,
+UNVERIFIED) **stay DISTINCT states.**
+
+**D2 derived that C-2 as ruled cannot express that distinction:** `lowerProgramEmit` **calls**
+`lowerProgram` (`:550-554` → `:521-526`), and the **untyped drivers construct the `CProgram`
+themselves** — so a **bare-table** 5th positional field makes **absent ≡ no-rows.** The two states
+collapse into one, which is precisely the fail-open default I forbade.
+
+**Accepted: the carrier field must be `Option`-shaped (or a two-constructor type), not a bare table.**
+My condition was right and my carrier could not implement it.
+
+### 🚨 Accepted correction — the carve-out names **THREE** driver sets, not two
+
+I wrote (RUN-B-013) that the table is structurally absent on **two** untyped drivers. D2 read the
+source and reports **`cevalProgram` is untyped too**, so it is **three** driver sets.
+
+**And a citation of mine was wrong:** I relayed P0-C's `core_ir_eval.mdk:598`; the real line is
+**`:522`** (the file is unchanged, so this is a mis-citation, not drift) — **and I relayed it into a
+mandatory `DEBT.md` row**, where an implementer would have followed it. Corrected here. *Second time
+this run a citation I relayed rather than opened was wrong* (the first was `ast.mdk:706-712`).
+
+### Two hazards worth surfacing from the bite list
+
+- 🚨 **wasm `:3700` re-spells `$memo_` INLINE** — so bite `b` can **silently break wasm with no
+  compile error.** Exactly the class the four-arm `engines:` ledger exists to catch, and it would not
+  have been caught by a type error.
+- **`B-2.4-k` touches 5 files, not the 4 I recorded.** Third time an engine-arm count in this arc has
+  been low (AM-3's missing arm, AM-2's false wasm arm, now this).
+
+### Resolved and honestly-declined
+
+- **Both of P0-C's conditionally-"none needed" `core_ir_eval` cells are now resolved**: `b`
+  unconditionally none (zero grep hits); `c` gated on `core_ir.mdk:232-234`'s shape.
+- **`core_ir_eval` producer sites, enumerated**: `:453-455`, `:431-438`, `:443-451`, `:587-588`,
+  `:401-411` — the sites P0-C flagged as missing from its own bites `a` and `d`.
+- **#1068's entry condition changed**: #1071 is now pinned, and #1068's pin was refused with a
+  derivation carrying a 2026-08-13 measurement. Owed: re-measure the **wasm** arm via
+  `build_wasm_oracle.sh` plus `engine_divergence.txt` rows `:159`/`:160`.
+- **Declined honestly:** it did not derive the C-1 bypass line numbers at `604278bb` (relayed with a
+  diffstat only) nor the `compiler/entries/` `lowerProgram` set — **commands given, not run.** Correct:
+  a relayed figure labelled as relayed is safe; the same figure presented as derived is not.
+
+### Throughput data point
+
+D2: **11.8 min**, concurrent with the `a3` writer and two other readers. **Zero interference** — it
+read only pinned `git show 604278bb:` copies and ran no build. The pinned-commit discipline works as
+intended, which is what makes the overlap safe rather than merely fast.
+
+---
+
+## RUN-B-027 — 🚨 R1: **`a2`'s "one ref on both arms" is KEYED INCONSISTENTLY. This blocks the drain.**
+
+`.claude/sprint-b/review/R1-landed-work.md`. Read-only, pinned. **Six findings, one retraction, and a
+ledger audit that corrected two of my claims.**
+
+### F1 (S2 now, **S0-shaped for `B-2.1-b2`**) — the unification I celebrated is incomplete
+
+`ieIndexRows` keys via `oblIfaceKeys` (`:21489`), which **branches on `irOrigin`**: **one** bare key
+when `OriginUnresolved`, **two** (bare + identity) otherwise. And on **Flat**, `flatTyOriginScope`
+(`resolve.mdk:4267`) **deliberately holds no entry for the user's own declarations** — so a
+**user-declared** interface's impls file **bare-only on Flat** and **under both keys on Module.**
+
+**So `bodyImplEnvRef` — the single substrate RUN-B-021 praised for retiring L1's two-registry hazard
+— is populated with two different keyings depending on arm.** That is a **NARROWING on Flat**: the
+exact direction `a1`'s gate states its 9 rows cannot see, and **it is not in `a2`'s `nearest miss:`.**
+
+🚨 **Consequence: `B-2.1-b2` (the drain) consumes this ref.** If Flat files bare-only while the goal
+side looks up under the identity key, lookups **miss** ⇒ false `T-NO-IMPL` on Flat ⇒ a regression on
+`check`/`lsp`/`repl` — **precisely the failure `a2` existed to prevent.** RUN-B-017 probe 3 measured
+that Flat is already *correct* on the target shape; this would break it by a different route.
+
+**UNVERIFIED and it is the deciding question:** is Flat's **goal** side also bare-only? If so the
+narrowing is neutralised. R1 states the probe but could not run it (no build permitted, writer live).
+
+**RULING: this is now a HARD GATE on `B-2.1-b2`.** The probe runs before the drain bite is
+dispatched. If Flat's keying is genuinely narrower, `a2` needs a follow-up before the drain — the
+substrate must be keyed *identically* on both arms or the "one ref" property is nominal only.
+
+### F2 (S2) — corrects MY claim about `a2`'s equivalence check
+
+RUN-B-021 called `a2`'s audit *"precisely the check for the narrow-env gap the flat gate is blind
+to."* **Overclaimed.** Its check 2 compares the Flat index against **its own rows** — **single-arm**,
+so it structurally cannot see a narrow-**vs-Module** env. And check 1 runs through `keyEntryOf`,
+whose `KeyEntry` **carries no `TyConOrigin`**, so it could not have detected F1 even in principle.
+**The audit was sound WITHIN one arm and silent ACROSS arms** — and I described it as the latter.
+
+### F3 (S3) — a **LYING COMMENT now in the tree**, and I repeated it
+
+`a2`'s *"linear by design … imports no quadratic"* is **false.**
+`ieInsertRowKeys` → `ieInsertRowAt` → `mregAppendK` is **`vs ++ [v]`** — O(bucket) per add
+(`registry.mdk:703`) — and it is reached **twice** (index + `ieBuildSnaps`). It avoided only
+`ieInsertRow`'s **global** O(rows²). The cost is unconditional **on every Flat compile, including
+per-keystroke LSP**, for a table **nothing reads yet.**
+
+**RUN-B-021 repeated the claim as *"avoided the quadratic BY CONSTRUCTION."* Corrected: it avoided
+the GLOBAL one, not the per-bucket one.** Both the source comment and my ledger need the narrower
+wording. ⚠️ A false perf claim in a comment is worse than none — it is what stops the next
+quadratic-hunt from looking here.
+
+### F4 (S3) — ⭐ **the gap I flagged is CLOSED. No eighth path.**
+
+RUN-B-019 recorded that I verified only *the callee set the implementer named*, not that it was
+complete. **R1 derived the full closure — 11 members, not 6 — and the ref reads are exactly
+`implObls` / `schemeObligationsRef` / `dictApps.items`. Conclusion CONFIRMED.** Two corrections: five
+callees were unnamed, and one (`normalizeLink`) **writes** — documented as representation-only, so
+still sound. **My caveat is discharged, by derivation rather than by trust.**
+
+### F5 (S3) · F6 (S1-shaped, pre-existing, UNVERIFIED)
+
+- **F5:** `B-3-a`'s `could move:` misses a **second** evaluation-order move — `keptConstraintArgs` now
+  evaluates before all three writes (strict argument). Sound, but *"(3) nothing else can move"* is
+  over-broad.
+- **F6:** `expandSupersEntry` + `pairSlots _ [] = []` **wipes the ids** of an entry lacking a parallel
+  ifaces entry — a **dict-slot drop.** `B-3-a`'s own row establishes the precondition and calls that
+  reader *"no safer than yesterday"*; **this reader's miss is not benign.** Ordering protects the
+  `scopeArities` pair; the bare-name-duplicate path is unsettled. **Pre-existing, not ours** — but it
+  is a live S1-shaped candidate and belongs to the repair round with a probe.
+
+### ⭐ A retraction, and a ledger audit that held
+
+R1 **retracted** its own finding that `B-3-a` miscited four line numbers — they are exact against
+`03ef6c47`; the residual is only that the **numbering base was unstated** (S3, and it already
+misleads at HEAD by +70). **A retraction is a good outcome and I want it visible.**
+
+**Independently confirmed** against the tree: `a2` has no reader (6 hits, 4 of them writes),
+`+70/0`, `+8/-2`, `B-3-b`'s byte-equivalence, RUN-B-022's 7-vs-stale-"five", the ci.yml shard wiring,
+and that the new gate is dash-clean. **My LEG A characterisation is right**, and R1 pinned the re-cut
+bar exactly: golden line **1040** `keptConstraintIfaces` deleted, line **1427** `registerMemberSlots`
+re-typed, **6 additions**, `expandSupersTable` **unchanged** — *anything else in that diff is a
+finding.* That is a far better handoff than "additive-only."
+
+---
+
+## RUN-B-028 — D1 (Phase 3′ refresh): the discharge-kind table, and a cheaper supers fix
+
+`.claude/sprint-b/design/D1-phase3-routes.md`. Sites `@604278bb`. Nothing measured.
+
+- **Discharge kinds enumerated: 12, plus 4 sub-discharges and 1 leak** — the crux I briefed for.
+  **STAMP:** D3–D6 (primary route only). **NEVER STAMP:** D1 `assum`-tyvar, D2 `assum`-predicate,
+  D7 `super` (no rung; flattened) — re-routing these through `inst` **is #203's class.**
+  🚨 **RULE BEFORE STAMPING:** D8 `routeUndeterminedTop:19288` (decides by **dedup'd impl COUNT**,
+  and reads `prog`, **not `IE`**) and D9 `resolveRecMono:19538` — **no selector ran, so an `InstId`
+  stamped there is FABRICATED.** That is the S0 the loose form would have produced, named concretely.
+- ⭐ **A cheaper supers fix than P0-B's.** The declared/appended boundary is **still destroyed in every
+  table** after `B-3-b` — but **it no longer needs a table**: appended slots have **ONE** mint site
+  (`superSlotOf:9209`), so **`csDeclared : Bool` on `CSlot`** (4 mint sites, one file, single-line
+  header ⇒ **no #829 trigger**) buys the invariant with **no new `Ref`, no ratchet row, and no
+  ~20-site `funConstraintsRef` widening.** Strictly better than P0-B's shape.
+- 🚨 **A constraint Phase 3′ imposes on Phase 2′, which I must pass to the drain brief:** `b1` is
+  **not statable** unless Phase 2′ leaves the selector returning **`Option ImplRow`** rather than a
+  `String` — and there are **three** entry points now, not one.
+- **RULING REQUESTED, GRANTED:** `d` (D8/D9) and `d′` (iface-blind fill) **move to Phase 2′** — they
+  are selection work, completable with a `String` payload, and neither is in RUN-B-024's list.
+  Accepted; 2′ grows by two bites. Order: `d` → `f` → `b1`.
+- **Refusals:** P0-B's *"selector call sites == `inst` arms"* is **FALSE at `604278bb`** (two
+  selections per arm), and restating it *"would license a D5/D6 collapse across two different method
+  keys."* `routesOfMonos` is a **method**-constraint fill, not a super-slot fill, so only **one**
+  iface-blind path carries supers. And **P0-B's "7 `RKey` hits, 5 construct" does not reproduce —
+  8 and 6, at BASE too.** ⚠️ **That is the FOURTH count corrected this run** (tree's "five stampers",
+  Fable's five, P0-B's 85, now this). Counts in this arc should be treated as unreliable by default.
+
+---
+
+*(Blocking the drain: F1's probe. `B-2.1-a3` still in flight.)*
