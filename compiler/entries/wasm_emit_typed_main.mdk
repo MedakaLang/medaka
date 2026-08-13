@@ -412,7 +412,7 @@ captureCurrentBinding "top" =
   putStr (emitProgram bindingInput program)
 captureCurrentBinding "lifted" =
   -- emitLetGroupRef calls emitLgLifted before it emits this group's use-site
-  -- body, so the sensitive local member is reached while curBindRef is lg:P.
+  -- body, so the sensitive local member is reached while currentBinding is lg:P.
   let program = bindingProgram [
     CBind "outer" [CClause [PVar "x" bindingLoc]
       (CLetGroup [CBind "P" [CClause [PVar "y" bindingLoc] bindingSensitiveExpr]]

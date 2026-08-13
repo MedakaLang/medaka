@@ -81,7 +81,7 @@ if grep -F 'implSelfCtxRef' "$WASM_SRC" >/dev/null; then
 fi
 EXPECTED_MODULE_REFS="$(printf '%s\n' \
   lamIdRef liftedFnsRef liftedNamesRef funcRefsRef liftedNamesSetW funcRefsSetW \
-  useStrRef curBindRef useListRef useArrayRef useRefBoxRef useRecUpdateRef \
+  useStrRef useListRef useArrayRef useRefBoxRef useRecUpdateRef \
   useStrLeafRef useRngRef useHashRef useEPutRef useTrapImport useDivGuardRef \
   useFloatRef useFloatHashRef useMathRef useFloatRngRef useFloatStrRef \
   useStrSearchRef useValueCmpRef useValueArithRef numPolyLocalsRef useStrCodecRef \
@@ -99,12 +99,52 @@ ACTUAL_MODULE_REF_DEFS="$(awk '
   /^public[[:space:]]+export[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]*=[[:space:]]*Ref([[:space:]]|$)/ { print $3 }
 ' "$WASM_SRC" | LC_ALL=C sort -u)"
 if [ "$ACTUAL_MODULE_REF_SIGS" != "$EXPECTED_MODULE_REFS" ] ||
-   [ "$ACTUAL_MODULE_REF_DEFS" != "$EXPECTED_MODULE_REFS" ]; then
-  echo "FAIL H2B4-AUTHORITY-SET: top-level Ref authority set changed"
+    [ "$ACTUAL_MODULE_REF_DEFS" != "$EXPECTED_MODULE_REFS" ]; then
+  echo "FAIL H2B5-AUTHORITY-SET: top-level Ref authority set changed"
   printf '  observed signatures:\n%s\n' "$ACTUAL_MODULE_REF_SIGS"
   printf '  observed definitions:\n%s\n' "$ACTUAL_MODULE_REF_DEFS"
   exit 1
 fi
+for required in \
+  'currentBinding : Ref String' \
+  'currentBinding = Ref "?"' \
+  'currentBindingOfW : WasmEmit -> String' \
+  'currentBindingOfW emit = emit.currentBinding.value' \
+  'setCurrentBindingOfW : WasmEmit -> String -> Unit' \
+  'setCurrentBindingOfW emit name = setRef emit.currentBinding name'; do
+  [ "$(grep -F -- "$required" "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] || {
+    echo "FAIL H2B5-CARRIER: missing $required"
+    exit 1
+  }
+done
+if grep -E '^curBindRef[[:space:]]*[:=]' "$WASM_SRC" >/dev/null; then
+  echo "FAIL H2B5-AUTHORITY-SET: retired current-binding authority remains ambient"
+  exit 1
+fi
+[ "$(grep -F 'setCurrentBindingOfW (progEmit prog)' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 2 ] || {
+  echo "FAIL H2B5-ROUTES: expected exactly two current-binding setter call sites"
+  exit 1
+}
+[ "$(grep -F 'currentBindingOfW (progEmit prog)' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 2 ] &&
+  [ "$(grep -F '++ currentBindingOfW emit ++' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
+  [ "$(grep -F 'currentBindingOfW' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 5 ] &&
+  [ "$(grep -F 'setCurrentBindingOfW' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 4 ] || {
+  echo "FAIL H2B5-ROUTES: expected exactly three current-binding getter call sites"
+  exit 1
+}
+grep -F 'patName emit _ =' "$WASM_SRC" >/dev/null &&
+  grep -F 'currentBindingOfW emit ++ "]")' "$WASM_SRC" >/dev/null || {
+  echo "FAIL H2B5-PATNAME-STRUCTURAL: patName fallback is not routed through WasmEmit"
+  exit 1
+}
+if grep -E 'let (saved|old|prior|previous)[A-Za-z0-9_]*[[:space:]]*=[[:space:]]*currentBindingOfW|setCurrentBindingOfW.*(saved|old|prior|previous)' "$WASM_SRC" >/dev/null; then
+  echo "FAIL H2B5-NO-RESTORE: current-binding save/restore is forbidden"
+  exit 1
+fi
+[ "$(grep -F 'emit.currentBinding' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 2 ] || {
+  echo "FAIL H2B5-NO-RESTORE: current-binding alias/reset/restore route added"
+  exit 1
+}
 for required in \
   'stringSegments : Ref (List (Int, List Int))' \
   'nextStringSegmentId : Ref Int' \
@@ -380,9 +420,8 @@ fi
 INPUT_WORK="$(mktemp -d)"
 trap 'rm -rf "$INPUT_WORK"' EXIT
 
-# Sprint 01 current-binding capture apparatus.  The sensitive rows deliberately
-# retain their full direct stdout/stderr files for independent diagnostic
-# adjudication; this gate checks only the observation protocol, never prose.
+# Sprint 01 current-binding capture apparatus. The expected events and strict
+# diagnostics pin the emission-owned authority and its two write routes.
 cbind_capture() {
   awk -v begin="$1" -v end="$2" '
     $0 == begin { seenBegin++; capture = 1; next }
@@ -444,7 +483,7 @@ CBIND_CONTROL_RUN_STATUS=$?
 }
 
 cbind_abort_row() {
-  local row="$1" rule="$2" marker="$3" setup="$4" expected prefix upper
+  local row="$1" rule="$2" marker="$3" setup="$4" binding="$5" census_prefix="$6" expected prefix upper
   case "$row" in
     top) upper=TOP ;;
     lifted) upper=LIFT ;;
@@ -454,8 +493,7 @@ cbind_abort_row() {
   esac
   "$EMITBIN" --capture-current-binding "$row" >"$INPUT_WORK/cbind-$row.out" 2>"$INPUT_WORK/cbind-$row.err"
   CBIND_ROW_STATUS=$?
-  [ "$CBIND_ROW_STATUS" -ne 0 ] || { echo "FAIL $rule: strict emission unexpectedly succeeded"; exit 1; }
-  [ -s "$INPUT_WORK/cbind-$row.err" ] || { echo "FAIL $rule: empty strict diagnostics"; exit 1; }
+  [ "$CBIND_ROW_STATUS" -eq 1 ] || { echo "FAIL $rule: strict status was $CBIND_ROW_STATUS, expected 1"; exit 1; }
   prefix="${setup:+$setup$'\n'}"
   expected="${prefix}CBIND_${upper}_RECORD_WAT_BEGIN
 CBIND_${upper}_RECORD_WAT_END
@@ -469,28 +507,43 @@ $marker"
     cbind_exact_capture "CBIND_${upper}_CENSUS_EVENTS_BEGIN" "CBIND_${upper}_CENSUS_EVENTS_END" "$INPUT_WORK/cbind-$row.out" >"$INPUT_WORK/cbind-$row-census.events" || {
       echo "FAIL $rule: malformed event capture"; exit 1;
     }
-  [ -s "$INPUT_WORK/cbind-$row-record.events" ] || { echo "FAIL CBIND-RECORD-EVENTS: empty $row record events"; exit 1; }
-  [ -s "$INPUT_WORK/cbind-$row-census.events" ] || { echo "FAIL CBIND-CENSUS-EVENTS: empty $row census events"; exit 1; }
+  cbind_exact_events "$rule" "$INPUT_WORK/cbind-$row-record.events" '?' "$binding"
+  cbind_exact_events "$rule" "$INPUT_WORK/cbind-$row-census.events" "$census_prefix" "$binding"
   grep -F 'usage:' "$INPUT_WORK/cbind-$row.out" "$INPUT_WORK/cbind-$row.err" >/dev/null && { echo "FAIL $rule: usage error"; exit 1; }
   grep -Ei 'parse error|type error|type mismatch|setup error' "$INPUT_WORK/cbind-$row.out" "$INPUT_WORK/cbind-$row.err" >/dev/null && {
     echo "FAIL $rule: setup/type failure"
     exit 1
   }
-  grep -E 'unbound variable|unsupported Core IR node|wasm W' "$INPUT_WORK/cbind-$row.err" >/dev/null || {
-    echo "FAIL $rule: strict stderr lacks an emitter gap mechanism"
+  [ "$(wc -l < "$INPUT_WORK/cbind-$row.err")" -eq 1 ] &&
+    [ "$(cat "$INPUT_WORK/cbind-$row.err")" = "runtime error [E-PANIC]: $(cbind_unbound "$binding")" ] || {
+    echo "FAIL $rule: strict stderr was not the exact unbound panic"
+    exit 1
+  }
+  [ "$(tail -n 1 "$INPUT_WORK/cbind-$row.out")" = "$marker" ] || {
+    echo "FAIL $rule: strict marker was not last"
     exit 1
   }
 }
 
-cbind_abort_row top CBIND-TOP-ABORT CBIND_TOP_STRICT ''
-cbind_abort_row lifted CBIND-LIFT-ABORT CBIND_LIFT_STRICT ''
-cbind_abort_row no-writer CBIND-NOWRITER-ABORT CBIND_NOWRITER_STRICT $'CBIND_NOWRITER_SETUP_WAT_BEGIN\nCBIND_NOWRITER_SETUP_WAT_END\nCBIND_NOWRITER_SETUP_OK'
-cbind_abort_row post-lift CBIND-POSTLIFT-ABORT CBIND_POSTLIFT_STRICT ''
-if cmp -s "$INPUT_WORK/cbind-top.err" "$INPUT_WORK/cbind-lifted.err" &&
-   cmp -s "$INPUT_WORK/cbind-top-record.events" "$INPUT_WORK/cbind-lifted-record.events"; then
-  echo "FAIL CBIND-POSITIVE-DISTINCTION: top/lifted captures all identical"
-  exit 1
-fi
+cbind_unbound() {
+  printf "unbound variable 'missingCurrentBinding' (not a local, global value, constructor, or known function) [in %s]" "$1"
+}
+cbind_unsupported() {
+  printf 'ref-mode: unsupported Core IR node CMatch (ordered-arm match — needs the decision-tree form) [in %s]' "$1"
+}
+cbind_exact_events() {
+  local rule="$1" file="$2" prefix="$3" binding="$4" expected
+  expected="$(printf '%s\t%s\n%s\t%s' "$prefix" "$(cbind_unbound "$binding")" "$prefix" "$(cbind_unsupported "$binding")")"
+  [ "$(wc -l < "$file")" -eq 2 ] && [ "$(cat "$file")" = "$expected" ] || {
+    echo "FAIL $rule: event lines/order/attribution changed"
+    exit 1
+  }
+}
+
+cbind_abort_row top H2B5-TOP-EXACT CBIND_TOP_STRICT '' P 'fn P'
+cbind_abort_row lifted H2B5-LIFT-EXACT CBIND_LIFT_STRICT '' 'lg:P' 'fn outer'
+cbind_abort_row no-writer H2B5-NOWRITER-EXACT CBIND_NOWRITER_STRICT $'CBIND_NOWRITER_SETUP_WAT_BEGIN\nCBIND_NOWRITER_SETUP_WAT_END\nCBIND_NOWRITER_SETUP_OK' '?' 'val P'
+cbind_abort_row post-lift H2B5-POSTLIFT-EXACT CBIND_POSTLIFT_STRICT '' 'lg:L' 'fn P'
 
 "$EMITBIN" --capture-current-binding malformed >"$INPUT_WORK/cbind-malformed.out" 2>"$INPUT_WORK/cbind-malformed.err"
 CBIND_MALFORMED_STATUS=$?

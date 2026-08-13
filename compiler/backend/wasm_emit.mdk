@@ -309,6 +309,7 @@ data WasmEmit =
       gapMode : WGapMode,
       gapLog : Ref (List String),
       curGapBind : Ref String,
+      currentBinding : Ref String,
       stringSegments : Ref (List (Int, List Int)),
       nextStringSegmentId : Ref Int,
       implSelfCtx : Ref ImplSelfCtx,
@@ -321,6 +322,7 @@ freshWasmEmit mode = WasmEmit {
   gapMode = mode,
   gapLog = Ref [],
   curGapBind = Ref "?",
+  currentBinding = Ref "?",
   stringSegments = Ref [],
   nextStringSegmentId = Ref 0,
   implSelfCtx = Ref ImplSelfOff,
@@ -675,9 +677,6 @@ funcRefsSetW = Ref omEmpty
 useStrRef : Ref Bool
 useStrRef = Ref False
 
-curBindRef : Ref String
-curBindRef = Ref "?"
-
 -- ── gap census (mirrors LLVM's per-emission gap recording) ───────────────────
 -- The WasmGC emitter normally `panic`s at the first node it can't lower (`gap`).
 -- In CENSUS mode the gap helpers instead RECORD the reason and return a
@@ -692,6 +691,12 @@ gapEventsOfW emit = reverseL emit.gapLog.value
 
 setGapBindingOfW : WasmEmit -> String -> Unit
 setGapBindingOfW emit name = setRef emit.curGapBind name
+
+currentBindingOfW : WasmEmit -> String
+currentBindingOfW emit = emit.currentBinding.value
+
+setCurrentBindingOfW : WasmEmit -> String -> Unit
+setCurrentBindingOfW emit name = setRef emit.currentBinding name
 
 noteGapW : WasmEmit -> String -> Unit
 noteGapW emit reason =
@@ -3134,7 +3139,7 @@ refPrintFor prog WRef =
 -- count, code = a thunk that unpacks the args array + calls $name).
 emitRefFnBind : Prog -> CBind -> List String
 emitRefFnBind prog (CBind name clauses0) =
-  let _ = setRef curBindRef name
+  let _ = setCurrentBindingOfW (progEmit prog) name
   -- W9b: a single-clause point-free constrained fn (`elem a = fold g False`) whose
   -- body is an under-applied CMethod gets eta-saturated to the method's full arity
   -- so the emitted dispatch call pushes every operand (else a validate underflow).
@@ -4866,7 +4871,7 @@ emitRefExpr prog env d (CVariantUpdate con base fields) =
 emitRefExpr prog env d other =
   gapLP
     prog
-    "ref-mode: unsupported Core IR node \{ctag other} [in \{curBindRef.value}]"
+    "ref-mode: unsupported Core IR node \{ctag other} [in \{currentBindingOfW (progEmit prog)}]"
 
 -- a scalar literal → an i31 immediate.  Int: ref.i31 of the value.  Bool: 1/0.
 -- Unit: i31 0 (a placeholder immediate; Unit is never inspected in this slice).
@@ -5074,7 +5079,7 @@ emitVarRefPlain prog env d x =
   -- build an eta closure wrapping a lifted `$mdk_ext_<name>` that calls the extern
   -- (peer of the LLVM emitExternEtaClosure).  env = [] (externs capture nothing).
   else if isWasmEtaExtern x then emitExternEtaClosure prog x
-  else gapUnboundLP prog "unbound variable '\{x}' (not a local, global value, constructor, or known function) [in \{curBindRef.value}]"
+  else gapUnboundLP prog "unbound variable '\{x}' (not a local, global value, constructor, or known function) [in \{currentBindingOfW (progEmit prog)}]"
 
 -- W9: lift `$mdk_ext_<name>` (a $codety) that unpacks its $args into synthetic CVar
 -- locals and emits the extern call, then build the closure struct at the use site.
@@ -7616,7 +7621,7 @@ lgBindParams (CBind _ clauses) = synthParams (clauseArityOf clauses)
 -- caps, rebuilds every member closure into its local, loads own params, emits clauses.
 emitLgLifted : Prog -> Int -> List String -> List String -> List CBind -> CBind -> Unit
 emitLgLifted prog gid names groupCaps binds (CBind name clauses) =
-  let _ = setRef curBindRef ("lg:" ++ name)
+  let _ = setCurrentBindingOfW (progEmit prog) ("lg:" ++ name)
   let lamName = "$mdk_lg\{intToString gid}_\{gname name}"
   let _ = noteFuncRef lamName
   let arity = clauseArityOf clauses
@@ -8508,7 +8513,7 @@ patName _ PWild = "_"
 patName emit _ =
   gapS
     emit
-    ("only PVar/PWild parameters (pattern params are inner-match material) [in " ++ curBindRef.value ++ "]")
+    ("only PVar/PWild parameters (pattern params are inner-match material) [in " ++ currentBindingOfW emit ++ "]")
 
 -- ── local collection ─────────────────────────────────────────────────────────
 -- Wasm requires every local declared in the function header.  Walk the body for
