@@ -72,6 +72,9 @@ main = match args ()
   "--reemit-trap-state"::_ => reemitTrapState ()
   "--emit-trap-state"::_ =>
     putStr (emitProgram trapStateInput trapStateAbortProgram)
+  "--reemit-ref-trap-state"::_ => reemitRefTrapState ()
+  "--emit-ref-trap-state"::_ =>
+    putStr (emitProgram refTrapStateInput refTrapStateAbortProgram)
   "--capture-current-binding"::row::_ => captureCurrentBinding row
   _ => driveRuntime emit
 
@@ -347,6 +350,53 @@ trapStateAbortProgram = CProgram
   ]
   []
   []
+  []
+
+-- H2b.8 ref-reader control: the ADT table forces emitRefProgram, whose late import
+-- predicate is distinct from scalar's. No ePut route appears in P or U.
+reemitRefTrapState : Unit -> <IO> Unit
+reemitRefTrapState _ =
+  let p1 = emitProgram refTrapStateInput refTrapStateProgram
+  let u = emitProgram refTrapStateInput refTrapStateControlProgram
+  let _ = printCapture "REF_TRAP_P1" p1
+  let _ = printCapture "REF_TRAP_U" u
+  printCapture "REF_TRAP_P2" (emitProgram refTrapStateInput refTrapStateProgram)
+
+refTrapStateInput : WasmEmitInput
+refTrapStateInput = makeWasmEmitInput [] [] [] False []
+
+refTrapCtorArities : List (String, Int)
+refTrapCtorArities = [("TrapToken", 0)]
+
+refTrapCtorTypes : List (String, String)
+refTrapCtorTypes = [("TrapToken", "TrapToken")]
+
+refTrapStateProgram : CProgram
+refTrapStateProgram = CProgram
+  [
+    CBind "refTrapRoute" [
+      CClause [PVar "n" lambdaStateLoc] (CBinPrim "/" (CLit (LInt 1)) (CLit (LInt 0)) "Int")
+    ],
+    CBind "main" [CClause [] (CLit (LInt 17))],
+  ]
+  refTrapCtorArities
+  refTrapCtorTypes
+  []
+
+refTrapStateControlProgram : CProgram
+refTrapStateControlProgram = CProgram
+  [CBind "main" [CClause [] (CLit (LInt 29))]]
+  refTrapCtorArities
+  refTrapCtorTypes
+  []
+
+refTrapStateAbortProgram : CProgram
+refTrapStateAbortProgram = CProgram
+  [
+    CBind "main" [CClause [] (CBinPrim "/" (CLit (LInt 1)) (CLit (LInt 0)) "Int")]
+  ]
+  refTrapCtorArities
+  refTrapCtorTypes
   []
 
 implSelfInput : WasmEmitInput

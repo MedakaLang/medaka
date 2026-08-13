@@ -98,6 +98,20 @@ for required in \
     exit 1
   }
 done
+for required in \
+  '"--reemit-ref-trap-state"::_' \
+  '"--emit-ref-trap-state"::_' \
+  'reemitRefTrapState : Unit -> <IO> Unit' \
+  'let p1 = emitProgram refTrapStateInput refTrapStateProgram' \
+  'let u = emitProgram refTrapStateInput refTrapStateControlProgram' \
+  '"REF_TRAP_P2"' \
+  'refTrapCtorArities = [("TrapToken", 0)]' \
+  'refTrapStateAbortProgram : CProgram'; do
+  grep -F -- "$required" "$TYPED_ENTRY" >/dev/null || {
+    echo "FAIL H2B8-REF-TRAP-HARNESS: missing $required"
+    exit 1
+  }
+done
 [ "$(grep -F 'let body = CLet False PWild (CVar "Pair" AGlobal) (CLet False PWild (CVar "Pair" AGlobal) lambdaBody)' "$TYPED_ENTRY" | wc -l | tr -d '[:space:]')" -eq 1 ] || {
   echo "FAIL H2B7-NAMED-WRAPPER-APPARATUS: lambda fixture must use Pair twice"
   exit 1
@@ -1212,6 +1226,86 @@ fi
 [ -z "$TRAP_ABORT_OUT" ] &&
   [ "$(cat "$INPUT_WORK/trap-abort.run.err")" = 'runtime error [E-DIV-ZERO]: division by zero' ] || {
   echo "FAIL H2B8-TRAP-ABORT: exact runtime diagnostic changed"
+  exit 1
+}
+
+# Census above is ownership-only: it records a gap while its trap-bearing binding
+# structurally exercises fresh authority. This P/U/P control observes ref-mode data:
+# its ADT table forces the distinct emitRefProgram late-import reader. A future renamed
+# ambient-authority mutant must first fail H2B8-AUTHORITY-SET; no artifact mutation here.
+REF_TRAP_OUT="$($EMITBIN --reemit-ref-trap-state 2>"$INPUT_WORK/ref-trap.emit.err")" || {
+  echo "FAIL H2B8-REF-TRAP-LIFECYCLE: ref trap harness"
+  cat "$INPUT_WORK/ref-trap.emit.err"
+  exit 1
+}
+[ ! -s "$INPUT_WORK/ref-trap.emit.err" ] || {
+  echo "FAIL H2B8-REF-TRAP-LIFECYCLE: harness wrote stderr"
+  cat "$INPUT_WORK/ref-trap.emit.err"
+  exit 1
+}
+REF_TRAP_MARKERS="$(printf '%s\n' "$REF_TRAP_OUT" | awk '/^REF_TRAP_(P1|U|P2)_(BEGIN|END)$/ { print }')"
+REF_TRAP_EXPECTED_MARKERS="$(printf 'REF_TRAP_P1_BEGIN\nREF_TRAP_P1_END\nREF_TRAP_U_BEGIN\nREF_TRAP_U_END\nREF_TRAP_P2_BEGIN\nREF_TRAP_P2_END')"
+[ "$REF_TRAP_MARKERS" = "$REF_TRAP_EXPECTED_MARKERS" ] || {
+  echo "FAIL H2B8-REF-TRAP-LIFECYCLE: ordered capture markers"
+  exit 1
+}
+ref_trap_capture() {
+  awk -v begin="$1" -v end="$2" '
+    $0 == begin { capture = 1; next }
+    $0 == end { exit }
+    capture { print }
+  ' <<<"$REF_TRAP_OUT"
+}
+ref_trap_capture REF_TRAP_P1_BEGIN REF_TRAP_P1_END > "$INPUT_WORK/ref-trap-p1.wat"
+ref_trap_capture REF_TRAP_U_BEGIN REF_TRAP_U_END > "$INPUT_WORK/ref-trap-u.wat"
+ref_trap_capture REF_TRAP_P2_BEGIN REF_TRAP_P2_END > "$INPUT_WORK/ref-trap-p2.wat"
+cmp -s "$INPUT_WORK/ref-trap-p1.wat" "$INPUT_WORK/ref-trap-p2.wat" || {
+  echo "FAIL H2B8-REF-TRAP-LIFECYCLE: ref P changed after U"
+  exit 1
+}
+for ref_trap_spec in 'p1 17 present' 'u 29 absent' 'p2 17 present'; do
+  ref_trap_name="${ref_trap_spec%% *}"
+  ref_trap_rest="${ref_trap_spec#* }"
+  ref_trap_result="${ref_trap_rest%% *}"
+  ref_trap_import="${ref_trap_rest#* }"
+  ref_trap_wat="$INPUT_WORK/ref-trap-$ref_trap_name.wat"
+  grep -F '(type $T_TrapToken' "$ref_trap_wat" >/dev/null || {
+    echo "FAIL H2B8-REF-TRAP-MODE: $ref_trap_name did not force ref mode"
+    exit 1
+  }
+  ref_trap_import_count="$(grep -F '(import "env" "mdk_write_err_byte"' "$ref_trap_wat" | wc -l | tr -d '[:space:]')"
+  if [ "$ref_trap_import" = present ]; then [ "$ref_trap_import_count" -eq 1 ]; else [ "$ref_trap_import_count" -eq 0 ]; fi || {
+    echo "FAIL H2B8-REF-TRAP-IMPORT: $ref_trap_name ref late-import predicate changed"
+    exit 1
+  }
+  wasm-tools parse "$ref_trap_wat" -o "$INPUT_WORK/ref-trap-$ref_trap_name.wasm" &&
+    wasm-tools validate --features=all "$INPUT_WORK/ref-trap-$ref_trap_name.wasm" || {
+    echo "FAIL H2B8-REF-TRAP-LIFECYCLE: parse/validate $ref_trap_name"
+    exit 1
+  }
+  REF_TRAP_RESULT="$($NODE "$RUNJS" "$INPUT_WORK/ref-trap-$ref_trap_name.wasm" 2>"$INPUT_WORK/ref-trap-$ref_trap_name.run.err")" || {
+    echo "FAIL H2B8-REF-TRAP-LIFECYCLE: inert execution failed $ref_trap_name"
+    exit 1
+  }
+  [ ! -s "$INPUT_WORK/ref-trap-$ref_trap_name.run.err" ] && [ "$REF_TRAP_RESULT" = "$ref_trap_result" ] || {
+    echo "FAIL H2B8-REF-TRAP-LIFECYCLE: output/stderr changed $ref_trap_name"
+    exit 1
+  }
+done
+"$EMITBIN" --emit-ref-trap-state > "$INPUT_WORK/ref-trap-abort.wat" 2>"$INPUT_WORK/ref-trap-abort.emit.err" &&
+  [ ! -s "$INPUT_WORK/ref-trap-abort.emit.err" ] &&
+  wasm-tools parse "$INPUT_WORK/ref-trap-abort.wat" -o "$INPUT_WORK/ref-trap-abort.wasm" &&
+  wasm-tools validate --features=all "$INPUT_WORK/ref-trap-abort.wasm" || {
+  echo "FAIL H2B8-REF-TRAP-ABORT: emit/parse/validate"
+  exit 1
+}
+if REF_TRAP_ABORT_OUT="$($NODE "$RUNJS" "$INPUT_WORK/ref-trap-abort.wasm" 2>"$INPUT_WORK/ref-trap-abort.run.err")"; then
+  echo "FAIL H2B8-REF-TRAP-ABORT: ref trap exited zero"
+  exit 1
+fi
+[ -z "$REF_TRAP_ABORT_OUT" ] &&
+  [ "$(cat "$INPUT_WORK/ref-trap-abort.run.err")" = 'runtime error [E-DIV-ZERO]: division by zero' ] || {
+  echo "FAIL H2B8-REF-TRAP-ABORT: exact ref runtime diagnostic changed"
   exit 1
 }
 
