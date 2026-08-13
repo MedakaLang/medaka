@@ -2452,3 +2452,203 @@ unchecked:
   those scripts made were **deleted** after their md5s were recorded (47 MB → 164 KB of untracked
   scratch); the pre-re-mint seed is recoverable from git (`git show HEAD:compiler/seed/emitter.ll.gz`,
   `md5 aabf000154a06fa5964815706e63267d`, raw `md5 60e85f34ea808452af49c955828cfc9d`).
+
+---
+
+### `EX-3` — Phase 2′ (sprint exit) — **THE ONE GOLDEN RE-CUT: 4 files, from the EX-2-certified binary. Every moved line attributed to a bite; the 4th re-signature was `g`'s un-enumerated OWED item, not an unclaimed semantic change. The IR golden did NOT move, and the wasm arm was OBSERVED for the first time in the sprint — clean.**
+
+🔗 **Ledger cross-reference: `DECISIONS.md` RUN-B-0xx** (the orchestrator composes it; I do not
+write a `DECISIONS.md` entry). Consumes and closes out the golden-re-cut obligation contract §5
+deferred for the whole run, and discharges the `⚠️ OWED` item left open at `B-2.1-g` — *"g has its
+own contribution which no one has enumerated"* — which is now enumerated: **+2 bindings
+(`ieImplExistsForHead`, `ieImplExistsForHeadGo`) and +1 re-signature (`keyForSite`)**. Also
+**corrects** the expected-red set: `diff_compiler_llvm_typed_ir` was listed red-by-design and is
+**GREEN, byte-identical**.
+
+sites:        `test/selfproc_goldens/legA/types.typecheck.golden` (+41/−21) ·
+              `test/snapshots/compiler/typecheck.md` (+1537/−674) ·
+              `test/snapshots/compiler/registry.md` (+6/−3) ·
+              `test/snapshots/compiler/core_ir_lower.md` (+10/−4).
+              **ZERO compiler-source lines.** `git status` at exit: exactly those 4 files modified.
+
+transform:    Re-cut, once, from the binary EX-2 certified (`MEDAKA_STRICT=1 ./medaka run` → exit 0,
+              so not stale; **no rebuild**). LEG A via `sh test/capture_goldens.sh --frozen
+              selfproc_legA`; snapshots via the GATE, **naming all three paths** —
+              `sh test/diff_compiler_snapshot_frontend.sh --bless compiler/types/typecheck.mdk
+              compiler/types/registry.mdk compiler/ir/core_ir_lower.mdk`. No corpus bless, no
+              hand-resolve, no merge (single writer; nothing to three-way-merge).
+
+**The bar the brief set, checked line by line — and one correction.**
+
+1. **LEG A is NOT purely subtractive, and that is correct.** Derived (not trusted): 1770 → 1790
+   bindings = **17 deletes + 37 adds + 4 re-signatures**, and the unified diff is exactly 21 `−`
+   / 41 `+` lines, so the delta is **fully accounted for with nothing left over** (`comm` of the
+   diff's name-set against {deletes ∪ adds ∪ re-signed} is empty in both directions).
+   Per-commit attribution of every line (`scratchpad/percommit.sh`):
+   Phase 1 `−1/+4` · a1 `0/0` · a2 `+2` · a3 `+12` · b2 `−6/+14` · f `+6` · g `+2` · **EX-1 `−13/+0`**.
+   ⭐ **EX-1's slice IS 13 deletions with zero additions — the headline claim CONFIRMED
+   independently.** The naive sums (−20/+40) exceed the cumulative (−17/+37) by exactly 3 in both
+   columns: `reportRouteWordSkew`/`routeWordAmbiguousMsg`/`routeWordHeadSkew`, added by `f` and
+   deleted by `EX-1`, cancel and are invisible in the cumulative golden.
+
+2. 🚨 **FOUR re-signatures, not the three the brief accounted for — and the 4th is NOT a finding.**
+   The brief said `registerMemberSlots` (Phase 1) + 2 from b2 = 3, and told me to STOP on an
+   unclaimed one. Measured set: `registerMemberSlots` (Phase 1, `List Mono -> List Int` →
+   `List (IfaceRef, Mono) -> List CSlot`), `keyForSiteByIface` + `selectReqImpl` (b2, both drop
+   the `KeyBuckets` param), and **`keyForSite` — attributed to `g` (`26423f93`)**, also a
+   `KeyBuckets`-param drop. **That is the `⚠️ OWED` item the brief itself flagged as "g has its own
+   contribution which no one has enumerated", now discharged: `g` = +2 bindings + 1 re-signature.**
+   So: no binding's type changed without a bite owning it. **I did not STOP, and the reason is
+   that the 4th was owed-but-unenumerated rather than unclaimed** — a distinction worth a
+   reviewer's attention, because those two look identical from the golden alone.
+   All four are **explicit source annotations**, not inferred drift; the golden merely alias-expands
+   `KeyBuckets`/`ImplBuckets` (`Map String (List KeyEntry)` / `Map String (List ImplEntry)`).
+
+3. **The snapshot move is confined to decls whose SOURCE moved — the "is unrelated code still
+   correct?" check, run as a check and not asserted.** `typecheck.md` sections: SOURCE 457 changed
+   lines, DESUGAR 195, MARK 195. Structural counts reconcile exactly: `DTypeSig` 1770→**1790**
+   (= the binding delta), `DFunDef` 3126→3151, and **`DData` 51→51, `DTypeAlias` 2→2 — no
+   type-level change at all.** Per-decl (`scratchpad/perdecl.sh`), of 1753 shared names exactly
+   **25** changed their DESUGAR rendering: the 4 re-signatures + 21 call-site rewirings. For **all
+   25**, the decl's own source block also changed (`scratchpad/srcmoved.sh`) — **zero decls whose
+   desugar output moved without a source edit.** MARK moved on the *same 25* and not one more, so
+   **no untouched decl's method-ref/dispatch resolution changed** — the check that actually matters
+   for a sprint that rewired dict routing.
+   `registry.md` and `core_ir_lower.md` are **pure comment edits** (retired names → new names in
+   prose) plus a `source_lines=` bump; no code in either snapshot moved.
+
+4. 🚨 **`diff_compiler_llvm_typed_ir` did NOT move — it is GREEN 54/54, and the brief's
+   expected-red entry for it is WRONG.** The brief said it "was on the expected-red list because
+   this sprint changes emitted IR by design." It doesn't: `llvm_typed_ir` (54/54 byte-identical
+   `.ll.golden`) **and** `llvm_modules` (56/56) and `diff_compiler_llvm` all pass untouched. I
+   checked the green is not vacuous rather than assuming: the gate byte-compares committed
+   `<name>.ll.golden` files and its own header makes **N==0 a hard FAILURE**, so 54 compared is 54
+   compared. **No IR golden was re-cut, because none moved.** EX-1's row already claimed "IR PROVEN
+   UNMOVED"; this extends that to the whole cumulative sprint diff, not just EX-1's slice.
+
+could move:   **I changed what the tree BELIEVES is correct in exactly four places. Enumerated:**
+  1. **`test/selfproc_goldens/legA/types.typecheck.golden` now defends 1790 inferred schemes** —
+     read by `diff_compiler_selfproc.sh` (CI **`backend`** shard, *not* the snapshot/check gates,
+     so it is invisible to a local snapshot run). Newly defended: the 37 `ie*`/`set*Constraint*`
+     substrate signatures, the *absence* of the 17 retired prefix-table bindings, and the 4 new
+     param lists. **If the drain is ever reverted or partially reverted, THIS golden is what goes
+     red first**, and it will read as "someone deleted 37 bindings" rather than "the revert was
+     incomplete".
+  2. **`test/snapshots/compiler/typecheck.md` now defends the desugar+mark rendering of 5007 decls**
+     (`diff_compiler_snapshot_frontend.sh`, snapshot shard, **and** the pre-commit hook's check 4).
+     It pins 21 call-site rewirings by their post-drain callee names — so a future rename of any
+     `ie*` reader moves this golden again.
+  3. **`registry.md` / `core_ir_lower.md` now defend comment text.** Low stakes, but real: these
+     two goldens will now go red on a *prose* edit to those comment blocks, which is the
+     line-count-neutrality hazard in AGENTS.md pointed at a snapshot instead of a fixture.
+  4. **What I did NOT extend:** no gate now defends any *behaviour* it didn't already. All four are
+     rendering/scheme goldens. The three drained S0s (#1072/#1564/#1599) are defended by
+     `must_fail`, which I did not touch and which is **still red by design** (see below).
+  5. ⚠️ **A residual risk I cannot close from here:** a golden is the oracle, so if any of the 25
+     changed decls is *semantically* wrong post-drain, I have just made the wrong rendering the
+     expected answer. My defence is that all 25 have an owning source edit in an owning bite — but
+     "attributable" is weaker than "correct", and the correctness of those 21 rewirings was
+     b2/f/g's burden, not something a re-cut can re-adjudicate.
+
+nearest miss: **The golden I was LEAST able to verify independently is
+`test/snapshots/compiler/typecheck.md`'s SOURCE section (457 changed lines).** Everything I proved
+is *structural*: names, counts, per-decl attribution, section reconciliation. For SOURCE I verified
+that it renders the committed source and that its line delta matches — but **I did not
+independently re-derive that the 457 changed SOURCE lines are the right source**; that is EX-1's and
+b2's diff, already reviewed, and a snapshot re-cut cannot re-review it. **What would settle it:** it
+is already settled for *identity* — `fmt --check`/the SOURCE section can only differ from the file
+on disk, and `diff_compiler_snapshot_frontend` now passes, so SOURCE == committed source by
+construction. The genuinely unsettled part is **semantic**, and the discriminator is not a golden at
+all: it is `diff_compiler_engines` (**run: 0 regressions / 0 promotions / 0 pinfail across 583
+fixtures**) plus the `must_fail` drain reproducing twice. Those are behavioural and they agree.
+⭐ **The honest attack a reviewer should mount:** *"you proved every moved line has an owning source
+edit; you did not prove any owning source edit was right."* Correct. That is the one claim in this
+row resting on earlier bites' review rather than on my own measurement.
+**Second-nearest:** the 4th re-signature. If `g`'s contribution had in fact been "zero
+re-signatures" rather than "un-enumerated", `keyForSite` would have been exactly the unclaimed
+semantic change the brief told me to STOP on — and the golden alone cannot tell those two apart.
+I resolved it by per-commit attribution (`scratchpad/attrib.sh`), which shows `g` moved that
+signature in source; **a reviewer who distrusts that should re-run that script, not re-read this row.**
+
+engines:      **All three arms observed, which has not been true before in this sprint.**
+  * **LLVM** — `diff_compiler_llvm` / `llvm_typed` / `llvm_typed_ir` (54/54 byte-identical IR) /
+    `llvm_modules` (56/56): all GREEN, **no IR movement**.
+  * ⭐ **wasm — OBSERVED, and clean. The arm the brief flags as "owed and NEVER OBSERVED across six
+    bites" is now measured, and NO wasm golden moved.** Built the oracle
+    (`test/wasm/build_wasm_oracle.sh`, exit 0) and ran: `diff_wasm` GREEN (incl. its TCO/DISP/S1B
+    asserts), `diff_wasm_typed` GREEN (9 ok, 0 failing), `diff_wasm_modules` GREEN (43 ok, 0 gap,
+    0 failing), `diff_compiler_tmc_parity` **25/25 — both backends TMC identical function sets**.
+    ⚠️ **Process note worth more than the result:** my first `diff_wasm_typed` run reported `rc=2`,
+    *"Syntax error: redirection unexpected"*. That was **my** bug, not the gate's — the script is
+    `#!/usr/bin/env bash`, uses a herestring, and CI invokes it as `bash test/wasm/diff_wasm_typed.sh`
+    (`ci.yml:1507`); I had run it under `sh` (dash). **Had I reported that rc=2 as "wasm gate broken"
+    the sprint's least-evidenced arm would have been left with a fabricated red.** Re-run under
+    `bash`: exit 0.
+  * **eval** — `eval_typed_batch`, `eval_typed_modules`, `snapshot_eval`, `snapshot_eval_errors`,
+    `core_ir_*` (7 gates): all GREEN. ⚠️ Per this ledger's standing hazard I am **not** offering
+    eval agreement as evidence about the dispatch shapes this sprint moved; it is reported as
+    "no golden moved", nothing stronger.
+  * **Cross-engine:** `diff_compiler_engines` — 583 fixtures, T1 eval==native 546 agree/0 differ,
+    T2 native==wasm 560/6 (all 6 ledgered), **0 REGRESSIONS, 0 PROMOTIONS, 0 PINFAIL**, 44 known
+    divergences unchanged. ⚠️ **0 PROMOTIONS is not a disappointment and should not be read as
+    one** — the 3 drained S0s were pinned in `must_fail`, never in `engine_divergence.txt`, so
+    this gate was never going to see them flip.
+
+unchecked:
+* 🔴 **STILL RED AFTER MY RE-CUT — the list `EX-4` needs, complete: exactly ONE gate.**
+  **`diff_compiler_must_fail`** — `100 fixtures: 97 still reproduce, 3 DRAINED, 0 control-broke,
+  **0 malformed**`. Run **twice**, byte-identical both times, and the DRAINED **names** (never the
+  count — six counts have been wrong in this arc) are exactly
+  `1072-overlap-xmod-bare-head-arm-order` (#1072),
+  `1564-import-order-decides-conditional-impl-candidacy` (#1564),
+  `1599-reachable-conditional-beats-unreachable-specific` (#1599).
+  **This is the tracker self-draining — a GOOD failure, and NOT a golden I may bless away.** It
+  drains when someone closes those 3 issues and deletes the 3 fixtures; that is `EX-4`/desk work,
+  not a re-cut. ⭐ **`0 malformed` is load-bearing here:** a malformed pin reports DRAINED falsely
+  (that shape has produced a false "drained" verdict three times in this project), so the drain is
+  genuine and not the known false-positive.
+  **Everything else I ran is GREEN.** 43 gates via `run_gates.sh` → 42 PASS + that 1 FAIL; plus
+  `engines`, the 4 wasm gates, `typecheck_compiler_source.sh` (**PASS**, incl. the #1111/#1112/#1519
+  ratchets), `make check-self` (**PASS**), `make docs-links` (0 dead), `make agent-doc-symbols`
+  (**0 dead across 1047 symbol claims** — so EX-1's 13 deletions left no dangling backticked symbol
+  in any agent-facing doc), `diff_compiler_selfproc` (**16 ok, 0 failing** post-bless).
+* **I did NOT rebuild the compiler, and did not re-run the fixpoint or the seed check.** Both are
+  EX-2's certification; I verified only its *premise* (`MEDAKA_STRICT=1` → exit 0, so the binary is
+  not older than the source on disk). ⚠️ **A golden re-cut is exactly the operation that would
+  silently enshrine a stale binary's output**, so note what that check does and does not buy: it
+  proves source-fingerprint agreement, **not** that the binary is the fixpoint EX-2 blessed.
+  ⚠️ **OWED if `EX-4` wants it airtight:** `sh test/selfcompile_fixpoint.sh` after this commit.
+* **`perf_scaling`: run, and its first result was a PHANTOM SKIP I nearly filed as a pass.** It is
+  **not** in preflight's derived 44 for this diff, but a substrate change is a real perf risk, so I
+  ran it anyway: first invocation exited **2** — *"build oracles first — missing profile_main"*.
+  ⚠️ Per AGENTS.md a phantom skip counts as FAILED, not skipped; I built `profile_main` and re-ran.
+  **Real result: GREEN — `20 ok, 1 known-superlinear (ledgered), 0 regressed (threshold 3.0x per
+  doubling)`**, 52 per-stage op-ratios graded. The stage this sprint actually touched grades clean
+  on the deterministic (allocation/op) arm: `ops typecheck: ok r1=1.20 r2=1.33` and
+  `ops elaborate: ok r1=1.11 r2=1.21` at N=250→500→1000 — **sub-linear, so the graph-global `IE`
+  substrate did not introduce a quadratic** in the stage that now reads it. (The `time typecheck`
+  arm reads `r1=2.27 r2=2.24`, i.e. ~linear-with-constant on a loaded shared box; per AGENTS.md
+  the op/alloc arm is the machine-independent one and is what I am relying on.) The single
+  ledgered superlinear row is `reexports` resolve-alloc, pre-existing and intrinsic.
+  ⚠️ **Had I trusted the first exit-2 as a pass, this row would have claimed perf coverage it did
+  not have** — the phantom-skip trap, live.
+* **Not run, and why:** `diff_compiler_capability_matrix`, `check_removed_constructs`, the sqlite and
+  playground gates, `diff_compiler_shadow_semantics`' second binary arm (**#1431** — that gate
+  hardcodes `$ROOT/medaka`, so it cannot be pointed at a base binary; it passed single-arm).
+  None is selected by preflight for this diff and none reads a golden I moved. The **merge queue**
+  is the authority on the unnarrowed set, not this row.
+* **What no gate in this run could have caught, stated plainly:** value goldens cannot see a
+  diagnostic-only change, absence probes cannot see an undercount, and eval agreement proves nothing
+  on a dispatch shape. My re-cut is *rendering*-level; **it cannot and does not validate the drain's
+  semantics.** The strongest behavioural evidence in this row is other people's: b2/f/g's probes and
+  the twice-reproduced 3-fixture drain.
+* **Reproduction:** `scratchpad/percommit.sh` (per-commit binding delta) · `attrib.sh` (which commit
+  moved each re-signature) · `resign.sh` (adds/deletes/re-signatures split) · `exhaustive.sh` (the
+  "nothing left over" proof) · `sections.sh` + `perdecl.sh` + `perdecl_mark.sh` (per-decl
+  DESUGAR/MARK movement) · `srcmoved.sh` (**the finding check** — desugar moved ⇒ source moved) ·
+  `names.sh` (validates the name-extraction heuristic against the committed BASE golden *before*
+  it is trusted anywhere else).
+* ⚠️ **Not mine, flagged not touched:** `.claude/sprint-b/next/QUEUED-p3-first.md` appeared
+  **untracked** during my session (tree was clean at my start, `HEAD = 6ec0111a`). I did not create,
+  read into, or modify it. Someone else wrote in this worktree while I held the writer seat.
+* ⛔ **I did not commit.** Four modified goldens, staged nothing.
