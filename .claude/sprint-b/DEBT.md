@@ -1988,3 +1988,263 @@ unchecked:
   `scratchpad/g-cprobe.sh <medaka> <root>` for `c`'s five-file corpus; `scratchpad/g-failcap.sh`
   for the new legs' fail-capability. Logs: `g-build1.log`, `g-ccm.log` (pre-re-cut, 85/1),
   `g-ccm2.log` (86/0), `g-mf1.log`, `g-mf2.log`, `g-fvo.log`, `g-cs.log`.
+
+### `B-2.1-d` (EX-1) — Phase 2′ — **THE ARGUED SWEEP: both write-only refs + the ENTIRE prefix-table READ SIDE (13 bindings) + all 13 dead-code suppressions. Pure deletion: 13 signatures removed, ZERO added, ZERO re-signed. IR PROVEN UNMOVED on an IR golden gate.**
+
+🔗 **Ledger cross-reference: `DECISIONS.md` RUN-B-0xx** (the orchestrator composes it). Consumes
+`B-2.1-g`'s ⛔ finding (the guard is not separable from its dependencies) and cashes
+`TYPECHECK-TARGET-ARCHITECTURE.md`'s *"DEFERRED → B-2, by DELETION"* row — **partly**; see
+`could move:` item 5 for what that row still owes.
+
+sites:        `git diff --numstat` — **414/669 `compiler/types/typecheck.mdk`, 0/1
+`test/registry_keying_ratchet.sh`, 9/5 `docs/spec/SHADOW-SEMANTICS.md`, 2/2
+`compiler/DIAGNOSTIC-CODES-DESIGN.md`, 1/1 `compiler/TYPECHECK-TARGET-ARCHITECTURE.md`.** Five
+files. **Signature delta is 13 lines and every one is a `-`** — derive, don't trust:
+`git diff -U0 -- compiler/types/typecheck.mdk | grep '^[+-][a-zA-Z]' | grep ' : '`. So
+`selfproc_legA` must read **SUBTRACTIVE-ONLY**: those 13 bindings leave and **no surviving
+binding's inferred type may move**; if one did, the deletion changed types and that is a finding.
+Net −255 lines, of which the code is a small minority — the bulk is prose (see `transform:` §3).
+
+transform:    **THREE things deleted, and only the first was in the packet.**
+1. **The two write-only refs.** `universeKeyBucketsRef` (`CrossRun` field + `freshCrossRun`
+   initialiser + `appendUniverseAccums`' read-modify-write accumulate) and `shadowKeyTableRef`
+   (`PerRun` field + `freshPerRun` initialiser + both `setRef` arms of `checkBodyImpl`'s
+   `match mode`). Verified ZERO code readers before deleting, per packet §5.
+2. **The 13 dead bindings `g` was forced to retain**, with all 13 `-- lint-disable-next-line
+   rule-dead-code` suppressions: `implExistsForHead(Go)`, `bucketOfHead`, `matchedEntry`,
+   `matchingEntries(Go)`, `candidateBucket`, `headCollides`, `countHead(Go)`, and `f`'s guard
+   trio `routeWordHeadSkew` / `reportRouteWordSkew` / `routeWordAmbiguousMsg`.
+   **PROVEN DEAD PER SYMBOL, not inherited from either list** (the brief required this because
+   `g` moved the picture). Method: for each of the 13, every tree-wide word-bounded code hit is
+   the def, its own signature, self-recursion, or a call **from another member of the 13** —
+   i.e. the set is a CLOSED subgraph with exactly **three zero-caller roots**
+   (`implExistsForHead`, `matchedEntry`, `reportRouteWordSkew`). Re-derive:
+   `for s in <the 13>; do git grep -nw "$s" -- '*.mdk' | grep -v ':[[:space:]]*--'; done`
+3. **ZERO second-order cascade, checked rather than assumed.** Every callee of the 13 keeps an
+   out-of-set caller: `pickMostSpecificEntry`/`mergeByDeclIdx` (the two `IE` selectors),
+   `entryHeadMatches` (`ieRowHeadMatches`), `headTabOf`/`headTabEq` (the `IE` counters),
+   `headBucketRender` (`bucketKeyEntriesFrom`), `bucketOf` (4 sites), `goalHeadCon` (both `IE`
+   selectors), `findMostSpecificEntry`, `ppPredArgsShared`, `pushTypeErrorOnceAt`, `dispHeadTab`.
+   **Nothing on the anti-scope list was deleted** — `buildKeyTable`, `bucketKeyEntries(From)`,
+   `keyEntryOf`, `KeyEntry`, `KeyBuckets`, `keyForSite*`, `mergeByDeclIdx`, `matchedEntry`'s
+   `IE` peers all stand. `buildKeyTable` keeps 2 of its 3 callers; `bucketKeyEntries` is now its
+   SOLE callee-caller pair.
+
+🚨 **WHY EACH DELETED GUARD'S CLASS IS COVERED — the argument the brief demanded, not an
+assertion.** Only ONE of the 13 was a reject-bearing guard: `reportRouteWordSkew`, pushing
+`T-ROUTE-WORD-AMBIGUOUS`. Its class was *"the prefix says this head is unique so a BARE route
+word is stamped, while the whole graph says that word names ≥2 impls defining the method"* — the
+`SA-4c` 139 miscompile. **That class is now handled CORRECTLY rather than rejected:** `B-2.1-g`
+repointed `keyForSite` onto the graph-global `bodyImplEnvRef`, so selection and the collision
+retest read ONE population and the two counts the guard compared **are one count** — the skew is
+not merely unreported, it is unconstructible. Evidence it is handled and not hidden:
+`diff_compiler_check_cli_modules.sh`'s `SA-4c/route-word-order-invariant` leg passes, asserting
+both import orders' IR is byte-identical AND the callee is the arity-1 specific impl. The other
+12 bindings pushed no diagnostic at all (pure lookups/counters/selectors), so there is no
+reject-coverage question for them. **No deleted symbol's class is unhandled ⇒ nothing was held
+back, and I found nothing that required me to STOP.**
+⚠️ **`#1578`: confirmed a NON-cost, first-hand.** `g` disproved the brief's attribution and I did
+not take that on trust — `1578-*` reports **REPRO on both must-fail runs of my final binary**,
+i.e. its behaviour is identical with the guard deleted. It belongs to `T-REQUIRES-UNROUTED`'s row.
+
+**Prose: 8 knowledge blocks RELOCATED, not deleted — and this is where the packet was most
+incomplete.** The packet named 3 stale comments + 2 dangling cross-refs + 5 present-tense sites;
+the real figure is **~50 comment references to the 13 symbols**, because `g` added 7 stale blocks
+and 13 dead-notes of its own AND because two high-value derivations *lived on functions this bite
+deletes* while LIVE symbols cited them as their home. Relocated (each to the live symbol its
+citers already point through):
+* the **#1111 spelling-keyed-retest derivation** (why a structural `HeadKey` compare re-opens an
+  S0) — was on `implExistsForHeadGo` → now on **`headTabIs`**, the primitive every surviving
+  retest shares. Three live citers repointed (`headTabEq`, `headTabOf`, `ieImplExistsForHeadGo`),
+  plus `dispHeadTab`'s T1 ledger and the `monoHeadCon` obituary's *"thirty lines from here"*
+  locator, which had become a dangling pointer into deleted text.
+* the **#1317 three-build measurement** (identity-vs-spelling counting, `(1,2)`→`(1,1)`) — was on
+  `countHead` → now on **`ieCountHeadByIface`**, with its 3 live citers repointed.
+* the **declaration-index / ORDER tie-break argument** and the **`mergeByDeclIdx` precondition**
+  — merged onto `mergeByDeclIdx`, which now ENUMERATES its callers (see `could move:` item 1).
+* the **`noneHeadTag` headless-self-merge unrepresentability derivation** — was on
+  `candidateBucket` → now on **`headBucketKey`**, inverting the old *"see there"* pointer.
+* the **F-3c/T4 non-closed-goal list-order residual** (packet §4b said explicitly not to lose
+  this) — was inside `candidateBucket`'s comment → now on **`pickMostSpecificEntry`**, the
+  function it is actually about.
+* the **`keyForSite`-is-elaborate-only / invisible-to-`check` derivation** — was framed as "the
+  verb split THIS GUARD leaves behind" → now on **`keyForSite`** itself, restated as what it
+  actually is: nothing is pushed from there today, so nothing is hidden today, but the split is
+  STRUCTURAL and a future diagnostic added there would be silently invisible to `check`.
+* `checkBodyImpl`'s writer site and `appendUniverseAccums`' header rewritten from "this seeding
+  is write-only, `d` will retire it" into **do-not-re-add warnings** naming the S0 mechanism.
+* `f`'s ~215-line guard block collapsed to a compact **HISTORY** block above
+  `ieCountHeadByMethod`, keeping the `SA-4c` IR evidence, the one-direction asymmetry, the
+  corrected #1578 attribution, and the DICT §11 *"do not re-derive this count in the obligation
+  channel"* warning.
+
+could move:   **Nothing at the language level, and that is measured, not assumed for a "pure
+deletion".** No `.mdk` code line outside the 13 dead bindings and the 6 ref sites changed; the
+compiler cannot behave differently because nothing reachable was touched. Proof rather than
+argument: **`diff_compiler_llvm_modules` PASSES on the final binary** — an IR golden gate whose
+corpus includes `test/llvm_fixtures_modules/module_local_route_word/`, the fixture
+*constructed* to be `f`'s guard's firing condition. **Byte-identical emitted IR on the one gate
+that would see a change ⇒ the deletion moved no IR and no dict arity.** I looked for the anomaly
+class the brief said to STOP on and found none.
+
+**1. The one real change, and it is a STRENGTHENING of a precondition, not a behaviour move.**
+`mergeByDeclIdx`'s ascending-index precondition now holds tree-wide **structurally**. ⚠️ The
+brief and packet both framed this as *"`buildKeyTable` becomes `bucketKeyEntries`' sole caller"*.
+That is true but it is no longer the operative reason, and the stronger statement is the honest
+one: because `candidateBucket` is ALSO dead, **no `KeyBuckets` value reaches `mergeByDeclIdx` at
+all any more.** Its only two callers are `ieCandidatesForIface`/`ieCandidatesForMethod` over
+`ieHeadRows`, indexed by `instRefSeq` — a whole-graph counter appended in build order, ascending
+by construction. The table that violated the precondition is gone AND the union that fed it is
+gone. Both facts are recorded on `mergeByDeclIdx` with the enumerated callers.
+
+**2. The ratchet moved and BOTH SIDES were derived, never quoted.** `test/registry_keying_ratchet.sh`
+check 1 is a set equality with no hardcoded count. Deleting the `CrossRun` field without deleting
+allowlist line 175 (or vice versa) fails with a set diff. Both deleted; gate **PASS**. The
+`CrossRun` field count, via the script's own `sed` extraction, is now **22** (was 23).
+⚠️ **I got this wrong twice before getting it right, and the failure mode is worth recording:**
+my hand-rolled re-derivation of the *expected* side returned **22** and then **68** while the gate
+was green at 23 — because `cross_allowed`'s first row shares the assignment line (`:173`), so any
+filter that drops that line silently undercounts. I stopped hand-rolling and used the gate's own
+set equality as the oracle. This is the fifth wrong count in this arc and the first one caught
+inside the bite that produced it.
+
+**3. `test/typecheck_compiler_source.sh` delta is EMPTY — verified, not trusted.** None of the
+13 deleted signature lines nor the 6 ref lines contains `OriginUnresolved`, so the text-keyed
+`tc_originun_allowed` list is untouched. Derive: `git diff -U0 | grep '^-' | grep -c OriginUnresolved`
+→ 0. *(I did not RUN that gate — it needs slow oracles and is CI's per the reduced floor.)*
+
+**4. `make agent-doc-symbols` moved and is green with NO exceptions row added.** The four
+`docs/spec/SHADOW-SEMANTICS.md` cells were rewritten to name the live successor
+(`ieImplExistsForHead` over `bodyImplEnvRef`); three are dated historical UPDATE notes, so the
+dead name is kept as **unbacktick'd** prose to preserve the history without a live-symbol claim.
+⚠️ **My first rewrite RE-INTRODUCED the dead backtick inside its own replacement text and reddened
+the gate** (`:1742`, `dead: 1`) — caught by running the gate rather than by reading my own diff,
+which is exactly why the floor has that gate in it.
+
+**5. 🚨 A CORRECTION I OWE THE LEDGER, found while sweeping prose: the Door 4 / Door 4b blocks
+and `DIAGNOSTIC-CODES-DESIGN.md`'s `T-REQUIRES-UNROUTED` row describe a two-registry split that
+`b2` ALREADY CLOSED on the leg they name.** All three said the cause is *"the evidence reader
+`concreteReqMatchByIface` consults `shadowKeyTableRef`, copied from the CUMULATIVE
+`universeKeyBucketsRef`"*. Derived on the tree: `concreteReqMatchByIface` reads
+`perRun.bodyImplEnvRef` (graph-global) since `b2`. **The split is NARROWER, not closed** — the
+surviving prefix read is `findMatchingImplReqsU`'s HEADLESS fallback,
+`firstReqMatch (univHeadless univ iface)` over `residualUnivRef`, a per-module ordinal
+projection. This is exactly `b2`'s Item 3 residual that `g` re-confirmed untouched. I corrected
+all three to state the surviving mechanism and explicitly wrote *"do NOT read this narrowing as
+(b) is fixed — this arm must still reject"*. ⛔ **I changed no behaviour here and did not touch
+the guard.** But it means the architecture doc's deferral row and that diagnostic row were BOTH
+stale in the direction that makes a live residual look closed, and **whether Door 4's guard now
+over-fires on the concrete leg is an open question for the repair round, not something I could
+settle inside a deletion bite.**
+
+**6. `keyTable` threading — IN SCOPE, DECIDED, DEFERRED, and the reason is not "too big".**
+`g` flagged that the threaded `keyTable` parameter now has zero terminal reads (~25 signatures +
+the `KeyBuckets` field on all four `EntailKind` constructors). **I derived where removing it
+leads and it exits my bite's licence:** `buildKeyTable`'s two surviving call sites
+(`let keyTable = buildKeyTable prog2`, `let stampKeyTable = buildKeyTable implDecls`) exist ONLY
+to feed that threading, so removing the parameter makes `buildKeyTable` dead, which cascades to
+`bucketKeyEntries(From)`, `keyEntryOf`, `headBucketRender`, `KeyEntry` and `KeyBuckets` — **six
+symbols the anti-scope list names as MUST-SURVIVE, and which AM-1 scopes to #1113.** So taking it
+would not be an enlargement of this bite, it would be a violation of it. Deferred, recorded in
+the architecture doc's row as *"the table is still BUILT and still threaded but has zero terminal
+reads"* so the next agent inherits the finding rather than re-deriving it.
+
+nearest miss: **A reader introduced between the packet's derivation (`1e7cbbbb`) and my deletion.
+RE-RAN packet §5's greps against `26423f93` immediately before touching anything, and diffed
+against the packet's stated baseline. The sets DIFFER from the packet — and they differ in the
+SAFE direction, which is the only reason I proceeded rather than stopping.**
+* Packet §5 probe (1) expected 2 code readers at the pin and ZERO after `c`; measured **ZERO**.
+* Packet §5 probe (2) expected 9 code lines at the pin, 7 after `c`; measured **7**, at the
+  post-`g` line numbers `6185 / 6307 / 7032 / 7128 / 21308 / 21309 / 26783` — the 2 decls, the 2
+  initialisers, the 2 `setRef` writes and the accumulate. **Not one is a read for a decision.**
+* Packet §5 probe (3) expected prose-only outside `typecheck.mdk`; measured exactly one hit,
+  `compiler/types/registry.mdk:682`, past-tense and still true (left alone).
+* Packet §5 probe (5) expected `implExistsForHead` to keep ONE caller via the threaded table.
+  **MEASURED ZERO — this is the packet's biggest miss and it ENLARGED the bite.** `g` moved
+  `resolveRLocalSite`'s leg too, so `implExistsForHead` has no callers and is itself one of the
+  13 dead. The packet's anti-scope table lists it as surviving; it does not.
+* **What I could NOT rule out, stated as a limit rather than a clearance:** a reader added to a
+  file I did not re-grep between my grep and my edit. I hold the only writer slot and
+  `git status` showed a clean tree throughout, so this is bounded by that assumption, not by a
+  measurement.
+
+engines:      **ONE LINE, and the reason rather than the word: no compiled byte reaches any
+engine, because nothing reachable was deleted.** All 13 bindings had zero live callers before
+deletion (proven per symbol above) and the two refs were write-only, so no engine's input
+changed — LLVM · wasm · eval · `core_ir_eval` all re-derive their words from the same `Route`
+values they received at `26423f93`. **Corroborated, not merely argued:** `diff_compiler_llvm_modules`
+PASSES on the final binary, so the LLVM arm's emitted IR is byte-identical on the corpus that
+contains the fixture built to exercise the deleted guard's condition.
+⚠️ **wasm: OWED AND STILL NEVER OBSERVED — five bites running** (`b2`/`c`/`f`/`g`/`d`). Stating
+it loudly as instructed: **my deletion touches nothing wasm consumes** — `grep -n
+'routeWordHeadSkew\|headCollides\|countHead\|matchedEntry\|candidateBucket\|implExistsForHead\|shadowKeyTableRef\|universeKeyBucketsRef'
+compiler/backend/wasm_emit.mdk compiler/ir/core_ir_eval.mdk` is **empty**, and `wasm_emit`
+re-derives its uniqueness test from a bare `String` it receives, not from any table I removed. So
+the wasm arm's exposure to THIS bite is nil; its exposure to `g`'s word change is unchanged and
+still unmeasured. `core_ir_eval` likewise untouched and likewise unobserved.
+
+gates run:    All on the FINAL binary (`make medaka` exit 0, `MEDAKA_STRICT=1` fresh), `fmt
+--write` and `lint` BEFORE each of the two builds:
+`medaka fmt --check` **clean** · `medaka lint compiler stdlib sqlite` **0 findings** ·
+`make check-self` **PASS** · `sh test/registry_keying_ratchet.sh` **PASS** (set equality held
+across the moved row; CrossRun 22) · `sh test/diff_compiler_check_cli_modules.sh` **86 ok, 0
+failing** (derived off the log, not quoted — the brief warned this number moved twice) ·
+`sh test/diff_compiler_flat_vs_onemodule.sh` **13 rows PASS, 1 drain notice** ·
+`sh test/run_gates.sh 'diff_compiler_llvm_modules*'` **PASS** ·
+`sh test/diff_compiler_must_fail.sh` **TWICE: 97 REPRO / 3 DRAINED / 0 control-broke / 0
+malformed, identical, same three NAMES read individually — #1072, #1564, #1599** ·
+`make agent-doc-symbols` **PASS, 0 dead, no exceptions row added** · `make docs-links` **PASS**.
+Must-stay-put pins held: **`1597-*` REPRO, `1046-*` REPRO.**
+⚠️ **`test/must_fail_fixtures/1075-*` DOES NOT EXIST** — the brief's must-stay-put list names a
+`#1075` pin, and `ls test/must_fail_fixtures/ | grep 1075` is empty. Nothing flipped because
+there is nothing there; the list item is misnamed or the pin was never created.
+⚠️ `diff_compiler_llvm_modules` **phantom-skipped on first invocation** (no
+`llvm_emit_modules_main` oracle in this worktree) and **refused with exit 1 on a later one**
+because my second `make medaka` staled the oracle. Both are the harness working, not results:
+built the oracle narrowly (`FORCE=1 JOBS=1 … --build-one llvm_emit_modules_main`) and re-ran to a
+real PASS each time. **A phantom skip is not a pass and I did not record one as such.**
+
+**🚨 ORCHESTRATOR FOLLOW-UPS (relayed mid-flight, both answered on my binary, both CLEARED):**
+* **#1599 is a GENUINE DRAIN, not a build refusal.** `check` **0** (`main : Unit`), `check --json`
+  **0** with `"diagnostics":[]` and **zero** `T-ROUTE-WORD-AMBIGUOUS`, `build` **0** (redirected
+  to a file, never piped), **built binary exit 0 printing `5`** — and `5` is the answer the
+  fixture's OWN `claim.txt` names as correct (*"THE CORRECT ANSWER IS 5 — `spec`'s `impl Show2
+  (Box T)` body"*), against the pinned-wrong `1003`. The reviewer was RIGHT on the fact:
+  `impl Show2 (Box …)` is declared in **both** `gen.mdk` and `spec.mdk`, so `f`'s *"one impl at
+  the head"* safety claim was false. It is moot — the guard is deleted and the program is now
+  correct rather than refused. **No headline drain unwinds.**
+* **#1564's two orders AGREE.** `main.mdk` (the previously false-rejecting order) and
+  `control.mdk` both: `check` **0**, `build` **0**, binary **0** printing **`wrap(int)`**. No
+  `T-ROUTE-WORD-AMBIGUOUS` in either stream. Genuine drain.
+* **`diff_compiler_llvm_modules` GREEN** ⇒ `g`'s retirement covered
+  `test/llvm_fixtures_modules/module_local_route_word/`. Nothing to escalate.
+
+unchecked:
+* **`selfcompile_fixpoint.sh` NOT RUN, and NOT owed by this bite the way it was owed by `g`.**
+  Per the reduced floor it is CI's `soundness` shard and EX-2's exit criterion. My positive
+  evidence that it should be a no-op is `diff_compiler_llvm_modules` PASS (byte-identical IR) —
+  **that is evidence, not the gate**; nobody has run the fixpoint on this diff.
+* **No seed re-mint attempted** — EX-2's, and on a no-IR-change deletion it should be a no-op.
+* **Snapshot and `selfproc_legA` goldens NOT re-cut — EX-3's, deliberately.** `zero goldens
+  blessed` is intact: `git status` shows five modified files and **no golden**. My contribution to
+  the legA diff is **13 deletions, zero additions, zero re-signatures** (command in `sites:`).
+  `test/snapshots/compiler/typecheck.md` also moves (−255 lines of source).
+* **`typecheck_compiler_source.sh`, `diff_compiler_engines.sh`, `perf_scaling`,
+  `shadow_semantics` (#1431), `eval_modules` / `core_ir_modules`, corpus sweeps, full suite: NOT
+  RUN**, per the reduced floor. `check-self` is a weaker authority than
+  `typecheck_compiler_source.sh` (which also covers `compiler/entries/*.mdk`).
+* **PERF: not measured, and a deletion is not automatically neutral to it.** Removing dead code
+  cannot slow the checker, but `appendUniverseAccums` no longer does a per-module
+  `bucketKeyEntries` fold over every decl, which should be a small WIN on multi-module compiles.
+  `check-self` PASSes; I did not time it, and a wall-clock A/B on a shared box with siblings live
+  is not a measurement. **Genuinely unanswered**; `perf_scaling` (allocation-graded) is CI's.
+* **The ~50 comment references were triaged, not exhaustively rewritten.** I fixed every
+  present-tense claim about a deleted symbol and every dangling *"see X"* locator I could find;
+  I deliberately LEFT past-tense historical mentions (e.g. lines 215/235's A-2.2b narrative,
+  `dispHeadTab`'s obituaries) because they are honest history and deleting them destroys the
+  record. **A reader should expect deleted names to appear in this file as history.** Derive the
+  set: `grep -nE '\`(implExistsForHead|matchedEntry|matchingEntries|candidateBucket|bucketOfHead|headCollides|countHead|routeWord\w+)\`' compiler/types/typecheck.mdk`
+* **Reproduction:** `scratchpad/refs.sh` (per-symbol death proof for the 13), `refs2.sh`
+  (second-order cascade), `p1599.sh` / `p1564.sh` (the two orchestrator follow-ups),
+  `final.sh` / `mf.sh` (the floor). Logs: `build.log`, `build2.log`, `f.*`, `fmf1.log`,
+  `fmf2.log`, `llvm3.log`, `ratchet-before.log`.

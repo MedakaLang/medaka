@@ -170,7 +170,7 @@ are red **BY DESIGN** on this branch and are **not your break**:
 | Must stay put | Why |
 |---|---|
 | `test/must_fail_fixtures/1597-*` | #1597 is **adjudicated out** (presumption OUT; Stage A Unit F, whose F-3 bite was refused as unreachable dead code, RUN-031). Nothing here fixes it, so it must read **REPRO** all run. If it flips DRAINED, **someone changed the field-owner seed — that is a finding.** ⚠️ Its `diag-code:` range is line-sensitive to `bmod.mdk`'s comment header; a comment-only edit there moves the pin. |
-| the #1075 pin (authored this run) | #1075 is **OUT of scope** (F-1 residual, #1046's class — its site reaches dispatch through a **local lambda**, so arg-tag survives until locals carry evidence). Pinned for falsifiability only. A still-RED #1075 is **correct**, not a Stage B failure. |
+| ~~the #1075 pin~~ — ⚠️ **THERE IS NO #1075 PIN. This row was my error.** | `test/must_fail_fixtures/1075-*` **does not exist** (verified by `EX-1`). P0-P **refused** to author one: #1075's filed observable is unreproducible on `main` (it was measured on unmerged PR #1074), so any pin would have asserted correct behaviour. It is ledgered in `test/MUST-FAIL-NOT-PINNABLE.txt` instead. #1075 remains **OUT of scope** (F-1 residual, #1046's class — its site reaches dispatch through a **local lambda**). **Nothing here can flip; do not look for it.** |
 | #1046 | Same F-1 routing. A B-2 that "drains" #1046 or #1075 has done something **out of scope** — investigate rather than celebrate. |
 
 ⚠️ **One pre-existing red is NOT ours**: `check_cli_modules`' `1112-A34/later-invisible` leg, which
