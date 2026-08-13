@@ -144,4 +144,76 @@ three times in this repo.
 #1075 is pinned but labelled **out-of-scope for Stage B** (F-1, local lambda), so a later agent
 does not read its still-RED pin as a Stage B failure.
 
+---
+
+## RUN-B-005 — the decisive gate is GREEN at BASE (baseline, not a formality)
+
+`sh test/selfcompile_fixpoint.sh` at BASE, **exit 0**:
+
+```
+C3a PASS: IR1 (native) == seed-bootstrapped converged reference, byte-for-byte
+C3b PASS: IR1 == IR2 byte-for-byte — FIXPOINT (the compiled compiler reproduces its own output)
+C3a (IR1==seed-ref): YES   C3b (IR1==IR2 fixpoint): YES
+```
+
+**Why this was worth spending before any implementation:** the fixpoint is **in-band from Phase 2
+on** and cannot be deferred, because B-2 changes emitted IR. Without a baseline, a red fixpoint
+later is ambiguous between *this run broke codegen* and *it was already red* — and the standing
+trap is that a **stale seed can SEGFAULT the fixpoint on a perfectly correct change.** It is green
+at BASE on the committed seed, so from here **any fixpoint failure is attributable to this run**
+and the seed is not a confound at the outset.
+
+⚠️ **Self-check on my own action, recorded because it is the exact shape this run exists to
+prevent.** I started this gate while P0-P was using `./medaka` to witness must-fail pins — i.e. I
+ran a heavy build-shaped job during another agent's measurement window, which is the contamination
+pattern §5 forbids. **Verified rather than assumed that it was harmless:** `selfcompile_fixpoint.sh`
+compiles every stage into its `$WORK` temp dir (`"$CC" ... -o "$2"` at `:112`, all targets under
+`$WORK`) and writes **neither** `./medaka` **nor** `./medaka_emitter`. Confirmed from the
+consequence, not the source: trunk mtimes were **unchanged** across the whole run
+(`medaka` 02:46:09, `medaka_emitter` 02:45:18 — identical before and after). So P0-P's evidence
+stands. **The general rule is unchanged and I should not have needed the check: do not overlap a
+build-shaped job with a measurement window.**
+
+---
+
+## RUN-B-006 — §5's wasm-corpus precondition: DISCHARGED, and it yields a Phase 5 tripwire
+
+Contract §5 requires confirming, before trusting a green wasm arm, that the wasm corpus still
+exercises **cross-module same-name collisions** — the class it was once entirely blind to.
+*"Derive per corpus; never quote a count."* Derived, not counted:
+
+- **#1418** — `gh issue view 1418` → **CLOSED**, titled *"S3: `test/wasm/fixtures_modules` has ZERO
+  cross-module same-name collision fixtures — the identity arc's semantics reach wasm with no
+  coverage of the class."* So the gap was real and was closed by adding coverage.
+- All three sibling corpora are present and are **genuinely distinct** (the shared-corpus trap
+  warns that a naive grep conflates them): `test/wasm/fixtures`, `test/wasm/fixtures_typed`,
+  `test/wasm/fixtures_modules`. The modules corpus holds the multi-module collision dirs
+  `iface_name_collision_default`, `mm_color`, `mm_sum`, `record_xmod_field_order`,
+  `record_xmod_field_order_permuted`, `record_xmod_field_type_collision`,
+  `record_xmod_field_type_swap`.
+- **Checked for substance, not just presence** (a fixture can exist and exercise nothing).
+  `iface_name_collision_default/` is a real 5-module program: `ifa.mdk` and `ifb.mdk` each declare
+  `interface Speak x` with a **different** default body and have **no import relationship of any
+  kind**; `ifai.mdk`/`ifbi.mdk` each implement it with a **method-less** impl, so each type must
+  inherit its *own* module's default.
+
+**Two properties of that fixture make it directly load-bearing for Phase 5 (B-2.4):**
+
+1. **Its expected value is hand-derived from the spec, not captured from an engine** — its own
+   header cites DICT-SEMANTICS §5 (a default applies only when the selected instance omits the
+   method) and §8 I4 (a class is `(module, name)`), concluding correct = `A-default|B-default`.
+   That is precisely the discipline §5 demands of us, already applied.
+2. It records that #1047 was invisible to `diff_compiler_engines` because **all three engines
+   resolved the same registry the same wrong way** — *"all three agreed and all three were wrong."*
+   This is the standing warning made concrete: **engine agreement is not evidence on a dispatch
+   shape**, and B-2.4 is a dispatch change in three engines.
+
+**Ruling:** the wasm arm's coverage of this class is real, so a green wasm arm is meaningful — and
+`iface_name_collision_default` is registered as a **tripwire for B-2.4**: it guards the *fixed*
+state of #1047, so if a B-2.4 bite moves it, that is a regression in the class this stage is
+supposed to be making structurally impossible. It is a **live differential against the native
+oracle with no golden**, so it cannot be silently blessed away.
+
+---
+
 *(Rulings from P0-A/B/C/D/P and the Fable consult are appended below as they land.)*
