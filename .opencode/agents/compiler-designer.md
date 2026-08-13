@@ -60,6 +60,13 @@ siblings or the full target architecture. Return only the candidate-family
 comparison, selected slice, plan delta, executable harness, acceptance boundary,
 and explicit residual. Normally keep a continuation packet under 100 lines.
 
+In #1398 sprint Phase 0, a complete candidate packet is not the global
+selection. Design only the assigned candidate or nearest alternative against
+the supplied exact-revision census and apparatus evidence. Attack its semantic-
+family boundary and implementation sizing, then return it for conductor
+synthesis and fresh plan review. Do not silently reconcile competing packets or
+promote a plausible census family to implementation-ready status.
+
 Before prescribing a harness, include an **apparatus feasibility** check: name
 the existing executable route, whether it can perform the required same-process
 or private-API sequence, and whether constructing or printing the artifact can

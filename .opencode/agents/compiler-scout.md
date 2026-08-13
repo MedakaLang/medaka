@@ -13,6 +13,7 @@ permission:
     "*": deny
     medaka-friction-report: allow
     medaka-epic-intake: allow
+    medaka-emitter-sprint: allow
   external_directory:
     "*": deny
     "/var/tmp/medaka-scratch/opencode/**": allow
@@ -42,6 +43,13 @@ checked independently. Keep tracker/history readiness separate from a large
 implementation census unless the caller proves both fit this bounded turn. If
 both cannot fit, finish readiness evidence and return the exact source-census
 follow-up rather than exhausting the step budget halfway through both.
+
+For a #1398 sprint Phase 0 census, also load `medaka-emitter-sprint`. Return the
+normalized raw source set before any count or family grouping, reconcile
+signatures with direct definitions, and enumerate lifecycle sites and routes.
+Do not select the winning family, declare a census candidate implementation-
+ready, or copy a residual population from the tracked sprint plan or prior
+handoff.
 
 Use the narrowest GitHub payload that proves the intake premise. Prefer
 `gh ... --json` plus `--jq` selecting issue state/body, the latest handoff, and

@@ -23,6 +23,11 @@ The project agents in `agents/` are an OpenCode adaptation of Medaka's complex-c
   probes, source-derived controls, and residual-state handoffs.
 - `medaka-continuation-receipt` provides one compact derive-don't-encode packet
   for staged continuation dispatch, review, PR prose, and tracker handoff.
+- `medaka-emitter-sprint` adapts #1398 to parallel revision-pinned intake,
+  census, apparatus, competing design, and review followed by isolated serial
+  implementation/integration and one reviewed PR. Durable sprint protocols live
+  under `sprints/`; live receipts and captures stay in a task-owned disposable
+  root under `/var/tmp/medaka-scratch/opencode/` and are never committed.
 
 Designer packets must pass an implementer-sized-slice test before Terra receives
 them. Implementers remain build-free; the conductor supplies exact isolation
