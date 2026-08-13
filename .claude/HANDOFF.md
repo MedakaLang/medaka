@@ -37,6 +37,65 @@ with the guard live and with it dead.
 
 ---
 
+## ✅ STAGE B SPRINT — PHASE 2′ CLOSED AND CERTIFIED (2026-08-13). **Safe to review. NOT ready to merge.**
+
+**Branch `arch/stage-b-sprint`, draft PR #1605, BASE `2b9dc798`.** The **UNSAFE** marking is **REMOVED** —
+earned by showing, not arguing. ⚠️ **"Safe to review / safe to hand to the repair round" is NOT "ready to
+merge."** Merging is Val's call: the PR is a **draft**, `must_fail` is **red by design**, and Phases
+3′/4/5 were never started.
+
+### Certified on the final binary at `7e3fe771` (orchestrator-run; `EX-4`'s agent died twice on API 529s)
+
+| what | evidence |
+|---|---|
+| **The S0 class BUILDS AND RUNS CORRECTLY** | `diff_compiler_check_cli_modules.sh` → **86 ok, 0 failing**, incl. `SA-4c/overlap-DRAINED-both-orders` *(build 0 **both orders**; binary prints `wrap-int-specific`)* and `SA-4c/route-word-order-invariant` *(both orders **IR-identical**; **arity-1** specific impl called)*. The arity-2-call-with-one-arg shape that segfaulted is **absent**. |
+| **Three S0s drained, by NAME, twice** | `must_fail` ×2 **identical**: `97 reproduce / 3 DRAINED / 0 control-broke / **0 malformed**` — `#1072`, `#1564`, `#1599`. ⚠️ **`0 malformed` is load-bearing**: it rules out the false-DRAINED shape. |
+| **#1514's capability loss CLEARED** | Proven by the pin's own state transition, not a hand-rolled probe: under `f`'s guard it read **DRAINED** (the build refused, so its bug became unobservable); it now reads **REPRO**, and the only way back to REPRO is for the build to succeed. |
+| **#1397 over-fire cleared** | **REPRO** again. |
+| **Nothing silently drained** | `#1560 #1182 #1597 #1046 #1578 #1514 #1397 #1071 #1062` — **all REPRO, verified by name**, not by count. |
+| **Fixpoint** | **C3a YES · C3b YES** at `7e3fe771`, run *after* the golden re-cut — closing the gap that a re-cut could otherwise enshrine a stale binary's output. Seed **byte-current** (`EX-2`). |
+| **Goldens** | Re-cut **ONCE** (`EX-3`): 201/201 snapshots matching · selfproc **16 ok / 0 failing**. |
+| **Breadth** | engines **583 fixtures, 0 regressions / 0 promotions / 0 pinfail** · perf_scaling 20 ok, **0 regressed** · `typecheck_compiler_source` · `agent-doc-symbols` 0 dead · **wasm clean on all four gates** (first observation in the sprint). |
+
+### 🟥 The ONE gate still red, and it is a DELIVERABLE
+
+**`diff_compiler_must_fail`** — the tracker self-draining on `#1072`/`#1564`/`#1599`. **Not a break.**
+⛔ **Do NOT close those three here.** Closure requires the adversarial review gate every soundness fix in
+this repo gets (contract §1: the run implements drains, it does not close them).
+
+### ⚠️ TWO ERRORS OF MINE, CORRECTED — do not act on the old text
+
+1. **`diff_compiler_llvm_typed_ir` was on the expected-red list. It NEVER MOVED.** `EX-3` measured it
+   **green 54/54 byte-identical** and checked the green is not vacuous (the gate byte-compares committed
+   `.ll.golden` and makes N==0 a hard failure). **No IR golden needed re-cutting.**
+2. **There is NO #1075 pin** (see the corrected row below). P0-P refused to author one — #1075's filed
+   observable is unreproducible on `main` (measured on unmerged PR #1074) — and ledgered it in
+   `test/MUST-FAIL-NOT-PINNABLE.txt`.
+
+### 🚨 WHAT THE REPAIR ROUND INHERITS — read before touching anything
+
+- 🚨 **Phase 3′ is BLOCKED ON A RULING, NOT ON WORK** (`.claude/sprint-b/next/QUEUED-p3-first.md`). The
+  D8/D9 *"rule before stamping"* sites were moved into Phase 2′ and **granted in `DECISIONS.md` — but
+  never taken.** Both still stamp bare tags with **no selector having run**, so a Phase 3′ bite would
+  stamp a **FABRICATED identity**. **Its first work item is a ruling.** *(My bookkeeping failure: I
+  recorded the grant and never converted it into a bite.)*
+- ⛔ **#1397 and #1514 must NOT be closed.** Neither was ever fixed — only un-refused.
+- **#1071 duplicates #1062** — same mechanism; #1071's stated discriminator was **measured false**. One
+  fix drains both; counting them separately inflates this run's output by one.
+- **`EX-3`'s own `nearest miss:`** — its golden proof is **structural**: every moved line has an owning
+  source edit, but *that an owning edit was right* rests on review, **not measurement.**
+- **`goalHeadCon = None`** — tested; a **NEGATIVE RESULT, not a clearance.** The **`tys = []`** sub-class
+  remains unwritable and untested.
+- **The Door 4 split is NARROWER, not closed** — the surviving prefix read is the **headless** leg over
+  `residualUnivRef`. Whether Door 4 now over-fires is the repair round's.
+- **#1114 and #991 are desk closes** with drafted evidence; Val deferred them here deliberately.
+- **wasm was observed exactly ONCE** (`EX-3`, clean). It is still the least-evidenced arm — **name it in
+  any merge decision.**
+- **13 bindings were deleted** (`EX-1`) and **8 knowledge blocks relocated** onto live citees, because two
+  high-value derivations lived on functions being deleted. Don't "restore" them.
+
+---
+
 ## 📋 IF YOU ARE PICKING THIS UP COLD, START HERE
 
 **Both possible next steps are already written, in the repo, at `.claude/sprint-b/next/`.** `B-2.1-g`
@@ -159,7 +218,7 @@ are red **BY DESIGN** on this branch and are **not your break**:
 |---|---|
 | `diff_compiler_snapshot_*` | Compiler sources are in the snapshot corpus, so every source bite moves its own golden. **Zero goldens are blessed for the entire run** (§5) — re-cut ONCE from the final binary in the repair round. |
 | `test/selfproc_goldens/legA/*` (`diff_compiler_selfproc.sh`) | Same cause: added/renamed/re-typed top-level bindings move the LEG A scheme goldens. Deferred with the snapshots. **CI-only signal** — stays green locally. |
-| `diff_compiler_llvm_typed_ir` (the IR-text golden) | B-2 changes emitted IR **by design** — that is the stage's whole content. |
+| ~~`diff_compiler_llvm_typed_ir`~~ — ⚠️ **WRONG PREDICTION, corrected 2026-08-13.** | I listed this expecting a large IR move *"by design."* **It never moved.** `EX-3` measured it **green 54/54 byte-identical**, and confirmed the green is not vacuous (the gate byte-compares committed `.ll.golden` files and makes N==0 a hard failure). `diff_compiler_llvm_modules` is likewise green. **Nothing here was re-cut because nothing moved** — the selection change was population-level, not codegen-level. ⚠️ Left visible rather than deleted: the wrong prediction **primed an implementer to expect a large IR move that does not exist**, which cost it a round of investigation. |
 | **The S-expr / Core-IR golden families** — `diff_compiler_core_ir*`, `diff_compiler_snapshot_*`'s S-expr cells | Added 2026-08-13 on P0-C's escalation. The frozen-admissibility carrier is a **5th positional `CProgram` field**, and `CProgram` is rendered by `core_ir_sexp` (`snapshot.mdk:568`, `:605`) — so the carrier alone moves these goldens **before any semantic change**. Listed explicitly because a positional-field widening reads like a formatting break, which is how an agent misdiagnoses the run's own debt. |
 | `diff_compiler_core_ir_modules.sh` | Consumes `core_ir_eval.mdk`, ruled IN as B-2.4's **fourth engine arm**. ⚠️ It shares `test/eval_modules_fixtures/*/` with `diff_compiler_eval_modules.sh` — the corpus that let the P0-9 fix ship "green" having run only the first of the two. **Both must be run before any B-2.4 drain claim.** |
 | `diff_compiler_must_fail.sh` | Drain targets are being **drained but not closed** (§1 issue-closure policy): #1564, #1599, #1560, #1072, #1071, #1062, #1068, #1182. **Their pins flipping red is THE deliverable** — it is the repair round's attack list — not a break. |
