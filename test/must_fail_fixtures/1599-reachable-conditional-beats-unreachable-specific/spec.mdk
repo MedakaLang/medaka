@@ -1,0 +1,4 @@
+import iface.{T(..), Box(..), Show2, show2}
+
+impl Show2 (Box T) where
+  show2 b = 5

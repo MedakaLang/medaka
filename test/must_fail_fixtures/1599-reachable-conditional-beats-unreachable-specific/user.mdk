@@ -1,0 +1,5 @@
+import iface.{T(..), Box(..), Show2, show2}
+import base
+import gen
+
+export useIt = show2 (Box T)

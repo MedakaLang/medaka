@@ -1,0 +1,14 @@
+-- CONTROL for #1599. Same six modules, same graph, ONE variable changed: the goal
+-- `Show2 (Box T)` is posed HERE, in an entry that imports `spec`, instead of inside
+-- `user.mdk`, which does not. So the more-specific `impl Show2 (Box T)` is reachable
+-- from the module posing the goal and most-specific-wins can actually apply.
+--
+-- Correct answer 5, and the control asserts the compiler gets it: if this ever stops
+-- printing 5, the bug is no longer "an unreachable specific impl loses" but something
+-- broader, and #1599's main.mdk would be pinning the wrong thing.
+import iface.{T(..), Box(..), Show2, show2}
+import base
+import gen
+import spec
+
+main = println (show2 (Box T))

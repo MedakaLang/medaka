@@ -1,0 +1,63 @@
+issue: 1599
+what: A conditional impl that IS reachable from the goal's module beats a
+what: MORE-SPECIFIC impl that is not. Most-specific-wins is a ratified feature of
+what: this language, so `impl Show2 (Box T)` must beat
+what: `impl Show2 (Box a) requires Show2 a`. It does not.
+what:
+what: `user.mdk` imports `gen` (the conditional impl) but NOT `spec` (the specific
+what: one). The entry imports both. Measured:
+what:   `medaka check main.mdk`        -> exit 0, `main : Unit`  (SILENT)
+what:   `medaka run main.mdk`          -> exit 1, E-NOT-A-FUNCTION: applied non-function: 5
+what:   `medaka build main.mdk` + run  -> exit 0, prints 1003    (WRONG, and silent)
+what:
+what: THE CORRECT ANSWER IS 5 -- `spec`'s `impl Show2 (Box T)` body. The pinned
+what: `stdout: 1003` is THE WRONG ANSWER and is the BUG asserted to still
+what: reproduce, never a claim that 1003 is correct. 1003 is the CONDITIONAL
+what: impl's arm: `1000 + show2 T` = `1000 + 3` from `base`. So the shape of the
+what: wrong value is itself the evidence -- the LESS specific impl was selected.
+what: The interpreter's `applied non-function: 5` is the same defect seen from the
+what: other side: it reached `spec`'s `5` and treated it as a dictionary.
+what:
+what: MECHANISM (partial): the same registry split #1564 and #1597 sit on --
+what: candidacy consults the graph-global `IE` while evidence consults the
+what: cumulative `universeKeyBucketsRef`/`shadowKeyTableRef`. Here it surfaces not
+what: as a MISSING dictionary but as the WRONG impl routed, which is why Stage A's
+what: `T-REQUIRES-UNROUTED` guard cannot fire: that guard's lookup returns `Some`.
+what:
+what: NOT A REGRESSION. Reproduced identically on `main` @ 7aae8b83 and on the
+what: Stage A branch, using two separately cold-built binaries each staged with
+what: their own stdlib/runtime/emitter (a binary resolves both from exeDir), with
+what: neither MEDAKA_ROOT nor MEDAKA_EMITTER exported. PRE-EXISTING.
+
+cmd: build-run main.mdk
+exit: 0
+stdout: 1003
+
+why-verb: `build-run`, not `run` and not `check`. `check` is CLEAN (exit 0, no
+why-verb: diagnostics) so it cannot grade this. `run` DOES fail (exit 1) but on a
+why-verb: different observable -- an E-NOT-A-FUNCTION panic, not a wrong value --
+why-verb: so pinning `run` would grade the interpreter's symptom and go green the
+why-verb: day the interpreter changes how it dies, while the native binary still
+why-verb: silently returns 1003. The silent wrong ANSWER out of the built binary
+why-verb: is the S0, so build-run is the only verb that grades the actual defect.
+
+control: build-run control.mdk
+
+why-control: `control.mdk` poses the same goal from an entry that DOES import
+why-control: `spec`, so the specific impl is reachable and most-specific-wins
+why-control: applies. It prints 5 and must keep printing 5. It is the
+why-control: discriminator in both directions: it rules out "the fixture is
+why-control: malformed" (a typo would break it too), and it goes red the day
+why-control: reachability stops deciding this -- which is the same change that
+why-control: should drain main.mdk. Deliberately graded under the SAME verb as
+why-control: `cmd:`, so the control exercises codegen too rather than only the
+why-control: front end.
+
+drains-when: the evidence reader is pointed at `IE` so that impl SELECTION and impl
+drains-when: CANDIDACY consult one environment. Per
+drains-when: compiler/TYPECHECK-TARGET-ARCHITECTURE.md:1815 that is B-2's (#1113):
+drains-when: "IE supplies the data, B-2 moves the reader". It does NOT drain on any
+drains-when: further A-3 work -- Stage A deliberately left routing untouched.
+drains-when: ⚠️ When it drains, replace this pin with a POSITIVE row asserting
+drains-when: `stdout: 5`; deleting it outright leaves the S0 unguarded, which is the
+drains-when: mistake test/diff_compiler_dict_semantics.sh records three times.

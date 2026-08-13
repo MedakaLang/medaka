@@ -1,0 +1,4 @@
+import iface.{T(..), Show2, show2}
+
+impl Show2 T where
+  show2 x = 3

@@ -1,0 +1,6 @@
+import iface.{Box(..), Show2, show2}
+
+impl Show2 (Box a) requires Show2 a where
+  show2 b =
+    match b
+      Box x => 1000 + show2 x
