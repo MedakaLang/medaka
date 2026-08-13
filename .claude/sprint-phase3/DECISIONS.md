@@ -681,3 +681,135 @@ design documents, corrected two in-tree comments, and surfaced two live defects.
 rework rate the audit measured at 75% held: of the six bites, **three were changed by Phase 0** —
 and one of those changes (`b1`'s `fromOption tag`) would otherwise have shipped as a break in every
 cross-module default-inheritance program.
+
+---
+
+## RUN-P3-019 — 🚨 `B-2.2-a` REFUSED AS DESIGNED and RE-CUT: there is **no type change**
+
+The architecture companion (P0-7) was asked to choose among four carrier shapes for `RKey`'s
+payload. **It refused all four and named the missing option: there is no carrier.** I audited the
+refusal before accepting it — including verifying its load-bearing claim first-hand — and **it is
+better evidenced than the design of record.** ACCEPTED.
+
+### The ruling
+
+**`data Route` is UNCHANGED. `RKey`'s first field stays `String`.** `B-2.2-a` becomes **one new
+module, one mint, zero call sites** — `compiler/types/route_key.mdk`, exporting `ifaceWordOf` /
+`implRouteKeyWord` / `routeWordFor` (+ private `rkTy`/`rkTyAtom`/`rkTyFunArg`), which **both** the
+caller side (`keyForSite*`) and the definition side (`declRouteKey`/`implKeyOf`) will call. The
+words then agree **by construction** instead of by two hand-mirrored implementations happening to
+match.
+
+### Why — three independent derivations, any one sufficient
+
+1. **No consumer can use an identity.** The consumer table enumerates all 15 reading sites: every
+   one needs the **word**, and the only namespaces `Route` reaches outside `types/` are `String`
+   symbol names (`@mdk_impl_<tag>__<method>`) and `hashName`'d i64 dict words. An `InstRef` arriving
+   there must be rendered to a `String` before it can act — **at which point it is the word.**
+2. **The mirror of the constraint I found is what kills D1's mint siting.** I established
+   `ast.mdk` ↛ `InstRef`; the decisive half is the other direction — `eval.mdk` and
+   `core_ir_lower.mdk` **also cannot reach `typecheck.mdk`** (verified: the only cross-stage import
+   edges are `core_ir_lower → eval.eval`, `llvm_emit`/`wasm_emit → ir.core_ir_lower`, `wasm_emit →
+   backend.trmc_analysis`). So D1's *"site the mint beside `InstRef` in `typecheck.mdk`"* would make
+   it a **THIRD** mirrored copy alongside `implKeyTc` and `implKeyOf` — **the exact P0-9 shape
+   `B-2.2-e` exists to delete**, while looking like it satisfied `e`'s stated property.
+3. **The tree already ruled this, at the site that owns the word**, in a header block cited by
+   neither D1 nor my brief: *"what moved onto identity is the FIELD, not the comparison"*
+   (`keyForSite`) and *"Route words are bare names by construction and three engines re-derive that
+   same uniqueness test from a bare `String` tag … the question is inherently SPELLING-scoped and
+   **answering it with identities is wrong at ANY supply level**"* (`ieCountHeadByIface`).
+   Component (ii) is that same move, one field over.
+
+**MEASURED**, and it settles the load-bearing question (*does anything need to distinguish two routes
+carrying the same word?*): at a genuine same-head/same-method collision the head test already fires
+and the word already separates the instances **all the way into the emitted symbol namespace** —
+`@mdk_impl_Alpha_T__ping` and `@mdk_impl_Beta_T__ping`, with the call site correctly reaching Alpha's.
+A control with the second interface deleted is clean, so the divergence is caused by the collision.
+⇒ **D1's component (ii) is dead weight in a node 25 sites touch.**
+
+### AD-1 is satisfied, not contradicted
+
+AD-1 required the absent state to **exist** and explicitly delegated its *representation* to `a`
+(*"or carries an explicit `unselected` value; the choice is `a`'s"*), stating the required outcome as
+*"the word stays `RKey <tag>` byte-for-byte."* **Under this ruling absence IS the bare head tag** —
+byte-for-byte what AD-1 demanded, at all three sites (D8, D9, and `b1`'s no-row arm). Nothing can
+distinguish an absent-identity `RKey "List"` from a deliberately-bare-because-unique one, **and
+nothing needs to**; every consumer treats them identically, which is what makes them safe.
+The honest loss: a future auditor cannot grep for "sites carrying an absent identity." If that
+auditability is ever wanted it belongs in a typecheck-internal side table, **never on `Route`**,
+which crosses five golden-producing engines where a within-compile serial is un-goldenable.
+
+### What this supersedes
+
+**RUN-P3-005 parts 2 and 3 are SUPERSEDED** (marked, not deleted — an unmarked superseded ruling is
+how a ledger starts lying):
+- part 2 (carrier type on field 1) — moot; there is no payload change.
+- part 3 (render identity into the S-expr, and round-trip it) — **moot, and the hazard evaporates.**
+  `core_ir_sexp.mdk` and `core_ir_sexp_parse.mdk` are **unchanged**; the word simply carries
+  different content, and `core_ir_roundtrip_main` stays faithful for it. ⚠️ Note the direction I had
+  wrong: `toRoute`'s pattern is one-element-only, so an **over-wide render would PANIC, not read as
+  absent** — the silent case needs an *under-wide* render, which this shape makes impossible.
+- **RUN-P3-005 part 1 also largely evaporates:** with no type change there is no compile-error set,
+  so §9's lending of the six non-owned files is **not exercised by `a`**. 15 of the 25 census sites
+  are untouched by the whole of Phase 3′. The merge-conflict risk against the #1398 wasm sprint
+  (RUN-P3-002) goes with it.
+- **The dump probe gets strictly BETTER**, not worse: after the mint, `escStr k` reads
+  `mymod::Alpha|T|` at a collision site — a content-derived, **compile-stable** instance name in a
+  golden. That is the checkable form of *"same evidence"*, and it is a form an `InstRef` could never
+  take.
+
+### 🚨 The catch that would have caused a regression, verified by me first-hand
+
+**`ifaceIdentity` returns `""` on the flat path, and the tree states `""` IS ABSENCE, NOT AN
+IDENTITY** (`ast.mdk:113-124`; `ifaceIdMatches` is the only legal comparison, and absence never
+matches even itself). The loader-less drivers deliberately stamp no origin, so a word built from a
+**raw** `ifaceIdentity` would spell `"|T|"` for **every** interface on `medaka check <single file>`,
+lsp, repl, doc, lint and snapshot — **collapsing two instances the present bare-name word keeps
+apart.** Hence `ifaceWordOf`'s bare-name fallback. This is the single most likely way to get `e`
+wrong and it is stated nowhere in D1.
+
+⚠️ **The property the implementer must ASSERT rather than assume:** the fallback is safe only
+because two same-spelled interfaces cannot both have absent origins *and* be in scope together — on
+the flat path there is one module and therefore one namespace. Cross-module, origins are stamped.
+**Write that down at the fallback; it is exactly where a silent collapse would live.**
+
+### Sizing, and the safety property this LOSES — stated, not glossed
+
+D1 sized `a` as *"2 sites + a compiler-enumerated error set"* and its virtue was that **the compiler
+enumerates the site list for you**, which is what made it safe for a weaker model. **That property is
+gone.** `a` is now fully inert (no call sites), and all of its risk moves into `b1`/`e`, whose nine
+sites are named by a **human** and must be checked as a **SET** — including
+`core_ir_eval.mdk:453-455`'s `VTypedImpl` producer, the P0-9 shape in the flesh.
+**`e`'s packet gets the derivation command, not the list of nine:**
+`grep -rn 'implKeyOf\|implKeyTc\|declRouteKey' compiler/ --include=*.mdk`.
+
+### Two further items this ruling hands forward
+
+- **`e` also collapses the `ppTy` mirror** (`ppTyAtom`/`ppTyFunArg`/`ppTy` in `typecheck.mdk` vs
+  `ppTyAtomK`/`ppTyFunArgK`/`ppTyK` in `eval.mdk`). `implKeyOf`'s header calls their agreement *"by
+  construction"* — **it is not**; they are two functions matching on the reachable subset, and they
+  **already differ off it** (typecheck renders `TyEffect`/`TyRow` as `<…>` and `TyConstrained` as
+  `cs => t`; eval strips all three). ⚠️ **The fold is behaviour-visible if any impl type arg can
+  carry an effect or a constraint — a discriminating probe is owed BEFORE collapsing, not after.**
+- **`nearest miss:` for `e`, which D1 does not state.** `sanitizeId` (`private_mangle.mdk:682-698`)
+  maps every char outside `[A-Za-z0-9_]` to `_`, **one-for-one and not injectively**. Today's word
+  alphabet at that boundary is `|` and space; #1182's fix **adds `:`**. So `a::Alpha|T|` →
+  `a__Alpha_T_`, and a module `a_` with interface `_Alpha` sanitizes to the **same symbol**. The
+  class pre-exists, but this bite **widens the alphabet reaching it** — a returns-nothing →
+  returns-something transition on a namespace nothing watches. Owed fixture: two modules whose
+  sanitized `<mid>::<iface>` spellings collide, asserting distinct emitted symbols.
+
+## RUN-P3-020 — a THIRD live defect found in passing (P0-7's byproduct) — TRIAGE OWED, not filed
+
+Two interfaces in **one file** declaring the same method name at different return types
+(`Alpha.ping : a -> String`, `Beta.ping : a -> Int`), both implemented on one type:
+`check` **exit 0** · `run` **exit 1** E-PANIC (`intToString: not an Int` — eval narrowed to Beta) ·
+`build` **exit 0** with *correct* distinct symbols and the call site reaching Alpha's ·
+**built binary exit 0 printing a raw word** where a string belongs. A control with `Beta` deleted is
+clean on every arm.
+
+So the emitted **symbols are right** and the wrongness is downstream of naming — which makes it
+**adjacent to but not obviously #1265** (that one is scoped to *defaults*, where
+`mdk_default_<method>_<tag>` has no interface component; here both impls are concrete). **Not filed
+— I have not reproduced this one myself yet**, and this sprint does not file an agent's claim
+unreproduced. Added to the exit-phase triage list with its repro path.

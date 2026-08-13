@@ -88,6 +88,10 @@ test: medaka
 	./medaka test stdlib/list.mdk
 	./medaka test stdlib/core.mdk
 	./medaka test compiler/types/registry.mdk
+	## ARCH B-2.2-a: the shared route-word mint — call-site-free BY DESIGN (the
+	## bites after it move `implKeyTc`/`implKeyOf`/`declRouteKey` onto it), so
+	## this line is the ONLY thing that typechecks it or runs its doctests.
+	./medaka test compiler/types/route_key.mdk
 	## A-3.2 (#1112): `typecheck.mdk` IS reached by check-self/typecheck_compiler_source.sh
 	## (it has plenty of call sites), but neither of those RUNS doctests — only
 	## `medaka test <file>` does. Listed here so `DataEnv`'s doctests (the

@@ -17,6 +17,7 @@ branch, mid-run:
 | `test/diff_compiler_selfproc.sh` (LEG A schemes) | new/re-typed top-level bindings move `test/selfproc_goldens/legA/*` — **CI `backend` shard only, green locally** | Phase 2 close-out re-cut |
 | `test/diff_compiler_llvm_typed_ir.sh` | `B-2.2-e` changes emitted impl symbol words | Phase 2 close-out re-cut |
 | `test/diff_compiler_must_fail.sh` | pins flipping as drains land is a **deliverable**, not a break | repair round |
+| `test/diff_compiler_snapshot_frontend.sh` — *`route_key.mdk: FAIL no snapshot`* | ⚠️ **an ADD, not a move.** `B-2.2-a` created `compiler/types/route_key.mdk`, and that gate **globs `compiler/types/*.mdk`** (`:165`), so the new file auto-enrolled in the shared snapshot corpus. Measured at the bite's landing: **201 of 201 existing snapshots compared and matching — zero goldens MOVED** | close-out, and it owes a **CREATE (`--new`)**, not a re-bless — the gate's own message warns against `--new`, so it needs a deliberate decision rather than a reflex |
 
 🚨 **Before calling any OTHER red "pre-existing", READ the gate that produced it.** In Stage A a red
 was called pre-existing by two agents and repeated in two commit messages and a PR body — and was

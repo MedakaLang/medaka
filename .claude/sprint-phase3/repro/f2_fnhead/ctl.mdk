@@ -1,0 +1,16 @@
+-- F-2 CONTROL, independently authored by the orchestrator rather than adapted
+-- from the reporting agent's probe. Same shape as ab.mdk with two `data` types
+-- substituted for the two function types, so the heads are real tycons.
+--
+-- Measured: check=0 run=0 [(5, 9)] build=0 exec=0 [(5, 9)] — correct on every
+-- arm. This is what establishes that the trigger is the FUNCTION-TYPED head and
+-- not merely two impls of one interface.
+interface Sz a where
+  sz : a -> Int
+data W = W
+data V = V
+impl Sz W where
+  sz _ = 5
+impl Sz V where
+  sz _ = 9
+main = println (sz W, sz V)
