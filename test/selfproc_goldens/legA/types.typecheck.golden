@@ -791,6 +791,8 @@ ieCountHeadByIface : ImplEnv -> String -> Option HeadKey -> Int
 ieCountHeadByIfaceGo : List ImplRow -> String -> Option TabKey -> Int
 ieCountHeadByMethod : ImplEnv -> String -> Option HeadKey -> Int
 ieCountHeadByMethodGo : List ImplRow -> String -> Option TabKey -> Int
+ieDefinesReqMethodAt : ImplEnv -> String -> Option HeadKey -> Bool
+ieDefinesReqMethodAtGo : List ImplRow -> String -> Option TabKey -> Bool
 ieEntriesForIface : List ImplRow -> String -> List Mono -> List KeyEntry
 ieEntriesForMethod : List ImplRow -> String -> List Mono -> List KeyEntry
 ieFileRow : ImplRow -> ImplEnv -> ImplEnv
@@ -868,8 +870,6 @@ implDeclFact : Decl -> List (IfaceRef, List Ty, List Require, List String)
 implDeclFacts : List Decl -> List (IfaceRef, List Ty, List Require, List String)
 implDeclWithReqs : Decl -> List (IfaceRef, List Ty, List Require)
 implDeclsWithReqs : List Decl -> List (IfaceRef, List Ty, List Require)
-implDefinesMethodAt : Map String (List ImplEntry) -> String -> String -> Bool
-implDefinesMethodAtGo : List ImplEntry -> String -> String -> Bool
 implDictNames : String -> Int -> List String
 implDictPassMethods : Int -> List ImplMethod -> List ImplMethod
 implDictRoutesForFull : Map String (List ImplEntry) -> Map String (List KeyEntry) -> String -> String -> String -> Mono -> List Mono -> List Route
@@ -893,6 +893,7 @@ implMatchesU : ImplUniverse -> IfaceRef -> List Mono -> Bool
 implMatchesWithReqsU : ImplUniverse -> IfaceRef -> List Mono -> Bool
 implMethodName : ImplMethod -> String
 implMethodNameTc : ImplMethod -> String
+implRowHasReqs : List Require -> Bool
 implRowMatchesSuper : TabKey -> String -> List Ty -> ImplRow -> Bool
 implRowsOf : String -> Int -> Int -> List (IfaceRef, List Ty, List Require, List String) -> List ImplRow
 implSubject : String -> String -> String

@@ -65,6 +65,43 @@ with the guard live and with it dead.
 
 ---
 
+## ✅ S1 BLOCKER CLOSED (`B-2.1-h` / FX-1, 2026-08-13) — status restored to **safe to review**
+
+**The confirmed S1 below is FIXED, and it did NOT require #1113 / Phase 3′.** The defect was the
+**population a guard read**, not the **word a route carries**: `implDefinesMethodAt` read the
+cumulative-prefix `ImplBuckets`, and its answer chose the **method name** the graph-global selector then
+selected on. Replaced by `ieDefinesReqMethodAt` over graph-global `IE`; both call sites repointed.
+
+| bar | result |
+|---|---|
+| The P1 program | **builds and runs correctly, exit 0, BOTH orders** — the right arm under **§8 I5** (candidacy is graph-global, so the impl *is* a candidate under both orders); base's refusal was a self-described **compiler limitation**, not a semantic reject |
+| 🚨 **C4 order-invariance** | **589-line IR diff → 0. Byte-identical.** ⭐ And **order-b's IR is byte-identical pre- vs post-fix**, so the fix moved *only* the broken order onto the good one rather than perturbing both |
+| Three drains, **by name** | #1072 · #1564 · #1599 still DRAINED; 97 REPRO, **0 control-broke, 0 malformed** |
+| #1397 / #1514 | still **REPRO** — the retired over-firing guard did not come back |
+| Gates | `check_cli_modules` **86/0** (incl. `SA-4c/route-word-order-invariant`) · `flat_vs_onemodule` **13** · `check-self` · `selfproc` **16/0** · `snapshot-check` **201/201** |
+| **Fail-capability** | **shown**: same script and fixtures on the **pre-fix** binary → 589-line diff + `E-NONEXHAUSTIVE-MATCH` at exit 0; post-fix → 0 |
+
+**Deliberately held (each would have been a second semantic change):** key strength unchanged (still
+spelling-keyed — a structural `HeadKey` compare re-opens **#1111**), the `requires`-only filter kept, and
+the head taken from the mono `entail` derived its tag from. **Net: a pure widening.**
+
+⚠️ **R3's "conjunct 2 is pending #1113" qualifier SURVIVES this fix** — two same-spelled heads still mint
+one word, which is why #1397/#1514 are untouched. **What changed is that organ 2's prefix reader is
+gone**, so R3's organ table row 2 is re-graded. **`ImplBuckets` readers are down to two.**
+
+**Goldens re-cut with the fix** (a compiler-source change moves them): `snapshots/compiler/{typecheck,eval}.md`
+and `selfproc_goldens/legA/types.typecheck.golden` — **verified additive-only: +3 new bindings, −2
+deleted, and NO surviving binding's inferred type moved.**
+
+⚠️ **Naming note:** the bite is `B-2.1-h`; `next/QUEUED-h-*.md` uses `h` as a *packet* letter. Different
+namespaces, left as-is — renaming would cost a snapshot re-bless for no correctness gain.
+
+**Still open (see the fix-round list):** the fourth engine arm is confirmed wrong and unwatched; the
+silent-S0 arm is **UNREACHED, not refuted**; and the **base-vs-branch corpus differential has never been
+run.**
+
+<details><summary>Original S1 report (historical — now fixed)</summary>
+
 ## 🛑 STATUS DOWNGRADED: **NOT SAFE TO MERGE — a CONFIRMED S1 REGRESSION** (F1, 2026-08-13)
 
 **`.claude/sprint-b/repair/F1-verdicts.md`.** The repair round's discriminators were **run**. Two
@@ -115,6 +152,10 @@ control prints `DEFAULT` on **all three**, isolating the cross-module axis exact
 
 **R4's D4 — the base-vs-branch CORPUS differential — has never been run by anyone.** It is the
 instrument the sprint lacks, and `EX-3`'s nearest-miss wrongly named the engines gate in its place.
+
+---
+
+</details>
 
 ---
 
