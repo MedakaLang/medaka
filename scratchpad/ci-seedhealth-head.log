@@ -1,0 +1,231 @@
+seed-health	Set up job	﻿2026-08-13T06:58:12.7782554Z Current runner version: '2.336.0'
+seed-health	Set up job	2026-08-13T06:58:12.7810763Z ##[group]Runner Image Provisioner
+seed-health	Set up job	2026-08-13T06:58:12.7811603Z Hosted Compute Agent
+seed-health	Set up job	2026-08-13T06:58:12.7812272Z Version: 20260707.563
+seed-health	Set up job	2026-08-13T06:58:12.7812881Z Commit: 02667638d2b423fbc733a8e32a88b44996a3ba6e
+seed-health	Set up job	2026-08-13T06:58:12.7813638Z Build Date: 2026-07-07T19:33:50Z
+seed-health	Set up job	2026-08-13T06:58:12.7814324Z Worker ID: {d6c02f71-0e97-4b3d-ae16-04485750fc38}
+seed-health	Set up job	2026-08-13T06:58:12.7815057Z Azure Region: eastus
+seed-health	Set up job	2026-08-13T06:58:12.7815654Z ##[endgroup]
+seed-health	Set up job	2026-08-13T06:58:12.7817765Z ##[group]Operating System
+seed-health	Set up job	2026-08-13T06:58:12.7818508Z Ubuntu
+seed-health	Set up job	2026-08-13T06:58:12.7819065Z 24.04.4
+seed-health	Set up job	2026-08-13T06:58:12.7819593Z LTS
+seed-health	Set up job	2026-08-13T06:58:12.7820139Z ##[endgroup]
+seed-health	Set up job	2026-08-13T06:58:12.7820684Z ##[group]Runner Image
+seed-health	Set up job	2026-08-13T06:58:12.7821260Z Image: ubuntu-24.04
+seed-health	Set up job	2026-08-13T06:58:12.7821867Z Version: 20260720.247.2
+seed-health	Set up job	2026-08-13T06:58:12.7822942Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20260720.247/images/ubuntu/Ubuntu2404-Readme.md
+seed-health	Set up job	2026-08-13T06:58:12.7824699Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20260720.247
+seed-health	Set up job	2026-08-13T06:58:12.7825666Z ##[endgroup]
+seed-health	Set up job	2026-08-13T06:58:12.7827318Z ##[group]GITHUB_TOKEN Permissions
+seed-health	Set up job	2026-08-13T06:58:12.7829377Z Contents: read
+seed-health	Set up job	2026-08-13T06:58:12.7830016Z Metadata: read
+seed-health	Set up job	2026-08-13T06:58:12.7830562Z Packages: read
+seed-health	Set up job	2026-08-13T06:58:12.7831164Z ##[endgroup]
+seed-health	Set up job	2026-08-13T06:58:12.7833676Z Secret source: Actions
+seed-health	Set up job	2026-08-13T06:58:12.7835093Z Prepare workflow directory
+seed-health	Set up job	2026-08-13T06:58:12.8227814Z Prepare all required actions
+seed-health	Set up job	2026-08-13T06:58:12.8276812Z Getting action download info
+seed-health	Set up job	2026-08-13T06:58:13.0274317Z Download action repository 'actions/checkout@v4' (SHA:11d5960a326750d5838078e36cf38b85af677262)
+seed-health	Set up job	2026-08-13T06:58:13.3634651Z Complete job name: seed-health
+seed-health	Run actions/checkout@v4	﻿2026-08-13T06:58:13.4376112Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+seed-health	Run actions/checkout@v4	2026-08-13T06:58:13.4385007Z ##[group]Run actions/checkout@v4
+seed-health	Run actions/checkout@v4	2026-08-13T06:58:13.4385781Z with:
+seed-health	Run actions/checkout@v4	2026-08-13T06:58:13.4386423Z   repository: MedakaLang/medaka
+seed-health	Run actions/checkout@v4	2026-08-13T06:58:13.4390142Z   token: ***
+seed-health	Run actions/checkout@v4	2026-08-13T06:58:13.4390569Z   ssh-strict: true
+seed-health	Run actions/checkout@v4	2026-08-13T06:58:13.4391009Z   ssh-user: git
+seed-health	Run actions/checkout@v4	2026-08-13T06:58:13.4391448Z   persist-credentials: true
+seed-health	Run actions/checkout@v4	2026-08-13T06:58:13.4391941Z   clean: true
+seed-health	Run actions/checkout@v4	2026-08-13T06:58:13.4392383Z   sparse-checkout-cone-mode: true
+seed-health	Run actions/checkout@v4	2026-08-13T06:58:13.4392912Z   fetch-depth: 1
+seed-health	Run actions/checkout@v4	2026-08-13T06:58:13.4393335Z   fetch-tags: false
+seed-health	Run actions/checkout@v4	2026-08-13T06:58:13.4393766Z   show-progress: true
+seed-health	Run actions/checkout@v4	2026-08-13T06:58:13.4394211Z   lfs: false
+seed-health	Run actions/checkout@v4	2026-08-13T06:58:13.4394615Z   submodules: false
+seed-health	Run actions/checkout@v4	2026-08-13T06:58:13.4395110Z   set-safe-directory: true
+seed-health	Run actions/checkout@v4	2026-08-13T06:58:13.4395620Z   allow-unsafe-pr-checkout: false
+seed-health	Run actions/checkout@v4	2026-08-13T06:58:13.4396697Z env:
+seed-health	Run actions/checkout@v4	2026-08-13T06:58:13.4397157Z   ORACLE_OPT: -O0
+seed-health	Run actions/checkout@v4	2026-08-13T06:58:13.4397638Z   WASM_TOOLS_VERSION: 1.219.1
+seed-health	Run actions/checkout@v4	2026-08-13T06:58:13.4398154Z   WASM_NODE_VERSION: 24
+seed-health	Run actions/checkout@v4	2026-08-13T06:58:13.4398608Z ##[endgroup]
+seed-health	Run actions/checkout@v4	2026-08-13T06:58:13.5400832Z Syncing repository: MedakaLang/medaka
+seed-health	Run actions/checkout@v4	2026-08-13T06:58:13.5402993Z ##[group]Getting Git version info
+seed-health	Run actions/checkout@v4	2026-08-13T06:58:13.5403732Z Working directory is '/home/runner/work/medaka/medaka'
+seed-health	Run actions/checkout@v4	2026-08-13T06:58:13.5409774Z [command]/usr/bin/git version
+seed-health	Run actions/checkout@v4	2026-08-13T06:58:13.5554974Z git version 2.54.0
+seed-health	Run actions/checkout@v4	2026-08-13T06:58:13.5577172Z ##[endgroup]
+seed-health	Run actions/checkout@v4	2026-08-13T06:58:13.5595515Z Temporarily overriding HOME='/home/runner/work/_temp/7efec112-bef8-4a89-953b-6b2cb949d1ed' before making global git config changes
+seed-health	Run actions/checkout@v4	2026-08-13T06:58:13.5598269Z Adding repository directory to the temporary git global config as a safe directory
+seed-health	Run actions/checkout@v4	2026-08-13T06:58:13.5600996Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/medaka/medaka
+seed-health	Run actions/checkout@v4	2026-08-13T06:58:13.5661403Z Deleting the contents of '/home/runner/work/medaka/medaka'
+seed-health	Run actions/checkout@v4	2026-08-13T06:58:13.5667417Z ##[group]Initializing the repository
+seed-health	Run actions/checkout@v4	2026-08-13T06:58:13.5672289Z [command]/usr/bin/git init /home/runner/work/medaka/medaka
+seed-health	Run actions/checkout@v4	2026-08-13T06:58:13.5827274Z hint: Using 'master' as the name for the initial branch. This default branch name
+seed-health	Run actions/checkout@v4	2026-08-13T06:58:13.5828657Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+seed-health	Run actions/checkout@v4	2026-08-13T06:58:13.5829848Z hint: to use in all of your new repositories, which will suppress this warning,
+seed-health	Run actions/checkout@v4	2026-08-13T06:58:13.5831182Z hint: call:
+seed-health	Run actions/checkout@v4	2026-08-13T06:58:13.5831880Z hint:
+seed-health	Run actions/checkout@v4	2026-08-13T06:58:13.5832763Z hint: 	git config --global init.defaultBranch <name>
+seed-health	Run actions/checkout@v4	2026-08-13T06:58:13.5833933Z hint:
+seed-health	Run actions/checkout@v4	2026-08-13T06:58:13.5834854Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+seed-health	Run actions/checkout@v4	2026-08-13T06:58:13.5836799Z hint: 'development'. The just-created branch can be renamed via this command:
+seed-health	Run actions/checkout@v4	2026-08-13T06:58:13.5838220Z hint:
+seed-health	Run actions/checkout@v4	2026-08-13T06:58:13.5839005Z hint: 	git branch -m <name>
+seed-health	Run actions/checkout@v4	2026-08-13T06:58:13.5839909Z hint:
+seed-health	Run actions/checkout@v4	2026-08-13T06:58:13.5840996Z hint: Disable this message with "git config set advice.defaultBranchName false"
+seed-health	Run actions/checkout@v4	2026-08-13T06:58:13.5842769Z Initialized empty Git repository in /home/runner/work/medaka/medaka/.git/
+seed-health	Run actions/checkout@v4	2026-08-13T06:58:13.5850740Z [command]/usr/bin/git remote add origin https://github.com/MedakaLang/medaka
+seed-health	Run actions/checkout@v4	2026-08-13T06:58:13.5908808Z ##[endgroup]
+seed-health	Run actions/checkout@v4	2026-08-13T06:58:13.5910849Z ##[group]Disabling automatic garbage collection
+seed-health	Run actions/checkout@v4	2026-08-13T06:58:13.5914740Z [command]/usr/bin/git config --local gc.auto 0
+seed-health	Run actions/checkout@v4	2026-08-13T06:58:13.5953738Z ##[endgroup]
+seed-health	Run actions/checkout@v4	2026-08-13T06:58:13.5955190Z ##[group]Setting up auth
+seed-health	Run actions/checkout@v4	2026-08-13T06:58:13.5963268Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+seed-health	Run actions/checkout@v4	2026-08-13T06:58:13.6006566Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+seed-health	Run actions/checkout@v4	2026-08-13T06:58:13.6405480Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+seed-health	Run actions/checkout@v4	2026-08-13T06:58:13.6442211Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+seed-health	Run actions/checkout@v4	2026-08-13T06:58:13.6667292Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+seed-health	Run actions/checkout@v4	2026-08-13T06:58:13.6703882Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+seed-health	Run actions/checkout@v4	2026-08-13T06:58:13.6930612Z [command]/usr/bin/git config --local http.https://github.com/.extraheader AUTHORIZATION: basic ***
+seed-health	Run actions/checkout@v4	2026-08-13T06:58:13.6968977Z ##[endgroup]
+seed-health	Run actions/checkout@v4	2026-08-13T06:58:13.6969831Z ##[group]Fetching the repository
+seed-health	Run actions/checkout@v4	2026-08-13T06:58:13.6979282Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +f248b35636f8235ed8862c1f75635ec158f72c3b:refs/remotes/pull/1605/merge
+seed-health	Run actions/checkout@v4	2026-08-13T06:58:15.4637661Z From https://github.com/MedakaLang/medaka
+seed-health	Run actions/checkout@v4	2026-08-13T06:58:15.4640302Z  * [new ref]         f248b35636f8235ed8862c1f75635ec158f72c3b -> pull/1605/merge
+seed-health	Run actions/checkout@v4	2026-08-13T06:58:15.4677228Z ##[endgroup]
+seed-health	Run actions/checkout@v4	2026-08-13T06:58:15.4679507Z ##[group]Determining the checkout info
+seed-health	Run actions/checkout@v4	2026-08-13T06:58:15.4681982Z ##[endgroup]
+seed-health	Run actions/checkout@v4	2026-08-13T06:58:15.4687752Z [command]/usr/bin/git sparse-checkout disable
+seed-health	Run actions/checkout@v4	2026-08-13T06:58:15.4740087Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+seed-health	Run actions/checkout@v4	2026-08-13T06:58:15.4771682Z ##[group]Checking out the ref
+seed-health	Run actions/checkout@v4	2026-08-13T06:58:15.4776489Z [command]/usr/bin/git checkout --progress --force refs/remotes/pull/1605/merge
+seed-health	Run actions/checkout@v4	2026-08-13T06:58:15.8788704Z Note: switching to 'refs/remotes/pull/1605/merge'.
+seed-health	Run actions/checkout@v4	2026-08-13T06:58:15.8790221Z 
+seed-health	Run actions/checkout@v4	2026-08-13T06:58:15.8790607Z You are in 'detached HEAD' state. You can look around, make experimental
+seed-health	Run actions/checkout@v4	2026-08-13T06:58:15.8791498Z changes and commit them, and you can discard any commits you make in this
+seed-health	Run actions/checkout@v4	2026-08-13T06:58:15.8792295Z state without impacting any branches by switching back to a branch.
+seed-health	Run actions/checkout@v4	2026-08-13T06:58:15.8793098Z 
+seed-health	Run actions/checkout@v4	2026-08-13T06:58:15.8793461Z If you want to create a new branch to retain commits you create, you may
+seed-health	Run actions/checkout@v4	2026-08-13T06:58:15.8794211Z do so (now or later) by using -c with the switch command. Example:
+seed-health	Run actions/checkout@v4	2026-08-13T06:58:15.8794634Z 
+seed-health	Run actions/checkout@v4	2026-08-13T06:58:15.8794836Z   git switch -c <new-branch-name>
+seed-health	Run actions/checkout@v4	2026-08-13T06:58:15.8795123Z 
+seed-health	Run actions/checkout@v4	2026-08-13T06:58:15.8795336Z Or undo this operation with:
+seed-health	Run actions/checkout@v4	2026-08-13T06:58:15.8795599Z 
+seed-health	Run actions/checkout@v4	2026-08-13T06:58:15.8795776Z   git switch -
+seed-health	Run actions/checkout@v4	2026-08-13T06:58:15.8796015Z 
+seed-health	Run actions/checkout@v4	2026-08-13T06:58:15.8796814Z Turn off this advice by setting config variable advice.detachedHead to false
+seed-health	Run actions/checkout@v4	2026-08-13T06:58:15.8797311Z 
+seed-health	Run actions/checkout@v4	2026-08-13T06:58:15.8797782Z HEAD is now at f248b35 Merge 26423f93f587d386213b9daff69daa7766ac7924 into 84af0123a7d9a2c506275c0924e7d648458ed30b
+seed-health	Run actions/checkout@v4	2026-08-13T06:58:15.8804193Z ##[endgroup]
+seed-health	Run actions/checkout@v4	2026-08-13T06:58:15.8852066Z [command]/usr/bin/git log -1 --format=%H
+seed-health	Run actions/checkout@v4	2026-08-13T06:58:15.8880775Z f248b35636f8235ed8862c1f75635ec158f72c3b
+seed-health	Install toolchain	﻿2026-08-13T06:58:15.9122469Z ##[group]Run sudo apt-get update -qq
+seed-health	Install toolchain	2026-08-13T06:58:15.9122997Z [36;1msudo apt-get update -qq[0m
+seed-health	Install toolchain	2026-08-13T06:58:15.9123347Z [36;1msudo apt-get install -y clang libgc-dev[0m
+seed-health	Install toolchain	2026-08-13T06:58:15.9171990Z shell: /usr/bin/bash -e {0}
+seed-health	Install toolchain	2026-08-13T06:58:15.9172368Z env:
+seed-health	Install toolchain	2026-08-13T06:58:15.9172610Z   ORACLE_OPT: -O0
+seed-health	Install toolchain	2026-08-13T06:58:15.9172874Z   WASM_TOOLS_VERSION: 1.219.1
+seed-health	Install toolchain	2026-08-13T06:58:15.9173184Z   WASM_NODE_VERSION: 24
+seed-health	Install toolchain	2026-08-13T06:58:15.9173440Z ##[endgroup]
+seed-health	Install toolchain	2026-08-13T06:58:23.7174071Z Reading package lists...
+seed-health	Install toolchain	2026-08-13T06:58:23.8772081Z Building dependency tree...
+seed-health	Install toolchain	2026-08-13T06:58:23.8781750Z Reading state information...
+seed-health	Install toolchain	2026-08-13T06:58:24.0503190Z The following NEW packages will be installed:
+seed-health	Install toolchain	2026-08-13T06:58:24.0512662Z   clang libgc-dev
+seed-health	Install toolchain	2026-08-13T06:58:24.0700212Z 0 upgraded, 2 newly installed, 0 to remove and 97 not upgraded.
+seed-health	Install toolchain	2026-08-13T06:58:24.0700959Z Need to get 266 kB of archives.
+seed-health	Install toolchain	2026-08-13T06:58:24.0701418Z After this operation, 1012 kB of additional disk space will be used.
+seed-health	Install toolchain	2026-08-13T06:58:24.0702136Z Get:1 file:/etc/apt/apt-mirrors.txt Mirrorlist [144 B]
+seed-health	Install toolchain	2026-08-13T06:58:24.0938777Z Get:2 http://azure.archive.ubuntu.com/ubuntu noble/universe amd64 clang amd64 1:18.0-59~exp2 [5846 B]
+seed-health	Install toolchain	2026-08-13T06:58:24.1018864Z Get:3 http://azure.archive.ubuntu.com/ubuntu noble/main amd64 libgc-dev amd64 1:8.2.6-1build1 [261 kB]
+seed-health	Install toolchain	2026-08-13T06:58:24.3516664Z Fetched 266 kB in 0s (5738 kB/s)
+seed-health	Install toolchain	2026-08-13T06:58:24.3989992Z Selecting previously unselected package clang.
+seed-health	Install toolchain	2026-08-13T06:58:24.5177872Z (Reading database ... 
+seed-health	Install toolchain	2026-08-13T06:58:24.5178695Z (Reading database ... 5%
+seed-health	Install toolchain	2026-08-13T06:58:24.5179104Z (Reading database ... 10%
+seed-health	Install toolchain	2026-08-13T06:58:24.5179367Z (Reading database ... 15%
+seed-health	Install toolchain	2026-08-13T06:58:24.5179640Z (Reading database ... 20%
+seed-health	Install toolchain	2026-08-13T06:58:24.5179932Z (Reading database ... 25%
+seed-health	Install toolchain	2026-08-13T06:58:24.5180240Z (Reading database ... 30%
+seed-health	Install toolchain	2026-08-13T06:58:24.5180634Z (Reading database ... 35%
+seed-health	Install toolchain	2026-08-13T06:58:24.5181014Z (Reading database ... 40%
+seed-health	Install toolchain	2026-08-13T06:58:24.5181396Z (Reading database ... 45%
+seed-health	Install toolchain	2026-08-13T06:58:24.5181814Z (Reading database ... 50%
+seed-health	Install toolchain	2026-08-13T06:58:24.5431213Z (Reading database ... 55%
+seed-health	Install toolchain	2026-08-13T06:58:24.8546228Z (Reading database ... 60%
+seed-health	Install toolchain	2026-08-13T06:58:25.1676305Z (Reading database ... 65%
+seed-health	Install toolchain	2026-08-13T06:58:25.4107645Z (Reading database ... 70%
+seed-health	Install toolchain	2026-08-13T06:58:25.6097216Z (Reading database ... 75%
+seed-health	Install toolchain	2026-08-13T06:58:26.1107387Z (Reading database ... 80%
+seed-health	Install toolchain	2026-08-13T06:58:26.6779690Z (Reading database ... 85%
+seed-health	Install toolchain	2026-08-13T06:58:27.6242815Z (Reading database ... 90%
+seed-health	Install toolchain	2026-08-13T06:58:28.3539121Z (Reading database ... 95%
+seed-health	Install toolchain	2026-08-13T06:58:28.3539725Z (Reading database ... 100%
+seed-health	Install toolchain	2026-08-13T06:58:28.3540386Z (Reading database ... 202954 files and directories currently installed.)
+seed-health	Install toolchain	2026-08-13T06:58:28.3584335Z Preparing to unpack .../clang_1%3a18.0-59~exp2_amd64.deb ...
+seed-health	Install toolchain	2026-08-13T06:58:28.3619077Z Unpacking clang (1:18.0-59~exp2) ...
+seed-health	Install toolchain	2026-08-13T06:58:28.3941086Z Selecting previously unselected package libgc-dev:amd64.
+seed-health	Install toolchain	2026-08-13T06:58:28.4067107Z Preparing to unpack .../libgc-dev_1%3a8.2.6-1build1_amd64.deb ...
+seed-health	Install toolchain	2026-08-13T06:58:28.4098907Z Unpacking libgc-dev:amd64 (1:8.2.6-1build1) ...
+seed-health	Install toolchain	2026-08-13T06:58:28.4703015Z Setting up clang (1:18.0-59~exp2) ...
+seed-health	Install toolchain	2026-08-13T06:58:28.5023171Z Setting up libgc-dev:amd64 (1:8.2.6-1build1) ...
+seed-health	Install toolchain	2026-08-13T06:58:28.5056663Z Processing triggers for man-db (2.12.0-4build2) ...
+seed-health	Install toolchain	2026-08-13T06:58:28.5119190Z Not building database; man-db/auto-update is not 'true'.
+seed-health	Install toolchain	2026-08-13T06:58:29.5339596Z 
+seed-health	Install toolchain	2026-08-13T06:58:29.5340096Z Running kernel seems to be up-to-date.
+seed-health	Install toolchain	2026-08-13T06:58:29.5340466Z 
+seed-health	Install toolchain	2026-08-13T06:58:29.5340618Z No services need to be restarted.
+seed-health	Install toolchain	2026-08-13T06:58:29.5340913Z 
+seed-health	Install toolchain	2026-08-13T06:58:29.5341110Z No containers need to be restarted.
+seed-health	Install toolchain	2026-08-13T06:58:29.5341390Z 
+seed-health	Install toolchain	2026-08-13T06:58:29.5341561Z No user sessions are running outdated binaries.
+seed-health	Install toolchain	2026-08-13T06:58:29.5341923Z 
+seed-health	Install toolchain	2026-08-13T06:58:29.5342239Z No VM guests are running outdated hypervisor (qemu) binaries on this host.
+seed-health	Seed must still build a working emitter (drift only warns)	﻿2026-08-13T06:58:30.4700327Z ##[group]Run sh test/bootstrap_from_seed.sh 2>&1 | tee /tmp/seed.log
+seed-health	Seed must still build a working emitter (drift only warns)	2026-08-13T06:58:30.4700886Z [36;1msh test/bootstrap_from_seed.sh 2>&1 | tee /tmp/seed.log[0m
+seed-health	Seed must still build a working emitter (drift only warns)	2026-08-13T06:58:30.4701342Z [36;1m# A seed that cannot do its job is a HARD failure — the script exits[0m
+seed-health	Seed must still build a working emitter (drift only warns)	2026-08-13T06:58:30.4701823Z [36;1m# nonzero for that, and `set -e`-less `tee` would hide it, so check.[0m
+seed-health	Seed must still build a working emitter (drift only warns)	2026-08-13T06:58:30.4702290Z [36;1mif ! grep -q 'BOOTSTRAP-FROM-SEED PASS' /tmp/seed.log; then[0m
+seed-health	Seed must still build a working emitter (drift only warns)	2026-08-13T06:58:30.4702833Z [36;1m  echo "::error::The seed can no longer build a working emitter. Re-mint: sh test/refresh_seed.sh"[0m
+seed-health	Seed must still build a working emitter (drift only warns)	2026-08-13T06:58:30.4703294Z [36;1m  exit 1[0m
+seed-health	Seed must still build a working emitter (drift only warns)	2026-08-13T06:58:30.4703481Z [36;1mfi[0m
+seed-health	Seed must still build a working emitter (drift only warns)	2026-08-13T06:58:30.4703802Z [36;1m# Drift is informative, not actionable-right-now. Surface it, don't block.[0m
+seed-health	Seed must still build a working emitter (drift only warns)	2026-08-13T06:58:30.4704235Z [36;1mif grep -q 'C3a WARN' /tmp/seed.log; then[0m
+seed-health	Seed must still build a working emitter (drift only warns)	2026-08-13T06:58:30.4704821Z [36;1m  echo "::warning::Seed has DRIFTED from current emission (still works). Re-mint at the next checkpoint: sh test/refresh_seed.sh"[0m
+seed-health	Seed must still build a working emitter (drift only warns)	2026-08-13T06:58:30.4705425Z [36;1mfi[0m
+seed-health	Seed must still build a working emitter (drift only warns)	2026-08-13T06:58:30.4751016Z shell: /usr/bin/bash -e {0}
+seed-health	Seed must still build a working emitter (drift only warns)	2026-08-13T06:58:30.4751271Z env:
+seed-health	Seed must still build a working emitter (drift only warns)	2026-08-13T06:58:30.4751458Z   ORACLE_OPT: -O0
+seed-health	Seed must still build a working emitter (drift only warns)	2026-08-13T06:58:30.4751668Z   WASM_TOOLS_VERSION: 1.219.1
+seed-health	Seed must still build a working emitter (drift only warns)	2026-08-13T06:58:30.4751899Z   WASM_NODE_VERSION: 24
+seed-health	Seed must still build a working emitter (drift only warns)	2026-08-13T06:58:30.4752106Z ##[endgroup]
+seed-health	Seed must still build a working emitter (drift only warns)	2026-08-13T06:58:30.6413309Z step 1: clang(seed) -> seed_emitter (stack 0x20000000) ...
+seed-health	Seed must still build a working emitter (drift only warns)	2026-08-13T06:58:38.0786931Z step 2: seed_emitter re-emitting the build driver's graph ...
+seed-health	Seed must still build a working emitter (drift only warns)	2026-08-13T06:58:46.4573221Z C3a WARN: committed seed differs from native re-emission (lagging seed).
+seed-health	Seed must still build a working emitter (drift only warns)	2026-08-13T06:58:46.4577811Z   -> building from emitter2 anyway (tolerant cold-start); re-mint with: sh test/refresh_seed.sh
+seed-health	Seed must still build a working emitter (drift only warns)	2026-08-13T06:58:46.4579007Z step 4: clang(emitter2) -> /home/runner/work/medaka/medaka/medaka_emitter ...
+seed-health	Seed must still build a working emitter (drift only warns)	2026-08-13T06:59:08.6724013Z 
+seed-health	Seed must still build a working emitter (drift only warns)	2026-08-13T06:59:08.6724851Z BOOTSTRAP-FROM-SEED PASS: built /home/runner/work/medaka/medaka/medaka_emitter OCaml-free from the gzipped seed.
+seed-health	Seed must still build a working emitter (drift only warns)	2026-08-13T06:59:08.6803170Z ##[warning]Seed has DRIFTED from current emission (still works). Re-mint at the next checkpoint: sh test/refresh_seed.sh
+seed-health	Post Run actions/checkout@v4	﻿2026-08-13T06:59:08.6931971Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+seed-health	Post Run actions/checkout@v4	2026-08-13T06:59:08.6933476Z Post job cleanup.
+seed-health	Post Run actions/checkout@v4	2026-08-13T06:59:08.7807957Z [command]/usr/bin/git version
+seed-health	Post Run actions/checkout@v4	2026-08-13T06:59:08.7852501Z git version 2.54.0
+seed-health	Post Run actions/checkout@v4	2026-08-13T06:59:08.7892748Z Temporarily overriding HOME='/home/runner/work/_temp/c02ff0eb-4bee-4afa-8bbb-297aba90fdc9' before making global git config changes
+seed-health	Post Run actions/checkout@v4	2026-08-13T06:59:08.7894024Z Adding repository directory to the temporary git global config as a safe directory
+seed-health	Post Run actions/checkout@v4	2026-08-13T06:59:08.7898044Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/medaka/medaka
+seed-health	Post Run actions/checkout@v4	2026-08-13T06:59:08.7939197Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+seed-health	Post Run actions/checkout@v4	2026-08-13T06:59:08.7979593Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+seed-health	Post Run actions/checkout@v4	2026-08-13T06:59:08.8231369Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+seed-health	Post Run actions/checkout@v4	2026-08-13T06:59:08.8278517Z http.https://github.com/.extraheader
+seed-health	Post Run actions/checkout@v4	2026-08-13T06:59:08.8288327Z [command]/usr/bin/git config --local --unset-all http.https://github.com/.extraheader
+seed-health	Post Run actions/checkout@v4	2026-08-13T06:59:08.8310004Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+seed-health	Post Run actions/checkout@v4	2026-08-13T06:59:08.8570692Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+seed-health	Post Run actions/checkout@v4	2026-08-13T06:59:08.8611271Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+seed-health	Complete job	﻿2026-08-13T06:59:08.9039227Z Cleaning up orphan processes
+seed-health	Complete job	2026-08-13T06:59:08.9334884Z ##[warning]Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/checkout@v4. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
