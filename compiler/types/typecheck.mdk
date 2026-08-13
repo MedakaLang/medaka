@@ -2438,7 +2438,10 @@ routeLocalSym _ = ""
 -- by `resetCrossModuleState`; the core pass (also Module mode) seeds them.  The Flat
 -- path never touches them (it rebuilds over its whole `prog` — already O(N)).
 --   • the SET of every in-scope interface-method name (buildDefinerShadows / buildStandaloneShadows)--   • the SET of every in-scope top-level funDef name (buildStandaloneShadows' importedFns)--   • the impl KEY buckets (implExistsForHead's existence table — order/dup-insensitive,
---     so NOT reverseL'd: only the two boolean `implExistsForHead` reads consult it)--   • interface name → its REQUIRED-method names (checkImplCompleteness' ifaceRequiredMethods).
+--     so NOT reverseL'd. ⚠️ ARCH B-2.1-g: `shadowKeyTableRef` — the ref this accumulator is
+--     copied into — now has ZERO code readers; all three boolean existence reads moved to the
+--     graph-global `bodyImplEnvRef` (`ieImplExistsForHead`). The accumulator is still grown and
+--     still copied, so both are WRITE-ONLY. `B-2.1-d` retires them)--   • interface name → its REQUIRED-method names (checkImplCompleteness' ifaceRequiredMethods).
 --     Interface names are globally unique, so last-write-wins omInsert == first-match scan.-- #154 PR2 adds two more of the same shape (site #3 — registerMethodIfaceParamsAll's
 -- per-module rebuild over `fullUniverse`).  Same lifecycle: survive `resetState`, cleared
 -- by `resetCrossModuleState`, seeded by the core pass, appended in `appendUniverseAccums`,
@@ -4149,8 +4152,13 @@ buildImplEnvGo (m::rest) seq env =
 -- already whole-program and already CORRECT on #1564's shape (it accepts and prints
 -- `wrap(int)` where the four-module program rejects), so a later bite that repoints
 -- the evidence reader onto an EMPTY Flat `IE` is a correct→broken regression on the
--- busiest verbs in the CLI.  This function removes that emptiness FIRST, additively:
--- nothing reads `bodyImplEnvRef` yet.
+-- busiest verbs in the CLI.  This function removes that emptiness FIRST, additively.
+-- ⚠️ This sentence used to end "nothing reads `bodyImplEnvRef` yet", which is FALSE from
+-- B-2.1-b2 on: three SELECTION legs read it (`concreteReqMatchByIface`,
+-- `selectReqImpl`/`keyForSiteByIface`, `implDictRoutesForFull`/`argImplDictRoutesForEncl`),
+-- and B-2.1-g added the METHOD-keyed route word (`keyForSite`) plus all three shadow
+-- existence reads (`ieImplExistsForHead`).  Derive the set, do not trust a list:
+-- `grep -n bodyImplEnvRef compiler/types/typecheck.mdk`.
 --
 -- One flat program is ONE scope, so every row takes ordinal 0 and mid `""` — there
 -- is no loader module id on this path (the prelude prefix carries `core` *origins*
@@ -6854,16 +6862,20 @@ currentMethodMismatch = Ref None
 --       - `inferShadowApp`            (importer shadow, inference time)
 --       - `definerReceiverDispatches` (Fork-1 receiver test, inference time)
 --       - `resolveRLocalSite`         (the post-inference route stamp)
---     Each projects a receiver `Mono` and feeds the result to NOTHING but
---     `implExistsForHead`, so each SHOULD call `headTyconMono` — the name-only
---     residual can no longer express that argument.  Derive the set rather than
---     trusting this list:
+--     Each projects a receiver `Mono` and feeds the result to NOTHING but an
+--     existence test, so each SHOULD call `headTyconMono` — the name-only
+--     residual can no longer express that argument.  ⚠️ ARCH B-2.1-g MOVED ALL
+--     THREE ONTO `ieImplExistsForHead` (graph-global `bodyImplEnvRef`), together,
+--     for the reason recorded there; the head projection is the SAME at all three,
+--     so the widening argument is unchanged and only a grep for the old single
+--     name no longer finds them.  Derive the set rather than trusting this list:
 --
---       grep -nw implExistsForHead compiler/types/typecheck.mdk \
---         | grep -vE '^[0-9]+:[[:space:]]*--' | grep -vE '^[0-9]+:implExistsForHead'
+--       grep -nwE '(ie)?[Ii]mplExistsForHead' compiler/types/typecheck.mdk \
+--         | grep -vE '^[0-9]+:[[:space:]]*--' | grep -vE '^[0-9]+:(ie)?[Ii]mplExistsForHead'
 --
 --     What the widening does NOT yet buy them is an identity comparison: the
---     retest inside `implExistsForHeadGo` projects both sides back through
+--     retest inside `ieImplExistsForHeadGo` (and `implExistsForHeadGo`, its now-dead
+--     predecessor) projects both sides back through
 --     `dispHeadTab`, deliberately.  ⚠️ NOT because the goal side "has no origin
 --     to compare with" — an earlier draft said that, and the absolute is what
 --     makes the defect unimaginable.  The goal side came back MIXED (which is
@@ -11545,7 +11557,11 @@ inferShadowApp env mname tagRefs f x =
   -- concrete receivers) are byte-identical.
   let _ = groundShadowReceiver (importerShadowDomain mname) tx (definerReceiverIsDictVar mname tx) dloc
   match headTyconMono tx
-    Some head => if implExistsForHead perRun.value.shadowKeyTableRef.value mname head then inferApp (envAlphaLets env) (EApp f x) (inferShadowAppHead env f) tx
+    -- ARCH B-2.1-g: the S2 impl question, off the GRAPH-GLOBAL substrate — see
+    -- `ieImplExistsForHead`.  It used to read the cumulative topological PREFIX
+    -- (`shadowKeyTableRef`), which made this answer depend on where in the module order
+    -- the receiver's impl happened to sit.
+    Some head => if ieImplExistsForHead perRun.value.bodyImplEnvRef.value mname head then inferApp (envAlphaLets env) (EApp f x) (inferShadowAppHead env f) tx
     else match lookupAssoc mname perRun.value.shadowStandaloneSchemesRef.value
       Some sscheme =>
         let smono = instantiate sscheme
@@ -11680,7 +11696,15 @@ inferDefinerShadowApp env name tagRef implRef f x =
   let dloc = currentLoc.value
   -- P0-19 d8 (S2/S6): infer the argument FIRST so the head scheme is chosen PER
   -- RECEIVER.  A receiver with a VISIBLE impl of the shadowed interface (impl universe
-  -- is GLOBAL — shadowKeyTableRef spans local ∪ imported ∪ prelude) DISPATCHES → type
+  -- is GRAPH-GLOBAL: ARCH B-2.1-g reads `bodyImplEnvRef` via `ieImplExistsForHead`)
+  -- DISPATCHES → type
+  -- 🚨 This note used to say "shadowKeyTableRef spans local ∪ imported ∪ prelude", and
+  -- BOTH halves were wrong.  `SHADOW-SEMANTICS.md:242-245` RETIRES that phrase — "'local
+  -- ∪ imported ∪ prelude' is NOT a synonym for graph-global … an older wording of S2 used
+  -- it as one anyway" — and the table was narrower still: on the Module arm
+  -- `shadowKeyTableRef` was the CUMULATIVE TOPOLOGICAL PREFIX, so it did not even span
+  -- "imported" once the impl sat in a topologically later module.  Do not re-derive the
+  -- retired claim from the old wording.
   -- the head against the METHOD scheme; else it is the STANDALONE.  Without this the
   -- mangled emit path (sym != "") ALWAYS typed against the standalone scheme
   -- (`Int -> Int`), so a definer shadow whose impl is IMPORTED (`size (Box 3)`, d8)
@@ -11831,8 +11855,10 @@ definerReceiverDispatches : String -> Mono -> Bool
 definerReceiverDispatches name xt
   | isDefinerShadow name = definerReceiverIsDictVar name xt
   | otherwise = match headTyconMono xt
+    -- ARCH B-2.1-g: graph-global, off `bodyImplEnvRef` — see `ieImplExistsForHead`.
+    -- The guard above means only the Fork-1 IMPORTER arm reaches here.
     Some head =>
-      implExistsForHead perRun.value.shadowKeyTableRef.value name head
+      ieImplExistsForHead perRun.value.bodyImplEnvRef.value name head
     None => definerReceiverIsDictVar name xt
 
 -- P0-19 (constrained-receiver arm): True iff an UNGROUNDED definer-shadow receiver is
@@ -15192,7 +15218,16 @@ paramMonoOf subst tp = fromOption (TRigid tp) (lookupAssoc tp subst)
 -- static analogue of eval's narrowMethod finding a VTypedImpl tagged [tag] in the
 -- method's VMulti — keyTable carries one entry per user+prelude impl with the methods
 -- it defines and its head tycon.  Mirrors lib/typecheck.ml's impl_exists_for_head.
+-- 🚨 DEAD SINCE ARCH B-2.1-g — RETAINED, NOT DELETED, AND THE REASON IS STRUCTURAL
+-- RATHER THAN SENTIMENTAL.  See `THE PREFIX-TABLE READ SIDE IS ONE UNIT` on
+-- `routeWordHeadSkew`: `B-2.1-f`'s loud reject (`T-ROUTE-WORD-AMBIGUOUS`, which this
+-- contract forbids deleting in the same bite that makes it unreachable) reads
+-- `headCollides` → `countHead` → `bucketOfHead`, so the whole prefix-table READ side —
+-- this function included — has to stand or fall with that guard.  `B-2.1-d` owns the
+-- one sweep that retires them together with `shadowKeyTableRef`/`universeKeyBucketsRef`.
+-- The live peer is `ieImplExistsForHead`.
 implExistsForHead : KeyBuckets -> String -> HeadKey -> Bool
+-- lint-disable-next-line rule-dead-code
 implExistsForHead buckets name hk =
   -- The goal-side key is projected ONCE, here, and handed to the scan: Medaka
   -- is strict, so re-deriving it inside the per-entry arm would rebuild the
@@ -15227,6 +15262,8 @@ implExistsForHead buckets name hk =
 -- unit — which is why this site belongs IN that ledger and not outside it.
 -- Corpus: `test/shadow_fixtures/i11_importer_extern_receiver`.
 implExistsForHeadGo : List KeyEntry -> String -> TabKey -> Bool
+-- ARCH B-2.1-g: dead; retained as one unit — see `routeWordHeadSkew`.
+-- lint-disable-next-line rule-dead-code
 implExistsForHeadGo [] _ _ = False
 implExistsForHeadGo ((KeyEntry methods hd _ _ _ _ _ _)::rest) name goal
   | headTabIs hd goal && contains name methods = True
@@ -15266,6 +15303,58 @@ headTabOf : Option HeadKey -> Option TabKey
 headTabOf None = None
 headTabOf (Some hk) = Some (dispHeadTab hk)
 
+-- ── ARCH B-2.1-g (Stage B sprint): THE SHADOW EXISTENCE TEST, GRAPH-GLOBAL ───
+-- The `IE` peer of `implExistsForHead`, and it is a SEPARATE SPEC from B-2.1-b2's
+-- three selection legs: #616 SHADOW semantics, not evidence.  S2's impl universe is
+-- `graph-global` — `SHADOW-SEMANTICS.md:226`, "ranges over EVERY module of the loaded
+-- graph, whether or not any import path reaches it" — and the live-impl / no-impl test
+-- is taken "against S2's graph-global impl universe (§1.0), never filtered by what `M`
+-- can name" (`:183-186`).  `shadowKeyTableRef` is not that: on the Module arm it is
+-- `universeKeyBucketsRef`, the CUMULATIVE TOPOLOGICAL PREFIX, so an importer shadow
+-- whose receiver's impl sits in a topologically later module answered "no impl" and
+-- called the standalone.  This reads `perRun.bodyImplEnvRef` instead (B-2.1-a2 seats
+-- the same population on BOTH driver arms; B-2.1-a3's `ieByHead` gives the same head
+-- partition `bucketOfHead` did).
+--
+-- 🚨 ALL THREE EXISTENCE READS MOVED TOGETHER, AND THAT IS THE WHOLE SCOPING LESSON
+-- OF THIS BITE.  `B-2.1-c` moved only the two INFERENCE-time reads (`inferShadowApp`,
+-- `definerReceiverDispatches`) and deferred `resolveRLocalSite`'s, on the argument that
+-- the first two have no sibling SELECTION read.  That argument was true and NOT
+-- SUFFICIENT: `resolveRLocalSite` has a sibling EXISTENCE read at a different PHASE, so
+-- deferring it left typecheck answering "an impl exists → type against the METHOD
+-- scheme" while the route resolver answered "no impl in my prefix → stamp `RLocal` → the
+-- standalone".  MEASURED: a located `Type mismatch: Int vs Box` reject became exit 0
+-- printing `70018059149297` (a `Box` pointer fed to `n + 1`), discriminated by the ORDER
+-- OF TWO `import` LINES.  That is the P0-20 class `resolveRLocalSite`'s own header warns
+-- about — "keep the two gates identical" — so the three reads are ONE decision.
+--
+-- ⚠️ Reaches the DEFINER arm from neither shadow caller: both short-circuit on
+-- `isDefinerShadow` first (S2's inversion routes a definer shadow to the standalone
+-- unconditionally), so this widening cannot re-erase a user's own top-level function.
+-- MEASURED as the control on `B-2.1-c`'s five-file corpus: the definer arm's located
+-- reject is byte-identical before and after.
+ieImplExistsForHead : ImplEnv -> String -> HeadKey -> Bool
+ieImplExistsForHead env name hk =
+  -- goal-side key projected ONCE, here — same reason `implExistsForHead` gives.
+  ieImplExistsForHeadGo (ieHeadRows (Some hk) env) name (dispHeadTab hk)
+
+-- 🚨 STILL SPELLING-KEYED, THROUGH `dispHeadTab`/`headTabIs` — the retest keeps the
+-- projection strength of the bucket it scans and NOT a stronger one.  The BUCKET moved
+-- from a topological prefix to the whole graph; the RETEST did not change shape.  The
+-- full derivation is the 🚨 note on `implExistsForHeadGo`: a structural `HeadKey`
+-- compare here re-opens #1111's S0 (`debug (stringLength "xy")` printing the
+-- standalone's answer at exit 0), because the impl side and the goal side are measured
+-- to disagree on ORIGIN per provenance.  `univReceiverTag tys` is the same head
+-- projection `ieFileRowByHead` files each row under, so the two sides of `headTabIs`
+-- are the partition, exactly as `ieCountHeadByIfaceGo` owes it.
+-- The method table is `ImplRow`'s last field — payload, never a key component (§9.3) —
+-- which is the same `methods` list `KeyEntry` carried and `keyEntryOfRow` copies out.
+ieImplExistsForHeadGo : List ImplRow -> String -> TabKey -> Bool
+ieImplExistsForHeadGo [] _ _ = False
+ieImplExistsForHeadGo ((ImplRow _ _ _ tys _ ms)::rest) name goal
+  | headTabIs (univReceiverTag tys) goal && contains name ms = True
+  | otherwise = ieImplExistsForHeadGo rest name goal
+
 -- C5: stamp RLocal on each recorded standalone-shadow arg-position site whose
 -- receiver mono now grounds to a concrete head tycon with NO impl of the method.
 -- The receiver HAS an impl (the genuine-method case, e.g. `toList (Some 7)`) → leave
@@ -15295,17 +15384,31 @@ headTabOf (Some hk) = Some (dispHeadTab hk)
 -- → entail (EKNestedTop).  So the single-entailment-function law holds at 4-of-5 BY CONSTRUCTION; what
 -- stays out is exactly the binding-selection axis §3 never claimed (cf. §8 I1: identity keyed by
 -- binding, not bare name).  "Does an impl exist" and "which impl entails" must agree on ONE
--- KeyBuckets table — a drift between them would be a real dispatch bug.  #415 item 2: that
--- agreement is STRUCTURAL, not a standing obligation.  Both reads consume this function's single
--- [keyTable] param: `implExistsForHead keyTable` directly, and `keyForSite` via
--- routesOfMonosTop keyTable → routeOf → entail (EKNestedTop keyTable) → entailInst.  There is no
--- second table in scope to drift TO; each resolver group threads one `buildKeyTable` result to
--- all five stampers (elaborateDict:7323, elabModuleStamp:14711).  Re-introducing the hazard would
--- take adding a parameter or reaching for a global — so keep both reads on [keyTable].
--- (The separate `implExistsForHead perRun.value.shadowKeyTableRef.value` reads in inferShadowApp
--- are NOT this table and NOT a drift: that universe is GLOBAL by design — local ∪ imported ∪
--- prelude, see the P0-19 d8 note — and answers the inference-time binding question, not which
--- impl a route stamps.)
+-- impl table — a drift between them would be a real dispatch bug.  #415 item 2: that
+-- agreement is STRUCTURAL, not a standing obligation.
+-- 🚨 ARCH B-2.1-g REBASED BOTH READS, TOGETHER, ONTO `perRun.bodyImplEnvRef`, and the
+-- sentence that stood here — "There is no second table in scope to drift TO" — WAS ALREADY
+-- FALSE and is what licensed a bad scoping.  `bodyImplEnvRef` has been a second impl table,
+-- in scope from anywhere, since B-2.1-a2, and B-2.1-b2 moved three SELECTION legs onto it
+-- while this site's two reads stayed on the threaded prefix `[keyTable]`.  `B-2.1-c` then
+-- moved the sibling SHADOW existence reads and deferred this one, which produced exactly the
+-- drift this block claimed was unreachable: existence answered True off the whole graph while
+-- `routesOfMonosTop … keyTable`, one line below, had no row to select — a located reject
+-- became exit 0 printing a garbage pointer.  So the agreement is restored the only way it can
+-- be, by moving BOTH: `ieImplExistsForHead …bodyImplEnvRef…` directly, and `keyForSite` (also
+-- repointed onto `bodyImplEnvRef`) via routesOfMonosTop → routeOf → entail (EKNestedTop) →
+-- entailInst.  ⚠️ THE INVARIANT IS UNCHANGED AND IS STILL THE ONE THAT MATTERS: these two
+-- reads must name ONE population.  It is no longer enforced by a shared parameter, so it is
+-- now enforced by a shared REF — and the check on any future edit here is "does the thing I
+-- am reading answer over the same population `keyForSite` selects from?", not "am I using
+-- [keyTable]?".  [keyTable] survives on this signature only for the parts of
+-- `routesOfMonosTop`'s subtree that still thread it; no read AT THIS SITE consults it.
+-- (The inference-time existence reads in `inferShadowApp` / `definerReceiverDispatches` are
+-- the same decision at an earlier PHASE and are now on the same ref for the same reason —
+-- B-2.1-c's measurement is that a phase split of one decision is as fatal as a table split.
+-- ⚠️ Do not re-derive the retired defence "GLOBAL by design — local ∪ imported ∪ prelude":
+-- `SHADOW-SEMANTICS.md:242-245` retires that phrase as a false synonym for graph-global, and
+-- `shadowKeyTableRef` was in fact the cumulative topological PREFIX on the Module arm.)
 resolveRLocalSites : List Decl -> ImplBuckets -> KeyBuckets -> List PendingEntry -> Unit
 resolveRLocalSites _ _ _ [] = setRef goalSiteLoc None
 resolveRLocalSites prog implTable keyTable ((PendingEntry name tagRef am _ kind loc)::rest) =
@@ -15348,8 +15451,13 @@ resolveRLocalSite prog implTable keyTable name tagRef am sym monos ifaces = matc
   -- gate the typing entry points do not share would route a site whose TYPE came from the
   -- dispatch path — route and type disagreeing is exactly the P0-20 bug class.  Keep the
   -- two gates identical.
+  -- ARCH B-2.1-g: graph-global, off `bodyImplEnvRef` — see `ieImplExistsForHead`, and
+  -- see the `#415 item 2` block above for why this read could only move TOGETHER with
+  -- its sibling selection leg (`routesOfMonosTop … keyTable` → `keyForSite`, likewise
+  -- repointed by this bite).  Both now read ONE table again, and it is the same table
+  -- the emitter counts over.
   Some tag => stampRLocalOrFallback
-    (not (isDefinerShadow name) && implExistsForHead keyTable name tag)
+    (not (isDefinerShadow name) && ieImplExistsForHead perRun.value.bodyImplEnvRef.value name tag)
     tagRef sym
     (routesOfMonosTop prog implTable keyTable monos ifaces)
   -- An UNGROUNDED definer-shadow receiver keeps the old default (RLocal → standalone);
@@ -15621,7 +15729,7 @@ stampOpRouteVal isBinop implTable keyTable method operandMono tag =
     -- singleton — entryHeadMatches then takes its arg-0 fallback, byte-identical
     -- to the pre-#609 scan.  Every operator interface (Eq/Ord/Num) is single-param
     -- anyway, where the singleton IS the full vector.
-    let key = fromOption tag (keyForSite keyTable method [operandMono])
+    let key = fromOption tag (keyForSite method [operandMono])
     let dictMethod = if isBinop then
       if implDefinesMethodAt implTable method tag then method else innerDefaultMethod method
     else
@@ -18134,6 +18242,8 @@ headlessBucketKey = regKeyNTab []
 -- same head or dispatch silently stops finding impls — which is what
 -- `dispHeadTab`'s derivation is about.
 bucketOfHead : Option HeadKey -> KeyBuckets -> List KeyEntry
+-- ARCH B-2.1-g: dead; retained as one unit — see `routeWordHeadSkew`.
+-- lint-disable-next-line rule-dead-code
 bucketOfHead hd buckets = bucketOf (headBucketRender hd) buckets
 
 -- #1128 (F-3b): a fully-general `impl C a` head is a bare TyVar, so `headTyconTy`
@@ -18221,33 +18331,61 @@ implKeyTc iface tys = "\{iface}|\{joinWith " " (map ppTyAtom tys)}|"
 -- renames every single-impl-per-head symbol in the tree, which moves the seed and
 -- every golden.  That is #1113's change, not this one; what F-3b needs is only that
 -- the route stop LYING about the selected instance, and `Some tag` does that.)
-keyForSite : KeyBuckets -> String -> List Mono -> Option String
-keyForSite table name goals = match matchedEntry table name goals
-  Some (KeyEntry _ hd _ key _ _ _ _) =>
-    if headCollides table name hd then
-      Some key
-    else
-      -- A-2.2b: the ROUTE WORD, projected back to a bare name on purpose — see
-      -- `KeyEntry`.  ⚠️ The collision TEST above did NOT move onto identity, and
-      -- an earlier revision of this line claimed it did: `headCollides` is
-      -- spelling-keyed through `dispHeadTab`, deliberately (see there).  What
-      -- moved onto identity is the FIELD, not the comparison — and it has to
-      -- stay that way here for a second, independent reason: what the checker
-      -- stamps into the dict cell has to keep matching
-      -- `core_ir_lower.declRouteKey` byte for byte.
-      -- ARCH B-2.1-f: …and it is that byte-for-byte agreement which FAILS when
-      -- this table's collision count disagrees with the whole graph's.  See
-      -- `reportRouteWordSkew` — the bare word below is the one that is unsafe.
-      let _ = reportRouteWordSkew table name goals
-      Some (headKeyNameOr noneHeadTag hd)
-  None =>
-    -- ARCH B-2.1-f: `None` is NOT a safe arm — every caller answers it with
-    -- `fromOption tag (…)`, i.e. with the SAME bare goal-head word the
-    -- non-colliding arm above stamps, so it carries the identical skew.  This
-    -- is in fact the arm `SA-4c` takes: the prefix table holds no entry at the
-    -- goal's head at all, so the count there is 0 while the graph's is 2.
-    let _ = reportRouteWordSkew table name goals
-    None
+-- 🚨 ARCH B-2.1-g: THE METHOD-KEYED ROUTE WORD IS NOW GRAPH-GLOBAL, and its
+-- `KeyBuckets` parameter is GONE rather than ignored (an ignored table parameter
+-- reads as "still consulted" at every call site — `keyForSiteByIface`'s precedent).
+-- This is entry point 2's word half: selection through `ieSelectRowByMethod` and the
+-- collision retest through `ieHeadCollidesByMethod`, both over
+-- `perRun.bodyImplEnvRef` — the SAME substrate, so the word and the impl the checker
+-- actually dispatches to can no longer be derived from two different populations.
+--
+-- WHY IT HAD TO MOVE, and it is not a tidiness point.  `B-2.1-b2` moved the three
+-- SELECTION legs onto `IE` and left this word on the topological prefix table by
+-- design (AM-1).  MEASURED, that split is a miscompile: the prefix at the goal's
+-- module held NO impl at head `Wrap`, so `headCollides` was False and a BARE word
+-- `Wrap` was stamped, while the emitter — which counts the whole program
+-- (`core_ir_lower.ifaceDeclHeadUnique`) — found TWO impls at that head and resolved
+-- the bare word by declaration order to the GENERAL, `requires`-carrying one.  The
+-- site then emitted `call @mdk_impl_Tag__Wrap_a___tagOf(i64 %t2)`: an arity-2 define
+-- called with ONE argument, the value cell landing in the dict slot.  `check` 0,
+-- `build` 0, built binary **139** (`SA-4c`, RUN-B-031/032).  `B-2.1-f` made that
+-- LOUD with `T-ROUTE-WORD-AMBIGUOUS` — a deliberate false-reject widening, standing
+-- in for this repoint until it could be made — and this bite is the repoint, so that
+-- guard is now UNREACHABLE by construction (see `routeWordHeadSkew`: the two counts
+-- it compares are now one count).
+--
+-- The word is a NAME three engines re-derive independently
+-- (`core_ir_lower.declRouteKey`/`ifaceDeclHeadUnique`, `llvm_emit.headTagUnique`/
+-- `distinctKeysAtHead`, `eval.pickTagFallback`), all three graph-globally — so this
+-- change makes the checker AGREE with them rather than teaching them a new word.  It
+-- does change which word is stamped wherever prefix and graph disagreed, i.e. it
+-- CHANGES EMITTED IR; the fixpoint is the authority on that.
+keyForSite : String -> List Mono -> Option String
+keyForSite name goals =
+  let env = perRun.value.bodyImplEnvRef.value
+  match ieSelectRowByMethod env name goals
+    Some (ImplRow _ _ ir tys _ _) =>
+      if ieHeadCollidesByMethod env name (univReceiverTag tys) then
+        -- recomputed by the SAME `implKeyTc ir.irName tys` that `keyEntryOfRow`
+        -- (and `keyEntryOf` before it) stamps into a `KeyEntry`'s `key` field, so
+        -- the word is byte-identical to what the prefix path produced for the same
+        -- winner — only the POPULATION the winner and the count come from moved.
+        Some (implKeyTc ir.irName tys)
+      else
+        -- A-2.2b: the ROUTE WORD, projected back to a bare name on purpose — see
+        -- `KeyEntry`.  ⚠️ The collision TEST is still spelling-keyed, through
+        -- `headTabOf`/`headTabEq` inside `ieCountHeadByMethod`, deliberately (see
+        -- `countHead` for the derivation): what the checker stamps into the dict
+        -- cell has to keep matching `core_ir_lower.declRouteKey` byte for byte, and
+        -- that consumer is a bare-`String` namespace.  What moved onto identity is
+        -- the FIELD, not the comparison.
+        Some (headKeyNameOr noneHeadTag (univReceiverTag tys))
+    -- No impl anywhere in the graph defines [name] at this goal's head (or the goal
+    -- has no head tycon at all, `ieSelectRowByMethod`'s `None => None` arm).  Every
+    -- caller answers `None` with `fromOption tag (…)`, i.e. the bare goal-head tag —
+    -- unchanged, and now genuinely safe: the graph agreeing there is no impl means
+    -- there is no second impl for that bare word to name.
+    None => None
 
 -- the head tycon that buckets a goal vector: the spine head of its FIRST component
 -- (the receiver).  Unchanged from the pre-#609 scalar bucketing — widening the
@@ -18278,6 +18416,9 @@ goalHeadCon [] = None
 -- routes of the now-rejected program are unchanged — see `pickMostSpecificEntry`).
 -- Mirrors lib/typecheck.ml's `strictly_more_specific` selection at a call site.
 matchedEntry : KeyBuckets -> String -> List Mono -> Option KeyEntry
+-- ARCH B-2.1-g: dead; the live peer is `ieSelectRowByMethod`.  Retained as one unit —
+-- see `routeWordHeadSkew`.
+-- lint-disable-next-line rule-dead-code
 matchedEntry table name goals =
   pickMostSpecificEntry goals (matchingEntries table name goals)
 
@@ -18297,6 +18438,9 @@ matchedEntry table name goals =
 -- below.  What survives unchanged is the other half: an entry with a TYCON head
 -- still cannot match a goal headed elsewhere, so no third bucket is ever needed.
 matchingEntries : KeyBuckets -> String -> List Mono -> List KeyEntry
+-- ARCH B-2.1-g: dead; the live peer is `ieCandidatesForMethod`.  Retained as one unit —
+-- see `routeWordHeadSkew`.
+-- lint-disable-next-line rule-dead-code
 matchingEntries buckets name goals = match goalHeadCon goals
   Some hk => matchingEntriesGo (candidateBucket buckets hk) name goals
   None => []
@@ -18407,6 +18551,9 @@ matchingEntries buckets name goals = match goalHeadCon goals
 -- rigid is still keyed by its spelling here (`dispHeadTab`), so the §8 I6.1
 -- residual is untouched by this unit.
 candidateBucket : KeyBuckets -> HeadKey -> List KeyEntry
+-- ARCH B-2.1-g: dead; its empty-headless fast path lives on in `ieCandidatesForMethod`
+-- (whose header records how).  Retained as one unit — see `routeWordHeadSkew`.
+-- lint-disable-next-line rule-dead-code
 candidateBucket buckets hk = match bucketOfHead None buckets
   [] => bucketOfHead (Some hk) buckets
   headless => mergeByDeclIdx (bucketOfHead (Some hk) buckets) headless
@@ -18432,6 +18579,9 @@ mergeByDeclIdx (x::xs) (y::ys)
   | otherwise = y :: mergeByDeclIdx (x::xs) ys
 
 matchingEntriesGo : List KeyEntry -> String -> List Mono -> List KeyEntry
+-- ARCH B-2.1-g: dead; the live peer is `ieEntriesForMethod`.  Retained as one unit —
+-- see `routeWordHeadSkew`.
+-- lint-disable-next-line rule-dead-code
 matchingEntriesGo [] _ _ = []
 matchingEntriesGo ((KeyEntry methodNames hd headTy key ifn itys reqs idx)::rest) name goals
   | contains name methodNames && entryHeadMatches headTy itys goals = KeyEntry methodNames hd headTy key ifn itys reqs idx :: matchingEntriesGo rest name goals
@@ -18804,6 +18954,9 @@ tyStructEqList _ _ = False
 -- do two distinct impls of [name] share head tycon [tag]?  (≥2 entries that
 -- define [name] at the same head tycon.)
 headCollides : KeyBuckets -> String -> Option HeadKey -> Bool
+-- ARCH B-2.1-g: dead; the live peer is `ieHeadCollidesByMethod`.  Retained as one unit —
+-- see `routeWordHeadSkew`.
+-- lint-disable-next-line rule-dead-code
 headCollides table name hd = countHead table name hd > 1
 
 -- 🚨 SPELLING-KEYED, THROUGH `dispHeadTab`, FOR THE SAME REASON `implExistsForHeadGo`
@@ -18878,11 +19031,17 @@ headCollides table name hd = countHead table name hd > 1
 -- Enrolment rule, from `dispHeadTab`: if a site's answer would CHANGE when the
 -- head half becomes an identity, it goes through that function.
 countHead : KeyBuckets -> String -> Option HeadKey -> Int
+-- ARCH B-2.1-g: dead; the live peer is `ieCountHeadByMethod`, which owes this block's
+-- spelling-keyed derivation.  Retained as one unit — see `routeWordHeadSkew`.
+-- lint-disable-next-line rule-dead-code
 countHead buckets name hd =
   -- goal-side key projected ONCE, here — see `headTabOf`.
   countHeadGo (bucketOfHead hd buckets) name (headTabOf hd)
 
 countHeadGo : List KeyEntry -> String -> Option TabKey -> Int
+-- ARCH B-2.1-g: dead; the live peer is `ieCountHeadByMethodGo`.  Retained as one unit —
+-- see `routeWordHeadSkew`.
+-- lint-disable-next-line rule-dead-code
 countHeadGo [] _ _ = 0
 countHeadGo ((KeyEntry methodNames hd2 _ _ _ _ _ _)::rest) name goal
   | contains name methodNames && headTabEq hd2 goal =
@@ -19142,7 +19301,31 @@ ieCountHeadByIfaceGo ((ImplRow _ _ ir tys _ _)::rest) iface goal
   | otherwise = ieCountHeadByIfaceGo rest iface goal
 
 -- ── ARCH B-2.1-f: the METHOD-keyed route word's prefix-vs-graph skew, MADE LOUD ──
--- 🚨 THIS IS A DELIBERATE FALSE-REJECT WIDENING, AND IT IS THE POINT.  `B-2.1-b2`
+-- 🚨🚨 RETIRED BY ARCH B-2.1-g, WHICH IS THE REPOINT THE LAST PARAGRAPH OF THIS BLOCK
+-- SAYS TO RETIRE IT WITH.  `routeWordHeadSkew` / `reportRouteWordSkew` HAVE NO CALLER:
+-- `keyForSite` now selects and counts over the SAME graph-global `bodyImplEnvRef` the
+-- guard used as its second opinion, so the two counts this predicate compares are one
+-- count and the disagreement it reports cannot arise.  KEPT, NOT DELETED, and that is a
+-- deliberate choice with a cost: deleting a loud reject is a severity decision that has
+-- to be argued on its own, and this bite's evidence is about the repoint.  What the
+-- block below documents is still true history and still names the miscompile; read it as
+-- the record of WHY the word had to move, and read `keyForSite` for what it moved to.
+-- ⚠️ It is UNREACHABLE, not merely unused: nothing in this file names either binding
+-- outside this block.  Derive rather than trust:
+--   grep -nw 'reportRouteWordSkew\|routeWordHeadSkew' compiler/types/typecheck.mdk \
+--     | grep -vE '^[0-9]+:[[:space:]]*--'
+-- (three hits: the two definitions and `reportRouteWordSkew`'s own guard clause.)
+-- ⚠️ AND THE DELETION IS NOT FREE OF A SECOND QUESTION: `headCollides`/`countHead` and
+-- `matchedEntry`/`matchingEntries`/`candidateBucket`/`implExistsForHead` are dead for
+-- the same reason, and they are the whole prefix-table read side.  `B-2.1-d` owns that
+-- sweep together with `shadowKeyTableRef`/`universeKeyBucketsRef`; a partial deletion
+-- here would leave the family half-alive, which is worse than leaving it whole.
+-- ⚠️ ONE ATTRIBUTION CORRECTED: this guard never covered #1578.  #1578 is
+-- `residualPredsOf`'s no-match arm and is named in `T-REQUIRES-UNROUTED`'s row, not in
+-- `T-ROUTE-WORD-AMBIGUOUS`'s; f's `must_fail` run shows #1578 still REPRO with the guard
+-- live, so its coverage is not a cost of retiring this.
+--
+-- 🚨 THIS WAS A DELIBERATE FALSE-REJECT WIDENING, AND IT WAS THE POINT.  `B-2.1-b2`
 -- moved the three SELECTION legs onto the graph-global `IE` and left the method-keyed
 -- ROUTE WORD (`keyForSite` → `matchedEntry` → `matchingEntries`) on the topological
 -- prefix table, by design (AM-1): moving it renames route words and moves the seed.
@@ -19180,8 +19363,9 @@ ieCountHeadByIfaceGo ((ImplRow _ _ ir tys _ _)::rest) iface goal
 -- fire, and #1072's method site is headless (`speak x` at a bare tyvar), which keys no
 -- bucket at all.
 --
--- ⚠️ WHY THIS IS A REJECT AND NOT A REPOINT.  Repointing the route word onto `IE` is the
--- real fix and it is a SEPARATE bite: the word is a NAME the emitter and both other
+-- ⚠️ WHY THIS WAS A REJECT AND NOT A REPOINT — history now (`B-2.1-g` did the repoint,
+-- one bite later).  Repointing the route word onto `IE` is the
+-- real fix and it was a SEPARATE bite: the word is a NAME the emitter and both other
 -- engines re-derive independently (`core_ir_lower.declRouteKey`/`ifaceDeclHeadUnique`,
 -- `llvm_emit.headTagUnique`, `eval.pickTagFallback`), so changing which word is stamped
 -- renames symbols, moves every IR golden and re-mints the seed.  Until that lands, this
@@ -19227,7 +19411,28 @@ ieHeadCollidesByMethod env name hd = ieCountHeadByMethod env name hd > 1
 -- `ieHeadRows` lookup plus one bucket walk per bare-word stamp.  Measured on
 -- `make check-self`, that is inside the run-to-run noise of a shared box (see
 -- DEBT.md `B-2.1-f`); it allocates only the single `headTabOf` key.
+-- 🚨🚨 THE PREFIX-TABLE READ SIDE IS ONE UNIT, AND THAT IS THIS BITE'S SHARPEST
+-- STRUCTURAL FINDING.  `B-2.1-g`'s ruling was "make `f`'s guard UNREACHABLE, do not
+-- DELETE it — a loud→silent transition is a severity increase and deletion is a separate
+-- argued decision."  Honoured here.  But the guard is NOT separable from the substrate
+-- this bite retires: it reads `headCollides` → `countHead` → `countHeadGo` →
+-- `bucketOfHead`, i.e. the whole prefix-table READ side, whose other members
+-- (`implExistsForHead(Go)`, `matchedEntry`, `matchingEntries(Go)`, `candidateBucket`)
+-- went dead in the same edit.  So "keep the guard, delete the rest" does not exist as an
+-- option: deleting its dependencies deletes the guard.  ⇒ THIRTEEN bindings are dead and
+-- ALL THIRTEEN are retained, each carrying its own `lint-disable-next-line
+-- rule-dead-code` (the max-ratchet pre-commit hook gates every rule, so silence had to be
+-- explicit and per-site rather than a file-wide waiver that would hide FUTURE dead code
+-- in a 30k-line file).  `B-2.1-d` retires the thirteen in ONE argued sweep together with
+-- `shadowKeyTableRef` / `universeKeyBucketsRef`, which this bite leaves WRITE-ONLY.
+-- ⚠️ Derive the SET, do not trust the number — including this block's "thirteen", and note
+-- a bare count is WRONG here: one `rule-dead-code` disable in this file (`wReset`) predates
+-- this bite, so `grep -c` answers 14.  Derive by NAME:
+--   grep -n -A1 'lint-disable-next-line rule-dead-code' compiler/types/typecheck.mdk
+-- and `medaka lint compiler/types/typecheck.mdk` must stay at 0 findings (the disables are
+-- honoured, so a NEW dead binding here still reds the hook).
 routeWordHeadSkew : KeyBuckets -> String -> List Mono -> Bool
+-- lint-disable-next-line rule-dead-code
 routeWordHeadSkew table name goals = match goalHeadCon goals
   Some hk => not (headCollides table name (Some hk))
     && ieHeadCollidesByMethod perRun.value.bodyImplEnvRef.value name (Some hk)
@@ -19242,6 +19447,9 @@ routeWordHeadSkew table name goals = match goalHeadCon goals
 -- `pushTypeErrorOnceAt` dedups on message text, so a site reached twice by two passes
 -- reports once.
 reportRouteWordSkew : KeyBuckets -> String -> List Mono -> Unit
+-- ARCH B-2.1-g: dead — `keyForSite` no longer calls it.  Retained; see the coupling note
+-- on `routeWordHeadSkew`.
+-- lint-disable-next-line rule-dead-code
 reportRouteWordSkew table name goals
   | routeWordHeadSkew table name goals = pushTypeErrorOnceAt "T-ROUTE-WORD-AMBIGUOUS" goalSiteLoc.value (routeWordAmbiguousMsg name goals)
   | otherwise = ()
@@ -19304,6 +19512,10 @@ reportRouteWordSkew table name goals
 -- True, and the canonical key of the min⊑ winner is stamped — which is exactly what the
 -- accepting import order already does.
 routeWordAmbiguousMsg : String -> List Mono -> String
+-- ARCH B-2.1-g: dead with its guard.  Retained; see `routeWordHeadSkew`.  ⚠️ Its
+-- `T-ROUTE-WORD-AMBIGUOUS` row in `compiler/DIAGNOSTIC-CODES-DESIGN.md` is marked
+-- RETIRED rather than removed, for the same reason.
+-- lint-disable-next-line rule-dead-code
 routeWordAmbiguousMsg name goals = "Cannot route the call to `\{name}` at `\{ppPredArgsShared goals}`: two or more impls that define `\{name}` share this receiver's head type constructor, and they are declared in modules that this one does not import — so this compiler cannot tell which of them this call selects. It would stamp the bare head name, a word that names more than one impl, and the emitted code would then pick one of them by declaration order — reading a dictionary that was never passed if the one it picks carries a `requires`. This is a compiler limitation, not an ambiguous program: add an `import` of the module that declares the other impl to THIS module, or move this code into a module that already imports it"
 
 -- the head node of an (unelaborated) AST type's left-nested `TyApp` spine.
@@ -19738,7 +19950,7 @@ entailInst : ImplBuckets -> String -> Mono -> String -> String -> EntailKind -> 
 -- exactly as before.
 entailInst implTable name m encl tag (EKReturn keyTable fullMono _) =
   let paramMonos = fromOption [m] (ifaceParamMonos name fullMono)
-  let routeKey = fromOption tag (keyForSite keyTable name paramMonos)
+  let routeKey = fromOption tag (keyForSite name paramMonos)
   (
     RKey routeKey [],
     implDictRoutesForFull implTable keyTable encl name tag m paramMonos,
@@ -19781,7 +19993,7 @@ entailInst implTable _ m encl tag (EKNestedTop keyTable iface _ depth rest) =
 -- differently at n≥2.  Sharing one binding makes them agree by construction.
 entailInst implTable name m encl tag (EKArg keyTable fullMono) =
   let goals = fromOption [m] (ifaceParamMonos name fullMono)
-  let routeKey = fromOption tag (keyForSite keyTable name goals)
+  let routeKey = fromOption tag (keyForSite name goals)
   let dictName = if implDefinesMethodAt implTable name tag then
     name
   else
@@ -21083,15 +21295,26 @@ checkBodyImpl seed mode prog0 =
   let _ = setRef perRun.value.definerShadowSigsRef sigs
   -- #154 PR1: implExistsForHead's existence table — the accumulated buckets on the
   -- Module path (existence is order/dup-insensitive), the per-program rebuild on Flat.
+  -- 🚨 ARCH B-2.1-g: THIS SEEDING IS NOW WRITE-ONLY.  `shadowKeyTableRef` has ZERO code
+  -- readers — all three of its boolean existence reads moved to the graph-global
+  -- `bodyImplEnvRef` seeded just below (`ieImplExistsForHead`), because the Module arm's
+  -- source here is `universeKeyBucketsRef`, a cumulative TOPOLOGICAL PREFIX, and S2's impl
+  -- universe is graph-global (`SHADOW-SEMANTICS.md:183-186`, `:226`).  Left standing rather
+  -- than deleted: retiring the ref means editing the `PerRun` record, which carries the
+  -- #829 interior-comment `fmt --write` corruption hazard, and `universeKeyBucketsRef` /
+  -- `bucketKeyEntries`' per-module append die with it.  `B-2.1-d` owns that sweep — do NOT
+  -- read the surviving write as evidence anything consults it.
   let _ = match mode
     Flat _ => setRef perRun.value.shadowKeyTableRef (buildKeyTable fullUniverse)
     Module _ _ _ => setRef perRun.value.shadowKeyTableRef crossRun.value.universeKeyBucketsRef.value
   -- ARCH B-2.1-a2: the SAME impl population, seated on `IE`'s shape, on BOTH arms —
   -- one ref, so the evidence reader B-2.1-b repoints has one substrate rather than an
-  -- arm gate.  ADDITIVE AND BEHAVIOUR-NEUTRAL BY CONSTRUCTION: nothing reads
-  -- `bodyImplEnvRef` yet, which is the whole point of landing it as its own bite —
-  -- the repoint that follows gets a substrate it can trust on a path where `IE` was
-  -- empty (see `buildFlatImplEnv` for the measured hazard, RUN-B-017 probe 3).
+  -- arm gate.  It landed ADDITIVE AND BEHAVIOUR-NEUTRAL, so the repoints that followed got
+  -- a substrate they could trust on a path where `IE` was empty (see `buildFlatImplEnv`
+  -- for the measured hazard, RUN-B-017 probe 3).
+  -- ⚠️ "nothing reads `bodyImplEnvRef` yet" was true only at a2 and is now FALSE: B-2.1-b2's
+  -- three selection legs, and B-2.1-g's route word plus three shadow existence reads, all
+  -- read this ref.  Derive the set: `grep -n bodyImplEnvRef compiler/types/typecheck.mdk`.
   -- The Module arm is a pointer copy of the env `buildDeclEnvs` already built; it
   -- deliberately does NOT re-derive, for the reason `moduleImplUniv` gives above.
   let _ = match mode

@@ -2248,6 +2248,17 @@ esac
 #           reject is observable on `build`/`run`, and `check` is STRUCTURALLY BLIND to
 #           the route-word channel (its driver runs neither the MARK nor the stamp
 #           pass).  That split is pinned as its own row below rather than hidden.
+#           🚨 ARCH B-2.1-g CLOSED ALL OF THAT AND BOTH SA-4c LEGS ARE RE-CUT BELOW.
+#           `keyForSite` now selects and counts over the graph-global
+#           `perRun.bodyImplEnvRef`, so the prefix-vs-graph disagreement no longer
+#           exists: `f`'s guard is unreachable, `T-ROUTE-WORD-AMBIGUOUS` is retired, and
+#           the program BUILDS AND RUNS CORRECTLY in both import orders.  The
+#           `check`-blindness row is retired WITH it — with nothing to report, `check 0`
+#           is simply the right answer for a legal program, so pinning it would assert
+#           nothing.  ⚠️ Both legs were re-cut DELIBERATELY, not to make a red go away:
+#           the replacement grades what the fix actually establishes (the SELECTED impl
+#           is the arity-1 specific one, and the two import orders agree), which is
+#           strictly harder to satisfy than either predecessor.
 mkdir -p "$TMP/sa4"
 cat > "$TMP/sa4/iface.mdk" <<'EOF'
 public export data Wrap a = Wrap a
@@ -2348,45 +2359,69 @@ EOF
 # Every assertion in this block used to grade `check` ALONE.  `B-2.1-b2` silenced this
 # shape and the silent state was a `build` at exit 0 whose BINARY exited **139** — so a
 # `check`-only assertion set is structurally blind to exactly the failure this block
-# exists for.  This leg grades `build`, which is where the guard's reject is OBSERVABLE:
-# it must REFUSE and leave no binary.  Exit code read from a variable, never through a
-# pipe (`build`'s status does not survive one).
-MEDAKA_ROOT="$ROOT" bound "$MEDAKA" build "$TMP/sa4c/main.mdk" -o "$TMP/sa4c.bin" >"$TMP/sa4c.buildlog" 2>&1
-sa4c_bcode=$?
-if [ -x "$TMP/sa4c.bin" ]; then
-  "$TMP/sa4c.bin" >/dev/null 2>&1
-  sa4c_bexit=$?
+# exists for.  So this leg grades the BUILT BINARY's own output, on BOTH import orders.
+# Exit codes read from variables, never through a pipe (`build`'s status does not
+# survive one).
+#
+# 🚨 RE-CUT BY ARCH B-2.1-g, AND THE DIRECTION MATTERS: it went from "build must REFUSE"
+# (`f`'s stand-in reject) to "build must SUCCEED and the binary must print
+# `wrap-int-specific` in BOTH orders".  That is not a relaxation.  The three states this
+# shape has been through are, in order: `b2` — build 0, binary **139** (S0); `f` — build
+# 1, no binary (loud false reject, S2); `g` — build 0, binary correct, BOTH orders.  The
+# assertion below fails on EITHER of the first two, so it is fail-capable against the
+# whole history and not merely against today.
+# Written out per arm rather than looped: a loop needs `eval` to build the per-arm
+# variable names, and `eval` around a `$?` read is exactly the kind of shell that passes
+# for the wrong reason (this gate's own header warns about dash's byte/exit traps).
+rm -f "$TMP/sa4c.main.bin" "$TMP/sa4c.main.bin.ll"
+MEDAKA_ROOT="$ROOT" bound "$MEDAKA" build --keep-ir "$TMP/sa4c/main.mdk" -o "$TMP/sa4c.main.bin" >"$TMP/sa4c.main.buildlog" 2>&1
+sa4c_bm=$?
+if [ -x "$TMP/sa4c.main.bin" ]; then
+  sa4c_em="$("$TMP/sa4c.main.bin" 2>/dev/null | head -1)"
 else
-  sa4c_bexit="no-binary"
+  sa4c_em="!!NO-BINARY"
 fi
-sa4c_run="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" run "$TMP/sa4c/control.mdk" 2>&1)"
-sa4c_rcode=$?
-if [ "$sa4c_bcode" -ne 0 ] && [ ! -x "$TMP/sa4c.bin" ] && [ "$sa4c_rcode" -eq 0 ] && [ "$sa4c_run" = "wrap-int-specific" ]; then
-  pass=$((pass+1)); printf 'ok   SA-4/overlap-still-rejects (build refuses, no binary; control still prints wrap-int-specific)\n'
+rm -f "$TMP/sa4c.control.bin" "$TMP/sa4c.control.bin.ll"
+MEDAKA_ROOT="$ROOT" bound "$MEDAKA" build --keep-ir "$TMP/sa4c/control.mdk" -o "$TMP/sa4c.control.bin" >"$TMP/sa4c.control.buildlog" 2>&1
+sa4c_bc=$?
+if [ -x "$TMP/sa4c.control.bin" ]; then
+  sa4c_ec="$("$TMP/sa4c.control.bin" 2>/dev/null | head -1)"
 else
-  fail=$((fail+1)); printf 'FAIL SA-4/overlap-still-rejects (build exit %d, binary exit %s, control run %d [%s] — want build refusal / wrap-int-specific)\n' "$sa4c_bcode" "$sa4c_bexit" "$sa4c_rcode" "$sa4c_run"
+  sa4c_ec="!!NO-BINARY"
 fi
-# 🚨 AND THE SPLIT ITSELF IS PINNED, NOT LEFT TO BE REDISCOVERED (ARCH B-2.1-f).
-# The guard lives in `keyForSite`, reached ONLY from the five `resolve*` stamp passes
-# inside `elaborateModules` — so `build`/`run` reject while `medaka check` on the SAME
-# project exits 0 with an empty diagnostic list, human and `--json` agreeing (#1362 is
-# therefore not confounding it).  Two independent causes, both derived: the check driver
-# (`analyzeProject` → `checkModulesDiags` → `checkModuleFullDiags`) never runs a stamp
-# pass, AND it has no `EMethodAt` node to stamp because the MARK pass is likewise
-# elaborate-only, so its `pendingSites` are empty.  See `keyForSite`'s guard block.
-# ⚠️ THIS ROW ASSERTS A KNOWN-WRONG STATE ON PURPOSE, exactly as leg (c) did before it.
-# It is an S2 (misleading `check`), strictly better than the S0 it replaced (no wrong
-# binary can be produced), and it DRAINS when ARCH B-2.1-g repoints the route word.
-# When this row flips, `check` learned to see the route-word channel — re-cut the two
-# assertions above and delete this one.
-sa4c_jout="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check --json "$TMP/sa4c/main.mdk" 2>&1)"
-sa4c_jcode=$?
-sa4c_hout="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check "$TMP/sa4c/main.mdk" 2>&1)"
-sa4c_hcode=$?
-if [ "$sa4c_jcode" -eq 0 ] && [ "$sa4c_hcode" -eq 0 ]; then
-  pass=$((pass+1)); printf 'ok   SA-4/overlap-check-blind-to-route-word (KNOWN split: check 0, build 1 — B-2.1-g drains it)\n'
+if [ "$sa4c_bm" -eq 0 ] && [ "$sa4c_bc" -eq 0 ] \
+  && [ "$sa4c_em" = "wrap-int-specific" ] && [ "$sa4c_ec" = "wrap-int-specific" ]; then
+  pass=$((pass+1)); printf 'ok   SA-4c/overlap-DRAINED-both-orders (build 0 both orders; binary prints wrap-int-specific)\n'
 else
-  fail=$((fail+1)); printf 'FAIL SA-4/overlap-check-blind-to-route-word (json %d, human %d — the split CHANGED; re-read B-2.1-f and re-cut the two legs above: [%s])\n' "$sa4c_jcode" "$sa4c_hcode" "$sa4c_hout"
+  fail=$((fail+1)); printf 'FAIL SA-4c/overlap-DRAINED-both-orders (build %s/%s, binary [%s]/[%s] — want 0/0 and wrap-int-specific twice)\n' "$sa4c_bm" "$sa4c_bc" "$sa4c_em" "$sa4c_ec"
+fi
+# 🚨 AND THIS IS THE MECHANISM LEG — the one that would have caught `b2`'s S0 directly,
+# and the replacement for `B-2.1-f`'s now-retired `check`-blindness row.
+#
+# Why the predecessor had to go rather than be kept: it pinned `check` exiting 0 on this
+# project as a KNOWN-WRONG state, because `build` rejected while `check` could not see
+# the route-word channel.  With the channel gone there is nothing to report, so `check 0`
+# is simply the CORRECT answer for a legal program — the row would have gone on passing
+# while asserting nothing.  An exit-code-graded row over a program that should check
+# clean cannot discriminate; grade the MECHANISM instead.
+#
+# What this grades: the two import orders must emit the SAME IR, and that IR must call
+# the ARITY-1 specific impl (`@mdk_impl_Tag__Wrap_Int___tagOf` with ONE argument).  Both
+# halves are load-bearing and neither implies the other:
+#   * a byte-identical diff alone would pass if BOTH orders were equally wrong;
+#   * the arity check alone would pass on the accepting order while the other segfaulted
+#     — which is exactly `b2`'s state (there, `nest` emitted
+#     `call @mdk_impl_Tag__Wrap_a___tagOf(i64 %t2)`: an arity-2 define called with ONE
+#     argument, the value cell landing in the dict slot, hence the 139).
+# So the pair is the discriminator, and the route word is what makes them agree.
+if [ ! -f "$TMP/sa4c.main.bin.ll" ] || [ ! -f "$TMP/sa4c.control.bin.ll" ]; then
+  fail=$((fail+1)); printf 'FAIL SA-4c/route-word-order-invariant (no IR kept — build refused, see the leg above)\n'
+elif diff "$TMP/sa4c.main.bin.ll" "$TMP/sa4c.control.bin.ll" >/dev/null 2>&1 \
+  && grep -q 'call i64 @mdk_impl_Tag__Wrap_Int___tagOf(i64 %[a-z0-9]*)$' "$TMP/sa4c.main.bin.ll"; then
+  pass=$((pass+1)); printf 'ok   SA-4c/route-word-order-invariant (both orders IR-identical; arity-1 specific impl called)\n'
+else
+  sa4c_site="$(grep -o 'call i64 @mdk_impl_Tag__Wrap[A-Za-z_0-9]*(i64[^)]*)' "$TMP/sa4c.main.bin.ll" | head -2 | tr '\n' ' ')"
+  fail=$((fail+1)); printf 'FAIL SA-4c/route-word-order-invariant (IR differs between import orders, or the specific impl is not the arity-1 callee: [%s])\n' "$sa4c_site"
 fi
 
 # 25. SA-6 (sprint repair round) — `runFinalChecks`' `-1` ordinal sentinel is LOUD.

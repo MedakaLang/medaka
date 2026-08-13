@@ -1655,3 +1655,336 @@ unchecked:
 * **NOT COMMITTED**, per the brief. Working tree holds four files (three source/gate/doc +
   this row); `scratchpad/sa4c/` + `probe.sh` reproduce every reading above against any binary
   (`sh probe.sh <medaka> <root> <label>`), and `probe4.sh` reproduces the #1397/#1514 readings.
+
+---
+
+### `B-2.1-g` — Phase 2′ (B-2.1) — **THE COMBINED BITE: route word + all three existence reads + `resolveRLocalSite`'s selection leg, onto ONE graph-global substrate. The `SA-4c` 139 is GONE and the program is CORRECT in BOTH import orders; `f`'s capability regression is CLEARED.**
+
+🔗 **Ledger cross-reference: `DECISIONS.md` RUN-B-0xx** (the orchestrator composes it from this
+row + my report). Predecessors this bite consumes and closes out: RUN-B-031 (`B-2.1-b2`, the
+drain that introduced the S0 by leaving the method-keyed route word on the prefix table *by
+design*, AM-1), `B-2.1-e`'s STOP (which measured it), `B-2.1-c`'s REFUSAL (which measured that a
+two-of-three existence scope is itself an S0), and `B-2.1-f` (the loud stand-in reject, now
+retired). **This bite AMENDS AM-1**: the `keyForSite*` family no longer reads the prefix table.
+
+sites:        `git diff --numstat` — **285/62 `compiler/types/typecheck.mdk`, 69/34
+`test/diff_compiler_check_cli_modules.sh`, 1/1 `compiler/DIAGNOSTIC-CODES-DESIGN.md`.** Three
+files. The signature delta is exactly three lines
+(`git diff -U0 compiler/types/typecheck.mdk | grep '^[+-][a-zA-Z]' | grep ' : '`):
+**+`ieImplExistsForHead`, +`ieImplExistsForHeadGo`, and `keyForSite` re-signatured** (its
+`KeyBuckets` parameter REMOVED, not ignored — an ignored table parameter reads as "still
+consulted" at every call site; `keyForSiteByIface`'s precedent). **Nothing deleted, nothing
+renamed** — so `selfproc_legA` must read as *those* two additions plus *that one*
+re-signature, and any OTHER binding's inferred type moving means the fix changed types.
+Two-thirds of the line count is prose: seven stale-comment blocks corrected in place
+(see `unchecked:`), and the thirteen dead-code notes below.
+
+transform:    **ONE substrate for one decision, at every phase it is taken.** Four members,
+moved together because three prior scopings proved no subset is correct:
+1. **The METHOD-keyed ROUTE WORD** — `keyForSite` reimplemented over
+   `perRun.bodyImplEnvRef`: selection through `ieSelectRowByMethod` (the min⊑ selector `b2`
+   already seated, `instRefSeq`-indexed) and the collision retest through
+   `ieHeadCollidesByMethod` (`f`'s predicate, repurposed from a second opinion into THE
+   opinion). Its three call sites (`entailInst`'s `EKReturn` and `EKArg` arms,
+   `stampOpRouteVal`) drop the table argument. The winner's key is recomputed by the same
+   `implKeyTc ir.irName tys` that `keyEntryOfRow`/`keyEntryOf` stamp, so the WORD is
+   byte-identical for any winner both substrates agreed on; only the population moved.
+2. **All three EXISTENCE reads** — `inferShadowApp`, `definerReceiverDispatches` (both
+   inference-time) and `resolveRLocalSite` (route-time) → the new `ieImplExistsForHead`,
+   the `IE` peer of `implExistsForHead`. Retest kept **spelling-keyed** through
+   `headTabIs`/`dispHeadTab`: a structural `HeadKey` compare re-opens #1111's S0, measured,
+   and the bucket it scans is filed under the same projection.
+3. **`resolveRLocalSite`'s own SELECTION leg** — moved *by construction* rather than by a
+   second edit: its leg is `routesOfMonosTop … keyTable` → `routeOf` → `entail` →
+   `entailInst` → `keyForSite`, and (1) repointed `keyForSite`. So existence and selection at
+   that site read ONE population again, which is the invariant its own header demands.
+4. **`f`'s guard is UNREACHABLE, NOT DELETED** — see the ⛔ finding below.
+**Licensed as a conformance fix** by `docs/spec/SHADOW-SEMANTICS.md:183-186` (the
+live-impl/no-impl test is taken *"against S2's **graph-global** impl universe (§1.0), never
+filtered by what `M` can name"*), `:226`, `:36-37`, and `:242-245` (which **retires** *"local ∪
+imported ∪ prelude"* as a false synonym for graph-global — the phrase two of the corrected
+comments were defending themselves with).
+
+⛔ **THE FINDING I MUST REPORT RATHER THAN QUIETLY RESOLVE: `f`'S GUARD IS NOT SEPARABLE FROM
+THE SUBSTRATE THIS BITE RETIRES.** The ruling was *"make the guard unreachable, do not delete
+it — a loud→silent transition is a severity increase; deletion is a separate argued
+decision."* Honoured. But `routeWordHeadSkew` reads `headCollides` → `countHead` →
+`countHeadGo` → `bucketOfHead` — the whole prefix-table READ side, whose other members
+(`implExistsForHead(Go)`, `matchedEntry`, `matchingEntries(Go)`, `candidateBucket`) went dead in
+the same edit. **So "keep the guard, delete the rest" does not exist as an option: deleting its
+dependencies deletes the guard.** ⇒ **THIRTEEN bindings are dead and all thirteen are RETAINED**,
+each with its own `-- lint-disable-next-line rule-dead-code` and a one-line pointer to the shared
+coupling note on `routeWordHeadSkew`. That is not cosmetic: `medaka lint` HAS a `rule-dead-code`
+rule and the pre-commit hook is a max ratchet, so **the thirteen were a hard gate, not a
+preference** — silence had to be explicit and PER SITE rather than a file-wide waiver that would
+hide FUTURE dead code in a 30k-line file. `B-2.1-d` retires the thirteen in ONE argued sweep with
+the two refs. ⚠️ **Derive by NAME, never by count** — one `rule-dead-code` disable in this file
+(`wReset`) predates this bite, so `grep -c` answers **14**, not 13:
+`grep -n -A1 'lint-disable-next-line rule-dead-code' compiler/types/typecheck.mdk`.
+
+⚠️ **ONE ATTRIBUTION IN THE BRIEF IS WRONG AND IT MATTERED TO THIS DECISION.** The brief says
+the guard *"still covers #1578"*. It does not. #1578 is `residualPredsOf`'s no-match arm, named in
+**`T-REQUIRES-UNROUTED`**'s row, not in `T-ROUTE-WORD-AMBIGUOUS`'s; and `f`'s own `must_fail` run
+shows **#1578 REPRO with the guard live**, as does mine with it dead. So retiring this guard costs
+#1578 nothing — the reason to keep it is the loud→silent rule *as a rule*, not a covered issue.
+
+could move:   **A GREAT DEAL, and it moved in the intended direction on every arm I could
+observe. MEASURED, not inferred; every exit code read from a file redirect, never through a
+pipe.**
+
+🚨 **1. `SA-4c` — THE GATING REQUIREMENT — BUILDS AND RUNS CORRECTLY IN BOTH IMPORT ORDERS,
+AND THE TWO ORDERS' IR IS BYTE-IDENTICAL.** Four verbs × two orders, all eight cells:
+
+| arm | `1e7cbbbb`…`3ba7817b` (`b2`, the S0) | `086aeb35` (`f`) | **this bite** |
+|---|---|---|---|
+| `check` (human) | 0, `main : Unit` | 0, `main : Unit` | **0, `main : Unit`** |
+| `check --json` | 0, empty diagnostics | 0, empty diagnostics | **0, empty diagnostics** |
+| `build` | 0 | **1, no binary** | **0** |
+| `run` | 0, `wrap-int-specific` | **1** | **0, `wrap-int-specific`** |
+| **built binary** | **139, `E-FATAL-SIGNAL`** | none exists | **0, `wrap-int-specific`** |
+| control order, binary | 0, `wrap-int-specific` | 0, `wrap-int-specific` | **0, `wrap-int-specific`** |
+
+**Emitted-IR evidence, off `build --keep-ir`:** `%t3 = call i64
+@mdk_impl_Tag__Wrap_Int___tagOf(i64 %t2)` against `define i64
+@mdk_impl_Tag__Wrap_Int___tagOf(i64 %arg0)` — **the arity-1 SPECIFIC impl, called with one
+argument**. The arity-2 conditional impl `@mdk_impl_Tag__Wrap_a___tagOf(i64 %arg0, i64 %arg1)`
+is still defined and every one of its call sites passes **two** args (`(i64 %t13, i64 %arg0)`).
+`b2`'s shape — an arity-2 define called with ONE argument — is **absent**. And
+`diff main.bin.ll control.bin.ll` is **empty**: the two import orders now emit the same bytes,
+which is the strongest form the order-invariance claim can take.
+
+🚨 **2. #1514's CAPABILITY LOSS IS CLEARED, AND #1397's OVER-FIRE WITH IT.**
+`diff_compiler_must_fail.sh` **run TWICE on the final binary: 97 REPRO / 3 DRAINED / 0
+control-broke / 0 malformed, identical counts and the same three NAMES both runs.**
+**DRAINED, read by name and never from the count: #1072, #1564, #1599** — exactly `b2`'s three
+intended drains, still drained. **#1397 and #1514 are back to REPRO**, i.e. `f`'s
+spelling-keyed guard no longer refuses their legal programs. ⚠️ The count going **5 → 3** is
+itself the anti-swap check the brief asked for: a silent substitution would have held 5.
+**Answering the brief's item 3 directly:** #1397 no longer rejects, and that is **correct** —
+the reject was over-fire, not progress. Neither #1397 nor #1514 is FIXED (both are back to their
+original silent wrongness) and **neither may be closed**; #1397's own IR proof (ONE
+`@mdk_impl_Thing_label` where there must be two) is untouched by this bite.
+
+**3. `B-2.1-c`'s five-file import-order corpus AGREES ON ALL FOUR VERBS.** The S0 `c` measured —
+*a located reject becoming exit 0 printing `70018059149297`* — is gone, and so is the base's
+false reject:
+
+| arm | base `1e7cbbbb` | `c`'s two-site patch (the S0) | **this bite** |
+|---|---|---|---|
+| `c-imp` (`import m` first) | **1**, located `Type mismatch: Int vs Box` | 0, `main : Unit` | **0, `main : Unit`** |
+| `c-imp` `run` | 1 | **1, `E-PANIC: unknown op '+'`** | **0, `300`** |
+| `c-imp` `build` / binary | 1 / — | 0 / **0, `70018059149297`** | **0 / 0, `300`** |
+| `c-imp2` (imports SWAPPED) | 0, `300` | 0, `300` | **0, `300`** |
+| **`c-def`** (definer shadow) | 1, located reject | 1, unchanged ✅ | **1, `m.mdk:4:9: Type mismatch: Int vs Box`** ✅ |
+
+**IR at the disputed site: `call i64 @mdk_impl_Box_size` on BOTH importer arms** (it was
+`@mdk_prov__size`, the standalone, on `c-imp`). **`c-def` is the control that had to hold and
+did** — the definer arm's located reject is unchanged, so this widening does **not** re-erase a
+user's own top-level function; both shadow callers short-circuit on `isDefinerShadow` first.
+
+**4. `check` AND `build` NOW AGREE ON THIS CLASS, WHICH RETIRES `f`'S ITEM-1 RESIDUAL BY
+DISSOLVING IT RATHER THAN BY FIXING IT — and that distinction is the honest one.** `f` derived
+that `keyForSite` is elaborate-only and `pendingSites` is empty on the check path, built the
+obvious fix, and measured it INERT. **All of that is still true and I did not attempt either of
+the two wrong fixes it named.** What changed is that the route word no longer decides
+accept/reject — it decides only a word, and it now decides it correctly — so there is no verdict
+for `check` to be blind to. Independently, the *shadow* half of this bite IS visible to `check`
+(`inferShadowApp`/`definerReceiverDispatches` run in typecheck proper, which the check driver
+does run), which is exactly why `c-imp`'s `check` moved from a false reject to 0 in agreement
+with its `build`. ⚠️ **The underlying split is NOT fixed and must not be reported as fixed:**
+`keyForSite` is still reached only from the five `resolve*` stamp passes inside
+`elaborateModules`. If a FUTURE diagnostic is ever pushed from there, it will be invisible to
+`check` again. I did not re-pin it, because the pin `f` left asserted `check 0` on this project
+as a KNOWN-WRONG state and `check 0` is now the CORRECT answer — see `gates run:`.
+
+**5. Tie-break and word semantics, for the spec reader.** The no-unique-minimum fallback at a
+method-keyed site moves from *arbitrary* (`bucketKeyEntriesFrom` restarts its ordinal per module
+⇒ duplicate indices, each slice prepended ⇒ descending, violating `mergeByDeclIdx`'s ascending
+precondition) to **graph-global declaration order** (`instRefSeq`, ascending by construction) —
+the same change `b2` made on the iface-keyed legs, stated verbatim from its row: *"at a
+non-closed, no-unique-minimum multi-module goal the fallback moves from arbitrary … to
+graph-global declaration order."* ⚠️ **This is NOT licence to implement T4** — DICT §11: *"T4
+MUST NOT be implemented before I5."* The non-closed goal is still silently decided by list
+order; only the order is now statable. **Second word change, stated because it is an IR change
+and not a no-op:** where the prefix table held NO entry at the goal's head, `keyForSite`
+answered `None` and the caller fell back to the bare goal tag; now a graph-global HEADLESS
+winner (`impl C a`) yields `noneHeadTag` instead. That is `keyForSiteByIface`'s own else-arm
+behaviour and the word the emitter derives (F-3b's derivation, on `keyForSite`), but it rests on
+the emitter's general-instance fallback tier (`emitGeneralRKey` → `findByTag noneHeadTag`,
+`eval.pickTagFallback`) — **empirical, not structural**, exactly as that block already warns.
+
+**6. Perf.** `make check-self` PASS. `keyForSite` was already the checker's hottest selector and
+it now takes `ieHeadRows` + one graph-global bucket walk in place of a prefix bucket walk — the
+same trade `a3`'s index was cut to make affordable, and `f` already added the graph-side scan on
+this path without a measurable regression. ⚠️ **I did NOT time it**: `check-self` is a pass/fail
+here, not a benchmark, and a wall-clock A/B on a shared box with sibling agents live is the
+measurement `b2`'s row is careful to disown. **The perf question for this diff is genuinely
+UNANSWERED**; `diff_compiler_perf_scaling.sh` (allocation-graded, machine-independent) is what
+would answer it and it was not run (~11 min, foreground-unsafe, CI's).
+
+nearest miss: **Item 1 — the `tys = []` sub-class: STILL OWED, and this bite adds no new
+exclusion.** `keyEntryOfRow`'s `[] => []` arm and `ieRowHeadMatches [] _ = False` drop a row
+with no head type, which is exactly what `keyEntryOf`'s own `[] => []` arm did on the prefix
+side — so such a row is unselectable on BOTH substrates, before and after. RUN-B-030 records
+that it cannot be produced from surface syntax and I did not falsify that; **it is untested
+because it is unwritable, which is a weaker statement than "safe" and I am not upgrading it.**
+
+**Item 2 — a goal whose head is NOT a tycon (`goalHeadCon = None`): STATED *AND TESTED*, and
+the test came out clean — but read what it actually shows.** `keyForSite` answers `None` there
+(`ieSelectRowByMethod`'s own `None` arm) and the caller stamps the bare goal tag, so the repoint
+cannot reach it; the fallbacks that CAN — `firstReqMatch (univHeadless univ iface)` and
+`routeUndeterminedTop`'s `implHeadTagsForIface prog` — are still prefix-read (`b2`'s Item 3),
+untouched. **Two discriminating programs, each with the impls in a topologically LATER module
+than the goal, each run in both import orders:**
+* `g-hd` — `export nest x = tagOf x`, no signature ⇒ inferred `Tag a => a -> String`, goal at
+  the rigid `a`. Two impls (`Int`, `Bool`). All four verbs 0 in both orders, `int/bool`, **IR
+  byte-identical between orders.**
+* `g-hd2` — `export nest = tagOf`, a method occurrence in VALUE position with the receiver never
+  supplied (the `undeterminedRoute` → `routeUndeterminedTop` path). All four verbs 0 in both
+  orders, `int`, **IR byte-identical.**
+🚨 **WHAT THAT DOES AND DOES NOT ESTABLISH.** It does *not* show the prefix-read fallbacks are
+correct — it shows I **could not reach them in a way that diverges**, because a constrained
+`nest` routes through its DICT (`RDict`) rather than through a stamped word, so the word is never
+consulted at the headless goal. **The residual is therefore still open, and my probes are a
+negative result, not a clearance.** The shape that would discriminate it has to reach
+`firstReqMatch`/`routeUndeterminedTop` with prefix and graph disagreeing, and I did not find
+one; that is the next program to attack, and it is the same one `b2`'s Item 3 named.
+
+**Item 3 — `resolveRLocalSite`'s `None` arm (ungrounded receiver) is still untouched**, as
+`c`'s refusal predicted for the correct fix: it consults no impl table at all, so an importer
+shadow whose receiver never grounds is unaffected on any substrate. No arm of
+`c-imp`/`c-imp2`/`c-def` exercises it.
+
+**Item 4 — `f`'s own Item 2 (a prefix that ALREADY collides while the graph holds a third,
+strictly more specific impl) is DRAINED BY CONSTRUCTION, not by fixture.** That shape was a
+disagreement between two counts; there is now one count, taken graph-globally, so the
+"counts agree while the stamped key names the wrong impl" state is unreachable. **I did not build
+the three-impl fixture** — the argument is structural and the honest label is *underived*.
+
+**Item 5 — the residual arithmetic difference is UNCHANGED and NOT claimed as fixed.**
+`core_ir_lower.ifaceDeclHeadUnique` counts DISTINCT canonical keys where
+`ieCountHeadByMethod` counts ROWS. Both are now graph-global over the same population, so the
+POPULATION skew is closed; the arithmetic difference is the pre-existing one
+`ifaceDeclHeadUnique`'s own comment records.
+
+**Item 6 — F1 stays dormant, not absent** (RUN-B-030): this bite adds no `TabKey` **equality
+comparison** and no `TabKey` **rendering**. `ieImplExistsForHeadGo` compares through
+`headTabIs` (which is `dispHeadTab hk == goal`, the projection the bucket is filed under, and
+the same comparison `implExistsForHeadGo` made) and `ieByHead`'s key has no interface component.
+
+engines:      **All four arms consume the changed `Route`, and unlike `b2`/`c` this bite CHANGES
+the stamped word — so "no engine source changed" is true and is not the whole answer.** No
+engine source is touched (`grep -n 'bodyImplEnvRef\|ieHeadRows\|keyForSite' compiler/ir/core_ir_eval.mdk
+compiler/backend/wasm_emit.mdk` is empty), but each re-derives this word independently and each
+owes a different reading:
+* **LLVM** (`llvm_emit.headTagUnique`/`distinctKeysAtHead`, `core_ir_lower.declRouteKey`/
+  `ifaceDeclHeadUnique`) — **OWED AND PAID, as the instrument of every table above.** Its
+  derivation was ALREADY graph-global; this bite makes the checker agree with it rather than
+  teaching it a new word, which is why the fix shows up as *the right call site* rather than as a
+  renamed symbol. Read directly off three `.ll` files (SA-4c, `c-imp`, `g-hd`/`g-hd2`).
+* **eval** (`pickTagFallback`) — **OWED AND PAID on these programs.** The severity disagreement
+  `c` measured (eval loud `E-PANIC: unknown op '+'` vs LLVM silent garbage at exit 0) is GONE:
+  `run` and the built binary now agree, on the right answer, on every arm. ⚠️ eval was also the
+  engine `f` silenced (it used to print `wrap-int-specific` correctly and then rejected); it
+  prints it again.
+* **`core_ir_eval`** (`cevalModules`, eval's parallel module driver) — **OWED AND NOT PAID.**
+  I did not observe it. Its gate `diff_compiler_core_ir_modules.sh` shares
+  `test/eval_modules_fixtures/*/` with `diff_compiler_eval_modules.sh` (the corpus that let the
+  P0-9 fix ship "green" having run only the first), and **both** are on this branch's known-red
+  list for the S-expr/`CProgram`-carrier reason, so a run of either would not have been
+  informative about this diff. It is genuinely owed to the repair round.
+* **wasm** (`wasm_emit`) — **OWED AND NEVER OBSERVED, in this bite or in `b2`/`c`/`f`.** It
+  re-derives the same uniqueness test from a bare `String`. `test/wasm/diff_wasm*.sh` and
+  `diff_compiler_tmc_parity.sh` need the wasm oracle; not built, not run. **This is the arm with
+  the least evidence behind it and it should be named as such in any merge decision.**
+
+gates run:    `diff_compiler_check_cli_modules.sh` **86 ok, 0 failing** (was 86/0 under `f`; two
+legs re-cut, net row count unchanged) · `diff_compiler_must_fail.sh` **TWICE, 97/3/0/0 both
+runs, same three names** · `diff_compiler_flat_vs_onemodule.sh` **13 rows PASS** (1 drain
+notice) · `make check-self` **PASS** · `make agent-doc-symbols` **PASS** (0 dead — nothing was
+deleted, so no symbol claim moved) · `make docs-links` **PASS** · `medaka fmt --check` clean and
+`medaka lint` **0 findings** on the touched source, both **BEFORE** each build.
+⚠️ The inherited `1112-A34/later-invisible` red that `.claude/HANDOFF.md` calls "pre-existing,
+not ours" is **green**, as `f` also observed — that HANDOFF line is stale, and nothing here
+could have fixed it (it failed by ACCEPTING).
+
+**🚨 THE TWO RE-CUT `SA-4c` LEGS, AND WHY EACH WAS RE-CUT RATHER THAN LEFT TO GO RED.**
+The gate's own FAIL text says *"the split CHANGED — re-cut"*, so this was licensed; what it
+does not license is a weaker assertion, and neither replacement is weaker.
+* `SA-4/overlap-still-rejects` → **`SA-4c/overlap-DRAINED-both-orders`**: from *"build must
+  REFUSE"* to *"build must SUCCEED and the binary must print `wrap-int-specific` in BOTH import
+  orders."* **Fail-capable against the whole history, not just against today**: it fails on
+  `b2`'s state (binary 139) and on `f`'s (no binary at all).
+* `SA-4/overlap-check-blind-to-route-word` → **`SA-4c/route-word-order-invariant`**, and the
+  predecessor was **DELETED rather than kept because it had become VACUOUS**: it pinned
+  `check 0` as a known-wrong state, and `check 0` is now the correct answer for a legal program,
+  so it would have gone on passing while asserting nothing. An exit-code-graded row over a
+  program that should check clean cannot discriminate — **grade the MECHANISM instead**. The
+  replacement asserts (a) the two import orders' IR is byte-identical AND (b) the callee is the
+  arity-1 specific impl. **Both halves are load-bearing and neither implies the other**: (a)
+  alone passes if both orders are equally wrong; (b) alone passes on the accepting order while
+  the other segfaults — which is exactly `b2`'s state.
+* **FAIL-CAPABILITY MEASURED, not argued** (`scratchpad/g-failcap.sh`): the arity grep run
+  against `b2`'s literal IR line (`@mdk_impl_Tag__Wrap_a___tagOf(i64 %t2)`) exits **1** (leg
+  FAILS), against this bite's line exits **0**; the diff arm against a one-line-mutated arm
+  exits **1** (leg FAILS). The no-IR arm is what catches `f`'s state.
+
+**🔓 THE ANSWER `B-2.1-d` IS BLOCKED ON: `shadowKeyTableRef` IS NOW FULLY DEAD, AND
+`universeKeyBucketsRef` WITH IT.** Derived, not assumed —
+`grep -n 'shadowKeyTableRef\|universeKeyBucketsRef' compiler/types/typecheck.mdk | grep -vE '^[0-9]+:\s*--'`
+returns **seven** lines and **not one is a read for a decision**: the two record fields, the two
+`Ref omEmpty` initializers, the two `setRef perRun.value.shadowKeyTableRef …` writes in
+`checkBodyImpl`, and `universeKeyBucketsRef`'s own read-modify-write accumulate in
+`appendUniverseAccums`. `shadowKeyTableRef` has **ZERO** readers; `universeKeyBucketsRef`'s only
+consuming read is the copy INTO that write-only ref. Outside this file the only mention is a
+comment in `compiler/types/registry.mdk:682`. So `d`'s precondition is met.
+🆕 **AND `d` INHERITS ONE MORE THING THIS BITE CREATED, WHICH ITS PACKET DOES NOT YET NAME: the
+threaded `keyTable` PARAMETER NOW HAS ZERO TERMINAL READS.** Its only two terminal consumers were
+`keyForSite` and `implExistsForHead`; both moved. The remaining ~25 `KeyBuckets` parameters
+(`resolveSites`/`resolveSite`/`resolveArgStamps`/`resolveOpSites`/`stampOpRouteVal`/
+`resolveRLocalSites`/`resolveRLocalSite`/`resolveDictApps`/`resolveMethodDicts`/`routeOf`/
+`routeOfD`/`undeterminedRoute`/`routeUndeterminedTop`/`routesOfMonos(Top)(V)`/`topRouteV`/
+`implDictRoutesForFull`/`argImplRequiresRoutes`/`argImplDictRoutesFor(Encl)`/`argImplReqRoutes`/
+`argReqRoute`, plus the `KeyBuckets` field on all four `EntailKind` constructors) form a closed
+cycle of pass-throughs. **Deliberately NOT removed here**: `lint` does not flag a dead parameter,
+so there was no ratchet forcing it, and threading removal touches ~25 signatures + a data
+constructor — a diff that would have buried the four-member repoint this bite is graded on.
+
+unchecked:
+* **`selfcompile_fixpoint.sh` NOT RUN — and THIS BITE CHANGES EMITTED IR, so it is the decisive
+  gate and it is genuinely owed.** Brief-assigned to CI's `soundness` shard (which has been
+  PASSING, hence a live trusted signal). **I looked specifically for the anomaly class I was told
+  to STOP on and found none:** dict arity agrees at define, call site and dict global on the
+  SA-4c IR (arity-1 callee for the arity-1 define, arity-2 for the arity-2, no mismatch anywhere);
+  `make medaka` completed cleanly (stage A + stage B, one cycle, exit 0); `make check-self`
+  passes. **That is evidence, not the gate — nobody has run the fixpoint on this diff.**
+* **No seed re-mint attempted.** Emitted IR changes, so `refresh_seed.sh` may be owed — it is
+  **not idempotent after a codegen change (run it TWICE)** and a stale seed can SEGFAULT the
+  fixpoint on a correct change. Belongs with the fixpoint, in one place, once.
+* **Snapshot and `selfproc_legA` goldens NOT re-cut, both owed** (§5: zero goldens blessed this
+  run). `compiler/types/typecheck.mdk` is in the snapshot corpus. The legA diff must read as
+  **+2 additions and exactly 1 re-signature** — derive, don't trust:
+  `git diff -U0 compiler/types/typecheck.mdk | grep '^[+-][a-zA-Z]' | grep ' : '`. 🚨 On a rebase,
+  take the base's version of BOTH families and **RE-DERIVE from the rebuilt binary**; a clean
+  three-way auto-merge of a golden is not evidence it is right (three agents hit that on this
+  exact file in one session). ⚠️ `diff_compiler_llvm_typed_ir` also moves, by design.
+* **`diff_compiler_engines.sh`, `diff_compiler_perf_scaling.sh`, `typecheck_compiler_source.sh`,
+  `diff_compiler_shadow_semantics.sh` (#1431: hardcodes `$ROOT/medaka`, so a differential needs a
+  second worktree), `diff_compiler_eval_modules.sh` / `diff_compiler_core_ir_modules.sh`, corpus
+  sweeps, the full suite: NOT RUN**, per the brief's reduced floor. `check-self` is a *weaker*
+  authority than `typecheck_compiler_source.sh` (which also covers `compiler/entries/*.mdk`).
+* **No breadth sweep for over-firing.** `f` ran all 39 `sqlite/*_demo.mdk`/`*_probe.mdk`
+  programs because its diff was a reject-WIDENING and over-fire was its whole risk. This diff
+  is a reject-NARROWING plus a WORD change, so the symmetric risk is a wrong word on a program
+  that previously worked — and the instrument for that is the fixpoint and the IR goldens, not a
+  check sweep. **I did not run the sweep, and I am naming the substitution rather than implying
+  the risk is absent.**
+* **The base columns in tables 1 and 3 are RELAYED, not re-measured.** `b2`'s and `f`'s cells
+  come from their DEBT rows; `c`'s come from `c`'s row. Only the **this bite** column and
+  `c-def`'s control were measured by me on a binary I built. I did not rebuild three historical
+  binaries to re-derive them.
+* **Reproduction, all outside the worktree:** `scratchpad/g-probe.sh <medaka> <root> <dir>
+  <label>` (four verbs × two orders, keeps IR) over `g-sa4c/`, `g-hd/`, `g-hd2/`;
+  `scratchpad/g-cprobe.sh <medaka> <root>` for `c`'s five-file corpus; `scratchpad/g-failcap.sh`
+  for the new legs' fail-capability. Logs: `g-build1.log`, `g-ccm.log` (pre-re-cut, 85/1),
+  `g-ccm2.log` (86/0), `g-mf1.log`, `g-mf2.log`, `g-fvo.log`, `g-cs.log`.

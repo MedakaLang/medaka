@@ -2,6 +2,41 @@
 
 ---
 
+## ✅ UPDATE after `B-2.1-g`: BOTH residuals `f` left are CLEARED. The `SA-4c` class is CORRECT, not merely loud.
+
+`B-2.1-g` repointed the METHOD-keyed route word (`keyForSite`) **and** all three existence reads
+**and** `resolveRLocalSite`'s selection leg onto the graph-global `perRun.bodyImplEnvRef`, as one
+bite. **`SA-4c` now builds and runs correctly in BOTH import orders, and the two orders emit
+byte-identical IR** — the arity-1 specific impl is the callee (`call
+@mdk_impl_Tag__Wrap_Int___tagOf(i64 %t2)` against a one-parameter define); `b2`'s arity-2-called-
+with-one-argument shape is absent. **#1514's capability regression is GONE and #1397 stops
+over-firing**: `must_fail` is back to **97 REPRO / 3 DRAINED / 0 control-broke / 0 malformed**
+(twice, identical, same three NAMES: #1564/#1599/#1072). `check_cli_modules` → **86 ok, 0
+failing**, with both `SA-4c` legs deliberately re-cut (the `check`-blindness pin was retired
+because `check 0` is now the correct answer, and the replacement grades the MECHANISM: IR
+order-invariance **and** the arity-1 callee, fail-capability measured against `b2`'s and `f`'s
+literal states). `B-2.1-c`'s five-file corpus agrees on `check`/`run`/`build`/binary in both
+orders (`300`), with the `c-def` definer control unchanged.
+
+⛔ **Still do NOT close #1397, #1514, #1564, #1599 or #1072** — the drains are drained, not
+closed (§1 issue-closure policy), and #1397/#1514 are back to their ORIGINAL silent wrongness,
+not fixed.
+🚨 **`f`'s guard is UNREACHABLE, not deleted, and it is NOT SEPARABLE**: it reads
+`headCollides` → `countHead` → `bucketOfHead`, so **thirteen** now-dead bindings are retained
+with per-site `lint-disable-next-line rule-dead-code`. `B-2.1-d` retires them in one sweep — its
+precondition is met: **`shadowKeyTableRef` has ZERO readers and `universeKeyBucketsRef`'s only
+consuming read feeds it.** `d` additionally inherits a newly-dead `keyTable` PARAMETER threaded
+through ~25 signatures.
+⚠️ **The branch still owes the fixpoint, the seed question, and the goldens** (snapshot +
+`selfproc_legA` + `llvm_typed_ir`) — this bite CHANGES EMITTED IR. **wasm is the arm with the
+least evidence behind it and has never been observed across `b2`/`c`/`f`/`g`.** Read the
+`B-2.1-g` row in `.claude/sprint-b/DEBT.md` before any merge decision.
+⚠️ **One brief-level correction worth inheriting:** the claim that `T-ROUTE-WORD-AMBIGUOUS`
+"covers #1578" is **false** — #1578 belongs to `T-REQUIRES-UNROUTED`'s row and stayed REPRO both
+with the guard live and with it dead.
+
+---
+
 ## 📋 IF YOU ARE PICKING THIS UP COLD, START HERE
 
 **Both possible next steps are already written, in the repo, at `.claude/sprint-b/next/`.** `B-2.1-g`
