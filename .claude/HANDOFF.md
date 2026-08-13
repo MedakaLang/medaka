@@ -37,6 +37,98 @@ with the guard live and with it dead.
 
 ---
 
+## 🚨 REPAIR ROUND — THE HEADLINE CLAIM IS **NOT** "C4/I2 BY CONSTRUCTION" (2026-08-13)
+
+**Verdict (R3, `.claude/sprint-b/repair/R3-c4i2.md`): ⚠️ CONJUNCT-2-ONLY — gap at the ROUTE STAMPER.
+Narrowed, not closed.** ⭐ **Phase 0 predicted exactly this**, and the prediction held.
+
+**What IS delivered (conjunct 1, plus most of 2):** the three selection legs **and** the route word now
+read graph-global `bodyImplEnvRef`; `SA-4c`'s class is genuinely fixed; three S0 pins drained.
+
+**The gap, with its derivation:** `stampImplTable`/`stampKeyTable` are still
+`buildImplTable`/`buildKeyTable (accAll ++ prog)` — **the cumulative prefix** — and
+**`implDefinesMethodAt` (`typecheck.mdk:15740`) still reads it, choosing the METHOD NAME that the
+graph-global selector then selects on** (`:19715`, `:15717`). **One decision, two substrates** — the
+shape `:19211-19217` forbids by name, two organs below where it forbids it.
+
+**Second, independent reason:** identity is **not in routes** (Phase 3′, unstarted) and the word is
+**spelling-scoped by design** (`implKeyTc:18268` is a pure rendering), retiring only with **#1113**.
+🚨 **So conjunct 2 is "PENDING #1113", not "by construction" — and that scoping sentence is OWED in any
+closure text.** Stage A's exact lesson was claiming the conjunction on half the evidence.
+
+⛔ **Do not describe this sprint as delivering C4/I2.** It delivers the instance-set half and most of
+the evidence half, with a named, located residual.
+
+### Drain verdicts (R5, `.claude/sprint-b/repair/R5-drains.md`)
+
+| issue | verdict |
+|---|---|
+| **#1564** | ✅ **CLOSE** — mechanism-match: the evidence reader moved to graph-global `bodyImplEnvRef`, the exact B-2 move the fixture's own `why-architecture:` names. 4-arm, both orders. |
+| **#1599** | ✅ **CLOSE** — genuine drain, binary exits 0 printing **5**, the claim's own correct answer. 🚨 **Closure MUST replace the pin with a positive `stdout: 5` row**, per its own `drains-when:`. |
+| **#1072** | ⚠️ **NEEDS A PROBE — DO NOT CLOSE YET.** `llvm_emit.mdk` is **untouched** (the bare head is still OR'd into every arm; only the stamper moved), and the checker counts by **method-name membership** while the emitter is **iface-keyed**, with `fillImplDefaults` same-module only ⇒ a cross-module impl that **inherits** a default may be invisible to the checker's count. |
+| **#1071** | **Duplicate of #1062, high confidence** — #1071's stated discriminator ("needs two sibling calls") is **refuted by #1062's one-call repro.** One fix drains both. Close as dup; **keep both fixtures.** |
+| **#1397 / #1514** | ⛔ **DO NOT CLOSE — confirmed legitimate REPRO.** Both pins grade `run` **and** the original wrong stdout, so REPRO **cannot** be satisfied by a build refusal. |
+
+**#1072 probe, run by the orchestrator at `61c4eebd`** (R5's discriminating variant: `b.mdk`'s
+more-specific impl **inherits** `speak` instead of overriding it; everything else is the fixture
+unchanged): `run` → `DEFAULT` · **`build` exit 0, binary prints `DEFAULT`, exit 0** — the **correct**
+answer. So the feared mechanism did **not** produce a wrong result in that variant.
+🚨 **BUT FAIL-CAPABILITY WAS NOT ESTABLISHED** — there is no evidence this probe *would* have caught
+the defect pre-fix, and **a probe that cannot fail is not evidence.** **R5's NEEDS-A-PROBE verdict
+therefore STANDS.** To settle it: run the same variant on a **pre-drain binary** (`85ceec1f`) and show
+it prints `general` there. Until then #1072 is *"probe green, discrimination unproven."*
+
+### 🚨 Two S0-SHAPED findings in the `could move:` columns (R4, `.claude/sprint-b/repair/R4-couldmove.md`) — both ⚠️ UNVERIFIED
+
+1. **The tie-break bullet understates by ~2 levels.** I recorded it as an *ordering* change. It is a
+   **candidate-SET** change: `ieCandidatesForIface` (`typecheck.mdk:18969-18980`) merges **graph-global**
+   `ieHeadRows` buckets where `candidateBucket` read the **topological prefix**. So a goal that had
+   **ONE** candidate (forced, correct) can now have **TWO**. If ⊑-incomparable **and non-closed**,
+   `pickMostSpecificEntry:18506-18512` **silently returns head-of-list** (the ambiguity report is
+   closedness-gated at `:18517-18527`) ⇒ **a different impl at exit 0, no diagnostic, and NO GATE.**
+   If **closed** ⇒ a **new `T-AMBIGUOUS-INSTANCE` reject outside `f`'s enumerated widening set.**
+2. **The "not identical arithmetic" parenthetical.** The arithmetic is unchanged; **the operand set is
+   not.** `ieCountHeadByIfaceGo:19156-19161` counts **rows**; `core_ir_lower.declKeysAtHead:1365-1370`
+   **dedups on canonical key.** They diverge iff two rows share `implKeyTc` — the **same-spelled-type
+   #1397/#1514 shape** — which previously required both rows **in the prefix** and now requires them
+   only **in the graph.** **Nobody ran same-spelling through the iface-keyed leg.** Grade the stamped
+   word in the `.ll`, **not** the exit code.
+
+**S2 — `EX-3`'s `nearest miss:` cites `diff_compiler_engines` as *the* semantic discriminator. That is
+INVALID.** The change is in **typecheck, upstream of the engine split**, so a wrongly-selected impl
+reaches all three engines **identically**. The row even states that rule verbatim and then leans on the
+gate anyway. 🚨 **The sprint contains NO base-vs-branch corpus differential at all** — that is the
+missing instrument, not the engines gate.
+
+**S3:** `perf_scaling` grades an axis its corpus never scales (every impl sits at its **own** head, so
+impls-per-head is never exercised). And `EX-3` cites eight `scratchpad/*.sh` that exist in **no
+commit** — my `61c4eebd` cleanup fixed `EX-2`'s one dangling cite and **missed these eight**. ⭐ R4
+**re-derived the underlying claim and it HOLDS**, so the citations are dead but the fact is sound.
+
+⭐ R4 **retracted one of its own findings** after establishing that two projections really are exact
+inverses.
+
+### Engine coverage (R6, `.claude/sprint-b/repair/R6-engines-ungated.md`)
+
+- 🚨 **F-2 (S1, verified in source): NO gate runs `core_ir_eval` on the typed multi-module path.**
+  `core_ir_modules_main.mdk` is **desugar+annotate only — no marker, no typecheck**, so no `Route` is
+  stamped; `core_ir_typed_main` is typed but **Flat**; `diff_compiler_engines.sh` has **three arms, not
+  four.** ⚠️ **The shared-`eval_modules_fixtures` precedent does NOT rescue this** — that gate is on a
+  *different pipeline* and would have been blind **even green.**
+- **F-1 (S0-candidate, ⚠️ UNVERIFIED):** the two sides share a population but **not an arithmetic** —
+  lowering counts **distinct keys** (`core_ir_lower.mdk:1367`), typecheck counts **rows**
+  (`typecheck.mdk:19156`, `:19228`), and `ieInsertRow` has **no dedup**. One duplicate key at a head ⇒
+  opposite collision verdicts ⇒ a stamped word naming **no defined symbol**. ⚠️ The bite's own comment
+  calls this *"pre-existing"* — **that is ungated author prose**, and since the Flat `IE` was
+  `emptyImplEnv` before `B-2.1-a2` seated it, **"introduced" is live.**
+- **Ungated cells:** tie-break order · impls-per-head cost · checker-word-vs-emitter-symbol agreement —
+  **nothing watches any of them.**
+- ⚠️ **CORRECTION TO MY LEDGER: wasm is better covered than I repeatedly claimed.**
+  `diff_wasm_modules.sh` covers **36 multi-module fixtures through the full front end.** My
+  "least-evidenced arm / never observed" framing was **overstated** wherever it appears below.
+
+---
+
 ## 🚨 NEW S0-SHAPED FINDING, REPRODUCED AND UNFILED — needs an owner (2026-08-13)
 
 **Pre-existing, NOT caused by this sprint.** Surfaced incidentally by `AD-1`'s D8 discriminator and
