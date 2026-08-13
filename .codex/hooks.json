@@ -1,0 +1,14 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh -c 'root=$(git rev-parse --show-toplevel) && python3 \"$root/.codex/hooks/skill-triage.py\"'"
+          }
+        ]
+      }
+    ]
+  }
+}

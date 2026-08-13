@@ -1,0 +1,4 @@
+interface:
+  display_name: "Medaka Throughput Sprint"
+  short_description: "Run high-throughput compiler stage sprints"
+  default_prompt: "Use $medaka-throughput-sprint to conduct a coherent Medaka compiler stage sprint."
