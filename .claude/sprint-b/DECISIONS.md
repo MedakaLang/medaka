@@ -837,4 +837,44 @@ implementation — and that knowledge is now recorded here and in `phase0/P0-D-b
 
 ---
 
+## RUN-B-016 — B-3-a and B-3-c sites verified first-hand; the asymmetry is real
+
+Completing the Phase 1 site review (RUN-B-014 covered B-3-b, the dangerous one). Read, not relayed:
+
+**B-3-a — the asymmetry P0-D designed around is REAL, and confirms the `Option` args payload:**
+
+| writer | `funConstraintsRef` | `funConstraintArgsRef` | `funConstraintIfacesRef` |
+|---|---|---|---|
+| `registerMember` (`:24268-24276`) | ✅ ids | ✅ `keptConstraintArgs …` | ✅ `keptIfaces` |
+| `registerInferredFor` (`:25317-25320`) | ✅ ids | ❌ **none** | ✅ `map (ifaceForInferredId m) ids` |
+
+So it is genuinely a **triple** at one site and a **pair** at the other. A fused record with a
+**non-optional** args field would force `registerInferredFor` to **invent an args value** — which is
+why P0-D specified `Option`. Verified rather than accepted: the design is right.
+
+⭐ **And this names what the bite is actually FOR**, which the issue's own wording obscures.
+`keptConstraintArgs`' header (`:24278-24280`, #1161/F-3a-ii) says it keeps `funConstraintArgsRef`
+*"slot-parallel to `funConstraintsRef`'s ids."* **Slot-parallelism across these tables is today a
+CONVENTION maintained by hand at every write site. The fusion's purpose is to make it a TYPE
+FACT.** That belongs in the bite text: an implementer who thinks the goal is "fewer refs" will
+happily fuse in a way that preserves the convention without making it structural, and land a diff
+that reads correct and buys nothing.
+
+**B-3-c — `registerMethodConstraints` (`:23697-23706`) is the genuinely mechanical bite.** Both
+writes sit in the **same `else` branch** under one guard
+(`if isEmptyL ids || hasAssocSL2 mname …`), key on the same `mname`, and **neither reads the other
+table.** No ordering dependency, no aliasing — the clean fusion, and therefore *this* is the bite
+that actually calibrates the protocol. Contrast B-3-b, which cannot be fused as written.
+
+Its `Option` requirement has a different cause, and it is a **behavioural** one: P0-D reports the
+five ids-only reseed sites are explicit **non-sites** because **positions-absence selects a fallback
+arm** (`:5845`, `:8614-8622`). So here a non-`Option` fused field does not merely force invented
+data — **it changes which arm runs.** Two bites, two different reasons for `Option`; an implementer
+told only "use `Option`" will get one of them wrong.
+
+**Phase 1 is now fully site-verified by me**: `a` (asymmetry ✅), `b` (ordering hazard, RUN-B-014 —
+cannot fuse the writes), `c` (clean), `d` (declined), `e` (docs).
+
+---
+
 *(P0-Q's probes are appended below when they land.)*
