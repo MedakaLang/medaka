@@ -7,7 +7,11 @@
 # redirects, never from a pipe (`medaka build`'s status does not survive one).
 # MEDAKA_STRICT=1 turns a stale-binary warning into a hard failure, so this
 # cannot silently grade an old binary.
-set -e
+#
+# 🚨 NO `set -e`, deliberately. Every interesting arm here FAILS on purpose —
+# F-2's `build` exits 1 with an E-PANIC, and that IS the finding. With `set -e`
+# the script dies at the first such arm and silently reports only the rows
+# above it, which is how this harness behaved the first time it was run.
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/../../.." && pwd)
 M=${1:-$ROOT/medaka}

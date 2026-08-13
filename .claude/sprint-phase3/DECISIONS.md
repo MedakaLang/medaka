@@ -813,3 +813,69 @@ So the emitted **symbols are right** and the wrongness is downstream of naming �
 `mdk_default_<method>_<tag>` has no interface component; here both impls are concrete). **Not filed
 — I have not reproduced this one myself yet**, and this sprint does not file an agent's claim
 unreproduced. Added to the exit-phase triage list with its repro path.
+
+---
+
+# RUN-P3-021 — `B-2.2-a` LANDED (`cd1f2c8d`), inert as designed
+
+`compiler/types/route_key.mdk` — 3 exports, 6 private helpers, 38 doctests, **zero call sites**.
+Verified on a freshly built binary: `make medaka` 0 · `check-self` PASS · doctests **38/38** ·
+`fmt --check` 0 · whole-project `lint` 0 · the pre-commit **cross-file** scan 0 ·
+`diff_compiler_snapshot_frontend` **201 of 201 existing snapshots compared and matching, zero
+goldens MOVED**.
+
+The `ifaceWordOf` fallback is **fail-capable, measured**: replacing its body with a raw
+`ifaceIdentity o name` reds **8 of the 38** doctests. That is the difference between a test that
+passes and a test that *could have failed* — the property RUN-P3-019 predicted would bite, now
+guarded by something that demonstrably fires.
+
+### Three decisions the implementer correctly handed back rather than taking
+
+1. **`rule-duplicate-body` red on `rkEffAtom` — silenced HERE, with `e` named as the owner of its
+   removal.** The finding is **true, not spurious**: it is a transitional 4th copy, and `B-2.2-e`
+   deletes the mirrors. Landing `a` together with `e` (the alternative) would have merged
+   `a`+`e`+`b1` into one landing and cost the clean, inert, separately-bisectable commit. The three
+   existing copies each carry the same directive; this one additionally names its own expiry.
+   ⚠️ **Placement is load-bearing and the diagnostic's line number misleads.** The directive must sit
+   immediately above **the specific duplicated equation**. Above the signature, or above the *first*
+   equation, it does **not** suppress — measured across three placements with the hook's own command.
+   The finding is reported at the declaration's first line, which is a **decl-level anchor, not the
+   line the directive is matched against**, so putting the directive where the diagnostic points is
+   the natural move and it fails. Written down at the site.
+2. **The `Makefile` `test:` line STAYS, and it is the bite's only real verification.** A
+   call-site-free module is invisible to `make check-self` *and* `typecheck_compiler_source.sh`
+   (measured 2026-08-03 for `types/registry.mdk`, whose header records it). Without that line the
+   module ships **unverified with every gate green** — this arc's signature failure. The implementer
+   found the standing instruction in the `Makefile`'s own comment; the packet had not carried it.
+3. **The snapshot is DEFERRED to the close-out, not created now.** The new file auto-enrolled in the
+   snapshot corpus via `compiler/types/*.mdk` (a shared-corpus ADD, not a golden move), so the
+   pre-commit hook correctly refused the commit. Committed with `PRECOMMIT_SNAPSHOT_DEFER=1` — the
+   documented shape (#1179) for a source commit whose golden lands later in the same PR — keeping
+   fmt/lint/lextok live, **never `--no-verify`.** ⚠️ The close-out owes a **CREATE (`--new`)**, not a
+   re-bless; the gate's own message warns against `--new` because it writes a golden from current
+   output, so this needs a deliberate decision. Recorded in `.claude/HANDOFF.md`.
+
+### One packet error, corrected by the implementer
+
+My packet said `eval`'s printer "strips all three" of `TyEffect`/`TyRow`/`TyConstrained`. It strips
+**two** — `eval.mdk:506` renders `TyRow` and agrees with typecheck. The instruction was unaffected
+(`rkTy` follows typecheck's `ppTy`, the more complete mirror), and the corrected divergence is now in
+`e`'s owed `unchecked:` item. **The error was mine, relayed from P0-7's phrasing without checking it.**
+
+### The verification debt `e` inherits, stated now so it is not discovered later
+
+`rkTy` follows **typecheck's** printer, so pointing **eval's** callers at it would *widen* eval's
+words: two impls differing only in an effect row or a constraint currently collapse onto one
+`implKeyOf` word there and would stop doing so. **That is very likely the right direction and it is a
+BEHAVIOUR CHANGE.** `e` owes a discriminating probe on the eval arm **before** collapsing the
+callers, not after.
+
+## RUN-P3-022 — the committed repro harness was BROKEN on first run, and that is why it was smoke-tested
+
+`.claude/sprint-phase3/repro/run.sh` had `set -e`, so it **died at F-2's first intentionally-failing
+`build`** and printed only the rows above it — silently reporting a subset as if it were the whole.
+This is Stage B's *"read-only reviewers' programs are UNRUN BY CONSTRUCTION — three of six needed
+repair"* trap, in a harness written to preserve findings. Fixed (no `set -e`, with the reason stated
+in the file so nobody re-adds it) and re-run: **both findings reproduce, matching the recorded
+expectations exactly.** It is now a record rather than a claim — which is the audit's own template
+delta about probes whose verdict gates a decision.
