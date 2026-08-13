@@ -1878,4 +1878,81 @@ finding.* That is a far better handoff than "additive-only."
 
 ---
 
-*(Blocking the drain: F1's probe. `B-2.1-a3` still in flight.)*
+## RUN-B-029 — process instrumentation: R1's time accounting, and four changes it earns
+
+Asked on Val's suggestion — *request brief accountings of where agents spent their time.* R1's is in
+first and it is more actionable than I expected. **Split:** orientation 15% · reading diffs + pinned
+source **40%** · derivations/greps 30% · writing the report 15%.
+
+### 🚨 The finding that changes MY plan: F1 may be a gate on nothing
+
+R1 states F1's true status plainly: **"mechanism established, reachability unknown."** One experiment
+settles it — and *"if the Flat goal side also mints bare-only, F1 collapses to a non-issue and **you
+have gated `B-2.1-b` on nothing**; if it doesn't, F1 is an S0 waiting for the repoint."*
+
+**Recorded because I called F1 a HARD GATE (RUN-B-027) on a mechanism finding whose reachability was
+never established.** That was the right *default* — the drain consumes that ref, and being wrong the
+other way ships a regression on `check`/`lsp`/`repl` — but the gate is provisional, not proven, and
+I should have labelled it that way. The queued `a4` brief already leads with the probe, so the
+sequencing is right; the *characterisation* was over-confident. **Two outcomes are equally
+legitimate: a fix, or evidence that F1 is benign plus a `nearest miss:` correction — and the second
+is not a wasted bite.**
+
+### Change 1 — **fund mechanism work read-only; fund reachability with a build window**
+
+Value per minute, from R1's own accounting:
+- **F1: ~8 min**, a four-hop grep chain (`ieIndexRows` → `oblIfaceKeys` → `irOrigin` →
+  `stampFlatTyOrigins` → `flatTyOriginScope`) — *the finding that mattered.*
+- **F3: ~3 min**, one grep. **F5: nearly free**, fell out of reading the diff.
+- **F6: ~20 min** for an UNVERIFIED pre-existing hazard whose reachability it *could not establish
+  read-only.* R1's own advice: **"Don't fund another F6-shaped one read-only."**
+- **F4: ~15 min and found no bug** — but it was a **confirmed negative on a soundness argument** I
+  had explicitly left open, which R1 correctly calls the right thing to buy.
+
+**Ruling: reviewers get a read-only pass for MECHANISM, then a short (~20 min) build window for only
+the two or three DISCRIMINATORS that pass produced.** R1's summary is the rule:
+*"almost all my findings came from reading; almost all my uncertainty needed a binary."*
+⚠️ That window collides with *"always keep a writer live"* — resolution: **I run the discriminators
+myself**, since I already own the commit boundary, and F1's probe is folded into `a4`'s first step.
+No writer has to pause.
+
+### Change 2 — 🚨 **cross-reference every `DEBT.md` row to its `DECISIONS.md` entry**
+
+R1 re-derived three things already recorded: RUN-B-022's 7-stampers count (**the ledger shipped its
+own command and R1 re-ran it anyway**, ~2 min), the `tys = []` divergence (already in `a2`'s
+`nearest miss:`), and `a2`'s 6-hit `bodyImplEnvRef` grep.
+
+**Diagnosis, and it is not the one I feared:** *"your prose was trustworthy every time it shipped its
+command. The failure was **indexing**, not honesty."* **Nothing in `DEBT.md`'s `a2` row pointed at
+`DECISIONS.md:1356-1380`, where the audit's actual projection lives** — R1 found it by grepping
+`ieAudit` on a hunch, **and that section is where F2 came from.** A one-line cross-reference *"would
+have paid for itself twice here."*
+
+**Adopted as a `DEBT.md` convention.** ⏸️ Holding the header edit until `a3` returns — it is appending
+its row to that file right now, and editing a file a live writer is writing is exactly the discipline
+I enforce on everyone else.
+
+### Change 3 — **stop telling agents to read the ledger; hand them line ranges**
+
+Blunt and correct: *"I did not read the full `DECISIONS.md`, and I don't think I should have."* It read
+~140 lines (the `a2`/RUN-B-021/022 region) plus a mechanical sweep of all **160** backticked symbols
+to check they resolve — **~4 min, found nothing** (`implOblToU`/`ieShadowCompare` are both
+knowingly-dead and described as such). **"Skip it next time; your prose is not the failure mode."**
+
+⭐ *"The 1618-line ledger's value to a reviewer is as a **LOOKUP TABLE**, not a document."* My briefs
+already name specific `RUN-B-xxx` entries rather than saying "read it all" — **that was right, and
+the next step is line ranges**, which is the same fix as Change 2 from the other direction.
+
+### Change 4 — the accounting itself is cheap and stays
+
+R1's retro accounting cost **35 s of wall-clock and zero tool calls** — it answered from its own
+transcript. **Effectively free**, and it produced a plan change (Change 1), a convention (Change 2),
+and a brief-length cut (Change 3). It is now a mandatory closing section in every writer brief.
+
+⚠️ **One thing I will not do with this data: rank agents by it.** It is process instrumentation. Both
+messages said so explicitly, because an agent that thinks its time split is being graded will
+optimise the split instead of the work — and the work is the point.
+
+---
+
+*(Blocking the drain: F1's probe, now correctly labelled PROVISIONAL. `B-2.1-a3` still in flight.)*

@@ -779,3 +779,173 @@ unchecked:  - **`sh test/selfcompile_fixpoint.sh` — NOT RUN, deliberately, and
 `/var/tmp/medaka-scratch/claude-0/-root-medaka/2f0cc56c-30c4-4612-bcb1-04d9e4d0a7e5/scratchpad/B-2.1-b1-3leg-EXPERIMENT.patch` — the same plus the throwaway global `matchingEntries`
 scan. Behaviourally correct on #1564's four arms; carries the +17% `check` regression. **Land only
 after the head-across-interfaces `ImplEnv` index bite is cut.**
+
+---
+
+### `B-2.1-a3` — Phase 2′ (B-2.1 precondition) — a HEAD-keyed, interface-blind `ImplEnv` index, filed ONCE PER ROW
+
+sites:      `compiler/types/typecheck.mdk` only. `git diff --numstat` = **257 insertions, 12
+deletions**; every deletion is a line re-spelled in place (listed below), none removed outright.
+* `:4083` — NEW `ImplEnv` field `ieByHead : MultiRegistry ImplRow`, between `ieHeadless` and
+  `ieIfaceTags`. **Added BARE, no trailing comment** (#829): `ImplEnv`'s header is the collapsed
+  single-line `data ImplEnv = ImplEnv {` — the measured-safe form — but the record already carries
+  an interior comment river on `ieUnivSnaps`, so the prose went on the filer instead. Verified
+  after `fmt --write`: the `ieUnivSnaps` block is byte-unmoved in the diff.
+* `:4117` — the matching `emptyImplEnv` initialiser `ieByHead = mregEmpty`.
+* `:4070-4077` — the `ImplEnv` header comment: *"the three buckets are the index"* → names the
+  buckets instead of counting them. It was **wrong the moment this field landed**, which is the
+  `stampKeyTable`-says-"five"-means-seven shape (RUN-B-022) one record over.
+* `:4304` — `ieInsertRow` (Module) now `ieFileRow r { env | ieRows = env.ieRows ++ [r] }`.
+* `:4190-4193` — `ieIndexRows` (Flat, `a2`'s index-only half) now folds `ieFileRow`.
+* `:4306-4358` — NEW `ieFileRow`, **the one once-per-row filing seam**, + its header (the
+  double-file derivation and the two-parallel-paths derivation).
+* `:4360-4361` — NEW `ieFileRowByHead` — the filing itself: `mregAppendK (headBucketKey
+  (univReceiverTag tys))`.
+* `:4363-4375` — NEW `ieHeadRows : Option HeadKey -> ImplEnv -> List ImplRow`, the read accessor.
+  **No production caller yet, by design** — `B-2.1-b2` consumes it.
+* `:4285-4288` — `ieInsertRowAt` gains a 🚨 recording that it runs once per `oblIfaceKeys` element
+  and that only interface-keyed indexes may be filed there.
+* `:18107-18116` — `headBucketRender hd = regKeyRender (headBucketKey hd)`, with NEW
+  `headBucketKey : Option HeadKey -> RegKey` split out of its two arms. **One mint, two tables.**
+* `:170-176` — a pre-existing import-list comment already cited **`headBucketKey`, a symbol that
+  did not exist**, and claimed the head buckets are keyed *"by IDENTITY"*. This bite makes that
+  citation resolve, so the false half is corrected in place (bare spelling; #1317 T1 / #1277) —
+  otherwise the next reader follows a live link to a wrong sentence.
+* `:4660-4814` — the doctest corpus (`ieOtherImplIn`, `ieGenImplIn`, `ieLooseImplIn`,
+  `ieHeadProbe{Amod,Zmod,Decls,Env}`, `ieProbeBlobHead`) and doctest items 5-9.
+
+transform:  Give `IE` the partition `KeyBuckets` has — rows keyed by RECEIVER HEAD, across
+interfaces, with a headless bucket — so the method-keyed selection leg
+(`matchedEntry` → `matchingEntries` → `candidateBucket`) can be made graph-global by a LOOKUP
+instead of the O(rows)-per-goal scan RUN-B-023 measured at `check-self` 21.5 s → 25.1 s (+17%) and
+refused. Not a widening of `stampKeyTable`: that re-creates design law L1's two-registry hazard
+`a2` just retired.
+
+**The placement IS the design content, and it is a correctness constraint, not tidiness.**
+`ieInsertRowAt` is entered once per `oblIfaceKeys` ELEMENT — twice for every origin-bearing
+interface — so a head-keyed index filed there DOUBLE-FILES and corrupts every count, `min⊑` and
+declaration-order merge over the bucket. It therefore goes in a once-per-row seam. There were
+**two** such paths after `a2` (`ieInsertRow` Module, `ieIndexRows` Flat), each spelling
+`ieInsertRowKeys (oblIfaceKeys ir) r` independently — the `evalModules`/`cevalModules` shape. So
+rather than filing in both, both were **routed through ONE new seam `ieFileRow`**: the only
+per-row difference left between the arms is the `ieRows` append, which is the difference that is
+supposed to be there. (Deviation from the brief, which said file it in both: this is the cleaner
+factoring it invited, and it makes the drift unrepresentable rather than merely absent.)
+
+**Order:** `mregAppendK`, ascending by `instRefSeq` by construction on both arms — RUN-B-007's
+declaration-index ruling and `mergeByDeclIdx`'s precondition. A prepend + reverse-at-finalize
+would file in O(1) instead of O(bucket) and was **deliberately declined**: it makes the ascending
+invariant true only AFTER a finalize step, which is exactly the second-maintainer hazard
+`ieAddRows`'s own header forbids for `ieUnivSnaps` (*"do not add a second maintainer"*). Stated
+plainly because it is a real trade and the brief asked for O(1): **the filing is O(bucket), not
+O(1)** — per BUCKET, never per population (this is not `ieRows`' `++ [r]`), and it is the same
+writer the two sibling buckets and `ImplUniverse` already use. R1's finding that *"`mregAppendK`
+is still O(bucket) per add"* is correct, and this bite's comment says so **at the site** rather
+than repeating the retired "avoided by construction" wording.
+
+**Measured, not asserted** (allocation — deterministic and machine-independent):
+* `test/bin/profile_modules_main` built from BASE source and from this source, **same emitter, same
+  `GC_INITIAL_HEAP_SIZE=2147483648`, same input** (`sqlite/main.mdk`, 24 modules, 3352 decls —
+  chosen because it does NOT contain `typecheck.mdk`, so both arms compile a byte-identical
+  program; profiling the compiler's own graph instead confounds the delta with 22 extra decls of
+  my own source, which was my first measurement and is why it is not the one reported):
+
+  | stage | BASE alloc | this bite | delta |
+  |---|---|---|---|
+  | parse / load / desugar / resolve / mark | 39.8094482421875 / 382.70506286621094 / 7.87066650390625 / 35.252655029296875 / 2.248565673828125 MB | **byte-identical, all five** | **0** |
+  | typecheck | 204.677001953125 MB | 205.14942932128906 MB | **+0.4724 MB (+495 KB, +0.231%)** |
+  | total | 672.5711975097656 MB | 673.0475311279297 MB | +0.4763 MB (+0.071%) |
+
+  The five untouched stages agreeing **to the last digit** is the instrument's own control: the
+  delta is attributable to the filing and to nothing else. Re-run once: byte-identical, so the
+  figure is deterministic as documented.
+* **Op-count column unchanged in every stage** (117106 / 134546 / 553769). `opBump` counts
+  `contains`/`lookupAssoc`, so this is direct evidence that **no `List`-as-a-set scan was added** —
+  `compiler/AGENTS.md`'s one rule.
+* **Bucket bound, measured on the compiler's own graph** (temporary audit panic, build stage B):
+  `rows=159 keys=27 maxbucket=16`. So the O(bucket) cost is bounded by `Σ b² / 2 ≤ maxbucket ×
+  rows / 2 = 1272` cons copies per whole-compiler compile — a constant factor, not a growth-rate
+  change.
+* Wall clock is **not** offered as evidence: the box carried load average 20-25 from other agents
+  for most of this session. `check-self` passed; its duration is meaningless here.
+
+could move: **NOTHING — and in its strongest available form rather than as an assertion:**
+* Nothing reads `ieByHead` or `ieHeadRows`. Derive it: `grep -n 'ieByHead\|ieHeadRows'
+  compiler/types/typecheck.mdk` — the only non-comment hits are the field, the initialiser, the
+  filer and the accessor itself, plus the doctests.
+* The two behavioural re-spellings are extensionally identity: `ieInsertRow`/`ieIndexRows` now call
+  `ieFileRow`, whose body is the OLD body plus one write to a NEW field; `headBucketRender` is
+  `regKeyRender` of the two arms it used to spell inline.
+* **Independent confirmation:** the emitted-IR fixpoint is byte-for-byte green (C3a YES / C3b YES),
+  and the five profiler stages above are byte-identical in ALLOCATION — which a behaviour change of
+  any size would move.
+* The one residual is the record itself: adding a field to `ImplEnv` re-orders nothing (named
+  fields), and `emptyImplEnv` stays reachable from `freshDriverState`, which is what keeps
+  `ImplRow`'s measured `CFieldAccess` emitter trap disarmed — see `ImplRow`'s header.
+
+nearest miss: **A program with ONE head bearing hundreds of impls.** `maxbucket=16` today; the
+filing is O(bucket) per row, so a corpus with e.g. 500 impls at head `Int` pays ~125 000 cons
+copies at build time. The READ side stays O(1) (`mregLookupK`). Nothing in the tree is near that
+and **no gate would see it**: `perf_scaling` scales DECLS and MODULES, not impls-per-head. Second
+nearest miss, and the one that matters to the next bite: **the consumer.** This bite makes the
+lookup affordable; it does not make it correct for `matchingEntries`, whose population must also be
+filtered by METHOD NAME and by `entryHeadMatches`, and whose rows must be adapted to `KeyEntry`
+(`keyEntryOfRow`, in the parked 3-leg patch, DROPS empty-`tys` rows while `ieByHead` files them
+under the headless key). So `ieByHead`'s headless bucket is a **superset** of `KeyBuckets`' for a
+`tys = []` impl — harmless while the consumer drops those rows, and an S0 the day it does not.
+
+engines:    **FOUR-arm ledger, none moved — with the reason, not the word:**
+* **LLVM** (`backend/llvm_emit.mdk`) — not touched and cannot be: this bite adds a typecheck-time
+  table nothing reads, so no route word, dict arity or symbol moves. Proven, not argued: the
+  self-compile fixpoint is byte-for-byte green (C3a/C3b YES), i.e. the emitted IR for the largest
+  program in the tree is unchanged.
+* **wasm** (`backend/wasm_emit.mdk`) — same reason, and **no peer arm is OWED**, because there is
+  nothing to mirror: `ieByHead` has no representation in any engine and will not until
+  `B-2.1-b2` changes which impl is *selected*. That bite owes the wasm arm; this one does not.
+* **`eval.mdk`** — untouched. Its dispatch reads `VMulti`/arg-tag values built from the elaborated
+  program, and the elaborated program is unchanged (fixpoint, plus the flat gate's VALUE clause at
+  9/9 with 0 drain notices).
+* **`core_ir_eval.mdk`** — untouched, and because RUN-B-007 AM-3 names this as the arm most likely
+  to ship silently broken it gets the explicit derivation: it consumes `CImplEntry`'s specificity
+  `score` and `CImplDefault`'s iface identity out of the LOWERED program. `ieByHead` is not
+  lowered, is read by no selector, and does not reach `core_ir_lower`. No lockstep edit is owed
+  because there is no `evalModules`-side change to mirror. ⚠️ The lockstep pair this bite DOES
+  touch is a different one — `ieInsertRow`/`ieIndexRows` — and it is fixed by construction (one
+  seam), asserted by doctest item 9.
+
+unchecked:
+* **`test/diff_compiler_perf_scaling.sh` NOT run** (measured 654-748 s, over the foreground
+  ceiling). Judged not the right instrument anyway: it grades a growth RATIO and a constant factor
+  at fixed impl count cannot move one — `compiler/AGENTS.md` says exactly this about that arm's
+  blindness. The allocation A/B above is the discriminating measurement.
+* **No `--bless`, no goldens, per §5.** `test/snapshots/compiler/typecheck.md` and
+  `test/selfproc_goldens/legA/types.typecheck.golden` are both MOVED by this diff (new top-level
+  bindings ⇒ additive-only on legA). **Blessed by nobody.**
+* **`refresh_seed.sh` NOT run**, deliberately, and flagged rather than assumed: C3a passed
+  byte-for-byte against the seed-bootstrapped converged reference, which is precisely the
+  comparison a stale seed fails.
+* **The corpus sweep was CUT from 1335 files to 415**, honestly: the first leg was `compiler/**`,
+  where each `check` is a whole-compiler multi-module compile — ~3 files/minute under this box's
+  load. 98 of those ran (the heaviest graphs in the tree, 159 rows each) plus 317 small
+  fixture/stdlib files; `test/llvm_fixtures*`, `test/must_fail_fixtures`, `test/parse_fixtures`,
+  `sqlite` and the rest of `compiler/**` did not. **Two globs I listed do not exist**
+  (`test/check_fixtures`, `test/types_fixtures` — the same two `a2` found) and `playground` holds
+  no `.mdk`; all three contributed nothing and are recorded rather than left to inflate the claim.
+* **The F1-immunity assertion (doctest 6d) is not backed by a mutation run.** Double-filing,
+  prepending and arm-drift were each proved by mutate-and-observe-RED; for 6d the evidence is the
+  derivation (`headBucketKey` has no interface component; `dispHeadTab hk = TkBare NsType
+  (headKeyName hk)`) plus the assertion that seq 4 — an `OriginUnresolved` interface, ONE
+  `oblIfaceKeys` leg where its siblings mint two — sits in the bucket on BOTH arms. I did not build
+  a fourth mutation giving the head key an interface component.
+* **`ieConcrete`/`ieHeadless` are still F1-affected and this bite does not fix that** (RUN-B-025
+  F1, a hard gate on the drain). It establishes only that the NEW index cannot inherit it.
+* **Quiescence caveat, flagged rather than assumed away:** `HEAD` moved under me mid-bite
+  (`604278bb` → `4b0f5b68`, the orchestrator's RUN-B-025 commit) and `.claude/sprint-b/DECISIONS.md`
+  was uncommitted (`M`) during my sweep and my first perf arm. Both are docs no gate reads and that
+  commit touched no `compiler/`/`test/` path (`git show --stat 4b0f5b68`), so the readings stand —
+  but the allocation A/B was taken across that boundary and the rule exists so that I do not make
+  that judgment silently.
+* **`ieByHead` is a table nothing reads, built on every compile including per-keystroke LSP.** That
+  is R1's objection to `a2` applied to this bite, and it is accepted for exactly ONE bite: if
+  `B-2.1-b2` does not land, this field is +495 KB per compile for nothing and should be reverted,
+  not carried.

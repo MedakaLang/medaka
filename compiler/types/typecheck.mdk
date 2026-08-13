@@ -168,8 +168,12 @@ import types.registry.{
   -- record lookup that selects a row by the receiver rather than by a spelling.
   headKeyIdent,
   -- A-2.2b (#1111): the dispatch-key layer.  `headBucketKey`/`RegKey` key the
-  -- head-tycon buckets by IDENTITY; `dispKeyRender` renders a whole obligation
-  -- ARGUMENT VECTOR, carrying its §8 I6.1 rigid positions in a separate group.
+  -- head-tycon buckets — ⚠️ by SPELLING, not by identity: this line said "by
+  -- IDENTITY" until B-2.1-a3, and `dispHeadTab hk = TkBare NsType (headKeyName hk)`
+  -- (the #1317 T1 rule, and the closed S0 #1277) says otherwise at the mint.  The
+  -- head's identity rides inside the `HeadKey` VALUE; the KEY it is filed under is
+  -- bare.  `dispKeyRender` renders a whole obligation ARGUMENT VECTOR, carrying its
+  -- §8 I6.1 rigid positions in a separate group.
   RegKey,
   regKeyOfTab,
   regKeyNTab,
@@ -4068,14 +4072,19 @@ ieRowTriple : ImplRow -> (IfaceRef, List Ty, List Require)
 ieRowTriple (ImplRow _ _ ir tys reqs _) = (ir, tys, reqs)
 
 -- The registry.  `ieRows` is the POPULATION in build order (ordinal order across
--- modules, `implDeclsWithReqs` order within one); the three buckets are the index —
--- the same three the obligation channel already has, with the SAME keys, minted
--- through the SAME `oblIfaceKeys`/`dispHeadTab` calls (see `ieInsertRow`), so `IE`
--- mints no parallel keying scheme.
+-- modules, `implDeclsWithReqs` order within one); the rest are INDEXES over it.
+-- `ieConcrete`/`ieHeadless`/`ieIfaceTags` are the obligation channel's own three,
+-- with the SAME keys, minted through the SAME `oblIfaceKeys`/`dispHeadTab` calls
+-- (see `ieInsertRow`), so `IE` mints no parallel keying scheme; `ieByHead` is
+-- `KeyBuckets`' partition, minted through the SAME `headBucketKey` (see
+-- `ieFileRowByHead`).  Derive the set rather than trusting a count here — this
+-- sentence said "the three buckets" while there were four, which is how
+-- `stampKeyTable`'s "five stampers" comment came to be wrong about seven.
 data ImplEnv = ImplEnv {
     ieRows : List ImplRow,  -- whole-graph, build order; the snapshot fold reads this
     ieConcrete : MultiRegistry ImplRow,
     ieHeadless : MultiRegistry ImplRow,
+    ieByHead : MultiRegistry ImplRow,
     ieIfaceTags : Registry SetRegistry,
     -- 🚨 A-3.4 PR2, AND IT IS A PERFORMANCE INVARIANT, NOT A CACHE.  One entry per
     -- distinct module ordinal, in ordinal order: `(o, universe of every row with
@@ -4109,6 +4118,7 @@ emptyImplEnv = ImplEnv {
   ieRows = [],
   ieConcrete = mregEmpty,
   ieHeadless = mregEmpty,
+  ieByHead = mregEmpty,
   ieIfaceTags = regEmpty,
   ieUnivSnaps = [],
 }
@@ -4179,10 +4189,12 @@ buildFlatImplEnv prog =
   ImplEnv { indexed | ieRows = rows, ieUnivSnaps = ieBuildSnaps rows }
 
 -- The index-only half of `ieInsertRow`: same keys, same writer, no `ieRows` append.
+-- ARCH B-2.1-a3: both halves now go through the ONE once-per-row seam `ieFileRow`,
+-- so an index added on either arm reaches both.  See its header — this pair is the
+-- two-parallel-drivers shape, and the seam is what keeps them from drifting.
 ieIndexRows : List ImplRow -> ImplEnv -> ImplEnv
 ieIndexRows [] env = env
-ieIndexRows ((r@(ImplRow _ _ ir _ _ _))::rest) env =
-  ieIndexRows rest (ieInsertRowKeys (oblIfaceKeys ir) r env)
+ieIndexRows (r::rest) env = ieIndexRows rest (ieFileRow r env)
 
 -- The per-ordinal prefix universes, in ONE left fold over the ordinal-ordered rows.
 -- See `ieUnivSnaps` for why this is a performance invariant rather than a cache.
@@ -4277,6 +4289,10 @@ ieAddRows (r::rest) env = ieAddRows rest (ieInsertRow r env)
 -- bucket + the tag set, headless → the iface's headless bucket.  `mregAppendK`, not
 -- `mregAddK`: within one bucket the FORWARD declaration order is semantic.
 --
+-- 🚨 ONCE PER `oblIfaceKeys` ELEMENT, i.e. TWICE PER ROW for every origin-bearing
+-- interface.  ONLY interface-keyed indexes belong here; anything else DOUBLE-FILES.
+-- The once-per-row seam is `ieFileRow` — read its header before adding a bucket.
+--
 -- ⚠️ OWED, RECORDED RATHER THAN FIXED UNDER REVIEW: `env.ieRows ++ [r]` is an
 -- append PER ROW, i.e. O(rows²) over the build.  It is small today — a tree-wide
 -- `impl` count in the low hundreds — but it is precisely the shape
@@ -4289,8 +4305,78 @@ ieAddRows (r::rest) env = ieAddRows rest (ieInsertRow r env)
 -- `buildImplEnv` derives that, after all inserts are done.  Full hazard, and what to do
 -- if you need to insert into a built `ImplEnv`, at `ieAddRows` above.
 ieInsertRow : ImplRow -> ImplEnv -> ImplEnv
-ieInsertRow (r@(ImplRow _ _ ir _ _ _)) env =
-  ieInsertRowKeys (oblIfaceKeys ir) r { env | ieRows = env.ieRows ++ [r] }
+ieInsertRow r env = ieFileRow r { env | ieRows = env.ieRows ++ [r] }
+
+-- ── ARCH B-2.1-a3 (Stage B sprint): THE ONE ONCE-PER-ROW FILING SEAM ──────────
+-- 🚨 EVERY PER-ROW INDEX GOES HERE, AND THE REASON IS A CORRECTNESS CONSTRAINT,
+-- NOT TIDINESS.  `ieInsertRowAt` below is entered ONCE PER `oblIfaceKeys`
+-- ELEMENT — i.e. TWICE for every row whose interface carries an origin, which is
+-- every row but an `OriginUnresolved` one (`oblIfaceKeys`: identity key + bare
+-- compatibility leg).  An index keyed by anything OTHER than the interface, filed
+-- there, DOUBLE-FILES: the bucket inflates, and every count, `min⊑` and
+-- declaration-order merge taken over it is silently wrong.  That is why
+-- `ieByHead` — keyed by HEAD, ACROSS interfaces — is filed here and not there.
+-- The doctests at `ieHeadProbeEnv` assert exactly-once and are fail-capable in
+-- that direction (a filing moved into `ieInsertRowAt` doubles their expected
+-- lists).
+--
+-- 🚨 AND IT EXISTS BECAUSE THERE ARE **TWO** ONCE-PER-ROW PATHS.  `ieInsertRow`
+-- (Module, via `ieAddRows`) and `ieIndexRows` (Flat, B-2.1-a2's index-only half)
+-- both spelled `ieInsertRowKeys (oblIfaceKeys ir) r` independently, so a new index
+-- added to one was silently absent from the other — the `evalModules` /
+-- `cevalModules` divergence shape `AGENTS.md` records ("a fix landed in one
+-- parallel driver and left the other broken for months").  With this seam the two
+-- arms cannot drift: the ONLY per-row difference left between them is the
+-- `ieRows` append, which is exactly the difference that is supposed to be there.
+ieFileRow : ImplRow -> ImplEnv -> ImplEnv
+ieFileRow (r@(ImplRow _ _ ir _ _ _)) env =
+  ieInsertRowKeys (oblIfaceKeys ir) r (ieFileRowByHead r env)
+
+-- The HEAD-keyed, interface-BLIND index: every row filed under its receiver head's
+-- bucket, or the headless bucket for a fully-general `impl C a`.  This is
+-- `KeyBuckets`' OWN partition (`bucketKeyEntriesFrom` → `headBucketRender`) over
+-- `IE`'s rows, and the key is minted by the SAME `headBucketKey` both tables now
+-- share, so the two cannot drift in keying — only in population, which is the
+-- whole point: `KeyBuckets` reaches its reader as a TOPOLOGICAL PREFIX
+-- (`universeKeyBucketsRef` / `stampKeyTable`), while this is GRAPH-GLOBAL.
+--
+-- 🚨 WHY AN INDEX AT ALL, MEASURED: the method-keyed selection leg
+-- (`matchedEntry` → `matchingEntries` → `candidateBucket`) is *the checker's
+-- hottest selector*, and answering it graph-globally by SCANNING `ieRows` cost
+-- `check-self` 21.5 s -> 25.1 s (+17%) — an O(rows) scan per goal, the exact
+-- `List`-as-a-map shape `compiler/AGENTS.md` forbids (DECISIONS.md RUN-B-023,
+-- which is why this bite exists and precedes the repoint).
+--
+-- ⚠️ ASCENDING BY `instRefSeq`, BY CONSTRUCTION, AND THAT IS LOAD-BEARING.  Both
+-- filing paths fold rows in forward order (`buildImplEnvGo` threads one whole-graph
+-- `seq` across modules in ordinal order; `buildFlatImplEnv` folds one forward list),
+-- and `mregAppendK` APPENDS — so every bucket is in graph-global forward
+-- declaration order.  That is `mergeByDeclIdx`'s documented ascending precondition,
+-- which `universeKeyBucketsRef` VIOLATES (`bucketKeyEntriesFrom` restarts at 0 per
+-- module, so its indices duplicate and each module's slice is prepended), and it is
+-- the property RUN-B-007's declaration-index ruling rests on.  A prepend +
+-- reverse-at-finalize would file in O(1) instead of `mregAppendK`'s O(bucket), and
+-- it is deliberately NOT taken: it makes the ascending invariant true only AFTER a
+-- finalize step, which is precisely the second-maintainer hazard `ieAddRows`'s
+-- header forbids for `ieUnivSnaps` ("do not add a second maintainer, and do not
+-- insert without one").  The cost is per-BUCKET, not per-population — this is not
+-- `ieRows`' `++ [r]` — and it is measured, not asserted: see DEBT.md B-2.1-a3.
+ieFileRowByHead : ImplRow -> ImplEnv -> ImplEnv
+ieFileRowByHead (r@(ImplRow _ _ _ tys _ _)) env = ImplEnv { env | ieByHead = mregAppendK (headBucketKey (univReceiverTag tys)) r env.ieByHead }
+
+-- 🚨 THE `IE` HEAD-BUCKET READ ACCESSOR — the peer of `bucketOfHead` on
+-- `KeyBuckets`.  Goal side and impl side project through the SAME `headBucketKey`,
+-- so a lookup cannot silently miss the bucket its rows were filed under (which is
+-- what `dispHeadTab`'s derivation is about).  Returns the rows ASCENDING by
+-- `instRefSeq` — see `ieFileRowByHead`; a consumer feeding `mergeByDeclIdx` depends
+-- on that and must not re-order them.
+--
+-- ⚠️ NO PRODUCTION CALLER YET, deliberately: `B-2.1-a3` is additive and
+-- behaviour-neutral, and `B-2.1-b2` is the repoint that consumes it.  It is bound
+-- here rather than left for that bite to open-code, for the reason `ieUniverseAt`
+-- gives: one read site is one place to re-scope.
+ieHeadRows : Option HeadKey -> ImplEnv -> List ImplRow
+ieHeadRows hd env = mregLookupK (headBucketKey hd) env.ieByHead
 
 ieInsertRowKeys : List TabKey -> ImplRow -> ImplEnv -> ImplEnv
 ieInsertRowKeys [] _ env = env
@@ -4579,6 +4665,157 @@ ieProbeEnv = buildImplEnv
 -- 1
 ieUnivConcreteOf : ImplUniverse -> MultiRegistry (List Ty, List Require)
 ieUnivConcreteOf (ImplUniverse conc _ _) = conc
+
+-- ── ARCH B-2.1-a3: the HEAD-keyed index's corpus, built to DISCRIMINATE ────────
+-- `ieProbeEnv` above cannot grade `ieByHead`: one impl per module means "exactly
+-- once", "ascending" and "interface-blind" all read the same value, so an index that
+-- double-filed, prepended, or was keyed on the interface would pass it.  This corpus
+-- separates the three.  Four of its five impls carry an ORIGIN-BEARING interface, so
+-- `oblIfaceKeys` mints TWO keys for each — which is what makes the double-file
+-- hazard reachable at all (an all-`OriginUnresolved` corpus would mint one apiece and
+-- grade nothing about the placement).
+--
+--   `amod` (ordinal 0): `impl Same Blob`, `impl Other Blob` — two DIFFERENT
+--                       interfaces at the SAME head, which is the case `ieConcrete`
+--                       separates and `ieByHead` must not.
+--   `zmod` (ordinal 1): `impl Same Blob` (its own same-spelled head — `dispHeadTab`
+--                       is spelling-keyed, #1317 T1, so it shares the bucket); a
+--                       fully-general `impl Gen a`, which has no head tycon and must
+--                       land in the HEADLESS bucket instead; and one impl whose
+--                       interface is `OriginUnresolved` (below).
+--
+-- 🚨 THE `OriginUnresolved` ROW IS THE `ieByHead`-IS-IMMUNE-TO-F1 PROBE, and it is
+-- the reason this corpus has a fifth member.  RUN-B-025's review finding F1: the
+-- interface keying of `a2`'s shared ref is ARM-ASYMMETRIC — `oblIfaceKeys` branches
+-- on `irOrigin`, and a user-declared interface has no `flatTyOriginScope` entry on
+-- Flat, so its impls file under ONE key there and TWO on Module.  `ieByHead` cannot
+-- inherit that, because its key has no interface component AT ALL: it is
+-- `headBucketKey (univReceiverTag tys)`, and `dispHeadTab hk = TkBare NsType
+-- (headKeyName hk)` — bare spelling, origin-blind (#1317 T1).  This row asserts that
+-- rather than arguing it: it lands in the SAME head bucket as its origin-bearing
+-- siblings while minting half as many interface keys.
+ieOtherImplIn : String -> Decl
+ieOtherImplIn m = DImpl {
+  pub = True,
+  iface = "Other",
+  tys = [ieTyBlob m],
+  reqs = [],
+  methods = [],
+  implOrigin = OriginModule m,
+}
+
+-- a fully-general `impl Gen a`: `univReceiverTag` answers `None` for a `TyVar` head,
+-- so this row is the headless-bucket case (#1128's shape).
+ieGenImplIn : String -> Decl
+ieGenImplIn m = DImpl {
+  pub = True,
+  iface = "Gen",
+  tys = [TyVar "a"],
+  reqs = [],
+  methods = [],
+  implOrigin = OriginModule m,
+}
+
+-- `impl Loose Blob` with an IDENTITY-LESS interface: `oblIfaceKeys` mints ONE key for
+-- it (the bare leg) where every sibling above gets two.  Its HEAD is an ordinary
+-- concrete `Blob`, so a head-keyed index must file it beside them regardless — see the
+-- F1 paragraph above.
+ieLooseImplIn : String -> Decl
+ieLooseImplIn m = DImpl {
+  pub = True,
+  iface = "Loose",
+  tys = [ieTyBlob m],
+  reqs = [],
+  methods = [],
+  implOrigin = OriginUnresolved,
+}
+
+ieHeadProbeAmod : List Decl
+ieHeadProbeAmod = [ieSameImplIn "amod", ieOtherImplIn "amod"]
+
+ieHeadProbeZmod : List Decl
+ieHeadProbeZmod =
+  [ieSameImplIn "zmod", ieGenImplIn "zmod", ieLooseImplIn "zmod"]
+
+-- the SAME four decls as one flat program — the Flat arm's input, so both once-per-row
+-- filing paths are graded over one corpus and a drift between them is visible.
+ieHeadProbeDecls : List Decl
+ieHeadProbeDecls = ieHeadProbeAmod ++ ieHeadProbeZmod
+
+ieHeadProbeEnv : ImplEnv
+ieHeadProbeEnv = buildImplEnv
+  [
+    declEnvModule 0 "amod" ieHeadProbeAmod,
+    declEnvModule 1 "zmod" ieHeadProbeZmod,
+  ]
+
+-- 5. THE POSITIVE CONTROL: the corpus is populated and numbered as claimed.  Read
+--    this first — every assertion below is a projection of it, so if this line is
+--    wrong they are all measuring the wrong thing.
+-- > map (r => instRefSeq (ieRowInst r)) ieHeadProbeEnv.ieRows
+-- [0, 1, 2, 3, 4]
+--
+-- 6. `ieByHead` — four properties, one line, each independently fail-capable:
+--    6a. EXACTLY ONCE PER ROW.  Filed in `ieFileRow` (once per row), NOT in
+--        `ieInsertRowAt` (once per `oblIfaceKeys` element).  Move the filing there
+--        and this reads `[0, 0, 1, 1, 2, 2, 4]` — the inflated bucket that would
+--        corrupt every count and `min⊑` taken over it.  ⚠️ Note seq 4 appears ONCE
+--        even then: its interface is `OriginUnresolved`, so it mints one key.  A
+--        double-file audit that only looked at ONE row could pick that one and see
+--        nothing.
+--    6b. INTERFACE-BLIND, ACROSS MODULES.  `Same`@amod, `Other`@amod, `Same`@zmod
+--        and `Loose` share the bucket: this is `KeyBuckets`' head partition, not
+--        `ieConcrete`'s `[iface, head]` one.  An index keyed on the interface reads
+--        `[0]` or `[0, 2]`, never `[0, 1, 2, 4]`.
+--    6c. ASCENDING BY `instRefSeq` — `mergeByDeclIdx`'s precondition (RUN-B-007's
+--        declaration-index ruling).  `mregAddK` in place of `mregAppendK` reads
+--        `[4, 2, 1, 0]`.
+--    6d. IMMUNE TO THE ARM-KEYING ASYMMETRY (RUN-B-025 F1).  Seq 4's interface mints
+--        ONE `oblIfaceKeys` leg where 0/1/2 mint two, and it is in the bucket all the
+--        same — because this key has no interface component.  An index that grew one
+--        (or that keyed the head through anything origin-bearing) drops seq 4 here.
+-- > map (r => instRefSeq (ieRowInst r)) (ieHeadRows (Some ieProbeBlobHead) ieHeadProbeEnv)
+-- [0, 1, 2, 4]
+--
+-- 7. THE HEADLESS ROW IS IN THE HEADLESS BUCKET AND NOWHERE ELSE.  `impl Gen a` is
+--    seq 3, and item 6 shows it is absent from the concrete bucket — so the two
+--    arms of `headBucketKey` are not collapsing into one.
+-- > map (r => instRefSeq (ieRowInst r)) (ieHeadRows None ieHeadProbeEnv)
+-- [3]
+--
+-- 8. THE CONTROL FOR 6b, and it is what proves that line tests something: the
+--    INTERFACE-keyed bucket over the SAME env answers with ONE row where the head
+--    bucket answers with three.  If `ieByHead` were a re-spelling of `ieConcrete`,
+--    item 6 would read this value instead.
+-- > listLen (mregLookupK (ieProbeKey "amod") ieHeadProbeEnv.ieConcrete)
+-- 1
+--
+-- ⚠️ ITEM 9'S LAST EXPECTATION LINE IS FOLLOWED DIRECTLY BY A DECLARATION
+--    (`ieProbeBlobHead`), AND IT HAS TO BE.  `medaka test` absorbs an ADJACENT
+--    COMMENT into a doctest's expected output, so a comment there — the block-end
+--    banner, where this block first ended — makes the last assertion FAIL with
+--    `expected: [3]` / `actual: [3]` and the banner spliced between them: a real
+--    failure that reads like a tooling bug.  Measured on this binary while writing
+--    these tests.  A decl terminates the block; do not move it or interpose a
+--    comment.
+--
+-- 9. 🚨 BOTH ONCE-PER-ROW ARMS FILE IT.  `buildImplEnv` (Module, via `ieAddRows` →
+--    `ieInsertRow`) and `buildFlatImplEnv` (Flat, via `ieIndexRows`) are the two
+--    paths B-2.1-a2 left in parallel, and the failure shape for a parallel pair in
+--    this tree is a fix landing in one and not the other (`evalModules` /
+--    `cevalModules`, `AGENTS.md`).  The same five decls through the FLAT builder must
+--    give the same buckets.  A future index added to only one arm leaves every line
+--    above green and reddens this one.
+--    ⚠️ This is ALSO the arm-symmetry assertion F1 does not have for the interface
+--    keying: identical head buckets on both arms, over a corpus that deliberately
+--    mixes origin-bearing and identity-less interfaces.  It says nothing about
+--    `ieConcrete`/`ieHeadless`, which is where F1 lives and which stays open.
+-- > map (r => instRefSeq (ieRowInst r)) (ieHeadRows (Some ieProbeBlobHead) (buildFlatImplEnv ieHeadProbeDecls))
+-- [0, 1, 2, 4]
+-- > map (r => instRefSeq (ieRowInst r)) (ieHeadRows None (buildFlatImplEnv ieHeadProbeDecls))
+-- [3]
+ieProbeBlobHead : HeadKey
+ieProbeBlobHead = headKeyOfCon (OriginModule "amod") "Blob"
 -- ═══ #1112 A-3.4: IE-BLOCK-END ═════════════════════════════════════════════════
 
 -- ═══ #1519 A-3.3: THE `CE` REGISTRY — CE-BLOCK-BEGIN ═══════════════════════════
@@ -17871,8 +18108,16 @@ bucketKeyEntriesFrom i ((KeyEntry ms hd hty key ifn itys reqs _)::rest) acc =
 -- `eval.mdk`, `llvm_emit.mdk` and `wasm_emit.mdk` each derive independently.  The
 -- TABLE key moved; the emitted symbol did not.
 headBucketRender : Option HeadKey -> String
-headBucketRender None = regKeyRender headlessBucketKey
-headBucketRender (Some hk) = regKeyRender (regKeyOfTab (dispHeadTab hk))
+headBucketRender hd = regKeyRender (headBucketKey hd)
+
+-- ARCH B-2.1-a3: the key `headBucketRender` renders, as a `RegKey` rather than a
+-- string.  Split out so `IE`'s head-keyed index (`ieFileRowByHead`, which files
+-- into a `MultiRegistry` and therefore needs the key, not its rendering) mints the
+-- SAME partition this table does — one mint, two tables, no drift.  Extensionally
+-- unchanged: `regKeyRender` of these two arms is what the two arms above spelled.
+headBucketKey : Option HeadKey -> RegKey
+headBucketKey None = headlessBucketKey
+headBucketKey (Some hk) = regKeyOfTab (dispHeadTab hk)
 
 -- The key of the bucket holding the fully-general (`impl C a`) entries.
 headlessBucketKey : RegKey
