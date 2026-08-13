@@ -101,6 +101,34 @@
 #     arises on any arm. This is the ENVIRONMENT CONTROL: if it breaks, the prelude
 #     or the harness broke, not the arms, and this gate says so rather than
 #     reporting a finding.
+#   * user_iface_dispatch / user_iface_undetermined — ARCH B-2.1-b2, and they exist
+#     because the six rows above are all PRELUDE-interface or accept/reject shapes,
+#     which is exactly why this gate was BLIND to the question `B-2.1-a4` had to
+#     answer by hand (DECISIONS.md RUN-B-030). R1's finding F1: a USER-declared
+#     interface is absent from `flatTyOriginScope`, so on FLAT its impls file under
+#     the BARE `TabKey` only, while on MODULE they file under both the identity key
+#     and the bare one — one ref (`bodyImplEnvRef`) carrying two keyings, selected by
+#     driver arm. `a4` adjudicated it BENIGN (the goal side mints `oblIfaceKey`,
+#     which IS the bare key for an identity-less goal, so write-side ⊇ read-side) —
+#     but a benign verdict no gate defends is the shape that rots, and `B-2.1-b2` is
+#     the bite that gives that substrate its first reader. These four rows are `a4`'s
+#     own probes, re-derived here:
+#       - p1 ACCEPT / value 7 — a user `Sizer` with one `impl Sizer Blob` and a
+#         concrete call. The impl files bare-only on FLAT and the goal HITS. §8 I5.
+#       - p3 REJECT `T-NO-IMPL` — same interface, called at a head with no impl.
+#         This is p1's FAIL-CAPABILITY control: without it, "p1 accepts" is also what
+#         an arm that accepts everything produces.
+#       - p5 REJECT `T-AMBIGUOUS-INSTANCE` — 🚨 the SILENT sub-case, and the reason
+#         these rows are worth their cost. `checkUndeterminedObligation`'s RULE 3 is
+#         gated on `implCountForIfaceU >= 2`, so a MISSED universe lookup does not
+#         mis-answer loudly: the count reads 0 and the diagnostic simply STOPS BEING
+#         EMITTED — loud → silent, with no value and no golden moving. An absence
+#         probe cannot see that; only a row asserting the diagnostic IS there can.
+#       - p6 ACCEPT / value 3 — p5's control: the identical shape with ONE impl,
+#         proving the guard is genuinely COUNT-driven and not shape-driven (if p6
+#         also rejected, p5 would be evidence about the shape, not about the count).
+#     Each FLAT row's `value` column runs `medaka run`, i.e. the MODULE arm's 1-module
+#     wrapper, so every accepting row here is a two-arm observation on one file.
 #   * no_impl_anywhere — REJECT (`T-NO-IMPL`) on both arms. There is genuinely no
 #     `impl Tag (Wrap …)` in the program, so rejection is correct. This is the
 #     NEGATIVE control: it is what stops an always-accept regression from making
@@ -191,6 +219,39 @@ printf '%s\n' "$IFACE_DECLS" > "$WORK/c3m/iface.mdk"
 printf '%s\n\n%s\n' "$IMPORT_IFACE" "$NEST_DECL" > "$WORK/c3m/nest.mdk"
 printf '%s\nimport nest.{nest}\n\n%s\n' "$IMPORT_IFACE" "$MAIN_DECL" > "$WORK/c3m/order1.mdk"
 
+# ── cases user_iface_dispatch / user_iface_undetermined (ARCH B-2.1-b2) ───────
+# A USER-DECLARED interface, not a prelude one — see the header. All four are FLAT
+# (no import, so `check` takes checkProgramSeededSplit); each accepting row's value
+# column additionally exercises the MODULE arm through `run`'s 1-module wrapper.
+SIZER_IFACE='public export data Blob = Blob Int
+
+export interface Sizer t where
+  sizeOf : t -> Int
+
+export impl Sizer Blob where
+  sizeOf (Blob n) = n'
+# The two-method form: `make` is RETURN-position, so `sizeOf (make 3)` leaves the
+# interface param UNDETERMINED — which is what reaches RULE 3's impl-count guard.
+SIZER_MK='public export data Blob = Blob Int
+
+export interface Sizer t where
+  make : Int -> t
+  sizeOf : t -> Int
+
+export impl Sizer Blob where
+  make n = Blob n
+  sizeOf (Blob n) = n'
+SIZER_MK_OTHER='public export data Other = Other Int
+
+export impl Sizer Other where
+  make n = Other n
+  sizeOf (Other n) = n'
+mkdir -p "$WORK/c4" "$WORK/c5"
+printf '%s\n\nmain = println (sizeOf (Blob 7))\n' "$SIZER_IFACE" > "$WORK/c4/p1.mdk"
+printf '%s\n\npublic export data Other = Other Int\n\nmain = println (sizeOf (Other 7))\n' "$SIZER_IFACE" > "$WORK/c4/p3.mdk"
+printf '%s\n\n%s\n\nmain = println (sizeOf (make 3))\n' "$SIZER_MK" "$SIZER_MK_OTHER" > "$WORK/c5/p5.mdk"
+printf '%s\n\nmain = println (sizeOf (make 3))\n' "$SIZER_MK" > "$WORK/c5/p6.mdk"
+
 # ── the rows ──────────────────────────────────────────────────────────────────
 # case | label | path | arm | mode | correct | today | code | value
 #   mode PIN  : `correct` is asserted; `today` is ignored (written as the same).
@@ -209,6 +270,10 @@ all_visible|module_order1|c2m/order1.mdk|MODULE|PIN|ACCEPT|ACCEPT|-|wrap(int)
 all_visible|module_order2|c2m/order2.mdk|MODULE|PIN|ACCEPT|ACCEPT|-|wrap(int)
 no_impl_anywhere|flat|c3f/flat.mdk|FLAT|PIN|REJECT|REJECT|T-NO-IMPL|-
 no_impl_anywhere|module_order1|c3m/order1.mdk|MODULE|PIN|REJECT|REJECT|T-NO-IMPL|-
+user_iface_dispatch|p1_concrete_hit|c4/p1.mdk|FLAT|PIN|ACCEPT|ACCEPT|-|7
+user_iface_dispatch|p3_no_impl|c4/p3.mdk|FLAT|PIN|REJECT|REJECT|T-NO-IMPL|-
+user_iface_undetermined|p5_two_impls|c5/p5.mdk|FLAT|PIN|REJECT|REJECT|T-AMBIGUOUS-INSTANCE|-
+user_iface_undetermined|p6_one_impl|c5/p6.mdk|FLAT|PIN|ACCEPT|ACCEPT|-|3
 "
 CHAR_ISSUE=1564
 
@@ -327,7 +392,7 @@ unset IFS
 # True before AND after the #1564 fix; silent about WHETHER an arm accepts. This is
 # what catches an arm that accepts and miscompiles, which acceptance-agreement
 # would have graded green.
-for case in cond_impl_third_module all_visible no_impl_anywhere; do
+for case in cond_impl_third_module all_visible no_impl_anywhere user_iface_dispatch user_iface_undetermined; do
   # `grep -c` exits 1 on no match, so count through `wc -l` instead — a `|| echo 0`
   # fallback appends a SECOND line and the arithmetic below then reads "0\n0".
   n="$(grep "^$case=" "$VALFILE" | wc -l | tr -d ' ')"

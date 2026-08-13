@@ -232,7 +232,7 @@ public export data Mono =
   --     `o` to `headKeyOfCon`, so every goal-side `HeadKey` CARRIES the
   --     identity — and every consumer of that `HeadKey` then projects it BACK to
   --     the bare spelling before comparing: `dispHeadTab` (the bucket key,
-  --     `implExistsForHeadGo`'s retest, `countHeadGo` / `countHeadByIfaceGo`,
+  --     `implExistsForHeadGo`'s retest, `countHeadGo` / `ieCountHeadByIfaceGo`,
   --     the obligation universes) or `headKeyName` / `headKeyNameOr` (the
   --     emitted route word).  `headTyconNameMono`, the name-only residual, still
   --     hands out a bare name outright.  (A-2.10's draft of this paragraph also
@@ -15241,7 +15241,7 @@ headTabIs (Some hk) goal = dispHeadTab hk == goal
 headTabIs None _ = False
 
 -- `headTabIs` widened to a goal that may itself be HEADLESS, for the two
--- counting scans (`countHeadGo`, `countHeadByIfaceGo`) whose goal is an
+-- counting scans (`countHeadGo`, `ieCountHeadByIfaceGo`) whose goal is an
 -- `Option HeadKey` rather than the `HeadKey` `implExistsForHead` always has.
 -- Same rule, same reason: both sides go through `dispHeadTab`, so the retest is
 -- exactly the partition `bucketOfHead` filed the entries under and never a
@@ -17918,7 +17918,7 @@ public export data ImplEntry =
 -- coherent siblings at the same head still wins there.  (#203: the element/requires
 -- routers that USED to first-match this table — the former implDictRoutesIn /
 -- argImplDictRoutesForGo — now select the most-specific impl over KeyBuckets via
--- `matchedEntry` / `selectImplEntryByIface`; forward order still decides their
+-- `matchedEntry` / `ieSelectRowByIface`; forward order still decides their
 -- tie-break when no unique min⊑ exists.)  This is NOT the coherence structure —
 -- cohScan scans a separate reverseL-ed list; these buckets keep forward
 -- order and coherence is not routed through them.
@@ -17966,7 +17966,9 @@ implEntryFromTys iface (headTy::rest) reqs methods = match headTyconNameTy headT
 -- They were audited as a SET; only `keyEntryOf` was changed, deliberately:
 --
 --  • `keyEntryOf` / KeyBuckets IS the registry every route selector reads
---    (`matchedEntry`, `selectImplEntryByIface`), so it is where the missing candidate
+--    (`matchedEntry`, and — since ARCH B-2.1-b2 projected the same shape out of
+--    `IE`'s rows via `keyEntryOfRow` — `ieSelectRowByIface`), so it is where the
+--    missing candidate
 --    was actually costing a wrong answer.  Fixed.
 --
 --  • `implEntryFromTys` / ImplBuckets holds only requires-BEARING impls and is read
@@ -17977,7 +17979,9 @@ implEntryFromTys iface (headTy::rest) reqs methods = match headTyconNameTy headT
 --    unioning them widens a FIRST-MATCH fallback, which is a different change with a
 --    different failure mode.  It is also not NEEDED for a headless impl's own
 --    `requires` to be discharged: that runs through `selectReqImpl` with the iface
---    known → `selectImplEntryByIface` over KeyBuckets, which returns the winner's own
+--    known → `ieSelectRowByIface` over `IE` (was `selectImplEntryByIface` over
+--    KeyBuckets until ARCH B-2.1-b2; the headless-bucket argument is unchanged,
+--    because `ieHeadRows None` is that same partition), which returns the winner's own
 --    `reqs`.  Verified end-to-end on a headless-impl-with-`requires` probe (a
 --    `impl Tag a requires Dbg a` beside `impl Tag (Box Int)`), which went from
 --    99/99/99 to the hand-derived 99/1007/1007 on run AND native build with only the
@@ -17998,8 +18002,10 @@ implEntryFromTys iface (headTy::rest) reqs methods = match headTyconNameTy headT
 -- so the next reader inherits it rather than re-deriving it.  The set above is the
 -- REGISTRARS (who writes a bucket).  The set below is the READERS that still index
 -- `bucketOf tag` DIRECTLY and so are now out of step with `candidateBucket`:
--- `implExistsForHead`, `countHead`/`headCollides`, `countHeadByIface`/
--- `headCollidesByIface`.
+-- `implExistsForHead`, `countHead`/`headCollides`, `ieCountHeadByIface`/
+-- `ieHeadCollidesByIface` (the last two index `ieHeadRows` rather than
+-- `bucketOfHead` since ARCH B-2.1-b2 — a different population, the SAME
+-- out-of-step-with-the-union shape).
 --
 -- The sharp one is `countHead`.  It is METHOD-NAME keyed, and `bucketOf noneHeadTag`
 -- holds the headless impls of EVERY interface, while two interfaces declaring the
@@ -18034,7 +18040,7 @@ implMethodNameTc (ImplMethod n _ _) = n
 -- single most-specific-wins selector for EVERY resolution position (§6 uniform
 -- resolution).  ImplBuckets OMITS no-requires impls, so it cannot see the specific
 -- `List Int` sibling next to a general `List a`; KeyBuckets carries every impl plus its
--- requires, so `selectImplEntryByIface` / `matchedEntry` return the min⊑ winner's OWN
+-- requires, so `ieSelectRowByIface` / `matchedEntry` return the min⊑ winner's OWN
 -- requires ([] for a no-requires specific impl — never the general sibling's).
 -- #1128 (F-3b): the trailing Int is the entry's DECLARATION INDEX — its position in
 -- the flat, forward-ordered entry list this table was built from.  It exists for one
@@ -18318,16 +18324,28 @@ matchingEntries buckets name goals = match goalHeadCon goals
 --      `resolveSites`/`resolveArgStamps`/`resolveOpSites`/`resolveDictApps` thread to
 --      `keyForSite`.
 --
---      It does NOT hold for `universeKeyBucketsRef`, and that table reaches this
---      merge on EVERY MULTI-MODULE COMPILE: `appendUniverseAccums` calls
+--      It does NOT hold for `universeKeyBucketsRef`: `appendUniverseAccums` calls
 --      `bucketKeyEntries` once per module with a NON-EMPTY accumulator, so
 --      `bucketKeyEntriesFrom` restarts at 0 (indices DUPLICATE across modules within
 --      one bucket) and nothing ever reverses it (each module's slice is in
---      DESCENDING index order).  `checkBodyImpl`'s Module arm copies it into
+--      DESCENDING index order).
+--
+--      ✅ ARCH B-2.1-b2: THAT VIOLATION NO LONGER REACHES A SELECTOR, AND IT WAS
+--      FIXED BY DELETION RATHER THAN BY REPAIR (DECISIONS.md RUN-B-007).  This
+--      paragraph used to end: `checkBodyImpl`'s Module arm copies that table into
 --      `shadowKeyTableRef`, which `concreteReqMatchByIface` reads →
---      `selectImplEntryByIface` → `matchingEntriesByIface` → here.  So
---      `mergeByDeclIdx`'s ascending-operands precondition is VIOLATED on that
---      consumer and its output order there is deterministic but arbitrary.
+--      `selectImplEntryByIface` → `matchingEntriesByIface` → here — so the
+--      precondition was violated on EVERY MULTI-MODULE COMPILE and the output order
+--      there was deterministic but arbitrary.  All three of those functions are gone:
+--      the iface- and method-keyed selectors now merge `ieHeadRows` buckets, whose
+--      index is `instRefSeq`, a WHOLE-GRAPH counter appended in build order — so both
+--      operands are ascending BY CONSTRUCTION and the tie-break is graph-global
+--      declaration order.  `universeKeyBucketsRef` still has the property; what
+--      changed is that no `mergeByDeclIdx` consumer reads it.  The remaining reader
+--      of THIS function is the method-keyed ROUTE WORD (`keyForSite` →
+--      `matchedEntry` → `matchingEntries`), threaded the `stampKeyTable` built by
+--      `buildKeyTable` — which is the `omEmpty`-seeded, per-bucket-reversed table the
+--      paragraph above describes, i.e. the arm where the precondition HOLDS.
 --
 --      Why that is recorded rather than fixed: list order only decides an ANSWER
 --      when `pickMostSpecificEntry` has no unique min⊑ and falls back to
@@ -18507,7 +18525,7 @@ pickMostSpecificEntry goals (e::rest) = match findMostSpecificEntry (e::rest) (e
 --     class (`match(IE, C τ̄)`).  Selecting across that set is a candidate-set
 --     DEFORMATION of the method-keyed path, not an ambiguous program, so reporting
 --     it as ambiguity would be the wrong message.  (The iface-keyed caller
---     `matchingEntriesByIface` cannot produce such a set, so the gate is a no-op
+--     `ieEntriesForIface` cannot produce such a set, so the gate is a no-op
 --     there.)
 --
 --     🚨 THIS GATE IS NOT INERT — IT IS DECLINING TO REPORT A LIVE S0 (**#1182**),
@@ -18794,7 +18812,7 @@ headCollides table name hd = countHead table name hd > 1
 -- leaves no regression test behind, so the shape's assertion moved into
 -- `test/diff_compiler_check_cli_modules.sh` (the `#1277, DRAINED BY A-2.10` block).
 --
--- Why it MATTERS even though no gate moved: `headCollides` / `headCollidesByIface`
+-- Why it MATTERS even though no gate moved: `headCollides` / `ieHeadCollidesByIface`
 -- going False where they were True makes `keyForSite` / `keyForSiteByIface` stamp
 -- the BARE HEAD WORD instead of the winner's canonical key, while
 -- `core_ir_lower.declRouteKey` derives the impl's own word from a spelling-based
@@ -18860,73 +18878,249 @@ countHeadGo ((KeyEntry methodNames hd2 _ _ _ _ _ _)::rest) name goal
     1 + countHeadGo rest name goal
   | otherwise = countHeadGo rest name goal
 
--- ── #203: INTERFACE-keyed most-specific selector (§3 `inst` = min⊑(match)) ───
--- The shared min⊑ selector, keyed by INTERFACE (not method name), over the ALL-impls
--- KeyBuckets registry (every impl carries its iface + requires, unlike ImplBuckets
--- which OMITS no-requires impls).  Returns the unique most-specific matching impl's
--- KeyEntry — from which callers read the canonical key AND the impl's OWN requires
--- ([] for a no-requires specific impl).  ≤1 match or equal heads → the FIRST match,
--- byte-identical to the historical first-match scans; ⊑-incomparable heads at a
--- CLOSED goal → still the first match, but #1155 now also rejects the program there.
--- This is the ONE selector every resolution position (E/F/G/H) now funnels
--- through, discharging the §6 "uniform resolution" obligation.
-selectImplEntryByIface : KeyBuckets -> String -> List Mono -> Option KeyEntry
-selectImplEntryByIface buckets iface goals =
-  pickMostSpecificEntry goals (matchingEntriesByIface buckets iface goals)
+-- ── ARCH B-2.1-b2 (Stage B sprint): SELECTION ON THE GRAPH-GLOBAL SUBSTRATE ──
+-- 🚨 THE FOUR `…ByIface` VARIANTS THAT LIVED HERE ARE DELETED, AND THAT IS THE
+-- BITE — not a tidy-up.  `selectImplEntryByIface` / `matchingEntriesByIface` /
+-- `headCollidesByIface` / `countHeadByIface` read a TOPOLOGICAL PREFIX of the
+-- program's impls (`shadowKeyTableRef` on the checker leg, `stampKeyTable` on the
+-- router leg), so a goal whose impl sits in a topologically LATER module could not
+-- see that impl at all — it recovered no `requires`, no dict was threaded, and the
+-- site rejected with `T-REQUIRES-UNROUTED` or (worse) under-applied.  That is
+-- #1564/#1599/#1072/#1560/#1182.  The three selection legs now read the
+-- GRAPH-GLOBAL `IE` that `B-2.1-a2` seats on `perRun.bodyImplEnvRef` (ONE ref,
+-- both driver arms), indexed by head ACROSS interfaces by `B-2.1-a3`
+-- (`ieByHead` / `ieHeadRows`).  DICT §8 I5: "instance candidacy is graph-global;
+-- import scoping filters NAMES, never instances."
+--
+-- 🚨 THE THREE LEGS, NAMED, BECAUSE MOVING TWO OF THEM PRODUCES AN S0.  Measured
+-- (DECISIONS.md RUN-B-023): repointing only the checker and the router took
+-- #1564's fixture from a LOUD located reject to `check` exit 0 with a
+-- **SEGFAULTING binary** (139) — the checker discharged the `requires` so the impl
+-- gained a dict param, while the METHOD-keyed element-route leg still selected off
+-- the prefix and passed none.  A `keyForSite`-shaped fix is not enough and the
+-- must-fail pin cannot see the difference (it grades `check`).
+--   1. CHECKER — `concreteReqMatchByIface` (evidence for the obligation channel).
+--   2. ROUTER  — `selectReqImpl` AND `keyForSiteByIface` **with its collision
+--      retest**: `entailInst`'s `EKNestedTop` arm computes the same selection
+--      twice (route word + `requires`) on the same iface and goal vector, so
+--      moving one without the other is a §6 C2 break by construction.
+--   3. METHOD-keyed — the element dicts at `implDictRoutesForFull` /
+--      `argImplDictRoutesForEncl`, which used `matchedEntry` over the prefix
+--      `stampKeyTable`.  ⚠️ `matchedEntry` / `matchingEntries` / `candidateBucket`
+--      / `countHead` / `headCollides` / `keyForSite` themselves stay LIVE on that
+--      prefix table: they serve the method-keyed ROUTE WORD, whose only
+--      prefix-vs-global difference is a head-collision COUNT.  That residual is
+--      stated as a `nearest miss` in DEBT.md `B-2.1-b2` rather than moved here,
+--      because moving it renames route words and moves the seed.
+--
+-- ⚠️ ONE min⊑ SELECTOR, NOT TWO.  DICT §11 / §6 *uniform resolution* forbids a
+-- second one, so every entry point below funnels through the SAME
+-- `pickMostSpecificEntry` — hence the same `entryCovers`, the same closed-goal
+-- `T-AMBIGUOUS-INSTANCE` report, the same first-match fallback — by projecting
+-- rows into the `KeyEntry` that selector already speaks.  `keyEntryOfRow` is that
+-- projection, and A-3.7's `cohImplOfRow` is its precedent one consumer over.
+--
+-- ⚠️ THE DECLARATION INDEX IS `instRefSeq`, WHICH FIXES RUN-B-007's DEFECT BY
+-- DELETION RATHER THAN BY REPAIR.  `mergeByDeclIdx` requires both operands
+-- ASCENDING by index; the prefix table VIOLATES that (`bucketKeyEntriesFrom`
+-- restarts at 0 per module so indices DUPLICATE, and each module's slice is
+-- prepended, hence descending — see `mergeByDeclIdx` and `candidateBucket`).
+-- `instRefSeq` is a WHOLE-GRAPH running counter and `ieFileRowByHead` APPENDS, so
+-- every `ieHeadRows` bucket is ascending BY CONSTRUCTION: the tie-break at a
+-- no-unique-minimum goal is graph-global declaration order, not an
+-- arbitrary-but-deterministic order nothing could state.
+--
+-- The `KeyEntry` a row projects to, field for field what `keyEntryOf` builds from
+-- the same `DImpl` — same `headTyconTy` head projection, same `implKeyTc` key,
+-- same `tys` as `itys` — with `instRefSeq` where `bucketKeyEntriesFrom` stamped a
+-- per-table ordinal.  `[]` for a row with no head type at all (`tys = []`), which
+-- is exactly `keyEntryOf`'s own `[] => []` arm: such a row is unselectable on both
+-- substrates, so this is not a new exclusion.
+keyEntryOfRow : ImplRow -> List KeyEntry
+keyEntryOfRow (ImplRow _ inst ir tys reqs ms) = match tys
+  headTy::_ => [
+    KeyEntry ms (headTyconTy headTy) headTy (implKeyTc ir.irName tys) ir.irName tys reqs (instRefSeq inst)
+  ]
+  [] => []
 
--- all impls of [iface] whose head pattern matches [receiverMono], in declaration
--- order.  Same bucket-by-head-tycon scan as matchingEntries, filtered on the impl's
--- iface instead of a method-name membership (so a specific impl that inherits a
--- method via a DEFAULT — hence not in its methodNames — is still seen).
--- #1128 (F-3b): same headless union as `matchingEntries` — see `candidateBucket` for
--- why this is a declaration-index merge and not a `++`.
-matchingEntriesByIface : KeyBuckets -> String -> List Mono -> List KeyEntry
-matchingEntriesByIface buckets iface goals = match goalHeadCon goals
-  Some hk => matchingEntriesByIfaceGo (candidateBucket buckets hk) iface goals
-  None => []
+-- `entryHeadMatches` against a row's head vector, without building the row's
+-- `KeyEntry` first — the whole point is that the hot scan below allocates only for
+-- a row that MATCHES.  A `tys = []` row matches nothing (it has no head pattern to
+-- match with), which agrees with `keyEntryOfRow` dropping it.
+ieRowHeadMatches : List Ty -> List Mono -> Bool
+ieRowHeadMatches (tys@(headTy::_)) goals = entryHeadMatches headTy tys goals
+ieRowHeadMatches [] _ = False
 
-matchingEntriesByIfaceGo : List KeyEntry -> String -> List Mono -> List KeyEntry
-matchingEntriesByIfaceGo [] _ _ = []
-matchingEntriesByIfaceGo ((KeyEntry ms hd hty key ifn itys reqs idx)::rest) iface goals
-  | ifn == iface && entryHeadMatches hty itys goals = KeyEntry ms hd hty key ifn itys reqs idx :: matchingEntriesByIfaceGo rest iface goals
-  | otherwise = matchingEntriesByIfaceGo rest iface goals
+-- The iface-keyed candidate scan: every row of [rows] whose interface is [iface]
+-- and whose head pattern matches [goals], as `KeyEntry`s, ORDER PRESERVED.  The
+-- peer of the deleted `matchingEntriesByIfaceGo`, one substrate over — same
+-- `ifn == iface` filter (NOT method-name membership, so a specific impl inheriting
+-- a method via a DEFAULT is still seen) and the same `entryHeadMatches`.
+-- `keyEntryOfRow r` is a ONE-element list on this arm (the guard proved `tys`
+-- non-empty), so the `++` is a single cons.
+ieEntriesForIface : List ImplRow -> String -> List Mono -> List KeyEntry
+ieEntriesForIface [] _ _ = []
+ieEntriesForIface ((r@(ImplRow _ _ ir tys _ _))::rest) iface goals
+  | ir.irName == iface && ieRowHeadMatches tys goals = keyEntryOfRow r
+    ++ ieEntriesForIface rest iface goals
+  | otherwise = ieEntriesForIface rest iface goals
+
+-- The METHOD-keyed candidate scan — the peer of `matchingEntriesGo`.  Same
+-- method-name membership test, same head match, same order.
+ieEntriesForMethod : List ImplRow -> String -> List Mono -> List KeyEntry
+ieEntriesForMethod [] _ _ = []
+ieEntriesForMethod ((r@(ImplRow _ _ _ tys _ ms))::rest) name goals
+  | contains name ms && ieRowHeadMatches tys goals = keyEntryOfRow r
+    ++ ieEntriesForMethod rest name goals
+  | otherwise = ieEntriesForMethod rest name goals
+
+-- `candidateBucket`'s union, on `IE`: the goal head's own bucket merged with the
+-- headless one, since a fully-general `impl C a` matches every goal but heads at
+-- none (#1128 F-3b).
+--
+-- ⚠️ FILTER-THEN-MERGE, where `candidateBucket` merges-then-filters, and the two
+-- are the same list: `mergeByDeclIdx` is a stable merge on an index, and dropping
+-- elements cannot reorder the ones that remain or change which side wins a tie
+-- (ties keep the LEFT operand, and the left operand is the head bucket on both
+-- spellings).  Filtering first is what keeps the scan allocation-free on the rows
+-- it rejects.
+--
+-- ⚠️ AND IT PRESERVES `candidateBucket`'s EMPTY-HEADLESS FAST PATH, which is the
+-- path essentially every real lookup takes (no module of compiler/, stdlib/ or
+-- sqlite/ declares a bare-tyvar impl head).  Two clauses of `mergeByDeclIdx` do
+-- it: `xs [] = xs` returns the left list ITSELF — no copy, no allocation — and
+-- `ieEntriesFor*` on the empty headless bucket is its own `[] => []` clause.  So
+-- the fast path costs one call and one match, not a bucket copy.
+ieCandidatesForIface : ImplEnv -> HeadKey -> String -> List Mono -> List KeyEntry
+ieCandidatesForIface env hk iface goals =
+  mergeByDeclIdx
+    (ieEntriesForIface (ieHeadRows (Some hk) env) iface goals)
+    (ieEntriesForIface (ieHeadRows None env) iface goals)
+
+ieCandidatesForMethod : ImplEnv -> HeadKey -> String -> List Mono -> List KeyEntry
+ieCandidatesForMethod env hk name goals =
+  mergeByDeclIdx
+    (ieEntriesForMethod (ieHeadRows (Some hk) env) name goals)
+    (ieEntriesForMethod (ieHeadRows None env) name goals)
+
+-- 🚨 ENTRY POINT 1 of 3 — the INTERFACE-keyed row selector (§3 `inst` =
+-- min⊑(match)), read by the checker leg and by BOTH halves of the router leg.
+-- Replaces `selectImplEntryByIface` for those three sites.
+--
+-- 🆕 IT RETURNS THE ROW, NOT A KEY OR A STRING, AND THAT IS AN INTERFACE
+-- OBLIGATION TO THE NEXT BITE.  The row carries `InstRef` — the instance identity
+-- this tree does not otherwise have — so Phase 3′'s stamping bite can name the
+-- selected instance at the site that selected it.  A `String`-returning selector
+-- makes that bite unstatable, and a `KeyEntry`-returning one loses the identity on
+-- the way out (`keyEntryOfRow` is lossy: it keeps `instRefSeq`, not `InstRef`).
+--
+-- A goal with no head tycon keys no bucket and selects nothing — `matchingEntries`'
+-- own `None => []` arm, unchanged.
+ieSelectRowByIface : ImplEnv -> String -> List Mono -> Option ImplRow
+ieSelectRowByIface env iface goals = match goalHeadCon goals
+  Some hk => ieRowOfEntry env (pickMostSpecificEntry goals (ieCandidatesForIface env hk iface goals))
+  None => None
+
+-- 🚨 ENTRY POINT 2 of 3 — the METHOD-keyed row selector, read by leg 3's two
+-- element-dict route sites.  The peer of `matchedEntry`, which stays live for the
+-- route WORD (see this block's header).
+ieSelectRowByMethod : ImplEnv -> String -> List Mono -> Option ImplRow
+ieSelectRowByMethod env name goals = match goalHeadCon goals
+  Some hk => ieRowOfEntry env (pickMostSpecificEntry goals (ieCandidatesForMethod env hk name goals))
+  None => None
+
+-- The inverse of `keyEntryOfRow`, and it is EXACT rather than heuristic: the
+-- winner's `idx` IS its row's `instRefSeq`, a whole-graph counter unique within one
+-- compile (`InstRef`), and the winner's row is filed in the bucket of its OWN head
+-- — which is the `KeyEntry`'s own second field, minted by the same `headTyconTy`
+-- `ieFileRowByHead` files under.  So ONE bucket scan finds it, with no fallback
+-- arm to be silently wrong in.
+ieRowOfEntry : ImplEnv -> Option KeyEntry -> Option ImplRow
+ieRowOfEntry _ None = None
+ieRowOfEntry env (Some (KeyEntry _ hd _ _ _ _ _ idx)) =
+  ieRowWithSeq (ieHeadRows hd env) idx
+
+ieRowWithSeq : List ImplRow -> Int -> Option ImplRow
+ieRowWithSeq [] _ = None
+ieRowWithSeq ((r@(ImplRow _ inst _ _ _ _))::rest) s
+  | instRefSeq inst == s = Some r
+  | otherwise = ieRowWithSeq rest s
+
+-- The three `KeyEntry` fields the deleted `selectImplEntryByIface` handed the
+-- router and the element-route legs — head pattern, FULL head vector, and the
+-- impl's OWN `requires` ([] for a no-requires specific impl).  Kept as one
+-- projection so the three consumers cannot drift in what they read off a row.
+-- `None` on a `tys = []` row: unselectable by construction (`keyEntryOfRow`), so
+-- that arm is totality, not a live fallback.
+ieRowHeadTriple : Option ImplRow -> Option (Ty, List Ty, List Require)
+ieRowHeadTriple None = None
+ieRowHeadTriple (Some (ImplRow _ _ _ (tys@(headTy::_)) reqs _)) =
+  Some (headTy, tys, reqs)
+ieRowHeadTriple (Some _) = None
 
 -- the canonical impl key to stamp at an iface-keyed site (EKNestedTop primary route),
 -- mirroring keyForSite: UPGRADE the bare head tag to the winning impl's full canonical
 -- key ONLY when two+ impls of [iface] share the head tycon (so bare-head dispatch is
--- ambiguous).  No collision (the common, non-overlapping case) → None → caller keeps
--- the bare tag, byte-identical.
+-- ambiguous).  No collision (the common, non-overlapping case) → the bare tag,
+-- byte-identical.
 -- #1128 (F-3b): the `else` arm returns the winner's own head tag rather than None,
 -- for the reason spelled out in full on `keyForSite` — a `noneHeadTag` winner is
 -- exactly the case where "the caller's fallback already equals the winner's head" is
 -- false, and answering None there discards the correctly-selected candidate.
-keyForSiteByIface : KeyBuckets -> String -> List Mono -> Option String
-keyForSiteByIface table iface goals = match selectImplEntryByIface table iface goals
-  Some (KeyEntry _ hd _ key _ _ _ _) =>
-    if headCollidesByIface table iface hd then
-      Some key
-    else
-      -- A-2.2b: the ROUTE WORD, bare on purpose — see `keyForSite`.
-      Some (headKeyNameOr noneHeadTag hd)
-  None => None
+--
+-- ARCH B-2.1-b2: repointed, not deleted (AM-1 still holds for the `keyForSite*`
+-- family).  The `KeyBuckets` parameter is GONE rather than ignored — an ignored
+-- table parameter reads as "still consulted" at every call site.  The winner's key
+-- is recomputed here by the SAME `implKeyTc ir.irName tys` that `keyEntryOfRow`
+-- (and `keyEntryOf` before it) stamps into the `key` field, so the stamped word is
+-- byte-identical to what the deleted path produced for the same winner.
+--
+-- 🚨 THE COLLISION RETEST MOVED WITH THE SELECTOR, AND THAT NARROWS A REAL SKEW
+-- RATHER THAN WIDENING ONE.  `core_ir_lower.ifaceDeclHeadUnique` — the emitter's
+-- side of the same verdict, which must agree WORD FOR WORD with what this stamps
+-- into the caller's dict cell — counts over `ifaceImplHeadTable`, installed by
+-- `lowerImpls` from `lowerProgramEmit allDecls`, i.e. the WHOLE program.  It was
+-- already graph-global while this side was a topological prefix; the two now count
+-- the same population.  ⚠️ Not identical arithmetic: that side counts DISTINCT
+-- canonical keys and this one counts rows, which is the pre-existing difference
+-- `ifaceDeclHeadUnique`'s own comment records — unchanged by this bite.
+keyForSiteByIface : String -> List Mono -> Option String
+keyForSiteByIface iface goals =
+  let env = perRun.value.bodyImplEnvRef.value
+  match ieSelectRowByIface env iface goals
+    Some (ImplRow _ _ ir tys _ _) =>
+      if ieHeadCollidesByIface env iface (univReceiverTag tys) then
+        Some (implKeyTc ir.irName tys)
+      else
+        -- A-2.2b: the ROUTE WORD, bare on purpose — see `keyForSite`.
+        Some (headKeyNameOr noneHeadTag (univReceiverTag tys))
+    None => None
 
--- do two+ distinct impls of [iface] share head tycon [tag]?
-headCollidesByIface : KeyBuckets -> String -> Option HeadKey -> Bool
-headCollidesByIface table iface hd = countHeadByIface table iface hd > 1
+-- 🚨 ENTRY POINT 3 of 3 — do two+ distinct impls of [iface] share head tycon
+-- [tag]?  The `IE` peer of `headCollidesByIface`.
+ieHeadCollidesByIface : ImplEnv -> String -> Option HeadKey -> Bool
+ieHeadCollidesByIface env iface hd = ieCountHeadByIface env iface hd > 1
 
--- Spelling-keyed through `dispHeadTab`, the iface-keyed twin of `countHead` —
--- the full derivation is there, and this site owes it identically: same bucket,
--- same retest, same `keyForSiteByIface` consequence.
-countHeadByIface : KeyBuckets -> String -> Option HeadKey -> Int
-countHeadByIface buckets iface hd =
+-- Still SPELLING-KEYED, through `headTabOf`/`headTabEq`, and that is deliberate:
+-- the full derivation is on `countHead`, and this site owes it identically.  An
+-- identity comparison here answers False wherever two entries' ORIGINS differ,
+-- which is measured to count 1 where the spelling form counts 2 on #1277's
+-- three-module repro — and the consequence is `keyForSiteByIface` stamping the
+-- bare head word where `core_ir_lower.declRouteKey` derives the canonical key.
+-- The BUCKET moved from a topological prefix to the whole graph; the RETEST did
+-- not change shape.  `univReceiverTag tys` is the same head projection
+-- `ieFileRowByHead` files each row under and `keyEntryOfRow` puts in `hd`.
+ieCountHeadByIface : ImplEnv -> String -> Option HeadKey -> Int
+ieCountHeadByIface env iface hd =
   -- goal-side key projected ONCE, here — see `headTabOf`.
-  countHeadByIfaceGo (bucketOfHead hd buckets) iface (headTabOf hd)
+  ieCountHeadByIfaceGo (ieHeadRows hd env) iface (headTabOf hd)
 
-countHeadByIfaceGo : List KeyEntry -> String -> Option TabKey -> Int
-countHeadByIfaceGo [] _ _ = 0
-countHeadByIfaceGo ((KeyEntry _ hd2 _ _ ifn _ _ _)::rest) iface goal
-  | ifn == iface && headTabEq hd2 goal = 1 + countHeadByIfaceGo rest iface goal
-  | otherwise = countHeadByIfaceGo rest iface goal
+ieCountHeadByIfaceGo : List ImplRow -> String -> Option TabKey -> Int
+ieCountHeadByIfaceGo [] _ _ = 0
+ieCountHeadByIfaceGo ((ImplRow _ _ ir tys _ _)::rest) iface goal
+  | ir.irName == iface && headTabEq (univReceiverTag tys) goal =
+    1 + ieCountHeadByIfaceGo rest iface goal
+  | otherwise = ieCountHeadByIfaceGo rest iface goal
 
 -- the head node of an (unelaborated) AST type's left-nested `TyApp` spine.
 -- Total (every `Ty` has a head) and ALLOCATION-FREE (it returns a node that
@@ -19035,8 +19229,14 @@ implDictRoutesForFull : ImplBuckets -> KeyBuckets -> String -> String -> String 
 -- #609: the impl is now selected on the SAME full param-mono vector the head subst
 -- is built from (was: `matchedEntry … resultMono` — arg-0 only, so at n≥2 it could
 -- hand headSubstWithParams the requires of an impl that does not match the goal).
-implDictRoutesForFull implTable keyTable encl name tag resultMono paramMonos = match matchedEntry keyTable name paramMonos
-  Some (KeyEntry _ _ headTy _ _ implTys reqs _) => match headSubstWithParams headTy implTys resultMono paramMonos
+-- ARCH B-2.1-b2 (LEG 3a, the METHOD-keyed ELEMENT DICTS): selection moved off the
+-- prefix `stampKeyTable` onto the graph-global `IE`.  🚨 THIS IS THE LEG WHOSE
+-- ABSENCE MAKES THE OTHER TWO AN S0: with legs 1/2 moved and this one left behind,
+-- #1564's impl gained a dict param it was never passed — `check` exit 0, built
+-- binary 139 (RUN-B-023).  [keyTable] is still threaded for the nested `requires`
+-- recursion, which re-buckets by each requires' own head.
+implDictRoutesForFull implTable keyTable encl name tag resultMono paramMonos = match ieRowHeadTriple (ieSelectRowByMethod perRun.value.bodyImplEnvRef.value name paramMonos)
+  Some (headTy, implTys, reqs) => match headSubstWithParams headTy implTys resultMono paramMonos
     Some subst => argImplReqRoutes implTable keyTable encl subst reqs 0
     None => []
   None => []
@@ -19382,7 +19582,7 @@ entailInst implTable name m encl tag (EKReturn keyTable fullMono _) =
 -- per-tyvar dict slots, and hence emitted dict arity, exactly as they were.  #607
 -- punch-list item 3 (dict slot = predicate, which really would move arity) stays open.
 entailInst implTable _ m encl tag (EKNestedTop keyTable iface _ depth rest) =
-  let routeKey = fromOption tag (keyForSiteByIface keyTable iface (m::rest))
+  let routeKey = fromOption tag (keyForSiteByIface iface (m::rest))
   (
     RKey routeKey (argImplRequiresRoutes implTable keyTable iface encl tag m rest depth),
     [],
@@ -19484,7 +19684,7 @@ routesOfMonosTopV prog implTable keyTable (m::rest) (iface::ifacesRest) (v::vs) 
 
 -- one slot.  A multi-argument predicate hands `routeOfD` the goal TAIL (arg 0 stays in
 -- `routeOfD`'s own `m`, exactly as EKNestedTop documents), so the selector sees
--- `Ix Int Char` instead of the shattered `Ix Int _` and `matchingEntriesByIface`
+-- `Ix Int Char` instead of the shattered `Ix Int _` and `ieEntriesForIface`
 -- returns a singleton.
 -- ⚠️ The vector's arg 0 — NOT this slot's own mono — is the predicate head.  The two
 -- differ whenever a predicate shatters into more than one slot (`Ix a b` gives the `b`
@@ -19617,7 +19817,7 @@ routesOfMonos implTable keyTable (m::rest) =
 --   • `iface == ""` ⇒ `goals == [m]`, so the iface-unknown arm is untouched however many
 --     callers supply a vector.  `topRouteV` additionally declines to build one at all
 --     when `iface == ""`, so the two pins agree from both ends.
---   • `iface != ""` ⇒ selection runs through `selectImplEntryByIface`, which matches
+--   • `iface != ""` ⇒ selection runs through `ieSelectRowByIface`, which matches
 --     `ifn == iface` and (for `iface == ""`) returns nothing either way.  A longer
 --     [goals] can only make `entryHeadMatches` STRICTER — it is the arg-0 FALLBACK that
 --     the short vector was triggering — so a second supplier cannot widen any match.
@@ -19634,7 +19834,7 @@ argImplRequiresRoutes implTable keyTable iface encl tag m rest depth =
   if depth >= 32 then []
   else
     let goals = if iface == "" then [m] else m::rest
-    match selectReqImpl keyTable implTable iface tag m goals
+    match selectReqImpl implTable iface tag m goals
       Some (headTy, itys, reqs) => match headSubstWithParams headTy itys m goals
         Some subst =>
           argImplReqRoutes implTable keyTable encl subst reqs (depth + 1)
@@ -19654,10 +19854,17 @@ argImplRequiresRoutes implTable keyTable iface encl tag m rest depth =
 -- instead of re-matching the arg-0 pattern alone.  [m] is arg 0 (the bucket key, and
 -- the only thing the iface-unknown arm can select on); [goals] is the vector the
 -- iface-known arm selects on — the caller pins them consistent, see argImplRequiresRoutes.
-selectReqImpl : KeyBuckets -> ImplBuckets -> String -> String -> Mono -> List Mono -> Option (Ty, List Ty, List Require)
-selectReqImpl keyTable implTable iface tag m goals
+-- ARCH B-2.1-b2 (LEG 2a, the ROUTER's `requires` half): the iface-known arm reads
+-- the graph-global `IE` instead of the prefix `KeyBuckets`.  The `KeyBuckets`
+-- parameter is REMOVED rather than ignored — it had exactly one reader, this arm.
+-- Its `EKNestedTop` caller computes the SAME selection a second time for the route
+-- WORD (`keyForSiteByIface`), which moved in the same bite: §6 C2 requires the impl
+-- dispatched to and the impl whose context is discharged to be the same impl, so
+-- these two cannot be repointed separately.
+selectReqImpl : ImplBuckets -> String -> String -> Mono -> List Mono -> Option (Ty, List Ty, List Require)
+selectReqImpl implTable iface tag m goals
   | iface == "" = map ((ImplEntry _ _ headTy reqs itys _) => (headTy, itys, reqs)) (findImplEntry implTable iface tag m)
-  | otherwise = map ((KeyEntry _ _ headTy _ _ itys reqs _) => (headTy, itys, reqs)) (selectImplEntryByIface keyTable iface goals)
+  | otherwise = ieRowHeadTriple (ieSelectRowByIface perRun.value.bodyImplEnvRef.value iface goals)
 
 -- ── D3b-1: arg-position element-dict routing ────────────────────────────────
 -- The argument-position analogue of implDictRoutesFor.  Same impl-table match +
@@ -19710,8 +19917,11 @@ argImplDictRoutesFor implTable keyTable name tag mono =
 -- every later argument.  Regression:
 -- test/eval_typed_fixtures/multiparam_impl_requires_arity{,_swapped}.mdk.
 argImplDictRoutesForEncl : ImplBuckets -> KeyBuckets -> String -> String -> String -> Mono -> List Mono -> List Route
-argImplDictRoutesForEncl implTable keyTable encl name _tag mono goals = match matchedEntry keyTable name goals
-  Some (KeyEntry _ _ headTy _ _ implTys reqs _) => match headSubstWithParams headTy implTys mono goals
+-- ARCH B-2.1-b2 (LEG 3b): the arg-position twin of leg 3a, repointed for the same
+-- reason and in the same bite — the two legs select the SAME way at the same goal
+-- and a split between them is the §6 C2 break the header describes.
+argImplDictRoutesForEncl implTable keyTable encl name _tag mono goals = match ieRowHeadTriple (ieSelectRowByMethod perRun.value.bodyImplEnvRef.value name goals)
+  Some (headTy, implTys, reqs) => match headSubstWithParams headTy implTys mono goals
     Some subst => argImplReqRoutes implTable keyTable encl subst reqs 0
     None => []
   None => []
@@ -21880,7 +22090,7 @@ oblIfaceKey ir = tabKeyOf NsIface ir.irOrigin ir.irName
 --   T1  the `KeyBuckets` partition — `headBucketRender` (written by
 --       `bucketKeyEntriesFrom`, read by `bucketOfHead`) and its retests
 --       `headTabIs`/`headTabEq`/`headTabOf`, consumed by `implExistsForHeadGo`,
---       `countHeadGo` and `countHeadByIfaceGo`.
+--       `countHeadGo` and `ieCountHeadByIfaceGo`.
 --   T2  the `ImplUniverse`/obligation channel — `insertUnivImpl`,
 --       `univConcreteBucket`, `oblKeyParts`.
 --
@@ -21890,10 +22100,13 @@ oblIfaceKey ir = tabKeyOf NsIface ir.irOrigin ir.irName
 -- `(1, 1)` — a valid program, exit 0, wrong answer, no diagnostic, i.e. #1277's
 -- own S0 re-introduced.  Moving T2 alone does not.  Moving ONLY the two counting
 -- scans' retest, with everything else here left spelling-keyed, reproduces it
--- exactly — so the cause is isolated to `countHead`/`countHeadByIface`.
+-- exactly — so the cause is isolated to `countHead`/`ieCountHeadByIface` (the
+-- latter measured as `countHeadByIface`, its `KeyBuckets`-reading predecessor;
+-- ARCH B-2.1-b2 moved its BUCKET to `ieHeadRows` and left its RETEST spelling-keyed
+-- for exactly the reason this ledger gives).
 --
 -- WHY, and why supply is beside the point: those two feed
--- `headCollides`/`headCollidesByIface` → `keyForSite`/`keyForSiteByIface`, which
+-- `headCollides`/`ieHeadCollidesByIface` → `keyForSite`/`keyForSiteByIface`, which
 -- stamp a ROUTE WORD.  Route words are bare names by construction, and three
 -- engines re-derive the same uniqueness test from a bare `String` tag
 -- (`core_ir_lower.declRouteKey`/`ifaceDeclHeadUnique`,
@@ -21962,7 +22175,7 @@ oblIfaceKey ir = tabKeyOf NsIface ir.irOrigin ir.irName
 --
 -- ⚠️ AND `implExistsForHeadGo` WAS NOT THE ONLY UNENROLLED RETEST — it was the
 -- only one anybody had looked at.  Round-2 review found the same defect twice
--- more, in `countHeadGo` and `countHeadByIfaceGo`, each scanning a
+-- more, in `countHeadGo` and `ieCountHeadByIfaceGo`, each scanning a
 -- spelling-keyed `bucketOfHead` while retesting `hd2 == hd` on `Option HeadKey`.
 -- Both are now enrolled (via `headTabEq` / `headTabOf`) and both appear in the
 -- grep below.  Treat "the fix is applied at the site the report named" as an
@@ -22023,10 +22236,13 @@ bucketRecvMatch ((tys, _)::rest) dm = match tys
 -- `impl Foo Int requires Bar Int` (no `impl Bar`) → an ACCEPT then a runtime null-dict
 -- crash, because `foo (3:Int)` dispatches to the MOST-SPECIFIC `impl Foo Int`.
 --
--- #326: the within-bucket winner is now chosen by the SHARED min⊑ selector
--- `selectImplEntryByIface` over the all-impls `KeyBuckets` registry (shadowKeyTableRef —
--- the SAME registry, and the SAME selector, the dispatch ROUTER stamps with; PR #319
--- fixed the router, this makes the CHECKER agree).  It returns the most-specific impl's
+-- #326: the within-bucket winner is chosen by the SHARED min⊑ selector — the SAME
+-- registry, and the SAME selector, the dispatch ROUTER stamps with (PR #319 fixed the
+-- router, this makes the CHECKER agree).  ⚠️ ARCH B-2.1-b2 moved BOTH sides at once:
+-- that registry is now `ieSelectRowByIface` over the graph-global `IE`
+-- (`bodyImplEnvRef`), not `selectImplEntryByIface` over the topological-prefix
+-- `shadowKeyTableRef`.  The checker-agrees-with-router property is what forced the two
+-- to move in one bite — see the `B-2.1-b2` block's three-leg header.  It returns the most-specific impl's
 -- OWN requires — [] for a no-requires specific `impl Foo (List Int)` sibling declared
 -- ALONGSIDE a `impl Foo (List a) requires Show a`, both in the same `List` head bucket —
 -- never the general sibling's.  The prior concrete-then-headless first-match ranked
@@ -22069,8 +22285,12 @@ findMatchingImplReqsU univ iface (a0::rest) = match concreteReqMatchByIface ifac
 -- saw the vector, the selector saw arg 0.  With one goal for both, a selected entry
 -- can no longer fail the subst for a reason the selector could have seen.
 concreteReqMatchByIface : String -> List Mono -> Option (List (String, Mono), List Require)
-concreteReqMatchByIface iface args = match selectImplEntryByIface perRun.value.shadowKeyTableRef.value iface args
-  Some (KeyEntry _ _ _ _ _ itys reqs _) =>
+-- ARCH B-2.1-b2 (LEG 1, the CHECKER): off `shadowKeyTableRef` — a topological
+-- PREFIX, so an impl in a later module contributed no `requires` and the goal read
+-- as unroutable — onto the graph-global `bodyImplEnvRef`.  See the `B-2.1-b2` block
+-- above for why moving this leg ALONE is an S0 rather than half a fix.
+concreteReqMatchByIface iface args = match ieSelectRowByIface perRun.value.bodyImplEnvRef.value iface args
+  Some (ImplRow _ _ _ itys reqs _) =>
     map (sub => (sub, reqs)) (implHeadSubst itys args)
   None => None
 
