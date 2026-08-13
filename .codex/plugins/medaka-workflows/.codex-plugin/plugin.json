@@ -1,7 +1,7 @@
 {
   "name": "medaka-workflows",
   "version": "0.1.0",
-  "description": "Verified Medaka compiler workflow skills migrated from OpenCode.",
+  "description": "Verified Medaka compiler workflow skill bundle loaded by project Codex config.",
   "author": {
     "name": "Medaka"
   },

@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 '/root/medaka/.codex/hooks/skill-triage.py'"
+            "command": "sh -c 'root=$(git rev-parse --show-toplevel) && python3 \"$root/.codex/hooks/skill-triage.py\"'"
           }
         ]
       }
