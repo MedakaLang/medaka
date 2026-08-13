@@ -4,6 +4,13 @@
 
 ## ✅ UPDATE after `B-2.1-g`: BOTH residuals `f` left are CLEARED. The `SA-4c` class is CORRECT, not merely loud.
 
+> 🕐 **HISTORICAL — written at `26423f93` (`B-2.1-g`), and this file's newest-at-top convention is
+> INVERTED here: the three Stage B sections BELOW this one are NEWER** (AD-1 `5ef29a60`, EX-4's
+> certification `89a9536b`, the repair round `a5a2ad00`). It is kept in place, with its stale claims
+> struck inline rather than deleted, because R7 found that a cold reader takes the first screen as
+> current. **Its `SA-4c`/#1514/#1397 findings still hold and were re-shown on the final binary
+> (`EX-4`); everything struck below was overtaken by `EX-1`/`EX-2`/`EX-3`.**
+
 `B-2.1-g` repointed the METHOD-keyed route word (`keyForSite`) **and** all three existence reads
 **and** `resolveRLocalSite`'s selection leg onto the graph-global `perRun.bodyImplEnvRef`, as one
 bite. **`SA-4c` now builds and runs correctly in BOTH import orders, and the two orders emit
@@ -21,16 +28,37 @@ orders (`300`), with the `c-def` definer control unchanged.
 ⛔ **Still do NOT close #1397, #1514, #1564, #1599 or #1072** — the drains are drained, not
 closed (§1 issue-closure policy), and #1397/#1514 are back to their ORIGINAL silent wrongness,
 not fixed.
-🚨 **`f`'s guard is UNREACHABLE, not deleted, and it is NOT SEPARABLE**: it reads
+🚨 ~~**`f`'s guard is UNREACHABLE, not deleted, and it is NOT SEPARABLE**: it reads
 `headCollides` → `countHead` → `bucketOfHead`, so **thirteen** now-dead bindings are retained
 with per-site `lint-disable-next-line rule-dead-code`. `B-2.1-d` retires them in one sweep — its
 precondition is met: **`shadowKeyTableRef` has ZERO readers and `universeKeyBucketsRef`'s only
 consuming read feeds it.** `d` additionally inherits a newly-dead `keyTable` PARAMETER threaded
-through ~25 signatures.
-⚠️ **The branch still owes the fixpoint, the seed question, and the goldens** (snapshot +
-`selfproc_legA` + `llvm_typed_ir`) — this bite CHANGES EMITTED IR. **wasm is the arm with the
-least evidence behind it and has never been observed across `b2`/`c`/`f`/`g`.** Read the
-`B-2.1-g` row in `.claude/sprint-b/DEBT.md` before any merge decision.
+through ~25 signatures.~~
+⚠️ **STRUCK — `EX-1` (=`B-2.1-d`, `ee49f7ec`) ALREADY DID THIS SWEEP.** Five symbols above are
+cited in the present tense and **have zero definitions at `fdc0109c`** — `headCollides`,
+`countHead`, `bucketOfHead`, `shadowKeyTableRef`, `universeKeyBucketsRef`; every surviving
+occurrence is a historical comment (several self-labelled *"both deleted by ARCH B-2.1-d"*).
+The retained-suppression count moved too. **Derived, not quoted:**
+```sh
+git grep -n -E '^(headCollides|countHead|bucketOfHead|shadowKeyTableRef|universeKeyBucketsRef)( |:)' \
+  fdc0109c -- compiler/types/typecheck.mdk   # no output, exit 1 — zero definitions
+git grep -c 'rule-dead-code' 26423f93 -- compiler/types/typecheck.mdk   # 19 lines when this was written
+git grep -c 'rule-dead-code' fdc0109c -- compiler/types/typecheck.mdk   #  3 lines now (all prose comments)
+```
+⚠️ ~~**The branch still owes the fixpoint, the seed question, and the goldens** (snapshot +
+`selfproc_legA` + `llvm_typed_ir`)~~ — **all three DISCHARGED**: the fixpoint and the seed by
+`EX-2` (`6ec0111a`, re-mint ×2 + in-band fixpoint) and again at `7e3fe771` (see the certification
+table below and its `EX-4` `DEBT.md` row), the goldens by `EX-3` (`7e3fe771`, the sprint's ONE
+re-cut). **`llvm_typed_ir` never moved and needed no re-cut** — but see the certification section
+for what that green does and does **not** prove.
+✅ **KEPT, and deliberately not struck: "this bite CHANGES EMITTED IR."** R7 first listed this as a
+fifth stale claim refuted by `EX-3`'s green IR gates and **retracted that in place**: the
+`.ll.golden` corpus **excludes the changed class by construction**, so it cannot refute this
+sentence. `b2`'s and `g`'s own `--keep-ir` readings show a different call site.
+⚠️ ~~**wasm is the arm with the least evidence behind it and has never been observed across
+`b2`/`c`/`f`/`g`.**~~ — **OVERSTATED, corrected by R6:** `diff_wasm_modules.sh` covers **36
+multi-module fixtures through the full front end**, and `EX-3` observed all four wasm gates clean.
+Read the `B-2.1-g` row in `.claude/sprint-b/DEBT.md` before any merge decision.
 ⚠️ **One brief-level correction worth inheriting:** the claim that `T-ROUTE-WORD-AMBIGUOUS`
 "covers #1578" is **false** — #1578 belongs to `T-REQUIRES-UNROUTED`'s row and stayed REPRO both
 with the guard live and with it dead.
@@ -55,35 +83,60 @@ same grep at the pin both show `ok 1112-A34/later-visible`, and `EX-4` measured 
 🚨 **Why this was the worst error in the ledger: it pre-authorises a cold reader to ignore a future RED
 in the sprint's primary oracle.** Any red in `check_cli_modules` is **real** and **yours**.
 
-### ⚠️ OWED — recorded, not yet fixed (do not act on the stale text)
+### ✅ ALL SEVEN OWED ITEMS ARE NOW DISCHARGED (fix round, `F2`) — and R7 was WRONG about one
 
-1. **The fixpoint line's derivation.** `HANDOFF` claims *"C3a YES · C3b YES at `7e3fe771`, run after the
-   golden re-cut."* **I did run it** — in-session, output `C3a PASS … byte-for-byte` /
-   `C3b PASS … FIXPOINT` — **but no `DEBT.md` row records it** (`EX-4` wrote none), while `EX-3`'s row
-   still books it **OWED**. 🚨 **And it does not say WHICH C3a** — the very distinction `EX-2` spent a
-   page establishing (the fixpoint's C3a is *convergence*; the currency check lives in
-   `bootstrap_from_seed.sh`). **Mine was the fixpoint's C3a. Re-run and record both, with the
-   distinction, before merge.** *(This is the second time I have blurred that distinction after being
-   corrected on it once.)*
-2. **`llvm_typed_ir` 54/54 proves less than claimed.** The drained programs were **rejected at `check`
-   on base**, so they **cannot be in an `.ll.golden` corpus** — the gate is green over a corpus that
-   **excludes the changed class**, while two bite rows say verbatim *"THIS BITE CHANGES EMITTED IR."*
-   ⭐ R7 made the same over-read while auditing and **retracted it in place**.
-3. **The `core_ir*` red-by-design justification cites a "5th positional `CProgram` field" that does not
-   exist** — four fields, byte-identical to base; Phase 4 never started. Same shape as the
-   `llvm_typed_ir` misprediction retracted one row above it.
-4. **The topmost Stage B section is two commits stale** — future-tense for completed work, a retained
-   suppression count of 13 that is now 3, and **five symbols with zero definitions at the pin**.
-5. 🚨 **A scope-ADDITION ruling rests on a citation attributed to the WRONG FILE.** RUN-B-011 (#1265
-   keying, IN) cites `docs/spec/DICT-SEMANTICS.md §9.9`; the string is in
-   `compiler/TYPECHECK-TARGET-ARCHITECTURE.md` — right lines, wrong file, **spec vs non-normative arch
-   doc.** The ruling may still be right; **its authority is not what I said it was.**
-6. 🚨 **THREE ARTEFACTS ARE LOST.** ~20 dangling `scratchpad/` paths, and the worktree scratchpad is
-   **gone from disk**: `B-2.1-b1-2leg/3leg.patch` and `c-REFUSED.patch` were the **sole carrier** of two
-   refused bites whose own rows say *"the measurement is the deliverable."* The findings survive in
-   prose; the patches do not.
-7. **`agent-doc-symbols` proves a narrower property than a row claims** — its corpus **excludes**
-   `HANDOFF.md`, `.claude/sprint-b/*` and `compiler/*.md`, i.e. everything R7 audited.
+Each was re-verified against `fdc0109c` **before** being fixed, per the standing rule that a precise
+citation is not a verified one. **One R7 finding did not survive that check and was NOT applied** — it
+is item 6, and its correction is the most important line in this block.
+
+1. ✅ **The fixpoint line now says WHICH C3a, and a `DEBT.md` `EX-4` row records the run.** It is
+   `selfcompile_fixpoint.sh`'s **CONVERGENCE** C3a — *not* `bootstrap_from_seed.sh`'s byte-**currency**
+   C3a, which `EX-2` ran separately. ⚠️ **The row records what could NOT be recovered as well as what
+   could:** no log, exit code or timing from that run survives, so it is booked as *"run, verdict lines
+   quoted, artefact not preserved"* — weaker than `EX-2`'s. `EX-3`'s OWED marker is reconciled to point
+   at it. *(This was the second time that distinction got blurred after one correction — hence the
+   fixture-grade paper trail now.)*
+2. ✅ **`llvm_typed_ir`'s claim is NARROWED, and the green is kept.** It proves *"no golden in the
+   emitting corpus moved"* — **not** that the sprint leaves emitted IR unchanged, and it does **not**
+   refute the two bite rows saying *"THIS BITE CHANGES EMITTED IR."* Corrected at both sites (the
+   certification section's error 1, and the known-red table row). ⭐ R7 made the same over-read while
+   auditing and retracted in place.
+3. ✅ **The `core_ir*` red-by-design row is retracted.** There is no 5th `CProgram` field — **four,
+   byte-identical to base**, Phase 4 never started, and `EX-3` measured the family **GREEN**. **A
+   `core_ir` red is real and yours.**
+4. ✅ **The topmost Stage B section is banner-marked HISTORICAL with its stale claims struck inline** —
+   the five zero-definition symbols, the `13`→`3` suppression count, the three "still owed" items (all
+   discharged), and the overstated wasm framing. Its one still-live claim (*"this bite CHANGES EMITTED
+   IR"*) is explicitly **kept**, per R7's own retraction.
+5. ✅ **RUN-B-011's citation is re-attributed.** The quote is `compiler/TYPECHECK-TARGET-ARCHITECTURE.md`
+   §9.9 `:2012`, **not** `docs/spec/DICT-SEMANTICS.md`. **The ruling is NOT re-litigated; its authority
+   is re-labelled** — an **ungated arch doc, not a normative spec**, and the §9.9 it sits in is a
+   *falsification-condition list*. Weigh it accordingly. (Nothing landed on it: `B-2.4-k` was never
+   implemented.)
+6. 🚨 **RETRACTED — R7 WAS WRONG, AND SO WAS THIS ENTRY. THE ARTEFACTS ARE NOT LOST.** I wrote *"THREE
+   ARTEFACTS ARE LOST … the worktree scratchpad is gone from disk."* **It never lived in the worktree.**
+   R7 resolved `scratchpad/` **relative to the worktree**, found nothing, and declared a loss; the
+   sprint's actual scratchpad is the **session** scratchpad, and it is intact on real disk (`/dev/vda3`,
+   **not** tmpfs). All three "lost" patches are present, as are 28 of the 33 cited artefacts:
+   ```sh
+   SP=/var/tmp/medaka-scratch/claude-0/-root-medaka/2f0cc56c-30c4-4612-bcb1-04d9e4d0a7e5/scratchpad
+   ls "$SP"/B-2.1-b1-2leg-AS-BRIEFED.patch "$SP"/B-2.1-b1-3leg-EXPERIMENT.patch "$SP"/c-REFUSED.patch
+   head -6 "$SP"/attrib.sh   # hardcodes this worktree + BASE 2b9dc798 — it IS this sprint's
+   ```
+   **Genuinely absent: only `scratchpad/emitter_from_seed`** (an `EX-2` build artefact, in that isolated
+   agent's own scratchpad, and regenerable by re-running `bootstrap_from_seed.sh`) **and
+   `scratchpad/sa4c/probe.sh`** (the `sa4c/` fixture directory itself survives). `EX-2`'s cited
+   `fixpoint-pre.log`/`fixpoint-post.log`/`ex2-gzprobe.sh`/`ex2-state.sh` are in
+   `/var/tmp/ex2-probes-kept/`. ⚠️ **The citations are still under-specified and should be read as
+   session-scoped, not repo-relative** — and a scratchpad is durable only until it is reaped, so
+   **anything a future round needs must be copied into the repo.** But *"lost"* was false, and declaring
+   a loss without searching is the same failure as quoting a count without a command. ⭐ **This is R7
+   being audited by the round it commissioned, which is what the second check is for.**
+7. ✅ **`agent-doc-symbols`' claim is narrowed in `DEBT.md`.** Its corpus is `AGENTS.md`,
+   `.claude/skills/*/SKILL.md`, `.claude/workstreams/*.md`, `.claude/ORCHESTRATING.md` and
+   `docs/spec/*.md` — it **excludes `HANDOFF.md`, `.claude/sprint-b/*` and `compiler/*.md`** (`Makefile`
+   `agent-doc-symbols` recipe comment; `compiler/*.md` is #1192). Item 4's five dead symbols lived in
+   `HANDOFF.md` **while the gate read 0 dead**. The ledger corpus is entirely outside it.
 
 ---
 
@@ -153,7 +206,12 @@ missing instrument, not the engines gate.
 **S3:** `perf_scaling` grades an axis its corpus never scales (every impl sits at its **own** head, so
 impls-per-head is never exercised). And `EX-3` cites eight `scratchpad/*.sh` that exist in **no
 commit** — my `61c4eebd` cleanup fixed `EX-2`'s one dangling cite and **missed these eight**. ⭐ R4
-**re-derived the underlying claim and it HOLDS**, so the citations are dead but the fact is sound.
+**re-derived the underlying claim and it HOLDS**, so the fact is sound regardless.
+✅ **CORRECTED (fix round): the citations are UNDER-SPECIFIED, not DEAD.** *"Exists in no commit"* is
+true and was read — by R7 and by me — as *"gone."* It is not: all eight resolve in the **session**
+scratchpad, which is intact on real disk. `DEBT.md`'s standing-hazards section now carries the
+absolute directory under *"WHERE `scratchpad/…` RESOLVES"*. ⚠️ Still a real defect — a path only its
+author can resolve is not a citation — and still one reap from becoming the loss it was mistaken for.
 
 ⭐ R4 **retracted one of its own findings** after establishing that two projections really are exact
 inverses.
@@ -231,7 +289,7 @@ merge."** Merging is Val's call: the PR is a **draft**, `must_fail` is **red by 
 | **#1514's capability loss CLEARED** | Proven by the pin's own state transition, not a hand-rolled probe: under `f`'s guard it read **DRAINED** (the build refused, so its bug became unobservable); it now reads **REPRO**, and the only way back to REPRO is for the build to succeed. |
 | **#1397 over-fire cleared** | **REPRO** again. |
 | **Nothing silently drained** | `#1560 #1182 #1597 #1046 #1578 #1514 #1397 #1071 #1062` — **all REPRO, verified by name**, not by count. |
-| **Fixpoint** | **C3a YES · C3b YES** at `7e3fe771`, run *after* the golden re-cut — closing the gap that a re-cut could otherwise enshrine a stale binary's output. Seed **byte-current** (`EX-2`). |
+| **Fixpoint** | **`selfcompile_fixpoint.sh` — CONVERGENCE C3a YES · C3b YES** at `7e3fe771`, run *after* the golden re-cut — closing the gap that a re-cut could otherwise enshrine a stale binary's output. 🚨 **WHICH C3a, because there are two and conflating them is a false inference** (`DEBT.md` `EX-2`, *"THE RE-MINT DECISION"*): this is `selfcompile_fixpoint.sh`'s C3a = `IR1 == REF`, a **one-crank convergence** test that a lagging seed **passes by design** (`test/selfcompile_fixpoint.sh:21-23`, `:44`). It is **NOT** the byte-**currency** check — that is `bootstrap_from_seed.sh`'s C3a, and it was run separately by `EX-2` after the re-mint. Seed **byte-current** as of `EX-2` (`6ec0111a`); no seed check was re-run at `7e3fe771`, and none was needed — no compiler source changed between them. **Recorded with its limits in `DEBT.md`'s `EX-4` row** (added by the fix round; the run's log was not preserved). |
 | **Goldens** | Re-cut **ONCE** (`EX-3`): 201/201 snapshots matching · selfproc **16 ok / 0 failing**. |
 | **Breadth** | engines **583 fixtures, 0 regressions / 0 promotions / 0 pinfail** · perf_scaling 20 ok, **0 regressed** · `typecheck_compiler_source` · `agent-doc-symbols` 0 dead · **wasm clean on all four gates** (first observation in the sprint). |
 
@@ -243,9 +301,28 @@ this repo gets (contract §1: the run implements drains, it does not close them)
 
 ### ⚠️ TWO ERRORS OF MINE, CORRECTED — do not act on the old text
 
-1. **`diff_compiler_llvm_typed_ir` was on the expected-red list. It NEVER MOVED.** `EX-3` measured it
-   **green 54/54 byte-identical** and checked the green is not vacuous (the gate byte-compares committed
-   `.ll.golden` and makes N==0 a hard failure). **No IR golden needed re-cutting.**
+1. **`diff_compiler_llvm_typed_ir` was on the expected-red list. NO COMMITTED IR GOLDEN MOVED.** `EX-3`
+   measured it **green 54/54 byte-identical** and checked the green is not vacuous (the gate
+   byte-compares committed `.ll.golden` and makes N==0 a hard failure). **No IR golden needed
+   re-cutting.**
+   🚨 **NARROWED (fix round, R7 §"the IR did not move"): that green proves *"no golden in the emitting
+   corpus moved"* — it does NOT prove the sprint leaves emitted IR unchanged, and it does NOT refute
+   the bite rows.** The N==0 check proves 54 goldens were **compared**; it says nothing about whether
+   the corpus **covers the changed class**, and by construction it does not. The drained programs
+   (#1564/#1599/#1072 and `SA-4c`) were **rejected at `check` on base** — a program that never emits
+   produces no `.ll.golden`, so it cannot be in that corpus. Meanwhile `B-2.1-b2`'s and `B-2.1-g`'s
+   rows both state verbatim **"THIS BITE CHANGES EMITTED IR"**, backed by `--keep-ir` readings of a
+   **different call site** (`@mdk_impl_Tag__Wrap_a___tagOf` arity-2 → the arity-1 specific impl).
+   **Both can be true, and are.** Derivation:
+   ```sh
+   git ls-tree -r --name-only fdc0109c -- test | grep -c 'll.golden$'                 # 54
+   git ls-tree -r --name-only fdc0109c -- test/llvm_fixtures_typed | grep -c '\.mdk$' # 54 — corpus unchanged
+   git show --numstat 1e7cbbbb | grep llvm_fixtures || echo '(none — the drain added no IR fixture)'
+   ```
+   ⭐ **R7 made the same over-read while auditing it and retracted in place.** The green stands; only
+   the inference from it was too wide. **To actually close this**, add a fixture to
+   `test/llvm_fixtures_typed/` that *does* emit and *does* exercise the changed selection — the
+   `SA-4c` control order builds and is the natural donor.
 2. **There is NO #1075 pin** (see the corrected row below). P0-P refused to author one — #1075's filed
    observable is unreproducible on `main` (measured on unmerged PR #1074) — and ledgered it in
    `test/MUST-FAIL-NOT-PINNABLE.txt`.
@@ -396,8 +473,8 @@ are red **BY DESIGN** on this branch and are **not your break**:
 |---|---|
 | `diff_compiler_snapshot_*` | Compiler sources are in the snapshot corpus, so every source bite moves its own golden. **Zero goldens are blessed for the entire run** (§5) — re-cut ONCE from the final binary in the repair round. |
 | `test/selfproc_goldens/legA/*` (`diff_compiler_selfproc.sh`) | Same cause: added/renamed/re-typed top-level bindings move the LEG A scheme goldens. Deferred with the snapshots. **CI-only signal** — stays green locally. |
-| ~~`diff_compiler_llvm_typed_ir`~~ — ⚠️ **WRONG PREDICTION, corrected 2026-08-13.** | I listed this expecting a large IR move *"by design."* **It never moved.** `EX-3` measured it **green 54/54 byte-identical**, and confirmed the green is not vacuous (the gate byte-compares committed `.ll.golden` files and makes N==0 a hard failure). `diff_compiler_llvm_modules` is likewise green. **Nothing here was re-cut because nothing moved** — the selection change was population-level, not codegen-level. ⚠️ Left visible rather than deleted: the wrong prediction **primed an implementer to expect a large IR move that does not exist**, which cost it a round of investigation. |
-| **The S-expr / Core-IR golden families** — `diff_compiler_core_ir*`, `diff_compiler_snapshot_*`'s S-expr cells | Added 2026-08-13 on P0-C's escalation. The frozen-admissibility carrier is a **5th positional `CProgram` field**, and `CProgram` is rendered by `core_ir_sexp` (`snapshot.mdk:568`, `:605`) — so the carrier alone moves these goldens **before any semantic change**. Listed explicitly because a positional-field widening reads like a formatting break, which is how an agent misdiagnoses the run's own debt. |
+| ~~`diff_compiler_llvm_typed_ir`~~ — ⚠️ **WRONG PREDICTION, corrected 2026-08-13.** | I listed this expecting a large IR move *"by design."* **It never moved.** `EX-3` measured it **green 54/54 byte-identical**, and confirmed the green is not vacuous (the gate byte-compares committed `.ll.golden` files and makes N==0 a hard failure). `diff_compiler_llvm_modules` is likewise green. **Nothing here was re-cut because no golden in that corpus moved.** ⚠️ Left visible rather than deleted: the wrong prediction **primed an implementer to expect a large IR move that does not exist**, which cost it a round of investigation. 🚨 **AND THE CORRECTION ITSELF WAS TOO WIDE — narrowed by the fix round.** This row used to end *"the selection change was population-level, not codegen-level."* **That does not follow from this gate.** The drained programs were rejected at `check` on base, so they emit nothing and cannot be in an `.ll.golden` corpus; the green is fully compatible with `b2`'s and `g`'s measured *"THIS BITE CHANGES EMITTED IR"* (`--keep-ir`: a different callee, arity-2 → arity-1). What is proved is **"no golden in the emitting corpus moved"**, nothing wider. See the certified section's corrected error 1 for the derivation and the donor fixture that would close it. |
+| ~~**The S-expr / Core-IR golden families** — `diff_compiler_core_ir*`, `diff_compiler_snapshot_*`'s S-expr cells~~ — 🚨 **WRONG JUSTIFICATION, corrected by the fix round. THE FAMILY IS GREEN; A RED HERE IS REAL AND YOURS.** | Added 2026-08-13 on P0-C's escalation, on the premise that *"the frozen-admissibility carrier is a **5th positional `CProgram` field**, and `CProgram` is rendered by `core_ir_sexp` (`snapshot.mdk:568`, `:605`) — so the carrier alone moves these goldens before any semantic change."* **There is no 5th field. `CProgram` has FOUR, byte-identical to base**, because the carrier was only *ruled* (Phase 0, `DECISIONS.md` RUN-B-013) and **Phase 4 was never started.** `EX-3` measured the family **GREEN**: *"`core_ir_*` (7 gates): all GREEN."* Derive it: <br>`git show fdc0109c:compiler/ir/core_ir.mdk \| grep -n CProgram` → `242: \| CProgram (List CBind) (List (String, Int)) (List (String, String)) (List CImplEntry)`; the same grep at `2b9dc798` is **byte-identical**. <br>⚠️ Left visible, not deleted: this is the **identical shape** to the `llvm_typed_ir` misprediction retracted one row above — a red pre-authorised by a carrier that was never built. **A cold reader hitting a genuine `core_ir` red must NOT dismiss it as by-design.** |
 | `diff_compiler_core_ir_modules.sh` | Consumes `core_ir_eval.mdk`, ruled IN as B-2.4's **fourth engine arm**. ⚠️ It shares `test/eval_modules_fixtures/*/` with `diff_compiler_eval_modules.sh` — the corpus that let the P0-9 fix ship "green" having run only the first of the two. **Both must be run before any B-2.4 drain claim.** |
 | `diff_compiler_must_fail.sh` | Drain targets are being **drained but not closed** (§1 issue-closure policy): #1564, #1599, #1560, #1072, #1071, #1062, #1068, #1182. **Their pins flipping red is THE deliverable** — it is the repair round's attack list — not a break. |
 | Differential / engines / capability-matrix / doc gates | Not run mid-sprint at all. |

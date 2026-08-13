@@ -502,10 +502,31 @@ with the rest.
 
 ### #1265 — **SPLIT: keying IN, denotation OUT.** And the agent revised its own ruling.
 
-P0-D **first ruled OUT**, then overturned itself on finding
-`docs/spec/DICT-SEMANTICS.md` §9.9 `:2011-2012`: *"#1265's pin flips … Revert; **that is B-2's**"* —
-i.e. the revert was forbidden in A-3.4 **precisely because** it is B-2's work. That is authority for
-IN, and it is the opposite of what proximity would have suggested.
+P0-D **first ruled OUT**, then overturned itself on finding ~~`docs/spec/DICT-SEMANTICS.md`~~
+**`compiler/TYPECHECK-TARGET-ARCHITECTURE.md`** §9.9 `:2011-2012`: *"#1265's pin flips … Revert;
+**that is B-2's**"* — i.e. the revert was forbidden in A-3.4 **precisely because** it is B-2's work.
+That is authority for IN, and it is the opposite of what proximity would have suggested.
+
+🚨 **ATTRIBUTION CORRECTED (fix round, R7). THE RULING IS NOT RE-LITIGATED — ONLY ITS AUTHORITY IS
+RE-LABELLED, AND A READER MUST WEIGH IT ACCORDINGLY.** Right §, right lines, **wrong file**, and the
+difference is load-bearing: **a spec is normative; an architecture doc is not.** This citation is the
+**sole** authority for a scope *addition*, so a reader who took `docs/spec/DICT-SEMANTICS.md` at face
+value weighed it as normative when it is **ungated arch prose** — the same
+`TYPECHECK-ARCH-BUG-FIT.md`/`TYPECHECK-TARGET-ARCHITECTURE.md` family this arc has already been burned
+by (*"the arc's own LEDGER is ungated prose"*). The string is **absent** from `DICT-SEMANTICS.md` at
+the introducing commit, at base, and at the pin. Derived:
+```sh
+git grep -n "that is B-2" fdc0109c -- docs/spec/DICT-SEMANTICS.md compiler/TYPECHECK-TARGET-ARCHITECTURE.md
+#  fdc0109c:compiler/TYPECHECK-TARGET-ARCHITECTURE.md:2012:  Revert; that is B-2's.
+#  (no hit in docs/spec/DICT-SEMANTICS.md)
+```
+The `§9.9` number is correct **for that file**: `TYPECHECK-TARGET-ARCHITECTURE.md:2001` is
+`### 9.9 What would falsify this design` — i.e. the quote is drawn from a **falsification-condition
+list**, not a normative assignment of ownership, which is a second reason to weigh it as evidence
+rather than as authority. ⚠️ **`B-2.4-k` was never implemented in this sprint**, so nothing landed on
+this basis and the correction is owed to whoever next weighs the scope question:
+`grep -c 'B-2.4-k' .claude/sprint-b/DEBT.md` → **0** (no bite row was ever written), and
+`.claude/HANDOFF.md` records *"Phases 3′/4/5 were never started."*
 
 - **Keying → IN**, as new bite **`B-2.4-k`** (6 symbols, 4 files).
 - **Denotation → OUT** (the method-namespace lane, #1354 M-2).

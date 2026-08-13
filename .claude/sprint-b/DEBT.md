@@ -46,6 +46,43 @@ Why each field exists — these are earned, not ceremonial:
 - **Zero goldens are blessed for the entire run.** They are re-cut **once**, from the final
   binary, never merged and never hand-resolved.
 
+### 📍 WHERE `scratchpad/…` RESOLVES — read this before treating any such citation as dangling
+
+Rows throughout this file cite **~20 `scratchpad/…` paths** plus **~18 bare script names**
+(`corpus.sh`, `attrib.sh`, `percommit.sh`, `resign.sh`, `exhaustive.sh`, `names.sh`, `sections.sh`,
+`perdecl.sh`, `perdecl_mark.sh`, `srcmoved.sh`, `p1564.sh`, `p1599.sh`, `probe4.sh`, `final.sh`,
+`c-probe.sh`, `c-ir-probe.sh`, `c-build-probe.sh`, `mf.sh`, …). **They are NOT repo-relative.** The
+worktree has no `scratchpad/` directory and never had one; they resolve in the **session** scratchpad:
+
+```
+/var/tmp/medaka-scratch/claude-0/-root-medaka/2f0cc56c-30c4-4612-bcb1-04d9e4d0a7e5/scratchpad/
+```
+
+⚠️ **R7 read them as worktree-relative, found nothing, and reported THREE ARTEFACTS LOST** —
+`B-2.1-b1-2leg-AS-BRIEFED.patch`, `B-2.1-b1-3leg-EXPERIMENT.patch` and `c-REFUSED.patch`, the sole
+carriers of two refused bites whose rows say *"the measurement is the deliverable."* 🚨 **That finding
+is RETRACTED: all three are present**, on real disk (`/dev/vda3`, not tmpfs), together with 28 of the
+33 artefacts this ledger cites. Confirm the directory is this sprint's rather than trusting the path —
+`attrib.sh` hardcodes this worktree and `BASE=2b9dc798…`, and the patches are Stage B diffs against
+`typecheck.mdk`:
+```sh
+SP=/var/tmp/medaka-scratch/claude-0/-root-medaka/2f0cc56c-30c4-4612-bcb1-04d9e4d0a7e5/scratchpad
+head -6 "$SP"/attrib.sh; ls "$SP"/*.patch
+```
+**Genuinely absent, both minor:** `scratchpad/emitter_from_seed` (an `EX-2` build artefact in that
+*isolated* agent's own scratchpad — regenerable by re-running `bootstrap_from_seed.sh`) and
+`scratchpad/sa4c/probe.sh` (the `sa4c/` fixture directory itself survives). `EX-2`'s
+`fixpoint-pre.log`, `fixpoint-post.log`, `ex2-gzprobe.sh` and `ex2-state.sh` are in
+`/var/tmp/ex2-probes-kept/`.
+
+🚨 **BUT DO NOT READ THIS AS "the citations are fine."** They are under-specified — a bare
+`scratchpad/x.sh` is unresolvable to anyone but the session that wrote it — and **a scratchpad is
+durable only until it is reaped.** Two rules follow: **(1)** anything a future round must be able to
+re-run belongs **in the repo**, as `.claude/sprint-b/next/` already does for the AD-1 programs;
+**(2)** cite the absolute path, or the citation decays into an unfalsifiable claim of evidence.
+⚠️ `make docs-links` cannot see any of this — `scratchpad/` is not in its pattern — which is why the
+gate stayed green over the whole set.
+
 ---
 
 *(Bite rows are appended below, in landing order.)*
@@ -586,6 +623,12 @@ were not carried over). `git diff` on the handed-back tree is 70 insertions / 0 
 written, built and measured; it is **not shippable as briefed** and is parked as two patches in the
 scratchpad (paths at the bottom of this row). What follows is the measurement, because the
 measurement is the deliverable.
+✅ **BOTH PATCHES VERIFIED PRESENT (fix round).** R7 reported them **LOST** — reading `scratchpad/` as
+worktree-relative — and that finding is **retracted**. They are at the session scratchpad named in
+*"WHERE `scratchpad/…` RESOLVES"* at the top of this file: `B-2.1-b1-2leg-AS-BRIEFED.patch` (20810 B)
+and `B-2.1-b1-3leg-EXPERIMENT.patch` (22278 B), both `diff --git a/compiler/types/typecheck.mdk`.
+⚠️ **They are outside the repo, so they are one reap away from actually being lost** — if this bite's
+code is ever wanted again, `git apply` it into a branch **before** relying on it.
 
 sites:      **Implemented and then reverted** — `compiler/types/typecheck.mdk`:
             `keyEntryOfRow` (new, beside `keyEntryOf`); `ieCandidateEntries` / `ieConcreteEntries` /
@@ -1283,6 +1326,10 @@ unchecked:
 **Nothing landed. `compiler/types/typecheck.mdk` is byte-identical to `1e7cbbbb`.** The transform
 was written, built, and measured; **as briefed it produces silent wrongness** and is parked as
 `scratchpad/c-REFUSED.patch` (+128/−25). The measurement is the deliverable.
+✅ **PATCH VERIFIED PRESENT (fix round)** — 17477 B, `diff --git a/compiler/types/typecheck.mdk`, at the
+session scratchpad named in *"WHERE `scratchpad/…` RESOLVES"* at the top of this file. **R7's "LOST"
+finding is retracted**; it resolved `scratchpad/` relative to the worktree, which never held one.
+⚠️ Outside the repo, so one reap from a real loss — `git apply` it into a branch before relying on it.
 
 🔗 **`DECISIONS.md RUN-B-0xx`** — the orchestrator's ledger owns the entry; this row is its
 evidence half. The ruling it needs: **the three existence reads are ONE bite, and that bite reaches
@@ -2610,14 +2657,29 @@ unchecked:
   **Everything else I ran is GREEN.** 43 gates via `run_gates.sh` → 42 PASS + that 1 FAIL; plus
   `engines`, the 4 wasm gates, `typecheck_compiler_source.sh` (**PASS**, incl. the #1111/#1112/#1519
   ratchets), `make check-self` (**PASS**), `make docs-links` (0 dead), `make agent-doc-symbols`
-  (**0 dead across 1047 symbol claims** — so EX-1's 13 deletions left no dangling backticked symbol
-  in any agent-facing doc), `diff_compiler_selfproc` (**16 ok, 0 failing** post-bless).
+  (**0 dead across 1047 symbol claims** — ~~so EX-1's 13 deletions left no dangling backticked symbol
+  in any agent-facing doc~~ 🚨 **NARROWED, fix round: THAT INFERENCE IS TOO WIDE, AND IT IS FALSE AS
+  STATED.** The property proved is *"no dangling symbol in the **gated** corpus"*, and the gated corpus
+  is `AGENTS.md` · `.claude/skills/*/SKILL.md` · `.claude/workstreams/*.md` · `.claude/ORCHESTRATING.md`
+  (BROAD) · `docs/spec/*.md` (SCOPED) — see the `agent-doc-symbols` recipe comment in the `Makefile`,
+  which also states *"`compiler/*.md` is NOT yet in this corpus — see #1192."* **It EXCLUDES
+  `.claude/HANDOFF.md`, `.claude/sprint-b/*.md` and `compiler/*.md` — i.e. this whole ledger corpus.**
+  The direct counterexample is measured: **five** of EX-1's deleted symbols (`headCollides`,
+  `countHead`, `bucketOfHead`, `shadowKeyTableRef`, `universeKeyBucketsRef`) were cited **live, in the
+  present tense, in `HANDOFF.md`** while this gate read **0 dead** — found by R7, not by any gate.
+  Derive the corpus rather than trusting this row: `git show fdc0109c:Makefile | sed -n '147,157p'`),
+  `diff_compiler_selfproc` (**16 ok, 0 failing** post-bless).
 * **I did NOT rebuild the compiler, and did not re-run the fixpoint or the seed check.** Both are
   EX-2's certification; I verified only its *premise* (`MEDAKA_STRICT=1` → exit 0, so the binary is
   not older than the source on disk). ⚠️ **A golden re-cut is exactly the operation that would
   silently enshrine a stale binary's output**, so note what that check does and does not buy: it
   proves source-fingerprint agreement, **not** that the binary is the fixpoint EX-2 blessed.
-  ⚠️ **OWED if `EX-4` wants it airtight:** `sh test/selfcompile_fixpoint.sh` after this commit.
+  ⚠️ ~~**OWED if `EX-4` wants it airtight:**~~ **PAID — see the `EX-4` row at the end of this file.**
+  `sh test/selfcompile_fixpoint.sh` **was** run by the orchestrator after this commit, at `7e3fe771`,
+  and reported **convergence C3a PASS · C3b PASS**. 🚨 **It was run and NOT RECORDED for ~5 hours**,
+  during which this OWED marker and `HANDOFF`'s certification table said opposite things about the same
+  event — caught by R7, not by any gate. **A run that is not written down is, to every later reader,
+  a run that did not happen.** Read the `EX-4` row for what the run does and does **not** establish.
 * **`perf_scaling`: run, and its first result was a PHANTOM SKIP I nearly filed as a pass.** It is
   **not** in preflight's derived 44 for this diff, but a substrate change is a real perf risk, so I
   ran it anyway: first invocation exited **2** — *"build oracles first — missing profile_main"*.
@@ -2642,7 +2704,11 @@ unchecked:
   on a dispatch shape. My re-cut is *rendering*-level; **it cannot and does not validate the drain's
   semantics.** The strongest behavioural evidence in this row is other people's: b2/f/g's probes and
   the twice-reproduced 3-fixture drain.
-* **Reproduction:** `scratchpad/percommit.sh` (per-commit binding delta) · `attrib.sh` (which commit
+* **Reproduction** — ⚠️ **all eight of these are SESSION-scratchpad paths, not repo paths; they exist
+  in no commit. All eight are PRESENT — see *"WHERE `scratchpad/…` RESOLVES"* at the top of this file
+  for the absolute directory.** (R4 separately re-derived the underlying claim and it **holds**, so
+  even if the scripts were reaped the fact would stand.)
+  `scratchpad/percommit.sh` (per-commit binding delta) · `attrib.sh` (which commit
   moved each re-signature) · `resign.sh` (adds/deletes/re-signatures split) · `exhaustive.sh` (the
   "nothing left over" proof) · `sections.sh` + `perdecl.sh` + `perdecl_mark.sh` (per-decl
   DESUGAR/MARK movement) · `srcmoved.sh` (**the finding check** — desugar moved ⇒ source moved) ·
@@ -2652,3 +2718,55 @@ unchecked:
   **untracked** during my session (tree was clean at my start, `HEAD = 6ec0111a`). I did not create,
   read into, or modify it. Someone else wrote in this worktree while I held the writer seat.
 * ⛔ **I did not commit.** Four modified goldens, staged nothing.
+
+---
+
+### `EX-4` — Phase 2′ (sprint exit) — **the certification's fixpoint run, recorded LATE and with its limits stated. This row exists because R7 found that the sprint's single most consequential codegen signal lived in a commit message and a HANDOFF table, and nowhere in this ledger.**
+
+⚠️ **Written by the fix round (`F2`), not by `EX-4`.** `EX-4` produced **no `DEBT.md` row at all** —
+its only artifact was `.claude/HANDOFF.md` (`git show --stat --name-only 89a9536b`). This row is
+therefore a **reconstruction from the orchestrator's own report**, and it is labelled as one. It is
+**not** a fresh measurement, and the fix round was **forbidden to build or run anything** (a second
+agent held the binary), so nothing here was re-derived on a running compiler.
+
+what ran:     `sh test/selfcompile_fixpoint.sh`, by the orchestrator, in-session, on the binary at
+  **`7e3fe771`** — i.e. **AFTER `EX-3`'s golden re-cut**, which is the point: a re-cut run against a
+  stale binary silently enshrines that binary's output, and running the fixpoint afterwards is what
+  closes that gap.
+
+verdict:      **`C3a PASS: IR1 (native) == seed-bootstrapped converged reference, byte-for-byte`** and
+  **`C3b PASS: IR1 == IR2 byte-for-byte — FIXPOINT`**. Both strings are **verbatim** the script's own
+  (`test/selfcompile_fixpoint.sh:165`, `:188`) — which is corroboration that the report came from a
+  real run of *this* script, and is the only corroboration available.
+
+🚨 **WHICH C3a — the distinction `EX-2`'s row spends a page establishing, and which `HANDOFF` dropped:**
+this is **`selfcompile_fixpoint.sh`'s C3a = `IR1 == REF`, a ONE-CRANK CONVERGENCE test that a lagging
+seed PASSES BY DESIGN** (the script's own SEMANTIC NOTE, `:21-23`: *"C3a = 'native emitter reproduces
+the CONVERGED seed-bootstrapped reference'"*; and `:44` *"C3a (reproduction): IR1 == REF
+byte-for-byte"*). **It is NOT the byte-CURRENCY check.** That is `bootstrap_from_seed.sh`'s C3a
+(`cmp seed.ll emitter2.ll`), which is the one a stale seed fails, and which `EX-2` ran separately after
+the re-mint (`SEED_STRICT=1 … strict` → exit 0). ⚠️ **So this row is NOT evidence the seed is current.**
+The seed-currency evidence is `EX-2`'s and is still good at this commit, for a reason that is derivable
+rather than assumed: **no compiler source changed between `EX-2` and `EX-3`** —
+`git diff --name-only 6ec0111a 7e3fe771 -- compiler stdlib runtime` is **EMPTY**.
+
+⚠️ **WHAT IS MISSING, STATED PLAINLY RATHER THAN GLOSSED:** **no log file, no exit code, and no timing
+were preserved.** Contrast `EX-2`'s identical claim one row up, which ships all three (*"exit 0, `C3a
+YES` / `C3b YES`, 38 s, `scratchpad/fixpoint-pre.log`"*) — and whose logs **do** survive, at
+`/var/tmp/ex2-probes-kept/fixpoint-pre.log` and `fixpoint-post.log`. **There is no such artefact for
+this run**, and the fix round searched the session scratchpad for one:
+`grep -rl 'C3a' <scratchpad> --include=*.log` returns ten files, all `a3`/`EX-2`-era, **none at
+`7e3fe771`**. **This row is therefore weaker than `EX-2`'s and must not be cited as if it were equal
+to it.**
+
+⚠️ **NOTE THE ONE STRING THAT DOES NOT MATCH, AND WHY IT IS NOT A CONTRADICTION:** `EX-2` records
+*"`C3a YES` / `C3b YES`"* while this row records *"`C3a PASS` / `C3b PASS`"*. **Same script, same run,
+two different lines of its output** — `:165`/`:188` print the `PASS` sentences, `:196` prints the
+`C3a (IR1==seed-ref): YES   C3b (IR1==IR2 fixpoint): YES` summary. Do not read the wording difference
+as two different checks; that is precisely the confusion this row exists to prevent.
+
+owed:         **To make the certification airtight, re-run `sh test/selfcompile_fixpoint.sh` on a
+binary built at the merge candidate, redirect to a file, read `$?` separately (its exit code does not
+survive a pipe), and commit the verdict lines into this row.** Until then the branch's only in-band
+codegen signal at the certified commit rests on an unarchived report. ⚠️ **That is a real gap, not a
+formality:** this sprint's rule is that a claim ships its derivation, and this one ships a quotation.
