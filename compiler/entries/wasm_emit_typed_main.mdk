@@ -59,6 +59,7 @@ import backend.wasm_emit.{
 import entries.entry_support.{driveRuntime}
 
 main = match args ()
+  "--reemit-trmc-state"::_ => reemitTrmcState ()
   "--reemit-impl-self-state"::_ => reemitImplSelfState ()
   "--reemit-input"::runtimePath::pPath::uPath::_ =>
     reemitInput runtimePath pPath uPath
@@ -67,6 +68,13 @@ main = match args ()
   "--reemit-gap-strict"::_ => reemitGapStrict ()
   "--reemit-string-state"::_ => reemitStringState ()
   "--reemit-default-state"::_ => reemitDefaultState ()
+  "--reemit-lambda-state"::_ => reemitLambdaState ()
+  "--reemit-trap-state"::_ => reemitTrapState ()
+  "--emit-trap-state"::_ =>
+    putStr (emitProgram trapStateInput trapStateAbortProgram)
+  "--reemit-ref-trap-state"::_ => reemitRefTrapState ()
+  "--emit-ref-trap-state"::_ =>
+    putStr (emitProgram refTrapStateInput refTrapStateAbortProgram)
   "--capture-current-binding"::row::_ => captureCurrentBinding row
   _ => driveRuntime emit
 
@@ -183,6 +191,56 @@ reemitStateP = "interface Mark a where\n  mark : a -> Int\n\ndata PSubject = PZe
 reemitStateU : String
 reemitStateU = "interface Mark a where\n  mark : a -> Int -> Int\n\ndata USubject = SharedCtor Int Int | UZero\n\ndata SharedRecord = SharedRecord { common : Int, uLast : Int }\n\nsharedArity x y = x\n\nuOnlyFn x = x\n\nsharedValueFn x y = x\n\napply f x y = f x y\n\nchoose x _ = x\n\nsubjectCode subject = match subject\n  SharedCtor first second => first + second\n  UZero => 0\n\nuOnlyValue = 2\n\nuOnlyProbe = uOnlyFn uOnlyValue\n\nuArityValue = sharedArity\n\nuArityProbe = apply uArityValue 1 2\n\nuFnProbe = sharedValueFn 2 3\n\nuRecordProbe = (SharedRecord { common = 3, uLast = 4 }).common\n\nuLazy = mark (SharedCtor 7 8) 0\n\nimpl Mark USubject where\n  mark _ _ = 9\n\nmain = choose uLazy (subjectCode (SharedCtor 7 8))\n"
 
+-- H2b.6: fresh strict/record/census emissions exercise top-level TRMC state.
+-- P is emitted twice around unrelated U work; U's census carries its one
+-- attributed gap. Both normal captures contain an admitted list-builder loop.
+reemitTrmcState : Unit -> <IO> Unit
+reemitTrmcState _ =
+  let p1 = emitProgram trmcStateInput (trmcStateProgram "pTrmc" 17)
+  let (u, _) = emitProgramRecord trmcStateInput (trmcStateProgram "uTrmc" 29)
+  let censusEvents = emitProgramGaps trmcStateInput trmcStateCensusProgram
+  let _ = printCapture "TRMC_P1" p1
+  let _ = printCapture "TRMC_RECORD_U" u
+  let _ = printEvents "TRMC_CENSUS_U_GAP" censusEvents
+  printCapture
+    "TRMC_P2"
+    (emitProgram trmcStateInput (trmcStateProgram "pTrmc" 17))
+
+trmcStateInput : WasmEmitInput
+trmcStateInput = makeWasmEmitInput [] [] [] False []
+
+trmcStateLoc : Loc
+trmcStateLoc = Loc "<trmc-state>" 1 1 1 1
+
+trmcStateProgram : String -> Int -> CProgram
+trmcStateProgram name marker =
+  let n = CVar "n" (ALocal 0 0)
+  let recursive = CApp (CVar name AGlobal) (CBinPrim "-" n (CLit (LInt 1)) "Int")
+  let body = CIf (CBinPrim "==" n (CLit (LInt 0)) "Int") (CList []) (CBinPrim "::" (CLit (LInt marker)) recursive "")
+  CProgram
+    [
+      CBind name [CClause [PVar "n" trmcStateLoc] body],
+      CBind "main" [
+        CClause [] (CLet False (PCons (PVar "head" trmcStateLoc) PWild) (CApp (CVar name AGlobal) (CLit (LInt 2000000))) (CVar "head" (ALocal 0 0)))
+      ],
+    ]
+    []
+    []
+    []
+
+trmcStateCensusProgram : CProgram
+trmcStateCensusProgram = CProgram
+  [
+    CBind "pTrmc" [
+      CClause [PVar "n" trmcStateLoc] (CIf (CBinPrim "==" (CVar "n" (ALocal 0 0)) (CLit (LInt 0)) "Int") (CList []) (CBinPrim "::" (CLit (LInt 17)) (CApp (CVar "pTrmc" AGlobal) (CBinPrim "-" (CVar "n" (ALocal 0 0)) (CLit (LInt 1)) "Int")) ""))
+    ],
+    CBind "trmcIntentionalGap" [CClause [] (CVar "missingTrmcCensus" AGlobal)],
+    CBind "main" [CClause [] (CLit (LInt 0))],
+  ]
+  []
+  []
+  []
+
 reemitImplSelfState : Unit -> <IO> Unit
 reemitImplSelfState _ =
   let pProgram = implSelfProgram "PLoop" 17 3
@@ -194,6 +252,152 @@ reemitImplSelfState _ =
   let censusEvents = emitProgramGaps implSelfInput (implSelfCensusProgram uProgram)
   let _ = printEvents "IMPL_SELF_CENSUS_U_GAP" censusEvents
   printCapture "IMPL_SELF_P2" (emitProgram implSelfInput pProgram)
+
+-- X-W.H2b.7: fresh WasmEmit owns the lambda-id counter, lifted-definition drain,
+-- named eta dedup, and `ref.func` declaration registry. P→U→census→P shares one
+-- process while every emission allocates exclusive carrier state.
+reemitLambdaState : Unit -> <IO> Unit
+reemitLambdaState _ =
+  let p1 = emitProgram lambdaStateInput (lambdaStateProgram 17)
+  let (u, _) = emitProgramRecord lambdaStateInput (lambdaStateProgram 29)
+  let censusEvents = emitProgramGaps lambdaStateInput lambdaStateCensusProgram
+  let _ = printCapture "LAMBDA_P1" p1
+  let _ = printCapture "LAMBDA_RECORD_U" u
+  let _ = printEvents "LAMBDA_CENSUS_U_GAP" censusEvents
+  printCapture
+    "LAMBDA_P2"
+    (emitProgram lambdaStateInput (lambdaStateProgram 17))
+
+lambdaStateInput : WasmEmitInput
+lambdaStateInput = makeWasmEmitInput [] [] [("Pair", ["Int", "Int"])] False []
+
+lambdaStateLoc : Loc
+lambdaStateLoc = Loc "<lambda-state>" 1 1 1 1
+
+lambdaStateProgram : Int -> CProgram
+lambdaStateProgram result =
+  let arg = PVar "arg" lambdaStateLoc
+  let local = PVar "local" lambdaStateLoc
+  let nestedName = PVar "nested" lambdaStateLoc
+  let identity = CLam [arg] (CVar "arg" (ALocal 0 0))
+  let nested = CLam [arg] (CApp (CVar "local" (ALocal 0 0)) (CVar "arg" (ALocal 0 0)))
+  let lambdaBody = if result == 17 then
+    CLet False local identity (CApp (CVar "local" (ALocal 0 0)) (CLit (LInt result)))
+  else
+    CLet False local identity (CLet False nestedName nested (CApp (CVar "nested" (ALocal 0 0)) (CLit (LInt result))))
+  let body = CLet False PWild (CVar "Pair" AGlobal) (CLet False PWild (CVar "Pair" AGlobal) lambdaBody)
+  CProgram [CBind "main" [CClause [] body]] [("Pair", 2)] [("Pair", "Pair")] []
+
+lambdaStateCensusProgram : CProgram
+lambdaStateCensusProgram = CProgram
+  [
+    CBind "lambdaCensus" [CClause [] (CLam [PVar "x" lambdaStateLoc] (CVar "x" (ALocal 0 0)))],
+    CBind "lambdaIntentionalGap" [CClause [] (CVar "missingLambdaCensus" AGlobal)],
+  ]
+  [("Pair", 2)]
+  [("Pair", "Pair")]
+  []
+
+-- X-W.H2b.8: coded stderr-import demand belongs to fresh WasmEmit. P carries an
+-- uncalled concrete div-zero route, so it imports mdk_write_err_byte while inert main
+-- runs. Trap-free record U and census separate P emissions; a separate strict route
+-- executes the exact abort.
+reemitTrapState : Unit -> <IO> Unit
+reemitTrapState _ =
+  let p1 = emitProgram trapStateInput trapStateProgram
+  let (u, _) = emitProgramRecord trapStateInput trapStateControlProgram
+  let censusEvents = emitProgramGaps trapStateInput trapStateCensusProgram
+  let _ = printCapture "TRAP_P1" p1
+  let _ = printCapture "TRAP_RECORD_U" u
+  let _ = printEvents "TRAP_CENSUS_U_GAP" censusEvents
+  printCapture "TRAP_P2" (emitProgram trapStateInput trapStateProgram)
+
+trapStateInput : WasmEmitInput
+trapStateInput = makeWasmEmitInput [] [] [] False []
+
+trapStateProgram : CProgram
+trapStateProgram = CProgram
+  [
+    CBind "trapRoute" [
+      CClause [PVar "n" lambdaStateLoc] (CBinPrim "/" (CLit (LInt 1)) (CLit (LInt 0)) "Int")
+    ],
+    CBind "main" [CClause [] (CLit (LInt 17))],
+  ]
+  []
+  []
+  []
+
+trapStateControlProgram : CProgram
+trapStateControlProgram =
+  CProgram [CBind "main" [CClause [] (CLit (LInt 29))]] [] [] []
+
+trapStateCensusProgram : CProgram
+trapStateCensusProgram = CProgram
+  [
+    CBind "trapCensusRoute" [
+      CClause [PVar "n" lambdaStateLoc] (CBinPrim "/" (CLit (LInt 1)) (CLit (LInt 0)) "Int")
+    ],
+    CBind "trapIntentionalGap" [CClause [] (CVar "missingTrapCensus" AGlobal)],
+  ]
+  []
+  []
+  []
+
+trapStateAbortProgram : CProgram
+trapStateAbortProgram = CProgram
+  [
+    CBind "main" [CClause [] (CBinPrim "/" (CLit (LInt 1)) (CLit (LInt 0)) "Int")]
+  ]
+  []
+  []
+  []
+
+-- H2b.8 ref-reader control: the ADT table forces emitRefProgram, whose late import
+-- predicate is distinct from scalar's. No ePut route appears in P or U.
+reemitRefTrapState : Unit -> <IO> Unit
+reemitRefTrapState _ =
+  let p1 = emitProgram refTrapStateInput refTrapStateProgram
+  let u = emitProgram refTrapStateInput refTrapStateControlProgram
+  let _ = printCapture "REF_TRAP_P1" p1
+  let _ = printCapture "REF_TRAP_U" u
+  printCapture "REF_TRAP_P2" (emitProgram refTrapStateInput refTrapStateProgram)
+
+refTrapStateInput : WasmEmitInput
+refTrapStateInput = makeWasmEmitInput [] [] [] False []
+
+refTrapCtorArities : List (String, Int)
+refTrapCtorArities = [("TrapToken", 0)]
+
+refTrapCtorTypes : List (String, String)
+refTrapCtorTypes = [("TrapToken", "TrapToken")]
+
+refTrapStateProgram : CProgram
+refTrapStateProgram = CProgram
+  [
+    CBind "refTrapRoute" [
+      CClause [PVar "n" lambdaStateLoc] (CBinPrim "/" (CLit (LInt 1)) (CLit (LInt 0)) "Int")
+    ],
+    CBind "main" [CClause [] (CLit (LInt 17))],
+  ]
+  refTrapCtorArities
+  refTrapCtorTypes
+  []
+
+refTrapStateControlProgram : CProgram
+refTrapStateControlProgram = CProgram
+  [CBind "main" [CClause [] (CLit (LInt 29))]]
+  refTrapCtorArities
+  refTrapCtorTypes
+  []
+
+refTrapStateAbortProgram : CProgram
+refTrapStateAbortProgram = CProgram
+  [
+    CBind "main" [CClause [] (CBinPrim "/" (CLit (LInt 1)) (CLit (LInt 0)) "Int")]
+  ]
+  refTrapCtorArities
+  refTrapCtorTypes
+  []
 
 implSelfInput : WasmEmitInput
 implSelfInput = makeWasmEmitInput [("walk", ("Loop", 2))] [] [] False []

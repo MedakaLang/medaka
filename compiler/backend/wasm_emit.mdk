@@ -304,6 +304,12 @@ data WGapMode = WGapStrict | WGapRecord
 
 data ImplSelfCtx = ImplSelfOff | ImplSelfOn String String Int
 
+-- Destination-passing TMC context. It is owned by a fresh WasmEmit so nested
+-- and independent emission routes cannot leak loop-local authority.
+data WTrmcCtx =
+  | WTrmcOff
+  | WTrmcOn SelfRef Int (List String) (List (String, Int)) Bool String String
+
 data WasmEmit =
   | WasmEmit {
       gapMode : WGapMode,
@@ -313,6 +319,13 @@ data WasmEmit =
       stringSegments : Ref (List (Int, List Int)),
       nextStringSegmentId : Ref Int,
       implSelfCtx : Ref ImplSelfCtx,
+      trmcCtx : Ref WTrmcCtx,
+      nextLambdaId : Ref Int,
+      liftedDefinitions : Ref (List (List String)),
+      liftedDefinitionNames : Ref (OrdMap Unit),
+      functionReferences : Ref (List String),
+      functionReferenceNames : Ref (OrdMap Unit),
+      trapImportNeeded : Ref Bool,
       emittedDefaultNames : Ref (OrdMap Unit),
       defaultDefinitions : Ref (List (List String)),
     }
@@ -326,6 +339,13 @@ freshWasmEmit mode = WasmEmit {
   stringSegments = Ref [],
   nextStringSegmentId = Ref 0,
   implSelfCtx = Ref ImplSelfOff,
+  trmcCtx = Ref WTrmcOff,
+  nextLambdaId = Ref 0,
+  liftedDefinitions = Ref [],
+  liftedDefinitionNames = Ref omEmpty,
+  functionReferences = Ref [],
+  functionReferenceNames = Ref omEmpty,
+  trapImportNeeded = Ref False,
   emittedDefaultNames = Ref omEmpty,
   defaultDefinitions = Ref [],
 }
@@ -627,40 +647,15 @@ canonFn prog n =
     n
 
 -- ── program entry ────────────────────────────────────────────────────────────
--- W4 module-level state for lambda lifting.  `lamIdRef` is the fresh-id counter for
--- lifted-lambda names (`$mdk_lamN`); `liftedFnsRef` accumulates the lifted top-level
--- function definitions emitted by `emitClosure`, drained at the end of the module
--- (peer to the LLVM emitter's defs list).  `funcRefsRef` accumulates the names that
--- must be `(elem declare func …)`'d so `ref.func` validates.  Reset per program.
-lamIdRef : Ref Int
-lamIdRef = Ref 0
-
-liftedFnsRef : Ref (List (List String))
-liftedFnsRef = Ref []
-
 -- Names of lifted defines whose body is fully determined by the name (the eta-wrap
 -- ctor `$mdk_wctor_<C>` and extern `$mdk_ext_<name>` closures) — used to dedup so a
 -- ctor/extern referenced point-free at MORE THAN ONE site emits its lifted (func …)
 -- ONCE.  `noteFuncRef` already deduped the matching `(elem declare)`, but `addLifted`
 -- did not dedup the define, so a second use-site duplicated the func → "duplicate func
 -- identifier" at wasm-tools assembly (`$mdk_lamN` names are unique, so they still route
--- through the plain `addLifted`).  Reset per program alongside `liftedFnsRef`.
-liftedNamesRef : Ref (List String)
-liftedNamesRef = Ref []
-
-funcRefsRef : Ref (List String)
-funcRefsRef = Ref []
-
--- perf #382: companion OrdMap SETS for the two `contains`-per-insert registries above
--- (`addLiftedNamed`/`noteFuncRef` deduped by a linear list scan on EVERY insert ⇒ O(refs ·
--- distinct)).  Membership now routes through these O(log n) sets; the lists still carry
--- insertion order (`funcRefsRef` is drained in order at emit end).  Reset to `omEmpty`
--- alongside their lists in emitProgram/emitProgramGaps so no set leaks across a re-emit.
-liftedNamesSetW : Ref (OrdMap Unit)
-liftedNamesSetW = Ref omEmpty
-
-funcRefsSetW : Ref (OrdMap Unit)
-funcRefsSetW = Ref omEmpty
+-- through the plain `addLifted`).  Per-emission `WasmEmit` state owns its dedup set.
+-- perf #382: both named-lift and function-reference sets preserve O(log n) membership;
+-- companion lists retain insertion order for their module-end drains.
 
 -- ── W6 string state ──────────────────────────────────────────────────────────
 -- `useStrRef` records whether the program uses any String/Char literal, the
@@ -845,14 +840,9 @@ useHashRef = Ref False
 useEPutRef : Ref Bool
 useEPutRef = Ref False
 
--- B5 (RUNTIME-TRAP-UNIFY §3 (5)): a coded runtime-trap helper streamed bytes to
--- stderr via the mdk_write_err_byte host import → force that import.  SET DURING
--- EMIT by wasmTrapInstrs (not the pre-scan): a trap can appear at a decision-tree
--- CTFail / clause-chain fallthrough whose reachability the pre-scan can't cheaply
--- decide, so emit{Ref,Scalar}Program reads this AFTER the body-emit bindings (Medaka
--- `let` is strict, so the import binding, computed after `fns`/`initLines`, sees it).
-useTrapImport : Ref Bool
-useTrapImport = Ref False
+-- B5 (RUNTIME-TRAP-UNIFY §3 (5)): per-emission event set while a coded runtime trap
+-- writes stderr bytes. Body emission precedes late scalar/ref import bindings, so strict
+-- lets expose this physical fact without ambient authority.
 
 isLazyGlobalW : Prog -> String -> Bool
 isLazyGlobalW prog x = omHasKey x (indexLazyGlobalsW (progIndex prog))
@@ -1031,32 +1021,32 @@ freshStrSeg emit bytes =
   let _ = setRef emit.stringSegments ((i, bytes)::emit.stringSegments.value)
   i
 
-freshLamId : Unit -> Int
-freshLamId _ =
-  let n = lamIdRef.value
-  let _ = setRef lamIdRef (n + 1)
+freshLamId : WasmEmit -> Int
+freshLamId emit =
+  let n = emit.nextLambdaId.value
+  let _ = setRef emit.nextLambdaId (n + 1)
   n
 
-addLifted : List String -> Unit
-addLifted def = setRef liftedFnsRef (def::liftedFnsRef.value)
+addLifted : WasmEmit -> List String -> Unit
+addLifted emit def =
+  setRef emit.liftedDefinitions (def::emit.liftedDefinitions.value)
 
--- addLifted, but keyed by a unique define name (see `liftedNamesRef`): a second call
+-- addLifted, but keyed by a unique define name: a second call
 -- with an already-seen name is a no-op, so a point-free ctor/extern used at N sites
 -- lifts its (func …) exactly once.
-addLiftedNamed : String -> List String -> Unit
-addLiftedNamed name def =
-  if omHasKey name liftedNamesSetW.value then ()
+addLiftedNamed : WasmEmit -> String -> List String -> Unit
+addLiftedNamed emit name def =
+  if omHasKey name emit.liftedDefinitionNames.value then ()
   else
-    let _ = setRef liftedNamesSetW (omInsert name () liftedNamesSetW.value)
-    let _ = setRef liftedNamesRef (name::liftedNamesRef.value)
-    addLifted def
+    let _ = setRef emit.liftedDefinitionNames (omInsert name () emit.liftedDefinitionNames.value)
+    addLifted emit def
 
-noteFuncRef : String -> Unit
-noteFuncRef nm =
-  if omHasKey nm funcRefsSetW.value then ()
+noteFuncRef : WasmEmit -> String -> Unit
+noteFuncRef emit nm =
+  if omHasKey nm emit.functionReferenceNames.value then ()
   else
-    let _ = setRef funcRefsSetW (omInsert nm () funcRefsSetW.value)
-    setRef funcRefsRef (nm::funcRefsRef.value)
+    let _ = setRef emit.functionReferenceNames (omInsert nm () emit.functionReferenceNames.value)
+    setRef emit.functionReferences (nm::emit.functionReferences.value)
 
 export emitProgram : WasmEmitInput -> CProgram -> String
 emitProgram input cp = emitProgramWith (freshWasmEmit WGapStrict) input cp
@@ -1071,12 +1061,6 @@ emitProgramRecord input cp =
 
 emitProgramWith : WasmEmit -> WasmEmitInput -> CProgram -> String
 emitProgramWith emit input (CProgram groups ctorArs ctorTypes impls) =
-  let _ = setRef lamIdRef 0
-  let _ = setRef liftedFnsRef []
-  let _ = setRef liftedNamesRef []
-  let _ = setRef liftedNamesSetW omEmpty
-  let _ = setRef funcRefsRef []
-  let _ = setRef funcRefsSetW omEmpty
   let _ = setRef useStrRef (programUsesStr groups)
   -- W7: scan the program for collection usage (gates type-section decls + forces
   -- ref-mode — every collection is a boxed (ref eq) value).
@@ -1088,7 +1072,6 @@ emitProgramWith emit input (CProgram groups ctorArs ctorTypes impls) =
   let _ = setRef useRngRef False
   let _ = setRef useHashRef False
   let _ = setRef useEPutRef False
-  let _ = setRef useTrapImport False
   let _ = setRef useDivGuardRef False
   let _ = setRef useFloatRef False
   let _ = setRef useFloatHashRef False
@@ -1142,12 +1125,6 @@ emitProgramWith emit input (CProgram groups ctorArs ctorTypes impls) =
 export emitProgramGaps : WasmEmitInput -> CProgram -> List String
 emitProgramGaps input (CProgram groups ctorArs ctorTypes impls) =
   let emit = freshWasmEmit WGapRecord
-  let _ = setRef lamIdRef 0
-  let _ = setRef liftedFnsRef []
-  let _ = setRef liftedNamesRef []
-  let _ = setRef liftedNamesSetW omEmpty
-  let _ = setRef funcRefsRef []
-  let _ = setRef funcRefsSetW omEmpty
   let _ = setRef useStrRef (programUsesStr groups)
   let _ = setRef useListRef False
   let _ = setRef useArrayRef False
@@ -1157,7 +1134,6 @@ emitProgramGaps input (CProgram groups ctorArs ctorTypes impls) =
   let _ = setRef useRngRef False
   let _ = setRef useHashRef False
   let _ = setRef useEPutRef False
-  let _ = setRef useTrapImport False
   let _ = setRef useDivGuardRef False
   let _ = setRef useFloatRef False
   let _ = setRef useFloatHashRef False
@@ -2136,10 +2112,10 @@ emitScalarProgram emit fnNames valNames groups =
   let fns = flatMap (emitScalarFnBind emit fnNames valNames) (userFnBinds groups)
   let initLines = emitScalarInit emit fnNames valNames groups
   -- B5: the stderr byte-write import for a coded div/mod trap.  Computed AFTER the
-  -- body-emit bindings above (Medaka `let` is strict) so useTrapImport — set during
+  -- body-emit bindings above (Medaka `let` is strict) so trapImportNeeded — set during
   -- emit by wasmTrapBytes — is visible.  wasm-tools text assembles fields into
   -- sections regardless of order, so a late `(import …)` field is fine.
-  let trapImport = if useTrapImport.value then stderrByteImportLines else []
+  let trapImport = if emit.trapImportNeeded.value then stderrByteImportLines else []
   joinNl (header ++ trapImport ++ globals ++ fns ++ ioRuntimeLines ++ initLines ++ [")"])
 
 oneGlobalI32 : String -> String
@@ -2341,7 +2317,7 @@ emitBinI32 emit fnNames valNames env op l r =
   -- ref mode (single function-scope $__sdivr i64 scratch; reuse across nested divs is
   -- safe — each store-then-immediately-use completes before the next).
   else if (op == "/" || op == "%") then
-    (li ++ ri ++ emitDivZeroGuard op "$__sdivr" ++ [wasmBinOp64 emit op] ++ nrm, binOpTy op)
+    (li ++ ri ++ emitDivZeroGuard emit op "$__sdivr" ++ [wasmBinOp64 emit op] ++ nrm, binOpTy op)
   else (li ++ ri ++ [wasmBinOp64 emit op] ++ nrm, binOpTy op)
 
 emitUnI32 : WasmEmit -> List String -> List String -> List String -> String -> CExpr -> (List String, WTy)
@@ -2420,9 +2396,9 @@ emitRefProgram : Prog -> List CBind -> String
 emitRefProgram prog groups =
   let header = preambleHeadLines
   let typeSection = emitTypeSection prog
-  -- W8: ePutStr/ePutStrLn (useEPutRef) and B5 coded traps (useTrapImport) both need the
+  -- W8: ePutStr/ePutStrLn (useEPutRef) and B5 coded traps both need the
   -- stderr byte-write import; it is emitted ONCE, LATE (see `trapImport` below), because
-  -- useTrapImport is set during body emit.
+  -- trapImportNeeded is set during body emit.
   let imports = ioByteImportLines
     -- W8b: floatToString is a host import (the shortest-round-trip formatter, #57,
     -- lives JS-side).
@@ -2456,7 +2432,7 @@ emitRefProgram prog groups =
   -- (0 UNFORCED / 1 FORCING / 2 FORCED); the value cell $g_<name> stays (ref null eq).
   let lazyStateGlobals = map oneGlobalState (filterList (isLazyGlobalW prog) valNames)
   let globals = rngGlobal ++ dispGlobals ++ map oneGlobalRef valNames ++ lazyStateGlobals
-  -- emit user fns FIRST (this is what accumulates lifted lambdas into liftedFnsRef).
+  -- emit user fns FIRST (this accumulates lifted lambdas into this WasmEmit).
   let fns = flatMap (emitRefFnBind prog) (userFnBinds groups)
   -- W5: the typeclass impl functions ($mdk_impl_<tag>_<method>), emitted as ordinary
   -- (ref eq) functions the RKey direct call / RDict if-chain dispatch into.
@@ -2464,19 +2440,19 @@ emitRefProgram prog groups =
   -- #561 PR-B: a `$force_<name>` func for every LAZY value global — the 3-state force
   -- (memoise-or-black-hole) that its reads `call` instead of `global.get`.  Emitted
   -- alongside initLines so its body-emit runs BEFORE the trapImport binding below reads
-  -- useTrapImport (an E-CYCLIC-VALUE trap sets it); mirrors the value-init emit order.
+  -- trapImportNeeded (an E-CYCLIC-VALUE trap sets it); mirrors value-init order.
   let forceFns = emitRefForceFns prog groups
   let initLines = emitRefInit prog groups
   -- layer-15: the synthesized interface-default defines ($mdk_default_<method>_<tag>),
   -- accumulated during fns/implFns/INIT body emission — a `filter` call may live in a
   -- value binding / `main` (emitRefInit), so this drain must follow initLines too.
-  -- Each default's inner lambda already drained into liftedFnsRef, so this precedes
+  -- Each default's inner lambda already drained into this WasmEmit, so this precedes
   -- the `lifted` concat.  Drained UNCONDITIONALLY (a default define is a plain fn).
   let defaultDefs = flatMap (x => x) (reverseL (progEmit prog).defaultDefinitions.value)
   -- now drain the lifted-lambda defs + the closure-apply runtime + elem-declare.
-  let lifted = if progUseClos prog then flatMap (x => x) (reverseL liftedFnsRef.value) else []
+  let lifted = if progUseClos prog then flatMap (x => x) (reverseL (progEmit prog).liftedDefinitions.value) else []
   let applyRt = if progUseClos prog then closApplyLines else []
-  let elemDecl = if progUseClos prog then [emitElemDeclare ()] else []
+  let elemDecl = if progUseClos prog then [emitElemDeclare (progEmit prog)] else []
   -- W6: the byte-write IO runtime (int/bool printers always; the $str-dependent
   -- string runtime only when strings are used) + the string-literal passive data
   -- segments (drained from this Prog's WasmEmit, in segment-index order).
@@ -2533,10 +2509,10 @@ emitRefProgram prog groups =
   let fileBytesRt = if useFileBytesRef.value then fileBytesRuntimeLines else []
   let dataSegs = emitDataSegs (progEmit prog)
   -- B5: the stderr byte-write import — for ePutStr (useEPutRef) OR a coded runtime trap
-  -- (useTrapImport, set during the body emit above).  Emitted ONCE.  This binding is
-  -- forced after all body-emit bindings (strict `let`), so useTrapImport is visible;
+  -- (trapImportNeeded, set during the body emit above). Emitted ONCE. This binding is
+  -- forced after all body-emit bindings (strict `let`), so trapImportNeeded is visible;
   -- `dataSegs` above already relies on that same after-body ordering.
-  let trapImport = if useEPutRef.value || useTrapImport.value then stderrByteImportLines else []
+  let trapImport = if useEPutRef.value || (progEmit prog).trapImportNeeded.value then stderrByteImportLines else []
   joinNl (header ++ typeSection ++ imports ++ trapImport ++ elemDecl ++ globals
             ++ fns ++ implFns ++ defaultDefs ++ lifted ++ applyRt ++ ioRt ++ strLeafRt ++ strConcatRt ++ appendRt ++ valueCmpRt ++ valueArithRt
             ++ stderrRt ++ rngRt ++ hashRt ++ hashStrRt
@@ -2572,10 +2548,10 @@ insertSeg (i, b) ((j, c)::rest) =
 
 -- the `(elem declare func …)` line listing every fn `ref.func`'d (lifted lambdas,
 -- the PAP code, and any top-level fn used as a value) — required so `ref.func`
--- validates.  Drained from `funcRefsRef` after all bodies are emitted.
-emitElemDeclare : Unit -> String
-emitElemDeclare _ =
-  let names = "$mdk_pap" :: reverseL funcRefsRef.value
+-- validates.  Drained from WasmEmit after all bodies are emitted.
+emitElemDeclare : WasmEmit -> String
+emitElemDeclare emit =
+  let names = "$mdk_pap" :: reverseL emit.functionReferences.value
   "  (elem declare func " ++ joinWith " " names ++ ")"
 
 oneGlobalRef : String -> String
@@ -2861,7 +2837,7 @@ emitRefForceFn prog (CBind name [CClause [] body]) =
   let scratch = scratchLocals maxDepth
   let localDecls = map (l => "  " ++ localDeclRef l) (bodyLocals ++ scratch)
   let w7Decls = map ("  " ++ _) (w7LocalDecls maxDepth)
-  let cyclic = wasmTrap "E-CYCLIC-VALUE" (name ++ " refers to itself during initialization (non-productive cyclic value)")
+  let cyclic = wasmTrap (progEmit prog) "E-CYCLIC-VALUE" (name ++ " refers to itself during initialization (non-productive cyclic value)")
   let unforced = ["    i32.const 1", "    global.set $gs_" ++ g] ++ indent instrs ++ ["    local.set $__frcv", "    local.get $__frcv", "    global.set $" ++ g, "    i32.const 2", "    global.set $gs_" ++ g, "    local.get $__frcv", "    ref.as_non_null"]
   [
       "  (func $force_" ++ g ++ " (result (ref eq))",
@@ -3280,8 +3256,8 @@ emitClauseChainRefEnv prog baseEnv name params arity clauses =
 
 emitClauseChainGo : Prog -> List String -> String -> List String -> Int -> List CClause -> Int -> List String
 -- B5: the last clause fell through (non-exhaustive function) → coded trap.
-emitClauseChainGo _ _ _ _ _ [] _ =
-  wasmTrap "E-NONEXHAUSTIVE-MATCH" "non-exhaustive match"
+emitClauseChainGo prog _ _ _ _ [] _ =
+  wasmTrap (progEmit prog) "E-NONEXHAUSTIVE-MATCH" "non-exhaustive match"
 emitClauseChainGo prog baseEnv name params arity ((CClause pats body)::rest) i =
   let clLabel = "$cl_\{name}_\{intToString i}"
   let (tests, binds, env) = clausePatCodeEnv prog baseEnv pats params clLabel
@@ -3522,7 +3498,7 @@ needsClosWrapper prog name =
 -- at the value-reference site (emitVarRef) so partial application threads its arity.
 emitFnClosWrapper : Prog -> String -> Int -> List String
 emitFnClosWrapper prog name arity =
-  let _ = noteFuncRef ("$mdk_w_" ++ name)
+  let _ = noteFuncRef (progEmit prog) ("$mdk_w_" ++ name)
   let argLoads = flatMap (i => [
     "local.get $args",
     "i32.const " ++ intToString i,
@@ -5069,7 +5045,7 @@ emitVarRefPlain prog env d x =
   else if isDeferredFloatExternW x then floatExternStub x
   else if isUnimplStrExternW x then floatExternStub x
   else if progFnMemberW prog x then
-    let _ = noteFuncRef ("$mdk_w_" ++ x)
+    let _ = noteFuncRef (progEmit prog) ("$mdk_w_" ++ x)
     ["ref.func $mdk_w_" ++ x, "i32.const " ++ intToString (progFnArity prog x),
      "array.new_fixed $argarr 0", "struct.new $clos"]
   -- W9: a bare prelude reference synthesized post-mangle (string-interp / `!=`) →
@@ -5087,8 +5063,8 @@ emitExternEtaClosure : Prog -> String -> List String
 emitExternEtaClosure prog name =
   let arity = externArityW name
   let lamName = "$mdk_ext_" ++ name
-  let _ = noteFuncRef lamName
-  let _ = addLiftedNamed lamName (emitExternEtaDefine prog lamName name arity)
+  let _ = noteFuncRef (progEmit prog) lamName
+  let _ = addLiftedNamed (progEmit prog) lamName (emitExternEtaDefine prog lamName name arity)
   [
     "ref.func " ++ lamName,
     "i32.const " ++ intToString arity,
@@ -5145,8 +5121,8 @@ emitCtorEtaClosure : Prog -> String -> List String
 emitCtorEtaClosure prog ctor =
   let arity = ctorArity prog ctor
   let lamName = "$mdk_wctor_" ++ gname ctor
-  let _ = noteFuncRef lamName
-  let _ = addLiftedNamed lamName (emitCtorEtaDefine prog lamName ctor arity)
+  let _ = noteFuncRef (progEmit prog) lamName
+  let _ = addLiftedNamed (progEmit prog) lamName (emitCtorEtaDefine prog lamName ctor arity)
   [
     "ref.func " ++ lamName,
     "i32.const " ++ intToString arity,
@@ -5220,21 +5196,21 @@ emitBinRef prog env d op l r tag =
     -- defines $mdk_value_div/$mdk_value_mod with a baked-in coded divisor-zero
     -- guard (wasm_preamble.mdk) referencing the $mdk_write_err_byte host import,
     -- even for a program that only ever uses poly-`Num` `==`/`<`/etc (this branch).
-    -- So useTrapImport must be forced here too, not just at the arith branch below
+    -- So trapImportNeeded must be forced here too, not just at arith branch below
     -- — else a poly-cmp-only program parses with "unknown func: $mdk_write_err_byte"
     -- (the import undeclared) because the unused div/mod bodies still reference it.
     let _ = setRef useValueArithRef True
-    let _ = setRef useTrapImport True
+    let _ = setRef (progEmit prog).trapImportNeeded True
     emitValueCmpNumRef prog env d op l r
   -- A1 (poly-`Num`-on-Float): arithmetic whose operand is a polymorphic `Num` param
   -- routes through the runtime value-tag-dispatched $mdk_value_add/… helper (A0) instead
   -- of the trapping inline int primitive.  The static Int/Float fast paths are unchanged.
-  -- #371: same useTrapImport note as the isCmpOp branch above — $mdk_value_div/
+  -- #371: same trap-import note as the isCmpOp branch above — $mdk_value_div/
   -- $mdk_value_mod's guard is baked into valueArithRuntimeLines UNCONDITIONALLY, so
   -- ANY poly-`Num` arith op (not just `/`/`%`) must force the host import.
   else if isArithOp op && isPolyNumBinop l r then
     let _ = setRef useValueArithRef True
-    let _ = setRef useTrapImport True
+    let _ = setRef (progEmit prog).trapImportNeeded True
     emitRefExpr prog env d l ++ emitRefExpr prog env d r ++ ["call $mdk_value_" ++ valueArithName op]
   else
     -- layer-17 §2.1: Int arithmetic/comparison computes in i64 over the box/unbox
@@ -5245,7 +5221,7 @@ emitBinRef prog env d op l r tag =
     -- B5: concrete-Int `/`/`%` get a divisor-zero guard emitting the coded trap line
     -- (peer of the native emitIntDivZeroChecked) before the raw i64.div_s/rem_s.
     if (op == "/" || op == "%") then
-      li ++ ri ++ emitDivZeroGuard op ("$__divr" ++ intToString d) ++ [wasmBinOp64 (progEmit prog) op, "call $mdk_box_int"]
+      li ++ ri ++ emitDivZeroGuard (progEmit prog) op ("$__divr" ++ intToString d) ++ [wasmBinOp64 (progEmit prog) op, "call $mdk_box_int"]
     else if isCmpOp op then li ++ ri ++ [wasmBinOp64 (progEmit prog) op, "ref.i31"]
     else li ++ ri ++ [wasmBinOp64 (progEmit prog) op, "call $mdk_box_int"]
 
@@ -5276,18 +5252,18 @@ valueArithName op = panic ("wasm A0: not a value-arith op '" ++ op ++ "'")
 -- ref-mode dependency, so the SAME helper works in scalar AND ref mode and only the
 -- import (not the $str runtime) is forced.  `unreachable` is stack-polymorphic, so the
 -- sequence validates as any result type (mirroring the bare `unreachable` it replaces).
--- Sets useTrapImport so emit{Ref,Scalar}Program declares the host import.
+-- Records this event on WasmEmit so emit{Ref,Scalar}Program declares host import.
 trapByteInstr : Int -> List String
 trapByteInstr b = ["i32.const " ++ intToString b, "call $mdk_write_err_byte"]
 
-wasmTrapBytes : String -> List String
-wasmTrapBytes text =
-  let _ = setRef useTrapImport True
+wasmTrapBytes : WasmEmit -> String -> List String
+wasmTrapBytes emit text =
+  let _ = setRef emit.trapImportNeeded True
   flatMap trapByteInstr (strBytesW text)
 
 -- a full coded trap with a compile-time-fixed message (div/mod/OOB/non-exhaustive).
-wasmTrap : String -> String -> List String
-wasmTrap code msg = wasmTrapBytes "runtime error [\{code}]: \{msg}\n"
+wasmTrap : WasmEmit -> String -> String -> List String
+wasmTrap emit code msg = wasmTrapBytes emit "runtime error [\{code}]: \{msg}\n"
   ++ ["unreachable"]
 
 -- B5: guard a concrete-Int div/mod divisor.  Stack in `[dividend:i64, divisor:i64]`;
@@ -5295,12 +5271,12 @@ wasmTrap code msg = wasmTrapBytes "runtime error [\{code}]: \{msg}\n"
 -- it is zero, then restores `[dividend, divisor]` for the following i64.div_s/rem_s.
 -- (The `if` has empty block type; the dividend rests untouched beneath it, and the
 -- then-branch ends in `unreachable` so the branch is stack-polymorphic.)
-emitDivZeroGuard : String -> String -> List String
-emitDivZeroGuard op dloc =
+emitDivZeroGuard : WasmEmit -> String -> String -> List String
+emitDivZeroGuard emit op dloc =
   let code = if op == "/" then "E-DIV-ZERO" else "E-MOD-ZERO"
   let msg = if op == "/" then "division by zero" else "modulo by zero"
   ["local.set " ++ dloc, "local.get " ++ dloc, "i64.eqz", "if"]
-    ++ indent (wasmTrap code msg)
+    ++ indent (wasmTrap emit code msg)
     ++ ["end", "local.get " ++ dloc]
 
 -- layer-9: emit a runtime-shape-dispatched comparison.  `==`/`!=` go through
@@ -5963,7 +5939,7 @@ emitLeafExternRef prog env d "writeFileBytes" _ =
 -- expression) is streamed through $mdk_eprint_str (forced via useEPutRef in noteW8Extern
 -- for `panic`), then a trailing newline byte.  `unreachable` is stack-polymorphic, so it
 -- validates as any result type.
-emitLeafExternRef prog env d "panic" [msg] = wasmTrapBytes "runtime error [E-PANIC]: "
+emitLeafExternRef prog env d "panic" [msg] = wasmTrapBytes (progEmit prog) "runtime error [E-PANIC]: "
   ++ emitRefExpr prog env d msg
   ++ ["ref.cast (ref $str)", "call $mdk_eprint_str"]
   ++ trapByteInstr 10
@@ -5975,14 +5951,14 @@ emitLeafExternRef prog env d "panic" _ =
 -- argument is dropped, matching the native @mdk_oob() abort (which also
 -- ignores its message and prints the fixed text).
 emitLeafExternRef prog env d "indexError" [msg] =
-  wasmTrap "E-INDEX-OOB" "index out of bounds"
+  wasmTrap (progEmit prog) "E-INDEX-OOB" "index out of bounds"
 emitLeafExternRef prog env d "indexError" _ =
   gapLP prog "wasm Index-16a: indexError takes exactly one argument"
 -- #670: `sliceError lo hiIncl` reuses the existing coded E-SLICE-OOB trap (the
 -- same fixed text the built-in slice path emits) -- both bound arguments are
 -- dropped, matching indexError and the native @mdk_slice_oob abort.
 emitLeafExternRef prog env d "sliceError" [lo, hi] =
-  wasmTrap "E-SLICE-OOB" "slice out of bounds"
+  wasmTrap (progEmit prog) "E-SLICE-OOB" "slice out of bounds"
 emitLeafExternRef prog env d "sliceError" _ =
   gapLP prog "wasm #670: sliceError takes exactly two arguments"
 -- stage-A: bitwise / shift externs (Int -> Int -> Int).  Args are (ref eq) boxed Ints;
@@ -6375,7 +6351,7 @@ emitArgsArray prog env d args =
 -- destination cell instead of issuing the stack-growing recursive call.  The
 -- destination-passing context (the self-ref, arity, the param locals, the loop/exit
 -- labels, the uniform cell struct name + recursive-field index) is carried in a
--- module-level ref so the existing tail-descent (emitRefTail / emitDecisionTail) can
+-- per-emission `WasmEmit.trmcCtx` field so tail descent (emitRefTail / emitDecisionTail) can
 -- redirect its cons/ctor/base leaves without threading a new argument through every arm.
 -- The ENGINE never sees a recursive `call`/`return_call` to the self fn inside the loop
 -- (the decisive "TMC fired" property): a cons/ctor leaf builds a cell, struct.sets it
@@ -6392,13 +6368,6 @@ emitArgsArray prog env d args =
 -- the built-in `h :: t` (→ reserved `$C_Cons`) vs a user ctor named `Cons`
 -- (→ `$CU_Cons`).  Homogeneous per fn, so the base leaf's parent-link
 -- (emitWasmTrmcBase) reads it from here rather than re-deriving from the ctor name.
-data WTrmcCtx =
-  | WTrmcOff
-  | WTrmcOn SelfRef Int (List String) (List (String, Int)) Bool String String
-
-wTrmcCtxRef : Ref WTrmcCtx
-wTrmcCtxRef = Ref WTrmcOff
-
 -- layer-18: the PLAIN-tail impl-method `return_call` context.  Set to `Some (method,
 -- tag, arity)` ONLY while emitting an ordinary (non-TMC, non-default) impl body in
 -- `emitImplGroup`; off everywhere else (top-level fns, default defines, dispatch
@@ -6437,7 +6406,7 @@ wTrmcDctorL = "$__tmc_dctor"
 -- `arity` = the enclosing fn's param count (unused today; kept for symmetry with
 -- the LLVM self-call walk).
 emitRefTail : Prog -> List String -> Int -> CExpr -> List String
-emitRefTail prog env arity e = match wTrmcCtxRef.value
+emitRefTail prog env arity e = match (progEmit prog).trmcCtx.value
   WTrmcOn self sarity pslots ctorSet _ loopLbl exitLbl =>
     -- TMC active: descend the structural tail wrappers (if/let/block/decision) with the
     -- context STILL LIVE so their inner leaves re-enter here; redirect every LEAF
@@ -6670,7 +6639,7 @@ emitWasmTrmcBase prog env exitLbl e =
   -- else store it into the current dest's recursive slot (the parent ctor's type
   -- is static for a singleton leaf-ctor set; a mixed set dispatches on
   -- $__tmc_dctor — wTrmcLinkParent).  Fetch the set from the ctx.
-  match wTrmcCtxRef.value
+  match (progEmit prog).trmcCtx.value
     WTrmcOn _ _ _ ctorSet isBuiltinList _ _ =>
       let storeBranch = wTrmcLinkParent isBuiltinList ctorSet valInstrs
       let seedBranch = valInstrs ++ ["local.set " ++ wTrmcHeadL]
@@ -6858,8 +6827,8 @@ emitWasmTrmcCore prog funcSym self lblRoot arity clauses ctorSet =
   let loopLbl = "$tmcloop"
   let exitLbl = "$tmcexit"
   let isBuiltinList = wTrmcBuildsBuiltinList prog self arity clauses
-  let saved = wTrmcCtxRef.value
-  let _ = setRef wTrmcCtxRef (WTrmcOn self arity pslots ctorSet isBuiltinList loopLbl exitLbl)
+  let saved = (progEmit prog).trmcCtx.value
+  let _ = setRef (progEmit prog).trmcCtx (WTrmcOn self arity pslots ctorSet isBuiltinList loopLbl exitLbl)
   -- Single all-PVar clause (no fallthrough): the fast path — alias params to the
   -- synthetic positions and TMC-emit the body directly.  Otherwise (multi-clause OR
   -- a clause carries a list/ctor pattern, e.g. `stripComments`/the `map` impl): route
@@ -6871,7 +6840,7 @@ emitWasmTrmcCore prog funcSym self lblRoot arity clauses ctorSet =
         bindParamAliases prog ps params ++ emitRefTail prog (map (patName (progEmit prog)) ps) arity b
       else emitClauseChainGo prog [] lblRoot params arity clauses 0
     _ => emitClauseChainGo prog [] lblRoot params arity clauses 0
-  let _ = setRef wTrmcCtxRef saved
+  let _ = setRef (progEmit prog).trmcCtx saved
   let loopShell = ["i32.const 1", "local.set " ++ wTrmcFirstL]
       ++ ["block " ++ exitLbl, "loop " ++ loopLbl]
       ++ indent bodyLines
@@ -7284,7 +7253,7 @@ emitDecisionTail prog env arity scrut arms tree =
 -- with the slot bodies tail-emitting their arms.
 emitTreeTail : Prog -> List String -> Int -> Int -> List String -> List (List String) -> List CArm -> CTree -> List String
 emitTreeTail prog env arity d root occs arms CTFail =
-  wasmTrap "E-NONEXHAUSTIVE-MATCH" "non-exhaustive match"
+  wasmTrap (progEmit prog) "E-NONEXHAUSTIVE-MATCH" "non-exhaustive match"
 emitTreeTail prog env arity d root occs arms (CTLeaf i) =
   emitLeafTail prog env arity root arms i
 emitTreeTail prog env arity d root occs arms (CTGuard i fail) =
@@ -7422,15 +7391,15 @@ emitLitSwitchTail prog _ _ _ _ _ _ _ _ _ _ =
 -- never consults a name-keyed table.
 emitClosure : Prog -> List String -> Int -> List Pat -> CExpr -> List String
 emitClosure prog env d pats body =
-  let n = freshLamId ()
+  let n = freshLamId (progEmit prog)
   let lamName = "$mdk_lam" ++ intToString n
   -- W2/cat2: a param may be a destructuring pattern (tuple/ctor); its BOUND vars
   -- (patVars) — not a single synthetic name — are what the body's free-var set
   -- subtracts, so the captures are computed over the real bound names.
   let boundVars = flatMap patVars pats
   let captured = filterList (c => contains c env) (dedupKeep (freeVarsExpr boundVars body))
-  let _ = noteFuncRef lamName
-  let _ = addLifted (emitLamDefine prog lamName pats captured body)
+  let _ = noteFuncRef (progEmit prog) lamName
+  let _ = addLifted (progEmit prog) (emitLamDefine prog lamName pats captured body)
   -- build the closure struct at the use site: ref.func, arity, env array of captures.
   let capInstrs = flatMap (c => ["local.get $" ++ gname c]) captured
   ["ref.func " ++ lamName, "i32.const " ++ intToString (listLen pats)]
@@ -7458,14 +7427,14 @@ emitLamDefine prog lamName pats captured body =
     ++ w7LocalDecls (maxRefDepth body)
   let setup = ["local.get $self", "ref.cast (ref $clos)", "local.set $__self_clos"]
   -- A lifted lambda is an INDEPENDENT function: it must NOT inherit the enclosing
-  -- fn's TMC loop context (wTrmcCtxRef) nor a dispatch-group context (wDispCtxRef).
+  -- fn's TMC loop context nor a dispatch-group context (wDispCtxRef).
   -- emitLamDefine can run while one of those is LIVE (a cons-tail clause body whose
-  -- lead-field / recomputed-arg builds a closure is emitted under a live wTrmcCtxRef),
+  -- lead-field / recomputed-arg builds a closure is emitted under a live trmc context),
   -- and without clearing it the lambda body's tail leaves would emit `$__tmc_*` /
   -- `$tmcloop` references that this lambda never declares as locals → invalid wasm.
-  let savedTrmc = wTrmcCtxRef.value
+  let savedTrmc = (progEmit prog).trmcCtx.value
   let savedDisp = wDispCtxRef.value
-  let _ = setRef wTrmcCtxRef WTrmcOff
+  let _ = setRef (progEmit prog).trmcCtx WTrmcOff
   let _ = setRef wDispCtxRef WDispOff
   -- A1 (poly-`Num`-on-Float, design row 6): a lambda's own params carry no declared
   -- sig, so its arith-used params are polymorphic `Num` (the arith-section accumulator
@@ -7475,7 +7444,7 @@ emitLamDefine prog lamName pats captured body =
   let _ = setRef numPolyLocalsRef (dedupKeep (lamPolyParamNames pats body ++ savedNumPoly))
   let bodyLines = emitRefTail prog bodyEnv arity body
   let _ = setRef numPolyLocalsRef savedNumPoly
-  let _ = setRef wTrmcCtxRef savedTrmc
+  let _ = setRef (progEmit prog).trmcCtx savedTrmc
   let _ = setRef wDispCtxRef savedDisp
   ["  (func " ++ lamName ++ " (type $codety) (param $self (ref eq)) (param $args (ref $argarr)) (result (ref eq))"]
     ++ map ("  " ++ _) localLines
@@ -7559,7 +7528,7 @@ argLoadAt (p, i) = [
 -- of the block.  Peer of the native emitter's `emitRecLam` route in emitBlock.
 emitSelfRecLocalBind : Prog -> List String -> String -> List Pat -> CExpr -> List String
 emitSelfRecLocalBind prog env x pats body =
-  let gid = freshLamId ()
+  let gid = freshLamId (progEmit prog)
   let bind = CBind x [CClause pats body]
   let groupCaps = filterList (c => contains c env) (dedupKeep (filterList (notIn [x]) (freeVarsClauses [] bind)))
   let _ = emitLgLifted prog gid [x] groupCaps [bind] bind
@@ -7567,7 +7536,7 @@ emitSelfRecLocalBind prog env x pats body =
 
 emitLetGroupRef : Prog -> List String -> Int -> List CBind -> CExpr -> List String
 emitLetGroupRef prog env d binds body =
-  let gid = freshLamId ()
+  let gid = freshLamId (progEmit prog)
   let valBinds = filterList isLgValBind binds
   let fnBinds = filterList (b => not (isLgValBind b)) binds
   let valNames = map lgBindName valBinds
@@ -7623,7 +7592,7 @@ emitLgLifted : Prog -> Int -> List String -> List String -> List CBind -> CBind 
 emitLgLifted prog gid names groupCaps binds (CBind name clauses) =
   let _ = setCurrentBindingOfW (progEmit prog) ("lg:" ++ name)
   let lamName = "$mdk_lg\{intToString gid}_\{gname name}"
-  let _ = noteFuncRef lamName
+  let _ = noteFuncRef (progEmit prog) lamName
   let arity = clauseArityOf clauses
   let params = synthParams arity
   let capPrologue = flatMap (capLoadAt) (zipIdx groupCaps 0)
@@ -7631,13 +7600,13 @@ emitLgLifted prog gid names groupCaps binds (CBind name clauses) =
   let argPrologue = flatMap (argLoadAt) (zipIdx params 0)
   -- a lifted letgroup member is an independent function: clear any live TMC /
   -- dispatch-group context so its body doesn't leak `$__tmc_*`/`$tmcloop` references
-  -- (see emitLamDefine — same hazard when lifted under a live wTrmcCtxRef).
-  let savedTrmc = wTrmcCtxRef.value
+  -- (see emitLamDefine — same hazard when lifted under a live trmc context).
+  let savedTrmc = (progEmit prog).trmcCtx.value
   let savedDisp = wDispCtxRef.value
-  let _ = setRef wTrmcCtxRef WTrmcOff
+  let _ = setRef (progEmit prog).trmcCtx WTrmcOff
   let _ = setRef wDispCtxRef WDispOff
   let bodyLines = emitClausesRefEnv prog (names ++ groupCaps) name params arity clauses
-  let _ = setRef wTrmcCtxRef savedTrmc
+  let _ = setRef (progEmit prog).trmcCtx savedTrmc
   let _ = setRef wDispCtxRef savedDisp
   let memberLocals = names
   let bodyLocals = filterList (notIn (params ++ groupCaps ++ memberLocals)) (dedupKeep (clauseLocals clauses))
@@ -7651,7 +7620,7 @@ emitLgLifted prog gid names groupCaps binds (CBind name clauses) =
     ++ map ("  " ++ _) localLines
     ++ indent (setup ++ capPrologue ++ memberRebuilds ++ argPrologue ++ bodyLines)
     ++ ["  )"]
-  addLifted def
+  addLifted (progEmit prog) def
 
 -- rebuild ONE member's closure value (ref.func + arity + $argarr of groupCaps) and
 -- bind it to its local `$<name>`.  Used BOTH at the use site and inside each lifted
@@ -7912,7 +7881,7 @@ emitIndexRef prog env d a i =
     -- @mdk_oob; message matches medaka_rt.c, sans the index value native also omits).
     ++ ["local.get " ++ idxL, "i32.const 0", "i32.lt_s"]
     ++ ["local.get " ++ idxL, "local.get " ++ arrL, "ref.as_non_null", "array.len", "i32.ge_s"]
-    ++ ["i32.or", "if"] ++ indent (wasmTrap "E-INDEX-OOB" "index out of bounds") ++ ["end"]
+    ++ ["i32.or", "if"] ++ indent (wasmTrap (progEmit prog) "E-INDEX-OOB" "index out of bounds") ++ ["end"]
     ++ ["local.get " ++ arrL, "ref.as_non_null", "local.get " ++ idxL, "array.get $arr", "ref.as_non_null"]
 
 -- CSlice arr lo hi incl: bounds-check, then new array of (end-lo) slots, copy via
@@ -7958,7 +7927,7 @@ emitSliceRef prog env d a lo hi incl =
     ++ ["local.get " ++ lenL, "local.get " ++ srcL, "ref.as_non_null", "array.len", "i32.gt_s", "i32.or"]
     -- (end - lo) < 0  (inverted range)
     ++ ["local.get " ++ lenL, "local.get " ++ loL, "i32.sub", "i32.const 0", "i32.lt_s", "i32.or"]
-    ++ ["if"] ++ indent (wasmTrap "E-SLICE-OOB" "slice out of bounds") ++ ["end"]
+    ++ ["if"] ++ indent (wasmTrap (progEmit prog) "E-SLICE-OOB" "slice out of bounds") ++ ["end"]
     ++ ["local.get " ++ lenL, "local.get " ++ loL, "i32.sub", "local.set " ++ lenL]
   arrI ++ loI ++ hiI ++ adj ++ guardI
     ++ ["i32.const 0", "ref.i31", "local.get " ++ lenL, "array.new $arr", "local.set " ++ dstL]
@@ -8135,7 +8104,7 @@ emitDecisionRef prog env d scrut arms tree =
 -- the default tail of a switch tower which falls through with the value on the stack.
 emitTreeRef : Prog -> List String -> Int -> String -> List String -> List (List String) -> List CArm -> CTree -> List String
 emitTreeRef prog env d decLabel root occs arms CTFail =
-  wasmTrap "E-NONEXHAUSTIVE-MATCH" "non-exhaustive match"
+  wasmTrap (progEmit prog) "E-NONEXHAUSTIVE-MATCH" "non-exhaustive match"
 emitTreeRef prog env d decLabel root occs arms (CTLeaf i) =
   emitLeafRef prog env d decLabel root arms i
 emitTreeRef prog env d decLabel root occs arms (CTGuard i fail) =

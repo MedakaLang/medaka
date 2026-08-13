@@ -79,14 +79,146 @@ if grep -F 'implSelfCtxRef' "$WASM_SRC" >/dev/null; then
   echo "FAIL wasm typed impl-self-state ratchet: retired ambient authority remains"
   exit 1
 fi
+if grep -E '^wTrmcCtxRef[[:space:]]*[:=]' "$WASM_SRC" >/dev/null; then
+  echo "FAIL H2B6-AUTHORITY-SET: retired trmc authority remains ambient"
+  exit 1
+fi
+for required in \
+  'trmcCtx : Ref WTrmcCtx' \
+  'trmcCtx = Ref WTrmcOff' \
+  'match (progEmit prog).trmcCtx.value' \
+  'let saved = (progEmit prog).trmcCtx.value' \
+  'let _ = setRef (progEmit prog).trmcCtx (WTrmcOn self arity pslots ctorSet isBuiltinList loopLbl exitLbl)' \
+  'let _ = setRef (progEmit prog).trmcCtx saved' \
+  'let savedTrmc = (progEmit prog).trmcCtx.value' \
+  'let _ = setRef (progEmit prog).trmcCtx WTrmcOff' \
+  'let _ = setRef (progEmit prog).trmcCtx savedTrmc'; do
+  grep -F -- "$required" "$WASM_SRC" >/dev/null || {
+    echo "FAIL H2B6-WTRMC-CARRIER: missing $required"
+    exit 1
+  }
+done
+for required in \
+  '"--reemit-ref-trap-state"::_' \
+  '"--emit-ref-trap-state"::_' \
+  'reemitRefTrapState : Unit -> <IO> Unit' \
+  'let p1 = emitProgram refTrapStateInput refTrapStateProgram' \
+  'let u = emitProgram refTrapStateInput refTrapStateControlProgram' \
+  '"REF_TRAP_P2"' \
+  'refTrapCtorArities = [("TrapToken", 0)]' \
+  'refTrapStateAbortProgram : CProgram'; do
+  grep -F -- "$required" "$TYPED_ENTRY" >/dev/null || {
+    echo "FAIL H2B8-REF-TRAP-HARNESS: missing $required"
+    exit 1
+  }
+done
+[ "$(grep -F 'let body = CLet False PWild (CVar "Pair" AGlobal) (CLet False PWild (CVar "Pair" AGlobal) lambdaBody)' "$TYPED_ENTRY" | wc -l | tr -d '[:space:]')" -eq 1 ] || {
+  echo "FAIL H2B7-NAMED-WRAPPER-APPARATUS: lambda fixture must use Pair twice"
+  exit 1
+}
+[ "$(grep -F 'match (progEmit prog).trmcCtx.value' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 2 ] || {
+  echo "FAIL H2B6-WTRMC-CARRIER: expected exactly two trmc readers"
+  exit 1
+}
+[ "$(grep -F 'let _ = setRef (progEmit prog).trmcCtx WTrmcOff' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 2 ] &&
+  [ "$(grep -F 'let _ = setRef (progEmit prog).trmcCtx savedTrmc' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 2 ] || {
+  echo "FAIL H2B6-WTRMC-CLEAR-ROUTES: expected two independent-function clears/restores"
+  exit 1
+}
+grep -F 'emitProgram input cp = emitProgramWith (freshWasmEmit WGapStrict) input cp' "$WASM_SRC" >/dev/null &&
+  [ "$(grep -F 'let emit = freshWasmEmit WGapRecord' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 2 ] || {
+  echo "FAIL H2B6-WTRMC-CLEAR-ROUTES: strict, record, census freshness routes changed"
+  exit 1
+}
+grep -F 'wDispCtxRef' "$WASM_SRC" >/dev/null || {
+  echo "FAIL H2B6-WTRMC-CLEAR-ROUTES: nearest-miss wDispCtxRef changed"
+  exit 1
+}
+if grep -E '^(lamIdRef|liftedFnsRef|liftedNamesRef|funcRefsRef|liftedNamesSetW|funcRefsSetW)[[:space:]]*[:=]' "$WASM_SRC" >/dev/null; then
+  echo "FAIL H2B7-AUTHORITY-SET: retired lambda authority remains ambient"
+  exit 1
+fi
+for required in \
+  'nextLambdaId : Ref Int' \
+  'liftedDefinitions : Ref (List (List String))' \
+  'liftedDefinitionNames : Ref (OrdMap Unit)' \
+  'functionReferences : Ref (List String)' \
+  'functionReferenceNames : Ref (OrdMap Unit)' \
+  'nextLambdaId = Ref 0' \
+  'liftedDefinitions = Ref []' \
+  'liftedDefinitionNames = Ref omEmpty' \
+  'functionReferences = Ref []' \
+  'functionReferenceNames = Ref omEmpty' \
+  'freshLamId : WasmEmit -> Int' \
+  'addLifted : WasmEmit -> List String -> Unit' \
+  'addLiftedNamed : WasmEmit -> String -> List String -> Unit' \
+  'noteFuncRef : WasmEmit -> String -> Unit' \
+  'emitElemDeclare : WasmEmit -> String' \
+  'let n = freshLamId (progEmit prog)' \
+  'let gid = freshLamId (progEmit prog)' \
+  'addLifted (progEmit prog) (emitLamDefine prog lamName pats captured body)' \
+  'addLifted (progEmit prog) def' \
+  'let lifted = if progUseClos prog then flatMap (x => x) (reverseL (progEmit prog).liftedDefinitions.value) else []' \
+  'let names = "$mdk_pap" :: reverseL emit.functionReferences.value' \
+  'emitProgram input cp = emitProgramWith (freshWasmEmit WGapStrict) input cp' \
+  'let emit = freshWasmEmit WGapRecord'; do
+  grep -F -- "$required" "$WASM_SRC" >/dev/null || {
+    echo "FAIL H2B7-CARRIER: missing $required"
+    exit 1
+  }
+done
+[ "$(grep -F 'freshLamId (progEmit prog)' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 3 ] || {
+  echo "FAIL H2B7-ROUTES: expected three lambda-id routes"
+  exit 1
+}
+[ "$(grep -F 'addLiftedNamed (progEmit prog)' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 2 ] &&
+  [ "$(grep -F 'noteFuncRef (progEmit prog)' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 6 ] || {
+  echo "FAIL H2B7-ROUTES: named lifts or function-reference routes changed"
+  exit 1
+}
+grep -F 'emitScalarProgram emit fnNames valNames groups' "$WASM_SRC" >/dev/null || {
+  echo "FAIL H2B7-NEAREST-MISS: scalar emission route changed"
+  exit 1
+}
+if grep -E '^useTrapImport[[:space:]]*[:=]' "$WASM_SRC" >/dev/null; then
+  echo "FAIL H2B8-AUTHORITY-SET: retired trap-import authority remains ambient"
+  exit 1
+fi
+for required in \
+  'trapImportNeeded : Ref Bool' \
+  'trapImportNeeded = Ref False' \
+  'wasmTrapBytes : WasmEmit -> String -> List String' \
+  'wasmTrap : WasmEmit -> String -> String -> List String' \
+  'setRef emit.trapImportNeeded True' \
+  'let trapImport = if emit.trapImportNeeded.value then stderrByteImportLines else []' \
+  'let trapImport = if useEPutRef.value || (progEmit prog).trapImportNeeded.value then stderrByteImportLines else []' \
+  'let _ = setRef (progEmit prog).trapImportNeeded True' \
+  'emitDivZeroGuard : WasmEmit -> String -> String -> List String' \
+  'emitDivZeroGuard emit op "$__sdivr"' \
+  'emitDivZeroGuard (progEmit prog) op ("$__divr" ++ intToString d)' \
+  'wasmTrap (progEmit prog) "E-NONEXHAUSTIVE-MATCH" "non-exhaustive match"' \
+  'wasmTrapBytes (progEmit prog) "runtime error [E-PANIC]: "'; do
+  grep -F -- "$required" "$WASM_SRC" >/dev/null || {
+    echo "FAIL H2B8-CARRIER: missing $required"
+    exit 1
+  }
+done
+[ "$(grep -F 'let _ = setRef (progEmit prog).trapImportNeeded True' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 2 ] || {
+  echo "FAIL H2B8-WRITERS: expected two explicit poly-runtime writers"
+  exit 1
+}
+grep -F 'useEPutRef : Ref Bool' "$WASM_SRC" >/dev/null &&
+  grep -F 'let stderrRt = if useEPutRef.value then stderrRuntimeLines else []' "$WASM_SRC" >/dev/null || {
+  echo "FAIL H2B8-NEAREST-MISS: ePut authority changed"
+  exit 1
+}
 EXPECTED_MODULE_REFS="$(printf '%s\n' \
-  lamIdRef liftedFnsRef liftedNamesRef funcRefsRef liftedNamesSetW funcRefsSetW \
   useStrRef useListRef useArrayRef useRefBoxRef useRecUpdateRef \
-  useStrLeafRef useRngRef useHashRef useEPutRef useTrapImport useDivGuardRef \
+  useStrLeafRef useRngRef useHashRef useEPutRef useDivGuardRef \
   useFloatRef useFloatHashRef useMathRef useFloatRngRef useFloatStrRef \
   useStrSearchRef useValueCmpRef useValueArithRef numPolyLocalsRef useStrCodecRef \
    useCharFromCodeRef useCharClassRef useIORef useArgsRef useFileBytesRef \
-   floatLocalsRef floatGlobalsRef tupleAritiesRef wTrmcCtxRef wDispCtxRef \
+   floatLocalsRef floatGlobalsRef tupleAritiesRef wDispCtxRef \
   wDispGroupsRef | LC_ALL=C sort -u)"
 ACTUAL_MODULE_REF_SIGS="$(awk '
   /^[A-Za-z_][A-Za-z0-9_]*[[:space:]]*:[[:space:]]*Ref([[:space:]]|$)/ { print $1 }
@@ -100,7 +232,7 @@ ACTUAL_MODULE_REF_DEFS="$(awk '
 ' "$WASM_SRC" | LC_ALL=C sort -u)"
 if [ "$ACTUAL_MODULE_REF_SIGS" != "$EXPECTED_MODULE_REFS" ] ||
     [ "$ACTUAL_MODULE_REF_DEFS" != "$EXPECTED_MODULE_REFS" ]; then
-  echo "FAIL H2B5-AUTHORITY-SET: top-level Ref authority set changed"
+  echo "FAIL H2B8-AUTHORITY-SET: top-level Ref authority set changed"
   printf '  observed signatures:\n%s\n' "$ACTUAL_MODULE_REF_SIGS"
   printf '  observed definitions:\n%s\n' "$ACTUAL_MODULE_REF_DEFS"
   exit 1
@@ -173,6 +305,14 @@ for required in \
   }
 done
 for required in \
+  '"--reemit-trmc-state"::_' \
+  'reemitTrmcState : Unit -> <IO> Unit' \
+  'let p1 = emitProgram trmcStateInput (trmcStateProgram "pTrmc" 17)' \
+  'let (u, _) = emitProgramRecord trmcStateInput (trmcStateProgram "uTrmc" 29)' \
+  'let censusEvents = emitProgramGaps trmcStateInput trmcStateCensusProgram' \
+  '"TRMC_P2"' \
+  '(emitProgram trmcStateInput (trmcStateProgram "pTrmc" 17))' \
+  'CBind "trmcIntentionalGap" [CClause [] (CVar "missingTrmcCensus" AGlobal)]' \
   '"--reemit-impl-self-state"::_' \
   'reemitImplSelfState : Unit -> <IO> Unit' \
   'let p1 = emitProgram implSelfInput pProgram' \
@@ -288,6 +428,112 @@ run_impl_self_check() {
       exit 1
     }
 }
+
+run_trmc_state_check() {
+  TRMC_OUT="$($EMITBIN --reemit-trmc-state 2>"$INPUT_WORK/trmc.emit.err")" || {
+    echo "FAIL H2B6-WTRMC-P-SHAPE: trmc state harness"
+    cat "$INPUT_WORK/trmc.emit.err"
+    exit 1
+  }
+  [ ! -s "$INPUT_WORK/trmc.emit.err" ] || {
+    echo "FAIL H2B6-WTRMC-P-SHAPE: trmc harness wrote stderr"
+    cat "$INPUT_WORK/trmc.emit.err"
+    exit 1
+  }
+  TRMC_MARKERS="$(printf '%s\n' "$TRMC_OUT" | awk '/^TRMC_(P1|RECORD_U|CENSUS_U_GAP|P2)_(BEGIN|END)$/ { print }')"
+  TRMC_EXPECTED_MARKERS="$(printf 'TRMC_P1_BEGIN\nTRMC_P1_END\nTRMC_RECORD_U_BEGIN\nTRMC_RECORD_U_END\nTRMC_CENSUS_U_GAP_BEGIN\nTRMC_CENSUS_U_GAP_END\nTRMC_P2_BEGIN\nTRMC_P2_END')"
+  [ "$TRMC_MARKERS" = "$TRMC_EXPECTED_MARKERS" ] || {
+    echo "FAIL H2B6-WTRMC-P-SHAPE: ordered capture markers"
+    exit 1
+  }
+  trmc_capture() {
+    awk -v begin="$1" -v end="$2" '
+      $0 == begin { capture = 1; next }
+      $0 == end { exit }
+      capture { print }
+    ' <<<"$TRMC_OUT"
+  }
+  trmc_capture TRMC_P1_BEGIN TRMC_P1_END > "$INPUT_WORK/trmc-p1.wat"
+  trmc_capture TRMC_RECORD_U_BEGIN TRMC_RECORD_U_END > "$INPUT_WORK/trmc-u.wat"
+  trmc_capture TRMC_CENSUS_U_GAP_BEGIN TRMC_CENSUS_U_GAP_END > "$INPUT_WORK/trmc-census.events"
+  trmc_capture TRMC_P2_BEGIN TRMC_P2_END > "$INPUT_WORK/trmc-p2.wat"
+  trmc_named_body() {
+    awk -v name="$1" '
+      $0 ~ "\\(func \\$" name "( |\\))" { take = 1 }
+      take {
+        print
+        opens = gsub(/\(/, "(")
+        closes = gsub(/\)/, ")")
+        depth += opens - closes
+        if (depth == 0) exit
+      }
+    ' "$2"
+  }
+  for trmc_file in trmc-p1.wat trmc-u.wat trmc-census.events trmc-p2.wat; do
+    [ -s "$INPUT_WORK/$trmc_file" ] || {
+      echo "FAIL H2B6-WTRMC-P-SHAPE: empty $trmc_file"
+      exit 1
+    }
+  done
+  cmp -s "$INPUT_WORK/trmc-p1.wat" "$INPUT_WORK/trmc-p2.wat" || {
+    echo "FAIL H2B6-WTRMC-P-SHAPE: P changed after record U and census"
+    exit 1
+  }
+  cmp -s "$INPUT_WORK/trmc-p1.wat" "$INPUT_WORK/trmc-u.wat" && {
+    echo "FAIL H2B6-WTRMC-P-SHAPE: P/U positive control did not differ"
+    exit 1
+  }
+  for trmc_spec in "p1 pTrmc 17" "u uTrmc 29" "p2 pTrmc 17"; do
+    trmc_name="${trmc_spec%% *}"
+    trmc_rest="${trmc_spec#* }"
+    trmc_fn="${trmc_rest%% *}"
+    trmc_expected="${trmc_rest#* }"
+    trmc_wat="$INPUT_WORK/trmc-$trmc_name.wat"
+    [ "$(grep -F "(func \$$trmc_fn" "$trmc_wat" | wc -l | tr -d '[:space:]')" -eq 1 ] || {
+      echo "FAIL H2B6-WTRMC-P-SHAPE: $trmc_name missing function"
+      exit 1
+    }
+    grep -F 'loop $tmcloop' "$trmc_wat" >/dev/null &&
+      grep -F 'br $tmcloop' "$trmc_wat" >/dev/null || {
+        echo "FAIL H2B6-WTRMC-P-SHAPE: $trmc_name missing TMC loop markers"
+        exit 1
+      }
+    trmc_named_body "$trmc_fn" "$trmc_wat" > "$INPUT_WORK/trmc-$trmc_name.body"
+    [ -s "$INPUT_WORK/trmc-$trmc_name.body" ] &&
+      [ "$(grep -F "call \$$trmc_fn" "$INPUT_WORK/trmc-$trmc_name.body" | wc -l | tr -d '[:space:]')" -eq 0 ] &&
+      [ "$(grep -F "return_call \$$trmc_fn" "$INPUT_WORK/trmc-$trmc_name.body" | wc -l | tr -d '[:space:]')" -eq 0 ] || {
+        echo "FAIL H2B6-WTRMC-P-SHAPE: $trmc_name gained recursive call"
+        exit 1
+      }
+    wasm-tools parse "$trmc_wat" -o "$INPUT_WORK/trmc-$trmc_name.wasm" || {
+      echo "FAIL H2B6-WTRMC-P-SHAPE: wasm-tools parse $trmc_name"
+      exit 1
+    }
+    wasm-tools validate --features=all "$INPUT_WORK/trmc-$trmc_name.wasm" || {
+      echo "FAIL H2B6-WTRMC-P-SHAPE: wasm-tools validate $trmc_name"
+      exit 1
+    }
+    grep -F "i32.const $trmc_expected" "$INPUT_WORK/trmc-$trmc_name.body" >/dev/null || {
+      echo "FAIL H2B6-WTRMC-P-SHAPE: $trmc_name missing named result marker $trmc_expected"
+      exit 1
+    }
+    TRMC_RESULT="$($NODE "$RUNJS" "$INPUT_WORK/trmc-$trmc_name.wasm" 2>"$INPUT_WORK/trmc-$trmc_name.run.err")" || {
+      echo "FAIL H2B6-WTRMC-P-SHAPE: execution failed $trmc_name"
+      cat "$INPUT_WORK/trmc-$trmc_name.run.err"
+      exit 1
+    }
+    [ ! -s "$INPUT_WORK/trmc-$trmc_name.run.err" ] && [ "$TRMC_RESULT" = "$trmc_expected" ] || {
+      echo "FAIL H2B6-WTRMC-P-SHAPE: execution changed $trmc_name"
+      exit 1
+    }
+  done
+  [ "$(wc -l < "$INPUT_WORK/trmc-census.events")" -eq 1 ] &&
+    grep -F $'val trmcIntentionalGap\tunbound variable '\''missingTrmcCensus' "$INPUT_WORK/trmc-census.events" >/dev/null &&
+    grep -F '[in pTrmc]' "$INPUT_WORK/trmc-census.events" >/dev/null || {
+      echo "FAIL H2B6-WTRMC-P-SHAPE: census gap attribution"
+      exit 1
+    }
+}
 if grep -E '^[[:space:]]*_?(emittedDefaultsWRef|emittedDefaultsSetW|defaultDefsWRef)[[:space:]]*[:=]' "$WASM_SRC" >/dev/null; then
   echo "FAIL H2B4-AUTHORITY-SET: retired default authority remains ambient"
   exit 1
@@ -367,6 +613,22 @@ for required in \
   'CImplEntry "synthDefault" 0 (CImplDefault "DefaultFace" [PVar "value" defaultStateLoc] (CLit (LInt 29)))'; do
   grep -F -- "$required" "$TYPED_ENTRY" >/dev/null || {
     echo "FAIL H2B4-DEFAULT-DEFS: default-state harness is missing $required"
+    exit 1
+  }
+done
+for required in \
+  '"--reemit-lambda-state"::_' \
+  'reemitLambdaState : Unit -> <IO> Unit' \
+  'let p1 = emitProgram lambdaStateInput (lambdaStateProgram 17)' \
+  'let (u, _) = emitProgramRecord lambdaStateInput (lambdaStateProgram 29)' \
+  'let censusEvents = emitProgramGaps lambdaStateInput lambdaStateCensusProgram' \
+  '"LAMBDA_P2"' \
+  '(emitProgram lambdaStateInput (lambdaStateProgram 17))' \
+  'lambdaStateProgram : Int -> CProgram' \
+  'CBind "lambdaCensus"' \
+  'CBind "lambdaIntentionalGap"'; do
+  grep -F -- "$required" "$TYPED_ENTRY" >/dev/null || {
+    echo "FAIL H2B7-LAMBDA-HARNESS: missing $required"
     exit 1
   }
 done
@@ -858,6 +1120,285 @@ forbid_wat type-to-ctors "$U_WAT" '(type $T_PSubject (sub (struct (field i32)))'
 require_wat type-to-ctors "$U_WAT" 'ref.cast (ref $T_USubject)'
 
 run_impl_self_check
+run_trmc_state_check
+
+for required in \
+  '"--reemit-trap-state"::_' \
+  '"--emit-trap-state"::_' \
+  'reemitTrapState : Unit -> <IO> Unit' \
+  'let p1 = emitProgram trapStateInput trapStateProgram' \
+  'let (u, _) = emitProgramRecord trapStateInput trapStateControlProgram' \
+  'let censusEvents = emitProgramGaps trapStateInput trapStateCensusProgram' \
+  '"TRAP_P2"' \
+  'trapStateAbortProgram : CProgram' \
+  'CBind "trapIntentionalGap"'; do
+  grep -F -- "$required" "$TYPED_ENTRY" >/dev/null || {
+    echo "FAIL H2B8-TRAP-HARNESS: missing $required"
+    exit 1
+  }
+done
+TRAP_OUT="$($EMITBIN --reemit-trap-state 2>"$INPUT_WORK/trap.emit.err")" || {
+  echo "FAIL H2B8-TRAP-LIFECYCLE: trap state harness"
+  cat "$INPUT_WORK/trap.emit.err"
+  exit 1
+}
+[ ! -s "$INPUT_WORK/trap.emit.err" ] || {
+  echo "FAIL H2B8-TRAP-LIFECYCLE: harness wrote stderr"
+  cat "$INPUT_WORK/trap.emit.err"
+  exit 1
+}
+TRAP_MARKERS="$(printf '%s\n' "$TRAP_OUT" | awk '/^TRAP_(P1|RECORD_U|CENSUS_U_GAP|P2)_(BEGIN|END)$/ { print }')"
+TRAP_EXPECTED_MARKERS="$(printf 'TRAP_P1_BEGIN\nTRAP_P1_END\nTRAP_RECORD_U_BEGIN\nTRAP_RECORD_U_END\nTRAP_CENSUS_U_GAP_BEGIN\nTRAP_CENSUS_U_GAP_END\nTRAP_P2_BEGIN\nTRAP_P2_END')"
+[ "$TRAP_MARKERS" = "$TRAP_EXPECTED_MARKERS" ] || {
+  echo "FAIL H2B8-TRAP-LIFECYCLE: ordered capture markers"
+  exit 1
+}
+trap_capture() {
+  awk -v begin="$1" -v end="$2" '
+    $0 == begin { capture = 1; next }
+    $0 == end { exit }
+    capture { print }
+  ' <<<"$TRAP_OUT"
+}
+trap_capture TRAP_P1_BEGIN TRAP_P1_END > "$INPUT_WORK/trap-p1.wat"
+trap_capture TRAP_RECORD_U_BEGIN TRAP_RECORD_U_END > "$INPUT_WORK/trap-u.wat"
+trap_capture TRAP_CENSUS_U_GAP_BEGIN TRAP_CENSUS_U_GAP_END > "$INPUT_WORK/trap-census.events"
+trap_capture TRAP_P2_BEGIN TRAP_P2_END > "$INPUT_WORK/trap-p2.wat"
+for trap_file in trap-p1.wat trap-u.wat trap-census.events trap-p2.wat; do
+  [ -s "$INPUT_WORK/$trap_file" ] || {
+    echo "FAIL H2B8-TRAP-LIFECYCLE: empty $trap_file"
+    exit 1
+  }
+done
+cmp -s "$INPUT_WORK/trap-p1.wat" "$INPUT_WORK/trap-p2.wat" || {
+  echo "FAIL H2B8-TRAP-LIFECYCLE: P changed after record U and census"
+  exit 1
+}
+for trap_spec in 'p1 17 present' 'u 29 absent' 'p2 17 present'; do
+  trap_name="${trap_spec%% *}"
+  trap_rest="${trap_spec#* }"
+  trap_result="${trap_rest%% *}"
+  trap_import="${trap_rest#* }"
+  trap_wat="$INPUT_WORK/trap-$trap_name.wat"
+  trap_import_count="$(grep -F '(import "env" "mdk_write_err_byte"' "$trap_wat" | wc -l | tr -d '[:space:]')"
+  if [ "$trap_import" = present ]; then [ "$trap_import_count" -eq 1 ]; else [ "$trap_import_count" -eq 0 ]; fi || {
+    echo "FAIL H2B8-TRAP-IMPORT: $trap_name import presence/order changed"
+    exit 1
+  }
+  wasm-tools parse "$trap_wat" -o "$INPUT_WORK/trap-$trap_name.wasm" || {
+    echo "FAIL H2B8-TRAP-LIFECYCLE: wasm-tools parse $trap_name"
+    exit 1
+  }
+  wasm-tools validate --features=all "$INPUT_WORK/trap-$trap_name.wasm" || {
+    echo "FAIL H2B8-TRAP-LIFECYCLE: wasm-tools validate $trap_name"
+    exit 1
+  }
+  TRAP_RESULT="$($NODE "$RUNJS" "$INPUT_WORK/trap-$trap_name.wasm" 2>"$INPUT_WORK/trap-$trap_name.run.err")" || {
+    echo "FAIL H2B8-TRAP-LIFECYCLE: inert execution failed $trap_name"
+    cat "$INPUT_WORK/trap-$trap_name.run.err"
+    exit 1
+  }
+  [ ! -s "$INPUT_WORK/trap-$trap_name.run.err" ] && [ "$TRAP_RESULT" = "$trap_result" ] || {
+    echo "FAIL H2B8-TRAP-LIFECYCLE: inert output/stderr changed $trap_name"
+    exit 1
+  }
+done
+[ "$(wc -l < "$INPUT_WORK/trap-census.events")" -eq 1 ] &&
+  grep -F $'val trapIntentionalGap\tunbound variable '\''missingTrapCensus' "$INPUT_WORK/trap-census.events" >/dev/null || {
+  echo "FAIL H2B8-TRAP-LIFECYCLE: census event attribution"
+  exit 1
+}
+"$EMITBIN" --emit-trap-state > "$INPUT_WORK/trap-abort.wat" 2>"$INPUT_WORK/trap-abort.emit.err" || {
+  echo "FAIL H2B8-TRAP-ABORT: emitter failed"
+  cat "$INPUT_WORK/trap-abort.emit.err"
+  exit 1
+}
+[ ! -s "$INPUT_WORK/trap-abort.emit.err" ] &&
+  wasm-tools parse "$INPUT_WORK/trap-abort.wat" -o "$INPUT_WORK/trap-abort.wasm" &&
+  wasm-tools validate --features=all "$INPUT_WORK/trap-abort.wasm" || {
+  echo "FAIL H2B8-TRAP-ABORT: emit/parse/validate"
+  exit 1
+}
+if TRAP_ABORT_OUT="$($NODE "$RUNJS" "$INPUT_WORK/trap-abort.wasm" 2>"$INPUT_WORK/trap-abort.run.err")"; then
+  echo "FAIL H2B8-TRAP-ABORT: trap route exited zero"
+  exit 1
+fi
+[ -z "$TRAP_ABORT_OUT" ] &&
+  [ "$(cat "$INPUT_WORK/trap-abort.run.err")" = 'runtime error [E-DIV-ZERO]: division by zero' ] || {
+  echo "FAIL H2B8-TRAP-ABORT: exact runtime diagnostic changed"
+  exit 1
+}
+
+# Census above is ownership-only: it records a gap while its trap-bearing binding
+# structurally exercises fresh authority. This P/U/P control observes ref-mode data:
+# its ADT table forces the distinct emitRefProgram late-import reader. A future renamed
+# ambient-authority mutant must first fail H2B8-AUTHORITY-SET; no artifact mutation here.
+REF_TRAP_OUT="$($EMITBIN --reemit-ref-trap-state 2>"$INPUT_WORK/ref-trap.emit.err")" || {
+  echo "FAIL H2B8-REF-TRAP-LIFECYCLE: ref trap harness"
+  cat "$INPUT_WORK/ref-trap.emit.err"
+  exit 1
+}
+[ ! -s "$INPUT_WORK/ref-trap.emit.err" ] || {
+  echo "FAIL H2B8-REF-TRAP-LIFECYCLE: harness wrote stderr"
+  cat "$INPUT_WORK/ref-trap.emit.err"
+  exit 1
+}
+REF_TRAP_MARKERS="$(printf '%s\n' "$REF_TRAP_OUT" | awk '/^REF_TRAP_(P1|U|P2)_(BEGIN|END)$/ { print }')"
+REF_TRAP_EXPECTED_MARKERS="$(printf 'REF_TRAP_P1_BEGIN\nREF_TRAP_P1_END\nREF_TRAP_U_BEGIN\nREF_TRAP_U_END\nREF_TRAP_P2_BEGIN\nREF_TRAP_P2_END')"
+[ "$REF_TRAP_MARKERS" = "$REF_TRAP_EXPECTED_MARKERS" ] || {
+  echo "FAIL H2B8-REF-TRAP-LIFECYCLE: ordered capture markers"
+  exit 1
+}
+ref_trap_capture() {
+  awk -v begin="$1" -v end="$2" '
+    $0 == begin { capture = 1; next }
+    $0 == end { exit }
+    capture { print }
+  ' <<<"$REF_TRAP_OUT"
+}
+ref_trap_capture REF_TRAP_P1_BEGIN REF_TRAP_P1_END > "$INPUT_WORK/ref-trap-p1.wat"
+ref_trap_capture REF_TRAP_U_BEGIN REF_TRAP_U_END > "$INPUT_WORK/ref-trap-u.wat"
+ref_trap_capture REF_TRAP_P2_BEGIN REF_TRAP_P2_END > "$INPUT_WORK/ref-trap-p2.wat"
+cmp -s "$INPUT_WORK/ref-trap-p1.wat" "$INPUT_WORK/ref-trap-p2.wat" || {
+  echo "FAIL H2B8-REF-TRAP-LIFECYCLE: ref P changed after U"
+  exit 1
+}
+for ref_trap_spec in 'p1 17 present' 'u 29 absent' 'p2 17 present'; do
+  ref_trap_name="${ref_trap_spec%% *}"
+  ref_trap_rest="${ref_trap_spec#* }"
+  ref_trap_result="${ref_trap_rest%% *}"
+  ref_trap_import="${ref_trap_rest#* }"
+  ref_trap_wat="$INPUT_WORK/ref-trap-$ref_trap_name.wat"
+  grep -F '(type $T_TrapToken' "$ref_trap_wat" >/dev/null || {
+    echo "FAIL H2B8-REF-TRAP-MODE: $ref_trap_name did not force ref mode"
+    exit 1
+  }
+  ref_trap_import_count="$(grep -F '(import "env" "mdk_write_err_byte"' "$ref_trap_wat" | wc -l | tr -d '[:space:]')"
+  if [ "$ref_trap_import" = present ]; then [ "$ref_trap_import_count" -eq 1 ]; else [ "$ref_trap_import_count" -eq 0 ]; fi || {
+    echo "FAIL H2B8-REF-TRAP-IMPORT: $ref_trap_name ref late-import predicate changed"
+    exit 1
+  }
+  wasm-tools parse "$ref_trap_wat" -o "$INPUT_WORK/ref-trap-$ref_trap_name.wasm" &&
+    wasm-tools validate --features=all "$INPUT_WORK/ref-trap-$ref_trap_name.wasm" || {
+    echo "FAIL H2B8-REF-TRAP-LIFECYCLE: parse/validate $ref_trap_name"
+    exit 1
+  }
+  REF_TRAP_RESULT="$($NODE "$RUNJS" "$INPUT_WORK/ref-trap-$ref_trap_name.wasm" 2>"$INPUT_WORK/ref-trap-$ref_trap_name.run.err")" || {
+    echo "FAIL H2B8-REF-TRAP-LIFECYCLE: inert execution failed $ref_trap_name"
+    exit 1
+  }
+  [ ! -s "$INPUT_WORK/ref-trap-$ref_trap_name.run.err" ] && [ "$REF_TRAP_RESULT" = "$ref_trap_result" ] || {
+    echo "FAIL H2B8-REF-TRAP-LIFECYCLE: output/stderr changed $ref_trap_name"
+    exit 1
+  }
+done
+"$EMITBIN" --emit-ref-trap-state > "$INPUT_WORK/ref-trap-abort.wat" 2>"$INPUT_WORK/ref-trap-abort.emit.err" &&
+  [ ! -s "$INPUT_WORK/ref-trap-abort.emit.err" ] &&
+  wasm-tools parse "$INPUT_WORK/ref-trap-abort.wat" -o "$INPUT_WORK/ref-trap-abort.wasm" &&
+  wasm-tools validate --features=all "$INPUT_WORK/ref-trap-abort.wasm" || {
+  echo "FAIL H2B8-REF-TRAP-ABORT: emit/parse/validate"
+  exit 1
+}
+if REF_TRAP_ABORT_OUT="$($NODE "$RUNJS" "$INPUT_WORK/ref-trap-abort.wasm" 2>"$INPUT_WORK/ref-trap-abort.run.err")"; then
+  echo "FAIL H2B8-REF-TRAP-ABORT: ref trap exited zero"
+  exit 1
+fi
+[ -z "$REF_TRAP_ABORT_OUT" ] &&
+  [ "$(cat "$INPUT_WORK/ref-trap-abort.run.err")" = 'runtime error [E-DIV-ZERO]: division by zero' ] || {
+  echo "FAIL H2B8-REF-TRAP-ABORT: exact ref runtime diagnostic changed"
+  exit 1
+}
+
+LAMBDA_OUT="$($EMITBIN --reemit-lambda-state 2>"$INPUT_WORK/lambda.emit.err")" || {
+  echo "FAIL H2B7-LAMBDA-LIFECYCLE: lambda state harness"
+  cat "$INPUT_WORK/lambda.emit.err"
+  exit 1
+}
+[ ! -s "$INPUT_WORK/lambda.emit.err" ] || {
+  echo "FAIL H2B7-LAMBDA-LIFECYCLE: harness wrote stderr"
+  cat "$INPUT_WORK/lambda.emit.err"
+  exit 1
+}
+LAMBDA_MARKERS="$(printf '%s\n' "$LAMBDA_OUT" | awk '/^LAMBDA_(P1|RECORD_U|CENSUS_U_GAP|P2)_(BEGIN|END)$/ { print }')"
+LAMBDA_EXPECTED_MARKERS="$(printf 'LAMBDA_P1_BEGIN\nLAMBDA_P1_END\nLAMBDA_RECORD_U_BEGIN\nLAMBDA_RECORD_U_END\nLAMBDA_CENSUS_U_GAP_BEGIN\nLAMBDA_CENSUS_U_GAP_END\nLAMBDA_P2_BEGIN\nLAMBDA_P2_END')"
+[ "$LAMBDA_MARKERS" = "$LAMBDA_EXPECTED_MARKERS" ] || {
+  echo "FAIL H2B7-LAMBDA-LIFECYCLE: ordered capture markers"
+  exit 1
+}
+lambda_capture() {
+  awk -v begin="$1" -v end="$2" '
+    $0 == begin { capture = 1; next }
+    $0 == end { exit }
+    capture { print }
+  ' <<<"$LAMBDA_OUT"
+}
+lambda_capture LAMBDA_P1_BEGIN LAMBDA_P1_END > "$INPUT_WORK/lambda-p1.wat"
+lambda_capture LAMBDA_RECORD_U_BEGIN LAMBDA_RECORD_U_END > "$INPUT_WORK/lambda-u.wat"
+lambda_capture LAMBDA_CENSUS_U_GAP_BEGIN LAMBDA_CENSUS_U_GAP_END > "$INPUT_WORK/lambda-census.events"
+lambda_capture LAMBDA_P2_BEGIN LAMBDA_P2_END > "$INPUT_WORK/lambda-p2.wat"
+for lambda_file in lambda-p1.wat lambda-u.wat lambda-census.events lambda-p2.wat; do
+  [ -s "$INPUT_WORK/$lambda_file" ] || {
+    echo "FAIL H2B7-LAMBDA-LIFECYCLE: empty $lambda_file"
+    exit 1
+  }
+done
+cmp -s "$INPUT_WORK/lambda-p1.wat" "$INPUT_WORK/lambda-p2.wat" || {
+  echo "FAIL H2B7-LAMBDA-LIFECYCLE: P changed after record U and census"
+  exit 1
+}
+cmp -s "$INPUT_WORK/lambda-p1.wat" "$INPUT_WORK/lambda-u.wat" && {
+  echo "FAIL H2B7-LAMBDA-LIFECYCLE: P/U positive control did not differ"
+  exit 1
+}
+for lambda_spec in 'p1 17 1' 'u 29 2' 'p2 17 1'; do
+  lambda_name="${lambda_spec%% *}"
+  lambda_rest="${lambda_spec#* }"
+  lambda_result="${lambda_rest%% *}"
+  lambda_count="${lambda_rest#* }"
+  lambda_wat="$INPUT_WORK/lambda-$lambda_name.wat"
+  [ "$(grep -E '^  \(func \$mdk_lam[0-9]+' "$lambda_wat" | wc -l | tr -d '[:space:]')" -eq "$lambda_count" ] &&
+    [ "$(grep -E '^  \(elem declare func .*\$mdk_lam0' "$lambda_wat" | wc -l | tr -d '[:space:]')" -eq 1 ] || {
+      echo "FAIL H2B7-LAMBDA-LIFECYCLE: $lambda_name lambda definition/ref declaration changed"
+      exit 1
+    }
+  wasm-tools parse "$lambda_wat" -o "$INPUT_WORK/lambda-$lambda_name.wasm" || {
+    echo "FAIL H2B7-LAMBDA-LIFECYCLE: wasm-tools parse $lambda_name"
+    exit 1
+  }
+  wasm-tools validate --features=all "$INPUT_WORK/lambda-$lambda_name.wasm" || {
+    echo "FAIL H2B7-LAMBDA-LIFECYCLE: wasm-tools validate $lambda_name"
+    exit 1
+  }
+  LAMBDA_RESULT="$($NODE "$RUNJS" "$INPUT_WORK/lambda-$lambda_name.wasm" 2>"$INPUT_WORK/lambda-$lambda_name.run.err")" || {
+    echo "FAIL H2B7-LAMBDA-LIFECYCLE: execution failed $lambda_name"
+    cat "$INPUT_WORK/lambda-$lambda_name.run.err"
+    exit 1
+  }
+  [ ! -s "$INPUT_WORK/lambda-$lambda_name.run.err" ] && [ "$LAMBDA_RESULT" = "$lambda_result" ] || {
+    echo "FAIL H2B7-LAMBDA-LIFECYCLE: execution changed $lambda_name"
+    exit 1
+  }
+done
+[ "$(grep -E '^  \(func \$mdk_wctor_Pair ' "$INPUT_WORK/lambda-p1.wat" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
+  [ "$(grep -E '^  \(func \$mdk_wctor_Pair ' "$INPUT_WORK/lambda-u.wat" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
+  [ "$(grep -E '^  \(func \$mdk_wctor_Pair ' "$INPUT_WORK/lambda-p2.wat" | wc -l | tr -d '[:space:]')" -eq 1 ] || {
+  echo "FAIL H2B7-NAMED-WRAPPER-DEDUPE: duplicate Pair uses must define one wrapper"
+  exit 1
+}
+lambda_elem_declare() {
+  grep -E '^  \(elem declare func ' "$1"
+}
+[ "$(lambda_elem_declare "$INPUT_WORK/lambda-p1.wat")" = '  (elem declare func $mdk_pap $mdk_wctor_Pair $mdk_lam0)' ] &&
+  [ "$(lambda_elem_declare "$INPUT_WORK/lambda-u.wat")" = '  (elem declare func $mdk_pap $mdk_wctor_Pair $mdk_lam0 $mdk_lam1)' ] &&
+  [ "$(lambda_elem_declare "$INPUT_WORK/lambda-p2.wat")" = '  (elem declare func $mdk_pap $mdk_wctor_Pair $mdk_lam0)' ] || {
+  echo "FAIL H2B7-ELEM-DECLARE-ORDER: exact function-reference membership/order changed"
+  exit 1
+}
+[ "$(wc -l < "$INPUT_WORK/lambda-census.events")" -eq 1 ] &&
+  grep -F $'val lambdaIntentionalGap\tunbound variable '\''missingLambdaCensus' "$INPUT_WORK/lambda-census.events" >/dev/null || {
+  echo "FAIL H2B7-LAMBDA-LIFECYCLE: census event attribution"
+  exit 1
+}
 
 [ -x "$EMITTER" ] && export MEDAKA_EMITTER="$EMITTER"
 

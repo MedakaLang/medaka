@@ -1,6 +1,6 @@
 # Emitter Architecture - the derived current map
 
-**Status:** CURRENT - source-derived LLVM/WasmGC emitter map through X-W.H2b.5.
+**Status:** CURRENT - source-derived LLVM/WasmGC emitter map through X-W.H2b.8.
 This is a description of the current
 implementation, not the target design. The target is
 [`EMITTER-TARGET-ARCHITECTURE.md`](EMITTER-TARGET-ARCHITECTURE.md), and the
@@ -150,11 +150,15 @@ authority and was removed. `emitProgram`, `emitProgramRecord`, and
 and `emitRefProgram` drains its definitions in the existing reverse/flatten
 order. X-W.H2b.5 moves current diagnostic-binding attribution into `WasmEmit`:
 fresh calls start at `?`; top-level `P`, nested `lg:P`, and the existing post-lift
-`lg:L` dynamic extent remain explicit. `wasm_emit_typed_main` and
-`test/wasm/diff_wasm_typed.sh` grade strict, record, census, and no-writer
-isolation, and derive the remaining ambient signature/definition set. H2b and
-#1407 remain open; the output, lifting, feature, numeric-scope, TRMC, and dispatch
-families remain future X-W.H2 work.
+`lg:L` dynamic extent remain explicit. X-W.H2b.6 moves the Stage-1 TRMC context
+into `WasmEmit`'s `trmcCtx`. X-W.H2b.7 moves lambda IDs, ordered lifted definitions,
+named-lift de-duplication, and function-reference list/set state into `WasmEmit`;
+former lifted-name Ref was unread duplicate authority and is retired. X-W.H2b.8 moves
+the coded-stderr-trap import event into `WasmEmit`'s `trapImportNeeded`. The typed
+entry and `test/wasm/diff_wasm_typed.sh` grade strict, record, census, and
+no-writer isolation. The re-derived remaining ambient top-level `Ref` population
+is 30, in output, feature, numeric, and dispatch families. H2b and #1407 remain
+open; those four families remain X-W.H2 work.
 
 ### 3.3 Per-program derived indexes
 
@@ -232,17 +236,19 @@ preserved merely because it exists or removed merely because it duplicates code.
 Both emitters rely on module-level `Ref`s. Some are ordinary local mutation
 (output buffers, counters) and some are scoped emission contexts. Wasm
 declaration-derived semantic input is no longer installed through Refs (X-W.H1);
-its remaining physical state is deferred to X-W.H2.
+H2b has moved its gap lifecycle, string, impl-self, TRMC, lifting, function-reference,
+and coded-trap-import lifecycle into fresh `WasmEmit` contexts. The remaining 30
+top-level ambient Refs are X-W.H2 output, feature, numeric, and dispatch families.
 
 The product driver shells out to a fresh emitter process specifically to obtain
 pristine state. Within one process:
 
 - LLVM constructs a fresh `Emit` record but also resets/installs external refs;
 - Wasm creates a fresh `WasmEmit` for strict, record, and gap-census calls; gap
-  lifecycle, passive string segments, impl-self scope, and synthesized-default
-  membership/definition buffers belong there; it still manually resets the
-  remaining feature flags, lifted-function tables, and lambdas at `emitProgram`
-  entry;
+  lifecycle, passive string segments, impl-self scope, Stage-1 TRMC context,
+  lambda/lifted-definition/function-reference state, coded-trap-import event, and
+  synthesized-default membership/definition buffers belong there; the remaining
+  30 ambient top-level Refs are output, feature, numeric, and dispatch families;
 - gap-census paths own a separate gap lifecycle but still duplicate the remaining
   physical setup;
 - X-W.H2 still owns the remaining physical-state lifecycle.
