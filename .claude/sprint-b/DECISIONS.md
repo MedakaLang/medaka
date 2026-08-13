@@ -806,4 +806,35 @@ Phase 2. The two highest-risk items in this sprint are now the same shape.
 
 ---
 
+## RUN-B-015 — the two desk closes: **DEFERRED to the repair round** (user ruling, 2026-08-13)
+
+**#1114** (verified already-landed, closing comment drafted by P0-D) and **#991** (all three clauses
+of its title verified false; landed in `fa9f7564` as an unlinked rider) are both **desk closes** —
+no implementation owed by either.
+
+The contract §1 explicitly authorized closing #1114 as *"a Phase 0 desk item"*, so this was
+available. **Val ruled: leave both for the repair round.** Deferred.
+
+**Rationale worth recording, since it makes the deferral the better call rather than merely the
+cautious one:** closure is an outward-facing, visible action, and the repair round is already the
+gate where **every** closure in this run happens (§1's issue-closure policy — the drain list stays
+open through the sprint and closes only after adversarial review). Closing two issues early would
+have made this run the only exception to its own policy, for no throughput gain: nothing in the
+sprint is blocked on either issue's *state*, only on the *knowledge* that they need no
+implementation — and that knowledge is now recorded here and in `phase0/P0-D-b3-adjudications.md`.
+
+**What the repair round inherits, so nothing is re-derived:**
+- **#1114** — close. Evidence: §4.2 OD1–OD6 (`DICT-SEMANTICS.md:782`) + six §11 rows
+  (`:2488-2493`); #845/#792 both CLOSED 2026-08-05 with four `run_check_agreement_fixtures/` cells;
+  every residual re-homed to #1330/#1326/#1337, so closing drops nothing. **Closing comment is
+  drafted in `phase0/P0-D-b3-adjudications.md`** — use it, do not re-derive it.
+- **#991** — close as already-implemented. Evidence, verified at the stamp sites rather than from
+  the enum's comment: `implObls : Windowed UObligation` (`typecheck.mdk:6732`); all **six**
+  `Provenance` arms have real producers (`:10072`, `:10443`, `:10981`, `:8914`, `:10812`, `:11045`);
+  numlit descope recorded at `:6733`; `implOblToU` has zero definitions and zero call sites.
+- ⚠️ **Neither close may be posted from a "CI green" or a passing gate** — both rest on
+  source-derived facts, and a green suite is not corroboration of either claim.
+
+---
+
 *(P0-Q's probes are appended below when they land.)*
