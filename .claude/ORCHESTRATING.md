@@ -2434,3 +2434,50 @@ pinned pre-drain went stale and cost a wasted grep round.
 - **A HEARTBEAT is right while work is in flight and wrong after.** Every-20-min checks caught **two idle
   slots and one empty queue**; then five consecutive no-ops against a finished sprint. **Stop it when the
   queue is legitimately empty** rather than manufacturing work to satisfy it.
+## The two-sprint AUDIT (2026-08-13) — the model holds; here is what the audit adds
+
+The section above is the Stage B run's own retrospective (throughput, briefs, packet-prep).
+This one records the *independent audit* of both sprints — headline claims, merge-queue runs,
+tracker state, and spec conformance, each verified against the tree rather than the sprint's
+prose. Verdict: **keep the sprint model.** No fabrications, no post-merge regressions attributed
+to either sprint, no contradictions with standing spec rulings. The audit record: memory
+`project_sprint_audit_verdict_20260813`, plus #1610 and the closes of #991/#1114/#1317.
+
+### 🚨 The repair round is LOAD-BEARING, not a contingency — never cut it for schedule
+
+Both sprints introduced S0/S1s mid-run. Every one was caught by the sprint's own adversarial
+repair round **before merge**, and **zero were caught by gates** — Stage B's worst (a loud
+compile-time refusal turned into an exit-0 build of a crashing binary; IR order-divergence 589
+lines) was green on every check that ran. A sprint that lands without its repair round has not
+gone faster; it has moved the catch to `main`.
+
+### Template deltas for the next sprint, each earned by a measured miss
+
+- **A `DEBT.md` row is owed for any behavior delta a differential DETECTS, not only ones the
+  implementer recognizes.** Stage B landed one real acceptance regression (correct under DICT
+  C3/C4, order-invariant — the intended direction) with **no row anywhere**; the repair round's
+  base-vs-branch differential is what found it. Close the loop: any base-vs-branch delta outside
+  the enumerated widening set gets a row *at detection time*, written by the round that found it.
+- **A probe that decides a merge blocker must be durable.** FX-1's 589→0 order-invariance
+  measurement — the evidence that closed the sprint's S1 — lives in prose plus session scratch;
+  only the behavioral property survived into a gate. If a probe's verdict gates the merge, land
+  the probe: fixture, gate, or committed script. A number nobody can re-run is a claim, not a
+  record.
+- **Desk closes are an EXIT CRITERION.** Phase 0 verified #991 and #1114 already-done; the closes
+  were deferred to the repair round and never executed, so the tracker lagged the tree for the
+  exact items the sprint had already derived. "Every verified desk close executed or handed to a
+  named owner" joins §8, at the cost of minutes.
+- **PR title severity must match the body's own table** (Stage B's said "three S0s"; its table
+  correctly said one was an S1). The title is the one line every future reader quotes unchecked.
+- **Sprint record directories must not collide.** `.claude/sprint/` (Stage A) and
+  `.claude/sprint-b/` (Stage B) hold identically-named DECISIONS.md/DEBT.md, and the Stage B run
+  doc's banner points at the wrong one for a Stage A reader. Name future runs
+  `.claude/sprint-<stage>/` from the start and never reuse a bare `sprint/`.
+
+### Residuals the audit routed, so nobody re-derives them
+
+Fourth-engine gate blindness → **#1608** (filed by the sprint, covers it fully). Untriaged
+nightly `perf_scaling DEEP` red (xref lint-stage time-superlinear, DEEP-only band) → **#1610**,
+with #1006 owning the went-unnoticed half. Phase 3′'s tripwire (identity-in-routes falsifies the
+copied super-slot route premise) → `.claude/sprint-b/repair/R3-c4i2.md` P4, already queued in
+`.claude/sprint-b/next/`.
