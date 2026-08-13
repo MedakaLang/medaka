@@ -69,6 +69,9 @@ main = match args ()
   "--reemit-string-state"::_ => reemitStringState ()
   "--reemit-default-state"::_ => reemitDefaultState ()
   "--reemit-lambda-state"::_ => reemitLambdaState ()
+  "--reemit-trap-state"::_ => reemitTrapState ()
+  "--emit-trap-state"::_ =>
+    putStr (emitProgram trapStateInput trapStateAbortProgram)
   "--capture-current-binding"::row::_ => captureCurrentBinding row
   _ => driveRuntime emit
 
@@ -290,6 +293,60 @@ lambdaStateCensusProgram = CProgram
   ]
   [("Pair", 2)]
   [("Pair", "Pair")]
+  []
+
+-- X-W.H2b.8: coded stderr-import demand belongs to fresh WasmEmit. P carries an
+-- uncalled concrete div-zero route, so it imports mdk_write_err_byte while inert main
+-- runs. Trap-free record U and census separate P emissions; a separate strict route
+-- executes the exact abort.
+reemitTrapState : Unit -> <IO> Unit
+reemitTrapState _ =
+  let p1 = emitProgram trapStateInput trapStateProgram
+  let (u, _) = emitProgramRecord trapStateInput trapStateControlProgram
+  let censusEvents = emitProgramGaps trapStateInput trapStateCensusProgram
+  let _ = printCapture "TRAP_P1" p1
+  let _ = printCapture "TRAP_RECORD_U" u
+  let _ = printEvents "TRAP_CENSUS_U_GAP" censusEvents
+  printCapture "TRAP_P2" (emitProgram trapStateInput trapStateProgram)
+
+trapStateInput : WasmEmitInput
+trapStateInput = makeWasmEmitInput [] [] [] False []
+
+trapStateProgram : CProgram
+trapStateProgram = CProgram
+  [
+    CBind "trapRoute" [
+      CClause [PVar "n" lambdaStateLoc] (CBinPrim "/" (CLit (LInt 1)) (CLit (LInt 0)) "Int")
+    ],
+    CBind "main" [CClause [] (CLit (LInt 17))],
+  ]
+  []
+  []
+  []
+
+trapStateControlProgram : CProgram
+trapStateControlProgram =
+  CProgram [CBind "main" [CClause [] (CLit (LInt 29))]] [] [] []
+
+trapStateCensusProgram : CProgram
+trapStateCensusProgram = CProgram
+  [
+    CBind "trapCensusRoute" [
+      CClause [PVar "n" lambdaStateLoc] (CBinPrim "/" (CLit (LInt 1)) (CLit (LInt 0)) "Int")
+    ],
+    CBind "trapIntentionalGap" [CClause [] (CVar "missingTrapCensus" AGlobal)],
+  ]
+  []
+  []
+  []
+
+trapStateAbortProgram : CProgram
+trapStateAbortProgram = CProgram
+  [
+    CBind "main" [CClause [] (CBinPrim "/" (CLit (LInt 1)) (CLit (LInt 0)) "Int")]
+  ]
+  []
+  []
   []
 
 implSelfInput : WasmEmitInput
