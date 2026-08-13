@@ -527,3 +527,222 @@ measurement. The counts I do state (six bites; three-of-six with real peer sets;
 occurrences; 3 `arg-tag` grep hits in `wasm_emit.mdk`) each ship the command that produced them —
 **re-run them; do not cite this file's numbers.** One of them was wrong on the first draft and
 caught by re-running, which is the only reason it is right now.
+
+---
+
+# 8. ADDENDUM (orchestrator request) — carrier ruling · 2′/3′ impact · four-arm ledger
+
+Appended, not rewritten. §§1-7 above stand except where §8.4 corrects them. Read
+`.claude/sprint-b/phase0/P0-B-routes.md` first — this section answers it. Still read-only; no
+build, no gate, no probe. Every count below ships the command that produced it, and I re-derived
+P0-B's two counts rather than relaying them (one reproduces exactly, one does not — §8.2).
+
+## 8.1 THE CARRIER RULING
+
+> **RULING. The frozen admissibility table rides TWO carriers, because no single one reaches all
+> four arms, and the "22 vs 85" framing is a false choice:**
+>
+> - **C-2 — a 5th positional field on `CProgram`** (`compiler/ir/core_ir.mdk:241-242`) — for the
+>   three arms that consume a lowering: **LLVM, wasm, `cevalProgram`.** Threaded by widening
+>   `lowerProgramEmit` (`compiler/ir/core_ir_lower.mdk:551-552`) and `lowerProgram` (`:522-523`)
+>   to take the table.
+> - **C-1 — widen the `elaborateModules` return** — for the **`eval`** arm, which never sees a
+>   `CProgram`.
+> - **C-3 (synthetic `Decl`) stays REFUSED.** I agree with P0-B and add nothing.
+>
+> **And a third clause that is not optional, because without it the ruling is unsound:** the
+> **UNTYPED drivers have NO table by construction** and the absent verdict must be
+> **representable and must not read as admissible.** §8.1.3.
+
+### 8.1.1 Why neither carrier alone suffices (derived — this is the load-bearing part)
+
+- **`eval` never sees a `CProgram`.** It consumes `Decl`s
+  (`evalModules : List Decl -> List (String, List Decl) -> …`, `compiler/eval/eval.mdk:3072`).
+  ⇒ C-2 cannot reach it.
+- **`cevalProgram` DOES take one:** `cevalProgram (CProgram groups ctorArs ctorToType implEntries)`
+  (`compiler/ir/core_ir_eval.mdk:400-401`) — a positional 4-field destructure of the declaration at
+  `core_ir.mdk:241-242`. ⇒ C-2 reaches the fourth arm's typed entry point.
+- **But `cevalModules` does NOT:** `cevalModules : List Decl -> List (String, List Decl) -> …`
+  (`core_ir_eval.mdk:528-529`) — it lowers internally. ⇒ the fourth arm has **two entry points with
+  different carrier reachability**, and the one the lockstep precedent lives on (the multi-module
+  driver, `test/eval_modules_fixtures/*/`) is the one C-2 misses.
+- **The emit path's input is `List Decl` too:** `lowerProgramEmit : List Decl -> CProgram`
+  (`core_ir_lower.mdk:551-552`). So the table cannot ride *into* lowering as data; the lowering
+  function must **take** it and place it in the new field. That is the concrete shape of P0-B's
+  seam (ii) and it is what I owed them.
+
+### 8.1.2 Why C-2 for the emit/`ceval` arms — the structural argument, and a correction to the criterion
+
+The orchestrator's criterion was *"say which carrier makes re-derivation structurally impossible
+rather than merely discouraged."* **I have to correct the criterion before answering it: no
+carrier can make re-derivation impossible.** Re-derivation is prevented only by **deleting the
+deriving functions** — `implEntryRouteWords`/`implEntryRouteKey*` (bite `B-2.4-d`),
+`headTagUniqueW`'s route use (`B-2.4-a`), `keyForSite*`/`KeyBuckets` (Phase 2′). A carrier
+controls a different property: whether **absence** and **bypass** are loud or silent. On that
+property the two candidates are not close:
+
+- **C-2 is unbypassable.** `CProgram` is destructured **positionally** at every consumer
+  (`core_ir_eval.mdk:401` is one; `grep -rn 'CProgram' --include=*.mdk compiler/ | grep -vE ':[[:space:]]*--'`
+  → **75** occurrences in **14** files). A 5th positional field is a **compile error** at every
+  construction and every pattern. No engine can proceed without supplying or binding it.
+- **C-1 is bypassable, and is ALREADY bypassed at 4 of its 22 sites today.** Four callers discard
+  the return outright: `compiler/driver/medaka_cli.mdk:745` and `:1685`
+  (`let _ = elaborateModules …`), `compiler/entries/eval_autoprint_main.mdk:39`,
+  `compiler/entries/playground_main.mdk:287`. Derive:
+  `grep -rn 'elaborateModules' --include=*.mdk compiler/ | grep -vE ':[[:space:]]*--' | grep -v '^compiler/types/typecheck.mdk'`.
+  A widened tuple component can be dropped with **no diagnostic**. That is exactly the
+  orchestrator's *"a carrier an engine can bypass will eventually be bypassed."*
+
+⇒ **C-2 wherever it reaches; C-1 only where C-2 structurally cannot (the `eval` arm), and there
+the bite must name the four discarding sites so an implementer cannot "thread" the table past a
+`let _ =` and report done.**
+
+**Threading cost, derived as APPLICATION sites rather than mentions** (mentions overstate the edit
+and understate which edits are semantic —
+`grep -rn 'lowerProgramEmit\|lowerProgram ' --include=*.mdk compiler/ | grep -vE ':[[:space:]]*--'`,
+dropping `import` lines and `draft_semantic_program.mdk:243`'s name string):
+
+| function | application sites | files |
+|---|---|---|
+| `lowerProgramEmit` | **16** — `snapshot.mdk:605` · `draft_semantic_program.mdk:142,194,214` · `profile_main.mdk:263` · `wasm_emit_gaps_main.mdk:71` · `llvm_emit_main.mdk:56` · `wasm_emit_typed_main.mdk:100` · `wasm_emit_main.mdk:40` · `llvm_emit_modules_main.mdk:85,120` · `llvm_emit_typed_main.mdk:99` · `wasm_emit_modules_main.mdk:64` · `core_ir_typed_modules_dump_main.mdk:43` · `llvm_bootstrap_lex_main.mdk:58` · `playground_main.mdk:327` | 12 |
+| `lowerProgram` | **9** — `snapshot.mdk:568` · `core_ir_dump_main.mdk:26` · `core_ir_typed_main.mdk:34` · `core_ir_prelude_main.mdk:25` · `core_ir_dict_pp_main.mdk:35` · `core_ir_run_main.mdk:29` · `core_ir_roundtrip_main.mdk:28` · `core_ir_main.mdk:33` · `core_ir_lower.mdk:555` (internal) | 9 |
+
+⚠️ **`snapshot.mdk` and `core_ir_sexp` are on this list, so C-2 moves the S-expr/snapshot golden
+families.** That is in the run's deferred set, but it must be written into `.claude/HANDOFF.md`
+as expected-red rather than discovered.
+
+### 8.1.3 🚨 The clause that keeps the ruling sound: the UNTYPED drivers have no table at all
+
+**Derived, and it is not a corner case:**
+- `cevalModules`' own comment, `core_ir_eval.mdk:598`: *"**UNTYPED path**, like cevalProgram /
+  evalModules."*
+- Two drivers call the eval arm with raw desugared decls, **no `elaborateModules` anywhere in the
+  path**: `compiler/entries/eval_modules_main.mdk:37`
+  (`evalModulesOutput (desugar (parse csrc)) (map desugarPair mods)`) and
+  `compiler/entries/profile_eval_main.mdk:92` (`evalModulesOutput coreDecls modules`).
+
+So for those paths the table is **structurally absent**, not merely uninstalled, and both carriers
+are irrelevant to them. Consequences, both mandatory:
+
+1. **The absent verdict must be a distinct third state**, never a default of "admissible". This is
+   exactly P0-B's `B2.3-a` `nearest miss:` — today's analogue **fails open**:
+   `lookupPositions _ _ [] = [0]` (`compiler/eval/eval.mdk:1934`) declares position 0 dispatchable
+   on a miss. A table inheriting that default has changed nothing, and `keepOrAll` (`:967-969`)
+   then returns the ORIGINAL candidate set when every tagged candidate is filtered out — the
+   silent-wrongness channel P0-B named.
+2. **`B-2.4-f`'s eval arm is therefore NOT "consult the table".** It is *"consult the table when
+   present; when absent, the arg-tag path keeps today's behaviour and is marked UNVERIFIED."*
+   Changing the untyped path's behaviour is the F-1/#1046 lane, out of this sprint. **I am ruling
+   it that way rather than inventing a third option, and flagging it (§8.5) because it is the one
+   place my unit knowingly leaves an unsound path unsound.**
+
+## 8.2 P0-B's two counts, re-derived: one reproduces exactly, one does not
+
+| P0-B claim | my derivation | verdict |
+|---|---|---|
+| C-1 = **22 call sites across 9 files** | the grep in §8.1.2, application sites only: `test_cmd` 7 (`:427,505,518,586,602,739,750`) · `medaka_cli` 4 (`:745,1685,1926,1958`) · `entry_support` 2 · `eval_autoprint_main` 2 · `origin_agreement_main` 2 · `playground_main` 2 · `eval_typed_modules_main` 1 · `wasm_emit_gaps_main` 1 · `llvm_bootstrap_lex_main` 1 = **22, in 9 files** | ✅ **reproduces exactly.** Their site list is correct file-for-file and line-for-line. |
+| C-2 = **85 `CProgram` mentions across 14 files** | I ran **their stated command verbatim** — `grep -rn CProgram --include=*.mdk compiler/ \| grep -v ':--' \| wc -l` → **75**. Cross-checked with a stricter comment filter (`grep -vE ':[[:space:]]*--'`) → also **75**; raw, comments included → **94**. Files: **14** ✅ | ⚠️ **DISAGREE on the number, agree on the file count.** 75, not 85. |
+
+**I could not determine why 85 appeared and I am not going to guess** — the most likely
+explanation available to me is a derivation run against a different tree (this repo's main
+checkout at `/root/medaka` is materially behind the worktrees), but **I did not read that tree**
+(a worktree-isolated agent reading another tree is the risk AGENTS.md warns costs the session) so
+that is a hypothesis, not a finding. Either way: **the number does not survive re-derivation in
+this worktree at BASE `2b9dc798`, and the honest cost figure for C-2 is not a mention count at
+all — it is the 16 + 9 = 25 application sites in §8.1.2 plus the destructures the compiler will
+name for you.** Nothing in the carrier ruling turns on 75-vs-85; the ruling turns on
+bypassability, which is structural.
+
+## 8.3 Does the 2′/3′ split move any of my bites? **YES — `a` and `b` move to 2′. `e` stays in 3′.**
+
+The orchestrator asked specifically about `a` and `e`. Answer, with the derivation:
+
+**`B-2.4-a` (superset-OR retirement) belongs at the END of Phase 2′, not in 3′.** Its drain
+(#1072, #1068) is a **population** defect, not a payload one. #1072's own mechanism, quoted in §1:
+*"`a` does not import `b`, so `a`'s `KeyBuckets` hold one impl at head `Box` → no collision →
+typecheck stamps the bare head."* The superset-OR exists **only** to hedge that module-local
+variance — the emitter cannot know the site's module (`llvm_emit.mdk:5310-5324`). Phase 2′ makes
+every stamping population graph-global; the variance disappears; the hedge becomes deletable
+**with the payload still a `String`**. Both sides then read whole-program tables:
+`ifaceDeclHeadUnique` already reads `ifaceImplHeadsRef`, installed from *"the WHOLE program's
+decls"* (`core_ir_lower.mdk:1269-1274`), and `implEntryRouteKey` already ANDs the two
+(`llvm_emit.mdk:1488`).
+
+> **Admissibility criterion, so this can be overturned mechanically rather than argued:**
+> `B-2.4-a` may land at the end of 2′ **iff every route-stamping population is whole-graph** —
+> the 7 stampers P0-B derived (`typecheck.mdk:28683,28684,28685,28687,28688,28690,28691`), their
+> two tables (`stampImplTable:28677`, `stampKeyTable:28682`) and the Flat peer
+> (`:14122-14131`). **If ANY of them still reads a cumulative prefix when 2′ closes, the superset
+> is still load-bearing and `a` must stay in 3′.** Deleting it early in that state converts
+> #1072's wrong-impl into an `unreachable`/trap — loud, but a different bug, and on the emitter's
+> critical path.
+
+**Landing `a` in 2′ is strictly better for attribution**, which is the property the deferred-golden
+posture depends on: at 2′ the IR moves for a *population* reason; in 3′ it moves because every
+symbol is renamed (P0-B's `B2.2-e` `could move:`). Bundled, no golden diff can be attributed to
+either.
+
+**`B-2.4-b` (memo selector) follows `a`** — `memoSelector`'s contract is *"the string an RKey
+occurrence carries"* (`core_ir_lower.mdk:859-861`), so it moves with whatever changes that string,
+in the same phase, same reasoning.
+
+**`B-2.4-e` (Route/CMethod consumption sweep) STAYS in 3′.** It is a consequence of the *type*
+change; at 2′ `Route`'s type is untouched and the bite has **no content**. Confirmed against
+P0-B's `B2.2-a`, whose whole point is that changing the payload *type* makes every consumer fail
+to compile — that compile-error set **is** `e`'s site list, and it does not exist until 3′.
+
+**`c` and `d` stay in 3′**, with one carve-out: `d`'s **disjointness** half (stop computing
+coverage by string subtraction across two namespaces — `tagsMinus`/`implEntryTags`,
+`llvm_emit.mdk:5170-5171`, `:5491-5501`) can land with `a` at 2′; `d`'s **deletion** half must
+follow the last reader. **`f` is independent of both** — it is gated only on the carrier (§8.1),
+so it can land any time after B-2.3's table exists.
+
+## 8.4 FOUR-ARM `engines:` LEDGER — correcting §4
+
+**The fourth arm is IN.** I accept the ruling and it is the right one; my §4 flagged
+`core_ir_eval.mdk` and declined to absorb it, and the derivation now settles it. The precise shape
+matters, because it is **not** a fourth copy of everything:
+
+> **`core_ir_eval` SHARES eval's dispatch CONSUMERS and DUPLICATES its PRODUCERS.** Derived from
+> its import list (`sed -n '/^import eval\.eval/,/^}/p' compiler/ir/core_ir_eval.mdk`): it imports
+> **`applyValue`, `methodAtNarrow`, `routeTag`, `applyDicts`, `applyMethodDicts`, `coalesceImpls`,
+> `installDispatchTables`** — and it imports **neither** `hasTag`, `matchesTag`, `filterByTag` nor
+> `pickTagFallback`, because it reaches all four *transitively* through the two it does import.
+> So one edit to eval's consumer helpers covers both eval arms **structurally**. But it builds its
+> own `VTypedImpl`: `cImplBodyValue env (CImplTagged tag key iface positions pats body) =
+> VTypedImpl tag key positions 0 (…)` (`:453-455`), and registers its own default cells
+> (`cImplEntryValue:444-445`, `cImplEntryValues:447-451`, `cModImplValues:588-590`).
+
+**That is precisely the P0-9 shape** — shared consumers, duplicated producers — and it is why an
+`eval.mdk`-only patch looked green for months. **§4's bite `a` and bite `d` were missing those
+producer sites; that is the correction.**
+
+| bite | LLVM | wasm | eval | **`core_ir_eval`** |
+|---|---|---|---|---|
+| **`a`** word retirement | ✅ `:5336-5370`, `:1486-1518` | ✅ `:4034-4039`, `:4456-4462`, `:3726` | ✅ `:1206-1212`, `:1998-2004` | 🆕 **REQUIRED — `:453-455` `cImplBodyValue` builds `VTypedImpl tag key …` itself.** Consumers inherited via `applyValue`/`methodAtNarrow` (import list above) ⇒ **no consumer edit**, and that is *justified by the import list*, not asserted |
+| **`b`** memo selector | ✅ `memoGlobalName:5412-5413` + gate `:5395-5396` | ✅ `dispatchCallSeqW:3698-3699` | **none needed** — memoises per `VTypedImpl` (`memoThunk`), identity-carried | **none needed** — same mechanism, reached through the shared `applyValue`. ⚠️ If `b` changes `memoBindName`'s *spelling*, `cevalProgram`'s CBind lookup is a reader; re-derive with `grep -n memoBindName` before claiming "none" |
+| **`c`** `noneHeadTag` re-key | ✅ `:5415-5439`, `:4594-4608` | ✅ `:3654-3688`, `:4560-4564` | ✅ `:1053-1056`, `:1011-1014` | **none needed** — `pickTagFallback` is reached through `methodAtNarrow`. ⚠️ Its `VTypedImpl` producer at `:455` stamps `tag` from `CImplTagged`, so if `c` changes what the general instance's tag *is*, `:453-455` becomes required — decide from the diff, not from this row |
+| **`d`** default-tag namespace | ✅ `:5162-5175`, `:5223-5271`, `:5491-5501` | **none — #1020, out of scope** (§3(ii)) | ✅ `:1058-1089` | 🆕 **REQUIRED — `:435-451` (`qualifiedDefaultNameC`, `cImplEntryValues`) is its own `defaultCellName` registration**, the peer of eval's `defaultEntry`. §4's bite `d` did not name it |
+| **`e`** Route sweep | ✅ | ✅ | ✅ | ✅ — imports `routeTag` (`:79`) and consumes `CMethod`/`CDict` routes on the typed path (`:23-24`) |
+| **`f`** frozen admissibility | ✅ `:5521-5599` | **none — RNone is a `gapLP`** (§3(i)) | ✅ `:940-976`, `:1934` | ⚠️ **NO TABLE ON THE `cevalModules` PATH** — untyped by its own comment (`:598`); `cevalProgram` gets it via C-2, `cevalModules` does not. §8.1.3's absent-verdict clause is this cell |
+
+**Standing instruction for the bite text:** no `engines:` cell may be blank, and *"none needed"*
+must cite **why** — an import that makes the helper shared, or a mechanism that carries identity
+already. A bare "none needed" is the P0-9 failure written down.
+
+## 8.5 What I escalate rather than decide
+
+1. **The untyped-eval unsoundness carve-out (§8.1.3 clause 2).** I ruled that `B-2.4-f` leaves
+   the untyped arg-tag path as-is and marks it UNVERIFIED. That is a *knowing* decision to leave
+   an unsound path unsound because fixing it is the out-of-scope F-1 lane — **it needs your assent
+   and a `DEBT.md` row, not my say-so.**
+2. **C-2 moves the snapshot and S-expr golden families** (`snapshot.mdk:568,605`, `core_ir_sexp`).
+   Deferred per §5 of the contract, but it must be in `.claude/HANDOFF.md` as expected-red before
+   the first commit, or an agent diagnoses the run's own debt as a break.
+3. **The 85→75 discrepancy (§8.2).** I report it; I did not chase it into another tree. If P0-B
+   derived it somewhere other than this worktree, **every other count in that file inherits the
+   same doubt** — and their 22 reproduced perfectly, so this is not a reason to distrust the file,
+   only that one figure.
+4. **`b`'s and `c`'s `core_ir_eval` cells are "none needed" CONDITIONALLY** (see the ⚠️ notes in
+   §8.4). Both conditions are one grep each and both are the implementer's to run before filling
+   the row. I will not pre-fill a row whose condition I could not evaluate without the diff.
