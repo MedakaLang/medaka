@@ -66,10 +66,18 @@ deliverables into this root before reaping their worktrees. The conversation
 ledger remains authoritative; these are disposable projections, not shared
 mutable state. Delete the entire root during wrap-up.
 
-## 3. Phase 0 assignments
+## 3. Phase 0 assignments and dependencies
 
 All assignments are read-only except an explicitly authorized reproducer's
-task-owned external scratch probes.
+task-owned external scratch probes. The execution DAG is:
+
+```text
+P0-INTAKE → P0-CENSUS → parallel P0-APPARATUS siblings
+  → parallel P0-DESIGN-A / P0-DESIGN-B → P0-SYNTHESIS → P0-REVIEW
+```
+
+Only siblings whose required inputs already exist run concurrently. A later
+packet must not guess or restate a missing predecessor's evidence.
 
 ### P0-INTAKE — readiness
 
@@ -116,6 +124,26 @@ Ordinary byte-identical WAT is vacuous for a diagnostic-only reader. A discarded
 read is not observable. Stop rather than approximate an inaccessible private
 route.
 
+### P0-X-L — extern catalog and collision groundwork
+
+If intake admits X-L.H, run a separate census/apparatus branch after intake:
+
+- derive semantic extern rows and provenance from `stdlib/runtime.mdk` and the
+  current elaborated declaration carrier;
+- inventory LLVM and Wasm disposition consumers without promoting either
+  backend's ladder to semantic authority;
+- require catalog completeness and a missing-row expected-red control;
+- enumerate each currently observable LLVM/Wasm symbol, tag, import, and
+  related collision domain as a raw set before grouping it;
+- require fail-closed collision expected-red controls, including impl/method
+  symbols and #1397's same-named-type shape where still applicable;
+- prove the additive groundwork does not create a permanent LLVM-only catalog
+  or begin X-L.P/X-L.C consumption.
+
+Ambient reset/drain, P → U → P, and renamed-Ref mutation requirements do not
+apply to X-L unless a separately identified ambient-state field is actually in
+its packet.
+
 ### P0-DESIGN-A/B — competing slices
 
 `compiler-designer` produces two independent continuation packets:
@@ -126,15 +154,18 @@ route.
 
 Each packet must pass the implementer-sized-slice test, name exact authorized
 paths and mirrors, preserve physical/semantic ownership separation, specify
-acceptance and mutation matrices, and state the exact residual. Neither packet
-is globally selected merely by being complete.
+acceptance and mutation matrices, state the exact residual, and name and test
+the nearest program or route its proposed slice does **not** cover. The packet
+must explain why that boundary remains correct or a known residual. Neither
+packet is globally selected merely by being complete.
 
 ### P0-SYNTHESIS and P0-REVIEW
 
 The conductor independently verifies decisive evidence, reconciles A/B, and
 selects one slice or defers both. A fresh `compiler-reviewer` then audits the
 synthesis for specification conformance, apparatus fail-capability, omitted
-routes, sizing, performance hazards, and misleading completion claims.
+routes, nearest-uncovered boundary evidence, sizing, performance hazards, and
+misleading completion claims.
 
 **Phase 0 gate:** all packets agree on revision and source population; every
 review finding is resolved; the selected family has a complete implementation

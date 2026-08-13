@@ -44,7 +44,8 @@ A first review starts fresh: independently derive expected behavior and architec
 When explicitly assigned #1398 sprint Phase 0 plan review, no implementation or
 verifier receipt exists yet. Audit the exact-revision census, apparatus
 fail-capability, competing designs, conductor synthesis, implementer-sized
-boundary, mutation plan, mirrors, residual, and invalidation rules. Require the
+boundary, nearest-uncovered program or route, mutation plan, mirrors, residual,
+and invalidation rules. Require the
 direct evidence packets named by the brief; do not demand code-test receipts or
 issue a code verdict. A clean plan-review verdict authorizes writer dispatch
 only for the reviewed packet and revision, not the whole sprint remainder.

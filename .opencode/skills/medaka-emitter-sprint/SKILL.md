@@ -30,20 +30,20 @@ The tracked sprint document is a durable protocol and scope proposal, not live
 state. Runtime packets, command logs, captures, receipts, and reviews stay in
 the disposable run root and are deleted at wrap-up.
 
-## 2. Phase 0 is parallel and read-only
+## 2. Phase 0 is a read-only evidence DAG
 
-Fan out bounded packets against one exact revision:
+Run bounded packets against one exact revision in this dependency order:
 
-- `P0-INTAKE`: tracker/history/source readiness and completed carriers;
-- `P0-CENSUS`: normalized raw authority set, then semantic-family grouping;
-- `P0-APPARATUS-<family>`: executable routes, P/U/read/observable matrix,
-  rendering/event-only/aborting classification, capture-hook feasibility;
-- `P0-DESIGN-A`: smallest coherent candidate;
-- `P0-DESIGN-B`: nearest alternative and the reason A may be unsafe or
-  undersized;
-- `P0-SYNTHESIS`: conductor-adjudicated selection or explicit deferral;
-- `P0-REVIEW`: fresh independent audit of fail-capability, sizing, mirrors, and
-  residuals.
+1. `P0-INTAKE`: tracker/history/source readiness and completed carriers;
+2. `P0-CENSUS`: normalized raw authority set, then semantic-family grouping;
+3. parallel `P0-APPARATUS-<family>` siblings for census-selected candidates:
+   executable routes, P/U/read/observable matrix, route classification, and
+   capture-hook feasibility;
+4. parallel `P0-DESIGN-A` and `P0-DESIGN-B` after their required census and
+   apparatus packets exist: smallest coherent candidate and nearest alternative;
+5. `P0-SYNTHESIS`: conductor-adjudicated selection or explicit deferral;
+6. `P0-REVIEW`: fresh independent audit of synthesis, fail-capability, sizing,
+   mirrors, and residuals.
 
 The census reports sets and evidence, not architecture. Candidate designers do
 not select the sprint winner independently. The conductor verifies decisive
@@ -62,17 +62,30 @@ A selected family must pass all of these gates:
 
 1. one bounded implementer turn reaches a compile-coherent boundary;
 2. semantic inputs stay in immutable input/validated-plan carriers;
-3. all declarations, initializers, resets, writers, readers, drains, dynamic
-   scopes, callers, and public routes are named;
+3. all relevant declarations, producers, consumers, fallbacks, callers, and
+   public routes are named; an ambient-state family additionally names
+   initializers, resets, writers, readers, drains, and dynamic scopes;
 4. current ordering, first-match policy, save/set/read/restore extent, output,
    and diagnostic behavior are fixed by authority or observed controls;
 5. the apparatus is executable and fail-capable before exact assertions are
    authored;
-6. one mutant per semantic field plus legal renamed-authority ownership mutants
-   is specified with the earliest stable expected-red rule;
+6. one mutant per semantic field is specified with the earliest stable
+   expected-red rule; an ambient-state family additionally has legal renamed-
+   authority ownership mutants;
 7. focused verification, snapshot, selfproc, fixpoint, and deferred-CI
    obligations are explicit;
 8. the residual authority set will be re-derived after the slice.
+
+Every synthesized packet also names and tests the nearest program or route the
+slice does **not** cover. It must state why that boundary remains correct or an
+explicit residual; P0-REVIEW rejects an untested boundary claim.
+
+For X-L.H, replace ambient-state lifecycle gates with its own architecture
+contract: derive catalog rows and provenance from the semantic extern source;
+prove completeness without creating a permanent LLVM-only authority; define a
+missing-row expected-red control; enumerate each current target collision
+domain; and define fail-closed collision expected-red controls. X-L.H never
+acquires reset/drain or renamed-Ref obligations merely by sharing this sprint.
 
 If execution is needed to discover generated IR/WAT or diagnostic text, split
 capture-hook work from exact assertions. A promising census candidate is not an
