@@ -98,6 +98,10 @@ for required in \
     exit 1
   }
 done
+[ "$(grep -F 'let body = CLet False PWild (CVar "Pair" AGlobal) (CLet False PWild (CVar "Pair" AGlobal) lambdaBody)' "$TYPED_ENTRY" | wc -l | tr -d '[:space:]')" -eq 1 ] || {
+  echo "FAIL H2B7-NAMED-WRAPPER-APPARATUS: lambda fixture must use Pair twice"
+  exit 1
+}
 [ "$(grep -F 'match (progEmit prog).trmcCtx.value' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 2 ] || {
   echo "FAIL H2B6-WTRMC-CARRIER: expected exactly two trmc readers"
   exit 1
@@ -1142,6 +1146,21 @@ for lambda_spec in 'p1 17 1' 'u 29 2' 'p2 17 1'; do
     exit 1
   }
 done
+[ "$(grep -E '^  \(func \$mdk_wctor_Pair ' "$INPUT_WORK/lambda-p1.wat" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
+  [ "$(grep -E '^  \(func \$mdk_wctor_Pair ' "$INPUT_WORK/lambda-u.wat" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
+  [ "$(grep -E '^  \(func \$mdk_wctor_Pair ' "$INPUT_WORK/lambda-p2.wat" | wc -l | tr -d '[:space:]')" -eq 1 ] || {
+  echo "FAIL H2B7-NAMED-WRAPPER-DEDUPE: duplicate Pair uses must define one wrapper"
+  exit 1
+}
+lambda_elem_declare() {
+  grep -E '^  \(elem declare func ' "$1"
+}
+[ "$(lambda_elem_declare "$INPUT_WORK/lambda-p1.wat")" = '  (elem declare func $mdk_pap $mdk_wctor_Pair $mdk_lam0)' ] &&
+  [ "$(lambda_elem_declare "$INPUT_WORK/lambda-u.wat")" = '  (elem declare func $mdk_pap $mdk_wctor_Pair $mdk_lam0 $mdk_lam1)' ] &&
+  [ "$(lambda_elem_declare "$INPUT_WORK/lambda-p2.wat")" = '  (elem declare func $mdk_pap $mdk_wctor_Pair $mdk_lam0)' ] || {
+  echo "FAIL H2B7-ELEM-DECLARE-ORDER: exact function-reference membership/order changed"
+  exit 1
+}
 [ "$(wc -l < "$INPUT_WORK/lambda-census.events")" -eq 1 ] &&
   grep -F $'val lambdaIntentionalGap\tunbound variable '\''missingLambdaCensus' "$INPUT_WORK/lambda-census.events" >/dev/null || {
   echo "FAIL H2B7-LAMBDA-LIFECYCLE: census event attribution"
