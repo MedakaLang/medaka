@@ -79,6 +79,43 @@ if grep -F 'implSelfCtxRef' "$WASM_SRC" >/dev/null; then
   echo "FAIL wasm typed impl-self-state ratchet: retired ambient authority remains"
   exit 1
 fi
+if grep -E '^wTrmcCtxRef[[:space:]]*[:=]' "$WASM_SRC" >/dev/null; then
+  echo "FAIL H2B6-AUTHORITY-SET: retired trmc authority remains ambient"
+  exit 1
+fi
+for required in \
+  'trmcCtx : Ref WTrmcCtx' \
+  'trmcCtx = Ref WTrmcOff' \
+  'match (progEmit prog).trmcCtx.value' \
+  'let saved = (progEmit prog).trmcCtx.value' \
+  'let _ = setRef (progEmit prog).trmcCtx (WTrmcOn self arity pslots ctorSet isBuiltinList loopLbl exitLbl)' \
+  'let _ = setRef (progEmit prog).trmcCtx saved' \
+  'let savedTrmc = (progEmit prog).trmcCtx.value' \
+  'let _ = setRef (progEmit prog).trmcCtx WTrmcOff' \
+  'let _ = setRef (progEmit prog).trmcCtx savedTrmc'; do
+  grep -F -- "$required" "$WASM_SRC" >/dev/null || {
+    echo "FAIL H2B6-WTRMC-CARRIER: missing $required"
+    exit 1
+  }
+done
+[ "$(grep -F 'match (progEmit prog).trmcCtx.value' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 2 ] || {
+  echo "FAIL H2B6-WTRMC-CARRIER: expected exactly two trmc readers"
+  exit 1
+}
+[ "$(grep -F 'let _ = setRef (progEmit prog).trmcCtx WTrmcOff' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 2 ] &&
+  [ "$(grep -F 'let _ = setRef (progEmit prog).trmcCtx savedTrmc' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 2 ] || {
+  echo "FAIL H2B6-WTRMC-CLEAR-ROUTES: expected two independent-function clears/restores"
+  exit 1
+}
+grep -F 'emitProgram input cp = emitProgramWith (freshWasmEmit WGapStrict) input cp' "$WASM_SRC" >/dev/null &&
+  [ "$(grep -F 'let emit = freshWasmEmit WGapRecord' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 2 ] || {
+  echo "FAIL H2B6-WTRMC-CLEAR-ROUTES: strict, record, census freshness routes changed"
+  exit 1
+}
+grep -F 'wDispCtxRef' "$WASM_SRC" >/dev/null || {
+  echo "FAIL H2B6-WTRMC-CLEAR-ROUTES: nearest-miss wDispCtxRef changed"
+  exit 1
+}
 EXPECTED_MODULE_REFS="$(printf '%s\n' \
   lamIdRef liftedFnsRef liftedNamesRef funcRefsRef liftedNamesSetW funcRefsSetW \
   useStrRef useListRef useArrayRef useRefBoxRef useRecUpdateRef \
@@ -86,7 +123,7 @@ EXPECTED_MODULE_REFS="$(printf '%s\n' \
   useFloatRef useFloatHashRef useMathRef useFloatRngRef useFloatStrRef \
   useStrSearchRef useValueCmpRef useValueArithRef numPolyLocalsRef useStrCodecRef \
    useCharFromCodeRef useCharClassRef useIORef useArgsRef useFileBytesRef \
-   floatLocalsRef floatGlobalsRef tupleAritiesRef wTrmcCtxRef wDispCtxRef \
+   floatLocalsRef floatGlobalsRef tupleAritiesRef wDispCtxRef \
   wDispGroupsRef | LC_ALL=C sort -u)"
 ACTUAL_MODULE_REF_SIGS="$(awk '
   /^[A-Za-z_][A-Za-z0-9_]*[[:space:]]*:[[:space:]]*Ref([[:space:]]|$)/ { print $1 }
@@ -100,7 +137,7 @@ ACTUAL_MODULE_REF_DEFS="$(awk '
 ' "$WASM_SRC" | LC_ALL=C sort -u)"
 if [ "$ACTUAL_MODULE_REF_SIGS" != "$EXPECTED_MODULE_REFS" ] ||
     [ "$ACTUAL_MODULE_REF_DEFS" != "$EXPECTED_MODULE_REFS" ]; then
-  echo "FAIL H2B5-AUTHORITY-SET: top-level Ref authority set changed"
+  echo "FAIL H2B6-AUTHORITY-SET: top-level Ref authority set changed"
   printf '  observed signatures:\n%s\n' "$ACTUAL_MODULE_REF_SIGS"
   printf '  observed definitions:\n%s\n' "$ACTUAL_MODULE_REF_DEFS"
   exit 1
@@ -173,6 +210,14 @@ for required in \
   }
 done
 for required in \
+  '"--reemit-trmc-state"::_' \
+  'reemitTrmcState : Unit -> <IO> Unit' \
+  'let p1 = emitProgram trmcStateInput (trmcStateProgram "pTrmc" 17)' \
+  'let (u, _) = emitProgramRecord trmcStateInput (trmcStateProgram "uTrmc" 29)' \
+  'let censusEvents = emitProgramGaps trmcStateInput trmcStateCensusProgram' \
+  '"TRMC_P2"' \
+  '(emitProgram trmcStateInput (trmcStateProgram "pTrmc" 17))' \
+  'CBind "trmcIntentionalGap" [CClause [] (CVar "missingTrmcCensus" AGlobal)]' \
   '"--reemit-impl-self-state"::_' \
   'reemitImplSelfState : Unit -> <IO> Unit' \
   'let p1 = emitProgram implSelfInput pProgram' \
@@ -285,6 +330,94 @@ run_impl_self_check() {
   [ "$(wc -l < "$INPUT_WORK/impl-self-census.events")" -eq 1 ] &&
     grep -F $'val implSelfIntentionalGap\tunbound variable '\''missingImplSelfGap' "$INPUT_WORK/impl-self-census.events" >/dev/null || {
       echo "FAIL wasm typed impl-self-state lifecycle: census event changed"
+      exit 1
+    }
+}
+
+run_trmc_state_check() {
+  TRMC_OUT="$($EMITBIN --reemit-trmc-state 2>"$INPUT_WORK/trmc.emit.err")" || {
+    echo "FAIL H2B6-WTRMC-P-SHAPE: trmc state harness"
+    cat "$INPUT_WORK/trmc.emit.err"
+    exit 1
+  }
+  [ ! -s "$INPUT_WORK/trmc.emit.err" ] || {
+    echo "FAIL H2B6-WTRMC-P-SHAPE: trmc harness wrote stderr"
+    cat "$INPUT_WORK/trmc.emit.err"
+    exit 1
+  }
+  TRMC_MARKERS="$(printf '%s\n' "$TRMC_OUT" | awk '/^TRMC_(P1|RECORD_U|CENSUS_U_GAP|P2)_(BEGIN|END)$/ { print }')"
+  TRMC_EXPECTED_MARKERS="$(printf 'TRMC_P1_BEGIN\nTRMC_P1_END\nTRMC_RECORD_U_BEGIN\nTRMC_RECORD_U_END\nTRMC_CENSUS_U_GAP_BEGIN\nTRMC_CENSUS_U_GAP_END\nTRMC_P2_BEGIN\nTRMC_P2_END')"
+  [ "$TRMC_MARKERS" = "$TRMC_EXPECTED_MARKERS" ] || {
+    echo "FAIL H2B6-WTRMC-P-SHAPE: ordered capture markers"
+    exit 1
+  }
+  trmc_capture() {
+    awk -v begin="$1" -v end="$2" '
+      $0 == begin { capture = 1; next }
+      $0 == end { exit }
+      capture { print }
+    ' <<<"$TRMC_OUT"
+  }
+  trmc_capture TRMC_P1_BEGIN TRMC_P1_END > "$INPUT_WORK/trmc-p1.wat"
+  trmc_capture TRMC_RECORD_U_BEGIN TRMC_RECORD_U_END > "$INPUT_WORK/trmc-u.wat"
+  trmc_capture TRMC_CENSUS_U_GAP_BEGIN TRMC_CENSUS_U_GAP_END > "$INPUT_WORK/trmc-census.events"
+  trmc_capture TRMC_P2_BEGIN TRMC_P2_END > "$INPUT_WORK/trmc-p2.wat"
+  for trmc_file in trmc-p1.wat trmc-u.wat trmc-census.events trmc-p2.wat; do
+    [ -s "$INPUT_WORK/$trmc_file" ] || {
+      echo "FAIL H2B6-WTRMC-P-SHAPE: empty $trmc_file"
+      exit 1
+    }
+  done
+  cmp -s "$INPUT_WORK/trmc-p1.wat" "$INPUT_WORK/trmc-p2.wat" || {
+    echo "FAIL H2B6-WTRMC-P-SHAPE: P changed after record U and census"
+    exit 1
+  }
+  cmp -s "$INPUT_WORK/trmc-p1.wat" "$INPUT_WORK/trmc-u.wat" && {
+    echo "FAIL H2B6-WTRMC-P-SHAPE: P/U positive control did not differ"
+    exit 1
+  }
+  for trmc_spec in "p1 pTrmc 17" "u uTrmc 29" "p2 pTrmc 17"; do
+    trmc_name="${trmc_spec%% *}"
+    trmc_rest="${trmc_spec#* }"
+    trmc_fn="${trmc_rest%% *}"
+    trmc_expected="${trmc_rest#* }"
+    trmc_wat="$INPUT_WORK/trmc-$trmc_name.wat"
+    [ "$(grep -F "(func \$$trmc_fn" "$trmc_wat" | wc -l | tr -d '[:space:]')" -eq 1 ] || {
+      echo "FAIL H2B6-WTRMC-P-SHAPE: $trmc_name missing function"
+      exit 1
+    }
+    grep -F 'loop $tmcloop' "$trmc_wat" >/dev/null &&
+      grep -F 'br $tmcloop' "$trmc_wat" >/dev/null || {
+        echo "FAIL H2B6-WTRMC-P-SHAPE: $trmc_name missing TMC loop markers"
+        exit 1
+      }
+    [ "$(grep -F "call \$$trmc_fn" "$trmc_wat" | wc -l | tr -d '[:space:]')" -eq 0 ] &&
+      [ "$(grep -F "return_call \$$trmc_fn" "$trmc_wat" | wc -l | tr -d '[:space:]')" -eq 0 ] || {
+        echo "FAIL H2B6-WTRMC-P-SHAPE: $trmc_name gained recursive call"
+        exit 1
+      }
+    wasm-tools parse "$trmc_wat" -o "$INPUT_WORK/trmc-$trmc_name.wasm" || {
+      echo "FAIL H2B6-WTRMC-P-SHAPE: wasm-tools parse $trmc_name"
+      exit 1
+    }
+    wasm-tools validate --features=all "$INPUT_WORK/trmc-$trmc_name.wasm" || {
+      echo "FAIL H2B6-WTRMC-P-SHAPE: wasm-tools validate $trmc_name"
+      exit 1
+    }
+    TRMC_RESULT="$($NODE "$RUNJS" "$INPUT_WORK/trmc-$trmc_name.wasm" 2>"$INPUT_WORK/trmc-$trmc_name.run.err")" || {
+      echo "FAIL H2B6-WTRMC-P-SHAPE: execution failed $trmc_name"
+      cat "$INPUT_WORK/trmc-$trmc_name.run.err"
+      exit 1
+    }
+    [ ! -s "$INPUT_WORK/trmc-$trmc_name.run.err" ] && [ "$TRMC_RESULT" = 0 ] || {
+      echo "FAIL H2B6-WTRMC-P-SHAPE: execution changed $trmc_name"
+      exit 1
+    }
+  done
+  [ "$(wc -l < "$INPUT_WORK/trmc-census.events")" -eq 1 ] &&
+    grep -F $'val trmcIntentionalGap\tunbound variable '\''missingTrmcCensus' "$INPUT_WORK/trmc-census.events" >/dev/null &&
+    grep -F '[in pTrmc]' "$INPUT_WORK/trmc-census.events" >/dev/null || {
+      echo "FAIL H2B6-WTRMC-P-SHAPE: census gap attribution"
       exit 1
     }
 }
@@ -858,6 +991,7 @@ forbid_wat type-to-ctors "$U_WAT" '(type $T_PSubject (sub (struct (field i32)))'
 require_wat type-to-ctors "$U_WAT" 'ref.cast (ref $T_USubject)'
 
 run_impl_self_check
+run_trmc_state_check
 
 [ -x "$EMITTER" ] && export MEDAKA_EMITTER="$EMITTER"
 

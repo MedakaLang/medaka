@@ -304,6 +304,12 @@ data WGapMode = WGapStrict | WGapRecord
 
 data ImplSelfCtx = ImplSelfOff | ImplSelfOn String String Int
 
+-- Destination-passing TMC context. It is owned by a fresh WasmEmit so nested
+-- and independent emission routes cannot leak loop-local authority.
+data WTrmcCtx =
+  | WTrmcOff
+  | WTrmcOn SelfRef Int (List String) (List (String, Int)) Bool String String
+
 data WasmEmit =
   | WasmEmit {
       gapMode : WGapMode,
@@ -313,6 +319,7 @@ data WasmEmit =
       stringSegments : Ref (List (Int, List Int)),
       nextStringSegmentId : Ref Int,
       implSelfCtx : Ref ImplSelfCtx,
+      trmcCtx : Ref WTrmcCtx,
       emittedDefaultNames : Ref (OrdMap Unit),
       defaultDefinitions : Ref (List (List String)),
     }
@@ -326,6 +333,7 @@ freshWasmEmit mode = WasmEmit {
   stringSegments = Ref [],
   nextStringSegmentId = Ref 0,
   implSelfCtx = Ref ImplSelfOff,
+  trmcCtx = Ref WTrmcOff,
   emittedDefaultNames = Ref omEmpty,
   defaultDefinitions = Ref [],
 }
@@ -6392,13 +6400,6 @@ emitArgsArray prog env d args =
 -- the built-in `h :: t` (→ reserved `$C_Cons`) vs a user ctor named `Cons`
 -- (→ `$CU_Cons`).  Homogeneous per fn, so the base leaf's parent-link
 -- (emitWasmTrmcBase) reads it from here rather than re-deriving from the ctor name.
-data WTrmcCtx =
-  | WTrmcOff
-  | WTrmcOn SelfRef Int (List String) (List (String, Int)) Bool String String
-
-wTrmcCtxRef : Ref WTrmcCtx
-wTrmcCtxRef = Ref WTrmcOff
-
 -- layer-18: the PLAIN-tail impl-method `return_call` context.  Set to `Some (method,
 -- tag, arity)` ONLY while emitting an ordinary (non-TMC, non-default) impl body in
 -- `emitImplGroup`; off everywhere else (top-level fns, default defines, dispatch
@@ -6437,7 +6438,7 @@ wTrmcDctorL = "$__tmc_dctor"
 -- `arity` = the enclosing fn's param count (unused today; kept for symmetry with
 -- the LLVM self-call walk).
 emitRefTail : Prog -> List String -> Int -> CExpr -> List String
-emitRefTail prog env arity e = match wTrmcCtxRef.value
+emitRefTail prog env arity e = match (progEmit prog).trmcCtx.value
   WTrmcOn self sarity pslots ctorSet _ loopLbl exitLbl =>
     -- TMC active: descend the structural tail wrappers (if/let/block/decision) with the
     -- context STILL LIVE so their inner leaves re-enter here; redirect every LEAF
@@ -6670,7 +6671,7 @@ emitWasmTrmcBase prog env exitLbl e =
   -- else store it into the current dest's recursive slot (the parent ctor's type
   -- is static for a singleton leaf-ctor set; a mixed set dispatches on
   -- $__tmc_dctor — wTrmcLinkParent).  Fetch the set from the ctx.
-  match wTrmcCtxRef.value
+  match (progEmit prog).trmcCtx.value
     WTrmcOn _ _ _ ctorSet isBuiltinList _ _ =>
       let storeBranch = wTrmcLinkParent isBuiltinList ctorSet valInstrs
       let seedBranch = valInstrs ++ ["local.set " ++ wTrmcHeadL]
@@ -6858,8 +6859,8 @@ emitWasmTrmcCore prog funcSym self lblRoot arity clauses ctorSet =
   let loopLbl = "$tmcloop"
   let exitLbl = "$tmcexit"
   let isBuiltinList = wTrmcBuildsBuiltinList prog self arity clauses
-  let saved = wTrmcCtxRef.value
-  let _ = setRef wTrmcCtxRef (WTrmcOn self arity pslots ctorSet isBuiltinList loopLbl exitLbl)
+  let saved = (progEmit prog).trmcCtx.value
+  let _ = setRef (progEmit prog).trmcCtx (WTrmcOn self arity pslots ctorSet isBuiltinList loopLbl exitLbl)
   -- Single all-PVar clause (no fallthrough): the fast path — alias params to the
   -- synthetic positions and TMC-emit the body directly.  Otherwise (multi-clause OR
   -- a clause carries a list/ctor pattern, e.g. `stripComments`/the `map` impl): route
@@ -6871,7 +6872,7 @@ emitWasmTrmcCore prog funcSym self lblRoot arity clauses ctorSet =
         bindParamAliases prog ps params ++ emitRefTail prog (map (patName (progEmit prog)) ps) arity b
       else emitClauseChainGo prog [] lblRoot params arity clauses 0
     _ => emitClauseChainGo prog [] lblRoot params arity clauses 0
-  let _ = setRef wTrmcCtxRef saved
+  let _ = setRef (progEmit prog).trmcCtx saved
   let loopShell = ["i32.const 1", "local.set " ++ wTrmcFirstL]
       ++ ["block " ++ exitLbl, "loop " ++ loopLbl]
       ++ indent bodyLines
@@ -7458,14 +7459,14 @@ emitLamDefine prog lamName pats captured body =
     ++ w7LocalDecls (maxRefDepth body)
   let setup = ["local.get $self", "ref.cast (ref $clos)", "local.set $__self_clos"]
   -- A lifted lambda is an INDEPENDENT function: it must NOT inherit the enclosing
-  -- fn's TMC loop context (wTrmcCtxRef) nor a dispatch-group context (wDispCtxRef).
+  -- fn's TMC loop context nor a dispatch-group context (wDispCtxRef).
   -- emitLamDefine can run while one of those is LIVE (a cons-tail clause body whose
-  -- lead-field / recomputed-arg builds a closure is emitted under a live wTrmcCtxRef),
+  -- lead-field / recomputed-arg builds a closure is emitted under a live trmc context),
   -- and without clearing it the lambda body's tail leaves would emit `$__tmc_*` /
   -- `$tmcloop` references that this lambda never declares as locals → invalid wasm.
-  let savedTrmc = wTrmcCtxRef.value
+  let savedTrmc = (progEmit prog).trmcCtx.value
   let savedDisp = wDispCtxRef.value
-  let _ = setRef wTrmcCtxRef WTrmcOff
+  let _ = setRef (progEmit prog).trmcCtx WTrmcOff
   let _ = setRef wDispCtxRef WDispOff
   -- A1 (poly-`Num`-on-Float, design row 6): a lambda's own params carry no declared
   -- sig, so its arith-used params are polymorphic `Num` (the arith-section accumulator
@@ -7475,7 +7476,7 @@ emitLamDefine prog lamName pats captured body =
   let _ = setRef numPolyLocalsRef (dedupKeep (lamPolyParamNames pats body ++ savedNumPoly))
   let bodyLines = emitRefTail prog bodyEnv arity body
   let _ = setRef numPolyLocalsRef savedNumPoly
-  let _ = setRef wTrmcCtxRef savedTrmc
+  let _ = setRef (progEmit prog).trmcCtx savedTrmc
   let _ = setRef wDispCtxRef savedDisp
   ["  (func " ++ lamName ++ " (type $codety) (param $self (ref eq)) (param $args (ref $argarr)) (result (ref eq))"]
     ++ map ("  " ++ _) localLines
@@ -7631,13 +7632,13 @@ emitLgLifted prog gid names groupCaps binds (CBind name clauses) =
   let argPrologue = flatMap (argLoadAt) (zipIdx params 0)
   -- a lifted letgroup member is an independent function: clear any live TMC /
   -- dispatch-group context so its body doesn't leak `$__tmc_*`/`$tmcloop` references
-  -- (see emitLamDefine — same hazard when lifted under a live wTrmcCtxRef).
-  let savedTrmc = wTrmcCtxRef.value
+  -- (see emitLamDefine — same hazard when lifted under a live trmc context).
+  let savedTrmc = (progEmit prog).trmcCtx.value
   let savedDisp = wDispCtxRef.value
-  let _ = setRef wTrmcCtxRef WTrmcOff
+  let _ = setRef (progEmit prog).trmcCtx WTrmcOff
   let _ = setRef wDispCtxRef WDispOff
   let bodyLines = emitClausesRefEnv prog (names ++ groupCaps) name params arity clauses
-  let _ = setRef wTrmcCtxRef savedTrmc
+  let _ = setRef (progEmit prog).trmcCtx savedTrmc
   let _ = setRef wDispCtxRef savedDisp
   let memberLocals = names
   let bodyLocals = filterList (notIn (params ++ groupCaps ++ memberLocals)) (dedupKeep (clauseLocals clauses))
