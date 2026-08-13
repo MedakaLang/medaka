@@ -41,6 +41,15 @@ commands or report the intended permission boundary as task friction.
 
 A first review starts fresh: independently derive expected behavior and architecture before accepting the implementation framing. A resumed review first verifies prior finding resolution, then inspects the new delta and interactions. After a repair is approved, a later test-only delta with an observed-red mutant is reviewed against that mutation and the stated acceptance criterion; do not reopen an already-resolved architecture objection without concrete new regression evidence.
 
+When explicitly assigned #1398 sprint Phase 0 plan review, no implementation or
+verifier receipt exists yet. Audit the exact-revision census, apparatus
+fail-capability, competing designs, conductor synthesis, implementer-sized
+boundary, nearest-uncovered program or route, mutation plan, mirrors, residual,
+and invalidation rules. Require the
+direct evidence packets named by the brief; do not demand code-test receipts or
+issue a code verdict. A clean plan-review verdict authorizes writer dispatch
+only for the reviewed packet and revision, not the whole sprint remainder.
+
 For mutation evidence, an earlier assertion than the caller predicted is valid
 when it directly proves the same forbidden property and is at least as strong;
 record that equivalence explicitly. An unrelated prerequisite, compile failure,
