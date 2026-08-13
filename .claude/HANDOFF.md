@@ -2,6 +2,30 @@
 
 ---
 
+## 📋 IF YOU ARE PICKING THIS UP COLD, START HERE
+
+**Both possible next steps are already written, in the repo, at `.claude/sprint-b/next/`.** `B-2.1-g`
+(the combined fix) was in flight when this was written; **which brief you use depends on its verdict:**
+
+| `g`'s verdict | Use | What it does |
+|---|---|---|
+| **Cleared #1514 and `SA-4c` builds correctly** | `QUEUED-h-exit.md` | `EX-1` delete the two dead refs (packet: `.claude/sprint-b/design/P-d-packet.md`) → `EX-2` seed re-mint **×2** then the **in-band** fixpoint → `EX-3` re-cut the snapshot + LEG A goldens **once** → `EX-4` un-safe this file, only by **re-showing** `SA-4c`/#1514/#1397 on the final binary |
+| **Could NOT clear #1514** | `QUEUED-h-revert.md` | `RV-1` revert `086aeb35` then `1e7cbbbb` (newest-first) **keeping four enumerated things** → `RV-2` verify against a `85ceec1f`-built binary → `RV-3` re-land all three drains as **ONE** unit → `RV-4` rewrite this file |
+
+⚠️ **The revert set is exactly TWO commits** — `95359281` (`c`) and `3ba7817b` (`e`) are **ledger-only**.
+⚠️ **A naive revert LOSES work you must keep:** the new gate `test/diff_compiler_flat_vs_onemodule.sh`
+**and its four extra rows live INSIDE `1e7cbbbb`**, as do `core_ir_lower.mdk`/`registry.mdk` edits and one
+`DICT-SEMANTICS.md` symbol cell. `RV-1` enumerates the keepers per file and gives
+`git diff --stat 85ceec1f -- compiler/` → **empty** as its identity check.
+⚠️ **`EX-3` is the riskiest step in either branch:** the cumulative LEG A golden diff is **NOT
+additive-only**, and **a rebase auto-merges that golden cleanly with no gate able to see the blend** —
+take the base's version of both moved golden families and **re-derive from the rebuilt binary.**
+⚠️ Both briefs carry explicit **`⚠️ OWED:`** markers with the exact command where a figure could not be
+derived read-only — including the pre-drain `must_fail` REPRO total and `check_cli_modules` ok-count,
+whose **published numbers have moved three times.** **Derive them on the pre-drain arm; do not quote.**
+
+---
+
 ## 🚨 UPDATE after `B-2.1-f`: the S0's DANGEROUS half is closed (S0 → S2). Branch STILL UNSAFE.
 
 `B-2.1-f` re-armed a loud reject (`T-ROUTE-WORD-AMBIGUOUS`, a new code — the impl min⊑ selects here
