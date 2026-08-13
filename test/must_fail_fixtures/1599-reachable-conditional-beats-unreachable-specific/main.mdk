@@ -1,0 +1,6 @@
+import user.{useIt}
+import base
+import spec
+import gen
+
+main = println useIt

@@ -2241,3 +2241,72 @@ gh api graphql -f query='{repository(owner:"MedakaLang",name:"medaka"){pullReque
 ⚠️ `mergeStateStatus` reads `UNKNOWN` on an already-merged PR, so it is a signal about a LIVE
 PR only — don't build a completion test on it. For "did it land", `scripts/pr.sh complete`
 (which proves the head SHA is on `main`) remains the answer.
+
+---
+
+## The deferred-verification sprint (Stage A, 2026-08-12/13) — what to keep, what to drop
+
+A whole stage implemented on one branch with gate verification deliberately deferred to a
+post-implementation adversarial round, then merged as PR #1601. It worked. The parts that
+worked and the parts that cost are **separable**, and they got bundled at the time.
+
+### ✅ KEEP: defer verification, but write the debt down
+
+`DEBT.md` with a mandatory per-bite **`could move:`** field ("what acceptance behaviour could
+plausibly have changed; *'nothing, and here is why'* is valid, silence is not") is what made the
+repair round possible. Five reviewers got a real attack list instead of a diff to re-read. Cost:
+essentially nothing. It found 2 S0 regressions, an architectural contradiction, and a
+pre-existing S0.
+
+### ❌ DROP: concurrent IMPLEMENTERS. **Parallelize readers, serialize writers.**
+
+Four contaminated measurements in one run, **all** from agents holding uncommitted edits; zero
+from late gates. The worst: a must-fail run reporting **5 phantom DRAINS** (zero on a quiescent
+tree) — and the natural next action on a drain is to *close the issue*, so trusting it would have
+put five wrongly-closed bugs in the tracker. Also ~4 bites of rework from a region collision and
+one function built twice by two units briefed to build it.
+
+Five adversarial reviewers ran concurrently with **zero** interference, because they do not edit.
+Brief read-only agents *"do NOT rebuild the binary"* — a rebuild is the single action that breaks
+quiescence for everyone. **No gate is measured while any agent holds uncommitted edits.** A drain
+set is *stable*: run any drain claim **twice**; two runs disagreeing means the tree is moving.
+
+⚠️ **State concurrency honestly in briefs.** I opened one with *"you are the ONLY agent live"*
+and dispatched two more into that worktree minutes later. That agent checked instead of trusting
+me, so its measurements survived. One that believed the sentence would have reported contaminated
+baselines as clean.
+
+### ⭐ THE HIGHEST-VALUE THING AN AGENT DID ALL RUN WAS REFUSE
+
+Every one of these caught something no gate here can see, and none was asked for:
+- an implementer **refused a bite** because the briefed site was unreachable (`publicDataDecl`
+  has no `DAttrib` arm, so a `DAttrib` can never reach the function the bite patched) — three
+  design passes had missed it, and the tree already said so in a fixture comment;
+- an implementer **refused a brief instruction** ("every miss must fail loud") because that miss's
+  loud form is a **false reject** — my brief had collapsed two opposite directions;
+- two agents **STOPPED rather than adapting** onto a half-applied edit in a shared region;
+- a reviewer **retracted its own finding** after noticing its probe grepped for the wrong keyword;
+- a read-only agent **audited this orchestrator's ledger** and was right twice.
+
+**Brief for refusal explicitly.** "Report disagreements rather than silently resolving them" and
+"if your region changed under you, STOP — do not adapt" both paid for themselves repeatedly.
+
+### 🎯 MAKE THE NEAREST-MISS TEST MANDATORY IN EVERY FIX BRIEF
+
+> *State and TEST the nearest program your fix does NOT cover.*
+
+The repair round exists because that question went unasked: a fix was verified against the
+reproduction it was handed, and **the S0 survived one added type signature**. Once mandatory, it
+found a live pre-existing S0 on the first try (#1599) and a retained false reject on the second.
+A fix verified only against its own repro is verified against the **bug report**, not the defect.
+
+### Two mechanical traps this run paid for
+
+- **An `isolation: "worktree"` agent writes its report into a worktree nobody reads.** Copy the
+  deliverable out the moment it returns, or it does not exist — the round's worst finding briefly
+  survived only as a summary of a summary. Its `/var/tmp` probe corpora *do* survive, and were
+  enough to reproduce the finding first-hand later.
+- **Before calling a red "pre-existing", read the gate that produced it.** This tree's gates
+  document which unit is licensed to flip them. One such red was reported as pre-existing by two
+  agents, repeated by me in two commit messages and a PR body, and was in fact our own licensed
+  deliverable — the header said so six lines above the assertion.
