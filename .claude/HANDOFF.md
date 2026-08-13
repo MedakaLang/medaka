@@ -2,6 +2,53 @@
 
 ---
 
+## 🚨🚨 BRANCH `arch/stage-b-sprint` IS UNSAFE AS OF `95359281`. DO NOT MERGE. DO NOT ENQUEUE.
+
+**`B-2.1-b2` (the drain, `1e7cbbbb`) drained #1564/#1599/#1072 AND INTRODUCED AN S0.** Measured by
+`B-2.1-e`, reproduced twice with a controlled discriminator, mechanism read off the emitted IR:
+
+`test/diff_compiler_check_cli_modules.sh` → **81 ok, 4 failing**, all four Door 4. Three are genuine
+drains. The fourth, **`SA-4c/overlap-still-rejects`, is an S0**: `check` **exit 0** (human *and*
+`--json` agreeing, so #1362 is not confounding it), `build` **0**, and the **built binary exits 139**.
+The interpreter prints the correct `wrap-int-specific`.
+
+**Mechanism:** `@mdk_impl_Tag__Wrap_a___tagOf` is arity 2 (dict + value); `@mdk_impl_Tag__Wrap_Int___tagOf`
+is arity 1. In the broken import order the site emits `call @mdk_impl_Tag__Wrap_a___tagOf(i64 %t2)` —
+**the arity-2 conditional impl called with ONE argument** — so the value cell lands in the dict slot and
+is dereferenced. **Wrong impl AND wrong arity.** Control order emits the arity-1 specific impl and is
+correct. Discriminator: the two fixtures are byte-identical except one adds a second same-head impl —
+**one same-head impl is correct, two segfault.** That is a **head-collision-count** disagreement between
+the prefix table and the whole graph.
+
+**Why no other signal catches it:**
+- The **must-fail pin grades `check` only** and therefore cannot see it — the same blindness that made
+  an earlier two-leg scope report DRAINED over a segfault (RUN-B-023).
+- **`SA-4c` was the ONLY assertion in the tree that could see it, and the drain silenced it.** Its own
+  header predicted this: *"If (c) ever flips to accepting, someone taught the guard to pick a winner
+  from the starved registry — check what it emits before calling that a fix."*
+- It is the drain bite's **own Item-4 `nearest miss:`**, which named the class but recorded it as a
+  route-word *naming* skew rather than a miscompile.
+
+⛔ **RULING: `SA-4c` MUST NOT be updated to assert acceptance.** Doing so pins an S0 as expected
+behaviour. Either its class is genuinely fixed (repoint leg 3's **method-keyed route word** —
+`keyForSite` → `matchedEntry` → `matchingEntries` — which AM-1 left on the prefix table by design), or
+**`SA-4c` goes back to rejecting.**
+
+⚠️ **The false reject was LOAD-BEARING.** Per this contract and `AGENTS.md`, *a fix that makes a defect
+quieter is a severity INCREASE* — so the drain as landed is a **net severity increase for this class**,
+even though it genuinely drained three S0s elsewhere. **That is why the branch does not merge in this
+state.**
+
+**Two legitimate drains whose assertion sites ARE stale and may be updated once the above is ruled:**
+`D4b/ground-goal-unrouted-rejects` (IR byte-identical to the control order) and
+`SA-4b/requires-impl-still-rejects` (#1564's own program, binary correct). `B-2.1-e` deliberately did
+**not** edit them, because a revert or amendment of `1e7cbbbb` would make those edits wrong.
+
+**Also blocked:** `B-2.1-c` (refused — no two-site version exists; all three existence reads must move
+together) and therefore `B-2.1-d` (its two refs' only readers are exactly `c`'s scope).
+
+---
+
 ## 🟥 KNOWN-RED FOR THE DURATION — **Stage B sprint, opened 2026-08-13**
 
 **Branch `arch/stage-b-sprint`, worktree `.claude/worktrees/giggly-tinkering-rainbow`, BASE
