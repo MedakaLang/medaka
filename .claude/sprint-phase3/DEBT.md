@@ -81,3 +81,83 @@ unchecked:    (1) **The divergence between the two printers this mint is meant t
               (4) **`rule-duplicate-body` is RED and deliberately left un-silenced** — see the
               orchestrator hand-off in the bite report; `rkEffAtom` is a transitional 4th copy of a
               helper whose 3 existing copies each carry a `lint-disable-next-line`.
+
+### B-2.2-f — the declared-prefix sidecar (plumbing only; nothing reads it yet)
+sites:        `compiler/types/typecheck.mdk` only, plus two allowlist rows in
+              `test/registry_keying_ratchet.sh:191-192`. Types: `CDeclaredPrefix` /
+              `CDeclared` beside `data CSlot`. Fields: `PerRun.funConstraintDeclaredRef`,
+              `CrossRun.crossModuleFunConstraintDeclaredRef` + `…DeclaredQualRef` (+ their
+              `freshPerRun`/`freshCrossRun` `Ref []` initialisers — reset is free through the
+              existing whole-record re-mints). FIVE writes: `setFunConstraintEntry` (the entry
+              append), the module seed bare + alias-prepend, the module snapshot bare + qual, and
+              the JOINT-DISCOVERY snapshot in `discoverPromotedModules` — the fifth, which
+              RUN-P3-015 omitted and which module 1 is seeded from. ONE read:
+              `declaredConstraintFor`, with `declaredConstraintSlots` demoted to a projection of
+              it. **`data CSlot` is UNTOUCHED and no `CSlot` mint site was edited.** Four
+              signatures generalized to carry a scalar payload: `aliasConstraintEntries` /
+              `aliasEntriesFor` / `moduleAliasEntry` / `memberAliasEntry` (`List a` → `a`) and
+              `promotedConstraints`; two pairs of structural duplicates collapsed into one
+              polymorphic function each — `attributeModuleArities`+`attributeModuleArrIfaces` →
+              `attributeModuleEntries` (**both `rule-duplicate-body` disables DELETED**, #1201
+              partially discharged) and `lookupQualArity`+`lookupQualIfaces` → `lookupQualPayload`.
+transform:    Every entry written into the ids table now carries, in a sidecar table keyed by the
+              SAME name, the number of dict slots the callee's own `=>` context DECLARED —
+              recorded as `CDPLen (listLen (dedupSlots slots))`, so `b1` can compare `index < k`
+              and withhold identity from the super slots `expandSupersPairs` APPENDS. Absence is a
+              distinct token, `CDPUnknown`, never `0` and never `Option Int`; it means WITHHOLD.
+              The single read clamps with `minI k (listLen slots)` before returning.
+could move:   Acceptance behaviour: NOTHING, and here is the evidence rather than the assertion.
+              Nothing reads `cdPrefix` — the sidecar is write-only this bite by the scope ruling,
+              so neither fill site was touched and no route word, dict arity or emitted symbol has
+              a new input. Measured on the rebuilt binary: `make medaka` exit 0 · `make check-self`
+              PASS · `test/registry_keying_ratchet.sh` PASS (24 CrossRun fields, 24 write targets,
+              both checks — the second allowlist is DERIVED from the first, which is why two rows
+              sufficed where RUN-P3-015 said four) · `diff_compiler_llvm_typed` and
+              `diff_compiler_llvm_typed_ir` **PASS — the emitted typed IR is byte-unchanged**,
+              which is the direct observation that dict arity and route words did not move ·
+              `diff_compiler_eval_modules` PASS (the run-path cross-module arm) · `fmt --check` and
+              `lint` clean on the touched file and on `lint compiler stdlib sqlite`. The one
+              non-behavioural consequence is that `compiler/types/typecheck.mdk`'s SNAPSHOT and its
+              `selfproc_legA` `types.typecheck` scheme golden both move — new top-level symbols,
+              generalized signatures, and four deleted duplicates (`git diff` on the file is the
+              derivation; no count is written here). Per the packet ZERO goldens were blessed —
+              the close-out re-cut owns them, and that diff must be read as a REVIEW artefact:
+              it is not additive-only, because collapsing the four duplicates deliberately
+              removes their rows.
+nearest miss: The nearest program this does not cover is EVERY program: with no reader, a callee
+              whose declared prefix is recorded as 1 and whose expansion appended 3 super slots is
+              stamped exactly as it was before this bite — #1113 is not fixed until `b1` reads
+              `cdPrefix`. The nearest program whose RECORDED value would be wrong if the arithmetic
+              were: `twice : (Shw a, Shw a) => a -> Int` — one tyvar, duplicated constraint.
+              Independently corroborated at the consumer end rather than by re-running the
+              packet's instrumentation: built with `--keep-ir`, `@mdk_w__twice` takes **one** dict
+              param, while the sibling control `both : (Shw a, Tag a) => a -> Int` takes **two**.
+              So `dedupSlots` really does collapse 2→1 and `listLen slots` would have recorded 2 —
+              marking the first APPENDED slot declared, the unsafe direction. That program is NOT
+              landed as a test (see `unchecked:` (1)).
+engines:      ONE LINE, because no engine sees a different byte: `diff_compiler_llvm_typed_ir`
+              passes, so LLVM emits identically; wasm shares the same Core IR input and the same
+              front end, and `eval`/`core_ir_eval` read routes this bite does not write. No peer
+              arm is owed by THIS bite. **`b1` owes all four**, since the moment `cdPrefix` gates
+              identity the route word itself changes on every engine.
+unchecked:    (1) **The packet's "doctests" deliverable is NOT LANDED, and it is not landable as
+              written.** `compiler/` carries no doctests and no `test "…"` blocks at all
+              (`grep -rn '>>>' compiler/` and `grep -rn '^test "' compiler/*/*.mdk` are both
+              EMPTY), so adding the first one to `typecheck.mdk` would be a first-of-its-kind
+              construct in a 30k-line file, run by no gate — `medaka test` is never pointed at it.
+              With `cdPrefix` unread there is also nothing observable to assert. The witness
+              program is carried instead as the `dedupSlots` comment at `setFunConstraintEntry`
+              and in `nearest miss:` above; `b1`, which makes the prefix observable, is where it
+              becomes a real fixture. (2) **The `minI` clamp is DEFENSIVE, not measured** — the
+              `pairSlots` truncation it guards was instrumented by the prep pass over a full
+              compiler build and a two-module probe and never fired. It is one token and it fails
+              closed. (3) **The vacuity measurement (§7 M-3) was NOT run** — it needs an
+              instrumented fill site, which the scope ruling forbids this bite from touching; the
+              orchestrator owns it. The `:14600-14612` joint-discovery write, which is what that
+              measurement exists to detect the absence of, IS present. (4) **No fixpoint, no
+              engines gate, no perf gate** — `llvm_typed_ir` passing byte-for-byte makes the
+              fixpoint's question (does the emitter emit the same thing) already answered for this
+              diff, and no backend file was touched. (5) **`CDPUnknown` is currently constructed
+              only by `clampPrefix`'s absent arms and consumed by nobody**, so the fail-closed rule
+              is stated and typed but not yet exercised; `b1` is the first reader that can violate
+              it.

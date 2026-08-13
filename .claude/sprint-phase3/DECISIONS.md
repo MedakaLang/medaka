@@ -879,3 +879,223 @@ repair"* trap, in a harness written to preserve findings. Fixed (no `set -e`, wi
 in the file so nobody re-adds it) and re-run: **both findings reproduce, matching the recorded
 expectations exactly.** It is now a record rather than a claim — which is the audit's own template
 delta about probes whose verdict gates a decision.
+
+## RUN-P3-023 — `B-2.2-f` RE-CUT AGAIN: **no `csDeclared` field.** Three corrections to RUN-P3-015
+
+The `f` prep pass refuted the field half of RUN-P3-015 and I accepted it. **`f` = table plumbing
+plus one read accessor. Zero `CSlot` mint edits, no `data CSlot` change.**
+
+**The decisive fact — and it is one I had in hand and failed to use.** Three sites mint the route
+word `b1` must withhold identity from. Two hold `List CSlot`; **the third holds `List Int` and
+constructs no `CSlot` at all** — `realizeRecDictApps:20140` → `recRoutes:20145` →
+`resolveRecMono:20161`. RUN-P3-011 *names* that site as one of the ≥3 copy sites, and I still scoped
+the question to *"the two fill sites"* when I briefed it. **A `csDeclared` field serves 2 of 3 and
+leaves the recursive arm stamping identity on appended slots — the same "vacuous exactly where it
+must not be" failure that got options (1) and (2) rejected, wearing a different hat.** A per-entry
+count keyed by callee name serves all three, including the one with no slot record.
+Second, independent reason: a field must be minted by all four `CSlot` mints — including
+`pairSlots`, which **is** RUN-P3-010's defect. The field re-opens the hole the count was ruled in to
+close.
+
+**Scope ruling: `f` touches NEITHER fill site.** Plumbing + accessor + doctests only; the indexed
+read is `b1`'s, since `b1` is what stamps. This keeps `f` inert and provable by unmoved goldens — the
+same property that made `a` reviewable. The alternative (bind `k` at the fill sites, use it nowhere)
+is dead code that `fmt`/lint carry and review cannot judge.
+
+### Three corrections to RUN-P3-015, all DERIVED by the prep pass
+
+1. **The ratchet owes TWO rows, not four.** Check 2's allowlist is *computed from* check 1's
+   (`test/registry_keying_ratchet.sh:362`, `sed 's/^/crossRun.value./'`), so adding a field row
+   **automatically admits its writer**. My "four rows" was an assumption dressed as a derivation.
+2. **`:29056`/`:29088` are WRITERS, not "count-only readers"** — whole-table replacements built from
+   `scopeArities`, which has no prefix to give. They correctly owe no `k`, because **no fill site
+   runs after dict-pass** — and that is precisely why the prefix cannot be a mandatory column and the
+   absent state must be first-class.
+3. 🚨 **The write list is FIVE sites, not three. The omitted one decides whether `f` is real.**
+   `:14600-14612` — `promotedConstraints … funConstraintsRef` → `expandSupersCross` →
+   `setCrossFunConstraintTables` — is a whole-table write of the crossRun bare pair **and it is what
+   module 1 is seeded from**. Without a companion write, **every promoted cross-module callee reaches
+   every fill site with no recorded prefix and `f` ships vacuous** — the exact failure mode that
+   disqualified option (1). Note the expansion happens *after* the filter, so the recorded value must
+   be the **pre-expansion** count.
+
+### Fail-closed representation: `CDeclaredPrefix = CDPUnknown | CDPLen Int`
+
+**Not `0`, not `Option Int`.** `k = 0` is a genuinely reachable *recorded* state (`registerMember`
+guards on `ifaceMonos` being non-empty, **not** on `slots`), and `fromOption 0` is one idiomatic
+invisible token — the collapse RUN-B-013 condition 1 forbids by name, with `fromOption` at 99 uses in
+`compiler/`. `CDPUnknown` has no prelude eliminator and is a token found nowhere else in the tree, so
+*"is any site collapsing absence into a length?"* is one grep. **Same reasoning as AD-2's carrier
+ruling, arrived at independently, one bite over** — which is some evidence the reasoning generalizes.
+
+## RUN-P3-024 — I MEASURED the prep's two arithmetic traps. One is WITNESSED; one is not
+
+The prep named two ways `index < k` could mark an **appended** slot as declared, and flagged both as
+needing a build. Per the standing rule — *a prep question only a build can answer gets the build
+before dispatch* — I instrumented both sites in one build, then reverted.
+
+**Trap 1 — `dedupSlots` shrinks the declared prefix: 🔴 WITNESSED.**
+
+```
+twice : (Shw a, Shw a) => a -> Int          -- one tyvar, duplicated constraint
+runtime error [E-PANIC]: PROBE-F-M1 twice 2->1
+```
+
+Two declared slots collapse to one. **Recording `k = listLen slots` would mark the first APPENDED
+slot as declared — silently, in the unsafe direction.** ⇒ `k = listLen (dedupSlots slots)` is
+**mandatory with a witness**, not defensive, and the program above is a ready-made fixture.
+⚠️ It fired **nowhere** in a full `make medaka` (the entire compiler + stdlib through the
+typechecker): the shape is absent from the compiler's own corpus and reachable only from user source.
+**A test that only compiles the compiler cannot catch a regression here** — worth stating, because
+"the self-build is clean" is exactly the evidence someone would offer.
+
+**Trap 2 — `pairSlots` truncation: UNWITNESSED.** Did not fire on a full compiler build or on the
+two-module probe. Keep the `min k (listLen slots)` clamp (one token, free) and record it as
+defensive. ⚠️ RUN-P3-015 claimed a mismatch *"clamps loudly"* — **it does not; nothing clamps it
+today.** That was a third unverified claim in the same entry.
+
+**The probe was fail-capable and demonstrated it** — silent across the whole compiler, firing on a
+purpose-built control. A probe that never fires anywhere proves nothing, and this one was one
+positive control away from being exactly that.
+⚠️ Cost note for the next orchestrator: my first probe build failed on `/=`. **Medaka's inequality is
+`!=`** — I copied the prep's Haskell-ism without checking, and it cost a build cycle.
+
+## RUN-P3-025 — 🚨 `B-2.2-b1` IS TWO LINES. It has ZERO edits at the four `inst` arms
+
+**DERIVED by the `b1`+`e` prep pass, and it inverts the bite's stated size.** Every ruling in this
+sprint — D1's, RUN-P3-006's, RUN-P3-013's — describes `b1` as *"stamp identity at the four `inst`
+arms"*. **The four arms need no edit at all.** All four call `keyForSite` / `keyForSiteByIface`, and
+**the row selection and the collision gate are already inside those two functions**
+(`:18430-18455`, `:19110-19121`). The arms contain nothing but `fromOption tag (…)`.
+
+`b1`'s entire behavioural payload:
+
+```
+typecheck.mdk:18440   Some (implKeyTc ir.irName tys)
+  →                   Some (implRouteKeyWord ir.irOrigin ir.irName tys None)
+typecheck.mdk:19115   ditto
+```
+
+`ImplRow`'s third field is an `IfaceRef` carrying **both** `irName` and `irOrigin`, so **the origin is
+already in hand at both sites.** Consequences:
+
+- **RUN-P3-006's warning is correct about a design nobody now needs to build.** I ruled that *"`b1`
+  must carry the collision gate, not merely project"* — the gate is already carried; `b1` changes one
+  expression *after* it. There is no second `IE` traversal and RUN-B-023's +17% risk does not arise.
+  ⚠️ Left in the ledger deliberately: the warning was sound, its premise was not.
+- **RUN-P3-013's amendment is already implemented in the tree.** I ruled that `b1` must *"preserve
+  the concrete head tag on the no-row arm"*. `fromOption tag` **is** that preservation, already
+  written. The amendment was right and the edit it implied does not exist.
+- **D5/D6's element routes are untouched by construction** — `b1` edits neither, so `b2`'s
+  prohibition is honoured with no explicit guard. State it anyway: a future reader of a two-line diff
+  cannot see that it was considered.
+
+## RUN-P3-026 — the definition side is ONE function, and the safe commit split is by WORD, not by SIDE
+
+**`ir/core_ir_lower.mdk:61` imports `implKeyOf` from `eval.eval`.** So `core_ir_lower`'s two mint
+sites are *the same function* as eval's, not a third copy — **`e` is roughly half the size D1
+implies**, and the seam is one string family with exactly two producers (`implKeyTc` caller-side,
+`implKeyOf` definition-side).
+
+**⇒ A single atomic commit is NOT required.** The atomicity is not `b1`-vs-`e`; it is *the two
+origin-supplying edits*. Split by word **content**:
+
+1. **Commit 1 — mirror deletion, provably byte-identical.** Point both mints at
+   `route_key.implRouteKeyWord` passing `OriginUnresolved`; retire `rkEffAtom`'s lint directive
+   (RUN-P3-021 named `e` its owner). Byte-identical by `route_key`'s own compatibility doctests.
+   **Safe to build and publish.**
+2. **Commit 2 — the origin, both sides at once. ATOMIC.** A tree with only one half moved builds
+   clean, type-checks clean, and the skew is **invisible to every gate and live on the `RDict`
+   path**. `b1`'s two lines live here.
+
+### 🚨 `e` CHANGES A COLLISION VERDICT — and it means our byte-identical claim is FALSE as stated
+
+`ifaceDeclHeadUnique` → `declKeysAtHead` dedups by **canonical key**, so making the key
+identity-bearing changes that count. Two same-spelled interfaces in different modules, each with an
+impl at head `T`: today both keys are `"Speak|T|"` → dedup to one → `unique = True` → the definition
+side routes both under the bare tag, **while the caller side (`ieCountHeadByIface`, which counts
+ROWS) already sees 2 and stamps `"Speak|T|"`. That is a live skew today**, masked only by
+`implEntryRouteWords`' union arm. After the change the keys are distinct, `unique = False`, and the
+skew closes.
+
+⇒ **"byte-identical IR on programs with no head collision" is FALSE.** The defensible claim is
+*"…no head collision **and no two same-spelled interfaces in the module graph**."* This goes in the
+PR body; a green `diff_compiler_llvm` must not be read as proof of the wider claim.
+
+## RUN-P3-027 — `KeyEntry`'s key field has NO READER; `e` must NOT touch two of D1's sites
+
+`KeyEntry`'s 4th field is written by `keyEntryOf:18307` and `keyEntryOfRow:18962` (the latter in
+**neither** D1's nine nor `b1`'s four) and **read by nobody**: every destructuring in the file binds
+other fields, and `bucketKeyEntriesFrom` only rebuilds it. Independently DERIVED at field level, and
+consistent with RUN-P3-007's finding that the `keyTable` family is inert.
+
+⇒ **`e` skips both.** Editing them adds two origin-threadings with zero observable effect, enlarges
+the diff on the file whose snapshot and LEG A goldens are the most expensive to move, and
+manufactures the appearance that `implKeyTc` has four live callers when it has **two**.
+**M4 (below) is the fail-capable confirmation — the grep alone is not.**
+
+**The only real plumbing in `e`:** `lowerImplMethod` and `implMethodEntry` have **no origin
+parameter**; their callers (`lowerDeclImpl`, `declImplEntries`) do not bind `implOrigin`. That is what
+an implementer hits first.
+
+**A grep-driven edit to guard against:** `wasm_emit.mdk:4090-4094` defines a *different function that
+happens to share the name* `implKeyOf` (a local projection for `distinctImplKeys`). **Not a word
+mint. Do not touch.** And `core_ir_eval.mdk:455` is a **consumer** — it is owed a *test*, not a patch,
+which is worth stating because two rulings flag it as "the P0-9 shape omitted by P0-B" in a way that
+reads as an owed edit.
+
+## RUN-P3-028 — the `ppTy` fold IS constructible, and there is a FOURTH divergence
+
+`impl I (<Stdout> Int)` and `impl I (Eq a => a)` are **grammatically legal impl heads** — impl type
+arguments are parsed by the full type parser through a parenthesised atom. **The fold is not vacuous
+at the parser.** The discriminating program:
+
+```medaka
+interface Sz a where
+  sz : a -> Int
+impl Sz Int where
+  sz _ = 1
+impl Sz (<Stdout> Int) where
+  sz _ = 2
+main = println (sz 0)
+```
+
+Today, DERIVED by reading the printers: **eval collides both impls onto one `(tag, key)` pair**
+(`ppTyK` strips `TyEffect`; `headTycon` strips it too), so `findByTag`'s first-match scan makes
+**declaration order decide** — while the typechecker stamps `"Sz|<Stdout> Int|"`, a word **no
+definition-side entry carries**. Pointing eval's mint at `rkTy` de-collides the definition side.
+
+⚠️ **A FOURTH divergence, not previously recorded:** `eval.headTycon` strips `TyEffect`/
+`TyConstrained` to the inner head while `typecheck.headTyNode` does not — so even after the printers
+are unified **the two sides still disagree on the TAG.** That is RUN-P3-014's `_ => None` wildcard one
+substrate over. **`e` does not fix it; it goes in `unchecked:`.**
+
+Whether either program survives resolve/coherence/typecheck is **not derivable** — it is M1/M2 below.
+Both outcomes are complete answers, and a rejection makes the fold vacuous and `e` safe on this axis.
+
+## RUN-P3-029 — the headline fixture has NOWHERE TO LIVE
+
+`diff_compiler_llvm_typed_ir.sh` reads a **single-file** corpus; `diff_compiler_llvm_modules.sh`
+grades **native stdout** against an eval golden, with no `.ll` golden anywhere. **No existing corpus
+gives an IR golden for a multi-module program** — and the cross-module default-inheritance fixture
+`b1` owes is exactly that. An owed design decision, not a fixture drop.
+⚠️ A **new** `test/*.sh` trips the CI shard-coverage gate unless a shard pattern in `ci.yml` matches
+it. Cheapest option: extend `diff_compiler_llvm_modules.sh` with an optional `entry.ll.golden`
+sibling, adding no new gate file.
+
+## RUN-P3-030 — my `sanitizeId` example was WRONG, and the prep refused it
+
+I wrote (RUN-P3-019) that `a::Alpha|T|` → `a__Alpha_T_` collides with module `a_` + interface
+`_Alpha`. **It does not:** `safeChar` maps each offending character to a **single** `_`, so `a_` +
+`_Alpha` gives `a_::_Alpha|T|` → `a____Alpha_T_` — four underscores, no collision. The prep refused
+to relay it and derived the real hazard instead:
+
+**Module ids are loader-derived PATHS, and `.`, `/`, `-` all sanitize to `_`** — so
+`a.b::Alpha|T|`, `a/b::Alpha|T|` and `a-b::Alpha|T|` **all** sanitize to `a_b__Alpha_T_`. A
+pre-existing shape at *module* granularity that `e` newly exposes at *interface* granularity. And
+the runtime word is `hashName key` (djb2), a **second, independent collision channel** that
+`sanitizeId` reasoning does not cover at all.
+
+**That is the third time this session a fabricated-but-plausible example of mine was caught by the
+agent I handed it to.** The pattern is consistent: the *hazard* was real each time and the *instance*
+I invented to illustrate it was not.
