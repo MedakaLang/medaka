@@ -680,7 +680,25 @@ jobs:
             # compiled-probe gate parked here for cost: this shard already builds
             # the adjacent Core/elaboration probes, so its marginal build joins the
             # existing parallel oracle batch rather than becoming a serial oracle.
-            pattern: "'diff_compiler_eval*' 'diff_compiler_core_ir*' 'diff_compiler_dispatch_shape' 'diff_compiler_prelude_obj' 'diff_compiler_slice_oob' 'diff_compiler_ir_size' 'diff_compiler_origin_agreement' 'diff_compiler_draft_semantic' 'diff_compiler_anf_identity' 'diff_compiler_import_order' 'diff_compiler_test_native' 'bootstrap_lex' 'bootstrap_resolve' 'bootstrap_typecheck' 'bootstrap_eval'"
+            #
+            # 'diff_compiler_flat_vs_onemodule' (ARCH B-2.1-a, Stage B sprint) is a
+            # TYPECHECK gate here for the same cost reason, fifth time over. Its
+            # thematic home is `types`, which is the SECOND-heaviest shard. Derived
+            # 2026-08-13 from two consecutive green merge_group runs (31655422530 and
+            # 31653614351) rather than trusted from any note in this tree — the shard
+            # walls were eval 149/151s, backend 165/160s, sqlite 185/191s, tools
+            # 202/213s, frontend 289/291s, types 322/324s, engines 373/364s. So
+            # `eval` is the cheapest shard on BOTH runs and `engines` is the POLE,
+            # which is the opposite of what the Stage B brief carried forward; the
+            # numbers rot, re-derive them before moving this line:
+            #   gh run view <id> --json jobs --jq '.jobs[]|select(.name|startswith("gates"))
+            #     |"\(((.completedAt|fromdate)-(.startedAt|fromdate)))s \(.name)"'
+            # It also lands beside its nearest sibling by SHAPE:
+            # diff_compiler_import_order, which likewise grades whether acceptance
+            # depends on import arrangement. It reads NO test/bin oracle and needs no
+            # clang or emitter — only ./medaka, 9 `check`/`run` invocations over
+            # generated tmp fixtures, measured 5.0s wall on the dev box.
+            pattern: "'diff_compiler_eval*' 'diff_compiler_core_ir*' 'diff_compiler_dispatch_shape' 'diff_compiler_prelude_obj' 'diff_compiler_slice_oob' 'diff_compiler_ir_size' 'diff_compiler_origin_agreement' 'diff_compiler_draft_semantic' 'diff_compiler_anf_identity' 'diff_compiler_import_order' 'diff_compiler_test_native' 'diff_compiler_flat_vs_onemodule' 'bootstrap_lex' 'bootstrap_resolve' 'bootstrap_typecheck' 'bootstrap_eval'"
           - name: backend
             # 'build_cmd' (T8): THE end-to-end gate for the SHIPPING `medaka build` CLI —
             # 14 real programs built through the actual CLI, each binary's stdout diffed

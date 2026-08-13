@@ -315,3 +315,66 @@ unchecked:    `make docs-links` and `make agent-doc-symbols` (both cheap, both g
 both out of scope for me — please run them). The §11 citation audit above. Whether
 `docs/README.md` needs regenerating: **no** — no `**Status:**` banner was touched.
 
+
+---
+
+### B-2.1-a1 — Phase 2′ (B-2.1 precondition) — build the Flat-vs-Module grader before the change it grades
+
+sites:        `test/diff_compiler_flat_vs_onemodule.sh` (NEW, +x, 9 rows / 3 cases) ·
+`compiler/types/typecheck.mdk:14112-14119` (comment only; +8/-2) ·
+`.github/workflows/ci.yml` (eval shard: +`diff_compiler_flat_vs_onemodule` + cost derivation) ·
+`test/DOC-LINK-EXCEPTIONS.txt:174` (REF reason rewritten, **NOT deleted** — see below)
+
+transform:    Added the instrument RUN-B-017 called missing, under the discoverable
+`diff_compiler_*` name so `run_gates.sh`'s default pattern reaches it. It **PINS** the FLAT arm's
+acceptance + diagnostic `code` per case (hand-derived from DICT §8 I5 / §3, **not captured**) and
+grades the FLAT-vs-MODULE relation only via *"every ACCEPTING arm must compute the same value"* —
+true on both sides of the #1564 fix. #1564's own row is CHARacterized (correct answer + today's
+answer + a third-state FAIL), so the drain stays with the must-fail suite, unduplicated.
+
+could move:   **NOTHING in compiler behaviour.** The only compiler-source byte changed is a
+comment inside `elaborateOne`'s header; `fmt --write` reported *"already formatted"* and `lint` 0
+findings, so no reflow reached code. The `ci.yml` and ledger edits are not compiled.
+⚠️ **What DOES move:** the snapshot golden `test/snapshots/compiler/typecheck.md`, because the
+compiler's own source is in the snapshot corpus and a comment edit shifts every line below it (+6
+net). Per §5/§7 that corpus is expected-red for the run and **nothing was blessed**.
+
+nearest miss: The nearest program this gate does **NOT** cover is one where the FLAT arm's
+**EMITTED EVIDENCE** is wrong while its **ACCEPTANCE** is right. The `value` column comes from
+`medaka run`, which takes the **MODULE** arm even on a single no-import file (the `elaborateOne`
+1-module wrapper), so **no value here is a FLAT-arm observation** — the FLAT arm is graded on
+acceptance + diagnostics ONLY. A FLAT-arm value needs `llvm_emit_typed_main` /
+`wasm_emit_typed_main` (the `elaborateDict` entries), which are `test/bin` compiled probes,
+excluded so this gate reads no oracle. Today that program behaves correctly (the flattened #1564
+accepts and prints `wrap(int)` through `run`), but **a B-2.1 change that seats a NARROWER Flat
+`ImplEnv` — right acceptance, wrong selected impl — would pass all 9 rows.** That gap belongs to
+a Phase 3′/5 emitted-IR differential and is stated in the gate header under *"WHAT THIS GATE
+CANNOT SEE."*
+Second nearest miss, **tested**: FLAT decl ORDER. Both declaration orders of the flattened #1564
+are rows (`flat_nest_first` / `flat_impl_first`) and both accept, so the gate would see a FLAT arm
+that became order-sensitive.
+
+engines:      **NONE MOVED, and the reason rather than the word:** this bite adds no compiler code
+— the only `.mdk` byte is a comment — so none of the four arms (LLVM · wasm · eval ·
+`core_ir_eval.mdk`) can have changed behaviour, and no peer arm is owed. Nor does the gate
+**OBSERVE** any of the four: it drives `check` (typecheck front end, both `CheckMode` arms) and
+`run` (the eval arm, incidentally, for the value column only). It is therefore **blind to an
+LLVM/wasm/core_ir_eval divergence by construction** — cross-engine agreement on these shapes is
+`diff_compiler_engines`' job, deferred to the repair round, and **this gate must not be read as
+covering it.**
+
+unchecked:    (1) The snapshot golden above — deliberately not re-derived, not blessed.
+(2) `selfcompile_fixpoint` — not run by the implementer (no compiled byte changed); **the
+orchestrator ran `check-self` → PASS** and judged the fixpoint unnecessary for a comment.
+(3) **The gate has never been run against a binary in which the FLAT arm is actually broken** —
+that binary does not exist yet, which is the point of building the grader first. Fail-capability
+was instead proven by mutating one expectation at a time in a COPY (**6/6 RED**, incl. the
+FLAT-pinned-REJECT regression direction and the value-agreement clause) plus a simulated
+DRAIN-NOTICE pass. So the **failure mechanics** are verified; the **specific future regression**
+is not, and cannot be until `B-2.1-a2` lands.
+(4) **macOS:** not executed there (no macOS host). Portability by construction — dash-clean under
+`sh`, the `perl`/`alarm` shim (reports **142**, not 124), octal-safe `printf` only, no `sed -i`,
+no GNU-only flags.
+(5) The two-arm `MEDAKA=` override path is implemented and was exercised only via the
+fail-capability harness and a nonexistent-binary probe (exit 2), **not** against a genuine second
+worktree.

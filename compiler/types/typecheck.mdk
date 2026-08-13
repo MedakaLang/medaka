@@ -14109,8 +14109,14 @@ unifyClauses env v ((pats, body)::rest) =
 -- (`preludeReturnPosDictNames livePrelude combined ++ constrainedSigNames userDecls`,
 -- the FULL constrained-sig set).  This wrapper takes `coreDecls` SEPARATE (not
 -- pre-flattened into prog), exactly as elaborateModules expects, and lets the
--- module path own the dict-set.  diff_flat_vs_onemodule.sh exists to CHARACTERIZE
--- where that difference (and the eval install order) actually changes OUTPUT.
+-- module path own the dict-set.  ⚠️ This line asserted that diff_flat_vs_onemodule.sh
+-- "exists" until 2026-08-13; it did not.  That was a TEMPORARY Phase-0 equivalence
+-- harness, DELETED with the rest of the Phase-5 scaffolding (DRIVER-COLLAPSE-PLAN.md,
+-- Phase 5), and its property was flat-vs-1-module BYTE-IDENTITY, not this one.  The
+-- live grader is test/diff_compiler_flat_vs_onemodule.sh (ARCH B-2.1-a): it PINS the
+-- Flat arm's own acceptance and diagnostics, and grades the Flat-vs-Module relation
+-- only through a clause true on both sides of the #1564 fix — every arm that ACCEPTS
+-- must compute the same value.  Read its header before changing either arm.
 export elaborateOne : List Decl -> List Decl -> (String, List Decl) -> List Decl
 elaborateOne runtimeDecls coreDecls (rootId, prog) =
   let (coreD, modules) = elaborateModules runtimeDecls coreDecls [(rootId, prog)]

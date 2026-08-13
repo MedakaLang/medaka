@@ -1172,4 +1172,135 @@ itself — still writes `§4.2 D1–D6`, the spelling `DICT-SEMANTICS.md:790` fo
 
 ---
 
-*(Phase 1 bite rows are in `DEBT.md`. Phase 2′ opens next.)*
+## RUN-B-020 — ✅ `B-2.1-a1` LANDED: the grader exists **before** the change it grades. Two of my errors corrected.
+
+`test/diff_compiler_flat_vs_onemodule.sh` — new, 9 rows / 3 cases, **5.0 s**, no `test/bin` oracle,
+no clang, no emitter. Fixtures generated into one `mktemp -d` **per process** (so it enrols no
+shared corpus — the shared-corpus trap avoided by construction), honours `MEDAKA=` for two-arm
+differentials, dash-clean, `perl`/`alarm` timeout shim.
+
+**Verified independently by me, not accepted from the report:**
+
+| check | result |
+|---|---|
+| `sh test/diff_compiler_flat_vs_onemodule.sh` | ✅ exit 0 — `checked 9 rows (0 drain notice(s))`, *"the FLAT arm holds its pinned answers; accepting arms agree on values"* |
+| `sh test/diff_compiler_ci_shard_coverage.sh` | ✅ exit 0 — *"every gate is in exactly one CI shard (0 missing, 0 duplicated)"* |
+| `make docs-links` | ✅ exit 0, **0** DEAD |
+| `make check-self` | ✅ PASS |
+
+### ⭐ The assert choice — its argument is sharper than either option I offered
+
+I framed the choice as agree-on-acceptance (red on arrival) vs must-disagree (enshrines the bug).
+**The implementer found the decisive objection to the first, which is neither of those:**
+
+> **"It goes GREEN on the exact regression the gate exists to catch."** If B-2.1 repoints the
+> reader onto an empty Flat `IE` and FLAT drops to the MODULE arm's rejection, **the arms agree and
+> the gate passes.** *"An assertion satisfied by the failure it guards is not an instrument."*
+
+**That is the whole discipline in one sentence**, and it is a better reason than "red on arrival."
+Chosen instead: **pin the FLAT arm's own answers** (hand-derived from DICT §8 I5 / §3, *not*
+captured), and grade the relation only through a clause **true on both sides of the #1564 fix** —
+*"every arm that ACCEPTS must compute the same value."* That clause is the miscompile catcher, and
+it is exactly the state #1564's own `claim.txt` records between A-3.6 and Door 4 (`check` exit 0,
+built binary **exit 139**) — a state acceptance-agreement would have called green.
+
+`must-disagree` was also rejected for a second reason I had not considered: **#1564 already has
+that pin** in the must-fail suite, so duplicating it means two graders to re-derive on one fix.
+
+Rows are `PIN` or `CHAR`; a `CHAR` row carries **both** the correct answer and today's answer —
+today's passes with a note, the correct answer passes with a **DRAIN NOTICE** naming #1564, and a
+**third** answer **FAILS**. So *"something else broke"* can never read as *"still broken"* or
+*"fixed."* Both a **positive** control (`all_visible`) and a **negative** control
+(`no_impl_anywhere`, both arms `T-NO-IMPL`) — without the negative one, an always-accept regression
+would pass every other row.
+
+⭐ **Fail-capability PROVEN, not asserted:** six independent single-expectation mutations of a
+**copy**, each RED — including **FLAT pinned to REJECT, the actual regression direction** — plus
+exit 2 on a missing binary and a simulated drain-notice pass.
+
+### 🚨 MY ERROR 1 — instruction 4 contradicted my own naming ruling. Correctly refused.
+
+I told the implementer to **delete** the `REF test/diff_flat_vs_onemodule.sh` row from
+`test/DOC-LINK-EXCEPTIONS.txt`, on RUN-B-019's reasoning that it would self-drain. **It refused, and
+measured why:** with the row removed, `make docs-links` exits **2** with `dead: 2` —
+`.claude/sprint-b/DECISIONS.md` and `phase0/P0-Q-probes.md` **still cite the old path**, and neither
+is the implementer's to rewrite.
+
+**Both drain directions I predicted are VOID, and my own naming ruling is what voided them:**
+**ORPHAN REF** cannot fire (the path is still cited); **STALE REF** cannot fire either, because I
+ruled the successor gets a **different name**, so the old path stays legitimately dead. *My two
+instructions were mutually inconsistent and I did not notice.*
+
+It **rewrote the row's reason** instead — which the ledger's own ORPHAN-REF doctrine demands, since
+*a reason that has become a lie is precisely what that check exists to prevent.* The reason now
+records the true history, that Phase 2′ discharged its ownership, that neither predicted drain
+applies, that deletion **fails** the gate, and the row's **real** drain condition (ORPHAN REF once
+these sprint records are archived).
+
+### 🚨 MY ERROR 2 — I repeated a stale number out of `AGENTS.md` instead of deriving it
+
+My brief told the implementer *"`engines` is the cheapest heavy shard."* **False.** It derived the
+truth from two consecutive green `merge_group` runs and put the gate in **`eval`** instead.
+**I re-verified on `31655422530` rather than accept the correction:**
+
+`engines` **373s (POLE)** · `types` 322 · `frontend` 289 · `tools` 202 · `sqlite` 185 · `backend`
+165 · `eval` **149s (CHEAPEST)**.
+
+I had copied `AGENTS.md`'s *"`gates (types)` was the pole and `engines` the cheapest heavy shard"* —
+**a claim sitting two lines above that file's own warning "Numbers here rot — read them off a run
+instead," followed by the exact command.** I quoted the number and skipped the command.
+
+**Root cause fixed, not just noted:** `AGENTS.md` now states that its shard-cost ranking has been
+wrong **three times**, records that the ranking **INVERTED** (explicitly *"to show the ranking
+inverted, not for you to reuse"*), and puts the derivation command in the load-bearing position.
+
+### Three further corrections the implementer derived
+
+1. **The missing gate was NOT a phantom — it was deliberately DELETED.**
+   `compiler/DRIVER-COLLAPSE-PLAN.md` Phase 5 (2026-06-13) lists `diff_flat_vs_onemodule.sh` among
+   scaffolding it removed, **and its property was flat-vs-1-module BYTE-IDENTITY** — not what
+   `B-2.1-a` needs. So RUN-B-017's framing ("asserts a tool that is not there") was right about the
+   symptom and **incomplete about the cause**: the comment is a *survivor of a deletion*, not a
+   fabrication. `typecheck.mdk`'s comment now says that, rather than merely swapping a filename.
+2. ⭐ **The gate caught a bug in ITSELF, and it generalizes.** Its first draft merged `2>&1` on the
+   value read; the moment its own `typecheck.mdk` comment edit made `./medaka` stale, **the stderr
+   staleness warning became line 1 of stdout** and six accepting rows went red — **build freshness
+   masquerading as a semantic finding**, which is #1421's exact shape. Streams are now split and the
+   rule is in the header. **This is the stdout/stderr trap biting a gate author rather than a probe
+   author**, and it is why that warning's channel is load-bearing.
+3. ⭐ **A false corpus-consumer edge, which could have certified an uncovered corpus.** A path
+   literal inside a live *message string* made `test/preflight.sh` credit the gate as a **consumer
+   of `test/must_fail_fixtures`** — its `_refs` derivation strips comments but **not strings**. That
+   false edge would be **inherited by `diff_compiler_fixture_corpus_coverage.sh`** and could be used
+   to certify that corpus as covered when this gate does not read it. Literal removed; re-derived
+   with `PREFLIGHT_DRY=1` to confirm the edge is gone. **Worth remembering as a shape:** a
+   coverage-derivation tool that greps strings can be *fed* a fake edge by ordinary prose.
+
+### What this bite deliberately does NOT cover (from its `nearest miss:`, and it is the honest gap)
+
+**No value in the gate is a FLAT-arm observation.** The `value` column comes from `medaka run`,
+which takes the **MODULE** arm even for a single no-import file (the `elaborateOne` 1-module
+wrapper), so the FLAT arm is graded on **acceptance + diagnostics only**. A FLAT-arm *value* needs
+`llvm_emit_typed_main`/`wasm_emit_typed_main`, which are compiled `test/bin` probes, excluded so
+this gate reads no oracle.
+
+**Consequence, stated so `B-2.1-a2` cannot hide behind a green gate:** a change that seats a
+**NARROWER** Flat `ImplEnv` — **right acceptance, wrong selected impl** — passes all 9 rows. That
+gap belongs to a Phase 3′/5 emitted-IR differential and is recorded in the gate's own header under
+*"WHAT THIS GATE CANNOT SEE."* **`B-2.1-a2` must therefore be graded on emitted evidence too, not
+on this gate alone.**
+
+Second nearest miss, and it *is* covered: **FLAT declaration ORDER** — both orders of the flattened
+#1564 are rows, so an order-sensitive FLAT arm would be caught.
+
+### Deferred debt
+
+`test/snapshots/compiler/typecheck.md` moves (+6 net) — the compiler's own source is in the snapshot
+corpus and even a **comment** edit shifts every line below it. **Blessed by nobody**, per §5.
+Fixpoint/`check-self` were not re-run by the implementer (correctly — no compiled byte changed);
+**I ran `check-self` anyway: PASS.** I did **not** re-run the fixpoint, because a comment cannot
+change emitted IR and it was green at `03ef6c47` two commits ago.
+
+---
+
+*(Phase 2′ continues: `B-2.1-a2` seats the Flat `ImplEnv`, graded by this gate AND on emitted evidence.)*
