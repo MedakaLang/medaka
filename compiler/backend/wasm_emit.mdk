@@ -6381,7 +6381,7 @@ emitArgsArray prog env d args =
 -- destination cell instead of issuing the stack-growing recursive call.  The
 -- destination-passing context (the self-ref, arity, the param locals, the loop/exit
 -- labels, the uniform cell struct name + recursive-field index) is carried in a
--- module-level ref so the existing tail-descent (emitRefTail / emitDecisionTail) can
+-- per-emission `WasmEmit.trmcCtx` field so tail descent (emitRefTail / emitDecisionTail) can
 -- redirect its cons/ctor/base leaves without threading a new argument through every arm.
 -- The ENGINE never sees a recursive `call`/`return_call` to the self fn inside the loop
 -- (the decisive "TMC fired" property): a cons/ctor leaf builds a cell, struct.sets it

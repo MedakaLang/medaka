@@ -418,7 +418,7 @@ run_trmc_state_check() {
       echo "FAIL H2B6-WTRMC-P-SHAPE: wasm-tools validate $trmc_name"
       exit 1
     }
-    grep -F "i32.const $trmc_expected" "$trmc_wat" >/dev/null || {
+    grep -F "i32.const $trmc_expected" "$INPUT_WORK/trmc-$trmc_name.body" >/dev/null || {
       echo "FAIL H2B6-WTRMC-P-SHAPE: $trmc_name missing named result marker $trmc_expected"
       exit 1
     }
