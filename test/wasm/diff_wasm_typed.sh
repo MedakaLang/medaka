@@ -682,6 +682,84 @@ fi
 INPUT_WORK="$(mktemp -d)"
 trap 'rm -rf "$INPUT_WORK"' EXIT
 
+# A0 capture-only apparatus. It fixes P/U/census ordering and executable controls
+# before A1–A4 assert any ownership transfer. P's prospective feature routes are
+# uncalled, so every normal module remains inert and prints 0.
+feature_capture() {
+  awk -v begin="$1" -v end="$2" '
+    $0 == begin { seenBegin++; capture = 1; next }
+    $0 == end { seenEnd++; capture = 0; next }
+    capture { print }
+    END { if (seenBegin != 1 || seenEnd != 1) exit 1 }
+  ' "$3"
+}
+feature_exact_capture() {
+  local begin="$1" end="$2" file="$3" begins ends
+  begins="$(grep -Fxc "$begin" "$file" || true)"
+  ends="$(grep -Fxc "$end" "$file" || true)"
+  [ "$begins" -eq 1 ] && [ "$ends" -eq 1 ] || return 1
+  feature_capture "$begin" "$end" "$file"
+}
+
+"$EMITBIN" --reemit-feature-state >"$INPUT_WORK/feature.out" 2>"$INPUT_WORK/feature.err"
+FEATURE_STATUS=$?
+[ "$FEATURE_STATUS" -eq 0 ] && [ ! -s "$INPUT_WORK/feature.err" ] || {
+  echo "FAIL A0-FEATURE-CAPTURE: harness status/stderr"
+  exit 1
+}
+FEATURE_MARKERS="$(awk '/^FEATURE_(P1|RECORD_U|CENSUS_U_GAP|P2)_(BEGIN|END)$/ { print }' "$INPUT_WORK/feature.out")"
+FEATURE_EXPECTED_MARKERS="$(printf 'FEATURE_P1_BEGIN\nFEATURE_P1_END\nFEATURE_RECORD_U_BEGIN\nFEATURE_RECORD_U_END\nFEATURE_CENSUS_U_GAP_BEGIN\nFEATURE_CENSUS_U_GAP_END\nFEATURE_P2_BEGIN\nFEATURE_P2_END')"
+[ "$FEATURE_MARKERS" = "$FEATURE_EXPECTED_MARKERS" ] || {
+  echo "FAIL A0-FEATURE-CAPTURE: marker cardinality/order"
+  exit 1
+}
+feature_exact_capture FEATURE_P1_BEGIN FEATURE_P1_END "$INPUT_WORK/feature.out" >"$INPUT_WORK/feature-p1.wat" &&
+  feature_exact_capture FEATURE_RECORD_U_BEGIN FEATURE_RECORD_U_END "$INPUT_WORK/feature.out" >"$INPUT_WORK/feature-u.wat" &&
+  feature_exact_capture FEATURE_CENSUS_U_GAP_BEGIN FEATURE_CENSUS_U_GAP_END "$INPUT_WORK/feature.out" >"$INPUT_WORK/feature-census.events" &&
+  feature_exact_capture FEATURE_P2_BEGIN FEATURE_P2_END "$INPUT_WORK/feature.out" >"$INPUT_WORK/feature-p2.wat" || {
+    echo "FAIL A0-FEATURE-CAPTURE: malformed capture"
+    exit 1
+  }
+for feature_file in feature-p1.wat feature-u.wat feature-census.events feature-p2.wat; do
+  [ -s "$INPUT_WORK/$feature_file" ] || {
+    echo "FAIL A0-FEATURE-CAPTURE: empty $feature_file"
+    exit 1
+  }
+done
+cmp -s "$INPUT_WORK/feature-p1.wat" "$INPUT_WORK/feature-p2.wat" || {
+  echo "FAIL A0-FEATURE-CAPTURE: P changed after record U and census"
+  exit 1
+}
+cmp -s "$INPUT_WORK/feature-p1.wat" "$INPUT_WORK/feature-u.wat" && {
+  echo "FAIL A0-FEATURE-CAPTURE: P/U positive control did not differ"
+  exit 1
+}
+FEATURE_EVENT="fn featureIntentionalGap	unbound variable 'missingFeatureCensus' (not a local, global value, constructor, or known function) [in featureIntentionalGap]"
+[ "$(wc -l < "$INPUT_WORK/feature-census.events")" -eq 1 ] &&
+  [ "$(cat "$INPUT_WORK/feature-census.events")" = "$FEATURE_EVENT" ] || {
+    echo "FAIL A0-FEATURE-CAPTURE: exact census event"
+    exit 1
+  }
+printf '0\n' >"$INPUT_WORK/feature-expected.out"
+for feature_name in p1 u p2; do
+  feature_wat="$INPUT_WORK/feature-$feature_name.wat"
+  wasm-tools parse "$feature_wat" -o "$INPUT_WORK/feature-$feature_name.wasm" || {
+    echo "FAIL A0-FEATURE-CAPTURE: wasm-tools parse $feature_name"
+    exit 1
+  }
+  wasm-tools validate --features=all "$INPUT_WORK/feature-$feature_name.wasm" || {
+    echo "FAIL A0-FEATURE-CAPTURE: wasm-tools validate $feature_name"
+    exit 1
+  }
+  "$NODE" "$RUNJS" "$INPUT_WORK/feature-$feature_name.wasm" >"$INPUT_WORK/feature-$feature_name.run.out" 2>"$INPUT_WORK/feature-$feature_name.run.err"
+  FEATURE_RUN_STATUS=$?
+  [ "$FEATURE_RUN_STATUS" -eq 0 ] && [ ! -s "$INPUT_WORK/feature-$feature_name.run.err" ] &&
+    cmp -s "$INPUT_WORK/feature-expected.out" "$INPUT_WORK/feature-$feature_name.run.out" || {
+      echo "FAIL A0-FEATURE-CAPTURE: inert execution $feature_name"
+      exit 1
+    }
+done
+
 # Sprint 01 current-binding capture apparatus. The expected events and strict
 # diagnostics pin the emission-owned authority and its two write routes.
 cbind_capture() {
