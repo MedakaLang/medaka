@@ -370,6 +370,11 @@ grep -F 'let _ = if name == "hashFloat" then let _ = setRef emit.useFloatHash Tr
   echo "FAIL H2B10-FLOAT-HASH-ROUTES: writer, reader, or retired reset changed"
   exit 1
 }
+[ "$(grep -F 'setRef emit.useFloatHash True' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
+  [ "$(grep -F '(progEmit prog).useFloatHash.value' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] || {
+  echo "FAIL H2B10-FLOAT-HASH-ROUTES: expected one hashFloat writer and reader"
+  exit 1
+}
 grep -F 'emitProgram input cp = emitProgramWith (freshWasmEmit WGapStrict) input cp' "$WASM_SRC" >/dev/null &&
   [ "$(grep -F 'let emit = freshWasmEmit WGapRecord' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 2 ] || {
   echo "FAIL H2B10-FLOAT-HASH-ROUTES: strict, record, census freshness routes changed"
