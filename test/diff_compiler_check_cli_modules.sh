@@ -2414,13 +2414,26 @@ fi
 #     `call @mdk_impl_Tag__Wrap_a___tagOf(i64 %t2)`: an arity-2 define called with ONE
 #     argument, the value cell landing in the dict slot, hence the 139).
 # So the pair is the discriminator, and the route word is what makes them agree.
+#
+# ⚠️ THE SYMBOL IS NOW MODULE-QUALIFIED, AND BOTH GREPS TOLERATE THAT DELIBERATELY.
+# ARCH B-2.2-b1/e made the impl route word carry the interface's origin, so this callee
+# went from `@mdk_impl_Tag__Wrap_Int___tagOf` to `@mdk_impl_iface__Tag__Wrap_Int___tagOf`.
+# The old LITERAL grep found nothing and this leg reddened in CI with an empty capture,
+# which reads exactly like "the specific impl is not the callee" — i.e. like a dispatch
+# regression. It was not: measured at that commit, both orders BUILD, both binaries print
+# `wrap-int-specific`, and the two IRs are BYTE-IDENTICAL.
+# The patterns below therefore allow an optional `<module>__` prefix and NOTHING ELSE.
+# Both load-bearing halves are intact: the `(i64 %x)$` anchor still pins ARITY 1 (a
+# one-argument call at end of line), and `Wrap_Int` still pins the SPECIFIC impl over the
+# general `Wrap_a` one. Do not relax either to silence a future red — a red here means
+# the orders diverged or the general impl won, and both are the S0 this leg exists for.
 if [ ! -f "$TMP/sa4c.main.bin.ll" ] || [ ! -f "$TMP/sa4c.control.bin.ll" ]; then
   fail=$((fail+1)); printf 'FAIL SA-4c/route-word-order-invariant (no IR kept — build refused, see the leg above)\n'
 elif diff "$TMP/sa4c.main.bin.ll" "$TMP/sa4c.control.bin.ll" >/dev/null 2>&1 \
-  && grep -q 'call i64 @mdk_impl_Tag__Wrap_Int___tagOf(i64 %[a-z0-9]*)$' "$TMP/sa4c.main.bin.ll"; then
+  && grep -qE 'call i64 @mdk_impl_[A-Za-z_0-9]*Tag__Wrap_Int___tagOf\(i64 %[a-z0-9]*\)$' "$TMP/sa4c.main.bin.ll"; then
   pass=$((pass+1)); printf 'ok   SA-4c/route-word-order-invariant (both orders IR-identical; arity-1 specific impl called)\n'
 else
-  sa4c_site="$(grep -o 'call i64 @mdk_impl_Tag__Wrap[A-Za-z_0-9]*(i64[^)]*)' "$TMP/sa4c.main.bin.ll" | head -2 | tr '\n' ' ')"
+  sa4c_site="$(grep -oE 'call i64 @mdk_impl_[A-Za-z_0-9]*Tag__Wrap[A-Za-z_0-9]*\(i64[^)]*\)' "$TMP/sa4c.main.bin.ll" | head -2 | tr '\n' ' ')"
   fail=$((fail+1)); printf 'FAIL SA-4c/route-word-order-invariant (IR differs between import orders, or the specific impl is not the arity-1 callee: [%s])\n' "$sa4c_site"
 fi
 
