@@ -29,7 +29,9 @@ sites:        `compiler/types/route_key.mdk` (NEW, 374 lines — 3 exports, 6 pr
 transform:    Minted, at zero call sites: `ifaceWordOf` (`module::Iface`, falling back to the bare
               name on both absent-origin arms), `implRouteKeyWord` (the existing
               `iface|args|method` wire format, with the iface half swapped for the qualified word
-              when an origin exists — #1182's fix, AVAILABLE and APPLIED NOWHERE), `routeWordFor`
+              when an origin exists — the #1047/#1265 route-word residual (#1113); NOT #1182, whose
+              interface-free candidate key no word substitution reaches — AVAILABLE and APPLIED
+              NOWHERE), `routeWordFor`
               (`declRouteKey`'s body and `keyForSite`'s collision branch, unified behind a
               caller-supplied verdict), and `rkTy`/`rkTyFunArg`/`rkTyAtom` (one prec-2 `Ty`
               printer, based on typecheck's `ppTy` — the more complete of the two mirrors).
@@ -48,7 +50,8 @@ nearest miss: The nearest program this does not cover is EVERY program — there
               no route word in the tree is produced by this module yet. Concretely: a two-module
               program where `a.mdk` and `b.mdk` each declare `interface Speak` and each impl it for
               the same head still routes on the bare word `Speak|T|` today, exactly as before this
-              bite; #1182 is not fixed until a later bite points `implKeyTc`/`implKeyOf` here. The
+              bite; the #1047/#1265 residual (#1113) is not closed until a later bite points
+              `implKeyTc`/`implKeyOf` here. (#1182 is NOT addressed by any of it.) The
               nearest thing this module could get wrong but does not: on the loader-less path
               (`medaka check <single file>`, lsp, repl, doc, lint, snapshot) a RAW `ifaceIdentity`
               would spell `"|T|"` for every interface and collapse instances the present bare-name

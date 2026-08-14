@@ -48,7 +48,12 @@ flagged as historically omitted (the P0-9 shape) — **is present** and mirrors 
 sibling purpose (#1047 default-body qualification / `ifaceIdsAtTag`). It is the **key mint** that
 never sees it: `implKeyOf`/`implKeyTc` take a bare `String` iface and the word begins with the bare
 name by construction. So identity is not "lost" — it is **present and unthreaded**, which is
-#1182's mechanism and makes `e`'s substitution local rather than a plumbing job.
+the **#1047/#1265** route-word residual's mechanism (citable ticket: **#1113**) and makes `e`'s
+substitution local rather than a plumbing job.
+⚠️ **CORRECTED (RUN-P3-036).** This sentence originally said *"#1182's mechanism"* and is the
+**earliest instance** of a nine-place propagation. #1182's mechanism is stated in its own issue body:
+*"`matchingEntries` selects candidates by method-name membership, not by interface."* That selection
+never consults the route word.
 
 ### 🚨 FINDING — D1's nine-site list is INCOMPLETE, and the two extra sites are in files §9 says we do NOT own
 
@@ -104,6 +109,11 @@ drift. **No stop-the-sprint condition.** Also confirmed first-hand, not relayed:
 
 ## RUN-P3-005 — 🚨 RULING: `B-2.2-a`'s blast radius vs §9's ownership list
 
+> 🚨 **PARTIALLY SUPERSEDED by RUN-P3-019.** Parts 2 and 3 are **moot** — there is no payload type
+> change, so no carrier and no S-expr work; and part 1's lending of the six non-owned files is **not
+> exercised by `a`**. The blast-radius *derivation* (25 sites / 9 files) stands and was independently
+> re-verified cell-by-cell by the referee.
+
 **The finding (DERIVED).** `Route` is consumed **positionally, tree-wide**. Word-bounded
 `grep -rn '\bRKey\b' compiler/ --include=*.mdk` (comments dropped) — an unbounded pattern also
 matches `CRKey` and inflates every number below:
@@ -143,6 +153,11 @@ it is ruled here rather than worked around silently.
    and states in `unchecked:` what the round-trip parser does or does not accept.
 
 ## RUN-P3-006 — CORRECTION to sprint §3 item 2: `keyForSite` is not a pure projection
+
+> 🚨 **SUPERSEDED IN ITS CONSEQUENCE by RUN-P3-025.** The observation is correct — `keyForSite` runs
+> a second `IE` query — but the instruction it produced (*"`b1` must carry the collision gate"*) is
+> **wrong**: the gate is already inside `keyForSite*`, and `b1` changes one expression *after* it.
+> **Deliberately left in place**, because the warning was sound and only its premise was not.
 
 Sprint §3 (*"already settled — do NOT re-derive"*) calls `keyForSite` a **6-line pure projection**.
 DERIVED at the pin, it is **10 non-comment lines and runs a SECOND `IE` query**: after selecting the
@@ -520,6 +535,12 @@ head is measuring this defect, not dispatch identity.
 
 ## RUN-P3-015 — `B-2.2-f` RE-SIZED: a declared-prefix COUNT sidecar. Options (1) and (2) both REJECTED
 
+> 🚨 **PARTIALLY SUPERSEDED by RUN-P3-023.** The **count-sidecar half stands**. The **`csDeclared`
+> field half is REFUTED** — no field, no `data CSlot` change, and `f` touches neither fill site.
+> Also corrected there: **2** ratchet rows, not 4; `:29056`/`:29088` are **WRITERS**, not
+> "count-only readers"; the write list is **FIVE** sites, not three. And corrected by the `f` review:
+> *"a mismatch clamps loudly"* is **false** — nothing clamps it, the implementer writes the `min`.
+
 The architecture agent (P0-6) verified RUN-P3-010's chain and ruled. The ruling stands, with **its
 one unmeasured premise now MEASURED by the orchestrator** (RUN-P3-016 below).
 
@@ -552,7 +573,8 @@ structurally the same shape as the live S1 one layer up (#1457).
 
 **A per-entry scalar: the DECLARED PREFIX LENGTH `k`, carried alongside the IDS table**, mirrored
 into `crossRun` bare + qual. **Not** a payload widening of `funConstraintsRef`; **not** a per-slot
-parallel list. `csDeclared` is then minted at the fill sites as `index < k`.
+parallel list. ~~`csDeclared` is then minted at the fill sites as `index < k`.~~
+**⚠️ REFUTED (RUN-P3-023): there is NO `csDeclared` field and `f` touches neither fill site.**
 
 **Why a count is sound here** (and D1 §6.1 item 2's objection does not apply): `expandSupersPairs =
 expandSupersFix allDecls declared declared` starts `acc = declared` and only ever **appends**, and
@@ -574,8 +596,10 @@ Writes owed: the whole-table replacements only — `21105/21107` (seed), `21364/
 per-slot list, so there is no zip and no truncation policy; a mismatch degrades to an out-of-range
 count, which clamps loudly rather than silently dropping a tail.
 
-**`b1` remains statable unchanged.** Its gate reads `csDeclared`, now correct on Flat, same-module
-and cross-module alike. **The sprint proceeds as cut, with `f` re-sized.**
+**`b1` remains statable unchanged.** ~~Its gate reads `csDeclared`, now correct on Flat, same-module
+and cross-module alike.~~ **⚠️ REFUTED twice: there is no `csDeclared` (RUN-P3-023), and `b1`'s
+payload is two lines with no gate of its own (RUN-P3-025).** The conclusion — `b1` stays statable —
+held through both re-cuts. **The sprint proceeds as cut, with `f` re-sized.**
 
 ### ⚠️ Correction B — `expandSupersIfaceEntry` is NOT idempotent, and it constrains the design
 
@@ -652,6 +676,22 @@ fix will not exercise the shape that matters after it.** Goes in `b1`'s brief ve
 ---
 
 # RUN-P3-018 — PHASE 0 GATE: **GO.** Bite order holds; two bites are amended and one is re-sized
+
+> # 🚨 THIS TABLE IS THE PHASE 0 SNAPSHOT AND **EVERY ROW HAS SINCE MOVED. DO NOT QUOTE IT.**
+>
+> | row | superseded by | what actually happened |
+> |---|---|---|
+> | `a` | **RUN-P3-019** | **no type change at all** — no carrier, sexp files untouched, no compiler-enumerated error set |
+> | `f` | **RUN-P3-023** | **no `csDeclared` field**; **2** ratchet rows, not 4; `f` touches **neither** fill site |
+> | `b1` | **RUN-P3-025** | **two lines, ZERO edits at the four arms**; the collision gate is already carried |
+> | `e` | **RUN-P3-027** | `e` must **skip two** of the nine sites (`KeyEntry`'s key field has no reader) |
+> | `b2` | **RUN-P3-032** | **DROPPED** — D1's ✅ on the D4 pair is *wrong at this pin* |
+> | `c` | **RUN-P3-033** | a **third** stale comment found; scope is three corrections, not two |
+>
+> Kept unedited below because it is the honest record of what Phase 0 concluded — and because the
+> gap between this table and the six entries above is the sprint's most useful artifact: it is the
+> measured rework rate, not an embarrassment. **But it is the most consultable thing in this file
+> (a `#`-level heading reading "GO"), so a reader who stops here leaves with six wrong facts.**
 
 Phase 0 ran six read-only agents plus one orchestrator-run instrumented build. **No stop condition
 fired.** The refresh found zero drift in the site set, and D1 §5's precondition — the one it said 3′
@@ -793,7 +833,8 @@ sites are named by a **human** and must be checked as a **SET** — including
   carry an effect or a constraint — a discriminating probe is owed BEFORE collapsing, not after.**
 - **`nearest miss:` for `e`, which D1 does not state.** `sanitizeId` (`private_mangle.mdk:682-698`)
   maps every char outside `[A-Za-z0-9_]` to `_`, **one-for-one and not injectively**. Today's word
-  alphabet at that boundary is `|` and space; #1182's fix **adds `:`**. So `a::Alpha|T|` →
+  alphabet at that boundary is `|` and space; the identity substitution (#1113) **adds `:`**. ⚠️ The
+  example that followed here was refuted — see RUN-P3-030. So `a::Alpha|T|` →
   `a__Alpha_T_`, and a module `a_` with interface `_Alpha` sanitizes to the **same symbol**. The
   class pre-exists, but this bite **widens the alphabet reaching it** — a returns-nothing →
   returns-something transition on a namespace nothing watches. Owed fixture: two modules whose
@@ -1099,3 +1140,260 @@ the runtime word is `hashName key` (djb2), a **second, independent collision cha
 **That is the third time this session a fabricated-but-plausible example of mine was caught by the
 agent I handed it to.** The pattern is consistent: the *hazard* was real each time and the *instance*
 I invented to illustrate it was not.
+
+## RUN-P3-031 — the `ppTy` fold is MEASURED SAFE; and a FOURTH divergence is confirmed as a live S1
+
+Ran in the quiescent window after `f` landed, before dispatching `b1`+`e` — the standing rule that a
+prep question needing a build gets the build **first**.
+
+**The fold (`e`'s largest unverified assumption): SAFE.** The worry was that pointing eval's mint at
+`rkTy` widens eval's words, since typecheck's printer renders `TyEffect`/`TyConstrained` and eval's
+strips them. **The widening is unobservable, because the program that would observe it does not
+typecheck:**
+
+```
+impl Sz Int  +  impl Sz (<Stdout> Int)  → check=1 run=1
+    "Overlapping impls of Sz: Int and Int can match the same type."
+impl Sz a    +  impl Sz (Eq a => a)     → check=1 run=1
+    "Overlapping impls of Sz: a and b can match the same type."
+```
+
+**Coherence strips the effect/constraint too** — the diagnostic says *"Int and Int"* — so two impls
+differing only in an effect row or a constraint **cannot coexist**. ⇒ the fold cannot change any
+accepted program's words. **`e` is safe on this axis, measured rather than assumed.**
+
+### 🚨 F-8 — a NEW S1, found by asking the sharper follow-up
+
+A *single* effect-carrying impl has no overlap to be rejected for. Measured, with a control differing
+only in the effect row:
+
+```
+impl Sz (<Stdout> Int)  → check=0  run=0 [2]  build=1
+    E-PANIC: no impl of method 'sz' for type '__none__'
+impl Sz Int             → check=0  run=0 [2]  build=0  exec=0 [2]   @mdk_impl_Int_sz
+```
+
+**A program that checks clean and runs correctly cannot be built.** Mechanism: `headTyconTy` answers
+`None` for a `TyEffect` head → `noneHeadTag` on the typecheck side, while eval/`core_ir_lower`'s
+`headTycon` **strips the effect** to `Int`. The emitter then looks up `__none__` and finds nothing.
+This is the **fourth divergence** the `b1`+`e` prep predicted — `eval.headTycon` vs
+`typecheck.headTyNode` — now with a failing program and a control.
+**`e` unifies the printers (word), not the head projections (tag), so this is unchanged by the
+sprint.** Recorded in `FINDINGS.md`; filed at the exit phase.
+
+## RUN-P3-032 — **`B-2.2-b2` is DROPPED.** Three independent reasons, and one of them is a finding
+
+The prep pass recommended dropping and I accept it. RUN-P3-018 already flagged `b2` as first to shed;
+this is that call, taken on evidence rather than on schedule pressure.
+
+1. 🚨 **Its D4 pair is NOT "provably the same selection" — D1's ✅ is wrong at this pin.** The element
+   leg's `selectReqImpl` has a live `iface == ""` arm that selects over a **different population**
+   (`ImplBuckets`, first-match by **declaration order**, no-requires impls omitted) with a
+   **different goal vector** (`[m]`, not `m::rest`) — and that arm is reachable from `EKNestedTop`
+   through four `routeOf … "" ""` callers. **Collapsing there is the D5/D6 semantics change one leg
+   over, arriving as a wrong VALUE at exit 0.** A correct `b2` would need an `iface != ""` guard D1
+   never mentions, so the "two named pairs, provably identical" sizing is simply false: it is one
+   clean pair plus a conditional one.
+2. **The bite is no longer "pass the row down."** `keyForSite`/`keyForSiteByIface` now *are* the
+   selector call — they select, collision-test and mint internally, returning `Option String` and
+   discarding the row. `b2` would have to split both, then add a pre-selected-row parameter to
+   `implDictRoutesForFull` and `argImplRequiresRoutes` — **the exact two functions `b1` is editing in
+   this worktree right now.** A region collision, for an optimization.
+3. **The win is smaller than billed and its premise is gone.** Each arm costs **three** IE traversal
+   groups (select-for-word · collision count · select-for-elements), so `b2` removes **1 of 3, not
+   1 of 2** — and RUN-P3-025 already established that `b1` adds no scan, so RUN-B-023's +17% is not
+   being re-bought. Its byte-identical bar would cost a fixpoint plus an LLVM-golden round to
+   establish.
+
+**Filed as a follow-up carrying the D4 `iface == ""` finding**, so Phase 5 does not re-plan it off
+D1's stale ✅.
+
+### ⚠️ This gives RUN-P3-008 its first reachability path
+
+The `ImplBuckets` second-deciding-population finding was DERIVED but had **no witness**. The prep
+statically derived **four callers** that reach `selectReqImpl`'s `iface == ""` arm. That is not yet a
+reproduction — but it converts "reachable in principle" into a named path the repair round can probe,
+and it upgrades the priority of that experiment. **Still not filed; the discriminating program is
+still owed.**
+
+## RUN-P3-033 — **`B-2.2-c` LANDS**, and it grew a THIRD stale comment
+
+`c` is the only bite that leaves the tree's measured-wrong comments corrected, and all of them were
+relayed forward through design documents unverified — one of them twice. The prep found a **third**,
+which nobody had flagged:
+
+3. **`entailInst`'s header says `EKNestedTop → bare head tag`.** False since #203 — the arm stamps
+   the canonical key of the min⊑ winner, bare only when the collision gate is False — and **its own
+   body comment says so eleven lines later**, as does the `EntailKind` ladder comment. *Two of three
+   descriptions of this arm are right and the one an implementer reads first is wrong.*
+
+Two traps checked and **discharged with derivations rather than assertions**:
+
+- **The fixture-line-count trap does NOT bite**, and the reason is worth pinning: the snapshot embeds
+  the source verbatim but its **graded sections carry no source locations**, so a line-shifting
+  comment edit diffs exactly the edited lines plus `source_lines=` — no cascade. No golden pins a
+  line *inside* `typecheck.mdk`, and the two in-tree `typecheck.mdk:NNNN` citations from other
+  modules sit **above** every edit site. ⇒ **Do not compress a correction to preserve line count.**
+  The wrong-tier correction says strictly more than the error did, and the sentence that protects
+  `fromOption tag` is precisely the one whose absence nearly shipped a break — **it must not be
+  traded away for neutrality.**
+- **#829 is not triggered.** The file's only three two-line-header *record* decls are >12 000 lines
+  from every edit site; `KeyEntry`/`EntailKind` are two-line-header but **positional, not record**, a
+  shape #829's measurement does not cover and the prep did not test. ⇒ one rule: **put no new comment
+  inside `data EntailKind`'s body** — the ladder block goes above `entail`, a *function*, sidestepping
+  the untested case entirely.
+
+## RUN-P3-034 — the repair round's BASE ARM is built and verified, ahead of need
+
+Both prior sprints improvised the base-vs-branch differential at the end. It is now warm:
+**`/var/tmp/p3/base-arm`**, a worktree at the sprint base `68f84bf1`, cold-built (exit 0).
+
+Verified as a **sound** arm rather than merely present — a two-worktree differential is only valid
+because a `medaka` binary resolves its emitter and stdlib from **`exeDir`**, the directory the binary
+sits in, not from cwd or the compiled file's project root:
+
+```
+exe-adjacent layout: medaka · medaka_emitter · stdlib · runtime   — all four present
+                     (⚠️ `runtime/` matters only at the FIRST build; check and run
+                      succeed without it, so its absence bites late)
+crossing guard:      MEDAKA_ROOT and MEDAKA_EMITTER both unset
+identity:            68f84bf1…  ·  run/build/exec all exit 0 → 12345
+route_key.mdk:       ABSENT — the arm genuinely predates the sprint
+```
+
+That last line is the one that makes the arm trustworthy: a "base" arm that carried this sprint's own
+new module would compare the branch against itself and report a reassuring nothing.
+
+## RUN-P3-035 — parallel verification, corrected mid-sprint on Val's push
+
+Four readers were dispatched against a live writer, all pinned to committed SHAs (`git show
+<sha>:<path>`) so the writer cannot contaminate them — the Stage B pattern that ran ~10 such agents
+with zero interference. **I had been serializing verification behind implementation, which is the
+0.73× parallel-efficiency failure Stage B's retrospective measured and named.**
+
+- **R-1** — adversarial review of `f` at its landing commit. Primary attack: *is the write set
+  complete?* A sixth unmirrored site means entries reach the reader with no prefix and the next bite
+  silently withholds identity there.
+- **R-2** — **referee audit of the orchestrator's own ledger.** ~700 lines of my prose is the
+  least-reviewed artifact in the sprint and it feeds the PR body and the #1113 close-out. Blocking
+  first item: adjudicate the #1182-vs-#1047 framing (below).
+- **R-3** — build the repair round's differential instrument **now**, graded on stdout rather than
+  exit codes, written outside the repo and **labelled never-run** in its own header.
+- **R-4** — tracker-vs-tree reconciliation, so the exit criterion *"every verified desk close
+  executed or handed to a named owner"* has a worklist.
+
+### ⚠️ A claim of mine now under adjudication: **"this fixes #1182"**
+
+The `b1`+`e` implementer's in-tree prose disputes a framing I have repeated throughout this ledger
+and in two packets. Its argument: **#1182 is two interfaces sharing a METHOD name**, selected by a
+`(method, head)`-keyed candidate set with **no interface component** — so qualifying the *word*
+does not change which row is selected. What the substitution actually fixes is the **#1047 family**:
+two same-**spelled** interfaces in different modules collapsing onto one route word.
+
+That reasoning looks right to me, and if it is, **the PR body would have claimed a fix we did not
+make.** I am not taking my own word for it: R-2 adjudicates it from the source side and R-4 from the
+tracker side, independently. **Two derivations agreeing is worth more than either alone** — and if
+they disagree, that disagreement is itself the finding.
+
+**The reachability property `c` inscribes was VERIFIED, not asserted** — every selector call site was
+enumerated, and one legitimate selector call **outside** the ladder (`concreteReqMatchByIface`, the
+obligation channel) is named in the comment so a future grep-based check does not read it as a
+violation.
+
+---
+
+# RUN-P3-036 — the parallel review round: `f` HOLDS, my ledger did NOT
+
+Four readers ran against the live `b1`+`e` writer, all pinned to committed SHAs. **Zero
+interference** — the Stage B pattern, reproduced. Their findings, and what I did about each.
+
+## R-1 — adversarial review of `f`: **VERDICT: `f` HOLDS**
+
+No defect makes the sidecar wrong, vacuous or non-inert. Six claims were attacked and held, each
+with a derivation I did not have: write-set completeness (including non-`setRef` routes — **there is
+no missing companion**), the two-valued read discipline (**zero consumers of the prefix**, so nothing
+can collapse it), the `declaredConstraintSlots` refactor's byte-identity (via
+`qualConstraintKey ≡ hasImportDefiner`, an *identity* not a contingency), the four generalizations'
+behavioural neutrality, the two-row ratchet claim, and — the one it most expected to break —
+**`dedupSlots` key identity across the write/expand seam**: `dedupBy` is stable first-occurrence, so
+dedup of a concatenation preserves the first operand's dedup as a **literal prefix**. It holds on a
+real property, not a coincidence.
+
+**Three findings I acted on:**
+
+1. 🚨 **The dict-pass sites leave a STALE prefix, not an absent one — and "absence here is correct"
+   is the premise `f` shipped with.** `resetState ()` fires at exactly two sites, **neither** between
+   the last `checkBodyImpl` and `dictPassModules*`, so the declared table still holds the *previous
+   module's* entries. A reader there gets a **present, wrong** prefix — the one state `CDPUnknown`
+   exists to make impossible. **Fail-closed is not achieved by not writing; it requires writing
+   `[]`.** No impact today (no readers) or for `b1` (its fill sites run during inference), but the
+   next bite to touch the define side inherits a silent wrong answer. **Relayed to the live
+   implementer as a one-token fix.**
+2. 🚨 **My commit message for `f` over-claims, and the waiver it licensed is invalid.** *"typed IR
+   byte-unchanged"* rests on gates whose corpus is **54 single-file, prelude-free fixtures** — so the
+   qual arm, both module seed/snapshot pairs and the joint-discovery snapshot are **never reached**.
+   It covers ~1 of 6 changed regions. **Corollary: `f`'s `DEBT.md` waived the fixpoint on those
+   grounds. That waiver does not survive.** The fixpoint is **not optional** for this sprint.
+3. **`CDeclaredPrefix`'s doc comment is false on a live path** — it defines the prefix by *"its own
+   `=>` context"*, but `setFunConstraintEntry`'s second caller mints from **inferred** ids with no
+   `=>` anywhere, recorded as `CDPLen`. Behaviour right, definition wrong, **and wrong in the
+   direction that invites an unsafe "fix"** (lowering the inferred path would withhold identity from
+   real slots). Relayed with a reword.
+
+Also: `lookupAssoc` calls **`opBump`**, so the read side moves the perf gate's op-count metric by
+~one table scan per constrained call site — for a value nobody reads. Not quadratic; owed a perf run.
+
+**And the close-out expectation it derived**, which the `f` commit note got half-right: the LEG A
+re-cut is **4 deletions + 4 additions + 5 MODIFIED rows**. The commit warned about deletions; **the
+five modifications are what `AGENTS.md` forbids by default.** Reviewer's check is not *"were rows
+deleted"* but *"is each modified row a strict generalization, old type an instance of new at
+`a := List X`, and nothing else moved"* — with `declaredConstraintSlots` and `qualConstraintFor`
+required to be **unchanged**. A sixth modified row is a regression.
+
+## R-2 — referee audit of my own ledger: **TWO BLOCKING FINDINGS**
+
+1. **The `#1182` attribution is wrong in NINE places, and my A-packet is the origin** — the `a`
+   implementer copied my sentence verbatim into the tree. Adjudicated twice, independently, both
+   against me. #1182's selection runs on `contains name ms` (method-name membership + head match,
+   **no interface component**) and the word is minted *downstream of the already-selected row*; in
+   #1182's own single-file repro **the word does not even move**. The substitution serves the
+   same-**spelled**-interface family — **#1047 (CLOSED)** and its open successor **#1265** — and the
+   citable ticket is **#1113**. **Corrected in all nine.** Worse than a wrong ticket: the sprint
+   contained **both framings simultaneously**, in two of my own packets, with no cross-reference —
+   whichever got quoted into the PR body would have won by accident.
+2. **ZERO in-place supersede markers existed** — and RUN-P3-019's own parenthetical reads
+   *"(marked, not deleted — an unmarked superseded ruling is how a ledger starts lying)"* while
+   marking nothing. **The sentence stating the rule broke the rule.** Worst instance: RUN-P3-018's
+   gate table, a `#`-heading reading "GO", with **all six rows stale**. **Fixed:** a supersession
+   table at the gate, in-place markers on RUN-P3-005/006/015, and the two live-sounding `csDeclared`
+   claims struck where a grep lands.
+
+Plus two contradictions, both fixed: `DEBT.md` said `rule-duplicate-body` was *"deliberately left
+un-silenced"* when the directive is committed at `route_key.mdk:230` (the row predated my ruling and
+was never updated); and `FINDINGS.md` still advertised the repro harness as **owed** after
+RUN-P3-022 had discharged it — *"discharged debt looking owed"* invites a future agent to re-spend a
+quiescent window. Also flagged: `fromOption` "99 **uses**" is 99 *lines*, 78 occurrences (the design
+argument survives either); and `DEBT.md`'s "374 lines" is 396.
+
+⚠️ **One claim R-2 could not verify and neither can I from the artifacts: the "15 reading sites"** —
+the entire justification for refusing the design of record. The table lives in an agent report that
+**does not ship with the PR**. **Owed: paste it into RUN-P3-019 or give the reproducing command.**
+
+## R-3 — the repair round's differential, built ahead of need
+
+`/var/tmp/p3/r3/` — 15 programs, 52 files, **never run** (stated in its own header and reprinted on
+every invocation). Not in the repo yet; I smoke-test it in the next quiet window before it is cited.
+
+Shapes worth naming: a **control** (p01) whose failure prints *"THE HARNESS IS SUSPECT — do not
+adjudicate any other row"*; a **bystander** (p15) where the colliding graph is present but the entry
+prints from an unrelated module — `AGENTS.md`'s *"feature works, unrelated code breaks"* shape, and
+a DIFFERS there outranks every other row; and both nearest-miss controls (F-2's function head, F-8's
+effect head) expected to be **equally broken on both arms**, since `e` unifies printers, not head
+projections.
+
+Refusals rather than warnings (exit 2, before any measurement) for: `MEDAKA_ROOT`/`MEDAKA_EMITTER`
+set (they cross both arms silently), both arms resolving to one directory, and a missing
+`runtime/medaka_rt.c` — the last with its "bites only on the first `build`" note. A
+**`both arms failed check`** counter exists because a corpus of unparseable programs would otherwise
+report a clean all-SAME. And an **`EXITONLY`** verdict annotated *"loud → quiet is a severity
+increase, not progress."*

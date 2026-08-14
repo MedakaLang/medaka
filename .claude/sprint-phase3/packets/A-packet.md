@@ -60,8 +60,20 @@ rkTyFunArg : Ty -> String  -- private
 
 - `implRouteKeyWord o iface tys nm` = `"\{ifaceWordOf o iface}|\{joinWith " " (map rkTyAtom tys)}|\{fromOption "" nm}"`
   — **byte-identical to today's `implKeyTc`/`implKeyOf` whenever the origin is absent**, and
-  carrying `module::Iface` in place of the bare name when it is not. That substitution is #1182's
-  fix; it is *available* here but **not yet applied anywhere**, because you wire up no callers.
+  carrying `module::Iface` in place of the bare name when it is not. It is *available* here but
+  **not yet applied anywhere**, because you wire up no callers.
+  🚨 **CORRECTED AFTER ISSUE (referee R-2, adjudicated twice).** This line originally read *"that
+  substitution is **#1182's** fix"*, and the `a` implementer copied that sentence verbatim into
+  `route_key.mdk` — **this packet is the origin of a nine-instance propagation.** It is **wrong**.
+  #1182 is two interfaces sharing a **METHOD** name; selection runs through
+  `ieEntriesForMethod`'s `contains name ms` filter — method-name membership plus a head match, **no
+  interface component** — and the word is minted *downstream of the already-selected row*, so no
+  word substitution can reach it. In #1182's own single-file repro the word does not even **move**
+  (`ifaceIdentity` answers `""`, the fallback returns the bare name). What the substitution fixes is
+  the **same-SPELLED-interface** family: #1047 (**CLOSED**) and its open successor **#1265**, whose
+  title records that *"#1264 fixed only the interface-name half of #1047"* — the tables were
+  qualified, the route word was not. **The citable ticket is `#1113`**, the arc issue this sprint
+  runs under.
 - `routeWordFor headIsUnique tag o iface tys` = `if headIsUnique then tag else implRouteKeyWord o iface tys None`
   — this is `core_ir_lower.declRouteKey`'s body and `keyForSite`'s
   `if ieHeadCollidesBy* … then implKeyTc … else headKeyNameOr …`, unified.

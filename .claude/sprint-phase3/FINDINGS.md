@@ -8,10 +8,11 @@ Defects and residuals surfaced **in passing** during this sprint. **None is in s
 > independently authored control. Rows below are marked accordingly.
 > Repro sources are committed under `repro/` so they survive the session — `/var/tmp` does not.
 >
-> ⏳ **OWED, next quiescent window:** `repro/run.sh` has been **written but not yet run** — a writer
-> is live, so measuring now would grade a possibly half-built binary. An unrun harness is the
-> *"read-only reviewers' programs are unrun by construction"* trap (three of six needed repair in
-> Stage B), so it gets smoke-tested before anything cites it.
+> ✅ **DISCHARGED (RUN-P3-022).** `repro/run.sh` was smoke-tested and **was broken on first run** —
+> a `set -e` killed it at F-2's first intentionally-failing `build`, silently reporting a subset as
+> the whole result. That is the *"reviewers' programs are unrun by construction"* trap (three of six
+> needed repair in Stage B) inside a harness written to preserve findings. Fixed, re-run: **both
+> findings reproduce, matching the recorded expectations exactly.**
 
 ---
 
@@ -90,6 +91,40 @@ symbols are distinct**, so the wrongness is downstream of naming. Needs its own 
 
 ---
 
+## F-8 — an EFFECT-carrying impl head: `check` 0, `run` 0 correct, `build` E-PANICs
+
+**Status:** ✅ REPRODUCED by the orchestrator, with a control differing only in the effect row.
+**Action:** file as a new issue (**S1: loud breakage**, plus an eval/native divergence) after a dedup
+check. Sources: `repro/f8_effect_head/`.
+
+```
+impl Sz (<Stdout> Int)   → check=0  run=0 [2]  build=1
+    error: emitter failed compiling …
+    runtime error [E-PANIC]: no impl of method 'sz' for type '__none__'
+impl Sz Int              → check=0  run=0 [2]  build=0  exec=0 [2]   @mdk_impl_Int_sz
+```
+
+**A program that type-checks clean and runs correctly cannot be built.** One effect row apart from a
+program that builds and runs fine.
+
+**Root cause, DERIVED:** the two sides disagree on the **head tag**, not on the key.
+`typecheck.headTyconTy` answers `None` for a `TyEffect` head (it matches only `TyCon`/`TyTuple`, so
+the head lands in the `noneHeadTag` bucket), while `eval`/`core_ir_lower`'s `headTycon` **strips the
+effect** to the inner head `Int`. The emitter then looks up `__none__` and finds nothing.
+
+⚠️ **Related to but distinct from F-2.** F-2 is the same `_ => None` wildcard reached via a *function*
+type; this is the *effect* arm, and its symptom is a build-time E-PANIC rather than an order-dependent
+wrong answer. Same wildcard, two shapes — which is the argument for auditing that arm as a **SET**
+rather than patching either instance.
+
+**Not this sprint's to fix**, and explicitly out of `B-2.2-e`'s scope: `e` unifies the type
+*printers* (the key), not the head *projections* (the tag). Recorded because it was found while
+discharging `e`'s largest unverified assumption — which itself came back **safe** (two impls
+differing only in an effect row are rejected by coherence, so the printer fold cannot change any
+accepted program's words).
+
+---
+
 ## F-4 — `expandSupersIfaceEntry` is not idempotent
 
 **Status:** DERIVED (by a Phase 0 architecture agent), **not measured** — and it may be
@@ -132,10 +167,19 @@ selectors now all read one graph-global population"* is **FALSE** at this pin an
 
 `sanitizeId` (`compiler/backend/private_mangle.mdk`, ~`:682-698`) maps every char outside
 `[A-Za-z0-9_]` to `_`, **one-for-one and not injectively**. Today's word alphabet at that boundary is
-`|` and space; #1182's fix **adds `:`**. So `a::Alpha|T|` → `a__Alpha_T_`, and a module `a_` with
-interface `_Alpha` sanitizes to the **same symbol**. The collision class pre-exists, but `e` widens
-the alphabet reaching it — a returns-nothing → returns-something transition on a namespace nothing
-is watching.
+`|` and space; the identity substitution (#1113) **adds `:`**. ⚠️ An earlier example here claimed
+`a::Alpha|T|` collides with a module `a_` + interface `_Alpha`; that is **WRONG** — `safeChar` maps
+each offending char to a *single* `_`, giving `a____Alpha_T_`, four underscores. The **real** hazard:
+module ids are loader-derived **paths**, and `.`, `/`, `-` all sanitize to `_`, so `a.b::I|T|`,
+`a/b::I|T|` and `a-b::I|T|` **all** collapse to `a_b__I_T_`. Separately the runtime word is
+`hashName key` (djb2) — a second, independent collision channel.
+
+The collision class pre-exists, but `e` widens the alphabet reaching it — a returns-nothing →
+returns-something transition on a namespace nothing is watching.
+
+⚠️ **Filing note:** file the *path* example (`a.b` / `a/b` / `a-b`), never the retracted `a_` +
+`_Alpha` one. This row becomes an issue body, and the retracted example would ship a repro that does
+not reproduce.
 
 ---
 
