@@ -60,10 +60,10 @@ correct response is to stop and close Phase 4 out, not to defer harder.
 |---|---|---|
 | 1 | **Phase 4 — `B-2.3` frozen admissibility** | Per-(class, position) admissibility computed once post-K from global `IE`, frozen into the elaboration output **as data**, consumed and never re-derived |
 | 2 | **Phase 4's terminal close-out** | The attribution mitigation above. Non-negotiable |
-| 3 | **Phase 5 — `B-2.4` the engines** | LLVM `implEntryRouteWords` superset-OR retirement + `noneHeadTag` catch-all re-key + disjoint default-tag namespace; wasm peer arm; `eval.mdk` mirrored dispatch; `Route`/`core_ir_lower` |
-| 4 | **#1068**, with Phase 5 | The design doc's coordination note: #1068's filed fix direction *"would build in wasm the superset arm this task deletes"*. Sequential is the wrong answer |
-| 5 | **#1265 keying half** | Stage B RUN-B-011 split it: keying **IN** (bite `B-2.4-k`), denotation **OUT**. Boundary: *can the key express two distinct answers?* No ⇒ representation ⇒ IN |
-| 6 | **#1621** (inert `keyTable`/`KeyBuckets` residue) | Phase 3′ left it built with zero terminal reads. ⚠️ **99 lines across TWO binders** — a census keyed on `keyTable` alone misses the multi-module half and Phase 5 sizes off the wrong count |
+| 3 | **Phase 5 — `B-2.4` the engines** | LLVM `implEntryRouteWords` superset-OR retirement + `noneHeadTag` catch-all re-key + disjoint default-tag namespace; wasm peer arm; `eval.mdk` mirrored dispatch; `Route`/`core_ir_lower`. ⚠️ **CONTESTED — #1403 claims this deliverable. §2b is a blocking Phase 0 adjudication** |
+| 4 | **#1068**, with Phase 5 | The design doc's coordination note: #1068's filed fix direction *"would build in wasm the superset arm this task deletes"*. Sequential is the wrong answer. ⚠️ **CO-OWNED with X-E + an X-W physical residual — this sprint cannot CLOSE it** (§2b row 3) |
+| 5 | **#1265 keying half** | Stage B RUN-B-011 split it: keying **IN** (bite `B-2.4-k`), denotation **OUT**. Boundary: *can the key express two distinct answers?* No ⇒ representation ⇒ IN. ⚠️ **The emitter fit ledger assigns it to A-3/#1112 + X-E and does not name #1113 at all** (§2b row 4) |
+| 6 | **#1621** (inert `keyTable`/`KeyBuckets` residue) | Phase 3′ left it built with zero terminal reads. ⚠️ **99 lines across TWO binders** — a census keyed on `keyTable` alone misses the multi-module half and Phase 5 sizes off the wrong count. ⚠️ **#1403 claims `KeyBuckets` retirement by name** (§2b row 2) |
 | 7 | **#1622** (the `b2` drop + the D4 `iface == ""` finding) | Without it Phase 5 re-plans the dropped `b2` off D1's stale ✅ |
 
 ### IN as drain targets (Val's ruling, 2026-08-14) — the conjunct-1 family
@@ -95,6 +95,179 @@ member** — it is the `headTyconTy` arm-set defect, not the selector. Its owner
 - **The `TyConstrained` third arm** as an independent unit. It is named in both #1617's and #1618's
   bodies as the third member of the SET; whoever fixes the arm set fixes all three. Filing a fourth
   issue for it duplicates.
+
+---
+
+## 2b. 🚨 THE COLLISION WITH THE EMITTER REARCHITECTURE EPIC (#1398 / X-E #1403)
+
+**Phase 5 as scoped claims deliverables that #1403 claims by name.** This was not cross-referenced
+when §2 was written; it is a **blocking Phase 0 adjudication**, not a note.
+
+### The citation is ONE-DIRECTIONAL, which is why it was missed
+
+- `compiler/EMITTER-TARGET-ARCHITECTURE.md` cites **#1113 five times** and sequences X-E after it
+  (`:154`, `:571`, `:637`, `:723`, `:802`).
+- `compiler/TYPECHECK-TARGET-ARCHITECTURE.md` mentions **#1398 / X-E / #1403 zero times**. So does
+  **#1113's own body**. Derive: `grep -c '1398\|X-E\|1403' compiler/TYPECHECK-TARGET-ARCHITECTURE.md`.
+
+**The downstream arc knows it has an upstream producer. The upstream arc does not know it has a
+consumer with a claim.**
+
+### The four overlaps, quoted rather than paraphrased
+
+| # | Phase 5 as scoped | #1403 / the fit ledger | verdict |
+|---|---|---|---|
+| 1 | *"LLVM `implEntryRouteWords` **superset-OR retirement**"* (`STAGE-B-SPRINT.md:101`) | *"X-E.C … **retires route-word superset hedges**, backend selection, incomplete entry-derived method tables, and default synthesis"* (#1403 body) | **SAME DELIVERABLE, TWO OWNERS.** Not a producer/consumer seam |
+| 2 | **#1621**, the inert `keyTable`/`KeyBuckets` residue | *"X-E still owns final evidence references and **route-word/`KeyBuckets` retirement**"* (#1403 body, verbatim) | **X-E claims it by name** |
+| 3 | **#1068** IN, *"lands HERE, with it"* | *"**DRAINED-BY #1113 plus X-E**, with a Wasm PHYSICAL-RESIDUAL"* (`EMITTER-ARCH-BUG-FIT.md` §3.9) | **CO-OWNED.** B-2 supplies evidence + admissibility; X-E does the cutover; X-W owns any instruction-level residual ⇒ **this sprint cannot CLOSE #1068** |
+| 4 | **#1265** keying half IN (Stage B RUN-B-011's split) | *"**DRAINED-BY A-3/#1112 plus X-E**"* — **#1113 is not named at all** (`EMITTER-ARCH-BUG-FIT.md` §3.4) | **Two ledgers contradict each other on ownership** |
+
+### The method conflict, which is separate from the ownership conflict
+
+#1403: *"After AP validation, **migrate all engines atomically.**"* Phase 5 as scoped cuts
+**per-engine bites** (LLVM arm, wasm peer arm, `eval` mirrored dispatch). These are not two routes to
+one place — atomic-vs-incremental is precisely the axis the arc's own progress rule cares about, and
+an incremental engine migration leaves two selection authorities coexisting, which is the divergence
+law L1 exists to remove.
+
+### And the emitter arc is ACTIVELY WRITING Phase 5's files, out of DAG order
+
+PR **#1623** merged **2026-08-14 05:47Z** — hours before this doc — rewriting `wasm_emit.mdk`
+(+628), `wasm_preamble.mdk`, and creating `compiler/entries/wasm_emit_typed_main.mdk` (+463). Its
+body reads **"Tracks #1407"** (X-W), i.e. the epic is landing X-W-adjacent work **before X-0/X-A**.
+All ten X units are OPEN.
+
+⇒ **§4 Q1's "drift" has a cause, and the cause is a live concurrent writer in the same organs.**
+Phase 5 planned against a snapshot of `wasm_emit.mdk` is planning against a moving file, and the
+serialize-writers rule this sprint inherits does not reach across arcs.
+
+### What Phase 0 must decide — BEFORE any Phase 5 bite is cut
+
+**The question is not "who is right." It is: does Phase 5 exist, or is Phase 5 X-E.C under another
+name?** Three readings, all defensible:
+
+1. **B-2 stops at Phase 4** (produce evidence references + frozen admissibility) and **X-E.C owns
+   the whole engine cutover**. #1113 closes on Phase 4; #1621/#1068/#1265 route to #1403. Cleanest
+   against both written contracts; smallest sprint; leaves the conjunct-1 S0s undrained until X-E.
+2. **Phase 5 proceeds and #1403 is re-scoped** to remove route-word/`KeyBuckets` retirement, keeping
+   X-E's disposition-completeness half. Drains the S0s sooner; requires an owner ruling that
+   **amends #1403's body**, not just a note here.
+3. **Phase 5 and X-E.C are merged into one cross-arc unit** with one owner. Honest about the fact
+   that they are the same work; costs the most coordination.
+
+🚨 **Do not resolve this by having Phase 5 quietly proceed.** Two arcs retiring the same authority
+on their own schedules is the `evalModules`/`cevalModules` lockstep hazard at arc scale — and this
+tree has already paid for that shape once, for months.
+
+### ⭐ ADOPTED RULING — reading 1, amended. Derived and ADOPTED 2026-08-14 at `0913762f`
+
+> ✅ **ADOPTED BY THE OWNER, AND RECORDED ON BOTH ARCS** — #1113 (`issuecomment-5290181264`) and
+> #1403 (`issuecomment-5290181894`), plus the reciprocal pointer added to
+> `compiler/TYPECHECK-TARGET-ARCHITECTURE.md` §8. **#1182 is REOPENED**
+> (`issuecomment-5290171440`). §2b's three readings are closed; reading 1 as amended below is the
+> plan of record.
+
+> **Phase 5 as scoped IS X-E.C under another name — CUT IT and route it to #1403.**
+> **But the conjunct-1 drains were MIS-ASSIGNED to it. They are typecheck-only, so cutting Phase 5
+> does not defer a single S0.**
+
+This answers §4 Q6 (*is the selector re-key Phase 4's or Phase 5's?*) and the Q6 answer **dissolves**
+the collision rather than adjudicating it. Three derivations, each a command:
+
+**1. The wrong choice is made in `compiler/types/typecheck.mdk`. No engine participates.**
+Every candidate scan — `ieEntriesForMethod`, `ieCandidatesForMethod`, `ieSelectRowByMethod`,
+`ieCountHeadByMethod`, `ieImplExistsForHeadGo` — lives in that one file. Derive:
+`grep -rn 'ieEntriesForMethod\|ieCandidatesForMethod\|ieSelectRowByMethod' compiler/ --include=*.mdk`
+→ every hit outside `typecheck.mdk` is a **comment** pointing back at it (`core_ir_lower.mdk:1265-1266`,
+`route_key.mdk:192`). The engines hold route **words** and `noneHeadTag` buckets; they do not choose
+the row.
+
+**2. The interface-keyed peer ALREADY EXISTS, and the tree already states it is immune.**
+`ieEntriesForIface` · `ieCandidatesForIface` · `ieSelectRowByIface` · `ieCountHeadByIface` ·
+`keyForSiteByIface` are all present today. `ieSelectRowByIface` and `ieSelectRowByMethod` are
+**structurally identical** — same `goalHeadCon` match, same `pickMostSpecificEntry`, same
+`ieRowOfEntry` — differing only in which candidate function they call, which differ only in
+`iface`-match vs `contains name ms`. And `typecheck.mdk` says so itself:
+
+> *"The iface-keyed caller `ieEntriesForIface` **cannot produce such a set**, so the gate is a no-op
+> there."*
+
+**3. The tree already names the fix, and names it as #1182's.**
+
+> *"it is a **bare-name-keyed candidate set, whose fix is to SCOPE the set by interface** (#1182
+> option 1), not to call it ambiguity."*
+> — and at `keyForSite`: *"**THIS IS NOT #1182**: that bug is `ieCandidatesForMethod`'s
+> interface-free candidate key, **UPSTREAM of this word**."*
+
+⇒ **The conjunct-1 drain is a repointing of `keyForSite`'s selector from the `*ByMethod` family to
+the `*ByIface` family, inside one file.** It touches no `llvm_emit.mdk`, no `wasm_emit.mdk`, no
+`eval.mdk` dispatcher. **It is not Phase 5 work and never was.**
+
+**What is left in Phase 5 once the drain is removed** is exactly: `implEntryRouteWords` superset-OR
+retirement · `noneHeadTag` catch-all re-key · disjoint default-tag namespace · wasm peer arm · `eval`
+mirrored dispatch. That is **legacy-authority retirement in the engines** — X-E.C's charter verbatim,
+claimed by #1403 by name, and correctly sequenced *after* B-2 by the emitter arc's own DAG.
+
+**And the asymmetry makes the split safe:** once the selector is interface-keyed, the superset-OR
+hedges are **inert** — still reached, never decisive. **Inert-and-dead is debt; wrong-and-silent is
+an S0.** The split puts the S0 work where it can land now and the debt where its owner already is.
+
+### The resulting sprint
+
+| phase | content | owner |
+|---|---|---|
+| **4** | `B-2.3` frozen admissibility, keyed by interface identity (as scoped) | B-2 / #1113 |
+| **4b** *(new)* | **the selector re-key** — `keyForSite` → `*ByIface`. Drains the conjunct-1 family | B-2 / **#1182** |
+| ~~5~~ | **CUT.** Route to #1403 X-E.C, which claims it and is sequenced after B-2 | #1403 |
+
+### ⚠️ Three honest residuals — this ruling does NOT claim they are covered
+
+1. **Sizing 4b is NOT settled, and the risk is SUPPLY, not shape.** Entry point 2 is method-keyed
+   because at its sites **the interface may not be in hand** — `ieSelectRowByMethod`'s own header
+   says it is *"read by leg 3's two element-dict route sites AND … by the route WORD itself, through
+   `keyForSite`."* Whether an interface is available at each is the arc's familiar `#1280` SUPPLY
+   shape and is **the design run's first question**. The substitution is one line *given* an
+   interface; obtaining one may not be.
+2. **#1617 is not drained by 4b.** Its mechanism is the `headTyconTy`/`headTyconHead` `_ => None`
+   **arm set** (§4 Q7), which spans `typecheck.mdk` **and** `eval.mdk` (where `headTyconHead` is
+   defined and exported, `:1980`) **and** `core_ir_lower.mdk` (which imports it, `:65`). Small,
+   shared, still not route-word retirement — so it rides with 4b, not with X-E.
+3. **#1608 is a genuine engine defect** in `core_ir_eval.mdk`'s independent dispatcher — outside
+   X-E.C's LLVM/wasm scope and outside typecheck. It is the `evalModules`/`cevalModules` lockstep
+   partner and **needs its own owner call**; this ruling does not make one.
+
+### 🚨 Blocking tracker correction: **#1182 IS CLOSED AND SHOULD NOT BE**
+
+Closed **2026-08-14T03:52:04Z**, a plain close with **no commit id** — i.e. a desk close during the
+Phase 3′ close-out sweep — **1 h 44 m after its own last comment (02:08Z) said, verbatim:**
+
+> *"**This issue is not fixed and was not touched**; its pin still reproduces identically (`run` ->
+> 1, control -> 2) on both arms of a base-vs-branch differential."*
+
+Its pin `test/must_fail_fixtures/1182-two-ifaces-same-method-name-order-decides/` is **live**, in a
+suite the merge recorded as *"100 reproduce, 0 drained."* (Derived from those two records; I did not
+re-run the gate.) **#1182 is the ticket for the exact fix 4b performs**, so reopening it is not
+bookkeeping — it is recovering the unit's home. **Reopen before Phase 0 cuts 4b.**
+
+### Adoption — DISCHARGED, and what it changes elsewhere in this doc
+
+Exit criterion 0 is **satisfied**: the ruling is recorded on **#1113** and on **#1403**, #1182 is
+reopened, and `TYPECHECK-TARGET-ARCHITECTURE.md` §8 gained the reciprocal
+**"Emitter-arc coordination"** bullet so the producer arc can see its consumer.
+
+⚠️ **Consequently the following earlier sections of this doc are SUPERSEDED — read them as history,
+not as plan:**
+
+| section | status after adoption |
+|---|---|
+| §2 IN rows **3, 4, 5, 6** (Phase 5, #1068, #1265, #1621) | **CUT** — routed to #1403, except #1068 which is co-owned and cannot be drained by B-2 alone |
+| §4 **Q1** (`D2` staleness) and **Q4** (the wasm permutation arm) | **Inherited by X-E.C**, and both are relayed in the #1403 comment. No longer this sprint's to answer |
+| §4 **Q5** (#1608's fourth arm) | **Still owed, still unowned** — residual 3. Not X-E's (it is `core_ir_eval`, not LLVM/wasm) and not typecheck's |
+| §4 **Q6** (selector re-key: Phase 4 or 5?) | **ANSWERED — Phase 4b.** This is the answer that dissolved the collision |
+| §6 (Phases 3–4, `B-2.4` + close-out) | **CUT.** The sprint is now Phase 0 → Phase 4 → Phase 4b → one close-out |
+| §2's per-phase close-out mitigation | **Simplified** — with Phase 5 cut there is one IR-moving rewrite again, so the standing one-per-sprint rule is satisfied without the extra checkpoint. Keep it only if Phase 4 and 4b land far enough apart to want the attribution |
+
+---
 
 ### Issue-closure policy — unchanged
 
@@ -179,6 +352,11 @@ Symbol-level survival, checked one at a time (`grep -nE '^<sym>' <file>`):
 **The owed answer:** every symbol survives; **every line citation in `D2` for `eval.mdk` and
 `wasm_emit.mdk` is stale.** Re-derive Phase 5's site lists **by symbol**, never by line — and treat
 `wasm_emit_typed_main.mdk` as a site set `D2` never saw at all.
+
+🚨 **The drift is not entropy — it has a named author (§2b).** PR #1623 ("Tracks #1407") landed that
+churn hours before this doc. So re-deriving once is not enough: **`wasm_emit.mdk` has a live
+concurrent writer from another arc**, and any Phase 5 site list has a shelf life measured in days.
+Re-derive at the moment of cutting each bite, not once at Phase 0.
 
 ### Q2 — serialization of the 5th `CProgram` field: **render** or **omit**?
 
@@ -317,7 +495,8 @@ it as slack. Its standing attack list, carried forward and re-aimed:
 
 | # | criterion | owner |
 |---|---|---|
-| 1 | **#1113 closes.** Both phases landed, or the residual is FILED with a number — *"unowned"* is not an allowed outcome | ORCH |
+| 0 | **§2b is ADJUDICATED and the ruling is written to BOTH arcs** — `DECISIONS.md`, a comment on #1113, **and** a comment on #1403. A ruling recorded on one side reproduces the one-directional citation that caused this | ORCH |
+| 1 | **#1113 closes.** Both phases landed, or the residual is FILED with a number — *"unowned"* is not an allowed outcome. ⚠️ Under §2b reading 1, #1113 closes on **Phase 4** and the engine cutover routes to #1403 — that is a legitimate close, not a shortfall | ORCH |
 | 2 | **C4/I2 asked a THIRD time, at the end, with the CONJUNCTION as the bar.** Hand-derive every expected answer from DICT §8 I4 **before** any invocation. Report conjunct 1 and conjunct 2 separately and name the shape each still fails on | ORCH |
 | 3 | **The four drain targets graded on the final binary, twice, quiescent.** A drain is causal or it is a shape move; say which | ORCH |
 | 4 | **Fixpoint C3a + C3b PASS** on the twice-refreshed seed, per phase | ORCH |

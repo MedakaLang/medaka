@@ -1433,11 +1433,27 @@ whole arc.
 - **Serialized landing.** Stages A and E occupy the whole `ws:typecheck` lane;
   B-3/C/D provide *development* parallelism, with landing interleaved through
   the one-PR-in-flight rule. The plan claims no more than that.
+- 🚨 **Emitter-arc coordination — this arc HAS a downstream consumer, and until
+  2026-08-14 this document did not say so.** The emitter rearchitecture epic
+  #1398 sequences its X-E stage (#1403) *after* B-2 and cites #1113 five times
+  (`compiler/EMITTER-TARGET-ARCHITECTURE.md:154`, `:571`, `:637`, `:723`,
+  `:802`); this file cited that arc **zero** times. The citation being
+  one-directional is how `B-2.4` came to be scoped as work #1403 already
+  claimed by name — *"X-E still owns final evidence references and
+  route-word/`KeyBuckets` retirement."* **Owner ruling, 2026-08-14, recorded on
+  BOTH issues:** `B-2.4` is **CUT** and routed to X-E.C; B-2 ends at **B-2.3**
+  (frozen admissibility) plus a new **B-2.3b**, the selector re-key repointing
+  `keyForSite` from typecheck's `*ByMethod` candidate family to its `*ByIface`
+  family (#1182). The order-dependent *selection* is made in `types/typecheck.mdk`,
+  upstream of every route word — no engine participates — which is why cutting
+  the engine leg defers no S0. #1621/#1265 route to X-E; #1068 stays co-owned
+  (B-2 supplies, X-E cuts over, X-W owns any physical residual).
 - **Not in scope:** engine-realization bugs (#1034/#826/#1101/#1020, the
-  emitter E-PANIC halves, wasm parity beyond B-2's word-set leg), the graded
-  arc's own design forks (#823's eager-arm decision), the `do`/`defer` routing
-  implementation (#824), and any change to surface syntax. The `medaka check`
-  CLI surface is unchanged throughout.
+  emitter E-PANIC halves, and — since the 2026-08-14 ruling above — the whole
+  engine word-set leg, wasm parity included), the graded arc's own design forks
+  (#823's eager-arm decision), the `do`/`defer` routing implementation (#824),
+  and any change to surface syntax. The `medaka check` CLI surface is unchanged
+  throughout.
 
 ---
 
