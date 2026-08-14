@@ -1757,3 +1757,51 @@ feeding `implMatchesU`, the two `ieHeadCollides*` gates, and `implEntryFromTys` 
 `requires`-bearing constrained impls) — and the conclusion survives measurement, but the PR should
 state the surface it actually attacked. **F3 from the prose lens (`keyEntryOfRow`) is answered by
 this review's Q3 surface: it is a routing reader, and the 25-program acceptance sweep found no move.**
+
+## RUN-P45-047 — ORCH REPRODUCED BOTH AGENT FINDINGS FIRST-HAND. One filed, one routed to an existing issue.
+
+Neither was relayed on an agent's word. Cold-built binary in the ORCH worktree (base — no sprint fix
+present, which is what a *pre-existing* claim requires), `MEDAKA_STRICT=1`, env clean,
+redirect-then-read-`$?`.
+
+**Filed #1641 (S1, `verified`)** — the census residual, reproduced exactly as the semantics reviewer
+described: `impl Zero (Eq x => Int)` alongside `impl Zero Bool` with an undetermined receiver gives
+`check` **0** / `run` **5** / `build` **1** (`E-PANIC: arg-tag dispatch … not supplied`), where the
+byte-identical plain-headed control is **rejected at check** with *"Ambiguous instance for `Zero`"*.
+The issue records the mechanism (`censusHeadNameTy` → `headTySpineNode` does not peel the wrapper, so
+`checkUndeterminedObligation`'s `implCountForIfaceU >= 2` guard is never met), that it is
+**arm-invariant hence pre-existing**, that the **effect wrapper does the same thing**, and that its
+former owner **F-3c (#1155) is CLOSED** so nothing lived here. A must-fail pin is recorded as owed.
+
+**Routed to #1228, not filed separately** — the `@attrib` finding. Reproduced, and then graded one
+step further than the reporting agent took it: the attributed `interface` is **dropped entirely**
+(`Unbound variable: aa` at the use site, loud, exit 1 in all three verbs), which is #1228's exact
+mechanism one namespace over — a `DAttrib` wrapper falling through a wildcard arm. ⇒ A comment on
+#1228 with the derivation, not a duplicate number.
+
+⭐ **But the probe found something the "same as #1228" reading would have missed, and it is the half
+worth keeping:** the drop **silences a rejection that otherwise fires**. Two same-named interfaces are
+rejected today (`Duplicate interface: Dup`); put `@inline` on the first and `check` exits **0** with
+*"1 declaration(s) checked"* — the declaration is gone before `duplicateErrors` ever sees it. **An
+attribute is currently a way to switch a duplicate-declaration rejection OFF.** That is a different
+failure shape from #1228's use-site consequence: a check that does not run, with no diagnostic at all.
+Same root cause, so same issue — recorded there rather than split.
+
+⚠️ Directly load-bearing for THIS sprint: a new rejection written over `interfaceList` inherits that
+blindness **silently**. W2 wrote its own attribute-aware walk for exactly this reason, and proved the
+premise on the binary rather than asserting it.
+
+## RUN-P45-048 — ⚠️ ORCH ERROR: I misrouted a coordinator message INTO A LIVE WRITER'S CONTEXT
+
+The `keyEntryOfRow` lead was addressed to the semantics reviewer and sent to **W2's** agent id, mid-bite,
+while W2 was writing Q1 in `resolve.mdk`. It concerned another PR, another file, and questions W2 was
+never asked.
+
+**W2 handled it correctly** — refused the binary experiments as not its bite, ran only the one cheap
+grep, reported that the structural claim holds, and asked me to route it back to its owner. The
+semantics reviewer had meanwhile reached the same surface independently, so nothing was lost.
+
+**The lesson is mine, not W2's.** *Parallelize readers, serialize writers* protects the tree; it does
+not protect a writer's ATTENTION, and an orchestrator message is an unaudited write straight into it.
+A misaddressed brief is indistinguishable, from inside, from a scope change. **Address by role, and
+re-read the id against the dispatch record before sending — the ids differ by two characters.**
