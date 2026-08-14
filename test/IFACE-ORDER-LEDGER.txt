@@ -72,6 +72,14 @@
 # reading — including the one state (a name-scoped fix) in which this gate stays
 # GREEN while the defect is still live, and what backstops it.
 #
+# 🚨 AND THE BOUND ON ALL OF IT: every case in this corpus is single-file with
+# DISTINCTLY NAMED interfaces, so a fix keyed on the bare interface NAME and one keyed
+# on a MODULE-QUALIFIED IDENTITY are INDISTINGUISHABLE here — same signatures, same
+# drain, same state. A drain in this ledger is therefore NOT evidence that Phase 4
+# keyed by identity. That question needs a cross-module probe (#1258 is the shape).
+# The gate header's section "THE TABLE ABOVE CANNOT TELL YOU *WHICH KIND* OF KEYING
+# LANDED" gives the full reading and why the shape is inexpressible in this corpus.
+#
 # ── WHAT A REVIEWER MUST DEMAND BEFORE ACCEPTING A **NEW** ROW ────────────────
 #
 # ⚠️ A tripwire's false positive is its masking path. If this file is easy to bump, it

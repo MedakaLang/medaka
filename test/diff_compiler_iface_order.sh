@@ -145,6 +145,36 @@
 #   In states 3 and 4 the gate prints the converged signature in its drain note, so
 #   the reader distinguishes them from the gate's own output without re-deriving.
 #
+# 🚨 ── THE TABLE ABOVE CANNOT TELL YOU *WHICH KIND* OF KEYING LANDED ────────────
+# Read this BEFORE acting on any result above; it bounds every row of that table.
+#
+# The whole point of the Stage B fix is re-keying impl selection from an interface
+# SPELLING to an interface IDENTITY, and `.claude/HANDOFF.md`'s top section demands of
+# Phase 4 specifically that the key be a MODULE-QUALIFIED IDENTITY, not a bare name.
+# THIS CORPUS CANNOT SEE THAT DISTINCTION. All five cases are single-file and declare
+# interfaces with DISTINCT names, so a fix keyed on the bare interface NAME and a fix
+# keyed on a module-qualified IDENTITY behave IDENTICALLY on every case here. They
+# produce the same signatures, drain the same rows, and land in the same state above.
+#
+# ⇒ A DRAIN HERE IS NOT EVIDENCE THAT THE KEY IS MODULE-QUALIFIED. States 3 and 4 both
+#   read the same for either keying. If what you need to know is "did Phase 4 key by
+#   identity or merely by name?", THIS GATE CANNOT ANSWER IT — you must go to a
+#   cross-module probe. #1258 is precisely that defect (two unrelated modules each
+#   declaring `Same` collapsed onto one bare-name key) and it is INVISIBLE here.
+#   Derive:  grep -n 'globally unique' compiler/types/typecheck.mdk
+#
+# And the discriminating shape is not merely absent, it is STRUCTURALLY INEXPRESSIBLE
+# in this corpus as built — do not "fix" this by adding a fixture until that changes:
+#   * two same-named interfaces in ONE file are rejected outright by resolve
+#     (`Duplicate interface: <Name>`; grep -n 'Duplicate interface' compiler/frontend/resolve.mdk),
+#     so the case cannot even be written;
+#   * two same-named interfaces in DIFFERENT modules are legal — nothing enforces
+#     interface-name uniqueness across modules — but this gate permutes only the ENTRY
+#     module's declarations, so the entry holds at most one of them and the permuter
+#     dies with `need >=2 top-level interface declarations, found 1`.
+# Closing that gap needs a corpus unit that permutes an IMPORTED module's declarations,
+# which is the same limit test/diff_compiler_import_order.sh has for import clauses.
+#
 # ###################################################################
 # # THE LEDGER — WHY A GATE MEASURING AN OPEN DEFECT IS GREEN       #
 # ###################################################################
