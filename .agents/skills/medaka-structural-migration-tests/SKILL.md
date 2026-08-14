@@ -115,7 +115,12 @@ credit, but an unrelated early exit is not.
 
 For a one-source mutation, prefer `scripts/mutation_transaction.sh` so EXIT and
 HUP/INT/TERM restoration, baseline hash proof, direct check status, expected-red
-matching, and final clean-state proof are one transaction. Use custom shell only
+matching, and final clean-state proof are one transaction. Backend mutations must
+use `--prepare` to force the emitter/native rebuild and rebuild the focused probe;
+use `--restore-check` to rebuild restored artifacts. A source mutation tested by
+a stale probe is invalid even when it reports green or red. The helper restores
+bytes without Git index writes, so isolated-worktree `.git/worktrees/*/index.lock`
+restrictions are not grounds for a custom transaction. Use custom shell only
 for a shape the helper cannot express, and retain the same guarantees.
 
 For mode/reset migrations, include renamed-authority mutants rather than only

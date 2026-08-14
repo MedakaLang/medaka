@@ -61,6 +61,12 @@ Run in this order and stop when the questions are answered:
 4. mandatory compiler-source, snapshot, selfproc, or fixpoint obligations;
 5. additional expensive local suites only when a named uncertainty survives.
 
+Before executing a compiled probe, enable the strict source-staleness channel or
+otherwise prove compiler and probe were rebuilt from the reviewed revision. Stop
+on a staleness warning; do not let a gate consume an old probe. When changed
+fixtures/docs introduce symbol-like names, run `make agent-doc-symbols` before the
+first push so newly stale exception-ledger entries do not become a CI-only round.
+
 Use `PREFLIGHT_DRY=1 sh test/preflight.sh` to derive candidate gates, not as an instruction to run all of them. Remember that dry mode does not reveal the forced backend fixpoint, and blast-radius paths can turn preflight into the prohibited full local suite. Prefer targeted `run_gates.sh` patterns or let CI parallelize genuine breadth.
 
 Derive a script's interpreter before syntax-checking it. Use `bash -n` for Bash
