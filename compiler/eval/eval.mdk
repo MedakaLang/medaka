@@ -344,11 +344,21 @@ defaultCellName ifaceId method = "\{ifaceId}#\{method}"
 
 -- the interface a method belongs to ("" if it is not an interface method).
 --
--- ⚠️ #1113 Phase 4 DELIBERATELY LEFT THIS ON THE BARE SPELLING.  It and
--- `methodsOfIface` are the OTHER two readers of `ifaceDispatchRef` (the
--- `lookupPositions` sites are the first two), and together they answer ONE
--- question for `siblingShadows`: which OTHER methods of this method's interface
--- should be shadowed while a default body runs.  That is an enumeration whose
+-- ⚠️ #1113 Phase 4 DELIBERATELY LEFT THIS ON THE BARE SPELLING — and the shape
+-- of that statement matters, so state it exactly: the ROW has FOUR consumers
+-- across TWO channels.  Two read the `disp` PARAMETER threaded from
+-- `installDispatchTables`' return value (`implMethodEntry` here and
+-- `core_ir_lower.lowerImplMethod`) and both are identity-keyed.  Two — this
+-- function and `methodsOfIface` — read `ifaceDispatchRef` itself, and they are
+-- the ONLY readers of the Ref; NEITHER was re-keyed.  So the identity component
+-- is live through the parameter channel and inert through the Ref channel, on
+-- purpose.  Do not read "two readers, both spelling-keyed" as evidence the
+-- identity is dead everywhere — that is the inert-fix misreading the comment
+-- above `installDispatchTables` warns about.
+--
+-- Together these two answer ONE question for `siblingShadows`: which OTHER
+-- methods of this method's interface should be shadowed while a default body
+-- runs.  That is an enumeration whose
 -- current answer is already a SUPERSET when two interfaces share both a spelling
 -- and a method name, and narrowing it to an identity would change which siblings
 -- get pinned to a tag — a dispatch change on a path this unit did not measure.
@@ -1976,10 +1986,16 @@ receiverParam (p::_) = [p]
 --     so a program whose interfaces do not collide by spelling is byte-identical.
 --
 -- ⚠️ NOT CLOSED BY THIS UNIT: `[0]` on a total miss is still fail-OPEN, and so is
--- `keepOrAll original [] = original` further downstream.  Re-keying makes the miss
--- unreachable in a well-formed program (an impl whose interface is not declared
--- anywhere in the joint decl list is a resolve error) but does not remove either
--- default; retiring them moves behaviour and is its own unit.
+-- `keepOrAll original [] = original` further downstream.
+--
+-- ⚠️ AND THE RE-KEYING DID NOT SHRINK THE MISS SET — do not credit it with that.
+-- Tier 2 IS the old lookup, `[0]` default included, so a TOTAL miss still means
+-- "no row matched by SPELLING either", which is exactly the condition that had to
+-- hold on the old key.  The argument that such a miss cannot arise in a
+-- well-formed program (an impl whose interface is declared nowhere in the joint
+-- decl list is a resolve error) was equally available before this unit and is an
+-- argument, not a removal.  Retiring either default moves behaviour and is its
+-- own unit.
 export lookupPositions : String -> String -> String -> List ((String, String, String), List Int) -> List Int
 lookupPositions ifaceId iface mname tbl = match positionsById ifaceId mname tbl
   Some p => p

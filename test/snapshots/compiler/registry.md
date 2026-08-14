@@ -1,5 +1,5 @@
 # META
-source_lines=2044
+source_lines=2066
 stages=DESUGAR,MARK
 # SOURCE
 -- Identity + registry substrate — Stage A-2 unit A-2.0
@@ -179,6 +179,28 @@ stages=DESUGAR,MARK
 -- are stated as A-2.0 sized them; the unit that converts each owes the same
 -- question ("is this table read on the flat path?") rather than inheriting
 -- this row's answer.
+--
+-- 🚨 `ifaceDispatchRef` HAS NOW BEEN ASKED THAT QUESTION, AND THE ANSWER IS
+-- YES — SO ITS ROW ABOVE IS MIS-SIZED. #1113 Phase 4 re-keyed that table and
+-- measured the flat-path half: the flat/loader-less drivers (`medaka check`
+-- on a no-import file, `lsp`, `repl`, `doc`, the playground) stamp nothing
+-- (`stampFlatTyOrigins`), so on those paths EVERY row and EVERY query carries
+-- the absent identity and an `ifaceIdMatches` tier answers None for all of
+-- them.  Its key is therefore NOT the `Ident × Ident` this row states: it is
+-- TWO-TIERED — identity when one is present, bare SPELLING when it is not —
+-- and `lookupPositions` (`eval.mdk`) is where both tiers live.
+--
+-- ⚠️ A `regKeyN [ifaceIdent, methodIdent]` conversion DELETES THE SPELLING
+-- TIER, and the loss is silent: `Ident` has no identity-less inhabitant, so
+-- every flat-path lookup would miss and fall through `lookupPositions`' `[0]`
+-- fail-open default, quietly changing arg-tag admissibility — and therefore
+-- dispatch — on all five drivers above.  That is ROW 1's hazard exactly, one
+-- row down, which is why this is written here rather than left for the next
+-- agent to re-derive.  Until identity SUPPLY is total (#1115 E-1 gives the
+-- flat path module ids) this row's honest sizing is `(Ident | String) ×
+-- String`; at total supply the spelling tier becomes dead and the row becomes
+-- true as written.  `methodReqCountRef` — installed from the same decl list by
+-- the same call — has NOT been asked this question and still owes it.
 --
 -- 🚨 THE FIFTH ROW IS `[Option Ident]`, NOT `[Ident]`, AND THE DIFFERENCE
 -- RE-OPENS #607. This row read `Ident × [Ident]` until round 2 of this PR's

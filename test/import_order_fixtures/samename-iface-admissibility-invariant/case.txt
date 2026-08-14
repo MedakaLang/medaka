@@ -39,7 +39,7 @@ two interfaces that collide by name must keep answering independently, in either
     "no impl of method 'display' for type 'DogB'"     (this ordering)
     "no impl of method 'display' for type 'DogA'"     (imports swapped)
 
-That is a SEPARATE, still-open bare-name collision — the two `speak` METHOD SCHEMES
+That is #1647, a SEPARATE, still-open bare-name collision — the two `speak` METHOD SCHEMES
 share a name and differ in type, so the emitter's front end attributes one interface's
 signature to the other's impl body and the interpolated `String` is typed as the
 receiver. Measured base-vs-branch: byte-identical failure, so #1113 Phase 4 neither
@@ -54,6 +54,14 @@ admissible positions), which forces different signatures, which trips the scheme
 collision above. The two defects are coextensive on today's compiler, and the typed
 Core IR dump is the only observation that separates them.
 
-Deliberately unledgered and must stay so: the `build` failure is INVARIANT across the
-orderings this gate permutes, so it is not an order-dependence and does not earn a row.
-A row appearing for this case would mean the re-keying regressed.
+Deliberately unledgered and must stay so — but read the next two sentences before
+concluding this file contradicts itself, because at a glance it does.
+
+The two `build` messages quoted above DO differ per ordering. What is invariant is the
+gate's SIGNATURE, which deliberately excludes `build`'s STDERR (see the gate header's
+"WHAT IS DELIBERATELY NOT COMPARED" — Medaka's runtime panics are not uniformly
+location-free, so stderr is not a comparable observable). Both orderings therefore
+reduce to the same `build=1/-:` and the case is correctly graded invariant. So this is
+NOT an order-dependence this gate can state, and it does not earn a ledger row; it is
+an order-dependence in a channel the gate does not read, owned by #1647. A row appearing
+for this case would mean the re-keying regressed.
