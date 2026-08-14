@@ -493,18 +493,23 @@ tyvarsInArgs ts = sumInts (map countTyvars ts)
 -- Int can match the same type"*, exit 1 on check AND run — note the diagnostic
 -- strips the row too).  What the fold DOES change for a LONE effect-headed impl is
 -- that this side finally spells the word typecheck was already stamping.
--- ⚠️ THIS PARAGRAPH USED TO LIST THREE SURVIVING TAG DIVERGENCES; TWO ARE NOW
--- CLOSED and one survives.  It said `headTycon` (below) strips `TyEffect` AND
--- `TyConstrained` while `typecheck.headTyconTy` "answers `None` for both, and for
--- a function head".  The effect arm was #1618 (a program that checks and runs but
--- cannot be BUILT) and the function head was #1617 (arg-tag dispatch on a
--- tagless closure); both are fixed by giving the two sides the SAME arms —
--- `typecheck.headTyNode` now peels `TyEffect`, and both sides answer
--- `route_key.funHeadTag` for an arrow.  `TyConstrained` is the survivor, and it
--- is measured benign rather than merely unaudited: peeling it yields a headless
--- body, so both sides still reach `None`.  ⚠️ Do not read even that as a closed
--- census — it is what has been enumerated so far.  `e` unified the printers (the
--- WORD); this bite unified the head projections (the TAG).
+-- ⚠️ THIS PARAGRAPH ONCE LISTED THREE SURVIVING TAG DIVERGENCES; ALL THREE ARE
+-- NOW CLOSED.  It said `headTycon` (below) strips `TyEffect` AND `TyConstrained`
+-- while `typecheck.headTyconTy` "answers `None` for both, and for a function
+-- head".  The effect arm was #1618, the function head was #1617, and the
+-- constraint arm was #1630 — every one of them a program that CHECKS and RUNS
+-- and cannot be BUILT (or, for #1617, one that builds and E-PANICs).  All three
+-- are fixed by giving the two sides the SAME arms: `typecheck.headTyNode` now
+-- peels `TyEffect` and `TyConstrained`, and both sides answer
+-- `route_key.funHeadTag` for an arrow.
+--
+-- 🚨 #1630 IS ALSO THE CASE AGAINST BOUNDING A CLASS FROM ONE EXAMPLE.  This
+-- paragraph declared `TyConstrained` "measured benign … peeling it yields a
+-- headless body", which was true of the ONE shape anybody tried (`Eq a => a`)
+-- and false of the neighbouring one (`Eq a => Int`).  A wrapper does not decide
+-- whether its body has a head; only the body does.  ⚠️ Do not read the census as
+-- closed even now — it is what has been enumerated so far.  `e` unified the
+-- printers (the WORD); #1617/#1618/#1630 unified the head projections (the TAG).
 -- Native Gap C: an ARITY-DISTINGUISHED tuple dispatch/impl-tag (`__tuple2__`,
 -- `__tuple3__`, …).  Each tuple arity gets its OWN impl group / lifted define and
 -- its own runtime dispatch tag, so the 2-/3-/4-/5-tuple `Eq`/`Ord`/`Debug` impls
@@ -525,10 +530,14 @@ tupleHeadTag n = "__tuple" ++ intToString n ++ "__"
 -- it.  `funHeadTag` is imported from `types/route_key.mdk` rather than respelled
 -- so the two sides cannot drift.
 --
--- ⚠️ `TyConstrained` is still peeled here and still NOT peeled by
--- `typecheck.headTyNode` — a surviving, measured-benign divergence (both sides
--- reach `None` because the peeled body is headless), left alone deliberately.
--- `TyEffect` is no longer one of them: typecheck peels it too as of #1618.
+-- ⚠️ `TyConstrained` IS NO LONGER A DIVERGENCE — `typecheck.headTyNode` peels it
+-- too as of #1630, exactly as it peels `TyEffect` as of #1618.  This arm was the
+-- half that was always right: it is why `impl Sz (Eq a => Int)` was FILED under
+-- tag `Int` by this side while the caller side stamped `__none__`, which is the
+-- shape of the reported bug.  All four arms below (`TyApp` spine,
+-- `TyConstrained`, `TyEffect`, `TyFun`) now have a counterpart on the typecheck
+-- side; `TyTuple`'s tag is still mirrored rather than shared (`tupleHeadTag` vs
+-- `tupleHeadTagTc`) and is the one place that can still drift.
 headTycon : Ty -> Option String
 headTycon (TyCon { tyConName = n }) = Some n
 headTycon (TyApp a _) = headTycon a
