@@ -9,63 +9,49 @@
 --
 -- 🚨 AN EARLIER VERSION OF THIS FIXTURE COULD NOT FAIL, and an adversarial
 -- reviewer falsified it by adding ONE method to its own interface. It declared
--- an arrow impl and an effect impl and then only ever asserted ORDINARY
--- dispatch — where the goal head is concrete, so the census that the change
--- actually perturbed was never consulted. The perturbed readers are the two
--- ACCEPTANCE readers of the impl-head projection, and reaching them needs a
--- shape the old fixture did not have:
+-- an arrow impl and an effect impl and then asserted only ORDINARY dispatch,
+-- where the goal head is concrete — so the readers the change actually
+-- perturbed were never consulted at all. Those readers do not decide ROUTING,
+-- they decide ACCEPTANCE, and reaching them needs two shapes the old fixture
+-- did not have:
 --
---   * an UNDETERMINED constraint (`szc []` — nothing fixes `a`), which is what
---     `routeUndeterminedTop` resolves by COUNTING an interface's distinct impl
---     heads: one → stamp it, two or more → `T-AMBIGUOUS-INSTANCE`, exit 1. If
---     the arrow and effect impls below were counted, this program would stop
---     COMPILING even though neither is ever dispatched to.
+--   * an UNDETERMINED constraint (`szc []` fixes nothing). `check` resolves it
+--     by COUNTING an interface's impl heads — `implCountForIfaceU >= 2` is
+--     `T-AMBIGUOUS-INSTANCE`, exit 1. If the arrow and effect impls below were
+--     counted, this program would stop COMPILING even though neither is ever
+--     dispatched to.
 --   * a MULTI-PARAM interface (`Conv`) with an effect-headed sibling impl,
---     which is what `groundOneObligation` grounds by asking for the UNIQUE impl
---     at a head tag; a second match makes it give up, `b` stays undetermined,
---     and the failure surfaces as a `Display` cascade at `println`.
+--     which `groundOneObligation` grounds by asking for the UNIQUE impl at a
+--     head tag; a second match makes it give up, `b` stays undetermined, and
+--     the failure surfaces as a `Display` cascade at `println`.
 --
--- Both shapes are asserted below and both would go from exit 0 to exit 1 under
--- an acceptance narrowing. That is the property this fixture claims, and it can
--- now actually lose it.
+-- Both would go from exit 0 to exit 1 under an acceptance narrowing, which is
+-- what makes this fixture able to fail. MEASURED: on the branch commit that had
+-- the narrowing (`a8a226cb`) this file is rejected at `check`; on the pre-change
+-- base (`aaa43716`) and on the fixed branch it prints the same value below.
 --
--- Expected `(48, True, True, True)`, hand-derived slot by slot:
+-- ⚠️ `undeterminedSz` IS NEVER CALLED, AND THAT IS THE POINT, not laziness.
+-- `check` still poses the constraint (that is the assertion), while the emitter
+-- drops the dead binding — which keeps this fixture BUILDABLE. An undetermined
+-- constraint reached from `main` does not build on ANY arm, base included (a
+-- single-impl `Sz` with no arrow and no effect anywhere still E-PANICs
+-- `no impl of method 'szc' for type 'List'` at `build` on base `aaa43716`);
+-- that is a separate, pre-existing defect and this fixture must not import it.
+--
+-- Expected `(48, True, True)`, hand-derived slot by slot, and byte-identical to
+-- what the pre-change compiler printed:
 --   1. `unwrap (Box 41)` = 41; `sz True` = 7 via `impl Sz Bool` (NOT the arrow
 --      impl, which `Bool` cannot match, and NOT the effect impl, whose head
---      peels to `Int`); 41 + 7 = 48.
+--      peels to `Float`); 41 + 7 = 48.
 --   2. `[1, 2, 3] == [1, 2, 3]` = `True` — prelude dispatch that predates all
 --      of this.
---   3. `szc []` fixes nothing, so the `Sz` constraint is UNDETERMINED. `Bool`
---      is the ONLY head the acceptance census counts (an arrow and an effect
---      row are not head type constructors), so `implCountForIfaceU Sz` is 1,
---      RULE 3 does not fire, the program is ACCEPTED, and the goal resolves to
---      `impl Sz Bool` — `szc _ = 21`, so `21 == 21` = `True`.
---
---      🚨 SLOT 3 IS THE ONE SLOT WHOSE VALUE DOES **NOT** MATCH THE PRE-CHANGE
---      COMPILER, and saying so is the point rather than a caveat. Measured on
---      base `aaa43716`, this slot is `False`: with `TyFun`/`TyEffect` heads
---      projecting to `None`, both bystander impls landed in the HEADLESS
---      bucket, which matches ANY receiver — so the arrow impl answered a goal
---      it has nothing to do with and `szc []` was `55`. That is #1617 itself,
---      one shape over, and it stays `55` on base whether the arrow impl is
---      declared first or last. What must be UNCHANGED here is the ACCEPT, not
---      the value; slots 1, 2 and 4 are the byte-identical ones.
---
---      ⚠️ `impl Sz Bool` is still declared FIRST deliberately, so that the
---      value cannot be read as a declaration-order artifact.
---   4. `conv 1` grounds `b` from the UNIQUE `Conv` impl at head `Int` — the
+--   3. `conv 1` grounds `b` from the UNIQUE `Conv` impl at head `Int` — the
 --      effect-headed `Conv (<Stdout> Int) String` is not counted — giving
 --      `impl Conv Int Bool`, so `conv 1` is `1 > 0` = `True`.
--- Slots 1, 2 and 4 print exactly what the pre-change compiler printed — that is
--- the bystander property. Slot 3's ACCEPT is also unchanged; its VALUE is not,
--- and the 🚨 on it says why. Slots 3 and 4 are the two that turn into exit 1 the
--- moment the census stops dropping the two bystander impls, which is what makes
--- this fixture able to fail at all.
 interface Sz a where
   sz : a -> Int
   szc : List a -> Int
 
--- ⚠️ DECLARED FIRST ON PURPOSE — see slot 3 of the derivation above.
 impl Sz Bool where
   sz _ = 7
   szc _ = 21
@@ -95,4 +81,8 @@ data Box a = Box a
 unwrap : Box Int -> Int
 unwrap (Box n) = n
 
-main = println (unwrap (Box 41) + sz True, [1, 2, 3] == [1, 2, 3], szc [] == 21, conv 1)
+-- never called: it exists to pose an UNDETERMINED `Sz` constraint at check time
+undeterminedSz : Int
+undeterminedSz = szc []
+
+main = println (unwrap (Box 41) + sz True, [1, 2, 3] == [1, 2, 3], conv 1)
