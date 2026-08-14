@@ -1,0 +1,25 @@
+-- ORGAN 4 (P4), THE HALF WHERE THE WORD IS EXPECTED TO MOVE.
+--
+-- Identical to `b1-p4-super-slot-unique-heads` except that `Base` has TWO impls
+-- at the head tycon `Box`.  The collision gate is therefore True at the appended
+-- `Base` super slot and False at the declared `Deriv` slot, so the two dict words
+-- differ -- which is the mechanism the sibling fixture proves is INVISIBLE while
+-- every head is unique.
+--
+-- HAND-DERIVED FROM THE SPEC: the receiver is `Box 1 : Box Int`.  `Deriv (Box
+-- Int)` gives `dtag` = 2; `Base (Box Int)` -- not `Base (Box String)`, which does
+-- not match the receiver -- gives `btag` = 1.  2 * 100 + 1.
+-- EXPECTED: 201
+--
+-- ⚠️ 201 IS ALSO WHAT A WRONGLY-ROUTED SUPER SLOT CAN PRINT, which is why the
+-- value is not the assertion.  `btag` = 3 is the discriminating wrong answer
+-- (203 = the `Box String` row), and Section 3 pins the SYMBOLS so that a right
+-- answer reached through the wrong row is still caught.
+import base.{Base(..), btag}
+import deriv.{Deriv(..), dtag}
+import t.{Box(..)}
+
+both : Deriv a => a -> Int
+both x = dtag x * 100 + btag x
+
+main = println (both (Box 1))

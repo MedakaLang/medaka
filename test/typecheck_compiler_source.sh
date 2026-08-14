@@ -240,9 +240,18 @@ compiler/frontend/parser.mdk"
 # LINE-GRAINED by the companion check just below: the `OriginUnresolved`-bearing lines
 # of typecheck.mdk are pinned by text, so a `Ty`-layer literal added there fails even
 # though the filename is allow-listed.
+# ⚠️ `compiler/types/route_key.mdk`: same entry, same reason, same "red since
+# `B-2.2-a`" caveat as `occun_allowed` above. Its three hits are the DOCTEST FIXTURES
+# `rkTyInt`/`rkTyBool`/`rkTyList` — `TyCon { …, tyConOrigin = OriginUnresolved }`,
+# built to be exactly the node a LOADER-LESS driver hands the mint, because the
+# doctests' whole job is to pin that the absent-origin arm still spells the bare
+# interface name. A `tyConUnresolved` call would satisfy the letter of this ratchet
+# and move the file onto `tyconun_allowed` instead; the literal is kept because the
+# fixture is asserting the SHAPE, and the file mints nothing the pipeline consumes.
 originun_allowed="compiler/entries/origin_agreement_main.mdk
 compiler/frontend/ast.mdk
 compiler/frontend/resolve.mdk
+compiler/types/route_key.mdk
 compiler/types/typecheck.mdk"
 tyconun_actual=$(git -C "$ROOT" grep -lw -- 'tyConUnresolved' -- '*.mdk' 2>/dev/null \
   | while IFS= read -r f; do
@@ -323,9 +332,21 @@ echo "  ok: $(printf '%s\n' "$declun_actual" | grep -c .) decl-layer producer fi
 # `DImpl` mints no decl-layer carrier and must never grow a `declHeadOf` arm (see
 # that function's own comment in compiler/entries/origin_agreement_main.mdk).
 # Merging the two lists is how that distinction gets lost.
+# ⚠️ `compiler/types/route_key.mdk` IS ON THIS LIST FOR ITS DOCTEST FIXTURES ALONE,
+# and it has been RED SINCE `B-2.2-a` LANDED THAT FILE (2026-08-13) — this ratchet
+# is a `git grep` over TRACKED files, not over an import closure, so the module was
+# never invisible to it; `a` simply ran no gate beyond build/check-self/snapshot and
+# nobody looked. Recorded rather than quietly fixed, because "a call-site-free module
+# is in no gate" is true of the COMPILER's gates and false of this one.
+# WHY IT IS SAFE: `route_key.mdk` mints route WORDS from a `Ty` it only ever READS.
+# It constructs no AST node for the pipeline at all — the sole non-comment hit is the
+# `constraintUnresolved` IMPORT that feeds `rkTy`'s two `TyConstrained` doctests. So
+# there is no post-resolve rebuild here to reset an acquired identity, which is the
+# hazard this ratchet exists to catch.
 occun_allowed="compiler/frontend/ast.mdk
 compiler/frontend/desugar.mdk
-compiler/frontend/parser.mdk"
+compiler/frontend/parser.mdk
+compiler/types/route_key.mdk"
 # ⚠️ Inherits #1222 exactly as the two ratchets above do: `git grep` sees only
 # TRACKED files. Same construction on purpose, so all three move together.
 occun_actual=$(git -C "$ROOT" grep -lwE -- 'constraintUnresolved|requireUnresolved|superUnresolved|dImplUnresolved' -- '*.mdk' 2>/dev/null \
@@ -445,6 +466,22 @@ echo "  ok: $(printf '%s\n' "$originun_actual" | grep -c .) OriginUnresolved con
 # Listed here rather than the grep widened, per the remedy this ratchet's other
 # entries state — a widened grep would stop reporting a FOURTH inhabitant, which is
 # the discoverability this ratchet exists to protect.
+# ⚠️ B-2.2-b1 ADDED ONE LINE, AND IT IS THE SECOND ENTRY THAT *CONSTRUCTS* —
+# `implKeyTc iface tys = implRouteKeyWord OriginUnresolved iface tys None`. It is a
+# `Ty`-layer literal in the sense the failure message warns about, so it needs the
+# justification stated here rather than a widened grep:
+#   * `implKeyTc` no longer mints a ROUTE. After `b1` its ONLY callers are
+#     `keyEntryOf`/`keyEntryOfRow`, which write `KeyEntry`'s 4th field — a field with
+#     NO READER (measured: stamping a literal `"__DEAD__"` at both sites builds,
+#     passes `make check-self`, and passes all of `diff_compiler_dict_semantics.sh`).
+#     The live route words are minted from the winning ROW's own `irOrigin` at
+#     `keyForSite`/`keyForSiteByIface`, which is what carries identity.
+#   * It constructs no NODE. `OriginUnresolved` here is an ARGUMENT to a word mint
+#     that renders it as "no module prefix"; nothing is stamped, so there is no
+#     immunity rule for it to make permanent — the same reasoning `ifaceRefBare`'s
+#     entry above carries, one layer further out.
+# If `KeyEntry`'s key field ever acquires a reader, this line stops being justified
+# and the word must come from the row like the other two.
 tc_originun_allowed="OriginUnresolved => \"<unresolved>\"
 OriginUnresolved => [TkBare NsIface ir.irName]
 bcEq = OriginUnresolved,
@@ -454,6 +491,7 @@ bcSemigroup = OriginUnresolved,
 ceSuperOrigin (Super { superOrigin = OriginUnresolved, ... }) = \"<unresolved>\"
 ifaceRefBare n = IfaceRef { irName = n, irOrigin = OriginUnresolved }
 ifaceRefNone = IfaceRef { irName = \"\", irOrigin = OriginUnresolved }
+implKeyTc iface tys = implRouteKeyWord OriginUnresolved iface tys None
 implOrigin = OriginUnresolved,
 originPhrase OriginUnresolved = \"an unknown module\"
 tconUnresolved n = TCon n OriginUnresolved"

@@ -1,0 +1,18 @@
+import base.{Base(..), btag}
+import deriv.{Deriv(..), dtag}
+
+public export data Box a = Box a
+
+-- TWO impls of `Base` at ONE head tycon (`Box`).  This is what makes the
+-- collision gate in `keyForSite`/`ieHeadCollidesByMethod` answer True at the
+-- appended `Base` slot, so the route word there is the CANONICAL IMPL KEY rather
+-- than the bare tag `Box` -- and, after `B-2.2-b1`, a canonical key that carries
+-- the declaring module's interface identity.
+impl Base (Box Int) where
+  btag _ = 1
+
+impl Base (Box String) where
+  btag _ = 3
+
+impl Deriv (Box Int) where
+  dtag _ = 2

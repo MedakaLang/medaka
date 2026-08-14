@@ -194,6 +194,12 @@ import types.registry.{
   sregAddK,
   sregSize,
 }
+-- B-2.2-e: THE route-word mint, shared with `eval/eval.mdk` and
+-- `ir/core_ir_lower.mdk`.  Before this bite each of those spelled its own copy
+-- (`implKeyTc` here, `implKeyOf` there) over its own `Ty` printer; they are now
+-- one function, so the caller side and the definition side of the dict-word seam
+-- agree BY CONSTRUCTION rather than by two mirrors staying in lockstep.
+import types.route_key.{implRouteKeyWord}
 
 -- ── monotypes & schemes ───────────────────────────────────────────────────
 public export data Mono =
@@ -5842,9 +5848,17 @@ data VecObl = VecObl { voIface : IfaceRef, voIds : List Int }
 -- there, once.
 data CSlot = CSlot { csIface : IfaceRef, csId : Int }
 
--- B-2.2-f (#1113): how many of a constrained callee's slots were DECLARED by its own
--- `=>` context, as opposed to APPENDED by `expandSupersPairs`' transitive super
--- expansion.  Carried per ENTRY, beside the ids table (never inside `CSlot`) — the
+-- B-2.2-f (#1113): how many of a constrained callee's slots were PRESENT BEFORE
+-- `expandSupersPairs`' transitive super expansion APPENDED any.
+-- ⚠️ THAT WORDING IS THE CORRECTION, and the direction of the old one matters.  This
+-- comment used to say "DECLARED by its own `=>` context", which is FALSE on a live
+-- path: `setFunConstraintEntry`'s second caller mints slots from INFERRED constraint
+-- ids, with no `=>` context anywhere, and those are recorded as `CDPLen` too.  The
+-- BEHAVIOUR is right — the operative property is "not appended by
+-- `expandSupersPairs`", and an inferred slot is not appended — but a reader taking the
+-- old definition literally would conclude the inferred path OVER-records and "fix" it
+-- by lowering the count, withholding identity from real slots.  Do not.
+-- Carried per ENTRY, beside the ids table (never inside `CSlot`) — the
 -- recursive-call arm (`realizeRecDictApps` -> `recRoutes` -> `resolveRecMono`) reads
 -- `funConstraintsRef` as a bare `List Int` and constructs no `CSlot` at all, so a
 -- per-slot field could not serve it.
@@ -18401,11 +18415,20 @@ keyEntryOf (DImpl { iface, tys, reqs, methods, ... }) = match tys
   [] => []
 keyEntryOf _ = []
 
--- the canonical impl key, byte-identical to eval.mdk's implKeyOf: `iface ++ "|" ++
--- <prec-2 args> ++ "|"` (the trailing empty name-component is retained so keys stay
--- byte-identical to the pre-removal format).
+-- the canonical impl key.  B-2.2-e: no longer a mirror of eval.mdk's `implKeyOf`
+-- — it IS that function (`route_key.implRouteKeyWord`), reached from both sides of
+-- the seam.  ⚠️ B-2.2-b1: this spelling passes `OriginUnresolved`, i.e. the BARE
+-- interface name, and it is the mint for exactly ONE thing: `KeyEntry`'s 4th field,
+-- written by `keyEntryOf`/`keyEntryOfRow` and READ BY NOBODY (measured, not grepped:
+-- replacing the word at both sites with a literal `"__DEAD__"` builds, passes
+-- `make check-self` and passes all 163 assertions of
+-- `test/diff_compiler_dict_semantics.sh`).  The LIVE route words — the ones that
+-- reach a dict cell and an emitted symbol — are minted at `keyForSite` /
+-- `keyForSiteByIface` from the winning ROW's own `irOrigin`, so they carry the
+-- interface's identity and this one does not.  Do not "unify" them without first
+-- giving that field a reader.
 implKeyTc : String -> List Ty -> String
-implKeyTc iface tys = "\{iface}|\{joinWith " " (map ppTyAtom tys)}|"
+implKeyTc iface tys = implRouteKeyWord OriginUnresolved iface tys None
 
 -- the canonical key to stamp for the impl of [name] matching the ground result
 -- mono — but ONLY when another impl of the same method shares its head tycon (so
@@ -18443,13 +18466,18 @@ implKeyTc iface tys = "\{iface}|\{joinWith " " (map ppTyAtom tys)}|"
 -- winner has a head tycon is therefore unmoved; the three fixtures above are the
 -- sites whose winner is HEADLESS, which is the whole point of the change.
 --
--- ⚠️ And BEHAVIOUR surviving that IR change is EMPIRICAL, not structural.  It rests
--- on the emitter's general-instance fallback tier: an `RKey` whose word matches no
--- tagged impl falls to `emitGeneralRKey` → `findByTag noneHeadTag`
--- (`compiler/backend/llvm_emit.mdk`, and `pickTagFallback` in eval.mdk is its peer).
--- Those three fixtures pass because that tier catches them, not because the word did
--- not move.  If that tier is ever narrowed, re-derive this — a green suite here is
--- evidence about the fallback, not about the route word.
+-- ⚠️ And BEHAVIOUR surviving that IR change is EMPIRICAL, not structural.  🚨 THIS
+-- PARAGRAPH USED TO NAME THE WRONG TIER — *"it rests on `emitGeneralRKey` →
+-- `findByTag noneHeadTag`"* — and that claim was relayed through two design
+-- documents before anyone built it (RUN-P3-013).  MEASURED: a `Some noneHeadTag`
+-- word is a DIRECT HIT, because the general impl is itself registered under
+-- `__none__` (`call @mdk_impl___none___sz`), so `emitMethod`'s `implFor` arm
+-- catches those three fixtures and `emitGeneralRKey` — the tier that used to be
+-- needed, before F-3b moved the word — is not reached from here at all.  The tier
+-- that DOES depend on this function is the one below it, `emitDefaultRKey`, and it
+-- is reached from the `None` arm, not from here: `mdk_default_<method>_<TAG>` is
+-- keyed on the `<TAG>` that `fromOption tag` supplies at the caller.  That is why
+-- the `None` arm must keep the concrete head tag (see its own comment).
 --
 -- The key/tag split deliberately mirrors `core_ir_lower.declRouteKey` (bare head when
 -- that head is unique among the interface's declared impls, canonical full-type key
@@ -18525,11 +18553,23 @@ keyForSite name goals =
   match ieSelectRowByMethod env name goals
     Some (ImplRow _ _ ir tys _ _) =>
       if ieHeadCollidesByMethod env name (univReceiverTag tys) then
-        -- recomputed by the SAME `implKeyTc ir.irName tys` that `keyEntryOfRow`
-        -- (and `keyEntryOf` before it) stamps into a `KeyEntry`'s `key` field, so
-        -- the word is byte-identical to what the prefix path produced for the same
-        -- winner — only the POPULATION the winner and the count come from moved.
-        Some (implKeyTc ir.irName tys)
+        -- 🚨 B-2.2-b1: THE WORD NOW CARRIES THE WINNING ROW'S INTERFACE IDENTITY,
+        -- `module::Iface` (`ir.irOrigin` is in hand here — `ImplRow`'s `IfaceRef`
+        -- field carries the origin beside the name, so no selection work is added
+        -- and the collision gate above is untouched).  Two same-spelled interfaces
+        -- in two modules used to collapse onto one word (the #1047/#1265
+        -- same-spelled-interface family — #1047 is CLOSED and #1265 records that
+        -- only the interface-NAME half was fixed, leaving this word bare); they no
+        -- longer do.  ⚠️ THIS IS NOT #1182: that bug is `ieCandidatesForMethod`'s
+        -- interface-free candidate key, UPSTREAM of this word, and on its own
+        -- one-file repro this substitution is a NO-OP (absent origin ⇒ bare name).  The DEFINITION side mints the same word from the same
+        -- function (`eval.declImplIfaceIdRow`/`implMethodEntry`,
+        -- `core_ir_lower.ifaceImplHeadEntries`/`lowerImplMethod`), which is what
+        -- keeps the dict cell and the emitted symbol byte-equal.
+        -- ⚠️ On the loader-less drivers (`check <single file>`, lsp, repl, doc)
+        -- the origin is absent and `ifaceWordOf` falls back to the bare name — the
+        -- pre-bite word exactly.  That fallback is load-bearing; see `route_key`.
+        Some (implRouteKeyWord ir.irOrigin ir.irName tys None)
       else
         -- A-2.2b: the ROUTE WORD, projected back to a bare name on purpose — see
         -- `KeyEntry`.  ⚠️ The collision TEST is still spelling-keyed, through
@@ -19185,9 +19225,11 @@ ieRowHeadTriple (Some _) = None
 -- ARCH B-2.1-b2: repointed, not deleted (AM-1 still holds for the `keyForSite*`
 -- family).  The `KeyBuckets` parameter is GONE rather than ignored — an ignored
 -- table parameter reads as "still consulted" at every call site.  The winner's key
--- is recomputed here by the SAME `implKeyTc ir.irName tys` that `keyEntryOfRow`
--- (and `keyEntryOf` before it) stamps into the `key` field, so the stamped word is
--- byte-identical to what the deleted path produced for the same winner.
+-- is minted here from the row's own `IfaceRef`.  ⚠️ B-2.2-b1: it is NO LONGER the
+-- same word `keyEntryOf`/`keyEntryOfRow` write into a `KeyEntry`'s (unread) `key`
+-- field — this one carries the interface IDENTITY, that one is bare.  The word this
+-- must stay byte-equal to is the DEFINITION side's (`core_ir_lower`/`eval`), and it
+-- does because both now call `route_key.implRouteKeyWord` with the same origin.
 --
 -- 🚨 THE COLLISION RETEST MOVED WITH THE SELECTOR, AND THAT NARROWS A REAL SKEW
 -- RATHER THAN WIDENING ONE.  `core_ir_lower.ifaceDeclHeadUnique` — the emitter's
@@ -19204,7 +19246,9 @@ keyForSiteByIface iface goals =
   match ieSelectRowByIface env iface goals
     Some (ImplRow _ _ ir tys _ _) =>
       if ieHeadCollidesByIface env iface (univReceiverTag tys) then
-        Some (implKeyTc ir.irName tys)
+        -- B-2.2-b1: identity-bearing, exactly as `keyForSite`'s collision arm —
+        -- see the derivation there.
+        Some (implRouteKeyWord ir.irOrigin ir.irName tys None)
       else
         -- A-2.2b: the ROUTE WORD, bare on purpose — see `keyForSite`.
         Some (headKeyNameOr noneHeadTag (univReceiverTag tys))
@@ -29172,6 +29216,15 @@ dictPassModulesIfEnabled dictNames core2 modules2 =
   let promotedQ = crossRun.value.crossModuleFunConstraintsQualRef.value
   let allMods = namesToSet (map fst modules2) omEmpty
   let _ = setRef perRun.value.funConstraintsRef (scopeArities promotedQ allMods (core2 ++ allModDecls))
+  -- 🚨 B-2.2-b1: THE SIDECAR IS CLEARED, NOT LEFT ALONE.  `f` shipped arguing that
+  -- writing no companion here is "absence, which is correct"; it is not — FAIL-CLOSED
+  -- REQUIRES WRITING `[]`.  `resetState ()` fires at exactly two sites and neither runs
+  -- between the last `checkBodyImpl` and this call, so not writing leaves the PREVIOUS
+  -- module's entries live: a reader in this phase would get a PRESENT, WRONG `CDPLen`,
+  -- resolved by bare-name first-match against a differently-populated table, with no
+  -- `CDPUnknown` to trip on.  Empty ⇒ `clampPrefix`'s `None` arm ⇒ `CDPUnknown` ⇒
+  -- withhold, which is the honest answer for a table this phase does not repopulate.
+  let _ = setRef perRun.value.funConstraintDeclaredRef []
   let _ = setRef perRun.value.methodConstraintsRef (scopeMethodArities crossRun.value.crossModuleMethodConstraintsQualRef.value allMods)
   let core2' = dictPass dictNames core2
   let modules2' = dictPassModulesScoped dictNames promotedQ core2 modules2 modules2
@@ -29205,6 +29258,10 @@ dictPassModulesScoped dictNames promotedQ core2 allModules ((mid, prog)::rest) =
   -- already rewritten `A.name` to the origin's real symbol before this point.
   let _ = setRef perRun.value.funConstraintsRef (aliasConstraintEntries prog promotedQ
     ++ scopeArities promotedQ scopeMods scope)
+  -- B-2.2-b1: cleared for the same reason as in `dictPassModulesIfEnabled` — a stale
+  -- prefix table is worse than an empty one, because only the empty one answers
+  -- `CDPUnknown`.
+  let _ = setRef perRun.value.funConstraintDeclaredRef []
   let _ = setRef perRun.value.methodConstraintsRef (scopeMethodArities crossRun.value.crossModuleMethodConstraintsQualRef.value scopeMods)
   (mid, dictPass dictNames prog) :: dictPassModulesScoped dictNames promotedQ core2 allModules rest
 

@@ -1,0 +1,4 @@
+-- The SAME interface as `b1-xmod-default-inherited-tag/iface.mdk` with EXACTLY
+-- ONE dimension flipped: the default body is gone.  Nothing else differs.
+export interface Sz a where
+  sz : a -> Int

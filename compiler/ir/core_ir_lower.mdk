@@ -33,8 +33,13 @@ import frontend.ast.{
   MethodDefault(..),
   ImplMethod(..),
   Route(..),
+  TyConOrigin,
   ifaceIdentity,
 }
+-- B-2.2-e: the ONE route-word mint.  This module used to reach it as
+-- `eval.eval.implKeyOf`; that mirror is deleted and both sides of the dict-word
+-- seam now call `route_key.implRouteKeyWord` with the impl's own `implOrigin`.
+import types.route_key.{implRouteKeyWord}
 import ir.core_ir.{
   CExpr(..),
   CArm(..),
@@ -58,7 +63,6 @@ import eval.eval.{
   lookupPositions,
   tyvarsInArgs,
   headTyconHead,
-  implKeyOf,
 }
 import list.{replicate}
 import support.ordmap.{OrdMap, omEmpty, omInsert, omHasKey}
@@ -1243,7 +1247,8 @@ lowerImpls prog =
 --
 -- The head tag is computed EXACTLY as `lowerImplMethod` computes an entry's tag
 -- (`fromOption noneHeadTag (headTyconHead tys)`), the canonical key EXACTLY as it
--- computes an entry's key (`implKeyOf iface tys None`), and the decl set is matched
+-- computes an entry's key (`implRouteKeyWord implOrigin iface tys None` — B-2.2-e:
+-- the SAME origin argument, so the two stay equal), and the decl set is matched
 -- arm-for-arm with `lowerDeclImpl` — including its `DAttrib` unwrapping (#1037).  So
 -- this table is a strict SUPERSET of the (tag, key) pairs the entries already yield:
 -- for every program that has no method-less impl the emitter's tag set (and its
@@ -1298,7 +1303,7 @@ ifaceImplHeadTable prog = flatMap ifaceImplHeadEntries prog
 ifaceImplHeadEntries : Decl -> List (String, String, String, String)
 -- #1037: matched arm-for-arm with `lowerDeclImpl`, which now unwraps `DAttrib` too.
 ifaceImplHeadEntries (DAttrib _ d) = ifaceImplHeadEntries d
-ifaceImplHeadEntries (DImpl { iface = ifaceName, implOrigin = o, tys = typeArgs, ... }) = [(ifaceIdentity o ifaceName, ifaceName, fromOption noneHeadTag (headTyconHead typeArgs), implKeyOf ifaceName typeArgs None)]
+ifaceImplHeadEntries (DImpl { iface = ifaceName, implOrigin = o, tys = typeArgs, ... }) = [(ifaceIdentity o ifaceName, ifaceName, fromOption noneHeadTag (headTyconHead typeArgs), implRouteKeyWord o ifaceName typeArgs None)]
 ifaceImplHeadEntries _ = []
 
 -- #1047: the interface IDENTITIES of every declared impl whose head tag OR
@@ -1385,7 +1390,11 @@ lowerDeclImpl : List ((String, String), List Int) -> Decl -> List CImplEntry
 -- and SIGSEGV'd through #948's arm-less dispatcher; eval's `declImplEntries` has the
 -- same shape and silently answered from the interface default instead.
 lowerDeclImpl disp (DAttrib _ d) = lowerDeclImpl disp d
-lowerDeclImpl disp (DImpl { iface = ifaceName, tys = typeArgs, methods, ... }) = map (lowerImplMethod disp ifaceName typeArgs) methods
+-- B-2.2-e: `implOrigin` is bound here purely to reach `lowerImplMethod`'s route
+-- word (the definition side of the identity-bearing key `keyForSite` stamps at the
+-- call site).  Matched arm-for-arm by `eval.declImplEntries`, which threads the
+-- same field for the same reason.
+lowerDeclImpl disp (DImpl { iface = ifaceName, implOrigin = o, tys = typeArgs, methods, ... }) = map (lowerImplMethod disp o ifaceName typeArgs) methods
 -- #1047: the default carries the DECLARING interface's identity, read straight off
 -- `DInterface.ifaceOrigin` (resolve stamps it in `elaborateModules`' preamble —
 -- `stampGraphTyOrigins`, the seam the `run` path and the separate `medaka_emitter`
@@ -1393,10 +1402,10 @@ lowerDeclImpl disp (DImpl { iface = ifaceName, tys = typeArgs, methods, ... }) =
 lowerDeclImpl _ (DInterface { name = ifaceName, ifaceOrigin = o, typarams = typeParams, methods, ... }) = flatMap (lowerDefault (ifaceIdentity o ifaceName) typeParams) methods
 lowerDeclImpl _ _ = []
 
-lowerImplMethod : List ((String, String), List Int) -> String -> List Ty -> ImplMethod -> CImplEntry
-lowerImplMethod disp ifaceName typeArgs (ImplMethod mname pats body) =
+lowerImplMethod : List ((String, String), List Int) -> TyConOrigin -> String -> List Ty -> ImplMethod -> CImplEntry
+lowerImplMethod disp o ifaceName typeArgs (ImplMethod mname pats body) =
   let tag = fromOption noneHeadTag (headTyconHead typeArgs)
-  let key = implKeyOf ifaceName typeArgs None
+  let key = implRouteKeyWord o ifaceName typeArgs None
   let positions = lookupPositions ifaceName mname disp
   CImplEntry
     mname

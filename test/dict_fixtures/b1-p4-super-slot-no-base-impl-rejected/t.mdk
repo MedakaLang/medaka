@@ -1,0 +1,9 @@
+import base.{Base(..), btag}
+import deriv.{Deriv(..), dtag}
+
+public export data T = T
+
+-- ⚠️ `impl Base T` IS DELETED HERE.  That is the ONLY difference from
+-- `b1-p4-super-slot-unique-heads/t.mdk`.
+impl Deriv T where
+  dtag _ = 2

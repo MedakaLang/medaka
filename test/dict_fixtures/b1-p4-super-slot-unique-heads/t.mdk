@@ -1,0 +1,10 @@
+import base.{Base(..), btag}
+import deriv.{Deriv(..), dtag}
+
+public export data T = T
+
+impl Base T where
+  btag _ = 1
+
+impl Deriv T where
+  dtag _ = 2

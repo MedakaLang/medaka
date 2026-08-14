@@ -39,8 +39,13 @@ import frontend.ast.{
   qualifiedLocal,
   Decl(..),
   DataVis(..),
+  TyConOrigin,
   ifaceIdentity,
 }
+-- B-2.2-e: the ONE route-word mint, shared with `types/typecheck.mdk` (the caller
+-- side of the seam) and `ir/core_ir_lower.mdk`.  It replaces this file's deleted
+-- `implKeyOf`/`ppTyK` mirror; see the obituary above `headTyconHead`.
+import types.route_key.{implRouteKeyWord}
 import support.util.{
   contains,
   listLen,
@@ -56,7 +61,6 @@ import support.util.{
   mapOption,
   joinDot,
   dedup,
-  escStr,
 }
 -- Reused JSON diagnostic shaping for `medaka run --json` (RUNTIME-DIAGNOSTIC-
 -- CHANNEL-DESIGN.md Fork C). diagnostics.mdk sits above frontend/types in the
@@ -302,7 +306,7 @@ declImplIfaceIdRow : Decl -> List (String, String, String)
 -- #1037: an attribute wraps the decl it annotates; matched arm-for-arm with
 -- `declImplEntries`, which unwraps `DAttrib` for the same reason.
 declImplIfaceIdRow (DAttrib _ d) = declImplIfaceIdRow d
-declImplIfaceIdRow (DImpl { iface = ifaceName, implOrigin = o, tys = typeArgs, ... }) = [(ifaceIdentity o ifaceName, fromOption noneHeadTag (headTyconHead typeArgs), implKeyOf ifaceName typeArgs None)]
+declImplIfaceIdRow (DImpl { iface = ifaceName, implOrigin = o, tys = typeArgs, ... }) = [(ifaceIdentity o ifaceName, fromOption noneHeadTag (headTyconHead typeArgs), implRouteKeyWord o ifaceName typeArgs None)]
 declImplIfaceIdRow _ = []
 
 -- the interface IDENTITIES of every declared impl at [tag] (head tag OR canonical
@@ -471,65 +475,31 @@ sumInts (x::xs) = x + sumInts xs
 export tyvarsInArgs : List Ty -> Int
 tyvarsInArgs ts = sumInts (map countTyvars ts)
 
--- TYPECHECK-AUDIT C7: the canonical impl key, mirroring lib/ast.ml's `impl_key`
--- byte-for-byte: `iface ++ "|" ++ <type args, prec-2 pretty> ++ "|" ++ name`.
--- Built from the same source (the impl's AST type args) here at install time and
--- by typecheck at each ground RKey route site, so the two strings agree by
--- construction.  Two impls sharing a head tycon but differing type args
--- (Pair Int Bool vs Pair Bool Int) get DISTINCT keys, so narrowing can pick the
--- one the typechecker chose instead of falling to first-impl-wins.
-export implKeyOf : String -> List Ty -> Option String -> String
-implKeyOf iface typeArgs nm =
-  "\{iface}|\{joinWith " " (map ppTyAtomK typeArgs)}|\{fromOption "" nm}"
-
--- prec-2 Ty pretty-printer (mirrors lib/ast.ml pp_ty_prec 2 / typecheck's
--- ppTyAtom): wraps applications and arrows, leaves atoms bare.
-ppTyK : Ty -> String
-ppTyK (TyCon { tyConName = n }) = n
-ppTyK (TyVar n) = n
-ppTyK (TyApp a b) = "\{ppTyK a} \{ppTyAtomK b}"
-ppTyK (TyFun a b) = "\{ppTyFunArgK a} -> \{ppTyK b}"
-ppTyK (TyTuple ts) = "(" ++ joinComma (map ppTyK ts) ++ ")"
-ppTyK (TyEffect _ _ t) = ppTyK t
-ppTyK (TyConstrained _ t) = ppTyK t
--- A bare row atom (#997) has no wrapped type to fall back to (unlike
--- `TyEffect` above, which prints its wrapped type and drops the row).
--- Render the row itself, so two impls keyed on different written rows
--- (`Async <Stdout>` vs `Async <Rand>`) don't collide onto the SAME
--- `implKeyOf` string — collapsing to a fixed placeholder here would be
--- strictly worse than `TyEffect`'s existing (already lossy) behavior.
--- Domain-faithful (mirrors typecheck.mdk's `ppEffAtomTy`, atom-for-atom —
--- `implKeyTc`'s doc comment claims byte-identical output to this function,
--- so `impl I (Box <Net "a/*"> Int)` must key the same on both sides): an
--- atom's domain param IS part of what a written row means, so dropping it
--- would collide two impls that differ only by domain onto one key.
-ppTyK (TyRow es tail _) = "<\{ppRowBodyK es tail}>"
-
-ppRowBodyK : List (String, Option String) -> Option String -> String
-ppRowBodyK es None = joinComma (map ppEffAtomK es)
-ppRowBodyK [] (Some v) = v
-ppRowBodyK es (Some v) = "\{joinComma (map ppEffAtomK es)} | \{v}"
-
--- mirrors typecheck.mdk's ppEffAtomTy exactly (None => l, Some "_" => l ++
--- " _", Some s => l ++ " " ++ %S) so the two implKey renderers stay in
--- lockstep per the doc comment above.
-ppEffAtomK : (String, Option String) -> String
-ppEffAtomK (l, None) = l
--- Intentional cross-file duplicate (a THIRD copy alongside typecheck.mdk's
--- ppEffAtomTy and doc.mdk's ppEffAtomDoc); not consolidating (tiny helper /
--- divergent-by-design backend trio).
--- lint-disable-next-line rule-duplicate-body
-ppEffAtomK (l, Some s) = if s == "_" then l ++ " _" else "\{l} \{escStr s}"
-
-ppTyFunArgK : Ty -> String
-ppTyFunArgK (TyFun a b) = "(" ++ ppTyK (TyFun a b) ++ ")"
-ppTyFunArgK t = ppTyK t
-
-ppTyAtomK : Ty -> String
-ppTyAtomK (TyFun a b) = "(" ++ ppTyK (TyFun a b) ++ ")"
-ppTyAtomK (TyApp a b) = "(" ++ ppTyK (TyApp a b) ++ ")"
-ppTyAtomK t = ppTyK t
-
+-- 🚨 B-2.2-e: `implKeyOf` AND ITS PRIVATE `ppTyK` PRINTER FAMILY ARE DELETED HERE.
+-- Both were mirrors of `types/typecheck.mdk`'s `implKeyTc`/`ppTyAtom` — the P0-9
+-- shape — and the mint now lives once, in `types/route_key.mdk`, which BOTH sides
+-- of the dict-word seam call (`implRouteKeyWord`).  Their callers in this file are
+-- `declImplIfaceIdRow` and `implMethodEntry`; `ir/core_ir_lower.mdk` used to import
+-- `implKeyOf` from here and now imports the mint directly.
+--
+-- ⚠️ THE FOLD IS NOT COSMETIC ON THIS SIDE — the deleted printer was the LESS
+-- complete of the two: `ppTyK` stripped `TyEffect` (`<Stdout> Int` → `Int`) and
+-- `TyConstrained` (`Eq a => a` → `a`), while `route_key.rkTy` (typecheck's printer)
+-- renders both.  So an impl head written with an effect row or a constraint now
+-- gets a DIFFERENT — and wider — word here than it did.  MEASURED that no accepted
+-- program can observe the widening as a collapse: two impls differing only in an
+-- effect row or a constraint are rejected by coherence before either word is minted
+-- (`impl Sz Int` + `impl Sz (<Stdout> Int)` → *"Overlapping impls of Sz: Int and
+-- Int can match the same type"*, exit 1 on check AND run — note the diagnostic
+-- strips the row too).  What the fold DOES change for a LONE effect-headed impl is
+-- that this side finally spells the word typecheck was already stamping.
+-- ⚠️ FURTHER divergences survive and are deliberately NOT fixed here: `headTycon`
+-- (below) strips `TyEffect` AND `TyConstrained` to the inner head while typecheck's
+-- `headTyconTy` does not (it answers `None` for both, and for a function head), so
+-- the two sides can still disagree on the TAG.  ⚠️ Do not read that list as
+-- complete — it is what has been enumerated so far, on a projection nobody has
+-- audited arm-for-arm.  `e` unifies the printers (the WORD), not the head
+-- projections.
 -- Native Gap C: an ARITY-DISTINGUISHED tuple dispatch/impl-tag (`__tuple2__`,
 -- `__tuple3__`, …).  Each tuple arity gets its OWN impl group / lifted define and
 -- its own runtime dispatch tag, so the 2-/3-/4-/5-tuple `Eq`/`Ord`/`Debug` impls
@@ -1988,17 +1958,21 @@ declImplEntries : EvalEnv (Value e) -> List ((String, String), List Int) -> Decl
 -- core_ir_lower's `lowerDeclImpl` — the two are parallel projections of the same
 -- decl set and a fix to one is silently absent from the other (AGENTS.md).
 declImplEntries env disp (DAttrib _ d) = declImplEntries env disp d
-declImplEntries env disp (DImpl { iface = ifaceName, tys = typeArgs, methods, ... }) = map (implMethodEntry env disp ifaceName typeArgs) methods
+-- B-2.2-e: `implOrigin` is bound here purely to reach `implMethodEntry`'s route
+-- word — the DEFINITION side's half of the identity-bearing key the typechecker
+-- stamps at the call site (`keyForSite`).  Matched arm-for-arm by
+-- `core_ir_lower.lowerDeclImpl`, which threads the same field for the same reason.
+declImplEntries env disp (DImpl { iface = ifaceName, implOrigin = o, tys = typeArgs, methods, ... }) = map (implMethodEntry env disp o ifaceName typeArgs) methods
 -- #1047: the DECLARING interface's identity comes straight off `ifaceOrigin`
 -- (resolve stamps it in `elaborateModules`' preamble, the seam `run` and the
 -- separate `medaka_emitter` BUILD process share).
 declImplEntries env _ (DInterface { name = ifaceName, ifaceOrigin = o, typarams = typeParams, methods, ... }) = flatMap (defaultEntry env (ifaceIdentity o ifaceName) typeParams) methods
 declImplEntries _ _ _ = []
 
-implMethodEntry : EvalEnv (Value e) -> List ((String, String), List Int) -> String -> List Ty -> ImplMethod -> (String, (Int, Value e))
-implMethodEntry env disp ifaceName typeArgs (ImplMethod mname pats body) =
+implMethodEntry : EvalEnv (Value e) -> List ((String, String), List Int) -> TyConOrigin -> String -> List Ty -> ImplMethod -> (String, (Int, Value e))
+implMethodEntry env disp o ifaceName typeArgs (ImplMethod mname pats body) =
   let tag = fromOption noneHeadTag (headTyconHead typeArgs)
-  let key = implKeyOf ifaceName typeArgs None
+  let key = implRouteKeyWord o ifaceName typeArgs None
   let positions = lookupPositions ifaceName mname disp
   let inner = implMethodValue env positions pats body
   (mname, (tyvarsInArgs typeArgs, VTypedImpl tag key positions 0 inner))

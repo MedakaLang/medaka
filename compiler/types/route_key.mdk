@@ -1,9 +1,28 @@
--- The SHARED ROUTE-WORD MINT — Stage B / Phase 3′ bite `B-2.2-a` (#1182).
+-- The SHARED ROUTE-WORD MINT — Stage B / Phase 3′ (ARCH B-2, #1113).
 --
--- 🚨 THIS MODULE HAS ZERO CALL SITES AND IS IMPORTED BY NOBODY. That is the
--- staging, not an oversight: `B-2.2-a` lands the mint, and the bites after it
--- move the callers onto it one at a time, each its own reviewable PR. Nothing
--- here changes any program's behaviour today.
+-- 🚨 THE TICKET IN THIS HEADER USED TO READ #1182 AND THAT WAS WRONG — nine
+-- instances of the same mis-citation propagated from one packet sentence, and a
+-- reader greps the HEADER, so it is corrected here rather than only in the body.
+-- Qualifying the route word does NOT fix #1182: that bug is
+-- `ieCandidatesForMethod`'s candidate key — method-name membership plus a head
+-- match, with NO interface component — which is UPSTREAM of this word; the row is
+-- already chosen wrong before anything here is minted. And on #1182's own repro
+-- the word does not even move: it is a SINGLE FILE, so `ifaceIdentity` answers
+-- `""`, `ifaceWordOf` falls back to the bare name, and the output is byte-
+-- identical to the pre-bite word. What this mint closes is the residual of the
+-- #1047/#1265 family — #1047 (two modules declaring same-SPELLED interfaces) is
+-- CLOSED, and #1265's own title records what was left: *"#1264 fixed only the
+-- interface-NAME half"*, i.e. the TABLES were qualified and the ROUTE WORD was
+-- not.  That word is what this module mints.
+--
+-- 🚨 THAT STAGING IS OVER. `B-2.2-e` + `B-2.2-b1` WIRED THE CALLERS UP: this
+-- module is now imported by `types/typecheck.mdk` (the caller side of the
+-- dict-word seam), `eval/eval.mdk` and `ir/core_ir_lower.mdk` (the definition
+-- side), and it is the ONLY mint of an impl route word in the tree. The two
+-- mirrors it replaced — `eval.implKeyOf` with its private `ppTyK` printer family,
+-- and `typecheck.implKeyTc`'s hand-spelled body — are DELETED. Everything below
+-- that reads as "available and applied nowhere" describes `a`'s landing and is
+-- annotated where it is now false.
 --
 -- ⚠️ THE DESIGN DOC IS WRONG FOR THIS BITE, DELIBERATELY.
 -- `.claude/sprint-b/design/D1-phase3-routes.md` §`B-2.2-a` says to change
@@ -38,6 +57,14 @@
 -- `compiler/types/registry.mdk` is the precedent for a new `types/` module
 -- with exactly this import shape.
 --
+-- ── ⚠️ HISTORICAL, and no longer the verification story ───────────────────
+-- The paragraph below was `a`'s: with the callers wired up this module is in
+-- `medaka_cli.mdk`'s import closure, so `make medaka`, `make check-self` and
+-- `test/typecheck_compiler_source.sh` all cover it now, and every gate that
+-- grades a route word grades it. **Keep the `Makefile` `test:` line anyway** —
+-- it is the only thing that RUNS the doctests below, which are the compatibility
+-- pins (byte-identity with the pre-fold word on the absent-origin arm).
+--
 -- 🚨 "NO CALL SITES" ALSO MEANS "IN NO GATE" UNLESS SAID OTHERWISE, and that
 -- is measured, not feared: `compiler/types/registry.mdk`'s header records the
 -- 2026-08-03 measurement that a module outside every entry's import closure is
@@ -55,8 +82,11 @@
 -- `implRouteKeyWord` is BYTE-IDENTICAL to today's `implKeyTc`
 -- (`types/typecheck.mdk`) and `implKeyOf` (`eval/eval.mdk`) whenever the
 -- origin is absent, and carries `module::Iface` in place of the bare
--- interface name when it is not. That substitution is #1182's fix; it is
--- AVAILABLE here and APPLIED NOWHERE, because this bite wires up no callers.
+-- interface name when it is not. ⚠️ That substitution is NOT #1182's fix — see
+-- the header for the full retraction. It closes the ROUTE-WORD residual of the
+-- #1047/#1265 family (two same-SPELLED interfaces in different modules
+-- collapsing onto one word). `B-2.2-b1` APPLIES it, at
+-- `keyForSite`/`keyForSiteByIface`.
 --
 -- `routeWordFor` is `core_ir_lower.declRouteKey`'s body and the
 -- `if ieHeadCollidesBy… then implKeyTc … else headKeyNameOr …` shape of
@@ -68,20 +98,26 @@
 -- single replacement for the mirrored `ppTyAtom` (`types/typecheck.mdk`) and
 -- `ppTyAtomK` (`eval/eval.mdk`).
 --
--- 🚨 THE TWO ORIGINALS ARE NOT DELETED HERE, AND THEY ALREADY DIVERGE OFF THE
--- REACHABLE SUBSET. Collapsing the callers is a LATER bite, and it owes a
--- discriminating probe first, because this is a real behavioural difference
--- and not a cosmetic one:
+-- 🚨 THE TWO ORIGINALS ARE NOW DELETED (`B-2.2-e`), AND THEY DIVERGED OFF THE
+-- REACHABLE SUBSET, so the collapse WIDENED eval's words. The divergence, kept
+-- because it is what the fold changed and a future reader needs to know which
+-- direction it moved:
 --   * `TyEffect effs tail t` — typecheck prints `<row> t`; eval prints `t`,
 --     dropping the row entirely.
 --   * `TyConstrained cs t`   — typecheck prints `cs => t`; eval prints `t`.
 --   * `TyRow`                — both print `<row>`; these agree.
 -- `rkTy` is based on typecheck's `ppTy`/`ppTyAtom`, the MORE COMPLETE of the
--- two, so adopting it at eval's callers would WIDEN eval's words for the two
--- rows above (two impls differing only in an effect row or a constraint
--- currently collapse onto one `implKeyOf` word there and would stop doing so).
--- That is very likely the fix direction, but it is a behaviour change and it
--- is not this bite's to make.
+-- two, so adopting it at eval's callers WIDENED eval's words for the two rows
+-- above: two impls differing only in an effect row or a constraint used to
+-- collapse onto one `implKeyOf` word there and no longer do.
+-- ✅ MEASURED SAFE, and this is the derivation rather than the assertion: a
+-- program that could OBSERVE the collapse does not typecheck. `impl Sz Int`
+-- beside `impl Sz (<Stdout> Int)` — and `impl Sz a` beside `impl Sz (Eq a => a)`
+-- — are both rejected by coherence at exit 1 on `check` AND `run`, with a
+-- diagnostic that STRIPS the row itself (*"Overlapping impls of Sz: Int and Int
+-- can match the same type"*). So no accepted program has two impls differing
+-- only on that axis, and the widening cannot separate two words that any
+-- accepted program's routes depended on being equal.
 
 -- `constraintUnresolved` is reached ONLY from the `TyConstrained` doctests
 -- below (it is `Constraint`'s one legal mint for an unstamped occurrence).
@@ -205,15 +241,19 @@ rkRowBody effs (Some v) = "\{joinWith ", " (map rkEffAtom effs)} | \{v}"
 -- what a written row means, so it is kept: dropping it would collide
 -- `Net "a/*"` and `Net "b/*"` onto one word.
 --
--- ⚠️ TRANSITIONAL 4th copy, and the `rule-duplicate-body` finding it draws is
--- TRUE, not spurious.  The three existing copies (`eval/eval.mdk`,
--- `tools/doc.mdk`, `types/typecheck.mdk`) each carry the same directive with a
--- "tiny helper / divergent-by-design" rationale.  This one is different: it is
--- transitional, and `B-2.2-e` — the bite that points those modules' key mints
--- at `implRouteKeyWord` — OWNS DELETING IT.  When `e` collapses the mirrors
--- this copy becomes the only one and BOTH the directive and this comment must
--- go.  Silencing it here rather than at `e`'s landing is what keeps `a` a
--- clean, inert, separately-bisectable commit.
+-- 🚨 `a` LEFT THIS DIRECTIVE MARKED "TRANSITIONAL, `B-2.2-e` OWNS DELETING IT".
+-- `e` LANDED AND REFUSED TO DELETE IT, because the premise was wrong: `e` deletes
+-- `eval.mdk`'s copy (`ppEffAtomK`, which only `implKeyOf` reached), but
+-- `types/typecheck.mdk`'s `ppEffAtomTy` and `tools/doc.mdk`'s `ppEffAtomDoc` are
+-- reached by the DIAGNOSTIC printers, which `e` does not touch — so this copy
+-- does NOT become the only one; it becomes one of THREE.  MEASURED, not reasoned:
+-- with the directive removed,
+--   medaka lint --only=rule-duplicate-body --deny=rule-duplicate-body \
+--     compiler stdlib sqlite
+-- exits 1 with *"'rkEffAtom' has a body structurally identical to a definition in
+-- compiler/tools/doc.mdk, compiler/types/typecheck.mdk"*.  The directive stays
+-- until someone folds the DIAGNOSTIC printers too, which is a different bite with
+-- a different blast radius (every error message that renders a type).
 --
 -- 🚨 PLACEMENT IS LOAD-BEARING, and the diagnostic's own line number misleads.
 -- `-- lint-disable-next-line rule-duplicate-body` must sit immediately above
@@ -316,8 +356,8 @@ rkTyList =
 -- > implRouteKeyWord OriginUnresolved "Show" [rkTyIntM] None == implRouteKeyWord OriginUnresolved "Show" [rkTyInt] None
 -- True
 
--- `implRouteKeyWord`, origin PRESENT: the #1182 substitution. Available here,
--- applied at no call site by this bite.
+-- `implRouteKeyWord`, origin PRESENT: the #1047/#1265 route-word substitution
+-- (NOT #1182 — see the header). Applied by `B-2.2-b1` at `keyForSite`.
 -- > implRouteKeyWord (OriginModule "b") "Speak" [rkTyInt] None
 -- "b::Speak|Int|"
 -- > implRouteKeyWord (OriginModule "a") "Speak" [rkTyInt] None == implRouteKeyWord (OriginModule "b") "Speak" [rkTyInt] None

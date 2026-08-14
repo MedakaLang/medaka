@@ -1,0 +1,24 @@
+-- THE FAIL-CAPABLE HALF of `b1-xmod-default-inherited-tag`.
+--
+-- A gate made only of the positive fixture cannot fail for the right reason: a
+-- method-less impl that silently resolved to NOTHING would also print a value if
+-- some other tier happened to answer.  This file is that fixture with EXACTLY ONE
+-- dimension flipped -- the interface default is deleted -- and it must stay a LOUD
+-- rejection at exit 1, naming the missing method.
+--
+-- It also bounds the population of `keyForSite`'s `None` arm.  The arm is reached
+-- for a cross-module method-less impl whether or not a default exists; what makes
+-- the sibling RUN is that a default is there for `emitDefaultRKey` to lift.  With
+-- no default there is nothing to route to and the program is rejected before any
+-- engine sees it -- so the no-row arm's live population really is the
+-- default-inheriting shape and nothing wider.
+--
+-- HAND-DERIVED: `impl Sz Box` implements no method and `Sz.sz` has no default, so
+-- the impl is incomplete.  REJECT on all three verbs.
+import iface.{Sz(..), sz}
+
+data Box = Box
+
+impl Sz Box where
+
+main = println (sz Box)

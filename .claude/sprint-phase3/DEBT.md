@@ -164,3 +164,140 @@ unchecked:    (1) **The packet's "doctests" deliverable is NOT LANDED, and it is
               only by `clampPrefix`'s absent arms and consumed by nobody**, so the fail-closed rule
               is stated and typed but not yet exercised; `b1` is the first reader that can violate
               it.
+
+### B-2.2-e + B-2.2-b1 — the mirror deletion, and the origin on both sides of the seam
+sites:        `compiler/types/typecheck.mdk` (import of `types.route_key`; `implKeyTc`'s body →
+              `implRouteKeyWord OriginUnresolved`; **`b1`'s TWO LINES** at `keyForSite` and
+              `keyForSiteByIface`, now `implRouteKeyWord ir.irOrigin ir.irName tys None`; plus
+              the two `f`-review one-liners relayed mid-flight — `funConstraintDeclaredRef` is
+              now CLEARED at `dictPassModulesIfEnabled`/`dictPassModulesScoped`, and
+              `CDeclaredPrefix`'s definition is reworded off "declared by its own `=>` context"
+              onto "present before super expansion appended any") · `compiler/eval/eval.mdk`
+              (`implKeyOf` AND its whole private `ppTyK`/`ppTyAtomK`/`ppEffAtomK` printer family
+              DELETED; `declImplIfaceIdRow` and `implMethodEntry` repointed, the latter grown an
+              origin param threaded from `declImplEntries`) · `compiler/ir/core_ir_lower.mdk`
+              (imports the mint directly instead of `eval.implKeyOf`; `ifaceImplHeadEntries` +
+              `lowerImplMethod`, the latter grown an origin param threaded from `lowerDeclImpl`)
+              · `compiler/types/route_key.mdk` (header retractions only — no code) ·
+              `test/diff_compiler_dict_semantics.sh` (5 TABLE rows + 8 IR rows) ·
+              `test/typecheck_compiler_source.sh` (3 ratchet allowlist entries — see
+              `unchecked:` (5)) · 5 new `test/dict_fixtures/` directories.
+              **ZERO edits at the four `inst` arms** (RUN-P3-025 holds: selection and the
+              collision gate are inside `keyForSite*`; the arms hold only `fromOption tag`),
+              and **D5/D6's element routes are untouched by construction** — `b1` edits neither,
+              so `b2`'s prohibition is honoured with no explicit guard. Stated because a reader
+              of a two-line diff cannot see that it was considered.
+transform:    ONE route-word mint for the whole tree. The caller side (`keyForSite*`) and the
+              definition side (`eval`, `core_ir_lower`) call the same function with the same
+              `implOrigin`, so a route word carries `module::Iface` where the loader stamped an
+              origin and the bare name where it did not (flat drivers — `check <single file>`,
+              lsp, repl, doc, lint, snapshot — byte-identical to pre-bite).
+could move:   **IT DID MOVE, and here is what.** (1) **ACCEPTANCE, on the `run` path:
+              `test/must_fail_fixtures/1514-xmod-same-spelled-iface-impl-selection` DRAINED.**
+              Two unrelated modules each declaring `interface Same` + `impl Same Blob` used to
+              collapse onto ONE route word and answer both call sites with one module's impl —
+              import-order dependent, exit 0, no diagnostic. Measured on this binary: `11 / 110
+              / 7`, the fixture's own hand-derived correct answer. That is the #1047/#1265
+              family, **not** #1182 (see `nearest miss:`). The gate is RED *because* it drained;
+              per the packet nothing was blessed or deleted — the close-out owns closing #1514
+              and removing the fixture. (2) **A COLLISION VERDICT.** `ifaceDeclHeadUnique` →
+              `declKeysAtHead` dedups by canonical key, so identity-bearing keys make two
+              same-spelled interfaces at one head count 2 instead of 1: `unique` flips False and
+              the definition side stops routing both under the bare tag, closing a skew that was
+              live and masked by `implEntryRouteWords`' union arm. ⇒ **"byte-identical IR on
+              programs with no head collision" is FALSE as usually stated.** The defensible
+              claim is *"…and no two same-spelled interfaces in the module graph."*
+              (3) **EMITTED SYMBOLS AND DICT WORDS at collision sites** —
+              `@mdk_impl_Base__Box_Int___btag` becomes `@mdk_impl_base__Base__Box_Int___btag`
+              (pinned both ways, HAS + LACKS, by the new `b1-p4-super-slot-colliding-heads`
+              rows) ⇒ the IR-text goldens and the LEG A scheme goldens move (all three edited
+              modules are LEG A). **ZERO goldens blessed, including the seed.** (4) **THE SEED
+              DOES NOT NEED RE-MINTING, measured rather than hoped:** `selfcompile_fixpoint.sh`
+              reports **C3a YES** — IR1 byte-identical to the seed-bootstrapped reference — and
+              **C3b YES**. The compiler's own source emits the same bytes through this change.
+              (5) **NOT acceptance anywhere else:** engines 0 regressions / 0 promotions / 0
+              pinfails; `eval_modules` 11/11; `llvm_typed_ir` 54/54 byte-identical (a SINGLE-FILE
+              corpus ⇒ absent origin ⇒ bare name, which is exactly why it cannot see this bite —
+              do not read its green as multi-module evidence); `dict_semantics` 176/176;
+              `typecheck_compiler_source` PASS; `check-self` PASS. And `pickMostSpecificEntry`
+              still RETURNS the first match after reporting, so a REJECTED program's routes are
+              unchanged — asserted, not assumed, by the two new REJECT fixtures keeping their
+              exact diagnostic codes (`T-INCOMPLETE-IMPL`, `T-MISSING-SUPER-IMPL`).
+nearest miss: **#1182 IS NOT FIXED AND NOT TOUCHED — its pin still reproduces** (`run` → 1,
+              control → 2). Two independent derivations agree why: the wrong row is chosen
+              UPSTREAM of this word, by `ieCandidatesForMethod`'s `(method, head)` key with no
+              interface component; and #1182's repro is a SINGLE FILE, so `ifaceIdentity` answers
+              `""`, `ifaceWordOf` falls back to the bare name and the word does not even move.
+              ⚠️ `b1` makes that bug **quieter → differently wrong**: where the head-tag hedge
+              used to mask the mis-selection, the wrongly-selected instance's IDENTITY is now
+              stamped directly. Watching artifact: the existing `must_fail_fixtures/1182-…`
+              pair, whose `why-control` block already explains how to read a convergence.
+              **`sanitizeId` is not injective and this bite widens the alphabet reaching it:**
+              module ids are loader-derived PATHS and `.`, `/`, `-` all sanitize to a SINGLE
+              `_`, so `a.b::I|T|`, `a/b::I|T|` and `a-b::I|T|` collide — pre-existing at MODULE
+              granularity, newly exposed at INTERFACE granularity. (⚠️ the circulated `a_` +
+              `_Alpha` example is WRONG — each offending char maps to one `_`.) Independently,
+              the runtime word is `hashName key` (djb2), a second and unrelated collision
+              channel no `sanitizeId` reasoning covers. **`D1-leak` is untouched:** a rigid
+              in-scope goal whose lookup misses still falls through to `inst`; `b1` makes that
+              wrongness NAMEABLE without fixing it — #1127 legs 1–2 are B-1's.
+engines:      **ALL FOUR MOVED, and the peers are owed.** eval and `core_ir_eval` share the
+              definition-side mint (`core_ir_eval.mdk:455` is a CONSUMER — owed a *test*, not a
+              patch); LLVM and wasm read the words through their own families. **OWED PEERS,
+              unedited here:** `llvm_emit.implEntryRouteKey` / `implEntryRouteWords` /
+              `headTagUnique` / `distinctKeysAtHead`, wasm's independently-written family, and
+              `core_ir_lower.distinctKeysAtHeadL`. Acceptance survives the verdict skew in
+              `could move:` (2) only because `implEntryRouteWords` emits the UNION
+              `{routeKey, headTag}` — the new colliding-heads fixture shows that union doing
+              exactly that work (`icmp eq` against BOTH the identity key and the bare tag).
+              ⚠️ `wasm_emit.mdk:4090`'s `implKeyOf` is a DIFFERENT function sharing the name (a
+              local projection for `distinctImplKeys`) — deliberately not touched.
+unchecked:    (1) **#1608 (S1, OPEN, declared un-pinnable) sits under the `run` arm of every
+              cross-module fixture added here** — `core_ir_eval` selects a cross-module impl by
+              IMPORT ORDER, ignoring the receiver, with no pin. Mitigation, not a fix: all five
+              new fixtures are graded `ALL_EXACT` (run AND build must agree byte-for-byte with a
+              hand-derived value) and every discriminating assertion is on EMITTED IR, so **no
+              assertion added by this bite rests on `run` alone.** (2) **The `headTycon`
+              asymmetry is NOT fixed and its enumeration is NOT complete.** eval's `headTycon`
+              strips `TyEffect` AND `TyConstrained` to the inner head where typecheck's
+              `headTyconTy` answers `None` (as it does for a function head) — three known shapes
+              of one wildcard arm, on a projection nobody has audited arm-for-arm. `e` unifies
+              the printers (the WORD), not the head projections (the TAG). Measured with a
+              control: `impl Sz (<Stdout> Int)` alone → check 0, run 0, **build 1**
+              (`E-PANIC: no impl of method 'sz' for type '__none__'`); `impl Sz Int` alone
+              builds and executes. Filed separately. (3) **The `ppTy` fold WIDENS eval's words**
+              (`<Stdout> Int` no longer prints as `Int`); the safety argument is that the
+              observing program does not typecheck — two impls differing only in an effect row
+              or a constraint are rejected by coherence (*"Overlapping impls of Sz: Int and
+              Int"* — the diagnostic strips the row too), exit 1 on check AND run, both shapes.
+              NOT measured: the LONE effect-headed impl, whose definition-side word does change
+              (to the one typecheck was already stamping) and which (2) says is broken on the
+              build path either way. (4) **`route_key` is now in the import closure**, so the
+              `Makefile` `test:` line is no longer its only verification — but it IS still the
+              only thing that RUNS its 38 doctests (all pass). Do not delete it. (5) 🚨 **THREE
+              RATCHET ALLOWLIST ENTRIES WERE ADDED TO `test/typecheck_compiler_source.sh`, AND
+              TWO OF THEM DISCHARGE A PRE-EXISTING RED INHERITED FROM `a`.** The `#1110`
+              occurrence-layer and `OriginUnresolved` producer ratchets are `git grep`s over
+              TRACKED files, **not** over an import closure — so `compiler/types/route_key.mdk`
+              has tripped them since `B-2.2-a` landed it, unnoticed because `a`'s own row records
+              that no gate beyond build/check-self/snapshot was run. ⚠️ *"A call-site-free module
+              is in no gate"* is true of the compiler's gates and FALSE of this one. Both entries
+              are justified at the list (doctest fixtures; the file constructs no AST the
+              pipeline consumes). The third is `b1`'s own — `implKeyTc`'s new `OriginUnresolved`
+              argument — justified by (6). (6) **M4 WAS RUN; it is the evidence for skipping two
+              of D1's nine sites.** `KeyEntry`'s key field was replaced with a literal
+              `"__DEAD__"` at both mint sites on a full rebuild: `make medaka` 0, `make
+              check-self` PASS, `diff_compiler_dict_semantics.sh` **163/163**. Corroborated at
+              field level — every `KeyEntry` destructuring binds `_` in position 4 and
+              `bucketKeyEntriesFrom` only rebuilds it. ⇒ dead field; `e` correctly skips
+              `keyEntryOf`/`keyEntryOfRow`. (7) **`a`'s instruction to retire `rkEffAtom`'s
+              `rule-duplicate-body` directive is REFUSED, measured.** `e` deletes eval's copy,
+              but typecheck's `ppEffAtomTy` and doc's `ppEffAtomDoc` are reached by the
+              DIAGNOSTIC printers, untouched here — so `rkEffAtom` becomes one of THREE, not the
+              only one. With the directive removed, `medaka lint --only=rule-duplicate-body
+              --deny=rule-duplicate-body compiler stdlib sqlite` exits 1 naming both files.
+              Directive kept; the comment above it records this instead of promising a deletion.
+              (8) **Not run:** perf/scaling, the wasm gates, and `diff_compiler_selfproc` (its
+              LEG A goldens move by construction and the packet forbids blessing — the close-out
+              re-cut owns them, along with `route_key.mdk`'s still-owed snapshot CREATE, which
+              `a` bequeathed).
