@@ -1,5 +1,5 @@
 # META
-source_lines=3826
+source_lines=3846
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted eval stage — Stage-1 capstone, port of lib/eval.ml's tree-walking
@@ -49,7 +49,7 @@ import frontend.ast.{
 -- B-2.2-e: the ONE route-word mint, shared with `types/typecheck.mdk` (the caller
 -- side of the seam) and `ir/core_ir_lower.mdk`.  It replaces this file's deleted
 -- `implKeyOf`/`ppTyK` mirror; see the obituary above `headTyconHead`.
-import types.route_key.{implRouteKeyWord}
+import types.route_key.{implRouteKeyWord, funHeadTag}
 import support.util.{
   contains,
   listLen,
@@ -497,13 +497,18 @@ tyvarsInArgs ts = sumInts (map countTyvars ts)
 -- Int can match the same type"*, exit 1 on check AND run — note the diagnostic
 -- strips the row too).  What the fold DOES change for a LONE effect-headed impl is
 -- that this side finally spells the word typecheck was already stamping.
--- ⚠️ FURTHER divergences survive and are deliberately NOT fixed here: `headTycon`
--- (below) strips `TyEffect` AND `TyConstrained` to the inner head while typecheck's
--- `headTyconTy` does not (it answers `None` for both, and for a function head), so
--- the two sides can still disagree on the TAG.  ⚠️ Do not read that list as
--- complete — it is what has been enumerated so far, on a projection nobody has
--- audited arm-for-arm.  `e` unifies the printers (the WORD), not the head
--- projections.
+-- ⚠️ THIS PARAGRAPH USED TO LIST THREE SURVIVING TAG DIVERGENCES; TWO ARE NOW
+-- CLOSED and one survives.  It said `headTycon` (below) strips `TyEffect` AND
+-- `TyConstrained` while `typecheck.headTyconTy` "answers `None` for both, and for
+-- a function head".  The effect arm was #1618 (a program that checks and runs but
+-- cannot be BUILT) and the function head was #1617 (arg-tag dispatch on a
+-- tagless closure); both are fixed by giving the two sides the SAME arms —
+-- `typecheck.headTyNode` now peels `TyEffect`, and both sides answer
+-- `route_key.funHeadTag` for an arrow.  `TyConstrained` is the survivor, and it
+-- is measured benign rather than merely unaudited: peeling it yields a headless
+-- body, so both sides still reach `None`.  ⚠️ Do not read even that as a closed
+-- census — it is what has been enumerated so far.  `e` unified the printers (the
+-- WORD); this bite unified the head projections (the TAG).
 -- Native Gap C: an ARITY-DISTINGUISHED tuple dispatch/impl-tag (`__tuple2__`,
 -- `__tuple3__`, …).  Each tuple arity gets its OWN impl group / lifted define and
 -- its own runtime dispatch tag, so the 2-/3-/4-/5-tuple `Eq`/`Ord`/`Debug` impls
@@ -514,12 +519,27 @@ tyvarsInArgs ts = sumInts (map countTyvars ts)
 export tupleHeadTag : Int -> String
 tupleHeadTag n = "__tuple" ++ intToString n ++ "__"
 
+-- ⚠️ THE `TyFun` ARM IS THE DEFINITION-SIDE HALF OF #1617 AND CANNOT BE OMITTED
+-- WHEN `typecheck.headTyconTy` GAINS ITS OWN.  This projection is what
+-- `headTyconHead` (below) hands to `core_ir_lower.ifaceImplHeadEntries` /
+-- `lowerImplMethod` as an impl's `CImplTagged` tag, and `declRouteKey`'s
+-- uniqueness verdict is counted over THESE tags — so for a LONE arrow-headed
+-- impl the caller side would stamp `__fun__` (unique at that head) while this
+-- side still filed the impl under `__none__`, and the emitter would fail to find
+-- it.  `funHeadTag` is imported from `types/route_key.mdk` rather than respelled
+-- so the two sides cannot drift.
+--
+-- ⚠️ `TyConstrained` is still peeled here and still NOT peeled by
+-- `typecheck.headTyNode` — a surviving, measured-benign divergence (both sides
+-- reach `None` because the peeled body is headless), left alone deliberately.
+-- `TyEffect` is no longer one of them: typecheck peels it too as of #1618.
 headTycon : Ty -> Option String
 headTycon (TyCon { tyConName = n }) = Some n
 headTycon (TyApp a _) = headTycon a
 headTycon (TyConstrained _ t) = headTycon t
 headTycon (TyEffect _ _ t) = headTycon t
 headTycon (TyTuple ts) = Some (tupleHeadTag (listLen ts))
+headTycon (TyFun _ _) = Some funHeadTag
 headTycon _ = None
 
 -- arg positions of a method type that mention an interface type parameter
@@ -3830,7 +3850,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
   evalModulesRootEnvWith extraExterns preludeDecls [(rootId, prog)]
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Lit" true) (mem "Ty" true) (mem "Addr" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "FieldAssign" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "Route" true) (mem "ConPayload" true) (mem "Field" true) (mem "Variant" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "qualifiedLocal" false) (mem "Decl" true) (mem "DataVis" true) (mem "TyConOrigin" false) (mem "ifaceIdentity" false))))
-(DUse false (UseGroup ("types" "route_key") ((mem "implRouteKeyWord" false))))
+(DUse false (UseGroup ("types" "route_key") ((mem "implRouteKeyWord" false) (mem "funHeadTag" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "reverseL" false) (mem "anyList" false) (mem "lookupAssoc" false) (mem "joinWith" false) (mem "fallthroughName" false) (mem "noneHeadTag" false) (mem "isEmptyL" false) (mem "filterList" false) (mem "initList" false) (mem "mapOption" false) (mem "joinDot" false) (mem "dedup" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Diag" true) (mem "Severity" true) (mem "cjAllToJson" false))))
 (DUse false (UseGroup ("bits64") ((mem "add64" false) (mem "sub64" false) (mem "mulLow64" false) (mem "xor64" false) (mem "shr64" false) (mem "mod64" false) (mem "ofInt" false) (mem "isZero" false) (mem "limbAt" false))))
@@ -4002,6 +4022,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "headTycon" ((PCon "TyConstrained" PWild (PVar "t"))) (EApp (EVar "headTycon") (EVar "t")))
 (DFunDef false "headTycon" ((PCon "TyEffect" PWild PWild (PVar "t"))) (EApp (EVar "headTycon") (EVar "t")))
 (DFunDef false "headTycon" ((PCon "TyTuple" (PVar "ts"))) (EApp (EVar "Some") (EApp (EVar "tupleHeadTag") (EApp (EVar "listLen") (EVar "ts")))))
+(DFunDef false "headTycon" ((PCon "TyFun" PWild PWild)) (EApp (EVar "Some") (EVar "funHeadTag")))
 (DFunDef false "headTycon" (PWild) (EVar "None"))
 (DTypeSig false "dispatchPositionsOf" (TyFun (TyCon "Ty") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int")))))
 (DFunDef false "dispatchPositionsOf" ((PVar "mty") (PVar "params")) (EApp (EApp (EApp (EVar "filterMentions") (ELit (LInt 0))) (EApp (EVar "argsOfTy") (EVar "mty"))) (EVar "params")))
@@ -5269,7 +5290,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "evalOneRootEnvWith" ((PVar "extraExterns") (PVar "preludeDecls") (PTuple (PVar "rootId") (PVar "prog"))) (EApp (EApp (EApp (EVar "evalModulesRootEnvWith") (EVar "extraExterns")) (EVar "preludeDecls")) (EListLit (ETuple (EVar "rootId") (EVar "prog")))))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Lit" true) (mem "Ty" true) (mem "Addr" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "FieldAssign" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "Route" true) (mem "ConPayload" true) (mem "Field" true) (mem "Variant" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "qualifiedLocal" false) (mem "Decl" true) (mem "DataVis" true) (mem "TyConOrigin" false) (mem "ifaceIdentity" false))))
-(DUse false (UseGroup ("types" "route_key") ((mem "implRouteKeyWord" false))))
+(DUse false (UseGroup ("types" "route_key") ((mem "implRouteKeyWord" false) (mem "funHeadTag" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "reverseL" false) (mem "anyList" false) (mem "lookupAssoc" false) (mem "joinWith" false) (mem "fallthroughName" false) (mem "noneHeadTag" false) (mem "isEmptyL" false) (mem "filterList" false) (mem "initList" false) (mem "mapOption" false) (mem "joinDot" false) (mem "dedup" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Diag" true) (mem "Severity" true) (mem "cjAllToJson" false))))
 (DUse false (UseGroup ("bits64") ((mem "add64" false) (mem "sub64" false) (mem "mulLow64" false) (mem "xor64" false) (mem "shr64" false) (mem "mod64" false) (mem "ofInt" false) (mem "isZero" false) (mem "limbAt" false))))
@@ -5441,6 +5462,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "headTycon" ((PCon "TyConstrained" PWild (PVar "t"))) (EApp (EVar "headTycon") (EVar "t")))
 (DFunDef false "headTycon" ((PCon "TyEffect" PWild PWild (PVar "t"))) (EApp (EVar "headTycon") (EVar "t")))
 (DFunDef false "headTycon" ((PCon "TyTuple" (PVar "ts"))) (EApp (EVar "Some") (EApp (EVar "tupleHeadTag") (EApp (EVar "listLen") (EVar "ts")))))
+(DFunDef false "headTycon" ((PCon "TyFun" PWild PWild)) (EApp (EVar "Some") (EVar "funHeadTag")))
 (DFunDef false "headTycon" (PWild) (EVar "None"))
 (DTypeSig false "dispatchPositionsOf" (TyFun (TyCon "Ty") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int")))))
 (DFunDef false "dispatchPositionsOf" ((PVar "mty") (PVar "params")) (EApp (EApp (EApp (EVar "filterMentions") (ELit (LInt 0))) (EApp (EVar "argsOfTy") (EVar "mty"))) (EVar "params")))
