@@ -2415,3 +2415,64 @@ precisely what the check exists to replace.
 their real head tag instead of the headless bucket. If any `dict_semantics`, `eval_modules`,
 `iface_order` or must-fail case moves after the merge, **that is the interaction** — report before
 adjusting.
+
+## RUN-P45-065 — 🚨 #1648 FILED: an impl method's dict param is ELIDED from the DEFINITION but still PASSED at the call site
+
+**ORCH reproduced first-hand on its own base binary before filing** (no sprint branch present), and
+**extended the reported shape until it got worse.** W5 handed over two cells; I added a third and a
+control:
+
+| body | check | run | build | **executed binary** | emitted |
+|---|---|---|---|---|---|
+| ignores dict **and** value | 0 | `22` | 0 | **0, `22`** | arity 1 · call passes 2 |
+| uses **value**, not dict | 0 | `42` | 0 | **1 — `E-NONEXHAUSTIVE-MATCH`** | arity 1 · call passes 2 |
+| **returns an `Int` field** (ORCH's addition) | 0 | `7` | 0 | **139 — SEGFAULT** | arity 1 · call passes **`i64 0`** |
+| **uses the dict** (control) | 0 | `42` | 0 | **0, `42`** | **arity 2** · call 2 ✓ |
+
+**The trigger is whether the body USES the dict**, not whether it has one — the control differs by
+`x == x` and emits the correct arity. The surviving parameter binds **positionally to the dict**, so the
+body operates on a dictionary pointer where its value belongs. `run` and the binary **disagree**, so it
+is a back-end/calling-convention defect and invisible to any gate grading `run`.
+
+⚠️ **The harmless row is the dangerous one:** row A is the same skew with no observable, so **a fix
+validated against it alone would look correct.**
+
+**Severity S1, graded from measurement and NOT from the neighbourhood** — everything measured is loud.
+The issue states explicitly what is **not** derived: whether a silent variant exists (a body returning
+the mis-bound pointer as an `Int` would *plausibly* print a heap address — plausibly, not measured; if
+someone builds it, this becomes S0), which of the two facts causes the fault (mis-binding vs the null
+dict), and where the elision happens.
+
+**Deduped against #1560/#1561** — those are a *missing* dict at a binding whose context was dropped;
+here the context is present and correct and the **definition disagrees with its call site**. Adjacent to
+#1425 and G-10/#1318; neither names this shape. Pin owed, with the note **not to pin row A** — it passes
+today, so it cannot fail and would pin nothing.
+
+## RUN-P45-066 — S2's DRAIN IS GENUINELY NEW, and the dedup used the cheapest decisive signal available
+
+W5 checked its false reject against #1579, #1457, #1302, #1326 and reports **none drained**. Two things
+about the method are worth keeping:
+
+⭐ **The cheapest decisive signal was already collected:** all four candidates carry must-fail pins, and
+CI's `soundness` job on #1645 ran *"Open bugs must still reproduce"* = **success** — a drained pin reds
+that gate. **It verified the step actually executed rather than trusting the rollup**, which is the
+distinction this repo's own CI section insists on.
+
+**Then it checked #1579 against the issue's own repro** and got a byte-identical pinned cell, plus a
+mechanism table that makes the non-overlap structural rather than observational:
+
+| | #1579 | S2's shape |
+|---|---|---|
+| interfaces | **one** | **two**, same spelling, different modules |
+| candidate rows | two impls **of one class** | one impl each, **of different classes** |
+| goal at selection | **free** | **ground** |
+| defect kind | **timing** (commits before quiescence) | **keying** (selection crosses a class boundary) |
+
+⇒ *"Do the two candidate rows carry the same `IfaceRef`?"* In #1579 they do, so `tyConIdsConflict` is
+False either way and the candidate set is **unchanged by the diff** — **identity keying is structurally
+incapable of moving #1579.** *"What made mine look close is the SYMPTOM — a false `T-NO-IMPL` on a
+`requires` clause — not the cause."*
+
+⭐ **And it named its shape's own fingerprint:** *"exchanging two module names makes the identical
+program compile"* — order-dependence, which is the signature of spelling-keyed selection specifically
+and which none of the four candidates has.
