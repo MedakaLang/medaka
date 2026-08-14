@@ -1,5 +1,5 @@
--- W8: ePutStrLn (stderr byte-write) + putStrLn (stdout).  The diff gate compares
--- STDOUT only, so the stdout line must match (stderr goes to fd 2 on both sides).
+-- W8: ePutStrLn (stderr byte-write) + putStrLn (stdout). The diff gate checks both
+-- channels: stdout matches and stderr is exact on fd 2.
 main =
   let _ = ePutStrLn "diagnostic to stderr"
   putStrLn "visible on stdout"
