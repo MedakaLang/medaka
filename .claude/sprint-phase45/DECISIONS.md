@@ -2010,3 +2010,41 @@ still pass"* is only meaningful for S2 if S2 first shows the origins actually ar
 verbs and produces no IR — the prelude axis is essentially unexercised for IR purposes. And the 19
 apparent prelude clashes in `llvm_fixtures_typed` are **false positives**: that corpus is prelude-free
 (`diff_compiler_llvm_typed.sh` passes only `runtime.mdk`, which declares zero interfaces).
+
+## RUN-P45-054 — Q1 COMPLETE (PR #1640). Must-fail suite fully green; two issues filed; both lenses dispatched.
+
+```
+diff_compiler_iface_order.sh: 5 case(s) — 5 ok, 0 failing
+diff_compiler_must_fail.sh:   98 fixtures: 98 reproduce, 0 DRAINED, 0 control-broke, 0 malformed (exit 0)
+```
+#1620 moved from DRAINED back to reproducing on its new axis, exactly as ruled. **Both counts re-run on
+a freshly rebuilt branch binary** after W2 swapped the tree to pre-Q1 and back — so they are not from a
+binary that had ceased to exist, which W2 flagged as a residual risk **and then closed rather than
+assumed.** That is the right instinct and it is worth naming: every earlier number in that PR was
+measured on a binary that no longer existed at the moment of the swap.
+
+⭐ **The #1620 re-pose rebuilt its derivation from scratch rather than transferring the value** — the
+thing I asked for and the thing that is easy to fake. `claim.txt` derives `False`-is-wrong from its own
+imports: `import beta.{Beta, ping}` binds the METHOD name while `import alpha.{Alpha}` binds only an
+INTERFACE name, so `ping T` has exactly one binding; `ping T : Int` is **shown** (a String comparand
+gives `Type mismatch: Int vs String`), only `impl Beta T` exists with body `7`, therefore `True` is
+required and `False` delivers `impl Alpha T`'s String where the accepted type says Int. The raw probe
+still prints a live heap address across three executions, so the Bool projection is still required.
+
+**Filings, both first-hand and both defended from measurement:** **#1642** (S3, `ws:testing`) — the
+`capture_goldens.sh boot_resolve` remedy naming a command that cannot work, with the working recipe and
+the `diff_compiler_diagnostics.sh` precedent one file over. **#1644** (S2, `ws:diagnostics`) — the
+order-dependent *diagnostic set*, **measured on BOTH binaries** (restore `resolve.mdk` to `401e3e30`,
+cold rebuild, re-run, restore, rebuild) and identical, hence pre-existing on `main`, not branch-induced.
+S0 ruled out because both orderings reject at exit 1. It also notes the gate header's broader Stage B
+conclusion is untouched — the refutation is scoped to the *"cannot even be written"* clause.
+**#1228 got a comment, not a number**, adding the pre-Q1 measurement and the `Method 'p' is not part of
+interface 'Dup'` mis-diagnosis that appears once an `impl` is added.
+
+**Both lenses dispatched on #1640** — semantics aimed at the boundaries (the S1-PRELUDE carve-out per
+#1499, imported/re-exported interfaces, `@attrib`, the single-file path, and whether the re-posed
+fixtures reproduce for the reason their claims state) and evidence aimed at the claim files, the ledger
+note, the tripwire-loss account, and the two new issues.
+
+**#1638 verified `isInMergeQueue: true` via GraphQL** — not from `gh pr merge`'s exit code, which
+carries no signal here in either direction.
