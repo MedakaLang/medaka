@@ -1,8 +1,0 @@
-export data Tally = Tally Int
-
-export bump : Tally -> Tally
-bump (Tally n) = Tally (n + 1)
-
-export bystanderValue : Int
-bystanderValue = match bump (bump (Tally 5))
-  Tally n => n
