@@ -384,6 +384,7 @@ exit-phase filing pass.
 | **#1559** | **CLOSE** | ORCH | `checkCoherence` takes `ImplEnv`; `CohImpl` carries an `IfaceRef` |
 | **#994** | 🚨 **ANTI-CLOSE — must NOT be closed, and this sprint WIDENED it** | ORCH | #994's third bullet is that CrossRun's mirror pairs reset *"only by whole-record re-mint."* At HEAD there are **eight lockstep `setRef`s at one site — two of them `f`'s.** PR #1605's *"Implements B-3 (#994)"* is true of the PerRun pairs and **false of the CrossRun snapshot.** Closing it would bury a live drift surface **a `b1` bug lands squarely on.** Partial-identity-reads-as-done, with our own bite now part of it |
 | **#1113** | **do NOT close** (implement-don't-close). **Update the body** | ORCH | its *"depends on Stage A"* dependency is discharged (Stage A merged 08-12); its drain line is two-thirds spent — see §5 item 4 |
+| **#1514** | 🚨 **CLOSE, and DELETE its fixture** — `test/must_fail_fixtures/1514-xmod-same-spelled-iface-impl-selection` **DRAINED** on this branch (§1 step 6). This is the sprint's one measured acceptance win; the pin is red *because* it drained, and the fixture must go with the close or the gate stays red on `main` | ORCH |
 | **#1122** | update: its serialized lane still reads as though B-2 were gated behind U2/U4, which have not landed and are being overtaken | FILE | RUN-P3-037 |
 
 ### Criterion 4 — the findings worklist (`FINDINGS.md`, routed by R-4)
@@ -408,23 +409,26 @@ before being listed**. Two of the six the audit named are **DISCHARGED** and are
 discharged debt advertised as owed invites the next agent to re-spend a quiet window on it
 (R-2 caught exactly that pattern in `FINDINGS.md`).
 
-### O-1 — the fixture with nowhere to live — ✅ **DISCHARGED** (in the working tree, uncommitted)
+### O-1 — the fixture with nowhere to live — ✅ **DISCHARGED and COMMITTED** (`ec1cda37`)
 
 **Claim (RUN-P3-029):** `diff_compiler_llvm_typed_ir.sh` reads a single-file corpus and
 `diff_compiler_llvm_modules.sh` grades native stdout against an eval golden — **no corpus gives an
 IR golden for a multi-module program**, which is exactly what `b1`'s cross-module fixture needs.
 
-**Status, DERIVED (`git diff test/diff_compiler_dict_semantics.sh`):** the `b1`+`e` writer solved
-it **without an IR golden and without a new gate file** — five directory fixtures added to the
-gate's section-1 table plus **six IR `HAS`/`LACKS` assertions in section 3**
+**Status, DERIVED (`git show ec1cda37 --stat`, `DEBT.md` `b1`+`e` `sites:`):** the writer solved it
+**without an IR golden and without a new gate file** — **5 table rows + 8 IR rows** in
+`test/diff_compiler_dict_semantics.sh` and five new `test/dict_fixtures/` directories, i.e.
+directory fixtures in section 1 plus IR `HAS`/`LACKS` assertions in section 3
 (`@mdk_default_sz_Box`, `@mdk_impl_Cup_sz`, the two-`@mdk_dc_0` P4 row, the qualified
 `@mdk_impl_base__Base__Box_Int___btag` **HAS** paired with the bare
 `@mdk_impl_Base__Box_Int___btag` **LACKS**, and the two-distinct-dict-constants row). That is a
 better answer than the one RUN-P3-029 proposed, and it adds no `test/*.sh`.
 
-**Residual owner: ORCH, at §1 step 5e** — confirm the gate change and the five directories are
-**committed**, and that the gate actually opens them (section 4's `*.mdk` glob excludes directories).
-Not owed as a design decision any more.
+**Residual owner: ORCH, at §1 step 5e** — one check remains: that the gate **actually opens** the
+five directories (section 4's `*.mdk`-direct glob excludes them, so their grading rests entirely on
+sections 1 and 3). `dict_semantics` reporting **176/176** at the landing (`DEBT.md` `could move:`
+(5)) against **163/163** during `e`'s M4 experiment is consistent with 13 new assertions being run
+— confirm it, don't infer it. Not owed as a design decision any more.
 
 ### O-2 — the snapshot `--new` decision — ⏳ **STILL OWED**
 
@@ -499,15 +503,19 @@ them together**"* — and RUN-P3-003 independently re-derived wasm's separate un
 (`headTagUniqueW`, `distinctKeysAtHeadW`, `headTagForKeyW`, `methodImplKey`, `findByTagW`, with
 **zero hits** for `ifaceImplRouteKeys`/`ifaceDeclHeadUnique`) **without citing #1068**.
 
-**Verified still owed, DERIVED:** `grep -rn '1068' .claude/sprint-phase3/` → **two hits, both
-inside R-4's own note**; `git diff | grep 1068` → **zero**. The `e` `DEBT.md` row does not exist
-yet (the bite is uncommitted).
+🚨 **Verified still owed, and the window to discharge it cheaply has CLOSED.** The `b1`+`e`
+`engines:` clause is now **written and committed** (`ec1cda37`) — it names the owed peers
+(`llvm_emit.implEntryRouteKey` / `implEntryRouteWords` / `headTagUnique` / `distinctKeysAtHead`,
+wasm's independent family, `core_ir_lower.distinctKeysAtHeadL`) and **does not cite #1068**.
+DERIVED: `grep -c '1068' .claude/sprint-phase3/DEBT.md` → **0**.
 
-**Owner: IMPL (`b1`+`e`), in the bite's `engines:` clause — fallback ORCH at the close-out.** The
-clause must cite **#1068** by number, or the wasm arm ships an **un-owned divergence**. Standing arc
-risk to relay with it (RUN-P3-003): if wasm truly has no consumer of the shared table, wasm's
-method-less-impl default-dispatch coverage rests entirely on a separately-maintained parallel
-family — an `evalModules`/`cevalModules`-class lockstep hazard.
+**Owner: ORCH, at the close-out** (the implementer's window is gone). Discharge by **either**
+appending an erratum row to `DEBT.md` citing #1068 against `e`'s `engines:` clause, **or** carrying
+it explicitly in the PR body and the #1113 close-out. Standing arc risk to relay with it
+(RUN-P3-003): if wasm truly has no consumer of the shared table, wasm's method-less-impl
+default-dispatch coverage rests entirely on a separately-maintained parallel family — an
+`evalModules`/`cevalModules`-class lockstep hazard — and #1113's blast list says the two must be
+done **together**.
 
 ### Also unowned, found by sweeping the ledger — assigned here rather than left blank
 
@@ -519,6 +527,9 @@ family — an `evalModules`/`cevalModules`-class lockstep hazard.
 | **#1127**'s `assum`-vs-`super` control — *"adopt rather than author fresh"*; relayed, adoption unconfirmed | RUN-P3-037 | **RR** |
 | the **`opBump` perf run** owed by `f`'s read side | RUN-P3-036 (R-1) | **RR** (§2 A11) |
 | **`c` has not landed** — it owns all three stale-comment corrections, including the one whose absence *"nearly shipped a break"* | RUN-P3-033 | **IMPL (`c`)** |
+| the **F-6 / `sanitizeId` fixture** — `e`'s own `nearest miss:` states the hazard (path ids `a.b`/`a/b`/`a-b` collapsing, plus the independent `hashName` djb2 channel) but **no fixture was landed** asserting distinct emitted symbols | `DEBT.md` `b1`+`e` `nearest miss:` | **RR** (§2 A7) |
+| **not run by any bite: perf/scaling, the wasm gates, `diff_compiler_selfproc`** (`unchecked:` (8)) | `DEBT.md` `b1`+`e` | **ORCH** (§1 steps 4–5) / **RR** (perf, wasm) |
+| **`DEBT.md`'s `a` row is factually wrong on one line** — `unchecked:` (4) says `rule-duplicate-body` is *"RED and deliberately left un-silenced"* while the directive is committed at `route_key.mdk:230`; and `b1`+`e`'s `unchecked:` (7) **refuses** `a`'s instruction to retire it (measured: with it removed, `lint --deny=rule-duplicate-body` exits 1 naming two files). The file is append-only ⇒ discharge with an appended **erratum**, not an edit | R-2 (RUN-P3-036); `DEBT.md` `b1`+`e` (7) | **ORCH** |
 
 **Every item above has an owner. Nothing in this sweep is unassigned.**
 
@@ -537,6 +548,10 @@ accident out of a `#`-level heading or a commit message.
    **nine** places. What the substitution serves is the **#1047 family** — and #1047 is **CLOSED**,
    so that means its live members: **#1265**, **#1514**, and the bare-compat leg of `oblIfaceKeys`.
    **Citable ticket: #1113.** (RUN-P3-003 correction, RUN-P3-035, RUN-P3-036, RUN-P3-037.)
+   **Now measured, not only derived:** the landed row records **#1182's pin still reproducing**
+   (`run` → 1, control → 2), and its repro is a single file — absent origin, bare-name fallback,
+   *"the word does not even move."* **What the sprint may claim instead is #1514's drain** (§1 step
+   6), which is the same-spelled-interface family and is hand-derived, not captured.
 2. 🚨 **"byte-identical IR on programs with no head collision."** **FALSE.** The defensible form is
    *"…no head collision **and no two same-spelled interfaces in the module graph**"* — because
    `ifaceDeclHeadUnique` → `declKeysAtHead` dedups by canonical key, so the collision **verdict**
