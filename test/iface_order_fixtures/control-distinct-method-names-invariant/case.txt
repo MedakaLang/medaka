@@ -1,0 +1,24 @@
+entry: main.mdk
+what: CONTROL — POSITIVE. Two interfaces with DISTINCT method names, two impls on one
+what: data type, both called. Must be invariant under interface-declaration order, and
+what: is deliberately UNLEDGERED so the gate grades it as such.
+
+how-established: The expected reading is derivable WITHOUT running anything: no method
+how-established: name is shared, so no candidate set can span both interfaces, so no
+how-established: mechanism this corpus is about can reach it. `m1 D + m2 D` is 3 in
+how-established: every ordering. That the expectation is predictable is the point of a
+how-established: control — its value is not read off the engine.
+
+why-it-matters: It is what makes the ledgered rows evidence rather than noise. If this
+why-it-matters: case ever DIVERGES, the finding is not "interface order decides method
+why-it-matters: dispatch" — it is that reordering interface declarations perturbs
+why-it-matters: programs with no method-name collision at all, which is a larger and
+why-it-matters: differently-shaped defect and must not be ledgered onto #1182 or #1620.
+
+what-it-cannot-catch: It cannot by itself detect a permuter that stopped moving
+what-it-cannot-catch: anything (a `^interface` regex broken by a syntax change), since
+what-it-cannot-catch: a dead permuter also reads invariant here. Two other things cover
+what-it-cannot-catch: that: the permuter DIES on a case with fewer than two interface
+what-it-cannot-catch: declarations (reported as a PERMUTER failure, not a pass), and a
+what-it-cannot-catch: dead permuter would collapse every ledgered row to one signature
+what-it-cannot-catch: and red them all as DRAINED — loudly, not silently.

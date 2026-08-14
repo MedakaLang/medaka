@@ -6,12 +6,17 @@
 -- AB ordering ONLY -- one `cmd:` and one `control:`, and the control spends its slot on
 -- the single-interface case, so there is no slot left for the reversed ordering.
 --
--- ⭐ THE REVERSED ORDERING IS UNGRADED EVERYWHERE IN THIS TREE, and it is not a
--- near-miss of the graded one: #1620 issuecomment-5290657940 reports the BA
--- permutation reaching `check` 0 / `build` 0 and then a built binary at exit 139 --
--- a SEGFAULT, i.e. a memory-safety consequence that the AB ordering does not have.
--- A permutation differential grades every ordering by construction, which is exactly
--- why this shape belongs here rather than as a second must-fail row.
+-- ⭐ THE REVERSED ORDERING IS UNGRADED EVERYWHERE IN THIS TREE, and grading it is why
+-- this case exists: a permutation differential grades every ordering by construction,
+-- where a must-fail fixture has one `cmd:` slot and one `control:` slot and #1620 has
+-- already spent both.
+--
+-- ⚠️ A REPORTED exit-139 SEGFAULT ON THE REVERSED ORDERING DID NOT REPRODUCE on this
+-- branch, and nothing here encodes it. Measured across both axes and both projections
+-- (eight runs, transcribed in case.txt), the reversed interface ordering is the
+-- WELL-BEHAVED one — `ping` resolves to Alpha and all three of check, the interpreter
+-- and the built binary agree on `alpha`. What this case pins is an ACCEPT-vs-REJECT
+-- flip, not a crash.
 --
 -- ⚠️ WHY `== 7` AND NOT THE RAW VALUE. Same reason the must-fail pin projects: the
 -- raw form's binary prints a LIVE HEAP ADDRESS that differs on every execution, so

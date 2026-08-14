@@ -1,0 +1,48 @@
+entry: main.mdk
+what: A MEASURED NEGATIVE RESULT, kept as a case. #1182's exact declarations —
+what: the shape whose answer IS decided by `impl`-block order — turn out to be
+what: INVARIANT under interface-declaration order. The two axes are independent
+what: for this shape. Unledgered, so the gate grades it as invariant.
+
+measured: On a cold `make medaka` of this branch (base aaa43716), both orderings of
+measured: `interface A1` / `interface A2` produce the identical signature
+measured:   check=0;codes=;schemes=main : Unit\n;run=0:1\n;build=0/0:1\n
+measured: while test/must_fail_fixtures/1182-two-ifaces-same-method-name-order-decides/
+measured: shows the SAME declarations answering 1 and 2 depending on `impl`-block order
+measured: (re-measured first-hand on this branch: main.mdk -> 1, control.mdk -> 2).
+
+why-this-is-not-a-dead-permuter: This was checked rather than assumed, because "the
+why-this-is-not-a-dead-permuter: probe found nothing" and "the probe moved nothing" are
+why-this-is-not-a-dead-permuter: the same reading. The permuter was run directly on this
+why-this-is-not-a-dead-permuter: file: it reports n=2, the identity ordering is
+why-this-is-not-a-dead-permuter: byte-identical to the original, and ordering 1,0 differs
+why-this-is-not-a-dead-permuter: from it exactly at the two `interface` header lines with
+why-this-is-not-a-dead-permuter: the file length unchanged (1414 bytes in all three). The
+why-this-is-not-a-dead-permuter: invariance is real. Two other cases in this corpus DO
+why-this-is-not-a-dead-permuter: diverge under the same permuter, which is the other half
+why-this-is-not-a-dead-permuter: of the same check.
+
+⭐ why-it-is-worth-keeping: It BOUNDS what this gate can see, and the bound is not
+⭐ why-it-is-worth-keeping: cosmetic. The gate header's FOUR-STATE TABLE says a
+⭐ why-it-is-worth-keeping: name-scoped fix (state 2) leaves this gate's ledgered rows
+⭐ why-it-is-worth-keeping: diverging. That is true of the rows that ARE ledgered — but
+⭐ why-it-is-worth-keeping: it is NOT true of this shape, because this shape does not
+⭐ why-it-is-worth-keeping: diverge on this axis in the first place. So for #1182's own
+⭐ why-it-is-worth-keeping: canonical program, draining the impl-order pin leaves NOTHING
+⭐ why-it-is-worth-keeping: here to object, and the state-2 signal comes from the sibling
+⭐ why-it-is-worth-keeping: cases (1182-unimplemented-iface-obligation-... and 1620-...)
+⭐ why-it-is-worth-keeping: rather than from this one. A reader checking "did the Stage B
+⭐ why-it-is-worth-keeping: fix reach the identity, or only the name?" must look at those
+⭐ why-it-is-worth-keeping: rows, not at this one. Recording that explicitly is worth more
+⭐ why-it-is-worth-keeping: than deleting a green fixture.
+⭐ why-it-is-worth-keeping:
+⭐ why-it-is-worth-keeping: It is also a live regression guard in the other direction: if
+⭐ why-it-is-worth-keeping: a Stage B unit makes THIS case start diverging, the fix has
+⭐ why-it-is-worth-keeping: introduced an interface-order dependence where there was none,
+⭐ why-it-is-worth-keeping: and the gate reds on an UNLEDGERED case — which is a new bug,
+⭐ why-it-is-worth-keeping: not a drain. Do not ledger it to make that green.
+
+what-is-not-asserted: NOT that 1 is the correct answer. Which interface `m` belongs to
+what-is-not-asserted: is the disputed question of #1182; this case asserts only that the
+what-is-not-asserted: two interface-declaration orderings agree with each other, which
+what-is-not-asserted: they do today whatever the right value turns out to be.

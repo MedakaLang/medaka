@@ -1,0 +1,166 @@
+# IFACE-ORDER-LEDGER.txt — cases in test/iface_order_fixtures/ whose answer DOES
+# depend on the order in which two `interface` declarations were written, each naming
+# the OPEN issue that owns it.
+#
+# Read by test/diff_compiler_iface_order.sh (the gate) and, for the half a gate cannot
+# check, by test/must_fail_census.sh (nightly, has the GitHub API).
+#
+# This file is test/IMPORT-ORDER-LEDGER.txt's design, re-aimed at a different axis.
+# Everything below about what a row means, how it drains and what a reviewer must
+# demand is that file's rule set, kept deliberately identical so the two ledgers
+# cannot drift into meaning different things.
+#
+# ── WHAT A ROW MEANS ──────────────────────────────────────────────────────────
+#
+# A row is not a suppression. It is a signed statement, in the tree, that
+#
+#     "reordering two interface declarations — which changes no program meaning —
+#      changes what this program does, that is a live soundness bug, and here is
+#      the issue that owns it."
+#
+# The gate is GREEN with rows present because a gate that lands red breaks `main` and
+# teaches people to ignore it. The rows are what keep the green honest.
+#
+# ── HOW A ROW DRAINS (this is the whole point) ────────────────────────────────
+#
+# The row pins EVERY DISTINCT SIGNATURE the case produces and requires there to be
+# MORE THAN ONE. So:
+#
+#   * the day a fix makes the case invariant, the row goes RED, naming the issue to
+#     close. It cannot silently absorb the fix, which is what a plain skip-list does
+#     and why this is not one;
+#   * if the divergence MOVES (different outputs, still divergent), the row goes RED
+#     too — the pinned signatures no longer match what the binary does;
+#   * a row naming a case directory that no longer exists goes RED (rot).
+#
+# When a row drains: close the issue, DELETE the row, and KEEP the fixture. Without a
+# row it is graded as invariant — i.e. it becomes the regression guard for the fix.
+#
+# ⭐ ── READ THE CONVERGED SIGNATURE BEFORE CLOSING ANYTHING ────────────────────
+#
+# This ledger has one obligation its sibling does not, and it is the reason the gate
+# was built. Two DIFFERENT fixes both make a row converge, and they are not
+# interchangeable. The gate prints the converged signature in its drain note:
+#
+#   check=1 WITH a codes= entry  -> the ambiguous occurrence is now REJECTED.
+#   check=0 with codes= EMPTY    -> selection is now deterministic and the program
+#                                   still compiles. Confirm the value in run=/build=
+#                                   is the one the fix INTENDED, not merely a stable
+#                                   one — a deterministic wrong answer converges too.
+#
+# And the harder half: CONVERGENCE HERE DOES NOT ESTABLISH THAT THE ISSUE IS FIXED.
+# A fix scoped by interface NAME can drain one axis and leave another. The sibling
+# axes are graded elsewhere and must be checked before closing:
+#
+#   test/must_fail_fixtures/1182-two-ifaces-same-method-name-order-decides/  (impl order)
+#   test/diff_compiler_dict_semantics.sh Section 4                          (impl blocks)
+#   test/diff_compiler_import_order.sh                                      (import clauses)
+#
+# See test/diff_compiler_iface_order.sh's header, FOUR-STATE TABLE, for the full
+# reading — including the one state (a name-scoped fix) in which this gate stays
+# GREEN while the defect is still live, and what backstops it.
+#
+# ── WHAT A REVIEWER MUST DEMAND BEFORE ACCEPTING A **NEW** ROW ────────────────
+#
+# ⚠️ A tripwire's false positive is its masking path. If this file is easy to bump, it
+# stops being a ledger and becomes the slack that lets the gate be ignored. So a new
+# row is deliberately expensive, and a reviewer should refuse one that does not carry
+# all five:
+#
+#   1. AN ISSUE NUMBER, `#<digits>`, OF AN ISSUE THAT IS OPEN. The gate checks the
+#      SYNTAX offline; it cannot check OPEN-ness (it must run on a dev box with no
+#      `gh` auth and in a required CI shard where an API blip must not block a merge).
+#      test/must_fail_census.sh reports a ledgered issue that is CLOSED. A reviewer
+#      should check by hand: `gh issue view <n> --json state`.
+#   2. A FIXTURE DIRECTORY NAMED `<issue-number>-...`. The gate enforces this, and it
+#      is the anti-reflexive-bump lock: you cannot quietly ledger a case that was
+#      green yesterday without RENAMING its directory, which is loud in a diff.
+#   3. THE ACTUAL OUTPUTS, TRANSCRIBED. Every pinned signature must be one the binary
+#      really produced — the gate compares the pinned set against the observed set
+#      EXACTLY, in both directions, so a guessed or copied signature fails
+#      immediately. You cannot write a row without running the case.
+#   4. A PRE-EXISTING BUG, NOT ONE THE PR INTRODUCED. Ask directly: does this row
+#      exist because the diff under review made a program order-dependent? If so the
+#      answer is to fix the diff. A row is for a bug that was already shipping.
+#   5. THE CASE'S OWN `case.txt` SAYING HOW THE EXPECTED VALUES WERE ESTABLISHED. A
+#      captured golden records what the engine did, not what is correct; a divergence
+#      pin is the honest thing to record when the engine is broken, but only if the
+#      fixture says on what evidence.
+#
+# ⚠️ AND ONE THAT IS SPECIFIC TO THIS AXIS: DO NOT LEDGER A CONTROL. Two cases here
+# (control-distinct-method-names-invariant/, control-shared-method-name-disjoint-
+# receivers/) must be invariant and are what make the ledgered rows evidence about the
+# candidate set rather than about method names in general. If a control starts
+# diverging, the finding is LARGER than any row here claims — file it, do not absorb
+# it. The gate's failure note says so on the row itself.
+#
+# ── FORMAT ────────────────────────────────────────────────────────────────────
+#
+#   <case-directory> | #<issue> | <signature> | <signature> [| <signature> ...]
+#
+# Fields are `|`-separated and surrounding whitespace is stripped. Blank lines and
+# lines starting with `#` are ignored. At least TWO signatures are required — a row
+# asserts a DIVERGENCE, and one signature is not a divergence.
+#
+# A signature is the gate's own one-line reduction of one ordering's behaviour:
+#
+#   check=<exit>;codes=<sorted,comma>;schemes=<scheme dump>;run=<exit>:<stdout>;build=<exit>/<exec-exit>:<stdout>
+#
+# ⚠️ Do not hand-derive that shape from this line either — the gate is the authority
+# on it and this comment can rot. `grep -n "printf 'check=" test/diff_compiler_iface_order.sh`
+#
+# Program output is escaped so a signature is always exactly one line and never
+# collides with the separators: `\` -> `\\`, `|` -> `\p`, `;` -> `\s`, newline ->
+# `\n`. The gate escapes what it observes and compares escaped strings, so what you
+# paste here is exactly what the gate prints when a row fails.
+#
+# DO NOT hand-write a signature. Run the gate with the row absent; it prints every
+# distinct signature it observed, and those lines are what belongs here. Both rows
+# below were produced that way on a cold `make medaka` of this branch (base aaa43716).
+
+# ── #1182 (OPEN): the unmet obligation goes to the LAST-DECLARED interface ───
+# Two interfaces declare `mth`; only one has an impl for the receiver. Declaring the
+# implemented interface FIRST makes the program REJECTED (`No impl of FB for Blob`);
+# swapping the two declarations, and nothing else, makes it ACCEPTED at exit 0 and it
+# prints the implemented interface's body. ACCEPT vs REJECT — the strongest reading a
+# permutation differential can produce.
+#
+# ⭐ THIS ROW IS THE PROOF THE INSTRUMENT CAN FAIL, and it is not derived from the
+# engine: compiler/types/typecheck.mdk records this exact flip as MEASURED, in the
+# comment block bounding Stage A-2's module-path-only carve-out, and states the
+# mechanism ("the obligation goes to the LAST-declared interface either way"). The
+# gate reproduces it in both directions including which interface is named in the
+# rejection. Derive:  grep -n 'interface declarations SWAPPED' compiler/types/typecheck.mdk
+#
+# ⚠️ The row asserts the ORDER DEPENDENCE, not a value. Whether `mth Blob` should be
+# accepted, rejected as ambiguous, or rejected for FB is #1182's open question.
+#
+# ⚠️ AXIS NOTE, and it matters for how a drain here is read: #1182's OWN canonical
+# program (two interfaces, two impls, one receiver) was measured INVARIANT on this
+# axis — it is kept as the unledgered case negative-1182-impl-axis-shape-is-iface-
+# axis-invariant/. So this row is not a restatement of #1182's must-fail pin on a new
+# axis; it is a DIFFERENT shape of the same collision that the pin cannot reach.
+1182-unimplemented-iface-obligation-iface-order | #1182 | check=0;codes=;schemes=main : Unit\n;run=0:11\n;build=0/0:11\n | check=1;codes=T-NO-IMPL;schemes=;run=1:;build=1/-:
+
+# ── #1620 (OPEN): same method name at DIFFERENT return types, one receiver ───
+# Two interfaces declare `ping` at `String` and at `Int`, both implemented on one type.
+# With Alpha declared first the program is ACCEPTED (typed at Beta's `Int`, since the
+# occurrence takes the LAST-declared interface — the same mechanism the #1182 row
+# above records) and prints `False`; with the two declarations swapped it is typed at
+# Alpha's `String` and REJECTED at T-TYPE-MISMATCH.
+#
+# The must-fail pin for #1620 grades ONE ordering — it has one `cmd:` slot and spends
+# its `control:` slot on the single-interface case — so the reversed ordering was
+# ungraded anywhere in this tree before this row.
+#
+# ⚠️ AN exit-139 SEGFAULT REPORTED FOR THE REVERSED ORDERING DID NOT REPRODUCE on this
+# branch and is NOT encoded here. Eight runs across both axes and both projections
+# found no nonzero executable exit; the reversed interface ordering is in fact the
+# well-behaved one (`ping` resolves to Alpha; check, interpreter and built binary all
+# agree on `alpha`). The case's own case.txt transcribes all eight readings. If that
+# claim is needed later it must be re-derived from scratch.
+#
+# ⚠️ `main` projects to `Bool` (`ping T == 7`) rather than printing `ping T`: the raw
+# form's built binary prints a LIVE HEAP ADDRESS that differs on every execution, so
+# an exact-match pin on it would red permanently for a reason unrelated to this axis.
+1620-two-ifaces-same-method-name-iface-order | #1620 | check=0;codes=;schemes=main : Unit\n;run=0:False\n;build=0/0:False\n | check=1;codes=T-TYPE-MISMATCH;schemes=;run=1:;build=1/-:
