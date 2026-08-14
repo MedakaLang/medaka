@@ -212,13 +212,13 @@ grep -F 'useEPutRef : Ref Bool' "$WASM_SRC" >/dev/null &&
   echo "FAIL H2B8-NEAREST-MISS: ePut authority changed"
   exit 1
 }
-if grep -E '^useDivGuardRef[[:space:]]*[:=]|setRef useDivGuardRef' "$WASM_SRC" >/dev/null; then
+if grep -E '^_?useDivGuardRef[[:space:]]*[:=]|setRef (_?useDivGuardRef)' "$WASM_SRC" >/dev/null; then
   echo "FAIL H2B9-DIV-AUTHORITY: retired ambient divisor authority remains"
   exit 1
 fi
 for required in \
   'useDivGuard : Ref Bool' \
-  'useDivGuard = Ref False' \
+  'useDivGuard = Ref' \
   'scanProgW7 : WasmEmit -> List CBind -> Unit' \
   'scanImplsW7 : WasmEmit -> List CImplEntry -> Unit' \
   'scanImplEntryW7 : WasmEmit -> CImplEntry -> Unit' \
@@ -745,20 +745,21 @@ FEATURE_STATUS=$?
   echo "FAIL A0-FEATURE-CAPTURE: harness status/stderr"
   exit 1
 }
-FEATURE_MARKERS="$(awk '/^FEATURE_(P1|RECORD_U|CENSUS_U_GAP|P2)_(BEGIN|END)$/ { print }' "$INPUT_WORK/feature.out")"
-FEATURE_EXPECTED_MARKERS="$(printf 'FEATURE_P1_BEGIN\nFEATURE_P1_END\nFEATURE_RECORD_U_BEGIN\nFEATURE_RECORD_U_END\nFEATURE_CENSUS_U_GAP_BEGIN\nFEATURE_CENSUS_U_GAP_END\nFEATURE_P2_BEGIN\nFEATURE_P2_END')"
+FEATURE_MARKERS="$(awk '/^FEATURE_(P1|FLOAT_DIV|RECORD_U|CENSUS_U_GAP|P2)_(BEGIN|END)$/ { print }' "$INPUT_WORK/feature.out")"
+FEATURE_EXPECTED_MARKERS="$(printf 'FEATURE_P1_BEGIN\nFEATURE_P1_END\nFEATURE_FLOAT_DIV_BEGIN\nFEATURE_FLOAT_DIV_END\nFEATURE_RECORD_U_BEGIN\nFEATURE_RECORD_U_END\nFEATURE_CENSUS_U_GAP_BEGIN\nFEATURE_CENSUS_U_GAP_END\nFEATURE_P2_BEGIN\nFEATURE_P2_END')"
 [ "$FEATURE_MARKERS" = "$FEATURE_EXPECTED_MARKERS" ] || {
   echo "FAIL A0-FEATURE-CAPTURE: marker cardinality/order"
   exit 1
 }
 feature_exact_capture FEATURE_P1_BEGIN FEATURE_P1_END "$INPUT_WORK/feature.out" >"$INPUT_WORK/feature-p1.wat" &&
+  feature_exact_capture FEATURE_FLOAT_DIV_BEGIN FEATURE_FLOAT_DIV_END "$INPUT_WORK/feature.out" >"$INPUT_WORK/feature-float-div.wat" &&
   feature_exact_capture FEATURE_RECORD_U_BEGIN FEATURE_RECORD_U_END "$INPUT_WORK/feature.out" >"$INPUT_WORK/feature-u.wat" &&
   feature_exact_capture FEATURE_CENSUS_U_GAP_BEGIN FEATURE_CENSUS_U_GAP_END "$INPUT_WORK/feature.out" >"$INPUT_WORK/feature-census.events" &&
   feature_exact_capture FEATURE_P2_BEGIN FEATURE_P2_END "$INPUT_WORK/feature.out" >"$INPUT_WORK/feature-p2.wat" || {
     echo "FAIL A0-FEATURE-CAPTURE: malformed capture"
     exit 1
   }
-for feature_file in feature-p1.wat feature-u.wat feature-census.events feature-p2.wat; do
+for feature_file in feature-p1.wat feature-float-div.wat feature-u.wat feature-census.events feature-p2.wat; do
   [ -s "$INPUT_WORK/$feature_file" ] || {
     echo "FAIL A0-FEATURE-CAPTURE: empty $feature_file"
     exit 1
@@ -774,6 +775,12 @@ if grep -F '(local $__divr0 i64)' "$INPUT_WORK/feature-u.wat" >/dev/null; then
   echo "FAIL H2B9-DIV-U-ABSENCE: inert control declared ref divisor local"
   exit 1
 fi
+grep -F '(local $__divr0 i64)' "$INPUT_WORK/feature-float-div.wat" >/dev/null &&
+  grep -F '(func $featureFloatDiv (param $u____wparg0 (ref eq)) (result (ref eq))' "$INPUT_WORK/feature-float-div.wat" >/dev/null &&
+  grep -F 'f64.div' "$INPUT_WORK/feature-float-div.wat" >/dev/null || {
+  echo "FAIL H2B9-DIV-FLOAT: Float-only division lost ref divisor-local shape"
+  exit 1
+}
 cmp -s "$INPUT_WORK/feature-p1.wat" "$INPUT_WORK/feature-p2.wat" || {
   echo "FAIL A0-FEATURE-CAPTURE: P changed after record U and census"
   exit 1
@@ -789,7 +796,7 @@ FEATURE_EVENT="fn featureIntentionalGap	unbound variable 'missingFeatureCensus' 
     exit 1
   }
 printf '0\n' >"$INPUT_WORK/feature-expected.out"
-for feature_name in p1 u p2; do
+for feature_name in p1 float-div u p2; do
   feature_wat="$INPUT_WORK/feature-$feature_name.wat"
   wasm-tools parse "$feature_wat" -o "$INPUT_WORK/feature-$feature_name.wasm" || {
     echo "FAIL A0-FEATURE-CAPTURE: wasm-tools parse $feature_name"

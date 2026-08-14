@@ -321,9 +321,11 @@ reemitTrapState _ =
 reemitFeatureState : Unit -> <IO> Unit
 reemitFeatureState _ =
   let p1 = emitProgram featureStateInput featureStateProgram
+  let floatDiv = emitProgram featureStateInput featureFloatDivProgram
   let (u, _) = emitProgramRecord featureStateInput featureStateControlProgram
   let censusEvents = emitProgramGaps featureStateInput featureStateCensusProgram
   let _ = printCapture "FEATURE_P1" p1
+  let _ = printCapture "FEATURE_FLOAT_DIV" floatDiv
   let _ = printCapture "FEATURE_RECORD_U" u
   let _ = printEvents "FEATURE_CENSUS_U_GAP" censusEvents
   printCapture "FEATURE_P2" (emitProgram featureStateInput featureStateProgram)
@@ -394,6 +396,20 @@ featureStateProgram =
     featureStateCtorArities
     featureStateCtorTypes
     []
+
+-- Float `/` stays over-approximated by the divisor-local scan: it needs the
+-- ref-mode local even though IEEE division never traps on zero.
+featureFloatDivProgram : CProgram
+featureFloatDivProgram = CProgram
+  [
+    CBind "featureFloatDiv" [
+      CClause [featureStateArg] (CBinPrim "/" (CLit (LFloat 1.0)) (CLit (LFloat 2.0)) "Float")
+    ],
+    CBind "main" [CClause [] (CLit (LInt 0))],
+  ]
+  []
+  []
+  []
 
 featureStateControlProgram : CProgram
 featureStateControlProgram = CProgram
