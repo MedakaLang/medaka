@@ -1,0 +1,34 @@
+-- §3 head projection with TWO STACKED WRAPPERS over one headed body — the #1630
+-- COMPOSITION row. Sibling of `s3-constrained-impl-head-routes.mdk`.
+--
+-- `impl Sz (Eq a => <Stdout> Int)` puts #1630's `TyConstrained` peel directly on top
+-- of #1618's `TyEffect` peel. The two fixes are one arm each on the SAME node walk
+-- (`typecheck.headTyNode`), so composition is a property of that walk being
+-- recursive rather than of either arm — and a property nobody has to believe,
+-- because this row executes it. Measured on this tree's binary before the fix:
+--   `check`  -> exit 0, no diagnostics
+--   `run`    -> 6, exit 0                                          (CORRECT)
+--   `build`  -> exit 1, no binary:
+--      runtime error [E-PANIC]: no impl of method 'sz' for type '__none__'
+-- i.e. the #1618 peel ALONE did not reach this head — the outer wrapper hid it, and
+-- the failure is byte-identical to the single-wrapper row's.
+--
+-- ⚠️ NOT A DUPLICATE OF ITS SIBLING.  A one-arm fix that special-cased
+-- `TyConstrained cs (TyCon …)` — the shape the bug report shows — would green the
+-- sibling row and RED this one. That is exactly the "verified against the bug
+-- report, not the defect" failure the sibling's header warns about, and this row is
+-- the check for it.
+--
+-- ⚠️ THE LOAD-BEARING CELL IS **build**, for the same reason as its sibling and as
+-- `s3-effect-carrying-impl-head-routes.mdk`: check and run were already correct
+-- while the bug was live. `ALL_EXACT` forces build to ACCEPT with stdout
+-- byte-identical to run's and to the pinned `6`.
+--
+-- ⚠️ ONE IMPL BLOCK, so Section 4 derives no permutation pair — correctly.
+interface Sz a where
+  sz : a -> Int
+
+impl Sz (Eq a => <Stdout> Int) where
+  sz _ = 6
+
+main = println (sz 0)

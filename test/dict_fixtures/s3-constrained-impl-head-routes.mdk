@@ -1,0 +1,54 @@
+-- §3 head projection + §7 single-evaluator law at a CONSTRAINED impl head whose
+-- body is HEADED — the #1630 fix. Third member of the `headTyconTy` `_ => None`
+-- arm set, after `s3-fn-typed-impl-heads-discriminated.mdk` (#1617, `TyFun`) and
+-- `s3-effect-carrying-impl-head-routes.mdk` (#1618, `TyEffect`).
+--
+-- WAS: the two head projections DISAGREED, exactly as in #1618 but behind a
+-- different wrapper. `eval.headTycon` has peeled `TyConstrained` since long before
+-- typecheck's projection existed, so this impl was FILED under tag `Int` by the
+-- definition side, while `typecheck.headTyNode` peeled only `TyApp` and `TyEffect`,
+-- so `headTyconTy` reached its `_ => None` arm and the caller side stamped
+-- `__none__`. The front end therefore resolved a call the EMITTER could not find:
+--   `check`  -> exit 0, no diagnostics
+--   `run`    -> 2, exit 0                                          (CORRECT)
+--   `build`  -> exit 1, no binary:
+--      runtime error [E-PANIC]: no impl of method 'sz' for type '__none__'
+-- Measured on this tree's binary before the fix; the fix adds one arm,
+-- `headTyNode (TyConstrained _ t) = headTyNode t`.
+--
+-- 🚨 THE HEADED BODY IS THE WHOLE POINT, AND THE WRAPPER IS NOT.  #1617's own
+-- commit body declared `TyConstrained` "measured benign … peeling it yields a
+-- headless body", which is true of `Eq a => a` and false of `Eq a => Int`. A
+-- wrapper does not decide whether its body has a head; only the body does. The
+-- headless spelling is a DIFFERENT program and is still correctly headless — it is
+-- an ordinary fully-general `impl Sz a`, and it built and ran fine both before and
+-- after the fix (3, exit 0 on every cell). Do not "simplify" this fixture's head to
+-- `Eq a => a`: that erases the only thing it pins.
+--
+-- ⚠️ SO THE LOAD-BEARING CELL OF THIS ROW IS THE **build** ARM, not the value.
+-- `check` and `run` were both already correct while the bug was live and pass on a
+-- compiler that still has it. Section 1's `ALL_EXACT` mode is what discriminates:
+-- it requires `build` to ACCEPT and its stdout to be byte-identical to `run`'s and
+-- to the pinned `2`, so a regression that puts a constrained head back into the
+-- `__none__` bucket fails on the build cell alone. Verified able to fail: mutating
+-- the pinned value to `3` reds this row and reverting greens it.
+--
+-- ⚠️ ONE IMPL BLOCK, so Section 4 derives no permutation pair for this file —
+-- correctly. Unlike #1617, this defect's signature was NOT declaration-order
+-- dependence: there is one impl, one interface and one call, and nothing to be
+-- ambiguous about. Its sibling `s3-constrained-effect-impl-head-routes.mdk` pins
+-- the composed wrapper; the arrow-under-constraint spelling
+-- (`impl Sz (Eq a => Int -> Int)`, measured check 0 / run 4 / build 1 before the
+-- fix and 4 on every cell after) rides the same one-line peel and is deliberately
+-- not given a third file.
+--
+-- ⚠️ The constraint's variable `a` appears nowhere in the head body. That is the
+-- reported shape, kept verbatim; it is also what makes the wrapper PURE wrapper, so
+-- the row pins the peel and nothing else.
+interface Sz a where
+  sz : a -> Int
+
+impl Sz (Eq a => Int) where
+  sz _ = 2
+
+main = println (sz 0)

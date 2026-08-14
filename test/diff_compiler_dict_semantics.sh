@@ -95,11 +95,21 @@
 #       impl and nothing to be ambiguous about. Fix: reconcile the projections.
 #     - #1180 (bare `TyVar`) is the arm where None is the DOCUMENTED INTENT; that
 #       program must be REJECTED and neither fix repairs it.
-#     - #1630 (OPEN) is the SAME arm set at a headed `TyConstrained` body --
-#       `impl Sz (Eq a => Int)` still gives `check=0 run=0 build=1`. A shape one
-#       constructor away is live, which is why deleting the executable memory of
-#       these two would have been the wrong trade: a drained fixture is not a
-#       drained class.
+#     - #1630 (FIXED; was OPEN when the two rows above landed) is the SAME arm set
+#       at a headed `TyConstrained` body -- `impl Sz (Eq a => Int)` gave
+#       `check=0 run=0 build=1`, byte-identically to #1618. Fix: one more arm on the
+#       same node walk, `headTyNode (TyConstrained _ t) = headTyNode t`. It has TWO
+#       rows below (`s3-constrained-impl-head-routes` and
+#       `s3-constrained-effect-impl-head-routes`) because a fix that special-cased
+#       the reported shape `TyConstrained cs (TyCon …)` would green the first and
+#       red the second.
+#       🚨 THIS ENTRY IS ALSO THE ARM SET'S OWN WARNING AGAINST BOUNDING A CLASS
+#       FROM ONE EXAMPLE. #1617's commit body declared `TyConstrained` "measured
+#       benign … peeling it yields a headless body" and this file recorded the class
+#       as "NOT finished" on that basis -- both true of `Eq a => a` and false of
+#       `Eq a => Int`. The wrapper never decided headedness; the body did. So read
+#       "the set is not finished" as still live: it is what has been enumerated, and
+#       the enumeration has now been wrong once in each direction.
 #   ⚠️ THE TWO ROWS DISCRIMINATE ON DIFFERENT CELLS, and reading either as a plain
 #   value pin makes it vacuous. #1617's value cell passes BY CONSTRUCTION on the one
 #   declaration order it was captured at -- its real assertion is Section 4, which
@@ -401,6 +411,8 @@ s3-nested-no-overlap-control.mdk|CONTROL for #323: identical depth, overlapping 
 s3-min-fully-general-sibling.mdk|§3 `inst` = min⊑(match) WITH A FULLY-GENERAL SIBLING -- the #1128 DRAIN (F-3b). `impl Tag a` beside `impl Tag (Box Int)`: goal `Tag (Box Int)` matches BOTH and min⊑ takes the concrete one (99); goals `Tag (Box String)` / `Tag (Box Bool)` match the general one ALONE, because no substitution makes `Box Int` into `Box String` (10, 10). This row pinned the WRONG 99/99/99 until 2026-08-01; the value below is the SPEC answer the fixture`s own header hand-derived before the fix existed, not a recapture of what the engine started doing|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|99\n10\n10|
 s3-fn-typed-impl-heads-discriminated.mdk|§3 `inst` DISCRIMINATES TWO FUNCTION-TYPED IMPL HEADS -- the #1617 DRAIN, and the third member of the `noneHeadTag` family after #1128 above and #1154 below. `impl Sz (Int -> Int)` beside `impl Sz (Bool -> Bool)`: `headTyconTy`s `_ => None` arm swallowed `TyFun`, both heads shared the ONE `noneHeadTag` bucket, and the value was decided by DECLARATION ORDER at exit 0 with `check --json` clean -- this ordering printed `(5, 5)`, the reversed one `(9, 9)`, and `build` exited 1 with `arg-tag dispatch on impl type that owns no constructors`. `(5, 9)` is the SPEC answer the fixtures own header hand-derived from the two signatures, not a recapture. ⚠️ THE VALUE CELL IS ONLY HALF THIS ROW: the defects signature was ORDER-DEPENDENCE, which a single-order value pin passes by construction, so the discriminating half is Section 4 -- this file is a FLAT `.mdk` with 2 impls of one interface precisely so the permuter derives it|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|(5, 9)|
 s3-effect-carrying-impl-head-routes.mdk|§3 head projection + §7 single-evaluator law at an EFFECT-CARRYING impl head -- the #1618 DRAIN. ONE interface, ONE `impl Sz (<Stdout> Int)`, ONE call: `typecheck.headTyconTy` answered None for the `TyEffect` head while eval`s and `core_ir_lower`s `headTycon` STRIPPED the effect to `Int`, so the front end resolved a call the EMITTER then could not find -- `check` 0 and `run` 2 were both already CORRECT and `build` exited 1 with `no impl of method ‘sz’ for type ‘__none__’`. ⚠️ THE LOAD-BEARING CELL IS **build**, not the value: check and run pass on a compiler that still has this bug, and it is `ALL_EXACT`s requirement that build ACCEPT with stdout byte-identical to run`s and to the pinned 2 that makes the row discriminate. ⚠️ ONE impl block, so Section 4 derives no pair here -- correctly, there is no declaration order to be free of; its sibling drain above carries that axis|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|2|
+s3-constrained-impl-head-routes.mdk|§3 head projection + §7 single-evaluator law at a CONSTRAINED impl head with a HEADED body -- the #1630 fix, third member of the arm set above. ONE interface, ONE `impl Sz (Eq a => Int)`, ONE call: `eval.headTycon` peeled `TyConstrained` and filed the impl under `Int` while `typecheck.headTyNode` peeled only `TyApp`/`TyEffect`, so the caller side stamped `__none__` -- `check` 0 and `run` 2 were both already CORRECT and `build` exited 1 with `no impl of method ‘sz’ for type ‘__none__’`. ⚠️ THE LOAD-BEARING CELL IS **build**, not the value, exactly as for #1618 above: `ALL_EXACT` requires build to ACCEPT with stdout byte-identical to run`s and to the pinned 2. ⚠️ THE HEADED BODY IS THE POINT: `Eq a => a` is a different program, correctly still headless, and was never broken -- do not simplify the head|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|2|
+s3-constrained-effect-impl-head-routes.mdk|§3 head projection with TWO STACKED WRAPPERS over one headed body -- the #1630 COMPOSITION row. `impl Sz (Eq a => <Stdout> Int)` puts the `TyConstrained` peel on top of #1618`s `TyEffect` peel; pre-fix it failed byte-identically to its sibling (check 0, run 6, build 1 with `no impl of method ‘sz’ for type ‘__none__’`), which is the measurement showing the #1618 peel alone did NOT reach a head an outer wrapper hides. ⚠️ NOT A DUPLICATE: a fix special-casing the reported shape `TyConstrained cs (TyCon …)` greens the sibling row and REDS this one -- that is this row`s whole job. ⚠️ Load-bearing cell is **build**|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|6|
 s3-w1-cyclic-superinterface-rejected.mdk|§3 W1 the superclass relation must be ACYCLIC (else `super`-search loops) -- statically rejected, not hung|REJECT|REJECT|REJECT|NONE||T-CYCLIC-SUPERINTERFACE
 s3-w3-method-scheme-rigidity-constraint.mdk|§3 W3 method-scheme fidelity, CONSTRAINT axis: an impl body may not need a class the method scheme does not license (#814 vein)|REJECT|REJECT|REJECT|NONE||T-IMPL-TOO-SPECIFIC
 s3-w3-method-scheme-rigidity-pinned-type.mdk|§3 W3 method-scheme fidelity, PINNED-TYPE axis: an impl body may not fix a caller-owned method variable even with no constraint involved|REJECT|REJECT|REJECT|NONE||T-IMPL-TOO-SPECIFIC
