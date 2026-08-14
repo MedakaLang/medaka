@@ -38,7 +38,8 @@ semantic-field/mutation-class pair:
 ```text
 row_id:
 semantic_field:
-mutation_class: reader-runtime | fresh-context-u-absence | renamed-authority
+mutation_class: reviewed class; ambient examples include reader-runtime,
+  fresh-context-u-absence, and renamed-authority
 route:
 claim:
 exact_head:
