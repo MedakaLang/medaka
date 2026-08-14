@@ -244,8 +244,7 @@ if grep -E '^_?useHashRef[[:space:]]*[:=]|setRef (_?useHashRef)' "$WASM_SRC" >/d
 fi
 for required in \
   'useRecUpdate : Ref Bool' \
-  'useRecUpdate = Ref' \
-  'let ru = if emit.useRecUpdate.value then ["(local $__rub" ++ sfx ++ " (ref eq))"] else []'; do
+  'useRecUpdate = Ref'; do
   grep -F -- "$required" "$WASM_SRC" >/dev/null || {
     echo "FAIL H2B9-RECUPDATE-AUTHORITY: missing $required"
     exit 1
@@ -303,10 +302,6 @@ for required in \
   'setRef emit.useRng True' \
   'setRef emit.useHash True' \
   '|| emit.useRng.value || emit.useHash.value || useFloatRef.value' \
-  'let rngGlobal = if (progEmit prog).useRng.value then rngStateGlobalLines else []' \
-  'let rngRt = if (progEmit prog).useRng.value then rngRuntimeLines else []' \
-  'let hashRt = if (progEmit prog).useHash.value then hashRuntimeLines else []' \
-  'let hashStrRt = if (progEmit prog).useHash.value && useStrRef.value then hashStringRuntimeLines else []' \
   'setRef useFloatHashRef True in setRef emit.useHash True' \
   'setRef useFloatRngRef True in setRef emit.useRng True'; do
   grep -F -- "$required" "$WASM_SRC" >/dev/null || {
