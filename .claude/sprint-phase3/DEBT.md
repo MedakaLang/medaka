@@ -456,3 +456,38 @@ unchecked:    **why** #1514's shape drains and `p02`'s does not. The adversarial
 causal derivation. We may **NOT** state that the same-spelled-interface class, the #1047/#1265 family,
 or "cross-module interface collisions" are fixed. **A drained fixture is not a drained class**, and the
 differential just demonstrated the gap empirically rather than leaving it as a caution.
+
+#### D-3 — headless cross-module impls: one collapsed symbol becomes two qualified ones
+
+**Written by the repair round that detected it (R-9), per the ledger's own rule.** It falls inside
+`e`'s *amended* `could move:` claim but **no bite's row records it**, and it is a **different bucket
+and a different mangling shape** from the collision-site change row `e` does record
+(`Base__Box_Int___btag` → `base__Base__Box_Int___btag`, a *headed* impl).
+
+sites:        no source site — an emergent consequence of `B-2.2-e`'s word carrying `module::Iface`
+              into the **headless** (`noneHeadTag`) bucket.
+transform:    none directly.
+could move:   🚨 **IT MOVED.** Two modules each declaring a same-spelled `interface C` with a
+              **headless** impl (`impl C a`):
+```
+base:    @mdk_impl___none___cm                      ← ONE symbol; the second module's body
+                                                       is silently DROPPED
+branch:  @mdk_impl_ma__C_a__cm                      ← TWO distinct symbols…
+         @mdk_impl_mb__C_a__cm                      ← …the second emitted and NEVER called
+```
+              **Values are unchanged on both arms** (`(1, 1)`, where `(1, 2)` is correct), so this is
+              **not** an acceptance or severity change. **Direction: neutral-to-better** — base
+              silently discarded a definition; the branch keeps both and makes the mis-selection
+              **nameable in the IR without fixing it**, which is exactly the pattern row `e` predicts.
+nearest miss: a headless case where two *qualified* words sanitize together would be `D-1`'s link
+              redefinition in this bucket. **Not searched for** — base emits one symbol here, so this
+              program cannot show it.
+engines:      LLVM (symbol set). eval unchanged — values identical on both arms. wasm unprobed.
+unchecked:    whether this bucket can reach `D-1`'s shape; the wasm arm.
+
+✅ **This row's sibling result CONFIRMS the amended claim.** A control with **differently-spelled**
+headless interfaces across modules produced **byte-identical IR**, with the symbols still unqualified
+(`@mdk_impl___none___cam` / `…cbm`) — qualification is gated on the collision verdict exactly as row
+`e` (2) describes. **The UNAMENDED claim — "byte-identical on programs with no head collision" —
+would have been falsified by this row.** Narrowing it to *"…and no two same-spelled interfaces in the
+module graph"* is what makes it survive.
