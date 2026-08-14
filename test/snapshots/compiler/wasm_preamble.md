@@ -1,5 +1,5 @@
 # META
-source_lines=1669
+source_lines=1670
 stages=DESUGAR,MARK
 # SOURCE
 -- WasmGC module PREAMBLE — the fixed lines that head every emitted WAT module
@@ -322,11 +322,12 @@ ioStrRuntimeLines = [
 ]
 
 -- ── W8 stderr byte-write seam (§6 — ePutStr/ePutStrLn) ───────────────────────
--- A second host import for stderr, parallel to `mdk_write_byte`.  Emitted only when
--- the program uses `ePutStr`/`ePutStrLn` (`useEPutRef`).  The native oracle
+-- A second host import for stderr, parallel to `mdk_write_byte`. Emitted when an
+-- ePut/panic body needs the stderr runtime or a coded trap needs the byte writer.
+-- The native oracle
 -- (`mdk_eputstr`) writes a String's UTF-8 bytes to fd 2; the JS runner accumulates
--- these into a separate buffer it prints on `process.stderr` (the diff gate compares
--- STDOUT only, so a stderr-only fixture's stdout matches on both sides).
+-- these into a separate buffer it prints on `process.stderr`; focused gates assert
+-- stderr directly.
 export stderrByteImportLines : List String
 stderrByteImportLines = [
   "  (import \"env\" \"mdk_write_err_byte\" (func $mdk_write_err_byte (param i32)))"
