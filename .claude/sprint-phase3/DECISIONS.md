@@ -1575,3 +1575,105 @@ matches — but **`b2daac7d` contains a partial file its message does not descri
 **Remedy, effective now: stage sprint-record files BY PATH while any agent has that directory open**,
 never by directory. The same rule already applies to `DEBT.md`, which has had two concurrent writers
 and which the `b1`+`e` implementer flagged for exactly this reason.
+
+---
+
+# RUN-P3-041 — `B-2.2-c` LANDED (`655991f2`); PHASE 1 COMPLETE. And `c` refused my property.
+
+All bites are in: `a` (`cd1f2c8d`) · `f` (`d5948e3a`) · `b1`+`e` (`ec1cda37`) · `c` (`655991f2`).
+`b2` dropped (RUN-P3-032).
+
+## 🚨 The property I specified for `c` was FALSE, and the implementer refused to inscribe it
+
+I gave `c` this absolute: *"No selector call may be reachable from `entailAssum*` or
+`entailFallback`."* **The second half is false at this pin.** `entailFallback` →
+`undeterminedRoute` → `routeUndeterminedTop` → `argImplRequiresRoutes` → `selectReqImpl` **is** a
+selector call reachable from `entailFallback`.
+
+**Inscribing it would have written a property the tree violates on its first read** — into the one
+bite whose entire purpose is leaving behind sentences the next refactor cannot silently violate.
+
+**RULED: the implementer's amendment stands, and is better than what I asked for.** It states the
+`assum` trio as an absolute (the whole chain enumerated: every arm is a `perRun` registry lookup)
+and names the fallback path as a **derived non-violation** — that rung answers its own goal by
+**COUNTING** (`implHeadTagsForIface`; exactly one, else `T-AMBIGUOUS-INSTANCE`), never by selection,
+and only then routes the chosen impl's nested `requires` as a fresh sub-goal descending the ladder
+again. The forbidden shape — the fallback rung answering the ladder's own goal *by selection* — is
+stated explicitly, and `KeepNone` cannot reach even this path.
+
+⚠️ **My packet claimed the property was "verified at the pin by enumerating every selector call
+site."** That enumeration stopped at `entailFallback`'s **own body** rather than following to the
+leaves. **This is the SECOND "verified by enumeration" claim in this sprint that stopped short of the
+leaves** (the first: the "15 reading sites" table). ⇒ **An enumeration claim must state its DEPTH.**
+"I enumerated the call sites" and "I followed each to its leaves" are different claims and this
+sprint has now conflated them twice.
+
+# RUN-P3-042 — adversarial review of `b1`+`e`: **THE BITE HOLDS**, on a stronger argument than mine
+
+**The by-construction claim is DERIVED TRUE, structurally.** `implRowsOf` is the **only** `ImplRow`
+construction site, and its `IfaceRef` comes only from `implDeclFact`, which is literally
+`IfaceRef { irName = iface, irOrigin = implOrigin }` off the `DImpl` — while the definition side
+destructures `implOrigin` off **that same `DImpl`**. ⇒ **the caller's `ir.irOrigin` IS the definition
+side's `implOrigin`: same field, same decl, one hop.** My brief framed these as two independent
+sources; they are not, and the reviewer notes that handing it that one line would have collapsed 45%
+of its time into a confirmation.
+
+**And it survives the pathological case:** #1288's re-export merge makes `implOrigin` *wrong* — but
+**identically wrong on both sides**, so agreement is unaffected. Nine attacks held in total,
+including one the reviewer **retracted** after chasing it (a tuple-rendering divergence that
+dissolved when `joinComma = joinWith ", "` turned out to be the same function).
+
+## 🚨 F-1 (S2, CLOSE-OUT BLOCKING) — the acceptance fix loses its only test at close-out
+
+**The only landed test of this bite's *acceptance* fix is the must-fail fixture — and the `DEBT` row
+instructs the close-out to close #1514 and remove it.**
+
+The five new `dict_fixtures/` rows pin the **wire format** (a module prefix appears in a symbol), not
+the **behaviour**: the colliding-heads fixture separates its two impls by **type argument**
+(`Box Int` vs `Box String`), which **the pre-bite word already separated**. The `base::` prefix is
+decoration in that program — nothing in it would behave differently if the prefix were absent.
+
+⇒ **Delete the must-fail pin without promoting its program and the tree has ZERO regression coverage
+for "two same-spelled interfaces select correctly" — the thing this bite actually fixed.**
+
+**Close-out requirement (blocking): promote #1514's program into `test/dict_fixtures/` as a value row
+BEFORE deleting the must-fail pin.** The gate already takes multi-module directory fixtures.
+
+## Adjudication: **"no seed re-mint owed" is SOUND** — and the derivation is worth keeping
+
+Not the confusion I was guarding against. From the harness: **the seed IS the native emitter's
+emission of the build driver's own graph — i.e. exactly `IR1`.** C3a asserts `IR1 == REF` where `REF`
+descends from the committed seed. So *"C3a green"* and *"`refresh_seed.sh` would rewrite the seed
+with identical bytes"* are **the same proposition on this harness.** Riders: `git show --stat
+ec1cda37` touches **no `compiler/backend/*` file**, so there is no codegen change to converge; and the
+residual C3a cannot see is a word that moves only in a program the compiler's own graph lacks.
+⚠️ **My commit message gave the unqualified claim.** The repo rule is to say **which** C3a; the DEBT
+row does (`IR1 byte-identical to the seed-bootstrapped reference`), the commit message does not — and
+the commit message is what a bisecting reader greps.
+
+## #1514's drain is REAL and CAUSAL, and its nearest miss is named
+
+Pre-bite the two sides **actively disagreed**: `declKeysAtHead` deduped both impls onto one key ⇒
+`ifaceDeclHeadUnique` True ⇒ definition side registered under the **bare tag**, while
+`keyForSiteByIface` counted **rows**, saw 2, and stamped the canonical key. Caller word ∉ the
+emitter's union ⇒ fallback tier ⇒ first-impl-wins. Post-bite the keys are distinct ⇒ `unique` False ⇒
+the caller's word is a direct hit. **A causal fix, not a shape move.**
+
+**Nearest program still wrong** — from the tree, not invented: the same two modules with
+**method-less impls inheriting an interface default**. `mdk_default_<method>_<TAG>` has **no
+interface component**, so two same-named defaults share one symbol; `core_ir_lower.mdk:1296-1300`
+says so verbatim and calls it **#1265, still open**. eval escapes via `defaultCellName ifaceId
+method`; the native emitter has no such escape.
+
+## Two more findings
+
+- **F-2 (S3):** two of the three `typecheck_compiler_source.sh` allowlist entries are **FILE-grained**
+  on a file that is **no longer inert** — `b1` moved `route_key.mdk` into the import closure **in the
+  same commit that added an entry justified by its inertness**. `typecheck.mdk`'s equivalent entry is
+  line-grained by a companion check; this one has none. Narrow it or add the companion.
+- **F-3 (S3, watch):** loader-derived module ids now reach an **emitted LLVM symbol**
+  (`@mdk_impl_base__Base__Box_Int___btag`). **#1223 is OPEN and MEASURED still reproducing** — an
+  import-bearing file's loader id is first-root as an entry and last-root as a dependency. Scoped
+  honestly: within one `medaka build` there is one loader run, so this is **not** a live miscompile;
+  what it is, is IR goldens whose expected symbol embeds a path-derived id, and a new coupling
+  between an open loader defect and object-file names.
