@@ -1715,3 +1715,68 @@ identical at the source level."*
 module does not export. **Both arms failed identically**, which is exactly the vacuous-both-arms-fail
 shape the differential harness had to grow a counter for — a probe failing the same way on both arms
 carries no signal and must not be read as agreement.
+
+# RUN-P3-044 — 🎯 THE DRAIN BOUNDARY, DERIVED. This is the sprint's scope statement.
+
+**One sentence:** the fix distinguishes impl route **words**; it does **not** change impl
+**selection** — so it covers exactly those programs where the candidate scan already yields ONE row
+(the two impls sit at **distinct head types**), and covers **none** where two impls share a head type
+**and** a method name, because there the wrong row is chosen **upstream of any word**.
+
+**A five-step mutation ladder, one variable per step, both pre-built arms, MEASURED.** Each step is
+the #1514 program (two modules, own same-spelled `Same`, own impl, bodies `n+1`/`n+100`); correct is
+`(11, 110)`:
+
+| step | variable | base run / exec | branch run / exec |
+|---|---|---|---|
+| **M0** = #1514 reduced | — (positive control) | `(11,11)` / `(11,110)` | `(11,110)` / `(11,110)` **drains** |
+| **M1** | + per-module wrapper fn | `(11,11)` / `(11,110)` | `(11,110)` / `(11,110)` **still drains** |
+| **M2** | head → a shared 3rd module (**one type**) | `(11,11)` / **`(11,11)`** | **`(11,11)` / `(11,11)` — FLIP** |
+| **M3** | M2 + interfaces spelled **differently** | `(11,11)` / `(11,11)` | unchanged |
+| **M4** | M3 + method names differ | `(11,110)` / `(11,110)` | positive control holds |
+
+**M1→M2 is the boundary.** The **wrapper is NOT** it (M1 has one and still drains). **Interface
+spelling is NOT** it (M3 reproduces the wrongness with *differently* spelled interfaces). **Shared
+head type + shared method name IS.**
+
+**Mechanism at the flip, read from IR:** branch M2 emits **both** qualified symbols, distinct — and
+**both call sites still call the first module's**, with the second's defined and never called.
+**The word is correct and is minted from the wrong row.** `ieEntriesForMethod` filters on
+`contains name ms` — method-name membership, **no interface component** — and its own neighbouring
+comment says the selector is read *"by the route WORD itself, through `keyForSite`"*. Nothing in the
+key separates two rows sharing a head bucket.
+
+## The three statements the PR body may use, and the one it may not
+
+✅ **COVERS:** cross-module same-spelled-interface programs where each module's impl is at **its own
+head type** — #1514's shape. `run` now agrees with `build` and with the hand-derived answer.
+
+🎯 **ALSO REPAIRS, and nothing in our commit messages claims it: a deterministic native SEGFAULT.**
+Add a `Same a => a -> Int` **constrained wrapper** to M1 and base **builds at exit 0 and segfaults
+3/3** (`exit 139`, `E-FATAL-SIGNAL`) while its `run` answers `(11,11)`; branch answers `(11,110)` on
+both arms. IR: base hands **the same** dict constant to both generic calls and the dispatcher tests a
+tag **no arm matches**, reaching `unreachable`; branch emits two constants and two matching arms.
+**Relayed to the live writer for a pin — an unpinned claim is not claimable.**
+
+❌ **DOES NOT COVER:** any program where two impls share **both** a method name and a head type.
+`p02`/`p03` measured `(1,1)`/`(2,2)` on base **and** branch, on `run` **and** the built binary, with
+`check` clean at exit 0 throughout. Import order still decides.
+
+## Different defect, or the same one further out? **DIFFERENT from #1514 — and it is #1182.**
+
+- **Not a spelling problem at all:** M3 reproduces `p02`'s wrongness with the two interfaces spelled
+  *differently*, so the spelling collision #1514 is about is **not load-bearing** for `p02`.
+- **Not #1265:** `p02`'s branch IR contains **zero** `mdk_default` symbols — both impls define the
+  method explicitly, so no default-cell collision is involved.
+- **Not #1047** (CLOSED; its residual is the default half, owned by #1265).
+- **It is #1182**, same selector, same order-dependence, same engine-agreement — and #1182's pin
+  still reproduces identically on both arms.
+
+⇒ **The sprint files NOTHING new here.** The only gap is *coverage of the existing pin*: #1182's
+fixture is single-file with both interfaces in one module, so the **cross-module / wrapper reach is
+unpinned**. That is a fixture recommendation on #1182, not a new issue.
+
+⚠️ **The most discriminating fact, which I had not recorded:** for `p02`, base's **`build` is also
+wrong**. #1514's `build` was **correct** and only `run` was wrong — which is why #1514 read as an
+eval-only defect. `p02` is wrong on **both** engines. A scope claim resting on `run` alone would have
+mis-drawn this boundary.
