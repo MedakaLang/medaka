@@ -820,6 +820,19 @@ MEDAKA_ROOT="$PWD" /tmp/alt/medaka run /tmp/hello.mdk # exit 0: 12345
 ⚠️ The miss diagnostic offers *"run from the project root"* as a remedy; measured, cwd
 being a directory that HAS `stdlib/` did **not** rescue it — only `MEDAKA_ROOT` or an
 exe-adjacent `stdlib/` did.
+🚨 **THE SAME PROPERTY MAKES A TWO-ARM DIFFERENTIAL UNSOUND WHEN THE TARGET IS ITSELF A
+`stdlib/*` FILE — and it fails in the direction that manufactures FINDINGS.** The
+internal-extern guard trusts a stdlib file only when it sits under the *binary's own*
+`MEDAKA_ROOT` (= `exeDir`). So a base binary living in one worktree, pointed at the branch
+worktree's `stdlib/array.mdk`, sees that file as **outside its stdlib** and rejects it with
+`R-INTERNAL-EXTERN` — while the branch binary on its own tree accepts. That reads exactly
+like *"the branch fixed 14 stdlib files"*. Measured 2026-08-15 on PR #1640: a reviewer
+reported 14 `base=1 → pr=0` stdlib divergences, then **retracted all 14** after swapping the
+file's tree reversed the direction — the variable was the file's location relative to the
+binary, not the compiler. Re-run with **each binary against its OWN tree's `stdlib/`** (and
+the tree prefix normalized before diffing): **0 divergences across all 29 modules.**
+⇒ For `stdlib/*` targets, either give each arm its own tree or set `MEDAKA_ROOT` per arm —
+never point one binary at the other's stdlib.
 🚨 **`stdlib/` is NOT the whole exe-adjacent layout — `medaka build` also needs `runtime/`
 there, and the gap bites only on the FIRST `build`.** The complete set beside the binary is
 `medaka` + `medaka_emitter` + `stdlib/` + **`runtime/`**: `runBuildNativeRoots`

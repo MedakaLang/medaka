@@ -2272,3 +2272,41 @@ identities and they DIFFER, where falling back to spelling **re-collides exactly
 key exists to separate.** If tier 2 is a blanket *"tier 1 returned nothing ⇒ try spelling"*, case (b)
 falls through, the re-key delivers nothing for its target shape, and **every gate stays green** — because
 the defect is not value-observable (above). This is the one question that decides whether the unit works.
+
+## RUN-P45-062 — THE #1640 SEMANTICS REVIEWER RETRACTED 14 OF ITS OWN HITS, AND FOUND A NEW TRAP DOING IT
+
+Its tree-wide sweep first reported **14 `base=1 → pr=0` stdlib divergences** — i.e. *"the branch fixed 14
+stdlib files"*, a finding shaped exactly like a real one. **All 14 retracted.**
+
+🚨 **The mechanism is a NEW instance of the exe-relative property, running in the opposite direction
+from the one `AGENTS.md` documents.** The internal-extern guard trusts a stdlib file only when it sits
+under the *binary's own* `MEDAKA_ROOT` (= `exeDir`). A base binary in a scratch worktree, pointed at the
+branch worktree's `stdlib/array.mdk`, sees it as **outside its stdlib** and emits `R-INTERNAL-EXTERN`;
+the branch binary on its own tree accepts. **Swapping the file's tree reverses the direction** — the
+variable was the file's LOCATION relative to the binary, not the compiler. Re-run with each binary
+against its own tree's stdlib, prefix normalized: **all 29 modules byte-identical, 0 divergences.**
+
+⇒ `AGENTS.md` says exe-relative resolution is what makes a two-worktree differential **sound**. That is
+true for ordinary programs and **false for `stdlib/*` targets**, which is the exception nobody had
+written down. **Landed in `AGENTS.md`** beside the existing exe-relative block.
+
+### ⭐⭐ Two epistemic corrections the reviewer made against ITSELF, both worth more than the sweep
+1. **It overstated its own bound and said so.** It had written that no other file in the tree *can*
+   change acceptance; the sweep then reported 18 divergences where it predicted 1. All 18 resolve, but
+   *"I asserted the bound before the evidence that would have tested it had arrived."*
+   [[feedback_a_claim_reaching_past_its_evidence]], self-caught.
+2. **Its sweep compared EXIT CODES ONLY, so it is blind to a change of REASON at the same exit code.**
+   `iface_order_fixtures/1182-…/main.mdk` does not appear among the 18 for precisely that reason: base
+   rejects with `T-NO-IMPL`, PR rejects with `R-DUPLICATE-IFACE-METHOD` — **same exit 1, different
+   diagnostic.** ⇒ *"The static census, not the sweep, is what actually bounds this change."*
+   [[feedback_an_exit_code_graded_control_answers_the_wrong_question]], found by the instrument's own
+   author.
+
+**Corrected result: exactly 5 files tree-wide change acceptance** — the 2 new resolve fixtures, the kept
+`1620` iface_order fixture, one non-gated `.claude/` scratch repro, and the text-only `1182` fixture.
+**Exactly the static census set.** Everything else in its report stands: the 105-name prelude carve-out,
+8 import spellings plus re-export chains, attribute-awareness both positions, verb reach, both re-posed
+pins with their load-bearing steps confirmed and controls proven fail-capable.
+
+**Bottom line: no false reject, no missed member of the intended set.** The one widening it thought it
+had found was its own probe asking the wrong question.
