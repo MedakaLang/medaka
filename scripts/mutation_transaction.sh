@@ -4,16 +4,18 @@
 set -u
 
 usage() {
-  echo "usage: $0 --source PATH --mutate CMD --check CMD --expect REGEX [--label NAME]" >&2
+  echo "usage: $0 --source PATH --mutate CMD --check CMD --expect REGEX [--prepare CMD] [--restore-check CMD] [--label NAME]" >&2
   exit 2
 }
 
-source_path= mutate_cmd= check_cmd= expect_regex= label=mutation
+source_path= mutate_cmd= prepare_cmd= check_cmd= restore_check_cmd= expect_regex= label=mutation
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --source) [ "$#" -ge 2 ] || usage; source_path=$2; shift 2 ;;
     --mutate) [ "$#" -ge 2 ] || usage; mutate_cmd=$2; shift 2 ;;
+    --prepare) [ "$#" -ge 2 ] || usage; prepare_cmd=$2; shift 2 ;;
     --check) [ "$#" -ge 2 ] || usage; check_cmd=$2; shift 2 ;;
+    --restore-check) [ "$#" -ge 2 ] || usage; restore_check_cmd=$2; shift 2 ;;
     --expect) [ "$#" -ge 2 ] || usage; expect_regex=$2; shift 2 ;;
     --label) [ "$#" -ge 2 ] || usage; label=$2; shift 2 ;;
     *) usage ;;
@@ -39,7 +41,10 @@ hash_file() {
 
 baseline_hash=$(hash_file "$source_path") || exit 2
 work=$(mktemp -d "${TMPDIR:-/tmp}/medaka-mutation.XXXXXX") || exit 2
+baseline_copy=$work/baseline
+cp "$source_path" "$baseline_copy" || { rm -rf "$work"; exit 2; }
 check_log=$work/check.log
+prepare_log=$work/prepare.log
 child_pid=
 check_pgid=
 
@@ -84,7 +89,16 @@ stop_check() {
 }
 
 restore() {
-  git -C "$repo" checkout HEAD -- "$rel" >/dev/null 2>&1 || return 1
+  # Isolated worktrees may allow source writes while denying Git's shared
+  # .git/worktrees/<id>/index.lock. Restoration must not need index writes.
+  cp "$baseline_copy" "$source_path" || return 1
+  [ "$(hash_file "$source_path")" = "$baseline_hash" ] || return 1
+}
+run_restore_check() {
+  [ -z "$restore_check_cmd" ] && return 0
+  (cd "$repo" && MUTATION_SOURCE=$source_path MUTATION_REPO=$repo MUTATION_REL=$rel sh -c "$restore_check_cmd")
+}
+validate_restored() {
   [ "$(hash_file "$source_path")" = "$baseline_hash" ] || return 1
   [ "$(git -C "$repo" status --porcelain)" = "$baseline_status" ] || return 1
 }
@@ -93,6 +107,8 @@ on_exit() {
   trap - EXIT HUP INT TERM
   stop_check || { rm -rf "$work"; exit 125; }
   restore || { echo "transaction $label: RESTORE FAILED for $rel" >&2; rm -rf "$work"; exit 125; }
+  run_restore_check || { echo "transaction $label: RESTORE CHECK FAILED for $rel" >&2; rm -rf "$work"; exit 125; }
+  validate_restored || { echo "transaction $label: RESTORE VALIDATION FAILED for $rel" >&2; rm -rf "$work"; exit 125; }
   rm -rf "$work"
   exit "$status"
 }
@@ -101,6 +117,8 @@ on_signal() {
   trap - EXIT HUP INT TERM
   stop_check || { rm -rf "$work"; exit 125; }
   restore || { echo "transaction $label: RESTORE FAILED after $sig for $rel" >&2; rm -rf "$work"; exit 125; }
+  run_restore_check || { echo "transaction $label: RESTORE CHECK FAILED after $sig for $rel" >&2; rm -rf "$work"; exit 125; }
+  validate_restored || { echo "transaction $label: RESTORE VALIDATION FAILED after $sig for $rel" >&2; rm -rf "$work"; exit 125; }
   rm -rf "$work"
   trap - "$sig"
   kill -s "$sig" "$$"
@@ -122,6 +140,23 @@ after_mutation_status=$(git -C "$repo" status --porcelain)
   echo "transaction $label: mutation changed nothing" >&2; exit 3;
 }
 
+if [ -n "$prepare_cmd" ]; then
+  perl -MPOSIX -e 'POSIX::setsid() >= 0 or die "setsid: $!"; exec @ARGV or die "exec: $!"' \
+    sh -c "cd \"\$1\" && MUTATION_SOURCE=\"\$2\" MUTATION_REPO=\"\$1\" MUTATION_REL=\"\$3\" sh -c \"\$4\"" \
+    sh "$repo" "$source_path" "$rel" "$prepare_cmd" >"$prepare_log" 2>&1 &
+  child_pid=$!
+  check_pgid=$child_pid
+  wait "$child_pid"
+  prepare_status=$?
+  child_pid=
+  stop_check || exit 125
+  if [ "$prepare_status" -ne 0 ]; then
+    echo "transaction $label: prepare command failed" >&2
+    cat "$prepare_log" >&2
+    exit 3
+  fi
+fi
+
 # Perl/POSIX::setsid is the same portable process-control substrate used by the
 # repository's macOS-safe timeout shim. exec preserves the session-leader PID.
 perl -MPOSIX -e 'POSIX::setsid() >= 0 or die "setsid: $!"; exec @ARGV or die "exec: $!"' \
@@ -141,5 +176,7 @@ grep -E -- "$expect_regex" "$check_log" >/dev/null || {
 
 decisive=$(grep -E -- "$expect_regex" "$check_log" | sed -n '1p')
 restore || { echo "transaction $label: RESTORE FAILED for $rel" >&2; exit 125; }
+run_restore_check || { echo "transaction $label: RESTORE CHECK FAILED for $rel" >&2; exit 125; }
+validate_restored || { echo "transaction $label: RESTORE VALIDATION FAILED for $rel" >&2; exit 125; }
 printf 'MUTATION-RED label=%s check_status=%s evidence=%s\n' "$label" "$check_status" "$decisive"
 printf 'MUTATION-RESTORED path=%s sha256=%s\n' "$rel" "$baseline_hash"

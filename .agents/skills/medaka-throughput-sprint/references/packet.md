@@ -15,6 +15,8 @@ Dispatch only when every required field is concrete.
 - Established semantic/architecture authority.
 - Transformation over named sites.
 - Callers, producers, consumers, fallbacks, and executable mirrors.
+- Per-field route/read matrix: exact reader reached on each shipping/probe route;
+  evidence classified as data-correctness, ownership-only, or vacuous.
 - Invariants and performance constraints.
 - Rejected approaches and known traps.
 - Shared symbols/artifacts and deterministic integration order.
@@ -27,5 +29,11 @@ Dispatch only when every required field is concrete.
 - Nearest program/route not covered and expected behavior.
 - Deferred local, CI, and repair-round obligations.
 - `could move`: plausible acceptance/diagnostic/output changes.
+- Overlap-review gate: shared carrier/harness/artifact regions whose prior slice
+  must receive lightweight review before this packet becomes dispatchable.
 
-Implementer reads root and nested `AGENTS.md`, then named code and direct callers. Discovery outside packet is premise feedback, not silent scope growth. Return summary, diff, minimum check, owed verification, premise conflicts, first-edit time, total time, blocked/rework time, and avoidable cost.
+Implementer records dispatch, first-edit, coherent-diff, and completion timestamps
+from externally visible clock output; estimates are not receipts. Then it reads root
+and nested `AGENTS.md`, named code, and direct callers. Discovery outside packet is
+premise feedback, not silent scope growth. Return summary, diff, minimum check, owed
+verification, premise conflicts, timestamps, blocked/rework time, and avoidable cost.

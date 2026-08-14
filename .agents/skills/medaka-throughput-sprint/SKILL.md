@@ -22,19 +22,22 @@ Escalate only choices materially changing accepted programs, runtime meaning, ty
 Maintain lanes in priority order:
 
 1. primary writer on eligible slice;
-2. preparation for successor; target ready-queue depth two;
+2. preparation for successor; target prepared-queue depth two while tracking
+   dispatchable depth separately;
 3. prompt integration of completed slices;
 4. high-value parallel verification and lightweight review;
 5. CI on coherent pushed checkpoints;
 6. broader preparation or proven-disjoint extra writers.
 
-Never consume last available child slot with verification while eligible writer waits. Root conductor prepares packets directly; delegate bounded research only when it shortens eligibility path. On writer completion, dispatch successor immediately unless completed slice invalidates successor premise.
+Never consume last available child slot with verification while eligible writer waits. Root conductor prepares packets directly; delegate bounded research only when it shortens eligibility path. On writer completion, dispatch successor immediately only when it is dispatchable. A prepared packet is not dispatchable while it overlaps an unreviewed carrier, harness, generated artifact, or acceptance boundary from the completed slice. Run lightweight diff review first for such overlap; overlap builds and verification, not successor edits. Create its writer worktree only after this gate clears.
 
-Use child completion or ten-minute intervals as heartbeat. Record active writer, ready depth, completed/integrated/reworked/discarded slices, writer gaps, integration and verification backlog, bottleneck, and concrete scheduling action. Status-only heartbeat fails contract.
+Use child completion or ten-minute intervals as heartbeat. Record active writer, prepared depth, dispatchable depth, completed/integrated/reworked/discarded slices, writer gaps, integration and verification backlog, bottleneck, and concrete scheduling action. Status-only heartbeat fails contract.
 
 ## Admit writers by evidence
 
 Slice eligible when writer can reach first edit after targeted named-code reading without architecture discovery or observable-semantic choice. Packet must satisfy [packet.md](references/packet.md).
+
+Eligibility also requires an exact route/read observability matrix. For every migrated semantic field, distinguish shipping/probe routes (including scalar, ref, record, census, or aborting routes as applicable), name the reader reached, and classify evidence as data-correctness, ownership-only, or vacuous. A route with a discarded read is not dispatchable evidence.
 
 One writer remains default. Add writers only after proving disjointness: distinct paths/regions, no shared API/carrier/semantic authority, no shared generated artifacts, no premise dependency, independent checks, deterministic integration order, and explicit collision scan. Different files alone do not prove disjointness. Every writer gets isolated worktree/branch.
 
@@ -62,7 +65,7 @@ Track externally observed timestamps:
 
 - primary-writer active minutes / eligible elapsed minutes;
 - writer gaps and blockers;
-- ready-queue depth;
+- prepared versus dispatchable queue depth;
 - dispatch-to-first-edit and dispatch-to-coherent-diff latency;
 - diff-to-integration latency;
 - completed, integrated, reworked, and discarded slices;
