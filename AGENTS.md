@@ -313,6 +313,12 @@ MEDAKA_ROOT=/tmp/fake ./medaka run /tmp/hello.mdk >/dev/null    # the warning, o
 **In a worktree:** the shell cwd resets between calls, so use
 `make -C /absolute/path/to/worktree medaka`. The `./medaka` binary lands in the worktree.
 
+🚨 **DO NOT EDIT COMPILER SOURCE WHILE A BUILD IS IN FLIGHT — the fingerprint is baked at STAGE A
+START, not at the end.** A `.mdk` edit made after `make medaka` begins — *a comment is enough* —
+produces a binary that silently lacks it and whose baked stamp no longer matches the tree, so every
+subsequent probe trips the staleness guard (or, without `MEDAKA_STRICT=1`, quietly measures the old
+arm). Measured 2026-08-14: one full rebuild lost. Finish the edit, then build.
+
 **Borrowing an emitter (`cp <other-tree>/medaka_emitter .` then `make medaka`) is SAFE, but it
 does NOT warm-start the build — say so plainly, since a prior wording sold it as a warm start
 and then stated the mechanism that defeats one in its own next clause.** `cp` copies the
@@ -678,6 +684,14 @@ on purpose). Re-install after a fresh clone:
   lint/lextok stay live — unlike `--no-verify`, which drops all four) for exactly that shape;
   CI's snapshot shard still enforces the real gate against the merged tree, so a forgotten golden
   still reds the PR. Do not reach for `--no-verify` for this case anymore.
+  🚨 **`PRECOMMIT_SNAPSHOT_DEFER=1` does NOT reach the UNSTAGED-snapshot guard, so "goldens in
+  their own terminal commit" and any LATER `.mdk`-staging commit are MUTUALLY EXCLUSIVE.** The
+  guard (the `git add` it forces, above) fails any commit that stages a `.mdk` while a blessed
+  snapshot sits unstaged on disk — and `PRECOMMIT_SNAPSHOT_DEFER=1` opts out of check 4's *suite*,
+  not out of that guard. Measured 2026-08-14 on PR #1638, where the intended order was source →
+  pin (a `.mdk`) → goldens. **Remedy: bless and stage the goldens LAST, after every `.mdk`-staging
+  commit is already in** — or stash them across the intervening commit. Neither `--no-verify` nor
+  `core.hooksPath=/dev/null` is the answer; both drop all four checks.
 - **Lextok** — OPPORTUNISTIC: only runs when `test/bin/lex_main` already exists (this hook
   never builds an oracle), scoped to staged `.mdk` files that already have a sibling
   `.lextok.golden`. Gates on `test/diff_compiler_lex_files.sh`. Remedy for a stale golden:
