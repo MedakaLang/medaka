@@ -1972,3 +1972,41 @@ is precisely what a no-op produces** and the bar proves far less than it appears
 ([[feedback_a_byte_identical_bar_on_unread_code_is_vacuous]]). A reader is enumerating the corpora for
 the discriminating shape now. **This is not a doubt about the code — it is a question about the inputs**,
 and it is the same question that let #1381's engines gate stay green while a layout bug shipped.
+
+## RUN-P45-053 — S1's BAR IS DISCRIMINATING, NOT VACUOUS. And the census hands S2 its control corpus.
+
+The falsification hypothesis fails, cleanly. `sameTyConHead` can differ from `==` in exactly one shape —
+two interfaces sharing a SPELLING with two known, different origins — and the corpus carries it:
+
+| corpus | projects | cross-module same-spelled iface | produce IR |
+|---|---|---|---|
+| `llvm_fixtures_modules` | 56 | **5** | all 5 |
+| `dict_fixtures` | 88 | **13** | 8 (5 more are build-REJECT, graded on status) |
+| the other five corpora | 320 | 0 | — |
+
+⇒ **13 discriminating projects, 13 of them reaching emitted IR.** A regression from `sameTyConHead`
+back to spelling `==` has somewhere to bite. ⚠️ The reader flagged that its 13 collapses to 5 **if**
+S1's harness consumed the existing dict gate's verdicts instead of building IR itself — it did not;
+W4 ran `medaka build --keep-ir` over all six corpora (dict_fixtures' 88 are inside the 391). The 13
+stands, derived rather than assumed.
+
+⭐ **The load-bearing single carrier: `test/dict_fixtures/s6-c1-xmod-same-spelled-ifaces-accepted/`** —
+`amod.mdk` and `zmod.mdk` each declare `interface Same a` with disjoint methods, both impl'd at head
+`Int`, entry using one method from each. Its own ledger row names the mechanism: *"`CohImpl`'s interface
+half is an `IfaceRef` compared through `cohSameIface`/`sameTyConHead` … re-key that half back to
+spelling and it reds."* Its `!T-CONFLICTING-IMPL` assertion is what makes it fail-capable, and its
+header warns the **shared head `Int` is load-bearing** — two module-local heads would mask the interface
+half entirely, because the head half is already identity-aware.
+
+### ⚠️ The caveat that matters, and it is S2's not S1's
+The reader verified the same-SPELLING shape, **not** that both `IfaceRef`s arrive **origin-tagged** at
+the selector. Under S1 they demonstrably do not — every query is `ifaceRefBare` — so under S1 these
+fixtures are no-ops **by construction**, which is exactly why S1 is neutral. **The discrimination is
+latent: it activates when S2 supplies real origins.** ⇒ These 13 are S2's positive controls, and *"they
+still pass"* is only meaningful for S2 if S2 first shows the origins actually arrive. Relayed to W5.
+
+**Also recorded:** exactly one user-vs-prelude same-spelling project exists
+(`dict_fixtures/i7-qual4-user-class-same-spelling.mdk`, `interface Num a`), it is REJECT on all three
+verbs and produces no IR — the prelude axis is essentially unexercised for IR purposes. And the 19
+apparent prelude clashes in `llvm_fixtures_typed` are **false positives**: that corpus is prelude-free
+(`diff_compiler_llvm_typed.sh` passes only `runtime.mdk`, which declares zero interfaces).
