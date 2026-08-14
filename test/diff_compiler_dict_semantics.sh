@@ -80,6 +80,32 @@
 # ###################################################################
 # # THE LEDGER -- rows pinned to a KNOWN divergence, newest first    #
 # ###################################################################
+# * s3-fn-typed-impl-heads-discriminated / s3-effect-carrying-impl-head-routes --
+#   #1617 (S0) and #1618 (S1) are FIXED and BOTH rows arrive here as DRAINS, from
+#   `test/must_fail_fixtures/1617-…` and `…/1618-…`. Recorded together because they
+#   are two members of ONE arm set -- `headTyconTy`'s `_ => None` wildcard in
+#   compiler/types/typecheck.mdk -- and the set is NOT finished, which is the whole
+#   reason they were re-pointed here rather than deleted:
+#     - #1617 (TyFun heads): every stage AGREED on None, so two function-typed heads
+#       shared one `noneHeadTag` bucket and DECLARATION ORDER decided the value at
+#       exit 0 with `check --json` clean. Fix: give `TyFun` a head tag.
+#     - #1618 (TyEffect head): the two projections DISAGREED -- typecheck answered
+#       None, eval and `core_ir_lower` STRIPPED the effect to the inner head -- so
+#       `check` and `run` were correct and only `build` died, on a program with one
+#       impl and nothing to be ambiguous about. Fix: reconcile the projections.
+#     - #1180 (bare `TyVar`) is the arm where None is the DOCUMENTED INTENT; that
+#       program must be REJECTED and neither fix repairs it.
+#     - #1630 (OPEN) is the SAME arm set at a headed `TyConstrained` body --
+#       `impl Sz (Eq a => Int)` still gives `check=0 run=0 build=1`. A shape one
+#       constructor away is live, which is why deleting the executable memory of
+#       these two would have been the wrong trade: a drained fixture is not a
+#       drained class.
+#   ⚠️ THE TWO ROWS DISCRIMINATE ON DIFFERENT CELLS, and reading either as a plain
+#   value pin makes it vacuous. #1617's value cell passes BY CONSTRUCTION on the one
+#   declaration order it was captured at -- its real assertion is Section 4, which
+#   derives this file automatically because it is a FLAT `.mdk` with two `impl Sz`
+#   blocks. #1618's `check` and `run` cells were ALREADY CORRECT while the bug was
+#   live -- its real assertion is the `build` cell that `ALL_EXACT` forces to agree.
 # * s6-1-4-supers-per-construction-goal -- #1127 (OPEN, S0 `verified`). SILENT
 #   WRONGNESS ON THE BUILD PATH. A §3 `super` projection out of a general `C`-instance
 #   constructed at a GROUND goal reaches the GENERAL `D`-dict, not the
@@ -373,6 +399,8 @@ s3-nested-obligation-most-specific.mdk|§2 uniformity + §3 `inst`/`assum`: the 
 s3-nested-obligation-two-levels.mdk|§2/§7 LEDGER #323 (OPEN): at nesting depth >=2 under overlap `run` E-PANICs `unknown op ‘+’` while check and the NATIVE binary are correct (7 then 119). build`s value is pinned because it is RIGHT; run`s pinned stdout is the `7` SENTINEL it emits before dying, which pins that it reached the failing line rather than falling over earlier. ⚠️ REACH POINT, NOT REASON -- run`s stderr is ungradeable (#1130), so a different fault on the same line would still pass. The row drains when run stops panicking|ACCEPT|REJECT|ACCEPT|BUILD_EXACT|7%%7\n119|
 s3-nested-no-overlap-control.mdk|CONTROL for #323: identical depth, overlapping impl REMOVED -- eval handles depth-3 recursive context discharge fine (31), so #323`s trigger is the OVERLAP, not the depth|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|31|
 s3-min-fully-general-sibling.mdk|§3 `inst` = min⊑(match) WITH A FULLY-GENERAL SIBLING -- the #1128 DRAIN (F-3b). `impl Tag a` beside `impl Tag (Box Int)`: goal `Tag (Box Int)` matches BOTH and min⊑ takes the concrete one (99); goals `Tag (Box String)` / `Tag (Box Bool)` match the general one ALONE, because no substitution makes `Box Int` into `Box String` (10, 10). This row pinned the WRONG 99/99/99 until 2026-08-01; the value below is the SPEC answer the fixture`s own header hand-derived before the fix existed, not a recapture of what the engine started doing|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|99\n10\n10|
+s3-fn-typed-impl-heads-discriminated.mdk|§3 `inst` DISCRIMINATES TWO FUNCTION-TYPED IMPL HEADS -- the #1617 DRAIN, and the third member of the `noneHeadTag` family after #1128 above and #1154 below. `impl Sz (Int -> Int)` beside `impl Sz (Bool -> Bool)`: `headTyconTy`s `_ => None` arm swallowed `TyFun`, both heads shared the ONE `noneHeadTag` bucket, and the value was decided by DECLARATION ORDER at exit 0 with `check --json` clean -- this ordering printed `(5, 5)`, the reversed one `(9, 9)`, and `build` exited 1 with `arg-tag dispatch on impl type that owns no constructors`. `(5, 9)` is the SPEC answer the fixtures own header hand-derived from the two signatures, not a recapture. ⚠️ THE VALUE CELL IS ONLY HALF THIS ROW: the defects signature was ORDER-DEPENDENCE, which a single-order value pin passes by construction, so the discriminating half is Section 4 -- this file is a FLAT `.mdk` with 2 impls of one interface precisely so the permuter derives it|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|(5, 9)|
+s3-effect-carrying-impl-head-routes.mdk|§3 head projection + §7 single-evaluator law at an EFFECT-CARRYING impl head -- the #1618 DRAIN. ONE interface, ONE `impl Sz (<Stdout> Int)`, ONE call: `typecheck.headTyconTy` answered None for the `TyEffect` head while eval`s and `core_ir_lower`s `headTycon` STRIPPED the effect to `Int`, so the front end resolved a call the EMITTER then could not find -- `check` 0 and `run` 2 were both already CORRECT and `build` exited 1 with `no impl of method ‘sz’ for type ‘__none__’`. ⚠️ THE LOAD-BEARING CELL IS **build**, not the value: check and run pass on a compiler that still has this bug, and it is `ALL_EXACT`s requirement that build ACCEPT with stdout byte-identical to run`s and to the pinned 2 that makes the row discriminate. ⚠️ ONE impl block, so Section 4 derives no pair here -- correctly, there is no declaration order to be free of; its sibling drain above carries that axis|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|2|
 s3-w1-cyclic-superinterface-rejected.mdk|§3 W1 the superclass relation must be ACYCLIC (else `super`-search loops) -- statically rejected, not hung|REJECT|REJECT|REJECT|NONE||T-CYCLIC-SUPERINTERFACE
 s3-w3-method-scheme-rigidity-constraint.mdk|§3 W3 method-scheme fidelity, CONSTRAINT axis: an impl body may not need a class the method scheme does not license (#814 vein)|REJECT|REJECT|REJECT|NONE||T-IMPL-TOO-SPECIFIC
 s3-w3-method-scheme-rigidity-pinned-type.mdk|§3 W3 method-scheme fidelity, PINNED-TYPE axis: an impl body may not fix a caller-owned method variable even with no constraint involved|REJECT|REJECT|REJECT|NONE||T-IMPL-TOO-SPECIFIC

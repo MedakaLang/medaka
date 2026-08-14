@@ -1,0 +1,31 @@
+-- #1617 — two ARROW-headed impls of one interface, declared Int-arrow FIRST.
+-- Permutation partner: fun_head_impl_ba.mdk (same program, impls swapped).
+--
+-- Expected `(5, 9)`, DERIVED FROM THE SOURCE, not captured: `f : Int -> Int`
+-- matches `impl Sz (Int -> Int)` only, `g : Bool -> Bool` matches
+-- `impl Sz (Bool -> Bool)` only, and the two impl heads do not overlap, so
+-- coherence accepts both and neither ordering may change the answer.
+--
+-- Before the fix `headTyconTy`/`headTyconMono` both answered `None` for an
+-- arrow, so both impls sat in the headless bucket, no row was selected, the
+-- site was stamped `RNone`, and: `run` printed `(5, 5)` here and `(9, 9)` in
+-- the partner (declaration order, exit 0, `check` clean — S0), while `build`
+-- E-PANICked with "arg-tag dispatch on impl type that owns no constructors".
+-- The PAIR is what makes an order-dependent selection visible; one ordering
+-- alone cannot see it.
+interface Sz a where
+  sz : a -> Int
+
+impl Sz (Int -> Int) where
+  sz _ = 5
+
+impl Sz (Bool -> Bool) where
+  sz _ = 9
+
+f : Int -> Int
+f x = x + 1
+
+g : Bool -> Bool
+g b = b
+
+main = println (sz f, sz g)

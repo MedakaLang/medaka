@@ -1,5 +1,5 @@
 # META
-source_lines=2024
+source_lines=2044
 stages=DESUGAR,MARK
 # SOURCE
 -- Identity + registry substrate — Stage A-2 unit A-2.0
@@ -958,10 +958,27 @@ lookupReg k ((k2, v)::rest) = if regKeyEq k k2 then Some v else lookupReg k rest
 -- projections stay `Option HeadKey` because two absences are not the same
 -- fact:
 --
---   (1) "this type has no head type constructor at all" — a bare tyvar, a
---       function type, an effect row.  That is what `None` meant before this
---       unit and what it means after, unchanged at every call site.  It is a
---       property of the TYPE.
+--   (1) "this type has no head type constructor at all" — a bare tyvar, or a
+--       type whose head node is none of the arms the projection classifies
+--       (e.g. a `TyConstrained`, whose peeled body is itself headless).  That
+--       is what `None` meant before this unit and what it means after,
+--       unchanged at every call site.  It is a property of the TYPE.
+--
+--       ⚠️ THIS LIST SAID "A FUNCTION TYPE, AN EFFECT ROW" UNTIL #1617/#1618
+--       AND BOTH ENTRIES ARE NOW FALSE ON THE DISPATCH PROJECTIONS.  An arrow
+--       head answers `Some (headKeyOfCon OriginBuiltin funHeadTag)` — the
+--       synthetic `__fun__` bucket (`types/route_key.mdk`) — and an
+--       effect-carrying head is PEELED to its inner head, so `<Stdout> Int`
+--       answers `Some Int`.  The projections that moved are `headTyconTy`
+--       (impl side) and `headTyconMono` (goal side), plus the bare-name
+--       residual `headTyconNameTy`.  The two that did NOT move still answer
+--       `None` for both, deliberately and for two different reasons:
+--       `headTyconNameMono` (its `TFun` arm would merge two populations
+--       `uOblIsDecidableNow` keeps apart) and `censusHeadNameTy` (an extra
+--       `Some` there is an ACCEPTANCE narrowing, not a routing fix) — each
+--       carries its own derivation in `types/typecheck.mdk`.  So "what `None`
+--       means" is now a property of the TYPE **and** of WHICH projection you
+--       asked; do not re-derive one side's answer from the other's.
 --   (2) "there is a head type constructor, but no identity for it" — `mkIdent`
 --       answers `None` on the FLAT/single-file driver path, where a user
 --       declaration still carries the pipeline-stage marker (`Ns`' doc-comment
@@ -1045,8 +1062,11 @@ headKeyName (HkRigid name) = name
 -- THREE APART. `headKeyNameOr <dflt>` (`types/typecheck.mdk`) collapses them to
 -- two — a name, or the placeholder — which is exactly what this replaces:
 --
---   ABSENT      `None` — the type has NO head type constructor (a bare tyvar,
---               a function type, an effect row). A property of the TYPE.
+--   ABSENT      `None` — the type has NO head type constructor (a bare tyvar;
+--               ⚠️ NOT a function type and NOT an effect row on the dispatch
+--               projections since #1617/#1618 — see the (1)/(2)/(3) note above
+--               `HeadKey` for which projections moved and which did not).
+--               A property of the TYPE.
 --   DECLARATION `Some (HkDecl tk)` — a real head. Keyable, and the key is
 --               `tk`, which already distinguishes the identity-bearing
 --               (`TkIdent`) from the not-yet-identified (`TkBare`) case.

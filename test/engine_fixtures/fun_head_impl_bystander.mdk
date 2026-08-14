@@ -1,0 +1,83 @@
+-- #1617/#1618 BYSTANDER — the new machinery is PRESENT and nothing asserted
+-- here uses it.
+--
+-- "The feature works" is what the sibling fixtures test. This one tests the
+-- question no gate normally asks: is the code that has NOTHING to do with the
+-- change still correct? The change adds a new head-tag bucket (`__fun__`) and
+-- makes `headTyNode` peel effect rows, both of which are consulted by EVERY
+-- dispatch in the program, not only by the ones that need them.
+--
+-- 🚨 AN EARLIER VERSION OF THIS FIXTURE COULD NOT FAIL, and an adversarial
+-- reviewer falsified it by adding ONE method to its own interface. It declared
+-- an arrow impl and an effect impl and then asserted only ORDINARY dispatch,
+-- where the goal head is concrete — so the readers the change actually
+-- perturbed were never consulted at all. Those readers do not decide ROUTING,
+-- they decide ACCEPTANCE.
+--
+-- The multi-param `Conv` block below is one of them, reachable from a fixture
+-- that must also BUILD: `groundOneObligation` grounds `b` by asking for the
+-- UNIQUE `Conv` impl at head tag `Int`, and if the effect-headed sibling were
+-- counted there would be two matches and `b` would stay undetermined — on an
+-- impl that is never dispatched to.
+--
+-- 🚨 MEASURED ON THE COMMIT THAT HAD THE NARROWING (`a8a226cb`), THIS FILE
+-- SEGFAULTS — and the shape of that failure is why this fixture is worth more
+-- than a rejection would be. There: `check` exits 0, `run` prints the right
+-- `(48, True, True)`, `build` exits 0, and the BUILT BINARY dies with
+-- `E-FATAL-SIGNAL: fatal memory fault (segmentation fault)`, reproducibly. The
+-- ungrounded obligation is also a missing dict parameter, so the front end
+-- accepts a program the emitter then mis-elaborates. On base `aaa43716` and on
+-- the amended branch all four cells agree on `(48, True, True)`.
+--
+-- ⚠️ THE SECOND ACCEPTANCE READER — the impl-head COUNT behind
+-- `T-AMBIGUOUS-INSTANCE` on an UNDETERMINED constraint — is NOT asserted here,
+-- deliberately, and the reason is not that it does not matter. An undetermined
+-- constraint leaves the site's route unstamped, and the emitter then E-PANICs
+-- `no impl of method '…' for type '…'` on EVERY arm including the pre-change
+-- base — a single-impl interface with no arrow and no effect anywhere still
+-- fails to `build` on base `aaa43716` — so a fixture in a corpus that BUILDS
+-- cannot carry that shape without going red for a defect it does not own. It is
+-- asserted where it belongs, in a CHECK-only corpus:
+-- `test/check_json_fixtures/impl_head_census_acceptance.mdk`, whose golden is
+-- an EMPTY diagnostics array and which `a8a226cb` reddens.
+--
+-- Expected `(48, True, True)`, hand-derived slot by slot, and byte-identical to
+-- what the pre-change compiler printed:
+--   1. `unwrap (Box 41)` = 41; `sz True` = 7 via `impl Sz Bool` (NOT the arrow
+--      impl, which `Bool` cannot match, and NOT the effect impl, whose head
+--      peels to `Float`); 41 + 7 = 48.
+--   2. `[1, 2, 3] == [1, 2, 3]` = `True` — prelude dispatch that predates all
+--      of this.
+--   3. `conv 1` grounds `b` from the UNIQUE `Conv` impl at head `Int` — the
+--      effect-headed `Conv (<Stdout> Int) String` is not counted — giving
+--      `impl Conv Int Bool`, so `conv 1` is `1 > 0` = `True`.
+interface Sz a where
+  sz : a -> Int
+
+impl Sz Bool where
+  sz _ = 7
+
+-- present, never dispatched to
+impl Sz (Int -> Int) where
+  sz _ = 5
+
+-- present, never dispatched to
+impl Sz (<Stdout> Float) where
+  sz _ = 6
+
+interface Conv a b where
+  conv : a -> b
+
+impl Conv Int Bool where
+  conv n = n > 0
+
+-- present, never dispatched to
+impl Conv (<Stdout> Int) String where
+  conv _ = "never"
+
+data Box a = Box a
+
+unwrap : Box Int -> Int
+unwrap (Box n) = n
+
+main = println (unwrap (Box 41) + sz True, [1, 2, 3] == [1, 2, 3], conv 1)

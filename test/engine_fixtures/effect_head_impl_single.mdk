@@ -1,0 +1,22 @@
+-- #1618 — the filed repro verbatim: a LONE effect-carrying impl head.
+--
+-- Expected `2`, derived from the source: effect rows are transparent in impl
+-- head position throughout this compiler (`tyIsConcrete`, `tyMatchesAst`,
+-- `tyStep`/`stripTyWrap`, and `fromAstTypeE`, which drops the row when the head
+-- becomes a `Mono` at all), so `impl Sz (<Stdout> Int)` IS an impl at head
+-- `Int` and the receiver `0 : Int` matches it.
+--
+-- Pre-fix this program checked clean and RAN correctly (`2`) but could not be
+-- BUILT: `eval.headTycon` peeled the row and filed the impl under tag `Int`,
+-- `typecheck.headTyconTy` did not and stamped the route word `__none__`, and
+-- the emitter died with "no impl of method 'sz' for type '__none__'". So the
+-- assertion that matters here is that all three engines AGREE — the pre-fix
+-- state had eval right and the backends absent, which no value golden taken
+-- from eval alone could have seen.
+interface Sz a where
+  sz : a -> Int
+
+impl Sz (<Stdout> Int) where
+  sz _ = 2
+
+main = println (sz 0)

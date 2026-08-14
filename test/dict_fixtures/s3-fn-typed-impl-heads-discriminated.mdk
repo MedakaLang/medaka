@@ -1,0 +1,55 @@
+-- §3 `inst` selection at two DIFFERENT FUNCTION-TYPED impl heads — the #1617 DRAIN.
+--
+-- This is the permanent home of `test/must_fail_fixtures/1617-fn-typed-impl-head-
+-- none-bucket/`, which pinned the BROKEN behaviour and drained when the fix landed.
+-- A must-fail row asserts a bug STILL REPRODUCES and cannot coexist with a row
+-- asserting it is fixed, so the shape moves here rather than being deleted — same
+-- migration `s3-nary-requires-goal-vector.mdk` made for #1154 and
+-- `s3-min-fully-general-sibling.mdk` for #1128 (the neighbouring `noneHeadTag` drain).
+--
+-- WAS: `headTyconTy` (compiler/types/typecheck.mdk) answered None for anything that
+-- is not a `TyCon` and not a `TyTuple` — `TyFun` included, although the arm is
+-- documented as "a type VARIABLE head has no head tycon". Both heads landed in the
+-- ONE `noneHeadTag` bucket and could not be discriminated: `check` was clean at
+-- exit 0, `run` answered by DECLARATION ORDER (this ordering printed `(5, 5)`; the
+-- reversed one printed `(9, 9)`), and `build` exited 1 with
+--   runtime error [E-PANIC]: arg-tag dispatch on impl type that owns no
+--   constructors (primitive receiver carries no cell tag)
+--
+-- HAND-DERIVED CORRECT ANSWER, from the source, not from the binary:
+--   `sz f` — f : Int -> Int   -> the `impl Sz (Int -> Int)` body  -> 5
+--   `sz g` — g : Bool -> Bool -> the `impl Sz (Bool -> Bool)` body -> 9
+--   so this prints `(5, 9)`, on run AND on the shipped binary (§7 value agreement).
+--
+-- ⚠️ THE VALUE ROW ALONE IS NOT THE WHOLE ASSERTION, AND THAT IS WHY THIS FIXTURE
+-- IS A FLAT `.mdk` AND NOT A DIRECTORY. Section 4 derives its permutation set from
+-- `test/dict_fixtures/*.mdk` with >=2 `impl` blocks of one interface, so this file
+-- is automatically permuted: reversing the two `impl Sz` blocks must not change
+-- `check`'s verdict, `run`'s stdout or `build`'s stdout. That is the half the
+-- drained must-fail fixture could only carry as an UNGRADED third file
+-- (`permutation.mdk`, run by nothing) — here it EXECUTES. It is also the half that
+-- matters most: the defect's signature was a declaration-order-dependent wrong
+-- answer, and a value pin alone passes by construction on the order it was
+-- captured at.
+--
+-- ⚠️ NOT #1180 (`headTyconTy`'s bare-`TyVar` arm, where answering None is the
+-- documented intent and the program must be REJECTED) and NOT #1630 (the same
+-- `_ => None` arm set at a headed `TyConstrained` body — `impl Sz (Eq a => Int)`,
+-- still `check=0 run=0 build=1` on this binary). The `_ => None` arm set is not
+-- finished; this row is the executable memory that THIS member of it was repaired.
+interface Sz a where
+  sz : a -> Int
+
+impl Sz (Int -> Int) where
+  sz _ = 5
+
+impl Sz (Bool -> Bool) where
+  sz _ = 9
+
+f : Int -> Int
+f x = x + 1
+
+g : Bool -> Bool
+g b = b
+
+main = println (sz f, sz g)

@@ -1,0 +1,14 @@
+-- #1618 — the PERMUTATION partner of effect_head_impl_ab.mdk: byte-identical
+-- except that the two impl blocks are declared in the opposite order.
+-- Expected `(2, 3)`, the SAME answer as the partner. See that file for the
+-- derivation.
+interface Sz a where
+  sz : a -> Int
+
+impl Sz (<Stdout> Bool) where
+  sz _ = 3
+
+impl Sz (<Stdout> Int) where
+  sz _ = 2
+
+main = println (sz 0, sz True)

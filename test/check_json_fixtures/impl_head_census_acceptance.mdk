@@ -1,0 +1,63 @@
+-- #1617/#1618 ACCEPTANCE PIN — the half of the bystander property that no
+-- BUILD-executing corpus can carry.
+--
+-- The arrow/effect impl-head tags are a ROUTING fix, but the projection they
+-- moved is also read by things that decide ACCEPTANCE. This file poses BOTH of
+-- those readers and asserts the ONE thing that must not change: `medaka check`
+-- reports NOTHING. The golden is an empty diagnostics array, which is why this
+-- fixture cannot pass vacuously — a narrowing emits `T-AMBIGUOUS-INSTANCE` and
+-- the byte-compare fails.
+--
+--   * `szc []` fixes nothing, so the `Sz` constraint is UNDETERMINED.
+--     `checkUndeterminedObligation`'s RULE 3 rejects when the interface has
+--     `implCountForIfaceU >= 2`, counted over the `ImplUniverse` iface->head-tag
+--     SET. `Bool` is the only head that set may contain: an arrow head and an
+--     effect-carrying head are not head type constructors, exactly as the
+--     headless impls they used to be filed beside. Count 1, no error.
+--   * `conv 1` needs `groundOneObligation` to find the UNIQUE `Conv` impl at
+--     head tag `Int`. The effect-headed sibling must not be a second match, or
+--     `b` stays undetermined and a `Display` cascade rejects at `println`.
+--
+-- Neither the arrow impl nor either effect impl is ever dispatched to. That is
+-- the point: this is "unrelated code still behaves", posed at the two readers
+-- the change perturbs.
+--
+-- MEASURED on three cold-built arms — base `aaa43716` check 0, branch
+-- `a8a226cb` check 1 (`Ambiguous instance for Sz`), amended branch check 0.
+--
+-- ⚠️ CHECK-ONLY ON PURPOSE. `medaka build` REJECTS this file on every arm
+-- including base: an undetermined constraint leaves the site's route unstamped
+-- and the emitter E-PANICs `no impl of method 'szc' for type 'List'`. That is a
+-- separate, pre-existing defect — a single-impl `Sz` with no arrow and no
+-- effect anywhere in the program reproduces it on base `aaa43716` — and it is
+-- why the sibling fixture `test/engine_fixtures/fun_head_impl_bystander.mdk`,
+-- which must build, carries only the `Conv` half.
+interface Sz a where
+  sz : a -> Int
+  szc : List a -> Int
+
+impl Sz Bool where
+  sz _ = 7
+  szc _ = 21
+
+-- present, never dispatched to
+impl Sz (Int -> Int) where
+  sz _ = 5
+  szc _ = 55
+
+-- present, never dispatched to
+impl Sz (<Stdout> Float) where
+  sz _ = 6
+  szc _ = 66
+
+interface Conv a b where
+  conv : a -> b
+
+impl Conv Int Bool where
+  conv n = n > 0
+
+-- present, never dispatched to
+impl Conv (<Stdout> Int) String where
+  conv _ = "never"
+
+main = println (sz True, szc [], conv 1)
