@@ -191,7 +191,7 @@ for required in \
   'wasmTrap : WasmEmit -> String -> String -> List String' \
   'setRef emit.trapImportNeeded True' \
   'let trapImport = if emit.trapImportNeeded.value then stderrByteImportLines else []' \
-  'let trapImport = if useEPutRef.value || (progEmit prog).trapImportNeeded.value then stderrByteImportLines else []' \
+  'let trapImport = if (progEmit prog).useEPut.value || (progEmit prog).trapImportNeeded.value then stderrByteImportLines else []' \
   'let _ = setRef (progEmit prog).trapImportNeeded True' \
   'emitDivZeroGuard : WasmEmit -> String -> String -> List String' \
   'emitDivZeroGuard emit op "$__sdivr"' \
@@ -207,14 +207,111 @@ done
   echo "FAIL H2B8-WRITERS: expected two explicit poly-runtime writers"
   exit 1
 }
-grep -F 'useEPutRef : Ref Bool' "$WASM_SRC" >/dev/null &&
-  grep -F 'let stderrRt = if useEPutRef.value then stderrRuntimeLines else []' "$WASM_SRC" >/dev/null || {
-  echo "FAIL H2B8-NEAREST-MISS: ePut authority changed"
+if grep -E '^_?useEPutRef[[:space:]]*[:=]|setRef (_?useEPutRef)' "$WASM_SRC" >/dev/null; then
+  echo "FAIL H2B9-EPUT-AUTHORITY: retired ambient ePut authority remains"
+  exit 1
+fi
+for required in \
+  'useEPut : Ref Bool' \
+  'useEPut = Ref' \
+  'setRef emit.useEPut True' \
+  '(progEmit prog).useEPut.value' \
+  'let trapImport = if (progEmit prog).useEPut.value || (progEmit prog).trapImportNeeded.value then stderrByteImportLines else []'; do
+  grep -F -- "$required" "$WASM_SRC" >/dev/null || {
+    echo "FAIL H2B9-EPUT-AUTHORITY: missing $required"
+    exit 1
+  }
+done
+[ "$(grep -F 'setRef emit.useEPut True' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 2 ] || {
+  echo "FAIL H2B9-EPUT-WRITERS: expected panic and ePut scan writers"
   exit 1
 }
+if grep -E '^_?useDivGuardRef[[:space:]]*[:=]|setRef (_?useDivGuardRef)' "$WASM_SRC" >/dev/null; then
+  echo "FAIL H2B9-DIV-AUTHORITY: retired ambient divisor authority remains"
+  exit 1
+fi
+if grep -E '^_?useRecUpdateRef[[:space:]]*[:=]|setRef (_?useRecUpdateRef)' "$WASM_SRC" >/dev/null; then
+  echo "FAIL H2B9-RECUPDATE-AUTHORITY: retired ambient record-update authority remains"
+  exit 1
+fi
+if grep -E '^_?useRngRef[[:space:]]*[:=]|setRef (_?useRngRef)' "$WASM_SRC" >/dev/null; then
+  echo "FAIL H2B9-RNG-AUTHORITY: retired ambient RNG authority remains"
+  exit 1
+fi
+if grep -E '^_?useHashRef[[:space:]]*[:=]|setRef (_?useHashRef)' "$WASM_SRC" >/dev/null; then
+  echo "FAIL H2B9-HASH-AUTHORITY: retired ambient hash authority remains"
+  exit 1
+fi
+for required in \
+  'useRecUpdate : Ref Bool' \
+  'useRecUpdate = Ref'; do
+  grep -F -- "$required" "$WASM_SRC" >/dev/null || {
+    echo "FAIL H2B9-RECUPDATE-AUTHORITY: missing $required"
+    exit 1
+  }
+done
+for required in \
+  'useDivGuard : Ref Bool' \
+  'useDivGuard = Ref' \
+  'scanProgW7 : WasmEmit -> List CBind -> Unit' \
+  'scanImplsW7 : WasmEmit -> List CImplEntry -> Unit' \
+  'scanImplEntryW7 : WasmEmit -> CImplEntry -> Unit' \
+  'scanBindW7 : WasmEmit -> CBind -> Unit' \
+  'scanClauseW7 : WasmEmit -> CClause -> Unit' \
+  'scanExprW7 : WasmEmit -> CExpr -> Unit' \
+  'scanW7Head : WasmEmit -> CExpr -> Unit' \
+  'noteW8Extern : WasmEmit -> String -> Unit' \
+  'noteW8Binop : WasmEmit -> String -> Unit' \
+  'scanArmW7 : WasmEmit -> CArm -> Unit' \
+  'scanGuardW7 : WasmEmit -> CGuard -> Unit' \
+  'scanStmtW7 : WasmEmit -> CStmt -> Unit' \
+  'scanPatW7 : WasmEmit -> Pat -> Unit' \
+  'scanTreeW7 : WasmEmit -> CTree -> Unit' \
+  'scanBranchW7 : WasmEmit -> CTBranch -> Unit' \
+  'scanHeadW7 : WasmEmit -> CHead -> Unit' \
+  'w7LocalDecls : WasmEmit -> Int -> List String' \
+  'w7LocalsAtDepth : WasmEmit -> Int -> List String' \
+  'noteW8Binop emit "/" = setRef emit.useDivGuard True' \
+  'noteW8Binop emit "%" = setRef emit.useDivGuard True' \
+  'let dv = if emit.useDivGuard.value then ["    (local $__sdivr i64)"] else []' \
+  'let dv = if emit.useDivGuard.value then ["(local $__sdivr i64)"] else []'; do
+  grep -F -- "$required" "$WASM_SRC" >/dev/null || {
+    echo "FAIL H2B9-DIV-AUTHORITY: missing $required"
+    exit 1
+  }
+done
+[ "$(grep -F 'w7LocalDecls (progEmit prog)' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 9 ] || {
+  echo "FAIL H2B9-DIV-AUTHORITY: expected nine ref-local declaration callers"
+  exit 1
+}
+[ "$(grep -F 'setRef emit.useRecUpdate True' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 2 ] || {
+  echo "FAIL H2B9-RECUPDATE-AUTHORITY: expected two update scan writers"
+  exit 1
+}
+grep -F 'scanExprW7 emit (CFieldAccess ex _ _) = scanExprW7 emit ex' "$WASM_SRC" >/dev/null &&
+  ! grep -A 1 -F 'scanExprW7 emit (CRecord _ fields) =' "$WASM_SRC" | grep -F 'useRecUpdate' >/dev/null || {
+  echo "FAIL H2B9-RECUPDATE-NEAREST-MISS: plain record construction/access changed authority"
+  exit 1
+}
+for required in \
+  'useRng : Ref Bool' \
+  'useRng = Ref' \
+  'useHash : Ref Bool' \
+  'useHash = Ref' \
+  'noteW8Extern emit name =' \
+  'setRef emit.useRng True' \
+  'setRef emit.useHash True' \
+  '|| emit.useRng.value || emit.useHash.value || useFloatRef.value' \
+  'setRef useFloatHashRef True in setRef emit.useHash True' \
+  'setRef useFloatRngRef True in setRef emit.useRng True'; do
+  grep -F -- "$required" "$WASM_SRC" >/dev/null || {
+    echo "FAIL H2B9-RNG-HASH-AUTHORITY: missing $required"
+    exit 1
+  }
+done
 EXPECTED_MODULE_REFS="$(printf '%s\n' \
-  useStrRef useListRef useArrayRef useRefBoxRef useRecUpdateRef \
-  useStrLeafRef useRngRef useHashRef useEPutRef useDivGuardRef \
+  useStrRef useListRef useArrayRef useRefBoxRef \
+  useStrLeafRef \
   useFloatRef useFloatHashRef useMathRef useFloatRngRef useFloatStrRef \
   useStrSearchRef useValueCmpRef useValueArithRef numPolyLocalsRef useStrCodecRef \
    useCharFromCodeRef useCharClassRef useIORef useArgsRef useFileBytesRef \
@@ -681,6 +778,155 @@ fi
 
 INPUT_WORK="$(mktemp -d)"
 trap 'rm -rf "$INPUT_WORK"' EXIT
+
+# A0 capture-only apparatus. It fixes P/U/census ordering and executable controls
+# before A1–A4 assert any ownership transfer. P's prospective feature routes are
+# uncalled, so every normal module remains inert and prints 0.
+feature_capture() {
+  awk -v begin="$1" -v end="$2" '
+    $0 == begin { seenBegin++; capture = 1; next }
+    $0 == end { seenEnd++; capture = 0; next }
+    capture { print }
+    END { if (seenBegin != 1 || seenEnd != 1) exit 1 }
+  ' "$3"
+}
+feature_exact_capture() {
+  local begin="$1" end="$2" file="$3" begins ends
+  begins="$(grep -Fxc "$begin" "$file" || true)"
+  ends="$(grep -Fxc "$end" "$file" || true)"
+  [ "$begins" -eq 1 ] && [ "$ends" -eq 1 ] || return 1
+  feature_capture "$begin" "$end" "$file"
+}
+
+"$EMITBIN" --reemit-feature-state >"$INPUT_WORK/feature.out" 2>"$INPUT_WORK/feature.err"
+FEATURE_STATUS=$?
+[ "$FEATURE_STATUS" -eq 0 ] && [ ! -s "$INPUT_WORK/feature.err" ] || {
+  echo "FAIL A0-FEATURE-CAPTURE: harness status/stderr"
+  exit 1
+}
+FEATURE_MARKERS="$(awk '/^FEATURE_(P1|HASH_INT_ONLY|FLOAT_DIV|RECORD_U|CENSUS_U_GAP|P2)_(BEGIN|END)$/ { print }' "$INPUT_WORK/feature.out")"
+FEATURE_EXPECTED_MARKERS="$(printf 'FEATURE_P1_BEGIN\nFEATURE_P1_END\nFEATURE_HASH_INT_ONLY_BEGIN\nFEATURE_HASH_INT_ONLY_END\nFEATURE_FLOAT_DIV_BEGIN\nFEATURE_FLOAT_DIV_END\nFEATURE_RECORD_U_BEGIN\nFEATURE_RECORD_U_END\nFEATURE_CENSUS_U_GAP_BEGIN\nFEATURE_CENSUS_U_GAP_END\nFEATURE_P2_BEGIN\nFEATURE_P2_END')"
+[ "$FEATURE_MARKERS" = "$FEATURE_EXPECTED_MARKERS" ] || {
+  echo "FAIL A0-FEATURE-CAPTURE: marker cardinality/order"
+  exit 1
+}
+feature_exact_capture FEATURE_P1_BEGIN FEATURE_P1_END "$INPUT_WORK/feature.out" >"$INPUT_WORK/feature-p1.wat" &&
+  feature_exact_capture FEATURE_HASH_INT_ONLY_BEGIN FEATURE_HASH_INT_ONLY_END "$INPUT_WORK/feature.out" >"$INPUT_WORK/feature-hash-int-only.wat" &&
+  feature_exact_capture FEATURE_FLOAT_DIV_BEGIN FEATURE_FLOAT_DIV_END "$INPUT_WORK/feature.out" >"$INPUT_WORK/feature-float-div.wat" &&
+  feature_exact_capture FEATURE_RECORD_U_BEGIN FEATURE_RECORD_U_END "$INPUT_WORK/feature.out" >"$INPUT_WORK/feature-u.wat" &&
+  feature_exact_capture FEATURE_CENSUS_U_GAP_BEGIN FEATURE_CENSUS_U_GAP_END "$INPUT_WORK/feature.out" >"$INPUT_WORK/feature-census.events" &&
+  feature_exact_capture FEATURE_P2_BEGIN FEATURE_P2_END "$INPUT_WORK/feature.out" >"$INPUT_WORK/feature-p2.wat" || {
+    echo "FAIL A0-FEATURE-CAPTURE: malformed capture"
+    exit 1
+  }
+for feature_file in feature-p1.wat feature-hash-int-only.wat feature-float-div.wat feature-u.wat feature-census.events feature-p2.wat; do
+  [ -s "$INPUT_WORK/$feature_file" ] || {
+    echo "FAIL A0-FEATURE-CAPTURE: empty $feature_file"
+    exit 1
+  }
+done
+for feature_p in feature-p1.wat feature-p2.wat; do
+  grep -F '(local $__divr0 i64)' "$INPUT_WORK/$feature_p" >/dev/null || {
+    echo "FAIL H2B9-DIV-LOCAL: missing ref divisor local in $feature_p"
+    exit 1
+  }
+done
+for feature_p in feature-p1.wat feature-p2.wat; do
+  grep -F '(local $__rub0 (ref eq))' "$INPUT_WORK/$feature_p" >/dev/null || {
+    echo "FAIL H2B9-RECUPDATE-LOCAL: missing record-update local in $feature_p"
+    exit 1
+  }
+done
+for feature_p in feature-p1.wat feature-p2.wat; do
+  grep -F '(func $mdk_eprint_str' "$INPUT_WORK/$feature_p" >/dev/null &&
+    grep -F '(func $mdk_eprint_strln' "$INPUT_WORK/$feature_p" >/dev/null &&
+    [ "$(grep -F '(import "env" "mdk_write_err_byte"' "$INPUT_WORK/$feature_p" | wc -l | tr -d '[:space:]')" -eq 1 ] || {
+      echo "FAIL H2B9-EPUT-RUNTIME: missing ePut stderr runtime/import in $feature_p"
+      exit 1
+    }
+done
+if grep -F '$mdk_eprint_str' "$INPUT_WORK/feature-u.wat" >/dev/null ||
+   grep -F '(import "env" "mdk_write_err_byte"' "$INPUT_WORK/feature-u.wat" >/dev/null; then
+  echo "FAIL H2B9-EPUT-U-ABSENCE: inert control emitted ePut stderr runtime/import"
+  exit 1
+fi
+if grep -F '(local $__divr0 i64)' "$INPUT_WORK/feature-u.wat" >/dev/null; then
+  echo "FAIL H2B9-DIV-U-ABSENCE: inert control declared ref divisor local"
+  exit 1
+fi
+if grep -F '(local $__rub0 (ref eq))' "$INPUT_WORK/feature-u.wat" >/dev/null; then
+  echo "FAIL H2B9-RECUPDATE-U-ABSENCE: inert control declared record-update local"
+  exit 1
+fi
+for feature_p in feature-p1.wat feature-p2.wat; do
+  grep -F '(global $mdk_rng_state' "$INPUT_WORK/$feature_p" >/dev/null &&
+    grep -F '(func $mdk_next_u64' "$INPUT_WORK/$feature_p" >/dev/null || {
+      echo "FAIL H2B9-RNG-RUNTIME: missing RNG global/runtime in $feature_p"
+      exit 1
+    }
+  grep -F '(func $mdk_hash_mix64' "$INPUT_WORK/$feature_p" >/dev/null &&
+    grep -F '(func $mdk_hash_int' "$INPUT_WORK/$feature_p" >/dev/null &&
+    grep -F '(func $mdk_hash_string' "$INPUT_WORK/$feature_p" >/dev/null || {
+      echo "FAIL H2B9-HASH-RUNTIME: missing base hash runtime in $feature_p"
+      exit 1
+    }
+done
+grep -F '(func $mdk_hash_mix64' "$INPUT_WORK/feature-hash-int-only.wat" >/dev/null &&
+  grep -F '(func $mdk_hash_int' "$INPUT_WORK/feature-hash-int-only.wat" >/dev/null &&
+  ! grep -F '(func $mdk_hash_string' "$INPUT_WORK/feature-hash-int-only.wat" >/dev/null || {
+    echo "FAIL H2B9-HASH-NEAREST-MISS: hashInt-only emission changed hash-string conjunction"
+    exit 1
+  }
+if grep -F '$mdk_rng_state' "$INPUT_WORK/feature-u.wat" >/dev/null ||
+   grep -F '$mdk_next_u64' "$INPUT_WORK/feature-u.wat" >/dev/null; then
+  echo "FAIL H2B9-RNG-U-ABSENCE: inert control emitted RNG global/runtime"
+  exit 1
+fi
+if grep -F '$mdk_hash_mix64' "$INPUT_WORK/feature-u.wat" >/dev/null ||
+   grep -F '$mdk_hash_int' "$INPUT_WORK/feature-u.wat" >/dev/null ||
+   grep -F '$mdk_hash_string' "$INPUT_WORK/feature-u.wat" >/dev/null; then
+  echo "FAIL H2B9-HASH-U-ABSENCE: inert control emitted hash runtime"
+  exit 1
+fi
+grep -F '(local $__divr0 i64)' "$INPUT_WORK/feature-float-div.wat" >/dev/null &&
+  grep -F '(func $featureFloatDiv (param $u____wparg0 (ref eq)) (result (ref eq))' "$INPUT_WORK/feature-float-div.wat" >/dev/null &&
+  grep -F 'f64.div' "$INPUT_WORK/feature-float-div.wat" >/dev/null || {
+  echo "FAIL H2B9-DIV-FLOAT: Float-only division lost ref divisor-local shape"
+  exit 1
+}
+cmp -s "$INPUT_WORK/feature-p1.wat" "$INPUT_WORK/feature-p2.wat" || {
+  echo "FAIL A0-FEATURE-CAPTURE: P changed after record U and census"
+  exit 1
+}
+cmp -s "$INPUT_WORK/feature-p1.wat" "$INPUT_WORK/feature-u.wat" && {
+  echo "FAIL A0-FEATURE-CAPTURE: P/U positive control did not differ"
+  exit 1
+}
+FEATURE_EVENT="fn featureIntentionalGap	unbound variable 'missingFeatureCensus' (not a local, global value, constructor, or known function) [in featureIntentionalGap]"
+[ "$(wc -l < "$INPUT_WORK/feature-census.events")" -eq 1 ] &&
+  [ "$(cat "$INPUT_WORK/feature-census.events")" = "$FEATURE_EVENT" ] || {
+    echo "FAIL A0-FEATURE-CAPTURE: exact census event"
+    exit 1
+  }
+printf '0\n' >"$INPUT_WORK/feature-expected.out"
+for feature_name in p1 hash-int-only float-div u p2; do
+  feature_wat="$INPUT_WORK/feature-$feature_name.wat"
+  wasm-tools parse "$feature_wat" -o "$INPUT_WORK/feature-$feature_name.wasm" || {
+    echo "FAIL A0-FEATURE-CAPTURE: wasm-tools parse $feature_name"
+    exit 1
+  }
+  wasm-tools validate --features=all "$INPUT_WORK/feature-$feature_name.wasm" || {
+    echo "FAIL A0-FEATURE-CAPTURE: wasm-tools validate $feature_name"
+    exit 1
+  }
+  "$NODE" "$RUNJS" "$INPUT_WORK/feature-$feature_name.wasm" >"$INPUT_WORK/feature-$feature_name.run.out" 2>"$INPUT_WORK/feature-$feature_name.run.err"
+  FEATURE_RUN_STATUS=$?
+  [ "$FEATURE_RUN_STATUS" -eq 0 ] && [ ! -s "$INPUT_WORK/feature-$feature_name.run.err" ] &&
+    cmp -s "$INPUT_WORK/feature-expected.out" "$INPUT_WORK/feature-$feature_name.run.out" || {
+      echo "FAIL A0-FEATURE-CAPTURE: inert execution $feature_name"
+      exit 1
+    }
+done
 
 # Sprint 01 current-binding capture apparatus. The expected events and strict
 # diagnostics pin the emission-owned authority and its two write routes.
@@ -1278,6 +1524,10 @@ for ref_trap_spec in 'p1 17 present' 'u 29 absent' 'p2 17 present'; do
     echo "FAIL H2B8-REF-TRAP-IMPORT: $ref_trap_name ref late-import predicate changed"
     exit 1
   }
+  if grep -F '$mdk_eprint_str' "$ref_trap_wat" >/dev/null; then
+    echo "FAIL H2B8-NEAREST-MISS: H2B9 trap-only ref emission included ePut runtime"
+    exit 1
+  fi
   wasm-tools parse "$ref_trap_wat" -o "$INPUT_WORK/ref-trap-$ref_trap_name.wasm" &&
     wasm-tools validate --features=all "$INPUT_WORK/ref-trap-$ref_trap_name.wasm" || {
     echo "FAIL H2B8-REF-TRAP-LIFECYCLE: parse/validate $ref_trap_name"

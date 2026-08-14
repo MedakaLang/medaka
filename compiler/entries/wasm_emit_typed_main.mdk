@@ -39,6 +39,7 @@ import ir.core_ir.{
   CBind(..),
   CClause(..),
   CExpr(..),
+  CField(..),
   CImplEntry(..),
   CImplBody(..),
 }
@@ -75,6 +76,7 @@ main = match args ()
   "--reemit-ref-trap-state"::_ => reemitRefTrapState ()
   "--emit-ref-trap-state"::_ =>
     putStr (emitProgram refTrapStateInput refTrapStateAbortProgram)
+  "--reemit-feature-state"::_ => reemitFeatureState ()
   "--capture-current-binding"::row::_ => captureCurrentBinding row
   _ => driveRuntime emit
 
@@ -311,6 +313,148 @@ reemitTrapState _ =
   let _ = printCapture "TRAP_RECORD_U" u
   let _ = printEvents "TRAP_CENSUS_U_GAP" censusEvents
   printCapture "TRAP_P2" (emitProgram trapStateInput trapStateProgram)
+
+-- A0 capture-only apparatus for H2b.9. P activates each prospective feature
+-- route from an uncalled one-argument binding; U is an inert positive control.
+-- Census deliberately uses a function binding so emitFnsGapsW establishes both
+-- gap attribution and current binding before its unbound-variable reader runs.
+reemitFeatureState : Unit -> <IO> Unit
+reemitFeatureState _ =
+  let p1 = emitProgram featureStateInput featureStateProgram
+  let hashIntOnly = emitProgram featureHashIntOnlyInput featureHashIntOnlyProgram
+  let floatDiv = emitProgram featureStateInput featureFloatDivProgram
+  let (u, _) = emitProgramRecord featureStateInput featureStateControlProgram
+  let censusEvents = emitProgramGaps featureStateInput featureStateCensusProgram
+  let _ = printCapture "FEATURE_P1" p1
+  let _ = printCapture "FEATURE_HASH_INT_ONLY" hashIntOnly
+  let _ = printCapture "FEATURE_FLOAT_DIV" floatDiv
+  let _ = printCapture "FEATURE_RECORD_U" u
+  let _ = printEvents "FEATURE_CENSUS_U_GAP" censusEvents
+  printCapture "FEATURE_P2" (emitProgram featureStateInput featureStateProgram)
+
+featureStateInput : WasmEmitInput
+featureStateInput = makeWasmEmitInput
+  []
+  []
+  [("FeatureRecord", ["Int", "Int"]), ("FeatureVariant", ["Int", "Int"])]
+  False
+  [("FeatureRecord", ["left", "right"]), ("FeatureVariant", ["left", "right"])]
+
+featureStateLoc : Loc
+featureStateLoc = Loc "<feature-state>" 1 1 1 1
+
+featureStateArg : Pat
+featureStateArg = PVar "x" featureStateLoc
+
+featureStateRecord : CExpr
+featureStateRecord = CRecord
+  "FeatureRecord"
+  [CField "left" (CLit (LInt 1)), CField "right" (CLit (LInt 2))]
+
+featureStateVariant : CExpr
+featureStateVariant = CRecord
+  "FeatureVariant"
+  [CField "left" (CLit (LInt 3)), CField "right" (CLit (LInt 4))]
+
+featureStateBinds : List CBind
+featureStateBinds = [
+  CBind "featureDiv" [
+    CClause [featureStateArg] (CBinPrim "/" (CVar "x" (ALocal 0 0)) (CLit (LInt 1)) "Int")
+  ],
+  CBind "featureMod" [
+    CClause [featureStateArg] (CBinPrim "%" (CVar "x" (ALocal 0 0)) (CLit (LInt 1)) "Int")
+  ],
+  CBind "featureRecordUpdate" [
+    CClause [featureStateArg] (CRecordUpdate "FeatureRecord" featureStateRecord [CField "left" (CLit (LInt 5))])
+  ],
+  CBind "featureVariantUpdate" [
+    CClause [featureStateArg] (CVariantUpdate "FeatureVariant" featureStateVariant [CField "right" (CLit (LInt 6))])
+  ],
+  CBind "featureRandomInt" [
+    CClause [featureStateArg] (CApp (CApp (CVar "randomInt" AGlobal) (CLit (LInt 0))) (CLit (LInt 1)))
+  ],
+  CBind "featureHashInt" [
+    CClause [featureStateArg] (CApp (CVar "hashInt" AGlobal) (CVar "x" (ALocal 0 0)))
+  ],
+  CBind "featureEPut" [
+    CClause [featureStateArg] (CApp (CVar "ePutStr" AGlobal) (CLit (LString "feature ePut")))
+  ],
+  CBind "featurePanic" [
+    CClause [featureStateArg] (CApp (CVar "panic" AGlobal) (CLit (LString "feature panic")))
+  ],
+]
+
+featureStateCtorArities : List (String, Int)
+featureStateCtorArities = [("FeatureRecord", 2), ("FeatureVariant", 2)]
+
+featureStateCtorTypes : List (String, String)
+featureStateCtorTypes =
+  [("FeatureRecord", "FeatureRecord"), ("FeatureVariant", "FeatureVariant")]
+
+featureStateProgram : CProgram
+featureStateProgram =
+  CProgram
+    (featureStateBinds ++ [CBind "main" [CClause [] (CLit (LInt 0))]])
+    featureStateCtorArities
+    featureStateCtorTypes
+    []
+
+-- This nearest-miss contains hashInt only.  Unlike featureStateProgram it has no
+-- string-bearing feature route, so it proves the hash-string runtime conjunction
+-- is not widened by base hash use.
+featureHashIntOnlyInput : WasmEmitInput
+featureHashIntOnlyInput = makeWasmEmitInput [] [] [] False []
+
+featureHashIntOnlyProgram : CProgram
+featureHashIntOnlyProgram = CProgram
+  [
+    CBind "featureHashIntOnly" [
+      CClause [featureStateArg] (CApp (CVar "hashInt" AGlobal) (CVar "x" (ALocal 0 0)))
+    ],
+    CBind "main" [CClause [] (CLit (LInt 0))],
+  ]
+  []
+  []
+  []
+
+-- Float `/` stays over-approximated by the divisor-local scan: it needs the
+-- ref-mode local even though IEEE division never traps on zero.
+featureFloatDivProgram : CProgram
+featureFloatDivProgram = CProgram
+  [
+    CBind "featureFloatDiv" [
+      CClause [featureStateArg] (CBinPrim "/" (CLit (LFloat 1.0)) (CLit (LFloat 2.0)) "Float")
+    ],
+    CBind "main" [CClause [] (CLit (LInt 0))],
+  ]
+  []
+  []
+  []
+
+featureStateControlProgram : CProgram
+featureStateControlProgram = CProgram
+  [
+    CBind "featurePlainRecord" [CClause [featureStateArg] featureStateRecord],
+    CBind "featurePlainAccess" [
+      CClause [featureStateArg] (CFieldAccess featureStateRecord "left" "FeatureRecord")
+    ],
+    CBind "featureControl" [CClause [featureStateArg] (CLit (LInt 29))],
+    CBind "main" [CClause [] (CLit (LInt 0))],
+  ]
+  featureStateCtorArities
+  featureStateCtorTypes
+  []
+
+featureStateCensusProgram : CProgram
+featureStateCensusProgram =
+  CProgram
+    (featureStateBinds ++ [
+      CBind "featureIntentionalGap" [CClause [featureStateArg] (CVar "missingFeatureCensus" AGlobal)],
+      CBind "main" [CClause [] (CLit (LInt 0))],
+    ])
+    featureStateCtorArities
+    featureStateCtorTypes
+    []
 
 trapStateInput : WasmEmitInput
 trapStateInput = makeWasmEmitInput [] [] [] False []

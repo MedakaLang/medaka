@@ -101,9 +101,12 @@ post-lift `lg:L` extent remain pinned. X-W.H2b.6 adds per-emission Stage-1 TRMC
 context (`WasmEmit`'s `trmcCtx`). X-W.H2b.7 adds per-emission lambda IDs, ordered lifted
 definitions, named-lift de-duplication, and function-reference list/set state;
 former lifted-name Ref was unread duplicate authority and is retired. X-W.H2b.8 adds the
-coded stderr-trap import event (`WasmEmit`'s `trapImportNeeded`). `emitProgram`/record/census
+coded stderr-trap import event (`WasmEmit`'s `trapImportNeeded`). X-W.H2b.9 adds per-emission
+divisor-local, record-update-local, RNG, hash, and stderr-runtime demand; trap-only emissions
+retain only the byte-writer import.
+`emitProgram`/record/census
 mint the context and `Prog` routes these helpers without changing successful WAT order.
-`diff_wasm_typed.sh` re-derives 30 remaining ambient top-level `Ref`s: output, feature,
+`diff_wasm_typed.sh` re-derives 25 remaining ambient top-level `Ref`s: output, feature,
 numeric, and dispatch. H2b/#1407 stay open. Do not add new ambient semantic-input or
 gap-lifecycle siblings.
 
