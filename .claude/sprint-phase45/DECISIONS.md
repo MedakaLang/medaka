@@ -2379,3 +2379,39 @@ reproduce and file.
 
 **My brief was wrong on one point:** I said S1's IR-diff harness was on its branch. It was not — S1
 touches three files, none a harness — so S2 wrote its own, and its own grades diagnostic text.
+
+## RUN-P45-064 — ⚠️ #1638's MERGE PUT TWO OPEN PRs INTO CONFLICT. The enqueue FAILED SILENTLY-SHAPED.
+
+`scripts/pr.sh enqueue --number 1640` ran its full 2400 s and reported *"did not join the merge queue or
+merge within 2400s (state=OPEN)"*. **The cause was not a red gate — CI never ran at all**: zero
+check-runs on head `83b8fc8d`, because `gh pr view` reads `mergeable: CONFLICTING`,
+`mergeStateStatus: DIRTY`. Same for **#1646**. (#1645 `MERGEABLE/CLEAN`; #1643 still `UNKNOWN`, i.e.
+GitHub is still computing it.)
+
+⭐ **The helper earned its keep here.** A bare `gh pr merge --auto` would have printed its usual
+merge-queue notice and exited with a code carrying no signal in either direction; I would have recorded
+"enqueued" and moved on, and #1640 would have sat unmerged with **no CI and no red** — indistinguishable
+from waiting. The helper verifies resulting STATE, so the non-event surfaced as a non-event.
+
+⚠️ **Do not conflate this with the standing "you do NOT need to keep your branch up to date with `main`"
+rule.** That rule is about *staleness*, which the queue absorbs. **A CONFLICTING branch is a different
+state: nothing runs and nothing enqueues.** Worth knowing at the point where a sprint lands its first
+PR into files its other PRs also touch — which is structurally when it will always happen.
+
+**Both writers instructed with the golden remedy rather than a merge:** take
+`test/selfproc_goldens/legA` and `test/snapshots` **wholesale from `origin/main`** and **re-derive from
+a rebuilt binary**. Those files have **no merge driver**, so two re-cuts in different regions
+three-way-merge with **no conflict marker** into a blend — and **no gate can flag it**, because the
+golden IS the oracle. S2 hit this same collision independently tonight and used exactly this recipe
+unprompted.
+
+**Both told to RE-MEASURE, not carry verdicts forward** — every gate count in both PRs was taken on a
+binary built from a tree that no longer exists. ⚠️ W6's case is the delicate one: its legA golden was
+**already non-additive** (11 pre-existing bindings re-signed, discharged by set equality). That verdict
+must be **re-derived on the merged tree**, not inherited — *"in principle it should be the same 11"* is
+precisely what the check exists to replace.
+
+**One interaction named for both, rather than assumed away:** #1638 made constrained impl heads reach
+their real head tag instead of the headless bucket. If any `dict_semantics`, `eval_modules`,
+`iface_order` or must-fail case moves after the merge, **that is the interaction** — report before
+adjusting.
