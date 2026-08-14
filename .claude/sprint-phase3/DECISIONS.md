@@ -1840,3 +1840,60 @@ program.** That is what distinguishes F-8 from this.
   the `b2` drop. **Without numbers, Phase 5 re-plans off stale design docs** — the `b2` drop in
   particular carries a finding (D1's ✅ on the D4 pair is wrong at this pin) that exists only in this
   ledger. **Both must be filed at the exit phase.**
+
+---
+
+# RUN-P3-047 — PHASE 2 COMPLETE. Every in-band close-out item discharged on the FINAL binary.
+
+| item | result |
+|---|---|
+| **fixpoint** | `C3a PASS: IR1 (native) == seed-bootstrapped converged reference, byte-for-byte` · `C3b PASS: IR1 == IR2`. Run on the **post-`c` binary**, closing the gap where the earlier measurement predated the terminal bite. **Names which C3a**, per the standing rule. |
+| **seed** | **No re-mint owed** — derived, not assumed: the seed *is* the native emitter's emission of the build driver's graph, so `C3a` green is the same proposition as *"`refresh_seed` would rewrite identical bytes"*; and `git show --stat` touches **no `compiler/backend/*` file**, so there is no codegen change to converge. |
+| **goldens** | Re-cut **ONCE**. Snapshot: 3 re-blessed **by name** + `route_key.md` **CREATED**; verified surgical against a before-copy (*"Only in test/snapshots/compiler: route_key.md"*), then re-checked for real — **202 fixtures, all 202 compared and matching.** |
+| **LEG A** | **Non-additive by design, and the diff matched the adversarial review's advance prediction EXACTLY**: 4 deletions, 4 additions, 5 modified, each modified row a strict generalization. **Both negative requirements hold:** `declaredConstraintSlots` and `qualConstraintFor` show **zero** diff lines and are both still present; there is **no sixth** modified row. |
+| **drains x2** | **Two runs, identical**: `97 fixtures: 96 still reproduce, 1 DRAINED (#1514), 0 control-broke, 0 malformed`. Agreement is the requirement — a disagreement would have meant the tree was still moving. |
+
+⚠️ `--new` reports *"0 compared, 201 skipped: NOTHING COMPARED (this is not a pass)"* — the gate is
+honest about that mode, and the **re-check afterwards** is what makes it a pass.
+
+**Draft PR #1616 is open** so CI absorbs the heavy gates in parallel. Body verified by readback (this
+repo has a recorded case of a `gh` write silently no-op'ing).
+
+## RUN-P3-048 — the leaked-pointer channel is NOT byte-stable, and the fix makes two findings pinnable
+
+Three filings hinge on a channel printing a leaked pointer. **Measured — six executions, six values:**
+
+```
+F-1: 70042639523808 / 70176320636896 / 69819114463200
+F-3: 47414081638712 / 47198690079032 / 46948661985592
+```
+
+Live heap addresses ⇒ **an exact-match pin on the raw value is impossible**; a `must_fail` row
+asserting one of those numbers would red on the next run for no reason.
+
+**The deterministic projection works** (`repro/f1_prelude_name/projected.mdk`) — compare against the
+hand-derived correct answer and print the **Bool**:
+
+```
+run    -> True    (correct)
+binary -> False   x3, stable
+```
+
+⇒ **both findings become `ALL_EXACT`-gradeable**, the run != build divergence is **preserved** as the
+observable, and the pin **self-drains to `True`** when fixed. **Two would-be NOT-PINNABLE rows
+converted into real pins for the cost of one probe.**
+
+## RUN-P3-049 — a conflict in my own docs, flagged rather than silently resolved
+
+`FINDINGS.md`'s **F-4** row says *"file with the derivation, labelled derived-not-measured"* — which
+**contradicts the binding filing discipline stated ten lines above it in the same file**. The filings
+agent **did not file it** and flagged the conflict instead.
+
+**RULED — the discipline wins.** F-4 is derived, never measured, and may be **unobservable through
+normal channels** (`pairSlots`' truncation masks it). It does **not** file as a bug. It files as an
+**ARCH issue about the CONSEQUENCE** — *a boundary marker stored on the ifaces table is unsound by
+construction* — a design claim provable from the source, plus a `MUST-FAIL-NOT-PINNABLE.txt` row if a
+probe confirms it is unobservable.
+
+⚠️ Also: **`FINDINGS.md` has no F-9** — a numbering gap I created by appending F-10 out of band.
+Recorded so nobody hunts for a lost finding.
