@@ -1689,3 +1689,71 @@ by an enumeration that is present and correct.
 ⇒ **Repair set for bite 0, to be applied before enqueue** (queued behind W2 under serialize-writers):
 F1, F2, F3's sentence, F4's counts, and the four minor. **F3's SEMANTIC half is not a repair item until
 the semantics reviewer rules on it.**
+
+## RUN-P45-046 — SEMANTICS-LENS REVIEW OF PR #1638: could not break the fix; two findings, both UPWARD
+
+Method worth recording because it is the bar: **three cold-built arms** — FIX (`906bae74`), BASE (the
+one line reverted, rebuilt), and **NARROW (the reviewer wrote the special-case fix the pin claims to
+catch, and rebuilt)** — 25 probe programs, every verb redirect-then-read-`$?`, env checked free of
+`MEDAKA_ROOT`/`MEDAKA_EMITTER`.
+
+**The fix holds.** Arm set complete (`Ty` has 8 constructors; after the peel set and the classifier
+arms the residue is `TyVar`, correctly headless, and `TyRow`, which is **rejected at the kind check on
+all three arms** so it never reaches dispatch). Headless preserved **byte-identically**. `check`
+stdout and exit code **byte-identical on all 25 programs across BASE and FIX** — no acceptance move,
+attacked directly at overlap, duplicate constrained heads, no-impl misses, undetermined receivers,
+specificity-with-`requires`, and cross-module. Spec conformance derived BEFORE invoking: DICT §3
+compares *heads only*, contexts play no role ⇒ the head of `impl Sz (Eq a => Int)` **is** `Int`; the
+IR agrees on both sides of the seam (`@mdk_impl_Int_sz` at definition and call site).
+
+**Pin verified the hard way:** on BASE, `diff_compiler_dict_semantics` fails **exactly the 2 new rows**
+and nothing else; on NARROW, **the effect fixture fails and the other passes** — i.e. the second
+fixture does precisely the discriminating job its header claims. That is an able-to-fail proof AND a
+discrimination proof, which is more than the bar asked for.
+
+### ⭐ F1 (CONFIRMED, in the PR's FAVOUR) — the fix also closes SILENT WRONGNESS, and the PR under-claims
+```medaka
+impl Sz (Eq a => Box Int) where sz _ = 13
+impl Sz (Box Bool)       where sz _ = 14
+main = println (sz (Box 1) + sz (Box True))     -- spec answer 27
+```
+**BASE: `run` prints 26 at exit 0** — both calls took 13. FIX: run, build and the executed binary all
+**27**. Two more BASE `run` failures the fix removes (`E-NOT-A-FUNCTION`, `E-PANIC: unknown op '+'`).
+
+⇒ **Both new fixture headers and the `headTyNode` comment assert *"`check` and `run` were both already
+CORRECT"*. True of the PINNED one-impl shape, FALSE of the class.** #1630's S1 grading is likewise
+scoped to the reported shape; the neighbour is an S0. This is
+[[feedback_severity_is_a_repro_artifact_not_a_defect_identity]] arriving from the good direction —
+and it is a *stronger* claim than the PR makes, so it must be corrected upward, not left.
+
+### 🚨 F2 (CONFIRMED) — the "tried and FAILED" negative in the new comment is FALSIFIED. Pre-existing.
+The PR's `censusHeadNameTy` comment records that #1630 *"tried and FAILED to build a program that
+observes"* the census residual. The candidate it used had the constrained impl as the interface's
+**only** impl — but `checkUndeterminedObligation` RULE 3 is guarded on `implCountForIfaceU >= 2`, so a
+one-impl program **cannot reach the arm the residual disables.** With two impls:
+
+| head | check | run | build |
+|---|---|---|---|
+| control, plain `Int` | **1** — *"Ambiguous instance for 'Zero'…"* | — | — |
+| constrained `Eq x => Int` | **0** | 5, exit 0 | **1** — `E-PANIC: arg-tag dispatch … not supplied` |
+
+Measured **identically on BASE, FIX and NARROW** ⇒ arm-invariant, **not introduced by this PR**. The
+same shape with #1618's effect wrapper behaves identically, so the phrase *"structural, not
+demonstrated"* is now falsified for **two of the three wrappers**. Severity as measured: **S1**.
+
+⚠️ **And its deferral points at a CLOSED issue** — the comment routes the ruling to F-3c (#1155).
+**Nothing open owns this residual today.**
+
+⇒ ORCH is reproducing F2 first-hand before filing (a binary is building in the orchestrator worktree).
+**Do not file an agent's claim unreproduced** — the rule this arc keeps paying for.
+
+### Repair set for bite 0 — GROWN by this review
+The prose repairs from RUN-P45-045, plus: **(a)** correct *"check and run were both already correct"*
+in the two fixture headers and the `headTyNode` comment — the class includes a silent-wrongness
+neighbour; **(b)** replace the *"tried and FAILED"* paragraph rather than shipping it, and drop the
+dead #1155 deferral; **(c)** the author's acceptance argument (*"goes through `censusHeadNameTy`"*) is
+**narrower than the real surface** — three other consequences exist (`univReceiverTag`'s bucket move
+feeding `implMatchesU`, the two `ieHeadCollides*` gates, and `implEntryFromTys` now registering
+`requires`-bearing constrained impls) — and the conclusion survives measurement, but the PR should
+state the surface it actually attacked. **F3 from the prose lens (`keyEntryOfRow`) is answered by
+this review's Q3 surface: it is a routing reader, and the 25-program acceptance sweep found no move.**
