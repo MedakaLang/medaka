@@ -2,10 +2,27 @@
 
 ---
 
-## 🟡 LIVE SPRINT (2026-08-14): Stage B / Phase 3′ — `B-2.2`, branch `arch/stage-b-phase3-b22`
+## ✅ CLOSED (2026-08-14): Stage B / Phase 3′ — `B-2.2` MERGED as PR #1616 (`99fbccff`)
 
-**Expected-red for the duration, BY DESIGN — do not diagnose these as a break.** Contract:
-`.claude/STAGE-B-PHASE3-SPRINT.md`; records: `.claude/sprint-phase3/`.
+🚨 **THE EXPECTED-RED SET BELOW IS SPENT. EVERY GATE IN IT IS GREEN ON `main`.**
+A red in any of them is now **a real break, not this sprint's deferred debt** — do not dismiss one
+by reading this section. It is kept only so the table's *reasoning* stays available; the sprint's
+records are at `.claude/sprint-phase3/` and its contract at `.claude/STAGE-B-PHASE3-SPRINT.md`.
+
+Final state at merge: goldens re-cut once (snapshot **202/202**, `selfproc_legA` re-cut with a
+deliberately non-additive diff whose shape was predicted in advance), fixpoint **C3a + C3b PASS** on
+the final binary, must-fail **96 → 100 fixtures, 100 reproduce, 0 drained**, CI **12/12**.
+
+### ⚠️ What the next agent most needs to know
+
+**C4/I2 is CONJUNCT 2 ONLY.** Evidence is order-invariant; the instance consulted is not. Identity
+went into the route **word** and not into the selection **key**, so where two impls share a method
+name *and* a head type the row is still chosen by import/declaration order, silently, on every
+engine. ⇒ **Phase 4 must key frozen admissibility by INTERFACE IDENTITY — if it freezes
+admissibility computed by the current selector, it freezes the order-dependence** — and **Phase 5
+cannot rely on cross-engine agreement to detect a miss**, because all engines currently agree on the
+same wrong answer. Only a permutation differential sees it. Full derivation: the `#1113` comment of
+2026-08-14 and `.claude/sprint-phase3/DECISIONS.md` RUN-P3-050.
 
 ⚠️ **CORRECTED at HEAD:** this unit was *planned* to change `RKey`'s payload type; that design was
 **REFUSED in Phase 0** and `data Route` is **unchanged** (`RKey String (List Route)`). The identity
