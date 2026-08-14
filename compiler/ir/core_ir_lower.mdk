@@ -1378,10 +1378,10 @@ declKeysAtHead ((_, i, t, k)::rest) iface tag acc
 -- one `disp` from all modules' decls jointly (an impl in module B for an interface
 -- in the prelude needs the prelude's dispatch positions), then lowers each
 -- module's impls against it.
-export lowerImplsWith : List ((String, String), List Int) -> List Decl -> List CImplEntry
+export lowerImplsWith : List ((String, String, String), List Int) -> List Decl -> List CImplEntry
 lowerImplsWith disp prog = flatMap (lowerDeclImpl disp) prog
 
-lowerDeclImpl : List ((String, String), List Int) -> Decl -> List CImplEntry
+lowerDeclImpl : List ((String, String, String), List Int) -> Decl -> List CImplEntry
 -- #1037: an ATTRIBUTE IS METADATA — it must never change which impls exist.  A
 -- decl attribute parses to `DAttrib attrs <decl>` (parser.parseAttrib wraps ANY
 -- decl), so `@deprecated "…" impl Speak Cat where …` reaches here as a DAttrib and
@@ -1402,11 +1402,15 @@ lowerDeclImpl disp (DImpl { iface = ifaceName, implOrigin = o, tys = typeArgs, m
 lowerDeclImpl _ (DInterface { name = ifaceName, ifaceOrigin = o, typarams = typeParams, methods, ... }) = flatMap (lowerDefault (ifaceIdentity o ifaceName) typeParams) methods
 lowerDeclImpl _ _ = []
 
-lowerImplMethod : List ((String, String), List Int) -> TyConOrigin -> String -> List Ty -> ImplMethod -> CImplEntry
+lowerImplMethod : List ((String, String, String), List Int) -> TyConOrigin -> String -> List Ty -> ImplMethod -> CImplEntry
 lowerImplMethod disp o ifaceName typeArgs (ImplMethod mname pats body) =
   let tag = fromOption noneHeadTag (headTyconHead typeArgs)
   let key = implRouteKeyWord o ifaceName typeArgs None
-  let positions = lookupPositions ifaceName mname disp
+  -- #1113 Phase 4: identity-keyed admissibility lookup — the LOCKSTEP peer of
+  -- `eval.implMethodEntry`'s identical line.  `o` is already bound for `key`, so
+  -- both consumers pay nothing.  These are the ONLY two `lookupPositions` call
+  -- sites, and `CImplTagged`'s `positions` is where the answer is FROZEN.
+  let positions = lookupPositions (ifaceIdentity o ifaceName) ifaceName mname disp
   CImplEntry
     mname
     (tyvarsInArgs typeArgs)

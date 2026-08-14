@@ -1,0 +1,59 @@
+entry: main.mdk
+what: #1113 Phase 4 — per-(class, position) arg-tag ADMISSIBILITY is a property of
+      the CLASS, not of its spelling, and must not move with import order
+
+Two modules each declare an interface spelled `Speak` with a method spelled `speak`.
+They are different classes (DICT-SEMANTICS §8 I4: a class is `(originModule, name)`),
+and their methods put the class parameter in DIFFERENT argument positions:
+
+    speakera.speak : String -> x -> String   ->  admissible arg-tag position {1}
+    speakerb.speak : x -> String -> String   ->  admissible arg-tag position {0}
+
+Hand-derived from §5 ("arg-tag dispatch is a refinement of `(method)`, admissible
+only where the class parameter occurs in an argument position"), NOT captured: the
+values below follow from the two signatures and the two impl bodies alone, and are
+the same under either ordering — which is the assertion.
+
+    useA = speak "x" DogA  ->  "A(x)"
+    useB = speak DogB "y"  ->  "B(y)"
+
+── WHAT MOVED, AND WHERE IT IS VISIBLE ──────────────────────────────────────────
+Before #1113 Phase 4 the admissibility table was keyed by the BARE `(iface, method)`
+pair, so both impls were frozen into `CImplTagged` under whichever `interface Speak`
+came first in the joint decl list, and the frozen answer FLIPPED with import order.
+Measured with `compiler/entries/core_ir_typed_modules_dump_main.mdk`:
+
+    PRE-FIX  imports speakera,speakerb ->  DogA (1)  DogB (1)   <- DogB wrong
+    PRE-FIX  imports speakerb,speakera ->  DogB (0)  DogA (0)   <- DogA wrong
+    POST-FIX both orderings            ->  DogA (1)  DogB (0)   <- the §5 answer
+
+That divergence lives in the ELABORATION OUTPUT. This gate's signature does not read
+it, so THIS CASE DID NOT SEE THE DEFECT and is not claimed to: `check` and `run` were
+already correct and already order-invariant on the pre-fix binary. It is the
+regression guard, and the "unrelated code still behaves" fixture the re-keying owes —
+two interfaces that collide by name must keep answering independently, in either order.
+
+── ⚠️ WHY THE `build` CELL IS 1 HERE, AND WHY THAT IS NOT THIS UNIT'S BUG ───────
+`build` fails on this program on BOTH sides of the fix, with
+
+    "no impl of method 'display' for type 'DogB'"     (this ordering)
+    "no impl of method 'display' for type 'DogA'"     (imports swapped)
+
+That is a SEPARATE, still-open bare-name collision — the two `speak` METHOD SCHEMES
+share a name and differ in type, so the emitter's front end attributes one interface's
+signature to the other's impl body and the interpolated `String` is typed as the
+receiver. Measured base-vs-branch: byte-identical failure, so #1113 Phase 4 neither
+causes nor fixes it. The discriminating CONTROL is one edit away and was run: give the
+two `speak`s the IDENTICAL signature `String -> x -> String` and the same two-module
+collision builds clean and prints `A(x)`/`B(y)`. So the failure tracks the SIGNATURE
+difference, not the name collision.
+
+That control is also why this shape has no value-level pin anywhere in the tree: an
+admissibility mis-key needs (same interface spelling, same method spelling, DIFFERENT
+admissible positions), which forces different signatures, which trips the scheme
+collision above. The two defects are coextensive on today's compiler, and the typed
+Core IR dump is the only observation that separates them.
+
+Deliberately unledgered and must stay so: the `build` failure is INVARIANT across the
+orderings this gate permutes, so it is not an order-dependence and does not earn a row.
+A row appearing for this case would mean the re-keying regressed.

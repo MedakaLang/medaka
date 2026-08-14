@@ -41,6 +41,7 @@ import frontend.ast.{
   DataVis(..),
   TyConOrigin,
   ifaceIdentity,
+  ifaceIdMatches,
 }
 -- B-2.2-e: the ONE route-word mint, shared with `types/typecheck.mdk` (the caller
 -- side of the seam) and `ir/core_ir_lower.mdk`.  It replaces this file's deleted
@@ -267,7 +268,10 @@ methodReqCountRef = Ref []
 -- methods.  Populated by every module driver beside methodReqCountRef (both tables
 -- are derived from the same `allDecls`, so they must be installed together — see
 -- installDispatchTables).
-ifaceDispatchRef : Ref (List ((String, String), List Int))
+-- #1113 Phase 4: the row is now ((iface IDENTITY, iface spelling, method),
+-- positions).  The identity component serves the `lookupPositions` LOOKUP only;
+-- the two readers just below deliberately stay on the SPELLING (see their notes).
+ifaceDispatchRef : Ref (List ((String, String, String), List Int))
 ifaceDispatchRef = Ref []
 
 -- The two dispatch tables applyMethodDicts consults are derived from the SAME decl
@@ -277,7 +281,7 @@ ifaceDispatchRef = Ref []
 -- interpreter the lookup always returned None and the fix was INERT.  Sharing the
 -- code is not sharing the DATA: bind them here so a driver cannot install one
 -- without the other.)
-export installDispatchTables : List Decl -> List ((String, String), List Int)
+export installDispatchTables : List Decl -> List ((String, String, String), List Int)
 installDispatchTables allDecls =
   let disp = buildIfaceDispatch allDecls
   let _ = setRef methodReqCountRef (buildMethodReqCounts allDecls)
@@ -339,22 +343,33 @@ export defaultCellName : String -> String -> String
 defaultCellName ifaceId method = "\{ifaceId}#\{method}"
 
 -- the interface a method belongs to ("" if it is not an interface method).
+--
+-- ⚠️ #1113 Phase 4 DELIBERATELY LEFT THIS ON THE BARE SPELLING.  It and
+-- `methodsOfIface` are the OTHER two readers of `ifaceDispatchRef` (the
+-- `lookupPositions` sites are the first two), and together they answer ONE
+-- question for `siblingShadows`: which OTHER methods of this method's interface
+-- should be shadowed while a default body runs.  That is an enumeration whose
+-- current answer is already a SUPERSET when two interfaces share both a spelling
+-- and a method name, and narrowing it to an identity would change which siblings
+-- get pinned to a tag — a dispatch change on a path this unit did not measure.
+-- The identity component of the row is therefore ignored here ON PURPOSE, not by
+-- omission; making these precise is a separate unit.
 ifaceOfMethod : String -> String
 ifaceOfMethod mname = ifaceOfMethodIn mname ifaceDispatchRef.value
 
-ifaceOfMethodIn : String -> List ((String, String), List Int) -> String
+ifaceOfMethodIn : String -> List ((String, String, String), List Int) -> String
 ifaceOfMethodIn _ [] = ""
-ifaceOfMethodIn mname (((i, m), _)::rest)
+ifaceOfMethodIn mname (((_, i, m), _)::rest)
   | m == mname = i
   | otherwise = ifaceOfMethodIn mname rest
 
--- every method name declared by [iface].
+-- every method name declared by [iface] (SPELLING — see `ifaceOfMethod` above).
 methodsOfIface : String -> List String
 methodsOfIface iface = methodsOfIfaceIn iface ifaceDispatchRef.value
 
-methodsOfIfaceIn : String -> List ((String, String), List Int) -> List String
+methodsOfIfaceIn : String -> List ((String, String, String), List Int) -> List String
 methodsOfIfaceIn _ [] = []
-methodsOfIfaceIn iface (((i, m), _)::rest)
+methodsOfIfaceIn iface (((_, i, m), _)::rest)
   | i == iface = m :: methodsOfIfaceIn iface rest
   | otherwise = methodsOfIfaceIn iface rest
 
@@ -1899,18 +1914,24 @@ clausesForName name ((n, c)::rest)
 -- the only way in, so the invariant is structural.  If a caller ever genuinely needs
 -- the dispatch table WITHOUT installing, export a reader for ifaceDispatchRef rather
 -- than re-exporting this.
-buildIfaceDispatch : List Decl -> List ((String, String), List Int)
+buildIfaceDispatch : List Decl -> List ((String, String, String), List Int)
 buildIfaceDispatch prog = flatMap ifaceDispatchEntries prog
 
-ifaceDispatchEntries : Decl -> List ((String, String), List Int)
+ifaceDispatchEntries : Decl -> List ((String, String, String), List Int)
 -- #1037: an attribute on an `interface` must not delete its dispatch positions.
 ifaceDispatchEntries (DAttrib _ d) = ifaceDispatchEntries d
-ifaceDispatchEntries (DInterface { name = ifaceName, typarams = typeParams, methods, ... }) = map (ifaceMethodEntry ifaceName typeParams) methods
+-- #1113 Phase 4: the row carries the DECLARING interface's IDENTITY beside its
+-- spelling, read straight off `ifaceOrigin` — the same field `declImplEntries`'
+-- `DInterface` arm already reads for the per-interface default cell (#1047), so
+-- the producer pays nothing for it.
+ifaceDispatchEntries (DInterface { name = ifaceName, ifaceOrigin = o, typarams = typeParams, methods, ... }) = map (ifaceMethodEntry (ifaceIdentity o ifaceName) ifaceName typeParams) methods
 ifaceDispatchEntries _ = []
 
-ifaceMethodEntry : String -> List String -> IfaceMethod -> ((String, String), List Int)
-ifaceMethodEntry ifaceName typeParams (IfaceMethod mname mty _) =
-  ((ifaceName, mname), dispatchPositionsOf mty (receiverParam typeParams))
+ifaceMethodEntry : String -> String -> List String -> IfaceMethod -> ((String, String, String), List Int)
+ifaceMethodEntry ifaceId ifaceName typeParams (IfaceMethod mname mty _) = (
+  (ifaceId, ifaceName, mname),
+  dispatchPositionsOf mty (receiverParam typeParams),
+)
 
 -- The receiver (dispatch) typaram is the FIRST interface param.  A multi-param
 -- interface (`FromEntries c e`) dispatches on `c`; a trailing element param `e`
@@ -1920,11 +1941,61 @@ receiverParam : List String -> List String
 receiverParam [] = []
 receiverParam (p::_) = [p]
 
-export lookupPositions : String -> String -> List ((String, String), List Int) -> List Int
-lookupPositions _ _ [] = [0]
-lookupPositions iface mname (((i, m), p)::rest)
+-- ── #1113 Phase 4: the ADMISSIBILITY lookup, keyed by interface IDENTITY ─────
+-- DICT-SEMANTICS §5 makes arg-tag dispatch a refinement of `(method)` that is
+-- admissible only at an argument position where the class parameter occurs.  That
+-- set is a property of ONE class — `a::Speak`'s `speak : String -> x -> String`
+-- admits position 1, `b::Speak`'s `speak : x -> String -> String` admits position
+-- 0 — and §8 I4 says the class is `(originModule, name)`, not `name`.
+--
+-- Keyed by the bare `(iface, method)` pair this table answered BOTH of those
+-- lookups with whichever `interface Speak` appeared FIRST in the joint decl list,
+-- so both impls were frozen into `CImplTagged` under the same positions and the
+-- answer flipped with import order (measured: `(1) (1)` vs `(0) (0)` for the same
+-- two impls, on `core_ir_typed_modules_dump_main`).  Freezing THAT into the
+-- elaboration output would have frozen the order-dependence, which is the one
+-- outcome this unit exists to avoid.
+--
+-- TWO TIERS, and the fallback is written rather than emergent:
+--
+--  1. IDENTITY, compared with `ifaceIdMatches` (`frontend/ast.mdk`) — the LOOKUP
+--     rule, where absence never matches, not even itself.  This site is a lookup:
+--     a false hit silently mis-keys admissibility (the defect above), a miss is
+--     recoverable by tier 2.  `sameTyConHead`'s absence-is-a-wildcard shape is the
+--     ACCEPTANCE rule and must NOT be copied here — under it an UNSTAMPED row
+--     would hijack a stamped query, which is the same first-match-wins failure in
+--     a new spelling.
+--
+--  2. SPELLING, plain `==` on the bare names.  Identity SUPPLY is partial: the
+--     flat/loader-less drivers (`medaka check` on a no-import file, `lsp`, `repl`,
+--     `doc`, the playground) stamp nothing (`stampFlatTyOrigins`), so on those
+--     paths every row and every query carries `""` and tier 1 answers None for
+--     ALL of them.  Without this tier they would fall through to the miss default
+--     and dispatch would change on the single-file path — the failure mode is
+--     "quietly plausible", not a crash.  Tier 2 reproduces today's answer exactly,
+--     so a program whose interfaces do not collide by spelling is byte-identical.
+--
+-- ⚠️ NOT CLOSED BY THIS UNIT: `[0]` on a total miss is still fail-OPEN, and so is
+-- `keepOrAll original [] = original` further downstream.  Re-keying makes the miss
+-- unreachable in a well-formed program (an impl whose interface is not declared
+-- anywhere in the joint decl list is a resolve error) but does not remove either
+-- default; retiring them moves behaviour and is its own unit.
+export lookupPositions : String -> String -> String -> List ((String, String, String), List Int) -> List Int
+lookupPositions ifaceId iface mname tbl = match positionsById ifaceId mname tbl
+  Some p => p
+  None => positionsByName iface mname tbl
+
+positionsById : String -> String -> List ((String, String, String), List Int) -> Option (List Int)
+positionsById _ _ [] = None
+positionsById ifaceId mname (((i, _, m), p)::rest)
+  | ifaceIdMatches ifaceId i && mname == m = Some p
+  | otherwise = positionsById ifaceId mname rest
+
+positionsByName : String -> String -> List ((String, String, String), List Int) -> List Int
+positionsByName _ _ [] = [0]
+positionsByName iface mname (((_, i, m), p)::rest)
   | iface == i && mname == m = p
-  | otherwise = lookupPositions iface mname rest
+  | otherwise = positionsByName iface mname rest
 
 -- A point-free (no-param) impl/default body: if the method is return-position
 -- (no discriminating arg) defer it as a memoising VThunk; otherwise eta-expand so
@@ -1969,7 +2040,7 @@ seqV : Unit -> Value e -> Value e
 seqV _ v = v
 
 -- one (methodName, (specificity-score, taggedValue)) per impl method / default
-declImplEntries : EvalEnv (Value e) -> List ((String, String), List Int) -> Decl -> List (String, (Int, Value e))
+declImplEntries : EvalEnv (Value e) -> List ((String, String, String), List Int) -> Decl -> List (String, (Int, Value e))
 -- #1037: an ATTRIBUTE IS METADATA — it must never change which impls exist.  A
 -- decl attribute parses to `DAttrib attrs <decl>`, and without this arm
 -- `@deprecated "…" impl Speak Cat where …` fell through to `_ => []`: the impl
@@ -1989,11 +2060,16 @@ declImplEntries env disp (DImpl { iface = ifaceName, implOrigin = o, tys = typeA
 declImplEntries env _ (DInterface { name = ifaceName, ifaceOrigin = o, typarams = typeParams, methods, ... }) = flatMap (defaultEntry env (ifaceIdentity o ifaceName) typeParams) methods
 declImplEntries _ _ _ = []
 
-implMethodEntry : EvalEnv (Value e) -> List ((String, String), List Int) -> TyConOrigin -> String -> List Ty -> ImplMethod -> (String, (Int, Value e))
+implMethodEntry : EvalEnv (Value e) -> List ((String, String, String), List Int) -> TyConOrigin -> String -> List Ty -> ImplMethod -> (String, (Int, Value e))
 implMethodEntry env disp o ifaceName typeArgs (ImplMethod mname pats body) =
   let tag = fromOption noneHeadTag (headTyconHead typeArgs)
   let key = implRouteKeyWord o ifaceName typeArgs None
-  let positions = lookupPositions ifaceName mname disp
+  -- #1113 Phase 4: `o` is the impl's own view of WHICH interface it implements
+  -- (resolve's `fillIfaceOccOrigin`), so `ifaceIdentity o ifaceName` is the same
+  -- word the DInterface arm mints — the identity was already in hand for `key`,
+  -- so the identity-keyed lookup costs nothing here.  Matched line-for-line by
+  -- `core_ir_lower.lowerImplMethod` (the evalModules/cevalModules lockstep pair).
+  let positions = lookupPositions (ifaceIdentity o ifaceName) ifaceName mname disp
   let inner = implMethodValue env positions pats body
   (mname, (tyvarsInArgs typeArgs, VTypedImpl tag key positions 0 inner))
 
@@ -3162,7 +3238,7 @@ installModGroups ((ModInfo _ decls grps cells menv)::rest) =
 
 -- a module's impl methods / interface defaults close over ITS env but coalesce
 -- into the shared global VMulti
-modImplEntries : List ((String, String), List Int) -> ModInfo (Value e) -> List (String, (Int, Value e))
+modImplEntries : List ((String, String, String), List Int) -> ModInfo (Value e) -> List (String, (Int, Value e))
 modImplEntries disp (ModInfo _ decls _ _ menv) =
   flatMap (declImplEntries menv disp) decls
 

@@ -551,7 +551,7 @@ cevalModules preludeDecls modules =
 -- pass 1: lower + allocate each module's local cells and build its env (imports
 -- resolved against already-processed modules, since loader order is
 -- dependency-first).  Mirror of eval.mdk's buildModInfos, lowering groups/impls.
-cBuildModInfos : List ((String, String), List Int) -> ModExports (Value e) -> List (String, ModExports (Value e)) -> List (String, List Decl) -> List (CModInfo (Value e))
+cBuildModInfos : List ((String, String, String), List Int) -> ModExports (Value e) -> List (String, ModExports (Value e)) -> List (String, List Decl) -> List (CModInfo (Value e))
 cBuildModInfos _ _ _ [] = []
 cBuildModInfos disp coreExports exportsMap ((mid, decls)::rest) =
   let globalCells = modExportCells coreExports

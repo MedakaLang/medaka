@@ -29,7 +29,7 @@ boolSeeds : List (String, Value a)
 boolToInt : Bool -> Int
 buildCtorFieldOrders : List Decl -> List (String, List String)
 buildCtorToType : List Decl -> List (String, String)
-buildIfaceDispatch : List Decl -> List ((String, String), List Int)
+buildIfaceDispatch : List Decl -> List ((String, String, String), List Int)
 buildMethodReqCounts : List Decl -> List ((String, String), Int)
 buildModInfos : ModExports (Value a) -> List (String, ModExports (Value a)) -> List (String, List Decl) -> List (ModInfo (Value a))
 buildWith : Value a -> Int -> Int -> List (Value a)
@@ -67,7 +67,7 @@ ctorsByTypeOf : List Decl -> List (String, List String)
 ctorsOfDecl : Decl -> List (String, Value a)
 currentEvalFile : Ref String
 currentEvalLoc : Ref Loc
-declImplEntries : EvalEnv (Value a) -> List ((String, String), List Int) -> Decl -> List (String, (Int, Value a))
+declImplEntries : EvalEnv (Value a) -> List ((String, String, String), List Int) -> Decl -> List (String, (Int, Value a))
 declImplIfaceIdRow : Decl -> List (String, String, String)
 declImplIfaceIdTable : List Decl -> List (String, String, String)
 declImplIfaceIdsRef : Ref (List (String, String, String))
@@ -150,18 +150,18 @@ groupsOf : List Decl -> List (String, List (List Pat, Expr))
 hasTag : String -> Value a -> Bool
 headTycon : Ty -> Option String
 headTyconHead : List Ty -> Option String
-ifaceDispatchEntries : Decl -> List ((String, String), List Int)
-ifaceDispatchRef : Ref (List ((String, String), List Int))
+ifaceDispatchEntries : Decl -> List ((String, String, String), List Int)
+ifaceDispatchRef : Ref (List ((String, String, String), List Int))
 ifaceIdsAtTagE : String -> List String
 ifaceIdsAtTagEGo : String -> List (String, String, String) -> List String
 ifaceMethodArity : IfaceMethod -> (String, Int)
-ifaceMethodEntry : String -> List String -> IfaceMethod -> ((String, String), List Int)
+ifaceMethodEntry : String -> String -> List String -> IfaceMethod -> ((String, String, String), List Int)
 ifaceMethodNmE : IfaceMethod -> String
 ifaceOfMethod : String -> String
-ifaceOfMethodIn : String -> List ((String, String), List Int) -> String
+ifaceOfMethodIn : String -> List ((String, String, String), List Int) -> String
 implDeclNames : Decl -> List String
 implDictRoutes : Option Int -> List Route -> List Route -> List Route
-implMethodEntry : EvalEnv (Value a) -> List ((String, String), List Int) -> TyConOrigin -> String -> List Ty -> ImplMethod -> (String, (Int, Value a))
+implMethodEntry : EvalEnv (Value a) -> List ((String, String, String), List Int) -> TyConOrigin -> String -> List Ty -> ImplMethod -> (String, (Int, Value a))
 implMethodName : ImplMethod -> String
 implMethodNames : List Decl -> List String
 implMethodReqCountEntry : List (String, Int) -> String -> ImplMethod -> List ((String, String), Int)
@@ -172,7 +172,7 @@ inCharRange : String -> String -> String -> Bool -> Bool
 inIntRange : Int -> Int -> Int -> Bool -> Bool
 insertScore : (Int, Value a) -> List (Int, Value a) -> List (Int, Value a)
 installConsts : List (String, Ref (Value a)) -> List (String, Value a) -> Unit
-installDispatchTables : List Decl -> List ((String, String), List Int)
+installDispatchTables : List Decl -> List ((String, String, String), List Int)
 installGroup : EvalEnv (Value a) -> List (String, Ref (Value a)) -> List LetBind -> Unit
 installGroups : EvalEnv (Value a) -> List (String, Ref (Value a)) -> List (String, List (List Pat, Expr)) -> Unit
 installModGroups : List (ModInfo (Value a)) -> Unit
@@ -203,7 +203,7 @@ lookupFramesOpt : List (List (String, Ref (Value a))) -> String -> Option (Value
 lookupMethod : EvalEnv (Value a) -> String -> Value a
 lookupMethodFrames : List (List (String, Ref (Value a))) -> List (List (String, Ref (Value a))) -> String -> Value a
 lookupMethodReqCountOpt : String -> String -> Option Int
-lookupPositions : String -> String -> List ((String, String), List Int) -> List Int
+lookupPositions : String -> String -> String -> List ((String, String, String), List Int) -> List Int
 lookupReqCount : String -> String -> List ((String, String), Int) -> Option Int
 makeCtor : String -> Int -> Value a
 makeCtorGo : String -> Int -> List (Value a) -> Value a
@@ -226,10 +226,10 @@ methodCellsOf : List (String, Ref (Value a)) -> List Decl -> List (String, Ref (
 methodDeclArities : Decl -> List (String, Int)
 methodReqCountRef : Ref (List ((String, String), Int))
 methodsOfIface : String -> List String
-methodsOfIfaceIn : String -> List ((String, String), List Int) -> List String
+methodsOfIfaceIn : String -> List ((String, String, String), List Int) -> List String
 mkGroup : List (String, (List Pat, Expr)) -> String -> (String, List (List Pat, Expr))
 modExportCells : ModExports a -> List (String, Ref a)
-modImplEntries : List ((String, String), List Int) -> ModInfo (Value a) -> List (String, (Int, Value a))
+modImplEntries : List ((String, String, String), List Int) -> ModInfo (Value a) -> List (String, (Int, Value a))
 moduleMethodNames : List Decl -> List String
 moduleMethodNamesOf : Decl -> List String
 narrowMethod : EvalEnv (Value a) -> String -> Value a -> String -> Value a
@@ -365,6 +365,8 @@ pendingRunDiags : Ref (List (String, String, List Diag))
 pickByTag : EvalEnv (Value a) -> String -> List (Value a) -> String -> Value a
 pickDefaultCand : EvalEnv (Value a) -> String -> List (Value a) -> String -> Value a
 pickTagFallback : EvalEnv (Value a) -> String -> List (Value a) -> String -> Value a
+positionsById : String -> String -> List ((String, String, String), List Int) -> Option (List Int)
+positionsByName : String -> String -> List ((String, String, String), List Int) -> List Int
 ppField : (String, Value a) -> String
 ppValue : Value a -> String
 ppValueAtom : Value a -> String

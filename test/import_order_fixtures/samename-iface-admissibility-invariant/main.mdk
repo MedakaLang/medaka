@@ -1,0 +1,6 @@
+import speakera.{useA}
+import speakerb.{useB}
+
+main =
+  let _ = println useA
+  println useB
