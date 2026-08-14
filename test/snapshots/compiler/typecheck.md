@@ -1,5 +1,5 @@
 # META
-source_lines=29901
+source_lines=30039
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted typecheck stage — port of lib/typecheck.ml's HM core.  SLICE 1:
@@ -2518,7 +2518,11 @@ routeLocalSym _ = ""
 --     addition to the tag bucket.  Almost always empty (`impl Foo a` — the overlapping-
 --     impls / parse fixtures are the only corpus sources), but MUST be kept: dropping
 --     them would change `implMatches` from True to False on such a program.--   • iface name → SET of its impls' concrete head tags (headless impls contribute no
---     tag, exactly as `implHeadTagsFromHeads` skipped them).  `implCountForIfaceU`
+--     tag, exactly as `implHeadTagsFromHeads` skipped them — and since #1617/#1618,
+--     ⚠️ NEITHER DO ARROW- OR EFFECT-HEADED IMPLS, which the other two buckets DO
+--     file: this one is the ACCEPTANCE census, guarded by `univHeadCountsInCensus`,
+--     and it is the only one of the three that is not a dispatch table).
+--     `implCountForIfaceU`
 --     reads its size — byte-identical to `listLen (dedup (implHeadTagsFromHeads …))`.
 --     ⚠️ A-2.2b: a `Registry SetRegistry`; the count is `sregSize`, the combinator
 --     A-2.0 added for exactly this reader.
@@ -4410,7 +4414,10 @@ ieInsertRowAt ifk (r@(ImplRow _ _ _ tys _ _)) env = match univReceiverTag tys
   Some hk =>
     let ifkey = regKeyOfTab ifk
     let hd = dispHeadTab hk
-    ImplEnv { env | ieConcrete = mregAppendK (regKeyNTab [ifk, hd]) r env.ieConcrete, ieIfaceTags = regInsertK ifkey (sregAddK (regKeyOfTab hd) (fromOption sregEmpty (regLookupK ifkey env.ieIfaceTags))) env.ieIfaceTags }
+    -- ⚠️ `ieIfaceTags` is the ACCEPTANCE census (`ieUniverseAt` hands it to
+    -- `implCountForIfaceU`), so it is guarded — `univHeadCountsInCensus`.  This
+    -- writer and `insertUnivImplAt` must move in LOCKSTEP.
+    ImplEnv { env | ieConcrete = mregAppendK (regKeyNTab [ifk, hd]) r env.ieConcrete, ieIfaceTags = univAddIfaceTag (univHeadCountsInCensus tys) ifkey hd env.ieIfaceTags }
   None => ImplEnv { env | ieHeadless = mregAppendK (regKeyOfTab ifk) r env.ieHeadless }
 
 -- 🚨 THE `IE` *UNIVERSE* READ ACCESSOR.  Every consumer that wants an
@@ -18208,8 +18215,16 @@ implEntryFromTys iface (headTy::rest) reqs methods = match headTyconNameTy headT
   None => []
 
 -- ⚠️ #1128 (F-3b) AUDIT — `implEntryFromTys`, `keyEntryOf` and `implHeadTagForIface`
--- all gate on `headTyconTy … Some tag`, so all three DROP a fully-general `impl C a`.
--- They were audited as a SET; only `keyEntryOf` was changed, deliberately:
+-- all gate on a head projection answering `Some tag`, so all three DROP a fully-general
+-- `impl C a`.  They were audited as a SET; only `keyEntryOf` was changed, deliberately:
+--
+-- ⚠️ THE THREE NO LONGER READ THE SAME PROJECTION (#1617/#1618).  `implEntryFromTys`
+-- and `keyEntryOf` are dispatch registrars and read the projections that gained the
+-- `TyFun` arm and the `TyEffect` peel (`headTyconNameTy` / `headTyconTy`);
+-- `implHeadTagForIface` is an ACCEPTANCE census and reads `censusHeadNameTy`, which is
+-- those projections as they were before that bite.  The `impl C a` argument below is
+-- unaffected — a bare `TyVar` head answers `None` in all three — but do not re-derive
+-- any of them from a sibling's projection.
 --
 --  • `keyEntryOf` / KeyBuckets WAS the registry every route selector read
 --    (`matchedEntry`; since ARCH B-2.1-b2 the same shape is projected out of `IE`'s
@@ -18245,6 +18260,14 @@ implEntryFromTys iface (headTy::rest) reqs methods = match headTyconNameTy headT
 --    narrowing arm of this arc is F-3c (#1155), which owns
 --    `pickMostSpecificEntry`'s no-unique-minimum arm; this shape belongs on ITS
 --    declared flip list, not smuggled in here.  Left unchanged, deliberately.
+--
+--    🚨 THIS BULLET WAS RIGHT AND WAS ALMOST OVERRUN SIX LINES AWAY.  #1617/#1618's
+--    first cut gave the SHARED projection an arrow arm and an effect peel, which
+--    reached this census through `headTyconNameTy` and narrowed acceptance for
+--    exactly the reason written above — measured on both arms, `impl C Int` beside
+--    `impl C (Int -> Int)` or `impl C (<Stdout> Bool)` went from a stamped route to
+--    exit 1.  The fix is `censusHeadNameTy` (see `headTyNode`'s 🚨).  A projection
+--    with an acceptance reader and a routing reader is not one projection.
 --
 -- ⚠️ THERE IS A SECOND SET, and the audit above did not enumerate it — recorded here
 -- so the next reader inherits it rather than re-deriving it.  The set above is the
@@ -19451,10 +19474,42 @@ ieHeadCollidesByMethod env name hd = ieCountHeadByMethod env name hd > 1
 -- `None` and agree.  Adding the arm would be a behaviour change on a shape with
 -- no reported divergence; #1617's own body records the measurement that bounds
 -- this class at two.
+--
+-- 🚨 IT IS THE **DISPATCH** WALK, AND THAT IS NOT A SYNONYM FOR "THE" WALK.  The
+-- `TyEffect` peel and `headTyconTy`/`headTyconNameTy`'s `TyFun` arms are a
+-- ROUTING fix (#1617/#1618): they make the impl side name the tag the goal side
+-- already keys.  But `headTyconNameTy` also had two readers that decide
+-- **ACCEPTANCE** rather than routing — `implHeadTagForIface` (the impl-head
+-- census `routeUndeterminedTop` counts: one head → stamp it, two or more →
+-- `T-AMBIGUOUS-INSTANCE`) and `implTysIfMatch` (`groundOneObligation`'s
+-- candidate set, which gives up on more than one match).  Feeding the new arms
+-- to THOSE turns an ACCEPT into a REJECT on programs that never dispatch to an
+-- arrow or an effect head at all: `impl C Int` beside `impl C (Int -> Int)` or
+-- `impl C (<Stdout> Bool)` went from a stamped route to *"Ambiguous instance"*,
+-- exit 1, measured on both arms.  `implEntryFromTys`, the third reader, is a
+-- dispatch registrar (`ImplBuckets` is looked up by `bucketOf` at the GOAL's
+-- head) and correctly keeps the new arms.
+--
+-- So the acceptance pair reads `censusHeadNameTy` below, over `headTySpineNode`
+-- — the walk this one WAS before #1618 — and the split is the point rather than
+-- an accident of refactoring.  The narrowing may well be the right answer under
+-- DICT-SEMANTICS §3, but it is a language-semantics decision owned by F-3c
+-- (#1155), not a rider on a dispatch bug fix; the audit note above
+-- `implEntryFromTys` said exactly that about this exact census before either
+-- arm existed.
 headTyNode : Ty -> Ty
 headTyNode (TyApp a _) = headTyNode a
 headTyNode (TyEffect _ _ t) = headTyNode t
 headTyNode t = t
+
+-- The `TyApp`-spine-only head walk: `headTyNode` MINUS the `TyEffect` peel.
+-- Read by `censusHeadNameTy` alone, and it exists so the acceptance readers keep
+-- projecting exactly what they projected before #1617/#1618 — see the 🚨 above.
+-- Do NOT "unify" the two: the sharing is what carried the routing fix into an
+-- acceptance census in the first place.
+headTySpineNode : Ty -> Ty
+headTySpineNode (TyApp a _) = headTySpineNode a
+headTySpineNode t = t
 
 -- the head type constructor of an (unelaborated) AST type, as the IMPL-SIDE
 -- dispatch key — Stage A-2 unit A-2.2 (#1111).  The result was `Option String`
@@ -19513,11 +19568,49 @@ headTyconNameTy : Ty -> Option String
 headTyconNameTy t = match headTyNode t
   TyCon { tyConName = n } => Some n
   TyTuple ts => Some (tupleHeadTagTc (listLen ts))
-  -- kept in lockstep with `headTyconTy`'s new arm (#1617): this residual's three
-  -- readers (`implEntryFromTys`, `implHeadTagForIface`, `implTysIfMatch`) all
-  -- compare their answer against a tag the projection above minted, so an arm
-  -- present in one and absent from the other is a table that cannot be looked up.
+  -- kept in lockstep with `headTyconTy`'s new arm (#1617): this residual's
+  -- remaining reader, `implEntryFromTys`, registers `ImplBuckets` rows that are
+  -- looked up by `bucketOf` at a GOAL head the dispatch projection minted, so an
+  -- arm present in one and absent from the other is a table that cannot be
+  -- looked up.
+  --
+  -- ⚠️ IT HAD THREE READERS AND NOW HAS ONE.  The other two decided ACCEPTANCE,
+  -- not routing, and read `censusHeadNameTy` below instead — `headTyNode`'s 🚨
+  -- has the measurement.
   TyFun _ _ => Some funHeadTag
+  _ => None
+
+-- ── the ACCEPTANCE-census head name ───────────────────────────────────────
+-- `headTyconNameTy` AS IT WAS BEFORE #1617/#1618: the `TyApp` spine only, no
+-- `TyEffect` peel, no `TyFun` arm — so an arrow-headed or effect-headed impl
+-- answers `None` and is DROPPED from the census, exactly as it was.
+--
+-- 🚨 THIS IS NOT A DUPLICATE OF THE PROJECTION ABOVE, IT IS THE OTHER QUESTION.
+-- Above: *"which dispatch bucket does this impl head file into?"* — every impl
+-- needs an answer, and a synthetic bucket name (`__fun__`, or the peeled inner
+-- head of an effect row) is a fine one.  Here: *"does this impl head COUNT as a
+-- candidate when the goal is still undetermined?"* — where an extra `Some`
+-- turns a stamped route into `T-AMBIGUOUS-INSTANCE`, i.e. rejects a program.
+--
+-- Its two readers:
+--   * `implHeadTagForIface` → `implHeadTagsForIface` → `routeUndeterminedTop`
+--   * `implTysIfMatch` → `uniqueImplTysFor` → `groundOneObligation`
+--
+-- ⚠️ The second one is also UNREACHABLE at `__fun__` by construction, which is
+-- the independent corroboration that this split is coherent rather than merely
+-- conservative: its `tag` argument comes from `headTyconNameMono`, and that
+-- residual deliberately did NOT gain a `TFun` arm (see its own 🚨), so no goal
+-- can ever ask this census for `__fun__`.  Answering `Some funHeadTag` here
+-- could therefore only ever ENLARGE a match set nothing queries — pure
+-- narrowing, no routing gain.
+--
+-- Whoever flips this to the narrowing owns F-3c (#1155)'s flip list, an owner
+-- ruling, and fixtures for the programs it stops accepting.  Do not fold it back
+-- into `headTyconNameTy` to "remove duplication".
+censusHeadNameTy : Ty -> Option String
+censusHeadNameTy t = match headTySpineNode t
+  TyCon { tyConName = n } => Some n
+  TyTuple ts => Some (tupleHeadTagTc (listLen ts))
   _ => None
 
 -- The bare name of a head key, with [dflt] when there is NO head type
@@ -20166,9 +20259,13 @@ implHeadTagsForIface prog iface =
 
 implHeadTagForIface : String -> Decl -> List String
 implHeadTagForIface want (DAttrib _ d) = implHeadTagForIface want d
+-- ⚠️ `censusHeadNameTy`, NOT `headTyconNameTy`: this is the ACCEPTANCE census
+-- (one head → stamp it, two or more → `T-AMBIGUOUS-INSTANCE`), so an arrow- or
+-- effect-headed impl must stay DROPPED here the way it was before #1617/#1618.
+-- The derivation is at `headTyNode`.
 implHeadTagForIface want (DImpl { iface, tys, ... })
   | iface == want = match tys
-    headTy::_ => match headTyconNameTy headTy
+    headTy::_ => match censusHeadNameTy headTy
       Some tag => [tag]
       None => []
     [] => []
@@ -22417,13 +22514,13 @@ insertUnivImplAt ifk tys reqs (ImplUniverse conc hl tags) = match univReceiverTa
     -- `check` is GC-bound.
     let ifkey = regKeyOfTab ifk
     let hd = dispHeadTab hk
+    -- ⚠️ the third bucket is the ACCEPTANCE census, not a dispatch table — see
+    -- `univHeadCountsInCensus`.  It is the ONE of these three that an arrow- or
+    -- effect-headed impl must stay out of.
     ImplUniverse
       (mregAppendK (regKeyNTab [ifk, hd]) (tys, reqs) conc)
       hl
-      (regInsertK
-        ifkey
-        (sregAddK (regKeyOfTab hd) (fromOption sregEmpty (regLookupK ifkey tags)))
-        tags)
+      (univAddIfaceTag (univHeadCountsInCensus tys) ifkey hd tags)
   None => ImplUniverse conc (mregAppendK (regKeyOfTab ifk) (tys, reqs) hl) tags
 
 -- ✅ #1446 (T2): THE OBLIGATION CHANNEL'S INTERFACE KEY IS AN IDENTITY.  `Predicate`
@@ -22658,6 +22755,43 @@ dispHeadTab hk = TkBare NsType (headKeyName hk)
 univReceiverTag : List Ty -> Option HeadKey
 univReceiverTag (headTy::_) = headTyconTy headTy
 univReceiverTag [] = None
+
+-- ── the acceptance census, at the impl-UNIVERSE layer ─────────────────────
+-- 🚨 THE THIRD BUCKET (`iface → SET of head tags`) IS NOT A DISPATCH TABLE, AND
+-- IT MUST NOT BE POPULATED BY `univReceiverTag`.  Its only reader is
+-- `implCountForIfaceU`, whose only reader is `checkUndeterminedObligation`'s
+-- RULE 3 — *"the var escaped its group anchored to NOTHING and the iface has >= 2
+-- impls ⇒ genuinely ambiguous"*, a `T-AMBIGUOUS-INSTANCE` REJECT.  The other two
+-- buckets ARE dispatch tables and keep `univReceiverTag`.
+--
+-- Giving `headTyconTy` a `TyFun` arm and a `TyEffect` peel (#1617/#1618) is a
+-- ROUTING fix, but it reached this set through the shared writer and pushed the
+-- count from 1 to 2 for `impl C Int` beside `impl C (Int -> Int)` — measured on
+-- both arms, exit 0 → exit 1 on a program that never dispatches to the arrow.
+-- The set's own doc-comment already stated the rule this restores: *"headless
+-- impls contribute no tag, exactly as `implHeadTagsFromHeads` skipped them"* —
+-- and `implHeadTagsFromHeads`' successor, `implHeadTagForIface`, is the sibling
+-- census that reads `censusHeadNameTy` for exactly the same reason.
+--
+-- ⚠️ TWO WRITERS, ONE HELPER, ON PURPOSE.  `insertUnivImplAt` (Flat path) and
+-- `ieInsertRowAt` (`IE`, the Module path `ieUniverseAt` projects the universe
+-- out of) both write a tag set, and a fix applied to one is silently absent from
+-- the other — the parallel-driver hazard `AGENTS.md` names for
+-- `evalModules`/`cevalModules`.  Both call THIS.
+univHeadCountsInCensus : List Ty -> Bool
+univHeadCountsInCensus (headTy::_) = isSome (censusHeadNameTy headTy)
+univHeadCountsInCensus [] = False
+
+-- Add [hd] to [ifkey]'s tag set, or leave the set alone when the head does not
+-- count in the census.  The `True` arm is byte-identical to what both writers
+-- did inline before; the `False` arm is the restored drop.
+univAddIfaceTag : Bool -> RegKey -> TabKey -> Registry SetRegistry -> Registry SetRegistry
+univAddIfaceTag False _ _ tags = tags
+univAddIfaceTag True ifkey hd tags =
+  regInsertK
+    ifkey
+    (sregAddK (regKeyOfTab hd) (fromOption sregEmpty (regLookupK ifkey tags)))
+    tags
 
 -- ── PR3 keyed lookups (replace implMatches / implMatchesReceiver / findMatchingImplReqs /
 -- implCountForIface).  Each first scans the concrete "iface|tag" bucket, then the iface's
@@ -23136,9 +23270,13 @@ filterImplTysFor prog iface tag = flatMap (implTysIfMatch iface tag) prog
 
 implTysIfMatch : String -> String -> Decl -> List (List Ty)
 implTysIfMatch iface tag (DAttrib _ d) = implTysIfMatch iface tag d
+-- ⚠️ `censusHeadNameTy`, NOT `headTyconNameTy`: `uniqueImplTysFor` gives up on
+-- more than one match, so an extra `Some` here is an ACCEPTANCE narrowing (a
+-- multi-param obligation stops being ground, and the cascade is a downstream
+-- `T-AMBIGUOUS-INSTANCE`).  The derivation is at `headTyNode`.
 implTysIfMatch iface tag (DImpl { iface = ifn, tys, ... })
   | ifn == iface = match tys
-    headTy::_ => match headTyconNameTy headTy
+    headTy::_ => match censusHeadNameTy headTy
       Some t => if t == tag then [tys] else []
       None => []
     [] => []
@@ -30569,7 +30707,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "ieInsertRowKeys" ((PList) PWild (PVar "env")) (EVar "env"))
 (DFunDef false "ieInsertRowKeys" ((PCons (PVar "ifk") (PVar "rest")) (PVar "r") (PVar "env")) (EApp (EApp (EApp (EVar "ieInsertRowKeys") (EVar "rest")) (EVar "r")) (EApp (EApp (EApp (EVar "ieInsertRowAt") (EVar "ifk")) (EVar "r")) (EVar "env"))))
 (DTypeSig false "ieInsertRowAt" (TyFun (TyCon "TabKey") (TyFun (TyCon "ImplRow") (TyFun (TyCon "ImplEnv") (TyCon "ImplEnv")))))
-(DFunDef false "ieInsertRowAt" ((PVar "ifk") (PAs "r" (PCon "ImplRow" PWild PWild PWild (PVar "tys") PWild PWild)) (PVar "env")) (EMatch (EApp (EVar "univReceiverTag") (EVar "tys")) (arm (PCon "Some" (PVar "hk")) () (EBlock (DoLet false false (PVar "ifkey") (EApp (EVar "regKeyOfTab") (EVar "ifk"))) (DoLet false false (PVar "hd") (EApp (EVar "dispHeadTab") (EVar "hk"))) (DoExpr (EVariantUpdate "ImplEnv" (EVar "env") ((fa "ieConcrete" (EApp (EApp (EApp (EVar "mregAppendK") (EApp (EVar "regKeyNTab") (EListLit (EVar "ifk") (EVar "hd")))) (EVar "r")) (EFieldAccess (EVar "env") "ieConcrete"))) (fa "ieIfaceTags" (EApp (EApp (EApp (EVar "regInsertK") (EVar "ifkey")) (EApp (EApp (EVar "sregAddK") (EApp (EVar "regKeyOfTab") (EVar "hd"))) (EApp (EApp (EVar "fromOption") (EVar "sregEmpty")) (EApp (EApp (EVar "regLookupK") (EVar "ifkey")) (EFieldAccess (EVar "env") "ieIfaceTags"))))) (EFieldAccess (EVar "env") "ieIfaceTags")))))))) (arm (PCon "None") () (EVariantUpdate "ImplEnv" (EVar "env") ((fa "ieHeadless" (EApp (EApp (EApp (EVar "mregAppendK") (EApp (EVar "regKeyOfTab") (EVar "ifk"))) (EVar "r")) (EFieldAccess (EVar "env") "ieHeadless"))))))))
+(DFunDef false "ieInsertRowAt" ((PVar "ifk") (PAs "r" (PCon "ImplRow" PWild PWild PWild (PVar "tys") PWild PWild)) (PVar "env")) (EMatch (EApp (EVar "univReceiverTag") (EVar "tys")) (arm (PCon "Some" (PVar "hk")) () (EBlock (DoLet false false (PVar "ifkey") (EApp (EVar "regKeyOfTab") (EVar "ifk"))) (DoLet false false (PVar "hd") (EApp (EVar "dispHeadTab") (EVar "hk"))) (DoExpr (EVariantUpdate "ImplEnv" (EVar "env") ((fa "ieConcrete" (EApp (EApp (EApp (EVar "mregAppendK") (EApp (EVar "regKeyNTab") (EListLit (EVar "ifk") (EVar "hd")))) (EVar "r")) (EFieldAccess (EVar "env") "ieConcrete"))) (fa "ieIfaceTags" (EApp (EApp (EApp (EApp (EVar "univAddIfaceTag") (EApp (EVar "univHeadCountsInCensus") (EVar "tys"))) (EVar "ifkey")) (EVar "hd")) (EFieldAccess (EVar "env") "ieIfaceTags")))))))) (arm (PCon "None") () (EVariantUpdate "ImplEnv" (EVar "env") ((fa "ieHeadless" (EApp (EApp (EApp (EVar "mregAppendK") (EApp (EVar "regKeyOfTab") (EVar "ifk"))) (EVar "r")) (EFieldAccess (EVar "env") "ieHeadless"))))))))
 (DTypeSig false "ieUniverseAt" (TyFun (TyCon "Int") (TyFun (TyCon "ImplEnv") (TyCon "ImplUniverse"))))
 (DFunDef false "ieUniverseAt" ((PVar "cur") (PVar "env")) (EApp (EApp (EApp (EVar "ieSnapAt") (EVar "cur")) (EFieldAccess (EVar "env") "ieUnivSnaps")) (EVar "emptyImplUniverse")))
 (DTypeSig false "ieSnapAt" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "ImplUniverse"))) (TyFun (TyCon "ImplUniverse") (TyCon "ImplUniverse")))))
@@ -33219,10 +33357,15 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "headTyNode" ((PCon "TyApp" (PVar "a") PWild)) (EApp (EVar "headTyNode") (EVar "a")))
 (DFunDef false "headTyNode" ((PCon "TyEffect" PWild PWild (PVar "t"))) (EApp (EVar "headTyNode") (EVar "t")))
 (DFunDef false "headTyNode" ((PVar "t")) (EVar "t"))
+(DTypeSig false "headTySpineNode" (TyFun (TyCon "Ty") (TyCon "Ty")))
+(DFunDef false "headTySpineNode" ((PCon "TyApp" (PVar "a") PWild)) (EApp (EVar "headTySpineNode") (EVar "a")))
+(DFunDef false "headTySpineNode" ((PVar "t")) (EVar "t"))
 (DTypeSig false "headTyconTy" (TyFun (TyCon "Ty") (TyApp (TyCon "Option") (TyCon "HeadKey"))))
 (DFunDef false "headTyconTy" ((PVar "t")) (EMatch (EApp (EVar "headTyNode") (EVar "t")) (arm (PRec "TyCon" ((rf "tyConName" (PVar "n")) (rf "tyConOrigin" (PVar "o"))) false) () (EApp (EVar "Some") (EApp (EApp (EVar "headKeyOfCon") (EVar "o")) (EVar "n")))) (arm (PCon "TyTuple" (PVar "ts")) () (EApp (EVar "Some") (EApp (EApp (EVar "headKeyOfCon") (EVar "OriginBuiltin")) (EApp (EVar "tupleHeadTagTc") (EApp (EVar "listLen") (EVar "ts")))))) (arm (PCon "TyFun" PWild PWild) () (EApp (EVar "Some") (EApp (EApp (EVar "headKeyOfCon") (EVar "OriginBuiltin")) (EVar "funHeadTag")))) (arm PWild () (EVar "None"))))
 (DTypeSig false "headTyconNameTy" (TyFun (TyCon "Ty") (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "headTyconNameTy" ((PVar "t")) (EMatch (EApp (EVar "headTyNode") (EVar "t")) (arm (PRec "TyCon" ((rf "tyConName" (PVar "n"))) false) () (EApp (EVar "Some") (EVar "n"))) (arm (PCon "TyTuple" (PVar "ts")) () (EApp (EVar "Some") (EApp (EVar "tupleHeadTagTc") (EApp (EVar "listLen") (EVar "ts"))))) (arm (PCon "TyFun" PWild PWild) () (EApp (EVar "Some") (EVar "funHeadTag"))) (arm PWild () (EVar "None"))))
+(DTypeSig false "censusHeadNameTy" (TyFun (TyCon "Ty") (TyApp (TyCon "Option") (TyCon "String"))))
+(DFunDef false "censusHeadNameTy" ((PVar "t")) (EMatch (EApp (EVar "headTySpineNode") (EVar "t")) (arm (PRec "TyCon" ((rf "tyConName" (PVar "n"))) false) () (EApp (EVar "Some") (EVar "n"))) (arm (PCon "TyTuple" (PVar "ts")) () (EApp (EVar "Some") (EApp (EVar "tupleHeadTagTc") (EApp (EVar "listLen") (EVar "ts"))))) (arm PWild () (EVar "None"))))
 (DTypeSig false "headKeyNameOr" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "HeadKey")) (TyCon "String"))))
 (DFunDef false "headKeyNameOr" (PWild (PCon "Some" (PVar "hk"))) (EApp (EVar "headKeyName") (EVar "hk")))
 (DFunDef false "headKeyNameOr" ((PVar "dflt") (PCon "None")) (EVar "dflt"))
@@ -33326,7 +33469,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "implHeadTagsForIface" ((PVar "prog") (PVar "iface")) (EApp (EVar "dedup") (EApp (EApp (EVar "flatMap") (EApp (EVar "implHeadTagForIface") (EVar "iface"))) (EVar "prog"))))
 (DTypeSig false "implHeadTagForIface" (TyFun (TyCon "String") (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "implHeadTagForIface" ((PVar "want") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EVar "implHeadTagForIface") (EVar "want")) (EVar "d")))
-(DFunDef false "implHeadTagForIface" ((PVar "want") (PRec "DImpl" ((rf "iface" None) (rf "tys" None)) true)) (EIf (EBinOp "==" (EVar "iface") (EVar "want")) (EMatch (EVar "tys") (arm (PCons (PVar "headTy") PWild) () (EMatch (EApp (EVar "headTyconNameTy") (EVar "headTy")) (arm (PCon "Some" (PVar "tag")) () (EListLit (EVar "tag"))) (arm (PCon "None") () (EListLit)))) (arm (PList) () (EListLit))) (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "implHeadTagForIface" ((PVar "want") (PRec "DImpl" ((rf "iface" None) (rf "tys" None)) true)) (EIf (EBinOp "==" (EVar "iface") (EVar "want")) (EMatch (EVar "tys") (arm (PCons (PVar "headTy") PWild) () (EMatch (EApp (EVar "censusHeadNameTy") (EVar "headTy")) (arm (PCon "Some" (PVar "tag")) () (EListLit (EVar "tag"))) (arm (PCon "None") () (EListLit)))) (arm (PList) () (EListLit))) (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "implHeadTagForIface" (PWild PWild) (EListLit))
 (DTypeSig false "ambiguousImplMsg" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "ambiguousImplMsg" ((PVar "iface")) (EBinOp "++" (EBinOp "++" (ELit (LString "Ambiguous instance for `")) (EVar "iface")) (ELit (LString "`. Cannot determine which impl; add a type annotation"))))
@@ -33630,7 +33773,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "oblIfaceKeys" (TyFun (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "TabKey"))))
 (DFunDef false "oblIfaceKeys" ((PVar "ir")) (EMatch (EFieldAccess (EVar "ir") "irOrigin") (arm (PCon "OriginUnresolved") () (EListLit (EApp (EApp (EVar "TkBare") (EVar "NsIface")) (EFieldAccess (EVar "ir") "irName")))) (arm PWild () (EListLit (EApp (EVar "oblIfaceKey") (EVar "ir")) (EApp (EApp (EVar "TkBare") (EVar "NsIface")) (EFieldAccess (EVar "ir") "irName"))))))
 (DTypeSig false "insertUnivImplAt" (TyFun (TyCon "TabKey") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyFun (TyApp (TyCon "List") (TyCon "Require")) (TyFun (TyCon "ImplUniverse") (TyCon "ImplUniverse"))))))
-(DFunDef false "insertUnivImplAt" ((PVar "ifk") (PVar "tys") (PVar "reqs") (PCon "ImplUniverse" (PVar "conc") (PVar "hl") (PVar "tags"))) (EMatch (EApp (EVar "univReceiverTag") (EVar "tys")) (arm (PCon "Some" (PVar "hk")) () (EBlock (DoLet false false (PVar "ifkey") (EApp (EVar "regKeyOfTab") (EVar "ifk"))) (DoLet false false (PVar "hd") (EApp (EVar "dispHeadTab") (EVar "hk"))) (DoExpr (EApp (EApp (EApp (EVar "ImplUniverse") (EApp (EApp (EApp (EVar "mregAppendK") (EApp (EVar "regKeyNTab") (EListLit (EVar "ifk") (EVar "hd")))) (ETuple (EVar "tys") (EVar "reqs"))) (EVar "conc"))) (EVar "hl")) (EApp (EApp (EApp (EVar "regInsertK") (EVar "ifkey")) (EApp (EApp (EVar "sregAddK") (EApp (EVar "regKeyOfTab") (EVar "hd"))) (EApp (EApp (EVar "fromOption") (EVar "sregEmpty")) (EApp (EApp (EVar "regLookupK") (EVar "ifkey")) (EVar "tags"))))) (EVar "tags")))))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "ImplUniverse") (EVar "conc")) (EApp (EApp (EApp (EVar "mregAppendK") (EApp (EVar "regKeyOfTab") (EVar "ifk"))) (ETuple (EVar "tys") (EVar "reqs"))) (EVar "hl"))) (EVar "tags")))))
+(DFunDef false "insertUnivImplAt" ((PVar "ifk") (PVar "tys") (PVar "reqs") (PCon "ImplUniverse" (PVar "conc") (PVar "hl") (PVar "tags"))) (EMatch (EApp (EVar "univReceiverTag") (EVar "tys")) (arm (PCon "Some" (PVar "hk")) () (EBlock (DoLet false false (PVar "ifkey") (EApp (EVar "regKeyOfTab") (EVar "ifk"))) (DoLet false false (PVar "hd") (EApp (EVar "dispHeadTab") (EVar "hk"))) (DoExpr (EApp (EApp (EApp (EVar "ImplUniverse") (EApp (EApp (EApp (EVar "mregAppendK") (EApp (EVar "regKeyNTab") (EListLit (EVar "ifk") (EVar "hd")))) (ETuple (EVar "tys") (EVar "reqs"))) (EVar "conc"))) (EVar "hl")) (EApp (EApp (EApp (EApp (EVar "univAddIfaceTag") (EApp (EVar "univHeadCountsInCensus") (EVar "tys"))) (EVar "ifkey")) (EVar "hd")) (EVar "tags")))))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "ImplUniverse") (EVar "conc")) (EApp (EApp (EApp (EVar "mregAppendK") (EApp (EVar "regKeyOfTab") (EVar "ifk"))) (ETuple (EVar "tys") (EVar "reqs"))) (EVar "hl"))) (EVar "tags")))))
 (DTypeSig false "oblIfaceKey" (TyFun (TyCon "IfaceRef") (TyCon "TabKey")))
 (DFunDef false "oblIfaceKey" ((PVar "ir")) (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsIface")) (EFieldAccess (EVar "ir") "irOrigin")) (EFieldAccess (EVar "ir") "irName")))
 (DTypeSig false "dispHeadTab" (TyFun (TyCon "HeadKey") (TyCon "TabKey")))
@@ -33638,6 +33781,12 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "univReceiverTag" (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "Option") (TyCon "HeadKey"))))
 (DFunDef false "univReceiverTag" ((PCons (PVar "headTy") PWild)) (EApp (EVar "headTyconTy") (EVar "headTy")))
 (DFunDef false "univReceiverTag" ((PList)) (EVar "None"))
+(DTypeSig false "univHeadCountsInCensus" (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyCon "Bool")))
+(DFunDef false "univHeadCountsInCensus" ((PCons (PVar "headTy") PWild)) (EApp (EVar "isSome") (EApp (EVar "censusHeadNameTy") (EVar "headTy"))))
+(DFunDef false "univHeadCountsInCensus" ((PList)) (EVar "False"))
+(DTypeSig false "univAddIfaceTag" (TyFun (TyCon "Bool") (TyFun (TyCon "RegKey") (TyFun (TyCon "TabKey") (TyFun (TyApp (TyCon "Registry") (TyCon "SetRegistry")) (TyApp (TyCon "Registry") (TyCon "SetRegistry")))))))
+(DFunDef false "univAddIfaceTag" ((PCon "False") PWild PWild (PVar "tags")) (EVar "tags"))
+(DFunDef false "univAddIfaceTag" ((PCon "True") (PVar "ifkey") (PVar "hd") (PVar "tags")) (EApp (EApp (EApp (EVar "regInsertK") (EVar "ifkey")) (EApp (EApp (EVar "sregAddK") (EApp (EVar "regKeyOfTab") (EVar "hd"))) (EApp (EApp (EVar "fromOption") (EVar "sregEmpty")) (EApp (EApp (EVar "regLookupK") (EVar "ifkey")) (EVar "tags"))))) (EVar "tags")))
 (DTypeSig false "implMatchesU" (TyFun (TyCon "ImplUniverse") (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "Bool")))))
 (DFunDef false "implMatchesU" (PWild PWild (PList)) (EVar "False"))
 (DFunDef false "implMatchesU" ((PVar "univ") (PVar "iface") (PCons (PVar "a0") (PVar "rest"))) (EBinOp "||" (EApp (EApp (EVar "bucketArgsMatch") (EApp (EApp (EApp (EVar "univConcreteBucket") (EVar "univ")) (EVar "iface")) (EApp (EVar "headTyconMono") (EVar "a0")))) (EBinOp "::" (EVar "a0") (EVar "rest"))) (EApp (EApp (EVar "bucketArgsMatch") (EApp (EApp (EVar "univHeadless") (EVar "univ")) (EVar "iface"))) (EBinOp "::" (EVar "a0") (EVar "rest")))))
@@ -33700,7 +33849,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "filterImplTysFor" ((PVar "prog") (PVar "iface") (PVar "tag")) (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "implTysIfMatch") (EVar "iface")) (EVar "tag"))) (EVar "prog")))
 (DTypeSig false "implTysIfMatch" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Ty")))))))
 (DFunDef false "implTysIfMatch" ((PVar "iface") (PVar "tag") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EApp (EVar "implTysIfMatch") (EVar "iface")) (EVar "tag")) (EVar "d")))
-(DFunDef false "implTysIfMatch" ((PVar "iface") (PVar "tag") (PRec "DImpl" ((rf "iface" (PVar "ifn")) (rf "tys" None)) true)) (EIf (EBinOp "==" (EVar "ifn") (EVar "iface")) (EMatch (EVar "tys") (arm (PCons (PVar "headTy") PWild) () (EMatch (EApp (EVar "headTyconNameTy") (EVar "headTy")) (arm (PCon "Some" (PVar "t")) () (EIf (EBinOp "==" (EVar "t") (EVar "tag")) (EListLit (EVar "tys")) (EListLit))) (arm (PCon "None") () (EListLit)))) (arm (PList) () (EListLit))) (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "implTysIfMatch" ((PVar "iface") (PVar "tag") (PRec "DImpl" ((rf "iface" (PVar "ifn")) (rf "tys" None)) true)) (EIf (EBinOp "==" (EVar "ifn") (EVar "iface")) (EMatch (EVar "tys") (arm (PCons (PVar "headTy") PWild) () (EMatch (EApp (EVar "censusHeadNameTy") (EVar "headTy")) (arm (PCon "Some" (PVar "t")) () (EIf (EBinOp "==" (EVar "t") (EVar "tag")) (EListLit (EVar "tys")) (EListLit))) (arm (PCon "None") () (EListLit)))) (arm (PList) () (EListLit))) (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "implTysIfMatch" (PWild PWild PWild) (EListLit))
 (DTypeSig false "substTyVars" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))) (TyFun (TyCon "Ty") (TyCon "Ty"))))
 (DFunDef false "substTyVars" ((PVar "sub") (PCon "TyVar" (PVar "n"))) (EApp (EApp (EVar "fromOption") (EApp (EVar "TyVar") (EVar "n"))) (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EVar "sub"))))
@@ -35585,7 +35734,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "ieInsertRowKeys" ((PList) PWild (PVar "env")) (EVar "env"))
 (DFunDef false "ieInsertRowKeys" ((PCons (PVar "ifk") (PVar "rest")) (PVar "r") (PVar "env")) (EApp (EApp (EApp (EVar "ieInsertRowKeys") (EVar "rest")) (EVar "r")) (EApp (EApp (EApp (EVar "ieInsertRowAt") (EVar "ifk")) (EVar "r")) (EVar "env"))))
 (DTypeSig false "ieInsertRowAt" (TyFun (TyCon "TabKey") (TyFun (TyCon "ImplRow") (TyFun (TyCon "ImplEnv") (TyCon "ImplEnv")))))
-(DFunDef false "ieInsertRowAt" ((PVar "ifk") (PAs "r" (PCon "ImplRow" PWild PWild PWild (PVar "tys") PWild PWild)) (PVar "env")) (EMatch (EApp (EVar "univReceiverTag") (EVar "tys")) (arm (PCon "Some" (PVar "hk")) () (EBlock (DoLet false false (PVar "ifkey") (EApp (EVar "regKeyOfTab") (EVar "ifk"))) (DoLet false false (PVar "hd") (EApp (EVar "dispHeadTab") (EVar "hk"))) (DoExpr (EVariantUpdate "ImplEnv" (EVar "env") ((fa "ieConcrete" (EApp (EApp (EApp (EVar "mregAppendK") (EApp (EVar "regKeyNTab") (EListLit (EVar "ifk") (EVar "hd")))) (EVar "r")) (EFieldAccess (EVar "env") "ieConcrete"))) (fa "ieIfaceTags" (EApp (EApp (EApp (EVar "regInsertK") (EVar "ifkey")) (EApp (EApp (EVar "sregAddK") (EApp (EVar "regKeyOfTab") (EVar "hd"))) (EApp (EApp (EVar "fromOption") (EVar "sregEmpty")) (EApp (EApp (EVar "regLookupK") (EVar "ifkey")) (EFieldAccess (EVar "env") "ieIfaceTags"))))) (EFieldAccess (EVar "env") "ieIfaceTags")))))))) (arm (PCon "None") () (EVariantUpdate "ImplEnv" (EVar "env") ((fa "ieHeadless" (EApp (EApp (EApp (EVar "mregAppendK") (EApp (EVar "regKeyOfTab") (EVar "ifk"))) (EVar "r")) (EFieldAccess (EVar "env") "ieHeadless"))))))))
+(DFunDef false "ieInsertRowAt" ((PVar "ifk") (PAs "r" (PCon "ImplRow" PWild PWild PWild (PVar "tys") PWild PWild)) (PVar "env")) (EMatch (EApp (EVar "univReceiverTag") (EVar "tys")) (arm (PCon "Some" (PVar "hk")) () (EBlock (DoLet false false (PVar "ifkey") (EApp (EVar "regKeyOfTab") (EVar "ifk"))) (DoLet false false (PVar "hd") (EApp (EVar "dispHeadTab") (EVar "hk"))) (DoExpr (EVariantUpdate "ImplEnv" (EVar "env") ((fa "ieConcrete" (EApp (EApp (EApp (EVar "mregAppendK") (EApp (EVar "regKeyNTab") (EListLit (EVar "ifk") (EVar "hd")))) (EVar "r")) (EFieldAccess (EVar "env") "ieConcrete"))) (fa "ieIfaceTags" (EApp (EApp (EApp (EApp (EVar "univAddIfaceTag") (EApp (EVar "univHeadCountsInCensus") (EVar "tys"))) (EVar "ifkey")) (EVar "hd")) (EFieldAccess (EVar "env") "ieIfaceTags")))))))) (arm (PCon "None") () (EVariantUpdate "ImplEnv" (EVar "env") ((fa "ieHeadless" (EApp (EApp (EApp (EVar "mregAppendK") (EApp (EVar "regKeyOfTab") (EVar "ifk"))) (EVar "r")) (EFieldAccess (EVar "env") "ieHeadless"))))))))
 (DTypeSig false "ieUniverseAt" (TyFun (TyCon "Int") (TyFun (TyCon "ImplEnv") (TyCon "ImplUniverse"))))
 (DFunDef false "ieUniverseAt" ((PVar "cur") (PVar "env")) (EApp (EApp (EApp (EVar "ieSnapAt") (EVar "cur")) (EFieldAccess (EVar "env") "ieUnivSnaps")) (EVar "emptyImplUniverse")))
 (DTypeSig false "ieSnapAt" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "ImplUniverse"))) (TyFun (TyCon "ImplUniverse") (TyCon "ImplUniverse")))))
@@ -38235,10 +38384,15 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "headTyNode" ((PCon "TyApp" (PVar "a") PWild)) (EApp (EVar "headTyNode") (EVar "a")))
 (DFunDef false "headTyNode" ((PCon "TyEffect" PWild PWild (PVar "t"))) (EApp (EVar "headTyNode") (EVar "t")))
 (DFunDef false "headTyNode" ((PVar "t")) (EVar "t"))
+(DTypeSig false "headTySpineNode" (TyFun (TyCon "Ty") (TyCon "Ty")))
+(DFunDef false "headTySpineNode" ((PCon "TyApp" (PVar "a") PWild)) (EApp (EVar "headTySpineNode") (EVar "a")))
+(DFunDef false "headTySpineNode" ((PVar "t")) (EVar "t"))
 (DTypeSig false "headTyconTy" (TyFun (TyCon "Ty") (TyApp (TyCon "Option") (TyCon "HeadKey"))))
 (DFunDef false "headTyconTy" ((PVar "t")) (EMatch (EApp (EVar "headTyNode") (EVar "t")) (arm (PRec "TyCon" ((rf "tyConName" (PVar "n")) (rf "tyConOrigin" (PVar "o"))) false) () (EApp (EVar "Some") (EApp (EApp (EVar "headKeyOfCon") (EVar "o")) (EVar "n")))) (arm (PCon "TyTuple" (PVar "ts")) () (EApp (EVar "Some") (EApp (EApp (EVar "headKeyOfCon") (EVar "OriginBuiltin")) (EApp (EVar "tupleHeadTagTc") (EApp (EVar "listLen") (EVar "ts")))))) (arm (PCon "TyFun" PWild PWild) () (EApp (EVar "Some") (EApp (EApp (EVar "headKeyOfCon") (EVar "OriginBuiltin")) (EVar "funHeadTag")))) (arm PWild () (EVar "None"))))
 (DTypeSig false "headTyconNameTy" (TyFun (TyCon "Ty") (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "headTyconNameTy" ((PVar "t")) (EMatch (EApp (EVar "headTyNode") (EVar "t")) (arm (PRec "TyCon" ((rf "tyConName" (PVar "n"))) false) () (EApp (EVar "Some") (EVar "n"))) (arm (PCon "TyTuple" (PVar "ts")) () (EApp (EVar "Some") (EApp (EVar "tupleHeadTagTc") (EApp (EVar "listLen") (EVar "ts"))))) (arm (PCon "TyFun" PWild PWild) () (EApp (EVar "Some") (EVar "funHeadTag"))) (arm PWild () (EVar "None"))))
+(DTypeSig false "censusHeadNameTy" (TyFun (TyCon "Ty") (TyApp (TyCon "Option") (TyCon "String"))))
+(DFunDef false "censusHeadNameTy" ((PVar "t")) (EMatch (EApp (EVar "headTySpineNode") (EVar "t")) (arm (PRec "TyCon" ((rf "tyConName" (PVar "n"))) false) () (EApp (EVar "Some") (EVar "n"))) (arm (PCon "TyTuple" (PVar "ts")) () (EApp (EVar "Some") (EApp (EVar "tupleHeadTagTc") (EApp (EVar "listLen") (EVar "ts"))))) (arm PWild () (EVar "None"))))
 (DTypeSig false "headKeyNameOr" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "HeadKey")) (TyCon "String"))))
 (DFunDef false "headKeyNameOr" (PWild (PCon "Some" (PVar "hk"))) (EApp (EVar "headKeyName") (EVar "hk")))
 (DFunDef false "headKeyNameOr" ((PVar "dflt") (PCon "None")) (EVar "dflt"))
@@ -38342,7 +38496,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "implHeadTagsForIface" ((PVar "prog") (PVar "iface")) (EApp (EVar "dedup") (EApp (EApp (EDictApp "flatMap") (EApp (EVar "implHeadTagForIface") (EVar "iface"))) (EVar "prog"))))
 (DTypeSig false "implHeadTagForIface" (TyFun (TyCon "String") (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "implHeadTagForIface" ((PVar "want") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EVar "implHeadTagForIface") (EVar "want")) (EVar "d")))
-(DFunDef false "implHeadTagForIface" ((PVar "want") (PRec "DImpl" ((rf "iface" None) (rf "tys" None)) true)) (EIf (EBinOp "==" (EVar "iface") (EVar "want")) (EMatch (EVar "tys") (arm (PCons (PVar "headTy") PWild) () (EMatch (EApp (EVar "headTyconNameTy") (EVar "headTy")) (arm (PCon "Some" (PVar "tag")) () (EListLit (EVar "tag"))) (arm (PCon "None") () (EListLit)))) (arm (PList) () (EListLit))) (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "implHeadTagForIface" ((PVar "want") (PRec "DImpl" ((rf "iface" None) (rf "tys" None)) true)) (EIf (EBinOp "==" (EVar "iface") (EVar "want")) (EMatch (EVar "tys") (arm (PCons (PVar "headTy") PWild) () (EMatch (EApp (EVar "censusHeadNameTy") (EVar "headTy")) (arm (PCon "Some" (PVar "tag")) () (EListLit (EVar "tag"))) (arm (PCon "None") () (EListLit)))) (arm (PList) () (EListLit))) (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "implHeadTagForIface" (PWild PWild) (EListLit))
 (DTypeSig false "ambiguousImplMsg" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "ambiguousImplMsg" ((PVar "iface")) (EBinOp "++" (EBinOp "++" (ELit (LString "Ambiguous instance for `")) (EVar "iface")) (ELit (LString "`. Cannot determine which impl; add a type annotation"))))
@@ -38646,7 +38800,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "oblIfaceKeys" (TyFun (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "TabKey"))))
 (DFunDef false "oblIfaceKeys" ((PVar "ir")) (EMatch (EFieldAccess (EVar "ir") "irOrigin") (arm (PCon "OriginUnresolved") () (EListLit (EApp (EApp (EVar "TkBare") (EVar "NsIface")) (EFieldAccess (EVar "ir") "irName")))) (arm PWild () (EListLit (EApp (EVar "oblIfaceKey") (EVar "ir")) (EApp (EApp (EVar "TkBare") (EVar "NsIface")) (EFieldAccess (EVar "ir") "irName"))))))
 (DTypeSig false "insertUnivImplAt" (TyFun (TyCon "TabKey") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyFun (TyApp (TyCon "List") (TyCon "Require")) (TyFun (TyCon "ImplUniverse") (TyCon "ImplUniverse"))))))
-(DFunDef false "insertUnivImplAt" ((PVar "ifk") (PVar "tys") (PVar "reqs") (PCon "ImplUniverse" (PVar "conc") (PVar "hl") (PVar "tags"))) (EMatch (EApp (EVar "univReceiverTag") (EVar "tys")) (arm (PCon "Some" (PVar "hk")) () (EBlock (DoLet false false (PVar "ifkey") (EApp (EVar "regKeyOfTab") (EVar "ifk"))) (DoLet false false (PVar "hd") (EApp (EVar "dispHeadTab") (EVar "hk"))) (DoExpr (EApp (EApp (EApp (EVar "ImplUniverse") (EApp (EApp (EApp (EVar "mregAppendK") (EApp (EVar "regKeyNTab") (EListLit (EVar "ifk") (EVar "hd")))) (ETuple (EVar "tys") (EVar "reqs"))) (EVar "conc"))) (EVar "hl")) (EApp (EApp (EApp (EVar "regInsertK") (EVar "ifkey")) (EApp (EApp (EVar "sregAddK") (EApp (EVar "regKeyOfTab") (EVar "hd"))) (EApp (EApp (EVar "fromOption") (EVar "sregEmpty")) (EApp (EApp (EVar "regLookupK") (EVar "ifkey")) (EVar "tags"))))) (EVar "tags")))))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "ImplUniverse") (EVar "conc")) (EApp (EApp (EApp (EVar "mregAppendK") (EApp (EVar "regKeyOfTab") (EVar "ifk"))) (ETuple (EVar "tys") (EVar "reqs"))) (EVar "hl"))) (EVar "tags")))))
+(DFunDef false "insertUnivImplAt" ((PVar "ifk") (PVar "tys") (PVar "reqs") (PCon "ImplUniverse" (PVar "conc") (PVar "hl") (PVar "tags"))) (EMatch (EApp (EVar "univReceiverTag") (EVar "tys")) (arm (PCon "Some" (PVar "hk")) () (EBlock (DoLet false false (PVar "ifkey") (EApp (EVar "regKeyOfTab") (EVar "ifk"))) (DoLet false false (PVar "hd") (EApp (EVar "dispHeadTab") (EVar "hk"))) (DoExpr (EApp (EApp (EApp (EVar "ImplUniverse") (EApp (EApp (EApp (EVar "mregAppendK") (EApp (EVar "regKeyNTab") (EListLit (EVar "ifk") (EVar "hd")))) (ETuple (EVar "tys") (EVar "reqs"))) (EVar "conc"))) (EVar "hl")) (EApp (EApp (EApp (EApp (EVar "univAddIfaceTag") (EApp (EVar "univHeadCountsInCensus") (EVar "tys"))) (EVar "ifkey")) (EVar "hd")) (EVar "tags")))))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "ImplUniverse") (EVar "conc")) (EApp (EApp (EApp (EVar "mregAppendK") (EApp (EVar "regKeyOfTab") (EVar "ifk"))) (ETuple (EVar "tys") (EVar "reqs"))) (EVar "hl"))) (EVar "tags")))))
 (DTypeSig false "oblIfaceKey" (TyFun (TyCon "IfaceRef") (TyCon "TabKey")))
 (DFunDef false "oblIfaceKey" ((PVar "ir")) (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsIface")) (EFieldAccess (EVar "ir") "irOrigin")) (EFieldAccess (EVar "ir") "irName")))
 (DTypeSig false "dispHeadTab" (TyFun (TyCon "HeadKey") (TyCon "TabKey")))
@@ -38654,6 +38808,12 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "univReceiverTag" (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "Option") (TyCon "HeadKey"))))
 (DFunDef false "univReceiverTag" ((PCons (PVar "headTy") PWild)) (EApp (EVar "headTyconTy") (EVar "headTy")))
 (DFunDef false "univReceiverTag" ((PList)) (EVar "None"))
+(DTypeSig false "univHeadCountsInCensus" (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyCon "Bool")))
+(DFunDef false "univHeadCountsInCensus" ((PCons (PVar "headTy") PWild)) (EApp (EVar "isSome") (EApp (EVar "censusHeadNameTy") (EVar "headTy"))))
+(DFunDef false "univHeadCountsInCensus" ((PList)) (EVar "False"))
+(DTypeSig false "univAddIfaceTag" (TyFun (TyCon "Bool") (TyFun (TyCon "RegKey") (TyFun (TyCon "TabKey") (TyFun (TyApp (TyCon "Registry") (TyCon "SetRegistry")) (TyApp (TyCon "Registry") (TyCon "SetRegistry")))))))
+(DFunDef false "univAddIfaceTag" ((PCon "False") PWild PWild (PVar "tags")) (EVar "tags"))
+(DFunDef false "univAddIfaceTag" ((PCon "True") (PVar "ifkey") (PVar "hd") (PVar "tags")) (EApp (EApp (EApp (EVar "regInsertK") (EVar "ifkey")) (EApp (EApp (EVar "sregAddK") (EApp (EVar "regKeyOfTab") (EVar "hd"))) (EApp (EApp (EVar "fromOption") (EVar "sregEmpty")) (EApp (EApp (EVar "regLookupK") (EVar "ifkey")) (EVar "tags"))))) (EVar "tags")))
 (DTypeSig false "implMatchesU" (TyFun (TyCon "ImplUniverse") (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "Bool")))))
 (DFunDef false "implMatchesU" (PWild PWild (PList)) (EVar "False"))
 (DFunDef false "implMatchesU" ((PVar "univ") (PVar "iface") (PCons (PVar "a0") (PVar "rest"))) (EBinOp "||" (EApp (EApp (EVar "bucketArgsMatch") (EApp (EApp (EApp (EVar "univConcreteBucket") (EVar "univ")) (EVar "iface")) (EApp (EVar "headTyconMono") (EVar "a0")))) (EBinOp "::" (EVar "a0") (EVar "rest"))) (EApp (EApp (EVar "bucketArgsMatch") (EApp (EApp (EVar "univHeadless") (EVar "univ")) (EVar "iface"))) (EBinOp "::" (EVar "a0") (EVar "rest")))))
@@ -38716,7 +38876,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "filterImplTysFor" ((PVar "prog") (PVar "iface") (PVar "tag")) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "implTysIfMatch") (EVar "iface")) (EVar "tag"))) (EVar "prog")))
 (DTypeSig false "implTysIfMatch" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Ty")))))))
 (DFunDef false "implTysIfMatch" ((PVar "iface") (PVar "tag") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EApp (EVar "implTysIfMatch") (EVar "iface")) (EVar "tag")) (EVar "d")))
-(DFunDef false "implTysIfMatch" ((PVar "iface") (PVar "tag") (PRec "DImpl" ((rf "iface" (PVar "ifn")) (rf "tys" None)) true)) (EIf (EBinOp "==" (EVar "ifn") (EVar "iface")) (EMatch (EVar "tys") (arm (PCons (PVar "headTy") PWild) () (EMatch (EApp (EVar "headTyconNameTy") (EVar "headTy")) (arm (PCon "Some" (PVar "t")) () (EIf (EBinOp "==" (EVar "t") (EVar "tag")) (EListLit (EVar "tys")) (EListLit))) (arm (PCon "None") () (EListLit)))) (arm (PList) () (EListLit))) (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "implTysIfMatch" ((PVar "iface") (PVar "tag") (PRec "DImpl" ((rf "iface" (PVar "ifn")) (rf "tys" None)) true)) (EIf (EBinOp "==" (EVar "ifn") (EVar "iface")) (EMatch (EVar "tys") (arm (PCons (PVar "headTy") PWild) () (EMatch (EApp (EVar "censusHeadNameTy") (EVar "headTy")) (arm (PCon "Some" (PVar "t")) () (EIf (EBinOp "==" (EVar "t") (EVar "tag")) (EListLit (EVar "tys")) (EListLit))) (arm (PCon "None") () (EListLit)))) (arm (PList) () (EListLit))) (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "implTysIfMatch" (PWild PWild PWild) (EListLit))
 (DTypeSig false "substTyVars" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))) (TyFun (TyCon "Ty") (TyCon "Ty"))))
 (DFunDef false "substTyVars" ((PVar "sub") (PCon "TyVar" (PVar "n"))) (EApp (EApp (EVar "fromOption") (EApp (EVar "TyVar") (EVar "n"))) (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EMethodRef "sub"))))
