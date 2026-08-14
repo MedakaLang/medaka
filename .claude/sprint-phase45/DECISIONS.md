@@ -2111,3 +2111,60 @@ occurrence goes unbound) and has been ordered.
 
 Repair round dispatched to W2 with all nine, my two corrections stated as mine, and an instruction to
 verify every item — including my corrections — before acting.
+
+## RUN-P45-057 — ✅ BITE 0 LANDED. PR #1638 MERGED (`22:39:00Z`), #1630 CLOSED by its own keyword.
+First merged unit of the implementation phase. Closure carries the landing sha via the plain
+`Fixes #1630.` — the policy's prescribed form, not a desk close.
+
+## RUN-P45-058 — SEMANTICS-LENS REVIEW OF #1640: could not break it, and the boundary work is the deliverable
+
+Two cold-built arms (PR `5d3745e3` / base `8eb0d359`), env clean, `MEDAKA_STRICT=1`,
+redirect-then-read-`$?`. **Verdict: no false reject, no missed member of the intended set.**
+
+**The prelude carve-out — the worst-outcome boundary — holds on 105 NAMES, not on the one fixture.**
+One program per name: all **50** method names across `core.mdk`'s 23 interfaces plus **55** prelude
+standalones. `check` output **byte-identical base vs PR on all 105**; `test` byte-identical on the 50;
+**zero** `R-DUPLICATE-IFACE-METHOD` anywhere. The exit-1 cases (`map`, `eq`, `compare`, …) are
+pre-existing arity/type errors, identical on base. And the *reason* was verified structurally, not just
+observed: `duplicateErrors` receives `preludeDecls` and demonstrably ignores it, the doctest path passes
+`livePrelude` as a **separate argument** rather than flattening it into `prog` (`test_cmd.mdk:385-393`),
+and the REPL's `combined` is user decls only — **so no path exists by which prelude decls enter `prog`.**
+That is the difference between "I probed it" and "it cannot happen."
+
+**Imports never participate:** 8 spellings (`{I}`, `.*`, `as A`, bare, own+imported, `export import`
+chain, chain+own, entry re-exporting) plus a 2-hop dependency — all byte-identical. The check fires only
+on a module's OWN decls, including when that module is two hops down, which is correct.
+
+**Also holds:** a method declared twice *within* one interface; method-vs-function/local/field names;
+defaults, `requires`, `deriving`, multi-impl; `@attrib` on either or both interfaces **and** the sibling
+duplicate-NAME check's own gap unchanged; three-way collisions naming the first declarer; every verb
+including `--json`, REPL, LSP `publishDiagnostics`, and the single-file path. `make check-self` and
+`snapshot-check` green; 29 stdlib modules checked, the two failures identical on base. **No `List`-as-set
+quadratic** — the walk is `OrdMap`-keyed, single pass.
+
+⭐ **A static census bounds what any further probing could find:** exactly **5** files in 3171 have two
+interfaces sharing a method name in one module — the 2 new resolve fixtures, the 2 kept iface_order
+fixtures, and one non-gated `.claude/` scratch repro. Nothing imports any of them, and Q1 reads only a
+module's own decls, **so no other file in the tree CAN change acceptance.** A full 3171-file differential
+was still running and its partial result agreed.
+
+**The reviewer RETRACTED its own F2** after finding the loc-less rendering identical on base — the
+behaviour it flagged is the pre-existing shape for every location-less resolve error. Retraction counted
+as a success, as it is here.
+
+### RULING on its F1 (S3): leave the message as-is, knowingly, and say so.
+`@inline interface E1` + `interface E1` (duplicate NAME, same method) makes the new diagnostic read
+*"declared by two interfaces in this module: 'E1' and 'E1'"* with the advice *"merge the two
+interfaces"*. The message is odd, but **the shape only exists because #1228 drops the attributed decl
+before the duplicate-NAME check can fire** — special-casing a message for a program that should never
+have been accepted adds a branch that must be maintained past the real fix. ⇒ **Record it in the PR body
+and on #1228 as a consequence of that drop, do not special-case it.** Base silently ACCEPTS this program
+at exit 0; the PR at least rejects it, so this is loud→louder, not a regression.
+
+**Its F3 is the evidence lens's F1** — already repaired in this round, independently found by both
+lenses, which is the two-lens split converging rather than duplicating.
+
+**Observation carried forward, not a defect:** Q1 makes the ambiguity unrepresentable **intra-module
+only**; the cross-module axis stays fully representable, and the two re-posed pins are the proof. **A
+later interface-identity keying unit still inherits an order-dependent supply cross-module.** The PR
+states this in three places and does not oversell it.
