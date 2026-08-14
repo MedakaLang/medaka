@@ -12,31 +12,34 @@
 -- an arrow impl and an effect impl and then asserted only ORDINARY dispatch,
 -- where the goal head is concrete — so the readers the change actually
 -- perturbed were never consulted at all. Those readers do not decide ROUTING,
--- they decide ACCEPTANCE, and reaching them needs two shapes the old fixture
--- did not have:
+-- they decide ACCEPTANCE.
 --
---   * an UNDETERMINED constraint (`szc []` fixes nothing). `check` resolves it
---     by COUNTING an interface's impl heads — `implCountForIfaceU >= 2` is
---     `T-AMBIGUOUS-INSTANCE`, exit 1. If the arrow and effect impls below were
---     counted, this program would stop COMPILING even though neither is ever
---     dispatched to.
---   * a MULTI-PARAM interface (`Conv`) with an effect-headed sibling impl,
---     which `groundOneObligation` grounds by asking for the UNIQUE impl at a
---     head tag; a second match makes it give up, `b` stays undetermined, and
---     the failure surfaces as a `Display` cascade at `println`.
+-- The multi-param `Conv` block below is one of them, reachable from a fixture
+-- that must also BUILD: `groundOneObligation` grounds `b` by asking for the
+-- UNIQUE `Conv` impl at head tag `Int`, and if the effect-headed sibling were
+-- counted there would be two matches and `b` would stay undetermined — on an
+-- impl that is never dispatched to.
 --
--- Both would go from exit 0 to exit 1 under an acceptance narrowing, which is
--- what makes this fixture able to fail. MEASURED: on the branch commit that had
--- the narrowing (`a8a226cb`) this file is rejected at `check`; on the pre-change
--- base (`aaa43716`) and on the fixed branch it prints the same value below.
+-- 🚨 MEASURED ON THE COMMIT THAT HAD THE NARROWING (`a8a226cb`), THIS FILE
+-- SEGFAULTS — and the shape of that failure is why this fixture is worth more
+-- than a rejection would be. There: `check` exits 0, `run` prints the right
+-- `(48, True, True)`, `build` exits 0, and the BUILT BINARY dies with
+-- `E-FATAL-SIGNAL: fatal memory fault (segmentation fault)`, reproducibly. The
+-- ungrounded obligation is also a missing dict parameter, so the front end
+-- accepts a program the emitter then mis-elaborates. On base `aaa43716` and on
+-- the amended branch all four cells agree on `(48, True, True)`.
 --
--- ⚠️ `undeterminedSz` IS NEVER CALLED, AND THAT IS THE POINT, not laziness.
--- `check` still poses the constraint (that is the assertion), while the emitter
--- drops the dead binding — which keeps this fixture BUILDABLE. An undetermined
--- constraint reached from `main` does not build on ANY arm, base included (a
--- single-impl `Sz` with no arrow and no effect anywhere still E-PANICs
--- `no impl of method 'szc' for type 'List'` at `build` on base `aaa43716`);
--- that is a separate, pre-existing defect and this fixture must not import it.
+-- ⚠️ THE SECOND ACCEPTANCE READER — the impl-head COUNT behind
+-- `T-AMBIGUOUS-INSTANCE` on an UNDETERMINED constraint — is NOT asserted here,
+-- deliberately, and the reason is not that it does not matter. An undetermined
+-- constraint leaves the site's route unstamped, and the emitter then E-PANICs
+-- `no impl of method '…' for type '…'` on EVERY arm including the pre-change
+-- base — a single-impl interface with no arrow and no effect anywhere still
+-- fails to `build` on base `aaa43716` — so a fixture in a corpus that BUILDS
+-- cannot carry that shape without going red for a defect it does not own. It is
+-- asserted where it belongs, in a CHECK-only corpus:
+-- `test/check_json_fixtures/impl_head_census_acceptance.mdk`, whose golden is
+-- an EMPTY diagnostics array and which `a8a226cb` reddens.
 --
 -- Expected `(48, True, True)`, hand-derived slot by slot, and byte-identical to
 -- what the pre-change compiler printed:
@@ -50,21 +53,17 @@
 --      `impl Conv Int Bool`, so `conv 1` is `1 > 0` = `True`.
 interface Sz a where
   sz : a -> Int
-  szc : List a -> Int
 
 impl Sz Bool where
   sz _ = 7
-  szc _ = 21
 
 -- present, never dispatched to
 impl Sz (Int -> Int) where
   sz _ = 5
-  szc _ = 55
 
 -- present, never dispatched to
 impl Sz (<Stdout> Float) where
   sz _ = 6
-  szc _ = 66
 
 interface Conv a b where
   conv : a -> b
@@ -80,9 +79,5 @@ data Box a = Box a
 
 unwrap : Box Int -> Int
 unwrap (Box n) = n
-
--- never called: it exists to pose an UNDETERMINED `Sz` constraint at check time
-undeterminedSz : Int
-undeterminedSz = szc []
 
 main = println (unwrap (Box 41) + sz True, [1, 2, 3] == [1, 2, 3], conv 1)
