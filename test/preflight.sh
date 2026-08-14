@@ -410,6 +410,10 @@ for f in $changed; do
       add 'diff_compiler_resolve*'; add 'diff_compiler_snapshot*'; add 'diff_compiler_check*'
       add 'diff_compiler_origin_agreement'
       add 'diff_compiler_import_order'
+      # G-0: the SAME argument on a different axis. resolve/marker decide which
+      # interface an occurrence of a shared method name belongs to, so they own the
+      # interface-DECLARATION-order dependence the way they own the clause-order one.
+      add 'diff_compiler_iface_order'
       add 'diff_compiler_dict_semantics' ;;
     compiler/frontend/exhaust.mdk)
       add 'diff_compiler_exhaust'; add 'diff_compiler_check_match' ;;
@@ -445,6 +449,11 @@ for f in $changed; do
       # the A-2.6 import-scoped overlay — the tables whose keying decides which
       # declaration an import clause's constructor name lands on.
       add 'diff_compiler_import_order'
+      # G-0: typecheck.mdk is where the interface-declaration-order dependence was
+      # MEASURED and written down — grep 'interface declarations SWAPPED' in it. It
+      # attributes an unmet obligation to the LAST-DECLARED interface, which is the
+      # mechanism both ledgered rows of the interface-order differential record.
+      add 'diff_compiler_iface_order'
       # (found deriving this row) diff_compiler_analyze_project pins DIAGNOSTICS —
       # analyzeProject's per-file bucketed severity/message output, the channel the
       # value-golden gates above (typecheck*/check*/eval_typed*) cannot see because
@@ -537,6 +546,9 @@ for f in $changed; do
     compiler/driver/*)
       add 'diff_compiler_check*'; add 'diff_compiler_diagnostics'; add 'diff_compiler_build'
       add 'diff_compiler_import_order'
+      # G-0: same reason — the loader fixes the order every downstream table is
+      # populated in, interface declarations included.
+      add 'diff_compiler_iface_order'
       add 'diff_compiler_dict_semantics'
       add 'diff_compiler_fmt_write_safety'
       # driver/diagnostics.mdk is where analyzeProject/analyzeProjectToLines are
@@ -659,6 +671,10 @@ for f in $changed; do
     # a preflight that derives NOTHING from a ledger edit is the masking path the
     # ledger's own header warns about.
     test/IMPORT-ORDER-LEDGER.txt)  add 'diff_compiler_import_order' ;;
+    # Same argument, same shape, second axis (G-0). Both ledgers are loose files
+    # under test/ that `_fixture_dir_for` cannot see, and both are exactly what
+    # someone edits ALONE when their gate goes red.
+    test/IFACE-ORDER-LEDGER.txt)   add 'diff_compiler_iface_order' ;;
 
     # ── sqlite: the derivation structurally CANNOT reach it ───────────────────
     # `_fixture_dir_for` only fires for a path with a `*fixtures*`/`*goldens*` ancestor
