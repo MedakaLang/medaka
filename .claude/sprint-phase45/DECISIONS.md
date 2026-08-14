@@ -1846,3 +1846,41 @@ These two rulings sat unmade for ~15 minutes while I filed #1641 — a finished 
 orchestrator's desk. That is the Stage B `0.73×` bottleneck reappearing in a new shape: not gaps
 between writers, but a **decision queue**. The fix is the same one that worked earlier tonight —
 rule on receipt, do the ledger work afterwards.
+
+## RUN-P45-050 — BOTH Q1 RULINGS LANDED, and the row deletion COST A TRIPWIRE (W2 caught it, I did not)
+
+PR #1640, two more commits. `diff_compiler_iface_order.sh` **5 ok / 0 failing (GREEN)**;
+`diff_compiler_must_fail.sh` **98 fixtures, 97 reproduce, 1 DRAINED, 0 control-broke, 0 malformed**.
+`soundness` stays red on #1620's drain alone. Neither issue closed.
+
+**W2 verified my census premise rather than taking it** — HALF 4 is row-driven, so an open issue with
+no row is not a violation. My reading was right.
+
+🚨 **But it recorded a consequence my ruling did not mention, and it is the ruling's real cost:**
+deleting the rows also deletes the HALF 4 **tripwire** — the coupling that catches someone closing
+these issues on a partial fix, which HALF 4's own header calls *load-bearing*. What survives is
+HALF 1 (PINNED-BUT-CLOSED), which reaches **#1182** through its re-posed fixture and **#1620 not at
+all**. ⇒ I ruled a guard gap into existence; closing it is mine, not scope creep. **#1620 is being
+re-posed cross-module in the same bite.**
+
+⭐ **Ruling 2's re-pose is STRICTLY STRONGER than the fixture it replaces, and the derivation came
+first.** Hand-derived before measuring, right on every cell: entry imports the method name from `a1`
+only and `a2` for its interface name only, so the occurrence of `m` has **exactly one binding** — and
+printing `2` runs a method of an interface the occurrence never named. **Wrong under every reading**,
+so #1182's name-resolution dispute is gone from the pin. (Importing `m` from both does *not*
+reproduce — `Ambiguous occurrence`, measured.) `check --json` clean at exit 0 across three files;
+`run` and the **built binary** both print `2`, so it is not an eval artifact.
+
+**The misleading `CONTROL-BROKE` is now twice-observed and written into `claim.txt` as a general
+rule** — the harness's *"the ENVIRONMENT moved, not the bug"* advice is wrong whenever the control
+shares the subject's rejected shape.
+
+**Filings authorised** (W2 reproduced all three first-hand, so it is the reporter): the
+`capture_goldens.sh boot_resolve` remedy string naming a command that cannot work; and the
+interface-order-dependent **diagnostic set** — which also refutes the `iface_order` header's *"cannot
+even be written"* claim, with an explicit instruction to state whether it was measured pre-Q1,
+post-Q1 or both. **The third was STOPPED** — the `@attrib` duplicate-name shape is already routed to
+#1228 with a first-hand reproduction; adding a number would duplicate.
+
+⚠️ `gh pr edit --body-file` **silently no-op'd** on this PR's body — byte-identical readback, exit 0,
+only a projects-classic warning on stderr. `scripts/pr.sh body` landed it. Known trap, hit again.
