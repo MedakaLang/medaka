@@ -931,7 +931,7 @@ done
 # H2b.10 capture-only apparatus. HashFloat P is strict and inert; record U keeps
 # Float + hashInt prerequisites while excluding hashFloat. Census proves its route
 # only, so it is asserted as one attributed event and never parsed as WAT.
-FLOAT_HASH_MARKERS="$(awk '/^FEATURE_HASH_FLOAT_(P1|RECORD_U|CENSUS_P_GAP|P2)_(BEGIN|END)$/ { print }' "$INPUT_WORK/feature.out")"
+FLOAT_HASH_MARKERS="$(awk '/^FEATURE_HASH_FLOAT_.*_(BEGIN|END)$/ { print }' "$INPUT_WORK/feature.out")"
 FLOAT_HASH_EXPECTED_MARKERS="$(printf 'FEATURE_HASH_FLOAT_P1_BEGIN\nFEATURE_HASH_FLOAT_P1_END\nFEATURE_HASH_FLOAT_RECORD_U_BEGIN\nFEATURE_HASH_FLOAT_RECORD_U_END\nFEATURE_HASH_FLOAT_CENSUS_P_GAP_BEGIN\nFEATURE_HASH_FLOAT_CENSUS_P_GAP_END\nFEATURE_HASH_FLOAT_P2_BEGIN\nFEATURE_HASH_FLOAT_P2_END')"
 [ "$FLOAT_HASH_MARKERS" = "$FLOAT_HASH_EXPECTED_MARKERS" ] || {
   echo "FAIL H2B10-FLOAT-HASH-MARKERS: marker cardinality/order"
@@ -987,11 +987,15 @@ FLOAT_HASH_EVENT=$'fn featureHashFloatIntentionalGap\tunbound variable \'missing
   }
 for float_hash_name in p1 u p2; do
   float_hash_wat="$INPUT_WORK/feature-hash-float-$float_hash_name.wat"
-  wasm-tools parse "$float_hash_wat" -o "$INPUT_WORK/feature-hash-float-$float_hash_name.wasm" || {
+  wasm-tools parse "$float_hash_wat" -o "$INPUT_WORK/feature-hash-float-$float_hash_name.wasm" 2>"$INPUT_WORK/feature-hash-float-$float_hash_name.parse.err"
+  FLOAT_HASH_PARSE_STATUS=$?
+  [ "$FLOAT_HASH_PARSE_STATUS" -eq 0 ] && [ ! -s "$INPUT_WORK/feature-hash-float-$float_hash_name.parse.err" ] || {
     echo "FAIL H2B10-FLOAT-HASH-PARSE: wasm-tools parse $float_hash_name"
     exit 1
   }
-  wasm-tools validate --features=all "$INPUT_WORK/feature-hash-float-$float_hash_name.wasm" || {
+  wasm-tools validate --features=all "$INPUT_WORK/feature-hash-float-$float_hash_name.wasm" 2>"$INPUT_WORK/feature-hash-float-$float_hash_name.validate.err"
+  FLOAT_HASH_VALIDATE_STATUS=$?
+  [ "$FLOAT_HASH_VALIDATE_STATUS" -eq 0 ] && [ ! -s "$INPUT_WORK/feature-hash-float-$float_hash_name.validate.err" ] || {
     echo "FAIL H2B10-FLOAT-HASH-VALIDATE: wasm-tools validate $float_hash_name"
     exit 1
   }
