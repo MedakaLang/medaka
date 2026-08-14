@@ -88,7 +88,7 @@ WORK="$(mktemp -d)"
 RESULTS="$(mktemp -d)"
 trap 'rm -rf "$WORK" "$RESULTS"' EXIT
 
-# Fan the 154 fixtures across an xargs -P pool of --one workers (see top of file).
+# Fan the 156 fixtures across an xargs -P pool of --one workers (see top of file).
 # Each worker does: medaka build oracle (-O0) + run, wasm emit, wasm-tools
 # parse/validate, node run, diff. NODE is resolved to its absolute path here (post
 # nvm selection) so the fresh worker shells don't re-run the Node-version dance.
