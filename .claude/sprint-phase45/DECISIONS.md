@@ -1601,3 +1601,37 @@ both ends.
 a **warning, explicitly not an error**, per `SHADOW-SEMANTICS.md` S1-PRELUDE, owned by **#1499**. So
 Q1 rejecting a prelude collision would not merely be over-broad — it would **contradict a written
 spec ruling and pre-empt another issue's deliverable.**
+
+## RUN-P45-043 — BITE 0 LANDS AS PR #1638 (open, unenqueued). The brief was RIGHT this time.
+
+Unlike the sibling bite, the briefed site and mechanism held: one arm,
+`headTyNode (TyConstrained _ t) = headTyNode t`. `eval.headTycon` deliberately untouched (it already
+had the arm) and `Mono` needs nothing (it has no constrained constructor) — the two sides keep
+DIFFERENT arm counts, which is the documented correct state.
+
+Cells, C3a/C3b, golden accounting and the four DEBT fields: `.claude/sprint-phase45/DEBT.md`, bite 0.
+
+**ORCH verification of the PR itself (evidence, not re-running):** three commits in the required
+shape (source · pin · terminal goldens); the body's only closing keyword is `Fixes #1630.` — nothing
+else is aimed at an issue that must stay open; CI running, `backend`/`sqlite`/`seed-health` already
+green. Two adversarial reviewers dispatched — **semantics** (arm-set completeness, the headless-body
+scoping claim, the acceptance-reader claim, `nothing → something` against the spec, the pin's
+discrimination) and **evidence/prose** (every shipped sentence traced to a command) — following the
+#1319 finding that the two lenses catch disjoint sets.
+
+## RUN-P45-044 — TWO TOOLING GAPS FOUND BY THE BITE, both reproducible for the next agent
+
+Recorded because both are structural, not one agent's bad luck:
+
+1. **`make medaka` bakes the source fingerprint at STAGE A START**, so any compiler-source edit made
+   *while a build is in flight* — a comment is enough — silently yields a binary lacking it, which
+   then fails `MEDAKA_STRICT=1` on every subsequent probe. Cost one full rebuild. The remedy is a
+   rule, not a tool: **do not edit compiler source while a build is running.**
+2. **`PRECOMMIT_SNAPSHOT_DEFER=1` does NOT reach the #1179 unstaged-snapshot guard.** Consequence: the
+   standing *"goldens re-cut in their own terminal commit"* rule and any LATER commit that stages a
+   `.mdk` are **mutually exclusive** under the current hook — the guard refuses the `.mdk`-staging
+   commit while a blessed snapshot sits unstaged. The writer worked around it by stashing the goldens
+   across the fixture commit (no `--no-verify`, no `hooksPath` override). ⇒ Ordering rule for this
+   sprint: **stage the goldens LAST, after every `.mdk`-staging commit is in.**
+
+Both landed as AGENTS.md lines in this sprint's docs commit so the next agent inherits them.
