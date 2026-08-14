@@ -2168,3 +2168,49 @@ lenses, which is the two-lens split converging rather than duplicating.
 only**; the cross-module axis stays fully representable, and the two re-posed pins are the proof. **A
 later interface-identity keying unit still inherits an order-dependent supply cross-module.** The PR
 states this in three places and does not oversell it.
+
+## RUN-P45-059 — Q1 CLOSED OUT. And W2 labelled a DERIVED cell as derived, unprompted.
+
+Both post-review items landed (PR body note + the self-draining #1228 comment). W2 **reproduced the odd
+wording first-hand before recording it** rather than transcribing it from the review — the right reflex
+for a claim that ships.
+
+⭐ **The precision it volunteered is the entry worth keeping.** The *"base silently accepts, so this is
+loud→louder"* cell is **DERIVED, not measured on a base binary**, and it labelled it that way in both
+artifacts rather than stating it flat. Its derivation, which I accept:
+1. on the PR binary the program yields **exactly one** diagnostic and it is Q1's — no `R-DUPLICATE-DEF`;
+2. resolve errors **accumulate rather than short-circuit**, so a firing duplicate-NAME check would appear
+   alongside — it demonstrably does not fire on this shape;
+3. Q1 is the only check this PR adds ⇒ base's diagnostic set is this one minus Q1's = **empty**.
+Corroborated by the pre-Q1 measurement already on #1228 (same construction, different method names,
+exit 0 clean on a base binary). It offered the direct base run at a cost of two rebuilds and did not
+take it unasked. **Ruled: the derivation stands** — it is closed under the accumulate property, not a
+plausibility argument, and the marginal value of two rebuilds does not justify the box time with two
+writers live.
+
+**Gates: none owed, and it said so instead of burning a cycle.** Neither change touches a `.mdk`,
+fixture, golden or script; `HEAD` unchanged at `83b8fc8d`. Re-running would re-measure an unchanged tree
+with an unchanged binary. **Declining to re-run, with the reason, is the correct answer** and the
+opposite of the reflex that pads a report.
+
+Its own retrospective on the F6 refusal is worth preserving verbatim in spirit: *"what made it refusable
+was having measured the premise cross-module first. Without that probe I'd have had only an opinion
+against a finding, and would probably have complied."* ⇒ **Briefing for refusal is necessary but not
+sufficient; the agent also needs the MEASUREMENT that makes refusal defensible.** Budget probe time for
+that, not just permission.
+
+Q1 session output: PR #1640 (4 commits) · issues **#1642** (S3 `ws:testing`), **#1644** (S2
+`ws:diagnostics`) · two comments on **#1228**. Nothing closed, no closing keyword. Enqueued.
+
+## RUN-P45-060 — PHASE 4 (`B-2.3`) DISPATCHED as W6, concurrent with S2
+
+Briefed on route α with the three corrections Phase 0 measured (`CProgram` carrier DEAD ⇒ `Ref CAdmis`;
+key is `(bare iface, bare method)` with **no head component**; the charter's stated justification is
+false and the real one is the **two fail-OPEN defaults**), the two-tier key requirement, the
+lookup-vs-filter comparator split, the lockstep obligation on `eval.mdk` + `core_ir_lower.mdk`, and the
+`keepOrAll` all-or-nothing ruling.
+
+🚨 **The framing that matters most, stated in the brief:** if Phase 4 freezes admissibility **computed by
+the current selector, it FREEZES THE ORDER-DEPENDENCE into data** and makes it harder to remove later.
+That is the worst outcome available in this bite, and it is why refusal was licensed explicitly as the
+likeliest correct answer of the sprint.
