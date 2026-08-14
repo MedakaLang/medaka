@@ -1473,3 +1473,50 @@ a second defect inside #1450**. Derive before filing: `build --keep-ir`, then
 5. 🚨 **A THIRD `headTyconTy` asymmetry:** `eval.mdk:~546` also strips **`TyConstrained`**. F-2 and
    F-8 are **two of three**. I wrote *"audit the arms as a SET"* and then shipped a set one arm
    short — the lesson failing inside the sentence that states it, for the second time this sprint.
+
+## RUN-P3-038 — two OWED measurements run on the BASE ARM, while a writer held the trunk
+
+Both are language-level questions about defects present at base, so the base-arm binary answers them
+and the live `b1`+`e` writer cannot contaminate them. This is the parallel-verification pattern
+applied to *measurements*, not just reading.
+
+### OWED-2 — **F-1's routing is CONFIRMED: a cell on #1450, and it is now IR-derived**
+
+R-4 flagged that F-1's *"same mechanism as #1450"* rested on a **symptom** (leaked pointer at exit 0)
+where #1450's own filing read the **arity off the IR** — and that if the arity were correct, a cell
+would bury a second defect inside that issue. Measured:
+
+```
+zub (control): define i64 @mdk_impl_T_zub(i64 %arg0)              ← ONE param, correct
+sub          : define i64 @mdk_impl_T_sub(i64 %arg0, i64 %arg1)   ← TWO
+               (cf. define i64 @mdk_impl_Int_sub(i64, i64) — Num.sub's arity)
+```
+
+The user interface declares `sub : a -> Int`, **arity 1**. The emitter defined its impl with
+**`Num.sub`'s arity 2**, and the call site passes two args to match. **That is #1450's mechanism
+verbatim, read the way #1450 read it.** F-1 files as a cell, no longer symptom-matched.
+
+### OWED-3 — **F-5 did NOT reproduce, and the probe did NOT discriminate. Both halves matter.**
+
+A nested `requires` chain (depth ≥ 2) with two impls of one interface at the same head where
+declaration order and min-specificity **disagree** (`Base (Wrap a)` = 1 vs `Base (Wrap Int)` = 2),
+and a swapped-order twin:
+
+```
+ab: check=0 run=0 [2] build=0 exec=0 [2]
+ba: check=0 run=0 [2] build=0 exec=0 [2]
+```
+
+Correct by min-specificity is **2**, and both orders answer 2 on every channel. Min-specificity won;
+order did not decide.
+
+🚨 **This is NOT evidence that F-5 is absent, and recording it as such would be the exact error this
+sprint keeps catching in others.** F-5 is about `selectReqImpl`'s **`iface == ""`** arm, which the
+prep derived is reached from `routesOfMonos*` via `routeOf … "" ""` — the method-dict / untyped
+fallback leg. **My program goes through `entail EKNestedTop` with `iface != ""`, i.e. very likely the
+OTHER arm.** I did not instrument it, so I cannot claim it reached the target.
+
+⇒ **A probe must discriminate, not merely answer.** Mine answered. **F-5 stays open and stays
+assigned to the repair round**, now with a *negative* result on the `iface != ""` path (useful: it
+bounds the claim) and an explicit note that **the `iface == ""` path is still unprobed** and needs a
+program that reaches `routesOfMonos`, or an instrumented build to confirm the arm was entered.
