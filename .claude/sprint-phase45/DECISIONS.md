@@ -1527,3 +1527,24 @@ module's own source*, and pin that with a fixture. The prelude-vs-user axis belo
 collisions co-loaded into one program — the population Q1 deliberately does NOT reach, outnumbering
 the intra-module population ~3:1. The two populations are disjoint in practice (no directory holds
 both shapes), which is the practical check P0-G's *"Q and S are not redundant"* claim needed.
+
+## RUN-P45-041 — ⭐ OWNER RULING (Val): Q1 rejects on DECLARATION. The controls are re-posed.
+
+Asked with the census in hand (RUN-P45-040), not up front.
+
+> **Keep P0-G's rule as designed: two interfaces in one module may not share a method name, period.**
+
+Three things this ruling BINDS on the bite, so none of them can be quietly dropped:
+
+1. **It narrows acceptance for a working shape, and the bite must SAY SO** — in the diagnostic's
+   `help` text and in the PR body's Q6 answer. The disjoint-receiver program
+   (`n U + n V == 3`, exit 0, order-invariant) compiles today and will not after. That is a
+   deliberate cost bought for a decidable rule at resolve, not an oversight.
+2. **G-0's two unledgered controls must be RE-POSED in the same bite**, on a shape Q1 permits, so the
+   instrument keeps the bound its ledgered rows rest on. A gate whose every case rejects agrees with
+   itself vacuously. ⚠️ The replacement control must be **proven able to fail** (mutate, watch it
+   red, revert) — a control that cannot fail is the masking path this sprint's own attack list names.
+3. **The rule's SCOPE is the module's own declared interfaces — NOT the implicit prelude.** If the
+   check is written over the seeded set (`pIfaces`/`expIfaceMethods`, seeded from `preludeDecls` at
+   `resolve.mdk:1608,2763,2836`), every user interface declaring `map`/`eq`/`compare` is rejected and
+   the blast radius stops being 10. **Pin the prelude case with a fixture that must still compile.**
