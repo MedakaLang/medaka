@@ -78,7 +78,7 @@
 --     floatToString (Float → W6b) — CLOSED, W8b (below).  The remaining string
 --     externs (stringSlice/stringIndexOf/stringCompare/toUpper/…) — CLOSED,
 --     `isStrExternW`.  ePutStr/ePutStrLn (stderr byte-write import) — CLOSED
---     (`useEPutRef`).  RNG + remaining externs → W8, CLOSED there.
+--     (`WasmEmit.useEPut`).  RNG + remaining externs → W8, CLOSED there.
 --   * Refutable pattern guards (`p <- e`) in a match arm — STILL a gap (both
 --     tail and non-tail arms `gapL`, ~line 6494/7310/7318; ledgered live as
 --     `llvm/guard_refut_ctor` in test/engine_divergence.txt).
@@ -326,6 +326,7 @@ data WasmEmit =
       functionReferences : Ref (List String),
       functionReferenceNames : Ref (OrdMap Unit),
       trapImportNeeded : Ref Bool,
+      useEPut : Ref Bool,
       useDivGuard : Ref Bool,
       useRecUpdate : Ref Bool,
       useRng : Ref Bool,
@@ -350,6 +351,7 @@ freshWasmEmit mode = WasmEmit {
   functionReferences = Ref [],
   functionReferenceNames = Ref omEmpty,
   trapImportNeeded = Ref False,
+  useEPut = Ref False,
   useDivGuard = Ref False,
   useRecUpdate = Ref False,
   useRng = Ref False,
@@ -831,13 +833,10 @@ useRefBoxRef = Ref False
 -- Which W8 LEAF runtime groups the program reaches (gates their preamble
 -- emission, peer to useStrRef).  useStrLeafRef: any pure-WAT string leaf op
 -- (++/charToStr/stringConcat/stringSlice/toUpper/toLower) → the strLeafRuntime.
--- The per-emission RNG/hash observations live in WasmEmit; useEPutRef gates the
+-- The per-emission RNG/hash observations live in WasmEmit; `WasmEmit.useEPut` gates the
 -- stderr import + runtime.
 useStrLeafRef : Ref Bool
 useStrLeafRef = Ref False
-
-useEPutRef : Ref Bool
-useEPutRef = Ref False
 
 -- B5 (RUNTIME-TRAP-UNIFY §3 (5)): per-emission event set while a coded runtime trap
 -- writes stderr bytes. Body emission precedes late scalar/ref import bindings, so strict
@@ -1061,7 +1060,6 @@ emitProgramWith emit input (CProgram groups ctorArs ctorTypes impls) =
   let _ = setRef useArrayRef False
   let _ = setRef useRefBoxRef False
   let _ = setRef useStrLeafRef False
-  let _ = setRef useEPutRef False
   let _ = setRef useFloatRef False
   let _ = setRef useFloatHashRef False
   let _ = setRef useFloatRngRef False
@@ -1119,7 +1117,6 @@ emitProgramGaps input (CProgram groups ctorArs ctorTypes impls) =
   let _ = setRef useArrayRef False
   let _ = setRef useRefBoxRef False
   let _ = setRef useStrLeafRef False
-  let _ = setRef useEPutRef False
   let _ = setRef useFloatRef False
   let _ = setRef useFloatHashRef False
   let _ = setRef useFloatRngRef False
@@ -1609,7 +1606,7 @@ scanW7Head emit h = scanExprW7 emit h
 
 -- ── W8: note which W8 LEAF/RNG/hash runtime groups an extern occurrence reaches ──
 -- Sets useStrLeafRef (the pure-WAT string ops needing strLeafRuntime), per-emission
--- RNG/hash observations, and useEPutRef as appropriate.  Piggybacks on the W7 walk.
+-- RNG/hash/ePut observations.  Piggybacks on the W7 walk.
 noteW8Extern : WasmEmit -> String -> Unit
 noteW8Extern emit name =
   let _ = if contains name ["charToStr", "stringConcat", "stringSlice", "stringToUpper", "stringToLower"]
@@ -1667,9 +1664,9 @@ noteW8Extern emit name =
                              "charIsPunct", "charToUpper", "charToLower"]
           then setRef useCharClassRef True else ()
   -- W10: panic's message arg is a $str → force the $str rep.  B5: the coded-trap
-  -- lowering streams that message through $mdk_eprint_str (gated on useEPutRef) after a
-  -- fixed "runtime error [E-PANIC]: " prefix, so force useEPutRef too.
-  let _ = if name == "panic" then let _ = setRef useStrRef True in setRef useEPutRef True else ()
+  -- lowering streams that message through $mdk_eprint_str (gated on this emission's
+  -- `useEPut`) after a fixed "runtime error [E-PANIC]: " prefix.
+  let _ = if name == "panic" then let _ = setRef useStrRef True in setRef emit.useEPut True else ()
   -- W10: the array intrinsic externs all build/read the $arr rep (and arrayFromList
   -- consumes a cons list).  Force useArrayRef; arrayFromList also forces useListRef.
   let _ = if contains name ["arrayLength", "arrayGetUnsafe", "arrayMake", "arrayMakeWith",
@@ -1699,7 +1696,7 @@ noteW8Extern emit name =
   let _ = if contains name ["readFileBytes", "writeFileBytes"]
           then let _ = setRef useIORef True in let _ = setRef useArrayRef True in let _ = setRef useStrRef True in setRef useFileBytesRef True
           else ()
-  if contains name ["ePutStr", "ePutStrLn"] then setRef useEPutRef True else ()
+  if contains name ["ePutStr", "ePutStrLn"] then setRef emit.useEPut True else ()
 -- `++` is runtime-dispatched ($mdk_append): needs the $str leaf concat ($mdk_str_append)
 -- AND the W7 cons list types ($C_Cons/$T_List) for the list-append branch.
 noteW8Binop : WasmEmit -> String -> Unit
@@ -2384,7 +2381,7 @@ emitRefProgram : Prog -> List CBind -> String
 emitRefProgram prog groups =
   let header = preambleHeadLines
   let typeSection = emitTypeSection prog
-  -- W8: ePutStr/ePutStrLn (useEPutRef) and B5 coded traps both need the
+  -- W8: ePutStr/ePutStrLn (`WasmEmit.useEPut`) and B5 coded traps both need the
   -- stderr byte-write import; it is emitted ONCE, LATE (see `trapImport` below), because
   -- trapImportNeeded is set during body emit.
   let imports = ioByteImportLines
@@ -2460,7 +2457,7 @@ emitRefProgram prog groups =
   -- when a poly-`Num` operand is routed to them (A1).  Reference $float/$boxint (always
   -- declared) + $mdk_unbox_int/$mdk_box_int (always in ioRuntimeLines).
   let valueArithRt = if useValueArithRef.value then valueArithRuntimeLines else []
-  let stderrRt = if useEPutRef.value then stderrRuntimeLines else []
+  let stderrRt = if (progEmit prog).useEPut.value then stderrRuntimeLines else []
   let rngRt = if (progEmit prog).useRng.value then rngRuntimeLines else []
   let hashRt = if (progEmit prog).useHash.value then hashRuntimeLines else []
   let hashStrRt = if (progEmit prog).useHash.value && useStrRef.value then hashStringRuntimeLines else []
@@ -2496,11 +2493,11 @@ emitRefProgram prog groups =
   -- ioHostRt in scope ($mdk_push_path / $mdk_io_result_to_str) + the $arr rep.
   let fileBytesRt = if useFileBytesRef.value then fileBytesRuntimeLines else []
   let dataSegs = emitDataSegs (progEmit prog)
-  -- B5: the stderr byte-write import — for ePutStr (useEPutRef) OR a coded runtime trap
+  -- B5: the stderr byte-write import — for ePutStr (`WasmEmit.useEPut`) OR a coded runtime trap
   -- (trapImportNeeded, set during the body emit above). Emitted ONCE. This binding is
   -- forced after all body-emit bindings (strict `let`), so trapImportNeeded is visible;
   -- `dataSegs` above already relies on that same after-body ordering.
-  let trapImport = if useEPutRef.value || (progEmit prog).trapImportNeeded.value then stderrByteImportLines else []
+  let trapImport = if (progEmit prog).useEPut.value || (progEmit prog).trapImportNeeded.value then stderrByteImportLines else []
   joinNl (header ++ typeSection ++ imports ++ trapImport ++ elemDecl ++ globals
             ++ fns ++ implFns ++ defaultDefs ++ lifted ++ applyRt ++ ioRt ++ strLeafRt ++ strConcatRt ++ appendRt ++ valueCmpRt ++ valueArithRt
             ++ stderrRt ++ rngRt ++ hashRt ++ hashStrRt
@@ -5924,7 +5921,7 @@ emitLeafExternRef prog env d "writeFileBytes" _ =
 -- W10/B5: `panic msg` → stream the coded line `runtime error [E-PANIC]: <msg>\n` to
 -- stderr, then `unreachable` (peer of native @mdk_panic / the interp's runtimePanic).
 -- The fixed prefix is unrolled to byte-writes; the user message (a $str (ref eq), any
--- expression) is streamed through $mdk_eprint_str (forced via useEPutRef in noteW8Extern
+-- expression) is streamed through $mdk_eprint_str (forced via `WasmEmit.useEPut` in noteW8Extern
 -- for `panic`), then a trailing newline byte.  `unreachable` is stack-polymorphic, so it
 -- validates as any result type.
 emitLeafExternRef prog env d "panic" [msg] = wasmTrapBytes (progEmit prog) "runtime error [E-PANIC]: "

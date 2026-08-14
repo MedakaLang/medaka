@@ -191,7 +191,7 @@ for required in \
   'wasmTrap : WasmEmit -> String -> String -> List String' \
   'setRef emit.trapImportNeeded True' \
   'let trapImport = if emit.trapImportNeeded.value then stderrByteImportLines else []' \
-  'let trapImport = if useEPutRef.value || (progEmit prog).trapImportNeeded.value then stderrByteImportLines else []' \
+  'let trapImport = if (progEmit prog).useEPut.value || (progEmit prog).trapImportNeeded.value then stderrByteImportLines else []' \
   'let _ = setRef (progEmit prog).trapImportNeeded True' \
   'emitDivZeroGuard : WasmEmit -> String -> String -> List String' \
   'emitDivZeroGuard emit op "$__sdivr"' \
@@ -207,9 +207,23 @@ done
   echo "FAIL H2B8-WRITERS: expected two explicit poly-runtime writers"
   exit 1
 }
-grep -F 'useEPutRef : Ref Bool' "$WASM_SRC" >/dev/null &&
-  grep -F 'let stderrRt = if useEPutRef.value then stderrRuntimeLines else []' "$WASM_SRC" >/dev/null || {
-  echo "FAIL H2B8-NEAREST-MISS: ePut authority changed"
+if grep -E '^_?useEPutRef[[:space:]]*[:=]|setRef (_?useEPutRef)' "$WASM_SRC" >/dev/null; then
+  echo "FAIL H2B9-EPUT-AUTHORITY: retired ambient ePut authority remains"
+  exit 1
+fi
+for required in \
+  'useEPut : Ref Bool' \
+  'useEPut = Ref' \
+  'setRef emit.useEPut True' \
+  '(progEmit prog).useEPut.value' \
+  'let trapImport = if (progEmit prog).useEPut.value || (progEmit prog).trapImportNeeded.value then stderrByteImportLines else []'; do
+  grep -F -- "$required" "$WASM_SRC" >/dev/null || {
+    echo "FAIL H2B9-EPUT-AUTHORITY: missing $required"
+    exit 1
+  }
+done
+[ "$(grep -F 'setRef emit.useEPut True' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 2 ] || {
+  echo "FAIL H2B9-EPUT-WRITERS: expected panic and ePut scan writers"
   exit 1
 }
 if grep -E '^_?useDivGuardRef[[:space:]]*[:=]|setRef (_?useDivGuardRef)' "$WASM_SRC" >/dev/null; then
@@ -302,7 +316,7 @@ for required in \
 done
 EXPECTED_MODULE_REFS="$(printf '%s\n' \
   useStrRef useListRef useArrayRef useRefBoxRef \
-  useStrLeafRef useEPutRef \
+  useStrLeafRef \
   useFloatRef useFloatHashRef useMathRef useFloatRngRef useFloatStrRef \
   useStrSearchRef useValueCmpRef useValueArithRef numPolyLocalsRef useStrCodecRef \
    useCharFromCodeRef useCharClassRef useIORef useArgsRef useFileBytesRef \
@@ -828,6 +842,19 @@ for feature_p in feature-p1.wat feature-p2.wat; do
     exit 1
   }
 done
+for feature_p in feature-p1.wat feature-p2.wat; do
+  grep -F '(func $mdk_eprint_str' "$INPUT_WORK/$feature_p" >/dev/null &&
+    grep -F '(func $mdk_eprint_strln' "$INPUT_WORK/$feature_p" >/dev/null &&
+    [ "$(grep -F '(import "env" "mdk_write_err_byte"' "$INPUT_WORK/$feature_p" | wc -l | tr -d '[:space:]')" -eq 1 ] || {
+      echo "FAIL H2B9-EPUT-RUNTIME: missing ePut stderr runtime/import in $feature_p"
+      exit 1
+    }
+done
+if grep -F '$mdk_eprint_str' "$INPUT_WORK/feature-u.wat" >/dev/null ||
+   grep -F '(import "env" "mdk_write_err_byte"' "$INPUT_WORK/feature-u.wat" >/dev/null; then
+  echo "FAIL H2B9-EPUT-U-ABSENCE: inert control emitted ePut stderr runtime/import"
+  exit 1
+fi
 if grep -F '(local $__divr0 i64)' "$INPUT_WORK/feature-u.wat" >/dev/null; then
   echo "FAIL H2B9-DIV-U-ABSENCE: inert control declared ref divisor local"
   exit 1
@@ -1502,6 +1529,10 @@ for ref_trap_spec in 'p1 17 present' 'u 29 absent' 'p2 17 present'; do
     echo "FAIL H2B8-REF-TRAP-IMPORT: $ref_trap_name ref late-import predicate changed"
     exit 1
   }
+  if grep -F '$mdk_eprint_str' "$ref_trap_wat" >/dev/null; then
+    echo "FAIL H2B8-NEAREST-MISS: H2B9 trap-only ref emission included ePut runtime"
+    exit 1
+  fi
   wasm-tools parse "$ref_trap_wat" -o "$INPUT_WORK/ref-trap-$ref_trap_name.wasm" &&
     wasm-tools validate --features=all "$INPUT_WORK/ref-trap-$ref_trap_name.wasm" || {
     echo "FAIL H2B8-REF-TRAP-LIFECYCLE: parse/validate $ref_trap_name"

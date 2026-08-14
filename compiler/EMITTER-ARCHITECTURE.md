@@ -1,6 +1,6 @@
 # Emitter Architecture - the derived current map
 
-**Status:** CURRENT - source-derived LLVM/WasmGC emitter map through X-W.H2b.8.
+**Status:** CURRENT - source-derived LLVM/WasmGC emitter map through X-W.H2b.9.
 This is a description of the current
 implementation, not the target design. The target is
 [`EMITTER-TARGET-ARCHITECTURE.md`](EMITTER-TARGET-ARCHITECTURE.md), and the
@@ -154,10 +154,12 @@ fresh calls start at `?`; top-level `P`, nested `lg:P`, and the existing post-li
 into `WasmEmit`'s `trmcCtx`. X-W.H2b.7 moves lambda IDs, ordered lifted definitions,
 named-lift de-duplication, and function-reference list/set state into `WasmEmit`;
 former lifted-name Ref was unread duplicate authority and is retired. X-W.H2b.8 moves
-the coded-stderr-trap import event into `WasmEmit`'s `trapImportNeeded`. The typed
+the coded-stderr-trap import event into `WasmEmit`'s `trapImportNeeded`. X-W.H2b.9
+moves divisor-local, record-update-local, RNG, hash, and stderr-runtime demand into
+`WasmEmit`; trap-only emissions still import the byte writer without the stderr runtime. The typed
 entry and `test/wasm/diff_wasm_typed.sh` grade strict, record, census, and
 no-writer isolation. The re-derived remaining ambient top-level `Ref` population
-is 30, in output, feature, numeric, and dispatch families. H2b and #1407 remain
+is 25, in output, feature, numeric, and dispatch families. H2b and #1407 remain
 open; those four families remain X-W.H2 work.
 
 ### 3.3 Per-program derived indexes
@@ -237,7 +239,7 @@ Both emitters rely on module-level `Ref`s. Some are ordinary local mutation
 (output buffers, counters) and some are scoped emission contexts. Wasm
 declaration-derived semantic input is no longer installed through Refs (X-W.H1);
 H2b has moved its gap lifecycle, string, impl-self, TRMC, lifting, function-reference,
-and coded-trap-import lifecycle into fresh `WasmEmit` contexts. The remaining 30
+and coded-trap-import plus H2b.9 feature-demand lifecycle into fresh `WasmEmit` contexts. The remaining 25
 top-level ambient Refs are X-W.H2 output, feature, numeric, and dispatch families.
 
 The product driver shells out to a fresh emitter process specifically to obtain
@@ -246,9 +248,9 @@ pristine state. Within one process:
 - LLVM constructs a fresh `Emit` record but also resets/installs external refs;
 - Wasm creates a fresh `WasmEmit` for strict, record, and gap-census calls; gap
   lifecycle, passive string segments, impl-self scope, Stage-1 TRMC context,
-  lambda/lifted-definition/function-reference state, coded-trap-import event, and
+  lambda/lifted-definition/function-reference state, coded-trap-import state, H2b.9 feature demand, and
   synthesized-default membership/definition buffers belong there; the remaining
-  30 ambient top-level Refs are output, feature, numeric, and dispatch families;
+  25 ambient top-level Refs are output, feature, numeric, and dispatch families;
 - gap-census paths own a separate gap lifecycle but still duplicate the remaining
   physical setup;
 - X-W.H2 still owns the remaining physical-state lifecycle.
