@@ -2214,3 +2214,61 @@ lookup-vs-filter comparator split, the lockstep obligation on `eval.mdk` + `core
 the current selector, it FREEZES THE ORDER-DEPENDENCE into data** and makes it harder to remove later.
 That is the worst outcome available in this bite, and it is why refusal was licensed explicitly as the
 likeliest correct answer of the sprint.
+
+## RUN-P45-061 — PHASE 4 LANDS AS PR #1646, and THREE of its judgement calls beat the brief
+
+`((iface, method), positions)` → `((ifaceId, iface, method), positions)`, both consumers
+(`eval.implMethodEntry`, `core_ir_lower.lowerImplMethod`) re-keyed in lockstep. C3a PASS · C3b PASS ·
+check-self PASS · selfproc 16/0 · snapshots 202/202 · eval_modules, core_ir_modules, eval_typed_modules,
+dict_semantics 4/4 · import_order 15/15. #1113 NOT closed.
+
+**1. The carrier — I briefed `Ref CAdmis`; W6 widened THE ROW instead, and that is strictly better.**
+The element type sits in `installDispatchTables`, `lowerImplsWith`, `cBuildModInfos`, `declImplEntries`,
+`modImplEntries`, `lookupPositions` — so updating one consumer and not the other **does not compile.**
+The `evalModules`/`cevalModules` lockstep stops being a convention plus a comment and becomes a type
+error. That is the correct answer to a trap `AGENTS.md` records as having survived for months.
+
+**2. `keepOrAll` NOT retired, and the unit therefore does NOT claim to close the fail-open behaviour** —
+the honest half of the all-or-nothing ruling, with `ARGSTAMP-UNIFY-PLAN.md`'s measured **22/3 → 15/10**
+parity regression as the reason. The `[0]` miss default likewise retained and named at the site.
+
+**3. The legA golden is NOT additive-only and was reported as such** — 13 rows, 2 new plus **11
+pre-existing bindings whose inferred type changed** — and discharged by **set equality against the
+signatures re-signed by hand**, not by eyeballing. The bar was never "additive"; it is "no UNTOUCHED
+binding moved", and that is what was checked.
+
+**Identity-keying was free, verified from the CONSEQUENCE not the source:** the pre-fix dump already
+printed `a::Speak|DogA|` / `b::Speak|DogB|` route keys **on the very line that then looked up by
+spelling.**
+
+### ⭐ The finding W6 nearly shipped as its own, and killed with a base arm
+It wrote a `dict_fixtures` row asserting `build|ACCEPT` and **deleted it**: on BOTH arms the shape fails
+`build` with `no impl of method 'display' for type 'DogB'`, byte-identical, so it is **not this change's
+defect**. The control settles it — identical signatures for the two `speak`s and the same two-module
+collision builds clean — so the failure tracks the **SIGNATURE**, i.e. a separate bare-name
+**method-scheme** collision (#1070 family).
+
+🚨 **The consequence is the sprint's most important architectural fact so far:** an admissibility
+mis-key **requires** different method signatures, which **forces** that collision ⇒ **the two defects are
+COEXTENSIVE on today's compiler**, and the typed Core IR dump is the only observation separating them.
+⇒ **Phase 4 is architectural hardening, not a user-visible fix**, and the PR says so. Anyone reading it
+as a drain of the #1070-family shape is wrong.
+
+**Second finding:** `diff_compiler_import_order.sh` **could not have caught this** — its signature
+excludes `build`'s stderr, so both pre-fix orderings collapse to `build=1/-:` and it would have graded
+the pre-fix binary INVARIANT while the emitter failed under a different type per order. Written into the
+fixture's `case.txt`.
+
+**Nearest miss, named and deliberately not folded in:** `llvm_emit.lookupSelfFnParams` /
+`core_ir_lower.selfFnParamTable` — same `(bare iface, bare method)` key, same `DInterface` source,
+`ifaceOrigin` equally in hand. **Fails CLOSED (`[]`), so it narrows rather than widens** — which is why
+it is next rather than now. No issue filed for it, correctly.
+
+### 🚨 ORCH's review question, which the semantics lens is aimed at
+**Does tier 2 fire when tier 1 missed for the RIGHT reason?** Tier 1 (`ifaceIdMatches`, absence never
+matches) misses in two structurally different situations: **(a) absence** — flat path, where falling back
+to spelling is CORRECT and preserves today's behaviour; and **(b) genuine conflict** — both sides carry
+identities and they DIFFER, where falling back to spelling **re-collides exactly the two interfaces the
+key exists to separate.** If tier 2 is a blanket *"tier 1 returned nothing ⇒ try spelling"*, case (b)
+falls through, the re-key delivers nothing for its target shape, and **every gate stays green** — because
+the defect is not value-observable (above). This is the one question that decides whether the unit works.
