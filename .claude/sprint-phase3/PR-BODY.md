@@ -336,7 +336,11 @@ The mid-run reds `.claude/HANDOFF.md` licensed are **discharged at this commit**
 
 ## 11. Owed after this PR — nothing here is claimed as done
 
-- **Pins for #1617 / #1618 / #1619 / #1620.** Shapes specified in `FILINGS.md` §§2–5; none landed (§7).
+- ~~**Pins for #1617 / #1618 / #1619 / #1620.**~~ ✅ **LANDED.** All four are pinned in
+  `test/must_fail_fixtures/`; the suite reads **100 fixtures, 100 still reproduce, 0 DRAINED,
+  0 control-broke, 0 malformed**, and `must_fail_census --all` no longer lists them. Each pin was
+  proven able to **drain** (perturb so it looks fixed → the suite reports DRAINED naming its own
+  issue → revert), and each control proven fail-capable independently.
 - **#1068 / the wasm arm.** #1113's blast list says #1068's fix and this work must be done
   **together**, and #1068 appears **zero** times in `DEBT.md` (`grep -c '1068' .claude/sprint-phase3/DEBT.md`
   → 0). Carried here instead. Standing risk: wasm's method-less-impl default-dispatch coverage rests
@@ -345,6 +349,7 @@ The mid-run reds `.claude/HANDOFF.md` licensed are **discharged at this commit**
 - **Owed peers, unedited by `b1`+`e`:** `llvm_emit.implEntryRouteKey` / `implEntryRouteWords` /
   `headTagUnique` / `distinctKeysAtHead`, wasm's family, `core_ir_lower.distinctKeysAtHeadL`, and a
   **test** (not a patch) for `core_ir_eval.mdk:455`.
+- ~~**The C4/I2 conjunction question.**~~ ✅ **ASKED AND ANSWERED — see §12.**
 - **The D-2 boundary question** — *why* #1514's shape drains and `p02`'s does not — is unanswered
   (`DEBT.md` D-2, `unchecked:`). A fixture for `p02` would need a KNOWN-BAD ledger row, not a
   conformance row.
@@ -352,3 +357,42 @@ The mid-run reds `.claude/HANDOFF.md` licensed are **discharged at this commit**
   2-engine; `diff_compiler_dict_semantics` drives check/run/build only (its own *"NOT YET COVERED"*
   §7 bullet).
 - **Not run by any bite:** perf/scaling, the wasm gates, `diff_compiler_selfproc` locally.
+
+
+---
+
+## 12. C4/I2, asked again at the end — **CONJUNCT 2 ONLY**
+
+The contract requires the arc's headline question re-asked at the end, and reserves one
+broad-semantics consult for it. Stage A closed with *"🔴 NEEDS-B-2. C4/I2 does NOT survive."*
+
+> **Evidence is now order-invariant. The instance consulted is not.**
+> **Same shape as Stage A's failure, one layer in.**
+
+Measured: 5 programs × 2 import orders × 2 arms × `check`/`run`/`build`/binary, plus emitted IR;
+every expectation hand-derived from DICT §8 I4 **before** any invocation; the harness
+positive-controlled by its own corpus.
+
+| shape | base | branch |
+|---|---|---|
+| **covered** (same-spelled interfaces, distinctly-headed impls) | 🔴 **both conjuncts fail** — ONE symbol called twice, its body changing with import order | ✅ **both hold** |
+| **uncovered** (same-spelled interfaces, **same head**, same method) | order-dependent | 🔴 **conjunct 2 holds, conjunct 1 FAILS** — both qualified symbols emitted with order-invariant bodies, both call sites calling the same one, import order deciding which. Identical to base on all four channels, `check` exit 0, no diagnostic |
+| **P4 super-slot** | `201` | `201`; IR byte-identical across orders **and** base-vs-branch |
+
+**The boundary as a property:** C4/I2 holds **iff every constrained call site's candidate scan —
+keyed by `(method name, head type)` with no interface or origin component — yields exactly ONE row.**
+Identity was threaded into the route **word** and **not into the selection key**, so this PR makes
+the wrong choice **nameable in the IR without making it right**. A strict improvement on base (which
+additionally *dropped* an instance and let the evidence itself flip) — and **not the conjunction.**
+
+🚨 **Two constraints on the remaining phases**, the first corroborating the AD-2 carrier ruling from
+an independent direction:
+
+- **Phase 4 must key frozen admissibility by INTERFACE IDENTITY, not `(method, head)`.** If it
+  freezes admissibility computed by the **current** selector, **it freezes the order-dependence.**
+- **Phase 5 must make the engines CONSUME that table.** ⚠️ **Cross-engine agreement cannot detect a
+  miss** — measured, all engines agree on the *same wrong, order-dependent* answer. **Only a
+  permutation differential can see it.**
+
+The contract warned against *"delivering conjunct 2 and calling it the conjunction."* This PR
+delivers conjunct 2, and calls it conjunct 2.
