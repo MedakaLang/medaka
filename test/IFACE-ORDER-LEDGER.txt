@@ -5,6 +5,69 @@
 # Read by test/diff_compiler_iface_order.sh (the gate) and, for the half a gate cannot
 # check, by test/must_fail_census.sh (nightly, has the GitHub API).
 #
+# ══════════════════════════════════════════════════════════════════════════════
+# 🚨 THIS FILE HAS NO ROWS, AND THAT IS **NOT** A STATEMENT THAT ANYTHING IS FIXED.
+#    READ THIS BEFORE INFERRING ANYTHING FROM THE EMPTINESS BELOW.
+# ══════════════════════════════════════════════════════════════════════════════
+#
+# Two rows lived here until 2026-08-15 and were REMOVED, deliberately, by the Q1 unit
+# (Stage B / Phase 4b, `ifaceMethodCollisions` in compiler/frontend/resolve.mdk):
+#
+#   1182-unimplemented-iface-obligation-iface-order | #1182
+#   1620-two-ifaces-same-method-name-iface-order    | #1620
+#
+# WHY THEY WERE REMOVED — the derivation, not the conclusion. Both rows asserted a
+# DIVERGENCE: each case produced two distinct signatures depending on which of two
+# interfaces was declared first. Q1 rejects a module whose own declarations include two
+# `interface`s sharing a METHOD name, so both cases now reject in EVERY ordering and each
+# converged to ONE signature:
+#
+#   check=1;codes=R-DUPLICATE-IFACE-METHOD;schemes=;run=1:;build=1/-:
+#
+# Per the gate's FOUR-STATE TABLE that is STATE 3 (an `R-*` prefix = rejected at the
+# RESOLVE stage; it is NOT the `check=1;codes=T-*` state-4 trap). A row asserting a
+# divergence that no longer exists is false, and the gate correctly reds on it. Both
+# fixtures are KEPT and are now UNLEDGERED, so the gate grades them as invariant — a
+# stronger guard than the rows were.
+#
+# 🚨 ── AND HERE IS THE HALF THE ABSENCE OF A ROW CANNOT TELL YOU ────────────────
+#
+# **#1182 AND #1620 ARE BOTH STILL OPEN, AND BOTH BUGS ARE STILL LIVE.** Q1 fixes only
+# the INTRA-MODULE half — two interfaces declared TOGETHER in one module. The same
+# collision ACROSS MODULES is untouched: `duplicateErrors` runs inside `buildErrors`,
+# which has no import table at all, so nothing in the fix can see two interfaces that
+# meet only through an `import`. That axis is where these issues now live, and THIS
+# CORPUS CANNOT EXPRESS IT — the gate permutes only the ENTRY module's declarations
+# (see its "SCOPE LIMITS" header), so a cross-module case cannot be written here at all.
+#
+# ⇒ DO NOT INFER A DRAIN FROM THE ABSENCE OF A ROW. The rows are gone because the
+#   INSTRUMENT stopped being able to see the bug, not because the bug stopped existing.
+#
+# WHERE THE SURVIVING POPULATION LIVES, so the next reader can find it without a census:
+#   * test/must_fail_fixtures/1182-two-ifaces-same-method-name-order-decides/ — RE-POSED
+#     onto the cross-module axis by the same PR; it still REPRODUCES and is the live pin.
+#   * test/must_fail_fixtures/1620-two-ifaces-same-method-binary-wrong-value/ — its
+#     single-file shape DRAINED under Q1 and it has NOT been re-posed. ⚠️ #1620 therefore
+#     has NO reproducing pin and NO ledger row: nothing mechanical guards it today.
+#   * test/diff_compiler_dict_semantics.sh §4 (impl-block permutation) and
+#     test/diff_compiler_import_order.sh (import clauses) grade the sibling axes.
+#   * A census over the tree found 29 fixture directories carrying a genuine
+#     cross-module method-name collision; grep for two modules declaring interfaces
+#     that share a method name rather than trusting that number.
+#
+# ⚠️ ONE MECHANICAL CONSEQUENCE, STATED SO IT IS NOT DISCOVERED THE HARD WAY.
+# test/must_fail_census.sh HALF 4 is ROW-DRIVEN (`for IOLEDGER in ...`, `#` lines
+# skipped — derive it, don't trust this line). With no rows here it reports nothing about
+# #1182/#1620, and that half's header calls this coupling LOAD-BEARING precisely because
+# it is what catches someone closing these issues on a partial fix. An OPEN issue with no
+# row is not a census violation, so removing the rows is mechanically safe — but it also
+# REMOVES that tripwire. What is left: HALF 1 (PINNED-BUT-CLOSED) covers #1182 through its
+# re-posed fixture, and covers #1620 NOT AT ALL.
+#
+# 🚨 #1182 HAS BEEN DESK-CLOSED TWICE on exactly this kind of inference — once 1h44m
+# after its own comment said it was not fixed. If you are about to close either issue
+# because this file is empty: that is the error, and this paragraph is the warning.
+#
 # This file is test/IMPORT-ORDER-LEDGER.txt's design, re-aimed at a different axis.
 # Everything below about what a row means, how it drains and what a reviewer must
 # demand is that file's rule set, kept deliberately identical so the two ledgers
@@ -138,6 +201,32 @@
 # distinct signature it observed, and those lines are what belongs here. Both rows
 # below were produced that way on a cold `make medaka` of this branch (base aaa43716).
 
+# ══════════════════════════════════════════════════════════════════════════════
+# ── REMOVED ROWS, KEPT AS HISTORY (2026-08-15, Q1) ───────────────────────────
+#
+# Everything from here down is COMMENTED OUT and is therefore invisible to the gate
+# and to must_fail_census.sh. It is retained because a row's prose IS its evidence:
+# the two removed rows recorded what the divergence WAS and how it was derived, and a
+# future reader re-opening this axis (cross-module, or a Phase 4 identity key) needs
+# that, not a deleted-file archaeology exercise. See the banner at the top of this
+# file for why they were removed and why that is NOT a statement that either issue is
+# fixed.
+#
+# The signatures each row pinned, as last observed while the divergence was live:
+#
+#   1182-unimplemented-iface-obligation-iface-order | #1182
+#     | check=0;codes=;schemes=main : Unit\n;run=0:11\n;build=0/0:11\n
+#     | check=1;codes=T-NO-IMPL;schemes=;run=1:;build=1/-:
+#
+#   1620-two-ifaces-same-method-name-iface-order | #1620
+#     | check=0;codes=;schemes=main : Unit\n;run=0:False\n;build=0/0:False\n
+#     | check=1;codes=T-TYPE-MISMATCH;schemes=;run=1:;build=1/-:
+#
+# ⚠️ Do NOT paste either back in to "restore" a row. They no longer describe the
+# binary: both cases now converge on a single R-DUPLICATE-IFACE-METHOD signature, so
+# a restored row would red immediately as "the divergence MOVED" — which is not what
+# happened. Re-deriving from the gate is the only correct way to re-ledger anything.
+#
 # ── #1182 (OPEN): the unmet obligation goes to the LAST-DECLARED interface ───
 # Two interfaces declare `mth`; only one has an impl for the receiver. Declaring the
 # implemented interface FIRST makes the program REJECTED (`No impl of FB for Blob`);
@@ -158,9 +247,11 @@
 # ⚠️ AXIS NOTE, and it matters for how a drain here is read: #1182's OWN canonical
 # program (two interfaces, two impls, one receiver) was measured INVARIANT on this
 # axis — it is kept as the unledgered case negative-1182-impl-axis-shape-is-iface-
-# axis-invariant/. So this row is not a restatement of #1182's must-fail pin on a new
-# axis; it is a DIFFERENT shape of the same collision that the pin cannot reach.
-1182-unimplemented-iface-obligation-iface-order | #1182 | check=0;codes=;schemes=main : Unit\n;run=0:11\n;build=0/0:11\n | check=1;codes=T-NO-IMPL;schemes=;run=1:;build=1/-:
+# axis-invariant/. ⚠️ THAT FIXTURE IS ALSO GONE — Q1 rejects it too; its proposition
+# is now carried by negative-1183-impl-axis-shape-is-iface-axis-invariant/. So this row
+# was not a restatement of #1182's must-fail pin on a new axis; it was a DIFFERENT
+# shape of the same collision that the pin could not reach.
+# ROW REMOVED 2026-08-15 (signature above).
 
 # ── #1620 (OPEN): same method name at DIFFERENT return types, one receiver ───
 # Two interfaces declare `ping` at `String` and at `Int`, both implemented on one type.
@@ -183,4 +274,4 @@
 # ⚠️ `main` projects to `Bool` (`ping T == 7`) rather than printing `ping T`: the raw
 # form's built binary prints a LIVE HEAP ADDRESS that differs on every execution, so
 # an exact-match pin on it would red permanently for a reason unrelated to this axis.
-1620-two-ifaces-same-method-name-iface-order | #1620 | check=0;codes=;schemes=main : Unit\n;run=0:False\n;build=0/0:False\n | check=1;codes=T-TYPE-MISMATCH;schemes=;run=1:;build=1/-:
+# ROW REMOVED 2026-08-15 (signature above).
