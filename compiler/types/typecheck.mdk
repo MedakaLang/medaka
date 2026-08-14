@@ -199,7 +199,7 @@ import types.registry.{
 -- (`implKeyTc` here, `implKeyOf` there) over its own `Ty` printer; they are now
 -- one function, so the caller side and the definition side of the dict-word seam
 -- agree BY CONSTRUCTION rather than by two mirrors staying in lockstep.
-import types.route_key.{implRouteKeyWord}
+import types.route_key.{implRouteKeyWord, funHeadTag}
 
 -- ── monotypes & schemes ───────────────────────────────────────────────────
 public export data Mono =
@@ -19430,8 +19430,26 @@ ieHeadCollidesByMethod env name hd = ieCountHeadByMethod env name hd > 1
 -- spine walk is shared and cannot drift between them; what they do NOT share
 -- is the classification of that head node, which is the part that differs by
 -- construction — see `headTyconMono`'s note on the same split.
+--
+-- 🚨 IT ALSO PEELS `TyEffect` — #1618, and the peel is NOT a `TyApp`-spine step.
+-- `eval.headTycon` has peeled it since long before this projection existed, so an
+-- `impl Sz (<Stdout> Int)` was filed by the DEFINITION side under tag `Int` while
+-- this side answered `None` and stamped the route word `__none__`; the emitter
+-- then looked `__none__` up, found nothing, and died with `no impl of method 'sz'
+-- for type '__none__'` on a program `check` and `run` both accept.  Peeling here
+-- makes the two sides name the same tag.  The peel belongs on the NODE walk, not
+-- on one classifier, so `headTyconTy` and `headTyconNameTy` cannot disagree about
+-- WHICH node they are classifying (they are only allowed to disagree about how).
+--
+-- ⚠️ `TyConstrained` is deliberately NOT peeled, even though `eval.headTycon`
+-- peels it too.  It is not the same defect: peeling a constraint yields a
+-- still-headless body (`impl Sz (Eq a => a)` → `a`), so both sides already answer
+-- `None` and agree.  Adding the arm would be a behaviour change on a shape with
+-- no reported divergence; #1617's own body records the measurement that bounds
+-- this class at two.
 headTyNode : Ty -> Ty
 headTyNode (TyApp a _) = headTyNode a
+headTyNode (TyEffect _ _ t) = headTyNode t
 headTyNode t = t
 
 -- the head type constructor of an (unelaborated) AST type, as the IMPL-SIDE
@@ -19449,10 +19467,21 @@ headTyNode t = t
 -- `tyConBuiltin (tupleCtorTyName n)` (`frontend/parser.mdk`).  It is also what
 -- keeps the impl side and the goal side agreeing on tuple heads, the invariant
 -- the `ImplUniverse` comment above already relies on.
+--
+-- ⚠️ THE `TyFun` ARM IS #1617's FIX, and `OriginBuiltin` is the same answer by
+-- the same authority as `TyTuple`'s: the arrow constructor is provided by the
+-- LANGUAGE, not by a declaration.  Before it, two arrow-headed impls of one
+-- interface both fell through to `None`, landed in the headless bucket, and —
+-- because `goalHeadCon` answered `None` too — `ieSelectRowByMethod` selected
+-- NOTHING, so the site was stamped `RNone` and the emitter fell back to arg-tag
+-- dispatch over a receiver (a closure) that carries no cell tag.  See
+-- `route_key.funHeadTag` for why ONE tag is enough here where tuples needed one
+-- per arity.
 headTyconTy : Ty -> Option HeadKey
 headTyconTy t = match headTyNode t
   TyCon { tyConName = n, tyConOrigin = o } => Some (headKeyOfCon o n)
   TyTuple ts => Some (headKeyOfCon OriginBuiltin (tupleHeadTagTc (listLen ts)))
+  TyFun _ _ => Some (headKeyOfCon OriginBuiltin funHeadTag)
   _ => None
 
 -- The BARE-NAME residual of the projection above: byte-identical to what
@@ -19480,6 +19509,11 @@ headTyconNameTy : Ty -> Option String
 headTyconNameTy t = match headTyNode t
   TyCon { tyConName = n } => Some n
   TyTuple ts => Some (tupleHeadTagTc (listLen ts))
+  -- kept in lockstep with `headTyconTy`'s new arm (#1617): this residual's three
+  -- readers (`implEntryFromTys`, `implHeadTagForIface`, `implTysIfMatch`) all
+  -- compare their answer against a tag the projection above minted, so an arm
+  -- present in one and absent from the other is a table that cannot be looked up.
+  TyFun _ _ => Some funHeadTag
   _ => None
 
 -- The bare name of a head key, with [dflt] when there is NO head type
@@ -20859,6 +20893,13 @@ headTyconMono t = match headMonoNode t
   -- instead of minting the identity §8 I6.1 forbids.  The answer is unchanged —
   -- `headKeyName (HkRigid n) == n`, exactly the `Some n` this arm gave before.
   TRigid n => Some (HkRigid n)
+  -- #1617, the GOAL half of the same bite — and it MUST land with
+  -- `headTyconTy`'s `TyFun` arm, never alone.  This is the projection
+  -- `goalHeadCon` reads, so it is what decides which bucket
+  -- `ieSelectRowByMethod`/`ieSelectRowByIface` search; fixing only the impl side
+  -- would file the arrow-headed impls into a bucket no goal ever keys, i.e.
+  -- would move them from "mis-bucketed" to "unreachable".
+  TFun _ _ _ => Some (headKeyOfCon OriginBuiltin funHeadTag)
   _ => None
 
 -- The BARE-NAME residual of the projection above: byte-identical to what
@@ -20880,6 +20921,25 @@ headTyconMono t = match headMonoNode t
 -- classify the SAME head nodes, so a new `Mono` head constructor is owed an arm
 -- in both (both fall through `_ => None`, which is exactly the wildcard hazard
 -- `AGENTS.md` names — audit them as a SET).
+--
+-- 🚨 THAT INVARIANT NOW HAS ONE DECLARED EXCEPTION, `TFun` (#1617), AND IT IS A
+-- DECISION RATHER THAN AN OVERSIGHT.  `headTyconMono` gained a `TFun` arm; this
+-- one deliberately did not, because the two functions stopped being asked the
+-- same QUESTION at that constructor:
+--   * `headTyconMono` is the goal-side DISPATCH KEY.  It needs arrow goals to key
+--     the same bucket arrow-headed impls file into, and `__fun__` is a synthetic
+--     bucket name, not a claim that a declaration exists.
+--   * this residual is read by 17 sites that ask "does this head NAME a type
+--     constructor?", and for several the answer `None` is load-bearing prose in
+--     the tree.  `allConcreteHeads` is the sharp one: `uOblIsDecidableNow`'s own
+--     comment derives its closed set FROM the fact that "`headTyconNameMono`
+--     answers `None` for a `TFun` … so `allConcreteHeads` calls it non-concrete",
+--     and pairs that with the separate `anyListM monoIsFunction` arm.  Handing it
+--     `Some "__fun__"` would silently merge two populations that comment keeps
+--     apart, on a path that — by its own 🚨 — NO GATE CAN SEE.
+-- So a NEW `Mono` head constructor still owes an arm in both; `TFun` is the one
+-- place where the pair answers differently on purpose.  Do not "restore
+-- symmetry" here without first re-deriving `uOblIsDecidableNow`'s closed set.
 headTyconNameMono : Mono -> Option String
 headTyconNameMono t = match headMonoNode t
   TCon n _ => Some n

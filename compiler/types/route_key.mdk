@@ -160,6 +160,32 @@ ifaceWordOf o name = match ifaceIdentity o name
   "" => name
   ident => ident
 
+-- ── the FUNCTION head tag ─────────────────────────────────────────────────
+-- The dispatch/impl-tag of an ARROW-headed impl (`impl Sz (Int -> Int)`) —
+-- #1617.  Sited HERE, beside the route word, for the reason this module exists
+-- at all: the tag is derived independently on three sides of the seam
+-- (`typecheck.headTyconTy`/`headTyconMono`, `eval.headTycon`, and through the
+-- latter `core_ir_lower.headTyconHead`), and a mirrored constant is exactly the
+-- drift `tupleHeadTag`/`tupleHeadTagTc` still carries.  One mint, three readers.
+--
+-- 🚨 IT IS DELIBERATELY ARITY-FREE, and that is the opposite of the nearest
+-- precedent (`tupleHeadTag n = "__tuple<n>__"`), so the divergence is derived
+-- rather than assumed.  A tuple's arity is the ONLY thing that separates
+-- `(Int, Int)` from `(Int, Int, Int)` at the head, and the runtime cell carries
+-- it (`HTuple`), so an arity-erased tuple tag coalesced impls that a value could
+-- still be told apart by.  An arrow has NO runtime tag at all (a closure carries
+-- no cell tag — that is the very E-PANIC #1617 reports on `build`), and its arity
+-- does not separate the pair the bug is about: `Int -> Int` and `Bool -> Bool`
+-- are both arity-1.  So NO tag drawn from an arrow's shape can discriminate two
+-- arrow-headed impls, and the discrimination has to come — and already does come
+-- — from `implRouteKeyWord` above, which prints the FULL type args.  The single
+-- tag's job is only to make the two impls COLLIDE, because a collision is
+-- precisely what makes `routeWordFor`/`keyForSite` upgrade the site to that
+-- canonical word.  This is the same mechanism `Pair Int Bool` vs `Pair Bool Int`
+-- already rides (`KeyEntry`'s C7 note, `types/typecheck.mdk`), not a new one.
+export funHeadTag : String
+funHeadTag = "__fun__"
+
 -- ── the impl route word ───────────────────────────────────────────────────
 -- `<iface word>|<type args, prec-2, space-joined>|<method name or empty>`.
 --
