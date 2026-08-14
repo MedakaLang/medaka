@@ -47,7 +47,11 @@ For each semantic field record P, U, private reader, controlled artifact/failure
 and whether each route is rendering, event-only, or aborting. Separate data
 correctness from ownership correctness. A discarded result is not observable.
 Name the finite reviewed mutation rows and earliest stable expected-red rule;
-state the claim each row proves.
+state the claim each row proves. Include exact mutation, prepare, check, and
+restore-check commands plus unique retained evidence directories. Reviewer
+projection carries these exact inputs and paths during initial harness review,
+before final matrix execution; summaries without executable inputs are
+insufficient.
 
 ## 4. Verification and inheritance
 

@@ -99,6 +99,17 @@ field. Ambient-state migrations require three distinct classes when applicable:
 - renamed ambient authority: roundtrip selected carrier field through a legal
   renamed top-level authority on relevant route.
 
+Fix every row's exact mutation command, route, and expected-red identifier before
+executing any row. Order behavioral evidence so each mutant reaches the earliest
+assertion that directly proves its claim, after structural checks have admitted
+the mutated program. Required behavioral shapes include P-loss, fresh-context U
+contamination, and a direct-reader corruption. Route-bearing ownership claims
+also require legal renamed-authority roundtrips on each applicable rendered and
+event-only route. A valid roundtrip copies the selected carrier value into the
+renamed authority and back before the real reader; it preserves behavior while
+violating ownership. An unused renamed cell, constant-only cell, or initializer
+caught solely by a structural name scan is not a renamed-authority mutant.
+
 Generic carrier mutations do not substitute for these claims. After final
 implementation/harness freeze, create one row per applicable field/class pair.
 Record row ID, semantic field, class, route, claim, exact head, target file,
@@ -133,7 +144,11 @@ use `--restore-check` to rebuild restored artifacts. A source mutation tested by
 a stale probe is invalid even when it reports green or red. The helper restores
 bytes without Git index writes, so isolated-worktree `.git/worktrees/*/index.lock`
 restrictions are not grounds for a custom transaction. Use custom shell only
-for a shape the helper cannot express, and retain the same guarantees.
+for a shape the helper cannot express, and retain the same guarantees. Pass
+`--receipt-dir` with a unique disposable directory for every reviewed row; it
+retains exact commands, prepare/check logs, statuses, hashes, decisive evidence,
+and restoration proof. Give initial reviewer these paths and exact inputs before
+execution so receipt-contract defects are found before final matrix cost.
 
 Unexpected green means wrong target or stale build until re-derived; report
 `BLOCKED_WRONG_TARGET`. Do not relabel it non-discriminating, substitute another
