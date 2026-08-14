@@ -1769,8 +1769,16 @@ tag **no arm matches**, reaching `unreachable`; branch emits two constants and t
 - **Not #1265:** `p02`'s branch IR contains **zero** `mdk_default` symbols — both impls define the
   method explicitly, so no default-cell collision is involved.
 - **Not #1047** (CLOSED; its residual is the default half, owned by #1265).
-- **It is #1182**, same selector, same order-dependence, same engine-agreement — and #1182's pin
-  still reproduces identically on both arms.
+- **It matches #1182** — same selector shape, same order-dependence, same engine-agreement — and
+  #1182's pin still reproduces identically on both arms.
+
+⚠️ **G-3, caught by the PR-body pass and corrected here: that match is a SYMPTOM MATCH, not a proof,
+and I stated it as an identity.** `CLOSE-OUT.md` §5 forbids *any* #1182 framing precisely because
+nine such attributions were already wrong this sprint — and I then created a tenth in the entry that
+records the correction. **The supported claim is narrower:** `p02`'s residual is **order-dependent
+selection upstream of the word**, it is **not** fixed by this sprint, and it is **not** #1265, #1047
+or anything unfiled. Whether it is literally #1182's defect or a sibling of it is **not established**,
+and the PR body must not assert it.
 
 ⇒ **The sprint files NOTHING new here.** The only gap is *coverage of the existing pin*: #1182's
 fixture is single-file with both interfaces in one module, so the **cross-module / wrapper reach is
@@ -1815,3 +1823,20 @@ asserted a third defect from a source-level asymmetry without measuring it — t
 claim-past-its-evidence move, in the opposite direction. **The rule that actually generalizes: an
 asymmetry in the source is not a defect until the two sides are shown to answer differently on a
 program.** That is what distinguishes F-8 from this.
+
+## RUN-P3-046 — errata on landed `DEBT.md` rows (recorded here, NOT edited in place: a writer is live)
+
+- **`b1`+`e` `could move:` says "all three edited modules are LEG A." TWO of three are.**
+  `ir.core_ir_lower` is **not** in the LEG A corpus. Left uncorrected, a reviewer reads a missing
+  third golden as a missing re-cut.
+- **`a`'s `sites:` says `route_key.mdk` is "374 lines."** It was 396 at `a`'s landing and is **436**
+  at HEAD (it grew in `e`). 🚨 **Three values, and two of them were "corrections."** This is the
+  third recount in this sprint's own ledger to produce a new wrong number, and it is the argument
+  for the rule rather than an embarrassment: **write the command, never the count.** Replacement:
+  `git show HEAD:compiler/types/route_key.mdk | wc -l`.
+- **`#1068` appears ZERO times in `DEBT.md`** while #1113 says its fix must be done **together** with
+  this work. The `engines:` clause shipped without it; assigned to the orchestrator as a follow-up.
+- **Two follow-ups have no issue number anywhere:** the deferred `keyTable`/`KeyBuckets` deletion and
+  the `b2` drop. **Without numbers, Phase 5 re-plans off stale design docs** — the `b2` drop in
+  particular carries a finding (D1's ✅ on the D4 pair is wrong at this pin) that exists only in this
+  ledger. **Both must be filed at the exit phase.**

@@ -7,7 +7,13 @@
 **Expected-red for the duration, BY DESIGN — do not diagnose these as a break.** Contract:
 `.claude/STAGE-B-PHASE3-SPRINT.md`; records: `.claude/sprint-phase3/`.
 
-This unit changes `RKey`'s payload type and therefore **emitted IR**. Goldens are blessed **ZERO
+⚠️ **CORRECTED at HEAD:** this unit was *planned* to change `RKey`'s payload type; that design was
+**REFUSED in Phase 0** and `data Route` is **unchanged** (`RKey String (List Route)`). The identity
+lives **inside the word**, minted by `compiler/types/route_key.mdk` and called from both sides of the
+seam. **Emitted IR still moves**, so everything below stands unaltered — but do not go looking for a
+payload type change, and do not repeat that framing: it is the doc a next agent reads first.
+
+This unit changes the emitted route **word** and therefore **emitted IR**. Goldens are blessed **ZERO
 times** until the close-out, when they are re-cut **once** from the final binary. So, on this
 branch, mid-run:
 
