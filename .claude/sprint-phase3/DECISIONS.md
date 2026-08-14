@@ -1397,3 +1397,79 @@ set (they cross both arms silently), both arms resolving to one directory, and a
 **`both arms failed check`** counter exists because a corpus of unparseable programs would otherwise
 report a clean all-SAME. And an **`EXITONLY`** verdict annotated *"loud → quiet is a severity
 increase, not progress."*
+
+## RUN-P3-037 — tracker reconciliation (R-4): four desk closes, one anti-close, five omissions
+
+### The #1182 adjudication is CLOSED — three independent derivations, all against me
+
+R-4 derived it tracker-side, R-2 source-side, the implementer in-tree. All three agree, and R-4 adds
+the fact that reframes the replacement: **#1047 is CLOSED**, so "the #1047 family" means its live
+members — **#1265**, **#1514**, and the bare-compat leg of `oblIfaceKeys`. Citable ticket: **#1113**.
+All nine instances corrected.
+
+### Desk closes: **#1512 · #1557 · #1558 · #1559** — four Stage A units implemented and left open
+
+Each derived, not relayed: `universeIfaceRequiredRef` survives only as **11 comment tombstones, zero
+code sites**; `ieCandidacyVisibleAt _ _ = True`; `checkCoherence` now takes `ImplEnv` and `CohImpl`
+carries an `IfaceRef`; #1512's three owed fixtures all exist at HEAD. Precedent for closing ARCH
+units on landing rather than holding them: #1446 and #991.
+
+⚠️ **#1558 must carry its re-scope into the close comment.** It landed as an owner-ruled **split, not
+the deletion its body specifies** — `test/registry_keying_ratchet.sh` says so in its own words:
+*"A-3.6 (#1558) HAS LANDED AND IT WAS NOT A DELETION."* Close it silently and the next reader takes
+the title as evidence the name axis flipped too. It did not.
+
+### 🚨 ANTI-CLOSE: **#994 must NOT be closed — and this sprint WIDENED it**
+
+`#994`'s third bullet is that CrossRun's mirror pairs should reset *"only by whole-record re-mint."*
+At HEAD there are **eight lockstep `setRef`s at one site** — and **two of them are `f`'s**. PR
+#1605's *"Implements B-3 (#994)"* is true of the PerRun pairs and **false of the CrossRun snapshot**.
+Closing #994 on that PR body would bury a live drift surface **that a `b1` bug would land squarely
+on**. This is the partial-identity-reads-as-done shape, and my own bite is now part of it.
+
+### #1113's body is STALE in a way that would corrupt the close-out
+
+Updated 2026-08-09 — before Stage A merged. Two consequences:
+- Its *"depends on Stage A"* dependency is **discharged** (Stage A merged 08-12).
+- Its *"Drains #1072/#1071/#1062"* line is **already two-thirds spent**: #1072 and #1071 are
+  **CLOSED**, drained by *Stage B*, not by B-2 (#1071 as a duplicate of #1062). **B-2's remaining
+  drain claim is #1062 alone — and #1062 is EVAL-ONLY**, which nothing in B-2.2's route-word half
+  touches. **The close-out must not cite #1062 as drained by this sprint.**
+
+Also: #1122's serialized lane still reads as though B-2 were gated behind U2/U4, which have not
+landed and are being overtaken.
+
+### FINDINGS → tracker, dedup done properly (title AND body, open AND closed)
+
+| row | routing | why |
+|---|---|---|
+| **F-6** | 🎯 **ALREADY COVERED — cell on #347** | #347 is OPEN, `needs-repro`, and says *"nobody has built two modules whose paths differ only in a separator char."* **F-6 supplies exactly that missing derivation.** A duplicate avoided outright |
+| **F-1** | cell on **#1450**, ⚠️ **conditional** | no issue covers a user interface method colliding with a prelude interface **method** (the neighbours are all prelude *standalones*). But see OWED-2 |
+| **F-2 / F-8** | **file separately** | same root arm, **different fixes**: F-2 needs `TyFun` to get a tag; F-8 needs two projections to agree. Merging them would give one pin two fixes |
+| **F-3** | **do not file** until reproduced | checked against #1265 (defaults only), #1530 (re-export), #1182 (order-dependence) — no match, but it is unreproduced |
+| **F-4** | file, labelled derived-not-measured | one search hit, closed, different subject |
+| **F-5** | repair round first; may be a **cell on #1154** | `pickMostSpecificEntry`'s first-declared arm is the same shape |
+
+🚨 **OWED-2 gates F-1's routing, and the failure mode is specific:** F-1's *"same mechanism as
+#1450"* is **symptom-matched, not IR-derived** — #1450's own filing read the arity off the IR. If the
+param count is correct with a wrong value, it is a **different mechanism** and the cell would **bury
+a second defect inside #1450**. Derive before filing: `build --keep-ir`, then
+`grep 'define .*_sub('`.
+
+### Five tracker facts my ledger never recorded (a grep of all three artifacts found three hits total)
+
+1. **#1068** — #1113's blast list says its fix *"would build in wasm the superset arm this task
+   deletes; **do them together**."* RUN-P3-003 independently re-derived wasm's separate family
+   **without citing #1068**. `e`'s `engines:` clause owes the issue number, or the wasm arm ships an
+   un-owned divergence.
+2. **#1608** — filed *by the previous sprint*, S1, **un-pinnable**: `core_ir_eval` selects a
+   cross-module impl by **import order**. It is `eval.mdk`'s lockstep peer, a file this sprint edits.
+   **Any `b1`/`e` fixture asserting on `run` in a cross-module shape may be measuring #1608.**
+   Relayed to the implementer.
+3. **#1127** — its repro carries an `assum`-vs-`super` control that is **exactly the P4 axis** the
+   new dict fixtures pin. Adopt it rather than authoring fresh. Relayed.
+4. **#1180** — a known-wrong `noneHeadTag` bucket sitting **under `b1`'s preserved fallback arm**.
+   Belongs in `DEBT.md`.
+5. 🚨 **A THIRD `headTyconTy` asymmetry:** `eval.mdk:~546` also strips **`TyConstrained`**. F-2 and
+   F-8 are **two of three**. I wrote *"audit the arms as a SET"* and then shipped a set one arm
+   short — the lesson failing inside the sentence that states it, for the second time this sprint.
