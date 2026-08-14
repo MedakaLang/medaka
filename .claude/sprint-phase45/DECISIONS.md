@@ -2048,3 +2048,66 @@ note, the tripwire-loss account, and the two new issues.
 
 **#1638 verified `isInMergeQueue: true` via GraphQL** — not from `gh pr merge`'s exit code, which
 carries no signal here in either direction.
+
+## RUN-P45-055 — 🚨 CORRECTION TO RUN-P45-050, AND IT IS MINE: HALF 1 is DIRECTORY-driven, not verdict-driven
+
+RUN-P45-050 recorded, from W2's report and then in my own words, that census **HALF 1** *"reaches #1182
+through its re-posed fixture and **#1620 not at all**"*, and I ruled the #1620 re-pose partly on that.
+**The script contradicts it.** `test/must_fail_census.sh:113-121` (enumerator) and `:136-166` (HALF 1):
+any `test/must_fail_fixtures/*/` whose `claim.txt` carries an `issue:` line is enrolled, and the half
+fires **purely on the issue being CLOSED**. It never reads the gate's REPRO/DRAINED verdict.
+
+⇒ While #1620's directory existed — **including while it was drained** — HALF 1 *would* have caught a
+desk-close. So *"covered by nothing"* overstates, in my ruling, in the PR body, and in the shipped
+ledger banner.
+
+**The re-pose is still right, on a stronger justification that was available the whole time:** a drained
+pin **reds the must-fail gate** and would have been deleted, and a drained pin **proves nothing about a
+live bug**. The correct claim is about the pin's *evidentiary* value, not about census coverage.
+
+⚠️ **Provenance of the error, because it matters more than the error:** W2 reported the HALF 1/HALF 4
+split, I did not check it against the script, and I then wrote it into a RULING — which W2 dutifully
+inscribed into a shipped artifact. That is
+[[feedback_dont_launder_an_agents_observation_into_your_inference]] running exactly as documented, on the
+same night I recorded RUN-P45-048 about laundering a message into a writer's context. **Second instance
+tonight of me relaying an agent's mechanical claim without opening the file.**
+
+**Also mine: the "29 cross-module directories" figure.** I commissioned it, handed it to W2, and it
+shipped in the ledger banner with a hedge but **no derivation**. An independent parse lands nearer 55
+and could not reproduce 29. ⇒ Either the command ships with the number or the number does not ship.
+[[feedback_derive_dont_encode]], violated by the person who keeps citing it.
+
+## RUN-P45-056 — EVIDENCE-LENS REVIEW OF #1640: nine findings, one BLOCKING, and the defect is STALENESS
+
+Verdict on the engineering prose: *"unusually disciplined — the derivations are real, the census
+reproduces exactly, the counts are honest, nothing is closed that shouldn't be."* The reviewer
+independently re-ran the newly-rejected-files census with its own layout parser and got **exactly the
+same 10 files**, and verified four counts/diffs character-for-character (98 fixture dirs, 5 iface_order
+cases, resolve snapshot +145/−5, legA +5/−0 additive-only).
+
+**F1 BLOCKS: commit 3 falsified a paragraph commit 2 wrote.** The ledger banner still says #1620 *"has
+NOT been re-posed"* and *"nothing mechanical guards it today"* — written truthfully at `e964f43d`, false
+since `5d3745e3` re-posed that exact fixture. **The banner is the artifact designed for whoever next
+touches #1620, and it tells them the issue is unguarded.** It is the same inference the banner's own
+next paragraph warns about. ⇒ Not a patch of two lines: **re-read the whole banner against the tree at
+head.**
+
+**F6 is the arc's signature failure, again:** `compiler/types/typecheck.mdk:16806-16816` still states in
+the present tense that a single-file two-interface program is ACCEPTED when the declarations are swapped
+— **Q1 rejects it in both orderings now** — and the ledger's removed-row prose *points the next reader
+straight at that comment* (`grep -n 'interface declarations SWAPPED'`). A falsified recipe surviving in
+the file the ledger cites as authority.
+
+**F7:** two files still instruct readers that the coupling this PR removed is intact
+(`diff_compiler_iface_order.sh:118-121` *"Do not remove that coupling."*; `must_fail_census.sh:~236`
+*"LOAD-BEARING, not decorative … Do not decouple them."*), and the gate's drain remedy still prints
+"close the issue, DELETE the row". Disclosure in the banner is honest but one-sided.
+
+**F4, not blocking but the one claim ranked above its evidence:** #1182's `claim.txt` **asserts** its
+load-bearing step (*"exactly ONE binding"*) from the spelling of the import lines, and — unlike #1620's
+— it cannot be corroborated by the value, since both modules declare `m : a -> Int` so no type probe
+distinguishes the denotations. **A cheap probe exists** (drop `m` from the `a1` import list, confirm the
+occurrence goes unbound) and has been ordered.
+
+Repair round dispatched to W2 with all nine, my two corrections stated as mine, and an instruction to
+verify every item — including my corrections — before acting.
