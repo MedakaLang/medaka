@@ -220,6 +220,14 @@ if grep -E '^_?useRecUpdateRef[[:space:]]*[:=]|setRef (_?useRecUpdateRef)' "$WAS
   echo "FAIL H2B9-RECUPDATE-AUTHORITY: retired ambient record-update authority remains"
   exit 1
 fi
+if grep -E '^_?useRngRef[[:space:]]*[:=]|setRef (_?useRngRef)' "$WASM_SRC" >/dev/null; then
+  echo "FAIL H2B9-RNG-AUTHORITY: retired ambient RNG authority remains"
+  exit 1
+fi
+if grep -E '^_?useHashRef[[:space:]]*[:=]|setRef (_?useHashRef)' "$WASM_SRC" >/dev/null; then
+  echo "FAIL H2B9-HASH-AUTHORITY: retired ambient hash authority remains"
+  exit 1
+fi
 for required in \
   'useRecUpdate : Ref Bool' \
   'useRecUpdate = Ref' \
@@ -272,9 +280,29 @@ grep -F 'scanExprW7 emit (CFieldAccess ex _ _) = scanExprW7 emit ex' "$WASM_SRC"
   echo "FAIL H2B9-RECUPDATE-NEAREST-MISS: plain record construction/access changed authority"
   exit 1
 }
+for required in \
+  'useRng : Ref Bool' \
+  'useRng = Ref' \
+  'useHash : Ref Bool' \
+  'useHash = Ref' \
+  'noteW8Extern emit name =' \
+  'setRef emit.useRng True' \
+  'setRef emit.useHash True' \
+  '|| emit.useRng.value || emit.useHash.value || useFloatRef.value' \
+  'let rngGlobal = if (progEmit prog).useRng.value then rngStateGlobalLines else []' \
+  'let rngRt = if (progEmit prog).useRng.value then rngRuntimeLines else []' \
+  'let hashRt = if (progEmit prog).useHash.value then hashRuntimeLines else []' \
+  'let hashStrRt = if (progEmit prog).useHash.value && useStrRef.value then hashStringRuntimeLines else []' \
+  'setRef useFloatHashRef True in setRef emit.useHash True' \
+  'setRef useFloatRngRef True in setRef emit.useRng True'; do
+  grep -F -- "$required" "$WASM_SRC" >/dev/null || {
+    echo "FAIL H2B9-RNG-HASH-AUTHORITY: missing $required"
+    exit 1
+  }
+done
 EXPECTED_MODULE_REFS="$(printf '%s\n' \
   useStrRef useListRef useArrayRef useRefBoxRef \
-  useStrLeafRef useRngRef useHashRef useEPutRef \
+  useStrLeafRef useEPutRef \
   useFloatRef useFloatHashRef useMathRef useFloatRngRef useFloatStrRef \
   useStrSearchRef useValueCmpRef useValueArithRef numPolyLocalsRef useStrCodecRef \
    useCharFromCodeRef useCharClassRef useIORef useArgsRef useFileBytesRef \
@@ -767,13 +795,14 @@ FEATURE_STATUS=$?
   echo "FAIL A0-FEATURE-CAPTURE: harness status/stderr"
   exit 1
 }
-FEATURE_MARKERS="$(awk '/^FEATURE_(P1|FLOAT_DIV|RECORD_U|CENSUS_U_GAP|P2)_(BEGIN|END)$/ { print }' "$INPUT_WORK/feature.out")"
-FEATURE_EXPECTED_MARKERS="$(printf 'FEATURE_P1_BEGIN\nFEATURE_P1_END\nFEATURE_FLOAT_DIV_BEGIN\nFEATURE_FLOAT_DIV_END\nFEATURE_RECORD_U_BEGIN\nFEATURE_RECORD_U_END\nFEATURE_CENSUS_U_GAP_BEGIN\nFEATURE_CENSUS_U_GAP_END\nFEATURE_P2_BEGIN\nFEATURE_P2_END')"
+FEATURE_MARKERS="$(awk '/^FEATURE_(P1|HASH_INT_ONLY|FLOAT_DIV|RECORD_U|CENSUS_U_GAP|P2)_(BEGIN|END)$/ { print }' "$INPUT_WORK/feature.out")"
+FEATURE_EXPECTED_MARKERS="$(printf 'FEATURE_P1_BEGIN\nFEATURE_P1_END\nFEATURE_HASH_INT_ONLY_BEGIN\nFEATURE_HASH_INT_ONLY_END\nFEATURE_FLOAT_DIV_BEGIN\nFEATURE_FLOAT_DIV_END\nFEATURE_RECORD_U_BEGIN\nFEATURE_RECORD_U_END\nFEATURE_CENSUS_U_GAP_BEGIN\nFEATURE_CENSUS_U_GAP_END\nFEATURE_P2_BEGIN\nFEATURE_P2_END')"
 [ "$FEATURE_MARKERS" = "$FEATURE_EXPECTED_MARKERS" ] || {
   echo "FAIL A0-FEATURE-CAPTURE: marker cardinality/order"
   exit 1
 }
 feature_exact_capture FEATURE_P1_BEGIN FEATURE_P1_END "$INPUT_WORK/feature.out" >"$INPUT_WORK/feature-p1.wat" &&
+  feature_exact_capture FEATURE_HASH_INT_ONLY_BEGIN FEATURE_HASH_INT_ONLY_END "$INPUT_WORK/feature.out" >"$INPUT_WORK/feature-hash-int-only.wat" &&
   feature_exact_capture FEATURE_FLOAT_DIV_BEGIN FEATURE_FLOAT_DIV_END "$INPUT_WORK/feature.out" >"$INPUT_WORK/feature-float-div.wat" &&
   feature_exact_capture FEATURE_RECORD_U_BEGIN FEATURE_RECORD_U_END "$INPUT_WORK/feature.out" >"$INPUT_WORK/feature-u.wat" &&
   feature_exact_capture FEATURE_CENSUS_U_GAP_BEGIN FEATURE_CENSUS_U_GAP_END "$INPUT_WORK/feature.out" >"$INPUT_WORK/feature-census.events" &&
@@ -781,7 +810,7 @@ feature_exact_capture FEATURE_P1_BEGIN FEATURE_P1_END "$INPUT_WORK/feature.out" 
     echo "FAIL A0-FEATURE-CAPTURE: malformed capture"
     exit 1
   }
-for feature_file in feature-p1.wat feature-float-div.wat feature-u.wat feature-census.events feature-p2.wat; do
+for feature_file in feature-p1.wat feature-hash-int-only.wat feature-float-div.wat feature-u.wat feature-census.events feature-p2.wat; do
   [ -s "$INPUT_WORK/$feature_file" ] || {
     echo "FAIL A0-FEATURE-CAPTURE: empty $feature_file"
     exit 1
@@ -807,6 +836,36 @@ if grep -F '(local $__rub0 (ref eq))' "$INPUT_WORK/feature-u.wat" >/dev/null; th
   echo "FAIL H2B9-RECUPDATE-U-ABSENCE: inert control declared record-update local"
   exit 1
 fi
+for feature_p in feature-p1.wat feature-p2.wat; do
+  grep -F '(global $mdk_rng_state' "$INPUT_WORK/$feature_p" >/dev/null &&
+    grep -F '(func $mdk_next_u64' "$INPUT_WORK/$feature_p" >/dev/null || {
+      echo "FAIL H2B9-RNG-RUNTIME: missing RNG global/runtime in $feature_p"
+      exit 1
+    }
+  grep -F '(func $mdk_hash_mix64' "$INPUT_WORK/$feature_p" >/dev/null &&
+    grep -F '(func $mdk_hash_int' "$INPUT_WORK/$feature_p" >/dev/null &&
+    grep -F '(func $mdk_hash_string' "$INPUT_WORK/$feature_p" >/dev/null || {
+      echo "FAIL H2B9-HASH-RUNTIME: missing base hash runtime in $feature_p"
+      exit 1
+    }
+done
+grep -F '(func $mdk_hash_mix64' "$INPUT_WORK/feature-hash-int-only.wat" >/dev/null &&
+  grep -F '(func $mdk_hash_int' "$INPUT_WORK/feature-hash-int-only.wat" >/dev/null &&
+  ! grep -F '(func $mdk_hash_string' "$INPUT_WORK/feature-hash-int-only.wat" >/dev/null || {
+    echo "FAIL H2B9-HASH-NEAREST-MISS: hashInt-only emission changed hash-string conjunction"
+    exit 1
+  }
+if grep -F '$mdk_rng_state' "$INPUT_WORK/feature-u.wat" >/dev/null ||
+   grep -F '$mdk_next_u64' "$INPUT_WORK/feature-u.wat" >/dev/null; then
+  echo "FAIL H2B9-RNG-U-ABSENCE: inert control emitted RNG global/runtime"
+  exit 1
+fi
+if grep -F '$mdk_hash_mix64' "$INPUT_WORK/feature-u.wat" >/dev/null ||
+   grep -F '$mdk_hash_int' "$INPUT_WORK/feature-u.wat" >/dev/null ||
+   grep -F '$mdk_hash_string' "$INPUT_WORK/feature-u.wat" >/dev/null; then
+  echo "FAIL H2B9-HASH-U-ABSENCE: inert control emitted hash runtime"
+  exit 1
+fi
 grep -F '(local $__divr0 i64)' "$INPUT_WORK/feature-float-div.wat" >/dev/null &&
   grep -F '(func $featureFloatDiv (param $u____wparg0 (ref eq)) (result (ref eq))' "$INPUT_WORK/feature-float-div.wat" >/dev/null &&
   grep -F 'f64.div' "$INPUT_WORK/feature-float-div.wat" >/dev/null || {
@@ -828,7 +887,7 @@ FEATURE_EVENT="fn featureIntentionalGap	unbound variable 'missingFeatureCensus' 
     exit 1
   }
 printf '0\n' >"$INPUT_WORK/feature-expected.out"
-for feature_name in p1 float-div u p2; do
+for feature_name in p1 hash-int-only float-div u p2; do
   feature_wat="$INPUT_WORK/feature-$feature_name.wat"
   wasm-tools parse "$feature_wat" -o "$INPUT_WORK/feature-$feature_name.wasm" || {
     echo "FAIL A0-FEATURE-CAPTURE: wasm-tools parse $feature_name"

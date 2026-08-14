@@ -328,6 +328,8 @@ data WasmEmit =
       trapImportNeeded : Ref Bool,
       useDivGuard : Ref Bool,
       useRecUpdate : Ref Bool,
+      useRng : Ref Bool,
+      useHash : Ref Bool,
       emittedDefaultNames : Ref (OrdMap Unit),
       defaultDefinitions : Ref (List (List String)),
     }
@@ -350,6 +352,8 @@ freshWasmEmit mode = WasmEmit {
   trapImportNeeded = Ref False,
   useDivGuard = Ref False,
   useRecUpdate = Ref False,
+  useRng = Ref False,
+  useHash = Ref False,
   emittedDefaultNames = Ref omEmpty,
   defaultDefinitions = Ref [],
 }
@@ -824,20 +828,13 @@ useRefBoxRef = Ref False
 -- answer. A record LAYOUT question must rest on the declaration; a scratch-local
 -- declaration is not a layout question.
 -- ── W8 extern-use state ──────────────────────────────────────────────────────
--- Which W8 LEAF/RNG runtime groups the program reaches (gates their preamble
+-- Which W8 LEAF runtime groups the program reaches (gates their preamble
 -- emission, peer to useStrRef).  useStrLeafRef: any pure-WAT string leaf op
 -- (++/charToStr/stringConcat/stringSlice/toUpper/toLower) → the strLeafRuntime.
--- useRngRef: any RNG extern → the SplitMix64 state global + runtime.  useHashRef:
--- any per-type hasher → the hash runtime.  useEPutRef: ePutStr/ePutStrLn → the
+-- The per-emission RNG/hash observations live in WasmEmit; useEPutRef gates the
 -- stderr import + runtime.
 useStrLeafRef : Ref Bool
 useStrLeafRef = Ref False
-
-useRngRef : Ref Bool
-useRngRef = Ref False
-
-useHashRef : Ref Bool
-useHashRef = Ref False
 
 useEPutRef : Ref Bool
 useEPutRef = Ref False
@@ -1064,8 +1061,6 @@ emitProgramWith emit input (CProgram groups ctorArs ctorTypes impls) =
   let _ = setRef useArrayRef False
   let _ = setRef useRefBoxRef False
   let _ = setRef useStrLeafRef False
-  let _ = setRef useRngRef False
-  let _ = setRef useHashRef False
   let _ = setRef useEPutRef False
   let _ = setRef useFloatRef False
   let _ = setRef useFloatHashRef False
@@ -1101,7 +1096,7 @@ emitProgramWith emit input (CProgram groups ctorArs ctorTypes impls) =
   -- hash externs produce/consume (ref eq) i31 values, so they force ref-mode too.
   let useRef = useClos || programUsesAdt groups ctorArs || isNonEmptyList impls || useStrRef.value
     || useListRef.value || useArrayRef.value || useRefBoxRef.value || isNonEmptyList tupleAritiesRef.value
-    || useRngRef.value || useHashRef.value || useFloatRef.value || useStrSearchRef.value
+    || emit.useRng.value || emit.useHash.value || useFloatRef.value || useStrSearchRef.value
     || useCharClassRef.value || useIORef.value
   let typeNames = distinctTypeNames ctorTypes
   let prog = Prog index typeNames valNames useClos impls input emit
@@ -1124,8 +1119,6 @@ emitProgramGaps input (CProgram groups ctorArs ctorTypes impls) =
   let _ = setRef useArrayRef False
   let _ = setRef useRefBoxRef False
   let _ = setRef useStrLeafRef False
-  let _ = setRef useRngRef False
-  let _ = setRef useHashRef False
   let _ = setRef useEPutRef False
   let _ = setRef useFloatRef False
   let _ = setRef useFloatHashRef False
@@ -1615,20 +1608,20 @@ scanW7Head emit (CVar f _) = noteW8Extern emit f
 scanW7Head emit h = scanExprW7 emit h
 
 -- ── W8: note which W8 LEAF/RNG/hash runtime groups an extern occurrence reaches ──
--- Sets useStrLeafRef (the pure-WAT string ops needing strLeafRuntime), useRngRef,
--- useHashRef, useEPutRef as appropriate.  Piggybacks on the W7 walk.
+-- Sets useStrLeafRef (the pure-WAT string ops needing strLeafRuntime), per-emission
+-- RNG/hash observations, and useEPutRef as appropriate.  Piggybacks on the W7 walk.
 noteW8Extern : WasmEmit -> String -> Unit
-noteW8Extern _ name =
+noteW8Extern emit name =
   let _ = if contains name ["charToStr", "stringConcat", "stringSlice", "stringToUpper", "stringToLower"]
           then setRef useStrLeafRef True else ()
   let _ = if isLeafExternW name && contains name ["randomInt", "randomBool", "randomChar", "setSeed"]
-          then setRef useRngRef True else ()
+          then setRef emit.useRng True else ()
   -- a Char main from randomChar is auto-printed by encoding the codepoint to a $str
   -- ($mdk_char_to_str → $mdk_print_strln), so randomChar needs the $str rep + the
   -- char-encode strLeaf runtime.
   let _ = if name == "randomChar" then let _ = setRef useStrRef True in setRef useStrLeafRef True else ()
   let _ = if contains name ["hashInt", "hashChar", "hashBool", "hashString"]
-          then setRef useHashRef True else ()
+          then setRef emit.useHash True else ()
   -- W8b: Float externs force the Float runtime (+ ref-mode + $str for floatToString).
   let _ = if contains name ["floatToString", "intToFloat", "floatToInt", "hashFloat", "randomFloat"]
           then setRef useFloatRef True else ()
@@ -1648,8 +1641,8 @@ noteW8Extern _ name =
           then let _ = setRef useFloatStrRef True in let _ = setRef useFloatRef True in let _ = setRef useStrRef True in setRef useIORef True
           else ()
   -- hashFloat needs the shared mix64 (hashRuntime); randomFloat needs next_u64 (rngRuntime).
-  let _ = if name == "hashFloat" then let _ = setRef useFloatHashRef True in setRef useHashRef True else ()
-  let _ = if name == "randomFloat" then let _ = setRef useFloatRngRef True in setRef useRngRef True else ()
+  let _ = if name == "hashFloat" then let _ = setRef useFloatHashRef True in setRef emit.useHash True else ()
+  let _ = if name == "randomFloat" then let _ = setRef useFloatRngRef True in setRef emit.useRng True else ()
   -- W8b: stringIndexOf/stringCompare use the strSearch runtime + cp_count (strLeaf) + $str.
   let _ = if contains name ["stringIndexOf", "stringCompare"]
           then let _ = setRef useStrSearchRef True in let _ = setRef useStrRef True in setRef useStrLeafRef True else ()
@@ -2421,7 +2414,7 @@ emitRefProgram prog groups =
   let dispGroups = wDetectDispatchGroups prog groups
   let _ = setRef wDispGroupsRef dispGroups
   -- W8: the SplitMix64 seed lives in a mutable i64 global (emitted before the value globals).
-  let rngGlobal = if useRngRef.value then rngStateGlobalLines else []
+  let rngGlobal = if (progEmit prog).useRng.value then rngStateGlobalLines else []
   let dispGlobals = flatMap wDispGlobalLines dispGroups
   -- #561 PR-B: a LAZY value global ALSO carries a per-global 3-state flag $gs_<name>
   -- (0 UNFORCED / 1 FORCING / 2 FORCED); the value cell $g_<name> stays (ref null eq).
@@ -2468,9 +2461,9 @@ emitRefProgram prog groups =
   -- declared) + $mdk_unbox_int/$mdk_box_int (always in ioRuntimeLines).
   let valueArithRt = if useValueArithRef.value then valueArithRuntimeLines else []
   let stderrRt = if useEPutRef.value then stderrRuntimeLines else []
-  let rngRt = if useRngRef.value then rngRuntimeLines else []
-  let hashRt = if useHashRef.value then hashRuntimeLines else []
-  let hashStrRt = if useHashRef.value && useStrRef.value then hashStringRuntimeLines else []
+  let rngRt = if (progEmit prog).useRng.value then rngRuntimeLines else []
+  let hashRt = if (progEmit prog).useHash.value then hashRuntimeLines else []
+  let hashStrRt = if (progEmit prog).useHash.value && useStrRef.value then hashStringRuntimeLines else []
   -- W8b: the Float runtime (intToFloat/floatToInt/floatToString) + the hashFloat /
   -- randomFloat helpers (gated separately since they need mix64 / next_u64) + the
   -- string index-of / compare runtime.

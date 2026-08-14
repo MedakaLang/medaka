@@ -321,10 +321,12 @@ reemitTrapState _ =
 reemitFeatureState : Unit -> <IO> Unit
 reemitFeatureState _ =
   let p1 = emitProgram featureStateInput featureStateProgram
+  let hashIntOnly = emitProgram featureHashIntOnlyInput featureHashIntOnlyProgram
   let floatDiv = emitProgram featureStateInput featureFloatDivProgram
   let (u, _) = emitProgramRecord featureStateInput featureStateControlProgram
   let censusEvents = emitProgramGaps featureStateInput featureStateCensusProgram
   let _ = printCapture "FEATURE_P1" p1
+  let _ = printCapture "FEATURE_HASH_INT_ONLY" hashIntOnly
   let _ = printCapture "FEATURE_FLOAT_DIV" floatDiv
   let _ = printCapture "FEATURE_RECORD_U" u
   let _ = printEvents "FEATURE_CENSUS_U_GAP" censusEvents
@@ -396,6 +398,24 @@ featureStateProgram =
     featureStateCtorArities
     featureStateCtorTypes
     []
+
+-- This nearest-miss contains hashInt only.  Unlike featureStateProgram it has no
+-- string-bearing feature route, so it proves the hash-string runtime conjunction
+-- is not widened by base hash use.
+featureHashIntOnlyInput : WasmEmitInput
+featureHashIntOnlyInput = makeWasmEmitInput [] [] [] False []
+
+featureHashIntOnlyProgram : CProgram
+featureHashIntOnlyProgram = CProgram
+  [
+    CBind "featureHashIntOnly" [
+      CClause [featureStateArg] (CApp (CVar "hashInt" AGlobal) (CVar "x" (ALocal 0 0)))
+    ],
+    CBind "main" [CClause [] (CLit (LInt 0))],
+  ]
+  []
+  []
+  []
 
 -- Float `/` stays over-approximated by the divisor-local scan: it needs the
 -- ref-mode local even though IEEE division never traps on zero.
