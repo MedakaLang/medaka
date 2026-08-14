@@ -159,7 +159,13 @@ name?** Three readings, all defensible:
 on their own schedules is the `evalModules`/`cevalModules` lockstep hazard at arc scale — and this
 tree has already paid for that shape once, for months.
 
-### ⭐ RECOMMENDED RULING — reading 1, amended. Derived 2026-08-14 at `0913762f`
+### ⭐ ADOPTED RULING — reading 1, amended. Derived and ADOPTED 2026-08-14 at `0913762f`
+
+> ✅ **ADOPTED BY THE OWNER, AND RECORDED ON BOTH ARCS** — #1113 (`issuecomment-5290181264`) and
+> #1403 (`issuecomment-5290181894`), plus the reciprocal pointer added to
+> `compiler/TYPECHECK-TARGET-ARCHITECTURE.md` §8. **#1182 is REOPENED**
+> (`issuecomment-5290171440`). §2b's three readings are closed; reading 1 as amended below is the
+> plan of record.
 
 > **Phase 5 as scoped IS X-E.C under another name — CUT IT and route it to #1403.**
 > **But the conjunct-1 drains were MIS-ASSIGNED to it. They are typecheck-only, so cutting Phase 5
@@ -243,12 +249,23 @@ suite the merge recorded as *"100 reproduce, 0 drained."* (Derived from those tw
 re-run the gate.) **#1182 is the ticket for the exact fix 4b performs**, so reopening it is not
 bookkeeping — it is recovering the unit's home. **Reopen before Phase 0 cuts 4b.**
 
-### What adopting this ruling requires
+### Adoption — DISCHARGED, and what it changes elsewhere in this doc
 
-It is a **recommendation until the owner adopts it**, and adoption is **two-sided** (exit criterion
-0): a comment on **#1113** recording that B-2 ends at Phase 4+4b, **and** a comment on **#1403**
-recording that X-E.C inherits route-word/`KeyBuckets` retirement with B-2's Phase 4 output as its
-producer. One-sided adoption reproduces the one-directional citation that caused §2b.
+Exit criterion 0 is **satisfied**: the ruling is recorded on **#1113** and on **#1403**, #1182 is
+reopened, and `TYPECHECK-TARGET-ARCHITECTURE.md` §8 gained the reciprocal
+**"Emitter-arc coordination"** bullet so the producer arc can see its consumer.
+
+⚠️ **Consequently the following earlier sections of this doc are SUPERSEDED — read them as history,
+not as plan:**
+
+| section | status after adoption |
+|---|---|
+| §2 IN rows **3, 4, 5, 6** (Phase 5, #1068, #1265, #1621) | **CUT** — routed to #1403, except #1068 which is co-owned and cannot be drained by B-2 alone |
+| §4 **Q1** (`D2` staleness) and **Q4** (the wasm permutation arm) | **Inherited by X-E.C**, and both are relayed in the #1403 comment. No longer this sprint's to answer |
+| §4 **Q5** (#1608's fourth arm) | **Still owed, still unowned** — residual 3. Not X-E's (it is `core_ir_eval`, not LLVM/wasm) and not typecheck's |
+| §4 **Q6** (selector re-key: Phase 4 or 5?) | **ANSWERED — Phase 4b.** This is the answer that dissolved the collision |
+| §6 (Phases 3–4, `B-2.4` + close-out) | **CUT.** The sprint is now Phase 0 → Phase 4 → Phase 4b → one close-out |
+| §2's per-phase close-out mitigation | **Simplified** — with Phase 5 cut there is one IR-moving rewrite again, so the standing one-per-sprint rule is satisfied without the extra checkpoint. Keep it only if Phase 4 and 4b land far enough apart to want the attribution |
 
 ---
 
