@@ -24,6 +24,28 @@ cannot rely on cross-engine agreement to detect a miss**, because all engines cu
 same wrong answer. Only a permutation differential sees it. Full derivation: the `#1113` comment of
 2026-08-14 and `.claude/sprint-phase3/DECISIONS.md` RUN-P3-050.
 
+> #### ⭐ G-0 built that permutation differential: `test/diff_compiler_iface_order.sh` (eval shard).
+>
+> It permutes the entry's **`interface` DECLARATIONS** — an axis no gate here moved before
+> (`diff_compiler_import_order.sh` moves import clauses; `diff_compiler_dict_semantics.sh` §4 and
+> #1182's must-fail pin move `impl` blocks). **It is GREEN and it is NOT a known-red entry.** Two
+> cases diverge today and are carried as rows in `test/IFACE-ORDER-LEDGER.txt` naming `#1182` and
+> `#1620`, the same self-draining shape `IMPORT-ORDER-LEDGER.txt` uses.
+>
+> **Read its header's FOUR-STATE TABLE before acting on anything it prints.** The point of the
+> instrument is a distinction the existing pins cannot make: a fix scoped by interface **NAME**
+> drains #1182's impl-order pin while leaving this axis diverging, so **a drained pin is not
+> evidence the identity re-keying landed**. In that one state this gate stays green too — its
+> backstop is that its ledger rows name the issues and `test/must_fail_census.sh` HALF 4 (nightly,
+> has the API, now generalized over BOTH order ledgers) reds if a ledgered issue is CLOSED. Do not
+> decouple them.
+>
+> ⚠️ **A RED here is most likely GOOD.** `DRAINED` means a ledgered divergence collapsed — read the
+> converged signature it prints: `check=1` **with** a `codes=` entry means the ambiguity is now
+> rejected; `check=0` with `codes=` **empty** means selection became deterministic (confirm the
+> value is the one intended, not merely stable). A red on one of the two **controls**, or on the
+> unledgered `negative-1182-...` case, is the opposite — a NEW order dependence. Do not ledger it.
+
 ⚠️ **CORRECTED at HEAD:** this unit was *planned* to change `RKey`'s payload type; that design was
 **REFUSED in Phase 0** and `data Route` is **unchanged** (`RKey String (List Route)`). The identity
 lives **inside the word**, minted by `compiler/types/route_key.mdk` and called from both sides of the
