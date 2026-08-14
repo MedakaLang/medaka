@@ -398,3 +398,61 @@ unchecked:    (1) **BLESSED ZERO GOLDENS, per the packet.** `diff_compiler_snaps
               — justified by (2)+`could move:`: with no expression in the diff there is no
               behaviour for them to grade, and the LEG A/snapshot goldens they touch are the
               close-out re-cut's, which this bite is forbidden to bless.
+
+### DIFFERENTIAL-DETECTED — written at detection time by the round that found it
+
+Per the two-sprint audit's template delta: *"a `DEBT.md` row is owed for any behavior delta a
+differential DETECTS, not only ones the implementer recognizes."* Neither of these was recognized by
+any bite's implementer. Base `68f84bf1` vs branch `ec1cda37`, 15 programs × 4 channels × 2 arms,
+graded on stdout and diagnostics (never exit codes). Control clean, 0 normalization leaks, 6 vacuous
+rows named. Harness: `/var/tmp/p3/r3/`, log `run_real.log`.
+
+#### D-1 — `p11_sanitize_collide`: a program that BUILT and ran (wrongly) now FAILS TO LINK
+
+sites:        no source site — an emergent consequence of `B-2.2-e`'s word carrying `module::Iface`
+              through `sanitizeId` (`compiler/backend/private_mangle.mdk`).
+transform:    none directly; the identity substitution widens the alphabet reaching a
+              non-injective sanitizer.
+could move:   🚨 **IT MOVED, and this row IS the detection.** Modules `a.b` and `a_b`, each with
+              its own `interface C`/method `m` at head `Int`:
+                base   → build 0, exec 0, prints `(1, 1)`   ← the pre-existing WRONG answer
+                branch → build **1**, `clang failed linking`:
+                         `invalid redefinition of function 'mdk_impl_a_b__C_Int__m'`
+              `.` and `_` both sanitize to `_`, so `a.b::C|Int|` and `a_b::C|Int|` collapse onto one
+              symbol. **This is F-6 / #347, previously `needs-repro`, now REPRODUCED — and made
+              load-bearing by this sprint.**
+nearest miss: module ids differing only by `/` or `-` (all sanitize to `_`); and the second,
+              independent channel `hashName` (djb2), which `sanitizeId` reasoning does not cover.
+engines:      LLVM only (the failure is at the clang link step). eval is unaffected — `run` is SAME
+              on both arms. wasm unprobed by this harness (2-engine differential).
+unchecked:    whether any REAL project has module ids colliding under `sanitizeId`. The corpus
+              program is synthetic.
+
+🚨 **Direction, stated explicitly because it is the whole question:** this is **silent wrongness →
+loud breakage**, i.e. **S0 → S1**, which by this repo's severity ladder is an **improvement** — the
+program was already answering `(1, 1)` where `(1, 2)` is correct, and now refuses to build instead of
+lying. **But it is a NEW build failure on a program that previously built**, and that must be in the
+PR body rather than discovered by a user. The standing rule that loud→silent is a regression has an
+inverse, and this is it.
+
+#### D-2 — the same-spelled-interface CLASS is **NOT** drained, though #1514 is
+
+sites:        n/a — a scope bound on the sprint's headline claim.
+transform:    n/a.
+could move:   `p02`/`p03` are two same-spelled interfaces in different modules, each with an impl at
+              the same head, reached through per-module wrapper functions. Correct is `(1, 2)`
+              (DICT §8 I4: a class is `(module, name)`). **Both arms print `(1, 1)` in one import
+              order and `(2, 2)` in the other — unchanged by the sprint, and still ORDER-DEPENDENT.**
+              `p04`/`p05` (method-name sharing across modules) likewise unchanged.
+nearest miss: this IS the nearest miss — the class #1514 belongs to, one wrapper away.
+engines:      unchanged on both arms, both engines.
+unchecked:    **why** #1514's shape drains and `p02`'s does not. The adversarial review verified
+              #1514's drain **causally** (the two sides actively disagreed pre-bite and now agree),
+              so the drain is real; what is unestablished is the boundary. Candidate: `p02` dispatches
+              through a wrapper in a third module, so the call may never reach `keyForSiteByIface`.
+              **Owed to the repair round.**
+
+🚨 **Binding on the PR body and the #1113 close-out:** we may state that **#1514 is drained**, with its
+causal derivation. We may **NOT** state that the same-spelled-interface class, the #1047/#1265 family,
+or "cross-module interface collisions" are fixed. **A drained fixture is not a drained class**, and the
+differential just demonstrated the gap empirically rather than leaving it as a caution.
