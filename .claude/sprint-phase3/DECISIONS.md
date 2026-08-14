@@ -1520,3 +1520,58 @@ OTHER arm.** I did not instrument it, so I cannot claim it reached the target.
 assigned to the repair round**, now with a *negative* result on the `iface != ""` path (useful: it
 bounds the claim) and an explicit note that **the `iface == ""` path is still unprobed** and needs a
 program that reaches `routesOfMonos`, or an instrumented build to confirm the arm was entered.
+
+## RUN-P3-039 — the close-out checklist, and three corrections it makes to this ledger
+
+`CLOSE-OUT.md` (590 lines, 5 sections) now exists so Phase 2 and the exit phase are **executable
+rather than reconstructed from ~1500 lines of narrative** — which is what the referee's
+"six owed follow-ups with no owner" finding actually demanded.
+
+**Owed sweep: 6 named → 4 still owed, 2 DISCHARGED.** The instruction to *verify each is still owed*
+was the highest-value line in the brief: it caught two items that would otherwise have been
+advertised as debt (RUN-P3-029's homeless fixture — solved by the `b1`+`e` writer without an IR
+golden or a new `test/*.sh`; and F-3, since reproduced first-hand). **Six further unowned items were
+found by sweeping and assigned. Nothing is left unassigned.**
+
+### 🚨 Correction 1 — the differential harness HAS been run, and its CONTROL IS RED
+
+`/var/tmp/p3/r3/run1.log` shows **11 DIFFER rows**, and **p01 — the control that must be identical —
+differs on `build`.** The two texts differ **only in the arm name inside the output path**: a
+`normalize()` gap, not a compiler delta. **And the harness's own "normalization leaks: 0" counter
+missed it** — the tripwire built for exactly this failed to fire.
+
+⇒ **No row in that run is adjudicable.** This is precisely why the control exists, and precisely why
+"all-SAME is also what a harness that ran nothing prints" was written into R-6's brief. R-6 is
+mid-repair on it. **Note also that my own report a few beats ago described the harness as "never
+run" — it had been run ~an hour earlier; the ledger was stale by one agent-lifetime.**
+
+### Correction 2 — `--new` takes NO path argument, and has historically lied
+
+It is **suite-wide** (`:138`), and under `--new` the summary has historically read *"all snapshots
+match"* **having compared nothing**. `route_key.mdk` needs a snapshot CREATE at the close-out, so
+this is directly on the path. Three guards are written into the checklist's step 5b.
+
+### Correction 3 — `ir.core_ir_lower` is NOT in the LEG A corpus
+
+The landed `DEBT.md` row for `b1`+`e` says *"all three edited modules are LEG A."* **It is two.**
+Erratum owed on that row; the close-out's expected LEG A diff (**4 deletions + 4 additions + 5
+MODIFIED**, with `declaredConstraintSlots` and `qualConstraintFor` required **unchanged** and a sixth
+modified row a regression) is unaffected.
+
+### One window that has now CLOSED
+
+**#1068** — the arc says its fix must be done **together** with the wasm arm, and `e`'s `engines:`
+clause is now committed **without citing it**. The cheap moment is gone; it is assigned to the
+orchestrator as a follow-up rather than pretended to be in scope.
+
+## RUN-P3-040 — a process hazard I created, recorded so it is not repeated
+
+**Blanket `git add .claude/sprint-phase3` while an agent is writing into that directory sweeps in a
+half-finished file.** `CLOSE-OUT.md` was captured mid-write by the F-3 commit (`b2daac7d`) and
+finalized only in `c2d89c44`. No damage — the full 590 lines are committed and the working tree
+matches — but **`b2daac7d` contains a partial file its message does not describe**, which is the
+"title must match the body" discipline failing one level down.
+
+**Remedy, effective now: stage sprint-record files BY PATH while any agent has that directory open**,
+never by directory. The same rule already applies to `DEBT.md`, which has had two concurrent writers
+and which the `b1`+`e` implementer flagged for exactly this reason.
