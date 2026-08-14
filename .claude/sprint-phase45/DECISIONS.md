@@ -1,0 +1,1388 @@
+# Stage B / Phases 4 + 4b — DECISIONS ledger
+
+Contract: `.claude/STAGE-B-PHASE45-SPRINT.md`. Predecessor records: `.claude/sprint-phase3/`.
+
+**BASE pinned at sprint open:** `aaa43716` (`git rev-parse HEAD` in
+`/root/medaka/.claude/worktrees/peppy-brewing-kitten`, 2026-08-14). `origin/main` moves under this
+worktree — every worktree shares one `.git` — so diff and checkout against `$BASE`, never a ref.
+
+**Shape of the sprint after the §2b adoption:** Phase 0 → **Phase 4** (`B-2.3` frozen
+admissibility) → **Phase 4b** (selector re-key, #1182) → **one** close-out. Phase 5 is CUT and
+routed to #1403 (X-E.C).
+
+---
+
+## RUN-P45-001 — Exit criterion 0 is DISCHARGED. Verified first-hand, not inherited.
+
+The sprint doc asserts it; a claim in a doc is not a verification. Re-derived at `aaa43716`:
+
+| requirement | evidence |
+|---|---|
+| ruling recorded on **#1113** | last comment `2026-08-14T06:21:47Z`, val-grasley, *"OWNER RULING (2026-08-14) — B-2 ends at Phase 4 + a new Phase 4b. Phase 5 is CUT and routed to #1403 (X-E.C)."* |
+| ruling mirrored on **#1403** | last comment `2026-08-14T06:21:52Z`, val-grasley, *"X-E.C **inherits** route-word / `KeyBuckets` retirement. The typechecker arc's `B-2.4` is CUT."* |
+| reciprocal pointer in the arch doc | `compiler/TYPECHECK-TARGET-ARCHITECTURE.md:1436` — *"🚨 **Emitter-arc coordination — this arc HAS a downstream consumer, and until…"* |
+| **#1182 REOPENED** | `gh issue list --state all` → `1182 OPEN` |
+
+⇒ Phase 0 does **not** re-adjudicate §2b. It opens on the design run.
+
+## RUN-P45-002 — Tracker state at sprint open, derived (not quoted from the doc)
+
+`gh issue list --state all`, filtered. All twelve are **OPEN**: #1068 · #1113 · #1182 · #1265 ·
+#1403 · #1608 · #1617 · #1618 · #1619 · #1620 · #1621 · #1622.
+
+Notably #1182 is open, so the doc's *"blocking tracker correction"* is already discharged; and
+#1113 is open, so nothing desk-closed itself during the Phase 3′ sweep this time.
+
+## RUN-P45-003 — Phase 0 packet set, and why these four
+
+Phase 0 is all **readers** ⇒ parallelized (the standing rule is PARALLELIZE READERS, SERIALIZE
+WRITERS; Stage A ran 3-5 concurrent *writers* and paid with four contaminated measurements and
+~4 bites of rework). No writer is live during Phase 0.
+
+| packet | owns | output |
+|---|---|---|
+| **P0-A** | The Phase 4 design run — Phase 4 has no design doc, and concurrent design-ahead was ruled out by measurement (75% rework rate). Also owes the **Q2** render-vs-omit derivation and the **Q3** scoped-key fixture design | `phase0/P0-A-phase4-design.md` |
+| **P0-B** | **Residual 1 — the 4b SUPPLY question.** The ruling sizes 4b as "one line given an interface"; whether an interface is *in hand* at each `*ByMethod` site is unsettled and is the design run's first question. An `IMPOSSIBLE HERE` verdict at any site falsifies the sizing | `phase0/P0-B-4b-supply.md` |
+| **P0-C** | **Q7 — the `_ => None` arm SET.** If Phase 4's table keys on a head function that returns nothing for three type shapes, the table under-discriminates *by construction* and freezing it freezes that. Verdict owed: Phase 4 **precondition** or independent unit | `phase0/P0-C-armset.md` |
+| **P0-D** | The **pre-fix drain baseline** (#1182/#1617/#1618/#1619/#1620/#1608, both permutations each) + **Q5** (#1608's harness, still unowned) + the permutation-instrument survey | `phase0/P0-D-drain-baseline.md` |
+
+**Why the baseline is a Phase 0 deliverable and not a close-out one:** exit criterion 3 demands
+the drains be graded on the final binary and that the report say whether each drain is *causal or a
+shape move*. That distinction is unrecoverable without a pre-fix observation captured on a binary
+built from the unmodified base. Captured at `aaa43716`.
+
+Binary for P0-D: `/root/medaka/.claude/worktrees/peppy-brewing-kitten/medaka`, cold-bootstrapped
+from `compiler/seed/emitter.ll.gz` at `aaa43716`, `make medaka` exit 0. No emitter was borrowed
+from a sibling tree.
+
+## Open — to be ruled at the close of Phase 0
+
+- **Q2** — render or omit the 5th `CProgram` field in the S-expr. ORCH rules on P0-A's derivation.
+- **Q3** — the scoped-key proof fixture, and the full set of gates that fixture directory enrolls it in.
+- **Q5** — which harness carries #1608. ORCH rules on P0-D's sizing. ⚠️ residual 3 of the adopted
+  ruling says #1608 *"needs its own owner call; this ruling does not make one."*
+- **Q7** — arm set: Phase 4 precondition or rides with 4b. ORCH rules on P0-C's verdict.
+- **4b sizing** — one bite or many, contingent on P0-B's supply verdict.
+
+---
+
+## RUN-P45-004 — P0-C: the arm set. **The sprint doc's membership is WRONG, and I verified it myself.**
+
+P0-C returned `PRECONDITION`. Before relaying any of it I re-derived the two structural claims
+first-hand — a relayed citation is a claim I am re-asserting.
+
+**Derived by ORCH at `aaa43716`:**
+
+`compiler/types/typecheck.mdk:19452-19456`
+```
+headTyconTy : Ty -> Option HeadKey
+headTyconTy t = match headTyNode t
+  TyCon { tyConName = n, tyConOrigin = o } => Some (headKeyOfCon o n)
+  TyTuple ts => Some (headKeyOfCon OriginBuiltin (tupleHeadTagTc (listLen ts)))
+  _ => None
+```
+`headTyNode` (`:19433-19435`) unwraps `TyApp` only. `public export data Ty` (`compiler/frontend/ast.mdk`)
+has **eight** constructors: `TyCon` · `TyVar` · `TyApp` · `TyFun` · `TyTuple` · `TyEffect` ·
+`TyConstrained` · `TyRow`.
+
+⇒ the catch-all swallows **five** shapes. The honest accounting — which is neither the doc's nor,
+exactly, P0-C's:
+
+| shape | status | evidence |
+|---|---|---|
+| `TyVar` | **correct by design** — a fully-general `impl C a` head *is* headless | `typecheck.mdk:18395` |
+| `TyFun` | **defect, filed** #1617 (S0) | — |
+| `TyEffect` | **defect, filed** #1618 (S1) | — |
+| `TyConstrained` | **measured NOT a defect** | #1617 body: *"A third candidate arm, `TyConstrained`, was **measured NOT to be a defect** … The live set is two."* |
+| `TyRow` | **UNKNOWN — unfiled, unnamed anywhere** | added by #997; probe dispatched as **P0-E** |
+
+🚨 **The sprint doc (§4 Q7) says the arm swallows three things — `TyFun`, `TyEffect`, and
+`TyConstrained` "unfiled by ruling, named in both bodies".** It kept #1617's citation and **inverted
+its polarity**: #1617 names `TyConstrained` to *bound the class at two*, not to extend it to three.
+And the doc **misses `TyRow` entirely**. So the one instruction Q7 gives — *"audit the arms as a
+SET"* — was itself handed a wrong set, in a section whose own text quotes Phase 3′'s retrospective:
+*"I wrote 'audit the arms as a SET' and then shipped a set one arm short."* **It happened again, in
+the sentence warning about it.**
+
+This is the `##REFUSALS`-earns-its-keep case: the brief relayed the doc's "three" and the analyst
+refused it. Correct the doc at close-out — it is ungated prose and it is what the next agent reads
+first.
+
+**Verdict deferred, and P0-C says exactly why (its R-1):** the arm set is a Phase 4 **precondition
+IFF** Phase 4 computes admissibility from `IE`'s head-keyed buckets (`univReceiverTag → headTyconTy`,
+`:22574`), and an **independent unit** if Phase 4 computes it structurally from `implTys`. That
+choice is P0-A's to derive. **Do not rule Q7 before P0-A lands.**
+
+Corroborating mechanical fact, worth keeping: `headBucketKey None = headlessBucketKey` (`:18388`),
+whose own comment (`:18391`) calls it *"the bucket holding the fully-general (`impl C a`) entries."*
+Every swallowed shape lands in a bucket that documents itself as containing only fully-general
+entries. Four of the five are not.
+
+---
+
+## RUN-P45-005 — 🚨 P0-B: the adopted ruling's SIZING IS WRONG, and the "weak" fix is a loud→silent move
+
+**Two claims verified by ORCH first-hand before relay**, because this one contradicts the ruling
+that shaped the sprint:
+
+**1. The `*ByIface` peer family is keyed by NAME, not identity.** Derived:
+```
+compiler/types/typecheck.mdk:19119
+ieEntriesForIface : List ImplRow -> String -> List Mono -> List KeyEntry
+```
+The interface parameter is a **`String`**, and the body's guard compares `ir.irName`. So §2b
+derivation 2 — *"the interface-keyed peer ALREADY EXISTS"* — is true of a **name**-keyed peer and
+**false of the `module::Iface` identity** that §3's Phase 4 constraint demands. **The ruling's
+central derivation does not reach its own requirement.**
+
+**2. The only available supply is itself the bug.** `ifaceOfMethodName` (`:24507`) reads
+`methodIfaceParamsRef`, whose own header (`:2327-2338`) states verbatim:
+
+> *"BOTH forms pick by REGISTRATION ORDER, and neither picks by what the occurrence resolved to — so
+> on a bare-name collision between two unrelated interfaces this table hands
+> `recordImplObligation` / `ifaceParamMonos` the **WRONG INTERFACE, silently, in either direction
+> (S0)**."*
+> *"The FLAT path is unchanged and still last-write-wins."*
+
+⇒ **The re-key does not remove the order dependence; it moves it from `impl`-block order to
+`interface`-block order.** #1182's pin drains and the S0 class survives, under a permutation **no
+gate performs**. That is precisely the severity-increase shape this repo's own ladder forbids: a
+fix that makes a defect quieter reads as progress because the loud signal disappears.
+
+⚠️ **Consequence for 4b's deliverable set:** an **interface-permutation control** is not a
+nice-to-have. Without it 4b certifies its own blind spot — the drain "passes" against the only
+permutation anyone runs. Cf. *"a verification probe must be ABLE to fail."*
+
+⚠️ **Contradiction inside the source worth flagging, not yet adjudicated:** that same header claims
+*"a module's scope binds a bare method name to at most one declaration — resolve rejects the
+ambiguous case outright."* #1182's repro is two interfaces in ONE file and `check` is **clean**. The
+comment and the filed S0 cannot both be right. P0-B's finding 2 (`Ident = Ident Ns IdentOrigin
+String`, `ast.mdk:310` — module-scoped, no interface component, so both interfaces in one module
+mint the SAME `Ident` and the scope-override machinery reports "no collision" and never runs)
+explains how. **Not yet ORCH-verified — do not relay it as settled.**
+
+**Sizing, per P0-B:** 3 bites under WEAK (permutation control FIRST, then the `keyForSite` repoint,
+then striking `ieImplExistsForHeadGo` as an existence test rather than a selector); 4 under STRONG,
+where the fourth is a **design run** — ≥3 files, ≥8 signatures, and a new AST field, because
+`EMethodAt`/`EMethodRef` carry a bare `String` minted from a name at `frontend/marker.mdk:90`.
+**Either way, not "one line".**
+
+**P0-B disagrees with the doc on two drain targets** — reported as its claims, NOT ORCH-verified:
+- **#1619 NOT drained** — both colliding interfaces are spelled `Tag`, and `ieEntriesForIface`
+  compares names, so the re-key is a literal no-op there.
+- **#1620 UNVERIFIABLE** — the issue itself records *"the mis-selecting site is unknown"*, and its
+  symbols are already correct and distinct.
+It agrees with the doc on #1617 (arm set, not selector) and #1608 (`core_ir_eval`, untyped path).
+
+⇒ **Of the four drain targets the ruling declared "typecheck-only, so cutting Phase 5 defers not a
+single S0", at most two survive contact.** That premise needs an owner ruling, not a repair.
+
+---
+
+## RUN-P45-006 — P0-A, and the fact that RECONCILES P0-A with P0-B. Derived by ORCH.
+
+P0-A reached P0-B's conclusion **independently** — `ieEntriesForIface` filters on a bare spelling.
+Two independent derivations agreeing is worth something; two agreeing because they read a common
+prefix is not, so ORCH re-derived the primitive:
+
+```
+compiler/types/typecheck.mdk:5794
+public export data IfaceRef = IfaceRef {
+    irName : String,  -- the SPELLING; still needed for diagnostics and for the spelling-keyed KeyBuckets question
+    irOrigin : TyConOrigin,  -- the I4 identity of the declaration this occurrence denotes
+  }
+
+compiler/types/typecheck.mdk:19121
+  | ir.irName == iface && ieRowHeadMatches tys goals = keyEntryOfRow r
+```
+
+🎯 **The identity is on the row and the filter compares the spelling.** This dissolves the apparent
+P0-A/P0-B conflict over sizing — they were describing different sides of the same seam:
+
+| side | identity available? | evidence |
+|---|---|---|
+| **impl row** | ✅ **YES** — `ImplRow → IfaceRef.irOrigin` | `:4074`, `:5794` |
+| **query / call site** | ❌ **NO** — callers pass a bare `String`, sourced from `ifaceOfMethodName` → `methodIfaceParamsRef`, itself the S0 | `:19119`, `:24507`, `:2327` |
+
+⇒ **STRONG 4b is blocked on the QUERY side only.** P0-B's ≥3-files/≥8-signatures/new-AST-field
+estimate is a claim about the query side and may be right; P0-A's *"only the interface half of the
+key is bare"* is a claim about the row side and is verified. Neither is a refutation of the other.
+
+**P0-A's other findings, relayed as ITS claims (ORCH-verified only where marked ✅):**
+1. **Phase 4 is a RELOCATION, not a re-key.** Arg-tag admissibility is not in `compiler/types/` at
+   all — it lives in `eval.mdk` (`buildIfaceDispatch`, `dispatchPositionsOf`, `lookupPositions`),
+   consumed at exactly two sites: `eval.mdk:1976` and `core_ir_lower.mdk:1409` — **the known
+   `evalModules`/`cevalModules` lockstep pair.** It is *already* computed once and frozen, so the
+   design doc's stated justification (*"stop re-deriving per call site"*) is false; the real
+   justification is the key plus two **fail-OPEN** defaults (`lookupPositions _ _ [] = [0]`,
+   `keepOrAll original [] = original`).
+2. **`CProgram` has 29 construction sites, not AD-2's 13** — 23 in
+   `compiler/entries/wasm_emit_typed_main.mdk`, **the file PR #1623 / X-W is actively rewriting.**
+   Any site list over it has a shelf life of days.
+3. **Q2: the sprint doc's silent-wrongness hazard DOES NOT REPRODUCE.** `parseCProgram` has exactly
+   one consumer (`core_ir_roundtrip_main.mdk:30`) and it lowers via the untyped path, so the field
+   is `CAdmisAbsent` before *and* after the round trip. Recommends rendering behind the existing
+   `faithfulRoutesRef` flag, default off.
+4. **No seam channel.** No import edge either way between `typecheck.mdk` and `core_ir_lower.mdk`;
+   all three elaboration entry points return `List Decl` only (`:14538`, `:14566`, `:28990`).
+   AD-2's *"one hop, no branch"* is right about the signature and **silent about the supply**.
+5. Q7: **PRECONDITION** — agreeing with P0-C. ⚠️ But P0-A repeats the sprint doc's WRONG arm set
+   (includes `TyConstrained`, misses `TyRow`). **RUN-P45-004's set is the authority, not P0-A's.**
+   P0-A does contribute one fact worth keeping: eval's `headTycon` (`:513-519`) *already* strips
+   `TyConstrained`/`TyEffect`, so **"mirror the arms across the two files" would be WRONG** — the
+   two sides need different arm counts.
+
+---
+
+## RUN-P45-007 — ⭐ THREE OWNER RULINGS (Val, 2026-08-14). These supersede the adopted §2b sizing.
+
+Asked once, with the full Phase 0 picture, rather than twice with partial data.
+
+### Ruling 1 — **Phase 4b does the STRONG fix: identity-keyed selection. In-sprint.**
+Not the name-keyed repoint. The `*ByIface` repoint is rejected **as a fix** because it moves the
+order dependence from `impl`-block order to `interface`-block order — draining #1182's pin while the
+S0 class survives under a permutation no gate performs. Design run dispatched as **P0-G**.
+
+### Ruling 2 — **Hold the writer for P0-E; ship the arm set COMPLETE.**
+The arm set is a Phase 4 precondition under both P0-A and P0-C and drains #1617 + #1618 on its own,
+so it is the obvious first writer — but its membership is still open pending P0-E's `TyRow` verdict.
+Shipping it one arm short is the exact failure Phase 3′'s retrospective records **and which the
+sprint doc then committed in the sentence warning about it** (RUN-P45-004). Writer stays idle until
+P0-E lands. Val accepted the idle cost explicitly, against her own standing *"always keep a writer
+live"* directive — recorded here because it is a deliberate exception, not a lapse.
+
+### Ruling 3 — **AD-2 is RE-OPENED as a Phase 0 deliverable.** Dispatched as **P0-F**.
+Three of its factual premises are measurably wrong at HEAD (13→29 sites; "one hop, no branch"→no
+edge at all; admissibility in `types/`→ in `eval.mdk`). The *reasoning* — fail-closed, two-valued,
+`Option` rejected — is not what is re-opened and survives unless P0-F shows otherwise.
+
+### 🚨 ORCH consequence Val did not have to rule on, stated here because it is mine to call
+
+**Ruling 1 REINSTATES the mitigation §2 declared "simplified" away.** The doc dropped the
+two-close-out requirement on the reasoning that *"with Phase 5 cut there is one IR-moving rewrite
+again, so the standing one-per-sprint rule is satisfied."* **STRONG 4b is a second IR-moving
+rewrite over the same organs.** The premise for simplifying is therefore void, and the original
+mitigation binds again:
+
+> **Phase 4 takes its OWN terminal close-out — goldens re-cut exactly once, seed re-minted TWICE,
+> fixpoint C3a+C3b — BEFORE 4b opens a single bite.**
+
+Two IR-moving rewrites with deferred goldens is the F-3 failure by name: CI cannot say which half
+moved a golden. ⚠️ **Unless P0-F or P0-G returns "4b must land BEFORE Phase 4"** — both are asked
+that question explicitly — in which case the ordering flips and the checkpoint goes between them in
+the other direction. The checkpoint itself is not optional either way.
+
+**Also newly in scope from ruling 1:** STRONG 4b may add a field to `EMethodAt`/`EMethodRef`. Per
+`AGENTS.md`'s task-playbook routing that makes it **add-language-feature**, not
+`harden-typechecker` — and it lands squarely in the *"ADDING A PROGRAM-GLOBAL TABLE OR A NEW AST
+CONSTRUCTOR"* trap, whose required fixture is **"feature + UNRELATED code still behaves"**, not
+"feature works". P0-G is briefed on it.
+
+---
+
+## RUN-P45-008 — P0-D: the pre-fix drain baseline. **All six reproduce.** Plus one escalation.
+
+Captured at `aaa43716` on the cold-bootstrapped binary, `MEDAKA_STRICT=1`, redirect-then-read-`$?`
+throughout (never a pipe — `build`'s exit code does not survive one). Env verified free of
+`MEDAKA_ROOT`/`MEDAKA_EMITTER`, which would silently cross the arms. Full cell table in
+`phase0/P0-D-drain-baseline.md`; **that table is the authority for exit criterion 3.**
+
+| issue | reproduces | note |
+|---|---|---|
+| #1182 | ✅ both permutations | `run`/native answer `1` vs `2` by impl order; `check` silent, exit 0 |
+| #1617 | ✅ both permutations | `ab`→`(5,5)`, `ba`→`(9,9)`, control `(5,9)`; `build` exit 1 + E-PANIC |
+| #1619 | ✅ | `(100,100)` where `(7,100)` is correct — **both import orders AGREE at the wrong answer** |
+| #1620 | ✅ **and worse than filed** — see RUN-P45-009 | |
+| #1608 | ✅ | eval + native correct and order-invariant; `cevalModules` prints `boxint` in permA |
+| #1618 | ✅ | byte-identical E-PANIC; control builds |
+
+🚨 **THE FINDING THE DRAIN GRADER MUST NOT MISS: three cells already AGREE pre-fix** — #1619 in both
+orders, #1618 in both orders, #1608's permB. **Post-fix agreement therefore proves nothing on those
+cells; grade the VALUE, not the agreement.** #1608's permB is *accidentally correct*, so a
+single-ordering probe would have reported it fixed. This is the "absence probes cannot see undercount
+bugs" shape and it is pre-loaded to fool exit criterion 3.
+
+**Two corrections P0-D makes to the record, both derived:**
+- #1608's body says swapping flips *"both answers"*; measured, **only the `cevalModules` arm moves.**
+- Q5 clause 3 (*"the only driver that reaches the broken arm is `core_ir_modules_main.mdk`"*) —
+  **two** entries reach `cevalModules`, `profile_eval_main.mdk` as well. The conclusion survives
+  (that one is a single-file untyped *timing* driver), but the clause as written is wrong.
+
+## RUN-P45-009 — ⭐ #1620's BA permutation SEGFAULTS. ORCH-reproduced, and now filed.
+
+P0-D ran a permutation the issue never did. **ORCH re-derived it independently** rather than relaying
+it — a new failure mode is a filing, and a filing needs its own proof:
+
+```
+check    -> exit 0    "ok (1 declaration(s) checked, 0 errors)"
+build    -> exit 0    "built ba.mdk -> ba.bin"
+./ba.bin -> exit 139  runtime error [E-FATAL-SIGNAL]: fatal memory fault (segmentation fault)
+```
+
+Swapping only the two **interface** declarations. **The existing pin covers the AB ordering only, so
+BA is graded by nothing** — a fix validated against the current fixture can leave this segfaulting
+and still read green.
+
+⇒ The two orderings are not "the bug and its mirror": they are **two failure modes of one
+mis-selection**, one silent (AB: raw word at exit 0) and one fatal (BA). Reporting either alone
+understates the class.
+
+**Filed** as `#1620 issuecomment-5290657940`, with the readback verified (a `gh` write that silently
+no-ops is a known shape here). Nothing closed. **Ask on the record: extend the pin to the BA
+ordering** — a repair-round deliverable for this sprint.
+
+## RUN-P45-010 — ⭐ RULING (ORCH): Q5 goes to **Option B**, a typed multi-module Core-IR gate.
+
+The decision was Val's to delegate and the cost fact is decisive, so ORCH rules it. **Verified
+first-hand** rather than taken from the packet:
+
+```
+.github/workflows/ci.yml:701
+pattern: "'diff_compiler_eval*' 'diff_compiler_core_ir*' ... "
+```
+
+⇒ a gate named `diff_compiler_core_ir_typed_modules.sh` **matches an existing shard pattern**, so it
+needs **no `ci.yml` edit and no `test/CI-COVERAGE-EXCEPTIONS.txt` row** — which is otherwise the
+tax on every new `test/*.sh` (a `.sh` matching no shard SILENTLY NEVER RUNS, and
+`diff_compiler_ci_shard_coverage.sh` reds the tree for it). It also lands in `eval`, the cheapest
+shard.
+
+Rejected: **Option A** (a fourth arm on `diff_compiler_engines.sh`) — that is the POLE shard *and*
+the arm would still drive the untyped path. **Option C** (a new `run_verb`) — breaks the must-fail
+harness's shipped-binary invariant and is likewise still untyped.
+
+⚠️ **Why "still untyped" is disqualifying, not a nitpick:** the one gate that runs `cevalModules`
+today (`test/diff_compiler_core_ir_modules.sh`) drives desugar + annotate with **no marker and no
+typecheck**, so **no `Route` is ever stamped** — it cannot distinguish a correct route word from no
+route word at all. **Its green proves nothing in either direction.** A gate must RUN where the bug
+lands.
+
+**This also unblocks the permutation ledger.** None of the six shapes is currently a fixture in
+`test/import_order_fixtures/`, and #1608 — the one that most belongs there — **cannot be filed as a
+row today**: all five signature cells are invariant across its orderings while only `cevalModules`
+flips, so the fixture would pass as INVARIANT. **A fixture that passes for the wrong reason is worse
+than no fixture.** Option B is what makes that row legal.
+
+⚠️ Also confirmed: `test/diff_compiler_import_order.sh` has **no wasm arm** (one `wasm` hit, line
+505, an unrelated comment). That remains inherited by X-E.C, not this sprint's to fix.
+
+---
+
+## RUN-P45-011 — P0-E: `TyRow` is **REACHABLE, NO DEFECT**. The arm set closes at TWO.
+
+`TyRow` does genuinely land on `headTyconTy`'s `_ => None` arm: one producer (`mkRow` ←
+`parseBareEffectAtom` ← `parseTyAtom`'s `TLt` arm), and `implRest` parses an impl head vector with
+`many parseTyAtom`, so `impl Foo <Stdout>` puts a bare `TyRow` in the slot `keyEntryOfRow` hands to
+`headTyconTy`. It is the only route — a `TyApp` spine can never be *headed* by a `TyRow`, since a
+leading `<…>` in full type position goes to `parseEffectTy` → `TyEffect`.
+
+**But it is guarded twice, either guard sufficient:**
+1. Every spelling is rejected **loudly at exit 1** with a located `T-ROW-KIND-MISMATCH` from
+   `fromAstTypeE`'s `TyRow` arm — in `check`, `check --json`, `run` and `build`, in **both** impl
+   permutations, with no binary emitted. Control with a `TyCon` head exits 0.
+2. Even as a candidate it is unselectable: the scary-looking `tyIsConcrete (TyRow…) = True` and
+   `tyStep (TyRow…) _ = MOk` arms are **dead**, because dispatch matching runs through `matchStep`,
+   a different function with no `TyRow` arm, ending in `matchStep _ _ = MFail`. A discriminating
+   probe (row impl alone; goals `Bool`/`Int`/`Unit`) captured **nothing** — ruling out the
+   `TCon "Unit"` recovery hypothesis too.
+
+Tracker searched (`TyRow`, `997`): nothing covers a row impl head or `headTyconTy`. **Nothing to
+file.**
+
+⇒ **#1617's *"the live set is two"* stands.** ORCH's RUN-P45-004 left `TyRow` open as possibly a
+fourth member; it is not. **The sprint doc's error was membership, not size**: it named
+`TyConstrained` (a measured non-defect) as the third member and omitted `TyRow` (a real
+catch-all resident that happens to be harmless). Both halves of that are still worth correcting in
+the doc — a reader who fixes the doc's three arms would change a non-defect and miss nothing real,
+but would also be reasoning from a false map.
+
+**Ruling 2's condition is DISCHARGED.** The set is complete and known. Writer released.
+
+---
+
+## RUN-P45-012 — W1 dispatched: the arm-set bite. First and only writer live.
+
+Isolated worktree, cold-bootstrapped (explicitly forbidden from borrowing an emitter — the `cp` that
+trips the isolation classifier is stateful and has cost a full session). Scope: `TyFun` (#1617) +
+`TyEffect` (#1618) **only**.
+
+Three hazards written into the brief, each from a Phase 0 finding:
+1. **Do NOT mirror the arms across files.** eval's `headTycon` already strips
+   `TyConstrained`/`TyEffect` while `headTyconTy` does not — the asymmetry IS #1618's mechanism, so
+   equalising the two sides would be the wrong fix.
+2. **Impl side and goal side must land together.** Fixing only the impl projection makes the impl
+   *unreachable from the goal side* — a partial fix manufactures a NEW defect.
+3. 🚨 **Unresolved design question handed over as the FIRST task, with explicit licence to refuse:**
+   what tag does a `TyFun` head carry? Currying means a single `__fun__` tag may **not** drain
+   #1617 — two distinct function-headed impls would still collide. `tupleHeadTagTc`'s arity-bearing
+   tag, in the same function, is the nearest precedent. **Resolve with evidence or refuse.**
+
+Every arm fixed turns NOTHING into SOMETHING — these impls are currently *invisible*, so no
+pre-existing fixture can fail and neither coverage nor the diff can say what to test. Tests must be
+hand-derived from the spec: a permutation pair per shape, plus a **bystander** fixture (the arm is
+present; the assertion is about code that does not use it).
+
+🛑 **W1 is forbidden to bless any golden** and must stop and report which moved. Blessing a red gate
+without independently deciding the new output is correct is the rubber stamp the golden gates exist
+to prevent. ORCH rules on blessing.
+
+---
+
+## RUN-P45-013 — 🚨 P0-F: **AD-2's `CProgram` carrier is DEAD.** And the key is not what anyone said.
+
+P0-F re-derived all three premises independently and matched P0-A line-for-line (29 constructions,
+no import edge, zero admissibility code in `compiler/types/`). It then corrected **P0-A and ORCH**
+on three further points. ORCH verified the two decisive ones first-hand.
+
+### ✅ Verified by ORCH — the carrier cannot reach one of its two consumers
+```
+$ grep -c 'CProgram' compiler/eval/eval.mdk
+0
+$ grep -n '^import' compiler/eval/eval.mdk        # no `ir.` import of any kind
+```
+`compiler/eval/eval.mdk` has **zero** `CProgram` occurrences and **no `ir.` import**. Admissibility's
+two consumption sites are `eval.mdk:1976` and `core_ir_lower.mdk:1409` — the `evalModules`/
+`cevalModules` lockstep pair — so **a 5th `CProgram` field cannot reach the first one at all**, and
+making it reachable would introduce an import cycle. P0-F adds a second, independent kill: `lowerImpls`
+(which contains the *other* consumption site) is an **argument to the `CProgram` constructor**
+(`core_ir_lower.mdk:533`), so the proposed field is **downstream of its own consumer**.
+
+⇒ **The two-valued `CAdmisAbsent | CAdmisTable` TYPE ruling survives — on stronger ground than AD-2
+had.** The live fail-open arm `lookupPositions _ _ [] = [0]` discriminates on exactly the `[]` the
+two-valued type splits, so fail-closed is no longer hypothetical, and the argument binds *harder* on
+a `Ref` carrier (which must have an initialiser). **`Option` stays rejected. The `CProgram` CARRIER
+is what dies.** P0-F recommends `Ref CAdmis` in a module all three importers already share — ~6
+sites, **zero in `wasm_emit_typed_main.mdk`** (the file with the live cross-arc writer, which holds
+24 of the 40 total sites), and no serialization question, which also **moots Q2**.
+
+### ✅ Verified by ORCH — the table is keyed `(bare iface, bare method)`. There is NO head component.
+```
+compiler/eval/eval.mdk:1903
+export lookupPositions : String -> String -> List ((String, String), List Int) -> List Int
+lookupPositions _ _ [] = [0]
+```
+⇒ **The sprint doc's, AD-2's and ORCH's shared `(method, head)` framing describes the WRONG TABLE.**
+`headTyconTy`'s already-identity-bearing `HeadKey` therefore does **not** narrow Phase 4's key work;
+exactly one component is bare, and it is the interface name.
+
+🎯 **And the fix site is tiny — the identity is in scope and thrown away one line later:**
+```
+compiler/eval/eval.mdk:1973-1976
+implMethodEntry env disp o ifaceName typeArgs (ImplMethod mname pats body) =
+  ...
+  let key = implRouteKeyWord o ifaceName typeArgs None      -- `o` IS the identity, used here
+  let positions = lookupPositions ifaceName mname disp      -- ...and DISCARDED here
+```
+`o : TyConOrigin` is a parameter, consumed on one line as identity and dropped on the next in favour
+of the bare `ifaceName`. Same shape at `core_ir_lower.mdk:1408/1409`, and `DInterface.ifaceOrigin`
+supplies the producer. `ifaceWordOf` is the ready-made key spelling.
+
+### ⚠️ P0-A's *"no channel at all"* is OVER-STATED — and ORCH relayed it
+Typecheck **already crosses the seam**, by stamping mutable `Ref`s inside `EMethodAt` (`ast.mdk:919`;
+written `typecheck.mdk:6613-6614`, read `core_ir_lower.mdk:150` and `eval.mdk:1256`). What is missing
+is a channel for a **whole-program value** — a much narrower gap than "no channel". RUN-P45-006 item 4
+is corrected accordingly. Corroborating: `eval.mdk:48` already imports `types.route_key`, so a shared
+module between the two sides exists today.
+
+### 🚨 An honesty constraint on whatever ships
+`keepOrAll original [] = original` — the *other* fail-open default — is **structurally unreachable
+from any carrier**: it filters candidate *values*, not the table. Freezing an authoritative table
+upstream of it is RUN-B-013's own *"has changed nothing"* warning. **Either retire it in the same
+unit, or the unit must NOT claim to have closed the fail-open behaviour.** A claim reaching past its
+evidence is this arc's most frequent review defect.
+
+### ⏸️ ORDERING — P0-F refuses to pick, correctly. This is the last open decision.
+It depends on **which source Phase 4 reads**, and the sprint doc states its intent two ways:
+- **route α — from `List Decl`:** Phase 4 is **NOT** blocked on 4b.
+- **route β — from `IE`'s `ieRows` post-K** (the charter's literal wording): **HARD-ORDERED AFTER
+  4b**, because every `IE` reader takes a bare `String` and `ieEntriesForIface` filters
+  `ir.irName == iface` — so freezing that selector **freezes the order-dependence** behind a table
+  that then reads as authoritative.
+
+Picking requires knowing which property Phase 4 is chartered to freeze. **Await P0-G, then one
+combined ordering decision to the owner.** Do not let a bite be cut against an unpicked branch —
+that is the F-3 failure arriving through the front door.
+
+---
+
+## RUN-P45-014 — 🚨 P0-G: the fix is CHEAPER and lives UPSTREAM. **The source comment is FALSE.**
+
+P0-G was killed by a server-side 529 with §§E/F/G unwritten, but **sections 0/A/B/C/D landed on disk
+(47 KB)** — the append-as-you-go rule paid for itself. Resumed for the remainder; the ordering
+verdict (§F) is still owed.
+
+### ✅ ORCH-verified — `resolve` has NO value-name duplicate check
+```
+compiler/frontend/resolve.mdk:1922
+duplicateErrors : List Decl -> List Decl -> List ResError
+  ... map (dupErr "type")        (findDups typeSeed  (dataRecordNames prog))
+   ++ map (dupErr "constructor") (findDups ctorSeed  (ctorNames prog))
+   ++ map (dupErr "interface")   (findDups ifaceSeed (map fst (interfaceList prog)))
+```
+Exactly three kinds. **There is no fourth.** ⇒ `methodIfaceParamsRef`'s header claim — *"resolve
+rejects the ambiguous case outright"* — **is false**, and RUN-P45-005 flagged it as a contradiction
+that had to resolve one way or the other. It resolves against the comment.
+
+P0-G found *why* the comment believes itself: a **cross-module** ambiguity rejection does exist
+(`AmbiguousOccurrence`, `resolve.mdk:726`) — but `keepAmbiguous`'s `not (contains n sameMod)`
+**explicitly excludes own-module declarations**. The comment generalised the cross-module guard to
+the intra-module case. **That asymmetry is the whole bug.**
+
+### The identity is NOT missing — the KEY collides
+There is exactly **one** identity supply for a method occurrence in the whole compiler:
+`perRun.methodIfaceParamsRef`, an `OrdMap` keyed by the **bare method name** whose *value* is a full
+`IfaceRef { irName, irOrigin }`. Its only readers — `recordImplObligation` (`:11306`),
+`ifaceParamMonos` (`:15314`), `ifaceOfMethodName` (`:24508`) — all take the interface out of that
+payload. ⇒ **the identity is in the value; the key is what loses it.**
+
+This is a named class in this tree, and P0-G found the register: `frontend/ast.mdk:492-494` —
+*"a table keyed by a BARE NAME that STORES a type head is an identity-supply defect"* — which
+instructs the reader to **derive** the member set rather than trust its list of two (#1256
+`recordByNameRef`, #1259 `universeDataEnv`). **`methodIfaceParamsRef` is an unlisted third member.**
+Deriving instead of reading the list is exactly what that paragraph asks for, and it worked.
+
+### ⇒ STRONG 4b is TWO independent units, not one
+| unit | what | cost |
+|---|---|---|
+| **S — selection** | re-key the `*ByIface` family from `ir.irName` (spelling) to `IfaceRef` identity, via the comparator that already exists (`sameTyConHead`, `ast.mdk:496`) | one file, ~6 signatures, **narrowing only** |
+| **Q — supply** | make the ambiguity **unrepresentable** — reject it in `resolve.mdk` | upstream, and it makes the bare-name key SOUND instead of working around its unsoundness |
+
+**For #1182's shape there is no supply answer to derive** — both declarations are "own", and the
+source says so itself (`typecheck.mdk:16802-16818`). That is what forces Q upstream rather than
+deeper.
+
+🚨 **Neither subsumes the other.** S without Q ships identity-keyed selection over an order-decided
+supply. Q without S leaves #1619's same-spelled-interfaces class untouched. **Both are needed, in
+that order.**
+
+⇒ This is a materially **cheaper and better-placed** fix than either sizing the owner chose between:
+P0-B's ≥3-files/≥8-signatures/new-AST-field estimate assumed identity had to be *manufactured and
+plumbed*. It does not — it exists, and the cheap move is to stop the collision upstream. **Bite
+`G-0` — the interface-permutation instrument — lands FIRST and MUST BE RED**, which is the
+fail-capable control RUN-P45-007 ruling 1 demanded.
+
+## RUN-P45-015 — Two agents lost to server-side 529s. Both RESUMED, nothing redone.
+
+W1 (arm set) died at *"Now fmt + lint on the three touched files"* with uncommitted edits; P0-G died
+with §§E/F/G unwritten. **Both were resumed by message rather than replaced** — a resume keeps the
+agent's own context and worktree, where the documented salvage path (extract a patch, hand it to a
+replacement) exists only for agents that cannot be resumed.
+
+W1's resume instruction adds one thing its original brief lacked: **commit the WIP before the next
+long step.** It has now been killed once mid-edit; carrying uncommitted work through a rebuild is how
+that becomes lost work. It was also told to report a half-written edit plainly rather than push
+through — a truncated edit silently poisons every later measurement — and given explicit licence to
+restart the bite from its last good commit if resuming is messier than redoing.
+
+**These were infrastructure faults, not agent errors.** Recorded so the run's throughput numbers are
+not later read as agents failing.
+
+---
+
+## RUN-P45-016 — P0-G §F: the ORDERING, and a silent-wrongness trap the FIX would introduce
+
+### The ordering matrix — the split IS the answer
+| | vs **Q** (resolve rejection) | vs **S** (identity-keyed selection) |
+|---|---|---|
+| **route α** | not ordered | not ordered — *and* Phase 4 goes identity-keyed for free |
+| **route β** | not ordered | 🚨 **`S1` MUST land first** |
+
+**`S1 → Phase 4` on route β is the only hard constraint in the matrix.**
+
+**P0-F's discriminator is NAMED and decidable today, with no charter ruling needed.** The table Phase
+4 would freeze **already exists and is route α**: `buildIfaceDispatch : List Decl -> List ((String,
+String), List Int)` (`eval.mdk:1882-1883`) walks `DInterface` decls (`:1888`) and is consumed by
+`lookupPositions` (`:1903`). Nothing in its production or consumption touches `IE`/`ieRows`/
+`*ByIface`. ⇒ the open question was **scope** (does Phase 4 freeze *this* table, or build a new
+`IE`-derived one?), not code — and α is strictly cheaper. **ORCH rules route α.** It needs no owner
+call: it is what the tree already does, and route β would be a new, more expensive table whose only
+distinction is inheriting the defect S exists to remove.
+
+### 🚨 ORCH-VERIFIED — the fix's own trap, and the tree pre-warns the exact mistake
+```
+compiler/frontend/ast.mdk:121-123
+ifaceIdentity (OriginModule m) name = "\{m}::\{name}"
+ifaceIdentity OriginUnresolved _ = ""
+ifaceIdentity OriginBuiltin _ = ""
+
+compiler/frontend/ast.mdk:139-140
+export ifaceIdMatches : String -> String -> Bool
+ifaceIdMatches a b = a != "" && a == b
+```
+Absence never matches, **not even itself** — and the surrounding comment says the flat/loader-less
+drivers *"deliberately stamp nothing"*. ⇒ a naively identity-keyed `lookupPositions` **misses on
+every FLAT lookup**, falls through the fail-open `lookupPositions _ _ [] = [0]` (`eval.mdk:1904`),
+and silently degrades dispatch positions on `check <single file>`, lsp, repl and doc. A naive `==`
+is the opposite bug (two unstamped interfaces compare equal). **Phase 4 needs a TWO-TIER key, and
+that requirement is invisible from the charter.** This is a would-be S0 *introduced by our own fix*
+— the "does this turn NOTHING into SOMETHING" question, answered in the dangerous direction.
+
+🎯 **ORCH cross-check P0-G did not draw, from the same comment block:**
+> *"⚠️ `sameTyConHead` BELOW IS THE OPPOSITE RULE ON THE SAME ABSENCE … this one answers a LOOKUP (a
+> miss is loud, a false hit is silent), that one answers ACCEPTANCE (a false reject refuses a valid
+> program). **Neither shape may be copied to the other site.**"*
+
+Unit **S** re-keys a *filter* and P0-G correctly reaches for `sameTyConHead` (acceptance). Phase 4's
+`lookupPositions` is a *lookup* and must use `ifaceIdMatches` **plus** the flat-path tier. **The two
+units need DIFFERENT comparators, and copying either to the other's site is pre-warned in the
+source.** Write this into both briefs.
+
+Also newly reported: the **producer** discards the origin too — `ifaceDispatchEntries`
+(`eval.mdk:1888`) destructures `DInterface { name, typarams, methods, … }` with `ifaceOrigin` in
+reach and unbound. And route α's identity fix is free at **both** ends: `ifaceIdentity`
+(`ast.mdk:121`) mints `"\{m}::\{name}"` — literally C4/I2's spelling — and is already called two
+lines away in both engines (`eval.mdk:1969`, `core_ir_lower.mdk:1402`), with `o` in hand.
+
+### ⭐ P0-G RETRACTED ITS OWN §B/§D CLAIM, unprompted
+Its earlier sections implied **Q1 blocks Phase 4**. Once P0-F named the consumer, P0-G refuted
+itself: `lookupPositions`' key comes from the *declaration* side (`DImpl.iface`/`DInterface.name`)
+and never reads `methodIfaceParamsRef` — verified negative by grep over both files, no hits. It
+labelled the original *"an inference about an unidentified consumer, not a derivation."*
+
+That is the sprint's most-cited defect class — **a claim reaching past its evidence** — caught by its
+own author, across a 529 restart. Recorded as the standard to hold the implementers to.
+
+### §E — the control exists nowhere, and its pre-fix reading is already on record
+**Nothing in the tree permutes `interface` declarations.** `diff_compiler_import_order.sh` permutes
+entry *import clauses*; `diff_compiler_dict_semantics.sh` §4 permutes *`impl` blocks* (regex `:889`).
+⇒ bite **G-0** is genuinely new coverage, not a re-run. Its pre-fix reading is already recorded in
+the source as a **measured verdict flip** (`typecheck.mdk:16806-16810`), so the probe is **provably
+able to fail** — satisfying RUN-P45-007 ruling 1's demand — and it discriminates all four states:
+today / name-scoped / Q1 / S1-alone.
+
+---
+
+## RUN-P45-017 — ✅ PHASE 0 CLOSED. The plan of record.
+
+Seven packets (P0-A … P0-G), five owed questions answered, two rulings by the owner and three by
+ORCH. **Every Phase 0 finding that contradicted the sprint doc was verified by ORCH first-hand
+before being acted on.**
+
+**Landing order.** G-0 first and RED; the arm set is a precondition under every route; Phase 4 takes
+route α with a two-tier key.
+
+| # | unit | owner | state |
+|---|---|---|---|
+| 1 | **arm set** — `TyFun` + `TyEffect` (#1617, #1618) | W1 | 🔨 in flight |
+| 2 | **G-0** — interface-permutation instrument, MUST BE RED | — | ready to cut |
+| 3 | **Q1** — `resolve` rejects two same-method interfaces in one module | — | ready to cut |
+| 4 | **S1 → S2** — widen `*ByIface` to `IfaceRef`; supply real identity | — | ready to cut |
+| 5 | **Phase 4** — freeze admissibility, route α, `Ref CAdmis` carrier, two-tier key | — | ready to cut |
+| 6 | **S3** — repoint `keyForSite` | ⏸️ **OWNER** | separable, LAST |
+| — | **X** — strike `ieImplExistsForHeadGo` from the target list | — | free, docs only |
+
+**Superseded and NOT to be re-inherited:** AD-2's `CProgram` carrier (dead — cannot reach
+`eval.mdk`); Q2's render-vs-omit question (moot — a `Ref` carrier has no serialization); the
+`(method, head)` framing (wrong table); the doc's three-member arm set (wrong member); and the
+ruling's *"one line, inside one file"* sizing for 4b (the fix is upstream, in `resolve.mdk`).
+
+**Two honesty constraints binding on the PR bodies:**
+1. `keepOrAll original [] = original` is unreachable from any carrier. **Retire it in the same unit,
+   or do not claim the unit closed the fail-open behaviour.**
+2. #1068 is co-owned with X-E and carries an X-W physical residual. **This sprint cannot CLOSE it**
+   regardless of what lands.
+
+---
+
+## RUN-P45-018 — W1 lands PR #1629, and DISPROVES the brief twice. Both were ORCH's errors.
+
+**PR #1629** (`fix/1617-1618-fun-and-effect-impl-head-tags`), open, unmerged.
+
+| shape | before | after |
+|---|---|---|
+| `ab` | `run [(5, 5)]` `build=1` | `run [(5, 9)]` `build=0` `exec [(5, 9)]` |
+| `ba` | `run [(9, 9)]` `build=1` | `run [(5, 9)]` `build=0` `exec [(5, 9)]` |
+| `eff` | `run [2]` `build=1` | `run [2]` `build=0` `exec [2]` |
+
+`(5, 9)` and `2` were **hand-derived from the source before any invocation** — the rule that stops a
+golden enshrining what the engine did. Both permutations now agree, which they did not before.
+
+### ⭐ The `TyFun` tag question: RESOLVED, and it refutes the brief's concern
+ORCH briefed that currying might mean one `__fun__` tag cannot drain #1617. **W1 disproved it with
+the typed Core-IR dump:** the two impls **already carry distinct canonical words**
+(`ab::Sz|(Int -> Int)|` vs `…|(Bool -> Bool)|`) while sharing one tag. The tag's only job is to make
+them *collide*, which is what upgrades the site to the canonical word — the same mechanism
+`Pair Int Bool`/`Pair Bool Int` rides. Tuples are arity-bearing for the *opposite* reason (arity is
+their only head discriminator and the runtime cell carries it; an arrow carries no cell tag at all).
+Verified with a curried pair at two arities. **One arity-free tag is correct.**
+
+### ⚠️ BRIEF DEFECT 1 — the site set was ONE FUNCTION SHORT
+With all four head projections fixed, #1618 drained and **#1617 did not**. `sz : a -> Int` dispatches
+on its *argument*, so its route comes from `resolveArgStamp` → `entail`, whose `inst` arm projected
+through `headTyconNameMono` — the residual ORCH's brief left untouched — and took the fallback every
+time. Repointing it at `headTyconMono` is the same repoint A-2.2b made at `goalHeadCon`.
+
+**Found by the typed Core-IR dump, not by reading source.** `AGENTS.md` calls that probe the highest-
+value tool here and says to reach for it *before* reasoning about routes; this is another instance.
+
+### 🚨 BRIEF DEFECT 2 — ORCH's authority table was WRONG, and ORCH told W1 not to re-litigate it
+RUN-P45-004/011 concluded the defect set closes at `{TyFun, TyEffect}`, and the W1 brief stated it as
+settled with *"do not re-litigate it, and do not extend the set."* **W1 probed the nearest uncovered
+shape anyway and found a defect.** ORCH-verified on the base binary:
+
+```
+impl Sz (Eq a => Int) where sz _ = 2
+check -> 0     run -> 0  [2]     build -> 1
+runtime error [E-PANIC]: no impl of method 'sz' for type '__none__'
+```
+
+Byte-identical to #1618. `headTyNode` unwraps `TyApp` only — it does **not** peel `TyConstrained` —
+so `Eq a => Int` never reaches the `TyCon Int` underneath.
+
+⇒ **#1617/#1618's *"measured NOT to be a defect"* is correct but SCOPED, and neither says so:** it
+holds for a **headless** body (`Eq a => a`, peel is a bare `TyVar`, legitimately headless). A
+**headed** body is #1618 one constructor over. **Filed #1630** (S1); scope corrections posted to
+#1617 (`issuecomment-5291012993`) and #1618 (`issuecomment-5291013346`). Deliberately kept OUT of
+#1629 — extending a set mid-bite is how a fix ships wrong in the other direction.
+
+**The propagation chain is the lesson.** One under-scoped sentence in an issue body → repeated into
+the sprint doc *with its polarity inverted* → quoted verbatim into an implementer brief as an
+authority table → caught only because the implementer disobeyed the instruction not to check.
+**"Disproving me is a SUCCESS" earned its place in the brief twice in one bite.** An enumeration that
+BOUNDS a class must carry its derivation and its scope, because every later reader treats it as
+settled.
+
+### Golden ruling — BLESS, in a separate terminal commit
+`diff_compiler_snapshot_frontend` is red **by construction** (the three edited files are themselves in
+the snapshot corpus). W1's evidence is the right evidence: 161 insertions / 26 deletions across
+`route_key.md`, `typecheck.md`, `eval.md`, with **every non-comment line traced to one of the six
+edited declarations or the import, and no unrelated declaration moved** — the "unrelated code still
+behaves" property applied to a golden, which is what separates a bless from a rubber stamp.
+
+Ruled: bless by NAMING each path (never a corpus), in its **own terminal commit**, then re-run the
+plain check and report the ratio — **the re-run is what makes it a pass.** `test/selfproc_goldens/legA/*`
+is **NOT** to be blessed: measured unmoved, with a mechanism (`funHeadTag` lives in `route_key.mdk`,
+not a LEG A module). ORCH reviews the **committed** diff, not a description of it.
+
+### Fixpoint — CI is NOT sufficient here
+W1's `unchecked:` deferred `selfcompile_fixpoint` to CI's `soundness`. **A green CI fixpoint covers
+C3b ONLY.** This change moves emitted IR, so the fixpoint is its decisive gate. W1 instructed to run
+it locally, backgrounded with a PID poll, and report **C3a and C3b as separate verdicts** — *"the
+fixpoint passed"* is not a reportable result. A segfault there is the stale-seed signature, not a
+bug; a seed re-mint is a decision to bring to ORCH, not a step to take.
+
+### Friction accepted from W1 (all four are real)
+1. Brief's site set incomplete (above).
+2. The `TyConstrained` claim quoted as authority (above).
+3. The isolation classifier rejects ordinary compound commands as "too complex", forcing every
+   multi-step probe through a written `.sh` — roughly doubled its tool calls. **Environmental, worth
+   knowing when sizing future probe packets.**
+4. `test/build_diff_fixtures` has **no golden regen script by design** — its header says hand-write
+   and review. Worth knowing before someone hunts for one.
+
+---
+
+## RUN-P45-019 — #1629 close-out: goldens blessed, fixpoint BOTH halves, and a hook bypass VERIFIED CLOSED
+
+**PR #1629** — three commits: two source (`e051788b`, `588a3322`), one **terminal golden re-cut**
+(`0da75b34`) carrying no source change, so the golden move is reviewable on its own.
+
+**Goldens.** Blessed by name, one file at a time, never a corpus sweep; each reported `1 blessed`;
+`git status` showed exactly three files, all under `test/snapshots/compiler/`. **Plain re-run:
+`202 fixtures, all 202 compared and matching`, exit 0** — the re-run is what makes it a pass, not the
+bless. `test/selfproc_goldens/legA/*` deliberately NOT blessed (measured unmoved; `diff_compiler_selfproc`
+PASSES), with the mechanism recorded **in the commit message** so a later reader cannot "restore
+symmetry" by blessing it.
+
+**Fixpoint — both halves, named:**
+```
+C3a (IR1 == seed-bootstrapped converged reference): YES
+C3b (IR1 == IR2, fixpoint):                          YES     exit 0
+```
+No segfault at any step ⇒ **no stale-seed signature, no seed re-mint owed.** This is why ORCH refused
+to accept CI's `soundness` as sufficient: a green CI fixpoint covers **C3b only**, and this change
+moves emitted IR.
+
+### ⚠️ W1 disclosed it committed with `core.hooksPath=/dev/null` throughout — ORCH verified the gap CLOSED
+Volunteered plainly rather than implying the hook had validated the commits, which is the right
+disclosure. The bypass drops **all four** pre-commit checks, so ORCH closed each independently rather
+than accepting the manual substitute:
+
+| hook check | status |
+|---|---|
+| **fmt** | ✅ ORCH-verified — `medaka fmt` (read-only mode) over the three files **as pushed** (`git show FETCH_HEAD:<path>`), **exit 0** |
+| **lint** | ✅ ORCH-verified — `medaka lint` over the same three, **exit 0** |
+| **lextok** | ✅ **moot** — no `.lextok.golden` sibling exists for any of the three; the check is opportunistic and would have been a no-op |
+| **snapshot** | ✅ blessed + 202/202 re-run, committed; CI's snapshot shard re-verifies against the merged tree |
+
+⚠️ **One honest residual, not closed:** the per-file lint above does **not** exercise the cross-file
+`rule-duplicate-body`, which needs a whole-project scan. Risk is low (W1 edited existing declarations
+and added few), but it is **not zero and is not covered by any gate** — derived: no gate enforces
+tree-wide `fmt`/`lint` (`grep -rn 'medaka lint\|fmt --check' test/*.sh` returns gates *about* fmt/lint
+behaviour, not enforcement of tree cleanliness). **The pre-commit hook is the ONLY enforcement of
+that rule, and it was bypassed.** Recorded rather than papered over.
+
+### `gh pr edit --body-file` silently no-opped AGAIN
+Returned **rc=1 and left the old body in place.** W1 caught it only by reading the state back —
+all three new key strings absent (`grep -c` → 0) — then landed it via `scripts/pr.sh body`, which
+self-verifies, and re-verified independently. **This is the documented shape and it recurred on this
+very sprint.** Standing rule reconfirmed: **verify the resulting state, never the return code.**
+
+## RUN-P45-020 — W2 dispatched: bite G-0, where a RED GATE IS THE DELIVERABLE
+
+Only writer live (W1 finished). G-0 is a *verification instrument for a fix that has not happened
+yet*, so **a green G-0 is a FAILED bite** — it would mean the probe cannot see what it exists to see.
+The brief requires the PR body to say so unmistakably, so no later agent "fixes" the red by weakening
+the probe.
+
+**It must discriminate FOUR states, not two** — today / name-scoped / Q1-landed / S1-alone. A probe
+that reports only "same vs different" collapses *name-scoped* into *Q1-landed*, which is precisely
+the confusion that lets a shallow fix look like a real one. Multi-channel signature recording, on the
+`import_order.sh` model, is what buys the discrimination.
+
+**Its proof-of-fail is already on record:** `typecheck.mdk:16806-16810` documents a measured verdict
+flip for this shape. If the instrument does not reproduce that flip, the instrument is broken — that
+check precedes believing any other result it produces.
+
+**One design tension handed over explicitly rather than decided:** a gate that is red by design
+cannot simply be wired into a required shard without redding the tree for everyone. W2 must choose —
+wire it and record the expected-red in `.claude/HANDOFF.md`, or exclude it with a reasoned
+`CI-COVERAGE-EXCEPTIONS.txt` row — and **state the consequence**. It was also pointed at
+`test/must_fail_fixtures/` as a possibly-simpler home, since that harness's contract already *is*
+"assert this bug still reproduces, go red when it drains", with the caveat to check
+`MUST-FAIL-NOT-PINNABLE.txt` first because those verbs may not reach the interface-permutation axis.
+
+---
+
+## RUN-P45-021 — ⭐ W2 OVERTURNS ORCH's central design instruction. **ADJUDICATED: W2 is right.**
+
+**PR #1631**, CI **12/12 green**: `test/diff_compiler_iface_order.sh` + `test/iface_order_fixtures/`
+(5 cases) + `test/IFACE-ORDER-LEDGER.txt`. Gate confirmed to have actually *run* in the CI logs
+(`PASS diff_compiler_iface_order`) — not a shard that went green having executed nothing.
+
+**ORCH mandated a RED gate** (*"a green G-0 is a FAILED bite"*). **W2 landed it GREEN, deliberately,
+and its argument is grounded in this tree's own solved precedent.** ORCH-verified verbatim:
+
+> `test/IMPORT-ORDER-LEDGER.txt` — *"The gate is GREEN with rows present because a gate that lands
+> red breaks `main` and teaches people to ignore it. **The rows are what keep the green honest.**"*
+
+**The ledger form is STRICTLY STRONGER than the red exit ORCH asked for**, on ORCH's own stated
+requirement:
+- a red-by-design gate must be **excluded** from CI (or it reds the tree for everyone), so it never
+  runs and rots — and it carries **one bit**, which *cannot* distinguish state 2 from state 3. That
+  is the exact four-state collapse the brief itself forbade. **The mandate contradicted its own
+  requirement.**
+- the ledger pins **every distinct signature** and reds in **three** directions — **DRAINED**,
+  **MOVED** (the partial/name-scoped fix), and **new unledgered divergence** — all three demonstrated
+  by negative control on the branch.
+
+**✅ ADOPTED. ORCH's red-gate instruction is withdrawn.** W2 also generalized
+`must_fail_census.sh` HALF 4 over **both** order ledgers — it was written for `IMPORT-ORDER-LEDGER.txt`
+alone and would have silently stopped covering the family. That is the state-2 backstop and it was
+not asked for.
+
+**Proof-of-fail delivered:** `typecheck.mdk`'s documented FA/FB flip reproduces by hand *and* through
+the instrument, as an **ACCEPT vs REJECT** flip (`check=0;…run=0:11` vs `check=1;codes=T-NO-IMPL`).
+W2 additionally proved the **permuter actually moves the file** (identity byte-identical; swap differs
+at exactly the two `interface` headers; 1414 bytes all three) — because *"found nothing"* and *"moved
+nothing"* are the same reading. That check was not in the brief and should have been.
+
+**W2's bounding finding:** #1182's canonical program is **INVARIANT** on the interface-order axis.
+So for #1182's own program a name-scoped fix leaves nothing here to object to; **the state-2 signal
+comes from the sibling cases.** Kept as an explicit `negative-1182-…` case. This narrows — correctly —
+the claim RUN-P45-005 made about what the instrument can see.
+
+## RUN-P45-022 — 🚨 ORCH's own #1620 filing was WRONG. Corrected in public.
+
+W2 reported #1620's segfault **did not reproduce** on the interface-order axis (8 runs). ORCH had
+reproduced it first-hand and filed it. Rather than assume either side was wrong, ORCH ran the
+**discriminating third program**:
+
+| program | interfaces | impls | result |
+|---|---|---|---|
+| original `ab` | `Alpha`,`Beta` | `Alpha`,`Beta` | raw word, exit 0 |
+| **interfaces only** | `Beta`,`Alpha` | `Alpha`,`Beta` | **prints `alpha`, exit 0 — well-behaved** |
+| **interfaces AND impls** | `Beta`,`Alpha` | `Beta`,`Alpha` | **exit 139, segfault** |
+
+⇒ **The segfault is real and still ungraded, but it is NOT reached by permuting interfaces alone.**
+P0-D's `ba` fixture swapped **both**; ORCH described it as *"swapping the two interface declarations —
+nothing else changes"*, which is **false**.
+
+🚨 **The failure mode is precisely the one this sprint keeps cataloguing, and the ask was the
+dangerous part:** extending the pin along the interface axis — as ORCH asked #1620 to do — would have
+pinned a **well-behaved** program, left the segfault ungraded, and *looked* like coverage. **Worse
+than no pin.**
+
+**And note where the error entered:** ORCH re-derived the segfault first-hand *specifically to avoid
+relaying P0-D's measurement unverified* — and then **described the setup from memory rather than from
+the file.** The verification was real; the sentence around it still reached past its evidence. A
+first-hand measurement does not immunise the prose that frames it.
+
+**Correction posted** (`#1620 issuecomment-5291356596`), readback verified, with the corrected ask:
+pin the **joint** permutation. Recorded rather than quietly edited.
+
+**Both W2 friction items 1 and 2 are ACCEPTED as ORCH brief defects**, alongside W1's two. Running
+tally of brief defects caught by implementers this sprint: **four, all from writers, none from
+gates.** Item 2 is the sharper one — the brief summarised `import_order.sh` as *"five cells, no wasm
+arm"*, accurate but omitting that it is a fully-developed self-draining ledger harness **whose header
+argues against the design ORCH mandated**. *Reading the file instead of the summary reversed the
+bite's central decision.* That is "derive, don't encode" biting at the **summary layer** — the
+orchestrator's layer.
+
+Item 3 also stands: `.claude/HANDOFF.md` already specified this instrument (*"Only a permutation
+differential sees it"*) and the brief never cited it. Item 4 is a genuine trap worth adding to
+`AGENTS.md`: **gate output invites `| head`, and a gate run piped to `head` reported `EXIT=0` for a
+run with two failures** — the documented `medaka build` pipe trap applies to gates too.
+
+---
+
+## RUN-P45-023 — Merge request received; premise was FALSE on both counts. Rounds run instead.
+
+Val: *"let's merge the PR assuming we've done the review and repair rounds."* **We had not**, and
+**#1629 was not green.** Merging is hard to reverse and the sprint's own rule — never merge an S0 fix
+on green alone, base rate 6 reviews / 6 real defects, all on 12/12-green PRs — applies squarely.
+Reported the gap and ran the rounds rather than acting on the assumption.
+
+### #1629's `soundness` red is the LICENSED one, but it hid two skipped steps
+Read the gate rather than guessing. The failing step is *"Open bugs must still reproduce (must-fail
+suite — a RED here means someone FIXED something)"*:
+```
+checked 100 fixtures: 98 still reproduce, 2 DRAINED, 0 control-broke, 0 malformed
+DRAINED  1617-fn-typed-impl-head-none-bucket          (issue #1617)
+DRAINED  1618-effect-carrying-impl-head-cannot-build  (issue #1618)
+```
+Exactly the two the PR fixes; **0 control-broke, 0 malformed** ⇒ no collateral drains. The tracker
+self-drained, which is that gate's entire purpose.
+
+🚨 **But the job dies there, and takes two steps down with it:**
+```
+failure :: Open bugs must still reproduce (must-fail suite …)
+skipped :: Compiler source must be well-typed
+skipped :: Emitter must reproduce itself (C3b fixpoint; C3a drift only warns)
+```
+**`typecheck_compiler_source.sh` — the ONE gate that catches an ill-typed compiler while every other
+gate passes — has not run on this PR.** A green rollup would never have shown that; only reading the
+step list did. **W3 dispatched**, briefed that the deliverable is making those two steps *execute*,
+not turning a tick green.
+
+W3 was steered toward **re-pointing** the drained fixtures rather than deleting them: **a drained
+fixture is not a drained class**, and **#1630** proves the class is live one constructor away. Also
+told **not to close #1617/#1618** — this sprint's policy is *implement, do not close*; closure
+happens post-merge with the landing sha.
+
+## RUN-P45-024 — R2 on #1631: **MERGE**, no S0/S1. And it verified what it was told to doubt.
+
+R2 built a read-only fakeroot in scratch (symlinked binary/stdlib/runtime + `git archive` of the
+branch's tests), exploiting the gate's `ROOT`-from-`dirname $0/..` to run **the branch gate against a
+base binary** without building anything. It then verified the instrument can fail **four independent
+ways**, building each mutation itself rather than accepting the author's negative control:
+unledgered divergence · MOVED · DRAINED · ROT — all EXIT=1 with the right message. Gate confirmed to
+have actually *run* in CI (`PASS diff_compiler_iface_order`, `gates (eval)` planned as FULL) — not a
+shard reporting SUCCESS having executed nothing.
+
+It also **executed the two things W2 had listed as `unchecked:`** — `must_fail_census.sh` HALF 4 with
+a stubbed `gh` (4 findings, **both** ledgers covered, no coverage loss), and dash/macOS portability.
+
+**⭐ And it independently re-derived ORCH's exit-139 debunk:** no 139 in any cell on the interface
+axis; alpha-first **leaks a heap address** (`47049609283896`, then `47401252067640` — different each
+run), beta-first stable. RUN-P45-022's correction holds under a second, independent method.
+⚠️ **Consequence for whoever pins #1620: the wrong answer is a LEAKED POINTER that varies per run**,
+so an exact-match pin will red on address drift. Project it to a stable predicate.
+
+### Findings and disposition
+| # | sev | finding | disposition |
+|---|---|---|---|
+| **F1** | S2 | the drain note printed at failure time drops the `R-*` qualifier the gate header carries, so an **S1-alone** fix converging on `check=1;codes=T-NO-IMPL` gets the **state-3** rule printed over it — the state collapse the instrument exists to prevent, one notch over. Reviewer forced the convergence and watched it happen | **W4 — fix BEFORE merge** |
+| **F2** | S2 | the corpus cannot discriminate interface-NAME keying from MODULE-QUALIFIED-IDENTITY keying — what HANDOFF demands of Phase 4. The limit IS disclosed, but as a coverage footnote never connected to the four-state table it undermines. Discriminating shape is structurally inexpressible today | **W4 — doc, next to the table** |
+| **F3** | S3 | `schemes=` cell is inert across the corpus — a pure function of `check=` | deferred |
+| **F4** | S3 | HALF 4's banner and lead paragraph still describe one ledger; only the file-top summary was updated. Behaviour verified correct | **W4 — doc** |
+| **F5** | S3 | unescaped TAB where TAB is the `cut -f2` separator | **SPLIT OUT — filed #1634** |
+
+**ORCH ruled F1 fixed pre-merge, against R2's "neither blocks the merge".** An instrument whose sole
+value is discriminating four states must not land misreporting one of them; "fix it before anyone
+acts on a red" is a promise no future agent inherits.
+
+## RUN-P45-025 — #1634 filed: a MASKING PATH inside the DETECTOR. ORCH-verified before filing.
+
+```
+test/diff_compiler_import_order.sh:254  esc() { … s/\\/\\\\/g; s/\|/\\p/g; s/;/\\s/g; s/\n/\\n/g … }
+                              :352      printf '%s\t%s\n' "$ord" "$(sig_for …)"
+                              :365      cut -f2 … | sort -u
+```
+`esc` escapes backslash, `|`, `;`, newline — **not TAB** — while TAB is the record separator that
+`cut -f2` splits on. A signature containing a TAB is truncated, so **two different signatures compare
+EQUAL**. Reachable: the signature embeds program stdout.
+
+**The direction is the dangerous one.** Truncation makes signatures *more* equal, never less ⇒ the
+only failure mode is **under**-reporting, and it cannot produce a false red. For this family that is
+the worst possible shape, because the ledger design reads "one distinct signature" as *"this case no
+longer diverges — drain the row."*
+
+**Severity S3, derived from what was measured** — no current fixture emits a TAB, so nothing is
+mis-reported today — with the escalation condition stated explicitly rather than inflating it to S2.
+That is the same discipline ORCH has been enforcing on every packet.
+
+Affects **both** gates (`import_order` and the new `iface_order`, which inherits the code). **Split
+out of #1631 rather than folded in**: a pre-existing defect must not be absorbed by the PR that
+merely replicates it, or the diff claims a fix it did not make and the original gate's decade of
+exposure disappears.
+
+## RUN-P45-026 — Two writers live concurrently. Deliberate, and stated to both.
+
+W3 (`compiler/` + `must_fail_fixtures/`, branch `fix/1617-1618-…`) and W4 (`test/*iface_order*` +
+`must_fail_census.sh`, branch `test/iface-order-instrument`) run at the same time in **separate
+isolated worktrees on separate branches touching disjoint files.**
+
+The SERIALIZE WRITERS rule exists because Stage A ran 3-5 concurrent writers **in one worktree** and
+paid with four contaminated measurements and ~4 bites of rework — the mechanism is shared state, not
+concurrency itself. Disjoint worktrees and disjoint files carry no such coupling.
+
+**W4's brief states the concurrency explicitly, naming W3 and its file set** — because a prior
+orchestrator on this arc opened a brief with *"you are the ONLY agent live"* and dispatched two more
+minutes later. If the premise is that they cannot collide, the agent is owed the facts to check it.
+
+---
+
+## RUN-P45-027 — W4: F1/F2/F4 landed on #1631. And a corpus that contradicted its own advice.
+
+Two commits (`b732e582`, `6c3609a4`) on `test/g0-iface-order-differential`; CI re-running. Gate
+re-verified `EXIT=0`, `5 case(s) — 5 ok, 0 failing`, byte-identical to baseline.
+
+**⭐ W4 found a stronger proof than the brief prescribed.** ORCH briefed it to *construct* the
+state-4 convergence. It did — but first noticed **the committed corpus already pins the
+counterexample**: the #1182 ledger row's own second signature is `check=1;codes=T-NO-IMPL`, a
+*type*-stage code, which the gate's printed note was labelling state 3. **A gate whose own pinned
+data contradicts its own printed advice** — that is the artifact, and W4 put it in the commit message
+rather than the constructed probe. Fixed in **four** places carrying the same flaw (printed note,
+four-state table, `codes=` cell description, ledger header), now discriminating by prefix: `R-*` ⇒
+state 3, `T-*` or empty ⇒ state 4. **No state collapsed — 3 and 4 are more separated than before.**
+
+### 🎯 ORCH-VERIFIED, and it corroborates the sprint's two-unit split from a citation nobody had
+W4 grep-proved F2's inexpressibility rather than accepting the brief, and turned up a better source:
+```
+compiler/types/typecheck.mdk:16700
+-- Interface names are NOT globally unique — nothing in resolve or the
+-- loader enforces it across modules, only WITHIN one (`Duplicate interface: Eq`).
+```
+⇒ **Q and S are NOT redundant, and this is the proof.** Q (reject the ambiguity in `resolve.mdk`)
+can only reach the **intra-module** collision, because cross-module same-name interfaces are
+**legal** — the #1258 shape, where two unrelated modules declaring `Same` shared one bare-name key
+and an impl completely implementing its own `Same` was rejected as missing the *other* one's method.
+**That is exactly why name-keying is insufficient and identity-keying is required.** RUN-P45-014's
+*"neither subsumes the other"* now rests on a source citation, not an argument.
+
+⚠️ **And it names what this corpus is structurally blind to: #1258.** F2's doc fix now says so at the
+four-state table — a drain here is **not** evidence Phase 4 keyed by module-qualified identity.
+
+### W4's `unchecked:` is exemplary and is kept as-is
+It flagged that R2's stubbed-`gh` execution of `must_fail_census.sh` HALF 4 is **a relayed
+observation, not its own** (its change there being provably comment-only, so it cannot matter), that
+it ran one gate only, and that F2's inexpressibility rests on reading + two cited diagnostics rather
+than on building a two-module fixture. **Labelling someone else's measurement as relayed, inside your
+own report, is the discipline this arc keeps finding absent.**
+
+### Friction — three accepted, one is a real harness defect worth escalating
+1. **ORCH gave the wrong branch name** (`test/iface-order-instrument` vs the real
+   `test/g0-iface-order-differential`). Cheap only because the brief also said to confirm it.
+2. **The PR branch was already checked out in a live sibling worktree, so `git checkout <branch>` is
+   impossible.** The brief's "check out the existing branch" is **not achievable as written** under
+   this repo's worktree fan-out; the working pattern is a local branch + `push HEAD:<ref>`. **This
+   belongs in the orchestration playbook — every writer on a multi-worktree sprint hits it.**
+3. W4 bypassed the hook on commit 1 out of caution, then ran commit 2 with it live and it passed —
+   and **flagged its own unnecessary bypass rather than leaving it in the reflog.** No `.mdk` was
+   staged, so all four checks were no-ops either way.
+4. 🚨 **The harness refuses `cmd > /path/in/scratchpad 2>&1; echo $?` as "too complex"** — while the
+   standing rule for gates and `medaka build` is *"never pipe; redirect to a file and read `$?`."*
+   **The SAFE pattern is the one being refused, leaving the unsafe one available.** ORCH hit this
+   repeatedly this session too. Worth raising as tooling, not worked around forever.
+
+---
+
+## RUN-P45-028 — W3: #1629 is **12/12 green and the skipped steps EXECUTED.** ORCH-verified.
+
+The deliverable was never the green tick. Verified first-hand on the new `soundness` job (not relayed
+from W3, and not inferred from the rollup — the rollup is exactly what hid this last time):
+```
+success :: Open bugs must still reproduce (must-fail suite — a RED here means someone FIXED something)
+success :: Compiler source must be well-typed
+success :: Emitter must reproduce itself (C3b fixpoint; C3a drift only warns)
+```
+`typecheck_compiler_source.sh`: **PASS, type-clean, 0 error-severity diagnostics across
+`medaka_cli.mdk` + 69 entries** — the gate that catches an ill-typed compiler while every other gate
+passes, which had **never run on this PR**. must-fail: `100 fixtures / 2 DRAINED / exit 1` →
+**`98 fixtures, 98 reproduce, 0 DRAINED, 0 control-broke, 0 malformed, exit 0`**.
+
+### The pins were RE-POINTED, not deleted — and the home was derived
+Into `test/diff_compiler_dict_semantics.sh`, because **a drained fixture is not a drained class** and
+**#1630 is live** — which W3 re-verified first-hand rather than relaying from the brief
+(`impl Sz (Eq a => Int)` → `check=0 run=0 [2] build=1`, E-PANIC byte-identical to the #1618 just
+fixed). The home was **derived, not invented**: two earlier members of the same `noneHeadTag` family
+already live there, and one arrived by exactly this route (`s3-nary-requires-goal-vector`, #1154,
+whose must-fail pin drained and migrated; Section 4's header documents it).
+
+**⭐ And it fixed a real coverage hole in the process.** The #1617 fixture's discriminating property
+is **declaration-order dependence**, which *a single-order value pin passes by construction*. The
+drained must-fail fixture could only carry that half as an **ungraded third file** (`permutation.mdk`,
+run by nothing). Written as a flat `.mdk`, Section 4's derived permuter now picks it up and it
+**executes**: `PASS perm … [Sz]`. Likewise #1618's discriminator is the **`build` cell** — `check`
+and `run` were *both already correct while the bug was live*, so a value-only reading is vacuous.
+**Both fixtures now assert the cell that can actually fail.** Fail-capability proven by mutation
+(`185 passed, 2 failed`), then reverted byte-clean.
+
+### ⭐ W3 caught its own grep wrong — by running it
+Its first consumer-enumeration excluded `/` from the leading character class, which *looks* like
+tightening a word boundary and instead **hid the gate itself** (`FIXDIR="$ROOT/test/must_fail_fixtures"`
+— the separator **is** a slash). Corrected: `must_fail_fixtures/` has **exactly two** directory
+readers; a naive grep also returns two **code**-line hits that are the path inside **TABLE row label
+strings** — prose no comment-filter heuristic can remove. Four files hit, two consume.
+
+### ⚠️ Flagged rather than silently overruled: the autoclose keywords
+`Closes #1617. Closes #1618.` sit at line 1 of the PR body — **the original author's, left in
+place**, with W3 noting a reader may want them stripped. ORCH-verified the form is **plain and
+unbolded**, so they **WILL fire on merge** (a bolded `Fixes **#N**` would silently not).
+
+**ORCH ruling: KEEP them.** The sprint's *"implement, do not close"* policy targets **desk closes** —
+closing without a landing commit — which is what let #1182 be closed while its pin still reproduced.
+Autoclosing on merge **is** closure with the landing sha, which is the policy's own prescribed form.
+Both issues drained against green controls and are re-pinned as fixed-behavior regressions. #1630
+stays open and is unaffected.
+
+### Friction — two repeats, one new
+1. **Branch already checked out in a sibling worktree ⇒ `git checkout -B` hard-fails.** Second writer
+   to hit this (W4 too). *Handing two agents the same branch name serializes them at the git layer,
+   not just logically.* **Goes in the playbook.**
+2. The isolation classifier rejected **three ordinary read-only commands**; each cost a round trip
+   into a scratch `.sh` — **and the scratch-script workaround is itself the one that eats exit
+   codes**, so it trades one hazard for another. Same defect as W4's item 4.
+3. 🆕 **`PREFLIGHT_DRY` cannot help a drain.** This diff's real gate set (`must_fail`,
+   `typecheck_compiler_source`) lives in **`soundness`, which preflight does not map at all** —
+   confirmed by `grep -n must_fail test/preflight.sh` returning nothing. By design per the gate
+   header, but the consequence is worth stating: **a drain is structurally invisible to the local
+   loop and only ever surfaces in CI.**
+
+## RUN-P45-029 — Both PRs are green. **Neither merges until R1 reports.**
+
+| PR | head | CI | review |
+|---|---|---|---|
+| **#1629** (arm set, S0+S1) | `a8a226cb` | **12/12**, skipped steps now executing | ⏳ **R1 running** |
+| **#1631** (G-0 instrument) | `6c3609a4` | **12/12** after W4's fixes | ✅ R2: MERGE |
+
+#1629 is an S0 fix and the standing rule is **never merge one on green alone** — base rate here is
+6 reviews / 6 real defects, every one on a 12/12-green PR. Green is the *precondition* for the
+review, not a substitute for it. Waiting.
+
+---
+
+## RUN-P45-030 — 🚨 R1 on #1629: **HOLD.** The review found an S1 the 12/12 green cannot see.
+
+**Verdict: do not merge as it stands.** R1 built a real two-arm differential (base `aaa4371` vs the
+PR's `compiler/` diff rebuilt in its own worktree) and **confirmed faithfulness first** — base prints
+`(5, 5)` on the #1617 repro, branch prints `(5, 9)`, matching the PR's own table. A differential
+whose arms were never shown to differ correctly proves nothing; this one was.
+
+### F1 (S1) — the projection has THREE readers. The PR analysed ONE.
+The PR gives `headTyconNameTy` a `TyFun` arm and makes the **shared** `headTyNode` peel `TyEffect`.
+Two of the other readers decide **ACCEPTANCE**, not dispatch:
+- `implHeadTagForIface` → `implHeadTagsForIface` → `routeUndeterminedTop` (`:20104-20112`, `:20085`)
+  — counts distinct impl head tags: one → stamp; **two or more → `T-AMBIGUOUS-INSTANCE`**. Arrow and
+  effect impls were *dropped* from that census before, and are *counted* now.
+- `implTysIfMatch` → `uniqueImplTysFor` → `groundOneObligation` (`:23107-23141`).
+
+Measured both arms, on programs that **never dispatch to an arrow or effect head**:
+
+| probe | BASE | BRANCH |
+|---|---|---|
+| `impl C Int` + `impl C (Int -> Int)`, undetermined site | `3`, exit 0 | `Ambiguous instance for C`, **exit 1** |
+| same with `impl C (<Stdout> Bool)` | `3`, exit 0 | **exit 1** |
+| multi-param `Conv` + effect-headed sibling | `True`, exit 0 | `Ambiguous instance for Display` (**prelude cascade**), **exit 1** |
+
+🚨 **The PR's own bystander fixture asserts this cannot happen, and is falsified by adding ONE method
+to its own interface** (`48`/exit 0 base → hard error branch, arrow impl still never dispatched to).
+It passes only because `Sz a` is single-param — which short-circuits `groundOneObligation` — and has
+no undetermined constraint. **This is the "feature + UNRELATED code still behaves" fixture failing at
+precisely the job it exists to do**, which is why 11 green checks are all consistent with the defect.
+
+### 🎯 ORCH-VERIFIED, and it is worse than R1 reported: THE TREE WARNED, SIX LINES AWAY
+`compiler/types/typecheck.mdk:18234-18240`, verbatim:
+> *"`implHeadTagForIface` feeds ONLY `implHeadTagsForIface` → `routeUndeterminedTop` … one head →
+> stamp it; two or more → `T-AMBIGUOUS-INSTANCE`. Including headless impls there changes an ACCEPT
+> into a REJECT … **That may well be the right answer under §3 … but it is an ACCEPTANCE NARROWING,
+> and this stage is a bug fix.**"*
+
+The warning names the function, the consequence, and the disposition — and sits a few lines from the
+projection the PR edited. **The defect is not that the new behaviour is wrong** (it may well be
+right); it is that an acceptance narrowing was shipped **undisclosed, unfixtured, and contradicted by
+the PR's own §8** (*"the change is inert wherever no impl head is an arrow or carries an effect
+row"*). That sentence is false, and it is in the body of an S0 fix — **the sprint's dominant defect
+class, again.**
+
+### What R1 RULED OUT — the review's value is not only the finding
+Attacks 2-6 and 8 all clean, each verified rather than accepted: arm set audited as a SET (`TyVar`/
+`TyRow` untouched, `impl C a` stays headless); the deliberate `headTyconNameMono` asymmetry is
+correct and defended from `uOblIsDecidableNow`'s closed set; **the `entail` repoint really is
+identical at every non-`TFun` head** (traced through `headKeyOfCon`/`tabKeyName`, *not* taken on the
+author's word); no `evalModules`/`cevalModules` lockstep gap (`core_ir_lower` **imports**
+`headTyconHead` from `eval`); **the `__fun__` single-tag ruling survives a currying attack
+empirically** — `(Int -> Int) -> Int` vs `Int -> Int -> Int` → `11, 22, 33`, run == build, because
+`rkTyAtom`/`rkTyFunArg` do parenthesize; and the golden re-cut is exactly the six edited declarations
+plus the import.
+
+**W5 dispatched.** Default is **option A** — keep the dispatch fix, restore acceptance behaviour,
+since #1617/#1618 are dispatch-bucketing bugs, not acceptance bugs. Option B (accept the narrowing)
+changes which programs compile, so it is a language-semantics decision needing an owner ruling and
+its own fixtures; W5 is told to **stop and report** rather than choose it. Also assigned: strengthen
+the bystander fixture so it *can* fail, correct §8, F2 (`registry.mdk:958`/`:1045` still say a `None`
+means "a function type"), and F5 (the underivable "8/8 agree").
+
+## RUN-P45-031 — ✅ #1631 MERGED-QUEUED. Review + repair genuinely complete for it.
+
+Preconditions actually satisfied, not assumed: CI **12/12** at `6c3609a4`; R2 verdict **MERGE** (no
+S0/S1); F1/F2/F4 **fixed and re-verified**; F5 **split out to #1634**; F3 deferred with a reason.
+
+Enqueued via `scripts/pr.sh enqueue` — the verified helper — which **read the state back** rather
+than trusting an exit code: `ok: PR 1631 is in the merge queue (state=OPEN)`, corroborated by
+`isInMergeQueue: true` over GraphQL. That matters because `gh pr merge --auto --merge` has returned
+**both** exit 0 and exit 1 on success in this repo, and `autoMergeRequest` reads `null` while queued
+— indistinguishable from never-armed.
+
+⚠️ `scripts/pr.sh complete` (which polls until the head SHA lands on `main`) was **blocked by the
+auto-mode classifier when backgrounded**. Landing will be confirmed by polling `isInMergeQueue` /
+`state` directly. **Not treating "enqueued" as "merged"** — the queue builds the PR *merged onto
+current `main` plus everything ahead of it* and can still bounce.
+
+✅ **LANDED.** `{"isInMergeQueue": false, "mergedAt": "2026-08-14T18:50:20Z", "state": "MERGED"}` —
+confirmed by state readback, never by a return code. **G-0 is on `main`.**
+
+---
+
+## RUN-P45-032 — W5: option A landed. The hold was MORE justified than the finding that caused it.
+
+CI **12/12** on head `41a1d77d` (ORCH-verified). Fixpoint **C3a YES / C3b YES, re-run on the
+amendment rather than inherited** — which is the right instinct, since the amendment changed compiler
+source after the earlier fixpoint run. Full `engines`: **553 agree / 0 differ / 0 regressions.**
+
+### 🚨 The un-amended head would have shipped a SEGFAULT
+W5's strengthened `fun_head_impl_bystander` fixture, run against `a8a226cb` (the head R1 reviewed):
+**check 0, run correct, build 0, built binary `E-FATAL-SIGNAL: fatal memory fault`**, reproducible.
+The *old* fixture printed `(48, True)` at exit 0 on that same commit. ⇒ the version ORCH held was one
+strengthened fixture away from shipping a segfault — **not merely an acceptance narrowing.** The
+fixture that could not fail was hiding a crash, not just a policy change.
+
+### ⭐ A FOURTH acceptance reader — the brief's list was short, again
+`univReceiverTag` (`= headTyconTy`) also populates the `ImplUniverse` iface→head-tag **SET** →
+`implCountForIfaceU` → `checkUndeterminedObligation` **RULE 3**. That set has **TWO WRITERS** —
+`insertUnivImplAt` (Flat) and `ieInsertRowAt` (IE/Module), the parallel-driver hazard — and **both
+had to move**. W5 found it because repointing only the two named readers **left probes 1 and 2 still
+rejecting**: the fix didn't work, so the missing reader announced itself. **"Audit the arms as a SET"
+failed once more at the brief layer, and was caught once more by the writer.**
+
+### Two ORCH brief corrections, one of which UPGRADES the fix
+1. Probe 1 prints **`4`** on base, not `3`. And `4` is the **arrow impl answering a goal whose only
+   concrete head is `Int`** — on base both bystanders sit in the headless wildcard bucket. ⇒ **that
+   probe is ALSO a silent wrong answer on base that this PR fixes**, and the amended `3` is the first
+   correct value. The fix drains more than either the PR or the review claimed.
+2. F2's path is `compiler/types/registry.mdk`. ORCH's brief had said "ir/registry.mdk" (no such
+   file — deliberately unbackticked here so the doc-link gate does not read a known-wrong path as a
+   live citation).
+
+### Fixture placement, decided by measurement rather than preference
+The undetermined-constraint shape **cannot** live in a build-executing corpus — it E-PANICs at
+`build` on **every** arm including base. W5's first cut imported it anyway and
+**`diff_compiler_engines` caught it as a REGRESSION**, because a plain `medaka build` passed while
+the gate's `MEDAKA_PRELUDE_OBJ` fast path does not DCE the dead binding. It went to
+`test/check_json_fixtures/` as check-only with golden `"diagnostics":[]` — **which cannot pass
+vacuously.**
+
+### Goldens moved AGAIN, and a prior claim was retracted in place
+`snapshots/compiler/typecheck.md`, `.../registry.md`, and **`selfproc_goldens/legA/types.typecheck.golden`**
+— re-cut in `3cbea687`, blessed **by name**, LEG A **additive-only (4 lines, no existing binding's
+inferred type changed)**. ⚠️ **§5 of the PR body had claimed LEG A "did not move"; W5 retracted that
+in place rather than quietly overwriting it**, and corrected §4/§6/§9 the same way — quoting the
+false text. §9's *"the change is inert wherever no impl head is an arrow or carries an effect row"*
+is **retracted, not softened**, and replaced by three separate claims: dispatch-changed,
+acceptance-restored, still-unswept.
+
+### 🆕 Friction worth promoting out of this sprint
+- **`MEDAKA_PRELUDE_OBJ`/`MEDAKA_RT_OBJ` change DCE behaviour versus a plain `medaka build`**, so a
+  fixture that builds standalone can fail inside `diff_compiler_engines`. **Documented nowhere** —
+  found only by replicating the exports by hand. Belongs in `AGENTS.md`.
+- **`git worktree add` from the shared checkout is refused**; it must be
+  `git -C <own-worktree> worktree add`. Not in AGENTS.md's worktree section.
+- **`gh pr view --json body` readback differs by exactly one trailing newline** from what
+  `pr.sh body` wrote — a byte-compare "fails" on a successful write. Third writer to hit a
+  `gh`-write verification quirk this sprint.
+- The redirect-refused-as-"too complex" harness defect again, called *"the single largest time cost
+  of the session"* by this writer.
+
+## RUN-P45-033 — R3 dispatched: a THIRD round, deliberately narrow
+
+**Not a re-review of the PR.** R1's clears stand and R3 is told not to redo them. Scope is **only**
+the `a8a226cb..41a1d77d` delta, justified by two facts: it was authored *in response to* a review so
+**no fresh eyes have seen it**, and it **changes acceptance semantics in the type checker**.
+
+Priority 1 is the **two-writer `ImplUniverse` set** — the same structural hazard as the
+`evalModules`/`cevalModules` pair, where patching one path and not the other left a bug live for
+months. A guard on Flat but not Module is a **flat-vs-module divergence**, and R3 is asked whether
+`diff_compiler_flat_vs_onemodule.sh` even covers it. Also: whether acceptance was restored
+*everywhere* or merely at the three probed shapes — including the **opposite and worse** direction,
+a silent **widening** that no golden could catch, which W5's own `unchecked:` concedes was never
+swept.
+
+**ORCH will merge on a clean verdict without a further round.** Proportionality: a third pass on an
+S0-fix PR whose repair touched a known parallel-driver hazard is warranted; a fourth would not be.
+
+---
+
+## RUN-P45-034 — R3: **CLEAN ON THE CODE. #1629 merges.** Two prose findings, filed as #1636.
+
+R3 built real arms — BASE = this worktree's binary, `MEDAKA_STRICT=1`-verified fresh at `aaa43716`;
+HEAD = cold-bootstrapped in a private detached worktree at `41a1d77d`, **no emitter borrowed.**
+
+**Item 1 — the two-writer SET: clean, and the real structure is SAFER than W5 described.** R3
+enumerated rather than accepting "two": `ieIfaceTags` has exactly one non-empty writer and **ZERO
+readers** (at head *and* at base); `ImplUniverse`'s tag field has exactly one constructor-application
+writer, `insertUnivImplAt`. **No third writer.** Decisively, the Module path does **not** reach the
+census via `ieIfaceTags` at all — `ieUniverseAt` reads `ieUnivSnaps`, built by
+`ieBuildSnapsGo → insertUnivImpl → insertUnivImplAt` ⇒ **both drivers share the ONE guarded writer**,
+so the lockstep hazard ORCH was worried about cannot arise without editing the shared helper.
+Measured flat vs 2-module on the same impl set: identical on each arm.
+
+**Item 2 — acceptance: PROVED, not probed.** `censusHeadNameTy`/`headTySpineNode` are **arm-for-arm
+and walk-for-walk identical** to base's `headTyconNameTy`/`headTyNode`, and `univHeadCountsInCensus`
+is **extensionally identical** to base's `isSome (headTyconTy …)` gate ⇒ **no program's acceptance can
+move through those readers in either direction.** That answers the question ORCH actually asked —
+including the **widening** direction, which no golden could catch — by *argument over the code*
+rather than by five more probes. The un-restored part (bucket placement) feeds only order-insensitive
+`||`-unions and a min⊑ selector, not a first-match; five base-vs-head probes found no widening.
+
+**Item 3 — the dispatch fix is intact:** `diff_compiler_build` 84/84 including both permutations,
+`check_json` 69/69, `dict_semantics` 187/187, snapshot 202/202, fmt+lint clean, bystander binary
+execs `(48, True, True)`, pins deleted and `soundness`'s must-fail step green.
+
+**Item 4:** E-PANIC-on-base verified verbatim including the single-impl control; the check-only golden
+is **non-vacuous AND fail-capable** (adding one concrete-headed impl flips it to
+`T-AMBIGUOUS-INSTANCE` exit 1). ⚠️ **R3 down-graded W5's `MEDAKA_PRELUDE_OBJ` "undocumented trap"**:
+it *does* change what is emitted (`withEmitHalf "program"`, `build_cmd.mdk:411`), but that is
+documented at the producer **and** in `diff_compiler_prelude_obj.sh`'s header. **Not a new trap, not
+worth filing** — RUN-P45-032's friction item is corrected accordingly.
+
+**LEG A golden: additive over the WHOLE PR** — 4 added lines, **zero removals or modifications.**
+
+### The two findings — filed as **#1636** rather than deferred verbally
+- **F-R3-1 (S2)** — `test/engine_fixtures/fun_head_impl_bystander.mdk`'s header states as MEASURED
+  that base agrees on all four cells. **False: base builds it and the built binary segfaults 5/5**
+  (exit 139), reduced to an 8-line repro. ⇒ the segfault is **pre-existing #1618**, not introduced by
+  `a8a226cb`, and **the fixture is a DIRECT REPRO of the bug being fixed, not the "bystander" it
+  claims to be.** Risk is the quiet kind: a later reader told *"base agrees"* may weaken or delete a
+  direct regression test for a closed S1, with every gate green.
+- **F-R3-2 (S3)** — the new comment at `typecheck.mdk:4413` says `ieIfaceTags` is the census
+  `ieUniverseAt` hands to `implCountForIfaceU`. **It has no reader at all.** The code is right
+  (guarding a dead index is correct); the *explanation* names a path that does not exist — and the
+  comment exists precisely to stop the next agent re-deriving it.
+
+**Why filed and not fixed pre-merge, unlike #1631's F1:** these are not free edits.
+`compiler/types/typecheck.mdk` is in its own snapshot corpus, so a comment change **moves its
+snapshot golden**, and fixture line counts are load-bearing where a golden pins `file:LINE:COL`. The
+fix carries a golden re-cut and its attendant rubber-stamp risk. #1631's F1 was two lines in a shell
+script with no golden — the asymmetry is in the cost, not the principle. **Filed** so it cannot rot
+into a remembered intention.
+
+## RUN-P45-035 — #1629 ENQUEUED. Both sprint PRs are through review.
+
+`ok: PR 1629 is in the merge queue (state=OPEN)`, corroborated `isInMergeQueue: true`. Head
+`41a1d77d`, CI 12/12, three review rounds, repair applied, fixpoint C3a+C3b re-run on the final
+amendment.
+
+On merge, the body's plain unbolded `Closes #1617. Closes #1618.` fires — **closure with the landing
+sha**, which is the policy's prescribed form, not a desk close. **#1630, #1634, #1636 stay open** and
+are unaffected.
