@@ -1,5 +1,5 @@
 # META
-source_lines=30039
+source_lines=30090
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted typecheck stage — port of lib/typecheck.ml's HM core.  SLICE 1:
@@ -19468,12 +19468,27 @@ ieHeadCollidesByMethod env name hd = ieCountHeadByMethod env name hd > 1
 -- on one classifier, so `headTyconTy` and `headTyconNameTy` cannot disagree about
 -- WHICH node they are classifying (they are only allowed to disagree about how).
 --
--- ⚠️ `TyConstrained` is deliberately NOT peeled, even though `eval.headTycon`
--- peels it too.  It is not the same defect: peeling a constraint yields a
--- still-headless body (`impl Sz (Eq a => a)` → `a`), so both sides already answer
--- `None` and agree.  Adding the arm would be a behaviour change on a shape with
--- no reported divergence; #1617's own body records the measurement that bounds
--- this class at two.
+-- 🚨 IT ALSO PEELS `TyConstrained` — #1630, and THIS PARAGRAPH USED TO SAY THE
+-- OPPOSITE.  It read: *"`TyConstrained` is deliberately NOT peeled … peeling a
+-- constraint yields a still-headless body (`impl Sz (Eq a => a)` → `a`), so both
+-- sides already answer `None` and agree"*, and cited #1617 as bounding the class
+-- at two.  That reasoning generalised from ONE body shape to ALL of them: it is
+-- sound for `Eq a => a`, whose peeled body really is a bare `TyVar`, and simply
+-- false for `Eq a => Int`, whose peeled body is a `TyCon`.  `eval.headTycon` has
+-- peeled `TyConstrained` since long before this projection existed, so the
+-- HEADED case reproduced #1618's exact failure with a different wrapper: the
+-- definition side filed `impl Sz (Eq a => Int)` under tag `Int` while this side
+-- answered `None` and stamped `__none__`, and `medaka build` died with `no impl
+-- of method 'sz' for type '__none__'` on a program `check` accepts and `run`
+-- answers correctly (measured: check 0, run `2`, build 1).
+--
+-- ⚠️ The HEADLESS body is unaffected and must stay that way: peeling
+-- `Eq a => a` still lands on a `TyVar`, every arm below still falls through to
+-- `_ => None`, and `impl Sz (Eq a => a)` remains a fully-general headless impl.
+-- The peel does not decide headedness — it only stops the WRAPPER from hiding a
+-- head that is there.  That is why the arm is on this NODE walk rather than in
+-- one classifier: `headTyconTy` and `headTyconNameTy` must not disagree about
+-- WHICH node they are classifying.
 --
 -- 🚨 IT IS THE **DISPATCH** WALK, AND THAT IS NOT A SYNONYM FOR "THE" WALK.  The
 -- `TyEffect` peel and `headTyconTy`/`headTyconNameTy`'s `TyFun` arms are a
@@ -19496,15 +19511,22 @@ ieHeadCollidesByMethod env name hd = ieCountHeadByMethod env name hd > 1
 -- DICT-SEMANTICS §3, but it is a language-semantics decision owned by F-3c
 -- (#1155), not a rider on a dispatch bug fix; the audit note above
 -- `implEntryFromTys` said exactly that about this exact census before either
--- arm existed.
+-- arm existed.  #1630's `TyConstrained` peel is the THIRD member of that same
+-- routing set and is held to the same line: it lands here and NOT on
+-- `headTySpineNode`, so a constrained-headed impl is still dropped from the
+-- acceptance census exactly as it was.  That is a deliberate residual, not an
+-- oversight — see `censusHeadNameTy`'s own note for the program it does not
+-- cover.
 headTyNode : Ty -> Ty
 headTyNode (TyApp a _) = headTyNode a
 headTyNode (TyEffect _ _ t) = headTyNode t
+headTyNode (TyConstrained _ t) = headTyNode t
 headTyNode t = t
 
--- The `TyApp`-spine-only head walk: `headTyNode` MINUS the `TyEffect` peel.
+-- The `TyApp`-spine-only head walk: `headTyNode` MINUS the `TyEffect` peel and
+-- (since #1630) MINUS the `TyConstrained` peel.
 -- Read by `censusHeadNameTy` alone, and it exists so the acceptance readers keep
--- projecting exactly what they projected before #1617/#1618 — see the 🚨 above.
+-- projecting exactly what they projected before #1617/#1618/#1630 — see the 🚨 above.
 -- Do NOT "unify" the two: the sharing is what carried the routing fix into an
 -- acceptance census in the first place.
 headTySpineNode : Ty -> Ty
@@ -19536,6 +19558,13 @@ headTySpineNode t = t
 -- dispatch over a receiver (a closure) that carries no cell tag.  See
 -- `route_key.funHeadTag` for why ONE tag is enough here where tuples needed one
 -- per arity.
+--
+-- ⚠️ #1630 ADDED NO ARM HERE, AND THAT IS THE POINT.  A constrained head is not
+-- a new KIND of head — `Eq a => Int` is an `Int` head behind a wrapper — so the
+-- fix is a peel on `headTyNode`, and every arm below classifies the peeled node
+-- unchanged.  If you are tempted to add a `TyConstrained` arm here, the shape
+-- you want is already handled; adding one would only let this projection and
+-- `headTyconNameTy` disagree about which node they classify.
 headTyconTy : Ty -> Option HeadKey
 headTyconTy t = match headTyNode t
   TyCon { tyConName = n, tyConOrigin = o } => Some (headKeyOfCon o n)
@@ -19607,6 +19636,28 @@ headTyconNameTy t = match headTyNode t
 -- Whoever flips this to the narrowing owns F-3c (#1155)'s flip list, an owner
 -- ruling, and fixtures for the programs it stops accepting.  Do not fold it back
 -- into `headTyconNameTy` to "remove duplication".
+--
+-- 🚨 #1630's `TyConstrained` peel STOPS HERE TOO — the census walks
+-- `headTySpineNode`, which does not peel the wrapper, so `impl Sz (Eq a => Int)`
+-- still answers `None` here and is still dropped from BOTH readers even though
+-- its peeled head `Int` is perfectly ordinary.  That is deliberate: the same
+-- ACCEPTANCE-narrowing argument the 🚨 above records for `__fun__` and for the
+-- effect peel applies verbatim, and the ruling belongs to F-3c (#1155), taken
+-- once for all three wrappers rather than bolted on per bug.
+--
+-- ⚠️ AND THE RESIDUAL IS STRUCTURAL, NOT DEMONSTRATED — say it that way.  This
+-- projection differs from `__fun__` in that a goal CAN reach it at a peeled
+-- head, so the vacuity argument the arrow arm enjoys is NOT available and the
+-- drop is a real behavioural difference in the code.  But #1630 tried and FAILED
+-- to build a program that observes it: the obvious candidate — a
+-- return-position method leaving the receiver undetermined, with the constrained
+-- impl as the interface's ONLY impl — behaved cell-for-cell identically to the
+-- same program with an unconstrained `impl Zero Int` head (both `check` 0, both
+-- `run` 1 on an UNRELATED return-position eval defect, both `build` 0, both
+-- executed and printed `0`), i.e. `routeUndeterminedTop`'s empty-census arm was
+-- never the deciding step there.  Do not upgrade this note to a bug report
+-- without a program that discriminates; do not downgrade it to "benign" either,
+-- which is the exact over-generalisation #1630 was.
 censusHeadNameTy : Ty -> Option String
 censusHeadNameTy t = match headTySpineNode t
   TyCon { tyConName = n } => Some n
@@ -33356,6 +33407,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "headTyNode" (TyFun (TyCon "Ty") (TyCon "Ty")))
 (DFunDef false "headTyNode" ((PCon "TyApp" (PVar "a") PWild)) (EApp (EVar "headTyNode") (EVar "a")))
 (DFunDef false "headTyNode" ((PCon "TyEffect" PWild PWild (PVar "t"))) (EApp (EVar "headTyNode") (EVar "t")))
+(DFunDef false "headTyNode" ((PCon "TyConstrained" PWild (PVar "t"))) (EApp (EVar "headTyNode") (EVar "t")))
 (DFunDef false "headTyNode" ((PVar "t")) (EVar "t"))
 (DTypeSig false "headTySpineNode" (TyFun (TyCon "Ty") (TyCon "Ty")))
 (DFunDef false "headTySpineNode" ((PCon "TyApp" (PVar "a") PWild)) (EApp (EVar "headTySpineNode") (EVar "a")))
@@ -38383,6 +38435,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "headTyNode" (TyFun (TyCon "Ty") (TyCon "Ty")))
 (DFunDef false "headTyNode" ((PCon "TyApp" (PVar "a") PWild)) (EApp (EVar "headTyNode") (EVar "a")))
 (DFunDef false "headTyNode" ((PCon "TyEffect" PWild PWild (PVar "t"))) (EApp (EVar "headTyNode") (EVar "t")))
+(DFunDef false "headTyNode" ((PCon "TyConstrained" PWild (PVar "t"))) (EApp (EVar "headTyNode") (EVar "t")))
 (DFunDef false "headTyNode" ((PVar "t")) (EVar "t"))
 (DTypeSig false "headTySpineNode" (TyFun (TyCon "Ty") (TyCon "Ty")))
 (DFunDef false "headTySpineNode" ((PCon "TyApp" (PVar "a") PWild)) (EApp (EVar "headTySpineNode") (EVar "a")))
