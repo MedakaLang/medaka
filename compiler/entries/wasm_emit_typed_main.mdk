@@ -325,12 +325,21 @@ reemitFeatureState _ =
   let floatDiv = emitProgram featureStateInput featureFloatDivProgram
   let (u, _) = emitProgramRecord featureStateInput featureStateControlProgram
   let censusEvents = emitProgramGaps featureStateInput featureStateCensusProgram
+  let hashFloatP1 = emitProgram featureHashFloatInput featureHashFloatProgram
+  let (hashFloatU, _) = emitProgramRecord featureHashFloatInput featureHashFloatRecordUProgram
+  let hashFloatCensusEvents = emitProgramGaps featureHashFloatInput featureHashFloatCensusProgram
   let _ = printCapture "FEATURE_P1" p1
   let _ = printCapture "FEATURE_HASH_INT_ONLY" hashIntOnly
   let _ = printCapture "FEATURE_FLOAT_DIV" floatDiv
   let _ = printCapture "FEATURE_RECORD_U" u
   let _ = printEvents "FEATURE_CENSUS_U_GAP" censusEvents
-  printCapture "FEATURE_P2" (emitProgram featureStateInput featureStateProgram)
+  let _ = printCapture "FEATURE_P2" (emitProgram featureStateInput featureStateProgram)
+  let _ = printCapture "FEATURE_HASH_FLOAT_P1" hashFloatP1
+  let _ = printCapture "FEATURE_HASH_FLOAT_RECORD_U" hashFloatU
+  let _ = printEvents "FEATURE_HASH_FLOAT_CENSUS_P_GAP" hashFloatCensusEvents
+  printCapture
+    "FEATURE_HASH_FLOAT_P2"
+    (emitProgram featureHashFloatInput featureHashFloatProgram)
 
 featureStateInput : WasmEmitInput
 featureStateInput = makeWasmEmitInput
@@ -411,6 +420,52 @@ featureHashIntOnlyProgram = CProgram
     CBind "featureHashIntOnly" [
       CClause [featureStateArg] (CApp (CVar "hashInt" AGlobal) (CVar "x" (ALocal 0 0)))
     ],
+    CBind "main" [CClause [] (CLit (LInt 0))],
+  ]
+  []
+  []
+  []
+
+-- H2b.10 hashFloat uses a fresh strict emission with an uncalled binding. Its
+-- record U is the nearest miss: Float + hashInt retain shared prerequisites but
+-- deliberately omit hashFloat. Census repeats P and adds exactly one attributed gap.
+featureHashFloatInput : WasmEmitInput
+featureHashFloatInput = makeWasmEmitInput [] [] [] False []
+
+featureHashFloatProgram : CProgram
+featureHashFloatProgram = CProgram
+  [
+    CBind "featureHashFloat" [
+      CClause [featureStateArg] (CApp (CVar "hashFloat" AGlobal) (CLit (LFloat 3.14)))
+    ],
+    CBind "main" [CClause [] (CLit (LInt 0))],
+  ]
+  []
+  []
+  []
+
+featureHashFloatRecordUProgram : CProgram
+featureHashFloatRecordUProgram = CProgram
+  [
+    CBind "featureHashFloatNearestFloat" [
+      CClause [featureStateArg] (CApp (CVar "intToFloat" AGlobal) (CVar "x" (ALocal 0 0)))
+    ],
+    CBind "featureHashFloatNearestHashInt" [
+      CClause [featureStateArg] (CApp (CVar "hashInt" AGlobal) (CVar "x" (ALocal 0 0)))
+    ],
+    CBind "main" [CClause [] (CLit (LInt 0))],
+  ]
+  []
+  []
+  []
+
+featureHashFloatCensusProgram : CProgram
+featureHashFloatCensusProgram = CProgram
+  [
+    CBind "featureHashFloat" [
+      CClause [featureStateArg] (CApp (CVar "hashFloat" AGlobal) (CLit (LFloat 3.14)))
+    ],
+    CBind "featureHashFloatIntentionalGap" [CClause [featureStateArg] (CVar "missingFeatureHashFloatCensus" AGlobal)],
     CBind "main" [CClause [] (CLit (LInt 0))],
   ]
   []

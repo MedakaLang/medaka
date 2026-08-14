@@ -331,6 +331,7 @@ data WasmEmit =
       useRecUpdate : Ref Bool,
       useRng : Ref Bool,
       useHash : Ref Bool,
+      useFloatHash : Ref Bool,
       emittedDefaultNames : Ref (OrdMap Unit),
       defaultDefinitions : Ref (List (List String)),
     }
@@ -356,6 +357,7 @@ freshWasmEmit mode = WasmEmit {
   useRecUpdate = Ref False,
   useRng = Ref False,
   useHash = Ref False,
+  useFloatHash = Ref False,
   emittedDefaultNames = Ref omEmpty,
   defaultDefinitions = Ref [],
 }
@@ -847,13 +849,10 @@ isLazyGlobalW prog x = omHasKey x (indexLazyGlobalsW (progIndex prog))
 
 -- W8b: the program uses Float (a Float literal, a Float extern, or a Float arith op).
 -- Forces ref-mode (a Float is a boxed (ref eq) $float struct) + gates the Float runtime
--- (floatRuntimeLines + the floatToString host import).  useFloatHashRef / useFloatRngRef
+-- (floatRuntimeLines + the floatToString host import).  WasmEmit.useFloatHash / useFloatRngRef
 -- gate the hashFloat / randomFloat runtimes (which need the shared mix64 / next_u64).
 useFloatRef : Ref Bool
 useFloatRef = Ref False
-
-useFloatHashRef : Ref Bool
-useFloatHashRef = Ref False
 
 -- #101: the program uses a libm math extern that lowers to a JS `Math.*` HOST IMPORT
 -- (a transcendental or pow/atan2/hypot — see isMathHostExternW).  Gates the
@@ -1061,7 +1060,6 @@ emitProgramWith emit input (CProgram groups ctorArs ctorTypes impls) =
   let _ = setRef useRefBoxRef False
   let _ = setRef useStrLeafRef False
   let _ = setRef useFloatRef False
-  let _ = setRef useFloatHashRef False
   let _ = setRef useFloatRngRef False
   let _ = setRef useMathRef False
   let _ = setRef useFloatStrRef False
@@ -1118,7 +1116,6 @@ emitProgramGaps input (CProgram groups ctorArs ctorTypes impls) =
   let _ = setRef useRefBoxRef False
   let _ = setRef useStrLeafRef False
   let _ = setRef useFloatRef False
-  let _ = setRef useFloatHashRef False
   let _ = setRef useFloatRngRef False
   let _ = setRef useMathRef False
   let _ = setRef useFloatStrRef False
@@ -1638,7 +1635,7 @@ noteW8Extern emit name =
           then let _ = setRef useFloatStrRef True in let _ = setRef useFloatRef True in let _ = setRef useStrRef True in setRef useIORef True
           else ()
   -- hashFloat needs the shared mix64 (hashRuntime); randomFloat needs next_u64 (rngRuntime).
-  let _ = if name == "hashFloat" then let _ = setRef useFloatHashRef True in setRef emit.useHash True else ()
+  let _ = if name == "hashFloat" then let _ = setRef emit.useFloatHash True in setRef emit.useHash True else ()
   let _ = if name == "randomFloat" then let _ = setRef useFloatRngRef True in setRef emit.useRng True else ()
   -- W8b: stringIndexOf/stringCompare use the strSearch runtime + cp_count (strLeaf) + $str.
   let _ = if contains name ["stringIndexOf", "stringCompare"]
@@ -2469,7 +2466,7 @@ emitRefProgram prog groups =
   -- so an int-only value-arith program doesn't reference a missing $mdk_float_rem.
   let floatRemRt = if useFloatRef.value || useValueArithRef.value then floatRemRuntimeLines else []
   let floatRt = if useFloatRef.value then floatRuntimeLines else []
-  let hashFloatRt = if useFloatHashRef.value then hashFloatRuntimeLines else []
+  let hashFloatRt = if (progEmit prog).useFloatHash.value then hashFloatRuntimeLines else []
   let randomFloatRt = if useFloatRngRef.value then randomFloatRuntimeLines else []
   -- layer-6: stringToFloat runtime ($mdk_string_to_float).  Needs ioHostRt for the
   -- path channel ($mdk_path_reset/$mdk_path_push), but emitted AFTER ioHostRt since

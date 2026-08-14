@@ -103,7 +103,7 @@ What's in the standard library, what's planned, module-by-module status.
 | [`DRIVER-COLLAPSE-PLAN.md`](../compiler/DRIVER-COLLAPSE-PLAN.md) | DRIVER-COLLAPSE-PLAN.md — collapse the dual single-file / multi-module drivers | PARTIALLY IMPLEMENTED |
 | [`EAGER-INIT-DESIGN.md`](../compiler/EAGER-INIT-DESIGN.md) | EAGER-INIT-DESIGN — closing the shared eager-global init-order hole (#553, S0) | COMPLETE |
 | [`EMITTER-ARCH-BUG-FIT.md`](../compiler/EMITTER-ARCH-BUG-FIT.md) | Emitter target architecture - per-bug fit ledger | CURRENT - S0/S1 fit at `f4fbcd0a` |
-| [`EMITTER-ARCHITECTURE.md`](../compiler/EMITTER-ARCHITECTURE.md) | Emitter Architecture - the derived current map | CURRENT - source-derived LLVM/WasmGC emitter map through X-W.H2b.9. |
+| [`EMITTER-ARCHITECTURE.md`](../compiler/EMITTER-ARCHITECTURE.md) | Emitter Architecture - the derived current map | CURRENT - source-derived LLVM/WasmGC emitter map through X-W.H2b.10. |
 | [`EMITTER-GAPS.md`](../compiler/EMITTER-GAPS.md) | EMITTER-GAPS.md | PARTIAL |
 | [`EMITTER-TARGET-ARCHITECTURE.md`](../compiler/EMITTER-TARGET-ARCHITECTURE.md) | Emitter Target Architecture - one semantic plan, two physical lowerings | PROPOSAL - one semantic plan, separate LLVM/Wasm physical plans. |
 | [`EQ-DISPATCH-DESIGN.md`](../compiler/EQ-DISPATCH-DESIGN.md) | `==`/`!=` → `Eq` Dispatch (Option A) — Design + Blast-Radius Census | OPEN |

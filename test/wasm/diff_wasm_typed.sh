@@ -302,7 +302,6 @@ for required in \
   'setRef emit.useRng True' \
   'setRef emit.useHash True' \
   '|| emit.useRng.value || emit.useHash.value || useFloatRef.value' \
-  'setRef useFloatHashRef True in setRef emit.useHash True' \
   'setRef useFloatRngRef True in setRef emit.useRng True'; do
   grep -F -- "$required" "$WASM_SRC" >/dev/null || {
     echo "FAIL H2B9-RNG-HASH-AUTHORITY: missing $required"
@@ -310,13 +309,30 @@ for required in \
   }
 done
 EXPECTED_MODULE_REFS="$(printf '%s\n' \
-  useStrRef useListRef useArrayRef useRefBoxRef \
+  floatGlobalsRef \
+  floatLocalsRef \
+  numPolyLocalsRef \
+  tupleAritiesRef \
+  useArgsRef \
+  useArrayRef \
+  useCharClassRef \
+  useCharFromCodeRef \
+  useFileBytesRef \
+  useFloatRef \
+  useFloatRngRef \
+  useFloatStrRef \
+  useIORef \
+  useListRef \
+  useMathRef \
+  useRefBoxRef \
+  useStrCodecRef \
   useStrLeafRef \
-  useFloatRef useFloatHashRef useMathRef useFloatRngRef useFloatStrRef \
-  useStrSearchRef useValueCmpRef useValueArithRef numPolyLocalsRef useStrCodecRef \
-   useCharFromCodeRef useCharClassRef useIORef useArgsRef useFileBytesRef \
-   floatLocalsRef floatGlobalsRef tupleAritiesRef wDispCtxRef \
-  wDispGroupsRef | LC_ALL=C sort -u)"
+  useStrRef \
+  useStrSearchRef \
+  useValueArithRef \
+  useValueCmpRef \
+  wDispCtxRef \
+  wDispGroupsRef)"
 ACTUAL_MODULE_REF_SIGS="$(awk '
   /^[A-Za-z_][A-Za-z0-9_]*[[:space:]]*:[[:space:]]*Ref([[:space:]]|$)/ { print $1 }
   /^export[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]*:[[:space:]]*Ref([[:space:]]|$)/ { print $2 }
@@ -329,11 +345,41 @@ ACTUAL_MODULE_REF_DEFS="$(awk '
 ' "$WASM_SRC" | LC_ALL=C sort -u)"
 if [ "$ACTUAL_MODULE_REF_SIGS" != "$EXPECTED_MODULE_REFS" ] ||
     [ "$ACTUAL_MODULE_REF_DEFS" != "$EXPECTED_MODULE_REFS" ]; then
-  echo "FAIL H2B8-AUTHORITY-SET: top-level Ref authority set changed"
+  echo "FAIL H2B10-FLOAT-HASH-AUTHORITY: top-level Ref authority set changed"
   printf '  observed signatures:\n%s\n' "$ACTUAL_MODULE_REF_SIGS"
   printf '  observed definitions:\n%s\n' "$ACTUAL_MODULE_REF_DEFS"
   exit 1
 fi
+if grep -E '^_?useFloatHashRef[[:space:]]*[:=]|setRef (_?useFloatHashRef)' "$WASM_SRC" >/dev/null; then
+  echo "FAIL H2B10-FLOAT-HASH-AUTHORITY: retired ambient hashFloat authority remains"
+  exit 1
+fi
+for required in \
+  'useFloatHash : Ref Bool' \
+  'useFloatHash = Ref False' \
+  'setRef emit.useFloatHash True' \
+  '(progEmit prog).useFloatHash.value'; do
+  grep -F -- "$required" "$WASM_SRC" >/dev/null || {
+    echo "FAIL H2B10-FLOAT-HASH-AUTHORITY: missing $required"
+    exit 1
+  }
+done
+grep -F 'let _ = if name == "hashFloat" then let _ = setRef emit.useFloatHash True in setRef emit.useHash True else ()' "$WASM_SRC" >/dev/null &&
+  grep -F 'let hashFloatRt = if (progEmit prog).useFloatHash.value then hashFloatRuntimeLines else []' "$WASM_SRC" >/dev/null &&
+  ! grep -E 'setRef emit\.useFloatHash False|setRef useFloatHashRef False' "$WASM_SRC" >/dev/null || {
+  echo "FAIL H2B10-FLOAT-HASH-ROUTES: writer, reader, or retired reset changed"
+  exit 1
+}
+[ "$(grep -F 'setRef emit.useFloatHash True' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
+  [ "$(grep -F '(progEmit prog).useFloatHash.value' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] || {
+  echo "FAIL H2B10-FLOAT-HASH-ROUTES: expected one hashFloat writer and reader"
+  exit 1
+}
+grep -F 'emitProgram input cp = emitProgramWith (freshWasmEmit WGapStrict) input cp' "$WASM_SRC" >/dev/null &&
+  [ "$(grep -F 'let emit = freshWasmEmit WGapRecord' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 2 ] || {
+  echo "FAIL H2B10-FLOAT-HASH-ROUTES: strict, record, census freshness routes changed"
+  exit 1
+}
 for required in \
   'currentBinding : Ref String' \
   'currentBinding = Ref "?"' \
@@ -924,6 +970,86 @@ for feature_name in p1 hash-int-only float-div u p2; do
   [ "$FEATURE_RUN_STATUS" -eq 0 ] && [ ! -s "$INPUT_WORK/feature-$feature_name.run.err" ] &&
     cmp -s "$INPUT_WORK/feature-expected.out" "$INPUT_WORK/feature-$feature_name.run.out" || {
       echo "FAIL A0-FEATURE-CAPTURE: inert execution $feature_name"
+      exit 1
+    }
+done
+
+# H2b.10 capture-only apparatus. HashFloat P is strict and inert; record U keeps
+# Float + hashInt prerequisites while excluding hashFloat. Census proves its route
+# only, so it is asserted as one attributed event and never parsed as WAT.
+FLOAT_HASH_MARKERS="$(awk '/^FEATURE_HASH_FLOAT_.*_(BEGIN|END)$/ { print }' "$INPUT_WORK/feature.out")"
+FLOAT_HASH_EXPECTED_MARKERS="$(printf 'FEATURE_HASH_FLOAT_P1_BEGIN\nFEATURE_HASH_FLOAT_P1_END\nFEATURE_HASH_FLOAT_RECORD_U_BEGIN\nFEATURE_HASH_FLOAT_RECORD_U_END\nFEATURE_HASH_FLOAT_CENSUS_P_GAP_BEGIN\nFEATURE_HASH_FLOAT_CENSUS_P_GAP_END\nFEATURE_HASH_FLOAT_P2_BEGIN\nFEATURE_HASH_FLOAT_P2_END')"
+[ "$FLOAT_HASH_MARKERS" = "$FLOAT_HASH_EXPECTED_MARKERS" ] || {
+  echo "FAIL H2B10-FLOAT-HASH-MARKERS: marker cardinality/order"
+  exit 1
+}
+feature_exact_capture FEATURE_HASH_FLOAT_P1_BEGIN FEATURE_HASH_FLOAT_P1_END "$INPUT_WORK/feature.out" >"$INPUT_WORK/feature-hash-float-p1.wat" &&
+  feature_exact_capture FEATURE_HASH_FLOAT_RECORD_U_BEGIN FEATURE_HASH_FLOAT_RECORD_U_END "$INPUT_WORK/feature.out" >"$INPUT_WORK/feature-hash-float-u.wat" &&
+  feature_exact_capture FEATURE_HASH_FLOAT_CENSUS_P_GAP_BEGIN FEATURE_HASH_FLOAT_CENSUS_P_GAP_END "$INPUT_WORK/feature.out" >"$INPUT_WORK/feature-hash-float-census.events" &&
+  feature_exact_capture FEATURE_HASH_FLOAT_P2_BEGIN FEATURE_HASH_FLOAT_P2_END "$INPUT_WORK/feature.out" >"$INPUT_WORK/feature-hash-float-p2.wat" || {
+    echo "FAIL H2B10-FLOAT-HASH-CAPTURE: malformed capture"
+    exit 1
+  }
+for float_hash_file in feature-hash-float-p1.wat feature-hash-float-u.wat feature-hash-float-census.events feature-hash-float-p2.wat; do
+  [ -s "$INPUT_WORK/$float_hash_file" ] || {
+    echo "FAIL H2B10-FLOAT-HASH-CAPTURE: empty $float_hash_file"
+    exit 1
+  }
+done
+cmp -s "$INPUT_WORK/feature-hash-float-p1.wat" "$INPUT_WORK/feature-hash-float-p2.wat" || {
+  echo "FAIL H2B10-FLOAT-HASH-P-IDENTITY: P changed after record U and census"
+  exit 1
+}
+cmp -s "$INPUT_WORK/feature-hash-float-p1.wat" "$INPUT_WORK/feature-hash-float-u.wat" && {
+  echo "FAIL H2B10-FLOAT-HASH-P-U: P/U positive control did not differ"
+  exit 1
+}
+for float_hash_p in feature-hash-float-p1.wat feature-hash-float-p2.wat; do
+  [ "$(grep -F '(func $mdk_hash_float' "$INPUT_WORK/$float_hash_p" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
+    [ "$(grep -F 'call $mdk_hash_float' "$INPUT_WORK/$float_hash_p" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
+    grep -F '(func $mdk_hash_mix64' "$INPUT_WORK/$float_hash_p" >/dev/null &&
+    grep -F '(func $mdk_hash_int' "$INPUT_WORK/$float_hash_p" >/dev/null &&
+    grep -F '(func $mdk_int_to_float' "$INPUT_WORK/$float_hash_p" >/dev/null || {
+      echo "FAIL H2B10-FLOAT-HASH-P-PRESENCE: missing hashFloat runtime/dependency in $float_hash_p"
+      exit 1
+    }
+done
+if grep -F '(func $mdk_hash_float' "$INPUT_WORK/feature-hash-float-u.wat" >/dev/null ||
+   grep -F 'call $mdk_hash_float' "$INPUT_WORK/feature-hash-float-u.wat" >/dev/null; then
+  echo "FAIL H2B10-FLOAT-HASH-U-ABSENCE: nearest miss emitted hashFloat"
+  exit 1
+fi
+grep -F '(func $mdk_int_to_float' "$INPUT_WORK/feature-hash-float-u.wat" >/dev/null &&
+  grep -F '(func $mdk_hash_mix64' "$INPUT_WORK/feature-hash-float-u.wat" >/dev/null &&
+  grep -F '(func $mdk_hash_int' "$INPUT_WORK/feature-hash-float-u.wat" >/dev/null || {
+    echo "FAIL H2B10-FLOAT-HASH-U-PREREQUISITES: nearest miss lost Float/hashInt prerequisites"
+    exit 1
+  }
+FLOAT_HASH_EVENT=$'fn featureHashFloatIntentionalGap\tunbound variable \'missingFeatureHashFloatCensus\' (not a local, global value, constructor, or known function) [in featureHashFloatIntentionalGap]'
+[ "$(wc -l < "$INPUT_WORK/feature-hash-float-census.events")" -eq 1 ] &&
+  [ "$(cat "$INPUT_WORK/feature-hash-float-census.events")" = "$FLOAT_HASH_EVENT" ] || {
+    echo "FAIL H2B10-FLOAT-HASH-CENSUS: exact one attributed gap"
+    exit 1
+  }
+for float_hash_name in p1 u p2; do
+  float_hash_wat="$INPUT_WORK/feature-hash-float-$float_hash_name.wat"
+  wasm-tools parse "$float_hash_wat" -o "$INPUT_WORK/feature-hash-float-$float_hash_name.wasm" 2>"$INPUT_WORK/feature-hash-float-$float_hash_name.parse.err"
+  FLOAT_HASH_PARSE_STATUS=$?
+  [ "$FLOAT_HASH_PARSE_STATUS" -eq 0 ] && [ ! -s "$INPUT_WORK/feature-hash-float-$float_hash_name.parse.err" ] || {
+    echo "FAIL H2B10-FLOAT-HASH-PARSE: wasm-tools parse $float_hash_name"
+    exit 1
+  }
+  wasm-tools validate --features=all "$INPUT_WORK/feature-hash-float-$float_hash_name.wasm" 2>"$INPUT_WORK/feature-hash-float-$float_hash_name.validate.err"
+  FLOAT_HASH_VALIDATE_STATUS=$?
+  [ "$FLOAT_HASH_VALIDATE_STATUS" -eq 0 ] && [ ! -s "$INPUT_WORK/feature-hash-float-$float_hash_name.validate.err" ] || {
+    echo "FAIL H2B10-FLOAT-HASH-VALIDATE: wasm-tools validate $float_hash_name"
+    exit 1
+  }
+  "$NODE" "$RUNJS" "$INPUT_WORK/feature-hash-float-$float_hash_name.wasm" >"$INPUT_WORK/feature-hash-float-$float_hash_name.run.out" 2>"$INPUT_WORK/feature-hash-float-$float_hash_name.run.err"
+  FLOAT_HASH_RUN_STATUS=$?
+  [ "$FLOAT_HASH_RUN_STATUS" -eq 0 ] && [ ! -s "$INPUT_WORK/feature-hash-float-$float_hash_name.run.err" ] &&
+    cmp -s "$INPUT_WORK/feature-expected.out" "$INPUT_WORK/feature-hash-float-$float_hash_name.run.out" || {
+      echo "FAIL H2B10-FLOAT-HASH-EXEC: inert execution $float_hash_name"
       exit 1
     }
 done

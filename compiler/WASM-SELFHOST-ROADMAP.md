@@ -2,14 +2,14 @@
 
 **Status:** IMPLEMENTED — census progress 1428 → 0, every category ✅ DONE, in-browser
 WAT assembly resolved, playground wired (all 2026-06-22). The lifecycle is current
-through X-W.H2b.9: H2b.1–H2b.5 moved gap mode/log/attribution, passive string-segment,
+through X-W.H2b.10: H2b.1–H2b.5 moved gap mode/log/attribution, passive string-segment,
 impl-self, synthesized-default, and diagnostic-binding state into `WasmEmit`; H2b.6
 moves Stage-1 TRMC context into `WasmEmit`'s `trmcCtx`; H2b.7 moves lambda IDs, ordered
 lifted definitions, named-lift de-duplication, and function-reference list/set state
 into `WasmEmit`; H2b.8 moves coded stderr-trap import state into
-`WasmEmit`'s `trapImportNeeded`; H2b.9 moves five feature-demand facts into the same
-per-emission context. The re-derived 25 remaining ambient top-level `Ref`s are
-output, feature, numeric, and dispatch families. H2b remains open.
+`WasmEmit`'s `trapImportNeeded`; H2b.9 moves five feature-demand facts and H2b.10 moves
+`hashFloat` runtime demand into the same per-emission context. The re-derived 24 remaining
+ambient top-level `Ref`s are output, feature, numeric, and dispatch families. H2b remains open.
 
 > **Goal:** run the Medaka compiler *itself*, compiled to WasmGC, in a browser — a
 > frontend-only playground with **no server-side compilation**. This is the
