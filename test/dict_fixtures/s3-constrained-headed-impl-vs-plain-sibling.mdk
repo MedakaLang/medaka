@@ -1,0 +1,74 @@
+-- §3 head projection at a CONSTRAINED headed impl BESIDE A PLAIN SIBLING — the
+-- #1630 row that grades the SILENT-WRONGNESS channel. Third pin of the fix,
+-- after `s3-constrained-impl-head-routes.mdk` (one impl, `Eq a => Int`) and
+-- `s3-constrained-effect-impl-head-routes.mdk` (stacked wrappers).
+--
+-- 🚨 THIS ROW EXISTS BECAUSE THE OTHER TWO CANNOT SEE THE WORST CELL. Both of
+-- them are ONE-IMPL programs, and on a one-impl program the pre-fix `check` and
+-- `run` were already CORRECT — the defect surfaced only at `build`, loudly. That
+-- is a property of ONE IMPL, not of the defect. Put a second impl of the same
+-- interface in the file and the pre-fix `run` is WRONG AT EXIT 0:
+--
+--   `impl Sz (Eq a => Box Int)` -> 13   and   `impl Sz (Box Bool)` -> 14
+--
+-- SPEC ANSWER, hand-derived from the two impl bodies before any binary was run:
+-- `sz (Box 1)` selects the `Box Int` impl (13), `sz (Box True)` selects the
+-- `Box Bool` impl (14), so `main` prints **27**. It is not a recapture.
+--
+-- MEASURED on a base arm built from this branch with the one-line fix REVERTED
+-- (`headTyNode (TyConstrained _ t) = headTyNode t` deleted, full 2-stage
+-- rebuild), against the fix arm, redirect-then-read of `$?` and `MEDAKA_STRICT=1`
+-- on every cell:
+--
+--            | check | run           | build | executed binary
+--   ---------|-------|---------------|-------|-----------------
+--   BEFORE   |   0   | 0, prints 26  |   1   | — no binary
+--   AFTER    |   0   | 0, prints 27  |   0   | 0, prints 27
+--
+-- AND IT IS DECLARATION-ORDER-DECIDED: reversing the two impl blocks makes the
+-- pre-fix answer **28** (14 + 14), still exit 0, still `check` clean. The fix arm
+-- prints 27 in BOTH orders — which is what Section 4's permutation pair asserts.
+--
+-- **26 = 13 + 13.** Both calls took the constrained impl. `eval.headTycon` peels
+-- `TyConstrained` and filed `Eq a => Box Int` under tag `Box`, while
+-- `typecheck.headTyNode` did not and stamped the caller side `__none__`, so the
+-- constrained impl left the `Box` bucket on one side only and the two impls
+-- stopped being discriminable. That is a WRONG VALUE AT EXIT 0 with `check`
+-- clean — silent wrongness, which the one-impl rows grade nothing of.
+--
+-- ⚠️ SO READ #1630's S1 GRADING AS SCOPED TO ITS REPORTED SHAPE. The class it
+-- belongs to reaches S0. The issue is not misgraded; the report simply did not
+-- carry this program. Two more pre-fix `run` failures the same one-line peel
+-- removes, measured on the same base arm and deliberately NOT given files of
+-- their own (they ride the identical arm): a `requires`-bearing constrained head
+-- (`impl Sz (Eq c => Box b) requires Eq b`) died `E-NOT-A-FUNCTION: applied
+-- non-function: 21`, and a constrained head in RETURN position beside a plain
+-- sibling died `E-NONEXHAUSTIVE-MATCH` — the wrong impl's value reached the
+-- match. Both are green on the fix arm (21 and 107 on every cell).
+-- ⚠️ These two error STRINGS are what THIS repair round measured. A brief that
+-- routed this work quoted them as `applied non-function: 1` and
+-- `E-PANIC: unknown op '+'`; the second was not reproduced here on any shape
+-- tried, and a one-impl return-position constrained head is simply CORRECT on
+-- the base arm (run 106, only `build` fails). Record what you ran.
+--
+-- ⚠️ TWO IMPL BLOCKS OF ONE INTERFACE, so Section 4 DOES derive a permutation
+-- pair here — unlike its two siblings, and deliberately. The pre-fix answer was
+-- decided by which impl was declared first, exactly as in #1617, so the
+-- permutation is the half a single-order value pin passes by construction.
+--
+-- ⚠️ THE TWO HEADS SHARE A HEAD TYCON (`Box`) ON PURPOSE. Post-fix both impls
+-- project to `Box`, so this row also asserts that peeling the wrapper does not
+-- collapse `Box Int` and `Box Bool` into one another — the full head type still
+-- discriminates below the tag.
+interface Sz a where
+  sz : a -> Int
+
+data Box a = Box a
+
+impl Sz (Eq a => Box Int) where
+  sz _ = 13
+
+impl Sz (Box Bool) where
+  sz _ = 14
+
+main = println (sz (Box 1) + sz (Box True))

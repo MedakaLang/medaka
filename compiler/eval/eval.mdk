@@ -497,11 +497,30 @@ tyvarsInArgs ts = sumInts (map countTyvars ts)
 -- NOW CLOSED.  It said `headTycon` (below) strips `TyEffect` AND `TyConstrained`
 -- while `typecheck.headTyconTy` "answers `None` for both, and for a function
 -- head".  The effect arm was #1618, the function head was #1617, and the
--- constraint arm was #1630 — every one of them a program that CHECKS and RUNS
--- and cannot be BUILT (or, for #1617, one that builds and E-PANICs).  All three
--- are fixed by giving the two sides the SAME arms: `typecheck.headTyNode` now
--- peels `TyEffect` and `TyConstrained`, and both sides answer
--- `route_key.funHeadTag` for an arrow.
+-- constraint arm was #1630.  All three are fixed by giving the two sides the
+-- SAME arms: `typecheck.headTyNode` now peels `TyEffect` and `TyConstrained`,
+-- and both sides answer `route_key.funHeadTag` for an arrow.
+--
+-- ⚠️ THE THREE DID NOT FAIL THE SAME WAY, AND FOLDING THEM INTO ONE SENTENCE
+-- ("checks and runs, cannot be built") ERASES THE WORST CELL EACH ONE HAD.
+-- Derived from the in-tree records, not from memory:
+--   * #1618 — `check` 0, `run` CORRECT, `build` **exit 1, NO BINARY**.
+--   * #1630 — same three cells AT ONE IMPL.  Add a second impl of the same
+--     interface and `run` is WRONG AT EXIT 0 (measured on a peel-reverted base
+--     arm: `impl Sz (Eq a => Box Int)` beside `impl Sz (Box Bool)` printed 26 in
+--     one declaration order and 28 in the other, spec answer 27) — so the class
+--     reaches SILENT WRONGNESS and #1630's S1 is a grading of its REPORTED
+--     shape.  Pinned at `test/dict_fixtures/s3-constrained-headed-impl-vs-plain-
+--     sibling.mdk`.
+--   * #1617 — `run` was WRONG and DECLARATION-ORDER-DEPENDENT at exit 0 (the
+--     same silent shape), and its `build` did NOT produce a panicking binary
+--     either: `emitTagMatch`'s empty-constructor arm goes through `gapStr`,
+--     which in `Strict` mode `panic`s the EMITTER (`backend/llvm_emit.mdk`), so
+--     `medaka build` exits 1 with no binary.  In-tree records: the #1617 row and
+--     the arm-set ledger in `test/diff_compiler_dict_semantics.sh` (both cells),
+--     that fixture's own header, and `PLAN.md`'s slice-7 entry for the build
+--     cell.  An earlier revision of THIS paragraph said #1617 "builds and
+--     E-PANICs"; there was never a binary to run.
 --
 -- 🚨 #1630 IS ALSO THE CASE AGAINST BOUNDING A CLASS FROM ONE EXAMPLE.  This
 -- paragraph declared `TyConstrained` "measured benign … peeling it yields a

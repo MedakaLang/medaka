@@ -24,6 +24,13 @@
 -- while the bug was live. `ALL_EXACT` forces build to ACCEPT with stdout
 -- byte-identical to run's and to the pinned `6`.
 --
+-- 🚨 "CHECK AND RUN WERE ALREADY CORRECT" IS TRUE OF THIS **ONE-IMPL** FILE AND
+-- FALSE OF THE CLASS. At two impls of one interface the pre-fix `run` is WRONG AT
+-- EXIT 0 and decided by declaration order — see the third #1630 row,
+-- `s3-constrained-headed-impl-vs-plain-sibling.mdk`, which exists precisely
+-- because this row and its sibling cannot see that channel. Do not quote this
+-- sentence as a statement about constrained impl heads in general.
+--
 -- ⚠️ ONE IMPL BLOCK, so Section 4 derives no permutation pair — correctly.
 interface Sz a where
   sz : a -> Int

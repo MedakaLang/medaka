@@ -16,9 +16,12 @@
 -- Measured on this tree's binary before the fix; the fix adds one arm,
 -- `headTyNode (TyConstrained _ t) = headTyNode t`.
 --
--- 🚨 THE HEADED BODY IS THE WHOLE POINT, AND THE WRAPPER IS NOT.  #1617's own
--- commit body declared `TyConstrained` "measured benign … peeling it yields a
--- headless body", which is true of `Eq a => a` and false of `Eq a => Int`. A
+-- 🚨 THE HEADED BODY IS THE WHOLE POINT, AND THE WRAPPER IS NOT.  PR #1629 —
+-- commit `e051788b`, both in its commit body and in the `eval.headTycon` census
+-- comment that commit landed — declared `TyConstrained` "measured benign …
+-- peeling it yields a headless body" (#1617 and #1618 are ISSUES and have no
+-- commit bodies; cite the PR's commits, not the issue numbers they close).
+-- That ruling is true of `Eq a => a` and false of `Eq a => Int`. A
 -- wrapper does not decide whether its body has a head; only the body does. The
 -- headless spelling is a DIFFERENT program and is still correctly headless — it is
 -- an ordinary fully-general `impl Sz a`, and it built and ran fine both before and
@@ -27,7 +30,19 @@
 --
 -- ⚠️ SO THE LOAD-BEARING CELL OF THIS ROW IS THE **build** ARM, not the value.
 -- `check` and `run` were both already correct while the bug was live and pass on a
--- compiler that still has it. Section 1's `ALL_EXACT` mode is what discriminates:
+-- compiler that still has it.
+--
+-- 🚨 THAT IS A CLAIM ABOUT **THIS ONE-IMPL SHAPE**, NOT ABOUT THE DEFECT CLASS,
+-- and the difference is the whole reason a third row exists beside this one.
+-- Add a second impl of the same interface and the pre-fix `run` is WRONG AT
+-- EXIT 0 — see `s3-constrained-headed-impl-vs-plain-sibling.mdk`, where two
+-- impls both answer from the first because a constrained head and a plain one
+-- shared the `noneHeadTag` bucket. So the class #1630 belongs to includes
+-- SILENT WRONGNESS, and #1630's S1 grading is scoped to the shape it reported —
+-- it is not a grading of the class. Do not repeat "check and run were already
+-- correct" as a statement about constrained impl heads in general.
+--
+-- Section 1's `ALL_EXACT` mode is what discriminates:
 -- it requires `build` to ACCEPT and its stdout to be byte-identical to `run`'s and
 -- to the pinned `2`, so a regression that puts a constrained head back into the
 -- `__none__` bucket fails on the build cell alone. Verified able to fail: mutating

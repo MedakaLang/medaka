@@ -96,17 +96,30 @@
 #     - #1180 (bare `TyVar`) is the arm where None is the DOCUMENTED INTENT; that
 #       program must be REJECTED and neither fix repairs it.
 #     - #1630 (FIXED; was OPEN when the two rows above landed) is the SAME arm set
-#       at a headed `TyConstrained` body -- `impl Sz (Eq a => Int)` gave
-#       `check=0 run=0 build=1`, byte-identically to #1618. Fix: one more arm on the
-#       same node walk, `headTyNode (TyConstrained _ t) = headTyNode t`. It has TWO
-#       rows below (`s3-constrained-impl-head-routes` and
-#       `s3-constrained-effect-impl-head-routes`) because a fix that special-cased
-#       the reported shape `TyConstrained cs (TyCon …)` would green the first and
-#       red the second.
+#       at a headed `TyConstrained` body. Fix: one more arm on the same node walk,
+#       `headTyNode (TyConstrained _ t) = headTyNode t`. It has THREE rows below,
+#       and they grade three different channels:
+#         `s3-constrained-impl-head-routes` -- ONE impl, `Eq a => Int`. Pre-fix
+#           `check=0 run=0 build=1`, byte-identically to #1618. Load-bearing cell:
+#           build.
+#         `s3-constrained-effect-impl-head-routes` -- `Eq a => <Stdout> Int`. Exists
+#           because a fix special-casing the reported shape `TyConstrained cs
+#           (TyCon …)` would green the first row and RED this one.
+#         `s3-constrained-headed-impl-vs-plain-sibling` -- TWO impls. The SILENT-
+#           WRONGNESS channel neither of the others can see, and the reason
+#           `check=0 run=0 build=1` must NOT be read as a statement about the class:
+#           that cell triple is a property of ONE IMPL. Measured on a base arm built
+#           from the fix branch with the peel deleted, `impl Sz (Eq a => Box Int)`
+#           beside `impl Sz (Box Bool)` printed 26 in one declaration order and 28
+#           in the reverse, at exit 0 with `check` clean. Spec answer 27. So the
+#           class reaches S0 and #1630's S1 grades its REPORTED shape, not the
+#           class. Section 4 permutes this row; the other two have one impl each.
 #       🚨 THIS ENTRY IS ALSO THE ARM SET'S OWN WARNING AGAINST BOUNDING A CLASS
-#       FROM ONE EXAMPLE. #1617's commit body declared `TyConstrained` "measured
-#       benign … peeling it yields a headless body" and this file recorded the class
-#       as "NOT finished" on that basis -- both true of `Eq a => a` and false of
+#       FROM ONE EXAMPLE. PR #1629's commit `e051788b` -- in its commit body and in
+#       the `eval.headTycon` comment it landed -- declared `TyConstrained` "measured
+#       benign … peeling it yields a headless body", and this file recorded the
+#       class as "NOT finished" on that basis. (#1617/#1618 are ISSUES and have no
+#       commit bodies; cite the PR's commits.) Both true of `Eq a => a` and false of
 #       `Eq a => Int`. The wrapper never decided headedness; the body did. So read
 #       "the set is not finished" as still live: it is what has been enumerated, and
 #       the enumeration has now been wrong once in each direction.
@@ -412,6 +425,7 @@ s3-min-fully-general-sibling.mdk|§3 `inst` = min⊑(match) WITH A FULLY-GENERAL
 s3-fn-typed-impl-heads-discriminated.mdk|§3 `inst` DISCRIMINATES TWO FUNCTION-TYPED IMPL HEADS -- the #1617 DRAIN, and the third member of the `noneHeadTag` family after #1128 above and #1154 below. `impl Sz (Int -> Int)` beside `impl Sz (Bool -> Bool)`: `headTyconTy`s `_ => None` arm swallowed `TyFun`, both heads shared the ONE `noneHeadTag` bucket, and the value was decided by DECLARATION ORDER at exit 0 with `check --json` clean -- this ordering printed `(5, 5)`, the reversed one `(9, 9)`, and `build` exited 1 with `arg-tag dispatch on impl type that owns no constructors`. `(5, 9)` is the SPEC answer the fixtures own header hand-derived from the two signatures, not a recapture. ⚠️ THE VALUE CELL IS ONLY HALF THIS ROW: the defects signature was ORDER-DEPENDENCE, which a single-order value pin passes by construction, so the discriminating half is Section 4 -- this file is a FLAT `.mdk` with 2 impls of one interface precisely so the permuter derives it|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|(5, 9)|
 s3-effect-carrying-impl-head-routes.mdk|§3 head projection + §7 single-evaluator law at an EFFECT-CARRYING impl head -- the #1618 DRAIN. ONE interface, ONE `impl Sz (<Stdout> Int)`, ONE call: `typecheck.headTyconTy` answered None for the `TyEffect` head while eval`s and `core_ir_lower`s `headTycon` STRIPPED the effect to `Int`, so the front end resolved a call the EMITTER then could not find -- `check` 0 and `run` 2 were both already CORRECT and `build` exited 1 with `no impl of method ‘sz’ for type ‘__none__’`. ⚠️ THE LOAD-BEARING CELL IS **build**, not the value: check and run pass on a compiler that still has this bug, and it is `ALL_EXACT`s requirement that build ACCEPT with stdout byte-identical to run`s and to the pinned 2 that makes the row discriminate. ⚠️ ONE impl block, so Section 4 derives no pair here -- correctly, there is no declaration order to be free of; its sibling drain above carries that axis|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|2|
 s3-constrained-impl-head-routes.mdk|§3 head projection + §7 single-evaluator law at a CONSTRAINED impl head with a HEADED body -- the #1630 fix, third member of the arm set above. ONE interface, ONE `impl Sz (Eq a => Int)`, ONE call: `eval.headTycon` peeled `TyConstrained` and filed the impl under `Int` while `typecheck.headTyNode` peeled only `TyApp`/`TyEffect`, so the caller side stamped `__none__` -- `check` 0 and `run` 2 were both already CORRECT and `build` exited 1 with `no impl of method ‘sz’ for type ‘__none__’`. ⚠️ THE LOAD-BEARING CELL IS **build**, not the value, exactly as for #1618 above: `ALL_EXACT` requires build to ACCEPT with stdout byte-identical to run`s and to the pinned 2. ⚠️ THE HEADED BODY IS THE POINT: `Eq a => a` is a different program, correctly still headless, and was never broken -- do not simplify the head|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|2|
+s3-constrained-headed-impl-vs-plain-sibling.mdk|§3 head projection at a CONSTRAINED headed impl BESIDE A PLAIN SIBLING -- the #1630 row that grades the SILENT-WRONGNESS channel, and the reason the two one-impl rows must not be read as statements about the class. `impl Sz (Eq a => Box Int)` beside `impl Sz (Box Bool)`: pre-fix the constrained impl left the `Box` bucket on the typecheck side only, the two impls stopped being discriminable, and DECLARATION ORDER decided the value at exit 0 with `check` clean -- measured on a base arm built from this branch with the one-line peel deleted, this order printed 26 (13+13) and the reverse 28 (14+14), `build` exited 1 with `no impl of method ‘sz’ for type ‘__none__’`. 27 is the SPEC answer hand-derived from the two impl bodies, not a recapture. ⚠️ SO #1630`s S1 GRADES ITS REPORTED SHAPE, NOT THE CLASS: at ONE impl `check` and `run` were already correct, which is a property of one impl. ⚠️ TWO impl blocks of one interface, so Section 4 DOES derive a permutation pair here -- unlike its two siblings, and deliberately: order-dependence was the pre-fix signature|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|27|
 s3-constrained-effect-impl-head-routes.mdk|§3 head projection with TWO STACKED WRAPPERS over one headed body -- the #1630 COMPOSITION row. `impl Sz (Eq a => <Stdout> Int)` puts the `TyConstrained` peel on top of #1618`s `TyEffect` peel; pre-fix it failed byte-identically to its sibling (check 0, run 6, build 1 with `no impl of method ‘sz’ for type ‘__none__’`), which is the measurement showing the #1618 peel alone did NOT reach a head an outer wrapper hides. ⚠️ NOT A DUPLICATE: a fix special-casing the reported shape `TyConstrained cs (TyCon …)` greens the sibling row and REDS this one -- that is this row`s whole job. ⚠️ Load-bearing cell is **build**|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|6|
 s3-w1-cyclic-superinterface-rejected.mdk|§3 W1 the superclass relation must be ACYCLIC (else `super`-search loops) -- statically rejected, not hung|REJECT|REJECT|REJECT|NONE||T-CYCLIC-SUPERINTERFACE
 s3-w3-method-scheme-rigidity-constraint.mdk|§3 W3 method-scheme fidelity, CONSTRAINT axis: an impl body may not need a class the method scheme does not license (#814 vein)|REJECT|REJECT|REJECT|NONE||T-IMPL-TOO-SPECIFIC
