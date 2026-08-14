@@ -1884,3 +1884,50 @@ post-Q1 or both. **The third was STOPPED** — the `@attrib` duplicate-name shap
 
 ⚠️ `gh pr edit --body-file` **silently no-op'd** on this PR's body — byte-identical readback, exit 0,
 only a projects-classic warning on stderr. `scripts/pr.sh body` landed it. Known trap, hit again.
+
+## RUN-P45-051 — REPAIR ROUND APPLIED (PR #1638). W3 DISPROVED TWO OF MY ELEVEN, and found a third thing.
+
+Two commits (`5074fc24` repair, `699cd6b8` goldens). **The one-line fix is untouched — W3 filtered the
+repair commit's `compiler/` diff and it is 100% comment lines, zero non-comment changes.** Final gate
+on the committed tree: **exit 0, 191/191 assertions.**
+
+### ⭐ The finding neither the brief nor either review had: #1630's class is ORDER-DECIDED
+Pre-fix, the two-impl program prints **26**; **reversing the two impl blocks makes it 28** — still
+exit 0, still `check` clean. That is **#1617's signature at #1630's constructor**: a silent,
+declaration-order-dependent wrong answer. The fix arm prints **27 in both orders**, and W3 added a
+permutation row to the gate's Section 4 grading exactly that.
+
+⇒ This lands #1630 squarely in **the conjunct-1 family this sprint exists to drain**, which nobody had
+claimed. It also means the bite-0 severity story is now: filed S1 (loud at `build`) → the class also
+contains **S0 silent wrongness** → and that wrongness is **order-dependent**. Three gradings of one
+defect, each correct for the shape that produced it.
+[[feedback_severity_is_a_repro_artifact_not_a_defect_identity]], third instance in this arc.
+
+### 🚨 TWO OF MY ELEVEN REPAIR ITEMS WERE WRONG. Both were mine relaying a reviewer's cells.
+1. **A1's second error string does not reproduce.** I briefed `E-PANIC: unknown op '+'` for a
+   return-position shape. Measured: a one-impl return-position constrained head is **correct pre-fix**
+   (`run` 106; only `build` fails); a two-impl one fails as `E-NONEXHAUSTIVE-MATCH`; the `requires`
+   shape reproduces but prints `applied non-function: 21`, **not `1`**. W3 recorded what it measured
+   plus a note that my strings were not reproduced.
+2. **B5's citation was half wrong.** I named commits `e051788b` **and** `699f0b5b`; `git log -S` finds
+   the phrase in **`e051788b` alone**. The corrections cite that commit only.
+
+**This is the review lesson eating its own author.** I wrote eleven items telling a writer that every
+claim must trace to a command — and two of mine were relayed cells I had not re-derived. W3 checked
+them rather than complying, which is the third time this sprint that briefing for refusal has paid.
+[[feedback_dont_launder_an_agents_observation_into_your_inference]].
+
+### 🚨 `gh pr edit --body-file` has a FOURTH failure mode: SILENT TRUNCATION
+Wrote **16,769 of 29,266 bytes at exit 0** — whole sections dropped from the middle. Every prior
+instance left the OLD body intact, so *"did it change?"* was a sufficient test; truncation **changes**
+the body, so a length-changed check passes and the missing half is exactly the evidence a reviewer
+needs. **Size-dependent** — small bodies landed fine in the same session. ⇒ **byte-compare the
+read-back against the file**, which is what `scripts/pr.sh body` already does. Recorded durably in
+the standing memory rather than only here.
+
+### Goldens
+Three snapshots (comment-only edits) blessed **by name**, plain re-check **202/202**. W3 read the diff:
+comment lines plus exactly three `source_lines=` counters, nothing else — the complete expected
+footprint. Staged **last**, all four hook checks live on the terminal commit. `selfproc_legA` cannot
+move (comment-only compiler diff). New pin row proven able to fail: `27 → 28` reds **that row alone**
+across all 91 units; reverted, 191/191.
