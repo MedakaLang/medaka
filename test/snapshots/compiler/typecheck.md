@@ -1,5 +1,5 @@
 # META
-source_lines=30090
+source_lines=30130
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted typecheck stage — port of lib/typecheck.ml's HM core.  SLICE 1:
@@ -19514,9 +19514,20 @@ ieHeadCollidesByMethod env name hd = ieCountHeadByMethod env name hd > 1
 -- arm existed.  #1630's `TyConstrained` peel is the THIRD member of that same
 -- routing set and is held to the same line: it lands here and NOT on
 -- `headTySpineNode`, so a constrained-headed impl is still dropped from the
--- acceptance census exactly as it was.  That is a deliberate residual, not an
--- oversight — see `censusHeadNameTy`'s own note for the program it does not
--- cover.
+-- acceptance census exactly as it was.  That is a deliberate residual, and it is
+-- an OBSERVABLE one — `censusHeadNameTy`'s own note carries the two-impl program
+-- that reaches it, measured identically on this arm and on a peel-reverted base
+-- arm.  It is PRE-EXISTING (it is the same residual the effect peel already
+-- left), so it is not this fix's to close; it is this fix's to describe
+-- correctly, which the note now does.
+--
+-- ⚠️ AND F-3c (#1155) IS **CLOSED**, so "F-3c owns the ruling" — written above
+-- and at `implEntryFromTys`, both predating this PR — is no longer a live
+-- deferral.  Those paragraphs are still right about WHY the walks are split (an
+-- acceptance narrowing is not a rider on a dispatch bug fix); they are stale
+-- only about who will decide it.  Nothing open owns it today.  Do not read the
+-- citation as a scheduled ruling, and do not delete the split on the grounds
+-- that its owner went away.
 headTyNode : Ty -> Ty
 headTyNode (TyApp a _) = headTyNode a
 headTyNode (TyEffect _ _ t) = headTyNode t
@@ -19642,22 +19653,51 @@ headTyconNameTy t = match headTyNode t
 -- still answers `None` here and is still dropped from BOTH readers even though
 -- its peeled head `Int` is perfectly ordinary.  That is deliberate: the same
 -- ACCEPTANCE-narrowing argument the 🚨 above records for `__fun__` and for the
--- effect peel applies verbatim, and the ruling belongs to F-3c (#1155), taken
--- once for all three wrappers rather than bolted on per bug.
+-- effect peel applies verbatim — a narrowing is not a rider on a dispatch bug
+-- fix, and it should be taken once for all three wrappers rather than bolted on
+-- per bug.  ⚠️ The 🚨 above defers that ruling to F-3c (**#1155, CLOSED**); read
+-- the reasoning, not the owner.
 --
--- ⚠️ AND THE RESIDUAL IS STRUCTURAL, NOT DEMONSTRATED — say it that way.  This
--- projection differs from `__fun__` in that a goal CAN reach it at a peeled
--- head, so the vacuity argument the arrow arm enjoys is NOT available and the
--- drop is a real behavioural difference in the code.  But #1630 tried and FAILED
--- to build a program that observes it: the obvious candidate — a
--- return-position method leaving the receiver undetermined, with the constrained
--- impl as the interface's ONLY impl — behaved cell-for-cell identically to the
--- same program with an unconstrained `impl Zero Int` head (both `check` 0, both
--- `run` 1 on an UNRELATED return-position eval defect, both `build` 0, both
--- executed and printed `0`), i.e. `routeUndeterminedTop`'s empty-census arm was
--- never the deciding step there.  Do not upgrade this note to a bug report
--- without a program that discriminates; do not downgrade it to "benign" either,
--- which is the exact over-generalisation #1630 was.
+-- 🚨 AND THE RESIDUAL IS **OBSERVABLE**.  This note used to read "STRUCTURAL,
+-- NOT DEMONSTRATED", citing a program #1630 "tried and FAILED to build" — a
+-- return-position method with the constrained impl as the interface's ONLY
+-- impl.  That candidate was DISQUALIFIED BY CONSTRUCTION and the note did not
+-- know it: `checkUndeterminedObligation`'s RULE 3 is guarded on
+-- `implCountForIfaceU >= 2`, so a ONE-IMPL program can never reach the arm the
+-- census residual disables.  A failed probe that could not have succeeded is not
+-- evidence of absence.  With TWO impls it is observable in one `check` cell:
+--
+--   interface Zero a where
+--     zero : a
+--   impl Zero (Eq x => Int) where zero = 0    -- control: plain `impl Zero Int`
+--   impl Zero Bool where zero = False
+--   ignore2 : a -> Int
+--   ignore2 _ = 5
+--   main = println (ignore2 zero)
+--
+-- CONTROL (plain `Int` head): `check` exits **1**, *"Ambiguous instance for
+-- `Zero`. Cannot determine which impl; add a type annotation"*.  CONSTRAINED
+-- head: `check` exits **0**, `run` prints 5, `build` exits **1**
+-- (`E-PANIC: arg-tag dispatch for method 'zero': discriminating arg position not
+-- supplied`).  The constrained impl is invisible to the census, the count stays
+-- at 1, RULE 3 never fires, and a genuinely ambiguous program is ACCEPTED.
+--
+-- ⚠️ IT IS PRE-EXISTING AND NOT #1630's TO FIX.  Measured cell-for-cell
+-- identically on this branch's binary AND on a base arm built from this branch
+-- with the one-line `headTyNode` peel deleted and both stages rebuilt —
+-- arm-invariant, so the peel neither introduced it nor could have removed it.
+-- The same shape with an EFFECT wrapper (`impl Zero (<Stdout> Int)` beside
+-- `impl Zero Bool`) gives the same three cells on both arms, so "structural, not
+-- demonstrated" was false for TWO of the three wrappers, not just this one.
+--
+-- ⚠️ AND NOTHING OPEN OWNS IT.  This note used to defer the ruling to F-3c
+-- (#1155); **#1155 is CLOSED**, so that deferral pointed at nothing.  The
+-- acceptance-narrowing argument the 🚨 above records is still the right reason
+-- to keep the census walk split from the dispatch walk, but "F-3c will rule on
+-- it" is no longer a live commitment and must not be cited as one.  Whoever
+-- picks this up owns the flip list and the fixtures; do not downgrade it to
+-- "benign", which is the exact over-generalisation #1630 was, and do not assume
+-- an unfiled residual is an unimportant one.
 censusHeadNameTy : Ty -> Option String
 censusHeadNameTy t = match headTySpineNode t
   TyCon { tyConName = n } => Some n
