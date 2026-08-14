@@ -1805,3 +1805,44 @@ semantics reviewer had meanwhile reached the same surface independently, so noth
 not protect a writer's ATTENTION, and an orchestrator message is an unaudited write straight into it.
 A misaddressed brief is indistinguishable, from inside, from a scope change. **Address by role, and
 re-read the id against the dispatch record before sending — the ids differ by two characters.**
+
+## RUN-P45-049 — ⭐ TWO ORCH RULINGS ON Q1's CONVERGED SIGNALS (PR #1640)
+
+Both were correctly refused by W2 rather than decided in-bite. Both reds are LICENSED and expected:
+`gates (eval)` = `iface_order`, `soundness` = `must_fail`.
+
+### Ruling 1 — the two `iface_order` ledger rows are DELETED. The issues stay OPEN.
+Converged, STATE 3, identical for both rows:
+`check=1;codes=R-DUPLICATE-IFACE-METHOD;schemes=;run=1:;build=1/-:` — an `R-*` prefix, i.e. a resolve
+rejection, not the `T-NO-IMPL` trap the four-state table warns about. Both orderings now reject
+identically, so **the divergence those rows pinned does not exist on this axis any more** and the two
+cases become ordinary invariant (unledgered) cases — which is a *stronger* guard than the row was.
+
+🚨 **The row deletion must NOT be read as a drain of the issue, and the ledger must SAY so.** The
+gate's four-state table pairs "converged" with "close the issue and delete the row"; here Q1 fixes only
+the **intra-module** half, while #1182/#1620 survive on the **cross-module** axis (a census found 29
+directories carrying that shape, which this corpus does not reach). A bare row deletion would read, to
+the next agent, as *"issue drained"* — and #1182 has already been desk-closed **twice** on exactly that
+kind of inference. ⇒ **W2 adds a header note naming the axis split and the surviving population.**
+Mechanically safe: `must_fail_census.sh` HALF 4 reds when a *ledgered* issue is CLOSED; an open issue
+with no row is not a violation.
+
+### Ruling 2 — #1182's must-fail pin is RE-POSED onto the cross-module axis.
+It reports `CONTROL-BROKE`, and the harness's printed advice (*"the ENVIRONMENT moved, not the bug"*)
+is **wrong for this case**: the control is itself a two-interface module, so Q1 rejects it too. The
+pin's whole signature moved, not its subject alone.
+
+The bug #1182 states — *impl-block order decides which impl runs* — **still reproduces cross-module**,
+which is where the issue now lives. ⇒ Re-pose the fixture there: keep the assertion, move the shape to
+two modules. Hand-derive the expected cells; do not capture them. If the cross-module shape turns out
+NOT to reproduce, that is a finding and the pin goes to `MUST-FAIL-NOT-PINNABLE.txt` with the reason —
+**not** a quiet deletion.
+
+⚠️ Both rulings preserve the invariant that matters: **an open bug keeps a live, self-draining pin.**
+Neither issue is closed by this PR.
+
+### Throughput note, recorded against myself
+These two rulings sat unmade for ~15 minutes while I filed #1641 — a finished bite parked on the
+orchestrator's desk. That is the Stage B `0.73×` bottleneck reappearing in a new shape: not gaps
+between writers, but a **decision queue**. The fix is the same one that worked earlier tonight —
+rule on receipt, do the ledger work afterwards.
