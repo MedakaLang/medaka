@@ -1,0 +1,35 @@
+-- CONTROL — POSITIVE, and it is what makes every other row in this corpus mean
+-- something.
+--
+-- Structurally this is the 1182 shape with ONE dimension flipped: the two interfaces
+-- declare DISTINCT method names (`m1`, `m2`) instead of the same one. Two interfaces,
+-- two impls on the same data type, two calls, same declaration shapes -- so the
+-- permuter moves exactly as much source as it does on the colliding cases.
+--
+-- It MUST be invariant, and it is deliberately UNLEDGERED so the gate grades it as
+-- such. That is the positive control this instrument needs in both directions:
+--
+--   * if it ever DIVERGES, the finding is not "interfaces are order-dependent" -- it
+--     is that reordering interface declarations perturbs programs with no method-name
+--     collision at all, which is a much larger and differently-shaped defect;
+--   * if the PERMUTER silently stopped moving anything (wrong chunk regex, a
+--     `^interface` that no longer matches after a syntax change), every case in this
+--     corpus would read invariant and the ledgered rows would go red as "DRAINED" --
+--     a broken instrument reporting a fixed compiler. This row cannot detect that
+--     alone, which is why the gate ALSO refuses any case whose permuter finds fewer
+--     than two interface declarations, and prints the permutation count per row.
+interface C1 a where
+  m1 : a -> Int
+
+interface C2 a where
+  m2 : a -> Int
+
+data D = D
+
+impl C1 D where
+  m1 _ = 1
+
+impl C2 D where
+  m2 _ = 2
+
+main = println (m1 D + m2 D)

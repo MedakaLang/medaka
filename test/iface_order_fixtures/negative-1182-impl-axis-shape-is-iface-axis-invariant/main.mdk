@@ -1,0 +1,40 @@
+-- #1182 ON THE INTERFACE-DECLARATION AXIS — A MEASURED NEGATIVE RESULT.
+--
+-- This is test/must_fail_fixtures/1182-two-ifaces-same-method-name-order-decides/main.mdk
+-- BYTE-FOR-BYTE in its declarations -- same `data Q`, same two interfaces, same two
+-- impls, same call -- and the ONLY thing this corpus does differently is WHICH AXIS
+-- IS PERMUTED. That pin permutes the two `impl` BLOCKS. This case permutes the two
+-- `interface` DECLARATIONS and leaves the impls exactly where they are.
+--
+-- ⭐ MEASURED ANSWER: THIS SHAPE IS INVARIANT ON THIS AXIS. Both orderings of the two
+-- interface declarations produce the identical signature (`1`, exit 0, on both
+-- engines) while the impl-block pin shows the SAME declarations answering 1 and 2.
+-- The two axes are independent here. That is a real negative result, not a gap in
+-- the instrument: the permuter was verified to genuinely swap the two blocks, and
+-- two sibling cases in this corpus DO diverge under it. See case.txt.
+--
+-- The consequence is recorded because it is load-bearing for how this gate is read:
+-- for #1182's OWN canonical program, a name-scoped fix leaves nothing here to
+-- object. The signal for that outcome comes from the sibling cases, not this one.
+-- Kept as a regression guard in the other direction: if a fix makes this shape start
+-- depending on interface order, the gate reds it as a NEW bug.
+--
+-- ⚠️ NOT AN ASSERTION THAT 1 IS RIGHT OR 2 IS RIGHT. Same disclaimer as the pin's:
+-- which interface `m` belongs to is genuinely in dispute (#1182 names two viable
+-- fixes that disagree about the value). The assertable defect is the ORDER
+-- DEPENDENCE -- reordering two interface declarations changes no program meaning.
+data Q a b c = Q a b c
+
+interface A1 a where
+  m : a -> Int
+
+interface A2 a where
+  m : a -> Int
+
+impl A1 (Q Int y z) where
+  m _ = 1
+
+impl A2 (Q x Bool z) where
+  m _ = 2
+
+main = println (m (Q 1 True 7))

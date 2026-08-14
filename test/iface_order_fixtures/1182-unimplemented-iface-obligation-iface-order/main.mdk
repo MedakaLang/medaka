@@ -1,0 +1,38 @@
+-- THE CANONICAL VERDICT FLIP, transcribed from the compiler's own source.
+--
+-- compiler/types/typecheck.mdk records this exact shape as MEASURED, in the comment
+-- block that bounds Stage A-2's module-path-only carve-out:
+--
+--   "MEASURED (identical on this build and on main, so nothing here regressed): one
+--    file with `interface FA`/`interface FB` both declaring `mth`, `data Blob`, and
+--    `impl FA Blob` only -- with FA declared FIRST the program is REJECTED
+--    `No impl of FB for Blob`, and with the two interface declarations SWAPPED
+--    (nothing else changed) it is ACCEPTED at exit 0 and prints FA's body.  The
+--    obligation goes to the LAST-declared interface either way; an
+--    interface-declaration reordering that changes no program meaning changes the
+--    verdict."
+--
+--   grep -n 'interface declarations SWAPPED' compiler/types/typecheck.mdk
+--
+-- This file is that shape, verbatim, and it is why it is in this corpus FIRST: it is
+-- the strongest possible reading a permutation differential can produce -- not a
+-- different value at exit 0, but ACCEPT vs REJECT. If this case ever reads as
+-- invariant while the source comment above still stands, the INSTRUMENT is broken,
+-- not the compiler. See case.txt.
+--
+-- ⚠️ This file does NOT assert that accepting is right or that rejecting is right.
+-- Which interface the occurrence of `mth` belongs to is the open name-resolution
+-- question of #1182. What is assertable without settling it: the two orderings are
+-- the same program, so they must not disagree about whether it compiles.
+interface FA a where
+  mth : a -> Int
+
+interface FB a where
+  mth : a -> Int
+
+data Blob = Blob
+
+impl FA Blob where
+  mth _ = 11
+
+main = println (mth Blob)

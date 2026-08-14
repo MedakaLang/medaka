@@ -8,7 +8,8 @@
 #   HALF 1  PINNED-BUT-CLOSED: an issue is CLOSED but its fixture still pins it  -> TRACKER lies
 #   HALF 2  a new open+verified issue has no fixture             -> a pinning candidate
 #   HALF 3  a NOT-PINNABLE ledger entry's issue is CLOSED        -> a stale exemption
-#   HALF 4  an IMPORT-ORDER-LEDGER row's issue is CLOSED         -> a stale owner (#1319)
+#   HALF 4  an ORDER-LEDGER row's issue is CLOSED               -> a stale owner (#1319)
+#           (both IMPORT-ORDER-LEDGER.txt and IFACE-ORDER-LEDGER.txt)
 #
 # ── ⭐ HALF 1 IS THE POINT: THE CORPUS IS AN ORACLE FOR THE TRACKER ─────────────
 #
@@ -193,25 +194,44 @@ fi
 [ "$h3" -eq 0 ] && echo "  none — every exemption still has a live subject."
 echo
 
-# ══ HALF 4: an IMPORT-ORDER-LEDGER row whose issue is CLOSED ══════════════════
+# ══ HALF 4: an ORDER-LEDGER row whose issue is CLOSED ═════════════════════════
+#           (BOTH ledgers: IMPORT-ORDER-LEDGER.txt and IFACE-ORDER-LEDGER.txt)
 #
-# test/IMPORT-ORDER-LEDGER.txt (read by test/diff_compiler_import_order.sh, the
-# import-clause permutation differential) carries one row per case whose answer still
-# depends on import order, each naming the OPEN issue that owns it. That ledger's own
-# header requires the issue to be OPEN, and the GATE cannot check it: it runs on every
-# dev box under `make gates`/preflight with no `gh` auth, and in a required CI shard
-# where an API blip must never block a merge. Exactly the split halves 1 and 3 already
+# Each permutation-differential ledger listed below carries one row per case whose
+# answer still depends on the order of some declaration that changes no program
+# meaning, and each row names the OPEN issue that owns it. Both ledgers' own headers
+# require that issue to be OPEN, and NEITHER GATE can check it: they run on every dev
+# box under `make gates`/preflight with no `gh` auth, and in required CI shards where
+# an API blip must never block a merge. Exactly the split halves 1 and 3 already
 # use — the offline half is loud on the PR, this half needs the API.
+#
+# The loop below iterates the ledgers; it is the authority on which are covered, and
+# this comment is not. Derive:  grep -n 'for IOLEDGER in' test/must_fail_census.sh
 #
 # ⚠️ Note what this does NOT do. The gate already fails when a ledgered divergence
 # CONVERGES (the real drain). This half catches the other lie: the issue was closed
 # while the bug still reproduces, so the row's claim of an owner is stale. As in half
 # 1, when a pin and the tracker disagree the pin is the MEASUREMENT and the issue
 # state is an assertion — do not assume the row is the wrong one.
-echo "── IMPORT-ORDER-LEDGER rows whose issue is CLOSED (stale owners) ────────"
-IOLEDGER="$ROOT/test/IMPORT-ORDER-LEDGER.txt"
+# ⚠️ TWO LEDGERS, ONE RULE. There are now two permutation-differential ledgers with
+# identical semantics, on different axes, and this half must cover BOTH — a check
+# written for one of them silently stops covering the family the moment a second axis
+# is added, which is exactly what happened here:
+#
+#   test/IMPORT-ORDER-LEDGER.txt  <- test/diff_compiler_import_order.sh (import clauses)
+#   test/IFACE-ORDER-LEDGER.txt   <- test/diff_compiler_iface_order.sh  (interface decls)
+#
+# ⭐ The interface-order ledger's coupling to this half is LOAD-BEARING, not decorative.
+# That gate's own header (FOUR-STATE TABLE, state 2) identifies one outcome in which it
+# stays GREEN while the defect is live: a fix scoped by interface NAME drains the
+# impl-order pins, so a reader concludes #1182/#1620 are fixed and CLOSES them, while
+# the interface axis still diverges and the rows here still assert a live bug. THIS
+# half is what catches that. Do not decouple them.
+echo "── ORDER-LEDGER rows whose issue is CLOSED (stale owners) ───────────────"
 h4=0
-if [ -f "$IOLEDGER" ]; then
+for IOLEDGER in "$ROOT/test/IMPORT-ORDER-LEDGER.txt" "$ROOT/test/IFACE-ORDER-LEDGER.txt"; do
+  [ -f "$IOLEDGER" ] || continue
+  lname="$(basename "$IOLEDGER")"
   while IFS= read -r line; do
     case "$line" in ''|\#*) continue ;; esac
     c="$(printf '%s' "$line" | awk -F'|' '{k=$1; gsub(/^[[:space:]]+|[[:space:]]+$/,"",k); print k}')"
@@ -221,10 +241,10 @@ if [ -f "$IOLEDGER" ]; then
     state="$(gh issue view "$n" --json state -q .state 2>/dev/null)" || state=""
     if [ -z "$state" ]; then
       echo "  ⚠️  #$n — could NOT read issue state (deleted, transferred, or the API refused)."
-      echo "      ledger row for case: $c"
+      echo "      $lname row for case: $c"
       findings=$((findings+1)); h4=$((h4+1))
     elif [ "$state" = "CLOSED" ]; then
-      echo "  🚨 #$n is CLOSED but its IMPORT-ORDER-LEDGER row still asserts a LIVE"
+      echo "  🚨 #$n is CLOSED but its $lname row still asserts a LIVE"
       echo "      order dependence — and the gate re-measured that divergence on the last run."
       echo "      ledger row for case: $c"
       echo "      Judge which is wrong: reopen #$n, or re-own the row on the issue that"
@@ -233,8 +253,8 @@ if [ -f "$IOLEDGER" ]; then
       findings=$((findings+1)); h4=$((h4+1))
     fi
   done < "$IOLEDGER"
-fi
-[ "$h4" -eq 0 ] && echo "  none — every import-order ledger row still has an open owner."
+done
+[ "$h4" -eq 0 ] && echo "  none — every order-ledger row still has an open owner."
 echo
 
 # ══ HALF 2: pinning candidates ═══════════════════════════════════════════════

@@ -1,0 +1,22 @@
+entry: main.mdk
+what: CONTROL — the SHARP one. Two interfaces DO share the method name `n`, exactly as
+what: the ledgered cases do; the single dimension that differs is that their impls are
+what: on DISJOINT receiver types, so only one impl can match at each call site. Must be
+what: invariant, and is deliberately UNLEDGERED so the gate grades it as such.
+
+how-established: Derivable WITHOUT running anything: at `n U` only `impl E1 U` matches
+how-established: the receiver and at `n V` only `impl E2 V` does, so no ranking between
+how-established: entries of different interfaces is ever performed and `n U + n V` is 3
+how-established: in every ordering. As with the other control, the expectation is not
+how-established: read off the engine.
+
+why-it-matters: The other control flips the METHOD NAME, so it can be dismissed as
+why-it-matters: "of course two unrelated interfaces don't interact". This one cannot:
+why-it-matters: it is one dimension away from the ledgered cases. It is what bounds
+why-it-matters: what the ledgered rows are evidence FOR. Those rows are evidence that
+why-it-matters: the CANDIDATE SET is keyed by bare method name and is therefore
+why-it-matters: deformed by interface-declaration order. If this case diverged too, the
+why-it-matters: proposition would have to weaken to "sharing a method name at all is
+why-it-matters: order-sensitive, collision or not" — a different and larger claim.
+why-it-matters: Keeping it green is what makes the difference between the two claims
+why-it-matters: observable rather than assumed.

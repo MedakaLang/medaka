@@ -1,0 +1,44 @@
+-- #1620 ON THE INTERFACE-DECLARATION AXIS.
+--
+-- Two interfaces in ONE file declare the same method name `ping` at DIFFERENT return
+-- types, both implemented on one concrete type `T`. The must-fail pin
+-- (test/must_fail_fixtures/1620-two-ifaces-same-method-binary-wrong-value/) grades the
+-- AB ordering ONLY -- one `cmd:` and one `control:`, and the control spends its slot on
+-- the single-interface case, so there is no slot left for the reversed ordering.
+--
+-- ⭐ THE REVERSED ORDERING IS UNGRADED EVERYWHERE IN THIS TREE, and grading it is why
+-- this case exists: a permutation differential grades every ordering by construction,
+-- where a must-fail fixture has one `cmd:` slot and one `control:` slot and #1620 has
+-- already spent both.
+--
+-- ⚠️ A REPORTED exit-139 SEGFAULT ON THE REVERSED ORDERING DID NOT REPRODUCE on this
+-- branch, and nothing here encodes it. Measured across both axes and both projections
+-- (eight runs, transcribed in case.txt), the reversed interface ordering is the
+-- WELL-BEHAVED one — `ping` resolves to Alpha and all three of check, the interpreter
+-- and the built binary agree on `alpha`. What this case pins is an ACCEPT-vs-REJECT
+-- flip, not a crash.
+--
+-- ⚠️ WHY `== 7` AND NOT THE RAW VALUE. Same reason the must-fail pin projects: the
+-- raw form's binary prints a LIVE HEAP ADDRESS that differs on every execution, so
+-- any exact-match record of it would diverge for a reason that has nothing to do
+-- with interface order and would make this case red permanently and meaninglessly.
+-- The Bool projection is stable. See raw-probe.mdk in the must-fail fixture.
+--
+-- ⚠️ NOT AN ASSERTION THAT Beta IS THE RIGHT CHOICE. Which interface `ping` belongs
+-- to is the same open question as #1182's. The assertable defect is that reordering
+-- two interface declarations changes no program meaning.
+interface Alpha a where
+  ping : a -> String
+
+interface Beta a where
+  ping : a -> Int
+
+data T = T
+
+impl Alpha T where
+  ping _ = "alpha"
+
+impl Beta T where
+  ping _ = 7
+
+main = println (ping T == 7)

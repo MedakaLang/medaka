@@ -1,0 +1,50 @@
+entry: main.mdk
+what: Two interfaces declare `mth`; only ONE of them has an impl for the receiver.
+what: The unmet obligation is attributed to the LAST-DECLARED interface, so swapping
+what: the two interface declarations flips the program between REJECTED and ACCEPTED.
+
+how-established: THIS CASE'S EXPECTED BEHAVIOUR WAS NOT DERIVED FROM THE ENGINE.
+how-established: It is transcribed from the compiler's own source, which records the
+how-established: flip as MEASURED, in the comment block bounding Stage A-2's
+how-established: module-path-only carve-out:
+how-established:   grep -n 'interface declarations SWAPPED' compiler/types/typecheck.mdk
+how-established: That comment states: with FA declared FIRST the program is REJECTED
+how-established: `No impl of FB for Blob`; with the two interface declarations SWAPPED
+how-established: and nothing else changed it is ACCEPTED at exit 0 and prints FA's body.
+how-established: It also states the mechanism: "the obligation goes to the LAST-declared
+how-established: interface either way".
+how-established:
+how-established: RE-MEASURED FIRST-HAND on a cold `make medaka` of this branch (base
+how-established: aaa43716), before the gate existed, by writing the two orderings out by
+how-established: hand and running `medaka check` / `medaka run` on each:
+how-established:   FA declared first:  check exit 1, run exit 1
+how-established:     "No impl of FB for Blob; write an 'impl FB Blob'."
+how-established:   FB declared first:  check exit 0, run exit 0, stdout `11`
+how-established: 11 is exactly `impl FA Blob`'s body. The reading matches the source
+how-established: comment in both directions, including which interface is named in the
+how-established: rejection.
+
+why-this-case-is-first: IT IS THE PROOF THAT THIS INSTRUMENT CAN FAIL, and that check
+why-this-case-is-first: had to happen before any other result here was believed. A
+why-this-case-is-first: permutation differential that cannot see a documented flip is a
+why-this-case-is-first: broken probe that would report every other case invariant and
+why-this-case-is-first: red every ledgered row as DRAINED — a broken instrument claiming
+why-this-case-is-first: a fixed compiler. This case is also the STRONGEST reading the
+why-this-case-is-first: signature can carry: ACCEPT vs REJECT, not two values at exit 0,
+why-this-case-is-first: so the `check=` cell alone separates the two orderings and no
+why-this-case-is-first: subtlety about which value is correct is needed to grade it.
+
+what-is-not-asserted: NEITHER ORDERING IS CLAIMED CORRECT. Whether `mth Blob` should
+what-is-not-asserted: resolve to FA (accept, print 11), be rejected as ambiguous, or be
+what-is-not-asserted: rejected for FB, is the open name-resolution question of #1182 and
+what-is-not-asserted: the issue names fixes that disagree about it. What is assertable
+what-is-not-asserted: without settling it: the two files are the same program under a
+what-is-not-asserted: cosmetic reordering, so they must not disagree about whether it
+what-is-not-asserted: compiles at all.
+
+issue: #1182 — nearest tracked owner, and named as such by the source comment above
+issue: ("Nearest tracked relative: #1182 (same one-file two-interface collision,
+issue: decided by impl-block order at dispatch)"). The AXIS differs — #1182's own pin
+issue: permutes `impl` blocks and this case permutes `interface` declarations — which
+issue: is precisely why this case exists: a NAME-SCOPED fix drains that pin and can
+issue: leave this one diverging. See the gate header's FOUR-STATE TABLE.

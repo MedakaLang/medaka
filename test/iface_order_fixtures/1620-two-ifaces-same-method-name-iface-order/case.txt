@@ -1,0 +1,77 @@
+entry: main.mdk
+what: Two interfaces in one file declare `ping` at DIFFERENT return types, both
+what: implemented on one concrete type. The program is accepted at one return type
+what: and delivered at the other. This case permutes the two interface declarations.
+
+how-established: DERIVED BY RUNNING THE GATE WITH NO LEDGER ROW PRESENT (see the
+how-established: procedure in test/IFACE-ORDER-LEDGER.txt's header). No value here is
+how-established: claimed correct — see below — so nothing was hand-predicted.
+how-established:
+how-established: ⚠️ A REPORTED SEGFAULT ON THE REVERSED ORDERING DID NOT REPRODUCE, and
+how-established: this row deliberately does NOT encode it. The claim under investigation
+how-established: was that the reversed ordering reaches `check` 0 / `build` 0 and then
+how-established: SEGFAULTS the built binary at exit 139. Probed by hand on this branch
+how-established: (base aaa43716) across BOTH axes and BOTH projections — eight runs, no
+how-established: exit 139 anywhere. What was measured instead:
+how-established:
+how-established:   INTERFACE axis (this case's axis; `impl`s left alone)
+how-established:     Alpha first, `ping T == 7`  -> check 0, run 0 `False`,  bin 0 `False`
+how-established:     Alpha first, `ping T`       -> check 0, run 1 E-PANIC
+how-established:                                    `intToString: not an Int`,
+how-established:                                    bin 0 printing a raw address
+how-established:     Beta  first, `ping T == 7`  -> check 1 T-TYPE-MISMATCH, build 1
+how-established:     Beta  first, `ping T`       -> check 0, run 0 `alpha`, bin 0 `alpha`
+how-established:
+how-established:   IMPL axis (interfaces left alone) — for comparison only
+how-established:     Alpha impl first, `ping T == 7` -> check 0, `False`
+how-established:     Beta  impl first, `ping T == 7` -> check 0, `True`
+how-established:
+how-established: So on this binary the REVERSED interface ordering (Beta first) is the
+how-established: WELL-BEHAVED one — `ping` resolves to Alpha, and check, the interpreter
+how-established: and the built binary all agree on `alpha`. The broken ordering is the
+how-established: one the must-fail pin already grades. Both engines agree in every cell;
+how-established: nothing here is a memory-safety observation.
+how-established:
+how-established: The divergence this row pins is therefore an ACCEPT-vs-REJECT flip, not
+how-established: a crash: with the projection in main.mdk, Alpha-first is accepted and
+how-established: prints `False` while Beta-first is rejected at T-TYPE-MISMATCH. That is
+how-established: assertable and is what the row records. If a future reader needs the
+how-established: exit-139 claim, it must be re-derived from scratch — it is not evidence
+how-established: this corpus carries.
+how-established:
+how-established: MECHANISM, corroborated across two fixtures rather than assumed. The
+how-established: reading here matches what compiler/types/typecheck.mdk records for the
+how-established: sibling case — "the obligation goes to the LAST-declared interface" —
+how-established: exactly: Alpha-first makes Beta last, so the occurrence is typed at
+how-established: Beta's `Int`; Beta-first makes Alpha last, so it is typed at Alpha's
+how-established: `String` and `== 7` cannot check. The residual S0 is that in the
+how-established: accepted ordering the DELIVERED body is Alpha's while the program was
+how-established: accepted at Beta's type.
+
+why-the-bool-projection: `main` asserts `ping T == 7` rather than printing `ping T`.
+why-the-bool-projection: The raw form's built binary prints a LIVE HEAP ADDRESS —
+why-the-bool-projection: measured three executions, three different values, per
+why-the-bool-projection: test/must_fail_fixtures/1620-two-ifaces-same-method-binary-
+why-the-bool-projection: wrong-value/raw-probe.mdk — so an exact-match record of it
+why-the-bool-projection: would diverge on every run for a reason with nothing to do
+why-the-bool-projection: with interface order, making this row permanently and
+why-the-bool-projection: meaninglessly red. The Bool projection is stable.
+
+what-is-not-asserted: NOT that Beta is the interface `ping` should resolve to. That is
+what-is-not-asserted: the same open name-resolution question as #1182's. What the
+what-is-not-asserted: must-fail pin asserts, and what remains true here, is weaker and
+what-is-not-asserted: order-independent: A PROGRAM THE COMPILER ACCEPTS MUST DELIVER A
+what-is-not-asserted: VALUE OF THE TYPE IT ACCEPTED IT AT.
+
+why-here-and-not-a-second-must-fail-row: test/diff_compiler_must_fail.sh grades ONE
+why-here-and-not-a-second-must-fail-row: `cmd:` plus one `control:` per fixture, and
+why-here-and-not-a-second-must-fail-row: #1620's control slot is already spent on the
+why-here-and-not-a-second-must-fail-row: single-interface case (which is the right use
+why-here-and-not-a-second-must-fail-row: of it — it distinguishes "the collision is
+why-here-and-not-a-second-must-fail-row: wrong" from "dispatch/emitter/clang broke").
+why-here-and-not-a-second-must-fail-row: So the reversed ordering has no slot there and
+why-here-and-not-a-second-must-fail-row: is UNGRADED anywhere in this tree today. A
+why-here-and-not-a-second-must-fail-row: permutation differential grades every ordering
+why-here-and-not-a-second-must-fail-row: by construction, which is why it belongs here.
+
+issue: #1620

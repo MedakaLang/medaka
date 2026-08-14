@@ -698,7 +698,7 @@ jobs:
             # depends on import arrangement. It reads NO test/bin oracle and needs no
             # clang or emitter — only ./medaka, 9 `check`/`run` invocations over
             # generated tmp fixtures, measured 5.0s wall on the dev box.
-            pattern: "'diff_compiler_eval*' 'diff_compiler_core_ir*' 'diff_compiler_dispatch_shape' 'diff_compiler_prelude_obj' 'diff_compiler_slice_oob' 'diff_compiler_ir_size' 'diff_compiler_origin_agreement' 'diff_compiler_draft_semantic' 'diff_compiler_anf_identity' 'diff_compiler_import_order' 'diff_compiler_test_native' 'diff_compiler_flat_vs_onemodule' 'bootstrap_lex' 'bootstrap_resolve' 'bootstrap_typecheck' 'bootstrap_eval'"
+            pattern: "'diff_compiler_eval*' 'diff_compiler_core_ir*' 'diff_compiler_dispatch_shape' 'diff_compiler_prelude_obj' 'diff_compiler_slice_oob' 'diff_compiler_ir_size' 'diff_compiler_origin_agreement' 'diff_compiler_draft_semantic' 'diff_compiler_anf_identity' 'diff_compiler_import_order' 'diff_compiler_iface_order' 'diff_compiler_test_native' 'diff_compiler_flat_vs_onemodule' 'bootstrap_lex' 'bootstrap_resolve' 'bootstrap_typecheck' 'bootstrap_eval'"
           - name: backend
             # 'build_cmd' (T8): THE end-to-end gate for the SHIPPING `medaka build` CLI —
             # 14 real programs built through the actual CLI, each binary's stdout diffed
