@@ -130,9 +130,8 @@ function mdkHexFloat(ip, fp, pexp) {
 
 const imports = { env: {
   mdk_write_byte: (b) => { acc.push(b & 0xff); },
-  // W8 stderr seam (ePutStr / ePutStrLn): the diff gate compares STDOUT only, so a
-  // stderr-only fixture's stdout matches on both sides; we still surface these bytes
-  // on process.stderr for parity with the native oracle's fd 2.
+  // W8 stderr seam (ePutStr / ePutStrLn): the diff gate checks stdout plus exact
+  // stderr. Surface these bytes on process.stderr for parity with native fd 2.
   mdk_write_err_byte: (b) => { eacc.push(b & 0xff); },
   // W8b floatToString: format the double, cache its bytes, return the byte length;
   // the module then reads each byte via mdk_float_fmt_byte to rebuild a $str.

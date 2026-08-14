@@ -77,6 +77,7 @@ main = match args ()
   "--emit-ref-trap-state"::_ =>
     putStr (emitProgram refTrapStateInput refTrapStateAbortProgram)
   "--reemit-feature-state"::_ => reemitFeatureState ()
+  "--reemit-char-from-code-state"::_ => reemitCharFromCodeState ()
   "--capture-current-binding"::row::_ => captureCurrentBinding row
   _ => driveRuntime emit
 
@@ -466,6 +467,69 @@ featureHashFloatCensusProgram = CProgram
       CClause [featureStateArg] (CApp (CVar "hashFloat" AGlobal) (CLit (LFloat 3.14)))
     ],
     CBind "featureHashFloatIntentionalGap" [CClause [featureStateArg] (CVar "missingFeatureHashFloatCensus" AGlobal)],
+    CBind "main" [CClause [] (CLit (LInt 0))],
+  ]
+  []
+  []
+  []
+
+-- H2b.11: charFromCode owns a range-check runtime and a point-free extern eta
+-- wrapper. P reaches both routes; U retains the neighboring Char/String path
+-- through charToStr without selecting charFromCode. Census repeats P and carries
+-- exactly one attributed gap between P emissions.
+reemitCharFromCodeState : Unit -> <IO> Unit
+reemitCharFromCodeState _ =
+  let p1 = emitProgram charFromCodeStateInput charFromCodeStateProgram
+  let (u, _) = emitProgramRecord charFromCodeStateInput charFromCodeStateControlProgram
+  let censusEvents = emitProgramGaps charFromCodeStateInput charFromCodeStateCensusProgram
+  let _ = printCapture "CHAR_FROM_CODE_P1" p1
+  let _ = printCapture "CHAR_FROM_CODE_RECORD_U" u
+  let _ = printEvents "CHAR_FROM_CODE_CENSUS_P_GAP" censusEvents
+  printCapture
+    "CHAR_FROM_CODE_P2"
+    (emitProgram charFromCodeStateInput charFromCodeStateProgram)
+
+charFromCodeStateInput : WasmEmitInput
+charFromCodeStateInput = makeWasmEmitInput [] [] [] False []
+
+charFromCodeStateProgram : CProgram
+charFromCodeStateProgram = CProgram
+  [
+    CBind "charFromCodeApplied" [
+      CClause [featureStateArg] (CApp (CVar "charFromCode" AGlobal) (CVar "x" (ALocal 0 0)))
+    ],
+    CBind "charFromCodePointFree" [
+      CClause [featureStateArg] (CLet False PWild (CVar "charFromCode" AGlobal) (CLit (LInt 0)))
+    ],
+    CBind "main" [CClause [] (CLit (LInt 0))],
+  ]
+  []
+  []
+  []
+
+charFromCodeStateControlProgram : CProgram
+charFromCodeStateControlProgram = CProgram
+  [
+    CBind "charFromCodeNearestChar" [
+      CClause [featureStateArg] (CApp (CVar "charToStr" AGlobal) (CLit (LChar "A")))
+    ],
+    CBind "charFromCodeNearestString" [CClause [featureStateArg] (CLit (LString "char-neighborhood"))],
+    CBind "main" [CClause [] (CLit (LInt 0))],
+  ]
+  []
+  []
+  []
+
+charFromCodeStateCensusProgram : CProgram
+charFromCodeStateCensusProgram = CProgram
+  [
+    CBind "charFromCodeApplied" [
+      CClause [featureStateArg] (CApp (CVar "charFromCode" AGlobal) (CVar "x" (ALocal 0 0)))
+    ],
+    CBind "charFromCodePointFree" [
+      CClause [featureStateArg] (CLet False PWild (CVar "charFromCode" AGlobal) (CLit (LInt 0)))
+    ],
+    CBind "charFromCodeIntentionalGap" [CClause [featureStateArg] (CVar "missingCharFromCodeCensus" AGlobal)],
     CBind "main" [CClause [] (CLit (LInt 0))],
   ]
   []

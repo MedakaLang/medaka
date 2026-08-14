@@ -1,5 +1,5 @@
 # META
-source_lines=2044
+source_lines=2058
 stages=DESUGAR,MARK
 # SOURCE
 -- Identity + registry substrate — Stage A-2 unit A-2.0
@@ -960,23 +960,37 @@ lookupReg k ((k2, v)::rest) = if regKeyEq k k2 then Some v else lookupReg k rest
 --
 --   (1) "this type has no head type constructor at all" — a bare tyvar, or a
 --       type whose head node is none of the arms the projection classifies
---       (e.g. a `TyConstrained`, whose peeled body is itself headless).  That
+--       (e.g. `Eq a => a`, whose peeled body is itself a bare tyvar).  That
 --       is what `None` meant before this unit and what it means after,
 --       unchanged at every call site.  It is a property of the TYPE.
+--
+--       ⚠️ THIS EXAMPLE USED TO READ "a `TyConstrained`, whose peeled body is
+--       itself headless" — a WRAPPER standing in for a BODY, which is precisely
+--       the over-generalisation #1630 was: `Eq a => Int` peels to a `TyCon` and
+--       is headed.  The body decides, never the wrapper; the example is now a
+--       body that really is headless.
 --
 --       ⚠️ THIS LIST SAID "A FUNCTION TYPE, AN EFFECT ROW" UNTIL #1617/#1618
 --       AND BOTH ENTRIES ARE NOW FALSE ON THE DISPATCH PROJECTIONS.  An arrow
 --       head answers `Some (headKeyOfCon OriginBuiltin funHeadTag)` — the
 --       synthetic `__fun__` bucket (`types/route_key.mdk`) — and an
 --       effect-carrying head is PEELED to its inner head, so `<Stdout> Int`
---       answers `Some Int`.  The projections that moved are `headTyconTy`
+--       answers `Some Int`.  A constraint wrapper is peeled the same way as of
+--       #1630, so `Eq a => Int` answers `Some Int` too.  The projections that
+--       moved are `headTyconTy`
 --       (impl side) and `headTyconMono` (goal side), plus the bare-name
---       residual `headTyconNameTy`.  The two that did NOT move still answer
---       `None` for both, deliberately and for two different reasons:
---       `headTyconNameMono` (its `TFun` arm would merge two populations
---       `uOblIsDecidableNow` keeps apart) and `censusHeadNameTy` (an extra
---       `Some` there is an ACCEPTANCE narrowing, not a routing fix) — each
---       carries its own derivation in `types/typecheck.mdk`.  So "what `None`
+--       residual `headTyconNameTy`.  The two that did NOT move are deliberate,
+--       for two different reasons, and they owe DIFFERENT answers now that the
+--       list has three entries rather than two — say which, do not say "both":
+--         * `headTyconNameMono` still answers `None` for an arrow and an effect
+--           row (its `TFun` arm would merge two populations
+--           `uOblIsDecidableNow` keeps apart).  The CONSTRAINT entry does not
+--           apply to it at all: it walks `Mono`, and `Mono` has no constrained
+--           constructor — constraints have become obligations by then — so
+--           there is no arm it could gain or decline.
+--         * `censusHeadNameTy` still answers `None` for ALL THREE (an extra
+--           `Some` there is an ACCEPTANCE narrowing, not a routing fix).
+--       Each carries its own derivation in `types/typecheck.mdk`.  So "what `None`
 --       means" is now a property of the TYPE **and** of WHICH projection you
 --       asked; do not re-derive one side's answer from the other's.
 --   (2) "there is a head type constructor, but no identity for it" — `mkIdent`

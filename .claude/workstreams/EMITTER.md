@@ -107,7 +107,8 @@ retain only the byte-writer import.
 `emitProgram`/record/census
 mint the context and `Prog` routes these helpers without changing successful WAT order.
 X-W.H2b.10 moves one fact, `hashFloat` runtime demand, into `WasmEmit`; census coverage is
-ownership-only. `diff_wasm_typed.sh` re-derives 24 remaining ambient top-level `Ref`s: output, feature,
+ownership-only. X-W.H2b.11 moves `charFromCode` runtime demand into `WasmEmit`; census coverage is
+ownership-only. `diff_wasm_typed.sh` re-derives 23 remaining ambient top-level `Ref`s: output, feature,
 numeric, and dispatch. H2b/#1407 stay open. Do not add new ambient semantic-input or
 gap-lifecycle siblings.
 
