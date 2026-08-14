@@ -99,10 +99,12 @@ field. Ambient-state migrations require three distinct classes when applicable:
 - renamed ambient authority: roundtrip selected carrier field through a legal
   renamed top-level authority on relevant route.
 
-Generic carrier mutations do not substitute for these claims. For each row,
-record `row_id`, exact head, target file, unique anchor, exact before/after text,
-prepare/check/restore commands, baseline hash, receipt path, and earliest stable
-expected-red identifier. Then:
+Generic carrier mutations do not substitute for these claims. After final
+implementation/harness freeze, create one row per applicable field/class pair.
+Record row ID, semantic field, class, route, claim, exact head, target file,
+unique anchor, exact before/after text and mutation command, prepare/check/
+restore-check commands, baseline hash, caller-owned receipt path, and earliest
+stable expected-red identifier. Then:
 
 1. apply one mutation;
 2. rebuild only the focused probe;

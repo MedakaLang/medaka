@@ -55,8 +55,10 @@ Mutation execution has one conductor-owned serialized lane. Designers and
 reviewers may specify or audit rows; only `compiler-mutation-verifier` mutates
 source. `sprint-verifier` owns ordinary gates and never substitutes legacy or
 generic rows for caller's matrix. Create a durable receipt directory at
-admission; each transaction writes exact transform, expected/observed ID, exit
-state, restore hash, clean porcelain, and process proof there.
+admission; after final freeze, bind one row per applicable field/class pair.
+Capture each transaction's command/output there with exact transform,
+expected/observed ID, exit state, restore hash, clean porcelain, and process
+proof.
 
 One assigned executable turn without a command or live yielded session is a
 stall: interrupt and re-dispatch with exact packet. Long builds use yielded

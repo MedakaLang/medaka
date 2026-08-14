@@ -75,11 +75,12 @@ A selected family must pass all of these gates:
    and diagnostic behavior are fixed by authority or observed controls;
 5. the apparatus is executable and fail-capable before exact assertions are
    authored;
-6. each semantic field has an executable mutation packet: row ID, exact head,
-   target file, unique anchor, exact before/after transform, prepare/check/
-   restore commands, baseline hash, and earliest stable expected-red rule; an
-   ambient-state family additionally specifies reader/runtime, fresh-context
-   U-absence, and legal renamed-authority roundtrip mutants;
+6. each semantic field has a mutation design naming class, route, claim,
+   mutation shape, and earliest stable expected-red rule; bind exact head,
+   target bytes/anchor, commands, hashes, and receipt path only after the final
+   implementation and harness freeze; an ambient-state family additionally
+   designs reader/runtime, fresh-context U-absence, and legal renamed-authority
+   roundtrip mutants;
 7. focused verification, snapshot, selfproc, fixpoint, and deferred-CI
    obligations are explicit;
 8. the residual authority set will be re-derived after the slice.
