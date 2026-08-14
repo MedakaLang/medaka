@@ -1386,3 +1386,60 @@ amendment.
 On merge, the body's plain unbolded `Closes #1617. Closes #1618.` fires — **closure with the landing
 sha**, which is the policy's prescribed form, not a desk close. **#1630, #1634, #1636 stay open** and
 are unaffected.
+
+---
+
+## RUN-P45-036 — ⭐ IMPLEMENTATION PHASE OPENED (2026-08-14). FOUR OWNER RULINGS (Val).
+
+Phase 0 closed at RUN-P45-017; this entry opens the implementation phase against that closed design.
+Asked once, with the Phase 0 picture in hand.
+
+### Ruling A — **scope: 4b + Phase 4 in ONE sprint.** Two IR-moving rewrites ⇒ **two terminal
+close-outs**, per the mitigation RUN-P45-007 reinstated. Phase 4 takes **route α**.
+
+### Ruling B — **S3 (`keyForSite` repoint) is ruled ON EVIDENCE, in-sprint.** Land Q1/S1/S2, re-measure
+the surviving #1182-class residual on the **built binary**, then decide. This adopts P0-G's own
+recommendation (§D.1 BITE S3 `unchecked:`) rather than pre-committing to the largest IR move in the set.
+
+### Ruling C — **#1608: adopt the GATE only.** Build RUN-P45-010's Option B typed multi-module Core-IR
+gate this sprint (it also closes the fourth-engine blindness); the FIX is filed as a separate unit with
+a named owner. Instrument now, fix later — the issue has been "unowned" for three consecutive sprints
+and an instrument is what stops that recurring silently.
+
+### Ruling D — **#1630 rides as bite 0**, landed FIRST and ALONE, on its own PR. It is the arm set's
+third member, same organ as #1629, and a Phase 4 precondition under the same reasoning the arm set was.
+⚠️ It is landed as its own bite precisely because #1629 was right not to extend its set mid-bite.
+
+**Landing order adopted:**
+```
+#1630  →  Q1  →  S1  →  S2  →  X  →  ⟦close-out 1⟧  →  Phase 4  →  ⟦close-out 2⟧
+       →  #1608 gate  →  ⟨rule S3 on evidence⟩
+```
+Phase 4 is **not** ordered against Q1 on either route (P0-G §F, verified negative); its position above
+is a serialization choice under *serialize writers*, not a dependency.
+
+**Plan of record for this phase:** `/root/.claude/plans/kind-humming-wirth.md` (owner-approved).
+
+## RUN-P45-037 — #1182 REOPENED (third state change in one day), with a mechanical argument
+
+Closed 03:52Z (no commit id) → reopened 06:20Z by ruling → **closed again 18:50Z, again with no commit
+id, no comment, and no PR referencing it** → reopened here. Derived from the issue timeline.
+
+What is new since the first reopen is that a **landed gate now contradicts the closure**:
+`test/IFACE-ORDER-LEDGER.txt` (PR #1631) carries row `1182-unimplemented-iface-obligation-iface-order`
+under the heading `── #1182 (OPEN): …`, and **`test/must_fail_census.sh` HALF 4 reds when a ledgered
+issue is CLOSED**. So the desk close does not merely mis-state the tracker — it breaks a nightly gate.
+The pin `test/must_fail_fixtures/1182-two-ifaces-same-method-name-order-decides/` is also still present
+and was recorded "100 reproduce, 0 drained" at the Phase 3′ merge.
+
+⇒ **A close-out desk sweep must check the PIN, not the sprint's narrative.** Twice now on this issue.
+Comment posted with readback verified: `issuecomment-5298050551`.
+
+## RUN-P45-038 — W1 dispatched: bite 0 (#1630), isolated worktree
+
+Briefed as a transformation over named sites (`headTyNode` / `headTyconTy`), with #1629's diff as the
+template, and three standing constraints stated explicitly: **do NOT symmetrize the arms with
+`eval.mdk`'s `headTycon`** (it already strips `TyConstrained`/`TyEffect`; the two sides need different
+arm counts), **count the readers of the changed projection two levels out** (#1629 narrowed acceptance
+through three of them at 11/12 green), and the **nearest-miss** test. Refusal licensed in the brief in
+the terms that earned their place on the sibling bite.
