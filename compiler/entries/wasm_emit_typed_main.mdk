@@ -414,11 +414,15 @@ featureFloatDivProgram = CProgram
 featureStateControlProgram : CProgram
 featureStateControlProgram = CProgram
   [
+    CBind "featurePlainRecord" [CClause [featureStateArg] featureStateRecord],
+    CBind "featurePlainAccess" [
+      CClause [featureStateArg] (CFieldAccess featureStateRecord "left" "FeatureRecord")
+    ],
     CBind "featureControl" [CClause [featureStateArg] (CLit (LInt 29))],
     CBind "main" [CClause [] (CLit (LInt 0))],
   ]
-  []
-  []
+  featureStateCtorArities
+  featureStateCtorTypes
   []
 
 featureStateCensusProgram : CProgram

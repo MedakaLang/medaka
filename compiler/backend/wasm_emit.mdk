@@ -327,6 +327,7 @@ data WasmEmit =
       functionReferenceNames : Ref (OrdMap Unit),
       trapImportNeeded : Ref Bool,
       useDivGuard : Ref Bool,
+      useRecUpdate : Ref Bool,
       emittedDefaultNames : Ref (OrdMap Unit),
       defaultDefinitions : Ref (List (List String)),
     }
@@ -348,6 +349,7 @@ freshWasmEmit mode = WasmEmit {
   functionReferenceNames = Ref omEmpty,
   trapImportNeeded = Ref False,
   useDivGuard = Ref False,
+  useRecUpdate = Ref False,
   emittedDefaultNames = Ref omEmpty,
   defaultDefinitions = Ref [],
 }
@@ -797,7 +799,8 @@ useArrayRef = Ref False
 useRefBoxRef : Ref Bool
 useRefBoxRef = Ref False
 
--- #1513 follow-up: does the program contain a `CRecordUpdate`/`CVariantUpdate`?
+-- `WasmEmit.useRecUpdate`: does this emission contain a
+-- `CRecordUpdate`/`CVariantUpdate`?
 -- Gates the `$__rub<d>` scratch local that `emitUpdateCopy` stashes the update base
 -- in — the ONLY consumer of that local, and reached from exactly those two nodes.
 --
@@ -820,9 +823,6 @@ useRefBoxRef = Ref False
 -- ever reached the failure is again a wasm-tools validation error, never a wrong
 -- answer. A record LAYOUT question must rest on the declaration; a scratch-local
 -- declaration is not a layout question.
-useRecUpdateRef : Ref Bool
-useRecUpdateRef = Ref False
-
 -- ── W8 extern-use state ──────────────────────────────────────────────────────
 -- Which W8 LEAF/RNG runtime groups the program reaches (gates their preamble
 -- emission, peer to useStrRef).  useStrLeafRef: any pure-WAT string leaf op
@@ -1063,7 +1063,6 @@ emitProgramWith emit input (CProgram groups ctorArs ctorTypes impls) =
   let _ = setRef useListRef False
   let _ = setRef useArrayRef False
   let _ = setRef useRefBoxRef False
-  let _ = setRef useRecUpdateRef False
   let _ = setRef useStrLeafRef False
   let _ = setRef useRngRef False
   let _ = setRef useHashRef False
@@ -1124,7 +1123,6 @@ emitProgramGaps input (CProgram groups ctorArs ctorTypes impls) =
   let _ = setRef useListRef False
   let _ = setRef useArrayRef False
   let _ = setRef useRefBoxRef False
-  let _ = setRef useRecUpdateRef False
   let _ = setRef useStrLeafRef False
   let _ = setRef useRngRef False
   let _ = setRef useHashRef False
@@ -1572,10 +1570,10 @@ scanExprW7 emit (CRecord _ fields) =
   forEachU (f => scanExprW7 emit (cFieldExpr f)) fields
 scanExprW7 emit (CFieldAccess ex _ _) = scanExprW7 emit ex
 scanExprW7 emit (CRecordUpdate _ base fields) =
-  let _ = setRef useRecUpdateRef True
+  let _ = setRef emit.useRecUpdate True
   let _ = scanExprW7 emit base in forEachU (f => scanExprW7 emit (cFieldExpr f)) fields
 scanExprW7 emit (CVariantUpdate _ base fields) =
-  let _ = setRef useRecUpdateRef True
+  let _ = setRef emit.useRecUpdate True
   let _ = scanExprW7 emit base in forEachU (f => scanExprW7 emit (cFieldExpr f)) fields
 scanExprW7 emit (CApp f a) =
   let (hd, args) = flattenApp (CApp f a) []
@@ -8547,7 +8545,7 @@ w7LocalsAtDepth emit d =
     "(local $__aexi" ++ sfx ++ " i32)", "(local $__aexn" ++ sfx ++ " i32)", "(local $__aexarr" ++ sfx ++ " (ref null $arr))", "(local $__aexlst" ++ sfx ++ " (ref eq))", "(local $__aexf" ++ sfx ++ " (ref eq))", "(local $__aexv" ++ sfx ++ " (ref eq))",
     -- stage-B: i64 bit accumulator for floatToBytes64/bytesToFloat64 reinterpret.
     "(local $__aexbits" ++ sfx ++ " i64)"] else []
-  let ru = if useRecUpdateRef.value then ["(local $__rub" ++ sfx ++ " (ref eq))"] else []
+  let ru = if emit.useRecUpdate.value then ["(local $__rub" ++ sfx ++ " (ref eq))"] else []
   -- B5: the i64 divisor-guard scratch for a concrete-Int `/`/`%` at this depth.
   let dv = if emit.useDivGuard.value then ["(local $__divr" ++ sfx ++ " i64)"] else []
   rl ++ ra ++ ru ++ dv

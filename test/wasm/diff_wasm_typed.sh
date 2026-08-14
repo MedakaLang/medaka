@@ -216,6 +216,19 @@ if grep -E '^_?useDivGuardRef[[:space:]]*[:=]|setRef (_?useDivGuardRef)' "$WASM_
   echo "FAIL H2B9-DIV-AUTHORITY: retired ambient divisor authority remains"
   exit 1
 fi
+if grep -E '^_?useRecUpdateRef[[:space:]]*[:=]|setRef (_?useRecUpdateRef)' "$WASM_SRC" >/dev/null; then
+  echo "FAIL H2B9-RECUPDATE-AUTHORITY: retired ambient record-update authority remains"
+  exit 1
+fi
+for required in \
+  'useRecUpdate : Ref Bool' \
+  'useRecUpdate = Ref' \
+  'let ru = if emit.useRecUpdate.value then ["(local $__rub" ++ sfx ++ " (ref eq))"] else []'; do
+  grep -F -- "$required" "$WASM_SRC" >/dev/null || {
+    echo "FAIL H2B9-RECUPDATE-AUTHORITY: missing $required"
+    exit 1
+  }
+done
 for required in \
   'useDivGuard : Ref Bool' \
   'useDivGuard = Ref' \
@@ -250,8 +263,17 @@ done
   echo "FAIL H2B9-DIV-AUTHORITY: expected nine ref-local declaration callers"
   exit 1
 }
+[ "$(grep -F 'setRef emit.useRecUpdate True' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 2 ] || {
+  echo "FAIL H2B9-RECUPDATE-AUTHORITY: expected two update scan writers"
+  exit 1
+}
+grep -F 'scanExprW7 emit (CFieldAccess ex _ _) = scanExprW7 emit ex' "$WASM_SRC" >/dev/null &&
+  ! grep -A 1 -F 'scanExprW7 emit (CRecord _ fields) =' "$WASM_SRC" | grep -F 'useRecUpdate' >/dev/null || {
+  echo "FAIL H2B9-RECUPDATE-NEAREST-MISS: plain record construction/access changed authority"
+  exit 1
+}
 EXPECTED_MODULE_REFS="$(printf '%s\n' \
-  useStrRef useListRef useArrayRef useRefBoxRef useRecUpdateRef \
+  useStrRef useListRef useArrayRef useRefBoxRef \
   useStrLeafRef useRngRef useHashRef useEPutRef \
   useFloatRef useFloatHashRef useMathRef useFloatRngRef useFloatStrRef \
   useStrSearchRef useValueCmpRef useValueArithRef numPolyLocalsRef useStrCodecRef \
@@ -771,8 +793,18 @@ for feature_p in feature-p1.wat feature-p2.wat; do
     exit 1
   }
 done
+for feature_p in feature-p1.wat feature-p2.wat; do
+  grep -F '(local $__rub0 (ref eq))' "$INPUT_WORK/$feature_p" >/dev/null || {
+    echo "FAIL H2B9-RECUPDATE-LOCAL: missing record-update local in $feature_p"
+    exit 1
+  }
+done
 if grep -F '(local $__divr0 i64)' "$INPUT_WORK/feature-u.wat" >/dev/null; then
   echo "FAIL H2B9-DIV-U-ABSENCE: inert control declared ref divisor local"
+  exit 1
+fi
+if grep -F '(local $__rub0 (ref eq))' "$INPUT_WORK/feature-u.wat" >/dev/null; then
+  echo "FAIL H2B9-RECUPDATE-U-ABSENCE: inert control declared record-update local"
   exit 1
 fi
 grep -F '(local $__divr0 i64)' "$INPUT_WORK/feature-float-div.wat" >/dev/null &&
