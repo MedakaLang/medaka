@@ -1,0 +1,41 @@
+-- #1620 — two interfaces in ONE file declare the SAME method name `ping` at
+-- DIFFERENT return types, both implemented on one concrete type `T`.
+--
+-- `check` accepts the program at exit 0, having resolved `ping T` to Beta's
+-- method (return type Int — raw-probe.mdk shows this directly: replacing the
+-- comparand with a String makes `check` report `Type mismatch: Int vs String`).
+-- Both engines then DELIVER Alpha's body: the built binary exits 0 printing the
+-- raw machine word of the string "alpha" where an Int belongs, and the
+-- interpreter E-PANICs with `intToString: not an Int`.
+--
+-- HAND-DERIVED EXPECTATION. Which interface the occurrence of `ping` belongs to
+-- is a name-resolution question and the answer is genuinely in dispute (cf.
+-- #1182), so this file does NOT assert that Beta is the right choice. What is
+-- assertable without settling that: A PROGRAM THE COMPILER ACCEPTS MUST DELIVER A
+-- VALUE OF THE TYPE IT ACCEPTED IT AT. It was accepted at `ping T : Int` with
+-- Beta's body being 7, so `ping T == 7` must be True. Every fix direction drains
+-- this row:
+--   * resolve consistently to Beta -> this prints True;
+--   * resolve to Alpha            -> `ping T : String` and this file no longer
+--                                    type-checks, so `medaka build` exits 1;
+--   * reject the collision        -> likewise, `medaka build` exits 1.
+--
+-- ⚠️ WHY THE PROJECTION AND NOT THE RAW VALUE. The raw form's binary prints a
+-- LIVE HEAP ADDRESS — measured three executions, three different values — so an
+-- exact-match pin on it would red on the very next run for no reason. See
+-- raw-probe.mdk, which is not graded.
+interface Alpha a where
+  ping : a -> String
+
+interface Beta a where
+  ping : a -> Int
+
+data T = T
+
+impl Alpha T where
+  ping _ = "alpha"
+
+impl Beta T where
+  ping _ = 7
+
+main = println (ping T == 7)

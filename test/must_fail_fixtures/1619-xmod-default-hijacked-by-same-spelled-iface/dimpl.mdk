@@ -1,0 +1,12 @@
+-- #1619, module 2 of 4: a METHOD-LESS impl of di's `Tag` on `Box`, which
+-- therefore inherits di's default body (7). `dtag` is the call site that must
+-- reach that default.
+import di.{Tag(..), tag}
+
+public export data Box = Box
+
+impl Tag Box where
+
+
+export dtag : Box -> Int
+dtag b = tag b

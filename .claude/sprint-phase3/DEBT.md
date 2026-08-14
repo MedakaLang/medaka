@@ -563,3 +563,99 @@ unchecked:    (a) **The pre-bite cells are RELAYED, not re-measured by me.** #15
               (e) **Every new row was proven FAIL-CAPABLE by perturbation, then reverted
               byte-exactly** — see the report; a fixture that has only ever passed has not been shown
               to pin anything.
+
+### PIN ROUND (P-1) — the four in-passing findings get self-draining fixtures (#1617–#1620)
+
+sites:        `test/must_fail_fixtures/1617-fn-typed-impl-head-none-bucket/` (NEW: `main.mdk`,
+              `control.mdk`, `permutation.mdk`, `claim.txt`) ·
+              `test/must_fail_fixtures/1618-effect-carrying-impl-head-cannot-build/` (NEW:
+              `main.mdk`, `control.mdk`, `claim.txt`) ·
+              `test/must_fail_fixtures/1619-xmod-default-hijacked-by-same-spelled-iface/` (NEW:
+              4 modules — `main.mdk`, `di.mdk`, `dimpl.mdk`, `other.mdk` — plus `control.mdk`,
+              `claim.txt`) ·
+              `test/must_fail_fixtures/1620-two-ifaces-same-method-binary-wrong-value/` (NEW:
+              `main.mdk`, `control.mdk`, `raw-probe.mdk`, `claim.txt`).
+              **NO compiler, stdlib or gate source was touched** — the must-fail member set is
+              `ls test/must_fail_fixtures/`, so adding a fixture is adding one directory and
+              `test/diff_compiler_must_fail.sh` needed no edit. Four `claim.txt`s were perturbed
+              during drain-capability probing and restored byte-exactly (`git status` shows only
+              the four new untracked directories).
+transform:    Four pins, each grading the channel that actually shows its defect: #1617 `run`
+              (S0 wrong value at exit 0; its `build` E-PANIC arm is recorded, not pinned, because
+              one `headTyconTy` repair closes both and a second pin would drain without its
+              sibling) · #1618 `build` + `stdout-line` (the ONLY verb that observes it — `check`
+              is clean and `run` is CORRECT) · #1619 `run` (all channels agree; the cheaper of
+              two non-independent engines) · #1620 `build-run` (the S0 is the BUILT BINARY
+              exiting 0 with a wrong value; `run`'s raw arm is exit-1-with-empty-stdout, which
+              this suite forbids as an assertion). Three of the four grade a DETERMINISTIC
+              PROJECTION — the program compares against the hand-derived correct answer and
+              prints the Bool — for two distinct reasons, spelled out per row: #1620 because the
+              raw channel is a **live heap address** (3 executions, 3 values, measured), #1617
+              and #1619 because the raw wrong value is order- / graph-dependent and a literal pin
+              would FALSE-DRAIN on a wrong→differently-wrong change.
+could move:   **NOTHING in the compiler.** No `compiler/`, `stdlib/`, `runtime/` or `test/*.sh`
+              byte changed; the binary was neither rebuilt nor needed to be, and every
+              measurement was taken with `MEDAKA_STRICT=1` clean (no staleness warning) on the
+              tree at `ced9e7f7`. What moves is one gate's fixture count:
+              `diff_compiler_must_fail.sh` 96 → **100 fixtures, 100 still reproduce, 0 DRAINED,
+              0 control-broke, 0 malformed** (exit 0), and `must_fail_census.sh --all` no longer
+              lists 1617/1618/1619/1620 as unpinned. Consumers of the corpus were DERIVED, not
+              assumed (`grep -rln 'must_fail_fixtures'` over `.sh`/`.yml`/`.py`/`.mdk`): exactly
+              **two** files READ the directory — `diff_compiler_must_fail.sh` and
+              `must_fail_census.sh`; every other hit is prose in a comment. `preflight` maps this
+              path to four gates and **all four were run green**: `must_fail` (0),
+              `must_fail_census` (0), `dict_semantics` (184/184), `shadow_semantics` (59/59).
+nearest miss: **#1620's mis-selecting SITE is still unknown** — the pin asserts the CONSEQUENCE
+              (a program accepted at `ping T : Int` delivers Alpha's String) and deliberately does
+              NOT assert that Beta is the right resolution, because that name-resolution question
+              is in dispute (cf. #1182). Every fix direction drains the row anyway, which is why
+              it could be pinned without settling it. #1617's `build` E-PANIC arm and #1620's
+              `run` E-PANIC arm are MEASURED and recorded in their claims but **ungraded**, so a
+              change that repaired only one of those arms would leave its row still reporting
+              REPRO. #1619 pins the explicit-impl-hijacks-a-default arm ONLY: the issue's
+              both-method-less variant (`(200, 200)`) is flagged there as possibly #1265's and is
+              not pinned by anything. And the corpus cannot express a REORDERING differential in
+              one row (`MUST-FAIL-NOT-PINNABLE.txt`'s #1183 argument), so #1617's permutation
+              half ships as an UNGRADED probe file, as #1182 and #1265 already do.
+engines:      **None moved — no engine sees a different byte.** The rows OBSERVE engines rather
+              than change them: #1617/#1619 grade `eval`; #1618 grades the emitter's failure;
+              #1620 grades LLVM + clang + the executed binary, with its control on the same verb.
+              **wasm and `core_ir_eval` are UNPROBED on all four** — this harness has no verb that
+              reaches either, so the third and fourth arms are owed for these shapes exactly as
+              they are for the rest of the corpus. Two rows (#1618, #1620) put this fixture set
+              into the `build`/`build-run` clang guard; `soundness`, where the suite runs, has
+              clang, and the guard fails LOUDLY (exit 2) rather than skipping.
+unchecked:    (a) **BLESSED ZERO GOLDENS.** Every expected value was hand-derived from the
+              language semantics (DICT §8 I4 + §5 for #1619; the impl bodies and the accepted
+              type for the rest) BEFORE any binary was run; no `CAPTURE=1` anywhere. `eval` is a
+              known-wrong oracle on dispatch shapes and was treated as one.
+              (b) **Every pin was proven able to DRAIN, by perturbing its expectation to look
+              fixed and then reverting byte-exactly** (`diff` clean, re-run green): #1617 and
+              #1620 (`stdout: False` → `True`) drained TOGETHER in one run, each naming its own
+              issue, gate exit 1; #1618 (`stdout-line`'s `'__none__'` → `'Int'`) drained with
+              `stdout-line: expected this EXACT line in stdout, and it is absent`; #1619
+              (`stdout: False` → `True`) drained, exercising the multi-module loader path. Final
+              state re-verified 100/100 REPRO, exit 0.
+              (c) **Every control was proven FAIL-CAPABLE the same way** — comparand mutated to a
+              value the program cannot produce, E-PANIC observed at exit 1, then reverted:
+              #1617 `(5, 99)`, #1619 `77`, #1620 `"nope"` (through the built binary). #1618's
+              control is a `build` at exit 0 and needs no assertion — a broken toolchain fails it
+              by construction.
+              (d) **Every PROJECTION was proven able to report `True`** on this binary, so none of
+              them is a probe that can only ever print one value: #1617 via the data-typed shape,
+              #1619 via the graph with `other` unimported, #1620 via the Beta-only program. Each
+              is named in its claim.
+              (e) **Exit codes were read from file redirects, never a pipe**, throughout — the
+              trap this suite's own header records three people hitting.
+              (f) **A BRIEF CLAIM WAS CONTRADICTED BY MEASUREMENT, and is reported rather than
+              silently worked around:** the pin brief states that "#1620's and #1617's observable
+              channels are NOT byte-stable". For #1620 that is exactly right (the heap address).
+              For **#1617 it is not** — `run` prints `(5, 5)` identically on three consecutive
+              executions. #1617 is projected anyway, for the *false-drain* reason above, not for
+              instability; its claim says so rather than repeating the brief.
+              (g) **Not run:** the full gate suite, the fixpoint, the snapshot corpus, perf, the
+              wasm gates. The diff contains no compiler source and no `.sh`, so there is no
+              behaviour for them to grade; `test/must_fail_fixtures` is in no snapshot family
+              (the four preflight-derived gates are the whole mapped set, and all four were run).
+              The pre-commit hook still runs its snapshot check for any staged `.mdk`, so the
+              committing agent will want `PRECOMMIT_SNAPSHOT_DEFER=1`.

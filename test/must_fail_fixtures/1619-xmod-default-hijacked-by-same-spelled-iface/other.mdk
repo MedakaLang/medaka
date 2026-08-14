@@ -1,0 +1,14 @@
+-- #1619, module 3 of 4: a DIFFERENT module declaring its OWN, SAME-SPELLED
+-- interface `Tag`, with an EXPLICIT impl on the same type. It never imports di,
+-- so by DICT §8 I4 (a class is `(module, name)`) this `Tag` and di's `Tag` are
+-- two different classes that merely share a spelling.
+import dimpl.{Box(..)}
+
+export interface Tag x where
+  tag : x -> Int
+
+impl Tag Box where
+  tag _ = 100
+
+export otag : Box -> Int
+otag b = tag b

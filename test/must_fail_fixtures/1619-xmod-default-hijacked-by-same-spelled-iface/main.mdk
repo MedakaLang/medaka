@@ -1,0 +1,24 @@
+-- #1619, module 4 of 4 — the entry. A cross-module interface DEFAULT is silently
+-- hijacked by a same-spelled interface at the same head: di's default is never
+-- reached, at exit 0, with `check` clean and run/build/binary all agreeing.
+--
+-- HAND-DERIVED CORRECT ANSWER, from DICT-SEMANTICS §8 I4 (a class is
+-- `(module, name)`, so di::Tag and other::Tag are two distinct classes) plus §5
+-- (an interface default applies only when the SELECTED instance omits the
+-- method):
+--   dtag Box -> dimpl's method-less `impl di::Tag Box` -> di's default body -> 7
+--   otag Box -> other's explicit `impl other::Tag Box` -> its own body      -> 100
+-- Correct is (7, 100), so this program must print True.
+--
+-- ⚠️ WHY THE PROJECTION AND NOT THE RAW TUPLE. The raw form prints `(100, 100)`
+-- here, and the issue also measured a neighbouring variant printing `(200, 200)`:
+-- the collapse is last-write-wins, so WHICH wrong value survives depends on what
+-- else is in the graph. A `stdout: (100, 100)` pin would drain — reading as
+-- "fixed" — on any change that merely moved this to a different wrong pair, e.g.
+-- `(7, 7)` (the other collapse direction), and a reader would close a live S0 on
+-- the strength of it. Comparing against the hand-derived answer collapses every
+-- wrong pair to False and only the correct one to True.
+import dimpl.{Box(..), dtag}
+import other.{otag}
+
+main = println ((dtag Box, otag Box) == (7, 100))

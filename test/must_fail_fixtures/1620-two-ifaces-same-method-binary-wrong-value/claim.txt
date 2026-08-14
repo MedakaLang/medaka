@@ -1,0 +1,106 @@
+issue: 1620
+what: Two interfaces in ONE file declare the SAME method name `ping` at DIFFERENT
+what: return types, both implemented on one concrete type `T`. A THREE-WAY
+what: divergence in one program: `check` ACCEPTS it at exit 0, `run` fails LOUD,
+what: and the BUILT BINARY EXITS 0 PRINTING A RAW MACHINE WORD where the accepted
+what: type says an Int belongs. The build arm is the S0; the run arm is only S1.
+what: The emitted symbols are correct and DISTINCT
+what: (`@mdk_impl_Alpha_T__ping`, `@mdk_impl_Beta_T__ping`), so the wrongness is
+what: DOWNSTREAM of naming: the call site reaches the wrong one.
+what: HAND-DERIVED EXPECTATION. Which interface the occurrence of `ping` belongs
+what: to is a NAME-RESOLUTION question whose answer is genuinely in dispute (cf.
+what: #1182), so THIS ROW DOES NOT ASSERT THAT Beta IS THE RIGHT CHOICE. What is
+what: assertable without settling that: A PROGRAM THE COMPILER ACCEPTS MUST
+what: DELIVER A VALUE OF THE TYPE IT ACCEPTED IT AT. It is accepted at
+what: `ping T : Int` -- shown directly, not assumed: replacing the comparand with
+what: a String makes `check` say `Type mismatch: Int vs String`, i.e. the front
+what: end resolved the occurrence to Beta, whose body is 7. So `ping T == 7` must
+what: be True, and main.mdk must print True.
+what: Measured FIRST-HAND on this branch's binary, 2026-08-14:
+what:   main.mdk      `check --json` -> {"diagnostics":[]}, exit 0 (silent)
+what:   main.mdk      `build`        -> exit 0; binary prints False, exit 0  <- PINNED
+what:   main.mdk      `run`          -> False, exit 0 (eval agrees with native)
+what:   raw-probe.mdk `run`          -> exit 1, `runtime error [E-PANIC]:
+what:                                   intToString: not an Int`
+what:   raw-probe.mdk binary         -> exit 0, printing 47185148492088 /
+what:                                   47242695156024 / 47268389349688 on three
+what:                                   consecutive executions (a live heap
+what:                                   address -- NOT byte-stable)
+what:   control.mdk   `build` + exec -> control-ok:alpha, exit 0
+what: ⚠️ WHAT IS NOT DERIVED (recorded as owed, per the issue): the MIS-SELECTING
+what: SITE is unknown. The measurements establish that it is downstream of naming
+what: and is not order-dependent -- which is what excludes #1265 and #1182 -- but
+what: nobody has identified where the wrong row is chosen.
+cmd: build-run main.mdk
+exit: 0
+stdout: False
+control: build-run control.mdk
+why-verb: `build-run` because the S0 is the BUILT BINARY silently exiting 0 with a
+why-verb: wrong value; that verb grades the EXECUTED binary's exit and stdout,
+why-verb: which is exactly that channel, and it also proves `medaka build` itself
+why-verb: succeeded (a build failure under this verb is a hard MALFORMED 126, not
+why-verb: a gradeable observation).
+why-verb: `run` is NOT chosen even though the projected form prints the same
+why-verb: False at exit 0: `run` and `build` share the whole front end, so they
+why-verb: are not two independent observations, and of the two arms the issue
+why-verb: grades the binary as the S0 and the interpreter as S1. The raw form's
+why-verb: `run` arm -- exit 1 with EMPTY stdout -- is unpinnable on principle: an
+why-verb: "it crashed" assertion matches any unrelated failure, and this
+why-verb: harness's `run` verb never reads stderr, so the E-PANIC text itself is
+why-verb: not mechanically checkable here.
+why-verb: `check` cannot be the verb: check is clean and exit 0 -- the silence is
+why-verb: precisely what makes the binary's wrong value an S0.
+why-stdout: ⚠️ THE PIN IS A PROJECTION BECAUSE THE RAW CHANNEL IS NOT BYTE-STABLE.
+why-stdout: raw-probe.mdk's binary prints a LIVE HEAP ADDRESS -- three executions,
+why-stdout: three different values, measured above -- so an exact-match pin on it
+why-stdout: would red on the very next run for no reason at all, which is a
+why-stdout: false drain manufactured by the fixture itself. Comparing against the
+why-stdout: hand-derived answer collapses the channel to a Bool that is stable by
+why-stdout: construction, and keeps the accepted-type-vs-delivered-value
+why-stdout: divergence as the observable.
+why-stdout: THE PROJECTION IS PROVEN ABLE TO REPORT True ON THIS BINARY (a probe
+why-stdout: that can only ever print one value pins nothing): the same program
+why-stdout: with interface Alpha and its impl deleted -- leaving Beta alone --
+why-stdout: builds and its binary prints True at exit 0. Measured 2026-08-14.
+why-stdout: EVERY FIX DIRECTION DRAINS THIS ROW, which is why the disputed
+why-stdout: resolution question does not need settling first:
+why-stdout:   * resolve consistently to Beta -> the binary prints True -> stdout
+why-stdout:     moves -> DRAINED;
+why-stdout:   * resolve to Alpha, or reject the collision with a diagnostic ->
+why-stdout:     `ping T == 7` no longer type-checks, `medaka build` exits 1, and
+why-stdout:     the build-run verb returns 126 -> the exact exit assertion fails
+why-stdout:     -> DRAINED. ⚠️ In that second case the failure text reads
+why-stdout:     "build-run MALFORMED: 'medaka build' itself failed" -- that is
+why-stdout:     this verb refusing to grade a binary that does not exist, NOT a
+why-stdout:     broken fixture. Read the build log it prints: if it is a type
+why-stdout:     error or an ambiguity diagnostic on this file, #1620 was fixed by
+why-stdout:     rejection; close it and delete this fixture.
+why-control: control.mdk deletes the SECOND interface and its impl, and nothing
+why-control: else -- the one flipped dimension is whether a second interface
+why-control: declares the same method name. It is graded with the SAME
+why-control: `build-run` verb, so it exercises the entire path this pin blames
+why-control: (front end, emitter, clang, executed binary); a red here means that
+why-control: path broke in general, and the harness says CONTROL-BROKE rather
+why-control: than DRAINED.
+why-control: Per #1144 a control is graded on its EXIT CODE ONLY, so it ASSERTS
+why-control: "alpha" and panics otherwise rather than printing it. PROVEN ABLE TO
+why-control: FAIL ON THIS TREE: mutating the comparand to "nope" makes the built
+why-control: binary exit 1 with `runtime error [E-PANIC]: control regressed: ...`
+why-control: (measured 2026-08-14, then reverted).
+why-note: A THIRD file ships here, raw-probe.mdk, NOT run by this gate. It carries
+why-note: the two channels the projection gives up -- the interpreter's E-PANIC
+why-note: and the binary's leaked pointer -- and the measurement that rules the
+why-note: raw value out as a pin. It names the commands that re-derive both.
+why-note: This fixture uses the `build-run` verb and therefore needs clang; the
+why-note: gate's clang guard fails LOUDLY (exit 2) rather than skipping, which is
+why-note: intended -- `soundness`, where this suite runs, has clang.
+why-note: NOT #1265 -- that is scoped to DEFAULTS, where
+why-note: `mdk_default_<method>_<tag>` genuinely lacks an interface component.
+why-note: Here both impls define `ping` explicitly and the emitted symbols are
+why-note: distinct.
+why-note: NOT #1182 -- that reproduces by IMPL-BLOCK ORDER and is a candidate-set
+why-note: deformation ranked by specificity. This reproduces UNCONDITIONALLY; no
+why-note: permutation is needed, and the two impls here are at the same head of
+why-note: two DIFFERENT interfaces with DIFFERENT return types, which is what
+why-note: makes the delivered value observably inconsistent with the accepted
+why-note: type rather than merely one of two plausible answers.
