@@ -74,20 +74,31 @@ included. This is `AGENTS.md`'s new-constructor-swallowed-by-a-wildcard trap one
 
 ## F-3 — same-file method-name collision across two interfaces: build arm silently wrong
 
-**Status:** ⚠️ **NOT yet reproduced by the orchestrator.** Reported by a Phase 0 agent with its
-probe under `/var/tmp/p3/p07/`. **Do not file until re-run first-hand** (and copy the repro into
-`repro/` when doing so).
+**Status:** ✅ **REPRODUCED by the orchestrator**, re-authored independently (not copied from the
+reporting agent's probe) with my own control. Sources: `repro/f3_method_collide/`.
+**Action:** FILE NEW — the dedup discriminator is now measured, see below.
 
-Two interfaces in **one file** declaring the same method name at different return types
-(`Alpha.ping : a -> String`, `Beta.ping : a -> Int`), both implemented on one type:
-`check` **exit 0** · `run` **exit 1** E-PANIC (`intToString: not an Int` — eval narrowed to Beta) ·
-`build` **exit 0**, emitting *correct* distinct symbols (`@mdk_impl_Alpha_T__ping`,
-`@mdk_impl_Beta_T__ping`) with the call site reaching Alpha's · **built binary exit 0 printing a raw
-word** where a string belongs. Control with `Beta` deleted: clean on every arm.
+```
+collide: check=0 run=1 build=0 exec=0 [47457582201144]
+         run: runtime error [E-PANIC]: intToString: not an Int
+         symbols: @mdk_impl_Alpha_T__ping  @mdk_impl_Beta_T__ping   ← two, DISTINCT
+control: check=0 run=0 build=0 exec=0 [alpha]
+         symbols: @mdk_impl_T_ping
+```
 
-**Dedup note:** adjacent to but not obviously **#1265**, which is scoped to *defaults*
-(`mdk_default_<method>_<tag>` has no interface component). Here both impls are concrete **and the
-symbols are distinct**, so the wrongness is downstream of naming. Needs its own triage.
+**A THREE-WAY divergence in one program:** `check` accepts, `run` fails **loud** (E-PANIC), and the
+**built binary exits 0 printing a raw word** where a `String` belongs. The build arm is the S0; the
+run arm is merely S1.
+
+🚨 **The measured symbols are what settle the dedup.** They are **correct and distinct**, so the
+wrongness is **downstream of naming** — which separates this from **#1265** (scoped to *defaults*,
+where `mdk_default_<method>_<tag>` has no interface component) and from **#1182** (order-dependent;
+this reproduces **unconditionally**, with no permutation needed). The control isolates the trigger to
+the second interface.
+
+**The program:** two interfaces in one file declaring the same method name at different return types
+(`Alpha.ping : a -> String`, `Beta.ping : a -> Int`), both implemented on one concrete type. The
+control deletes the second interface and its impl, and nothing else.
 
 ---
 

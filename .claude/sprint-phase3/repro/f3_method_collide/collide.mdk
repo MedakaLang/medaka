@@ -1,0 +1,28 @@
+-- F-3, re-authored by the orchestrator rather than copied from the reporting
+-- agent's probe, so the reproduction is independent.
+--
+-- Two interfaces in ONE file declaring the SAME method name at DIFFERENT return
+-- types, both implemented on one concrete type. Reported behaviour to check:
+--   check  exit 0
+--   run    exit 1, E-PANIC (eval narrowed to the Int-returning interface)
+--   build  exit 0, emitting two DISTINCT impl symbols
+--   binary exit 0 printing a raw word where a string belongs
+--
+-- If that holds, the emitted symbols are correct and the wrongness is downstream
+-- of naming — which is what distinguishes it from #1265 (scoped to defaults) and
+-- from #1182 (order-dependence; this is unconditional).
+interface Alpha a where
+  ping : a -> String
+
+interface Beta a where
+  ping : a -> Int
+
+data T = T
+
+impl Alpha T where
+  ping _ = "alpha"
+
+impl Beta T where
+  ping _ = 7
+
+main = println (ping T)
