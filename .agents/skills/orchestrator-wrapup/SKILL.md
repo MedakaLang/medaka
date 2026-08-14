@@ -145,6 +145,11 @@ Reaping order matters:
   must show nothing you didn't deliberately commit.
 - **The stash stack is SHARED across worktrees** — leave no stash behind (`git stash list`);
   if you must set work aside, a tagged WIP commit is safer than a stash on this box.
+- **Branch cleanup needs reachability proof.** A clean removed worktree does not
+  make its branch disposable. Require `git merge-base --is-ancestor <branch>
+  origin/main` before normal deletion. If false, preserve the ref or obtain
+  explicit authority for archival/deletion; equivalent cherry-picked content
+  does not make unique commits recoverable.
 
 ## Step 6 — write the learnings down (so the next session inherits them)
 

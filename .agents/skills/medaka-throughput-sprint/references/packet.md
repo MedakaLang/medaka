@@ -32,6 +32,27 @@ Dispatch only when every required field is concrete.
 - Overlap-review gate: shared carrier/harness/artifact regions whose prior slice
   must receive lightweight review before this packet becomes dispatchable.
 
+For mutation work, use one exact-row packet per field:
+
+```text
+row_id:
+exact_head:
+target_file:
+unique_anchor:
+mutation_before:
+mutation_after:
+prepare_command:
+check_command:
+expected_failure_id_or_set:
+restore_command:
+baseline_sha256:
+receipt_path:
+```
+
+Generic carrier or legacy-family rows cannot substitute for reader/runtime,
+fresh-context U-absence, or renamed ambient-authority rows. Unexpected green is
+`BLOCKED_WRONG_TARGET` pending reviewer adjudication.
+
 Implementer records dispatch, first-edit, coherent-diff, and completion timestamps
 from externally visible clock output; estimates are not receipts. Then it reads root
 and nested `AGENTS.md`, named code, and direct callers. Discovery outside packet is

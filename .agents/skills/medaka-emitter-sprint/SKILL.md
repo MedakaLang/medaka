@@ -57,6 +57,11 @@ Phase 0 completes only when every packet agrees on its revision and source
 population. Resolve disagreement from source/evidence; never average reports or
 merge their prose.
 
+`P0-REVIEW` must exist as a durable packet before implementation dispatch.
+Conversation relay or checkpoint prose does not satisfy admission. Review names
+exact revision, source population, selected family, rejected alternative, slice
+count/cohesion, and mutation-plan completeness.
+
 ## 3. Admit one implementation slice at a time
 
 A selected family must pass all of these gates:
@@ -70,9 +75,11 @@ A selected family must pass all of these gates:
    and diagnostic behavior are fixed by authority or observed controls;
 5. the apparatus is executable and fail-capable before exact assertions are
    authored;
-6. one mutant per semantic field is specified with the earliest stable
-   expected-red rule; an ambient-state family additionally has legal renamed-
-   authority ownership mutants;
+6. each semantic field has an executable mutation packet: row ID, exact head,
+   target file, unique anchor, exact before/after transform, prepare/check/
+   restore commands, baseline hash, and earliest stable expected-red rule; an
+   ambient-state family additionally specifies reader/runtime, fresh-context
+   U-absence, and legal renamed-authority roundtrip mutants;
 7. focused verification, snapshot, selfproc, fixpoint, and deferred-CI
    obligations are explicit;
 8. the residual authority set will be re-derived after the slice.
@@ -80,6 +87,14 @@ A selected family must pass all of these gates:
 Every synthesized packet also names and tests the nearest program or route the
 slice does **not** cover. It must state why that boundary remains correct or an
 explicit residual; P0-REVIEW rejects an untested boundary claim.
+
+Default to **4–6 serial slices**: one shared apparatus slice when needed, then
+semantic slices sharing one carrier, scanner, and proof vocabulary. Three or
+fewer needs an explicit reason the apparatus cannot amortize another coherent
+field; more than six needs an explicit reason review and mutation contracts
+remain one bounded claim. Split when verification authority, touched carrier,
+or acceptance vocabulary changes materially. Never enlarge scope to hit a
+count.
 
 For X-L.H, replace ambient-state lifecycle gates with its own architecture
 contract: derive catalog rows and provenance from the semantic extern source;
@@ -132,9 +147,12 @@ semantics or durable architecture direction requires a choice.
 
 ## 6. Finalize one reviewed batch
 
-After the last accepted family, run one final mutation matrix on the reviewed
-exact-head harness. Then derive snapshots/goldens once from the final source,
-inspect every generated diff, rerun their gates, and apply proportional local
+After the last accepted family, derive snapshots/goldens once, finish harness
+repairs, and **freeze the integration head**. Heavy review and mutation run only
+against that frozen exact head; any source or harness delta invalidates affected
+rows and requires a new review boundary. Run one final mutation matrix on the
+reviewed exact-head harness. Then inspect every generated diff, rerun their
+gates, and apply proportional local
 verification. Open one PR for the coherent batch and follow
 `medaka-pr-lifecycle`; merge-group CI remains landing authority.
 

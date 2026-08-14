@@ -99,6 +99,13 @@ branches and task scratch files, but leave
 unattributed sibling worktrees and processes untouched. Report any retained
 path and reason.
 
+Choose slice-ref disposition at sprint admission. Prefer integrating exact
+slice commits so task branches become ancestors of topic. Before deleting any
+branch, prove its tip reachable from `origin/main`; if not, preserve it or
+create an explicitly authorized archival ref. Never force-delete unique commits
+merely because equivalent changes landed. Treat an already-absent remote topic
+as successful cleanup after readback, regardless of delete-command exit code.
+
 ## Compact receipt
 
 Return only: PR URL/head, PR-CI result, review verdict, merge-group result when

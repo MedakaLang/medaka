@@ -51,11 +51,26 @@ Run highest-value verification in spare capacity: direct reproducer and nearest 
 
 Generated snapshots, selfproc goldens, seed, and similar exact-head artifacts have one derivation authority. Never merge competing generated outputs.
 
+Mutation execution has one conductor-owned serialized lane. Designers and
+reviewers may specify or audit rows; only `compiler-mutation-verifier` mutates
+source. `sprint-verifier` owns ordinary gates and never substitutes legacy or
+generic rows for caller's matrix. Create a durable receipt directory at
+admission; each transaction writes exact transform, expected/observed ID, exit
+state, restore hash, clean porcelain, and process proof there.
+
+One assigned executable turn without a command or live yielded session is a
+stall: interrupt and re-dispatch with exact packet. Long builds use yielded
+sessions and polling instead of partial completion reports.
+
 ## Repair before landing
 
 Repair round is mandatory and budgeted from admission. Stop admitting ordinary slices; preserve one repair writer when actionable findings exist. Run heavy independent adversarial review over exact pushed head, work every `could move` and nearest-miss obligation, reconcile CI, run remaining proportional gates, audit deleted/retained legacy authorities, and update GitHub debt disposition.
 
 Push repaired head and obtain clean blocking verdict. Prepare final PR summary and explicit residuals. Ask user before enqueueing full sprint PR. Green CI, prior sprint approval, or permission to push does not imply enqueue approval.
+
+Freeze pushed repair head during final heavy review and mutation. Any head
+movement requires delta review and invalidation analysis before prior receipts
+can carry forward.
 
 Run `orchestrator-wrapup` before declaring completion.
 
