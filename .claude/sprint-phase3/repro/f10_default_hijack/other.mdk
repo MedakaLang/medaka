@@ -1,0 +1,10 @@
+import dimpl.{Box(..)}
+
+export interface Tag x where
+  tag : x -> Int
+
+impl Tag Box where
+  tag _ = 100
+
+export otag : Box -> Int
+otag b = tag b

@@ -1,0 +1,17 @@
+-- The other colliding module. No import edge to or from amod.mdk in either
+-- direction. Same shape, same constrained-wrapper route, different head type
+-- (`ZBlob`) and one different token in the impl body (`n + 100`), so 110 is a value
+-- ONLY this impl can produce.
+public export data ZBlob = ZBlob Int
+
+export interface Same a where
+  sizeOf : a -> Int
+
+impl Same ZBlob where
+  sizeOf (ZBlob n) = n + 100
+
+zWrap : Same a => a -> Int
+zWrap x = sizeOf x
+
+export zValue : Int
+zValue = zWrap (ZBlob 10)

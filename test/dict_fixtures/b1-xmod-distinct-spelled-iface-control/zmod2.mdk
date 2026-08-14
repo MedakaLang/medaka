@@ -1,0 +1,14 @@
+-- The sibling's zmod.mdk with the interface, type and method spelled differently
+-- (`Same2`/`Blob2`/`sizeOf2` for `Same`/`Blob`/`sizeOf`). Same arithmetic, same
+-- shape, same exports-one-value structure -- so nothing but the spelling collision
+-- is removed.
+public export data Blob2 = Blob2 Int
+
+export interface Same2 a where
+  sizeOf2 : a -> Int
+
+impl Same2 Blob2 where
+  sizeOf2 (Blob2 n) = n + 100
+
+export zValue2 : Int
+zValue2 = sizeOf2 (Blob2 10)

@@ -1,0 +1,14 @@
+-- The other colliding module. No import edge to or from amod.mdk in either
+-- direction, so nothing in the language relates these two `Same` declarations --
+-- they collide only in SPELLING. `n + 100` is the one token that differs from
+-- amod's impl body; 110 is a value ONLY this impl can produce.
+public export data Blob = Blob Int
+
+export interface Same a where
+  sizeOf : a -> Int
+
+impl Same Blob where
+  sizeOf (Blob n) = n + 100
+
+export zValue : Int
+zValue = sizeOf (Blob 10)

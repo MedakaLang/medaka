@@ -206,3 +206,45 @@ not reproduce.
    `emitGeneralRKey → findByTag noneHeadTag` as the tier the behaviour rests on. **That tier is
    unreachable from the arm in question**; the real tier is `emitDefaultRKey`. Relayed through two
    design documents unverified. **Correct it in place rather than relaying it a third time.**
+
+---
+
+## F-10 — a cross-module interface DEFAULT is silently hijacked by a same-spelled interface
+
+**Status:** ✅ **REPRODUCED by the orchestrator** on both pre-built arms, with the control firing.
+Found by the repair round (R-9). Sources: `repro/f10_default_hijack/`.
+**Action:** FILE NEW (**S0: silent wrongness**). Pinnable in `must_fail_fixtures/` — `check`, `run`,
+`build` and the binary all agree, so it grades `ALL_EXACT`.
+
+```
+a2    (collision present)       : base (100, 100)   branch (100, 100)   <- correct is (7, 100)
+a2ctl (colliding module deleted): base 7            branch 7            <- control FIRES
+a3    (both impls method-less)  : base (200, 200)   branch (200, 200)   <- correct is (7, 200)
+```
+
+**The shape:** module `di` declares `interface Tag` **with a default body** (`tag _ = 7`); module
+`dimpl` has a **method-less** `impl Tag Box` that inherits it; module `other` declares its **own
+same-spelled** `interface Tag` with an explicit `impl Tag Box where tag _ = 100`. Expected by
+DICT §8 I4 (a class is `(module, name)`) plus §5 (a default applies only when the *selected* instance
+omits the method): `(7, 100)`. Measured `(100, 100)` — **`di`'s default is never reached.**
+
+**Mechanism, DERIVED:** the untagged interface-default registry is keyed by **bare head tag with no
+interface component**, so two same-spelled interfaces' defaults at one head collapse
+**last-write-wins** — the `installConsts`/`findCell` hazard `AGENTS.md` documents for module frames,
+reappearing in the default tier.
+
+**Identical on both arms => PRE-EXISTING. The sprint exposed it, did not cause it.**
+
+🚨 **Dedup, and this is a THIRD distinct sub-shape — do not merge it:**
+- **not #1182** — that is *differently*-spelled interfaces sharing a **method name**, single-file, and
+  **order-dependent**. This is *same*-spelled interfaces and is **not** order-dependent (swapping the
+  imports changes nothing; the colliding module is topologically later in both orders).
+- **not `p02`/D-2** — that residual **is** order-dependent and involves two explicit impls. Here the
+  hijacked side is a **default**.
+- **not #1265** — that is two same-named *defaults* colliding on `mdk_default_<method>_<TAG>`. Here
+  one side is an **explicit impl body** that wins over another interface's default.
+
+⚠️ **It also sharpens `DEBT.md` row `c`.** That row says deleting `fromOption tag` *"breaks every
+cross-module method-less impl inheriting an interface default."* True — and the complement is now
+measured: **keeping it silently breaks them anyway the moment a same-spelled interface shares the
+head.**

@@ -491,3 +491,75 @@ headless interfaces across modules produced **byte-identical IR**, with the symb
 `e` (2) describes. **The UNAMENDED claim — "byte-identical on programs with no head collision" —
 would have been falsified by this row.** Narrowing it to *"…and no two same-spelled interfaces in the
 module graph"* is what makes it survive.
+
+### REPAIR ROUND (R-1) — coverage restored for the acceptance fix, and two over-broad allowlist entries narrowed
+
+sites:        `test/dict_fixtures/b1-xmod-same-spelled-iface-impl-selection/` (NEW, 4 files) ·
+              `test/dict_fixtures/b1-xmod-distinct-spelled-iface-control/` (NEW, 4 files) ·
+              `test/dict_fixtures/b1-xmod-same-spelled-iface-constrained-wrapper/` (NEW, 3 files) ·
+              `test/diff_compiler_dict_semantics.sh` (3 section-1 rows, 5 section-3 IR rows) ·
+              `test/typecheck_compiler_source.sh` (2 NEW companion line-checks +
+              2 corrected justification comments)
+transform:    (1) **#1514's program promoted out of `must_fail` into a VALUE fixture**, so deleting
+              the drained pin at close-out no longer leaves the fixed behaviour unguarded. The five
+              existing `b1-*` rows pin the WIRE FORMAT only, and the colliding-heads one separates
+              its impls by TYPE ARGUMENT — which the pre-bite word already separated — so the module
+              prefix is decoration there and nothing in that program answers differently without it.
+              This is the only row in the corpus whose VALUE the identity decides.
+              (2) A **constrained-wrapper** sibling, added mid-flight, pinning a deterministic
+              native SEGFAULT out of existence (see `engines:`).
+              (3) `route_key.mdk`'s `originun_allowed` / `occun_allowed` filename entries given the
+              **line-grained companion checks** `typecheck.mdk`'s entry already had.
+could move:   **NOTHING in the compiler — the diff contains no `compiler/` or `stdlib/` change.**
+              `compiler/types/route_key.mdk` was appended to TWICE during fail-capability probing and
+              restored byte-exactly both times (`git status` clean for it at hand-off); the built
+              binary was never rebuilt and never needed to be. What moves is the GATE's assertion
+              count: `diff_compiler_dict_semantics.sh` 176 → 184, `typecheck_compiler_source.sh`
+              gains two checks.
+nearest miss: 🚨 **The WRAPPER-IN-A-THIRD-MODULE shape (`DEBT.md` D-2) — measurably NOT drained and
+              deliberately NOT added here.** Both `b1-xmod-*-iface-*` fixtures dispatch through a
+              wrapper declared in the SAME module as its interface. D-2's `p02`/`p03` route through a
+              wrapper in a third module; both arms answer `(1, 1)` in one import order and `(2, 2)` in
+              the other, unchanged by this sprint. Adding a fixture for it would need a KNOWN-BAD
+              ledger row, not a conformance row, and the boundary question D-2 leaves open ("why does
+              #1514's shape drain and p02's not") is still unanswered. A drained fixture is not a
+              drained class; nothing here widens that claim.
+              Second miss: `test/diff_compiler_import_order.sh` (its own corpus,
+              `test/import_order_fixtures/`) is the natural home for the ORDER-DEPENDENCE half of
+              this class and was **not** extended — the #1514 shape is no longer order-dependent, so
+              a row there would be green-by-construction; the D-2 shape is, and belongs there if and
+              when someone pins it.
+engines:      eval + LLVM, on all three fixtures. `check`/`run`/`build` are graded on every row, and
+              `ALL_EXACT` additionally requires run and build stdout to be byte-identical.
+              🚨 **The constrained-wrapper fixture is the one with an engine DELTA to record, and it
+              is not a delta any bite's implementer recognized or any commit message claims.**
+              Measured on two pre-built arms: base built at exit 0 and its **BINARY SEGFAULTED, 3 runs
+              of 3** (139, `E-FATAL-SIGNAL`) while `run` answered `(11, 11)`; branch answers
+              `(11, 110)` on both engines at exit 0. IR-read mechanism: base handed the SAME dict
+              constant to both generic calls while the dispatcher tested one tag in BOTH arms, so no
+              arm matched and control fell to `unreachable`; branch emits two constants and two arms.
+              **Stated as an EMERGENT consequence of the route-word change, not as fixing a filed
+              issue — no issue we have identified covers it.**
+              wasm: UNPROBED on all three fixtures. This gate drives check/run/build only (its own
+              "NOT YET COVERED" §7 bullet), so the third refinement of the single-evaluator law is
+              owed for these rows exactly as it is for every other row in the corpus.
+unchecked:    (a) **The pre-bite cells are RELAYED, not re-measured by me.** #1514's `11 / 11 / 7`
+              comes from the drained pin's own `claim.txt`; the wrapper fixture's segfault cells come
+              from the coordinator's two-arm measurement. I verified the POST-fix side first-hand on
+              this binary (check 0, run and built-binary stdout, `MEDAKA_STRICT=1`, exit codes read
+              unpiped) and derived the IR facts myself from `--keep-ir`. I did not build a base-arm
+              binary. (b) The three `mdk_dc_N` constant indices in the section-3 rows are pinned
+              LITERALLY (house style — `b1-p4-*` pins `@mdk_dc_0`/`@mdk_dc_1` the same way); they are
+              stable only as long as the fixture's own declaration set is. The arms' `icmp eq` tag
+              WORDS were deliberately NOT pinned — they are hashes and would re-red on any re-mint
+              with no behaviour change. (c) I did not run the full suite, the fixpoint, or the
+              snapshot corpus: the diff touches no compiler source, and the snapshot corpus is the
+              close-out's to re-cut. `test/dict_fixtures` is not in any snapshot family (derived:
+              `run_family` calls in `diff_compiler_snapshot_frontend.sh`), so these fixtures owe no
+              snapshot golden — but the pre-commit hook still runs check 4 for any staged `.mdk`, so
+              the committing agent will want `PRECOMMIT_SNAPSHOT_DEFER=1`. (d) **BLESSED ZERO
+              GOLDENS.** Every pinned value was hand-derived from the impl bodies before any binary
+              was run; no `CAPTURE=1` anywhere.
+              (e) **Every new row was proven FAIL-CAPABLE by perturbation, then reverted
+              byte-exactly** — see the report; a fixture that has only ever passed has not been shown
+              to pin anything.
