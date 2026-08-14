@@ -1780,3 +1780,38 @@ unpinned**. That is a fixture recommendation on #1182, not a new issue.
 wrong**. #1514's `build` was **correct** and only `run` was wrong — which is why #1514 read as an
 eval-only defect. `p02` is wrong on **both** engines. A scope claim resting on `run` alone would have
 mis-drawn this boundary.
+
+## RUN-P3-045 — the "third `headTyconTy` arm" is NOT a third defect. I over-called it after under-calling twice.
+
+Twice this sprint I wrote *"audit the arms as a SET"* and shipped a set one arm short. The tracker
+reconciliation then found that `eval`'s `headTycon` **also** strips `TyConstrained` while
+`typecheck`'s `headTyconTy` strips neither, and I recorded that as a **third** live asymmetry
+alongside F-2 (`TyFun`) and F-8 (`TyEffect`). **I predicted it would reproduce F-8's shape. It does
+not.** MEASURED on both pre-built arms, with two controls:
+
+```
+              base                                   branch
+constrained : check 0 run 0 [2] build 0 exec 0 [2]  | identical   ← NO defect
+effect      : check 0 run 0 [2] build 1 NOBIN       | identical   ← F-8 reproduces (control)
+plain       : check 0 run 0 [2] build 0 exec 0 [2]  | identical   ← clean (control)
+```
+
+**The probe was live** — the effect control fired and the plain control stayed clean, so a null on
+the constrained arm is a real answer, not a dead probe.
+
+**Why the source asymmetry does not become a defect, DERIVED from the measurement:** F-8 breaks
+because the two sides **disagree** — eval strips the effect row to the concrete head `Int` while
+typecheck answers `None` → `noneHeadTag`, so the emitter looks up a bucket nothing registered under.
+Stripping a **constraint** from `Eq a => a` yields `a`, which is **still headless**, so *both* sides
+answer headless and **agree**. A single headless impl is a direct hit (`impl Sz a` works), which is
+why nothing breaks.
+
+⇒ **The live set is TWO, not three.** The source-level asymmetry is real; the *divergence* requires
+the stripped result to be a **concrete head on one side and headless on the other**, which only the
+effect arm produces among the three. **F-2 and F-8 file as before; no third row.**
+
+⚠️ **Recorded against myself deliberately.** Having under-called this set twice, I over-corrected and
+asserted a third defect from a source-level asymmetry without measuring it — the same
+claim-past-its-evidence move, in the opposite direction. **The rule that actually generalizes: an
+asymmetry in the source is not a defect until the two sides are shown to answer differently on a
+program.** That is what distinguishes F-8 from this.
