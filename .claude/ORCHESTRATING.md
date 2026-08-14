@@ -2481,3 +2481,75 @@ nightly `perf_scaling DEEP` red (xref lint-stage time-superlinear, DEEP-only ban
 with #1006 owning the went-unnoticed half. Phase 3′'s tripwire (identity-in-routes falsifies the
 copied super-slot route premise) → `.claude/sprint-b/repair/R3-c4i2.md` P4, already queued in
 `.claude/sprint-b/next/`.
+
+## Stage B / Phase 3′ (2026-08-14) — the sprint where every bite was re-cut by someone who refused it
+
+PR #1616. Four bites landed, one dropped, one S0 drained. **The headline is not the diff: it is that
+the design of record was wrong about FOUR of its six bites, and each error was caught by the agent
+handed it rather than by any gate.**
+
+| bite | what the design said | what was true |
+|---|---|---|
+| `a` | change `RKey`'s payload to a two-component carrier | **no type change at all** — all 15 reading sites need the word; none can consume an identity |
+| `f` | add a per-slot declared/appended flag to `CSlot` | **no field** — a third mint site holds `List Int` and constructs no `CSlot`, so a flag serves 2 of 3 |
+| `b1` | stamp identity at the four `inst` arms | **two lines, zero arm edits** — selection and the collision gate were already inside `keyForSite*` |
+| `b2` | collapse a pair that is "provably one selection" | **dropped** — that pair is not one selection at this pin |
+
+⇒ **Design-ahead's ~75% rework rate reproduced almost exactly.** The countermeasure that worked was
+not better design; it was **briefing for refusal and then believing the refusal.**
+
+### ⭐⭐ AN ENUMERATION CLAIM MUST STATE ITS DEPTH
+
+Twice this sprint a *"verified by enumerating every X"* claim turned out to have stopped at the first
+level instead of following to the leaves:
+
+- *"every selector call site enumerated"* → stopped at `entailFallback`'s own body. The property I
+  then asked an implementer to inscribe was **FALSE**, and it refused to write it — into the one bite
+  whose whole purpose is leaving behind sentences the next refactor cannot violate.
+- *"the 15 reading sites"* → three mentions, **zero enumerations**, in anything that ships with the PR.
+
+**"I enumerated the call sites" and "I followed each to its leaves" are different claims.** Say which.
+
+### ⭐⭐ A SOURCE-LEVEL ASYMMETRY IS NOT A DEFECT UNTIL BOTH SIDES ANSWER DIFFERENTLY ON A PROGRAM
+
+I wrote *"audit the arms as a SET"* about a wildcard, twice shipped a set one arm short, then
+**over-corrected** and asserted a third defect from a source asymmetry without measuring it. Measured:
+it is **not** a defect — stripping a constraint yields a still-headless type, so both sides agree.
+The two real ones disagree (one side says a concrete head, the other headless). Same
+claim-past-its-evidence move, opposite direction.
+
+### 📊 PARALLELIZE READERS *AGAINST A LIVE WRITER* — pinned readers cost nothing
+
+Stage B measured implementation at **0.73×** parallel efficiency, a third of wall-clock with zero
+agents live. This run reproduced that until it was corrected mid-sprint: **readers pinned to
+committed SHAs (`git show <sha>:<path>`) are immune to a live writer**, and ran with zero
+interference throughout. What filled the slots productively:
+
+- adversarial review of a **landed** bite while the next one is being written;
+- a **referee audit of the orchestrator's own prose** — which found nine wrong issue attributions and
+  **zero in-place supersede markers**, in a ledger whose own text says an unmarked superseded ruling
+  *"is how a ledger starts lying"*;
+- **measurements on a separately-built base arm**, which a trunk writer cannot contaminate;
+- building the repair round's instrument **before** it was needed.
+
+### ⭐⭐ PUSH A DRAFT PR EARLY — it caught two reds the whole local suite missed
+
+The sprint ran the fixpoint, the full snapshot suite, dict-semantics, engines, eval-modules, LLVM
+typed IR and must-fail twice. **Neither CI red appeared in any of them:** a doc-symbol citation this
+sprint's own deletion rotted (`soundness`, failing in 13s), and the sprint's own repro harness
+tripping the *"gate that silently never runs"* check from **outside `test/`**. Both were ours; both
+were invisible locally.
+
+### Traps this run paid for
+
+- **Blanket `git add <dir>` while an agent is writing into that dir** sweeps a half-finished file into
+  an unrelated commit. Stage sprint records **by path** while any agent has the directory open.
+- **A probe that fails IDENTICALLY on both arms carries no signal.** My first two-arm probe used
+  exports the module does not have; "identical" was one glance away from being read as agreement.
+- **My coarse greps produced three false alarms** (a count that was comments, diff lines that were
+  comments, "surviving" occurrences that were trailing side-comments). Each time inspecting rather
+  than trusting resolved it — the lesson is not "grep better", it is *never conclude from a count you
+  have not eyeballed*.
+- **`--bless`/`--new` are not symmetric.** `--new` is **suite-wide**, never overwrites, and reports
+  *"0 compared, 201 skipped: NOTHING COMPARED (this is not a pass)"*. The **re-check afterwards** is
+  what makes it a pass.

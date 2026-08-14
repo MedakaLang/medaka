@@ -1,0 +1,17 @@
+-- M1c: the sharper question M1 raises. M1 showed two impls differing only in an
+-- effect row are REJECTED as overlapping (coherence strips the effect too), so
+-- the ppTy fold is vacuous for the two-impl case.
+--
+-- But a SINGLE effect-carrying impl has no overlap to be rejected for. If it is
+-- accepted, then today eval mints "Sz|Int|" (ppTyK strips TyEffect) while the
+-- typechecker stamps "Sz|<Stdout> Int|" (ppTy renders it) -- a caller-side word
+-- that NO definition-side entry carries. That is the skew keyForSite's header
+-- warns is "silent on the direct-call path and live on the RDict path", and it
+-- would exist TODAY, before bite e.
+interface Sz a where
+  sz : a -> Int
+
+impl Sz (<Stdout> Int) where
+  sz _ = 2
+
+main = println (sz 0)

@@ -240,9 +240,26 @@ compiler/frontend/parser.mdk"
 # LINE-GRAINED by the companion check just below: the `OriginUnresolved`-bearing lines
 # of typecheck.mdk are pinned by text, so a `Ty`-layer literal added there fails even
 # though the filename is allow-listed.
+# ⚠️ `compiler/types/route_key.mdk`: same entry, same reason, same "red since
+# `B-2.2-a`" caveat as `occun_allowed` above. Its three hits are the DOCTEST FIXTURES
+# `rkTyInt`/`rkTyBool`/`rkTyList` — `TyCon { …, tyConOrigin = OriginUnresolved }`,
+# built to be exactly the node a LOADER-LESS driver hands the mint, because the
+# doctests' whole job is to pin that the absent-origin arm still spells the bare
+# interface name. A `tyConUnresolved` call would satisfy the letter of this ratchet
+# and move the file onto `tyconun_allowed` instead; the literal is kept because the
+# fixture is asserting the SHAPE.
+# 🚨 THIS ENTRY IS NOW LINE-GRAINED BY A COMPANION CHECK (`rk_originun_allowed`,
+# below the `tc_originun` one), AND THE SENTENCE THAT USED TO END THIS PARAGRAPH —
+# "the file mints nothing the pipeline consumes" — IS THE REASON. It was true when
+# `B-2.2-a` landed the module inert and FALSE by the time `B-2.2-b1`/`-e` wired
+# `implRouteKeyWord`/`routeWordFor` into `typecheck.mdk`'s live route path, in the
+# same sprint. A filename entry granted on "nothing calls this file" cannot survive
+# the file acquiring callers, so the exemption is pinned to its four actual lines
+# the way `typecheck.mdk`'s is.
 originun_allowed="compiler/entries/origin_agreement_main.mdk
 compiler/frontend/ast.mdk
 compiler/frontend/resolve.mdk
+compiler/types/route_key.mdk
 compiler/types/typecheck.mdk"
 tyconun_actual=$(git -C "$ROOT" grep -lw -- 'tyConUnresolved' -- '*.mdk' 2>/dev/null \
   | while IFS= read -r f; do
@@ -323,9 +340,27 @@ echo "  ok: $(printf '%s\n' "$declun_actual" | grep -c .) decl-layer producer fi
 # `DImpl` mints no decl-layer carrier and must never grow a `declHeadOf` arm (see
 # that function's own comment in compiler/entries/origin_agreement_main.mdk).
 # Merging the two lists is how that distinction gets lost.
+# ⚠️ `compiler/types/route_key.mdk` IS ON THIS LIST FOR ITS DOCTEST FIXTURES ALONE,
+# and it has been RED SINCE `B-2.2-a` LANDED THAT FILE (2026-08-13) — this ratchet
+# is a `git grep` over TRACKED files, not over an import closure, so the module was
+# never invisible to it; `a` simply ran no gate beyond build/check-self/snapshot and
+# nobody looked. Recorded rather than quietly fixed, because "a call-site-free module
+# is in no gate" is true of the COMPILER's gates and false of this one.
+# WHY IT IS SAFE: `route_key.mdk` mints route WORDS from a `Ty` it only ever READS.
+# It constructs no AST node for the pipeline at all — the sole non-comment hit is the
+# `constraintUnresolved` IMPORT that feeds `rkTy`'s two `TyConstrained` doctests. So
+# there is no post-resolve rebuild here to reset an acquired identity, which is the
+# hazard this ratchet exists to catch.
+# 🚨 THAT REASONING IS ABOUT THE LINE, NOT THE FILE, AND THE FILE-LEVEL VERSION OF IT
+# EXPIRED IN THE SPRINT THAT WROTE IT. `route_key.mdk` was inert when `B-2.2-a`
+# landed it; `B-2.2-b1`/`-e` then put it in `typecheck.mdk`'s live import closure, so
+# a whole-file exemption now covers a module the pipeline calls. Pinned to that one
+# line by the companion check `rk_occun_allowed` (below the `tc_originun` one), the
+# same way `typecheck.mdk`'s filename entry is.
 occun_allowed="compiler/frontend/ast.mdk
 compiler/frontend/desugar.mdk
-compiler/frontend/parser.mdk"
+compiler/frontend/parser.mdk
+compiler/types/route_key.mdk"
 # ⚠️ Inherits #1222 exactly as the two ratchets above do: `git grep` sees only
 # TRACKED files. Same construction on purpose, so all three move together.
 occun_actual=$(git -C "$ROOT" grep -lwE -- 'constraintUnresolved|requireUnresolved|superUnresolved|dImplUnresolved' -- '*.mdk' 2>/dev/null \
@@ -445,6 +480,22 @@ echo "  ok: $(printf '%s\n' "$originun_actual" | grep -c .) OriginUnresolved con
 # Listed here rather than the grep widened, per the remedy this ratchet's other
 # entries state — a widened grep would stop reporting a FOURTH inhabitant, which is
 # the discoverability this ratchet exists to protect.
+# ⚠️ B-2.2-b1 ADDED ONE LINE, AND IT IS THE SECOND ENTRY THAT *CONSTRUCTS* —
+# `implKeyTc iface tys = implRouteKeyWord OriginUnresolved iface tys None`. It is a
+# `Ty`-layer literal in the sense the failure message warns about, so it needs the
+# justification stated here rather than a widened grep:
+#   * `implKeyTc` no longer mints a ROUTE. After `b1` its ONLY callers are
+#     `keyEntryOf`/`keyEntryOfRow`, which write `KeyEntry`'s 4th field — a field with
+#     NO READER (measured: stamping a literal `"__DEAD__"` at both sites builds,
+#     passes `make check-self`, and passes all of `diff_compiler_dict_semantics.sh`).
+#     The live route words are minted from the winning ROW's own `irOrigin` at
+#     `keyForSite`/`keyForSiteByIface`, which is what carries identity.
+#   * It constructs no NODE. `OriginUnresolved` here is an ARGUMENT to a word mint
+#     that renders it as "no module prefix"; nothing is stamped, so there is no
+#     immunity rule for it to make permanent — the same reasoning `ifaceRefBare`'s
+#     entry above carries, one layer further out.
+# If `KeyEntry`'s key field ever acquires a reader, this line stops being justified
+# and the word must come from the row like the other two.
 tc_originun_allowed="OriginUnresolved => \"<unresolved>\"
 OriginUnresolved => [TkBare NsIface ir.irName]
 bcEq = OriginUnresolved,
@@ -454,6 +505,7 @@ bcSemigroup = OriginUnresolved,
 ceSuperOrigin (Super { superOrigin = OriginUnresolved, ... }) = \"<unresolved>\"
 ifaceRefBare n = IfaceRef { irName = n, irOrigin = OriginUnresolved }
 ifaceRefNone = IfaceRef { irName = \"\", irOrigin = OriginUnresolved }
+implKeyTc iface tys = implRouteKeyWord OriginUnresolved iface tys None
 implOrigin = OriginUnresolved,
 originPhrase OriginUnresolved = \"an unknown module\"
 tconUnresolved n = TCon n OriginUnresolved"
@@ -474,6 +526,81 @@ if [ "$tc_originun_actual" != "$tc_originun_allowed" ]; then
   exit 1
 fi
 echo "  ok: 1 Mono-layer OriginUnresolved line in typecheck.mdk, no Ty-layer literal"
+
+# ── The LINE-GRAINED half of the two `compiler/types/route_key.mdk` entries ──
+# 🚨 WHY THIS EXISTS, stated plainly because the justification it replaces EXPIRED
+# AS IT WAS WRITTEN. Both filename entries (`originun_allowed` and `occun_allowed`)
+# were added with the reasoning "route_key.mdk is inert — it has no call sites, so
+# a filename exemption over the whole file exempts nothing that runs." THE SAME
+# SPRINT MOVED THAT MODULE INTO THE IMPORT CLOSURE (`B-2.2-a` minted it,
+# `B-2.2-b1`/`-e` wired `implRouteKeyWord`/`routeWordFor` into `typecheck.mdk`'s
+# live route path), so by the time the entries landed the premise was already
+# false: a filename entry now exempts a module the pipeline actually calls.
+# Derive rather than trust this paragraph:
+#   grep -rn 'route_key' compiler/types/typecheck.mdk | head
+#
+# THE REMEDY IS THE ONE `typecheck.mdk` ALREADY USES ABOVE, and it is chosen over
+# deleting the filename entries because the two producer ratchets compare EXACT
+# SETS of filenames — there is no way to say "this file, these lines" in the list
+# itself, so line-graining has to be a companion check. `typecheck.mdk` had one and
+# this file did not; that asymmetry is the whole defect. A new `OriginUnresolved`
+# or interface-occurrence mint added to route_key.mdk now FAILS here even though
+# the filename stays allow-listed.
+#
+# WHAT THE PINNED LINES ARE, and why each is safe:
+#   * three `TyCon { …, tyConOrigin = OriginUnresolved }` literals — the DOCTEST
+#     FIXTURES `rkTyInt`/`rkTyBool`/`rkTyList`. They are built to be exactly the node
+#     a LOADER-LESS driver hands the mint, because the doctests' job is to pin that
+#     the absent-origin arm still spells the bare interface name. Nothing stamps
+#     them and nothing in the pipeline consumes them, so there is no immunity rule
+#     for them to make permanent.
+#   * one `constraintUnresolved,` — an IMPORT, not a construction, feeding `rkTy`'s
+#     two `TyConstrained` doctests.
+# ⚠️ The doctest COMMENT lines that mention `OriginUnresolved` (there are many —
+# `implRouteKeyWord OriginUnresolved "Show" …`) are excluded by the same `^--`
+# filter the sibling checks use, so this pin does not fight the doctests it protects.
+echo "checking route_key.mdk unresolved-sentinel lines ..."
+rk_originun_allowed="TyCon { tyConName = \"Bool\", tyConLoc = None, tyConOrigin = OriginUnresolved }
+TyCon { tyConName = \"Int\", tyConLoc = None, tyConOrigin = OriginUnresolved }
+TyCon { tyConName = \"List\", tyConLoc = None, tyConOrigin = OriginUnresolved }"
+rk_originun_actual=$(grep -w 'OriginUnresolved' "$ROOT/compiler/types/route_key.mdk" \
+  | sed 's/^[[:space:]]*//' \
+  | grep -vE '^--' \
+  | LC_ALL=C sort)
+if [ "$rk_originun_actual" != "$rk_originun_allowed" ]; then
+  echo "FAIL: the OriginUnresolved lines of compiler/types/route_key.mdk changed."
+  echo "  allowed (the three rkTy* doctest fixtures, and nothing else):"
+  printf '%s\n' "$rk_originun_allowed" | sed 's/^/    /'
+  echo "  actual:"
+  printf '%s\n' "$rk_originun_actual" | sed 's/^/    /'
+  echo "  route_key.mdk is on \`originun_allowed\` for its DOCTEST FIXTURES ONLY, and"
+  echo "  that module is now IN the live import closure -- the 'it is inert' reasoning"
+  echo "  the filename entry was granted under no longer holds. A new sentinel site"
+  echo "  here needs its own justification: add the line above and say why in the PR,"
+  echo "  or build the node with \`tyConUnresolved\` / \`tyConBuiltin\` instead."
+  exit 1
+fi
+echo "  ok: 3 doctest-fixture OriginUnresolved lines in route_key.mdk, no live mint"
+
+rk_occun_allowed="constraintUnresolved,"
+rk_occun_actual=$(grep -wE 'constraintUnresolved|requireUnresolved|superUnresolved|dImplUnresolved' \
+    "$ROOT/compiler/types/route_key.mdk" \
+  | sed 's/^[[:space:]]*//' \
+  | grep -vE '^--' \
+  | LC_ALL=C sort)
+if [ "$rk_occun_actual" != "$rk_occun_allowed" ]; then
+  echo "FAIL: the interface-occurrence unresolved lines of compiler/types/route_key.mdk changed."
+  echo "  allowed (the import that feeds the TyConstrained doctests, and nothing else):"
+  printf '%s\n' "$rk_occun_allowed" | sed 's/^/    /'
+  echo "  actual:"
+  printf '%s\n' "$rk_occun_actual" | sed 's/^/    /'
+  echo "  route_key.mdk is on \`occun_allowed\` for that ONE import, and the module is"
+  echo "  now IN the live import closure. A post-resolve rebuild here would reset an"
+  echo "  acquired interface-occurrence identity permanently. Rebuild with a record"
+  echo "  UPDATE (\`Constraint { c | constraintArgs = … }\`) instead."
+  exit 1
+fi
+echo "  ok: 1 doctest-feeding occurrence-layer import in route_key.mdk, no live mint"
 
 # ── #1110 unit D: the `Mono.TCon` MINT SET ──────────────────────────────────
 # `Mono.TCon` (compiler/types/typecheck.mdk) carries a `TyConOrigin` — the GOAL side

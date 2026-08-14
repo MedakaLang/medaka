@@ -1,0 +1,49 @@
+-- §8 I4 + §3 `inst` -- THE SAME-SPELLED-INTERFACE COLLISION REACHED THROUGH A
+-- CONSTRAINED WRAPPER. Sibling of b1-xmod-same-spelled-iface-impl-selection with
+-- ONE structural variable added: each module dispatches through its own
+-- `Same a => a -> Int` wrapper instead of calling the method directly, so the call
+-- becomes a GENERIC site that receives a dict CONSTANT as an argument. Heads are
+-- distinct (`ABlob` vs `ZBlob`) -- the interface SPELLING is the only thing the two
+-- unrelated modules share.
+--
+-- SPEC ANSWER HAND-DERIVED, NOT CAPTURED. `amod.Same` and `zmod.Same` are two
+-- classes (DICT §8 I4: an interface is identified by its declaration), and each
+-- wrapper is declared inside the module whose `Same` is the only one in its scope,
+-- so `aWrap`s predicate denotes `amod.Same` and `zWrap`s denotes `zmod.Same`. Each
+-- goal has a singleton matching set -- amods impl at `ABlob`, zmods at `ZBlob` --
+-- so aValue = 10 + 1 = 11 and zValue = 10 + 100 = 110.
+--   => (11, 110).
+--
+-- 🚨 THIS FIXTURE PINS A DETERMINISTIC NATIVE SEGFAULT OUT OF EXISTENCE, and that
+-- is why it is worth a row of its own beside the direct-dispatch sibling. MEASURED
+-- ON TWO PRE-BUILT ARMS:
+--     base   -- build exit 0, and the BUILT BINARY SEGFAULTS, 3 runs of 3
+--               (exit 139, `E-FATAL-SIGNAL`); `run` answers (11, 11)
+--     branch -- `run` and the binary BOTH answer (11, 110) at exit 0
+-- Mechanism, read from the emitted IR rather than inferred: base hands the SAME
+-- dict constant to both generic calls, and the dispatcher tests one tag in BOTH
+-- arms while the constant actually passed is a different value -- so no arm
+-- matches and control falls through to `unreachable`. The branch emits TWO
+-- constants and two arms testing exactly those.
+--
+-- ⚠️ NOT A FILED ISSUE, AND NOT DESCRIBED AS FIXING ONE. This is an EMERGENT
+-- consequence of the route-word change; no issue we have identified covers it. The
+-- row exists so the repair cannot be silently lost, not to close anything.
+--
+-- ⚠️ WHY THE VALUE ALONE IS NOT ENOUGH, and the IR row is not decoration: base`s
+-- `run` answers (11, 11) while base`s BINARY dies, so a fixture that graded only
+-- `run` would record a wrong VALUE and never see the crash, and one that graded only
+-- exit codes would see 139-vs-0 without knowing why. Section 1 (`ALL_EXACT` grades
+-- run AND build stdout AND the pinned value) covers the first gap; the section-3
+-- row pinning TWO DISTINCT dict constants covers the second -- a build that happened
+-- to pass the right constant for the wrong reason would satisfy the value and fail
+-- that row.
+--
+-- ⚠️ WHAT THE WRAPPER IS FOR: without it the same two modules merely answer
+-- WRONGLY. The generic, dict-taking call site is what converts a wrong selection
+-- into a memory fault, which is the discriminator between this fixture and its
+-- direct-dispatch sibling.
+import amod.{aValue}
+import zmod.{zValue}
+
+main = println (aValue, zValue)

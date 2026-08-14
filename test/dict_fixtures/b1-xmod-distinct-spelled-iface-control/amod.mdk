@@ -1,0 +1,13 @@
+-- BYTE-IDENTICAL to b1-xmod-same-spelled-iface-impl-selection/amod.mdk. Holding
+-- this file fixed is what makes the spelling of the OTHER module the only variable
+-- between the two fixtures.
+public export data Blob = Blob Int
+
+export interface Same a where
+  sizeOf : a -> Int
+
+impl Same Blob where
+  sizeOf (Blob n) = n + 1
+
+export aValue : Int
+aValue = sizeOf (Blob 10)

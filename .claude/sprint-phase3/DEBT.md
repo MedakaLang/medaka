@@ -1,0 +1,661 @@
+# Stage B / Phase 3′ (`B-2.2`) — DEBT
+
+Append-only, one row per landed bite. The orchestrator commits; the implementer supplies the row.
+**`could move:` and `nearest miss:` may not be blank** — *"nothing, and here is why"* is valid,
+silence is not.
+
+```
+### <bite id> — <one-line description>
+sites:        <files:lines actually touched>
+transform:    <what was applied>
+could move:   <what acceptance behaviour could plausibly have changed>
+nearest miss: <the nearest program this does NOT cover, and what it does today>
+engines:      <LLVM / wasm / eval / core_ir_eval — which arms moved, which peers are owed>
+unchecked:    <what was not verified, and why>
+```
+
+⚠️ **A row is owed for any behaviour delta the repair round's differential DETECTS**, not only
+those an implementer recognized — written at detection time, by the round that found it.
+
+---
+
+### B-2.2-a — the shared route-word mint
+sites:        `compiler/types/route_key.mdk` (NEW, 374 lines — 3 exports, 6 private helpers, 4
+              fixtures, 38 doctests) · `Makefile:91-94` (the `test:` line that is the ONLY thing
+              typechecking or running this module — see `unchecked:`). NOTHING else was touched:
+              `frontend/ast.mdk` is unchanged (`data Route` untouched per RUN-P3-019), and
+              `implKeyTc`/`implKeyOf`/`ppTyAtom`/`ppTyAtomK`/`declRouteKey`/`keyForSite` are all
+              still exactly as they were.
+transform:    Minted, at zero call sites: `ifaceWordOf` (`module::Iface`, falling back to the bare
+              name on both absent-origin arms), `implRouteKeyWord` (the existing
+              `iface|args|method` wire format, with the iface half swapped for the qualified word
+              when an origin exists — the #1047/#1265 route-word residual (#1113); NOT #1182, whose
+              interface-free candidate key no word substitution reaches — AVAILABLE and APPLIED
+              NOWHERE), `routeWordFor`
+              (`declRouteKey`'s body and `keyForSite`'s collision branch, unified behind a
+              caller-supplied verdict), and `rkTy`/`rkTyFunArg`/`rkTyAtom` (one prec-2 `Ty`
+              printer, based on typecheck's `ppTy` — the more complete of the two mirrors).
+could move:   NOTHING, and here is the evidence rather than the assertion. The module is in no
+              entry's import closure (`grep -rn route_key compiler stdlib test` → the file's own
+              doc-comment and the `Makefile` line, no import anywhere), so no compiled byte reaches
+              any consumer. Measured: `make medaka` exit 0, `make check-self` PASS,
+              `diff_compiler_snapshot_frontend` **201 of 201 existing snapshots compared and
+              matching — zero goldens MOVED**. The one non-inert consequence is an ADD, not a move:
+              `compiler/types/*.mdk` is a GLOB in that gate (`test/diff_compiler_snapshot_frontend.sh:165`),
+              so the new file auto-enrolled in the snapshot corpus and the gate now reports
+              `202 fixtures — 201 compared` with `route_key.mdk: FAIL no snapshot`. The close-out
+              re-cut therefore owes a CREATE (`--new`) for `test/snapshots/compiler/route_key.md`,
+              not only re-blesses of moved goldens.
+nearest miss: The nearest program this does not cover is EVERY program — there is no call site, so
+              no route word in the tree is produced by this module yet. Concretely: a two-module
+              program where `a.mdk` and `b.mdk` each declare `interface Speak` and each impl it for
+              the same head still routes on the bare word `Speak|T|` today, exactly as before this
+              bite; the #1047/#1265 residual (#1113) is not closed until a later bite points
+              `implKeyTc`/`implKeyOf` here. (#1182 is NOT addressed by any of it.) The
+              nearest thing this module could get wrong but does not: on the loader-less path
+              (`medaka check <single file>`, lsp, repl, doc, lint, snapshot) a RAW `ifaceIdentity`
+              would spell `"|T|"` for every interface and collapse instances the present bare-name
+              word keeps apart — `ifaceWordOf`'s fallback is what prevents it, and it is
+              fail-capable: replacing the function body with the raw `ifaceIdentity o name` reds 8
+              of the 38 doctests (measured, then reverted).
+engines:      ONE LINE, because no compiled byte reaches an engine: the module is imported by
+              nobody, so LLVM, wasm, eval and core_ir_eval all emit and execute byte-identically to
+              base. No peer arm is owed by THIS bite — but the bite that collapses the callers owes
+              all four, because `rkTy` is typecheck-complete and `eval`'s `ppTyAtomK` is not (see
+              `unchecked:`).
+unchecked:    (1) **The divergence between the two printers this mint is meant to replace is
+              recorded, not resolved.** `types/typecheck.mdk`'s `ppTy` renders `TyEffect` as
+              `<row> t` and `TyConstrained` as `cs => t`; `eval/eval.mdk`'s `ppTyK` strips both
+              (`TyRow` agrees on both sides — the packet's "eval strips all three" is off by one,
+              `eval.mdk:506` renders it). `rkTy` follows typecheck, so pointing eval's callers here
+              would WIDEN eval's words: two impls differing only in an effect row or a constraint
+              currently collapse onto one `implKeyOf` word there and would stop doing so. That is
+              very likely the fix direction and it is a BEHAVIOUR CHANGE — bite `e` owes a
+              discriminating probe on the eval arm before it collapses the callers. This bite ran
+              no such probe. (2) **Verification of this module rests entirely on one `Makefile`
+              line.** A call-site-free module is invisible to `make medaka`, `make check-self` and
+              `test/typecheck_compiler_source.sh` (measured 2026-08-03 for `types/registry.mdk`,
+              whose header records it; the `Makefile`'s own comment says "Add a line here for every
+              call-site-free compiler module"), so `./medaka test compiler/types/route_key.mdk` in
+              the `test:` target is the only thing that typechecks it or runs its 38 doctests.
+              Delete that line and every assertion silently stops running. (3) **No gate beyond
+              build/check-self/snapshot was run** — no fixpoint, no engines, no perf: with zero
+              call sites there is nothing for them to observe, and the packet forbids capturing.
+              (4) **`rule-duplicate-body` is RED and deliberately left un-silenced** — see the
+              orchestrator hand-off in the bite report; `rkEffAtom` is a transitional 4th copy of a
+              helper whose 3 existing copies each carry a `lint-disable-next-line`.
+
+### B-2.2-f — the declared-prefix sidecar (plumbing only; nothing reads it yet)
+sites:        `compiler/types/typecheck.mdk` only, plus two allowlist rows in
+              `test/registry_keying_ratchet.sh:191-192`. Types: `CDeclaredPrefix` /
+              `CDeclared` beside `data CSlot`. Fields: `PerRun.funConstraintDeclaredRef`,
+              `CrossRun.crossModuleFunConstraintDeclaredRef` + `…DeclaredQualRef` (+ their
+              `freshPerRun`/`freshCrossRun` `Ref []` initialisers — reset is free through the
+              existing whole-record re-mints). FIVE writes: `setFunConstraintEntry` (the entry
+              append), the module seed bare + alias-prepend, the module snapshot bare + qual, and
+              the JOINT-DISCOVERY snapshot in `discoverPromotedModules` — the fifth, which
+              RUN-P3-015 omitted and which module 1 is seeded from. ONE read:
+              `declaredConstraintFor`, with `declaredConstraintSlots` demoted to a projection of
+              it. **`data CSlot` is UNTOUCHED and no `CSlot` mint site was edited.** Four
+              signatures generalized to carry a scalar payload: `aliasConstraintEntries` /
+              `aliasEntriesFor` / `moduleAliasEntry` / `memberAliasEntry` (`List a` → `a`) and
+              `promotedConstraints`; two pairs of structural duplicates collapsed into one
+              polymorphic function each — `attributeModuleArities`+`attributeModuleArrIfaces` →
+              `attributeModuleEntries` (**both `rule-duplicate-body` disables DELETED**, #1201
+              partially discharged) and `lookupQualArity`+`lookupQualIfaces` → `lookupQualPayload`.
+transform:    Every entry written into the ids table now carries, in a sidecar table keyed by the
+              SAME name, the number of dict slots the callee's own `=>` context DECLARED —
+              recorded as `CDPLen (listLen (dedupSlots slots))`, so `b1` can compare `index < k`
+              and withhold identity from the super slots `expandSupersPairs` APPENDS. Absence is a
+              distinct token, `CDPUnknown`, never `0` and never `Option Int`; it means WITHHOLD.
+              The single read clamps with `minI k (listLen slots)` before returning.
+could move:   Acceptance behaviour: NOTHING, and here is the evidence rather than the assertion.
+              Nothing reads `cdPrefix` — the sidecar is write-only this bite by the scope ruling,
+              so neither fill site was touched and no route word, dict arity or emitted symbol has
+              a new input. Measured on the rebuilt binary: `make medaka` exit 0 · `make check-self`
+              PASS · `test/registry_keying_ratchet.sh` PASS (24 CrossRun fields, 24 write targets,
+              both checks — the second allowlist is DERIVED from the first, which is why two rows
+              sufficed where RUN-P3-015 said four) · `diff_compiler_llvm_typed` and
+              `diff_compiler_llvm_typed_ir` **PASS — the emitted typed IR is byte-unchanged**,
+              which is the direct observation that dict arity and route words did not move ·
+              `diff_compiler_eval_modules` PASS (the run-path cross-module arm) · `fmt --check` and
+              `lint` clean on the touched file and on `lint compiler stdlib sqlite`. The one
+              non-behavioural consequence is that `compiler/types/typecheck.mdk`'s SNAPSHOT and its
+              `selfproc_legA` `types.typecheck` scheme golden both move — new top-level symbols,
+              generalized signatures, and four deleted duplicates (`git diff` on the file is the
+              derivation; no count is written here). Per the packet ZERO goldens were blessed —
+              the close-out re-cut owns them, and that diff must be read as a REVIEW artefact:
+              it is not additive-only, because collapsing the four duplicates deliberately
+              removes their rows.
+nearest miss: The nearest program this does not cover is EVERY program: with no reader, a callee
+              whose declared prefix is recorded as 1 and whose expansion appended 3 super slots is
+              stamped exactly as it was before this bite — #1113 is not fixed until `b1` reads
+              `cdPrefix`. The nearest program whose RECORDED value would be wrong if the arithmetic
+              were: `twice : (Shw a, Shw a) => a -> Int` — one tyvar, duplicated constraint.
+              Independently corroborated at the consumer end rather than by re-running the
+              packet's instrumentation: built with `--keep-ir`, `@mdk_w__twice` takes **one** dict
+              param, while the sibling control `both : (Shw a, Tag a) => a -> Int` takes **two**.
+              So `dedupSlots` really does collapse 2→1 and `listLen slots` would have recorded 2 —
+              marking the first APPENDED slot declared, the unsafe direction. That program is NOT
+              landed as a test (see `unchecked:` (1)).
+engines:      ONE LINE, because no engine sees a different byte: `diff_compiler_llvm_typed_ir`
+              passes, so LLVM emits identically; wasm shares the same Core IR input and the same
+              front end, and `eval`/`core_ir_eval` read routes this bite does not write. No peer
+              arm is owed by THIS bite. **`b1` owes all four**, since the moment `cdPrefix` gates
+              identity the route word itself changes on every engine.
+unchecked:    (1) **The packet's "doctests" deliverable is NOT LANDED, and it is not landable as
+              written.** `compiler/` carries no doctests and no `test "…"` blocks at all
+              (`grep -rn '>>>' compiler/` and `grep -rn '^test "' compiler/*/*.mdk` are both
+              EMPTY), so adding the first one to `typecheck.mdk` would be a first-of-its-kind
+              construct in a 30k-line file, run by no gate — `medaka test` is never pointed at it.
+              With `cdPrefix` unread there is also nothing observable to assert. The witness
+              program is carried instead as the `dedupSlots` comment at `setFunConstraintEntry`
+              and in `nearest miss:` above; `b1`, which makes the prefix observable, is where it
+              becomes a real fixture. (2) **The `minI` clamp is DEFENSIVE, not measured** — the
+              `pairSlots` truncation it guards was instrumented by the prep pass over a full
+              compiler build and a two-module probe and never fired. It is one token and it fails
+              closed. (3) **The vacuity measurement (§7 M-3) was NOT run** — it needs an
+              instrumented fill site, which the scope ruling forbids this bite from touching; the
+              orchestrator owns it. The `:14600-14612` joint-discovery write, which is what that
+              measurement exists to detect the absence of, IS present. (4) **No fixpoint, no
+              engines gate, no perf gate** — `llvm_typed_ir` passing byte-for-byte makes the
+              fixpoint's question (does the emitter emit the same thing) already answered for this
+              diff, and no backend file was touched. (5) **`CDPUnknown` is currently constructed
+              only by `clampPrefix`'s absent arms and consumed by nobody**, so the fail-closed rule
+              is stated and typed but not yet exercised; `b1` is the first reader that can violate
+              it.
+
+### B-2.2-e + B-2.2-b1 — the mirror deletion, and the origin on both sides of the seam
+sites:        `compiler/types/typecheck.mdk` (import of `types.route_key`; `implKeyTc`'s body →
+              `implRouteKeyWord OriginUnresolved`; **`b1`'s TWO LINES** at `keyForSite` and
+              `keyForSiteByIface`, now `implRouteKeyWord ir.irOrigin ir.irName tys None`; plus
+              the two `f`-review one-liners relayed mid-flight — `funConstraintDeclaredRef` is
+              now CLEARED at `dictPassModulesIfEnabled`/`dictPassModulesScoped`, and
+              `CDeclaredPrefix`'s definition is reworded off "declared by its own `=>` context"
+              onto "present before super expansion appended any") · `compiler/eval/eval.mdk`
+              (`implKeyOf` AND its whole private `ppTyK`/`ppTyAtomK`/`ppEffAtomK` printer family
+              DELETED; `declImplIfaceIdRow` and `implMethodEntry` repointed, the latter grown an
+              origin param threaded from `declImplEntries`) · `compiler/ir/core_ir_lower.mdk`
+              (imports the mint directly instead of `eval.implKeyOf`; `ifaceImplHeadEntries` +
+              `lowerImplMethod`, the latter grown an origin param threaded from `lowerDeclImpl`)
+              · `compiler/types/route_key.mdk` (header retractions only — no code) ·
+              `test/diff_compiler_dict_semantics.sh` (5 TABLE rows + 8 IR rows) ·
+              `test/typecheck_compiler_source.sh` (3 ratchet allowlist entries — see
+              `unchecked:` (5)) · 5 new `test/dict_fixtures/` directories.
+              **ZERO edits at the four `inst` arms** (RUN-P3-025 holds: selection and the
+              collision gate are inside `keyForSite*`; the arms hold only `fromOption tag`),
+              and **D5/D6's element routes are untouched by construction** — `b1` edits neither,
+              so `b2`'s prohibition is honoured with no explicit guard. Stated because a reader
+              of a two-line diff cannot see that it was considered.
+transform:    ONE route-word mint for the whole tree. The caller side (`keyForSite*`) and the
+              definition side (`eval`, `core_ir_lower`) call the same function with the same
+              `implOrigin`, so a route word carries `module::Iface` where the loader stamped an
+              origin and the bare name where it did not (flat drivers — `check <single file>`,
+              lsp, repl, doc, lint, snapshot — byte-identical to pre-bite).
+could move:   **IT DID MOVE, and here is what.** (1) **ACCEPTANCE, on the `run` path:
+              `test/must_fail_fixtures/1514-xmod-same-spelled-iface-impl-selection` DRAINED.**
+              Two unrelated modules each declaring `interface Same` + `impl Same Blob` used to
+              collapse onto ONE route word and answer both call sites with one module's impl —
+              import-order dependent, exit 0, no diagnostic. Measured on this binary: `11 / 110
+              / 7`, the fixture's own hand-derived correct answer. That is the #1047/#1265
+              family, **not** #1182 (see `nearest miss:`). The gate is RED *because* it drained;
+              per the packet nothing was blessed or deleted — the close-out owns closing #1514
+              and removing the fixture. (2) **A COLLISION VERDICT.** `ifaceDeclHeadUnique` →
+              `declKeysAtHead` dedups by canonical key, so identity-bearing keys make two
+              same-spelled interfaces at one head count 2 instead of 1: `unique` flips False and
+              the definition side stops routing both under the bare tag, closing a skew that was
+              live and masked by `implEntryRouteWords`' union arm. ⇒ **"byte-identical IR on
+              programs with no head collision" is FALSE as usually stated.** The defensible
+              claim is *"…and no two same-spelled interfaces in the module graph."*
+              (3) **EMITTED SYMBOLS AND DICT WORDS at collision sites** —
+              `@mdk_impl_Base__Box_Int___btag` becomes `@mdk_impl_base__Base__Box_Int___btag`
+              (pinned both ways, HAS + LACKS, by the new `b1-p4-super-slot-colliding-heads`
+              rows) ⇒ the IR-text goldens and the LEG A scheme goldens move (all three edited
+              modules are LEG A). **ZERO goldens blessed, including the seed.** (4) **THE SEED
+              DOES NOT NEED RE-MINTING, measured rather than hoped:** `selfcompile_fixpoint.sh`
+              reports **C3a YES** — IR1 byte-identical to the seed-bootstrapped reference — and
+              **C3b YES**. The compiler's own source emits the same bytes through this change.
+              (5) **NOT acceptance anywhere else:** engines 0 regressions / 0 promotions / 0
+              pinfails; `eval_modules` 11/11; `llvm_typed_ir` 54/54 byte-identical (a SINGLE-FILE
+              corpus ⇒ absent origin ⇒ bare name, which is exactly why it cannot see this bite —
+              do not read its green as multi-module evidence); `dict_semantics` 176/176;
+              `typecheck_compiler_source` PASS; `check-self` PASS. And `pickMostSpecificEntry`
+              still RETURNS the first match after reporting, so a REJECTED program's routes are
+              unchanged — asserted, not assumed, by the two new REJECT fixtures keeping their
+              exact diagnostic codes (`T-INCOMPLETE-IMPL`, `T-MISSING-SUPER-IMPL`).
+nearest miss: **#1182 IS NOT FIXED AND NOT TOUCHED — its pin still reproduces** (`run` → 1,
+              control → 2). Two independent derivations agree why: the wrong row is chosen
+              UPSTREAM of this word, by `ieCandidatesForMethod`'s `(method, head)` key with no
+              interface component; and #1182's repro is a SINGLE FILE, so `ifaceIdentity` answers
+              `""`, `ifaceWordOf` falls back to the bare name and the word does not even move.
+              ⚠️ `b1` makes that bug **quieter → differently wrong**: where the head-tag hedge
+              used to mask the mis-selection, the wrongly-selected instance's IDENTITY is now
+              stamped directly. Watching artifact: the existing `must_fail_fixtures/1182-…`
+              pair, whose `why-control` block already explains how to read a convergence.
+              **`sanitizeId` is not injective and this bite widens the alphabet reaching it:**
+              module ids are loader-derived PATHS and `.`, `/`, `-` all sanitize to a SINGLE
+              `_`, so `a.b::I|T|`, `a/b::I|T|` and `a-b::I|T|` collide — pre-existing at MODULE
+              granularity, newly exposed at INTERFACE granularity. (⚠️ the circulated `a_` +
+              `_Alpha` example is WRONG — each offending char maps to one `_`.) Independently,
+              the runtime word is `hashName key` (djb2), a second and unrelated collision
+              channel no `sanitizeId` reasoning covers. **`D1-leak` is untouched:** a rigid
+              in-scope goal whose lookup misses still falls through to `inst`; `b1` makes that
+              wrongness NAMEABLE without fixing it — #1127 legs 1–2 are B-1's.
+engines:      **ALL FOUR MOVED, and the peers are owed.** eval and `core_ir_eval` share the
+              definition-side mint (`core_ir_eval.mdk:455` is a CONSUMER — owed a *test*, not a
+              patch); LLVM and wasm read the words through their own families. **OWED PEERS,
+              unedited here:** `llvm_emit.implEntryRouteKey` / `implEntryRouteWords` /
+              `headTagUnique` / `distinctKeysAtHead`, wasm's independently-written family, and
+              `core_ir_lower.distinctKeysAtHeadL`. Acceptance survives the verdict skew in
+              `could move:` (2) only because `implEntryRouteWords` emits the UNION
+              `{routeKey, headTag}` — the new colliding-heads fixture shows that union doing
+              exactly that work (`icmp eq` against BOTH the identity key and the bare tag).
+              ⚠️ `wasm_emit.mdk:4090`'s `implKeyOf` is a DIFFERENT function sharing the name (a
+              local projection for `distinctImplKeys`) — deliberately not touched.
+unchecked:    (1) **#1608 (S1, OPEN, declared un-pinnable) sits under the `run` arm of every
+              cross-module fixture added here** — `core_ir_eval` selects a cross-module impl by
+              IMPORT ORDER, ignoring the receiver, with no pin. Mitigation, not a fix: all five
+              new fixtures are graded `ALL_EXACT` (run AND build must agree byte-for-byte with a
+              hand-derived value) and every discriminating assertion is on EMITTED IR, so **no
+              assertion added by this bite rests on `run` alone.** (2) **The `headTycon`
+              asymmetry is NOT fixed and its enumeration is NOT complete.** eval's `headTycon`
+              strips `TyEffect` AND `TyConstrained` to the inner head where typecheck's
+              `headTyconTy` answers `None` (as it does for a function head) — three known shapes
+              of one wildcard arm, on a projection nobody has audited arm-for-arm. `e` unifies
+              the printers (the WORD), not the head projections (the TAG). Measured with a
+              control: `impl Sz (<Stdout> Int)` alone → check 0, run 0, **build 1**
+              (`E-PANIC: no impl of method 'sz' for type '__none__'`); `impl Sz Int` alone
+              builds and executes. Filed separately. (3) **The `ppTy` fold WIDENS eval's words**
+              (`<Stdout> Int` no longer prints as `Int`); the safety argument is that the
+              observing program does not typecheck — two impls differing only in an effect row
+              or a constraint are rejected by coherence (*"Overlapping impls of Sz: Int and
+              Int"* — the diagnostic strips the row too), exit 1 on check AND run, both shapes.
+              NOT measured: the LONE effect-headed impl, whose definition-side word does change
+              (to the one typecheck was already stamping) and which (2) says is broken on the
+              build path either way. (4) **`route_key` is now in the import closure**, so the
+              `Makefile` `test:` line is no longer its only verification — but it IS still the
+              only thing that RUNS its 38 doctests (all pass). Do not delete it. (5) 🚨 **THREE
+              RATCHET ALLOWLIST ENTRIES WERE ADDED TO `test/typecheck_compiler_source.sh`, AND
+              TWO OF THEM DISCHARGE A PRE-EXISTING RED INHERITED FROM `a`.** The `#1110`
+              occurrence-layer and `OriginUnresolved` producer ratchets are `git grep`s over
+              TRACKED files, **not** over an import closure — so `compiler/types/route_key.mdk`
+              has tripped them since `B-2.2-a` landed it, unnoticed because `a`'s own row records
+              that no gate beyond build/check-self/snapshot was run. ⚠️ *"A call-site-free module
+              is in no gate"* is true of the compiler's gates and FALSE of this one. Both entries
+              are justified at the list (doctest fixtures; the file constructs no AST the
+              pipeline consumes). The third is `b1`'s own — `implKeyTc`'s new `OriginUnresolved`
+              argument — justified by (6). (6) **M4 WAS RUN; it is the evidence for skipping two
+              of D1's nine sites.** `KeyEntry`'s key field was replaced with a literal
+              `"__DEAD__"` at both mint sites on a full rebuild: `make medaka` 0, `make
+              check-self` PASS, `diff_compiler_dict_semantics.sh` **163/163**. Corroborated at
+              field level — every `KeyEntry` destructuring binds `_` in position 4 and
+              `bucketKeyEntriesFrom` only rebuilds it. ⇒ dead field; `e` correctly skips
+              `keyEntryOf`/`keyEntryOfRow`. (7) **`a`'s instruction to retire `rkEffAtom`'s
+              `rule-duplicate-body` directive is REFUSED, measured.** `e` deletes eval's copy,
+              but typecheck's `ppEffAtomTy` and doc's `ppEffAtomDoc` are reached by the
+              DIAGNOSTIC printers, untouched here — so `rkEffAtom` becomes one of THREE, not the
+              only one. With the directive removed, `medaka lint --only=rule-duplicate-body
+              --deny=rule-duplicate-body compiler stdlib sqlite` exits 1 naming both files.
+              Directive kept; the comment above it records this instead of promising a deletion.
+              (8) **Not run:** perf/scaling, the wasm gates, and `diff_compiler_selfproc` (its
+              LEG A goldens move by construction and the packet forbids blessing — the close-out
+              re-cut owns them, along with `route_key.mdk`'s still-owed snapshot CREATE, which
+              `a` bequeathed).
+
+### B-2.2-c — the comment-only bite: three wrong comments corrected, one property inscribed
+sites:        `compiler/types/typecheck.mdk` only, four hunks, **comment lines exclusively**
+              (`git diff -U0 | grep -vE '^[+-][[:space:]]*--'` over the non-marker lines is
+              EMPTY — the mechanical check, not an assertion): `:18482-18487` (the
+              `fromOption tag` consequence, appended to `keyForSite`'s header), `:19539-19549`
+              (`implDictRoutesForFull`'s `[keyTable]` justification), `:19811-19850` (the new
+              selector-reachability block, above `entail` — a FUNCTION, so #829 cannot fire),
+              `:19896-19898` (`entailInst`'s header, the `EKNestedTop` clause). +60/−3.
+transform:    (1) `keyForSite`: the WRONG-TIER paragraph was **already corrected by `b1`+`e`**
+              (it names `emitDefaultRKey`, and the `Some __none__`-is-a-direct-hit measurement,
+              correctly) — **not re-edited**. What was still missing is the CONSEQUENCE, which is
+              the half that nearly shipped a break, so it was appended: `fromOption tag` is not a
+              hedge over a selector result, it is the ONLY source of that TAG where it fires,
+              deleting it breaks every cross-module method-less impl inheriting an interface
+              default, and a green suite here is evidence about the DEFAULT tier, not the route
+              word. (2) `implDictRoutesForFull`: *"[keyTable] is still threaded for the nested
+              `requires` recursion, which re-buckets by each requires' own head"* replaced with
+              **dead parameter awaiting the sweep**, carrying the derivation (`selectReqImpl`'s
+              signature takes no `KeyBuckets`; its own header says the parameter was REMOVED
+              rather than ignored; every link on `argImplReqRoutes → argReqRoute → routeOfD →
+              entail` only FORWARDS the table; the one `KeyBuckets`-consuming fallback,
+              `undeterminedRoute`'s `CountImpls` arm, is unreachable because `argReqRoute` seeds
+              with `KeepNone`). (3) `entailInst`'s header: `EKNestedTop → bare head tag` replaced
+              with *the min⊑ winner's canonical key (bare head only when the iface-keyed
+              collision gate is False)* — false since #203, and the arm's own body comment and
+              the `EntailKind` ladder comment both already said so. (4) NEW: the ladder's
+              **selector-reachability** property above `entail`, with its three earned guards —
+              why it matters (§3 `assum` ≺ `inst` ≺ `fallback`; a later rung answering re-routes
+              a dict cell from a caller-supplied parameter to a statically selected impl, wrong
+              value at exit 0), that it is **reachability, not a count** (two selector calls per
+              `inst` arm are legitimate and at `EKArg`/`EKOp` deliberately ask about DIFFERENT
+              methods via `innerDefaultMethod`/`ieDefinesReqMethodAt` — verified at both arms —
+              so any *"one call per arm"* rule licenses a collapse that changes which impl's
+              context is discharged), and that a grep of `ieSelectRowBy*` is not the check
+              (`concreteReqMatchByIface` is a legitimate out-of-ladder selector, the obligation
+              channel's evidence check).
+              ⚠️ **THE PACKET'S WORDING OF THE PROPERTY WAS AMENDED, NOT INSCRIBED VERBATIM, AND
+              THE AMENDMENT IS REPORTED RATHER THAN SILENT.** The packet's clause *"No selector
+              call may be reachable from `entailAssum`, `entailAssumVar`, `entailAssumRoute` or
+              `entailFallback`"* is TRUE for the three `assum` functions (enumerated: every arm
+              is a `perRun` registry lookup — `activeDictVarOfEncl`/`activeDictVarForEncl`/
+              `enclDictVarOf`/`opDictVarOf`/`activeDictPredOf`/`ifaceOfMethodName` — none reaches
+              a selector) and **FALSE for `entailFallback` at this pin**: `EKNestedTop`'s
+              `CountImpls` policy goes `undeterminedRoute` → `routeUndeterminedTop`, whose
+              exactly-one arm calls `argImplRequiresRoutes` → `selectReqImpl` (`:20036`). Writing
+              the packet's form verbatim would have inscribed a property the tree violates on
+              its first read — the exact failure this bite exists to end. The block therefore
+              states the assum trio as an absolute, and names the fallback path as a
+              **derived non-violation**: that rung answers THIS goal by COUNTING
+              (`implHeadTagsForIface`, exactly-one, else `T-AMBIGUOUS-INSTANCE`), never by
+              selection, and only then routes the chosen impl's own nested `requires` as a FRESH
+              sub-goal descending the ladder again. The forbidden shape — the fallback rung
+              answering the ladder's own goal by selection — is stated explicitly, and the
+              `KeepNone` policy (every element-dict recursion) cannot reach even this path.
+could move:   NOTHING, and the reason is structural rather than an assertion: **the diff contains
+              no expression**, only `--` lines, mechanically confirmed by the grep quoted in
+              `sites:`. Corroborated end-to-end: `make medaka` exit 0 (full 2-stage rebuild) and
+              `make check-self` **PASS** on the rebuilt binary; `medaka fmt --check` 0 and
+              `medaka lint` 0 on the edited file, before AND after the rebuild. Comment-bearing
+              record decls were not touched — every edit is a free-standing `--` block above a
+              FUNCTION or a signature, so #829's record-header hazard has no site here.
+nearest miss: The property inscribed is about PLACEMENT of selector calls, not about lookup
+              correctness, so the nearest program it does not cover is the **`D1-leak`
+              fall-through**: a rigid, in-scope goal whose `assum` lookup MISSES, so the ladder
+              falls through to `inst` and re-resolves it by selection. That is a real
+              re-resolution TODAY, on a correct-by-this-property tree — the selector call sits in
+              the `inst` arm exactly where the rule allows — and **this bite does not fix it**.
+              #1127 legs 1–2 are B-1's, and B-1 is out of this sprint's scope
+              (RUN-P3 scope ruling), so the leak survives the sprint. Second nearest: the
+              `[keyTable]` parameter that (2) now calls dead is still PRESENT in every signature
+              on that chain (the set is a command, not a number written here:
+              `grep -n 'KeyBuckets ->' compiler/types/typecheck.mdk`); naming it dead does not
+              remove it, and the sweep that does is owed.
+engines:      **None moved.** No emitted byte changes: comment-only, and the LLVM/wasm/eval/
+              core_ir_eval arms all consume the AST after comments are discarded by the lexer.
+              No peer is owed a mirroring edit — `eval.mdk`/`core_ir_eval.mdk` carry no copy of
+              these comments (they are about the typechecker's routing ladder, which has no
+              parallel in the eval drivers).
+unchecked:    (1) **BLESSED ZERO GOLDENS, per the packet.** `diff_compiler_snapshot_frontend.sh`
+              was RUN (not blessed) and reports 4 failures in the `compiler` family:
+              `typecheck.mdk` (SOURCE, DESUGAR, MARK), `core_ir_lower.mdk`, `eval.mdk` (same
+              sections) and `route_key.mdk` (no snapshot). **Three of the four are inherited, not
+              mine** — `core_ir_lower.mdk` and `eval.mdk` are UNMODIFIED in this working tree
+              (`git status` lists only `typecheck.mdk`), so they are `b1`+`e`'s deferred re-cut,
+              and `route_key.mdk` is `a`'s owed CREATE. (2) **My edit provably cannot have moved
+              `typecheck.mdk`'s DESUGAR/MARK sections, and did not need to be measured to know
+              it:** those sections contain **zero** location-like tokens (`grep -cE '[0-9]+:[0-9]+'`
+              from `# DESUGAR` to EOF of the committed golden → **0**), so a line-shifting comment
+              edit cannot reach them; and the golden's own `source_lines=29596` against `HEAD`'s
+              29763 shows the file was already 167 lines past its golden BEFORE this bite. That
+              is also the derivation behind the packet's instruction NOT to compress for line
+              count, and it held. (3) **Not run:** the gate suite at large, `selfcompile_fixpoint`,
+              `typecheck_compiler_source.sh`, perf/scaling, the wasm gates, `diff_compiler_selfproc`
+              — justified by (2)+`could move:`: with no expression in the diff there is no
+              behaviour for them to grade, and the LEG A/snapshot goldens they touch are the
+              close-out re-cut's, which this bite is forbidden to bless.
+
+### DIFFERENTIAL-DETECTED — written at detection time by the round that found it
+
+Per the two-sprint audit's template delta: *"a `DEBT.md` row is owed for any behavior delta a
+differential DETECTS, not only ones the implementer recognizes."* Neither of these was recognized by
+any bite's implementer. Base `68f84bf1` vs branch `ec1cda37`, 15 programs × 4 channels × 2 arms,
+graded on stdout and diagnostics (never exit codes). Control clean, 0 normalization leaks, 6 vacuous
+rows named. Harness: `/var/tmp/p3/r3/`, log `run_real.log`.
+
+#### D-1 — `p11_sanitize_collide`: a program that BUILT and ran (wrongly) now FAILS TO LINK
+
+sites:        no source site — an emergent consequence of `B-2.2-e`'s word carrying `module::Iface`
+              through `sanitizeId` (`compiler/backend/private_mangle.mdk`).
+transform:    none directly; the identity substitution widens the alphabet reaching a
+              non-injective sanitizer.
+could move:   🚨 **IT MOVED, and this row IS the detection.** Modules `a.b` and `a_b`, each with
+              its own `interface C`/method `m` at head `Int`:
+                base   → build 0, exec 0, prints `(1, 1)`   ← the pre-existing WRONG answer
+                branch → build **1**, `clang failed linking`:
+                         `invalid redefinition of function 'mdk_impl_a_b__C_Int__m'`
+              `.` and `_` both sanitize to `_`, so `a.b::C|Int|` and `a_b::C|Int|` collapse onto one
+              symbol. **This is F-6 / #347, previously `needs-repro`, now REPRODUCED — and made
+              load-bearing by this sprint.**
+nearest miss: module ids differing only by `/` or `-` (all sanitize to `_`); and the second,
+              independent channel `hashName` (djb2), which `sanitizeId` reasoning does not cover.
+engines:      LLVM only (the failure is at the clang link step). eval is unaffected — `run` is SAME
+              on both arms. wasm unprobed by this harness (2-engine differential).
+unchecked:    whether any REAL project has module ids colliding under `sanitizeId`. The corpus
+              program is synthetic.
+
+🚨 **Direction, stated explicitly because it is the whole question:** this is **silent wrongness →
+loud breakage**, i.e. **S0 → S1**, which by this repo's severity ladder is an **improvement** — the
+program was already answering `(1, 1)` where `(1, 2)` is correct, and now refuses to build instead of
+lying. **But it is a NEW build failure on a program that previously built**, and that must be in the
+PR body rather than discovered by a user. The standing rule that loud→silent is a regression has an
+inverse, and this is it.
+
+#### D-2 — the same-spelled-interface CLASS is **NOT** drained, though #1514 is
+
+sites:        n/a — a scope bound on the sprint's headline claim.
+transform:    n/a.
+could move:   `p02`/`p03` are two same-spelled interfaces in different modules, each with an impl at
+              the same head, reached through per-module wrapper functions. Correct is `(1, 2)`
+              (DICT §8 I4: a class is `(module, name)`). **Both arms print `(1, 1)` in one import
+              order and `(2, 2)` in the other — unchanged by the sprint, and still ORDER-DEPENDENT.**
+              `p04`/`p05` (method-name sharing across modules) likewise unchanged.
+nearest miss: this IS the nearest miss — the class #1514 belongs to, one wrapper away.
+engines:      unchanged on both arms, both engines.
+unchecked:    **why** #1514's shape drains and `p02`'s does not. The adversarial review verified
+              #1514's drain **causally** (the two sides actively disagreed pre-bite and now agree),
+              so the drain is real; what is unestablished is the boundary. Candidate: `p02` dispatches
+              through a wrapper in a third module, so the call may never reach `keyForSiteByIface`.
+              **Owed to the repair round.**
+
+🚨 **Binding on the PR body and the #1113 close-out:** we may state that **#1514 is drained**, with its
+causal derivation. We may **NOT** state that the same-spelled-interface class, the #1047/#1265 family,
+or "cross-module interface collisions" are fixed. **A drained fixture is not a drained class**, and the
+differential just demonstrated the gap empirically rather than leaving it as a caution.
+
+#### D-3 — headless cross-module impls: one collapsed symbol becomes two qualified ones
+
+**Written by the repair round that detected it (R-9), per the ledger's own rule.** It falls inside
+`e`'s *amended* `could move:` claim but **no bite's row records it**, and it is a **different bucket
+and a different mangling shape** from the collision-site change row `e` does record
+(`Base__Box_Int___btag` → `base__Base__Box_Int___btag`, a *headed* impl).
+
+sites:        no source site — an emergent consequence of `B-2.2-e`'s word carrying `module::Iface`
+              into the **headless** (`noneHeadTag`) bucket.
+transform:    none directly.
+could move:   🚨 **IT MOVED.** Two modules each declaring a same-spelled `interface C` with a
+              **headless** impl (`impl C a`):
+```
+base:    @mdk_impl___none___cm                      ← ONE symbol; the second module's body
+                                                       is silently DROPPED
+branch:  @mdk_impl_ma__C_a__cm                      ← TWO distinct symbols…
+         @mdk_impl_mb__C_a__cm                      ← …the second emitted and NEVER called
+```
+              **Values are unchanged on both arms** (`(1, 1)`, where `(1, 2)` is correct), so this is
+              **not** an acceptance or severity change. **Direction: neutral-to-better** — base
+              silently discarded a definition; the branch keeps both and makes the mis-selection
+              **nameable in the IR without fixing it**, which is exactly the pattern row `e` predicts.
+nearest miss: a headless case where two *qualified* words sanitize together would be `D-1`'s link
+              redefinition in this bucket. **Not searched for** — base emits one symbol here, so this
+              program cannot show it.
+engines:      LLVM (symbol set). eval unchanged — values identical on both arms. wasm unprobed.
+unchecked:    whether this bucket can reach `D-1`'s shape; the wasm arm.
+
+✅ **This row's sibling result CONFIRMS the amended claim.** A control with **differently-spelled**
+headless interfaces across modules produced **byte-identical IR**, with the symbols still unqualified
+(`@mdk_impl___none___cam` / `…cbm`) — qualification is gated on the collision verdict exactly as row
+`e` (2) describes. **The UNAMENDED claim — "byte-identical on programs with no head collision" —
+would have been falsified by this row.** Narrowing it to *"…and no two same-spelled interfaces in the
+module graph"* is what makes it survive.
+
+### REPAIR ROUND (R-1) — coverage restored for the acceptance fix, and two over-broad allowlist entries narrowed
+
+sites:        `test/dict_fixtures/b1-xmod-same-spelled-iface-impl-selection/` (NEW, 4 files) ·
+              `test/dict_fixtures/b1-xmod-distinct-spelled-iface-control/` (NEW, 4 files) ·
+              `test/dict_fixtures/b1-xmod-same-spelled-iface-constrained-wrapper/` (NEW, 3 files) ·
+              `test/diff_compiler_dict_semantics.sh` (3 section-1 rows, 5 section-3 IR rows) ·
+              `test/typecheck_compiler_source.sh` (2 NEW companion line-checks +
+              2 corrected justification comments)
+transform:    (1) **#1514's program promoted out of `must_fail` into a VALUE fixture**, so deleting
+              the drained pin at close-out no longer leaves the fixed behaviour unguarded. The five
+              existing `b1-*` rows pin the WIRE FORMAT only, and the colliding-heads one separates
+              its impls by TYPE ARGUMENT — which the pre-bite word already separated — so the module
+              prefix is decoration there and nothing in that program answers differently without it.
+              This is the only row in the corpus whose VALUE the identity decides.
+              (2) A **constrained-wrapper** sibling, added mid-flight, pinning a deterministic
+              native SEGFAULT out of existence (see `engines:`).
+              (3) `route_key.mdk`'s `originun_allowed` / `occun_allowed` filename entries given the
+              **line-grained companion checks** `typecheck.mdk`'s entry already had.
+could move:   **NOTHING in the compiler — the diff contains no `compiler/` or `stdlib/` change.**
+              `compiler/types/route_key.mdk` was appended to TWICE during fail-capability probing and
+              restored byte-exactly both times (`git status` clean for it at hand-off); the built
+              binary was never rebuilt and never needed to be. What moves is the GATE's assertion
+              count: `diff_compiler_dict_semantics.sh` 176 → 184, `typecheck_compiler_source.sh`
+              gains two checks.
+nearest miss: 🚨 **The WRAPPER-IN-A-THIRD-MODULE shape (`DEBT.md` D-2) — measurably NOT drained and
+              deliberately NOT added here.** Both `b1-xmod-*-iface-*` fixtures dispatch through a
+              wrapper declared in the SAME module as its interface. D-2's `p02`/`p03` route through a
+              wrapper in a third module; both arms answer `(1, 1)` in one import order and `(2, 2)` in
+              the other, unchanged by this sprint. Adding a fixture for it would need a KNOWN-BAD
+              ledger row, not a conformance row, and the boundary question D-2 leaves open ("why does
+              #1514's shape drain and p02's not") is still unanswered. A drained fixture is not a
+              drained class; nothing here widens that claim.
+              Second miss: `test/diff_compiler_import_order.sh` (its own corpus,
+              `test/import_order_fixtures/`) is the natural home for the ORDER-DEPENDENCE half of
+              this class and was **not** extended — the #1514 shape is no longer order-dependent, so
+              a row there would be green-by-construction; the D-2 shape is, and belongs there if and
+              when someone pins it.
+engines:      eval + LLVM, on all three fixtures. `check`/`run`/`build` are graded on every row, and
+              `ALL_EXACT` additionally requires run and build stdout to be byte-identical.
+              🚨 **The constrained-wrapper fixture is the one with an engine DELTA to record, and it
+              is not a delta any bite's implementer recognized or any commit message claims.**
+              Measured on two pre-built arms: base built at exit 0 and its **BINARY SEGFAULTED, 3 runs
+              of 3** (139, `E-FATAL-SIGNAL`) while `run` answered `(11, 11)`; branch answers
+              `(11, 110)` on both engines at exit 0. IR-read mechanism: base handed the SAME dict
+              constant to both generic calls while the dispatcher tested one tag in BOTH arms, so no
+              arm matched and control fell to `unreachable`; branch emits two constants and two arms.
+              **Stated as an EMERGENT consequence of the route-word change, not as fixing a filed
+              issue — no issue we have identified covers it.**
+              wasm: UNPROBED on all three fixtures. This gate drives check/run/build only (its own
+              "NOT YET COVERED" §7 bullet), so the third refinement of the single-evaluator law is
+              owed for these rows exactly as it is for every other row in the corpus.
+unchecked:    (a) **The pre-bite cells are RELAYED, not re-measured by me.** #1514's `11 / 11 / 7`
+              comes from the drained pin's own `claim.txt`; the wrapper fixture's segfault cells come
+              from the coordinator's two-arm measurement. I verified the POST-fix side first-hand on
+              this binary (check 0, run and built-binary stdout, `MEDAKA_STRICT=1`, exit codes read
+              unpiped) and derived the IR facts myself from `--keep-ir`. I did not build a base-arm
+              binary. (b) The three `mdk_dc_N` constant indices in the section-3 rows are pinned
+              LITERALLY (house style — `b1-p4-*` pins `@mdk_dc_0`/`@mdk_dc_1` the same way); they are
+              stable only as long as the fixture's own declaration set is. The arms' `icmp eq` tag
+              WORDS were deliberately NOT pinned — they are hashes and would re-red on any re-mint
+              with no behaviour change. (c) I did not run the full suite, the fixpoint, or the
+              snapshot corpus: the diff touches no compiler source, and the snapshot corpus is the
+              close-out's to re-cut. `test/dict_fixtures` is not in any snapshot family (derived:
+              `run_family` calls in `diff_compiler_snapshot_frontend.sh`), so these fixtures owe no
+              snapshot golden — but the pre-commit hook still runs check 4 for any staged `.mdk`, so
+              the committing agent will want `PRECOMMIT_SNAPSHOT_DEFER=1`. (d) **BLESSED ZERO
+              GOLDENS.** Every pinned value was hand-derived from the impl bodies before any binary
+              was run; no `CAPTURE=1` anywhere.
+              (e) **Every new row was proven FAIL-CAPABLE by perturbation, then reverted
+              byte-exactly** — see the report; a fixture that has only ever passed has not been shown
+              to pin anything.
+
+### PIN ROUND (P-1) — the four in-passing findings get self-draining fixtures (#1617–#1620)
+
+sites:        `test/must_fail_fixtures/1617-fn-typed-impl-head-none-bucket/` (NEW: `main.mdk`,
+              `control.mdk`, `permutation.mdk`, `claim.txt`) ·
+              `test/must_fail_fixtures/1618-effect-carrying-impl-head-cannot-build/` (NEW:
+              `main.mdk`, `control.mdk`, `claim.txt`) ·
+              `test/must_fail_fixtures/1619-xmod-default-hijacked-by-same-spelled-iface/` (NEW:
+              4 modules — `main.mdk`, `di.mdk`, `dimpl.mdk`, `other.mdk` — plus `control.mdk`,
+              `claim.txt`) ·
+              `test/must_fail_fixtures/1620-two-ifaces-same-method-binary-wrong-value/` (NEW:
+              `main.mdk`, `control.mdk`, `raw-probe.mdk`, `claim.txt`).
+              **NO compiler, stdlib or gate source was touched** — the must-fail member set is
+              `ls test/must_fail_fixtures/`, so adding a fixture is adding one directory and
+              `test/diff_compiler_must_fail.sh` needed no edit. Four `claim.txt`s were perturbed
+              during drain-capability probing and restored byte-exactly (`git status` shows only
+              the four new untracked directories).
+transform:    Four pins, each grading the channel that actually shows its defect: #1617 `run`
+              (S0 wrong value at exit 0; its `build` E-PANIC arm is recorded, not pinned, because
+              one `headTyconTy` repair closes both and a second pin would drain without its
+              sibling) · #1618 `build` + `stdout-line` (the ONLY verb that observes it — `check`
+              is clean and `run` is CORRECT) · #1619 `run` (all channels agree; the cheaper of
+              two non-independent engines) · #1620 `build-run` (the S0 is the BUILT BINARY
+              exiting 0 with a wrong value; `run`'s raw arm is exit-1-with-empty-stdout, which
+              this suite forbids as an assertion). Three of the four grade a DETERMINISTIC
+              PROJECTION — the program compares against the hand-derived correct answer and
+              prints the Bool — for two distinct reasons, spelled out per row: #1620 because the
+              raw channel is a **live heap address** (3 executions, 3 values, measured), #1617
+              and #1619 because the raw wrong value is order- / graph-dependent and a literal pin
+              would FALSE-DRAIN on a wrong→differently-wrong change.
+could move:   **NOTHING in the compiler.** No `compiler/`, `stdlib/`, `runtime/` or `test/*.sh`
+              byte changed; the binary was neither rebuilt nor needed to be, and every
+              measurement was taken with `MEDAKA_STRICT=1` clean (no staleness warning) on the
+              tree at `ced9e7f7`. What moves is one gate's fixture count:
+              `diff_compiler_must_fail.sh` 96 → **100 fixtures, 100 still reproduce, 0 DRAINED,
+              0 control-broke, 0 malformed** (exit 0), and `must_fail_census.sh --all` no longer
+              lists 1617/1618/1619/1620 as unpinned. Consumers of the corpus were DERIVED, not
+              assumed (`grep -rln 'must_fail_fixtures'` over `.sh`/`.yml`/`.py`/`.mdk`): exactly
+              **two** files READ the directory — `diff_compiler_must_fail.sh` and
+              `must_fail_census.sh`; every other hit is prose in a comment. `preflight` maps this
+              path to four gates and **all four were run green**: `must_fail` (0),
+              `must_fail_census` (0), `dict_semantics` (184/184), `shadow_semantics` (59/59).
+nearest miss: **#1620's mis-selecting SITE is still unknown** — the pin asserts the CONSEQUENCE
+              (a program accepted at `ping T : Int` delivers Alpha's String) and deliberately does
+              NOT assert that Beta is the right resolution, because that name-resolution question
+              is in dispute (cf. #1182). Every fix direction drains the row anyway, which is why
+              it could be pinned without settling it. #1617's `build` E-PANIC arm and #1620's
+              `run` E-PANIC arm are MEASURED and recorded in their claims but **ungraded**, so a
+              change that repaired only one of those arms would leave its row still reporting
+              REPRO. #1619 pins the explicit-impl-hijacks-a-default arm ONLY: the issue's
+              both-method-less variant (`(200, 200)`) is flagged there as possibly #1265's and is
+              not pinned by anything. And the corpus cannot express a REORDERING differential in
+              one row (`MUST-FAIL-NOT-PINNABLE.txt`'s #1183 argument), so #1617's permutation
+              half ships as an UNGRADED probe file, as #1182 and #1265 already do.
+engines:      **None moved — no engine sees a different byte.** The rows OBSERVE engines rather
+              than change them: #1617/#1619 grade `eval`; #1618 grades the emitter's failure;
+              #1620 grades LLVM + clang + the executed binary, with its control on the same verb.
+              **wasm and `core_ir_eval` are UNPROBED on all four** — this harness has no verb that
+              reaches either, so the third and fourth arms are owed for these shapes exactly as
+              they are for the rest of the corpus. Two rows (#1618, #1620) put this fixture set
+              into the `build`/`build-run` clang guard; `soundness`, where the suite runs, has
+              clang, and the guard fails LOUDLY (exit 2) rather than skipping.
+unchecked:    (a) **BLESSED ZERO GOLDENS.** Every expected value was hand-derived from the
+              language semantics (DICT §8 I4 + §5 for #1619; the impl bodies and the accepted
+              type for the rest) BEFORE any binary was run; no `CAPTURE=1` anywhere. `eval` is a
+              known-wrong oracle on dispatch shapes and was treated as one.
+              (b) **Every pin was proven able to DRAIN, by perturbing its expectation to look
+              fixed and then reverting byte-exactly** (`diff` clean, re-run green): #1617 and
+              #1620 (`stdout: False` → `True`) drained TOGETHER in one run, each naming its own
+              issue, gate exit 1; #1618 (`stdout-line`'s `'__none__'` → `'Int'`) drained with
+              `stdout-line: expected this EXACT line in stdout, and it is absent`; #1619
+              (`stdout: False` → `True`) drained, exercising the multi-module loader path. Final
+              state re-verified 100/100 REPRO, exit 0.
+              (c) **Every control was proven FAIL-CAPABLE the same way** — comparand mutated to a
+              value the program cannot produce, E-PANIC observed at exit 1, then reverted:
+              #1617 `(5, 99)`, #1619 `77`, #1620 `"nope"` (through the built binary). #1618's
+              control is a `build` at exit 0 and needs no assertion — a broken toolchain fails it
+              by construction.
+              (d) **Every PROJECTION was proven able to report `True`** on this binary, so none of
+              them is a probe that can only ever print one value: #1617 via the data-typed shape,
+              #1619 via the graph with `other` unimported, #1620 via the Beta-only program. Each
+              is named in its claim.
+              (e) **Exit codes were read from file redirects, never a pipe**, throughout — the
+              trap this suite's own header records three people hitting.
+              (f) **A BRIEF CLAIM WAS CONTRADICTED BY MEASUREMENT, and is reported rather than
+              silently worked around:** the pin brief states that "#1620's and #1617's observable
+              channels are NOT byte-stable". For #1620 that is exactly right (the heap address).
+              For **#1617 it is not** — `run` prints `(5, 5)` identically on three consecutive
+              executions. #1617 is projected anyway, for the *false-drain* reason above, not for
+              instability; its claim says so rather than repeating the brief.
+              (g) **Not run:** the full gate suite, the fixpoint, the snapshot corpus, perf, the
+              wasm gates. The diff contains no compiler source and no `.sh`, so there is no
+              behaviour for them to grade; `test/must_fail_fixtures` is in no snapshot family
+              (the four preflight-derived gates are the whole mapped set, and all four were run).
+              The pre-commit hook still runs its snapshot check for any staged `.mdk`, so the
+              committing agent will want `PRECOMMIT_SNAPSHOT_DEFER=1`.

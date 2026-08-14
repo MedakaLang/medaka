@@ -1,0 +1,23 @@
+-- #1619 CONTROL — main.mdk's entry with the colliding module removed from the
+-- import graph, and NOTHING else changed. `other.mdk` is still on disk (the
+-- loader walks imports, so a module nobody imports is not in the graph), so the
+-- ONE dimension that flips is whether the same-spelled interface is present.
+--
+-- Without it, `dtag Box` reaches di's inherited default and answers 7 — which is
+-- exactly the half of the correct pair that main.mdk loses. If this file also
+-- stopped answering 7, cross-module interface DEFAULTS would be broken in
+-- general and #1619's framing would be wrong; the harness then says
+-- CONTROL-BROKE rather than DRAINED.
+--
+-- Per #1144 a control is graded on its EXIT CODE ONLY, so it ASSERTS 7 and
+-- panics otherwise rather than printing it — a control that merely printed would
+-- exit 0 either way and could never fail. PROVEN ABLE TO FAIL: changing the
+-- comparand to a value the program cannot produce, 77, makes `medaka run
+-- control.mdk` exit 1 with `runtime error [E-PANIC]: control regressed: ...`
+-- (measured 2026-08-14, then reverted).
+import dimpl.{Box(..), dtag}
+
+main =
+  if dtag Box == 7
+    then println "control-ok:7"
+    else panic "control regressed: the inherited cross-module default no longer answers 7"

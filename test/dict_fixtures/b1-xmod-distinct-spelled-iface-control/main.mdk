@@ -1,0 +1,31 @@
+-- CONTROL for b1-xmod-same-spelled-iface-impl-selection, promoted from that
+-- must_fail pin's own `control.mdk`. ONE dimension varied: whether the two
+-- unrelated modules' interface/type/method spellings COLLIDE.
+--
+-- amod.mdk is BYTE-IDENTICAL to the sibling's. zmod2.mdk keeps the sibling zmod's
+-- shape and arithmetic byte-for-byte and changes only the three spellings
+-- (`Same2`/`Blob2`/`sizeOf2`), so there is no cross-module spelling collision left.
+-- Everything else -- the module topology, the import clauses, the bystander, the
+-- three printed values -- is held fixed.
+--
+-- SPEC ANSWER: identical to the sibling's, and hand-derived the same way. Two
+-- differently-spelled interfaces are two classes for the uninteresting reason as
+-- well as the interesting one, each goal has a singleton matching set, so
+-- 11 / 110 / 7.
+--
+-- ⚠️ THE CONTROL'S VALUE IS THE SAME AS THE SIBLING'S, ON PURPOSE, and that is
+-- what it asserts: the answer must not depend on the spelling collision. So this
+-- pair is read by which member reds, not by their values differing. Sibling RED +
+-- control GREEN localises a regression to the collision; BOTH red says
+-- cross-module dispatch broke generally and the collision is a red herring. Before
+-- the drain the sibling's `run` printed 11 / 11 / 7 while this file already printed
+-- 11 / 110 / 7 on the same binary -- that measured contrast is the whole reason the
+-- defect was attributable to the collision rather than to module boundaries.
+import amod.{aValue}
+import zmod2.{zValue2}
+import bystander.{bystanderValue}
+
+main =
+  let _ = println aValue
+  let _ = println zValue2
+  println bystanderValue

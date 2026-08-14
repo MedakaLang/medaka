@@ -1,0 +1,22 @@
+-- One of the two colliding modules. Declares its OWN `Same`, its OWN type, its OWN
+-- impl -- and, unlike the b1-xmod-same-spelled-iface-impl-selection sibling, routes
+-- its call through a CONSTRAINED WRAPPER (`Same a => a -> Int`) rather than
+-- dispatching directly. That wrapper is the whole variable: it turns the call into a
+-- generic site that takes a dict CONSTANT as an argument, which is where the two
+-- modules same-spelled classes can be handed the same witness.
+--
+-- The head type is `ABlob`, distinct from zmods `ZBlob`: the interface SPELLING is
+-- the only thing shared between the two modules.
+public export data ABlob = ABlob Int
+
+export interface Same a where
+  sizeOf : a -> Int
+
+impl Same ABlob where
+  sizeOf (ABlob n) = n + 1
+
+aWrap : Same a => a -> Int
+aWrap x = sizeOf x
+
+export aValue : Int
+aValue = aWrap (ABlob 10)

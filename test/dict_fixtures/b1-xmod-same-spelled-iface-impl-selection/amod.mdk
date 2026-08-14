@@ -1,0 +1,15 @@
+-- One of the two colliding modules. Declares its OWN `Same`, its OWN `Blob` and
+-- its OWN `impl Same Blob`, and imports nothing -- so every name in `aValue`'s
+-- body resolves within this file and the goal has exactly one candidate.
+-- Byte-identical to zmod.mdk except for the impl body (`n + 1` vs `n + 100`),
+-- which is what makes the two answers distinguishable.
+public export data Blob = Blob Int
+
+export interface Same a where
+  sizeOf : a -> Int
+
+impl Same Blob where
+  sizeOf (Blob n) = n + 1
+
+export aValue : Int
+aValue = sizeOf (Blob 10)

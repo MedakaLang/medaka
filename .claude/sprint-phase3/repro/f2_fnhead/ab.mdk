@@ -1,0 +1,22 @@
+-- F-2. Two impls of one interface at two DIFFERENT function-typed heads.
+-- `headTyconTy`'s `_ => None` wildcard files both into the same `noneHeadTag`
+-- bucket, so they are indistinguishable to dispatch.
+--
+-- Correct answer, derived from the source before running: (5, 9).
+-- Measured 2026-08-14 on a cold-built binary at 68f84bf1:
+--   ab.mdk: check=0 run=0 [(5, 5)] build=1 (E-PANIC) exec=NOBIN
+--   ba.mdk: check=0 run=0 [(9, 9)] build=1 (E-PANIC) exec=NOBIN
+-- run is wrong in BOTH permutations at exit 0 (S0); build exits 1 with a
+-- compiler E-PANIC rather than a diagnostic (S1 + engine divergence).
+-- ba.mdk differs ONLY in the order of the two impl blocks.
+interface Sz a where
+  sz : a -> Int
+impl Sz (Int -> Int) where
+  sz _ = 5
+impl Sz (Bool -> Bool) where
+  sz _ = 9
+f : Int -> Int
+f x = x + 1
+g : Bool -> Bool
+g b = b
+main = println (sz f, sz g)

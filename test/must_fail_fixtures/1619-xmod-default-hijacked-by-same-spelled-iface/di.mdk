@@ -1,0 +1,4 @@
+-- #1619, module 1 of 4: an interface WITH A DEFAULT BODY.
+export interface Tag x where
+  tag : x -> Int
+  tag _ = 7

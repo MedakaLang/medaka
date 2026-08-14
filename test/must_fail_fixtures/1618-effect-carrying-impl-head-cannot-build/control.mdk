@@ -1,0 +1,16 @@
+-- #1618 CONTROL — byte-identical to main.mdk's program except the impl head is a
+-- plain `Int` rather than `<Stdout> Int`. ONE dimension flips: the effect row.
+--
+-- It is graded with the SAME verb as the pin (`build`), and must exit 0. That is
+-- what separates "this program cannot be built" from "nothing can be built here"
+-- — a missing clang, a broken emitter or a broken prelude fails this file too,
+-- and the harness then says CONTROL-BROKE rather than DRAINED.
+--
+-- Measured 2026-08-14: `medaka build control.mdk` exits 0 and the binary prints 2.
+interface Sz a where
+  sz : a -> Int
+
+impl Sz Int where
+  sz _ = 2
+
+main = println (sz 0)

@@ -1,0 +1,89 @@
+issue: 1619
+what: A cross-module interface DEFAULT is silently hijacked by a SAME-SPELLED
+what: interface at the same head. `di.mdk` declares `interface Tag` WITH a default
+what: body (7); `dimpl.mdk` has a METHOD-LESS `impl Tag Box` that inherits it;
+what: `other.mdk` declares its OWN same-spelled `interface Tag` with an EXPLICIT
+what: `impl Tag Box` (100). di's default is then NEVER REACHED -- at exit 0, with
+what: `check` clean and run, build and the built binary all agreeing on the wrong
+what: answer, and no diagnostic anywhere.
+what: HAND-DERIVED CORRECT ANSWER, from DICT-SEMANTICS §8 I4 (a class is
+what: `(module, name)`, so di::Tag and other::Tag are two DISTINCT classes that
+what: merely share a spelling) plus §5 (an interface default applies only when the
+what: SELECTED instance omits the method):
+what:   dtag Box -> dimpl's method-less impl of di::Tag    -> di's default -> 7
+what:   otag Box -> other's explicit impl of other::Tag    -> its own body -> 100
+what: Correct is (7, 100), so main.mdk -- which prints
+what: `(dtag Box, otag Box) == (7, 100)` -- must print True.
+what: Measured FIRST-HAND on this branch's binary, 2026-08-14:
+what:   main.mdk    `check --json` -> 4 files, all {"diagnostics":[]}, exit 0
+what:   main.mdk    `run`          -> False, exit 0            <- PINNED HERE
+what:   main.mdk    `build`        -> exit 0; binary prints False, exit 0
+what:   the same program printing the RAW tuple -> (100, 100), exit 0
+what:   control.mdk `run`          -> control-ok:7, exit 0
+what: MECHANISM (per the issue): the untagged interface-default registry is keyed
+what: by BARE HEAD TAG with no interface component, so two same-spelled
+what: interfaces' entries at one head collapse LAST-WRITE-WINS -- the
+what: `installConsts`/`findCell` hazard already documented for module frames,
+what: reappearing in the default tier. It is the bare-name-keyed-table shape: a
+what: key with no interface component lets entries from unrelated declarations
+what: collide.
+cmd: run main.mdk
+exit: 0
+stdout: False
+control: run control.mdk
+why-verb: `run` rather than `build-run`: every channel agrees here (`run`,
+why-verb: `build` + the executed binary all produce False, measured above), so
+why-verb: the two engines are not two independent observations of anything --
+why-verb: the defect is in the SHARED front end's default registry. `run` is the
+why-verb: cheaper of the two (no clang) and gives the same discrimination. The
+why-verb: native arm was confirmed BY HAND anyway, and is recorded above.
+why-verb: `check` cannot be the verb: check is clean and exit 0 across all four
+why-verb: modules -- the silence is precisely the S0.
+why-stdout: ⚠️ THE PIN IS A PROJECTION, DELIBERATELY. The raw observable
+why-stdout: `(100, 100)` is byte-stable, so instability is NOT the reason. The
+why-stdout: reason is a FALSE DRAIN: the collapse is last-write-wins, so WHICH
+why-stdout: wrong value survives depends on what else is in the module graph --
+why-stdout: the issue measured a neighbouring both-method-less variant printing
+why-stdout: `(200, 200)`, and `(7, 7)` is the other collapse direction. A
+why-stdout: `stdout: (100, 100)` pin would go RED -- reading as "fixed" -- on any
+why-stdout: change that merely moved this to a DIFFERENT wrong pair, and a reader
+why-stdout: would close a live S0 on the strength of it. Comparing against the
+why-stdout: hand-derived pair collapses every wrong answer to False and only the
+why-stdout: correct one to True.
+why-stdout: THE PROJECTION IS PROVEN ABLE TO REPORT True ON THIS BINARY (a probe
+why-stdout: that can only ever print one value pins nothing): the same graph with
+why-stdout: `other` dropped from the imports and `println (dtag Box == 7)` prints
+why-stdout: True at exit 0. Measured 2026-08-14.
+why-stdout: A fix that instead REJECTS the collision with a diagnostic also
+why-stdout: drains this row -- `run` would exit 1, and the exit assertion is
+why-stdout: exact, never "nonzero".
+why-control: control.mdk is main.mdk's entry with the colliding module dropped
+why-control: from the IMPORT GRAPH and nothing else changed. `other.mdk` is still
+why-control: on disk -- the loader walks imports, so a module nobody imports is
+why-control: not in the graph -- so the ONE dimension that flips is the presence
+why-control: of the same-spelled interface. It asserts 7: the half of the correct
+why-control: pair that main.mdk loses. A red here means cross-module interface
+why-control: DEFAULTS are broken in general (or the loader is), not that #1619 is
+why-control: fixed, and the harness says CONTROL-BROKE rather than DRAINED.
+why-control: Per #1144 a control is graded on its EXIT CODE ONLY, so it ASSERTS 7
+why-control: and panics otherwise rather than printing it. PROVEN ABLE TO FAIL ON
+why-control: THIS TREE: mutating the comparand to 77 makes `medaka run
+why-control: control.mdk` exit 1 with `runtime error [E-PANIC]: control
+why-control: regressed: ...` (measured 2026-08-14, then reverted).
+why-note: FOUR modules ship here; `main.mdk` is the entry and the loader pulls
+why-note: `dimpl` -> `di` and `other` from the same directory. There is no
+why-note: `medaka.toml` at or above this directory, so the project root is the
+why-note: fixture directory itself and the pin is location-independent.
+why-note: NOT #1182 -- that is DIFFERENTLY-spelled interfaces sharing a METHOD
+why-note: name, single-file, and ORDER-DEPENDENT. This is SAME-spelled interfaces
+why-note: and is not order-dependent: swapping main.mdk's two imports changes
+why-note: nothing, because the colliding module is topologically later either way.
+why-note: NOT #1265 -- that is two same-named DEFAULTS colliding on
+why-note: `mdk_default_<method>_<TAG>`. Here the hijacking side is an EXPLICIT
+why-note: impl body winning over another interface's default.
+why-note: ⚠️ One arm the issue FLAGS rather than asserts, and this row does not
+why-note: pin: the both-method-less variant (measured (200, 200)) is closer to
+why-note: #1265, since both sides are then defaults and only the interface
+why-note: SPELLING differs. If #1265's owner claims that arm, that is a
+why-note: reasonable merge; the arm pinned here is the explicit-impl-hijacks-a-
+why-note: default one, which is the one filed with confidence.

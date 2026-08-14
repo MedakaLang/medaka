@@ -1,0 +1,11 @@
+-- BYTE-IDENTICAL to the sibling's bystander.mdk: declares no interface, impls
+-- nothing, dispatches nothing. Held fixed so the two fixtures' third line is the
+-- same observation in both.
+export data Tally = Tally Int
+
+export bump : Tally -> Tally
+bump (Tally n) = Tally (n + 1)
+
+export bystanderValue : Int
+bystanderValue = match bump (bump (Tally 5))
+  Tally n => n

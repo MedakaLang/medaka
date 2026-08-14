@@ -161,8 +161,7 @@ ifaceOfMethod : String -> String
 ifaceOfMethodIn : String -> List ((String, String), List Int) -> String
 implDeclNames : Decl -> List String
 implDictRoutes : Option Int -> List Route -> List Route -> List Route
-implKeyOf : String -> List Ty -> Option String -> String
-implMethodEntry : EvalEnv (Value a) -> List ((String, String), List Int) -> String -> List Ty -> ImplMethod -> (String, (Int, Value a))
+implMethodEntry : EvalEnv (Value a) -> List ((String, String), List Int) -> TyConOrigin -> String -> List Ty -> ImplMethod -> (String, (Int, Value a))
 implMethodName : ImplMethod -> String
 implMethodNames : List Decl -> List String
 implMethodReqCountEntry : List (String, Int) -> String -> ImplMethod -> List ((String, String), Int)
@@ -366,12 +365,7 @@ pendingRunDiags : Ref (List (String, String, List Diag))
 pickByTag : EvalEnv (Value a) -> String -> List (Value a) -> String -> Value a
 pickDefaultCand : EvalEnv (Value a) -> String -> List (Value a) -> String -> Value a
 pickTagFallback : EvalEnv (Value a) -> String -> List (Value a) -> String -> Value a
-ppEffAtomK : (String, Option String) -> String
 ppField : (String, Value a) -> String
-ppRowBodyK : List (String, Option String) -> Option String -> String
-ppTyAtomK : Ty -> String
-ppTyFunArgK : Ty -> String
-ppTyK : Ty -> String
 ppValue : Value a -> String
 ppValueAtom : Value a -> String
 prim1 : (Value a -> Value a) -> Value a

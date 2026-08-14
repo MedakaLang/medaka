@@ -194,6 +194,12 @@ import types.registry.{
   sregAddK,
   sregSize,
 }
+-- B-2.2-e: THE route-word mint, shared with `eval/eval.mdk` and
+-- `ir/core_ir_lower.mdk`.  Before this bite each of those spelled its own copy
+-- (`implKeyTc` here, `implKeyOf` there) over its own `Ty` printer; they are now
+-- one function, so the caller side and the definition side of the dict-word seam
+-- agree BY CONSTRUCTION rather than by two mirrors staying in lockstep.
+import types.route_key.{implRouteKeyWord}
 
 -- ── monotypes & schemes ───────────────────────────────────────────────────
 public export data Mono =
@@ -5842,6 +5848,42 @@ data VecObl = VecObl { voIface : IfaceRef, voIds : List Int }
 -- there, once.
 data CSlot = CSlot { csIface : IfaceRef, csId : Int }
 
+-- B-2.2-f (#1113): how many of a constrained callee's slots were PRESENT BEFORE
+-- `expandSupersPairs`' transitive super expansion APPENDED any.
+-- ⚠️ THAT WORDING IS THE CORRECTION, and the direction of the old one matters.  This
+-- comment used to say "DECLARED by its own `=>` context", which is FALSE on a live
+-- path: `setFunConstraintEntry`'s second caller mints slots from INFERRED constraint
+-- ids, with no `=>` context anywhere, and those are recorded as `CDPLen` too.  The
+-- BEHAVIOUR is right — the operative property is "not appended by
+-- `expandSupersPairs`", and an inferred slot is not appended — but a reader taking the
+-- old definition literally would conclude the inferred path OVER-records and "fix" it
+-- by lowering the count, withholding identity from real slots.  Do not.
+-- Carried per ENTRY, beside the ids table (never inside `CSlot`) — the
+-- recursive-call arm (`realizeRecDictApps` -> `recRoutes` -> `resolveRecMono`) reads
+-- `funConstraintsRef` as a bare `List Int` and constructs no `CSlot` at all, so a
+-- per-slot field could not serve it.
+--
+-- ⚠️ TWO-VALUED ON PURPOSE.  Absence is NOT `0` and NOT `Option Int`:
+--   * `0` is a genuinely RECORDED state (`registerMember` guards on the constraint
+--     list, not on the surviving slots, so an entry with zero declared slots is real),
+--     so spelling absence `0` makes the two indistinguishable;
+--   * `Option Int` collapses at the read site through one invisible `fromOption 0`
+--     (99 uses of `fromOption` in `compiler/`), which is exactly the erasure this
+--     distinction exists to survive.
+-- `CDPUnknown` has no prelude eliminator and the token exists nowhere else in the
+-- tree, so "is any site collapsing absence into a length?" is one grep.
+--
+-- 🚨 FAIL-CLOSED: `CDPUnknown` means WITHHOLD identity (behaves as prefix 0).  The
+-- opposite default stamps identity onto APPENDED super slots, which is the defect this
+-- sidecar exists to prevent.
+data CDeclaredPrefix = CDPUnknown | CDPLen Int
+
+-- B-2.2-f (#1113): the result of the ONE declared-slot resolution.  The slots and the
+-- declared prefix must come from the SAME entry decision (qual hit / known-import miss
+-- / bare fallback) — a second accessor re-deriving that choice is the drift
+-- `qualConstraintKey` was factored out to remove.  See `declaredConstraintFor`.
+data CDeclared = CDeclared { cdSlots : List CSlot, cdPrefix : CDeclaredPrefix }
+
 -- THE pairing point — the only place in the tree where a slot-id list meets a
 -- slot-parallel interface list.
 --
@@ -6261,6 +6303,8 @@ data CrossRun = CrossRun {
     crossModuleFunConstraintsQualRef : Ref (List ((String, String), List Int)),
     crossModuleFunConstraintIfacesRef : Ref (List (String, List IfaceRef)),
     crossModuleFunConstraintIfacesQualRef : Ref (List ((String, String), List IfaceRef)),
+    crossModuleFunConstraintDeclaredRef : Ref (List (String, CDeclaredPrefix)),
+    crossModuleFunConstraintDeclaredQualRef : Ref (List ((String, String), CDeclaredPrefix)),
     crossModuleMethodConstraintsRef : Ref (List (String, List Int)),
     crossModuleMethodConstraintsQualRef : Ref (List ((String, String), List Int)),
     coreSchemeObligationsRef : Ref (OrdMap (List VecObl)),  -- #673: core's OWN schemeObligationsRef, snapshotted after the core pass (see declaredCrossModuleObls)
@@ -6323,6 +6367,8 @@ freshCrossRun env = CrossRun {
   crossModuleFunConstraintsQualRef = Ref [],
   crossModuleFunConstraintIfacesRef = Ref [],
   crossModuleFunConstraintIfacesQualRef = Ref [],
+  crossModuleFunConstraintDeclaredRef = Ref [],
+  crossModuleFunConstraintDeclaredQualRef = Ref [],
   crossModuleMethodConstraintsRef = Ref [],
   crossModuleMethodConstraintsQualRef = Ref [],
   coreSchemeObligationsRef = Ref omEmpty,
@@ -7055,6 +7101,7 @@ data PerRun = PerRun {
     activeDictVars : Ref (List (Int, String)),
     activeDictPreds : Ref (List (String, Mono, String)),
     funConstraintsRef : Ref (List (String, List Int)),
+    funConstraintDeclaredRef : Ref (List (String, CDeclaredPrefix)),
     funConstraintArgsRef : Ref (List (String, List (List Mono))),
     funConstraintIfacesRef : Ref (List (String, List IfaceRef)),
     currentImportDefinersRef : Ref (List (String, String)),
@@ -7150,6 +7197,7 @@ freshPerRun _ = PerRun {
   activeDictVars = Ref [],
   activeDictPreds = Ref [],
   funConstraintsRef = Ref [],
+  funConstraintDeclaredRef = Ref [],
   funConstraintArgsRef = Ref [],
   funConstraintIfacesRef = Ref [],
   currentImportDefinersRef = Ref [],
@@ -9030,8 +9078,8 @@ qualConstraintFor name = match qualConstraintKey name
     -- that is the manufacturable mismatch described on `CSlot` — but they now meet in
     -- `pairSlots`, which owns the policy, instead of in three downstream zips.
     map (ids => pairSlots ids
-      (fromOption [] (lookupQualIfaces src origin crossRun.value.crossModuleFunConstraintIfacesQualRef.value)))
-      (lookupQualArity src origin crossRun.value.crossModuleFunConstraintsQualRef.value)
+      (fromOption [] (lookupQualPayload src origin crossRun.value.crossModuleFunConstraintIfacesQualRef.value)))
+      (lookupQualPayload src origin crossRun.value.crossModuleFunConstraintsQualRef.value)
 
 -- the (import-source module, ORIGINAL exported name) key a cross-module callee's qual
 -- entries live under; `None` ⇒ local fn / wildcard import / re-export / check path.
@@ -9087,19 +9135,20 @@ declaredConstraintIds name = match qualConstraintIds name
 qualConstraintIds : String -> Option (List Int)
 qualConstraintIds name = match qualConstraintKey name
   None => None
-  Some (src, origin) => lookupQualArity src origin crossRun.value.crossModuleFunConstraintsQualRef.value
+  Some (src, origin) => lookupQualPayload src origin crossRun.value.crossModuleFunConstraintsQualRef.value
 
-lookupQualArity : String -> String -> List ((String, String), List Int) -> Option (List Int)
-lookupQualArity _ _ [] = None
-lookupQualArity src name (((m, n), v)::rest)
+-- first-match lookup in a `(definer module, exported name)`-keyed qual table.
+--
+-- B-2.2-f (#1113): ONE polymorphic function where there were two byte-identical
+-- monomorphic copies (`lookupQualArity` / `lookupQualIfaces`).  The declared-prefix
+-- sidecar's payload is a SCALAR, so a third copy could not have shared their `List X`
+-- shape anyway — and three identical bodies is where `rule-duplicate-body` starts
+-- collecting disables.
+lookupQualPayload : String -> String -> List ((String, String), a) -> Option a
+lookupQualPayload _ _ [] = None
+lookupQualPayload src name (((m, n), v)::rest)
   | m == src && n == name = Some v
-  | otherwise = lookupQualArity src name rest
-
-lookupQualIfaces : String -> String -> List ((String, String), List IfaceRef) -> Option (List IfaceRef)
-lookupQualIfaces _ _ [] = None
-lookupQualIfaces src name (((m, n), v)::rest)
-  | m == src && n == name = Some v
-  | otherwise = lookupQualIfaces src name rest
+  | otherwise = lookupQualPayload src name rest
 
 -- WS-2/D2: a constrained callee's declared dict slots (constraint tyvar id + interface
 -- occurrence, PAIRED — see `CSlot`; never two parallel lists).  Prefer
@@ -9110,9 +9159,40 @@ lookupQualIfaces src name (((m, n), v)::rest)
 -- Reading only the bare-name table there left the importer shadow's dicts EMPTY on `run`
 -- (funConstraintsRef is reset per module and only re-seeded from the cross-module table
 -- on the EMIT path), so `build` was right and `run` was wrong — the inverse skew.
+--
+-- B-2.2-f (#1113): this is now a PROJECTION of `declaredConstraintFor`, which resolves
+-- the slots and their DECLARED-PREFIX length in ONE entry decision.  There is
+-- deliberately no parallel `declaredConstraintK`: two readers re-deriving which entry a
+-- name resolves to is the drift `qualConstraintKey` was factored out to remove.
 declaredConstraintSlots : String -> List CSlot
-declaredConstraintSlots name = match qualConstraintFor name
-  Some slots => slots
+declaredConstraintSlots name = (declaredConstraintFor name).cdSlots
+
+-- B-2.2-f (#1113): the ONE resolution — a constrained callee's declared dict slots AND
+-- how many of them its own `=>` context declared (the rest being super slots
+-- `expandSupersPairs` appends downstream).  Arms mirror `declaredConstraintSlots`'
+-- former body exactly, keyed once through `qualConstraintKey`.
+--
+-- 🚨 The prefix is CLAMPED against the slots actually returned (`clampPrefix`).
+-- `pairSlots` truncates to the shorter of (ids, ifaces), a mismatch this seam can
+-- manufacture by construction (see `CSlot`), and an unclamped `index < k` past the end
+-- of a truncated list marks APPENDED slots declared — the unsafe direction.  UNWITNESSED
+-- (instrumented over a full compiler build and a two-module probe; it never fired), so
+-- the clamp is defensive, not measured — it is one token and it fails closed.
+declaredConstraintFor : String -> CDeclared
+declaredConstraintFor name = match qualConstraintKey name
+  Some (src, origin) => match lookupQualPayload src origin crossRun.value.crossModuleFunConstraintsQualRef.value
+    Some ids =>
+      let slots = pairSlots ids
+        (fromOption [] (lookupQualPayload src origin crossRun.value.crossModuleFunConstraintIfacesQualRef.value))
+      CDeclared {
+        cdSlots = slots,
+        cdPrefix = clampPrefix slots
+          (lookupQualPayload src origin crossRun.value.crossModuleFunConstraintDeclaredQualRef.value),
+      }
+    -- a KNOWN import with no qual entry: genuinely unconstrained in its source module
+    -- (the `hasImportDefiner` arm below, reached through the same fact).  No slots, so
+    -- `CDPLen 0` is the accurate reading and not an absence — see `CDeclaredPrefix`.
+    None => CDeclared { cdSlots = [], cdPrefix = CDPLen 0 }
   -- #739: source-exact fallback.  An EXPLICITLY-imported name (present in
   -- currentImportDefinersRef) whose (import-source, name) qual entry is ABSENT is
   -- genuinely UNCONSTRAINED in its source module — every module's constrained fns ARE
@@ -9128,10 +9208,24 @@ declaredConstraintSlots name = match qualConstraintFor name
   -- re-export / check-path (mid "") names — absent from currentImportDefinersRef — still
   -- take the bare-name path (byte-identical when there is no collision).
   None =>
-    if hasImportDefiner name then []
-    else pairSlots
-      (fromOption [] (lookupAssocSL2 name perRun.value.funConstraintsRef.value))
-      (fromOption [] (lookupAssocS name perRun.value.funConstraintIfacesRef.value))
+    if hasImportDefiner name then CDeclared { cdSlots = [], cdPrefix = CDPLen 0 }
+    else
+      let slots = pairSlots
+        (fromOption [] (lookupAssocSL2 name perRun.value.funConstraintsRef.value))
+        (fromOption [] (lookupAssocS name perRun.value.funConstraintIfacesRef.value))
+      CDeclared {
+        cdSlots = slots,
+        cdPrefix = clampPrefix slots (lookupAssoc name perRun.value.funConstraintDeclaredRef.value),
+      }
+
+-- B-2.2-f (#1113): a recorded prefix, clamped to the slots it indexes into; an ABSENT
+-- one stays `CDPUnknown`, which every reader must treat as WITHHOLD (prefix 0).  Do not
+-- "simplify" the absent arm to `CDPLen 0` — `CDPLen 0` is a recorded state a real entry
+-- can hold, and collapsing the two erases the only signal that a write site is missing.
+clampPrefix : List CSlot -> Option CDeclaredPrefix -> CDeclaredPrefix
+clampPrefix _ None = CDPUnknown
+clampPrefix _ (Some CDPUnknown) = CDPUnknown
+clampPrefix slots (Some (CDPLen k)) = CDPLen (minI k (listLen slots))
 
 -- #739: is [name] an explicitly-imported value (has a known source module)?  A miss in
 -- the qual constraint table for such a name is authoritative ("unconstrained in its
@@ -9252,7 +9346,7 @@ instantiateTracked (Forall ids evars t) =
 -- falls back to its scalar goal — i.e. exactly today's behaviour, never a wrong one.
 -- Building one is not a rider: the qual tables are re-seeded across modules and a
 -- stored vector's TYVAR arguments carry per-module tyvar ids (each module resets
--- tyvarCounter), so they would need the same id re-attribution `attributeModuleArities`
+-- tyvarCounter), so they would need the same id re-attribution `attributeModuleEntries`
 -- does for the ids table.  A vector attributed with the WRONG module's ids substitutes
 -- to a wrong-but-concrete goal — strictly worse than missing.  See #1161's residual note.
 -- ⚠️ AND NAME WHAT THE RESIDUAL NOW COSTS, not just that it exists: because the
@@ -14599,6 +14693,14 @@ discoverPromotedModules runtimeDecls coreDecls modules rpNames argNames =
   let promoted = filterList (n => not (contains n dictSeed)) grown
   let snapshot = promotedConstraints promoted perRun.value.funConstraintsRef.value
   let snapshotIfaces = promotedConstraintIfaces promoted perRun.value.funConstraintIfacesRef.value
+  -- B-2.2-f (#1113): the declared-prefix sidecar for the SAME promoted entries.  Without
+  -- it every promoted cross-module callee reaches a fill site with no recorded prefix
+  -- (module 1 is seeded from this crossRun table), and the sidecar would be vacuous
+  -- exactly where it matters.
+  -- ⚠️ PRE-EXPANSION on purpose: `expandSupersCross` below APPENDS super slots to
+  -- `snapshot`, and the prefix must count what was DECLARED before that append.  It is
+  -- read here, before `resetState` re-mints `perRun`, and written after it with the pair.
+  let snapshotDeclared = promotedConstraints promoted perRun.value.funConstraintDeclaredRef.value
   -- WS-1b: expand the cross-module snapshot's super slots too, so a cross-module
   -- constrained fn reached from another module under-fills exactly like clamp would.
   -- #994 (B-3-a): kept as ONE tuple from here to the write (`setCrossFunConstraintTables`)
@@ -14610,6 +14712,7 @@ discoverPromotedModules runtimeDecls coreDecls modules rpNames argNames =
   let _ = wRestore perRun.value.typeErrors savedErrSnap
   let _ = setRef perRun.value.errorsDetected savedDetected
   let _ = setCrossFunConstraintTables expandedPair
+  let _ = setRef crossRun.value.crossModuleFunConstraintDeclaredRef snapshotDeclared
   promoted
 -- DRIVER-COLLAPSE Phase 2: discovery is a SCRATCH joint typecheck (see below); its
 -- type-error side effects must NOT leak into the STICKY accumulator that gates the
@@ -14662,7 +14765,10 @@ discoverNextJoint runtimeDecls joint rpNames argNames current next
 -- the funConstraintsRef entries (name, ids) for the promoted user fns only —
 -- snapshot of the joint discovery, carried across resetState by
 -- crossModuleFunConstraintsRef so dictArityOf reads the right param count.
-promotedConstraints : List String -> List (String, List Int) -> List (String, List Int)
+-- B-2.2-f (#1113): payload generalized to `a` so the declared-prefix sidecar's SCALAR
+-- entries are filtered by the SAME `promoted` list, through the same function, rather
+-- than by a third structural copy of this one-line body.
+promotedConstraints : List String -> List (String, a) -> List (String, a)
 promotedConstraints promoted entries =
   filterList (e => contains (fst e) promoted) entries
 
@@ -18309,11 +18415,20 @@ keyEntryOf (DImpl { iface, tys, reqs, methods, ... }) = match tys
   [] => []
 keyEntryOf _ = []
 
--- the canonical impl key, byte-identical to eval.mdk's implKeyOf: `iface ++ "|" ++
--- <prec-2 args> ++ "|"` (the trailing empty name-component is retained so keys stay
--- byte-identical to the pre-removal format).
+-- the canonical impl key.  B-2.2-e: no longer a mirror of eval.mdk's `implKeyOf`
+-- — it IS that function (`route_key.implRouteKeyWord`), reached from both sides of
+-- the seam.  ⚠️ B-2.2-b1: this spelling passes `OriginUnresolved`, i.e. the BARE
+-- interface name, and it is the mint for exactly ONE thing: `KeyEntry`'s 4th field,
+-- written by `keyEntryOf`/`keyEntryOfRow` and READ BY NOBODY (measured, not grepped:
+-- replacing the word at both sites with a literal `"__DEAD__"` builds, passes
+-- `make check-self` and passes all 163 assertions of
+-- `test/diff_compiler_dict_semantics.sh`).  The LIVE route words — the ones that
+-- reach a dict cell and an emitted symbol — are minted at `keyForSite` /
+-- `keyForSiteByIface` from the winning ROW's own `irOrigin`, so they carry the
+-- interface's identity and this one does not.  Do not "unify" them without first
+-- giving that field a reader.
 implKeyTc : String -> List Ty -> String
-implKeyTc iface tys = "\{iface}|\{joinWith " " (map ppTyAtom tys)}|"
+implKeyTc iface tys = implRouteKeyWord OriginUnresolved iface tys None
 
 -- the canonical key to stamp for the impl of [name] matching the ground result
 -- mono — but ONLY when another impl of the same method shares its head tycon (so
@@ -18351,13 +18466,24 @@ implKeyTc iface tys = "\{iface}|\{joinWith " " (map ppTyAtom tys)}|"
 -- winner has a head tycon is therefore unmoved; the three fixtures above are the
 -- sites whose winner is HEADLESS, which is the whole point of the change.
 --
--- ⚠️ And BEHAVIOUR surviving that IR change is EMPIRICAL, not structural.  It rests
--- on the emitter's general-instance fallback tier: an `RKey` whose word matches no
--- tagged impl falls to `emitGeneralRKey` → `findByTag noneHeadTag`
--- (`compiler/backend/llvm_emit.mdk`, and `pickTagFallback` in eval.mdk is its peer).
--- Those three fixtures pass because that tier catches them, not because the word did
--- not move.  If that tier is ever narrowed, re-derive this — a green suite here is
--- evidence about the fallback, not about the route word.
+-- ⚠️ And BEHAVIOUR surviving that IR change is EMPIRICAL, not structural.  🚨 THIS
+-- PARAGRAPH USED TO NAME THE WRONG TIER — *"it rests on `emitGeneralRKey` →
+-- `findByTag noneHeadTag`"* — and that claim was relayed through two design
+-- documents before anyone built it (RUN-P3-013).  MEASURED: a `Some noneHeadTag`
+-- word is a DIRECT HIT, because the general impl is itself registered under
+-- `__none__` (`call @mdk_impl___none___sz`), so `emitMethod`'s `implFor` arm
+-- catches those three fixtures and `emitGeneralRKey` — the tier that used to be
+-- needed, before F-3b moved the word — is not reached from here at all.  The tier
+-- that DOES depend on this function is the one below it, `emitDefaultRKey`, and it
+-- is reached from the `None` arm, not from here: `mdk_default_<method>_<TAG>` is
+-- keyed on the `<TAG>` that `fromOption tag` supplies at the caller.  That is why
+-- the `None` arm must keep the concrete head tag (see its own comment).
+--
+-- ⇒ `fromOption tag` is NOT a hedge over a selector result.  At the sites where it
+-- fires it is the ONLY source of that TAG — nothing downstream re-derives one — so
+-- deleting it breaks every cross-module method-less impl inheriting an interface
+-- default.  And read a green suite here accordingly: it is evidence about the
+-- DEFAULT tier, not about the route word.
 --
 -- The key/tag split deliberately mirrors `core_ir_lower.declRouteKey` (bare head when
 -- that head is unique among the interface's declared impls, canonical full-type key
@@ -18433,11 +18559,23 @@ keyForSite name goals =
   match ieSelectRowByMethod env name goals
     Some (ImplRow _ _ ir tys _ _) =>
       if ieHeadCollidesByMethod env name (univReceiverTag tys) then
-        -- recomputed by the SAME `implKeyTc ir.irName tys` that `keyEntryOfRow`
-        -- (and `keyEntryOf` before it) stamps into a `KeyEntry`'s `key` field, so
-        -- the word is byte-identical to what the prefix path produced for the same
-        -- winner — only the POPULATION the winner and the count come from moved.
-        Some (implKeyTc ir.irName tys)
+        -- 🚨 B-2.2-b1: THE WORD NOW CARRIES THE WINNING ROW'S INTERFACE IDENTITY,
+        -- `module::Iface` (`ir.irOrigin` is in hand here — `ImplRow`'s `IfaceRef`
+        -- field carries the origin beside the name, so no selection work is added
+        -- and the collision gate above is untouched).  Two same-spelled interfaces
+        -- in two modules used to collapse onto one word (the #1047/#1265
+        -- same-spelled-interface family — #1047 is CLOSED and #1265 records that
+        -- only the interface-NAME half was fixed, leaving this word bare); they no
+        -- longer do.  ⚠️ THIS IS NOT #1182: that bug is `ieCandidatesForMethod`'s
+        -- interface-free candidate key, UPSTREAM of this word, and on its own
+        -- one-file repro this substitution is a NO-OP (absent origin ⇒ bare name).  The DEFINITION side mints the same word from the same
+        -- function (`eval.declImplIfaceIdRow`/`implMethodEntry`,
+        -- `core_ir_lower.ifaceImplHeadEntries`/`lowerImplMethod`), which is what
+        -- keeps the dict cell and the emitted symbol byte-equal.
+        -- ⚠️ On the loader-less drivers (`check <single file>`, lsp, repl, doc)
+        -- the origin is absent and `ifaceWordOf` falls back to the bare name — the
+        -- pre-bite word exactly.  That fallback is load-bearing; see `route_key`.
+        Some (implRouteKeyWord ir.irOrigin ir.irName tys None)
       else
         -- A-2.2b: the ROUTE WORD, projected back to a bare name on purpose — see
         -- `KeyEntry`.  ⚠️ The collision TEST is still spelling-keyed, through
@@ -19093,9 +19231,11 @@ ieRowHeadTriple (Some _) = None
 -- ARCH B-2.1-b2: repointed, not deleted (AM-1 still holds for the `keyForSite*`
 -- family).  The `KeyBuckets` parameter is GONE rather than ignored — an ignored
 -- table parameter reads as "still consulted" at every call site.  The winner's key
--- is recomputed here by the SAME `implKeyTc ir.irName tys` that `keyEntryOfRow`
--- (and `keyEntryOf` before it) stamps into the `key` field, so the stamped word is
--- byte-identical to what the deleted path produced for the same winner.
+-- is minted here from the row's own `IfaceRef`.  ⚠️ B-2.2-b1: it is NO LONGER the
+-- same word `keyEntryOf`/`keyEntryOfRow` write into a `KeyEntry`'s (unread) `key`
+-- field — this one carries the interface IDENTITY, that one is bare.  The word this
+-- must stay byte-equal to is the DEFINITION side's (`core_ir_lower`/`eval`), and it
+-- does because both now call `route_key.implRouteKeyWord` with the same origin.
 --
 -- 🚨 THE COLLISION RETEST MOVED WITH THE SELECTOR, AND THAT NARROWS A REAL SKEW
 -- RATHER THAN WIDENING ONE.  `core_ir_lower.ifaceDeclHeadUnique` — the emitter's
@@ -19112,7 +19252,9 @@ keyForSiteByIface iface goals =
   match ieSelectRowByIface env iface goals
     Some (ImplRow _ _ ir tys _ _) =>
       if ieHeadCollidesByIface env iface (univReceiverTag tys) then
-        Some (implKeyTc ir.irName tys)
+        -- B-2.2-b1: identity-bearing, exactly as `keyForSite`'s collision arm —
+        -- see the derivation there.
+        Some (implRouteKeyWord ir.irOrigin ir.irName tys None)
       else
         -- A-2.2b: the ROUTE WORD, bare on purpose — see `keyForSite`.
         Some (headKeyNameOr noneHeadTag (univReceiverTag tys))
@@ -19394,8 +19536,17 @@ implDictRoutesForFull : ImplBuckets -> KeyBuckets -> String -> String -> String 
 -- prefix `stampKeyTable` onto the graph-global `IE`.  🚨 THIS IS THE LEG WHOSE
 -- ABSENCE MAKES THE OTHER TWO AN S0: with legs 1/2 moved and this one left behind,
 -- #1564's impl gained a dict param it was never passed — `check` exit 0, built
--- binary 139 (RUN-B-023).  [keyTable] is still threaded for the nested `requires`
--- recursion, which re-buckets by each requires' own head.
+-- binary 139 (RUN-B-023).  ⚠️ [keyTable] is a DEAD PARAMETER AWAITING THE SWEEP, not
+-- a live re-bucketing.  This comment used to justify it as *"still threaded for the
+-- nested `requires` recursion, which re-buckets by each requires' own head"* — MEASURED
+-- FALSE, and the recursion's own end point already says so: it terminates at
+-- `selectReqImpl`, whose signature takes no `KeyBuckets` at all, and whose header
+-- records why (*"the `KeyBuckets` parameter is REMOVED rather than ignored — it had
+-- exactly one reader, this arm"*).  Nothing on the chain
+-- (`argImplReqRoutes` → `argReqRoute` → `routeOfD` → `entail`'s `EKNestedTop` arms)
+-- reads the table; each link only forwards it, and the one `KeyBuckets`-consuming
+-- fallback (`undeterminedRoute`'s `CountImpls` arm) is unreachable because
+-- `argReqRoute` seeds the recursion with `KeepNone`.
 implDictRoutesForFull implTable keyTable encl name tag resultMono paramMonos = match ieRowHeadTriple (ieSelectRowByMethod perRun.value.bodyImplEnvRef.value name paramMonos)
   Some (headTy, implTys, reqs) => match headSubstWithParams headTy implTys resultMono paramMonos
     Some subst => argImplReqRoutes implTable keyTable encl subst reqs 0
@@ -19657,6 +19808,46 @@ data EntailKind =
   -- RNone guard (op-site refs are always Ref RNone-seeded — parser/desugar).
   | EKOp Bool KeyBuckets Bool
 
+-- 🚨 THE LADDER'S SELECTOR-REACHABILITY PROPERTY, inscribed so the next refactor
+-- cannot violate it silently.  Every impl-row SELECTOR call reachable from `entail`
+-- lies in an `inst` arm (`entailInst`) or in an element-route helper called from one.
+-- No selector call may be reachable from `entailAssum`, `entailAssumVar` or
+-- `entailAssumRoute` — verified at this pin by enumerating the assum chain
+-- (`activeDictVarOfEncl`/`activeDictVarForEncl`/`enclDictVarOf`/`opDictVarOf`/
+-- `activeDictPredOf`/`ifaceOfMethodName`): every one is a `perRun` registry lookup and
+-- none reaches a selector.
+--
+-- ⚠️ `entailFallback` HAS ONE REACHING PATH, AND IT IS NOT A VIOLATION — but it is why
+-- the rule above stops naming it.  `EKNestedTop`'s `CountImpls` policy goes
+-- `undeterminedRoute` → `routeUndeterminedTop`, which answers THIS goal by COUNTING
+-- (`implHeadTagsForIface`, exactly-one → that tag; two or more → `T-AMBIGUOUS-INSTANCE`),
+-- never by selection — and only THEN routes the chosen impl's own nested `requires`
+-- through `argImplRequiresRoutes` → `selectReqImpl`, which is a FRESH sub-goal
+-- descending the ladder again, not this goal being answered on a later rung.  A refactor
+-- that let the fallback rung answer the ladder's own goal by selection IS the violation
+-- this property forbids; the `KeepNone` policy (every element-dict recursion) cannot
+-- reach even this path.
+--
+-- WHY IT MATTERS.  DICT-SEMANTICS §3 pins the precedence: `assum` strictly precedes
+-- `inst`, which strictly precedes `fallback`.  Letting a later rung answer a goal an
+-- earlier rung could have answered re-routes a dict cell from a CALLER-SUPPLIED
+-- PARAMETER to a STATICALLY SELECTED impl — the wrong value, at exit 0, with no
+-- diagnostic.  A selector call sitting on an `assum` or `fallback` arm is precisely how
+-- that happens, which is why this is a placement rule and not a tidiness point.
+--
+-- 🚨 IT IS A REACHABILITY PROPERTY, NOT A COUNT — AND THE COUNT FORM IS FALSE ON A
+-- CORRECT TREE.  There are legitimately TWO selector calls per `inst` arm: one for the
+-- primary route word, one inside the element-route helper.  At `EKArg` and `EKOp` those
+-- two deliberately ask about DIFFERENT methods — the element helper is keyed on the
+-- `innerDefaultMethod`-reduced name when the head's impl does not itself define the
+-- method (`ieDefinesReqMethodAt`).  Any *"one selector call per arm"* rule would license
+-- collapsing them, which changes WHICH IMPL'S CONTEXT IS DISCHARGED (§6 C2).  Do not
+-- restate this property in the count form.
+--
+-- ⚠️ AND A GREP OF `ieSelectRowBy*` IS NOT THE CHECK.  `concreteReqMatchByIface` is a
+-- LEGITIMATE selector call outside this ladder — it is the obligation channel's evidence
+-- check, not a routing decision — and is out of scope here.  An audit that greps the
+-- selector names without excluding it reports a false violation.
 entail : ImplBuckets -> String -> Mono -> String -> EntailKind -> (Route, List Route)
 entail implTable name m encl kind = match entailAssum m encl name kind
   Some dname => (entailAssumRoute dname kind, [])
@@ -19702,7 +19893,9 @@ entailAssumRoute dname (EKArg _ _) = RDict dname
 entailAssumRoute dname (EKOp _ _ _) = RDict dname
 
 -- inst: a concrete head [tag].  EKReturn → canonical full-type key + split element routes
--- (implRef-bound); EKNestedTop → bare head tag with requires PACKED into the primary RKey;
+-- (implRef-bound); EKNestedTop → the min⊑ winner's canonical key (bare head only when the
+-- iface-keyed collision gate is False — see the arm's own body comment) with requires PACKED
+-- into the primary RKey;
 -- EKArg → same canonical RKey primary as EKReturn but element routes keyed on the
 -- (default-reduced) method via argImplDictRoutesForEncl; EKOp → stampOpRouteVal (builtin
 -- head → RNone do-nothing, else RKey with reqs packed in, no separate element routes).
@@ -21104,10 +21297,15 @@ checkBodyImpl seed mode prog0 =
       let _ = setRef driverState.value.methodDispatchIdxRef crossRun.value.universeMethodDispatchIdxRef.value
       let _ = setRef perRun.value.funConstraintsRef crossRun.value.crossModuleFunConstraintsRef.value
       let _ = setRef perRun.value.funConstraintIfacesRef crossRun.value.crossModuleFunConstraintIfacesRef.value
+      -- B-2.2-f (#1113): the declared-prefix sidecar rides the IDS table — every
+      -- whole-table replacement of `funConstraintsRef` owes one of these.
+      let _ = setRef perRun.value.funConstraintDeclaredRef crossRun.value.crossModuleFunConstraintDeclaredRef.value
       let _ = setRef perRun.value.funConstraintsRef (aliasConstraintEntries prog crossRun.value.crossModuleFunConstraintsQualRef.value
         ++ perRun.value.funConstraintsRef.value)
       let _ = setRef perRun.value.funConstraintIfacesRef (aliasConstraintEntries prog crossRun.value.crossModuleFunConstraintIfacesQualRef.value
         ++ perRun.value.funConstraintIfacesRef.value)
+      let _ = setRef perRun.value.funConstraintDeclaredRef (aliasConstraintEntries prog crossRun.value.crossModuleFunConstraintDeclaredQualRef.value
+        ++ perRun.value.funConstraintDeclaredRef.value)
       let _ = setRef perRun.value.currentImportDefinersRef (importDefinersOf prog)
       let _ = setRef perRun.value.currentImportOriginsRef (importOriginsOf prog)
       -- #1114 (#845): this module's imported SCHEME CONTEXTS, keyed by local spelling.
@@ -21363,9 +21561,13 @@ checkBodyImpl seed mode prog0 =
       let _ = expandSupersTable driverState.value.superDeclsRef.value
       let _ = setRef crossRun.value.crossModuleFunConstraintsRef perRun.value.funConstraintsRef.value
       let _ = setRef crossRun.value.crossModuleFunConstraintsQualRef
-        (attributeModuleArities mid prog perRun.value.funConstraintsRef.value ++ crossRun.value.crossModuleFunConstraintsQualRef.value)
+        (attributeModuleEntries mid prog perRun.value.funConstraintsRef.value ++ crossRun.value.crossModuleFunConstraintsQualRef.value)
       let _ = setRef crossRun.value.crossModuleFunConstraintIfacesQualRef
-        (attributeModuleArrIfaces mid prog perRun.value.funConstraintIfacesRef.value ++ crossRun.value.crossModuleFunConstraintIfacesQualRef.value)
+        (attributeModuleEntries mid prog perRun.value.funConstraintIfacesRef.value ++ crossRun.value.crossModuleFunConstraintIfacesQualRef.value)
+      -- B-2.2-f (#1113): the sidecar's two snapshots, paired with the ids snapshots above.
+      let _ = setRef crossRun.value.crossModuleFunConstraintDeclaredRef perRun.value.funConstraintDeclaredRef.value
+      let _ = setRef crossRun.value.crossModuleFunConstraintDeclaredQualRef
+        (attributeModuleEntries mid prog perRun.value.funConstraintDeclaredRef.value ++ crossRun.value.crossModuleFunConstraintDeclaredQualRef.value)
       let _ = setRef crossRun.value.crossModuleFunConstraintIfacesRef perRun.value.funConstraintIfacesRef.value
       let _ = setRef crossRun.value.crossModuleMethodConstraintsRef perRun.value.methodConstraintsRef.value
       let _ = setRef crossRun.value.crossModuleMethodConstraintsQualRef
@@ -25043,6 +25245,17 @@ registerConstraintRegs ((m, ifaceMonos, argVecs)::rest) =
 setFunConstraintEntry : String -> List CSlot -> Option (List (List Mono)) -> Unit
 setFunConstraintEntry m slots argsOpt =
   let _ = setRef perRun.value.funConstraintsRef ((m, map (s => s.csId) slots)::perRun.value.funConstraintsRef.value)
+  -- B-2.2-f (#1113): the DECLARED-prefix sidecar, written in the SAME op as the ids it
+  -- describes so the two can never be written apart.
+  --
+  -- 🚨 `dedupSlots`, not `listLen slots` — MEASURED, not defensive.  `expandSupersPairs`
+  -- starts from `dedupSlots declared`, so a signature whose context names one interface
+  -- twice on one tyvar (`twice : (Shw a, Shw a) => a -> Int`) contributes ONE slot where
+  -- `slots` holds two.  Recording the unshrunk length would put `index < k` one slot past
+  -- the real declared prefix and mark the first APPENDED super slot as declared — the
+  -- unsafe direction, silently.
+  let _ = setRef perRun.value.funConstraintDeclaredRef
+    ((m, CDPLen (listLen (dedupSlots slots)))::perRun.value.funConstraintDeclaredRef.value)
   let _ = setRef perRun.value.funConstraintIfacesRef ((m, map (s => s.csIface) slots)::perRun.value.funConstraintIfacesRef.value)
   match argsOpt
     Some args => setRef perRun.value.funConstraintArgsRef ((m, args)::perRun.value.funConstraintArgsRef.value)
@@ -27247,7 +27460,10 @@ memberSchemeOblEntry mid qual m =
     (e => (local, snd e))
     (filterList (e => fst (fst e) == mid && snd (fst e) == origin) qual)
 
-aliasConstraintEntries : List Decl -> List ((String, String), List a) -> List (String, List a)
+-- B-2.2-f (#1113): the payload is `a`, not `List a`.  The declared-prefix sidecar's
+-- qual table carries a per-entry SCALAR (`CDeclaredPrefix`), which does not fit a
+-- list-shaped payload; every existing caller instantiates `a := List X` unchanged.
+aliasConstraintEntries : List Decl -> List ((String, String), a) -> List (String, a)
 aliasConstraintEntries [] _ = []
 aliasConstraintEntries ((DAttrib _ d)::rest) qual = aliasConstraintEntries [d] qual
   ++ aliasConstraintEntries rest qual
@@ -27255,7 +27471,7 @@ aliasConstraintEntries ((DUse _ path _)::rest) qual = aliasEntriesFor (usePathMo
   ++ aliasConstraintEntries rest qual
 aliasConstraintEntries (_::rest) qual = aliasConstraintEntries rest qual
 
-aliasEntriesFor : String -> UsePath -> List ((String, String), List a) -> List (String, List a)
+aliasEntriesFor : String -> UsePath -> List ((String, String), a) -> List (String, a)
 -- `import m as A` → every constrained fn m defines is callable as `A.<name>`.
 aliasEntriesFor mid (UseAlias _ a) qual = flatMap (moduleAliasEntry mid a) qual
 -- `import m.{x as y}` → `y` carries `x`'s dict arity.
@@ -27857,12 +28073,15 @@ memberDictName bare m = match useMemberAlias m
   Some local => if contains (useMemberOrigin m) bare then [local] else []
   None => []
 
-moduleAliasEntry : String -> String -> ((String, String), List a) -> List (String, List a)
+-- B-2.2-f (#1113): payload generalized `List a` -> `a` along with `aliasEntriesFor`
+-- above (a bare `a` there cannot flow into a `List a` parameter here).  Every existing
+-- caller — including `schemeOblEntriesFor`'s — instantiates `a := List X` unchanged.
+moduleAliasEntry : String -> String -> ((String, String), a) -> List (String, a)
 moduleAliasEntry mid a ((defMid, n), ids)
   | defMid == mid = [(qualifiedLocal a n, ids)]
   | otherwise = []
 
-memberAliasEntry : String -> List ((String, String), List a) -> UseMember -> List (String, List a)
+memberAliasEntry : String -> List ((String, String), a) -> UseMember -> List (String, a)
 memberAliasEntry mid qual m = match useMemberAlias m
   None => []
   Some local =>
@@ -29054,6 +29273,15 @@ dictPassModulesIfEnabled dictNames core2 modules2 =
   let promotedQ = crossRun.value.crossModuleFunConstraintsQualRef.value
   let allMods = namesToSet (map fst modules2) omEmpty
   let _ = setRef perRun.value.funConstraintsRef (scopeArities promotedQ allMods (core2 ++ allModDecls))
+  -- 🚨 B-2.2-b1: THE SIDECAR IS CLEARED, NOT LEFT ALONE.  `f` shipped arguing that
+  -- writing no companion here is "absence, which is correct"; it is not — FAIL-CLOSED
+  -- REQUIRES WRITING `[]`.  `resetState ()` fires at exactly two sites and neither runs
+  -- between the last `checkBodyImpl` and this call, so not writing leaves the PREVIOUS
+  -- module's entries live: a reader in this phase would get a PRESENT, WRONG `CDPLen`,
+  -- resolved by bare-name first-match against a differently-populated table, with no
+  -- `CDPUnknown` to trip on.  Empty ⇒ `clampPrefix`'s `None` arm ⇒ `CDPUnknown` ⇒
+  -- withhold, which is the honest answer for a table this phase does not repopulate.
+  let _ = setRef perRun.value.funConstraintDeclaredRef []
   let _ = setRef perRun.value.methodConstraintsRef (scopeMethodArities crossRun.value.crossModuleMethodConstraintsQualRef.value allMods)
   let core2' = dictPass dictNames core2
   let modules2' = dictPassModulesScoped dictNames promotedQ core2 modules2 modules2
@@ -29087,6 +29315,10 @@ dictPassModulesScoped dictNames promotedQ core2 allModules ((mid, prog)::rest) =
   -- already rewritten `A.name` to the origin's real symbol before this point.
   let _ = setRef perRun.value.funConstraintsRef (aliasConstraintEntries prog promotedQ
     ++ scopeArities promotedQ scopeMods scope)
+  -- B-2.2-b1: cleared for the same reason as in `dictPassModulesIfEnabled` — a stale
+  -- prefix table is worse than an empty one, because only the empty one answers
+  -- `CDPUnknown`.
+  let _ = setRef perRun.value.funConstraintDeclaredRef []
   let _ = setRef perRun.value.methodConstraintsRef (scopeMethodArities crossRun.value.crossModuleMethodConstraintsQualRef.value scopeMods)
   (mid, dictPass dictNames prog) :: dictPassModulesScoped dictNames promotedQ core2 allModules rest
 
@@ -29150,26 +29382,18 @@ scopeMethodArities promotedMQ scopeMods =
 modInScope : String -> OrdMap Unit -> Bool
 modInScope mid scopeMods = mid == "" || omHasKey mid scopeMods
 
--- attribute each fn DEFINED in [prog] that carries a funConstraintsRef entry to [mid].
-attributeModuleArities : String -> List Decl -> List (String, List Int) -> List ((String, String), List Int)
--- Structural duplicate of `attributeModuleArrIfaces` below (same body, two
--- payload instantiations); NOT de-duplicated here because this is a
--- tooling-scoped PR and this is language internals — tracked in #1201.
--- lint-disable-next-line rule-duplicate-body
-attributeModuleArities mid prog entries =
-  let progNames = namesToSet (declTopFnNames prog) omEmpty
-  map
-    (e => ((mid, fst e), snd e))
-    (filterList (e => omHasKey (fst e) progNames) entries)
-
--- WS-2/D2: ifaces analog of attributeModuleArities — attribute each fn DEFINED in [prog]
--- that carries a funConstraintIfacesRef entry to [mid], slot-parallel to the arity qual
--- snapshot, so inferDictAtFound reads a callee's ids + ifaces from one (mid,name) source.
-attributeModuleArrIfaces : String -> List Decl -> List (String, List IfaceRef) -> List ((String, String), List IfaceRef)
--- Structural duplicate of `attributeModuleArities` above; deferred
--- de-duplication — see #1201.
--- lint-disable-next-line rule-duplicate-body
-attributeModuleArrIfaces mid prog entries =
+-- attribute each fn DEFINED in [prog] that carries a per-fn table entry to [mid] —
+-- the source-exact `(mid, name)` key every cross-module fn table is read under.
+--
+-- Used for all three of the fn-side qual snapshots: the constraint ARITIES
+-- (`funConstraintsRef`), the slot-parallel IFACES (`funConstraintIfacesRef`) and, since
+-- B-2.2-f (#1113), the per-entry DECLARED-PREFIX scalar.  It was two byte-identical
+-- monomorphic copies (`attributeModuleArities` / `attributeModuleArrIfaces`), each
+-- carrying a `rule-duplicate-body` disable deferred to #1201; the sidecar's SCALAR
+-- payload does not fit a `List X` signature at all, so the payload is now `a` and both
+-- disables are gone rather than joined by a third.
+attributeModuleEntries : String -> List Decl -> List (String, a) -> List ((String, String), a)
+attributeModuleEntries mid prog entries =
   let progNames = namesToSet (declTopFnNames prog) omEmpty
   map
     (e => ((mid, fst e), snd e))
@@ -29177,7 +29401,7 @@ attributeModuleArrIfaces mid prog entries =
 
 -- #1114 (#845): attribute each TOP-LEVEL binding of [prog] that carries a
 -- `schemeObligationsRef` entry to [mid], source-exactly keyed `(mid, name)` — the same
--- key discipline as `attributeModuleArities` above, and for the same #739 reason (a
+-- key discipline as `attributeModuleEntries` above, and for the same #739 reason (a
 -- bare-name cross-module table misattributes a same-named export of another module).
 --
 -- ⚠️ Unlike the arity tables, `schemeObligationsRef` is keyed `(name, binding-id)` and

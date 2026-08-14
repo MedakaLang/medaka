@@ -188,6 +188,8 @@ crossModuleFunConstraintsRef -- cross-module fn constraint-arity snapshot, bare 
 crossModuleFunConstraintsQualRef -- cross-module fn constraint-arity snapshot, module-qualified mirror
 crossModuleFunConstraintIfacesRef -- cross-module fn constraint-iface snapshot, bare name
 crossModuleFunConstraintIfacesQualRef -- cross-module fn constraint-iface snapshot, module-qualified mirror
+crossModuleFunConstraintDeclaredRef -- cross-module DECLARED-PREFIX sidecar to crossModuleFunConstraintsRef; per-entry scalar, not a slot-parallel list -- B-2.2-f (#1113)
+crossModuleFunConstraintDeclaredQualRef -- module-qualified mirror of the line above, keyed (definer module, fn name), resolved through the same qualConstraintKey decision as the ids and ifaces qual tables
 crossModuleMethodConstraintsRef -- cross-module method constraint-arity snapshot, bare name
 crossModuleMethodConstraintsQualRef -- cross-module method constraint-arity snapshot, module-qualified mirror
 coreSchemeObligationsRef -- #673: core pass own scheme-obligations snapshot, taken after the core pass

@@ -1,0 +1,21 @@
+-- F-1 with a DETERMINISTIC projection instead of the raw value.
+--
+-- The raw channel prints a live heap address that varies every execution
+-- (measured: three runs, three values), so an exact-match pin is impossible.
+-- Comparing against the hand-derived correct answer collapses it to a Bool:
+--   correct behaviour -> True
+--   the defect        -> False
+-- A must-fail fixture then pins `False` and SELF-DRAINS to `True` when fixed,
+-- which is exactly what that corpus is for.
+interface Zub a where
+  sub : a -> Int
+
+data T = T
+
+impl Zub T where
+  sub _ = 2
+
+both : Zub a => a -> Int
+both x = sub x
+
+main = println (both T == 2)

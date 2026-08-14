@@ -1,0 +1,28 @@
+-- #1620 CONTROL — main.mdk with the SECOND interface and its impl deleted, and
+-- nothing else changed. ONE dimension flips: whether a second interface declares
+-- the same method name.
+--
+-- It is graded with the SAME verb as the pin (`build-run`), so it exercises the
+-- whole path — front end, emitter, clang, and the executed binary — that the pin
+-- claims delivers a wrong value only under the collision. A red here means
+-- single-interface dispatch, the emitter or clang broke, not that #1620 is fixed,
+-- and the harness says CONTROL-BROKE rather than DRAINED.
+--
+-- Per #1144 a control is graded on its EXIT CODE ONLY, so it ASSERTS "alpha" and
+-- panics otherwise rather than printing it — a control that merely printed would
+-- exit 0 either way and could never fail. PROVEN ABLE TO FAIL: changing the
+-- comparand to a value the program cannot produce, "nope", makes the built
+-- binary exit 1 with `runtime error [E-PANIC]: control regressed: ...`
+-- (measured 2026-08-14, then reverted).
+interface Alpha a where
+  ping : a -> String
+
+data T = T
+
+impl Alpha T where
+  ping _ = "alpha"
+
+main =
+  if ping T == "alpha"
+    then println "control-ok:alpha"
+    else panic "control regressed: a lone interface's method no longer delivers its own impl body"

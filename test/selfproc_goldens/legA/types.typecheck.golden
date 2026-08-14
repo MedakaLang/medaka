@@ -18,7 +18,7 @@ addRecordIdentRaw : String -> String -> Ident -> List Field -> DataEnv -> DataEn
 addVariantIdentsRaw : String -> TyConOrigin -> List Variant -> DataEnv -> DataEnv
 addVariants : TcEnv -> List (String, Mono) -> List (String, Ref Effvar) -> List Int -> List Int -> Mono -> List Variant -> TcEnv
 aliasArityMsg : String -> Int -> Int -> String
-aliasConstraintEntries : List Decl -> List ((String, String), List a) -> List (String, List a)
+aliasConstraintEntries : List Decl -> List ((String, String), a) -> List (String, a)
 aliasDfsVisit : List (String, List String) -> Ref (List String) -> Ref (List String) -> Ref (List String) -> String -> Unit
 aliasDfsVisitAll : List (String, List String) -> Ref (List String) -> Ref (List String) -> Ref (List String) -> List String -> Unit
 aliasDfsVisitNeighbors : List (String, List String) -> Ref (List String) -> Ref (List String) -> Ref (List String) -> List String -> Unit
@@ -26,7 +26,7 @@ aliasDictNames : List String -> List (String, List Decl) -> List (String, List D
 aliasDictNamesOfDecl : List String -> List (String, List Decl) -> Decl -> List String
 aliasDictNamesOfPath : List String -> List (String, List Decl) -> String -> UsePath -> List String
 aliasDictNamesOfUnit : List String -> List (String, List Decl) -> List Decl -> List String
-aliasEntriesFor : String -> UsePath -> List ((String, String), List a) -> List (String, List a)
+aliasEntriesFor : String -> UsePath -> List ((String, String), a) -> List (String, a)
 aliasFixtureAttribCore : Decl
 aliasFixtureEnv : DataEnv
 aliasFixturePrivCore : Decl
@@ -128,8 +128,7 @@ attachEntryDiagOpt : Option String -> List (String, (List TcDiag, List TcDiag)) 
 attachEntryWarn : TcDiag -> List (String, (List TcDiag, List TcDiag)) -> List (String, (List TcDiag, List TcDiag))
 attachEntryWarnOpt : Option String -> List (String, (List TcDiag, List TcDiag)) -> List (String, (List TcDiag, List TcDiag))
 attributeMethodModuleArities : String -> List Decl -> List (String, List Int) -> List ((String, String), List Int)
-attributeModuleArities : String -> List Decl -> List (String, List Int) -> List ((String, String), List Int)
-attributeModuleArrIfaces : String -> List Decl -> List (String, List IfaceRef) -> List ((String, String), List IfaceRef)
+attributeModuleEntries : String -> List Decl -> List (String, a) -> List ((String, String), a)
 attributeModuleSchemeObls : String -> List Decl -> List ((String, String), List VecObl) -> List ((String, Int), List VecObl) -> List ((String, String), List VecObl)
 attributeSchemeOblsGo : String -> Map String Unit -> Map String Unit -> List ((String, Int), List VecObl) -> List ((String, String), List VecObl)
 augmentWithParams : List (String, Mono) -> List Ty -> List Mono -> List (String, Mono)
@@ -319,6 +318,7 @@ checkUndeterminedObligation : ImplUniverse -> IfaceRef -> Mono -> Option Loc -> 
 checkUndeterminedObligations : ImplUniverse -> IfaceRef -> List Mono -> Option Loc -> Unit
 checkUndeterminedRetEffVars : List Decl -> Unit
 checkUndeterminedRetEffVarsDecl : Decl -> Unit
+clampPrefix : List CSlot -> Option CDeclaredPrefix -> CDeclaredPrefix
 classEnvDeclFact : Decl -> List (String, List String, List IfaceMethod, List Super, TyConOrigin)
 classEnvDeclFacts : List Decl -> List (String, List String, List IfaceMethod, List Super, TyConOrigin)
 classEnvFinish : ClassEnv -> ClassEnv
@@ -484,6 +484,7 @@ declMethodNamesOf : Decl -> List String
 declOwnedBy : String -> String -> TyConOrigin -> Bool
 declTopFnNames : List Decl -> List String
 declaredConstraintArgs : String -> List (List Mono)
+declaredConstraintFor : String -> CDeclared
 declaredConstraintIds : String -> List Int
 declaredConstraintSlots : String -> List CSlot
 declaredCrossModuleObls : String -> Option (List VecObl)
@@ -1108,8 +1109,7 @@ lookupDomain : String -> List (String, Param) -> Param
 lookupIfaceById : Int -> List VecObl -> Option IfaceRef
 lookupLocalFlag : TcEnv -> String -> Bool
 lookupMethodCand : Ident -> List (Ident, (IfaceRef, List String, Ty, List (String, List Kind))) -> Option (IfaceRef, List String, Ty, List (String, List Kind))
-lookupQualArity : String -> String -> List ((String, String), List Int) -> Option (List Int)
-lookupQualIfaces : String -> String -> List ((String, String), List IfaceRef) -> Option (List IfaceRef)
+lookupQualPayload : String -> String -> List ((String, String), a) -> Option a
 lookupRecordByMangledHead : Mono -> String -> String -> Option (String, RecordInfo)
 lookupRecordByName : String -> Option RecordInfo
 lookupRecordForReceiver : Mono -> String -> Option RecordInfo
@@ -1136,7 +1136,7 @@ matchTyMonos : List Ty -> List Mono -> Option (List (String, Mono))
 maybeInferConstraint : List (String, Ty) -> List (IfaceRef, List Mono, Option Loc) -> List UObligation -> String -> Scheme -> Unit
 maybeStandaloneValueMono : String -> Option Mono
 maybeStandaloneValueMonoEmit : TcEnv -> String -> Ref Route -> Option Mono
-memberAliasEntry : String -> List ((String, String), List a) -> UseMember -> List (String, List a)
+memberAliasEntry : String -> List ((String, String), a) -> UseMember -> List (String, a)
 memberBinding : UseMember -> (String, String)
 memberBindsCtorName : String -> String -> UseMember -> Bool
 memberClauseIsValue : (List Pat, Expr) -> Bool
@@ -1178,7 +1178,7 @@ missingImplMethodMsg : String -> List Ty -> String -> String
 missingSuperImplMsg : String -> List Ty -> String -> List Ty -> String
 mkMethodOccObl : IfaceRef -> List String -> Ty -> Mono -> Provenance -> Option Loc -> UObligation
 modInScope : String -> Map String Unit -> Bool
-moduleAliasEntry : String -> String -> ((String, String), List a) -> List (String, List a)
+moduleAliasEntry : String -> String -> ((String, String), a) -> List (String, a)
 moduleDictNames : List Decl -> List Decl -> List (String, List Decl) -> List String
 moduleUserFnNames : List (String, List Decl) -> List String
 monoArgUnboundIds : Mono -> List Int
@@ -1342,7 +1342,7 @@ processSCCs : TcEnv -> List (String, Ty) -> Map String (List (List Pat, Expr)) -
 processTopGroups : TcEnv -> List (String, Ty) -> List (String, (List Pat, Expr)) -> List String -> List (String, Scheme)
 productNorm : List (String, Param) -> Param
 promotedConstraintIfaces : List String -> List (String, List IfaceRef) -> List (String, List IfaceRef)
-promotedConstraints : List String -> List (String, List Int) -> List (String, List Int)
+promotedConstraints : List String -> List (String, a) -> List (String, a)
 propParamName : PropParam -> String
 propParamNamesTc : List PropParam -> List String
 publicDataDecl : Decl -> Bool

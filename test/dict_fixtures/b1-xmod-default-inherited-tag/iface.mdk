@@ -1,0 +1,15 @@
+-- The interface, with a DEFAULT body, in a module of its own.
+--
+-- `Cup`'s impl is METHOD-LESS and lives HERE, in the interface's own module, so
+-- desugar's `fillImplDefaults` (same-module only, `desugar.mdk`) specializes the
+-- default into a tagged clause for it.  That is the SAME-MODULE twin: it has a
+-- method entry, `keyForSite` selects a row for it, and the site routes on that
+-- row's word.  `main.mdk`'s `Box` impl is the same source shape one module over,
+-- where no such clause is synthesized -- see that file.
+export interface Sz a where
+  sz : a -> Int
+  sz _ = 42
+
+public export data Cup = Cup
+
+impl Sz Cup where

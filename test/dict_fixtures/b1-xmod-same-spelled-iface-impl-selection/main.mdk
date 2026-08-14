@@ -1,0 +1,57 @@
+-- §8 I4 + §3 `inst` -- IMPL SELECTION under TWO SAME-SPELLED INTERFACES IN
+-- UNRELATED MODULES. Promoted from the drained must_fail pin
+-- `1514-xmod-same-spelled-iface-impl-selection`: a pin asserts a bug STILL
+-- REPRODUCES, so a fix deletes it and the S0 has NO guard unless a positive row
+-- replaces it (the same move that produced s6-c1-xmod-same-spelled-ifaces-accepted
+-- from #1438 and i4-xmod-method-occurrence-* from #1507).
+--
+-- SPEC ANSWER HAND-DERIVED FROM DICT §8 I4 + §3, NOT READ OFF A BINARY. An
+-- interface is identified by its DECLARATION, so `amod.Same` and `zmod.Same` are
+-- two classes. `amod.aValue = sizeOf (Blob 10)` sits INSIDE amod, where the only
+-- `Same`, the only `Blob` and the only `impl Same Blob` in scope are amod's own:
+-- `match(IE, amod.Same amod.Blob)` is the singleton {amod's impl}, so
+-- aValue = 10 + 1 = 11. Symmetrically `zmod.zValue` can only mean zmod's own impl,
+-- zValue = 10 + 100 = 110. There is no ambiguity anywhere in this program to
+-- resolve -- neither module imports the other, and neither goal has a second
+-- candidate. bystanderValue touches no interface at all: 5 + 1 + 1 = 7.
+--   => 11 / 110 / 7.
+--
+-- 🚨 WHY THIS ROW EXISTS AND WHY THE b1-* SIBLINGS DO NOT COVER IT. The five
+-- `b1-*` rows pin the WIRE FORMAT (that a module prefix appears in an emitted
+-- symbol); `b1-p4-super-slot-colliding-heads` separates its two impls by TYPE
+-- ARGUMENT (`Box Int` vs `Box String`), which the pre-B-2.2 word already
+-- separated -- the module prefix is decoration there and nothing in that program
+-- would answer differently without it. THIS program is the one whose VALUE the
+-- identity carries: strip the module component from the route word and amod's and
+-- zmod's impls collapse into one registry cell, whichever installs last wins for
+-- both readers, and line 2 reads 11.
+--
+-- 🚨 MEASURED ON THE PRE-BITE BINARY (the must_fail pin's own recorded cells, and
+-- the reason it was a pin): `check` exit 0 `main : Unit`; `run` printed 11 / 11 / 7
+-- at exit 0 -- SILENT WRONGNESS, zValue getting amod's `n + 1` instead of zmod's
+-- own `n + 100` -- while the BUILT BINARY printed the correct 11 / 110 / 7. So the
+-- two engines actively DISAGREED, which is what makes the drain causal rather than
+-- coincidental, and it is why this row is ALL_EXACT: the mode requires run and
+-- build to agree with each other AND with the pinned value, so the pre-bite state
+-- fails it twice over.
+--
+-- ⚠️ SCOPE BOUND, stated here because the sprint's own differential established it
+-- (DEBT.md D-2): this fixture pins the DIRECT shape -- each module computes its own
+-- value inside its own module. The WRAPPER shape (dispatch reaching the collision
+-- through a function in a third module) is measurably NOT drained, is still
+-- import-order-dependent on both arms, and is deliberately NOT in this corpus. A
+-- drained fixture is not a drained class; do not read this row's green as "same-
+-- spelled cross-module interfaces are fixed".
+--
+-- ⚠️ The bystander line is not filler. It is the "unrelated code still behaves"
+-- half: an identity re-key is a change to a PROGRAM-GLOBAL route table, and the
+-- failure shape of that class is that the feature works and something that never
+-- touches it breaks. `7` is produced by a module that declares no interface.
+import amod.{aValue}
+import zmod.{zValue}
+import bystander.{bystanderValue}
+
+main =
+  let _ = println aValue
+  let _ = println zValue
+  println bystanderValue

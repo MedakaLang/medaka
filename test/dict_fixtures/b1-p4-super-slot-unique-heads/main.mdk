@@ -1,0 +1,37 @@
+-- ORGAN 4 (P4) -- THE SUPER-SLOT TRIPWIRE, and the "unchanged" half of it.
+--
+-- `both` declares ONE predicate, `Deriv a`.  `expandSupersPairs` APPENDS a second
+-- dict slot for the superinterface `Base a`, so the emitted definition takes TWO
+-- dict params for a one-argument source function (asserted in Section 3).  The
+-- tripwire is what is APPLIED at those two slots: today both words are the bare
+-- head tag `T`, so the SAME one-word dict constant is passed twice.  The tree
+-- states the premise at `typecheck.mdk` ("Because the dict VALUE is just a type
+-- tag, the super slot's route is identical to the sub slot's"), and Phase 3′ is
+-- what eventually falsifies it.
+--
+-- 🚨 THIS FIXTURE PINS THAT `B-2.2-b1` DID **NOT** MOVE THIS PROGRAM, WHICH IS THE
+-- POINT OF IT.  With ONE impl per interface the collision gate in `keyForSite` is
+-- False at BOTH slots, so both stamp the bare tag exactly as before the bite --
+-- identity is only reachable through the collision branch.  A `b1` that widened
+-- the word to identity UNCONDITIONALLY would rename every single-impl-per-head
+-- symbol in the tree (that is #1113's end state, not this bite's), and it would
+-- show up here first.  The sibling fixture `b1-p4-super-slot-colliding-heads`
+-- is where the word IS expected to move.
+--
+-- HAND-DERIVED FROM THE SPEC: `dtag T` = 2 and `btag T` = 1, so 2 * 100 + 1.
+-- EXPECTED: 201
+--
+-- The distinct bodies are load-bearing: they make a copied route OBSERVABLE (a
+-- super slot resolving to the sub's row would print 202), so this is not an
+-- absence probe.  The negative control is the sibling directory
+-- `b1-p4-super-slot-no-base-impl-rejected`: delete `impl Base T` and the program
+-- is rejected at exit 1, which is what keeps this row from passing because the
+-- appended slot VANISHED rather than resolved.
+import base.{Base(..), btag}
+import deriv.{Deriv(..), dtag}
+import t.{T(..)}
+
+both : Deriv a => a -> Int
+both x = dtag x * 100 + btag x
+
+main = println (both T)

@@ -1,0 +1,11 @@
+-- Declares no interface, impls nothing, dispatches nothing -- the module that has
+-- nothing to do with the change under test. Its `7` is the assertion that an
+-- identity re-key of the route table left code that never enters that table alone.
+export data Tally = Tally Int
+
+export bump : Tally -> Tally
+bump (Tally n) = Tally (n + 1)
+
+export bystanderValue : Int
+bystanderValue = match bump (bump (Tally 5))
+  Tally n => n

@@ -1,0 +1,15 @@
+-- A2 — method-less impl inheriting a cross-module DEFAULT, at a head that ALSO
+-- carries a same-spelled interface from a different module.
+--
+-- HAND-DERIVED EXPECTATION (DICT §8 I4: a class is (module, name); §5: the
+-- interface default is used only when the SELECTED instance omits the method):
+--   dtag Box -> di::Tag's default body            -> 7
+--   otag Box -> other::Tag's explicit impl body   -> 100
+-- Correct = (7, 100).
+--
+-- The other answer that would have counted: (7, 7) or (100, 100) = the two
+-- same-spelled interfaces collapsed onto one route word.
+import dimpl.{Box(..), dtag}
+import other.{otag}
+
+main = println (dtag Box, otag Box)

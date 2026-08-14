@@ -151,6 +151,12 @@ hand-rebuilt ritual.
 soundness/product contexts. ⚠️ **A gate matching
 `test/diff_compiler_*.sh` but no shard pattern in `ci.yml` SILENTLY NEVER RUNS** —
 `diff_compiler_ci_shard_coverage.sh` catches it, and the merge queue will bounce you for it.
+🚨 **That check's input is the TREE, not `test/`, so a `.sh` you add ANYWHERE trips it** — measured
+2026-08-14, a repro harness committed under `.claude/` reddened `gates (tools)` as *"matches NO CI
+shard and would SILENTLY NEVER RUN"*. If the script is not a gate, the fix is a
+`test/CI-COVERAGE-EXCEPTIONS.txt` row **with a reason**, not a rename: say what it is, and why
+running it in CI would be wrong (a harness whose arms are *expected* to fail would red the suite on
+findings that are correctly still open).
 ⚠️ **Derive the current set** (this used to claim "Ten" while `wasm` was already required, #597):
 ```sh
 gh api repos/MedakaLang/medaka/rulesets --jq '.[]|select(.enforcement=="active")|.id' | while read -r id; do
@@ -628,6 +634,13 @@ on purpose). Re-install after a fresh clone:
   A stale snapshot fails the commit rather than reading as tooling breakage. **Run `make
   snapshot-check` first**; to bless a moved snapshot, `sh test/diff_compiler_snapshot_frontend.sh
   --bless <file.mdk>` then re-stage `test/snapshots/` and read the diff (that diff is the real
+  ⚠️ **A NEW compiler source file needs `--new`, and `--new` is NOT `--bless`'s sibling — it is
+  SUITE-WIDE.** It never overwrites (so existing goldens are safe), but it **skips** everything it
+  did not create and says so honestly: *"0 compared, 201 skipped: NOTHING COMPARED (this is not a
+  pass)"*. ⇒ **run `--new`, verify it created exactly what you expected (`diff -rq` against a
+  before-copy), then RE-RUN the plain check** — the re-check is what makes it a pass. Measured
+  2026-08-14 creating `test/snapshots/compiler/route_key.md`: 1 new, 0 blessed, 201 skipped, and the
+  subsequent check read 202/202.
   review gate).
   ⚠️ **This check reads the WORKING TREE, not the index** — a `--bless` you forgot to
   `git add` used to be invisible to it (it "passed" because the disk looked current, while the

@@ -1,0 +1,13 @@
+-- F-3 CONTROL: collide.mdk with the second interface (and its impl) deleted.
+-- Nothing else changes. Expect clean on every arm: check 0, run 0 [alpha],
+-- build 0, binary 0 [alpha]. If this is also broken, the trigger is not the
+-- method-name collision and F-3's framing is wrong.
+interface Alpha a where
+  ping : a -> String
+
+data T = T
+
+impl Alpha T where
+  ping _ = "alpha"
+
+main = println (ping T)

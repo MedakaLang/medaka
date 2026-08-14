@@ -1,0 +1,18 @@
+-- NEGATIVE CONTROL for `b1-p4-super-slot-unique-heads` (PC1).
+--
+-- The superinterface obligation must be LIVE: with `impl Base T` deleted the
+-- program is rejected at exit 1.  Without this row, a regression that made the
+-- appended `Base` super slot VANISH -- rather than resolve to the wrong dict --
+-- would keep both the value assertion (201) and the IR assertions of the sibling
+-- green while the tripwire silently stopped watching anything.
+--
+-- HAND-DERIVED: `impl Deriv T` declares `requires Base a` at `a = T` and no
+-- `impl Base T` exists anywhere in the graph.  REJECT.
+import base.{Base(..), btag}
+import deriv.{Deriv(..), dtag}
+import t.{T(..)}
+
+both : Deriv a => a -> Int
+both x = dtag x * 100 + btag x
+
+main = println (both T)

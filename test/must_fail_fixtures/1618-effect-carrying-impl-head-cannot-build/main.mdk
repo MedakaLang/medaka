@@ -1,0 +1,20 @@
+-- #1618 — a SINGLE impl whose head carries an effect row, `<Stdout> Int`.
+--
+-- There is no overlap here to be rejected for, and nothing about this program is
+-- ambiguous: one interface, one impl, one call. It CHECKS clean (exit 0) and RUNS
+-- correctly (`medaka run` prints 2), and then it CANNOT BE BUILT — `medaka build`
+-- exits 1 with a compiler E-PANIC, one effect row away from a program that builds
+-- and runs fine (control.mdk).
+--
+-- HAND-DERIVED CORRECT ANSWER: the only impl of `Sz` whose head matches the
+-- receiver is this one, so `sz 0` is its body, 2 — which is exactly what `medaka
+-- run` already prints. The defect is NOT the value; it is that the emitter cannot
+-- find the impl the front end already resolved. Correct behaviour is therefore
+-- `medaka build` exiting 0 and the binary printing 2, like control.mdk does.
+interface Sz a where
+  sz : a -> Int
+
+impl Sz (<Stdout> Int) where
+  sz _ = 2
+
+main = println (sz 0)

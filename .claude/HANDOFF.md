@@ -2,6 +2,39 @@
 
 ---
 
+## 🟡 LIVE SPRINT (2026-08-14): Stage B / Phase 3′ — `B-2.2`, branch `arch/stage-b-phase3-b22`
+
+**Expected-red for the duration, BY DESIGN — do not diagnose these as a break.** Contract:
+`.claude/STAGE-B-PHASE3-SPRINT.md`; records: `.claude/sprint-phase3/`.
+
+⚠️ **CORRECTED at HEAD:** this unit was *planned* to change `RKey`'s payload type; that design was
+**REFUSED in Phase 0** and `data Route` is **unchanged** (`RKey String (List Route)`). The identity
+lives **inside the word**, minted by `compiler/types/route_key.mdk` and called from both sides of the
+seam. **Emitted IR still moves**, so everything below stands unaltered — but do not go looking for a
+payload type change, and do not repeat that framing: it is the doc a next agent reads first.
+
+This unit changes the emitted route **word** and therefore **emitted IR**. Goldens are blessed **ZERO
+times** until the close-out, when they are re-cut **once** from the final binary. So, on this
+branch, mid-run:
+
+| gate | why it is red | who licenses it |
+|---|---|---|
+| `test/diff_compiler_snapshot_*.sh` | compiler source is in its own snapshot corpus | Phase 2 close-out re-cut |
+| `test/diff_compiler_selfproc.sh` (LEG A schemes) | new/re-typed top-level bindings move `test/selfproc_goldens/legA/*` — **CI `backend` shard only, green locally** | Phase 2 close-out re-cut |
+| `test/diff_compiler_llvm_typed_ir.sh` | `B-2.2-e` changes emitted impl symbol words | Phase 2 close-out re-cut |
+| `test/diff_compiler_must_fail.sh` | pins flipping as drains land is a **deliverable**, not a break | repair round |
+| `test/diff_compiler_snapshot_frontend.sh` — *`route_key.mdk: FAIL no snapshot`* | ⚠️ **an ADD, not a move.** `B-2.2-a` created `compiler/types/route_key.mdk`, and that gate **globs `compiler/types/*.mdk`** (`:165`), so the new file auto-enrolled in the shared snapshot corpus. Measured at the bite's landing: **201 of 201 existing snapshots compared and matching — zero goldens MOVED** | close-out, and it owes a **CREATE (`--new`)**, not a re-bless — the gate's own message warns against `--new`, so it needs a deliberate decision rather than a reflex |
+
+🚨 **Before calling any OTHER red "pre-existing", READ the gate that produced it.** In Stage A a red
+was called pre-existing by two agents and repeated in two commit messages and a PR body — and was
+the run's own licensed deliverable, said so six lines above the assertion.
+
+**The seed is re-minted (`test/refresh_seed.sh` TWICE — it is not idempotent after a codegen
+change) and the fixpoint re-validated IN-BAND at the close-out.** A fixpoint segfault on a change
+that looks correct is the stale-seed signature, not your bug.
+
+---
+
 ## ✅ UPDATE after `B-2.1-g`: BOTH residuals `f` left are CLEARED. The `SA-4c` class is CORRECT, not merely loud.
 
 > 🕐 **HISTORICAL — written at `26423f93` (`B-2.1-g`), and this file's newest-at-top convention is
