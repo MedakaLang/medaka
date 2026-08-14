@@ -1677,3 +1677,41 @@ method`; the native emitter has no such escape.
   honestly: within one `medaka build` there is one loader run, so this is **not** a live miscompile;
   what it is, is IR goldens whose expected symbol embeds a path-derived id, and a new coupling
   between an open loader defect and object-file names.
+
+## RUN-P3-043 — OWED-1 DISCHARGED: no tree-wide prelude symbol move
+
+The adversarial review closed eight of nine attacks on paper and named **one link it could not**:
+`declKeysAtHead`'s dedup exists because *"a re-imported prelude impl appears in the joint decl list
+twice under ONE key"* — and after `e` that premise requires both copies to carry **identical
+`implOrigin`**. If any path re-stamped a shared decl per module, the copies would diverge, the count
+would become 2, `ifaceDeclHeadUnique` would flip **False for a prelude interface**, and symbols would
+move **tree-wide**. C3a would catch that only if the compiler's own graph happened to hit it.
+
+**Measured on the two pre-built arms** (no rebuild; a writer holds the trunk). Two modules both
+importing `map`, so prelude impls reach the joint decl list from two places:
+
+```
+base   → build 0, exec 0 [25], 253 distinct @mdk_impl_ symbols
+branch → build 0, exec 0 [25], 253 distinct @mdk_impl_ symbols
+symbol-set diff: IDENTICAL
+```
+
+**⇒ The dedup premise holds. No prelude symbol moved.**
+
+### The positive control, and why this is not a vacuous null
+
+A null result proves nothing unless the probe *could* have been non-null. **It could**, and the
+control is already measured: `p11_sanitize_collide` on **this same branch binary** emits
+`@mdk_impl_a_b__C_Int__m` — a module-qualified symbol. So the branch arm demonstrably qualifies
+symbols when the collision gate fires. Here it does not fire, because prelude impls are unique per
+head and take `routeWordFor`'s bare-tag arm.
+
+⚠️ **Honest scope:** this is a **consequence-side** check (did symbols move?), not an instrumented
+check of the mechanism (do the two copies carry the same origin?). That is the preferred direction in
+this tree — verify the consequence, not the mechanism — but it means the finding is *"no observable
+divergence on a program that exercises the shared-prelude path"*, not *"the origins are provably
+identical at the source level."*
+⚠️ Also recorded because it cost a round: my first probe used `map.empty`/`map.insert`, which that
+module does not export. **Both arms failed identically**, which is exactly the vacuous-both-arms-fail
+shape the differential harness had to grow a counter for — a probe failing the same way on both arms
+carries no signal and must not be read as agreement.
