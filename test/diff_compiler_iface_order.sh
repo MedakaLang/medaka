@@ -51,9 +51,11 @@
 #           is ACCEPT vs REJECT, not two different values.
 #   codes=  every `"code":"..."` in `check --json`, SORTED, as a multiset. Sorted
 #           because diagnostics come out in source order and permutation moves source
-#           lines. THIS CELL IS WHAT SEPARATES STATE 3 FROM STATE 4 below: a fix that
-#           REJECTS the ambiguity converges on a signature carrying a diagnostic code;
-#           a fix that merely SELECTS deterministically converges on one with none.
+#           lines. THIS CELL IS WHAT SEPARATES STATE 3 FROM STATE 4 below — but read it
+#           by CODE PREFIX, not by emptiness: a fix that REJECTS the ambiguity converges
+#           on an `R-*` (resolve-stage) code; a fix that merely SELECTS deterministically
+#           converges on NO code, or on a `T-*` (type-stage) one when the selected impl
+#           then fails to typecheck. `check=1` alone does NOT mean state 3.
 #   schemes= plain `medaka check`'s scheme dump, selected by FORMAT (`<name> : <type>`
 #           at column 0) rather than by stream. ⚠️ Diagnostics are NOT reliably on
 #           stderr -- import_order.sh measured resolve-stage diagnostics on stderr and
@@ -125,9 +127,20 @@
 #
 #   STATE 4 — S1 ALONE (identity-keyed selection, no resolve rejection).
 #     THIS GATE: also converges to ONE signature, also RED as `DRAINED` -- but the
-#     observed signature reads `check=0;codes=;...` with a stable value in `run=` and
-#     `build=`. THE `codes=` CELL IS THE DISCRIMINATOR between 3 and 4, which is why
-#     an exit-code-only criterion would not have done.
+#     observed signature carries NO `R-*` code. Two sub-shapes, BOTH state 4:
+#       * `check=0;codes=;...` with a stable value in `run=`/`build=` -- the selected
+#         impl typechecks and the program runs.
+#       * `check=1;codes=T-*;...` -- selection WAS deterministic, and the impl it
+#         deterministically chose then failed TYPECHECK. Concretely: the
+#         1182-unimplemented-iface-obligation-iface-order case declares only
+#         `impl FA Blob`, so an S1-alone fix that binds `mth` to FB converges on
+#         `check=1;codes=T-NO-IMPL` in every ordering. That is a type error, NOT an
+#         ambiguity rejection, and it must not be read as state 3.
+#     ⇒ THE DISCRIMINATOR IS THE CODE PREFIX, not the exit code and not whether
+#       `codes=` is non-empty: `R-*` (resolve) => state 3; `T-*` or empty => state 4.
+#       An exit-code-only criterion would not have done, and neither would a
+#       merely-non-empty-`codes=` one -- see this corpus's OWN #1182 ledger row,
+#       which already pins a `check=1;codes=T-NO-IMPL` signature today.
 #
 #   In states 3 and 4 the gate prints the converged signature in its drain note, so
 #   the reader distinguishes them from the gate's own output without re-deriving.
@@ -471,11 +484,22 @@ for cse in $cases; do
       printf '     Observed signature: %s\n' "$(cat "$TMP/$cse.distinct")"
       printf '     ⭐ READ THE CONVERGED SIGNATURE BEFORE ACTING — it says WHICH fix landed,\n'
       printf '     and the two answers are not interchangeable (gate header, FOUR-STATE TABLE):\n'
-      printf '       check=1 WITH a codes= entry  -> the ambiguity is now REJECTED (state 3).\n'
+      printf '       check=1 with an R-* code     -> the ambiguity is now REJECTED at the\n'
+      printf '                                       RESOLVE stage (state 3).\n'
       printf '       check=0 with codes= EMPTY    -> selection is now deterministic and the\n'
       printf '                                       program still compiles (state 4). Confirm\n'
       printf '                                       the value in run=/build= is the one the\n'
       printf '                                       fix INTENDED, not merely a stable one.\n'
+      printf '       check=1 with a T-* code      -> ALSO state 4, NOT state 3. Deterministic\n'
+      printf '                                       selection that then fails TYPECHECK. The\n'
+      printf '                                       1182-unimplemented-... case declares only\n'
+      printf '                                       `impl FA Blob`, so an S1-alone fix binding\n'
+      printf '                                       deterministically to FB converges on\n'
+      printf '                                       check=1;codes=T-NO-IMPL. Reading that as\n'
+      printf '                                       state 3 would credit a resolve rejection\n'
+      printf '                                       that never landed.\n'
+      printf '     ⇒ THE DISCRIMINATOR IS THE CODE PREFIX, NOT merely whether codes= is\n'
+      printf '       non-empty: R-* (resolve) = state 3; T-* (type) or empty = state 4.\n'
       printf '     ⚠️ Convergence alone does NOT establish that %s is fully fixed. A fix scoped\n' "$issue"
       printf '     by interface NAME can drain one axis and leave another; that is why this\n'
       printf '     corpus exists alongside the impl-order pins. Check the sibling axes too:\n'

@@ -194,15 +194,19 @@ fi
 [ "$h3" -eq 0 ] && echo "  none — every exemption still has a live subject."
 echo
 
-# ══ HALF 4: an IMPORT-ORDER-LEDGER row whose issue is CLOSED ══════════════════
+# ══ HALF 4: an ORDER-LEDGER row whose issue is CLOSED ═════════════════════════
+#           (BOTH ledgers: IMPORT-ORDER-LEDGER.txt and IFACE-ORDER-LEDGER.txt)
 #
-# test/IMPORT-ORDER-LEDGER.txt (read by test/diff_compiler_import_order.sh, the
-# import-clause permutation differential) carries one row per case whose answer still
-# depends on import order, each naming the OPEN issue that owns it. That ledger's own
-# header requires the issue to be OPEN, and the GATE cannot check it: it runs on every
-# dev box under `make gates`/preflight with no `gh` auth, and in a required CI shard
-# where an API blip must never block a merge. Exactly the split halves 1 and 3 already
+# Each permutation-differential ledger listed below carries one row per case whose
+# answer still depends on the order of some declaration that changes no program
+# meaning, and each row names the OPEN issue that owns it. Both ledgers' own headers
+# require that issue to be OPEN, and NEITHER GATE can check it: they run on every dev
+# box under `make gates`/preflight with no `gh` auth, and in required CI shards where
+# an API blip must never block a merge. Exactly the split halves 1 and 3 already
 # use — the offline half is loud on the PR, this half needs the API.
+#
+# The loop below iterates the ledgers; it is the authority on which are covered, and
+# this comment is not. Derive:  grep -n 'for IOLEDGER in' test/must_fail_census.sh
 #
 # ⚠️ Note what this does NOT do. The gate already fails when a ledgered divergence
 # CONVERGES (the real drain). This half catches the other lie: the issue was closed

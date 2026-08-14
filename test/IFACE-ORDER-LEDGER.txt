@@ -42,11 +42,23 @@
 # was built. Two DIFFERENT fixes both make a row converge, and they are not
 # interchangeable. The gate prints the converged signature in its drain note:
 #
-#   check=1 WITH a codes= entry  -> the ambiguous occurrence is now REJECTED.
+# ⚠️ READ THE CODE PREFIX, NOT MERELY WHETHER `codes=` IS NON-EMPTY:
+#
+#   check=1 with an R-* code     -> the ambiguous occurrence is now REJECTED at the
+#                                   RESOLVE stage. This is the only reading that means
+#                                   "the ambiguity was rejected".
 #   check=0 with codes= EMPTY    -> selection is now deterministic and the program
 #                                   still compiles. Confirm the value in run=/build=
 #                                   is the one the fix INTENDED, not merely a stable
 #                                   one — a deterministic wrong answer converges too.
+#   check=1 with a T-* code      -> ALSO deterministic selection, NOT a rejection: the
+#                                   impl that was deterministically chosen then failed
+#                                   TYPECHECK. The #1182 row below already pins a
+#                                   `check=1;codes=T-NO-IMPL` signature TODAY, so a
+#                                   converged signature of that shape is evidence of
+#                                   deterministic selection, not of an ambiguity check.
+#                                   Same reading, and the same trap, as the gate's
+#                                   FOUR-STATE TABLE state 4.
 #
 # And the harder half: CONVERGENCE HERE DOES NOT ESTABLISH THAT THE ISSUE IS FIXED.
 # A fix scoped by interface NAME can drain one axis and leave another. The sibling
