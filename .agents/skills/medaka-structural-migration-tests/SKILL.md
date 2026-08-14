@@ -91,8 +91,20 @@ checks complement behavior; they do not replace it.
 
 ## 5. Mutation-test every semantic field
 
-After a clean implementation revision, define one reversible private mutation
-per field, normally emptying or corrupting only that accessor. For each row:
+After a clean implementation revision, define reversible private mutations per
+field. Ambient-state migrations require three distinct classes when applicable:
+
+- reader/runtime: corrupt selected reader or runtime demand;
+- fresh-context U-absence: seed only that fresh carrier field with U;
+- renamed ambient authority: roundtrip selected carrier field through a legal
+  renamed top-level authority on relevant route.
+
+Generic carrier mutations do not substitute for these claims. After final
+implementation/harness freeze, create one row per applicable field/class pair.
+Record row ID, semantic field, class, route, claim, exact head, target file,
+unique anchor, exact before/after text and mutation command, prepare/check/
+restore-check commands, baseline hash, caller-owned receipt path, and earliest
+stable expected-red identifier. Then:
 
 1. apply one mutation;
 2. rebuild only the focused probe;
@@ -122,6 +134,14 @@ a stale probe is invalid even when it reports green or red. The helper restores
 bytes without Git index writes, so isolated-worktree `.git/worktrees/*/index.lock`
 restrictions are not grounds for a custom transaction. Use custom shell only
 for a shape the helper cannot express, and retain the same guarantees.
+
+Unexpected green means wrong target or stale build until re-derived; report
+`BLOCKED_WRONG_TARGET`. Do not relabel it non-discriminating, substitute another
+row, or weaken expected evidence without reviewer confirmation. Successful row
+receipt requires: expected ID observed; transaction exited; source blob equals
+HEAD; porcelain empty; no mutation/build process; retained log path.
+Independently inspect final filesystem state instead of trusting reported hash.
+Long prepares run in yielded sessions and are polled to completion.
 
 For mode/reset migrations, include renamed-authority mutants rather than only
 mutating retired names. One mutant restores the old reset choreography so output
