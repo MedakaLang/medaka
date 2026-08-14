@@ -326,6 +326,7 @@ data WasmEmit =
       functionReferences : Ref (List String),
       functionReferenceNames : Ref (OrdMap Unit),
       trapImportNeeded : Ref Bool,
+      useDivGuard : Ref Bool,
       emittedDefaultNames : Ref (OrdMap Unit),
       defaultDefinitions : Ref (List (List String)),
     }
@@ -346,6 +347,7 @@ freshWasmEmit mode = WasmEmit {
   functionReferences = Ref [],
   functionReferenceNames = Ref omEmpty,
   trapImportNeeded = Ref False,
+  useDivGuard = Ref False,
   emittedDefaultNames = Ref omEmpty,
   defaultDefinitions = Ref [],
 }
@@ -847,12 +849,6 @@ useEPutRef = Ref False
 isLazyGlobalW : Prog -> String -> Bool
 isLazyGlobalW prog x = omHasKey x (indexLazyGlobalsW (progIndex prog))
 
--- B5: the program contains a concrete-Int `/`/`%` → declare the i64 divisor-guard
--- scratch local ($__divr<depth> in ref mode, $__sdivr in scalar mode).  Set by the
--- pre-scan (noteW8Binop) so the local decl is present before the div-site emit.
-useDivGuardRef : Ref Bool
-useDivGuardRef = Ref False
-
 -- W8b: the program uses Float (a Float literal, a Float extern, or a Float arith op).
 -- Forces ref-mode (a Float is a boxed (ref eq) $float struct) + gates the Float runtime
 -- (floatRuntimeLines + the floatToString host import).  useFloatHashRef / useFloatRngRef
@@ -1072,7 +1068,6 @@ emitProgramWith emit input (CProgram groups ctorArs ctorTypes impls) =
   let _ = setRef useRngRef False
   let _ = setRef useHashRef False
   let _ = setRef useEPutRef False
-  let _ = setRef useDivGuardRef False
   let _ = setRef useFloatRef False
   let _ = setRef useFloatHashRef False
   let _ = setRef useFloatRngRef False
@@ -1089,8 +1084,8 @@ emitProgramWith emit input (CProgram groups ctorArs ctorTypes impls) =
   let _ = setRef useArgsRef False
   let _ = setRef useFileBytesRef False
   let _ = setRef tupleAritiesRef []
-  let _ = scanProgW7 groups
-  let _ = scanImplsW7 impls
+  let _ = scanProgW7 emit groups
+  let _ = scanImplsW7 emit impls
   -- W8b: any Float program needs the $str rep — a Float value-main auto-prints through
   -- floatToString (a $str), and $mdk_float_to_str builds a $str.  Force useStrRef so the
   -- $str type + the $str print runtime emit.
@@ -1134,7 +1129,6 @@ emitProgramGaps input (CProgram groups ctorArs ctorTypes impls) =
   let _ = setRef useRngRef False
   let _ = setRef useHashRef False
   let _ = setRef useEPutRef False
-  let _ = setRef useDivGuardRef False
   let _ = setRef useFloatRef False
   let _ = setRef useFloatHashRef False
   let _ = setRef useFloatRngRef False
@@ -1151,8 +1145,8 @@ emitProgramGaps input (CProgram groups ctorArs ctorTypes impls) =
   let _ = setRef useArgsRef False
   let _ = setRef useFileBytesRef False
   let _ = setRef tupleAritiesRef []
-  let _ = scanProgW7 groups
-  let _ = scanImplsW7 impls
+  let _ = scanProgW7 emit groups
+  let _ = scanImplsW7 emit impls
   let _ = if useFloatRef.value then setRef useStrRef True else ()
   let fnNames = collectFnNames groups
   let valNames = collectValNames groups
@@ -1532,99 +1526,101 @@ headUsesStr h = exprUsesStr h
 -- BOTH constructions (CList/CTuple/CArray/CRangeArray/CIndex/CSlice/CRangeList, Ref/
 -- setRef) AND match heads (HCons/HNil → list, HTuple n → tuple).  Mirrors how
 -- programUsesStr scans, but mutates the refs as it walks (peer to noteTupleArity).
-scanProgW7 : List CBind -> Unit
-scanProgW7 groups = forEachU (b => scanBindW7 b) groups
+scanProgW7 : WasmEmit -> List CBind -> Unit
+scanProgW7 emit groups = forEachU (b => scanBindW7 emit b) groups
 
 -- W9: scan impl method bodies + interface defaults for collection/extern use too
 -- (e.g. `eq (x::xs) (y::ys)` forces lists; `display n = intToString n` forces $str).
-scanImplsW7 : List CImplEntry -> Unit
-scanImplsW7 impls = forEachU scanImplEntryW7 impls
+scanImplsW7 : WasmEmit -> List CImplEntry -> Unit
+scanImplsW7 emit impls = forEachU (entry => scanImplEntryW7 emit entry) impls
 
-scanImplEntryW7 : CImplEntry -> Unit
-scanImplEntryW7 (CImplEntry _ _ body) = match body
-  CImplTagged _ _ _ _ pats b => let _ = forEachU scanPatW7 pats in scanExprW7 b
-  CImplDefault _ pats b => let _ = forEachU scanPatW7 pats in scanExprW7 b
+scanImplEntryW7 : WasmEmit -> CImplEntry -> Unit
+scanImplEntryW7 emit (CImplEntry _ _ body) = match body
+  CImplTagged _ _ _ _ pats b =>
+    let _ = forEachU (p => scanPatW7 emit p) pats in scanExprW7 emit b
+  CImplDefault _ pats b =>
+    let _ = forEachU (p => scanPatW7 emit p) pats in scanExprW7 emit b
 
 forEachU : (a -> Unit) -> List a -> Unit
 forEachU _ [] = ()
 forEachU f (x::xs) = let _ = f x in forEachU f xs
 
-scanBindW7 : CBind -> Unit
-scanBindW7 (CBind _ clauses) = forEachU scanClauseW7 clauses
+scanBindW7 : WasmEmit -> CBind -> Unit
+scanBindW7 emit (CBind _ clauses) =
+  forEachU (clause => scanClauseW7 emit clause) clauses
 
 -- W9: scan BOTH a clause's param patterns (a list/tuple clause head forces the
 -- collection type sections even when the body has no collection literal — e.g.
 -- core.mdk's debugListItems `(y::rest)` heads) AND its body.
-scanClauseW7 : CClause -> Unit
-scanClauseW7 (CClause pats body) =
-  let _ = forEachU scanPatW7 pats
-  scanExprW7 body
+scanClauseW7 : WasmEmit -> CClause -> Unit
+scanClauseW7 emit (CClause pats body) =
+  let _ = forEachU (p => scanPatW7 emit p) pats
+  scanExprW7 emit body
 
-scanExprW7 : CExpr -> Unit
-scanExprW7 (CList es) = let _ = setRef useListRef True in forEachU scanExprW7 es
-scanExprW7 (CRangeList lo hi _) =
-  let _ = setRef useListRef True in let _ = scanExprW7 lo in scanExprW7 hi
-scanExprW7 (CTuple es) =
-  let _ = noteTupleArity (listLen es) in forEachU scanExprW7 es
-scanExprW7 (CArray es) =
-  let _ = setRef useArrayRef True in forEachU scanExprW7 es
-scanExprW7 (CRangeArray lo hi _) =
-  let _ = setRef useArrayRef True in let _ = scanExprW7 lo in scanExprW7 hi
-scanExprW7 (CIndex a i) =
-  let _ = setRef useArrayRef True in let _ = scanExprW7 a in scanExprW7 i
-scanExprW7 (CSlice a lo hi _) = let _ = setRef useArrayRef True in let _ = scanExprW7 a in let _ = scanExprW7 lo in scanExprW7 hi
-scanExprW7 (CRecord _ fields) = forEachU (f => scanExprW7 (cFieldExpr f)) fields
-scanExprW7 (CFieldAccess ex _ _) = scanExprW7 ex
-scanExprW7 (CRecordUpdate _ base fields) =
+scanExprW7 : WasmEmit -> CExpr -> Unit
+scanExprW7 emit (CList es) =
+  let _ = setRef useListRef True in forEachU (e => scanExprW7 emit e) es
+scanExprW7 emit (CRangeList lo hi _) = let _ = setRef useListRef True in let _ = scanExprW7 emit lo in scanExprW7 emit hi
+scanExprW7 emit (CTuple es) =
+  let _ = noteTupleArity (listLen es) in forEachU (e => scanExprW7 emit e) es
+scanExprW7 emit (CArray es) =
+  let _ = setRef useArrayRef True in forEachU (e => scanExprW7 emit e) es
+scanExprW7 emit (CRangeArray lo hi _) = let _ = setRef useArrayRef True in let _ = scanExprW7 emit lo in scanExprW7 emit hi
+scanExprW7 emit (CIndex a i) = let _ = setRef useArrayRef True in let _ = scanExprW7 emit a in scanExprW7 emit i
+scanExprW7 emit (CSlice a lo hi _) = let _ = setRef useArrayRef True in let _ = scanExprW7 emit a in let _ = scanExprW7 emit lo in scanExprW7 emit hi
+scanExprW7 emit (CRecord _ fields) =
+  forEachU (f => scanExprW7 emit (cFieldExpr f)) fields
+scanExprW7 emit (CFieldAccess ex _ _) = scanExprW7 emit ex
+scanExprW7 emit (CRecordUpdate _ base fields) =
   let _ = setRef useRecUpdateRef True
-  let _ = scanExprW7 base in forEachU (f => scanExprW7 (cFieldExpr f)) fields
-scanExprW7 (CVariantUpdate _ base fields) =
+  let _ = scanExprW7 emit base in forEachU (f => scanExprW7 emit (cFieldExpr f)) fields
+scanExprW7 emit (CVariantUpdate _ base fields) =
   let _ = setRef useRecUpdateRef True
-  let _ = scanExprW7 base in forEachU (f => scanExprW7 (cFieldExpr f)) fields
-scanExprW7 (CApp f a) =
+  let _ = scanExprW7 emit base in forEachU (f => scanExprW7 emit (cFieldExpr f)) fields
+scanExprW7 emit (CApp f a) =
   let (hd, args) = flattenApp (CApp f a) []
-  let _ = scanW7Head hd
-  forEachU scanExprW7 args
-scanExprW7 (CVar x _) =
+  let _ = scanW7Head emit hd
+  forEachU (arg => scanExprW7 emit arg) args
+scanExprW7 emit (CVar x _) =
   if x == "Ref" then
     setRef useRefBoxRef True
   else
-    noteW8Extern x
+    noteW8Extern emit x
 -- W8b: a Float literal forces the Float rep + runtime.  (Bare `pi`/`e` are NOT keyed
 -- here — scanExprW7 doesn't track binders, so a LOCAL named `e`/`pi`, e.g. `Err e`,
 -- would false-positive; useFloatRef is instead forced by a Float literal, a Float
 -- extern, OR a Float-kinded main, post-scan in emitProgram.)
-scanExprW7 (CLit (LFloat _)) = setRef useFloatRef True
-scanExprW7 (CLam _ b) = scanExprW7 b
-scanExprW7 (CBinPrim op l r _) =
-  let _ = noteW8Binop op in let _ = scanExprW7 l in scanExprW7 r
-scanExprW7 (CUnOp _ x) = scanExprW7 x
-scanExprW7 (CIf c t f) =
-  let _ = scanExprW7 c in let _ = scanExprW7 t in scanExprW7 f
-scanExprW7 (CLet _ pat a b) =
-  let _ = scanPatW7 pat in let _ = scanExprW7 a in scanExprW7 b
-scanExprW7 (CBlock stmts) = forEachU scanStmtW7 stmts
-scanExprW7 (CDecision scrut arms tree) = let _ = scanExprW7 scrut in let _ = forEachU (a => scanArmW7 a) arms in scanTreeW7 tree
-scanExprW7 (CMatch scrut arms) =
-  let _ = scanExprW7 scrut in forEachU (a => scanArmW7 a) arms
+scanExprW7 _ (CLit (LFloat _)) = setRef useFloatRef True
+scanExprW7 emit (CLam _ b) = scanExprW7 emit b
+scanExprW7 emit (CBinPrim op l r _) =
+  let _ = noteW8Binop emit op in let _ = scanExprW7 emit l in scanExprW7 emit r
+scanExprW7 emit (CUnOp _ x) = scanExprW7 emit x
+scanExprW7 emit (CIf c t f) =
+  let _ = scanExprW7 emit c in let _ = scanExprW7 emit t in scanExprW7 emit f
+scanExprW7 emit (CLet _ pat a b) =
+  let _ = scanPatW7 emit pat in let _ = scanExprW7 emit a in scanExprW7 emit b
+scanExprW7 emit (CBlock stmts) = forEachU (stmt => scanStmtW7 emit stmt) stmts
+scanExprW7 emit (CDecision scrut arms tree) = let _ = scanExprW7 emit scrut in let _ = forEachU (arm => scanArmW7 emit arm) arms in scanTreeW7 emit tree
+scanExprW7 emit (CMatch scrut arms) =
+  let _ = scanExprW7 emit scrut in forEachU (arm => scanArmW7 emit arm) arms
 -- W9: descend a CLetGroup so its lifted members' bodies (and their externs /
 -- collection use, e.g. arbitraryList's `go` using `randomInt` + `::`) gate the
 -- runtime/type sections.
-scanExprW7 (CLetGroup binds b) =
-  let _ = forEachU (bd => scanBindW7 bd) binds in scanExprW7 b
-scanExprW7 _ = ()
+scanExprW7 emit (CLetGroup binds b) =
+  let _ = forEachU (bd => scanBindW7 emit bd) binds in scanExprW7 emit b
+scanExprW7 _ _ = ()
 
-scanW7Head : CExpr -> Unit
-scanW7Head (CVar "Ref" _) = setRef useRefBoxRef True
-scanW7Head (CVar "setRef" _) = setRef useRefBoxRef True
-scanW7Head (CVar f _) = noteW8Extern f
-scanW7Head h = scanExprW7 h
+scanW7Head : WasmEmit -> CExpr -> Unit
+scanW7Head _ (CVar "Ref" _) = setRef useRefBoxRef True
+scanW7Head _ (CVar "setRef" _) = setRef useRefBoxRef True
+scanW7Head emit (CVar f _) = noteW8Extern emit f
+scanW7Head emit h = scanExprW7 emit h
 
 -- ── W8: note which W8 LEAF/RNG/hash runtime groups an extern occurrence reaches ──
 -- Sets useStrLeafRef (the pure-WAT string ops needing strLeafRuntime), useRngRef,
 -- useHashRef, useEPutRef as appropriate.  Piggybacks on the W7 walk.
-noteW8Extern : String -> Unit
-noteW8Extern name =
+noteW8Extern : WasmEmit -> String -> Unit
+noteW8Extern _ name =
   let _ = if contains name ["charToStr", "stringConcat", "stringSlice", "stringToUpper", "stringToLower"]
           then setRef useStrLeafRef True else ()
   let _ = if isLeafExternW name && contains name ["randomInt", "randomBool", "randomChar", "setSeed"]
@@ -1715,61 +1711,62 @@ noteW8Extern name =
   if contains name ["ePutStr", "ePutStrLn"] then setRef useEPutRef True else ()
 -- `++` is runtime-dispatched ($mdk_append): needs the $str leaf concat ($mdk_str_append)
 -- AND the W7 cons list types ($C_Cons/$T_List) for the list-append branch.
-noteW8Binop : String -> Unit
-noteW8Binop "++" =
+noteW8Binop : WasmEmit -> String -> Unit
+noteW8Binop _ "++" =
   let _ = setRef useStrLeafRef True
   let _ = setRef useStrRef True
   setRef useListRef True
-noteW8Binop "::" = setRef useListRef True
+noteW8Binop _ "::" = setRef useListRef True
 -- B5: a concrete-Int `/`/`%` needs the divisor-guard scratch local (declared per fn
 -- via w7LocalsAtDepth / the scalar fn+init decls).  Float `/` never traps on zero.
-noteW8Binop "/" = setRef useDivGuardRef True
-noteW8Binop "%" = setRef useDivGuardRef True
-noteW8Binop _ = ()
+noteW8Binop emit "/" = setRef emit.useDivGuard True
+noteW8Binop emit "%" = setRef emit.useDivGuard True
+noteW8Binop _ _ = ()
 
-scanArmW7 : CArm -> Unit
-scanArmW7 (CArm pat guards body) =
-  let _ = scanPatW7 pat
-  let _ = forEachU scanGuardW7 guards
-  scanExprW7 body
+scanArmW7 : WasmEmit -> CArm -> Unit
+scanArmW7 emit (CArm pat guards body) =
+  let _ = scanPatW7 emit pat
+  let _ = forEachU (guard => scanGuardW7 emit guard) guards
+  scanExprW7 emit body
 
-scanGuardW7 : CGuard -> Unit
-scanGuardW7 (CGBool g) = scanExprW7 g
-scanGuardW7 (CGBind p e) = let _ = scanPatW7 p in scanExprW7 e
+scanGuardW7 : WasmEmit -> CGuard -> Unit
+scanGuardW7 emit (CGBool g) = scanExprW7 emit g
+scanGuardW7 emit (CGBind p e) = let _ = scanPatW7 emit p in scanExprW7 emit e
 
-scanStmtW7 : CStmt -> Unit
-scanStmtW7 (CSExpr e) = scanExprW7 e
-scanStmtW7 (CSLet _ pat e) = let _ = scanPatW7 pat in scanExprW7 e
-scanStmtW7 (CSAssign _ e) = scanExprW7 e
+scanStmtW7 : WasmEmit -> CStmt -> Unit
+scanStmtW7 emit (CSExpr e) = scanExprW7 emit e
+scanStmtW7 emit (CSLet _ pat e) =
+  let _ = scanPatW7 emit pat in scanExprW7 emit e
+scanStmtW7 emit (CSAssign _ e) = scanExprW7 emit e
 
 -- a pattern's collection heads: a cons/nil/list pattern → list; a tuple pattern → its arity.
-scanPatW7 : Pat -> Unit
-scanPatW7 (PCons h t) =
-  let _ = setRef useListRef True in let _ = scanPatW7 h in scanPatW7 t
-scanPatW7 (PList ps) = let _ = setRef useListRef True in forEachU scanPatW7 ps
-scanPatW7 (PTuple ps) =
-  let _ = noteTupleArity (listLen ps) in forEachU scanPatW7 ps
-scanPatW7 (PCon _ args) = forEachU scanPatW7 args
-scanPatW7 (PAs _ _ p) = scanPatW7 p
-scanPatW7 _ = ()
+scanPatW7 : WasmEmit -> Pat -> Unit
+scanPatW7 emit (PCons h t) = let _ = setRef useListRef True in let _ = scanPatW7 emit h in scanPatW7 emit t
+scanPatW7 emit (PList ps) =
+  let _ = setRef useListRef True in forEachU (p => scanPatW7 emit p) ps
+scanPatW7 emit (PTuple ps) =
+  let _ = noteTupleArity (listLen ps) in forEachU (p => scanPatW7 emit p) ps
+scanPatW7 emit (PCon _ args) = forEachU (p => scanPatW7 emit p) args
+scanPatW7 emit (PAs _ _ p) = scanPatW7 emit p
+scanPatW7 _ _ = ()
 
 -- a decision tree's match heads (the lowered shape of list/tuple patterns).
-scanTreeW7 : CTree -> Unit
-scanTreeW7 CTFail = ()
-scanTreeW7 (CTLeaf _) = ()
-scanTreeW7 (CTGuard _ fail) = scanTreeW7 fail
-scanTreeW7 (CTDrop sub) = scanTreeW7 sub
-scanTreeW7 (CTSwitch branches dft) =
-  let _ = forEachU scanBranchW7 branches in scanTreeW7 dft
+scanTreeW7 : WasmEmit -> CTree -> Unit
+scanTreeW7 _ CTFail = ()
+scanTreeW7 _ (CTLeaf _) = ()
+scanTreeW7 emit (CTGuard _ fail) = scanTreeW7 emit fail
+scanTreeW7 emit (CTDrop sub) = scanTreeW7 emit sub
+scanTreeW7 emit (CTSwitch branches dft) = let _ = forEachU (branch => scanBranchW7 emit branch) branches in scanTreeW7 emit dft
 
-scanBranchW7 : CTBranch -> Unit
-scanBranchW7 (CTBranch h sub) = let _ = scanHeadW7 h in scanTreeW7 sub
+scanBranchW7 : WasmEmit -> CTBranch -> Unit
+scanBranchW7 emit (CTBranch h sub) =
+  let _ = scanHeadW7 emit h in scanTreeW7 emit sub
 
-scanHeadW7 : CHead -> Unit
-scanHeadW7 HCons = setRef useListRef True
-scanHeadW7 HNil = setRef useListRef True
-scanHeadW7 (HTuple n) = noteTupleArity n
-scanHeadW7 _ = ()
+scanHeadW7 : WasmEmit -> CHead -> Unit
+scanHeadW7 _ HCons = setRef useListRef True
+scanHeadW7 _ HNil = setRef useListRef True
+scanHeadW7 _ (HTuple n) = noteTupleArity n
+scanHeadW7 _ _ = ()
 
 cFieldExpr : CField -> CExpr
 cFieldExpr (CField _ e) = e
@@ -2133,7 +2130,7 @@ emitScalarInit emit fnNames valNames groups =
   let locals = dedupKeep (valLocals ++ mainLocals)
   let localDecls = map (l => "  " ++ localDeclI32 l) locals
   -- B5: scalar divisor-guard scratch (a `/`/`%` in a value-binding or `main` body).
-  let dv = if useDivGuardRef.value then ["    (local $__sdivr i64)"] else []
+  let dv = if emit.useDivGuard.value then ["    (local $__sdivr i64)"] else []
   ["  (func $__init"]
     ++ dv
     ++ localDecls
@@ -2187,7 +2184,7 @@ emitScalarFnBind emit fnNames valNames (CBind name [CClause pats body]) =
   let sig = "  (func $\{gname name}\{joinWith "" (map paramDeclI32 params)} (result i64)"
   let localDecls = map localDeclI32 extraLocals
   -- B5: scalar divisor-guard scratch for a concrete-Int `/`/`%` in this fn body.
-  let dv = if useDivGuardRef.value then ["(local $__sdivr i64)"] else []
+  let dv = if emit.useDivGuard.value then ["(local $__sdivr i64)"] else []
   [sig] ++ map ("  " ++ _) (dv ++ localDecls) ++ indent instrs ++ ["  )"]
 emitScalarFnBind emit _ _ (CBind name _) =
   gapL
@@ -2784,7 +2781,7 @@ emitRefInit prog groups =
   let scratch = scratchLocals maxDepth
   let locals = dedupKeep (valLocals ++ mainLocals) ++ scratch
   let localDecls = map (l => "  " ++ localDeclRef l) locals
-  let w7Decls = map ("  " ++ _) (w7LocalDecls maxDepth)
+  let w7Decls = map ("  " ++ _) (w7LocalDecls (progEmit prog) maxDepth)
   ["  (func $__init"]
     ++ localDecls
     ++ w7Decls
@@ -2836,7 +2833,7 @@ emitRefForceFn prog (CBind name [CClause [] body]) =
   let maxDepth = maxRefDepth body
   let scratch = scratchLocals maxDepth
   let localDecls = map (l => "  " ++ localDeclRef l) (bodyLocals ++ scratch)
-  let w7Decls = map ("  " ++ _) (w7LocalDecls maxDepth)
+  let w7Decls = map ("  " ++ _) (w7LocalDecls (progEmit prog) maxDepth)
   let cyclic = wasmTrap (progEmit prog) "E-CYCLIC-VALUE" (name ++ " refers to itself during initialization (non-productive cyclic value)")
   let unforced = ["    i32.const 1", "    global.set $gs_" ++ g] ++ indent instrs ++ ["    local.set $__frcv", "    local.get $__frcv", "    global.set $" ++ g, "    i32.const 2", "    global.set $gs_" ++ g, "    local.get $__frcv", "    ref.as_non_null"]
   [
@@ -3159,7 +3156,7 @@ emitRefFnBind prog (CBind name clauses0) =
           let scratch = scratchLocals (clausesMaxDepth clauses)
           let sig = "  (func $\{gname name}\{joinWith "" (map paramDeclRef params)} (result (ref eq))"
           let localDecls = map localDeclRef (extraLocals ++ scratch)
-          let w7Decls = w7LocalDecls (clausesMaxDepth clauses)
+          let w7Decls = w7LocalDecls (progEmit prog) (clausesMaxDepth clauses)
           let fnDef = [sig] ++ map ("  " ++ _) (localDecls ++ w7Decls) ++ indent bodyLines ++ ["  )"]
           let wrapper = if needsClosWrapper prog name then emitFnClosWrapper prog name arity else []
           fnDef ++ wrapper
@@ -4274,7 +4271,7 @@ emitImplGroup prog (ImplG method headTag key arity clauses) =
       let scratch = scratchLocals (clausesMaxDepth clauses)
       let sig = "  (func $\{fnName}\{joinWith "" (map paramDeclRef params)} (result (ref eq))"
       let localDecls = map localDeclRef (extraLocals ++ scratch)
-      let w7Decls = w7LocalDecls (clausesMaxDepth clauses)
+      let w7Decls = w7LocalDecls (progEmit prog) (clausesMaxDepth clauses)
       [sig] ++ map ("  " ++ _) (localDecls ++ w7Decls) ++ indent bodyLines ++ ["  )"]
 
 clausePatVars : CClause -> List String
@@ -4674,7 +4671,7 @@ emitDefaultDefnGroup prog fname tag method arity clauses =
   let scratch = scratchLocals (clausesMaxDepth clauses)
   let sig = "  (func $\{fname}\{joinWith "" (map paramDeclRef params)} (result (ref eq))"
   let localDecls = map localDeclRef (extraLocals ++ scratch)
-  let w7Decls = w7LocalDecls (clausesMaxDepth clauses)
+  let w7Decls = w7LocalDecls (progEmit prog) (clausesMaxDepth clauses)
   [sig]
     ++ map ("  " ++ _) (localDecls ++ w7Decls)
     ++ indent bodyLines
@@ -6858,7 +6855,7 @@ emitWasmTrmcCore prog funcSym self lblRoot arity clauses ctorSet =
   let extraLocals = filterList (notIn params) (dedupKeep allLocals)
   let scratch = scratchLocals (clausesMaxDepth clauses)
   let localDecls = map localDeclRef (extraLocals ++ scratch)
-  let w7Decls = w7LocalDecls (clausesMaxDepth clauses)
+  let w7Decls = w7LocalDecls (progEmit prog) (clausesMaxDepth clauses)
   let sig = "  (func $\{funcSym}\{joinWith "" (map paramDeclRef params)} (result (ref eq))"
   wTmcMarker funcSym "trmc" :: [sig] ++ map ("  " ++ _) (tmcLocals ++ localDecls ++ w7Decls) ++ indent loopShell ++ ["  )"]
 
@@ -7057,7 +7054,7 @@ emitWDispMemberFn prog grp emitName origName arity clauses =
   -- the member needs the tmc temp local ($__tmc_t0 = the fresh cell stash).
   let tmcLocal = ["(local " ++ wTrmcTempL 0 ++ " (ref null eq))"]
   let localDecls = map localDeclRef (extraLocals ++ scratch)
-  let w7Decls = w7LocalDecls (clausesMaxDepth clauses)
+  let w7Decls = w7LocalDecls (progEmit prog) (clausesMaxDepth clauses)
   marker ++ [sig] ++ map ("  " ++ _) (tmcLocal ++ localDecls ++ w7Decls) ++ indent bodyLines ++ ["  )"]
 
 -- the spine-cons leaf rewrite (case 2), generalized to N cells + any group-member
@@ -7424,7 +7421,7 @@ emitLamDefine prog lamName pats captured body =
   let scratch = scratchLocals (maxRefDepth body)
   let localLines = ["(local $__self_clos (ref $clos))"]
     ++ map (l => localDeclRef l) (synthPs ++ captured ++ patBoundVars ++ bodyLocals ++ scratch)
-    ++ w7LocalDecls (maxRefDepth body)
+    ++ w7LocalDecls (progEmit prog) (maxRefDepth body)
   let setup = ["local.get $self", "ref.cast (ref $clos)", "local.set $__self_clos"]
   -- A lifted lambda is an INDEPENDENT function: it must NOT inherit the enclosing
   -- fn's TMC loop context nor a dispatch-group context (wDispCtxRef).
@@ -7614,7 +7611,7 @@ emitLgLifted prog gid names groupCaps binds (CBind name clauses) =
   let localLines = ["(local $__self_clos (ref $clos))"]
     ++ map (n => "(local $" ++ gname n ++ " (ref eq))") memberLocals
     ++ map (l => localDeclRef l) (params ++ groupCaps ++ bodyLocals ++ scratch)
-    ++ w7LocalDecls (clausesMaxDepth clauses)
+    ++ w7LocalDecls (progEmit prog) (clausesMaxDepth clauses)
   let setup = ["local.get $self", "ref.cast (ref $clos)", "local.set $__self_clos"]
   let def = ["  (func " ++ lamName ++ " (type $codety) (param $self (ref eq)) (param $args (ref $argarr)) (result (ref eq))"]
     ++ map ("  " ++ _) localLines
@@ -8536,11 +8533,12 @@ collectStmtLocals (CSAssign _ ex) = collectExprLocals ex
 -- bound `maxRefDepth` already computes for $__rf<d>) covers every site (unused locals
 -- are valid WasmGC, so over-declaring is harmless).  Gated by the per-kind usage refs
 -- so a program that uses none declares none.  Returns full `(local …)` lines.
-w7LocalDecls : Int -> List String
-w7LocalDecls maxDepth = flatMap w7LocalsAtDepth (rangeList 0 (maxI maxDepth 1))
+w7LocalDecls : WasmEmit -> Int -> List String
+w7LocalDecls emit maxDepth =
+  flatMap (d => w7LocalsAtDepth emit d) (rangeList 0 (maxI maxDepth 1))
 
-w7LocalsAtDepth : Int -> List String
-w7LocalsAtDepth d =
+w7LocalsAtDepth : WasmEmit -> Int -> List String
+w7LocalsAtDepth emit d =
   let sfx = intToString d
   let rl = if useListRef.value then ["(local $__rlacc" ++ sfx ++ " (ref eq))", "(local $__rli" ++ sfx ++ " i32)", "(local $__rllo" ++ sfx ++ " i32)"] else []
   let ra = if useArrayRef.value then ["(local $__raarr" ++ sfx ++ " (ref null $arr))", "(local $__rai" ++ sfx ++ " i32)", "(local $__ralo" ++ sfx ++ " i32)", "(local $__racnt" ++ sfx ++ " i32)", "(local $__ixarr" ++ sfx ++ " (ref null $arr))", "(local $__ixi" ++ sfx ++ " i32)", "(local $__slsrc" ++ sfx ++ " (ref null $arr))", "(local $__sldst" ++ sfx ++ " (ref null $arr))", "(local $__sllo" ++ sfx ++ " i32)", "(local $__sllen" ++ sfx ++ " i32)",
@@ -8551,7 +8549,7 @@ w7LocalsAtDepth d =
     "(local $__aexbits" ++ sfx ++ " i64)"] else []
   let ru = if useRecUpdateRef.value then ["(local $__rub" ++ sfx ++ " (ref eq))"] else []
   -- B5: the i64 divisor-guard scratch for a concrete-Int `/`/`%` at this depth.
-  let dv = if useDivGuardRef.value then ["(local $__divr" ++ sfx ++ " i64)"] else []
+  let dv = if emit.useDivGuard.value then ["(local $__divr" ++ sfx ++ " i64)"] else []
   rl ++ ra ++ ru ++ dv
 
 -- an arm contributes its pattern's bound vars + its body's locals + guard locals.

@@ -212,9 +212,47 @@ grep -F 'useEPutRef : Ref Bool' "$WASM_SRC" >/dev/null &&
   echo "FAIL H2B8-NEAREST-MISS: ePut authority changed"
   exit 1
 }
+if grep -E '^useDivGuardRef[[:space:]]*[:=]|setRef useDivGuardRef' "$WASM_SRC" >/dev/null; then
+  echo "FAIL H2B9-DIV-AUTHORITY: retired ambient divisor authority remains"
+  exit 1
+fi
+for required in \
+  'useDivGuard : Ref Bool' \
+  'useDivGuard = Ref False' \
+  'scanProgW7 : WasmEmit -> List CBind -> Unit' \
+  'scanImplsW7 : WasmEmit -> List CImplEntry -> Unit' \
+  'scanImplEntryW7 : WasmEmit -> CImplEntry -> Unit' \
+  'scanBindW7 : WasmEmit -> CBind -> Unit' \
+  'scanClauseW7 : WasmEmit -> CClause -> Unit' \
+  'scanExprW7 : WasmEmit -> CExpr -> Unit' \
+  'scanW7Head : WasmEmit -> CExpr -> Unit' \
+  'noteW8Extern : WasmEmit -> String -> Unit' \
+  'noteW8Binop : WasmEmit -> String -> Unit' \
+  'scanArmW7 : WasmEmit -> CArm -> Unit' \
+  'scanGuardW7 : WasmEmit -> CGuard -> Unit' \
+  'scanStmtW7 : WasmEmit -> CStmt -> Unit' \
+  'scanPatW7 : WasmEmit -> Pat -> Unit' \
+  'scanTreeW7 : WasmEmit -> CTree -> Unit' \
+  'scanBranchW7 : WasmEmit -> CTBranch -> Unit' \
+  'scanHeadW7 : WasmEmit -> CHead -> Unit' \
+  'w7LocalDecls : WasmEmit -> Int -> List String' \
+  'w7LocalsAtDepth : WasmEmit -> Int -> List String' \
+  'noteW8Binop emit "/" = setRef emit.useDivGuard True' \
+  'noteW8Binop emit "%" = setRef emit.useDivGuard True' \
+  'let dv = if emit.useDivGuard.value then ["    (local $__sdivr i64)"] else []' \
+  'let dv = if emit.useDivGuard.value then ["(local $__sdivr i64)"] else []'; do
+  grep -F -- "$required" "$WASM_SRC" >/dev/null || {
+    echo "FAIL H2B9-DIV-AUTHORITY: missing $required"
+    exit 1
+  }
+done
+[ "$(grep -F 'w7LocalDecls (progEmit prog)' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 9 ] || {
+  echo "FAIL H2B9-DIV-AUTHORITY: expected nine ref-local declaration callers"
+  exit 1
+}
 EXPECTED_MODULE_REFS="$(printf '%s\n' \
   useStrRef useListRef useArrayRef useRefBoxRef useRecUpdateRef \
-  useStrLeafRef useRngRef useHashRef useEPutRef useDivGuardRef \
+  useStrLeafRef useRngRef useHashRef useEPutRef \
   useFloatRef useFloatHashRef useMathRef useFloatRngRef useFloatStrRef \
   useStrSearchRef useValueCmpRef useValueArithRef numPolyLocalsRef useStrCodecRef \
    useCharFromCodeRef useCharClassRef useIORef useArgsRef useFileBytesRef \
@@ -726,6 +764,16 @@ for feature_file in feature-p1.wat feature-u.wat feature-census.events feature-p
     exit 1
   }
 done
+for feature_p in feature-p1.wat feature-p2.wat; do
+  grep -F '(local $__divr0 i64)' "$INPUT_WORK/$feature_p" >/dev/null || {
+    echo "FAIL H2B9-DIV-LOCAL: missing ref divisor local in $feature_p"
+    exit 1
+  }
+done
+if grep -F '(local $__divr0 i64)' "$INPUT_WORK/feature-u.wat" >/dev/null; then
+  echo "FAIL H2B9-DIV-U-ABSENCE: inert control declared ref divisor local"
+  exit 1
+fi
 cmp -s "$INPUT_WORK/feature-p1.wat" "$INPUT_WORK/feature-p2.wat" || {
   echo "FAIL A0-FEATURE-CAPTURE: P changed after record U and census"
   exit 1
