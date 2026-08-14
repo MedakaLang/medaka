@@ -928,6 +928,82 @@ for feature_name in p1 hash-int-only float-div u p2; do
     }
 done
 
+# H2b.10 capture-only apparatus. HashFloat P is strict and inert; record U keeps
+# Float + hashInt prerequisites while excluding hashFloat. Census proves its route
+# only, so it is asserted as one attributed event and never parsed as WAT.
+FLOAT_HASH_MARKERS="$(awk '/^FEATURE_HASH_FLOAT_(P1|RECORD_U|CENSUS_P_GAP|P2)_(BEGIN|END)$/ { print }' "$INPUT_WORK/feature.out")"
+FLOAT_HASH_EXPECTED_MARKERS="$(printf 'FEATURE_HASH_FLOAT_P1_BEGIN\nFEATURE_HASH_FLOAT_P1_END\nFEATURE_HASH_FLOAT_RECORD_U_BEGIN\nFEATURE_HASH_FLOAT_RECORD_U_END\nFEATURE_HASH_FLOAT_CENSUS_P_GAP_BEGIN\nFEATURE_HASH_FLOAT_CENSUS_P_GAP_END\nFEATURE_HASH_FLOAT_P2_BEGIN\nFEATURE_HASH_FLOAT_P2_END')"
+[ "$FLOAT_HASH_MARKERS" = "$FLOAT_HASH_EXPECTED_MARKERS" ] || {
+  echo "FAIL H2B10-FLOAT-HASH-MARKERS: marker cardinality/order"
+  exit 1
+}
+feature_exact_capture FEATURE_HASH_FLOAT_P1_BEGIN FEATURE_HASH_FLOAT_P1_END "$INPUT_WORK/feature.out" >"$INPUT_WORK/feature-hash-float-p1.wat" &&
+  feature_exact_capture FEATURE_HASH_FLOAT_RECORD_U_BEGIN FEATURE_HASH_FLOAT_RECORD_U_END "$INPUT_WORK/feature.out" >"$INPUT_WORK/feature-hash-float-u.wat" &&
+  feature_exact_capture FEATURE_HASH_FLOAT_CENSUS_P_GAP_BEGIN FEATURE_HASH_FLOAT_CENSUS_P_GAP_END "$INPUT_WORK/feature.out" >"$INPUT_WORK/feature-hash-float-census.events" &&
+  feature_exact_capture FEATURE_HASH_FLOAT_P2_BEGIN FEATURE_HASH_FLOAT_P2_END "$INPUT_WORK/feature.out" >"$INPUT_WORK/feature-hash-float-p2.wat" || {
+    echo "FAIL H2B10-FLOAT-HASH-CAPTURE: malformed capture"
+    exit 1
+  }
+for float_hash_file in feature-hash-float-p1.wat feature-hash-float-u.wat feature-hash-float-census.events feature-hash-float-p2.wat; do
+  [ -s "$INPUT_WORK/$float_hash_file" ] || {
+    echo "FAIL H2B10-FLOAT-HASH-CAPTURE: empty $float_hash_file"
+    exit 1
+  }
+done
+cmp -s "$INPUT_WORK/feature-hash-float-p1.wat" "$INPUT_WORK/feature-hash-float-p2.wat" || {
+  echo "FAIL H2B10-FLOAT-HASH-P-IDENTITY: P changed after record U and census"
+  exit 1
+}
+cmp -s "$INPUT_WORK/feature-hash-float-p1.wat" "$INPUT_WORK/feature-hash-float-u.wat" && {
+  echo "FAIL H2B10-FLOAT-HASH-P-U: P/U positive control did not differ"
+  exit 1
+}
+for float_hash_p in feature-hash-float-p1.wat feature-hash-float-p2.wat; do
+  [ "$(grep -F '(func $mdk_hash_float' "$INPUT_WORK/$float_hash_p" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
+    [ "$(grep -F 'call $mdk_hash_float' "$INPUT_WORK/$float_hash_p" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
+    grep -F '(func $mdk_hash_mix64' "$INPUT_WORK/$float_hash_p" >/dev/null &&
+    grep -F '(func $mdk_hash_int' "$INPUT_WORK/$float_hash_p" >/dev/null &&
+    grep -F '(func $mdk_int_to_float' "$INPUT_WORK/$float_hash_p" >/dev/null || {
+      echo "FAIL H2B10-FLOAT-HASH-P-PRESENCE: missing hashFloat runtime/dependency in $float_hash_p"
+      exit 1
+    }
+done
+if grep -F '(func $mdk_hash_float' "$INPUT_WORK/feature-hash-float-u.wat" >/dev/null ||
+   grep -F 'call $mdk_hash_float' "$INPUT_WORK/feature-hash-float-u.wat" >/dev/null; then
+  echo "FAIL H2B10-FLOAT-HASH-U-ABSENCE: nearest miss emitted hashFloat"
+  exit 1
+fi
+grep -F '(func $mdk_int_to_float' "$INPUT_WORK/feature-hash-float-u.wat" >/dev/null &&
+  grep -F '(func $mdk_hash_mix64' "$INPUT_WORK/feature-hash-float-u.wat" >/dev/null &&
+  grep -F '(func $mdk_hash_int' "$INPUT_WORK/feature-hash-float-u.wat" >/dev/null || {
+    echo "FAIL H2B10-FLOAT-HASH-U-PREREQUISITES: nearest miss lost Float/hashInt prerequisites"
+    exit 1
+  }
+FLOAT_HASH_EVENT=$'fn featureHashFloatIntentionalGap\tunbound variable \'missingFeatureHashFloatCensus\' (not a local, global value, constructor, or known function) [in featureHashFloatIntentionalGap]'
+[ "$(wc -l < "$INPUT_WORK/feature-hash-float-census.events")" -eq 1 ] &&
+  [ "$(cat "$INPUT_WORK/feature-hash-float-census.events")" = "$FLOAT_HASH_EVENT" ] || {
+    echo "FAIL H2B10-FLOAT-HASH-CENSUS: exact one attributed gap"
+    exit 1
+  }
+for float_hash_name in p1 u p2; do
+  float_hash_wat="$INPUT_WORK/feature-hash-float-$float_hash_name.wat"
+  wasm-tools parse "$float_hash_wat" -o "$INPUT_WORK/feature-hash-float-$float_hash_name.wasm" || {
+    echo "FAIL H2B10-FLOAT-HASH-PARSE: wasm-tools parse $float_hash_name"
+    exit 1
+  }
+  wasm-tools validate --features=all "$INPUT_WORK/feature-hash-float-$float_hash_name.wasm" || {
+    echo "FAIL H2B10-FLOAT-HASH-VALIDATE: wasm-tools validate $float_hash_name"
+    exit 1
+  }
+  "$NODE" "$RUNJS" "$INPUT_WORK/feature-hash-float-$float_hash_name.wasm" >"$INPUT_WORK/feature-hash-float-$float_hash_name.run.out" 2>"$INPUT_WORK/feature-hash-float-$float_hash_name.run.err"
+  FLOAT_HASH_RUN_STATUS=$?
+  [ "$FLOAT_HASH_RUN_STATUS" -eq 0 ] && [ ! -s "$INPUT_WORK/feature-hash-float-$float_hash_name.run.err" ] &&
+    cmp -s "$INPUT_WORK/feature-expected.out" "$INPUT_WORK/feature-hash-float-$float_hash_name.run.out" || {
+      echo "FAIL H2B10-FLOAT-HASH-EXEC: inert execution $float_hash_name"
+      exit 1
+    }
+done
+
 # Sprint 01 current-binding capture apparatus. The expected events and strict
 # diagnostics pin the emission-owned authority and its two write routes.
 cbind_capture() {
