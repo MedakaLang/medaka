@@ -1635,3 +1635,57 @@ Recorded because both are structural, not one agent's bad luck:
    sprint: **stage the goldens LAST, after every `.mdk`-staging commit is in.**
 
 Both landed as AGENTS.md lines in this sprint's docs commit so the next agent inherits them.
+
+## RUN-P45-045 — EVIDENCE-LENS REVIEW OF PR #1638: 4 real findings, and the split earned its keep
+
+The prose lens found things the semantics lens is not looking for, exactly as the #1319 split predicts.
+**None of them is wrong code.** All four are claims reaching past their evidence — the arc's dominant
+defect shape, ninth consecutive instance.
+
+**F1 (MEDIUM-HIGH) — a live fixture header still asserts the ruling this PR falsifies, WITH cells.**
+`test/dict_fixtures/s3-fn-typed-impl-heads-discriminated.mdk:35-38` says #1630 is *"still `check=0
+run=0 build=1` on this binary"* — a present-tense measurement that becomes false the moment this PR
+lands, in a file the PR **does not touch**. The PR carefully corrects `eval.mdk`, `registry.mdk`,
+`headTyNode`'s header and the gate ledger, and misses the sibling FIXTURE carrying the same ruling.
+⇒ **This is the mechanism that created #1630 in the first place**, reproducing one file over.
+
+**F2 (MEDIUM) — a CORRECTING comment overshoots in the other direction.** The new `eval.mdk` text says
+#1617 is *"one that builds and E-PANICs"*. Three in-tree records say `build` **exited 1**
+(`diff_compiler_dict_semantics.sh:402`, the fixture header, `PLAN.md:1837`), and the message is minted
+in `llvm_emit.mdk:5588` — the EMITTER panicking, so no binary exists. The same sentence folds all
+three arm-set members into *"CHECKS and RUNS"*, erasing that #1617's `run` was **wrong and
+order-dependent** while #1618's and #1630's were correct. A comment written to fix an over-general
+comment, restating a sibling's cells in the "less broken" direction.
+
+**F3 (MEDIUM) — the enumeration of the walk that ACTUALLY CHANGED is 3 of 4.** `headTyconTy` has three
+call sites; the PR names `keyEntryOf` and `univReceiverTag` and never mentions **`keyEntryOfRow`**
+(`:19123`), which feeds `ieSelectRowByIface` — the very selector the NEXT bite widens. ⚠️ Note the
+polarity: the PR follows the **untouched** census walk to its leaves and gives a one-hop list for the
+walk it **did** change. That is backwards, and it is trap 3 from `HANDOFF.md` verbatim. **Relayed to
+the semantics reviewer as ITS claim to verify, with the two questions that decide whether it is a
+defect or a sentence.**
+
+**F4 (MEDIUM) — three precise counts no shipped table supports.** *"all 10 programs"* over tables
+containing 8; *"the six newly-buildable programs"* where 5 rows go `build 1 → 0`; and *"`build` +
+executed the produced binary — all 10, both arms"*, which is impossible as stated because the pre-fix
+arm produced **no binary** and the overlap row rejects at `check` on both arms — the body says both
+things itself. `DEBT.md` describes the same work as 7. **Three artifacts, three counts.** The
+underlying row-by-row table is real evidence; the summary numbers on top of it are not derived from it.
+
+**Four minor:** the falsified quote is attributed to *"#1617's commit body"* (an issue has none; it is
+PR #1629's commits `e051788b`/`699f0b5b`) in two SHIPPED artifacts while commit 1 gets it right;
+`registry.mdk:970`'s *"for both"* is stale at three after this PR's own insertion; `unchecked:` omits
+`typecheck_compiler_source.sh`, the gate `AGENTS.md:556` names for this exact change class; and one
+commit message mixes an exit code and a printed value in adjacent cells (`run 0` then `run 2`).
+
+**Checked and CLEAN, worth recording because it is the part most likely to have rotted:** exactly one
+closing keyword (`Fixes #1630.`); the negative result is stated as *structural, not demonstrated* in
+source, body and commit alike with **no sentence anywhere softening it to benign** — the best-handled
+part of the PR; `"measured benign"` survives nowhere else in the tree; all three golden line-count
+deltas re-derive from the diff; the `202/202` string is a verbatim instance of the script's own success
+format, not a reconstruction; and Q4's *"I looked for a fourth member and did not find one"* is backed
+by an enumeration that is present and correct.
+
+⇒ **Repair set for bite 0, to be applied before enqueue** (queued behind W2 under serialize-writers):
+F1, F2, F3's sentence, F4's counts, and the four minor. **F3's SEMANTIC half is not a repair item until
+the semantics reviewer rules on it.**
