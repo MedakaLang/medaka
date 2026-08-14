@@ -40,21 +40,39 @@ CC="${CC:-clang}"
 if [ "${1:-}" = "--one" ]; then
   f="$2"; name="$(basename "$f")"
   obin="$WORKDIR/$name.oracle"; wat="$WORKDIR/$name.wat"; wasm="$WORKDIR/$name.wasm"
+  native_out="$WORKDIR/$name.native.out"; native_err="$WORKDIR/$name.native.err"
+  node_out="$WORKDIR/$name.node.out"; node_err="$WORKDIR/$name.node.err"
   st=0; msg=""
   if ! MEDAKA_CLANG_OPT="${WASM_ORACLE_OPT:--O2}" "$MEDAKA" build --allow-internal "$f" -o "$obin" >"$WORKDIR/$name.build.err" 2>&1; then
     msg="$(printf 'FAIL %s (oracle build)\n%s' "$name" "$(cat "$WORKDIR/$name.build.err")")"; st=1
   else
-    ref="$("$obin" 2>/dev/null)"
-    if ! "$EMITBIN" "$f" > "$wat" 2>"$WORKDIR/$name.emit.err"; then
+    if ! "$obin" >"$native_out" 2>"$native_err"; then
+      msg="$(printf 'FAIL %s (native oracle run)\n%s' "$name" "$(cat "$native_err")")"; st=1
+    elif [ "$name" = "w8_stderr_write.mdk" ] && ! printf 'diagnostic to stderr\n' | cmp -s - "$native_err"; then
+      msg="FAIL $name (native stderr contract)"; st=1
+    elif [ "$name" != "w8_stderr_write.mdk" ] && [ -s "$native_err" ]; then
+      msg="$(printf 'FAIL %s (native oracle stderr)\n%s' "$name" "$(cat "$native_err")")"; st=1
+    elif ! "$EMITBIN" "$f" > "$wat" 2>"$WORKDIR/$name.emit.err"; then
       msg="$(printf 'FAIL %s (wasm emit)\n%s' "$name" "$(cat "$WORKDIR/$name.emit.err")")"; st=1
     elif ! wasm-tools parse "$wat" -o "$wasm" 2>"$WORKDIR/$name.parse.err"; then
       msg="$(printf 'FAIL %s (wasm-tools parse)\n%s' "$name" "$(cat "$WORKDIR/$name.parse.err")")"; st=1
     elif ! wasm-tools validate --features=all "$wasm" 2>"$WORKDIR/$name.val.err"; then
       msg="$(printf 'FAIL %s (wasm-tools validate)\n%s' "$name" "$(cat "$WORKDIR/$name.val.err")")"; st=1
     else
-      got="$("$NODE" "$RUNJS" "$wasm" 2>"$WORKDIR/$name.run.err")"
-      if [ "$ref" = "$got" ]; then msg="ok   $name"
-      else msg="$(printf 'FAIL %s\n  oracle: %s\n  wasm  : %s\n  (%s)' "$name" "$ref" "$got" "$(cat "$WORKDIR/$name.run.err")")"; st=1; fi
+      if ! "$NODE" "$RUNJS" "$wasm" >"$node_out" 2>"$node_err"; then
+        msg="$(printf 'FAIL %s (wasm run)\n%s' "$name" "$(cat "$node_err")")"; st=1
+      elif [ "$name" = "w8_stderr_write.mdk" ] && ! printf 'diagnostic to stderr\n' | cmp -s - "$node_err"; then
+        msg="FAIL $name (wasm stderr contract)"; st=1
+      elif [ "$name" != "w8_stderr_write.mdk" ] && [ -s "$node_err" ]; then
+        msg="$(printf 'FAIL %s (wasm stderr)\n%s' "$name" "$(cat "$node_err")")"; st=1
+      elif [ "$name" = "w11_char_from_code_pointfree.mdk" ] &&
+           { ! printf 'A\n' | cmp -s - "$native_out" || ! printf 'A\n' | cmp -s - "$node_out"; }; then
+        msg="FAIL $name (expected exact stdout A)"; st=1
+      elif cmp -s "$native_out" "$node_out"; then
+        msg="ok   $name"
+      else
+        msg="$(printf 'FAIL %s\n  oracle: %s\n  wasm  : %s' "$name" "$(cat "$native_out")" "$(cat "$node_out")")"; st=1
+      fi
     fi
   fi
   echo "$st" > "$RESULTDIR/$name.status"
@@ -88,24 +106,35 @@ WORK="$(mktemp -d)"
 RESULTS="$(mktemp -d)"
 trap 'rm -rf "$WORK" "$RESULTS"' EXIT
 
-# Fan the 156 fixtures across an xargs -P pool of --one workers (see top of file).
+# Fan fixtures across an xargs -P pool of --one workers (see top of file).
 # Each worker does: medaka build oracle (-O0) + run, wasm emit, wasm-tools
 # parse/validate, node run, diff. NODE is resolved to its absolute path here (post
 # nvm selection) so the fresh worker shells don't re-run the Node-version dance.
 # --allow-internal: the w10 array-kernel fixtures use internal-only externs.
 JOBS="${JOBS:-$(sysctl -n hw.logicalcpu 2>/dev/null || nproc 2>/dev/null || echo 4)}"
 NODE_ABS="$(command -v "$NODE" 2>/dev/null || echo "$NODE")"
-ls "$FIXDIR"/*.mdk 2>/dev/null \
+fixtures=("$FIXDIR"/*.mdk)
+[ -e "${fixtures[0]}" ] || { echo "FAIL W2: no fixtures in $FIXDIR"; exit 1; }
+fixture_count="${#fixtures[@]}"
+if ! printf '%s\n' "${fixtures[@]}" \
   | MEDAKA="$MEDAKA" EMITBIN="$EMITBIN" NODE="$NODE_ABS" RUNJS="$RUNJS" \
     MEDAKA_EMITTER="${MEDAKA_EMITTER:-$EMITTER}" WASM_ORACLE_OPT="${WASM_ORACLE_OPT:-}" \
     WORKDIR="$WORK" RESULTDIR="$RESULTS" \
-    xargs -P "$JOBS" -n 1 -I{} bash "$0" --one {}
+    xargs -P "$JOBS" -I{} bash "$0" --one {}; then
+  echo "FAIL W2: fixture worker pipeline"
+  exit 1
+fi
 
 pass=0; fail=0
 for s in "$RESULTS"/*.status; do
   [ -f "$s" ] || continue
   if [ "$(cat "$s")" = 0 ]; then pass=$((pass+1)); else fail=$((fail+1)); fi
 done
+status_count=$((pass + fail))
+[ "$status_count" -eq "$fixture_count" ] || {
+  echo "FAIL W2: expected $fixture_count statuses, found $status_count"
+  exit 1
+}
 
 printf '\n%d ok, %d failing\n' "$pass" "$fail"
 
