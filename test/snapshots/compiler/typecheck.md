@@ -1,5 +1,5 @@
 # META
-source_lines=30039
+source_lines=30061
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted typecheck stage — port of lib/typecheck.ml's HM core.  SLICE 1:
@@ -16819,6 +16819,20 @@ insertIfaceMethodsAcc iface typarams scope ((IfaceMethod mname mty _)::rest) (mp
 -- interface declarations SWAPPED (nothing else changed) it is ACCEPTED at exit 0 and prints
 -- FA's body.  The obligation goes to the LAST-declared interface either way; an
 -- interface-declaration reordering that changes no program meaning changes the verdict.
+-- 🚨 THAT MEASUREMENT IS HISTORY AS OF 2026-08-15 — DO NOT RE-RUN THE RECIPE AND EXPECT IT.
+-- The Q1 unit (`ifaceMethodCollisions`, compiler/frontend/resolve.mdk) now REJECTS a module
+-- whose own declarations include two `interface`s sharing a METHOD name, so that exact file
+-- is refused with `R-DUPLICATE-IFACE-METHOD` in BOTH orderings before typecheck ever sees
+-- it.  The flip is no longer observable and the shape is no longer constructible in one
+-- file.  It is kept, scoped, because it is the evidence for the corrected REASON below —
+-- deleting it would leave that reasoning unsupported.
+-- ⚠️ AND THE MECHANISM DOES NOT SIMPLY MOVE CROSS-MODULE — measured, not assumed, on one
+-- posing: `fa.mdk`/`fb.mdk` each exporting an interface declaring `mth`, an entry doing
+-- `import fa.{FA, mth}` + `import fb.{FB}` with `impl FA Blob` only, prints 11 at exit 0.
+-- The obligation goes to FA, not to the other interface, because the entry binds exactly one
+-- denotation of `mth`.  So do not restate the last-declared-wins claim on the cross-module
+-- axis on the strength of this paragraph; that would need its own probe, and the one posing
+-- measured contradicts it.  The intra-module claim was true when made and is now unreachable.
 -- The carve-out itself still stands, on the FIRST clause plus a mechanism argument: this
 -- unit's discriminator is the importing module's IMPORT SCOPE, and a single file has none
 -- — every candidate is own, so no rung of `scopedMethodEntry` can separate them.  ⚠️ Nor
@@ -18281,7 +18295,15 @@ implEntryFromTys iface (headTy::rest) reqs methods = match headTyconNameTy headT
 --
 -- The sharp one is the METHOD-keyed count.  It is keyed on the method NAME, and the
 -- headless bucket holds the headless impls of EVERY interface, while two interfaces
--- declaring the same method name are accepted.  So a headless method count can reach 2,
+-- declaring the same method name are accepted.  ⚠️ SCOPE, narrowed 2026-08-15: that
+-- premise is now false INTRA-module — Q1 (`ifaceMethodCollisions`,
+-- compiler/frontend/resolve.mdk) rejects a module declaring two such interfaces.  It
+-- remains TRUE ACROSS MODULES, which is what keeps this branch reachable, so this note
+-- does NOT describe dead code.  Measured rather than argued: `ha.mdk`/`hb.mdk` each
+-- exporting an interface declaring `hm` WITH A HEADLESS `impl HA a` / `impl HB a`, and an
+-- entry importing the method name from one and the interface name from the other, is
+-- ACCEPTED at exit 0 (prints 1).  Both headless impls are registered, so the count still
+-- reaches 2 by the route below.  So a headless method count can reach 2,
 -- the collision test fires, and `keyForSite` takes its CANONICAL-KEY branch with a
 -- `__none__` winner — a branch that was UNREACHABLE before this change, because that
 -- bucket was always empty.

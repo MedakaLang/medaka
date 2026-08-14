@@ -227,6 +227,16 @@ echo
 # impl-order pins, so a reader concludes #1182/#1620 are fixed and CLOSES them, while
 # the interface axis still diverges and the rows here still assert a live bug. THIS
 # half is what catches that. Do not decouple them.
+# 🚨 UPDATE 2026-08-15: test/IFACE-ORDER-LEDGER.txt CURRENTLY HAS NO ROWS, so this half
+# reports nothing about #1182/#1620 today — the state described above is real but its two
+# instances are gone. Q1 (`R-DUPLICATE-IFACE-METHOD`, compiler/frontend/resolve.mdk)
+# rejected the INTRA-module shape, both ledgered cases converged, and a row asserting a
+# divergence that no longer exists is false, so the rows were removed while both issues
+# stayed OPEN on the cross-module axis. The rule above is unchanged and binds any future
+# row; it simply has no subjects right now. Those two issues are instead covered by HALF 1
+# above, which is DIRECTORY-driven rather than row-driven, via their re-posed cross-module
+# pins in test/must_fail_fixtures/. Derive the live row set before relying on this half:
+#   grep -cvE '^[[:space:]]*(#|$)' test/IFACE-ORDER-LEDGER.txt
 echo "── ORDER-LEDGER rows whose issue is CLOSED (stale owners) ───────────────"
 h4=0
 for IOLEDGER in "$ROOT/test/IMPORT-ORDER-LEDGER.txt" "$ROOT/test/IFACE-ORDER-LEDGER.txt"; do

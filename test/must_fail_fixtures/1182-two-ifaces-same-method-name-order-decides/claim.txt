@@ -18,6 +18,20 @@ what: INTERFACE NAME only, so the occurrence of `m` has exactly ONE binding -- A
 what: Printing 2 therefore runs the body of a method belonging to an interface the
 what: occurrence never named, which is wrong under EVERY reading. No name-resolution
 what: question is left open.
+what: ⭐ THAT ONE-BINDING STEP IS THE LOAD-BEARING ONE, AND IT IS MEASURED RATHER THAN
+what: READ OFF THE IMPORT LINES. Unlike #1620 -- where a String comparand proves the
+what: denotation by its TYPE -- both interfaces here declare `m : a -> Int`, so no type
+what: probe can distinguish them and the step needs evidence of its own. It also cannot
+what: be established by the `Ambiguous occurrence` measurement further down: that shows
+what: both modules EXPORT `m`, not that `import a2.{A2}` fails to BIND it. The
+what: discriminating probe is to delete `m` from the a1 import list while LEAVING
+what: `import a2.{A2}` in place -- if A2 brought a method name into scope, `m` would
+what: still resolve. MEASURED 2026-08-15:
+what:   `import a1.{A1}` + `import a2.{A2}`, everything else byte-identical ->
+what:   R-UNBOUND, `Unbound variable: m. (Did you forget to 'import a1.{m}'?)`, exit 1
+what:   -- and the compiler's own suggestion names a1, not a2.
+what: So `import a2.{A2}` binds no method name, and with `m` imported from a1 alone the
+what: occurrence provably has exactly one binding.
 what: HAND-DERIVED BEFORE ANY RUN (the engine is what is under suspicion here, so its
 what: output cannot be the oracle): `m` binds to A1's method and the goal is
 what: `A1 (Q Int Bool Int)`. Under correct interface-scoped selection the candidate set

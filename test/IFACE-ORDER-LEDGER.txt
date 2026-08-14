@@ -45,15 +45,23 @@
 #
 # WHERE THE SURVIVING POPULATION LIVES, so the next reader can find it without a census:
 #   * test/must_fail_fixtures/1182-two-ifaces-same-method-name-order-decides/ — RE-POSED
-#     onto the cross-module axis by the same PR; it still REPRODUCES and is the live pin.
-#   * test/must_fail_fixtures/1620-two-ifaces-same-method-binary-wrong-value/ — its
-#     single-file shape DRAINED under Q1 and it has NOT been re-posed. ⚠️ #1620 therefore
-#     has NO reproducing pin and NO ledger row: nothing mechanical guards it today.
+#     onto the cross-module axis by the same PR; it still REPRODUCES and is a live pin.
+#   * test/must_fail_fixtures/1620-two-ifaces-same-method-binary-wrong-value/ — ALSO
+#     RE-POSED onto the cross-module axis by the same PR, in a later commit; it still
+#     REPRODUCES and is a live pin.
 #   * test/diff_compiler_dict_semantics.sh §4 (impl-block permutation) and
 #     test/diff_compiler_import_order.sh (import clauses) grade the sibling axes.
-#   * A census over the tree found 29 fixture directories carrying a genuine
-#     cross-module method-name collision; grep for two modules declaring interfaces
-#     that share a method name rather than trusting that number.
+#   * The wider fixture population carrying a cross-module method-name collision is
+#     LARGE — dozens of directories — but ⚠️ DO NOT ENCODE A COUNT HERE. Three
+#     independent derivations of it during one review produced 29, ~55 and 35; the
+#     spread is a parse-definition disagreement, not arithmetic, which is exactly why
+#     this file ships the command instead of a number. Derive it when you need it:
+#         find test -name '*.mdk' -print0 | xargs -0 perl -e '<layout-block parse>'
+#     i.e. group .mdk files by DIRECTORY, collect each file's interface method names
+#     from its indented `<name> :` signature lines, and report directories where two
+#     DIFFERENT files share one. Decide for yourself whether re-exports and
+#     `fixtures_modules/` corpora belong in your definition — that choice is the whole
+#     spread above.
 #
 # ⚠️ ONE MECHANICAL CONSEQUENCE, STATED SO IT IS NOT DISCOVERED THE HARD WAY.
 # test/must_fail_census.sh HALF 4 is ROW-DRIVEN (`for IOLEDGER in ...`, `#` lines
@@ -61,8 +69,23 @@
 # #1182/#1620, and that half's header calls this coupling LOAD-BEARING precisely because
 # it is what catches someone closing these issues on a partial fix. An OPEN issue with no
 # row is not a census violation, so removing the rows is mechanically safe — but it also
-# REMOVES that tripwire. What is left: HALF 1 (PINNED-BUT-CLOSED) covers #1182 through its
-# re-posed fixture, and covers #1620 NOT AT ALL.
+# REMOVES that tripwire.
+#
+# WHAT REPLACES IT — and ⚠️ NOT what an earlier draft of this banner said. That draft
+# claimed HALF 1 covers an issue only "through a reproducing fixture", so a drained pin
+# left #1620 covered by nothing. THAT IS WRONG; derive it rather than trusting either
+# version (`sed -n '113,166p' test/must_fail_census.sh`). HALF 1 is DIRECTORY-DRIVEN: it
+# enumerates `must_fail_fixtures/*/`, enrols every directory whose `claim.txt` carries an
+# `issue:` line, and fires purely on that issue being CLOSED. It never reads the gate's
+# REPRO/DRAINED verdict. So HALF 1 covered #1620 the whole time, drained or not, and it
+# covers both issues now.
+#
+# The real cost of a drained pin is different, and it is still serious: a drained pin
+# REDS the must-fail gate, and the gate's own drain note instructs the reader to close the
+# issue and `git rm -r` the fixture. So a drained pin does not sit there quietly being
+# watched — it applies steady pressure to delete the very directory HALF 1's coverage
+# depends on. And a pin that no longer reproduces is not evidence about a live bug in any
+# case. THAT is why both fixtures were re-posed rather than left drained.
 #
 # 🚨 #1182 HAS BEEN DESK-CLOSED TWICE on exactly this kind of inference — once 1h44m
 # after its own comment said it was not fixed. If you are about to close either issue
@@ -116,10 +139,12 @@
 #                                   one — a deterministic wrong answer converges too.
 #   check=1 with a T-* code      -> ALSO deterministic selection, NOT a rejection: the
 #                                   impl that was deterministically chosen then failed
-#                                   TYPECHECK. The #1182 row below already pins a
-#                                   `check=1;codes=T-NO-IMPL` signature TODAY, so a
-#                                   converged signature of that shape is evidence of
-#                                   deterministic selection, not of an ambiguity check.
+#                                   TYPECHECK. ⚠️ Until Q1 the #1182 row pinned exactly
+#                                   such a `check=1;codes=T-NO-IMPL` signature (it is in
+#                                   the REMOVED-ROWS history below); there is no live row
+#                                   here now, but the trap is unchanged — a converged
+#                                   signature of that shape is evidence of deterministic
+#                                   selection, not of an ambiguity check.
 #                                   Same reading, and the same trap, as the gate's
 #                                   FOUR-STATE TABLE state 4.
 #
@@ -170,12 +195,15 @@
 #      pin is the honest thing to record when the engine is broken, but only if the
 #      fixture says on what evidence.
 #
-# ⚠️ AND ONE THAT IS SPECIFIC TO THIS AXIS: DO NOT LEDGER A CONTROL. Two cases here
-# (control-distinct-method-names-invariant/, control-shared-method-name-disjoint-
-# receivers/) must be invariant and are what make the ledgered rows evidence about the
-# candidate set rather than about method names in general. If a control starts
-# diverging, the finding is LARGER than any row here claims — file it, do not absorb
-# it. The gate's failure note says so on the row itself.
+# ⚠️ AND ONE THAT IS SPECIFIC TO THIS AXIS: DO NOT LEDGER A CONTROL. The controls in
+# this corpus must be invariant, and they are what make any ledgered row evidence about
+# the candidate set rather than about method names in general. If a control starts
+# diverging, the finding is LARGER than any row here claims — file it, do not absorb it.
+# The gate's failure note says so on the row itself.
+#   ⚠️ The control SET changed with Q1 and this rule outlived its old membership list,
+#   which named `control-shared-method-name-disjoint-receivers/` — a directory Q1 deleted
+#   (its program is now rejected on the declaration). DERIVE the current set instead of
+#   trusting any list here:  ls -d test/iface_order_fixtures/{control-*,negative-*}/
 #
 # ── FORMAT ────────────────────────────────────────────────────────────────────
 #
@@ -198,8 +226,16 @@
 # paste here is exactly what the gate prints when a row fails.
 #
 # DO NOT hand-write a signature. Run the gate with the row absent; it prints every
-# distinct signature it observed, and those lines are what belongs here. Both rows
-# below were produced that way on a cold `make medaka` of this branch (base aaa43716).
+# distinct signature it observed, and those lines are what belongs here. The two rows
+# this file used to carry were produced that way on a cold `make medaka` at base
+# aaa43716; they are now history (see REMOVED ROWS below) and there are no live rows.
+#
+# ⚠️ TWO DIFFERENT BASE SHAs APPEAR ACROSS THIS CORPUS AND THAT IS CORRECT, NOT DRIFT.
+# `aaa43716` is when the corpus and its rows were first measured; `401e3e30` (in
+# negative-1183-.../case.txt) is when Q1 re-measured the cases it re-posed. Each cell
+# names the base it was actually observed at, which is the point — do NOT "reconcile"
+# them to one SHA, because that would attach a measurement to a commit it was never run
+# on. Re-derive against your own HEAD if you need a current number.
 
 # ══════════════════════════════════════════════════════════════════════════════
 # ── REMOVED ROWS, KEPT AS HISTORY (2026-08-15, Q1) ───────────────────────────
