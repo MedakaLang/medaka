@@ -1487,3 +1487,43 @@ that is unreachable for an interface; **the S1 bite must verify that rather than
 **dict-cell byte change**, and `core_ir_lower.ifaceDeclHeadUnique` counts over a different table and
 would not follow — the skew the file's own `:19315-19330` records as previously producing exit 0 plus
 a segfault. **The S1 bite's byte-identical bar is therefore load-bearing, not ceremonial.**
+
+## RUN-P45-040 — 🚨 Q1 BLAST-RADIUS CENSUS: Q1 as specified REJECTS A PROGRAM THE TREE PINS AS CORRECT
+
+Reader, pinned to `401e3e30`, layout-block parser (not grep), no build. 3165 `.mdk` files · 657
+declare an interface · 101 declare ≥2 · **10 files collide intra-module.**
+
+**The good half — Q1 is shippable as stated:**
+- **`compiler/` declares ZERO interfaces**; `stdlib/` declares 23, all in `core.mdk`, **pairwise
+  disjoint** method sets (nearest misses `Index`/`IndexMut`, `Applicative`/`Thenable` — no overlap).
+  So Q1 breaks neither the compiler's own build nor the prelude.
+- Two `must_fail` pin dirs (#1182, #1620) stop compiling ⇒ **the pins DRAIN**, which is the shape the
+  #1182 claim itself names as one of its two viable fixes.
+- Two ledgered `iface_order` rows converge ⇒ RED on `diff_compiler_iface_order.sh`, which is that
+  gate's **documented drain path**, not a break.
+
+**🚨 The half that needs an owner ruling — Q1 destroys the G-0 instrument's two UNLEDGERED CONTROLS,
+and one of them is a legal, order-invariant, working program:**
+- `test/iface_order_fixtures/control-shared-method-name-disjoint-receivers/` — two interfaces share
+  method `n`, implemented at **disjoint receiver types**; `case.txt` asserts `n U + n V == 3` at
+  exit 0 **in every ordering**. Nothing about it is ambiguous at any occurrence. **Q1 rejects it.**
+- `test/iface_order_fixtures/negative-1182-impl-axis-shape-is-iface-axis-invariant/` — same fate.
+- These controls are what **bound what the ledgered rows are evidence for** (their own `case.txt`
+  says so). Losing them silently converts G-0 from an instrument into a tautology: every case
+  rejects, so every case "agrees".
+
+⇒ **Q1 is not purely a repair of an invariant the tree already believes.** `methodIfaceParamsRef`'s
+header claims resolve rejects the ambiguous case; the control proves the *unambiguous* case is
+legal today and works. Rejecting on DECLARATION alone narrows acceptance for working programs.
+
+**⚠️ Second unmeasured axis, and it is the one that could blow the radius open:** the census compared
+interfaces **textually in the same file only**. `resolve.mdk` seeds `pIfaces`/`expIfaceMethods` from
+`preludeDecls` (`:1608`, `:2763`, `:2836`). **If Q1's "one module" is read to include the implicit
+prelude, every user interface declaring `map`/`eq`/`compare`/… collides** and the radius is not 10.
+The bite must state, in code and in its PR body, that its scope is *interfaces declared in the
+module's own source*, and pin that with a fixture. The prelude-vs-user axis belongs to SHADOW/#1499.
+
+**Also recorded from the census (not acted on):** 29 directories carry genuine CROSS-module
+collisions co-loaded into one program — the population Q1 deliberately does NOT reach, outnumbering
+the intra-module population ~3:1. The two populations are disjoint in practice (no directory holds
+both shapes), which is the practical check P0-G's *"Q and S are not redundant"* claim needed.
