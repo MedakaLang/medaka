@@ -18479,6 +18479,12 @@ implKeyTc iface tys = implRouteKeyWord OriginUnresolved iface tys None
 -- keyed on the `<TAG>` that `fromOption tag` supplies at the caller.  That is why
 -- the `None` arm must keep the concrete head tag (see its own comment).
 --
+-- ⇒ `fromOption tag` is NOT a hedge over a selector result.  At the sites where it
+-- fires it is the ONLY source of that TAG — nothing downstream re-derives one — so
+-- deleting it breaks every cross-module method-less impl inheriting an interface
+-- default.  And read a green suite here accordingly: it is evidence about the
+-- DEFAULT tier, not about the route word.
+--
 -- The key/tag split deliberately mirrors `core_ir_lower.declRouteKey` (bare head when
 -- that head is unique among the interface's declared impls, canonical full-type key
 -- otherwise): the typechecker stamps this word into the caller's dict cell and the
@@ -19530,8 +19536,17 @@ implDictRoutesForFull : ImplBuckets -> KeyBuckets -> String -> String -> String 
 -- prefix `stampKeyTable` onto the graph-global `IE`.  🚨 THIS IS THE LEG WHOSE
 -- ABSENCE MAKES THE OTHER TWO AN S0: with legs 1/2 moved and this one left behind,
 -- #1564's impl gained a dict param it was never passed — `check` exit 0, built
--- binary 139 (RUN-B-023).  [keyTable] is still threaded for the nested `requires`
--- recursion, which re-buckets by each requires' own head.
+-- binary 139 (RUN-B-023).  ⚠️ [keyTable] is a DEAD PARAMETER AWAITING THE SWEEP, not
+-- a live re-bucketing.  This comment used to justify it as *"still threaded for the
+-- nested `requires` recursion, which re-buckets by each requires' own head"* — MEASURED
+-- FALSE, and the recursion's own end point already says so: it terminates at
+-- `selectReqImpl`, whose signature takes no `KeyBuckets` at all, and whose header
+-- records why (*"the `KeyBuckets` parameter is REMOVED rather than ignored — it had
+-- exactly one reader, this arm"*).  Nothing on the chain
+-- (`argImplReqRoutes` → `argReqRoute` → `routeOfD` → `entail`'s `EKNestedTop` arms)
+-- reads the table; each link only forwards it, and the one `KeyBuckets`-consuming
+-- fallback (`undeterminedRoute`'s `CountImpls` arm) is unreachable because
+-- `argReqRoute` seeds the recursion with `KeepNone`.
 implDictRoutesForFull implTable keyTable encl name tag resultMono paramMonos = match ieRowHeadTriple (ieSelectRowByMethod perRun.value.bodyImplEnvRef.value name paramMonos)
   Some (headTy, implTys, reqs) => match headSubstWithParams headTy implTys resultMono paramMonos
     Some subst => argImplReqRoutes implTable keyTable encl subst reqs 0
@@ -19793,6 +19808,46 @@ data EntailKind =
   -- RNone guard (op-site refs are always Ref RNone-seeded — parser/desugar).
   | EKOp Bool KeyBuckets Bool
 
+-- 🚨 THE LADDER'S SELECTOR-REACHABILITY PROPERTY, inscribed so the next refactor
+-- cannot violate it silently.  Every impl-row SELECTOR call reachable from `entail`
+-- lies in an `inst` arm (`entailInst`) or in an element-route helper called from one.
+-- No selector call may be reachable from `entailAssum`, `entailAssumVar` or
+-- `entailAssumRoute` — verified at this pin by enumerating the assum chain
+-- (`activeDictVarOfEncl`/`activeDictVarForEncl`/`enclDictVarOf`/`opDictVarOf`/
+-- `activeDictPredOf`/`ifaceOfMethodName`): every one is a `perRun` registry lookup and
+-- none reaches a selector.
+--
+-- ⚠️ `entailFallback` HAS ONE REACHING PATH, AND IT IS NOT A VIOLATION — but it is why
+-- the rule above stops naming it.  `EKNestedTop`'s `CountImpls` policy goes
+-- `undeterminedRoute` → `routeUndeterminedTop`, which answers THIS goal by COUNTING
+-- (`implHeadTagsForIface`, exactly-one → that tag; two or more → `T-AMBIGUOUS-INSTANCE`),
+-- never by selection — and only THEN routes the chosen impl's own nested `requires`
+-- through `argImplRequiresRoutes` → `selectReqImpl`, which is a FRESH sub-goal
+-- descending the ladder again, not this goal being answered on a later rung.  A refactor
+-- that let the fallback rung answer the ladder's own goal by selection IS the violation
+-- this property forbids; the `KeepNone` policy (every element-dict recursion) cannot
+-- reach even this path.
+--
+-- WHY IT MATTERS.  DICT-SEMANTICS §3 pins the precedence: `assum` strictly precedes
+-- `inst`, which strictly precedes `fallback`.  Letting a later rung answer a goal an
+-- earlier rung could have answered re-routes a dict cell from a CALLER-SUPPLIED
+-- PARAMETER to a STATICALLY SELECTED impl — the wrong value, at exit 0, with no
+-- diagnostic.  A selector call sitting on an `assum` or `fallback` arm is precisely how
+-- that happens, which is why this is a placement rule and not a tidiness point.
+--
+-- 🚨 IT IS A REACHABILITY PROPERTY, NOT A COUNT — AND THE COUNT FORM IS FALSE ON A
+-- CORRECT TREE.  There are legitimately TWO selector calls per `inst` arm: one for the
+-- primary route word, one inside the element-route helper.  At `EKArg` and `EKOp` those
+-- two deliberately ask about DIFFERENT methods — the element helper is keyed on the
+-- `innerDefaultMethod`-reduced name when the head's impl does not itself define the
+-- method (`ieDefinesReqMethodAt`).  Any *"one selector call per arm"* rule would license
+-- collapsing them, which changes WHICH IMPL'S CONTEXT IS DISCHARGED (§6 C2).  Do not
+-- restate this property in the count form.
+--
+-- ⚠️ AND A GREP OF `ieSelectRowBy*` IS NOT THE CHECK.  `concreteReqMatchByIface` is a
+-- LEGITIMATE selector call outside this ladder — it is the obligation channel's evidence
+-- check, not a routing decision — and is out of scope here.  An audit that greps the
+-- selector names without excluding it reports a false violation.
 entail : ImplBuckets -> String -> Mono -> String -> EntailKind -> (Route, List Route)
 entail implTable name m encl kind = match entailAssum m encl name kind
   Some dname => (entailAssumRoute dname kind, [])
@@ -19838,7 +19893,9 @@ entailAssumRoute dname (EKArg _ _) = RDict dname
 entailAssumRoute dname (EKOp _ _ _) = RDict dname
 
 -- inst: a concrete head [tag].  EKReturn → canonical full-type key + split element routes
--- (implRef-bound); EKNestedTop → bare head tag with requires PACKED into the primary RKey;
+-- (implRef-bound); EKNestedTop → the min⊑ winner's canonical key (bare head only when the
+-- iface-keyed collision gate is False — see the arm's own body comment) with requires PACKED
+-- into the primary RKey;
 -- EKArg → same canonical RKey primary as EKReturn but element routes keyed on the
 -- (default-reduced) method via argImplDictRoutesForEncl; EKOp → stampOpRouteVal (builtin
 -- head → RNone do-nothing, else RKey with reqs packed in, no separate element routes).

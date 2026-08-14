@@ -301,3 +301,100 @@ unchecked:    (1) **#1608 (S1, OPEN, declared un-pinnable) sits under the `run` 
               LEG A goldens move by construction and the packet forbids blessing — the close-out
               re-cut owns them, along with `route_key.mdk`'s still-owed snapshot CREATE, which
               `a` bequeathed).
+
+### B-2.2-c — the comment-only bite: three wrong comments corrected, one property inscribed
+sites:        `compiler/types/typecheck.mdk` only, four hunks, **comment lines exclusively**
+              (`git diff -U0 | grep -vE '^[+-][[:space:]]*--'` over the non-marker lines is
+              EMPTY — the mechanical check, not an assertion): `:18482-18487` (the
+              `fromOption tag` consequence, appended to `keyForSite`'s header), `:19539-19549`
+              (`implDictRoutesForFull`'s `[keyTable]` justification), `:19811-19850` (the new
+              selector-reachability block, above `entail` — a FUNCTION, so #829 cannot fire),
+              `:19896-19898` (`entailInst`'s header, the `EKNestedTop` clause). +60/−3.
+transform:    (1) `keyForSite`: the WRONG-TIER paragraph was **already corrected by `b1`+`e`**
+              (it names `emitDefaultRKey`, and the `Some __none__`-is-a-direct-hit measurement,
+              correctly) — **not re-edited**. What was still missing is the CONSEQUENCE, which is
+              the half that nearly shipped a break, so it was appended: `fromOption tag` is not a
+              hedge over a selector result, it is the ONLY source of that TAG where it fires,
+              deleting it breaks every cross-module method-less impl inheriting an interface
+              default, and a green suite here is evidence about the DEFAULT tier, not the route
+              word. (2) `implDictRoutesForFull`: *"[keyTable] is still threaded for the nested
+              `requires` recursion, which re-buckets by each requires' own head"* replaced with
+              **dead parameter awaiting the sweep**, carrying the derivation (`selectReqImpl`'s
+              signature takes no `KeyBuckets`; its own header says the parameter was REMOVED
+              rather than ignored; every link on `argImplReqRoutes → argReqRoute → routeOfD →
+              entail` only FORWARDS the table; the one `KeyBuckets`-consuming fallback,
+              `undeterminedRoute`'s `CountImpls` arm, is unreachable because `argReqRoute` seeds
+              with `KeepNone`). (3) `entailInst`'s header: `EKNestedTop → bare head tag` replaced
+              with *the min⊑ winner's canonical key (bare head only when the iface-keyed
+              collision gate is False)* — false since #203, and the arm's own body comment and
+              the `EntailKind` ladder comment both already said so. (4) NEW: the ladder's
+              **selector-reachability** property above `entail`, with its three earned guards —
+              why it matters (§3 `assum` ≺ `inst` ≺ `fallback`; a later rung answering re-routes
+              a dict cell from a caller-supplied parameter to a statically selected impl, wrong
+              value at exit 0), that it is **reachability, not a count** (two selector calls per
+              `inst` arm are legitimate and at `EKArg`/`EKOp` deliberately ask about DIFFERENT
+              methods via `innerDefaultMethod`/`ieDefinesReqMethodAt` — verified at both arms —
+              so any *"one call per arm"* rule licenses a collapse that changes which impl's
+              context is discharged), and that a grep of `ieSelectRowBy*` is not the check
+              (`concreteReqMatchByIface` is a legitimate out-of-ladder selector, the obligation
+              channel's evidence check).
+              ⚠️ **THE PACKET'S WORDING OF THE PROPERTY WAS AMENDED, NOT INSCRIBED VERBATIM, AND
+              THE AMENDMENT IS REPORTED RATHER THAN SILENT.** The packet's clause *"No selector
+              call may be reachable from `entailAssum`, `entailAssumVar`, `entailAssumRoute` or
+              `entailFallback`"* is TRUE for the three `assum` functions (enumerated: every arm
+              is a `perRun` registry lookup — `activeDictVarOfEncl`/`activeDictVarForEncl`/
+              `enclDictVarOf`/`opDictVarOf`/`activeDictPredOf`/`ifaceOfMethodName` — none reaches
+              a selector) and **FALSE for `entailFallback` at this pin**: `EKNestedTop`'s
+              `CountImpls` policy goes `undeterminedRoute` → `routeUndeterminedTop`, whose
+              exactly-one arm calls `argImplRequiresRoutes` → `selectReqImpl` (`:20036`). Writing
+              the packet's form verbatim would have inscribed a property the tree violates on
+              its first read — the exact failure this bite exists to end. The block therefore
+              states the assum trio as an absolute, and names the fallback path as a
+              **derived non-violation**: that rung answers THIS goal by COUNTING
+              (`implHeadTagsForIface`, exactly-one, else `T-AMBIGUOUS-INSTANCE`), never by
+              selection, and only then routes the chosen impl's own nested `requires` as a FRESH
+              sub-goal descending the ladder again. The forbidden shape — the fallback rung
+              answering the ladder's own goal by selection — is stated explicitly, and the
+              `KeepNone` policy (every element-dict recursion) cannot reach even this path.
+could move:   NOTHING, and the reason is structural rather than an assertion: **the diff contains
+              no expression**, only `--` lines, mechanically confirmed by the grep quoted in
+              `sites:`. Corroborated end-to-end: `make medaka` exit 0 (full 2-stage rebuild) and
+              `make check-self` **PASS** on the rebuilt binary; `medaka fmt --check` 0 and
+              `medaka lint` 0 on the edited file, before AND after the rebuild. Comment-bearing
+              record decls were not touched — every edit is a free-standing `--` block above a
+              FUNCTION or a signature, so #829's record-header hazard has no site here.
+nearest miss: The property inscribed is about PLACEMENT of selector calls, not about lookup
+              correctness, so the nearest program it does not cover is the **`D1-leak`
+              fall-through**: a rigid, in-scope goal whose `assum` lookup MISSES, so the ladder
+              falls through to `inst` and re-resolves it by selection. That is a real
+              re-resolution TODAY, on a correct-by-this-property tree — the selector call sits in
+              the `inst` arm exactly where the rule allows — and **this bite does not fix it**.
+              #1127 legs 1–2 are B-1's, and B-1 is out of this sprint's scope
+              (RUN-P3 scope ruling), so the leak survives the sprint. Second nearest: the
+              `[keyTable]` parameter that (2) now calls dead is still PRESENT in every signature
+              on that chain (the set is a command, not a number written here:
+              `grep -n 'KeyBuckets ->' compiler/types/typecheck.mdk`); naming it dead does not
+              remove it, and the sweep that does is owed.
+engines:      **None moved.** No emitted byte changes: comment-only, and the LLVM/wasm/eval/
+              core_ir_eval arms all consume the AST after comments are discarded by the lexer.
+              No peer is owed a mirroring edit — `eval.mdk`/`core_ir_eval.mdk` carry no copy of
+              these comments (they are about the typechecker's routing ladder, which has no
+              parallel in the eval drivers).
+unchecked:    (1) **BLESSED ZERO GOLDENS, per the packet.** `diff_compiler_snapshot_frontend.sh`
+              was RUN (not blessed) and reports 4 failures in the `compiler` family:
+              `typecheck.mdk` (SOURCE, DESUGAR, MARK), `core_ir_lower.mdk`, `eval.mdk` (same
+              sections) and `route_key.mdk` (no snapshot). **Three of the four are inherited, not
+              mine** — `core_ir_lower.mdk` and `eval.mdk` are UNMODIFIED in this working tree
+              (`git status` lists only `typecheck.mdk`), so they are `b1`+`e`'s deferred re-cut,
+              and `route_key.mdk` is `a`'s owed CREATE. (2) **My edit provably cannot have moved
+              `typecheck.mdk`'s DESUGAR/MARK sections, and did not need to be measured to know
+              it:** those sections contain **zero** location-like tokens (`grep -cE '[0-9]+:[0-9]+'`
+              from `# DESUGAR` to EOF of the committed golden → **0**), so a line-shifting comment
+              edit cannot reach them; and the golden's own `source_lines=29596` against `HEAD`'s
+              29763 shows the file was already 167 lines past its golden BEFORE this bite. That
+              is also the derivation behind the packet's instruction NOT to compress for line
+              count, and it held. (3) **Not run:** the gate suite at large, `selfcompile_fixpoint`,
+              `typecheck_compiler_source.sh`, perf/scaling, the wasm gates, `diff_compiler_selfproc`
+              — justified by (2)+`could move:`: with no expression in the diff there is no
+              behaviour for them to grade, and the LEG A/snapshot goldens they touch are the
+              close-out re-cut's, which this bite is forbidden to bless.
