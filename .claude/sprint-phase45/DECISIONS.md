@@ -1931,3 +1931,44 @@ comment lines plus exactly three `source_lines=` counters, nothing else — the 
 footprint. Staged **last**, all four hook checks live on the terminal commit. `selfproc_legA` cannot
 move (comment-only compiler diff). New pin row proven able to fail: `27 → 28` reds **that row alone**
 across all 91 units; reverted, 191/191.
+
+## RUN-P45-052 — S1 LANDS AS PR #1643 (open). Bar: 391/391 byte-identical IR. One ruling, one flag.
+
+Nine functions widened `String` → `IfaceRef` (the 7-member `*ByIface` family + `concreteReqMatchByIface`
++ `selectReqImpl`), plus one new seam `ieRowIfaceMatches`. W4 confirmed first-hand that nothing in the
+family is exported and there is no non-comment reference outside `typecheck.mdk`.
+
+**Evidence:** 391/391 byte-identical across six corpora (`differing=0 missing=0`); 330 produce real IR,
+the other 61 are error fixtures compared on **build status**, all 61 agreeing. **Positive control run** —
+injecting one byte into one `.ll` and one wrong status into another makes the harness report
+`differing=2`, naming both. **C3a YES, C3b YES**, separate verdicts. Plus `check-self`, `make test`,
+dict-semantics, iface_order, import_order, selfproc 16/0, lex_files, diff_native_cli.
+
+**ORCH verified the legA golden myself** (not from the report): the diff is exactly the nine re-signings
+plus the one added binding; **no pre-existing binding's inferred type changed**. A zero IR diff beside a
+moved scheme golden is consistent — the golden records declared types, the IR records behaviour.
+
+### ⭐ The neutrality is STRUCTURAL, not merely measured — and W4 said so without being asked
+Because every query is minted `ifaceRefBare` (absent origin), `tyConIdsConflict`'s `(Some, Some)` arm
+is **unreachable**, so a row minted `OriginBuiltin` cannot conflict with an absent query *regardless* of
+the invariant. ⇒ W4 **declined to certify the `OriginBuiltin` invariant** and flagged it in `unchecked:`
+as **S2's obligation**, since S2 is what makes that arm reachable. That is the right shape of answer:
+it did not need the invariant, so it did not claim it.
+
+### ⭐ RULING (ORCH): the count/collision test STAYS SPELLING-KEYED. S1's choice stands.
+W4 threaded `IfaceRef` through `ieCountHeadByIface`/`…Go` but left the comparison as
+`ir.irName == iface.irName`, citing the file's own #1317 derivation — the route-word collision question
+is inherently spelling-scoped because three engines re-derive that word from a bare `String` tag. **It
+flagged this rather than deciding it silently, and its bar could not distinguish the two choices.**
+Ruled: **the shipped design already says this** — B-2.2 kept the collision *test* spelling-keyed on
+purpose so the checker's stamp keeps matching `core_ir_lower.declRouteKey` byte for byte, while identity
+moved onto the FIELD. The reasoning is the design's, not W4's invention. Relayed to S2 with an explicit
+licence to overturn it on evidence.
+
+### ⚠️ ORCH's own follow-up, because the headline number invites a vacuity error
+`sameTyConHead` can differ from `==` in **exactly one situation**: two interfaces sharing a SPELLING with
+two known, different origins. **If no program in those six corpora contains that shape, 391/391 identical
+is precisely what a no-op produces** and the bar proves far less than it appears
+([[feedback_a_byte_identical_bar_on_unread_code_is_vacuous]]). A reader is enumerating the corpora for
+the discriminating shape now. **This is not a doubt about the code — it is a question about the inputs**,
+and it is the same question that let #1381's engines gate stay green while a layout bug shipped.
