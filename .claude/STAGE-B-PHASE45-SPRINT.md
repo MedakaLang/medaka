@@ -159,6 +159,97 @@ name?** Three readings, all defensible:
 on their own schedules is the `evalModules`/`cevalModules` lockstep hazard at arc scale — and this
 tree has already paid for that shape once, for months.
 
+### ⭐ RECOMMENDED RULING — reading 1, amended. Derived 2026-08-14 at `0913762f`
+
+> **Phase 5 as scoped IS X-E.C under another name — CUT IT and route it to #1403.**
+> **But the conjunct-1 drains were MIS-ASSIGNED to it. They are typecheck-only, so cutting Phase 5
+> does not defer a single S0.**
+
+This answers §4 Q6 (*is the selector re-key Phase 4's or Phase 5's?*) and the Q6 answer **dissolves**
+the collision rather than adjudicating it. Three derivations, each a command:
+
+**1. The wrong choice is made in `compiler/types/typecheck.mdk`. No engine participates.**
+Every candidate scan — `ieEntriesForMethod`, `ieCandidatesForMethod`, `ieSelectRowByMethod`,
+`ieCountHeadByMethod`, `ieImplExistsForHeadGo` — lives in that one file. Derive:
+`grep -rn 'ieEntriesForMethod\|ieCandidatesForMethod\|ieSelectRowByMethod' compiler/ --include=*.mdk`
+→ every hit outside `typecheck.mdk` is a **comment** pointing back at it (`core_ir_lower.mdk:1265-1266`,
+`route_key.mdk:192`). The engines hold route **words** and `noneHeadTag` buckets; they do not choose
+the row.
+
+**2. The interface-keyed peer ALREADY EXISTS, and the tree already states it is immune.**
+`ieEntriesForIface` · `ieCandidatesForIface` · `ieSelectRowByIface` · `ieCountHeadByIface` ·
+`keyForSiteByIface` are all present today. `ieSelectRowByIface` and `ieSelectRowByMethod` are
+**structurally identical** — same `goalHeadCon` match, same `pickMostSpecificEntry`, same
+`ieRowOfEntry` — differing only in which candidate function they call, which differ only in
+`iface`-match vs `contains name ms`. And `typecheck.mdk` says so itself:
+
+> *"The iface-keyed caller `ieEntriesForIface` **cannot produce such a set**, so the gate is a no-op
+> there."*
+
+**3. The tree already names the fix, and names it as #1182's.**
+
+> *"it is a **bare-name-keyed candidate set, whose fix is to SCOPE the set by interface** (#1182
+> option 1), not to call it ambiguity."*
+> — and at `keyForSite`: *"**THIS IS NOT #1182**: that bug is `ieCandidatesForMethod`'s
+> interface-free candidate key, **UPSTREAM of this word**."*
+
+⇒ **The conjunct-1 drain is a repointing of `keyForSite`'s selector from the `*ByMethod` family to
+the `*ByIface` family, inside one file.** It touches no `llvm_emit.mdk`, no `wasm_emit.mdk`, no
+`eval.mdk` dispatcher. **It is not Phase 5 work and never was.**
+
+**What is left in Phase 5 once the drain is removed** is exactly: `implEntryRouteWords` superset-OR
+retirement · `noneHeadTag` catch-all re-key · disjoint default-tag namespace · wasm peer arm · `eval`
+mirrored dispatch. That is **legacy-authority retirement in the engines** — X-E.C's charter verbatim,
+claimed by #1403 by name, and correctly sequenced *after* B-2 by the emitter arc's own DAG.
+
+**And the asymmetry makes the split safe:** once the selector is interface-keyed, the superset-OR
+hedges are **inert** — still reached, never decisive. **Inert-and-dead is debt; wrong-and-silent is
+an S0.** The split puts the S0 work where it can land now and the debt where its owner already is.
+
+### The resulting sprint
+
+| phase | content | owner |
+|---|---|---|
+| **4** | `B-2.3` frozen admissibility, keyed by interface identity (as scoped) | B-2 / #1113 |
+| **4b** *(new)* | **the selector re-key** — `keyForSite` → `*ByIface`. Drains the conjunct-1 family | B-2 / **#1182** |
+| ~~5~~ | **CUT.** Route to #1403 X-E.C, which claims it and is sequenced after B-2 | #1403 |
+
+### ⚠️ Three honest residuals — this ruling does NOT claim they are covered
+
+1. **Sizing 4b is NOT settled, and the risk is SUPPLY, not shape.** Entry point 2 is method-keyed
+   because at its sites **the interface may not be in hand** — `ieSelectRowByMethod`'s own header
+   says it is *"read by leg 3's two element-dict route sites AND … by the route WORD itself, through
+   `keyForSite`."* Whether an interface is available at each is the arc's familiar `#1280` SUPPLY
+   shape and is **the design run's first question**. The substitution is one line *given* an
+   interface; obtaining one may not be.
+2. **#1617 is not drained by 4b.** Its mechanism is the `headTyconTy`/`headTyconHead` `_ => None`
+   **arm set** (§4 Q7), which spans `typecheck.mdk` **and** `eval.mdk` (where `headTyconHead` is
+   defined and exported, `:1980`) **and** `core_ir_lower.mdk` (which imports it, `:65`). Small,
+   shared, still not route-word retirement — so it rides with 4b, not with X-E.
+3. **#1608 is a genuine engine defect** in `core_ir_eval.mdk`'s independent dispatcher — outside
+   X-E.C's LLVM/wasm scope and outside typecheck. It is the `evalModules`/`cevalModules` lockstep
+   partner and **needs its own owner call**; this ruling does not make one.
+
+### 🚨 Blocking tracker correction: **#1182 IS CLOSED AND SHOULD NOT BE**
+
+Closed **2026-08-14T03:52:04Z**, a plain close with **no commit id** — i.e. a desk close during the
+Phase 3′ close-out sweep — **1 h 44 m after its own last comment (02:08Z) said, verbatim:**
+
+> *"**This issue is not fixed and was not touched**; its pin still reproduces identically (`run` ->
+> 1, control -> 2) on both arms of a base-vs-branch differential."*
+
+Its pin `test/must_fail_fixtures/1182-two-ifaces-same-method-name-order-decides/` is **live**, in a
+suite the merge recorded as *"100 reproduce, 0 drained."* (Derived from those two records; I did not
+re-run the gate.) **#1182 is the ticket for the exact fix 4b performs**, so reopening it is not
+bookkeeping — it is recovering the unit's home. **Reopen before Phase 0 cuts 4b.**
+
+### What adopting this ruling requires
+
+It is a **recommendation until the owner adopts it**, and adoption is **two-sided** (exit criterion
+0): a comment on **#1113** recording that B-2 ends at Phase 4+4b, **and** a comment on **#1403**
+recording that X-E.C inherits route-word/`KeyBuckets` retirement with B-2's Phase 4 output as its
+producer. One-sided adoption reproduces the one-directional citation that caused §2b.
+
 ---
 
 ### Issue-closure policy — unchanged
