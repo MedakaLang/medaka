@@ -316,7 +316,6 @@ EXPECTED_MODULE_REFS="$(printf '%s\n' \
   useArgsRef \
   useArrayRef \
   useCharClassRef \
-  useCharFromCodeRef \
   useFileBytesRef \
   useFloatRef \
   useFloatRngRef \
@@ -345,11 +344,41 @@ ACTUAL_MODULE_REF_DEFS="$(awk '
 ' "$WASM_SRC" | LC_ALL=C sort -u)"
 if [ "$ACTUAL_MODULE_REF_SIGS" != "$EXPECTED_MODULE_REFS" ] ||
     [ "$ACTUAL_MODULE_REF_DEFS" != "$EXPECTED_MODULE_REFS" ]; then
-  echo "FAIL H2B10-FLOAT-HASH-AUTHORITY: top-level Ref authority set changed"
+  echo "FAIL H2B11-CHAR-FROM-CODE-AUTHORITY: top-level Ref authority set changed"
   printf '  observed signatures:\n%s\n' "$ACTUAL_MODULE_REF_SIGS"
   printf '  observed definitions:\n%s\n' "$ACTUAL_MODULE_REF_DEFS"
   exit 1
 fi
+if grep -E '^_?useCharFromCodeRef[[:space:]]*[:=]|setRef (_?useCharFromCodeRef)' "$WASM_SRC" >/dev/null; then
+  echo "FAIL H2B11-CHAR-FROM-CODE-AUTHORITY: retired ambient authority remains"
+  exit 1
+fi
+for required in \
+  'useCharFromCode : Ref Bool' \
+  'useCharFromCode = Ref False' \
+  'setRef emit.useCharFromCode True' \
+  '(progEmit prog).useCharFromCode.value'; do
+  grep -F -- "$required" "$WASM_SRC" >/dev/null || {
+    echo "FAIL H2B11-CHAR-FROM-CODE-AUTHORITY: missing $required"
+    exit 1
+  }
+done
+grep -F 'let _ = if name == "charFromCode" then setRef emit.useCharFromCode True else ()' "$WASM_SRC" >/dev/null &&
+  grep -F 'let charFromCodeRt = if (progEmit prog).useCharFromCode.value then charFromCodeRuntimeLines else []' "$WASM_SRC" >/dev/null &&
+  ! grep -E 'setRef emit\.useCharFromCode False|setRef useCharFromCodeRef False' "$WASM_SRC" >/dev/null || {
+  echo "FAIL H2B11-CHAR-FROM-CODE-ROUTES: writer, reader, or retired reset changed"
+  exit 1
+}
+[ "$(grep -F 'setRef emit.useCharFromCode True' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
+  [ "$(grep -F '(progEmit prog).useCharFromCode.value' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] || {
+  echo "FAIL H2B11-CHAR-FROM-CODE-ROUTES: expected one charFromCode writer and reader"
+  exit 1
+}
+grep -F 'emitProgram input cp = emitProgramWith (freshWasmEmit WGapStrict) input cp' "$WASM_SRC" >/dev/null &&
+  [ "$(grep -F 'let emit = freshWasmEmit WGapRecord' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 2 ] || {
+  echo "FAIL H2B11-CHAR-FROM-CODE-ROUTES: strict, record, census freshness routes changed"
+  exit 1
+}
 if grep -E '^_?useFloatHashRef[[:space:]]*[:=]|setRef (_?useFloatHashRef)' "$WASM_SRC" >/dev/null; then
   echo "FAIL H2B10-FLOAT-HASH-AUTHORITY: retired ambient hashFloat authority remains"
   exit 1
