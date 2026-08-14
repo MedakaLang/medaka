@@ -1,0 +1,40 @@
+-- #1617/#1618 BYSTANDER — the new machinery is PRESENT and nothing asserted
+-- here uses it.
+--
+-- "The feature works" is what the sibling fixtures test. This one tests the
+-- question no gate normally asks: is the code that has NOTHING to do with the
+-- change still correct? The change adds a new head-tag bucket (`__fun__`) and
+-- makes `headTyNode` peel effect rows, both of which are consulted by EVERY
+-- dispatch in the program, not only by the ones that need them. So an
+-- arrow-headed impl and an effect-headed impl are declared below and never
+-- dispatched to, while the assertions are about:
+--
+--   * an ordinary ADT-headed impl of the SAME interface (`sz True`),
+--   * a plain non-interface function (`unwrap`),
+--   * prelude dispatch that predates all of this (`==` at `List Int`).
+--
+-- Expected `(48, True)`, hand-derived: `unwrap (Box 41)` = 41; `sz True` = 7
+-- via `impl Sz Bool` (NOT the arrow impl, which `Bool` cannot match, and NOT
+-- the effect impl, whose head peels to `Int`); 41 + 7 = 48; and
+-- `[1, 2, 3] == [1, 2, 3]` is `True`. Every one of those values is what the
+-- program printed before this change too — that is the point of the fixture.
+interface Sz a where
+  sz : a -> Int
+
+-- present, never dispatched to
+impl Sz (Int -> Int) where
+  sz _ = 5
+
+-- present, never dispatched to
+impl Sz (<Stdout> Float) where
+  sz _ = 6
+
+impl Sz Bool where
+  sz _ = 7
+
+data Box a = Box a
+
+unwrap : Box Int -> Int
+unwrap (Box n) = n
+
+main = println (unwrap (Box 41) + sz True, [1, 2, 3] == [1, 2, 3])

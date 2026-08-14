@@ -19882,11 +19882,32 @@ data EntailKind =
 -- LEGITIMATE selector call outside this ladder — it is the obligation channel's evidence
 -- check, not a routing decision — and is out of scope here.  An audit that greps the
 -- selector names without excluding it reports a false violation.
+-- 🚨 THE `inst` ARM PROJECTS THROUGH `headTyconMono`, THE DISPATCH-KEY PROJECTION,
+-- NOT THROUGH THE `headTyconNameMono` RESIDUAL IT READ UNTIL #1617.  This is the
+-- SAME repoint A-2.2b made at `goalHeadCon` and the three `implExistsForHead`
+-- receiver sites, arriving one site late: `entail` is a ROUTING decision (its
+-- result is stamped straight into a site's route ref by `resolveArgStamp`), so it
+-- owes the goal-side dispatch key, and the name-only residual can no longer
+-- express that argument now that the two answer differently at `TFun`.
+--
+-- MEASURED, this line alone is what kept #1617 open after both head projections
+-- and both definition-side tags already agreed on `__fun__`: an arg-position
+-- occurrence (`sz : a -> Int` dispatches on its ARGUMENT, so it is stamped here
+-- and not by `resolveSites`) took the `None => entailFallback` arm, left the site
+-- `RNone`, and the emitter arg-tag-dispatched over a closure.  The typed Core-IR
+-- dump showed `CMethod "sz" RNone` beside two correctly-tagged
+-- `CImplTagged "__fun__"` entries — impl side fixed, goal side fixed, route still
+-- unstamped.
+--
+-- ⚠️ The name is projected INSIDE the arm, not with `map headKeyName` over the
+-- `Option` — same reason `headTyconNameTy`/`headTyconNameMono` exist at all
+-- (`compiler/AGENTS.md`): Medaka is strict, so the combinator spelling would
+-- allocate a second `Option` on every entailment to throw it away.
 entail : ImplBuckets -> String -> Mono -> String -> EntailKind -> (Route, List Route)
 entail implTable name m encl kind = match entailAssum m encl name kind
   Some dname => (entailAssumRoute dname kind, [])
-  None => match headTyconNameMono m
-    Some tag => entailInst implTable name m encl tag kind
+  None => match headTyconMono m
+    Some hk => entailInst implTable name m encl (headKeyName hk) kind
     None => (entailFallback implTable kind, [])
 
 -- #412: `assum`, both halves.  DICT-SEMANTICS §3 pins the precedence — `assum`/`super`

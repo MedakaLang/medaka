@@ -1,0 +1,22 @@
+-- #1618 — the PERMUTATION pair for the effect-carrying head, Int-rowed impl
+-- declared FIRST. Partner: effect_head_impl_ba.mdk.
+--
+-- Expected `(2, 3)`, hand-derived: the rows are transparent, so these are impls
+-- at heads `Int` and `Bool` respectively — two distinct heads, no overlap, and
+-- `sz 0` / `sz True` each match exactly one. Declaration order cannot matter.
+--
+-- Why a pair at all when the filed repro has one impl: peeling the row moves
+-- these impls out of the shared headless bucket into two SEPARATE per-head
+-- buckets. A single-impl fixture cannot distinguish "peeled to the right head"
+-- from "peeled to any head at all", because with one candidate every bucket
+-- answers the same. Two impls that must land in DIFFERENT buckets can.
+interface Sz a where
+  sz : a -> Int
+
+impl Sz (<Stdout> Int) where
+  sz _ = 2
+
+impl Sz (<Stdout> Bool) where
+  sz _ = 3
+
+main = println (sz 0, sz True)
