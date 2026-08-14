@@ -2515,3 +2515,67 @@ interaction could hide, and offered the ~35-minute run. **Declined.** The merge 
 on a branch — and the standing rule is that the queue, not a local pass, is the authority. Burning 35
 minutes of a shared box with two other writers live to duplicate what the queue must do anyway is the
 wrong trade. **Flagging it rather than silently omitting it was exactly right.**
+
+## RUN-P45-068 — #1647 FILED by W6, with the sprint's best single line of diagnosis
+
+`S1: loud breakage` · `verified` · `ws:typecheck` · `ws:soundness`. Deduped against **eight** issues
+(the six I named plus two it found) and cross-referenced onto **#1354** as its natural absorbing stage.
+
+⭐ **The root cause is one line, and it is a MECHANISM rather than a symptom:** `inferOneImpl`
+destructures `DImpl { iface, tys, reqs, methods, ... }` and **`implOrigin` is dropped by the `...`** —
+while **four sibling sites build an `IfaceRef` from exactly that field.** That is what makes the dedup
+credible instead of assertive: you can point at a field present at four sites and absent at the fifth.
+It is **not** a `universe*` table at all — it is `ifaceMethodTy`'s linear `name == iface` scan over
+`allProg`, reached through `ifaceMethodTyResolved`'s **slow arm**.
+
+⭐ **The severity was defended by probing the S0 direction, not by failing to find one.**
+`ifaceMethodTyResolved`'s **fast** arm (the `check` path) reads the table *after*
+`applyMethodScopeOverrides` overlays it per module from the identity-keyed companion — **so `check` is
+structurally right and only the emit path bypasses the overlay.** Tested directly: a body ill-typed
+under its own interface and well-typed under the other's is **correctly rejected**, identically to the
+no-collision control. ⇒ valid program, loud at `build`, **no demonstrated silent wrongness → S1**, with
+the issue stating that an emit-path S0 variant would be a split-out and that none was found.
+
+**Coextensivity with Phase 4 stated in THREE places** — the issue, the fixture's `case.txt`, and the PR
+body — including, explicitly, that **#1646 is NOT a fix for #1647**.
+
+## RUN-P45-069 — RULING: do NOT squash under a live reviewer. W6's deviation ratified.
+
+W6 declined to amend its parent commit while the semantics lens was still running, put the coextensivity
+caveat in a new `docs(dispatch):` commit whose message leads with it, and **flagged the deviation rather
+than taking it silently.** Ratified: **force-pushing under a live reviewer invalidates that reviewer's
+arm mid-flight** — it would be measuring a tree that no longer exists, the same class of error two
+agents closed by hand tonight. The separate commit solves the real problem (a `git log` reader seeing
+`fix(dispatch):` with no caveat) at none of that cost.
+
+**Two habits worth keeping, both W6's:**
+- It confirmed legA's set equality **from history** — no commit in `adf3afcc..bd65dbfb` touches legA at
+  all — rather than from #1638's *stated* verdict. Corroboration from an independent channel, not a
+  second reading of the same claim.
+- It reported the #1638 interaction as **measured** (`dict_semantics` passes *including its three new
+  `s3-constrained-*` fixtures*), not as expected.
+
+⚠️ **And its parting note is the one most likely to be lost, so it is recorded here:** the two owed
+follow-ups are **NOT the same size.** `methodReqCountRef` is a **question** (is that table read on the
+flat path?) and answering it may be all it needs. `selfFnParamTable`/`lookupSelfFnParams` is a
+**change**: `ifaceOrigin` is reachable but **not currently bound** in `ifaceSelfFnParamEntries`, so it
+needs a binder — and it fails **closed**, so its symptom is a *lost* `LTy` refinement rather than a
+wrong one. *"'Same shape, same fix' is the inference that would make the second one look cheaper than
+it is."*
+
+## RUN-P45-070 — #1643 (S1) ALSO CONFLICTING; merge dispatched with PROPORTIONATE re-verification
+
+Its 12 green checks predate the conflict and will not re-run until it is resolved; **#1645 (S2) is
+stacked on it**, so this unblocks both.
+
+**Ruled: do NOT re-run the full 424-case IR diff.** S1's neutrality argument is **structural** — every
+query is minted `ifaceRefBare`, so `tyConIdsConflict`'s `(Some, Some)` arm is unreachable and the answer
+cannot move *regardless of base*. Re-running 424 cases to re-confirm a structural property, on a box
+with two other writers, is the wrong trade. **Targeted re-run over the 13 discriminating carriers only**
+(5 in `llvm_fixtures_modules`, 8 in `dict_fixtures`), with `s6-c1-xmod-same-spelled-ifaces-accepted/`
+named as load-bearing and not to be simplified. ⚠️ **If the targeted subset shows any difference, that
+falsifies the structural argument and is far more interesting than a green** — instructed to stop and
+report rather than investigate.
+
+Also carried into that brief: **rebuild the oracles BEFORE capturing a golden** (RUN-P45-067), since the
+capture path shares `check_all_main` and has no staleness guard.
