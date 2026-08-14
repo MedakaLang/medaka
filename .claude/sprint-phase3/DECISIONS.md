@@ -1897,3 +1897,68 @@ probe confirms it is unobservable.
 
 ⚠️ Also: **`FINDINGS.md` has no F-9** — a numbering gap I created by appending F-10 out of band.
 Recorded so nobody hunts for a lost finding.
+
+---
+
+# RUN-P3-050 — 🎯 C4/I2, ASKED AGAIN AT THE END: **CONJUNCT 2 ONLY.**
+
+The contract reserves one broad-semantics consult for this and requires the question re-asked at the
+end. **Answered, with a program.**
+
+> **Evidence is now order-invariant. The instance consulted is not.**
+> **Same shape as Stage A's failure, one layer in.**
+
+## The conjuncts, stated so they can be falsified
+
+- **Conjunct 1 — "the same instance set":** *which `ImplRow` discharges each site* — observable as the
+  executed body and the callee `@mdk_impl_*` symbol inside the calling function. Falsified by a
+  permutation pair (import order the only variable) where either observable moves.
+- **Conjunct 2 — "the same evidence":** the minted route words — observable as the emitted symbol
+  **names**, their per-name bodies, and the `@mdk_dc_*` constants. Falsified by a permutation pair
+  whose evidence set differs beyond the benign class (function emission order + interned tag
+  renumbering) that the control establishes.
+
+Expected answers hand-derived from DICT §8 I4 **before any invocation**.
+
+## Measured — 5 programs × 2 import orders × 2 arms × 4 channels + IR
+
+| shape | base | branch |
+|---|---|---|
+| **covered** (same-spelled interfaces, impls at **distinctly-headed** types) | 🔴 **both conjuncts fail** — ONE symbol called twice, and *the body under that name* changes with import order; `(11,11)` / `(110,110)` on all four channels | ✅ **both hold** — two qualified symbols, each caller reaching its own, cross-order IR diff is exactly the benign class |
+| **uncovered** (same-spelled interfaces, impls at the **SAME head**, same method) | `(1,1)` ↔ `(2,2)` by import order | 🔴 **conjunct 2 HOLDS, conjunct 1 FAILS** — both qualified symbols emitted with order-invariant bodies, yet **both call sites call the same one**, and which one is import-order decided. Identical to base on all four channels, `check` exit 0, no diagnostic |
+| **P4 super-slot** | `201` | `201`; kept IR **byte-identical across orders AND base-vs-branch** — the sprint changed nothing here, consistent with RUN-P3-011 |
+| **control** (distinct names, distinct heads) | invariant | invariant — its 38-line cross-order IR diff *defines* the benign class |
+
+**The harness is positive-controlled by its own corpus**: the two shapes that produced real deltas
+went through the same machinery as the control that did not.
+
+## The boundary, as a PROPERTY rather than a list of programs
+
+> On the branch, C4/I2 holds **iff every constrained call site's candidate scan — keyed by
+> `(method name, head type)` with no interface or origin component — yields exactly ONE row.**
+
+Identity was threaded into the route **word** (evidence) but **not into the selection key**, so
+wherever two impls share a method name *and* a head type the row is chosen by declaration/import
+order **upstream of any word**, on every engine, silently. **The sprint made the wrong choice
+NAMEABLE in the IR without making it right** — the branch emits both instances, correctly labelled,
+then order-dependently picks one. A strict improvement on base (which additionally *dropped* an
+instance and let the evidence itself flip), and **not the conjunction**.
+
+## 🚨 What this means for Phase 4 — and it CORROBORATES AD-2 from a different direction
+
+- **Phase 4 must key the frozen admissibility table by INTERFACE IDENTITY (`module::Iface`), not by
+  `(method, head)`.** The obligation minted from one module's interface may only be discharged by an
+  impl *of that interface*. ⚠️ **If Phase 4 freezes admissibility computed by the CURRENT selector,
+  it freezes the order-dependence** — the table must be built from identity, not from spelling and
+  method-name membership.
+- **Phase 5 must make the engines CONSUME that table** rather than re-run their independent
+  `(method, head)` families. ⚠️ **Cross-engine agreement will not detect a Phase 5 miss** — measured
+  here, all engines currently agree on the *same wrong, order-dependent* answer. **Only a permutation
+  differential can see it.**
+- The discriminating regression program is the uncovered shape above; it belongs in
+  `test/import_order_fixtures/` as a known-bad ledger row.
+
+## The framing this sprint set out with, honoured
+
+The contract warned: *"the failure mode to guard against is delivering conjunct 2 and calling it the
+conjunction."* **We delivered conjunct 2, and we are calling it conjunct 2.**
