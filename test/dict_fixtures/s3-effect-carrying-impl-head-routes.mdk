@@ -1,0 +1,46 @@
+-- §3 head projection + §7 single-evaluator law at an EFFECT-CARRYING impl head —
+-- the #1618 DRAIN. Permanent home of `test/must_fail_fixtures/
+-- 1618-effect-carrying-impl-head-cannot-build/`, which pinned the broken behaviour.
+--
+-- WAS: the two head projections DISAGREED. `typecheck.headTyconTy` matched only
+-- `TyCon`/`TyTuple`, so a `TyEffect` head answered None and this impl landed in the
+-- `noneHeadTag` bucket; eval's and `core_ir_lower`'s `headTycon` STRIPPED the effect
+-- to the inner head `Int`. The front end therefore resolved the call and the EMITTER
+-- could not find what it had resolved:
+--   `check --json` -> {"diagnostics":[]}, exit 0
+--   `run`          -> 2, exit 0                                     (CORRECT)
+--   `build`        -> exit 1, no binary:
+--      runtime error [E-PANIC]: no impl of method 'sz' for type '__none__'
+--
+-- There is no overlap here to be rejected for and nothing ambiguous: ONE interface,
+-- ONE impl, ONE call. The only impl of `Sz` matching the receiver is this one, so
+-- `sz 0` is its body — 2 — which `run` already printed. The defect was never the
+-- value; it was that `build` could not reach the impl.
+--
+-- ⚠️ SO THE LOAD-BEARING CELL OF THIS ROW IS THE **BUILD** ARM, not the value.
+-- `check` and `run` were both already correct pre-fix and their cells pass on a
+-- compiler that never had this bug and on one that still does. Section 1's
+-- `ALL_EXACT` mode is what makes the row discriminate: it requires `build` to
+-- ACCEPT and its stdout to be byte-identical to `run`'s and to the pinned `2`, so a
+-- regression that puts the effect-carrying head back into the `__none__` bucket
+-- fails on the build cell alone. This is exactly the check/run-agree-build-diverges
+-- blindness §7 exists for, and the reason a value-only reading of this row would
+-- be vacuous.
+--
+-- ⚠️ ONE IMPL BLOCK, so Section 4 does not derive a permutation pair for this file —
+-- correctly: there is no declaration order to be free of. Its sibling drain,
+-- `s3-fn-typed-impl-heads-discriminated.mdk`, carries that axis.
+--
+-- ⚠️ NOT #1617 (the FUNCTION-typed head, where every stage agreed on None and the
+-- fix was to give `TyFun` a tag; here the two projections DISAGREED and the fix was
+-- to reconcile them) and NOT #1180 (the bare-`TyVar` arm, where None is intended).
+-- The CROSS-MODULE form of this shape behaved identically pre-fix (byte-identical
+-- E-PANIC); the single-file form is kept because it is the smaller repro, not
+-- because the defect was ever single-file-only.
+interface Sz a where
+  sz : a -> Int
+
+impl Sz (<Stdout> Int) where
+  sz _ = 2
+
+main = println (sz 0)
