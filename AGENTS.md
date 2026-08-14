@@ -605,6 +605,18 @@ Override with `NO_STALE_CHECK=1` only if you know exactly why. `diff_native_cli`
 bootstrap suites are especially stale-prone when invoked OUTSIDE `run_gates.sh` (e.g. bare
 `sh test/diff_native_cli.sh`) — force-rebuild before trusting a pass/fail from those.
 
+🚨 **THE GOLDEN-CAPTURE PATH READS THE SAME ORACLES AND HAS NO GUARD AT ALL — so a stale
+oracle does not just mis-report a gate, it can BLESS A WRONG GOLDEN, which is permanent.**
+`sh test/capture_goldens.sh --frozen selfproc_legA` and `sh test/diff_compiler_selfproc.sh`
+both read `test/bin/check_all_main`; `run_gates.sh` would refuse on its mtime, and neither of
+those invoked directly will. Measured 2026-08-15 on PR #1640: after merging `main`, the
+LEG A golden was re-derived against an oracle built **before** the merge — the gate read
+`16 ok, 0 failing` and the bless looked clean. Rebuilding the oracles and re-deriving from
+scratch produced a byte-identical golden, **so the artifact was right and the evidence for it
+was not.** ⇒ **After ANY merge or rebase, rebuild the oracles BEFORE capturing a golden**, and
+prefer routing the check through `run_gates.sh` afterwards so the guard is in the loop. A
+wrong gate verdict is loud on the next run; a wrong golden becomes the expected output.
+
 **Parallelism.** The oracle build, `run_gates.sh`, the heavy compiler gates, and every wasm
 gate fan out across an `xargs -P` pool — cap with `JOBS=n`, or `INNER_JOBS=n` for per-gate
 fan-out inside `run_gates.sh`. Opt-level knobs (`EMITTER_OPT` -O2, `ORACLE_OPT` -O0,

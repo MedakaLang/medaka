@@ -2476,3 +2476,42 @@ incapable of moving #1579.** *"What made mine look close is the SYMPTOM — a fa
 ⭐ **And it named its shape's own fingerprint:** *"exchanging two module names makes the identical
 program compile"* — order-dependence, which is the signature of spelling-keyed selection specifically
 and which none of the four candidates has.
+
+## RUN-P45-067 — 🚨 A STALE ORACLE CAN BLESS A WRONG GOLDEN, AND NOTHING GUARDS THAT PATH. Landed in AGENTS.md.
+
+W2 merged `main` into #1640 (which had moved by **two** merges, #1638 and #1639), pinned
+`BASE=bd65dbfb` first because `origin/main` moves under a shared `.git`, and took both golden families
+wholesale from `BASE` — then **caught itself about to report a green it had not earned.**
+
+`diff_compiler_selfproc.sh` and `capture_goldens.sh --frozen selfproc_legA` **both read
+`test/bin/check_all_main`**, and it had built that oracle **before** the merge. Invoked directly, both
+bypass `run_gates.sh`'s staleness guard. So its first `16 ok, 0 failing` — **and the golden it blessed**
+— were measured against an oracle that did not reflect #1638.
+
+⇒ It rebuilt the oracles, reset LEG A to `BASE`, re-derived from scratch, and got a **byte-identical**
+result. **The artifact was right and the evidence for it was not**, which is the distinction that
+matters: a wrong gate verdict is loud on the next run, **a wrong golden becomes the expected output.**
+`AGENTS.md` warned that gates are stale-prone outside `run_gates.sh`; it did **not** say the *capture*
+path shares the oracle and has no guard. **Now it does.**
+
+**Re-measured on the merged tree, all five, nothing moved:** snapshot 202/202 · selfproc 16/0 (fresh
+oracles) · check-self PASS · iface_order 5/5 · must_fail 98/98 · plus 12/12 on the resolve/check family
+routed **through `run_gates.sh` specifically so the guard was in the loop.**
+
+**It did not trust the source auto-merge either** — `compiler/types/typecheck.mdk` merged without
+conflict, and it verified both sides survived: its own two markers present, its delta vs `BASE`
+comment-only at `+23/−1`, and **zero lines of #1638's removed.**
+
+**LEG A `+5/−0`, `frontend.resolve.golden` only**, all five bindings its own. ⭐ **And the sharper
+negative it reported rather than the easy one:** `types.typecheck`'s LEG A schemes match `BASE`
+**exactly** — which is the real evidence there is no #1638 interaction, since #1638's head-tag change
+lands in *that* file and a scheme-level interaction would surface there first. "Nothing in must_fail
+moved" is the weaker claim; it gave both.
+
+### RULING on its `unchecked:` — do NOT run `dict_semantics` locally before enqueue
+It flagged that #1638 added three fixtures to that gate and touched it, making it the one place an
+interaction could hide, and offered the ~35-minute run. **Declined.** The merge queue runs it
+**unnarrowed against the merged result**, which is strictly stronger than a local run of the same gate
+on a branch — and the standing rule is that the queue, not a local pass, is the authority. Burning 35
+minutes of a shared box with two other writers live to duplicate what the queue must do anyway is the
+wrong trade. **Flagging it rather than silently omitting it was exactly right.**
