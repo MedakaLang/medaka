@@ -386,11 +386,12 @@ test, every candidate through native build AND wasm build AND `medaka run`). The
   Stage-1 TRMC context (`WasmEmit`'s `trmcCtx`). H2b.7 adds lambda IDs, ordered lifted
   definitions, named-lift de-duplication, and function-reference list/set state;
   former lifted-name Ref was unread duplicate authority and is retired. H2b.8 adds coded
-  stderr-trap import state (`WasmEmit`'s `trapImportNeeded`). H2b.9 adds per-emission divisor-local,
-  record-update-local, RNG, hash, and ePut/panic stderr-runtime demand without widening trap-only
-  runtime output. The typed entry pins top-level,
+stderr-trap import state (`WasmEmit`'s `trapImportNeeded`). H2b.9 adds per-emission divisor-local,
+record-update-local, RNG, hash, and ePut/panic stderr-runtime demand without widening trap-only
+runtime output. H2b.10 moves one fact, `hashFloat` runtime demand, into `WasmEmit`; census
+coverage is ownership-only. The typed entry pins top-level,
   nested-lift, fresh no-writer, post-lift attribution, and trap-import isolation across
-  strict, record, and census routes; `diff_wasm_typed.sh` re-derives 25 remaining ambient
+strict, record, and census routes; `diff_wasm_typed.sh` re-derives 24 remaining ambient
   top-level `Ref`s: output, feature, numeric, and dispatch. H2b and #1407 stay open.
 - **`$boxint` equality/compare through a poly HOF is by VALUE** (no ref-identity bug).
 - **NaN `compare`/`min`/`max` are engine-UNIFORM today** (all three engines: `Eq`,

@@ -302,7 +302,6 @@ for required in \
   'setRef emit.useRng True' \
   'setRef emit.useHash True' \
   '|| emit.useRng.value || emit.useHash.value || useFloatRef.value' \
-  'setRef useFloatHashRef True in setRef emit.useHash True' \
   'setRef useFloatRngRef True in setRef emit.useRng True'; do
   grep -F -- "$required" "$WASM_SRC" >/dev/null || {
     echo "FAIL H2B9-RNG-HASH-AUTHORITY: missing $required"
@@ -310,13 +309,30 @@ for required in \
   }
 done
 EXPECTED_MODULE_REFS="$(printf '%s\n' \
-  useStrRef useListRef useArrayRef useRefBoxRef \
+  floatGlobalsRef \
+  floatLocalsRef \
+  numPolyLocalsRef \
+  tupleAritiesRef \
+  useArgsRef \
+  useArrayRef \
+  useCharClassRef \
+  useCharFromCodeRef \
+  useFileBytesRef \
+  useFloatRef \
+  useFloatRngRef \
+  useFloatStrRef \
+  useIORef \
+  useListRef \
+  useMathRef \
+  useRefBoxRef \
+  useStrCodecRef \
   useStrLeafRef \
-  useFloatRef useFloatHashRef useMathRef useFloatRngRef useFloatStrRef \
-  useStrSearchRef useValueCmpRef useValueArithRef numPolyLocalsRef useStrCodecRef \
-   useCharFromCodeRef useCharClassRef useIORef useArgsRef useFileBytesRef \
-   floatLocalsRef floatGlobalsRef tupleAritiesRef wDispCtxRef \
-  wDispGroupsRef | LC_ALL=C sort -u)"
+  useStrRef \
+  useStrSearchRef \
+  useValueArithRef \
+  useValueCmpRef \
+  wDispCtxRef \
+  wDispGroupsRef)"
 ACTUAL_MODULE_REF_SIGS="$(awk '
   /^[A-Za-z_][A-Za-z0-9_]*[[:space:]]*:[[:space:]]*Ref([[:space:]]|$)/ { print $1 }
   /^export[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]*:[[:space:]]*Ref([[:space:]]|$)/ { print $2 }
@@ -329,11 +345,36 @@ ACTUAL_MODULE_REF_DEFS="$(awk '
 ' "$WASM_SRC" | LC_ALL=C sort -u)"
 if [ "$ACTUAL_MODULE_REF_SIGS" != "$EXPECTED_MODULE_REFS" ] ||
     [ "$ACTUAL_MODULE_REF_DEFS" != "$EXPECTED_MODULE_REFS" ]; then
-  echo "FAIL H2B8-AUTHORITY-SET: top-level Ref authority set changed"
+  echo "FAIL H2B10-FLOAT-HASH-AUTHORITY: top-level Ref authority set changed"
   printf '  observed signatures:\n%s\n' "$ACTUAL_MODULE_REF_SIGS"
   printf '  observed definitions:\n%s\n' "$ACTUAL_MODULE_REF_DEFS"
   exit 1
 fi
+if grep -E '^_?useFloatHashRef[[:space:]]*[:=]|setRef (_?useFloatHashRef)' "$WASM_SRC" >/dev/null; then
+  echo "FAIL H2B10-FLOAT-HASH-AUTHORITY: retired ambient hashFloat authority remains"
+  exit 1
+fi
+for required in \
+  'useFloatHash : Ref Bool' \
+  'useFloatHash = Ref False' \
+  'setRef emit.useFloatHash True' \
+  '(progEmit prog).useFloatHash.value'; do
+  grep -F -- "$required" "$WASM_SRC" >/dev/null || {
+    echo "FAIL H2B10-FLOAT-HASH-AUTHORITY: missing $required"
+    exit 1
+  }
+done
+grep -F 'let _ = if name == "hashFloat" then let _ = setRef emit.useFloatHash True in setRef emit.useHash True else ()' "$WASM_SRC" >/dev/null &&
+  grep -F 'let hashFloatRt = if (progEmit prog).useFloatHash.value then hashFloatRuntimeLines else []' "$WASM_SRC" >/dev/null &&
+  ! grep -E 'setRef emit\.useFloatHash False|setRef useFloatHashRef False' "$WASM_SRC" >/dev/null || {
+  echo "FAIL H2B10-FLOAT-HASH-ROUTES: writer, reader, or retired reset changed"
+  exit 1
+}
+grep -F 'emitProgram input cp = emitProgramWith (freshWasmEmit WGapStrict) input cp' "$WASM_SRC" >/dev/null &&
+  [ "$(grep -F 'let emit = freshWasmEmit WGapRecord' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 2 ] || {
+  echo "FAIL H2B10-FLOAT-HASH-ROUTES: strict, record, census freshness routes changed"
+  exit 1
+}
 for required in \
   'currentBinding : Ref String' \
   'currentBinding = Ref "?"' \

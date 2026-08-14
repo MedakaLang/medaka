@@ -106,7 +106,8 @@ divisor-local, record-update-local, RNG, hash, and stderr-runtime demand; trap-o
 retain only the byte-writer import.
 `emitProgram`/record/census
 mint the context and `Prog` routes these helpers without changing successful WAT order.
-`diff_wasm_typed.sh` re-derives 25 remaining ambient top-level `Ref`s: output, feature,
+X-W.H2b.10 moves one fact, `hashFloat` runtime demand, into `WasmEmit`; census coverage is
+ownership-only. `diff_wasm_typed.sh` re-derives 24 remaining ambient top-level `Ref`s: output, feature,
 numeric, and dispatch. H2b/#1407 stay open. Do not add new ambient semantic-input or
 gap-lifecycle siblings.
 
