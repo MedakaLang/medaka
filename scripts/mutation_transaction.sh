@@ -44,6 +44,7 @@ work=$(mktemp -d "${TMPDIR:-/tmp}/medaka-mutation.XXXXXX") || exit 2
 baseline_copy=$work/baseline
 cp "$source_path" "$baseline_copy" || { rm -rf "$work"; exit 2; }
 check_log=$work/check.log
+prepare_log=$work/prepare.log
 child_pid=
 check_pgid=
 
@@ -140,10 +141,20 @@ after_mutation_status=$(git -C "$repo" status --porcelain)
 }
 
 if [ -n "$prepare_cmd" ]; then
-  (cd "$repo" && MUTATION_SOURCE=$source_path MUTATION_REPO=$repo MUTATION_REL=$rel sh -c "$prepare_cmd") || {
+  perl -MPOSIX -e 'POSIX::setsid() >= 0 or die "setsid: $!"; exec @ARGV or die "exec: $!"' \
+    sh -c "cd \"\$1\" && MUTATION_SOURCE=\"\$2\" MUTATION_REPO=\"\$1\" MUTATION_REL=\"\$3\" sh -c \"\$4\"" \
+    sh "$repo" "$source_path" "$rel" "$prepare_cmd" >"$prepare_log" 2>&1 &
+  child_pid=$!
+  check_pgid=$child_pid
+  wait "$child_pid"
+  prepare_status=$?
+  child_pid=
+  stop_check || exit 125
+  if [ "$prepare_status" -ne 0 ]; then
     echo "transaction $label: prepare command failed" >&2
+    cat "$prepare_log" >&2
     exit 3
-  }
+  fi
 fi
 
 # Perl/POSIX::setsid is the same portable process-control substrate used by the

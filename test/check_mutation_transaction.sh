@@ -78,6 +78,33 @@ export REAL_GIT
 grep -F 'MUTATION-RESTORED path=source.txt' "$WORK/no-index.out" >/dev/null || fail "no-index restoration receipt"
 clean
 
+# Prepare uses the same supervised process-group lifecycle as check. TERM must
+# reap a resistant descendant and restore without waiting for prepare to finish.
+"$HELPER" --source "$SOURCE" --mutate "$MUTATE" \
+  --prepare "echo \$\$ > '$WORK/prepare.pid'; (trap '' TERM; touch '$WORK/prepare.started'; sleep 30; touch '$WORK/prepare-delayed.write') & leaf=\$!; echo \$leaf > '$WORK/prepare-leaf.pid'; wait" \
+  --check "$CHECK" --expect '^TXN-EXPECTED-RED$' --label prepare-signal \
+  >"$WORK/prepare-signal.out" 2>"$WORK/prepare-signal.err" &
+prepare_helper_pid=$!
+i=0
+while [ "$i" -lt 100 ] && [ ! -f "$WORK/prepare.started" ]; do
+  sleep 0.05
+  i=$((i + 1))
+done
+[ "$i" -lt 100 ] || { kill -TERM "$prepare_helper_pid" 2>/dev/null || true; wait "$prepare_helper_pid" 2>/dev/null || true; fail "prepare signal setup did not start"; }
+kill -TERM "$prepare_helper_pid" || fail "could not signal helper during prepare"
+set +e
+wait "$prepare_helper_pid"
+prepare_signal_status=$?
+set -e
+[ "$prepare_signal_status" -eq 143 ] || fail "prepare TERM status was $prepare_signal_status, expected 143"
+prepare_pid=$(cat "$WORK/prepare.pid")
+process_alive "$prepare_pid" && fail "prepare process survived TERM"
+prepare_leaf=$(cat "$WORK/prepare-leaf.pid")
+process_alive "$prepare_leaf" && fail "prepare descendant survived TERM"
+sleep 0.2
+[ ! -e "$WORK/prepare-delayed.write" ] || fail "prepare wrote after restoration"
+clean
+
 "$HELPER" --source "$SOURCE" --mutate "$MUTATE" \
   --check "(trap '' TERM; sleep 30; touch '$WORK/ordinary-delayed.write') & leaf=\$!; echo \$leaf > '$WORK/ordinary-leaf.pid'; echo TXN-EXPECTED-RED; exit 17" \
   --expect '^TXN-EXPECTED-RED$' --label ordinary-child >"$WORK/ordinary.out" 2>"$WORK/ordinary.err" || fail "ordinary child transaction"
