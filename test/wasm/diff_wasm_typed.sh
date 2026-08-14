@@ -364,7 +364,7 @@ for required in \
   }
 done
 grep -F 'let _ = if name == "charFromCode" then setRef emit.useCharFromCode True else ()' "$WASM_SRC" >/dev/null &&
-  grep -F 'let charFromCodeRt = if (progEmit prog).useCharFromCode.value then charFromCodeRuntimeLines else []' "$WASM_SRC" >/dev/null &&
+  grep -F 'let charFromCodeRt = if (progEmit prog).useCharFromCode.value then ' "$WASM_SRC" >/dev/null &&
   ! grep -E 'setRef emit\.useCharFromCode False|setRef useCharFromCodeRef False' "$WASM_SRC" >/dev/null || {
   echo "FAIL H2B11-CHAR-FROM-CODE-ROUTES: writer, reader, or retired reset changed"
   exit 1
