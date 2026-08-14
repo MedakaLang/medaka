@@ -316,7 +316,6 @@ EXPECTED_MODULE_REFS="$(printf '%s\n' \
   useArgsRef \
   useArrayRef \
   useCharClassRef \
-  useCharFromCodeRef \
   useFileBytesRef \
   useFloatRef \
   useFloatRngRef \
@@ -345,11 +344,41 @@ ACTUAL_MODULE_REF_DEFS="$(awk '
 ' "$WASM_SRC" | LC_ALL=C sort -u)"
 if [ "$ACTUAL_MODULE_REF_SIGS" != "$EXPECTED_MODULE_REFS" ] ||
     [ "$ACTUAL_MODULE_REF_DEFS" != "$EXPECTED_MODULE_REFS" ]; then
-  echo "FAIL H2B10-FLOAT-HASH-AUTHORITY: top-level Ref authority set changed"
+  echo "FAIL H2B11-CHAR-FROM-CODE-AUTHORITY: top-level Ref authority set changed"
   printf '  observed signatures:\n%s\n' "$ACTUAL_MODULE_REF_SIGS"
   printf '  observed definitions:\n%s\n' "$ACTUAL_MODULE_REF_DEFS"
   exit 1
 fi
+if grep -E '^_?useCharFromCodeRef[[:space:]]*[:=]|setRef (_?useCharFromCodeRef)' "$WASM_SRC" >/dev/null; then
+  echo "FAIL H2B11-CHAR-FROM-CODE-AUTHORITY: retired ambient authority remains"
+  exit 1
+fi
+for required in \
+  'useCharFromCode : Ref Bool' \
+  'useCharFromCode = Ref False' \
+  'setRef emit.useCharFromCode True' \
+  '(progEmit prog).useCharFromCode.value'; do
+  grep -F -- "$required" "$WASM_SRC" >/dev/null || {
+    echo "FAIL H2B11-CHAR-FROM-CODE-AUTHORITY: missing $required"
+    exit 1
+  }
+done
+grep -F 'let _ = if name == "charFromCode" then setRef emit.useCharFromCode True else ()' "$WASM_SRC" >/dev/null &&
+  grep -F 'let charFromCodeRt = if (progEmit prog).useCharFromCode.value then ' "$WASM_SRC" >/dev/null &&
+  ! grep -E 'setRef emit\.useCharFromCode False|setRef useCharFromCodeRef False' "$WASM_SRC" >/dev/null || {
+  echo "FAIL H2B11-CHAR-FROM-CODE-ROUTES: writer, reader, or retired reset changed"
+  exit 1
+}
+[ "$(grep -F 'setRef emit.useCharFromCode True' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
+  [ "$(grep -F '(progEmit prog).useCharFromCode.value' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] || {
+  echo "FAIL H2B11-CHAR-FROM-CODE-ROUTES: expected one charFromCode writer and reader"
+  exit 1
+}
+grep -F 'emitProgram input cp = emitProgramWith (freshWasmEmit WGapStrict) input cp' "$WASM_SRC" >/dev/null &&
+  [ "$(grep -F 'let emit = freshWasmEmit WGapRecord' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 2 ] || {
+  echo "FAIL H2B11-CHAR-FROM-CODE-ROUTES: strict, record, census freshness routes changed"
+  exit 1
+}
 if grep -E '^_?useFloatHashRef[[:space:]]*[:=]|setRef (_?useFloatHashRef)' "$WASM_SRC" >/dev/null; then
   echo "FAIL H2B10-FLOAT-HASH-AUTHORITY: retired ambient hashFloat authority remains"
   exit 1
@@ -1050,6 +1079,89 @@ for float_hash_name in p1 u p2; do
   [ "$FLOAT_HASH_RUN_STATUS" -eq 0 ] && [ ! -s "$INPUT_WORK/feature-hash-float-$float_hash_name.run.err" ] &&
     cmp -s "$INPUT_WORK/feature-expected.out" "$INPUT_WORK/feature-hash-float-$float_hash_name.run.out" || {
       echo "FAIL H2B10-FLOAT-HASH-EXEC: inert execution $float_hash_name"
+      exit 1
+    }
+done
+
+# H2b.11 capture-only apparatus. P selects charFromCode through both its applied
+# CApp route and a bare CVar eta wrapper; U retains the Char/String neighborhood
+# through charToStr while excluding selected-helper artifacts.
+CHAR_FROM_CODE_OUT="$INPUT_WORK/char-from-code.out"
+"$EMITBIN" --reemit-char-from-code-state >"$CHAR_FROM_CODE_OUT" 2>"$INPUT_WORK/char-from-code.err"
+CHAR_FROM_CODE_STATUS=$?
+[ "$CHAR_FROM_CODE_STATUS" -eq 0 ] && [ ! -s "$INPUT_WORK/char-from-code.err" ] || {
+  echo "FAIL H2B11-CHAR-FROM-CODE-STATUS: harness status/stderr"
+  exit 1
+}
+CHAR_FROM_CODE_MARKERS="$(awk '/^CHAR_FROM_CODE_(P1|RECORD_U|CENSUS_P_GAP|P2)_(BEGIN|END)$/ { print }' "$CHAR_FROM_CODE_OUT")"
+CHAR_FROM_CODE_EXPECTED_MARKERS="$(printf 'CHAR_FROM_CODE_P1_BEGIN\nCHAR_FROM_CODE_P1_END\nCHAR_FROM_CODE_RECORD_U_BEGIN\nCHAR_FROM_CODE_RECORD_U_END\nCHAR_FROM_CODE_CENSUS_P_GAP_BEGIN\nCHAR_FROM_CODE_CENSUS_P_GAP_END\nCHAR_FROM_CODE_P2_BEGIN\nCHAR_FROM_CODE_P2_END')"
+[ "$CHAR_FROM_CODE_MARKERS" = "$CHAR_FROM_CODE_EXPECTED_MARKERS" ] || {
+  echo "FAIL H2B11-CHAR-FROM-CODE-MARKERS: marker cardinality/order"
+  exit 1
+}
+feature_exact_capture CHAR_FROM_CODE_P1_BEGIN CHAR_FROM_CODE_P1_END "$CHAR_FROM_CODE_OUT" >"$INPUT_WORK/char-from-code-p1.wat" &&
+  feature_exact_capture CHAR_FROM_CODE_RECORD_U_BEGIN CHAR_FROM_CODE_RECORD_U_END "$CHAR_FROM_CODE_OUT" >"$INPUT_WORK/char-from-code-u.wat" &&
+  feature_exact_capture CHAR_FROM_CODE_CENSUS_P_GAP_BEGIN CHAR_FROM_CODE_CENSUS_P_GAP_END "$CHAR_FROM_CODE_OUT" >"$INPUT_WORK/char-from-code-census.events" &&
+  feature_exact_capture CHAR_FROM_CODE_P2_BEGIN CHAR_FROM_CODE_P2_END "$CHAR_FROM_CODE_OUT" >"$INPUT_WORK/char-from-code-p2.wat" || {
+  echo "FAIL H2B11-CHAR-FROM-CODE-CAPTURE: malformed capture"
+  exit 1
+}
+for char_from_code_file in char-from-code-p1.wat char-from-code-u.wat char-from-code-census.events char-from-code-p2.wat; do
+  [ -s "$INPUT_WORK/$char_from_code_file" ] || {
+    echo "FAIL H2B11-CHAR-FROM-CODE-CAPTURE: empty $char_from_code_file"
+    exit 1
+  }
+done
+cmp -s "$INPUT_WORK/char-from-code-p1.wat" "$INPUT_WORK/char-from-code-p2.wat" || {
+  echo "FAIL H2B11-CHAR-FROM-CODE-P-IDENTITY: P changed after record U and census"
+  exit 1
+}
+cmp -s "$INPUT_WORK/char-from-code-p1.wat" "$INPUT_WORK/char-from-code-u.wat" && {
+  echo "FAIL H2B11-CHAR-FROM-CODE-P-U: P/U positive control did not differ"
+  exit 1
+}
+for char_from_code_p in char-from-code-p1.wat char-from-code-p2.wat; do
+  [ "$(grep -F '(func $mdk_char_from_code' "$INPUT_WORK/$char_from_code_p" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
+    [ "$(grep -F 'call $mdk_char_from_code' "$INPUT_WORK/$char_from_code_p" | wc -l | tr -d '[:space:]')" -eq 2 ] &&
+    [ "$(grep -F '(func $mdk_ext_charFromCode' "$INPUT_WORK/$char_from_code_p" | wc -l | tr -d '[:space:]')" -eq 1 ] || {
+      echo "FAIL H2B11-CHAR-FROM-CODE-P-PRESENCE: helper/direct-call/eta wrapper in $char_from_code_p"
+      exit 1
+    }
+done
+if grep -F '$mdk_char_from_code' "$INPUT_WORK/char-from-code-u.wat" >/dev/null ||
+   grep -F '$mdk_ext_charFromCode' "$INPUT_WORK/char-from-code-u.wat" >/dev/null; then
+  echo "FAIL H2B11-CHAR-FROM-CODE-U-ABSENCE: nearest miss emitted selected helper"
+  exit 1
+fi
+grep -F '(func $mdk_char_to_str' "$INPUT_WORK/char-from-code-u.wat" >/dev/null || {
+  echo "FAIL H2B11-CHAR-FROM-CODE-U-NEIGHBORHOOD: nearest miss lost charToStr"
+  exit 1
+}
+CHAR_FROM_CODE_EVENT=$'fn charFromCodeIntentionalGap\tunbound variable \'missingCharFromCodeCensus\' (not a local, global value, constructor, or known function) [in charFromCodeIntentionalGap]'
+[ "$(wc -l < "$INPUT_WORK/char-from-code-census.events")" -eq 1 ] &&
+  [ "$(cat "$INPUT_WORK/char-from-code-census.events")" = "$CHAR_FROM_CODE_EVENT" ] || {
+    echo "FAIL H2B11-CHAR-FROM-CODE-CENSUS: exact one attributed gap"
+    exit 1
+  }
+for char_from_code_name in p1 u p2; do
+  char_from_code_wat="$INPUT_WORK/char-from-code-$char_from_code_name.wat"
+  wasm-tools parse "$char_from_code_wat" -o "$INPUT_WORK/char-from-code-$char_from_code_name.wasm" 2>"$INPUT_WORK/char-from-code-$char_from_code_name.parse.err"
+  CHAR_FROM_CODE_PARSE_STATUS=$?
+  [ "$CHAR_FROM_CODE_PARSE_STATUS" -eq 0 ] && [ ! -s "$INPUT_WORK/char-from-code-$char_from_code_name.parse.err" ] || {
+    echo "FAIL H2B11-CHAR-FROM-CODE-PARSE: wasm-tools parse $char_from_code_name"
+    exit 1
+  }
+  wasm-tools validate --features=all "$INPUT_WORK/char-from-code-$char_from_code_name.wasm" 2>"$INPUT_WORK/char-from-code-$char_from_code_name.validate.err"
+  CHAR_FROM_CODE_VALIDATE_STATUS=$?
+  [ "$CHAR_FROM_CODE_VALIDATE_STATUS" -eq 0 ] && [ ! -s "$INPUT_WORK/char-from-code-$char_from_code_name.validate.err" ] || {
+    echo "FAIL H2B11-CHAR-FROM-CODE-VALIDATE: wasm-tools validate $char_from_code_name"
+    exit 1
+  }
+  "$NODE" "$RUNJS" "$INPUT_WORK/char-from-code-$char_from_code_name.wasm" >"$INPUT_WORK/char-from-code-$char_from_code_name.run.out" 2>"$INPUT_WORK/char-from-code-$char_from_code_name.run.err"
+  CHAR_FROM_CODE_RUN_STATUS=$?
+  [ "$CHAR_FROM_CODE_RUN_STATUS" -eq 0 ] && [ ! -s "$INPUT_WORK/char-from-code-$char_from_code_name.run.err" ] &&
+    cmp -s "$INPUT_WORK/feature-expected.out" "$INPUT_WORK/char-from-code-$char_from_code_name.run.out" || {
+      echo "FAIL H2B11-CHAR-FROM-CODE-EXEC: inert execution $char_from_code_name"
       exit 1
     }
 done

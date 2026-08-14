@@ -1,0 +1,6 @@
+-- W11b: point-free charFromCode reaches its extern eta closure before application.
+apply f x = f x
+
+main = match apply charFromCode 65
+  Some c => charToStr c
+  None => "none"
