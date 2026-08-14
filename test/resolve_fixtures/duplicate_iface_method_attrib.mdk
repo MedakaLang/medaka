@@ -1,0 +1,17 @@
+-- DuplicateInterfaceMethod through a `@attrib`-WRAPPED interface declaration.
+--
+-- ⭐ WHY THIS FIXTURE EXISTS SEPARATELY. `interfaceList` -- the function the sibling
+-- duplicate-interface-NAME check reads -- has NO `DAttrib` arm: an attributed
+-- `interface` falls to its wildcard and is invisible to it. Q1 therefore walks the
+-- decls itself (`ownInterfaceMethods`, attribute-aware) rather than widening
+-- `interfaceList`, which would have silently widened that sibling check too. If a
+-- later change "simplifies" Q1 onto `interfaceList`, this file stops being rejected
+-- and the plain duplicate_iface_method.mdk above would not notice.
+@inline
+interface E1 a where
+  n : a -> Int
+
+interface E2 a where
+  n : a -> Int
+
+main = println 0
