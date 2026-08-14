@@ -1,0 +1,14 @@
+import shared.{Box(..)}
+
+export interface Same a where
+  foo : a -> Int
+
+export impl Same (Box a) where
+  foo _ = 11
+
+-- The reason this fixture exists: a CONSTRAINED STANDALONE. Calling it stamps a dict
+-- ROUTE, which is the leg B-4b-ii deliberately left spelling-keyed, so this program
+-- exercises the checker leg (identity) and the router leg (spelling) on the SAME
+-- goal.
+export useIt : Same a => a -> Int
+useIt x = foo x

@@ -1,0 +1,10 @@
+-- THE ONLY DIFFERENCE FROM THE SIBLING: this is the module WITHOUT a `requires`, and
+-- it is now the one that sorts first. Nothing else moved — same spellings, same head,
+-- same methods, same bodies, same values.
+import shared.{Box(..)}
+
+export interface Same a where
+  foo : a -> Int
+
+export impl Same (Box a) where
+  foo _ = 1
