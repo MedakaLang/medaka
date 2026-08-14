@@ -52,6 +52,82 @@ grep -F 'MUTATION-RED label=focused check_status=17 evidence=TXN-EXPECTED-RED' "
 grep -F 'MUTATION-RESTORED path=source.txt sha256=' "$WORK/focused.out" >/dev/null || fail "focused restoration receipt"
 clean
 
+RECEIPT=$WORK/receipt-success
+"$HELPER" --source "$SOURCE" --mutate "$MUTATE" --prepare 'echo PREPARED-LOG' --check "$CHECK" \
+  --expect '^TXN-EXPECTED-RED$' --label retained --receipt-dir "$RECEIPT" \
+  >"$WORK/retained.out" 2>"$WORK/retained.err" || fail "retained receipt transaction"
+grep -Fx "$MUTATE" "$RECEIPT/mutate.cmd" >/dev/null || fail "mutation command not retained"
+grep -Fx "$CHECK" "$RECEIPT/check.cmd" >/dev/null || fail "check command not retained"
+grep -F 'PREPARED-LOG' "$RECEIPT/prepare.log" >/dev/null || fail "prepare log not retained"
+grep -F 'TXN-EXPECTED-RED' "$RECEIPT/check.log" >/dev/null || fail "check log not retained"
+grep -F "baseline_sha256=$BASE_HASH" "$RECEIPT/metadata.txt" >/dev/null || fail "baseline hash not retained"
+grep -F 'check_status=17' "$RECEIPT/metadata.txt" >/dev/null || fail "check status not retained"
+grep -F 'decisive_evidence=TXN-EXPECTED-RED' "$RECEIPT/metadata.txt" >/dev/null || fail "decisive evidence not retained"
+grep -F "restored_sha256=$BASE_HASH" "$RECEIPT/metadata.txt" >/dev/null || fail "restored hash not retained"
+grep -F 'restoration=proved-clean' "$RECEIPT/metadata.txt" >/dev/null || fail "restoration proof not retained"
+clean
+
+UNREADABLE_RECEIPT=$WORK/receipt-list-failure
+mkdir "$UNREADABLE_RECEIPT" || fail "create list-failure receipt"
+printf 'OLD-EVIDENCE\n' >"$UNREADABLE_RECEIPT/metadata.txt"
+mkdir "$WORK/fail-ls" || fail "create failing ls shim directory"
+cat >"$WORK/fail-ls/ls" <<'EOF'
+#!/bin/sh
+exit 9
+EOF
+chmod +x "$WORK/fail-ls/ls"
+if PATH="$WORK/fail-ls:$PATH" "$HELPER" --source "$SOURCE" --mutate "$MUTATE" --check "$CHECK" \
+  --expect '^TXN-EXPECTED-RED$' --label list-failure --receipt-dir "$UNREADABLE_RECEIPT" \
+  >"$WORK/list-failure.out" 2>"$WORK/list-failure.err"; then
+  fail "failed receipt listing accepted"
+fi
+grep -F 'could not inspect receipt directory' "$WORK/list-failure.err" >/dev/null || fail "failed receipt listing diagnostic"
+grep -Fx 'OLD-EVIDENCE' "$UNREADABLE_RECEIPT/metadata.txt" >/dev/null || fail "failed listing overwrote existing evidence"
+clean
+
+NEWLINE_RECEIPT=$WORK/receipt-newline-name
+mkdir "$NEWLINE_RECEIPT" || fail "create newline-name receipt"
+perl -e 'open my $fh, ">", "$ARGV[0]/\n" or die $!' "$NEWLINE_RECEIPT" || fail "create newline-only filename"
+if "$HELPER" --source "$SOURCE" --mutate "$MUTATE" --check "$CHECK" \
+  --expect '^TXN-EXPECTED-RED$' --label newline-name --receipt-dir "$NEWLINE_RECEIPT" \
+  >"$WORK/newline-name.out" 2>"$WORK/newline-name.err"; then
+  fail "newline-only receipt entry accepted"
+fi
+grep -F 'receipt directory exists and is not empty' "$WORK/newline-name.err" >/dev/null || fail "newline-only receipt diagnostic"
+clean
+
+BROKEN_RECEIPT=$WORK/receipt-write-failure
+set +e
+"$HELPER" --source "$SOURCE" --mutate "$MUTATE" \
+  --prepare "rm '$BROKEN_RECEIPT/metadata.txt' && ln -s /dev/full '$BROKEN_RECEIPT/metadata.txt'" \
+  --check "$CHECK" --expect '^TXN-EXPECTED-RED$' --label receipt-write-failure \
+  --receipt-dir "$BROKEN_RECEIPT" >"$WORK/receipt-write-failure.out" 2>"$WORK/receipt-write-failure.err"
+receipt_write_status=$?
+set -e
+[ "$receipt_write_status" -eq 125 ] || fail "receipt write failure status was $receipt_write_status, expected 125"
+grep -F 'could not append receipt metadata' "$WORK/receipt-write-failure.err" >/dev/null || fail "receipt write failure diagnostic"
+clean
+
+if "$HELPER" --source "$SOURCE" --mutate "$MUTATE" --check "$CHECK" \
+  --expect '^TXN-EXPECTED-RED$' --receipt-dir "$REPO/in-repo-receipt" \
+  >"$WORK/in-repo.out" 2>"$WORK/in-repo.err"; then
+  fail "in-repository receipt directory accepted"
+fi
+grep -F 'receipt directory must be outside repository' "$WORK/in-repo.err" >/dev/null || fail "in-repository receipt diagnostic"
+[ ! -e "$REPO/in-repo-receipt" ] || fail "rejected receipt directory left behind"
+clean
+
+set +e
+"$HELPER" --source "$SOURCE" --mutate "$MUTATE" --check "$CHECK" \
+  --restore-check 'echo RESTORE-DETAIL; exit 9' --expect '^TXN-EXPECTED-RED$' \
+  --label restore-check-failure >"$WORK/restore-failure.out" 2>"$WORK/restore-failure.err"
+restore_failure_status=$?
+set -e
+[ "$restore_failure_status" -eq 125 ] || fail "restore-check failure status was $restore_failure_status, expected 125"
+[ "$(grep -F -c 'RESTORE-DETAIL' "$WORK/restore-failure.err")" -eq 1 ] || fail "restore-check detail not replayed exactly once"
+grep -F 'RESTORE CHECK FAILED' "$WORK/restore-failure.err" >/dev/null || fail "restore-check failure diagnostic"
+clean
+
 PREPARE='grep -q "^# MUTANT" "$MUTATION_SOURCE" && printf prepared > prepared.txt'
 RESTORE_CHECK='grep -q "^# Medaka" "$MUTATION_SOURCE" && rm -f prepared.txt'
 "$HELPER" --source "$SOURCE" --mutate "$MUTATE" --prepare "$PREPARE" --check "$CHECK" \
@@ -115,10 +191,13 @@ sleep 0.2
 clean
 
 if "$HELPER" --source "$SOURCE" --mutate "$MUTATE" --check 'echo WRONG-RED; exit 19' \
-  --expect '^RIGHT-RED$' --label mismatch >"$WORK/mismatch.out" 2>"$WORK/mismatch.err"; then
+  --expect '^RIGHT-RED$' --label mismatch --receipt-dir "$WORK/receipt-mismatch" >"$WORK/mismatch.out" 2>"$WORK/mismatch.err"; then
   fail "mismatched expected-red accepted"
 fi
 grep -F 'expected-red pattern not found' "$WORK/mismatch.err" >/dev/null || fail "mismatch diagnostic"
+grep -F 'WRONG-RED' "$WORK/receipt-mismatch/check.log" >/dev/null || fail "mismatch log not retained"
+grep -F 'transaction_status=4' "$WORK/receipt-mismatch/metadata.txt" >/dev/null || fail "mismatch status not retained"
+grep -F 'restoration=proved-clean' "$WORK/receipt-mismatch/metadata.txt" >/dev/null || fail "mismatch restoration not retained"
 clean
 
 "$HELPER" --source "$SOURCE" --mutate "$MUTATE" \

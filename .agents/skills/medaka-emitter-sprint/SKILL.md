@@ -66,6 +66,12 @@ count/cohesion, and mutation-plan completeness.
 
 A selected family must pass all of these gates:
 
+Select the smallest candidate by an independently movable semantic fact, not by
+shared syntax, file locality, or carrier convenience. Before admitting a
+multi-field cohort, compare every isomorphic one-field residual and record why
+none is independently movable. Prefer the one-field slice when its producer,
+consumer, lifecycle, and fail-capable proof close without another field.
+
 1. one bounded implementer turn reaches a compile-coherent boundary;
 2. semantic inputs stay in immutable input/validated-plan carriers;
 3. all relevant declarations, producers, consumers, fallbacks, callers, and
@@ -123,9 +129,15 @@ verification of the current family, but it is invalidated by any intervening
 source change that can affect its census, routes, apparatus, or acceptance
 boundary. Re-admit it against the new exact head before dispatch.
 
-Only the conductor integrates. Never share a writer worktree, merge generated
+Only the conductor integrates. An isolated writer may have a read-only shared
+Git index: require a coherent working-tree diff plus check receipts, not a local
+commit. The conductor applies/commits that diff and verifies its exact integrated
+head. Never share a writer worktree, merge generated
 goldens, or allow two branches to derive snapshots from different compiler
 states. Compiler-source landings and their exact-head measurements are serial.
+Run mutation matrices only after integration, from a clean conductor-owned
+worktree; writer-local mutation evidence is exploratory and cannot satisfy the
+final exact-head matrix.
 
 ## 5. Checkpoint every integrated family
 
