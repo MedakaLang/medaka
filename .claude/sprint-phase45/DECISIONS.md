@@ -1443,3 +1443,47 @@ template, and three standing constraints stated explicitly: **do NOT symmetrize 
 arm counts), **count the readers of the changed projection two levels out** (#1629 narrowed acceptance
 through three of them at 11/12 green), and the **nearest-miss** test. Refusal licensed in the brief in
 the terms that earned their place on the sibling bite.
+
+## RUN-P45-039 — S1 site census (reader, pinned to `401e3e30`, no build). Four findings.
+
+**1. `sameTyConHead`'s absence arm is a WILDCARD, not a never-match — and that is what makes S1
+byte-neutral on the flat path.** Quoted (`ast.mdk:496-507`): `sameTyConHead n1 o1 n2 o2 = n1 == n2 &&
+not (tyConIdsConflict o1 o2)`, and `tyConIdsConflict` answers `False` unless BOTH origins are
+identities and they differ. So the only answer that moves is *same spelling, two known different
+declarations* — exactly the case the bite intends to catch. ⚠️ The contrasting rule
+`ifaceIdMatches` (`ast.mdk:139-140`, `a != "" && a == b`) is the LOOKUP-direction comparator where
+absence never matches; picking it here would turn every unstamped flat-driver interface into a
+non-match. **This is the plan-of-record's trap 2 ("lookup and filter need DIFFERENT comparators")
+appearing as a concrete choice between two named functions.**
+
+**2. Blast radius is ONE FILE.** No member of the family is `export`ed and there is no non-comment
+reference outside `compiler/types/typecheck.mdk` (hits in `core_ir_lower`, `route_key`, `registry`,
+`llvm_emit` are all comments). The risk is internal plumbing, not an API break.
+
+**3. The supply is not uniform — three grades, and the site list is now leaf-traced:**
+- **Site A** (`concreteReqMatchByIface :22889`) — `findMatchingImplReqsU` already holds an `IfaceRef`
+  and projects `.irName` purely to satisfy the narrow callee. Widening DELETES the projection. Zero
+  plumbing.
+- **Sites C / C′** (`keyForSiteByIface :20087`, `ieHeadCollidesByIface :19277`) — **the real bite.**
+  The `String` lives inside two DATA declarations (`EKNestedTop`'s payload; `CountImpls`), so supply
+  means widening both plus ~12 signatures. Roots trace to `CSlot.csIface` (an `IfaceRef`, projected
+  to `.irName` at `:9277` and `:12480`) — recoverable, but that projection is a **documented
+  deliberate decision** (route words stay spellings), and `ifaceFromDictApps` (`:26606`) reads the
+  channel back expecting a `String`.
+- **Root C3** (`argImplReqRoutes :20447`) — cheapest supply (`Require` already carries
+  `requireOrigin`, `ast.mdk:1042`) and **highest odds of a real behaviour change**: the query origin
+  is stamped by resolve on a `requires` clause while the row origin comes from `DImpl.implOrigin`.
+  Different stamping paths ⇒ a disagreement silently DROPS a `requires` route.
+
+**4. 🚨 A hazard that is dead only by a comment, not by a type.** `ifaceIdentity` (`ast.mdk:121`)
+maps `OriginBuiltin` to `""` (absence); `identOriginOf` (`ast.mdk:324`) maps it to
+`Some IdentBuiltin` (a real identity). Hence `sameTyConHead "Eq" OriginBuiltin "Eq" (OriginModule
+"core")` is **False — a conflict**, where today's `==` on the spelling answers True. Anywhere the
+widened plumbing mints `OriginBuiltin` for an interface, byte-neutrality breaks. Two comments assert
+that is unreachable for an interface; **the S1 bite must verify that rather than inherit it.**
+
+⚠️ Also flagged by the reader and NOT to be lost: `ieHeadCollidesByIface` decides which word
+`keyForSiteByIface` stamps (canonical vs bare). A count falling 2→1 under the widened comparator is a
+**dict-cell byte change**, and `core_ir_lower.ifaceDeclHeadUnique` counts over a different table and
+would not follow — the skew the file's own `:19315-19330` records as previously producing exit 0 plus
+a segfault. **The S1 bite's byte-identical bar is therefore load-bearing, not ceremonial.**
