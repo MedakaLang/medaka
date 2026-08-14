@@ -2310,3 +2310,72 @@ pins with their load-bearing steps confirmed and controls proven fail-capable.
 
 **Bottom line: no false reject, no missed member of the intended set.** The one widening it thought it
 had found was its own probe asking the wrong question.
+
+## RUN-P45-063 — S2 LANDS AS PR #1645, and it is the sprint's strongest bite. It also DRAINED something.
+
+Branched from S1. **12/12 green, not enqueued, nothing closed.** C3a YES · C3b YES ·
+`dict_semantics` 196/196 (5 new assertions) · `selfproc` 16/0 · fixtures taken to the **executed
+binary** (3 / 3 / 33, hand-derived first).
+
+### ⭐⭐ The decisive argument was NOT "an origin is available here" — it was that the function DISAGREED WITH ITSELF
+`findMatchingImplReqsU`'s headless fallback leg has **always** been identity-keyed (`univHeadless` →
+`oblIfaceKey` → `TkIdent`), while its concrete leg — **tried first** — re-minted bare and asked a
+spelling question **over the same population**. An internal contradiction is a far stronger warrant for
+a re-key than an availability claim, and it is the shape I should have briefed for. **Supplied at that
+one site; every other site LEFT BARE with its reason.**
+
+`entailInst`'s `EKNestedTop` arm and `argImplRequiresRoutes` share **one** `iface` variable — which is
+how §6 C2 (dispatch impl == context-discharged impl) is held **by construction** — and their upstream
+projects `csIface.irName` deliberately ("route words, not identities"). *"There is no trustworthy origin
+there, only one to invent."* Exactly the rule the brief set: **a wrong identity is worse than an absent
+one.**
+
+**The count ruling held without needing to be enforced:** identity was supplied only on a leg that
+stamps **no route word**, so no collision count moved, `keyForSiteByIface` never flipped between
+canonical key and bare head tag, and the `ifaceDeclHeadUnique` skew is not in play.
+
+**`OriginBuiltin`: DERIVED unreachable for an interface** — the only `iface:`-tagged origin writers mint
+`OriginModule`; `builtinTyOrigins` keys under the bare name in the *type* namespace, so
+`omLookup (ifaceKey n)` cannot return it. Corroborated on a binary: every `iface:` row of the
+origin-agreement corpus reads `mod:…`, prelude `Eq`/`Ord`/`Debug` included. **Latent, not live.** S1
+declined to certify it; S2 discharged it, which is the hand-off working.
+
+### 🚨 ARRIVAL DEMONSTRATED POSITIVELY — and it exposed a live FALSE REJECT the branch DRAINS
+Built before touching code: two unrelated modules each declaring `interface Same a`, both impl'd at the
+shared head `Box a`, one carrying `requires Eq a`. Using the **context-free** impl is rejected with
+`No impl of Eq for Opaque` — *a constraint the program never wrote, imposed by a foreign class* — on
+`check`, `run` **and** `build`. **Exchanging the two module names makes the identical program compile.**
+Both orderings committed as a pair; either alone passes an order-decided compiler.
+
+⇒ Sent for dedup against **#1579** (residual reducer commits to a general impl's `requires` while the
+goal is free — falsely rejects), #1457, #1302, #1326. **If it drains one, this is the sprint's first
+user-visible fix rather than architectural hardening.**
+
+### IR evidence, and it graded the right channel
+424 cases / eight corpora: **422 identical, 0 IR-byte differences, 2 status differences** — both the new
+fixtures, `base=1 → branch=0`, **both predicted before the run.** ⭐ **Rejecting cases compared on
+DIAGNOSTIC TEXT, not exit code**, so the narrowing direction is graded — independently avoiding the
+blindness another reviewer found in its own sweep tonight. Harness proven fail-capable by a one-byte
+injection applied **after both arms built** (poisoned case flips, neighbour does not).
+
+### 🚨 `MEDAKA_STRICT=1` CANNOT BE USED ON BOTH ARMS OF A TWO-ARM DIFFERENTIAL — landed in AGENTS.md
+Staleness is computed against `<exeDir>/compiler` and two arms share one compiler tree by construction,
+so the older arm exit-1s on **every** case and the run reports *"everything differs"*. S2's first run
+did exactly that. ⇒ **Assert freshness once, on the arm where it can be true.** Second AGENTS.md trap
+of the night about two-arm differentials, after the `stdlib/*` one.
+
+### `main` moved under it mid-task, landing #1638 in the SAME file — handled correctly
+Both golden families moved; only `source_lines=` conflicted textually and **everything else auto-merged
+cleanly into a blend.** It took both wholesale from `origin/main` and **re-derived from a rebuilt
+binary**, then re-ran every measurement on the merged tree. That is the documented remedy executed
+without being reminded — and the hazard is real precisely because a blended golden IS the oracle, so no
+gate can flag it.
+
+**Unchecked, reported not filed, and possibly serious:** a `requires`-bearing impl whose body ignores
+its dict emits `define … @mdk_impl_Box_bar(i64 %arg0)` **while its call site passes two arguments** —
+measured on the BASE arm, single-module, so pre-existing. **A definition of arity 1 called with 2 args
+is a calling-convention mismatch, which is the shape that segfaults.** Repro requested; ORCH will
+reproduce and file.
+
+**My brief was wrong on one point:** I said S1's IR-diff harness was on its branch. It was not — S1
+touches three files, none a harness — so S2 wrote its own, and its own grades diagnostic text.

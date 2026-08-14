@@ -285,6 +285,15 @@ warning; **`MEDAKA_STRICT=1`** promotes it to a hard `exit 1`, useful when you n
 you're not debugging or verifying against a stale binary (`checkSourceStaleness`,
 `compiler/driver/medaka_cli.mdk`).
 
+🚨 **`MEDAKA_STRICT=1` CANNOT BE USED ON BOTH ARMS OF A TWO-ARM DIFFERENTIAL — it turns the
+base arm into `exit 1` on EVERY case and the run reports "everything differs".** Staleness is
+computed against `<exeDir>/compiler`, and a two-arm comparison shares one compiler tree by
+construction, so the older arm's baked fingerprint can never match the source beside it. That
+is not a stale binary; it is the guard doing its job on a layout it was not designed for.
+Measured 2026-08-15 on PR #1645, where the first differential run reported a total divergence
+for exactly this reason. ⇒ **Assert freshness ONCE, on the arm where it can be true**, and run
+the comparison itself without it — or give each arm its own `compiler/` tree.
+
 🚨 **THE WARNING GOES TO STDERR, NEVER STDOUT — so `2>/dev/null` HIDES IT and a probe that
 reads stdout will never see it.** `checkSourceStaleness` emits it with `ePutStrLn` and
 nothing else prints it (`grep -rn 'may be stale; rebuild' compiler/` finds one site,
