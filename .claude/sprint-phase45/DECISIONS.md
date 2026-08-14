@@ -1548,3 +1548,56 @@ Three things this ruling BINDS on the bite, so none of them can be quietly dropp
    check is written over the seeded set (`pIfaces`/`expIfaceMethods`, seeded from `preludeDecls` at
    `resolve.mdk:1608,2763,2836`), every user interface declaring `map`/`eq`/`compare` is rejected and
    the blast radius stops being 10. **Pin the prelude case with a fixture that must still compile.**
+
+## RUN-P45-042 — 🚨 P0-G's Q1 PREMISE IS REFUTED, and the refutation makes Q1 CHEAPER
+
+Reader, pinned, no build. P0-G §C.1 asserts — with three derivations — that
+*"resolve has NO value-name duplicate check at all."* **False.** Five exist [read]:
+`R-DUPLICATE-DEF` for duplicate **type**, **constructor** and **interface NAME**
+(`resolve.mdk:1928`/`:1929`/`:1930`), plus `R-DUPLICATE-SIGNATURE` (`:1734`) and `R-DUP-BINDING`
+(`:1762`). What P0-G is *right* about is narrower and is documented as deliberate at `:1720-1733`:
+there is no check for a multi-clause function-name collision without a repeated signature.
+
+⇒ **Consequence for the bite, and it is good news: `resolve.mdk:1930` IS the template, line for line.**
+
+```medaka
+duplicateErrors preludeDecls prog =
+  let ifaceSeed = whenL seed (map fst (interfaceList preludeDecls))
+  … ++ map (dupErr "interface") (findDups ifaceSeed (map fst (interfaceList prog)))
+```
+
+It already demonstrates the **exact prelude-exclusion mechanism RUN-P45-041 rules for**: the module's
+own set is `interfaceList prog`; the prelude enters only as a *seed*, which Q1 simply **omits**.
+Imports are not in the picture at all — `buildErrors` (`:1664`) has no `known` table, and it is the
+one import-independent error pass BOTH resolve entry points run (`:2056`, `:2064`, `:3096`). So the
+ruled scope is achieved by construction at that site, not by a guard.
+
+⚠️ **Rejected placements, with what each gets wrong:** `checkInterfaceDecl` (`:1379`) sees only `Env`,
+whose `interfaces`/`ifaceMethods` are **prelude+imports-merged** (`:1624-1625`, `:2784`) — wrong set;
+`buildEnvMM` (`:2763`) is multi-module only, so a check there is **invisible to `medaka check
+one.mdk`**; `expIfaceMethodsDirect` (`:2930`) is `pub`-filtered and carries re-exports — wrong on
+both ends.
+
+**Three constraints the writer must carry:**
+1. **`interfaceList` has NO `DAttrib` arm** (`:1509` falls to the wildcard) while `interfaceNamesOf`
+   (`:4133`) recurses into it. An `@attrib`-decorated `interface` is **invisible** to the template
+   function — the #1228 family exactly. Follow `interfaceNamesOf`'s shape, and pin an attributed
+   interface in the fixture set.
+2. **`DInterface` carries NO `Loc`** (`ast.mdk:1210`; `declLoc` `:1871` has arms for `DAttrib`/
+   `DFunDef` only, so `DInterface` hits `_ = None`), and `IfaceMethod` (`ast.mdk:1021`) has none
+   either. Per-method name spans exist ONLY in the parser (`declNameSpanOf`/`methodNameIdxs`) and do
+   not survive to resolve. ⇒ **The diagnostic will be location-less like its sibling
+   (`dupErr … None`), or best-effort via `firstTyLoc`** — and `firstTyLoc` yields `None` for a fully
+   parametric signature. "Point at the second declaration" is not achievable here without an AST
+   change. Say that in the PR rather than shipping a wrong span.
+3. **Resolve is PURE — there is no `pushResolveError` family** (`resolve.mdk:8`). A new `ResError`
+   constructor must touch its five exhaustive consumers: `data ResError` (`:93`), `resErrorLoc`
+   (`:214`), `resErrorSexp` (`:1971` — feeds the `resolve_modules` gate), `ppResError` (`:2078`),
+   `resErrorCode` (`:2140`); `resErrorDidYouMean` has a wildcard and needs nothing. Goldens that move:
+   `test/snapshots/compiler/resolve.md` and `test/check_json_fixtures/*.check_json.golden`.
+
+⭐ **Direct authority for the scope ruling, found by the reader:** the RESERVED row
+`W-PRELUDE-METHOD-SHADOW` (`DIAGNOSTIC-CODES-DESIGN.md:280`) specifies the *prelude*-collision case as
+a **warning, explicitly not an error**, per `SHADOW-SEMANTICS.md` S1-PRELUDE, owned by **#1499**. So
+Q1 rejecting a prelude collision would not merely be over-broad — it would **contradict a written
+spec ruling and pre-empt another issue's deliverable.**
