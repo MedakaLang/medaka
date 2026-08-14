@@ -2,6 +2,65 @@
 
 ---
 
+## ✅ 2026-08-14: Stage B Phase 0 CLOSED, arm set + G-0 landed. **No known-red gates from this run.**
+
+Sprint contract: `.claude/STAGE-B-PHASE45-SPRINT.md`. **Full records and every ruling:
+`.claude/sprint-phase45/DECISIONS.md`** (RUN-P45-001 … 035) — read that before re-deriving anything
+below.
+
+**Merged:** PR **#1631** (G-0, the interface-order differential) · PR **#1629** (the `headTyconTy`
+arm set, closing #1617 + #1618 on merge). Nothing is expected-red; a red gate now is a real break.
+
+### 🚨 The sprint doc's own §2/§4 are SUPERSEDED. Do not plan off them.
+Phase 0 measured five of its premises wrong. The corrections, each derived first-hand:
+
+| the doc says | measured at HEAD |
+|---|---|
+| the `_ => None` arm set is `TyFun`/`TyEffect`/`TyConstrained` | **wrong member**: `TyConstrained` was ruled a non-defect *for a headless body only* — a **headed** body IS a defect (**#1630**). `TyRow` is swallowed too but doubly guarded (non-defect) |
+| 4b is "one line, inside one file" | the `*ByIface` peer is keyed by a bare **`String`**, not identity. The real fix is **upstream in `resolve.mdk`**, which has **no value-name duplicate check at all** |
+| Phase 4 keys on `(method, head)` | the admissibility table is keyed **`(bare iface, bare method)` — no head component** |
+| AD-2's `CProgram` carrier | **dead** — `compiler/eval/eval.mdk` has zero `CProgram` occurrences and no `ir.` import, so a 5th field cannot reach one of the two consumers |
+| `CProgram` has 13 construction sites | **29**, and 23 are in a file the emitter arc is actively rewriting |
+
+### The plan of record for the next sprint
+Landing order. **Phase 4 takes route α** (freeze the table that already exists, off `List Decl`),
+which is decidable today and strictly cheaper than the `IE`-derived alternative.
+
+| # | unit | state |
+|---|---|---|
+| 1 | arm set — `TyFun` + `TyEffect` | ✅ merged (#1629) |
+| 2 | **G-0** interface-permutation instrument | ✅ merged (#1631) |
+| 3 | **Q1** — `resolve` rejects two same-method interfaces in one module | ready to cut |
+| 4 | **S1 → S2** — widen the `*ByIface` family to `IfaceRef`, supply real identity | ready to cut |
+| 5 | **Phase 4** — freeze admissibility, `Ref CAdmis` carrier, **two-tier key** | ready to cut |
+| 6 | **S3** — repoint the site-key selector | ⏸️ owner decision, separable, last |
+
+**Q and S are NOT redundant**, and the proof is in the tree: interface names are **not globally
+unique** — nothing enforces it across modules, only within one. Q reaches only the intra-module
+collision; the cross-module case (#1258's shape) needs identity keying.
+
+### 🚨 Three traps for whoever cuts unit 5
+1. **A naive identity key silently degrades the FLAT path.** Identity is the empty string when
+   unstamped, and the only legal comparator treats absence as never-matching — so an
+   identity-keyed lookup **misses on every flat lookup** and falls through a fail-open default,
+   quietly changing dispatch on single-file `check`, lsp, repl and doc. **A two-tier key is
+   required, and nothing in the charter says so.**
+2. **The lookup and the filter need DIFFERENT comparators**, and the source says so where they are
+   defined: one answers a LOOKUP (a miss is loud, a false hit is silent), the other ACCEPTANCE (a
+   false reject refuses a valid program) — *"neither shape may be copied to the other site."*
+3. **Count the READERS of any head projection you change, two levels out.** PR #1629 changed one
+   for dispatch and silently narrowed **acceptance** through three other readers; the tree warned
+   about exactly this six lines from the edited function, and 11/12 CI was green.
+
+### Still open, filed this run
+**#1630** (S1, headed constrained impl head) · **#1634** (S3, the order-permutation gates do not
+escape TAB while TAB is their field separator — a masking path in a detector) · **#1636** (S2, a
+fixture header claims base agrees where base segfaults; that fixture is a direct repro, not a
+bystander). Also still open and untouched: **#1608** (needs its own owner call — it is
+`core_ir_eval`, outside both typecheck and the emitter arc's LLVM/wasm scope) and **#1619/#1620**.
+
+---
+
 ## ✅ CLOSED (2026-08-14): Stage B / Phase 3′ — `B-2.2` MERGED as PR #1616 (`99fbccff`)
 
 🚨 **THE EXPECTED-RED SET BELOW IS SPENT. EVERY GATE IN IT IS GREEN ON `main`.**

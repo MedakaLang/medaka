@@ -977,9 +977,52 @@ or merely increasing a tool budget repeats the routing failure.
 
 ---
 
+## Do not commission a RED-BY-DESIGN gate. Commission a GREEN gate with a ledger. (2026-08-14)
+
+Building an instrument for a defect that is **not yet fixed**, the obvious brief is *"it must land
+RED — a green here is a failed bite."* I wrote exactly that. **The implementer landed it green with
+a ledger and overturned me, correctly**, citing a header this tree already had:
+
+> *"The gate is GREEN with rows present because a gate that lands red breaks `main` and teaches
+> people to ignore it. **The rows are what keep the green honest.**"*
+> — `test/IMPORT-ORDER-LEDGER.txt`
+
+**The red mandate was worse on my own stated requirement.** I had asked the instrument to
+discriminate four states (unfixed / shallow-fix / upstream-fix / deep-fix). A red-by-design gate
+must be excluded from CI or it reds the tree for everyone — so it never runs and rots — and it
+carries **one bit**, which cannot tell four states apart. The brief contradicted itself.
+
+A ledger row instead pins **every distinct signature** the case produces, and reds in three
+directions: **DRAINED**, **MOVED** (the partial fix — the case one bit cannot see), and a new
+unledgered divergence. Reserve red-on-landing for `test/must_fail_fixtures/`, whose contract
+already is *"assert this still reproduces, go red when it drains."*
+
+Two follow-ons worth carrying:
+- **Make the discriminator multi-channel** (exit code + sorted diagnostic codes + each verb's
+  stdout), never a single verdict. A same/different reading collapses the states you care about —
+  and distinguish a *resolve*-stage rejection from a *type*-stage one, or a deep fix reports as
+  the upstream fix.
+- **Prove the instrument can fail before trusting its green**, and separately prove the permuter
+  actually rewrote the file: *"found nothing"* and *"moved nothing"* produce identical readings.
+
+🎯 **The meta-lesson is about the brief, not the gate.** Mine described the prior art as *"five
+cells, no wasm arm"* — accurate, and it omitted that the file is a fully-developed ledger harness
+whose header argues against the design I was mandating. **Reading the file instead of my summary
+reversed the bite's central decision.** DERIVE-don't-encode applies to the orchestrator's own
+summary layer, which is exactly where nobody checks it.
+
 ## Parallelism & file hygiene
 
 ### 🚨 TELL EVERY AGENT TO WORK IN ITS OWN WORKTREE — SAY IT EXPLICITLY
+
+⚠️ **But do NOT tell a second writer to "check out the existing PR branch."** One branch can be
+checked out in only one worktree, and the first agent's worktree still holds it — `git checkout`
+hard-fails, *after* the new agent has spent ~2-3 min cold-bootstrapping. Three writers hit this in
+one session. Give them the working pattern instead: `git switch -c <local> origin/<branch>`, then
+`git push origin HEAD:<branch>`. Have them confirm the real ref with `gh pr view <N> --json
+headRefName` rather than trusting a branch name you relayed — I got one wrong.
+(Also: an isolated session must run `git -C <its-own-worktree> worktree add`, not a bare
+`git worktree add` from the shared checkout, which is refused.)
 
 **Two agents in one session independently ended up building in the ORCHESTRATOR'S worktree.** The
 harness injects the *orchestrator's* `CLAUDE.md`/`AGENTS.md` path into the agent's context, so an agent

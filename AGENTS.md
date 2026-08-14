@@ -560,6 +560,26 @@ make docs-index                        # regenerate docs/README.md (GENERATED �
 | `test/diff_compiler_tmc_parity.sh` | Both backends TMC the same functions (needs `sh test/wasm/build_wasm_oracle.sh`) |
 | `test/bootstrap_*.sh` | Each native pipeline stage == interpreter output |
 | `test/diff_compiler_must_fail.sh` | **The MUST-FAIL suite — the TRACKER's self-drain.** Each `test/must_fail_fixtures/*/` asserts one OPEN issue's bug **still reproduces**; when a fix lands the fixture flips green and **FAILS the gate**, naming the issue to close. **A RED here is usually a GOOD failure, not your break.** Runs in `soundness`, not a shard |
+
+⚠️ **When a pin DRAINS, the gate offers two remedies — prefer RE-POINTING it at a regression gate
+over deleting it.** Deleting removes the only executable memory that the shape was ever broken, and
+a drained fixture is not a drained *class*: on 2026-08-14 both #1617 and #1618 drained while
+**#1630** — the same arm, one type constructor over — stayed live. Re-pointing also tends to
+*recover* coverage, because the must-fail harness runs one `cmd:` plus one `control:`, so any
+second dimension a fixture carried (a permutation twin, a build-vs-run cell) was sitting there
+**ungraded**; moved into a differential gate it starts executing. Derive the destination — look for
+an existing gate that already owns siblings of that bug class — rather than inventing one.
+
+🚨 **A drain is invisible to the local loop.** `test/preflight.sh` does not map `soundness` at all
+(`grep -n must_fail test/preflight.sh` returns nothing), so neither `make preflight` nor
+`PREFLIGHT_DRY=1` will tell you a pin is about to flip. It surfaces only in CI. **And when the
+must-fail step fails, the steps AFTER it in that job are `skipped`** — including
+`typecheck_compiler_source.sh` and the C3b fixpoint, i.e. the two that catch an ill-typed compiler
+and a broken emitter. A red `soundness` you have "explained" as a licensed drain is therefore also
+a `soundness` that **ran neither of them**; read the step list, not the rollup:
+```sh
+gh api repos/MedakaLang/medaka/actions/jobs/<job-id> --jq '[.steps[] | "\(.conclusion) :: \(.name)"]'
+```
 | `test/check_removed_constructs.sh` | Tree-wide scan for stale uses of removed constructs (~2-3 min, `JOBS=` knob) |
 
 **Stale oracles:** `run_gates.sh` already derives which `test/bin/*` probes the SELECTED gates
