@@ -1,0 +1,6 @@
+-- PERMUTATION A: dogs imported before cats.
+import critters.{Dog(..), Cat(..), Tagged, tag}
+import dogs
+import cats
+
+main = putStrLn (tag Dog ++ " " ++ tag Cat)

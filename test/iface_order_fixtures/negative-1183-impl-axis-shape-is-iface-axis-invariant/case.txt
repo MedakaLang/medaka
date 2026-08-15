@@ -1,0 +1,40 @@
+entry: main.mdk
+what: A MEASURED NEGATIVE RESULT, kept as a case. A shape whose answer IS decided by
+what: `impl`-BLOCK order (#1183, still open) is INVARIANT under interface-declaration
+what: order. The two axes are independent for this shape. Unledgered, so the gate
+what: grades it as invariant.
+
+replaces: negative-1182-impl-axis-shape-is-iface-axis-invariant/, which carried
+replaces: #1182's declarations byte-for-byte — two interfaces sharing the method name
+replaces: `m`. Q1 (Stage B / Phase 4b) rejects that file on the declaration, so the
+replaces: proposition needed an impl-order-sensitive carrier that Q1 permits. #1183's
+replaces: open-goal shape is one, and the anchor issue moves with it.
+
+measured: On a binary built from this branch (base 401e3e30, cold `make medaka`):
+measured:   main.mdk            `run` -> 1, exit 0 (plus W-INCOMPARABLE-IMPLS)
+measured:   the two `impl Sh` blocks SWAPPED, nothing else changed
+measured:                       `run` -> 2, exit 0
+measured: so the impl axis decides the value, exactly as #1183 records, while both
+measured: orderings of `interface Sh` / `interface Tg` agree with each other.
+
+why-this-is-not-a-dead-permuter: The permuter finds n=2 interface chunks here and the
+why-this-is-not-a-dead-permuter: gate prints that count on the row, so a permuter that
+why-this-is-not-a-dead-permuter: stopped moving anything would fail this case's
+why-this-is-not-a-dead-permuter: >=2 requirement rather than read invariant. The
+why-this-is-not-a-dead-permuter: impl-axis measurement above is the other half: the
+why-this-is-not-a-dead-permuter: file is genuinely order-sensitive on SOME axis, so
+why-this-is-not-a-dead-permuter: its invariance here is a real negative result and
+why-this-is-not-a-dead-permuter: not an inert program.
+
+why-not-a-closed-goal: Within ONE interface, two overlapping impls at a CLOSED goal
+why-not-a-closed-goal: are rejected outright (`Ambiguous instance for 'A1'`, measured
+why-not-a-closed-goal: on this branch), so a closed-goal shape cannot carry an
+why-not-a-closed-goal: impl-order dependence at all. The goal here is left OPEN (`[]`
+why-not-a-closed-goal: leaves an unbound metavariable), which is what defers F-3d's
+why-not-a-closed-goal: coherence reject to a warning and lets the selector commit to
+why-not-a-closed-goal: the head of the candidate list.
+
+what-is-not-asserted: NOT that 1 is the correct answer. §6.2 T4 says a non-closed goal
+what-is-not-asserted: is DEFERRED to quiescence, which this compiler has no pass for;
+what-is-not-asserted: #1183 owns the dispute. This case asserts only that the two
+what-is-not-asserted: interface-declaration orderings agree with each other.

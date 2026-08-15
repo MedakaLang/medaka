@@ -1,0 +1,7 @@
+-- PERMUTATION B: cats imported before dogs. Byte-identical to main_permA.mdk
+-- except for the order of the two bare imports.
+import critters.{Dog(..), Cat(..), Tagged, tag}
+import cats
+import dogs
+
+main = putStrLn (tag Dog ++ " " ++ tag Cat)

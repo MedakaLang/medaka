@@ -1,34 +1,47 @@
--- #1620 — two interfaces in ONE file declare the SAME method name `ping` at
--- DIFFERENT return types, both implemented on one concrete type `T`.
+-- #1620 — RE-POSED ONTO THE CROSS-MODULE AXIS (2026-08-15). Two interfaces, declared in
+-- two DIFFERENT modules, declare the SAME method name `ping` at DIFFERENT return types,
+-- both implemented on one concrete type `T`. `check` accepts the program at exit 0 and the
+-- BUILT BINARY EXITS 0 DELIVERING A VALUE OF THE OTHER TYPE.
 --
--- `check` accepts the program at exit 0, having resolved `ping T` to Beta's
--- method (return type Int — raw-probe.mdk shows this directly: replacing the
--- comparand with a String makes `check` report `Type mismatch: Int vs String`).
--- Both engines then DELIVER Alpha's body: the built binary exits 0 printing the
--- raw machine word of the string "alpha" where an Int belongs, and the
--- interpreter E-PANICs with `intToString: not an Int`.
+-- ⚠️ WHY IT MOVED. The previous shape put both interfaces in THIS file. The Q1 unit
+-- (Stage B / Phase 4b) now rejects that on the declaration (R-DUPLICATE-IFACE-METHOD), so
+-- the old fixture stopped reaching the defect it pins and the must-fail gate reported it
+-- DRAINED. #1620 is NOT fixed by Q1: Q1 covers only the INTRA-module half --
+-- `duplicateErrors` runs inside `buildErrors`, which has no import table at all -- so
+-- nothing in it can see two interfaces that meet only through an `import`. That is where
+-- this bug now lives, and this file is it.
 --
--- HAND-DERIVED EXPECTATION. Which interface the occurrence of `ping` belongs to
--- is a name-resolution question and the answer is genuinely in dispute (cf.
--- #1182), so this file does NOT assert that Beta is the right choice. What is
--- assertable without settling that: A PROGRAM THE COMPILER ACCEPTS MUST DELIVER A
--- VALUE OF THE TYPE IT ACCEPTED IT AT. It was accepted at `ping T : Int` with
--- Beta's body being 7, so `ping T == 7` must be True. Every fix direction drains
--- this row:
---   * resolve consistently to Beta -> this prints True;
---   * resolve to Alpha            -> `ping T : String` and this file no longer
---                                    type-checks, so `medaka build` exits 1;
---   * reject the collision        -> likewise, `medaka build` exits 1.
+-- ⭐ HAND-DERIVED FROM THIS FILE'S OWN IMPORTS AND ITS OWN TWO INTERFACES. The expected
+-- value is NOT inherited from the shape this replaces, and must not be justified by citing
+-- it -- that fixture is gone and a pin whose reasoning points at a deleted file cannot be
+-- audited. The derivation, from scratch:
 --
--- ⚠️ WHY THE PROJECTION AND NOT THE RAW VALUE. The raw form's binary prints a
--- LIVE HEAP ADDRESS — measured three executions, three different values — so an
--- exact-match pin on it would red on the very next run for no reason. See
--- raw-probe.mdk, which is not graded.
-interface Alpha a where
-  ping : a -> String
-
-interface Beta a where
-  ping : a -> Int
+--   1. `import beta.{Beta, ping}` binds the METHOD NAME `ping`. `import alpha.{Alpha}`
+--      binds only an INTERFACE NAME. So the occurrence `ping T` below has EXACTLY ONE
+--      binding in scope: `Beta.ping : a -> Int`. There is no second denotation to choose
+--      between, and therefore no name-resolution question to settle.
+--   2. Hence `ping T : Int`, and `ping T == 7` is a well-typed Int comparison. Shown
+--      directly rather than assumed -- replacing the comparand with a String makes `check`
+--      report `Type mismatch: Int vs String` (measured), i.e. the front end really did
+--      resolve the occurrence to Beta.
+--   3. The only impl of `Beta` at `T` is `impl Beta T where ping _ = 7`, in this file.
+--   4. ⇒ `ping T` is 7, `ping T == 7` is True, and THIS PROGRAM MUST PRINT True.
+--
+-- Printing False means the program delivered `impl Alpha T`'s body -- the String "alpha" --
+-- where the type it was ACCEPTED at says Int. A PROGRAM THE COMPILER ACCEPTS MUST DELIVER A
+-- VALUE OF THE TYPE IT ACCEPTED IT AT; that is violated here with no diagnostic on any verb.
+--
+-- ⚠️ WHY THE PROJECTION AND NOT THE RAW VALUE. `main` compares to 7 rather than printing
+-- `ping T`: the raw form's built binary prints a LIVE HEAP ADDRESS, different on every
+-- execution, so an exact-match pin on it would red on the next run for a reason unrelated
+-- to this bug. raw-probe.mdk carries that channel and is not graded.
+--
+-- ⇒ EVERY FIX DIRECTION DRAINS THIS ROW:
+--   * select by interface identity -> `ping T` is 7 -> this prints True -> stdout moves;
+--   * reject the cross-module collision -> `medaka build` exits 1 -> the build-run verb
+--     returns a hard 126 -> the exit assertion fails.
+import beta.{Beta, ping}
+import alpha.{Alpha}
 
 data T = T
 

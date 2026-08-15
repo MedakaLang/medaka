@@ -1,0 +1,7 @@
+-- The interface and the type. Both impls below have the SAME head tycon (`Box`),
+-- so a dispatcher that keys on the argument's constructor TAG cannot tell them
+-- apart; only the receiver's TYPE can. That is the whole point of the fixture.
+public export data Box a = Box a
+
+export interface Tagged a where
+  tag : a -> String

@@ -1,0 +1,52 @@
+-- CONTROL — IT BOUNDS Q1's SCOPE. A method name shared with the PRELUDE must still
+-- be ACCEPTED, and must be invariant under interface-declaration order.
+--
+-- ⭐ WHY THIS CONTROL, AND WHAT IT REPLACED. Until Q1 (Stage B / Phase 4b) this slot
+-- held control-shared-method-name-disjoint-receivers/: two interfaces in this file
+-- both declaring `n`, with impls at DISJOINT receivers, asserted invariant. Q1
+-- rejects that shape ON THE DECLARATION, so it can no longer be written here at all
+-- -- and it is NOT re-posed elsewhere, because it is inexpressible. MEASURED, four
+-- ways, on a binary built from this branch:
+--   * both interfaces in THIS module          -> R-DUPLICATE-IFACE-METHOD (Q1);
+--   * this module's interface + an IMPORTED one -> the module's own declaration wins
+--     the name and the imported method is unreachable (`No impl of E1 for V`), so
+--     the second receiver cannot be observed;
+--   * two IMPORTED modules                    -> `Ambiguous occurrence: 'n' is
+--     exported by both `pu` and `pv``, already rejected before Q1;
+--   * this module's interface + the PRELUDE   -> the prelude side is shadowed and
+--     unreachable too (`No impl of Floor for Int`).
+-- So "one method name observed at two receivers" only ever existed in the first
+-- case, which is exactly what Q1 removes. See the PR for the transcripts.
+--
+-- ⭐ WHAT THIS ONE ASSERTS INSTEAD, and why it is the sharp control now: Q1's scope
+-- ruling is that the PRELUDE IS OUT (docs/spec/SHADOW-SEMANTICS.md S1-PRELUDE, held
+-- by #1499 under the reserved `W-PRELUDE-METHOD-SHADOW`). `Floor` declares
+-- `minBound`, which is core's `Bounded.minBound` -- a live prelude interface method
+-- with prelude impls. If Q1 ever seeds itself from the prelude, THIS FILE STOPS
+-- COMPILING and the row goes red. That is the only in-tree guard on that boundary.
+--
+-- how-established: not read off the engine. `minBound` here can only be `U` (it is
+-- the argument of `useU : U -> Int`), and `tag U` can only be `impl Tag U`; no
+-- ranking between interfaces is performed in either, so the answer is 4 + 5 = 9 in
+-- every ordering. `minBound` was chosen over `eq`/`map`/`hash` because those three
+-- break the prelude's OWN bodies at exit 1 today (a pre-existing #1499-adjacent
+-- residue, measured), which would make this control assert a failure rather than an
+-- acceptance.
+interface Floor a where
+  minBound : a
+
+interface Tag a where
+  tag : a -> Int
+
+data U = U
+
+impl Floor U where
+  minBound = U
+
+impl Tag U where
+  tag _ = 4
+
+useU : U -> Int
+useU u = tag u + 5
+
+main = println (useU minBound)

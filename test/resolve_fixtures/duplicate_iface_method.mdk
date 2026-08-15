@@ -1,0 +1,19 @@
+-- DuplicateInterfaceMethod (Q1, Stage B / Phase 4b): two `interface`s declared in
+-- ONE module declare the same METHOD name `n`.
+--
+-- ⭐ THERE IS NO OCCURRENCE OF `n` ANYWHERE IN THIS FILE, ON PURPOSE. The rule is on
+-- the DECLARATION, not on an ambiguous use, so a file that merely declares the
+-- collision and never exercises it must still be rejected. A fixture that called `n`
+-- would pass under either rule and could not tell them apart.
+--
+-- ⚠️ THIS SHAPE COMPILED BEFORE. With impls at disjoint receivers it ran correctly
+-- (it was test/iface_order_fixtures/control-shared-method-name-disjoint-receivers/).
+-- The narrowing is the owner ruling, not an accident — see ifaceMethodCollisions in
+-- compiler/frontend/resolve.mdk.
+interface E1 a where
+  n : a -> Int
+
+interface E2 a where
+  n : a -> Int
+
+main = println 0

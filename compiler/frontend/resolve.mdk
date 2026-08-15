@@ -198,6 +198,14 @@ public export data ResError =
   -- binding. Bindings are immutable; `=` (without `let`) is not a declaration.
   -- Carries the reassigned name + span. Mutation lives on `Ref`/`:=`.
   | ReassignImmutable String (Option Loc)
+  -- Q1 (Stage B / Phase 4b): TWO interfaces declared in ONE module declare the
+  -- same METHOD name.  Fields: the method name, the interface that declared it
+  -- FIRST, the interface re-declaring it.  Rejected ON DECLARATION, not at an
+  -- ambiguous occurrence — see ifaceMethodCollisions for the ruling and its
+  -- deliberate narrowing of acceptance.  Location-less by construction:
+  -- `DInterface` carries no `Loc` (declLoc sends it to `None`) and `IfaceMethod`
+  -- has none either, so there is no span to point at and none is fabricated.
+  | DuplicateInterfaceMethod String String String (Option Loc)
 
 -- The did-you-mean pair (misspelled name, suggested name) for a resolve error,
 -- or None.  Only an UnboundVariable that carries a suggestion qualifies today.
@@ -240,6 +248,7 @@ resErrorLoc (AmbiguousType _ _ l) = l
 resErrorLoc (AmbiguousInterface _ _ l) = l
 resErrorLoc (InternalExternAccess _ l) = l
 resErrorLoc (ReassignImmutable _ l) = l
+resErrorLoc (DuplicateInterfaceMethod _ _ _ l) = l
 
 -- ── The name environment ──────────────────────────────────────────────────
 -- `values`/`types`/`ctors`/`imported`/`internalGuard` are membership-tested on
@@ -1928,9 +1937,89 @@ duplicateErrors preludeDecls prog =
   map (dupErr "type") (findDups typeSeed (dataRecordNames prog))
     ++ map (dupErr "constructor") (findDups ctorSeed (ctorNames prog))
     ++ map (dupErr "interface") (findDups ifaceSeed (map fst (interfaceList prog)))
+    ++ ifaceMethodCollisions prog
 
 dupErr : String -> String -> ResError
 dupErr kind n = DuplicateDefinition kind n None
+
+-- Q1 (Stage B / Phase 4b): a module whose OWN declarations include two
+-- `interface`s declaring the same METHOD name is REJECTED, on the DECLARATION.
+--
+-- ⚠️ THIS NARROWS ACCEPTANCE, deliberately and with an owner ruling behind it.
+-- `interface E1 a where n : a -> Int` + `interface E2 a where n : a -> Int`, with
+-- impls at DISJOINT receivers, is a program that compiled and ran correctly before
+-- this check (it was test/iface_order_fixtures/control-shared-method-name-disjoint-
+-- receivers/). It is rejected now anyway: the point is to make the ambiguity
+-- UNREPRESENTABLE so a later unit can key impl selection by interface identity
+-- without inheriting an order-dependent supply. Rejecting only at an ambiguous
+-- OCCURRENCE would leave the deformed candidate set in the program and merely
+-- decline to look at it.
+--
+-- ⚠️ SCOPE — THE PRELUDE IS OUT, AND THAT IS A SPEC RULING, NOT CAUTION.
+-- `preludeDecls` is deliberately NOT consulted here (contrast the three checks
+-- above, each of which seeds from it), so this fires on NEITHER prelude sub-case,
+-- and the two are NOT the same case:
+--   * against a prelude STANDALONE, docs/spec/SHADOW-SEMANTICS.md S1-PRELUDE rules
+--     the collision observable but explicitly NOT an error, under the RESERVED
+--     code `W-PRELUDE-METHOD-SHADOW` (compiler/DIAGNOSTIC-CODES-DESIGN.md §3),
+--     owned by #1499. Rejecting it here would contradict a written ruling and
+--     pre-empt that issue's deliverable.
+--   * against a prelude INTERFACE METHOD (`eq`, `map`, `hash`, `minBound`) there
+--     is no ruling of its own, so the behaviour is left exactly as it is — which
+--     is measured NOT uniform: `minBound` shadows cleanly and the program runs at
+--     exit 0, while `eq`/`map`/`hash` break the prelude's OWN bodies at exit 1
+--     (`Could not deduce 'Same a' from the signature of 'neq'`). Untouched either
+--     way; this check never looks at the prelude to find out which.
+-- Pinned by test/iface_order_fixtures/control-prelude-method-name-shadow-accepted/.
+--
+-- SCOPE, the other two edges, achieved BY CONSTRUCTION of this site rather than by
+-- a filter: imports never enter (`buildErrors` has no import table at all), and the
+-- module's own set is exactly `prog`. So this says nothing about two interfaces in
+-- DIFFERENT modules — the residual #1182/#1620 class — which stays live.
+--
+-- ⚠️ NOT `interfaceList`. That function has no `DAttrib` arm (it falls to its
+-- wildcard), so an `@attr`-decorated `interface` is invisible to it — the same gap
+-- `interfaceNamesOf` already documents. A `DAttrib` arm was NOT added to
+-- `interfaceList` to fix that: the duplicate-interface-NAME check two lines above
+-- reads the very same function, so widening it would ALSO widen that check — a
+-- second acceptance narrowing, unscoped and unasked for. This walk is attribute-
+-- aware on its own instead.
+ifaceMethodCollisions : List Decl -> List ResError
+ifaceMethodCollisions prog =
+  ifaceMethodCollisionsGo omEmpty (ownInterfaceMethods prog)
+
+-- `seen` maps a method name to the FIRST interface that declared it, and is
+-- extended only AFTER an interface's own methods have been checked against it —
+-- so a method name repeated WITHIN one interface is not reported here. That shape
+-- is a different (and today unchecked) defect; folding it in silently would be a
+-- third narrowing nobody scoped.
+ifaceMethodCollisionsGo : OrdMap String -> List (String, List String) -> List ResError
+ifaceMethodCollisionsGo _ [] = []
+ifaceMethodCollisionsGo seen ((iname, ms)::rest) = ifaceMethodErrs iname seen ms
+  ++ ifaceMethodCollisionsGo (addIfaceMethods iname ms seen) rest
+
+ifaceMethodErrs : String -> OrdMap String -> List String -> List ResError
+ifaceMethodErrs _ _ [] = []
+ifaceMethodErrs iname seen (m::rest) = match omLookup m seen
+  Some prev => DuplicateInterfaceMethod m prev iname None :: ifaceMethodErrs iname seen rest
+  None => ifaceMethodErrs iname seen rest
+
+-- first declarer wins, so a name colliding three ways names the SAME first
+-- interface in both reports rather than chaining.
+addIfaceMethods : String -> List String -> OrdMap String -> OrdMap String
+addIfaceMethods _ [] seen = seen
+addIfaceMethods iname (m::rest) seen
+  | omHasKey m seen = addIfaceMethods iname rest seen
+  | otherwise = addIfaceMethods iname rest (omInsert m iname seen)
+
+-- `interfaceList`, made attribute-aware — see ifaceMethodCollisions for why this
+-- is a separate walk and not an arm added to `interfaceList`.
+ownInterfaceMethods : List Decl -> List (String, List String)
+ownInterfaceMethods [] = []
+ownInterfaceMethods ((DInterface { name = n, methods, ... })::rest) =
+  (n, map ifaceMethodNm methods) :: ownInterfaceMethods rest
+ownInterfaceMethods ((DAttrib _ d)::rest) = ownInterfaceMethods (d::rest)
+ownInterfaceMethods (_::rest) = ownInterfaceMethods rest
 
 -- names that are already present when declared (order-sensitive, like add_unique).
 --
@@ -2014,6 +2103,8 @@ resErrorSexp (AmbiguousInterface n mods _) = "(AmbiguousInterface "
   ++ joinWith " " (escStr n :: map escStr mods)
   ++ ")"
 resErrorSexp (ReassignImmutable n _) = "(ReassignImmutable " ++ escStr n ++ ")"
+resErrorSexp (DuplicateInterfaceMethod m a b _) =
+  "(DuplicateInterfaceMethod \{escStr m} \{escStr a} \{escStr b})"
 
 -- String key for an `Option Loc`, used only to distinguish dedup candidates
 -- (NOT a serialization contract like resErrorSexp): `None` collapses to a
@@ -2127,6 +2218,14 @@ ppResError (AmbiguousInterface n mods _) = "Ambiguous interface: '\{n}' is broug
 ppResError (InternalExternAccess n _) = "'"
   ++ n
   ++ "' is an internal-only primitive. Cannot be used outside the standard library (pass --allow-internal to override)"
+-- ⚠️ THE HELP TEXT SAYS THE NARROWING OUT LOUD, DELIBERATELY. This rejects a
+-- program shape that compiled before (two interfaces sharing a method name at
+-- DISJOINT receivers ran fine), so the message must not pretend the program was
+-- always illegal — it says the rule is on the DECLARATION and names the two
+-- interfaces plus the fix. The parenthetical bounds the rule: a collision with a
+-- PRELUDE method is a different case, ruled a warning-not-error by
+-- docs/spec/SHADOW-SEMANTICS.md S1-PRELUDE (#1499), and is NOT what this fires on.
+ppResError (DuplicateInterfaceMethod m a b _) = "Method '\{m}' is declared by two interfaces in this module: '\{a}' and '\{b}'. Two interfaces declared together may not share a method name — an occurrence of '\{m}' could not be attributed to either. Rename the method in one of them, or merge the two interfaces. (A method name shared with a PRELUDE interface is a different case and stays legal.)"
 ppResError (ReassignImmutable n _) = "Cannot reassign '\{n}' — bindings are immutable. To bind a new value, shadow it with `let \{n} = ...`. For mutable state, use a `Ref`: `let \{n} = Ref 0`, then write `\{n} := \{n}.value + 1` (read the cell with `\{n}.value`)"
 
 -- Stable diagnostic code (DIAGNOSTIC-CODES-DESIGN §2) for a resolve error — one
@@ -2162,6 +2261,7 @@ resErrorCode (AmbiguousType _ _ _) = "R-AMBIGUOUS-TYPE"
 resErrorCode (AmbiguousInterface _ _ _) = "R-AMBIGUOUS-INTERFACE"
 resErrorCode (InternalExternAccess _ _) = "R-INTERNAL-EXTERN"
 resErrorCode (ReassignImmutable _ _) = "R-IMMUTABLE-ASSIGN"
+resErrorCode (DuplicateInterfaceMethod _ _ _ _) = "R-DUPLICATE-IFACE-METHOD"
 
 -- Mirror lib/resolve.ml's mod_phrase: two modules → "both `a` and `b`";
 -- otherwise a comma-separated list of backtick-quoted module names.

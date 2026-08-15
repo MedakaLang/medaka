@@ -1,0 +1,14 @@
+-- PERMUTATION A: intbox imported before strbox (both bare — see the sibling
+-- case's case.txt for why their order is cosmetic).
+import boxes.{Box(..), Tagged, tag}
+import relay.{relay}
+import intbox
+import strbox
+
+bi : Box Int
+bi = Box 1
+
+bs : Box String
+bs = Box "s"
+
+main = putStrLn (relay bi ++ " " ++ relay bs)

@@ -1,5 +1,5 @@
 # META
-source_lines=30284
+source_lines=30232
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted typecheck stage — port of lib/typecheck.ml's HM core.  SLICE 1:
@@ -16819,6 +16819,20 @@ insertIfaceMethodsAcc iface typarams scope ((IfaceMethod mname mty _)::rest) (mp
 -- interface declarations SWAPPED (nothing else changed) it is ACCEPTED at exit 0 and prints
 -- FA's body.  The obligation goes to the LAST-declared interface either way; an
 -- interface-declaration reordering that changes no program meaning changes the verdict.
+-- 🚨 THAT MEASUREMENT IS HISTORY AS OF 2026-08-15 — DO NOT RE-RUN THE RECIPE AND EXPECT IT.
+-- The Q1 unit (`ifaceMethodCollisions`, compiler/frontend/resolve.mdk) now REJECTS a module
+-- whose own declarations include two `interface`s sharing a METHOD name, so that exact file
+-- is refused with `R-DUPLICATE-IFACE-METHOD` in BOTH orderings before typecheck ever sees
+-- it.  The flip is no longer observable and the shape is no longer constructible in one
+-- file.  It is kept, scoped, because it is the evidence for the corrected REASON below —
+-- deleting it would leave that reasoning unsupported.
+-- ⚠️ AND THE MECHANISM DOES NOT SIMPLY MOVE CROSS-MODULE — measured, not assumed, on one
+-- posing: `fa.mdk`/`fb.mdk` each exporting an interface declaring `mth`, an entry doing
+-- `import fa.{FA, mth}` + `import fb.{FB}` with `impl FA Blob` only, prints 11 at exit 0.
+-- The obligation goes to FA, not to the other interface, because the entry binds exactly one
+-- denotation of `mth`.  So do not restate the last-declared-wins claim on the cross-module
+-- axis on the strength of this paragraph; that would need its own probe, and the one posing
+-- measured contradicts it.  The intra-module claim was true when made and is now unreachable.
 -- The carve-out itself still stands, on the FIRST clause plus a mechanism argument: this
 -- unit's discriminator is the importing module's IMPORT SCOPE, and a single file has none
 -- — every candidate is own, so no rung of `scopedMethodEntry` can separate them.  ⚠️ Nor
@@ -18281,7 +18295,15 @@ implEntryFromTys iface (headTy::rest) reqs methods = match headTyconNameTy headT
 --
 -- The sharp one is the METHOD-keyed count.  It is keyed on the method NAME, and the
 -- headless bucket holds the headless impls of EVERY interface, while two interfaces
--- declaring the same method name are accepted.  So a headless method count can reach 2,
+-- declaring the same method name are accepted.  ⚠️ SCOPE, narrowed 2026-08-15: that
+-- premise is now false INTRA-module — Q1 (`ifaceMethodCollisions`,
+-- compiler/frontend/resolve.mdk) rejects a module declaring two such interfaces.  It
+-- remains TRUE ACROSS MODULES, which is what keeps this branch reachable, so this note
+-- does NOT describe dead code.  Measured rather than argued: `ha.mdk`/`hb.mdk` each
+-- exporting an interface declaring `hm` WITH A HEADLESS `impl HA a` / `impl HB a`, and an
+-- entry importing the method name from one and the interface name from the other, is
+-- ACCEPTED at exit 0 (prints 1).  Both headless impls are registered, so the count still
+-- reaches 2 by the route below.  So a headless method count can reach 2,
 -- the collision test fires, and `keyForSite` takes its CANONICAL-KEY branch with a
 -- `__none__` winner — a branch that was UNREACHABLE before this change, because that
 -- bucket was always empty.
@@ -19165,29 +19187,8 @@ ieRowHeadMatches [] _ = False
 -- rules document each other at `frontend/ast.mdk`; neither may be copied to the
 -- other's site.
 --
--- 🚨 B-4b-ii SUPPLIED REAL IDENTITY, SO THE `(Some, Some)` ARM IS NOW REACHABLE AND
--- THE PARAGRAPH ABOVE IS HISTORY, NOT A CURRENT DESCRIPTION.  Exactly ONE of the
--- family's three entry points supplies it — `findMatchingImplReqsU` → `iface`, read
--- off `Require.requireOrigin` / `Predicate.iface`; see the derivation there, and the
--- per-site reasons the other two are still bare (`entailInst`'s `EKNestedTop` arm and
--- `argImplRequiresRoutes`, both fed by the deliberately SPELLING-keyed route-word
--- channel `shadowStandaloneDictSlots` / `pushDictApp` project into).
---
--- ⚠️ WHAT THAT MAKES REACHABLE, stated because B-4b-i's neutrality argument DEPENDED
--- on it being unreachable: a row whose interface carries `OriginBuiltin` would now
--- conflict with an origin-bearing query, since `ifaceIdentity` maps `OriginBuiltin` to
--- absence while `identOriginOf` maps it to `Some IdentBuiltin`.  DERIVED, not
--- inherited from the comments that assert it: the only `iface:`-tagged writers into
--- `tyOriginScope`/`flatTyOriginScope` are `ifaceDeclaredIn` and `ownIfaceOrigin`, and
--- BOTH mint `OriginModule`; `builtinTyOrigins` keys under the BARE name, i.e. the type
--- namespace, so `fillIfaceOccOrigin`'s `omLookup (ifaceKey n)` cannot return
--- `OriginBuiltin`.  Its other arm only preserves an origin the occurrence already had,
--- and no site in the tree mints `OriginBuiltin` into an interface-occurrence carrier
--- (`tyConBuiltin` builds a `Ty`; `tconBuiltin` / `tconTupleHead` / `headKeyOfCon
--- OriginBuiltin` build type heads).  Corroborated on the binary: every interface row
--- of the origin-agreement corpus reads `mod:…`, the prelude's `Eq`/`Ord`/`Debug`
--- included, and none reads `builtin`.  Re-derive rather than trust this:
---     grep -rn '^iface:.*builtin' test/origin_fixtures/    # must find nothing
+-- The NEXT bite is the one that supplies real identity here.  It is allowed to move
+-- behaviour; this one is not.
 --
 -- The rule is factored into `ieRowIfaceMatches` rather than inlined so the SELECTION
 -- family has exactly ONE seam a supply bite has to reason about — and so it cannot be
@@ -20259,33 +20260,9 @@ entailInst implTable name m encl tag (EKReturn keyTable fullMono _) =
 -- per-tyvar dict slots, and hence emitted dict arity, exactly as they were.  #607
 -- punch-list item 3 (dict slot = predicate, which really would move arity) stays open.
 entailInst implTable _ m encl tag (EKNestedTop keyTable iface _ depth rest) =
-  -- 🚨 B-4b-ii LEFT THIS BARE ON PURPOSE, AND THE REASON IS THE SOURCE, NOT THE
-  -- PLUMBING.  Widening `EKNestedTop`'s field is mechanical; the question is whether
-  -- anything upstream HAS an origin worth supplying, and on this leg it does not.
-  -- `EKNestedTop` is constructed at exactly one site (`routeOfD`), whose `iface`
-  -- reaches it from `routesOfMonosTop`/`routesOfMonosTopV` — whose `List String` is
-  -- minted by `shadowStandaloneDictSlots` and `pushDictApp` as `map (s =>
-  -- s.csIface.irName) expanded`, a projection those two functions' own comments
-  -- declare deliberate ("the ROUTE half stays a SPELLING … route words, not
-  -- identities").  Un-projecting it is the route-word design question (#1507 /
-  -- `dispHeadTab`), not an identity-supply omission, so inventing an origin here
-  -- would be supplying one from a source this bite cannot justify.
-  --
-  -- ⚠️ AND THE CONSUMER WOULD NOT SURVIVE IT UNEXAMINED.  This value reaches BOTH
-  -- `keyForSiteByIface` (below) and `argImplRequiresRoutes` (the same `iface`, one
-  -- line down — §6 C2 forbids repointing those separately, which is exactly why they
-  -- share the variable).  `keyForSiteByIface` gates the stamped word on
-  -- `ieHeadCollidesByIface`, whose count stays SPELLING-keyed by ruling, so a
-  -- selection that moved without the count moving flips the word between the
-  -- canonical key and the bare head tag — a dict-cell byte change
-  -- `core_ir_lower.ifaceDeclHeadUnique` does not follow.  Whoever supplies identity
-  -- here owns that decision explicitly.
-  --
-  -- MEASURED that leaving it bare is safe for what B-4b-ii DID move: a program whose
-  -- checker leg now selects by identity and whose route leg still selects by spelling
-  -- routes CORRECTLY on all three engines and in the executed binary
-  -- (`test/dict_fixtures/b4bii-xmod-req-route-*`).  That is an observation on the
-  -- shapes reachable today, not a proof — see the PR's `nearest miss:`.
+  -- B-4b-i: `EKNestedTop` still carries a bare `String`, so the query is minted with
+  -- an ABSENT origin — `ifaceRefBare`, never an invented one.  Supplying identity
+  -- here is the next bite, and it needs `EKNestedTop`'s own field widened first.
   let routeKey = fromOption tag (keyForSiteByIface (ifaceRefBare iface) (m::rest))
   (
     RKey routeKey (argImplRequiresRoutes implTable keyTable iface encl tag m rest depth),
@@ -20548,14 +20525,9 @@ argImplRequiresRoutes implTable keyTable iface encl tag m rest depth =
   if depth >= 32 then []
   else
     let goals = if iface == "" then [m] else m::rest
-    -- B-4b-ii: still bare, and NOT independently — this `iface` is the SAME value
-    -- `entailInst`'s `EKNestedTop` arm hands `keyForSiteByIface` one line above its
-    -- call to this function, which is how §6 C2 ("the impl dispatched to and the impl
-    -- whose context is discharged must be the same impl") is held by construction
-    -- rather than by care.  The reason it carries no origin is written there; moving
-    -- one of these two without the other is the thing C2 forbids.  Its own `iface ==
-    -- ""` pin two lines up is the same sentinel `selectReqImpl` re-spells; both stay
-    -- name-scoped.
+    -- B-4b-i: `argImplRequiresRoutes` still receives a bare `String`, so the query is
+    -- minted with an ABSENT origin.  Its own `iface == ""` pin two lines up is the
+    -- same sentinel `selectReqImpl` re-spells; both stay name-scoped.
     match selectReqImpl implTable (ifaceRefBare iface) tag m goals
       Some (headTy, itys, reqs) => match headSubstWithParams headTy itys m goals
         Some subst =>
@@ -23082,39 +23054,15 @@ bucketRecvMatch ((tys, _)::rest) dm = match tys
 -- overlap_same_head_req_wins{,_swapped}.mdk (#326 within-bucket min⊑).
 findMatchingImplReqsU : ImplUniverse -> IfaceRef -> List Mono -> Option (List (String, Mono), List Require)
 findMatchingImplReqsU univ iface [] = firstReqMatch (univHeadless univ iface) []
--- 🚨 B-4b-ii SUPPLIES THE IDENTITY HERE — B-4b-i's `ifaceRefBare iface.irName`
--- wrapper is DELETED, and this is the behaviour change that bite deferred.
---
--- WHY THIS SOURCE IS TRUSTWORTHY, stated as a derivation rather than an assertion:
--- `iface` reaches this function from `reqObligationsFor` and `residualPredsOf`, whose
--- own `IfaceRef` is minted by `reqToObligation` off `Require.requireHead` +
--- `Require.requireOrigin` — a carrier `resolve.fillIfaceOccOrigin` stamps from the
--- DECLARING module's `iface:`-tagged scope, under the immunity rule (an occurrence
--- that already carries identity is never re-stamped).  It is NOT taken from
--- `methodIfaceParamsRef`, the bare-method-name-keyed table whose own S0s are open;
--- nothing on this path consults it.
---
--- ⚠️ THE TWO LEGS OF THIS FUNCTION DISAGREED, AND THAT IS WHAT THIS FIXES.  The
--- HEADLESS fallback one line below has ALWAYS been identity-keyed — `univHeadless`
--- looks the bucket up through `oblIfaceKey`, i.e. `tabKeyOf NsIface ir.irOrigin
--- ir.irName`, which is `TkIdent` for an origin-bearing interface — while the CONCRETE
--- leg re-minted the query bare and asked a SPELLING question over the same population.
--- One function, two keyings, and the concrete leg is the one tried first.
---
--- MEASURED false reject this removes (hand-derived first, then run): two unrelated
--- modules each declaring `interface Same a`, each with `impl Same (Box a)` — one plain,
--- one `requires Eq a`.  A use of the PLAIN one's method at `Box Opaque` was rejected
--- with *"No impl of Eq for Opaque"*, because the spelling scan reached the OTHER
--- module's row and imposed ITS `requires`.  Swapping the two modules' names made the
--- same program compile: the answer depended on declaration order, which is the
--- signature of a spelling-keyed selection. See `test/dict_fixtures/b4bii-*`.
---
--- ⚠️ ABSENCE IS STILL A WILDCARD, and that is what keeps the flat drivers alive:
--- `sameTyConHead`'s `tyConIdsConflict` answers True only when BOTH origins are
--- identities and they differ, so a single-file `check`/lsp/repl/doc run — which stamps
--- nothing — is unaffected, term for term.  This is NOT `ifaceIdMatches`; see
--- `ieRowIfaceMatches`.
-findMatchingImplReqsU univ iface (a0::rest) = match concreteReqMatchByIface iface (a0::rest)
+-- 🚨 B-4b-i: `iface` IS ALREADY AN `IfaceRef` HERE, WITH ITS ORIGIN IN HAND, AND IT IS
+-- DELIBERATELY NOT PASSED THROUGH.  Handing it to `concreteReqMatchByIface` would be
+-- free at the keystroke level and would SUPPLY REAL IDENTITY to the selector — which
+-- is a behaviour change (`sameTyConHead` could then reject a row today's `==`
+-- accepts), and this bite is representation-only.  Re-minting the query with
+-- `ifaceRefBare` keeps the origin absent, which is what makes the widening
+-- byte-neutral.  This is the ONE site in the family where the supply bite has nothing
+-- left to plumb: it only has to delete the `ifaceRefBare` wrapper.
+findMatchingImplReqsU univ iface (a0::rest) = match concreteReqMatchByIface (ifaceRefBare iface.irName) (a0::rest)
   Some r => Some r
   None => firstReqMatch (univHeadless univ iface) (a0::rest)
 
@@ -34048,7 +33996,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "bucketRecvMatch" ((PCons (PTuple (PVar "tys") PWild) (PVar "rest")) (PVar "dm")) (EMatch (EVar "tys") (arm (PCons (PVar "recv") PWild) () (EMatch (EApp (EApp (EVar "matchTyMono") (EVar "recv")) (EVar "dm")) (arm (PCon "Some" PWild) () (EVar "True")) (arm (PCon "None") () (EApp (EApp (EVar "bucketRecvMatch") (EVar "rest")) (EVar "dm"))))) (arm (PList) () (EApp (EApp (EVar "bucketRecvMatch") (EVar "rest")) (EVar "dm")))))
 (DTypeSig false "findMatchingImplReqsU" (TyFun (TyCon "ImplUniverse") (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyApp (TyCon "List") (TyCon "Require"))))))))
 (DFunDef false "findMatchingImplReqsU" ((PVar "univ") (PVar "iface") (PList)) (EApp (EApp (EVar "firstReqMatch") (EApp (EApp (EVar "univHeadless") (EVar "univ")) (EVar "iface"))) (EListLit)))
-(DFunDef false "findMatchingImplReqsU" ((PVar "univ") (PVar "iface") (PCons (PVar "a0") (PVar "rest"))) (EMatch (EApp (EApp (EVar "concreteReqMatchByIface") (EVar "iface")) (EBinOp "::" (EVar "a0") (EVar "rest"))) (arm (PCon "Some" (PVar "r")) () (EApp (EVar "Some") (EVar "r"))) (arm (PCon "None") () (EApp (EApp (EVar "firstReqMatch") (EApp (EApp (EVar "univHeadless") (EVar "univ")) (EVar "iface"))) (EBinOp "::" (EVar "a0") (EVar "rest"))))))
+(DFunDef false "findMatchingImplReqsU" ((PVar "univ") (PVar "iface") (PCons (PVar "a0") (PVar "rest"))) (EMatch (EApp (EApp (EVar "concreteReqMatchByIface") (EApp (EVar "ifaceRefBare") (EFieldAccess (EVar "iface") "irName"))) (EBinOp "::" (EVar "a0") (EVar "rest"))) (arm (PCon "Some" (PVar "r")) () (EApp (EVar "Some") (EVar "r"))) (arm (PCon "None") () (EApp (EApp (EVar "firstReqMatch") (EApp (EApp (EVar "univHeadless") (EVar "univ")) (EVar "iface"))) (EBinOp "::" (EVar "a0") (EVar "rest"))))))
 (DTypeSig false "concreteReqMatchByIface" (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyApp (TyCon "List") (TyCon "Require")))))))
 (DFunDef false "concreteReqMatchByIface" ((PVar "iface") (PVar "args")) (EMatch (EApp (EApp (EApp (EVar "ieSelectRowByIface") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "bodyImplEnvRef") "value")) (EVar "iface")) (EVar "args")) (arm (PCon "Some" (PCon "ImplRow" PWild PWild PWild (PVar "itys") (PVar "reqs") PWild)) () (EApp (EApp (EVar "map") (ELam ((PVar "sub")) (ETuple (EVar "sub") (EVar "reqs")))) (EApp (EApp (EVar "implHeadSubst") (EVar "itys")) (EVar "args")))) (arm (PCon "None") () (EVar "None"))))
 (DTypeSig false "firstReqMatch" (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "List") (TyCon "Require")))) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyApp (TyCon "List") (TyCon "Require")))))))
@@ -39078,7 +39026,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "bucketRecvMatch" ((PCons (PTuple (PVar "tys") PWild) (PVar "rest")) (PVar "dm")) (EMatch (EVar "tys") (arm (PCons (PVar "recv") PWild) () (EMatch (EApp (EApp (EVar "matchTyMono") (EVar "recv")) (EVar "dm")) (arm (PCon "Some" PWild) () (EVar "True")) (arm (PCon "None") () (EApp (EApp (EVar "bucketRecvMatch") (EVar "rest")) (EVar "dm"))))) (arm (PList) () (EApp (EApp (EVar "bucketRecvMatch") (EVar "rest")) (EVar "dm")))))
 (DTypeSig false "findMatchingImplReqsU" (TyFun (TyCon "ImplUniverse") (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyApp (TyCon "List") (TyCon "Require"))))))))
 (DFunDef false "findMatchingImplReqsU" ((PVar "univ") (PVar "iface") (PList)) (EApp (EApp (EVar "firstReqMatch") (EApp (EApp (EVar "univHeadless") (EVar "univ")) (EVar "iface"))) (EListLit)))
-(DFunDef false "findMatchingImplReqsU" ((PVar "univ") (PVar "iface") (PCons (PVar "a0") (PVar "rest"))) (EMatch (EApp (EApp (EVar "concreteReqMatchByIface") (EVar "iface")) (EBinOp "::" (EVar "a0") (EVar "rest"))) (arm (PCon "Some" (PVar "r")) () (EApp (EVar "Some") (EVar "r"))) (arm (PCon "None") () (EApp (EApp (EVar "firstReqMatch") (EApp (EApp (EVar "univHeadless") (EVar "univ")) (EVar "iface"))) (EBinOp "::" (EVar "a0") (EVar "rest"))))))
+(DFunDef false "findMatchingImplReqsU" ((PVar "univ") (PVar "iface") (PCons (PVar "a0") (PVar "rest"))) (EMatch (EApp (EApp (EVar "concreteReqMatchByIface") (EApp (EVar "ifaceRefBare") (EFieldAccess (EVar "iface") "irName"))) (EBinOp "::" (EVar "a0") (EVar "rest"))) (arm (PCon "Some" (PVar "r")) () (EApp (EVar "Some") (EVar "r"))) (arm (PCon "None") () (EApp (EApp (EVar "firstReqMatch") (EApp (EApp (EVar "univHeadless") (EVar "univ")) (EVar "iface"))) (EBinOp "::" (EVar "a0") (EVar "rest"))))))
 (DTypeSig false "concreteReqMatchByIface" (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyApp (TyCon "List") (TyCon "Require")))))))
 (DFunDef false "concreteReqMatchByIface" ((PVar "iface") (PVar "args")) (EMatch (EApp (EApp (EApp (EVar "ieSelectRowByIface") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "bodyImplEnvRef") "value")) (EVar "iface")) (EVar "args")) (arm (PCon "Some" (PCon "ImplRow" PWild PWild PWild (PVar "itys") (PVar "reqs") PWild)) () (EApp (EApp (EMethodRef "map") (ELam ((PVar "sub")) (ETuple (EMethodRef "sub") (EVar "reqs")))) (EApp (EApp (EVar "implHeadSubst") (EVar "itys")) (EVar "args")))) (arm (PCon "None") () (EVar "None"))))
 (DTypeSig false "firstReqMatch" (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "List") (TyCon "Require")))) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyApp (TyCon "List") (TyCon "Require")))))))
