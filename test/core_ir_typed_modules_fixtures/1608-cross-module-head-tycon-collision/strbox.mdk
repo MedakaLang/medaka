@@ -1,0 +1,4 @@
+import boxes.{Box(..), Tagged, tag}
+
+export impl Tagged (Box String) where
+  tag (Box _) = "boxstr"

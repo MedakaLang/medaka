@@ -1,0 +1,66 @@
+-- TYPED multi-module execution through the Core-IR interpreter — the composition
+-- of the typed multi-module eval path (eval_typed_modules_main.mdk) and the
+-- UNTYPED multi-module Core-IR path (core_ir_modules_main.mdk).  It is the fourth
+-- engine arm: `cevalModules` driven over trees that have actually been marked and
+-- typechecked.
+--
+--   medaka run compiler/entries/core_ir_typed_modules_main.mdk <runtime.mdk> <core.mdk> <entry.mdk> [root ...]
+--
+-- (On anything bigger than a fixture, build it native — `medaka run` on a
+-- compiler-graph entry overflows the tree-walking interpreter's frame budget.
+-- test/build_oracles.sh builds it as test/bin/core_ir_typed_modules_main.)
+--
+-- 🚨 WHY THIS EXISTS, and why core_ir_modules_main.mdk does not cover it (#1608).
+-- That driver is desugar + annotate only — no marker, no typecheck — so NO `Route`
+-- is ever stamped on a method occurrence.  `cevalModules` therefore falls back to
+-- untyped arg-tag "first impl wins" for EVERY interface method, and a gate over
+-- that path cannot distinguish a correct route word from no route word at all: its
+-- green proves nothing in either direction.  Two impls whose heads share a tycon
+-- (`Box Int` vs `Box String`) are indistinguishable by arg tag, so only a route can
+-- select between them — and only this driver stamps one.
+--
+-- Structure mirrors eval_typed_modules_main.mdk EXACTLY (loadProgram → desugar per
+-- module → elaborateModules → per-module-frame evaluation), with the single
+-- terminal call swapped from eval.mdk's `evalModulesOutput` to
+-- ir.core_ir_eval's `cevalModulesOutput` — i.e. the ONLY variable between the two
+-- drivers is which of the two parallel module drivers runs.  Keep it that way:
+-- AGENTS.md records `evalModules` and `cevalModules` as parallel drivers that must
+-- move in lockstep, and this driver is the instrument that can see them diverge.
+--
+-- Graded by test/diff_compiler_core_ir_typed_modules.sh.
+
+import frontend.ast.{Decl}
+import frontend.parser.{parse}
+import frontend.desugar.{desugar}
+import driver.loader.{loadProgram}
+import types.typecheck.{elaborateModules}
+import ir.core_ir_eval.{cevalModulesOutput}
+import entries.entry_support.{failWith, usageModules}
+import support.path.{dirOf}
+
+main : <IO> Unit
+main = match args ()
+  runtimeP::coreP::entry::roots =>
+    run runtimeP coreP entry (rootsOrDefault entry roots)
+  _ => failWith usageModules
+
+rootsOrDefault : String -> List String -> List String
+rootsOrDefault entry [] = [dirOf entry]
+rootsOrDefault _ roots = roots
+
+desugarPair : (String, List Decl) -> (String, List Decl)
+desugarPair (mid, p) = (mid, desugar p)
+
+run : String -> String -> String -> List String -> <IO> Unit
+run runtimeP coreP entry roots = match readFile runtimeP
+  Err e => failWith e
+  Ok rsrc => match readFile coreP
+    Err e => failWith e
+    Ok csrc => match loadProgram entry roots
+      Err e => failWith e
+      Ok mods => runElab (desugar (parse rsrc)) (desugar (parse csrc)) (map desugarPair mods)
+
+runElab : List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit
+runElab runtimeDecls coreDecls modules =
+  let elaborated = elaborateModules runtimeDecls coreDecls modules
+  putStr (cevalModulesOutput (fst elaborated) (snd elaborated))

@@ -9,7 +9,7 @@
 #   HALF 2  a new open+verified issue has no fixture             -> a pinning candidate
 #   HALF 3  a NOT-PINNABLE ledger entry's issue is CLOSED        -> a stale exemption
 #   HALF 4  an ORDER-LEDGER row's issue is CLOSED               -> a stale owner (#1319)
-#           (both IMPORT-ORDER-LEDGER.txt and IFACE-ORDER-LEDGER.txt)
+#           (IMPORT-ORDER-LEDGER.txt, IFACE-ORDER-LEDGER.txt, CORE-IR-TYPED-LEDGER.txt)
 #
 # ── ⭐ HALF 1 IS THE POINT: THE CORPUS IS AN ORACLE FOR THE TRACKER ─────────────
 #
@@ -220,6 +220,18 @@ echo
 #
 #   test/IMPORT-ORDER-LEDGER.txt  <- test/diff_compiler_import_order.sh (import clauses)
 #   test/IFACE-ORDER-LEDGER.txt   <- test/diff_compiler_iface_order.sh  (interface decls)
+#   test/CORE-IR-TYPED-LEDGER.txt <- test/diff_compiler_core_ir_typed_modules.sh
+#                                    (#1608, the fourth engine arm)
+#
+# ⚠️ THE THIRD LEDGER IS NOT THE SAME KIND OF ROW, and the loop below is deliberately
+# indifferent to the difference. The first two pin a DIVERGENCE (>=2 signatures per
+# row, no claim about which is right). CORE-IR-TYPED-LEDGER.txt pins a WRONG VALUE
+# against a HAND-DERIVED correct one (exactly one observed value per row), because on
+# its corpus both untyped drivers AGREE and both are wrong — so agreement is not
+# available as an oracle there. What all three share is the only thing THIS half
+# needs: field 1 is a case key, field 2 is `#<issue>`, and the row asserts a LIVE bug
+# whose owner must be OPEN. Read the third ledger's own header before judging one of
+# its rows; the wording this half prints is the divergence family's.
 #
 # ⭐ The interface-order ledger's coupling to this half is LOAD-BEARING, not decorative.
 # That gate's own header (FOUR-STATE TABLE, state 2) identifies one outcome in which it
@@ -239,7 +251,8 @@ echo
 #   grep -cvE '^[[:space:]]*(#|$)' test/IFACE-ORDER-LEDGER.txt
 echo "── ORDER-LEDGER rows whose issue is CLOSED (stale owners) ───────────────"
 h4=0
-for IOLEDGER in "$ROOT/test/IMPORT-ORDER-LEDGER.txt" "$ROOT/test/IFACE-ORDER-LEDGER.txt"; do
+for IOLEDGER in "$ROOT/test/IMPORT-ORDER-LEDGER.txt" "$ROOT/test/IFACE-ORDER-LEDGER.txt" \
+                "$ROOT/test/CORE-IR-TYPED-LEDGER.txt"; do
   [ -f "$IOLEDGER" ] || continue
   lname="$(basename "$IOLEDGER")"
   while IFS= read -r line; do

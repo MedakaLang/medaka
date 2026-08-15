@@ -1,0 +1,4 @@
+import critters.{Cat(..), Tagged, tag}
+
+export impl Tagged Cat where
+  tag Cat = "meow"

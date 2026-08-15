@@ -414,6 +414,11 @@ for f in $changed; do
       # interface an occurrence of a shared method name belongs to, so they own the
       # interface-DECLARATION-order dependence the way they own the clause-order one.
       add 'diff_compiler_iface_order'
+      # #1608, same argument as the compiler/types/* arm: marker.mdk decides which
+      # occurrences become EMethodRef and therefore which ones can carry a route at
+      # all, so it owns the one gate that grades route CONSUMPTION on the typed
+      # multi-module path.
+      add 'diff_compiler_core_ir_typed_modules'
       add 'diff_compiler_dict_semantics' ;;
     compiler/frontend/exhaust.mdk)
       add 'diff_compiler_exhaust'; add 'diff_compiler_check_match' ;;
@@ -454,6 +459,13 @@ for f in $changed; do
       # attributes an unmet obligation to the LAST-DECLARED interface, which is the
       # mechanism both ledgered rows of the interface-order differential record.
       add 'diff_compiler_iface_order'
+      # #1608: elaborateModules is what STAMPS the routes on the graph path, and
+      # diff_compiler_core_ir_typed_modules is the only gate that grades a route
+      # being CONSUMED there — its own positive control is "remove elaborateModules
+      # from the driver and watch the typed arm fall back to arg-tag". The rest of
+      # the diff_compiler_core_ir* family runs the UNTYPED path and is structurally
+      # blind to this; it is not selected by this arm and would not cover it.
+      add 'diff_compiler_core_ir_typed_modules'
       # (found deriving this row) diff_compiler_analyze_project pins DIAGNOSTICS —
       # analyzeProject's per-file bucketed severity/message output, the channel the
       # value-golden gates above (typecheck*/check*/eval_typed*) cannot see because
@@ -675,6 +687,10 @@ for f in $changed; do
     # under test/ that `_fixture_dir_for` cannot see, and both are exactly what
     # someone edits ALONE when their gate goes red.
     test/IFACE-ORDER-LEDGER.txt)   add 'diff_compiler_iface_order' ;;
+    # Third ledger, same structural blind spot (#1608). Its rows pin a WRONG VALUE
+    # rather than a divergence — see its own header — but the masking path is
+    # identical: a loose file under test/ that someone edits ALONE when the gate reds.
+    test/CORE-IR-TYPED-LEDGER.txt) add 'diff_compiler_core_ir_typed_modules' ;;
 
     # ── sqlite: the derivation structurally CANNOT reach it ───────────────────
     # `_fixture_dir_for` only fires for a path with a `*fixtures*`/`*goldens*` ancestor
