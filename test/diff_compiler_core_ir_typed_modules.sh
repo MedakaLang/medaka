@@ -39,27 +39,57 @@
 #     two is wrong, and absorbing it into a ledger row would be exactly the
 #     rubber stamp the ledger exists to prevent.
 #
-#   TIER 3 — VALUE, on the untyped arms. If their (agreed) output equals
-#     expected.txt, nothing is owed. If it does NOT, a row in
-#     test/CORE-IR-TYPED-LEDGER.txt must name an OPEN issue and transcribe the
-#     EXACT observed value. Missing row -> RED. Row present but the value moved
-#     -> RED. Row present and the case is now correct -> RED, naming the issue to
-#     close. That is the drain.
+#   TIER 3 — VALUE, on the untyped arms, in one of THREE dispositions:
+#       (i)   output == expected.txt, no pin, no row -> ok, nothing owed.
+#       (ii)  a PIN file `<entry>.untyped.txt` -> the output must equal it EXACTLY.
+#             This says "this arm is arg-tag BY CONSTRUCTION and nobody is going to
+#             fix it; here is what it prints." No issue is named, because there is
+#             no defect to own. Any movement, in either direction, is RED.
+#       (iii) no pin and output != expected.txt -> a row in
+#             test/CORE-IR-TYPED-LEDGER.txt must name an OPEN issue and transcribe
+#             the EXACT observed value. This says "live DEFECT, owned." Missing row
+#             -> RED. Value moved -> RED. Case now correct -> RED, naming the issue
+#             to close. That is the drain.
+#     (ii) and (iii) are mutually exclusive per entry and the gate enforces it: a
+#     pin says there is nothing to fix, a row says there is.
 #
-# ── WHY THE GATE IS GREEN TODAY WITH #1608 OPEN ───────────────────────────────
+# ── WHY THE UNTYPED ARMS ARE PINNED AND NOT LEDGERED (#1608, CLOSED) ──────────
 #
-# Because #1608's wrongness is a TIER 3 fact, and tier 3 is ledgered. The measured
-# reading (see each case's case.txt) is that the TYPED arms are correct and
-# order-invariant, and the two UNTYPED drivers are BYTE-IDENTICAL to each other —
-# i.e. what reproduces is the shared, documented untyped arg-tag fallback, not a
-# `cevalModules`-specific defect. #1608 was filed on a table comparing a TYPED
-# `eval` reading against an UNTYPED `ceval` reading; same-arm, they agree. The
-# issue is left OPEN for its owner to re-scope; this gate does not close it.
+# This gate was built for #1608, which claimed `cevalModules` resolves a
+# cross-module interface method by IMPORT ORDER rather than by the receiver's type.
+# Measured arm for arm — first on a program of the described shape, then on the
+# reporter's ORIGINAL program recovered verbatim from the sprint packet that
+# produced the issue — that does not hold:
 #
-# The must-fail suite cannot carry any of this: test/MUST-FAIL-NOT-PINNABLE.txt:174
-# refuses the pin with a derived argument (no verb in that harness drives
-# `cevalModules` at all). Hence the ledger pattern, after its two siblings
-# test/IMPORT-ORDER-LEDGER.txt and test/IFACE-ORDER-LEDGER.txt.
+#   TYPED:   medaka run == medaka build == core_ir_typed_modules_main == CORRECT,
+#            and order-invariant, on every case in this corpus.
+#   UNTYPED: eval_modules_main == core_ir_modules_main, BYTE-IDENTICAL, and their
+#            answer depends on import order rather than on the program.
+#
+# #1608's ✅/❌ table compared a TYPED `eval` reading (`medaka run`) against an
+# UNTYPED `ceval` reading (core_ir_modules_main) — an ARM MISMATCH. Same-arm, the
+# two parallel module drivers agree. #1608 was CLOSED 2026-08-15 as mis-scoped at
+# filing.
+#
+# So the untyped arms' answer is wrong under the language semantics but is NOT an
+# owned defect: those drivers are desugar + annotate only, no marker and no
+# typecheck, so no `Route` is ever stamped and arg-tag "first impl wins" is all
+# they have. That is their documented design (`cevalModules`' own header: "UNTYPED
+# path, like cevalProgram / evalModules"), not a bug awaiting a fix — and a ledger
+# row would be a signed statement that it IS one (see that file's WHAT A ROW MEANS).
+# Hence the pin: the behaviour stays graded EXACTLY, which is the whole value of
+# this gate, without asserting a defect nobody has argued for.
+#
+# ⚠️ The pinned value is NOT a blessing and NOT an oracle. expected.txt remains the
+# statement of what is CORRECT, hand-derived, and tier 1 holds the shipping arms to
+# it. The pin only records what a deliberately route-blind driver does. Note also
+# that arg-tag's choice is independent of the program, so in any one ordering it is
+# wrong for some programs and ACCIDENTALLY RIGHT for others — which is why several
+# pins here equal expected.txt and that coincidence is called out rather than read
+# as partial correctness.
+#
+# The must-fail suite cannot carry any of this: no verb in that harness drives
+# `cevalModules` at all. Hence this gate.
 #
 # ── ORACLES ───────────────────────────────────────────────────────────────────
 #
@@ -198,8 +228,52 @@ for dir in "$FIXDIR"/*/; do
     fi
     printf 'ok   %s  tier2 lockstep evalModules == cevalModules\n' "$key"
 
-    # ── TIER 3: the untyped VALUE, against the ledger ─────────────────────────
+    # ── TIER 3: the untyped VALUE ─────────────────────────────────────────────
+    # TWO MODES, and which one applies is decided by whether the entry has a PIN
+    # file. They mean different things and must not be conflated:
+    #
+    #   PIN  (<entry>.untyped.txt present) — "this arm is arg-tag BY CONSTRUCTION,
+    #        nobody is going to fix it, and here is exactly what it prints." No
+    #        issue, because there is no defect to own. The value is still graded
+    #        EXACTLY, so any movement in either direction is red.
+    #   LEDGER (no pin, value != expected) — "this is a live DEFECT and here is the
+    #        OPEN issue that owns it." Drains when the issue is fixed.
+    #
+    # An entry may not have both: a pin says there is nothing to fix, a row says
+    # there is, and signing both is signing a contradiction.
+    pinfile="${dir%/}/$ename.untyped.txt"
     row="$(ledger_lookup "$key")"
+
+    if [ -f "$pinfile" ]; then
+      if [ -n "$row" ]; then
+        fail=$((fail+1))
+        printf 'FAIL %s TIER 3 — BOTH a by-design pin AND a ledger row\n' "$key"
+        printf '  %s says this arm is by-design and unowned; the %s row says it is a\n' "$(basename "$pinfile")" "${row%%|*}"
+        printf '  live defect owned by an open issue. Exactly one of those is true. Decide\n'
+        printf '  which, and delete the other.\n'
+        continue
+      fi
+      pinned="$(strip_unit < "$pinfile" | esc)"
+      if [ "$eu" != "$pinned" ]; then
+        fail=$((fail+1))
+        printf 'FAIL %s TIER 3 — THE BY-DESIGN PIN MOVED\n' "$key"
+        printf '  pinned (%s): %s\n' "$(basename "$pinfile")" "$pinned"
+        printf '  observed:    %s\n' "$eu"
+        printf '  ⇒ the untyped arg-tag fallback shared by evalModules and cevalModules\n'
+        printf '    changed behaviour. That may be a deliberate improvement or a regression,\n'
+        printf '    but it is never a bump: re-derive, decide which it is, and say so in the\n'
+        printf "    case's case.txt. If the arm became CORRECT, the pin should be deleted and\n"
+        printf '    the entry graded against expected.txt on all five arms.\n'
+        continue
+      fi
+      if [ "$eu" = "$expected" ]; then
+        printf 'ok   %s  tier3 untyped pinned (== derived value; arg-tag agrees here by luck)\n' "$key"
+      else
+        printf 'ok   %s  tier3 untyped pinned by design (%s, derived is %s)\n' "$key" "$pinned" "$expected"
+      fi
+      continue
+    fi
+
     if [ "$eu" = "$expected" ]; then
       if [ -n "$row" ]; then
         fail=$((fail+1))

@@ -1,0 +1,106 @@
+CASE: #1608's ORIGINAL repro program, verbatim — receiver type inferred from a
+      string LITERAL, one occurrence, no type signature anywhere.
+OWNS: nothing — no open issue. This case is what CLOSED #1608 (2026-08-15,
+      mis-scoped at filing). The untyped arms' answer is PINNED per entry
+      (main_permA.untyped.txt / main_permB.untyped.txt), not ledgered.
+
+── PROVENANCE: this is the reporter's program, not a reconstruction ───────────
+
+#1608's owner ruling asks for the ORIGINAL program rather than one of the
+described shape, because a reconstruction is a different program. It did not have
+to be reconstructed — it survives verbatim as committed source, in the sprint
+discriminator packet that produced the issue:
+
+  .claude/sprint-b/repair/R6-engines-ungated.md   § "D-1 (run first)"
+      the four modules as heredocs, plus the arm invocations and the control
+  .claude/sprint-b/repair/F1-verdicts.md          § "Finding 5 (R6-D1)"
+      the record of that packet being RUN, carrying the same three values
+      (boxstr / boxstr / boxint) and naming the arms
+
+The two records agree, so the files here are copied from the packet unchanged.
+
+── HOW THE EXPECTED VALUE WAS ESTABLISHED ────────────────────────────────────
+
+NOT captured. Derived from the language semantics BEFORE any arm was run, then
+compared:
+
+  `"s"` is a String literal, so `Box "s" : Box String` — the receiver's type is
+  fixed by the literal, with no signature and no defaulting freedom in play.
+  `speak : Speak a => a -> String` instantiates at `a := Box String`, giving the
+  goal `Speak (Box String)`. Of the two impls in scope, `Speak (Box String)`
+  matches and `Speak (Box Int)` cannot (Int is not String). The two impls are
+  DISJOINT, so no overlap / most-specific question arises at all — exactly one
+  match. Selection is by the receiver's TYPE (docs/spec/DICT-SEMANTICS.md).
+
+  ⇒ `speak (Box "s")`  ==  "boxstr", in BOTH permutations.
+
+The two `import` lines that differ between main_permA.mdk and main_permB.mdk are
+BARE imports. A bare import binds no names at all (AGENTS.md); its only effect is
+to bring the module's impls into scope for dispatch. Reordering two of them
+therefore changes no program meaning, and any arm whose answer moves is wrong
+about something other than this program.
+
+── WHY THIS CASE, GIVEN 1608-cross-module-head-tycon-collision ALREADY EXISTS ──
+
+Same head-tycon-collision mechanism, but a DIFFERENT axis on the receiver, which
+is what makes it worth its own entry rather than a duplicate:
+
+  1608-cross-module-head-tycon-collision  TWO occurrences, off bindings carrying
+                                          EXPLICIT signatures (bi : Box Int, …)
+  1608-original-literal-receiver (here)   ONE occurrence, receiver type INFERRED
+                                          from an inline literal, no signature
+
+Both impls have head tycon `Box`, so the argument's constructor TAG is `Box`
+either way and an arg-tag dispatcher CANNOT discriminate even in principle; only
+a stamped route can. Predicted arg-tag behaviour is therefore "first impl the
+import order reached wins", independent of the program — which is exactly what
+the permA/permB split below shows.
+
+⚠️ READ WITH ITS SIBLING 1608-original-positive-control. This case is wrong on the
+untyped arms in permA and ACCIDENTALLY CORRECT in permB; the control is the exact
+mirror. Neither case alone can distinguish "selects by type" from "selects by
+import order" — the pair can, and that is why both are here.
+
+── MEASURED, 2026-08-15, on a cold `make medaka` at 2c549fef ─────────────────
+
+  arm                                        permA        permB
+  ─────────────────────────────────────────  ───────────  ─────────────────────
+  eval, TYPED   (`medaka run`)               boxstr ✅    boxstr ✅
+  native        (`medaka build` + exec)      boxstr ✅    boxstr ✅
+  ceval, TYPED  (core_ir_typed_modules_main) boxstr ✅    boxstr ✅
+  eval, UNTYPED (eval_modules_main)          boxint ❌    boxstr ⚠️ accidental
+  ceval, UNTYPED(core_ir_modules_main)       boxint ❌    boxstr ⚠️ accidental
+
+All ten cells exit 0.
+
+🚨 SAME VERDICT AS THE DESCRIBED-SHAPE CASE, NOW ON THE PROGRAM #1608 WAS FILED
+ON. All three TYPED arms are correct and order-invariant; the two UNTYPED drivers
+are BYTE-IDENTICAL to each other in both orderings. There is no
+`cevalModules`-specific defect and no evalModules/cevalModules lockstep failure on
+this shape — what reproduces is the shared, documented untyped arg-tag fallback.
+
+The ✅/✅/❌ table in #1608's body compared a TYPED `eval` reading against an
+UNTYPED `ceval` reading, and the primary record states this rather than leaving it
+to inference: F1-verdicts.md Finding 5 names `test/bin/core_ir_modules_main` — the
+UNTYPED driver — as the source of its `core_ir_eval` number, while its `eval` and
+`native` numbers came from `./medaka run` and `./medaka build`. Same-arm, the
+drivers agree.
+
+⚠️ permB's untyped value EQUALS the hand-derived expectation. That is not the arms
+being right — it is the coin landing the other way, and the gate says so in those
+words ("arg-tag agrees here by luck"). The sibling positive control is what keeps
+it from reading as partial correctness.
+
+── DISPOSITION (2026-08-15) ──────────────────────────────────────────────────
+
+#1608 was CLOSED as mis-scoped at filing, on this measurement. Both entries are
+PINNED rather than ledgered: a ledger row asserts "that is a live defect, and here
+is the OPEN issue that owns it", and while the value below is genuinely not the
+one the semantics require, no issue owns it and none should — the untyped drivers
+are desugar + annotate only, so arg-tag is all they have, by design.
+
+The pin grades the same bytes the ledger did, exactly, with no issue needed to
+stay honest: any movement is red, including the day the arm becomes correct (at
+which point delete the pin and let expected.txt grade all five arms). Both entries
+are pinned, where a ledger could only carry permA — so the arm is MORE graded than
+before, not less.

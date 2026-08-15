@@ -1,0 +1,9 @@
+-- PERMUTATION A: `ints` imported before `strs` — the original exactly as filed.
+-- Both `import` lines below are BARE: they bind no names at all, and their only
+-- effect is to bring each module's impls into scope. Their ORDER is cosmetic and
+-- must not change any answer.
+import box.{Box(..), Speak, speak}
+import ints
+import strs
+
+main = putStrLn (speak (Box "s"))

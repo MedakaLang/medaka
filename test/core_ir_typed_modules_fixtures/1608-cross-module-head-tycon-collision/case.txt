@@ -1,5 +1,7 @@
 CASE: cross-module interface method, two impls sharing one head tycon
-OWNS:  #1608 (OPEN) — on the UNTYPED arms only; see the finding below.
+OWNS:  nothing — no open issue. #1608 (the issue this case was built for) was
+       CLOSED 2026-08-15 as mis-scoped at filing; the finding below is why. The
+       untyped arms' answer is PINNED (main_perm*.untyped.txt), not ledgered.
 
 ── HOW THE EXPECTED VALUE WAS ESTABLISHED ────────────────────────────────────
 
@@ -54,4 +56,18 @@ What actually reproduces is the documented untyped arg-tag fallback, which
 pins that shared untyped value; the gate's LOCKSTEP check is what would catch a
 future fix to one driver that is not mirrored in the other.
 
-#1608 is left OPEN for its owner to re-scope. This fixture does not close it.
+── DISPOSITION (2026-08-15) ──────────────────────────────────────────────────
+
+#1608 was CLOSED as mis-scoped at filing, after the reading above was re-measured
+on the reporter's ORIGINAL program (see 1608-original-literal-receiver/case.txt,
+which recovers it verbatim from the sprint packet and reaches the same verdict).
+
+The ledger rows this case carried were removed with it, and NOT because a fix
+landed — the untyped arms still print the value below. A ledger row asserts "that
+is a live defect, and here is the OPEN issue that owns it"; the first clause is
+still true, the second is not. The behaviour is the untyped drivers' documented
+arg-tag design, so it is now PINNED per entry in main_permA.untyped.txt /
+main_permB.untyped.txt, graded byte-exactly by the gate's tier 3. Any movement,
+including the arm becoming CORRECT, is red. The grading did not weaken — it got
+stricter, since both entries are pinned where both were previously ledgered and
+the pin needs no issue to stay honest.
