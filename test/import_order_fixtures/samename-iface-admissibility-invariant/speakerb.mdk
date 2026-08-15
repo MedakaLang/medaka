@@ -1,0 +1,13 @@
+-- The other `Speak`.  Same spelling, same method spelling, DIFFERENT signature:
+-- `x` occurs in argument position 0, so §5 admits arg-tag dispatch at position 0
+-- ONLY.  The two interfaces share nothing but their names.
+public export data DogB = DogB
+
+export interface Speak x where
+  speak : x -> String -> String
+
+impl Speak DogB where
+  speak _ s = "B(\{s})"
+
+export useB : String
+useB = speak DogB "y"
