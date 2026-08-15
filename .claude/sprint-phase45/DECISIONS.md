@@ -3269,3 +3269,37 @@ instrument covering a class deserves tracking, not remembering.
 see* puts a row in a ratchet nothing validates — and W8's own `STALE REF` drain would never fire for it,
 leaving it unfalsifiable. Same *"leave history alone"* reasoning as `R5-drains.md`; the only difference
 is that one was flagged. **The issue is the right home for that fact, not the exceptions file.**
+
+## RUN-P45-093 — ✅ PHASE 4 MERGED (`21:55:05Z`). Five of six units on `main`. #1113 NOT yet closed.
+
+`main` now carries **#1638** (bite 0) · **#1640** (Q1) · **#1643** (S1) · **#1646** (Phase 4) ·
+**#1649** (the fourth-engine-arm gate). Open: **#1645** (S2, merged-and-verified, under one focused lens)
+· **#1651** (by-design pins) · **#1652** (the two owed pins).
+
+⚠️ **#1113 stays OPEN until exit criterion 2 is discharged**, not because Phase 4 is in doubt. The
+contract is explicit that criterion 2 *"is the one that can be quietly failed"*: **C4/I2 must be asked a
+THIRD time with the CONJUNCTION as the bar**, conjunct 1 and conjunct 2 reported **separately**, each
+naming the shape it still fails on. Closing #1113 on "Phase 4 landed" would be exactly that quiet
+failure.
+
+**W10 dispatched to answer it** — measurement and report only, no fix, no close, cold-built from current
+`main`. Briefed with: the spec's conjunction as written; **both prior partial answers** (Stage A's
+*"NEEDS-B-2"*, Phase 3′'s *"conjunct 2 only"*) so it can say what moved; the boundary stated as a
+property rather than a program list; and hand-derivation from DICT §8 I4/§3 **before any invocation**,
+since *the engines are what is under test and their output is not the oracle*.
+
+**Four questions it must answer rather than address:**
+1. **Is conjunct 1 true intra-module, or merely UNREPRESENTABLE?** Q1 rejects the colliding declaration —
+   *"correct"* and *"cannot be written"* are different answers and the arc's claim depends on which.
+2. **What survives CROSS-module?** Q1 does not reach it; S2 supplied identity only at the `requires`
+   seam; `keyForSite`'s supply is still bare-name keyed with its repoint (S3) **deferred behind #1354**.
+   **Name the shapes.**
+3. **Is conjunct 2 still order-invariant after five merges**, or did something regress it?
+4. ⭐ **The one interaction nobody has measured:** Phase 4's tier 2 is a blanket *"identity missed ⇒ try
+   spelling"* fallback whose safety rests on an **unstated invariant** (tier 1 never misses when the
+   query is stamped), verified when **no query carried identity**. **S2 has since supplied real identity
+   somewhere. Is that invariant still true on `main`?**
+
+**Refusal licensed explicitly, including the specific honest outcome:** if the answer is still *"conjunct
+2 only"*, say so — *"the arc has answered this partially twice and both times the partial answer was the
+valuable one."*
