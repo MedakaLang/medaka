@@ -3130,3 +3130,23 @@ title+body no-op on one call).
 **And it posted a correction comment on the CLOSED #1608**, because its earlier comment's *"two ledger
 rows"* sentence *"would otherwise have rotted on a closed issue"* — maintaining prose on an issue nobody
 will reopen, which is exactly the standard this arc keeps having to relearn.
+
+## RUN-P45-088 — ⚠️ #1646 FELL OUT OF THE MERGE QUEUE SILENTLY. The documented lapse, observed.
+
+Enqueued and **verified** in-queue earlier (`ok: PR 1646 is in the merge queue`). Re-checked now:
+`isInMergeQueue: false`, `mergeable: MERGEABLE`, **12/12 checks green**, state still OPEN. **No red, no
+notification, no trace of why** — the PR simply stopped being queued.
+
+⇒ This is [[feedback_auto_merge_arming_is_not_durable]] reproducing exactly: **arming is not a terminal
+state, and "I verified it was queued" has a shelf life.** The only terminal signal is `state: MERGED`.
+
+**Operational rule this sprint confirms, worth carrying to the template:** *verify in-queue when you
+enqueue, then RE-VERIFY until MERGED.* A queued PR that quietly drops out is indistinguishable from one
+still waiting — and in a sprint whose units keep re-conflicting each other, a PR that sits unmerged for
+an extra cycle is one that will need another rebuild + golden re-derive. Re-armed.
+
+⚠️ Note the compounding: three of tonight's five enqueue attempts did not do what a naive reading of
+their return would suggest — one timed out on a CONFLICT with no CI ever starting, one reported
+"already MERGED before queue membership was observable", and this one silently un-queued after a verified
+success. **Every one was caught only because `scripts/pr.sh` reads back STATE rather than trusting an
+exit code**, and because it was re-checked afterwards.
