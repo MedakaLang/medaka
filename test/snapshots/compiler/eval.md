@@ -1,5 +1,5 @@
 # META
-source_lines=3966
+source_lines=4027
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted eval stage — Stage-1 capstone, port of lib/eval.ml's tree-walking
@@ -362,12 +362,41 @@ defaultCellName ifaceId method = "\{ifaceId}#\{method}"
 --
 -- Together these two answer ONE question for `siblingShadows`: which OTHER
 -- methods of this method's interface should be shadowed while a default body
--- runs.  That is an enumeration whose
--- current answer is already a SUPERSET when two interfaces share both a spelling
--- and a method name, and narrowing it to an identity would change which siblings
--- get pinned to a tag — a dispatch change on a path this unit did not measure.
--- The identity component of the row is therefore ignored here ON PURPOSE, not by
--- omission; making these precise is a separate unit.
+-- runs.  Leaving them on the spelling is behaviour-preserving (measured: a
+-- base-vs-branch differential over the module fixture corpus found 0 output and
+-- 0 exit-code differences, which covers the eval-only `siblingShadows` path).
+--
+-- ⚠️ BUT THE TWO READERS ARE NOT THE SAME SHAPE, AND ONLY ONE OF THEM IS A
+-- SUPERSET.  An earlier draft of this comment said "already a SUPERSET" of both;
+-- that is true of `methodsOfIface` and FALSE of this function:
+--
+--   * `methodsOfIface iface` returns EVERY row whose iface spelling matches, so
+--     when two interfaces share a spelling it over-enumerates — a superset, and
+--     a superset of siblings only over-shadows.
+--   * `ifaceOfMethodIn` matches on the METHOD name alone and returns the FIRST
+--     hit — ONE answer, not a set.  Two interfaces with DIFFERENT spellings that
+--     share a method name (`interface A where foo` / `interface B where foo`)
+--     therefore make `ifaceOfMethod "foo"` DECLARATION-ORDER-DEPENDENT, and
+--     `methodsOfIface` then enumerates the WRONG interface's methods.  That is a
+--     WRONG SET, not a superset, and no amount of over-shadowing recovers it.
+--
+-- That order-dependence is PRE-EXISTING — the key gained a component here and
+-- lost nothing — and it is not known to be value-observable: reaching it needs
+-- the narrow inherited-default-plus-`requires` shape that makes `siblingShadows`
+-- bind anything, which was not built.  It is out of this bite's scope, stated
+-- rather than left for the next reader to rediscover.
+--
+-- ⭐ AND THE RESIDUAL IS NARROWER THAN IT WAS: #1640 (Q1) rejects two interfaces
+-- in ONE module sharing a method name outright, so from that point on this can
+-- only be reached ACROSS modules.  ⚠️ DERIVE THIS, DO NOT TRUST IT — #1640 landed
+-- on `main` AFTER this branch's merge base, so at the time of writing the check
+-- is NOT in this tree and grepping here finds nothing:
+--     grep -rn 'R-DUPLICATE-IFACE-METHOD' compiler/
+-- A hit means the intra-module half is closed and only the cross-module residual
+-- above survives; no hit means you are on a tree that predates it.
+--
+-- The identity component of the row is therefore ignored at both sites ON
+-- PURPOSE, not by omission; making them precise is a separate unit.
 ifaceOfMethod : String -> String
 ifaceOfMethod mname = ifaceOfMethodIn mname ifaceDispatchRef.value
 
@@ -2016,6 +2045,38 @@ receiverParam (p::_) = [p]
 --     and dispatch would change on the single-file path — the failure mode is
 --     "quietly plausible", not a crash.  Tier 2 reproduces today's answer exactly,
 --     so a program whose interfaces do not collide by spelling is byte-identical.
+--
+-- 🚨 TIER 2 RESTS ON AN UNSTATED INVARIANT, AND THIS PARAGRAPH IS IT.  Read the
+-- fallback structurally: `lookupPositions` matches `positionsById` against
+-- `Some`/`None` and CANNOT DISTINGUISH "the query carried no identity" from "the
+-- query carried one and no row matched it".  Both reach tier 2 identically.  So
+-- the dangerous case — BOTH sides stamped, identities genuinely DIFFERENT, and
+-- the spelling tier re-collides exactly the two rows tier 1 just separated — is
+-- NOT excluded by construction.  It is excluded only by:
+--
+--     INVARIANT: tier 1 never misses when the query carries an identity.
+--
+-- Which holds today, and was measured rather than argued: two instrumented builds
+-- (one panicking if a stamped query reached tier 2, one panicking if tier 2 had to
+-- choose among two-or-more same-spelled rows) saw ZERO hits across a full compiler
+-- self-compile and the whole module fixture corpus under both `run` and `build` —
+-- with a positive control proving the probe fires (forcing a tier-1 miss produces
+-- `REVIEW-TIER2-COLLISION`, exit 1), so the zeros mean something.
+--
+-- ⚠️ UNREACHABLE IS AN ARGUMENT, NOT A REMOVAL — the same standard this comment
+-- applies to `[0]` below, and it applies here too.  WHAT WOULD FALSIFY IT: any
+-- change to identity SUPPLY.  #1115 E-1 gives the flat path module ids; any future
+-- driver with PARTIAL supply does the same locally.  The moment a stamped query can
+-- meet a same-spelled row it does not own, this case goes from unreachable to live
+-- and dispatch changes — AND NO GATE COULD SEE IT, because the wrong row is a
+-- plausible answer, not a crash.  Whoever changes identity supply owns re-running
+-- the probe above, not inheriting this paragraph's verdict.
+--
+-- ⚠️ AND DO NOT "FIX" THIS WITH `ifaceId == ""`.  Guarding tier 2 on the QUERY's
+-- stamp is NOT equivalent: it sends the mixed case — row unstamped, query stamped
+-- — to the fail-open `[0]` instead of to the correct row, which is strictly worse
+-- and cannot be proven unreachable either.  If a guard is ever wanted the safe
+-- shape is on >1 CANDIDATE at tier 2, never on the query's stamp.
 --
 -- ⚠️ NOT CLOSED BY THIS UNIT: `[0]` on a total miss is still fail-OPEN, and so is
 -- `keepOrAll original [] = original` further downstream.
