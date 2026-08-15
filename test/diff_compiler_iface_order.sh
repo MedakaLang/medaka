@@ -118,6 +118,15 @@
 #     backstop is that the ledger rows NAME #1182, and test/must_fail_census.sh
 #     (nightly, has the GitHub API) reports a ledgered issue that has been CLOSED. So
 #     closing #1182 on a name-scoped fix reds the census. Do not remove that coupling.
+#     🚨 UPDATE 2026-08-15 (Q1): THAT COUPLING IS GONE FOR #1182/#1620 — THE ROWS THAT
+#     CARRIED IT WERE DELETED. Q1 (`R-DUPLICATE-IFACE-METHOD`) made both ledgered cases
+#     converge, a row asserting a divergence that no longer exists is false, and census
+#     HALF 4 is ROW-driven, so with no rows it reports nothing about either issue. The
+#     paragraph above still describes the mechanism correctly and still binds any FUTURE
+#     row; it just no longer describes these two issues. What backstops them now is
+#     census HALF 1, which is DIRECTORY-driven (`must_fail_fixtures/*/` + an `issue:`
+#     line, fired on CLOSED, verdict never read) and covers both through their re-posed
+#     cross-module pins. See test/IFACE-ORDER-LEDGER.txt's header banner.
 #
 #   STATE 3 — Q1 LANDED (resolve REJECTS the ambiguous occurrence).
 #     THIS GATE: the case converges to ONE signature and the row goes RED as
@@ -537,6 +546,18 @@ for cse in $cases; do
       printf '       test/diff_compiler_dict_semantics.sh (Section 4, impl-block permutation)\n'
       printf '     Then: 1. close %s  2. DELETE the row from test/IFACE-ORDER-LEDGER.txt\n' "$issue"
       printf '           3. KEEP the fixture — unledgered, it becomes the regression guard.\n'
+      printf '     ⚠️ STEP 1 IS NOT AUTOMATIC, and skipping it is a supported outcome. A fix\n'
+      printf '        can drain this axis while the SAME issue stays live on another — Q1\n'
+      printf '        (2026-08-15) drained both rows this corpus had by rejecting the\n'
+      printf '        INTRA-module shape, while #1182/#1620 remained open cross-module. In\n'
+      printf '        that case do 2 and 3, leave the issue OPEN, and note in the ledger\n'
+      printf '        header WHY the row went away — otherwise the next reader reads the\n'
+      printf '        empty file as "fixed".\n'
+      printf '     ⚠️ AND CHECK THE ISSUE STILL HAS A GUARD AFTERWARDS. Deleting a row\n'
+      printf '        removes census HALF 4 (row-driven) for that issue. HALF 1 still covers\n'
+      printf '        it if a must_fail_fixtures/ directory names it in claim.txt — but a\n'
+      printf '        pin that DRAINED is under standing instruction to be deleted, so\n'
+      printf '        re-pose it onto the surviving axis rather than leaving it drained.\n'
     } >>"$TMP/notes"
     echo FAIL >>"$TMP/verdicts"; continue
   fi

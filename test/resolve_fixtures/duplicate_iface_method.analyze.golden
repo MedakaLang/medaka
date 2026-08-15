@@ -1,0 +1,1 @@
+error: Method 'n' is declared by two interfaces in this module: 'E1' and 'E2'. Two interfaces declared together may not share a method name — an occurrence of 'n' could not be attributed to either. Rename the method in one of them, or merge the two interfaces. (A method name shared with a PRELUDE interface is a different case and stays legal.)

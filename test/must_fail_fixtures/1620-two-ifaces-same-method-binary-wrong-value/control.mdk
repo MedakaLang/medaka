@@ -1,28 +1,32 @@
--- #1620 CONTROL — main.mdk with the SECOND interface and its impl deleted, and
--- nothing else changed. ONE dimension flips: whether a second interface declares
--- the same method name.
+-- #1620 CONTROL — main.mdk with the COLLISION removed and nothing else changed: no
+-- `import alpha`, no `impl Alpha T`. One interface, one impl, same data type, same call.
+-- The single flipped dimension is whether a SECOND module's interface declares a method
+-- with the same name.
 --
--- It is graded with the SAME verb as the pin (`build-run`), so it exercises the
--- whole path — front end, emitter, clang, and the executed binary — that the pin
--- claims delivers a wrong value only under the collision. A red here means
--- single-interface dispatch, the emitter or clang broke, not that #1620 is fixed,
--- and the harness says CONTROL-BROKE rather than DRAINED.
+-- It is graded with the SAME `build-run` verb as main.mdk, so it exercises the entire path
+-- this pin blames (front end, emitter, clang, executed binary). A red here means that path
+-- broke in general, and the harness says CONTROL-BROKE rather than DRAINED.
 --
--- Per #1144 a control is graded on its EXIT CODE ONLY, so it ASSERTS "alpha" and
--- panics otherwise rather than printing it — a control that merely printed would
--- exit 0 either way and could never fail. PROVEN ABLE TO FAIL: changing the
--- comparand to a value the program cannot produce, "nope", makes the built
--- binary exit 1 with `runtime error [E-PANIC]: control regressed: ...`
--- (measured 2026-08-14, then reverted).
-interface Alpha a where
-  ping : a -> String
+-- ⚠️ True IS ALSO THE ANSWER A CORRECT COMPILER GIVES FOR main.mdk, and that is deliberate.
+-- It makes this control DOUBLE as the post-fix regression guard: selecting by interface
+-- identity makes main.mdk print True too, so main.mdk's pinned stdout moves (a clean
+-- DRAINED) while this control keeps passing. Posing the control on the buggy value instead
+-- is what made #1182's old fixture produce a CONTROL-BROKE whose printed advice ("the
+-- ENVIRONMENT moved, not the bug") was wrong -- see that fixture's claim.txt.
+--
+-- Per #1144 this harness grades a control on its EXIT CODE ONLY, and a
+-- wrong-value-at-exit-0 bug cannot be discriminated by an exit code unless the program puts
+-- the value INTO the exit code. So `main` ASSERTS True and panics otherwise, rather than
+-- printing it — a control that merely printed would exit 0 either way and could never fail.
+import beta.{Beta, ping}
 
 data T = T
 
-impl Alpha T where
-  ping _ = "alpha"
+impl Beta T where
+  ping _ = 7
 
 main =
-  if ping T == "alpha"
-    then println "control-ok:alpha"
-    else panic "control regressed: a lone interface's method no longer delivers its own impl body"
+  if ping T == 7 then
+    println "control-ok:True"
+  else
+    panic "control regressed: with no colliding interface, ping T is no longer 7"
