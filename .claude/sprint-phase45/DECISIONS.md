@@ -3080,3 +3080,53 @@ order-dependent by construction, but easy for a later reader to misread as a ble
 set: HALF 4 must go quiet **honestly** rather than by muting a correct detector; the untyped arms must
 stay **graded**; tiers 1 and 2 must remain unmaskable. **Explicitly forbidden: reopening #1608 to make
 the ledger valid** — tail-wagging-dog, since its closure rests on W9's own measurement.
+
+## RUN-P45-087 — ⭐⭐ W9 REJECTED BOTH OF MY OPTIONS AND INVENTED A BETTER THIRD. Landed in #1651.
+
+I offered (a) re-point the rows to a new issue, or (b) convert them to plain expected values, with my
+hesitation about each. **Both were wrong, and its reasons are better than my hesitations.**
+
+**(a) fails on the ledger's OWN definition of a row** — *"…**that is a live defect**, and here is the
+issue that owns it."* Measured: **clause one still holds** (the untyped arms do print a non-semantic
+value); **clause two does not.** ⇒ *"Re-pointing means filing a bug for behaviour nobody has argued is
+one; keeping means signing a false statement. Both fail on the file's own text."* That is a sharper
+argument than my "category error" instinct, and it is **derived from the artifact rather than from
+taste.**
+
+**(b) was UNIMPLEMENTABLE as posed, and my "reads oddly" objection was the wrong reason to reject it:**
+`expected.txt` is the hand-derived **CORRECT** value that tier 1 holds the three typed arms to. Folding
+the untyped answer into it **destroys the only statement of what is correct** — and cannot be done
+anyway, since the typed and untyped answers differ.
+
+### (c), landed: a per-entry BY-DESIGN PIN
+`<entry>.untyped.txt` holds exactly what the two untyped drivers print, graded **byte-exactly**, **no
+issue named because none is owed**. Pin and ledger row are **mutually exclusive per entry** and the gate
+**refuses both** — so the two dispositions cannot silently coexist.
+
+⭐ **And it answered my real objection by LABELLING rather than avoidance.** I worried this pins an
+order-dependence *as expected*. Its answer: `expected.txt` stays the correctness statement, the pin is
+explicitly *"what a route-blind driver does"*, and **the gate now prints `arg-tag agrees here by luck`
+on the accidental cells instead of a bare `ok`.** The reader is told which greens are luck.
+
+**Grading got STRICTER, not looser:** **all eight** `1608-*` entries are pinned where only **four** were
+ledgered — the accidental halves had been graded only as `== expected`.
+
+⭐ **It also took HALF 4's warning seriously rather than past it.** That half says *"Do NOT just delete
+the row — the gate proves the bug is still there."* Its reading: **the gate proves the DIVERGENCE, which
+is why the rows were not merely deleted; it never proved the divergence is a DEFECT — the half the row
+asserted, and the half now false.** Precedent cited for removing rows whose *assertion* became false
+(as against whose *bug* was fixed): the census's own 2026-08-15 note on `IFACE-ORDER-LEDGER.txt`.
+
+**Verification by delta:** gate **10 graded / 0 failing**; `must_fail` **98/98 REPRO**; census delta
+**exactly 7 findings removed** (6 ledger rows + the `NOT-PINNABLE` row), 2 `none —` lines added,
+**nothing else changed**. Both new failure modes **proven by sabotage then reverted** (mutated pin →
+`THE BY-DESIGN PIN MOVED`; pin+row together → the contradiction error).
+
+⚠️ **`gh pr edit` silently no-op'd BOTH the body and the title** — reported success, changed nothing;
+caught by readback, landed via `scripts/pr.sh body` and `gh api -X PATCH`, each independently re-read.
+**A fifth distinct failure mode for that command tonight** (no-op, truncation, and now a silent
+title+body no-op on one call).
+
+**And it posted a correction comment on the CLOSED #1608**, because its earlier comment's *"two ledger
+rows"* sentence *"would otherwise have rotted on a closed issue"* — maintaining prose on an issue nobody
+will reopen, which is exactly the standard this arc keeps having to relearn.
