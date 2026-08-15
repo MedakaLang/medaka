@@ -1,0 +1,9 @@
+-- #1182, module 1 of 2. Declares interface `A1` with a method named `m`.
+--
+-- The METHOD NAME `m` is exported from here and imported by the entry; `A2`'s identically
+-- named method (a2.mdk) is deliberately NOT imported as a name. That is what makes the
+-- cross-module posing STRONGER than the single-file one it replaced: in the entry, the
+-- occurrence of `m` has exactly ONE binding, A1's, so "which interface does `m` denote?"
+-- is not in dispute here the way it is in #1182's original single-file shape.
+export interface A1 a where
+  m : a -> Int

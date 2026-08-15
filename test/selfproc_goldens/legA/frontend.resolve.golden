@@ -1,3 +1,4 @@
+addIfaceMethods : String -> List String -> Map String String -> Map String String
 addImportProvenance : Map String (List String) -> String -> List String -> Map String (List String)
 addProvenance : Map String (List String) -> String -> String -> Map String (List String)
 ambigModPhrase : List String -> String
@@ -140,6 +141,9 @@ ifaceAmbigMods : Env -> String -> List String
 ifaceAmbiguousSet : Map String ModuleExports -> List Decl -> List (String, List String)
 ifaceDeclaredIn : String -> String -> (String, String)
 ifaceKey : String -> String
+ifaceMethodCollisions : List Decl -> List ResError
+ifaceMethodCollisionsGo : Map String String -> List (String, List String) -> List ResError
+ifaceMethodErrs : String -> Map String String -> List String -> List ResError
 ifaceMethodNm : IfaceMethod -> String
 ifaceMethodPairs : ModuleExports -> List String -> List (String, List String)
 ifaceMethodsOf : String -> List (String, List String) -> List String
@@ -210,6 +214,7 @@ originTraceEnabled : Ref Bool
 originTraceLog : Ref (List (String, List Decl))
 overPubUse : ModuleExports -> Map String ModuleExports -> (UsePath -> ModuleExports -> List a) -> UsePath -> List a
 ownIfaceOrigin : String -> String -> (String, TyConOrigin)
+ownInterfaceMethods : List Decl -> List (String, List String)
 ownTyOrigin : String -> String -> (String, TyConOrigin)
 ownedFieldOwners : ModuleExports -> List (String, String) -> List (String, String)
 ownersForTypes : List String -> List (String, String) -> List (String, String)

@@ -1,0 +1,50 @@
+-- A MEASURED NEGATIVE RESULT: a shape whose answer IS decided by `impl`-BLOCK order
+-- is INVARIANT under `interface`-declaration order. The two axes are independent.
+--
+-- ⭐ WHAT THIS REPLACED, AND WHY THE ANCHOR MOVED FROM #1182 TO #1183. Until Q1
+-- (Stage B / Phase 4b) this slot held negative-1182-impl-axis-shape-is-iface-axis-
+-- invariant/, which carried #1182's declarations byte-for-byte: TWO interfaces both
+-- declaring `m`, whose impls the selector ranked against each other. Q1 rejects that
+-- file ON THE DECLARATION, so the proposition needed a different impl-order-sensitive
+-- carrier. #1183 is one, and it is still live: `Sh`'s two impls here are
+-- ⊑-incomparable and the goal is NOT closed (`[]` leaves an unbound metavariable), so
+-- F-3d's coherence reject is deferred and `pickMostSpecificEntry` commits to the HEAD
+-- of the candidate list -- the value is decided by which `impl Sh` block is written
+-- first. This is test/dict_fixtures/s6-2-t4-open-goal-deferred.mdk's shape, carried in
+-- test/diff_compiler_dict_semantics.sh §4 as a KNOWN-BAD permutation row against
+-- #1183, plus a second interface so this gate's permuter has two chunks to move.
+--
+-- ⚠️ THE #1182 SHAPE IS NOT MERELY MOVED, IT IS GONE FROM THIS CORPUS. Its
+-- impl-order sensitivity came from a candidate set SPANNING TWO INTERFACES that
+-- shared a method name; Q1 makes that unrepresentable within one module. Within ONE
+-- interface, overlapping impls at a CLOSED goal are rejected outright as
+-- `Ambiguous instance` (measured on this branch), which is why the carrier had to be
+-- the OPEN-goal #1183 shape and not a closed one.
+--
+-- ⚠️ NOT AN ASSERTION THAT 1 IS RIGHT. Same disclaimer the replaced file carried:
+-- §6.2 T4's actual answer is to DEFER a non-closed goal to quiescence, which this
+-- compiler has no pass for. What is asserted is only that the two interface-
+-- declaration orderings AGREE WITH EACH OTHER.
+--
+-- Unledgered on purpose, so the gate grades it as invariant and reds if it moves: if
+-- a later Stage B unit makes THIS shape start depending on interface order, the fix
+-- has introduced an order dependence where there was none. Do not ledger it to make
+-- that green.
+data Q a b c = Q a b c
+
+interface Sh a where
+  sh : a -> Int
+
+interface Tg a where
+  tg : a -> Int
+
+impl Sh (Q Int y z) where
+  sh _ = 1
+
+impl Sh (Q x Bool z) where
+  sh _ = 2
+
+impl Tg (Q Int y z) where
+  tg _ = 9
+
+main = println (sh (Q 1 True []))

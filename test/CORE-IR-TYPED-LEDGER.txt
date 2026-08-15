@@ -1,0 +1,148 @@
+# CORE-IR-TYPED-LEDGER.txt — cases in test/core_ir_typed_modules_fixtures/ whose
+# answer on the UNTYPED module drivers differs from the hand-derived correct value,
+# each naming the OPEN issue that owns it.
+#
+# Read by test/diff_compiler_core_ir_typed_modules.sh (the gate) and, for the half a
+# gate cannot check, by test/must_fail_census.sh (nightly, has the GitHub API).
+#
+# This file is test/IMPORT-ORDER-LEDGER.txt's design re-aimed at a different axis, the
+# third in that family (test/IFACE-ORDER-LEDGER.txt is the second). Everything below
+# about what a row means, how it drains and what a reviewer must demand is that file's
+# rule set, kept deliberately close so the three cannot drift into meaning different
+# things — with ONE deliberate difference, stated in full under WHAT A ROW MEANS.
+#
+# ── WHAT A ROW MEANS ──────────────────────────────────────────────────────────
+#
+# A row is not a suppression. It is a signed statement, in the tree, that
+#
+#     "on this program, the two UNTYPED module drivers agree with each other and
+#      both print an answer that is NOT the one the language semantics require,
+#      that is a live defect, and here is the issue that owns it."
+#
+# ⚠️ THE DELIBERATE DIFFERENCE FROM ITS TWO SIBLINGS, and a reviewer must not
+# generalise past it: those ledgers pin a DIVERGENCE and therefore require at least
+# TWO signatures per row, because one signature is not a divergence. This ledger pins
+# a WRONG VALUE against an independently derived correct one, so a row carries exactly
+# ONE observed value. The permutation axis is still graded — each ordering is its own
+# row, keyed by entry file — but the oracle here is the derivation in the case's
+# case.txt, never agreement between two runs. Two arms agreeing is not evidence: on
+# these exact cases both untyped drivers agree with each other and both are wrong.
+#
+# The gate is GREEN with rows present because a gate that lands red breaks `main` and
+# teaches people to ignore it. The rows are what keep the green honest.
+#
+# ── WHAT A ROW MAY NOT COVER ──────────────────────────────────────────────────
+#
+# 🚨 A row reaches TIER 3 ONLY. It cannot silence:
+#
+#   * TIER 1 — a wrong value on `medaka run`, on `medaka build`+exec, or on the TYPED
+#     Core-IR arm (test/bin/core_ir_typed_modules_main). Those are the shipping and
+#     route-consuming paths; a miss there is a red gate, full stop.
+#   * TIER 2 — the two untyped drivers DISAGREEING with each other. AGENTS.md records
+#     `evalModules` and `cevalModules` as parallel module drivers that must be fixed in
+#     LOCKSTEP, and that a fix once shipped patching only eval.mdk and left
+#     core_ir_eval.mdk broken for months. A divergence between them is that hazard
+#     arriving, whichever arm is wrong. Ledgering it would be the rubber stamp this
+#     file exists to prevent.
+#
+# The gate enforces both refusals structurally — it consults this file only after
+# tiers 1 and 2 have passed. Derive rather than trusting this paragraph:
+#   grep -n 'ledger_lookup' test/diff_compiler_core_ir_typed_modules.sh
+#
+# ── HOW A ROW DRAINS (this is the whole point) ────────────────────────────────
+#
+#   * the day a fix makes the untyped arms print the derived value, the row goes RED,
+#     naming the issue to close. It cannot silently absorb the fix, which is what a
+#     plain skip-list does and why this is not one;
+#   * if the wrong value MOVES (still wrong, differently wrong), the row goes RED too —
+#     the pinned value no longer matches what the binary does;
+#   * a row naming a case/entry that no longer exists goes RED (rot).
+#
+# When a row drains: close the issue, DELETE the row, and KEEP the fixture. Without a
+# row the entry is graded as CORRECT on all five arms — i.e. it becomes the regression
+# guard for the fix.
+#
+# ── WHAT A REVIEWER MUST DEMAND BEFORE ACCEPTING A **NEW** ROW ────────────────
+#
+# ⚠️ A tripwire's false positive is its masking path. If this file is easy to bump, it
+# stops being a ledger and becomes the slack that lets the gate be ignored. So a new
+# row is deliberately expensive, and a reviewer should refuse one that does not carry
+# all five:
+#
+#   1. AN ISSUE NUMBER, `#<digits>`, OF AN ISSUE THAT IS OPEN. The gate checks the
+#      SYNTAX offline; it cannot check OPEN-ness (it must run on a dev box with no `gh`
+#      auth and in a required CI shard where an API blip must not block a merge).
+#      test/must_fail_census.sh reports a ledgered issue that is CLOSED. A reviewer
+#      should check by hand: `gh issue view <n> --json state`.
+#   2. A FIXTURE DIRECTORY NAMED `<issue-number>-...`. It is the anti-reflexive-bump
+#      lock: you cannot quietly ledger a case that was green yesterday without RENAMING
+#      its directory, which is loud in a diff.
+#   3. THE ACTUAL OUTPUT, TRANSCRIBED. The pinned value must be one the binary really
+#      produced — the gate compares it against the observed value EXACTLY, so a guessed
+#      or copied value fails immediately. You cannot write a row without running the case.
+#      DO NOT hand-write it: run the gate with the row absent and it prints, on the
+#      failing line, exactly the string that belongs here.
+#   4. A PRE-EXISTING BUG, NOT ONE THE PR INTRODUCED. Ask directly: does this row exist
+#      because the diff under review made a program wrong? If so the answer is to fix
+#      the diff. A row is for a bug that was already shipping.
+#   5. THE CASE'S OWN `case.txt` SAYING HOW THE EXPECTED VALUE WAS DERIVED — from the
+#      language semantics, before any arm was run. This corpus has NO captured goldens
+#      by construction: the engines under test are the ones suspected of being wrong,
+#      so capturing one would enshrine the bug as the expected answer.
+#
+# ⚠️ AND ONE SPECIFIC TO THIS AXIS: DO NOT LEDGER THE CONTROL. control-distinct-head-
+# tycons-invariant/ must be correct on all five arms in both orderings, and it is what
+# makes the rows below evidence about the CANDIDATE SET rather than about cross-module
+# interface dispatch in general. If the control starts failing, the finding is LARGER
+# than any row here claims — file it, do not absorb it.
+#
+# ── FORMAT ────────────────────────────────────────────────────────────────────
+#
+#   <case-directory>/<entry-basename> | #<issue> | <observed value>
+#
+# Fields are `|`-separated and surrounding whitespace is stripped. Blank lines and
+# lines starting with `#` are ignored.
+#
+# The value is escaped so a row is always exactly one line and never collides with the
+# separator: `\` -> `\\`, `|` -> `\p`, newline -> `\n`. The gate escapes what it
+# observes and compares escaped strings, so what you paste here is exactly what the
+# gate printed. ⚠️ Do not hand-derive that shape from this comment either — the gate is
+# the authority on it and this comment can rot:
+#   grep -n '^esc()' -A6 test/diff_compiler_core_ir_typed_modules.sh
+#
+# ══ ROWS ══════════════════════════════════════════════════════════════════════
+#
+# ── #1608 (OPEN): the untyped module drivers select a cross-module impl by import
+#    order, ignoring the receiver's type ─────────────────────────────────────────
+#
+# Two impls (`Box Int` / `Box String`) share one head tycon, so the argument's
+# constructor tag is `Box` in both cases and an arg-tag dispatcher cannot discriminate
+# even in principle. Both untyped drivers fall back to arg-tag "first impl wins", so
+# BOTH occurrences collapse onto whichever impl the import order reached first — which
+# is why each row's value repeats one answer twice, and why swapping the two bare
+# imports swaps which answer it repeats.
+#
+# 🚨 THIS ROW SET RE-SCOPES #1608, AND A REVIEWER SHOULD READ THIS BEFORE FIXING IT.
+# #1608 is filed as a defect SPECIFIC to `cevalModules` (compiler/ir/core_ir_eval.mdk),
+# on the strength of a table reading `eval` ✅ / `core_ir_eval` ❌. MEASURED here
+# same-arm, that table does not hold: the `eval` ✅ reading came from `medaka run`,
+# which is the TYPED path, while the `core_ir_eval` ❌ reading came from
+# core_ir_modules_main, which is the UNTYPED one. Compared arm for arm —
+#
+#   TYPED:    medaka run == medaka build == core_ir_typed_modules_main == CORRECT,
+#             and order-invariant, on both cases below. (The TYPED Core-IR arm did not
+#             exist before this gate; it is what settles the question.)
+#   UNTYPED:  eval_modules_main == core_ir_modules_main, BYTE-IDENTICAL, both wrong.
+#
+# — there is no `cevalModules`-specific defect and no lockstep divergence on this
+# shape. What reproduces is the shared, documented untyped arg-tag fallback
+# (`cevalModules`' own header: "UNTYPED path, like cevalProgram / evalModules").
+#
+# #1608 is deliberately left OPEN: re-scoping it is its owner's call, not this gate's,
+# and the rows drain the moment the untyped path stops being arg-tag — whether that
+# happens because #1608 is fixed as filed or because it is re-scoped and fixed
+# elsewhere. Each case's case.txt carries the full transcribed matrix.
+1608-cross-module-head-tycon-collision/main_permA | #1608 | boxint boxint\n
+1608-cross-module-head-tycon-collision/main_permB | #1608 | boxstr boxstr\n
+1608-cross-module-dict-forwarding/main_permA | #1608 | [boxint] [boxint]\n
+1608-cross-module-dict-forwarding/main_permB | #1608 | [boxstr] [boxstr]\n
