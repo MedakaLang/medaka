@@ -3303,3 +3303,36 @@ since *the engines are what is under test and their output is not the oracle*.
 **Refusal licensed explicitly, including the specific honest outcome:** if the answer is still *"conjunct
 2 only"*, say so — *"the arc has answered this partially twice and both times the partial answer was the
 valuable one."*
+
+## RUN-P45-094 — ⚠️ I ALMOST MANUFACTURED FIVE FALSE ALARMS FROM A TRUNCATED QUERY. Caught before acting.
+
+Doing the close-out tracker audit I ran `gh issue list --state open --limit 100` and tested membership.
+It reported **#1182, #1113, #1062, #1228 and #1354 as closed/absent.** Every one of those is **OPEN** —
+the repo has more than 100 open issues, so the list was **truncated and its ABSENCES carry no
+information.**
+
+**The inference was the error, not the data.** A bounded query's *presence* is evidence; its *absence*
+is only evidence if you have established the bound is not binding. Re-queried per issue:
+
+| issue | state | |
+|---|---|---|
+| #1182 | **OPEN** | correctly reopened; stayed open |
+| #1630 | **CLOSED** | drained by #1638 — the one legitimate closure |
+| #1113 #1062 #1228 #1354 #1619 #1620 #1641 #1642 #1644 #1647 #1648 #1653 #1654 | **OPEN** | as intended |
+
+⚠️ **The near-miss that matters:** #1182 reading as closed would have looked like a **THIRD desk-close of
+the same issue** — the exact pattern this sprint has already caught twice — and I would have gone
+chasing it, or worse, "re-reopened" an issue that was never closed and written a third indignant
+comment. **A false alarm shaped like a known real hazard is the most expensive kind**, because the
+pattern-match supplies the confidence the evidence lacks.
+
+⇒ Same class as tonight's other instrument failures, and the fifth of them:
+[[feedback_an_exit_code_graded_control_answers_the_wrong_question]] (exit codes),
+[[feedback_a_differential_is_blind_to_what_landed_under_you]] (both arms),
+`dead: N` as a lower bound (extension-gated extraction), a CI red with **zero steps executed**, and now a
+**truncated list read as a complete one.** In every case the instrument answered a narrower question than
+the one asked, and the answer looked like an answer.
+
+**Tracker state at close-out is CORRECT:** one issue closed tonight by a landed fix (#1630, via #1638's
+keyword with its sha), one closed by owner ruling with the record attached (#1608), **nothing else
+closed**, and every pin-bearing issue still open.
