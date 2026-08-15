@@ -2,7 +2,108 @@
 
 ---
 
-## ✅ 2026-08-14: Stage B Phase 0 CLOSED, arm set + G-0 landed. **No known-red gates from this run.**
+## 🚦 2026-08-16 — Stage B Phase 4/4b implementation phase CLOSED (#1113 closed). **THERE ARE NO KNOWN-RED GATES.**
+
+**Nothing on `main` is expected-red. A red gate now is a REAL BREAK — not this sprint's deferred
+debt — and this file gives you no licence to dismiss one.** Every section below this one is history
+kept for its reasoning; none of it licenses a red today.
+
+Confirm rather than trust the sentence above (`main`'s most recent CI run, and any nightly):
+
+```sh
+gh run list --branch main --limit 5 --json event,name,conclusion,headSha,createdAt \
+  --jq '.[]|"\(.createdAt) \(.event) \(.name) \(.conclusion) \(.headSha[0:8])"'
+```
+
+Sprint contract: `.claude/STAGE-B-PHASE45-SPRINT.md`. **Records and every ruling:
+`.claude/sprint-phase45/DECISIONS.md` (RUN-P45-036 … 096)** — this section deliberately does not
+duplicate them. ⚠️ Both #1113's closing comment and the sprint brief cite that range as *"…098"*;
+the file's last entry is **096** (`grep -c '^## RUN-P45-' .claude/sprint-phase45/DECISIONS.md`).
+
+### What landed
+
+| unit | PR | state |
+|---|---|---|
+| arm set — constrained impl head reaches its real head tag (closed #1630) | **#1638** | MERGED |
+| **Q1** — `resolve` rejects two interfaces in ONE module sharing a method name (`R-DUPLICATE-IFACE-METHOD`) | **#1640** | MERGED |
+| **S1** — the `*ByIface` selector family widened `String` → `IfaceRef` (behaviour-neutral: 391/391 byte-identical IR) | **#1643** | MERGED |
+| **Phase 4 (`B-2.3`)** — arg-tag admissibility frozen as data, **re-keyed by interface IDENTITY**, two-tier key, both consumers held in lockstep by the ELEMENT TYPE (divergence is a compile error) | **#1646** | MERGED |
+| the **fourth engine arm** — first driver running `cevalModules` over TYPED trees; then the reporter's original repro (closed #1608) | **#1649** + **#1651** | MERGED |
+| the two owed self-draining must-fail pins (#1648, #1641) | **#1652** | MERGED |
+
+🚨 **#1645 (S2 — real interface identity supplied at the `requires`-residual seam) HAS NOT MERGED.**
+#1113's closing table lists it among what landed; measured at the time of writing it is **OPEN, all
+12 checks green, `isInMergeQueue: true`**. ⇒ **Do not assume that seam's behaviour is on `main`.**
+Check it, don't infer it — and note `gh pr merge`'s exit code carries no signal here (AGENTS.md):
+
+```sh
+gh pr view 1645 --json state,mergedAt
+gh api graphql -f query='{repository(owner:"MedakaLang",name:"medaka"){pullRequest(number:1645){isInMergeQueue state}}}' --jq '.data.repository.pullRequest'
+```
+
+### ⚠️ The one thing you most need to know: **C4/I2 is still CONJUNCT 2 ONLY**
+
+Unchanged in shape from the Phase 3′ answer, asked and answered a third time, and **nothing this
+sprint regressed it or moved it**. **Evidence is order-invariant; the instance consulted is not.**
+The one-line proof, from the typed Core-IR dump: a binding in one module carries a route key naming
+**the other module's interface** — *identity is in the WORD, not the KEY*. Full derivation: the
+closing comment on **#1113**.
+
+⚠️ **And the distinction this arc must not blur: intra-module collisions are now UNREPRESENTABLE,
+not CORRECT.** Q1 rejects the *declaration*; it does not resolve the *occurrence* — and it also
+rejects some disjoint-receiver programs that are unambiguous under the spec. Those are two different
+claims. Shapes still failing, all measured, all with live pins: **#1182** (cross-module same-spelled
+interfaces at a shared head) · **#1620** (type-preservation break on the built binary) · **#1619**
+(cross-module default hijack).
+
+### What is deferred, and who owns it
+
+**Phase 4b — the selector re-key (`keyForSite` → the identity-keyed family) — did not land,
+deliberately.** It is owned by **#1182 (OPEN, S0)** and sequenced behind **#1354**, on measured
+grounds: Q1 makes `keyForSite`'s supply sound *intra-module*, but its supply (`methodIfaceParamsRef`)
+is still **bare-name keyed CROSS-module**, so repointing now would move the order dependence from
+impl-block order to interface-declaration order rather than remove it. Unowned was not an allowed
+outcome; this is filed, not carried on a promise.
+
+### New traps landed in `AGENTS.md` this sprint — read them there, they are not re-explained here
+
+- **A two-arm differential whose TARGET is a `stdlib/*` file is UNSOUND, and it fails in the
+  direction that MANUFACTURES findings** (14 reported divergences, all 14 retracted). AGENTS.md,
+  *"THE SAME PROPERTY MAKES A TWO-ARM DIFFERENTIAL UNSOUND"*.
+- **`MEDAKA_STRICT=1` cannot be set on BOTH arms of a two-arm differential** — the base arm exits 1
+  on every case and the run reports "everything differs". AGENTS.md, staleness-guard section.
+- **The golden-CAPTURE path reads the same oracles as the gates and has NO staleness guard** — a
+  stale oracle can bless a wrong golden, which is permanent. Rebuild oracles after any merge/rebase
+  *before* capturing. AGENTS.md, *"Stale oracles"*.
+- **Do not edit compiler source while a build is in flight** — the fingerprint is baked at stage A
+  start; a comment is enough to lose the rebuild. AGENTS.md, just above the emitter-borrowing note.
+
+### Gate / tooling gaps filed this sprint (all OPEN, S3)
+
+- **#1653** — the must-fail census cannot express *"closed as a duplicate, pin deliberately
+  retained"*: a permanent false positive in HALF 1.
+- **#1654** — `check_doc_links.sh` cannot see a DIRECTORY citation, so its `dead: N` is a **lower
+  bound by construction** and a doc citing a deleted directory is silently unguarded.
+- **#1642** — `test/bootstrap_resolve.sh`'s missing-golden remedy names a command that cannot work
+  (`capture_goldens.sh boot_resolve` matches ZERO fixtures).
+
+### If you are picking this up cold
+
+Read, in this order: `.claude/sprint-phase45/DECISIONS.md` (RUN-P45-036 … 096 — the ⭐/🚨 entries
+first), the closing comment on **#1113**, and `compiler/TYPECHECK-TARGET-ARCHITECTURE.md` for where
+C4/I2 and the identity work sit in the arc. The still-open S0/S1s this sprint filed or left standing:
+**#1619**, **#1620**, **#1641**, **#1644**, **#1647**, **#1648**, **#1182** — query each by number
+(`gh issue view <n> --json state,labels`); a bounded `gh issue list` truncates and its absences carry
+no information.
+
+---
+
+## ✅ CLOSED (superseded 2026-08-16): 2026-08-14 Stage B Phase 0 — arm set + G-0 landed
+
+🚨 **SUPERSEDED BY THE SECTION ABOVE. Its "plan of record" is SPENT — units 1–5 all landed
+(#1638/#1640/#1643/#1646) and unit 6 (`S3`) was deferred to #1182 behind #1354.** Nothing here is
+expected-red. Kept only so its Phase 0 corrections and the G-0 four-state reading stay available;
+**do not plan off its landing-order table.**
 
 Sprint contract: `.claude/STAGE-B-PHASE45-SPRINT.md`. **Full records and every ruling:
 `.claude/sprint-phase45/DECISIONS.md`** (RUN-P45-001 … 035) — read that before re-deriving anything
