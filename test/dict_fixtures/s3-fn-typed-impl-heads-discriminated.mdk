@@ -34,9 +34,20 @@
 --
 -- ⚠️ NOT #1180 (`headTyconTy`'s bare-`TyVar` arm, where answering None is the
 -- documented intent and the program must be REJECTED) and NOT #1630 (the same
--- `_ => None` arm set at a headed `TyConstrained` body — `impl Sz (Eq a => Int)`,
--- still `check=0 run=0 build=1` on this binary). The `_ => None` arm set is not
--- finished; this row is the executable memory that THIS member of it was repaired.
+-- `_ => None` arm set at a headed `TyConstrained` body — `impl Sz (Eq a => Int)`).
+-- #1630 is FIXED and pinned two rows below, at
+-- `s3-constrained-impl-head-routes.mdk`.
+--
+-- 🚨 THIS PARAGRAPH SAID `impl Sz (Eq a => Int)` WAS "still `check=0 run=0
+-- build=1` on this binary" UNTIL #1630's FIX LANDED. It was a present-tense
+-- measurement, scoped to one binary, parked in a sibling artifact that no fix to
+-- #1630 would ever touch — which is the SAME mechanism that produced #1630
+-- itself (PR #1629 scoped a ruling to `Eq a => a` and left it reading as a
+-- ruling on the wrapper). If you repair a member of this arm set, grep the tree
+-- for the old ruling and fix the SET, not the file you are in.
+--
+-- The `_ => None` arm set is not finished; this row is the executable memory
+-- that THIS member of it was repaired.
 interface Sz a where
   sz : a -> Int
 

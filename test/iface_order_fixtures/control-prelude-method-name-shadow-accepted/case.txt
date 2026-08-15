@@ -1,0 +1,32 @@
+entry: main.mdk
+what: CONTROL — it bounds Q1's SCOPE. An interface method whose name is a PRELUDE
+what: interface method's (`minBound`, core's `Bounded.minBound`) must still be
+what: ACCEPTED and must be invariant under interface-declaration order. Deliberately
+what: UNLEDGERED so the gate grades it as invariant.
+
+replaces: control-shared-method-name-disjoint-receivers/, which Q1 (Stage B /
+replaces: Phase 4b) rejects ON THE DECLARATION. That case is NOT re-posed elsewhere
+replaces: because its observation is inexpressible after Q1 — see main.mdk's header
+replaces: for the four measurements that establish that, and the PR for transcripts.
+
+how-established: Derivable WITHOUT running anything: `minBound` can only be `U` (it
+how-established: is the argument of `useU : U -> Int`) and `tag U` can only be
+how-established: `impl Tag U`, so no ranking between interfaces is performed and the
+how-established: answer is 4 + 5 = 9 in every ordering. Then confirmed on a binary
+how-established: built from this branch: `medaka run main.mdk` -> 9, exit 0.
+
+why-it-matters: Q1's scope ruling is that the PRELUDE IS OUT — the prelude-collision
+why-it-matters: case is specified as a WARNING and explicitly not an error
+why-it-matters: (docs/spec/SHADOW-SEMANTICS.md S1-PRELUDE, reserved code
+why-it-matters: W-PRELUDE-METHOD-SHADOW, owned by #1499). `duplicateErrors`' other
+why-it-matters: three checks all seed themselves from `preludeDecls`; Q1
+why-it-matters: deliberately does not. If someone "makes it consistent" with its
+why-it-matters: siblings, this file stops compiling and this row goes red. It is the
+why-it-matters: only in-tree guard on that boundary.
+
+why-minBound: `eq`, `map` and `hash` were rejected as carriers: a user interface
+why-minBound: declaring any of those breaks the PRELUDE's own bodies at exit 1 today
+why-minBound: (measured — `Could not deduce 'Same a' from the signature of 'neq'`),
+why-minBound: a pre-existing #1499-adjacent residue. This control must assert an
+why-minBound: ACCEPTANCE, so it needs a prelude method name that shadows cleanly,
+why-minBound: and `minBound` is one (measured: exit 0).

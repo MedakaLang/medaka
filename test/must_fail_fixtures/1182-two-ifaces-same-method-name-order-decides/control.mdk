@@ -1,33 +1,38 @@
 -- #1182 CONTROL — identical to main.mdk except the two `impl` blocks are SWAPPED.
--- `impl A2 (Q x Bool z)` is declared first and `impl A1 (Q Int y z)` second. Nothing else
--- changes: same data type, same two interfaces in the same order, same bodies, same call.
+-- `impl A1 (Q Int y z)` is declared first and `impl A2 (Q x Bool z)` second. Nothing else
+-- changes: same two imported interfaces, same data type, same bodies, same call.
 --
--- ⚠️ THE CONTROL IS THE OTHER HALF OF A REORDERING DIFFERENTIAL, not a claim that 2 is
--- the right answer. It asserts that this ordering yields 2 while main.mdk's yields 1 —
--- i.e. that the answer is decided by `impl` block order. It does NOT endorse either value.
+-- THE PAIR IS THE ASSERTION, not either file alone: together they pin (A2 first -> 2) AND
+-- (A1 first -> 1), which IS the statement "the impl-block order decides". That is the
+-- reordering-differential shape test/MUST-FAIL-NOT-PINNABLE.txt's #1183 entry argues a
+-- SINGLE must-fail row cannot express — answered here by spending the CONTROL SLOT on the
+-- second ordering rather than on an unrelated near-miss, so both orderings are graded.
+--
+-- ⚠️ 1 IS ALSO THE ANSWER A CORRECT COMPILER GIVES, and that is deliberate. It makes this
+-- control DOUBLE as the post-fix regression guard: scoping the candidate set by interface
+-- makes BOTH files print 1, so main.mdk's pinned stdout moves (a clean DRAINED) while this
+-- control keeps passing. The shape this fixture replaced could not do that — its control
+-- asserted the wrong-value ordering, so a fix produced a CONTROL-BROKE whose printed advice
+-- ("the ENVIRONMENT moved, not the bug") was wrong.
 --
 -- Per #1144 this harness grades a control on its EXIT CODE ONLY, and a
--- wrong-value-at-exit-0 bug cannot be discriminated by an exit code unless the program
--- puts the value INTO the exit code. So `main` ASSERTS 2 and panics otherwise, rather
--- than printing it — a control that merely printed would exit 0 either way and could
--- never fail.
+-- wrong-value-at-exit-0 bug cannot be discriminated by an exit code unless the program puts
+-- the value INTO the exit code. So `main` ASSERTS 1 and panics otherwise, rather than
+-- printing it — a control that merely printed would exit 0 either way and could never fail.
+import a1.{A1, m}
+import a2.{A2}
+
 data Q a b c = Q a b c
-
-interface A1 a where
-  m : a -> Int
-
-interface A2 a where
-  m : a -> Int
-
-impl A2 (Q x Bool z) where
-  m _ = 2
 
 impl A1 (Q Int y z) where
   m _ = 1
 
+impl A2 (Q x Bool z) where
+  m _ = 2
+
 main =
   let r = m (Q 1 True 7)
-  if r == 2 then
-    println "control-ok:2"
+  if r == 1 then
+    println "control-ok:1"
   else
-    panic "control regressed: with the impl blocks swapped the answer is no longer 2"
+    panic "control regressed: with impl A1 declared first the answer is no longer 1"

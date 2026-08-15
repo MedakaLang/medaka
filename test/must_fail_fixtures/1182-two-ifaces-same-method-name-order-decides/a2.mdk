@@ -1,0 +1,14 @@
+-- #1182, module 2 of 2. Declares interface `A2`, whose method is ALSO named `m`.
+--
+-- The entry imports only the INTERFACE NAME (`import a2.{A2}`), never the method name, so
+-- `A2.m` is not bound to any spelling in the entry. It reaches the selector only through
+-- the impl universe — which is exactly the point: `matchingEntries` keys candidates by
+-- bare METHOD NAME, so this impl still lands in the candidate set for an occurrence that
+-- names A1's method.
+--
+-- ⚠️ Importing `m` from BOTH modules instead is a different program and does NOT reproduce
+-- this: it is rejected up front with `Ambiguous occurrence: 'm' is exported by both 'a1'
+-- and 'a2'` (measured on this branch). The single-name import is what keeps the defect
+-- reachable.
+export interface A2 a where
+  m : a -> Int

@@ -698,6 +698,28 @@ jobs:
             # depends on import arrangement. It reads NO test/bin oracle and needs no
             # clang or emitter — only ./medaka, 9 `check`/`run` invocations over
             # generated tmp fixtures, measured 5.0s wall on the dev box.
+            #
+            # 'diff_compiler_core_ir_typed_modules' (#1608) needs NO new pattern — the
+            # existing 'diff_compiler_core_ir*' glob already matches it, and this shard
+            # is where it belongs anyway, on cost and on oracle overlap. Cost re-derived
+            # 2026-08-14/15 from three consecutive green merge_group runs (31846695129,
+            # 31836577116, 31835386721) rather than trusted from the note above, whose
+            # own numbers had already rotted: shard walls were eval 301/304/312s,
+            # sqlite 318/201/314s, tools 378/174/369s, backend 402/294/401s,
+            # frontend 491/360/393s, types 510/393/499s, engines 398/396/510s. `eval`
+            # is the cheapest by mean AND has by far the lowest variance of the seven;
+            # `types` and `engines` are the poles. ⚠️ Those numbers rot — the ranking in
+            # the paragraph above (eval 149s, engines 373s) is from ONE day earlier in
+            # the same month and is already 2x off in absolute terms. Re-derive with the
+            # `gh run view` command a few lines up before moving anything.
+            #
+            # Oracle overlap is the second reason and it is the stronger one: the gate
+            # reads test/bin/core_ir_typed_modules_main (new), core_ir_modules_main and
+            # eval_modules_main — and this shard ALREADY builds the latter two for
+            # diff_compiler_core_ir_modules and diff_compiler_eval_modules. So the true
+            # marginal cost here is ONE extra oracle build plus ~6 tiny programs
+            # (3 probe invocations + 1 `medaka run` + 1 `medaka build` + clang each).
+            # In any other shard it would be THREE oracle builds.
             pattern: "'diff_compiler_eval*' 'diff_compiler_core_ir*' 'diff_compiler_dispatch_shape' 'diff_compiler_prelude_obj' 'diff_compiler_slice_oob' 'diff_compiler_ir_size' 'diff_compiler_origin_agreement' 'diff_compiler_draft_semantic' 'diff_compiler_anf_identity' 'diff_compiler_import_order' 'diff_compiler_iface_order' 'diff_compiler_test_native' 'diff_compiler_flat_vs_onemodule' 'bootstrap_lex' 'bootstrap_resolve' 'bootstrap_typecheck' 'bootstrap_eval'"
           - name: backend
             # 'build_cmd' (T8): THE end-to-end gate for the SHIPPING `medaka build` CLI —

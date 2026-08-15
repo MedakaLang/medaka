@@ -1,0 +1,57 @@
+CASE: cross-module interface method, two impls sharing one head tycon
+OWNS:  #1608 (OPEN) — on the UNTYPED arms only; see the finding below.
+
+── HOW THE EXPECTED VALUE WAS ESTABLISHED ────────────────────────────────────
+
+NOT captured. Derived from the language semantics BEFORE any arm was run, then
+compared:
+
+  `bi : Box Int` and `bs : Box String` are both given explicit, unambiguous type
+  signatures, so no defaulting or inference freedom is in play. Method selection
+  is by the receiver's TYPE (docs/spec/DICT-SEMANTICS.md; the "most specific
+  wins" ruling). `Box Int` matches `impl Tagged (Box Int)` and nothing else;
+  `Box String` matches `impl Tagged (Box String)` and nothing else. Neither impl
+  is more specific than the other — they are disjoint — so there is no
+  overlap-resolution question.
+
+  ⇒ `tag bi ++ " " ++ tag bs`  ==  "boxint boxstr", in BOTH permutations.
+
+The two `import` lines that differ between main_permA.mdk and main_permB.mdk are
+BARE imports. A bare import binds no names at all (AGENTS.md); its only effect is
+to bring the module's impls into scope for dispatch. Reordering two of them
+therefore changes no program meaning, and any arm whose answer moves is wrong
+about something other than this program.
+
+── WHY THIS SHAPE ────────────────────────────────────────────────────────────
+
+Both impls have head tycon `Box`, so the argument's constructor TAG is `Box` in
+both cases. An arg-tag dispatcher ("first impl whose tag matches wins") CANNOT
+discriminate here even in principle; only a stamped route can. That makes this
+the shape that separates a route-consuming dispatcher from a tag-guessing one —
+and it is why the control case (distinct head tycons) is not a substitute.
+
+── MEASURED, 2026-08-15, on a cold `make medaka` of this branch ──────────────
+
+  arm                                        permA              permB
+  ─────────────────────────────────────────  ─────────────────  ─────────────────
+  eval, TYPED   (`medaka run`)               boxint boxstr ✅   boxint boxstr ✅
+  native        (`medaka build` + exec)      boxint boxstr ✅   boxint boxstr ✅
+  ceval, TYPED  (core_ir_typed_modules_main) boxint boxstr ✅   boxint boxstr ✅
+  eval, UNTYPED (eval_modules_main)          boxint boxint ❌   boxstr boxstr ❌
+  ceval, UNTYPED(core_ir_modules_main)       boxint boxint ❌   boxstr boxstr ❌
+
+🚨 THE FINDING, and it re-scopes #1608: the two UNTYPED module drivers are
+BYTE-IDENTICAL to each other in both permutations. #1608 was filed as a defect
+SPECIFIC to `cevalModules` (compiler/ir/core_ir_eval.mdk) on the strength of a
+table comparing `eval` ✅ against `core_ir_eval` ❌ — but that `eval` reading came
+from `medaka run`, which is the TYPED path, while the `core_ir_eval` reading came
+from core_ir_modules_main, which is the UNTYPED one. Same-arm, the two parallel
+module drivers AGREE. There is no lockstep divergence between them on this shape.
+
+What actually reproduces is the documented untyped arg-tag fallback, which
+`evalModules` and `cevalModules` share by design (see cevalModules' own header:
+"UNTYPED path, like cevalProgram / evalModules"). The ledger row for this case
+pins that shared untyped value; the gate's LOCKSTEP check is what would catch a
+future fix to one driver that is not mirrored in the other.
+
+#1608 is left OPEN for its owner to re-scope. This fixture does not close it.
