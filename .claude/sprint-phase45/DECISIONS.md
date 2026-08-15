@@ -2821,3 +2821,52 @@ change to identity supply**), *"no gate could see it"* recorded, and the `ifaceI
 off by name** with its reason. **R2's reasoning corrected without touching the decision.** `repl` moved
 into `unchecked:` with the reason, not just the label. **legA re-captured byte-identical** — the positive
 confirmation that a comment change moved no inferred type.
+
+## RUN-P45-079 — ⭐ OWNER RULING (Val): S3 IS DEFERRED until #1354 lands. Ruled on evidence, as contracted.
+
+The Phase 0 plan held S3 (the `keyForSite` repoint) for *"a post-Q1 measurement rather than up front."*
+The measurement is in:
+
+- **Q1 landed**, so two interfaces sharing a method name in ONE module are now rejected ⇒
+  `keyForSite`'s supply (`ifaceOfMethodName` → `methodIfaceParamsRef`) **is sound intra-module**,
+  exactly as P0-G predicted.
+- **But that table is still bare-name keyed CROSS-module** — per-module state overlaid from a bare-name
+  universe map, which is **#1354's** territory — and the **re-posed #1182 pin reproduces cross-module
+  today** (must-fail 98/98).
+- S3 carries **the largest IR move of any bite in the sprint.**
+
+⇒ **Doing S3 now would key selection by an identity whose cross-module supply is still bare-name —
+moving the order dependence from impl-block order to interface-declaration order rather than removing
+it.** That is precisely the *"weak fix / loud→silent"* shape **this sprint's own opening ruling
+rejected** (RUN-P45-007 ruling 1). Deferring is not a shortfall; it is the same ruling applied
+consistently at the other end of the sprint.
+
+**Routed behind #1354.** #1113 closes on Phase 4 per the sprint contract's exit criterion 1; S3 is
+recorded on #1182 as the unit that finishes it, with this evidence attached.
+
+## RUN-P45-080 — S1 RE-MERGED AND RE-VERIFIED (2nd time). Its Q1-interaction check was one a differential CANNOT do.
+
+**#1643 `MERGEABLE`**, merge commit `2ef4c573`. **Enqueued immediately on receipt**, per RUN-P45-077.
+
+⭐⭐ **The methodological point of the night:** I asked W4 to watch for a Q1 interaction with its corpus.
+It observed that **a two-arm differential is structurally blind to that question** — Q1 is in *both*
+arms, so a same-module rejection **cancels out and reports `identical`**. It compared each fixture's
+status against the **pre-Q1 run** instead. Static scan first (of the 18 projects, exactly three files
+declare two interfaces, all with **disjoint** method names), then confirmed on the binary: **0 fixtures
+changed status across the Q1 landing**, 13 accept / 5 reject unchanged fixture-by-fixture. **Q1 did not
+reach the corpus; no fixture was adjusted.**
+⇒ *"Same instrument, wrong question"* — the differential answers "did my change move anything", **not**
+"did the thing that landed under me move anything." Two different baselines.
+
+**`run_gates.sh` routing caught THREE oracle problems, not the one I predicted** — `eval_modules_main`
+stale; `core_ir_typed_modules_main` (#1649's new oracle) phantom-skipped; and **`core_ir_modules_main`,
+a second oracle the new gate also reads**, visible only when running the gate directly rather than
+through the wrapper. With all three built, **`diff_compiler_core_ir_typed_modules` PASSES** — so the new
+fourth-engine-arm gate is genuinely exercised against this branch rather than skipped.
+
+**Verdicts: C3a YES · C3b YES**; targeted differential **18/18 byte-identical including diagnostic
+logs**; LEG A re-derived a **third** time, unchanged. #1640's `resolve.md` and `frontend.resolve.golden`
+**preserved byte-intact** — the snapshot delta touches only `typecheck.md`.
+
+⚠️ **Its closing caveat is the thrash stated precisely:** *"a third landing would invalidate this again —
+the evidence above is specific to base `acd3144f`."*
