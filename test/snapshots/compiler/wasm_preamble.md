@@ -1661,7 +1661,7 @@ strCodecRuntimeLines = [
 -- 0xDFFF, byte-identical to medaka_rt.c mdk_char_from_code) → Some <char i31>
 -- (struct.new $C_Some ordinal 0 + the i31 codepoint) / None (i31 ordinal 1).  The
 -- reserved Option ctors ($C_Some / the Option root) are emitted unconditionally in
--- ref-mode.  Gated independently (`useCharFromCodeRef`) — needs no $str/$arr.
+-- ref-mode. Gated independently by `WasmEmit.useCharFromCode` — needs no $str/$arr.
 export charFromCodeRuntimeLines : List String
 charFromCodeRuntimeLines = [
   "  ;; -- W11b charFromCode (byte-identical to medaka_rt.c mdk_char_from_code) --",

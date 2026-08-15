@@ -332,6 +332,7 @@ data WasmEmit =
       useRng : Ref Bool,
       useHash : Ref Bool,
       useFloatHash : Ref Bool,
+      useCharFromCode : Ref Bool,
       emittedDefaultNames : Ref (OrdMap Unit),
       defaultDefinitions : Ref (List (List String)),
     }
@@ -358,6 +359,7 @@ freshWasmEmit mode = WasmEmit {
   useRng = Ref False,
   useHash = Ref False,
   useFloatHash = Ref False,
+  useCharFromCode = Ref False,
   emittedDefaultNames = Ref omEmpty,
   defaultDefinitions = Ref [],
 }
@@ -906,10 +908,6 @@ numPolyLocalsRef = Ref []
 useStrCodecRef : Ref Bool
 useStrCodecRef = Ref False
 
--- W11b: the program uses charFromCode (the $mdk_char_from_code range-check runtime).
-useCharFromCodeRef : Ref Bool
-useCharFromCodeRef = Ref False
-
 -- W11b: the program uses charIsAlpha/charIsSpace/… or charToUpper/charToLower.
 useCharClassRef : Ref Bool
 useCharClassRef = Ref False
@@ -1068,7 +1066,6 @@ emitProgramWith emit input (CProgram groups ctorArs ctorTypes impls) =
   let _ = setRef useValueArithRef False
   let _ = setRef numPolyLocalsRef []
   let _ = setRef useStrCodecRef False
-  let _ = setRef useCharFromCodeRef False
   let _ = setRef useCharClassRef False
   let _ = setRef useIORef False
   let _ = setRef useArgsRef False
@@ -1124,7 +1121,6 @@ emitProgramGaps input (CProgram groups ctorArs ctorTypes impls) =
   let _ = setRef useValueArithRef False
   let _ = setRef numPolyLocalsRef []
   let _ = setRef useStrCodecRef False
-  let _ = setRef useCharFromCodeRef False
   let _ = setRef useCharClassRef False
   let _ = setRef useIORef False
   let _ = setRef useArgsRef False
@@ -1655,7 +1651,7 @@ noteW8Extern emit name =
   let _ = if contains name ["debugStringLit", "debugCharLit"]
           then let _ = setRef useStrRef True in setRef useStrLeafRef True else ()
   -- W11b: charFromCode : Int -> Option Char — range-check runtime, no $str/$arr needed.
-  let _ = if name == "charFromCode" then setRef useCharFromCodeRef True else ()
+  let _ = if name == "charFromCode" then setRef emit.useCharFromCode True else ()
   -- W11b: char classification + case-mapping externs — pure WAT helpers, no $str/$arr.
   let _ = if contains name ["charIsAlpha", "charIsSpace", "charIsUpper", "charIsLower",
                              "charIsPunct", "charToUpper", "charToLower"]
@@ -2478,7 +2474,7 @@ emitRefProgram prog groups =
   -- and the $arr rep (both forced via noteW8Extern).  charFromCode alone needs neither
   -- the codec nor strLeaf, so its runtime fn is gated independently.
   let strCodecRt = if useStrCodecRef.value then strCodecRuntimeLines else []
-  let charFromCodeRt = if useCharFromCodeRef.value then charFromCodeRuntimeLines else []
+  let charFromCodeRt = if (progEmit prog).useCharFromCode.value then charFromCodeRuntimeLines else []
   -- W11b: char classification + case-mapping helpers (ASCII-only pure WAT).
   let charClassRt = if useCharClassRef.value then charClassRuntimeLines else []
   -- W12: the IO host-surface marshaling runtime (byte-channel + the five extern bodies).
