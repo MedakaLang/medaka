@@ -2713,3 +2713,56 @@ unreproduced refutation.** Two issues have already been desk-closed here on infe
 evidence; this is not a third. Ruling posted to #1608 with the three decisive outcomes named and the
 cheap way to get them (run the original through the five arms the new gate already drives). State,
 labels and severity untouched; readback verified.
+
+## RUN-P45-075 — SEMANTICS LENS ON #1646: the tier-2 question ANSWERED, and the answer is "by invariant, not by construction"
+
+**Verdict: could not break it. No CONFIRMED defect.** But the headline question got a real answer.
+
+**Structurally, tier 2 IS a blanket *"tier 1 returned nothing ⇒ try spelling"*** — `lookupPositions`
+matches `positionsById` against `Some`/`None` and **does not distinguish absence from conflict**. So
+case (b) — both sides stamped, identities differ, fallback re-collides exactly the two interfaces the
+key exists to separate — is **NOT excluded by construction.** It is excluded only by the invariant
+*"tier 1 never misses when the query carries an identity."*
+
+⭐ **And then it MEASURED that invariant instead of arguing it.** Two instrumented builds — panic if a
+stamped query reaches tier 2; panic if tier 2 must choose among ≥2 same-spelled rows — **zero hits**
+across a full compiler self-compile **and** 123 module fixtures × `run` + `build`. **With a positive
+control proving the probe fires**: forcing tier 1 to miss yields
+`REVIEW-TIER2-COLLISION id=speakerb::Speak …`, exit 1. **That is what makes the zeros mean something**,
+and it is the discipline this whole sprint has been converging on.
+
+⚠️ **Every route it built to reach case (b) is closed UPSTREAM, in another subsystem, not by this PR** —
+`Method 'bark' is not part of interface 'Speak'`; `Duplicate interface: Debug`; `Ambiguous interface`
+in **both** import orders. So the property holds today for reasons #1646 does not own.
+
+### ⇒ REPAIR R1: apply the PR's OWN standard to tier 2
+#1646 is scrupulous that the `[0]` default is *"unreachable, and unreachable is an argument, not a
+removal"* — **and tier 2 now rests on exactly such an unstated invariant.** State it, and state what
+falsifies it: a future change to identity supply (**#1115 E-1**, or any partial-supply driver) silently
+converts case (b) from unreachable to live **and no gate could see it.**
+🚨 **Do NOT add the obvious guard.** Guarding on `ifaceId == ""` is **not** equivalent — it would send
+the mixed *"row unstamped, query stamped"* case to the fail-open `[0]` instead of the correct row, and
+that case is not provably unreachable. If a guard is wanted, the safe shape is **>1 candidate at tier
+2**. Ruled: **comment only this bite**; a behaviour change does not ride inside a documentation repair.
+
+### ⇒ REPAIR R2: one of the two "safe on spelling" arguments is WRONG
+The count is right and leaving both Ref readers on the spelling **is** behaviour-preserving (0
+output/exit differences across 123 fixtures). But *"their answer is already a superset"* **is true only
+of `methodsOfIface`.** `ifaceOfMethodIn` returns the **FIRST** row whose *method* name matches — a
+single answer — so two **differently-spelled** interfaces sharing a method name make `ifaceOfMethod`
+order-dependent and `methodsOfIface` then enumerates **the wrong interface's** methods: **a wrong set,
+not a superset.** PLAUSIBLE, **pre-existing, not regressed.** Fix the justification, not the code.
+
+⭐ **New information worth recording where the next reader will find it: Q1 REJECTS that shape
+intra-module** (`R-DUPLICATE-IFACE-METHOD`), so `ifaceOfMethod`'s order-dependence survives **only
+cross-module** from here on. Two sprint units interacting in the residual, discovered by review rather
+than by design.
+
+**Confirmed by the lens, worth keeping:** lockstep is **genuinely structural** — reverting only
+`core_ir_lower`'s call yields two type errors and `check-self` exit 2; **wasm really does ignore
+`positions`** (10 `CImplTagged` sites, all binding `_` at that slot); the typed Core IR differential
+over 123 fixtures is **byte-identical except the one collision fixture** (`compared=123 irdiffs=1`),
+measured on the one instrument that can see it; and the legA changed-set equals the edited-signature set.
+
+**Weak spot disclosed rather than papered over:** its `repl` probe hit a parse error on **both** arms,
+so repl dispatch was not properly exercised — going into `unchecked:` rather than riding on inference.
