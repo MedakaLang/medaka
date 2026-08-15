@@ -3150,3 +3150,29 @@ their return would suggest — one timed out on a CONFLICT with no CI ever start
 "already MERGED before queue membership was observable", and this one silently un-queued after a verified
 success. **Every one was caught only because `scripts/pr.sh` reads back STATE rather than trusting an
 exit code**, and because it was re-checked afterwards.
+
+## RUN-P45-089 — THE FIXTURE DELETION ROTTED A DOC CITATION. Second-order cascade, caught by the gate.
+
+`soundness` red on #1652 — **9 s in, on `check_doc_links.sh`**, not on the suite:
+`.claude/sprint-b/repair/R5-drains.md:336: DEAD -> test/must_fail_fixtures/1071-…/main.mdk`
+(5343 references / 320 files; **dead: 1**).
+
+⇒ **The same shape as my #1608 close, one layer out**: a deletion I ruled invalidated prose elsewhere in
+the tree. **Two cascades in one session from two different bookkeeping acts** — closing an issue with
+instruments pointing at it, and deleting a fixture with documents citing it.
+
+**Ruled: excuse it as `legitimate history`, do NOT edit the record.** `R5-drains.md` is a **dated sprint
+repair record** whose citation was **true when written**; rewriting it to match today's tree *"is how a
+historical record starts lying."* The gate already has that category and it is the larger of its two
+buckets (159 of 207 excusals). The excusal must say **where the content went** — absorbed into
+`1062-…/`, measurement preserved in its `why-absorbed:` block, #1071 closed as a duplicate — so a reader
+following the dead path is routed rather than left concluding it was lost.
+
+⚠️ **And the bound I asked W8 to check rather than assume:** the gate only sees **markdown path
+citations**, so `dead: 1` is a **lower bound** on the deletion's blast radius — a prose mention without a
+path, a fixture name in a ledger, or a directory name in a script would all be invisible to it.
+
+⭐ **Worth recording in the gate's favour:** this is `check_doc_links.sh` doing exactly its job, in 9
+seconds, on a change whose author had already run five gates and the census. **The cheap gate caught what
+the expensive ones structurally could not see** — none of `must_fail`, `iface_order`,
+`shadow_semantics`, `dict_semantics` or the census reads markdown.
