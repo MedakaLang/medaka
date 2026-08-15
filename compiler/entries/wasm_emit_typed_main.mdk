@@ -78,6 +78,7 @@ main = match args ()
     putStr (emitProgram refTrapStateInput refTrapStateAbortProgram)
   "--reemit-feature-state"::_ => reemitFeatureState ()
   "--reemit-char-from-code-state"::_ => reemitCharFromCodeState ()
+  "--reemit-leaf-runtime-state"::_ => reemitLeafRuntimeState ()
   "--capture-current-binding"::row::_ => captureCurrentBinding row
   _ => driveRuntime emit
 
@@ -535,6 +536,133 @@ charFromCodeStateCensusProgram = CProgram
   []
   []
   []
+
+-- LR0 capture-only apparatus. Each row emits strict P, record U, census P with
+-- one attributed gap, then strict P again. Record events retain their own empty
+-- capture so a record-mode substitution cannot hide behind valid placeholder WAT.
+reemitLeafRuntimeState : Unit -> <IO> Unit
+reemitLeafRuntimeState _ =
+  let _ = reemitLeafRuntimeRow "CHARCLASS" leafCharClassP leafCharClassU leafCharClassCensus
+  let _ = reemitLeafRuntimeRow "FLOATRNG" leafFloatRngP leafFloatRngU leafFloatRngCensus
+  let _ = reemitLeafRuntimeRow "STRCODEC" leafStrCodecP leafStrCodecU leafStrCodecCensus
+  reemitLeafRuntimeRow "MATH" leafMathP leafMathU leafMathCensus
+
+reemitLeafRuntimeRow : String -> CProgram -> CProgram -> CProgram -> <IO> Unit
+reemitLeafRuntimeRow name p u census =
+  let p1 = emitProgram leafRuntimeInput p
+  let (recordU, recordEvents) = emitProgramRecord leafRuntimeInput u
+  let censusEvents = emitProgramGaps leafRuntimeInput census
+  let _ = printCapture ("LEAF_" ++ name ++ "_P1") p1
+  let _ = printCapture ("LEAF_" ++ name ++ "_RECORD_U") recordU
+  let _ = printEvents ("LEAF_" ++ name ++ "_RECORD_U_EVENTS") recordEvents
+  let _ = printEvents ("LEAF_" ++ name ++ "_CENSUS_P_GAP") censusEvents
+  printCapture ("LEAF_" ++ name ++ "_P2") (emitProgram leafRuntimeInput p)
+
+leafRuntimeInput : WasmEmitInput
+leafRuntimeInput = makeWasmEmitInput [] [] [] False []
+
+leafRuntimeLoc : Loc
+leafRuntimeLoc = Loc "<leaf-runtime-state>" 1 1 1 1
+
+leafRuntimeArg : Pat
+leafRuntimeArg = PVar "x" leafRuntimeLoc
+
+leafRuntimeProgram : List CBind -> CProgram
+leafRuntimeProgram groups =
+  CProgram (groups ++ [CBind "main" [CClause [] (CLit (LInt 0))]]) [] [] []
+
+leafRuntimeCensus : CProgram -> String -> String -> CProgram
+leafRuntimeCensus (CProgram groups ctorArs ctorTypes impls) bindName missingName = CProgram (groups ++ [CBind bindName [CClause [leafRuntimeArg] (CVar missingName AGlobal)]]) ctorArs ctorTypes impls
+
+leafCharClassP : CProgram
+leafCharClassP = leafRuntimeProgram
+  [
+    CBind "leafCharClass" [
+      CClause [leafRuntimeArg] (CApp (CVar "charIsAlpha" AGlobal) (CLit (LChar "a")))
+    ]
+  ]
+
+leafCharClassU : CProgram
+leafCharClassU = leafRuntimeProgram
+  [
+    CBind "leafCharClassNearestCode" [
+      CClause [leafRuntimeArg] (CApp (CVar "charFromCode" AGlobal) (CLit (LInt 65)))
+    ],
+    CBind "leafCharClassNearestString" [
+      CClause [leafRuntimeArg] (CLet False PWild (CLit (LString "char-class-nearest")) (CLit (LInt 0)))
+    ],
+  ]
+
+leafCharClassCensus : CProgram
+leafCharClassCensus =
+  leafRuntimeCensus
+    leafCharClassP
+    "leafCharClassIntentionalGap"
+    "missingLeafCharClassCensus"
+
+leafFloatRngP : CProgram
+leafFloatRngP = leafRuntimeProgram
+  [
+    CBind "leafFloatRng" [CClause [leafRuntimeArg] (CApp (CVar "randomFloat" AGlobal) (CLit LUnit))]
+  ]
+
+leafFloatRngU : CProgram
+leafFloatRngU = leafRuntimeProgram
+  [
+    CBind "leafFloatRngNearestInt" [
+      CClause [leafRuntimeArg] (CApp (CApp (CVar "randomInt" AGlobal) (CLit (LInt 0))) (CLit (LInt 1)))
+    ],
+    CBind "leafFloatRngNearestFloat" [
+      CClause [leafRuntimeArg] (CApp (CVar "intToFloat" AGlobal) (CLit (LInt 0)))
+    ],
+  ]
+
+leafFloatRngCensus : CProgram
+leafFloatRngCensus =
+  leafRuntimeCensus
+    leafFloatRngP
+    "leafFloatRngIntentionalGap"
+    "missingLeafFloatRngCensus"
+
+leafStrCodecP : CProgram
+leafStrCodecP = leafRuntimeProgram
+  [
+    CBind "leafStrCodec" [
+      CClause [leafRuntimeArg] (CApp (CVar "stringToChars" AGlobal) (CLit (LString "héllo")))
+    ]
+  ]
+
+leafStrCodecU : CProgram
+leafStrCodecU = leafRuntimeProgram
+  [
+    CBind "leafStrCodecNearestChar" [
+      CClause [leafRuntimeArg] (CApp (CVar "charToStr" AGlobal) (CLit (LChar "A")))
+    ],
+    CBind "leafStrCodecNearestArray" [CClause [leafRuntimeArg] (CArray [CLit (LInt 1)])],
+  ]
+
+leafStrCodecCensus : CProgram
+leafStrCodecCensus =
+  leafRuntimeCensus
+    leafStrCodecP
+    "leafStrCodecIntentionalGap"
+    "missingLeafStrCodecCensus"
+
+leafMathP : CProgram
+leafMathP = leafRuntimeProgram
+  [
+    CBind "leafMath" [CClause [leafRuntimeArg] (CApp (CVar "sin" AGlobal) (CLit (LFloat 0.0)))]
+  ]
+
+leafMathU : CProgram
+leafMathU = leafRuntimeProgram
+  [
+    CBind "leafMathNearestSqrt" [CClause [leafRuntimeArg] (CApp (CVar "sqrt" AGlobal) (CLit (LFloat 4.0)))]
+  ]
+
+leafMathCensus : CProgram
+leafMathCensus =
+  leafRuntimeCensus leafMathP "leafMathIntentionalGap" "missingLeafMathCensus"
 
 -- Float `/` stays over-approximated by the divisor-local scan: it needs the
 -- ref-mode local even though IEEE division never traps on zero.

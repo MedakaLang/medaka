@@ -54,6 +54,10 @@ if [ "${1:-}" = "--one" ]; then
       msg="$(printf 'FAIL %s (native oracle stderr)\n%s' "$name" "$(cat "$native_err")")"; st=1
     elif ! "$EMITBIN" "$f" > "$wat" 2>"$WORKDIR/$name.emit.err"; then
       msg="$(printf 'FAIL %s (wasm emit)\n%s' "$name" "$(cat "$WORKDIR/$name.emit.err")")"; st=1
+    elif [ "$name" = "w8b_math_host_import.mdk" ] &&
+         { ! grep -F '(import "env" "mdk_sin"' "$wat" >/dev/null ||
+           ! grep -F 'call $mdk_sin' "$wat" >/dev/null; }; then
+      msg="FAIL $name (missing mdk_sin host import/direct call)"; st=1
     elif ! wasm-tools parse "$wat" -o "$wasm" 2>"$WORKDIR/$name.parse.err"; then
       msg="$(printf 'FAIL %s (wasm-tools parse)\n%s' "$name" "$(cat "$WORKDIR/$name.parse.err")")"; st=1
     elif ! wasm-tools validate --features=all "$wasm" 2>"$WORKDIR/$name.val.err"; then

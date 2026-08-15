@@ -1003,6 +1003,155 @@ for feature_name in p1 hash-int-only float-div u p2; do
     }
 done
 
+# LR0 capture-only apparatus. Each field retains ten ordered markers: strict P1,
+# record U WAT, record U events, census P+gap events, then strict P2. Record events
+# are exact-empty evidence, not discarded output.
+LEAF_OUT="$INPUT_WORK/leaf-runtime.out"
+"$EMITBIN" --reemit-leaf-runtime-state >"$LEAF_OUT" 2>"$INPUT_WORK/leaf-runtime.err"
+LEAF_STATUS=$?
+[ "$LEAF_STATUS" -eq 0 ] && [ ! -s "$INPUT_WORK/leaf-runtime.err" ] || {
+  echo "FAIL LR-LEAF-STATUS: harness status/stderr"
+  exit 1
+}
+LEAF_MARKERS="$(awk '/^LEAF_(CHARCLASS|FLOATRNG|STRCODEC|MATH)_(P1|RECORD_U|RECORD_U_EVENTS|CENSUS_P_GAP|P2)_(BEGIN|END)$/ { print }' "$LEAF_OUT")"
+LEAF_EXPECTED_MARKERS="$(printf 'LEAF_CHARCLASS_P1_BEGIN\nLEAF_CHARCLASS_P1_END\nLEAF_CHARCLASS_RECORD_U_BEGIN\nLEAF_CHARCLASS_RECORD_U_END\nLEAF_CHARCLASS_RECORD_U_EVENTS_BEGIN\nLEAF_CHARCLASS_RECORD_U_EVENTS_END\nLEAF_CHARCLASS_CENSUS_P_GAP_BEGIN\nLEAF_CHARCLASS_CENSUS_P_GAP_END\nLEAF_CHARCLASS_P2_BEGIN\nLEAF_CHARCLASS_P2_END\nLEAF_FLOATRNG_P1_BEGIN\nLEAF_FLOATRNG_P1_END\nLEAF_FLOATRNG_RECORD_U_BEGIN\nLEAF_FLOATRNG_RECORD_U_END\nLEAF_FLOATRNG_RECORD_U_EVENTS_BEGIN\nLEAF_FLOATRNG_RECORD_U_EVENTS_END\nLEAF_FLOATRNG_CENSUS_P_GAP_BEGIN\nLEAF_FLOATRNG_CENSUS_P_GAP_END\nLEAF_FLOATRNG_P2_BEGIN\nLEAF_FLOATRNG_P2_END\nLEAF_STRCODEC_P1_BEGIN\nLEAF_STRCODEC_P1_END\nLEAF_STRCODEC_RECORD_U_BEGIN\nLEAF_STRCODEC_RECORD_U_END\nLEAF_STRCODEC_RECORD_U_EVENTS_BEGIN\nLEAF_STRCODEC_RECORD_U_EVENTS_END\nLEAF_STRCODEC_CENSUS_P_GAP_BEGIN\nLEAF_STRCODEC_CENSUS_P_GAP_END\nLEAF_STRCODEC_P2_BEGIN\nLEAF_STRCODEC_P2_END\nLEAF_MATH_P1_BEGIN\nLEAF_MATH_P1_END\nLEAF_MATH_RECORD_U_BEGIN\nLEAF_MATH_RECORD_U_END\nLEAF_MATH_RECORD_U_EVENTS_BEGIN\nLEAF_MATH_RECORD_U_EVENTS_END\nLEAF_MATH_CENSUS_P_GAP_BEGIN\nLEAF_MATH_CENSUS_P_GAP_END\nLEAF_MATH_P2_BEGIN\nLEAF_MATH_P2_END')"
+[ "$LEAF_MARKERS" = "$LEAF_EXPECTED_MARKERS" ] || {
+  echo "FAIL LR-LEAF-MARKERS: exact 40 ordered markers"
+  exit 1
+}
+for leaf_field in CHARCLASS FLOATRNG STRCODEC MATH; do
+  feature_exact_capture "LEAF_${leaf_field}_P1_BEGIN" "LEAF_${leaf_field}_P1_END" "$LEAF_OUT" >"$INPUT_WORK/leaf-${leaf_field}-p1.wat" &&
+    feature_exact_capture "LEAF_${leaf_field}_RECORD_U_BEGIN" "LEAF_${leaf_field}_RECORD_U_END" "$LEAF_OUT" >"$INPUT_WORK/leaf-${leaf_field}-u.wat" &&
+    feature_exact_capture "LEAF_${leaf_field}_RECORD_U_EVENTS_BEGIN" "LEAF_${leaf_field}_RECORD_U_EVENTS_END" "$LEAF_OUT" >"$INPUT_WORK/leaf-${leaf_field}-record.events" &&
+    feature_exact_capture "LEAF_${leaf_field}_CENSUS_P_GAP_BEGIN" "LEAF_${leaf_field}_CENSUS_P_GAP_END" "$LEAF_OUT" >"$INPUT_WORK/leaf-${leaf_field}-census.events" &&
+    feature_exact_capture "LEAF_${leaf_field}_P2_BEGIN" "LEAF_${leaf_field}_P2_END" "$LEAF_OUT" >"$INPUT_WORK/leaf-${leaf_field}-p2.wat" || {
+      echo "FAIL LR-${leaf_field}-CAPTURE: malformed capture"
+      exit 1
+    }
+  for leaf_wat in p1 u p2; do
+    [ -s "$INPUT_WORK/leaf-${leaf_field}-${leaf_wat}.wat" ] || {
+      echo "FAIL LR-${leaf_field}-CAPTURE: empty $leaf_wat WAT"
+      exit 1
+    }
+  done
+  [ ! -s "$INPUT_WORK/leaf-${leaf_field}-record.events" ] || {
+    echo "FAIL LR-${leaf_field}-RECORD-EVENTS: expected exact empty events"
+    exit 1
+  }
+  [ -s "$INPUT_WORK/leaf-${leaf_field}-census.events" ] || {
+    echo "FAIL LR-${leaf_field}-CENSUS: empty events"
+    exit 1
+  }
+  cmp -s "$INPUT_WORK/leaf-${leaf_field}-p1.wat" "$INPUT_WORK/leaf-${leaf_field}-p2.wat" || {
+    echo "FAIL LR-${leaf_field}-P-IDENTITY: P changed after record U and census"
+    exit 1
+  }
+  cmp -s "$INPUT_WORK/leaf-${leaf_field}-p1.wat" "$INPUT_WORK/leaf-${leaf_field}-u.wat" && {
+    echo "FAIL LR-${leaf_field}-P-U: P/U positive control did not differ"
+    exit 1
+  }
+done
+for leaf_field in CHARCLASS FLOATRNG STRCODEC MATH; do
+  for leaf_wat in p1 u p2; do
+    leaf_path="$INPUT_WORK/leaf-${leaf_field}-${leaf_wat}.wat"
+    wasm-tools parse "$leaf_path" -o "$INPUT_WORK/leaf-${leaf_field}-${leaf_wat}.wasm" >"$INPUT_WORK/leaf-${leaf_field}-${leaf_wat}.parse.out" 2>"$INPUT_WORK/leaf-${leaf_field}-${leaf_wat}.parse.err"
+    LEAF_PARSE_STATUS=$?
+    [ "$LEAF_PARSE_STATUS" -eq 0 ] && [ ! -s "$INPUT_WORK/leaf-${leaf_field}-${leaf_wat}.parse.out" ] && [ ! -s "$INPUT_WORK/leaf-${leaf_field}-${leaf_wat}.parse.err" ] || {
+      echo "FAIL LR-${leaf_field}-PARSE: $leaf_wat"
+      exit 1
+    }
+    wasm-tools validate --features=all "$INPUT_WORK/leaf-${leaf_field}-${leaf_wat}.wasm" >"$INPUT_WORK/leaf-${leaf_field}-${leaf_wat}.validate.out" 2>"$INPUT_WORK/leaf-${leaf_field}-${leaf_wat}.validate.err"
+    LEAF_VALIDATE_STATUS=$?
+    [ "$LEAF_VALIDATE_STATUS" -eq 0 ] && [ ! -s "$INPUT_WORK/leaf-${leaf_field}-${leaf_wat}.validate.out" ] && [ ! -s "$INPUT_WORK/leaf-${leaf_field}-${leaf_wat}.validate.err" ] || {
+      echo "FAIL LR-${leaf_field}-VALIDATE: $leaf_wat"
+      exit 1
+    }
+    "$NODE" "$RUNJS" "$INPUT_WORK/leaf-${leaf_field}-${leaf_wat}.wasm" >"$INPUT_WORK/leaf-${leaf_field}-${leaf_wat}.run.out" 2>"$INPUT_WORK/leaf-${leaf_field}-${leaf_wat}.run.err"
+    LEAF_RUN_STATUS=$?
+    [ "$LEAF_RUN_STATUS" -eq 0 ] && [ ! -s "$INPUT_WORK/leaf-${leaf_field}-${leaf_wat}.run.err" ] &&
+      printf '0\n' | cmp -s - "$INPUT_WORK/leaf-${leaf_field}-${leaf_wat}.run.out" || {
+        echo "FAIL LR-${leaf_field}-EXEC: inert $leaf_wat"
+        exit 1
+      }
+  done
+done
+for leaf_wat in p1 p2; do
+  grep -F '(func $mdk_char_is_alpha' "$INPUT_WORK/leaf-CHARCLASS-${leaf_wat}.wat" >/dev/null &&
+    grep -F 'call $mdk_char_is_alpha' "$INPUT_WORK/leaf-CHARCLASS-${leaf_wat}.wat" >/dev/null || {
+      echo "FAIL LR-CHARCLASS-P-PRESENCE: $leaf_wat"
+      exit 1
+    }
+  grep -F '(func $mdk_random_float' "$INPUT_WORK/leaf-FLOATRNG-${leaf_wat}.wat" >/dev/null &&
+    grep -F 'call $mdk_random_float' "$INPUT_WORK/leaf-FLOATRNG-${leaf_wat}.wat" >/dev/null &&
+    grep -F '(func $mdk_next_u64' "$INPUT_WORK/leaf-FLOATRNG-${leaf_wat}.wat" >/dev/null || {
+      echo "FAIL LR-FLOATRNG-P-PRESENCE: $leaf_wat"
+      exit 1
+    }
+  for leaf_codec_helper in mdk_str_to_chars mdk_chars_to_str mdk_str_to_utf8_bytes mdk_utf8_bytes_to_str; do
+    grep -F "(func \$$leaf_codec_helper" "$INPUT_WORK/leaf-STRCODEC-${leaf_wat}.wat" >/dev/null || {
+      echo "FAIL LR-STRCODEC-P-PRESENCE: $leaf_codec_helper in $leaf_wat"
+      exit 1
+    }
+  done
+  grep -F 'call $mdk_str_to_chars' "$INPUT_WORK/leaf-STRCODEC-${leaf_wat}.wat" >/dev/null || {
+    echo "FAIL LR-STRCODEC-P-DIRECT-CALL: $leaf_wat"
+    exit 1
+  }
+  grep -F '(import "env" "mdk_sin"' "$INPUT_WORK/leaf-MATH-${leaf_wat}.wat" >/dev/null &&
+    grep -F 'call $mdk_sin' "$INPUT_WORK/leaf-MATH-${leaf_wat}.wat" >/dev/null || {
+      echo "FAIL LR-MATH-P-PRESENCE: $leaf_wat"
+      exit 1
+    }
+done
+if grep -F '$mdk_char_is_alpha' "$INPUT_WORK/leaf-CHARCLASS-u.wat" >/dev/null; then
+  echo "FAIL LR-CHARCLASS-U-ABSENCE: nearest miss emitted char class"
+  exit 1
+fi
+grep -F '(func $mdk_char_from_code' "$INPUT_WORK/leaf-CHARCLASS-u.wat" >/dev/null || {
+  echo "FAIL LR-CHARCLASS-U-COFACTOR: missing charFromCode"
+  exit 1
+}
+if grep -F '$mdk_random_float' "$INPUT_WORK/leaf-FLOATRNG-u.wat" >/dev/null; then
+  echo "FAIL LR-FLOATRNG-U-ABSENCE: nearest miss emitted randomFloat"
+  exit 1
+fi
+grep -F '(func $mdk_next_u64' "$INPUT_WORK/leaf-FLOATRNG-u.wat" >/dev/null &&
+  grep -F '(func $mdk_int_to_float' "$INPUT_WORK/leaf-FLOATRNG-u.wat" >/dev/null || {
+    echo "FAIL LR-FLOATRNG-U-COFACTORS: missing RNG/Float"
+    exit 1
+  }
+for leaf_codec_helper in mdk_str_to_chars mdk_chars_to_str mdk_str_to_utf8_bytes mdk_utf8_bytes_to_str; do
+  if grep -F "\$$leaf_codec_helper" "$INPUT_WORK/leaf-STRCODEC-u.wat" >/dev/null; then
+    echo "FAIL LR-STRCODEC-U-ABSENCE: nearest miss emitted $leaf_codec_helper"
+    exit 1
+  fi
+done
+grep -F '(func $mdk_char_to_str' "$INPUT_WORK/leaf-STRCODEC-u.wat" >/dev/null &&
+  grep -F '(type $arr (array (mut (ref eq)))' "$INPUT_WORK/leaf-STRCODEC-u.wat" >/dev/null || {
+    echo "FAIL LR-STRCODEC-U-COFACTORS: missing Char/String/Array"
+    exit 1
+  }
+if grep -F '$mdk_sin' "$INPUT_WORK/leaf-MATH-u.wat" >/dev/null; then
+  echo "FAIL LR-MATH-U-ABSENCE: nearest miss emitted sin import"
+  exit 1
+fi
+grep -F 'f64.sqrt' "$INPUT_WORK/leaf-MATH-u.wat" >/dev/null || {
+  echo "FAIL LR-MATH-U-COFACTOR: missing sqrt"
+  exit 1
+}
+LEAF_CHARCLASS_EVENT=$'fn leafCharClassIntentionalGap\tunbound variable \'missingLeafCharClassCensus\' (not a local, global value, constructor, or known function) [in leafCharClassIntentionalGap]'
+LEAF_FLOATRNG_EVENT=$'fn leafFloatRngIntentionalGap\tunbound variable \'missingLeafFloatRngCensus\' (not a local, global value, constructor, or known function) [in leafFloatRngIntentionalGap]'
+LEAF_STRCODEC_EVENT=$'fn leafStrCodecIntentionalGap\tunbound variable \'missingLeafStrCodecCensus\' (not a local, global value, constructor, or known function) [in leafStrCodecIntentionalGap]'
+LEAF_MATH_EVENT=$'fn leafMathIntentionalGap\tunbound variable \'missingLeafMathCensus\' (not a local, global value, constructor, or known function) [in leafMathIntentionalGap]'
+for leaf_field in CHARCLASS FLOATRNG STRCODEC MATH; do
+  leaf_event_var="LEAF_${leaf_field}_EVENT"
+  [ "$(wc -l < "$INPUT_WORK/leaf-${leaf_field}-census.events")" -eq 1 ] &&
+    [ "$(cat "$INPUT_WORK/leaf-${leaf_field}-census.events")" = "${!leaf_event_var}" ] || {
+      echo "FAIL LR-${leaf_field}-CENSUS: exact one attributed gap"
+      exit 1
+    }
+done
+
 # H2b.10 capture-only apparatus. HashFloat P is strict and inert; record U keeps
 # Float + hashInt prerequisites while excluding hashFloat. Census proves its route
 # only, so it is asserted as one attributed event and never parsed as WAT.
