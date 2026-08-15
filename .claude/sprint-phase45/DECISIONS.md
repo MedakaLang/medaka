@@ -2977,3 +2977,57 @@ mechanism, two fixtures, both flip when #1062 is fixed. Directory name kept (his
 churn) with a `why-note:` recording the dedup and that the field points at the live issue **on purpose**,
 so a future reader does not "correct" it back. ⚠️ Told to **verify #1062 is actually open first** and to
 stop if not — and licensed to argue that the census should learn the duplicate convention instead.
+
+## RUN-P45-084 — 🚨 MY ADDENDUM WAS MECHANICALLY IMPOSSIBLE. W8 APPLIED IT, MEASURED IT, AND REFUSED WITH PROOF.
+
+I told W8 to re-point #1071's pin at #1062 and keep the directory name. **Both halves collide with rules
+the harness enforces**, and it found out the only honest way — by doing it and running the gate:
+
+```
+MALFORMED: issue #1062 is pinned by MORE THAN ONE fixture … One fixture per issue.
+MALFORMED: 1071-…/ is named for issue #1071 but its claim.txt says 'issue: 1062'.
+```
+`dup_fail` makes the gate **exit 1**, so my metadata-only "fix" would have **redded `soundness` on
+#1652** — a required check. #1062 already has its own pin, so re-pointing *creates* the duplicate the
+gate forbids; keeping the name is exactly what the prefix-vs-claim check rejects. **There is no version
+of my instruction the harness accepts.** Tree reverted, diff verified identical.
+
+⇒ **Fifth orchestrator error caught by a writer tonight, and the first that would have redded a required
+check.** The pattern is stable: my errors are in *relayed mechanism claims* — HALF 1's keying, the merge
+snippet's ordering, the "13 carriers" count, the tree-property claim, and now this. **Every one would
+have been caught by opening the file I was describing.**
+
+### ⭐⭐ And its correction to my FRAMING is the more valuable half
+I called this *"a tripwire crying wolf."* W8: **the wolf is not the census.** *"HALF 1 is correctly
+reporting that a fixture names a closed issue; what is missing is any expression of 'closed as
+duplicate, pin retained'. Fixing the pin's metadata would silence a CORRECT detector."*
+⇒ **Recording its version, not mine.** [[feedback_a_tripwires_false_positive_is_its_masking_path]] needs
+a companion clause: *before muting a detector, establish whether it is wrong or merely inexpressive —
+the repairs are opposite.*
+
+### The real finding: THREE written records, TWO rulings, and a refuted discriminator
+- `must_fail_census.sh`'s own remedy text: *"closed in error / as a dupe … → REOPEN"*
+- #1071's `claim.txt`: *"if the tracker adjudicates #1071 a duplicate of #1062, CLOSE #1071 and **delete
+  THIS directory**"*
+- #1071's closing comment: *"both fixtures are **deliberately kept**"*
+
+**The permanent census finding is the symptom of that unresolved conflict, not a bug in the pin.**
+⭐ And the same `why-note` **destroys #1071's own claim to being a distinct shape**: the supposed
+discriminator (a default body with only ONE sibling call) was **measured FALSE** — *"the sibling-call
+COUNT is not the trigger, and the two issues may well be one bug."*
+
+### ⭐ OWNER RULING (Val): DELETE the `1071-…` fixture; PRESERVE its measurement.
+It is what that fixture's own claim.txt instructs; its distinctness claim is false by its own note; and
+**#1062's fixture keeps grading the mechanism, so no coverage is lost** — which is all *"deliberately
+kept"* was protecting. #1071 **stays closed**; not reopened.
+
+⚠️ **The condition that makes it safe:** #1062's claim.txt has **no cross-reference back to #1071**
+(W8 checked), so a bare deletion would destroy the only record that the sibling-call-count discriminator
+was **tested and refuted** — and someone would re-derive it. The measurement, the dupe history, and *why
+re-pointing is forbidden* all move into #1062's `why-note:` plus a comment on #1062 **before** anything
+is deleted.
+
+**Option 3 (`superseded-by:` in `claim.txt`, HALF 1 treating CLOSED + superseded-by-an-OPEN-issue as
+benign) was ruled against FOR THIS BITE ONLY** — it changes gate semantics at the tail of a long sprint
+and deserves its own review. **W8 asked to file it as an issue with its design and self-drain**, so the
+reasoning survives. That is the right disposition for a good idea arriving at the wrong moment.
