@@ -1,0 +1,5 @@
+-- Byte-identical to the sibling's `shared.mdk`. See `main.mdk` for why the pair,
+-- and not either file alone, is the assertion.
+public export data Box a = Box a
+
+public export data Opaque = Opaque

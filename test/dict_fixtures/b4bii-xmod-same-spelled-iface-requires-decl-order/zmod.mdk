@@ -1,0 +1,9 @@
+-- The other, unrelated module. Same spelling `Same`, different method, SAME head
+-- `Box a`, and — the point — NO `requires` at all.
+import shared.{Box(..)}
+
+export interface Same a where
+  foo : a -> Int
+
+export impl Same (Box a) where
+  foo _ = 1

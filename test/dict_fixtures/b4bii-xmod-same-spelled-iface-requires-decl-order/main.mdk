@@ -1,0 +1,29 @@
+-- §8 I4 / §3: an interface is identified by its DECLARATION, so `amod.Same` and
+-- `zmod.Same` are TWO classes and `foo`'s obligation may only ever be discharged
+-- against `zmod.Same`'s impl.
+--
+-- SPEC ANSWER, HAND-DERIVED BEFORE ANY BINARY WAS RUN: `foo (Box Opaque)` selects
+-- `zmod`'s `impl Same (Box a)`, which has no context, so `Opaque` needs nothing —
+-- 1. `bar (Box 1)` selects `amod`'s, whose `requires Eq a` grounds to `Eq Int`,
+-- which holds — 2. Total 3. ACCEPT.
+--
+-- MEASURED AS A FALSE REJECT ON THE B-4b-i BASE BINARY (this worktree, its own
+-- stdlib/runtime/emitter): `check`/`run`/`build` all exit 1 with
+--   `No impl of Eq for Opaque; add 'deriving Eq' to the 'Opaque' type, …`
+-- pointed at `foo (Box Opaque)` — a constraint THIS PROGRAM NEVER WROTE, imposed by
+-- the OTHER module's class. `findMatchingImplReqsU`'s concrete leg re-minted its query
+-- through `ifaceRefBare`, so `ieEntriesForIface` compared a bare SPELLING and reached
+-- `amod`'s row first. Its own HEADLESS sibling leg one line below was already
+-- identity-keyed (`univHeadless` → `oblIfaceKey`), so the function disagreed with
+-- itself.
+--
+-- ⚠️ THE SWAPPED SIBLING IS HALF THE ASSERTION. `…-decl-order-swapped/` is this same
+-- program with the two modules' names exchanged and NOTHING else, and it ACCEPTED at
+-- 3 on that same base binary. A reordering that changes no program meaning changing
+-- the program's answer is the defect stated as an experiment; the pair is what pins
+-- it, and either fixture alone can pass a compiler that is still order-decided.
+import shared.{Box(..), Opaque(..)}
+import amod.{bar}
+import zmod.{foo}
+
+main = println (foo (Box Opaque) + bar (Box 1))

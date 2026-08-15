@@ -1,0 +1,9 @@
+-- The conditional impl, declared FIRST — the ordering the `…-decl-order` pair proved
+-- was the losing one for the CHECKER leg.
+import shared.{Box(..)}
+
+export interface Same a where
+  bar : a -> Int
+
+export impl Same (Box a) requires Eq a where
+  bar _ = 22

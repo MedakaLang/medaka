@@ -1,0 +1,12 @@
+import shared.{Box(..)}
+
+-- The module whose impl is SELECTED, and whose context is the one that must be
+-- discharged. Its `requires Eq a` is real and, at `Opaque`, unsatisfiable.
+export interface Same a where
+  m : a -> Int
+
+export impl Same (Box a) requires Eq a where
+  m _ = 2
+
+export viaA : Same a => a -> Int
+viaA x = m x

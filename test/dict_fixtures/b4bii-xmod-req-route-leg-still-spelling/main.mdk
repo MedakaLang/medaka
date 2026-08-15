@@ -1,0 +1,37 @@
+-- WHAT THIS PINS, AND WHAT IT DOES NOT.
+--
+-- B-4b-ii supplied real interface identity at ONE of the three `*ByIface` entry
+-- points — `findMatchingImplReqsU`, the CHECKER leg — and deliberately left the two
+-- ROUTE-WORD entry points (`entailInst`'s `EKNestedTop` arm and
+-- `argImplRequiresRoutes`) minting a bare query, because their upstream
+-- (`shadowStandaloneDictSlots` / `pushDictApp`) projects `csIface.irName` on purpose.
+-- That asymmetry is the risk the bite takes on, and this fixture is where it is
+-- observed rather than argued: the checker now selects `zmod.Same` by IDENTITY while
+-- the router still selects by SPELLING over the same two candidate rows.
+--
+-- SPEC ANSWER, HAND-DERIVED FIRST: `useIt (Box Opaque)` instantiates `Same a` at
+-- `Box Opaque` against `zmod.Same`, whose impl has no context, and its body calls
+-- `foo` — 11. `bar (Box 1)` selects `amod`'s, `requires Eq a` grounds to `Eq Int` —
+-- 22. Total 33. ACCEPT.
+--
+-- ⚠️ WHAT THE EMITTED IR ACTUALLY SHOWS, READ RATHER THAN ASSUMED. An earlier draft of
+-- this header claimed the passed DICT was the assertion. It is not: `@mdk_zmod__useIt`
+-- takes its dict in `%arg0` and then IGNORES it — its whole body is
+-- `call i64 @mdk_impl_Box_foo(i64 %arg1)`, a DIRECT call the checker resolved
+-- statically. So the route word is not consulted at run time on this shape, and a
+-- claim resting on the dict constant would have been pinning a value nothing reads.
+--
+-- The assertion that IS discriminating is that direct call's TARGET: `useIt` reaches
+-- `zmod`'s `foo`, and a router that had selected `amod`'s row would have named `bar`
+-- there. Section 3 pins it, because a value-only row cannot tell a correct selection
+-- from an arithmetic coincidence.
+--
+-- MEASURED ON THE B-4b-i BASE BINARY: rejected at exit 1 (`No impl of Eq for
+-- Opaque`), the same false reject the `…-decl-order` sibling isolates — so this
+-- program was UNREACHABLE before the supply, and the route leg had never been asked
+-- this question. That is why it is pinned now rather than assumed.
+import shared.{Box(..), Opaque(..)}
+import amod.{bar}
+import zmod.{useIt}
+
+main = println (useIt (Box Opaque) + bar (Box 1))

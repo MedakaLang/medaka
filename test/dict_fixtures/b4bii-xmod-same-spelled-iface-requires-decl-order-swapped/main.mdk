@@ -1,0 +1,17 @@
+-- The CONTROL half of the `…-decl-order` pair, and it is a control in the strict
+-- sense: it flips exactly ONE dimension — which of the two same-spelled classes is
+-- declared first — and the correct answer is UNCHANGED at 3, for the identical
+-- derivation written in the sibling's header.
+--
+-- MEASURED ON THE B-4b-i BASE BINARY: this ACCEPTED at 3 while the sibling was
+-- rejected. That asymmetry is the whole finding. A compiler that selects by spelling
+-- passes THIS fixture, which is exactly why it cannot be the only one: an
+-- order-decided answer is invisible from whichever ordering happens to be lucky.
+--
+-- ⚠️ Do NOT "simplify" the two into one fixture, and do not rename the modules to
+-- match: the sort order of the module ids IS the variable.
+import shared.{Box(..), Opaque(..)}
+import amod.{foo}
+import zmod.{bar}
+
+main = println (foo (Box Opaque) + bar (Box 1))

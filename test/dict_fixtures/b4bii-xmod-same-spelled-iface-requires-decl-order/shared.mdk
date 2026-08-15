@@ -1,0 +1,10 @@
+-- The SHARED head. Both same-spelled interfaces below impl at THIS head, and that is
+-- load-bearing exactly as `s6-c1-xmod-same-spelled-ifaces-accepted`'s header records:
+-- the selector's HEAD half is already identity-aware, so two module-local heads would
+-- mask the INTERFACE half — which is the half under test.
+public export data Box a = Box a
+
+-- A type with NO `Eq` impl. It is what makes `amod`'s `requires Eq a` OBSERVABLE: if
+-- the wrong interface's impl is selected, its context is imposed and the program is
+-- rejected naming a constraint the program never wrote.
+public export data Opaque = Opaque
