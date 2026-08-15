@@ -1,5 +1,5 @@
 # META
-source_lines=1747
+source_lines=1751
 stages=DESUGAR,MARK
 # SOURCE
 -- elaborated-AST → Core IR lowering (STAGE2-DESIGN §2.1).  Consumes the SAME
@@ -1382,10 +1382,10 @@ declKeysAtHead ((_, i, t, k)::rest) iface tag acc
 -- one `disp` from all modules' decls jointly (an impl in module B for an interface
 -- in the prelude needs the prelude's dispatch positions), then lowers each
 -- module's impls against it.
-export lowerImplsWith : List ((String, String), List Int) -> List Decl -> List CImplEntry
+export lowerImplsWith : List ((String, String, String), List Int) -> List Decl -> List CImplEntry
 lowerImplsWith disp prog = flatMap (lowerDeclImpl disp) prog
 
-lowerDeclImpl : List ((String, String), List Int) -> Decl -> List CImplEntry
+lowerDeclImpl : List ((String, String, String), List Int) -> Decl -> List CImplEntry
 -- #1037: an ATTRIBUTE IS METADATA — it must never change which impls exist.  A
 -- decl attribute parses to `DAttrib attrs <decl>` (parser.parseAttrib wraps ANY
 -- decl), so `@deprecated "…" impl Speak Cat where …` reaches here as a DAttrib and
@@ -1406,11 +1406,15 @@ lowerDeclImpl disp (DImpl { iface = ifaceName, implOrigin = o, tys = typeArgs, m
 lowerDeclImpl _ (DInterface { name = ifaceName, ifaceOrigin = o, typarams = typeParams, methods, ... }) = flatMap (lowerDefault (ifaceIdentity o ifaceName) typeParams) methods
 lowerDeclImpl _ _ = []
 
-lowerImplMethod : List ((String, String), List Int) -> TyConOrigin -> String -> List Ty -> ImplMethod -> CImplEntry
+lowerImplMethod : List ((String, String, String), List Int) -> TyConOrigin -> String -> List Ty -> ImplMethod -> CImplEntry
 lowerImplMethod disp o ifaceName typeArgs (ImplMethod mname pats body) =
   let tag = fromOption noneHeadTag (headTyconHead typeArgs)
   let key = implRouteKeyWord o ifaceName typeArgs None
-  let positions = lookupPositions ifaceName mname disp
+  -- #1113 Phase 4: identity-keyed admissibility lookup — the LOCKSTEP peer of
+  -- `eval.implMethodEntry`'s identical line.  `o` is already bound for `key`, so
+  -- both consumers pay nothing.  These are the ONLY two `lookupPositions` call
+  -- sites, and `CImplTagged`'s `positions` is where the answer is FROZEN.
+  let positions = lookupPositions (ifaceIdentity o ifaceName) ifaceName mname disp
   CImplEntry
     mname
     (tyvarsInArgs typeArgs)
@@ -2244,15 +2248,15 @@ nodeTag _ = "?"
 (DTypeSig false "declKeysAtHead" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "declKeysAtHead" ((PList) PWild PWild (PVar "acc")) (EVar "acc"))
 (DFunDef false "declKeysAtHead" ((PCons (PTuple PWild (PVar "i") (PVar "t") (PVar "k")) (PVar "rest")) (PVar "iface") (PVar "tag") (PVar "acc")) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "i") (EVar "iface")) (EBinOp "==" (EVar "t") (EVar "tag"))) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "k")) (EVar "acc")))) (EApp (EApp (EApp (EApp (EVar "declKeysAtHead") (EVar "rest")) (EVar "iface")) (EVar "tag")) (EBinOp "::" (EVar "k") (EVar "acc"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "declKeysAtHead") (EVar "rest")) (EVar "iface")) (EVar "tag")) (EVar "acc")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig true "lowerImplsWith" (TyFun (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "CImplEntry")))))
+(DTypeSig true "lowerImplsWith" (TyFun (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "CImplEntry")))))
 (DFunDef false "lowerImplsWith" ((PVar "disp") (PVar "prog")) (EApp (EApp (EVar "flatMap") (EApp (EVar "lowerDeclImpl") (EVar "disp"))) (EVar "prog")))
-(DTypeSig false "lowerDeclImpl" (TyFun (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int")))) (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "CImplEntry")))))
+(DTypeSig false "lowerDeclImpl" (TyFun (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int")))) (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "CImplEntry")))))
 (DFunDef false "lowerDeclImpl" ((PVar "disp") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EVar "lowerDeclImpl") (EVar "disp")) (EVar "d")))
 (DFunDef false "lowerDeclImpl" ((PVar "disp") (PRec "DImpl" ((rf "iface" (PVar "ifaceName")) (rf "implOrigin" (PVar "o")) (rf "tys" (PVar "typeArgs")) (rf "methods" None)) true)) (EApp (EApp (EVar "map") (EApp (EApp (EApp (EApp (EVar "lowerImplMethod") (EVar "disp")) (EVar "o")) (EVar "ifaceName")) (EVar "typeArgs"))) (EVar "methods")))
 (DFunDef false "lowerDeclImpl" (PWild (PRec "DInterface" ((rf "name" (PVar "ifaceName")) (rf "ifaceOrigin" (PVar "o")) (rf "typarams" (PVar "typeParams")) (rf "methods" None)) true)) (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "lowerDefault") (EApp (EApp (EVar "ifaceIdentity") (EVar "o")) (EVar "ifaceName"))) (EVar "typeParams"))) (EVar "methods")))
 (DFunDef false "lowerDeclImpl" (PWild PWild) (EListLit))
-(DTypeSig false "lowerImplMethod" (TyFun (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int")))) (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyFun (TyCon "ImplMethod") (TyCon "CImplEntry")))))))
-(DFunDef false "lowerImplMethod" ((PVar "disp") (PVar "o") (PVar "ifaceName") (PVar "typeArgs") (PCon "ImplMethod" (PVar "mname") (PVar "pats") (PVar "body"))) (EBlock (DoLet false false (PVar "tag") (EApp (EApp (EVar "fromOption") (EVar "noneHeadTag")) (EApp (EVar "headTyconHead") (EVar "typeArgs")))) (DoLet false false (PVar "key") (EApp (EApp (EApp (EApp (EVar "implRouteKeyWord") (EVar "o")) (EVar "ifaceName")) (EVar "typeArgs")) (EVar "None"))) (DoLet false false (PVar "positions") (EApp (EApp (EApp (EVar "lookupPositions") (EVar "ifaceName")) (EVar "mname")) (EVar "disp"))) (DoExpr (EApp (EApp (EApp (EVar "CImplEntry") (EVar "mname")) (EApp (EVar "tyvarsInArgs") (EVar "typeArgs"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CImplTagged") (EVar "tag")) (EVar "key")) (EVar "ifaceName")) (EVar "positions")) (EVar "pats")) (EApp (EVar "lower") (EVar "body")))))))
+(DTypeSig false "lowerImplMethod" (TyFun (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int")))) (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyFun (TyCon "ImplMethod") (TyCon "CImplEntry")))))))
+(DFunDef false "lowerImplMethod" ((PVar "disp") (PVar "o") (PVar "ifaceName") (PVar "typeArgs") (PCon "ImplMethod" (PVar "mname") (PVar "pats") (PVar "body"))) (EBlock (DoLet false false (PVar "tag") (EApp (EApp (EVar "fromOption") (EVar "noneHeadTag")) (EApp (EVar "headTyconHead") (EVar "typeArgs")))) (DoLet false false (PVar "key") (EApp (EApp (EApp (EApp (EVar "implRouteKeyWord") (EVar "o")) (EVar "ifaceName")) (EVar "typeArgs")) (EVar "None"))) (DoLet false false (PVar "positions") (EApp (EApp (EApp (EApp (EVar "lookupPositions") (EApp (EApp (EVar "ifaceIdentity") (EVar "o")) (EVar "ifaceName"))) (EVar "ifaceName")) (EVar "mname")) (EVar "disp"))) (DoExpr (EApp (EApp (EApp (EVar "CImplEntry") (EVar "mname")) (EApp (EVar "tyvarsInArgs") (EVar "typeArgs"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CImplTagged") (EVar "tag")) (EVar "key")) (EVar "ifaceName")) (EVar "positions")) (EVar "pats")) (EApp (EVar "lower") (EVar "body")))))))
 (DTypeSig false "lowerDefault" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "IfaceMethod") (TyApp (TyCon "List") (TyCon "CImplEntry"))))))
 (DFunDef false "lowerDefault" (PWild PWild (PCon "IfaceMethod" PWild PWild (PCon "None"))) (EListLit))
 (DFunDef false "lowerDefault" ((PVar "ifaceId") (PVar "typeParams") (PCon "IfaceMethod" (PVar "mname") PWild (PCon "Some" (PCon "MethodDefault" (PVar "pats") (PVar "body"))))) (EListLit (EApp (EApp (EApp (EVar "CImplEntry") (EVar "mname")) (EApp (EVar "listLen") (EVar "typeParams"))) (EApp (EApp (EApp (EVar "CImplDefault") (EVar "ifaceId")) (EVar "pats")) (EApp (EVar "lower") (EVar "body"))))))
@@ -2893,15 +2897,15 @@ nodeTag _ = "?"
 (DTypeSig false "declKeysAtHead" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "declKeysAtHead" ((PList) PWild PWild (PVar "acc")) (EVar "acc"))
 (DFunDef false "declKeysAtHead" ((PCons (PTuple PWild (PVar "i") (PVar "t") (PVar "k")) (PVar "rest")) (PVar "iface") (PVar "tag") (PVar "acc")) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "i") (EVar "iface")) (EBinOp "==" (EVar "t") (EVar "tag"))) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "k")) (EVar "acc")))) (EApp (EApp (EApp (EApp (EVar "declKeysAtHead") (EVar "rest")) (EVar "iface")) (EVar "tag")) (EBinOp "::" (EVar "k") (EVar "acc"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "declKeysAtHead") (EVar "rest")) (EVar "iface")) (EVar "tag")) (EVar "acc")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig true "lowerImplsWith" (TyFun (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "CImplEntry")))))
+(DTypeSig true "lowerImplsWith" (TyFun (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "CImplEntry")))))
 (DFunDef false "lowerImplsWith" ((PVar "disp") (PVar "prog")) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "lowerDeclImpl") (EVar "disp"))) (EVar "prog")))
-(DTypeSig false "lowerDeclImpl" (TyFun (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int")))) (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "CImplEntry")))))
+(DTypeSig false "lowerDeclImpl" (TyFun (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int")))) (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "CImplEntry")))))
 (DFunDef false "lowerDeclImpl" ((PVar "disp") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EVar "lowerDeclImpl") (EVar "disp")) (EVar "d")))
 (DFunDef false "lowerDeclImpl" ((PVar "disp") (PRec "DImpl" ((rf "iface" (PVar "ifaceName")) (rf "implOrigin" (PVar "o")) (rf "tys" (PVar "typeArgs")) (rf "methods" None)) true)) (EApp (EApp (EMethodRef "map") (EApp (EApp (EApp (EApp (EVar "lowerImplMethod") (EVar "disp")) (EVar "o")) (EVar "ifaceName")) (EVar "typeArgs"))) (EVar "methods")))
 (DFunDef false "lowerDeclImpl" (PWild (PRec "DInterface" ((rf "name" (PVar "ifaceName")) (rf "ifaceOrigin" (PVar "o")) (rf "typarams" (PVar "typeParams")) (rf "methods" None)) true)) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "lowerDefault") (EApp (EApp (EVar "ifaceIdentity") (EVar "o")) (EVar "ifaceName"))) (EVar "typeParams"))) (EVar "methods")))
 (DFunDef false "lowerDeclImpl" (PWild PWild) (EListLit))
-(DTypeSig false "lowerImplMethod" (TyFun (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int")))) (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyFun (TyCon "ImplMethod") (TyCon "CImplEntry")))))))
-(DFunDef false "lowerImplMethod" ((PVar "disp") (PVar "o") (PVar "ifaceName") (PVar "typeArgs") (PCon "ImplMethod" (PVar "mname") (PVar "pats") (PVar "body"))) (EBlock (DoLet false false (PVar "tag") (EApp (EApp (EVar "fromOption") (EVar "noneHeadTag")) (EApp (EVar "headTyconHead") (EVar "typeArgs")))) (DoLet false false (PVar "key") (EApp (EApp (EApp (EApp (EVar "implRouteKeyWord") (EVar "o")) (EVar "ifaceName")) (EVar "typeArgs")) (EVar "None"))) (DoLet false false (PVar "positions") (EApp (EApp (EApp (EVar "lookupPositions") (EVar "ifaceName")) (EVar "mname")) (EVar "disp"))) (DoExpr (EApp (EApp (EApp (EVar "CImplEntry") (EVar "mname")) (EApp (EVar "tyvarsInArgs") (EVar "typeArgs"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CImplTagged") (EVar "tag")) (EVar "key")) (EVar "ifaceName")) (EVar "positions")) (EVar "pats")) (EApp (EVar "lower") (EVar "body")))))))
+(DTypeSig false "lowerImplMethod" (TyFun (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int")))) (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyFun (TyCon "ImplMethod") (TyCon "CImplEntry")))))))
+(DFunDef false "lowerImplMethod" ((PVar "disp") (PVar "o") (PVar "ifaceName") (PVar "typeArgs") (PCon "ImplMethod" (PVar "mname") (PVar "pats") (PVar "body"))) (EBlock (DoLet false false (PVar "tag") (EApp (EApp (EVar "fromOption") (EVar "noneHeadTag")) (EApp (EVar "headTyconHead") (EVar "typeArgs")))) (DoLet false false (PVar "key") (EApp (EApp (EApp (EApp (EVar "implRouteKeyWord") (EVar "o")) (EVar "ifaceName")) (EVar "typeArgs")) (EVar "None"))) (DoLet false false (PVar "positions") (EApp (EApp (EApp (EApp (EVar "lookupPositions") (EApp (EApp (EVar "ifaceIdentity") (EVar "o")) (EVar "ifaceName"))) (EVar "ifaceName")) (EVar "mname")) (EVar "disp"))) (DoExpr (EApp (EApp (EApp (EVar "CImplEntry") (EVar "mname")) (EApp (EVar "tyvarsInArgs") (EVar "typeArgs"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CImplTagged") (EVar "tag")) (EVar "key")) (EVar "ifaceName")) (EVar "positions")) (EVar "pats")) (EApp (EVar "lower") (EVar "body")))))))
 (DTypeSig false "lowerDefault" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "IfaceMethod") (TyApp (TyCon "List") (TyCon "CImplEntry"))))))
 (DFunDef false "lowerDefault" (PWild PWild (PCon "IfaceMethod" PWild PWild (PCon "None"))) (EListLit))
 (DFunDef false "lowerDefault" ((PVar "ifaceId") (PVar "typeParams") (PCon "IfaceMethod" (PVar "mname") PWild (PCon "Some" (PCon "MethodDefault" (PVar "pats") (PVar "body"))))) (EListLit (EApp (EApp (EApp (EVar "CImplEntry") (EVar "mname")) (EApp (EVar "listLen") (EVar "typeParams"))) (EApp (EApp (EApp (EVar "CImplDefault") (EVar "ifaceId")) (EVar "pats")) (EApp (EVar "lower") (EVar "body"))))))

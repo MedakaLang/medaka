@@ -1,0 +1,13 @@
+-- One of two INDEPENDENT interfaces that happen to be spelled `Speak` and to
+-- declare a method spelled `speak`.  Its class parameter `x` occurs in argument
+-- position 1, so DICT-SEMANTICS §5 admits arg-tag dispatch at position 1 ONLY.
+public export data DogA = DogA
+
+export interface Speak x where
+  speak : String -> x -> String
+
+impl Speak DogA where
+  speak s _ = "A(\{s})"
+
+export useA : String
+useA = speak "x" DogA
