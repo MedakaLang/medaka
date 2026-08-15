@@ -1,7 +1,0 @@
-import shared.{Box(..)}
-
-export interface Same a where
-  mc : a -> Int
-
-export impl Same (Box a) requires Eq a where
-  mc _ = 2

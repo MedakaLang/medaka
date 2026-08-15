@@ -20,10 +20,16 @@
 -- OTHER class's method for it.
 --
 -- ⚠️ Read this fixture beside `b4bii-xmod-same-spelled-iface-requires-decl-order`
--- (false reject, drained) and `test/must_fail_fixtures/1182-xmod-same-spelled-
--- iface-shared-method-dispatch` (wrong dispatch, NOT drained and pre-existing).
--- The three are one collision seen from three sides; only this one and the
--- decl-order pair move on this bite.
+-- (the false-reject direction, drained by the same one-line change).
+--
+-- ⚠️ AND DO NOT CONFUSE EITHER WITH `test/must_fail_fixtures/1182-two-ifaces-
+-- same-method-name-order-decides`, which is a DIFFERENT defect that merely looks
+-- adjacent. That one is driven by the shared METHOD name and is PRE-EXISTING;
+-- measured, changing the two interfaces' NAMES so they no longer collide leaves
+-- it reproducing unchanged on both arms, so the interface-spelling collision
+-- these two fixtures are about contributes nothing to it. What this bite does to
+-- it is remove a false reject that was accidentally SHIELDING one of its
+-- variants — recorded in that fixture's own claim, not here.
 import shared.{Box(..), Opaque(..)}
 import zmod
 import amod.{viaA}

@@ -1,6 +1,0 @@
-public export data Box a = Box a
-
--- No `Eq` instance, and that absence is the whole point: it is what made the
--- PRE-B-4b-ii compiler reject this program outright, which is what hid the
--- dispatch defect below.
-public export data Opaque = Opaque

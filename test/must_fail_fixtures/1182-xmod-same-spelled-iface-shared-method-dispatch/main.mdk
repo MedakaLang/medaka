@@ -1,5 +1,0 @@
-import shared.{Box(..), Opaque(..)}
-import amod
-import zmod.{useIt}
-
-main = println (useIt (Box Opaque))

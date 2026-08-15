@@ -20310,25 +20310,31 @@ entailInst implTable _ m encl tag (EKNestedTop keyTable iface _ depth rest) =
   --     disambiguates the two same-spelled classes for free, because each class's method
   --     name occurs in exactly one of them.  The cited fixture had that property, which
   --     is precisely why it could not falsify the claim it was cited for.
-  --   * COLLIDING method names (`m` vs `m`) — NOT safe.  That disambiguation vanishes,
-  --     the route leg's spelling scan reaches the OTHER module's row, and the built binary
-  --     prints ITS value at exit 0.  Pinned, with the emitted IR read rather than
-  --     inferred, at `test/must_fail_fixtures/1182-xmod-same-spelled-iface-shared-method-
-  --     dispatch`: the stamped dict's head word is amod's, so the FIRST arm of the
-  --     dispatch chain fires and zmod's arm is never reached — and that dict also carries
-  --     a cell for a constraint with no instance anywhere in the program.
+  --   * COLLIDING method names (`m` vs `m`) — NOT safe.  That disambiguation vanishes and
+  --     the built binary prints the OTHER class's value at exit 0.
   --
-  -- ⚠️ THE WRONG DISPATCH IS PRE-EXISTING — this bite neither causes nor fixes it, and
-  -- the control proving that is in the fixture's own claim: change the payload to a type
-  -- that HAS `Eq` and both arms accept, both print the same wrong value, and the emitted
-  -- IR is BYTE-IDENTICAL.  What this bite changes is that a FALSE REJECT was accidentally
-  -- SHIELDING that shape, so the observable moves loud → silent.  Under `AGENTS.md`'s
-  -- ladder that is a severity INCREASE, which is why it is recorded here and pinned
-  -- rather than left for the next reader to rediscover.
+  -- 🚨 BUT THE CAUSE IS NOT THIS SEAM, AND A DRAFT OF THIS COMMENT SAID IT WAS.  It read:
+  -- "the route leg's spelling scan reaches the OTHER module's row", and cited a pin of
+  -- its own.  DISCRIMINATING EXPERIMENT, measured 2026-08-16 on both arms: take that
+  -- program and change ONLY the two interfaces' NAMES so they no longer collide
+  -- (`SameA`/`SameZ`), keeping the shared method name — the base binary then ACCEPTS (no
+  -- false reject, the spellings differ) and BOTH arms still print the wrong value.  So
+  -- the wrong dispatch is driven ENTIRELY by the shared METHOD name — `matchingEntries`
+  -- selecting candidates by method-name membership rather than by interface (#1182) —
+  -- and the interface-spelling collision this seam is about contributes NOTHING to it.
+  -- The draft pin was deleted on that evidence and the fact ported into #1182's own
+  -- fixture (`test/must_fail_fixtures/1182-two-ifaces-same-method-name-order-decides`).
   --
-  -- So supplying identity at THIS site is not merely optional — it is what would close
-  -- the shape above.  It is still not this bite's to do, for the reason in the paragraph
-  -- above: the origin would have to be INVENTED here, not acquired.
+  -- ⚠️ WHAT IS STILL TRUE, AND IS THIS BITE'S TO OWN: that defect is PRE-EXISTING (with
+  -- an `Eq`-bearing payload both arms accept, both print the same wrong value, and the
+  -- emitted IR is BYTE-IDENTICAL), and B-4b-ii removes a FALSE REJECT that was
+  -- accidentally SHIELDING it on the same-spelled variant — so the observable there moves
+  -- loud → silent.  Under `AGENTS.md`'s ladder that is a severity INCREASE, which is why
+  -- it is recorded rather than left for the next reader to rediscover.
+  --
+  -- The lesson for the next bite at this seam: a wrong answer downstream of an
+  -- interface-spelling collision is NOT evidence that the interface-spelling seam caused
+  -- it.  Vary the collision away and re-measure before attributing.
   let routeKey = fromOption tag (keyForSiteByIface (ifaceRefBare iface) (m::rest))
   (
     RKey routeKey (argImplRequiresRoutes implTable keyTable iface encl tag m rest depth),

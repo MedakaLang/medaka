@@ -133,3 +133,27 @@ why-note: permutes only the ENTRY module's declarations and cannot express this 
 why-note: all. See that file's header banner.
 why-note: `diff_compiler_engines` is structurally blind to this -- both engines agree on 2
 why-note: -- which is why the must-fail corpus is where it lives.
+why-note: ⭐ PR 1645 (B-4b-ii) MAKES THIS DEFECT REACHABLE ON A SHAPE THAT USED TO BE
+why-note: REJECTED, and that loud->silent transition is recorded here rather than in a
+why-note: second fixture. Add ONE thing to this defect's shape: give the two interfaces
+why-note: THE SAME SPELLING as well as the same method name, and put a `requires Eq a`
+why-note: on one impl at a payload type with no `Eq`. Before 1645 that program was
+why-note: rejected outright (`No impl of Eq for Opaque` -- a constraint it never wrote,
+why-note: imposed by the foreign class), so THE FALSE REJECT WAS ACCIDENTALLY SHIELDING
+why-note: this bug. 1645 fixes the false reject, and the program now compiles and prints
+why-note: the WRONG value at exit 0. By AGENTS.md's ladder that is a severity INCREASE,
+why-note: so it is stated where the defect lives.
+why-note: ⚠️ THAT SHAPE IS NOT A SECOND DEFECT, AND THE DISCRIMINATING EXPERIMENT IS WHY
+why-note: -- it was very nearly filed as one. Take that program and change ONLY the two
+why-note: interfaces' NAMES so they no longer collide (`SameA`/`SameZ`), leaving the
+why-note: shared method name `m`. MEASURED 2026-08-16, both arms: the base binary now
+why-note: ACCEPTS (no false reject, since the interface spellings differ) and the branch
+why-note: still prints the WRONG 2. So the wrong dispatch is driven ENTIRELY by the
+why-note: shared METHOD name -- this row's mechanism -- and the interface-spelling
+why-note: collision contributes nothing to it. A draft pin that claimed the route word /
+why-note: same-spelling was the cause was deleted on this evidence.
+why-note: ⚠️ AND THE WRONG DISPATCH IS PRE-EXISTING, so 1645 neither causes nor fixes it:
+why-note: change that program's payload to a type that HAS `Eq` (so the false reject
+why-note: cannot fire) and BOTH arms accept, BOTH print the wrong value, and the emitted
+why-note: IR is BYTE-IDENTICAL between them. Measured against a base cold-built from
+why-note: origin/main with its own stdlib/runtime.
