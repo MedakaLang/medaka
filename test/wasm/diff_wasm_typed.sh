@@ -315,7 +315,6 @@ EXPECTED_MODULE_REFS="$(printf '%s\n' \
   tupleAritiesRef \
   useArgsRef \
   useArrayRef \
-  useCharClassRef \
   useFileBytesRef \
   useFloatRef \
   useFloatRngRef \
@@ -344,11 +343,38 @@ ACTUAL_MODULE_REF_DEFS="$(awk '
 ' "$WASM_SRC" | LC_ALL=C sort -u)"
 if [ "$ACTUAL_MODULE_REF_SIGS" != "$EXPECTED_MODULE_REFS" ] ||
     [ "$ACTUAL_MODULE_REF_DEFS" != "$EXPECTED_MODULE_REFS" ]; then
-  echo "FAIL H2B11-CHAR-FROM-CODE-AUTHORITY: top-level Ref authority set changed"
+  echo "FAIL H2B-LR-AUTHORITY-SET: top-level Ref authority set changed"
   printf '  observed signatures:\n%s\n' "$ACTUAL_MODULE_REF_SIGS"
   printf '  observed definitions:\n%s\n' "$ACTUAL_MODULE_REF_DEFS"
   exit 1
 fi
+if grep -E '^_?useCharClassRef[[:space:]]*[:=]|setRef (_?useCharClassRef)' "$WASM_SRC" >/dev/null; then
+  echo "FAIL H2B-LR-AUTHORITY-SET: retired CharClass ambient authority remains"
+  exit 1
+fi
+for required in \
+  'useCharClass : Ref Bool' \
+  'useCharClass = Ref'; do
+  [ "$(grep -F -- "$required" "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] || {
+    echo "FAIL H2B-LR-CHARCLASS-CARRIER: missing or duplicate $required"
+    exit 1
+  }
+done
+grep -F 'then setRef emit.useCharClass True else ()' "$WASM_SRC" >/dev/null &&
+  grep -F '|| emit.useCharClass.value || useIORef.value' "$WASM_SRC" >/dev/null &&
+  grep -F 'let charClassRt = if (progEmit prog).useCharClass.value then charClassRuntimeLines else []' "$WASM_SRC" >/dev/null &&
+  ! grep -E 'setRef emit\.useCharClass False|setRef useCharClassRef False' "$WASM_SRC" >/dev/null || {
+    echo "FAIL H2B-LR-CHARCLASS-ROUTES: writer, operational read, or reset changed"
+    exit 1
+  }
+[ "$(grep -F 'setRef emit.useCharClass True' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
+  [ "$(grep -F 'emit.useCharClass.value' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
+  [ "$(grep -F '(progEmit prog).useCharClass.value' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
+  grep -F 'emitProgram input cp = emitProgramWith (freshWasmEmit WGapStrict) input cp' "$WASM_SRC" >/dev/null &&
+  [ "$(grep -F 'let emit = freshWasmEmit WGapRecord' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 2 ] || {
+    echo "FAIL H2B-LR-CHARCLASS-ROUTES: writer/read cardinality or fresh route changed"
+    exit 1
+  }
 if grep -E '^_?useCharFromCodeRef[[:space:]]*[:=]|setRef (_?useCharFromCodeRef)' "$WASM_SRC" >/dev/null; then
   echo "FAIL H2B11-CHAR-FROM-CODE-AUTHORITY: retired ambient authority remains"
   exit 1

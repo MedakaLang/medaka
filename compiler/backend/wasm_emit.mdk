@@ -333,6 +333,7 @@ data WasmEmit =
       useHash : Ref Bool,
       useFloatHash : Ref Bool,
       useCharFromCode : Ref Bool,
+      useCharClass : Ref Bool,
       emittedDefaultNames : Ref (OrdMap Unit),
       defaultDefinitions : Ref (List (List String)),
     }
@@ -360,6 +361,7 @@ freshWasmEmit mode = WasmEmit {
   useHash = Ref False,
   useFloatHash = Ref False,
   useCharFromCode = Ref False,
+  useCharClass = Ref False,
   emittedDefaultNames = Ref omEmpty,
   defaultDefinitions = Ref [],
 }
@@ -908,10 +910,6 @@ numPolyLocalsRef = Ref []
 useStrCodecRef : Ref Bool
 useStrCodecRef = Ref False
 
--- W11b: the program uses charIsAlpha/charIsSpace/… or charToUpper/charToLower.
-useCharClassRef : Ref Bool
-useCharClassRef = Ref False
-
 -- W12: the program uses any IO host-surface extern (readFile / fileExists / args /
 -- getEnv / exit).  Gates the IO host imports + the byte-channel marshaling runtime.
 -- All of these touch a $str (path/result), so they also force useStrRef.
@@ -1066,7 +1064,6 @@ emitProgramWith emit input (CProgram groups ctorArs ctorTypes impls) =
   let _ = setRef useValueArithRef False
   let _ = setRef numPolyLocalsRef []
   let _ = setRef useStrCodecRef False
-  let _ = setRef useCharClassRef False
   let _ = setRef useIORef False
   let _ = setRef useArgsRef False
   let _ = setRef useFileBytesRef False
@@ -1090,7 +1087,7 @@ emitProgramWith emit input (CProgram groups ctorArs ctorTypes impls) =
   let useRef = useClos || programUsesAdt groups ctorArs || isNonEmptyList impls || useStrRef.value
     || useListRef.value || useArrayRef.value || useRefBoxRef.value || isNonEmptyList tupleAritiesRef.value
     || emit.useRng.value || emit.useHash.value || useFloatRef.value || useStrSearchRef.value
-    || useCharClassRef.value || useIORef.value
+    || emit.useCharClass.value || useIORef.value
   let typeNames = distinctTypeNames ctorTypes
   let prog = Prog index typeNames valNames useClos impls input emit
   if useRef then emitRefProgram prog groups
@@ -1121,7 +1118,6 @@ emitProgramGaps input (CProgram groups ctorArs ctorTypes impls) =
   let _ = setRef useValueArithRef False
   let _ = setRef numPolyLocalsRef []
   let _ = setRef useStrCodecRef False
-  let _ = setRef useCharClassRef False
   let _ = setRef useIORef False
   let _ = setRef useArgsRef False
   let _ = setRef useFileBytesRef False
@@ -1655,7 +1651,7 @@ noteW8Extern emit name =
   -- W11b: char classification + case-mapping externs — pure WAT helpers, no $str/$arr.
   let _ = if contains name ["charIsAlpha", "charIsSpace", "charIsUpper", "charIsLower",
                              "charIsPunct", "charToUpper", "charToLower"]
-          then setRef useCharClassRef True else ()
+          then setRef emit.useCharClass True else ()
   -- W10: panic's message arg is a $str → force the $str rep.  B5: the coded-trap
   -- lowering streams that message through $mdk_eprint_str (gated on this emission's
   -- `useEPut`) after a fixed "runtime error [E-PANIC]: " prefix.
@@ -2476,7 +2472,7 @@ emitRefProgram prog groups =
   let strCodecRt = if useStrCodecRef.value then strCodecRuntimeLines else []
   let charFromCodeRt = if (progEmit prog).useCharFromCode.value then charFromCodeRuntimeLines else []
   -- W11b: char classification + case-mapping helpers (ASCII-only pure WAT).
-  let charClassRt = if useCharClassRef.value then charClassRuntimeLines else []
+  let charClassRt = if (progEmit prog).useCharClass.value then charClassRuntimeLines else []
   -- W12: the IO host-surface marshaling runtime (byte-channel + the five extern bodies).
   -- The `args` body lives in a separate block (it builds a $C_Cons list, needing the
   -- list types) gated on useArgsRef.
