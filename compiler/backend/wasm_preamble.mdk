@@ -1529,7 +1529,7 @@ strSearchRuntimeLines = [
 -- Byte-identical to medaka_rt.c (mdk_string_to_chars / mdk_string_from_chars +
 -- mdk_utf8_decode / mdk_utf8_encode).  A Char is an i31 codepoint; an `Array Char` is
 -- the §3.3 $arr = (array (mut (ref eq))) holding `cp_count` i31s.  Emitted when the
--- program uses stringToChars/stringFromChars (`useStrCodecRef`); needs the $str rep
+-- program uses stringToChars/stringFromChars (`WasmEmit.useStrCodec`); needs the $str rep
 -- ($u8arr) AND the $arr rep (both forced by noteW8Extern).
 --   $mdk_str_to_chars : decode each UTF-8 codepoint (lead byte <0x80 → 1B; <0xE0 → 2B
 --     & 0x1F; <0xF0 → 3B & 0x0F; else 4B & 0x07; each continuation byte & 0x3F, shift
