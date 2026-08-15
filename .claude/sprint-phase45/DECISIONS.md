@@ -2766,3 +2766,58 @@ measured on the one instrument that can see it; and the legA changed-set equals 
 
 **Weak spot disclosed rather than papered over:** its `repl` probe hit a parse error on **both** arms,
 so repl dispatch was not properly exercised — going into `unchecked:` rather than riding on inference.
+
+## RUN-P45-076 — ✅ Q1 (#1640) AND THE #1608 GATE (#1649) ARE MERGED. Two of five units landed.
+
+`main` now carries: bite 0 (#1638), Q1 (#1640), the typed Core-IR gate (#1649). Open: #1643 (S1),
+#1645 (S2, stacked), #1646 (Phase 4).
+
+## RUN-P45-077 — ⚠️ SERIALIZATION THRASH IS THE SPRINT'S REAL TAX, and it is structural
+
+**#1643 re-conflicted while waiting** — #1640 and #1649 merged ahead of it, both touching the golden
+families, so the enqueue I had started never took (`isInMergeQueue: false`, `mergeable: CONFLICTING`).
+It had already merged once, tonight, and paid a full rebuild + golden re-derive + re-measure for it.
+
+**The mechanism, stated so it is not re-diagnosed later:** every unit in this sprint lands in
+`compiler/types/typecheck.mdk` and re-cuts the same two golden families, which have **no merge driver**.
+So each merge invalidates every other open branch, and the cost per invalidation is not a textual
+resolve — it is *rebuild the binary, re-derive both golden families, re-measure every verdict*, because
+the previous numbers came from a tree that no longer exists.
+
+⇒ **The fix is to close the WINDOW, not to repeat the cycle: verify → enqueue on receipt, with nothing
+batched ahead.** Recorded as a lesson for the next sprint's template — *when N units share one file and
+one golden family, the enqueue must follow the verification immediately, and a unit that sits verified
+but unqueued is accruing a rebuild.*
+
+**Both remaining writers briefed on what is newly in `main`** rather than left to discover it: Q1's new
+`R-DUPLICATE-IFACE-METHOD` and its resolve goldens, and #1649's **new compiler entry point plus a new
+`test/bin/*` oracle** — which makes their oracle sets stale in a *new* way, on the exact path where the
+capture has no staleness guard.
+
+⚠️ **One interaction named in advance for S1:** its discriminating corpus is built entirely from
+same-spelled interfaces, and Q1 now rejects that shape **intra-module**. Its fixtures are *cross-module*,
+which Q1 does not reach — **but if any of the 18 now fails to compile, that is Q1 reaching further than
+its census said**, and it is a finding to report before adjusting any fixture.
+
+## RUN-P45-078 — W6 CORRECTED ME AGAIN: #1640 is NOT in #1646's branch, and it shipped a DISCRIMINATOR instead of a claim
+
+I told W6 to record that "Q1 now rejects that shape intra-module" as a property of the tree. **#1640
+landed at `00:12:38Z`, after that branch's merge base `bd65dbfb`** — verified, not assumed:
+`grep -rn 'R-DUPLICATE-IFACE-METHOD' compiler/` **exits 1 with zero hits on that branch.**
+
+⭐ **So it did not write my sentence.** The comment records #1640 as the narrowing, states that it
+postdates the branch's base, and **ships the one-line grep as the discriminator** — a hit means the
+intra-module half is closed and only the cross-module residual survives; no hit means the reader is on a
+tree that predates it. **Correct whichever side of the merge the reader is standing on, and it cannot rot
+into a false claim.** That is a better answer than the one I asked for, and it is the fourth
+orchestrator-authored error a writer has caught tonight.
+
+⚠️ **And it hit the piped-exit-code trap while checking that very claim** — `grep … | head` returned
+`rc=0` from `head` — and re-ran unpiped. The trap this repo documents for `build`, biting in the middle
+of verifying a claim about a diagnostic's existence.
+
+**R1 landed as ruled: comment only, no guard**, with the invariant stated, the falsifier named (**any
+change to identity supply**), *"no gate could see it"* recorded, and the `ifaceId == ""` guard **warned
+off by name** with its reason. **R2's reasoning corrected without touching the decision.** `repl` moved
+into `unchecked:` with the reason, not just the label. **legA re-captured byte-identical** — the positive
+confirmation that a comment change moved no inferred type.
