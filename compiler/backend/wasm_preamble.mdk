@@ -1060,7 +1060,7 @@ floatFmtImportLines = [
 -- floatRem lower to native f64 opcodes / $mdk_round / $mdk_float_rem — NOT host imports.
 -- Every JS harness that instantiates a module (test/wasm/run.js + the playground
 -- worker.js / compile.mjs / *_test.mjs) provides these $mdk_<name> functions.
--- Gated on useMathRef (set by noteW8Extern when a host-math extern is referenced).
+-- Gated on WasmEmit.useMath (set by noteW8Extern when a host-math extern is referenced).
 export mathHostImportLines : List String
 mathHostImportLines = [
   "  ;; -- #101 libm math host seam (JS Math.*, see run.js / worker.js) --",

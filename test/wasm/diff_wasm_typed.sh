@@ -320,7 +320,6 @@ EXPECTED_MODULE_REFS="$(printf '%s\n' \
   useFloatStrRef \
   useIORef \
   useListRef \
-  useMathRef \
   useRefBoxRef \
   useStrLeafRef \
   useStrRef \
@@ -422,6 +421,63 @@ grep -F 'let _ = if contains name ["stringToChars", "stringFromChars"]' "$WASM_S
   grep -F 'emitProgram input cp = emitProgramWith (freshWasmEmit WGapStrict) input cp' "$WASM_SRC" >/dev/null &&
   [ "$(grep -F 'let emit = freshWasmEmit WGapRecord' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 2 ] || {
     echo "FAIL H2B-LR-STRCODEC-ROUTES: writer/reader cardinality or fresh route changed"
+    exit 1
+  }
+if grep -E '^_?useMathRef[[:space:]]*[:=]|setRef (_?useMathRef)' "$WASM_SRC" >/dev/null; then
+  echo "FAIL H2B-LR-AUTHORITY-SET: retired Math ambient authority remains"
+  exit 1
+fi
+for required in \
+  'useMath : Ref Bool' \
+  'useMath = Ref'; do
+  [ "$(grep -F -- "$required" "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] || {
+    echo "FAIL H2B-LR-MATH-CARRIER: missing or duplicate $required"
+    exit 1
+  }
+done
+EXPECTED_MATH_HOST_NAMES="$(printf '%s\n' \
+  acos asin atan atan2 cbrt cos cosh exp hypot log log10 log2 pow sin sinh tan tanh | LC_ALL=C sort)"
+ACTUAL_MATH_HOST_NAMES="$(awk '
+  /^isMathHostExternW name = contains$/ { in_math_host = 1; next }
+  in_math_host {
+    if ($0 ~ /^  \]$/) exit
+    while (match($0, /"[^"]+"/)) {
+      print substr($0, RSTART + 1, RLENGTH - 2)
+      $0 = substr($0, RSTART + RLENGTH)
+    }
+  }
+' "$WASM_SRC" | LC_ALL=C sort -u)"
+[ "$ACTUAL_MATH_HOST_NAMES" = "$EXPECTED_MATH_HOST_NAMES" ] || {
+  echo "FAIL H2B-LR-MATH-PREDICATE: Math host-extern name set changed"
+  exit 1
+}
+MATH_FLOAT_COFACTOR_LINE="$(grep -n -F 'let _ = if isFloatMathExternW name then setRef useFloatRef True else ()' "$WASM_SRC" | cut -d: -f1)"
+MATH_WRITER_LINE="$(grep -n -F 'let _ = if isMathHostExternW name then setRef emit.useMath True else ()' "$WASM_SRC" | cut -d: -f1)"
+MATH_IMPORT_LINE="$(grep -n -F 'mathHostImportLines else []' "$WASM_SRC" | cut -d: -f1)"
+FLOAT_IMPORT_LINE="$(grep -n -F 'floatFmtImportLines else []' "$WASM_SRC" | cut -d: -f1)"
+FLOATSTR_IMPORT_LINE="$(grep -n -F 'floatStrImportLines else []' "$WASM_SRC" | cut -d: -f1)"
+[ -n "$MATH_FLOAT_COFACTOR_LINE" ] &&
+  [ -n "$MATH_WRITER_LINE" ] &&
+  [ -n "$MATH_IMPORT_LINE" ] &&
+  [ -n "$FLOAT_IMPORT_LINE" ] &&
+  [ -n "$FLOATSTR_IMPORT_LINE" ] &&
+  [ "$(grep -F 'let _ = if isFloatMathExternW name then setRef useFloatRef True else ()' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
+  [ "$(grep -F 'let _ = if isMathHostExternW name then setRef emit.useMath True else ()' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
+  [ "$(grep -F 'mathHostImportLines else []' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
+  [ "$(grep -F 'floatFmtImportLines else []' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
+  [ "$(grep -F 'floatStrImportLines else []' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
+  [ "$MATH_FLOAT_COFACTOR_LINE" -lt "$MATH_WRITER_LINE" ] &&
+  [ "$FLOAT_IMPORT_LINE" -lt "$MATH_IMPORT_LINE" ] &&
+  [ "$MATH_IMPORT_LINE" -lt "$FLOATSTR_IMPORT_LINE" ] &&
+  ! grep -E 'setRef emit\.useMath False|setRef useMathRef False' "$WASM_SRC" >/dev/null || {
+    echo "FAIL H2B-LR-MATH-ROUTES: cofactor, import order, or reset changed"
+    exit 1
+  }
+[ "$(grep -F 'setRef emit.useMath True' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
+  [ "$(grep -F '(progEmit prog).useMath.value' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
+  grep -F 'emitProgram input cp = emitProgramWith (freshWasmEmit WGapStrict) input cp' "$WASM_SRC" >/dev/null &&
+  [ "$(grep -F 'let emit = freshWasmEmit WGapRecord' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 2 ] || {
+    echo "FAIL H2B-LR-MATH-ROUTES: writer/reader cardinality or fresh route changed"
     exit 1
   }
 if grep -E '^_?useCharFromCodeRef[[:space:]]*[:=]|setRef (_?useCharFromCodeRef)' "$WASM_SRC" >/dev/null; then

@@ -334,6 +334,7 @@ data WasmEmit =
       useFloatHash : Ref Bool,
       useFloatRng : Ref Bool,
       useStrCodec : Ref Bool,
+      useMath : Ref Bool,
       useCharFromCode : Ref Bool,
       useCharClass : Ref Bool,
       emittedDefaultNames : Ref (OrdMap Unit),
@@ -364,6 +365,7 @@ freshWasmEmit mode = WasmEmit {
   useFloatHash = Ref False,
   useFloatRng = Ref False,
   useStrCodec = Ref False,
+  useMath = Ref False,
   useCharFromCode = Ref False,
   useCharClass = Ref False,
   emittedDefaultNames = Ref omEmpty,
@@ -862,14 +864,6 @@ isLazyGlobalW prog x = omHasKey x (indexLazyGlobalsW (progIndex prog))
 useFloatRef : Ref Bool
 useFloatRef = Ref False
 
--- #101: the program uses a libm math extern that lowers to a JS `Math.*` HOST IMPORT
--- (a transcendental or pow/atan2/hypot — see isMathHostExternW).  Gates the
--- mathHostImportLines block (the $mdk_sin/$mdk_pow/… imports the JS harnesses provide).
--- The IEEE-exact ops (sqrt/floor/ceil/trunc/round) and floatRem need no host import, so
--- they force useFloatRef only, never this.
-useMathRef : Ref Bool
-useMathRef = Ref False
-
 -- layer-6: stringToFloat is a host-seam extern (like floatToString).  It takes a $str,
 -- pushes its bytes via the IO path channel (mdk_path_reset/mdk_path_push), and calls
 -- the new mdk_str_to_float host import to parse the f64 JS-side.  Forces floatRef
@@ -1051,7 +1045,6 @@ emitProgramWith emit input (CProgram groups ctorArs ctorTypes impls) =
   let _ = setRef useRefBoxRef False
   let _ = setRef useStrLeafRef False
   let _ = setRef useFloatRef False
-  let _ = setRef useMathRef False
   let _ = setRef useFloatStrRef False
   let _ = setRef useStrSearchRef False
   let _ = setRef useValueCmpRef False
@@ -1103,7 +1096,6 @@ emitProgramGaps input (CProgram groups ctorArs ctorTypes impls) =
   let _ = setRef useRefBoxRef False
   let _ = setRef useStrLeafRef False
   let _ = setRef useFloatRef False
-  let _ = setRef useMathRef False
   let _ = setRef useFloatStrRef False
   let _ = setRef useStrSearchRef False
   let _ = setRef useValueCmpRef False
@@ -1274,7 +1266,7 @@ isLeafExternW name = contains name [
   -- #101: libm math externs.  IEEE-exact ops lower to native f64 opcodes
   -- (sqrt/floor/ceil/trunc → f64.sqrt/floor/ceil/trunc; round → $mdk_round, C-round
   -- half-away-from-zero); transcendentals lower to JS `Math.*` HOST IMPORTS ($mdk_<name>,
-  -- gated on useMathRef).  floatRem lowers to $mdk_float_rem (floatRemRuntimeLines).
+  -- gated on WasmEmit.useMath).  floatRem lowers to $mdk_float_rem (floatRemRuntimeLines).
   -- All mirror llvm's isMathUnary/isMathBinary/floatRem NAME SET (see llvm_emit.mdk).
   "sqrt", "floor", "ceil", "trunc", "round",
   "cbrt", "exp", "log", "log2", "log10",
@@ -1283,7 +1275,7 @@ isLeafExternW name = contains name [
   "pow", "atan2", "hypot", "floatRem"]
 
 -- #101: the libm math externs whose wasm lowering is a JS `Math.*` HOST IMPORT
--- (transcendentals + the two-arg pow/atan2/hypot).  These force useMathRef so the
+-- (transcendentals + the two-arg pow/atan2/hypot).  These force WasmEmit.useMath so the
 -- mathHostImportLines block is declared (and the JS harnesses provide $mdk_<name>).
 -- The IEEE-exact ops (sqrt/floor/ceil/trunc/round) are NOT here — they lower to native
 -- f64 opcodes / $mdk_round, needing no host import.  floatRem uses $mdk_float_rem (WAT).
@@ -1606,8 +1598,8 @@ noteW8Extern emit name =
   -- (ref-mode + floatRuntimeLines carries $mdk_round; $mdk_float_rem is floatRemRuntimeLines).
   let _ = if isFloatMathExternW name then setRef useFloatRef True else ()
   -- #101: the transcendental / binary math externs lower to JS Math.* host imports —
-  -- force useMathRef so mathHostImportLines is declared.
-  let _ = if isMathHostExternW name then setRef useMathRef True else ()
+  -- force emit.useMath so mathHostImportLines is declared.
+  let _ = if isMathHostExternW name then setRef emit.useMath True else ()
   -- floatToString needs the $str rep to build its result string.
   let _ = if name == "floatToString" then setRef useStrRef True else ()
   -- layer-6: stringToFloat : String -> Option Float.  Pushes bytes via the IO path
@@ -2369,7 +2361,7 @@ emitRefProgram prog groups =
     -- lives JS-side).
     ++ (if useFloatRef.value then floatFmtImportLines else [])
     -- #101: the libm transcendentals / pow / atan2 / hypot are JS Math.* host imports.
-    ++ (if useMathRef.value then mathHostImportLines else [])
+    ++ (if (progEmit prog).useMath.value then mathHostImportLines else [])
     -- layer-6: stringToFloat is a host import (mdk_str_to_float = the host strtod parser).
     ++ (if useFloatStrRef.value then floatStrImportLines else [])
     -- W12: the IO host surface (readFile/fileExists/args/getEnv/exit) host imports.
