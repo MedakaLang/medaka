@@ -332,6 +332,7 @@ data WasmEmit =
       useRng : Ref Bool,
       useHash : Ref Bool,
       useFloatHash : Ref Bool,
+      useFloatRng : Ref Bool,
       useCharFromCode : Ref Bool,
       useCharClass : Ref Bool,
       emittedDefaultNames : Ref (OrdMap Unit),
@@ -360,6 +361,7 @@ freshWasmEmit mode = WasmEmit {
   useRng = Ref False,
   useHash = Ref False,
   useFloatHash = Ref False,
+  useFloatRng = Ref False,
   useCharFromCode = Ref False,
   useCharClass = Ref False,
   emittedDefaultNames = Ref omEmpty,
@@ -853,7 +855,7 @@ isLazyGlobalW prog x = omHasKey x (indexLazyGlobalsW (progIndex prog))
 
 -- W8b: the program uses Float (a Float literal, a Float extern, or a Float arith op).
 -- Forces ref-mode (a Float is a boxed (ref eq) $float struct) + gates the Float runtime
--- (floatRuntimeLines + the floatToString host import).  WasmEmit.useFloatHash / useFloatRngRef
+-- (floatRuntimeLines + the floatToString host import).  WasmEmit.useFloatHash / useFloatRng
 -- gate the hashFloat / randomFloat runtimes (which need the shared mix64 / next_u64).
 useFloatRef : Ref Bool
 useFloatRef = Ref False
@@ -865,9 +867,6 @@ useFloatRef = Ref False
 -- they force useFloatRef only, never this.
 useMathRef : Ref Bool
 useMathRef = Ref False
-
-useFloatRngRef : Ref Bool
-useFloatRngRef = Ref False
 
 -- layer-6: stringToFloat is a host-seam extern (like floatToString).  It takes a $str,
 -- pushes its bytes via the IO path channel (mdk_path_reset/mdk_path_push), and calls
@@ -1056,7 +1055,6 @@ emitProgramWith emit input (CProgram groups ctorArs ctorTypes impls) =
   let _ = setRef useRefBoxRef False
   let _ = setRef useStrLeafRef False
   let _ = setRef useFloatRef False
-  let _ = setRef useFloatRngRef False
   let _ = setRef useMathRef False
   let _ = setRef useFloatStrRef False
   let _ = setRef useStrSearchRef False
@@ -1110,7 +1108,6 @@ emitProgramGaps input (CProgram groups ctorArs ctorTypes impls) =
   let _ = setRef useRefBoxRef False
   let _ = setRef useStrLeafRef False
   let _ = setRef useFloatRef False
-  let _ = setRef useFloatRngRef False
   let _ = setRef useMathRef False
   let _ = setRef useFloatStrRef False
   let _ = setRef useStrSearchRef False
@@ -1628,7 +1625,7 @@ noteW8Extern emit name =
           else ()
   -- hashFloat needs the shared mix64 (hashRuntime); randomFloat needs next_u64 (rngRuntime).
   let _ = if name == "hashFloat" then let _ = setRef emit.useFloatHash True in setRef emit.useHash True else ()
-  let _ = if name == "randomFloat" then let _ = setRef useFloatRngRef True in setRef emit.useRng True else ()
+  let _ = if name == "randomFloat" then let _ = setRef emit.useFloatRng True in setRef emit.useRng True else ()
   -- W8b: stringIndexOf/stringCompare use the strSearch runtime + cp_count (strLeaf) + $str.
   let _ = if contains name ["stringIndexOf", "stringCompare"]
           then let _ = setRef useStrSearchRef True in let _ = setRef useStrRef True in setRef useStrLeafRef True else ()
@@ -2459,7 +2456,7 @@ emitRefProgram prog groups =
   let floatRemRt = if useFloatRef.value || useValueArithRef.value then floatRemRuntimeLines else []
   let floatRt = if useFloatRef.value then floatRuntimeLines else []
   let hashFloatRt = if (progEmit prog).useFloatHash.value then hashFloatRuntimeLines else []
-  let randomFloatRt = if useFloatRngRef.value then randomFloatRuntimeLines else []
+  let randomFloatRt = if (progEmit prog).useFloatRng.value then randomFloatRuntimeLines else []
   -- layer-6: stringToFloat runtime ($mdk_string_to_float).  Needs ioHostRt for the
   -- path channel ($mdk_path_reset/$mdk_path_push), but emitted AFTER ioHostRt since
   -- those functions are defined there (wasm forward refs are fine, but order is clear).

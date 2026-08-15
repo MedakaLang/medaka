@@ -302,7 +302,7 @@ for required in \
   'setRef emit.useRng True' \
   'setRef emit.useHash True' \
   '|| emit.useRng.value || emit.useHash.value || useFloatRef.value' \
-  'setRef useFloatRngRef True in setRef emit.useRng True'; do
+  'setRef emit.useFloatRng True in setRef emit.useRng True'; do
   grep -F -- "$required" "$WASM_SRC" >/dev/null || {
     echo "FAIL H2B9-RNG-HASH-AUTHORITY: missing $required"
     exit 1
@@ -317,7 +317,6 @@ EXPECTED_MODULE_REFS="$(printf '%s\n' \
   useArrayRef \
   useFileBytesRef \
   useFloatRef \
-  useFloatRngRef \
   useFloatStrRef \
   useIORef \
   useListRef \
@@ -373,6 +372,30 @@ grep -F 'then setRef emit.useCharClass True else ()' "$WASM_SRC" >/dev/null &&
   grep -F 'emitProgram input cp = emitProgramWith (freshWasmEmit WGapStrict) input cp' "$WASM_SRC" >/dev/null &&
   [ "$(grep -F 'let emit = freshWasmEmit WGapRecord' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 2 ] || {
     echo "FAIL H2B-LR-CHARCLASS-ROUTES: writer/read cardinality or fresh route changed"
+    exit 1
+  }
+if grep -E '^_?useFloatRngRef[[:space:]]*[:=]|setRef (_?useFloatRngRef)' "$WASM_SRC" >/dev/null; then
+  echo "FAIL H2B-LR-AUTHORITY-SET: retired FloatRng ambient authority remains"
+  exit 1
+fi
+for required in \
+  'useFloatRng : Ref Bool' \
+  'useFloatRng = Ref'; do
+  [ "$(grep -F -- "$required" "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] || {
+    echo "FAIL H2B-LR-FLOATRNG-CARRIER: missing or duplicate $required"
+    exit 1
+  }
+done
+grep -F 'then let _ = setRef emit.useFloatRng True in setRef emit.useRng True else ()' "$WASM_SRC" >/dev/null &&
+  ! grep -E 'setRef emit\.useFloatRng False|setRef useFloatRngRef False' "$WASM_SRC" >/dev/null || {
+    echo "FAIL H2B-LR-FLOATRNG-ROUTES: writer, operational read, or reset changed"
+    exit 1
+  }
+[ "$(grep -F 'setRef emit.useFloatRng True' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
+  [ "$(grep -F '(progEmit prog).useFloatRng.value' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
+  grep -F 'emitProgram input cp = emitProgramWith (freshWasmEmit WGapStrict) input cp' "$WASM_SRC" >/dev/null &&
+  [ "$(grep -F 'let emit = freshWasmEmit WGapRecord' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 2 ] || {
+    echo "FAIL H2B-LR-FLOATRNG-ROUTES: writer/read cardinality or fresh route changed"
     exit 1
   }
 if grep -E '^_?useCharFromCodeRef[[:space:]]*[:=]|setRef (_?useCharFromCodeRef)' "$WASM_SRC" >/dev/null; then
