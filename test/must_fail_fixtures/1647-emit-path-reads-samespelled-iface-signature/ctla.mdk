@@ -1,0 +1,11 @@
+-- CONTROL module A: identical in every respect to speakera.mdk except the type name.
+public export data CatA = CatA
+
+export interface Speak x where
+  speak : String -> x -> String
+
+impl Speak CatA where
+  speak s _ = "A(\{s})"
+
+export useA : String
+useA = speak "x" CatA

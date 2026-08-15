@@ -1,0 +1,17 @@
+-- UNGRADED EVIDENCE (this gate executes only `cmd:` and `control:`).
+--
+-- main.mdk with the two import lines SWAPPED and nothing else changed. It is the
+-- observation that makes the mechanism unambiguous: the emitter's failure names the
+-- OTHER type, so what decides the attribution is the ORDER of two cosmetic import
+-- lines, not anything about either module.
+--   main.mdk         (speakera first) : build 1, "... for type 'DogB'"
+--   swapped-order.mdk (speakerb first): build 1, "... for type 'DogA'"
+-- It is NOT the pin: one exit-code-plus-line assertion per fixture is enough, and a
+-- second row asserting the mirrored string would drain and re-drain together with the
+-- first for the same reason.
+import speakerb.{useB}
+import speakera.{useA}
+
+main =
+  let _ = println useA
+  println useB

@@ -1,0 +1,12 @@
+-- #1647 fixture, module A. Declares an interface SPELLED `Speak` whose method
+-- `speak` takes the String FIRST: `String -> x -> String`.
+public export data DogA = DogA
+
+export interface Speak x where
+  speak : String -> x -> String
+
+impl Speak DogA where
+  speak s _ = "A(\{s})"
+
+export useA : String
+useA = speak "x" DogA
