@@ -3031,3 +3031,52 @@ is deleted.
 benign) was ruled against FOR THIS BITE ONLY** — it changes gate semantics at the tail of a long sprint
 and deserves its own review. **W8 asked to file it as an issue with its design and self-drain**, so the
 reasoning survives. That is the right disposition for a good idea arriving at the wrong moment.
+
+## RUN-P45-085 — #1071's FIXTURE DELETED, ITS MEASUREMENT PRESERVED. W8 kept two things I did not ask for.
+
+`must_fail` **99/99 reproduce, 0 drained, 0 control-broke, 0 malformed**; census **HALF 1: "none — every
+pinned issue is still open."** ⭐ **It diffed the census run against the pre-change one rather than
+eyeballing it** — the delta is *exactly* the eight lines of the #1071 finding and **nothing else**. That
+is the right way to prove a detector went quiet for the right reason.
+
+**Preserved beyond the brief, and both would have been destroyed by a bare deletion:**
+1. **#1071's own cells and its control** — a second impl at a *different* head tycon printing the correct
+   pair. *"It is what PROVES the two shapes are one mechanism rather than asserting it."*
+2. ⭐ **A corpus obligation #1071 was carrying and #1062 was not**: `test/llvm_fixtures_modules/` goldens
+   are **captured from eval**, so the shared-head + non-constant-default axis is **deliberately unpinned
+   there**, and whoever fixes this must add that axis at the same time. **That obligation would have
+   vanished with the directory.** It now sits on the surviving pin.
+
+It also quoted the measured MALFORMED output inline, *"so a future reader who thinks 'why not just
+re-point it?' gets the answer without re-running the experiment"* — the derivation shipped with the
+conclusion.
+
+**#1653 filed** for the general repair (`superseded-by:`), with the three drains that stop it degrading
+into a skip-list, and with the honest note that its *"unknown keys are ignored"* claim is **derived from
+reading `claim_has`/`claim_get`, not measured** — *"which is exactly the distinction that broke the
+addendum, so I'd rather label it than let it travel as measured."* **It applied my own failure mode to
+itself, unprompted.**
+
+## RUN-P45-086 — ⚠️ MY CLOSE OF #1608 CASCADED INTO THE LEDGER THAT ISSUE PRODUCED. Mine to fix.
+
+Closing #1608 invalidated three artifacts that name it as OPEN:
+1. **`test/CORE-IR-TYPED-LEDGER.txt`** (from #1649) carries rows headed `── #1608 (OPEN) ──` and prose
+   saying *"#1608 is deliberately left OPEN: re-scoping it is its owner's call"* — **that call has now
+   been made, the other way.** `must_fail_census.sh` **HALF 4 reds when a ledgered issue is CLOSED.**
+2. **PR #1651 adds MORE rows naming #1608**, so it cannot merge as-is.
+3. **`MUST-FAIL-NOT-PINNABLE.txt:174`** says in its own text *"Delete this line once #1608 closes"* —
+   and its body still asserts the defect as *"mechanism established rather than inferred"*, which the
+   measurement **refuted**. Stale by its own instruction **and** wrong in its claims.
+
+⇒ **A closure is not a bookkeeping act when the issue has instruments pointing at it.** Recorded as a
+lesson: *before closing an issue, grep the TREE for its number — ledgers, exception files and fixture
+headers name issues and encode their state.*
+
+**Handed back to W9** (which built the instrument and had no way to know) with the two candidate shapes
+and **my hesitation about each stated rather than hidden**: re-pointing to a new issue may be a category
+error (the ledger is for known-WRONG cells awaiting a fix; this behaviour is *designed*), while
+converting to plain expected values pins an **order-dependence as expected** — honest for an arm that is
+order-dependent by construction, but easy for a later reader to misread as a blessed bug. Constraints
+set: HALF 4 must go quiet **honestly** rather than by muting a correct detector; the untyped arms must
+stay **graded**; tiers 1 and 2 must remain unmaskable. **Explicitly forbidden: reopening #1608 to make
+the ledger valid** — tail-wagging-dog, since its closure rests on W9's own measurement.
