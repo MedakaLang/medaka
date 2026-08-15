@@ -2921,3 +2921,59 @@ one row and leave the other wrong. Fail-capability measured; tiers 1 and 2 stay 
 
 ⚠️ **Explicitly NOT closed by this: wasm remains ungraded on this shape** (`diff_compiler_engines.sh`
 still has three arms). Recorded on the issue rather than silently inherited.
+
+## RUN-P45-082 — BOTH OWED PINS LAND (PR #1652). Three judgement calls beat the brief.
+
+Fixtures only — 12 files, 575 insertions, all under `test/must_fail_fixtures/`, **no compiler source**,
+so its surface stayed disjoint from the live writer's as intended. Final:
+**`100 fixtures: 100 reproduce, 0 DRAINED, 0 control-broke, 0 malformed`**, suite exit 0.
+
+**All four #1648 cells reproduced exactly**, plus two things beyond the brief: it **read the IR itself**
+(`define i64 @mdk_impl_Box_bar(i64 %arg0)` against `call … (i64 0, i64 %t3)` — arity 1 vs 2 with a
+**null** leading dict), and it built an **ablation** (`requires Eq a` deleted, every other byte
+identical → clean at exit 0 printing 7). The ablation is what the shape actually needed, because it
+also established that a **single-dimension control is not constructible**: `main.mdk`'s `a` is
+**phantom**, so no body over it can make `Eq a` live. That is a derivation, not an excuse.
+**And it bounded #1641 further than filed:** `impl Zero (<Stdout> Int)` behaves **identically**, so the
+defect is **not `TyConstrained`-specific.**
+
+### ⭐ The three calls, all better than what I asked for
+1. **A guard against the `build` verb's mis-report path, self-installed.** An emitter-only "fix" leaving
+   `check` still accepting would **drain the row while the acceptance — the actual defect — survives**:
+   the defect going *quieter*. `claim.txt` now carries an explicit instruction — if it drains because
+   `build` **succeeds**, re-run `check` first and **do not close #1641**. The severity-increase guard, in
+   the one artifact read at exactly the moment it matters.
+2. **A two-dimension control, deliberately.** The tighter one-dimension control would **break under a
+   legitimate fix** that rejects constrained impl heads outright, making the gate print CONTROL-BROKE's
+   *"the ENVIRONMENT moved"* advice **about a real fix**. It chose the control that survives being fixed.
+3. **It neither forced #1641's inverted control into the harness nor dumped it into
+   `MUST-FAIL-NOT-PINNABLE.txt`** — it pinned the honestly-pinnable subject side and shipped the
+   plain-head program **UNGRADED with its measurement**, naming the limitation as the harness's.
+
+**Fail-proofs: four mutations, each run and reverted**, each reddening **only** its own row, with the
+harness's own message quoted; final revert confirmed **diff-identical**. Both stdout and exit assertions
+shown to fire independently.
+
+## RUN-P45-083 — ⚠️ A TRIPWIRE CRYING WOLF: HALF 1 cannot express "closed as a DUPLICATE, pin retained"
+
+W8 reported `PINNED-BUT-CLOSED #1071` as pre-existing. **ORCH ran the pin first-hand: it reproduces
+exactly as written** — `run` prints `int/31` twice at exit 0, the built binary prints `int/31` / `str/71`
+and is correct.
+
+**But the close was LEGITIMATE, not a desk-close** — #1071 was closed as a **duplicate of #1062**, and
+the closing comment says verbatim: *"Neither is fixed — both pins still reproduce, and both fixtures are
+deliberately kept."* Same mechanism, same engine, same collision shape. Timeline confirms a deliberate
+dedup with a derivation, not a sweep.
+
+⇒ **The census's HALF 1 keys on `state == CLOSED` and cannot distinguish that legitimate state from the
+hazard it exists to catch.** So the finding is permanent and false — and
+[[feedback_a_tripwires_false_positive_is_its_masking_path]]: **the next person to see a HALF 1 finding
+will have been trained it is noise, on the run where it is real.** This tracker has had **two** genuine
+desk-closes tonight; a detector for them that cries wolf is worse than none.
+
+**Remedy dispatched into #1652** (same fixtures-only surface): re-point the fixture's `issue:` field to
+**#1062**, the live issue, so HALF 1 goes quiet **honestly** and the self-drain still works — one
+mechanism, two fixtures, both flip when #1062 is fixed. Directory name kept (historical; renaming is
+churn) with a `why-note:` recording the dedup and that the field points at the live issue **on purpose**,
+so a future reader does not "correct" it back. ⚠️ Told to **verify #1062 is actually open first** and to
+stop if not — and licensed to argue that the census should learn the duplicate convention instead.
