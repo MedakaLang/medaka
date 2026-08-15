@@ -2870,3 +2870,54 @@ logs**; LEG A re-derived a **third** time, unchanged. #1640's `resolve.md` and `
 
 ⚠️ **Its closing caveat is the thrash stated precisely:** *"a third landing would invalidate this again —
 the evidence above is specific to base `acd3144f`."*
+
+## RUN-P45-081 — ⭐⭐ #1608 SETTLED ON THE REPORTER'S OWN PROGRAM, AND CLOSED. It was mis-scoped AT FILING.
+
+**The original was recovered VERBATIM from committed source** — `.claude/sprint-b/repair/R6-engines-ungated.md`
+§ D-1, with `F1-verdicts.md` recording the same packet being run — **not reconstructed.** W9 was briefed
+to stop and refuse if it could not get the original in full; it did not have to.
+
+Five arms × two orderings × two programs, expectation hand-derived first, cold build:
+
+| arm | permA | permB |
+|---|---|---|
+| eval TYPED · native · **ceval TYPED** | `boxstr` ✅ | `boxstr` ✅ |
+| eval UNTYPED · ceval UNTYPED | `boxint` ❌ | `boxstr` ⚠️ **accidentally right** |
+
+**Outcome 1 on the filed program**, matching the described shape. All 20 cells exit 0.
+
+### 🚨 The finding is a FILING error, and the repo's own records prove it
+`F1-verdicts.md` names **`test/bin/core_ir_modules_main` — the UNTYPED driver** — as the source of the
+`core_ir_eval` ❌, while the `eval`/`native` ✅ came from `./medaka run` and `./medaka build`, **the typed
+path.** The issue's ✅/❌ table compares **two different arms, not two engines.** And R6's packet said so
+at the time, verbatim: *"`boxint` … is **not** a new bug — it is the untyped arm behaving as designed."*
+⇒ **The escalation to *"cevalModules resolves by import order"* happened AT FILING, not at measurement.**
+The measurement was right and was correctly interpreted *in the packet*; the issue text generalised past
+it. [[feedback_a_claim_reaching_past_its_evidence]] — at the moment a measurement becomes a ticket.
+
+⭐ **And the accidental-correctness hazard is symmetric, which is the generalisable half:** arg-tag's
+choice is independent of the program, so **each ordering makes exactly one of the two programs look
+right.** Any single-ordering *or* single-program reading of this shape is a coin flip.
+
+**One sub-claim corrected in the body's FAVOUR:** *"swapping the import lines flips both answers"* is
+**true** — W9 measured it — but `F1-verdicts.md` records no import swap, so it was a correct claim that
+was not, on the record, measured.
+
+### ⭐ OWNER RULING (Val): CLOSE, with the record attached. Done.
+Closed with the full measurement, the arm-mismatch derivation quoted from this repo's own records, and
+the note that **nothing was fixed — it is closed because the defect it describes was never measured to
+exist.** State verified `CLOSED` and the comment readback verified.
+
+**What it leaves behind is the durable part, and it is why chasing it beat desk-closing it:**
+`compiler/entries/core_ir_typed_modules_main.mdk` — the first driver to run `cevalModules` over marked +
+typechecked trees — and the gate's **T2 tier, which makes the `evalModules`/`cevalModules` lockstep
+gradeable for the first time**, a hazard that had been prose in `AGENTS.md` ever since a fix shipped
+patching only one of the pair. **A wrongly-scoped S1 bought a real gate for the fourth engine arm.**
+
+**PR #1651** adds both programs as gate cases plus two ledger rows — deliberately on **opposite
+permutations**, so a "fix" that merely flipped which impl the untyped fallback reaches first would drain
+one row and leave the other wrong. Fail-capability measured; tiers 1 and 2 stay green, so the rows
+**cannot mask** a typed-arm or lockstep failure. Enqueued.
+
+⚠️ **Explicitly NOT closed by this: wasm remains ungraded on this shape** (`diff_compiler_engines.sh`
+still has three arms). Recorded on the issue rather than silently inherited.
