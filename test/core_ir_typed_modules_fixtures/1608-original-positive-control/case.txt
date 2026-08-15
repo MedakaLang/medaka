@@ -1,8 +1,10 @@
 CASE: #1608's ORIGINAL POSITIVE CONTROL, verbatim — the sibling case's program
       with `speak (Box "s")` changed to `speak (Box 1)`, so the CORRECT answer is
       the other impl.
-OWNS: #1608 (OPEN) — on the UNTYPED arms only, and in permB only; the exact
-      MIRROR of 1608-original-literal-receiver. Read that case first.
+OWNS: nothing — no open issue (#1608 was CLOSED 2026-08-15 as mis-scoped at
+      filing). The exact MIRROR of 1608-original-literal-receiver; read that case
+      first, including its DISPOSITION section. Both entries here are PINNED
+      (main_perm*.untyped.txt), not ledgered.
 
 ── PROVENANCE ────────────────────────────────────────────────────────────────
 
@@ -44,14 +46,13 @@ RIGHT for the other.
   ...positive-control (int)  boxint  ⚠️ accidental boxstr  ❌
 
 So this is the ONLY case in this corpus whose untyped wrongness lands in permB
-rather than permA, and the only ledger row on that side. Concretely, it guards
-two things the sibling alone cannot:
+rather than permA. Concretely, it guards two things the sibling alone cannot:
 
   1. A reading of the sibling that saw only one ordering could mistake an
      accidental agreement for correctness. The mirror makes that impossible.
   2. A "fix" that merely flipped which impl the untyped fallback reaches first
-     would drain the sibling's permA row while leaving this case's permB row
-     wrong — the gate reports it instead of going green.
+     would satisfy the sibling's permA pin while breaking this case's permB pin —
+     the gate reports it instead of going green.
 
 ── MEASURED, 2026-08-15, on a cold `make medaka` at 2c549fef ─────────────────
 
@@ -68,11 +69,20 @@ All ten cells exit 0.
 The TYPED arms print `boxint` here and `boxstr` on the sibling — i.e. they track
 the RECEIVER'S TYPE rather than emitting a constant, which is what makes their
 green fail-capable rather than vacuous. The UNTYPED arms print a value that
-depends only on the import order and not on the program, which is the defect.
+depends only on the import order and not on the program — wrong under the
+semantics, and by construction: those drivers stamp no route, so arg-tag is all
+they have.
 
-⚠️ permA is UNLEDGERED on purpose: its untyped value equals the hand-derived
-expectation, so the gate grades it correct. That is the coin landing the right
-way, not the arm being right — the sibling case's permA row is the same coin
-landing the other way.
+⚠️ permA's untyped value EQUALS the hand-derived expectation. That is the coin
+landing the right way, not the arm being right, and the gate says so in those
+words ("arg-tag agrees here by luck") rather than reporting a bare ok — the
+sibling case's permA is the same coin landing the other way.
 
-#1608 is left OPEN. This fixture does not close it.
+── DISPOSITION (2026-08-15) ──────────────────────────────────────────────────
+
+#1608 was CLOSED as mis-scoped at filing. Both entries here are PINNED
+(main_perm*.untyped.txt) rather than ledgered, for the reason set out in the
+sibling case's DISPOSITION: the value is not the one the semantics require, but no
+issue owns it and none should, so a ledger row — which asserts a LIVE DEFECT with
+an OPEN owner — would be a false statement. The pin grades the identical bytes
+exactly and reds on any movement in either direction.

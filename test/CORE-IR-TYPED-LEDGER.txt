@@ -112,66 +112,44 @@
 #
 # ══ ROWS ══════════════════════════════════════════════════════════════════════
 #
-# ── #1608 (OPEN): the untyped module drivers select a cross-module impl by import
-#    order, ignoring the receiver's type ─────────────────────────────────────────
+# ── THIS FILE CURRENTLY HAS NO ROWS, AND THAT IS THE CORRECT STATE ────────────
 #
-# Two impls (`Box Int` / `Box String`) share one head tycon, so the argument's
-# constructor tag is `Box` in both cases and an arg-tag dispatcher cannot discriminate
-# even in principle. Both untyped drivers fall back to arg-tag "first impl wins", so
-# BOTH occurrences collapse onto whichever impl the import order reached first — which
-# is why each row's value repeats one answer twice, and why swapping the two bare
-# imports swaps which answer it repeats.
+# It carried four rows owned by #1608 from the day this gate landed until
+# 2026-08-15, when #1608 was CLOSED as mis-scoped at filing. The rows were removed
+# with it. That removal is NOT the "a fix landed, the row drained" path described
+# above, and a reader must not mistake it for one — the untyped arms still print a
+# value that is not the derived one. What changed is the OTHER half of what a row
+# asserts.
 #
-# 🚨 THIS ROW SET RE-SCOPES #1608, AND A REVIEWER SHOULD READ THIS BEFORE FIXING IT.
-# #1608 is filed as a defect SPECIFIC to `cevalModules` (compiler/ir/core_ir_eval.mdk),
-# on the strength of a table reading `eval` ✅ / `core_ir_eval` ❌. MEASURED here
-# same-arm, that table does not hold: the `eval` ✅ reading came from `medaka run`,
-# which is the TYPED path, while the `core_ir_eval` ❌ reading came from
-# core_ir_modules_main, which is the UNTYPED one. Compared arm for arm —
+# A row says (see WHAT A ROW MEANS): the untyped drivers agree and both print an
+# answer the semantics do not require, "THAT IS A LIVE DEFECT, and here is the issue
+# that owns it." The first clause is still true. The second is not: measured arm for
+# arm — first on a program of #1608's described shape, then on the reporter's
+# ORIGINAL program recovered verbatim from the sprint packet that produced the issue
+# — all three TYPED arms are correct and order-invariant, and the two UNTYPED drivers
+# are BYTE-IDENTICAL to each other. #1608's ✅/❌ table compared a TYPED `eval`
+# reading against an UNTYPED `ceval` reading; same-arm they agree. There is no
+# `cevalModules`-specific defect and no lockstep divergence.
 #
-#   TYPED:    medaka run == medaka build == core_ir_typed_modules_main == CORRECT,
-#             and order-invariant, on both cases below. (The TYPED Core-IR arm did not
-#             exist before this gate; it is what settles the question.)
-#   UNTYPED:  eval_modules_main == core_ir_modules_main, BYTE-IDENTICAL, both wrong.
+# The untyped drivers are desugar + annotate only — no marker, no typecheck — so no
+# `Route` is ever stamped and arg-tag "first impl wins" is all they have. That is
+# their design, not a bug awaiting a fix, and no issue owns it. Keeping a row would
+# have meant signing "that is a live defect" about behaviour nobody has argued is
+# one; re-pointing the rows at a NEW issue would have meant filing a bug for the
+# same thing. Both were rejected on this file's own definition of a row.
 #
-# — there is no `cevalModules`-specific defect and no lockstep divergence on this
-# shape. What reproduces is the shared, documented untyped arg-tag fallback
-# (`cevalModules`' own header: "UNTYPED path, like cevalProgram / evalModules").
+# ⚠️ THE BEHAVIOUR IS STILL GRADED, AND MORE TIGHTLY THAN THESE ROWS GRADED IT.
+# The rows were replaced by per-entry PIN files, `<entry>.untyped.txt`, next to each
+# case's expected.txt: the gate holds the untyped arms to those bytes EXACTLY, so any
+# movement in either direction is red, including the day the arm becomes correct.
+# The rows were not deleted to make a detector quiet — the grading moved, and got
+# stricter (all eight `1608-*` entries are pinned, where only four were ledgered).
+# Derive it rather than trusting this paragraph:
+#   grep -n 'pinfile' test/diff_compiler_core_ir_typed_modules.sh
+#   ls test/core_ir_typed_modules_fixtures/*/*.untyped.txt
 #
-# #1608 is deliberately left OPEN: re-scoping it is its owner's call, not this gate's,
-# and the rows drain the moment the untyped path stops being arg-tag — whether that
-# happens because #1608 is fixed as filed or because it is re-scoped and fixed
-# elsewhere. Each case's case.txt carries the full transcribed matrix.
-1608-cross-module-head-tycon-collision/main_permA | #1608 | boxint boxint\n
-1608-cross-module-head-tycon-collision/main_permB | #1608 | boxstr boxstr\n
-1608-cross-module-dict-forwarding/main_permA | #1608 | [boxint] [boxint]\n
-1608-cross-module-dict-forwarding/main_permB | #1608 | [boxstr] [boxstr]\n
-#
-# ── #1608, THE REPORTER'S ORIGINAL PROGRAM (and its own positive control) ──────
-#
-# The two cases above are of the shape #1608 DESCRIBES. These two are the program
-# it was FILED ON, recovered verbatim from the sprint discriminator packet that
-# produced the issue (.claude/sprint-b/repair/R6-engines-ungated.md § "D-1", with
-# .claude/sprint-b/repair/F1-verdicts.md § "Finding 5" recording it being run).
-# Same verdict, now on the original: all three TYPED arms correct and
-# order-invariant, both UNTYPED drivers byte-identical to each other and wrong.
-#
-# ⚠️ NOTE THE PERMUTATION ASYMMETRY — it is the point of the pair, not an
-# oversight. Arg-tag picks whichever impl the import order reached first, a choice
-# INDEPENDENT of the program, so in any one ordering it is wrong for one of these
-# two programs and ACCIDENTALLY RIGHT for the other:
-#
-#   program                          permA (ints first)    permB (strs first)
-#   ───────────────────────────────  ────────────────────  ────────────────────
-#   1608-original-literal-receiver   boxint  ❌ (row below) boxstr  accidental
-#   1608-original-positive-control   boxint  accidental     boxstr  ❌ (row below)
-#
-# Hence exactly one row per case, on OPPOSITE sides. The unledgered halves are
-# graded as correct by tier 3, which is right — their value does equal the
-# hand-derived one — but that is the coin landing the right way, not the arm being
-# right, and each case's case.txt says so. This is also the only ledger row in
-# this file on the permB side: a "fix" that merely flipped which impl the untyped
-# fallback reaches first would drain the literal-receiver row and leave this one
-# wrong, and the gate would report that rather than going green.
-1608-original-literal-receiver/main_permA | #1608 | boxint\n
-1608-original-positive-control/main_permB | #1608 | boxstr\n
+# A future GENUINE defect on this corpus — an untyped value that is wrong AND owned
+# by an open issue, or any tier-1/tier-2 failure, which a pin can never silence —
+# belongs here as a row under the rules above. The mechanism is live and unchanged;
+# it simply has no subjects right now. Derive the live row set, do not trust a count:
+#   grep -cvE '^[[:space:]]*(#|$)' test/CORE-IR-TYPED-LEDGER.txt

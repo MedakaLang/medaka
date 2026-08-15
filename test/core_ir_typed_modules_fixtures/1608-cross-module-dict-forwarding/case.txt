@@ -1,6 +1,9 @@
 CASE: the same two-impl collision, reached through a CONSTRAINED POLYMORPHIC
       forwarder in a fourth module (`relay : Tagged a => a -> String`).
-OWNS:  #1608 (OPEN) — on the UNTYPED arms only; see the sibling case's case.txt.
+OWNS:  nothing — no open issue. #1608 was CLOSED 2026-08-15 as mis-scoped at
+       filing; see the sibling case's case.txt for the finding and the DISPOSITION
+       section. The untyped arms' answer is PINNED (main_perm*.untyped.txt), not
+       ledgered: it is the drivers' documented arg-tag design, not an owned defect.
 
 ── HOW THE EXPECTED VALUE WAS ESTABLISHED ────────────────────────────────────
 

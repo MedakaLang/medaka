@@ -1,6 +1,8 @@
 CASE: #1608's ORIGINAL repro program, verbatim — receiver type inferred from a
       string LITERAL, one occurrence, no type signature anywhere.
-OWNS: #1608 (OPEN) — on the UNTYPED arms only, and in permA only; see below.
+OWNS: nothing — no open issue. This case is what CLOSED #1608 (2026-08-15,
+      mis-scoped at filing). The untyped arms' answer is PINNED per entry
+      (main_permA.untyped.txt / main_permB.untyped.txt), not ledgered.
 
 ── PROVENANCE: this is the reporter's program, not a reconstruction ───────────
 
@@ -84,10 +86,21 @@ UNTYPED driver — as the source of its `core_ir_eval` number, while its `eval` 
 `native` numbers came from `./medaka run` and `./medaka build`. Same-arm, the
 drivers agree.
 
-⚠️ Note that permB is UNLEDGERED here on purpose: its untyped value equals the
-hand-derived expectation, so the gate grades it as correct. That is not the arms
-being right — it is the coin landing the other way. The sibling control is what
-keeps that from reading as partial correctness.
+⚠️ permB's untyped value EQUALS the hand-derived expectation. That is not the arms
+being right — it is the coin landing the other way, and the gate says so in those
+words ("arg-tag agrees here by luck"). The sibling positive control is what keeps
+it from reading as partial correctness.
 
-#1608 is left OPEN. Re-scoping it is its owner's call; this fixture does not
-close it.
+── DISPOSITION (2026-08-15) ──────────────────────────────────────────────────
+
+#1608 was CLOSED as mis-scoped at filing, on this measurement. Both entries are
+PINNED rather than ledgered: a ledger row asserts "that is a live defect, and here
+is the OPEN issue that owns it", and while the value below is genuinely not the
+one the semantics require, no issue owns it and none should — the untyped drivers
+are desugar + annotate only, so arg-tag is all they have, by design.
+
+The pin grades the same bytes the ledger did, exactly, with no issue needed to
+stay honest: any movement is red, including the day the arm becomes correct (at
+which point delete the pin and let expected.txt grade all five arms). Both entries
+are pinned, where a ledger could only carry permA — so the arm is MORE graded than
+before, not less.
