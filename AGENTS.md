@@ -285,6 +285,15 @@ warning; **`MEDAKA_STRICT=1`** promotes it to a hard `exit 1`, useful when you n
 you're not debugging or verifying against a stale binary (`checkSourceStaleness`,
 `compiler/driver/medaka_cli.mdk`).
 
+🚨 **`MEDAKA_STRICT=1` CANNOT BE USED ON BOTH ARMS OF A TWO-ARM DIFFERENTIAL — it turns the
+base arm into `exit 1` on EVERY case and the run reports "everything differs".** Staleness is
+computed against `<exeDir>/compiler`, and a two-arm comparison shares one compiler tree by
+construction, so the older arm's baked fingerprint can never match the source beside it. That
+is not a stale binary; it is the guard doing its job on a layout it was not designed for.
+Measured 2026-08-15 on PR #1645, where the first differential run reported a total divergence
+for exactly this reason. ⇒ **Assert freshness ONCE, on the arm where it can be true**, and run
+the comparison itself without it — or give each arm its own `compiler/` tree.
+
 🚨 **THE WARNING GOES TO STDERR, NEVER STDOUT — so `2>/dev/null` HIDES IT and a probe that
 reads stdout will never see it.** `checkSourceStaleness` emits it with `ePutStrLn` and
 nothing else prints it (`grep -rn 'may be stale; rebuild' compiler/` finds one site,
@@ -312,6 +321,12 @@ MEDAKA_ROOT=/tmp/fake ./medaka run /tmp/hello.mdk >/dev/null    # the warning, o
 
 **In a worktree:** the shell cwd resets between calls, so use
 `make -C /absolute/path/to/worktree medaka`. The `./medaka` binary lands in the worktree.
+
+🚨 **DO NOT EDIT COMPILER SOURCE WHILE A BUILD IS IN FLIGHT — the fingerprint is baked at STAGE A
+START, not at the end.** A `.mdk` edit made after `make medaka` begins — *a comment is enough* —
+produces a binary that silently lacks it and whose baked stamp no longer matches the tree, so every
+subsequent probe trips the staleness guard (or, without `MEDAKA_STRICT=1`, quietly measures the old
+arm). Measured 2026-08-14: one full rebuild lost. Finish the edit, then build.
 
 **Borrowing an emitter (`cp <other-tree>/medaka_emitter .` then `make medaka`) is SAFE, but it
 does NOT warm-start the build — say so plainly, since a prior wording sold it as a warm start
@@ -590,6 +605,18 @@ Override with `NO_STALE_CHECK=1` only if you know exactly why. `diff_native_cli`
 bootstrap suites are especially stale-prone when invoked OUTSIDE `run_gates.sh` (e.g. bare
 `sh test/diff_native_cli.sh`) — force-rebuild before trusting a pass/fail from those.
 
+🚨 **THE GOLDEN-CAPTURE PATH READS THE SAME ORACLES AND HAS NO GUARD AT ALL — so a stale
+oracle does not just mis-report a gate, it can BLESS A WRONG GOLDEN, which is permanent.**
+`sh test/capture_goldens.sh --frozen selfproc_legA` and `sh test/diff_compiler_selfproc.sh`
+both read `test/bin/check_all_main`; `run_gates.sh` would refuse on its mtime, and neither of
+those invoked directly will. Measured 2026-08-15 on PR #1640: after merging `main`, the
+LEG A golden was re-derived against an oracle built **before** the merge — the gate read
+`16 ok, 0 failing` and the bless looked clean. Rebuilding the oracles and re-deriving from
+scratch produced a byte-identical golden, **so the artifact was right and the evidence for it
+was not.** ⇒ **After ANY merge or rebase, rebuild the oracles BEFORE capturing a golden**, and
+prefer routing the check through `run_gates.sh` afterwards so the guard is in the loop. A
+wrong gate verdict is loud on the next run; a wrong golden becomes the expected output.
+
 **Parallelism.** The oracle build, `run_gates.sh`, the heavy compiler gates, and every wasm
 gate fan out across an `xargs -P` pool — cap with `JOBS=n`, or `INNER_JOBS=n` for per-gate
 fan-out inside `run_gates.sh`. Opt-level knobs (`EMITTER_OPT` -O2, `ORACLE_OPT` -O0,
@@ -678,6 +705,14 @@ on purpose). Re-install after a fresh clone:
   lint/lextok stay live — unlike `--no-verify`, which drops all four) for exactly that shape;
   CI's snapshot shard still enforces the real gate against the merged tree, so a forgotten golden
   still reds the PR. Do not reach for `--no-verify` for this case anymore.
+  🚨 **`PRECOMMIT_SNAPSHOT_DEFER=1` does NOT reach the UNSTAGED-snapshot guard, so "goldens in
+  their own terminal commit" and any LATER `.mdk`-staging commit are MUTUALLY EXCLUSIVE.** The
+  guard (the `git add` it forces, above) fails any commit that stages a `.mdk` while a blessed
+  snapshot sits unstaged on disk — and `PRECOMMIT_SNAPSHOT_DEFER=1` opts out of check 4's *suite*,
+  not out of that guard. Measured 2026-08-14 on PR #1638, where the intended order was source →
+  pin (a `.mdk`) → goldens. **Remedy: bless and stage the goldens LAST, after every `.mdk`-staging
+  commit is already in** — or stash them across the intervening commit. Neither `--no-verify` nor
+  `core.hooksPath=/dev/null` is the answer; both drop all four checks.
 - **Lextok** — OPPORTUNISTIC: only runs when `test/bin/lex_main` already exists (this hook
   never builds an oracle), scoped to staged `.mdk` files that already have a sibling
   `.lextok.golden`. Gates on `test/diff_compiler_lex_files.sh`. Remedy for a stale golden:
@@ -806,6 +841,19 @@ MEDAKA_ROOT="$PWD" /tmp/alt/medaka run /tmp/hello.mdk # exit 0: 12345
 ⚠️ The miss diagnostic offers *"run from the project root"* as a remedy; measured, cwd
 being a directory that HAS `stdlib/` did **not** rescue it — only `MEDAKA_ROOT` or an
 exe-adjacent `stdlib/` did.
+🚨 **THE SAME PROPERTY MAKES A TWO-ARM DIFFERENTIAL UNSOUND WHEN THE TARGET IS ITSELF A
+`stdlib/*` FILE — and it fails in the direction that manufactures FINDINGS.** The
+internal-extern guard trusts a stdlib file only when it sits under the *binary's own*
+`MEDAKA_ROOT` (= `exeDir`). So a base binary living in one worktree, pointed at the branch
+worktree's `stdlib/array.mdk`, sees that file as **outside its stdlib** and rejects it with
+`R-INTERNAL-EXTERN` — while the branch binary on its own tree accepts. That reads exactly
+like *"the branch fixed 14 stdlib files"*. Measured 2026-08-15 on PR #1640: a reviewer
+reported 14 `base=1 → pr=0` stdlib divergences, then **retracted all 14** after swapping the
+file's tree reversed the direction — the variable was the file's location relative to the
+binary, not the compiler. Re-run with **each binary against its OWN tree's `stdlib/`** (and
+the tree prefix normalized before diffing): **0 divergences across all 29 modules.**
+⇒ For `stdlib/*` targets, either give each arm its own tree or set `MEDAKA_ROOT` per arm —
+never point one binary at the other's stdlib.
 🚨 **`stdlib/` is NOT the whole exe-adjacent layout — `medaka build` also needs `runtime/`
 there, and the gap bites only on the FIRST `build`.** The complete set beside the binary is
 `medaka` + `medaka_emitter` + `stdlib/` + **`runtime/`**: `runBuildNativeRoots`

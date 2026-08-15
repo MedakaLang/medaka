@@ -1386,3 +1386,1989 @@ amendment.
 On merge, the body's plain unbolded `Closes #1617. Closes #1618.` fires — **closure with the landing
 sha**, which is the policy's prescribed form, not a desk close. **#1630, #1634, #1636 stay open** and
 are unaffected.
+
+---
+
+## RUN-P45-036 — ⭐ IMPLEMENTATION PHASE OPENED (2026-08-14). FOUR OWNER RULINGS (Val).
+
+Phase 0 closed at RUN-P45-017; this entry opens the implementation phase against that closed design.
+Asked once, with the Phase 0 picture in hand.
+
+### Ruling A — **scope: 4b + Phase 4 in ONE sprint.** Two IR-moving rewrites ⇒ **two terminal
+close-outs**, per the mitigation RUN-P45-007 reinstated. Phase 4 takes **route α**.
+
+### Ruling B — **S3 (`keyForSite` repoint) is ruled ON EVIDENCE, in-sprint.** Land Q1/S1/S2, re-measure
+the surviving #1182-class residual on the **built binary**, then decide. This adopts P0-G's own
+recommendation (§D.1 BITE S3 `unchecked:`) rather than pre-committing to the largest IR move in the set.
+
+### Ruling C — **#1608: adopt the GATE only.** Build RUN-P45-010's Option B typed multi-module Core-IR
+gate this sprint (it also closes the fourth-engine blindness); the FIX is filed as a separate unit with
+a named owner. Instrument now, fix later — the issue has been "unowned" for three consecutive sprints
+and an instrument is what stops that recurring silently.
+
+### Ruling D — **#1630 rides as bite 0**, landed FIRST and ALONE, on its own PR. It is the arm set's
+third member, same organ as #1629, and a Phase 4 precondition under the same reasoning the arm set was.
+⚠️ It is landed as its own bite precisely because #1629 was right not to extend its set mid-bite.
+
+**Landing order adopted:**
+```
+#1630  →  Q1  →  S1  →  S2  →  X  →  ⟦close-out 1⟧  →  Phase 4  →  ⟦close-out 2⟧
+       →  #1608 gate  →  ⟨rule S3 on evidence⟩
+```
+Phase 4 is **not** ordered against Q1 on either route (P0-G §F, verified negative); its position above
+is a serialization choice under *serialize writers*, not a dependency.
+
+**Plan of record for this phase:** `/root/.claude/plans/kind-humming-wirth.md` (owner-approved).
+
+## RUN-P45-037 — #1182 REOPENED (third state change in one day), with a mechanical argument
+
+Closed 03:52Z (no commit id) → reopened 06:20Z by ruling → **closed again 18:50Z, again with no commit
+id, no comment, and no PR referencing it** → reopened here. Derived from the issue timeline.
+
+What is new since the first reopen is that a **landed gate now contradicts the closure**:
+`test/IFACE-ORDER-LEDGER.txt` (PR #1631) carries row `1182-unimplemented-iface-obligation-iface-order`
+under the heading `── #1182 (OPEN): …`, and **`test/must_fail_census.sh` HALF 4 reds when a ledgered
+issue is CLOSED**. So the desk close does not merely mis-state the tracker — it breaks a nightly gate.
+The pin `test/must_fail_fixtures/1182-two-ifaces-same-method-name-order-decides/` is also still present
+and was recorded "100 reproduce, 0 drained" at the Phase 3′ merge.
+
+⇒ **A close-out desk sweep must check the PIN, not the sprint's narrative.** Twice now on this issue.
+Comment posted with readback verified: `issuecomment-5298050551`.
+
+## RUN-P45-038 — W1 dispatched: bite 0 (#1630), isolated worktree
+
+Briefed as a transformation over named sites (`headTyNode` / `headTyconTy`), with #1629's diff as the
+template, and three standing constraints stated explicitly: **do NOT symmetrize the arms with
+`eval.mdk`'s `headTycon`** (it already strips `TyConstrained`/`TyEffect`; the two sides need different
+arm counts), **count the readers of the changed projection two levels out** (#1629 narrowed acceptance
+through three of them at 11/12 green), and the **nearest-miss** test. Refusal licensed in the brief in
+the terms that earned their place on the sibling bite.
+
+## RUN-P45-039 — S1 site census (reader, pinned to `401e3e30`, no build). Four findings.
+
+**1. `sameTyConHead`'s absence arm is a WILDCARD, not a never-match — and that is what makes S1
+byte-neutral on the flat path.** Quoted (`ast.mdk:496-507`): `sameTyConHead n1 o1 n2 o2 = n1 == n2 &&
+not (tyConIdsConflict o1 o2)`, and `tyConIdsConflict` answers `False` unless BOTH origins are
+identities and they differ. So the only answer that moves is *same spelling, two known different
+declarations* — exactly the case the bite intends to catch. ⚠️ The contrasting rule
+`ifaceIdMatches` (`ast.mdk:139-140`, `a != "" && a == b`) is the LOOKUP-direction comparator where
+absence never matches; picking it here would turn every unstamped flat-driver interface into a
+non-match. **This is the plan-of-record's trap 2 ("lookup and filter need DIFFERENT comparators")
+appearing as a concrete choice between two named functions.**
+
+**2. Blast radius is ONE FILE.** No member of the family is `export`ed and there is no non-comment
+reference outside `compiler/types/typecheck.mdk` (hits in `core_ir_lower`, `route_key`, `registry`,
+`llvm_emit` are all comments). The risk is internal plumbing, not an API break.
+
+**3. The supply is not uniform — three grades, and the site list is now leaf-traced:**
+- **Site A** (`concreteReqMatchByIface :22889`) — `findMatchingImplReqsU` already holds an `IfaceRef`
+  and projects `.irName` purely to satisfy the narrow callee. Widening DELETES the projection. Zero
+  plumbing.
+- **Sites C / C′** (`keyForSiteByIface :20087`, `ieHeadCollidesByIface :19277`) — **the real bite.**
+  The `String` lives inside two DATA declarations (`EKNestedTop`'s payload; `CountImpls`), so supply
+  means widening both plus ~12 signatures. Roots trace to `CSlot.csIface` (an `IfaceRef`, projected
+  to `.irName` at `:9277` and `:12480`) — recoverable, but that projection is a **documented
+  deliberate decision** (route words stay spellings), and `ifaceFromDictApps` (`:26606`) reads the
+  channel back expecting a `String`.
+- **Root C3** (`argImplReqRoutes :20447`) — cheapest supply (`Require` already carries
+  `requireOrigin`, `ast.mdk:1042`) and **highest odds of a real behaviour change**: the query origin
+  is stamped by resolve on a `requires` clause while the row origin comes from `DImpl.implOrigin`.
+  Different stamping paths ⇒ a disagreement silently DROPS a `requires` route.
+
+**4. 🚨 A hazard that is dead only by a comment, not by a type.** `ifaceIdentity` (`ast.mdk:121`)
+maps `OriginBuiltin` to `""` (absence); `identOriginOf` (`ast.mdk:324`) maps it to
+`Some IdentBuiltin` (a real identity). Hence `sameTyConHead "Eq" OriginBuiltin "Eq" (OriginModule
+"core")` is **False — a conflict**, where today's `==` on the spelling answers True. Anywhere the
+widened plumbing mints `OriginBuiltin` for an interface, byte-neutrality breaks. Two comments assert
+that is unreachable for an interface; **the S1 bite must verify that rather than inherit it.**
+
+⚠️ Also flagged by the reader and NOT to be lost: `ieHeadCollidesByIface` decides which word
+`keyForSiteByIface` stamps (canonical vs bare). A count falling 2→1 under the widened comparator is a
+**dict-cell byte change**, and `core_ir_lower.ifaceDeclHeadUnique` counts over a different table and
+would not follow — the skew the file's own `:19315-19330` records as previously producing exit 0 plus
+a segfault. **The S1 bite's byte-identical bar is therefore load-bearing, not ceremonial.**
+
+## RUN-P45-040 — 🚨 Q1 BLAST-RADIUS CENSUS: Q1 as specified REJECTS A PROGRAM THE TREE PINS AS CORRECT
+
+Reader, pinned to `401e3e30`, layout-block parser (not grep), no build. 3165 `.mdk` files · 657
+declare an interface · 101 declare ≥2 · **10 files collide intra-module.**
+
+**The good half — Q1 is shippable as stated:**
+- **`compiler/` declares ZERO interfaces**; `stdlib/` declares 23, all in `core.mdk`, **pairwise
+  disjoint** method sets (nearest misses `Index`/`IndexMut`, `Applicative`/`Thenable` — no overlap).
+  So Q1 breaks neither the compiler's own build nor the prelude.
+- Two `must_fail` pin dirs (#1182, #1620) stop compiling ⇒ **the pins DRAIN**, which is the shape the
+  #1182 claim itself names as one of its two viable fixes.
+- Two ledgered `iface_order` rows converge ⇒ RED on `diff_compiler_iface_order.sh`, which is that
+  gate's **documented drain path**, not a break.
+
+**🚨 The half that needs an owner ruling — Q1 destroys the G-0 instrument's two UNLEDGERED CONTROLS,
+and one of them is a legal, order-invariant, working program:**
+- `test/iface_order_fixtures/control-shared-method-name-disjoint-receivers/` — two interfaces share
+  method `n`, implemented at **disjoint receiver types**; `case.txt` asserts `n U + n V == 3` at
+  exit 0 **in every ordering**. Nothing about it is ambiguous at any occurrence. **Q1 rejects it.**
+- `test/iface_order_fixtures/negative-1182-impl-axis-shape-is-iface-axis-invariant/` — same fate.
+- These controls are what **bound what the ledgered rows are evidence for** (their own `case.txt`
+  says so). Losing them silently converts G-0 from an instrument into a tautology: every case
+  rejects, so every case "agrees".
+
+⇒ **Q1 is not purely a repair of an invariant the tree already believes.** `methodIfaceParamsRef`'s
+header claims resolve rejects the ambiguous case; the control proves the *unambiguous* case is
+legal today and works. Rejecting on DECLARATION alone narrows acceptance for working programs.
+
+**⚠️ Second unmeasured axis, and it is the one that could blow the radius open:** the census compared
+interfaces **textually in the same file only**. `resolve.mdk` seeds `pIfaces`/`expIfaceMethods` from
+`preludeDecls` (`:1608`, `:2763`, `:2836`). **If Q1's "one module" is read to include the implicit
+prelude, every user interface declaring `map`/`eq`/`compare`/… collides** and the radius is not 10.
+The bite must state, in code and in its PR body, that its scope is *interfaces declared in the
+module's own source*, and pin that with a fixture. The prelude-vs-user axis belongs to SHADOW/#1499.
+
+**Also recorded from the census (not acted on):** 29 directories carry genuine CROSS-module
+collisions co-loaded into one program — the population Q1 deliberately does NOT reach, outnumbering
+the intra-module population ~3:1. The two populations are disjoint in practice (no directory holds
+both shapes), which is the practical check P0-G's *"Q and S are not redundant"* claim needed.
+
+## RUN-P45-041 — ⭐ OWNER RULING (Val): Q1 rejects on DECLARATION. The controls are re-posed.
+
+Asked with the census in hand (RUN-P45-040), not up front.
+
+> **Keep P0-G's rule as designed: two interfaces in one module may not share a method name, period.**
+
+Three things this ruling BINDS on the bite, so none of them can be quietly dropped:
+
+1. **It narrows acceptance for a working shape, and the bite must SAY SO** — in the diagnostic's
+   `help` text and in the PR body's Q6 answer. The disjoint-receiver program
+   (`n U + n V == 3`, exit 0, order-invariant) compiles today and will not after. That is a
+   deliberate cost bought for a decidable rule at resolve, not an oversight.
+2. **G-0's two unledgered controls must be RE-POSED in the same bite**, on a shape Q1 permits, so the
+   instrument keeps the bound its ledgered rows rest on. A gate whose every case rejects agrees with
+   itself vacuously. ⚠️ The replacement control must be **proven able to fail** (mutate, watch it
+   red, revert) — a control that cannot fail is the masking path this sprint's own attack list names.
+3. **The rule's SCOPE is the module's own declared interfaces — NOT the implicit prelude.** If the
+   check is written over the seeded set (`pIfaces`/`expIfaceMethods`, seeded from `preludeDecls` at
+   `resolve.mdk:1608,2763,2836`), every user interface declaring `map`/`eq`/`compare` is rejected and
+   the blast radius stops being 10. **Pin the prelude case with a fixture that must still compile.**
+
+## RUN-P45-042 — 🚨 P0-G's Q1 PREMISE IS REFUTED, and the refutation makes Q1 CHEAPER
+
+Reader, pinned, no build. P0-G §C.1 asserts — with three derivations — that
+*"resolve has NO value-name duplicate check at all."* **False.** Five exist [read]:
+`R-DUPLICATE-DEF` for duplicate **type**, **constructor** and **interface NAME**
+(`resolve.mdk:1928`/`:1929`/`:1930`), plus `R-DUPLICATE-SIGNATURE` (`:1734`) and `R-DUP-BINDING`
+(`:1762`). What P0-G is *right* about is narrower and is documented as deliberate at `:1720-1733`:
+there is no check for a multi-clause function-name collision without a repeated signature.
+
+⇒ **Consequence for the bite, and it is good news: `resolve.mdk:1930` IS the template, line for line.**
+
+```medaka
+duplicateErrors preludeDecls prog =
+  let ifaceSeed = whenL seed (map fst (interfaceList preludeDecls))
+  … ++ map (dupErr "interface") (findDups ifaceSeed (map fst (interfaceList prog)))
+```
+
+It already demonstrates the **exact prelude-exclusion mechanism RUN-P45-041 rules for**: the module's
+own set is `interfaceList prog`; the prelude enters only as a *seed*, which Q1 simply **omits**.
+Imports are not in the picture at all — `buildErrors` (`:1664`) has no `known` table, and it is the
+one import-independent error pass BOTH resolve entry points run (`:2056`, `:2064`, `:3096`). So the
+ruled scope is achieved by construction at that site, not by a guard.
+
+⚠️ **Rejected placements, with what each gets wrong:** `checkInterfaceDecl` (`:1379`) sees only `Env`,
+whose `interfaces`/`ifaceMethods` are **prelude+imports-merged** (`:1624-1625`, `:2784`) — wrong set;
+`buildEnvMM` (`:2763`) is multi-module only, so a check there is **invisible to `medaka check
+one.mdk`**; `expIfaceMethodsDirect` (`:2930`) is `pub`-filtered and carries re-exports — wrong on
+both ends.
+
+**Three constraints the writer must carry:**
+1. **`interfaceList` has NO `DAttrib` arm** (`:1509` falls to the wildcard) while `interfaceNamesOf`
+   (`:4133`) recurses into it. An `@attrib`-decorated `interface` is **invisible** to the template
+   function — the #1228 family exactly. Follow `interfaceNamesOf`'s shape, and pin an attributed
+   interface in the fixture set.
+2. **`DInterface` carries NO `Loc`** (`ast.mdk:1210`; `declLoc` `:1871` has arms for `DAttrib`/
+   `DFunDef` only, so `DInterface` hits `_ = None`), and `IfaceMethod` (`ast.mdk:1021`) has none
+   either. Per-method name spans exist ONLY in the parser (`declNameSpanOf`/`methodNameIdxs`) and do
+   not survive to resolve. ⇒ **The diagnostic will be location-less like its sibling
+   (`dupErr … None`), or best-effort via `firstTyLoc`** — and `firstTyLoc` yields `None` for a fully
+   parametric signature. "Point at the second declaration" is not achievable here without an AST
+   change. Say that in the PR rather than shipping a wrong span.
+3. **Resolve is PURE — there is no `pushResolveError` family** (`resolve.mdk:8`). A new `ResError`
+   constructor must touch its five exhaustive consumers: `data ResError` (`:93`), `resErrorLoc`
+   (`:214`), `resErrorSexp` (`:1971` — feeds the `resolve_modules` gate), `ppResError` (`:2078`),
+   `resErrorCode` (`:2140`); `resErrorDidYouMean` has a wildcard and needs nothing. Goldens that move:
+   `test/snapshots/compiler/resolve.md` and `test/check_json_fixtures/*.check_json.golden`.
+
+⭐ **Direct authority for the scope ruling, found by the reader:** the RESERVED row
+`W-PRELUDE-METHOD-SHADOW` (`DIAGNOSTIC-CODES-DESIGN.md:280`) specifies the *prelude*-collision case as
+a **warning, explicitly not an error**, per `SHADOW-SEMANTICS.md` S1-PRELUDE, owned by **#1499**. So
+Q1 rejecting a prelude collision would not merely be over-broad — it would **contradict a written
+spec ruling and pre-empt another issue's deliverable.**
+
+## RUN-P45-043 — BITE 0 LANDS AS PR #1638 (open, unenqueued). The brief was RIGHT this time.
+
+Unlike the sibling bite, the briefed site and mechanism held: one arm,
+`headTyNode (TyConstrained _ t) = headTyNode t`. `eval.headTycon` deliberately untouched (it already
+had the arm) and `Mono` needs nothing (it has no constrained constructor) — the two sides keep
+DIFFERENT arm counts, which is the documented correct state.
+
+Cells, C3a/C3b, golden accounting and the four DEBT fields: `.claude/sprint-phase45/DEBT.md`, bite 0.
+
+**ORCH verification of the PR itself (evidence, not re-running):** three commits in the required
+shape (source · pin · terminal goldens); the body's only closing keyword is `Fixes #1630.` — nothing
+else is aimed at an issue that must stay open; CI running, `backend`/`sqlite`/`seed-health` already
+green. Two adversarial reviewers dispatched — **semantics** (arm-set completeness, the headless-body
+scoping claim, the acceptance-reader claim, `nothing → something` against the spec, the pin's
+discrimination) and **evidence/prose** (every shipped sentence traced to a command) — following the
+#1319 finding that the two lenses catch disjoint sets.
+
+## RUN-P45-044 — TWO TOOLING GAPS FOUND BY THE BITE, both reproducible for the next agent
+
+Recorded because both are structural, not one agent's bad luck:
+
+1. **`make medaka` bakes the source fingerprint at STAGE A START**, so any compiler-source edit made
+   *while a build is in flight* — a comment is enough — silently yields a binary lacking it, which
+   then fails `MEDAKA_STRICT=1` on every subsequent probe. Cost one full rebuild. The remedy is a
+   rule, not a tool: **do not edit compiler source while a build is running.**
+2. **`PRECOMMIT_SNAPSHOT_DEFER=1` does NOT reach the #1179 unstaged-snapshot guard.** Consequence: the
+   standing *"goldens re-cut in their own terminal commit"* rule and any LATER commit that stages a
+   `.mdk` are **mutually exclusive** under the current hook — the guard refuses the `.mdk`-staging
+   commit while a blessed snapshot sits unstaged. The writer worked around it by stashing the goldens
+   across the fixture commit (no `--no-verify`, no `hooksPath` override). ⇒ Ordering rule for this
+   sprint: **stage the goldens LAST, after every `.mdk`-staging commit is in.**
+
+Both landed as AGENTS.md lines in this sprint's docs commit so the next agent inherits them.
+
+## RUN-P45-045 — EVIDENCE-LENS REVIEW OF PR #1638: 4 real findings, and the split earned its keep
+
+The prose lens found things the semantics lens is not looking for, exactly as the #1319 split predicts.
+**None of them is wrong code.** All four are claims reaching past their evidence — the arc's dominant
+defect shape, ninth consecutive instance.
+
+**F1 (MEDIUM-HIGH) — a live fixture header still asserts the ruling this PR falsifies, WITH cells.**
+`test/dict_fixtures/s3-fn-typed-impl-heads-discriminated.mdk:35-38` says #1630 is *"still `check=0
+run=0 build=1` on this binary"* — a present-tense measurement that becomes false the moment this PR
+lands, in a file the PR **does not touch**. The PR carefully corrects `eval.mdk`, `registry.mdk`,
+`headTyNode`'s header and the gate ledger, and misses the sibling FIXTURE carrying the same ruling.
+⇒ **This is the mechanism that created #1630 in the first place**, reproducing one file over.
+
+**F2 (MEDIUM) — a CORRECTING comment overshoots in the other direction.** The new `eval.mdk` text says
+#1617 is *"one that builds and E-PANICs"*. Three in-tree records say `build` **exited 1**
+(`diff_compiler_dict_semantics.sh:402`, the fixture header, `PLAN.md:1837`), and the message is minted
+in `llvm_emit.mdk:5588` — the EMITTER panicking, so no binary exists. The same sentence folds all
+three arm-set members into *"CHECKS and RUNS"*, erasing that #1617's `run` was **wrong and
+order-dependent** while #1618's and #1630's were correct. A comment written to fix an over-general
+comment, restating a sibling's cells in the "less broken" direction.
+
+**F3 (MEDIUM) — the enumeration of the walk that ACTUALLY CHANGED is 3 of 4.** `headTyconTy` has three
+call sites; the PR names `keyEntryOf` and `univReceiverTag` and never mentions **`keyEntryOfRow`**
+(`:19123`), which feeds `ieSelectRowByIface` — the very selector the NEXT bite widens. ⚠️ Note the
+polarity: the PR follows the **untouched** census walk to its leaves and gives a one-hop list for the
+walk it **did** change. That is backwards, and it is trap 3 from `HANDOFF.md` verbatim. **Relayed to
+the semantics reviewer as ITS claim to verify, with the two questions that decide whether it is a
+defect or a sentence.**
+
+**F4 (MEDIUM) — three precise counts no shipped table supports.** *"all 10 programs"* over tables
+containing 8; *"the six newly-buildable programs"* where 5 rows go `build 1 → 0`; and *"`build` +
+executed the produced binary — all 10, both arms"*, which is impossible as stated because the pre-fix
+arm produced **no binary** and the overlap row rejects at `check` on both arms — the body says both
+things itself. `DEBT.md` describes the same work as 7. **Three artifacts, three counts.** The
+underlying row-by-row table is real evidence; the summary numbers on top of it are not derived from it.
+
+**Four minor:** the falsified quote is attributed to *"#1617's commit body"* (an issue has none; it is
+PR #1629's commits `e051788b`/`699f0b5b`) in two SHIPPED artifacts while commit 1 gets it right;
+`registry.mdk:970`'s *"for both"* is stale at three after this PR's own insertion; `unchecked:` omits
+`typecheck_compiler_source.sh`, the gate `AGENTS.md:556` names for this exact change class; and one
+commit message mixes an exit code and a printed value in adjacent cells (`run 0` then `run 2`).
+
+**Checked and CLEAN, worth recording because it is the part most likely to have rotted:** exactly one
+closing keyword (`Fixes #1630.`); the negative result is stated as *structural, not demonstrated* in
+source, body and commit alike with **no sentence anywhere softening it to benign** — the best-handled
+part of the PR; `"measured benign"` survives nowhere else in the tree; all three golden line-count
+deltas re-derive from the diff; the `202/202` string is a verbatim instance of the script's own success
+format, not a reconstruction; and Q4's *"I looked for a fourth member and did not find one"* is backed
+by an enumeration that is present and correct.
+
+⇒ **Repair set for bite 0, to be applied before enqueue** (queued behind W2 under serialize-writers):
+F1, F2, F3's sentence, F4's counts, and the four minor. **F3's SEMANTIC half is not a repair item until
+the semantics reviewer rules on it.**
+
+## RUN-P45-046 — SEMANTICS-LENS REVIEW OF PR #1638: could not break the fix; two findings, both UPWARD
+
+Method worth recording because it is the bar: **three cold-built arms** — FIX (`906bae74`), BASE (the
+one line reverted, rebuilt), and **NARROW (the reviewer wrote the special-case fix the pin claims to
+catch, and rebuilt)** — 25 probe programs, every verb redirect-then-read-`$?`, env checked free of
+`MEDAKA_ROOT`/`MEDAKA_EMITTER`.
+
+**The fix holds.** Arm set complete (`Ty` has 8 constructors; after the peel set and the classifier
+arms the residue is `TyVar`, correctly headless, and `TyRow`, which is **rejected at the kind check on
+all three arms** so it never reaches dispatch). Headless preserved **byte-identically**. `check`
+stdout and exit code **byte-identical on all 25 programs across BASE and FIX** — no acceptance move,
+attacked directly at overlap, duplicate constrained heads, no-impl misses, undetermined receivers,
+specificity-with-`requires`, and cross-module. Spec conformance derived BEFORE invoking: DICT §3
+compares *heads only*, contexts play no role ⇒ the head of `impl Sz (Eq a => Int)` **is** `Int`; the
+IR agrees on both sides of the seam (`@mdk_impl_Int_sz` at definition and call site).
+
+**Pin verified the hard way:** on BASE, `diff_compiler_dict_semantics` fails **exactly the 2 new rows**
+and nothing else; on NARROW, **the effect fixture fails and the other passes** — i.e. the second
+fixture does precisely the discriminating job its header claims. That is an able-to-fail proof AND a
+discrimination proof, which is more than the bar asked for.
+
+### ⭐ F1 (CONFIRMED, in the PR's FAVOUR) — the fix also closes SILENT WRONGNESS, and the PR under-claims
+```medaka
+impl Sz (Eq a => Box Int) where sz _ = 13
+impl Sz (Box Bool)       where sz _ = 14
+main = println (sz (Box 1) + sz (Box True))     -- spec answer 27
+```
+**BASE: `run` prints 26 at exit 0** — both calls took 13. FIX: run, build and the executed binary all
+**27**. Two more BASE `run` failures the fix removes (`E-NOT-A-FUNCTION`, `E-PANIC: unknown op '+'`).
+
+⇒ **Both new fixture headers and the `headTyNode` comment assert *"`check` and `run` were both already
+CORRECT"*. True of the PINNED one-impl shape, FALSE of the class.** #1630's S1 grading is likewise
+scoped to the reported shape; the neighbour is an S0. This is
+[[feedback_severity_is_a_repro_artifact_not_a_defect_identity]] arriving from the good direction —
+and it is a *stronger* claim than the PR makes, so it must be corrected upward, not left.
+
+### 🚨 F2 (CONFIRMED) — the "tried and FAILED" negative in the new comment is FALSIFIED. Pre-existing.
+The PR's `censusHeadNameTy` comment records that #1630 *"tried and FAILED to build a program that
+observes"* the census residual. The candidate it used had the constrained impl as the interface's
+**only** impl — but `checkUndeterminedObligation` RULE 3 is guarded on `implCountForIfaceU >= 2`, so a
+one-impl program **cannot reach the arm the residual disables.** With two impls:
+
+| head | check | run | build |
+|---|---|---|---|
+| control, plain `Int` | **1** — *"Ambiguous instance for 'Zero'…"* | — | — |
+| constrained `Eq x => Int` | **0** | 5, exit 0 | **1** — `E-PANIC: arg-tag dispatch … not supplied` |
+
+Measured **identically on BASE, FIX and NARROW** ⇒ arm-invariant, **not introduced by this PR**. The
+same shape with #1618's effect wrapper behaves identically, so the phrase *"structural, not
+demonstrated"* is now falsified for **two of the three wrappers**. Severity as measured: **S1**.
+
+⚠️ **And its deferral points at a CLOSED issue** — the comment routes the ruling to F-3c (#1155).
+**Nothing open owns this residual today.**
+
+⇒ ORCH is reproducing F2 first-hand before filing (a binary is building in the orchestrator worktree).
+**Do not file an agent's claim unreproduced** — the rule this arc keeps paying for.
+
+### Repair set for bite 0 — GROWN by this review
+The prose repairs from RUN-P45-045, plus: **(a)** correct *"check and run were both already correct"*
+in the two fixture headers and the `headTyNode` comment — the class includes a silent-wrongness
+neighbour; **(b)** replace the *"tried and FAILED"* paragraph rather than shipping it, and drop the
+dead #1155 deferral; **(c)** the author's acceptance argument (*"goes through `censusHeadNameTy`"*) is
+**narrower than the real surface** — three other consequences exist (`univReceiverTag`'s bucket move
+feeding `implMatchesU`, the two `ieHeadCollides*` gates, and `implEntryFromTys` now registering
+`requires`-bearing constrained impls) — and the conclusion survives measurement, but the PR should
+state the surface it actually attacked. **F3 from the prose lens (`keyEntryOfRow`) is answered by
+this review's Q3 surface: it is a routing reader, and the 25-program acceptance sweep found no move.**
+
+## RUN-P45-047 — ORCH REPRODUCED BOTH AGENT FINDINGS FIRST-HAND. One filed, one routed to an existing issue.
+
+Neither was relayed on an agent's word. Cold-built binary in the ORCH worktree (base — no sprint fix
+present, which is what a *pre-existing* claim requires), `MEDAKA_STRICT=1`, env clean,
+redirect-then-read-`$?`.
+
+**Filed #1641 (S1, `verified`)** — the census residual, reproduced exactly as the semantics reviewer
+described: `impl Zero (Eq x => Int)` alongside `impl Zero Bool` with an undetermined receiver gives
+`check` **0** / `run` **5** / `build` **1** (`E-PANIC: arg-tag dispatch … not supplied`), where the
+byte-identical plain-headed control is **rejected at check** with *"Ambiguous instance for `Zero`"*.
+The issue records the mechanism (`censusHeadNameTy` → `headTySpineNode` does not peel the wrapper, so
+`checkUndeterminedObligation`'s `implCountForIfaceU >= 2` guard is never met), that it is
+**arm-invariant hence pre-existing**, that the **effect wrapper does the same thing**, and that its
+former owner **F-3c (#1155) is CLOSED** so nothing lived here. A must-fail pin is recorded as owed.
+
+**Routed to #1228, not filed separately** — the `@attrib` finding. Reproduced, and then graded one
+step further than the reporting agent took it: the attributed `interface` is **dropped entirely**
+(`Unbound variable: aa` at the use site, loud, exit 1 in all three verbs), which is #1228's exact
+mechanism one namespace over — a `DAttrib` wrapper falling through a wildcard arm. ⇒ A comment on
+#1228 with the derivation, not a duplicate number.
+
+⭐ **But the probe found something the "same as #1228" reading would have missed, and it is the half
+worth keeping:** the drop **silences a rejection that otherwise fires**. Two same-named interfaces are
+rejected today (`Duplicate interface: Dup`); put `@inline` on the first and `check` exits **0** with
+*"1 declaration(s) checked"* — the declaration is gone before `duplicateErrors` ever sees it. **An
+attribute is currently a way to switch a duplicate-declaration rejection OFF.** That is a different
+failure shape from #1228's use-site consequence: a check that does not run, with no diagnostic at all.
+Same root cause, so same issue — recorded there rather than split.
+
+⚠️ Directly load-bearing for THIS sprint: a new rejection written over `interfaceList` inherits that
+blindness **silently**. W2 wrote its own attribute-aware walk for exactly this reason, and proved the
+premise on the binary rather than asserting it.
+
+## RUN-P45-048 — ⚠️ ORCH ERROR: I misrouted a coordinator message INTO A LIVE WRITER'S CONTEXT
+
+The `keyEntryOfRow` lead was addressed to the semantics reviewer and sent to **W2's** agent id, mid-bite,
+while W2 was writing Q1 in `resolve.mdk`. It concerned another PR, another file, and questions W2 was
+never asked.
+
+**W2 handled it correctly** — refused the binary experiments as not its bite, ran only the one cheap
+grep, reported that the structural claim holds, and asked me to route it back to its owner. The
+semantics reviewer had meanwhile reached the same surface independently, so nothing was lost.
+
+**The lesson is mine, not W2's.** *Parallelize readers, serialize writers* protects the tree; it does
+not protect a writer's ATTENTION, and an orchestrator message is an unaudited write straight into it.
+A misaddressed brief is indistinguishable, from inside, from a scope change. **Address by role, and
+re-read the id against the dispatch record before sending — the ids differ by two characters.**
+
+## RUN-P45-049 — ⭐ TWO ORCH RULINGS ON Q1's CONVERGED SIGNALS (PR #1640)
+
+Both were correctly refused by W2 rather than decided in-bite. Both reds are LICENSED and expected:
+`gates (eval)` = `iface_order`, `soundness` = `must_fail`.
+
+### Ruling 1 — the two `iface_order` ledger rows are DELETED. The issues stay OPEN.
+Converged, STATE 3, identical for both rows:
+`check=1;codes=R-DUPLICATE-IFACE-METHOD;schemes=;run=1:;build=1/-:` — an `R-*` prefix, i.e. a resolve
+rejection, not the `T-NO-IMPL` trap the four-state table warns about. Both orderings now reject
+identically, so **the divergence those rows pinned does not exist on this axis any more** and the two
+cases become ordinary invariant (unledgered) cases — which is a *stronger* guard than the row was.
+
+🚨 **The row deletion must NOT be read as a drain of the issue, and the ledger must SAY so.** The
+gate's four-state table pairs "converged" with "close the issue and delete the row"; here Q1 fixes only
+the **intra-module** half, while #1182/#1620 survive on the **cross-module** axis (a census found 29
+directories carrying that shape, which this corpus does not reach). A bare row deletion would read, to
+the next agent, as *"issue drained"* — and #1182 has already been desk-closed **twice** on exactly that
+kind of inference. ⇒ **W2 adds a header note naming the axis split and the surviving population.**
+Mechanically safe: `must_fail_census.sh` HALF 4 reds when a *ledgered* issue is CLOSED; an open issue
+with no row is not a violation.
+
+### Ruling 2 — #1182's must-fail pin is RE-POSED onto the cross-module axis.
+It reports `CONTROL-BROKE`, and the harness's printed advice (*"the ENVIRONMENT moved, not the bug"*)
+is **wrong for this case**: the control is itself a two-interface module, so Q1 rejects it too. The
+pin's whole signature moved, not its subject alone.
+
+The bug #1182 states — *impl-block order decides which impl runs* — **still reproduces cross-module**,
+which is where the issue now lives. ⇒ Re-pose the fixture there: keep the assertion, move the shape to
+two modules. Hand-derive the expected cells; do not capture them. If the cross-module shape turns out
+NOT to reproduce, that is a finding and the pin goes to `MUST-FAIL-NOT-PINNABLE.txt` with the reason —
+**not** a quiet deletion.
+
+⚠️ Both rulings preserve the invariant that matters: **an open bug keeps a live, self-draining pin.**
+Neither issue is closed by this PR.
+
+### Throughput note, recorded against myself
+These two rulings sat unmade for ~15 minutes while I filed #1641 — a finished bite parked on the
+orchestrator's desk. That is the Stage B `0.73×` bottleneck reappearing in a new shape: not gaps
+between writers, but a **decision queue**. The fix is the same one that worked earlier tonight —
+rule on receipt, do the ledger work afterwards.
+
+## RUN-P45-050 — BOTH Q1 RULINGS LANDED, and the row deletion COST A TRIPWIRE (W2 caught it, I did not)
+
+PR #1640, two more commits. `diff_compiler_iface_order.sh` **5 ok / 0 failing (GREEN)**;
+`diff_compiler_must_fail.sh` **98 fixtures, 97 reproduce, 1 DRAINED, 0 control-broke, 0 malformed**.
+`soundness` stays red on #1620's drain alone. Neither issue closed.
+
+**W2 verified my census premise rather than taking it** — HALF 4 is row-driven, so an open issue with
+no row is not a violation. My reading was right.
+
+🚨 **But it recorded a consequence my ruling did not mention, and it is the ruling's real cost:**
+deleting the rows also deletes the HALF 4 **tripwire** — the coupling that catches someone closing
+these issues on a partial fix, which HALF 4's own header calls *load-bearing*. What survives is
+HALF 1 (PINNED-BUT-CLOSED), which reaches **#1182** through its re-posed fixture and **#1620 not at
+all**. ⇒ I ruled a guard gap into existence; closing it is mine, not scope creep. **#1620 is being
+re-posed cross-module in the same bite.**
+
+⭐ **Ruling 2's re-pose is STRICTLY STRONGER than the fixture it replaces, and the derivation came
+first.** Hand-derived before measuring, right on every cell: entry imports the method name from `a1`
+only and `a2` for its interface name only, so the occurrence of `m` has **exactly one binding** — and
+printing `2` runs a method of an interface the occurrence never named. **Wrong under every reading**,
+so #1182's name-resolution dispute is gone from the pin. (Importing `m` from both does *not*
+reproduce — `Ambiguous occurrence`, measured.) `check --json` clean at exit 0 across three files;
+`run` and the **built binary** both print `2`, so it is not an eval artifact.
+
+**The misleading `CONTROL-BROKE` is now twice-observed and written into `claim.txt` as a general
+rule** — the harness's *"the ENVIRONMENT moved, not the bug"* advice is wrong whenever the control
+shares the subject's rejected shape.
+
+**Filings authorised** (W2 reproduced all three first-hand, so it is the reporter): the
+`capture_goldens.sh boot_resolve` remedy string naming a command that cannot work; and the
+interface-order-dependent **diagnostic set** — which also refutes the `iface_order` header's *"cannot
+even be written"* claim, with an explicit instruction to state whether it was measured pre-Q1,
+post-Q1 or both. **The third was STOPPED** — the `@attrib` duplicate-name shape is already routed to
+#1228 with a first-hand reproduction; adding a number would duplicate.
+
+⚠️ `gh pr edit --body-file` **silently no-op'd** on this PR's body — byte-identical readback, exit 0,
+only a projects-classic warning on stderr. `scripts/pr.sh body` landed it. Known trap, hit again.
+
+## RUN-P45-051 — REPAIR ROUND APPLIED (PR #1638). W3 DISPROVED TWO OF MY ELEVEN, and found a third thing.
+
+Two commits (`5074fc24` repair, `699cd6b8` goldens). **The one-line fix is untouched — W3 filtered the
+repair commit's `compiler/` diff and it is 100% comment lines, zero non-comment changes.** Final gate
+on the committed tree: **exit 0, 191/191 assertions.**
+
+### ⭐ The finding neither the brief nor either review had: #1630's class is ORDER-DECIDED
+Pre-fix, the two-impl program prints **26**; **reversing the two impl blocks makes it 28** — still
+exit 0, still `check` clean. That is **#1617's signature at #1630's constructor**: a silent,
+declaration-order-dependent wrong answer. The fix arm prints **27 in both orders**, and W3 added a
+permutation row to the gate's Section 4 grading exactly that.
+
+⇒ This lands #1630 squarely in **the conjunct-1 family this sprint exists to drain**, which nobody had
+claimed. It also means the bite-0 severity story is now: filed S1 (loud at `build`) → the class also
+contains **S0 silent wrongness** → and that wrongness is **order-dependent**. Three gradings of one
+defect, each correct for the shape that produced it.
+[[feedback_severity_is_a_repro_artifact_not_a_defect_identity]], third instance in this arc.
+
+### 🚨 TWO OF MY ELEVEN REPAIR ITEMS WERE WRONG. Both were mine relaying a reviewer's cells.
+1. **A1's second error string does not reproduce.** I briefed `E-PANIC: unknown op '+'` for a
+   return-position shape. Measured: a one-impl return-position constrained head is **correct pre-fix**
+   (`run` 106; only `build` fails); a two-impl one fails as `E-NONEXHAUSTIVE-MATCH`; the `requires`
+   shape reproduces but prints `applied non-function: 21`, **not `1`**. W3 recorded what it measured
+   plus a note that my strings were not reproduced.
+2. **B5's citation was half wrong.** I named commits `e051788b` **and** `699f0b5b`; `git log -S` finds
+   the phrase in **`e051788b` alone**. The corrections cite that commit only.
+
+**This is the review lesson eating its own author.** I wrote eleven items telling a writer that every
+claim must trace to a command — and two of mine were relayed cells I had not re-derived. W3 checked
+them rather than complying, which is the third time this sprint that briefing for refusal has paid.
+[[feedback_dont_launder_an_agents_observation_into_your_inference]].
+
+### 🚨 `gh pr edit --body-file` has a FOURTH failure mode: SILENT TRUNCATION
+Wrote **16,769 of 29,266 bytes at exit 0** — whole sections dropped from the middle. Every prior
+instance left the OLD body intact, so *"did it change?"* was a sufficient test; truncation **changes**
+the body, so a length-changed check passes and the missing half is exactly the evidence a reviewer
+needs. **Size-dependent** — small bodies landed fine in the same session. ⇒ **byte-compare the
+read-back against the file**, which is what `scripts/pr.sh body` already does. Recorded durably in
+the standing memory rather than only here.
+
+### Goldens
+Three snapshots (comment-only edits) blessed **by name**, plain re-check **202/202**. W3 read the diff:
+comment lines plus exactly three `source_lines=` counters, nothing else — the complete expected
+footprint. Staged **last**, all four hook checks live on the terminal commit. `selfproc_legA` cannot
+move (comment-only compiler diff). New pin row proven able to fail: `27 → 28` reds **that row alone**
+across all 91 units; reverted, 191/191.
+
+## RUN-P45-052 — S1 LANDS AS PR #1643 (open). Bar: 391/391 byte-identical IR. One ruling, one flag.
+
+Nine functions widened `String` → `IfaceRef` (the 7-member `*ByIface` family + `concreteReqMatchByIface`
++ `selectReqImpl`), plus one new seam `ieRowIfaceMatches`. W4 confirmed first-hand that nothing in the
+family is exported and there is no non-comment reference outside `typecheck.mdk`.
+
+**Evidence:** 391/391 byte-identical across six corpora (`differing=0 missing=0`); 330 produce real IR,
+the other 61 are error fixtures compared on **build status**, all 61 agreeing. **Positive control run** —
+injecting one byte into one `.ll` and one wrong status into another makes the harness report
+`differing=2`, naming both. **C3a YES, C3b YES**, separate verdicts. Plus `check-self`, `make test`,
+dict-semantics, iface_order, import_order, selfproc 16/0, lex_files, diff_native_cli.
+
+**ORCH verified the legA golden myself** (not from the report): the diff is exactly the nine re-signings
+plus the one added binding; **no pre-existing binding's inferred type changed**. A zero IR diff beside a
+moved scheme golden is consistent — the golden records declared types, the IR records behaviour.
+
+### ⭐ The neutrality is STRUCTURAL, not merely measured — and W4 said so without being asked
+Because every query is minted `ifaceRefBare` (absent origin), `tyConIdsConflict`'s `(Some, Some)` arm
+is **unreachable**, so a row minted `OriginBuiltin` cannot conflict with an absent query *regardless* of
+the invariant. ⇒ W4 **declined to certify the `OriginBuiltin` invariant** and flagged it in `unchecked:`
+as **S2's obligation**, since S2 is what makes that arm reachable. That is the right shape of answer:
+it did not need the invariant, so it did not claim it.
+
+### ⭐ RULING (ORCH): the count/collision test STAYS SPELLING-KEYED. S1's choice stands.
+W4 threaded `IfaceRef` through `ieCountHeadByIface`/`…Go` but left the comparison as
+`ir.irName == iface.irName`, citing the file's own #1317 derivation — the route-word collision question
+is inherently spelling-scoped because three engines re-derive that word from a bare `String` tag. **It
+flagged this rather than deciding it silently, and its bar could not distinguish the two choices.**
+Ruled: **the shipped design already says this** — B-2.2 kept the collision *test* spelling-keyed on
+purpose so the checker's stamp keeps matching `core_ir_lower.declRouteKey` byte for byte, while identity
+moved onto the FIELD. The reasoning is the design's, not W4's invention. Relayed to S2 with an explicit
+licence to overturn it on evidence.
+
+### ⚠️ ORCH's own follow-up, because the headline number invites a vacuity error
+`sameTyConHead` can differ from `==` in **exactly one situation**: two interfaces sharing a SPELLING with
+two known, different origins. **If no program in those six corpora contains that shape, 391/391 identical
+is precisely what a no-op produces** and the bar proves far less than it appears
+([[feedback_a_byte_identical_bar_on_unread_code_is_vacuous]]). A reader is enumerating the corpora for
+the discriminating shape now. **This is not a doubt about the code — it is a question about the inputs**,
+and it is the same question that let #1381's engines gate stay green while a layout bug shipped.
+
+## RUN-P45-053 — S1's BAR IS DISCRIMINATING, NOT VACUOUS. And the census hands S2 its control corpus.
+
+The falsification hypothesis fails, cleanly. `sameTyConHead` can differ from `==` in exactly one shape —
+two interfaces sharing a SPELLING with two known, different origins — and the corpus carries it:
+
+| corpus | projects | cross-module same-spelled iface | produce IR |
+|---|---|---|---|
+| `llvm_fixtures_modules` | 56 | **5** | all 5 |
+| `dict_fixtures` | 88 | **13** | 8 (5 more are build-REJECT, graded on status) |
+| the other five corpora | 320 | 0 | — |
+
+⇒ **13 discriminating projects, 13 of them reaching emitted IR.** A regression from `sameTyConHead`
+back to spelling `==` has somewhere to bite. ⚠️ The reader flagged that its 13 collapses to 5 **if**
+S1's harness consumed the existing dict gate's verdicts instead of building IR itself — it did not;
+W4 ran `medaka build --keep-ir` over all six corpora (dict_fixtures' 88 are inside the 391). The 13
+stands, derived rather than assumed.
+
+⭐ **The load-bearing single carrier: `test/dict_fixtures/s6-c1-xmod-same-spelled-ifaces-accepted/`** —
+`amod.mdk` and `zmod.mdk` each declare `interface Same a` with disjoint methods, both impl'd at head
+`Int`, entry using one method from each. Its own ledger row names the mechanism: *"`CohImpl`'s interface
+half is an `IfaceRef` compared through `cohSameIface`/`sameTyConHead` … re-key that half back to
+spelling and it reds."* Its `!T-CONFLICTING-IMPL` assertion is what makes it fail-capable, and its
+header warns the **shared head `Int` is load-bearing** — two module-local heads would mask the interface
+half entirely, because the head half is already identity-aware.
+
+### ⚠️ The caveat that matters, and it is S2's not S1's
+The reader verified the same-SPELLING shape, **not** that both `IfaceRef`s arrive **origin-tagged** at
+the selector. Under S1 they demonstrably do not — every query is `ifaceRefBare` — so under S1 these
+fixtures are no-ops **by construction**, which is exactly why S1 is neutral. **The discrimination is
+latent: it activates when S2 supplies real origins.** ⇒ These 13 are S2's positive controls, and *"they
+still pass"* is only meaningful for S2 if S2 first shows the origins actually arrive. Relayed to W5.
+
+**Also recorded:** exactly one user-vs-prelude same-spelling project exists
+(`dict_fixtures/i7-qual4-user-class-same-spelling.mdk`, `interface Num a`), it is REJECT on all three
+verbs and produces no IR — the prelude axis is essentially unexercised for IR purposes. And the 19
+apparent prelude clashes in `llvm_fixtures_typed` are **false positives**: that corpus is prelude-free
+(`diff_compiler_llvm_typed.sh` passes only `runtime.mdk`, which declares zero interfaces).
+
+## RUN-P45-054 — Q1 COMPLETE (PR #1640). Must-fail suite fully green; two issues filed; both lenses dispatched.
+
+```
+diff_compiler_iface_order.sh: 5 case(s) — 5 ok, 0 failing
+diff_compiler_must_fail.sh:   98 fixtures: 98 reproduce, 0 DRAINED, 0 control-broke, 0 malformed (exit 0)
+```
+#1620 moved from DRAINED back to reproducing on its new axis, exactly as ruled. **Both counts re-run on
+a freshly rebuilt branch binary** after W2 swapped the tree to pre-Q1 and back — so they are not from a
+binary that had ceased to exist, which W2 flagged as a residual risk **and then closed rather than
+assumed.** That is the right instinct and it is worth naming: every earlier number in that PR was
+measured on a binary that no longer existed at the moment of the swap.
+
+⭐ **The #1620 re-pose rebuilt its derivation from scratch rather than transferring the value** — the
+thing I asked for and the thing that is easy to fake. `claim.txt` derives `False`-is-wrong from its own
+imports: `import beta.{Beta, ping}` binds the METHOD name while `import alpha.{Alpha}` binds only an
+INTERFACE name, so `ping T` has exactly one binding; `ping T : Int` is **shown** (a String comparand
+gives `Type mismatch: Int vs String`), only `impl Beta T` exists with body `7`, therefore `True` is
+required and `False` delivers `impl Alpha T`'s String where the accepted type says Int. The raw probe
+still prints a live heap address across three executions, so the Bool projection is still required.
+
+**Filings, both first-hand and both defended from measurement:** **#1642** (S3, `ws:testing`) — the
+`capture_goldens.sh boot_resolve` remedy naming a command that cannot work, with the working recipe and
+the `diff_compiler_diagnostics.sh` precedent one file over. **#1644** (S2, `ws:diagnostics`) — the
+order-dependent *diagnostic set*, **measured on BOTH binaries** (restore `resolve.mdk` to `401e3e30`,
+cold rebuild, re-run, restore, rebuild) and identical, hence pre-existing on `main`, not branch-induced.
+S0 ruled out because both orderings reject at exit 1. It also notes the gate header's broader Stage B
+conclusion is untouched — the refutation is scoped to the *"cannot even be written"* clause.
+**#1228 got a comment, not a number**, adding the pre-Q1 measurement and the `Method 'p' is not part of
+interface 'Dup'` mis-diagnosis that appears once an `impl` is added.
+
+**Both lenses dispatched on #1640** — semantics aimed at the boundaries (the S1-PRELUDE carve-out per
+#1499, imported/re-exported interfaces, `@attrib`, the single-file path, and whether the re-posed
+fixtures reproduce for the reason their claims state) and evidence aimed at the claim files, the ledger
+note, the tripwire-loss account, and the two new issues.
+
+**#1638 verified `isInMergeQueue: true` via GraphQL** — not from `gh pr merge`'s exit code, which
+carries no signal here in either direction.
+
+## RUN-P45-055 — 🚨 CORRECTION TO RUN-P45-050, AND IT IS MINE: HALF 1 is DIRECTORY-driven, not verdict-driven
+
+RUN-P45-050 recorded, from W2's report and then in my own words, that census **HALF 1** *"reaches #1182
+through its re-posed fixture and **#1620 not at all**"*, and I ruled the #1620 re-pose partly on that.
+**The script contradicts it.** `test/must_fail_census.sh:113-121` (enumerator) and `:136-166` (HALF 1):
+any `test/must_fail_fixtures/*/` whose `claim.txt` carries an `issue:` line is enrolled, and the half
+fires **purely on the issue being CLOSED**. It never reads the gate's REPRO/DRAINED verdict.
+
+⇒ While #1620's directory existed — **including while it was drained** — HALF 1 *would* have caught a
+desk-close. So *"covered by nothing"* overstates, in my ruling, in the PR body, and in the shipped
+ledger banner.
+
+**The re-pose is still right, on a stronger justification that was available the whole time:** a drained
+pin **reds the must-fail gate** and would have been deleted, and a drained pin **proves nothing about a
+live bug**. The correct claim is about the pin's *evidentiary* value, not about census coverage.
+
+⚠️ **Provenance of the error, because it matters more than the error:** W2 reported the HALF 1/HALF 4
+split, I did not check it against the script, and I then wrote it into a RULING — which W2 dutifully
+inscribed into a shipped artifact. That is
+[[feedback_dont_launder_an_agents_observation_into_your_inference]] running exactly as documented, on the
+same night I recorded RUN-P45-048 about laundering a message into a writer's context. **Second instance
+tonight of me relaying an agent's mechanical claim without opening the file.**
+
+**Also mine: the "29 cross-module directories" figure.** I commissioned it, handed it to W2, and it
+shipped in the ledger banner with a hedge but **no derivation**. An independent parse lands nearer 55
+and could not reproduce 29. ⇒ Either the command ships with the number or the number does not ship.
+[[feedback_derive_dont_encode]], violated by the person who keeps citing it.
+
+## RUN-P45-056 — EVIDENCE-LENS REVIEW OF #1640: nine findings, one BLOCKING, and the defect is STALENESS
+
+Verdict on the engineering prose: *"unusually disciplined — the derivations are real, the census
+reproduces exactly, the counts are honest, nothing is closed that shouldn't be."* The reviewer
+independently re-ran the newly-rejected-files census with its own layout parser and got **exactly the
+same 10 files**, and verified four counts/diffs character-for-character (98 fixture dirs, 5 iface_order
+cases, resolve snapshot +145/−5, legA +5/−0 additive-only).
+
+**F1 BLOCKS: commit 3 falsified a paragraph commit 2 wrote.** The ledger banner still says #1620 *"has
+NOT been re-posed"* and *"nothing mechanical guards it today"* — written truthfully at `e964f43d`, false
+since `5d3745e3` re-posed that exact fixture. **The banner is the artifact designed for whoever next
+touches #1620, and it tells them the issue is unguarded.** It is the same inference the banner's own
+next paragraph warns about. ⇒ Not a patch of two lines: **re-read the whole banner against the tree at
+head.**
+
+**F6 is the arc's signature failure, again:** `compiler/types/typecheck.mdk:16806-16816` still states in
+the present tense that a single-file two-interface program is ACCEPTED when the declarations are swapped
+— **Q1 rejects it in both orderings now** — and the ledger's removed-row prose *points the next reader
+straight at that comment* (`grep -n 'interface declarations SWAPPED'`). A falsified recipe surviving in
+the file the ledger cites as authority.
+
+**F7:** two files still instruct readers that the coupling this PR removed is intact
+(`diff_compiler_iface_order.sh:118-121` *"Do not remove that coupling."*; `must_fail_census.sh:~236`
+*"LOAD-BEARING, not decorative … Do not decouple them."*), and the gate's drain remedy still prints
+"close the issue, DELETE the row". Disclosure in the banner is honest but one-sided.
+
+**F4, not blocking but the one claim ranked above its evidence:** #1182's `claim.txt` **asserts** its
+load-bearing step (*"exactly ONE binding"*) from the spelling of the import lines, and — unlike #1620's
+— it cannot be corroborated by the value, since both modules declare `m : a -> Int` so no type probe
+distinguishes the denotations. **A cheap probe exists** (drop `m` from the `a1` import list, confirm the
+occurrence goes unbound) and has been ordered.
+
+Repair round dispatched to W2 with all nine, my two corrections stated as mine, and an instruction to
+verify every item — including my corrections — before acting.
+
+## RUN-P45-057 — ✅ BITE 0 LANDED. PR #1638 MERGED (`22:39:00Z`), #1630 CLOSED by its own keyword.
+First merged unit of the implementation phase. Closure carries the landing sha via the plain
+`Fixes #1630.` — the policy's prescribed form, not a desk close.
+
+## RUN-P45-058 — SEMANTICS-LENS REVIEW OF #1640: could not break it, and the boundary work is the deliverable
+
+Two cold-built arms (PR `5d3745e3` / base `8eb0d359`), env clean, `MEDAKA_STRICT=1`,
+redirect-then-read-`$?`. **Verdict: no false reject, no missed member of the intended set.**
+
+**The prelude carve-out — the worst-outcome boundary — holds on 105 NAMES, not on the one fixture.**
+One program per name: all **50** method names across `core.mdk`'s 23 interfaces plus **55** prelude
+standalones. `check` output **byte-identical base vs PR on all 105**; `test` byte-identical on the 50;
+**zero** `R-DUPLICATE-IFACE-METHOD` anywhere. The exit-1 cases (`map`, `eq`, `compare`, …) are
+pre-existing arity/type errors, identical on base. And the *reason* was verified structurally, not just
+observed: `duplicateErrors` receives `preludeDecls` and demonstrably ignores it, the doctest path passes
+`livePrelude` as a **separate argument** rather than flattening it into `prog` (`test_cmd.mdk:385-393`),
+and the REPL's `combined` is user decls only — **so no path exists by which prelude decls enter `prog`.**
+That is the difference between "I probed it" and "it cannot happen."
+
+**Imports never participate:** 8 spellings (`{I}`, `.*`, `as A`, bare, own+imported, `export import`
+chain, chain+own, entry re-exporting) plus a 2-hop dependency — all byte-identical. The check fires only
+on a module's OWN decls, including when that module is two hops down, which is correct.
+
+**Also holds:** a method declared twice *within* one interface; method-vs-function/local/field names;
+defaults, `requires`, `deriving`, multi-impl; `@attrib` on either or both interfaces **and** the sibling
+duplicate-NAME check's own gap unchanged; three-way collisions naming the first declarer; every verb
+including `--json`, REPL, LSP `publishDiagnostics`, and the single-file path. `make check-self` and
+`snapshot-check` green; 29 stdlib modules checked, the two failures identical on base. **No `List`-as-set
+quadratic** — the walk is `OrdMap`-keyed, single pass.
+
+⭐ **A static census bounds what any further probing could find:** exactly **5** files in 3171 have two
+interfaces sharing a method name in one module — the 2 new resolve fixtures, the 2 kept iface_order
+fixtures, and one non-gated `.claude/` scratch repro. Nothing imports any of them, and Q1 reads only a
+module's own decls, **so no other file in the tree CAN change acceptance.** A full 3171-file differential
+was still running and its partial result agreed.
+
+**The reviewer RETRACTED its own F2** after finding the loc-less rendering identical on base — the
+behaviour it flagged is the pre-existing shape for every location-less resolve error. Retraction counted
+as a success, as it is here.
+
+### RULING on its F1 (S3): leave the message as-is, knowingly, and say so.
+`@inline interface E1` + `interface E1` (duplicate NAME, same method) makes the new diagnostic read
+*"declared by two interfaces in this module: 'E1' and 'E1'"* with the advice *"merge the two
+interfaces"*. The message is odd, but **the shape only exists because #1228 drops the attributed decl
+before the duplicate-NAME check can fire** — special-casing a message for a program that should never
+have been accepted adds a branch that must be maintained past the real fix. ⇒ **Record it in the PR body
+and on #1228 as a consequence of that drop, do not special-case it.** Base silently ACCEPTS this program
+at exit 0; the PR at least rejects it, so this is loud→louder, not a regression.
+
+**Its F3 is the evidence lens's F1** — already repaired in this round, independently found by both
+lenses, which is the two-lens split converging rather than duplicating.
+
+**Observation carried forward, not a defect:** Q1 makes the ambiguity unrepresentable **intra-module
+only**; the cross-module axis stays fully representable, and the two re-posed pins are the proof. **A
+later interface-identity keying unit still inherits an order-dependent supply cross-module.** The PR
+states this in three places and does not oversell it.
+
+## RUN-P45-059 — Q1 CLOSED OUT. And W2 labelled a DERIVED cell as derived, unprompted.
+
+Both post-review items landed (PR body note + the self-draining #1228 comment). W2 **reproduced the odd
+wording first-hand before recording it** rather than transcribing it from the review — the right reflex
+for a claim that ships.
+
+⭐ **The precision it volunteered is the entry worth keeping.** The *"base silently accepts, so this is
+loud→louder"* cell is **DERIVED, not measured on a base binary**, and it labelled it that way in both
+artifacts rather than stating it flat. Its derivation, which I accept:
+1. on the PR binary the program yields **exactly one** diagnostic and it is Q1's — no `R-DUPLICATE-DEF`;
+2. resolve errors **accumulate rather than short-circuit**, so a firing duplicate-NAME check would appear
+   alongside — it demonstrably does not fire on this shape;
+3. Q1 is the only check this PR adds ⇒ base's diagnostic set is this one minus Q1's = **empty**.
+Corroborated by the pre-Q1 measurement already on #1228 (same construction, different method names,
+exit 0 clean on a base binary). It offered the direct base run at a cost of two rebuilds and did not
+take it unasked. **Ruled: the derivation stands** — it is closed under the accumulate property, not a
+plausibility argument, and the marginal value of two rebuilds does not justify the box time with two
+writers live.
+
+**Gates: none owed, and it said so instead of burning a cycle.** Neither change touches a `.mdk`,
+fixture, golden or script; `HEAD` unchanged at `83b8fc8d`. Re-running would re-measure an unchanged tree
+with an unchanged binary. **Declining to re-run, with the reason, is the correct answer** and the
+opposite of the reflex that pads a report.
+
+Its own retrospective on the F6 refusal is worth preserving verbatim in spirit: *"what made it refusable
+was having measured the premise cross-module first. Without that probe I'd have had only an opinion
+against a finding, and would probably have complied."* ⇒ **Briefing for refusal is necessary but not
+sufficient; the agent also needs the MEASUREMENT that makes refusal defensible.** Budget probe time for
+that, not just permission.
+
+Q1 session output: PR #1640 (4 commits) · issues **#1642** (S3 `ws:testing`), **#1644** (S2
+`ws:diagnostics`) · two comments on **#1228**. Nothing closed, no closing keyword. Enqueued.
+
+## RUN-P45-060 — PHASE 4 (`B-2.3`) DISPATCHED as W6, concurrent with S2
+
+Briefed on route α with the three corrections Phase 0 measured (`CProgram` carrier DEAD ⇒ `Ref CAdmis`;
+key is `(bare iface, bare method)` with **no head component**; the charter's stated justification is
+false and the real one is the **two fail-OPEN defaults**), the two-tier key requirement, the
+lookup-vs-filter comparator split, the lockstep obligation on `eval.mdk` + `core_ir_lower.mdk`, and the
+`keepOrAll` all-or-nothing ruling.
+
+🚨 **The framing that matters most, stated in the brief:** if Phase 4 freezes admissibility **computed by
+the current selector, it FREEZES THE ORDER-DEPENDENCE into data** and makes it harder to remove later.
+That is the worst outcome available in this bite, and it is why refusal was licensed explicitly as the
+likeliest correct answer of the sprint.
+
+## RUN-P45-061 — PHASE 4 LANDS AS PR #1646, and THREE of its judgement calls beat the brief
+
+`((iface, method), positions)` → `((ifaceId, iface, method), positions)`, both consumers
+(`eval.implMethodEntry`, `core_ir_lower.lowerImplMethod`) re-keyed in lockstep. C3a PASS · C3b PASS ·
+check-self PASS · selfproc 16/0 · snapshots 202/202 · eval_modules, core_ir_modules, eval_typed_modules,
+dict_semantics 4/4 · import_order 15/15. #1113 NOT closed.
+
+**1. The carrier — I briefed `Ref CAdmis`; W6 widened THE ROW instead, and that is strictly better.**
+The element type sits in `installDispatchTables`, `lowerImplsWith`, `cBuildModInfos`, `declImplEntries`,
+`modImplEntries`, `lookupPositions` — so updating one consumer and not the other **does not compile.**
+The `evalModules`/`cevalModules` lockstep stops being a convention plus a comment and becomes a type
+error. That is the correct answer to a trap `AGENTS.md` records as having survived for months.
+
+**2. `keepOrAll` NOT retired, and the unit therefore does NOT claim to close the fail-open behaviour** —
+the honest half of the all-or-nothing ruling, with `ARGSTAMP-UNIFY-PLAN.md`'s measured **22/3 → 15/10**
+parity regression as the reason. The `[0]` miss default likewise retained and named at the site.
+
+**3. The legA golden is NOT additive-only and was reported as such** — 13 rows, 2 new plus **11
+pre-existing bindings whose inferred type changed** — and discharged by **set equality against the
+signatures re-signed by hand**, not by eyeballing. The bar was never "additive"; it is "no UNTOUCHED
+binding moved", and that is what was checked.
+
+**Identity-keying was free, verified from the CONSEQUENCE not the source:** the pre-fix dump already
+printed `a::Speak|DogA|` / `b::Speak|DogB|` route keys **on the very line that then looked up by
+spelling.**
+
+### ⭐ The finding W6 nearly shipped as its own, and killed with a base arm
+It wrote a `dict_fixtures` row asserting `build|ACCEPT` and **deleted it**: on BOTH arms the shape fails
+`build` with `no impl of method 'display' for type 'DogB'`, byte-identical, so it is **not this change's
+defect**. The control settles it — identical signatures for the two `speak`s and the same two-module
+collision builds clean — so the failure tracks the **SIGNATURE**, i.e. a separate bare-name
+**method-scheme** collision (#1070 family).
+
+🚨 **The consequence is the sprint's most important architectural fact so far:** an admissibility
+mis-key **requires** different method signatures, which **forces** that collision ⇒ **the two defects are
+COEXTENSIVE on today's compiler**, and the typed Core IR dump is the only observation separating them.
+⇒ **Phase 4 is architectural hardening, not a user-visible fix**, and the PR says so. Anyone reading it
+as a drain of the #1070-family shape is wrong.
+
+**Second finding:** `diff_compiler_import_order.sh` **could not have caught this** — its signature
+excludes `build`'s stderr, so both pre-fix orderings collapse to `build=1/-:` and it would have graded
+the pre-fix binary INVARIANT while the emitter failed under a different type per order. Written into the
+fixture's `case.txt`.
+
+**Nearest miss, named and deliberately not folded in:** `llvm_emit.lookupSelfFnParams` /
+`core_ir_lower.selfFnParamTable` — same `(bare iface, bare method)` key, same `DInterface` source,
+`ifaceOrigin` equally in hand. **Fails CLOSED (`[]`), so it narrows rather than widens** — which is why
+it is next rather than now. No issue filed for it, correctly.
+
+### 🚨 ORCH's review question, which the semantics lens is aimed at
+**Does tier 2 fire when tier 1 missed for the RIGHT reason?** Tier 1 (`ifaceIdMatches`, absence never
+matches) misses in two structurally different situations: **(a) absence** — flat path, where falling back
+to spelling is CORRECT and preserves today's behaviour; and **(b) genuine conflict** — both sides carry
+identities and they DIFFER, where falling back to spelling **re-collides exactly the two interfaces the
+key exists to separate.** If tier 2 is a blanket *"tier 1 returned nothing ⇒ try spelling"*, case (b)
+falls through, the re-key delivers nothing for its target shape, and **every gate stays green** — because
+the defect is not value-observable (above). This is the one question that decides whether the unit works.
+
+## RUN-P45-062 — THE #1640 SEMANTICS REVIEWER RETRACTED 14 OF ITS OWN HITS, AND FOUND A NEW TRAP DOING IT
+
+Its tree-wide sweep first reported **14 `base=1 → pr=0` stdlib divergences** — i.e. *"the branch fixed 14
+stdlib files"*, a finding shaped exactly like a real one. **All 14 retracted.**
+
+🚨 **The mechanism is a NEW instance of the exe-relative property, running in the opposite direction
+from the one `AGENTS.md` documents.** The internal-extern guard trusts a stdlib file only when it sits
+under the *binary's own* `MEDAKA_ROOT` (= `exeDir`). A base binary in a scratch worktree, pointed at the
+branch worktree's `stdlib/array.mdk`, sees it as **outside its stdlib** and emits `R-INTERNAL-EXTERN`;
+the branch binary on its own tree accepts. **Swapping the file's tree reverses the direction** — the
+variable was the file's LOCATION relative to the binary, not the compiler. Re-run with each binary
+against its own tree's stdlib, prefix normalized: **all 29 modules byte-identical, 0 divergences.**
+
+⇒ `AGENTS.md` says exe-relative resolution is what makes a two-worktree differential **sound**. That is
+true for ordinary programs and **false for `stdlib/*` targets**, which is the exception nobody had
+written down. **Landed in `AGENTS.md`** beside the existing exe-relative block.
+
+### ⭐⭐ Two epistemic corrections the reviewer made against ITSELF, both worth more than the sweep
+1. **It overstated its own bound and said so.** It had written that no other file in the tree *can*
+   change acceptance; the sweep then reported 18 divergences where it predicted 1. All 18 resolve, but
+   *"I asserted the bound before the evidence that would have tested it had arrived."*
+   [[feedback_a_claim_reaching_past_its_evidence]], self-caught.
+2. **Its sweep compared EXIT CODES ONLY, so it is blind to a change of REASON at the same exit code.**
+   `iface_order_fixtures/1182-…/main.mdk` does not appear among the 18 for precisely that reason: base
+   rejects with `T-NO-IMPL`, PR rejects with `R-DUPLICATE-IFACE-METHOD` — **same exit 1, different
+   diagnostic.** ⇒ *"The static census, not the sweep, is what actually bounds this change."*
+   [[feedback_an_exit_code_graded_control_answers_the_wrong_question]], found by the instrument's own
+   author.
+
+**Corrected result: exactly 5 files tree-wide change acceptance** — the 2 new resolve fixtures, the kept
+`1620` iface_order fixture, one non-gated `.claude/` scratch repro, and the text-only `1182` fixture.
+**Exactly the static census set.** Everything else in its report stands: the 105-name prelude carve-out,
+8 import spellings plus re-export chains, attribute-awareness both positions, verb reach, both re-posed
+pins with their load-bearing steps confirmed and controls proven fail-capable.
+
+**Bottom line: no false reject, no missed member of the intended set.** The one widening it thought it
+had found was its own probe asking the wrong question.
+
+## RUN-P45-063 — S2 LANDS AS PR #1645, and it is the sprint's strongest bite. It also DRAINED something.
+
+Branched from S1. **12/12 green, not enqueued, nothing closed.** C3a YES · C3b YES ·
+`dict_semantics` 196/196 (5 new assertions) · `selfproc` 16/0 · fixtures taken to the **executed
+binary** (3 / 3 / 33, hand-derived first).
+
+### ⭐⭐ The decisive argument was NOT "an origin is available here" — it was that the function DISAGREED WITH ITSELF
+`findMatchingImplReqsU`'s headless fallback leg has **always** been identity-keyed (`univHeadless` →
+`oblIfaceKey` → `TkIdent`), while its concrete leg — **tried first** — re-minted bare and asked a
+spelling question **over the same population**. An internal contradiction is a far stronger warrant for
+a re-key than an availability claim, and it is the shape I should have briefed for. **Supplied at that
+one site; every other site LEFT BARE with its reason.**
+
+`entailInst`'s `EKNestedTop` arm and `argImplRequiresRoutes` share **one** `iface` variable — which is
+how §6 C2 (dispatch impl == context-discharged impl) is held **by construction** — and their upstream
+projects `csIface.irName` deliberately ("route words, not identities"). *"There is no trustworthy origin
+there, only one to invent."* Exactly the rule the brief set: **a wrong identity is worse than an absent
+one.**
+
+**The count ruling held without needing to be enforced:** identity was supplied only on a leg that
+stamps **no route word**, so no collision count moved, `keyForSiteByIface` never flipped between
+canonical key and bare head tag, and the `ifaceDeclHeadUnique` skew is not in play.
+
+**`OriginBuiltin`: DERIVED unreachable for an interface** — the only `iface:`-tagged origin writers mint
+`OriginModule`; `builtinTyOrigins` keys under the bare name in the *type* namespace, so
+`omLookup (ifaceKey n)` cannot return it. Corroborated on a binary: every `iface:` row of the
+origin-agreement corpus reads `mod:…`, prelude `Eq`/`Ord`/`Debug` included. **Latent, not live.** S1
+declined to certify it; S2 discharged it, which is the hand-off working.
+
+### 🚨 ARRIVAL DEMONSTRATED POSITIVELY — and it exposed a live FALSE REJECT the branch DRAINS
+Built before touching code: two unrelated modules each declaring `interface Same a`, both impl'd at the
+shared head `Box a`, one carrying `requires Eq a`. Using the **context-free** impl is rejected with
+`No impl of Eq for Opaque` — *a constraint the program never wrote, imposed by a foreign class* — on
+`check`, `run` **and** `build`. **Exchanging the two module names makes the identical program compile.**
+Both orderings committed as a pair; either alone passes an order-decided compiler.
+
+⇒ Sent for dedup against **#1579** (residual reducer commits to a general impl's `requires` while the
+goal is free — falsely rejects), #1457, #1302, #1326. **If it drains one, this is the sprint's first
+user-visible fix rather than architectural hardening.**
+
+### IR evidence, and it graded the right channel
+424 cases / eight corpora: **422 identical, 0 IR-byte differences, 2 status differences** — both the new
+fixtures, `base=1 → branch=0`, **both predicted before the run.** ⭐ **Rejecting cases compared on
+DIAGNOSTIC TEXT, not exit code**, so the narrowing direction is graded — independently avoiding the
+blindness another reviewer found in its own sweep tonight. Harness proven fail-capable by a one-byte
+injection applied **after both arms built** (poisoned case flips, neighbour does not).
+
+### 🚨 `MEDAKA_STRICT=1` CANNOT BE USED ON BOTH ARMS OF A TWO-ARM DIFFERENTIAL — landed in AGENTS.md
+Staleness is computed against `<exeDir>/compiler` and two arms share one compiler tree by construction,
+so the older arm exit-1s on **every** case and the run reports *"everything differs"*. S2's first run
+did exactly that. ⇒ **Assert freshness once, on the arm where it can be true.** Second AGENTS.md trap
+of the night about two-arm differentials, after the `stdlib/*` one.
+
+### `main` moved under it mid-task, landing #1638 in the SAME file — handled correctly
+Both golden families moved; only `source_lines=` conflicted textually and **everything else auto-merged
+cleanly into a blend.** It took both wholesale from `origin/main` and **re-derived from a rebuilt
+binary**, then re-ran every measurement on the merged tree. That is the documented remedy executed
+without being reminded — and the hazard is real precisely because a blended golden IS the oracle, so no
+gate can flag it.
+
+**Unchecked, reported not filed, and possibly serious:** a `requires`-bearing impl whose body ignores
+its dict emits `define … @mdk_impl_Box_bar(i64 %arg0)` **while its call site passes two arguments** —
+measured on the BASE arm, single-module, so pre-existing. **A definition of arity 1 called with 2 args
+is a calling-convention mismatch, which is the shape that segfaults.** Repro requested; ORCH will
+reproduce and file.
+
+**My brief was wrong on one point:** I said S1's IR-diff harness was on its branch. It was not — S1
+touches three files, none a harness — so S2 wrote its own, and its own grades diagnostic text.
+
+## RUN-P45-064 — ⚠️ #1638's MERGE PUT TWO OPEN PRs INTO CONFLICT. The enqueue FAILED SILENTLY-SHAPED.
+
+`scripts/pr.sh enqueue --number 1640` ran its full 2400 s and reported *"did not join the merge queue or
+merge within 2400s (state=OPEN)"*. **The cause was not a red gate — CI never ran at all**: zero
+check-runs on head `83b8fc8d`, because `gh pr view` reads `mergeable: CONFLICTING`,
+`mergeStateStatus: DIRTY`. Same for **#1646**. (#1645 `MERGEABLE/CLEAN`; #1643 still `UNKNOWN`, i.e.
+GitHub is still computing it.)
+
+⭐ **The helper earned its keep here.** A bare `gh pr merge --auto` would have printed its usual
+merge-queue notice and exited with a code carrying no signal in either direction; I would have recorded
+"enqueued" and moved on, and #1640 would have sat unmerged with **no CI and no red** — indistinguishable
+from waiting. The helper verifies resulting STATE, so the non-event surfaced as a non-event.
+
+⚠️ **Do not conflate this with the standing "you do NOT need to keep your branch up to date with `main`"
+rule.** That rule is about *staleness*, which the queue absorbs. **A CONFLICTING branch is a different
+state: nothing runs and nothing enqueues.** Worth knowing at the point where a sprint lands its first
+PR into files its other PRs also touch — which is structurally when it will always happen.
+
+**Both writers instructed with the golden remedy rather than a merge:** take
+`test/selfproc_goldens/legA` and `test/snapshots` **wholesale from `origin/main`** and **re-derive from
+a rebuilt binary**. Those files have **no merge driver**, so two re-cuts in different regions
+three-way-merge with **no conflict marker** into a blend — and **no gate can flag it**, because the
+golden IS the oracle. S2 hit this same collision independently tonight and used exactly this recipe
+unprompted.
+
+**Both told to RE-MEASURE, not carry verdicts forward** — every gate count in both PRs was taken on a
+binary built from a tree that no longer exists. ⚠️ W6's case is the delicate one: its legA golden was
+**already non-additive** (11 pre-existing bindings re-signed, discharged by set equality). That verdict
+must be **re-derived on the merged tree**, not inherited — *"in principle it should be the same 11"* is
+precisely what the check exists to replace.
+
+**One interaction named for both, rather than assumed away:** #1638 made constrained impl heads reach
+their real head tag instead of the headless bucket. If any `dict_semantics`, `eval_modules`,
+`iface_order` or must-fail case moves after the merge, **that is the interaction** — report before
+adjusting.
+
+## RUN-P45-065 — 🚨 #1648 FILED: an impl method's dict param is ELIDED from the DEFINITION but still PASSED at the call site
+
+**ORCH reproduced first-hand on its own base binary before filing** (no sprint branch present), and
+**extended the reported shape until it got worse.** W5 handed over two cells; I added a third and a
+control:
+
+| body | check | run | build | **executed binary** | emitted |
+|---|---|---|---|---|---|
+| ignores dict **and** value | 0 | `22` | 0 | **0, `22`** | arity 1 · call passes 2 |
+| uses **value**, not dict | 0 | `42` | 0 | **1 — `E-NONEXHAUSTIVE-MATCH`** | arity 1 · call passes 2 |
+| **returns an `Int` field** (ORCH's addition) | 0 | `7` | 0 | **139 — SEGFAULT** | arity 1 · call passes **`i64 0`** |
+| **uses the dict** (control) | 0 | `42` | 0 | **0, `42`** | **arity 2** · call 2 ✓ |
+
+**The trigger is whether the body USES the dict**, not whether it has one — the control differs by
+`x == x` and emits the correct arity. The surviving parameter binds **positionally to the dict**, so the
+body operates on a dictionary pointer where its value belongs. `run` and the binary **disagree**, so it
+is a back-end/calling-convention defect and invisible to any gate grading `run`.
+
+⚠️ **The harmless row is the dangerous one:** row A is the same skew with no observable, so **a fix
+validated against it alone would look correct.**
+
+**Severity S1, graded from measurement and NOT from the neighbourhood** — everything measured is loud.
+The issue states explicitly what is **not** derived: whether a silent variant exists (a body returning
+the mis-bound pointer as an `Int` would *plausibly* print a heap address — plausibly, not measured; if
+someone builds it, this becomes S0), which of the two facts causes the fault (mis-binding vs the null
+dict), and where the elision happens.
+
+**Deduped against #1560/#1561** — those are a *missing* dict at a binding whose context was dropped;
+here the context is present and correct and the **definition disagrees with its call site**. Adjacent to
+#1425 and G-10/#1318; neither names this shape. Pin owed, with the note **not to pin row A** — it passes
+today, so it cannot fail and would pin nothing.
+
+## RUN-P45-066 — S2's DRAIN IS GENUINELY NEW, and the dedup used the cheapest decisive signal available
+
+W5 checked its false reject against #1579, #1457, #1302, #1326 and reports **none drained**. Two things
+about the method are worth keeping:
+
+⭐ **The cheapest decisive signal was already collected:** all four candidates carry must-fail pins, and
+CI's `soundness` job on #1645 ran *"Open bugs must still reproduce"* = **success** — a drained pin reds
+that gate. **It verified the step actually executed rather than trusting the rollup**, which is the
+distinction this repo's own CI section insists on.
+
+**Then it checked #1579 against the issue's own repro** and got a byte-identical pinned cell, plus a
+mechanism table that makes the non-overlap structural rather than observational:
+
+| | #1579 | S2's shape |
+|---|---|---|
+| interfaces | **one** | **two**, same spelling, different modules |
+| candidate rows | two impls **of one class** | one impl each, **of different classes** |
+| goal at selection | **free** | **ground** |
+| defect kind | **timing** (commits before quiescence) | **keying** (selection crosses a class boundary) |
+
+⇒ *"Do the two candidate rows carry the same `IfaceRef`?"* In #1579 they do, so `tyConIdsConflict` is
+False either way and the candidate set is **unchanged by the diff** — **identity keying is structurally
+incapable of moving #1579.** *"What made mine look close is the SYMPTOM — a false `T-NO-IMPL` on a
+`requires` clause — not the cause."*
+
+⭐ **And it named its shape's own fingerprint:** *"exchanging two module names makes the identical
+program compile"* — order-dependence, which is the signature of spelling-keyed selection specifically
+and which none of the four candidates has.
+
+## RUN-P45-067 — 🚨 A STALE ORACLE CAN BLESS A WRONG GOLDEN, AND NOTHING GUARDS THAT PATH. Landed in AGENTS.md.
+
+W2 merged `main` into #1640 (which had moved by **two** merges, #1638 and #1639), pinned
+`BASE=bd65dbfb` first because `origin/main` moves under a shared `.git`, and took both golden families
+wholesale from `BASE` — then **caught itself about to report a green it had not earned.**
+
+`diff_compiler_selfproc.sh` and `capture_goldens.sh --frozen selfproc_legA` **both read
+`test/bin/check_all_main`**, and it had built that oracle **before** the merge. Invoked directly, both
+bypass `run_gates.sh`'s staleness guard. So its first `16 ok, 0 failing` — **and the golden it blessed**
+— were measured against an oracle that did not reflect #1638.
+
+⇒ It rebuilt the oracles, reset LEG A to `BASE`, re-derived from scratch, and got a **byte-identical**
+result. **The artifact was right and the evidence for it was not**, which is the distinction that
+matters: a wrong gate verdict is loud on the next run, **a wrong golden becomes the expected output.**
+`AGENTS.md` warned that gates are stale-prone outside `run_gates.sh`; it did **not** say the *capture*
+path shares the oracle and has no guard. **Now it does.**
+
+**Re-measured on the merged tree, all five, nothing moved:** snapshot 202/202 · selfproc 16/0 (fresh
+oracles) · check-self PASS · iface_order 5/5 · must_fail 98/98 · plus 12/12 on the resolve/check family
+routed **through `run_gates.sh` specifically so the guard was in the loop.**
+
+**It did not trust the source auto-merge either** — `compiler/types/typecheck.mdk` merged without
+conflict, and it verified both sides survived: its own two markers present, its delta vs `BASE`
+comment-only at `+23/−1`, and **zero lines of #1638's removed.**
+
+**LEG A `+5/−0`, `frontend.resolve.golden` only**, all five bindings its own. ⭐ **And the sharper
+negative it reported rather than the easy one:** `types.typecheck`'s LEG A schemes match `BASE`
+**exactly** — which is the real evidence there is no #1638 interaction, since #1638's head-tag change
+lands in *that* file and a scheme-level interaction would surface there first. "Nothing in must_fail
+moved" is the weaker claim; it gave both.
+
+### RULING on its `unchecked:` — do NOT run `dict_semantics` locally before enqueue
+It flagged that #1638 added three fixtures to that gate and touched it, making it the one place an
+interaction could hide, and offered the ~35-minute run. **Declined.** The merge queue runs it
+**unnarrowed against the merged result**, which is strictly stronger than a local run of the same gate
+on a branch — and the standing rule is that the queue, not a local pass, is the authority. Burning 35
+minutes of a shared box with two other writers live to duplicate what the queue must do anyway is the
+wrong trade. **Flagging it rather than silently omitting it was exactly right.**
+
+## RUN-P45-068 — #1647 FILED by W6, with the sprint's best single line of diagnosis
+
+`S1: loud breakage` · `verified` · `ws:typecheck` · `ws:soundness`. Deduped against **eight** issues
+(the six I named plus two it found) and cross-referenced onto **#1354** as its natural absorbing stage.
+
+⭐ **The root cause is one line, and it is a MECHANISM rather than a symptom:** `inferOneImpl`
+destructures `DImpl { iface, tys, reqs, methods, ... }` and **`implOrigin` is dropped by the `...`** —
+while **four sibling sites build an `IfaceRef` from exactly that field.** That is what makes the dedup
+credible instead of assertive: you can point at a field present at four sites and absent at the fifth.
+It is **not** a `universe*` table at all — it is `ifaceMethodTy`'s linear `name == iface` scan over
+`allProg`, reached through `ifaceMethodTyResolved`'s **slow arm**.
+
+⭐ **The severity was defended by probing the S0 direction, not by failing to find one.**
+`ifaceMethodTyResolved`'s **fast** arm (the `check` path) reads the table *after*
+`applyMethodScopeOverrides` overlays it per module from the identity-keyed companion — **so `check` is
+structurally right and only the emit path bypasses the overlay.** Tested directly: a body ill-typed
+under its own interface and well-typed under the other's is **correctly rejected**, identically to the
+no-collision control. ⇒ valid program, loud at `build`, **no demonstrated silent wrongness → S1**, with
+the issue stating that an emit-path S0 variant would be a split-out and that none was found.
+
+**Coextensivity with Phase 4 stated in THREE places** — the issue, the fixture's `case.txt`, and the PR
+body — including, explicitly, that **#1646 is NOT a fix for #1647**.
+
+## RUN-P45-069 — RULING: do NOT squash under a live reviewer. W6's deviation ratified.
+
+W6 declined to amend its parent commit while the semantics lens was still running, put the coextensivity
+caveat in a new `docs(dispatch):` commit whose message leads with it, and **flagged the deviation rather
+than taking it silently.** Ratified: **force-pushing under a live reviewer invalidates that reviewer's
+arm mid-flight** — it would be measuring a tree that no longer exists, the same class of error two
+agents closed by hand tonight. The separate commit solves the real problem (a `git log` reader seeing
+`fix(dispatch):` with no caveat) at none of that cost.
+
+**Two habits worth keeping, both W6's:**
+- It confirmed legA's set equality **from history** — no commit in `adf3afcc..bd65dbfb` touches legA at
+  all — rather than from #1638's *stated* verdict. Corroboration from an independent channel, not a
+  second reading of the same claim.
+- It reported the #1638 interaction as **measured** (`dict_semantics` passes *including its three new
+  `s3-constrained-*` fixtures*), not as expected.
+
+⚠️ **And its parting note is the one most likely to be lost, so it is recorded here:** the two owed
+follow-ups are **NOT the same size.** `methodReqCountRef` is a **question** (is that table read on the
+flat path?) and answering it may be all it needs. `selfFnParamTable`/`lookupSelfFnParams` is a
+**change**: `ifaceOrigin` is reachable but **not currently bound** in `ifaceSelfFnParamEntries`, so it
+needs a binder — and it fails **closed**, so its symptom is a *lost* `LTy` refinement rather than a
+wrong one. *"'Same shape, same fix' is the inference that would make the second one look cheaper than
+it is."*
+
+## RUN-P45-070 — #1643 (S1) ALSO CONFLICTING; merge dispatched with PROPORTIONATE re-verification
+
+Its 12 green checks predate the conflict and will not re-run until it is resolved; **#1645 (S2) is
+stacked on it**, so this unblocks both.
+
+**Ruled: do NOT re-run the full 424-case IR diff.** S1's neutrality argument is **structural** — every
+query is minted `ifaceRefBare`, so `tyConIdsConflict`'s `(Some, Some)` arm is unreachable and the answer
+cannot move *regardless of base*. Re-running 424 cases to re-confirm a structural property, on a box
+with two other writers, is the wrong trade. **Targeted re-run over the 13 discriminating carriers only**
+(5 in `llvm_fixtures_modules`, 8 in `dict_fixtures`), with `s6-c1-xmod-same-spelled-ifaces-accepted/`
+named as load-bearing and not to be simplified. ⚠️ **If the targeted subset shows any difference, that
+falsifies the structural argument and is far more interesting than a green** — instructed to stop and
+report rather than investigate.
+
+Also carried into that brief: **rebuild the oracles BEFORE capturing a golden** (RUN-P45-067), since the
+capture path shares `check_all_main` and has no staleness guard.
+
+## RUN-P45-071 — #1640 IS IN THE MERGE QUEUE (verified by state). #1608's GATE dispatched as W7.
+
+`ok: PR 1640 is in the merge queue (state=OPEN)` — read back, not inferred from an exit code.
+
+**The #1608 gate fills a slot that contends with nothing** — it branches from `main` and touches no file
+any open PR holds. Briefed as **instrument only, do NOT fix #1608**, per the owner ruling
+(RUN-P45-036 ruling C).
+
+Constraints that matter, carried into the brief:
+- **Why no existing gate sees it:** `diff_compiler_core_ir_modules.sh` runs the **untyped** path, so the
+  shapes where dict-passing and interface-method selection happen never reach it. `evalModules` /
+  `cevalModules` are the documented lockstep pair, and a P0-9 fix once shipped patching only
+  `eval.mdk`, leaving `core_ir_eval.mdk` broken for months — **this defect's own family, with the
+  fourth engine arm ungated.**
+- **RED first, then the control** — a gate that passes today proves nothing.
+- **Hand-derive before running.** ⚠️ A captured golden here would enshrine what the engine does, and
+  **the engine under test is the one suspected of being wrong** — the eval-golden trap at full force on
+  an engine nobody has been grading.
+- **Permutation is the discriminating axis**, and a single ordering can be *accidentally correct* — a
+  prior measurement found exactly that on this defect's own permB arm. **Grade the VALUE, not
+  agreement.**
+- **Wire it into a CI shard or it silently never runs**, with the shard cost **derived**, never quoted
+  (that ranking has been wrong three times and has inverted). ⚠️ And any `.sh` added **anywhere in the
+  tree** trips the coverage check — scratch scripts stay out of the repo.
+- **Declare the expected RED honestly** — ledger row (HALF 4 is row-driven) or must-fail pin; pick and
+  justify.
+- ⚠️ It was also told to **verify which arm actually moves**: #1608's body says *"both answers"* flip,
+  a later measurement found **only `cevalModules` moves**. Inherit neither.
+
+## RUN-P45-072 — ⚠️ MY MERGE SNIPPET WAS WRONG, AND I SENT IT TO THREE WRITERS. W4 caught it.
+
+I wrote:
+```sh
+BASE=$(git rev-parse origin/main)   # <-- pins the STALE ref
+git fetch origin main
+git merge "$BASE"                   # <-- merges the OLD main
+```
+**Pinning before fetching pins the pre-fetch ref**, so the merge target is the main that existed before
+the fetch — i.e. the merge would not bring in what you just fetched. W4 fetched first, then pinned the
+literal SHA `bd65dbfb`, and used that throughout.
+
+**Provenance, because it matters:** `AGENTS.md`'s recipe is correct — it pins `origin/main` in a context
+where the fetch has already happened, and pinning *before it moves again* is the entire point. **The bug
+is mine, introduced by inserting `git fetch` AFTER the pin** when I adapted it. W2 and W6 both received
+the same snippet and both ended up on the right SHA anyway (their `origin/main` was already current), so
+it cost nothing — but it would have, on a stale local ref, and it would have been invisible: a merge
+that silently omits the commits you thought you were merging.
+
+⇒ **Correct order: FETCH, then pin, then use the literal SHA.** Third orchestrator-authored error
+tonight (after the misrouted message and the HALF 1 mechanism), and the third caught by a writer rather
+than by me.
+
+## RUN-P45-073 — S1 MERGED CLEAN AND RE-VERIFIED. My "13 carriers" was also a number that needed deriving.
+
+**#1643 `MERGEABLE`**, merge commit `1d8b1a27`. S2 (#1645) unblocked.
+
+**It reviewed the clean auto-merge instead of trusting it** — *"a clean apply is not evidence"* —
+and gave the reasons rather than an assertion: #1638's entire source change to `typecheck.mdk` is **one
+line** with the rest of its +109 being comments; it sits ~160 lines below S1's edits; it touches the
+**head** half of impl matching where S1 touches the **interface** half; and it adds **no new caller** of
+anything S1 widened — **census re-derived on the merged file, not carried forward.**
+
+⚠️ **My "13 discriminating carriers" list globs to 18 projects.** The 13 is the *IR-reaching* count; the
+other 5 are the `*-rejected` fixtures, which emit no IR. **W4 ran the superset rather than guessing
+which 13 I meant** — the right call, and another instance of a count of mine that needed a derivation
+rather than a number (`i4-xmod-*` alone is 10).
+
+**Result: `identical=18 differing=0 missing=0`**, base arm = merged tree with **only** `typecheck.mdk`
+reverted, so the sole variable is S1's change with #1638 present in **both** arms (`cmp` confirms the
+arms are genuinely different binaries).
+
+⭐ **It went beyond exit codes without being asked:** a recursive `diff -rq` over `.ll`, `.status` **and
+the captured stderr logs** is empty, so the 5 rejecting fixtures are **byte-identical in DIAGNOSTIC
+TEXT**, not merely in exit code. That is the answer standing question 6 actually wants, and it is the
+same blindness another reviewer found in its own sweep tonight — avoided here by construction.
+**Positive control run in the reject→accept direction specifically** (byte injected into `s6-c1`'s IR
+*and* a `*-rejected` flipped 1→0 ⇒ `differing=2`). `s6-c1` left exactly as-is, shared head `Int` intact.
+
+**The staleness guard earned its keep immediately** — routed through `run_gates.sh`, it refused
+`diff_compiler_test`/`lex_files` because `test_main`/`lex_main` predated the merge. **Rebuilt rather
+than `NO_STALE_CHECK=1`.** And the whole-suite snapshot check on the merged tree failed on **exactly one
+file — its own**: the other 201 validating BASE's goldens against the merged tree is *independent*
+evidence the reset carried correctly.
+
+**Merged-tree verdicts: C3a YES · C3b YES**, plus check-self, `make test`, dict_semantics, iface_order,
+import_order, selfproc, the `diff_compiler_test*` family, lex_files and diff_native_cli. LEG A verdict
+re-derived on the merged tree and unchanged: nine re-signings plus one new binding, **no pre-existing
+scheme moved.**
+
+## RUN-P45-074 — ⭐⭐ THE #1608 GATE EXISTS (PR #1649, 12/12) — AND IT REFUTES THE ISSUE IT WAS BUILT FOR
+
+**Built:** `compiler/entries/core_ir_typed_modules_main.mdk` — the first driver in the tree that runs
+`cevalModules` over **marked + typechecked** trees; it is `eval_typed_modules_main.mdk` with **one call
+swapped**, so the only variable between the two is which parallel module driver runs.
+`test/diff_compiler_core_ir_typed_modules.sh` grades 5 arms × 2 orderings × 3 cases in three tiers, and
+**tier T2 makes the `evalModules`/`cevalModules` LOCKSTEP gradeable for the first time** — an
+`AGENTS.md` hazard that has been prose ever since a fix shipped patching only one of the pair.
+`test/CORE-IR-TYPED-LEDGER.txt` is third in the ledger family, wired into `must_fail_census.sh` HALF 4.
+
+**Fail-capable in FOUR independent directions, each demonstrated rather than argued.** The strongest is
+the **positive control**: stripping *only* `elaborateModules` from the new driver reds **only** the
+`ceval-typed` arm, **only** on the `1608-*` cases, falling back to byte-identical arg-tag answers. ⇒
+**the green is a MECHANISM claim, not an exit code** — it shows the typed arm's correctness is *caused
+by route stamping*, which is precisely what "is this gate vacuous?" asks.
+
+**It verified the gate RAN, by name, in the shard log** (`PASS diff_compiler_core_ir_typed_modules`,
+oracle built in ~26 s) rather than trusting the rollup — and kept the caveat that a `pull_request` run
+is narrowed and the merge queue is the authority.
+
+**Shard `eval`, chosen on RE-DERIVED cost** (three green `merge_group` runs: eval 301/304/312, lowest
+variance; types 467 the pole) plus the structural reason that it **already builds 2 of the 3 oracles**.
+⚠️ **The `ci.yml` cost note it replaced had rotted ~2× in absolute terms within the same month** — the
+new one ships its derivation command and a rot warning. Fourth time this tree has proved a written
+ranking wrong.
+
+### 🚨 THE FINDING: #1608 does not reproduce as a `cevalModules` defect
+Measured arm-for-arm: **all three typed arms** (eval-typed, native, ceval-typed) are **correct and
+order-invariant**, including on the harder cross-module dict-forwarding shape; **the two UNTYPED drivers
+are byte-identical to each other** and both wrong. That is the shared, documented untyped arg-tag
+fallback — **not an engine divergence and not a lockstep failure.** #1608's ✅/❌ table compares a
+**TYPED** `eval` reading against an **UNTYPED** `ceval` one. **Arm mismatch.**
+⭐ It also dissolved my briefed caveat rather than picking a side: *"flips both answers"* (two `tag`
+occurrences within one arm) and *"only `cevalModules` moves"* (which arm moves) are **different claims,
+both correct** — neither is evidence against the other.
+
+### ⭐ OWNER RULING (Val): #1608 STAYS OPEN. Demand the ORIGINAL repro.
+The refutation is strong **and it is not yet about this issue's own program** — the author says plainly
+*"I verified a program of the described shape, not the reporter's original."* ⇒ **Reproduce-before-you-act
+cuts BOTH ways: it forbids fixing on an unreproduced claim and equally forbids CLOSING on an
+unreproduced refutation.** Two issues have already been desk-closed here on inferences that outran their
+evidence; this is not a third. Ruling posted to #1608 with the three decisive outcomes named and the
+cheap way to get them (run the original through the five arms the new gate already drives). State,
+labels and severity untouched; readback verified.
+
+## RUN-P45-075 — SEMANTICS LENS ON #1646: the tier-2 question ANSWERED, and the answer is "by invariant, not by construction"
+
+**Verdict: could not break it. No CONFIRMED defect.** But the headline question got a real answer.
+
+**Structurally, tier 2 IS a blanket *"tier 1 returned nothing ⇒ try spelling"*** — `lookupPositions`
+matches `positionsById` against `Some`/`None` and **does not distinguish absence from conflict**. So
+case (b) — both sides stamped, identities differ, fallback re-collides exactly the two interfaces the
+key exists to separate — is **NOT excluded by construction.** It is excluded only by the invariant
+*"tier 1 never misses when the query carries an identity."*
+
+⭐ **And then it MEASURED that invariant instead of arguing it.** Two instrumented builds — panic if a
+stamped query reaches tier 2; panic if tier 2 must choose among ≥2 same-spelled rows — **zero hits**
+across a full compiler self-compile **and** 123 module fixtures × `run` + `build`. **With a positive
+control proving the probe fires**: forcing tier 1 to miss yields
+`REVIEW-TIER2-COLLISION id=speakerb::Speak …`, exit 1. **That is what makes the zeros mean something**,
+and it is the discipline this whole sprint has been converging on.
+
+⚠️ **Every route it built to reach case (b) is closed UPSTREAM, in another subsystem, not by this PR** —
+`Method 'bark' is not part of interface 'Speak'`; `Duplicate interface: Debug`; `Ambiguous interface`
+in **both** import orders. So the property holds today for reasons #1646 does not own.
+
+### ⇒ REPAIR R1: apply the PR's OWN standard to tier 2
+#1646 is scrupulous that the `[0]` default is *"unreachable, and unreachable is an argument, not a
+removal"* — **and tier 2 now rests on exactly such an unstated invariant.** State it, and state what
+falsifies it: a future change to identity supply (**#1115 E-1**, or any partial-supply driver) silently
+converts case (b) from unreachable to live **and no gate could see it.**
+🚨 **Do NOT add the obvious guard.** Guarding on `ifaceId == ""` is **not** equivalent — it would send
+the mixed *"row unstamped, query stamped"* case to the fail-open `[0]` instead of the correct row, and
+that case is not provably unreachable. If a guard is wanted, the safe shape is **>1 candidate at tier
+2**. Ruled: **comment only this bite**; a behaviour change does not ride inside a documentation repair.
+
+### ⇒ REPAIR R2: one of the two "safe on spelling" arguments is WRONG
+The count is right and leaving both Ref readers on the spelling **is** behaviour-preserving (0
+output/exit differences across 123 fixtures). But *"their answer is already a superset"* **is true only
+of `methodsOfIface`.** `ifaceOfMethodIn` returns the **FIRST** row whose *method* name matches — a
+single answer — so two **differently-spelled** interfaces sharing a method name make `ifaceOfMethod`
+order-dependent and `methodsOfIface` then enumerates **the wrong interface's** methods: **a wrong set,
+not a superset.** PLAUSIBLE, **pre-existing, not regressed.** Fix the justification, not the code.
+
+⭐ **New information worth recording where the next reader will find it: Q1 REJECTS that shape
+intra-module** (`R-DUPLICATE-IFACE-METHOD`), so `ifaceOfMethod`'s order-dependence survives **only
+cross-module** from here on. Two sprint units interacting in the residual, discovered by review rather
+than by design.
+
+**Confirmed by the lens, worth keeping:** lockstep is **genuinely structural** — reverting only
+`core_ir_lower`'s call yields two type errors and `check-self` exit 2; **wasm really does ignore
+`positions`** (10 `CImplTagged` sites, all binding `_` at that slot); the typed Core IR differential
+over 123 fixtures is **byte-identical except the one collision fixture** (`compared=123 irdiffs=1`),
+measured on the one instrument that can see it; and the legA changed-set equals the edited-signature set.
+
+**Weak spot disclosed rather than papered over:** its `repl` probe hit a parse error on **both** arms,
+so repl dispatch was not properly exercised — going into `unchecked:` rather than riding on inference.
+
+## RUN-P45-076 — ✅ Q1 (#1640) AND THE #1608 GATE (#1649) ARE MERGED. Two of five units landed.
+
+`main` now carries: bite 0 (#1638), Q1 (#1640), the typed Core-IR gate (#1649). Open: #1643 (S1),
+#1645 (S2, stacked), #1646 (Phase 4).
+
+## RUN-P45-077 — ⚠️ SERIALIZATION THRASH IS THE SPRINT'S REAL TAX, and it is structural
+
+**#1643 re-conflicted while waiting** — #1640 and #1649 merged ahead of it, both touching the golden
+families, so the enqueue I had started never took (`isInMergeQueue: false`, `mergeable: CONFLICTING`).
+It had already merged once, tonight, and paid a full rebuild + golden re-derive + re-measure for it.
+
+**The mechanism, stated so it is not re-diagnosed later:** every unit in this sprint lands in
+`compiler/types/typecheck.mdk` and re-cuts the same two golden families, which have **no merge driver**.
+So each merge invalidates every other open branch, and the cost per invalidation is not a textual
+resolve — it is *rebuild the binary, re-derive both golden families, re-measure every verdict*, because
+the previous numbers came from a tree that no longer exists.
+
+⇒ **The fix is to close the WINDOW, not to repeat the cycle: verify → enqueue on receipt, with nothing
+batched ahead.** Recorded as a lesson for the next sprint's template — *when N units share one file and
+one golden family, the enqueue must follow the verification immediately, and a unit that sits verified
+but unqueued is accruing a rebuild.*
+
+**Both remaining writers briefed on what is newly in `main`** rather than left to discover it: Q1's new
+`R-DUPLICATE-IFACE-METHOD` and its resolve goldens, and #1649's **new compiler entry point plus a new
+`test/bin/*` oracle** — which makes their oracle sets stale in a *new* way, on the exact path where the
+capture has no staleness guard.
+
+⚠️ **One interaction named in advance for S1:** its discriminating corpus is built entirely from
+same-spelled interfaces, and Q1 now rejects that shape **intra-module**. Its fixtures are *cross-module*,
+which Q1 does not reach — **but if any of the 18 now fails to compile, that is Q1 reaching further than
+its census said**, and it is a finding to report before adjusting any fixture.
+
+## RUN-P45-078 — W6 CORRECTED ME AGAIN: #1640 is NOT in #1646's branch, and it shipped a DISCRIMINATOR instead of a claim
+
+I told W6 to record that "Q1 now rejects that shape intra-module" as a property of the tree. **#1640
+landed at `00:12:38Z`, after that branch's merge base `bd65dbfb`** — verified, not assumed:
+`grep -rn 'R-DUPLICATE-IFACE-METHOD' compiler/` **exits 1 with zero hits on that branch.**
+
+⭐ **So it did not write my sentence.** The comment records #1640 as the narrowing, states that it
+postdates the branch's base, and **ships the one-line grep as the discriminator** — a hit means the
+intra-module half is closed and only the cross-module residual survives; no hit means the reader is on a
+tree that predates it. **Correct whichever side of the merge the reader is standing on, and it cannot rot
+into a false claim.** That is a better answer than the one I asked for, and it is the fourth
+orchestrator-authored error a writer has caught tonight.
+
+⚠️ **And it hit the piped-exit-code trap while checking that very claim** — `grep … | head` returned
+`rc=0` from `head` — and re-ran unpiped. The trap this repo documents for `build`, biting in the middle
+of verifying a claim about a diagnostic's existence.
+
+**R1 landed as ruled: comment only, no guard**, with the invariant stated, the falsifier named (**any
+change to identity supply**), *"no gate could see it"* recorded, and the `ifaceId == ""` guard **warned
+off by name** with its reason. **R2's reasoning corrected without touching the decision.** `repl` moved
+into `unchecked:` with the reason, not just the label. **legA re-captured byte-identical** — the positive
+confirmation that a comment change moved no inferred type.
+
+## RUN-P45-079 — ⭐ OWNER RULING (Val): S3 IS DEFERRED until #1354 lands. Ruled on evidence, as contracted.
+
+The Phase 0 plan held S3 (the `keyForSite` repoint) for *"a post-Q1 measurement rather than up front."*
+The measurement is in:
+
+- **Q1 landed**, so two interfaces sharing a method name in ONE module are now rejected ⇒
+  `keyForSite`'s supply (`ifaceOfMethodName` → `methodIfaceParamsRef`) **is sound intra-module**,
+  exactly as P0-G predicted.
+- **But that table is still bare-name keyed CROSS-module** — per-module state overlaid from a bare-name
+  universe map, which is **#1354's** territory — and the **re-posed #1182 pin reproduces cross-module
+  today** (must-fail 98/98).
+- S3 carries **the largest IR move of any bite in the sprint.**
+
+⇒ **Doing S3 now would key selection by an identity whose cross-module supply is still bare-name —
+moving the order dependence from impl-block order to interface-declaration order rather than removing
+it.** That is precisely the *"weak fix / loud→silent"* shape **this sprint's own opening ruling
+rejected** (RUN-P45-007 ruling 1). Deferring is not a shortfall; it is the same ruling applied
+consistently at the other end of the sprint.
+
+**Routed behind #1354.** #1113 closes on Phase 4 per the sprint contract's exit criterion 1; S3 is
+recorded on #1182 as the unit that finishes it, with this evidence attached.
+
+## RUN-P45-080 — S1 RE-MERGED AND RE-VERIFIED (2nd time). Its Q1-interaction check was one a differential CANNOT do.
+
+**#1643 `MERGEABLE`**, merge commit `2ef4c573`. **Enqueued immediately on receipt**, per RUN-P45-077.
+
+⭐⭐ **The methodological point of the night:** I asked W4 to watch for a Q1 interaction with its corpus.
+It observed that **a two-arm differential is structurally blind to that question** — Q1 is in *both*
+arms, so a same-module rejection **cancels out and reports `identical`**. It compared each fixture's
+status against the **pre-Q1 run** instead. Static scan first (of the 18 projects, exactly three files
+declare two interfaces, all with **disjoint** method names), then confirmed on the binary: **0 fixtures
+changed status across the Q1 landing**, 13 accept / 5 reject unchanged fixture-by-fixture. **Q1 did not
+reach the corpus; no fixture was adjusted.**
+⇒ *"Same instrument, wrong question"* — the differential answers "did my change move anything", **not**
+"did the thing that landed under me move anything." Two different baselines.
+
+**`run_gates.sh` routing caught THREE oracle problems, not the one I predicted** — `eval_modules_main`
+stale; `core_ir_typed_modules_main` (#1649's new oracle) phantom-skipped; and **`core_ir_modules_main`,
+a second oracle the new gate also reads**, visible only when running the gate directly rather than
+through the wrapper. With all three built, **`diff_compiler_core_ir_typed_modules` PASSES** — so the new
+fourth-engine-arm gate is genuinely exercised against this branch rather than skipped.
+
+**Verdicts: C3a YES · C3b YES**; targeted differential **18/18 byte-identical including diagnostic
+logs**; LEG A re-derived a **third** time, unchanged. #1640's `resolve.md` and `frontend.resolve.golden`
+**preserved byte-intact** — the snapshot delta touches only `typecheck.md`.
+
+⚠️ **Its closing caveat is the thrash stated precisely:** *"a third landing would invalidate this again —
+the evidence above is specific to base `acd3144f`."*
+
+## RUN-P45-081 — ⭐⭐ #1608 SETTLED ON THE REPORTER'S OWN PROGRAM, AND CLOSED. It was mis-scoped AT FILING.
+
+**The original was recovered VERBATIM from committed source** — `.claude/sprint-b/repair/R6-engines-ungated.md`
+§ D-1, with `F1-verdicts.md` recording the same packet being run — **not reconstructed.** W9 was briefed
+to stop and refuse if it could not get the original in full; it did not have to.
+
+Five arms × two orderings × two programs, expectation hand-derived first, cold build:
+
+| arm | permA | permB |
+|---|---|---|
+| eval TYPED · native · **ceval TYPED** | `boxstr` ✅ | `boxstr` ✅ |
+| eval UNTYPED · ceval UNTYPED | `boxint` ❌ | `boxstr` ⚠️ **accidentally right** |
+
+**Outcome 1 on the filed program**, matching the described shape. All 20 cells exit 0.
+
+### 🚨 The finding is a FILING error, and the repo's own records prove it
+`F1-verdicts.md` names **`test/bin/core_ir_modules_main` — the UNTYPED driver** — as the source of the
+`core_ir_eval` ❌, while the `eval`/`native` ✅ came from `./medaka run` and `./medaka build`, **the typed
+path.** The issue's ✅/❌ table compares **two different arms, not two engines.** And R6's packet said so
+at the time, verbatim: *"`boxint` … is **not** a new bug — it is the untyped arm behaving as designed."*
+⇒ **The escalation to *"cevalModules resolves by import order"* happened AT FILING, not at measurement.**
+The measurement was right and was correctly interpreted *in the packet*; the issue text generalised past
+it. [[feedback_a_claim_reaching_past_its_evidence]] — at the moment a measurement becomes a ticket.
+
+⭐ **And the accidental-correctness hazard is symmetric, which is the generalisable half:** arg-tag's
+choice is independent of the program, so **each ordering makes exactly one of the two programs look
+right.** Any single-ordering *or* single-program reading of this shape is a coin flip.
+
+**One sub-claim corrected in the body's FAVOUR:** *"swapping the import lines flips both answers"* is
+**true** — W9 measured it — but `F1-verdicts.md` records no import swap, so it was a correct claim that
+was not, on the record, measured.
+
+### ⭐ OWNER RULING (Val): CLOSE, with the record attached. Done.
+Closed with the full measurement, the arm-mismatch derivation quoted from this repo's own records, and
+the note that **nothing was fixed — it is closed because the defect it describes was never measured to
+exist.** State verified `CLOSED` and the comment readback verified.
+
+**What it leaves behind is the durable part, and it is why chasing it beat desk-closing it:**
+`compiler/entries/core_ir_typed_modules_main.mdk` — the first driver to run `cevalModules` over marked +
+typechecked trees — and the gate's **T2 tier, which makes the `evalModules`/`cevalModules` lockstep
+gradeable for the first time**, a hazard that had been prose in `AGENTS.md` ever since a fix shipped
+patching only one of the pair. **A wrongly-scoped S1 bought a real gate for the fourth engine arm.**
+
+**PR #1651** adds both programs as gate cases plus two ledger rows — deliberately on **opposite
+permutations**, so a "fix" that merely flipped which impl the untyped fallback reaches first would drain
+one row and leave the other wrong. Fail-capability measured; tiers 1 and 2 stay green, so the rows
+**cannot mask** a typed-arm or lockstep failure. Enqueued.
+
+⚠️ **Explicitly NOT closed by this: wasm remains ungraded on this shape** (`diff_compiler_engines.sh`
+still has three arms). Recorded on the issue rather than silently inherited.
+
+## RUN-P45-082 — BOTH OWED PINS LAND (PR #1652). Three judgement calls beat the brief.
+
+Fixtures only — 12 files, 575 insertions, all under `test/must_fail_fixtures/`, **no compiler source**,
+so its surface stayed disjoint from the live writer's as intended. Final:
+**`100 fixtures: 100 reproduce, 0 DRAINED, 0 control-broke, 0 malformed`**, suite exit 0.
+
+**All four #1648 cells reproduced exactly**, plus two things beyond the brief: it **read the IR itself**
+(`define i64 @mdk_impl_Box_bar(i64 %arg0)` against `call … (i64 0, i64 %t3)` — arity 1 vs 2 with a
+**null** leading dict), and it built an **ablation** (`requires Eq a` deleted, every other byte
+identical → clean at exit 0 printing 7). The ablation is what the shape actually needed, because it
+also established that a **single-dimension control is not constructible**: `main.mdk`'s `a` is
+**phantom**, so no body over it can make `Eq a` live. That is a derivation, not an excuse.
+**And it bounded #1641 further than filed:** `impl Zero (<Stdout> Int)` behaves **identically**, so the
+defect is **not `TyConstrained`-specific.**
+
+### ⭐ The three calls, all better than what I asked for
+1. **A guard against the `build` verb's mis-report path, self-installed.** An emitter-only "fix" leaving
+   `check` still accepting would **drain the row while the acceptance — the actual defect — survives**:
+   the defect going *quieter*. `claim.txt` now carries an explicit instruction — if it drains because
+   `build` **succeeds**, re-run `check` first and **do not close #1641**. The severity-increase guard, in
+   the one artifact read at exactly the moment it matters.
+2. **A two-dimension control, deliberately.** The tighter one-dimension control would **break under a
+   legitimate fix** that rejects constrained impl heads outright, making the gate print CONTROL-BROKE's
+   *"the ENVIRONMENT moved"* advice **about a real fix**. It chose the control that survives being fixed.
+3. **It neither forced #1641's inverted control into the harness nor dumped it into
+   `MUST-FAIL-NOT-PINNABLE.txt`** — it pinned the honestly-pinnable subject side and shipped the
+   plain-head program **UNGRADED with its measurement**, naming the limitation as the harness's.
+
+**Fail-proofs: four mutations, each run and reverted**, each reddening **only** its own row, with the
+harness's own message quoted; final revert confirmed **diff-identical**. Both stdout and exit assertions
+shown to fire independently.
+
+## RUN-P45-083 — ⚠️ A TRIPWIRE CRYING WOLF: HALF 1 cannot express "closed as a DUPLICATE, pin retained"
+
+W8 reported `PINNED-BUT-CLOSED #1071` as pre-existing. **ORCH ran the pin first-hand: it reproduces
+exactly as written** — `run` prints `int/31` twice at exit 0, the built binary prints `int/31` / `str/71`
+and is correct.
+
+**But the close was LEGITIMATE, not a desk-close** — #1071 was closed as a **duplicate of #1062**, and
+the closing comment says verbatim: *"Neither is fixed — both pins still reproduce, and both fixtures are
+deliberately kept."* Same mechanism, same engine, same collision shape. Timeline confirms a deliberate
+dedup with a derivation, not a sweep.
+
+⇒ **The census's HALF 1 keys on `state == CLOSED` and cannot distinguish that legitimate state from the
+hazard it exists to catch.** So the finding is permanent and false — and
+[[feedback_a_tripwires_false_positive_is_its_masking_path]]: **the next person to see a HALF 1 finding
+will have been trained it is noise, on the run where it is real.** This tracker has had **two** genuine
+desk-closes tonight; a detector for them that cries wolf is worse than none.
+
+**Remedy dispatched into #1652** (same fixtures-only surface): re-point the fixture's `issue:` field to
+**#1062**, the live issue, so HALF 1 goes quiet **honestly** and the self-drain still works — one
+mechanism, two fixtures, both flip when #1062 is fixed. Directory name kept (historical; renaming is
+churn) with a `why-note:` recording the dedup and that the field points at the live issue **on purpose**,
+so a future reader does not "correct" it back. ⚠️ Told to **verify #1062 is actually open first** and to
+stop if not — and licensed to argue that the census should learn the duplicate convention instead.
+
+## RUN-P45-084 — 🚨 MY ADDENDUM WAS MECHANICALLY IMPOSSIBLE. W8 APPLIED IT, MEASURED IT, AND REFUSED WITH PROOF.
+
+I told W8 to re-point #1071's pin at #1062 and keep the directory name. **Both halves collide with rules
+the harness enforces**, and it found out the only honest way — by doing it and running the gate:
+
+```
+MALFORMED: issue #1062 is pinned by MORE THAN ONE fixture … One fixture per issue.
+MALFORMED: 1071-…/ is named for issue #1071 but its claim.txt says 'issue: 1062'.
+```
+`dup_fail` makes the gate **exit 1**, so my metadata-only "fix" would have **redded `soundness` on
+#1652** — a required check. #1062 already has its own pin, so re-pointing *creates* the duplicate the
+gate forbids; keeping the name is exactly what the prefix-vs-claim check rejects. **There is no version
+of my instruction the harness accepts.** Tree reverted, diff verified identical.
+
+⇒ **Fifth orchestrator error caught by a writer tonight, and the first that would have redded a required
+check.** The pattern is stable: my errors are in *relayed mechanism claims* — HALF 1's keying, the merge
+snippet's ordering, the "13 carriers" count, the tree-property claim, and now this. **Every one would
+have been caught by opening the file I was describing.**
+
+### ⭐⭐ And its correction to my FRAMING is the more valuable half
+I called this *"a tripwire crying wolf."* W8: **the wolf is not the census.** *"HALF 1 is correctly
+reporting that a fixture names a closed issue; what is missing is any expression of 'closed as
+duplicate, pin retained'. Fixing the pin's metadata would silence a CORRECT detector."*
+⇒ **Recording its version, not mine.** [[feedback_a_tripwires_false_positive_is_its_masking_path]] needs
+a companion clause: *before muting a detector, establish whether it is wrong or merely inexpressive —
+the repairs are opposite.*
+
+### The real finding: THREE written records, TWO rulings, and a refuted discriminator
+- `must_fail_census.sh`'s own remedy text: *"closed in error / as a dupe … → REOPEN"*
+- #1071's `claim.txt`: *"if the tracker adjudicates #1071 a duplicate of #1062, CLOSE #1071 and **delete
+  THIS directory**"*
+- #1071's closing comment: *"both fixtures are **deliberately kept**"*
+
+**The permanent census finding is the symptom of that unresolved conflict, not a bug in the pin.**
+⭐ And the same `why-note` **destroys #1071's own claim to being a distinct shape**: the supposed
+discriminator (a default body with only ONE sibling call) was **measured FALSE** — *"the sibling-call
+COUNT is not the trigger, and the two issues may well be one bug."*
+
+### ⭐ OWNER RULING (Val): DELETE the `1071-…` fixture; PRESERVE its measurement.
+It is what that fixture's own claim.txt instructs; its distinctness claim is false by its own note; and
+**#1062's fixture keeps grading the mechanism, so no coverage is lost** — which is all *"deliberately
+kept"* was protecting. #1071 **stays closed**; not reopened.
+
+⚠️ **The condition that makes it safe:** #1062's claim.txt has **no cross-reference back to #1071**
+(W8 checked), so a bare deletion would destroy the only record that the sibling-call-count discriminator
+was **tested and refuted** — and someone would re-derive it. The measurement, the dupe history, and *why
+re-pointing is forbidden* all move into #1062's `why-note:` plus a comment on #1062 **before** anything
+is deleted.
+
+**Option 3 (`superseded-by:` in `claim.txt`, HALF 1 treating CLOSED + superseded-by-an-OPEN-issue as
+benign) was ruled against FOR THIS BITE ONLY** — it changes gate semantics at the tail of a long sprint
+and deserves its own review. **W8 asked to file it as an issue with its design and self-drain**, so the
+reasoning survives. That is the right disposition for a good idea arriving at the wrong moment.
+
+## RUN-P45-085 — #1071's FIXTURE DELETED, ITS MEASUREMENT PRESERVED. W8 kept two things I did not ask for.
+
+`must_fail` **99/99 reproduce, 0 drained, 0 control-broke, 0 malformed**; census **HALF 1: "none — every
+pinned issue is still open."** ⭐ **It diffed the census run against the pre-change one rather than
+eyeballing it** — the delta is *exactly* the eight lines of the #1071 finding and **nothing else**. That
+is the right way to prove a detector went quiet for the right reason.
+
+**Preserved beyond the brief, and both would have been destroyed by a bare deletion:**
+1. **#1071's own cells and its control** — a second impl at a *different* head tycon printing the correct
+   pair. *"It is what PROVES the two shapes are one mechanism rather than asserting it."*
+2. ⭐ **A corpus obligation #1071 was carrying and #1062 was not**: `test/llvm_fixtures_modules/` goldens
+   are **captured from eval**, so the shared-head + non-constant-default axis is **deliberately unpinned
+   there**, and whoever fixes this must add that axis at the same time. **That obligation would have
+   vanished with the directory.** It now sits on the surviving pin.
+
+It also quoted the measured MALFORMED output inline, *"so a future reader who thinks 'why not just
+re-point it?' gets the answer without re-running the experiment"* — the derivation shipped with the
+conclusion.
+
+**#1653 filed** for the general repair (`superseded-by:`), with the three drains that stop it degrading
+into a skip-list, and with the honest note that its *"unknown keys are ignored"* claim is **derived from
+reading `claim_has`/`claim_get`, not measured** — *"which is exactly the distinction that broke the
+addendum, so I'd rather label it than let it travel as measured."* **It applied my own failure mode to
+itself, unprompted.**
+
+## RUN-P45-086 — ⚠️ MY CLOSE OF #1608 CASCADED INTO THE LEDGER THAT ISSUE PRODUCED. Mine to fix.
+
+Closing #1608 invalidated three artifacts that name it as OPEN:
+1. **`test/CORE-IR-TYPED-LEDGER.txt`** (from #1649) carries rows headed `── #1608 (OPEN) ──` and prose
+   saying *"#1608 is deliberately left OPEN: re-scoping it is its owner's call"* — **that call has now
+   been made, the other way.** `must_fail_census.sh` **HALF 4 reds when a ledgered issue is CLOSED.**
+2. **PR #1651 adds MORE rows naming #1608**, so it cannot merge as-is.
+3. **`MUST-FAIL-NOT-PINNABLE.txt:174`** says in its own text *"Delete this line once #1608 closes"* —
+   and its body still asserts the defect as *"mechanism established rather than inferred"*, which the
+   measurement **refuted**. Stale by its own instruction **and** wrong in its claims.
+
+⇒ **A closure is not a bookkeeping act when the issue has instruments pointing at it.** Recorded as a
+lesson: *before closing an issue, grep the TREE for its number — ledgers, exception files and fixture
+headers name issues and encode their state.*
+
+**Handed back to W9** (which built the instrument and had no way to know) with the two candidate shapes
+and **my hesitation about each stated rather than hidden**: re-pointing to a new issue may be a category
+error (the ledger is for known-WRONG cells awaiting a fix; this behaviour is *designed*), while
+converting to plain expected values pins an **order-dependence as expected** — honest for an arm that is
+order-dependent by construction, but easy for a later reader to misread as a blessed bug. Constraints
+set: HALF 4 must go quiet **honestly** rather than by muting a correct detector; the untyped arms must
+stay **graded**; tiers 1 and 2 must remain unmaskable. **Explicitly forbidden: reopening #1608 to make
+the ledger valid** — tail-wagging-dog, since its closure rests on W9's own measurement.
+
+## RUN-P45-087 — ⭐⭐ W9 REJECTED BOTH OF MY OPTIONS AND INVENTED A BETTER THIRD. Landed in #1651.
+
+I offered (a) re-point the rows to a new issue, or (b) convert them to plain expected values, with my
+hesitation about each. **Both were wrong, and its reasons are better than my hesitations.**
+
+**(a) fails on the ledger's OWN definition of a row** — *"…**that is a live defect**, and here is the
+issue that owns it."* Measured: **clause one still holds** (the untyped arms do print a non-semantic
+value); **clause two does not.** ⇒ *"Re-pointing means filing a bug for behaviour nobody has argued is
+one; keeping means signing a false statement. Both fail on the file's own text."* That is a sharper
+argument than my "category error" instinct, and it is **derived from the artifact rather than from
+taste.**
+
+**(b) was UNIMPLEMENTABLE as posed, and my "reads oddly" objection was the wrong reason to reject it:**
+`expected.txt` is the hand-derived **CORRECT** value that tier 1 holds the three typed arms to. Folding
+the untyped answer into it **destroys the only statement of what is correct** — and cannot be done
+anyway, since the typed and untyped answers differ.
+
+### (c), landed: a per-entry BY-DESIGN PIN
+`<entry>.untyped.txt` holds exactly what the two untyped drivers print, graded **byte-exactly**, **no
+issue named because none is owed**. Pin and ledger row are **mutually exclusive per entry** and the gate
+**refuses both** — so the two dispositions cannot silently coexist.
+
+⭐ **And it answered my real objection by LABELLING rather than avoidance.** I worried this pins an
+order-dependence *as expected*. Its answer: `expected.txt` stays the correctness statement, the pin is
+explicitly *"what a route-blind driver does"*, and **the gate now prints `arg-tag agrees here by luck`
+on the accidental cells instead of a bare `ok`.** The reader is told which greens are luck.
+
+**Grading got STRICTER, not looser:** **all eight** `1608-*` entries are pinned where only **four** were
+ledgered — the accidental halves had been graded only as `== expected`.
+
+⭐ **It also took HALF 4's warning seriously rather than past it.** That half says *"Do NOT just delete
+the row — the gate proves the bug is still there."* Its reading: **the gate proves the DIVERGENCE, which
+is why the rows were not merely deleted; it never proved the divergence is a DEFECT — the half the row
+asserted, and the half now false.** Precedent cited for removing rows whose *assertion* became false
+(as against whose *bug* was fixed): the census's own 2026-08-15 note on `IFACE-ORDER-LEDGER.txt`.
+
+**Verification by delta:** gate **10 graded / 0 failing**; `must_fail` **98/98 REPRO**; census delta
+**exactly 7 findings removed** (6 ledger rows + the `NOT-PINNABLE` row), 2 `none —` lines added,
+**nothing else changed**. Both new failure modes **proven by sabotage then reverted** (mutated pin →
+`THE BY-DESIGN PIN MOVED`; pin+row together → the contradiction error).
+
+⚠️ **`gh pr edit` silently no-op'd BOTH the body and the title** — reported success, changed nothing;
+caught by readback, landed via `scripts/pr.sh body` and `gh api -X PATCH`, each independently re-read.
+**A fifth distinct failure mode for that command tonight** (no-op, truncation, and now a silent
+title+body no-op on one call).
+
+**And it posted a correction comment on the CLOSED #1608**, because its earlier comment's *"two ledger
+rows"* sentence *"would otherwise have rotted on a closed issue"* — maintaining prose on an issue nobody
+will reopen, which is exactly the standard this arc keeps having to relearn.
+
+## RUN-P45-088 — ⚠️ #1646 FELL OUT OF THE MERGE QUEUE SILENTLY. The documented lapse, observed.
+
+Enqueued and **verified** in-queue earlier (`ok: PR 1646 is in the merge queue`). Re-checked now:
+`isInMergeQueue: false`, `mergeable: MERGEABLE`, **12/12 checks green**, state still OPEN. **No red, no
+notification, no trace of why** — the PR simply stopped being queued.
+
+⇒ This is [[feedback_auto_merge_arming_is_not_durable]] reproducing exactly: **arming is not a terminal
+state, and "I verified it was queued" has a shelf life.** The only terminal signal is `state: MERGED`.
+
+**Operational rule this sprint confirms, worth carrying to the template:** *verify in-queue when you
+enqueue, then RE-VERIFY until MERGED.* A queued PR that quietly drops out is indistinguishable from one
+still waiting — and in a sprint whose units keep re-conflicting each other, a PR that sits unmerged for
+an extra cycle is one that will need another rebuild + golden re-derive. Re-armed.
+
+⚠️ Note the compounding: three of tonight's five enqueue attempts did not do what a naive reading of
+their return would suggest — one timed out on a CONFLICT with no CI ever starting, one reported
+"already MERGED before queue membership was observable", and this one silently un-queued after a verified
+success. **Every one was caught only because `scripts/pr.sh` reads back STATE rather than trusting an
+exit code**, and because it was re-checked afterwards.
+
+## RUN-P45-089 — THE FIXTURE DELETION ROTTED A DOC CITATION. Second-order cascade, caught by the gate.
+
+`soundness` red on #1652 — **9 s in, on `check_doc_links.sh`**, not on the suite:
+`.claude/sprint-b/repair/R5-drains.md:336: DEAD -> test/must_fail_fixtures/1071-…/main.mdk`
+(5343 references / 320 files; **dead: 1**).
+
+⇒ **The same shape as my #1608 close, one layer out**: a deletion I ruled invalidated prose elsewhere in
+the tree. **Two cascades in one session from two different bookkeeping acts** — closing an issue with
+instruments pointing at it, and deleting a fixture with documents citing it.
+
+**Ruled: excuse it as `legitimate history`, do NOT edit the record.** `R5-drains.md` is a **dated sprint
+repair record** whose citation was **true when written**; rewriting it to match today's tree *"is how a
+historical record starts lying."* The gate already has that category and it is the larger of its two
+buckets (159 of 207 excusals). The excusal must say **where the content went** — absorbed into
+`1062-…/`, measurement preserved in its `why-absorbed:` block, #1071 closed as a duplicate — so a reader
+following the dead path is routed rather than left concluding it was lost.
+
+⚠️ **And the bound I asked W8 to check rather than assume:** the gate only sees **markdown path
+citations**, so `dead: 1` is a **lower bound** on the deletion's blast radius — a prose mention without a
+path, a fixture name in a ledger, or a directory name in a script would all be invisible to it.
+
+⭐ **Worth recording in the gate's favour:** this is `check_doc_links.sh` doing exactly its job, in 9
+seconds, on a change whose author had already run five gates and the census. **The cheap gate caught what
+the expensive ones structurally could not see** — none of `must_fail`, `iface_order`,
+`shadow_semantics`, `dict_semantics` or the census reads markdown.
+
+## RUN-P45-090 — S2 MERGED AND RE-VERIFIED. Its diff is now ONE non-comment line, and it caught its own false alarms.
+
+**#1645 `MERGEABLE`/`CLEAN`, 12/12 green.** Fetched **first**, then pinned `BASE=2c549fef` — the corrected
+ordering. **S1 is upstream, so this is no longer a stacked PR**, and the entire non-comment delta is:
+```
+-  … concreteReqMatchByIface (ifaceRefBare iface.irName) (a0::rest)
++  … concreteReqMatchByIface iface                        (a0::rest)
+```
+**The two status differences still hold and are still the only ones**, re-measured cell-for-cell against
+the post-Q1 base rather than carried over. 26-project corpus: `identical=24, ir-diff=0, status-diff=2,
+reject-text-diff=0`. **C3a YES · C3b YES.** legA **byte-identical to base and not in the PR at all** —
+the clean result now that S1's nine re-signings merged with S1.
+
+### ⭐⭐ Its Q1 third-arm check produced TWO FALSE ALARMS, and it caught both before reporting
+The naive comparison first said **8** fixtures moved, then **13**. Neither was the compiler:
+1. the older harness built `"$p/main.mdk"` where `$p` already ended in `/` from a `*/` glob, so every
+   project's diagnostic carries a **double slash**;
+2. the build's **success lines** (`built … -> <outdir>`, `kept IR:`) name **each run's own output
+   directory**.
+
+> *"Had I reported either, I'd have handed you a Q1 escalation that did not exist."*
+
+Both differentials then **proven fail-capable by injection** (poisoned → exactly `IR-moved=1,
+reject-text-moved=1`; restored → `0/0`). ⇒ **A differential's noise floor is part of the instrument**,
+and paths that embed a run's own directory are the classic source. Final: `status-moved=0`, nothing that
+landed underneath reached the corpus.
+
+### 🚨 A CI job FAILED WITH ZERO GATE STEPS EXECUTED — and "flake" is the wrong word
+`soundness`'s first run failed at **`Install toolchain = cancelled`**, and **every gate step after it
+reads `skipped`.** ⇒ **not a flake and not a pass: a coverage gap.** It re-ran the job (all steps
+`success`) **and**, because a skipped must-fail suite is both the tracker's self-drain and this branch's
+dedup evidence, **ran it locally too**: 98/98 reproduce, `check-self` PASS — independently re-confirming
+that #1579/#1457/#1302/#1326 all still reproduce.
+⇒ **Read the STEPS, not the job conclusion.** A red whose steps never ran and a red whose gate failed are
+opposite findings that look identical in the rollup.
+
+### 🚨 SHARED-SCRATCH CONTAMINATION: `git commit -F` picked up ANOTHER AGENT'S message file
+Its first merge commit landed under a foreign message (`test(1620): re-pose the pin cross-module…`) —
+**content correct** (both parents, its one-line delta), message wrong; amended. ⇒ **The per-session
+scratchpad is not as isolated as its path suggests, and `commit -F` will use whatever is there.**
+Relayed into the next reviewer's brief: keep scratch in a **private subdirectory**.
+Extends [[feedback_agents_read_each_others_gate_logs_in_shared_scratch]] from *reading* to *writing*.
+
+**`run_gates.sh` again earned its place** — it caught #1649's new gate phantom-skipping because that gate
+reads **three** oracles and the worktree had one, and counted it **FAILED rather than skipped**, which is
+the design working.
+
+## RUN-P45-091 — ONE focused lens on #1645, proportionate to a one-line diff
+Not two, and not a sweep: its evidence has been re-derived across two merges. The lens is aimed at **the
+one thing nobody has attacked — the WIDENING**: what is the nearest program this newly ACCEPTS and gets
+wrong, taken to the **executed binary**; can identity now arrive **wrong** (re-export chain,
+alias-qualified occurrence — the two shapes that have defeated identity checks in this file's history);
+and can an **`OriginBuiltin`** row be minted to reach the conflict arm **this PR is what makes
+reachable** — an invariant that is on record as **derived, not measured**.
+
+## RUN-P45-092 — THE DOC-LINK GATE HAS A STRUCTURAL BLIND SPOT: it cannot see DIRECTORY citations
+
+W8 fixed the dead link as ruled — one `REF` row in the `legitimate history` bucket, `R5-drains.md`
+untouched, reason **routing the reader** (absorbed into `1062-…`, #1071 closed as a duplicate of the OPEN
+#1062, deleted rather than re-pointed **because the harness forbids two pins on one issue**, with the
+measured MALFORMED result quoted *"so nobody re-litigates it from the doc side"*).
+`make docs-links` → `dead: 0`, rc 0; excused 207 → 208, `TODO(docs-cleanup)` debt **unchanged at 48**.
+`make agent-doc-symbols` also clean (1070 claims, dead 0).
+
+⭐ **It put DRAIN CONDITIONS on the exception it added** — **ORPHAN REF** when the repair record is
+archived, and **STALE REF** if a successor fixture ever appears at that path, *"which would itself be the
+signal that someone re-added the second pin."* **An exception that cannot expire is how an exceptions
+file becomes a skip-list.** Second time tonight the same agent attached a drain to something it added.
+
+### 🚨 The blast-radius answer, and it is a finding about the GATE
+I asked it to check whether `dead: 1` was a complete accounting. **It is not, and the reason is
+structural:** tier-2 bare-path extraction requires an extension from `.mdk .sh .c .md .txt .toml .yml`,
+so **a citation of a DIRECTORY is invisible to the gate.** Tonight's accounting: **1 flagged · 1
+real-but-structurally-invisible (`.claude/sprint-b/DECISIONS.md:583`, a live dead path no gate will ever
+report) · 4 pre-excused.** Two further shapes are invisible even *with* a path prefix — the brace form
+`{claim.txt,…}` and a `$W/`-prefixed variable path.
+
+⇒ **`dead: N` is a LOWER BOUND by construction**, for every deletion, not just this one. **Ruled: file
+it** (`S3`, `ws:testing`, under W8's name, separate from #1653 — different gate, different mechanism),
+with `DECISIONS.md:583` as the concrete instance and the honest cost note that extending tier-2 to
+directories *"would likely surface other directory citations tree-wide"*, so the fix is not free.
+
+**Why it earns a number rather than a memory:** `check_doc_links.sh` runs in **`soundness`**, a required
+check, and tonight it was **the only gate that caught the deletion's fallout — in 9 seconds — when five
+other gates and the census structurally could not see markdown at all.** A blind spot in the sole
+instrument covering a class deserves tracking, not remembering.
+
+### RULING: no exception row for the unflagged citation
+**An exception exists to excuse something the gate REPORTS.** Adding one for a citation the gate *cannot
+see* puts a row in a ratchet nothing validates — and W8's own `STALE REF` drain would never fire for it,
+leaving it unfalsifiable. Same *"leave history alone"* reasoning as `R5-drains.md`; the only difference
+is that one was flagged. **The issue is the right home for that fact, not the exceptions file.**
+
+## RUN-P45-093 — ✅ PHASE 4 MERGED (`21:55:05Z`). Five of six units on `main`. #1113 NOT yet closed.
+
+`main` now carries **#1638** (bite 0) · **#1640** (Q1) · **#1643** (S1) · **#1646** (Phase 4) ·
+**#1649** (the fourth-engine-arm gate). Open: **#1645** (S2, merged-and-verified, under one focused lens)
+· **#1651** (by-design pins) · **#1652** (the two owed pins).
+
+⚠️ **#1113 stays OPEN until exit criterion 2 is discharged**, not because Phase 4 is in doubt. The
+contract is explicit that criterion 2 *"is the one that can be quietly failed"*: **C4/I2 must be asked a
+THIRD time with the CONJUNCTION as the bar**, conjunct 1 and conjunct 2 reported **separately**, each
+naming the shape it still fails on. Closing #1113 on "Phase 4 landed" would be exactly that quiet
+failure.
+
+**W10 dispatched to answer it** — measurement and report only, no fix, no close, cold-built from current
+`main`. Briefed with: the spec's conjunction as written; **both prior partial answers** (Stage A's
+*"NEEDS-B-2"*, Phase 3′'s *"conjunct 2 only"*) so it can say what moved; the boundary stated as a
+property rather than a program list; and hand-derivation from DICT §8 I4/§3 **before any invocation**,
+since *the engines are what is under test and their output is not the oracle*.
+
+**Four questions it must answer rather than address:**
+1. **Is conjunct 1 true intra-module, or merely UNREPRESENTABLE?** Q1 rejects the colliding declaration —
+   *"correct"* and *"cannot be written"* are different answers and the arc's claim depends on which.
+2. **What survives CROSS-module?** Q1 does not reach it; S2 supplied identity only at the `requires`
+   seam; `keyForSite`'s supply is still bare-name keyed with its repoint (S3) **deferred behind #1354**.
+   **Name the shapes.**
+3. **Is conjunct 2 still order-invariant after five merges**, or did something regress it?
+4. ⭐ **The one interaction nobody has measured:** Phase 4's tier 2 is a blanket *"identity missed ⇒ try
+   spelling"* fallback whose safety rests on an **unstated invariant** (tier 1 never misses when the
+   query is stamped), verified when **no query carried identity**. **S2 has since supplied real identity
+   somewhere. Is that invariant still true on `main`?**
+
+**Refusal licensed explicitly, including the specific honest outcome:** if the answer is still *"conjunct
+2 only"*, say so — *"the arc has answered this partially twice and both times the partial answer was the
+valuable one."*
+
+## RUN-P45-094 — ⚠️ I ALMOST MANUFACTURED FIVE FALSE ALARMS FROM A TRUNCATED QUERY. Caught before acting.
+
+Doing the close-out tracker audit I ran `gh issue list --state open --limit 100` and tested membership.
+It reported **#1182, #1113, #1062, #1228 and #1354 as closed/absent.** Every one of those is **OPEN** —
+the repo has more than 100 open issues, so the list was **truncated and its ABSENCES carry no
+information.**
+
+**The inference was the error, not the data.** A bounded query's *presence* is evidence; its *absence*
+is only evidence if you have established the bound is not binding. Re-queried per issue:
+
+| issue | state | |
+|---|---|---|
+| #1182 | **OPEN** | correctly reopened; stayed open |
+| #1630 | **CLOSED** | drained by #1638 — the one legitimate closure |
+| #1113 #1062 #1228 #1354 #1619 #1620 #1641 #1642 #1644 #1647 #1648 #1653 #1654 | **OPEN** | as intended |
+
+⚠️ **The near-miss that matters:** #1182 reading as closed would have looked like a **THIRD desk-close of
+the same issue** — the exact pattern this sprint has already caught twice — and I would have gone
+chasing it, or worse, "re-reopened" an issue that was never closed and written a third indignant
+comment. **A false alarm shaped like a known real hazard is the most expensive kind**, because the
+pattern-match supplies the confidence the evidence lacks.
+
+⇒ Same class as tonight's other instrument failures, and the fifth of them:
+[[feedback_an_exit_code_graded_control_answers_the_wrong_question]] (exit codes),
+[[feedback_a_differential_is_blind_to_what_landed_under_you]] (both arms),
+`dead: N` as a lower bound (extension-gated extraction), a CI red with **zero steps executed**, and now a
+**truncated list read as a complete one.** In every case the instrument answered a narrower question than
+the one asked, and the answer looked like an answer.
+
+**Tracker state at close-out is CORRECT:** one issue closed tonight by a landed fix (#1630, via #1638's
+keyword with its sha), one closed by owner ruling with the record attached (#1608), **nothing else
+closed**, and every pin-bearing issue still open.
+
+## RUN-P45-095 — ⚠️ MY OWN BYTE-COMPARE RECIPE MANUFACTURES A FALSE MISMATCH ON ANY NON-ASCII BODY
+
+Verifying #1655's body I compared `gh pr view --json body --jq '.body|length'` (**3957**) against
+`wc -c` (**3982**) and read a **25-byte shortfall** — the exact signature of the silent truncation this
+sprint measured earlier tonight (16,769 of 29,266 bytes at exit 0).
+
+**It was not truncation. `jq`'s `length` on a string counts CODEPOINTS, not bytes**, and the body carries
+25 bytes of multibyte overhead from `⚠️ ⭐ ⇒ —`. Confirmed: the file is **3957 chars / 3982 bytes** —
+`jq` and `wc` were both right about different questions. A true `cmp` shows the readback is the file plus
+`jq`'s trailing newline: **content identical.**
+
+⇒ **The recipe I have been giving agents all night — "byte-compare the readback" — produces a FALSE
+ALARM on every body containing an emoji, an arrow or an em-dash**, i.e. on essentially every body written
+in this repo's house style. Under a real truncation the two numbers also disagree, so the check cannot
+distinguish "truncated" from "has unicode" **in the direction that matters.**
+
+**The correct check is `cmp` on two files** (or `jq -r` into a file and `diff`), never two length numbers
+from two tools that count different units:
+```sh
+gh pr view <N> --json body --jq '.body' > /tmp/readback
+cmp /tmp/readback <file>          # expect: EOF on <file> after N bytes  == identical + jq's newline
+```
+
+⭐ **Sixth instrument-mismatch of the night, and the first one inside my own verification advice.** The
+others were an exit code, both arms of a differential, an extension-gated extraction, a CI red with zero
+steps executed, and a truncated list. Same shape every time: **the instrument answered a narrower or
+different question than the one asked, and the answer looked like an answer.** That a *verification*
+recipe joined the list is the point — the checking apparatus is not exempt from the failure mode it
+checks for.
+
+## RUN-P45-096 — SPRINT RECORDS OPENED AS PR #1655 (docs only)
+RUN-P45-036 … 095 plus `DEBT.md`, and the **four measured `AGENTS.md` traps**: the `stdlib/*` two-arm
+unsoundness (which fails toward *manufacturing* findings), `MEDAKA_STRICT` on both arms, the
+golden-capture staleness gap, and mid-build source edits. `make docs-links` and `make agent-doc-symbols`
+both PASS. Body readback verified by `cmp`, not by length. Nothing closed by it.
