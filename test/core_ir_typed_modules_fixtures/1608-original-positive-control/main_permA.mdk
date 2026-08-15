@@ -1,0 +1,10 @@
+-- PERMUTATION A: `ints` imported before `strs`.
+-- #1608's ORIGINAL positive control, verbatim: the sibling case's program with
+-- its last line changed to `speak (Box 1)`, so the correct answer is the OTHER
+-- impl. The two `import` lines are BARE and bind no names; their order is
+-- cosmetic and must not change any answer.
+import box.{Box(..), Speak, speak}
+import ints
+import strs
+
+main = putStrLn (speak (Box 1))

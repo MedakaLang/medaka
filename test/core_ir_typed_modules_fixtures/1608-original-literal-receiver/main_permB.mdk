@@ -1,0 +1,8 @@
+-- PERMUTATION B: `strs` imported before `ints`. Identical to main_permA.mdk except
+-- for the order of the two BARE imports, which bind no names — so this program has
+-- the same meaning and must produce the same answer on every arm.
+import box.{Box(..), Speak, speak}
+import strs
+import ints
+
+main = putStrLn (speak (Box "s"))

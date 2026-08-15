@@ -146,3 +146,32 @@
 1608-cross-module-head-tycon-collision/main_permB | #1608 | boxstr boxstr\n
 1608-cross-module-dict-forwarding/main_permA | #1608 | [boxint] [boxint]\n
 1608-cross-module-dict-forwarding/main_permB | #1608 | [boxstr] [boxstr]\n
+#
+# ── #1608, THE REPORTER'S ORIGINAL PROGRAM (and its own positive control) ──────
+#
+# The two cases above are of the shape #1608 DESCRIBES. These two are the program
+# it was FILED ON, recovered verbatim from the sprint discriminator packet that
+# produced the issue (.claude/sprint-b/repair/R6-engines-ungated.md § "D-1", with
+# .claude/sprint-b/repair/F1-verdicts.md § "Finding 5" recording it being run).
+# Same verdict, now on the original: all three TYPED arms correct and
+# order-invariant, both UNTYPED drivers byte-identical to each other and wrong.
+#
+# ⚠️ NOTE THE PERMUTATION ASYMMETRY — it is the point of the pair, not an
+# oversight. Arg-tag picks whichever impl the import order reached first, a choice
+# INDEPENDENT of the program, so in any one ordering it is wrong for one of these
+# two programs and ACCIDENTALLY RIGHT for the other:
+#
+#   program                          permA (ints first)    permB (strs first)
+#   ───────────────────────────────  ────────────────────  ────────────────────
+#   1608-original-literal-receiver   boxint  ❌ (row below) boxstr  accidental
+#   1608-original-positive-control   boxint  accidental     boxstr  ❌ (row below)
+#
+# Hence exactly one row per case, on OPPOSITE sides. The unledgered halves are
+# graded as correct by tier 3, which is right — their value does equal the
+# hand-derived one — but that is the coin landing the right way, not the arm being
+# right, and each case's case.txt says so. This is also the only ledger row in
+# this file on the permB side: a "fix" that merely flipped which impl the untyped
+# fallback reaches first would drain the literal-receiver row and leave this one
+# wrong, and the gate would report that rather than going green.
+1608-original-literal-receiver/main_permA | #1608 | boxint\n
+1608-original-positive-control/main_permB | #1608 | boxstr\n

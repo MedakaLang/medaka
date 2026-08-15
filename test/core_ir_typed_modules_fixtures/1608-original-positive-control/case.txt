@@ -1,0 +1,78 @@
+CASE: #1608's ORIGINAL POSITIVE CONTROL, verbatim — the sibling case's program
+      with `speak (Box "s")` changed to `speak (Box 1)`, so the CORRECT answer is
+      the other impl.
+OWNS: #1608 (OPEN) — on the UNTYPED arms only, and in permB only; the exact
+      MIRROR of 1608-original-literal-receiver. Read that case first.
+
+── PROVENANCE ────────────────────────────────────────────────────────────────
+
+The reporter's own positive control, not one invented here.
+`.claude/sprint-b/repair/R6-engines-ungated.md` § "D-1" specifies it verbatim:
+
+    **Positive control** (must print `boxint`, or D-1 proves nothing): change
+    `main.mdk`'s last line to `speak (Box 1)` and re-run all four.
+
+and `.claude/sprint-b/repair/F1-verdicts.md` § "Finding 5 (R6-D1)" records it
+being run. The other three modules are byte-identical to the sibling case's.
+
+── HOW THE EXPECTED VALUE WAS ESTABLISHED ────────────────────────────────────
+
+NOT captured. Derived from the language semantics BEFORE any arm was run:
+
+  `1` is a numeric literal defaulting to `Int`, so `Box 1 : Box Int`. The goal is
+  `Speak (Box Int)`, which matches `impl Speak (Box Int)` and nothing else — the
+  two impls in scope are DISJOINT, so there is no overlap question.
+
+  ⇒ `speak (Box 1)`  ==  "boxint", in BOTH permutations.
+
+⚠️ Stated rather than glossed: this derivation leans on numeric-literal
+defaulting, which the sibling case does not — a String literal has a fixed type.
+That makes this case slightly the WEAKER of the two on its own. It is not here to
+be strong on its own; see below.
+
+── WHY THIS CASE EXISTS: it is what makes the pair discriminating ─────────────
+
+Both impls share head tycon `Box`, so an arg-tag dispatcher selects "whichever
+impl the import order reached first" — a choice that is INDEPENDENT of the
+program. That has a consequence the corpus otherwise could not see: in any single
+import order, arg-tag is WRONG for one of these two programs and ACCIDENTALLY
+RIGHT for the other.
+
+  program                    permA (ints first)   permB (strs first)
+  ─────────────────────────  ───────────────────  ───────────────────
+  ...literal-receiver (str)  boxint  ❌           boxstr  ⚠️ accidental
+  ...positive-control (int)  boxint  ⚠️ accidental boxstr  ❌
+
+So this is the ONLY case in this corpus whose untyped wrongness lands in permB
+rather than permA, and the only ledger row on that side. Concretely, it guards
+two things the sibling alone cannot:
+
+  1. A reading of the sibling that saw only one ordering could mistake an
+     accidental agreement for correctness. The mirror makes that impossible.
+  2. A "fix" that merely flipped which impl the untyped fallback reaches first
+     would drain the sibling's permA row while leaving this case's permB row
+     wrong — the gate reports it instead of going green.
+
+── MEASURED, 2026-08-15, on a cold `make medaka` at 2c549fef ─────────────────
+
+  arm                                        permA                 permB
+  ─────────────────────────────────────────  ────────────────────  ───────────
+  eval, TYPED   (`medaka run`)               boxint ✅             boxint ✅
+  native        (`medaka build` + exec)      boxint ✅             boxint ✅
+  ceval, TYPED  (core_ir_typed_modules_main) boxint ✅             boxint ✅
+  eval, UNTYPED (eval_modules_main)          boxint ⚠️ accidental  boxstr ❌
+  ceval, UNTYPED(core_ir_modules_main)       boxint ⚠️ accidental  boxstr ❌
+
+All ten cells exit 0.
+
+The TYPED arms print `boxint` here and `boxstr` on the sibling — i.e. they track
+the RECEIVER'S TYPE rather than emitting a constant, which is what makes their
+green fail-capable rather than vacuous. The UNTYPED arms print a value that
+depends only on the import order and not on the program, which is the defect.
+
+⚠️ permA is UNLEDGERED on purpose: its untyped value equals the hand-derived
+expectation, so the gate grades it correct. That is the coin landing the right
+way, not the arm being right — the sibling case's permA row is the same coin
+landing the other way.
+
+#1608 is left OPEN. This fixture does not close it.

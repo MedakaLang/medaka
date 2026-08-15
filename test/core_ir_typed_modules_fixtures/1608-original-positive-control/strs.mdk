@@ -1,0 +1,4 @@
+import box.{Box(..), Speak}
+
+impl Speak (Box String) where
+  speak _ = "boxstr"
