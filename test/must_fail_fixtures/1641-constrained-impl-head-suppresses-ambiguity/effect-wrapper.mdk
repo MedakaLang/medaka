@@ -1,0 +1,27 @@
+-- #1641 — NOT GRADED BY THIS GATE. main.mdk with the CONSTRAINT wrapper replaced by an
+-- EFFECT wrapper on the same head: `impl Zero (<Stdout> Int)`. Measured first-hand
+-- 2026-08-15, identical to main.mdk in every cell:
+--
+--   check -> 0 ("ok (2 declaration(s) checked, 0 errors)")
+--   run   -> 0, prints 5
+--   build -> 1, `error: emitter failed compiling …` +
+--            `runtime error [E-PANIC]: arg-tag dispatch for method 'zero': discriminating
+--             arg position not supplied (under-applied / unapplied method)`
+--
+-- It ships because it bounds the defect: this is NOT a property of `TyConstrained`, it is
+-- a property of the head projection the impl census reads, whose arm set peels neither
+-- wrapper. A fix that special-cases the constraint wrapper alone would leave this file
+-- broken while draining the pinned row — so check this file too before closing #1641.
+interface Zero a where
+  zero : a
+
+impl Zero (<Stdout> Int) where
+  zero = 0
+
+impl Zero Bool where
+  zero = False
+
+ignore2 : a -> Int
+ignore2 _ = 5
+
+main = println (ignore2 zero)
