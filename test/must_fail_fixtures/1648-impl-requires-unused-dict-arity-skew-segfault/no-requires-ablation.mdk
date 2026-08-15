@@ -1,0 +1,19 @@
+-- #1648 — NOT GRADED BY THIS GATE. THE ABLATION: main.mdk with `requires Eq a` DELETED
+-- and every other byte identical — same data declaration, same phantom `a`, same body,
+-- same call. It builds and RUNS CLEAN: binary exit 0, printing `7` (measured first-hand).
+--
+-- This is what isolates the trigger to the `requires` clause itself rather than to the
+-- phantom type parameter, the `match` body, or anything else main.mdk and control.mdk
+-- happen to differ in. control.mdk had to change the data declaration to give its body
+-- something to compare; this file changes nothing but the clause, and that alone removes
+-- the fault.
+data Box a = Box Int
+
+interface Same a where
+  bar : a -> Int
+
+impl Same (Box a) where
+  bar b = match b
+    Box n => n
+
+main = println (bar (Box 7))

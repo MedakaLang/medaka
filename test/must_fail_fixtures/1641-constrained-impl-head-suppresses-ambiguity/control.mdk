@@ -1,0 +1,40 @@
+-- #1641 CONTROL — the same interface, the same TWO impls, the same `ignore2`, the same
+-- call, built with the same `build` verb. What is flipped is that the obligation is
+-- DETERMINED: `zb : Bool` fixes the receiver, so there is a unique correct answer and the
+-- program must build.
+--
+-- ⭐ HAND-DERIVED: `zb : Bool` selects `impl Zero Bool` (`zero = False`), `ignore2` discards
+-- it and returns 5, so a correct compiler builds this and its binary prints `5`. Measured:
+-- check 0, run `5`, build 0, binary exit 0 printing `5`.
+--
+-- ⚠️ WHY THIS AND NOT THE OBVIOUS ONE-DIMENSION CONTROL. The natural control is
+-- plain-head-rejected.mdk — main.mdk with the wrapper removed, differing in exactly one
+-- byte-level dimension. IT CANNOT BE THE GRADED CONTROL: it is CORRECTLY REJECTED at exit
+-- 1, and this harness grades a control by requiring EXIT 0. Posing it as the control would
+-- report CONTROL-BROKE on a perfectly healthy tree, every run, forever. It ships here
+-- unGRADED instead, because it is the evidence for the claim's central comparison.
+--
+-- ⚠️ WHY THE WRAPPER IS ABSENT HERE, on purpose. The alternative control keeps the
+-- constrained head and only determines the receiver (constrained-determined.mdk, also
+-- shipped unGRADED, also measured green). That is the tighter one-dimension comparison,
+-- but it would BREAK under a legitimate fix direction — rejecting a constraint wrapper on
+-- an impl head outright — and a fix must never make this harness print CONTROL-BROKE's
+-- advice ("the ENVIRONMENT moved, not the bug"), which would be false. This control
+-- contains nothing any plausible fix for #1641 could reject, so it stays green under all
+-- of them and doubles as the post-fix regression guard.
+interface Zero a where
+  zero : a
+
+impl Zero Int where
+  zero = 0
+
+impl Zero Bool where
+  zero = False
+
+zb : Bool
+zb = zero
+
+ignore2 : a -> Int
+ignore2 _ = 5
+
+main = println (ignore2 zb)

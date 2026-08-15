@@ -1,0 +1,133 @@
+issue: 1641
+what: A CONSTRAINT WRAPPER ON AN IMPL HEAD SUPPRESSES THE AMBIGUITY REJECTION THE IDENTICAL
+what: PLAIN HEAD RECEIVES. With `impl Zero Int`, a program whose `zero` occurrence has an
+what: undetermined receiver and TWO impls of `Zero` is correctly refused at `check`, exit 1.
+what: Wrapping that one head as `impl Zero (Eq x => Int)` — the ONLY difference between the
+what: two files — makes `check` accept at exit 0 with zero diagnostics, and `medaka build`
+what: then dies INSIDE THE EMITTER at exit 1.
+what: ⭐ HAND-DERIVED, NOT CAPTURED, and the derivation is about what must NOT happen, so it
+what: does not need the engine to be trusted: `ignore2 : a -> Int` discards its argument, so
+what: the occurrence `zero` constrains nothing; `Zero` has two impls at DIFFERENT types with
+what: DIFFERENT bodies. ⇒ THERE IS NO CORRECT VALUE FOR THIS PROGRAM, and a compiler must
+what: refuse it — as it does refuse the plain-head sibling. A wrapper on one head cannot
+what: make an impl stop existing, so both must still count. ⇒ the acceptance is the defect.
+what: MEASURED FIRST-HAND on a cold `make medaka` of this branch (no borrowed emitter),
+what: 2026-08-15, MEDAKA_STRICT=1, env free of MEDAKA_ROOT/MEDAKA_EMITTER, every verb
+what: redirected to a file with $? read directly (never piped — `build`'s exit code does not
+what: survive a pipe, and this claim is entirely about a `build` exit code):
+what:   main.mdk (`Eq x => Int` head)  check 0 — "ok (2 declaration(s) checked, 0 errors)";
+what:                                  `check --json` -> {"diagnostics":[]}, exit 0;
+what:                                  run 0, prints 5;
+what:                                  build EXIT 1, printing
+what:                                    `error: emitter failed compiling <path>` and
+what:                                    `runtime error [E-PANIC]: arg-tag dispatch for
+what:                                     method 'zero': discriminating arg position not
+what:                                     supplied (under-applied / unapplied method)`
+what:                                  and producing NO binary                    <- PINNED
+what:   plain-head-rejected.mdk        check EXIT 1, ``Ambiguous instance for `Zero`. Cannot
+what:   (`Int` head, one byte-level     determine which impl; add a type annotation``;
+what:    dimension flipped)             run 1 and build 1 with the same diagnostic
+what:   control.mdk (plain head,       check 0, run `5`, build 0, binary exit 0 printing `5`
+what:    receiver DETERMINED)
+what:   constrained-determined.mdk     check 0, run `5`, build 0, binary exit 0 printing `5`
+what:   effect-wrapper.mdk             IDENTICAL to main.mdk in every cell — so this is a
+what:   (`<Stdout> Int` head)          property of the head projection the impl census
+what:                                  reads, not of the constraint wrapper specifically
+what: ⚠️ TWO IMPLS ARE LOAD-BEARING AND THIS IS WHY THE RESIDUAL WAS ONCE RECORDED AS
+what: UNOBSERVABLE. `checkUndeterminedObligation`'s rule is guarded on
+what: `implCountForIfaceU >= 2`; PR #1638's attempt used the constrained impl as the
+what: interface's ONLY impl, which cannot reach the guarded arm at all. The negative result
+what: was real and its scope was not stated. Do not "simplify" main.mdk by deleting the
+what: second impl — that un-reproduces the bug.
+what: ⚠️ WHAT IS NOT DERIVED BY ME: the mechanism. #1641 cites `censusHeadNameTy` projecting
+what: the head through `headTySpineNode`, which peels neither wrapper, so a wrapped head is
+what: absent from the census tag set the ambiguity rule counts over. I did not read that
+what: code or instrument the census; I am relaying the issue's citation. What IS mine is
+what: every cell above, including the effect-wrapper equivalence.
+cmd: build main.mdk
+exit: 1
+stdout-line: runtime error [E-PANIC]: arg-tag dispatch for method 'zero': discriminating arg position not supplied (under-applied / unapplied method)
+control: build control.mdk
+why-verb: `build`, and NOT `build-run`: no binary is produced at all, so there is nothing to
+why-verb: execute — `build` is this suite's only verb that grades a build FAILURE (its exit
+why-verb: code plus its combined stdout+stderr) as the pinned observation, which is exactly
+why-verb: this shape.
+why-verb: `check` was considered and NOT chosen, and the trade is worth stating because the
+why-verb: acceptance — not the panic — is the defect (see `what:`). A `check-json` pin would
+why-verb: read "exit 0 and an empty diagnostic list", which is an assertion that ANY
+why-verb: accepting program satisfies: it names nothing specific to #1641 and would keep
+why-verb: reading REPRO if the ambiguity rule were deleted wholesale. The `build` arm
+why-verb: carries a distinctive, exact string produced by nothing else in this corpus, and
+why-verb: it is downstream of the acceptance, so it cannot be reached unless the acceptance
+why-verb: happened. That is a strictly sharper handle on the same defect.
+why-verb: ⚠️ THE ONE FIX DIRECTION THIS VERB WOULD MIS-REPORT, stated so it cannot be missed:
+why-verb: teaching the EMITTER to cope while leaving `check` accepting would make `medaka
+why-verb: build` exit 0, drain this row, and print "close #1641" — WRONGLY. That is not a
+why-verb: fix, it is the defect going quiet (a severity INCREASE: the program would then
+why-verb: silently deliver one of two arbitrary impls). ⇒ IF THIS ROW DRAINS BECAUSE
+why-verb: `medaka build` NOW SUCCEEDS, DO NOT CLOSE #1641. Re-run `medaka check main.mdk`
+why-verb: first: if it still exits 0, the acceptance survives, and the pin must be re-posed
+why-verb: on the check arm rather than deleted. The drain is legitimate only when `check`
+why-verb: rejects.
+why-pin: exit 1 AND one exact whole line, via `stdout-line` rather than `stdout`. The full
+why-pin: output cannot be pinned with `stdout:` because its first line is
+why-pin: `error: emitter failed compiling <path>` and the harness invokes the verb with an
+why-pin: ABSOLUTE path ("$FIXDIR/<name>/main.mdk"), so that line embeds this checkout's
+why-pin: location and would differ on every machine. The pinned line is path-free, is the
+why-pin: emitter's own panic text, and is not produced by any other program in this corpus.
+why-pin: This harness's `stdout-line` is a LITERAL WHOLE-LINE match — not a substring, not
+why-pin: a regex — so an unrelated build failure produces a different line and FAILS rather
+why-pin: than matching, which is the "it crashed" trap this suite forbids.
+why-pin: A known cost, recorded rather than hidden: the pinned line is prose, so a pure
+why-pin: REWORDING of that panic message would drain this row without fixing anything. There
+why-pin: is no `code`-keyed alternative — this is `medaka build`'s raw output, not a `check
+why-pin: --json` diagnostic, so the stable-`code` mechanism (`diag-code`) is unavailable
+why-pin: here. If you are rewording that panic, update this line in the same commit; if you
+why-pin: are reading a drain, check whether the message merely moved before closing anything.
+why-pin: EVERY GENUINE FIX DIRECTION DRAINS THIS ROW:
+why-pin:   * make the impl census see through the wrapper (the issue's own suggested fix)
+why-pin:     -> the ambiguity rule fires -> `check` rejects, `build` exits 1 with the
+why-pin:     ``Ambiguous instance for `Zero`…`` diagnostic INSTEAD of the E-PANIC line ->
+why-pin:     the stdout-line assertion fails -> DRAINED (with the exit code unchanged, which
+why-pin:     is precisely why the exit code alone would NOT have been an adequate pin here);
+why-pin:   * reject a constraint wrapper on an impl head outright -> a different diagnostic,
+why-pin:     same result -> DRAINED.
+why-control: control.mdk is the same interface, the same TWO impls, the same `ignore2` and
+why-control: the same call, graded with the SAME `build` verb, so it exercises the whole
+why-control: path this pin blames — front end, obligation resolution, dict emission, the
+why-control: emitter — and a red there means that path broke in general. The harness then
+why-control: says CONTROL-BROKE, a verdict distinct from DRAINED.
+why-control: ⚠️ THE POLARITY IS INVERTED HERE AND THE HARNESS CANNOT EXPRESS THE OBVIOUS
+why-control: CONTROL. The natural control is plain-head-rejected.mdk — main.mdk with the
+why-control: wrapper removed, exactly one dimension flipped. It is CORRECTLY REJECTED at
+why-control: exit 1, and this harness grades a control by requiring EXIT 0, so posing it as
+why-control: `control:` would report CONTROL-BROKE on a healthy tree on every run, forever.
+why-control: The comparison it makes is the heart of the claim, so it ships as an unGRADED
+why-control: file and its measurement is recorded under `what:` above. This is a real
+why-control: expressiveness limit of the harness, stated rather than worked around: there is
+why-control: no assertion kind here for "this neighbouring program must FAIL".
+why-control: The graded control instead flips a different dimension — whether the obligation
+why-control: is DETERMINED (`zb : Bool`) — and drops the wrapper. Two dimensions, chosen
+why-control: deliberately over the tighter one-dimension alternative
+why-control: (constrained-determined.mdk, shipped unGRADED and measured green): a fix that
+why-control: rejected constraint wrappers on impl heads outright would break that tighter
+why-control: control and make this gate print CONTROL-BROKE's advice ("the ENVIRONMENT
+why-control: moved, not the bug") about a genuine fix. control.mdk contains nothing any
+why-control: plausible fix for #1641 could reject, so it stays green under every fix
+why-control: direction and doubles as the post-fix regression guard.
+why-control: Per #1144 a control is graded on its EXIT CODE ONLY. Under the `build` verb
+why-control: there is no value to assert — the graded exit is the compiler's — so the
+why-control: correctness of what it builds (`5`) is this claim's own recorded observation
+why-control: (binary executed separately: exit 0, prints `5`), not the gate's.
+why-note: THREE files here are NOT graded (nothing but `cmd:` and `control:` is executed):
+why-note: plain-head-rejected.mdk (the inverted-polarity control the harness cannot take),
+why-note: constrained-determined.mdk (the tighter control it would have been unsafe to
+why-note: grade), and effect-wrapper.mdk (which bounds the defect beyond `TyConstrained`).
+why-note: Each carries its own measurement in its header.
+why-note: A FIX THAT SPECIAL-CASES THE CONSTRAINT WRAPPER ALONE IS INCOMPLETE and this row
+why-note: would drain anyway: check effect-wrapper.mdk before closing #1641.
+why-note: No open issue owned this residual before #1641 — `censusHeadNameTy`'s comment
+why-note: defers the ruling to F-3c (#1155), which is CLOSED.
+why-note: This fixture uses the `build` verb and therefore needs clang; the gate's clang
+why-note: guard fails LOUDLY (exit 2) rather than skipping, which is intended — `soundness`,
+why-note: where this suite runs, has clang.

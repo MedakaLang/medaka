@@ -1,0 +1,22 @@
+-- #1648 — NOT GRADED BY THIS GATE. Row A of the issue's table: the body ignores the dict
+-- AND the value. It has the SAME arity skew as main.mdk (`define …(i64 %arg0)` against a
+-- 2-argument call), but nothing reads the mis-bound parameter, so the binary happens to
+-- print the right answer: `22`, exit 0.
+--
+-- ⚠️ THIS IS WHY IT IS NOT THE PIN. It passes today, so an assertion on it could not
+-- fail, and a fixture that cannot fail pins nothing. It is kept here because it is the
+-- dangerous cell, not the harmless one: a fix validated against this shape alone would
+-- look correct while leaving the skew in place. Any fix for #1648 should also be checked
+-- against this file's emitted IR, not just its exit code.
+--
+-- Measured first-hand alongside main.mdk: check 0, run `22`, build 0, binary exit 0
+-- printing `22`.
+data Box a = Box Int
+
+interface Same a where
+  bar : a -> Int
+
+impl Same (Box a) requires Eq a where
+  bar _ = 22
+
+main = println (bar (Box 7))
