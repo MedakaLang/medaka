@@ -3231,3 +3231,41 @@ wrong, taken to the **executed binary**; can identity now arrive **wrong** (re-e
 alias-qualified occurrence — the two shapes that have defeated identity checks in this file's history);
 and can an **`OriginBuiltin`** row be minted to reach the conflict arm **this PR is what makes
 reachable** — an invariant that is on record as **derived, not measured**.
+
+## RUN-P45-092 — THE DOC-LINK GATE HAS A STRUCTURAL BLIND SPOT: it cannot see DIRECTORY citations
+
+W8 fixed the dead link as ruled — one `REF` row in the `legitimate history` bucket, `R5-drains.md`
+untouched, reason **routing the reader** (absorbed into `1062-…`, #1071 closed as a duplicate of the OPEN
+#1062, deleted rather than re-pointed **because the harness forbids two pins on one issue**, with the
+measured MALFORMED result quoted *"so nobody re-litigates it from the doc side"*).
+`make docs-links` → `dead: 0`, rc 0; excused 207 → 208, `TODO(docs-cleanup)` debt **unchanged at 48**.
+`make agent-doc-symbols` also clean (1070 claims, dead 0).
+
+⭐ **It put DRAIN CONDITIONS on the exception it added** — **ORPHAN REF** when the repair record is
+archived, and **STALE REF** if a successor fixture ever appears at that path, *"which would itself be the
+signal that someone re-added the second pin."* **An exception that cannot expire is how an exceptions
+file becomes a skip-list.** Second time tonight the same agent attached a drain to something it added.
+
+### 🚨 The blast-radius answer, and it is a finding about the GATE
+I asked it to check whether `dead: 1` was a complete accounting. **It is not, and the reason is
+structural:** tier-2 bare-path extraction requires an extension from `.mdk .sh .c .md .txt .toml .yml`,
+so **a citation of a DIRECTORY is invisible to the gate.** Tonight's accounting: **1 flagged · 1
+real-but-structurally-invisible (`.claude/sprint-b/DECISIONS.md:583`, a live dead path no gate will ever
+report) · 4 pre-excused.** Two further shapes are invisible even *with* a path prefix — the brace form
+`{claim.txt,…}` and a `$W/`-prefixed variable path.
+
+⇒ **`dead: N` is a LOWER BOUND by construction**, for every deletion, not just this one. **Ruled: file
+it** (`S3`, `ws:testing`, under W8's name, separate from #1653 — different gate, different mechanism),
+with `DECISIONS.md:583` as the concrete instance and the honest cost note that extending tier-2 to
+directories *"would likely surface other directory citations tree-wide"*, so the fix is not free.
+
+**Why it earns a number rather than a memory:** `check_doc_links.sh` runs in **`soundness`**, a required
+check, and tonight it was **the only gate that caught the deletion's fallout — in 9 seconds — when five
+other gates and the census structurally could not see markdown at all.** A blind spot in the sole
+instrument covering a class deserves tracking, not remembering.
+
+### RULING: no exception row for the unflagged citation
+**An exception exists to excuse something the gate REPORTS.** Adding one for a citation the gate *cannot
+see* puts a row in a ratchet nothing validates — and W8's own `STALE REF` drain would never fire for it,
+leaving it unfalsifiable. Same *"leave history alone"* reasoning as `R5-drains.md`; the only difference
+is that one was flagged. **The issue is the right home for that fact, not the exceptions file.**
