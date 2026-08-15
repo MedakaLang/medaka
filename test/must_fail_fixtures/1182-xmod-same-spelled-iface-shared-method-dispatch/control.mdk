@@ -1,0 +1,21 @@
+-- CONTROL: flips exactly ONE dimension — the two interfaces' METHOD NAMES are
+-- distinct (`m` vs `mz`), so the method-keyed candidate set cannot mix the two
+-- classes. Everything else is byte-for-byte the shape of main.mdk: same two
+-- same-spelled `Same` interfaces, same shared head `Box a`, same `requires Eq a`
+-- on one of them, same `Opaque` payload with no `Eq`.
+--
+-- Per #1144 this harness grades a control on its EXIT CODE ONLY, so this control
+-- ASSERTS the correct value and panics otherwise rather than printing it — a
+-- control that merely printed would exit 0 either way and could never fail.
+-- Proven able to fail: change the comparand to a value the program cannot
+-- produce and `medaka run control.mdk` exits 1 with `runtime error [E-PANIC]`.
+import shared.{Box(..), Opaque(..)}
+import cmod
+import ymod.{useItZ}
+
+main =
+  let got = useItZ (Box Opaque)
+  if got == 1 then
+    println "control-ok:1"
+  else
+    panic "control expected 1, got \{intToString got}"

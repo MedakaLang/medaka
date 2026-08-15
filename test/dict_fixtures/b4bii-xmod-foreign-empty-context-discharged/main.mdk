@@ -1,0 +1,31 @@
+-- §8 I4 + §6 C2 — THE SOUNDNESS HOLE B-4b-ii CLOSES, and the only direction the
+-- bite's other fixtures do not cover: they exhibit the FALSE-REJECT direction,
+-- this one exhibits the FALSE-ACCEPT.
+--
+-- `viaA` is amod's, so its `Same a` constraint is `amod.Same`, and the impl that
+-- must witness it at `Box Opaque` is amod's `impl Same (Box a) requires Eq a`.
+-- That context grounds to `Eq Opaque`, which has no instance anywhere in this
+-- program. SPEC ANSWER, hand-derived before any binary was run: REJECT.
+--
+-- 🚨 MEASURED AS A SILENT FALSE ACCEPT ON A BASE BINARY cold-built from
+-- origin/main @ 2c549fef with its own stdlib/runtime: `check` exit 0, `run` exit
+-- 0 printing 1, `build` exit 0, executed binary printing 1. The checker reached
+-- ZMOD's row by SPELLING and discharged ITS empty context in place of amod's —
+-- so a program whose selected impl declares an unsatisfiable constraint ran to
+-- completion with no diagnostic. On this binary all three verbs reject with
+-- `T-NO-IMPL`.
+--
+-- ⚠️ THE VALUE 1 IS WHAT MAKES IT SOUNDNESS AND NOT MERELY ACCEPTANCE. 1 is
+-- zmod's body. The base binary did not just accept the program, it ran the
+-- OTHER class's method for it.
+--
+-- ⚠️ Read this fixture beside `b4bii-xmod-same-spelled-iface-requires-decl-order`
+-- (false reject, drained) and `test/must_fail_fixtures/1182-xmod-same-spelled-
+-- iface-shared-method-dispatch` (wrong dispatch, NOT drained and pre-existing).
+-- The three are one collision seen from three sides; only this one and the
+-- decl-order pair move on this bite.
+import shared.{Box(..), Opaque(..)}
+import zmod
+import amod.{viaA}
+
+main = println (viaA (Box Opaque))

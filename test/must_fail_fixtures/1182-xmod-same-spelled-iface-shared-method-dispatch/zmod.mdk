@@ -1,0 +1,12 @@
+import shared.{Box(..)}
+
+export interface Same a where
+  m : a -> Int
+
+export impl Same (Box a) where
+  m _ = 1
+
+-- A constrained standalone: calling it STAMPS A DICT ROUTE, which is the leg
+-- that picks the wrong impl.
+export useIt : Same a => a -> Int
+useIt x = m x

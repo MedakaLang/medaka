@@ -1,0 +1,5 @@
+public export data Box a = Box a
+
+-- No `Eq` instance. That absence is the assertion: the selected impl DEMANDS
+-- `Eq a` at `a := Opaque`, and nothing in this program can witness it.
+public export data Opaque = Opaque

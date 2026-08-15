@@ -20299,11 +20299,36 @@ entailInst implTable _ m encl tag (EKNestedTop keyTable iface _ depth rest) =
   -- `core_ir_lower.ifaceDeclHeadUnique` does not follow.  Whoever supplies identity
   -- here owns that decision explicitly.
   --
-  -- MEASURED that leaving it bare is safe for what B-4b-ii DID move: a program whose
-  -- checker leg now selects by identity and whose route leg still selects by spelling
-  -- routes CORRECTLY on all three engines and in the executed binary
-  -- (`test/dict_fixtures/b4bii-xmod-req-route-*`).  That is an observation on the
-  -- shapes reachable today, not a proof — see the PR's `nearest miss:`.
+  -- 🚨 THIS PARAGRAPH USED TO CLAIM LEAVING IT BARE WAS "MEASURED SAFE FOR WHAT B-4b-ii
+  -- DID MOVE".  THAT IS FALSE, AND THE FALSIFYING PROGRAM IS ONE EDIT AWAY FROM THE
+  -- FIXTURE THE CLAIM CITED.  What is actually true is narrower, and the boundary is the
+  -- METHOD NAMES:
+  --
+  --   * DISJOINT method names (`bar` vs `foo`) — safe, and measured:
+  --     `test/dict_fixtures/b4bii-xmod-req-route-leg-still-spelling` routes correctly on
+  --     all three engines and in the executed binary.  The METHOD-keyed selector
+  --     disambiguates the two same-spelled classes for free, because each class's method
+  --     name occurs in exactly one of them.  The cited fixture had that property, which
+  --     is precisely why it could not falsify the claim it was cited for.
+  --   * COLLIDING method names (`m` vs `m`) — NOT safe.  That disambiguation vanishes,
+  --     the route leg's spelling scan reaches the OTHER module's row, and the built binary
+  --     prints ITS value at exit 0.  Pinned, with the emitted IR read rather than
+  --     inferred, at `test/must_fail_fixtures/1182-xmod-same-spelled-iface-shared-method-
+  --     dispatch`: the stamped dict's head word is amod's, so the FIRST arm of the
+  --     dispatch chain fires and zmod's arm is never reached — and that dict also carries
+  --     a cell for a constraint with no instance anywhere in the program.
+  --
+  -- ⚠️ THE WRONG DISPATCH IS PRE-EXISTING — this bite neither causes nor fixes it, and
+  -- the control proving that is in the fixture's own claim: change the payload to a type
+  -- that HAS `Eq` and both arms accept, both print the same wrong value, and the emitted
+  -- IR is BYTE-IDENTICAL.  What this bite changes is that a FALSE REJECT was accidentally
+  -- SHIELDING that shape, so the observable moves loud → silent.  Under `AGENTS.md`'s
+  -- ladder that is a severity INCREASE, which is why it is recorded here and pinned
+  -- rather than left for the next reader to rediscover.
+  --
+  -- So supplying identity at THIS site is not merely optional — it is what would close
+  -- the shape above.  It is still not this bite's to do, for the reason in the paragraph
+  -- above: the origin would have to be INVENTED here, not acquired.
   let routeKey = fromOption tag (keyForSiteByIface (ifaceRefBare iface) (m::rest))
   (
     RKey routeKey (argImplRequiresRoutes implTable keyTable iface encl tag m rest depth),

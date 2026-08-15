@@ -1,0 +1,11 @@
+import shared.{Box(..)}
+
+-- An UNRELATED module that merely shares the spelling `Same` and the method
+-- spelling `m`, at the identical signature, impl'd at the SAME head — and
+-- carrying NO context at all. Its empty `requires` is what the pre-B-4b-ii
+-- checker discharged in amod's place.
+export interface Same a where
+  m : a -> Int
+
+export impl Same (Box a) where
+  m _ = 1
