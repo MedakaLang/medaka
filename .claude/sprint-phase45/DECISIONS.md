@@ -3176,3 +3176,58 @@ path, a fixture name in a ledger, or a directory name in a script would all be i
 seconds, on a change whose author had already run five gates and the census. **The cheap gate caught what
 the expensive ones structurally could not see** — none of `must_fail`, `iface_order`,
 `shadow_semantics`, `dict_semantics` or the census reads markdown.
+
+## RUN-P45-090 — S2 MERGED AND RE-VERIFIED. Its diff is now ONE non-comment line, and it caught its own false alarms.
+
+**#1645 `MERGEABLE`/`CLEAN`, 12/12 green.** Fetched **first**, then pinned `BASE=2c549fef` — the corrected
+ordering. **S1 is upstream, so this is no longer a stacked PR**, and the entire non-comment delta is:
+```
+-  … concreteReqMatchByIface (ifaceRefBare iface.irName) (a0::rest)
++  … concreteReqMatchByIface iface                        (a0::rest)
+```
+**The two status differences still hold and are still the only ones**, re-measured cell-for-cell against
+the post-Q1 base rather than carried over. 26-project corpus: `identical=24, ir-diff=0, status-diff=2,
+reject-text-diff=0`. **C3a YES · C3b YES.** legA **byte-identical to base and not in the PR at all** —
+the clean result now that S1's nine re-signings merged with S1.
+
+### ⭐⭐ Its Q1 third-arm check produced TWO FALSE ALARMS, and it caught both before reporting
+The naive comparison first said **8** fixtures moved, then **13**. Neither was the compiler:
+1. the older harness built `"$p/main.mdk"` where `$p` already ended in `/` from a `*/` glob, so every
+   project's diagnostic carries a **double slash**;
+2. the build's **success lines** (`built … -> <outdir>`, `kept IR:`) name **each run's own output
+   directory**.
+
+> *"Had I reported either, I'd have handed you a Q1 escalation that did not exist."*
+
+Both differentials then **proven fail-capable by injection** (poisoned → exactly `IR-moved=1,
+reject-text-moved=1`; restored → `0/0`). ⇒ **A differential's noise floor is part of the instrument**,
+and paths that embed a run's own directory are the classic source. Final: `status-moved=0`, nothing that
+landed underneath reached the corpus.
+
+### 🚨 A CI job FAILED WITH ZERO GATE STEPS EXECUTED — and "flake" is the wrong word
+`soundness`'s first run failed at **`Install toolchain = cancelled`**, and **every gate step after it
+reads `skipped`.** ⇒ **not a flake and not a pass: a coverage gap.** It re-ran the job (all steps
+`success`) **and**, because a skipped must-fail suite is both the tracker's self-drain and this branch's
+dedup evidence, **ran it locally too**: 98/98 reproduce, `check-self` PASS — independently re-confirming
+that #1579/#1457/#1302/#1326 all still reproduce.
+⇒ **Read the STEPS, not the job conclusion.** A red whose steps never ran and a red whose gate failed are
+opposite findings that look identical in the rollup.
+
+### 🚨 SHARED-SCRATCH CONTAMINATION: `git commit -F` picked up ANOTHER AGENT'S message file
+Its first merge commit landed under a foreign message (`test(1620): re-pose the pin cross-module…`) —
+**content correct** (both parents, its one-line delta), message wrong; amended. ⇒ **The per-session
+scratchpad is not as isolated as its path suggests, and `commit -F` will use whatever is there.**
+Relayed into the next reviewer's brief: keep scratch in a **private subdirectory**.
+Extends [[feedback_agents_read_each_others_gate_logs_in_shared_scratch]] from *reading* to *writing*.
+
+**`run_gates.sh` again earned its place** — it caught #1649's new gate phantom-skipping because that gate
+reads **three** oracles and the worktree had one, and counted it **FAILED rather than skipped**, which is
+the design working.
+
+## RUN-P45-091 — ONE focused lens on #1645, proportionate to a one-line diff
+Not two, and not a sweep: its evidence has been re-derived across two merges. The lens is aimed at **the
+one thing nobody has attacked — the WIDENING**: what is the nearest program this newly ACCEPTS and gets
+wrong, taken to the **executed binary**; can identity now arrive **wrong** (re-export chain,
+alias-qualified occurrence — the two shapes that have defeated identity checks in this file's history);
+and can an **`OriginBuiltin`** row be minted to reach the conflict arm **this PR is what makes
+reachable** — an invariant that is on record as **derived, not measured**.
