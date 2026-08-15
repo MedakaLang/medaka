@@ -1,0 +1,15 @@
+-- PERMUTATION A: intbox imported before strbox.
+-- The two `import` lines below bind NO names (bare imports); their only effect is
+-- to bring each module's impls into scope. Their ORDER is therefore cosmetic and
+-- must not change any answer.
+import boxes.{Box(..), Tagged, tag}
+import intbox
+import strbox
+
+bi : Box Int
+bi = Box 1
+
+bs : Box String
+bs = Box "s"
+
+main = putStrLn (tag bi ++ " " ++ tag bs)

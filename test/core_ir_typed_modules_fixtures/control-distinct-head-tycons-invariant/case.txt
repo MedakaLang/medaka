@@ -1,0 +1,30 @@
+CASE: THE CONTROL. Same interface, same cross-module layout, same permutation
+      axis — but the two impls have DISTINCT head tycons (`Dog` / `Cat`).
+OWNS:  nothing. ⚠️ DO NOT LEDGER THIS CASE.
+
+── HOW THE EXPECTED VALUE WAS ESTABLISHED ────────────────────────────────────
+
+NOT captured. `tag Dog` can only match `impl Tagged Dog`; `tag Cat` can only match
+`impl Tagged Cat`. There is exactly one candidate per occurrence under any
+selection rule whatsoever.
+
+  ⇒ "woof meow", in BOTH permutations, on EVERY arm — including the untyped ones,
+    because the argument's constructor tag alone determines the answer here.
+
+── WHAT THIS CASE IS FOR ─────────────────────────────────────────────────────
+
+It is what makes the two #1608 rows evidence about the CANDIDATE SET rather than
+about cross-module interface dispatch in general. Without it, "the untyped arms
+are wrong" would be consistent with the untyped drivers being broken for any
+cross-module method at all, and the ledger rows would be pinning a much larger
+defect than they claim.
+
+🚨 If this case ever starts diverging — between permutations, between arms, or
+from "woof meow" — the finding is LARGER than any row in the ledger claims. FILE
+IT. Do not absorb it with a ledger row: a control that has been ledgered has
+stopped being a control, and the corpus loses the only thing that bounds its
+sibling rows.
+
+── MEASURED, 2026-08-15, on a cold `make medaka` of this branch ──────────────
+
+All five arms, both permutations: "woof meow". Invariant, as derived.

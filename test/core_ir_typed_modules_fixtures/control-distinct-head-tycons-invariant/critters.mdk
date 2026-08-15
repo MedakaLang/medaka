@@ -1,0 +1,8 @@
+-- Same interface shape as the two #1608 cases, but the two impls below have
+-- DISTINCT head tycons, so the argument's constructor tag alone determines the
+-- answer and every dispatcher — route-consuming or tag-guessing — gets it right.
+public export data Dog = Dog
+public export data Cat = Cat
+
+export interface Tagged a where
+  tag : a -> String

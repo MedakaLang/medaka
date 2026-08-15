@@ -1,0 +1,14 @@
+-- PERMUTATION B: strbox imported before intbox. Byte-identical to main_permA.mdk
+-- except for the order of the two bare imports.
+import boxes.{Box(..), Tagged, tag}
+import relay.{relay}
+import strbox
+import intbox
+
+bi : Box Int
+bi = Box 1
+
+bs : Box String
+bs = Box "s"
+
+main = putStrLn (relay bi ++ " " ++ relay bs)

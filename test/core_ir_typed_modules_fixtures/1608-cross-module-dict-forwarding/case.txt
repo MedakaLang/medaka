@@ -1,0 +1,38 @@
+CASE: the same two-impl collision, reached through a CONSTRAINED POLYMORPHIC
+      forwarder in a fourth module (`relay : Tagged a => a -> String`).
+OWNS:  #1608 (OPEN) — on the UNTYPED arms only; see the sibling case's case.txt.
+
+── HOW THE EXPECTED VALUE WAS ESTABLISHED ────────────────────────────────────
+
+NOT captured. Derived before running anything:
+
+  `relay`'s body contains `tag x` at type `a`, which cannot be resolved where it
+  is written — `relay` receives the `Tagged` dictionary from its call site. At
+  `relay bi` the caller instantiates `a := Box Int` and must hand over the
+  `Tagged (Box Int)` impl; at `relay bs`, `Tagged (Box String)`. `relay` wraps
+  its result in brackets.
+
+  ⇒ `relay bi ++ " " ++ relay bs`  ==  "[boxint] [boxstr]", in BOTH permutations.
+
+── WHY THIS CASE EXISTS SEPARATELY FROM THE DIRECT ONE ───────────────────────
+
+The sibling case's `tag bi` is resolved AT the call site, where the receiver's
+type is syntactically to hand. Here the selection is made at the call site but
+CONSUMED one module away, through a dictionary parameter. A dispatcher can be
+right about the first and wrong about the second — that is the ⭐ "ask the nearest
+program a fix does not cover" shape — so both are graded. They are not
+redundant: this is the only case in this corpus where an impl is chosen in a
+module that does not contain the method occurrence that uses it.
+
+── MEASURED, 2026-08-15, on a cold `make medaka` of this branch ──────────────
+
+  arm                                        permA                permB
+  ─────────────────────────────────────────  ───────────────────  ───────────────────
+  eval, TYPED   (`medaka run`)               [boxint] [boxstr] ✅ [boxint] [boxstr] ✅
+  native        (`medaka build` + exec)      [boxint] [boxstr] ✅ [boxint] [boxstr] ✅
+  ceval, TYPED  (core_ir_typed_modules_main) [boxint] [boxstr] ✅ [boxint] [boxstr] ✅
+  eval, UNTYPED (eval_modules_main)          [boxint] [boxint] ❌ [boxstr] [boxstr] ❌
+  ceval, UNTYPED(core_ir_modules_main)       [boxint] [boxint] ❌ [boxstr] [boxstr] ❌
+
+Same reading as the sibling case, on the harder shape: the typed arms are correct
+and order-invariant, and the two untyped drivers are byte-identical to each other.
