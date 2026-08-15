@@ -1,0 +1,164 @@
+issue: 1647
+what: An impl body is typechecked against the WRONG SAME-SPELLED INTERFACE'S declared
+what: method signature ON THE EMIT PATH ONLY. Two modules each declare an interface
+what: spelled `Speak` with a method spelled `speak`, at DIFFERENT signatures
+what: (`String -> x -> String` in speakera, `x -> String -> String` in speakerb). The
+what: program is valid; `medaka check` accepts it and `medaka run` executes it
+what: CORRECTLY; `medaka build` dies IN THE EMITTER at exit 1, naming a type from the
+what: OTHER module's reading of the body.
+what: ⭐ HAND-DERIVED, NOT CAPTURED. DICT-SEMANTICS §8 I4: an interface is identified
+what: by (module, name), so speakera::Speak and speakerb::Speak are two DISTINCT
+what: interfaces that merely share a spelling, and each impl body is checked against
+what: ITS OWN module's declaration. ⇒ `speak "x" DogA` = "A(x)" and `speak DogB "y"` =
+what: "B(y)", so a CORRECT compiler builds main.mdk and the binary prints A(x) then
+what: B(y) at exit 0. The interpreter agrees (`run` prints exactly that), so the right
+what: answer is not in dispute — only the emit path is.
+what: MEASURED FIRST-HAND on a cold `make medaka` of this branch (no borrowed emitter),
+what: 2026-08-16, MEDAKA_STRICT=1, env free of MEDAKA_ROOT/MEDAKA_EMITTER, every verb
+what: redirected to a file with $? read directly (never piped — `build`'s exit code
+what: does not survive a pipe). One dimension varied: do the two same-spelled `speak`
+what: methods have the SAME signature?
+what:   main.mdk          (signatures DIFFER)   check 0 (`main : Unit`, no diagnostics)
+what:                      · run 0 printing `A(x)` `B(y)` · build 1, combined output:
+what:                        error: emitter failed compiling <path>/main.mdk
+what:                        runtime error [E-PANIC]: no impl of method 'display' for
+what:                        type 'DogB'                                     <- PINNED
+what:                      IDENTICAL ON 3 CONSECUTIVE BUILDS (exit 1, same line).
+what:   control.mdk       (signatures IDENTICAL) check 0 · build 0 · binary exit 0
+what:                      printing `A(x)` `B(y)`
+what:   swapped-order.mdk (main.mdk, two import lines SWAPPED, nothing else) run 0
+what:                      printing `A(x)` `B(y)` · build 1, `... for type 'DogA'` —
+what:                      the emitter names a DIFFERENT TYPE per import order.
+what:   illtyped-probe.mdk (body ill-typed under its OWN signature, well-typed only
+what:                      under the other module's) check REJECTS at exit 1:
+what:                      `illtypedb.mdk:11:26: Type mismatch: DogC vs String`
+what: MECHANISM (verified first-hand in the source on this branch, not relayed):
+what: `inferOneImpl` destructures `DImpl { iface, tys, reqs, methods, ... }` and
+what: `implOrigin` is DROPPED BY THE `...`, so only the bare interface SPELLING reaches
+what: `inferImplMethod` -> `ifaceMethodTyResolved`, which has two arms with different
+what: selection rules. Its FAST arm (guarded by `useFastIfaceMethodTy`, the CHECK path)
+what: reads `methodIfaceParamsRef`, which `applyMethodScopeOverrides` has overlaid PER
+what: MODULE — which is why check is right. Its SLOW arm (the EMIT path) falls through
+what: to `ifaceMethodTy`, a linear scan of `allProg` matching `name == iface`, so THE
+what: FIRST `DInterface` SPELLED `Speak` IN THE JOINT DECL LIST WINS regardless of
+what: which module declared it or which module the impl is in. speakerb's body is then
+what: read under `String -> x -> String`, binding `s` at the class parameter `DogB`,
+what: and the interpolation's `display` has no impl for it. Swapping the imports swaps
+what: which interface is first, hence `DogA`.
+cmd: build main.mdk
+exit: 1
+stdout-line: runtime error [E-PANIC]: no impl of method 'display' for type 'DogB'
+control: build control.mdk
+why-verb: `build`, and it is the ONLY verb that can grade this defect.
+why-verb:   * `check` is GREEN AND CORRECT here (exit 0, `main : Unit`, zero
+why-verb:     diagnostics across all three modules) — the check path goes through the
+why-verb:     per-module overlay and gets the right signature. There is no diagnostic
+why-verb:     to pin and nothing wrong to assert.
+why-verb:   * `run` is GREEN AND CORRECT too — it prints the hand-derived `A(x)` /
+why-verb:     `B(y)` at exit 0. Pinning `run` would pin correct behaviour.
+why-verb:   * `build-run` is UNUSABLE BY CONSTRUCTION: `medaka build` FAILS here, and
+why-verb:     under that verb a build failure is a hard MALFORMED 126 ("cannot run a
+why-verb:     binary that did not build"), never a gradeable observation. The harness's
+why-verb:     own header routes exactly this case to `build`.
+why-verb:   * `check-json` / `check-types` / `fmt-write` / `mcp-call` reach nothing that
+why-verb:     is broken in this program.
+why-verb: `build` grades `medaka build`'s own exit code AND its combined stdout+stderr,
+why-verb: which is where the emitter's failure text lands — the pinned observation.
+why-pin: EXIT 1 PLUS ONE EXACT `stdout-line`, not the exit code alone. Exit 1 by itself
+why-pin: would be satisfied by ANY build failure of this program for ANY reason (the
+why-pin: laundering hazard this suite's header calls out as worse than no fixture);
+why-pin: the E-PANIC line names `DogB`, which IS the defect — the emitter can only
+why-pin: reach `display` at `DogB` if it read speakerb's body under speakera's
+why-pin: declaration.
+why-pin: WHY NOT `stdout:` (the whole output). The FIRST line of that output embeds the
+why-pin: absolute path this gate invokes with (`error: emitter failed compiling
+why-pin: /…/test/must_fail_fixtures/…/main.mdk`), which differs per worktree and per
+why-pin: checkout location — pinning it would bake this machine into the claim. The
+why-pin: `stdout-line` verb exists for exactly this: pin the bug's line, literally and
+why-pin: whole, out of an output that cannot be pinned entire. There is no second,
+why-pin: path-free line available to pin alongside it as the "the command still ran"
+why-pin: witness; the exit code plus the E-PANIC line, which only the emitter emits,
+why-pin: carry that job here.
+why-pin: EVERY FIX DIRECTION DRAINS THIS ROW:
+why-pin:   * the emit path is re-keyed by interface IDENTITY (the #1354 direction, or a
+why-pin:     shared seam with the check path) -> speakerb's body is read under its own
+why-pin:     `x -> String -> String` -> the program BUILDS -> exit 1 fails AND the
+why-pin:     stdout-line is absent -> DRAINED;
+why-pin:   * the emit path stops inferring impl bodies at all -> the program builds ->
+why-pin:     same, DRAINED;
+why-pin:   * the front end instead REJECTS the same-spelling collision with a
+why-pin:     diagnostic -> `medaka build` still exits 1, but the E-PANIC line is gone
+why-pin:     (a resolve/type diagnostic is not an emitter panic) -> the stdout-line
+why-pin:     assertion fails -> DRAINED. ⚠️ Read the failure text: if the row drained on
+why-pin:     the stdout-line ALONE while the exit is STILL 1, run `medaka build` on
+why-pin:     main.mdk by hand before closing anything. A DELIBERATE REJECTION is a fix
+why-pin:     (close #1647); a REWORDED E-PANIC on the same failure is NOT (update this
+why-pin:     line and leave #1647 open).
+why-pin: ⚠️⚠️ THE MIS-REPORT GUARD, for the common drain direction. If this row drains
+why-pin: because `medaka build` now SUCCEEDS, DO NOT CLOSE #1647 ON THAT ALONE. An
+why-pin: emit-path change that merely stops the emitter from tripping over the wrong
+why-pin: signature — while still attributing that wrong signature — turns a loud S1
+why-pin: into silent wrongness, which this ladder counts as a SEVERITY INCREASE. Before
+why-pin: closing, do BOTH:
+why-pin:   1. run the produced binary: it must print exactly `A(x)` then `B(y)` at exit
+why-pin:      0, the hand-derived answer above (and the same as `medaka run`). Anything
+why-pin:      else means the emit path is STILL reading the wrong declaration and the
+why-pin:      defect has become an S0 — reopen/re-file at S0, do not close;
+why-pin:   2. re-run `medaka check` on illtyped-probe.mdk (ungraded, ships here): it
+why-pin:      must STILL be rejected with `Type mismatch: DogC vs String`. A "fix" that
+why-pin:      removes emit-path body inference could drain this row while also
+why-pin:      swallowing that rejection.
+why-control: control.mdk is main.mdk with ONE dimension flipped — the two same-spelled
+why-control: `speak` methods are declared at the SAME signature. Everything the defect
+why-control: is NOT about stays: two modules, two interfaces both spelled `Speak`, two
+why-control: methods both spelled `speak`, two impls, two imports, string
+why-control: interpolation, and the SAME `build` verb, so it exercises the whole path
+why-control: this pin blames (loader, resolve, typecheck, marker, Core IR, emitter,
+why-control: clang, link). It builds at exit 0 and its binary prints `A(x)` / `B(y)`.
+why-control: So the trigger is pinned to the SIGNATURE DIFFERENCE, not to the name
+why-control: collision: two interfaces sharing a name and a method name build fine.
+why-control: A red here is CONTROL-BROKE, a verdict distinct from DRAINED, so "you
+why-control: broke multi-module emit" can never be read as "you fixed #1647".
+why-control: ABLE TO FAIL, not merely able to pass: the control is graded on its exit
+why-control: code, and this exact program SHAPE produces a nonzero one the moment the
+why-control: defect's trigger is present — main.mdk is the same file with the second
+why-control: signature reversed and it exits 1. The control is not a program that
+why-control: cannot fail.
+why-note: THREE files here are NOT graded (this gate executes only `cmd:` and
+why-note: `control:`, plus whatever those two entries import): swapped-order.mdk,
+why-note: illtyped-probe.mdk and its module illtypedb.mdk. They are measured evidence
+why-note: for this claim and inputs to the guard above, not assertions. The graded
+why-note: entries are main.mdk (importing speakera.mdk + speakerb.mdk) and
+why-note: control.mdk (importing ctla.mdk + ctlb.mdk).
+why-note: SEVERITY IS S1, NOT S0, AND THE S0 WAS PROBED FOR. The worry is that a body
+why-note: checked against the wrong signature is ACCEPTED when it should be rejected.
+why-note: illtyped-probe.mdk is that probe and `check` rejects it (MEASURED HERE:
+why-note: exit 1, `Type mismatch: DogC vs String`; #1647 additionally reports that a
+why-note: single-module version of the same body is rejected identically — RELAYED,
+why-note: not re-measured in this fixture). The demonstrated damage is confined to the
+why-note: emit path: a valid program that builds nowhere, loudly, at exit 1.
+why-note: NOT #1182 — that is the SAME two-interface collision in a SINGLE FILE,
+why-note: decided by impl-block order at DISPATCH. This is multi-module, on the
+why-note: SIGNATURE channel, and its decider is the joint decl list's interface order.
+why-note: NOT #1620 — that is a wrong VALUE out of the built binary from two ifaces
+why-note: sharing a method name; here no binary is produced at all.
+why-note: NOT #1619 — that is an interface DEFAULT hijacked at the same head (the
+why-note: untagged default registry), silent and at exit 0. This is loud, at exit 1,
+why-note: and about a declared method's TYPE.
+why-note: NOT #1113 / PR #1646 — that re-keys the arg-tag ADMISSIBILITY table by
+why-note: interface identity. RELAYED FROM #1647, not re-measured here: this failure
+why-note: was byte-identical on `main` @ 8eb0d359 and on that PR's branch, so #1646
+why-note: neither causes nor fixes it. (What IS measured here is this branch's
+why-note: binary, whose base already contains #1646.) The two defects are
+why-note: COEXTENSIVE on today's compiler (an admissibility mis-key needs the same
+why-note: same-spelling + differing-signature shape), which is why #1113 Phase 4 has no
+why-note: value-level pin while THIS issue is open — the `test/dict_fixtures/` row
+why-note: `ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|A(x)\nB(y)` becomes writable the day this
+why-note: fixture drains.
+why-note: test/import_order_fixtures/samename-iface-admissibility-invariant/ carries the
+why-note: same SHAPE but cannot see this bug: it excludes `build`'s stderr from its
+why-note: signature, so both import orders reduce to `build=1/-:` and it grades the
+why-note: case invariant while the emitter fails under a different type in each order.
+why-note: This fixture uses the `build` verb and therefore needs clang; the gate's
+why-note: clang guard fails LOUDLY (exit 2) rather than skipping — intended, and
+why-note: `soundness`, where this suite runs, has clang.

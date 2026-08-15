@@ -1,0 +1,14 @@
+-- CONTROL module B: the ONE flipped dimension. Still a second interface spelled
+-- `Speak` with a method spelled `speak`, still a second impl, still two modules —
+-- but the SIGNATURE is now IDENTICAL to ctla's (`String -> x -> String`), so no
+-- body can be mis-checked against the other interface's declaration.
+public export data CatB = CatB
+
+export interface Speak x where
+  speak : String -> x -> String
+
+impl Speak CatB where
+  speak s _ = "B(\{s})"
+
+export useB : String
+useB = speak "y" CatB
