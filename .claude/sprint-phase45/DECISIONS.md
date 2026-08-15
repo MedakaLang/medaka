@@ -3336,3 +3336,39 @@ the one asked, and the answer looked like an answer.
 **Tracker state at close-out is CORRECT:** one issue closed tonight by a landed fix (#1630, via #1638's
 keyword with its sha), one closed by owner ruling with the record attached (#1608), **nothing else
 closed**, and every pin-bearing issue still open.
+
+## RUN-P45-095 — ⚠️ MY OWN BYTE-COMPARE RECIPE MANUFACTURES A FALSE MISMATCH ON ANY NON-ASCII BODY
+
+Verifying #1655's body I compared `gh pr view --json body --jq '.body|length'` (**3957**) against
+`wc -c` (**3982**) and read a **25-byte shortfall** — the exact signature of the silent truncation this
+sprint measured earlier tonight (16,769 of 29,266 bytes at exit 0).
+
+**It was not truncation. `jq`'s `length` on a string counts CODEPOINTS, not bytes**, and the body carries
+25 bytes of multibyte overhead from `⚠️ ⭐ ⇒ —`. Confirmed: the file is **3957 chars / 3982 bytes** —
+`jq` and `wc` were both right about different questions. A true `cmp` shows the readback is the file plus
+`jq`'s trailing newline: **content identical.**
+
+⇒ **The recipe I have been giving agents all night — "byte-compare the readback" — produces a FALSE
+ALARM on every body containing an emoji, an arrow or an em-dash**, i.e. on essentially every body written
+in this repo's house style. Under a real truncation the two numbers also disagree, so the check cannot
+distinguish "truncated" from "has unicode" **in the direction that matters.**
+
+**The correct check is `cmp` on two files** (or `jq -r` into a file and `diff`), never two length numbers
+from two tools that count different units:
+```sh
+gh pr view <N> --json body --jq '.body' > /tmp/readback
+cmp /tmp/readback <file>          # expect: EOF on <file> after N bytes  == identical + jq's newline
+```
+
+⭐ **Sixth instrument-mismatch of the night, and the first one inside my own verification advice.** The
+others were an exit code, both arms of a differential, an extension-gated extraction, a CI red with zero
+steps executed, and a truncated list. Same shape every time: **the instrument answered a narrower or
+different question than the one asked, and the answer looked like an answer.** That a *verification*
+recipe joined the list is the point — the checking apparatus is not exempt from the failure mode it
+checks for.
+
+## RUN-P45-096 — SPRINT RECORDS OPENED AS PR #1655 (docs only)
+RUN-P45-036 … 095 plus `DEBT.md`, and the **four measured `AGENTS.md` traps**: the `stdlib/*` two-arm
+unsoundness (which fails toward *manufacturing* findings), `MEDAKA_STRICT` on both arms, the
+golden-capture staleness gap, and mid-build source edits. `make docs-links` and `make agent-doc-symbols`
+both PASS. Body readback verified by `cmp`, not by length. Nothing closed by it.
