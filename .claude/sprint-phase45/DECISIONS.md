@@ -2608,3 +2608,63 @@ Constraints that matter, carried into the brief:
   justify.
 - ⚠️ It was also told to **verify which arm actually moves**: #1608's body says *"both answers"* flip,
   a later measurement found **only `cevalModules` moves**. Inherit neither.
+
+## RUN-P45-072 — ⚠️ MY MERGE SNIPPET WAS WRONG, AND I SENT IT TO THREE WRITERS. W4 caught it.
+
+I wrote:
+```sh
+BASE=$(git rev-parse origin/main)   # <-- pins the STALE ref
+git fetch origin main
+git merge "$BASE"                   # <-- merges the OLD main
+```
+**Pinning before fetching pins the pre-fetch ref**, so the merge target is the main that existed before
+the fetch — i.e. the merge would not bring in what you just fetched. W4 fetched first, then pinned the
+literal SHA `bd65dbfb`, and used that throughout.
+
+**Provenance, because it matters:** `AGENTS.md`'s recipe is correct — it pins `origin/main` in a context
+where the fetch has already happened, and pinning *before it moves again* is the entire point. **The bug
+is mine, introduced by inserting `git fetch` AFTER the pin** when I adapted it. W2 and W6 both received
+the same snippet and both ended up on the right SHA anyway (their `origin/main` was already current), so
+it cost nothing — but it would have, on a stale local ref, and it would have been invisible: a merge
+that silently omits the commits you thought you were merging.
+
+⇒ **Correct order: FETCH, then pin, then use the literal SHA.** Third orchestrator-authored error
+tonight (after the misrouted message and the HALF 1 mechanism), and the third caught by a writer rather
+than by me.
+
+## RUN-P45-073 — S1 MERGED CLEAN AND RE-VERIFIED. My "13 carriers" was also a number that needed deriving.
+
+**#1643 `MERGEABLE`**, merge commit `1d8b1a27`. S2 (#1645) unblocked.
+
+**It reviewed the clean auto-merge instead of trusting it** — *"a clean apply is not evidence"* —
+and gave the reasons rather than an assertion: #1638's entire source change to `typecheck.mdk` is **one
+line** with the rest of its +109 being comments; it sits ~160 lines below S1's edits; it touches the
+**head** half of impl matching where S1 touches the **interface** half; and it adds **no new caller** of
+anything S1 widened — **census re-derived on the merged file, not carried forward.**
+
+⚠️ **My "13 discriminating carriers" list globs to 18 projects.** The 13 is the *IR-reaching* count; the
+other 5 are the `*-rejected` fixtures, which emit no IR. **W4 ran the superset rather than guessing
+which 13 I meant** — the right call, and another instance of a count of mine that needed a derivation
+rather than a number (`i4-xmod-*` alone is 10).
+
+**Result: `identical=18 differing=0 missing=0`**, base arm = merged tree with **only** `typecheck.mdk`
+reverted, so the sole variable is S1's change with #1638 present in **both** arms (`cmp` confirms the
+arms are genuinely different binaries).
+
+⭐ **It went beyond exit codes without being asked:** a recursive `diff -rq` over `.ll`, `.status` **and
+the captured stderr logs** is empty, so the 5 rejecting fixtures are **byte-identical in DIAGNOSTIC
+TEXT**, not merely in exit code. That is the answer standing question 6 actually wants, and it is the
+same blindness another reviewer found in its own sweep tonight — avoided here by construction.
+**Positive control run in the reject→accept direction specifically** (byte injected into `s6-c1`'s IR
+*and* a `*-rejected` flipped 1→0 ⇒ `differing=2`). `s6-c1` left exactly as-is, shared head `Int` intact.
+
+**The staleness guard earned its keep immediately** — routed through `run_gates.sh`, it refused
+`diff_compiler_test`/`lex_files` because `test_main`/`lex_main` predated the merge. **Rebuilt rather
+than `NO_STALE_CHECK=1`.** And the whole-suite snapshot check on the merged tree failed on **exactly one
+file — its own**: the other 201 validating BASE's goldens against the merged tree is *independent*
+evidence the reset carried correctly.
+
+**Merged-tree verdicts: C3a YES · C3b YES**, plus check-self, `make test`, dict_semantics, iface_order,
+import_order, selfproc, the `diff_compiler_test*` family, lex_files and diff_native_cli. LEG A verdict
+re-derived on the merged tree and unchanged: nine re-signings plus one new binding, **no pre-existing
+scheme moved.**
