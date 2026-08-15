@@ -2668,3 +2668,48 @@ evidence the reset carried correctly.
 import_order, selfproc, the `diff_compiler_test*` family, lex_files and diff_native_cli. LEG A verdict
 re-derived on the merged tree and unchanged: nine re-signings plus one new binding, **no pre-existing
 scheme moved.**
+
+## RUN-P45-074 — ⭐⭐ THE #1608 GATE EXISTS (PR #1649, 12/12) — AND IT REFUTES THE ISSUE IT WAS BUILT FOR
+
+**Built:** `compiler/entries/core_ir_typed_modules_main.mdk` — the first driver in the tree that runs
+`cevalModules` over **marked + typechecked** trees; it is `eval_typed_modules_main.mdk` with **one call
+swapped**, so the only variable between the two is which parallel module driver runs.
+`test/diff_compiler_core_ir_typed_modules.sh` grades 5 arms × 2 orderings × 3 cases in three tiers, and
+**tier T2 makes the `evalModules`/`cevalModules` LOCKSTEP gradeable for the first time** — an
+`AGENTS.md` hazard that has been prose ever since a fix shipped patching only one of the pair.
+`test/CORE-IR-TYPED-LEDGER.txt` is third in the ledger family, wired into `must_fail_census.sh` HALF 4.
+
+**Fail-capable in FOUR independent directions, each demonstrated rather than argued.** The strongest is
+the **positive control**: stripping *only* `elaborateModules` from the new driver reds **only** the
+`ceval-typed` arm, **only** on the `1608-*` cases, falling back to byte-identical arg-tag answers. ⇒
+**the green is a MECHANISM claim, not an exit code** — it shows the typed arm's correctness is *caused
+by route stamping*, which is precisely what "is this gate vacuous?" asks.
+
+**It verified the gate RAN, by name, in the shard log** (`PASS diff_compiler_core_ir_typed_modules`,
+oracle built in ~26 s) rather than trusting the rollup — and kept the caveat that a `pull_request` run
+is narrowed and the merge queue is the authority.
+
+**Shard `eval`, chosen on RE-DERIVED cost** (three green `merge_group` runs: eval 301/304/312, lowest
+variance; types 467 the pole) plus the structural reason that it **already builds 2 of the 3 oracles**.
+⚠️ **The `ci.yml` cost note it replaced had rotted ~2× in absolute terms within the same month** — the
+new one ships its derivation command and a rot warning. Fourth time this tree has proved a written
+ranking wrong.
+
+### 🚨 THE FINDING: #1608 does not reproduce as a `cevalModules` defect
+Measured arm-for-arm: **all three typed arms** (eval-typed, native, ceval-typed) are **correct and
+order-invariant**, including on the harder cross-module dict-forwarding shape; **the two UNTYPED drivers
+are byte-identical to each other** and both wrong. That is the shared, documented untyped arg-tag
+fallback — **not an engine divergence and not a lockstep failure.** #1608's ✅/❌ table compares a
+**TYPED** `eval` reading against an **UNTYPED** `ceval` one. **Arm mismatch.**
+⭐ It also dissolved my briefed caveat rather than picking a side: *"flips both answers"* (two `tag`
+occurrences within one arm) and *"only `cevalModules` moves"* (which arm moves) are **different claims,
+both correct** — neither is evidence against the other.
+
+### ⭐ OWNER RULING (Val): #1608 STAYS OPEN. Demand the ORIGINAL repro.
+The refutation is strong **and it is not yet about this issue's own program** — the author says plainly
+*"I verified a program of the described shape, not the reporter's original."* ⇒ **Reproduce-before-you-act
+cuts BOTH ways: it forbids fixing on an unreproduced claim and equally forbids CLOSING on an
+unreproduced refutation.** Two issues have already been desk-closed here on inferences that outran their
+evidence; this is not a third. Ruling posted to #1608 with the three decisive outcomes named and the
+cheap way to get them (run the original through the five arms the new gate already drives). State,
+labels and severity untouched; readback verified.
