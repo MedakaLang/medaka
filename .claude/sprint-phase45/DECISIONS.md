@@ -2579,3 +2579,32 @@ report rather than investigate.
 
 Also carried into that brief: **rebuild the oracles BEFORE capturing a golden** (RUN-P45-067), since the
 capture path shares `check_all_main` and has no staleness guard.
+
+## RUN-P45-071 — #1640 IS IN THE MERGE QUEUE (verified by state). #1608's GATE dispatched as W7.
+
+`ok: PR 1640 is in the merge queue (state=OPEN)` — read back, not inferred from an exit code.
+
+**The #1608 gate fills a slot that contends with nothing** — it branches from `main` and touches no file
+any open PR holds. Briefed as **instrument only, do NOT fix #1608**, per the owner ruling
+(RUN-P45-036 ruling C).
+
+Constraints that matter, carried into the brief:
+- **Why no existing gate sees it:** `diff_compiler_core_ir_modules.sh` runs the **untyped** path, so the
+  shapes where dict-passing and interface-method selection happen never reach it. `evalModules` /
+  `cevalModules` are the documented lockstep pair, and a P0-9 fix once shipped patching only
+  `eval.mdk`, leaving `core_ir_eval.mdk` broken for months — **this defect's own family, with the
+  fourth engine arm ungated.**
+- **RED first, then the control** — a gate that passes today proves nothing.
+- **Hand-derive before running.** ⚠️ A captured golden here would enshrine what the engine does, and
+  **the engine under test is the one suspected of being wrong** — the eval-golden trap at full force on
+  an engine nobody has been grading.
+- **Permutation is the discriminating axis**, and a single ordering can be *accidentally correct* — a
+  prior measurement found exactly that on this defect's own permB arm. **Grade the VALUE, not
+  agreement.**
+- **Wire it into a CI shard or it silently never runs**, with the shard cost **derived**, never quoted
+  (that ranking has been wrong three times and has inverted). ⚠️ And any `.sh` added **anywhere in the
+  tree** trips the coverage check — scratch scripts stay out of the repo.
+- **Declare the expected RED honestly** — ledger row (HALF 4 is row-driven) or must-fail pin; pick and
+  justify.
+- ⚠️ It was also told to **verify which arm actually moves**: #1608's body says *"both answers"* flip,
+  a later measurement found **only `cevalModules` moves**. Inherit neither.
