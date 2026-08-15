@@ -1,0 +1,46 @@
+-- #1641 — A CONSTRAINT WRAPPER ON AN IMPL HEAD SUPPRESSES THE AMBIGUITY REJECTION THE
+-- IDENTICAL PLAIN HEAD RECEIVES. `zero`'s receiver here is undetermined (`ignore2 : a ->
+-- Int` discards its argument), and there are TWO impls of `Zero`, so this program is
+-- exactly the shape the ambiguity rule exists to reject — and with a plain `impl Zero Int`
+-- head it IS rejected, at `check`, exit 1 (plain-head-rejected.mdk, not graded). Wrapping
+-- the head in `Eq x =>` makes `check` accept it silently at exit 0; `medaka build` then
+-- dies inside the emitter.
+--
+-- ⭐ HAND-DERIVED, NOT CAPTURED — and the derivation is about WHAT MUST NOT HAPPEN, which
+-- is what makes it checkable without trusting the engine:
+--
+--   1. `ignore2 : a -> Int` is fully polymorphic in its argument and returns 5 for any
+--      argument, so the occurrence `zero` in `ignore2 zero` imposes NO constraint on which
+--      `Zero` impl is meant. Its receiver type is undetermined, full stop.
+--   2. `Zero` has TWO impls whose heads are at DIFFERENT types (`Int` and `Bool`) with
+--      DIFFERENT method bodies (`0` and `False`). Two candidates, nothing to choose
+--      between them.
+--   3. ⇒ THERE IS NO CORRECT VALUE FOR THIS PROGRAM TO COMPUTE. A compiler must refuse it,
+--      exactly as it refuses the plain-head sibling. Both impls must count, and the only
+--      difference between the sibling and this file is a wrapper on one head — a wrapper
+--      cannot make an impl stop existing.
+--   4. ⇒ ACCEPTING AT `check` IS THE DEFECT. That `medaka build` then panics is the loud
+--      consequence of the same acceptance, and it is the channel this fixture pins because
+--      it is the one that carries an exact, distinctive observable.
+--
+-- ⚠️ TWO IMPLS ARE LOAD-BEARING. `checkUndeterminedObligation`'s rule is guarded on
+-- `implCountForIfaceU >= 2`, so a ONE-IMPL program cannot reach the arm at all — that is
+-- exactly why an earlier attempt to observe this residual (PR #1638) failed and was
+-- recorded as unobservable. Do not "simplify" this file by deleting `impl Zero Bool`.
+--
+-- ⚠️ IT IS NOT SPECIFIC TO THE CONSTRAINT WRAPPER: `impl Zero (<Stdout> Int)` behaves
+-- identically (measured — see effect-wrapper.mdk, not graded). The defect is a property of
+-- the head projection the impl census reads, not of `TyConstrained`.
+interface Zero a where
+  zero : a
+
+impl Zero (Eq x => Int) where
+  zero = 0
+
+impl Zero Bool where
+  zero = False
+
+ignore2 : a -> Int
+ignore2 _ = 5
+
+main = println (ignore2 zero)

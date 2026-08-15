@@ -1,0 +1,27 @@
+-- #1641 — NOT GRADED BY THIS GATE. main.mdk with the CONSTRAINED head kept and only the
+-- receiver determined (`zb : Bool`). Measured first-hand 2026-08-15: check 0, run `5`,
+-- build 0, binary exit 0 printing `5`.
+--
+-- It is the tighter one-dimension comparison for the graded control — it proves the
+-- constrained impl head by itself parses, checks, and EMITS perfectly well, and that what
+-- main.mdk needs in order to fail is the UNDETERMINED obligation on top of it. It is not
+-- the graded control only because it would break under a legitimate fix direction
+-- (rejecting a constraint wrapper on an impl head outright), which would make this harness
+-- print CONTROL-BROKE's "the ENVIRONMENT moved" advice about a real fix. See
+-- control.mdk's header.
+interface Zero a where
+  zero : a
+
+impl Zero (Eq x => Int) where
+  zero = 0
+
+impl Zero Bool where
+  zero = False
+
+zb : Bool
+zb = zero
+
+ignore2 : a -> Int
+ignore2 _ = 5
+
+main = println (ignore2 zb)

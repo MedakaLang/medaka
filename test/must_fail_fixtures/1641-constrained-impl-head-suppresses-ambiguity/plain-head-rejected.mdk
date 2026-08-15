@@ -1,0 +1,32 @@
+-- #1641 — NOT GRADED BY THIS GATE (it cannot be: see below). This is main.mdk with the
+-- constraint wrapper removed from the first impl head and NOTHING else changed —
+-- `impl Zero Int` instead of `impl Zero (Eq x => Int)`. It is the one-dimension comparison
+-- the whole issue rests on, and it is CORRECTLY REJECTED:
+--
+--   check -> exit 1, on the `zero` occurrence in `main`:
+--     Ambiguous instance for `Zero`. Cannot determine which impl; add a type annotation
+--   run -> exit 1, same diagnostic;  build -> exit 1, same diagnostic
+--
+-- (measured first-hand 2026-08-15. The message is the observable; no line:col is quoted
+-- here on purpose, since editing this comment block would move it.)
+--
+-- ⚠️ WHY IT IS NOT THE GRADED CONTROL. This harness defines a control as a near-identical
+-- program that must stay GREEN, and enforces that by requiring EXIT 0. Here the control
+-- shape is the program that is correctly REFUSED — the subject is the one wrongly accepted
+-- — so the usual polarity is inverted and the harness cannot express it: posing this file
+-- as `control:` would report CONTROL-BROKE on a healthy tree on every single run. The
+-- graded control is control.mdk; this file is evidence, and the comparison it makes is
+-- recorded in claim.txt rather than asserted mechanically.
+interface Zero a where
+  zero : a
+
+impl Zero Int where
+  zero = 0
+
+impl Zero Bool where
+  zero = False
+
+ignore2 : a -> Int
+ignore2 _ = 5
+
+main = println (ignore2 zero)

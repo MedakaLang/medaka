@@ -72,3 +72,51 @@ why-note: line there makes that fixture's own eval golden go wrong. Also note
 why-note: test/engine_divergence.txt has NO row for this (#1058's three additions
 why-note: are all `wasm:codegen-bug`), so the 3-engine gate is currently blind to
 why-note: the eval side. Close #1062 and delete this fixture when it drains.
+why-absorbed: ⚠️ #1071 WAS THE SAME BUG, AND ITS DISTINGUISHING HYPOTHESIS WAS MEASURED
+why-absorbed: FALSE. #1071 ("eval does not re-narrow the SIBLING-METHOD calls inside an
+why-absorbed: INHERITED interface default body when the receiver's head tycon collides
+why-absorbed: across two impls differing only in their type ARGUMENT") was filed as a
+why-absorbed: separate shape and had its own fixture here,
+why-absorbed: test/must_fail_fixtures/1071-eval-inherited-default-sibling-calls-typearg/.
+why-absorbed: #1071 is now CLOSED as a duplicate of THIS issue and that fixture is
+why-absorbed: DELETED (2026-08-15). This note exists so the deletion costs nothing: the
+why-absorbed: refutation below was recorded ONLY in the deleted claim, and #1062's own
+why-absorbed: text had no cross-reference back to it.
+why-absorbed: THE REFUTED DISCRIMINATOR, with what was measured. #1071's body claimed the
+why-absorbed: trigger needed a default body with MORE THAN ONE sibling call -- "a default
+why-absorbed: body with only ONE sibling call did not reproduce for me". THAT IS FALSE ON
+why-absorbed: THIS TREE: measured 2026-08-13, the same two-impl program with the default
+why-absorbed: reduced to `describe x = tagOf x` reproduces IDENTICALLY (eval `int`/`int`,
+why-absorbed: native `int`/`str`). ⇒ THE SIBLING-CALL COUNT IS NOT THE TRIGGER. Do not
+why-absorbed: re-derive this; it has been tested and refuted once already.
+why-absorbed: #1071's own pinned cells, for the record: `check main.mdk` exit 0 with ZERO
+why-absorbed: diagnostics; `run main.mdk` exit 0 printing `int/31` TWICE (the pin, where
+why-absorbed: the correct pair is `int/31` then `str/71`); `build` + execute exit 0
+why-absorbed: printing `int/31` / `str/71` -- NATIVE WAS CORRECT, so that shape was
+why-absorbed: eval-ONLY too, exactly as this row is. Its control put the second impl at a
+why-absorbed: DIFFERENT head tycon (`Bag String` vs `Box String`) and printed the correct
+why-absorbed: pair. Both shapes are one mechanism: an inherited default body's sibling
+why-absorbed: call is not re-narrowed by the canonical impl key at a head tycon shared by
+why-absorbed: two impls differing in their type argument. ⇒ ONE FIX DRAINS BOTH; there was
+why-absorbed: never a second bug to hunt.
+why-absorbed: ⚠️ WHY THE FIXTURE WAS DELETED RATHER THAN RE-POINTED AT #1062, so nobody
+why-absorbed: re-adds it: THE HARNESS FORBIDS TWO PINS ON ONE ISSUE. Re-pointing that
+why-absorbed: claim's `issue:` field to 1062 was tried and MEASURED (2026-08-15) to
+why-absorbed: produce TWO hard MALFORMED findings and a gate exit 1 -- "issue #1062 is
+why-absorbed: pinned by MORE THAN ONE fixture" (this row plus that one) and "…/ is named
+why-absorbed: for issue #1071 but its claim.txt says 'issue: 1062'" (the directory-prefix
+why-absorbed: check). That would red `soundness`. Keeping the directory and re-pointing
+why-absorbed: the field is not an available option in this harness; the deleted fixture's
+why-absorbed: own claim.txt prescribed this same resolution ("if the tracker adjudicates
+why-absorbed: #1071 a duplicate of #1062, CLOSE #1071 and delete THIS directory rather
+why-absorbed: than hunting for a second fix").
+why-absorbed: COVERAGE IS UNCHANGED BY THE DELETION: this fixture still grades the
+why-absorbed: mechanism on the same engine (`run`, eval-only, native correct), which is
+why-absorbed: the only thing the second pin was protecting. What the deletion DID cost is
+why-absorbed: recorded above rather than lost.
+why-absorbed: ⭐ INHERITED FROM #1071 AND STILL OWED WHEN THIS DRAINS: the corpus
+why-absorbed: consequence. test/llvm_fixtures_modules/ goldens are captured FROM eval, so
+why-absorbed: the shared-head + non-constant-default axis is deliberately unpinned there;
+why-absorbed: whoever fixes this should add that axis to
+why-absorbed: test/llvm_fixtures_modules/typearg_inherited_default_dispatch/ at the same
+why-absorbed: time -- the same fixture this claim's `why-note:` already names.
