@@ -28,14 +28,24 @@
 #     in gates you never named).
 #   - NOT detected: two slices moving the same golden via UNPREDICTED gate
 #     coupling (e.g. both perturbing prelude-adjacent behavior that re-cuts
-#     eval goldens), single-line registry chokepoints inside a shared file the
-#     lists omit, and semantic collisions with no textual overlap (two green
-#     branches have merged into a crashing tree here). The merge queue plus the
+#     eval goldens); snapshot moves from test-FIXTURE .mdk edits (only the
+#     compiler/ snapshot corpus is predicted — same-directory fixture edits
+#     are caught by the fixture-dir check, cross-corpus ones are not);
+#     single-line registry chokepoints inside a shared file the lists omit;
+#     and semantic collisions with no textual overlap (two green branches
+#     have merged into a crashing tree here). The merge queue plus the
 #     serialized-arming rule remain the backstop for those.
 
 set -u
 
 die() { echo "sprint-disjoint: $1" >&2; exit 2; }
+
+# Artifact prediction tests paths relative to the repo root; a wrong cwd would
+# silently predict NOTHING and report a false clean (the permissive direction).
+# Anchor on the script's own location so cwd never matters.
+ROOT=$(cd "$(dirname "$0")/.." && pwd) || die "cannot resolve repo root"
+cd "$ROOT" || die "cannot cd to repo root $ROOT"
+[ -d test/snapshots/compiler ] || die "sanity: $ROOT/test/snapshots/compiler missing — not the medaka repo root?"
 
 # Predict golden/snapshot artifacts a changed path can move.
 # compiler/<dir>/<name>.mdk -> test/snapshots/compiler/<name>.md (snapshot corpus)
@@ -61,7 +71,7 @@ predict_artifacts() {
 
 # Fixture directories touched (shared corpora).
 fixture_dirs() {
-  grep -e '^test/.*_fixtures/' -e '^test/wasm/fixtures' "$1" 2>/dev/null \
+  grep -e '^test/.*_fixtures/' -e '^test/wasm/fixtures[_/]' "$1" 2>/dev/null \
     | while IFS= read -r p; do dirname "$p"; done | sort -u
 }
 
@@ -133,7 +143,14 @@ case "$mode" in
       echo "disjointness — goldens three-way-merge cleanly into blends, and two"
       echo "green branches have merged into a crashing tree here."
     else
-      echo "CONFLICTS:"; echo "$OUT"; rc=1
+      mrc=$?
+      if [ "$mrc" -eq 1 ]; then
+        echo "CONFLICTS:"; echo "$OUT"; rc=1
+      else
+        # >1 is a git ERROR (bad object, unsupported flag), not a conflict —
+        # do not paste it into a packet as conflict evidence.
+        echo "GIT-ERROR (merge-tree exit $mrc, not a conflict):"; echo "$OUT"; rc=1
+      fi
     fi
     rm -rf "$T"
     ;;

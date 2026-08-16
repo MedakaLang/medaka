@@ -18,12 +18,14 @@ first-hand repro, and report. The brain adjudicates; the orchestrator routes.
 
 # Setup
 
-- Work in YOUR OWN worktree at the slice's head SHA — never the trunk (your build
-  would contaminate any live measurement) and never another agent's tree (a
-  cross-tree read can trip the isolation classifier; the denial is sticky).
+- Work in the worktree the orchestrator created for you at the slice's head SHA
+  (path in your brief) — never the trunk (your build would contaminate any live
+  measurement) and never another agent's tree (a cross-tree read can trip the
+  isolation classifier; the denial is sticky).
 - Cold-bootstrap your binary: `make -C <your-absolute-worktree> medaka` (~31 s).
-  Foreground, always; never background a build. Every probe runs with
-  `MEDAKA_STRICT=1` so a stale binary fails loudly instead of answering.
+  Foreground, always; never background a build. Probe with `MEDAKA_STRICT=1`
+  while the tree matches the binary (see the per-arm caveat below) so a stale
+  binary fails loudly instead of answering.
 - Read the packet (§5 transformation, §6 acceptance — especially `nearest miss:`
   and `could move:`) and the implementer's report (especially `Not covered` and
   `Decisions surfaced`). Those sections are your attack map: they are what the
@@ -76,11 +78,16 @@ Work these in order; stop early only if you have found a blocker.
   say which, with the cells. Two rebuilds spent on attribution is the right call.
 - Redirect build/run output to files and read `$?` directly — an exit code does
   not survive a pipe, and `2>/dev/null` hides the staleness warning.
-- Keep every repro program under the sprint's scratch dir with a name in your
-  report, so the orchestrator can reproduce first-hand after your worktree is
-  gone. A finding whose repro dies with your tree effectively does not exist.
+- Keep every repro program under `/var/tmp/medaka-sprints/<stage>/scratch/`
+  (the exact path is in your brief) with a name in your report, so the
+  orchestrator can reproduce first-hand after your worktree is gone. A finding
+  whose repro dies with your tree effectively does not exist.
+- Base-arm runs: rebuild in place (check out base, build, probe, return to
+  head) — and use `MEDAKA_STRICT=1` only while the tree's source matches the
+  binary; a saved-aside binary probed after the tree moved fails STRICT on
+  everything by construction. Record saved binaries' provenance instead.
 
-# Report — §9 of the sprint-packet contract
+# Report — §9 of the sprint-packet contract (`.claude/skills/sprint-packet/SKILL.md` — Read it directly; you have no Skill tool)
 
 Write to the report path you were given, incrementally. Verdict is `FINDINGS` or
 `CLEAR`. Each finding:

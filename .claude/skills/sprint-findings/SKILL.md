@@ -26,18 +26,28 @@ first (reports are the record; chat is not).
 
 The mechanical and architectural halves are deliberately SPLIT: repro, pin, and
 attribution are fixture work (Sonnet), and spending brain judgment on them
-muddies the ruling with shell mechanics. For any bug-shaped finding, dispatch
-`bug-reproducer` with the FINDINGS row, the source report path, and both SHAs
-(pinned base + slice head). Its bundle is: first-hand minimized repro,
+muddies the ruling with shell mechanics. Dispatch `bug-reproducer` with the
+FINDINGS row, the source report path, both SHAs (pinned base + slice head), and
+a worktree YOU create for it at the slice head (`git worktree add`; it manages
+its two arms inside that one tree). Its bundle — written to the sprint dir's
+`findings/<slug>/`, never only its worktree — is: first-hand minimized repro,
 base-vs-slice × channel attribution matrix, a pin fixture PROVEN to reproduce
 (or a reasoned not-pinnable row), and a ready-to-file issue draft with no
-severity and no interpretation. Paper-only findings (a conformance gap, a wrong
-ledger row) skip the reproducer and go straight to ruling.
+severity and no interpretation.
+
+**Bug-shaped vs paper-only is a mechanical test, not a judgment:** if the
+finding's claim cites any program output, exit code, or runtime behavior →
+bug-shaped → reproducer. If it cites only documents (a ledger row, a spec
+clause, a missing citation) → paper-only → straight to ruling. Cites both, or
+unclear → bug-shaped (the expensive default is the safe one; a paper-only
+misclassification files an unreproduced claim, the recorded worst outcome).
 
 Orchestrator-side checks BEFORE dispatching (they need no agent):
 
-- A new RED first checks the contract's expected-red block (HANDOFF.md) —
-  a licensed red is not a finding; debugging one is a recorded time sink.
+- A new RED first checks `EXPECTED-RED.md` in the sprint dir. The check is
+  string-mechanical: the gate's name appears there verbatim → licensed, not a
+  finding. Partial or ambiguous match → brain (a correct-in-general dismissal
+  rule shipping a break is a recorded failure shape).
 - ⚠️ **Quiescence before trusting any gate-derived finding** (a drain, a new
   red, a count): no measurement is valid while a writer holds uncommitted
   edits. Run it twice; two runs disagreeing means the tree is moving, not the
@@ -125,10 +135,14 @@ the brain has already ruled:
    is queried by label; prose titles are not filed anywhere) and, for PLANNED,
    the owning arc/spec citation. **No closing keywords anywhere in the body** —
    "do NOT close #N" has closed #N; reference issues as `see issue N` in prose.
-4. **Land the pin** (already authored and proven by the reproducer): rename to
-   `test/must_fail_fixtures/<N>-slug/` with the real issue number and commit it
-   with the filing PR. Not-pinnable → the reproducer's drafted
-   `test/MUST-FAIL-NOT-PINNABLE.txt` row lands instead.
+4. **Land the pin** from the reproducer's bundle in the sprint dir
+   (`findings/<slug>/pin/` — NOT from its worktree, which may be reclaimed):
+   copy into `test/must_fail_fixtures/<N>-slug/` with the real issue number as
+   the directory prefix (the harness hard-rejects unnumbered names as
+   MALFORMED), fill `issue:` in `claim.txt`, and commit it with the filing PR —
+   whose CI run of the must-fail suite is what finally grades it in-harness.
+   Not-pinnable → the reproducer's drafted `test/MUST-FAIL-NOT-PINNABLE.txt`
+   row lands instead.
 5. **Close the citation loop**: PLANNED → add the back-reference to the owning
    arc/spec doc (bidirectional, per the ruling); GAP → execute the gap-closure
    action the ruling named (spec/arc addition, or the VAL decision point) and

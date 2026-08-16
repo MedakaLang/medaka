@@ -1,5 +1,13 @@
 # Next-orchestrator handoff — Medaka (2026-07-17)
 
+> ⚠️ **2026-08-16 — sprint record paths below are GONE.** All committed sprint records
+> (`.claude/sprint*/`, `.claude/STAGE-*-SPRINT.md`) were deleted in PR 1658 (the
+> sprint-workflow mechanization) under Val's ephemeral-records ruling: sprint records now
+> live in `/var/tmp/medaka-sprints/<stage>/` for a sprint's duration, and their durable
+> content is exported to each sprint's GitHub tracking issue. Citations of those paths in
+> the dated entries below are legitimate history — TRUE when written; recover content, if
+> ever needed, from git history before that PR's merge commit. Do not "fix" the citations.
+
 ---
 
 ## ✅ 2026-08-14: Stage B Phase 0 CLOSED, arm set + G-0 landed. **No known-red gates from this run.**

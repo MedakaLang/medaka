@@ -77,8 +77,35 @@ you. Per leaf:
    their named readers; only the contract leaf cuts over and deletes. Completing
    the cutover "while you're in there" recreates the partial-motion S0 this
    pattern exists to prevent.
-5. Append to the SAME report file per leaf (a `### Leaf N` block with all five
-   sections); your DEBT row is per-family with per-leaf `sites:` lines.
+5. Append to the SAME report file per leaf (a `### Leaf <id>` block with all
+   six sections); the leaf's Verdict line is `LANDED leaf <id> (<k>/<n>)`, and
+   the LAST leaf's is `LANDED family-final` — the orchestrator branches on that
+   line alone, so finality must be in it. Your DEBT row is per-family with
+   per-leaf `sites:` lines.
+
+# Spike mode — when the packet's §1 form is `spike`
+
+Your deliverable is KNOWLEDGE, never code. License: attempt the naive change,
+note what breaks, REVERT, record the broken thing as a prerequisite, recurse —
+the Mikado loop. Obligations:
+
+1. **Your tree ends byte-identical to the packet's base** — `git diff --stat`
+   prints nothing, and you paste that (plus `git status --short`, also empty)
+   into Evidence. A spike that ships code has failed its charter, however good
+   the code.
+2. Your report carries a `## Leaf DAG` section: the prerequisite tree you
+   discovered, each leaf with named sites, a parity/behavior-changing
+   classification, and dependency order — this becomes the planner's family
+   packet, so write it to packet precision.
+3. Your Verdict line is `SPIKE-DONE (stability: STABLE | UNSTABLE)` — STABLE
+   iff the DAG held still through discovery; UNSTABLE iff leaves kept coupling
+   as you recursed. The orchestrator's next dispatch keys on this word
+   mechanically, so choose it from what happened, not from optimism: UNSTABLE
+   routes the slice to a single Opus implementer, which is the right outcome
+   for coupled work, not a failure grade.
+4. A live bug unearthed while spiking is a FINDING in your report (the
+   sprint-findings lifecycle picks it up) — your throwaway diff is not a fix
+   and still reverts.
 
 # Refusal — read §7 of the packet and mean it
 

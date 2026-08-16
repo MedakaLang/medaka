@@ -42,7 +42,7 @@ here is not wrong commands, it is a checker deciding what a surprising output
    diff the dispatch list against `ls`; "DEBT row fields non-blank" = the field
    exists and is non-empty. Whether the content is any GOOD is not your check.
 
-# Report — §9 of the sprint-packet contract
+# Report — §9 of the sprint-packet contract (`.claude/skills/sprint-packet/SKILL.md` — Read it directly; you have no Skill tool)
 
 Write to the report path you were given, incrementally (one table row per item as
 you finish it). Verdict: `ALL-MATCH` / `MISMATCHES: <n>` / `ESCALATIONS: <n>`.

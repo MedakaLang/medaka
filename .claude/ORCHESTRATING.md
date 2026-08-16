@@ -10,13 +10,16 @@ Companion docs: `AGENTS.md` (agent-facing router) and the per-task **skills** in
 > ### ⭐ RUNNING A SPRINT? The workflow is MECHANIZED now (2026-08-16) — don't re-derive it from this file.
 >
 > This file remains the lessons ledger, but the sprint workflow itself lives in executable
-> artifacts, built from those lessons: **`.claude/skills/sprint-orchestrator`** (the seat: a
-> mechanical Sonnet 5 main session + a persistent Opus 5 `sprint-brain` agent adjudicating via a
-> rule table), **`.claude/skills/slice-landed`** (the per-slice completion sequence),
+> artifacts, built from those lessons: **`.claude/skills/sprint-plan`** (cutting the slice set),
+> **`.claude/skills/sprint-orchestrator`** (the seat: a mechanical Sonnet 5 main session + a
+> persistent Opus 5 `sprint-brain` agent adjudicating via a rule table),
+> **`.claude/skills/slice-landed`** (the per-slice completion sequence),
 > **`.claude/skills/sprint-packet`** (the handoff contract: slice forms incl. discovery spikes +
-> families, the refusal license, the five-section report), the role definitions in
+> families, the refusal license, the six-section report),
+> **`.claude/skills/sprint-findings`** (the bug/gap lifecycle), the role definitions in
 > **`.claude/agents/`** (`sprint-brain`, `sprint-implementer`, `slice-breaker`,
-> `spec-conformance-reviewer`, `sprint-planner`, `sprint-verifier`, `sprint-scout`), and
+> `spec-conformance-reviewer`, `sprint-planner`, `sprint-verifier`, `sprint-scout`,
+> `bug-reproducer`, `friction-triage`, `sprint-retro`), and
 > **`scripts/sprint-disjoint.sh`** (parallel-writer disjointness evidence). Where those artifacts
 > contradict older prose in this file — notably "Choosing the model" (pre-Claude-5 tiers) and the
 > Stage B role table (its own retro overturned its implementer row) — **the artifacts win**; the

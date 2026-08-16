@@ -1,6 +1,6 @@
 ---
 name: friction-triage
-description: Wrap-up agent that processes the sprint's friction ledger — clusters items by mechanism, dedupes against the tracker (and flags tracker dupes it notices), decides which items deserve issues, and drafts them ready-to-file. Dispatch once at sprint wrap-up with FRICTION.md, the reports dir, and the sprint's handle index. It drafts; the orchestrator files with readback.
+description: Wrap-up agent that processes the sprint's friction ledger — clusters items by mechanism, dedupes against the tracker (and flags tracker dupes it notices), decides which items deserve issues, and drafts them ready-to-file. Dispatch once at sprint wrap-up with FRICTION.md and the reports dir (handles for identifiers appear in the sprint ledgers — reuse them). It drafts; the orchestrator files with readback.
 model: sonnet
 tools: Read, Grep, Glob, Bash, Write
 ---
@@ -50,7 +50,7 @@ reasons, not filing everything.
    skill/agent/contract that caused the friction) is marked `route-to:
    sprint-retro` — evaluating the workflow is the retro's charter, not yours.
 
-# Report — §9 of the sprint-packet contract
+# Report — §9 of the sprint-packet contract (`.claude/skills/sprint-packet/SKILL.md` — Read it directly; you have no Skill tool)
 
 Verdict: `TRIAGED: <n> items -> <a> drafts, <b> comments, <c> routed, <d>
 dropped`. Body: the triage table (cluster | occurrences | decision | reason |

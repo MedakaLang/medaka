@@ -115,9 +115,12 @@ every word whose deletion changes anything.
 - **Branch name** and **absolute worktree path**. State explicitly: "Ignore any
   CLAUDE.md-header path — your tree is the path above; run everything with
   absolute paths."
+- **Form:** `standard` | `spike` | `family` (see Slice forms).
 - **Classification:** `parity` (behavior provably unchanged — diffs/gates are the
   oracle) or `behavior-changing` (anything else; all soundness work). This drives
   the model tier at dispatch: parity → Sonnet 5; behavior-changing → Opus 5.
+  **Spikes and unstable-DAG slices are always classified `behavior-changing`**
+  (always Opus 5), so the dispatch decision reads off these two fields alone.
 - **Collision matrix:** every other live or queued writer, the file-set
   intersection with this slice (**including goldens and snapshots** — disjoint
   source files have collided on one golden), and the `git merge-tree` evidence.
@@ -188,6 +191,12 @@ Rules for the planner writing it:
 - **`could move:`** what observable behavior could plausibly shift — feeds the
   DEBT.md row and gives the repair round its attack list. "Nothing, and here is
   why" is valid; silence is not.
+- **The DEBT.md row** the executing agent appends has exactly five fields, none
+  blank: `sites:` (the named sites actually touched), `transform:` (one line),
+  `could move:` (from above), `nearest miss:` (the nearest uncovered program,
+  from above), `unchecked:` (claims taken on trust / checks skipped). This is
+  the row every checker checks; "nothing, and here is why" is valid in any
+  field, silence is not.
 
 ## §7 Refusal license — verbatim in every packet
 
@@ -215,6 +224,13 @@ Rules for the planner writing it:
 > - Do not spawn subagents. Do the work yourself, sequentially.
 > - Stage commits BY PATH — never `git add -A`. Run `medaka fmt --write` and
 >   `medaka lint` on touched files before building.
+> - The pre-commit hook also runs a SNAPSHOT check on any staged `.mdk`: bless
+>   only the golden/snapshot moves §6 lists (via the gate's own `--bless`),
+>   `git add` the blessed files in the same commit, and run `make
+>   snapshot-check` first. If §6 defers a golden re-cut to a later commit,
+>   `PRECOMMIT_SNAPSHOT_DEFER=1` opts that one commit out — but a blessed
+>   snapshot sitting UNSTAGED on disk still fails any later `.mdk`-staging
+>   commit, so bless-and-stage LAST, after every `.mdk` commit is in.
 > - Work only in your worktree at the absolute path in §1. Do not read another
 >   agent's worktree.
 > - If this packet authorizes any `gh` interaction: prefer `scripts/pr.sh`
@@ -232,7 +248,12 @@ verdict line + the path — the FILE is the deliverable. Required sections:
 
 ```
 ## Verdict
-LANDED | REFUSED | BLOCKED | FINDINGS (reviewers) — one line, then one paragraph.
+One line, then one paragraph. Packet-executing agents: LANDED | REFUSED |
+BLOCKED — a family leaf writes `LANDED leaf <leaf-id> (<k>/<n>)` and the last
+one `LANDED family-final`; a spike writes `SPIKE-DONE (stability: STABLE |
+UNSTABLE)`. Reviewers: FINDINGS | CLEAR. Other roles use the verdict set their
+own definition fixes. The orchestrator branches on this line mechanically, so
+the vocabulary is closed per role — invent no values.
 
 ## Evidence
 Commands run and their key output, verbatim. Every claim above traceable to a
@@ -246,7 +267,9 @@ one non-issue is cheap; a buried decision is how S0s shipped.
 
 ## Deviations from packet
 Every place the executed work differs from the packet as written, however small,
-including "the packet said X sites, I found X+1". NONE is valid; absence is not.
+including "the packet said X sites, I found X+1". For an agent dispatched on a
+checklist or question rather than a packet, this section reads as deviations
+from the DISPATCH BRIEF — same duty, same format. NONE is valid; absence is not.
 
 ## Not covered
 What this work does NOT establish: shapes not probed, programs not run, claims

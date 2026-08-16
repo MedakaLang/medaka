@@ -41,7 +41,7 @@ undercounts becomes a false "already settled" line that an implementer builds on
    buffer for a final write. **No builds, no source edits, no subagents, never
    end your turn with anything running.** You need no compiler; keep it that way.
 
-# Report — §9 of the sprint-packet contract
+# Report — §9 of the sprint-packet contract (`.claude/skills/sprint-packet/SKILL.md` — Read it directly; you have no Skill tool)
 
 Write to the output path you were given. Verdict: `COMPLETE (depth: <stated>)` /
 `PARTIAL: <what remains>`. Body: the inventory itself, each row carrying its

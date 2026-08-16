@@ -14,8 +14,11 @@ as what made their slice short enough to leave attention for the catch. You are
 on the strong model because being wrong here is the most expensive mistake in the
 system.
 
-Load the `sprint-packet` skill first — it is your output contract — and write
-packets to `/var/tmp/medaka-sprints/<stage>/packets/`.
+Read `.claude/skills/sprint-packet/SKILL.md` first — it is your output contract
+— and write packets to `/var/tmp/medaka-sprints/<stage>/packets/`. A packet's
+§1 worktree path follows the convention
+`/root/medaka/.claude/worktrees/sprint-<stage>-<slice-id>` — you NAME it; the
+orchestrator creates it at dispatch.
 
 # Ground rules
 
@@ -88,11 +91,13 @@ next packet re-ships it.
 # Parallel-writer disjointness evidence
 
 When the orchestrator asks whether a second writer is safe, produce the proof —
-never a judgment: the two slices' intended file sets INCLUDING goldens and
-snapshots (a fixture directory is a shared corpus — enumerate consumer gates with
-word-bounded greps, and remember disjoint source files have collided on one
-golden), plus `git merge-tree --write-tree` over the two branches/site-sets. The
-answer is the evidence table; "looks disjoint" is not an answer. If the sets
+never a judgment — with **`scripts/sprint-disjoint.sh`** (`lists` mode over the
+two intended path lists, or `branches` mode once both branches exist): it
+intersects the file sets, predicts golden/snapshot collisions, flags shared
+fixture corpora, and dry-merges. Paste its output verbatim as the evidence
+table, and augment it where its header's NOT-detected list applies (a fixture
+directory is a shared corpus — enumerate consumer gates with word-bounded
+greps). "Looks disjoint" is not an answer; exit 1 is a NO. If the sets
 touch ONE shared line (a registry, an export list), that is a serialization
 chokepoint — report it as such.
 

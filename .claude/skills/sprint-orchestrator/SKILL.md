@@ -13,9 +13,10 @@ audited sprints, two of which would have been S0s.
 
 **Seat model: Sonnet 5.** This seat is deliberately mechanical. You dispatch, track,
 route, and record. You do NOT adjudicate: every judgment call goes to the
-**sprint-brain** (below) by rule, never by your own assessment of difficulty. If this
-session is not running Sonnet 5, tell Val before proceeding — a stronger model in
-this seat tends to adjudicate inline, which is how past S0s shipped unrecorded.
+**sprint-brain** (below) by rule, never by your own assessment of difficulty. At
+sprint start, state to Val which model you believe this session is running — the
+seat is designed for Sonnet 5, and a stronger model here tends to adjudicate
+inline, which is how past S0s shipped unrecorded.
 
 ## The seat and the brain
 
@@ -42,12 +43,12 @@ before acting:
 | Trigger | Why it can't be yours |
 |---|---|
 | Any refusal or "I disagree with the packet" finding | Refusals were right 5/6 times; adjudicating one is the highest-stakes call in the sprint |
-| Any critical/high review finding | Blocks arming; needs a repair-slice ruling |
+| Any S0/S1 review finding | Blocks (re-)arming and may dequeue; needs a repair-slice ruling |
 | Any deviation-from-packet in a report | The packet is the contract; deviations are scope questions |
 | Two reports conflicting | Needs a third probe, designed by the brain |
 | Any golden/snapshot adjudication or bless | A bless enshrines output as correct forever |
 | Any scope, sequencing, or slice-boundary change | Scope-splitting one decision made two S0s |
-| Anything that would write a new entry to DECISIONS.md | Definitionally a decision |
+| Anything that would write a new RULING to DECISIONS.md | Definitionally a decision. (Mechanical bookkeeping appends — the BASE pin, dispatch-log lines, a recorded idle reason, the heartbeat self-audit — are yours and need no consult) |
 | **Catch-all: you are about to do something not written in this loop** | Unrecognized judgment moments are how every recorded seat error happened |
 
 Escalating is free; improvising is not. When in doubt, there is no doubt — consult.
@@ -56,7 +57,13 @@ Escalating is free; improvising is not. When in doubt, there is no doubt — con
 
 Every subagent's definition mandates a fixed report format, written TO DISK in the
 sprint record dir, with the return message being only a pointer + verdict line. Your
-job is enforcement, and it is mechanical:
+job is enforcement, and it is mechanical. **Scope: rules 1–5 apply to every
+DISPATCHED agent's report. The brain is the one exemption — its consult replies
+follow its own five-section ruling format (Ruling / Derivation / Ledger entry /
+Actions / Escalate), checked for THOSE sections instead.** For agents dispatched
+on a checklist or question rather than a packet, "the path its packet named" means
+the report path in the dispatch brief, and `Deviations from packet` means
+deviations from that brief (packet contract §9).
 
 1. **On every agent return, first verify the report file exists on disk** at the
    path its packet named. Isolated-worktree agents: `cp` the report out of their
@@ -66,7 +73,7 @@ job is enforcement, and it is mechanical:
    minimum: `## Verdict`, `## Evidence` (commands + outputs, not claims),
    `## Decisions surfaced` (the literal string `NONE` is valid; absence is not),
    `## Deviations from packet` (`NONE` valid, absence not), `## Not covered`
-   (what this work does NOT establish), `## Friction` (`NONE` valid, absence
+   (what this work does NOT establish), "## Friction" (NONE valid, absence
    not — agents log, never triage).
 3. **A report missing any section BOUNCES** — send the agent back to complete it.
    Never fill a gap yourself, never infer what a missing section "would have said".
@@ -74,11 +81,12 @@ job is enforcement, and it is mechanical:
    `Deviations from packet` other than `NONE` → brain, with the file path. Any
    bug or gap reported anywhere → the `sprint-findings` skill's lifecycle
    (FINDINGS.md row → attribution → brain ruling REPAIR/ABSORB/FILE/DEFER/
-   DISMISS → execution). `Not covered` items → append to the sprint's
-   open-questions list in FINDINGS.md so they reach the repair round.
-   `Friction` items → append verbatim to FRICTION.md with the source report
-   path (no triage now — the `friction-triage` agent processes the whole
-   ledger at wrap-up).
+   DISMISS → execution). `Not covered` items → append verbatim to
+   OPEN-QUESTIONS.md (NOT FINDINGS.md — they carry no status column and would
+   jam the mechanical exit sweep) so they reach the repair round. "Friction"
+   items → append verbatim to FRICTION.md with the source report path (no
+   triage now — the `friction-triage` agent processes the whole ledger at
+   wrap-up).
 5. **Never merge, drop, or reword report content.** You move pointers and append
    verbatim text. If two documents disagree, that is a conflict → brain.
 6. **Enforce the identifier convention** (packet contract §0): every issue
@@ -164,8 +172,14 @@ machine is still turning."
 2. **Create the record dir** `/var/tmp/medaka-sprints/<stage>/` (never a bare
    `sprint/` name — two past runs collided on identical filenames):
    `DECISIONS.md` (append-only, each entry carries its derivation), `DEBT.md`
-   (one row per slice), `FINDINGS.md`, `FRICTION.md` (verbatim accumulation of
-   reports' Friction sections), `reports/`, `packets/`.
+   (one row per slice, five fields per packet contract §6), `FINDINGS.md`
+   (finding rows ONLY), `OPEN-QUESTIONS.md` (reports' `Not covered` items,
+   verbatim — separate from FINDINGS.md so the exit sweep's status-column check
+   never meets a row without a status), `FRICTION.md` (verbatim accumulation of
+   reports' Friction sections), `QUEUE.md` (queue state: next packet, arm-next
+   PR under serialized landing), `EXPECTED-RED.md` (the known-red gate set),
+   `reports/`, `packets/`, `scratch/` (breaker/reproducer repro programs — the
+   worktree-independent home that outlives their trees).
    **The record dir is EPHEMERAL and is NEVER committed to the repo** (Val's
    ruling: the repo is the "what" of the language; the roadmap's "how" lives in
    GitHub issues). `/var/tmp` is deliberate: disk-backed (`/tmp` is RAM-backed
@@ -176,13 +190,19 @@ machine is still turning."
    `test/`, memories, the tracking issue) — never through a `git add`.
 3. **Spawn the sprint-brain**; its first task: review the sprint contract, confirm
    the slice plan, and write DECISIONS.md's opening entries.
-4. **Write the expected-red block** into `.claude/HANDOFF.md` before any dispatch —
-   the known-red gate set for the duration, so nobody debugs a licensed red.
-5. **Queue the first two packets** (dispatch `sprint-planner` for #2 while #1 comes
-   from the sprint contract). One ahead only — deeper design-ahead measured a ~75%
-   rework rate; review of landed work reworks at zero.
-6. **Arm the heartbeat** (below).
-7. **Dispatch implementer #1.** The writer lane is now occupied and must stay so.
+4. **Write the expected-red block** to `EXPECTED-RED.md` and post it to the
+   tracking issue before any dispatch — the known-red gate set for the duration,
+   so nobody debugs a licensed red. (NOT to `.claude/HANDOFF.md`: an uncommitted
+   repo-file edit is invisible to every agent worktree created at BASE, and
+   committing it violates the ephemeral-records rule.)
+5. **Dispatch `sprint-planner` for packet #1** — the contract's slice table is
+   boundary-depth by design and is NOT a packet; dispatching an implementer on
+   it would bounce as incomplete. When packet #1 returns `PACKET-READY`, run its
+   completeness scan (below), dispatch implementer #1, and immediately dispatch
+   the planner for packet #2. One ahead only from then on — deeper design-ahead
+   measured a ~75% rework rate; review of landed work reworks at zero.
+6. **Arm the heartbeat** (below). The writer lane is now occupied and must stay
+   so.
 
 ## Steady state — the `slice-landed` sequence
 
@@ -199,9 +219,10 @@ load-bearing (writer lane first, bookkeeping last):
 6. Only now: bookkeeping — DEBT row readback, ledger appends, report routing —
    while the writer runs.
 
-Review findings: critical/high blocks *arming*, not the writer lane; the brain rules
-on the repair slice and it enters the queue. Findings on already-armed PRs: dequeue
-via GraphQL (`--disable-auto` does not dequeue).
+Review findings: an S0/S1 finding blocks further arming and — since arming (step
+3) normally precedes review (step 4) — usually means DEQUEUE the already-armed PR
+via GraphQL (`--disable-auto` does not dequeue), then hold re-arming until the
+brain's repair ruling lands. Not the writer lane: it keeps moving throughout.
 
 ## Slice forms and decomposition
 
@@ -210,11 +231,13 @@ family — see the `sprint-packet` skill's "Slice forms" for the rationale). You
 handling is mechanical:
 
 - **Discovery spike:** dispatch a `sprint-implementer` with model override
-  `opus` and the spike packet. On return, verify its tree is byte-identical to
-  base (`git -C <wt> diff --stat` empty) — a spike that shipped code bounces.
-  Its report's **stability verdict** drives the next dispatch with no judgment:
-  stable DAG → planner cuts a family packet (Sonnet 5); unstable DAG → planner
-  cuts one standard slice (Opus 5 override).
+  `opus` and the spike packet. On return, BEFORE reaping its worktree, verify
+  the tree is byte-identical to base (`git -C <wt> diff --stat` prints nothing;
+  the report's Evidence must also carry that output) — a spike that shipped
+  code bounces. Its Verdict line — `SPIKE-DONE (stability: STABLE | UNSTABLE)`,
+  packet contract §9 — drives the next dispatch with no judgment: STABLE →
+  planner cuts a family packet (Sonnet 5); UNSTABLE → planner cuts one
+  standard `behavior-changing` slice (Opus 5).
 - **Family:** dispatch ONE implementer on leaf 1; when its leaf report lands,
   run the report-contract check on that leaf's block, then **continue the SAME
   agent via SendMessage** ("leaf N next") — do not spawn a fresh implementer per
@@ -232,10 +255,13 @@ handling is mechanical:
 Default is one writer. A second writer requires ALL of:
 - **Its own worktree** (one writer per worktree, no exceptions — shared `./medaka`
   contaminated four measurements in one sprint).
-- **Proven disjointness**: `git merge-tree --write-tree` over the two slices'
-  intended file sets **including goldens and snapshots** — disjoint source files have
-  collided on a single golden before. The proof lives in the packet; the brain
-  signs off on it.
+- **Proven disjointness**: `scripts/sprint-disjoint.sh` (`lists` mode for
+  intended file sets, `branches` mode for cut branches) — it runs the
+  merge-tree dry merge AND predicts golden/snapshot collisions, which
+  hand-rolled `comm` misses and which is the recorded collision shape (disjoint
+  source files have collided on a single golden). Its evidence table, verbatim,
+  lives in the packet; the brain signs off. Exit 1 = not disjoint, no appeal at
+  this seat.
 - **Serialized landing**: arm ONE PR at a time; GitHub evaluates mergeability
   against main, never against queue siblings.
 
@@ -244,12 +270,19 @@ Default is one writer. A second writer requires ALL of:
 Arm at sprint start: `/loop` with this tick list (self-paced wakeups, ~600 s). Each
 tick **derives state from scratch — never carry state across ticks**:
 
+0. **Interlock:** if a `slice-landed` sequence is mid-flight (its lock file
+   `SEQUENCE.lock` exists in the sprint dir), take NO dispatch or arming action
+   this tick — record `tick: deferred (sequence live)` and stop. Without this, a
+   tick firing between that sequence's steps can double-dispatch a writer or arm
+   out of order.
 1. **Writer lane:** is at least one implementer live? If not, why — and dispatch.
 2. **Parallelization:** anything waiting that a reader could do now (review, packet,
    enumeration) against a pinned commit?
-3. **CI rollup:** one `gh pr view --json statusCheckRollup` per open PR + queue
-   membership via `isInMergeQueue` (GraphQL). Arming lapses silently — re-verify
-   until `MERGED`.
+3. **CI rollup + serialized arming:** one `gh pr view --json statusCheckRollup`
+   per open PR + queue membership via `isInMergeQueue` (GraphQL). Arming lapses
+   silently — re-verify until `MERGED`. Read `QUEUE.md`: if it names an
+   arm-next PR and no PR of yours is currently queued, arm it now
+   (`scripts/pr.sh enqueue --timeout 60`) and update `QUEUE.md`.
 4. **Agent liveness:** a task-notification whose text says "waiting for the
    background build" is by construction waiting on an event that cannot arrive —
    resume it with the check, not the verdict. Discriminate stall vs phantom with
@@ -260,23 +293,35 @@ tick **derives state from scratch — never carry state across ticks**:
    next stall — fix it now.
 7. **Self-audit:** did I do anything this interval not written in this loop, or
    resolve anything without the brain? If yes → report it to the brain
-   retroactively, now. An improvised action that stays unreported is the crack.
+   retroactively, now, AND append a `self-audit:` line to DECISIONS.md either
+   way (`clean` or the improvisation, one line — a mechanical append, no
+   consult needed). This running log is the retro's evidence base for the
+   seat-model trial; an improvised action that stays unrecorded is the crack.
 
 ## Measurement quiescence
 
-No gate result, drain claim, or perf number is valid while any writer holds
-uncommitted edits. If you must measure mid-run: commit everything, confirm no
-writer is live, run twice — two runs disagreeing means the tree is moving, not the
-suite. A drain on a non-quiescent tree once reported 5 phantom DRAINS whose natural
-next action was closing five live bugs.
+Quiescence is PER TREE: no gate result, drain claim, or perf number measured in a
+tree is valid while any agent holds uncommitted edits or a build IN THAT TREE —
+which is why writers get their own worktrees, and why measurements run in a tree
+no writer occupies (the trunk, or a dedicated measurement worktree at a pinned
+SHA). Before trusting any such number: confirm the measuring tree is quiescent
+(`git -C <tree> status --short` empty, no build process), and run twice — two
+runs disagreeing means the tree is moving, not the suite. A drain measured under
+a live writer once reported 5 phantom DRAINS whose natural next action was
+closing five live bugs.
 
 ## End of sprint
 
 1. **Repair round — non-optional.** Both audited sprints introduced S0/S1s mid-run;
-   every one was caught by this round, zero by gates. Fresh adversarial reviewers
-   over the whole sprint diff, briefed to attack "no-op" claims and
-   self-declared-unreachable residuals (wrong 3/3 times on record). The brain
-   designs the round; you dispatch it.
+   every one was caught by this round, zero by gates. Concretely: the brain
+   designs the round (attack list over the whole sprint diff — "no-op" claims
+   and self-declared-unreachable residuals first, wrong 3/3 times on record);
+   the planner cuts it as review packets (target diff range, attack list,
+   report paths — a review packet's "named sites" are the claims to attack);
+   you dispatch fresh `slice-breaker`s on them, each in its own worktree you
+   create, plus a `spec-conformance-reviewer` over the sprint's ledgers vs its
+   PRs. Findings run the `sprint-findings` lifecycle; a REPAIR ruling here
+   blocks SPRINT exit.
 2. **Report sweep:** confirm `reports/` holds every dispatched agent's report file —
    the dispatch log (DECISIONS.md) is the checklist. A missing report is a finding,
    not a shrug.
@@ -293,12 +338,16 @@ next action was closing five live bugs.
    with the full record dir, the heartbeat's self-audit/improvisation log, and
    friction-triage's report. Relay RETRO.md to Val UNFILTERED — its proposals
    and escalations are hers to approve; you apply nothing from it yourself.
-6. **Export, then dispose.** Post the close-out summary and RETRO.md's content
-   as comments on the sprint's TRACKING ISSUE (created by `sprint-plan`; the
-   durable "how" home — verify by readback), then close it referencing the
-   merged PRs. Now the record dir has nothing unique left: the exit guarantees
-   exported findings (issues + pins), friction (issues), decisions that matter
-   beyond the sprint (memories/spec PRs), and the retro (tracking issue).
+6. **Export, then dispose.** Compose the close-out summary — mechanical, from
+   the ledgers: the slice table's final states, merged PR list, the findings
+   sweep's terminal tally, refusal count, DEBT rows — and post it, RETRO.md's
+   content, AND the full text of every draft file the retro produced (they are
+   Val's to approve later; content that exists only in the dir dies in step
+   below) as comments on the sprint's TRACKING ISSUE (created by `sprint-plan`;
+   verify by readback), then close it referencing the merged PRs. Now the
+   record dir has nothing unique left: the exit guarantees exported findings
+   (issues + pins), friction (issues), decisions that matter beyond the sprint
+   (memories/spec PRs), and the retro + drafts (tracking issue).
    Archive-and-delete it: `tar -czf /var/tmp/medaka-sprints/<stage>.tar.gz
    <dir> && rm -rf <dir>` — the tarball is a courtesy for post-mortems, not a
    record; anything someone would need to UNTAR to know was exported wrongly.

@@ -45,8 +45,9 @@ ref, and never another agent's worktree.
    of a golden is a silent blend). A moved golden nobody adjudicated as CORRECT —
    as opposed to merely current — is a finding: blessing records what the engine
    did, not what is right.
-6. **Ledger hygiene.** DEBT row present with no blank `could move:` /
-   `nearest miss:` fields ("nothing, and here is why" is valid; silence is not);
+6. **Ledger hygiene.** DEBT row present with all five §6 fields (`sites:`
+   `transform:` `could move:` `nearest miss:` `unchecked:`) non-blank
+   ("nothing, and here is why" is valid; silence is not);
    report has all six §9 sections with real content (a `NONE` that the diff
    contradicts is a finding); any issue the slice claims to fix has its pin
    status stated (drained pins can lie — a pin drains on shape, not mechanism;
@@ -67,7 +68,7 @@ lives where no text governs. You may run read-only probes (`git show`, greps,
 as a named suggestion for the slice-breaker in your report rather than running
 it yourself.
 
-# Report — §9 of the sprint-packet contract
+# Report — §9 of the sprint-packet contract (`.claude/skills/sprint-packet/SKILL.md` — Read it directly; you have no Skill tool)
 
 Write to the report path you were given, incrementally. Verdict `FINDINGS` or
 `CLEAR`. Each finding:

@@ -51,10 +51,11 @@ From the sprint record dir and PR/CI history, derive at least:
 - **Refusal ledger:** every refusal/bounce — was it right? (Adjudicated how?)
   A sprint with zero refusals is a finding about brief-for-refusal, not a
   success.
-- **Escalation routing:** the orchestrator's self-audit and improvisation log —
-  did the mechanical seat improvise or adjudicate inline? Did any ruling
-  happen off-ledger? (This is the standing trial protocol for the Sonnet-seat
-  design; mis-routing here is a seat-model question for Val.)
+- **Escalation routing:** the heartbeat's `self-audit:` lines in DECISIONS.md
+  (one per tick, `clean` or the improvisation) plus the consult log — did the
+  mechanical seat improvise or adjudicate inline? Did any ruling happen
+  off-ledger? (This is the standing trial protocol for the Sonnet-seat design;
+  mis-routing here is a seat-model question for Val.)
 - **Packet accuracy:** per slice, deviations-from-packet and premise failures —
   which §4 facts fell, and would a spike have caught them?
 - **Catch attribution:** every defect found this sprint × which mechanism
@@ -92,7 +93,7 @@ changes. If the evidence contradicts a principle itself, that is the most
 valuable finding a retro can produce — escalate it to VAL as a named question;
 do not soften it and do not act on it.
 
-# Report — §9 of the sprint-packet contract
+# Report — §9 of the sprint-packet contract (`.claude/skills/sprint-packet/SKILL.md` — Read it directly; you have no Skill tool)
 
 Verdict: `RETRO: <n> proposals, <m> escalations`. `Not covered`: evidence you
 could not recover (missing logs, unrecoverable token counts) — name it so the
