@@ -26,6 +26,22 @@
 -- what proves the residue is NOT the alias spelling and NOT this fix's to
 -- close. #1427 therefore stays OPEN until that slice lands and repairs `run`.
 --
+-- ⭐ THE ATTRIBUTION NOW HAS FOUR INDEPENDENT CELLS, NOT ONE (RUN-XMOD-039 F5 --
+-- the slice-breaker re-derived two of them independently at shapes this fixture
+-- does not itself contain, and they belong here rather than in a new issue):
+--   1. THIS file (depth-1 re-export, ALIAS spelling, at `Int`)      -- run panics
+--   2. the selective-spelling control beside it (depth-1, at `Int`) -- run panics
+--   3. a DEPTH-3 re-export chain, alias spelling, at `Int`          -- run panics
+--      (`intToString: not an Int`); build 0, binary correct at `2`
+--   4. the same shape instantiated at `Float` (`f x = x + x`)       -- run panics
+--      (`floatToString: not a Float`); build 0, binary correct at `5.0`
+-- Cell 4 is the one that proves the BUILD arm's repair is real rather than a
+-- lucky `Int` default: a wrongly-routed `Num` dict cannot print `5.0`. And the
+-- pattern across all four -- BOTH spellings, BOTH depths, BOTH numeric types,
+-- run broken every time while build is correct every time -- is what makes the
+-- dict-arity channel the attribution rather than anything about aliasing or
+-- re-export depth.
+--
 -- MODE IS PLAIN `BUILD_EXACT`, NOT THE `<run>%%<build>` SPLIT, and that is a
 -- measured limitation rather than a choice: `run` emits ZERO bytes on stdout
 -- before dying, and the split half is compared through `printf '%b\n'`, which
