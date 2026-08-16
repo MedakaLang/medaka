@@ -123,8 +123,9 @@ if sprint:
         "slice-breaker, spec-conformance-reviewer, sprint-planner, "
         "sprint-verifier, sprint-scout.\n"
         "- A bug/gap was found mid-sprint -> load sprint-findings (row -> "
-        "attribution -> brain ruling REPAIR/ABSORB/FILE/DEFER/DISMISS; every "
-        "row terminal before exit).\n"
+        "bug-reproducer bundle -> brain's two-question ruling: in-sprint w/ "
+        "adjustment sweep, or orthogonal placed PLANNED-vs-GAP; every row "
+        "terminal before exit).\n"
         "- Parallel-writer disjointness evidence -> scripts/sprint-disjoint.sh."
     )
 

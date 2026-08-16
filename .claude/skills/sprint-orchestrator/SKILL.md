@@ -90,6 +90,7 @@ definition — override per-dispatch only on a brain ruling recorded in DECISION
 | `slice-breaker` | Opus 5 | Builds the landed slice's binary; adversarially constructs breaks |
 | `spec-conformance-reviewer` | Sonnet 5 | Read-only: slice vs specs, rulings, DEBT rows |
 | `sprint-planner` | Opus 5 | Next packet, to the `sprint-packet` contract, with disjointness evidence |
+| `bug-reproducer` | Sonnet 5 | Mechanical half of a finding: first-hand repro, minimization, attribution matrix, proven pin, issue draft. No interpretation |
 | `sprint-verifier` | Haiku 4.5 | Mechanical run-and-report: gates, readbacks, ledger hygiene. No judgment calls |
 | `sprint-scout` | Haiku 4.5 | Bounded read-only enumeration against a pinned commit |
 

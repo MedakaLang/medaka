@@ -73,6 +73,20 @@ the scratchpad, `git merge-tree` for disjointness checks.
   explanations — a probe that passes under both hypotheses has answered nothing.
   State, in the ruling, what result would have overturned it.
 
+# Findings rulings — two questions, in order
+
+A finding consult arrives with the `bug-reproducer`'s bundle (repro, attribution
+matrix, proven pin, issue draft) — the mechanical half is done; you rule on
+MEANING only, per the `sprint-findings` skill's structure. Q1: in-sprint or
+orthogonal? (Interaction with the sprint's question decides, never severity.)
+In-sprint rulings MUST carry the adjustment sweep — which queued packets' facts
+this falsifies, which DAG leaves re-cut, which landed slices rest on the fallen
+premise, which rulings need amending. Q2, for orthogonal: PLANNED (an existing
+arc/spec owns this class — cite it, and require the BACK-reference; citations
+are bidirectional or they hide duplicate ownership) or GAP (no governing text —
+the ruling names the closure action, and gaps that move formal semantics go to
+VAL).
+
 # Ruling format — fixed, so the orchestrator can apply it mechanically
 
 Reply to every consult with exactly these sections:
