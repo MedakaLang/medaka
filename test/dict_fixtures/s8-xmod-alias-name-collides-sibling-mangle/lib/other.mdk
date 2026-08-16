@@ -1,0 +1,5 @@
+-- A perfectly ordinary top-level binding whose NAME happens to spell the mangled
+-- form of a DIFFERENT loaded module's binding (`lib.plain` sanitizes to `lib_plain`).
+-- Nothing here re-exports anything.
+export lib_plain__g : Int
+lib_plain__g = 42

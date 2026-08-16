@@ -27898,20 +27898,35 @@ resolveMemberSchemes (origin, local) depSchemes = match lookupAssoc origin depSc
 -- (#1427); for an unconstrained one the enclosing prelude call's dict route resolves to
 -- nothing, the emitter writes a null dict operand, and the BINARY segfaults (#1472).
 --
--- Conservatism (the property this rests on): a BARE key — no `<sanitized mid>__` prefix
--- for any loaded module — is still re-bound under the alias.  That population is exactly
--- the interface METHODS (publicValNames admits them; private_mangle's rename map, built
--- from unitDefNames/pubFnNames, never renames them), which is the occurrence-carrier
--- question #1276/#1386 own — deliberately NOT moved here.  The only keys whose binding
--- changes are those mangled for a DIFFERENT loaded module, i.e. precisely the
--- re-exported ones, i.e. precisely the defect.
-aliasSchemes : List String -> String -> List (String, Scheme) -> List (String, Scheme)
-aliasSchemes mids alias depSchemes =
-  map (aliasSchemeEntry mids alias) depSchemes
+-- Conservatism (the property this rests on): a BARE key — one no loaded module exports
+-- under that exact name with that module's own mangle prefix — is still re-bound under
+-- the alias.  That population is exactly the interface METHODS (publicValNames admits
+-- them; private_mangle's rename map, built from unitDefNames/pubFnNames, never renames
+-- them), which is the occurrence-carrier question #1276/#1386 own — deliberately NOT
+-- moved here.  The only keys whose binding changes are those a DIFFERENT loaded module
+-- actually exports under its mangled name, i.e. precisely the re-exported ones, i.e.
+-- precisely the defect.
+--
+-- 🚨 THE TEST IS AN IDENTITY TEST, NOT A STRING-SHAPE TEST (RUN-XMOD-039 F2), and it
+-- must stay one.  A first version asked only "does `k` carry SOME loaded module's mangle
+-- prefix?" — a pure spelling question — and that regressed a program base accepted: with
+-- a module `lib.plain` loaded, an unrelated module's ordinary exported binding literally
+-- named `lib_plain__g` was misread as already-mangled and rejected `Unbound variable:
+-- O.lib_plain__g` at exit 1.  That surface is UNBOUNDED AND GROWS WITH THE MODULE GRAPH
+-- (every module `a.b` makes `a_b__x` a landmine), and a sprint whose thesis is "identity
+-- must not be derived from spelling" cannot decide identity by spelling, even in a guard.
+-- ⚠️ So do NOT repair a future false positive here by TIGHTENING THE PREFIX PATTERN — a
+-- narrower heuristic has a smaller unbounded surface, not a bounded one.  The conjunct
+-- below is what bounds it: `k` must be a name the candidate module ACTUALLY EXPORTS, so
+-- a false positive now requires two modules to genuinely export the same symbol rather
+-- than one identifier to merely look like a mangled one.
+aliasSchemes : List (String, List (String, Scheme)) -> String -> List (String, Scheme) -> List (String, Scheme)
+aliasSchemes deps alias depSchemes =
+  map (aliasSchemeEntry deps alias) depSchemes
 
-aliasSchemeEntry : List String -> String -> (String, Scheme) -> (String, Scheme)
-aliasSchemeEntry mids alias (k, s) =
-  if isMangledForAny mids k then
+aliasSchemeEntry : List (String, List (String, Scheme)) -> String -> (String, Scheme) -> (String, Scheme)
+aliasSchemeEntry deps alias (k, s) =
+  if isMangledExportOfAny deps k then
     (k, s)
   else
     (qualifiedLocal alias k, s)
@@ -27923,17 +27938,26 @@ isMangledFor mid k =
   let lp = stringLength pre
   lp <= stringLength k && stringSlice 0 lp k == pre
 
--- is `k` mangled for ANY module in this compilation?  Short-circuiting and monomorphic
--- on purpose (a dict-passed `any` over a closure is the measured anti-pattern here).
-isMangledForAny : List String -> String -> Bool
-isMangledForAny [] _ = False
-isMangledForAny (m::ms) k = isMangledFor m k || isMangledForAny ms k
+-- is `k` a symbol some loaded module ACTUALLY EXPORTS under that module's own mangled
+-- name?  Both halves are load-bearing and the ORDER is deliberate: the cheap spelling
+-- test gates the assoc lookup, so the scan below runs only for the rare key that already
+-- looks mangled.  Short-circuiting and monomorphic on purpose (a dict-passed `any` over
+-- a closure is the measured anti-pattern here).
+isMangledExportOfAny : List (String, List (String, Scheme)) -> String -> Bool
+isMangledExportOfAny [] _ = False
+isMangledExportOfAny ((m, pubV)::rest) k = isMangledFor m k && isSome (lookupAssoc k pubV)
+  || isMangledExportOfAny rest k
 
 -- the (key, scheme) pairs a single `import` form brings into scope, resolving each
--- member to its (possibly mangled) key in the dependency's schemes.  `mids` is the
--- loaded module-id set (see aliasSchemes); the non-alias arms ignore it — their
--- resolution is definer-agnostic by construction (a `__<name>` SUFFIX test, and the
--- wildcard form performs no mangle test at all).
+-- member to its (possibly mangled) key in the dependency's schemes.  `deps` is the
+-- loaded dependency environment — module id PLUS that module's public schemes, because
+-- the alias arm's test needs the exported NAMES, not just the ids (see aliasSchemes).
+-- The non-alias arms ignore it — their resolution is definer-agnostic by construction
+-- (a `__<name>` SUFFIX test, and the wildcard form performs no mangle test at all).
+--
+-- Passing `depEnv` WHOLE is also what supplies the spelled `depId` itself: both callers
+-- reach this only through a successful `lookupAssoc depId depEnv`, so the spelled module
+-- is in the list by construction and needs no separate term.
 --
 -- 🚨 `"core"` IS DELIBERATELY **NOT** IN `mids`, AND MUST NOT BE ADDED BACK
 -- (RUN-XMOD-039).  It was, briefly.  The argument for it reads well — `reexportSeed`'s
@@ -27946,9 +27970,9 @@ isMangledForAny (m::ms) k = isMangledFor m k || isMangledForAny ms k
 -- `core__foo` reached through an alias import was misread as already-mangled and left
 -- un-rebound — `Unbound variable: O.core__foo`, exit 1, on a program that compiled and
 -- printed correctly before.  Zero measured benefit, measured cost.
-importFormSchemes : List String -> UsePath -> List (String, Scheme) -> List (String, Scheme)
-importFormSchemes mids (UseAlias _ alias) depSchemes =
-  aliasSchemes mids alias depSchemes
+importFormSchemes : List (String, List (String, Scheme)) -> UsePath -> List (String, Scheme) -> List (String, Scheme)
+importFormSchemes deps (UseAlias _ alias) depSchemes =
+  aliasSchemes deps alias depSchemes
 importFormSchemes _ path depSchemes = match importedBindings path
   None => depSchemes
   Some bindings => flatMap (b => resolveMemberSchemes b depSchemes) bindings
@@ -28658,7 +28682,7 @@ importSeed ((DUse _ path _)::rest) depEnv =
   let depId = usePathModuleId path
   match lookupAssoc depId depEnv
     None => importSeed rest depEnv
-    Some depSchemes => importFormSchemes (depId :: map fst depEnv) path depSchemes
+    Some depSchemes => importFormSchemes depEnv path depSchemes
       ++ importSeed rest depEnv
 importSeed (_::rest) depEnv = importSeed rest depEnv
 
@@ -29007,7 +29031,7 @@ reexportSeed coreV ((DUse True path _)::rest) depEnv =
   let src = if depId == "core" then Some coreV else lookupAssoc depId depEnv
   match src
     None => reexportSeed coreV rest depEnv
-    Some depSchemes => importFormSchemes (depId :: map fst depEnv) path depSchemes
+    Some depSchemes => importFormSchemes depEnv path depSchemes
       ++ reexportSeed coreV rest depEnv
 reexportSeed coreV (_::rest) depEnv = reexportSeed coreV rest depEnv
 

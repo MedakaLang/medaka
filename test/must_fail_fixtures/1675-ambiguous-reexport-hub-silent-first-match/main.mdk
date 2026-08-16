@@ -1,0 +1,3 @@
+import lib.hub.{g}
+
+main = println (g 1)
