@@ -20,14 +20,28 @@ permuter tries all 3! = 6 orderings.
 
 ## HOW THE EXPECTED VALUES WERE ESTABLISHED
 
-⚠️ These are NOT adjudicated correct answers -- no spec ruling exists for what
-`mth "abc" 5` should mean when two unrelated interfaces share a bare method name at
-DIFFERING dispatch indices plus a standalone shadow. #1351's own body derives (by
-hand, from the declared signatures, independently of this gate) that `7` -- the
-body of `impl IZ String`, whose `mth` takes an `Int` first -- cannot be reached
-correctly by a call whose first argument is a `String`; but it explicitly does NOT
-settle whether the "right" answer is the standalone's `99` or a rejected program.
-**What this row pins is the DIVERGENCE, not a verdict on which side is correct.**
+⚠️ UPDATED 2026-08-16: a spec ruling now exists and settles the correct answer for
+this exact corpus. `docs/spec/SHADOW-SEMANTICS.md`'s S2-DECL (🔒 RULED 2026-08-09,
+against #1351 itself) decides it, and this sprint's DECISIONS.md RUN-XMOD-006
+hand-derives the converged value from S2-DECL (a)+(b)+(d): `main.mdk` imports
+`fmodI.{mth}`, `amodI.{af}`, `zmodI.{IZ, zf}` -- naming `IZ` only, not `IA` -- so the
+admitted set is the singleton `{IZ}`, S2-DECL (d)'s exactly-one arm. `IZ`'s declared
+`mth : Int -> b -> Int` puts its dispatch typaram at parameter 1, so the receiver
+argument is the literal `5`, head `Int`; `zmodI` declares only `impl IZ String`, so
+no `impl IZ Int` exists anywhere in the graph; by S2-DECL (b) the impl query comes
+from that same declaration and misses, so the importer arm falls through to the
+standalone: `fmodI.mth "abc" 5 + af 0 + zf 0` converges on **`99`, on all six
+orderings and all three verbs (`check`/`run`/`build`)**. S2-DECL's own cost
+paragraph independently predicts the same value. #1351's own body derives (by hand,
+from the declared signatures, independently of this gate) that `7` -- the body of
+`impl IZ String`, whose `mth` takes an `Int` first -- cannot be reached correctly by
+a call whose first argument is a `String`; the ruling above additionally forecloses
+a uniform reject as the answer (an order-invariant reject is still wrong, per
+RUN-XMOD-022 / RUN-XMOD-053 in this sprint's DECISIONS.md). **This row still pins
+the current DIVERGENCE below, which is the pre-fix defect -- neither the `7`s nor
+the rejects match the ruled `99`, and the transcribed signatures are left unchanged
+as the honest record of what `sh test/diff_compiler_import_order.sh` measures on
+today's binary.**
 
 The two signatures below are exactly what `sh test/diff_compiler_import_order.sh`
 itself printed for this case while UNLEDGERED, transcribed verbatim (not
