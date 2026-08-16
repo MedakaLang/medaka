@@ -1,9 +1,0 @@
-import di.{Tag(..), tag}
-
-public export data Box = Box
-
-impl Tag Box where
-  
-
-export dtag : Box -> Int
-dtag b = tag b

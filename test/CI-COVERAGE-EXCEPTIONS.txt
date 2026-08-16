@@ -138,4 +138,3 @@ test/registry_keying_ratchet   run every time via test/typecheck_compiler_source
 # CLI, stdout diffed against committed goldens — 14 ok / 0 failing) is now in the `backend`
 # shard. It is the gate that would have caught this session's `diff_compiler_llvm` bug, where
 # 201/201 passed against goldens no `medaka build` binary can actually produce.
-.claude/sprint-phase3/repro/run   NOT A GATE. Repro harness for the Stage B/Phase 3' sprint's in-passing findings (F-1, F-2, F-8): it re-runs their programs against any medaka binary so the recorded measurements can be reproduced after the session ends. It asserts nothing and grades nothing — every arm's exit code is data, and several arms are EXPECTED to fail (F-2's build E-PANICs on purpose). Running it in CI would red the suite on findings that are correctly still open. The findings themselves are pinned by test/must_fail_fixtures/ rows, which is where CI enforcement belongs.

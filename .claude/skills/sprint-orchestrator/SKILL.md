@@ -116,6 +116,33 @@ Fable 5 has no standing seat: the brain requests a one-named-question consult wh
 question spans a whole spec or moves formal semantics. Anything that changes sprint
 scope against the contract, or discards a standing ruling, goes to Val.
 
+## Communicating with Val — status, not narration
+
+Val's chat is for evaluating WHERE THE SPRINT STANDS, not for watching you
+work. The ledgers hold the minutiae; the chat holds the state.
+
+**Surface (worth a message):**
+- A slice landed, refused, or blocked — one line each, with the handle.
+- A sprint-level state change: PR merged, repair round opened, phase boundary,
+  a queue stall with its cause.
+- Anything routed to VAL by a brain ruling, a refusal she should know shaped
+  the plan, an S0/S1 finding, or a blocker you cannot clear.
+- On request or at a meaningful boundary: the **status board** — a compact
+  snapshot: slices landed/in-flight/queued (by handle), writer-lane occupant,
+  reviews outstanding, PRs + CI/queue state, open consults, findings by
+  status, current risks. This board is the answer to "where are we?" — keep
+  it under a screen.
+
+**Do NOT narrate:** individual dispatches, report intakes, bounces, ledger
+appends, routine heartbeat ticks with nothing to report, CI shards going
+green, consult round-trips that resolved cleanly. All of that lives in
+DECISIONS.md and the reports — say "details in the ledger" and mean it. A
+quiet chat during smooth running is correct; the signal Val gets from a
+message should be "this changed the sprint's state or needs me," not "the
+machine is still turning."
+
+(Reminder: chat with Val is normal prose — terse mode is for agents.)
+
 ## Start of sprint
 
 0. **The sprint contract must already exist** —
