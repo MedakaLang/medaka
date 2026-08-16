@@ -1,0 +1,77 @@
+issue: 1664
+what: `docs/spec/SHADOW-SEMANTICS.md`'s S2-DECL-SCOPE note (2026-08-16) governs what
+what: an admitted declaration DENOTES. Three measured cells on this graph pin the
+what: actual causal variable:
+what:
+what:   graph / admission                          | run     | value
+what:   -------------------------------------------|---------|-------
+what:   main.mdk: IA admitted, IZ admitted          | 7       | (see below)
+what:   iz-unadmitted.mdk: IA admitted, IZ NOT admitted, `impl IZ String` present | 7 | IDENTICAL
+what:   control.mdk: IA admitted, zmodI absent entirely (no `impl IZ String`)     | 99 | differs
+what:
+what: `main.mdk` and `iz-unadmitted.mdk` give the SAME wrong value (7) despite `IZ`
+what: being ADMITTED in one and NOT admitted in the other -- so admission count is
+what: NOT the causal variable. What flips the answer is whether `impl IZ String`
+what: is PRESENT IN THE GRAPH AT ALL (control.mdk has no zmodI import of any kind,
+what: so no `impl IZ String` exists anywhere in the compiled program). This is an
+what: S2-DECL **(c)** violation, not (b): `implExistsForHead` is keyed by method
+what: name + head tycon, never by interface, so it can answer about an impl of a
+what: declaration `M` cannot even name (`iz-unadmitted.mdk` never admits `IZ`) --
+what: exactly what (c) forbids.
+what: Denotation-wise: both `IA` and `IZ` (when admitted) denote the imported
+what: standalone (99) on their OWN geometry -- `IA` alone has no `impl IA String`;
+what: `IZ` alone has `impl IZ String` but no `impl IZ Int`, and `IZ`'s own receiver
+what: argument is position 1 (value `5`, head `Int`), not position 0. The observed
+what: `7` is `impl IZ String`'s body, reached from a String-typed call at argument
+what: POSITION 0 -- `IA`'s geometry, not `IZ`'s -- via an impl query
+what: (`implExistsForHead "mth" "String"`) that never checks whether the
+what: declaration owning that impl is even in scope.
+what: Verified first-hand on this slice's binary (MEDAKA_STRICT=1):
+what:   medaka check main.mdk           -> "main : Unit", exit 0 (zero diagnostics)
+what:   medaka run main.mdk             -> 7, exit 0
+what:   medaka run iz-unadmitted.mdk    -> 7, exit 0 (NOT run by this gate; see its
+what:                                       own header comment -- traceability only)
+what:   medaka run control.mdk          -> 99, exit 0
+cmd: run main.mdk
+exit: 0
+stdout: 7
+control: run control.mdk
+why-verb: `run` rather than `build-run`: the defect is reached in the shared front end
+why-verb: (methodDispatchIdx / recordRLocalSite, compiler/types/typecheck.mdk), which
+why-verb: `medaka run` and `medaka build` both go through, so the two engines are not
+why-verb: two independent observations here and `run` is the cheaper verb (no clang).
+why-verb: `check` cannot be the verb: check is clean (exit 0, zero diagnostics) on
+why-verb: main.mdk -- the silence is precisely the defect (no diagnostic exists for
+why-verb: an S2-DECL (c) violation of this shape).
+why-stdout: the observable is a WRONG VALUE AT EXIT 0 -- `7` matches neither `IA`'s
+why-stdout: nor `IZ`'s own denotation (both denote 99 on their own geometry), and it
+why-stdout: is unmoved by whether `IZ` is even admitted (`iz-unadmitted.mdk` cell) --
+why-stdout: only removing `impl IZ String` from the graph entirely (control.mdk)
+why-stdout: moves it, which is the (c) signature.
+why-control: control.mdk removes the WHOLE `import zmodI.{IZ, zf}` clause (and the
+why-control: then-unreachable `zf 0` use), which removes BOTH `IZ`'s admission AND
+why-control: `impl IZ String`'s presence in the graph -- two variables, not one.
+why-control: `iz-unadmitted.mdk` isolates them: it removes ONLY `IZ`'s admission
+why-control: (`zmodI.{zf}`, not `zmodI.{IZ, zf}`) while `impl IZ String` stays in the
+why-control: graph, and measures 7 -- identical to main.mdk. That is what proves
+why-control: admission count is not the causal variable; control.mdk alone would not
+why-control: have shown this (it changes both variables at once).
+why-note: TRAP (same as the sibling fixture): `methodDispatchIdx`'s only caller,
+why-note: `recordRLocalSite`, is gated on a standalone shadow of the SAME bare name
+why-note: being in scope -- `fmodI.mth` is load-bearing here too, not incidental.
+why-note: SEQUENCING: this fixture pins an S2-DECL (c) conformance defect (impl
+why-note: existence queried without checking whether the owning declaration is
+why-note: nameable). The fix is to make `implExistsForHead` (or its equivalent
+why-note: query) declaration-scoped, not to add a new reject diagnostic; it needs
+why-note: NO new diagnostic code and is NOT gated on the occurrence carrier
+why-note: (#1276/#1265/#1386) -- that gating applies only to S2-DECL (d)'s
+why-note: disagreeing-arm reject, which remains a SEPARATE, still-unfixtured shape
+why-note: (see docs/spec/SHADOW-SEMANTICS.md's S2-DECL-SCOPE note). If this fixture
+why-note: DRAINS from a slice that did not explicitly claim to fix it, that is a
+why-note: FINDING (route through sprint-findings for verification/attribution), not
+why-note: grounds to close #1664 on the strength of an incidental side effect.
+why-note: A genuinely-DISAGREEING S2-DECL (d) fixture (e.g. add `impl IA String` so
+why-note: `IA` denotes that impl while `IZ` still denotes the standalone) is
+why-note: separately owed and NOT this fixture -- it has no fixture anywhere yet and
+why-note: is queued for later, sequenced with the reject arm after the
+why-note: occurrence-carrier slice.

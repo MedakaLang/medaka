@@ -1,0 +1,19 @@
+-- THIRD measured cell, NOT run by this gate (same reason order-swapped.mdk isn't
+-- run by the sibling ../1351-methoddispatchidx-import-order-collision/ fixture --
+-- diff_compiler_must_fail.sh grades exactly one `cmd:` plus one `control:`). Kept
+-- here for traceability of the causal-variable claim in claim.txt.
+--
+-- Same graph as main.mdk/control.mdk, but zmodI's member list names only `zf`, NOT
+-- `IZ` -- so `IZ` is UNADMITTED (S1-NS (a) never sees it) while `impl IZ String`
+-- remains present in the compiled graph. Measured: `medaka run iz-unadmitted.mdk`
+-- -> 7, exit 0 -- IDENTICAL to main.mdk's two-admitted cell, despite IZ itself
+-- being unadmitted here. This is what shows the causal variable is the GRAPH
+-- PRESENCE of `impl IZ String`, not whether IZ's own declaration is admitted --
+-- an S2-DECL (c) question (`implExistsForHead` is keyed by method name + head
+-- tycon, never by interface, so it can answer about an impl of a declaration `M`
+-- cannot even name), not (b). See claim.txt's three-cell table.
+import fmodI.{mth}
+import amodI.{IA, af}
+import zmodI.{zf}
+
+main = println (mth "abc" 5 + af 0 + zf 0)

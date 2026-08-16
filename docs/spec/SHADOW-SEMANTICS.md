@@ -1086,6 +1086,89 @@ Given an occurrence of bare name `N` in module `M`:
   > author named would convert many of today's reject cells into the one-admitted
   > case, and is the standing candidate; (e) survives either way.
 
+  > ### 🔒 S2-DECL-SCOPE — RULED 2026-08-16 ([#1354](https://github.com/MedakaLang/medaka/issues/1354) M-1's residual): NO successor clause is owed — S2-DECL already governs it, and here is its reach per issue
+  >
+  > **The gap this closes is a CITATION gap, not a semantic one.** #1354's M-1 unit
+  > records a residual it says only a spec ruling can decide — *"when the overlay
+  > declines — both interfaces nameable, neither method name imported — there is no
+  > scoped answer to route to … `docs/spec/SHADOW-SEMANTICS.md` should move before the
+  > code does"* — and three slices of the 2026-08-16 cross-module-identity sprint were
+  > planned around waiting for it. **It has already moved.** S2-DECL (above, ruled
+  > 2026-08-09, on this same issue #1351) decides that residual in full. This note adds
+  > no rule; it records the reach, so the next reader does not commission the ruling a
+  > third time.
+  >
+  > **The residual's own framing is FALSE and is corrected here rather than repeated.**
+  > *"Both interfaces nameable, neither method name imported"* does **not** empty S1's
+  > right operand. S1-NS (a)(i) — the TYPE arm — admits a method name `n` when the
+  > declaring interface's **own name** is admitted into `M`, whether or not `n` is. Two
+  > nameable interfaces give a union of **two**, not zero. What declines in that shape is
+  > an *implementation* predicate (`scopedMethodEntry`'s witness ladder, whose
+  > `importedMethodEntry` arm requires an import binding the **name**), which is strictly
+  > narrower than S1-NS (a). **A predicate that requires the method name where S1-NS (a)
+  > admits on the interface name is NON-CONFORMANT with S2-DECL (c)**, which admits
+  > declarations by S1-NS (a) and by nothing else. This is the whole content of the
+  > residual, and it is an implementation-conformance statement, not an open question.
+  >
+  > **Reach, per issue, stated as a verdict so it can be graded rather than inferred.**
+  >
+  > | Issue | What S2-DECL specifies for it |
+  > |---|---|
+  > | [#1351](https://github.com/MedakaLang/medaka/issues/1351) | Its corpus is the **exactly-one-admitted** arm of (d), not the ambiguous one. `test/import_order_fixtures/1351-methoddispatchidx-import-order-collision/` names `IZ` in its member list and does **not** name `IA`, so exactly one declaration is admitted; (a)+(b) then give receiver argument **1** (`IZ`'s dispatch typaram `b` first appears at parameter 1), whose head is `Int`, and no `impl IZ Int` exists in the graph — so the occurrence denotes the **imported standalone**, value **99**, on **all six** orderings and on **all three verbs**. An implementation is conformant here iff its admission predicate is S1-NS (a) including the TYPE arm; requiring the method name leaves the bare-name first-match table in the loop and (e) is violated |
+  > | [#1182](https://github.com/MedakaLang/medaka/issues/1182) / [#1620](https://github.com/MedakaLang/medaka/issues/1620) | **NOT GOVERNED.** S1's shadow-hood conjunct requires `N ∈ funDef-names(standalones defined in M or imported into M)` (S1, above; SHADOW-SEMANTICS.md:249-253) — a plain top-level `DFunDef` of the colliding name. #1182/#1620's repro has no such standalone: `m` exists **only** as two interface methods (`interface A1 … m`, `interface A2 … m`), never a top-level function. S1's conjunct is vacuously false, so S2-DECL never fires — the same pattern this document already names for #1302 (⚠️ under S1) and the wildcard-reexport case (row 44 / `msmth`, above): *"a different mechanism."* The actual mechanism, per #1182's own filed text: `matchingEntries` selects candidates by **method-name membership**, not by interface, so impls of different interfaces sharing a method name land in one candidate set and are ranked against each other by `pickMostSpecificEntry` — DICT-SEMANTICS §6 C1 coherence, a same-class-selector question, not an occurrence-granularity or import-order scoping question S2-DECL could ever reach |
+  > | [#1265](https://github.com/MedakaLang/medaka/issues/1265) | **NOT GOVERNED.** Same vacuous-conjunct reasoning as the #1182/#1620 row: #1265's colliding name `speak` exists **only** as two interface methods (`ifa::Speak.speak`, `ifb::Greet.speak`), never a standalone top-level `DFunDef` — S1's shadow-hood conjunct is vacuously false, so S2-DECL never fires. The actual mechanism, per #1265's own filed text: `ifaceIdsAtTag tag` returns the identity of **every** interface implementing at that tag, and `defaultOwnedBy`'s filter yields **two** survivors when one type implements two interfaces sharing a method name, so the `_ => Some fallback` arm returns first-match — a cross-module DEFAULT-candidate registry leak (DICT-SEMANTICS §5 / §8 I4: the emitted symbol `mdk_default_<method>_<tag>` has no room for two interfaces' distinct default bodies), not an occurrence-granularity or intra-module problem |
+  >
+  > **What this note deliberately does NOT do, and why.** It does **not** commission
+  > implementation of (d)'s **≥2-admitted-and-disagreeing** reject arm, and it does not
+  > create a diagnostic code for it. S2-DECL's own ⟲ overturn condition names an
+  > **occurrence-level carrier recording which interface the author named** as the
+  > standing candidate to convert *"many of today's reject cells into the one-admitted
+  > case"*. That carrier is live work. Implementing the reject before the carrier lands
+  > would narrow acceptance across a cell set the carrier is expected to shrink — a
+  > false-reject widening taken twice, against a shape that today has **no fixture in
+  > either corpus** (derive, do not trust: no entry under `test/shadow_fixtures/` or
+  > `test/import_order_fixtures/` names two distinct interfaces declaring one method
+  > name). **Sequencing rule: the carrier first, then (d)'s reject arm over whatever
+  > cells remain.**
+  >
+  > A pin exists for a neighbouring shape at
+  > [`test/must_fail_fixtures/1664-decl-agreeing-both-admitted/`](../../test/must_fail_fixtures/1664-decl-agreeing-both-admitted/claim.txt)
+  > ([#1664](https://github.com/MedakaLang/medaka/issues/1664)); its measured causal
+  > variable is the graph presence of a non-admitted declaration's impl, i.e. an
+  > S2-DECL **(c)** conformance question, not the (d) disagreeing arm — which still
+  > has no fixture anywhere.
+  >
+  > **Diagnostic code — RESERVED, NOT CREATED.** When (d)'s disagreeing arm is
+  > implemented it needs a **new `T-` code**, and neither existing family will host it:
+  > the `R-AMBIGUOUS-*` family is resolve-stage and this reject needs the receiver's head
+  > tycon and the graph-global impl query, and `T-AMBIGUOUS-INSTANCE` is *"this predicate
+  > has no unique evidence"* for a determined type, whereas this is *"two admitted
+  > declarations disagree about what this name denotes"*. `R-DUPLICATE-IFACE-METHOD` is
+  > its **intra-module, declaration-time** peer and explicitly does not cover the
+  > cross-module case. **No row is added to `compiler/DIAGNOSTIC-CODES-DESIGN.md` by this
+  > note** — a code in that catalog that no binary can emit is a lie in the catalog.
+  >
+  > **Row 42 (`i22_importer_member_alias_not_nameable`) is NOT reached by this note, and
+  > that is a decision, not an omission.** It is already governed: **S1-NS (a)(ii)** says
+  > the admitted name must be the **callable** one, so under the clause `99` is correct
+  > for both `import ifc` and `import ifc.{size as sz}`, and the pinned `7` is an
+  > implementation non-conformance, not an unruled cell. Its **fix shape** is the open
+  > question, on a fresh axis, and 🚨 **the obvious fix is MEASURED INERT**: keying the
+  > VALUE arm on the local spelling cannot move `run`/`build`, because
+  > `renameAliasedMethods` → `deAliasMethodImports` has already rewritten `{size as sz}`
+  > to `{size}` before `selectIfaceRows` runs on that path; the `check` path does not
+  > de-alias, so the change moves **`check` alone** and manufactures a `check` ≠ `run`
+  > split. Do not attempt it.
+  >
+  > **⟲ Overturn condition.** This note is overturned by exhibiting a shape in which
+  > S2-DECL's four cardinality arms (d) give **no** answer — i.e. a method occurrence
+  > that is a shadow under S1/S1-NS and for which the admitted-declaration set is
+  > neither empty, nor a singleton, nor an agreeing set, nor a disagreeing set. Its
+  > per-issue table is overturned per row by a measurement contradicting that row's
+  > stated value or mechanism; the #1351 row in particular is overturned by an
+  > `impl IZ Int` appearing anywhere in that corpus's graph, which would move its value
+  > off the standalone.
+
 - **S3 (N-way).** **[CHANGED]** **Vacuous for a definer shadow:** every occurrence
   is the standalone regardless of receiver, so no receiver selects an impl; a
   receiver at a live-impl head is a **located reject**, not a dispatch. The impls
