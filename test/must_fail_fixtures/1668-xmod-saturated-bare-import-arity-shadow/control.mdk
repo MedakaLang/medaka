@@ -1,0 +1,4 @@
+import pmod.{P, step}
+import qmod
+
+main = println (step 5 == 6)

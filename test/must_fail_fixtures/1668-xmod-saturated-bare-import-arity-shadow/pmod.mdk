@@ -1,0 +1,5 @@
+export interface P a where
+  step : a -> Int
+
+impl P Int where
+  step x = x + 1
