@@ -10,13 +10,18 @@ bug, a spec gap, a wrong ledger row, an unexpected gate flip, a "this looks
 wrong" in passing. The playbook exists because findings are where sprints leak:
 the audited sprints' worst outcomes were findings mishandled — a phantom drain
 nearly closing five live bugs, an unreproduced claim filed as fact, evidence
-surviving only as session-scratch prose. The lifecycle below is mechanical for
-the orchestrator; every judgment inside it is a brain ruling.
+surviving only as session-scratch prose. The lifecycle below is mechanical and
+runs at the REAR seat (`sprint-rear` owns FINDINGS.md, dispatches the
+reproducer, and executes every filing; its brain consults relay through the
+front seat verbatim); every judgment inside it is a brain ruling.
 
 ## 1. Intake — every finding gets a row before anything else
 
 Append to `/var/tmp/medaka-sprints/<stage>/FINDINGS.md` immediately, one row:
-`F<n> | <one-line claim> | source report path | status: OPEN`. No triage yet,
+`F<n> | <one-line claim> | source report path | status: OPEN`. The REAR seat
+is the file's sole writer: a finding surfacing at the front seat (any report
+it intakes — refusals included) reaches this file as a `finding: <claim> |
+report <path>` message, appended by the rear seat on receipt. No triage yet,
 no severity yet, no dedup yet — the row exists so the finding cannot be lost
 between its report and its ruling. A finding mentioned in conversation or a
 return message but absent from a report file gets BOUNCED to its reporter
@@ -26,10 +31,12 @@ first (reports are the record; chat is not).
 
 The mechanical and architectural halves are deliberately SPLIT: repro, pin, and
 attribution are fixture work (Sonnet), and spending brain judgment on them
-muddies the ruling with shell mechanics. Dispatch `bug-reproducer` with the
-FINDINGS row, the source report path, both SHAs (pinned base + slice head), and
-a worktree YOU create for it at the slice head (`git worktree add`; it manages
-its two arms inside that one tree). Its bundle — written to the sprint dir's
+muddies the ruling with shell mechanics. The rear seat requests the dispatch
+(a `consult:`-tagged request through the front seat); the FRONT seat creates
+the worktree at the slice head (`git worktree add` — all worktree creation is
+front-seat) and dispatches `bug-reproducer` with the FINDINGS row, the source
+report path, both SHAs (pinned base + slice head), and that worktree path (it
+manages its two arms inside that one tree). Its bundle — written to the sprint dir's
 `findings/<slug>/`, never only its worktree — is: first-hand minimized repro,
 base-vs-slice × channel attribution matrix, a pin fixture PROVEN to reproduce
 (or a reasoned not-pinnable row), and a ready-to-file issue draft with no
@@ -82,9 +89,11 @@ the bug changes, not just that it gets fixed:
   a repair slice against merged work.)
 - Does a DECISIONS.md ruling need amending? (Amend by new entry, never edit.)
 
-Terminal route for in-sprint: **REPAIR** (slice-caused, blocks that PR's
-ARMING — never the writer lane; planner cuts the repair slice at the front of
-the queue) or **ABSORB** (pre-existing but it advances the sprint's question
+Terminal route for in-sprint: **REPAIR** (slice-caused; the fix lands FORWARD
+on the sprint branch: the planner cuts the fix packet, the FRONT seat grants
+the lane and dispatches the fixer, the fix merges via FIX-LANDED — it never
+blocks the writer lane, and only an S0-class finding's adversarial-review
+obligation blocks the terminal enqueue) or **ABSORB** (pre-existing but it advances the sprint's question
 and fits the size budget — the brain must say WHY; absorb-by-default is how
 sprints sprawl). S0/S1 slice-caused is always REPAIR, and the direction rule
 applies: a slice that made an existing defect QUIETER (loud crash → wrong
@@ -117,8 +126,9 @@ WITH the disproving derivation — debunking needs the same proof as filing;
 
 ## 4. Filing protocol — when the ruling is FILE
 
-Mechanical, in order; the orchestrator executes from the reproducer's bundle,
-the brain has already ruled:
+Mechanical, in order; the REAR seat executes from the reproducer's bundle, the
+brain has already ruled. **No other agent runs a `gh issue` write, ever** —
+drafters draft, the rear seat files, always with readback:
 
 1. **The first-hand repro requirement is satisfied by the reproducer's bundle**
    — it ran fresh, independently of the reporting agent. A finding with no
@@ -136,13 +146,17 @@ the brain has already ruled:
    the owning arc/spec citation. **No closing keywords anywhere in the body** —
    "do NOT close #N" has closed #N; reference issues as `see issue N` in prose.
 4. **Land the pin** from the reproducer's bundle in the sprint dir
-   (`findings/<slug>/pin/` — NOT from its worktree, which may be reclaimed):
-   copy into `test/must_fail_fixtures/<N>-slug/` with the real issue number as
-   the directory prefix (the harness hard-rejects unnumbered names as
-   MALFORMED), fill `issue:` in `claim.txt`, and commit it with the filing PR —
-   whose CI run of the must-fail suite is what finally grades it in-harness.
+   (`findings/<slug>/pin/` — NOT from its worktree, which may be reclaimed).
+   Under v3's single-PR model the pin lands ON THE SPRINT BRANCH like any
+   write: the front seat grants a lane and dispatches `sprint-verifier` with
+   the exact checklist — copy `findings/<slug>/pin/` into
+   `test/must_fail_fixtures/<N>-slug/` (real issue number as the directory
+   prefix; the harness hard-rejects unnumbered names as MALFORMED), fill
+   `issue:` in `claim.txt`, commit by path on a `fix/pin-<slug>` branch, push
+   — and the fix merges via the front seat's FIX-LANDED path. The sprint PR's
+   CI run of the must-fail suite is what finally grades it in-harness.
    Not-pinnable → the reproducer's drafted `test/MUST-FAIL-NOT-PINNABLE.txt`
-   row lands instead.
+   row lands the same way instead.
 5. **Close the citation loop**: PLANNED → add the back-reference to the owning
    arc/spec doc (bidirectional, per the ruling); GAP → execute the gap-closure
    action the ruling named (spec/arc addition, or the VAL decision point) and
@@ -159,13 +173,14 @@ the brain has already ruled:
   fixture's shape was the mechanism's ONLY trigger before believing the fix is
   whole. The close itself checks the PIN, not the sprint's narrative.
 - **A finding in `Not covered`** is not a bug report — it is unexamined
-  territory. It accumulates in FINDINGS.md as input to the repair round, not
+  territory. It accumulates in FINDINGS.md as input to the heavy round, not
   as an OPEN finding needing a ruling now.
 - **Spike discoveries**: a spike that unearths a live bug reports it as a
   finding like anyone else — the spike's throwaway diff is not a fix and must
   still end byte-identical.
-- **Repair-round findings** at sprint end follow the same lifecycle, with one
-  tightening: REPAIR rulings there block the SPRINT's exit, not just a PR.
+- **Heavy-round findings** at sprint end follow the same lifecycle, with one
+  tightening: REPAIR rulings there block the SPRINT's exit (the terminal
+  enqueue), not just a push.
 
 ## 6. The exit guarantee
 

@@ -82,4 +82,4 @@ suggested-runtime-check: NONE, or the probe the slice-breaker should run.
 ```
 
 `CLEAR` must still fill `Not covered` — the checks you did not perform are what
-the repair round reads first.
+the heavy round reads first.

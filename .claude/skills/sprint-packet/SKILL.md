@@ -109,12 +109,18 @@ every word whose deletion changes anything.
 ## §1 Identity
 
 - **Slice ID** and issue refs (`#NNN`).
-- **Pinned base:** the exact SHA this packet was derived against. The implementer
-  starts from this SHA — never from a moving ref; shared `.git` means
-  `origin/main` advances under you mid-task.
-- **Branch name** and **absolute worktree path**. State explicitly: "Ignore any
-  CLAUDE.md-header path — your tree is the path above; run everything with
-  absolute paths."
+- **Pinned base:** the exact sprint-branch SHA this packet was derived against —
+  never a moving ref; shared `.git` means refs advance under you mid-task.
+  **The sprint branch moves between packet-writing and dispatch** (v3 single-PR
+  model), so the dispatch brief carries TWO SHAs: the packet's pinned SHA and
+  the worktree's actual head. The implementer's step-0 check is: `git diff
+  <pinned>..HEAD -- <every §5-named file>` is EMPTY. Non-empty → the region
+  changed under the packet → STOP and report per the abort condition; empty →
+  proceed on the newer head.
+- **Branch name** and **absolute worktree path** (fix packets use branch
+  `fix/<finding-slug>`, cut by the front seat from the sprint head at lane
+  grant). State explicitly: "Ignore any CLAUDE.md-header path — your tree is
+  the path above; run everything with absolute paths."
 - **Form:** `standard` | `spike` | `family` (see Slice forms).
 - **Classification:** `parity` (behavior provably unchanged — diffs/gates are the
   oracle) or `behavior-changing` (anything else; all soundness work). This drives
@@ -176,20 +182,60 @@ Rules for the planner writing it:
 - **Rejected approaches**, with one line each on why — so the implementer doesn't
   independently rediscover and adopt one.
 
-## §6 Acceptance
+## §6 Acceptance — the MINIMAL set; CI verifies, the implementer generates
 
-- **Compile-coherent boundary:** the tree builds and typechecks at the end of the
-  slice — no "will compile after the next slice" states.
-- **Per claim, the cheapest fail-capable check** — a check that cannot fail
-  verifies nothing. Name the command and the expected output, including expected
-  reds (an unexplained green is as suspicious as an unexplained red).
-- **Targeted gates only** (`make preflight` / named `run_gates.sh` patterns).
-  Expected golden/snapshot moves listed by path; an unlisted golden move is a
-  finding to report, not a thing to bless.
+**Deferred-verification doctrine (v3): the implementer's verification budget is
+deliberately tiny.** Local checks exist to confirm the slice isn't seriously
+broken and does what it primarily claims — everything else is CI's job on the
+sprint PR and the merge queue's clock. The full ceiling for a standard slice:
+
+1. `medaka fmt --write` + `medaka lint` on touched files (the pre-commit hook
+   forces these anyway; fighting it costs more than running it).
+2. `make medaka` — the build itself.
+3. `make check-self` (~20 s) — the cheap typecheck stand-in; the bootstrap path
+   builds green on an ill-typed compiler, so this is not optional.
+4. **The primary-claim probe(s):** per §5 claim, the cheapest FAIL-CAPABLE check
+   — a check that cannot fail verifies nothing. Name the command and expected
+   output, including expected reds.
+5. **Bless what your own diff moved** — expected golden/snapshot moves listed
+   here by path; re-cutting them is code-adjacent output, not verification, and
+   a missed golden is a guaranteed CI red round-trip. An UNLISTED golden move is
+   a finding to report, never a thing to bless. When the listed moves include
+   the selfproc LEG A golden, its oracle prerequisite is licensed as part of
+   this step (the ONE oracle-build exception — a legA capture against stale
+   oracles blesses a wrong golden permanently): `for o in check_all_main
+   eval_modules_main eval_typed_modules_main; do FORCE=1 JOBS=1 sh
+   test/build_oracles.sh --build-one $o; done` before `sh
+   test/capture_goldens.sh --frozen selfproc_legA`.
+
+**Diagnosis is not verification.** The ceiling above caps post-hoc ACCEPTANCE
+checking — it does not cap the probing needed to LOCATE or characterize a
+defect while writing the fix (a profiler run, an ablation, a discriminating
+repro is ordinary §5 work). The test: a run whose outcome decides what you
+WRITE next is diagnosis and is fine; a run whose outcome you expect to confirm
+what you already wrote is verification and stops at the ceiling.
+
+**Named NOT-run, so nobody "helpfully" adds them:** no `make preflight`, no
+`run_gates.sh` patterns, no oracle builds (beyond the legA license above), no
+engines differential, no fixpoint, no full or partial suites. A packet that
+lists a gate here needs a brain-ruled reason recorded in §6. The two standing
+exceptions, both brain-gated:
+- `local-fixpoint: yes` — only for slices touching `compiler/backend/*`, where a
+  fixpoint break first seen in CI is too expensive to fix forward blind.
+- **Golden-capture freeze:** if any §5 site sits in an area FINDINGS.md marks
+  known-broken, golden/fixture CAPTURE there is deferred to after the fix — a
+  golden captured against broken behavior enshrines the bug. The deferral is
+  recorded on the FINDINGS row and executed at the heavy round.
+
+**Also mandatory in §6, unchanged from v2 (NOT exceptions — every packet
+carries them):**
+- A **family** packet additionally states `per-leaf-merge: yes | no` — whether
+  the front seat merges each leaf's `@<sha>` as it lands or the family merges
+  once at family-final.
 - **The nearest program this slice does NOT cover** — the adjacent shape a
   reviewer should probe first. Asking this question found two S0s.
 - **`could move:`** what observable behavior could plausibly shift — feeds the
-  DEBT.md row and gives the repair round its attack list. "Nothing, and here is
+  DEBT.md row and gives the heavy round its attack list. "Nothing, and here is
   why" is valid; silence is not.
 - **The DEBT.md row** the executing agent appends has exactly five fields, none
   blank: `sites:` (the named sites actually touched), `transform:` (one line),
@@ -219,8 +265,12 @@ Rules for the planner writing it:
 >   not the build's), never end your turn with anything still running.
 > - Verify the binary you probe is the one you built: `MEDAKA_STRICT=1` on every
 >   probe.
-> - Push and report. The orchestrator watches CI, not you. Do not poll CI, do not
+> - Push and report. The rear seat watches CI, not you. Do not poll CI, do not
 >   send per-shard updates.
+> - **Never file, edit, comment on, or close a GitHub issue.** Issue writes are
+>   seat-only (the sprint-rear seat executes them, with readback). A bug you
+>   find goes in your report's findings; a body you want filed goes in your
+>   report as a draft. "I filed #N" in a report is a deviation-from-packet.
 > - Do not spawn subagents. Do the work yourself, sequentially.
 > - Stage commits BY PATH — never `git add -A`. Run `medaka fmt --write` and
 >   `medaka lint` on touched files before building.
@@ -249,15 +299,24 @@ verdict line + the path — the FILE is the deliverable. Required sections:
 ```
 ## Verdict
 One line, then one paragraph. Packet-executing agents: LANDED | REFUSED |
-BLOCKED — a family leaf writes `LANDED leaf <leaf-id> (<k>/<n>)` and the last
-one `LANDED family-final`; a spike writes `SPIKE-DONE (stability: STABLE |
-UNSTABLE)`. Reviewers: FINDINGS | CLEAR. Other roles use the verdict set their
-own definition fixes. The orchestrator branches on this line mechanically, so
-the vocabulary is closed per role — invent no values.
+BLOCKED — a family leaf writes `LANDED leaf <leaf-id> (<k>/<n>) @<sha>` (the
+leaf's commit SHA — the front seat merges by it) and the last one `LANDED
+family-final @<sha>`; a refused leaf writes `REFUSED leaf <leaf-id>
+(<k>/<n>)` (landed leaves stay merged; the family pauses); a fixer executing
+a fix packet writes `FIX-LANDED`; a spike writes `SPIKE-DONE (stability:
+STABLE | UNSTABLE)`. Reviewers: FINDINGS | CLEAR. Other roles use the verdict
+set their own definition fixes. The front seat branches on this line
+mechanically, so the vocabulary is closed per role — invent no values.
 
 ## Evidence
 Commands run and their key output, verbatim. Every claim above traceable to a
 line here. State which binary (SHA + freshness check) produced each measurement.
+Packet-executing agents: the FIRST line of this section is a time split,
+best-effort to the nearest ~5 min —
+`time: total <m>m | build <m>m | diagnose <m>m | write <m>m | verify <m>m` —
+this is the sprint's only instrument for where writer wall-clock goes (the
+xmod-identity sprint could not answer it from its ledgers), so an absent line
+bounces like a missing section.
 
 ## Decisions surfaced
 Anything you resolved, noticed, or worked around that involved a judgment call —
@@ -273,7 +332,7 @@ from the DISPATCH BRIEF — same duty, same format. NONE is valid; absence is no
 
 ## Not covered
 What this work does NOT establish: shapes not probed, programs not run, claims
-taken on trust, checks skipped and why. This section is what the repair round
+taken on trust, checks skipped and why. This section is what the heavy round
 reads first. NONE is almost never true.
 
 ## Friction

@@ -15,7 +15,7 @@ it fresh" that the filing protocol requires, distinct from the reporting agent.
 
 # Setup
 
-Work in the worktree the orchestrator created for you (path in your brief) —
+Work in the worktree the front seat created for you (path in your brief) —
 you build binaries there (base arm AND slice arm, by checking out each SHA in
 turn), and a build anywhere shared breaks quiescence for live measurements.
 Cold-bootstrap (`make -C <your-worktree> medaka`, ~31 s); never read another
@@ -73,7 +73,7 @@ and confirm it behaves as claimed. Paste both runs into Evidence. A pin you did
 not run is a lie waiting to report "drained" — malformed pins have produced
 false BENIGN verdicts three times. Not pinnable? (nondeterministic addresses →
 project to a Bool; genuinely unpinnable → draft the MUST-FAIL-NOT-PINNABLE row
-with the reason) — say so and why. Commit nothing — the orchestrator lands the
+with the reason) — say so and why. Commit nothing — the front seat lands the
 pin from your bundle after filing (a FILE ruling ships it with the issue; a
 REPAIR ruling converts it into the repair slice's regression test).
 
