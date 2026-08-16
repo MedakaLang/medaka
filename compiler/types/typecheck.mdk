@@ -27934,6 +27934,18 @@ isMangledForAny (m::ms) k = isMangledFor m k || isMangledForAny ms k
 -- loaded module-id set (see aliasSchemes); the non-alias arms ignore it — their
 -- resolution is definer-agnostic by construction (a `__<name>` SUFFIX test, and the
 -- wildcard form performs no mangle test at all).
+--
+-- 🚨 `"core"` IS DELIBERATELY **NOT** IN `mids`, AND MUST NOT BE ADDED BACK
+-- (RUN-XMOD-039).  It was, briefly.  The argument for it reads well — `reexportSeed`'s
+-- own comment records core as the one source NOT in depEnv, and private_mangle *does*
+-- mangle core's exports to `core__<name>` — but it was DERIVED, never witnessed: a
+-- `export import core.{…}` reached through an alias is green on every verb with or
+-- without the term, because core's names are seeded via `baseSeed` and resolve before
+-- the alias binding is ever consulted.  Meanwhile the term has a MEASURED cost: it made
+-- `mangledName "core" "" == "core__"` a live prefix, so an ordinary user binding named
+-- `core__foo` reached through an alias import was misread as already-mangled and left
+-- un-rebound — `Unbound variable: O.core__foo`, exit 1, on a program that compiled and
+-- printed correctly before.  Zero measured benefit, measured cost.
 importFormSchemes : List String -> UsePath -> List (String, Scheme) -> List (String, Scheme)
 importFormSchemes mids (UseAlias _ alias) depSchemes =
   aliasSchemes mids alias depSchemes
@@ -28646,7 +28658,7 @@ importSeed ((DUse _ path _)::rest) depEnv =
   let depId = usePathModuleId path
   match lookupAssoc depId depEnv
     None => importSeed rest depEnv
-    Some depSchemes => importFormSchemes (depId :: "core" :: map fst depEnv) path depSchemes
+    Some depSchemes => importFormSchemes (depId :: map fst depEnv) path depSchemes
       ++ importSeed rest depEnv
 importSeed (_::rest) depEnv = importSeed rest depEnv
 
@@ -28995,7 +29007,7 @@ reexportSeed coreV ((DUse True path _)::rest) depEnv =
   let src = if depId == "core" then Some coreV else lookupAssoc depId depEnv
   match src
     None => reexportSeed coreV rest depEnv
-    Some depSchemes => importFormSchemes (depId :: "core" :: map fst depEnv) path depSchemes
+    Some depSchemes => importFormSchemes (depId :: map fst depEnv) path depSchemes
       ++ reexportSeed coreV rest depEnv
 reexportSeed coreV (_::rest) depEnv = reexportSeed coreV rest depEnv
 
