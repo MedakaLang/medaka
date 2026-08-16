@@ -1,0 +1,5 @@
+-- W8b Math host-import source mirror: uncalled sin must emit mdk_sin; inert main prints 0.
+export mathProbe : Float -> Float
+mathProbe x = sin x
+
+main = 0

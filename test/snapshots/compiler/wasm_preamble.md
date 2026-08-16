@@ -1064,7 +1064,7 @@ floatFmtImportLines = [
 -- floatRem lower to native f64 opcodes / $mdk_round / $mdk_float_rem — NOT host imports.
 -- Every JS harness that instantiates a module (test/wasm/run.js + the playground
 -- worker.js / compile.mjs / *_test.mjs) provides these $mdk_<name> functions.
--- Gated on useMathRef (set by noteW8Extern when a host-math extern is referenced).
+-- Gated on WasmEmit.useMath (set by noteW8Extern when a host-math extern is referenced).
 export mathHostImportLines : List String
 mathHostImportLines = [
   "  ;; -- #101 libm math host seam (JS Math.*, see run.js / worker.js) --",
@@ -1533,7 +1533,7 @@ strSearchRuntimeLines = [
 -- Byte-identical to medaka_rt.c (mdk_string_to_chars / mdk_string_from_chars +
 -- mdk_utf8_decode / mdk_utf8_encode).  A Char is an i31 codepoint; an `Array Char` is
 -- the §3.3 $arr = (array (mut (ref eq))) holding `cp_count` i31s.  Emitted when the
--- program uses stringToChars/stringFromChars (`useStrCodecRef`); needs the $str rep
+-- program uses stringToChars/stringFromChars (`WasmEmit.useStrCodec`); needs the $str rep
 -- ($u8arr) AND the $arr rep (both forced by noteW8Extern).
 --   $mdk_str_to_chars : decode each UTF-8 codepoint (lead byte <0x80 → 1B; <0xE0 → 2B
 --     & 0x1F; <0xF0 → 3B & 0x0F; else 4B & 0x07; each continuation byte & 0x3F, shift

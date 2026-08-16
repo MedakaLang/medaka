@@ -332,7 +332,11 @@ data WasmEmit =
       useRng : Ref Bool,
       useHash : Ref Bool,
       useFloatHash : Ref Bool,
+      useFloatRng : Ref Bool,
+      useStrCodec : Ref Bool,
+      useMath : Ref Bool,
       useCharFromCode : Ref Bool,
+      useCharClass : Ref Bool,
       emittedDefaultNames : Ref (OrdMap Unit),
       defaultDefinitions : Ref (List (List String)),
     }
@@ -359,7 +363,11 @@ freshWasmEmit mode = WasmEmit {
   useRng = Ref False,
   useHash = Ref False,
   useFloatHash = Ref False,
+  useFloatRng = Ref False,
+  useStrCodec = Ref False,
+  useMath = Ref False,
   useCharFromCode = Ref False,
+  useCharClass = Ref False,
   emittedDefaultNames = Ref omEmpty,
   defaultDefinitions = Ref [],
 }
@@ -851,21 +859,10 @@ isLazyGlobalW prog x = omHasKey x (indexLazyGlobalsW (progIndex prog))
 
 -- W8b: the program uses Float (a Float literal, a Float extern, or a Float arith op).
 -- Forces ref-mode (a Float is a boxed (ref eq) $float struct) + gates the Float runtime
--- (floatRuntimeLines + the floatToString host import).  WasmEmit.useFloatHash / useFloatRngRef
+-- (floatRuntimeLines + the floatToString host import).  WasmEmit.useFloatHash / useFloatRng
 -- gate the hashFloat / randomFloat runtimes (which need the shared mix64 / next_u64).
 useFloatRef : Ref Bool
 useFloatRef = Ref False
-
--- #101: the program uses a libm math extern that lowers to a JS `Math.*` HOST IMPORT
--- (a transcendental or pow/atan2/hypot — see isMathHostExternW).  Gates the
--- mathHostImportLines block (the $mdk_sin/$mdk_pow/… imports the JS harnesses provide).
--- The IEEE-exact ops (sqrt/floor/ceil/trunc/round) and floatRem need no host import, so
--- they force useFloatRef only, never this.
-useMathRef : Ref Bool
-useMathRef = Ref False
-
-useFloatRngRef : Ref Bool
-useFloatRngRef = Ref False
 
 -- layer-6: stringToFloat is a host-seam extern (like floatToString).  It takes a $str,
 -- pushes its bytes via the IO path channel (mdk_path_reset/mdk_path_push), and calls
@@ -901,16 +898,6 @@ useValueArithRef = Ref False
 -- structural Float) are unchanged.  Seeded (and reset to []) per fn in emitRefFnBind.
 numPolyLocalsRef : Ref (List String)
 numPolyLocalsRef = Ref []
-
--- W11b: the program uses stringToChars / stringFromChars (the UTF-8 codec runtime
--- $mdk_str_to_chars / $mdk_chars_to_str, which decode/encode between a $str and an
--- $arr of i31 Char codepoints).  Needs $str + $arr + the strLeaf char encoder.
-useStrCodecRef : Ref Bool
-useStrCodecRef = Ref False
-
--- W11b: the program uses charIsAlpha/charIsSpace/… or charToUpper/charToLower.
-useCharClassRef : Ref Bool
-useCharClassRef = Ref False
 
 -- W12: the program uses any IO host-surface extern (readFile / fileExists / args /
 -- getEnv / exit).  Gates the IO host imports + the byte-channel marshaling runtime.
@@ -1058,15 +1045,11 @@ emitProgramWith emit input (CProgram groups ctorArs ctorTypes impls) =
   let _ = setRef useRefBoxRef False
   let _ = setRef useStrLeafRef False
   let _ = setRef useFloatRef False
-  let _ = setRef useFloatRngRef False
-  let _ = setRef useMathRef False
   let _ = setRef useFloatStrRef False
   let _ = setRef useStrSearchRef False
   let _ = setRef useValueCmpRef False
   let _ = setRef useValueArithRef False
   let _ = setRef numPolyLocalsRef []
-  let _ = setRef useStrCodecRef False
-  let _ = setRef useCharClassRef False
   let _ = setRef useIORef False
   let _ = setRef useArgsRef False
   let _ = setRef useFileBytesRef False
@@ -1090,7 +1073,7 @@ emitProgramWith emit input (CProgram groups ctorArs ctorTypes impls) =
   let useRef = useClos || programUsesAdt groups ctorArs || isNonEmptyList impls || useStrRef.value
     || useListRef.value || useArrayRef.value || useRefBoxRef.value || isNonEmptyList tupleAritiesRef.value
     || emit.useRng.value || emit.useHash.value || useFloatRef.value || useStrSearchRef.value
-    || useCharClassRef.value || useIORef.value
+    || emit.useCharClass.value || useIORef.value
   let typeNames = distinctTypeNames ctorTypes
   let prog = Prog index typeNames valNames useClos impls input emit
   if useRef then emitRefProgram prog groups
@@ -1113,15 +1096,11 @@ emitProgramGaps input (CProgram groups ctorArs ctorTypes impls) =
   let _ = setRef useRefBoxRef False
   let _ = setRef useStrLeafRef False
   let _ = setRef useFloatRef False
-  let _ = setRef useFloatRngRef False
-  let _ = setRef useMathRef False
   let _ = setRef useFloatStrRef False
   let _ = setRef useStrSearchRef False
   let _ = setRef useValueCmpRef False
   let _ = setRef useValueArithRef False
   let _ = setRef numPolyLocalsRef []
-  let _ = setRef useStrCodecRef False
-  let _ = setRef useCharClassRef False
   let _ = setRef useIORef False
   let _ = setRef useArgsRef False
   let _ = setRef useFileBytesRef False
@@ -1287,7 +1266,7 @@ isLeafExternW name = contains name [
   -- #101: libm math externs.  IEEE-exact ops lower to native f64 opcodes
   -- (sqrt/floor/ceil/trunc → f64.sqrt/floor/ceil/trunc; round → $mdk_round, C-round
   -- half-away-from-zero); transcendentals lower to JS `Math.*` HOST IMPORTS ($mdk_<name>,
-  -- gated on useMathRef).  floatRem lowers to $mdk_float_rem (floatRemRuntimeLines).
+  -- gated on WasmEmit.useMath).  floatRem lowers to $mdk_float_rem (floatRemRuntimeLines).
   -- All mirror llvm's isMathUnary/isMathBinary/floatRem NAME SET (see llvm_emit.mdk).
   "sqrt", "floor", "ceil", "trunc", "round",
   "cbrt", "exp", "log", "log2", "log10",
@@ -1296,7 +1275,7 @@ isLeafExternW name = contains name [
   "pow", "atan2", "hypot", "floatRem"]
 
 -- #101: the libm math externs whose wasm lowering is a JS `Math.*` HOST IMPORT
--- (transcendentals + the two-arg pow/atan2/hypot).  These force useMathRef so the
+-- (transcendentals + the two-arg pow/atan2/hypot).  These force WasmEmit.useMath so the
 -- mathHostImportLines block is declared (and the JS harnesses provide $mdk_<name>).
 -- The IEEE-exact ops (sqrt/floor/ceil/trunc/round) are NOT here — they lower to native
 -- f64 opcodes / $mdk_round, needing no host import.  floatRem uses $mdk_float_rem (WAT).
@@ -1619,8 +1598,8 @@ noteW8Extern emit name =
   -- (ref-mode + floatRuntimeLines carries $mdk_round; $mdk_float_rem is floatRemRuntimeLines).
   let _ = if isFloatMathExternW name then setRef useFloatRef True else ()
   -- #101: the transcendental / binary math externs lower to JS Math.* host imports —
-  -- force useMathRef so mathHostImportLines is declared.
-  let _ = if isMathHostExternW name then setRef useMathRef True else ()
+  -- force emit.useMath so mathHostImportLines is declared.
+  let _ = if isMathHostExternW name then setRef emit.useMath True else ()
   -- floatToString needs the $str rep to build its result string.
   let _ = if name == "floatToString" then setRef useStrRef True else ()
   -- layer-6: stringToFloat : String -> Option Float.  Pushes bytes via the IO path
@@ -1632,7 +1611,7 @@ noteW8Extern emit name =
           else ()
   -- hashFloat needs the shared mix64 (hashRuntime); randomFloat needs next_u64 (rngRuntime).
   let _ = if name == "hashFloat" then let _ = setRef emit.useFloatHash True in setRef emit.useHash True else ()
-  let _ = if name == "randomFloat" then let _ = setRef useFloatRngRef True in setRef emit.useRng True else ()
+  let _ = if name == "randomFloat" then let _ = setRef emit.useFloatRng True in setRef emit.useRng True else ()
   -- W8b: stringIndexOf/stringCompare use the strSearch runtime + cp_count (strLeaf) + $str.
   let _ = if contains name ["stringIndexOf", "stringCompare"]
           then let _ = setRef useStrSearchRef True in let _ = setRef useStrRef True in setRef useStrLeafRef True else ()
@@ -1640,11 +1619,11 @@ noteW8Extern emit name =
   -- of i31 Char codepoints.  Force the $str rep, the $arr rep, the strLeaf char encoder
   -- ($mdk_char_to_str, reused by stringFromChars), and the codec runtime itself.
   let _ = if contains name ["stringToChars", "stringFromChars"]
-          then let _ = setRef useStrCodecRef True in let _ = setRef useStrRef True in let _ = setRef useArrayRef True in setRef useStrLeafRef True else ()
+          then let _ = setRef emit.useStrCodec True in let _ = setRef useStrRef True in let _ = setRef useArrayRef True in setRef useStrLeafRef True else ()
   -- W11b: the UTF-8 byte codec ($str <-> Array Int).  Force the codec runtime (carries
   -- $mdk_str_to_utf8_bytes / $mdk_utf8_bytes_to_str), the $str rep, and the $arr rep.
   let _ = if contains name ["stringToUtf8Bytes", "stringFromUtf8Bytes"]
-          then let _ = setRef useStrCodecRef True in let _ = setRef useStrRef True in setRef useArrayRef True else ()
+          then let _ = setRef emit.useStrCodec True in let _ = setRef useStrRef True in setRef useArrayRef True else ()
   -- W9: debugStringLit/debugCharLit quote+escape into a fresh $str via $mdk_dbg_quote,
   -- which reuses $mdk_cp_count + $mdk_char_to_str (both in strLeafRuntimeLines).  Force
   -- the $str rep + the strLeaf runtime.  (No $arr needed.)
@@ -1655,7 +1634,7 @@ noteW8Extern emit name =
   -- W11b: char classification + case-mapping externs — pure WAT helpers, no $str/$arr.
   let _ = if contains name ["charIsAlpha", "charIsSpace", "charIsUpper", "charIsLower",
                              "charIsPunct", "charToUpper", "charToLower"]
-          then setRef useCharClassRef True else ()
+          then setRef emit.useCharClass True else ()
   -- W10: panic's message arg is a $str → force the $str rep.  B5: the coded-trap
   -- lowering streams that message through $mdk_eprint_str (gated on this emission's
   -- `useEPut`) after a fixed "runtime error [E-PANIC]: " prefix.
@@ -2382,7 +2361,7 @@ emitRefProgram prog groups =
     -- lives JS-side).
     ++ (if useFloatRef.value then floatFmtImportLines else [])
     -- #101: the libm transcendentals / pow / atan2 / hypot are JS Math.* host imports.
-    ++ (if useMathRef.value then mathHostImportLines else [])
+    ++ (if (progEmit prog).useMath.value then mathHostImportLines else [])
     -- layer-6: stringToFloat is a host import (mdk_str_to_float = the host strtod parser).
     ++ (if useFloatStrRef.value then floatStrImportLines else [])
     -- W12: the IO host surface (readFile/fileExists/args/getEnv/exit) host imports.
@@ -2463,7 +2442,7 @@ emitRefProgram prog groups =
   let floatRemRt = if useFloatRef.value || useValueArithRef.value then floatRemRuntimeLines else []
   let floatRt = if useFloatRef.value then floatRuntimeLines else []
   let hashFloatRt = if (progEmit prog).useFloatHash.value then hashFloatRuntimeLines else []
-  let randomFloatRt = if useFloatRngRef.value then randomFloatRuntimeLines else []
+  let randomFloatRt = if (progEmit prog).useFloatRng.value then randomFloatRuntimeLines else []
   -- layer-6: stringToFloat runtime ($mdk_string_to_float).  Needs ioHostRt for the
   -- path channel ($mdk_path_reset/$mdk_path_push), but emitted AFTER ioHostRt since
   -- those functions are defined there (wasm forward refs are fine, but order is clear).
@@ -2473,10 +2452,10 @@ emitRefProgram prog groups =
   -- range-check runtime ($mdk_char_from_code).  The codec needs the $str rep ($u8arr)
   -- and the $arr rep (both forced via noteW8Extern).  charFromCode alone needs neither
   -- the codec nor strLeaf, so its runtime fn is gated independently.
-  let strCodecRt = if useStrCodecRef.value then strCodecRuntimeLines else []
+  let strCodecRt = if (progEmit prog).useStrCodec.value then strCodecRuntimeLines else []
   let charFromCodeRt = if (progEmit prog).useCharFromCode.value then charFromCodeRuntimeLines else []
   -- W11b: char classification + case-mapping helpers (ASCII-only pure WAT).
-  let charClassRt = if useCharClassRef.value then charClassRuntimeLines else []
+  let charClassRt = if (progEmit prog).useCharClass.value then charClassRuntimeLines else []
   -- W12: the IO host-surface marshaling runtime (byte-channel + the five extern bodies).
   -- The `args` body lives in a separate block (it builds a $C_Cons list, needing the
   -- list types) gated on useArgsRef.

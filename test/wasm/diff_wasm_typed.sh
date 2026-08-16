@@ -302,7 +302,7 @@ for required in \
   'setRef emit.useRng True' \
   'setRef emit.useHash True' \
   '|| emit.useRng.value || emit.useHash.value || useFloatRef.value' \
-  'setRef useFloatRngRef True in setRef emit.useRng True'; do
+  'setRef emit.useFloatRng True in setRef emit.useRng True'; do
   grep -F -- "$required" "$WASM_SRC" >/dev/null || {
     echo "FAIL H2B9-RNG-HASH-AUTHORITY: missing $required"
     exit 1
@@ -315,16 +315,12 @@ EXPECTED_MODULE_REFS="$(printf '%s\n' \
   tupleAritiesRef \
   useArgsRef \
   useArrayRef \
-  useCharClassRef \
   useFileBytesRef \
   useFloatRef \
-  useFloatRngRef \
   useFloatStrRef \
   useIORef \
   useListRef \
-  useMathRef \
   useRefBoxRef \
-  useStrCodecRef \
   useStrLeafRef \
   useStrRef \
   useStrSearchRef \
@@ -344,11 +340,146 @@ ACTUAL_MODULE_REF_DEFS="$(awk '
 ' "$WASM_SRC" | LC_ALL=C sort -u)"
 if [ "$ACTUAL_MODULE_REF_SIGS" != "$EXPECTED_MODULE_REFS" ] ||
     [ "$ACTUAL_MODULE_REF_DEFS" != "$EXPECTED_MODULE_REFS" ]; then
-  echo "FAIL H2B11-CHAR-FROM-CODE-AUTHORITY: top-level Ref authority set changed"
+  echo "FAIL H2B-LR-AUTHORITY-SET: top-level Ref authority set changed"
   printf '  observed signatures:\n%s\n' "$ACTUAL_MODULE_REF_SIGS"
   printf '  observed definitions:\n%s\n' "$ACTUAL_MODULE_REF_DEFS"
   exit 1
 fi
+if grep -E '^_?useCharClassRef[[:space:]]*[:=]|setRef (_?useCharClassRef)' "$WASM_SRC" >/dev/null; then
+  echo "FAIL H2B-LR-AUTHORITY-SET: retired CharClass ambient authority remains"
+  exit 1
+fi
+for required in \
+  'useCharClass : Ref Bool' \
+  'useCharClass = Ref'; do
+  [ "$(grep -F -- "$required" "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] || {
+    echo "FAIL H2B-LR-CHARCLASS-CARRIER: missing or duplicate $required"
+    exit 1
+  }
+done
+grep -F 'then setRef emit.useCharClass True else ()' "$WASM_SRC" >/dev/null &&
+  grep -F '|| emit.useCharClass.value || useIORef.value' "$WASM_SRC" >/dev/null &&
+  grep -F 'let charClassRt = if (progEmit prog).useCharClass.value then charClassRuntimeLines else []' "$WASM_SRC" >/dev/null &&
+  ! grep -E 'setRef emit\.useCharClass False|setRef useCharClassRef False' "$WASM_SRC" >/dev/null || {
+    echo "FAIL H2B-LR-CHARCLASS-ROUTES: writer, operational read, or reset changed"
+    exit 1
+  }
+[ "$(grep -F 'setRef emit.useCharClass True' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
+  [ "$(grep -F 'emit.useCharClass.value' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
+  [ "$(grep -F '(progEmit prog).useCharClass.value' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
+  grep -F 'emitProgram input cp = emitProgramWith (freshWasmEmit WGapStrict) input cp' "$WASM_SRC" >/dev/null &&
+  [ "$(grep -F 'let emit = freshWasmEmit WGapRecord' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 2 ] || {
+    echo "FAIL H2B-LR-CHARCLASS-ROUTES: writer/read cardinality or fresh route changed"
+    exit 1
+  }
+if grep -E '^_?useFloatRngRef[[:space:]]*[:=]|setRef (_?useFloatRngRef)' "$WASM_SRC" >/dev/null; then
+  echo "FAIL H2B-LR-AUTHORITY-SET: retired FloatRng ambient authority remains"
+  exit 1
+fi
+for required in \
+  'useFloatRng : Ref Bool' \
+  'useFloatRng = Ref'; do
+  [ "$(grep -F -- "$required" "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] || {
+    echo "FAIL H2B-LR-FLOATRNG-CARRIER: missing or duplicate $required"
+    exit 1
+  }
+done
+grep -F 'then let _ = setRef emit.useFloatRng True in setRef emit.useRng True else ()' "$WASM_SRC" >/dev/null &&
+  ! grep -E 'setRef emit\.useFloatRng False|setRef useFloatRngRef False' "$WASM_SRC" >/dev/null || {
+    echo "FAIL H2B-LR-FLOATRNG-ROUTES: writer, operational read, or reset changed"
+    exit 1
+  }
+[ "$(grep -F 'setRef emit.useFloatRng True' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
+  [ "$(grep -F '(progEmit prog).useFloatRng.value' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
+  grep -F 'emitProgram input cp = emitProgramWith (freshWasmEmit WGapStrict) input cp' "$WASM_SRC" >/dev/null &&
+  [ "$(grep -F 'let emit = freshWasmEmit WGapRecord' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 2 ] || {
+    echo "FAIL H2B-LR-FLOATRNG-ROUTES: writer/read cardinality or fresh route changed"
+    exit 1
+  }
+if grep -E '^_?useStrCodecRef[[:space:]]*[:=]|setRef (_?useStrCodecRef)' "$WASM_SRC" >/dev/null; then
+  echo "FAIL H2B-LR-AUTHORITY-SET: retired StrCodec ambient authority remains"
+  exit 1
+fi
+for required in \
+  'useStrCodec : Ref Bool' \
+  'useStrCodec = Ref'; do
+  [ "$(grep -F -- "$required" "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] || {
+    echo "FAIL H2B-LR-STRCODEC-CARRIER: missing or duplicate $required"
+    exit 1
+  }
+done
+grep -F 'let _ = if contains name ["stringToChars", "stringFromChars"]' "$WASM_SRC" >/dev/null &&
+  grep -F 'then let _ = setRef emit.useStrCodec True in let _ = setRef useStrRef True in let _ = setRef useArrayRef True in setRef useStrLeafRef True else ()' "$WASM_SRC" >/dev/null &&
+  grep -F 'let _ = if contains name ["stringToUtf8Bytes", "stringFromUtf8Bytes"]' "$WASM_SRC" >/dev/null &&
+  grep -F 'then let _ = setRef emit.useStrCodec True in let _ = setRef useStrRef True in setRef useArrayRef True else ()' "$WASM_SRC" >/dev/null &&
+  ! grep -E 'setRef emit\.useStrCodec False|setRef useStrCodecRef False' "$WASM_SRC" >/dev/null || {
+    echo "FAIL H2B-LR-STRCODEC-ROUTES: producers, cofactors, or reset changed"
+    exit 1
+  }
+[ "$(grep -F 'setRef emit.useStrCodec True' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 2 ] &&
+  [ "$(grep -F '(progEmit prog).useStrCodec.value' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
+  grep -F 'emitProgram input cp = emitProgramWith (freshWasmEmit WGapStrict) input cp' "$WASM_SRC" >/dev/null &&
+  [ "$(grep -F 'let emit = freshWasmEmit WGapRecord' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 2 ] || {
+    echo "FAIL H2B-LR-STRCODEC-ROUTES: writer/reader cardinality or fresh route changed"
+    exit 1
+  }
+if grep -E '^_?useMathRef[[:space:]]*[:=]|setRef (_?useMathRef)' "$WASM_SRC" >/dev/null; then
+  echo "FAIL H2B-LR-AUTHORITY-SET: retired Math ambient authority remains"
+  exit 1
+fi
+for required in \
+  'useMath : Ref Bool' \
+  'useMath = Ref'; do
+  [ "$(grep -F -- "$required" "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] || {
+    echo "FAIL H2B-LR-MATH-CARRIER: missing or duplicate $required"
+    exit 1
+  }
+done
+EXPECTED_MATH_HOST_NAMES="$(printf '%s\n' \
+  acos asin atan atan2 cbrt cos cosh exp hypot log log10 log2 pow sin sinh tan tanh | LC_ALL=C sort)"
+ACTUAL_MATH_HOST_NAMES="$(awk '
+  /^isMathHostExternW name = contains$/ { in_math_host = 1; next }
+  in_math_host {
+    if ($0 ~ /^  \]$/) exit
+    while (match($0, /"[^"]+"/)) {
+      print substr($0, RSTART + 1, RLENGTH - 2)
+      $0 = substr($0, RSTART + RLENGTH)
+    }
+  }
+' "$WASM_SRC" | LC_ALL=C sort -u)"
+[ "$ACTUAL_MATH_HOST_NAMES" = "$EXPECTED_MATH_HOST_NAMES" ] || {
+  echo "FAIL H2B-LR-MATH-PREDICATE: Math host-extern name set changed"
+  exit 1
+}
+MATH_FLOAT_COFACTOR_LINE="$(grep -n -F 'let _ = if isFloatMathExternW name then setRef useFloatRef True else ()' "$WASM_SRC" | cut -d: -f1)"
+MATH_WRITER_LINE="$(grep -n -F 'let _ = if isMathHostExternW name then setRef emit.useMath True else ()' "$WASM_SRC" | cut -d: -f1)"
+MATH_IMPORT_LINE="$(grep -n -F 'mathHostImportLines else []' "$WASM_SRC" | cut -d: -f1)"
+FLOAT_IMPORT_LINE="$(grep -n -F 'floatFmtImportLines else []' "$WASM_SRC" | cut -d: -f1)"
+FLOATSTR_IMPORT_LINE="$(grep -n -F 'floatStrImportLines else []' "$WASM_SRC" | cut -d: -f1)"
+[ -n "$MATH_FLOAT_COFACTOR_LINE" ] &&
+  [ -n "$MATH_WRITER_LINE" ] &&
+  [ -n "$MATH_IMPORT_LINE" ] &&
+  [ -n "$FLOAT_IMPORT_LINE" ] &&
+  [ -n "$FLOATSTR_IMPORT_LINE" ] &&
+  [ "$(grep -F 'let _ = if isFloatMathExternW name then setRef useFloatRef True else ()' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
+  [ "$(grep -F 'let _ = if isMathHostExternW name then setRef emit.useMath True else ()' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
+  [ "$(grep -F 'mathHostImportLines else []' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
+  [ "$(grep -F 'floatFmtImportLines else []' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
+  [ "$(grep -F 'floatStrImportLines else []' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
+  [ "$MATH_FLOAT_COFACTOR_LINE" -lt "$MATH_WRITER_LINE" ] &&
+  [ "$FLOAT_IMPORT_LINE" -lt "$MATH_IMPORT_LINE" ] &&
+  [ "$MATH_IMPORT_LINE" -lt "$FLOATSTR_IMPORT_LINE" ] &&
+  ! grep -E 'setRef emit\.useMath False|setRef useMathRef False' "$WASM_SRC" >/dev/null || {
+    echo "FAIL H2B-LR-MATH-ROUTES: cofactor, import order, or reset changed"
+    exit 1
+  }
+[ "$(grep -F 'setRef emit.useMath True' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
+  [ "$(grep -F '(progEmit prog).useMath.value' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
+  grep -F 'emitProgram input cp = emitProgramWith (freshWasmEmit WGapStrict) input cp' "$WASM_SRC" >/dev/null &&
+  [ "$(grep -F 'let emit = freshWasmEmit WGapRecord' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 2 ] || {
+    echo "FAIL H2B-LR-MATH-ROUTES: writer/reader cardinality or fresh route changed"
+    exit 1
+  }
 if grep -E '^_?useCharFromCodeRef[[:space:]]*[:=]|setRef (_?useCharFromCodeRef)' "$WASM_SRC" >/dev/null; then
   echo "FAIL H2B11-CHAR-FROM-CODE-AUTHORITY: retired ambient authority remains"
   exit 1
@@ -873,6 +1004,131 @@ feature_exact_capture() {
   feature_capture "$begin" "$end" "$file"
 }
 
+# LR0 ownership evidence runs before legacy feature-state assertions. A reader
+# mutant must fail at its leaf field, even when its U shape also changes a
+# legacy feature-state artifact.
+LEAF_OUT="$INPUT_WORK/leaf-runtime.out"
+"$EMITBIN" --reemit-leaf-runtime-state >"$LEAF_OUT" 2>"$INPUT_WORK/leaf-runtime.err"
+LEAF_STATUS=$?
+[ "$LEAF_STATUS" -eq 0 ] && [ ! -s "$INPUT_WORK/leaf-runtime.err" ] || {
+  echo "FAIL LR-LEAF-STATUS: harness status/stderr"
+  exit 1
+}
+LEAF_MARKERS="$(awk '/^LEAF_(CHARCLASS|FLOATRNG|STRCODEC|MATH)_(P1|RECORD_U|RECORD_U_EVENTS|CENSUS_P_GAP|P2)_(BEGIN|END)$/ { print }' "$LEAF_OUT")"
+LEAF_EXPECTED_MARKERS="$(printf 'LEAF_CHARCLASS_P1_BEGIN\nLEAF_CHARCLASS_P1_END\nLEAF_CHARCLASS_RECORD_U_BEGIN\nLEAF_CHARCLASS_RECORD_U_END\nLEAF_CHARCLASS_RECORD_U_EVENTS_BEGIN\nLEAF_CHARCLASS_RECORD_U_EVENTS_END\nLEAF_CHARCLASS_CENSUS_P_GAP_BEGIN\nLEAF_CHARCLASS_CENSUS_P_GAP_END\nLEAF_CHARCLASS_P2_BEGIN\nLEAF_CHARCLASS_P2_END\nLEAF_FLOATRNG_P1_BEGIN\nLEAF_FLOATRNG_P1_END\nLEAF_FLOATRNG_RECORD_U_BEGIN\nLEAF_FLOATRNG_RECORD_U_END\nLEAF_FLOATRNG_RECORD_U_EVENTS_BEGIN\nLEAF_FLOATRNG_RECORD_U_EVENTS_END\nLEAF_FLOATRNG_CENSUS_P_GAP_BEGIN\nLEAF_FLOATRNG_CENSUS_P_GAP_END\nLEAF_FLOATRNG_P2_BEGIN\nLEAF_FLOATRNG_P2_END\nLEAF_STRCODEC_P1_BEGIN\nLEAF_STRCODEC_P1_END\nLEAF_STRCODEC_RECORD_U_BEGIN\nLEAF_STRCODEC_RECORD_U_END\nLEAF_STRCODEC_RECORD_U_EVENTS_BEGIN\nLEAF_STRCODEC_RECORD_U_EVENTS_END\nLEAF_STRCODEC_CENSUS_P_GAP_BEGIN\nLEAF_STRCODEC_CENSUS_P_GAP_END\nLEAF_STRCODEC_P2_BEGIN\nLEAF_STRCODEC_P2_END\nLEAF_MATH_P1_BEGIN\nLEAF_MATH_P1_END\nLEAF_MATH_RECORD_U_BEGIN\nLEAF_MATH_RECORD_U_END\nLEAF_MATH_RECORD_U_EVENTS_BEGIN\nLEAF_MATH_RECORD_U_EVENTS_END\nLEAF_MATH_CENSUS_P_GAP_BEGIN\nLEAF_MATH_CENSUS_P_GAP_END\nLEAF_MATH_P2_BEGIN\nLEAF_MATH_P2_END')"
+[ "$LEAF_MARKERS" = "$LEAF_EXPECTED_MARKERS" ] || {
+  echo "FAIL LR-LEAF-MARKERS: exact 40 ordered markers"
+  exit 1
+}
+for leaf_field in CHARCLASS FLOATRNG STRCODEC MATH; do
+  feature_exact_capture "LEAF_${leaf_field}_P1_BEGIN" "LEAF_${leaf_field}_P1_END" "$LEAF_OUT" >"$INPUT_WORK/leaf-${leaf_field}-p1.wat" &&
+    feature_exact_capture "LEAF_${leaf_field}_RECORD_U_BEGIN" "LEAF_${leaf_field}_RECORD_U_END" "$LEAF_OUT" >"$INPUT_WORK/leaf-${leaf_field}-u.wat" &&
+    feature_exact_capture "LEAF_${leaf_field}_RECORD_U_EVENTS_BEGIN" "LEAF_${leaf_field}_RECORD_U_EVENTS_END" "$LEAF_OUT" >"$INPUT_WORK/leaf-${leaf_field}-record.events" &&
+    feature_exact_capture "LEAF_${leaf_field}_CENSUS_P_GAP_BEGIN" "LEAF_${leaf_field}_CENSUS_P_GAP_END" "$LEAF_OUT" >"$INPUT_WORK/leaf-${leaf_field}-census.events" &&
+    feature_exact_capture "LEAF_${leaf_field}_P2_BEGIN" "LEAF_${leaf_field}_P2_END" "$LEAF_OUT" >"$INPUT_WORK/leaf-${leaf_field}-p2.wat" || {
+      echo "FAIL LR-${leaf_field}-CAPTURE: malformed capture"
+      exit 1
+    }
+  for leaf_wat in p1 u p2; do
+    [ -s "$INPUT_WORK/leaf-${leaf_field}-${leaf_wat}.wat" ] || {
+      echo "FAIL LR-${leaf_field}-CAPTURE: empty $leaf_wat WAT"
+      exit 1
+    }
+  done
+  [ ! -s "$INPUT_WORK/leaf-${leaf_field}-record.events" ] || {
+    echo "FAIL LR-${leaf_field}-RECORD-EVENTS: expected exact empty events"
+    exit 1
+  }
+  [ -s "$INPUT_WORK/leaf-${leaf_field}-census.events" ] || {
+    echo "FAIL LR-${leaf_field}-CENSUS: empty events"
+    exit 1
+  }
+  cmp -s "$INPUT_WORK/leaf-${leaf_field}-p1.wat" "$INPUT_WORK/leaf-${leaf_field}-p2.wat" || {
+    echo "FAIL LR-${leaf_field}-P-IDENTITY: P changed after record U and census"
+    exit 1
+  }
+  cmp -s "$INPUT_WORK/leaf-${leaf_field}-p1.wat" "$INPUT_WORK/leaf-${leaf_field}-u.wat" && {
+    echo "FAIL LR-${leaf_field}-P-U: P/U positive control did not differ"
+    exit 1
+  }
+done
+for leaf_wat in p1 p2; do
+  grep -F '(func $mdk_char_is_alpha' "$INPUT_WORK/leaf-CHARCLASS-${leaf_wat}.wat" >/dev/null &&
+    grep -F 'call $mdk_char_is_alpha' "$INPUT_WORK/leaf-CHARCLASS-${leaf_wat}.wat" >/dev/null || {
+      echo "FAIL LR-CHARCLASS-P-PRESENCE: $leaf_wat"
+      exit 1
+    }
+  grep -F '(func $mdk_random_float' "$INPUT_WORK/leaf-FLOATRNG-${leaf_wat}.wat" >/dev/null &&
+    grep -F 'call $mdk_random_float' "$INPUT_WORK/leaf-FLOATRNG-${leaf_wat}.wat" >/dev/null &&
+    grep -F '(func $mdk_next_u64' "$INPUT_WORK/leaf-FLOATRNG-${leaf_wat}.wat" >/dev/null || {
+      echo "FAIL LR-FLOATRNG-P-PRESENCE: $leaf_wat"
+      exit 1
+    }
+  for leaf_codec_helper in mdk_str_to_chars mdk_chars_to_str mdk_str_to_utf8_bytes mdk_utf8_bytes_to_str; do
+    grep -F "(func \$$leaf_codec_helper" "$INPUT_WORK/leaf-STRCODEC-${leaf_wat}.wat" >/dev/null || {
+      echo "FAIL LR-STRCODEC-P-PRESENCE: $leaf_codec_helper in $leaf_wat"
+      exit 1
+    }
+  done
+  grep -F 'call $mdk_str_to_chars' "$INPUT_WORK/leaf-STRCODEC-${leaf_wat}.wat" >/dev/null || {
+    echo "FAIL LR-STRCODEC-P-DIRECT-CALL: $leaf_wat"
+    exit 1
+  }
+  grep -F '(import "env" "mdk_sin"' "$INPUT_WORK/leaf-MATH-${leaf_wat}.wat" >/dev/null &&
+    grep -F 'call $mdk_sin' "$INPUT_WORK/leaf-MATH-${leaf_wat}.wat" >/dev/null || {
+      echo "FAIL LR-MATH-P-PRESENCE: $leaf_wat"
+      exit 1
+    }
+done
+if grep -F '$mdk_char_is_alpha' "$INPUT_WORK/leaf-CHARCLASS-u.wat" >/dev/null; then
+  echo "FAIL LR-CHARCLASS-U-ABSENCE: nearest miss emitted char class"
+  exit 1
+fi
+grep -F '(func $mdk_char_from_code' "$INPUT_WORK/leaf-CHARCLASS-u.wat" >/dev/null || {
+  echo "FAIL LR-CHARCLASS-U-COFACTOR: missing charFromCode"
+  exit 1
+}
+if grep -F '$mdk_random_float' "$INPUT_WORK/leaf-FLOATRNG-u.wat" >/dev/null; then
+  echo "FAIL LR-FLOATRNG-U-ABSENCE: nearest miss emitted randomFloat"
+  exit 1
+fi
+grep -F '(func $mdk_next_u64' "$INPUT_WORK/leaf-FLOATRNG-u.wat" >/dev/null &&
+  grep -F '(func $mdk_int_to_float' "$INPUT_WORK/leaf-FLOATRNG-u.wat" >/dev/null || {
+    echo "FAIL LR-FLOATRNG-U-COFACTORS: missing RNG/Float"
+    exit 1
+  }
+for leaf_codec_helper in mdk_str_to_chars mdk_chars_to_str mdk_str_to_utf8_bytes mdk_utf8_bytes_to_str; do
+  if grep -F "\$$leaf_codec_helper" "$INPUT_WORK/leaf-STRCODEC-u.wat" >/dev/null; then
+    echo "FAIL LR-STRCODEC-U-ABSENCE: nearest miss emitted $leaf_codec_helper"
+    exit 1
+  fi
+done
+grep -F '(func $mdk_char_to_str' "$INPUT_WORK/leaf-STRCODEC-u.wat" >/dev/null &&
+  grep -F '(type $arr (array (mut (ref eq)))' "$INPUT_WORK/leaf-STRCODEC-u.wat" >/dev/null || {
+    echo "FAIL LR-STRCODEC-U-COFACTORS: missing Char/String/Array"
+    exit 1
+  }
+if grep -F '$mdk_sin' "$INPUT_WORK/leaf-MATH-u.wat" >/dev/null; then
+  echo "FAIL LR-MATH-U-ABSENCE: nearest miss emitted sin import"
+  exit 1
+fi
+grep -F 'f64.sqrt' "$INPUT_WORK/leaf-MATH-u.wat" >/dev/null || {
+  echo "FAIL LR-MATH-U-COFACTOR: missing sqrt"
+  exit 1
+}
+LEAF_CHARCLASS_EVENT=$'fn leafCharClassIntentionalGap\tunbound variable \'missingLeafCharClassCensus\' (not a local, global value, constructor, or known function) [in leafCharClassIntentionalGap]'
+LEAF_FLOATRNG_EVENT=$'fn leafFloatRngIntentionalGap\tunbound variable \'missingLeafFloatRngCensus\' (not a local, global value, constructor, or known function) [in leafFloatRngIntentionalGap]'
+LEAF_STRCODEC_EVENT=$'fn leafStrCodecIntentionalGap\tunbound variable \'missingLeafStrCodecCensus\' (not a local, global value, constructor, or known function) [in leafStrCodecIntentionalGap]'
+LEAF_MATH_EVENT=$'fn leafMathIntentionalGap\tunbound variable \'missingLeafMathCensus\' (not a local, global value, constructor, or known function) [in leafMathIntentionalGap]'
+for leaf_field in CHARCLASS FLOATRNG STRCODEC MATH; do
+  leaf_event_var="LEAF_${leaf_field}_EVENT"
+  [ "$(wc -l < "$INPUT_WORK/leaf-${leaf_field}-census.events")" -eq 1 ] &&
+    [ "$(cat "$INPUT_WORK/leaf-${leaf_field}-census.events")" = "${!leaf_event_var}" ] || {
+      echo "FAIL LR-${leaf_field}-CENSUS: exact one attributed gap"
+      exit 1
+    }
+done
+
 "$EMITBIN" --reemit-feature-state >"$INPUT_WORK/feature.out" 2>"$INPUT_WORK/feature.err"
 FEATURE_STATUS=$?
 [ "$FEATURE_STATUS" -eq 0 ] && [ ! -s "$INPUT_WORK/feature.err" ] || {
@@ -1001,6 +1257,31 @@ for feature_name in p1 hash-int-only float-div u p2; do
       echo "FAIL A0-FEATURE-CAPTURE: inert execution $feature_name"
       exit 1
     }
+done
+# Leaf capture/marker/P-U/cofactor/event checks ran before legacy feature-state checks.
+for leaf_field in CHARCLASS FLOATRNG STRCODEC MATH; do
+  for leaf_wat in p1 u p2; do
+    leaf_path="$INPUT_WORK/leaf-${leaf_field}-${leaf_wat}.wat"
+    wasm-tools parse "$leaf_path" -o "$INPUT_WORK/leaf-${leaf_field}-${leaf_wat}.wasm" >"$INPUT_WORK/leaf-${leaf_field}-${leaf_wat}.parse.out" 2>"$INPUT_WORK/leaf-${leaf_field}-${leaf_wat}.parse.err"
+    LEAF_PARSE_STATUS=$?
+    [ "$LEAF_PARSE_STATUS" -eq 0 ] && [ ! -s "$INPUT_WORK/leaf-${leaf_field}-${leaf_wat}.parse.out" ] && [ ! -s "$INPUT_WORK/leaf-${leaf_field}-${leaf_wat}.parse.err" ] || {
+      echo "FAIL LR-${leaf_field}-PARSE: $leaf_wat"
+      exit 1
+    }
+    wasm-tools validate --features=all "$INPUT_WORK/leaf-${leaf_field}-${leaf_wat}.wasm" >"$INPUT_WORK/leaf-${leaf_field}-${leaf_wat}.validate.out" 2>"$INPUT_WORK/leaf-${leaf_field}-${leaf_wat}.validate.err"
+    LEAF_VALIDATE_STATUS=$?
+    [ "$LEAF_VALIDATE_STATUS" -eq 0 ] && [ ! -s "$INPUT_WORK/leaf-${leaf_field}-${leaf_wat}.validate.out" ] && [ ! -s "$INPUT_WORK/leaf-${leaf_field}-${leaf_wat}.validate.err" ] || {
+      echo "FAIL LR-${leaf_field}-VALIDATE: $leaf_wat"
+      exit 1
+    }
+    "$NODE" "$RUNJS" "$INPUT_WORK/leaf-${leaf_field}-${leaf_wat}.wasm" >"$INPUT_WORK/leaf-${leaf_field}-${leaf_wat}.run.out" 2>"$INPUT_WORK/leaf-${leaf_field}-${leaf_wat}.run.err"
+    LEAF_RUN_STATUS=$?
+    [ "$LEAF_RUN_STATUS" -eq 0 ] && [ ! -s "$INPUT_WORK/leaf-${leaf_field}-${leaf_wat}.run.err" ] &&
+      printf '0\n' | cmp -s - "$INPUT_WORK/leaf-${leaf_field}-${leaf_wat}.run.out" || {
+        echo "FAIL LR-${leaf_field}-EXEC: inert $leaf_wat"
+        exit 1
+      }
+  done
 done
 
 # H2b.10 capture-only apparatus. HashFloat P is strict and inert; record U keeps
