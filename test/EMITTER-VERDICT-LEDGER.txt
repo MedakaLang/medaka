@@ -1,0 +1,125 @@
+# EMITTER-VERDICT-LEDGER.txt — cases in test/import_order_fixtures/ where the RAW
+# `./medaka_emitter` binary's own accept/reject verdict DISAGREES with `medaka
+# check`/`run`/`build`'s, observed by test/diff_compiler_import_order.sh's
+# emitter-verdict arm (RUN-XMOD-022/023, packet L1-L2-driver-asymmetry-observation,
+# xmod-identity sprint, epic #1122).
+#
+# ── WASM ARM (item 5, correction round, RUN-XMOD-041) — MEASURED, F3 REPRODUCES ─
+#
+# This ledger's own gate (`diff_compiler_import_order.sh`) grades the LLVM raw
+# emitter only. The WasmGC emitter (`compiler/entries/wasm_emit_modules_main.mdk`)
+# shares the same `entry_support.runEmitWith`/`underivedMainDiags` scaffolding
+# (F3's mechanism), so the F3 hole was measured to reproduce there too, cheaply:
+# `sh test/wasm/build_wasm_oracle.sh --modules-only` (~46s), then invoked directly
+# on #1667's own repro (`test/import_order_fixtures/1667-emitter-accepts-check-rejects`)
+# — `./test/bin/wasm_emit_modules_main stdlib/runtime.mdk stdlib/core.mdk main.mdk
+# <workdir>` → exit 0, 4298005-byte non-empty wasm text output, empty stderr, on
+# an entry `check`/`run`/`build` all reject with T-TYPE-MISMATCH. Same shape as
+# the LLVM arm. This is a ONE-TIME measurement, not a standing gate arm: the wasm
+# emitter is NOT wired into `diff_compiler_import_order.sh`'s corpus loop (out of
+# scope for this correction — a wasm emitter-verdict arm would be its own leaf).
+#
+# ── WHAT A ROW MEANS ──────────────────────────────────────────────────────────
+#
+# A row is an OBSERVATION, not a licence and not a correctness claim. It says:
+#
+#     "the raw emitter's own accept/reject verdict for this case's entry differs
+#      from what check/run/build decide, THIS IS MEASURED, and here is why it is
+#      not (yet) treated as its own must-fail pin."
+#
+# The CLASSIFICATION field (AGREE|DISAGREE) is COMPUTED by the gate from the
+# per-ordering `check=<exit>;emit=<exit>:<ir|noir>` signatures — never transcribed
+# by hand into this file and never trusted at face value: the gate re-derives it
+# every run and FAILS if a row's own field says something the computation
+# disagrees with. So a pasted row cannot lie about its own classification.
+#
+# ⚠️ THIS LEDGER RECORDS WHAT THE EMITTER DID, NOT WHAT IS CORRECT. Every row here
+# is a MEASUREMENT, exactly the same hazard class as any captured golden. Do not
+# read a green run of this gate as proof the emitter is right on these cases — it
+# is proof only that the disagreement is the SAME one that was pinned. The emitter
+# is the party this sprint has measured to be WRONG on at least the #1667 shape
+# (silently accepting and emitting a runnable program for an entry check/run/build
+# all reject at exit 1 with T-TYPE-MISMATCH); every DISAGREE row below is KNOWN-BAD
+# in that same sense — none of them is evidence the emitter's answer is preferable.
+#
+# ── WHY AGREE CASES ARE DELIBERATELY UNPINNED ─────────────────────────────────
+#
+# AGREE is the common, quiet case, and it is NOT ledgered here on purpose: a row
+# is only ever written for a DISAGREE. If a case in the corpus AGREEs, adding a
+# case in the future must not force a row — the absence of a row already means
+# "the emitter's own verdict currently matches the front end's" for every case not
+# named below. If a ledgered case's emitter verdict later CONVERGES with check's
+# (i.e. it stops disagreeing), the row DRAINS: the gate fails naming it, printing
+# "DRAINED", and the fixture is kept unledgered afterward as the regression guard.
+#
+# ── FORMAT ────────────────────────────────────────────────────────────────────
+#
+#   <case-directory> | AGREE|DISAGREE | <reason> | <sig> [| <sig> ...]
+#
+# Fields are `|`-separated and surrounding whitespace is stripped. Blank lines and
+# lines starting with `#` are ignored. Every row here is DISAGREE (AGREE is never
+# pinned, see above). A signature is:
+#
+#   check=<check's exit code>;emit=<raw emitter's exit code>:<ir|noir>
+#
+# `ir` means the emitter wrote non-empty IR to stdout; `noir` means it did not.
+# Neither the IR text nor the emitter's stderr is ever part of a signature (the IR
+# moves on every compiler change; the stderr embeds absolute mktemp paths — see
+# test/diff_compiler_import_order.sh's header, "signature escaping"). DO NOT
+# hand-write a signature: run the gate with the row absent, it prints every
+# distinct signature it observed under "Row to paste", and that is what belongs
+# here.
+#
+# ── #1667 (emitter accepts a program check/run/build reject) ──────────────────
+#
+# This ledger, via the emitter-verdict arm below, is the PERMANENT GUARD named by
+# the `1667` row in test/MUST-FAIL-NOT-PINNABLE.txt (RUN-XMOD-030): #1667 cannot
+# be expressed as an ordinary must-fail pin because `test/diff_compiler_must_fail.sh`
+# has no verb that can invoke the raw emitter (F17, packet L1-L2). If that
+# NOT-PINNABLE row or this file's `1667-emitter-accepts-check-rejects` case is ever
+# removed, re-read that row before deleting either.
+#
+# ⚠️ STRENGTHENED (F5/item 6, correction round, RUN-XMOD-041) — "accepts (exit 0,
+# non-empty IR)" under-describes what the emitter hands you. Measured on this
+# case's own repro (`mth "abc" 5` against `zmodI.mth : Int -> b -> Int`, whose
+# body is `mth n s = 7`): the 362890-byte IR LINKS clean (`clang … -lgc -lm`,
+# exit 0) and the resulting binary EXECUTES at exit 0, printing `7` — a confident
+# wrong answer for a program `check`/`run`/`build` all reject with T-TYPE-MISMATCH,
+# not merely a tool that was too permissive at the IR stage. `medaka build` itself
+# still rejects this program (its in-process pre-check runs before it would spawn
+# the emitter), so this user-facing path is not exposed through the normal CLI —
+# that bound is what keeps #1667 off the S0 ladder.
+#
+# ── MECHANISM, FOR THE ROWS BELOW THAT SHARE IT ────────────────────────────────
+#
+# ⚠️ CORRECTED (F3, correction round, RUN-XMOD-041) — a prior draft of this
+# paragraph attributed the gap to `shouldAutoPrintMain`/`main`'s TYPE ("which
+# every Unit-`main` fixture in this corpus skips"). Measured false: a 2x2 over
+# {single,multi}-module x {unit,non-unit}-main shows `main`'s type moves NOTHING
+# (both single-module cells are `emit=1:noir`; both multi-module cells are
+# `emit=0:ir`).
+#
+# The real mechanism is `underivedMainDiags` (compiler/driver/main_autoprint.mdk),
+# the ONLY site on this path that `failWith`s on a typecheck diagnostic. Its first
+# clause pattern-matches a SINGLETON module list (`[(_, entryDecls)]`); every other
+# shape — every multi-module program, i.e. any program with an import — falls to
+# the wildcard clause, which unconditionally returns `[]`. So for the entire
+# import-order corpus (every case here has >=2 modules by construction — it
+# permutes import clauses), that diagnostic-surfacing arm is structurally
+# unreachable, independent of `main`'s type; the emitter also typechecks MANGLED
+# decls where check/run typecheck un-mangled ones (see the gate's own header,
+# "THE EMITTER-VERDICT ARM"). Rows below citing this paragraph share this ONE
+# mechanism — the wildcard match on `underivedMainDiags`, not five or six
+# independent bugs.
+
+1253-record-form-ctor-head-decided-by-import-order | DISAGREE | Emitter accepts (exit 0, non-empty IR) an entry that `check`/`run`/`build` reject in EVERY ordering with R-AMBIGUOUS-CTOR (drained from test/IMPORT-ORDER-LEDGER.txt by #1319 unit 1 — that drain closed the ORDER-dependence of the reject, not the emitter's own failure to reject at all). Same discard-diagnostics mechanism as the paragraph above. | check=1;emit=0:ir
+
+1351-methoddispatchidx-import-order-collision | DISAGREE | Emitter accepts (exit 0, non-empty IR) in EVERY ordering, including the 3 of 6 orderings where check/run/build reject at exit 1 with T-TYPE-MISMATCH (the #1351 order-dependence itself, ledgered separately in test/IMPORT-ORDER-LEDGER.txt). Cross-references #1667: same discard-diagnostics mechanism, on the same corpus this ledger's #1667 row also names. | check=0;emit=0:ir | check=1;emit=0:ir
+
+1667-emitter-accepts-check-rejects | DISAGREE | #1667's own minimized 2-module repro (enrolled here per RUN-XMOD-030 item 7's binding requirement). Emitter accepts (exit 0, non-empty IR) in BOTH orderings; check/run/build reject at exit 1 with T-TYPE-MISMATCH in both. Same discard-diagnostics mechanism as the paragraph above. | check=1;emit=0:ir
+
+733-ambiguous-ctor-reject-cascade-order-dependent | DISAGREE | Emitter accepts (exit 0, non-empty IR) an entry check/run/build reject at exit 1 with R-AMBIGUOUS-CTOR (and, in one ordering, a cascading T-TYPE-MISMATCH — the #733 order-dependence itself, ledgered separately in test/IMPORT-ORDER-LEDGER.txt). Same discard-diagnostics mechanism as the paragraph above. | check=1;emit=0:ir
+
+control-ambiguous-ctor-reject-invariant | DISAGREE | This case's own name says CONTROL for the import-order axis (R-AMBIGUOUS-CTOR fires invariantly in both orderings, per its case.txt) — it is not a control for the emitter-verdict axis. Emitter accepts (exit 0, non-empty IR) in both orderings despite check/run/build rejecting invariantly. Same discard-diagnostics mechanism as the paragraph above. | check=1;emit=0:ir
+
+samename-iface-admissibility-invariant | DISAGREE | REVERSE direction from every other row here, and CORRECTED in the correction round (F2(a), RUN-XMOD-041) — a prior draft of this row wrongly claimed "check/run/build ACCEPT (exit 0) in both orderings"; measured, that is false. Measured (both orderings): check=0, run=0, printing "A(x)"/"B(y)" per case.txt — but build=1, and build's failure IS the raw emitter's own panic surfacing directly through `medaka build`'s error path: `error: emitter failed compiling <entry> / runtime error [E-PANIC]: no impl of method 'display' for type 'DogB'`. So `build` and the raw emitter AGREE (both reject, same message) — the only real disagreement here is check/run vs {build, emitter}, which `sig_for`'s own `build=1/-:` cell already records; this row exists only because the emitter-verdict arm's classification is computed from `check`'s exit code, not `build`'s. This matches issue #1647 (bare-name method-scheme collision — the two `speak` interfaces share a spelling and the emitter's front end attributes one's signature to the other's impl), already open and already attributed by this case's own case.txt (see "WHY THE `build` CELL IS 1 HERE" there) — NOT a new candidate for its own issue. See case.txt for the full derivation and the discriminating control that isolates #1647 from #1113 Phase 4. | check=0;emit=1:noir
