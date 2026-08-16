@@ -1,0 +1,11 @@
+-- UNCONSTRAINED binding sharing the surface name `pick` with cmod's. Its dict arity is 0,
+-- independently of cmod's 1 (DICT-SEMANTICS §8 I1).
+--
+-- POLYMORPHIC on purpose: a monomorphic `Int -> Int` would make a phantom leading dict
+-- silently consistent (define and call site agree on the extra slot and the printed number
+-- is right by accident). `a -> a` makes the skew value-observable.
+--
+-- ⚠️ Nothing in the entry ever names THIS module. It is reached only through `rmod`'s
+-- `export import` -- which is the whole variable under test.
+export pick : a -> a
+pick x = x

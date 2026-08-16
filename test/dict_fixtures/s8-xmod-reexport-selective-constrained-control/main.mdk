@@ -4,21 +4,31 @@
 -- GROUND TRUTH, HAND-DERIVED IDENTICALLY: `f x = x + 1` instantiated at `Int`,
 -- so `f 1` = 2.
 --
--- THIS CONTROL DOES TWO JOBS, and the second is why it is not redundant:
+-- THIS CONTROL DOES TWO JOBS, and the second CHANGED MEANING when the dict-arity
+-- seam was repaired (RUN-XMOD-062):
 --   1. It localises an alias-arm regression, exactly as the unconstrained pair's
 --      control does.
---   2. IT IS THE ATTRIBUTION FOR THE SIBLING'S REJECTING `run` CELL. This
---      spelling was ALWAYS green on `build` (it never had the scheme-env
---      defect), yet its `run` panics `intToString: not an Int` in precisely the
---      same way. One spelling broken and one spelling green on `build`, BOTH
---      broken identically on `run`, is what shows the run panic rides a
---      DIFFERENT channel from the build failure -- the #1369/#1425 dict-arity
---      seam, not the scheme-environment identity fix. Without this row the
---      sibling's REJECT could be misread as "the alias fix was incomplete".
---      MEASURED, not argued: on the fixed binary this file's cells are
---      check 0 / run 1 (`E-PANIC: intToString: not an Int`, 0 bytes stdout) /
---      build 0 / executed binary 0 printing `2` -- cell-for-cell IDENTICAL to
---      the alias sibling. The spelling changes nothing about the run arm.
+--   2. It was the ATTRIBUTION for the sibling's REJECTING `run` cell. Both
+--      spellings panicked `E-PANIC: intToString: not an Int` on `run` while both
+--      were correct on `build`, and that identity was the argument that the run
+--      residue was the #1369/#1425 dict-arity seam rather than anything about
+--      the ALIAS spelling.
+--
+-- 🚨 THE TWO SPELLINGS NOW DIVERGE, AND THE DIVERGENCE IS THE ASSERTION.
+-- RUN-XMOD-062 made the dict-arity seam's definer rows carry the TRUE DEFINER of
+-- a re-exported name (`lib.decl`) instead of the module the importer SPELLS
+-- (`lib.rsel`), derived through the one admission predicate. That repairs THIS
+-- (selective) spelling: `run` now exits 0 printing `2`, cell-for-cell agreeing
+-- with `build`. The ALIAS sibling still panics identically to before, because an
+-- alias route is not built from these rows at all -- `aliasEntriesFor` copies
+-- qual entries whose definer is `usePathModuleId path`, i.e. the SPELLED module,
+-- so a re-exporter alias matches nothing. MEASURED on both binaries: at b313d767
+-- both spellings panic; at the repair this file prints `2` at exit 0 and the
+-- alias sibling is byte-identically unchanged.
+--
+-- ⇒ The residue #1427 is still waiting on IS now alias-specific, which is the
+-- opposite of what this pair established before. Do not re-derive that from the
+-- old prose: run both files.
 import lib.rsel.{f}
 
 main = println (f 1)

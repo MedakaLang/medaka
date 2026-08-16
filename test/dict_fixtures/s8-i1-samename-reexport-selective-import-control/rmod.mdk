@@ -1,0 +1,6 @@
+-- RE-EXPORTS `pick` selectively. It DECLARES nothing.
+--
+-- This one line is the entire defect surface RUN-XMOD-062 repaired: the supply half of the
+-- dict-arity identity seam used to answer "what does rmod make available" by listing what
+-- rmod DECLARES, so `pick` got no definer row and fell to the source-blind bare-name table.
+export import umod.{pick}

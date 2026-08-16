@@ -1,0 +1,19 @@
+-- §8 I1 across a re-export where THE ENTRY NEVER NAMES THE COLLIDING MODULE (RUN-XMOD-062,
+-- #1425 F1). `cmod` is two hops away, reachable only through `smod`; `pick`'s definer `umod`
+-- is reachable only through `rmod`'s `export import`. Neither module is spelled in main.mdk.
+--
+-- Same reason `-wildcard-transitive-definer/` exists one relocation earlier: the poisoning
+-- reach of a bare-name arity table is the whole LOADED module set, not the entry's own import
+-- list, so a definer resolution re-narrowed to the entry's own clauses keeps the two siblings
+-- green and reds this.
+--
+-- Hand-derived, not captured: `S.hop 1` = `C.pick 1` = `sz 1 + 100` = 101 and
+-- `pick 1 + 200` = 201. MEASURED KNOWN-BAD at b313d767: `run` 101 then
+-- `E-NOT-A-FUNCTION: applied non-function: <dict:>`, `check` 0, built binary correct.
+
+import rmod.*
+import smod as S
+
+main =
+  println (S.hop 1)
+  println (pick 1 + 200)

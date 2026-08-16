@@ -1,0 +1,19 @@
+-- CONTROL for the three `-reexport-` siblings, and the DISCRIMINATOR that proves the variable
+-- is the IMPORT FORM (RUN-XMOD-062). Byte-identical to `-selective-through-wildcard/` except
+-- for main.mdk's first line: `import rmod.{pick}` here, `import rmod.*` there.
+--
+-- This spelling was ALREADY CORRECT at b313d767 while its wildcard twin panicked, which is how
+-- the third relocation was identified as the same seam defect rather than a new one. It is
+-- carried as a fixture because the repair changes what a NAMED import contributes too -- the
+-- row's definer is now `umod` (the true definer) rather than the spelled `rmod` -- so this row
+-- is what catches that widening if it ever stops resolving.
+--
+-- Hand-derived, not captured: `C.pick (1 : Int)` = 101, `pick 1 + 200` = 201.
+-- MEASURED CORRECT at b313d767 as well as at the repair -- an unchanged cell on purpose.
+
+import rmod.{pick}
+import cmod as C
+
+main =
+  println (C.pick (1 : Int))
+  println (pick 1 + 200)

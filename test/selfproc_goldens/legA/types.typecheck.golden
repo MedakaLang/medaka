@@ -517,6 +517,7 @@ defaultSubject : String -> String -> String
 defaultSurvivorMap : List (String, Mono) -> List (Int, Mono) -> List (String, Mono)
 definerReceiverDispatches : String -> Mono -> Bool
 definerReceiverIsDictVar : String -> Mono -> Bool
+definerRowsOf : List (String, (String, String)) -> List (String, String)
 definerShadowArgHead : Expr -> Option (String, Ref Route, Ref (List Route))
 definerShadowHeadType : TcEnv -> String -> Expr -> Mono
 definerShadowVarHead : Expr -> Option String
@@ -647,7 +648,6 @@ expandSupersIfaceEntry : List Decl -> (String, List IfaceRef) -> (String, List I
 expandSupersPairs : List Decl -> List CSlot -> List CSlot
 expandSupersTable : List Decl -> Unit
 expectedParamTypes : Mono -> Int -> List Mono
-explicitImportDefiners : List Decl -> List (String, String)
 exportsCtorIdentFor : String -> Ident -> List (String, String, Ident) -> Bool
 exportsIdentFor : String -> Ident -> List (String, Ident) -> Bool
 exprLoc : Expr -> Option Loc
@@ -743,7 +743,7 @@ graphIfaceMethods : List Decl -> List (String, List Decl) -> Map String (List (S
 graphIfaceMethodsGo : Map String (List (String, List String)) -> List (String, List Decl) -> Map String (List (String, List String))
 graphMethodExports : List Decl -> List (String, List Decl) -> Map String (List (String, Ident))
 graphMethodExportsGo : Map String (List (String, Ident)) -> List (String, List Decl) -> Map String (List (String, Ident))
-graphPubFnNames : String -> List String
+graphPubDefiners : Int -> String -> List (String, (String, String))
 groundMultiParamObligations : List Decl -> List UObligation -> Unit
 groundNumVars : List UObligation -> List Int -> Unit
 groundOneObligation : List Decl -> String -> List String -> Ty -> Mono -> Unit
@@ -906,9 +906,10 @@ implRowsOf : String -> Int -> Int -> List (IfaceRef, List Ty, List Require, List
 implSubject : String -> String -> String
 implTupleHeadKindMsg : String -> Int -> List Kind -> String
 implTysIfMatch : String -> String -> Decl -> List (List Ty)
-importDefinersOf : List Decl -> List (String, String)
+importDefinerFuel : Int
+importDefinersOf : List Decl -> List (String, (String, String))
+importFormRows : UsePath -> List (String, a) -> List (String, a)
 importFormSchemes : List (String, List (String, Scheme)) -> UsePath -> List (String, Scheme) -> List (String, Scheme)
-importOriginsOf : List Decl -> List (String, String)
 importOverlayDecls : Int -> List DeclEnvModule -> Decl -> List Decl
 importSeed : List Decl -> List (String, List (String, Scheme)) -> List (String, Scheme)
 importedBindings : UsePath -> Option (List (String, String))
@@ -1147,6 +1148,7 @@ memberAliasEntry : String -> List ((String, String), a) -> UseMember -> List (St
 memberBinding : UseMember -> (String, String)
 memberBindsCtorName : String -> String -> UseMember -> Bool
 memberClauseIsValue : (List Pat, Expr) -> Bool
+memberDefinerRow : String -> List (String, (String, String)) -> (String, String) -> List (String, (String, String))
 memberDictName : List String -> UseMember -> List String
 memberMethodRename : List String -> UseMember -> List (String, String)
 memberOverlayDecl : Int -> List DeclEnvModule -> String -> UseMember -> List Decl
@@ -1187,6 +1189,7 @@ mkMethodOccObl : IfaceRef -> List String -> Ty -> Mono -> Provenance -> Option L
 modInScope : String -> Map String Unit -> Bool
 moduleAliasEntry : String -> String -> ((String, String), a) -> List (String, a)
 moduleDictNames : List Decl -> List Decl -> List (String, List Decl) -> List String
+modulePubDefiners : Int -> String -> List Decl -> List (String, (String, String))
 moduleUserFnNames : List (String, List Decl) -> List String
 monoArgUnboundIds : Mono -> List Int
 monoIdsWithIface : (Mono, String) -> List (Int, String)
@@ -1261,6 +1264,7 @@ ordinalIsSentinel : Int -> Bool
 ordinalSentinelGuard : Int -> Unit
 ordinalSentinelMsg : String
 originPhrase : TyConOrigin -> String
+originRowsOf : List (String, (String, String)) -> List (String, String)
 overAppliedMsg : String -> Int -> Int -> String
 overlayDecided : Bool -> (Option Decl, Option Decl, Option Decl) -> Bool
 overlayNote : String -> String -> String -> TyConOrigin -> Decl -> (Option Decl, Option Decl, Option Decl) -> (Option Decl, Option Decl, Option Decl)
@@ -1421,6 +1425,7 @@ recordStandaloneSigObligations : String -> String -> Mono -> Unit
 recordTypeError : TcDiag -> Unit
 recordUnopSite : String -> Ref Route -> Mono -> Unit
 reexportCtorMember : UseMember -> List (String, String, Ident) -> List (String, String, Ident)
+reexportDefiners : Int -> List Decl -> List (String, (String, String))
 reexportRenamed : (String, String) -> List (String, Ident) -> List (String, Ident)
 reexportSchemeOblEntries : List Decl -> List ((String, String), List VecObl) -> List (String, List VecObl)
 reexportSeed : List (String, Scheme) -> List Decl -> List (String, List (String, Scheme)) -> List (String, Scheme)
@@ -1511,7 +1516,7 @@ resolveDictApps : List Decl -> Map String (List ImplEntry) -> Map String (List K
 resolveFieldAmbiguous : Mono -> String -> List String -> Option (String, RecordInfo)
 resolveFieldByOwners : Mono -> String -> Option (String, RecordInfo)
 resolveFieldRecord : Mono -> String -> Option (String, RecordInfo)
-resolveMemberSchemes : (String, String) -> List (String, Scheme) -> List (String, Scheme)
+resolveMemberRows : (String, String) -> List (String, a) -> List (String, a)
 resolveMethodDicts : Map String (List ImplEntry) -> Map String (List KeyEntry) -> List (Ref (List Route), List Mono) -> Unit
 resolveOpSite : Bool -> Map String (List ImplEntry) -> Map String (List KeyEntry) -> String -> Ref Route -> Mono -> Bool -> String -> Unit
 resolveOpSites : Bool -> Map String (List ImplEntry) -> Map String (List KeyEntry) -> List PendingEntry -> Unit
@@ -1772,6 +1777,8 @@ unopMethodApp : String -> Expr -> Ref Route -> Expr
 unreachableArmWarning : String
 unroutedGroundReqs : ImplUniverse -> IfaceRef -> List Mono -> List (IfaceRef, List Mono)
 unroutedResidual : IfaceRef -> List Mono -> List (IfaceRef, List Mono)
+useAdmittedRows : Bool -> List Decl -> List (String, (String, String))
+useDefinerRows : Bool -> UsePath -> List (String, (String, String))
 useFastIfaceMethodTy : Ref Bool
 useModuleId : Decl -> List String
 usePathBindsCtor : UsePath -> String -> String -> Bool
@@ -1800,7 +1807,6 @@ wRestore : Windowed a -> (List a, Int) -> Unit
 wSnapshot : Windowed a -> (List a, Int)
 wWindow : Windowed a -> Int -> List a
 walkDispatch : List String -> Ty -> Mono -> List (String, Mono)
-wildImportDefiners : List Decl -> List (String, String)
 wildSchemeOblEntry : String -> ((String, String), List VecObl) -> List (String, List VecObl)
 wrapIf : Bool -> String -> String
 zerosL : Int -> List Int

@@ -21814,8 +21814,12 @@ checkBodyImpl seed mode prog0 =
         (selfDeclArities mid prog crossRun.value.crossModuleFunConstraintIfacesQualRef.value perRun.value.funConstraintIfacesRef.value)
       let _ = setRef perRun.value.funConstraintDeclaredRef
         (selfDeclArities mid prog crossRun.value.crossModuleFunConstraintDeclaredQualRef.value perRun.value.funConstraintDeclaredRef.value)
-      let _ = setRef perRun.value.currentImportDefinersRef (importDefinersOf prog)
-      let _ = setRef perRun.value.currentImportOriginsRef (importOriginsOf prog)
+      -- RUN-XMOD-062: ONE derivation, two projections.  The two refs are read together
+      -- (`qualConstraintKey` assembles a `(definer, origin)` key out of both), so they
+      -- must not be derived by two independent walks that could admit different rows.
+      let admitted = importDefinersOf prog
+      let _ = setRef perRun.value.currentImportDefinersRef (definerRowsOf admitted)
+      let _ = setRef perRun.value.currentImportOriginsRef (originRowsOf admitted)
       -- #1114 (#845): this module's imported SCHEME CONTEXTS, keyed by local spelling.
       -- `reverseL` before `omFromPairs` so the FIRST entry wins a duplicate key, matching
       -- the first-match `lookupAssoc` policy of the three sibling tables set just above
@@ -28000,10 +28004,38 @@ endsWithStr suf s =
 -- backend/private_mangle — so the suffix-matched entries are passed through under their
 -- MANGLED keys, which is exactly the key the mangled reference will look up.  (A member
 -- alias is erased by the same mangling, so it needs no rebinding there.)
-resolveMemberSchemes : (String, String) -> List (String, Scheme) -> List (String, Scheme)
-resolveMemberSchemes (origin, local) depSchemes = match lookupAssoc origin depSchemes
+-- PAYLOAD-GENERIC on purpose (RUN-XMOD-062).  This is the member-resolution half of the
+-- ONE admission predicate — "which of a dependency's exported rows does this import form
+-- admit, and under which local key" — and it is shared by every consumer of that
+-- question rather than re-derived per payload.  Its callers today carry `Scheme`
+-- payloads (`importFormSchemes`) and `(definer module, origin name)` payloads
+-- (`importDefinersOf`); nothing in the body inspects the payload.
+resolveMemberRows : (String, String) -> List (String, a) -> List (String, a)
+resolveMemberRows (origin, local) depRows = match lookupAssoc origin depRows
   Some s => [(local, s)]
-  None => filter (kv => endsWithStr (memberSuffix origin) (fst kv)) depSchemes
+  None => filter (kv => endsWithStr (memberSuffix origin) (fst kv)) depRows
+
+-- ── THE admission predicate for VALUES, payload-generic (RUN-XMOD-062) ─────────
+-- "What does this import form admit out of a dependency's exported rows?", answered
+-- ONCE for every caller that asks it.  The forms live in `importedBindings` (wildcard /
+-- member list / bare-or-dotted / module alias) and are resolved here; the ALIAS arm is
+-- deliberately not special-cased here, because what `A.name` re-keying means is
+-- payload-specific — each caller handles `UseAlias` before delegating (see
+-- `importFormSchemes`, which routes it to `aliasSchemes`).
+--
+-- 🚨 A CALLER MUST NOT RE-ENUMERATE THE FORMS.  Three consecutive repairs to the
+-- dict-arity identity seam (#1425 F1 and its two relocations) each scoped their fix by
+-- enumerating import forms by hand, and each enumeration missed a member the next
+-- review found — wildcard, then selective re-export, then wildcard re-export.  Routing
+-- through this function makes "did we cover every form" a property of ONE definition
+-- instead of a hope: a form added to `importedBindings` reaches every caller by
+-- construction.  `selectIfaceRows`/`narrowRowToNamed` are the same predicate for
+-- interface ROWS (a row is a name plus a list of methods, so its narrowing is
+-- per-method rather than per-key) — deliberate mirrors; move them in lockstep.
+importFormRows : UsePath -> List (String, a) -> List (String, a)
+importFormRows path depRows = match importedBindings path
+  None => depRows
+  Some bindings => flatMap (b => resolveMemberRows b depRows) bindings
 
 -- `import m as A` binds EVERY value m exports under `A.name` — so it enumerates the
 -- dependency's schemes rather than a fixed member list.
@@ -28123,9 +28155,7 @@ isMangledExportOfAny ((m, pubV)::rest) k = isMangledFor m k && isSome (lookupAss
 importFormSchemes : List (String, List (String, Scheme)) -> UsePath -> List (String, Scheme) -> List (String, Scheme)
 importFormSchemes deps (UseAlias _ alias) depSchemes =
   aliasSchemes deps alias depSchemes
-importFormSchemes _ path depSchemes = match importedBindings path
-  None => depSchemes
-  Some bindings => flatMap (b => resolveMemberSchemes b depSchemes) bindings
+importFormSchemes _ path depSchemes = importFormRows path depSchemes
 
 -- ── import aliasing: re-key the dict-arity / dict-iface tables ───────────────────
 -- Both tables (funConstraintsRef, funConstraintIfacesRef) are keyed by the name a CALL
@@ -29151,59 +29181,114 @@ declOwnedBy mid tyName o = match mkIdent NsType (OriginModule mid) tyName
 -- today's behaviour — the same fail-closed-on-absent-identity discipline
 -- `selfDeclArities` takes for `mid == ""`.
 --
--- ORDER AND SHADOWING.  Explicit rows come FIRST (every reader is first-match), and a
--- wildcard row is dropped when the name is already spoken for — by an explicit import
--- of this module, or by this module's OWN top-level declaration, which shadows the
+-- ORDER AND SHADOWING.  Named-form rows come FIRST (every reader is first-match), and a
+-- wildcard row is dropped when the name is already spoken for — by a named import of
+-- this module, or by this module's OWN top-level declaration, which shadows the
 -- wildcard binding and whose arity `selfDeclArities` answers from its own qual row.
--- A name a wildcard source RE-EXPORTS rather than declares still gets no row and still
--- takes the bare path; that is #1369/#1427's re-export hop, deliberately untouched
--- here, and it fails OPEN to current behaviour rather than to a dropped dict.
-importDefinersOf : List Decl -> List (String, String)
+--
+-- 🚨 THE SUPPLY SIDE DOES NOT ENUMERATE (RUN-XMOD-062).  It used to, twice over — one
+-- walk for the named forms, one for the wildcard form, each deciding for itself what a
+-- dependency "makes available".  Both walks answered that with the names a dependency
+-- DECLARES, so a name it RE-EXPORTS (`export import u.{pick}` / `export import u.*`,
+-- at any depth) got no row and fell to the source-blind bare table — the same
+-- `E-NOT-A-FUNCTION: applied non-function: <dict:>` on a well-typed program, one hop
+-- further out.  That was the THIRD enumeration in this seam to miss a member.  The rows
+-- are now DERIVED: `graphPubDefiners` answers "what does module m export, and who
+-- DEFINED each of those names" (declared publics, plus re-exports resolved through the
+-- same predicate, transitively), and `importFormRows` — the one admission predicate,
+-- shared with `importFormSchemes` — answers "which of those does this import form
+-- admit, under which local key".  A form or a re-export shape this seam has never seen
+-- is covered by construction, not by a case.
+--
+-- Also, the payload is now a PAIR: `(definer module, origin name at the definer)`,
+-- because a re-export hop can RENAME (`export import u.{pick as pk}`).  The qual tables
+-- are keyed `(definer, ORIGINAL exported name)`, so carrying only the definer would key
+-- them with the local spelling, MISS, and — via `hasImportDefiner` — read that miss as
+-- "genuinely unconstrained", silently dropping the callee's dict.  Both halves of the
+-- key come out of one derivation; they cannot disagree.
+importDefinersOf : List Decl -> List (String, (String, String))
 importDefinersOf prog =
-  let explicit = explicitImportDefiners prog
-  let taken = namesToSet (map fst explicit ++ declTopFnNames prog) omEmpty
-  explicit
-    ++ filterList (e => not (omHasKey (fst e) taken)) (wildImportDefiners prog)
+  let named = useAdmittedRows False prog
+  let taken = namesToSet (map fst named ++ declTopFnNames prog) omEmpty
+  named
+    ++ filterList (e => not (omHasKey (fst e) taken)) (useAdmittedRows True prog)
 
--- the rows the NAMED import forms contribute (`import m.{a, b as c}`, `import a.b.n`);
--- `import m as A` and `import m` name no values and contribute none.
-explicitImportDefiners : List Decl -> List (String, String)
-explicitImportDefiners [] = []
-explicitImportDefiners ((DAttrib _ d)::rest) = explicitImportDefiners [d]
-  ++ explicitImportDefiners rest
-explicitImportDefiners ((DUse _ path _)::rest) =
+-- one precedence TIER of the walk above — [wild] selects the wildcard-form rows or the
+-- named-form rows.  This is a precedence split, not a re-enumeration of the forms:
+-- WHICH names a form admits is `importFormRows`' answer in both tiers.
+useAdmittedRows : Bool -> List Decl -> List (String, (String, String))
+useAdmittedRows _ [] = []
+useAdmittedRows wild ((DAttrib _ d)::rest) = useAdmittedRows wild [d]
+  ++ useAdmittedRows wild rest
+useAdmittedRows wild ((DUse _ path _)::rest) = useDefinerRows wild path
+  ++ useAdmittedRows wild rest
+useAdmittedRows wild (_::rest) = useAdmittedRows wild rest
+
+-- `core` is skipped: the implicit prelude is never an explicit provenance (every reader
+-- of these rows relies on that — see `declaredConstraintFor`).
+useDefinerRows : Bool -> UsePath -> List (String, (String, String))
+useDefinerRows wild path =
   let depId = usePathModuleId path
-  if depId == "core" then explicitImportDefiners rest
+  if depId == "core" then []
   else match importedBindings path
-    None => explicitImportDefiners rest
-    Some bindings => map (b => (snd b, depId)) bindings
-      ++ explicitImportDefiners rest
-explicitImportDefiners (_::rest) = explicitImportDefiners rest
+    None => if wild then graphPubDefiners importDefinerFuel depId else []
+    Some bindings =>
+      if wild then
+        []
+      else
+        flatMap (memberDefinerRow depId (graphPubDefiners importDefinerFuel depId)) bindings
 
--- the rows a WILDCARD import contributes: `import m.*` binds every PUBLIC top-level
--- binding `m` declares, each under its own name (a wildcard has no aliasing, so local
--- == origin and `importOriginsOf` needs no companion arm — `qualConstraintKey` already
--- defaults the origin to the name itself).
-wildImportDefiners : List Decl -> List (String, String)
-wildImportDefiners [] = []
-wildImportDefiners ((DAttrib _ d)::rest) = wildImportDefiners [d]
-  ++ wildImportDefiners rest
-wildImportDefiners ((DUse _ path _)::rest) =
+-- resolve ONE named member against the dependency's export table.  The fallback is the
+-- load-bearing part: on the Flat / loader-less drivers `deModules` is EMPTY, so the
+-- table is silent about every dependency, and a named import must keep contributing its
+-- row (attributed to the SPELLED module, which is what it contributed before this
+-- derivation existed) rather than vanish.  The wildcard form has no such fallback — it
+-- cannot enumerate without the graph — which is the same fail-closed-on-absent-identity
+-- discipline `selfDeclArities` takes for `mid == ""`.
+memberDefinerRow : String -> List (String, (String, String)) -> (String, String) -> List (String, (String, String))
+memberDefinerRow depId pubs (origin, local) = match resolveMemberRows (origin, local) pubs
+  [] => [(local, (depId, origin))]
+  rows => rows
+
+-- what module [mid] EXPORTS as values, each mapped to the module that DEFINED it and
+-- the name it is defined under — read off the graph envelope `buildDeclEnvs` already
+-- built for this driver.  Empty when the envelope is (Flat / loader-less drivers).
+--
+-- Re-exports recurse through `importFormRows`, so `export import u.{p}`,
+-- `export import u.*` and a chain of either resolve identically and transitively, and
+-- an aliased re-export keeps the ORIGIN half of the payload pointing at the definer's
+-- own name.  Declared names come first: a module that both declares and re-exports a
+-- name answers with its own binding, matching first-match resolution elsewhere.
+--
+-- [fuel] bounds the recursion.  The loader rejects import cycles before typecheck runs,
+-- so a cycle should be unreachable here; the bound is what keeps "should be" from being
+-- load-bearing for termination of the compiler itself.
+graphPubDefiners : Int -> String -> List (String, (String, String))
+graphPubDefiners fuel mid
+  | fuel <= 0 = []
+  | otherwise = flatMap (m => if m.demId == mid then modulePubDefiners fuel mid m.demDecls else []) driverState.value.declEnvsRef.value.deModules
+
+importDefinerFuel : Int
+importDefinerFuel = 64
+
+modulePubDefiners : Int -> String -> List Decl -> List (String, (String, String))
+modulePubDefiners fuel mid decls = map (n => (n, (mid, n))) (pubTopFnNames decls)
+  ++ reexportDefiners (fuel - 1) decls
+
+-- the rows a module's `export import` decls (`DUse True` — the same filter resolve's
+-- `pubUsePaths` and `reexportSeed` use) add to its own export table.  A plain `import`
+-- is not re-exported and contributes nothing downstream.
+reexportDefiners : Int -> List Decl -> List (String, (String, String))
+reexportDefiners _ [] = []
+reexportDefiners fuel ((DAttrib _ d)::rest) = reexportDefiners fuel [d]
+  ++ reexportDefiners fuel rest
+reexportDefiners fuel ((DUse True path _)::rest) =
   let depId = usePathModuleId path
-  if depId == "core" then wildImportDefiners rest
-  else match importedBindings path
-    None => map (n => (n, depId)) (graphPubFnNames depId)
-      ++ wildImportDefiners rest
-    Some _ => wildImportDefiners rest
-wildImportDefiners (_::rest) = wildImportDefiners rest
-
--- the PUBLIC top-level fn names module [mid] declares, read off the graph envelope
--- `buildDeclEnvs` already built for this driver.  Empty when the envelope is (Flat /
--- loader-less drivers), which is what makes the wildcard rows fail closed there.
-graphPubFnNames : String -> List String
-graphPubFnNames mid = flatMap
-  (m => if m.demId == mid then pubTopFnNames m.demDecls else [])
-  driverState.value.declEnvsRef.value.deModules
+  if depId == "core" then
+    reexportDefiners fuel rest
+  else
+    importFormRows path (graphPubDefiners fuel depId) ++ reexportDefiners fuel rest
+reexportDefiners fuel (_::rest) = reexportDefiners fuel rest
 
 -- `declTopFnNames` restricted to the EXPORTED bindings — what a wildcard import can
 -- actually bind.  A private binding must not enter the definer map: it is unreachable
@@ -29229,31 +29314,30 @@ pubTopFnNames decls =
   let fns = namesToSet (declTopFnNames decls) omEmpty
   filterList (n => omHasKey n fns) (publicValNames decls)
 
--- #739 fix follow-up: local-import-name → ORIGINAL exported name, the alias-resolution
--- companion to importDefinersOf (which maps local → source module).  `importedBindings`
+-- #739 fix follow-up: local-import-name → ORIGINAL exported name.  `importedBindings`
 -- yields (origin, local) pairs, so an aliased member `{x as y}` gives (y ↦ x) and a plain
 -- `{f}` gives (f ↦ f).  qualConstraintFor keys the (source, name) qual tables by the ORIGIN,
 -- not the surface alias — the tables are attributed under the DEFINING name — so a constrained
 -- aliased import (`hash_map.{set as hmSet}`) resolves its `Hash`/`Eq` dict instead of being
 -- misclassified as unconstrained and short-circuited (which DROPPED the dict → dispatch panic).
-importOriginsOf : List Decl -> List (String, String)
-importOriginsOf [] = []
-importOriginsOf ((DAttrib _ d)::rest) = importOriginsOf [d]
-  ++ importOriginsOf rest
-importOriginsOf ((DUse _ path _)::rest) =
-  let depId = usePathModuleId path
-  if depId == "core" then importOriginsOf rest
-  else match importedBindings path
-    None => importOriginsOf rest
-    Some bindings => map (b => (snd b, fst b)) bindings ++ importOriginsOf rest
-importOriginsOf (_::rest) = importOriginsOf rest
+--
+-- RUN-XMOD-062: this is now a PROJECTION of `importDefinersOf`'s rows rather than its own
+-- `DUse` walk.  Two walks over the import forms could disagree about which rows exist —
+-- and a `(definer, origin)` key assembled from two disagreeing walks is exactly the
+-- silent misroute this seam pays for.  `definerRowsOf` is its sibling projection; both
+-- take the SAME rows, computed once at the single write site.
+originRowsOf : List (String, (String, String)) -> List (String, String)
+originRowsOf rows = map (e => (fst e, snd (snd e))) rows
+
+definerRowsOf : List (String, (String, String)) -> List (String, String)
+definerRowsOf rows = map (e => (fst e, fst (snd e))) rows
 
 -- the (key, scheme) pairs a module RE-EXPORTS via `export import` (`DUse True`).
 -- Mirrors resolve's re-export set (resolve.pubUsePaths filters the same `DUse True`)
 -- into the typecheck seed: walk the export-flagged DUse decls and, for each, pick the
 -- re-exported member names out of the SOURCE dependency's public schemes already in
 -- depEnv — the exact member resolution importSeed uses (importFormSchemes /
--- resolveMemberSchemes), so it works on both golden and mangled emit paths.  Schemes
+-- resolveMemberRows), so it works on both golden and mangled emit paths.  Schemes
 -- come from depEnv by IDENTITY (the definer's original schemes, never re-generalized),
 -- which preserves the original-definer constraint ids (D2 diamond-safety).  ONLY
 -- `DUse True` is threaded, so a plain `import` never leaks the importer's names

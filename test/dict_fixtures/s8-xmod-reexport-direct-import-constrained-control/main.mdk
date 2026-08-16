@@ -1,0 +1,20 @@
+-- NO-HOP CONTROL for the `export import` re-export family, re-pointed here from
+-- `test/must_fail_fixtures/1369-export-import-constrained-callee-no-dict/control.mdk` when
+-- RUN-XMOD-062 drained that pin.
+--
+-- The drained pin graded ONE verb (`run`, exit code only) on its main arm and carried this
+-- control ungraded beside it. Its main arm is now the `s8-xmod-reexport-selective-
+-- constrained-control/` row, which grades check + run + build + executed binary; this file
+-- is the dimension that would otherwise have been lost, and it is what isolates the defect
+-- to the RE-EXPORT HOP rather than to the constrained binding `f` itself: byte-identical to
+-- that sibling except that it imports `lib.decl.{f}` DIRECTLY.
+--
+-- GROUND TRUTH, HAND-DERIVED FROM THE DECLARATION: `f : Num a => a -> a`, `f x = x + 1`,
+-- instantiated at `Int` by the literal, so `f 1` = 2 on every verb.
+--
+-- MEASURED CORRECT ON BOTH ARMS (b313d767 and the RUN-XMOD-062 repair) -- an unchanged cell
+-- on purpose. If this row ever moves, the regression is in ordinary named-import dict
+-- routing and not in anything about re-exports, which is exactly what a control is for.
+import lib.decl.{f}
+
+main = println (f 1)

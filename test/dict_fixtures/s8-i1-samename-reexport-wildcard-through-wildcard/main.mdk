@@ -1,0 +1,18 @@
+-- §8 I1 ACROSS A WILDCARD RE-EXPORT REACHED BY A WILDCARD IMPORT (RUN-XMOD-062, #1425 F1).
+-- `import rmod.*` where `rmod` is nothing but `export import umod.*`.
+--
+-- Varies exactly ONE token against `-selective-through-wildcard/`: the re-export's own form.
+-- That is the discrimination this row exists for -- a supply side that resolves re-exports by
+-- enumerating their forms can cover the selective spelling and miss this one, and the failure
+-- would look identical to "already fixed" from the sibling alone.
+--
+-- Hand-derived, not captured: `C.pick (1 : Int)` = 101, `pick 1 + 200` = 201 (see the sibling
+-- for the derivation). MEASURED KNOWN-BAD at b313d767: `run` 101 then
+-- `E-NOT-A-FUNCTION: applied non-function: <dict:>`, `check` 0, built binary correct.
+
+import rmod.*
+import cmod as C
+
+main =
+  println (C.pick (1 : Int))
+  println (pick 1 + 200)

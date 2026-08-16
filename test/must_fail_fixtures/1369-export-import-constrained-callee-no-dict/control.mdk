@@ -1,3 +1,0 @@
-import lib.decl.{f}
-
-main = println (f 1)
