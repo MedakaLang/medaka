@@ -47,7 +47,7 @@ ref, and never another agent's worktree.
    did, not what is right.
 6. **Ledger hygiene.** DEBT row present with no blank `could move:` /
    `nearest miss:` fields ("nothing, and here is why" is valid; silence is not);
-   report has all five §9 sections with real content (a `NONE` that the diff
+   report has all six §9 sections with real content (a `NONE` that the diff
    contradicts is a finding); any issue the slice claims to fix has its pin
    status stated (drained pins can lie — a pin drains on shape, not mechanism;
    flag any close resting solely on a drain).

@@ -94,8 +94,8 @@ that sentence have shipped S0s.
 
 Write it to the packet's named report path, INCREMENTALLY as you work (evidence
 lines as you produce them — if you die mid-slice, half a report on disk beats
-none). All five sections: Verdict / Evidence / Decisions surfaced / Deviations
-from packet / Not covered. `NONE` is valid; absence is not. Also append your
+none). All six sections: Verdict / Evidence / Decisions surfaced / Deviations
+from packet / Not covered / Friction. `NONE` is valid; absence is not. Also append your
 slice's DEBT.md row with the fields §6 defined (`sites:` `transform:`
 `could move:` `nearest miss:` `unchecked:`).
 

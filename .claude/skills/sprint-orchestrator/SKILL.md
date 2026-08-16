@@ -66,7 +66,8 @@ job is enforcement, and it is mechanical:
    minimum: `## Verdict`, `## Evidence` (commands + outputs, not claims),
    `## Decisions surfaced` (the literal string `NONE` is valid; absence is not),
    `## Deviations from packet` (`NONE` valid, absence not), `## Not covered`
-   (what this work does NOT establish).
+   (what this work does NOT establish), `## Friction` (`NONE` valid, absence
+   not — agents log, never triage).
 3. **A report missing any section BOUNCES** — send the agent back to complete it.
    Never fill a gap yourself, never infer what a missing section "would have said".
 4. **Route by section, mechanically:** anything in `Decisions surfaced` or
@@ -75,6 +76,9 @@ job is enforcement, and it is mechanical:
    (FINDINGS.md row → attribution → brain ruling REPAIR/ABSORB/FILE/DEFER/
    DISMISS → execution). `Not covered` items → append to the sprint's
    open-questions list in FINDINGS.md so they reach the repair round.
+   `Friction` items → append verbatim to FRICTION.md with the source report
+   path (no triage now — the `friction-triage` agent processes the whole
+   ledger at wrap-up).
 5. **Never merge, drop, or reword report content.** You move pointers and append
    verbatim text. If two documents disagree, that is a conflict → brain.
 6. **Enforce the identifier convention** (packet contract §0): every issue
@@ -100,6 +104,8 @@ definition — override per-dispatch only on a brain ruling recorded in DECISION
 | `bug-reproducer` | Sonnet 5 | Mechanical half of a finding: first-hand repro, minimization, attribution matrix, proven pin, issue draft. No interpretation |
 | `sprint-verifier` | Haiku 4.5 | Mechanical run-and-report: gates, readbacks, ledger hygiene. No judgment calls |
 | `sprint-scout` | Haiku 4.5 | Bounded read-only enumeration against a pinned commit |
+| `friction-triage` | Sonnet 5 | Wrap-up only: clusters/dedupes the friction ledger, decides file-worthiness, drafts issues |
+| `sprint-retro` | Opus 5 | Wrap-up only: evaluates the WORKFLOW against the standing principles; proposes changes for Val |
 
 Fable 5 has no standing seat: the brain requests a one-named-question consult when a
 question spans a whole spec or moves formal semantics. Anything that changes sprint
@@ -118,6 +124,7 @@ scope against the contract, or discards a standing ruling, goes to Val.
 2. **Create the record dir** `.claude/sprint-<stage>/` (never bare `sprint/` — two
    past runs collided on identical filenames): `DECISIONS.md` (append-only, each
    entry carries its derivation), `DEBT.md` (one row per slice), `FINDINGS.md`,
+   `FRICTION.md` (verbatim accumulation of reports' Friction sections),
    `reports/` (every agent report lands here), `packets/`.
 3. **Spawn the sprint-brain**; its first task: review the sprint contract, confirm
    the slice plan, and write DECISIONS.md's opening entries.
@@ -232,5 +239,11 @@ next action was closing five live bugs.
 4. **Desk-closes are an exit criterion:** every issue the sprint verified fixed gets
    closed with a derivation-bearing comment — check the PIN, not the narrative.
    The brain approves each close.
-5. Run the `orchestrator-wrapup` skill.
-6. Stop the heartbeat loop.
+5. **Continuous-improvement pair** (parallel with desk-closes): dispatch
+   `friction-triage` on FRICTION.md; when it returns, file its accepted drafts
+   with readback, route its `route-to:` items, then dispatch `sprint-retro`
+   with the full record dir, the heartbeat's self-audit/improvisation log, and
+   friction-triage's report. Relay RETRO.md to Val UNFILTERED — its proposals
+   and escalations are hers to approve; you apply nothing from it yourself.
+6. Run the `orchestrator-wrapup` skill.
+7. Stop the heartbeat loop.

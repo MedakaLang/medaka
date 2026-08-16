@@ -204,7 +204,7 @@ Rules for the planner writing it:
 > - Write your report to the path in §9 INCREMENTALLY as you finish each part —
 >   never buffer everything for a final write.
 
-## §9 The report — same five sections for every agent, no exceptions
+## §9 The report — same six sections for every agent, no exceptions
 
 The packet names the report path:
 `.claude/sprint-<stage>/reports/<slice-id>-<role>.md`. The return message is one
@@ -232,6 +232,17 @@ including "the packet said X sites, I found X+1". NONE is valid; absence is not.
 What this work does NOT establish: shapes not probed, programs not run, claims
 taken on trust, checks skipped and why. This section is what the repair round
 reads first. NONE is almost never true.
+
+## Friction
+Anything that slowed you down, confused you, or made you unsure — a misleading
+doc, a flaky command, a tool that lied, a packet section you had to read three
+times, a missing helper you hand-rolled. LOG, DON'T JUDGE: you are not asked
+to triage it, size it, or propose the fix — one line per item is enough, and
+logging liberally is correct (a dedicated triage agent processes the sprint's
+whole friction ledger at wrap-up; your job is only not to lose the data). The
+ONE exception needs no judgment either: friction that BLOCKS you from
+completing the packet is not friction — it is a BLOCKED verdict or a refusal,
+and you act on it now through that path. NONE is valid; absence is not.
 ```
 
 An agent that ends its turn without the report file on disk has not finished,

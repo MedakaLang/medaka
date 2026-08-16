@@ -18,8 +18,9 @@ something between steps 1 and 2.
    out NOW — `cp <agent-wt>/<report> .claude/sprint-<stage>/reports/` — before
    anything else; the worktree can be reclaimed and a return message is a
    summary, not an artifact.
-2. All five §9 sections present (`Verdict` / `Evidence` / `Decisions surfaced` /
-   `Deviations from packet` / `Not covered`), each non-absent (`NONE` is valid).
+2. All six §9 sections present (`Verdict` / `Evidence` / `Decisions surfaced` /
+   `Deviations from packet` / `Not covered` / `Friction`), each non-absent
+   (`NONE` is valid).
    Missing any → BOUNCE: continue the agent via SendMessage telling it which
    section to complete. Do not proceed on a bounced report; do not fill the gap.
 3. Read ONLY the `Verdict` line to branch below. You are not the report's
