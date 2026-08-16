@@ -1,0 +1,13 @@
+-- Declared FIRST in the graph (module ids sort `amod` < `zmod`, and `main` imports it
+-- first), so its rows reach the declaration-order merge ahead of `zmod`'s. Its
+-- interface merely SHARES THE SPELLING `Same` with `zmod`'s; the two have disjoint
+-- methods and neither module imports the other.
+import shared.{Box(..)}
+
+export interface Same a where
+  bar : a -> Int
+
+-- The CONDITIONAL impl. Its `requires Eq a` is the payload a spelling-keyed selection
+-- misattributes to `zmod`'s unrelated class.
+export impl Same (Box a) requires Eq a where
+  bar _ = 2

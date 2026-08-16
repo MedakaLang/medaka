@@ -1,0 +1,3 @@
+public export data Box a = Box a
+
+public export data Opaque = Opaque

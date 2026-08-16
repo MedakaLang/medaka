@@ -1,0 +1,8 @@
+-- The conditional impl, now declared SECOND.
+import shared.{Box(..)}
+
+export interface Same a where
+  bar : a -> Int
+
+export impl Same (Box a) requires Eq a where
+  bar _ = 2

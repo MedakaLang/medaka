@@ -1,0 +1,37 @@
+-- §8 I4 + §6 C2 — THE SOUNDNESS HOLE B-4b-ii CLOSES, and the only direction the
+-- bite's other fixtures do not cover: they exhibit the FALSE-REJECT direction,
+-- this one exhibits the FALSE-ACCEPT.
+--
+-- `viaA` is amod's, so its `Same a` constraint is `amod.Same`, and the impl that
+-- must witness it at `Box Opaque` is amod's `impl Same (Box a) requires Eq a`.
+-- That context grounds to `Eq Opaque`, which has no instance anywhere in this
+-- program. SPEC ANSWER, hand-derived before any binary was run: REJECT.
+--
+-- 🚨 MEASURED AS A SILENT FALSE ACCEPT ON A BASE BINARY cold-built from
+-- origin/main @ 2c549fef with its own stdlib/runtime: `check` exit 0, `run` exit
+-- 0 printing 1, `build` exit 0, executed binary printing 1. The checker reached
+-- ZMOD's row by SPELLING and discharged ITS empty context in place of amod's —
+-- so a program whose selected impl declares an unsatisfiable constraint ran to
+-- completion with no diagnostic. On this binary all three verbs reject with
+-- `T-NO-IMPL`.
+--
+-- ⚠️ THE VALUE 1 IS WHAT MAKES IT SOUNDNESS AND NOT MERELY ACCEPTANCE. 1 is
+-- zmod's body. The base binary did not just accept the program, it ran the
+-- OTHER class's method for it.
+--
+-- ⚠️ Read this fixture beside `b4bii-xmod-same-spelled-iface-requires-decl-order`
+-- (the false-reject direction, drained by the same one-line change).
+--
+-- ⚠️ AND DO NOT CONFUSE EITHER WITH `test/must_fail_fixtures/1182-two-ifaces-
+-- same-method-name-order-decides`, which is a DIFFERENT defect that merely looks
+-- adjacent. That one is driven by the shared METHOD name and is PRE-EXISTING;
+-- measured, changing the two interfaces' NAMES so they no longer collide leaves
+-- it reproducing unchanged on both arms, so the interface-spelling collision
+-- these two fixtures are about contributes nothing to it. What this bite does to
+-- it is remove a false reject that was accidentally SHIELDING one of its
+-- variants — recorded in that fixture's own claim, not here.
+import shared.{Box(..), Opaque(..)}
+import zmod
+import amod.{viaA}
+
+main = println (viaA (Box Opaque))
