@@ -35,7 +35,7 @@ type-clean.
   and it settles the question every time. `soundness` hosts `diff_compiler_must_fail.sh` because **a
   diff can fix a bug** — but must never host `must_fail_census.sh`, because **no diff can close an
   issue**: blocking an innocent PR on repo state its diff never touched is the "not your break"
-  problem `.claude/HANDOFF.md` exists to mitigate. Repo-state checks go **nightly**; diff-caused
+  problem the `known-red` issue label exists to mitigate. Repo-state checks go **nightly**; diff-caused
   checks gate the PR. (Corollaries for anything reaching the network: a required check that calls an
   API stops the whole repo merging on an outage, and it cannot run on a dev box with no `gh` auth —
   where it would have to SKIP, and "this didn't run" must never look like "this passed".)

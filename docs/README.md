@@ -13,10 +13,8 @@ current guidance.**
 
 Root entry points (not indexed below — always here): [`README.md`](../README.md)
 (build/test/CLI), [`AGENTS.md`](../AGENTS.md) (agent orientation, router),
-[`PLAN.md`](../PLAN.md) (open roadmap), [`HANDOFF.md`](../HANDOFF.md)
-(start-here snapshot — its own banner flags it partly stale; treat as a
-pointer to `docs/ops/DISTRIBUTION-DESIGN.md` / `docs/ops/RELEASE-0.1.0-PLAN.md`
-for current status, not as live guidance itself).
+[`PLAN.md`](../PLAN.md) (open roadmap). Session-handoff state lives in GitHub
+issues (`known-red` label for expected-red gates), not in a doc.
 
 ### spec — language ground truth
 

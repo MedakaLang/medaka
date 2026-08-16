@@ -1,3 +1,0 @@
-export interface Tag x where
-  tag : x -> Int
-  tag _ = 7

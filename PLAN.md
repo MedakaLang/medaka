@@ -39,9 +39,11 @@ is a soundness item and should be split out into the bug queue.
 
 ## Current status (2026-07-04) — NEW NORTH STAR: 0.1.0 public preview release
 
-> **Picking up the distribution workstream? Read [`HANDOFF.md`](./HANDOFF.md) first**
-> — it has the ranked next actions (start: D2 Track 1 big-stack pthread), the D0
-> spike results, and where each task lands.
+> **Picking up the distribution workstream?** The old `HANDOFF.md` snapshot was
+> retired 2026-08-16 (handoff state lives in GitHub issues now; its content was
+> already flagged stale). Current status: `docs/ops/DISTRIBUTION-DESIGN.md` and
+> `docs/ops/RELEASE-0.1.0-PLAN.md`, plus the `0.1.0 public preview` milestone in
+> the tracker.
 
 **The current-phase north star is a public 0.1.0 preview** — the point where Medaka
 goes in front of strangers. The compiler is mature; the distance is almost entirely

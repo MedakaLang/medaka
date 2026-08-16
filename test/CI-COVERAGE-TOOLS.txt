@@ -88,6 +88,12 @@ scripts/pr                     the verified PR-lifecycle helper (#1414): `body`/
                                (test/pr_helper_test.sh) is in the `tools` shard and exercises it.
 scripts/mutation_transaction   one-source expected-red transaction helper; its focused test
                                runs unguarded in the soundness job.
+scripts/sprint-disjoint        sprint-orchestration evidence tool: mechanical disjointness
+                               check (file/golden/snapshot/fixture-corpus intersection +
+                               merge-tree dry merge) for running two sprint writers in
+                               parallel. Asserts nothing about the compiler; exit 1 means
+                               "collision evidence found", which is data for the planner,
+                               not a suite failure. See .claude/skills/sprint-packet.
 test/fixtures/pr_mock_gh       mock `gh` used ONLY by test/pr_helper_test.sh (which is in the
                                `tools` shard); running it directly proves nothing.
 

@@ -7,6 +7,24 @@ pattern recurs.**
 
 Companion docs: `AGENTS.md` (agent-facing router) and the per-task **skills** in `.claude/skills/`.
 
+> ### ⭐ RUNNING A SPRINT? The workflow is MECHANIZED now (2026-08-16) — don't re-derive it from this file.
+>
+> This file remains the lessons ledger, but the sprint workflow itself lives in executable
+> artifacts, built from those lessons: **`.claude/skills/sprint-plan`** (cutting the slice set),
+> **`.claude/skills/sprint-orchestrator`** (the seat: a mechanical Sonnet 5 main session + a
+> persistent Opus 5 `sprint-brain` agent adjudicating via a rule table),
+> **`.claude/skills/slice-landed`** (the per-slice completion sequence),
+> **`.claude/skills/sprint-packet`** (the handoff contract: slice forms incl. discovery spikes +
+> families, the refusal license, the six-section report),
+> **`.claude/skills/sprint-findings`** (the bug/gap lifecycle), the role definitions in
+> **`.claude/agents/`** (`sprint-brain`, `sprint-implementer`, `slice-breaker`,
+> `spec-conformance-reviewer`, `sprint-planner`, `sprint-verifier`, `sprint-scout`,
+> `bug-reproducer`, `friction-triage`, `sprint-retro`), and
+> **`scripts/sprint-disjoint.sh`** (parallel-writer disjointness evidence). Where those artifacts
+> contradict older prose in this file — notably "Choosing the model" (pre-Claude-5 tiers) and the
+> Stage B role table (its own retro overturned its implementer row) — **the artifacts win**; the
+> prose is retained as history.
+
 ---
 
 ## 🚦 `main` IS PROTECTED. YOU CANNOT PUSH TO IT.
@@ -954,6 +972,13 @@ a list of defects to anyone. **Do not hand over prose. Hand over a script.**
 ---
 
 ## Choosing the model
+
+> ⚠️ **SUPERSEDED for sprint work (2026-08-16, Claude 5 family):** the sprint roster's model
+> assignments live in the `.claude/agents/*.md` frontmatter and the `sprint-orchestrator` skill's
+> roster table — Sonnet 5 orchestrator seat, Opus 5 brain/breaker/planner, Sonnet 5 implementer
+> default with packet-classified Opus 5 override, Haiku 4.5 verifier/scout, Fable 5 one-question
+> consults only. The rows below predate the Claude 5 family; they remain useful as the task
+> TAXONOMY (what is mechanical vs judgment work) but not as model names.
 
 - **Sonnet** — surgical, scoped, additive, read-only, or mechanical-with-a-template work (wiring, one
   additive dispatch arm, audits).

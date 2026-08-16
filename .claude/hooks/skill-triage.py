@@ -44,7 +44,16 @@ mcp_lint = re.search(r"\blint\b", prompt, re.IGNORECASE)
 mcp_test = re.search(r"\brun (the )?doctests?\b", prompt, re.IGNORECASE)
 mcp = mcp_check or mcp_type_at or mcp_symbols or mcp_definition or mcp_references or mcp_fmt or mcp_lint or mcp_test
 
-if not roadmap and not stdlib and not mcp:
+# Sprint-orchestration task: running/starting a sprint, or orchestrating
+# multi-agent implementation work. The sprint machinery lives in dedicated
+# skills + .claude/agents/ definitions; nothing else routes to it.
+sprint = re.search(r"\bsprint\b", prompt, re.IGNORECASE) or (
+    re.search(r"\borchestrat", prompt, re.IGNORECASE)
+    and re.search(r"\b(run|start|launch|kick|resume|implement|slice|packet)\b",
+                  prompt, re.IGNORECASE)
+)
+
+if not roadmap and not stdlib and not mcp and not sprint:
     sys.exit(0)
 
 if roadmap:
@@ -94,6 +103,31 @@ if mcp:
         "-- a daughter editing compiler/*.mdk or stdlib/core.mdk must still "
         "verify with its OWN freshly-built ./medaka (docs/ops/MCP.md §4); "
         "watch for a staleBinary field on the tool result."
+    )
+
+if sprint:
+    print(
+        "Skill triage (sprint/orchestration task detected): the sprint "
+        "machinery is defined in skills + agent definitions — do not re-derive "
+        "the workflow from ORCHESTRATING.md prose:\n"
+        "- Planning/cutting a NEW sprint (choosing the slice set) -> load "
+        "sprint-plan (coherent set, ~5+ slices, boundary-depth specs only; "
+        "Opus 5 minimum).\n"
+        "- Running a sprint as the orchestrator seat -> load sprint-orchestrator "
+        "(Sonnet 5 seat + persistent sprint-brain; escalation is a rule table).\n"
+        "- An implementer just returned -> load slice-landed (the fixed "
+        "completion sequence; order is load-bearing).\n"
+        "- Writing or executing a slice handoff -> load sprint-packet (the "
+        "contract: slice forms, refusal license, the six-section report).\n"
+        "- Dispatch roles via .claude/agents/: sprint-brain, sprint-implementer, "
+        "slice-breaker, spec-conformance-reviewer, sprint-planner, "
+        "sprint-verifier, sprint-scout, bug-reproducer, and at wrap-up "
+        "friction-triage + sprint-retro.\n"
+        "- A bug/gap was found mid-sprint -> load sprint-findings (row -> "
+        "bug-reproducer bundle -> brain's two-question ruling: in-sprint w/ "
+        "adjustment sweep, or orthogonal placed PLANNED-vs-GAP; every row "
+        "terminal before exit).\n"
+        "- Parallel-writer disjointness evidence -> scripts/sprint-disjoint.sh."
     )
 
 sys.exit(0)
