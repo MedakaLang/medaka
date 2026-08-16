@@ -101,11 +101,22 @@
 # RUN-XMOD-022/023 (xmod-identity sprint, packet
 # L1-L2-driver-asymmetry-observation). The discovery spike measured that the RAW
 # `./medaka_emitter` binary can exit 0 and emit a complete, linkable, runnable
-# program for an entry that `check`/`run`/`build` all reject — because on the
-# non-auto-print `main` arm, `runEmitWith` never inspects `elaborateModules`'
-# diagnostics before proceeding (see compiler/entries/entry_support.mdk), and it
-# typechecks MANGLED decls where check/run typecheck un-mangled ones. This is a
-# separate observation from the signature above, kept in a SEPARATE space and
+# program for an entry that `check`/`run`/`build` all reject.
+#
+# ⚠️ MECHANISM (corrected F3, RUN-XMOD-041 — a prior draft of this paragraph blamed
+# `main`'s TYPE; measured, that is false; the real discriminator is MODULE COUNT):
+# `underivedMainDiags` (compiler/driver/main_autoprint.mdk) is the ONLY place a
+# `failWith` on a typecheck diagnostic sits on this path, and its first clause
+# pattern-matches a SINGLETON module list — `underivedMainDiags rt core
+# [(_, entryDecls)] = …`. Every OTHER shape, including every multi-module program
+# (any program with an import), falls to the wildcard clause, which returns `[]`
+# unconditionally. So for any import-bearing entry — the entire corpus this gate
+# permutes — that diagnostic-surfacing arm is structurally unreachable regardless
+# of whether `main` is Unit-valued or not: a 2x2 measured on {single,multi} x
+# {unit,non-unit} main showed `main`'s type moves NOTHING (`single-unit` and
+# `single-nonunit` both `emit=1:noir`; `multi-unit` and `multi-nonunit` both
+# `emit=0:ir`) while module count moves everything. This is a separate observation
+# from the signature above, kept in a SEPARATE space and
 # graded against a SEPARATE sidecar ledger, `test/EMITTER-VERDICT-LEDGER.txt` —
 # on purpose, per RUN-XMOD-023: folding an `emit=` cell into the `check=…` printf
 # above would re-cut every row already pinned in `test/IMPORT-ORDER-LEDGER.txt`,
@@ -345,8 +356,17 @@ sig_for() {
 #    text and the emitter's stderr must never be pinned.
 emit_verdict_for() {
   _work="$1"; _entry="$2"
+  # The extra "$ROOT/stdlib" root gives the raw emitter the SAME root set
+  # check/run/build get via MEDAKA_ROOT="$ROOT" (exported above) — without it, any
+  # case importing a non-`core` stdlib module (list/map/string/...) would resolve
+  # for check/run/build but exit 1 "unknown module: <m>" for the raw emitter alone,
+  # misclassifying as DISAGREE for a root-set reason that has nothing to do with a
+  # compiler defect (F1, correction round, RUN-XMOD-041). Measured:
+  # `./medaka_emitter stdlib/runtime.mdk stdlib/core.mdk <entry> <workdir>` on a
+  # program with `import list.{reverse}` -> exit 1 "unknown module: list"; the same
+  # invocation with a trailing `stdlib` root -> exit 0, non-empty IR.
   bound "$EMITTER" "$ROOT/stdlib/runtime.mdk" "$ROOT/stdlib/core.mdk" \
-        "$_work/$_entry" "$_work" >"$_work/.emit.ll" 2>"$_work/.emit.err"
+        "$_work/$_entry" "$_work" "$ROOT/stdlib" >"$_work/.emit.ll" 2>"$_work/.emit.err"
   _e=$?
   if [ -s "$_work/.emit.ll" ]; then _ir=ir; else _ir=noir; fi
   printf 'emit=%s:%s\n' "$_e" "$_ir"
@@ -649,7 +669,16 @@ if [ -f "$EMITTER_LEDGER" ]; then
   fi
 fi
 
-printf '%s: %d case(s) — %d ok, %d failing\n' "$(basename "$0")" "$total" "$pass" "$fail"
+# F4/item 6 (correction round, RUN-XMOD-041): $total counts VERDICT lines, not
+# fixture directories — the emitter-verdict arm appends its own PASS/FAIL onto
+# $TMP/verdicts for every DISAGREE case (on top of the pre-existing check/run/build
+# verdict every case gets), so $total now exceeds the directory count whenever any
+# ledgered DISAGREE row exists. Pre-slice the two numbers coincided; print both so
+# a shrunk corpus is still legible from the tally alone.
+ncases=0
+for _c in $cases; do ncases=$((ncases+1)); done
+printf '%s: %d verdict(s) over %d case(s) — %d ok, %d failing\n' \
+  "$(basename "$0")" "$total" "$ncases" "$pass" "$fail"
 
 # ⚠️ AN EMPTY RUN IS A FAILURE, NOT A PASS. A gate that can silently no-op will:
 # every wasm gate in this tree once shelled out to an absent tool, printed "skipping"

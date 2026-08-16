@@ -57,6 +57,15 @@ Core IR dump is the only observation that separates them.
 Deliberately unledgered and must stay so — but read the next two sentences before
 concluding this file contradicts itself, because at a glance it does.
 
+⚠️ SCOPE (added F2(b), correction round, RUN-XMOD-041): "deliberately unledgered and
+must stay so" is scoped to `test/IMPORT-ORDER-LEDGER.txt` specifically — the ledger
+that pins ORDER-dependence, which this case does not exhibit on the channel it
+reads (see below). It is a DIFFERENT, later-added channel: this case DOES, and is
+EXPECTED to, carry a row in `test/EMITTER-VERDICT-LEDGER.txt` (RUN-XMOD-022/023) —
+that sidecar ledger grades the raw emitter's own accept/reject verdict against
+check's, a question orthogonal to import order, and a row there is not a violation
+of this file's invariant.
+
 The two `build` messages quoted above DO differ per ordering. What is invariant is the
 gate's SIGNATURE, which deliberately excludes `build`'s STDERR (see the gate header's
 "WHAT IS DELIBERATELY NOT COMPARED" — Medaka's runtime panics are not uniformly

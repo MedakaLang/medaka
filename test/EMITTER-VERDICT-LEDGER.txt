@@ -4,6 +4,21 @@
 # emitter-verdict arm (RUN-XMOD-022/023, packet L1-L2-driver-asymmetry-observation,
 # xmod-identity sprint, epic #1122).
 #
+# ── WASM ARM (item 5, correction round, RUN-XMOD-041) — MEASURED, F3 REPRODUCES ─
+#
+# This ledger's own gate (`diff_compiler_import_order.sh`) grades the LLVM raw
+# emitter only. The WasmGC emitter (`compiler/entries/wasm_emit_modules_main.mdk`)
+# shares the same `entry_support.runEmitWith`/`underivedMainDiags` scaffolding
+# (F3's mechanism), so the F3 hole was measured to reproduce there too, cheaply:
+# `sh test/wasm/build_wasm_oracle.sh --modules-only` (~46s), then invoked directly
+# on #1667's own repro (`test/import_order_fixtures/1667-emitter-accepts-check-rejects`)
+# — `./test/bin/wasm_emit_modules_main stdlib/runtime.mdk stdlib/core.mdk main.mdk
+# <workdir>` → exit 0, 4298005-byte non-empty wasm text output, empty stderr, on
+# an entry `check`/`run`/`build` all reject with T-TYPE-MISMATCH. Same shape as
+# the LLVM arm. This is a ONE-TIME measurement, not a standing gate arm: the wasm
+# emitter is NOT wired into `diff_compiler_import_order.sh`'s corpus loop (out of
+# scope for this correction — a wasm emitter-verdict arm would be its own leaf).
+#
 # ── WHAT A ROW MEANS ──────────────────────────────────────────────────────────
 #
 # A row is an OBSERVATION, not a licence and not a correctness claim. It says:
@@ -64,15 +79,38 @@
 # NOT-PINNABLE row or this file's `1667-emitter-accepts-check-rejects` case is ever
 # removed, re-read that row before deleting either.
 #
+# ⚠️ STRENGTHENED (F5/item 6, correction round, RUN-XMOD-041) — "accepts (exit 0,
+# non-empty IR)" under-describes what the emitter hands you. Measured on this
+# case's own repro (`mth "abc" 5` against `zmodI.mth : Int -> b -> Int`, whose
+# body is `mth n s = 7`): the 362890-byte IR LINKS clean (`clang … -lgc -lm`,
+# exit 0) and the resulting binary EXECUTES at exit 0, printing `7` — a confident
+# wrong answer for a program `check`/`run`/`build` all reject with T-TYPE-MISMATCH,
+# not merely a tool that was too permissive at the IR stage. `medaka build` itself
+# still rejects this program (its in-process pre-check runs before it would spawn
+# the emitter), so this user-facing path is not exposed through the normal CLI —
+# that bound is what keeps #1667 off the S0 ladder.
+#
 # ── MECHANISM, FOR THE ROWS BELOW THAT SHARE IT ────────────────────────────────
 #
-# On the non-auto-print `main` arm, `runEmitWith` (compiler/entries/entry_support.mdk)
-# never inspects `elaborateModules`'s diagnostics before emitting — the only
-# `failWith` on a typecheck diagnostic is inside the `shouldAutoPrintMain` branch,
-# which every Unit-`main` fixture in this corpus skips — and the emitter typechecks
-# MANGLED decls where check/run typecheck un-mangled ones (see the gate's own header,
-# "THE EMITTER-VERDICT ARM"). Rows below citing this paragraph share this mechanism;
-# they are independent measurements, not a single bug counted six times.
+# ⚠️ CORRECTED (F3, correction round, RUN-XMOD-041) — a prior draft of this
+# paragraph attributed the gap to `shouldAutoPrintMain`/`main`'s TYPE ("which
+# every Unit-`main` fixture in this corpus skips"). Measured false: a 2x2 over
+# {single,multi}-module x {unit,non-unit}-main shows `main`'s type moves NOTHING
+# (both single-module cells are `emit=1:noir`; both multi-module cells are
+# `emit=0:ir`).
+#
+# The real mechanism is `underivedMainDiags` (compiler/driver/main_autoprint.mdk),
+# the ONLY site on this path that `failWith`s on a typecheck diagnostic. Its first
+# clause pattern-matches a SINGLETON module list (`[(_, entryDecls)]`); every other
+# shape — every multi-module program, i.e. any program with an import — falls to
+# the wildcard clause, which unconditionally returns `[]`. So for the entire
+# import-order corpus (every case here has >=2 modules by construction — it
+# permutes import clauses), that diagnostic-surfacing arm is structurally
+# unreachable, independent of `main`'s type; the emitter also typechecks MANGLED
+# decls where check/run typecheck un-mangled ones (see the gate's own header,
+# "THE EMITTER-VERDICT ARM"). Rows below citing this paragraph share this ONE
+# mechanism — the wildcard match on `underivedMainDiags`, not five or six
+# independent bugs.
 
 1253-record-form-ctor-head-decided-by-import-order | DISAGREE | Emitter accepts (exit 0, non-empty IR) an entry that `check`/`run`/`build` reject in EVERY ordering with R-AMBIGUOUS-CTOR (drained from test/IMPORT-ORDER-LEDGER.txt by #1319 unit 1 — that drain closed the ORDER-dependence of the reject, not the emitter's own failure to reject at all). Same discard-diagnostics mechanism as the paragraph above. | check=1;emit=0:ir
 
@@ -84,4 +122,4 @@
 
 control-ambiguous-ctor-reject-invariant | DISAGREE | This case's own name says CONTROL for the import-order axis (R-AMBIGUOUS-CTOR fires invariantly in both orderings, per its case.txt) — it is not a control for the emitter-verdict axis. Emitter accepts (exit 0, non-empty IR) in both orderings despite check/run/build rejecting invariantly. Same discard-diagnostics mechanism as the paragraph above. | check=1;emit=0:ir
 
-samename-iface-admissibility-invariant | DISAGREE | REVERSE direction from every other row here: check/run/build ACCEPT (exit 0) in both orderings — this is #1113 Phase 4's per-(class,position) admissibility case and the front end resolves it correctly — but the raw emitter EXITS 1 with NO IR in both orderings. Measured by hand (not pinned, per the header above): its stderr is `runtime error [E-PANIC]: no impl of method 'display' for type 'DogB'`, i.e. the emitter's own dict/mangling path fails to route a `display` call the front end already proved has an impl. This is NOT the discard-diagnostics mechanism the other rows share (there is no diagnostic to discard — check accepts) — it looks like a distinct backend dispatch/mangling defect and is flagged here as a candidate for its own issue; this leaf does not file one (out of scope, observation-only). | check=0;emit=1:noir
+samename-iface-admissibility-invariant | DISAGREE | REVERSE direction from every other row here, and CORRECTED in the correction round (F2(a), RUN-XMOD-041) — a prior draft of this row wrongly claimed "check/run/build ACCEPT (exit 0) in both orderings"; measured, that is false. Measured (both orderings): check=0, run=0, printing "A(x)"/"B(y)" per case.txt — but build=1, and build's failure IS the raw emitter's own panic surfacing directly through `medaka build`'s error path: `error: emitter failed compiling <entry> / runtime error [E-PANIC]: no impl of method 'display' for type 'DogB'`. So `build` and the raw emitter AGREE (both reject, same message) — the only real disagreement here is check/run vs {build, emitter}, which `sig_for`'s own `build=1/-:` cell already records; this row exists only because the emitter-verdict arm's classification is computed from `check`'s exit code, not `build`'s. This matches issue #1647 (bare-name method-scheme collision — the two `speak` interfaces share a spelling and the emitter's front end attributes one's signature to the other's impl), already open and already attributed by this case's own case.txt (see "WHY THE `build` CELL IS 1 HERE" there) — NOT a new candidate for its own issue. See case.txt for the full derivation and the discriminating control that isolates #1647 from #1113 Phase 4. | check=0;emit=1:noir
