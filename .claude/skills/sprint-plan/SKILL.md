@@ -6,7 +6,7 @@ description: Cut a sprint — choose a coherent, well-bounded set of slices (~5+
 # Sprint planning — cutting the slice set
 
 This skill produces ONE artifact: the sprint contract at
-`.claude/sprint-<stage>/CONTRACT.md`. Its whole craft is two calibrations:
+`/var/tmp/medaka-sprints/<stage>/CONTRACT.md`. Its whole craft is two calibrations:
 **picking a set of slices that belong together**, and **specifying them shallowly
 enough that reality can't invalidate the work**. Everything deeper than the
 boundary is the run-time `sprint-planner`'s job, one packet ahead, informed by
@@ -86,7 +86,17 @@ re-cut reorders without ceremony.
 
 ## Step 4 — write the contract
 
-`.claude/sprint-<stage>/CONTRACT.md` (record-dir naming rule: never a bare
+The contract is a WORKING document, not a repo artifact — it lives in the
+ephemeral sprint dir and is never committed (the repo is the "what" of the
+language; the roadmap's "how" lives in GitHub issues). Its durable shadow is
+the **sprint tracking issue**: after writing the contract, open one GitHub
+issue titled with the sprint's question, body = §1–§3 and §7 (the question,
+scope, slice table, exit criteria), labeled by workstream. This issue is where
+the close-out and retro land at wrap-up, and it is what someone browsing the
+tracker sees of the sprint. Verify the creation by readback; handles per the
+identifier convention.
+
+`/var/tmp/medaka-sprints/<stage>/CONTRACT.md` (record-dir naming rule: never a bare
 `sprint/`), with these sections:
 
 - **§1 The question** — the one-sentence purpose of the sprint.

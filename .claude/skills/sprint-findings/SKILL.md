@@ -15,7 +15,7 @@ the orchestrator; every judgment inside it is a brain ruling.
 
 ## 1. Intake — every finding gets a row before anything else
 
-Append to `.claude/sprint-<stage>/FINDINGS.md` immediately, one row:
+Append to `/var/tmp/medaka-sprints/<stage>/FINDINGS.md` immediately, one row:
 `F<n> | <one-line claim> | source report path | status: OPEN`. No triage yet,
 no severity yet, no dedup yet — the row exists so the finding cannot be lost
 between its report and its ruling. A finding mentioned in conversation or a

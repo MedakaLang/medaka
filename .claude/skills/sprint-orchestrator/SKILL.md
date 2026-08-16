@@ -114,18 +114,26 @@ scope against the contract, or discards a standing ruling, goes to Val.
 ## Start of sprint
 
 0. **The sprint contract must already exist** —
-   `.claude/sprint-<stage>/CONTRACT.md`, produced by the `sprint-plan` skill
+   `/var/tmp/medaka-sprints/<stage>/CONTRACT.md`, produced by the `sprint-plan` skill
    (run before this session, on Opus 5 or Fable 5). If there is no contract, or
    it lacks the slice table / already-settled / expected-red sections, stop and
    say so: cutting the slice set is judgment work this seat must not improvise.
 1. **Pin the base:** `BASE=$(git rev-parse HEAD)` — record it in DECISIONS.md
    line 1. Shared `.git` means `origin/main`/`main` move under you; never name a
    moving ref.
-2. **Create the record dir** `.claude/sprint-<stage>/` (never bare `sprint/` — two
-   past runs collided on identical filenames): `DECISIONS.md` (append-only, each
-   entry carries its derivation), `DEBT.md` (one row per slice), `FINDINGS.md`,
-   `FRICTION.md` (verbatim accumulation of reports' Friction sections),
-   `reports/` (every agent report lands here), `packets/`.
+2. **Create the record dir** `/var/tmp/medaka-sprints/<stage>/` (never a bare
+   `sprint/` name — two past runs collided on identical filenames):
+   `DECISIONS.md` (append-only, each entry carries its derivation), `DEBT.md`
+   (one row per slice), `FINDINGS.md`, `FRICTION.md` (verbatim accumulation of
+   reports' Friction sections), `reports/`, `packets/`.
+   **The record dir is EPHEMERAL and is NEVER committed to the repo** (Val's
+   ruling: the repo is the "what" of the language; the roadmap's "how" lives in
+   GitHub issues). `/var/tmp` is deliberate: disk-backed (`/tmp` is RAM-backed
+   tmpfs), it survives session crashes for a multi-day sprint, and it sits
+   OUTSIDE every worktree — so every agent, isolated ones included, writes its
+   report there directly and nothing dies with a reclaimed worktree. Durable
+   knowledge leaves the dir through the exit guarantees (issues, pins in
+   `test/`, memories, the tracking issue) — never through a `git add`.
 3. **Spawn the sprint-brain**; its first task: review the sprint contract, confirm
    the slice plan, and write DECISIONS.md's opening entries.
 4. **Write the expected-red block** into `.claude/HANDOFF.md` before any dispatch —
@@ -245,5 +253,14 @@ next action was closing five live bugs.
    with the full record dir, the heartbeat's self-audit/improvisation log, and
    friction-triage's report. Relay RETRO.md to Val UNFILTERED — its proposals
    and escalations are hers to approve; you apply nothing from it yourself.
-6. Run the `orchestrator-wrapup` skill.
-7. Stop the heartbeat loop.
+6. **Export, then dispose.** Post the close-out summary and RETRO.md's content
+   as comments on the sprint's TRACKING ISSUE (created by `sprint-plan`; the
+   durable "how" home — verify by readback), then close it referencing the
+   merged PRs. Now the record dir has nothing unique left: the exit guarantees
+   exported findings (issues + pins), friction (issues), decisions that matter
+   beyond the sprint (memories/spec PRs), and the retro (tracking issue).
+   Archive-and-delete it: `tar -czf /var/tmp/medaka-sprints/<stage>.tar.gz
+   <dir> && rm -rf <dir>` — the tarball is a courtesy for post-mortems, not a
+   record; anything someone would need to UNTAR to know was exported wrongly.
+7. Run the `orchestrator-wrapup` skill.
+8. Stop the heartbeat loop.

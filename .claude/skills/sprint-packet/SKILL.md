@@ -8,7 +8,7 @@ description: The writer-packet contract for Medaka sprints — the fixed format 
 A packet is the complete handoff for one slice. The receiving agent should need
 NOTHING outside the packet plus the repo — no conversation history, no "as
 discussed", no unstated context. Packets are files in
-`.claude/sprint-<stage>/packets/<slice-id>.md`, and the dispatch brief is one line:
+`/var/tmp/medaka-sprints/<stage>/packets/<slice-id>.md`, and the dispatch brief is one line:
 "Execute packet <path> under the sprint-packet contract."
 
 **A slice is a transformation over named sites.** If it cannot be stated as "apply
@@ -207,7 +207,7 @@ Rules for the planner writing it:
 ## §9 The report — same six sections for every agent, no exceptions
 
 The packet names the report path:
-`.claude/sprint-<stage>/reports/<slice-id>-<role>.md`. The return message is one
+`/var/tmp/medaka-sprints/<stage>/reports/<slice-id>-<role>.md`. The return message is one
 verdict line + the path — the FILE is the deliverable. Required sections:
 
 ```

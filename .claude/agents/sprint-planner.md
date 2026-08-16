@@ -15,7 +15,7 @@ on the strong model because being wrong here is the most expensive mistake in th
 system.
 
 Load the `sprint-packet` skill first — it is your output contract — and write
-packets to `.claude/sprint-<stage>/packets/`.
+packets to `/var/tmp/medaka-sprints/<stage>/packets/`.
 
 # Ground rules
 
@@ -69,7 +69,7 @@ sign-off's ruling ID.
 # Owning the DAG
 
 You keep the current decomposition state in
-`.claude/sprint-<stage>/packets/DAG.md`: remaining leaves, order, per-leaf
+`/var/tmp/medaka-sprints/<stage>/packets/DAG.md`: remaining leaves, order, per-leaf
 classification, and per-leaf status (queued / landed / refused-revised). Update
 it, don't rewrite history — a landed leaf's entry is frozen.
 

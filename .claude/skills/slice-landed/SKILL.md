@@ -14,9 +14,11 @@ something between steps 1 and 2.
 
 ## Step 0 — report intake (always, for every verdict)
 
-1. The report file exists at the packet's named path. Agent ran isolated? Copy it
-   out NOW — `cp <agent-wt>/<report> .claude/sprint-<stage>/reports/` — before
-   anything else; the worktree can be reclaimed and a return message is a
+1. The report file exists at the packet's named path — which is under
+   `/var/tmp/medaka-sprints/<stage>/reports/`, OUTSIDE every worktree, so even
+   isolated agents write it there directly. If an agent wrote in-worktree
+   anyway, copy it out NOW (`cp <agent-wt>/<report> .../reports/`) before
+   anything else — the worktree can be reclaimed, and a return message is a
    summary, not an artifact.
 2. All six §9 sections present (`Verdict` / `Evidence` / `Decisions surfaced` /
    `Deviations from packet` / `Not covered` / `Friction`), each non-absent
