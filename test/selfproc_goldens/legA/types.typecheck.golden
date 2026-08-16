@@ -735,6 +735,7 @@ globalCoherenceConflict : ImplEnv -> (Option String, Option String)
 goalHeadCon : List Mono -> Option HeadKey
 goalSiteLoc : Ref (Option Loc)
 goalsClosed : List Mono -> Bool
+graphCarriesMangledFunDefs : List (String, List Decl) -> Bool
 graphCtorExports : List Decl -> List (String, List Decl) -> Map String (List (String, String, Ident))
 graphCtorExportsGo : Map String (List (String, String, Ident)) -> List (String, List Decl) -> Map String (List (String, String, Ident))
 graphIfaceMethods : List Decl -> List (String, List Decl) -> Map String (List (String, List String))
@@ -1246,6 +1247,7 @@ oblIfaceKey : IfaceRef -> TabKey
 oblIfaceKeys : IfaceRef -> List TabKey
 oblKeyParts : Int -> List (Option HeadKey) -> (List TabKey, List Int)
 oblPredOf : UObligation -> List (IfaceRef, List Mono, Option Loc)
+occurrenceCarriesMangledShadowSym : Ref Route -> Bool
 occursAdjust : Int -> Int -> Mono -> Unit
 occursAdjustUnbound : Int -> Int -> Ref Tyvar -> Int -> Int -> Unit
 occursAdjustVar : Int -> Int -> Ref Tyvar -> Unit
@@ -1747,6 +1749,7 @@ unifyRowN : EffRow -> EffRow -> Unit
 unifyStandaloneDomain : Mono -> Mono -> Option Loc -> Unit
 unifyVars : Ref Tyvar -> Ref Tyvar -> Unit
 uniqueImplTysFor : List Decl -> String -> String -> Option (List Ty)
+unitCarriesMangledFunDefs : String -> List (String, (List Pat, Expr)) -> Bool
 unitMangledShadows : List String -> (String, List Decl) -> List (String, String)
 univAddIfaceTag : Bool -> RegKey -> TabKey -> Registry SetRegistry -> Registry SetRegistry
 univConcreteBucket : ImplUniverse -> IfaceRef -> Option HeadKey -> List (List Ty, List Require)

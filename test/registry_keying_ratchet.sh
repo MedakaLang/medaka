@@ -205,6 +205,7 @@ argDispatchIdxRef -- arg-position dispatch index list, seeded once over allDecls
 dictEligibleRef -- dict-eligible fn NAME list, module-path scratch set fresh per elaboration
 dictEligibleSetRef -- dict-eligible fn NAME set, OrdMap mirror of dictEligibleRef for O(log) membership
 mangledShadowMapRef -- mangled-name -> bare-method-name shadow map, emit path only (P0-18)
+mangledFunDefsPresentRef -- L3 (xmod-identity #1351 spine): graph-level Bool, the fact that this compile decl graph carries >=1 top-level funDef with its own module mangle prefix (graphCarriesMangledFunDefs). NOT a bare-name-keyed cross-module table -- it carries no key at all, just a Bool -- so the scoping question is whether one compile can observe another compile value, answered by the SAME two-part conjunction as graphMethodExportsRef/graphIfaceMethodsRef/graphCtorExportsRef above: (a) unconditional whole-value overwrite at BOTH Module-mode driver entries (checkModulesPreamble, elaborateModules), AND (b) no reset point in between. Unlike its sibling mangledShadowMapRef (single writer, elaborateModules only -- a pre-existing gap against this same property, out of scope here), this field is written at BOTH entries deliberately, to avoid repeating that gap
 userIfaceNamesRef -- user-declared interface NAME set, gates super-expansion (WS-1b)
 coherenceUserDecls -- user decls consulted by coherence warnings
 superDeclsRef -- interfaces in scope for super-constraint expansion
