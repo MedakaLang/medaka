@@ -463,6 +463,7 @@ declCtorIdentsOf : Decl -> List (String, String, Ident)
 declCtorNamed : String -> Decl -> Bool
 declEnvDeclFieldOwners : List Decl -> Map String (List String) -> Map String (List String)
 declEnvDeclsOf : List DeclEnvModule -> List Decl
+declEnvDefinerIndex : Map String (List (String, (String, String))) -> List DeclEnvModule -> Map String (List (String, (String, String)))
 declEnvKindEntries : List Decl -> List (TabKey, List Kind)
 declEnvModule : Int -> String -> List Decl -> DeclEnvModule
 declEnvModulesFrom : Int -> List (String, List Decl) -> List DeclEnvModule
@@ -522,6 +523,7 @@ definerShadowArgHead : Expr -> Option (String, Ref Route, Ref (List Route))
 definerShadowHeadType : TcEnv -> String -> Expr -> Mono
 definerShadowVarHead : Expr -> Option String
 definerShadowsFromSet : Map String Unit -> List Decl -> List String
+definersIn : Map String (List (String, (String, String))) -> String -> List (String, (String, String))
 depExportsCtorIdent : String -> String -> Ident -> Bool
 depExportsMethodIdent : String -> String -> Ident -> Bool
 depGraphMap : List String -> Map String (List (List Pat, Expr)) -> Map String (List String)
@@ -692,6 +694,7 @@ firstImplMethodLoc : List ImplMethod -> Option Loc
 firstOrZero : List Int -> Int
 firstPredForEncl : String -> Mono -> String -> List (String, Mono, String) -> Option String
 firstReqMatch : List (List Ty, List Require) -> List Mono -> Option (List (String, Mono), List Require)
+firstRowPerName : Map String Unit -> List (String, (String, String)) -> List (String, (String, String))
 firstTupleCallHint : List Mono -> Option (String, Option (Loc, String))
 firstTvar : Mono -> Mono -> Int -> Option Mono
 flatClassEnvOf : List Decl -> ClassEnv
@@ -743,7 +746,7 @@ graphIfaceMethods : List Decl -> List (String, List Decl) -> Map String (List (S
 graphIfaceMethodsGo : Map String (List (String, List String)) -> List (String, List Decl) -> Map String (List (String, List String))
 graphMethodExports : List Decl -> List (String, List Decl) -> Map String (List (String, Ident))
 graphMethodExportsGo : Map String (List (String, Ident)) -> List (String, List Decl) -> Map String (List (String, Ident))
-graphPubDefiners : Int -> String -> List (String, (String, String))
+graphPubDefiners : String -> List (String, (String, String))
 groundMultiParamObligations : List Decl -> List UObligation -> Unit
 groundNumVars : List UObligation -> List Int -> Unit
 groundOneObligation : List Decl -> String -> List String -> Ty -> Mono -> Unit
@@ -906,7 +909,6 @@ implRowsOf : String -> Int -> Int -> List (IfaceRef, List Ty, List Require, List
 implSubject : String -> String -> String
 implTupleHeadKindMsg : String -> Int -> List Kind -> String
 implTysIfMatch : String -> String -> Decl -> List (List Ty)
-importDefinerFuel : Int
 importDefinersOf : List Decl -> List (String, (String, String))
 importFormRows : UsePath -> List (String, a) -> List (String, a)
 importFormSchemes : List (String, List (String, Scheme)) -> UsePath -> List (String, Scheme) -> List (String, Scheme)
@@ -1189,7 +1191,7 @@ mkMethodOccObl : IfaceRef -> List String -> Ty -> Mono -> Provenance -> Option L
 modInScope : String -> Map String Unit -> Bool
 moduleAliasEntry : String -> String -> ((String, String), a) -> List (String, a)
 moduleDictNames : List Decl -> List Decl -> List (String, List Decl) -> List String
-modulePubDefiners : Int -> String -> List Decl -> List (String, (String, String))
+modulePubDefiners : Map String (List (String, (String, String))) -> String -> List Decl -> List (String, (String, String))
 moduleUserFnNames : List (String, List Decl) -> List String
 monoArgUnboundIds : Mono -> List Int
 monoIdsWithIface : (Mono, String) -> List (Int, String)
@@ -1425,7 +1427,7 @@ recordStandaloneSigObligations : String -> String -> Mono -> Unit
 recordTypeError : TcDiag -> Unit
 recordUnopSite : String -> Ref Route -> Mono -> Unit
 reexportCtorMember : UseMember -> List (String, String, Ident) -> List (String, String, Ident)
-reexportDefiners : Int -> List Decl -> List (String, (String, String))
+reexportDefiners : Map String (List (String, (String, String))) -> List Decl -> List (String, (String, String))
 reexportRenamed : (String, String) -> List (String, Ident) -> List (String, Ident)
 reexportSchemeOblEntries : List Decl -> List ((String, String), List VecObl) -> List (String, List VecObl)
 reexportSeed : List (String, Scheme) -> List Decl -> List (String, List (String, Scheme)) -> List (String, Scheme)

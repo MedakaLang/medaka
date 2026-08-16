@@ -2757,6 +2757,7 @@ data DeclEnvModule = DeclEnvModule {
 data DeclEnvs = DeclEnvs {
     deModules : List DeclEnvModule,  -- ordinal order, prelude first
     deOrdIndex : OrdMap Int,
+    deDefiners : OrdMap (List (String, (String, String))),  -- RUN-XMOD-066: `graphPubDefiners`' answer, per module id — see `declEnvDefinerIndex`
     deAllDecls : List Decl,
     deData : DataEnv,  -- A-3.2a (#1112) built it; A-3.2b residual 1 (#1512) made it LIVE — `aliasUniverseAt` reads `deAliases`
     deImpls : ImplEnv,
@@ -2772,6 +2773,7 @@ emptyDeclEnvs : DeclEnvs
 emptyDeclEnvs = DeclEnvs {
   deModules = [],
   deOrdIndex = omEmpty,
+  deDefiners = omEmpty,
   deAllDecls = [],
   deData = emptyDataEnv,
   deImpls = emptyImplEnv,
@@ -2797,6 +2799,7 @@ buildDeclEnvs coreDecls modules =
   DeclEnvs {
     deModules = mods,
     deOrdIndex = declEnvOrdIndex (omInsert "" 0 omEmpty) mods,
+    deDefiners = declEnvDefinerIndex omEmpty mods,
     deAllDecls = allDecls,
     deData = buildDataEnv mods,
     -- #1112 A-3.4: `IE`, built here so it inherits this function's ordering and its
@@ -29234,12 +29237,12 @@ useDefinerRows wild path =
   let depId = usePathModuleId path
   if depId == "core" then []
   else match importedBindings path
-    None => if wild then graphPubDefiners importDefinerFuel depId else []
+    None => if wild then graphPubDefiners depId else []
     Some bindings =>
       if wild then
         []
       else
-        flatMap (memberDefinerRow depId (graphPubDefiners importDefinerFuel depId)) bindings
+        flatMap (memberDefinerRow depId (graphPubDefiners depId)) bindings
 
 -- resolve ONE named member against the dependency's export table.  The fallback is the
 -- load-bearing part: on the Flat / loader-less drivers `deModules` is EMPTY, so the
@@ -29257,46 +29260,118 @@ memberDefinerRow depId pubs (origin, local) = match resolveMemberRows (origin, l
 -- the name it is defined under — read off the graph envelope `buildDeclEnvs` already
 -- built for this driver.  Empty when the envelope is (Flat / loader-less drivers).
 --
--- Re-exports recurse through `importFormRows`, so `export import u.{p}`,
+-- Re-exports resolve through `importFormRows`, so `export import u.{p}`,
 -- `export import u.*` and a chain of either resolve identically and transitively, and
 -- an aliased re-export keeps the ORIGIN half of the payload pointing at the definer's
 -- own name.  Declared names come first: a module that both declares and re-exports a
 -- name answers with its own binding, matching first-match resolution elsewhere.
 --
--- [fuel] bounds the recursion.  The loader rejects import cycles before typecheck runs,
--- so a cycle should be unreachable here; the bound is what keeps "should be" from being
--- load-bearing for termination of the compiler itself.
+-- 🚨 RUN-XMOD-066: THIS IS A TABLE LOOKUP, NOT A WALK, AND THAT IS LOAD-BEARING FOR CI.
+-- The first cut recursed per call: `flatMap` over every row of `deModules` to find [mid],
+-- then a fresh recursive walk per `export import`.  Nothing shares a subresult, so a
+-- re-export CHAIN costs O(depth * modules) per importer and a branching re-export DAG
+-- costs Fibonacci-many walks (round-3 breaker, F4).  A fuel bound of 64 capped the depth
+-- and not the work: `test/diff_compiler_perf_scaling.sh`'s `modules` shape — 400 modules
+-- in one `export import` chain — went from 1.69 s to 2.49 s of typecheck at N=400, with
+-- the ADDED term growing 3.2x per doubling of N against ~2x for everything else, and CI's
+-- `gates (types)` failed it twice deterministically as SUPERLINEAR (TIME).  A comment
+-- landed here calling that cost "acceptable" (RUN-XMOD-064); it was measurably wrong and
+-- is retracted.
 --
--- UNMEMOIZED: a re-export DAG where each module re-exports two predecessors costs
--- Fibonacci-many walks in chain depth (measured — round-3 breaker report, F4).  Depth is
--- bounded by re-export chain length, not by program size, and no branching DAG like that
--- shows up in practice (the compiler's own graph: 0 measurable effect, interleaved).
-graphPubDefiners : Int -> String -> List (String, (String, String))
-graphPubDefiners fuel mid
-  | fuel <= 0 = []
-  | otherwise = flatMap (m => if m.demId == mid then modulePubDefiners fuel mid m.demDecls else []) driverState.value.declEnvsRef.value.deModules
+-- The whole answer is now derived ONCE per graph, in `declEnvDefinerIndex`, and lives on
+-- the envelope as `deDefiners` — a real `OrdMap` keyed by module id, O(log modules) to
+-- read, NOT a `List` scanned per lookup (this tree's thirteen quadratics are all "a List
+-- used as a set or a map"; a memo that reintroduced the scan would be the fourteenth).
+--
+-- KEY SCOPING.  The key is the loader's module id — the SAME `demId` `deOrdIndex` is
+-- keyed by and the same one `usePathModuleId` produces at every reader.  Two positions in
+-- the module graph cannot collide on it, because a module id names a `deModules` row and
+-- `declEnvModulesFrom` builds exactly one row per loader module; and it cannot collide
+-- ACROSS graphs, because the table is a field of the envelope rather than a program-global
+-- ref — see `declEnvDefinerIndex` for why that is the point.
+--
+-- Empty when the envelope is (Flat / loader-less drivers), exactly as before: a miss
+-- answers `[]`, which is the fail-closed-on-absent-identity discipline the whole seam
+-- takes (`selfDeclArities` for `mid == ""`).
+graphPubDefiners : String -> List (String, (String, String))
+graphPubDefiners mid =
+  definersIn driverState.value.declEnvsRef.value.deDefiners mid
 
-importDefinerFuel : Int
-importDefinerFuel = 64
+definersIn : OrdMap (List (String, (String, String))) -> String -> List (String, (String, String))
+definersIn tbl mid = match omLookup mid tbl
+  None => []
+  Some rows => rows
 
-modulePubDefiners : Int -> String -> List Decl -> List (String, (String, String))
-modulePubDefiners fuel mid decls = map (n => (n, (mid, n))) (pubTopFnNames decls)
-  ++ reexportDefiners (fuel - 1) decls
+-- ── the per-graph derivation of `deDefiners`, built once by `buildDeclEnvs` ────────────
+--
+-- 🚨 NO RESET POINT IS NEEDED, AND THAT IS DELIBERATE (RUN-XMOD-066 (iii)).  The obvious
+-- shape for a memo here is a `driverState` ref filled lazily — and `driverState` has no
+-- reset point at all, which is precisely what makes `mangledShadowMapRef` an anti-pattern
+-- (RUN-XMOD-040): it is written once, on the emit path, and nothing invalidates it when
+-- the thing it was derived FROM is replaced, so a second graph in one process reads the
+-- first graph's answers.  This table is instead a FIELD of the value it is a function of.
+-- `deDefiners` is derived from `mods` and from nothing else, in the same constructor, so
+-- it cannot outlive its input: every write of `declEnvsRef` (both Module-mode driver
+-- entries write it unconditionally — see `checkModulesPreamble` and `elaborateModules`)
+-- replaces the whole envelope, table included, and a driver that never calls
+-- `buildDeclEnvs` reads `emptyDeclEnvs`' empty one.  There is no state to forget to clear.
+--
+-- ONE FORWARD FOLD, dependency-first.  [acc] holds the finished rows of every module of a
+-- LOWER ordinal, and a re-export target is a DEPENDENCY, so it is always already in [acc]
+-- — `deModules` is the loader's dependency-first order (see `DeclEnvModule.demOrd`), the
+-- same premise `deKindsBefore`/`deOwnersBefore`/`declEnvSeedChain` are built on.  So the
+-- transitive answer falls out of a single linear pass with no recursion, and therefore no
+-- fuel: `importDefinerFuel = 64` existed only to keep termination from resting on the
+-- loader's cycle rejection, and a fold over a finite list terminates outright.  (Its side
+-- effect — silently truncating a re-export chain deeper than 64 to a partial row set, i.e.
+-- a dropped dict on a well-typed program — goes with it.)
+declEnvDefinerIndex : OrdMap (List (String, (String, String))) -> List DeclEnvModule -> OrdMap (List (String, (String, String)))
+declEnvDefinerIndex acc [] = acc
+declEnvDefinerIndex acc (m::rest) =
+  declEnvDefinerIndex
+    (omInsert
+      m.demId
+      (firstRowPerName omEmpty (modulePubDefiners acc m.demId m.demDecls))
+      acc)
+    rest
+
+-- keep the FIRST row per local spelling and drop the rest.  This is not a shortcut, it is
+-- what every reader of these rows already does: `resolveMemberRows` takes `lookupAssoc`'s
+-- first hit, `importDefinersOf` drops a wildcard row whose name is already spoken for, and
+-- the three refs the rows land in are read first-match.  So collapsing here is
+-- observationally identical AND it is what keeps the TABLE from being exponential: a
+-- wildcard re-export takes its dependency's rows WHOLESALE (`importFormRows`' `None` arm),
+-- so a module re-exporting two predecessors carries |rows(k-1)| + |rows(k-2)| — Fibonacci
+-- in chain depth — even though the DISTINCT names are only ever the handful the graph
+-- actually declares.  Measured on the round-3 breaker's own branching corpus (F4, K=26,
+-- `check`, min of 3 interleaved rounds): 8.23 s without this line, 6.56 s with it, against
+-- a 6.49 s base.
+firstRowPerName : OrdMap Unit -> List (String, (String, String)) -> List (String, (String, String))
+firstRowPerName _ [] = []
+firstRowPerName seen ((k, v)::rest) =
+  if omHasKey k seen then
+    firstRowPerName seen rest
+  else
+    (k, v) :: firstRowPerName (omInsert k () seen) rest
+
+modulePubDefiners : OrdMap (List (String, (String, String))) -> String -> List Decl -> List (String, (String, String))
+modulePubDefiners before mid decls = map (n => (n, (mid, n))) (pubTopFnNames decls)
+  ++ reexportDefiners before decls
 
 -- the rows a module's `export import` decls (`DUse True` — the same filter resolve's
 -- `pubUsePaths` and `reexportSeed` use) add to its own export table.  A plain `import`
 -- is not re-exported and contributes nothing downstream.
-reexportDefiners : Int -> List Decl -> List (String, (String, String))
+reexportDefiners : OrdMap (List (String, (String, String))) -> List Decl -> List (String, (String, String))
 reexportDefiners _ [] = []
-reexportDefiners fuel ((DAttrib _ d)::rest) = reexportDefiners fuel [d]
-  ++ reexportDefiners fuel rest
-reexportDefiners fuel ((DUse True path _)::rest) =
+reexportDefiners before ((DAttrib _ d)::rest) = reexportDefiners before [d]
+  ++ reexportDefiners before rest
+reexportDefiners before ((DUse True path _)::rest) =
   let depId = usePathModuleId path
   if depId == "core" then
-    reexportDefiners fuel rest
+    reexportDefiners before rest
   else
-    importFormRows path (graphPubDefiners fuel depId) ++ reexportDefiners fuel rest
-reexportDefiners fuel (_::rest) = reexportDefiners fuel rest
+    importFormRows path (definersIn before depId) ++ reexportDefiners before rest
+reexportDefiners before (_::rest) = reexportDefiners before rest
 
 -- `declTopFnNames` restricted to the EXPORTED bindings — what a wildcard import can
 -- actually bind.  A private binding must not enter the definer map: it is unreachable
