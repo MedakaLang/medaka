@@ -647,6 +647,7 @@ expandSupersIfaceEntry : List Decl -> (String, List IfaceRef) -> (String, List I
 expandSupersPairs : List Decl -> List CSlot -> List CSlot
 expandSupersTable : List Decl -> Unit
 expectedParamTypes : Mono -> Int -> List Mono
+explicitImportDefiners : List Decl -> List (String, String)
 exportsCtorIdentFor : String -> Ident -> List (String, String, Ident) -> Bool
 exportsIdentFor : String -> Ident -> List (String, Ident) -> Bool
 exprLoc : Expr -> Option Loc
@@ -742,6 +743,7 @@ graphIfaceMethods : List Decl -> List (String, List Decl) -> Map String (List (S
 graphIfaceMethodsGo : Map String (List (String, List String)) -> List (String, List Decl) -> Map String (List (String, List String))
 graphMethodExports : List Decl -> List (String, List Decl) -> Map String (List (String, Ident))
 graphMethodExportsGo : Map String (List (String, Ident)) -> List (String, List Decl) -> Map String (List (String, Ident))
+graphPubFnNames : String -> List String
 groundMultiParamObligations : List Decl -> List UObligation -> Unit
 groundNumVars : List UObligation -> List Int -> Unit
 groundOneObligation : List Decl -> String -> List String -> Ty -> Mono -> Unit
@@ -1351,6 +1353,7 @@ promotedConstraintIfaces : List String -> List (String, List IfaceRef) -> List (
 promotedConstraints : List String -> List (String, a) -> List (String, a)
 propParamName : PropParam -> String
 propParamNamesTc : List PropParam -> List String
+pubTopFnNames : List Decl -> List String
 publicDataDecl : Decl -> Bool
 publicDataDecls : List Decl -> List Decl
 publicValNames : List Decl -> List String
@@ -1797,6 +1800,7 @@ wRestore : Windowed a -> (List a, Int) -> Unit
 wSnapshot : Windowed a -> (List a, Int)
 wWindow : Windowed a -> Int -> List a
 walkDispatch : List String -> Ty -> Mono -> List (String, Mono)
+wildImportDefiners : List Decl -> List (String, String)
 wildSchemeOblEntry : String -> ((String, String), List VecObl) -> List (String, List VecObl)
 wrapIf : Bool -> String -> String
 zerosL : Int -> List Int

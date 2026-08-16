@@ -29120,17 +29120,114 @@ declOwnedBy mid tyName o = match mkIdent NsType (OriginModule mid) tyName
   Some want => mkIdent NsType o tyName == Some want
   None => False
 
+-- ── the local-spelling → DEFINER map, for EVERY import form ─────────────────────
+-- This is the ONE representation the dict-arity identity seam resolves through:
+-- `qualConstraintKey` turns a name into a `(definer, origin)` key with it, and
+-- `hasImportDefiner` reads the same rows to decide that a qual MISS means "genuinely
+-- unconstrained in its source module" rather than "look in the source-blind bare
+-- table".  Every reader of that decision — `declaredConstraintFor`,
+-- `declaredConstraintIds`, the pinned-var guard — takes its answer from here, and
+-- none of them knows which import FORM produced a row.  So the forms are normalized
+-- here, once, and a form whose rows are missing is not a gap in one arm: it is a
+-- silent fall-through to bare-name first-match for that whole spelling.
+--
+-- 🚨 `import m.*` USED TO CONTRIBUTE NOTHING, and that hole is #1425's F1.
+-- `importedBindings` answers `None` for `UseWild` because a wildcard's member list
+-- cannot be read off the `DUse` decl alone — it is every public top-level binding the
+-- DEPENDENCY declares — so this walk simply skipped it and every wildcard-imported
+-- name fell to the bare table.  While the bare table happened to be wrong on BOTH
+-- sides of a same-name collision (a foreign constrained row sized the define AND the
+-- call), the two errors cancelled and the spelling looked correct.  `selfDeclArities`
+-- then repaired the DEFINE side by identity; the call side, still on the bare table,
+-- began applying a dict its callee no longer abstracts —
+-- `E-NOT-A-FUNCTION: applied non-function: <dict:>` on nine ordinary 3-line stdlib
+-- programs, in BOTH import orders, behind a `check` that exits 0.  The defect did not
+-- move because the repair was wrong; it moved because the repair was applied at one
+-- arm of a seam whose other arm had no rows at all.
+--
+-- The graph is what supplies the missing member list, and it is already built and
+-- already keyed by module id: `declEnvsRef.deModules`.  On the Flat/loader-less paths
+-- that envelope is EMPTY, so the wildcard rows are empty and this is byte-identically
+-- today's behaviour — the same fail-closed-on-absent-identity discipline
+-- `selfDeclArities` takes for `mid == ""`.
+--
+-- ORDER AND SHADOWING.  Explicit rows come FIRST (every reader is first-match), and a
+-- wildcard row is dropped when the name is already spoken for — by an explicit import
+-- of this module, or by this module's OWN top-level declaration, which shadows the
+-- wildcard binding and whose arity `selfDeclArities` answers from its own qual row.
+-- A name a wildcard source RE-EXPORTS rather than declares still gets no row and still
+-- takes the bare path; that is #1369/#1427's re-export hop, deliberately untouched
+-- here, and it fails OPEN to current behaviour rather than to a dropped dict.
 importDefinersOf : List Decl -> List (String, String)
-importDefinersOf [] = []
-importDefinersOf ((DAttrib _ d)::rest) = importDefinersOf [d]
-  ++ importDefinersOf rest
-importDefinersOf ((DUse _ path _)::rest) =
+importDefinersOf prog =
+  let explicit = explicitImportDefiners prog
+  let taken = namesToSet (map fst explicit ++ declTopFnNames prog) omEmpty
+  explicit
+    ++ filterList (e => not (omHasKey (fst e) taken)) (wildImportDefiners prog)
+
+-- the rows the NAMED import forms contribute (`import m.{a, b as c}`, `import a.b.n`);
+-- `import m as A` and `import m` name no values and contribute none.
+explicitImportDefiners : List Decl -> List (String, String)
+explicitImportDefiners [] = []
+explicitImportDefiners ((DAttrib _ d)::rest) = explicitImportDefiners [d]
+  ++ explicitImportDefiners rest
+explicitImportDefiners ((DUse _ path _)::rest) =
   let depId = usePathModuleId path
-  if depId == "core" then importDefinersOf rest
+  if depId == "core" then explicitImportDefiners rest
   else match importedBindings path
-    None => importDefinersOf rest
-    Some bindings => map (b => (snd b, depId)) bindings ++ importDefinersOf rest
-importDefinersOf (_::rest) = importDefinersOf rest
+    None => explicitImportDefiners rest
+    Some bindings => map (b => (snd b, depId)) bindings
+      ++ explicitImportDefiners rest
+explicitImportDefiners (_::rest) = explicitImportDefiners rest
+
+-- the rows a WILDCARD import contributes: `import m.*` binds every PUBLIC top-level
+-- binding `m` declares, each under its own name (a wildcard has no aliasing, so local
+-- == origin and `importOriginsOf` needs no companion arm — `qualConstraintKey` already
+-- defaults the origin to the name itself).
+wildImportDefiners : List Decl -> List (String, String)
+wildImportDefiners [] = []
+wildImportDefiners ((DAttrib _ d)::rest) = wildImportDefiners [d]
+  ++ wildImportDefiners rest
+wildImportDefiners ((DUse _ path _)::rest) =
+  let depId = usePathModuleId path
+  if depId == "core" then wildImportDefiners rest
+  else match importedBindings path
+    None => map (n => (n, depId)) (graphPubFnNames depId)
+      ++ wildImportDefiners rest
+    Some _ => wildImportDefiners rest
+wildImportDefiners (_::rest) = wildImportDefiners rest
+
+-- the PUBLIC top-level fn names module [mid] declares, read off the graph envelope
+-- `buildDeclEnvs` already built for this driver.  Empty when the envelope is (Flat /
+-- loader-less drivers), which is what makes the wildcard rows fail closed there.
+graphPubFnNames : String -> List String
+graphPubFnNames mid = flatMap
+  (m => if m.demId == mid then pubTopFnNames m.demDecls else [])
+  driverState.value.declEnvsRef.value.deModules
+
+-- `declTopFnNames` restricted to the EXPORTED bindings — what a wildcard import can
+-- actually bind.  A private binding must not enter the definer map: it is unreachable
+-- from the importer, and a row for it could shadow a genuine wildcard row of the same
+-- name from a second dependency.
+--
+-- ⚠️ The export test is `publicValNames`, the module's own canonical one — NOT a
+-- hand-rolled `DFunDef True` scan, for the reason `attributeModuleSchemeObls` records
+-- and this function's first cut re-learned the expensive way: `export pick : a -> a`
+-- on one line with `pick x = x` on the next parses as a PUBLIC `DTypeSig` plus a
+-- PRIVATE `DFunDef`, so a `DFunDef`-flag scan calls the common spelling private,
+-- returns NO names, and the whole wildcard row-set is silently empty — which reads
+-- exactly like "the fix had no effect".  Measured on this binary: with the flag scan
+-- the F1 repro was byte-identically unfixed.
+--
+-- Intersected with `declTopFnNames` so the map carries only what this seam answers for
+-- — top-level FN definitions.  `publicValNames` also yields public interface METHOD
+-- names (global-by-name, owned by the method-side tables) and public EXTERNs (dict
+-- arity 0 by construction); neither belongs in a fn-side definer map, and excluding
+-- them fails OPEN to the bare path rather than to a dropped dict.
+pubTopFnNames : List Decl -> List String
+pubTopFnNames decls =
+  let fns = namesToSet (declTopFnNames decls) omEmpty
+  filterList (n => omHasKey n fns) (publicValNames decls)
 
 -- #739 fix follow-up: local-import-name → ORIGINAL exported name, the alias-resolution
 -- companion to importDefinersOf (which maps local → source module).  `importedBindings`
