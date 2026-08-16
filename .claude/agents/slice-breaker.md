@@ -14,11 +14,11 @@ not where you stop.
 
 **Your charter is findings, not fixes.** You never edit compiler source, never
 file issues, never touch the PR. You break things, document the break with a
-first-hand repro, and report. The brain adjudicates; the orchestrator routes.
+first-hand repro, and report. The brain adjudicates; the seats route.
 
 # Setup
 
-- Work in the worktree the orchestrator created for you at the slice's head SHA
+- Work in the worktree the front seat created for you at the slice's head SHA
   (path in your brief) — never the trunk (your build would contaminate any live
   measurement) and never another agent's tree (a cross-tree read can trip the
   isolation classifier; the denial is sticky).
@@ -80,7 +80,7 @@ Work these in order; stop early only if you have found a blocker.
   not survive a pipe, and `2>/dev/null` hides the staleness warning.
 - Keep every repro program under `/var/tmp/medaka-sprints/<stage>/scratch/`
   (the exact path is in your brief) with a name in your report, so the
-  orchestrator can reproduce first-hand after your worktree is gone. A finding
+  seats can reproduce first-hand after your worktree is gone. A finding
   whose repro dies with your tree effectively does not exist.
 - Base-arm runs: rebuild in place (check out base, build, probe, return to
   head) — and use `MEDAKA_STRICT=1` only while the tree's source matches the
@@ -103,5 +103,5 @@ base-arm: reproduces on base? (ran / not run — say which)
 Severity honestly: S0 = wrong answer or destroyed source with NO error. Do not
 inflate — a false S0 costs a repair slice; do not deflate — a buried S0 ships.
 `CLEAR` must still fill `Not covered`: the attacks you did NOT run are exactly
-what the repair round needs to know. CLEAR-with-empty-not-covered is the one
-report shape the orchestrator should distrust on sight.
+what the heavy round needs to know. CLEAR-with-empty-not-covered is the one
+report shape the rear seat should distrust on sight.

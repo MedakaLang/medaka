@@ -1,128 +1,210 @@
 ---
 name: slice-landed
-description: The FRONT seat's fixed sequence for the moment an implementer returns — report intake, refill the writer lane, merge the slice into the sprint branch (golden re-cut rule), one handoff message to the sprint-rear seat, dispatch the planner, then bookkeeping. Run on EVERY implementer return (landed, refused, or blocked; slice or family leaf). Order is load-bearing.
+description: The FRONT seat's fixed sequence for the moment an implementer returns — report intake, merge into the sprint branch (golden rule), refill the writer lane from the merged head, one handoff message to the sprint-rear seat, dispatch the planner, then bookkeeping. Run on EVERY implementer return (landed, refused, blocked, spike, fixer, or family leaf). Order is load-bearing.
 ---
 
 # Slice landed — the front-seat completion sequence
 
-Run this the moment any implementer returns. The order exists because the
-measured sprint bottleneck was the orchestrator doing bookkeeping serially with
-ZERO writers live (0.73× parallel efficiency; 33 of 122 minutes dead): everything
-that refills or feeds the writer lane happens BEFORE anything that merely
-records. In v3 the sequence is also SHORT by design — everything downstream of
-the sprint-branch merge (push, PR, CI, reviewers, findings) belongs to the
-`sprint-rear` seat and leaves your critical path in one message. Do not
-reorder, do not interleave, do not "just quickly" verify something between
-steps 1 and 2.
+Run this the moment any implementer (slice, spike, family leaf, or fixer)
+returns. The order exists because the measured sprint bottleneck was the
+orchestrator doing bookkeeping serially with ZERO writers live (0.73× parallel
+efficiency; 33 of 122 minutes dead): bookkeeping comes last. In v3 the merge
+comes FIRST — before the lane refill — because the next worktree must be cut
+from the MERGED head: a worktree cut pre-merge starts one slice behind the
+sprint branch, which manufactures exactly the two-sided golden merge the golden
+rule below exists to prevent. The merge is local and takes seconds; the
+sequence stays short because everything downstream of it (push, PR, CI,
+reviewers) leaves in one message to the `sprint-rear` seat. Do not reorder, do
+not interleave.
+
+**All merges happen in the LANDING WORKTREE** — the dedicated worktree holding
+`sprint/<stage>`, created once at sprint start (see the `sprint-orchestrator`
+skill). Never build in it; never merge anywhere else (a branch cannot be
+checked out in two worktrees, so ad-hoc checkouts fail against sibling trees).
 
 ## Step 0 — report intake (always, for every verdict)
 
-0. **Take the lock:** create `SEQUENCE.lock` in the sprint dir. The heartbeat
-   takes no dispatch/merge action while it exists; remove it as this sequence's
-   final act. (A heartbeat tick finding a lock older than ~30 min escalates to
-   the brain rather than deleting it.)
+0. **Take the lock:** `touch /var/tmp/medaka-sprints/<stage>/SEQUENCE.lock`.
+   The heartbeat takes no dispatch/merge action while it exists; `rm` it as
+   this sequence's final act. (A tick finding a lock older than ~30 min —
+   `find <dir>/SEQUENCE.lock -mmin +30` non-empty — escalates to the brain
+   rather than deleting it.)
 1. The report file exists at the packet's named path under
    `/var/tmp/medaka-sprints/<stage>/reports/`. If the agent wrote in-worktree
-   anyway, copy it out NOW — the worktree can be reclaimed, and a return
-   message is a summary, not an artifact.
+   anyway, copy it out NOW.
 2. All six §9 sections present ("Verdict" / "Evidence" / "Decisions surfaced" /
    "Deviations from packet" / "Not covered" / "Friction"), each non-absent
    (`NONE` valid). Missing any → BOUNCE via SendMessage; do not proceed on a
    bounced report; do not fill the gap.
-3. Read ONLY the "Verdict" line to branch below. You are not the report's
-   evaluator — its content routes in step 5.
+3. Read ONLY the "Verdict" line and branch on it — the closed vocabulary is:
+   `LANDED` (below) · `LANDED leaf <id> (<k>/<n>) @<sha>` (family, mid) ·
+   `LANDED family-final @<sha>` (family, last — full LANDED sequence) ·
+   `FIX-LANDED` (fixer — light path below) · `SPIKE-DONE (stability: …)` ·
+   `REFUSED` / `REFUSED leaf <id> (<k>/<n>)` · `BLOCKED`. Any other verdict
+   string → bounce (closed vocabulary, packet §9).
 
-## Verdict = LANDED
+## Verdict = LANDED (or `LANDED family-final @<sha>`)
 
-**1. Refill the writer lane.** Take the next packet from QUEUE.md and:
-- **Completeness scan** (mechanical presence check): every §0–§9 section
-  present, §4 facts each carrying a command, §1 carrying pinned sprint-branch
-  SHA + worktree path + form + classification. Missing anything → BOUNCE to the
+**1. Merge into the sprint branch — the handoff token.** In the landing
+worktree:
+```sh
+git -C <landing> fetch origin <slice-branch>
+git -C <landing> merge --no-edit FETCH_HEAD     # sprint/<stage> is checked out here
+```
+(FETCH_HEAD is repo-global and clobbered by any sibling fetch — merge
+immediately after fetching, or fetch into a pinned SHA first.) Then:
+- **Fast-forward short-circuit:** if the merge fast-forwarded (single live
+  lane — the common case; `git merge-base --is-ancestor <old sprint head>
+  <slice head>` was true), there is only one line of development: the golden
+  rule below is vacuous, skip it.
+- **Golden rule (true merges only — ≥2 lanes):** determine "touched from both
+  sides" mechanically:
+  ```sh
+  MB=$(git merge-base <old sprint head> <slice head>)
+  comm -12 <(git diff --name-only $MB <old sprint head> | sort) \
+           <(git diff --name-only $MB <slice head> | sort) \
+    | grep -E 'test/selfproc_goldens/|test/snapshots/|\.golden$'
+  ```
+  Empty → the auto-merge stands. Non-empty → NEVER accept the auto-merge (a
+  blend has no conflict marker and no gate can see it): reset those paths to
+  `<old sprint head>`'s version, create a RE-CUT WORKTREE at the merged head,
+  and dispatch `sprint-verifier` with the exact re-derivation checklist —
+  build `make medaka`, **rebuild the legA oracles first** (`for o in
+  check_all_main eval_modules_main eval_typed_modules_main; do FORCE=1 JOBS=1
+  sh test/build_oracles.sh --build-one $o; done` — a stale oracle here
+  BLESSES a wrong golden, permanently), then `sh test/capture_goldens.sh
+  --frozen selfproc_legA` and the snapshot gate's `--bless <path>` per moved
+  file, then report the diff (legA must be additive-only). Commit the re-cut
+  on the sprint branch; the step-2 handoff WAITS for it (rare case;
+  correctness beats latency here).
+- **A merge conflict touching a golden** → `git -C <landing> merge --abort`,
+  then treat as the non-empty case above: re-merge taking the pre-merge
+  version of the golden paths (`git checkout --ours` on them), re-derive via
+  the verifier checklist.
+- **A merge conflict in source files** → `git -C <landing> merge --abort` →
+  brain (sequencing ruling), never hand-resolved at this seat.
+
+**2. Hand off to the rear seat — one message, fixed format:**
+`landed: <slice handle> | head <merged sprint-branch SHA> | report <path> |
+packet <path> | breaker-wt <path>` — where `breaker-wt` is a worktree YOU
+create now at the merged head (`git worktree add <path> <sha>`); it is
+MANDATORY in the message (an optional field here deadlocked the breaker
+dispatch in review). The rear seat pushes exactly the named SHA, dispatches
+both reviewers, and replies `ack:`. You do NOT wait for the reply; the
+heartbeat's poke tick collects it.
+
+**3. Refill the writer lane.** Take the next `status: queued` packet row from
+QUEUE.md (row format: `<slice handle> | packet <path> | depends-on <handles|
+NONE> | status: queued|dispatched|landed|refused`) and:
+- **Completeness scan** (mechanical presence check): every §1–§9 section
+  present, §4 facts each carrying a command, §1 carrying pinned SHA + branch +
+  worktree path + form + classification. Missing anything → BOUNCE to the
   planner, take the next independent packet instead.
-- **Create the worktree** at the CURRENT sprint-branch head (after this
-  sequence's step 2 merge if you can cheaply wait one step — otherwise at the
-  pre-merge head; the packet's §1 drift check covers the gap):
-  `git worktree add <path> <sprint-branch head SHA>`. Record the SHA in the
-  dispatch brief alongside the packet's pinned SHA. Worktree creation is
-  YOURS — no agent creates its own.
-- **Dispatch** — one-line brief ("Execute packet <path> under the sprint-packet
-  contract; your tree is at <head SHA>, packet pinned <SHA>"), model read off
-  §1: `parity` → Sonnet; `behavior-changing` (incl. every spike and
-  unstable-DAG slice) → `model: opus`.
+- **Create the worktree** at the sprint branch's CURRENT (merged) head:
+  `git worktree add <packet's §1 path> <merged head SHA>`. Record both SHAs in
+  the dispatch brief. Worktree creation is YOURS — no agent creates its own.
+- **Dispatch** — brief: "Execute packet <path> under the sprint-packet
+  contract; your tree is at <merged head SHA>; packet pinned <§1 SHA>." Model
+  read off §1: `parity` → Sonnet; `behavior-changing` (incl. every spike and
+  unstable-DAG slice) → `model: opus`. Update the QUEUE.md row to
+  `dispatched`.
 If no packet is queued, that is a runway failure: note it in QUEUE.md and make
 step 4 a blocking priority.
 
-**2. Merge into the sprint branch — the handoff token.** Merge the slice branch
-into `sprint/<stage>` locally. Then the ONE non-mechanical-looking check, done
-mechanically:
-- **Golden rule:** if the merge touched any golden/snapshot family
-  (`test/selfproc_goldens/`, `test/snapshots/`, `*.golden`) from BOTH sides,
-  never accept git's clean auto-merge — a blend has no conflict marker and no
-  gate can see it (3 recorded incidents in one session). Reset those paths to
-  the pre-merge sprint-branch version and RE-DERIVE from the merged head
-  (`sh test/capture_goldens.sh --frozen selfproc_legA`; the snapshot gate's
-  `--bless <path>` by name), building the merged head first if needed — or
-  dispatch `sprint-verifier` with that exact command checklist. Read the diff:
-  legA moves must be additive-only. One side moved, other side didn't →
-  auto-merge is fine.
-- A merge CONFLICT in source files → brain (sequencing ruling), never
-  hand-resolved at this seat.
-
-**3. Hand off to the rear seat — one message:**
-`landed: <slice handle>, sprint-branch head <sha>, report <path>, packet <path>`
-(+ the breaker worktree path if you pre-created it). The rear seat pushes,
-updates the sprint PR, and dispatches both reviewers. Expect an acknowledgment
-by the next heartbeat tick; you do NOT wait for it now.
-
-**4. Dispatch `sprint-planner`** for slice N+2's packet: the contract section or
-ruling to plan, the just-landed report's path (it must read "Deviations" and
-"Decisions surfaced" before writing — feed-forward is its rule), and the NEW
-sprint-branch head as the pin.
+**4. Dispatch `sprint-planner`** for slice N+2's packet: the contract section
+or ruling to plan, the just-landed report's path (it must read "Deviations"
+and "Decisions surfaced" before writing — feed-forward is its rule), and the
+NEW merged head as the pin. On its return: `PACKET-READY` → append the
+QUEUE.md row; `SPIKE-NEEDED` → dispatch the spike per the orchestrator
+skill's slice-forms handling; `BLOCKED` → brain consult.
 
 **5. Bookkeeping — only now, while all of the above runs:**
-- Route the report mechanically: `Decisions surfaced` ≠ NONE or `Deviations from
-  packet` ≠ NONE → brain consult (question + rule + file path — never a
-  paraphrase). "Not covered" → OPEN-QUESTIONS.md verbatim. "Friction" →
-  FRICTION.md verbatim. Any bug/gap anywhere in the report → forward the row to
-  the REAR seat (FINDINGS.md is its file) in the same handoff thread.
+- Route the report mechanically: "Decisions surfaced" ≠ NONE or "Deviations
+  from packet" ≠ NONE → brain consult. "Not covered" → OPEN-QUESTIONS.md
+  verbatim. "Friction" → FRICTION.md verbatim. Any bug/gap anywhere →
+  `finding: <one-line claim> | report <path>` message to the REAR seat
+  (FINDINGS.md is its file; it appends the row on receipt — the front seat
+  never writes FINDINGS.md).
 - DEBT row present with all five §6 fields non-blank (presence check only).
 - Append dispatch-log entries to DECISIONS.md; update QUEUE.md's lane table
-  (old lane closed, new lane opened with its worktree + region).
-- **Release the lock** — last act of the sequence.
+  (lane row format: `<occupant handle> | worktree <path> | region <file-set
+  summary> | evidence <disjoint-run id|SOLE>`; close the old row, open the
+  new).
+- **Release the lock** — last act.
 
-## Verdict = `LANDED leaf <id> (<k>/<n>)` — family leaf, not final
+## Verdict = FIX-LANDED — fixer return, light path
 
-Finality is read off the Verdict line alone (`LANDED family-final` takes the
-full sequence). Mid-family leaf, lighter path: intake the leaf's report block
-(step 0); if the packet licenses per-leaf merging, run step 2 + the rear-seat
-handoff for the leaf (CI runs while later leaves execute); then **continue the
-SAME implementer via SendMessage** ("leaf <next-id> next"). Leaf "Decisions
-surfaced" / "Deviations" still route to the brain immediately. Release the lock
-after each leaf intake.
+A fixer is a writer dispatched by YOU on a brain REPAIR ruling (branch
+`fix/<finding-slug>`, cut from the sprint head at lane grant). On return: step
+0 intake → **step 1 merge** (same golden rule) → handoff to the rear seat as
+`landed-fix: <finding handle> | head <sha> | report <path>` (rear pushes and
+updates the FINDINGS row; NO reviewer dispatch — the heavy round reviews
+fixes — unless the REPAIR ruling's Actions said otherwise) → close the fixer's
+lane row → bookkeeping. No planner dispatch, no lane refill (the fix lane was
+extra).
 
-## Verdict = REFUSED or BLOCKED
+## Verdict = `LANDED leaf <id> (<k>/<n>) @<sha>` — family leaf, not final
 
-A refused slice is landed work — same energy, and the lane's refill never waits
-on adjudication:
+Lighter path: intake the leaf's report block (step 0); if the packet licenses
+per-leaf merging (the family packet's §6 must say `per-leaf-merge: yes|no` —
+planner's call at cut time), run step 1 on the leaf's `@<sha>` and send the
+rear seat `landed-leaf: <family handle> leaf <id> | head <sha>` (rear PUSHES
+only — no reviewer dispatch; reviewers fire once, at family-final). Then
+**continue the SAME implementer via SendMessage** ("leaf <next-id> next").
+Leaf "Decisions surfaced" / "Deviations" still route to the brain immediately;
+leaf findings forward as `finding:` messages. No planner dispatch mid-family.
+Release the lock after each leaf intake.
+
+## Verdict = `SPIKE-DONE (stability: STABLE | UNSTABLE)`
+
+No merge, no handoff — a spike ships knowledge, never code. BEFORE reaping its
+worktree: `git -C <spike-wt> diff --stat` and `git -C <spike-wt> status
+--short` both print nothing (the report's Evidence must carry the same
+outputs); a spike that shipped code bounces. Then route on the stability word
+alone: STABLE → dispatch the planner to cut the family packet (leaf DAG from
+the spike report); UNSTABLE → dispatch the planner to cut ONE standard
+`behavior-changing` slice. Refill the lane meanwhile with an independent
+queued packet if one exists (independence test below). Bookkeeping; release
+the lock.
+
+## Verdict = REFUSED, `REFUSED leaf <id> (<k>/<n>)`, or BLOCKED
+
+A refused slice is landed work — same energy, and the lane's refill never
+waits on adjudication:
 
 1. **Refill the lane in parallel** with an INDEPENDENT queued packet if one
-   exists. Independence is mechanical: `depends-on` does not name the refused
-   slice, AND §1's collision matrix records zero intersection with it, AND no
-   §4 fact cites its handle. Any check fails or is ambiguous → dependent. If
-   nothing qualifies, the lane legitimately idles — record why in DECISIONS.md.
-2. **Brain consult, immediately:** refusal report path + packet path + the rule
-   ("any refusal"). The brain's default is believe-and-re-cut.
-3. **Execute the brain's Actions verbatim** — typically: planner revises the
-   packet folding the measurement into §4; the re-cut enters the queue front.
-4. Bookkeeping as in step 5. The refused packet is retained — it is evidence.
-   Nothing merges to the sprint branch; no rear-seat handoff.
+   exists. Independence is mechanical: its QUEUE.md `depends-on` does not name
+   the refused slice, AND its §1 collision matrix records zero intersection
+   with it, AND no §4 fact cites its handle. Any check fails or is ambiguous →
+   dependent. If nothing qualifies, the lane legitimately idles — record why
+   in DECISIONS.md.
+2. **Branch by verdict:**
+   - `REFUSED` → brain consult immediately (report + packet paths + the rule
+     "any refusal"; default is believe-and-re-cut). Execute its Actions
+     verbatim — typically the planner revises the packet, re-cut enters the
+     queue front. Nothing merges; the branch is retained as evidence.
+   - `REFUSED leaf …` → the landed leaves STAY merged (their green boundaries
+     are the design); the family PAUSES (do not send "leaf next"). Brain
+     consult; typically the planner revises only the REMAINING leaves and the
+     SAME implementer is continued on the revised DAG.
+   - `BLOCKED` → a packet defect (missing section, unreadable path, premise
+     it could not evaluate): BOUNCE the packet to the planner with the report;
+     brain consult only if the blockage names a judgment question.
+3. Bookkeeping as above. Findings in the report still forward to the rear
+   seat as `finding:` messages (the refusal path skips the merge handoff, not
+   findings intake — refusals are the highest-yield finding source on
+   record).
 
-## Reviewer / fixer returns
+## Reviewer returns
 
-These arrive at the REAR seat in v3 — it runs the same step-0 intake and the
-`sprint-findings` lifecycle, consulting the brain through you as a verbatim
-relay. The only reviewer-driven action at YOUR seat: a brain REPAIR ruling that
-resequences the queue (you re-order QUEUE.md), a fixer-lane request (you run
-`scripts/sprint-disjoint.sh` against every live lane and grant or queue it), and
-an S0-class finding (record its heavy-round adversarial-review obligation in
-DECISIONS.md — it blocks the terminal enqueue, never the writer lane).
+Reviewers return to the REAR seat (it dispatched them); it runs intake and
+the `sprint-findings` lifecycle there. The only reviewer-driven actions at
+YOUR seat, each arriving as a rear-seat reply or a brain ruling: a REPAIR
+ruling → planner cuts the fix packet (you dispatch), lane grant (run
+`scripts/sprint-disjoint.sh` PAIRWISE against each live lane row — treat ONLY
+exit 0 as disjoint; exit 1 = collision; **exit 2 = usage error, fix the
+invocation, never a grant**; `lists` mode takes two FILES — write the file
+sets to `<dir>/scratch/` first), fixer dispatch on branch
+`fix/<finding-slug>`; a queue resequencing → re-order QUEUE.md; an S0-class
+finding → record its heavy-round adversarial-review obligation in
+DECISIONS.md (blocks the terminal enqueue, never the writer lane).

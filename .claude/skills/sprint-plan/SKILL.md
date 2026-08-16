@@ -94,8 +94,9 @@ The contract is a WORKING document, not a repo artifact — it lives in the
 ephemeral sprint dir and is never committed (the repo is the "what" of the
 language; the roadmap's "how" lives in GitHub issues). Its durable shadow is
 the **sprint tracking issue**: after writing the contract, open one GitHub
-issue titled with the sprint's question, body = §1–§3 and §7 (the question,
-scope, slice table, exit criteria), labeled by workstream. This issue is where
+issue titled with the sprint's question, body = §1–§3, §7 and §8 (the
+question, scope, slice table, landing model, exit criteria), labeled by
+workstream. This issue is where
 the close-out and retro land at wrap-up, and it is what someone browsing the
 tracker sees of the sprint. Verify the creation by readback; handles per the
 identifier convention.

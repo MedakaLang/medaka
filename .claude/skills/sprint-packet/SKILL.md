@@ -117,9 +117,10 @@ every word whose deletion changes anything.
   <pinned>..HEAD -- <every §5-named file>` is EMPTY. Non-empty → the region
   changed under the packet → STOP and report per the abort condition; empty →
   proceed on the newer head.
-- **Branch name** and **absolute worktree path**. State explicitly: "Ignore any
-  CLAUDE.md-header path — your tree is the path above; run everything with
-  absolute paths."
+- **Branch name** and **absolute worktree path** (fix packets use branch
+  `fix/<finding-slug>`, cut by the front seat from the sprint head at lane
+  grant). State explicitly: "Ignore any CLAUDE.md-header path — your tree is
+  the path above; run everything with absolute paths."
 - **Form:** `standard` | `spike` | `family` (see Slice forms).
 - **Classification:** `parity` (behavior provably unchanged — diffs/gates are the
   oracle) or `behavior-changing` (anything else; all soundness work). This drives
@@ -199,21 +200,35 @@ sprint PR and the merge queue's clock. The full ceiling for a standard slice:
 5. **Bless what your own diff moved** — expected golden/snapshot moves listed
    here by path; re-cutting them is code-adjacent output, not verification, and
    a missed golden is a guaranteed CI red round-trip. An UNLISTED golden move is
-   a finding to report, never a thing to bless.
+   a finding to report, never a thing to bless. When the listed moves include
+   the selfproc LEG A golden, its oracle prerequisite is licensed as part of
+   this step (the ONE oracle-build exception — a legA capture against stale
+   oracles blesses a wrong golden permanently): `for o in check_all_main
+   eval_modules_main eval_typed_modules_main; do FORCE=1 JOBS=1 sh
+   test/build_oracles.sh --build-one $o; done` before `sh
+   test/capture_goldens.sh --frozen selfproc_legA`.
 
 **Named NOT-run, so nobody "helpfully" adds them:** no `make preflight`, no
-`run_gates.sh` patterns, no oracle builds, no engines differential, no fixpoint,
-no full or partial suites. A packet that lists a gate here needs a brain-ruled
-reason recorded in §6. The two standing exceptions, both brain-gated:
+`run_gates.sh` patterns, no oracle builds (beyond the legA license above), no
+engines differential, no fixpoint, no full or partial suites. A packet that
+lists a gate here needs a brain-ruled reason recorded in §6. The two standing
+exceptions, both brain-gated:
 - `local-fixpoint: yes` — only for slices touching `compiler/backend/*`, where a
   fixpoint break first seen in CI is too expensive to fix forward blind.
 - **Golden-capture freeze:** if any §5 site sits in an area FINDINGS.md marks
   known-broken, golden/fixture CAPTURE there is deferred to after the fix — a
-  golden captured against broken behavior enshrines the bug.
+  golden captured against broken behavior enshrines the bug. The deferral is
+  recorded on the FINDINGS row and executed at the heavy round.
+
+**Also mandatory in §6, unchanged from v2 (NOT exceptions — every packet
+carries them):**
+- A **family** packet additionally states `per-leaf-merge: yes | no` — whether
+  the front seat merges each leaf's `@<sha>` as it lands or the family merges
+  once at family-final.
 - **The nearest program this slice does NOT cover** — the adjacent shape a
   reviewer should probe first. Asking this question found two S0s.
 - **`could move:`** what observable behavior could plausibly shift — feeds the
-  DEBT.md row and gives the repair round its attack list. "Nothing, and here is
+  DEBT.md row and gives the heavy round its attack list. "Nothing, and here is
   why" is valid; silence is not.
 - **The DEBT.md row** the executing agent appends has exactly five fields, none
   blank: `sites:` (the named sites actually touched), `transform:` (one line),
@@ -277,11 +292,14 @@ verdict line + the path — the FILE is the deliverable. Required sections:
 ```
 ## Verdict
 One line, then one paragraph. Packet-executing agents: LANDED | REFUSED |
-BLOCKED — a family leaf writes `LANDED leaf <leaf-id> (<k>/<n>)` and the last
-one `LANDED family-final`; a spike writes `SPIKE-DONE (stability: STABLE |
-UNSTABLE)`. Reviewers: FINDINGS | CLEAR. Other roles use the verdict set their
-own definition fixes. The orchestrator branches on this line mechanically, so
-the vocabulary is closed per role — invent no values.
+BLOCKED — a family leaf writes `LANDED leaf <leaf-id> (<k>/<n>) @<sha>` (the
+leaf's commit SHA — the front seat merges by it) and the last one `LANDED
+family-final @<sha>`; a refused leaf writes `REFUSED leaf <leaf-id>
+(<k>/<n>)` (landed leaves stay merged; the family pauses); a fixer executing
+a fix packet writes `FIX-LANDED`; a spike writes `SPIKE-DONE (stability:
+STABLE | UNSTABLE)`. Reviewers: FINDINGS | CLEAR. Other roles use the verdict
+set their own definition fixes. The front seat branches on this line
+mechanically, so the vocabulary is closed per role — invent no values.
 
 ## Evidence
 Commands run and their key output, verbatim. Every claim above traceable to a
@@ -301,7 +319,7 @@ from the DISPATCH BRIEF — same duty, same format. NONE is valid; absence is no
 
 ## Not covered
 What this work does NOT establish: shapes not probed, programs not run, claims
-taken on trust, checks skipped and why. This section is what the repair round
+taken on trust, checks skipped and why. This section is what the heavy round
 reads first. NONE is almost never true.
 
 ## Friction

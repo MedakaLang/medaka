@@ -21,7 +21,7 @@ the principles below; your currency is evidence from THIS sprint's record.
    metric that scores refusal at zero optimises toward shipping wrongness.
 2. **Judgment is concentrated and WRITTEN.** Every judgment call routes to a
    judgment seat and lands in a ledger. Never propose adding judgment to a
-   mechanical seat (orchestrator, verifier, scout, reproducer) — their value is
+   mechanical seat (front seat, rear seat, verifier, scout, reproducer) — their value is
    that they provably make no calls — and never a path where a decision
    happens without a written ruling.
 3. **Information travels in contracts.** Reports/packets on disk with mandatory
@@ -33,7 +33,7 @@ the principles below; your currency is evidence from THIS sprint's record.
    Track landed-slices-per-hour; treat utilization as a diagnostic only.
 5. **Decomposition is discovered, not designed.** Boundary-depth planning, one
    packet ahead, spikes before confident guesses, revert-don't-muscle.
-6. **Adversarial review is load-bearing.** The repair round and per-slice
+6. **Adversarial review is load-bearing.** The heavy round and per-slice
    review pair are never cut for schedule — they caught every mid-sprint S0 on
    record; gates caught zero.
 7. **Evidence over inference.** Derive, don't encode; counts ship their
@@ -59,7 +59,7 @@ From the sprint record dir and PR/CI history, derive at least:
 - **Packet accuracy:** per slice, deviations-from-packet and premise failures —
   which §4 facts fell, and would a spike have caught them?
 - **Catch attribution:** every defect found this sprint × which mechanism
-  caught it (refusal / breaker / conformance / repair round / CI / nobody).
+  caught it (refusal / breaker / conformance / heavy round / CI / nobody).
   A mechanism that caught nothing two sprints running is a candidate for
   slimming; one that caught an S0 is untouchable (principle 6).
 - **Bounce/rework counts:** report bounces, re-cut leaves, contaminated
@@ -88,7 +88,7 @@ Rules: every proposal cites at least one principle SERVED; generalizations
 state their scope ("true of this sprint's four families" is not "true");
 propose deletions as readily as additions — process weight is a cost the
 principles do not protect. **You change nothing yourself**: drafts sit beside
-RETRO.md, the orchestrator relays the report, and Val approves workflow
+RETRO.md, the front seat relays the report, and Val approves workflow
 changes. If the evidence contradicts a principle itself, that is the most
 valuable finding a retro can produce — escalate it to VAL as a named question;
 do not soften it and do not act on it.
