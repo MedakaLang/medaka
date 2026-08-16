@@ -1,5 +1,5 @@
 # META
-source_lines=30901
+source_lines=30906
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted typecheck stage — port of lib/typecheck.ml's HM core.  SLICE 1:
@@ -29329,6 +29329,11 @@ definersIn tbl mid = match omLookup mid tbl
 -- loader's cycle rejection, and a fold over a finite list terminates outright.  (Its side
 -- effect — silently truncating a re-export chain deeper than 64 to a partial row set, i.e.
 -- a dropped dict on a well-typed program — goes with it.)
+--
+-- UNGATED: nothing in this fold checks that [deModules] really is dependency-first — it's
+-- enforced upstream by the loader's topo-sort, not verified locally. A violation fails
+-- CLOSED: the not-yet-inserted dependency's `omLookup` misses, yielding a partial/missing
+-- row, never a crash or a wrong-but-plausible answer.
 declEnvDefinerIndex : OrdMap (List (String, (String, String))) -> List DeclEnvModule -> OrdMap (List (String, (String, String)))
 declEnvDefinerIndex acc [] = acc
 declEnvDefinerIndex acc (m::rest) =
