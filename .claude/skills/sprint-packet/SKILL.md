@@ -208,6 +208,13 @@ sprint PR and the merge queue's clock. The full ceiling for a standard slice:
    test/build_oracles.sh --build-one $o; done` before `sh
    test/capture_goldens.sh --frozen selfproc_legA`.
 
+**Diagnosis is not verification.** The ceiling above caps post-hoc ACCEPTANCE
+checking — it does not cap the probing needed to LOCATE or characterize a
+defect while writing the fix (a profiler run, an ablation, a discriminating
+repro is ordinary §5 work). The test: a run whose outcome decides what you
+WRITE next is diagnosis and is fine; a run whose outcome you expect to confirm
+what you already wrote is verification and stops at the ceiling.
+
 **Named NOT-run, so nobody "helpfully" adds them:** no `make preflight`, no
 `run_gates.sh` patterns, no oracle builds (beyond the legA license above), no
 engines differential, no fixpoint, no full or partial suites. A packet that
@@ -304,6 +311,12 @@ mechanically, so the vocabulary is closed per role — invent no values.
 ## Evidence
 Commands run and their key output, verbatim. Every claim above traceable to a
 line here. State which binary (SHA + freshness check) produced each measurement.
+Packet-executing agents: the FIRST line of this section is a time split,
+best-effort to the nearest ~5 min —
+`time: total <m>m | build <m>m | diagnose <m>m | write <m>m | verify <m>m` —
+this is the sprint's only instrument for where writer wall-clock goes (the
+xmod-identity sprint could not answer it from its ledgers), so an absent line
+bounces like a missing section.
 
 ## Decisions surfaced
 Anything you resolved, noticed, or worked around that involved a judgment call —

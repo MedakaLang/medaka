@@ -136,7 +136,9 @@ that sentence have shipped S0s.
 
 Write it to the packet's named report path, INCREMENTALLY as you work (evidence
 lines as you produce them — if you die mid-slice, half a report on disk beats
-none). All six sections: Verdict / Evidence / Decisions surfaced / Deviations
+none). Evidence opens with the §9 time-split line (`time: total … | build … |
+diagnose … | write … | verify …`, nearest ~5 min) — track it as you go, don't
+reconstruct it at the end. All six sections: Verdict / Evidence / Decisions surfaced / Deviations
 from packet / Not covered / Friction. `NONE` is valid; absence is not. Also append your
 slice's DEBT.md row with the fields §6 defined (`sites:` `transform:`
 `could move:` `nearest miss:` `unchecked:`).
