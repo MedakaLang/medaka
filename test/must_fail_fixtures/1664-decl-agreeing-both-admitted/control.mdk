@@ -1,0 +1,13 @@
+-- control: main.mdk with the WHOLE `import zmodI.{IZ, zf}` clause removed (and the
+-- then-unreachable `zf 0` use) -- this removes BOTH `IZ`'s admission AND
+-- `impl IZ String`'s presence in the graph at once, TWO variables, not one (see
+-- `iz-unadmitted.mdk`, which isolates them, and claim.txt's three-cell table). Only
+-- `IA` is admitted here and no `impl IA String` exists in the graph -- per
+-- S2-DECL (a)+(c), the occurrence denotes the imported standalone, 99. This
+-- corroborates that `IA` alone genuinely denotes 99 (per main.mdk's denotation
+-- claim) and, together with `iz-unadmitted.mdk`, isolates the true causal variable
+-- to "graph presence of `impl IZ String`", not admission count.
+import fmodI.{mth}
+import amodI.{IA, af}
+
+main = println (mth "abc" 5 + af 0)

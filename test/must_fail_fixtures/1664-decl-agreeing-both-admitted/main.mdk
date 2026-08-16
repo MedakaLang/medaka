@@ -1,0 +1,21 @@
+-- #1664. S2-DECL-SCOPE note (docs/spec/SHADOW-SEMANTICS.md), "Also owed" item 1. Same graph
+-- as ../1351-methoddispatchidx-import-order-collision/ but BOTH interfaces are named
+-- in their own import clause -- `amodI.{IA, af}` AND `zmodI.{IZ, zf}` -- so BOTH `IA`
+-- and `IZ` are admitted declarations under S1-NS (a) (the TYPE arm), not just one.
+-- IA alone denotes the imported standalone (no `impl IA String`); IZ alone ALSO
+-- denotes the imported standalone (`impl IZ String` exists, `impl IZ Int` does not).
+-- The observed `7` is neither declaration's own denotation. THREE measured cells
+-- (this file, `iz-unadmitted.mdk`, `control.mdk` -- see claim.txt's table) show the
+-- causal variable is NOT admission count: `iz-unadmitted.mdk` (IZ NOT admitted,
+-- `impl IZ String` still present) ALSO gives 7, identical to this file. Only
+-- removing `impl IZ String` from the graph entirely (control.mdk) changes the
+-- answer. This is an S2-DECL (c) violation (`implExistsForHead` answers about an
+-- impl of a declaration `M` cannot even name), not (b) and not (d)'s disagreeing
+-- arm. See claim.txt for the full three-cell table and mechanism.
+-- `fmodI.mth` is the load-bearing standalone shadow -- without it `methodDispatchIdx`
+-- is never consulted (see the sibling fixture's claim.txt TRAP note).
+import fmodI.{mth}
+import amodI.{IA, af}
+import zmodI.{IZ, zf}
+
+main = println (mth "abc" 5 + af 0 + zf 0)
