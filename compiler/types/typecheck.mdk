@@ -5503,6 +5503,7 @@ data DriverState =
       dictEligibleRef : Ref (List String),
       dictEligibleSetRef : Ref (OrdMap Unit),
       mangledShadowMapRef : Ref (List (String, String)),
+      mangledFunDefsPresentRef : Ref Bool,
       userIfaceNamesRef : Ref (List String),
       coherenceUserDecls : Ref (List Decl),
       superDeclsRef : Ref (List Decl),
@@ -5532,6 +5533,7 @@ freshDriverState _ = DriverState {
   dictEligibleRef = Ref [],
   dictEligibleSetRef = Ref omEmpty,
   mangledShadowMapRef = Ref [],
+  mangledFunDefsPresentRef = Ref False,
   userIfaceNamesRef = Ref [],
   coherenceUserDecls = Ref [],
   superDeclsRef = Ref [],
@@ -27657,6 +27659,32 @@ unitMangledShadows methodNames (mid, decls) =
     (m => if contains (mangledName mid m) fns then [(mangledName mid m, m)] else [])
     methodNames
 
+-- L3 (xmod-identity #1351 spine, RUN-XMOD-022/026): the graph-level fact "this
+-- compile's decls carry at least one top-level funDef with its own module's
+-- mangle prefix" — the DENOTATION the new driverState flag below actually
+-- records (F12).  NOT literally "a mangler ran": a hand-written `m__foo` in
+-- module `m` on the un-mangled (check/run) path also satisfies it, harmlessly
+-- (see that flag's callers).  Reuses `isMangledFor` (F6) rather than a second
+-- prefix test, and `funDefs` rather than a second decl walk.
+-- Monomorphic, explicit-recursion, short-circuits on the first hit — do NOT
+-- delegate to prelude `any`/`elem` here (AGENTS.md: costed +56% self-compile
+-- on this file's hot helpers).
+graphCarriesMangledFunDefs : List (String, List Decl) -> Bool
+graphCarriesMangledFunDefs [] = False
+graphCarriesMangledFunDefs ((mid, decls)::rest) =
+  if unitCarriesMangledFunDefs mid (funDefs decls) then
+    True
+  else
+    graphCarriesMangledFunDefs rest
+
+unitCarriesMangledFunDefs : String -> List (String, (List Pat, Expr)) -> Bool
+unitCarriesMangledFunDefs mid [] = False
+unitCarriesMangledFunDefs mid ((n, _)::rest) =
+  if isMangledFor mid n then
+    True
+  else
+    unitCarriesMangledFunDefs mid rest
+
 buildStandaloneShadowsGraph : List Decl -> List Decl -> List String
 buildStandaloneShadowsGraph allDecls userDecls =
   let methodNames = allIfaceMethodNames allDecls
@@ -29161,6 +29189,13 @@ checkModulesPreamble runtimeDecls coreDecls modules =
   -- #1111 A-2.11 (#1319 unit 1): the CONSTRUCTOR peer of the line above, under the
   -- identical two-part property.  Both driver entries carry both lines or neither works.
   let _ = setRef driverState.value.graphCtorExportsRef (graphCtorExports coreDecls modules)
+  -- L3 (xmod-identity #1351 spine): the graph-level mangled-funDefs fact, under the
+  -- SAME two-part safety property as the three lines above (F3: unconditional
+  -- whole-value overwrite at BOTH Module-mode driver entries + no reset point in
+  -- between is what keeps compile N's flag from leaking into compile N+1 — see
+  -- `graphMethodExports`).  `elaborateModules` carries the identical derivation,
+  -- from the identical `("core", coreDecls)::modules` unit list.
+  let _ = setRef driverState.value.mangledFunDefsPresentRef (graphCarriesMangledFunDefs (("core", coreDecls)::modules))
   -- #1112 A-3.1: the whole-graph declaration envelope, under the SAME two-part
   -- property as the three lines above (`driverState` has no reset point, and both
   -- Module-mode driver entries write it unconditionally).  `elaborateModules`
@@ -29658,7 +29693,11 @@ elaborateModules runtimeDecls coreDecls0 modulesIn =
   -- P0-18: recover the definer-shadow map from the (already-mangled on the emit path)
   -- decls BEFORE marking/typecheck reads it.  Empty on the un-mangled path.  Set once
   -- here; per-module resetState (in checkModuleFullImpl) does NOT clear it.
-  let _ = setRef driverState.value.mangledShadowMapRef (computeMangledShadowMap allDecls (("core", coreDecls)::modules))
+  -- L3 (xmod-identity #1351 spine): bind the unit list ONCE so the map and the
+  -- graph-level "carries mangled funDefs" flag can never drift apart.
+  let mangleUnitsList = ("core", coreDecls)::modules
+  let _ = setRef driverState.value.mangledShadowMapRef (computeMangledShadowMap allDecls mangleUnitsList)
+  let _ = setRef driverState.value.mangledFunDefsPresentRef (graphCarriesMangledFunDefs mangleUnitsList)
   let _ = setRef driverState.value.superDeclsRef allDecls  -- WS-1b: interfaces in scope for the discovery scratch typecheck
   let _ = setRef driverState.value.userIfaceNamesRef (collectIfaceNames (flatMap snd modules))  -- WS-1b: gate super-expansion to user interfaces
   let rpNames = returnPosMethodNames allDecls
