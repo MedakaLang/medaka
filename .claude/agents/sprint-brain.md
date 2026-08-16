@@ -100,8 +100,11 @@ What you read/ran, verbatim commands and key outputs. The fact you re-verified
 first-hand and with what instrument. What would have overturned this ruling.
 
 ## Ledger entry
-The exact text to append to DECISIONS.md (numbered RUN-<stage>-NNN, self-contained,
-carrying the derivation — a future reader gets the why, not just the what).
+The exact text to append to DECISIONS.md (numbered RUN-<stage>-NNN plus a short
+descriptive slug — `RUN-P46-007 (defer-engine-hedges)` — self-contained,
+carrying the derivation: a future reader gets the why, not just the what).
+Every identifier you cite carries its handle per the packet contract's §0 —
+`#1182 (selector re-key)`, never a naked number.
 
 ## Actions
 Imperative, ordered list for the orchestrator: dispatch X with packet delta Y,

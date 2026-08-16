@@ -92,7 +92,10 @@ re-cut reorders without ceremony.
 - **§1 The question** — the one-sentence purpose of the sprint.
 - **§2 In / Out** — scope both ways, each Out with its reason stated so it can
   be overturned deliberately rather than rediscovered.
-- **§3 The slice table** — the five fields above, one row per slice.
+- **§3 The slice table** — the five fields above, one row per slice. **Slice
+  IDs are descriptive slugs** (`S-selector-rekey`, `S-freeze-admissibility`),
+  never opaque letters (`E4`, `F7`) — the packet contract's §0 identifier
+  convention starts here, because every later document inherits these names.
 - **§4 Already settled — do NOT re-derive** — sprint-wide facts with their
   proving commands (same discipline as a packet's §4; this seeds every packet).
 - **§5 Issue-closure policy** — which issues this sprint may close, and that

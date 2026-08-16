@@ -69,6 +69,27 @@ is a named leaf — unlike partial motion, which leaves two organs silently
 answering one question from different substrates (the recorded S0 shape). The
 brain signs off on any expand/contract plan before its family is cut.
 
+## §0 Identifiers carry names — the sprint-wide convention
+
+**A bare identifier never travels alone.** Issue numbers, slice IDs, finding
+IDs, and ruling IDs are unreadable to anyone (Val explicitly, but also every
+agent joining mid-sprint) without a handle. Everywhere an identifier appears —
+packets, reports, ledgers, consults, PR bodies, status messages — it carries a
+short descriptive handle:
+
+- Issues: `#1362 (check --json silent-accept)` — mint the handle from the
+  issue's mechanism, not its symptom, and reuse it verbatim thereafter.
+- Slices/leaves: IDs ARE descriptive slugs — `S-selector-rekey`,
+  `L2-migrate-eval-reader` — never bare letters like `E4`/`F7`.
+- Findings: `F3 (wasm arm missing)` — the row's one-line claim supplies it.
+- Rulings: `RUN-<stage>-007 (defer-engine-hedges)`.
+
+The handle is MINTED ONCE, at first use, and then stable — two handles for one
+identifier is worse than none, and renaming mid-sprint breaks every grep. Docs
+may drop the number but never the handle. The orchestrator bounces ledger
+entries and consults that carry naked identifiers, same as missing report
+sections.
+
 ## §1 Identity
 
 - **Slice ID** and issue refs (`#NNN`).

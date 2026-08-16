@@ -77,6 +77,13 @@ job is enforcement, and it is mechanical:
    open-questions list in FINDINGS.md so they reach the repair round.
 5. **Never merge, drop, or reword report content.** You move pointers and append
    verbatim text. If two documents disagree, that is a conflict → brain.
+6. **Enforce the identifier convention** (packet contract §0): every issue
+   number, slice ID, finding ID, and ruling ID in any ledger entry, consult, PR
+   body, or status message to Val carries its descriptive handle —
+   `#1362 (check --json silent-accept)`, `S-selector-rekey`, `F3 (wasm arm
+   missing)` — minted once, stable thereafter. A naked identifier bounces like a
+   missing section. This applies hardest to YOUR OWN writing: bare `E4`-style
+   labels in orchestrator output are how a run becomes unreadable.
 
 ## Roster
 
