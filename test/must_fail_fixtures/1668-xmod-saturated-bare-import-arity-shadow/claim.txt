@@ -2,19 +2,36 @@ issue: 1668
 what: two modules each declare an interface with a method of the SAME bare name
 what: (`step`) but DIFFERENT declared arity -- `pmod.P.step : a -> Int` (1 user
 what: arg), `qmod.Q.step : b -> Int -> Int` (2 user args). `main.mdk` imports
-what: `qmod` (no names bound -- a BARE `import qmod`, which still brings its impl
-what: into scope for the whole-module-graph arity table) BEFORE
-what: `import pmod.{P, step}`, then calls `step 5` -- a fully SATURATED
-what: application of P's own 1-arg method, no partial application anywhere in
-what: the source. `check`/`run` are both correct (0 / 0 -> True, matching
-what: `step 5 == 6`). The BUILT BINARY, executed, prints False: the emitted
-what: `@mdk_impl_Int_step` function is defined with TWO parameters
-what: (`i64 %arg0, i64 %arg1`) instead of one, and gets routed through a PAP
-what: wrapper (`@mdk_pap_mdk_impl_Int_step_0`) that leaves the second parameter
-what: uninitialised -- a leaked-pointer defect, so `step 5` no longer equals 6
-what: and the projected comparison is False. Swapping the two import lines
-what: (control.mdk) -- nothing else -- makes the SAME two interfaces build-run
-what: correctly: True.
+what: `qmod` (no names bound -- a BARE `import qmod`, which still enters its
+what: interface DECLARATION -- qmod defines no impl at all -- into the whole-
+what: module-graph arity table) BEFORE `import pmod.{P, step}`, then calls
+what: `step 5` -- a fully SATURATED application of P's own 1-arg method, no
+what: partial application anywhere in the SOURCE. `check`/`run` are both
+what: correct (0 / 0 -> True, matching `step 5 == 6`).
+what: THE BUILT BINARY, EXECUTED, PRINTS False. MEASURED FROM THE EMITTED IR
+what: (`medaka build --keep-ir`; `mdk_program_main`, this exact binary):
+what:   %t0 = call i64 @mdk_impl_Int_fromInt(i64 11)      ; the literal 5, tagged
+what:   %t1 = call ptr @mdk_alloc(i64 24)                 ; a CLOSURE is allocated
+what:   store i64 1, ptr %t1
+what:   store i64 ptrtoint (ptr @mdk_pap_mdk_impl_Int_step_0 to i64), ptr %t2
+what:   store i64 %t0, ptr %t3                            ; 5 captured, arg 1 of 2
+what:   %t4 = ptrtoint ptr %t1 to i64
+what:   %t5 = call i64 @mdk_impl_Int_fromInt(i64 13)      ; the literal 6
+what:   %t6 = call i64 @mdk_value_eq(i64 %t4, i64 %t5)    ; CLOSURE POINTER == 6 -> False
+what: The arity table reports `step` as arity 2 (Q's declared arity), so the
+what: fully-saturated SOURCE call `step 5` is lowered as a 1-of-2 PARTIAL
+what: APPLICATION: a heap closure is allocated capturing `5` and the PAP entry
+what: point `@mdk_pap_mdk_impl_Int_step_0`, and `== 6` then compares that
+what: CLOSURE POINTER against the tagged Int 6 -- False. That PAP function
+what: (`i64 %clos, i64 %arg0`, forwarding `(captured, %arg0)` to
+what: `@mdk_impl_Int_step`) is DEFINED but never REACHED on this path -- the
+what: wrong value comes from comparing a closure's address against an Int, not
+what: from any uninitialised read. UNESTABLISHED beyond this measurement:
+what: whether every execution takes this identical partial-application path
+what: (only the closure's own address varies run to run, which is consistent
+what: with this but not independently re-checked per execution).
+what: Swapping the two import lines (control.mdk) -- nothing else -- makes the
+what: SAME two interfaces build-run correctly: True.
 what: MEASURED FIRST-HAND on a cold `make medaka` build of this worktree at
 what: 460ff3d7ae9dea7d4de6e7756bfc113fe3c921f0 (no borrowed emitter),
 what: MEDAKA_STRICT=1 on check/run/build, every command redirected to a file
@@ -23,9 +40,9 @@ what:   medaka check main.mdk        -> exit 0, "main : Unit"
 what:   medaka run   main.mdk        -> exit 0, "True"  (correct, matches hand-derivation)
 what:   medaka build main.mdk -o X   -> exit 0, "built ... -> X"
 what:   ./X (3 separate executions)  -> exit 0, "False", ALL 3 times (deterministic
-what:                                   despite the underlying leaked value itself being
-what:                                   address-valued and non-byte-stable per-run --
-what:                                   see why-stdout)
+what:                                   despite the underlying value being a heap
+what:                                   closure pointer -- address-valued and
+what:                                   non-byte-stable per-run -- see why-stdout)
 what:   medaka build control.mdk -o Y -> exit 0
 what:   ./Y (2 separate executions)   -> exit 0, "True", both times
 what: HAND-DERIVED, before any tool output: `step 5` denotes `impl P Int`'s
@@ -40,17 +57,17 @@ what: arity") -- same root-cause table, methodIfaceTable
 what: (compiler/ir/core_ir_lower.mdk:1536) / methodIfaceOfInput,
 what: methodArityOfInput (compiler/backend/llvm_emit.mdk:481,486), a
 what: cross-module table keyed by the BARE method name with no interface
-what: component, first-match/last-write-wins on a name collision. #1450's own
-what: fixture (1450-xmod-iface-method-name-arity-collision-segfault) pins the
-what: DEFLATED-arity/under-applied/SEGFAULT sibling of this same table; this
-what: fixture pins the INFLATED-arity/fully-SATURATED-call/silent-wrong-value
-what: sibling, which #1450's own "Owed" note claimed was "immune" to a
-what: saturated-call pin and which #1450's own existing fixture claimed
-what: "cannot be pinned through this harness AT ALL" -- both claims are FALSE,
-what: disproved by this fixture. #1450 closes only when BOTH pins drain; a fix
-what: guarded only on under-application would drain #1450's segfault fixture
-what: and leave this one red, which is the intended, mechanical signal that
-what: the two symptoms need one shared fix, not a partial one.
+what: component. #1450's own fixture (1450-xmod-iface-method-name-arity-
+what: collision-segfault) pins the DEFLATED-arity/under-applied/SEGFAULT cell
+what: of this same table; this fixture pins the INFLATED-arity/fully-
+what: SATURATED-call/silent-wrong-value cell, which #1450's own "Owed" note
+what: claimed was "immune" to a saturated-call pin and which #1450's own
+what: existing fixture claimed "cannot be pinned through this harness AT ALL"
+what: -- both claims are FALSE, disproved by this fixture.
+what: #1450 and #1668 reach the same site from opposite directions, so one fix
+what: is EXPECTED to drain both. Closing both on a shared drain is correct --
+what: if both pins actually drained. Closing either while the other's pin
+what: still reproduces is not, and is a finding.
 cmd: build-run main.mdk
 exit: 0
 stdout: False
@@ -61,16 +78,17 @@ why-verb: binary is wrong. `medaka build` alone is insufficient too -- it exits
 why-verb: 0 with no diagnostic; the defect only shows once the produced binary
 why-verb: actually runs.
 why-stdout: THE PIN IS A PROJECTION because the raw channel (bare `println
-why-stdout: (step 5)`) prints a live heap address that is NOT byte-stable --
-why-stdout: measured on the unprojected minimized repro, three consecutive
-why-stdout: executions of the qmod-first binary gave three DIFFERENT large
-why-stdout: integers. An exact-stdout pin on that raw value would red on the
-why-stdout: very next run for no reason. Comparing against the hand-derived
-why-stdout: correct answer (`== 6`, i.e. `step 5 == 6`) collapses the channel
-why-stdout: to a Bool that is stable by construction while preserving the
-why-stdout: run-correct/build-wrong divergence as the observable. Proven able
-why-stdout: to print True on this exact binary: control.mdk (import lines
-why-stdout: swapped) build-runs to True, measured twice.
+why-stdout: (step 5)`) prints a live heap address (the allocated closure's
+why-stdout: pointer -- see `what:`) that is NOT byte-stable -- measured on the
+why-stdout: unprojected minimized repro, three consecutive executions of the
+why-stdout: qmod-first binary gave three DIFFERENT large integers. An
+why-stdout: exact-stdout pin on that raw value would red on the very next run
+why-stdout: for no reason. Comparing against the hand-derived correct answer
+why-stdout: (`== 6`, i.e. `step 5 == 6`) collapses the channel to a Bool that
+why-stdout: is stable by construction while preserving the run-correct/
+why-stdout: build-wrong divergence as the observable. Proven able to print
+why-stdout: True on this exact binary: control.mdk (import lines swapped)
+why-stdout: build-runs to True, measured twice.
 why-control: control.mdk is BYTE-IDENTICAL to main.mdk except the two import
 why-control: lines are swapped (`pmod` first, `qmod` second). Same two
 why-control: colliding interfaces, same call, same receiver -- proving the
@@ -82,10 +100,23 @@ why-control: (this suite's control check only grades exit code, not stdout --
 why-control: the correct-VALUE confirmation is this claim's own observation,
 why-control: not the gate's).
 why-note: filed as #1668, a CHILD of #1450 per the brain's ruling (RUN-XMOD-029
-why-note: follow-up): the two fixtures pin genuinely distinct observables of
-why-note: the same table (segfault-on-under-application vs. silent-wrong-value
-why-note: on-saturated-call) and #1450's own text values keeping both as a
-why-note: self-executing discriminator for whether a future fix addresses one
-why-note: or both. This fixture and 1450-xmod-iface-method-name-arity-
-why-note: collision-segfault/ are siblings, not a replacement pair -- the
-why-note: latter is untouched by this change.
+why-note: follow-up). #1450 and #1668 are two members of a larger FAMILY of
+why-note: must-fail fixtures pinning cross-module METHOD-NAME identity
+why-note: confusion -- not just a pair. Derive current membership rather than
+why-note: trust a count (an earlier version of this file said "siblings" and
+why-note: named only #1450; that framing under-counted):
+why-note:   grep -liE 'share[sd]? a (bare )?method|shar(e|ing) a method name|
+why-note:   method name.*collis|two interfaces.*(share|same).*method|
+why-note:   method.*spelled|spelled.*method|same.*method.*name' \
+why-note:   test/must_fail_fixtures/*/claim.txt
+why-note: MEASURED (run against this exact corpus): returns at least
+why-note: 1182, 1265, 1276, 1351, 1450, 1530, 1619, 1620, 1647, and this
+why-note: fixture (1668) -- nine-plus files, not two. This is a CORPUS SCAN,
+why-note: not an exact-membership oracle: some hits key a DIFFERENT table
+why-note: (e.g. 1647 reads `methodIfaceParamsRef`, a typecheck-side table
+why-note: #1450's own body distinguishes from `methodIfaceTable`) and share
+why-note: only the SYMPTOM CLASS (cross-module bare-method-name identity
+why-note: confusion, this sprint's #1354 METHOD-namespace framing), not
+why-note: necessarily the exact code path. Confirming which hits share this
+why-note: fixture's exact table is NOT done here -- triage per-fixture before
+why-note: assuming a fix here drains any of them beyond #1450.
