@@ -6,27 +6,27 @@ what: (stdlib/core.mdk:335-339). `main.mdk` imports it SELECTIVELY
 what: (`import dmod.{debug}`) and calls `debug 5 == "d"`. `check` and `check --json` are
 what: BOTH clean (exit 0, zero diagnostics on every file). `medaka run` -- the
 what: tree-walking interpreter -- prints `False` at exit 0. The BUILT native binary,
-what: executed, ALSO prints `False` at exit 0. All three execution channels (run,
-what: build, executed binary) silently agree on the SAME wrong value, with NO
-what: diagnostic anywhere on any channel.
-what: THE CORRECT ANSWER, HAND-DERIVED FROM THE DECLARATIONS ONLY (never from an
-what: engine -- every engine here is wrong and agrees, so none of them is an oracle for
-what: this claim): `import dmod.{debug}` is an ordinary selective import; its entire
-what: documented purpose (AGENTS.md: "an import must say what it binds") is to bind the
-what: bare name `debug`, in the importing module, to `dmod`'s `D.debug`. The only
-what: `impl D Int` in scope returns the literal string "d" for any Int receiver, so
-what: `debug 5` denotes "d" under that binding, and `debug 5 == "d"` denotes `True`.
-what: `False` is therefore wrong under the declarations alone, independent of what any
-what: engine computes.
+what: executed, ALSO prints `False` at exit 0. On THIS pinned cell, both engines agree
+what: on the same wrong value with no diagnostic anywhere.
+what: THE CORRECT ANSWER FOR THIS PINNED CELL, HAND-DERIVED FROM THE DECLARATIONS ONLY
+what: (never from an engine -- both engines here are wrong and agree, so neither is an
+what: oracle for this claim): `import dmod.{debug}` is an ordinary selective import;
+what: its entire documented purpose (AGENTS.md: "an import must say what it binds") is
+what: to bind the bare name `debug`, in the importing module, to `dmod`'s `D.debug`.
+what: The only `impl D Int` in scope returns the literal string "d" for any Int
+what: receiver, so `debug 5` denotes "d" under that binding, and `debug 5 == "d"`
+what: denotes `True`. `False` is therefore wrong under the declarations alone,
+what: independent of what any engine computes.
 what: WHAT THIS FIXTURE DOES NOT DECIDE: whether the CORRECT fix is "route the call to
 what: the user's D.debug" (the reading above), "reject the program as an ambiguous /
 what: colliding declaration", or some other resolution, is the SAME open class question
 what: already sitting on #1182 (two interfaces sharing a bare method name; order-
-what: dependent selection) -- here the implicit prelude occupies one side of the
-what: collision instead of a second user module. That adjudication is explicitly NOT
-what: made by this fixture; see the issue body's "Adjudication" section. This claim only
-what: asserts the CURRENT observable (silent wrong value on every channel) still
-what: reproduces.
+what: dependent selection, mechanism: `matchingEntries` merges candidates by bare
+what: method-name membership, `pickMostSpecificEntry` ranks by receiver type) -- #1672
+what: is a MEMBER of that family, with the implicit prelude as one of the two
+what: colliding interfaces rather than a second user module. That adjudication is
+what: explicitly NOT made by this fixture; see issue #1672's body. This claim only
+what: asserts the CURRENT observable (the pinned cell's wrong value) still reproduces.
 what: GOVERNING TEXT: NOT SHADOW-SEMANTICS / S1-PRELUDE (docs/spec/SHADOW-SEMANTICS.md,
 what: #1375/#1499) -- that ruling is scoped to a PRELUDE STANDALONE (a bare function,
 what: no interface) colliding with a user interface method. Here BOTH sides are
@@ -37,38 +37,90 @@ what: DICT-SEMANTICS §6 C1 + C4/I2 (docs/spec/DICT-SEMANTICS.md) -- the same go
 what: text as #1182's class question -- cited, not decided, here.
 what: `compiler/DIAGNOSTIC-CODES-DESIGN.md`'s `R-DUPLICATE-IFACE-METHOD` row names this
 what: exact axis ("a collision with a prelude interface method is left exactly as it
-what: behaves today") and points at issue #1672 (this issue) as of this PR.
-what: MECHANISM, read from the emitted LLVM IR (`medaka build --keep-ir` on this exact
-what: shape): `mdk_program_main` calls `@mdk_impl_core__Debug_Int__debug` -- the
-what: PRELUDE's OWN impl -- directly, even though the import list explicitly names
-what: `debug` from `dmod`; the user's own `@mdk_impl_dmod__D_Int__debug` is emitted into
-what: the module (compiles fine) but is never called from `main` (dead code). So this is
-what: a WRONG-IMPL-SELECTION defect at the call site: the import is silently ignored and
-what: the collision resolves in favor of the prelude every time. UNESTABLISHED beyond
-what: this: whether the same misrouting occurs for other colliding prelude interface
-what: methods (`Eq.eq`/`Ord.compare`/`Display.display`/...), for bare (`import dmod`) or
-what: wildcard (`import dmod.*`) import forms, on the wasm backend, or via
-what: `medaka test`/doctest/LSP/MCP channels -- none of those were probed for this pin.
-what: MEASURED FIRST-HAND on this branch's own cold `make medaka` build
+what: behaves today") and points at issue #1672 (this issue).
+what: MECHANISM ON THE PINNED CELL, read from the emitted LLVM IR (`medaka build
+what: --keep-ir` on this exact shape): `mdk_program_main` calls
+what: `@mdk_impl_core__Debug_Int__debug` -- the PRELUDE's OWN impl -- even though the
+what: import list explicitly names `debug` from `dmod`; the user's own
+what: `@mdk_impl_dmod__D_Int__debug` is emitted into the module (compiles fine) but is
+what: never called from `main` on THIS cell. Selection is receiver-TYPE-directed
+what: (#1182's own filed mechanism, `matchingEntries`/`pickMostSpecificEntry`), NOT a
+what: rule that resolves to the prelude universally -- MEASURED FIRST-HAND: a program
+what: importing the same `debug` where a SECOND `impl D` exists for a user type with no
+what: prelude `Debug` instance calls of that type correctly reach the user's impl in
+what: the SAME program that calls of `Int` still misroute to the prelude
+what: (scratch: `interface D a where debug : a -> String`; `impl D Int` returns
+what: "d-int"; `impl D T` (T a bare user data type) returns "d-T"; `println (debug 5)`
+what: then `println (debug T)` prints `5` then `d-T` -- the Int call misroutes, the T
+what: call does not, in one program, one build).
+what: REACHABILITY, MEASURED FIRST-HAND on this branch's own cold `make medaka` build
 what: (MEDAKA_STRICT=1 on every command, each redirected to a file with $? read
-what: directly, never piped):
-what:   medaka check main.mdk         -> exit 0, "main : Unit"
-what:   medaka check --json main.mdk  -> exit 0, both files "diagnostics":[]
-what:   medaka run   main.mdk         -> exit 0, "False"
-what:   medaka build main.mdk -o X    -> exit 0, "built ... -> X", no diagnostic
-what:   ./X (the executed binary)     -> exit 0, "False" (same as run)
-what:   medaka run   control.mdk      -> exit 0, "True"
+what: directly, never piped) -- every cell below is its own minimized 2-or-3-file
+what: program, not re-derived from the pinned cell's files:
+what:   * selective import (`import dmod.{debug}`, the pinned cell)      -> silent wrong
+what:   * wildcard import (`import dmod.*`)                              -> silent wrong
+what:   * qualified/aliased import (`import dmod as Dm`, call `Dm.debug`) -> silent wrong
+what:     (a POSITIVE control on the same program that `Dm.nosuch 5` is rejected
+what:     `Unbound variable: Dm.nosuch` confirms the alias path really is consulted and
+what:     really does resolve `Dm.debug`, just to the wrong declaration)
+what:   * re-export chain (`mid.mdk`: `export import dmod.{debug}`; entry imports
+what:     `mid.{debug}`)                                                 -> silent wrong
+what:   * collision reached via a non-entry intermediate module (a helper in `mid.mdk`
+what:     itself calls `debug`, entry never names `debug` directly)      -> silent wrong
+what:   * the DEFINING module's own body (`dmod.mdk` itself defines
+what:     `callIt n = debug n`; the entry imports and calls only `callIt`, `debug` is
+what:     never imported or named anywhere in the program)               -> silent wrong
+what:     (this is the SHARPEST cell: no import of `debug` exists anywhere; the defect
+what:     is not about import lists or import order)
+what:   * other colliding prelude interface methods, same shape:
+what:     `Display.display`, `Hashable.hash`, `Eq.eq` (user impl `eq x y = False`;
+what:     program prints `True` -- the prelude's own `Int` equality wins and the
+what:     result is INVERTED, confirmed first-hand)                      -> all silent wrong
+what:   * signature variant (`debug : a -> Int -> String`, arity 2; call `debug 5 7`)
+what:     -> check clean; `run` exits 1 (`E-NOT-A-FUNCTION: applied non-function: 5`,
+what:     LOUD); the BUILT BINARY exits 0 and silently prints `5` (the prelude's
+what:     1-arg impl called with the extra argument dropped at the ABI -- read from
+what:     `--keep-ir`: a direct 2-argument call to
+what:     `@mdk_impl_core__Debug_Int__debug`, a KNOWN 1-parameter function). So on THIS
+what:     cell `run` and the built binary DISAGREE -- `diff_compiler_engines` CAN see
+what:     this cell (it cannot see the pinned cell, where both engines agree).
+what:   * BARE import (`import dmod`, no name list) -> prints `False` (prelude's
+what:     `intToString 5 == "d"`) but this is CORRECT BY DESIGN, not a defect: a bare
+what:     import binds no names (AGENTS.md), so `debug` legitimately denotes the
+what:     prelude's method here. This is the class's NEGATIVE boundary; do not read it
+what:     as another silent cell.
+what:   * three interfaces sharing the name `debug`, two of them user modules (no
+what:     collision with the prelude in the ambiguity check itself) -> REJECTED LOUDLY
+what:     at `check`, exit 1, `Ambiguous occurrence: 'debug' is exported by both 'amod'
+what:     and 'bmod'` -- the prelude is simply not a participant in that ambiguity
+what:     check; user-vs-user collisions on a name the prelude also uses are caught,
+what:     collisions where the prelude is one side are not.
+what:   * the SAME declarations directly in ONE file (no second module at all) ->
+what:     REJECTED LOUDLY at exit 1 on `check` and `run`
+what:     (`Could not deduce 'D a' from the signature of 'debugListItems'` /
+what:     `debugArrayItems` -- prelude helpers that internally call `debug` and can no
+what:     longer deduce `D a` once the module itself declares a colliding interface
+what:     method). So the cross-module shape is what is silent; the same-file shape is
+what:     loud -- confirmed first-hand this session.
+what: NOT MEASURED / UNESTABLISHED: wasm backend; `medaka test`/doctest/LSP/MCP
+what: channels; `core_ir_typed_modules_dump_main`'s dict-route view (why the prelude's
+what: key wins at the dispatch site, as opposed to that it does); interaction with
+what: `deriving Debug`; a parameterized prelude impl (`List a`/`Option a`) as the
+what: colliding receiver; order-sensitivity of the misroute (declaration/import
+what: reordering).
 cmd: run main.mdk
 exit: 0
 stdout: False
 control: run control.mdk
-why-verb: `run` is the cheapest channel that already shows the defect: `check` and
-why-verb: `check --json` are both clean (exit 0, zero diagnostics) on every file, and
-why-verb: `run` itself -- with no clang step -- already prints the wrong value at exit
-why-verb: 0. `build`/the executed binary were ALSO measured wrong (same "False"), which
-why-verb: shows the defect is not run-vs-build divergence (contrast #1450/#1668, where
-why-verb: only the built binary is wrong); pinning `run` is the minimal channel that
-why-verb: still discriminates.
+why-verb: `run` is the cheapest channel that already shows the defect on the pinned
+why-verb: cell: `check` and `check --json` are both clean (exit 0, zero diagnostics) on
+why-verb: every file, and `run` itself -- with no clang step -- already prints the
+why-verb: wrong value at exit 0. `build`/the executed binary were ALSO measured wrong on
+why-verb: this cell (same "False"); pinning `run` is the minimal channel that still
+why-verb: discriminates THIS cell. (The class as a whole is broader: the arity-variant
+why-verb: cell above makes `run` and the built binary DISAGREE -- see `what:` -- so
+why-verb: "run and build always agree in this class" is NOT a property of the class,
+why-verb: only of the specific program pinned here.)
 why-stdout: the observable is a wrong BOOL VALUE at exit 0, not a wrong exit code --
 why-stdout: `exit: 0` alone asserts nothing (a correct program also exits 0). The
 why-stdout: discrimination is `stdout: False` PAIRED WITH the control asserting `True`
@@ -91,38 +143,36 @@ why-control: interface uses, so no collision exists. MEASURED: exit 0, "True". I
 why-control: the trigger to the NAME COLLISION with the prelude's own interface method,
 why-control: not to anything about the import shape, the interface/impl declarations, or
 why-control: the comparison idiom.
-why-control: PROVEN ABLE TO FAIL: mutating dctl.mdk's `dbg x = "d"` to a different
-why-control: literal (e.g. "z") makes control.mdk print "False" instead of "True",
-why-control: which would fail the control's implicit exit/stdout-True expectation this
-why-control: harness grades on -- not independently re-verified in this pin session
-why-control: (UNESTABLISHED as a literal command run here; asserted by construction of
-why-control: the comparison idiom, same as sibling fixtures in this suite).
+why-control: WHAT THE HARNESS ACTUALLY GRADES ON THE CONTROL: exit code ONLY
+why-control: (`test/diff_compiler_must_fail.sh:536-546`: `run_verb ...; crc=$?;
+why-control: [ "$crc" = 0 ] || ctl_broke=...`, plus a diagnostics-emptiness check that
+why-control: applies only when the control verb is `check-json` -- this pin's control
+why-control: verb is `run`, so that branch never fires). There is NO stdout comparison
+why-control: on the control anywhere in the harness. The control is fit for its
+why-control: documented purpose regardless (proving the ENVIRONMENT did not break, not
+why-control: that the control's VALUE stayed a specific string) -- do not read the exit-
+why-control: code-only grading as a gap to close; it is what the harness's own header
+why-control: says a control is for.
 why-note: NOT #1497/#1492/#1493/#1499 -- those are all PRELUDE-STANDALONE collisions (no
 why-note: interface on the prelude side); here the prelude side (`Debug`) is itself an
 why-note: interface, a different collision axis those rulings do not address (S1-PRELUDE
 why-note: is scoped to standalones).
-why-note: NOT #1450/#1668 -- those are an arity-mismatch collision between TWO USER
-why-note: modules (bare-name-keyed arity table -> wrong-arity PAP), and `run` is CORRECT
-why-note: there (only the built binary is wrong). Here BOTH `run` and the binary are
-why-note: wrong, from the SAME misrouted denotation, and the mechanism (read from IR) is
-why-note: wrong-impl-SELECTION, not wrong arity.
-why-note: NOT #1620/#1092/#1351/#1182/#1265/#1619/#1530/#1288/#1438 and siblings -- none
-why-note: of those names the IMPLICIT PRELUDE as one side of the collision; all are
-why-note: two-user-module or same-file-two-user-interface shapes. #1182 is cited above
-why-note: only for its GOVERNING TEXT / open class question, not as the same bug.
-why-note: `diff_compiler_engines` is STRUCTURALLY BLIND to this: check/run/build/binary
-why-note: all agree (on the WRONG value), so there is no engine disagreement anywhere
-why-note: for that gate to notice -- which is why the must-fail corpus is where this
-why-note: lives, and why this is a MORE silent shape than #1668 (there only the built
-why-note: binary disagrees with a correct `run`; here `run` itself is already wrong).
-why-note: LOAD-BEARING MINIMIZATION FACT (not asserted by this pin's graded files, but
-why-note: recorded for the next reader): putting the SAME declarations directly into
-why-note: ONE file (no second module) does NOT reproduce the silent shape -- it is
-why-note: instead correctly REJECTED at exit 1 on every verb, because the prelude's own
-why-note: internal helpers (`debugListItems`/`debugArrayItems`) call `debug` and can no
-why-note: longer deduce `D a` once the module itself declares a colliding interface
-why-note: method. So the SEPARATE-MODULE shape (as graded here) is what is silent; a
-why-note: same-file variant is loud -- opposite of #1620/#1092's same-file-is-silent
-why-note: pattern. Not independently re-measured in this exact worktree/session; carried
-why-note: forward from the reproducer's bundle
-why-note: (/var/tmp/medaka-sprints/xmod-identity/reports/prelude-iface-debug-collision-repro.md).
+why-note: RELATIONSHIP TO #1450/#1668: those are an arity-mismatch collision between TWO
+why-note: USER modules (bare-name-keyed arity table -> wrong-arity PAP/call). #1672's
+why-note: arity-variant cell (see `what:`) lands in the SAME shape -- a direct call with
+why-note: the wrong argument count, silently wrong at the built binary while `run`
+why-note: panics loudly -- so #1672 is not disjoint from that family on every cell, only
+why-note: on the specific cell pinned here (which has matching arity on both sides and
+why-note: is therefore silent on every channel). No claim of "run always agrees with
+why-note: build in this class" is made anywhere in this fixture.
+why-note: #1182 FAMILY: this issue is a MEMBER of #1182's family (two interfaces
+why-note: sharing a bare method name; #1182's own filed mechanism --
+why-note: `matchingEntries`/`pickMostSpecificEntry`, bare-name-keyed candidate merge
+why-note: ranked by receiver type -- is measured to be #1672's mechanism too, with the
+why-note: prelude as one of the two interfaces). See issue #1672's body for the
+why-note: reparenting and #1182's own back-reference.
+why-note: `diff_compiler_engines` sees SOME cells of this class (the arity-variant cell)
+why-note: and not others (the pinned cell, where check/run/build/binary all agree on the
+why-note: wrong value) -- it is not structurally blind to the whole class, only to the
+why-note: specific program pinned here, which is why the must-fail corpus is still where
+why-note: THIS cell lives.
