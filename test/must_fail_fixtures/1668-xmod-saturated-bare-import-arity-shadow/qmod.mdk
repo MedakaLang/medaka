@@ -1,0 +1,2 @@
+export interface Q b where
+  step : b -> Int -> Int
