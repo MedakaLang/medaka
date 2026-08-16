@@ -1,0 +1,61 @@
+issue: 1427
+what: `lib/decl.mdk` exports `f : Num a => a -> a`; `lib/rsel.mdk` is a pure
+what: re-exporter (`export import lib.decl.{f}`); `main.mdk` imports it
+what: with an ALIAS spelling (`import lib.rsel as R`) and calls `R.f 1`.
+what: `medaka check` accepts (exit 0). PR #1671 (S-scheme-env-identity,
+what: cross-module-identity sprint) repaired the BUILD arm of this exact
+what: shape: `medaka build` now succeeds and the binary prints `2` (it used
+what: to fail outright with `E-PANIC: unbound constrained fn: lib_decl__f`,
+what: no binary -- that was this fixture's original pin, deleted by #1671
+what: as part of the repair). This fixture is RECREATED, re-pointed to the
+what: `run` arm: `medaka run main.mdk` still panics
+what: `E-PANIC: intToString: not an Int`, exit 1 -- a DIFFERENT channel
+what: (#1369/#1425's dict-arity seam), unrepaired by #1671 on purpose (see
+what: #1671's own commit message, "SCOPE" section). #1427 stays open until
+what: #1425 lands.
+cmd: run main.mdk
+exit: 1
+control: run control.mdk
+why-fixture: `run` is the verb that observes the CURRENTLY-open half of
+why-fixture: this defect. `main = println (R.f 1)` is strict, so `R.f 1`
+why-fixture: panics DURING argument evaluation, before `println` ever
+why-fixture: runs -- stdout is empty. This harness's `run` verb grades
+why-fixture: only stdout + exit code (stderr goes to a side file no
+why-fixture: comparison here reads), so the literal E-PANIC message text
+why-fixture: is not mechanically checkable through this suite; the exit
+why-fixture: code (1, vs. the control's 0) is the discriminating,
+why-fixture: fail-capable assertion. Re-measured first-hand against a cold
+why-fixture: `make medaka` of this branch (post-#1671), MEDAKA_STRICT=1,
+why-fixture: exit read via a file redirect, never a pipe: `medaka run
+why-fixture: main.mdk` -> exit 1, `runtime error [E-PANIC]:
+why-fixture: intToString: not an Int`.
+why-control: control.mdk imports `lib.decl.{f}` DIRECTLY -- no `export import`
+why-control: re-export hop at all (unlike the original build-arm pin's
+why-control: control, which used the SELECTIVE re-export spelling; that
+why-control: control no longer stays green on `run`, since it panics
+why-control: identically to `main.mdk` via the #1369/#1425 channel -- see
+why-control: why-note below). Re-measured: `medaka run control.mdk` -> exit 0,
+why-control: stdout `2`.
+why-note: on `run`, the ALIAS-spelling panic in `main.mdk` is NOT
+why-note: mechanistically distinct from #1369's own selective-spelling
+why-note: pin (`test/must_fail_fixtures/1369-export-import-constrained-callee-no-dict/`)
+why-note: -- both panic identically (`intToString: not an Int`) via the
+why-note: shared #1369/#1425 dict-arity seam. That is WHY the control here
+why-note: had to change from "selective re-export" (which also panics) to
+why-note: "direct import, no re-export hop" (which is green) -- the
+why-note: alias-vs-selective distinction that discriminated the now-fixed
+why-note: BUILD defect does not discriminate on RUN. #1427 is kept as its
+why-note: own pin (not merged into #1369's) because the issue tracker
+why-note: still separately tracks the alias-spelling shape and its
+why-note: closure is gated on #1425, exactly as #1369's closure is
+why-note: (RUN-XMOD-036, Amendment B: re-point a fixture whose OBSERVATION
+why-note: partially drained rather than deleting it -- only the `build`
+why-note: observation drained here, `run` did not). A correct fix to
+why-note: #1425 makes `medaka run main.mdk` print `2` at exit 0, matching
+why-note: `check` and `build`+run -- flipping this row's exit from 1 to 0,
+why-note: draining it. Close #1427 and delete this fixture when that
+why-note: happens (re-check against #1369/#1425 first: if the same change
+why-note: drains both, close both citing each other). The companion gate
+why-note: cell `s8-xmod-reexport-alias-constrained` in
+why-note: test/diff_compiler_dict_semantics.sh is labeled KNOWN-BAD citing
+why-note: #1427 and #1425 for the same reason.
