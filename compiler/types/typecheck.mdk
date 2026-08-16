@@ -27943,6 +27943,32 @@ isMangledFor mid k =
 -- test gates the assoc lookup, so the scan below runs only for the rare key that already
 -- looks mangled.  Short-circuiting and monomorphic on purpose (a dict-passed `any` over
 -- a closure is the measured anti-pattern here).
+--
+-- 🚨 THE HONEST RESIDUAL, RECORDED SO THE NEXT READER DOES NOT HAVE TO RE-DERIVE IT
+-- (RUN-XMOD-042).  This is "SHAPE **AND** ACTUALLY-EXPORTED", **not** pure identity, and
+-- the distinction matters if you are auditing it against the sprint's own thesis that
+-- identity must not be derived from spelling.  `isMangledFor` is still a string test; it
+-- has simply stopped being the *whole* decision.  What the `isSome (lookupAssoc k pubV)`
+-- conjunct buys is that the surface becomes BOUNDED BY THE PROGRAM'S REAL EXPORT SET: a
+-- false positive now needs a GENUINE SYMBOL COLLISION -- module `m` must actually export
+-- something named exactly `k`, where `k` also carries `m`'s mangle prefix -- instead of
+-- merely a similar-LOOKING name.  Before the conjunct, the surface grew with the module
+-- graph (every module `a.b` made `a_b__x` a landmine, which is what regressed `core__foo`
+-- and `lib_plain__g`); now it does not grow with the graph at all.
+--
+-- ⚠️ WHY NOT DROP THE SHAPE HALF AND MAKE IT PURE IDENTITY?  Because that is measurably
+-- WRONG here, not merely purer: a re-exported interface METHOD key is also a key of its
+-- declaring module's `pubV`, so "is `k` a key of some other loaded module?" alone answers
+-- True for methods and would re-bind them -- moving the bare-key population that
+-- #1276/#1386 own and that this slice must not touch.  The shape half is precisely what
+-- holds methods out (a bare method name carries no `<mid>__` prefix).  So the two halves
+-- are not redundant and neither may be removed on tidiness grounds.
+--
+-- ⚠️ The residual's true root is one level down and is NOT fixed here: private_mangle's
+-- `(module, name) -> symbol` encoding is not injective -- a module `lib.plain` and a
+-- module literally named `lib_plain` both yield `lib_plain__g`.  That is the common root
+-- of both regressions above and is bigger than this function; do not try to repair it by
+-- editing this test.
 isMangledExportOfAny : List (String, List (String, Scheme)) -> String -> Bool
 isMangledExportOfAny [] _ = False
 isMangledExportOfAny ((m, pubV)::rest) k = isMangledFor m k && isSome (lookupAssoc k pubV)
