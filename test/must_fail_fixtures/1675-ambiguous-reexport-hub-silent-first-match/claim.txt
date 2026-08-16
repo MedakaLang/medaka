@@ -1,0 +1,107 @@
+issue: 1675
+what: `lib/hub.mdk` re-exports the SAME bare value name `g` from TWO DIFFERENT
+what: definers (`export import lib.pa.{g}` + `export import lib.pb.{g}`), where
+what: `lib.pa`'s `g x = x + 1` and `lib.pb`'s `g x = x * 10`. `main.mdk` imports
+what: `g` from the hub and calls `g 1`. NO interfaces, NO impls, NO dicts
+what: anywhere -- this is plain top-level value bindings.
+what: ⭐ SPEC ANSWER, HAND-DERIVED FROM THE DECLARATIONS BEFORE ANY BINARY WAS
+what: RUN, and NOT read off any engine:
+what:   1. `lib.pa.g 1` = 1 + 1 = 2.   `lib.pb.g 1` = 1 * 10 = 10.
+what:   2. `lib/hub.mdk` re-exports BOTH under the SAME bare name `g`, so the
+what:      occurrence `g` in main.mdk has TWO denotations in scope.
+what:   3. A program whose occurrence has two denotations is AMBIGUOUS and a
+what:      correct compiler REJECTS it. There is no rule that prefers either
+what:      definer -- neither is more specific, neither shadows the other, and
+what:      declaration order is not a selection rule anywhere in the language.
+what:   4. ⇒ main.mdk MUST be rejected. ANY value it prints at exit 0 is a wrong
+what:      answer, whichever of 2 or 10 it happens to be.
+what: MEASURED FIRST-HAND on this branch's binary, MEDAKA_STRICT=1, every verb
+what: redirected to a file with $? read separately (never piped):
+what:   main.mdk   check      -> `main : Unit`, exit 0   (SILENT -- no diagnostic)
+what:   main.mdk   check --json -> exit 0, ZERO diagnostics on all 4 files. The
+what:              machine-readable channel is silent too; this is NOT #1362,
+what:              the human arm is equally silent.
+what:   main.mdk   run        -> `2`, exit 0             <- PINNED
+what:   main.mdk   build      -> exit 0, binary prints `2`, exit 0
+what: 🚨 THE DISCRIMINATING MEASUREMENT -- the answer is decided by DECLARATION
+what: ORDER, which is what makes it arbitrary rather than a principled choice.
+what: With `lib/hub.mdk`'s two `export import` lines EXCHANGED and nothing else
+what: varied, the SAME main.mdk prints `10` instead of `2`, still at exit 0,
+what: still with no diagnostic, on BOTH importer spellings:
+what:   hub = pa then pb  ->  selective spelling `2`   | alias spelling `2`
+what:   hub = pb then pa  ->  selective spelling `10`  | alias spelling `10`
+what: Swapping two adjacent lines in a file that declares nothing changes the
+what: program's value. That is the S0.
+what: MECHANISM (cited, not instrumented): `resolveMemberSchemes`'s suffix
+what: fallback in compiler/types/typecheck.mdk is a `filter`, so for a re-export
+what: hub it can return BOTH `lib_pa__g` and `lib_pb__g`; the downstream
+what: `lookupAssoc` then takes the FIRST. The source comment there asserts
+what: "distinct members never share an `__<name>` suffix" -- an assertion about
+what: ONE module's own members, which does not hold for a re-export hub.
+cmd: run main.mdk
+exit: 0
+stdout: 2
+control: run control.mdk
+why-verb: `run`, and the pin asserts exit 0 -- the INVERSE of the usual
+why-verb: must-fail shape, because the defect IS acceptance. Every verb is
+why-verb: equally wrong here (check/run/build all exit 0 and the built binary
+why-verb: prints the same value), so `run` is chosen as the cheapest of the
+why-verb: three; it needs no clang and no linked binary.
+why-pin: `stdout: 2` is asserted ON TOP OF the exit code and is NOT
+why-pin: redundant with it. An exit-code-only pin cannot see the actual
+why-pin: observable -- that the value moves between `2` and `10` with a
+why-pin: semantically null edit -- and would also be blind to the defect
+why-pin: getting WORSE (#1484's concern): a future change that made this cell
+why-pin: print some third value, or a raw machine word, at exit 0 would keep an
+why-pin: exit-only pin green. The exact `2` is the pa-definer's answer and pins
+why-pin: WHICH arbitrary branch is currently taken.
+why-pin: ⚠️ `stdout:` and NOT `stdout-bytes:` -- measured, not guessed. The two
+why-pin: differ by exactly the trailing newline (this harness's own header:
+why-pin: "stdout: exact whole stdout. stdout-bytes: same, no trailing newline
+why-pin: appended"), and `println` emits one. A first draft of this pin used
+why-pin: `stdout-bytes: 2` and the gate reported the row DRAINED -- i.e. a
+why-pin: MALFORMED pin reading as "the bug is fixed", which is the most
+why-pin: dangerous direction a pin can fail in. `stdout-bytes:` is right for a
+why-pin: 0-byte capture (a crash before any output, as in the former
+why-pin: 1472-alias-reexport-null-dict-segfault row); it is wrong for anything
+why-pin: `println` produced.
+why-pin: ⚠️ REACH, NOT REASON: this records that the compiler accepts and
+why-pin: answers `2`. It does not and cannot assert WHY. When the ambiguity is
+why-pin: diagnosed, main.mdk starts exiting 1 and this row DRAINS.
+why-control: control.mdk is main.mdk with ONE dimension varied -- it imports `g`
+why-control: DIRECTLY from `lib.pb` instead of through the ambiguous hub, so the
+why-control: occurrence has exactly ONE denotation and the program is
+why-control: unambiguous and legal. It must stay exit 0. Deliberately chosen as
+why-control: the `lib.pb` arm, NOT `lib.pa`: it prints `10`, the value the
+why-control: pinned row does NOT print, so the pair also documents that both
+why-control: definers are individually reachable and correct (measured: `lib.pa`
+why-control: direct prints `2`, `lib.pb` direct prints `10`, both exit 0). That
+why-control: proves the machinery works and localises the defect to the
+why-control: re-export MERGE rather than to either definer or to `export import`
+why-control: as such.
+why-note: 🚨 THIS CLASS NOW HAS NO LOUD CHANNEL ANYWHERE, and this fixture is
+why-note: the replacement for the one it lost. Before PR #1671 (slice
+why-note: S-scheme-env-identity, the #1337 scheme-environment identity fix) the
+why-note: ALIAS spelling of this shape built at exit 0 and the BINARY SEGFAULTED
+why-note: (exit 139, empty stdout) -- the only loud signal this defect class
+why-note: produced anywhere. That crash was #1472's null-dict defect and
+why-note: repairing it was that PR's whole purpose; the repair is correct and
+why-note: the crash must not come back. But the ambiguity itself was never
+why-note: diagnosed on either spelling, and the SELECTIVE spelling already
+why-note: answered silently on that PR's base `936116b9` -- so the silent
+why-note: wrongness is PRE-EXISTING and is NOT attributable to that slice, while
+why-note: the loud→silent transition on the alias arm IS a consequence of it.
+why-note: AGENTS.md's "a fix that makes a defect QUIETER is a severity INCREASE"
+why-note: corollary is why this is filed and pinned rather than left in a diff.
+why-note: relation to #1530: DIFFERENT MECHANISM AND POPULATION, checked rather
+why-note: than assumed. #1530 is a METHOD name shared by two interfaces merged
+why-note: through re-export, resolved by an interface-merge last-write-wins
+why-note: floor. This fixture has no interfaces at all. #1530's own pin still
+why-note: reproduces independently. #1288 is the same hazard one layer up
+why-note: (types/interfaces rather than values).
+why-note: SUGGESTED FIX DIRECTION (not a decision): reject at the MERGE point --
+why-note: when the suffix-fallback `filter` yields more than one candidate that
+why-note: is a genuine collision and should raise a diagnostic naming both
+why-note: definers, in the shape `cohCrossModuleMsg` already uses for
+why-note: cross-module coherence conflicts. The first-match `lookupAssoc` is the
+why-note: symptom, not the place to fix it.

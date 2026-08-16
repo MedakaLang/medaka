@@ -1,8 +1,0 @@
--- issue #1472 control: the ONE variable removed -- SELECTIVE import of `g`
--- through the SAME re-export hop (`lib.rplain.{g}`), instead of the ALIAS
--- spelling (`as R` / `R.g`). This is #1472's own "same re-export, SELECTIVE
--- importer" control row, which its own measured table reports green on every
--- verb (check/run/build/executed binary all exit 0, printing `2`).
-import lib.rplain.{g}
-
-main = println (g 1)

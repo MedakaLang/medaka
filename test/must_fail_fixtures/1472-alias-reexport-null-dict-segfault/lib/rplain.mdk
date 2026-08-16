@@ -1,4 +1,0 @@
--- issue #1472: RE-EXPORTS plain's `g`. main.mdk imports it through HERE, with
--- an ALIAS spelling -- this is the hop+spelling combination that corrupts the
--- dict argument at an UNRELATED prelude call site (`println`).
-export import lib.plain.{g}

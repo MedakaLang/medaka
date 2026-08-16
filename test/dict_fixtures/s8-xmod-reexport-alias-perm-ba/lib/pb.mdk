@@ -1,0 +1,4 @@
+-- definer B. A DISTINCT definer from pa, so the hub's public schemes carry keys
+-- mangled for TWO different modules -- which is the point of the permutation.
+export gb : Int -> Int
+gb x = x * 10

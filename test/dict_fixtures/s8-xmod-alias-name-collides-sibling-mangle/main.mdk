@@ -1,0 +1,43 @@
+-- REGRESSION PIN for RUN-XMOD-039 F2 (`lib_plain__g` beside a loaded `lib.plain`),
+-- the other half of the "FEATURE LANDED + UNRELATED CODE STILL BEHAVES" pair.
+-- Promoted verbatim from the slice-breaker's `pC` probe.
+--
+-- 🚨 THIS IS THE ROW THAT BOUNDS THE COLLISION SURFACE, and it is strictly the
+-- more important of the pair. F1's trigger was one hardcoded string (`"core"`)
+-- and deleting that term fixed it. THIS one is not a single bad constant: with a
+-- spelling-keyed test, EVERY module named `a.b` makes `a_b__x` a landmine, so the
+-- false-positive surface is UNBOUNDED AND GROWS WITH THE MODULE GRAPH. That is
+-- why the remedy had to be a change of KIND -- an identity test -- and not a
+-- narrower pattern. ⚠️ A future agent who "fixes" a regression here by tightening
+-- the prefix match has reintroduced the class with a smaller surface, not removed
+-- it; see the comment block at `aliasSchemes` in compiler/types/typecheck.mdk.
+--
+-- WHAT BROKE. `lib.other` exports an ordinary top-level binding literally spelled
+-- `lib_plain__g`. A DIFFERENT module, `lib.plain`, is also loaded, and sanitizes
+-- to `lib_plain`. The string-shape test therefore answered "already mangled" for
+-- a binding on the GOLDEN path that nothing had mangled, left it un-rebound, and
+-- rejected: `main.mdk:8:15: Unbound variable: O.lib_plain__g`, exit 1 on
+-- check/run/build. Base compiled it and printed `44`.
+-- ⚠️ Note the diagnostic gave the user NO hint of the real cause -- it said the
+-- binding was unbound while it was plainly declared and exported two lines away.
+--
+-- WHY IT PASSES NOW, stated as the property rather than the symptom: the test asks
+-- whether `k` is a name some loaded module ACTUALLY EXPORTS under that module's own
+-- mangled form. On the golden path `lib.plain` exports the bare `g`, NOT
+-- `lib_plain__g`, so the conjunct is false and the key is correctly re-bound as
+-- `O.lib_plain__g`. On the emit path a genuinely re-exported `lib_plain__g` IS a
+-- key of `lib.plain`'s own schemes, so the conjunct holds and the key is left
+-- alone -- which is the #1472/#1427 fix. One test, both answers, no spelling
+-- coincidence in either direction.
+--
+-- GROUND TRUTH, HAND-DERIVED FROM THE DECLARATIONS, NOT CAPTURED:
+--   `lib_plain__g : Int` = 42 (lib/other.mdk).
+--   `g : Int -> Int`, `g x = x + 1` (lib/plain.mdk), so `g 1` = 2.
+--   `42 + 2` = 44.
+--
+-- ⚠️ BOTH IMPORTS ARE LOAD-BEARING. `import lib.plain.{g}` is what puts `lib.plain`
+-- into the loaded set; drop it and the collision cannot arise and the row is inert.
+import lib.plain.{g}
+import lib.other as O
+
+main = println (O.lib_plain__g + g 1)

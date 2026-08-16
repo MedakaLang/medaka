@@ -1,0 +1,4 @@
+-- Pure RE-EXPORTER: `g`'s definer is lib.plain, but the importer names THIS module.
+-- That is the whole defect surface -- the key in this module's public schemes is
+-- mangled `lib_plain__g` (for the DEFINER), not `lib_rplain__g`.
+export import lib.plain.{g}

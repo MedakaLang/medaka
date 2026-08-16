@@ -1,0 +1,24 @@
+-- #1472 (alias-importer re-export -> NULL dict at an unrelated prelude call) --
+-- THE POSITIVE ROW REPLACING THE DRAINED PIN
+-- `1472-alias-reexport-null-dict-segfault`. A pin asserts a bug STILL
+-- REPRODUCES, so a fix deletes it and the S0 has NO guard unless a positive row
+-- replaces it.
+--
+-- GROUND TRUTH, HAND-DERIVED FROM THE DECLARATIONS BEFORE ANY BINARY WAS RUN --
+-- not captured from the engine:
+--   `g : Int -> Int`, `g x = x + 1` (lib/plain.mdk). `R.g` names that same
+--   binding, reached through lib.rplain's `export import`, which re-exports
+--   BY IDENTITY (the definer's own scheme, never re-generalized). So
+--   `R.g 1` = 1 + 1 = 2, and `println` writes `2`.
+-- All three verbs must ACCEPT and both engines must print that same `2`.
+--
+-- WHY THE VALUE ROW ALONE IS NOT THE ASSERTION: pre-fix, `check` exited 0,
+-- `run` printed the CORRECT `2`, and `build` exited 0 -- every behavioural
+-- signal was green. Only the EXECUTED BINARY failed (exit 139, empty stdout,
+-- E-FATAL-SIGNAL). The section-3 IR row is what carries this fixture: it pins
+-- that `println`'s LEADING DICT OPERAND is the real dict constant and not the
+-- null `i64 0` the emitter wrote pre-fix. An exit-code-only or value-only
+-- grade cannot tell "the dict is right" from "the crash moved".
+import lib.rplain as R
+
+main = println (R.g 1)

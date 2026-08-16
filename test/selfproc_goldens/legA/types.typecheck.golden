@@ -36,8 +36,8 @@ aliasMethodRenames : List (String, List String) -> List Decl -> List (String, St
 aliasMethodRenamesOf : List (String, List String) -> Decl -> List (String, String)
 aliasMethodRenamesOfPath : List String -> UsePath -> List (String, String)
 aliasNamesAt : Int -> List String
-aliasSchemeEntry : String -> String -> (String, Scheme) -> (String, Scheme)
-aliasSchemes : String -> String -> List (String, Scheme) -> List (String, Scheme)
+aliasSchemeEntry : List (String, List (String, Scheme)) -> String -> (String, Scheme) -> (String, Scheme)
+aliasSchemes : List (String, List (String, Scheme)) -> String -> List (String, Scheme) -> List (String, Scheme)
 aliasUniverseAt : Int -> List (TabKey, AliasDecl) -> List (TabKey, (List String, Ty))
 aliasVisibleTo : Int -> AliasDecl -> Bool
 alignedMethodConstraintIds : String -> List (Int, Mono) -> Option (List Int)
@@ -904,7 +904,7 @@ implSubject : String -> String -> String
 implTupleHeadKindMsg : String -> Int -> List Kind -> String
 implTysIfMatch : String -> String -> Decl -> List (List Ty)
 importDefinersOf : List Decl -> List (String, String)
-importFormSchemes : String -> UsePath -> List (String, Scheme) -> List (String, Scheme)
+importFormSchemes : List (String, List (String, Scheme)) -> UsePath -> List (String, Scheme) -> List (String, Scheme)
 importOriginsOf : List Decl -> List (String, String)
 importOverlayDecls : Int -> List DeclEnvModule -> Decl -> List Decl
 importSeed : List Decl -> List (String, List (String, Scheme)) -> List (String, Scheme)
@@ -1049,6 +1049,7 @@ isDefinerShadow : String -> Bool
 isHoleParam : Param -> Bool
 isHoleStr : String -> Bool
 isLetrecGroup : List String -> Bool
+isMangledExportOfAny : List (String, List (String, Scheme)) -> String -> Bool
 isMangledFor : String -> String -> Bool
 isMonoScheme : Scheme -> Bool
 isNonexpansive : Expr -> Bool

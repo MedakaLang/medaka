@@ -1,0 +1,3 @@
+-- An ordinary binding whose name happens to start with `core__`.
+export core__foo : Int
+core__foo = 7

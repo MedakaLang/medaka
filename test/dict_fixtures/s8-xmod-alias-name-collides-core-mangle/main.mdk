@@ -1,0 +1,31 @@
+-- REGRESSION PIN for RUN-XMOD-039 F1 (`core__foo`), and one half of the
+-- "FEATURE LANDED + UNRELATED CODE STILL BEHAVES" pair this corpus was missing.
+-- Promoted verbatim from the slice-breaker's `pD` probe.
+--
+-- 🚨 READ WHAT THIS ASSERTS BEFORE CHANGING IT. Nothing here exercises the
+-- #1337 feature at all: there is NO `export import` anywhere, no re-export hop,
+-- one dependency, one alias import. That is the entire point. AGENTS.md names
+-- this the single most expensive defect shape in the tree -- "your feature works
+-- perfectly and something unrelated breaks" -- and it is invisible to every
+-- fixture that exercises the feature, because those all pass.
+--
+-- WHAT BROKE. The first version of the #1337 fix decided "is this dependency
+-- scheme key already the symbol the reference will look up?" by asking whether
+-- the key carried SOME loaded module's mangle prefix -- a pure STRING-SHAPE
+-- question. It seeded that set with `"core"`, and `mangledName "core" "" ==
+-- "core__"`, so this file's perfectly ordinary `core__foo` was misread as
+-- already-mangled, left un-rebound, and rejected:
+--   `main.mdk:6:7: Unbound variable: O.core__foo`, exit 1 on check AND run AND
+--   build (plus a cascaded `Ambiguous instance for 'Display'`). No binary.
+-- The base binary compiled this file and printed `7`.
+--
+-- GROUND TRUTH, HAND-DERIVED FROM THE DECLARATIONS, NOT CAPTURED: `core__foo` is
+-- declared `: Int` and bound to `7` in lib/other.mdk; `import lib.other as O`
+-- binds it as `O.core__foo`; so this prints `7` on run and on the built binary.
+--
+-- ⚠️ THE FIXTURE IS THE IDENTIFIER. `core__foo` is not decoration and must not be
+-- "tidied" to a normal name -- rename it and this row still passes while testing
+-- nothing. Same for its sibling fixture's `lib_plain__g`.
+import lib.other as O
+
+main = println O.core__foo

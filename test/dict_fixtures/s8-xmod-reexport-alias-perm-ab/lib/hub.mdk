@@ -1,0 +1,5 @@
+-- RE-EXPORT HUB over TWO DIFFERENT definers. ORDERING A-then-B.
+-- The `-ba` sibling is this file with exactly these two lines EXCHANGED and
+-- nothing else varied.
+export import lib.pa.{ga}
+export import lib.pb.{gb}

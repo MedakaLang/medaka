@@ -1,0 +1,3 @@
+-- Pure RE-EXPORTER, same hop as the unconstrained pair: `f`'s definer is
+-- lib.decl, but the importer names THIS module.
+export import lib.decl.{f}
