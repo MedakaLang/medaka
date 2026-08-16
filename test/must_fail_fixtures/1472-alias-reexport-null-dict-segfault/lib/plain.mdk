@@ -1,4 +1,0 @@
--- issue #1472: the module that DECLARES the UNCONSTRAINED binding. No class
--- constraint anywhere on `g` at all.
-export g : Int -> Int
-g x = x + 1

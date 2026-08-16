@@ -1,0 +1,3 @@
+-- definer A.
+export ga : Int -> Int
+ga x = x + 1

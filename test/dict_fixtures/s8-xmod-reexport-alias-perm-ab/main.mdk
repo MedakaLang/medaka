@@ -1,0 +1,41 @@
+-- THE PERMUTATION ROW, ORDERING 1 of 2 (packet Amendment A condition 2): ONE
+-- import spelling (the ALIAS spelling), ALL orderings of the re-export
+-- declarations, asserting ONE SIGNATURE. Section 4 of this gate permutes `impl`
+-- blocks and auto-derives its pair set from single-FILE fixtures, so it cannot
+-- reach a multi-file re-export hub -- this explicit `-ab`/`-ba` pair is how
+-- order-invariance-within-a-spelling stays graded for this shape. Two
+-- declarations means 2! = 2 orderings, so the pair IS all of them.
+--
+-- WHAT VARIES ACROSS THE PAIR: only the ORDER of `lib/hub.mdk`'s two
+-- `export import` lines. Definers, spellings, arithmetic and call shape are
+-- byte-identical between the two fixtures.
+--
+-- WHY THIS SHAPE CAN CATCH SOMETHING THE OTHER ROWS CANNOT: the fix widened the
+-- alias arm's "already mangled?" test from the ONE module the importer spelled to
+-- the LOADED MODULE-ID SET. A SET-membership test must not care which member
+-- matched, or in what order the set was built. Here the hub's public schemes
+-- carry keys mangled for TWO different definers (`lib_pa__ga`, `lib_pb__gb`), so
+-- an order-sensitive widening -- a first-match that could land on the wrong
+-- module, or a supply list whose contents depend on fold order -- would make the
+-- two orderings disagree on the value, the signature, or both.
+--
+-- GROUND TRUTH, HAND-DERIVED FROM THE DECLARATIONS BEFORE ANY BINARY WAS RUN --
+-- not captured from the engine:
+--   `ga : Int -> Int`, `ga x = x + 1` (lib/pa.mdk).
+--   `gb : Int -> Int`, `gb x = x * 10` (lib/pb.mdk).
+--   Both reach here through lib.hub's `export import`, which re-exports BY
+--   IDENTITY, so `H.ga`/`H.gb` denote those same two bindings.
+--   `combine x = H.ga x + H.gb x` is therefore `Int -> Int` -- the ONE signature
+--   both orderings must produce (section 2 asserts exactly this line).
+--   `combine 3` = (3 + 1) + (3 * 10) = 4 + 30 = 34.
+--
+-- ⚠️ THE TWO DEFINERS' ARITHMETIC DIFFERS ON PURPOSE (`+ 1` vs `* 10`). Had both
+-- used `+ 1`, swapping which definer a key resolved to would leave the value
+-- UNCHANGED and this pair would be inert -- it would pass on a compiler that had
+-- confused the two bindings entirely.
+import lib.hub as H
+
+combine : Int -> Int
+combine x = H.ga x + H.gb x
+
+main = println (combine 3)

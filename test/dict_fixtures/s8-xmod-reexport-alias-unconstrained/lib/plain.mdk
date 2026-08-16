@@ -1,0 +1,3 @@
+-- DECLARES the unconstrained binding. No class constraint anywhere on `g`.
+export g : Int -> Int
+g x = x + 1

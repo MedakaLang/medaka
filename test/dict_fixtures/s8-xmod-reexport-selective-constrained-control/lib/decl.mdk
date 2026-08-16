@@ -1,0 +1,3 @@
+-- DECLARES the CONSTRAINED sibling of s8-xmod-reexport-alias-unconstrained's `g`.
+export f : Num a => a -> a
+f x = x + 1

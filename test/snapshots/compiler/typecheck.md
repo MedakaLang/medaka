@@ -1,5 +1,5 @@
 # META
-source_lines=30337
+source_lines=30364
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted typecheck stage — port of lib/typecheck.ml's HM core.  SLICE 1:
@@ -27888,16 +27888,34 @@ resolveMemberSchemes (origin, local) depSchemes = match lookupAssoc origin depSc
 -- `import m as A` binds EVERY value m exports under `A.name` — so it enumerates the
 -- dependency's schemes rather than a fixed member list.
 --
--- Same golden/mangled split as above, made exact by testing the dep's own mangle prefix
--- (`<sanitized mid>__`) instead of guessing: on the emit path the reference is already
--- `<mid>__name`, so the key must stay mangled; on the golden path the reference is the
--- flat `A.name` that desugar produced, so bind it under that.
-aliasSchemes : String -> String -> List (String, Scheme) -> List (String, Scheme)
-aliasSchemes mid alias depSchemes = map (aliasSchemeEntry mid alias) depSchemes
+-- Same golden/mangled split as above: on the emit path the reference is already
+-- `<definer>__name`, so the key must stay mangled; on the golden path the reference is
+-- the flat `A.name` that desugar produced, so bind it under that.
+--
+-- #1337/#1427/#1472: the mangle test asks the LOADED MODULE-ID SET, not just the module
+-- the importer spelled.  A key reached through `export import` is mangled for its
+-- DEFINER, not for the re-exporter `m` that the importer named — so a spelled-mid-only
+-- prefix test answered False for it and re-bound `lib_plain__g` as `A.lib_plain__g`,
+-- while backend/private_mangle (which chases re-exports to the definer) had already
+-- rewritten the body's reference to the bare `lib_plain__g`.  The lookup then missed:
+-- for a constrained callee that reaches inferDictAt's panic and `build` fails outright
+-- (#1427); for an unconstrained one the enclosing prelude call's dict route resolves to
+-- nothing, the emitter writes a null dict operand, and the BINARY segfaults (#1472).
+--
+-- Conservatism (the property this rests on): a BARE key — no `<sanitized mid>__` prefix
+-- for any loaded module — is still re-bound under the alias.  That population is exactly
+-- the interface METHODS (publicValNames admits them; private_mangle's rename map, built
+-- from unitDefNames/pubFnNames, never renames them), which is the occurrence-carrier
+-- question #1276/#1386 own — deliberately NOT moved here.  The only keys whose binding
+-- changes are those mangled for a DIFFERENT loaded module, i.e. precisely the
+-- re-exported ones, i.e. precisely the defect.
+aliasSchemes : List String -> String -> List (String, Scheme) -> List (String, Scheme)
+aliasSchemes mids alias depSchemes =
+  map (aliasSchemeEntry mids alias) depSchemes
 
-aliasSchemeEntry : String -> String -> (String, Scheme) -> (String, Scheme)
-aliasSchemeEntry mid alias (k, s) =
-  if isMangledFor mid k then
+aliasSchemeEntry : List String -> String -> (String, Scheme) -> (String, Scheme)
+aliasSchemeEntry mids alias (k, s) =
+  if isMangledForAny mids k then
     (k, s)
   else
     (qualifiedLocal alias k, s)
@@ -27909,11 +27927,20 @@ isMangledFor mid k =
   let lp = stringLength pre
   lp <= stringLength k && stringSlice 0 lp k == pre
 
+-- is `k` mangled for ANY module in this compilation?  Short-circuiting and monomorphic
+-- on purpose (a dict-passed `any` over a closure is the measured anti-pattern here).
+isMangledForAny : List String -> String -> Bool
+isMangledForAny [] _ = False
+isMangledForAny (m::ms) k = isMangledFor m k || isMangledForAny ms k
+
 -- the (key, scheme) pairs a single `import` form brings into scope, resolving each
--- member to its (possibly mangled) key in the dependency's schemes.
-importFormSchemes : String -> UsePath -> List (String, Scheme) -> List (String, Scheme)
-importFormSchemes mid (UseAlias _ alias) depSchemes =
-  aliasSchemes mid alias depSchemes
+-- member to its (possibly mangled) key in the dependency's schemes.  `mids` is the
+-- loaded module-id set (see aliasSchemes); the non-alias arms ignore it — their
+-- resolution is definer-agnostic by construction (a `__<name>` SUFFIX test, and the
+-- wildcard form performs no mangle test at all).
+importFormSchemes : List String -> UsePath -> List (String, Scheme) -> List (String, Scheme)
+importFormSchemes mids (UseAlias _ alias) depSchemes =
+  aliasSchemes mids alias depSchemes
 importFormSchemes _ path depSchemes = match importedBindings path
   None => depSchemes
   Some bindings => flatMap (b => resolveMemberSchemes b depSchemes) bindings
@@ -28623,7 +28650,7 @@ importSeed ((DUse _ path _)::rest) depEnv =
   let depId = usePathModuleId path
   match lookupAssoc depId depEnv
     None => importSeed rest depEnv
-    Some depSchemes => importFormSchemes depId path depSchemes
+    Some depSchemes => importFormSchemes (depId :: "core" :: map fst depEnv) path depSchemes
       ++ importSeed rest depEnv
 importSeed (_::rest) depEnv = importSeed rest depEnv
 
@@ -28972,7 +28999,7 @@ reexportSeed coreV ((DUse True path _)::rest) depEnv =
   let src = if depId == "core" then Some coreV else lookupAssoc depId depEnv
   match src
     None => reexportSeed coreV rest depEnv
-    Some depSchemes => importFormSchemes depId path depSchemes
+    Some depSchemes => importFormSchemes (depId :: "core" :: map fst depEnv) path depSchemes
       ++ reexportSeed coreV rest depEnv
 reexportSeed coreV (_::rest) depEnv = reexportSeed coreV rest depEnv
 
@@ -35020,14 +35047,17 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "endsWithStr" ((PVar "suf") (PVar "s")) (EBlock (DoLet false false (PVar "ls") (EApp (EVar "stringLength") (EVar "s"))) (DoLet false false (PVar "lsuf") (EApp (EVar "stringLength") (EVar "suf"))) (DoExpr (EBinOp "&&" (EBinOp "<=" (EVar "lsuf") (EVar "ls")) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "-" (EVar "ls") (EVar "lsuf"))) (EVar "ls")) (EVar "s")) (EVar "suf"))))))
 (DTypeSig false "resolveMemberSchemes" (TyFun (TyTuple (TyCon "String") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))))
 (DFunDef false "resolveMemberSchemes" ((PTuple (PVar "origin") (PVar "local")) (PVar "depSchemes")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "origin")) (EVar "depSchemes")) (arm (PCon "Some" (PVar "s")) () (EListLit (ETuple (EVar "local") (EVar "s")))) (arm (PCon "None") () (EApp (EApp (EVar "filter") (ELam ((PVar "kv")) (EApp (EApp (EVar "endsWithStr") (EApp (EVar "memberSuffix") (EVar "origin"))) (EApp (EVar "fst") (EVar "kv"))))) (EVar "depSchemes")))))
-(DTypeSig false "aliasSchemes" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))))))
-(DFunDef false "aliasSchemes" ((PVar "mid") (PVar "alias") (PVar "depSchemes")) (EApp (EApp (EVar "map") (EApp (EApp (EVar "aliasSchemeEntry") (EVar "mid")) (EVar "alias"))) (EVar "depSchemes")))
-(DTypeSig false "aliasSchemeEntry" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyTuple (TyCon "String") (TyCon "Scheme")) (TyTuple (TyCon "String") (TyCon "Scheme"))))))
-(DFunDef false "aliasSchemeEntry" ((PVar "mid") (PVar "alias") (PTuple (PVar "k") (PVar "s"))) (EIf (EApp (EApp (EVar "isMangledFor") (EVar "mid")) (EVar "k")) (ETuple (EVar "k") (EVar "s")) (ETuple (EApp (EApp (EVar "qualifiedLocal") (EVar "alias")) (EVar "k")) (EVar "s"))))
+(DTypeSig false "aliasSchemes" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))))))
+(DFunDef false "aliasSchemes" ((PVar "mids") (PVar "alias") (PVar "depSchemes")) (EApp (EApp (EVar "map") (EApp (EApp (EVar "aliasSchemeEntry") (EVar "mids")) (EVar "alias"))) (EVar "depSchemes")))
+(DTypeSig false "aliasSchemeEntry" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyTuple (TyCon "String") (TyCon "Scheme")) (TyTuple (TyCon "String") (TyCon "Scheme"))))))
+(DFunDef false "aliasSchemeEntry" ((PVar "mids") (PVar "alias") (PTuple (PVar "k") (PVar "s"))) (EIf (EApp (EApp (EVar "isMangledForAny") (EVar "mids")) (EVar "k")) (ETuple (EVar "k") (EVar "s")) (ETuple (EApp (EApp (EVar "qualifiedLocal") (EVar "alias")) (EVar "k")) (EVar "s"))))
 (DTypeSig false "isMangledFor" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "isMangledFor" ((PVar "mid") (PVar "k")) (EBlock (DoLet false false (PVar "pre") (EApp (EApp (EVar "mangledName") (EVar "mid")) (ELit (LString "")))) (DoLet false false (PVar "lp") (EApp (EVar "stringLength") (EVar "pre"))) (DoExpr (EBinOp "&&" (EBinOp "<=" (EVar "lp") (EApp (EVar "stringLength") (EVar "k"))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "lp")) (EVar "k")) (EVar "pre"))))))
-(DTypeSig false "importFormSchemes" (TyFun (TyCon "String") (TyFun (TyCon "UsePath") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))))))
-(DFunDef false "importFormSchemes" ((PVar "mid") (PCon "UseAlias" PWild (PVar "alias")) (PVar "depSchemes")) (EApp (EApp (EApp (EVar "aliasSchemes") (EVar "mid")) (EVar "alias")) (EVar "depSchemes")))
+(DTypeSig false "isMangledForAny" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyCon "Bool"))))
+(DFunDef false "isMangledForAny" ((PList) PWild) (EVar "False"))
+(DFunDef false "isMangledForAny" ((PCons (PVar "m") (PVar "ms")) (PVar "k")) (EBinOp "||" (EApp (EApp (EVar "isMangledFor") (EVar "m")) (EVar "k")) (EApp (EApp (EVar "isMangledForAny") (EVar "ms")) (EVar "k"))))
+(DTypeSig false "importFormSchemes" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "UsePath") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))))))
+(DFunDef false "importFormSchemes" ((PVar "mids") (PCon "UseAlias" PWild (PVar "alias")) (PVar "depSchemes")) (EApp (EApp (EApp (EVar "aliasSchemes") (EVar "mids")) (EVar "alias")) (EVar "depSchemes")))
 (DFunDef false "importFormSchemes" (PWild (PVar "path") (PVar "depSchemes")) (EMatch (EApp (EVar "importedBindings") (EVar "path")) (arm (PCon "None") () (EVar "depSchemes")) (arm (PCon "Some" (PVar "bindings")) () (EApp (EApp (EVar "flatMap") (ELam ((PVar "b")) (EApp (EApp (EVar "resolveMemberSchemes") (EVar "b")) (EVar "depSchemes")))) (EVar "bindings")))))
 (DTypeSig false "importedSchemeOblEntries" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "VecObl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "VecObl")))))))
 (DFunDef false "importedSchemeOblEntries" ((PList) PWild) (EListLit))
@@ -35186,7 +35216,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "importSeed" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))))
 (DFunDef false "importSeed" ((PList) PWild) (EListLit))
 (DFunDef false "importSeed" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest")) (PVar "depEnv")) (EBinOp "++" (EApp (EApp (EVar "importSeed") (EListLit (EVar "d"))) (EVar "depEnv")) (EApp (EApp (EVar "importSeed") (EVar "rest")) (EVar "depEnv"))))
-(DFunDef false "importSeed" ((PCons (PCon "DUse" PWild (PVar "path") PWild) (PVar "rest")) (PVar "depEnv")) (EBlock (DoLet false false (PVar "depId") (EApp (EVar "usePathModuleId") (EVar "path"))) (DoExpr (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "depId")) (EVar "depEnv")) (arm (PCon "None") () (EApp (EApp (EVar "importSeed") (EVar "rest")) (EVar "depEnv"))) (arm (PCon "Some" (PVar "depSchemes")) () (EBinOp "++" (EApp (EApp (EApp (EVar "importFormSchemes") (EVar "depId")) (EVar "path")) (EVar "depSchemes")) (EApp (EApp (EVar "importSeed") (EVar "rest")) (EVar "depEnv"))))))))
+(DFunDef false "importSeed" ((PCons (PCon "DUse" PWild (PVar "path") PWild) (PVar "rest")) (PVar "depEnv")) (EBlock (DoLet false false (PVar "depId") (EApp (EVar "usePathModuleId") (EVar "path"))) (DoExpr (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "depId")) (EVar "depEnv")) (arm (PCon "None") () (EApp (EApp (EVar "importSeed") (EVar "rest")) (EVar "depEnv"))) (arm (PCon "Some" (PVar "depSchemes")) () (EBinOp "++" (EApp (EApp (EApp (EVar "importFormSchemes") (EBinOp "::" (EVar "depId") (EBinOp "::" (ELit (LString "core")) (EApp (EApp (EVar "map") (EVar "fst")) (EVar "depEnv"))))) (EVar "path")) (EVar "depSchemes")) (EApp (EApp (EVar "importSeed") (EVar "rest")) (EVar "depEnv"))))))))
 (DFunDef false "importSeed" ((PCons PWild (PVar "rest")) (PVar "depEnv")) (EApp (EApp (EVar "importSeed") (EVar "rest")) (EVar "depEnv")))
 (DTypeSig false "importedCtorTypeDecls" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "DeclEnvModule")) (TyApp (TyCon "List") (TyCon "Decl"))))))
 (DFunDef false "importedCtorTypeDecls" ((PVar "unitDecls") (PVar "cur") (PVar "rows")) (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "importOverlayDecls") (EVar "cur")) (EVar "rows"))) (EVar "unitDecls")))
@@ -35235,7 +35265,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "reexportSeed" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))))))
 (DFunDef false "reexportSeed" (PWild (PList) PWild) (EListLit))
 (DFunDef false "reexportSeed" ((PVar "coreV") (PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest")) (PVar "depEnv")) (EBinOp "++" (EApp (EApp (EApp (EVar "reexportSeed") (EVar "coreV")) (EListLit (EVar "d"))) (EVar "depEnv")) (EApp (EApp (EApp (EVar "reexportSeed") (EVar "coreV")) (EVar "rest")) (EVar "depEnv"))))
-(DFunDef false "reexportSeed" ((PVar "coreV") (PCons (PCon "DUse" (PCon "True") (PVar "path") PWild) (PVar "rest")) (PVar "depEnv")) (EBlock (DoLet false false (PVar "depId") (EApp (EVar "usePathModuleId") (EVar "path"))) (DoLet false false (PVar "src") (EIf (EBinOp "==" (EVar "depId") (ELit (LString "core"))) (EApp (EVar "Some") (EVar "coreV")) (EApp (EApp (EVar "lookupAssoc") (EVar "depId")) (EVar "depEnv")))) (DoExpr (EMatch (EVar "src") (arm (PCon "None") () (EApp (EApp (EApp (EVar "reexportSeed") (EVar "coreV")) (EVar "rest")) (EVar "depEnv"))) (arm (PCon "Some" (PVar "depSchemes")) () (EBinOp "++" (EApp (EApp (EApp (EVar "importFormSchemes") (EVar "depId")) (EVar "path")) (EVar "depSchemes")) (EApp (EApp (EApp (EVar "reexportSeed") (EVar "coreV")) (EVar "rest")) (EVar "depEnv"))))))))
+(DFunDef false "reexportSeed" ((PVar "coreV") (PCons (PCon "DUse" (PCon "True") (PVar "path") PWild) (PVar "rest")) (PVar "depEnv")) (EBlock (DoLet false false (PVar "depId") (EApp (EVar "usePathModuleId") (EVar "path"))) (DoLet false false (PVar "src") (EIf (EBinOp "==" (EVar "depId") (ELit (LString "core"))) (EApp (EVar "Some") (EVar "coreV")) (EApp (EApp (EVar "lookupAssoc") (EVar "depId")) (EVar "depEnv")))) (DoExpr (EMatch (EVar "src") (arm (PCon "None") () (EApp (EApp (EApp (EVar "reexportSeed") (EVar "coreV")) (EVar "rest")) (EVar "depEnv"))) (arm (PCon "Some" (PVar "depSchemes")) () (EBinOp "++" (EApp (EApp (EApp (EVar "importFormSchemes") (EBinOp "::" (EVar "depId") (EBinOp "::" (ELit (LString "core")) (EApp (EApp (EVar "map") (EVar "fst")) (EVar "depEnv"))))) (EVar "path")) (EVar "depSchemes")) (EApp (EApp (EApp (EVar "reexportSeed") (EVar "coreV")) (EVar "rest")) (EVar "depEnv"))))))))
 (DFunDef false "reexportSeed" ((PVar "coreV") (PCons PWild (PVar "rest")) (PVar "depEnv")) (EApp (EApp (EApp (EVar "reexportSeed") (EVar "coreV")) (EVar "rest")) (EVar "depEnv")))
 (DTypeSig false "foldModules" (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyVar "e"))))))) (TyFun (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyVar "e") (TyFun (TyVar "acc") (TyVar "acc"))))) (TyFun (TyVar "acc") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyVar "acc")))))))))))))
 (DFunDef false "foldModules" (PWild PWild PWild PWild (PVar "base") PWild PWild PWild PWild PWild (PList)) (EVar "base"))
@@ -40050,14 +40080,17 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "endsWithStr" ((PVar "suf") (PVar "s")) (EBlock (DoLet false false (PVar "ls") (EApp (EVar "stringLength") (EVar "s"))) (DoLet false false (PVar "lsuf") (EApp (EVar "stringLength") (EVar "suf"))) (DoExpr (EBinOp "&&" (EBinOp "<=" (EVar "lsuf") (EVar "ls")) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "-" (EVar "ls") (EVar "lsuf"))) (EVar "ls")) (EVar "s")) (EVar "suf"))))))
 (DTypeSig false "resolveMemberSchemes" (TyFun (TyTuple (TyCon "String") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))))
 (DFunDef false "resolveMemberSchemes" ((PTuple (PVar "origin") (PVar "local")) (PVar "depSchemes")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "origin")) (EVar "depSchemes")) (arm (PCon "Some" (PVar "s")) () (EListLit (ETuple (EVar "local") (EVar "s")))) (arm (PCon "None") () (EApp (EApp (EMethodRef "filter") (ELam ((PVar "kv")) (EApp (EApp (EVar "endsWithStr") (EApp (EVar "memberSuffix") (EVar "origin"))) (EApp (EVar "fst") (EVar "kv"))))) (EVar "depSchemes")))))
-(DTypeSig false "aliasSchemes" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))))))
-(DFunDef false "aliasSchemes" ((PVar "mid") (PVar "alias") (PVar "depSchemes")) (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "aliasSchemeEntry") (EVar "mid")) (EVar "alias"))) (EVar "depSchemes")))
-(DTypeSig false "aliasSchemeEntry" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyTuple (TyCon "String") (TyCon "Scheme")) (TyTuple (TyCon "String") (TyCon "Scheme"))))))
-(DFunDef false "aliasSchemeEntry" ((PVar "mid") (PVar "alias") (PTuple (PVar "k") (PVar "s"))) (EIf (EApp (EApp (EVar "isMangledFor") (EVar "mid")) (EVar "k")) (ETuple (EVar "k") (EVar "s")) (ETuple (EApp (EApp (EVar "qualifiedLocal") (EVar "alias")) (EVar "k")) (EVar "s"))))
+(DTypeSig false "aliasSchemes" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))))))
+(DFunDef false "aliasSchemes" ((PVar "mids") (PVar "alias") (PVar "depSchemes")) (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "aliasSchemeEntry") (EVar "mids")) (EVar "alias"))) (EVar "depSchemes")))
+(DTypeSig false "aliasSchemeEntry" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyTuple (TyCon "String") (TyCon "Scheme")) (TyTuple (TyCon "String") (TyCon "Scheme"))))))
+(DFunDef false "aliasSchemeEntry" ((PVar "mids") (PVar "alias") (PTuple (PVar "k") (PVar "s"))) (EIf (EApp (EApp (EVar "isMangledForAny") (EVar "mids")) (EVar "k")) (ETuple (EVar "k") (EVar "s")) (ETuple (EApp (EApp (EVar "qualifiedLocal") (EVar "alias")) (EVar "k")) (EVar "s"))))
 (DTypeSig false "isMangledFor" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "isMangledFor" ((PVar "mid") (PVar "k")) (EBlock (DoLet false false (PVar "pre") (EApp (EApp (EVar "mangledName") (EVar "mid")) (ELit (LString "")))) (DoLet false false (PVar "lp") (EApp (EVar "stringLength") (EVar "pre"))) (DoExpr (EBinOp "&&" (EBinOp "<=" (EVar "lp") (EApp (EVar "stringLength") (EVar "k"))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "lp")) (EVar "k")) (EVar "pre"))))))
-(DTypeSig false "importFormSchemes" (TyFun (TyCon "String") (TyFun (TyCon "UsePath") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))))))
-(DFunDef false "importFormSchemes" ((PVar "mid") (PCon "UseAlias" PWild (PVar "alias")) (PVar "depSchemes")) (EApp (EApp (EApp (EVar "aliasSchemes") (EVar "mid")) (EVar "alias")) (EVar "depSchemes")))
+(DTypeSig false "isMangledForAny" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyCon "Bool"))))
+(DFunDef false "isMangledForAny" ((PList) PWild) (EVar "False"))
+(DFunDef false "isMangledForAny" ((PCons (PVar "m") (PVar "ms")) (PVar "k")) (EBinOp "||" (EApp (EApp (EVar "isMangledFor") (EVar "m")) (EVar "k")) (EApp (EApp (EVar "isMangledForAny") (EVar "ms")) (EVar "k"))))
+(DTypeSig false "importFormSchemes" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "UsePath") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))))))
+(DFunDef false "importFormSchemes" ((PVar "mids") (PCon "UseAlias" PWild (PVar "alias")) (PVar "depSchemes")) (EApp (EApp (EApp (EVar "aliasSchemes") (EVar "mids")) (EVar "alias")) (EVar "depSchemes")))
 (DFunDef false "importFormSchemes" (PWild (PVar "path") (PVar "depSchemes")) (EMatch (EApp (EVar "importedBindings") (EVar "path")) (arm (PCon "None") () (EVar "depSchemes")) (arm (PCon "Some" (PVar "bindings")) () (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "b")) (EApp (EApp (EVar "resolveMemberSchemes") (EVar "b")) (EVar "depSchemes")))) (EVar "bindings")))))
 (DTypeSig false "importedSchemeOblEntries" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "VecObl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "VecObl")))))))
 (DFunDef false "importedSchemeOblEntries" ((PList) PWild) (EListLit))
@@ -40216,7 +40249,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "importSeed" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))))
 (DFunDef false "importSeed" ((PList) PWild) (EListLit))
 (DFunDef false "importSeed" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest")) (PVar "depEnv")) (EBinOp "++" (EApp (EApp (EVar "importSeed") (EListLit (EVar "d"))) (EVar "depEnv")) (EApp (EApp (EVar "importSeed") (EVar "rest")) (EVar "depEnv"))))
-(DFunDef false "importSeed" ((PCons (PCon "DUse" PWild (PVar "path") PWild) (PVar "rest")) (PVar "depEnv")) (EBlock (DoLet false false (PVar "depId") (EApp (EVar "usePathModuleId") (EVar "path"))) (DoExpr (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "depId")) (EVar "depEnv")) (arm (PCon "None") () (EApp (EApp (EVar "importSeed") (EVar "rest")) (EVar "depEnv"))) (arm (PCon "Some" (PVar "depSchemes")) () (EBinOp "++" (EApp (EApp (EApp (EVar "importFormSchemes") (EVar "depId")) (EVar "path")) (EVar "depSchemes")) (EApp (EApp (EVar "importSeed") (EVar "rest")) (EVar "depEnv"))))))))
+(DFunDef false "importSeed" ((PCons (PCon "DUse" PWild (PVar "path") PWild) (PVar "rest")) (PVar "depEnv")) (EBlock (DoLet false false (PVar "depId") (EApp (EVar "usePathModuleId") (EVar "path"))) (DoExpr (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "depId")) (EVar "depEnv")) (arm (PCon "None") () (EApp (EApp (EVar "importSeed") (EVar "rest")) (EVar "depEnv"))) (arm (PCon "Some" (PVar "depSchemes")) () (EBinOp "++" (EApp (EApp (EApp (EVar "importFormSchemes") (EBinOp "::" (EVar "depId") (EBinOp "::" (ELit (LString "core")) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "depEnv"))))) (EVar "path")) (EVar "depSchemes")) (EApp (EApp (EVar "importSeed") (EVar "rest")) (EVar "depEnv"))))))))
 (DFunDef false "importSeed" ((PCons PWild (PVar "rest")) (PVar "depEnv")) (EApp (EApp (EVar "importSeed") (EVar "rest")) (EVar "depEnv")))
 (DTypeSig false "importedCtorTypeDecls" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "DeclEnvModule")) (TyApp (TyCon "List") (TyCon "Decl"))))))
 (DFunDef false "importedCtorTypeDecls" ((PVar "unitDecls") (PVar "cur") (PVar "rows")) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "importOverlayDecls") (EVar "cur")) (EVar "rows"))) (EVar "unitDecls")))
@@ -40265,7 +40298,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "reexportSeed" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))))))
 (DFunDef false "reexportSeed" (PWild (PList) PWild) (EListLit))
 (DFunDef false "reexportSeed" ((PVar "coreV") (PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest")) (PVar "depEnv")) (EBinOp "++" (EApp (EApp (EApp (EVar "reexportSeed") (EVar "coreV")) (EListLit (EVar "d"))) (EVar "depEnv")) (EApp (EApp (EApp (EVar "reexportSeed") (EVar "coreV")) (EVar "rest")) (EVar "depEnv"))))
-(DFunDef false "reexportSeed" ((PVar "coreV") (PCons (PCon "DUse" (PCon "True") (PVar "path") PWild) (PVar "rest")) (PVar "depEnv")) (EBlock (DoLet false false (PVar "depId") (EApp (EVar "usePathModuleId") (EVar "path"))) (DoLet false false (PVar "src") (EIf (EBinOp "==" (EVar "depId") (ELit (LString "core"))) (EApp (EVar "Some") (EVar "coreV")) (EApp (EApp (EVar "lookupAssoc") (EVar "depId")) (EVar "depEnv")))) (DoExpr (EMatch (EVar "src") (arm (PCon "None") () (EApp (EApp (EApp (EVar "reexportSeed") (EVar "coreV")) (EVar "rest")) (EVar "depEnv"))) (arm (PCon "Some" (PVar "depSchemes")) () (EBinOp "++" (EApp (EApp (EApp (EVar "importFormSchemes") (EVar "depId")) (EVar "path")) (EVar "depSchemes")) (EApp (EApp (EApp (EVar "reexportSeed") (EVar "coreV")) (EVar "rest")) (EVar "depEnv"))))))))
+(DFunDef false "reexportSeed" ((PVar "coreV") (PCons (PCon "DUse" (PCon "True") (PVar "path") PWild) (PVar "rest")) (PVar "depEnv")) (EBlock (DoLet false false (PVar "depId") (EApp (EVar "usePathModuleId") (EVar "path"))) (DoLet false false (PVar "src") (EIf (EBinOp "==" (EVar "depId") (ELit (LString "core"))) (EApp (EVar "Some") (EVar "coreV")) (EApp (EApp (EVar "lookupAssoc") (EVar "depId")) (EVar "depEnv")))) (DoExpr (EMatch (EVar "src") (arm (PCon "None") () (EApp (EApp (EApp (EVar "reexportSeed") (EVar "coreV")) (EVar "rest")) (EVar "depEnv"))) (arm (PCon "Some" (PVar "depSchemes")) () (EBinOp "++" (EApp (EApp (EApp (EVar "importFormSchemes") (EBinOp "::" (EVar "depId") (EBinOp "::" (ELit (LString "core")) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "depEnv"))))) (EVar "path")) (EVar "depSchemes")) (EApp (EApp (EApp (EVar "reexportSeed") (EVar "coreV")) (EVar "rest")) (EVar "depEnv"))))))))
 (DFunDef false "reexportSeed" ((PVar "coreV") (PCons PWild (PVar "rest")) (PVar "depEnv")) (EApp (EApp (EApp (EVar "reexportSeed") (EVar "coreV")) (EVar "rest")) (EVar "depEnv")))
 (DTypeSig false "foldModules" (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyVar "e"))))))) (TyFun (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyVar "e") (TyFun (TyVar "acc") (TyVar "acc"))))) (TyFun (TyVar "acc") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyVar "acc")))))))))))))
 (DFunDef false "foldModules" (PWild PWild PWild PWild (PVar "base") PWild PWild PWild PWild PWild (PList)) (EVar "base"))

@@ -1,0 +1,41 @@
+-- #1427 (alias-importer re-export -> build fails, unbound constrained fn) --
+-- THE POSITIVE ROW REPLACING THE DRAINED PIN
+-- `1427-alias-reexport-constrained-build-fails`. A pin asserts a bug STILL
+-- REPRODUCES, so a fix deletes it and the S0 has NO guard unless a positive row
+-- replaces it.
+--
+-- SAME conjunction as the unconstrained sibling (`export import` re-export + an
+-- ALIAS importer spelling) with ONE dimension flipped: the callee is CONSTRAINED
+-- (`Num a => a -> a`). That changes only the SYMPTOM, not the channel: the same
+-- missed scheme-env lookup that silently corrupted a prelude dict there reaches
+-- `inferDictAt`'s panic here, so `medaka build` failed OUTRIGHT pre-fix
+-- (exit 1, `E-PANIC: unbound constrained fn: lib_decl__f`, no binary).
+--
+-- GROUND TRUTH, HAND-DERIVED FROM THE DECLARATIONS BEFORE ANY BINARY WAS RUN:
+--   `f : Num a => a -> a`, `f x = x + 1`. `R.f 1` instantiates at `Int`
+--   (defaulting the `Num` goal to the literal's type), so `R.f 1` = 2 and the
+--   BUILT BINARY prints `2`.
+--
+-- 🚨 THE `run` CELL IS **REJECT**, AND THAT IS PINNED-AS-MEASURED, NOT FORCED
+-- GREEN. `medaka run` still panics `E-PANIC: intToString: not an Int` (exit 1,
+-- EMPTY stdout) on this program. That panic is a DIFFERENT MECHANISM on a
+-- DIFFERENT channel -- the #1369/#1425 DICT-ARITY seam, owned by the sprint
+-- slice `S-dict-arity-seam`, not by the scheme-environment fix that drained the
+-- build arm here. Its own control (`s8-xmod-reexport-selective-constrained-
+-- control`) shows the identical panic under the SELECTIVE spelling, which is
+-- what proves the residue is NOT the alias spelling and NOT this fix's to
+-- close. #1427 therefore stays OPEN until that slice lands and repairs `run`.
+--
+-- MODE IS PLAIN `BUILD_EXACT`, NOT THE `<run>%%<build>` SPLIT, and that is a
+-- measured limitation rather than a choice: `run` emits ZERO bytes on stdout
+-- before dying, and the split half is compared through `printf '%b\n'`, which
+-- turns an empty expectation into a 1-byte newline that can never match a
+-- 0-byte capture. So there is no reach point to pin here -- and `run`'s stderr
+-- is ungradeable by this harness (#1130), so the panic signature is unpinnable
+-- too. What IS asserted: `run` REJECTS (nonzero), and `build` ACCEPTS printing
+-- exactly `2`. The day the dict-arity seam is repaired `run` flips to ACCEPT
+-- and this row REDS -- which is the drain, not a regression: re-point it to
+-- ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|2 and close #1427 then.
+import lib.rsel as R
+
+main = println (R.f 1)

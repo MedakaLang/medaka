@@ -1,0 +1,20 @@
+-- CONTROL for `s8-xmod-reexport-alias-unconstrained`, and the canary that keeps
+-- it honest. BYTE-IDENTICAL program but for ONE dimension: the importer SPELLING.
+-- SELECTIVE import through the SAME re-export hop (`lib.rplain.{g}` / bare `g 1`)
+-- instead of the ALIAS spelling (`as R` / `R.g 1`). Same definer, same
+-- re-exporter, same unconstrained `g`, same call shape.
+--
+-- GROUND TRUTH, HAND-DERIVED IDENTICALLY: `g x = x + 1` at `Int`, so `g 1` = 2.
+--
+-- WHY THE PAIR, NOT THIS FILE ALONE: this spelling was ALWAYS green (it resolves
+-- through `resolveMemberSchemes`, whose fallback is a `__<name>` SUFFIX test that
+-- is definer-agnostic BY CONSTRUCTION -- `"__g"` matches `lib_plain__g` no matter
+-- which module mangled it). The alias arm's prefix test was the broken one. So
+-- the pair is read by WHICH MEMBER REDS: sibling red + control green localises a
+-- regression to the alias spelling; both red says the re-export hop itself broke.
+-- The value is deliberately the SAME on both -- the answer must not depend on the
+-- spelling -- which is exactly why the values cannot discriminate and section 3
+-- carries the assertion on both.
+import lib.rplain.{g}
+
+main = println (g 1)

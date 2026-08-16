@@ -27884,16 +27884,34 @@ resolveMemberSchemes (origin, local) depSchemes = match lookupAssoc origin depSc
 -- `import m as A` binds EVERY value m exports under `A.name` — so it enumerates the
 -- dependency's schemes rather than a fixed member list.
 --
--- Same golden/mangled split as above, made exact by testing the dep's own mangle prefix
--- (`<sanitized mid>__`) instead of guessing: on the emit path the reference is already
--- `<mid>__name`, so the key must stay mangled; on the golden path the reference is the
--- flat `A.name` that desugar produced, so bind it under that.
-aliasSchemes : String -> String -> List (String, Scheme) -> List (String, Scheme)
-aliasSchemes mid alias depSchemes = map (aliasSchemeEntry mid alias) depSchemes
+-- Same golden/mangled split as above: on the emit path the reference is already
+-- `<definer>__name`, so the key must stay mangled; on the golden path the reference is
+-- the flat `A.name` that desugar produced, so bind it under that.
+--
+-- #1337/#1427/#1472: the mangle test asks the LOADED MODULE-ID SET, not just the module
+-- the importer spelled.  A key reached through `export import` is mangled for its
+-- DEFINER, not for the re-exporter `m` that the importer named — so a spelled-mid-only
+-- prefix test answered False for it and re-bound `lib_plain__g` as `A.lib_plain__g`,
+-- while backend/private_mangle (which chases re-exports to the definer) had already
+-- rewritten the body's reference to the bare `lib_plain__g`.  The lookup then missed:
+-- for a constrained callee that reaches inferDictAt's panic and `build` fails outright
+-- (#1427); for an unconstrained one the enclosing prelude call's dict route resolves to
+-- nothing, the emitter writes a null dict operand, and the BINARY segfaults (#1472).
+--
+-- Conservatism (the property this rests on): a BARE key — no `<sanitized mid>__` prefix
+-- for any loaded module — is still re-bound under the alias.  That population is exactly
+-- the interface METHODS (publicValNames admits them; private_mangle's rename map, built
+-- from unitDefNames/pubFnNames, never renames them), which is the occurrence-carrier
+-- question #1276/#1386 own — deliberately NOT moved here.  The only keys whose binding
+-- changes are those mangled for a DIFFERENT loaded module, i.e. precisely the
+-- re-exported ones, i.e. precisely the defect.
+aliasSchemes : List String -> String -> List (String, Scheme) -> List (String, Scheme)
+aliasSchemes mids alias depSchemes =
+  map (aliasSchemeEntry mids alias) depSchemes
 
-aliasSchemeEntry : String -> String -> (String, Scheme) -> (String, Scheme)
-aliasSchemeEntry mid alias (k, s) =
-  if isMangledFor mid k then
+aliasSchemeEntry : List String -> String -> (String, Scheme) -> (String, Scheme)
+aliasSchemeEntry mids alias (k, s) =
+  if isMangledForAny mids k then
     (k, s)
   else
     (qualifiedLocal alias k, s)
@@ -27905,11 +27923,20 @@ isMangledFor mid k =
   let lp = stringLength pre
   lp <= stringLength k && stringSlice 0 lp k == pre
 
+-- is `k` mangled for ANY module in this compilation?  Short-circuiting and monomorphic
+-- on purpose (a dict-passed `any` over a closure is the measured anti-pattern here).
+isMangledForAny : List String -> String -> Bool
+isMangledForAny [] _ = False
+isMangledForAny (m::ms) k = isMangledFor m k || isMangledForAny ms k
+
 -- the (key, scheme) pairs a single `import` form brings into scope, resolving each
--- member to its (possibly mangled) key in the dependency's schemes.
-importFormSchemes : String -> UsePath -> List (String, Scheme) -> List (String, Scheme)
-importFormSchemes mid (UseAlias _ alias) depSchemes =
-  aliasSchemes mid alias depSchemes
+-- member to its (possibly mangled) key in the dependency's schemes.  `mids` is the
+-- loaded module-id set (see aliasSchemes); the non-alias arms ignore it — their
+-- resolution is definer-agnostic by construction (a `__<name>` SUFFIX test, and the
+-- wildcard form performs no mangle test at all).
+importFormSchemes : List String -> UsePath -> List (String, Scheme) -> List (String, Scheme)
+importFormSchemes mids (UseAlias _ alias) depSchemes =
+  aliasSchemes mids alias depSchemes
 importFormSchemes _ path depSchemes = match importedBindings path
   None => depSchemes
   Some bindings => flatMap (b => resolveMemberSchemes b depSchemes) bindings
@@ -28619,7 +28646,7 @@ importSeed ((DUse _ path _)::rest) depEnv =
   let depId = usePathModuleId path
   match lookupAssoc depId depEnv
     None => importSeed rest depEnv
-    Some depSchemes => importFormSchemes depId path depSchemes
+    Some depSchemes => importFormSchemes (depId :: "core" :: map fst depEnv) path depSchemes
       ++ importSeed rest depEnv
 importSeed (_::rest) depEnv = importSeed rest depEnv
 
@@ -28968,7 +28995,7 @@ reexportSeed coreV ((DUse True path _)::rest) depEnv =
   let src = if depId == "core" then Some coreV else lookupAssoc depId depEnv
   match src
     None => reexportSeed coreV rest depEnv
-    Some depSchemes => importFormSchemes depId path depSchemes
+    Some depSchemes => importFormSchemes (depId :: "core" :: map fst depEnv) path depSchemes
       ++ reexportSeed coreV rest depEnv
 reexportSeed coreV (_::rest) depEnv = reexportSeed coreV rest depEnv
 
