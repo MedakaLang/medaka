@@ -1,0 +1,3 @@
+import dmod.{debug}
+
+main = println (debug 5 == "d")
