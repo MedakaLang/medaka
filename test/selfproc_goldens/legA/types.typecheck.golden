@@ -1582,6 +1582,9 @@ seedEffectDomains : Unit -> Unit
 selectIfaceRows : UsePath -> List (String, List String) -> List (String, List String)
 selectReqImpl : Map String (List ImplEntry) -> IfaceRef -> String -> Mono -> List Mono -> Option (Ty, List Ty, List Require)
 selfBinding : String -> (String, String)
+selfDeclArities : String -> List Decl -> List ((String, String), a) -> List (String, a) -> List (String, a)
+selfNameRows : List Decl -> List (String, a) -> List (String, a)
+selfQualEntries : String -> Map String Unit -> List ((String, String), a) -> List (String, a)
 setCardCap : Int
 setCoherenceUserDecls : List Decl -> Unit
 setCrossFunConstraintTables : (List (String, List Int), List (String, List IfaceRef)) -> Unit

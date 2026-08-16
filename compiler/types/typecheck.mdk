@@ -21785,7 +21785,9 @@ checkBodyImpl seed mode prog0 =
       let _ = setRef perRun.value.flatUserShadowNamesRef definerShadows
       let _ = setRef perRun.value.flatCoreFnNamesRef (namesToSet (map fst (funDefs coreProg)) omEmpty)
       ()
-    Module _ _ _ =>
+    -- #1425 site 2: `mid` is BOUND here now — the three lockstep re-keys at the end of this
+    -- arm need this module's identity, and the arm can no longer discard it.
+    Module mid _ _ =>
       let _ = setRef driverState.value.standaloneValuesRef (dedup (importerShadows ++ definerShadows))
       let _ = setRef perRun.value.shadowStandaloneSchemesRef (pickStandaloneSchemes importerShadows seed)
       let _ = setRef driverState.value.methodDispatchIdxRef crossRun.value.universeMethodDispatchIdxRef.value
@@ -21800,6 +21802,18 @@ checkBodyImpl seed mode prog0 =
         ++ perRun.value.funConstraintIfacesRef.value)
       let _ = setRef perRun.value.funConstraintDeclaredRef (aliasConstraintEntries prog crossRun.value.crossModuleFunConstraintDeclaredQualRef.value
         ++ perRun.value.funConstraintDeclaredRef.value)
+      -- #1425 site 2: the three tables above were just seeded WHOLESALE from graph-wide
+      -- BARE-NAME accumulators, so every name this module declares is currently answered by
+      -- whichever module's same-named binding the topological order happened to put first.
+      -- Re-key those names — and only those — onto this module's own `(mid, name)` rows.
+      -- Three writes, in lockstep, per B-2.2-f (#1113): the declared-prefix sidecar rides the
+      -- IDS table, and this is a whole-table replacement of all three.
+      let _ = setRef perRun.value.funConstraintsRef
+        (selfDeclArities mid prog crossRun.value.crossModuleFunConstraintsQualRef.value perRun.value.funConstraintsRef.value)
+      let _ = setRef perRun.value.funConstraintIfacesRef
+        (selfDeclArities mid prog crossRun.value.crossModuleFunConstraintIfacesQualRef.value perRun.value.funConstraintIfacesRef.value)
+      let _ = setRef perRun.value.funConstraintDeclaredRef
+        (selfDeclArities mid prog crossRun.value.crossModuleFunConstraintDeclaredQualRef.value perRun.value.funConstraintDeclaredRef.value)
       let _ = setRef perRun.value.currentImportDefinersRef (importDefinersOf prog)
       let _ = setRef perRun.value.currentImportOriginsRef (importOriginsOf prog)
       -- #1114 (#845): this module's imported SCHEME CONTEXTS, keyed by local spelling.
@@ -22053,16 +22067,21 @@ checkBodyImpl seed mode prog0 =
     Flat _ => ()
     Module mid _ _ =>
       let _ = expandSupersTable driverState.value.superDeclsRef.value
-      let _ = setRef crossRun.value.crossModuleFunConstraintsRef perRun.value.funConstraintsRef.value
+      -- #1425: restore the rows the per-module view masked (see `selfNameRows`) — the view
+      -- must not propagate as a graph-wide deletion into the next module's seed.
+      let _ = setRef crossRun.value.crossModuleFunConstraintsRef
+        (perRun.value.funConstraintsRef.value ++ selfNameRows prog crossRun.value.crossModuleFunConstraintsRef.value)
       let _ = setRef crossRun.value.crossModuleFunConstraintsQualRef
         (attributeModuleEntries mid prog perRun.value.funConstraintsRef.value ++ crossRun.value.crossModuleFunConstraintsQualRef.value)
       let _ = setRef crossRun.value.crossModuleFunConstraintIfacesQualRef
         (attributeModuleEntries mid prog perRun.value.funConstraintIfacesRef.value ++ crossRun.value.crossModuleFunConstraintIfacesQualRef.value)
       -- B-2.2-f (#1113): the sidecar's two snapshots, paired with the ids snapshots above.
-      let _ = setRef crossRun.value.crossModuleFunConstraintDeclaredRef perRun.value.funConstraintDeclaredRef.value
+      let _ = setRef crossRun.value.crossModuleFunConstraintDeclaredRef
+        (perRun.value.funConstraintDeclaredRef.value ++ selfNameRows prog crossRun.value.crossModuleFunConstraintDeclaredRef.value)
       let _ = setRef crossRun.value.crossModuleFunConstraintDeclaredQualRef
         (attributeModuleEntries mid prog perRun.value.funConstraintDeclaredRef.value ++ crossRun.value.crossModuleFunConstraintDeclaredQualRef.value)
-      let _ = setRef crossRun.value.crossModuleFunConstraintIfacesRef perRun.value.funConstraintIfacesRef.value
+      let _ = setRef crossRun.value.crossModuleFunConstraintIfacesRef
+        (perRun.value.funConstraintIfacesRef.value ++ selfNameRows prog crossRun.value.crossModuleFunConstraintIfacesRef.value)
       let _ = setRef crossRun.value.crossModuleMethodConstraintsRef perRun.value.methodConstraintsRef.value
       let _ = setRef crossRun.value.crossModuleMethodConstraintsQualRef
         (attributeMethodModuleArities mid prog perRun.value.methodConstraintsRef.value ++ crossRun.value.crossModuleMethodConstraintsQualRef.value)
@@ -30035,8 +30054,13 @@ dictPassModulesScoped dictNames promotedQ core2 allModules ((mid, prog)::rest) =
   -- its dicts.  This is the RUN/eval path's counterpart to the same fix in
   -- checkModuleFullImpl — the EMIT path never needs it, because private_mangle has
   -- already rewritten `A.name` to the origin's real symbol before this point.
-  let _ = setRef perRun.value.funConstraintsRef (aliasConstraintEntries prog promotedQ
-    ++ scopeArities promotedQ scopeMods scope)
+  -- #1425 site 3: re-key the names THIS module declares onto its own qual rows before the
+  -- table is handed to `dictPass`.  `scopeArities` reduces `(mid, name)` to a bare name and
+  -- throws the module id away, which is where a foreign module's constrained row becomes
+  -- this module's phantom dict param; `selfDeclArities` is what puts the identity back for
+  -- the one set of names this module can answer authoritatively — its own.
+  let _ = setRef perRun.value.funConstraintsRef (selfDeclArities mid prog promotedQ
+    (aliasConstraintEntries prog promotedQ ++ scopeArities promotedQ scopeMods scope))
   -- B-2.2-b1: cleared for the same reason as in `dictPassModulesIfEnabled` — a stale
   -- prefix table is worse than an empty one, because only the empty one answers
   -- `CDPUnknown`.
@@ -30083,6 +30107,77 @@ scopeArities promotedQ scopeMods scope =
   let inferredNames = namesToSet (map fst inferred) omEmpty
   let sigEntries = filterList (e => not (omHasKey (fst e) inferredNames)) (flatMap constrainedSigArity scope)
   inferred ++ sigEntries
+
+-- ── #1425 / #1351: a module's OWN declarations take their arity from their OWN row ──
+-- A bare-name arity table cannot say WHOSE `f` an entry is.  When two modules each declare
+-- a top-level `f` — one `=>`-constrained, one not — the graph-wide bare accumulator carries
+-- only the CONSTRAINED one's row, because an unconstrained binding contributes none at all.
+-- So the unconstrained module's OWN `f` is sized with the OTHER module's dict arity: its
+-- `define` takes a phantom dict parameter that its call sites never pass, and the argument
+-- lands in the dict slot.  Which of the two import orderings breaks is decided by the order
+-- of two `import` lines, because that decides the topological order the bare accumulator is
+-- grown in — a wrong answer selected by source-file layout.
+--
+-- ⚠️ THIS IS THE CASE `scopeArities`' OWN in-scope-preference CANNOT REACH, and it is why
+-- that preference is not enough on its own.  Its ladder prefers "an entry whose owning
+-- module is in scope", and an unconstrained binding HAS NO ENTRY — it can never win a
+-- preference it does not enter.  Worse, `scopeMods` is the IMPORTER direction (`mid` ∪ the
+-- modules that transitively import it), so a foreign definer is never "in scope" and its row
+-- survives by the `not (omHasKey … resolvedNames)` arm precisely when it is most wrong.
+--
+-- The repair supplies the DECLARATION's identity where it is already available and nowhere
+-- else.  For each name THIS module declares at top level, the entry is THIS module's
+-- `(mid, name)` qual row — and ABSENT when there is none, which is the accurate reading of
+-- an unconstrained binding, not a missing fact: `declaredConstraintFor`'s `None` arm already
+-- reads a qual miss for a known import exactly that way ("a MISS for a known import means
+-- 'no constraint', not 'look elsewhere'"), and this is the same discipline applied to the
+-- module's own declarations instead of to its imports.  A name the module does NOT declare
+-- keeps the incoming table's answer byte-identical, so a program with no same-name collision
+-- across modules is unaffected.
+--
+-- ⚠️ FAILS CLOSED ON ABSENT IDENTITY.  `mid == ""` is the "no module id" sentinel of the
+-- loader-less drivers (single-file `check`, lsp, repl, doc); there the incoming table is
+-- returned untouched, i.e. today's behaviour.  A supply that turned absence into a dropped
+-- dict would be a severity increase, and absence is common on those paths by construction.
+--
+-- Keyed on `elaborateModules`' OWN inputs — the module's decls and the qual accumulator,
+-- both already in hand at every site that calls this — never on which driver invoked it.
+selfDeclArities : String -> List Decl -> List ((String, String), a) -> List (String, a) -> List (String, a)
+selfDeclArities mid prog qual bare =
+  if mid == "" then bare
+  else
+    let own = namesToSet (declTopFnNames prog) omEmpty
+    selfQualEntries mid own qual
+      ++ filterList (e => not (omHasKey (fst e) own)) bare
+
+-- ── the other half of `selfDeclArities`, and it is NOT optional ──────────────
+-- `selfDeclArities` is a per-module VIEW; the ref it is written to is ALSO the ref the
+-- cross-module accumulator is snapshotted FROM at the end of the same body
+-- (`crossModuleFunConstraintsRef` ← `perRun.funConstraintsRef`).  Without this restore the
+-- view becomes a graph-wide LOSS: the rows masked while checking module `mid` never reach
+-- the modules processed after it.
+--
+-- 🚨 MEASURED, not hypothetical — this is what the first cut of #1425's fix did.  Masking
+-- `count` while checking `mut_array` (which declares an unconstrained `count`) deleted the
+-- PRELUDE's constrained `count` row from the accumulator, so every later module lost it and
+-- an ordinary `count (x => x > 1) [1, 2, 3]` in the entry panicked at `run`.  Prelude names
+-- are the ones that expose it, because `importDefinersOf` skips `core` — a prelude name is
+-- never an "explicit import", so it can only ever be answered by this bare table.
+--
+-- Restores by NAME from the accumulator's own previous value (still unwritten at the
+-- snapshot, which is this ref's only writer), appended AFTER the module's rows so
+-- first-match still prefers the identity-resolved answer.  Content-preserving: the view
+-- removed exactly these rows, so appending them back is not duplication.
+selfNameRows : List Decl -> List (String, a) -> List (String, a)
+selfNameRows prog old =
+  let own = namesToSet (declTopFnNames prog) omEmpty
+  filterList (e => omHasKey (fst e) own) old
+
+-- this module's own qual rows, reduced to the bare (name, payload) shape readers expect.
+selfQualEntries : String -> OrdMap Unit -> List ((String, String), a) -> List (String, a)
+selfQualEntries mid own qual = map
+  (e => (snd (fst e), snd e))
+  (filterList (e => fst (fst e) == mid && omHasKey (snd (fst e)) own) qual)
 
 -- WS-2/D2 method analog of scopeArities, WITHOUT the sig-fallback: every method-level
 -- constraint is registered during its interface module's typecheck

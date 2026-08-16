@@ -1,0 +1,36 @@
+-- DICT-SEMANTICS §8 I1, the EVAL-PATH half its `s8-i1-samename-independent-dict-arity/`
+-- sibling is structurally unable to assert (RUN-XMOD-049, #1425).
+--
+-- That sibling's two structural rows read the EMIT path, where `runEmitWith` has already
+-- run `mangleUnits` and made the bare keys accidentally identity-bearing, so they cannot
+-- fail on this defect class however broken the eval path is; and its value row cannot see
+-- it either, because its `pick` is monomorphic so the define and the call site agree on the
+-- phantom slot. This fixture closes exactly that gap: the unconstrained same-named binding
+-- is POLYMORPHIC (`a -> a`), so a phantom leading dict parameter is value-observable -- the
+-- binding returns the DICTIONARY rather than its argument.
+--
+-- SPEC ANSWER (hand-derived from the declared signatures, NOT captured from any engine):
+-- dict arity is keyed by binding identity, so `cmod.pick : Sz a => a -> Int` abstracts one
+-- dict and `umod.pick : a -> a` abstracts NONE. `C.pick (1 : Int)` = `sz 1 + 100` = 101.
+-- `U.use 1` = `pick 1 + 200` = `1 + 200` = 201. So: 101 then 201.
+--
+-- 🚨 THE ORDER OF THE TWO `import` LINES BELOW IS LOAD-BEARING AND MUST NOT BE "TIDIED".
+-- `umod` MUST come first. Measured at `a1086fbb` (pre-fix), both ways, on this exact
+-- fixture:
+--
+--     import umod as U ; import cmod as C  ->  run exit 1: prints 101, then
+--                                              `E-PANIC: unknown op '+'`
+--     import cmod as C ; import umod as U  ->  run exit 0: 101 / 201  (PASSES)
+--
+-- The panic is `umod.pick` returning the phantom DICTIONARY instead of its argument, so
+-- `pick n + 200` adds to a dict. Written in the other order this fixture is GREEN AT BASE
+-- and asserts nothing about this defect -- which is exactly the trap #1425's two sites set
+-- for each other: they MASK each other, and which one you observe is decided by two import
+-- lines. I wrote this file in the passing order first and it passed at base; that is why
+-- this warning is here.
+import umod as U
+import cmod as C
+
+main =
+  println (C.pick (1 : Int))
+  println (U.use 1)

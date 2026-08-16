@@ -1,0 +1,19 @@
+-- #1326 Repro A. `ps.h : Display a => a -> String` and `qs.h : a -> a` are two
+-- SIGNATURED, unrelated, same-named bindings. `h` here is unambiguously qs's `a -> a`
+-- (`ph` is the alias for ps's); `tag (h NoDisp)` never needs Display. Rejected anyway,
+-- at `h`'s own call site, with ps's Display obligation.
+--
+-- Flattened from the drained must-fail pin's `lib/` layout: this gate's harness copies a
+-- case directory's top-level files only (`for f in "$cdir"/*; do cp "$f" "$work/"; done`),
+-- so a fixture with a subdirectory silently loses it and BOTH orderings then fail to
+-- resolve identically — which this gate would report as "invariant". Measured first-hand
+-- while adding this case.
+import ps.{h as ph}
+import qs.{h}
+
+data NoDisp = NoDisp
+
+tag : NoDisp -> String
+tag _ = "ok"
+
+main = println "\{tag (h NoDisp)} / \{ph 5}"

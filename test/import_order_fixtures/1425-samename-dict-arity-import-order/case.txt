@@ -1,0 +1,52 @@
+entry: main.mdk
+what: #1425 dict-arity seam -- two modules each declare a top-level `widget`, one
+what: `=>`-constrained and one not, and the order of the entry's TWO import lines alone
+what: decided whether `medaka run` printed `101` / `201` or printed `101` and then
+what: panicked `E-PANIC: intToString: not an Int` mid-program.
+
+Sources are the three modules of `test/dict_fixtures/s8-i1-samename-independent-dict-arity/`,
+copied byte-for-byte into this directory (not modified, not symlinked -- a genuinely
+separate corpus per AGENTS.md's shared-corpus trap). `lefty.widget : Sz a => a -> Int`
+abstracts ONE dict; `righty.widget : Int -> Int` abstracts NONE. `main.mdk` has two
+top-level import clauses, so this gate's permuter tries both 2! = 2 orderings.
+
+## WHY THIS FIXTURE EXISTS WHERE IT DOES
+
+The `dict_fixtures/` copy is graded by `test/diff_compiler_dict_semantics.sh`, whose two
+structural rows for this shape (`^define i64 @mdk_lefty__widget\(i64 %arg0, i64 %arg1\)`
+and `^define i64 @mdk_righty__widget\(i64 %arg0\)`) read the EMIT path. `runEmitWith` runs
+`mangleUnits` BEFORE `elaborateModules`, which makes the emitter's bare keys accidentally
+identity-bearing -- so those rows are STRUCTURALLY INCAPABLE of failing on this defect
+class however broken the eval path is, and its value row could not see it either, because
+the define and the call site agreed on the same phantom dict slot and the printed number
+came out right by accident. This gate grades `check` + `run` + `build` + the EXECUTED
+BINARY across EVERY ordering, which is what actually reaches the defect.
+
+## HOW THE EXPECTED VALUES WERE ESTABLISHED
+
+The SPEC ANSWER is hand-derived in `lefty.mdk`/`righty.mdk`/`main.mdk`'s own headers and
+in DICT-SEMANTICS §8 I1, independently of any engine: dictionary arity is keyed by BINDING
+IDENTITY, so `lefty.widget` abstracts one dict and `righty.widget` abstracts none;
+`L.widget (1 : Int)` = `sz 1 + 100` = 101 and `R.widget 1` = 201. Both orderings must
+print `101` then `201`.
+
+This case is graded INVARIANT (no `test/IMPORT-ORDER-LEDGER.txt` row) because the defect
+it was built for is FIXED in the same PR that adds it -- it is the regression guard, which
+is what the ledger header prescribes a drained case becomes.
+
+MEASURED FIRST-HAND at the pre-fix base `a1086fbbad826ceb9873fb2e308cb8cc3d7bdf51` -- by
+reverting ONLY the compiler change, rebuilding, and running THIS GATE over THIS directory
+(MEDAKA_STRICT=1 green on that arm, since source then matched the baked stamp). The gate
+printed these two signatures verbatim, i.e. this fixture is demonstrably FAIL-CAPABLE and
+its post-fix "invariant" verdict is not vacuous:
+
+    check=0;codes=;schemes=main : Unit\n;run=0:101\n201\n;build=0/0:101\n201\n
+    check=0;codes=;schemes=main : Unit\n;run=1:101\n;build=0/0:101\n201\n
+
+Read the second one closely -- it is the whole defect in one line. `check` accepts (exit 0)
+and the BUILT BINARY is CORRECT (`build=0/0:101\n201\n`), while `run` exits 1 having
+printed only `101`. Same program, same compiler, one reordered import line: the eval path
+under-applies a phantom dict and dies mid-program while the emit path is untouched, because
+`runEmitWith` mangles before `elaborateModules` and the eval drivers do not.
+
+Post-fix both orderings are the spec answer above, and this case is graded invariant.

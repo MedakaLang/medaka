@@ -1,6 +1,0 @@
-import list.{get}
-import usemap.{sizeOf1, mkMap}
-
-main =
-  let xs = [10, 20, 30]
-  println (get 0 xs)

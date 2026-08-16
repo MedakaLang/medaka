@@ -1,0 +1,59 @@
+entry: main.mdk
+what: #1326 -- a same-named sibling's `=>` context was misattributed onto an unconstrained
+what: binding, so `tag (h NoDisp)` was rejected `No impl of Display for NoDisp` at `h`'s own
+what: call site, on a program whose `h` unambiguously denotes `lib.qs.h : a -> a` and needs
+what: no `Display` at all. A FALSE REJECT: `medaka check` exit 1 on a valid program.
+
+Sources are the three modules of
+`test/must_fail_fixtures/1326-cross-module-bare-name-obligation-misattributed/`, copied
+byte-for-byte into this directory. `lib/ps.h : Display a => a -> String` is CONSTRAINED and
+reachable only through its alias `ph`; `lib/qs.h : a -> a` is UNCONSTRAINED and is what the
+bare `h` names. `main.mdk` has two top-level import clauses, so this gate's permuter tries
+both 2! = 2 orderings.
+
+## WHY THIS FIXTURE EXISTS WHERE IT DOES -- A RE-POINT, NOT A DELETION
+
+The must-fail pin above DRAINED when this defect was fixed. AGENTS.md's drain protocol
+prefers RE-POINTING a drained pin at a regression gate over deleting it, because a drained
+fixture is not a drained CLASS, and deleting removes the only executable memory that the
+shape was ever broken. Re-pointing also RECOVERS coverage here, exactly as that protocol
+predicts: the must-fail harness graded ONE verb (`check-json`, on `diag-code` + range) in
+ONE import order; this gate grades `check` + its diagnostic codes + the inferred schemes +
+`run` + `build` + the EXECUTED BINARY, across EVERY ordering. The second dimension the pin
+carried -- the other import order -- was sitting there ungraded, and starts executing here.
+
+## HOW THE EXPECTED VALUES WERE ESTABLISHED
+
+Hand-derived from the declared signatures, independently of any engine, and stated in the
+drained pin's own `claim.txt`: the bare name `h` resolves unambiguously to `lib.qs.h : a -> a`
+(ps's is reachable only as `ph`), so `tag (h NoDisp)` never needs a `Display` obligation and
+`ph 5` needs one that `Int` satisfies. The program is VALID and must print `ok / 5` at exit
+0 under BOTH orderings. Neither ordering's rejection was ever a correct answer -- this is a
+false reject, not an adjudication gap, which is why this case pins a verdict and the
+sibling `1351-...` case pins only a divergence.
+
+This case is graded INVARIANT (no `test/IMPORT-ORDER-LEDGER.txt` row): the defect is FIXED
+in the same PR that adds it, so it lands as the regression guard.
+
+MEASURED FIRST-HAND at the pre-fix base `a1086fbbad826ceb9873fb2e308cb8cc3d7bdf51` -- by
+reverting ONLY the compiler change, rebuilding, and running THIS GATE over THIS directory
+(MEDAKA_STRICT=1 green on that arm). The gate printed these two signatures verbatim, so
+this fixture is demonstrably FAIL-CAPABLE and its post-fix "invariant" verdict is not
+vacuous:
+
+    check=0;codes=;schemes=tag : NoDisp -> String\nmain : Unit\n;run=0:ok / 5\n;build=0/0:ok / 5\n
+    check=1;codes=T-NO-IMPL;schemes=;run=1:;build=1/-:
+
+One ordering compiles and prints `ok / 5`; the other rejects the SAME program at exit 1 with
+`T-NO-IMPL`. The second is the false reject #1326 named. At base this case ALSO tripped an
+unledgered emitter-verdict DISAGREE (`check=0;emit=0:ir` vs `check=1;emit=0:ir` -- the raw
+emitter accepting what `check` rejected in one ordering); that disagreement drains with the
+same fix and is green post-fix, so no `EMITTER-VERDICT-LEDGER.txt` row is added.
+
+Post-fix, measured through this gate: both orderings `check` exit 0, `run` exit 0, `ok / 5`.
+
+⚠️ FIXTURE LAYOUT IS LOAD-BEARING HERE -- see `main.mdk`'s header. The gate's harness copies
+a case directory's TOP-LEVEL FILES ONLY, so the pin's original `lib/ps.mdk` layout silently
+lost its modules and BOTH orderings then failed to resolve identically, which this gate
+reports as "invariant" -- a vacuous pass. Measured first-hand while adding this case; the
+modules are flattened for that reason and must stay flat.

@@ -1,5 +1,0 @@
-import list.{get}
-
-main =
-  let xs = [10, 20, 30]
-  println (get 0 xs)
