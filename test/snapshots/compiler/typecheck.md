@@ -1,5 +1,5 @@
 # META
-source_lines=30818
+source_lines=30826
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted typecheck stage — port of lib/typecheck.ml's HM core.  SLICE 1:
@@ -29205,9 +29205,12 @@ declOwnedBy mid tyName o = match mkIdent NsType (OriginModule mid) tyName
 -- is covered by construction, not by a case.
 --
 -- Also, the payload is now a PAIR: `(definer module, origin name at the definer)`,
--- because a re-export hop can RENAME (`export import u.{pick as pk}`).  The qual tables
--- are keyed `(definer, ORIGINAL exported name)`, so carrying only the definer would key
--- them with the local spelling, MISS, and — via `hasImportDefiner` — read that miss as
+-- because an IMPORTER can rename a re-exported member (`import r1.{pick as pk}` — an
+-- ordinary import with an as-alias on a name that happens to be re-exported).  A
+-- RE-EXPORT hop itself cannot rename: `export import u.{pick as pk}` is a hard parse
+-- error (`parser.mdk:2379`), so that is not the motivating shape.  The qual tables are
+-- keyed `(definer, ORIGINAL exported name)`, so carrying only the definer would key them
+-- with the local spelling, MISS, and — via `hasImportDefiner` — read that miss as
 -- "genuinely unconstrained", silently dropping the callee's dict.  Both halves of the
 -- key come out of one derivation; they cannot disagree.
 importDefinersOf : List Decl -> List (String, (String, String))
@@ -29267,6 +29270,11 @@ memberDefinerRow depId pubs (origin, local) = match resolveMemberRows (origin, l
 -- [fuel] bounds the recursion.  The loader rejects import cycles before typecheck runs,
 -- so a cycle should be unreachable here; the bound is what keeps "should be" from being
 -- load-bearing for termination of the compiler itself.
+--
+-- UNMEMOIZED: a re-export DAG where each module re-exports two predecessors costs
+-- Fibonacci-many walks in chain depth (measured — round-3 breaker report, F4).  Depth is
+-- bounded by re-export chain length, not by program size, and no branching DAG like that
+-- shows up in practice (the compiler's own graph: 0 measurable effect, interleaved).
 graphPubDefiners : Int -> String -> List (String, (String, String))
 graphPubDefiners fuel mid
   | fuel <= 0 = []
