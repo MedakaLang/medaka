@@ -94,8 +94,10 @@ writer lane's refill from waiting on adjudication:
 
 Intake per step 0. Verdict `CLEAR` → record in DECISIONS.md; if `Not covered` is
 empty on a CLEAR, bounce it — that is the one report shape to distrust on sight.
-Verdict `FINDINGS` → brain consult with the report path. Critical/high finding on
-a PR already queued: dequeue FIRST (GraphQL `dequeuePullRequest` — `--disable-auto`
-does not dequeue), then consult. The writer lane never blocks on review
-adjudication; a repair slice enters the queue like any other packet, cut by the
-planner from the brain's ruling.
+Verdict `FINDINGS` → load the `sprint-findings` skill and run its lifecycle:
+FINDINGS.md row first, attribution second, brain ruling third (REPAIR / ABSORB /
+FILE / DEFER / DISMISS), execution fourth. Critical/high finding on a PR already
+queued: dequeue FIRST (GraphQL `dequeuePullRequest` — `--disable-auto` does not
+dequeue), then consult. The writer lane never blocks on review adjudication; a
+repair slice enters the queue like any other packet, cut by the planner from the
+brain's ruling.

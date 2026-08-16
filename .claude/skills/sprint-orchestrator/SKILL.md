@@ -70,8 +70,10 @@ job is enforcement, and it is mechanical:
 3. **A report missing any section BOUNCES** — send the agent back to complete it.
    Never fill a gap yourself, never infer what a missing section "would have said".
 4. **Route by section, mechanically:** anything in `Decisions surfaced` or
-   `Deviations from packet` other than `NONE` → brain, with the file path. Findings
-   in reviewer reports → brain. `Not covered` items → append to the sprint's
+   `Deviations from packet` other than `NONE` → brain, with the file path. Any
+   bug or gap reported anywhere → the `sprint-findings` skill's lifecycle
+   (FINDINGS.md row → attribution → brain ruling REPAIR/ABSORB/FILE/DEFER/
+   DISMISS → execution). `Not covered` items → append to the sprint's
    open-questions list in FINDINGS.md so they reach the repair round.
 5. **Never merge, drop, or reword report content.** You move pointers and append
    verbatim text. If two documents disagree, that is a conflict → brain.
@@ -215,8 +217,12 @@ next action was closing five live bugs.
 2. **Report sweep:** confirm `reports/` holds every dispatched agent's report file —
    the dispatch log (DECISIONS.md) is the checklist. A missing report is a finding,
    not a shrug.
-3. **Desk-closes are an exit criterion:** every issue the sprint verified fixed gets
+3. **Findings sweep — every FINDINGS.md row terminal** (the `sprint-findings`
+   exit guarantee): REPAIR→fixed-and-reviewed, ABSORB→landed, FILE→issue number
+   + pin path, DEFER→trigger condition, DISMISS→derivation. Dispatch the
+   verifier with this as a checklist; an OPEN row blocks exit.
+4. **Desk-closes are an exit criterion:** every issue the sprint verified fixed gets
    closed with a derivation-bearing comment — check the PIN, not the narrative.
    The brain approves each close.
-4. Run the `orchestrator-wrapup` skill.
-5. Stop the heartbeat loop.
+5. Run the `orchestrator-wrapup` skill.
+6. Stop the heartbeat loop.
