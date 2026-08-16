@@ -1,0 +1,52 @@
+-- RUN-XMOD-070 F1: the WILDCARD re-export spelling of #1427's known defect,
+-- plus a discriminating TWO-IMPL cell.
+--
+-- `s8-xmod-reexport-alias-constrained` already grades the SELECTIVE spelling
+-- (`export import lib.decl.{f}`) of this exact disagreement -- `run` panics
+-- (`aliasEntriesFor` keys its copied qual entries on the SPELLED module, and a
+-- re-exporter spells none), `build` succeeds because the scheme-env lookup
+-- that repair added is definer-keyed, not spelling-keyed. What that row does
+-- NOT cover: (a) the WILDCARD re-export spelling (`export import lib.decl.*`,
+-- this fixture's `lib/rwild.mdk`) reaches the identical `aliasEntriesFor` site
+-- and reproduces byte-identically; (b) its own build-arm value was a
+-- SINGLE-impl program, which cannot discriminate a correctly-routed dict from
+-- a wrongly-routed one that happens to print a plausible number.
+--
+-- This fixture closes BOTH gaps in one row: the re-export spelling is
+-- WILDCARD, and `lib.decl`'s `Sz` interface carries TWO impls (`Int`,
+-- `String`), so `R.f`'s two call sites must route to DIFFERENT dicts for the
+-- value to come out right.
+--
+-- GROUND TRUTH, HAND-DERIVED FROM THE DECLARATIONS BEFORE ANY BINARY WAS RUN:
+--   `sz : a -> Int`, `impl Sz Int (sz n = n)`, `impl Sz String (sz s = 1000)`,
+--   `f x = sz x + 100`.
+--   `R.f 1`     -> `Sz Int`,    sz 1 = 1,    f = 1 + 100    = 101
+--   `R.f "abc"` -> `Sz String`, sz "abc" = 1000, f = 1000 + 100 = 1100
+--
+-- MEASURED on this worktree's own cold-built binary (MEDAKA_STRICT=1,
+-- exit read via file redirect, never a pipe):
+--   check                 -> exit 0
+--   run                   -> exit 1, `E-PANIC: intToString: not an Int`,
+--                            ZERO bytes on stdout (dies evaluating the very
+--                            first `R.f 1` -- same channel, same symptom, as
+--                            the selective sibling's `run` cell)
+--   build + execute       -> exit 0, prints `101` then `1100` -- BOTH values
+--                            correct, proving the dict for EACH call site
+--                            routed to its own impl rather than one impl
+--                            winning for both (the failure mode a single-impl
+--                            program cannot rule out)
+--
+-- Emitted IR (section 3 below) shows the two call sites passing DIFFERENT
+-- dict constants (`@mdk_dc_0` for `Sz Int`, `@mdk_dc_2` for `Sz String`) to
+-- the SAME definer symbol `@mdk_lib_decl__f` -- the mechanism behind the
+-- value pair above.
+--
+-- 🚨 KNOWN-BAD ON THE `run` CELL, same as the selective sibling: this is not
+-- expected to be "fixed" by this row -- #1427 stays open, gated on the
+-- #1369/#1425 dict-arity seam. When `run` repairs, BOTH this row and its
+-- selective sibling flip together; re-point per RUN-XMOD-036.
+import lib.rwild as R
+
+main =
+  println (R.f 1)
+  println (R.f "abc")

@@ -1,0 +1,5 @@
+-- Pure RE-EXPORTER, WILDCARD spelling (`.*`) instead of the SELECTIVE
+-- `{f}` spelling `s8-xmod-reexport-alias-constrained`'s `rsel.mdk` uses. The
+-- ungraded cell RUN-XMOD-070/F1 names: `f`'s definer is still `lib.decl`, but
+-- the importer names THIS module.
+export import lib.decl.*

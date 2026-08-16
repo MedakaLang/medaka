@@ -1,0 +1,15 @@
+-- Sibling of s8-xmod-reexport-alias-constrained's `decl.mdk`, but with TWO
+-- impls of the interface `f` is constrained over, so the answer discriminates
+-- which impl a call site actually routed to (a single-impl program cannot
+-- tell "the right dict" from "the only dict").
+export interface Sz a where
+  sz : a -> Int
+
+export impl Sz Int where
+  sz n = n
+
+export impl Sz String where
+  sz s = 1000
+
+export f : Sz a => a -> Int
+f x = sz x + 100
