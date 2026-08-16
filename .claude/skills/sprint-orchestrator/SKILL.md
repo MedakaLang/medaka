@@ -88,7 +88,15 @@ job is enforcement, and it is mechanical:
    missing)` — minted once, stable thereafter. A naked identifier bounces like a
    missing section. This applies hardest to YOUR OWN writing: bare `E4`-style
    labels in orchestrator output are how a run becomes unreadable.
-7. **Terse mode (packet contract §0b):** everything agent-facing — dispatch
+7. **`gh` goes through the helper where one exists.** For the PR lifecycle,
+   ALWAYS `scripts/pr.sh` (`body`/`watch`/`enqueue`/`complete`) — it verifies
+   resulting state (body readback byte-compare, GraphQL queue membership, head
+   SHA on main) where raw `gh` exit codes carry no signal and write paths
+   silently no-op. For gh operations the helper does not cover (issues,
+   comments, labels): write, then READ BACK and compare — never trust the
+   return code. This preference binds every agent whose packet authorizes gh
+   interaction, not just you.
+8. **Terse mode (packet contract §0b):** everything agent-facing — dispatch
    briefs, consults, ledger rows — is telegraphic; content (commands, caveats,
    negative results, qualifiers) survives at full fidelity, prose does not.
    The ONE exception is your communication with Val: normal prose, normal

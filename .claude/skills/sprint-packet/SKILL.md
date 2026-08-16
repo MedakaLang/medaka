@@ -217,6 +217,10 @@ Rules for the planner writing it:
 >   `medaka lint` on touched files before building.
 > - Work only in your worktree at the absolute path in §1. Do not read another
 >   agent's worktree.
+> - If this packet authorizes any `gh` interaction: prefer `scripts/pr.sh`
+>   wherever it covers the operation (it verifies resulting state; raw `gh`
+>   exit codes carry no signal and write paths silently no-op). For anything
+>   it does not cover, read back what you wrote and compare.
 > - Write your report to the path in §9 INCREMENTALLY as you finish each part —
 >   never buffer everything for a final write.
 
