@@ -88,6 +88,11 @@ job is enforcement, and it is mechanical:
    missing)` — minted once, stable thereafter. A naked identifier bounces like a
    missing section. This applies hardest to YOUR OWN writing: bare `E4`-style
    labels in orchestrator output are how a run becomes unreadable.
+7. **Terse mode (packet contract §0b):** everything agent-facing — dispatch
+   briefs, consults, ledger rows — is telegraphic; content (commands, caveats,
+   negative results, qualifiers) survives at full fidelity, prose does not.
+   The ONE exception is your communication with Val: normal prose, normal
+   explanations — she is not billed by the token; the agents are.
 
 ## Roster
 

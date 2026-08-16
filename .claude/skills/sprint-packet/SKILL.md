@@ -90,6 +90,22 @@ may drop the number but never the handle. The orchestrator bounces ledger
 entries and consults that carry naked identifiers, same as missing report
 sections.
 
+## §0b Terse mode — inter-agent text is for machines that bill by the token
+
+**Every artifact whose reader is another agent — reports, packets, consults,
+rulings, ledger rows, drafts — is written TERSE: telegraphic, no filler, no
+restating the question, no politeness, fragments fine.** Only the
+orchestrator's communication with Val is normal prose.
+
+Terseness compresses the PROSE, never the CONTENT. Keep, always, at full
+fidelity: exact commands and outputs, paths, handles, numbers with their
+producing commands, epistemic labels (DERIVED/RELAYED/UNVERIFIED), scope and
+depth qualifiers ("first-level only"), negative results, and every caveat.
+Those are precisely what summarization historically dropped — a terse report
+that loses a caveat has sacrificed meaning, which is the one trade this rule
+forbids. Rule of thumb: cut every word whose deletion changes nothing; keep
+every word whose deletion changes anything.
+
 ## §1 Identity
 
 - **Slice ID** and issue refs (`#NNN`).
