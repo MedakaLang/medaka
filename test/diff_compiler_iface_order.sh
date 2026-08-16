@@ -158,8 +158,9 @@
 # Read this BEFORE acting on any result above; it bounds every row of that table.
 #
 # The whole point of the Stage B fix is re-keying impl selection from an interface
-# SPELLING to an interface IDENTITY, and `.claude/HANDOFF.md`'s top section demands of
-# Phase 4 specifically that the key be a MODULE-QUALIFIED IDENTITY, not a bare name.
+# SPELLING to an interface IDENTITY, and the Stage B handoff record (2026-08-14; was
+# .claude/HANDOFF.md, since retired to GitHub issues) demanded of Phase 4 specifically
+# that the key be a MODULE-QUALIFIED IDENTITY, not a bare name.
 # THIS CORPUS CANNOT SEE THAT DISTINCTION. All five cases are single-file and declare
 # interfaces with DISTINCT names, so a fix keyed on the bare interface NAME and a fix
 # keyed on a module-qualified IDENTITY behave IDENTICALLY on every case here. They

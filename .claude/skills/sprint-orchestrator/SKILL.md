@@ -192,9 +192,11 @@ machine is still turning."
    the slice plan, and write DECISIONS.md's opening entries.
 4. **Write the expected-red block** to `EXPECTED-RED.md` and post it to the
    tracking issue before any dispatch — the known-red gate set for the duration,
-   so nobody debugs a licensed red. (NOT to `.claude/HANDOFF.md`: an uncommitted
-   repo-file edit is invisible to every agent worktree created at BASE, and
-   committing it violates the ephemeral-records rule.)
+   so nobody debugs a licensed red. (Not a repo file: an uncommitted repo-file
+   edit is invisible to every agent worktree created at BASE, and committing it
+   violates the ephemeral-records rule. A red expected to OUTLIVE the sprint
+   additionally gets a `known-red` labeled issue — that label is the repo-wide
+   known-red channel.)
 5. **Dispatch `sprint-planner` for packet #1** — the contract's slice table is
    boundary-depth by design and is NOT a packet; dispatching an implementer on
    it would bounce as incomplete. When packet #1 returns `PACKET-READY`, run its

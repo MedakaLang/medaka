@@ -267,7 +267,7 @@ value-to-risk item on the board". **Closing an issue as already-fixed is a good 
 |------|-----------|
 | `.claude/workstreams/` | Per-workstream **domain knowledge**: the traps, the collision map, and *why each bug class recurs*. **Not the backlog** (that is the issue tracker) — read the one matching your labels **before** you start. |
 | `.claude/ORCHESTRATING.md` | Orchestration playbook. Its #1 lesson: *the gap docs lie — reproduce before you trust them.* |
-| `.claude/HANDOFF.md` | **Known-red gates.** Read BEFORE diagnosing a failing gate — it is usually not your break. |
+| `gh issue list --label known-red` | **Known-red gates.** Check BEFORE diagnosing a failing gate — it is usually not your break. One issue per expected-red gate, closed when the gate is green again (the old `.claude/HANDOFF.md` doc was retired 2026-08-16 — handoff state lives in GitHub issues). |
 | `.claude/skills/` | Task playbooks (table at the bottom of this file). |
 
 ## Build & test

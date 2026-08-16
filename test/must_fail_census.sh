@@ -47,7 +47,7 @@
 # That one line settles gate placement, and it is why `soundness` hosts the must-fail GATE
 # (a diff can fix a bug) but must never host this CENSUS (no diff can close an issue).
 # Blocking an innocent PR on repo state its diff never touched is the "not your break"
-# problem `.claude/HANDOFF.md` exists to mitigate. Three more reasons, any one sufficient:
+# problem the `known-red` issue label exists to mitigate. Three more reasons, any one sufficient:
 #   * `soundness` is required on every PR AND every merge-queue entry — one API blip or
 #     rate-limit and NOTHING in the repo merges;
 #   * every agent runs the gate locally via `make gates`/preflight with no `gh` auth, so it

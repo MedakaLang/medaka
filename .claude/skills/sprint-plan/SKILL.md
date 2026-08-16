@@ -110,8 +110,10 @@ identifier convention.
   proving commands (same discipline as a packet's §4; this seeds every packet).
 - **§5 Issue-closure policy** — which issues this sprint may close, and that
   every close checks the PIN, not the narrative.
-- **§6 Expected-red block** — the known-red gate set for the duration (copied
-  into HANDOFF.md at sprint start by the orchestrator).
+- **§6 Expected-red block** — the known-red gate set for the duration (the
+  orchestrator copies it to the sprint dir's `EXPECTED-RED.md` and the tracking
+  issue at sprint start; reds expected beyond the sprint get a `known-red`
+  labeled issue each).
 - **§7 Exit criteria** — including the repair round (non-optional) and
   desk-closes.
 
