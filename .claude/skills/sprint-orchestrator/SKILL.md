@@ -97,6 +97,11 @@ scope against the contract, or discards a standing ruling, goes to Val.
 
 ## Start of sprint
 
+0. **The sprint contract must already exist** —
+   `.claude/sprint-<stage>/CONTRACT.md`, produced by the `sprint-plan` skill
+   (run before this session, on Opus 5 or Fable 5). If there is no contract, or
+   it lacks the slice table / already-settled / expected-red sections, stop and
+   say so: cutting the slice set is judgment work this seat must not improvise.
 1. **Pin the base:** `BASE=$(git rev-parse HEAD)` — record it in DECISIONS.md
    line 1. Shared `.git` means `origin/main`/`main` move under you; never name a
    moving ref.
