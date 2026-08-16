@@ -1,5 +1,5 @@
 # META
-source_lines=979
+source_lines=988
 stages=DESUGAR,MARK
 # SOURCE
 -- UNIVERSAL PER-MODULE NAME MANGLING for the flat multi-module EMIT path.
@@ -17,8 +17,13 @@ stages=DESUGAR,MARK
 -- FIX — universal mangling: EVERY top-level FUNCTION binding (in core + every
 -- module) is renamed to a module-qualified unique symbol `<mid>__<name>`, and
 -- EVERY reference is rewritten IMPORT-AWARE to its resolved origin module's
--- mangled name.  Collisions are then impossible BY CONSTRUCTION — no two surviving
--- `@mdk_<sym>` symbols can coincide.
+-- mangled name.  Collisions are then avoided FOR MODULE IDS THAT DON'T COLLIDE
+-- under `sanitizeId`'s mapping — NOT impossible by construction: `sanitizeId`
+-- maps every non-`[A-Za-z0-9_]` char (including the loader's own `.` module-id
+-- separator) to `_`, so a flat module `lib_plain.mdk` (id `lib_plain`) and a
+-- nested module `lib/plain.mdk` (id `lib.plain`) sanitize to the identical
+-- string and produce the identical `@mdk_<sym>` symbol for a same-named export
+-- — a real, measured collision, not a hypothetical one. See #1677 (open).
 --
 -- IMPORT-AWARE RESOLUTION is the crux.  For a (non-shadowed) reference to bare
 -- name `n` in unit `mid` we must know WHICH module's definition it binds:
@@ -70,9 +75,13 @@ stages=DESUGAR,MARK
 -- ctor is renamed `<owningMid>__<ctor>` at its DEFINITION (DData variant /
 -- DNewtype con) AND at every USE site (EVar construct, PCon / PRec match,
 -- ERecordCreate, EVariantUpdate), import-aware (a `import M.{T(..)}` maps T's ctors
--- to `<M>__<ctor>`).  Collisions are then impossible by construction; the per-site
--- owning module comes from the importing unit's scope, so construct and match always
--- agree.  The gates diff OUTPUT, so a consistent ctor rename is invisible.
+-- to `<M>__<ctor>`).  Collisions are then avoided FOR MODULE IDS THAT DON'T COLLIDE
+-- under `sanitizeId`'s mapping — NOT impossible by construction; this reuses the same
+-- `mangledName`/`sanitizeId` as the function path above, so it is presumed equally
+-- exposed to the same non-injective-id collision (presumed, not independently
+-- reproduced — see #1677, routed to #1319 as owed follow-up). Where ids don't collide,
+-- the per-site owning module comes from the importing unit's scope, so construct and
+-- match always agree.  The gates diff OUTPUT, so a consistent ctor rename is invisible.
 --
 -- This runs PER UNIT, BEFORE elaborateModules flattens the boundaries away.  It
 -- lives ONLY in the emit drivers (never the oracle/golden drivers), so every
