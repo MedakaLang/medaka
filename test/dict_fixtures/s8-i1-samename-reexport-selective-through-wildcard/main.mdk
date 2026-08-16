@@ -1,0 +1,26 @@
+-- §8 I1 ACROSS A SELECTIVE RE-EXPORT REACHED BY A WILDCARD IMPORT (RUN-XMOD-062, #1425 F1,
+-- third relocation). `import rmod.*` where `rmod` is nothing but `export import umod.{pick}`.
+--
+-- The two `-wildcard-` siblings grade a name a wildcard-imported module DECLARES. This grades
+-- one it RE-EXPORTS -- which the wildcard repair's supply walk did not enumerate, so the name
+-- got no row in `currentImportDefinersRef`, `declaredConstraintFor` fell through to the
+-- bare-name table, and `cmod.pick`'s CONSTRAINED row answered for the unconstrained
+-- `umod.pick`: the call applied a dict its callee does not abstract.
+--
+-- Hand-derived from the two declared signatures, NOT captured: `cmod.pick : Sz a => a -> Int`
+-- abstracts ONE dict and `umod.pick : a -> a` abstracts NONE (§8 I1); a re-export changes
+-- neither binding's identity. So `C.pick (1 : Int)` = `sz 1 + 100` = 101 and
+-- `pick 1 + 200` = 201.
+--
+-- MEASURED KNOWN-BAD at b313d767, in BOTH import orders: `run` printed 101 and then died
+-- `E-NOT-A-FUNCTION: applied non-function: <dict:>`, while `check` exited 0 and the BUILT
+-- BINARY printed 101/201 correctly -- three verbs, two answers, on a well-typed program.
+-- ⚠️ Order-INVARIANT, so `test/diff_compiler_import_order.sh` reports it "invariant" and
+-- PASSES on the broken compiler; the value assertion here is the only thing that sees it.
+
+import rmod.*
+import cmod as C
+
+main =
+  println (C.pick (1 : Int))
+  println (pick 1 + 200)

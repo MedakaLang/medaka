@@ -1,7 +1,0 @@
-import map.{Map, size, singleton}
-
-export sizeOf1 : Map Int Int -> Int
-sizeOf1 m = size m
-
-export mkMap : Map Int Int
-mkMap = singleton 1 2

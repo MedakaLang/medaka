@@ -1,0 +1,30 @@
+-- Regression guard for #1425. PR #1683 drained the original must-fail pin
+-- (test/must_fail_fixtures/1425-list-get-map-bare-seed-poison/, deleted with no
+-- git-detected rename) and replaced it with
+-- test/import_order_fixtures/1425-samename-dict-arity-import-order/ -- a DIFFERENT
+-- shape (synthetic `lefty`/`righty` widgets, both bindings always called via
+-- `as`-qualified imports). That replacement cannot express the original defect's
+-- "reachable but never called" property; see this directory's case.txt for the
+-- full account (RUN-XMOD-052).
+--
+-- MINIMAL shape per RUN-XMOD-052 (a 2-hop direct `import map`, not the original
+-- pin's 3-hop `main -> usemap -> map` -- measured NOT load-bearing, see case.txt).
+-- `list.get` and `map.get` are two DIFFERENTLY-CONSTRAINED bindings sharing the
+-- bare name `get`. `main.mdk` imports `list.{get}` (the one it calls) and, on the
+-- SAME import-order axis this gate permutes, also imports names from `map`
+-- (Map/size/singleton -- never `get`, and never CALLED here at all). Nothing in
+-- this file calls anything from `map` -- merely making the `map` module reachable
+-- in the graph is enough to poison a bare-name dict-arity table keyed without
+-- module scope.
+--
+-- SPEC ANSWER (hand-derived, DICT-SEMANTICS Sec8 I1): `get 0 [10, 20, 30]` is a
+-- plain 0-indexed list lookup on `list.get : Int -> List a -> Option a`, an
+-- UNCONSTRAINED binding whose dict arity is its own, independent of any other
+-- same-bare-name binding merely being reachable elsewhere in the module graph.
+-- The answer is `Some 10` under every import ordering.
+import list.{get}
+import map.{Map, size, singleton}
+
+main =
+  let xs = [10, 20, 30]
+  println (get 0 xs)

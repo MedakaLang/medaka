@@ -1,0 +1,24 @@
+-- DICT-SEMANTICS §8 I1 under a WILDCARD import whose colliding sibling the ENTRY NEVER NAMES
+-- (RUN-XMOD-054, #1425 F1 repair). The `-wildcard-import-callee/` sibling puts both modules in
+-- the entry's own import list; this one puts the constrained definer two hops away, reachable
+-- only through `smod`.
+--
+-- WHY BOTH ARE KEPT. RUN-XMOD-054 records that the nine affected stdlib programs included one
+-- reached transitively -- "which is a SEAM symptom, not an arm symptom". This fixture is that
+-- symptom stated as an assertion: if a later change re-narrows the definer resolution to the
+-- entry's own import clauses, the sibling stays green and this one reds.
+--
+-- SPEC ANSWER (hand-derived from the declared signatures, NOT captured from any engine):
+-- `hop 1` = `cmod.pick 1` = `sz 1 + 100` = 101; `pick 1 + 200` = `1 + 200` = 201, because
+-- `umod.pick : a -> a` abstracts NO dict whatever `cmod.pick` abstracts. So: 101 then 201.
+--
+-- MEASURED KNOWN-BAD at the pre-repair head `fb7f3544`, in BOTH import orders: `run` printed
+-- 101 and then died `E-NOT-A-FUNCTION: applied non-function: <dict:>`, while `check` exited 0
+-- and the built binary printed the correct 101/201. Order-invariant, so
+-- `test/diff_compiler_import_order.sh` cannot see it -- see the sibling's header.
+import umod.*
+import smod.{hop}
+
+main =
+  println (hop 1)
+  println (pick 1 + 200)

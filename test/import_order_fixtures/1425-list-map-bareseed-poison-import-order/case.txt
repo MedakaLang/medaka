@@ -1,0 +1,82 @@
+entry: main.mdk
+what: DELIBERATE REGRESSION GUARD (not a discovery, not a new bug) for a coverage gap
+what: created BY THIS SPRINT'S OWN #1683 (RUN-XMOD-052). PR #1683 drained the original
+what: #1425 must-fail pin (test/must_fail_fixtures/1425-list-get-map-bare-seed-poison/,
+what: deleted with no git-detected rename) and committed a REPLACEMENT case at
+what: test/import_order_fixtures/1425-samename-dict-arity-import-order/ that is a
+what: byte-for-byte copy of the UNRELATED s8-i1-samename-independent-dict-arity dict
+what: fixture: synthetic `lefty`/`righty` widgets, both bindings always CALLED via
+what: `as`-qualified imports. That replacement gained cells (five graded channels vs
+what: the drained pin's one) but LOST the original pin's whole point: a binding that
+what: is reachable in the module graph but NEVER CALLED. This directory restores that
+what: property with real stdlib names.
+
+## WHY THIS EXISTS, PRECISELY (RUN-XMOD-052)
+
+A sprint bug-reproducer confirmed first-hand (bundle:
+/var/tmp/medaka-sprints/xmod-identity/findings/conf-1683-repoint/) that base
+(a1086fbbad826ceb9873fb2e308cb8cc3d7bdf51) panics on the ORIGINAL #1425 module graph
+(main -> list.{get} + usemap.{sizeOf1,mkMap}, usemap -> map.{Map,size,singleton},
+`map.get` never imported/called by anyone) and head (565bad56) fixes it -- but NO
+fixture committed anywhere in the tree after #1683 exercises the "reachable but never
+called" property, in any corpus (import_order_fixtures/, dict_fixtures/,
+must_fail_fixtures/). The committed 1425-samename-dict-arity-import-order/ replacement
+is structurally INCAPABLE of expressing it: its own import shape (`as`-qualified,
+both bindings always called at every site) was confirmed, by direct probe against the
+pre-fix base binary, to NOT reproduce a "call one, never call the other" analog of the
+bug at all (a `lefty`/`righty` widget-shaped reconstruction of the never-called
+property printed `101`, exit 0, correctly, on BOTH import orderings at base -- i.e.
+it cannot see this defect class).
+
+The brain's ruling (RUN-XMOD-052) also corrects a claim in the reproducer's bundle:
+the "reachability gap is independent of the naming difference" framing is NOT
+established. The only configuration measured to reproduce the bug uses real stdlib
+names (`list`/`map`) AND the never-called property TOGETHER -- a synthetic
+never-called analog does not reproduce at base at all (see above). This directory
+therefore keeps the REAL stdlib names, per that ruling -- a synthetic reconstruction
+would guard nothing.
+
+## MINIMAL SHAPE (RUN-XMOD-052 action 2)
+
+Uses a 2-HOP direct `import map`, not the original pin's 3-hop
+`main -> usemap -> map`. The reproducer measured the transitive `usemap` hop is NOT
+load-bearing for the mechanism -- a direct `import map` in `main.mdk` reproduces the
+defect identically on the pre-fix base binary. Only the "reachable but never called"
+property and the real-stdlib-name pairing are load-bearing; the extra hop is not, so
+this fixture omits it. `main.mdk` imports `list.{get}` (the binding it calls) and
+`map.{Map, size, singleton}` (imported so `map` -- and therefore its bare-name `get`
+export -- is reachable in the module graph; NONE of the three are ever called here).
+
+## HOW THE EXPECTED VALUE WAS ESTABLISHED
+
+`get 0 [10, 20, 30]` is a plain 0-indexed list lookup on `list.get : Int -> List a ->
+Option a`, an UNCONSTRAINED binding per DICT-SEMANTICS Sec8 I1. Its dict arity is its
+own, independent of any other same-bare-name binding (here, `map.get`, differently
+constrained) merely being reachable elsewhere in the module graph. The answer is
+`Some 10` under every ordering and in the no-`map`-import control.
+
+## MEASURED FIRST-HAND
+
+At base `a1086fbbad826ceb9873fb2e308cb8cc3d7bdf51` (fresh cold `make medaka` in a
+dedicated worktree, `MEDAKA_STRICT=1`, binary probed immediately after that build):
+
+    main.mdk          (list, map order):    runtime error [E-PANIC]: no matching impl for dispatch, exit 1
+    main_swapped.mdk  (map, list order):    Some 10, exit 0
+    control.mdk       (no map import):      Some 10, exit 0
+
+At slice head `565bad561238cfeca890bfef85dcc7c219fe98f6` (this branch's own binary,
+`MEDAKA_STRICT=1`):
+
+    main.mdk:          Some 10, exit 0
+    main_swapped.mdk:  Some 10, exit 0
+    control.mdk:       Some 10, exit 0
+
+Fail-capable at base (one ordering panics while the other two channels agree and are
+correct -- matching the original pin's own note that `run` is the discriminating
+verb), invariant-correct at head (every ordering and the control agree and are
+correct). This is demonstrably not a vacuous regression guard.
+
+This case is graded INVARIANT (no `test/IMPORT-ORDER-LEDGER.txt` row): the defect it
+guards is FIXED already, on the same branch this guard lands on -- add-then-delete
+resolves to no row, per the ledger's own header and this corpus's own #1326/#1425
+precedent.

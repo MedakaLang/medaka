@@ -1,0 +1,6 @@
+-- RE-EXPORTS every public value of `umod`, WILDCARD spelling, and DECLARES nothing.
+--
+-- The sibling `-selective-through-wildcard/` fixture varies only this line (`.{pick}` there,
+-- `.*` here): both re-export spellings must resolve `pick`'s definer to `umod`, and a supply
+-- side that enumerates re-export forms by hand can cover one and miss the other.
+export import umod.*

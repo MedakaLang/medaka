@@ -1,8 +1,0 @@
-import ps.{h as ph}
-
-data NoDisp = NoDisp
-
-tag : NoDisp -> String
-tag _ = "ok"
-
-main = println "\{tag NoDisp} / \{ph 5}"

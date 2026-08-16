@@ -36,15 +36,23 @@ why-control: control no longer stays green on `run`, since it panics
 why-control: identically to `main.mdk` via the #1369/#1425 channel -- see
 why-control: why-note below). Re-measured: `medaka run control.mdk` -> exit 0,
 why-control: stdout `2`.
-why-note: on `run`, the ALIAS-spelling panic in `main.mdk` is NOT
-why-note: mechanistically distinct from #1369's own selective-spelling
-why-note: pin (`test/must_fail_fixtures/1369-export-import-constrained-callee-no-dict/`)
-why-note: -- both panic identically (`intToString: not an Int`) via the
-why-note: shared #1369/#1425 dict-arity seam. That is WHY the control here
-why-note: had to change from "selective re-export" (which also panics) to
-why-note: "direct import, no re-export hop" (which is green) -- the
-why-note: alias-vs-selective distinction that discriminated the now-fixed
-why-note: BUILD defect does not discriminate on RUN. #1427 is kept as its
+why-note: SUPERSEDED AT RUN-XMOD-062, AND THE CORRECTION IS THE POINT.
+why-note: This note used to say the ALIAS-spelling panic was NOT
+why-note: mechanistically distinct from #1369's selective-spelling pin,
+why-note: because both panicked `intToString: not an Int`. #1369's pin has
+why-note: since DRAINED and been re-pointed into
+why-note: test/diff_compiler_dict_semantics.sh: the dict-arity seam now
+why-note: resolves a re-exported name to its TRUE definer, so every NAMED
+why-note: import form routes the dict correctly and the selective spelling
+why-note: prints `2` at exit 0 on all four cells. This ALIAS spelling is
+why-note: byte-identically unchanged, so the two ARE distinct after all:
+why-note: an alias route is not built from those definer rows at all --
+why-note: `aliasEntriesFor` copies qual entries whose definer is
+why-note: `usePathModuleId path`, i.e. the module the importer SPELLS, and
+why-note: a re-exporter spells no entries. ⇒ the residue is ALIAS-SPECIFIC
+why-note: and its site is `aliasEntriesFor`/`aliasConstraintEntries`, not
+why-note: `importDefinersOf`. The control below stays as it is (direct
+why-note: import, no hop): it is still green and still isolates the hop. #1427 is kept as its
 why-note: own pin (not merged into #1369's) because the issue tracker
 why-note: still separately tracks the alias-spelling shape and its
 why-note: closure is gated on #1425, exactly as #1369's closure is

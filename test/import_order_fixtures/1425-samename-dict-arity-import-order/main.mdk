@@ -18,25 +18,6 @@
 -- righty's exactly ONE. A bare-name arity table would give them the same count,
 -- and the value assertion alone might still pass if the extra slot happened to
 -- be ignored -- which is precisely how a "dead dict slot" hides.
---
--- 🚨 BUT NEITHER ROW IN THIS FILE CAN SEE THE EVAL-PATH FORM OF THAT SKEW, AND THAT
--- IS STRUCTURAL, NOT AN OVERSIGHT (RUN-XMOD-049, #1425). Both `define`-arity
--- assertions above read the EMIT path, and `entry_support.runEmitWith` runs
--- `mangleUnits` BEFORE `elaborateModules` -- which makes the emitter's bare keys
--- accidentally identity-bearing. So those two rows are incapable of failing on this
--- defect class HOWEVER BROKEN the eval path is: measured at `a1086fbb`, both were
--- green while `medaka run` on the same three modules, with the entry's two import
--- lines swapped, printed `101` and then panicked. The value row cannot see it
--- either, because the define and the call site AGREE on the phantom dict slot, so
--- the printed number is right by accident.
---
--- What actually reaches it is (a) the same three modules enrolled in
--- `test/import_order_fixtures/1425-samename-dict-arity-import-order/`, which permutes
--- the entry's import clauses and grades `run` and the EXECUTED BINARY in every
--- ordering, and (b) the polymorphic sibling `s8-i1-samename-unconstrained-poly-callee/`
--- beside this one, whose unconstrained callee is value-observably wrong when it is
--- handed a phantom dict. This fixture's own shape is monomorphic and has no
--- value-observable consequence, which is why the sibling exists.
 import lefty as L
 import righty as R
 

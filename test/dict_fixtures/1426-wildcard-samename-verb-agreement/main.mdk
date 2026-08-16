@@ -1,0 +1,43 @@
+-- #1426 (wildcard-import escape) -- RE-POINTED, not deleted, when it drained.
+--
+-- This is the ENTRY of the former `test/must_fail_fixtures/
+-- 1426-wildcard-samename-check-passes-run-build-fail/`, moved here verbatim (ps.mdk / qs.mdk
+-- are byte-identical) when the RUN-XMOD-054 seam repair drained it. AGENTS.md prefers
+-- re-pointing a drained pin over deleting it: deleting removes the only executable memory
+-- that the shape was ever broken, and the must-fail harness graded ONE command plus a
+-- control, so the pin's other dimensions -- `check` and `build`+execute -- were sitting there
+-- ungraded. Here all four cells (check verdict, run, build, executed binary) are graded.
+--
+-- THE DEFECT IT REMEMBERS. `ps.h : Display a => a -> String` abstracts one dict; `qs.h : a -> a`
+-- abstracts none. The entry imports `ps.{h as ph}` (selective+alias) and `qs.*` (wildcard) and
+-- uses BOTH. A wildcard-imported name contributed no row to `currentImportDefinersRef`, so
+-- `h` could not be resolved to a definer and fell through to the source-blind bare-name arity
+-- table, where `ps.h`'s `Display` row answered for `qs.h`. `medaka check` exited 0 (correctly:
+-- `NoDisp` never reaches `ps.h`) while `run` and `build` both exited 1 with a generic
+-- `error: type error in main.mdk` -- three verbs, two answers, on a well-typed program.
+--
+-- ⚠️ The pin's own claim.txt recorded this as ORDER-INDEPENDENT ("swapping the two import
+-- lines gives the identical check-0/run-1 split"), which is why the guard is a VALUE
+-- assertion here and not a case in `test/diff_compiler_import_order.sh`: that gate's criterion
+-- is invariance across orderings with no ground truth, so an order-invariant wrongness reads
+-- as "invariant" and PASSES on the broken compiler.
+--
+-- SPEC ANSWER, hand-derived and stated by the pin itself: `tag (h NoDisp)` uses qs's
+-- unconstrained `h` (needs no `Display`) and `ph 5` uses ps's constrained `h` at `Int` (which
+-- has `Display`). The program is well-typed and prints `ok / 5` at exit 0 on every verb.
+--
+-- MEASURED KNOWN-BAD at the pre-repair head `fb7f3544`: `run main.mdk` exit 1. The pin's
+-- CONTROL (drop the `qs` import and the `h NoDisp` call, keep `ps.{h as ph}`) exited 0 there,
+-- isolating the defect to the co-presence of both same-named bindings with one of them
+-- wildcard-imported. That control is not carried over as a file -- this directory is one
+-- project and a second `main` would join its module graph -- and its role is now served by
+-- the two `s8-i1-samename-wildcard-*` fixtures, which vary exactly that co-presence.
+import ps.{h as ph}
+import qs.*
+
+data NoDisp = NoDisp
+
+tag : NoDisp -> String
+tag _ = "ok"
+
+main = println "\{tag (h NoDisp)} / \{ph 5}"

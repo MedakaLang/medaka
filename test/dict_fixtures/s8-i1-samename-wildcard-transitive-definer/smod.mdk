@@ -1,0 +1,9 @@
+-- The ONLY module that names `cmod`. `main.mdk` reaches cmod's constrained `pick` solely
+-- through this hop, so the entry's source text never mentions the colliding module at all.
+-- That is the property this fixture adds over its `-wildcard-import-callee/` sibling: the
+-- poisoning reach of a bare-name arity table is the whole LOADED module set, not the entry's
+-- own import list, so a user can be broken by a collision they cannot see in their own file.
+import cmod as C
+
+export hop : Int -> Int
+hop n = C.pick n

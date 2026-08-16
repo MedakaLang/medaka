@@ -1,0 +1,4 @@
+-- The SAME constrained declaration the two `-reexport-selective-` fixtures reach through a
+-- re-export hop. Nothing here is re-exported: this module IS the definer, spelled directly.
+export f : Num a => a -> a
+f x = x + 1

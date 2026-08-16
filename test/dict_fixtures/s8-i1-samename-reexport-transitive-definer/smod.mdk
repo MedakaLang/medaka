@@ -1,0 +1,4 @@
+import cmod as C
+
+export hop : Int -> Int
+hop n = C.pick n

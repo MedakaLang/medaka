@@ -21,10 +21,19 @@
 -- EMPTY stdout) on this program. That panic is a DIFFERENT MECHANISM on a
 -- DIFFERENT channel -- the #1369/#1425 DICT-ARITY seam, owned by the sprint
 -- slice `S-dict-arity-seam`, not by the scheme-environment fix that drained the
--- build arm here. Its own control (`s8-xmod-reexport-selective-constrained-
--- control`) shows the identical panic under the SELECTIVE spelling, which is
--- what proves the residue is NOT the alias spelling and NOT this fix's to
--- close. #1427 therefore stays OPEN until that slice lands and repairs `run`.
+-- build arm here. #1427 therefore stays OPEN until that channel repairs `run`.
+--
+-- 🚨 UPDATED AT RUN-XMOD-062, BECAUSE THE ATTRIBUTION MOVED. This paragraph used
+-- to argue "the residue is NOT the alias spelling", on the ground that the
+-- selective-spelling control panicked identically. That control has since been
+-- REPAIRED: the dict-arity seam now resolves a re-exported name to its TRUE
+-- definer, so `import lib.rsel.{f}` prints `2` at exit 0 on every verb. This
+-- ALIAS spelling is byte-identically unchanged, because an alias route is not
+-- built from those rows -- `aliasEntriesFor` copies qual entries whose definer is
+-- `usePathModuleId path`, the SPELLED module, and a re-exporter spells no
+-- entries. ⇒ The remaining residue IS alias-specific, and its site is
+-- `aliasEntriesFor`/`aliasConstraintEntries`, not `importDefinersOf`. Cells 2, 3
+-- and 4 below were measured BEFORE that repair; re-derive rather than trust.
 --
 -- ⭐ THE ATTRIBUTION NOW HAS FOUR INDEPENDENT CELLS, NOT ONE (RUN-XMOD-039 F5 --
 -- the slice-breaker re-derived two of them independently at shapes this fixture

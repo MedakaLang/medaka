@@ -1,0 +1,9 @@
+-- Same as main.mdk with the two import lines swapped -- the original bug's own
+-- mechanism note says the topological-order accumulator is grown in import-line
+-- order, so both orderings must be checked.
+import map.{Map, size, singleton}
+import list.{get}
+
+main =
+  let xs = [10, 20, 30]
+  println (get 0 xs)

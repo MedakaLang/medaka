@@ -1,0 +1,13 @@
+-- CONSTRAINED `pick`: per DICT-SEMANTICS §4 `gen-sig` it abstracts ONE dict parameter, and
+-- per §8 I1 that arity belongs to THIS binding's module-qualified identity, not to the
+-- surface name `pick`. Identical to the `s8-i1-samename-unconstrained-poly-callee/` sibling's
+-- cmod -- what differs in this fixture is the ENTRY'S IMPORT SPELLING, which is the whole
+-- variable under test.
+export interface Sz a where
+  sz : a -> Int
+
+export impl Sz Int where
+  sz n = n
+
+export pick : Sz a => a -> Int
+pick x = sz x + 100

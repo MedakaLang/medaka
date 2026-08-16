@@ -1,0 +1,5 @@
+-- UNCONSTRAINED, POLYMORPHIC `pick`, sharing the surface name with cmod's constrained one.
+-- Dict arity 0, independently of cmod's 1 (DICT-SEMANTICS §8 I1). No local caller: the only
+-- occurrence of `pick` in the program is the wildcard-imported one in main.mdk.
+export pick : a -> a
+pick x = x

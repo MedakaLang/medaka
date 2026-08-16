@@ -1,0 +1,17 @@
+-- UNCONSTRAINED binding sharing the surface name `pick` with cmod's. Its dict arity is 0,
+-- independently of cmod's 1 (DICT-SEMANTICS §8 I1).
+--
+-- POLYMORPHIC on purpose: `s8-i1-samename-independent-dict-arity/`'s shape is monomorphic
+-- (`Int -> Int`), so a phantom leading dict is silently consistent there -- define and call
+-- site agree on the extra slot and the printed number is right by accident. `a -> a` makes
+-- the skew value-observable.
+--
+-- ⚠️ NOTE WHAT IS **NOT** HERE, and it is the difference from the
+-- `s8-i1-samename-unconstrained-poly-callee/` sibling: that fixture's `umod` also declares a
+-- `use` helper that calls `pick` LOCALLY, so the occurrence it grades is a same-module one.
+-- Here there is no local caller at all. The only occurrence of `pick` in the whole program is
+-- in `main.mdk`, reached through `import umod.*` -- a WILDCARD-imported occurrence, which is
+-- the one import spelling that contributed no rows to `currentImportDefinersRef` and so fell
+-- through to the source-blind bare-name table. See main.mdk's header.
+export pick : a -> a
+pick x = x

@@ -1,0 +1,20 @@
+-- UNCONSTRAINED binding sharing the surface name `pick` with cmod's. Its dict arity is 0,
+-- independently of cmod's 1 (DICT-SEMANTICS §8 I1).
+--
+-- POLYMORPHIC on purpose, and it is the whole point of this fixture: `s8-i1`'s sibling
+-- shape is monomorphic (`Int -> Int`), so a phantom leading dict parameter there is
+-- silently consistent -- the define and the call site agree on the extra slot and the
+-- printed number comes out right by accident. Here the binding is `a -> a`, so a phantom
+-- dict slot makes `pick` RETURN THE DICTIONARY instead of its argument, which is
+-- value-observable.
+--
+-- `use` calls `pick` LOCALLY, inside the module that declares it. That matters: an
+-- explicitly IMPORTED occurrence is resolved through `currentImportDefinersRef` and the
+-- module-qualified arity tables, which were already source-exact; a LOCAL occurrence takes
+-- the bare-name table, which is where a foreign module's same-named constrained binding
+-- was able to size this one.
+export pick : a -> a
+pick x = x
+
+export use : Int -> Int
+use n = pick n + 200

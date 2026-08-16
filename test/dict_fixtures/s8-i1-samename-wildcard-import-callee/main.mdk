@@ -1,0 +1,47 @@
+-- DICT-SEMANTICS §8 I1 under the WILDCARD import spelling (RUN-XMOD-054, #1425 F1 repair).
+--
+-- WHAT THIS ADDS OVER ITS TWO SIBLINGS. `s8-i1-samename-independent-dict-arity/` grades the
+-- EMIT path (mangled, accidentally identity-bearing) and a monomorphic value;
+-- `s8-i1-samename-unconstrained-poly-callee/` grades an eval-path occurrence reached through
+-- an ALIASED import and a same-module local call. Neither contains a wildcard import, and
+-- neither does any other fixture in this tree: at the time this was written,
+--
+--     grep -rn "^import [a-z_]*\.\*" compiler/ stdlib/   ->  zero files
+--
+-- so the self-compile fixpoint, `selfproc` and `check-self` are all structurally incapable of
+-- observing the wildcard-import class. That blind spot is why the #1425 dict-arity fix could
+-- repair the aliased arm and BREAK this one in the same motion, with every gate green.
+--
+-- THE MECHANISM IT GUARDS. A wildcard-imported name contributed NO row to
+-- `currentImportDefinersRef`, so `qualConstraintKey` could not resolve it to a definer and
+-- `declaredConstraintFor` fell through to the bare-name table -- where `cmod.pick`'s
+-- constrained row answered for `umod.pick`. While the bare table was ALSO wrong on the define
+-- side the two errors cancelled and this spelling looked correct; once `selfDeclArities` fixed
+-- the define by identity, the call site began applying a dict its callee no longer abstracts.
+--
+-- SPEC ANSWER (hand-derived from the declared signatures, NOT captured from any engine):
+-- dict arity is keyed by binding identity, so `cmod.pick : Sz a => a -> Int` abstracts one
+-- dict and `umod.pick : a -> a` abstracts NONE. `C.pick (1 : Int)` = `sz 1 + 100` = 101.
+-- `pick 1 + 200` = `1 + 200` = 201. So: 101 then 201.
+--
+-- 🚨 UNLIKE ITS `-poly-callee` SIBLING, THE IMPORT ORDER HERE IS **NOT** LOAD-BEARING, AND
+-- THAT IS ITSELF THE FINDING. Measured at the pre-repair head `fb7f3544`, BOTH orders:
+--
+--     import umod.* ; import cmod as C  ->  run exit 1: 101, then
+--                                           `E-NOT-A-FUNCTION: applied non-function: <dict:>`
+--     import cmod as C ; import umod.*  ->  run exit 1: identical
+--
+-- Because the wrongness is order-INVARIANT, `test/diff_compiler_import_order.sh` -- whose
+-- criterion is invariance across orderings, with no ground truth -- reports this shape as
+-- "invariant" and PASSES on the broken compiler. A permutation differential can only see the
+-- order-dependent face of this defect family; the value assertion below is what sees this one.
+-- That is why this guard lives in `dict_semantics` and not in `import_order`.
+--
+-- `medaka check` exits 0 and the BUILT BINARY prints the correct 101/201 on the broken
+-- compiler too; `run` is the only verb that shows it.
+import umod.*
+import cmod as C
+
+main =
+  println (C.pick (1 : Int))
+  println (pick 1 + 200)
