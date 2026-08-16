@@ -1182,30 +1182,8 @@ for leaf_field in CHARCLASS FLOATRNG STRCODEC MATH; do
     exit 1
   }
 done
-for leaf_field in CHARCLASS FLOATRNG STRCODEC MATH; do
-  for leaf_wat in p1 u p2; do
-    leaf_path="$INPUT_WORK/leaf-${leaf_field}-${leaf_wat}.wat"
-    wasm-tools parse "$leaf_path" -o "$INPUT_WORK/leaf-${leaf_field}-${leaf_wat}.wasm" >"$INPUT_WORK/leaf-${leaf_field}-${leaf_wat}.parse.out" 2>"$INPUT_WORK/leaf-${leaf_field}-${leaf_wat}.parse.err"
-    LEAF_PARSE_STATUS=$?
-    [ "$LEAF_PARSE_STATUS" -eq 0 ] && [ ! -s "$INPUT_WORK/leaf-${leaf_field}-${leaf_wat}.parse.out" ] && [ ! -s "$INPUT_WORK/leaf-${leaf_field}-${leaf_wat}.parse.err" ] || {
-      echo "FAIL LR-${leaf_field}-PARSE: $leaf_wat"
-      exit 1
-    }
-    wasm-tools validate --features=all "$INPUT_WORK/leaf-${leaf_field}-${leaf_wat}.wasm" >"$INPUT_WORK/leaf-${leaf_field}-${leaf_wat}.validate.out" 2>"$INPUT_WORK/leaf-${leaf_field}-${leaf_wat}.validate.err"
-    LEAF_VALIDATE_STATUS=$?
-    [ "$LEAF_VALIDATE_STATUS" -eq 0 ] && [ ! -s "$INPUT_WORK/leaf-${leaf_field}-${leaf_wat}.validate.out" ] && [ ! -s "$INPUT_WORK/leaf-${leaf_field}-${leaf_wat}.validate.err" ] || {
-      echo "FAIL LR-${leaf_field}-VALIDATE: $leaf_wat"
-      exit 1
-    }
-    "$NODE" "$RUNJS" "$INPUT_WORK/leaf-${leaf_field}-${leaf_wat}.wasm" >"$INPUT_WORK/leaf-${leaf_field}-${leaf_wat}.run.out" 2>"$INPUT_WORK/leaf-${leaf_field}-${leaf_wat}.run.err"
-    LEAF_RUN_STATUS=$?
-    [ "$LEAF_RUN_STATUS" -eq 0 ] && [ ! -s "$INPUT_WORK/leaf-${leaf_field}-${leaf_wat}.run.err" ] &&
-      printf '0\n' | cmp -s - "$INPUT_WORK/leaf-${leaf_field}-${leaf_wat}.run.out" || {
-        echo "FAIL LR-${leaf_field}-EXEC: inert $leaf_wat"
-        exit 1
-      }
-  done
-done
+# Field ownership checks must precede toolchain work: reader mutants must fail at
+# their field-specific assertion, never a downstream parse/validate/execute check.
 for leaf_wat in p1 p2; do
   grep -F '(func $mdk_char_is_alpha' "$INPUT_WORK/leaf-CHARCLASS-${leaf_wat}.wat" >/dev/null &&
     grep -F 'call $mdk_char_is_alpha' "$INPUT_WORK/leaf-CHARCLASS-${leaf_wat}.wat" >/dev/null || {
@@ -1279,8 +1257,32 @@ for leaf_field in CHARCLASS FLOATRNG STRCODEC MATH; do
   [ "$(wc -l < "$INPUT_WORK/leaf-${leaf_field}-census.events")" -eq 1 ] &&
     [ "$(cat "$INPUT_WORK/leaf-${leaf_field}-census.events")" = "${!leaf_event_var}" ] || {
       echo "FAIL LR-${leaf_field}-CENSUS: exact one attributed gap"
+    exit 1
+  }
+done
+for leaf_field in CHARCLASS FLOATRNG STRCODEC MATH; do
+  for leaf_wat in p1 u p2; do
+    leaf_path="$INPUT_WORK/leaf-${leaf_field}-${leaf_wat}.wat"
+    wasm-tools parse "$leaf_path" -o "$INPUT_WORK/leaf-${leaf_field}-${leaf_wat}.wasm" >"$INPUT_WORK/leaf-${leaf_field}-${leaf_wat}.parse.out" 2>"$INPUT_WORK/leaf-${leaf_field}-${leaf_wat}.parse.err"
+    LEAF_PARSE_STATUS=$?
+    [ "$LEAF_PARSE_STATUS" -eq 0 ] && [ ! -s "$INPUT_WORK/leaf-${leaf_field}-${leaf_wat}.parse.out" ] && [ ! -s "$INPUT_WORK/leaf-${leaf_field}-${leaf_wat}.parse.err" ] || {
+      echo "FAIL LR-${leaf_field}-PARSE: $leaf_wat"
       exit 1
     }
+    wasm-tools validate --features=all "$INPUT_WORK/leaf-${leaf_field}-${leaf_wat}.wasm" >"$INPUT_WORK/leaf-${leaf_field}-${leaf_wat}.validate.out" 2>"$INPUT_WORK/leaf-${leaf_field}-${leaf_wat}.validate.err"
+    LEAF_VALIDATE_STATUS=$?
+    [ "$LEAF_VALIDATE_STATUS" -eq 0 ] && [ ! -s "$INPUT_WORK/leaf-${leaf_field}-${leaf_wat}.validate.out" ] && [ ! -s "$INPUT_WORK/leaf-${leaf_field}-${leaf_wat}.validate.err" ] || {
+      echo "FAIL LR-${leaf_field}-VALIDATE: $leaf_wat"
+      exit 1
+    }
+    "$NODE" "$RUNJS" "$INPUT_WORK/leaf-${leaf_field}-${leaf_wat}.wasm" >"$INPUT_WORK/leaf-${leaf_field}-${leaf_wat}.run.out" 2>"$INPUT_WORK/leaf-${leaf_field}-${leaf_wat}.run.err"
+    LEAF_RUN_STATUS=$?
+    [ "$LEAF_RUN_STATUS" -eq 0 ] && [ ! -s "$INPUT_WORK/leaf-${leaf_field}-${leaf_wat}.run.err" ] &&
+      printf '0\n' | cmp -s - "$INPUT_WORK/leaf-${leaf_field}-${leaf_wat}.run.out" || {
+        echo "FAIL LR-${leaf_field}-EXEC: inert $leaf_wat"
+        exit 1
+      }
+  done
 done
 
 # H2b.10 capture-only apparatus. HashFloat P is strict and inert; record U keeps
