@@ -1,0 +1,60 @@
+issue: 1681
+what: `medaka run` on a program whose `main` is a non-Unit, non-Async VALUE
+what: (`main = 3 + 1`) prints a message shaped like a rejection --
+what: `'main' must be a value of type Unit (e.g. an IO action). 'medaka run' only
+what: forces main for its side effects and prints nothing for a plain value; wrap
+what: the intended effect, e.g. 'main = println "hi"'` (compiler/driver/medaka_cli.mdk,
+what: `mainNonUnitMsg`/`mainNonUnitWarning`) -- but the process EXITS 0 and produces
+what: ZERO BYTES of stdout, never applying/printing `main`'s value.  The SAME source
+what: built and executed (`medaka build` + run the binary) auto-prints the value: `4`,
+what: exit 0.  So for one unmodified source file, `run` silently discards the value
+what: at exit 0 (indistinguishable, by exit code, from a correct silent program) while
+what: the built binary computes and prints it -- a run-vs-build observable divergence
+what: that is NOT gated by anything: `check`/`check --json` both also report success
+what: (check human output repeats the same warning text plus "ok ... 0 errors"; MEASURED
+what: separately that `check --json` on this exact file returns an EMPTY diagnostics
+what: array, i.e. the W-MAIN-SHAPE warning is not even visible on the machine-readable
+what: channel -- noted here as an adjacent observation, not part of this claim).
+what: MECHANISM (derived, not asserted as a defect): `mainNonUnitWarning`
+what: (compiler/driver/medaka_cli.mdk:726-733) is SevWarning, not SevError, by
+what: explicit design (the surrounding comment names it a "0.1.0 audit #3" beginner-
+what: footgun UX addition on top of a PRE-EXISTING silent no-op --
+what: "medaka run evaluates top-level bindings and checks main EXISTS but never
+what: APPLIES it ... silently no-ops (exit 0, no output, no diagnostic)",
+what: compiler/driver/medaka_cli.mdk:677-679).  So the exit-0 outcome is deliberate;
+what: what this claim pins is the OBSERVABLE (exit 0, zero-byte stdout) for this
+what: specific source, not a judgment that the design is wrong.
+cmd: run main.mdk
+exit: 0
+stdout-bytes:
+control: run control.mdk
+why-fixture: `run`'s stdout-only grading (test/diff_compiler_must_fail.sh's run_verb)
+why-fixture: never sees the rejection-shaped text -- it lands on stderr
+why-fixture: (confirmed: `medaka run main.mdk >out 2>err` puts the full message in
+why-fixture: `err` and leaves `out` at 0 bytes).  The only channel this harness can
+why-fixture: grade for the `run` verb is exit code + stdout, so the claim pins
+why-fixture: exactly that pair.  `stdout-bytes:` is left EMPTY (zero bytes, no
+why-fixture: trailing newline) because the real captured stdout is genuinely 0 bytes
+why-fixture: -- `stdout:` (the newline-per-line matcher) cannot express this: even an
+why-fixture: EXPLICITLY empty `stdout:` field still materializes a 1-byte expected
+why-fixture: file (one appended blank line) via its per-line `while read` loop, which
+why-fixture: would mismatch a genuinely-0-byte capture and misreport MALFORMED/DRAINED
+why-fixture: from the moment this fixture is added -- precedent for this exact
+why-fixture: `stdout-bytes:`-empty idiom is
+why-fixture: test/must_fail_fixtures/1101-native-call-drops-arg-caf-closure.
+why-fixture: This pin is fail-capable in BOTH plausible remediation directions: if a
+why-fixture: fix instead makes a non-Unit main a hard error, `exit:` flips to nonzero
+why-fixture: and the pin drains; if a fix instead makes `run` compute and auto-print
+why-fixture: the value (matching build), stdout stops being empty and the pin drains.
+why-control: control.mdk is main.mdk with the ONLY change being that the value is
+why-control: wrapped in `println` (`main = println (3 + 1)`), making `main` a genuine
+why-control: `Unit` IO action -- the exact remedy the message itself suggests. It
+why-control: must `run` clean at exit 0; confirmed independently it prints `4` then a
+why-control: newline (this suite's control check only grades exit 0, so the value
+why-control: match is this claim's own observation, not the gate's).
+why-note: DISTINCT from the sibling incidental finding in the same source report
+why-note: (`medaka test` admits a body `medaka run` rejects at typecheck, then
+why-note: panics) -- that is a different verb (`test`, which this harness has no
+why-note: verb for at all) and a different mechanism (the `hasTests`/`hasProps`
+why-note: typecheck-gate exemption in compiler/tools/test_cmd.mdk, not the main-shape
+why-note: warning path here). Keep the two issues/fixtures separate.
