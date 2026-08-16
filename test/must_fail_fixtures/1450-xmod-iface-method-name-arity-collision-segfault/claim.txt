@@ -109,3 +109,13 @@ mechanism: impl's own interface rather than from a name-keyed global lookup) sho
 mechanism: flip main.mdk's build-run from exit 139 to exit 0 printing `12`, draining
 mechanism: this row: close #1450 and delete this fixture (or re-point it at a
 mechanism: regression gate asserting the fixed behavior).
+why-note: SUPERSEDES the single-fixture closing sentence in the `mechanism:` block
+why-note: above (drafted before a second fixture existed). #1450 now has a CHILD
+why-note: issue, #1668 (test/must_fail_fixtures/1668-xmod-saturated-bare-import-
+why-note: arity-shadow/), pinning a DISTINCT cell of this same table: DEFLATED
+why-note: arity / under-applied call / loud SEGFAULT (this fixture) vs. INFLATED
+why-note: arity / fully SATURATED call / SILENT wrong value (#1668). #1450 and
+why-note: #1668 reach the same site from opposite directions, so one fix is
+why-note: EXPECTED to drain both. Closing both on a shared drain is correct -- if
+why-note: both pins actually drained. Closing either while the other's pin still
+why-note: reproduces is not, and is a finding.
