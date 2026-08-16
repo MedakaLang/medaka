@@ -1,5 +1,5 @@
 # META
-source_lines=30490
+source_lines=30542
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted typecheck stage — port of lib/typecheck.ml's HM core.  SLICE 1:
@@ -11805,11 +11805,34 @@ occurrenceCarriesMangledShadowSym tagRef = routeLocalSym tagRef.value != ""
 -- for THIS route.  The new graph-level conjunct is ADDED, not substituted for the
 -- occurrence test — F7 (this file) forbids replacing the per-occurrence route test with a
 -- graph-wide one: doing so would fire for occurrences the mark pass never marked, and
--- would pin genuine method-values, breaking dispatch.  The new conjunct is
--- redundant-by-construction (F8's implication chain: a non-empty route symbol can only
--- exist if `sm` — the mangled-shadow map — was non-empty, which implies the graph fact is
--- already True), so it can only ever narrow nothing further; A4-5's negative control
--- measures that, rather than asserting it.
+-- would pin genuine method-values, breaking dispatch.
+--
+-- 🚨 RUN-XMOD-045 CORRECTION (post-landing, slice-breaker finding) — REPLACES the
+-- original "redundant-by-construction, F8" safety narrative below with the actual one.
+-- F8's implication chain ("a non-empty route symbol implies the graph fact is True") is
+-- still literally true, but it undersold what actually holds: `mangledFunDefsPresentRef`
+-- is not merely implied True in that case, it is CONSTANT TRUE on every emit path,
+-- unconditionally — see `graphCarriesMangledFunDefs`'s header for the mechanism
+-- (`private_mangle.mdk:14-16` mangles core's own funDefs unconditionally, before this
+-- flag is ever computed; measured ~70 `@mdk_<mid>__*` symbols in a feature-free build's
+-- IR with zero shadows).  F8's phrasing hid its own precondition: it is only a
+-- meaningful narrowing test if the flag CAN be False on some occurrence's compile, and
+-- on the emit path it never is.  The actual safety property is therefore simpler and
+-- stronger than "redundant, measured by a negative control": THE FLAG IS CONSTANT TRUE
+-- THE MOMENT MANGLING RAN AT ALL, so its conjunct can never be what rejects an
+-- occurrence the un-mangled reading of `occurrenceCarriesMangledShadowSym` would have
+-- accepted — the predicate's real discriminator is still, and only, the
+-- per-occurrence route symbol.
+--
+-- 🚨 THIS FACT CURRENTLY HAS NO DISCRIMINATING CONSUMER — L4's conjunct
+-- (`mangledFunDefsPresentRef`) is constant-True on emit and its partner
+-- (`occurrenceCarriesMangledShadowSym`) is always-empty off emit.  It is explicit
+-- documentation of an implicit invariant, not a live condition.  Do not migrate a
+-- reader onto it expecting it to select.  KEPT rather than reverted (owner ruling,
+-- RUN-XMOD-045): provably zero-risk, and "this graph was mangled" is more readable
+-- than the anonymous `routeLocalSym … != ""` idiom it replaced, even though it cannot
+-- currently narrow anything a build-time `medaka check`/`run`/`build` differential
+-- could observe from outside the compiler.
 importerShadowOnEmitPath : String -> Ref Route -> Bool
 importerShadowOnEmitPath name tagRef = singleTyparamIfaceMethod name
   && driverState.value.mangledFunDefsPresentRef.value
@@ -27698,6 +27721,35 @@ unitMangledShadows methodNames (mid, decls) =
 -- Monomorphic, explicit-recursion, short-circuits on the first hit — do NOT
 -- delegate to prelude `any`/`elem` here (AGENTS.md: costed +56% self-compile
 -- on this file's hot helpers).
+--
+-- 🚨 RUN-XMOD-045 CORRECTION (post-landing, slice-breaker finding): on EVERY
+-- emit path this flag is CONSTANT TRUE, not merely "true when some module
+-- shadows an interface method."  `private_mangle.mdk:14-16` states the
+-- mangler's actual scope: "EVERY top-level FUNCTION binding (in core + every
+-- module) is renamed to a module-qualified unique symbol," unconditionally,
+-- BEFORE `elaborateModules` (and therefore this function) ever runs.  So
+-- `core`'s own funDefs already carry the `core__` prefix by the time this
+-- walks them, and the very first unit checked (`("core", coreDecls)`, see
+-- both call sites below) already satisfies `unitCarriesMangledFunDefs` —
+-- MEASURED: a feature-free `main = println 1` build emits ~70 distinct
+-- `@mdk_core__*`/`@mdk_<mid>__*` symbols in its own IR with zero user
+-- modules, zero shadows, zero interfaces.  The ORIGINAL packet's inertness
+-- argument (F8: "a non-empty route symbol implies this flag is True") is
+-- still literally correct but was read as "this flag is sometimes False,"
+-- which is false — it is NEVER False on the emit path, so F8's implication
+-- is vacuously satisfied rather than doing narrowing work.  The precondition
+-- F8's phrasing hid: BOTH writers (this flag AND the route-symbol conjunct
+-- in `importerShadowOnEmitPath`) are stamped by the SAME compile, and on
+-- that compile this flag is always True the moment mangling has run at all —
+-- see `importerShadowOnEmitPath`'s own header for the consequence.
+--
+-- 🚨 THIS FACT CURRENTLY HAS NO DISCRIMINATING CONSUMER — L4's conjunct is
+-- constant-True on emit and its partner (`occurrenceCarriesMangledShadowSym`)
+-- is always-empty off emit.  It is explicit documentation of an implicit
+-- invariant, not a live condition.  Do not migrate a reader onto it
+-- expecting it to select.  KEPT (not reverted) by owner ruling because it is
+-- provably zero-risk and reads better than the anonymous test it replaced —
+-- see `importerShadowOnEmitPath`.
 graphCarriesMangledFunDefs : List (String, List Decl) -> Bool
 graphCarriesMangledFunDefs [] = False
 graphCarriesMangledFunDefs ((mid, decls)::rest) =

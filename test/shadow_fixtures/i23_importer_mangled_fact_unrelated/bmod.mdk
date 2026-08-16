@@ -1,9 +1,0 @@
--- L4 trap fixture, UNRELATED half: its own single-typaram interface, its own data type,
--- its own impl. Does not mention `amod`'s names (`Sizeable`, `size`) anywhere.
-export interface Greetable a where
-  greet : a -> String
-
-public export data Widget = Widget String
-
-export impl Greetable Widget where
-  greet (Widget s) = "Hello, \{s}!"
