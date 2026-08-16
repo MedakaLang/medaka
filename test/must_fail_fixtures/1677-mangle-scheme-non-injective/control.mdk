@@ -1,0 +1,6 @@
+import libplain.{g as gFlat}
+import lib.plain.{g as gNested}
+
+main =
+  println (gFlat 1)
+  println (gNested 1)
