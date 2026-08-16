@@ -1,0 +1,4 @@
+import zmodI.{IZ}
+import fmodI.{mth}
+
+main = println (mth "abc" 5)

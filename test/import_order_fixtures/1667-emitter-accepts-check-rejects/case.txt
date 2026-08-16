@@ -1,0 +1,45 @@
+entry: main.mdk
+what: #1667's own minimized 2-module repro, enrolled here (packet
+what: L1-L2-driver-asymmetry-observation, RUN-XMOD-030 item 7's BINDING
+what: requirement) so the emitter-verdict ledger's #1667 citation actually
+what: watches the shape the MUST-FAIL-NOT-PINNABLE row is about, rather than
+what: only the unrelated #1351 3-module corpus.
+
+Sources copied byte-for-byte from
+`/var/tmp/medaka-sprints/xmod-identity/findings/emit-accepts-check-rejects/repro/`
+(main.mdk, fmodI.mdk, zmodI.mdk) -- not modified. `zmodI.IZ.mth : Int -> b -> Int`
+carries the program's only impl (`impl IZ String`, whose `mth` takes an `Int`
+first); `fmodI.mth : String -> Int -> Int` is an unrelated standalone with the
+same bare name. The call `mth "abc" 5` passes a `String` first, so under EITHER
+reading of which `mth` should win, `check`/`run`/`build` reject it.
+
+`main.mdk` has two top-level import clauses (zmodI, fmodI), so this gate's
+permuter tries both 2! = 2 orderings.
+
+## HOW THE EXPECTED VALUES WERE ESTABLISHED
+
+Measured by hand outside the gate, on a cold `make medaka` of this worktree at
+the pinned base 460ff3d7ae9dea7d4de6e7756bfc113fe3c921f0, MEDAKA_STRICT=1
+(`medaka --version` confirmed fresh):
+
+    zmodI, fmodI (as shipped): `medaka check` exit 1, `medaka run` exit 1,
+      both `Type mismatch: Int vs String` at 4:20
+    fmodI, zmodI (swapped):    `medaka check` exit 1, `medaka run` exit 1,
+      the SAME message at 4:20
+
+So `check`/`run`/`build` are order-INVARIANT for this program (both orderings
+reject identically) -- this case needs NO row in test/IMPORT-ORDER-LEDGER.txt and
+is graded there as an ordinary invariant case.
+
+The RAW EMITTER (`./medaka_emitter <runtime> <core> main.mdk <workdir>`),
+independently invoked outside the gate, in BOTH orderings: exit 0, a complete
+362890-byte LLVM IR module on stdout, empty stderr. That is the #1667 disagreement
+this fixture exists to enroll: the emitter accepts what all three front-end-facing
+drivers (`check`/`run`/`build`) reject, and it does so REGARDLESS of import order
+-- i.e. this case is expected to classify DISAGREE in
+test/EMITTER-VERDICT-LEDGER.txt, not AGREE, and its pinned set has exactly one
+distinct signature (both orderings agree with each other; only the FRONT vs
+EMITTER halves disagree).
+
+See #1667 (emitter accepts a program check/run/build reject) and
+test/EMITTER-VERDICT-LEDGER.txt's own header.

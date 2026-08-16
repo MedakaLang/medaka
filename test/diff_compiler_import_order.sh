@@ -95,6 +95,33 @@
 #     prints FROM-RA vs FROM-RB). An IR-level assertion would be a stronger probe and
 #     is not attempted; `medaka build --keep-ir` is the tool if a future row needs it.
 #
+# ###################################################################
+# # THE EMITTER-VERDICT ARM — A FOURTH DRIVER, GRADED SEPARATELY     #
+# ###################################################################
+# RUN-XMOD-022/023 (xmod-identity sprint, packet
+# L1-L2-driver-asymmetry-observation). The discovery spike measured that the RAW
+# `./medaka_emitter` binary can exit 0 and emit a complete, linkable, runnable
+# program for an entry that `check`/`run`/`build` all reject — because on the
+# non-auto-print `main` arm, `runEmitWith` never inspects `elaborateModules`'
+# diagnostics before proceeding (see compiler/entries/entry_support.mdk), and it
+# typechecks MANGLED decls where check/run typecheck un-mangled ones. This is a
+# separate observation from the signature above, kept in a SEPARATE space and
+# graded against a SEPARATE sidecar ledger, `test/EMITTER-VERDICT-LEDGER.txt` —
+# on purpose, per RUN-XMOD-023: folding an `emit=` cell into the `check=…` printf
+# above would re-cut every row already pinned in `test/IMPORT-ORDER-LEDGER.txt`,
+# including #1351's, whose two signatures are the comparison the eventual drain
+# depends on. `sig_for`'s printf is untouched by this arm.
+#
+# For each ordering already staged to run `sig_for`, `emit_verdict_for` invokes
+# the raw emitter directly and observes ONLY its exit code and whether it wrote
+# non-empty IR — never the IR text (moves on every compiler change) and never its
+# stderr (embeds absolute mktemp paths, the exact bug this gate's own `schemes=`
+# comment records catching on its first real run). Per case, the observed
+# CLASSIFICATION (AGREE/DISAGREE — computed, never transcribed) is graded against
+# `test/EMITTER-VERDICT-LEDGER.txt`, whose own header explains the row format and
+# the grading rules. See also `test/MUST-FAIL-NOT-PINNABLE.txt`'s `1667` row,
+# which names this arm as the permanent guard for #1667.
+#
 # ── SCOPE LIMITS, SAID OUT LOUD ──────────────────────────────────────────────
 #   * Only the ENTRY module's clauses are permuted. A defect decided by an IMPORTED
 #     module's clause order is NOT covered by this gate. Nothing else covers it either.
@@ -142,6 +169,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MEDAKA="$ROOT/medaka"
 FIXDIR="$ROOT/test/import_order_fixtures"
 LEDGER="$ROOT/test/IMPORT-ORDER-LEDGER.txt"
+EMITTER_LEDGER="$ROOT/test/EMITTER-VERDICT-LEDGER.txt"
 
 [ -x "$MEDAKA" ] || { echo "build native first: make medaka (missing $MEDAKA)"; exit 2; }
 [ -d "$FIXDIR" ] || { echo "missing fixture dir: $FIXDIR"; exit 2; }
@@ -163,6 +191,7 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 : >"$TMP/verdicts"
 : >"$TMP/builtwitness"
+: >"$TMP/emitwitness"
 : >"$TMP/notes"
 
 # ── the permuter ─────────────────────────────────────────────────────────────
@@ -310,6 +339,19 @@ sig_for() {
     "$_c" "$_codes" "$_s" "$_r" "$_ro" "$_b" "$_x" "$_bo"
 }
 
+# ── the emitter-verdict observable (RUN-XMOD-022/023) — sibling of sig_for, NOT
+#    a mirror. It must never be folded into sig_for's printf (see the header
+#    section above). Only the exit code and IR-nonemptiness are observed; the IR
+#    text and the emitter's stderr must never be pinned.
+emit_verdict_for() {
+  _work="$1"; _entry="$2"
+  bound "$EMITTER" "$ROOT/stdlib/runtime.mdk" "$ROOT/stdlib/core.mdk" \
+        "$_work/$_entry" "$_work" >"$_work/.emit.ll" 2>"$_work/.emit.err"
+  _e=$?
+  if [ -s "$_work/.emit.ll" ]; then _ir=ir; else _ir=noir; fi
+  printf 'emit=%s:%s\n' "$_e" "$_ir"
+}
+
 echo "IMPORT-CLAUSE PERMUTATION DIFFERENTIAL — the answer must not depend on import order."
 echo "corpus: test/import_order_fixtures   ledger: test/IMPORT-ORDER-LEDGER.txt"
 echo
@@ -338,6 +380,7 @@ for cse in $cases; do
   partial="$(printf '%s' "$head1" | sed 's/.*partial=\([0-9]*\).*/\1/')"
 
   : >"$TMP/$cse.sigs"
+  : >"$TMP/$cse.emitsigs"
   k=0
   tail -n +2 "$TMP/$cse.orders" | while IFS= read -r ord; do
     [ -n "$ord" ] || continue
@@ -349,7 +392,12 @@ for cse in $cases; do
       printf 'PERMUTER-WRITE-FAILED %s\n' "$ord" >>"$TMP/$cse.sigs"
       continue
     fi
-    printf '%s\t%s\n' "$ord" "$(sig_for "$work" "$entry")" >>"$TMP/$cse.sigs"
+    _sig="$(sig_for "$work" "$entry")"
+    printf '%s\t%s\n' "$ord" "$_sig" >>"$TMP/$cse.sigs"
+    _chk="$(printf '%s' "$_sig" | sed 's/^\(check=[^;]*\);.*/\1/')"
+    _esig="$(emit_verdict_for "$work" "$entry")"
+    printf '%s;%s\n' "$_chk" "$_esig" >>"$TMP/$cse.emitsigs"
+    case "$_esig" in emit=0:ir) echo emitted >>"$TMP/emitwitness" ;; esac
   done
 
   nord="$(grep -c . "$TMP/$cse.sigs" 2>/dev/null || true)"; [ -n "$nord" ] || nord=0
@@ -364,6 +412,80 @@ for cse in $cases; do
 
   cut -f2 "$TMP/$cse.sigs" | sort -u >"$TMP/$cse.distinct"
   ndist="$(grep -c . "$TMP/$cse.distinct" 2>/dev/null || true)"; [ -n "$ndist" ] || ndist=0
+
+  # ── the emitter-verdict arm (RUN-XMOD-022/023) — a PARALLEL, independent grading
+  #    path, not a mirror of the block below. It runs regardless of whether this
+  #    case is ledgered on the check/run/build axis, and it contributes its own
+  #    PASS/FAIL to $TMP/verdicts, so it must never `continue` out of this loop.
+  if [ -s "$TMP/$cse.emitsigs" ]; then
+    sort -u "$TMP/$cse.emitsigs" >"$TMP/$cse.emitdistinct"
+    eclass=AGREE
+    while IFS= read -r esig; do
+      [ -n "$esig" ] || continue
+      cexit="$(printf '%s' "$esig" | sed 's/^check=\([^;]*\);.*/\1/')"
+      eexit="$(printf '%s' "$esig" | sed 's/.*emit=\([^:]*\):.*/\1/')"
+      if [ "$cexit" = 0 ] && [ "$eexit" != 0 ]; then eclass=DISAGREE
+      elif [ "$cexit" != 0 ] && [ "$eexit" = 0 ]; then eclass=DISAGREE
+      fi
+    done <"$TMP/$cse.emitdistinct"
+
+    erow=''
+    if [ -f "$EMITTER_LEDGER" ]; then
+      erow="$(awk -F'|' -v c="$cse" '!/^[[:space:]]*#/ && NF>=3 {
+               k = $1; gsub(/^[[:space:]]+|[[:space:]]+$/, "", k);
+               if (k == c) print }' "$EMITTER_LEDGER" | head -1)"
+    fi
+
+    if [ -z "$erow" ]; then
+      if [ "$eclass" = AGREE ]; then
+        : # the common, quiet case — no row needed
+      else
+        printf 'FAIL %-52s emitter-verdict: DISAGREE, UNLEDGERED — the raw emitter'"'"'s\n' "$cse"
+        printf '       accept/reject verdict diverges from check'"'"'s and nobody has pinned it\n'
+        {
+          printf '  %s: emitter-verdict DISAGREE, unledgered.\n' "$cse"
+          printf '     Add a row to test/EMITTER-VERDICT-LEDGER.txt. Observed signature(s):\n'
+          while IFS= read -r s; do printf '       %s\n' "$s"; done <"$TMP/$cse.emitdistinct"
+          printf '     Row to paste (fill in the reason):\n'
+          printf '       %s | DISAGREE | <reason> | %s\n' "$cse" \
+            "$(paste -sd'|' "$TMP/$cse.emitdistinct" | sed 's/|/ | /g')"
+        } >>"$TMP/notes"
+        echo FAIL >>"$TMP/verdicts"
+      fi
+    else
+      erow_class="$(printf '%s' "$erow" | awk -F'|' '{gsub(/^[[:space:]]+|[[:space:]]+$/,"",$2); print $2}')"
+      erow_reason="$(printf '%s' "$erow" | awk -F'|' '{gsub(/^[[:space:]]+|[[:space:]]+$/,"",$3); print $3}')"
+      printf '%s' "$erow" | awk -F'|' '{for (i=4;i<=NF;i++) {gsub(/^[[:space:]]+|[[:space:]]+$/,"",$i); if ($i != "") print $i}}' \
+        | sort -u >"$TMP/$cse.epinned"
+      if [ "$eclass" = AGREE ]; then
+        printf 'FAIL %-52s emitter-verdict: DRAINED — row present but the emitter now agrees\n' "$cse"
+        {
+          printf '  %s: emitter-verdict has CONVERGED with check. Delete this row from\n' "$cse"
+          printf '     test/EMITTER-VERDICT-LEDGER.txt. Observed signature(s):\n'
+          while IFS= read -r s; do printf '       %s\n' "$s"; done <"$TMP/$cse.emitdistinct"
+        } >>"$TMP/notes"
+        echo FAIL >>"$TMP/verdicts"
+      elif [ "$erow_class" != "DISAGREE" ]; then
+        printf 'FAIL %-52s emitter-verdict: row classification says "%s" but observed is DISAGREE\n' \
+          "$cse" "$erow_class"
+        echo FAIL >>"$TMP/verdicts"
+      elif [ -z "$erow_reason" ] || [ "$erow_reason" = "-" ]; then
+        printf 'FAIL %-52s emitter-verdict: row has no reason — a row must say why\n' "$cse"
+        echo FAIL >>"$TMP/verdicts"
+      elif cmp -s "$TMP/$cse.emitdistinct" "$TMP/$cse.epinned"; then
+        printf 'ok   %-52s emitter-verdict: KNOWN-BAD (%s)\n' "$cse" "$erow_reason"
+        echo PASS >>"$TMP/verdicts"
+      else
+        printf 'FAIL %-52s emitter-verdict: pinned set differs from observed\n' "$cse"
+        {
+          printf '  %s: emitter-verdict pinned set no longer matches observed.\n' "$cse"
+          printf '     pinned:\n';   sed 's/^/       /' "$TMP/$cse.epinned"
+          printf '     observed:\n'; sed 's/^/       /' "$TMP/$cse.emitdistinct"
+        } >>"$TMP/notes"
+        echo FAIL >>"$TMP/verdicts"
+      fi
+    fi
+  fi
 
   # ── the ledger row for this case, if any ──
   row=''
@@ -471,6 +593,19 @@ if [ -f "$LEDGER" ]; then
   done <"$LEDGER"
 fi
 
+# ── same rot check, for the emitter-verdict sidecar ledger ───────────────────
+if [ -f "$EMITTER_LEDGER" ]; then
+  while IFS= read -r line; do
+    case "$line" in ''|\#*) continue ;; esac
+    c="$(printf '%s' "$line" | awk -F'|' '{gsub(/^[[:space:]]+|[[:space:]]+$/,"",$1); print $1}')"
+    [ -n "$c" ] || continue
+    if [ ! -d "$FIXDIR/$c" ]; then
+      printf 'FAIL emitter-verdict ledger names case "%s", which does not exist under test/import_order_fixtures/\n' "$c"
+      echo FAIL >>"$TMP/verdicts"
+    fi
+  done <"$EMITTER_LEDGER"
+fi
+
 # ── tally ────────────────────────────────────────────────────────────────────
 # Verdicts go to a FILE, never a variable: the loops above run in a subshell under
 # dash and a variable mutated inside one does not survive.
@@ -499,6 +634,21 @@ if [ -f "$LEDGER" ]; then
   fi
 fi
 
+# Same visibility rule for the emitter-verdict sidecar — a MEASURED disagreement,
+# not a correctness claim (the emitter is the party this sprint has measured to be
+# WRONG on at least the #1667 shape; see test/EMITTER-VERDICT-LEDGER.txt's header).
+if [ -f "$EMITTER_LEDGER" ]; then
+  enrows="$(grep -cvE '^[[:space:]]*(#|$)' "$EMITTER_LEDGER" 2>/dev/null || true)"; [ -n "$enrows" ] || enrows=0
+  if [ "$enrows" -gt 0 ]; then
+    echo "LEDGERED (emitter-verdict) — driver disagreements known and pinned right now:"
+    grep -vE '^[[:space:]]*(#|$)' "$EMITTER_LEDGER" \
+      | awk -F'|' '{gsub(/^[[:space:]]+|[[:space:]]+$/,"",$1); gsub(/^[[:space:]]+|[[:space:]]+$/,"",$2);
+                    printf "  %-52s %s\n", $1, $2}'
+    echo "  (each drains itself: when the emitter agrees again, its row goes RED here)"
+    echo
+  fi
+fi
+
 printf '%s: %d case(s) — %d ok, %d failing\n' "$(basename "$0")" "$total" "$pass" "$fail"
 
 # ⚠️ AN EMPTY RUN IS A FAILURE, NOT A PASS. A gate that can silently no-op will:
@@ -515,6 +665,14 @@ fi
 if [ ! -s "$TMP/builtwitness" ]; then
   echo "FAIL: the BUILD arm produced no executable anywhere in the corpus — it graded" >&2
   echo "      nothing, and an arm that graded nothing must not report green." >&2
+  exit 1
+fi
+# Same rule for the emitter-verdict arm: if no ordering anywhere in the corpus ever
+# produced emit=0:ir, the raw emitter never once succeeded, and every signature
+# would be a same-shaped failure — indistinguishable from "the arm never ran".
+if [ ! -s "$TMP/emitwitness" ]; then
+  echo "FAIL: the EMITTER-VERDICT arm never observed emit=0:ir anywhere in the corpus —" >&2
+  echo "      it graded nothing, and an arm that graded nothing must not report green." >&2
   exit 1
 fi
 

@@ -683,6 +683,10 @@ for f in $changed; do
     # a preflight that derives NOTHING from a ledger edit is the masking path the
     # ledger's own header warns about.
     test/IMPORT-ORDER-LEDGER.txt)  add 'diff_compiler_import_order' ;;
+    # Same argument again: the sidecar emitter-verdict ledger is also a loose file
+    # under test/ that `_fixture_dir_for` cannot see, and it feeds the SAME gate
+    # (RUN-XMOD-022/023, packet L1-L2-driver-asymmetry-observation).
+    test/EMITTER-VERDICT-LEDGER.txt) add 'diff_compiler_import_order' ;;
     # Same argument, same shape, second axis (G-0). Both ledgers are loose files
     # under test/ that `_fixture_dir_for` cannot see, and both are exactly what
     # someone edits ALONE when their gate goes red.
