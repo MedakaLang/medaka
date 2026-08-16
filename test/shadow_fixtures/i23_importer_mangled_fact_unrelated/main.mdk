@@ -1,0 +1,11 @@
+-- L4 trap fixture (xmod-identity #1351 spine): the assertion is ENTIRELY about `bmod`
+-- (Greetable/Widget/greet), an ordinary interface-method call with a live impl -- it never
+-- reaches `definerShadowArgHead`'s mangled-emit-path arm, because it is not a standalone
+-- shadow occurrence at all. `amod` is imported (bare -- binds no names) only to put its
+-- definer shadow in the graph, so `mangledFunDefsPresentRef` is True on the emit path.
+-- Hand-derived expected value: `greet (Widget "World")` = "Hello, " ++ "World" ++ "!" =
+-- "Hello, World!" -- unaffected by anything in `amod`.
+import amod
+import bmod.{Greetable, greet, Widget(..)}
+
+main = println (greet (Widget "World"))

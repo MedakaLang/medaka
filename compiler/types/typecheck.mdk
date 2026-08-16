@@ -11774,6 +11774,17 @@ definerShadowArgHead (EMethodAt name tagRef implRef _)
   | otherwise = None
 definerShadowArgHead _ = None
 
+-- L4 (xmod-identity #1351 spine, RUN-XMOD-022/026): the mark pass's own per-occurrence
+-- verdict, named rather than left as an anonymous `routeLocalSym … != ""` idiom.
+-- `rewriteArgScoped`'s `sm` arm is the SOLE origin of a non-empty RLocal symbol on an
+-- EMethodAt route (F8); every other RLocal stamp propagates that origin symbol
+-- unchanged.  This is NOT a graph-wide fact and is NOT interchangeable with one: "The
+-- signal is PER-OCCURRENCE, not graph-wide … keying on it (not on the whole-graph
+-- standaloneValuesRef) is what keeps this from pinning the compiler's genuine
+-- method-values and breaking dispatch" (this file, historically beside this site).
+occurrenceCarriesMangledShadowSym : Ref Route -> Bool
+occurrenceCarriesMangledShadowSym tagRef = routeLocalSym tagRef.value != ""
+
 -- #54: the SECOND disjunct of definerShadowArgHead — the IMPORTER-on-emit signal, kept
 -- separate because it carries a DIFFERENT gate from the definer one.  The mark pass seeds
 -- an importer shadow's route with the provider's mangled standalone symbol, so a non-empty
@@ -11782,9 +11793,23 @@ definerShadowArgHead _ = None
 -- it feeds is Fork 1's per-receiver rule; the definer disjunct (isDefinerShadow) does not,
 -- because the S2 inversion never queries the impl universe.  On the un-mangled run/check
 -- path the route is RNone (sym ""), so this is inert there.
+--
+-- L4: this predicate now names its two conjuncts separately instead of conflating them in
+-- one `routeLocalSym … != ""` test.  `driverState.value.mangledFunDefsPresentRef.value`
+-- (L3) is the GRAPH-level fact "this compile's decls carry mangled funDefs at all";
+-- `occurrenceCarriesMangledShadowSym tagRef` is the mark pass's own PER-OCCURRENCE verdict
+-- for THIS route.  The new graph-level conjunct is ADDED, not substituted for the
+-- occurrence test — F7 (this file) forbids replacing the per-occurrence route test with a
+-- graph-wide one: doing so would fire for occurrences the mark pass never marked, and
+-- would pin genuine method-values, breaking dispatch.  The new conjunct is
+-- redundant-by-construction (F8's implication chain: a non-empty route symbol can only
+-- exist if `sm` — the mangled-shadow map — was non-empty, which implies the graph fact is
+-- already True), so it can only ever narrow nothing further; A4-5's negative control
+-- measures that, rather than asserting it.
 importerShadowOnEmitPath : String -> Ref Route -> Bool
 importerShadowOnEmitPath name tagRef = singleTyparamIfaceMethod name
-  && routeLocalSym tagRef.value != ""
+  && driverState.value.mangledFunDefsPresentRef.value
+  && occurrenceCarriesMangledShadowSym tagRef
 
 -- P0-18: type `size (Box 3)` exactly as the ordinary path (against the standalone
 -- scheme the env rebound `size` to, preserving program types), but record the

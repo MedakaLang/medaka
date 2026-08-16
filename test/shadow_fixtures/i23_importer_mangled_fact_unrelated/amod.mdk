@@ -1,0 +1,10 @@
+-- L4 trap fixture (xmod-identity #1351 spine, RUN-XMOD-022 "feature + UNRELATED code
+-- still behaves"). This module is the FEATURE half: a definer shadow (D1b shape -- the
+-- shadowed interface has ZERO live impls anywhere in the graph) so `size` gets mangled to
+-- `amod__size` on the emit path, making `graphCarriesMangledFunDefs` True for the whole
+-- compile. Nothing in `main.mdk`'s printed value depends on anything declared here.
+export interface Sizeable a where
+  size : a -> Int
+
+export size : Int -> Int
+size n = n + 1
