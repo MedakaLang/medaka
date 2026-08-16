@@ -109,9 +109,14 @@ every word whose deletion changes anything.
 ## §1 Identity
 
 - **Slice ID** and issue refs (`#NNN`).
-- **Pinned base:** the exact SHA this packet was derived against. The implementer
-  starts from this SHA — never from a moving ref; shared `.git` means
-  `origin/main` advances under you mid-task.
+- **Pinned base:** the exact sprint-branch SHA this packet was derived against —
+  never a moving ref; shared `.git` means refs advance under you mid-task.
+  **The sprint branch moves between packet-writing and dispatch** (v3 single-PR
+  model), so the dispatch brief carries TWO SHAs: the packet's pinned SHA and
+  the worktree's actual head. The implementer's step-0 check is: `git diff
+  <pinned>..HEAD -- <every §5-named file>` is EMPTY. Non-empty → the region
+  changed under the packet → STOP and report per the abort condition; empty →
+  proceed on the newer head.
 - **Branch name** and **absolute worktree path**. State explicitly: "Ignore any
   CLAUDE.md-header path — your tree is the path above; run everything with
   absolute paths."
@@ -176,16 +181,35 @@ Rules for the planner writing it:
 - **Rejected approaches**, with one line each on why — so the implementer doesn't
   independently rediscover and adopt one.
 
-## §6 Acceptance
+## §6 Acceptance — the MINIMAL set; CI verifies, the implementer generates
 
-- **Compile-coherent boundary:** the tree builds and typechecks at the end of the
-  slice — no "will compile after the next slice" states.
-- **Per claim, the cheapest fail-capable check** — a check that cannot fail
-  verifies nothing. Name the command and the expected output, including expected
-  reds (an unexplained green is as suspicious as an unexplained red).
-- **Targeted gates only** (`make preflight` / named `run_gates.sh` patterns).
-  Expected golden/snapshot moves listed by path; an unlisted golden move is a
-  finding to report, not a thing to bless.
+**Deferred-verification doctrine (v3): the implementer's verification budget is
+deliberately tiny.** Local checks exist to confirm the slice isn't seriously
+broken and does what it primarily claims — everything else is CI's job on the
+sprint PR and the merge queue's clock. The full ceiling for a standard slice:
+
+1. `medaka fmt --write` + `medaka lint` on touched files (the pre-commit hook
+   forces these anyway; fighting it costs more than running it).
+2. `make medaka` — the build itself.
+3. `make check-self` (~20 s) — the cheap typecheck stand-in; the bootstrap path
+   builds green on an ill-typed compiler, so this is not optional.
+4. **The primary-claim probe(s):** per §5 claim, the cheapest FAIL-CAPABLE check
+   — a check that cannot fail verifies nothing. Name the command and expected
+   output, including expected reds.
+5. **Bless what your own diff moved** — expected golden/snapshot moves listed
+   here by path; re-cutting them is code-adjacent output, not verification, and
+   a missed golden is a guaranteed CI red round-trip. An UNLISTED golden move is
+   a finding to report, never a thing to bless.
+
+**Named NOT-run, so nobody "helpfully" adds them:** no `make preflight`, no
+`run_gates.sh` patterns, no oracle builds, no engines differential, no fixpoint,
+no full or partial suites. A packet that lists a gate here needs a brain-ruled
+reason recorded in §6. The two standing exceptions, both brain-gated:
+- `local-fixpoint: yes` — only for slices touching `compiler/backend/*`, where a
+  fixpoint break first seen in CI is too expensive to fix forward blind.
+- **Golden-capture freeze:** if any §5 site sits in an area FINDINGS.md marks
+  known-broken, golden/fixture CAPTURE there is deferred to after the fix — a
+  golden captured against broken behavior enshrines the bug.
 - **The nearest program this slice does NOT cover** — the adjacent shape a
   reviewer should probe first. Asking this question found two S0s.
 - **`could move:`** what observable behavior could plausibly shift — feeds the
@@ -219,8 +243,12 @@ Rules for the planner writing it:
 >   not the build's), never end your turn with anything still running.
 > - Verify the binary you probe is the one you built: `MEDAKA_STRICT=1` on every
 >   probe.
-> - Push and report. The orchestrator watches CI, not you. Do not poll CI, do not
+> - Push and report. The rear seat watches CI, not you. Do not poll CI, do not
 >   send per-shard updates.
+> - **Never file, edit, comment on, or close a GitHub issue.** Issue writes are
+>   seat-only (the sprint-rear seat executes them, with readback). A bug you
+>   find goes in your report's findings; a body you want filed goes in your
+>   report as a draft. "I filed #N" in a report is a deviation-from-packet.
 > - Do not spawn subagents. Do the work yourself, sequentially.
 > - Stage commits BY PATH — never `git add -A`. Run `medaka fmt --write` and
 >   `medaka lint` on touched files before building.

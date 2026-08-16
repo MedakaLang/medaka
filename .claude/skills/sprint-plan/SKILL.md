@@ -54,10 +54,14 @@ A sprint is a unit, not a bucket. A slice belongs in this sprint iff:
   across slices "to balance sizes".
 
 **Size the set: at least ~5 slices is the sweet spot, scaled by slice weight.**
-Fewer than that and the sprint machinery (contract, ledgers, repair round) costs
+Fewer than that and the sprint machinery (contract, ledgers, heavy round) costs
 more than it amortizes — land 2 slices as ordinary PRs instead. The ceiling is
-what the repair round can genuinely attack in one pass: if the projected total
-diff is too large to adversarially review, the sprint is two sprints. Each slice
+what the heavy round can genuinely attack in one pass: if the projected total
+diff is too large to adversarially review, the sprint is two sprints. This
+ceiling binds HARDER under v3's deferred-verification model — the heavy round
+is the first adversarial pass over deliberately under-verified work, and the
+terminal merge-queue run is the first full-gate run, so a sprint too big for
+its heavy round has no backstop at all. Each slice
 should be roughly one writer-session of work; a slice that is obviously several
 becomes a family candidate (flag it — the spike decides), and a slice that is an
 afternoon's triviality gets merged into a neighbor or dropped to the ordinary
@@ -114,8 +118,15 @@ identifier convention.
   orchestrator copies it to the sprint dir's `EXPECTED-RED.md` and the tracking
   issue at sprint start; reds expected beyond the sprint get a `known-red`
   labeled issue each).
-- **§7 Exit criteria** — including the repair round (non-optional) and
-  desk-closes.
+- **§7 Landing model** — v3 default: ONE sprint branch (`sprint/<stage>`) and
+  ONE running draft PR for the whole sprint; slices merge into the branch, the
+  PR enqueues once, after the heavy round. Mid-sprint CI is the narrowed
+  `pull_request` run only; mid-sprint breakage is tolerated and fixed forward.
+  State here any deviation (e.g. a slice that MUST land to main mid-sprint) and
+  why.
+- **§8 Exit criteria** — including the heavy round (non-optional; it carries
+  every S0-class finding's adversarial review and any deferred golden
+  captures — both block the terminal enqueue) and desk-closes.
 
 ## Step 5 — adversarial read before handoff
 

@@ -10,8 +10,10 @@ bug, a spec gap, a wrong ledger row, an unexpected gate flip, a "this looks
 wrong" in passing. The playbook exists because findings are where sprints leak:
 the audited sprints' worst outcomes were findings mishandled — a phantom drain
 nearly closing five live bugs, an unreproduced claim filed as fact, evidence
-surviving only as session-scratch prose. The lifecycle below is mechanical for
-the orchestrator; every judgment inside it is a brain ruling.
+surviving only as session-scratch prose. The lifecycle below is mechanical and
+runs at the REAR seat (`sprint-rear` owns FINDINGS.md, dispatches the
+reproducer, and executes every filing; its brain consults relay through the
+front seat verbatim); every judgment inside it is a brain ruling.
 
 ## 1. Intake — every finding gets a row before anything else
 
@@ -82,9 +84,11 @@ the bug changes, not just that it gets fixed:
   a repair slice against merged work.)
 - Does a DECISIONS.md ruling need amending? (Amend by new entry, never edit.)
 
-Terminal route for in-sprint: **REPAIR** (slice-caused, blocks that PR's
-ARMING — never the writer lane; planner cuts the repair slice at the front of
-the queue) or **ABSORB** (pre-existing but it advances the sprint's question
+Terminal route for in-sprint: **REPAIR** (slice-caused; the fix lands FORWARD
+on the sprint branch as a fixer-lane dispatch — it never blocks the writer
+lane, and only an S0-class finding's adversarial-review obligation blocks the
+terminal enqueue; planner cuts the repair slice, front of the queue) or
+**ABSORB** (pre-existing but it advances the sprint's question
 and fits the size budget — the brain must say WHY; absorb-by-default is how
 sprints sprawl). S0/S1 slice-caused is always REPAIR, and the direction rule
 applies: a slice that made an existing defect QUIETER (loud crash → wrong
@@ -117,8 +121,9 @@ WITH the disproving derivation — debunking needs the same proof as filing;
 
 ## 4. Filing protocol — when the ruling is FILE
 
-Mechanical, in order; the orchestrator executes from the reproducer's bundle,
-the brain has already ruled:
+Mechanical, in order; the REAR seat executes from the reproducer's bundle, the
+brain has already ruled. **No other agent runs a `gh issue` write, ever** —
+drafters draft, the rear seat files, always with readback:
 
 1. **The first-hand repro requirement is satisfied by the reproducer's bundle**
    — it ran fresh, independently of the reporting agent. A finding with no
@@ -164,8 +169,9 @@ the brain has already ruled:
 - **Spike discoveries**: a spike that unearths a live bug reports it as a
   finding like anyone else — the spike's throwaway diff is not a fix and must
   still end byte-identical.
-- **Repair-round findings** at sprint end follow the same lifecycle, with one
-  tightening: REPAIR rulings there block the SPRINT's exit, not just a PR.
+- **Heavy-round findings** at sprint end follow the same lifecycle, with one
+  tightening: REPAIR rulings there block the SPRINT's exit (the terminal
+  enqueue), not just a push.
 
 ## 6. The exit guarantee
 

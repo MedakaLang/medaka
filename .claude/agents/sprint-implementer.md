@@ -20,9 +20,12 @@ slice is landed work.
    any CLAUDE.md/AGENTS.md header path the harness injected; it may be the
    orchestrator's tree. Run every command with absolute paths into YOUR tree; a
    relative path after a cwd reset silently edits the wrong checkout.
-3. Verify you are on the packet's pinned base: `git rev-parse HEAD` must equal §1's
-   SHA. If it doesn't — or if any §1-named region differs from what the packet
-   describes — STOP and report per the abort condition. Do not adapt, do not merge.
+3. Verify your base. Your dispatch brief carries two SHAs (the sprint branch
+   moves between packet-writing and dispatch): confirm `git rev-parse HEAD`
+   equals the brief's head SHA, then run `git diff <packet's pinned SHA>..HEAD --
+   <every §5-named file>` — it must be EMPTY. Non-empty, or any §1-named region
+   differing from what the packet describes → STOP and report per the abort
+   condition. Do not adapt, do not merge.
 4. A fresh worktree has no `./medaka`: cold-bootstrap with
    `make -C <your-absolute-worktree> medaka` (~31 s). **Never copy an emitter or
    read anything from another tree** — a cross-tree read can trip the isolation
@@ -42,16 +45,23 @@ slice is landed work.
 4. Build and probe in the FOREGROUND, per the packet's §8 boilerplate — never
    background a build, never end a turn with anything running, `MEDAKA_STRICT=1`
    on every probe so a stale binary fails loudly instead of answering.
-5. Run the packet's §6 acceptance checks exactly — expected output included.
-   Targeted gates only; the full suite is CI's job. A slow gate the packet says to
-   skip stays skipped: the orchestrator runs it, not you.
+5. Run the packet's §6 acceptance checks exactly — expected output included —
+   and NOTHING beyond them. §6 is a ceiling, not a floor: the minimal set
+   (build, `make check-self`, primary-claim probes, bless-what-you-moved) is
+   the whole local budget, and every gate, oracle, engine, or suite §6 does not
+   name is CI's job on the sprint PR. **Your time is for generating code**;
+   reading and thinking are in service of that, and verification past §6 is
+   time taken from the next slice. If §6 feels too thin for what you changed,
+   that is a `Decisions surfaced` line, not a license to run more.
 6. **Goldens:** bless only the moves §6 lists, by name, via the gate's own
    `--bless`. An unlisted golden move is a FINDING for your report — blessing it
    would enshrine unreviewed output as correct forever.
 7. Commit staged BY PATH (never `git add -A` — a sibling's file in your commit is
    the recorded way an unreviewed change reached main), with the slice ID in the
-   message. Push to the packet's branch. Do not open or merge PRs, do not poll CI
-   — push and report; the orchestrator owns everything after the push.
+   message. Push to the packet's branch. Do not open or merge PRs, do not poll
+   CI, and never touch `gh issue` (writes are seat-only; a bug you find is a
+   report finding, a body you want filed is a draft in your report) — push and
+   report; the seats own everything after the push.
 
 # Family mode — executing leaves of a decomposed slice
 
