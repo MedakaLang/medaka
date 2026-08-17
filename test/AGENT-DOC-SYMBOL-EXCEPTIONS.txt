@@ -44,8 +44,10 @@
 #
 # ── Derived against main @ e070a8f4 (2026-07-13) ─────────────────────────────
 #   11 SYM exceptions: non-code proper nouns (Claude Code harness tool/hook
-#       names: Monitor, TaskList, TaskStop, UserPromptSubmit — these docs also
-#       describe the AGENT HARNESS itself, not just Medaka source), one
+#       names: Monitor, TaskList, TaskStop — these docs also
+#       describe the AGENT HARNESS itself, not just Medaka source; a fourth,
+#       UserPromptSubmit, drained 2026-08-17 when AGENTS.md was compressed to a
+#       router and stopped naming the hook event), one
 #       external C library symbol this repo never defines (GC_malloc_kind —
 #       Boehm GC internal, referenced only for `perf` attribution), a naming-
 #       CONVENTION shorthand ("Msg" standing for the "*Msg"-suffixed builder
@@ -88,7 +90,6 @@ SYM	Monitor	.claude/ORCHESTRATING.md describes the Claude Code Monitor TOOL (str
 SYM	TaskList	.claude/ORCHESTRATING.md describes chaining sub-agent tasks via TaskList (blockedBy dependencies) — an agent-harness/orchestration concept, not Medaka source
 SYM	TaskStop	.claude/ORCHESTRATING.md's oracle-pool-respawn remedy names the TaskStop tool (stops a runaway background agent) — an agent-harness concept, not Medaka source
 SYM	CronCreate	.claude/ORCHESTRATING.md's 20-minute-heartbeat section names the CronCreate tool (arms a recurring orchestrator self-check) — an agent-harness concept, not Medaka source
-SYM	UserPromptSubmit	AGENTS.md names the Claude Code hook event UserPromptSubmit (`.claude/hooks/skill-triage.py`'s trigger) — a Claude Code harness concept, not Medaka source
 
 # ── SYM: real external symbol, but external to this repo ───────────────────
 SYM	GC_malloc_kind	AGENTS.md/PERF.md reference this ONLY as the Boehm GC internal allocation-tag function `perf script` attributes samples to for profiling — it is part of libgc, never defined in this repo's compiler/stdlib/runtime source

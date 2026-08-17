@@ -68,8 +68,9 @@
 #       archive/design/** and archive/findings/**, which are NEWLY archived
 #       (2026-07-13 docs-tree reorg) current docs whose links must stay live).
 #       Legitimate history; not counted as debt. All 15 still earn their place.
-#    1 REF exception   — compiler/foo.mdk, a deliberately fictional filename in
-#       AGENTS.md's own worktree-gotcha example. Not a doc bug.
+#       (A 16th, compiler/foo.mdk — a fictional filename in AGENTS.md's
+#       worktree-gotcha example — drained 2026-08-17 when AGENTS.md was
+#       compressed to a router and stopped spelling the example path out.)
 #   21 REF exceptions  — TODO(docs-cleanup): real stale paths in LIVING docs
 #       (was 25 at the split; 4 drained 2026-07-15, see note below). This is
 #       the punch list: mostly the compiler/*.mdk -> subfolder move
@@ -140,7 +141,6 @@ FILE	compiler/DRIVER-COLLAPSE-PLAN.md	header: "STATUS: COMPLETE - all phases don
 FILE	compiler/MESSAGE-AUDIT.md	a read-only, point-in-time audit of user-facing message strings — historical grading record, not a living reference
 
 # ── REF: not a doc bug (a deliberately fictional example filename) ──────────
-REF	compiler/foo.mdk	AGENTS.md's own worktree-gotcha example uses "compiler/foo.mdk" as a deliberately fictional illustrative filename ("a relative `grep -n compiler/foo.mdk` runs there..."), not a real citation
 
 # ── REF: TODO(docs-cleanup) — real stale paths in living docs ───────────────
 REF	compiler/ast.mdk	TODO(docs-cleanup): stale path from the compiler subfolder restructure; now compiler/frontend/ast.mdk

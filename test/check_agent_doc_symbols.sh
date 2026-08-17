@@ -165,7 +165,14 @@ command -v grep >/dev/null 2>&1 || { echo "FAIL: grep not found"; exit 2; }
 #             renamed/removed symbols by design, which needs a doc-by-doc
 #             triage this change did not have room for. Tracked separately —
 #             see #1192, which tracks it.
+#             `.claude/dossier/*.md` IS here: it holds the incident narrative
+#             EXTRACTED from AGENTS.md when that file was compressed to a
+#             router. The prose did not change character by moving — it is the
+#             same symbol-claiming agent-facing text — so it must not fall out
+#             of this gate on the way. (`docs/ops/*.md` is deliberately NOT a
+#             member, which is exactly why the dossier does not live there.)
 git ls-files 'AGENTS.md' '.claude/skills/*/SKILL.md' '.claude/workstreams/*.md' '.claude/ORCHESTRATING.md' \
+                '.claude/dossier/*.md' \
   > "$WORK/doc_files_broad.txt"
 git ls-files 'docs/spec/*.md' > "$WORK/doc_files_scoped.txt"
 
