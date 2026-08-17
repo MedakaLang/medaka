@@ -87,6 +87,15 @@ fi
 native_checked=$(awk -F'[:/ ]+' '/^counted: /{ print $3 }' "$NATIVE_OUT")
 
 # ── Assertion floor (anti-rot) ──────────────────────────────────────────
+# A non-numeric count makes `[` ERROR rather than compare, and with `set -e`
+# off control falls through to the PASS branch — so the floor guard could
+# never fail on the one thing it exists to catch (RUN-PDS0-040, F20). Check
+# numeric-ness first.
+case "$native_checked" in
+  ''|*[!0-9]*)
+    echo "FAIL: native row count is not a number ('$native_checked') — the driver's summary line did not parse; the anti-rot floor could not be graded."
+    exit 1 ;;
+esac
 if [ "$native_checked" -lt "$FLOOR" ]; then
   echo "FAIL: only $native_checked rows checked (native), expected >= $FLOOR"
   exit 1

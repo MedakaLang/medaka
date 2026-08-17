@@ -75,6 +75,16 @@ for spec in $SUITES; do
     rc=1
     continue
   fi
+  # A non-numeric count makes `[` ERROR rather than compare, and with `set -e`
+  # off control falls through to the PASS branch — so the floor guard could
+  # never fail on the one thing it exists to catch (RUN-PDS0-040, F20). Check
+  # numeric-ness first.
+  case "$ran" in
+    ''|*[!0-9]*)
+      echo "FAIL: $name.mdk — assertion count is not a number ('$ran') — the driver's summary line did not parse; the anti-rot floor could not be graded."
+      rc=1
+      continue ;;
+  esac
   if [ "$ran" -lt "$floor" ]; then
     echo "FAIL: $name.mdk — only $ran assertions ran, expected >= $floor (vacuous-green guard: discovery may have silently stopped finding tests)"
     printf '%s\n' "$out"

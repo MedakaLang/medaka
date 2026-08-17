@@ -50,6 +50,16 @@ if [ "$last_line" != "TOTAL: PASS" ]; then
   exit 1
 fi
 
+# A non-numeric count makes `[` ERROR rather than compare, and with `set -e`
+# off control falls through to the PASS branch — so the floor guard could
+# never fail on the one thing it exists to catch (RUN-PDS0-040, F20). Check
+# numeric-ness first.
+case "$pass_count" in
+  ''|*[!0-9]*)
+    echo "FAIL: PASS-line count is not a number ('$pass_count') — the driver's summary line did not parse; the anti-rot floor could not be graded."
+    cat "$out"
+    exit 1 ;;
+esac
 if [ "$pass_count" -lt "$PASS_FLOOR" ]; then
   echo "FAIL: only $pass_count PASS lines, expected >= $PASS_FLOOR (vacuous-green guard: the driver may have silently read zero rows)"
   cat "$out"
