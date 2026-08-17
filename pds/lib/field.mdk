@@ -90,11 +90,20 @@
    operations transfers; its magnitudes do not.
 
    ── Not constant-time ────────────────────────────────────────────────
-   `feInverse` is Fermat's little theorem by square-and-multiply over a fixed
-   exponent, and the comparisons/conditional subtractions here branch on
-   secret-dependent data. THIS IMPLEMENTATION IS NOT CONSTANT-TIME. Phase 0
-   grades correctness only; no side-channel property is claimed or checked
-   (no constant-time requirement appears anywhere in the design). -}
+   These operations are NOT constant-time. The reduction path has
+   data-dependent iteration count and a data-dependent conditional
+   subtraction. Do NOT use these modules with secret material — private
+   keys, ECDSA nonces — until #1724 is resolved.
+
+   Every public operation here ends in the reduction path, so every one
+   of them inherits this leak. `feInverse`'s square-and-multiply ladder
+   is clean by itself — its exponent is a public compile-time constant
+   with a fixed iteration count — but its leak is entirely inherited
+   from the reduction underneath.
+
+   Constant-time-with-respect-to-secret-inputs is a settled requirement
+   for the signing path, not an open question — it is simply not
+   implemented here, and #1724 tracks it. -}
 
 import array.{set, blit}
 
@@ -221,17 +230,26 @@ subPGo n i borrow =
 --   Each limb must be non-negative and small enough that the carry chain
 --   stays inside the 63-bit fixnum — every producer in this module keeps
 --   limbs below 2^43, against a ceiling of 2^62 (see the module header).
+--
+--   The length half of that contract is enforced loudly, the same way the
+--   module already enforces its byte-length contracts at `feFromBytes` /
+--   `feFromBytesReduce`, since this is the same enforcement at the limb
+--   boundary — the only way to reach it is to build a non-10-limb `Fe`
+--   through the transparent alias.
 export feCanonicalize : Array Int -> Fe
 feCanonicalize raw =
-  let n = arrayCopy raw
-  let () = reduceCarry n
-  -- After reduceCarry the value is < 2^256, and 2^256 - p = 2^32 + 977 < p,
-  -- so ONE conditional subtraction is enough.
-  if gtePLimbs n then
-    let () = subPInPlace n
-    n
+  if arrayLength raw != 10 then
+    panic "field.feCanonicalize: expected 10 limbs, got \{intToString (arrayLength raw)}"
   else
-    n
+    let n = arrayCopy raw
+    let () = reduceCarry n
+    -- After reduceCarry the value is < 2^256, and 2^256 - p = 2^32 + 977 < p,
+    -- so ONE conditional subtraction is enough.
+    if gtePLimbs n then
+      let () = subPInPlace n
+      n
+    else
+      n
 
 -- ── Serialization ────────────────────────────────────────────────────
 

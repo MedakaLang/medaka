@@ -131,11 +131,23 @@
    not arise.
 
    ── Not constant-time ────────────────────────────────────────────────
-   `scInverse` is Fermat's little theorem by square-and-multiply over a
-   fixed exponent, and the comparisons / conditional subtractions here
-   branch on secret-dependent data. THIS IMPLEMENTATION IS NOT
-   CONSTANT-TIME. Phase 0 grades correctness only; no side-channel property
-   is claimed or checked. -}
+   These operations are NOT constant-time. The reduction path has
+   data-dependent iteration count and a data-dependent conditional
+   subtraction. Do NOT use these modules with secret material — private
+   keys, ECDSA nonces — until #1724 is resolved.
+
+   Every public operation here ends in the reduction path, so every one
+   of them inherits this leak. `scInverse`'s square-and-multiply ladder
+   is clean by itself — its exponent is a public compile-time constant
+   with a fixed iteration count — but its leak is entirely inherited
+   from the reduction underneath, and `scInverse` amplifies it: it runs
+   its Fermat chain through `scMul` ~451 times, so a single inversion
+   produces on the order of 450 correlated timing samples of the leaky
+   reduction.
+
+   Constant-time-with-respect-to-secret-inputs is a settled requirement
+   for the signing path, not an open question — it is simply not
+   implemented here, and #1724 tracks it. -}
 
 import array as A
 
