@@ -14,8 +14,10 @@ Record slice ID, packet summary or link, writer branch/base, collision proof, di
 
 Record exact SHA, severity, evidence, affected slice/premise, disposition (`fix-now`, `repair`, `defer-out`, `false`, `pre-existing`), owner, and invalidated packets. Never call finding pre-existing without measuring base.
 
+Record refusals separately: role/slice, refused claim, adjudication, terminal verdict (`UPHELD`, `OVERRULED`, `PARTIAL`), and evidence. Missing verdict blocks sprint exit.
+
 ## Final comment
 
-Record stage acceptance results, throughput metrics, repair verdict, local and CI receipts, residual authorities/debt, PR head, and explicit state: `AWAITING OWNER ENQUEUE APPROVAL`.
+Record stage acceptance results, throughput metrics, repair verdict, local and CI receipts, residual authorities/debt, PR head, and explicit state: `AWAITING OWNER ENQUEUE APPROVAL`. After merge, attach terminal `merge_group` result; narrowed `pull_request` CI is not merge-queue attribution.
 
 GitHub writes require readback verification. Tracker prose is claim until source/history/evidence confirms it.
