@@ -1,0 +1,510 @@
+{- | Arithmetic modulo the secp256k1 field prime `p = 2^256 - 2^32 - 977`,
+   on **10 limbs in base 2^26**: limbs 0..8 hold 26 bits each and limb 9 holds
+   22 (9*26 + 22 = 256, non-redundant), least-significant limb first.
+
+   ── Why this representation ──────────────────────────────────────────
+   Design decision P10 (`docs/design/ATPROTO-PDS-DESIGN.md`, #1699 field
+   10x2^26 limbs): it is the layout `libsecp256k1`'s `field_10x26_impl.h`
+   uses, so the subtlest arithmetic in this project is cross-checkable
+   ELEMENT BY ELEMENT against an audited implementation of the identical
+   representation. The answer key lives at
+   `pds/test/vectors/field_reference_corpus.txt` with its provenance row in
+   `pds/test/VECTOR-PROVENANCE.txt` — never as inline literals here (G5).
+
+   An element is an `Array Int` of exactly 10 limbs. Not a record and not a
+   tuple: tuples top out at arity 5, and a record forbids the indexed loops
+   the schoolbook multiply is written as. The reference unrolls its limbs into
+   a struct FOR SPEED, and speed is out of scope in Phase 0.
+
+   ── The canonical invariant ──────────────────────────────────────────
+   Every value produced by every public operation here is CANONICAL: fully
+   reduced, `0 <= v < p`, hence `n[i] <= 2^26 - 1` for `i` in 0..8 and
+   `n[9] <= 2^22 - 1`. That is magnitude 1 in the reference's vocabulary, and
+   then some. No weakly-normalized or higher-magnitude element is ever
+   exposed. Normalization here is EAGER, at every public boundary.
+
+   `Array` is mutable, so: every operation allocates a fresh result array and
+   NEVER writes into an argument. `feZero`, `feOne` and the private `pLimbs` are
+   shared immutable constants for the same reason — nothing in this module
+   writes through a value it did not allocate.
+
+   ── The headroom chain (derived against THIS code) ───────────────────
+   `Int` is a 63-bit fixnum whose non-negative ceiling is `2^62 - 1`, and it
+   WRAPS SILENTLY: no trap, no diagnostic (`stdlib/runtime.mdk`,
+   `compiler/RUNTIME-DESIGN.md`). So every intermediate is bounded here.
+
+     limb                a_i < 2^26  (i <= 8),  a_9 < 2^22
+     partial product     a_i * b_j < 2^52
+     worst column        `feMul`'s schoolbook column k = 8 has NINE terms whose
+                         two indices are both <= 8, so c_8 < 9 * (2^26-1)^2
+                         < 2^55.170. Column k = 9 is wider (ten terms) but two
+                         of them involve the 22-bit limb 9, giving
+                         8*(2^26-1)^2 + 2*(2^26-1)*(2^22-1) < 2^55.022 — so
+                         k = 8, not k = 9, is the worst column.
+     plus its carry      the carry into a column is < 9*2^52 / 2^26 < 2^29.2,
+                         so column-plus-carry < 2^55.171.
+     headroom            2^62 / 2^55.171 = 2^6.83 — about 6.8 bits clear.
+
+   After the fold, the largest limb is `e[0] < 2^42.4` (see `foldHigh`), far
+   below the column sums, so the schoolbook column IS the peak intermediate.
+
+   ── Carry BEFORE fold — the other order overflows ────────────────────
+   The high half is folded back with `2^256 = 2^32 + 977 (mod p)`, i.e.
+   `2^260 = R1*2^26 + R0` with `R1 = 1024`, `R0 = 15632` — the reference's own
+   constants (`field_10x26_impl.h`: `R0 = 0x3D10`, `R1 = 0x400`). Folding an
+   UNCARRIED column would compute `c_k * R0 < 2^55.17 * 2^13.94 = 2^69.1`,
+   SEVEN BITS OVER THE CEILING, and it would wrap with no signal. So `feMul`
+   carry-propagates all 19 columns down below 2^26 FIRST and only then folds —
+   the same `u0 = d & M; ... c += u0 * R0` order the reference uses.
+
+   ── THE BOUND IS NOT A TRIPWIRE. Read this before skipping a normalize ─
+   At magnitude 2 (limbs up to `2*(2^26-1)`) the worst column is
+   `9*(2*(2^26-1))^2 < 2^57.170` — STILL 4.83 BITS CLEAR of `2^62`. So a
+   missed normalization does NOT overflow and does NOT fail fast: it fails
+   only after several operations have accumulated past the invariant, by which
+   point the wrong answer has no visible relationship to the site that caused
+   it. Eager normalization is therefore enforced STRUCTURALLY — by this
+   module's own discipline (every public operation ends in `feCanonicalize`) and
+   by the reference corpus — and must NEVER be left to overflow to catch a
+   violation. What breaks the chain: admitting inputs above magnitude 1 (at
+   magnitude 8 the column sum is `9*2^58 = 2^61.17`, 0.83 bits clear, and the
+   carry eats into that); folding before carrying; and any "accumulate several
+   products, reduce once" restructuring.
+
+   ── Two bounds that do NOT apply here ────────────────────────────────
+   `stdlib/bits64.mdk`'s published `< 2^35` is a FOUR-limb column of 16-bit
+   limbs inside a 64-bit value. This module is ten limbs of 26 bits inside a
+   256-bit value; that number has nothing to do with this one.
+
+   And the REFERENCE'S OWN PROOF DOES NOT TRANSFER. `secp256k1_fe_mul_inner`
+   admits 30-bit limbs (`VERIFY_BITS(a[i], 30)`) and all EIGHTEEN of its
+   64-bit accumulator assertions are commented out in the pinned source — its
+   accumulator genuinely reaches a full 64 bits, which is fine for a `uint64`
+   and fatal for a 63-bit `Int` that wraps silently. The reference's ORDER of
+   operations transfers; its magnitudes do not.
+
+   ── Not constant-time ────────────────────────────────────────────────
+   `feInverse` is Fermat's little theorem by square-and-multiply over a fixed
+   exponent, and the comparisons/conditional subtractions here branch on
+   secret-dependent data. THIS IMPLEMENTATION IS NOT CONSTANT-TIME. Phase 0
+   grades correctness only; no side-channel property is claimed or checked
+   (no constant-time requirement appears anywhere in the design). -}
+
+-- ── Constants ────────────────────────────────────────────────────────
+
+-- 2^26 - 1: the mask for limbs 0..8.
+limbMask : Int
+limbMask = 0x3ffffff
+
+-- 2^22 - 1: the mask for limb 9 (the 26/22 seam).
+topMask : Int
+topMask = 0x3fffff
+
+-- p = 2^256 - 2^32 - 977 in this layout. Derived from (2^256 - 1) - (2^32 +
+-- 976): limb 0 loses 976 = 0x3d0 and limb 1 loses 2^32 / 2^26 = 64.
+pLimbs : Array Int
+pLimbs = [|
+  0x3fffc2f, 0x3ffffbf, 0x3ffffff, 0x3ffffff, 0x3ffffff, 0x3ffffff, 0x3ffffff,
+  0x3ffffff, 0x3ffffff, 0x3fffff,
+|]
+
+-- 2^256 = 2^32 + 977 (mod p), expressed at limb granularity: a unit of weight
+-- 2^256 contributes 977 to limb 0 and 2^32 / 2^26 = 64 to limb 1.
+foldLow : Int
+foldLow = 977
+
+foldHi : Int
+foldHi = 64
+
+-- 2^260 = R1 * 2^26 + R0 (mod p) — 2^4 * (2^32 + 977) = 2^36 + 15632. These
+-- are `field_10x26_impl.h`'s R0 = 0x3D10 and R1 = 0x400.
+r0 : Int
+r0 = 15632
+
+r1 : Int
+r1 = 1024
+
+-- p - 2, the Fermat exponent for `feInverse`, as 32 big-endian bytes.
+--   p   = ffffffff ffffffff ffffffff ffffffff ffffffff ffffffff fffffffe fffffc2f
+--   p-2 = ffffffff ffffffff ffffffff ffffffff ffffffff ffffffff fffffffe fffffc2d
+expPMinus2 : Array Int
+expPMinus2 = [|
+  0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+  0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+  0xff, 0xfe, 0xff, 0xff, 0xfc, 0x2d,
+|]
+
+-- | The additive identity.
+export feZero : Fe
+feZero = [|0, 0, 0, 0, 0, 0, 0, 0, 0, 0|]
+
+-- | The multiplicative identity.
+export feOne : Fe
+feOne = [|1, 0, 0, 0, 0, 0, 0, 0, 0, 0|]
+
+-- | A field element: exactly 10 limbs, base 2^26, least-significant first,
+--   limb 9 holding 22 bits. Every value handed out by this module is
+--   canonical (`0 <= v < p`).
+export type Fe = Array Int
+
+-- ── Carrying, folding, canonicalizing ────────────────────────────────
+
+-- Propagate carries through limbs 0..8 and mask limb 9 to 22 bits, IN PLACE.
+-- Returns the overflow above bit 255 (the units of weight 2^256), which the
+-- caller folds back. Every limb is < 2^26 (limb 9 < 2^22) on return.
+carryPass : Array Int -> Int
+carryPass n = carryPassGo n 0
+
+carryPassGo : Array Int -> Int -> Int
+carryPassGo n i =
+  if i >= 9 then
+    let hi = arrayGetUnsafe 9 n
+    let () = arraySetUnsafe 9 (bitAnd hi topMask) n
+    shiftRight hi 22
+  else
+    let v = arrayGetUnsafe i n
+    let () = arraySetUnsafe i (bitAnd v limbMask) n
+    let () = arraySetUnsafe (i + 1) (arrayGetUnsafe (i + 1) n + shiftRight v 26) n
+    carryPassGo n (i + 1)
+
+-- Carry, then fold the 2^256 overflow back with 2^256 = 2^32 + 977, and
+-- repeat until nothing overflows. Terminates because each fold strictly
+-- decreases the value (x * 2^256 > x * (2^32 + 977) for x > 0). IN PLACE.
+reduceCarry : Array Int -> Unit
+reduceCarry n =
+  let x = carryPass n
+  if x == 0 then ()
+  else
+    let () = arraySetUnsafe 0 (arrayGetUnsafe 0 n + x * foldLow) n
+    let () = arraySetUnsafe 1 (arrayGetUnsafe 1 n + x * foldHi) n
+    reduceCarry n
+
+-- Is the carried limb array >= p? Compared most-significant limb first.
+gtePLimbs : Array Int -> Bool
+gtePLimbs n = gtePGo n 9
+
+gtePGo : Array Int -> Int -> Bool
+gtePGo n i =
+  if i < 0 then True
+  else
+    let a = arrayGetUnsafe i n
+    let b = arrayGetUnsafe i pLimbs
+    if a > b then True else if a < b then False else gtePGo n (i - 1)
+
+-- n := n - p, IN PLACE. Precondition: n >= p (so the top limb never borrows).
+subPInPlace : Array Int -> Unit
+subPInPlace n = subPGo n 0 0
+
+subPGo : Array Int -> Int -> Int -> Unit
+subPGo n i borrow =
+  if i >= 10 then ()
+  else
+    let d = arrayGetUnsafe i n - arrayGetUnsafe i pLimbs - borrow
+    if d < 0 then
+      let () = arraySetUnsafe i (d + limbMask + 1) n
+      subPGo n (i + 1) 1
+    else
+      let () = arraySetUnsafe i d n
+      subPGo n (i + 1) 0
+
+-- | Reduce any 10-limb array to the canonical representative of its value
+--   mod p. The argument is NOT modified.
+--
+--   Each limb must be non-negative and small enough that the carry chain
+--   stays inside the 63-bit fixnum — every producer in this module keeps
+--   limbs below 2^43, against a ceiling of 2^62 (see the module header).
+export feCanonicalize : Array Int -> Fe
+feCanonicalize raw =
+  let n = arrayCopy raw
+  let () = reduceCarry n
+  -- After reduceCarry the value is < 2^256, and 2^256 - p = 2^32 + 977 < p,
+  -- so ONE conditional subtraction is enough.
+  if gtePLimbs n then
+    let () = subPInPlace n
+    n
+  else
+    n
+
+-- ── Serialization ────────────────────────────────────────────────────
+
+-- 32 big-endian bytes -> the exact 256-bit value as 10 limbs (no reduction).
+limbsOfBytes : Array Int -> Array Int
+limbsOfBytes bs =
+  let n = arrayMake 10 0
+  let () = limbsOfBytesGo bs n 31 0 0 0
+  n
+
+limbsOfBytesGo : Array Int -> Array Int -> Int -> Int -> Int -> Int -> Unit
+limbsOfBytesGo bs n bpos acc accBits li =
+  if li >= 10 then ()
+  else
+    if accBits >= 26 then
+      let () = arraySetUnsafe li (bitAnd acc limbMask) n
+      limbsOfBytesGo bs n bpos (shiftRight acc 26) (accBits - 26) (li + 1)
+    else
+      if bpos >= 0 then limbsOfBytesGo bs n (bpos - 1) (acc + shiftLeft (arrayGetUnsafe bpos bs) accBits) (accBits + 8) li
+      else
+        let () = arraySetUnsafe li (bitAnd acc limbMask) n
+        limbsOfBytesGo bs n bpos (shiftRight acc 26) 0 (li + 1)
+
+-- Is this a well-formed 32-byte array with every element in 0..255?
+byteArrayOk : Array Int -> Bool
+byteArrayOk bs = arrayLength bs == 32 && byteRangeGo bs 0
+
+byteRangeGo : Array Int -> Int -> Bool
+byteRangeGo bs i =
+  if i >= 32 then True
+  else
+    let b = arrayGetUnsafe i bs
+    if b < 0 || b > 255 then False else byteRangeGo bs (i + 1)
+
+-- | Parse 32 big-endian bytes as a CANONICAL field element: a value >= p is
+--   REJECTED rather than reduced. This is the entry point a wire format
+--   should use — an encoder that emits a non-canonical 32 bytes is producing
+--   a value no verifier will agree with.
+--
+--   The `0 <= b <= 255` element contract IS enforced here (and the length):
+--   an out-of-range element is an `Err`, never silently taken mod 256.
+export feFromBytes : Array Int -> Result String Fe
+feFromBytes bs =
+  if arrayLength bs != 32 then Err "field.feFromBytes: expected 32 bytes, got \{intToString (arrayLength bs)}"
+  else
+    if not (byteArrayOk bs) then Err "field.feFromBytes: every element must be a byte in 0..255"
+    else
+      let n = limbsOfBytes bs
+      if gtePLimbs n then
+        Err "field.feFromBytes: value is not canonical (>= p)"
+      else
+        Ok n
+
+-- | Parse ANY 32 big-endian bytes, reducing mod p. This mirrors
+--   `secp256k1_fe_set_b32_mod` and is what the reference corpus's `red` rows
+--   grade. Use `feFromBytes` when the input is supposed to be canonical.
+--
+--   The element contract is enforced here too, but this function is not
+--   `Result`-typed, so a violation PANICS rather than aliasing mod 256. A
+--   loud abort is the point: silently masking an out-of-range element would
+--   compute a different value than the caller wrote.
+export feFromBytesReduce : Array Int -> Fe
+feFromBytesReduce bs =
+  if arrayLength bs != 32 then
+    panic "field.feFromBytesReduce: expected 32 bytes, got \{intToString (arrayLength bs)}"
+  else if not (byteArrayOk bs) then
+    panic "field.feFromBytesReduce: every element must be a byte in 0..255"
+  else
+    feCanonicalize (limbsOfBytes bs)
+
+-- | The canonical 32 big-endian bytes of a field element. Canonicalizes
+--   first, so it is total over any well-formed 10-limb array.
+export feToBytes : Fe -> Array Int
+feToBytes a =
+  let n = feCanonicalize a
+  let out = arrayMake 32 0
+  let () = toBytesGo n out 0 0 0 31
+  out
+
+toBytesGo : Fe -> Array Int -> Int -> Int -> Int -> Int -> Unit
+toBytesGo n out li acc accBits pos =
+  if pos < 0 then ()
+  else
+    if accBits >= 8 then
+      let () = arraySetUnsafe pos (bitAnd acc 255) out
+      toBytesGo n out li (shiftRight acc 8) (accBits - 8) (pos - 1)
+    else
+      if li < 10 then toBytesGo n out (li + 1) (acc + shiftLeft (arrayGetUnsafe li n) accBits) (accBits + 26) pos
+      else
+        let () = arraySetUnsafe pos (bitAnd acc 255) out
+        toBytesGo n out li (shiftRight acc 8) 0 (pos - 1)
+
+-- ── Comparison ───────────────────────────────────────────────────────
+
+-- | Are two canonical elements equal? Canonical representatives are unique,
+--   so this is limb-wise equality.
+export feEqual : Fe -> Fe -> Bool
+feEqual a b = equalGo a b 0
+
+equalGo : Fe -> Fe -> Int -> Bool
+equalGo a b i =
+  if i >= 10 then
+    True
+  else if arrayGetUnsafe i a != arrayGetUnsafe i b then
+    False
+  else
+    equalGo a b (i + 1)
+
+-- | Is this element zero?
+export feIsZero : Fe -> Bool
+feIsZero a = feEqual a feZero
+
+-- | Is the canonical representative odd? (The low bit of limb 0.)
+export feIsOdd : Fe -> Bool
+feIsOdd a = bitAnd (arrayGetUnsafe 0 a) 1 == 1
+
+-- ── Arithmetic ───────────────────────────────────────────────────────
+
+-- | Addition mod p. Limb-wise, then feCanonicalize: each sum is < 2^27.
+export feAdd : Fe -> Fe -> Fe
+feAdd a b =
+  let e = arrayMake 10 0
+  let () = addGo a b e 0
+  feCanonicalize e
+
+addGo : Fe -> Fe -> Array Int -> Int -> Unit
+addGo a b e i =
+  if i >= 10 then ()
+  else
+    let () = arraySetUnsafe i (arrayGetUnsafe i a + arrayGetUnsafe i b) e
+    addGo a b e (i + 1)
+
+-- | Additive inverse mod p, computed as `p - a` with borrow. `a` is canonical
+--   so `0 <= a < p`, hence `0 < p - a <= p`; `feCanonicalize` maps the `a = 0`
+--   case (`p - 0 = p`) back to 0.
+export feNegate : Fe -> Fe
+feNegate a =
+  let e = arrayMake 10 0
+  let () = negateGo a e 0 0
+  feCanonicalize e
+
+negateGo : Fe -> Array Int -> Int -> Int -> Unit
+negateGo a e i borrow =
+  if i >= 10 then ()
+  else
+    let d = arrayGetUnsafe i pLimbs - arrayGetUnsafe i a - borrow
+    if d < 0 then
+      let () = arraySetUnsafe i (d + limbMask + 1) e
+      negateGo a e (i + 1) 1
+    else
+      let () = arraySetUnsafe i d e
+      negateGo a e (i + 1) 0
+
+-- | Subtraction mod p. NEGATE-THEN-ADD, exactly as the reference does it —
+--   `libsecp256k1` has no `secp256k1_fe_sub` either.
+export feSub : Fe -> Fe -> Fe
+feSub a b = feAdd a (feNegate b)
+
+-- | Multiplication mod p: schoolbook columns, then CARRY, then fold.
+--
+--   The three steps and their bounds are the module header's headroom chain.
+--   The order is load-bearing: folding an uncarried column would reach
+--   2^69.1 against a 2^62 ceiling and wrap silently.
+export feMul : Fe -> Fe -> Fe
+feMul a b =
+  -- Step 1 — the 19 schoolbook columns (index 19 receives the final carry).
+  -- Peak: column 8, nine terms, < 2^55.170.
+  let c = arrayMake 20 0
+  let () = mulAccum a b c 0
+  -- Step 2 — carry EVERY column below 2^26 before anything is folded.
+  let () = carryChain c 0
+  -- Step 3 — fold the high half back with 2^260 = r1 * 2^26 + r0.
+  let e = arrayMake 11 0
+  let () = foldHigh c e
+  let res = arrayMake 10 0
+  let () = arrayBlit e 0 res 0 10
+  feCanonicalize res
+
+mulAccum : Fe -> Fe -> Array Int -> Int -> Unit
+mulAccum a b c i =
+  if i >= 10 then ()
+  else
+    let () = mulAccumRow a b c i 0
+    mulAccum a b c (i + 1)
+
+mulAccumRow : Fe -> Fe -> Array Int -> Int -> Int -> Unit
+mulAccumRow a b c i j =
+  if j >= 10 then ()
+  else
+    let k = i + j
+    let () = arraySetUnsafe k (arrayGetUnsafe k c + arrayGetUnsafe i a * arrayGetUnsafe j b) c
+    mulAccumRow a b c i (j + 1)
+
+-- Carry columns 0..18 down below 2^26, depositing the last carry in c[19].
+carryChain : Array Int -> Int -> Unit
+carryChain c i =
+  if i >= 19 then ()
+  else
+    let v = arrayGetUnsafe i c
+    let () = arraySetUnsafe i (bitAnd v limbMask) c
+    let () = arraySetUnsafe (i + 1) (arrayGetUnsafe (i + 1) c + shiftRight v 26) c
+    carryChain c (i + 1)
+
+-- Fold columns 10..19 (weight >= 2^260) into columns 0..10, then fold the
+-- one column-10 residue (from c[19]'s r1 term) once more.
+--
+-- Bounds, with every c[q] < 2^26 after `carryChain` and c[19] < 2^18 (the
+-- product of two values < 2^256 is < 2^512 = 2^18 * 2^494):
+--   e[m] for m >= 2 : < 2^26 + 2^26*r0 + 2^26*r1               < 2^40.1
+--   e[1]            : the above + (c[19]*r1)*r1                < 2^40.3
+--   e[0]            : < 2^26 + 2^26*r0 + (c[19]*r1)*r0         < 2^42.4
+-- all far below the step-1 column sums, so the schoolbook column remains the
+-- peak intermediate of the whole operation.
+foldHigh : Array Int -> Array Int -> Unit
+foldHigh c e =
+  let () = foldCopy c e 0
+  let () = foldGo c e 10
+  let hi = arrayGetUnsafe 10 e
+  let () = arraySetUnsafe 10 0 e
+  let () = arraySetUnsafe 0 (arrayGetUnsafe 0 e + hi * r0) e
+  arraySetUnsafe 1 (arrayGetUnsafe 1 e + hi * r1) e
+
+foldCopy : Array Int -> Array Int -> Int -> Unit
+foldCopy c e m =
+  if m >= 10 then ()
+  else
+    let () = arraySetUnsafe m (arrayGetUnsafe m c) e
+    foldCopy c e (m + 1)
+
+foldGo : Array Int -> Array Int -> Int -> Unit
+foldGo c e q =
+  if q >= 20 then ()
+  else
+    let v = arrayGetUnsafe q c
+    let () = arraySetUnsafe (q - 10) (arrayGetUnsafe (q - 10) e + v * r0) e
+    let () = arraySetUnsafe (q - 9) (arrayGetUnsafe (q - 9) e + v * r1) e
+    foldGo c e (q + 1)
+
+-- | Squaring mod p. Deliberately `feMul a a`: the reference splits squaring out
+--   FOR SPEED, and a separate carry chain would be a second thing to prove.
+--   The bound is identical — a doubled cross term `2*a_i*a_j` replaces the two
+--   equal terms it stands for, so no column grows.
+export feSquare : Fe -> Fe
+feSquare a = feMul a a
+
+-- | Multiplicative inverse mod p, by Fermat's little theorem: `a^(p-2)`,
+--   square-and-multiply over the fixed 256-bit exponent, most-significant
+--   bit first.
+--
+--   🚨 `feInverse feZero` IS `feZero`. THIS IS A TOTAL FUNCTION and 0 has no
+--   true inverse: the value 0 is returned for the input 0. That matches
+--   `libsecp256k1` (`secp256k1_fe_inv` of zero is zero, not an error) and it is
+--   pinned executably by the `inv 0` row of the reference corpus — diverging on
+--   that one cell would weaken exactly the element-by-element
+--   cross-checkability the 10x2^26 layout was chosen for.
+--
+--   CALLERS MUST ESTABLISH NON-ZERONESS THEMSELVES before relying on the
+--   result being a true inverse. A zero result is NOT evidence of anything; in
+--   particular a signing routine must reject `k = 0` before inverting it, and
+--   must never treat a zero result as valid.
+--
+--   Not constant-time (see the module header).
+--
+-- > feEqual (feInverse feZero) feZero
+-- True
+--
+-- > feEqual (feMul (feInverse feOne) feOne) feOne
+-- True
+export feInverse : Fe -> Fe
+feInverse a = powGo a 255 feOne
+
+powGo : Fe -> Int -> Fe -> Fe
+powGo base bitIdx acc =
+  if bitIdx < 0 then acc
+  else
+    let sq = feSquare acc
+    let r = if expBit bitIdx then feMul sq base else sq
+    powGo base (bitIdx - 1) r
+
+-- Bit `k` of p-2, read out of its 32 big-endian bytes.
+expBit : Int -> Bool
+expBit k =
+  let byte = arrayGetUnsafe (31 - shiftRight k 3) expPMinus2
+  bitAnd (shiftRight byte (k - shiftLeft (shiftRight k 3) 3)) 1 == 1
