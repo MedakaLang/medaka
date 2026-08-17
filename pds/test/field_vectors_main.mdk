@@ -1,0 +1,208 @@
+{- | Reference-corpus driver for `pds/lib/field.mdk` (S-field, #1699 field
+   10x2^26 limbs).
+
+   Usage: field_vectors_main [--stride N] <corpus-file> [<corpus-file> ...]
+
+   Grades our secp256k1 field arithmetic against
+   `pds/test/vectors/field_reference_corpus.txt`, generated from
+   `libsecp256k1` at the pinned commit — never against a self-captured
+   golden (G5, `docs/design/ATPROTO-PDS-DESIGN.md` §5). Provenance:
+   `pds/test/VECTOR-PROVENANCE.txt`.
+
+   Grammar — one row per line, lowercase hex, single-space separated:
+     <op> <a-64hex> <r-64hex>            op in { red, sqr, neg, inv }
+     <op> <a-64hex> <b-64hex> <r-64hex>  op in { mul, add, sub }
+   Blank lines and lines beginning `#` are ignored. Operands are RAW 32-byte
+   big-endian values that may be >= p; every one goes in through
+   `feFromBytesReduce`, and every result is compared as CANONICAL 32 bytes.
+   An UNKNOWN op token is a FAIL naming the line, never a skip — a silently
+   skipped row is a false green.
+
+   `--stride N` checks only every Nth row (and counts the rest as skipped).
+   That is what lets the gate's eval-engine phase run a bounded subset: the
+   `inv` rows are ~500 field multiplications each, which the tree-walking
+   interpreter is not the right engine for. The native phase runs stride 1.
+
+   The LAST stdout line is exactly `TOTAL: PASS` or `TOTAL: FAIL`. Exit 1 if
+   any row failed OR if zero rows were checked (the vacuous-green guard). -}
+
+import lib.field.{
+  Fe,
+  feFromBytesReduce,
+  feToBytes,
+  feAdd,
+  feSub,
+  feMul,
+  feSquare,
+  feNegate,
+  feInverse,
+}
+import hex.{decode, encode}
+import string.{split, startsWith, toInt, trim}
+import io.{readLines}
+
+-- ── Counter layout ───────────────────────────────────────────────────
+-- `counts` holds the per-op OK count, indexed by `opIndex`.
+-- `totals` holds [checked, failed, skipped].
+
+opNames : Array String
+opNames = [|"red", "sqr", "neg", "inv", "mul", "add", "sub"|]
+
+opIndex : String -> Int
+opIndex op =
+  if op == "red" then
+    0
+  else if op == "sqr" then
+    1
+  else if op == "neg" then
+    2
+  else if op == "inv" then
+    3
+  else if op == "mul" then
+    4
+  else if op == "add" then
+    5
+  else if op == "sub" then
+    6
+  else
+    -1
+
+bump : Array Int -> Int -> Unit
+bump arr i = arraySetUnsafe i (arrayGetUnsafe i arr + 1) arr
+
+-- ── Row evaluation ───────────────────────────────────────────────────
+
+mustHex : String -> Array Int
+mustHex s = match decode s
+  Ok bs => bs
+  Err m => panic "field_vectors: bad hex '\{s}': \{m}"
+
+loadFe : String -> Fe
+loadFe s = feFromBytesReduce (mustHex s)
+
+applyUnary : String -> Fe -> Fe
+applyUnary op x =
+  if op == "red" then
+    x
+  else if op == "sqr" then
+    feSquare x
+  else if op == "neg" then
+    feNegate x
+  else
+    feInverse x
+
+applyBinary : String -> Fe -> Fe -> Fe
+applyBinary op x y =
+  if op == "mul" then
+    feMul x y
+  else if op == "add" then
+    feAdd x y
+  else
+    feSub x y
+
+-- Compare an actual field element against the row's expected 64-hex, print
+-- one line for the cell, and update the counters.
+grade : Array Int -> Array Int -> String -> String -> Fe -> String -> <IO> Unit
+grade counts totals label op actual expected =
+  let got = encode (feToBytes actual)
+  let () = bump totals 0
+  if got == expected then
+    let () = bump counts (opIndex op)
+    println "PASS\t\{label}"
+  else
+    let () = bump totals 1
+    println "FAIL\t\{label}\texpected \{expected}\tgot \{got}"
+
+-- ── Line dispatch ────────────────────────────────────────────────────
+
+isComment : String -> Bool
+isComment line = startsWith "#" line
+
+processLine : Array Int -> Array Int -> String -> Int -> String -> <IO> Unit
+processLine counts totals path lineNo line =
+  let t = trim line
+  if t == "" || isComment t then ()
+  else match split " " t
+    [op, a, r] => if opIndex op < 0 || opIndex op > 3 then
+      let () = bump totals 0
+      let () = bump totals 1
+      println
+        "FAIL\t\{path}:\{intToString lineNo}\tunknown or misplaced op '\{op}' in: \{t}"
+    else grade counts totals "\{path}:\{intToString lineNo}:\{op}" op (applyUnary op (loadFe a)) r
+    [op, a, b, r] => if opIndex op < 4 then
+      let () = bump totals 0
+      let () = bump totals 1
+      println
+        "FAIL\t\{path}:\{intToString lineNo}\tunknown or misplaced op '\{op}' in: \{t}"
+    else grade counts totals "\{path}:\{intToString lineNo}:\{op}" op (applyBinary op (loadFe a) (loadFe b)) r
+    _ =>
+      let () = bump totals 0
+      let () = bump totals 1
+      println "FAIL\t\{path}:\{intToString lineNo}\tmalformed row: \{t}"
+
+processAll : Array Int -> Array Int -> Int -> String -> List String -> Int -> Int -> <IO> Unit
+processAll counts totals stride path [] lineNo rowNo = ()
+processAll counts totals stride path (l::rest) lineNo rowNo =
+  let t = trim l
+  if t == "" || isComment t then processAll counts totals stride path rest (lineNo + 1) rowNo
+  else
+    if rowNo % stride != 0 then
+      let () = bump totals 2
+      processAll counts totals stride path rest (lineNo + 1) (rowNo + 1)
+    else
+      let () = processLine counts totals path lineNo l
+      processAll counts totals stride path rest (lineNo + 1) (rowNo + 1)
+
+runFile : Array Int -> Array Int -> Int -> String -> <IO, FileRead "_"> Unit
+runFile counts totals stride path = match readLines path
+  Err e =>
+    let () = println "FAIL\tcannot read \{path}: \{e}"
+    bump totals 1
+  Ok ls => processAll counts totals stride path ls 1 0
+
+runAll : Array Int -> Array Int -> Int -> List String -> <IO, FileRead "_"> Unit
+runAll counts totals stride [] = ()
+runAll counts totals stride (f::rest) =
+  let () = runFile counts totals stride f
+  runAll counts totals stride rest
+
+-- ── Reporting ────────────────────────────────────────────────────────
+
+printOpCounts : Array Int -> Int -> <IO> Unit
+printOpCounts counts i =
+  if i >= 7 then ()
+  else
+    let () = println "op \{arrayGetUnsafe i opNames}: \{intToString (arrayGetUnsafe i counts)} ok"
+    printOpCounts counts (i + 1)
+
+parseArgs : List String -> (Int, List String)
+parseArgs ("--stride"::nStr::rest) = match toInt nStr
+  Some n =>
+    if n < 1 then
+      panic "field_vectors: --stride needs a positive integer"
+    else
+      (n, rest)
+  None => panic "field_vectors: --stride needs an integer argument"
+parseArgs files = (1, files)
+
+main : <IO, Env, FileRead "_"> Unit
+main =
+  let (stride, files) = parseArgs (args ())
+  if files == [] then
+    let () = println "usage: field_vectors_main [--stride N] <corpus-file> [<corpus-file> ...]"
+    exit 2
+  else
+    let counts = arrayMake 7 0
+    let totals = arrayMake 3 0
+    let () = runAll counts totals stride files
+    let () = printOpCounts counts 0
+    let checked = arrayGetUnsafe 0 totals
+    let failed = arrayGetUnsafe 1 totals
+    let skipped = arrayGetUnsafe 2 totals
+    let () = println "counted: \{intToString (checked - failed)}/\{intToString checked} rows ok, \{intToString skipped} skipped (stride \{intToString stride})"
+    if failed > 0 || checked == 0 then
+      let () = println "TOTAL: FAIL"
+      exit 1
+    else
+      let () = println "TOTAL: PASS"
+      exit 0

@@ -175,3 +175,48 @@ structurally — no in-family source publishes it.
 MEDAKA_ROOT="$(git rev-parse --show-toplevel)" sh pds/test/encodings_vectors.sh
 MEDAKA_ROOT="$(git rev-parse --show-toplevel)" sh pds/test/inlang_test_oracle.sh
 ```
+
+## secp256k1 field arithmetic (S-field, #1699)
+
+`pds/lib/field.mdk` is arithmetic modulo `p = 2^256 - 2^32 - 977` on **10
+limbs in base 2^26** (limbs 0..8 hold 26 bits, limb 9 holds 22). That layout
+is design decision **P10**: it is `libsecp256k1`'s `field_10x26_impl.h`
+layout, chosen so the subtlest arithmetic here is cross-checkable element by
+element against an audited implementation of the identical representation.
+Read the module header before changing anything in it — it carries the
+headroom derivation against Medaka's silently-wrapping 63-bit `Int`, and the
+reason the reference's own overflow proof does **not** transfer.
+
+**The answer key.** `pds/test/vectors/field_reference_corpus.txt` (944 rows:
+`red`/`sqr`/`neg`/`inv` over 44 inputs, `mul`/`add`/`sub` over 256 pairs) is
+GENERATED from `libsecp256k1` — never captured from our own implementation
+(G5). Its provenance row and the `[impl]` pin are in
+`pds/test/VECTOR-PROVENANCE.txt`; that file's POLICY block is canonical and is
+not restated here.
+
+**The pin is sprint-wide.** The `[impl] libsecp256k1` stanza pins one
+repo + version + commit for the whole sprint: `pds/lib/scalar.mdk` will reuse
+the same `id`, and the provenance gate REDS on a second `[impl]` stanza
+pinning that id to a different commit. The `commit:` value is the **peeled**
+commit of the annotated tag (`git rev-parse 'v0.8.0^{commit}'`) — a bare
+`rev-parse`/`ls-remote` on an annotated tag returns the tag OBJECT's sha, and
+nothing downstream can tell the two apart.
+
+**Regenerating the corpus.** `pds/tools/gen_field_corpus.sh` is a **TOOL, not
+a gate** — it needs network and a C compiler, is never run in CI, and lives
+outside `pds/test/` for exactly that reason (see the classification policy
+above); its row is in `test/CI-COVERAGE-TOOLS.txt`. The input set and the pair
+list live in committed source (`pds/tools/field_corpus_driver.c`), so the only
+run-time parameter is the output path:
+
+```sh
+sh pds/tools/gen_field_corpus.sh /tmp/x
+cmp /tmp/x pds/test/vectors/field_reference_corpus.txt   # must be byte-identical
+```
+
+**Run the gates locally:**
+
+```sh
+MEDAKA_ROOT="$(git rev-parse --show-toplevel)" sh pds/test/field_vectors.sh
+MEDAKA_ROOT="$(git rev-parse --show-toplevel)" sh pds/test/inlang_test_oracle.sh
+```
