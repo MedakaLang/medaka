@@ -1,5 +1,5 @@
 # META
-source_lines=30906
+source_lines=30953
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted typecheck stage — port of lib/typecheck.ml's HM core.  SLICE 1:
@@ -10187,14 +10187,61 @@ resolveFieldByOwners te fname = match fieldOwnerNames fname
   r::rest => resolveFieldAmbiguous te fname (r::rest)
 
 -- multiple owners: receiver still an unbound var ⇒ genuinely ambiguous; a
--- concrete (non-record) receiver ⇒ pick the first owner so the later unify
--- surfaces the type mismatch (mirrors the oracle's two `_` sub-branches).
+-- concrete (non-record) receiver ⇒ narrow by the receiver's own declaration
+-- identity, and only if that does not land on exactly one owner fall back to
+-- picking the first owner so the later unify surfaces the type mismatch
+-- (mirrors the oracle's two `_` sub-branches).
 resolveFieldAmbiguous : Mono -> String -> List String -> Option (String, RecordInfo)
 resolveFieldAmbiguous te fname owners = match normalize te
   TVar _ =>
     let _ = pushTypeError "T-AMBIGUOUS-FIELD" (ambiguousFieldMsg fname owners)
     None
-  _ => pairRecordByName (headL owners)
+  _ => resolveFieldOwnersNarrowed te owners
+
+-- ── #1216 / #1382: the multi-owner arm stops answering by sort order ──────────
+-- `sortUniqS` makes `headL owners` a MODULE-NAME SORT, so before this the concrete
+-- arm decided which record a `.field` access means by the alphabetical order of the
+-- declaring modules — measured on the emit path as `CFieldAccess (CVar
+-- "zwrap__mkZ") "a" "awrap__Cfg"`: zwrap's value, awrap's record, applied
+-- faithfully by the backend.
+--
+-- The narrowing asks the one question the bare key cannot: which DECLARATION does
+-- the receiver's own head name?  It ADOPTS `recordCandIsReceiverDecl` — the same
+-- landed comparator `lookupRecordByMangledHead` filters with — so both sides go
+-- through `headTyconMono` and the comparison is on `HeadKey`, not on the string
+-- every candidate here spells identically by construction.
+--
+-- THREE PROPERTIES THIS DELIBERATELY HAS, each the reason a hazard does not apply:
+--   * ABSENCE DECIDES NOTHING.  `HeadKey` embeds `TabKey`, whose `TkIdent`/`TkBare`
+--     split means a key carrying identity can never equal one that does not.  A
+--     receiver never stamped (`HkRigid`, the flat/single-file driver where every
+--     decl is `TkBare`) matches ZERO candidates and falls through to exactly
+--     today's answer — never "the first one".
+--   * IT IS NOT A FALLBACK-ON-AMBIGUITY.  Anything other than exactly one surviving
+--     candidate returns today's answer unchanged, so this can only replace a coin
+--     flip with the receiver's own declaration; it can never widen an accept.
+--   * IT CANNOT TURN NOTHING INTO SOMETHING.  Every candidate is built by a
+--     SUCCESSFUL `lookupRecordByName`, and the fall-through is byte-for-byte the
+--     old expression, so no program that resolved to `None` here can now resolve to
+--     `Some`.
+--
+-- One mint of the receiver's key for the whole filter, not one per candidate — the
+-- same hoist `lookupRecordByMangledHead` documents, for the same reason
+-- (`tabKeyOf` → `mkIdent` → `identOriginOf` allocates on the way).
+resolveFieldOwnersNarrowed : Mono -> List String -> Option (String, RecordInfo)
+resolveFieldOwnersNarrowed te owners =
+  let rk = headTyconMono te
+  match filterList (recordCandIsReceiverDecl rk) (ownerCandidates owners)
+    [pair] => Some pair
+    _ => pairRecordByName (headL owners)
+
+-- Each owner key paired with its `RecordInfo`; a key with no entry is dropped
+-- rather than defaulted, so the filter above only ever sees real declarations.
+ownerCandidates : List String -> List (String, RecordInfo)
+ownerCandidates [] = []
+ownerCandidates (key::rest) = match lookupRecordByName key
+  Some ri => (key, ri) :: ownerCandidates rest
+  None => ownerCandidates rest
 
 pairRecordByName : String -> Option (String, RecordInfo)
 pairRecordByName r = map (ri => (r, ri)) (lookupRecordByName r)
@@ -32543,7 +32590,12 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "resolveFieldByOwners" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RecordInfo"))))))
 (DFunDef false "resolveFieldByOwners" ((PVar "te") (PVar "fname")) (EMatch (EApp (EVar "fieldOwnerNames") (EVar "fname")) (arm (PList) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "pushUnknownField") (EVar "fname")) (ELit (LString "<unknown>")))) (DoExpr (EVar "None")))) (arm (PList (PVar "r")) () (EApp (EVar "pairRecordByName") (EVar "r"))) (arm (PCons (PVar "r") (PVar "rest")) () (EApp (EApp (EApp (EVar "resolveFieldAmbiguous") (EVar "te")) (EVar "fname")) (EBinOp "::" (EVar "r") (EVar "rest"))))))
 (DTypeSig false "resolveFieldAmbiguous" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RecordInfo")))))))
-(DFunDef false "resolveFieldAmbiguous" ((PVar "te") (PVar "fname") (PVar "owners")) (EMatch (EApp (EVar "normalize") (EVar "te")) (arm (PCon "TVar" PWild) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-AMBIGUOUS-FIELD"))) (EApp (EApp (EVar "ambiguousFieldMsg") (EVar "fname")) (EVar "owners")))) (DoExpr (EVar "None")))) (arm PWild () (EApp (EVar "pairRecordByName") (EApp (EVar "headL") (EVar "owners"))))))
+(DFunDef false "resolveFieldAmbiguous" ((PVar "te") (PVar "fname") (PVar "owners")) (EMatch (EApp (EVar "normalize") (EVar "te")) (arm (PCon "TVar" PWild) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-AMBIGUOUS-FIELD"))) (EApp (EApp (EVar "ambiguousFieldMsg") (EVar "fname")) (EVar "owners")))) (DoExpr (EVar "None")))) (arm PWild () (EApp (EApp (EVar "resolveFieldOwnersNarrowed") (EVar "te")) (EVar "owners")))))
+(DTypeSig false "resolveFieldOwnersNarrowed" (TyFun (TyCon "Mono") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RecordInfo"))))))
+(DFunDef false "resolveFieldOwnersNarrowed" ((PVar "te") (PVar "owners")) (EBlock (DoLet false false (PVar "rk") (EApp (EVar "headTyconMono") (EVar "te"))) (DoExpr (EMatch (EApp (EApp (EVar "filterList") (EApp (EVar "recordCandIsReceiverDecl") (EVar "rk"))) (EApp (EVar "ownerCandidates") (EVar "owners"))) (arm (PList (PVar "pair")) () (EApp (EVar "Some") (EVar "pair"))) (arm PWild () (EApp (EVar "pairRecordByName") (EApp (EVar "headL") (EVar "owners"))))))))
+(DTypeSig false "ownerCandidates" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "RecordInfo")))))
+(DFunDef false "ownerCandidates" ((PList)) (EListLit))
+(DFunDef false "ownerCandidates" ((PCons (PVar "key") (PVar "rest"))) (EMatch (EApp (EVar "lookupRecordByName") (EVar "key")) (arm (PCon "Some" (PVar "ri")) () (EBinOp "::" (ETuple (EVar "key") (EVar "ri")) (EApp (EVar "ownerCandidates") (EVar "rest")))) (arm (PCon "None") () (EApp (EVar "ownerCandidates") (EVar "rest")))))
 (DTypeSig false "pairRecordByName" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RecordInfo")))))
 (DFunDef false "pairRecordByName" ((PVar "r")) (EApp (EApp (EVar "map") (ELam ((PVar "ri")) (ETuple (EVar "r") (EVar "ri")))) (EApp (EVar "lookupRecordByName") (EVar "r"))))
 (DTypeSig false "headL" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
@@ -37616,7 +37668,12 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "resolveFieldByOwners" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RecordInfo"))))))
 (DFunDef false "resolveFieldByOwners" ((PVar "te") (PVar "fname")) (EMatch (EApp (EVar "fieldOwnerNames") (EVar "fname")) (arm (PList) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "pushUnknownField") (EVar "fname")) (ELit (LString "<unknown>")))) (DoExpr (EVar "None")))) (arm (PList (PVar "r")) () (EApp (EVar "pairRecordByName") (EVar "r"))) (arm (PCons (PVar "r") (PVar "rest")) () (EApp (EApp (EApp (EVar "resolveFieldAmbiguous") (EVar "te")) (EVar "fname")) (EBinOp "::" (EVar "r") (EVar "rest"))))))
 (DTypeSig false "resolveFieldAmbiguous" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RecordInfo")))))))
-(DFunDef false "resolveFieldAmbiguous" ((PVar "te") (PVar "fname") (PVar "owners")) (EMatch (EApp (EVar "normalize") (EVar "te")) (arm (PCon "TVar" PWild) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-AMBIGUOUS-FIELD"))) (EApp (EApp (EVar "ambiguousFieldMsg") (EVar "fname")) (EVar "owners")))) (DoExpr (EVar "None")))) (arm PWild () (EApp (EVar "pairRecordByName") (EApp (EVar "headL") (EVar "owners"))))))
+(DFunDef false "resolveFieldAmbiguous" ((PVar "te") (PVar "fname") (PVar "owners")) (EMatch (EApp (EVar "normalize") (EVar "te")) (arm (PCon "TVar" PWild) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-AMBIGUOUS-FIELD"))) (EApp (EApp (EVar "ambiguousFieldMsg") (EVar "fname")) (EVar "owners")))) (DoExpr (EVar "None")))) (arm PWild () (EApp (EApp (EVar "resolveFieldOwnersNarrowed") (EVar "te")) (EVar "owners")))))
+(DTypeSig false "resolveFieldOwnersNarrowed" (TyFun (TyCon "Mono") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RecordInfo"))))))
+(DFunDef false "resolveFieldOwnersNarrowed" ((PVar "te") (PVar "owners")) (EBlock (DoLet false false (PVar "rk") (EApp (EVar "headTyconMono") (EVar "te"))) (DoExpr (EMatch (EApp (EApp (EVar "filterList") (EApp (EVar "recordCandIsReceiverDecl") (EVar "rk"))) (EApp (EVar "ownerCandidates") (EVar "owners"))) (arm (PList (PVar "pair")) () (EApp (EVar "Some") (EVar "pair"))) (arm PWild () (EApp (EVar "pairRecordByName") (EApp (EVar "headL") (EVar "owners"))))))))
+(DTypeSig false "ownerCandidates" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "RecordInfo")))))
+(DFunDef false "ownerCandidates" ((PList)) (EListLit))
+(DFunDef false "ownerCandidates" ((PCons (PVar "key") (PVar "rest"))) (EMatch (EApp (EVar "lookupRecordByName") (EVar "key")) (arm (PCon "Some" (PVar "ri")) () (EBinOp "::" (ETuple (EVar "key") (EVar "ri")) (EApp (EVar "ownerCandidates") (EVar "rest")))) (arm (PCon "None") () (EApp (EVar "ownerCandidates") (EVar "rest")))))
 (DTypeSig false "pairRecordByName" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RecordInfo")))))
 (DFunDef false "pairRecordByName" ((PVar "r")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "ri")) (ETuple (EVar "r") (EVar "ri")))) (EApp (EVar "lookupRecordByName") (EVar "r"))))
 (DTypeSig false "headL" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
