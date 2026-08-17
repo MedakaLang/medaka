@@ -180,3 +180,75 @@ source-note:   FIPS PUB 180-2 is WITHDRAWN, superseded by FIPS PUB 180-4 — it 
 extraction:    hand-transcribed from Appendix B.1 (Len=24, "abc"), B.2 (Len=448, the 56-char string), and B.3 (Len=8, Repeat=1000000, "a"*1000000); each digest and each message string read back twice against `pdftotext -layout` output of the PDF, and cross-checked against Python hashlib's sha256 of the same plaintext before being committed
 retrieved:     2026-08-17
 consumer:      S-sha256 (#1698 sha256 FIPS 180-4)
+[vector]
+file:          pds/test/vectors/multibase_basic.csv
+local-sha256:  5187b285a345c57bf3bf37df492d052d9a7ccf4c72c3084afa15599fedd9a32e
+kind:          published-artifact
+source:        multiformats/multibase tests/basic.csv
+source-url:    https://raw.githubusercontent.com/multiformats/multibase/d7406cdea189b82a0b3937f5737b440f5fa92f92/tests/basic.csv
+source-sha256: 5187b285a345c57bf3bf37df492d052d9a7ccf4c72c3084afa15599fedd9a32e
+extraction:    committed byte-verbatim as fetched; curl -sS <url> | cmp - <file> reproduces it
+retrieved:     2026-08-17
+consumer:      S-encodings (#1701 encodings base58btc + multiformats)
+notes:         pinned commit d7406cdea189b82a0b3937f5737b440f5fa92f92; base58btc row is line 19; grades multibaseBase58btc end-to-end (the expected string carries the multibase 'z' prefix)
+
+[vector]
+file:          pds/test/vectors/multibase_leading_zero.csv
+local-sha256:  c50e9f08313638337df1ab15303e9d1b9b749c83783dd42b9ce7ceb638f3d1a8
+kind:          published-artifact
+source:        multiformats/multibase tests/leading_zero.csv
+source-url:    https://raw.githubusercontent.com/multiformats/multibase/d7406cdea189b82a0b3937f5737b440f5fa92f92/tests/leading_zero.csv
+source-sha256: c50e9f08313638337df1ab15303e9d1b9b749c83783dd42b9ce7ceb638f3d1a8
+extraction:    committed byte-verbatim as fetched; curl -sS <url> | cmp - <file> reproduces it
+retrieved:     2026-08-17
+consumer:      S-encodings (#1701 encodings base58btc + multiformats)
+notes:         pinned commit d7406cdea189b82a0b3937f5737b440f5fa92f92; base58btc row is line 19; input is one 0x00 byte prepended to "yes mani !" (tests/README.md); 1 leading zero byte
+
+[vector]
+file:          pds/test/vectors/multibase_two_leading_zeros.csv
+local-sha256:  5575989d5d4b11893f15332cb887d3fb7083b7e3f7589f256b6e18f649363543
+kind:          published-artifact
+source:        multiformats/multibase tests/two_leading_zeros.csv
+source-url:    https://raw.githubusercontent.com/multiformats/multibase/d7406cdea189b82a0b3937f5737b440f5fa92f92/tests/two_leading_zeros.csv
+source-sha256: 5575989d5d4b11893f15332cb887d3fb7083b7e3f7589f256b6e18f649363543
+extraction:    committed byte-verbatim as fetched; curl -sS <url> | cmp - <file> reproduces it
+retrieved:     2026-08-17
+consumer:      S-encodings (#1701 encodings base58btc + multiformats)
+notes:         pinned commit d7406cdea189b82a0b3937f5737b440f5fa92f92; base58btc row is line 19; input is two 0x00 bytes prepended to "yes mani !" (tests/README.md); 2 leading zero bytes — #1701's named classic-bug cell
+
+[vector]
+file:          pds/test/vectors/multicodec_table.csv
+local-sha256:  a82260ff027287d4e4b794c800e0d7eb9f8222f17efefd0b679c55530a80e7d3
+kind:          published-artifact
+source:        multiformats/multicodec table.csv
+source-url:    https://raw.githubusercontent.com/multiformats/multicodec/38e3bf3e38f613679d76ef2041d73a8060f8622a/table.csv
+source-sha256: a82260ff027287d4e4b794c800e0d7eb9f8222f17efefd0b679c55530a80e7d3
+extraction:    committed byte-verbatim as fetched; curl -sS <url> | cmp - <file> reproduces it
+retrieved:     2026-08-17
+consumer:      S-encodings (#1701 encodings base58btc + multiformats)
+notes:         pinned commit 38e3bf3e38f613679d76ef2041d73a8060f8622a; secp256k1-pub (0xe7) and p256-pub (0x1200) carry table status:draft; sha2-256 (0x12), raw (0x55) and dag-cbor (0x71) are permanent; identity (0x00) appears twice in this file — name is not a unique key
+
+[vector]
+file:          pds/test/vectors/base58_draft_msporny_02.txt
+local-sha256:  a90cb7a282af8059ce84199bc07f4d201e819db48ab1610e671b2e38a9d0bc1f
+kind:          published-artifact
+source:        IETF draft-msporny-base58-02, "The Base58 Encoding Scheme"
+source-url:    https://www.ietf.org/archive/id/draft-msporny-base58-02.txt
+source-sha256: a37072640e1c4eea65fe8e1252ab9cb198f7c2903b804afe2cd65046461e6e06
+extraction:    hand-transcribed from §2 (alphabet) and §5 (3 test vectors); each row read back twice against the fetched .txt file
+retrieved:     2026-08-17
+consumer:      S-encodings (#1701 encodings base58btc + multiformats)
+source-note:   EXPIRED Internet-Draft (Expires: May 4, 2021, per every page footer). Admitted per RUN-PDS0-008 because multiformats/multibase's own README.md (pinned commit d7406cdea189b82a0b3937f5737b440f5fa92f92, line 104) normatively cites this exact document, verbatim: "`base58btc` https://datatracker.ietf.org/doc/html/draft-msporny-base58-02" — no successor document exists.
+notes:         KNOWN ERRATUM in this row 3 (leading-zero vector): the draft's own §5 states 0x0000287fb4cd -> "111233QC4", which is inconsistent with the draft's OWN §3-4 algorithm applied to that stated input (a correct implementation yields "11233QC4", cross-checked against the independent `base58` PyPI package). Disclosed in the vector file itself and in pds/lib/base58.mdk's base58btcEncode doc comment; not graded as pass/fail by the driver. Rows 1-2 (Hello World! / quick brown fox) verified correct against the same independent library.
+
+[vector]
+file:          pds/test/vectors/unsigned_varint_examples.txt
+local-sha256:  5d1b8fb04553e3ead4e1c3483173dbf6c9511f9c766de440b03d6c214f497c77
+kind:          published-artifact
+source:        multiformats/unsigned-varint README.md
+source-url:    https://raw.githubusercontent.com/multiformats/unsigned-varint/dd184f1ce89c81808503bb719b5fcb13844d08f3/README.md
+source-sha256: 23f6df40bcb6630c45d3f29343a913c61c035d2aaf210666173a6b54a075171b
+extraction:    hand-transcribed from the "Examples:" fenced block (6 rows) and the "What do we mean by minimally encoded?" paragraph's one published non-minimal counter-example; each row read back twice against the fetched README.md
+retrieved:     2026-08-17
+consumer:      S-encodings (#1701 encodings base58btc + multiformats)
+notes:         pinned commit dd184f1ce89c81808503bb719b5fcb13844d08f3; current spec, no status caveat; 16383 is not in this block (no reachable in-family source publishes it — covered structurally by pds/test/encodings_test.mdk instead, per packet §3 deviation 2)

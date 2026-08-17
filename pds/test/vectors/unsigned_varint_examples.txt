@@ -1,0 +1,23 @@
+# unsigned_varint_examples.txt — hand-transcribed from the "Examples:" fenced
+# block and the non-minimal counter-example in
+# multiformats/unsigned-varint README.md, pinned commit
+# dd184f1ce89c81808503bb719b5fcb13844d08f3.
+#
+# source-url: https://raw.githubusercontent.com/multiformats/unsigned-varint/dd184f1ce89c81808503bb719b5fcb13844d08f3/README.md
+# fetched sha256: 23f6df40bcb6630c45d3f29343a913c61c035d2aaf210666173a6b54a075171b
+#
+# ── Worked encodings (the "Examples:" fenced block) ───────────────────────
+# One row per example, tab-separated: <decimal value> <TAB> <lowercase hex bytes, emitted order>
+1	01
+127	7f
+128	8001
+255	ff01
+300	ac02
+16384	808001
+#
+# ── Non-minimal rejection (the "What do we mean by minimally encoded?" ───
+# paragraph) — the ONE published counter-example: `{0x81 0x00}` is a valid
+# golang varint encoding of 0x1, but the MINIMAL encoding of 0x1 is `{0x1}`,
+# so a conforming decoder MUST reject `{0x81 0x00}`.
+# Row, tab-separated: reject <TAB> <lowercase hex bytes>
+reject	8100

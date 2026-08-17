@@ -1,0 +1,138 @@
+-- | In-language structural tests for S-encodings (#1701 encodings base58btc
+--   + multiformats). Only STRUCTURAL properties (round-trips, boundary
+--   lengths, rejection shapes) live here — answer-key values live in the
+--   ledgered vector files under pds/test/vectors/ and are graded by
+--   pds/test/encodings_vectors_main.mdk instead (VECTOR-PROVENANCE.txt's own
+--   DOES-NOT-PROVE block: inline literals in a *_test.mdk are invisible to
+--   the provenance ledger by construction).
+--
+--   Two licensed exceptions to that rule, each with its reason stated at the
+--   assertion site: the two `multicodecPrefix` byte-sequence checks (#1701
+--   states them inline; their bytes are hand-computed, not independently
+--   published — see the comment there) and the empty-input base58 edge
+--   (published nowhere in-family).
+
+import test.{expectEqual, expectTrue}
+import lib.base58.{base58btcEncode, base58btcDecode}
+import lib.multiformats.{
+  uvarintEncode,
+  uvarintDecodeAll,
+  multicodecSecp256k1Pub,
+  multicodecP256Pub,
+  multicodecPrefix,
+  multibaseBase58btc,
+  multibaseBase58btcDecode,
+}
+
+-- ── base58 round-trip, 0/1/3 leading zero bytes ────────────────────────────
+
+bytesNoZeros : Array Int
+bytesNoZeros = arrayFromList [72, 101, 108, 108, 111]
+
+bytesOneZero : Array Int
+bytesOneZero = arrayFromList [0, 72, 101, 108, 108, 111]
+
+bytesThreeZeros : Array Int
+bytesThreeZeros = arrayFromList [0, 0, 0, 72, 101, 108, 108, 111]
+
+test "base58 round-trip: 0 leading zero bytes" =
+  expectEqual (base58btcDecode (base58btcEncode bytesNoZeros)) (Ok bytesNoZeros)
+
+test "base58 round-trip: 1 leading zero byte" =
+  expectEqual (base58btcDecode (base58btcEncode bytesOneZero)) (Ok bytesOneZero)
+
+test "base58 round-trip: 3 leading zero bytes" =
+  expectEqual
+    (base58btcDecode (base58btcEncode bytesThreeZeros))
+    (Ok bytesThreeZeros)
+
+-- ── base58 decode rejection ────────────────────────────────────────────────
+-- '0', 'O', 'I', 'l' are the four ASCII alphanumerics deliberately absent
+-- from base58btcAlphabet (draft-msporny-base58-02 §2) — verify structurally
+-- against decode rejection, not by asserting the character set from prose.
+
+isErr : Result e a -> Bool
+isErr (Err _) = True
+isErr (Ok _) = False
+
+test "base58 decode rejects '0'" = expectTrue (isErr (base58btcDecode "0"))
+
+test "base58 decode rejects 'O'" = expectTrue (isErr (base58btcDecode "O"))
+
+test "base58 decode rejects 'I'" = expectTrue (isErr (base58btcDecode "I"))
+
+test "base58 decode rejects 'l'" = expectTrue (isErr (base58btcDecode "l"))
+
+test "base58 decode rejects embedded space" =
+  expectTrue (isErr (base58btcDecode "abc def"))
+
+-- ── the empty-input edge — published nowhere in-family (§3 deviation 3) ────
+-- Structural/definitional: an empty byte string is the multiplicative
+-- identity of the encoding (no digits, no leading-zero prefix), asserted
+-- here as a definitional edge rather than from a published vector. Carried
+-- into this slice's DEBT.md `unchecked:` field.
+
+test "base58 encode of empty input is empty string" =
+  expectEqual (base58btcEncode [||]) ""
+
+-- ── uvarint 16383/16384 boundary as a LENGTH property (§3 deviation 2) ─────
+-- 16383 has no reachable in-family published vector (F-22); this is a
+-- structural boundary-length + round-trip property derived from the
+-- published 7-bits-per-byte rule (F-8), not a transcribed answer key.
+
+test "uvarint length: 127 -> 1 byte" =
+  expectEqual (arrayLength (uvarintEncode 127)) 1
+
+test "uvarint length: 128 -> 2 bytes" =
+  expectEqual (arrayLength (uvarintEncode 128)) 2
+
+test "uvarint length: 16383 -> 2 bytes" =
+  expectEqual (arrayLength (uvarintEncode 16383)) 2
+
+test "uvarint length: 16384 -> 3 bytes" =
+  expectEqual (arrayLength (uvarintEncode 16384)) 3
+
+test "uvarint round-trip: 127" =
+  expectEqual (uvarintDecodeAll (uvarintEncode 127)) (Ok 127)
+
+test "uvarint round-trip: 128" =
+  expectEqual (uvarintDecodeAll (uvarintEncode 128)) (Ok 128)
+
+test "uvarint round-trip: 16383" =
+  expectEqual (uvarintDecodeAll (uvarintEncode 16383)) (Ok 16383)
+
+test "uvarint round-trip: 16384" =
+  expectEqual (uvarintDecodeAll (uvarintEncode 16384)) (Ok 16384)
+
+-- ── uvarint truncated / over-long rejection ────────────────────────────────
+
+test "uvarint rejects truncated input (continuation bit set, no more bytes)" =
+  expectTrue (isErr (uvarintDecodeAll (arrayFromList [0x80])))
+
+test "uvarint rejects over-long input (>9 bytes, continuation bit set throughout)" = expectTrue (isErr (uvarintDecodeAll (arrayFromList [0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x01])))
+
+-- ── multibase base58btc ─────────────────────────────────────────────────────
+
+test "multibase base58btc is 'z' ++ base58btcEncode" =
+  expectEqual
+    (multibaseBase58btc bytesOneZero)
+    ("z" ++ base58btcEncode bytesOneZero)
+
+test "multibase base58btc round-trips" =
+  expectEqual
+    (multibaseBase58btcDecode (multibaseBase58btc bytesThreeZeros))
+    (Ok bytesThreeZeros)
+
+-- ── multicodecPrefix — the ONE place this slice asserts expected bytes that
+--    are not in a ledgered vector file [RUN-PDS0-011 precision fix]: code
+--    sourced from the committed multicodec table; its varint rendering
+--    computed by hand and checked against the varint round-trip cells — not
+--    independently published in that byte form. Their INPUTS (the codes
+--    0xe7 / 0x1200) ARE ledgered, via pds/test/vectors/multicodec_table.csv.
+
+test "multicodecPrefix secp256k1-pub == [0xe7, 0x01]" = expectEqual
+  (multicodecPrefix multicodecSecp256k1Pub)
+  (arrayFromList [0xe7, 0x01])
+
+test "multicodecPrefix p256-pub == [0x80, 0x24]" =
+  expectEqual (multicodecPrefix multicodecP256Pub) (arrayFromList [0x80, 0x24])
