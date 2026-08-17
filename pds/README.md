@@ -227,3 +227,64 @@ MEDAKA_ROOT="$(git rev-parse --show-toplevel)" sh pds/test/inlang_test_oracle.sh
 Phase 0/1 cross-check oracle, with a documented no-Docker fallback for boxes without Docker.
 The full procedure lives in `docs/ops/PDS-ORACLE.md` — this is a **local manual procedure, not
 a gate; no CI job provisions it**.
+
+## secp256k1 scalar arithmetic (S-scalar, #1700)
+
+`pds/lib/scalar.mdk` is arithmetic modulo the secp256k1 **group order**
+`n = 0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141`
+(SEC 2 v2 §2.4.1) — the ring ECDSA's `k`, `r` and `s` live in. It exports
+`scAdd`/`scSub`/`scMul`/`scNegate`/`scInverse`, canonical 32-byte
+serialization, and `scIsHigh`.
+
+**It deliberately shares no code with `pds/lib/field.mdk`.** The field module
+mirrors `libsecp256k1`'s 10×2^26 layout because design decision P10 wants
+element-by-element cross-checkability of the subtlest arithmetic in the
+project. Scalar operations run a *few times per signature, not thousands*, so
+this module optimises for being easy to argue about instead: **16 limbs of
+2^16**, uniform width, 26 bits of headroom against Medaka's silently-wrapping
+63-bit `Int`.
+
+🚨 **The field's reduction does not transfer, and that is the reason the two
+modules are separate rather than shared.** `2^256 − p` is `2^32 + 977`, ~33
+bits, which is what makes the field's SINGLE fold pass fully reduce. `2^256 −
+n = 0x14551231950b75fc4402da1732fc9bebf` is **129 bits**: one fold of a
+512-bit product lands below 2^385, not below 2^256. `scalar.mdk` therefore
+folds **until the high half is empty** (each pass subtracts a positive
+multiple of `n`, so it strictly decreases and terminates) and then makes ONE
+conditional subtraction. Read the module header before changing anything in
+it — it carries that argument and the headroom derivation.
+
+**The answer key.** `pds/test/vectors/scalar_reference_corpus.txt` (1028 rows:
+`red`/`neg`/`inv`/`high`/`ovf` over 52 inputs, `mul`/`add`/`sub` over 256
+pairs) is GENERATED from `libsecp256k1` — never captured from our own
+implementation (G5). `ovf` rows pin the `>= n` rejection boundary
+(`scFromBytes`); `high` rows pin the strict low-S predicate. Its provenance row
+is in `pds/test/VECTOR-PROVENANCE.txt`.
+
+**The pin is the SAME sprint-wide `[impl] libsecp256k1` stanza** `S-field`
+wrote; this slice reuses it and adds no second `[impl]` stanza.
+
+**Regenerating the corpus.** `pds/tools/gen_scalar_corpus.sh` is a **TOOL, not
+a gate** — network + a C compiler, never run in CI, lives outside `pds/test/`
+for that reason; its row is in `test/CI-COVERAGE-TOOLS.txt`. The input set and
+the pair list live in committed source
+(`pds/tools/scalar_corpus_driver.c`), so the only run-time parameter is the
+output path:
+
+```sh
+sh pds/tools/gen_scalar_corpus.sh /tmp/x
+cmp /tmp/x pds/test/vectors/scalar_reference_corpus.txt   # must be byte-identical
+```
+
+**`scIsHigh` lands WITHOUT its ECDSA consumer.** It is the low-S predicate
+(`s > floor(n/2)`) that atproto requires; the *normalization* — negate-if-high
+— is a signature-encoding decision needing `r`, `s` and the wire format, and
+belongs to next sprint's signing slice. There is deliberately no
+`scNormalizeLow` here.
+
+**Run the gates locally:**
+
+```sh
+MEDAKA_ROOT="$(git rev-parse --show-toplevel)" sh pds/test/scalar_vectors.sh
+MEDAKA_ROOT="$(git rev-parse --show-toplevel)" sh pds/test/inlang_test_oracle.sh
+```

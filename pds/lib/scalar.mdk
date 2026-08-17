@@ -1,0 +1,573 @@
+{- | Arithmetic modulo the secp256k1 GROUP ORDER
+
+     n = 0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141
+
+   on **16 limbs in base 2^16** (16 * 16 = 256, non-redundant, every limb the
+   same width), least-significant limb first. `n` is the published curve
+   parameter from SEC 2 v2 §2.4.1; it is not justified here, and it is pinned
+   EXECUTABLY by the reference corpus's `red n -> 0` and `red (n+1) -> 1` rows
+   (an inline `.mdk` literal is invisible to `pds/test/VECTOR-PROVENANCE.txt`
+   by construction, which is exactly why those rows exist).
+
+   ── Why this representation is NOT `pds/lib/field.mdk`'s ─────────────
+   Deliberate, per the sprint contract and #1700's own scope section: this
+   module shares NO code with `field.mdk` and does not import it. Scalar
+   operations run a few times per signature, not thousands, so this is
+   correctness-first code and the simplest representation that is easy to
+   argue about wins. 16 x 2^16 gives a uniform limb width (no 26/22 seam),
+   26 bits of headroom (below), and a trivial byte serialization — each limb
+   is exactly two of the 32 big-endian bytes.
+
+   🚨 **`field.mdk`'s reduction DOES NOT TRANSFER, and this is the single
+   most important structural difference.** The field prime's complement
+   `2^256 - p = 2^32 + 977` is ~33 bits, which is what makes a SINGLE fold
+   pass fully reduce there. The group order's complement
+
+     c = 2^256 - n = 0x14551231950b75fc4402da1732fc9bebf
+
+   is **129 bits**. Folding a 512-bit product once by `c` yields a value
+   below 2^385, not below 2^256: one pass does not reduce mod `n`. Porting
+   the field's single-fold shape here would be silently wrong.
+
+   ── The reduction actually implemented ───────────────────────────────
+   `reduceWide` (the one reduction path every public operation ends in):
+
+     1. carry-propagate the whole 32-limb workspace so every limb < 2^16;
+     2. WHILE the high half (limbs 16..31) is non-zero: replace
+        `H * 2^256 + L` by `H * c + L` (using `2^256 = c (mod n)`), zeroing
+        the high half, then carry-propagate again;
+     3. ONE conditional subtraction of `n`.
+
+   **Why it terminates, and why it terminates CANONICAL.** Each fold replaces
+   `V = H*2^256 + L` (with `H >= 1`) by `V - H*n`, which is congruent mod `n`
+   and STRICTLY smaller; the values are non-negative integers, so the loop
+   must stop. Concretely it converges fast — from below 2^512 the bounds run
+   2^512 -> 2^385 -> 2^258.4 -> just over 2^256 -> below 2^256 — but the loop
+   is written as "until the high half is zero", so correctness does not
+   depend on that count. When it stops, `V < 2^256`; since `n > 2^255`,
+   `2^256 < 2n`, so ONE conditional subtraction is enough to land in
+   `[0, n)`. Step 3 is that subtraction.
+
+   The rejected alternative was shift-and-subtract on the 512-bit product:
+   simplest to argue, but ~256 compare-and-subtract passes per multiply,
+   which the tree-walking interpreter arm of `pds/test/scalar_vectors.sh`
+   could not run in any reasonable time.
+
+   ── The canonical invariant, EAGER ───────────────────────────────────
+   Every value handed out by every public operation is CANONICAL: fully
+   reduced, `0 <= v < n`, hence every limb `< 2^16`. No wider or weakly
+   reduced value is ever exposed. That is what makes `scEqual` limb-wise
+   equality, and it is what the reference corpus grades.
+
+   `Array` is mutable, so: every operation allocates a fresh workspace and
+   result and NEVER writes into an argument. `scZero`, `scOne` and the
+   private `nLimbs` / `cLimbs` / `expNMinus2` are shared immutable constants
+   for the same reason — nothing in this module writes through a value it
+   did not allocate.
+
+   ── The headroom chain (derived against THIS code) ───────────────────
+   `Int` is a 63-bit fixnum whose non-negative ceiling is `2^62 - 1`, and it
+   WRAPS SILENTLY: no trap, no diagnostic (`stdlib/runtime.mdk`,
+   `compiler/RUNTIME-DESIGN.md`). So every intermediate is bounded here.
+
+     limb                a_i <= 2^16 - 1, uniformly (no seam limb)
+     partial product     a_i * b_j < 2^32
+     WORST COLUMN        `scMul`'s schoolbook column k has
+                         `min(k,15) - max(0,k-15) + 1` terms, maximised at
+                         k = 15 with SIXTEEN terms:
+                           c_15 <= 16 * (2^16 - 1)^2 < 2^36.
+                         The NEIGHBOURS WERE CHECKED, not assumed: k = 14 and
+                         k = 16 have FIFTEEN terms each, < 2^35.907, and every
+                         limb has the same bound (unlike the field's 26/22
+                         layout, no narrow limb can make a wider column
+                         cheaper). So k = 15 is the unique peak.
+     plus its carry      `carryAll` runs a running carry < 2^36 / 2^16 =
+                         2^20, so column-plus-carry < 2^36 + 2^20 < 2^36.0001.
+     fold column         `foldOnce` accumulates `h_i * c_j` with `c` only
+                         NINE limbs wide, so at most 9 terms < 9 * 2^32 <
+                         2^35.170, plus the existing limb (< 2^16):
+                         < 2^35.171 — strictly below the schoolbook peak, so
+                         the schoolbook column IS the peak intermediate of
+                         the whole operation.
+     HEADROOM            2^62 / 2^36.0001 = 2^25.9999 — about **26 bits clear**.
+
+   ── 🚨 THE BOUND IS NOT A TRIPWIRE. Read this before skipping a reduce ─
+   With 26 bits of headroom, a MISSED REDUCTION DOES NOT OVERFLOW AND DOES
+   NOT FAIL FAST. Feed `scMul` limbs of up to 2^17 (one doubling past the
+   invariant) and the worst column is `16 * (2^17)^2 = 2^38` — still 24 bits
+   clear of 2^62. The wrong answer therefore surfaces several operations
+   later, with no visible relationship to the site that caused it.
+   Reduction is consequently enforced STRUCTURALLY — every public operation
+   ends in `reduceWide`, and the reference corpus grades the result — and
+   must NEVER be left to overflow to catch a violation. What breaks the
+   chain: admitting non-canonical inputs; folding before carrying; and any
+   "accumulate several products, reduce once" restructuring.
+
+   `carryAll` additionally PANICS if anything carries out of limb 31, which
+   would mean a caller handed `reduceWide` a value >= 2^512. Every caller
+   here is below that by construction (a product of two values < n is
+   < 2^512), so the panic is a structural guard, not a reachable path.
+
+   ── Bounds-checked array API, deliberately ───────────────────────────
+   This module reads with `arr[i]` and writes with `Array.set` — the
+   bounds-checked PUBLIC API — never the restricted `*Unsafe` internal
+   externs. (Spelled that way on purpose: a grep for the restricted names
+   over this slice's `.mdk` files must come back EMPTY, and a prose mention
+   here would be the one false positive.)
+   That is a standing project ruling: reach
+   for an unsafe primitive only after MEASURING that bounds-checking's cost
+   is too severe. This is explicitly not a hot path (a few operations per
+   signature), so no such measurement could license it and the question does
+   not arise.
+
+   ── Not constant-time ────────────────────────────────────────────────
+   `scInverse` is Fermat's little theorem by square-and-multiply over a
+   fixed exponent, and the comparisons / conditional subtractions here
+   branch on secret-dependent data. THIS IMPLEMENTATION IS NOT
+   CONSTANT-TIME. Phase 0 grades correctness only; no side-channel property
+   is claimed or checked. -}
+
+import array as A
+
+-- ── Constants ────────────────────────────────────────────────────────
+
+-- 2^16 - 1: the mask for every limb (all sixteen are the same width).
+limbMask : Int
+limbMask = 0xffff
+
+-- The number of limbs in a scalar, and in the wide multiply workspace.
+nWide : Int
+nWide = 32
+
+-- n, the secp256k1 group order (SEC 2 v2 §2.4.1), in this layout:
+--   n = fffffffffffffffffffffffffffffffe baaedce6af48a03b bfd25e8cd0364141
+-- read two bytes per limb, least-significant limb first.
+nLimbs : Array Int
+nLimbs = [|
+  0x4141, 0xd036, 0x5e8c, 0xbfd2, 0xa03b, 0xaf48, 0xdce6, 0xbaae, 0xfffe,
+  0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff,
+|]
+
+-- c = 2^256 - n = 0x14551231950b75fc4402da1732fc9bebf, NINE limbs (129 bits).
+-- `2^256 = c (mod n)` is the fold identity `reduceWide` iterates. This is the
+-- 129-bit complement the module header warns about: it is NOT the field's
+-- 33-bit one, and one fold pass does not reduce.
+cLimbs : Array Int
+cLimbs =
+  [|0xbebf, 0x2fc9, 0xa173, 0x402d, 0x5fc4, 0x50b7, 0x2319, 0x4551, 0x0001|]
+
+-- n - 2, the Fermat exponent for `scInverse`, as 32 big-endian bytes. `n`
+-- ends 0x...4141 and 0x41 >= 2, so this differs from `n` in the last byte
+-- only (0x41 -> 0x3f).
+--   n   = fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141
+--   n-2 = fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd036413f
+expNMinus2 : Array Int
+expNMinus2 = [|
+  0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+  0xff, 0xff, 0xfe, 0xba, 0xae, 0xdc, 0xe6, 0xaf, 0x48, 0xa0, 0x3b, 0xbf, 0xd2,
+  0x5e, 0x8c, 0xd0, 0x36, 0x41, 0x3f,
+|]
+
+-- | A scalar mod `n`: exactly 16 limbs, base 2^16, least-significant first.
+--   Every value handed out by this module is canonical (`0 <= v < n`).
+export type Sc = Array Int
+
+-- | The additive identity.
+export scZero : Sc
+scZero = [|0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0|]
+
+-- | The multiplicative identity.
+export scOne : Sc
+scOne = [|1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0|]
+
+-- ── Carrying, folding, reducing ──────────────────────────────────────
+
+-- Carry-propagate the whole 32-limb workspace IN PLACE, leaving every limb
+-- below 2^16. PANICS if anything carries out of limb 31: that would mean the
+-- workspace held a value >= 2^512, which no caller in this module can
+-- produce (a product of two values < n is < 2^512).
+carryAll : Array Int -> Unit
+carryAll w = carryGo w 0 0
+
+carryGo : Array Int -> Int -> Int -> Unit
+carryGo w i carry =
+  if i >= nWide then if carry != 0 then panic "scalar.carryAll: carry out of the top limb — input was >= 2^512" else ()
+  else
+    let v = w[i] + carry
+    let () = A.set i (bitAnd v limbMask) w
+    carryGo w (i + 1) (shiftRight v 16)
+
+-- Are limbs 16..31 all zero, i.e. is the workspace's value already < 2^256?
+highIsZero : Array Int -> Bool
+highIsZero w = highZeroGo w 16
+
+highZeroGo : Array Int -> Int -> Bool
+highZeroGo w i =
+  if i >= nWide then
+    True
+  else if w[i] != 0 then
+    False
+  else
+    highZeroGo w (i + 1)
+
+-- One fold pass: `H * 2^256 + L` becomes `H * c + L`, IN PLACE, with the high
+-- half zeroed. Congruent mod `n` (because `2^256 = c (mod n)`) and STRICTLY
+-- smaller whenever `H > 0` (because `c < 2^256`) — that pair is the whole
+-- termination argument for `reduceLoop`.
+--
+-- The highest limb touched is `15 + 8 = 23`, inside the workspace. The
+-- accumulated column is < 2^35.171 (module header), well under the 2^62
+-- ceiling; `carryAll` runs immediately after.
+foldOnce : Array Int -> Unit
+foldOnce w =
+  let h = arrayMake 16 0
+  let () = takeHigh w h 16
+  foldAccum w h 0
+
+takeHigh : Array Int -> Array Int -> Int -> Unit
+takeHigh w h i =
+  if i >= nWide then ()
+  else
+    let () = A.set (i - 16) w[i] h
+    let () = A.set i 0 w
+    takeHigh w h (i + 1)
+
+foldAccum : Array Int -> Array Int -> Int -> Unit
+foldAccum w h i =
+  if i >= 16 then ()
+  else
+    let () = foldAccumRow w h i 0
+    foldAccum w h (i + 1)
+
+foldAccumRow : Array Int -> Array Int -> Int -> Int -> Unit
+foldAccumRow w h i j =
+  if j >= 9 then ()
+  else
+    let k = i + j
+    let () = A.set k (w[k] + h[i] * cLimbs[j]) w
+    foldAccumRow w h i (j + 1)
+
+-- Fold until the high half is empty. Terminates: each iteration subtracts a
+-- positive multiple of `n` from a non-negative integer (see `foldOnce`).
+reduceLoop : Array Int -> Unit
+reduceLoop w =
+  let () = carryAll w
+  if highIsZero w then ()
+  else
+    let () = foldOnce w
+    reduceLoop w
+
+-- Is the workspace's low half >= n? Compared most-significant limb first.
+-- Precondition: limbs 16..31 are zero and limbs 0..15 are each < 2^16.
+gteNLimbs : Array Int -> Bool
+gteNLimbs w = gteNGo w 15
+
+-- Shared with `scIsHigh`, which calls it on a 17-limb array after checking
+-- limb 16 separately: it reads limbs 0..15 only.
+gteNGo : Array Int -> Int -> Bool
+gteNGo w i =
+  if i < 0 then True
+  else
+    let a = w[i]
+    let b = nLimbs[i]
+    if a > b then True else if a < b then False else gteNGo w (i - 1)
+
+-- w := w - n over limbs 0..15, IN PLACE. Precondition: w >= n (so the top
+-- limb never borrows).
+subNInPlace : Array Int -> Unit
+subNInPlace w = subNGo w 0 0
+
+subNGo : Array Int -> Int -> Int -> Unit
+subNGo w i borrow =
+  if i >= 16 then ()
+  else
+    let d = w[i] - nLimbs[i] - borrow
+    if d < 0 then
+      let () = A.set i (d + limbMask + 1) w
+      subNGo w (i + 1) 1
+    else
+      let () = A.set i d w
+      subNGo w (i + 1) 0
+
+-- Reduce a 32-limb workspace to the canonical scalar of its value mod `n`,
+-- returning a FRESH 16-limb array. The workspace is consumed (mutated), so
+-- every caller allocates its own.
+--
+-- Precondition: every limb non-negative, and the value below 2^512 (see
+-- `carryAll`, which panics otherwise).
+--
+-- After `reduceLoop` the value is < 2^256, and `n > 2^255` gives
+-- `2^256 < 2n`, so ONE conditional subtraction lands in `[0, n)`.
+reduceWide : Array Int -> Sc
+reduceWide w =
+  let () = reduceLoop w
+  let () = if gteNLimbs w then subNInPlace w else ()
+  let out = arrayMake 16 0
+  let () = copyLow w out 0
+  out
+
+copyLow : Array Int -> Array Int -> Int -> Unit
+copyLow w out i =
+  if i >= 16 then ()
+  else
+    let () = A.set i w[i] out
+    copyLow w out (i + 1)
+
+-- ── Serialization ────────────────────────────────────────────────────
+
+-- 32 big-endian bytes -> the exact 256-bit value as 16 limbs (no reduction).
+-- Limb `i` is exactly bytes `31 - 2i` (low) and `30 - 2i` (high), which is
+-- the whole benefit of a base-2^16 layout over the field's 26-bit one.
+limbsOfBytes : Array Int -> Array Int
+limbsOfBytes bs =
+  let out = arrayMake 16 0
+  let () = limbsOfBytesGo bs out 0
+  out
+
+limbsOfBytesGo : Array Int -> Array Int -> Int -> Unit
+limbsOfBytesGo bs out i =
+  if i >= 16 then ()
+  else
+    let () = A.set i (bs[31 - 2 * i] + bs[30 - 2 * i] * 256) out
+    limbsOfBytesGo bs out (i + 1)
+
+-- Is this a well-formed 32-byte array with every element in 0..255?
+byteArrayOk : Array Int -> Bool
+byteArrayOk bs = arrayLength bs == 32 && byteRangeGo bs 0
+
+byteRangeGo : Array Int -> Int -> Bool
+byteRangeGo bs i =
+  if i >= 32 then True
+  else
+    let b = bs[i]
+    if b < 0 || b > 255 then False else byteRangeGo bs (i + 1)
+
+-- Widen 16 canonical limbs into a fresh 32-limb workspace.
+wideOf : Sc -> Array Int
+wideOf a =
+  let w = arrayMake nWide 0
+  let () = copyLow a w 0
+  w
+
+-- | Parse 32 big-endian bytes as a CANONICAL scalar: a value >= n is
+--   REJECTED rather than reduced. This is the entry point a wire format
+--   should use — an ECDSA `r` or `s` outside `[0, n)` is not a well-formed
+--   signature component, and the reference corpus's `ovf` rows are exactly
+--   this rejection boundary (`ovf a` is 1 iff `scFromBytes a` is `Err`).
+--
+--   The `0 <= b <= 255` element contract IS enforced here (and the length):
+--   an out-of-range element is an `Err`, never silently taken mod 256.
+export scFromBytes : Array Int -> Result String Sc
+scFromBytes bs =
+  if arrayLength bs != 32 then Err "scalar.scFromBytes: expected 32 bytes, got \{intToString (arrayLength bs)}"
+  else
+    if not (byteArrayOk bs) then Err "scalar.scFromBytes: every element must be a byte in 0..255"
+    else
+      let w = wideOf (limbsOfBytes bs)
+      if gteNLimbs w then
+        Err "scalar.scFromBytes: value is not canonical (>= n)"
+      else
+        Ok (reduceWide w)
+
+-- | Parse ANY 32 big-endian bytes, reducing mod `n`. This mirrors
+--   `secp256k1_scalar_set_b32` and is what the reference corpus's `red` rows
+--   grade. Use `scFromBytes` when the input is supposed to be canonical.
+--
+--   The element contract is enforced here too, but this function is not
+--   `Result`-typed, so a violation PANICS rather than aliasing mod 256. A
+--   loud abort is the point: silently masking an out-of-range element would
+--   compute a different value than the caller wrote.
+export scFromBytesReduce : Array Int -> Sc
+scFromBytesReduce bs =
+  if arrayLength bs != 32 then
+    panic "scalar.scFromBytesReduce: expected 32 bytes, got \{intToString (arrayLength bs)}"
+  else if not (byteArrayOk bs) then
+    panic "scalar.scFromBytesReduce: every element must be a byte in 0..255"
+  else
+    reduceWide (wideOf (limbsOfBytes bs))
+
+-- | The canonical 32 big-endian bytes of a scalar. Reduces first, so it is
+--   total over any well-formed 16-limb array.
+export scToBytes : Sc -> Array Int
+scToBytes a =
+  let v = reduceWide (wideOf a)
+  let out = arrayMake 32 0
+  let () = toBytesGo v out 0
+  out
+
+toBytesGo : Sc -> Array Int -> Int -> Unit
+toBytesGo v out i =
+  if i >= 16 then ()
+  else
+    let () = A.set (31 - 2 * i) (bitAnd v[i] 255) out
+    let () = A.set (30 - 2 * i) (shiftRight v[i] 8) out
+    toBytesGo v out (i + 1)
+
+-- ── Comparison ───────────────────────────────────────────────────────
+
+-- | Are two canonical scalars equal? Canonical representatives are unique,
+--   so this is limb-wise equality.
+export scEqual : Sc -> Sc -> Bool
+scEqual a b = equalGo a b 0
+
+equalGo : Sc -> Sc -> Int -> Bool
+equalGo a b i =
+  if i >= 16 then
+    True
+  else if a[i] != b[i] then
+    False
+  else
+    equalGo a b (i + 1)
+
+-- | Is this scalar zero?
+export scIsZero : Sc -> Bool
+scIsZero a = scEqual a scZero
+
+-- | The LOW-S PREDICATE: is `s` strictly greater than `floor(n/2)`?
+--
+--   ECDSA signatures are malleable — `(r, s)` and `(r, n - s)` are both
+--   valid — so atproto (like Bitcoin) requires the LOW half: `s <=
+--   floor(n/2)`. This predicate is the test a signer/verifier applies.
+--
+--   🚨 THE NORMALIZATION ITSELF (negate-if-high) IS NOT IN THIS MODULE.
+--   Whether to replace `s` by `n - s`, and how the result is encoded, is a
+--   signature-encoding decision that needs `r`, `s` and the wire format; the
+--   signing slice owns it. Do not add a `scNormalizeLow`/`scCondNegate` here.
+--
+--   STRICTLY greater, matching `secp256k1_scalar_is_high`: `scIsHigh
+--   floor(n/2)` is `False` and `scIsHigh (floor(n/2) + 1)` is `True`. The
+--   corpus's `high` rows are the graded answer key for that boundary.
+--
+--   Implemented WITHOUT a second big constant: for integers,
+--   `s > floor(n/2)` iff `2s > n - 1` iff `2s >= n` (`n` is odd). So this
+--   doubles `s` into 17 limbs and compares against `n`.
+--
+-- > scIsHigh (scInverse (scAdd scOne scOne))
+-- True
+--
+-- > scIsHigh (scSub (scInverse (scAdd scOne scOne)) scOne)
+-- False
+export scIsHigh : Sc -> Bool
+scIsHigh s =
+  let d = arrayMake 17 0
+  let () = dblGo s d 0 0
+  if d[16] != 0 then True else gteNGo d 15
+
+dblGo : Sc -> Array Int -> Int -> Int -> Unit
+dblGo s d i carry =
+  if i >= 16 then A.set 16 carry d
+  else
+    let v = 2 * s[i] + carry
+    let () = A.set i (bitAnd v limbMask) d
+    dblGo s d (i + 1) (shiftRight v 16)
+
+-- ── Arithmetic ───────────────────────────────────────────────────────
+
+-- | Addition mod `n`. Limb-wise into a fresh workspace (each sum < 2^17),
+--   then `reduceWide`.
+export scAdd : Sc -> Sc -> Sc
+scAdd a b =
+  let w = arrayMake nWide 0
+  let () = addGo a b w 0
+  reduceWide w
+
+addGo : Sc -> Sc -> Array Int -> Int -> Unit
+addGo a b w i =
+  if i >= 16 then ()
+  else
+    let () = A.set i (a[i] + b[i]) w
+    addGo a b w (i + 1)
+
+-- | Additive inverse mod `n`, computed as `n - a` with borrow. `a` is
+--   canonical so `0 <= a < n`, hence `0 < n - a <= n`; `reduceWide`'s
+--   conditional subtraction maps the `a = 0` case (`n - 0 = n`) back to 0.
+export scNegate : Sc -> Sc
+scNegate a =
+  let w = arrayMake nWide 0
+  let () = negateGo a w 0 0
+  reduceWide w
+
+negateGo : Sc -> Array Int -> Int -> Int -> Unit
+negateGo a w i borrow =
+  if i >= 16 then ()
+  else
+    let d = nLimbs[i] - a[i] - borrow
+    if d < 0 then
+      let () = A.set i (d + limbMask + 1) w
+      negateGo a w (i + 1) 1
+    else
+      let () = A.set i d w
+      negateGo a w (i + 1) 0
+
+-- | Subtraction mod `n`. NEGATE-THEN-ADD, exactly as the reference does it —
+--   `libsecp256k1` has no `secp256k1_scalar_sub` either.
+export scSub : Sc -> Sc -> Sc
+scSub a b = scAdd a (scNegate b)
+
+-- | Multiplication mod `n`: schoolbook columns into a 32-limb workspace,
+--   then `reduceWide` (carry, fold-until-clear by `c = 2^256 - n`, one
+--   conditional subtraction).
+--
+--   The bound is the module header's headroom chain: the peak intermediate
+--   is column 15, sixteen terms, < 2^36 against a 2^62 ceiling.
+export scMul : Sc -> Sc -> Sc
+scMul a b =
+  let w = arrayMake nWide 0
+  let () = mulAccum a b w 0
+  reduceWide w
+
+mulAccum : Sc -> Sc -> Array Int -> Int -> Unit
+mulAccum a b w i =
+  if i >= 16 then ()
+  else
+    let () = mulAccumRow a b w i 0
+    mulAccum a b w (i + 1)
+
+mulAccumRow : Sc -> Sc -> Array Int -> Int -> Int -> Unit
+mulAccumRow a b w i j =
+  if j >= 16 then ()
+  else
+    let k = i + j
+    let () = A.set k (w[k] + a[i] * b[j]) w
+    mulAccumRow a b w i (j + 1)
+
+-- | Multiplicative inverse mod `n`, by Fermat's little theorem: `a^(n-2)`,
+--   square-and-multiply over the fixed 256-bit exponent, most-significant
+--   bit first.
+--
+--   🚨 `scInverse scZero` IS `scZero`. THIS IS A TOTAL FUNCTION and 0 has no
+--   true inverse: the value 0 is returned for the input 0. That matches
+--   `libsecp256k1` — `secp256k1_scalar_inverse` is built directly on
+--   `secp256k1_modinv32`, whose header states "If x is zero, the result will
+--   be zero as well", so it is the REFERENCE's behaviour and not a
+--   convention invented here (RUN-PDS0-016 Q1). It is pinned executably by
+--   the `inv 0` row of the reference corpus.
+--
+--   CALLERS MUST ESTABLISH NON-ZERONESS THEMSELVES before relying on the
+--   result being a true inverse. A zero result is NOT evidence of anything;
+--   in particular a signing routine must reject `k = 0` before inverting it,
+--   and must never treat a zero result as valid.
+--
+--   Not constant-time (see the module header).
+--
+-- > scEqual (scInverse scZero) scZero
+-- True
+--
+-- > scEqual (scMul (scInverse scOne) scOne) scOne
+-- True
+export scInverse : Sc -> Sc
+scInverse a = powGo a 255 scOne
+
+powGo : Sc -> Int -> Sc -> Sc
+powGo base bitIdx acc =
+  if bitIdx < 0 then acc
+  else
+    let sq = scMul acc acc
+    let r = if expBit bitIdx then scMul sq base else sq
+    powGo base (bitIdx - 1) r
+
+-- Bit `k` of n-2, read out of its 32 big-endian bytes.
+expBit : Int -> Bool
+expBit k =
+  let byte = expNMinus2[31 - shiftRight k 3]
+  bitAnd (shiftRight byte (k - shiftLeft (shiftRight k 3) 3)) 1 == 1
