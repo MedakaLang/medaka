@@ -544,7 +544,18 @@ jobs:
             #   gh run view <id> --json jobs --jq '.jobs[]|select(.name|startswith("gates"))
             #     |"\(((.completedAt|fromdate)-(.startedAt|fromdate)))s \(.name)"'
             # It needs `gzip`, which ships on ubuntu-latest (unlike sqlite3, installed below).
-            pattern: "'sqlite/test/*oracle' 'gzip/test/*oracle'"
+            #
+            # pds/test/* (S-pds-skeleton, #1705) joins this shard by COST, not theme:
+            # two consecutive green merge_group runs (31983057792, 31979717039) put
+            # `sqlite` at 162s/203s — cheapest or second-cheapest of the seven shards
+            # in both runs (only `backend` at 177s beat it in the second run); `engines`
+            # is the pole at 385-389s both times. Re-derive before moving anything;
+            # these numbers rot — see the gh command a few lines up.
+            # NOTE the glob is 'pds/test/*', not 'pds/test/*oracle': deliberately ONE
+            # directory level deep (`*` does not cross `/`) so any future pds/ in-language
+            # gate is auto-enrolled with NO ci.yml edit, as long as it lands directly in
+            # pds/test/ (see pds/README.md's "CI classification policy" section).
+            pattern: "'sqlite/test/*oracle' 'gzip/test/*oracle' 'pds/test/*'"
           - name: frontend
             # 'native_fixtures/run' (T8): 11 native-only regression assertions (parse-error
             # location + foreign-syntax hints + one eval dispatch check). A real gate that
