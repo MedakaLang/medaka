@@ -193,15 +193,20 @@ two reviewers get dispatched mid-slice teaches the agent to distrust packets. If
 measurements are part of acceptance, state whether the tree will be quiescent and
 when.
 
-If acceptance (or a reviewer's attribution) needs a base-vs-branch comparison,
+If acceptance (or a reviewer's attribution) needs a comparison against `$BASE`,
 name the sprint's **base-arm depot** path and SHA here instead of licensing a
 second build. Binding usage rules, because a two-arm differential fails in the
 direction that MANUFACTURES findings: run each binary against its OWN tree
 (`MEDAKA_ROOT` per arm, or the depot's copied `stdlib`/`runtime`); never point
-one arm at the other's stdlib; `MEDAKA_STRICT=1` on the branch arm only — on
-the depot arm it fails every case by construction (AGENTS.md [D-TWO-ARM],
-[D-TWO-ARM-STDLIB], [B-STRICT-TWO-ARM]). The depot is the BASE arm and never
-moves; a mid-sprint arm is a fresh build and you say so.
+one arm at the other's stdlib; assert freshness with `MEDAKA_STRICT=1` on the
+BRANCH arm only (AGENTS.md [D-TWO-ARM], [D-TWO-ARM-STDLIB],
+[B-STRICT-TWO-ARM]). Derived, so nobody trusts strict mode where it does
+nothing: the depot carries no `compiler/`, and `sourceStalenessVerdict`
+(`compiler/driver/medaka_cli.mdk`) returns `None` when `<root>/compiler` is
+absent — on the depot arm the staleness check is INERT, neither passing nor
+failing. Its freshness rests on the recorded `BASE.sha`, not on a flag. The
+depot is the BASE arm and never moves; a comparison against the SPRINT HEAD
+(any fix's before/after) is a different arm and a fresh build, and you say so.
 
 ## §3 Mission
 

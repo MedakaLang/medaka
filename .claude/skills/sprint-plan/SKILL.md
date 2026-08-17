@@ -53,16 +53,25 @@ A sprint is a unit, not a bucket. A slice belongs in this sprint iff:
   in one slice (or an explicit expand–migrate–contract family) — never spread
   across slices "to balance sizes".
 
-**One slice in the set is the INDEPENDENT REFILL, marked as such.** It depends
-on nothing in the sprint's main DAG — not a spike's outcome, not another
-leaf's landing, not a shared golden — and it is packeted early and parked in
-QUEUE.md as the designated lane refill. A *discovered* decomposition is usually
-a chain, and a chain cannot satisfy the one-packet-ahead runway invariant: the
+**One slice in the set is the INDEPENDENT REFILL** (`refill: yes` in its §3
+row). It depends on nothing in the sprint's main DAG — not a spike's outcome,
+not another leaf's landing, not a shared golden — and the run-time planner cuts
+its packet immediately after packet #1, parking it in QUEUE.md as the
+designated lane refill. A *discovered* decomposition is usually a chain, and a
+chain cannot satisfy the one-packet-ahead runway invariant: the
 `sprint/ctor-identity` writer lane idled twice with the reason honestly
 recorded ("no independent queued packet exists to refill the lane with"). If
 the candidate set genuinely admits no independent slice, say so in §3 in one
 line with why — the orchestrator then knows its idle branch is real rather than
 a planning miss.
+
+**Stated trade (principle 5 / the one-ahead rule):** this is the ONE licensed
+exception to "plan exactly one slice ahead", and it is licensed on a specific
+property — a slice with no DAG dependency is by construction not invalidated by
+what the DAG discovers, which is what makes design-ahead rot elsewhere (~75%
+rework). It buys a lane refill that a chain cannot supply. If the refill packet
+DOES start rotting, that is evidence it was never independent, and it goes back
+through the planner like any other falsified premise.
 
 **Size the set: at least ~5 slices is the sweet spot, scaled by slice weight.**
 Fewer than that and the sprint machinery (contract, ledgers, heavy round) costs
@@ -93,6 +102,8 @@ Per slice, the contract records exactly five things:
 4. **Classification guess** — parity vs behavior-changing (drives the model
    tier; the packet may overturn it).
 5. **Depends-on** — other slices by ID, forming the landing order.
+6. **`refill: yes|no`** — exactly one row in the table carries `yes` (the
+   independent refill above), or §3 carries the one-line why-not.
 
 **The orderings will rot faster than the facts** — plans' orderings are the
 first casualty of contact. Mark the landing order as provisional; the
@@ -118,7 +129,7 @@ identifier convention.
 - **§1 The question** — the one-sentence purpose of the sprint.
 - **§2 In / Out** — scope both ways, each Out with its reason stated so it can
   be overturned deliberately rather than rediscovered.
-- **§3 The slice table** — the five fields above, one row per slice. **Slice
+- **§3 The slice table** — the six fields above, one row per slice. **Slice
   IDs are descriptive slugs** (`S-selector-rekey`, `S-freeze-admissibility`),
   never opaque letters (`E4`, `F7`) — the packet contract's §0 identifier
   convention starts here, because every later document inherits these names.

@@ -4,8 +4,12 @@
 # ephemeral sprint record dir under /var/tmp, never anything in this tree.
 #
 # Usage: sh scripts/sprint-report-check.sh <report.md> [...]
-# Exit 0 = every named report carries all six sections; exit 1 = at least one
-# does not (or does not exist).
+# Exit 0 = every named report carries all six sections plus its `time:` line;
+# exit 1 = at least one does not (or does not exist).
+#
+# Point it at REPORTS ONLY. A ledger (reports/rear-seat-ledger.md) is not a §9
+# report and will bounce; a sweep that always fires one known-false alarm is how
+# a check stops being believed, which is the dynamic this script exists to fix.
 #
 # PRESENCE ONLY — whether the content is any good is a seat's judgment, not this
 # script's. It exists so report intake needs no judgment at all: in
@@ -32,6 +36,10 @@ for f in "$@"; do
       miss="$miss [$(printf '%s' "$s" | sed 's/\[ -\]/ /g')]"
     fi
   done
+  # The §9 time-split line, checked here for the same reason the sections are:
+  # it is the sprint's only wall-clock instrument, it is asserted by ~12 role
+  # definitions, and a duty that is only asserted gets dropped silently.
+  grep -qiE '^ {0,3}(\*\*)?time *:' "$f" || miss="$miss [time:]"
   if [ -n "$miss" ]; then
     printf '%s: BOUNCE — missing:%s\n' "$f" "$miss"
     rc=1

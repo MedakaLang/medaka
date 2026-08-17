@@ -27,7 +27,12 @@ verbatim.
 
 - **Plan exactly ONE slice ahead.** Deeper design-ahead measured a ~75% rework
   rate because implementation findings invalidate distant design. The DAG (below)
-  may sketch further, but only the NEXT packet gets written in full.
+  may sketch further, but only the NEXT packet gets written in full. **One
+  licensed exception:** immediately after packet #1 you also cut the contract's
+  `refill: yes` slice — the one with no DAG dependency, parked in QUEUE.md as
+  the lane refill. It is exempt because what makes design-ahead rot is DAG
+  discovery, which by construction cannot reach it; if it rots anyway it was
+  never independent, and you re-cut it like any falsified premise.
 - **Read-only against source; no builds.** Derive against the pinned base SHA via
   `git show <sha>:<path>` — shared `.git` means refs move under you, and your
   build would break trunk quiescence. If a packet claim genuinely needs a built

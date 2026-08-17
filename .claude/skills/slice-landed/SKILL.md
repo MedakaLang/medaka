@@ -52,13 +52,25 @@ worktree:
 git -C <landing> fetch origin <slice-branch>
 git -C <landing> merge --ff-only FETCH_HEAD     # sprint/<stage> is checked out here
 ```
-**`--ff-only` is the default and it is a free detector (v5):** a branch cut
-from the wrong base cannot merge quietly — git refuses, from an artifact
-neither party authored. Wrong-base worktrees recurred at least three times in
-one sprint and were caught only because the writer happened to check. Fall
-back to `git merge --no-edit` (a true merge) ONLY after running the
-golden-intersection check below first, and record that you did in the merge
-log line.
+**`--ff-only` is the default and it is a free detector on the SINGLE-lane path
+(v5):** a branch cut from the wrong base cannot merge quietly — git refuses,
+from an artifact neither party authored. Wrong-base worktrees recurred at
+least three times in one sprint and were caught only because the writer
+happened to check.
+
+⚠️ **A refusal is NOT automatically a wrong base — read the lane table before
+you conclude anything.** With two lanes cut from the same head, the second
+landing is by construction not a fast-forward, so the refusal is EXPECTED and
+fires on every multi-lane landing (8 fix-forward slices in one sprint, and fix
+lanes run concurrently by design). The discriminator, mechanical:
+
+- **A second live lane in QUEUE.md** → ordinary two-lane landing: run the
+  golden-intersection check below, then `git merge --no-edit`, and record in
+  the merge log line that you did the check.
+- **SOLE live lane** → a wrong-base landing: BLOCKED → brain. Do not merge.
+
+Treating the first case as the second costs a ruling cycle for nothing; the
+reverse ships the landing this detector exists to stop.
 (FETCH_HEAD is repo-global and clobbered by any sibling fetch — merge
 immediately after fetching, or fetch into a pinned SHA first.) Then:
 - **Fast-forward short-circuit:** if the merge fast-forwarded (single live
@@ -108,28 +120,27 @@ NONE> | status: queued|dispatched|landed|refused`) and:
   present, §4 facts each carrying a command, §1 carrying pinned SHA + branch +
   worktree path + form + classification. Missing anything → BOUNCE to the
   planner, take the next independent packet instead.
-- **Create the worktree** at the sprint branch's CURRENT (merged) head:
-  `git worktree add <path under the record dir> <merged head SHA>`. Record
-  both SHAs in the dispatch brief. Worktree creation is YOURS — no agent
-  creates its own. (Reviewer and reproducer worktrees work the same way; a
-  writer dispatched with `isolation: "worktree"` may land in a
-  harness-created tree instead, which is fine and is why the packet no longer
-  names a path — see the pre-dispatch checklist.)
+- **Provision the tree per the sprint's recorded MODE** (set by the sprint-start
+  isolation probe; orchestrator step 5b). HARNESS mode: create nothing for a
+  writer — the flag mints its tree. FRONT-SEAT mode: `git worktree add <path
+  under the record dir> <merged head SHA>` and name that path in the brief.
+  Either way, reviewer/reproducer/domain-adversary worktrees are yours, and no
+  agent creates its own. Record both SHAs in the dispatch brief.
 - **Pre-dispatch checklist — three mechanical assertions, no judgment (v5):**
-  1. `isolation: "worktree"` is set **on the Agent tool call**, not merely
-     described in the prompt. Measured: the FIRST implementer dispatch of
-     `sprint/ctor-identity` omitted it, ran in the front seat's own inherited
-     worktree, switched that worktree's branch out from under the seat, and an
-     observed uncommitted `typecheck.mdk` edit vanished; recovery cost three
-     rulings and a four-dispatch positive-control programme. Packet prose does
-     NOT substitute for the flag.
+  1. The mode's flag matches the mode: `isolation: "worktree"` set **on the
+     Agent tool call** (not merely described in the prompt) in HARNESS mode,
+     absent in FRONT-SEAT mode. A writer dispatched with neither a flag nor a
+     named tree runs in the front seat's own checkout — that happened once and
+     it switched the seat's branch out from under it, losing an observed
+     uncommitted edit and costing three rulings to close.
   2. The brief names **the front-seat repo path** as a tree the agent must NOT
      be in, and requires as its first act: `git rev-parse --show-toplevel`,
      `git rev-parse HEAD`, and
      `git merge-base --is-ancestor <merged head SHA> HEAD && echo BASE-OK` —
-     all three reported in Evidence. `isolation:"worktree"` can mint a tree
-     from `main` rather than the sprint branch, and `git rev-parse HEAD` looks
-     perfectly healthy when it does.
+     all three reported in Evidence. A harness-minted tree can come from
+     `main` rather than the sprint branch, and `git rev-parse HEAD` looks
+     perfectly healthy when it does (that is probe outcome C, and the mode
+     table gives it a rebase branch rather than a lost dispatch).
   3. Merges are `--ff-only` (step 1). Self-correcting a wrong base is licensed
      ONLY when all of: verified with `merge-base` (not assumed), flagged in
      the report, correct base reachable in the same tree. Missing any one is
@@ -240,11 +251,11 @@ the `sprint-findings` lifecycle there. The only reviewer-driven actions at
 YOUR seat, each arriving as a rear-seat reply or a brain ruling: a REPAIR
 ruling → you dispatch the fixer directly from the ruling + repro bundle (v4 —
 no fix packet; the sprint-packet Fix form defines the brief), lane grant (run
-`scripts/sprint-disjoint.sh` YOURSELF at grant time, PAIRWISE against each
-live lane row, under the staleness rules in the orchestrator skill's "Parallel
-writers" section — a stamped head ≠ current sprint head is INVALID, and an
-exit 1 naming only lanes absent from the live lane table is re-run, not a
-brain consult), fixer dispatch on branch
+`scripts/sprint-disjoint.sh` YOURSELF at grant time, PAIRWISE against a lane
+list derived from QUEUE.md right then, under the orchestrator skill's
+"Parallel writers" rules — a stamped head ≠ current sprint head is INVALID,
+exit 1 is a brain consult, exit 2 is a bad invocation), fixer dispatch on
+branch
 `fix/<finding-slug>`; a queue resequencing → re-order QUEUE.md; an S0-class
 finding → record its heavy-round adversarial-review obligation in
 DECISIONS.md (blocks the terminal enqueue, never the writer lane).

@@ -69,6 +69,36 @@ that actually RAN the mechanism wins.
   a path list and reports a false collision — the permissive direction. Hence a
   separate `paths` mode.
 
+### Amended before landing, by independent review
+
+An independent reviewer graded the round against the cost/throughput goals
+(`COHERENT WITH EXCEPTIONS: 15`) and 11 of its findings were applied before
+merge. The ones that changed a rule rather than its prose:
+
+| Was | Is | Why |
+|---|---|---|
+| Per-tick heartbeat check `grep -o 'RUN-<stage>-[0-9]{3}'` vs `ls rulings/` | Phase-boundary two-directional `comm` anchored on the `## RUN-…` HEADING | The original **passes on the incident that motivated the whole protocol**: run against ctor-identity's real ledger it sees 37 numbers against 18 entries, `RUN-CTOR-034` among them, purely from citations — and `^RUN-` is no better, two prose lines in that file begin with the bare ID |
+| `scribed:` confirmation per ruling | Confirmations RIDE the next message to the brain | A dedicated confirmation is one daughter wake per ruling — ~40/sprint at the 5-min-TTL write price, i.e. the exact tax H3's rotation exists to remove, and ~10× the cost of all 970 added lines of text |
+| `entries: <N>` + "a number you did not allocate → re-request" | `run=` reserves a contiguous RUN; the reply repeats the whole block per entry | As written, a correct multi-ruling reply was rejected and cost a round trip — the opposite of the claim that this replaces the one-per-reply throttle |
+| "exit 1 whose colliding lanes are ALL absent from the live table → re-run" | Derive the lane list at grant time; exit 1 → brain, no fourth case | Mapping a colliding FILE to an owning lane through a prose `region` summary is judgment at a mechanical seat (principle 2) — and it re-authorized the improvisation it was meant to replace |
+| Front seat creates writer worktrees AND sets `isolation:"worktree"` | The sprint-start probe SELECTS one mode (A/B/C/D table), including a rebase branch for outcome C | Both mandated at once means one is dead work every slice, and the probe had no written branch for a negative result |
+| `--ff-only` described as free | Free on the sole-lane path; a refusal with a second live lane is the ordinary two-lane case, not a wrong base | Guaranteed to fire on every multi-lane landing (8 fix-forward slices in one sprint) and invites a false escalation |
+| OBLIGATIONS row poked "past the phase it belonged to" | Row gains a `due-by` column; the poke is a string compare | No phase field existed, so the check was unexecutable — and the motivating incident was precisely a deadline failure |
+| packet §2: "`MEDAKA_STRICT=1` … on the depot arm it fails every case" | Derived: the depot has no `compiler/`, so `sourceStalenessVerdict` returns `None` and strict is INERT there | The claim was false, in a "do NOT re-derive" position, and it broke this same round's new rule against unverified mechanism claims |
+| Depot built at step 3, "3 consumers" | Built at 6b after the packet-#1 dispatch; 2 consumers; H13 cost marked UNDERIVED with the command to measure it | A cold build ahead of the first dispatch is pure serialization; a fix's control is the sprint head, not `$BASE` |
+| Wrap-up sweep over `reports/*.md` | Sweep excludes `rear-seat-ledger.md` | The ledger is not a §9 report and bounces every sprint — one known-false alarm is how a check stops being believed |
+| `time:` asserted at ~12 roles, checked nowhere | `sprint-report-check.sh` checks it | It is the only wall-clock instrument, and H13's grading target depends on it |
+
+Also adopted from the review: a standing **deletion quota** for every future
+retro round (≥2 retirement candidates, same evidence standard as an addition) —
+this round was 23 additions to 0 deletions while the front-seat-resident skill
+grew 62%, which is how weight accumulates one defensible rule at a time.
+
+The review's remaining findings were accepted as-is: F12's timing estimate
+stays UNDERIVED by design (no build was run), and F15's text-trimming
+suggestion was measured at ~$3–8/sprint against a $591.70 sprint — under 1.5%,
+so no rule was cut to save prose.
+
 ### Escalated to Val — open, not decided here
 
 - **E1 (pds): should the brain WRITE DECISIONS.md directly?** Adoption 1 makes

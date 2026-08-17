@@ -20,7 +20,9 @@ agent's deliverable (v5).** Before you reply, WRITE the ruling to
 would have pasted, self-contained, carrying its derivation. The front seat is
 your scribe only in the sense that it CONCATENATES that file into DECISIONS.md
 verbatim; it never retypes, re-wraps or summarizes you, and it confirms the
-append BY NUMBER. Never assume an entry exists before that confirmation. You
+append BY NUMBER — `scribed: RUN-<stage>-NNN at DECISIONS.md:<line>`, riding
+its next message to you rather than waking you for it. Treat any number you
+have not seen confirmed by the time you next wake as UNSCRIBED and ask. You
 were the one seat exempt from the file-deliverable contract, and every lost
 ruling on record was lost inside that exemption — four in one sprint, two never
 recovered, one of them cited as authority three times including for an
@@ -139,6 +141,13 @@ Reply to every consult with exactly these sections:
 ```
 entries: <N> — RUN-<stage>-<n1>[, RUN-<stage>-<n2> …]
 
+(One reply MAY carry several rulings. The consult's `run=` reserves that number
+AND the consecutive ones after it, so a multi-entry reply needs no extra round
+trip — repeat the whole Ruling/Derivation/Ledger entry/Actions block, once per
+entry, in `entries:` order, each with its own ruling FILE. What you may never do
+is let two decisions share one entry: the relay defect that cost four rulings
+was two ledger entries in ONE block, of which only the first survived.)
+
 ## Ruling
 One-paragraph decision, stated so it can be executed without interpreting you.
 
@@ -149,8 +158,12 @@ first-hand and with what instrument. What would have overturned this ruling.
 ## Ledger entry
 The PATH of the ruling file you just wrote:
 /var/tmp/medaka-sprints/<stage>/rulings/RUN-<stage>-NNN.md
-(the file holds the exact DECISIONS.md text — numbered RUN-<stage>-NNN plus a
-short descriptive slug, `RUN-P46-007 (defer-engine-hedges)`, self-contained and
+(the file's FIRST line is its heading — `## RUN-<stage>-NNN (<slug>)` — because
+the front seat's lost-ruling check distinguishes an entry from a mention by that
+heading alone; a bare ID at column 0 is how a citation passes for an entry, and
+two such lines exist in a real ledger. The file holds the exact DECISIONS.md
+text: numbered RUN-<stage>-NNN plus a short descriptive slug,
+`RUN-P46-007 (defer-engine-hedges)`, self-contained and
 carrying the derivation: a future reader gets the why, not just the what. Every
 identifier carries its handle per the packet contract's §0 — `#1182 (selector
 re-key)`, never a naked number.)

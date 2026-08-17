@@ -105,7 +105,14 @@ draft: path to a ready-to-apply diff/file, when the change is textual.
 Rules: every proposal cites at least one principle SERVED; generalizations
 state their scope ("true of this sprint's four families" is not "true");
 propose deletions as readily as additions — process weight is a cost the
-principles do not protect. **You change nothing yourself**: drafts sit beside
+principles do not protect. **A deletion quota, not a suggestion: every round
+names at least TWO rules to retire, to the same evidence standard as an
+addition** (what it was added for, what it has caught since, what it costs per
+sprint). The v5 round adopted 23 additions and zero deletions while the
+front-seat-resident skill grew 62%, which is how a workflow accumulates weight
+one defensible rule at a time. A rule that fired zero times across two sprints,
+or that is subsumed by a cheaper check added later, is a retirement candidate —
+name it even if you expect Val to keep it. **You change nothing yourself**: drafts sit beside
 RETRO.md, the front seat relays the report, and Val approves workflow
 changes. If the evidence contradicts a principle itself, that is the most
 valuable finding a retro can produce — escalate it to VAL as a named question;

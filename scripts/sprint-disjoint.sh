@@ -158,6 +158,14 @@ case "$mode" in
   lists)
     [ $# -eq 2 ] || die "usage: sprint-disjoint.sh [--head <rev>] lists <fileA> <fileB>"
     [ -f "$1" ] && [ -f "$2" ] || die "list file missing (inline paths? use 'paths' mode)"
+    # A TRACKED file is a repo source file, not a path list: reading one in
+    # yields ~200 lines of source treated as paths and a false COLLISION — the
+    # permissive direction, and the exact slip `paths` mode exists to absorb.
+    for l in "$1" "$2"; do
+      if git ls-files --error-unmatch "$l" >/dev/null 2>&1; then
+        die "'$l' is a tracked repo file, not a path list — use 'paths' mode for inline paths"
+      fi
+    done
     report_pair "$1" "$2"; rc=$?
     ;;
   paths)
