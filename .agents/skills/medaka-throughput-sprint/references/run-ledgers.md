@@ -12,6 +12,8 @@ Conductor checks numbering/files, concatenates each file verbatim into `DECISION
 
 Escalate user decisions that change accepted programs, formal semantics, standing sprint contract, or settled prior ruling. Brain may re-cut sequencing and scope within contract. Conflicting first-hand reports require third discriminating probe.
 
+Record each user decision as `VAL-<stage>-NNN (<slug>)` with five nonblank fields: `decision` verbatim, binding `scope`, durable in-repo `destination`, executing `owner`, and readback `executed`. Track destination as obligation; record directory alone is invalid. Then send brain one invalidation consult naming block: which landed/in-flight settled premises it falsifies and which lanes require re-cut.
+
 ## Mechanics
 
 Derive next ruling number from headings, not mentions. At phase boundaries and pre-enqueue, compare allocated consult numbers, ruling files, decision headings, and obligation rows. Sprint cannot exit with missing ruling, open obligation, open finding, or unadjudicated refusal.

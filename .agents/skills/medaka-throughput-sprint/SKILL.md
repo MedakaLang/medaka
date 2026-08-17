@@ -15,11 +15,15 @@ Select one architecture stage and tightly coupled subitems. Require one reviewab
 
 Pin base revision. Create conductor integration branch/worktree. Post admission comment on stage issue with scope, non-goals, semantic authority, tentative DAG, expected mirrors, repair-round requirement, and enqueue approval boundary.
 
+Before first writer, run one disposable isolation smoke probe: report toplevel, head, status, `/var/tmp` write, commit, and push-by-ref. Record mode: `HARNESS` only when agent receives independent tree at correct ancestry; `FRONT-SEAT` when Codex shares conductor cwd, requiring conductor-created worktree and every writer command dispatched with that absolute `workdir`; `HARNESS+REBASE` when tree is isolated but starts from wrong head, with one explicitly licensed SHA-pinned rebase. Anything else blocks for judgment. Never claim isolation before probe.
+
+For each expected red, record `masks:` with command-derived skipped successor checks and `unmask-by:` scheduled in sprint's first half. `unmask-by: wrap-up` is invalid. After writer #1 is active, build one immutable base-arm depot from pinned base for reviewer/reproducer differentials; copy binaries plus `stdlib/` and `runtime/`, record SHA/path, and never use depot for fix before/after attribution.
+
 Derive candidate scope from current issues, source, history, and merged work; inherited plans are claims. Budget property-class review when code's deployment domain adds obligations stage acceptance cannot express: constant-time behavior, hostile-input trust boundaries, crypto/protocol misuse, irreversible effects, or concurrency. Dispatch one property class per `domain-adversary` review.
 
 Escalate only choices materially changing accepted programs, runtime meaning, type/effect/interface semantics, evaluation order, failure behavior, or cross-backend semantic contract. Reorder, split, defer, or cancel work autonomously when evidence changes.
 
-Use one persistent `sprint-brain` judgment seat when rulings become frequent. It reads primary artifacts and writes numbered ruling files; conductor mechanically applies them. Never run two brains concurrently. Rotate brain at phase boundary only after successor reads decision ledger. Keep `sprint-rear` live when slots permit; root conductor remains responsible for transport and final state.
+Use one persistent `sprint-brain` judgment seat when rulings become frequent. It reads primary artifacts and writes numbered ruling files; conductor mechanically applies them. Never run two brains concurrently. Rotate brain and rear at phase boundaries and after roughly five landings: successor reads required ledgers first. Keep `sprint-rear` live when slots permit; root conductor remains responsible for transport and final state. Ledgers, not growing daughter context, carry state.
 
 ## Keep rolling lanes full
 
@@ -34,6 +38,8 @@ Maintain lanes in priority order:
 6. broader preparation or proven-disjoint extra writers.
 
 Never consume last available child slot with verification while eligible writer waits. Root conductor prepares packets directly; delegate bounded research only when it shortens eligibility path. On writer completion, dispatch successor immediately only when it is dispatchable. A prepared packet is not dispatchable while it overlaps an unreviewed carrier, harness, generated artifact, or acceptance boundary from the completed slice. Run lightweight diff review first for such overlap; overlap builds and verification, not successor edits. Create its writer worktree only after this gate clears.
+
+Designate one dependency-free `independent-refill` packet outside main DAG and prepare it immediately after packet #1. If none exists, record why. Two prepared packets depending on active slice do not protect runway.
 
 Use child completion or ten-minute intervals as heartbeat. Record active writer, prepared depth, dispatchable depth, completed/integrated/reworked/discarded slices, writer gaps, integration and verification backlog, bottleneck, and concrete scheduling action. Status-only heartbeat fails contract.
 
@@ -60,9 +66,11 @@ Added sites, edits, checks, or acceptance criteria require packet revision befor
 
 Only conductor integrates. Inspect diff against packet, run cheapest fail-capable integration discriminator, commit one coherent slice, push coherent checkpoints early, and post checkpoint SHA plus receipts/debt to stage issue. Do not let optional prose delay integration or successor dispatch.
 
-Require every agent artifact to contain `Verdict`, `Evidence`, `Decisions surfaced`, `Deviations from packet`, `Not covered`, and `Friction`; `NONE` is valid, omission is not. Evidence starts with externally observed time, exact revision/worktree, commands, outputs, and artifact paths. Role-specific tables/findings live inside Evidence. Validate with `sh scripts/sprint-report-check.sh <report>` when report uses sprint format.
+Require every non-brain agent response to contain literal `time:` plus `Verdict`, `Evidence`, `Decisions surfaced`, `Deviations from packet`, `Not covered`, and `Friction`; `NONE` is valid, omission is not. Every dispatch names report path. Because read-only Codex roles cannot write `/var/tmp`, conductor writes returned text verbatim to that path, then always runs `sh scripts/sprint-report-check.sh <report>`; never summarize or reconstruct it. Role-specific tables/findings live inside Evidence. Brain uses numbered ruling-file contract instead.
 
-Run highest-value verification in spare capacity: direct reproducer and nearest miss, compile/typecheck, changed-boundary differential, relevant eval/native/Wasm mirror, emitter fixpoint, lightweight adversarial review, then breadth. CI is parallel verifier. Continue writing while CI runs; stop writer only when failure invalidates its packet or shared premise. Record unrun, skipped, inconclusive, stale, or superseded checks as debt, never green.
+After every behavior-changing landing, run mandatory parallel pair: `sprint-reviewer` as slice breaker attacking claim/counterexamples, and `sprint-conformance-reviewer` checking packet/rulings/spec/prose. Queue pair behind writer when slots clamp; do not defer it to heavy round. For parity landings, run pair when `could move`, nearest miss, or overlap review demands it.
+
+Run remaining verification in spare capacity: direct reproducer and nearest miss, compile/typecheck, changed-boundary differential, relevant eval/native/Wasm mirror, emitter fixpoint, then breadth. CI is parallel verifier. Continue writing while CI runs; stop writer only when failure invalidates packet/shared premise. Record unrun, skipped, inconclusive, stale, or superseded checks as debt, never green.
 
 Generated snapshots, selfproc goldens, seed, and similar exact-head artifacts have one derivation authority. Never merge competing generated outputs.
 

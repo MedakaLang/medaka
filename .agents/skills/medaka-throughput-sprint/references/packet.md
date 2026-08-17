@@ -5,8 +5,9 @@ Dispatch only when every required field is concrete.
 ## Identity
 
 - Slice ID and stage acceptance criterion.
-- Exact base/head, branch, absolute isolated worktree.
-- Dispatch mode. Writer derives tree first with `git rev-parse --show-toplevel`; never trusts prompt/header path. Require isolated harness tree or exact conductor-provided tree, then prove dispatch head descends from named sprint head.
+- Exact base/head, branch, dispatch mode, and absolute tree selected by isolation probe.
+- `HARNESS`: writer derives tree first with `git rev-parse --show-toplevel` and proves it differs from conductor tree. `FRONT-SEAT`: conductor creates tree; every agent tool call sets its absolute `workdir`, then writer validates toplevel equals brief path. `HARNESS+REBASE`: same as HARNESS plus exact licensed SHA-pinned rebase. All modes prove dispatch head descends from named sprint head.
+- Classification: `parity` → `sprint-implementer`; `behavior-changing`, spike, or unstable DAG → `sprint-heavy-implementer`.
 - Authorized files and named regions/symbols.
 - Active-writer collision matrix and abort condition.
 - Git-index boundary: assume isolated writer index writes may fail. Writer owes a
@@ -45,6 +46,7 @@ Dispatch only when every required field is concrete.
 - Stop on missed same-question site, changed owned region, invalid premise, semantic choice, or overlap. Do not silently widen scope.
 - Return six sections: `Verdict`, `Evidence`, `Decisions surfaced`, `Deviations from packet`, `Not covered`, `Friction`. `NONE` is valid; missing section invalid.
 - Evidence opens with externally observed time and includes derived worktree, exact head/base proof, commands, outputs, and artifact paths.
+- Dispatch names report path. Agent returns literal `time:` plus all six sections; conductor persists response verbatim and validates it.
 
 After implementation and harness freeze, use one exact-row packet per applicable
 semantic-field/mutation-class pair:
