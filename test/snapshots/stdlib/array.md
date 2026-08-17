@@ -1,5 +1,5 @@
 # META
-source_lines=579
+source_lines=598
 stages=DESUGAR,MARK
 # SOURCE
 {- array.mdk — operations on Array a
@@ -184,12 +184,31 @@ drop n arr = sliceClamped n (arrayLength arr) arr
 
 -- `append` comes from `impl Semigroup (Array a)` (also the `++` operator).
 
--- | Flatten one level.  Two passes: sum lengths, then fill.
+{- | Flatten one level.  Two passes: sum the inner lengths, then bulk-copy
+   each inner array into the result with one `arrayBlit` per inner.
+   O(outer + total).
+
+   > toList (concat (fromList [fromList [1, 2], fromList [3]]))
+   [1, 2, 3] -}
 export concat : Array (Array a) -> Array a
 concat arrs =
   let outer = arrayLength arrs
   let total = concatTotal arrs 0 0 outer
-  arrayMakeWith total (i => concatLookup arrs i 0 outer)
+  if total <= 0 then [||]
+  else
+    let out = arrayMake total (concatLookup arrs 0 0 outer)
+    concatBlitAll arrs out 0 0 outer
+
+concatBlitAll : Array (Array a) -> Array a -> Int -> Int -> Int -> Array a
+concatBlitAll arrs out k dstOff outer =
+  if k >= outer then out
+  else
+    let inner = arrayGetUnsafe k arrs
+    let len = arrayLength inner
+    if len <= 0 then concatBlitAll arrs out (k + 1) dstOff outer
+    else
+      let _ = arrayBlit inner 0 out dstOff len
+      concatBlitAll arrs out (k + 1) (dstOff + len) outer
 
 concatTotal : Array (Array a) -> Int -> Int -> Int -> Int
 concatTotal arrs i acc outer =
@@ -198,9 +217,9 @@ concatTotal arrs i acc outer =
   else
     concatTotal arrs (i + 1) (acc + arrayLength (arrayGetUnsafe i arrs)) outer
 
-{- | Find element `i` by walking the outer array, subtracting inner
-   lengths.  O(outer) per lookup → O(outer * total) overall.  Fine for
-   typical use; a future optimisation could precompute a prefix-sum index. -}
+{- | Element `target` of the concatenation, found by walking the outer array
+   and subtracting inner lengths.  O(outer).  `concat` calls this exactly ONCE,
+   for `target = 0`, to obtain the allocation seed. -}
 concatLookup : Array (Array a) -> Int -> Int -> Int -> a
 concatLookup arrs target k outer =
   let inner = arrayGetUnsafe k arrs
@@ -616,7 +635,9 @@ prop "forEachWithIndex visits every index once, in order, matching zip with rang
 (DTypeSig true "drop" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyApp (TyCon "Array") (TyVar "a")))))
 (DFunDef false "drop" ((PVar "n") (PVar "arr")) (EApp (EApp (EApp (EVar "sliceClamped") (EVar "n")) (EApp (EVar "arrayLength") (EVar "arr"))) (EVar "arr")))
 (DTypeSig true "concat" (TyFun (TyApp (TyCon "Array") (TyApp (TyCon "Array") (TyVar "a"))) (TyApp (TyCon "Array") (TyVar "a"))))
-(DFunDef false "concat" ((PVar "arrs")) (EBlock (DoLet false false (PVar "outer") (EApp (EVar "arrayLength") (EVar "arrs"))) (DoLet false false (PVar "total") (EApp (EApp (EApp (EApp (EVar "concatTotal") (EVar "arrs")) (ELit (LInt 0))) (ELit (LInt 0))) (EVar "outer"))) (DoExpr (EApp (EApp (EVar "arrayMakeWith") (EVar "total")) (ELam ((PVar "i")) (EApp (EApp (EApp (EApp (EVar "concatLookup") (EVar "arrs")) (EVar "i")) (ELit (LInt 0))) (EVar "outer")))))))
+(DFunDef false "concat" ((PVar "arrs")) (EBlock (DoLet false false (PVar "outer") (EApp (EVar "arrayLength") (EVar "arrs"))) (DoLet false false (PVar "total") (EApp (EApp (EApp (EApp (EVar "concatTotal") (EVar "arrs")) (ELit (LInt 0))) (ELit (LInt 0))) (EVar "outer"))) (DoExpr (EIf (EBinOp "<=" (EVar "total") (ELit (LInt 0))) (EArrayLit) (EBlock (DoLet false false (PVar "out") (EApp (EApp (EVar "arrayMake") (EVar "total")) (EApp (EApp (EApp (EApp (EVar "concatLookup") (EVar "arrs")) (ELit (LInt 0))) (ELit (LInt 0))) (EVar "outer")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "concatBlitAll") (EVar "arrs")) (EVar "out")) (ELit (LInt 0))) (ELit (LInt 0))) (EVar "outer"))))))))
+(DTypeSig false "concatBlitAll" (TyFun (TyApp (TyCon "Array") (TyApp (TyCon "Array") (TyVar "a"))) (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Array") (TyVar "a"))))))))
+(DFunDef false "concatBlitAll" ((PVar "arrs") (PVar "out") (PVar "k") (PVar "dstOff") (PVar "outer")) (EIf (EBinOp ">=" (EVar "k") (EVar "outer")) (EVar "out") (EBlock (DoLet false false (PVar "inner") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "k")) (EVar "arrs"))) (DoLet false false (PVar "len") (EApp (EVar "arrayLength") (EVar "inner"))) (DoExpr (EIf (EBinOp "<=" (EVar "len") (ELit (LInt 0))) (EApp (EApp (EApp (EApp (EApp (EVar "concatBlitAll") (EVar "arrs")) (EVar "out")) (EBinOp "+" (EVar "k") (ELit (LInt 1)))) (EVar "dstOff")) (EVar "outer")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "arrayBlit") (EVar "inner")) (ELit (LInt 0))) (EVar "out")) (EVar "dstOff")) (EVar "len"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "concatBlitAll") (EVar "arrs")) (EVar "out")) (EBinOp "+" (EVar "k") (ELit (LInt 1)))) (EBinOp "+" (EVar "dstOff") (EVar "len"))) (EVar "outer")))))))))
 (DTypeSig false "concatTotal" (TyFun (TyApp (TyCon "Array") (TyApp (TyCon "Array") (TyVar "a"))) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))))
 (DFunDef false "concatTotal" ((PVar "arrs") (PVar "i") (PVar "acc") (PVar "outer")) (EIf (EBinOp ">=" (EVar "i") (EVar "outer")) (EVar "acc") (EApp (EApp (EApp (EApp (EVar "concatTotal") (EVar "arrs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "+" (EVar "acc") (EApp (EVar "arrayLength") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arrs"))))) (EVar "outer"))))
 (DTypeSig false "concatLookup" (TyFun (TyApp (TyCon "Array") (TyApp (TyCon "Array") (TyVar "a"))) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyVar "a"))))))
@@ -730,7 +751,9 @@ prop "forEachWithIndex visits every index once, in order, matching zip with rang
 (DTypeSig true "drop" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyApp (TyCon "Array") (TyVar "a")))))
 (DFunDef false "drop" ((PVar "n") (PVar "arr")) (EApp (EApp (EApp (EVar "sliceClamped") (EVar "n")) (EApp (EVar "arrayLength") (EVar "arr"))) (EVar "arr")))
 (DTypeSig true "concat" (TyFun (TyApp (TyCon "Array") (TyApp (TyCon "Array") (TyVar "a"))) (TyApp (TyCon "Array") (TyVar "a"))))
-(DFunDef false "concat" ((PVar "arrs")) (EBlock (DoLet false false (PVar "outer") (EApp (EVar "arrayLength") (EVar "arrs"))) (DoLet false false (PVar "total") (EApp (EApp (EApp (EApp (EVar "concatTotal") (EVar "arrs")) (ELit (LInt 0))) (ELit (LInt 0))) (EVar "outer"))) (DoExpr (EApp (EApp (EVar "arrayMakeWith") (EVar "total")) (ELam ((PVar "i")) (EApp (EApp (EApp (EApp (EVar "concatLookup") (EVar "arrs")) (EVar "i")) (ELit (LInt 0))) (EVar "outer")))))))
+(DFunDef false "concat" ((PVar "arrs")) (EBlock (DoLet false false (PVar "outer") (EApp (EVar "arrayLength") (EVar "arrs"))) (DoLet false false (PVar "total") (EApp (EApp (EApp (EApp (EVar "concatTotal") (EVar "arrs")) (ELit (LInt 0))) (ELit (LInt 0))) (EVar "outer"))) (DoExpr (EIf (EBinOp "<=" (EVar "total") (ELit (LInt 0))) (EArrayLit) (EBlock (DoLet false false (PVar "out") (EApp (EApp (EVar "arrayMake") (EVar "total")) (EApp (EApp (EApp (EApp (EVar "concatLookup") (EVar "arrs")) (ELit (LInt 0))) (ELit (LInt 0))) (EVar "outer")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "concatBlitAll") (EVar "arrs")) (EVar "out")) (ELit (LInt 0))) (ELit (LInt 0))) (EVar "outer"))))))))
+(DTypeSig false "concatBlitAll" (TyFun (TyApp (TyCon "Array") (TyApp (TyCon "Array") (TyVar "a"))) (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Array") (TyVar "a"))))))))
+(DFunDef false "concatBlitAll" ((PVar "arrs") (PVar "out") (PVar "k") (PVar "dstOff") (PVar "outer")) (EIf (EBinOp ">=" (EVar "k") (EVar "outer")) (EVar "out") (EBlock (DoLet false false (PVar "inner") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "k")) (EVar "arrs"))) (DoLet false false (PVar "len") (EApp (EVar "arrayLength") (EVar "inner"))) (DoExpr (EIf (EBinOp "<=" (EVar "len") (ELit (LInt 0))) (EApp (EApp (EApp (EApp (EApp (EVar "concatBlitAll") (EVar "arrs")) (EVar "out")) (EBinOp "+" (EVar "k") (ELit (LInt 1)))) (EVar "dstOff")) (EVar "outer")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "arrayBlit") (EVar "inner")) (ELit (LInt 0))) (EVar "out")) (EVar "dstOff")) (EVar "len"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "concatBlitAll") (EVar "arrs")) (EVar "out")) (EBinOp "+" (EVar "k") (ELit (LInt 1)))) (EBinOp "+" (EVar "dstOff") (EVar "len"))) (EVar "outer")))))))))
 (DTypeSig false "concatTotal" (TyFun (TyApp (TyCon "Array") (TyApp (TyCon "Array") (TyVar "a"))) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))))
 (DFunDef false "concatTotal" ((PVar "arrs") (PVar "i") (PVar "acc") (PVar "outer")) (EIf (EBinOp ">=" (EVar "i") (EVar "outer")) (EVar "acc") (EApp (EApp (EApp (EApp (EVar "concatTotal") (EVar "arrs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "+" (EVar "acc") (EApp (EVar "arrayLength") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arrs"))))) (EVar "outer"))))
 (DTypeSig false "concatLookup" (TyFun (TyApp (TyCon "Array") (TyApp (TyCon "Array") (TyVar "a"))) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyVar "a"))))))

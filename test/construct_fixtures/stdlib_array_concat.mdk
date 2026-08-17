@@ -1,0 +1,33 @@
+-- Array.concat over EMPTY inner arrays and exact prefix boundaries.
+-- Every cell is a shape the old O(outer*total) linear-subtraction lookup
+-- handled correctly by construction; a prefix-index/bulk-copy rewrite can
+-- silently regress them (an empty run makes a boundary ambiguous).
+import array.{concat, fromList, make}
+
+e : Array Int
+e = fromList []
+
+mk : List Int -> Array Int
+mk xs = fromList xs
+
+main =
+  -- empty runs at front, middle AND tail
+  println (toList (concat (fromList [e, mk [1], e, e, mk [2], e])))
+  -- total length 0, non-zero outer count
+  println (toList (concat (fromList [e, e, e])))
+  -- outer count 0
+  println (toList (concat (fromList [])))
+  -- a single inner array
+  println (toList (concat (fromList [mk [7, 8, 9]])))
+  -- all inners length 1: every target lands exactly on a boundary
+  println (toList (concat (fromList [mk [1], mk [2], mk [3], mk [4]])))
+  -- ragged lengths: first and last element of each inner
+  println (toList (concat (fromList [mk [1, 2, 3], mk [4], mk [5, 6]])))
+  -- leading empty only
+  println (toList (concat (fromList [e, mk [1, 2]])))
+  -- trailing empty only
+  println (toList (concat (fromList [mk [1, 2], e])))
+  -- one empty inner
+  println (toList (concat (fromList [e])))
+  -- ragged with interior empties: total length preserved
+  println (length (concat (fromList (map (n => make n 0) [0, 1, 0, 5, 0, 3, 0]))))
