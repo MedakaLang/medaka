@@ -1815,6 +1815,7 @@ wRestore : Windowed a -> (List a, Int) -> Unit
 wSnapshot : Windowed a -> (List a, Int)
 wWindow : Windowed a -> Int -> List a
 walkDispatch : List String -> Ty -> Mono -> List (String, Mono)
+wildOverlayDecls : Int -> List DeclEnvModule -> String -> List Decl
 wildSchemeOblEntry : String -> ((String, String), List VecObl) -> List (String, List VecObl)
 wrapIf : Bool -> String -> String
 zerosL : Int -> List Int

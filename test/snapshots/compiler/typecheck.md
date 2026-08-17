@@ -1,5 +1,5 @@
 # META
-source_lines=31022
+source_lines=31062
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted typecheck stage — port of lib/typecheck.ml's HM core.  SLICE 1:
@@ -29065,12 +29065,18 @@ importSeed (_::rest) depEnv = importSeed rest depEnv
 -- states the same equality for the qual tables).
 --
 -- ⚠️ PERF (issue #154) — THE REAL BOUND, stated for the WORK and not just the RESULT.
--- The RESULT is import-count bounded: at most one overlay decl per UseGroup member, a
--- per-module VIEW, never a per-module rebuild of the global universe.  A module
--- importing no constructors overlays NOTHING and stays byte-identical.  A bare
--- `import mod` (UseName) and a wildcard `import mod.*` (UseWild) contribute no overlay:
--- the bare form binds no ctors at all, and a wildcard cannot name its owning type here,
--- so it takes the same universe-fallback the value seed's wildcard does.
+-- The RESULT is bounded by IMPORT COUNT x PER-MODULE PUBLIC DECL COUNT: at most one
+-- overlay decl per UseGroup member, and — since `wildOverlayDecls` — the wildcard-named
+-- module's whole published row per `UseWild`.  It is still a per-module VIEW (the row is
+-- the envelope's own memoized `demPubDecls`, not a copy), never a per-module rebuild of
+-- the global universe.  A module importing no constructors AND no wildcard overlays
+-- NOTHING and stays byte-identical.  A bare `import mod` (UseName) still contributes no
+-- overlay: the bare form binds no ctors at all, so no ctor occurrence in the reader can
+-- mean that module's declaration by that import.  A wildcard `import mod.*` DOES
+-- contribute, as of `wildOverlayDecls` below — it cannot name its owning type, but it
+-- does not need to: every decl the module publishes is in scope by construction, and
+-- leaving it to the universe-fallback made import-clause ORDER decide which declaration
+-- a ctor occurrence meant, in both the spurious-warning and the lost-warning direction.
 --
 -- The WORK is NOT import-count bounded, and saying it is has already shipped a
 -- regression.  `pool` is the WHOLE accumulated universe and it is SCANNED — so the cost
@@ -29116,7 +29122,37 @@ importOverlayDecls : Int -> List DeclEnvModule -> Decl -> List Decl
 importOverlayDecls cur rows (DAttrib _ d) = importOverlayDecls cur rows d
 importOverlayDecls cur rows (DUse _ (p@(UseGroup _ ms)) _) =
   flatMap (memberOverlayDecl cur rows (usePathModuleId p)) ms
+importOverlayDecls cur rows (DUse _ (p@(UseWild _)) _) =
+  wildOverlayDecls cur rows (usePathModuleId p)
 importOverlayDecls _ _ _ = []
+
+-- A wildcard import's overlay: EVERY decl the named module publishes, as the reader at
+-- ordinal `cur` may see it.  A wildcard names no member, so there is nothing to look up
+-- by name — the whole published row IS the answer, and one row is all a module id can
+-- have (`deOrdIndex` keys rows by `demId`), hence the stop at the first match.
+--
+-- 🚨 `declEnvRowVisible`, NEVER `m.demDecls`.  The visible projection is what confines
+-- this to `publicDataDecl`s — public `DData`/`DInterface`/`DImpl`/`DTypeAlias` — and
+-- `DNewtype`'s ABSENCE from that predicate is deliberate (see `publicDataDecl`): reading
+-- `demDecls` here would leak a wildcard-imported module's PRIVATE and NEWTYPE
+-- constructors across the module boundary, draining #1311/#1305 in the loud→silent
+-- direction, i.e. a severity INCREASE.  A wildcard-imported `newtype`'s ctors are
+-- consequently NOT overlaid; that is the ruled behaviour, not an oversight.
+--
+-- The private branch of `declEnvRowVisible` (`entryOrd == cur`, the reader's own row) is
+-- UNREACHABLE from here for the reason the pool note above already gives: `mid` comes
+-- from a `DUse` path, and no module imports itself.
+--
+-- ⚠️ PERF: this returns the row's OWN memoized `demPubDecls` list — no filtered copy is
+-- materialised, per `declEnvRowVisible`'s zero-allocation contract.  It does move the
+-- RESULT bound: see the `THE REAL BOUND` note above.
+wildOverlayDecls : Int -> List DeclEnvModule -> String -> List Decl
+wildOverlayDecls _ [] _ = []
+wildOverlayDecls cur (m::rest) mid =
+  if m.demId == mid then
+    declEnvRowVisible cur m
+  else
+    wildOverlayDecls cur rest mid
 
 -- One member's overlay decl.  The bare-name fallback is kept for the `(..)` spelling
 -- ALONE, so no overlay that fired before #1111 A-2.6 is lost where the identity cannot
@@ -29838,10 +29874,14 @@ checkModuleFullDiags mid seedVars accData accAll prog =
   --     constructor-naming member contributes now (`import m.{T, C}`, and a record's
   --     `import m.{Cfg}`), not only the `(..)` spelling.
   --   * NOT "a module with no `T(..)` import is byte-identical" — only a module that
-  --     names no constructor at all is.
-  -- The PERF claim is corrected at `importedCtorTypeDecls` itself (the result is
-  -- import-count bounded; the WORK is O(members x |universe|), held down by one
-  -- zero-allocation traversal per member).  Do not restate it as "no O(N²)" here: this
+  --     names no constructor at all AND carries no wildcard import is.  A wildcard
+  --     (`import m.*`) contributes m's whole published row without naming any
+  --     constructor, since `wildOverlayDecls`; before that arm existed it fell to the
+  --     universe fallback and import-clause ORDER decided the oracle's answer.
+  -- The PERF claim is corrected at `importedCtorTypeDecls` itself (the result is bounded
+  -- by import count x per-module public decl count; the WORK is O(members x |universe|),
+  -- held down by one zero-allocation traversal per member).  Do not restate it as "no
+  -- O(N²)" here: this
   -- call site is the SECOND per-module scan of the same pool, so it doubles whatever
   -- that constant is.
   -- A-3.2b (#1512): the SECOND consumer of the retired `universeDataDecls`, re-pointed
@@ -35906,7 +35946,11 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "importOverlayDecls" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "DeclEnvModule")) (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "Decl"))))))
 (DFunDef false "importOverlayDecls" ((PVar "cur") (PVar "rows") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EApp (EVar "importOverlayDecls") (EVar "cur")) (EVar "rows")) (EVar "d")))
 (DFunDef false "importOverlayDecls" ((PVar "cur") (PVar "rows") (PCon "DUse" PWild (PAs "p" (PCon "UseGroup" PWild (PVar "ms"))) PWild)) (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EVar "memberOverlayDecl") (EVar "cur")) (EVar "rows")) (EApp (EVar "usePathModuleId") (EVar "p")))) (EVar "ms")))
+(DFunDef false "importOverlayDecls" ((PVar "cur") (PVar "rows") (PCon "DUse" PWild (PAs "p" (PCon "UseWild" PWild)) PWild)) (EApp (EApp (EApp (EVar "wildOverlayDecls") (EVar "cur")) (EVar "rows")) (EApp (EVar "usePathModuleId") (EVar "p"))))
 (DFunDef false "importOverlayDecls" (PWild PWild PWild) (EListLit))
+(DTypeSig false "wildOverlayDecls" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "DeclEnvModule")) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))
+(DFunDef false "wildOverlayDecls" (PWild (PList) PWild) (EListLit))
+(DFunDef false "wildOverlayDecls" ((PVar "cur") (PCons (PVar "m") (PVar "rest")) (PVar "mid")) (EIf (EBinOp "==" (EFieldAccess (EVar "m") "demId") (EVar "mid")) (EApp (EApp (EVar "declEnvRowVisible") (EVar "cur")) (EVar "m")) (EApp (EApp (EApp (EVar "wildOverlayDecls") (EVar "cur")) (EVar "rest")) (EVar "mid"))))
 (DTypeSig false "memberOverlayDecl" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "DeclEnvModule")) (TyFun (TyCon "String") (TyFun (TyCon "UseMember") (TyApp (TyCon "List") (TyCon "Decl")))))))
 (DFunDef false "memberOverlayDecl" ((PVar "cur") (PVar "rows") (PVar "mid") (PCon "UseMember" (PVar "n") (PVar "ctors") PWild PWild)) (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "findOverlayDecl") (EVar "mid")) (EVar "n")) (EVar "ctors")) (EVar "cur")) (EVar "rows")) (arm (PCon "Some" (PVar "d")) () (EListLit (EVar "d"))) (arm (PCon "None") () (EListLit))))
 (DTypeSig false "findOverlayDecl" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Bool") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "DeclEnvModule")) (TyApp (TyCon "Option") (TyCon "Decl"))))))))
@@ -40994,7 +41038,11 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "importOverlayDecls" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "DeclEnvModule")) (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "Decl"))))))
 (DFunDef false "importOverlayDecls" ((PVar "cur") (PVar "rows") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EApp (EVar "importOverlayDecls") (EVar "cur")) (EVar "rows")) (EVar "d")))
 (DFunDef false "importOverlayDecls" ((PVar "cur") (PVar "rows") (PCon "DUse" PWild (PAs "p" (PCon "UseGroup" PWild (PVar "ms"))) PWild)) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EVar "memberOverlayDecl") (EVar "cur")) (EVar "rows")) (EApp (EVar "usePathModuleId") (EVar "p")))) (EVar "ms")))
+(DFunDef false "importOverlayDecls" ((PVar "cur") (PVar "rows") (PCon "DUse" PWild (PAs "p" (PCon "UseWild" PWild)) PWild)) (EApp (EApp (EApp (EVar "wildOverlayDecls") (EVar "cur")) (EVar "rows")) (EApp (EVar "usePathModuleId") (EVar "p"))))
 (DFunDef false "importOverlayDecls" (PWild PWild PWild) (EListLit))
+(DTypeSig false "wildOverlayDecls" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "DeclEnvModule")) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))
+(DFunDef false "wildOverlayDecls" (PWild (PList) PWild) (EListLit))
+(DFunDef false "wildOverlayDecls" ((PVar "cur") (PCons (PVar "m") (PVar "rest")) (PVar "mid")) (EIf (EBinOp "==" (EFieldAccess (EVar "m") "demId") (EVar "mid")) (EApp (EApp (EVar "declEnvRowVisible") (EVar "cur")) (EVar "m")) (EApp (EApp (EApp (EVar "wildOverlayDecls") (EVar "cur")) (EVar "rest")) (EVar "mid"))))
 (DTypeSig false "memberOverlayDecl" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "DeclEnvModule")) (TyFun (TyCon "String") (TyFun (TyCon "UseMember") (TyApp (TyCon "List") (TyCon "Decl")))))))
 (DFunDef false "memberOverlayDecl" ((PVar "cur") (PVar "rows") (PVar "mid") (PCon "UseMember" (PVar "n") (PVar "ctors") PWild PWild)) (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "findOverlayDecl") (EVar "mid")) (EVar "n")) (EVar "ctors")) (EVar "cur")) (EVar "rows")) (arm (PCon "Some" (PVar "d")) () (EListLit (EVar "d"))) (arm (PCon "None") () (EListLit))))
 (DTypeSig false "findOverlayDecl" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Bool") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "DeclEnvModule")) (TyApp (TyCon "Option") (TyCon "Decl"))))))))
