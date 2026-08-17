@@ -12,7 +12,7 @@
 | `sprint-verifier` | `sprint_verifier` custom agent |
 | `domain-adversary` | `domain_adversary` custom agent |
 | `sprint-retro` | `sprint_retro` custom agent after terminal merge-queue evidence |
-| `sprint-rear` review/finding/CI pipeline | `sprint_rear` when slot permits; otherwise root conductor mechanics plus reviewers |
+| `sprint-rear` review/finding/CI pipeline | persistent `sprint_rear`; root conductor relays brain consults and owns final state |
 | `SendMessage` | `send_message` for advisory delivery; `followup_task` to wake idle persistent seat |
 | `TaskStop` | `interrupt_agent` |
 | task roster | `list_agents` |
@@ -20,7 +20,7 @@
 
 ## Intentional adaptations
 
-- Codex permits four total active agents including root. Exact Claude front+rear+brain architecture consumes all slots and leaves no writer. Root absorbs rear-seat mechanics while brain + writer + planner/reviewer/verifier need slots. `sprint_rear` remains available phasewise when brain or writer is rotated out.
+- Repository config requests seven concurrent child threads, permitting root + rear + brain + writer + planner/reviewer/verifier lanes. Runtime service may clamp configured concurrency; when it does, preserve writer and brain first, then absorb rear mechanics into root.
 - Codex role configuration uses `.codex/agents/*.toml`; model names map Opus judgment/review seats to `gpt-5.6-sol`, Sonnet mechanical/writer seats to `gpt-5.6-terra`, and cheap verification to `gpt-5.6-luna`.
 - Codex agents cannot be assumed to own stable Claude harness worktree paths. Dispatch packet names mode/branch/base; agent derives actual root. Root conductor owns commits/integration unless role permissions explicitly allow push.
 - Codex commentary/final responses are not durable sprint state. Persist packets, reports, rulings, ledgers, and GitHub readbacks before relying on them.

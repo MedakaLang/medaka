@@ -19,7 +19,7 @@ Derive candidate scope from current issues, source, history, and merged work; in
 
 Escalate only choices materially changing accepted programs, runtime meaning, type/effect/interface semantics, evaluation order, failure behavior, or cross-backend semantic contract. Reorder, split, defer, or cancel work autonomously when evidence changes.
 
-Use one persistent `sprint-brain` judgment seat when rulings become frequent. It reads primary artifacts and writes numbered ruling files; conductor mechanically applies them. Never run two brains concurrently. Rotate brain at phase boundary only after successor reads decision ledger. With Codex's four-total-agent ceiling, conductor performs Claude rear-seat mechanics itself; do not reserve separate rear agent while writer and brain are live.
+Use one persistent `sprint-brain` judgment seat when rulings become frequent. It reads primary artifacts and writes numbered ruling files; conductor mechanically applies them. Never run two brains concurrently. Rotate brain at phase boundary only after successor reads decision ledger. Keep `sprint-rear` live when slots permit; root conductor remains responsible for transport and final state.
 
 ## Keep rolling lanes full
 
