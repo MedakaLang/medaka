@@ -13461,6 +13461,42 @@ inferLetGroup env binds body =
   infer env2 body
 
 -- ── data declarations → constructor schemes ───────────────────────────────
+-- #1586/#1228: may `registerData` look THROUGH a `DAttrib` wrapper, and for
+-- which wrapped decl kinds?  ONLY `DData` and `DNewtype`.  The selectivity is
+-- load-bearing, not stylistic, and each exclusion is excluded for a stated,
+-- still-open reason — do NOT "complete" this predicate without owning them:
+--
+--   * `DTypeAlias` — EXCLUDED.  Unwrapping it would send an attributed alias
+--     into `registerData`'s `DTypeAlias` arm, which writes
+--     `perRun.value.aliasTableRef`, i.e. the alias would EXPAND where it is
+--     declared.  That is exactly the trigger of the 🚨 RE-ADD CONDITION stated
+--     on `dataEnvAddDecl` (#1512): whoever fires it **must delete
+--     `aliasVisibleTo`'s `not ad.adAttrib` conjunct in the same diff**, or the
+--     result is the MIRROR of the widening that guard was added to prevent
+--     (expands locally, opaque in importers) — and that block records that no
+--     fixture in the tree would catch the omission.  #1512 owns that pairing;
+--     this slice deliberately does not fire it, so the guard stays as written.
+--   * `DInterface` — EXCLUDED, and vacuously so: `registerData` has no
+--     `DInterface` arm at all (A-3.5c, see the note on the catch-all below), so
+--     unwrapping one would reach the same catch-all anyway.  An attributed
+--     interface's unresolvability is #1079.
+--   * `DImpl` and everything else — EXCLUDED.  Cross-module PUBLICATION is a
+--     DIFFERENT question from declaring-module REGISTRATION, and it is answered
+--     by `publicDataDecl`, whose own `DAttrib` absence is documented in place
+--     and owned by #1063 (attribute drops an export) / #1079.  Leaving it shut
+--     keeps an attributed decl uniformly invisible cross-module — the same
+--     shape a `VisPrivate` decl already has — rather than split-brained.
+--
+-- 🚨 THE `_ = False` ARM IS A WILDCARD, so a NEW `Decl` constructor lands in it
+-- SILENTLY (the hazard AGENTS.md names).  `False` is the CONSERVATIVE default —
+-- it preserves today's behaviour, unregistered — but a new constructor that
+-- ought to register will do so without a diagnostic saying why not.
+registerDataUnwrapsAttrib : Decl -> Bool
+registerDataUnwrapsAttrib (DAttrib _ d) = registerDataUnwrapsAttrib d
+registerDataUnwrapsAttrib (DData { ... }) = True
+registerDataUnwrapsAttrib (DNewtype { ... }) = True
+registerDataUnwrapsAttrib _ = False
+
 registerData : TcEnv -> Decl -> TcEnv
 registerData env (DData { dataName = name, dataParams = params, dataCtors = variants, dataOrigin = o }) = registerVariants o env name params variants
 -- DECLARATION MINT (#1110/#1111 A-2.3): `tyAliasOrigin` is the alias's own
@@ -13471,6 +13507,14 @@ registerData env (DTypeAlias { tyAliasName = name, tyAliasParams = params, tyAli
   let _ = setRef perRun.value.aliasTableRef ((tyTabKey o name, (params, rhs))::perRun.value.aliasTableRef.value)
   env
 registerData env (DNewtype { newtypeName = name, newtypeParams = params, newtypeCtor = con, newtypeFieldTy = fty, newtypeOrigin = o }) = registerVariants o env name params [Variant con (ConPos [fty])]
+-- #1586/#1228: the ARM-SELECTIVE `DAttrib` unwrap.  Recursing on `d` handles
+-- nested wrappers (`DAttrib [a] (DAttrib [b] d)` is producible by the parser —
+-- see `dataEnvAddDecl`'s comment) because the inner `DAttrib` re-enters this
+-- same arm.  The guard is `registerDataUnwrapsAttrib` above; read its block
+-- before widening it.
+registerData env (DAttrib _ d)
+  | registerDataUnwrapsAttrib d = registerData env d
+  | otherwise = env
 -- ⚠️ #1557 A-3.5c: THE `DInterface` ARM IS GONE, and its absence is the point.
 -- #822 registered each interface type-parameter's slot kinds here, into
 -- `ifaceParamKindsRef`, *"because every consumer must see the table BEFORE the first

@@ -1542,10 +1542,19 @@ userValueNames ((DInterface { methods, ... })::rest) = map ifaceMethodNm methods
 userValueNames ((DAttrib _ d)::rest) = userValueNames (d::rest)
 userValueNames (_::rest) = userValueNames rest
 
+-- #1586: `fieldOwnersOf` was this file's ONE collector missing the `DAttrib`
+-- unwrap its ~24 siblings all have (`dataRecordNames`, `ctorNames`,
+-- `userValueNames`, `effectNames`, …), so an attributed record cast no
+-- field-owner vote at resolve while typecheck's peer table disagreed.
+-- UNIFORM unwrap is safe here and is provably equivalent to the ARM-SELECTIVE
+-- one `registerData` needs: this function has exactly ONE contributing arm
+-- (`DData`) and a catch-all that contributes nothing, so unwrapping an
+-- attributed alias / interface / impl adds nothing to the result.
 fieldOwnersOf : List Decl -> List (String, String)
 fieldOwnersOf [] = []
 fieldOwnersOf ((DData { dataCtors = vs })::rest) = flatMap variantFieldOwners vs
   ++ fieldOwnersOf rest
+fieldOwnersOf ((DAttrib _ d)::rest) = fieldOwnersOf (d::rest)
 fieldOwnersOf (_::rest) = fieldOwnersOf rest
 
 recordFieldOwner : String -> Field -> (String, String)
