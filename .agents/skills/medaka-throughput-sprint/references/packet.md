@@ -5,8 +5,8 @@ Dispatch only when every required field is concrete.
 ## Identity
 
 - Slice ID and stage acceptance criterion.
-- Exact base/head, branch, dispatch mode, and absolute tree selected by isolation probe.
-- `HARNESS`: writer derives tree first with `git rev-parse --show-toplevel` and proves it differs from conductor tree. `FRONT-SEAT`: conductor creates tree; every agent tool call sets its absolute `workdir`, then writer validates toplevel equals brief path. `HARNESS+REBASE`: same as HARNESS plus exact licensed SHA-pinned rebase. All modes prove dispatch head descends from named sprint head.
+- Exact base/head, branch, dispatch mode, and conductor tree. Absolute writer tree appears only in `FRONT-SEAT` packets; harness chooses a fresh path per dispatch.
+- `HARNESS`: writer derives tree first with `git rev-parse --show-toplevel` and proves it differs from conductor tree. `FRONT-SEAT`: conductor creates named tree; every agent tool call sets its absolute `workdir`, then writer validates toplevel equals brief path. `HARNESS+REBASE`: same as HARNESS plus exact licensed SHA-pinned rebase. All modes prove dispatch head descends from named sprint head.
 - Classification: `parity` → `sprint-implementer`; `behavior-changing`, spike, or unstable DAG → `sprint-heavy-implementer`.
 - Authorized files and named regions/symbols.
 - Active-writer collision matrix and abort condition.
@@ -47,6 +47,10 @@ Dispatch only when every required field is concrete.
 - Return six sections: `Verdict`, `Evidence`, `Decisions surfaced`, `Deviations from packet`, `Not covered`, `Friction`. `NONE` is valid; missing section invalid.
 - Evidence opens with externally observed time and includes derived worktree, exact head/base proof, commands, outputs, and artifact paths.
 - Dispatch names report path. Agent returns literal `time:` plus all six sections; conductor persists response verbatim and validates it.
+
+## Spike form
+
+Spike produces knowledge, never landing code: attempt → observe → revert every tracked/untracked change it created → prove byte-identical named files and clean status. Return leaf DAG, discovered sites/premises/checks, and `SPIKE-DONE (stability: STABLE|UNSTABLE)`. Stable DAG may become parity family only when behavior remains provably unchanged; unstable DAG routes whole coupled slice to heavy implementer.
 
 After implementation and harness freeze, use one exact-row packet per applicable
 semantic-field/mutation-class pair:
