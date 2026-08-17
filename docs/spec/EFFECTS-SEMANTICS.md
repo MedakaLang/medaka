@@ -814,10 +814,10 @@ bound of #803 cannot see it either, because applying the callback contributes on
 the *variable* `e`, never a concrete atom (the bound's own precision argument,
 above, says exactly this). §6.7 states the obligation this exposes.
 
-So the fork stands, and `stdlib/async.mdk`'s `map`/`pure` apply the callback
+`stdlib/async.mdk`'s `map`/`pure` still apply the callback
 **eagerly**, inline in the constructor arm (`map f (Done a) = Done (f a)`,
-`stdlib/async.mdk`). Two candidate resolutions, named neutrally, with no verdict
-between them here:
+`stdlib/async.mdk`). Two candidate resolutions were named neutrally here while
+the fork stood; the verdict follows them:
 
 - **defer the arm** (`gmap g (Done a) = Suspend (u => Done (g a))`), keeping
   construction pure per the discharge-at-`grun` story above, at the cost of an
@@ -826,7 +826,17 @@ between them here:
   arrow instead of only its result index, which changes the signature
   discipline described above rather than the impl.
 
-#823 must settle this before migrating Async.
+**RESOLVED (owner: Val, 2026-08-17; recorded on #823): DEFER the arm.** Graded
+impls suspend the constructor fast path (`deferMap g (Done a)` builds
+`Suspend (u => Done (g a))` rather than applying `g` inline); construction
+stays genuinely pure and the callback's row fires at force time, per the
+discharge story above. Accepted costs: a map/bind on an already-`Done` value
+allocates a `Suspend` and pays one extra force round, and the eager reduction
+is not preserved in the graded family. The eager-and-charge option was declined
+because the charge lands on the method's *declared* arrow — every impl and call
+site pays it — which rejects the pure-context builder that is this discipline's
+central use case. An explicitly-charged eager sibling method remains addable
+later as a separate decision. #823 migrates Async against this verdict.
 
 ⚠️ **Read the fork correctly — and this document had it a notch wrong.** An earlier
 revision of this paragraph said the probe makes the choice load-bearing because
@@ -837,8 +847,8 @@ explicit `→^{e}` on the method arrow *is* correctly enforced at the call site.
 is false is that the choice is **free**. The unsound shape is neither of them — it
 is the *uncharged* signature this section's own examples give (`gmap : (a →^{e} b)
 → f e a → f e b`, no row on the method's arrows), which is what the probe above
-exercises and what #823 is on course to ship if the fork is left unmade. §6.7,
-finding 2, gives the mechanism.
+exercises and what #823 was on course to ship while the fork stood unmade (it
+is now made — the resolution above). §6.7, finding 2, gives the mechanism.
 
 The full family with independent grades remains the ideal; graded-lite is a
 narrower first surface realized *within* it once the kind exists, not a
@@ -1446,19 +1456,21 @@ the non-local rule; the table's own hazards are a separate matter (#1069).
 Listed rather than smoothed over, because a guessed answer here has cost this
 document three public retractions already (PRs #999/#1001).
 
-- **Q1 — the `Deferred*` METHOD names.** The interface names are decided; the
-  methods are not, and they are not all attested. Of the four this document names,
-  `gandThen`/`gmap` (with `grun`) are spelled in
-  `test/engine_fixtures/graded_iface_async.mdk` and `gpure` in
-  `test/typecheck_error_fixtures/graded_closed_row_grade_ok.mdk:22`, while **`gap`
-  is this document's own invention** as a graded method name. The tree is not even
-  self-consistent on the ones it has: the same fixture spells its bind `gth` at
-  `:21`, so "the fixtures' spelling" is not a single answer to defer to.
-  `DeferredMappable.gmap` also pairs a descriptive interface name with a cryptic
-  prefix. Constraint that any answer must respect: the names must stay distinct
-  from the plain family's, since sharing them would make the unqualified `andThen`
-  that `do` desugars to pick one interface and break the prelude's containers
-  (#824).
+- **Q1 — the `Deferred*` METHOD names. RESOLVED (Val, 2026-08-17; recorded on
+  #824): descriptive `defer*` words** — `deferMap` / `deferThen` / `deferPure`,
+  with the discharge method spelled `force`. This respects the binding
+  constraint (distinct from the plain family's names, since sharing them would
+  make the unqualified `andThen` that `do` desugars to pick one interface and
+  break the prelude's containers, #824) and matches the decided `Deferred*`
+  interface names rather than the fixtures' `g*` prefix. The `g*` spellings
+  this entry previously catalogued (`gandThen`/`gmap`/`grun` in
+  `test/engine_fixtures/graded_iface_async.mdk`, `gpure` in
+  `test/typecheck_error_fixtures/graded_closed_row_grade_ok.mdk:22`, the
+  fixture-internal `gth`, and `gap` — this document's own invention) are
+  historical until #823/#824 land the surface; do not add new ones. The
+  criticism that motivated the choice stands recorded: `DeferredMappable.gmap`
+  paired a descriptive interface name with a cryptic, not-even-self-consistent
+  prefix.
 - **Q2 — one diagnostic code or two.** §6.4's declaration-site contradiction and
   the shipped use-site check are the same rule at two seams. Whether
   `T-EFFECT-KIND-MISMATCH` covers both, or the declaration site takes its own code,
@@ -1520,9 +1532,14 @@ document three public retractions already (PRs #999/#1001).
   point 2). So there is no existing behaviour to preserve or contradict here: the
   alias case is entirely greenfield, which makes Q5 cheap to settle and means
   nothing depends on settling it now.
-- **Q6 — the `do`-routing keyword's spelling** (#824). A separate keyword mirroring
-  `do` is decided; the word is not. `defer` reads as "run at scope exit" to anyone
-  arriving from Go or Zig.
+- **Q6 — the `do`-routing keyword's spelling** (#824). **RESOLVED (Val,
+  2026-08-17; recorded on #824): `defer`.** A separate keyword mirroring `do`
+  was already decided; the word is now too. The objection this entry recorded —
+  `defer` reads as "run at scope exit" to anyone arriving from Go or Zig — was
+  weighed and accepted, not dropped: Medaka has no scope-exit construct for it
+  to collide with, and `defer` is family-coherent across the whole surface
+  (`Deferred*` interfaces, `defer*` methods, `defer` blocks), which is the
+  argument that won.
 
 ---
 

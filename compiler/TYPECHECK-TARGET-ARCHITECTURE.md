@@ -1267,6 +1267,16 @@ orders merges, and the plan does not pretend otherwise.
   agree), because #845 (selective-import spelling never reaches the
   declared-obligation channel) and #792 (accepted at check, rejected at build)
   are deferral-*policy* defects that storage unification alone does not drain.
+- **B-4 ⊕ (#1318). A dict slot is a PREDICATE** — routed in-arc 2026-08-17 (the
+  #1661 routing rulings; this row was previously owned by no stage): slot
+  cardinality and payload follow the predicate, with the full argument vector
+  carried to route selection and the obligation channel (the
+  #1161-residual/#1177/#1169 class). **Hard-sequenced before or with E-5
+  (#1137), never after** — centralizing arity first would freeze the wrong slot
+  cardinality into the elaboration contract (the coupling both issues state).
+  Also on the emitter arc's X-C path (#1402 sits behind #1318 → #1137). Not
+  byte-identical; moves emitted dict-param arity ⇒ seed re-mint discipline and
+  the adversarial bar, per the issue.
 
 **Stage C — One method-body judgment**
 
@@ -1275,6 +1285,12 @@ orders merges, and the plan does not pretend otherwise.
 - **C-2 ⊕ (#830). Signature authority** — more-general-than-body ⇒ def-site
   reject (never silent narrowing); vector-valued entailment side condition per
   DICT §9.
+- **C-3 ⊕ (#1136). W3-inst instance-head fidelity** — routed in-arc 2026-08-17
+  (the #1661 routing rulings) as C-2's sibling in the same
+  declaration-is-authority bucket: every impl-head type variable must survive
+  the checking of every method body of that impl unconstrained, else reject at
+  the impl declaration (#819's class; extends `checkMethodRigidityCore` keyed
+  on the head vars). Its spec paragraph joins the S-2 (#1107) owed set.
 
 **Stage D — Effects soundness (family F) — independent of A/B; interleaves with the graded arc**
 
@@ -1298,7 +1314,9 @@ orders merges, and the plan does not pretend otherwise.
   the eliminator obligation, which is the replacement rule the graded arc
   supplies. Coordinates with #822/#823; if #823 resolves the eager-arm fork to
   the uncharged signature, the launder remains representable and the arc — not
-  this stage — closes it.
+  this stage — closes it. **Fork resolved 2026-08-17 (Val, recorded on #823):
+  DEFER the arm — the uncharged-signature conditional above no longer arises,
+  and D-3 + #823 run as one coordinated sprint (§8).**
 - **D-4 ⊕ (#995). Effect-walk convergence** — post-unify checks only; the #803
   pre-unification bound explicitly stays where it is (its exactness is its
   timing); rigid-skolem idealization stays blocked on #817/#820 as filed.
@@ -1329,6 +1347,13 @@ orders merges, and the plan does not pretend otherwise.
   reset-lifecycle re-derivation, LSP seam contract test, per-module diagnostic
   attribution unchanged, marked-node universe = all body kinds. *This is R1;
   it does not start until E-2 is green and soaked.*
+- **E-5 ⊕ (#1137). Per-method arity + calling convention as output-contract
+  data** — routed in-arc 2026-08-17 (the #1661 routing rulings): §2 E's payload
+  sentence finally has an owner. No engine derives arity from a clause pattern
+  count or a declared signature's arrow spine. **After or with B-4 (#1318)**,
+  per the slot-cardinality coupling stated there. Ships with the L5
+  hand-derived arity conformance fixture — centralizing makes a wrong value
+  unanimous, and no engine differential can see unanimity.
 
 **Stage F — Locals + extraction + residuals**
 
@@ -1364,7 +1389,13 @@ peer, coordinating at A-3 (kind machinery) and D-3 (coverage rules).
 #1317 → A-3 (#1112) → B-2 (#1113)`, with the two name-identity units — **#1319**
 (constructors) and **A-values (#1337)** (values, above) — running **parallel**, and
 #1114 parallel to the A-2 tail. Read the epic's stage table and its amendment
-comments, not this line, when sequencing new work.
+comments, not this line, when sequencing new work. **The 2026-08-17 roadmap
+re-derivation comment on epic #1122 is the current amendment layer**: it
+reconciles the post-2026-08-12 landings (B-2's terminal state, the B-2.4 cut to
+X-E.C, sprint #1663) and supersedes the epic body's serialized-lane block; the
+remaining spine it derives runs #1351 ∧ #1450 → #1182 first (conjunct 1 of
+C4/I2), with #1319, the D-lane + graded sprint, the E-lane, the C-lane → F-1,
+and the B-1 design run around it.
 
 **Sizing honesty.** A is weeks of serialized work (every golden family moves at
 least once; "fleet-parallel" applies to development, not landing); B-1, B-2 and
@@ -1426,10 +1457,19 @@ whole arc.
   macOS-only and exits 2 without measuring on this project's Linux dev box
   (#1187) — so A-1/A-2 cannot claim to have cleared it until #1187 lands a
   working harness; treat the bar as blocked, not satisfied by omission.
-- **Graded-arc coordination.** A-3 and #822 both rewrite the kind-check
-  machinery; D-3 and #823 both touch coverage rules. Whichever lands second
-  rebases on the first — named up front so neither arc discovers the other in
-  a merge queue.
+- **Graded-arc coordination — three named points as of 2026-08-17.**
+  (1) *Kind machinery*: RESOLVED — #822 closed 2026-07-25 and A-3.5c (#1557)
+  landed the declared-kind reads, so this arc owns that machinery now (the
+  original "A-3 and #822 both rewrite it, whichever lands second rebases" hazard
+  is spent; the L5 row's stale-premise note says the same). (2) *Coverage
+  rules*: D-3 and #823 both touch them. ADOPTED 2026-08-17 (recorded on
+  #817/#823): #817/#825 reach their terminal state via the graded arc only
+  after D-3 is in force, and **D-3 + #823 run as one coordinated sprint** —
+  ownership stays with the graded arc, execution folds into the D-lane. The
+  eager-arm fork is RESOLVED (Val, 2026-08-17: DEFER the arm; the uncharged
+  signature never ships). (3) *#1594 is a mandatory rider on #823*: the
+  flat-path `TkBare` kind keying converts S3 → S0 the moment a graded interface
+  lands in `core.mdk`.
 - **Serialized landing.** Stages A and E occupy the whole `ws:typecheck` lane;
   B-3/C/D provide *development* parallelism, with landing interleaved through
   the one-PR-in-flight rule. The plan claims no more than that.
@@ -1451,8 +1491,8 @@ whole arc.
 - **Not in scope:** engine-realization bugs (#1034/#826/#1101/#1020, the
   emitter E-PANIC halves, and — since the 2026-08-14 ruling above — the whole
   engine word-set leg, wasm parity included), the graded arc's own design forks
-  (#823's eager-arm decision), the `do`/`defer` routing implementation (#824),
-  and any change to surface syntax. The `medaka check` CLI surface is unchanged
+  (#823's eager-arm decision — made 2026-08-17, still not this arc's work), the
+  `do`/`defer` routing implementation (#824), and any change to surface syntax. The `medaka check` CLI surface is unchanged
   throughout.
 
 ---
