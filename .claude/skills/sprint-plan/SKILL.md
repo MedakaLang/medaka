@@ -53,6 +53,26 @@ A sprint is a unit, not a bucket. A slice belongs in this sprint iff:
   in one slice (or an explicit expand–migrate–contract family) — never spread
   across slices "to balance sizes".
 
+**One slice in the set is the INDEPENDENT REFILL** (`refill: yes` in its §3
+row). It depends on nothing in the sprint's main DAG — not a spike's outcome,
+not another leaf's landing, not a shared golden — and the run-time planner cuts
+its packet immediately after packet #1, parking it in QUEUE.md as the
+designated lane refill. A *discovered* decomposition is usually a chain, and a
+chain cannot satisfy the one-packet-ahead runway invariant: the
+`sprint/ctor-identity` writer lane idled twice with the reason honestly
+recorded ("no independent queued packet exists to refill the lane with"). If
+the candidate set genuinely admits no independent slice, say so in §3 in one
+line with why — the orchestrator then knows its idle branch is real rather than
+a planning miss.
+
+**Stated trade (principle 5 / the one-ahead rule):** this is the ONE licensed
+exception to "plan exactly one slice ahead", and it is licensed on a specific
+property — a slice with no DAG dependency is by construction not invalidated by
+what the DAG discovers, which is what makes design-ahead rot elsewhere (~75%
+rework). It buys a lane refill that a chain cannot supply. If the refill packet
+DOES start rotting, that is evidence it was never independent, and it goes back
+through the planner like any other falsified premise.
+
 **Size the set: at least ~5 slices is the sweet spot, scaled by slice weight.**
 Fewer than that and the sprint machinery (contract, ledgers, heavy round) costs
 more than it amortizes — land 2 slices as ordinary PRs instead. The ceiling is
@@ -69,7 +89,7 @@ PR flow.
 
 ## Step 3 — specify each slice at BOUNDARY depth, deliberately no deeper
 
-Per slice, the contract records exactly five things:
+Per slice, the contract records exactly six things:
 
 1. **Mission** — what is true after it lands that wasn't before, one paragraph,
    citing the issues/rulings it serves.
@@ -82,6 +102,8 @@ Per slice, the contract records exactly five things:
 4. **Classification guess** — parity vs behavior-changing (drives the model
    tier; the packet may overturn it).
 5. **Depends-on** — other slices by ID, forming the landing order.
+6. **`refill: yes|no`** — exactly one row in the table carries `yes` (the
+   independent refill above), or §3 carries the one-line why-not.
 
 **The orderings will rot faster than the facts** — plans' orderings are the
 first casualty of contact. Mark the landing order as provisional; the
@@ -107,7 +129,7 @@ identifier convention.
 - **§1 The question** — the one-sentence purpose of the sprint.
 - **§2 In / Out** — scope both ways, each Out with its reason stated so it can
   be overturned deliberately rather than rediscovered.
-- **§3 The slice table** — the five fields above, one row per slice. **Slice
+- **§3 The slice table** — the six fields above, one row per slice. **Slice
   IDs are descriptive slugs** (`S-selector-rekey`, `S-freeze-admissibility`),
   never opaque letters (`E4`, `F7`) — the packet contract's §0 identifier
   convention starts here, because every later document inherits these names.
@@ -118,7 +140,12 @@ identifier convention.
 - **§6 Expected-red block** — the known-red gate set for the duration (the
   orchestrator copies it to the sprint dir's `EXPECTED-RED.md` and the tracking
   issue at sprint start; reds expected beyond the sprint get a `known-red`
-  labeled issue each).
+  labeled issue each). Every row carries `masks:` (the checks that do NOT run
+  behind it — DERIVED from the job's step list, command recorded; `NONE` is a
+  common and valid value) and `unmask-by:` (the slice or fix that clears it,
+  scheduled in the FIRST HALF of the sprint — `wrap-up` is not a valid value).
+  A failing step skips its successors, and one licensed red kept a whole
+  sprint's soundness signal dark.
 - **§7 Landing model** — v3 default: ONE sprint branch (`sprint/<stage>`) and
   ONE running draft PR for the whole sprint; slices merge into the branch, the
   PR enqueues once, after the heavy round. Mid-sprint CI is the narrowed
@@ -128,6 +155,16 @@ identifier convention.
 - **§8 Exit criteria** — including the heavy round (non-optional; it carries
   every S0-class finding's adversarial review and any deferred golden
   captures — both block the terminal enqueue) and desk-closes.
+- **§8b Domain review** — when this sprint is the language's FIRST use in a new
+  domain, name the property classes a `domain-adversary` pass will cover
+  (constant-time/side-channel, hostile input at a trust boundary, protocol or
+  crypto misuse, irreversible external effects, concurrency) and budget them;
+  or state in ONE line why this domain has no failure class the slice
+  acceptance cells can express. Silence does not qualify. (Scope, stated: this
+  is generalized from one sprint in one new domain, where three out-of-contract
+  reviews produced 33 items → 5 findings, including a LANGUAGE-level gap — no
+  CSPRNG anywhere in the tree — that the contract could never have asked
+  about.)
 
 ## Step 5 — adversarial read before handoff
 

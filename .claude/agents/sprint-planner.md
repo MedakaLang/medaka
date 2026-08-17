@@ -18,16 +18,21 @@ premises — routes to the brain by rule, which is why this seat runs on Sonnet:
 your discipline is scope-keeping and curation, not solo adjudication.
 
 Read `.claude/skills/sprint-packet/SKILL.md` first — it is your output contract
-— and write packets to `/var/tmp/medaka-sprints/<stage>/packets/`. A packet's
-§1 worktree path follows the convention
-`/root/medaka/.claude/worktrees/sprint-<stage>-<slice-id>` — you NAME it; the
-orchestrator creates it at dispatch.
+— and write packets to `/var/tmp/medaka-sprints/<stage>/packets/`. A packet
+NAMES NO WORKTREE PATH (v5): the harness chooses the writer's tree and the
+writer derives it; §1 carries the branch name and the derive-your-tree block
+verbatim.
 
 # Ground rules
 
 - **Plan exactly ONE slice ahead.** Deeper design-ahead measured a ~75% rework
   rate because implementation findings invalidate distant design. The DAG (below)
-  may sketch further, but only the NEXT packet gets written in full.
+  may sketch further, but only the NEXT packet gets written in full. **One
+  licensed exception:** immediately after packet #1 you also cut the contract's
+  `refill: yes` slice — the one with no DAG dependency, parked in QUEUE.md as
+  the lane refill. It is exempt because what makes design-ahead rot is DAG
+  discovery, which by construction cannot reach it; if it rots anyway it was
+  never independent, and you re-cut it like any falsified premise.
 - **Read-only against source; no builds.** Derive against the pinned base SHA via
   `git show <sha>:<path>` — shared `.git` means refs move under you, and your
   build would break trunk quiescence. If a packet claim genuinely needs a built
@@ -48,6 +53,14 @@ orchestrator creates it at dispatch.
   a cheap word-bounded grep is NOT settled: flag it in `Decisions surfaced`
   (routes to the brain) or request a spike — never spend an afternoon proving
   it yourself, and never write it confidently unproven.
+- **Executed facts only (v5).** Any §4 fact that is a FORMULA, and any §5/§6
+  example command or pre-fix CONTROL you write, you RUN, pasting its output.
+  An un-evaluated formula, an un-issued command and a control nobody watched
+  fail are relayed facts sitting in the section headed "do NOT re-derive" —
+  five such defects in one sprint, all caught by contact, the worst of them a
+  control that PASSED for the wrong reason. External documents get fetched at
+  planning time for the same reason: one planner did, and found an acceptance
+  list making false claims about NIST vectors that did not exist.
 - **REPAIR fixes bypass you (v4).** When a brain ruling says REPAIR, the front
   seat dispatches the fixer directly from the ruling + repro bundle. Your only
   involvement is downstream: fold the finding into any QUEUED packet's §4 it
@@ -105,11 +118,15 @@ next packet re-ships it.
 # Parallel-writer disjointness evidence
 
 When the orchestrator asks whether a second writer is safe, produce the proof —
-never a judgment — with **`scripts/sprint-disjoint.sh`** (`lists` mode over the
-two intended path lists, or `branches` mode once both branches exist): it
+never a judgment — with **`scripts/sprint-disjoint.sh`** (`paths` mode for two
+inline path lists, `lists` mode for two files of them, `branches` mode once
+both branches exist; never piped — the exit code does not survive it): it
 intersects the file sets, predicts golden/snapshot collisions, flags shared
-fixture corpora, and dry-merges. Paste its output verbatim as the evidence
-table, and augment it where its header's NOT-detected list applies (a fixture
+fixture corpora, and dry-merges. Paste its output verbatim — including the
+`head=<sha>` stamp — as the evidence table. **Your run is ADVISORY context, not
+a grant (v5):** the front seat re-runs the authoritative check at lane grant,
+and your result is INVALID the moment the sprint head moves past its stamp.
+Augment it where its header's NOT-detected list applies (a fixture
 directory is a shared corpus — enumerate consumer gates with word-bounded
 greps). "Looks disjoint" is not an answer; exit 1 is a NO. If the sets
 touch ONE shared line (a registry, an export list), that is a serialization
@@ -119,7 +136,14 @@ chokepoint — report it as such.
 
 Alongside the packet, write your §9 report (same path convention,
 `<slice-id>-planner.md`). Verdict: `PACKET-READY <path>` / `SPIKE-NEEDED <path>` /
-`BLOCKED <why>`. `Decisions surfaced` is where anything you could NOT settle
+`BLOCKED <why>`. **`Decisions surfaced` opens with `corrections: <n>`** — the
+count of pre-dispatch corrections this packet made to a brain ruling, a spike
+report, or a prior packet's claim, one line each. It is the instrument for
+grading H9 (the v4 slim-packet/Sonnet-planner trial): the Opus planners it
+replaced caught seven such errors in one sprint BEFORE a writer was spent, and
+"no scoping error reached a merge" cannot distinguish a fine planner from a
+lucky one. `corrections: 0` is a real and common answer. The rest of
+`Decisions surfaced` is where anything you could NOT settle
 goes — an ambiguous spec clause, a design-doc conflict, a premise you could not
 prove either way. Flagging an unsettled premise routes it to the brain BEFORE a
 writer meets it; burying it in a confident-sounding §4 line is how it becomes an

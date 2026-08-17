@@ -48,18 +48,32 @@ VAL. What is forbidden is the silent version.
 
 From the sprint record dir and PR/CI history, derive at least:
 
-- **Refusal ledger:** every refusal/bounce — was it right? (Adjudicated how?)
-  A sprint with zero refusals is a finding about brief-for-refusal, not a
-  success.
-- **Escalation routing:** the heartbeat's `self-audit:` lines in DECISIONS.md
-  (one per tick, `clean` or the improvisation) plus the consult log — did the
-  mechanical seat improvise or adjudicate inline? Did any ruling happen
-  off-ledger? (This is the standing trial protocol for the Sonnet-seat design;
-  mis-routing here is a seat-model question for Val.)
+- **Refusal ledger:** FINDINGS.md's Refusals table — every refusal, decline,
+  and falsified premise, with its verdict. A sprint with zero refusals is a
+  finding about brief-for-refusal, not a success. If a count you want is not
+  derivable from that table, say so in `Not covered` rather than reconstructing
+  it from prose.
+- **Escalation routing:** the `self-audit:` lines in DECISIONS.md (per EVENT,
+  plus `clean` at quiet ticks) and the `declined-out-of-band:` lines, plus the
+  consult log — did the mechanical seat improvise or adjudicate inline? Did any
+  ruling happen off-ledger? (This is the standing trial protocol for the
+  Sonnet-seat design; mis-routing here is a seat-model question for Val. Grade
+  the two apart: "no loop step existed" is a loop-coverage finding, "the seat
+  felt qualified" is a model finding.)
+- **Ledger integrity:** ruling numbers contiguous, `rulings/` matching
+  DECISIONS.md, every OBLIGATIONS.md row terminal, every `VAL-<stage>-NNN`
+  block's `destination:` written and `executed:` read back. A cited-but-absent
+  ruling is the most serious workflow defect on record and it has occurred in
+  both audited sprints.
 - **Packet accuracy:** per slice, deviations-from-packet and premise failures —
   which §4 facts fell, and would a spike have caught them?
 - **Catch attribution:** every defect found this sprint × which mechanism
-  caught it (refusal / breaker / conformance / heavy round / CI / nobody).
+  caught it (refusal / breaker / conformance / domain review / heavy round /
+  CI / nobody). **CI attribution needs the terminal `merge_group` run** — if
+  you were dispatched before the sprint PR read MERGED, the only CI evidence
+  is the narrowed `pull_request` arm the workflow itself calls non-
+  authoritative, so put CI attribution in `Not covered` rather than scoring it
+  zero.
   A mechanism that caught nothing two sprints running is a candidate for
   slimming; one that caught an S0 is untouchable (principle 6).
 - **Bounce/rework counts:** report bounces, re-cut leaves, contaminated
@@ -91,7 +105,14 @@ draft: path to a ready-to-apply diff/file, when the change is textual.
 Rules: every proposal cites at least one principle SERVED; generalizations
 state their scope ("true of this sprint's four families" is not "true");
 propose deletions as readily as additions — process weight is a cost the
-principles do not protect. **You change nothing yourself**: drafts sit beside
+principles do not protect. **A deletion quota, not a suggestion: every round
+names at least TWO rules to retire, to the same evidence standard as an
+addition** (what it was added for, what it has caught since, what it costs per
+sprint). The v5 round adopted 23 additions and zero deletions while the
+front-seat-resident skill grew 62%, which is how a workflow accumulates weight
+one defensible rule at a time. A rule that fired zero times across two sprints,
+or that is subsumed by a cheaper check added later, is a retirement candidate —
+name it even if you expect Val to keep it. **You change nothing yourself**: drafts sit beside
 RETRO.md, the front seat relays the report, and Val approves workflow
 changes. If the evidence contradicts a principle itself, that is the most
 valuable finding a retro can produce — escalate it to VAL as a named question;
