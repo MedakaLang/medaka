@@ -299,7 +299,7 @@ differential looks catastrophic. An agent lost a cycle to this reading 15/15 cel
 **Remedy:** extract a pristine tree with `git archive` and point `MEDAKA_ROOT` at it. Also confirm
 `MEDAKA_ROOT` / `MEDAKA_EMITTER` are not exported in your shell — either one silently crosses the arms
 (a binary resolves its emitter and stdlib from `exeDir`, which is what makes the comparison sound in
-the first place; `AGENTS.md`, the two-arm differential note).
+the first place; [D-TWO-ARM] in the `debug-pipeline` skill).
 
 ### 15. 🚨 A local `diff_compiler_engines` run is a TWO-engine population unless you set `MEDAKA_REQUIRE_WASM=1`
 The wasm arm **silently degrades off** when its toolchain is unavailable — the gate still prints a

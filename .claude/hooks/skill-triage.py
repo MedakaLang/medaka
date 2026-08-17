@@ -53,7 +53,60 @@ sprint = re.search(r"\bsprint\b", prompt, re.IGNORECASE) or (
                   prompt, re.IGNORECASE)
 )
 
-if not roadmap and not stdlib and not mcp and not sprint:
+# Gate-shaped task: a gate/shard went red, or a fixture/golden/gate is being
+# authored. AGENTS.md keeps only the loop and the silent-failure traps; the
+# per-gate table and the authoring procedure moved into the `gates` skill
+# (2026-08-17), so nothing routes there unless this fires.
+#
+# NOTE ON SHAPE (a review found the first cut missed every headline phrasing):
+# match a gate NOUN and a FAILURE word independently, in any order, rather than
+# an ordered proximity pair. And no leading \b on the gate nouns -- `_` is a word
+# character, so `\bfixpoint` can never match inside `selfcompile_fixpoint`, and
+# `\bgate\b` can never match `gates`.
+gate_noun = re.search(r"gates?\b|shards?\b|preflight|fixpoint|run_gates|diff_compiler_"
+                      r"|must-?fail|soundness|selfcompile|\boracles?\b|merge queue|\bCI\b"
+                      r"|fixtures?\b|goldens?\b",
+                      prompt, re.IGNORECASE)
+fail_word = re.search(r"\bred\b|fail\w*|brok\w*|broke|\bnot passing\b|\bregress\w*", prompt, re.IGNORECASE)
+gate_author = re.search(r"\b(add|write|author|capture|bless|re-?cut|pin)\w*\b.{0,40}"
+                        r"\b(gates?|fixtures?|goldens?|snapshots?|regression tests?|must-?fail)\b",
+                        prompt, re.IGNORECASE) or re.search(r"diff_compiler_\w*", prompt)
+gates = (gate_noun and fail_word) or gate_author
+
+# Debug-shaped task: a .mdk program misbehaves, or a two-arm differential is
+# being set up. The probe/flag catalogue and the two-arm recipe moved out of
+# AGENTS.md into `debug-pipeline` (2026-08-17).
+#
+# Every verb/noun takes \w* -- "failing"/"parser"/"compiles" are the phrasings
+# people actually type. The dispatch arm is deliberately narrow: bare "dispatch"
+# is sprint vocabulary ("dispatch an agent"), so it must co-occur with an
+# impl/instance/method/dict word.
+debug = (re.search(r"\b(why does\w*|why is|why won'?t|why do\w*|debug\w*|diagnos\w+|repro\w*)\b.{0,60}"
+                   r"\b(pars\w*|parser|compil\w*|typecheck\w*|type-check\w*|eval\w*|fail\w*"
+                   r"|error\w*|crash\w*|wrong|reject\w*)\b", prompt, re.IGNORECASE)
+         # ...but only about Medaka. "why does the README fail to render" is not
+         # a pipeline bug; require a Medaka noun somewhere in the prompt.
+         and re.search(r"\.mdk\b|\bmedaka\b|\bcompiler\b|\bstdlib\b|\btypecheck\w*|\bparser\b"
+                       r"|\beval\b|\bimpl\w*|\bfixture\b|\bmodule\b|\bprogram\b|\bdoctest\w*",
+                       prompt, re.IGNORECASE)
+         ) or re.search(
+                  r"\btwo-?arm\b|\bwrong (value|answer|output|result)\b|--keep-ir\b"
+                  # bare "Core IR" also matches "write a doc explaining Core IR";
+                  # anchor it to the things you do WITH the dump.
+                  r"|\bCore IR\b[^.]{0,40}\b(dump|dict|route|lower\w*|probe|emit\w*)\b"
+                  r"|\b(dump|inspect|look at|read)\b[^.]{0,20}\bCore IR\b"
+                  r"|\bdifferential\b|\b(old|previous|base|origin/main)\b[^.]{0,30}\bbinar\w+"
+                  r"|\bbinar\w+[^.]{0,30}\b(vs|versus|against)\b"
+                  r"|\bwrong\b[^.]{0,20}\bimpls?\b"
+                  # "implementer" is sprint vocabulary -- match `impl`/`impls`/
+                  # `implementation` exactly, never a bare `impl\w*`.
+                  r"|\bdispatch\w*\b[^.]{0,40}\b(impls?|implementation|instance|method|dict)\b"
+                  # engine divergence: eval vs native vs wasm disagreeing
+                  r"|\b(eval|interpreter|native|wasm|build)\b[^.]{0,40}\b(but|whereas|yet)\b[^.]{0,40}"
+                  r"\b(eval|interpreter|native|wasm|build)\b",
+                  prompt, re.IGNORECASE)
+
+if not roadmap and not stdlib and not mcp and not sprint and not gates and not debug:
     sys.exit(0)
 
 if roadmap:
@@ -130,6 +183,32 @@ if sprint:
         "adjustment sweep, or orthogonal placed PLANNED-vs-GAP; every row "
         "terminal before exit).\n"
         "- Parallel-writer disjointness evidence -> scripts/sprint-disjoint.sh."
+    )
+
+if gates:
+    print(
+        "Skill triage (gate-shaped task detected): AGENTS.md keeps only the "
+        "preflight loop and the traps whose failure is SILENT -- the per-gate "
+        "table and the authoring procedure live in the `gates` skill.\n"
+        "- A gate/shard went red -> run `gh issue list --label known-red` "
+        "FIRST (it is usually not your break), then load gates for what that "
+        "gate proves.\n"
+        "- Adding a fixture, capturing/blessing a golden, or writing a new "
+        "gate -> load gates (shared-corpus consumers, CI shard registration, "
+        "and the dash-not-bash shell half).\n"
+        "Triage reminder, not a directive."
+    )
+
+if debug:
+    print(
+        "Skill triage (debug-shaped task detected): load debug-pipeline "
+        "before reasoning from source -- it carries the stage-isolation "
+        "method, the entry probes, the [D-*] flag catalogue (--json codes, "
+        "--types, the TYPED Core IR dump, --keep-ir), and the two-arm "
+        "differential recipe. AGENTS.md keeps only the three traps that turn "
+        "a wrong answer into a right-looking one ([D-JSON-HOLE], "
+        "[D-BUILD-PIPE], [D-TWO-ARM-STDLIB]).\n"
+        "Triage reminder, not a directive."
     )
 
 sys.exit(0)

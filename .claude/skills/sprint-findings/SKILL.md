@@ -127,6 +127,15 @@ applies: a slice that made an existing defect QUIETER (loud crash → wrong
 answer at exit 0) is a severity increase and repairs, even though "the crash
 is gone."
 
+⚠️ **Reviewing the fix that comes back is TWO questions, not one.** *Does the fix
+fit the BUG* (does it address the actual mechanism the reproducer established?)
+and *does the fix conform to the TARGET* (does it move toward the architecture
+the arc is building?). A locally correct, green, well-reviewed fix can still
+relocate fragility rather than remove it — the bar is that the END STATE is more
+coherent, not that the diff is right. When the answers diverge, that is an
+architecture-divergence escalation to Val (`sprint-orchestrator` § Escalation is
+a RULE TABLE), not a REPAIR you wave through on green.
+
 ### Q2 — for ORTHOGONAL findings: does it have an architectural home?
 
 - **PLANNED** — the bug's class is already owned by an arc/spec (a
