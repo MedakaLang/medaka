@@ -1,0 +1,153 @@
+# pds/test/VECTOR-PROVENANCE.txt — provenance for every vector file under pds/test/
+#
+# WHY THIS EXISTS  (docs/design/ATPROTO-PDS-DESIGN.md §5, G5)
+#   G5: "No golden is ever captured from our own implementation in Phases 0-1.
+#   Capturing a golden records what the engine did, not what is correct; on a
+#   protocol where correctness is defined by other people's implementations, a
+#   self-captured golden is not weak evidence but *anti*-evidence, since it
+#   converts a bug into the defended expected output."
+#   The design also states G5 has NO mechanical enforcement, and names this file
+#   as the remedy: "require every vector file to carry a committed provenance URL
+#   and digest, and add a gate that fails on any vector file lacking one … a
+#   ledger that self-drains, in the style of test/EXTERN-DOMAIN-LEDGER.txt".
+#   The gate is pds/test/vector_provenance.sh.
+#
+# WHAT THIS LEDGER PROVES, AND WHAT IT DOES NOT
+#
+#   PROVES — mechanically, offline, on every CI run:
+#     - every vector file under pds/test/ has exactly one [vector] stanza here;
+#     - that file's CURRENT bytes still hash to the local-sha256 in its stanza,
+#       i.e. nobody edited a vector after its row was written;
+#     - every reference-impl row names an [impl] stanza that pins one
+#       repo + version + commit, and no two [impl] stanzas pin the same id to
+#       different commits — ONE answer key for the sprint, not one per slice;
+#     - every key required for the row's kind is present and well-formed.
+#
+#   DOES NOT PROVE:
+#     - that source-url was ever fetched, or that the bytes at that URL hash to
+#       source-sha256. THIS GATE HAS NO NETWORK. source-sha256 is an audit anchor
+#       for a human reviewer, not a checked column.
+#     - that the recorded values actually came from the cited source. A row with a
+#       correct local-sha256 and a fabricated source-url PASSES. This ledger makes
+#       a self-captured golden into a written, attributed, falsifiable claim that a
+#       reviewer can check by hand; it does not detect one.
+#     - anything about expected values that are not in a vector file — inline
+#       literals in a pds/**/*_test.mdk, or a .mdk data module, are invisible here
+#       BY CONSTRUCTION. Put expected values in a vector file under pds/test/.
+#
+# WHAT COUNTS AS A VECTOR FILE (the gate's enumeration — no allowlist, no names):
+#   every regular file under pds/test/ at ANY depth, EXCEPT *.sh, *.mdk, and this
+#   file. A .md under pds/test/ therefore needs a row too: put prose in
+#   pds/README.md instead.
+#
+# FORMAT
+#   Stanzas. A stanza opens with [impl] or [vector] alone on a line and runs to
+#   the next stanza header or EOF. Inside: "key: value", one per line; the value
+#   is the rest of the line, surrounding whitespace stripped; values are
+#   single-line (no continuations). Blank lines, and lines whose first non-blank
+#   character is '#', are ignored anywhere. An UNKNOWN key is an ERROR, not a
+#   comment — that is the typo guard. A stanza header other than [impl] or
+#   [vector] is ALSO an error, naming the line — same typo guard, opposite
+#   failure direction: a mistyped header (e.g. [vecter]) must not be silently
+#   skipped, taking its vector file's row with it.
+#
+#   [impl] — one per reference implementation used anywhere in this sprint.
+#     id         short handle; [vector] rows reference it            REQUIRED
+#     repo       URL of the source repository                        REQUIRED
+#     version    release tag or version string                       REQUIRED
+#     commit     40 hex — the exact commit corpora were generated at REQUIRED
+#     retrieved  YYYY-MM-DD                                          REQUIRED
+#     notes      free text                                           optional
+#
+#   [vector] — exactly one per vector file.
+#     file           repo-relative path of the vector file           REQUIRED
+#     local-sha256   64 hex of THAT FILE's bytes; gate recomputes it REQUIRED
+#     kind           published-artifact | reference-impl             REQUIRED
+#     source-url     where a reviewer goes to check this             REQUIRED
+#     extraction     how the values got from the source into the file REQUIRED
+#     retrieved      YYYY-MM-DD                                      REQUIRED
+#     consumer       slice-id + issue with its handle                REQUIRED
+#     source         artifact title/identifier
+#                                      REQUIRED iff kind=published-artifact
+#     source-sha256  64 hex of the fetched artifact's bytes, or the literal
+#                    token UNAVAILABLE
+#                                      REQUIRED iff kind=published-artifact
+#     source-note    why the artifact is not byte-digestible
+#                                      REQUIRED iff source-sha256=UNAVAILABLE
+#     impl           an [impl] stanza's id
+#                                      REQUIRED iff kind=reference-impl
+#     notes          free text                                       optional
+#
+#   THE TWO DIGEST COLUMNS HAVE DIFFERENT JOBS. local-sha256 is GATE-CHECKED and
+#   catches drift after the fact was recorded. source-sha256 is AUDIT-ONLY and is
+#   what lets a human re-fetch the artifact and confirm the bytes. Neither can
+#   detect a fabricated source-url; see DOES NOT PROVE, above.
+#
+# ── WORKED EXAMPLE — kind: published-artifact ────────────────────────────────
+#   (EXAMPLE ONLY. The digests below are all-zeros and are not real values.)
+#
+#   [vector]
+#   file:          pds/test/vectors/sha256_fips180_4.txt
+#   local-sha256:  0000000000000000000000000000000000000000000000000000000000000000
+#   kind:          published-artifact
+#   source:        FIPS PUB 180-4, Secure Hash Standard, Appendix B.1-B.3 worked examples
+#   source-url:    https://nvlpubs.nist.gov/nistpubs/FIPS/NIST.FIPS.180-4.pdf
+#   source-sha256: 0000000000000000000000000000000000000000000000000000000000000000
+#   extraction:    hand-transcribed from Appendix B.1/B.2/B.3; each digest read back twice against the PDF
+#   retrieved:     2026-08-17
+#   consumer:      S-sha256 (#1698 sha256 FIPS 180-4)
+#
+# ── WORKED EXAMPLE — kind: reference-impl ────────────────────────────────────
+#   (EXAMPLE ONLY. The commit and digest below are all-zeros and are not real.)
+#
+#   [impl]
+#   id:            libsecp256k1
+#   repo:          https://github.com/bitcoin-core/secp256k1
+#   version:       v0.0.0
+#   commit:        0000000000000000000000000000000000000000
+#   retrieved:     2026-08-17
+#   notes:         the 10x2^26 field layout this project mirrors (design P10, #1699)
+#
+#   [vector]
+#   file:          pds/test/vectors/field_mul_corpus.txt
+#   local-sha256:  0000000000000000000000000000000000000000000000000000000000000000
+#   kind:          reference-impl
+#   impl:          libsecp256k1
+#   source-url:    https://github.com/bitcoin-core/secp256k1/tree/v0.0.0/src/field_10x26_impl.h
+#   extraction:    pds/tools/gen_field_corpus.sh — builds libsecp256k1 at the pinned commit, drives secp256k1_fe_mul over a fixed input list, prints hex in/out pairs; re-running must reproduce this file byte-for-byte
+#   retrieved:     2026-08-17
+#   consumer:      S-field (#1699 field 10x2^26 limbs)
+#
+# ── POLICY: WHICH ANSWER KEY A SLICE MAY USE ─────────────────────────────────
+#   published-artifact — the answer key is a DOCUMENT. [RUN-PDS0-005 E2] The
+#     artifact must fall WITHIN THE CLASS its consumer issue already names —
+#     FIPS PUB 180-4 or a NIST CAVS corpus for S-sha256 (#1698); published
+#     base58btc vectors or the published multicodec table for S-encodings
+#     (#1701). WHICH specific document within that class is a within-class
+#     choice and stays with the leaf; an artifact OUTSIDE the named class is a
+#     refusal to the brain, not an in-slice decision. The row still records
+#     source, source-url, source-sha256 (or UNAVAILABLE + source-note), and
+#     extraction.
+#   reference-impl — the answer key is a PROGRAM, and the choice is a judgment
+#     that is settled ONCE for the sprint, not per slice:
+#       * for pds/lib/field.mdk and pds/lib/scalar.mdk the reference
+#         implementation is libsecp256k1 (bitcoin-core/secp256k1). This is a
+#         RECORDING of design decision P10 — the 10x2^26 layout was chosen FOR
+#         cross-checkability against that implementation — not a new choice. A
+#         slice may not substitute another implementation; if it believes it must,
+#         that is a refusal to the brain, not an in-slice decision.
+#       * the VERSION is pinned by whichever slice extracts FIRST: it writes the
+#         [impl] stanza (version + 40-hex commit). Every later slice REUSES that
+#         id, and the gate REDS on a second [impl] stanza pinning the same id to a
+#         different commit. That is what makes the pin single-valued without this
+#         file having to guess a version in advance.
+#       * extraction must name a COMMITTED procedure (a script path, or a written
+#         procedure in pds/README.md) that regenerates the file byte-for-byte.
+#         "I ran something locally" is not an extraction procedure.
+#
+# ── LIVE ROWS ────────────────────────────────────────────────────────────────
+# None yet — this ledger lands BEFORE the first vector file exists, so that
+# nothing is ever retro-filled. S-sha256 (#1698), S-encodings (#1701), S-field
+# (#1699) and S-scalar (#1700) each add their stanzas in the SAME COMMIT as their
+# corpus. Until then the gate's own self-test is the only fail-capable evidence
+# in a run; it runs on every invocation for exactly that reason.
