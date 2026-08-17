@@ -69,6 +69,28 @@ escalation rule> paths=<file paths to primary material>` — pointers, never
 paraphrases; the brain reads from disk and bounces path-less consults. Label
 relayed ones `[rear]` when you forward them.
 
+## Daughter rotation — reset-respawn at phase boundaries (v4, H3)
+
+Persistent daughters pay a measured rewrite tax: subagent prompt-cache TTL is
+a fixed 5 minutes (not configurable), consult/poke gaps exceed it, so nearly
+every wake rewrites the daughter's whole grown context at write prices
+(~$270/sprint-pair at the 2026-08-17 baseline; the brain ran an 80% hit rate).
+The LEDGERS, not the contexts, are the state — so ROTATE each daughter:
+
+- **When:** at every phase boundary (at minimum: just before you send
+  `phase: heavy-round`, and again after the terminal enqueue if the queue wait
+  is long), plus opportunistically after ~5 landings if no boundary occurred.
+  Never mid-consult and never with a handoff unacknowledged.
+- **How:** finish/collect anything in flight; release the old daughter; spawn
+  the successor with the ORIGINAL spawn message plus: *"You are a successor
+  seat. Before acting, read DECISIONS.md end-to-end"* (rear successor: *"also
+  `reports/rear-seat-ledger.md`, FINDINGS.md, EXPECTED-RED.md"*) *"— prior
+  rulings and rows are standing, not up for re-derivation."* Append a
+  `rotated: <seat> at <boundary>` log line to DECISIONS.md (mechanical, no
+  consult needed).
+- **Invariant kept:** never TWO live at once — the one-brain/one-ledger rule
+  guards against FORKED judgment, which serial succession does not create.
+
 ## One sprint branch, one running PR
 
 The sprint lands as a SINGLE PR from branch `sprint/<stage>` — no per-slice
@@ -78,9 +100,13 @@ PRs, no stacks. Mechanics you own:
   LANDING WORKTREE (created at sprint start, below; a branch cannot be checked
   out in two worktrees, so ad-hoc merges fail). The merge precedes the next
   worktree cut — the next writer starts from the merged head.
-- **Fixers are writers**: a brain REPAIR ruling → planner cuts the fix packet →
-  you grant a lane (disjointness below) → you dispatch the fixer on branch
-  `fix/<finding-slug>` cut from the current sprint head → it returns to YOU →
+- **Fixers are writers, and fixes carry NO packet (v4, H9)**: a brain REPAIR
+  ruling (its Actions must name scope, the fail-capable acceptance probe, and
+  expected golden moves — missing any, bounce it back to the brain) → you
+  grant a lane (disjointness below) → you dispatch the fixer on branch
+  `fix/<finding-slug>` cut from the current sprint head, brief = ruling path +
+  repro-bundle path + branch/worktree/two SHAs/report path (the sprint-packet
+  Fix form governs; the planner is not in the loop) → it returns to YOU →
   `slice-landed`'s FIX-LANDED light path merges it. Fix-forward parallelism is
   bounded by disjointness, not caution; fixes never block the next-slice
   dispatch.
@@ -193,10 +219,10 @@ definition — override per-dispatch only on a brain ruling.
 |---|---|---|---|
 | `sprint-brain` | Opus 5, persistent | Front (spawn) | All adjudication; authors DECISIONS.md rulings (front seat scribes) |
 | `sprint-rear` | Sonnet 5, persistent | Front (spawn) | Post-merge pipeline, CI intake, reviews, findings, filing |
-| `sprint-implementer` | Sonnet 5 (Opus 5 per packet §1) | Front | Slices, spikes, families, AND fixes (a fix packet is a small slice) |
+| `sprint-implementer` | Sonnet 5 (Opus 5 per packet §1) | Front | Slices, spikes, families, AND fixes (a fix executes from a REPAIR ruling + repro bundle — no packet) |
 | `slice-breaker` | Opus 5 | Rear | Adversarial breaks on the landed slice, in a front-created worktree |
 | `spec-conformance-reviewer` | Sonnet 5 | Rear | Read-only: slice vs specs, rulings, DEBT rows |
-| `sprint-planner` | Opus 5 | Front | Next packet — slice, family, review, or fix — to contract |
+| `sprint-planner` | Sonnet 5 | Front | Next contract-depth packet (~250-line ceiling) — slice, family, or review; fixes bypass it |
 | `bug-reproducer` | Sonnet 5 | Front (on rear's consult-driven request; front creates its worktree) | Mechanical half of a finding; drafts, never files |
 | `sprint-verifier` | Haiku 4.5 | Either seat | Mechanical run-and-report: readbacks, ledger sweeps, the golden re-cut checklist |
 | `sprint-scout` | Haiku 4.5 | Front | Bounded read-only enumeration against a pinned commit |
@@ -225,6 +251,14 @@ or routine rear-seat replies. A quiet chat during smooth running is correct.
    `/var/tmp/medaka-sprints/<stage>/CONTRACT.md` (from `sprint-plan`, run
    before this session on Opus 5+). Missing, or lacking the slice table /
    already-settled / expected-red sections → stop and say so.
+   **Launch note for Val (v4, H10):** start the front-seat session with
+   `CLAUDE_CODE_AUTO_COMPACT_WINDOW=300k claude` so this session auto-compacts
+   at ~300k instead of the model default (front-seat contexts measured ~487k
+   avg/request — the largest read pool in the system). Safe by design: every
+   heartbeat tick derives state from the ledgers, never from memory. If the
+   session wasn't launched with it, say so at start — Val can `/autocompact
+   300k` instead (note: that form saves to user settings, so it outlives the
+   sprint).
 1. **Pin the base:** confirm with Val that this checkout's HEAD is the
    intended base, then `BASE=$(git rev-parse HEAD)` — DECISIONS.md line 1.
    Never name a moving ref.
