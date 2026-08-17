@@ -220,3 +220,9 @@ cmp /tmp/x pds/test/vectors/field_reference_corpus.txt   # must be byte-identica
 MEDAKA_ROOT="$(git rev-parse --show-toplevel)" sh pds/test/field_vectors.sh
 MEDAKA_ROOT="$(git rev-parse --show-toplevel)" sh pds/test/inlang_test_oracle.sh
 ```
+
+## Oracle (S-oracle-standup, #1707)
+
+`pds/oracle/` runs the official Bluesky PDS service payload locally as the Phase 0/1
+cross-check oracle. The full procedure lives in `docs/ops/PDS-ORACLE.md` — this is a **local
+manual procedure, not a gate; no CI job provisions it**.
