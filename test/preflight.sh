@@ -877,7 +877,7 @@ done
 # corpus), and the same as a gate matching no CI shard. "This didn't run" must never be
 # indistinguishable from "this passed."
 gates=""
-# `set -f` (noglob) for this OUTER split only: $pats is an unquoted variable
+# `set -f` (noglob), NOT just for this outer split: $pats is an unquoted variable
 # expansion, so without it a pattern that happens to literally match a real
 # on-disk path (e.g. 'pds/test/*', which DOES match pds/test/*.sh files —
 # unlike 'sqlite/test/*oracle', which never matches a real filename because
@@ -912,7 +912,13 @@ for pat in $pats; do
     exit 1
   fi
 done
-set +f
+# NOTE: noglob STAYS ON from here to end of script. Every consumer of $pats
+# below — the LOCAL_SKIP filter (which REWRITES $pats), the re-resolve, and the
+# unquoted `--for $pats` / `run_gates.sh $pats` argument splits — needs word
+# splitting but must NEVER pathname-expand a pattern like 'pds/test/*' that
+# literally matches real files. `set -f` gives exactly that; `case` patterns are
+# unaffected, and it is not inherited by child processes, so build_oracles.sh
+# and run_gates.sh still glob normally on their own. RUN-PDS0-006.
 
 # ── PREFLIGHT_DRY=1: print the derived gate set and stop ──────────────────────
 # The change→gate derivation is the part most likely to silently under-run, and it was
@@ -1014,10 +1020,12 @@ if [ -n "$local_skipped" ]; then
   # still in $pats it matches the skipped gate again and it comes back, correctly.
   gates=""
   for pat in $pats; do
+    set +f          # the INNER loop needs real globbing (mirrors the resolver above)
     for g in "$ROOT"/test/$pat.sh "$ROOT"/$pat.sh; do
       [ -f "$g" ] || continue
       case " $gates " in *" $g "*) ;; *) gates="$gates $g" ;; esac
     done
+    set -f
   done
   [ -n "$pats" ] || {
     echo "preflight: every gate this diff derives is a local-only skip ($local_skipped) — nothing to run HERE."
