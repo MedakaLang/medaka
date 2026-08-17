@@ -373,10 +373,15 @@ runs disagreeing means the tree is moving, not the suite.
    closed with a derivation-bearing comment — check the PIN (now on main),
    not the narrative; brain approves each close; the REAR seat executes with
    readback.
-7. **Continuous-improvement pair:** dispatch `friction-triage` on
+7. **Continuous-improvement pair:** first generate the cost report —
+   `python3 scripts/sprint-cost-report.py --since <sprint start ISO> >
+   <record dir>/COSTS.md` (post-hoc transcript aggregation; no mid-sprint
+   logging exists or is needed). Then dispatch `friction-triage` on
    FRICTION.md; the rear seat files its accepted drafts; then dispatch
-   `sprint-retro` with the full record dir, both seats' self-audit logs, and
-   friction-triage's report. Relay RETRO.md to Val UNFILTERED.
+   `sprint-retro` with the full record dir (COSTS.md included), both seats'
+   self-audit logs, and friction-triage's report — its cost-per-role pass
+   grades `.claude/SPRINT-COST-HYPOTHESES.md` against COSTS.md. Relay
+   RETRO.md to Val UNFILTERED.
 8. **Export, release, then dispose — in that order.** Close-out summary +
    RETRO.md + every draft file → comments on the TRACKING ISSUE (your second
    licensed issue write; readback-verified), close it referencing the merged
