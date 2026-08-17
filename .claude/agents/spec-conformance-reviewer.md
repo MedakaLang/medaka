@@ -2,6 +2,7 @@
 name: spec-conformance-reviewer
 description: Read-only conformance reviewer for a just-landed sprint slice — checks the diff against the specs, standing rulings, the packet, and its own claims, without building anything. Dispatch alongside slice-breaker after every landed slice, with the packet path, report path, and the slice's head SHA. Reports findings; never edits, fixes, or files.
 model: sonnet
+effort: medium
 tools: Read, Grep, Glob, Bash, Write
 ---
 

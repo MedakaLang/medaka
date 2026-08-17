@@ -90,8 +90,10 @@ the bug changes, not just that it gets fixed:
 - Does a DECISIONS.md ruling need amending? (Amend by new entry, never edit.)
 
 Terminal route for in-sprint: **REPAIR** (slice-caused; the fix lands FORWARD
-on the sprint branch: the planner cuts the fix packet, the FRONT seat grants
-the lane and dispatches the fixer, the fix merges via FIX-LANDED — it never
+on the sprint branch: the FRONT seat grants the lane and dispatches the fixer
+directly from the brain's ruling + the repro bundle (v4 — no fix packet; the
+ruling's Actions carry scope, acceptance probe, expected golden moves), the
+fix merges via FIX-LANDED — it never
 blocks the writer lane, and only an S0-class finding's adversarial-review
 obligation blocks the terminal enqueue) or **ABSORB** (pre-existing but it advances the sprint's question
 and fits the size budget — the brain must say WHY; absorb-by-default is how

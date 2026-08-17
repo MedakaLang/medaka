@@ -200,7 +200,8 @@ waits on adjudication:
 Reviewers return to the REAR seat (it dispatched them); it runs intake and
 the `sprint-findings` lifecycle there. The only reviewer-driven actions at
 YOUR seat, each arriving as a rear-seat reply or a brain ruling: a REPAIR
-ruling → planner cuts the fix packet (you dispatch), lane grant (run
+ruling → you dispatch the fixer directly from the ruling + repro bundle (v4 —
+no fix packet; the sprint-packet Fix form defines the brief), lane grant (run
 `scripts/sprint-disjoint.sh` PAIRWISE against each live lane row — treat ONLY
 exit 0 as disjoint; exit 1 = collision; **exit 2 = usage error, fix the
 invocation, never a grant**; `lists` mode takes two FILES — write the file

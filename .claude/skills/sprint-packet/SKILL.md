@@ -15,6 +15,18 @@ discussed", no unstated context. Packets are files in
 this transformation to these N named sites," it is not a slice yet — it is design
 work, and it goes back to the planner or the brain.
 
+**Packets are contracts, not encyclopedias (v4, H9).** Target **≤ ~250 lines**;
+a packet past that is usually doing the implementer's discovery for it.
+Measured (2026-08-17 baseline): packets ran 53–89KB, packet prose is re-read at
+cache-read prices by EVERY consumer turn (implementer ~150 requests, breaker,
+conformance — $10–20/slice downstream), and site-level detail is what rots
+fastest — refusals overturned packet claims 5 of 6 times. The packet fixes the
+**boundary**: mission, site list, one-question check, classification,
+acceptance, refusal license. Per-site transformation detail is the
+implementer's discovery, protected by §7 — an implementer who finds the
+boundary wrong refuses; one who finds a site's mechanics differ from its own
+expectation just does the work.
+
 **Every section below is mandatory.** `NONE` (with one line of why) is a valid
 section body; an absent section is not. The orchestrator bounces an incomplete
 packet back to the planner exactly as it bounces an incomplete report — nobody
@@ -47,6 +59,19 @@ instead of partial motion. Three slice forms result:
    leaf-by-leaf — its context accumulates, so mid-family discoveries carry
    forward instead of dying between dispatches. Every leaf ends at a
    compile-coherent, committed boundary.
+
+4. **Fix — NO packet (v4, H9).** A fix executes from the brain's REPAIR ruling
+   plus the finding's repro bundle; the planner is not in the loop (measured:
+   fix packets were the largest documents of two sprints, re-deriving what the
+   ruling and bundle already contained). The front seat's dispatch brief IS the
+   contract, carrying: the ruling path — whose Actions section must name the
+   fix's scope, the fail-capable acceptance probe(s), and expected
+   golden/snapshot moves (a ruling missing these bounces back to the brain
+   before dispatch) — the repro-bundle path, branch `fix/<finding-slug>`,
+   absolute worktree path, the two SHAs, and the report path. §6's minimal
+   set, §7's refusal license, and §8/§9 bind verbatim; the fixer refuses
+   against the RULING exactly as an implementer refuses against a packet.
+   Verdict stays `FIX-LANDED`.
 
 **Form selection is mechanical, off the spike's stability verdict:** clean stable
 DAG → family on Sonnet 5. Unstable DAG (leaves kept coupling during discovery) →
@@ -117,9 +142,9 @@ every word whose deletion changes anything.
   <pinned>..HEAD -- <every §5-named file>` is EMPTY. Non-empty → the region
   changed under the packet → STOP and report per the abort condition; empty →
   proceed on the newer head.
-- **Branch name** and **absolute worktree path** (fix packets use branch
-  `fix/<finding-slug>`, cut by the front seat from the sprint head at lane
-  grant). State explicitly: "Ignore any CLAUDE.md-header path — your tree is
+- **Branch name** and **absolute worktree path** (fixes carry no packet — see
+  the Fix form; their brief names branch `fix/<finding-slug>`, cut by the
+  front seat from the sprint head at lane grant). State explicitly: "Ignore any CLAUDE.md-header path — your tree is
   the path above; run everything with absolute paths."
 - **Form:** `standard` | `spike` | `family` (see Slice forms).
 - **Classification:** `parity` (behavior provably unchanged — diffs/gates are the
@@ -155,6 +180,16 @@ command or derivation that proved it** (a bare assertion is not settled, it is
 relayed). Implementers name this section as the thing that keeps a slice short.
 Rules for the planner writing it:
 
+- **Curate, don't re-derive (v4, H9).** §4 collects facts that already exist
+  with proofs — brain rulings, spike reports, prior slices' reports (their
+  "Deviations from packet" sections especially), scout inventories — cited
+  with the producing
+  command or path. Fresh planner derivation is bounded to the §5 site list and
+  disjointness evidence; a fact that needs deep new recon to prove is not
+  "already settled", it is the implementer's discovery (or grounds for a
+  spike). An empty-ish §4 on a fresh area is honest; a fat §4 of fresh
+  derivation is the planner doing the slice.
+
 - **Grep-prove every symbol and path** against `.mdk`/`.c`/`.sh` source at the
   exact cited line — docs under `compiler/` make fabricated symbols appear to
   resolve.
@@ -167,8 +202,10 @@ Rules for the planner writing it:
 ## §5 The transformation
 
 - **Named sites:** file + symbol (line numbers rot; symbols survive), for every
-  site the transform touches.
-- **The transform itself**, stated once, precisely.
+  site the transform touches — as a LIST, not per-site prose.
+- **The transform itself**, stated once, precisely, at boundary depth — what
+  must be true of the sites afterwards, not per-site edit scripts (v4, H9: the
+  per-site mechanics are the implementer's discovery).
 - **Callers and mirrors:** parallel structures that must move in lockstep (e.g.
   `eval/eval.mdk` vs `ir/core_ir_eval.mdk` module drivers) and every `_ =>`
   wildcard arm that could silently swallow a new constructor — audit the arm SET.
@@ -303,7 +340,7 @@ BLOCKED — a family leaf writes `LANDED leaf <leaf-id> (<k>/<n>) @<sha>` (the
 leaf's commit SHA — the front seat merges by it) and the last one `LANDED
 family-final @<sha>`; a refused leaf writes `REFUSED leaf <leaf-id>
 (<k>/<n>)` (landed leaves stay merged; the family pauses); a fixer executing
-a fix packet writes `FIX-LANDED`; a spike writes `SPIKE-DONE (stability:
+a fixer writes `FIX-LANDED`; a spike writes `SPIKE-DONE (stability:
 STABLE | UNSTABLE)`. Reviewers: FINDINGS | CLEAR. Other roles use the verdict
 set their own definition fixes. The front seat branches on this line
 mechanically, so the vocabulary is closed per role — invent no values.
