@@ -1,0 +1,253 @@
+{- | Pure-Medaka SHA-256 (FIPS PUB 180-4 §6.2), byte-oriented.
+
+   Public surface: `sha256 : Array Int -> Array Int` — bytes 0..255 in, 32
+   bytes out. Everything else in this module is private. No
+   incremental/streaming form (#1698 "Scope": nothing calls one yet, so none
+   is built here).
+
+   ── Arithmetic contract (checked here for every reviewer) ──────────────
+   Every word is an `Int` in `[0, 2^32)`. `mask32 x = bitAnd x 4294967295`.
+   Every `+`, every `shiftLeft`, and every `bitNot` result is immediately
+   followed by `mask32`. `shiftRight` needs no mask: it is LOGICAL/unsigned
+   (`stdlib/runtime.mdk`) and its input is already masked. A sum of up to
+   five 32-bit values is `< 2^35`, well inside the 63-bit fixnum
+   (`stdlib/bits64.mdk`), so no intermediate ever overflows — the mask
+   enforces the *modulus* (wraparound mod 2^32), not fixnum safety.
+
+   ── Byte order ───────────────────────────────────────────────────────
+   Message words are big-endian (FIPS 180-4 §3.1). The digest is emitted
+   most-significant byte first, in H0..H7 order: 32 bytes total.
+
+   ── Where the answer key lives ──────────────────────────────────────
+   Expected digests for this module live under `pds/test/vectors/`, with
+   provenance rows in `pds/test/VECTOR-PROVENANCE.txt` — never as inline
+   literals in this file (G5, `docs/design/ATPROTO-PDS-DESIGN.md` §5).
+
+   ── Shape, not perf ──────────────────────────────────────────────────
+   This module never materializes a padded copy of the whole message: full
+   64-byte blocks are read directly from the input `Array` by offset, and
+   only the final one-or-two blocks (<=128 bytes) are synthesized to hold
+   the 0x80 marker, zero padding, and the 64-bit big-endian bit length. -}
+
+import array.{get, set, make, blit}
+
+-- ── Constants ────────────────────────────────────────────────────────
+
+-- FIPS 180-4 §5.3.3 initial hash value H(0).
+h0Init : (Int, Int, Int, Int, Int, Int, Int, Int)
+h0Init = (
+  0x6a09e667,
+  0xbb67ae85,
+  0x3c6ef372,
+  0xa54ff53a,
+  0x510e527f,
+  0x9b05688c,
+  0x1f83d9ab,
+  0x5be0cd19,
+)
+
+-- FIPS 180-4 §4.2.2 round constants K[0..63].
+k : Array Int
+k = [|
+  0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1,
+  0x923f82a4, 0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3,
+  0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786,
+  0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+  0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147,
+  0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13,
+  0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
+  0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+  0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a,
+  0x5b9cca4f, 0x682e6ff3, 0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208,
+  0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+|]
+
+-- ── Bit / word arithmetic ────────────────────────────────────────────
+
+mask32 : Int -> Int
+mask32 x = bitAnd x 4294967295
+
+rotr32 : Int -> Int -> Int
+rotr32 n x = mask32 (bitOr (shiftRight x n) (shiftLeft x (32 - n)))
+
+ch : Int -> Int -> Int -> Int
+ch x y z = bitXor (bitAnd x y) (bitAnd (mask32 (bitNot x)) z)
+
+maj : Int -> Int -> Int -> Int
+maj x y z = bitXor (bitXor (bitAnd x y) (bitAnd x z)) (bitAnd y z)
+
+bigSigma0 : Int -> Int
+bigSigma0 x = bitXor (bitXor (rotr32 2 x) (rotr32 13 x)) (rotr32 22 x)
+
+bigSigma1 : Int -> Int
+bigSigma1 x = bitXor (bitXor (rotr32 6 x) (rotr32 11 x)) (rotr32 25 x)
+
+smallSigma0 : Int -> Int
+smallSigma0 x = bitXor (bitXor (rotr32 7 x) (rotr32 18 x)) (shiftRight x 3)
+
+smallSigma1 : Int -> Int
+smallSigma1 x = bitXor (bitXor (rotr32 17 x) (rotr32 19 x)) (shiftRight x 10)
+
+-- In-bounds indexing via the safe `Array.get`, panicking on a miss. Every
+-- call site below only ever indexes within a known length, so the `None`
+-- arm is unreachable (same idiom as `stdlib/hex.mdk`'s `byteAt`).
+byteAt : Array Int -> Int -> Int
+byteAt arr i = match get i arr
+  Some b => b
+  None => panic "sha256: byteAt index out of bounds"
+
+wordAt : Array Int -> Int -> Int
+wordAt arr i = match get i arr
+  Some w => w
+  None => panic "sha256: wordAt index out of bounds"
+
+-- ── Message schedule ─────────────────────────────────────────────────
+
+-- Big-endian 32-bit word starting at byte index `i*4`, read through an
+-- arbitrary byte accessor (so the caller decides whether bytes come from
+-- the original message or a synthesized tail block).
+scheduleWord : (Int -> Int) -> Int -> Int
+scheduleWord byteOf i =
+  let b0 = byteOf (i * 4)
+  let b1 = byteOf (i * 4 + 1)
+  let b2 = byteOf (i * 4 + 2)
+  let b3 = byteOf (i * 4 + 3)
+  mask32 (bitOr
+    (bitOr (bitOr (shiftLeft b0 24) (shiftLeft b1 16)) (shiftLeft b2 8))
+    b3)
+
+fillFirst16 : Array Int -> (Int -> Int) -> Int -> Unit
+fillFirst16 w byteOf i =
+  if i >= 16 then ()
+  else
+    set i (scheduleWord byteOf i) w
+    fillFirst16 w byteOf (i + 1)
+
+extendSchedule : Array Int -> Int -> Unit
+extendSchedule w i =
+  if i >= 64 then ()
+  else
+    let s0 = smallSigma0 (wordAt w (i - 15))
+    let s1 = smallSigma1 (wordAt w (i - 2))
+    let v = mask32 (mask32 (mask32 (wordAt w (i - 16) + s0) + wordAt w (i - 7)) + s1)
+    set i v w
+    extendSchedule w (i + 1)
+
+-- Build the 64-word message schedule for one block from a byte accessor
+-- covering that block's 64 bytes (offsets 0..63).
+buildSchedule : (Int -> Int) -> Array Int
+buildSchedule byteOf =
+  let w = make 64 0
+  fillFirst16 w byteOf 0
+  extendSchedule w 16
+  w
+
+-- ── Compression ──────────────────────────────────────────────────────
+
+type State = (Int, Int, Int, Int, Int, Int, Int, Int)
+
+compressRounds : Array Int -> State -> Int -> State
+compressRounds w (a, b, c, d, e, f, g, h) t =
+  if t >= 64 then (a, b, c, d, e, f, g, h)
+  else
+    let t1 = mask32 (mask32 (mask32 (mask32 (h + bigSigma1 e) + ch e f g) + wordAt k t) + wordAt w t)
+    let t2 = mask32 (bigSigma0 a + maj a b c)
+    let a' = mask32 (t1 + t2)
+    let e' = mask32 (d + t1)
+    compressRounds w (a', a, b, c, e', e, f, g) (t + 1)
+
+-- One 64-byte block, addressed via `byteOf` (offsets 0..63 relative to the
+-- block start), folded into the running hash state.
+compressBlock : (Int -> Int) -> State -> State
+compressBlock byteOf (h0, h1, h2, h3, h4, h5, h6, h7) =
+  let w = buildSchedule byteOf
+  let (a, b, c, d, e, f, g, h) = compressRounds w (h0, h1, h2, h3, h4, h5, h6, h7) 0
+  (
+    mask32 (h0 + a),
+    mask32 (h1 + b),
+    mask32 (h2 + c),
+    mask32 (h3 + d),
+    mask32 (h4 + e),
+    mask32 (h5 + f),
+    mask32 (h6 + g),
+    mask32 (h7 + h),
+  )
+
+-- ── Driving the blocks ───────────────────────────────────────────────
+
+-- Fold every FULL 64-byte block of `msg` directly by offset — no copy of
+-- the message is ever made.
+processFullBlocks : Array Int -> Int -> State -> Int -> State
+processFullBlocks msg numFull st blockIdx =
+  if blockIdx >= numFull then st
+  else
+    let base = blockIdx * 64
+    processFullBlocks
+      msg
+      numFull
+      (compressBlock (j => byteAt msg (base + j)) st)
+      (blockIdx + 1)
+
+-- The length, in bits, of `padLength`-byte messages fits big-endian into
+-- the last 8 bytes of the padded block: writes it there.
+writeLenGo : Array Int -> Int -> Int -> Int -> Unit
+writeLenGo out offset bitLen i =
+  if i >= 8 then ()
+  else
+    let shiftAmt = (7 - i) * 8
+    set (offset + i) (bitAnd (shiftRight bitLen shiftAmt) 255) out
+    writeLenGo out offset bitLen (i + 1)
+
+-- The number of bytes in the final, padded region (one block if the tail
+-- plus the 0x80 marker plus the 8-byte length fits in 64 bytes, else two).
+padLength : Int -> Int
+padLength tailLen = if tailLen + 1 + 8 <= 64 then 64 else 128
+
+-- Synthesize the final one-or-two padded blocks: `tailLen` message bytes
+-- (copied via `blit`, never the whole message), then `0x80`, then zero
+-- bytes, then the 64-bit big-endian bit length of the WHOLE message.
+buildTail : Array Int -> Int -> Int -> Array Int
+buildTail msg len tailLen =
+  let size = padLength tailLen
+  let out = make size 0
+  blit msg (len - tailLen) out 0 tailLen
+  set tailLen 0x80 out
+  writeLenGo out (size - 8) (len * 8) 0
+  out
+
+processTail : Array Int -> State -> State
+processTail tail st =
+  let numBlocks = arrayLength tail / 64
+  processFullBlocks tail numBlocks st 0
+
+-- ── Public entry point ───────────────────────────────────────────────
+
+export sha256 : Array Int -> Array Int
+sha256 msg =
+  let len = arrayLength msg
+  let numFull = len / 64
+  let tailLen = len - numFull * 64
+  let afterFull = processFullBlocks msg numFull h0Init 0
+  let tail = buildTail msg len tailLen
+  let (h0, h1, h2, h3, h4, h5, h6, h7) = processTail tail afterFull
+  digestBytes (h0, h1, h2, h3, h4, h5, h6, h7)
+
+digestWord : Array Int -> Int -> Int -> Unit
+digestWord out i word =
+  set (i * 4) (bitAnd (shiftRight word 24) 255) out
+  set (i * 4 + 1) (bitAnd (shiftRight word 16) 255) out
+  set (i * 4 + 2) (bitAnd (shiftRight word 8) 255) out
+  set (i * 4 + 3) (bitAnd word 255) out
+
+digestBytes : State -> Array Int
+digestBytes (h0, h1, h2, h3, h4, h5, h6, h7) =
+  let out = make 32 0
+  digestWord out 0 h0
+  digestWord out 1 h1
+  digestWord out 2 h2
+  digestWord out 3 h3
+  digestWord out 4 h4
+  digestWord out 5 h5
+  digestWord out 6 h6
+  digestWord out 7 h7
+  out

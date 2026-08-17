@@ -146,8 +146,37 @@
 #         "I ran something locally" is not an extraction procedure.
 #
 # ── LIVE ROWS ────────────────────────────────────────────────────────────────
-# None yet — this ledger lands BEFORE the first vector file exists, so that
-# nothing is ever retro-filled. S-sha256 (#1698), S-encodings (#1701), S-field
-# (#1699) and S-scalar (#1700) each add their stanzas in the SAME COMMIT as their
-# corpus. Until then the gate's own self-test is the only fail-capable evidence
-# in a run; it runs on every invocation for exactly that reason.
+
+[vector]
+file:          pds/test/vectors/SHA256ShortMsg.rsp
+local-sha256:  75e1cb83994638481808e225b9eb0c1ebd0c232d952ac42b61abce6363be283c
+kind:          published-artifact
+source:        NIST CAVS SHS byte-oriented test vectors, SHA256ShortMsg.rsp (from shabytetestvectors.zip)
+source-url:    https://csrc.nist.gov/CSRC/media/Projects/Cryptographic-Algorithm-Validation-Program/documents/shs/shabytetestvectors.zip
+source-sha256: 929ef80b7b3418aca026643f6f248815913b60e01741a44bba9e118067f4c9b8
+extraction:    unzip shabytetestvectors.zip; copy SHA256ShortMsg.rsp verbatim (CRLF preserved, no edits)
+retrieved:     2026-08-17
+consumer:      S-sha256 (#1698 sha256 FIPS 180-4)
+
+[vector]
+file:          pds/test/vectors/SHA256LongMsg.rsp
+local-sha256:  6fac36f37360bcf74ffcf4465c18e30d6d5a04cc90885b901fc3130c16060974
+kind:          published-artifact
+source:        NIST CAVS SHS byte-oriented test vectors, SHA256LongMsg.rsp (from shabytetestvectors.zip)
+source-url:    https://csrc.nist.gov/CSRC/media/Projects/Cryptographic-Algorithm-Validation-Program/documents/shs/shabytetestvectors.zip
+source-sha256: 929ef80b7b3418aca026643f6f248815913b60e01741a44bba9e118067f4c9b8
+extraction:    unzip shabytetestvectors.zip; copy SHA256LongMsg.rsp verbatim (CRLF preserved, no edits)
+retrieved:     2026-08-17
+consumer:      S-sha256 (#1698 sha256 FIPS 180-4)
+
+[vector]
+file:          pds/test/vectors/sha256_worked_examples.txt
+local-sha256:  1b40ab001701331ce8df08ef07c7b6269f2b0b30acec14be9263532b710fa66d
+kind:          published-artifact
+source:        FIPS PUB 180-2, Secure Hash Standard (2002), Appendix B.1/B.2/B.3 worked examples
+source-url:    https://csrc.nist.gov/files/pubs/fips/180-2/final/docs/fips180-2.pdf
+source-sha256: 1ac8c64a78c0b1e2fdb4c346da117fdf6bea713220a3b6d932080f1834d517c1
+source-note:   FIPS PUB 180-2 is WITHDRAWN, superseded by FIPS PUB 180-4 — it remains the correct answer key here because (a) the SHA-256 algorithm is bit-identical between the two editions (180-4's Appendix C "Technical Changes from FIPS 180-3" lists no SHA-256 change), and (b) Appendix B of 180-2 is the ORIGIN of these three worked examples, which 180-4 dropped entirely (its extracted table of contents has no examples appendix). In-class under RUN-PDS0-008's restated RUN-PDS0-005 E2 (any NIST SHS publication, FIPS 180-x including the withdrawn 180-2, provided a withdrawn-edition row carries this note).
+extraction:    hand-transcribed from Appendix B.1 (Len=24, "abc"), B.2 (Len=448, the 56-char string), and B.3 (Len=8, Repeat=1000000, "a"*1000000); each digest and each message string read back twice against `pdftotext -layout` output of the PDF, and cross-checked against Python hashlib's sha256 of the same plaintext before being committed
+retrieved:     2026-08-17
+consumer:      S-sha256 (#1698 sha256 FIPS 180-4)
