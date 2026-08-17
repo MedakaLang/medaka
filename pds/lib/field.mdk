@@ -25,8 +25,14 @@
 
    `Array` is mutable, so: every operation allocates a fresh result array and
    NEVER writes into an argument. `feZero`, `feOne` and the private `pLimbs` are
-   shared immutable constants for the same reason — nothing in this module
-   writes through a value it did not allocate.
+   meant as shared immutable constants, and nothing in THIS module writes
+   through a value it did not allocate — but `Fe` is a transparent alias for
+   `Array Int`, so nothing enforces that from outside: a caller can write
+   through `feZero`/`feOne` directly, and this module has no way to detect it.
+   Making these values genuinely immutable (an abstract `Fe`) is filed as
+   follow-up work for the ECDSA slice. `feIsZero` therefore checks the
+   argument's own limbs directly rather than comparing against `feZero` — see
+   its doc comment.
 
    ── The headroom chain (derived against THIS code) ───────────────────
    `Int` is a 63-bit fixnum whose non-negative ceiling is `2^62 - 1`, and it
@@ -335,8 +341,23 @@ equalGo a b i =
     equalGo a b (i + 1)
 
 -- | Is this element zero?
+--
+--   Checks the ARGUMENT'S OWN LIMBS. Deliberately NOT `feEqual a feZero`:
+--   `Fe` is a transparent alias for a mutable `Array Int`, so `feZero` is
+--   writable by any caller, and a predicate that consulted it would report a
+--   true zero as non-zero (and a non-zero as zero) for the rest of the
+--   process, at exit 0, with no diagnostic. Do not "simplify" this back.
 export feIsZero : Fe -> Bool
-feIsZero a = feEqual a feZero
+feIsZero a = isZeroGo a 0
+
+isZeroGo : Fe -> Int -> Bool
+isZeroGo a i =
+  if i >= 10 then
+    True
+  else if a[i] != 0 then
+    False
+  else
+    isZeroGo a (i + 1)
 
 -- | Is the canonical representative odd? (The low bit of limb 0.)
 export feIsOdd : Fe -> Bool

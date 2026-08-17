@@ -61,9 +61,14 @@
 
    `Array` is mutable, so: every operation allocates a fresh workspace and
    result and NEVER writes into an argument. `scZero`, `scOne` and the
-   private `nLimbs` / `cLimbs` / `expNMinus2` are shared immutable constants
-   for the same reason — nothing in this module writes through a value it
-   did not allocate.
+   private `nLimbs` / `cLimbs` / `expNMinus2` are meant as shared immutable
+   constants, and nothing in THIS module writes through a value it did not
+   allocate — but `Sc` is a transparent alias for `Array Int`, so nothing
+   enforces that from outside: a caller can write through `scZero`/`scOne`
+   directly, and this module has no way to detect it. Making these values
+   genuinely immutable (an abstract `Sc`) is filed as follow-up work for the
+   ECDSA slice. `scIsZero` therefore checks the argument's own limbs directly
+   rather than comparing against `scZero` — see its doc comment.
 
    ── The headroom chain (derived against THIS code) ───────────────────
    `Int` is a 63-bit fixnum whose non-negative ceiling is `2^62 - 1`, and it
@@ -104,9 +109,14 @@
    "accumulate several products, reduce once" restructuring.
 
    `carryAll` additionally PANICS if anything carries out of limb 31, which
-   would mean a caller handed `reduceWide` a value >= 2^512. Every caller
-   here is below that by construction (a product of two values < n is
-   < 2^512), so the panic is a structural guard, not a reachable path.
+   would mean a caller handed `reduceWide` a value >= 2^512. A CANONICAL
+   product of two values < n is < 2^512, so no canonical-input caller reaches
+   it — but the guard IS reachable from the public API: `scMul` fed a
+   non-canonical `Sc` (constructible because `Sc` is a transparent alias, see
+   above) drives the workspace past 2^512 and the panic fires, loudly and
+   correctly, on both engines. This was tested by direct construction during
+   this sprint's heavy round and the panic fired; the guard is live, not dead
+   code.
 
    ── Bounds-checked array API, deliberately ───────────────────────────
    This module reads with `arr[i]` and writes with `Array.set` — the
@@ -184,8 +194,10 @@ scOne = [|1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0|]
 
 -- Carry-propagate the whole 32-limb workspace IN PLACE, leaving every limb
 -- below 2^16. PANICS if anything carries out of limb 31: that would mean the
--- workspace held a value >= 2^512, which no caller in this module can
--- produce (a product of two values < n is < 2^512).
+-- workspace held a value >= 2^512. No CANONICAL-input caller in this module
+-- produces that (a product of two values < n is < 2^512) — but it IS
+-- reachable from the public API (a non-canonical `Sc` fed to `scMul`; tested
+-- by direct construction, the panic fired). The guard is live, not dead code.
 carryAll : Array Int -> Unit
 carryAll w = carryGo w 0 0
 
@@ -420,8 +432,23 @@ equalGo a b i =
     equalGo a b (i + 1)
 
 -- | Is this scalar zero?
+--
+--   Checks the ARGUMENT'S OWN LIMBS. Deliberately NOT `scEqual a scZero`:
+--   `Sc` is a transparent alias for a mutable `Array Int`, so `scZero` is
+--   writable by any caller, and a predicate that consulted it would report a
+--   true zero as non-zero (and a non-zero as zero) for the rest of the
+--   process, at exit 0, with no diagnostic. Do not "simplify" this back.
 export scIsZero : Sc -> Bool
-scIsZero a = scEqual a scZero
+scIsZero a = isZeroGo a 0
+
+isZeroGo : Sc -> Int -> Bool
+isZeroGo a i =
+  if i >= 16 then
+    True
+  else if a[i] != 0 then
+    False
+  else
+    isZeroGo a (i + 1)
 
 -- | The LOW-S PREDICATE: is `s` strictly greater than `floor(n/2)`?
 --
