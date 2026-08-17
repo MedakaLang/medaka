@@ -63,6 +63,7 @@ anyArgMentions : List String -> List Ty -> Bool
 anyClauseEagerlyRefsGroup : List String -> List FunClause -> Bool
 anyConcreteHead : List Mono -> Bool
 anyContainsI : List Int -> List Int -> Bool
+anyCtorSiblingWithholds : Option HeadKey -> String -> String -> List String -> Bool
 anyDepReaches : List String -> List String -> String -> List (String, List Decl) -> Bool
 anyHoleAtom : List Atom -> Bool
 anyIdPinned : List Int -> List (Int, Mono) -> Bool
@@ -431,6 +432,7 @@ ctorCandImported : List Decl -> String -> (Ident, String, Scheme) -> Bool
 ctorCandScheme : (Ident, String, Scheme) -> Scheme
 ctorHeadIsUpper : String -> Bool
 ctorIdentRow : String -> TyConOrigin -> String -> List (String, String, Ident)
+ctorSiblingWithholds : Option HeadKey -> String -> String -> Bool
 currentDoOrigin : Ref (Option Loc)
 currentLoc : Ref (Option Loc)
 currentLocalSchemes : Unit -> List (String, Scheme)
@@ -1212,6 +1214,8 @@ nameableIfaceMethodSet : List Decl -> Map String Unit
 nameableIfaceShadows : List Decl -> List String -> List String
 namesToSet : List String -> Map String Unit -> Map String Unit
 narrowRowToNamed : List String -> (String, List String) -> List (String, List String)
+narrowedPick : Option HeadKey -> String -> List String -> List (String, RecordInfo) -> Option (String, RecordInfo)
+narrowingBlockedByCtorSibling : Option HeadKey -> String -> String -> Bool
 negateOp : Mono -> Mono
 newEffvarId : Unit -> Int
 newTyvarId : Unit -> Int
@@ -1518,7 +1522,7 @@ resolveArithSites : List (Ref Route, Mono) -> Unit
 resolveDictApps : List Decl -> Map String (List ImplEntry) -> Map String (List KeyEntry) -> List (Ref (List Route), List Mono, List String, List (List Mono), Option Loc) -> Unit
 resolveFieldAmbiguous : Mono -> String -> List String -> Option (String, RecordInfo)
 resolveFieldByOwners : Mono -> String -> Option (String, RecordInfo)
-resolveFieldOwnersNarrowed : Mono -> List String -> Option (String, RecordInfo)
+resolveFieldOwnersNarrowed : Mono -> String -> List String -> Option (String, RecordInfo)
 resolveFieldRecord : Mono -> String -> Option (String, RecordInfo)
 resolveMemberRows : (String, String) -> List (String, a) -> List (String, a)
 resolveMethodDicts : Map String (List ImplEntry) -> Map String (List KeyEntry) -> List (Ref (List Route), List Mono) -> Unit

@@ -1,0 +1,6 @@
+-- Third owner of the field name `x`, so the field is multi-owner and the ambiguous
+-- arm runs at all (same role this module plays in the paired fixture).
+public export data U = Aaa { x : Int }
+
+export mkU : U
+mkU = Aaa { x = 5 }

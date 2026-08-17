@@ -1,0 +1,12 @@
+-- CONTROL half of the pair with `record_ctor_sibling_blocks_narrowing/`: two
+-- named-field constructors of one type where BOTH declare `x`, at DIFFERENT slot
+-- indices.  Both are owners of `x`, both survive the receiver-identity filter, and
+-- the narrowing's singleton gate is never reached — so this cell must read
+-- IDENTICALLY on base, on the unrepaired slice, and after the repair.
+public export data T = Zed { x : Int, q : Int } | Oth { q : Int, x : Int }
+
+export mkZ : T
+mkZ = Zed { x = 1, q = 2 }
+
+export mkO : T
+mkO = Oth { q = 3, x = 4 }

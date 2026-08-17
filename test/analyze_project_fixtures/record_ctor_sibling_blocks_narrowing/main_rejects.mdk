@@ -1,0 +1,26 @@
+-- 🚨 REGRESSION CELL — the receiver-identity narrowing must NOT trust a lone
+-- surviving candidate when the receiver's TYPE has another named-field constructor
+-- that withholds the field.  (`resolveFieldOwnersNarrowed` / `narrowedPick` /
+-- `narrowingBlockedByCtorSibling`, compiler/types/typecheck.mdk.)
+--
+-- `mkOth.x` projects a field that only the receiver's SIBLING constructor `Zed`
+-- declares.  A value of type `T` carries no static constructor tag, so the
+-- receiver's type cannot say whether `Zed`'s layout applies — and the narrowing's
+-- comparator compares RESULT-TYPE heads, so it lands on exactly one survivor
+-- (`Zed`) for ANY receiver of type `T`.
+--
+-- MEASURED on the unrepaired slice `ada2bd57`: `check` exit 0 with ZERO
+-- diagnostics, and the BUILT BINARY exit 0 printing `99` — the sibling
+-- constructor's field, i.e. silent wrongness on the emit path, where base
+-- `d2b7cb8b` had rejected the program on check/run/build alike.  The repair
+-- restores the rejection pinned below.
+--
+-- PAIR: this cell alone does not test the property.  Its control is
+-- `record_ctor_siblings_all_declare/` (both constructors declare the field ⇒ two
+-- survivors ⇒ the narrowing already fell through, so that cell must not move), and
+-- the ACCEPT cell proving the repair did not simply disable the narrowing is
+-- `test/llvm_fixtures/record_owner_narrowing_flat.mdk`.
+import m1.{T(..), mkOth}
+import m2.{U(..), mkU}
+
+main = println mkOth.x
