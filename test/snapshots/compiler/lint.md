@@ -1,5 +1,5 @@
 # META
-source_lines=4117
+source_lines=4119
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint.mdk — the `medaka lint` framework + seed rules.
@@ -27,7 +27,7 @@ import frontend.ast.{
   -- no-op.
   Ns(..),
   TyConOrigin(..),
-  TabKey,
+  TabKey(..),
   tabKeyOf,
   Loc(..),
   Lit(..),
@@ -1233,12 +1233,14 @@ derivableHit orc loc iface tys
 -- the type has a `data`/`record` declaration (with constructors) visible in the
 -- linted file — so `deriving` is actually available for it.  Primitive types
 -- (Int/Float/Bool/String/Char/Unit/Array) have no such decl → `oGetCtors` = None.
--- ⚠️ Mints the key the writer rows mint: this oracle is built from ONE file's
--- raw decls, whose `dataOrigin` is `OriginUnresolved`, so `tabKeyOf` lands in
--- `TkBare NsType tyName` on both ends — the same answer as the bare-name
--- lookup this replaced.
+-- ⚠️ This oracle is built from ONE file's raw decls with no identity-stamping
+-- pass in the loop, so the key is bare BY CONSTRUCTION on both the write and
+-- read side — `TkBare NsType tyName` directly, rather than routed through
+-- `tabKeyOf`'s origin dance (which would land in the same place, since
+-- `mkIdent _ OriginUnresolved _ = None`, but naming it directly keeps this
+-- module out of the #1110 OriginUnresolved ratchet).
 hasUserDataDecl : Oracle -> String -> Bool
-hasUserDataDecl orc tyName = match oGetCtors orc (tabKeyOf NsType OriginUnresolved tyName)
+hasUserDataDecl orc tyName = match oGetCtors orc (TkBare NsType tyName)
   Some _ => True
   None => False
 
@@ -4120,7 +4122,7 @@ duplicateBodySameFileRule = Rule {
   fix = None,
 }
 # DESUGAR
-(DUse false (UseGroup ("frontend" "ast") ((mem "Ns" true) (mem "TyConOrigin" true) (mem "TabKey" false) (mem "tabKeyOf" false) (mem "Loc" true) (mem "Lit" true) (mem "Ty" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "ImplMethod" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true) (mem "Expr" true) (mem "Decl" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Ns" true) (mem "TyConOrigin" true) (mem "TabKey" true) (mem "tabKeyOf" false) (mem "Loc" true) (mem "Lit" true) (mem "Ty" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "ImplMethod" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true) (mem "Expr" true) (mem "Decl" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" false) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "declPosLine" false) (mem "declPosEndLine" false) (mem "parseWithPositions" false) (mem "parseWithPositionsLocated" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true) (mem "Diag" true) (mem "ppSeverity" false) (mem "readFileSafe" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "anyList" false) (mem "allList" false) (mem "filterList" false) (mem "joinNl" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "reverseL" false) (mem "splitNl" false) (mem "splitOnChar" false) (mem "joinWith" false) (mem "sortUniqS" false) (mem "startsWith" false) (mem "stringTrim" false) (mem "lookupAssoc" false) (mem "dedupBy" false))))
@@ -4469,7 +4471,7 @@ duplicateBodySameFileRule = Rule {
 (DTypeSig false "derivableHit" (TyFun (TyCon "Oracle") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "List") (TyCon "Finding")))))))
 (DFunDef false "derivableHit" ((PVar "orc") (PVar "loc") (PVar "iface") (PVar "tys")) (EIf (EApp (EApp (EVar "contains") (EVar "iface")) (EVar "derivableIfaces")) (EMatch (EApp (EVar "singleNamedType") (EVar "tys")) (arm (PCon "Some" (PVar "tyName")) () (EIf (EApp (EApp (EVar "hasUserDataDecl") (EVar "orc")) (EVar "tyName")) (EListLit (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameDerivable")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "hand-written `impl ")) (EApp (EVar "display") (EVar "iface"))) (ELit (LString "` for '"))) (EApp (EVar "display") (EVar "tyName"))) (ELit (LString "' — use `deriving ("))) (EApp (EVar "display") (EVar "iface"))) (ELit (LString ")`")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc"))))) (EListLit))) (arm (PCon "None") () (EListLit))) (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "hasUserDataDecl" (TyFun (TyCon "Oracle") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "hasUserDataDecl" ((PVar "orc") (PVar "tyName")) (EMatch (EApp (EApp (EVar "oGetCtors") (EVar "orc")) (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsType")) (EVar "OriginUnresolved")) (EVar "tyName"))) (arm (PCon "Some" PWild) () (EVar "True")) (arm (PCon "None") () (EVar "False"))))
+(DFunDef false "hasUserDataDecl" ((PVar "orc") (PVar "tyName")) (EMatch (EApp (EApp (EVar "oGetCtors") (EVar "orc")) (EApp (EApp (EVar "TkBare") (EVar "NsType")) (EVar "tyName"))) (arm (PCon "Some" PWild) () (EVar "True")) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig false "singleNamedType" (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "singleNamedType" ((PList (PVar "t"))) (EApp (EVar "tyHeadName") (EVar "t")))
 (DFunDef false "singleNamedType" (PWild) (EVar "None"))
@@ -5549,7 +5551,7 @@ duplicateBodySameFileRule = Rule {
 (DTypeSig false "duplicateBodySameFileRule" (TyCon "Rule"))
 (DFunDef false "duplicateBodySameFileRule" () (ERecordCreate "Rule" ((fa "name" (EVar "ruleNameDuplicateBody")) (fa "descr" (ELit (LString "top-level function body is structurally identical to another top-level function in the SAME file (copy-paste; consolidate) — the in-file counterpart of the cross-file rule of the same name"))) (fa "severity" (EVar "SevWarning")) (fa "enabled" (EVar "True")) (fa "check" (EVar "ruleDuplicateBodySameFile")) (fa "fix" (EVar "None")))))
 # MARK
-(DUse false (UseGroup ("frontend" "ast") ((mem "Ns" true) (mem "TyConOrigin" true) (mem "TabKey" false) (mem "tabKeyOf" false) (mem "Loc" true) (mem "Lit" true) (mem "Ty" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "ImplMethod" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true) (mem "Expr" true) (mem "Decl" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Ns" true) (mem "TyConOrigin" true) (mem "TabKey" true) (mem "tabKeyOf" false) (mem "Loc" true) (mem "Lit" true) (mem "Ty" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "ImplMethod" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true) (mem "Expr" true) (mem "Decl" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" false) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "declPosLine" false) (mem "declPosEndLine" false) (mem "parseWithPositions" false) (mem "parseWithPositionsLocated" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true) (mem "Diag" true) (mem "ppSeverity" false) (mem "readFileSafe" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "anyList" false) (mem "allList" false) (mem "filterList" false) (mem "joinNl" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "reverseL" false) (mem "splitNl" false) (mem "splitOnChar" false) (mem "joinWith" false) (mem "sortUniqS" false) (mem "startsWith" false) (mem "stringTrim" false) (mem "lookupAssoc" false) (mem "dedupBy" false))))
@@ -5898,7 +5900,7 @@ duplicateBodySameFileRule = Rule {
 (DTypeSig false "derivableHit" (TyFun (TyCon "Oracle") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "List") (TyCon "Finding")))))))
 (DFunDef false "derivableHit" ((PVar "orc") (PVar "loc") (PVar "iface") (PVar "tys")) (EIf (EApp (EApp (EVar "contains") (EVar "iface")) (EVar "derivableIfaces")) (EMatch (EApp (EVar "singleNamedType") (EVar "tys")) (arm (PCon "Some" (PVar "tyName")) () (EIf (EApp (EApp (EVar "hasUserDataDecl") (EVar "orc")) (EVar "tyName")) (EListLit (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameDerivable")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "hand-written `impl ")) (EApp (EMethodRef "display") (EVar "iface"))) (ELit (LString "` for '"))) (EApp (EMethodRef "display") (EVar "tyName"))) (ELit (LString "' — use `deriving ("))) (EApp (EMethodRef "display") (EVar "iface"))) (ELit (LString ")`")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc"))))) (EListLit))) (arm (PCon "None") () (EListLit))) (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "hasUserDataDecl" (TyFun (TyCon "Oracle") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "hasUserDataDecl" ((PVar "orc") (PVar "tyName")) (EMatch (EApp (EApp (EVar "oGetCtors") (EVar "orc")) (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsType")) (EVar "OriginUnresolved")) (EVar "tyName"))) (arm (PCon "Some" PWild) () (EVar "True")) (arm (PCon "None") () (EVar "False"))))
+(DFunDef false "hasUserDataDecl" ((PVar "orc") (PVar "tyName")) (EMatch (EApp (EApp (EVar "oGetCtors") (EVar "orc")) (EApp (EApp (EVar "TkBare") (EVar "NsType")) (EVar "tyName"))) (arm (PCon "Some" PWild) () (EVar "True")) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig false "singleNamedType" (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "singleNamedType" ((PList (PVar "t"))) (EApp (EVar "tyHeadName") (EVar "t")))
 (DFunDef false "singleNamedType" (PWild) (EVar "None"))
