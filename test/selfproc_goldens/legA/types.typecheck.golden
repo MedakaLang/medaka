@@ -914,11 +914,12 @@ implTysIfMatch : String -> String -> Decl -> List (List Ty)
 importDefinersOf : List Decl -> List (String, (String, String))
 importFormRows : UsePath -> List (String, a) -> List (String, a)
 importFormSchemes : List (String, List (String, Scheme)) -> UsePath -> List (String, Scheme) -> List (String, Scheme)
-importOverlayDecls : Int -> List DeclEnvModule -> Decl -> List Decl
+importOverlayDecls : Bool -> Int -> List DeclEnvModule -> Decl -> List Decl
 importSeed : List Decl -> List (String, List (String, Scheme)) -> List (String, Scheme)
 importedBindings : UsePath -> Option (List (String, String))
 importedCtorEntry : List Decl -> String -> List (Ident, String, Scheme) -> Option Scheme
-importedCtorTypeDecls : List Decl -> Int -> List DeclEnvModule -> List Decl
+importedCtorTypeDeclsFirstWins : List Decl -> Int -> List DeclEnvModule -> List Decl
+importedCtorTypeDeclsLastWins : List Decl -> Int -> List DeclEnvModule -> List Decl
 importedMethodEntry : List Decl -> String -> List (Ident, (IfaceRef, List String, Ty, List (String, List Kind))) -> Option (IfaceRef, List String, Ty, List (String, List Kind))
 importedRecordEntry : List Decl -> String -> List (Ident, String, RecordInfo) -> Option RecordInfo
 importedSchemeOblEntries : List Decl -> List ((String, String), List VecObl) -> List (String, List VecObl)
@@ -1273,6 +1274,7 @@ originPhrase : TyConOrigin -> String
 originRowsOf : List (String, (String, String)) -> List (String, String)
 overAppliedMsg : String -> Int -> Int -> String
 overlayDecided : Bool -> (Option Decl, Option Decl, Option Decl) -> Bool
+overlayHalf : Bool -> List Decl -> Int -> List DeclEnvModule -> List Decl
 overlayNote : String -> String -> String -> TyConOrigin -> Decl -> (Option Decl, Option Decl, Option Decl) -> (Option Decl, Option Decl, Option Decl)
 overlayScan : String -> String -> Bool -> (Option Decl, Option Decl, Option Decl) -> List Decl -> (Option Decl, Option Decl, Option Decl)
 overlayScanOne : String -> String -> (Option Decl, Option Decl, Option Decl) -> Decl -> (Option Decl, Option Decl, Option Decl)

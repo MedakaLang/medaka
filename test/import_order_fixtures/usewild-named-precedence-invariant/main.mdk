@@ -1,0 +1,14 @@
+-- The match covers BOTH constructors of `aacol.Col` — the type the `Red`/`Blue` patterns
+-- belong to — so it is EXHAUSTIVE and NO diagnostic is owed under any ordering of these
+-- two import clauses.  `Green`/`Purple` belong to a different type that merely shares the
+-- spelling `Col`, and a wildcard clause cannot change which declaration an explicitly
+-- named constructor means.  Prints 6, exit 0.
+import aacol.{Red, Blue, aval}
+import zzcol.*
+
+f x = match x
+  Red => 1
+  Blue => 2
+
+main : <IO> Unit
+main = println (f Red + aval)

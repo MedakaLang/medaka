@@ -22031,7 +22031,7 @@ checkBodyImpl seed mode prog0 =
       --     at all.  It is order-observable only for a decl registered twice, where it
       --     agrees.  It is NOT evidence about the bare-keyed tables above.
       --   * the exhaust ctor ORACLE — and it is built at a DIFFERENT CALL SITE
-      --     (`checkModuleFullDiags`: `seedCheckRun (prog ++ importedCtorTypeDecls prog …
+      --     (`checkModuleFullDiags`: `seedCheckRun (prog ++ importedCtorTypeDeclsFirstWins prog …
       --     ++ accData)`), from a LIST, with `oracleMap` = `omFromPairs (reverseL …)`,
       --     i.e. FIRST-wins on that list → prog0 > overlay > universe.  Same verdict,
       --     opposite mechanism, and reached through none of the code on this line.
@@ -22073,8 +22073,13 @@ checkBodyImpl seed mode prog0 =
       -- why the reader's OWN row is excluded here and registered by the two
       -- `registerAllData` calls below instead.
       let _ = declEnvSeedDataUniverse mid envs
+      -- 🚨 `…LastWins`, NOT the `…FirstWins` sibling: `registerAllData` folds LEFT into
+      -- `omInsert` tables, so the LAST row wins, and the overlay's named-outranks-wildcard
+      -- rule therefore needs the `UseGroup` rows LAST.  The oracle call site takes the
+      -- opposite order for the opposite reason — see the partition note at
+      -- `importedCtorTypeDeclsFirstWins`.  Swapping these two inverts the rule silently.
       let base = registerAllData crossRun.value.universeDataEnv.value
-                   (importedCtorTypeDecls prog0 cur envs.deModules)
+                   (importedCtorTypeDeclsLastWins prog0 cur envs.deModules)
       let env0 = registerAllData base prog0
       let _ = applyRecordScopeOverrides prog0
       applyCtorScopeOverrides prog0 env0
@@ -29110,17 +29115,81 @@ importSeed (_::rest) depEnv = importSeed rest depEnv
 -- from a `DUse` path, and no module imports itself, so an own-module decl can only
 -- ever fill the `bareType` fallback — LAST in a FIRST-wins walk, so it can only add a
 -- candidate where every earlier row supplied none, never displace one.
-importedCtorTypeDecls : List Decl -> Int -> List DeclEnvModule -> List Decl
-importedCtorTypeDecls unitDecls cur rows =
-  flatMap (importOverlayDecls cur rows) unitDecls
+-- 🚨 THE RESULT IS PARTITIONED: NAMED (`UseGroup`) ROWS AND WILDCARD (`UseWild`) ROWS
+-- ARE TWO SEPARATE HALVES, and which half a consumer must see FIRST depends on that
+-- consumer's own tie-break direction.  This is not a style choice; a single flat
+-- source-ordered list shipped an S1.
+--
+-- WHY.  Before `wildOverlayDecls`, only `UseGroup` contributed, and every row was ONE
+-- precisely-named decl.  A wildcard row is the module's WHOLE published set, so once
+-- `UseWild` was enrolled the flat `flatMap` over the unit's decls in SOURCE ORDER made
+-- import-clause order decide same-named-type collisions BETWEEN the two spellings: with
+-- `import zzcol.*` written above `import aacol.{Red, Blue}`, a non-exhaustive match over
+-- `aacol.Col` was reported as `Missing case: 'Green'` — a constructor of `zzcol.Col`,
+-- the wrong type entirely — and the real missing case went unreported, so the program
+-- then died at runtime on the case nobody warned about.  Swapping the two clauses fixed
+-- it.  Measured on af6e0414 (broken) vs c7c879b7 (correct in BOTH orders).
+--
+-- THE RULE, and it is the ordinary scoping one: AN EXPLICITLY NAMED MEMBER OUTRANKS A
+-- WILDCARD.  "You named this type" beats "you imported everything and it happened to be
+-- in there", whichever clause is written first.
+--
+-- 🚨 THE TWO CONSUMERS TIE-BREAK IN OPPOSITE DIRECTIONS, so they take opposite orders.
+-- Enumerated, because a future edit that routes one of them through the other's wrapper
+-- silently inverts the rule for that consumer with no diagnostic anywhere:
+--   * `registerAllData` (the `dataEnv` overlay) folds the list LEFT and its bare-keyed
+--     tables are `omInsert`, i.e. LAST-WRITE-WINS  -> named rows must come LAST
+--     -> `importedCtorTypeDeclsLastWins`.
+--   * `seedCheckRun` (the exhaustiveness ctor ORACLE) builds `oracleMap` =
+--     `omFromPairs (reverseL …)`, i.e. FIRST-WINS   -> named rows must come FIRST
+--     -> `importedCtorTypeDeclsFirstWins`.
+-- Same rule, both sites; only the list order differs.  The big note at the `dataEnv`
+-- call site enumerates the full set of order-observable structures — this pair is the
+-- overlay's own contribution to it.
+--
+-- ⚠️ WHAT THIS DELIBERATELY DOES **NOT** DECIDE: named-vs-named.  Two `UseGroup` clauses
+-- each naming a same-spelled type from a different module are still resolved by
+-- import-clause order, exactly as before this partition — within each half the walk is
+-- the same `flatMap` over `unitDecls` in source order, and neither consumer's tie-break
+-- direction moved.  That case is a SEPARATE, PRE-EXISTING defect (it reproduces on
+-- c7c879b7, before the wildcard arm existed) and fixing it needs the overlay keyed by
+-- RESOLVED DECLARATION IDENTITY rather than by bare type name — #1319/#1185 territory,
+-- not an ordering change.  Do not "while you are here" it: an ordering answer for
+-- named-vs-named would freeze a guess into the oracle.
+--
+-- ⚠️ PERF: the unit's decl list is walked TWICE (once per half) instead of once, but the
+-- POOL — the expensive part, see `THE REAL BOUND` above — is scanned exactly as many
+-- times as before: each clause yields its rows in whichever half claims it and `[]` in
+-- the other, so the total member/wildcard lookups are unchanged.  The extra cost is one
+-- linear pass over `unitDecls`, which is import-clause bounded, not universe bounded.
+importedCtorTypeDeclsFirstWins : List Decl -> Int -> List DeclEnvModule -> List Decl
+importedCtorTypeDeclsFirstWins unitDecls cur rows = overlayHalf False unitDecls cur rows
+  ++ overlayHalf True unitDecls cur rows
 
-importOverlayDecls : Int -> List DeclEnvModule -> Decl -> List Decl
-importOverlayDecls cur rows (DAttrib _ d) = importOverlayDecls cur rows d
-importOverlayDecls cur rows (DUse _ (p@(UseGroup _ ms)) _) =
-  flatMap (memberOverlayDecl cur rows (usePathModuleId p)) ms
-importOverlayDecls cur rows (DUse _ (p@(UseWild _)) _) =
-  wildOverlayDecls cur rows (usePathModuleId p)
-importOverlayDecls _ _ _ = []
+importedCtorTypeDeclsLastWins : List Decl -> Int -> List DeclEnvModule -> List Decl
+importedCtorTypeDeclsLastWins unitDecls cur rows = overlayHalf True unitDecls cur rows
+  ++ overlayHalf False unitDecls cur rows
+
+-- One half of the partition, in the unit's own source order.  `wildHalf` selects which:
+-- True = `UseWild` rows only, False = `UseGroup` rows only.
+overlayHalf : Bool -> List Decl -> Int -> List DeclEnvModule -> List Decl
+overlayHalf wildHalf unitDecls cur rows =
+  flatMap (importOverlayDecls wildHalf cur rows) unitDecls
+
+importOverlayDecls : Bool -> Int -> List DeclEnvModule -> Decl -> List Decl
+importOverlayDecls wildHalf cur rows (DAttrib _ d) =
+  importOverlayDecls wildHalf cur rows d
+importOverlayDecls wildHalf cur rows (DUse _ (p@(UseGroup _ ms)) _) =
+  if wildHalf then
+    []
+  else
+    flatMap (memberOverlayDecl cur rows (usePathModuleId p)) ms
+importOverlayDecls wildHalf cur rows (DUse _ (p@(UseWild _)) _) =
+  if wildHalf then
+    wildOverlayDecls cur rows (usePathModuleId p)
+  else
+    []
+importOverlayDecls _ _ _ _ = []
 
 -- A wildcard import's overlay: EVERY decl the named module publishes, as the reader at
 -- ordinal `cur` may see it.  A wildcard names no member, so there is nothing to look up
@@ -29874,7 +29943,7 @@ checkModuleFullDiags mid seedVars accData accAll prog =
   --     (`import m.*`) contributes m's whole published row without naming any
   --     constructor, since `wildOverlayDecls`; before that arm existed it fell to the
   --     universe fallback and import-clause ORDER decided the oracle's answer.
-  -- The PERF claim is corrected at `importedCtorTypeDecls` itself (the result is bounded
+  -- The PERF claim is corrected at `importedCtorTypeDeclsFirstWins` itself (the result is bounded
   -- by import count x per-module public decl count; the WORK is O(members x |universe|),
   -- held down by one zero-allocation traversal per member).  Do not restate it as "no
   -- O(N²)" here: this
@@ -29885,7 +29954,11 @@ checkModuleFullDiags mid seedVars accData accAll prog =
   -- pool ("keeps the two overlays in lockstep", above), and `mid` is this function's
   -- own parameter, so the same loader-derived key reaches both.
   let declEnvsHere = driverState.value.declEnvsRef.value
-  let _ = seedCheckRun (prog ++ importedCtorTypeDecls prog (declEnvsOrdOf mid declEnvsHere) declEnvsHere.deModules ++ accData)
+  -- 🚨 `…FirstWins`: `oracleMap` is `omFromPairs (reverseL …)`, so the FIRST row wins and
+  -- the `UseGroup` rows must come FIRST for an explicitly named member to outrank a
+  -- wildcard.  The `dataEnv` overlay takes `…LastWins` — opposite order, same rule,
+  -- because that consumer is last-write-wins.  See `importedCtorTypeDeclsFirstWins`.
+  let _ = seedCheckRun (prog ++ importedCtorTypeDeclsFirstWins prog (declEnvsOrdOf mid declEnvsHere) declEnvsHere.deModules ++ accData)
   -- Bug C: pass the cumulative full impl universe (core + earlier modules) as
   -- implDecls (was checkModuleFull, i.e. implDecls=[]) so buildStandaloneShadows sees
   -- an imported standalone funDef that shadows an interface method (`map`'s `toList`
