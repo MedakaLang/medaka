@@ -223,6 +223,7 @@ MEDAKA_ROOT="$(git rev-parse --show-toplevel)" sh pds/test/inlang_test_oracle.sh
 
 ## Oracle (S-oracle-standup, #1707)
 
-`pds/oracle/` runs the official Bluesky PDS service payload locally as the Phase 0/1
-cross-check oracle. The full procedure lives in `docs/ops/PDS-ORACLE.md` — this is a **local
-manual procedure, not a gate; no CI job provisions it**.
+`pds/oracle/` runs the **official Bluesky PDS container image, pinned by digest**, as the
+Phase 0/1 cross-check oracle, with a documented no-Docker fallback for boxes without Docker.
+The full procedure lives in `docs/ops/PDS-ORACLE.md` — this is a **local manual procedure, not
+a gate; no CI job provisions it**.

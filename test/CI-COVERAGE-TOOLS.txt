@@ -104,11 +104,14 @@ pds/tools/gen_field_corpus     regenerates pds/test/vectors/field_reference_corp
                                about the compiler. The corpus it produces IS graded — by
                                pds/test/field_vectors.sh and pds/test/vector_provenance.sh.
 
-# ── pds oracle (S-oracle-standup, #1707 — a local manual procedure, not a gate) ──
-pds/oracle/run                regenerates a local Bluesky PDS service install
-                               ($PDS_ORACLE_HOME, outside the repo) as the Phase 0/1 oracle;
-                               needs network + Node/pnpm; asserts nothing about the compiler.
-                               No CI job invokes it. See docs/ops/PDS-ORACLE.md.
+# ── pds oracle (S-oracle-standup, #1707; docker re-cut fix-oracle-standup-docker — a
+#    local manual procedure, not a gate) ──
+pds/oracle/run                runs the official ghcr.io/bluesky-social/pds container image,
+                               pinned by digest ($PDS_ORACLE_HOME, outside the repo), as the
+                               Phase 0/1 oracle; falls back to a host-Node install (node-*
+                               verbs) when Docker is unavailable. Needs network for the first
+                               pull/fetch; asserts nothing about the compiler. No CI job
+                               invokes it. See docs/ops/PDS-ORACLE.md.
 
 # ── sourced libraries (never executed; `sh <file>` is a no-op) ──
 test/lib_scratch               shell library, not a script: sourced by run_gates / build_oracles /
