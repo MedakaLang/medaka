@@ -161,7 +161,9 @@ All commands are run from the repo root.
 # 1. Pull the pinned image by digest and verify it landed under that exact digest.
 sh pds/oracle/run.sh pull
 
-# 2. Start the container (DETACHED — supervised by dockerd, not your shell).
+# 2. Start the container (DETACHED — supervised by dockerd, not your shell). The first
+#    `up` also generates pds.docker.env (mode 0600) from the sample; `up` REFUSES to start
+#    if PDS_DID_PLC_URL is missing or empty in that file — see Limitations item 1.
 sh pds/oracle/run.sh up
 
 # 3. Probe it.
@@ -196,8 +198,9 @@ start (e.g. missing data/blobs directories — `up` creates them for you before 
 # 1. Fetch the pinned service/ payload, verify its sha256, then install deps.
 sh pds/oracle/run.sh node-setup
 
-# 2. Start the server in the FOREGROUND (own terminal/turn; generates pds.env with fresh
-#    secrets on first run).
+# 2. Start the server in the FOREGROUND (own terminal/turn; generates pds.env, mode 0600,
+#    with fresh secrets on first run). `node-up` REFUSES to start if PDS_DID_PLC_URL is
+#    missing or empty in that file — see Limitations item 1.
 sh pds/oracle/run.sh node-up
 
 # 3. From a SEPARATE shell, probe it (same `check` as Route A):
@@ -216,23 +219,29 @@ sh pds/oracle/run.sh node-provenance     # Route B (local install reads)
 - **Route A:** `sh pds/oracle/run.sh down` — removes the container. Nothing is left running.
 - **Route B:** `node-up` runs in the foreground — `Ctrl-C` (or `kill` the `node` process)
   stops the server.
-- Both routes: cleanup of the oracle home is a single `rm -rf "$PDS_ORACLE_HOME"` (default
-  `${TMPDIR:-/var/tmp}/medaka-pds-oracle`) — deliberately outside the repo, so this procedure
-  can never leave the tree dirty; there is nothing under version control to clean up and
-  nothing to add to `.gitignore`.
+- Both routes: cleanup of the oracle home is a single
+  `rm -rf "${PDS_ORACLE_HOME:-${TMPDIR:-/var/tmp}/medaka-pds-oracle}"` — deliberately outside
+  the repo, so this procedure can never leave the tree dirty; there is nothing under version
+  control to clean up and nothing to add to `.gitignore`. (`PDS_ORACLE_HOME` is set INSIDE
+  `run.sh` and is not exported to your shell, so a literal `rm -rf "$PDS_ORACLE_HOME"` — with
+  no default — expands to `rm -rf ""` and cleans nothing; use the form above.)
 
 ## Limitations
 
-1. **Account creation needs a reachable PLC directory** (both routes). Without one,
-   `com.atproto.server.createAccount` fails:
+1. **Both samples now SET `PDS_DID_PLC_URL=http://127.0.0.1:9`** — a dead loopback sentinel,
+   not left commented out. Account creation therefore fails, by construction:
    ```
    POST /xrpc/com.atproto.server.createAccount {"handle":"alice.test",...}
      -> 502 {"error":"UpstreamFailure","message":"Unable to perform PLC operation"}
    ```
-   The public `https://plc.directory` would satisfy this, but pointing at it publishes a
-   real `did:plc` to a real network — that decision has EXTERNAL SIDE EFFECTS and is **Val's
-   to make**, not this document's or any implementer's. A local PLC server is the alternative,
-   and is Phase 1's problem, not this slice's. Containerizing Route A does not change this.
+   **If the variable is unset OR empty, `@atproto/pds` resolves `plcUrl` to the PRODUCTION
+   `https://plc.directory` instead**, and `createAccount` performs a real, permanent, public,
+   un-withdrawable `did:plc` WRITE there. That decision has EXTERNAL SIDE EFFECTS and is
+   **Val's to make**, not this document's or any implementer's — which is why `run.sh up` /
+   `node-up` now **REFUSE to start** unless `PDS_DID_PLC_URL` is set to a non-empty value in
+   the env file: it is a required decision, not a default. A local PLC server is the
+   alternative, and is Phase 1's problem, not this slice's (`RUN-PDS0-022 D2` — now a safety
+   prerequisite there). Containerizing Route A does not change this.
 2. **Route B is not the container.** No container runtime, no `dumb-init`, no bundled `goat`,
    no Caddy/TLS — see "What Route B does NOT reproduce" above. Its equivalence to the
    container rests on identical `service/` bytes, identical `@atproto/pds` version, and the

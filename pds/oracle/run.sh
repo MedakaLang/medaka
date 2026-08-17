@@ -99,6 +99,44 @@ script_dir() {
   ( cd "$d" && pwd )
 }
 
+require_plc_url() {
+  # $1 = env file path. Refuses to let either route start a server unless
+  # PDS_DID_PLC_URL is set to a NON-EMPTY value IN THE FILE.
+  #
+  # Deliberate property: this reads the FILE, not the ambient shell environment.
+  # For Route B (node-up) an exported shell PDS_DID_PLC_URL would reach `node`
+  # anyway via `set -a; . "$env_file"`, but this guard still refuses on the file's
+  # own content — refuse-when-unsure, uniform across both routes. An ambient-env
+  # guard (`[ -n "${PDS_DID_PLC_URL:-}" ]`) would only ever cover Route B: Route A's
+  # `docker run --env-file` does not inherit the caller's shell at all.
+  #
+  # Unset AND present-but-empty are both refused: @atproto/common's envStr() maps
+  # an empty string to `undefined`, identically to unset, so
+  # `PDS_DID_PLC_URL=` (empty) resolves to the PRODUCTION https://plc.directory —
+  # exactly the defect this guard exists to close. A key merely being present is
+  # not enough; the value must be non-empty and non-whitespace.
+  #
+  # Whitespace-only (e.g. `PDS_DID_PLC_URL=" "`) checked separately (RUN-PDS0-030):
+  # envStr() (@atproto/common dist/env.js:6-11) only tests `str.length === 0` — it
+  # does NOT trim — so a whitespace-only value has nonzero length and is NOT mapped
+  # to undefined; it would reach `new plc.Client(...)` as a literal garbage URL and
+  # fail LOUDLY at connect time, not silently resolve to production. The non-empty
+  # check below is therefore sufficient; this guard rejects it anyway (its regex
+  # requires a non-whitespace FIRST character) as an accidental extra safety margin,
+  # not because the library's behavior requires it.
+  ef="$1"
+  if ! grep -Eq '^PDS_DID_PLC_URL=[^[:space:]]' "$ef" 2>/dev/null; then
+    echo "pds/oracle/run.sh: REFUSING to start — PDS_DID_PLC_URL is not set (or is empty) in $ef" >&2
+    echo "  This is a REQUIRED safety decision, not a default. Unset or empty means the" >&2
+    echo "  server resolves to the PRODUCTION https://plc.directory, and account creation" >&2
+    echo "  would perform a real, permanent, un-withdrawable public did:plc WRITE there." >&2
+    echo "  Safe value to paste into $ef:" >&2
+    echo "    PDS_DID_PLC_URL=http://127.0.0.1:9" >&2
+    echo "  Or delete $ef and re-run this subcommand to regenerate it from the updated sample." >&2
+    exit 1
+  fi
+}
+
 # ============================== primary (docker) route ==============================
 
 cmd_pull() {
@@ -140,14 +178,17 @@ cmd_up() {
     jwt_secret="$(openssl rand -hex 32)"
     admin_pw="$(openssl rand -hex 16)"
     plc_key="$(openssl rand -hex 32)"
-    sed \
+    ( umask 077; sed \
       -e "s#^PDS_JWT_SECRET=.*#PDS_JWT_SECRET=$jwt_secret#" \
       -e "s#^PDS_ADMIN_PASSWORD=.*#PDS_ADMIN_PASSWORD=$admin_pw#" \
       -e "s#^PDS_PLC_ROTATION_KEY_K256_PRIVATE_KEY_HEX=.*#PDS_PLC_ROTATION_KEY_K256_PRIVATE_KEY_HEX=$plc_key#" \
       -e "s#^PDS_PORT=.*#PDS_PORT=$PDS_ORACLE_PORT#" \
-      "$sample" > "$env_file"
+      "$sample" > "$env_file" )
+    chmod 600 "$env_file"
     echo "pds/oracle/run.sh: wrote $env_file (never committed; oracle home is outside the repo)"
   fi
+
+  require_plc_url "$env_file"
 
   docker rm -f "$PDS_ORACLE_CONTAINER" >/dev/null 2>&1 || true
 
@@ -210,18 +251,30 @@ cmd_check() {
   ok=0
 
   echo "pds/oracle/run.sh: GET $base/xrpc/_health"
-  health_out="$(curl -sS --retry 5 --retry-delay 1 --retry-connrefused -w '\n%{http_code}' "$base/xrpc/_health")"
-  health_code="$(printf '%s' "$health_out" | tail -1)"
-  health_body="$(printf '%s' "$health_out" | sed '$d')"
-  echo "  -> $health_code $health_body"
-  [ "$health_code" = "200" ] || ok=1
+  health_rc=0
+  health_out="$(curl -sS --retry 5 --retry-delay 1 --retry-connrefused -w '\n%{http_code}' "$base/xrpc/_health")" || health_rc=$?
+  if [ "$health_rc" -ne 0 ]; then
+    echo "  -> (curl exit $health_rc, no response)"
+    ok=1
+  else
+    health_code="$(printf '%s' "$health_out" | tail -1)"
+    health_body="$(printf '%s' "$health_out" | sed '$d')"
+    echo "  -> $health_code $health_body"
+    [ "$health_code" = "200" ] || ok=1
+  fi
 
   echo "pds/oracle/run.sh: GET $base/xrpc/com.atproto.server.describeServer"
-  ds_out="$(curl -sS --retry 5 --retry-delay 1 --retry-connrefused -w '\n%{http_code}' "$base/xrpc/com.atproto.server.describeServer")"
-  ds_code="$(printf '%s' "$ds_out" | tail -1)"
-  ds_body="$(printf '%s' "$ds_out" | sed '$d')"
-  echo "  -> $ds_code $ds_body"
-  [ "$ds_code" = "200" ] || ok=1
+  ds_rc=0
+  ds_out="$(curl -sS --retry 5 --retry-delay 1 --retry-connrefused -w '\n%{http_code}' "$base/xrpc/com.atproto.server.describeServer")" || ds_rc=$?
+  if [ "$ds_rc" -ne 0 ]; then
+    echo "  -> (curl exit $ds_rc, no response)"
+    ok=1
+  else
+    ds_code="$(printf '%s' "$ds_out" | tail -1)"
+    ds_body="$(printf '%s' "$ds_out" | sed '$d')"
+    echo "  -> $ds_code $ds_body"
+    [ "$ds_code" = "200" ] || ok=1
+  fi
 
   if [ "$ok" -ne 0 ]; then
     echo "pds/oracle/run.sh: check FAILED (expected 200 from both endpoints)" >&2
@@ -302,14 +355,17 @@ cmd_node_up() {
     jwt_secret="$(openssl rand -hex 32)"
     admin_pw="$(openssl rand -hex 16)"
     plc_key="$(openssl rand -hex 32)"
-    sed \
+    ( umask 077; sed \
       -e "s#^PDS_JWT_SECRET=.*#PDS_JWT_SECRET=$jwt_secret#" \
       -e "s#^PDS_ADMIN_PASSWORD=.*#PDS_ADMIN_PASSWORD=$admin_pw#" \
       -e "s#^PDS_PLC_ROTATION_KEY_K256_PRIVATE_KEY_HEX=.*#PDS_PLC_ROTATION_KEY_K256_PRIVATE_KEY_HEX=$plc_key#" \
       -e "s#^PDS_PORT=.*#PDS_PORT=$PDS_ORACLE_PORT#" \
-      "$sample" > "$env_file"
+      "$sample" > "$env_file" )
+    chmod 600 "$env_file"
     echo "pds/oracle/run.sh: wrote $env_file (never committed; oracle home is outside the repo)"
   fi
+
+  require_plc_url "$env_file"
 
   # shellcheck disable=SC1090
   set -a
