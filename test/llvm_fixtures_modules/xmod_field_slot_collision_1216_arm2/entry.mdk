@@ -1,0 +1,28 @@
+-- #1216, ARM 2 — two same-named-CONSTRUCTOR (`Cfg`) records in unrelated
+-- modules, projected via distinct owning TYPE names (`WrapA`/`WrapZ`). This
+-- is a genuinely different arm from arm1 (a plain field-NAME collision
+-- across two differently-named record types): here `lookupRecordByMangledHead`
+-- keeps only candidates whose registry key suffix-matches `__<head>`, and
+-- `awrap__Cfg` does not end in `__WrapA` — so pre-fix, the candidate list
+-- was EMPTY, the receiver-identity narrowing never ran, and control fell to
+-- `resolveFieldByOwners` -> `pairRecordByName (headL owners)`, which picked
+-- the first key in `sortUniqS` order, i.e. BY MODULE-NAME SORT ORDER. Also
+-- note: no projection here crosses a module boundary, and this entry module
+-- never mentions either type name at all — a module's OWN projections were
+-- corrupted by a declaration it has no import path to.
+--
+-- Re-pointed from the drained must-fail pin
+-- `test/must_fail_fixtures/1216-xmod-record-field-name-collision/`'s
+-- why-note second arm (both arms of #1216 confirmed fixed 2026-08-17; see
+-- that commit's message).
+--
+-- Expected output, hand-derived from the sources: mkA = Cfg { a = 11, b = 22 }
+-- => arA = 11, arB = 22; mkZ = Cfg { b = 33, a = 44 } => zrA = 44, zrB = 33.
+-- So `11,22,44,33`. Cross-checked against `medaka run`, which is unaffected
+-- by this bug class (interpreter resolves fields by NAME, not layout).
+import awrap.{arA, arB}
+import zwrap.{zrA, zrB}
+
+main : <IO> Unit
+main = putStrLn (intToString arA ++ "," ++ intToString arB
+  ++ "," ++ intToString zrA ++ "," ++ intToString zrB)

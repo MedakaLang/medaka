@@ -62,6 +62,16 @@ import frontend.ast.{
   useMemberLocal,
   useMemberAlias,
   qualifiedLocal,
+  -- RE-HOMED here from `types/registry.mdk` (oracle-identity family leaf L1):
+  -- `frontend/exhaust.mdk`'s constructor oracle keys on `TabKey`, and
+  -- `frontend` may not import `types`.  Same six symbols, same bodies; only
+  -- the module they are imported from changed.  The RENDERER stays in
+  -- `types/registry.mdk` and is still imported from there.
+  TabKey(..),
+  tabKeyOf,
+  tabKeyName,
+  lookupTab,
+  tabHasName,
 }
 -- #1111 Stage A-2 unit A-2.3: the TYPE-namespace re-key.  `aliasTableRef` /
 -- `dataParamKindsRef` (and their `universe*` cross-run halves) are keyed by
@@ -74,11 +84,6 @@ import frontend.ast.{
 -- through `ifaceTabKey` below.  `universeRegisteredIfacesRef` is deliberately
 -- NOT re-keyed — see `ifaceRegistered`.
 import types.registry.{
-  TabKey(..),
-  tabKeyOf,
-  tabKeyName,
-  lookupTab,
-  tabHasName,
   RegKey,
   Registry,
   regKeyOfTab,
@@ -10183,14 +10188,130 @@ resolveFieldByOwners te fname = match fieldOwnerNames fname
   r::rest => resolveFieldAmbiguous te fname (r::rest)
 
 -- multiple owners: receiver still an unbound var ⇒ genuinely ambiguous; a
--- concrete (non-record) receiver ⇒ pick the first owner so the later unify
--- surfaces the type mismatch (mirrors the oracle's two `_` sub-branches).
+-- concrete (non-record) receiver ⇒ narrow by the receiver's own declaration
+-- identity, and only if that does not land on exactly one owner fall back to
+-- picking the first owner so the later unify surfaces the type mismatch
+-- (mirrors the oracle's two `_` sub-branches).
 resolveFieldAmbiguous : Mono -> String -> List String -> Option (String, RecordInfo)
 resolveFieldAmbiguous te fname owners = match normalize te
   TVar _ =>
     let _ = pushTypeError "T-AMBIGUOUS-FIELD" (ambiguousFieldMsg fname owners)
     None
-  _ => pairRecordByName (headL owners)
+  _ => resolveFieldOwnersNarrowed te fname owners
+
+-- ── #1216 / #1382: the multi-owner arm stops answering by sort order ──────────
+-- `sortUniqS` makes `headL owners` a MODULE-NAME SORT, so before this the concrete
+-- arm decided which record a `.field` access means by the alphabetical order of the
+-- declaring modules — measured on the emit path as `CFieldAccess (CVar
+-- "zwrap__mkZ") "a" "awrap__Cfg"`: zwrap's value, awrap's record, applied
+-- faithfully by the backend.
+--
+-- The narrowing asks the one question the bare key cannot: which DECLARATION does
+-- the receiver's own head name?  It ADOPTS `recordCandIsReceiverDecl` — the same
+-- landed comparator `lookupRecordByMangledHead` filters with — so both sides go
+-- through `headTyconMono` and the comparison is on `HeadKey`, not on the string
+-- every candidate here spells identically by construction.
+--
+-- WHAT THIS HAS, AND WHAT IT MEASURABLY DOES NOT — the second and third bullets
+-- below replace three claims that shipped with the original narrowing and were
+-- **measured false** by the adversarial review of `S-record-pairing-identity`.
+-- Keep them stated as measurements; the false versions cost a reviewer a round and
+-- were the stated reason the flat path carried no test cell.
+--   * ABSENCE DECIDES NOTHING.  `HeadKey` embeds `TabKey`, whose `TkIdent`/`TkBare`
+--     split means a key carrying identity can never equal one that does not.  A
+--     receiver whose head was never stamped at all matches ZERO candidates and
+--     falls through to exactly today's answer — never "the first one".
+--   * ⚠️ IT IS LIVE ON THE FLAT/SINGLE-FILE DRIVER.  The retracted claim was that
+--     the flat driver, where every decl is `TkBare`, "matches ZERO candidates".
+--     FALSE: `TkBare Ns String` CARRIES the type name, so two bare keys naming the
+--     same type ARE equal, and the narrowing selects there.  Measured: `flat/p.mdk`
+--     (two single-ctor records sharing field `tag`, concrete receiver) goes from a
+--     base-arm `Type mismatch: Beta vs Alpha` to the hand-derived correct `42`.
+--     That direction is CORRECT and is kept; `test/llvm_fixtures_modules/
+--     record_owner_ctor_ambiguity/` carries the flat cell so it stays graded.
+--   * ⚠️ IT CAN WIDEN AN ACCEPT, WHICH IS WHY THE SIBLING GUARD EXISTS.  The
+--     retracted claim was that "anything other than exactly one surviving candidate
+--     returns today's answer, so it can never widen an accept" — the premise is
+--     true and the conclusion does not follow: a singleton survivor is itself a new
+--     accept where the old ladder's `headL` pick reached a unify mismatch.  For
+--     SINGLE-constructor records that widening is the fix (`flat`, `#1216`).  For a
+--     MULTI-`ConNamed`-variant type it was unsound, exactly as the `#1319 UNIT 2`
+--     note above predicted for a type-keyed record index: `recordCandIsReceiverDecl`
+--     compares RESULT-TYPE heads while `registerRecordInfoKeyed` registers one
+--     `RecordInfo` per named-field CONSTRUCTOR, so for
+--     `data T = Zed { x } | Oth { y }` every candidate of type `T` compares equal to
+--     an `Oth` receiver and the filter lands on `Zed` with full confidence.
+--     Measured on `ada2bd57`: `(Oth …).x` went from a base-arm `exit 1` on
+--     check/run/build to `check` exit 0 and a BUILT BINARY printing `99` — a
+--     loud→silent transition.  `narrowingBlockedByCtorSibling` below is the repair.
+--   * IT CANNOT TURN NOTHING INTO SOMETHING.  Every candidate is built by a
+--     SUCCESSFUL `lookupRecordByName`, and the fall-through is byte-for-byte the
+--     old expression, so no program that resolved to `None` here can now resolve to
+--     `Some`.
+--
+-- One mint of the receiver's key for the whole filter, not one per candidate — the
+-- same hoist `lookupRecordByMangledHead` documents, for the same reason
+-- (`tabKeyOf` → `mkIdent` → `identOriginOf` allocates on the way).
+resolveFieldOwnersNarrowed : Mono -> String -> List String -> Option (String, RecordInfo)
+resolveFieldOwnersNarrowed te fname owners =
+  let rk = headTyconMono te
+  narrowedPick
+    rk
+    fname
+    owners
+    (filterList (recordCandIsReceiverDecl rk) (ownerCandidates owners))
+
+-- The singleton gate, plus the guard the comparator's granularity requires.  A
+-- lone survivor is trusted ONLY when the receiver's type does not also have a
+-- named-field constructor that withholds this field: a value of type `T` carries no
+-- static constructor tag, so where two constructors of `T` disagree about `fname`
+-- the receiver's TYPE cannot say which layout applies, and selecting is guessing.
+-- Anything else — zero survivors, several survivors, or a blocked singleton —
+-- returns the pre-narrowing answer byte-for-byte, the same `_ =>` fall-through the
+-- original arm had.
+narrowedPick : Option HeadKey -> String -> List String -> List (String, RecordInfo) -> Option (String, RecordInfo)
+narrowedPick rk fname _ [(k, ri)]
+  | not (narrowingBlockedByCtorSibling rk fname k) = Some (k, ri)
+narrowedPick _ _ owners _ = pairRecordByName (headL owners)
+
+-- Is there ANOTHER registered named-field constructor sharing the survivor's
+-- RESULT head that does NOT declare `fname`?  That is precisely the
+-- multi-`ConNamed`-variant shape whose layout the receiver's type underdetermines.
+-- A record re-registered under a second key is excluded by construction: it
+-- declares `fname` too, so it fails the withholds test (and it would already be a
+-- second survivor, since `fieldOwnersRef` is written in lockstep with
+-- `recordByNameRef` by `registerRecordInfoKeyed`).
+-- Cost: one pass over the record registry, taken ONLY when the filter produced a
+-- singleton — i.e. in the give-up arm of a multi-owner field access, never on the
+-- exact-hit path.
+narrowingBlockedByCtorSibling : Option HeadKey -> String -> String -> Bool
+narrowingBlockedByCtorSibling rk fname survivorKey =
+  anyCtorSiblingWithholds
+    rk
+    fname
+    survivorKey
+    (omKeys perRun.value.recordByNameRef.value)
+
+anyCtorSiblingWithholds : Option HeadKey -> String -> String -> List String -> Bool
+anyCtorSiblingWithholds _ _ _ [] = False
+anyCtorSiblingWithholds rk fname skey (k::rest)
+  | k == skey = anyCtorSiblingWithholds rk fname skey rest
+  | ctorSiblingWithholds rk fname k = True
+  | otherwise = anyCtorSiblingWithholds rk fname skey rest
+
+ctorSiblingWithholds : Option HeadKey -> String -> String -> Bool
+ctorSiblingWithholds rk fname k = match lookupRecordByName k
+  Some ri => rk == headTyconMono (recordResultMono ri)
+    && isNone (omLookup fname (recordFieldMap ri))
+  None => False
+
+-- Each owner key paired with its `RecordInfo`; a key with no entry is dropped
+-- rather than defaulted, so the filter above only ever sees real declarations.
+ownerCandidates : List String -> List (String, RecordInfo)
+ownerCandidates [] = []
+ownerCandidates (key::rest) = match lookupRecordByName key
+  Some ri => (key, ri) :: ownerCandidates rest
+  None => ownerCandidates rest
 
 pairRecordByName : String -> Option (String, RecordInfo)
 pairRecordByName r = map (ri => (r, ri)) (lookupRecordByName r)
@@ -13218,7 +13339,7 @@ checkMatchRedundant scrutTy arms =
 -- is `None`, i.e. when the scrutinee type has no concrete head, in which case no
 -- arm carries a constructor pattern and there is no head constructor to find in
 -- either order.
-checkRedundantGo : Option String -> List (List Pat) -> OrdMap Unit -> Bool -> List Arm -> Unit
+checkRedundantGo : Option TabKey -> List (List Pat) -> OrdMap Unit -> Bool -> List Arm -> Unit
 checkRedundantGo _ _ _ _ [] = ()
 checkRedundantGo col0 prec heads offCol ((Arm pat gs body)::rest) =
   let dp = desugarPat driverState.value.matchOracle.value pat
@@ -13248,7 +13369,7 @@ checkRedundantGo col0 prec heads offCol ((Arm pat gs body)::rest) =
 -- deliberate over-approximation of "has a wildcard head" (it also trips on a literal
 -- head, which `specializeCon` would in fact discard): erring towards `True` only ever
 -- costs us the fast path and falls back to the exact check, never an answer.
-armUnreachable : Option String -> List (List Pat) -> OrdMap Unit -> Bool -> Pat -> Bool
+armUnreachable : Option TabKey -> List (List Pat) -> OrdMap Unit -> Bool -> Pat -> Bool
 armUnreachable col0 prec heads offCol (PCon c args)
   | not offCol && not (omHasKey c heads) = False
   | otherwise =
@@ -13290,9 +13411,14 @@ nonExhaustiveMsg scrutTy rows = match usefulWitness driverState.value.matchOracl
 
 -- Name the scrutinee type (skip the synthetic tuple type names, which aren't
 -- user-facing — the witness pattern already reads as a tuple).
-tyOfMsg : Option String -> String
+-- ⚠️ Reads the bare NAME out of the key (`tabKeyName`) on purpose: this is
+-- witness PROSE, not a lookup, and its text must not change for any program
+-- whose diagnostic does not change.
+tyOfMsg : Option TabKey -> String
 tyOfMsg None = ""
-tyOfMsg (Some t) = if isTupleTyName t then "" else " of '\{t}'"
+tyOfMsg (Some k) =
+  let t = tabKeyName k
+  if isTupleTyName t then "" else " of '\{t}'"
 
 isTupleTyName : String -> Bool
 isTupleTyName t = stringLength t >= 7 && stringSlice 0 7 t == "__tuple"
@@ -13307,8 +13433,25 @@ nonGuardedRows ((Arm _ _ _)::rest) = nonGuardedRows rest
 -- the head type name of the scrutinee, for the matrix's column-0 oracle: a
 -- TCon/TApp head gives the type name; a tuple has no TCon head, so it maps to a
 -- synthetic per-arity tuple type (mirrors the reference's col0_type).
-matchCol0Type : Mono -> Option String
-matchCol0Type ty = map (n => n) (headTyconNameMono ty)
+--
+-- ⚠️ ANSWER-PRESERVING CLASSIFICATION, and it is a REQUIRED property rather
+-- than a style choice.  `headTyconNameMono` is the gate — it decides `Some` vs
+-- `None` on exactly the `Mono` head nodes it decided them on before, so `TFun`
+-- stays `None` (#1617, deliberate) and falls through to `inferCol0Type`, and a
+-- rigid head still produces a key that MISSES the table exactly as today's
+-- bare `Some n` missed it.  `headTyconMono` is consulted only to UPGRADE a key
+-- that is already going to be `Some`, never to change whether it is `Some`.
+--
+-- Composing the two existing projections is deliberate: they already owe each
+-- other an arm for every new `Mono` head node, and a third independent
+-- `match headMonoNode` arm set here is one more the next person would forget.
+matchCol0Type : Mono -> Option TabKey
+matchCol0Type ty = match headTyconNameMono ty
+  None => None
+  Some n => match headTyconMono ty
+    Some (HkDecl k) => Some k
+    Some (HkRigid _) => Some (TkBare NsType n)
+    None => Some (TkBare NsType n)
 
 inferArms : TcEnv -> Mono -> Mono -> List Arm -> Unit
 inferArms _ _ _ [] = ()
@@ -21915,7 +22058,7 @@ checkBodyImpl seed mode prog0 =
       --     at all.  It is order-observable only for a decl registered twice, where it
       --     agrees.  It is NOT evidence about the bare-keyed tables above.
       --   * the exhaust ctor ORACLE — and it is built at a DIFFERENT CALL SITE
-      --     (`checkModuleFullDiags`: `seedCheckRun (prog ++ importedCtorTypeDecls prog …
+      --     (`checkModuleFullDiags`: `seedCheckRun (prog ++ importedCtorTypeDeclsFirstWins prog …
       --     ++ accData)`), from a LIST, with `oracleMap` = `omFromPairs (reverseL …)`,
       --     i.e. FIRST-wins on that list → prog0 > overlay > universe.  Same verdict,
       --     opposite mechanism, and reached through none of the code on this line.
@@ -21957,8 +22100,13 @@ checkBodyImpl seed mode prog0 =
       -- why the reader's OWN row is excluded here and registered by the two
       -- `registerAllData` calls below instead.
       let _ = declEnvSeedDataUniverse mid envs
+      -- 🚨 `…LastWins`, NOT the `…FirstWins` sibling: `registerAllData` folds LEFT into
+      -- `omInsert` tables, so the LAST row wins, and the overlay's named-outranks-wildcard
+      -- rule therefore needs the `UseGroup` rows LAST.  The oracle call site takes the
+      -- opposite order for the opposite reason — see the partition note at
+      -- `importedCtorTypeDeclsFirstWins`.  Swapping these two inverts the rule silently.
       let base = registerAllData crossRun.value.universeDataEnv.value
-                   (importedCtorTypeDecls prog0 cur envs.deModules)
+                   (importedCtorTypeDeclsLastWins prog0 cur envs.deModules)
       let env0 = registerAllData base prog0
       let _ = applyRecordScopeOverrides prog0
       applyCtorScopeOverrides prog0 env0
@@ -27099,7 +27247,35 @@ seedCheckRun oracleDecls =
 seedAndCheckSplit : List Decl -> List Decl -> List Decl -> List (String, Scheme)
 seedAndCheckSplit runtimeDecls coreProg userProg =
   let prog = coreProg ++ userProg
-  let _ = seedCheckRun prog
+  -- ⚠️ THE ORACLE'S PRELUDE HALF IS STAMPED HERE AND `prog`'s IS NOT, AND THE
+  -- ASYMMETRY IS THE POINT.  `matchOracle`'s `typeCtors` is the one table keyed
+  -- by DECLARATION IDENTITY (`frontend/exhaust.mdk`), so its rows have to be
+  -- minted from the SAME origin the READER's key is minted from.  The reader's
+  -- key comes from `matchCol0Type` → `headTyconMono` → the scrutinee `Mono`'s
+  -- `TCon` origin, and on THIS path that origin is written by the
+  -- `stampDeclOrigins "core" coreProgTy` call inside `checkProgramSeededSplit`
+  -- (`frontend/resolve.mdk`'s #1227 note) — on the very next line, over this
+  -- same `coreProg`.  Feeding `buildOracle` the UNstamped copy therefore made
+  -- the writer mint `TkBare NsType "Option"` for a type whose reader mints
+  -- `TkIdent (Ident NsType (IdentModule "core") "Option")`; `tabKeyEq` never
+  -- equates those, so under the ONE ABSENCE RULE every prelude-typed column-0
+  -- lookup MISSED — and a `bindCtors` miss is LOUD, not silent (`defaultMatrix`
+  -- keeps only wildcard-headed rows, so an all-ctor-headed matrix goes empty and
+  -- `useful _ _ [] _ = True`), which is why the unstamped form put a spurious
+  -- `non-exhaustive match of 'Ordering'` on `main = println 1`.
+  --
+  -- ⚠️ Same id, same decls, same call — NOT an invented module id, so the
+  -- "over-supplying is not correctable" bound in `stampDeclOrigins`' comment is
+  -- not being widened.  `fillDeclOrigin` fills only a still-`OriginUnresolved`
+  -- origin, so this is idempotent and cannot re-stamp an identity-bearing decl.
+  --
+  -- ⚠️ `prog` itself is deliberately left alone: its readers here
+  -- (`runFinalChecks`' cycle walk, `flatClassEnvOf`, `flatImplEnvOf`) are the
+  -- ones that work today, and widening the stamp to them is a separate question
+  -- with its own blast radius.  `buildOracle` reads `DData` only, and of its four
+  -- tables only `typeCtors` reads an origin — the other three stay name-keyed —
+  -- so the blast radius of this line is exactly that one table's keys.
+  let _ = seedCheckRun (stampDeclOrigins "core" coreProg ++ userProg)
   -- #1280: prelude boundary in hand — see `checkProgramSchemesWithRuntime`.
   let schemes = checkProgramSeededSplit (externSchemes (externTyOriginScope coreProg) runtimeDecls) coreProg userProg
   -- #1557 A-3.5c: TWO envs, because the two decl lists differ here and always have —
@@ -28945,12 +29121,18 @@ importSeed (_::rest) depEnv = importSeed rest depEnv
 -- states the same equality for the qual tables).
 --
 -- ⚠️ PERF (issue #154) — THE REAL BOUND, stated for the WORK and not just the RESULT.
--- The RESULT is import-count bounded: at most one overlay decl per UseGroup member, a
--- per-module VIEW, never a per-module rebuild of the global universe.  A module
--- importing no constructors overlays NOTHING and stays byte-identical.  A bare
--- `import mod` (UseName) and a wildcard `import mod.*` (UseWild) contribute no overlay:
--- the bare form binds no ctors at all, and a wildcard cannot name its owning type here,
--- so it takes the same universe-fallback the value seed's wildcard does.
+-- The RESULT is bounded by IMPORT COUNT x PER-MODULE PUBLIC DECL COUNT: at most one
+-- overlay decl per UseGroup member, and — since `wildOverlayDecls` — the wildcard-named
+-- module's whole published row per `UseWild`.  It is still a per-module VIEW (the row is
+-- the envelope's own memoized `demPubDecls`, not a copy), never a per-module rebuild of
+-- the global universe.  A module importing no constructors AND no wildcard overlays
+-- NOTHING and stays byte-identical.  A bare `import mod` (UseName) still contributes no
+-- overlay: the bare form binds no ctors at all, so no ctor occurrence in the reader can
+-- mean that module's declaration by that import.  A wildcard `import mod.*` DOES
+-- contribute, as of `wildOverlayDecls` below — it cannot name its owning type, but it
+-- does not need to: every decl the module publishes is in scope by construction, and
+-- leaving it to the universe-fallback made import-clause ORDER decide which declaration
+-- a ctor occurrence meant, in both the spurious-warning and the lost-warning direction.
 --
 -- The WORK is NOT import-count bounded, and saying it is has already shipped a
 -- regression.  `pool` is the WHOLE accumulated universe and it is SCANNED — so the cost
@@ -28988,15 +29170,109 @@ importSeed (_::rest) depEnv = importSeed rest depEnv
 -- from a `DUse` path, and no module imports itself, so an own-module decl can only
 -- ever fill the `bareType` fallback — LAST in a FIRST-wins walk, so it can only add a
 -- candidate where every earlier row supplied none, never displace one.
-importedCtorTypeDecls : List Decl -> Int -> List DeclEnvModule -> List Decl
-importedCtorTypeDecls unitDecls cur rows =
-  flatMap (importOverlayDecls cur rows) unitDecls
+-- 🚨 THE RESULT IS PARTITIONED: NAMED (`UseGroup`) ROWS AND WILDCARD (`UseWild`) ROWS
+-- ARE TWO SEPARATE HALVES, and which half a consumer must see FIRST depends on that
+-- consumer's own tie-break direction.  This is not a style choice; a single flat
+-- source-ordered list shipped an S1.
+--
+-- WHY.  Before `wildOverlayDecls`, only `UseGroup` contributed, and every row was ONE
+-- precisely-named decl.  A wildcard row is the module's WHOLE published set, so once
+-- `UseWild` was enrolled the flat `flatMap` over the unit's decls in SOURCE ORDER made
+-- import-clause order decide same-named-type collisions BETWEEN the two spellings: with
+-- `import zzcol.*` written above `import aacol.{Red, Blue}`, a non-exhaustive match over
+-- `aacol.Col` was reported as `Missing case: 'Green'` — a constructor of `zzcol.Col`,
+-- the wrong type entirely — and the real missing case went unreported, so the program
+-- then died at runtime on the case nobody warned about.  Swapping the two clauses fixed
+-- it.  Measured on af6e0414 (broken) vs c7c879b7 (correct in BOTH orders).
+--
+-- THE RULE, and it is the ordinary scoping one: AN EXPLICITLY NAMED MEMBER OUTRANKS A
+-- WILDCARD.  "You named this type" beats "you imported everything and it happened to be
+-- in there", whichever clause is written first.
+--
+-- 🚨 THE TWO CONSUMERS TIE-BREAK IN OPPOSITE DIRECTIONS, so they take opposite orders.
+-- Enumerated, because a future edit that routes one of them through the other's wrapper
+-- silently inverts the rule for that consumer with no diagnostic anywhere:
+--   * `registerAllData` (the `dataEnv` overlay) folds the list LEFT and its bare-keyed
+--     tables are `omInsert`, i.e. LAST-WRITE-WINS  -> named rows must come LAST
+--     -> `importedCtorTypeDeclsLastWins`.
+--   * `seedCheckRun` (the exhaustiveness ctor ORACLE) builds `oracleMap` =
+--     `omFromPairs (reverseL …)`, i.e. FIRST-WINS   -> named rows must come FIRST
+--     -> `importedCtorTypeDeclsFirstWins`.
+-- Same rule, both sites; only the list order differs.  The big note at the `dataEnv`
+-- call site enumerates the full set of order-observable structures — this pair is the
+-- overlay's own contribution to it.
+--
+-- ⚠️ WHAT THIS DELIBERATELY DOES **NOT** DECIDE: named-vs-named.  Two `UseGroup` clauses
+-- each naming a same-spelled type from a different module are still resolved by
+-- import-clause order, exactly as before this partition — within each half the walk is
+-- the same `flatMap` over `unitDecls` in source order, and neither consumer's tie-break
+-- direction moved.  That case is a SEPARATE, PRE-EXISTING defect (it reproduces on
+-- c7c879b7, before the wildcard arm existed) and fixing it needs the overlay keyed by
+-- RESOLVED DECLARATION IDENTITY rather than by bare type name — #1319/#1185 territory,
+-- not an ordering change.  Do not "while you are here" it: an ordering answer for
+-- named-vs-named would freeze a guess into the oracle.
+--
+-- ⚠️ PERF: the unit's decl list is walked TWICE (once per half) instead of once, but the
+-- POOL — the expensive part, see `THE REAL BOUND` above — is scanned exactly as many
+-- times as before: each clause yields its rows in whichever half claims it and `[]` in
+-- the other, so the total member/wildcard lookups are unchanged.  The extra cost is one
+-- linear pass over `unitDecls`, which is import-clause bounded, not universe bounded.
+importedCtorTypeDeclsFirstWins : List Decl -> Int -> List DeclEnvModule -> List Decl
+importedCtorTypeDeclsFirstWins unitDecls cur rows = overlayHalf False unitDecls cur rows
+  ++ overlayHalf True unitDecls cur rows
 
-importOverlayDecls : Int -> List DeclEnvModule -> Decl -> List Decl
-importOverlayDecls cur rows (DAttrib _ d) = importOverlayDecls cur rows d
-importOverlayDecls cur rows (DUse _ (p@(UseGroup _ ms)) _) =
-  flatMap (memberOverlayDecl cur rows (usePathModuleId p)) ms
-importOverlayDecls _ _ _ = []
+importedCtorTypeDeclsLastWins : List Decl -> Int -> List DeclEnvModule -> List Decl
+importedCtorTypeDeclsLastWins unitDecls cur rows = overlayHalf True unitDecls cur rows
+  ++ overlayHalf False unitDecls cur rows
+
+-- One half of the partition, in the unit's own source order.  `wildHalf` selects which:
+-- True = `UseWild` rows only, False = `UseGroup` rows only.
+overlayHalf : Bool -> List Decl -> Int -> List DeclEnvModule -> List Decl
+overlayHalf wildHalf unitDecls cur rows =
+  flatMap (importOverlayDecls wildHalf cur rows) unitDecls
+
+importOverlayDecls : Bool -> Int -> List DeclEnvModule -> Decl -> List Decl
+importOverlayDecls wildHalf cur rows (DAttrib _ d) =
+  importOverlayDecls wildHalf cur rows d
+importOverlayDecls wildHalf cur rows (DUse _ (p@(UseGroup _ ms)) _) =
+  if wildHalf then
+    []
+  else
+    flatMap (memberOverlayDecl cur rows (usePathModuleId p)) ms
+importOverlayDecls wildHalf cur rows (DUse _ (p@(UseWild _)) _) =
+  if wildHalf then
+    wildOverlayDecls cur rows (usePathModuleId p)
+  else
+    []
+importOverlayDecls _ _ _ _ = []
+
+-- A wildcard import's overlay: EVERY decl the named module publishes, as the reader at
+-- ordinal `cur` may see it.  A wildcard names no member, so there is nothing to look up
+-- by name — the whole published row IS the answer, and one row is all a module id can
+-- have (`deOrdIndex` keys rows by `demId`), hence the stop at the first match.
+--
+-- 🚨 `declEnvRowVisible`, NEVER `m.demDecls`.  The visible projection is what confines
+-- this to `publicDataDecl`s — public `DData`/`DInterface`/`DImpl`/`DTypeAlias` — and
+-- `DNewtype`'s ABSENCE from that predicate is deliberate (see `publicDataDecl`): reading
+-- `demDecls` here would leak a wildcard-imported module's PRIVATE and NEWTYPE
+-- constructors across the module boundary, draining #1311/#1305 in the loud→silent
+-- direction, i.e. a severity INCREASE.  A wildcard-imported `newtype`'s ctors are
+-- consequently NOT overlaid; that is the ruled behaviour, not an oversight.
+--
+-- The private branch of `declEnvRowVisible` (`entryOrd == cur`, the reader's own row) is
+-- UNREACHABLE from here for the reason the pool note above already gives: `mid` comes
+-- from a `DUse` path, and no module imports itself.
+--
+-- ⚠️ PERF: this returns the row's OWN memoized `demPubDecls` list — no filtered copy is
+-- materialised, per `declEnvRowVisible`'s zero-allocation contract.  It does move the
+-- RESULT bound: see the `THE REAL BOUND` note above.
+wildOverlayDecls : Int -> List DeclEnvModule -> String -> List Decl
+wildOverlayDecls _ [] _ = []
+wildOverlayDecls cur (m::rest) mid =
+  if m.demId == mid then
+    declEnvRowVisible cur m
+  else
+    wildOverlayDecls cur rest mid
 
 -- One member's overlay decl.  The bare-name fallback is kept for the `(..)` spelling
 -- ALONE, so no overlay that fired before #1111 A-2.6 is lost where the identity cannot
@@ -29718,10 +29994,14 @@ checkModuleFullDiags mid seedVars accData accAll prog =
   --     constructor-naming member contributes now (`import m.{T, C}`, and a record's
   --     `import m.{Cfg}`), not only the `(..)` spelling.
   --   * NOT "a module with no `T(..)` import is byte-identical" — only a module that
-  --     names no constructor at all is.
-  -- The PERF claim is corrected at `importedCtorTypeDecls` itself (the result is
-  -- import-count bounded; the WORK is O(members x |universe|), held down by one
-  -- zero-allocation traversal per member).  Do not restate it as "no O(N²)" here: this
+  --     names no constructor at all AND carries no wildcard import is.  A wildcard
+  --     (`import m.*`) contributes m's whole published row without naming any
+  --     constructor, since `wildOverlayDecls`; before that arm existed it fell to the
+  --     universe fallback and import-clause ORDER decided the oracle's answer.
+  -- The PERF claim is corrected at `importedCtorTypeDeclsFirstWins` itself (the result is bounded
+  -- by import count x per-module public decl count; the WORK is O(members x |universe|),
+  -- held down by one zero-allocation traversal per member).  Do not restate it as "no
+  -- O(N²)" here: this
   -- call site is the SECOND per-module scan of the same pool, so it doubles whatever
   -- that constant is.
   -- A-3.2b (#1512): the SECOND consumer of the retired `universeDataDecls`, re-pointed
@@ -29729,7 +30009,11 @@ checkModuleFullDiags mid seedVars accData accAll prog =
   -- pool ("keeps the two overlays in lockstep", above), and `mid` is this function's
   -- own parameter, so the same loader-derived key reaches both.
   let declEnvsHere = driverState.value.declEnvsRef.value
-  let _ = seedCheckRun (prog ++ importedCtorTypeDecls prog (declEnvsOrdOf mid declEnvsHere) declEnvsHere.deModules ++ accData)
+  -- 🚨 `…FirstWins`: `oracleMap` is `omFromPairs (reverseL …)`, so the FIRST row wins and
+  -- the `UseGroup` rows must come FIRST for an explicitly named member to outrank a
+  -- wildcard.  The `dataEnv` overlay takes `…LastWins` — opposite order, same rule,
+  -- because that consumer is last-write-wins.  See `importedCtorTypeDeclsFirstWins`.
+  let _ = seedCheckRun (prog ++ importedCtorTypeDeclsFirstWins prog (declEnvsOrdOf mid declEnvsHere) declEnvsHere.deModules ++ accData)
   -- Bug C: pass the cumulative full impl universe (core + earlier modules) as
   -- implDecls (was checkModuleFull, i.e. implDecls=[]) so buildStandaloneShadows sees
   -- an imported standalone funDef that shadows an interface method (`map`'s `toList`

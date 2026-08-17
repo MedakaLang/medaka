@@ -1,0 +1,7 @@
+-- #1216, ARM 1 — the second owner of the field name `beta`.  `beta` is index 0
+-- here, index 1 in `entry.mdk`'s `Rec`.  There is no import relationship the
+-- other direction (this module does not know `Rec` exists); the point is that
+-- `entry.mdk`'s OWN projection onto its OWN `Rec` was reading the wrong slot
+-- merely because another module in the graph declares a field of the same
+-- name at a different index.
+public export data Other = Other { beta : String, alpha : String }

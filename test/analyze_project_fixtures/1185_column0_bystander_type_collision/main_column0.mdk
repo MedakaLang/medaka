@@ -1,0 +1,41 @@
+-- L1 step-2b's discriminating repro (sprint/ctor-identity,
+-- S-ctor-oracle-identity-family, L1-oracle-typectors-key-identity), promoted to a
+-- durable multi-module `analyze_project` fixture.  Two modules declare a
+-- same-named type `T` with DIFFERENT constructor sets; the scrutinee's type
+-- arrives through a FUNCTION (`zzt.mk`) so the *bystander* (`aat`) is the
+-- name-IMPORTED module and `zzt` -- the type `mk` actually returns -- is only
+-- bare-imported.  A THIRD module (`byw`) participates in nothing and must stay
+-- clean, proving this is not merely "the graph happens to be small".
+--
+-- EXPECTED RESULT, DERIVED BY HAND BEFORE ANY RUN (this corpus has NO
+-- regeneration script; oracle.json is hand-written and reviewed):
+--   `mk n : zzt.T`, whose constructors are exactly `X`, `Y`, `Z`; all three
+--   have arms below, so `g` is EXHAUSTIVE.  `aat.T`'s constructors `A`/`B` are
+--   never in scope for this match at all -- `T`'s value here can only mean
+--   `zzt.T`.  `byw.Widget` is used only as an ordinary value, matched by
+--   nothing.  Every file in the graph publishes ZERO diagnostics.
+--
+-- MEASURED AT BASE (`c7c879b7`, before this family): the oracle instead
+-- answered from `aat`'s row (loaded first) and demanded `A`:
+--   "Warning: non-exhaustive match of 'T'. Missing case: 'A'; add a 'A => ...'
+--   arm, or a '_' wildcard arm to catch the rest."  Swapping the two import
+--   lines flipped the same program to clean -- order-dependent at base.
+--   (`S-ctor-oracle-identity-family-implementer.md`, L1 step 2b-ii.)
+import aat.{T(..)}
+import zzt.{X, Y, Z, mk}
+import byw.{Widget, defaultWidget}
+
+g : Int -> Int
+g n = match mk n
+  X => 1
+  Y => 2
+  Z => 3
+
+w : Widget
+w = defaultWidget
+
+main : <IO> Unit
+main =
+  let _ = println (g 0)
+  let _ = w
+  println "ok"

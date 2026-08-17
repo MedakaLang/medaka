@@ -1,0 +1,7 @@
+-- The `Col` the entry ACTUALLY means: it is reached by `import zzcol.*`, so both its
+-- constructors are in scope in the entry.  TWO constructors, so a single-arm match on
+-- this type is non-exhaustive and a `W-NONEXHAUSTIVE` is owed.
+public export data Col = Red | Blue
+
+export zf : Int -> Int
+zf n = n

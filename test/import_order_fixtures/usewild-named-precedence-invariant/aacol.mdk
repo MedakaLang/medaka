@@ -1,0 +1,4 @@
+public export data Col = Red | Blue
+
+export aval : Int
+aval = 5

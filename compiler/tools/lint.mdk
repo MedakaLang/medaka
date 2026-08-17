@@ -15,6 +15,16 @@
 -- support.util, everything else is inline.
 
 import frontend.ast.{
+  -- `frontend/exhaust.mdk`'s `typeCtors` is keyed by declaration identity
+  -- (oracle-identity family leaf L1), so this file's three oracle consumers
+  -- mint a key instead of passing a bare name.  All of them build their
+  -- oracle from ONE file's raw decls, whose `dataOrigin` is
+  -- `OriginUnresolved`, so every key on both ends is `TkBare` — a measured
+  -- no-op.
+  Ns(..),
+  TyConOrigin(..),
+  TabKey(..),
+  tabKeyOf,
   Loc(..),
   Lit(..),
   Ty(..),
@@ -1142,6 +1152,9 @@ recPatFieldIrrefutable orc (RecPatField _ _ (Some p)) = patIrrefutable orc p
 -- (its type isn't visible in this file) is NOT provably single → False (SKIP).
 ctorIsSingle : Oracle -> String -> Bool
 ctorIsSingle orc c = match oGetCtorType orc c
+  -- Leaf L2 deleted L1's transitional bridge mint here: `oGetCtorType` now
+  -- answers the `TabKey` the type's own decl minted, so the round trip is
+  -- identity-to-identity and this key is passed straight through.
   Some t => match oGetCtors orc t
     Some ctors => listLen ctors == 1
     None => False
@@ -1216,8 +1229,14 @@ derivableHit orc loc iface tys
 -- the type has a `data`/`record` declaration (with constructors) visible in the
 -- linted file — so `deriving` is actually available for it.  Primitive types
 -- (Int/Float/Bool/String/Char/Unit/Array) have no such decl → `oGetCtors` = None.
+-- ⚠️ This oracle is built from ONE file's raw decls with no identity-stamping
+-- pass in the loop, so the key is bare BY CONSTRUCTION on both the write and
+-- read side — `TkBare NsType tyName` directly, rather than routed through
+-- `tabKeyOf`'s origin dance (which would land in the same place, since
+-- `mkIdent _ OriginUnresolved _ = None`, but naming it directly keeps this
+-- module out of the #1110 OriginUnresolved ratchet).
 hasUserDataDecl : Oracle -> String -> Bool
-hasUserDataDecl orc tyName = match oGetCtors orc tyName
+hasUserDataDecl orc tyName = match oGetCtors orc (TkBare NsType tyName)
   Some _ => True
   None => False
 
@@ -1453,7 +1472,9 @@ irrefutablePat _ _ = False
 -- `data`, or a record-as-data).  Both queries are pure syntactic oracle lookups.
 ctorIsSole : Oracle -> String -> Bool
 ctorIsSole orc c = match oGetCtorType orc c
-  Some tyName => match oGetCtors orc tyName
+  -- Leaf L2 deleted L1's transitional bridge mint here — see `ctorIsSingle`
+  -- above; the round trip is now identity-to-identity.
+  Some tyKey => match oGetCtors orc tyKey
     Some ctors => listLen ctors == 1
     None => False
   None => False

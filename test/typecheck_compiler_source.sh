@@ -1003,7 +1003,16 @@ echo "  ok: $(printf '%s\n' "$carrier_actual" | grep -c .) TyConOrigin carrier f
 # this one: its first parameter is a `TyConOrigin`, so `^[[:space:]]*NAME[[:space:]]*:
 # [[:space:]]*TyConOrigin` matched the signature.  The discriminator was narrowed to
 # require the indentation a record field always has; the derivation is at that grep.
-carrier_count_expected=15
+#
+# 15 -> 16 (sprint/ctor-identity, S-ctor-oracle-identity leaf 1, the `TabKey`
+# re-home): `tabKeyOf : Ns -> TyConOrigin -> String -> TabKey`. Same class as both
+# bumps above: a READER. `TabKey = TkIdent Ident | TkBare Ns String`, `Ident = Ident
+# Ns IdentOrigin String` — no `TyConOrigin` anywhere in the result type, so
+# `tabKeyOf` provably consumes and discards; its result cannot carry an origin even
+# in principle. No field on any node, no mint, no new inhabitant, so no
+# `declHeadOf` arm and no producer-ratchet entry is owed, and the carrier field set
+# is INDEPENDENTLY still `9 graded, 0 owed`.
+carrier_count_expected=16
 # Comment-filtered, matching the idiom the three sibling ratchets above already
 # use (`grep -w … | grep -qvE '^[[:space:]]*--'`). An unfiltered count reds this
 # gate on a COMMENT-ONLY diff that merely names `TyConOrigin` in prose -- someone

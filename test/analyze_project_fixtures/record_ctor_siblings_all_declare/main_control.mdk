@@ -1,0 +1,13 @@
+-- CONTROL for `record_ctor_sibling_blocks_narrowing/` — read that fixture's header
+-- first; neither cell tests the property alone.
+--
+-- Every named-field constructor of `T` declares `x`, so the candidate filter keeps
+-- TWO survivors and the narrowing already returned the pre-narrowing answer before
+-- the repair.  MEASURED byte-identical on base `d2b7cb8b`, on the unrepaired slice
+-- `ada2bd57`, and after the repair: two `Type mismatch: T vs U` diagnostics.  If a
+-- future change to the narrowing moves THIS cell, it changed a case the receiver's
+-- type genuinely cannot decide.
+import m1.{T(..), mkZ, mkO}
+import m2.{U(..), mkU}
+
+main = println "\{mkZ.x},\{mkO.x},\{mkU.x}"

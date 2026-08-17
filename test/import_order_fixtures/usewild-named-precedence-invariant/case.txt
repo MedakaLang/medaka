@@ -1,0 +1,57 @@
+entry: main.mdk
+what: an EXPLICITLY NAMED member must outrank a WILDCARD, whichever clause is written first
+
+`aacol` and `zzcol` each declare a type spelled `Col` with DISJOINT constructor sets
+(`{Red, Blue}` vs `{Green, Purple}`). The entry names `Red`/`Blue` in a member list and
+reaches `zzcol` with `.*`. `f` carries no signature, so its argument type is inferred
+from its patterns — `aacol.Col` — and the two-arm match covers it completely. NO
+diagnostic is owed under EITHER ordering, and `run`/`build` print 6 at exit 0 under both.
+
+WHY THIS CASE EXISTS, and how it differs from its sibling
+`usewild-exhaust-oracle-invariant/`. That case has exactly ONE import-visible module
+publishing the type in question, so it is invariant by construction along the axis
+below and cannot see this class at all. This case has TWO, one reached by each SPELLING
+of import, which is the whole point: it asks which spelling wins.
+
+`importedCtorTypeDecls` (compiler/types/typecheck.mdk) was a single `flatMap` over the
+unit's decls in SOURCE ORDER, and that output order IS the precedence — the oracle's
+`oracleMap` is `omFromPairs (reverseL …)`, i.e. first-wins. While only `UseGroup`
+contributed, every row was one precisely-named decl. The `UseWild` arm (landed at
+af6e0414) made a wildcard contribute the named module's WHOLE published set, so a
+wildcard clause written ABOVE a member list outranked it. Measured on a binary cold-built
+from af6e0414, both orderings of exactly these two clauses:
+
+    `import aacol.{Red, Blue, aval}` then `import zzcol.*`  -> codes={}
+    `import zzcol.*` then `import aacol.{Red, Blue, aval}`  -> codes={W-NONEXHAUSTIVE}
+                                                               (`Missing case: 'Green'`)
+
+i.e. the two orderings disagreed, and the second is a SPURIOUS warning naming a
+constructor of a type this entry's `f` is not about — direction (a) of the very defect
+the `UseWild` arm was cut to remove, re-created one clause-order away.
+
+⚠️ THIS CASE IS FAIL-CAPABLE AT af6e0414 and could not have been green there: the two
+orderings differ in the `codes=` component of this gate's signature, which is graded.
+That is not true of the LOST-warning direction of the same bug (a non-exhaustive match
+whose reported missing case is read out of the wrong type): both orderings emit exactly
+one `W-NONEXHAUSTIVE` there and differ ONLY in the message TEXT, which this gate
+deliberately excludes. That direction — the S1 half — is pinned on the absolute-answer
+axis instead, by `test/analyze_project_fixtures/usewild_named_precedence_oracle/`, whose
+hand-written oracle pins `Missing case: 'Blue'`. Neither gate can see the other's half;
+the pair is the coverage.
+
+FIX: `importedCtorTypeDecls` is now PARTITIONED into a named (`UseGroup`) half and a
+wildcard (`UseWild`) half, ordered per consumer — the two consumers tie-break in OPPOSITE
+directions (`registerAllData` is last-write-wins, the oracle is first-wins), so a single
+list order cannot give named rows precedence at both. See the partition note at
+`importedCtorTypeDeclsFirstWins`.
+
+⚠️ WHAT THIS CASE DOES NOT COVER, deliberately: named-vs-named. Two `UseGroup` clauses
+each naming a same-spelled type from a different module are STILL decided by import-clause
+order — a separate, pre-existing defect that reproduces on c7c879b7, before the wildcard
+arm existed, and that needs the overlay keyed by resolved declaration identity rather than
+by bare type name. Do not add that shape to this corpus as an invariance case; it would
+land red. It belongs in the ledger, under its own issue, if and when it is filed.
+
+UNLEDGERED, deliberately: the gate demands invariance and this case is invariant after the
+partition. Current behaviour, every ordering: codes={}, check exit 0, run/build exit 0,
+prints `6`.

@@ -1,0 +1,7 @@
+-- A `Col` the entry never imports and can never name: the entry takes only `aval`
+-- from here.  It exists to occupy the flat data-universe pool with a same-spelled
+-- type whose constructor set DIFFERS from the one the entry actually means.
+public export data Col = Red
+
+export aval : Int
+aval = 5

@@ -1,0 +1,45 @@
+-- The PRECEDENCE sibling of `usewild_ctor_overlay_oracle/`.  That fixture has ONE
+-- import-visible module publishing the type in question, so it cannot see which SPELLING
+-- of import outranks which.  This one has TWO, and the whole fixture is the question the
+-- other cannot ask: when a WILDCARD clause and an EXPLICIT MEMBER LIST both put a type
+-- spelled `Col` in scope, which declaration does a constructor occurrence mean?
+--
+-- 🚨 WHY THIS FIXTURE EXISTS.  `importedCtorTypeDecls` was a single `flatMap` over the
+-- unit's decls in SOURCE ORDER, and that output order IS the precedence (the oracle's
+-- `oracleMap` is `omFromPairs (reverseL …)`, i.e. first-wins).  While only `UseGroup`
+-- contributed, every row was one precisely-named decl.  The `UseWild` arm made a wildcard
+-- contribute the named module's WHOLE published set — so a wildcard clause written ABOVE
+-- an explicit member list outranked it, and "you imported everything and this happened to
+-- be in there" beat "you named this type".  The overlay is now PARTITIONED: named rows and
+-- wildcard rows are separate halves, ordered per consumer (see the partition note at
+-- `importedCtorTypeDeclsFirstWins`, compiler/types/typecheck.mdk).
+--
+-- THE CLAUSE ORDER HERE IS LOAD-BEARING: the wildcard is written FIRST, which is the
+-- broken arm.  Do not "tidy" the imports into alphabetical order — that silently converts
+-- this fixture into the arm that was always green.
+--
+-- EXPECTED RESULT, DERIVED BY HAND BEFORE ANY RUN (this corpus has NO regeneration
+-- script; `oracle.json` is hand-written and reviewed precisely so a wrong engine answer
+-- cannot become the permanent expected output):
+--
+--   `f` carries no signature, so its argument type is inferred from the `Red` pattern.
+--   `Red` is bound by the member list and belongs to `aacol.Col`, whose constructors are
+--   `Red` and `Blue`.  `Green`/`Purple` are constructors of a DIFFERENT type that merely
+--   shares the spelling `Col`.  The single-arm match therefore omits exactly one case,
+--   `Blue`, and that is the only diagnostic owed anywhere in this graph.  `main` applies
+--   `f` only to `Red`, so nothing is owed at runtime.
+--
+-- MEASURED, on a binary cold-built from sprint/ctor-identity @ af6e0414 (the `UseWild`
+-- arm, before this partition): this exact graph reported
+-- `non-exhaustive match of 'Col'. Missing case: 'Green'` — a constructor of `zzcol.Col`,
+-- a type the scrutinee is not — while the REAL missing case `Blue` went unreported and
+-- the program died at runtime on the case nobody warned about.  Swapping the two import
+-- lines reported `Blue` correctly.  Base `c7c879b7` reported `Blue` in BOTH orders.
+import zzcol.*
+import aacol.{Red, Blue, aval}
+
+f x = match x
+  Red => 1
+
+main : <IO> Unit
+main = println (f Red + aval)

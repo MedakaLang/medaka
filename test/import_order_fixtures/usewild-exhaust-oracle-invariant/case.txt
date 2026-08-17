@@ -1,0 +1,36 @@
+entry: main.mdk
+what: a WILDCARD import must decide the exhaustiveness oracle, not import-clause order
+
+`aacol` and `zzcol` each declare a type spelled `Col` with DIFFERENT constructor sets
+(`{Red}` vs `{Red, Blue}`). The entry takes only the value `aval` from `aacol` and
+reaches `zzcol` with `.*`, so the only `Col` the entry can name is `zzcol.Col` — two
+constructors — and the entry's single-arm `match` is non-exhaustive. `W-NONEXHAUSTIVE`
+is therefore owed under EVERY ordering. `main` only ever applies `f` to `Red`, so the
+runtime never reaches the missing arm: `run`/`build` are exit 0 printing `6` under both
+orderings, and the DIAGNOSTIC is the whole observable (the `codes=` component of this
+gate's signature is what grades it).
+
+WHY THIS CASE EXISTS. `importOverlayDecls` (compiler/types/typecheck.mdk) matched
+`UseGroup` alone; `UseWild` fell through the `_ _ _ = []` fallback, so a wildcard
+import contributed NO import-scoped overlay and the constructor occurrence was decided
+by bare-name first-match over the flat load-ordered universe. Measured on a binary
+cold-built from sprint/ctor-identity @ c7c879b7, both orderings of exactly these two
+clauses:
+
+    `import aacol.{aval}` then `import zzcol.*`  -> codes={}                  (warning LOST)
+    `import zzcol.*` then `import aacol.{aval}`  -> codes={W-NONEXHAUSTIVE}   (warning present)
+
+i.e. the two orderings disagreed, and the first is the loud->silent direction AGENTS.md
+grades as a severity increase. The sibling `over_ctors` shape (aacol having MORE ctors)
+diverges the other way, emitting a spurious `W-NONEXHAUSTIVE` naming a constructor the
+entry cannot name.
+
+⚠️ THIS CASE COULD NOT HAVE BEEN GREEN AT c7c879b7 — it is fail-capable by construction,
+which is the point: the corpus previously had no case whose signature carried a
+diagnostic-code difference along this axis, so the gate read 25/25 ok with the wildcard
+overlay entirely absent. The gate was never blind to the CLASS (its `codes=` component
+sees it); the CORPUS had no member.
+
+UNLEDGERED, deliberately: the gate demands invariance. Current behaviour after
+`wildOverlayDecls` (compiler/types/typecheck.mdk), every ordering:
+codes={W-NONEXHAUSTIVE}, check exit 0, run/build exit 0, prints `6`.

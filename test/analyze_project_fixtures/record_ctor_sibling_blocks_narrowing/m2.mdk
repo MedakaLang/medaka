@@ -1,0 +1,7 @@
+-- The SECOND owner of the field name `x`, on another type in another module.  Its
+-- only job is to make `x` a MULTI-OWNER field, so `resolveFieldByOwners` takes its
+-- ambiguous arm and the receiver-identity narrowing runs at all.
+public export data U = Aaa { x : Int }
+
+export mkU : U
+mkU = Aaa { x = 5 }

@@ -1,0 +1,34 @@
+-- THE FLAT/SINGLE-FILE CELL FOR THE RECEIVER-IDENTITY NARROWING — the one the
+-- landed slice `S-record-pairing-identity` omitted on a claim that is measurably
+-- false.
+--
+-- That slice's in-source note asserted "the flat/single-file driver where every
+-- decl is `TkBare` matches ZERO candidates", and used it as the reason this path
+-- needed no fixture.  FALSE: `TkBare Ns String` CARRIES the type name, so two bare
+-- keys naming the same type ARE equal and the narrowing selects here too.  Measured
+-- on base `d2b7cb8b` this program was REJECTED (`Type mismatch: Beta vs Alpha` —
+-- the old `headL (sortUniqS owners)` coin flip picked `Alpha`); with the narrowing
+-- it answers from the receiver's own declaration.
+--
+-- It is also the ACCEPT half of the comparator-granularity repair's fail-capable
+-- pair (`narrowedPick` / `narrowingBlockedByCtorSibling`,
+-- compiler/types/typecheck.mdk).  The repair refuses to trust a lone surviving
+-- candidate ONLY when the receiver's type has a named-field SIBLING constructor
+-- that withholds the field.  `Alpha` and `Beta` are single-constructor records, so
+-- no sibling exists, the selection stands, and this must keep printing 42 — a
+-- repair that simply disabled the narrowing would red HERE.  The REJECT half is
+-- test/analyze_project_fixtures/record_ctor_sibling_blocks_narrowing/; neither cell
+-- alone tests the property.
+--
+-- Hand-derived: `bv` is a `Beta`, whose `tag` is 42.  Applying `Alpha`'s layout
+-- instead answers 7 (`extra`, slot 0) — a wrong VALUE at exit 0, not an error,
+-- which is why this cell is graded on the BUILT binary's stdout.
+data Alpha = MkAlpha { tag : Int, onlyA : Int }
+
+data Beta = MkBeta { extra : Int, tag : Int }
+
+bv : Beta
+bv = MkBeta { extra = 7, tag = 42 }
+
+main : <IO> Unit
+main = println bv.tag

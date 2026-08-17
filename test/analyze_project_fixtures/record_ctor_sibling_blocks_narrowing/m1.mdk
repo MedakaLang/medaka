@@ -1,0 +1,9 @@
+-- The MULTI-`ConNamed`-VARIANT type.  `Zed` and `Oth` are two named-field
+-- constructors of ONE type `T`, and only `Zed` declares `x`.
+-- `registerRecordInfoKeyed` registers one `RecordInfo` per CONSTRUCTOR but stamps
+-- every one of them with the SAME result head (`T`) — that granularity gap is what
+-- this fixture pins.
+public export data T = Zed { x : Int } | Oth { y : Int }
+
+export mkOth : T
+mkOth = Oth { y = 99 }

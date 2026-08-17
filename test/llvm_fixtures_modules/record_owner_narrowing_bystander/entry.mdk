@@ -1,0 +1,57 @@
+-- THE "FEATURE PRESENT, UNRELATED CODE STILL BEHAVES" CELL for the identity
+-- narrowing added to `resolveFieldAmbiguous`'s concrete-receiver arm.  It must be
+-- green BEFORE and AFTER that change; that is the property, not a drain.
+--
+-- ⚠️ WHAT IT IS FOR.  The narrowing runs on EVERY `.field` access whose receiver
+-- is concrete and whose field name is declared by more than one record — not only
+-- on the colliding ones.  Nothing in this graph collides: three distinct record
+-- types, three distinct constructors, three distinct modules.  The only thing
+-- shared is the FIELD name `tag`, which is legal and common, and is exactly what
+-- routes an ordinary projection onto the edited arm.
+--
+-- The four cells, and which path each takes:
+--
+--   `mkA.tag`    — head `Alpha`, registry key `MkAlpha` (a named-field variant is
+--                  keyed by its CONSTRUCTOR), so the exact lookup misses and no
+--                  key suffix-matches `__Alpha`.  Three owners reach the
+--                  multi-owner arm: THIS is the cell that traverses the new code.
+--                  Before the change the answer came from `headL` of the
+--                  sort-ordered owner keys; after it, from the receiver's own
+--                  declaration identity.  Both name `MkAlpha`, so the cell is
+--                  green either way — which is the assertion.
+--   `mkA.onlyA`  — one owner; the untouched `[r]` singleton arm.
+--   `mkB.onlyB`  — one owner, different module; the same untouched arm, proving
+--                  the narrowing did not capture the single-owner path.
+--   `lv.own`     — `Local` is declared by THIS module.  A module never sees its
+--                  own records in the identity companion (it is grown from
+--                  `pubDecls` at the END of a module's arm), and `Local` is not
+--                  public at all, so this cell stands over the case where no
+--                  identity companion row can exist.  One owner, `[r]` arm.
+--
+-- 🚨 `mkB.tag` IS DELIBERATELY ABSENT.  It is NOT a bystander: at the base of this
+-- change it resolves to `MkAlpha` (the first owner key in sort order) and the
+-- program is REFUSED with `Type mismatch: Beta vs Alpha`.  That is the #1216 /
+-- #1382 defect itself, not unrelated code, so pinning it here would make this a
+-- drain cell and destroy the before-AND-after property the cell exists for.
+--
+-- Hand-derived answer, from the language semantics rather than from the tool:
+-- `mkA.tag` = 1, `mkA.onlyA` = 2, `mkB.onlyB` = 4, `lv.own` = 6 → `1,2,4,6`.
+import alib.{Alpha, mkA}
+import blib.{Beta, mkB}
+
+data Local =
+  | MkLocal { tag : Int, own : Int }
+
+lv : Local
+lv = MkLocal { tag = 5, own = 6 }
+
+main : <IO> Unit
+main =
+  putStrLn
+    (intToString mkA.tag
+      ++ ","
+      ++ intToString mkA.onlyA
+      ++ ","
+      ++ intToString mkB.onlyB
+      ++ ","
+      ++ intToString lv.own)

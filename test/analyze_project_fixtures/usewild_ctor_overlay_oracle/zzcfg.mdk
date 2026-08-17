@@ -1,0 +1,6 @@
+-- The `Cfg` the entry ACTUALLY means, reached by `import zzcfg.*`.  Loaded SECOND,
+-- which is the whole point: see main_usewild.mdk.
+public export data Cfg = CZ
+
+export zzf : Int -> Int
+zzf n = n

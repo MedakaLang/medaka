@@ -63,6 +63,7 @@ anyArgMentions : List String -> List Ty -> Bool
 anyClauseEagerlyRefsGroup : List String -> List FunClause -> Bool
 anyConcreteHead : List Mono -> Bool
 anyContainsI : List Int -> List Int -> Bool
+anyCtorSiblingWithholds : Option HeadKey -> String -> String -> List String -> Bool
 anyDepReaches : List String -> List String -> String -> List (String, List Decl) -> Bool
 anyHoleAtom : List Atom -> Bool
 anyIdPinned : List Int -> List (Int, Mono) -> Bool
@@ -106,7 +107,7 @@ armDictSites : Arm -> List (Ref (List Route))
 armEVars : Arm -> List String
 armIsUnguarded : List Guard -> Bool
 armSites : Arm -> List (Ref Route)
-armUnreachable : Option String -> List (List Pat) -> Map String Unit -> Bool -> Pat -> Bool
+armUnreachable : Option TabKey -> List (List Pat) -> Map String Unit -> Bool -> Pat -> Bool
 arrowsWithLastEffect : List Mono -> EffRow -> Mono -> Mono
 assignName : Ref (List (Int, String)) -> Ref Int -> Int -> String
 astEffrowE : List (String, Ref Effvar) -> Ty -> EffRow
@@ -302,7 +303,7 @@ checkProgramSchemesWithRuntime : List Decl -> List Decl -> List Decl -> List (St
 checkProgramSeeded : List (String, Scheme) -> List Decl -> List (String, Scheme)
 checkProgramSeededSplit : List (String, Scheme) -> List Decl -> List Decl -> List (String, Scheme)
 checkRecBindNonFunction : String -> Expr -> Unit
-checkRedundantGo : Option String -> List (List Pat) -> Map String Unit -> Bool -> List Arm -> Unit
+checkRedundantGo : Option TabKey -> List (List Pat) -> Map String Unit -> Bool -> List Arm -> Unit
 checkReqObligations : ImplUniverse -> Option Loc -> List (IfaceRef, List Mono) -> Unit
 checkReqOne : ImplUniverse -> IfaceRef -> List Mono -> Option Loc -> Unit
 checkSigConstraintCoverage : List (String, List (IfaceRef, Mono), List (List Mono)) -> List (String, Ty) -> List (String, Ty, List (String, Mono)) -> List (IfaceRef, List Mono, Option Loc) -> List UObligation -> List (String, Scheme) -> Unit
@@ -431,6 +432,7 @@ ctorCandImported : List Decl -> String -> (Ident, String, Scheme) -> Bool
 ctorCandScheme : (Ident, String, Scheme) -> Scheme
 ctorHeadIsUpper : String -> Bool
 ctorIdentRow : String -> TyConOrigin -> String -> List (String, String, Ident)
+ctorSiblingWithholds : Option HeadKey -> String -> String -> Bool
 currentDoOrigin : Ref (Option Loc)
 currentLoc : Ref (Option Loc)
 currentLocalSchemes : Unit -> List (String, Scheme)
@@ -912,11 +914,12 @@ implTysIfMatch : String -> String -> Decl -> List (List Ty)
 importDefinersOf : List Decl -> List (String, (String, String))
 importFormRows : UsePath -> List (String, a) -> List (String, a)
 importFormSchemes : List (String, List (String, Scheme)) -> UsePath -> List (String, Scheme) -> List (String, Scheme)
-importOverlayDecls : Int -> List DeclEnvModule -> Decl -> List Decl
+importOverlayDecls : Bool -> Int -> List DeclEnvModule -> Decl -> List Decl
 importSeed : List Decl -> List (String, List (String, Scheme)) -> List (String, Scheme)
 importedBindings : UsePath -> Option (List (String, String))
 importedCtorEntry : List Decl -> String -> List (Ident, String, Scheme) -> Option Scheme
-importedCtorTypeDecls : List Decl -> Int -> List DeclEnvModule -> List Decl
+importedCtorTypeDeclsFirstWins : List Decl -> Int -> List DeclEnvModule -> List Decl
+importedCtorTypeDeclsLastWins : List Decl -> Int -> List DeclEnvModule -> List Decl
 importedMethodEntry : List Decl -> String -> List (Ident, (IfaceRef, List String, Ty, List (String, List Kind))) -> Option (IfaceRef, List String, Ty, List (String, List Kind))
 importedRecordEntry : List Decl -> String -> List (Ident, String, RecordInfo) -> Option RecordInfo
 importedSchemeOblEntries : List Decl -> List ((String, String), List VecObl) -> List (String, List VecObl)
@@ -1138,7 +1141,7 @@ mangledHeadCandidatesGo : String -> List String -> List (String, RecordInfo)
 mapLocalSchemes : List (String, Mono) -> List (String, Scheme)
 markModules : List Decl -> List (String, List Decl) -> (List Decl, List (String, List Decl))
 markNumlitOpTaint : Mono -> Unit
-matchCol0Type : Mono -> Option String
+matchCol0Type : Mono -> Option TabKey
 matchOneSided : (a -> b -> MStep c a b) -> (c -> c -> Bool) -> (b -> b -> Bool) -> List (a, b) -> List (c, b) -> Option (List (c, b))
 matchStep : Ty -> Mono -> MStep String Ty Mono
 matchTyMono : Ty -> Mono -> Option (List (String, Mono))
@@ -1212,6 +1215,8 @@ nameableIfaceMethodSet : List Decl -> Map String Unit
 nameableIfaceShadows : List Decl -> List String -> List String
 namesToSet : List String -> Map String Unit -> Map String Unit
 narrowRowToNamed : List String -> (String, List String) -> List (String, List String)
+narrowedPick : Option HeadKey -> String -> List String -> List (String, RecordInfo) -> Option (String, RecordInfo)
+narrowingBlockedByCtorSibling : Option HeadKey -> String -> String -> Bool
 negateOp : Mono -> Mono
 newEffvarId : Unit -> Int
 newTyvarId : Unit -> Int
@@ -1269,6 +1274,7 @@ originPhrase : TyConOrigin -> String
 originRowsOf : List (String, (String, String)) -> List (String, String)
 overAppliedMsg : String -> Int -> Int -> String
 overlayDecided : Bool -> (Option Decl, Option Decl, Option Decl) -> Bool
+overlayHalf : Bool -> List Decl -> Int -> List DeclEnvModule -> List Decl
 overlayNote : String -> String -> String -> TyConOrigin -> Decl -> (Option Decl, Option Decl, Option Decl) -> (Option Decl, Option Decl, Option Decl)
 overlayScan : String -> String -> Bool -> (Option Decl, Option Decl, Option Decl) -> List Decl -> (Option Decl, Option Decl, Option Decl)
 overlayScanOne : String -> String -> (Option Decl, Option Decl, Option Decl) -> Decl -> (Option Decl, Option Decl, Option Decl)
@@ -1277,6 +1283,7 @@ overrideScopedCtors : List Decl -> Map String (List (Ident, String, Scheme)) -> 
 overrideScopedMethods : List Decl -> Map String (List (Ident, (IfaceRef, List String, Ty, List (String, List Kind)))) -> List String -> Map String (IfaceRef, List String, Ty, List (String, List Kind)) -> Map String (IfaceRef, List String, Ty, List (String, List Kind))
 overrideScopedRecords : List Decl -> Map String (List (Ident, String, RecordInfo)) -> List String -> Unit
 ownMethodIdent : List Decl -> String -> Option Ident
+ownerCandidates : List String -> List (String, RecordInfo)
 pairIface : String -> Int -> List (String, Int)
 pairRecordByName : String -> Option (String, RecordInfo)
 pairSlots : List Int -> List IfaceRef -> List CSlot
@@ -1517,6 +1524,7 @@ resolveArithSites : List (Ref Route, Mono) -> Unit
 resolveDictApps : List Decl -> Map String (List ImplEntry) -> Map String (List KeyEntry) -> List (Ref (List Route), List Mono, List String, List (List Mono), Option Loc) -> Unit
 resolveFieldAmbiguous : Mono -> String -> List String -> Option (String, RecordInfo)
 resolveFieldByOwners : Mono -> String -> Option (String, RecordInfo)
+resolveFieldOwnersNarrowed : Mono -> String -> List String -> Option (String, RecordInfo)
 resolveFieldRecord : Mono -> String -> Option (String, RecordInfo)
 resolveMemberRows : (String, String) -> List (String, a) -> List (String, a)
 resolveMethodDicts : Map String (List ImplEntry) -> Map String (List KeyEntry) -> List (Ref (List Route), List Mono) -> Unit
@@ -1720,7 +1728,7 @@ tyConNamesInTy : Ty -> List String
 tyHeadEqV : List Ty -> List Ty -> Bool
 tyIsConcrete : Ty -> Bool
 tyMatchesAst : Ty -> Ty -> Bool
-tyOfMsg : Option String -> String
+tyOfMsg : Option TabKey -> String
 tyStep : Ty -> Ty -> MStep String Ty Ty
 tyStrictlyMoreSpecificV : List Ty -> List Ty -> Bool
 tyStructEq : Ty -> Ty -> Bool
@@ -1809,6 +1817,7 @@ wRestore : Windowed a -> (List a, Int) -> Unit
 wSnapshot : Windowed a -> (List a, Int)
 wWindow : Windowed a -> Int -> List a
 walkDispatch : List String -> Ty -> Mono -> List (String, Mono)
+wildOverlayDecls : Int -> List DeclEnvModule -> String -> List Decl
 wildSchemeOblEntry : String -> ((String, String), List VecObl) -> List (String, List VecObl)
 wrapIf : Bool -> String -> String
 zerosL : Int -> List Int
