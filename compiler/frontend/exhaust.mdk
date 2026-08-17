@@ -136,10 +136,19 @@ digitVal c = charCode c - charCode '0'
 -- `allCovered`, `specializeCon`) compare against pattern-derived bare ctor
 -- names, so an identity-granularity value filtered by a name-granularity
 -- bucket table would be a granularity mismatch.
+--
+-- ⚠️ `ctorType` is the MIRROR of that (leaf L2), and its asymmetry is
+-- deliberate: its KEY stays the bare ctor name — `PCon String (List Pat)`
+-- carries no identity carrier, so the reader end could never mint one — while
+-- its VALUE becomes the same `TabKey`@`NsType` that `typeCtors` is keyed by.
+-- That is what makes the `oGetCtorType >>= oGetCtors` round trip
+-- identity-to-identity, so a nested column's lookup hits the row its own
+-- declaration wrote.  With a bare-`String` value the round trip had to bridge
+-- through a `TkBare` mint, which can never match a `TkIdent` row.
 public export data Oracle = Oracle {
     typeCtors : List (TabKey, List String),
     ctorArity : OrdMap Int,
-    ctorType : OrdMap String,
+    ctorType : OrdMap TabKey,
     ctorFields : OrdMap (List String),  -- ctor → declared field names in order (DData ConNamed variants)
   }
 
@@ -183,13 +192,18 @@ builtinTypeCtors = [
 builtinArity : List (String, Int)
 builtinArity = [("True", 0), ("False", 0), ("Cons", 2), ("Nil", 0), ("Unit", 0)]
 
-builtinCtorType : List (String, String)
+-- ⚠️ `OriginBuiltin` for the same reason `builtinTypeCtors` uses it: these
+-- values ARE the keys `oGetCtors` is about to look up, and the builtin rows of
+-- `typeCtors` are minted `TkIdent (Ident NsType IdentBuiltin …)`.  A `TkBare`
+-- value here would miss its own table's row on every builtin-typed nested
+-- column.
+builtinCtorType : List (String, TabKey)
 builtinCtorType = [
-  ("True", "Bool"),
-  ("False", "Bool"),
-  ("Cons", "List"),
-  ("Nil", "List"),
-  ("Unit", "Unit"),
+  ("True", tabKeyOf NsType OriginBuiltin "Bool"),
+  ("False", tabKeyOf NsType OriginBuiltin "Bool"),
+  ("Cons", tabKeyOf NsType OriginBuiltin "List"),
+  ("Nil", tabKeyOf NsType OriginBuiltin "List"),
+  ("Unit", tabKeyOf NsType OriginBuiltin "Unit"),
 ]
 
 dataTypeCtors : Decl -> List (TabKey, List String)
@@ -200,9 +214,10 @@ dataArity : Decl -> List (String, Int)
 dataArity (DData { dataCtors = variants }) = map variantArity variants
 dataArity _ = []
 
-dataCtorType : Decl -> List (String, String)
-dataCtorType (DData { dataName = tyname, dataCtors = variants }) =
-  map (variantCtorType tyname) variants
+-- The key is minted ONCE per `data` decl, from that decl's own `dataOrigin` —
+-- the very same mint `dataTypeCtors` uses for the row this value points at.
+dataCtorType : Decl -> List (String, TabKey)
+dataCtorType (DData { dataName = tyname, dataOrigin = origin, dataCtors = variants }) = map (variantCtorType (tabKeyOf NsType origin tyname)) variants
 dataCtorType _ = []
 
 variantName : Variant -> String
@@ -212,8 +227,8 @@ variantArity : Variant -> (String, Int)
 variantArity (Variant n (ConPos tys)) = (n, listLen tys)
 variantArity (Variant n (ConNamed fs _)) = (n, listLen fs)
 
-variantCtorType : String -> Variant -> (String, String)
-variantCtorType tyname (Variant n _) = (n, tyname)
+variantCtorType : TabKey -> Variant -> (String, TabKey)
+variantCtorType tykey (Variant n _) = (n, tykey)
 
 dataCtorFields : Decl -> List (String, List String)
 dataCtorFields (DData { dataCtors = variants }) =
@@ -235,9 +250,12 @@ oGetCtors oracle t
   | (Some _) <- tupleArityOfName (tabKeyName t) = Some [tabKeyName t]
   | otherwise = lookupTab t oracle.typeCtors
 
-export oGetCtorType : Oracle -> String -> Option String
+-- The tuple short-circuit mints `OriginBuiltin` to match `oGetCtors`' own
+-- short-circuit, which answers off the NAME before either table is consulted —
+-- so the synthetic `__tupleN__` key never actually reaches a row on either end.
+export oGetCtorType : Oracle -> String -> Option TabKey
 oGetCtorType oracle c
-  | (Some _) <- tupleArityOfName c = Some c
+  | (Some _) <- tupleArityOfName c = Some (tabKeyOf NsType OriginBuiltin c)
   | otherwise = omLookup c oracle.ctorType
 
 oGetArity : Oracle -> String -> Int
@@ -353,17 +371,21 @@ headCtors [] = []
 headCtors (((PCon c _)::_)::rest) = c :: headCtors rest
 headCtors (_::rest) = headCtors rest
 
--- TRANSITIONAL (leaf L1 only; leaf L2 deletes this mint): the nested-column key
--- has no identity available until `ctorType`'s VALUE carries one.  `TkBare`
--- cannot match a `TkIdent` row, so on the typed multi-module path every nested
--- column's lookup MISSES and its warning is SUPPRESSED.  This is why L1 must
--- never reach `main` alone (RUN-CTOR-019 S3).
+-- Leaf L2 deleted L1's transitional `TkBare` mint here: `ctorType`'s VALUE now
+-- carries the declaration identity, so the key `tryEachType` forwards is the
+-- one the type's own `data` decl minted and the round trip is
+-- identity-to-identity.
+--
+-- ⚠️ Still FIRST-WINS BY BARE CTOR NAME, and that is a separate defect: two
+-- same-named constructors from different types resolve to whichever row the
+-- table saw first, so the identity forwarded here may faithfully name the
+-- WRONG type.  L2 makes the round trip identity-PRESERVING, not
+-- identity-CORRECT; picking the right occurrence is occurrence-scope work
+-- (`S-ctor-overlay-retire`).
 inferCol0Type : Oracle -> List (List Pat) -> Option TabKey
-inferCol0Type oracle pmat = map
-  (t => tabKeyOf NsType OriginUnresolved t)
-  (tryEachType oracle (headCtors pmat))
+inferCol0Type oracle pmat = tryEachType oracle (headCtors pmat)
 
-tryEachType : Oracle -> List String -> Option String
+tryEachType : Oracle -> List String -> Option TabKey
 tryEachType _ [] = None
 tryEachType oracle (c::cs) = match oGetCtorType oracle c
   Some t => Some t

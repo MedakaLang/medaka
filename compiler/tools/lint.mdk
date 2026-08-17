@@ -1152,12 +1152,10 @@ recPatFieldIrrefutable orc (RecPatField _ _ (Some p)) = patIrrefutable orc p
 -- (its type isn't visible in this file) is NOT provably single → False (SKIP).
 ctorIsSingle : Oracle -> String -> Bool
 ctorIsSingle orc c = match oGetCtorType orc c
-  -- TRANSITIONAL (leaf L1 only; leaf L2 deletes this mint): `oGetCtorType`
-  -- still answers a bare `String`, so the round trip is bridged with an
-  -- identity-less key.  `TkBare` cannot match a `TkIdent` row — harmless here
-  -- because this oracle's rows are all `OriginUnresolved` (one file's raw
-  -- decls), but it is why L1 must never reach `main` alone.
-  Some t => match oGetCtors orc (tabKeyOf NsType OriginUnresolved t)
+  -- Leaf L2 deleted L1's transitional bridge mint here: `oGetCtorType` now
+  -- answers the `TabKey` the type's own decl minted, so the round trip is
+  -- identity-to-identity and this key is passed straight through.
+  Some t => match oGetCtors orc t
     Some ctors => listLen ctors == 1
     None => False
   None => False
@@ -1472,10 +1470,9 @@ irrefutablePat _ _ = False
 -- `data`, or a record-as-data).  Both queries are pure syntactic oracle lookups.
 ctorIsSole : Oracle -> String -> Bool
 ctorIsSole orc c = match oGetCtorType orc c
-  -- TRANSITIONAL (leaf L1 only; leaf L2 deletes this mint) — see
-  -- `ctorIsSingle` above for why the bridge is safe on this all-
-  -- `OriginUnresolved` oracle and why it is still transitional.
-  Some tyName => match oGetCtors orc (tabKeyOf NsType OriginUnresolved tyName)
+  -- Leaf L2 deleted L1's transitional bridge mint here — see `ctorIsSingle`
+  -- above; the round trip is now identity-to-identity.
+  Some tyKey => match oGetCtors orc tyKey
     Some ctors => listLen ctors == 1
     None => False
   None => False
