@@ -1,5 +1,5 @@
 # META
-source_lines=4098
+source_lines=4120
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint.mdk — the `medaka lint` framework + seed rules.
@@ -19,6 +19,16 @@ stages=DESUGAR,MARK
 -- support.util, everything else is inline.
 
 import frontend.ast.{
+  -- `frontend/exhaust.mdk`'s `typeCtors` is keyed by declaration identity
+  -- (oracle-identity family leaf L1), so this file's three oracle consumers
+  -- mint a key instead of passing a bare name.  All of them build their
+  -- oracle from ONE file's raw decls, whose `dataOrigin` is
+  -- `OriginUnresolved`, so every key on both ends is `TkBare` — a measured
+  -- no-op.
+  Ns(..),
+  TyConOrigin(..),
+  TabKey,
+  tabKeyOf,
   Loc(..),
   Lit(..),
   Ty(..),
@@ -1146,7 +1156,12 @@ recPatFieldIrrefutable orc (RecPatField _ _ (Some p)) = patIrrefutable orc p
 -- (its type isn't visible in this file) is NOT provably single → False (SKIP).
 ctorIsSingle : Oracle -> String -> Bool
 ctorIsSingle orc c = match oGetCtorType orc c
-  Some t => match oGetCtors orc t
+  -- TRANSITIONAL (leaf L1 only; leaf L2 deletes this mint): `oGetCtorType`
+  -- still answers a bare `String`, so the round trip is bridged with an
+  -- identity-less key.  `TkBare` cannot match a `TkIdent` row — harmless here
+  -- because this oracle's rows are all `OriginUnresolved` (one file's raw
+  -- decls), but it is why L1 must never reach `main` alone.
+  Some t => match oGetCtors orc (tabKeyOf NsType OriginUnresolved t)
     Some ctors => listLen ctors == 1
     None => False
   None => False
@@ -1220,8 +1235,12 @@ derivableHit orc loc iface tys
 -- the type has a `data`/`record` declaration (with constructors) visible in the
 -- linted file — so `deriving` is actually available for it.  Primitive types
 -- (Int/Float/Bool/String/Char/Unit/Array) have no such decl → `oGetCtors` = None.
+-- ⚠️ Mints the key the writer rows mint: this oracle is built from ONE file's
+-- raw decls, whose `dataOrigin` is `OriginUnresolved`, so `tabKeyOf` lands in
+-- `TkBare NsType tyName` on both ends — the same answer as the bare-name
+-- lookup this replaced.
 hasUserDataDecl : Oracle -> String -> Bool
-hasUserDataDecl orc tyName = match oGetCtors orc tyName
+hasUserDataDecl orc tyName = match oGetCtors orc (tabKeyOf NsType OriginUnresolved tyName)
   Some _ => True
   None => False
 
@@ -1457,7 +1476,10 @@ irrefutablePat _ _ = False
 -- `data`, or a record-as-data).  Both queries are pure syntactic oracle lookups.
 ctorIsSole : Oracle -> String -> Bool
 ctorIsSole orc c = match oGetCtorType orc c
-  Some tyName => match oGetCtors orc tyName
+  -- TRANSITIONAL (leaf L1 only; leaf L2 deletes this mint) — see
+  -- `ctorIsSingle` above for why the bridge is safe on this all-
+  -- `OriginUnresolved` oracle and why it is still transitional.
+  Some tyName => match oGetCtors orc (tabKeyOf NsType OriginUnresolved tyName)
     Some ctors => listLen ctors == 1
     None => False
   None => False
@@ -4101,7 +4123,7 @@ duplicateBodySameFileRule = Rule {
   fix = None,
 }
 # DESUGAR
-(DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Lit" true) (mem "Ty" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "ImplMethod" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true) (mem "Expr" true) (mem "Decl" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Ns" true) (mem "TyConOrigin" true) (mem "TabKey" false) (mem "tabKeyOf" false) (mem "Loc" true) (mem "Lit" true) (mem "Ty" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "ImplMethod" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true) (mem "Expr" true) (mem "Decl" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" false) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "declPosLine" false) (mem "declPosEndLine" false) (mem "parseWithPositions" false) (mem "parseWithPositionsLocated" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true) (mem "Diag" true) (mem "ppSeverity" false) (mem "readFileSafe" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "anyList" false) (mem "allList" false) (mem "filterList" false) (mem "joinNl" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "reverseL" false) (mem "splitNl" false) (mem "splitOnChar" false) (mem "joinWith" false) (mem "sortUniqS" false) (mem "startsWith" false) (mem "stringTrim" false) (mem "lookupAssoc" false) (mem "dedupBy" false))))
@@ -4430,7 +4452,7 @@ duplicateBodySameFileRule = Rule {
 (DFunDef false "recPatFieldIrrefutable" (PWild (PCon "RecPatField" PWild PWild (PCon "None"))) (EVar "True"))
 (DFunDef false "recPatFieldIrrefutable" ((PVar "orc") (PCon "RecPatField" PWild PWild (PCon "Some" (PVar "p")))) (EApp (EApp (EVar "patIrrefutable") (EVar "orc")) (EVar "p")))
 (DTypeSig false "ctorIsSingle" (TyFun (TyCon "Oracle") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "ctorIsSingle" ((PVar "orc") (PVar "c")) (EMatch (EApp (EApp (EVar "oGetCtorType") (EVar "orc")) (EVar "c")) (arm (PCon "Some" (PVar "t")) () (EMatch (EApp (EApp (EVar "oGetCtors") (EVar "orc")) (EVar "t")) (arm (PCon "Some" (PVar "ctors")) () (EBinOp "==" (EApp (EVar "listLen") (EVar "ctors")) (ELit (LInt 1)))) (arm (PCon "None") () (EVar "False")))) (arm (PCon "None") () (EVar "False"))))
+(DFunDef false "ctorIsSingle" ((PVar "orc") (PVar "c")) (EMatch (EApp (EApp (EVar "oGetCtorType") (EVar "orc")) (EVar "c")) (arm (PCon "Some" (PVar "t")) () (EMatch (EApp (EApp (EVar "oGetCtors") (EVar "orc")) (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsType")) (EVar "OriginUnresolved")) (EVar "t"))) (arm (PCon "Some" (PVar "ctors")) () (EBinOp "==" (EApp (EVar "listLen") (EVar "ctors")) (ELit (LInt 1)))) (arm (PCon "None") () (EVar "False")))) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig false "destructureInParamFix" (TyFun (TyCon "Oracle") (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl"))))))
 (DFunDef false "destructureInParamFix" ((PVar "orc") (PCon "DFunDef" (PVar "vis") (PVar "name") (PVar "pats") (PVar "body"))) (EMatch (EApp (EApp (EVar "matchBodyOnBareParam") (EVar "pats")) (EVar "body")) (arm (PCon "Some" (PTuple (PVar "p") (PVar "k") (PVar "arms"))) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "destructureInParamFixArms") (EVar "orc")) (EVar "vis")) (EVar "name")) (EVar "pats")) (EVar "p")) (EVar "k")) (EVar "arms"))) (arm (PCon "None") () (EVar "None"))))
 (DFunDef false "destructureInParamFix" (PWild PWild) (EVar "None"))
@@ -4450,7 +4472,7 @@ duplicateBodySameFileRule = Rule {
 (DTypeSig false "derivableHit" (TyFun (TyCon "Oracle") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "List") (TyCon "Finding")))))))
 (DFunDef false "derivableHit" ((PVar "orc") (PVar "loc") (PVar "iface") (PVar "tys")) (EIf (EApp (EApp (EVar "contains") (EVar "iface")) (EVar "derivableIfaces")) (EMatch (EApp (EVar "singleNamedType") (EVar "tys")) (arm (PCon "Some" (PVar "tyName")) () (EIf (EApp (EApp (EVar "hasUserDataDecl") (EVar "orc")) (EVar "tyName")) (EListLit (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameDerivable")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "hand-written `impl ")) (EApp (EVar "display") (EVar "iface"))) (ELit (LString "` for '"))) (EApp (EVar "display") (EVar "tyName"))) (ELit (LString "' — use `deriving ("))) (EApp (EVar "display") (EVar "iface"))) (ELit (LString ")`")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc"))))) (EListLit))) (arm (PCon "None") () (EListLit))) (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "hasUserDataDecl" (TyFun (TyCon "Oracle") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "hasUserDataDecl" ((PVar "orc") (PVar "tyName")) (EMatch (EApp (EApp (EVar "oGetCtors") (EVar "orc")) (EVar "tyName")) (arm (PCon "Some" PWild) () (EVar "True")) (arm (PCon "None") () (EVar "False"))))
+(DFunDef false "hasUserDataDecl" ((PVar "orc") (PVar "tyName")) (EMatch (EApp (EApp (EVar "oGetCtors") (EVar "orc")) (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsType")) (EVar "OriginUnresolved")) (EVar "tyName"))) (arm (PCon "Some" PWild) () (EVar "True")) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig false "singleNamedType" (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "singleNamedType" ((PList (PVar "t"))) (EApp (EVar "tyHeadName") (EVar "t")))
 (DFunDef false "singleNamedType" (PWild) (EVar "None"))
@@ -4523,7 +4545,7 @@ duplicateBodySameFileRule = Rule {
 (DFunDef false "irrefutablePat" ((PVar "orc") (PCon "PCon" (PVar "c") (PVar "subps"))) (EBinOp "&&" (EApp (EApp (EVar "ctorIsSole") (EVar "orc")) (EVar "c")) (EApp (EVar "not") (EApp (EApp (EVar "anyList") (EApp (EVar "refutablePat") (EVar "orc"))) (EVar "subps")))))
 (DFunDef false "irrefutablePat" (PWild PWild) (EVar "False"))
 (DTypeSig false "ctorIsSole" (TyFun (TyCon "Oracle") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "ctorIsSole" ((PVar "orc") (PVar "c")) (EMatch (EApp (EApp (EVar "oGetCtorType") (EVar "orc")) (EVar "c")) (arm (PCon "Some" (PVar "tyName")) () (EMatch (EApp (EApp (EVar "oGetCtors") (EVar "orc")) (EVar "tyName")) (arm (PCon "Some" (PVar "ctors")) () (EBinOp "==" (EApp (EVar "listLen") (EVar "ctors")) (ELit (LInt 1)))) (arm (PCon "None") () (EVar "False")))) (arm (PCon "None") () (EVar "False"))))
+(DFunDef false "ctorIsSole" ((PVar "orc") (PVar "c")) (EMatch (EApp (EApp (EVar "oGetCtorType") (EVar "orc")) (EVar "c")) (arm (PCon "Some" (PVar "tyName")) () (EMatch (EApp (EApp (EVar "oGetCtors") (EVar "orc")) (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsType")) (EVar "OriginUnresolved")) (EVar "tyName"))) (arm (PCon "Some" (PVar "ctors")) () (EBinOp "==" (EApp (EVar "listLen") (EVar "ctors")) (ELit (LInt 1)))) (arm (PCon "None") () (EVar "False")))) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig false "refutablePat" (TyFun (TyCon "Oracle") (TyFun (TyCon "Pat") (TyCon "Bool"))))
 (DFunDef false "refutablePat" ((PVar "orc") (PVar "p")) (EApp (EVar "not") (EApp (EApp (EVar "irrefutablePat") (EVar "orc")) (EVar "p"))))
 (DTypeSig false "refutableField" (TyFun (TyCon "Oracle") (TyFun (TyCon "RecPatField") (TyCon "Bool"))))
@@ -5530,7 +5552,7 @@ duplicateBodySameFileRule = Rule {
 (DTypeSig false "duplicateBodySameFileRule" (TyCon "Rule"))
 (DFunDef false "duplicateBodySameFileRule" () (ERecordCreate "Rule" ((fa "name" (EVar "ruleNameDuplicateBody")) (fa "descr" (ELit (LString "top-level function body is structurally identical to another top-level function in the SAME file (copy-paste; consolidate) — the in-file counterpart of the cross-file rule of the same name"))) (fa "severity" (EVar "SevWarning")) (fa "enabled" (EVar "True")) (fa "check" (EVar "ruleDuplicateBodySameFile")) (fa "fix" (EVar "None")))))
 # MARK
-(DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Lit" true) (mem "Ty" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "ImplMethod" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true) (mem "Expr" true) (mem "Decl" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Ns" true) (mem "TyConOrigin" true) (mem "TabKey" false) (mem "tabKeyOf" false) (mem "Loc" true) (mem "Lit" true) (mem "Ty" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "ImplMethod" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true) (mem "Expr" true) (mem "Decl" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" false) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "declPosLine" false) (mem "declPosEndLine" false) (mem "parseWithPositions" false) (mem "parseWithPositionsLocated" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true) (mem "Diag" true) (mem "ppSeverity" false) (mem "readFileSafe" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "anyList" false) (mem "allList" false) (mem "filterList" false) (mem "joinNl" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "reverseL" false) (mem "splitNl" false) (mem "splitOnChar" false) (mem "joinWith" false) (mem "sortUniqS" false) (mem "startsWith" false) (mem "stringTrim" false) (mem "lookupAssoc" false) (mem "dedupBy" false))))
@@ -5859,7 +5881,7 @@ duplicateBodySameFileRule = Rule {
 (DFunDef false "recPatFieldIrrefutable" (PWild (PCon "RecPatField" PWild PWild (PCon "None"))) (EVar "True"))
 (DFunDef false "recPatFieldIrrefutable" ((PVar "orc") (PCon "RecPatField" PWild PWild (PCon "Some" (PVar "p")))) (EApp (EApp (EVar "patIrrefutable") (EVar "orc")) (EVar "p")))
 (DTypeSig false "ctorIsSingle" (TyFun (TyCon "Oracle") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "ctorIsSingle" ((PVar "orc") (PVar "c")) (EMatch (EApp (EApp (EVar "oGetCtorType") (EVar "orc")) (EVar "c")) (arm (PCon "Some" (PVar "t")) () (EMatch (EApp (EApp (EVar "oGetCtors") (EVar "orc")) (EVar "t")) (arm (PCon "Some" (PVar "ctors")) () (EBinOp "==" (EApp (EVar "listLen") (EVar "ctors")) (ELit (LInt 1)))) (arm (PCon "None") () (EVar "False")))) (arm (PCon "None") () (EVar "False"))))
+(DFunDef false "ctorIsSingle" ((PVar "orc") (PVar "c")) (EMatch (EApp (EApp (EVar "oGetCtorType") (EVar "orc")) (EVar "c")) (arm (PCon "Some" (PVar "t")) () (EMatch (EApp (EApp (EVar "oGetCtors") (EVar "orc")) (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsType")) (EVar "OriginUnresolved")) (EVar "t"))) (arm (PCon "Some" (PVar "ctors")) () (EBinOp "==" (EApp (EVar "listLen") (EVar "ctors")) (ELit (LInt 1)))) (arm (PCon "None") () (EVar "False")))) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig false "destructureInParamFix" (TyFun (TyCon "Oracle") (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl"))))))
 (DFunDef false "destructureInParamFix" ((PVar "orc") (PCon "DFunDef" (PVar "vis") (PVar "name") (PVar "pats") (PVar "body"))) (EMatch (EApp (EApp (EVar "matchBodyOnBareParam") (EVar "pats")) (EVar "body")) (arm (PCon "Some" (PTuple (PVar "p") (PVar "k") (PVar "arms"))) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "destructureInParamFixArms") (EVar "orc")) (EVar "vis")) (EVar "name")) (EVar "pats")) (EVar "p")) (EVar "k")) (EVar "arms"))) (arm (PCon "None") () (EVar "None"))))
 (DFunDef false "destructureInParamFix" (PWild PWild) (EVar "None"))
@@ -5879,7 +5901,7 @@ duplicateBodySameFileRule = Rule {
 (DTypeSig false "derivableHit" (TyFun (TyCon "Oracle") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "List") (TyCon "Finding")))))))
 (DFunDef false "derivableHit" ((PVar "orc") (PVar "loc") (PVar "iface") (PVar "tys")) (EIf (EApp (EApp (EVar "contains") (EVar "iface")) (EVar "derivableIfaces")) (EMatch (EApp (EVar "singleNamedType") (EVar "tys")) (arm (PCon "Some" (PVar "tyName")) () (EIf (EApp (EApp (EVar "hasUserDataDecl") (EVar "orc")) (EVar "tyName")) (EListLit (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameDerivable")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "hand-written `impl ")) (EApp (EMethodRef "display") (EVar "iface"))) (ELit (LString "` for '"))) (EApp (EMethodRef "display") (EVar "tyName"))) (ELit (LString "' — use `deriving ("))) (EApp (EMethodRef "display") (EVar "iface"))) (ELit (LString ")`")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc"))))) (EListLit))) (arm (PCon "None") () (EListLit))) (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "hasUserDataDecl" (TyFun (TyCon "Oracle") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "hasUserDataDecl" ((PVar "orc") (PVar "tyName")) (EMatch (EApp (EApp (EVar "oGetCtors") (EVar "orc")) (EVar "tyName")) (arm (PCon "Some" PWild) () (EVar "True")) (arm (PCon "None") () (EVar "False"))))
+(DFunDef false "hasUserDataDecl" ((PVar "orc") (PVar "tyName")) (EMatch (EApp (EApp (EVar "oGetCtors") (EVar "orc")) (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsType")) (EVar "OriginUnresolved")) (EVar "tyName"))) (arm (PCon "Some" PWild) () (EVar "True")) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig false "singleNamedType" (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "singleNamedType" ((PList (PVar "t"))) (EApp (EVar "tyHeadName") (EVar "t")))
 (DFunDef false "singleNamedType" (PWild) (EVar "None"))
@@ -5952,7 +5974,7 @@ duplicateBodySameFileRule = Rule {
 (DFunDef false "irrefutablePat" ((PVar "orc") (PCon "PCon" (PVar "c") (PVar "subps"))) (EBinOp "&&" (EApp (EApp (EVar "ctorIsSole") (EVar "orc")) (EVar "c")) (EApp (EVar "not") (EApp (EApp (EVar "anyList") (EApp (EVar "refutablePat") (EVar "orc"))) (EVar "subps")))))
 (DFunDef false "irrefutablePat" (PWild PWild) (EVar "False"))
 (DTypeSig false "ctorIsSole" (TyFun (TyCon "Oracle") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "ctorIsSole" ((PVar "orc") (PVar "c")) (EMatch (EApp (EApp (EVar "oGetCtorType") (EVar "orc")) (EVar "c")) (arm (PCon "Some" (PVar "tyName")) () (EMatch (EApp (EApp (EVar "oGetCtors") (EVar "orc")) (EVar "tyName")) (arm (PCon "Some" (PVar "ctors")) () (EBinOp "==" (EApp (EVar "listLen") (EVar "ctors")) (ELit (LInt 1)))) (arm (PCon "None") () (EVar "False")))) (arm (PCon "None") () (EVar "False"))))
+(DFunDef false "ctorIsSole" ((PVar "orc") (PVar "c")) (EMatch (EApp (EApp (EVar "oGetCtorType") (EVar "orc")) (EVar "c")) (arm (PCon "Some" (PVar "tyName")) () (EMatch (EApp (EApp (EVar "oGetCtors") (EVar "orc")) (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsType")) (EVar "OriginUnresolved")) (EVar "tyName"))) (arm (PCon "Some" (PVar "ctors")) () (EBinOp "==" (EApp (EVar "listLen") (EVar "ctors")) (ELit (LInt 1)))) (arm (PCon "None") () (EVar "False")))) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig false "refutablePat" (TyFun (TyCon "Oracle") (TyFun (TyCon "Pat") (TyCon "Bool"))))
 (DFunDef false "refutablePat" ((PVar "orc") (PVar "p")) (EApp (EVar "not") (EApp (EApp (EVar "irrefutablePat") (EVar "orc")) (EVar "p"))))
 (DTypeSig false "refutableField" (TyFun (TyCon "Oracle") (TyFun (TyCon "RecPatField") (TyCon "Bool"))))
