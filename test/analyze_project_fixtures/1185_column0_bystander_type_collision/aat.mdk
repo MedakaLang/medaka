@@ -1,0 +1,5 @@
+-- Same-named-type bystander, half of the L1 step-2b repro (sprint/ctor-identity,
+-- S-ctor-oracle-identity-family). `T` here is NEVER the scrutinee's type in
+-- main.mdk -- it exists only to give the oracle a same-named, wrong-arity row to
+-- collide with, at column 0 of a `match`.
+public export data T = A | B

@@ -1,0 +1,9 @@
+-- The "feature + UNRELATED code still behaves" bystander (AGENTS.md's
+-- program-global-table hazard).  Declares its own type, participates in no
+-- collision, and is imported by main.mdk for a value never scrutinised by any
+-- match -- its per-file diagnostic bucket must be [] both before and after
+-- this family's transform.
+public export data Widget = Wheel | Sprocket
+
+export defaultWidget : Widget
+defaultWidget = Wheel

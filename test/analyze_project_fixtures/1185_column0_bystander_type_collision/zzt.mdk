@@ -1,0 +1,8 @@
+-- The type `main.mdk`'s `match` actually scrutinises: `mk`'s return type is
+-- `zzt.T`, which shares its bare name `T` with `aat.T` (different module,
+-- different constructor set).  This is `zzt` (not `aat`) so it loads SECOND in
+-- `main.mdk`'s import order -- the adverse order the L1 step-2b repro needs.
+public export data T = X | Y | Z
+
+export mk : Int -> T
+mk n = if n == 0 then X else Y
