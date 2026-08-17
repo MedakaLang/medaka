@@ -6,7 +6,7 @@ bucketClauses : List (String, (List Pat, Expr)) -> Map String (List (List Pat, E
 bucketFor : String -> Map String (List (List Pat, Expr)) -> List (List Pat, Expr)
 buildOracle : List Decl -> Oracle
 builtinArity : List (String, Int)
-builtinCtorType : List (String, String)
+builtinCtorType : List (String, TabKey)
 builtinTypeCtors : List (TabKey, List String)
 charsPrefixTuple : Array Char -> Bool
 charsSuffixUnder : Array Char -> Int -> Bool
@@ -26,7 +26,7 @@ collectLetBindInner : LetBind -> List LetBind
 collectLetBinds : Expr -> List LetBind
 dataArity : Decl -> List (String, Int)
 dataCtorFields : Decl -> List (String, List String)
-dataCtorType : Decl -> List (String, String)
+dataCtorType : Decl -> List (String, TabKey)
 dataTypeCtors : Decl -> List (TabKey, List String)
 declBodyWarnings : Oracle -> Decl -> List (String, Option Loc)
 defRow : List Pat -> Option (List Pat)
@@ -74,7 +74,7 @@ missingCtorPat : Oracle -> List String -> List String -> Pat
 nonExhaustiveClausesMsg : Oracle -> String -> Int -> List (List Pat) -> String
 oGetArity : Oracle -> String -> Int
 oGetCtorFields : Oracle -> String -> Option (List String)
-oGetCtorType : Oracle -> String -> Option String
+oGetCtorType : Oracle -> String -> Option TabKey
 oGetCtors : Oracle -> TabKey -> Option (List String)
 oracleMap : List (String, a) -> Map String a
 parenWrapWit : Bool -> String -> String
@@ -95,7 +95,7 @@ specializeCon : String -> Int -> List (List Pat) -> List (List Pat)
 specializeLit : Lit -> List (List Pat) -> List (List Pat)
 topFunDefClauses : List Decl -> List (String, (List Pat, Expr))
 totalClauseRows : Oracle -> List (List Pat, Expr) -> List (List Pat)
-tryEachType : Oracle -> List String -> Option String
+tryEachType : Oracle -> List String -> Option TabKey
 tupleArityCheck : Array Char -> Int -> Option Int
 tupleArityOfName : String -> Option Int
 tupleCtorName : Int -> String
@@ -110,7 +110,7 @@ usefulWildCtors : Oracle -> Option (List String) -> List (List Pat) -> List Pat 
 usefulWitness : Oracle -> Option TabKey -> List (List Pat) -> Int -> Option (List Pat)
 variantArity : Variant -> (String, Int)
 variantCtorFields : Variant -> List (String, List String)
-variantCtorType : String -> Variant -> (String, String)
+variantCtorType : TabKey -> Variant -> (String, TabKey)
 variantName : Variant -> String
 witnessBranch : Oracle -> String -> List (List Pat) -> Int -> Option (List Pat)
 witnessPrepend : Pat -> Option (List Pat) -> Option (List Pat)

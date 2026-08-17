@@ -1,5 +1,5 @@
 # META
-source_lines=4120
+source_lines=4117
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint.mdk — the `medaka lint` framework + seed rules.
@@ -1156,12 +1156,10 @@ recPatFieldIrrefutable orc (RecPatField _ _ (Some p)) = patIrrefutable orc p
 -- (its type isn't visible in this file) is NOT provably single → False (SKIP).
 ctorIsSingle : Oracle -> String -> Bool
 ctorIsSingle orc c = match oGetCtorType orc c
-  -- TRANSITIONAL (leaf L1 only; leaf L2 deletes this mint): `oGetCtorType`
-  -- still answers a bare `String`, so the round trip is bridged with an
-  -- identity-less key.  `TkBare` cannot match a `TkIdent` row — harmless here
-  -- because this oracle's rows are all `OriginUnresolved` (one file's raw
-  -- decls), but it is why L1 must never reach `main` alone.
-  Some t => match oGetCtors orc (tabKeyOf NsType OriginUnresolved t)
+  -- Leaf L2 deleted L1's transitional bridge mint here: `oGetCtorType` now
+  -- answers the `TabKey` the type's own decl minted, so the round trip is
+  -- identity-to-identity and this key is passed straight through.
+  Some t => match oGetCtors orc t
     Some ctors => listLen ctors == 1
     None => False
   None => False
@@ -1476,10 +1474,9 @@ irrefutablePat _ _ = False
 -- `data`, or a record-as-data).  Both queries are pure syntactic oracle lookups.
 ctorIsSole : Oracle -> String -> Bool
 ctorIsSole orc c = match oGetCtorType orc c
-  -- TRANSITIONAL (leaf L1 only; leaf L2 deletes this mint) — see
-  -- `ctorIsSingle` above for why the bridge is safe on this all-
-  -- `OriginUnresolved` oracle and why it is still transitional.
-  Some tyName => match oGetCtors orc (tabKeyOf NsType OriginUnresolved tyName)
+  -- Leaf L2 deleted L1's transitional bridge mint here — see `ctorIsSingle`
+  -- above; the round trip is now identity-to-identity.
+  Some tyKey => match oGetCtors orc tyKey
     Some ctors => listLen ctors == 1
     None => False
   None => False
@@ -4452,7 +4449,7 @@ duplicateBodySameFileRule = Rule {
 (DFunDef false "recPatFieldIrrefutable" (PWild (PCon "RecPatField" PWild PWild (PCon "None"))) (EVar "True"))
 (DFunDef false "recPatFieldIrrefutable" ((PVar "orc") (PCon "RecPatField" PWild PWild (PCon "Some" (PVar "p")))) (EApp (EApp (EVar "patIrrefutable") (EVar "orc")) (EVar "p")))
 (DTypeSig false "ctorIsSingle" (TyFun (TyCon "Oracle") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "ctorIsSingle" ((PVar "orc") (PVar "c")) (EMatch (EApp (EApp (EVar "oGetCtorType") (EVar "orc")) (EVar "c")) (arm (PCon "Some" (PVar "t")) () (EMatch (EApp (EApp (EVar "oGetCtors") (EVar "orc")) (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsType")) (EVar "OriginUnresolved")) (EVar "t"))) (arm (PCon "Some" (PVar "ctors")) () (EBinOp "==" (EApp (EVar "listLen") (EVar "ctors")) (ELit (LInt 1)))) (arm (PCon "None") () (EVar "False")))) (arm (PCon "None") () (EVar "False"))))
+(DFunDef false "ctorIsSingle" ((PVar "orc") (PVar "c")) (EMatch (EApp (EApp (EVar "oGetCtorType") (EVar "orc")) (EVar "c")) (arm (PCon "Some" (PVar "t")) () (EMatch (EApp (EApp (EVar "oGetCtors") (EVar "orc")) (EVar "t")) (arm (PCon "Some" (PVar "ctors")) () (EBinOp "==" (EApp (EVar "listLen") (EVar "ctors")) (ELit (LInt 1)))) (arm (PCon "None") () (EVar "False")))) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig false "destructureInParamFix" (TyFun (TyCon "Oracle") (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl"))))))
 (DFunDef false "destructureInParamFix" ((PVar "orc") (PCon "DFunDef" (PVar "vis") (PVar "name") (PVar "pats") (PVar "body"))) (EMatch (EApp (EApp (EVar "matchBodyOnBareParam") (EVar "pats")) (EVar "body")) (arm (PCon "Some" (PTuple (PVar "p") (PVar "k") (PVar "arms"))) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "destructureInParamFixArms") (EVar "orc")) (EVar "vis")) (EVar "name")) (EVar "pats")) (EVar "p")) (EVar "k")) (EVar "arms"))) (arm (PCon "None") () (EVar "None"))))
 (DFunDef false "destructureInParamFix" (PWild PWild) (EVar "None"))
@@ -4545,7 +4542,7 @@ duplicateBodySameFileRule = Rule {
 (DFunDef false "irrefutablePat" ((PVar "orc") (PCon "PCon" (PVar "c") (PVar "subps"))) (EBinOp "&&" (EApp (EApp (EVar "ctorIsSole") (EVar "orc")) (EVar "c")) (EApp (EVar "not") (EApp (EApp (EVar "anyList") (EApp (EVar "refutablePat") (EVar "orc"))) (EVar "subps")))))
 (DFunDef false "irrefutablePat" (PWild PWild) (EVar "False"))
 (DTypeSig false "ctorIsSole" (TyFun (TyCon "Oracle") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "ctorIsSole" ((PVar "orc") (PVar "c")) (EMatch (EApp (EApp (EVar "oGetCtorType") (EVar "orc")) (EVar "c")) (arm (PCon "Some" (PVar "tyName")) () (EMatch (EApp (EApp (EVar "oGetCtors") (EVar "orc")) (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsType")) (EVar "OriginUnresolved")) (EVar "tyName"))) (arm (PCon "Some" (PVar "ctors")) () (EBinOp "==" (EApp (EVar "listLen") (EVar "ctors")) (ELit (LInt 1)))) (arm (PCon "None") () (EVar "False")))) (arm (PCon "None") () (EVar "False"))))
+(DFunDef false "ctorIsSole" ((PVar "orc") (PVar "c")) (EMatch (EApp (EApp (EVar "oGetCtorType") (EVar "orc")) (EVar "c")) (arm (PCon "Some" (PVar "tyKey")) () (EMatch (EApp (EApp (EVar "oGetCtors") (EVar "orc")) (EVar "tyKey")) (arm (PCon "Some" (PVar "ctors")) () (EBinOp "==" (EApp (EVar "listLen") (EVar "ctors")) (ELit (LInt 1)))) (arm (PCon "None") () (EVar "False")))) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig false "refutablePat" (TyFun (TyCon "Oracle") (TyFun (TyCon "Pat") (TyCon "Bool"))))
 (DFunDef false "refutablePat" ((PVar "orc") (PVar "p")) (EApp (EVar "not") (EApp (EApp (EVar "irrefutablePat") (EVar "orc")) (EVar "p"))))
 (DTypeSig false "refutableField" (TyFun (TyCon "Oracle") (TyFun (TyCon "RecPatField") (TyCon "Bool"))))
@@ -5881,7 +5878,7 @@ duplicateBodySameFileRule = Rule {
 (DFunDef false "recPatFieldIrrefutable" (PWild (PCon "RecPatField" PWild PWild (PCon "None"))) (EVar "True"))
 (DFunDef false "recPatFieldIrrefutable" ((PVar "orc") (PCon "RecPatField" PWild PWild (PCon "Some" (PVar "p")))) (EApp (EApp (EVar "patIrrefutable") (EVar "orc")) (EVar "p")))
 (DTypeSig false "ctorIsSingle" (TyFun (TyCon "Oracle") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "ctorIsSingle" ((PVar "orc") (PVar "c")) (EMatch (EApp (EApp (EVar "oGetCtorType") (EVar "orc")) (EVar "c")) (arm (PCon "Some" (PVar "t")) () (EMatch (EApp (EApp (EVar "oGetCtors") (EVar "orc")) (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsType")) (EVar "OriginUnresolved")) (EVar "t"))) (arm (PCon "Some" (PVar "ctors")) () (EBinOp "==" (EApp (EVar "listLen") (EVar "ctors")) (ELit (LInt 1)))) (arm (PCon "None") () (EVar "False")))) (arm (PCon "None") () (EVar "False"))))
+(DFunDef false "ctorIsSingle" ((PVar "orc") (PVar "c")) (EMatch (EApp (EApp (EVar "oGetCtorType") (EVar "orc")) (EVar "c")) (arm (PCon "Some" (PVar "t")) () (EMatch (EApp (EApp (EVar "oGetCtors") (EVar "orc")) (EVar "t")) (arm (PCon "Some" (PVar "ctors")) () (EBinOp "==" (EApp (EVar "listLen") (EVar "ctors")) (ELit (LInt 1)))) (arm (PCon "None") () (EVar "False")))) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig false "destructureInParamFix" (TyFun (TyCon "Oracle") (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl"))))))
 (DFunDef false "destructureInParamFix" ((PVar "orc") (PCon "DFunDef" (PVar "vis") (PVar "name") (PVar "pats") (PVar "body"))) (EMatch (EApp (EApp (EVar "matchBodyOnBareParam") (EVar "pats")) (EVar "body")) (arm (PCon "Some" (PTuple (PVar "p") (PVar "k") (PVar "arms"))) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "destructureInParamFixArms") (EVar "orc")) (EVar "vis")) (EVar "name")) (EVar "pats")) (EVar "p")) (EVar "k")) (EVar "arms"))) (arm (PCon "None") () (EVar "None"))))
 (DFunDef false "destructureInParamFix" (PWild PWild) (EVar "None"))
@@ -5974,7 +5971,7 @@ duplicateBodySameFileRule = Rule {
 (DFunDef false "irrefutablePat" ((PVar "orc") (PCon "PCon" (PVar "c") (PVar "subps"))) (EBinOp "&&" (EApp (EApp (EVar "ctorIsSole") (EVar "orc")) (EVar "c")) (EApp (EVar "not") (EApp (EApp (EVar "anyList") (EApp (EVar "refutablePat") (EVar "orc"))) (EVar "subps")))))
 (DFunDef false "irrefutablePat" (PWild PWild) (EVar "False"))
 (DTypeSig false "ctorIsSole" (TyFun (TyCon "Oracle") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "ctorIsSole" ((PVar "orc") (PVar "c")) (EMatch (EApp (EApp (EVar "oGetCtorType") (EVar "orc")) (EVar "c")) (arm (PCon "Some" (PVar "tyName")) () (EMatch (EApp (EApp (EVar "oGetCtors") (EVar "orc")) (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsType")) (EVar "OriginUnresolved")) (EVar "tyName"))) (arm (PCon "Some" (PVar "ctors")) () (EBinOp "==" (EApp (EVar "listLen") (EVar "ctors")) (ELit (LInt 1)))) (arm (PCon "None") () (EVar "False")))) (arm (PCon "None") () (EVar "False"))))
+(DFunDef false "ctorIsSole" ((PVar "orc") (PVar "c")) (EMatch (EApp (EApp (EVar "oGetCtorType") (EVar "orc")) (EVar "c")) (arm (PCon "Some" (PVar "tyKey")) () (EMatch (EApp (EApp (EVar "oGetCtors") (EVar "orc")) (EVar "tyKey")) (arm (PCon "Some" (PVar "ctors")) () (EBinOp "==" (EApp (EVar "listLen") (EVar "ctors")) (ELit (LInt 1)))) (arm (PCon "None") () (EVar "False")))) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig false "refutablePat" (TyFun (TyCon "Oracle") (TyFun (TyCon "Pat") (TyCon "Bool"))))
 (DFunDef false "refutablePat" ((PVar "orc") (PVar "p")) (EApp (EVar "not") (EApp (EApp (EVar "irrefutablePat") (EVar "orc")) (EVar "p"))))
 (DTypeSig false "refutableField" (TyFun (TyCon "Oracle") (TyFun (TyCon "RecPatField") (TyCon "Bool"))))

@@ -1,5 +1,5 @@
 # META
-source_lines=954
+source_lines=976
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted exhaust stage — Stage 4 port of `lib/exhaust.ml`'s standalone
@@ -140,10 +140,19 @@ digitVal c = charCode c - charCode '0'
 -- `allCovered`, `specializeCon`) compare against pattern-derived bare ctor
 -- names, so an identity-granularity value filtered by a name-granularity
 -- bucket table would be a granularity mismatch.
+--
+-- ⚠️ `ctorType` is the MIRROR of that (leaf L2), and its asymmetry is
+-- deliberate: its KEY stays the bare ctor name — `PCon String (List Pat)`
+-- carries no identity carrier, so the reader end could never mint one — while
+-- its VALUE becomes the same `TabKey`@`NsType` that `typeCtors` is keyed by.
+-- That is what makes the `oGetCtorType >>= oGetCtors` round trip
+-- identity-to-identity, so a nested column's lookup hits the row its own
+-- declaration wrote.  With a bare-`String` value the round trip had to bridge
+-- through a `TkBare` mint, which can never match a `TkIdent` row.
 public export data Oracle = Oracle {
     typeCtors : List (TabKey, List String),
     ctorArity : OrdMap Int,
-    ctorType : OrdMap String,
+    ctorType : OrdMap TabKey,
     ctorFields : OrdMap (List String),  -- ctor → declared field names in order (DData ConNamed variants)
   }
 
@@ -187,13 +196,18 @@ builtinTypeCtors = [
 builtinArity : List (String, Int)
 builtinArity = [("True", 0), ("False", 0), ("Cons", 2), ("Nil", 0), ("Unit", 0)]
 
-builtinCtorType : List (String, String)
+-- ⚠️ `OriginBuiltin` for the same reason `builtinTypeCtors` uses it: these
+-- values ARE the keys `oGetCtors` is about to look up, and the builtin rows of
+-- `typeCtors` are minted `TkIdent (Ident NsType IdentBuiltin …)`.  A `TkBare`
+-- value here would miss its own table's row on every builtin-typed nested
+-- column.
+builtinCtorType : List (String, TabKey)
 builtinCtorType = [
-  ("True", "Bool"),
-  ("False", "Bool"),
-  ("Cons", "List"),
-  ("Nil", "List"),
-  ("Unit", "Unit"),
+  ("True", tabKeyOf NsType OriginBuiltin "Bool"),
+  ("False", tabKeyOf NsType OriginBuiltin "Bool"),
+  ("Cons", tabKeyOf NsType OriginBuiltin "List"),
+  ("Nil", tabKeyOf NsType OriginBuiltin "List"),
+  ("Unit", tabKeyOf NsType OriginBuiltin "Unit"),
 ]
 
 dataTypeCtors : Decl -> List (TabKey, List String)
@@ -204,9 +218,10 @@ dataArity : Decl -> List (String, Int)
 dataArity (DData { dataCtors = variants }) = map variantArity variants
 dataArity _ = []
 
-dataCtorType : Decl -> List (String, String)
-dataCtorType (DData { dataName = tyname, dataCtors = variants }) =
-  map (variantCtorType tyname) variants
+-- The key is minted ONCE per `data` decl, from that decl's own `dataOrigin` —
+-- the very same mint `dataTypeCtors` uses for the row this value points at.
+dataCtorType : Decl -> List (String, TabKey)
+dataCtorType (DData { dataName = tyname, dataOrigin = origin, dataCtors = variants }) = map (variantCtorType (tabKeyOf NsType origin tyname)) variants
 dataCtorType _ = []
 
 variantName : Variant -> String
@@ -216,8 +231,8 @@ variantArity : Variant -> (String, Int)
 variantArity (Variant n (ConPos tys)) = (n, listLen tys)
 variantArity (Variant n (ConNamed fs _)) = (n, listLen fs)
 
-variantCtorType : String -> Variant -> (String, String)
-variantCtorType tyname (Variant n _) = (n, tyname)
+variantCtorType : TabKey -> Variant -> (String, TabKey)
+variantCtorType tykey (Variant n _) = (n, tykey)
 
 dataCtorFields : Decl -> List (String, List String)
 dataCtorFields (DData { dataCtors = variants }) =
@@ -239,9 +254,12 @@ oGetCtors oracle t
   | (Some _) <- tupleArityOfName (tabKeyName t) = Some [tabKeyName t]
   | otherwise = lookupTab t oracle.typeCtors
 
-export oGetCtorType : Oracle -> String -> Option String
+-- The tuple short-circuit mints `OriginBuiltin` to match `oGetCtors`' own
+-- short-circuit, which answers off the NAME before either table is consulted —
+-- so the synthetic `__tupleN__` key never actually reaches a row on either end.
+export oGetCtorType : Oracle -> String -> Option TabKey
 oGetCtorType oracle c
-  | (Some _) <- tupleArityOfName c = Some c
+  | (Some _) <- tupleArityOfName c = Some (tabKeyOf NsType OriginBuiltin c)
   | otherwise = omLookup c oracle.ctorType
 
 oGetArity : Oracle -> String -> Int
@@ -357,17 +375,21 @@ headCtors [] = []
 headCtors (((PCon c _)::_)::rest) = c :: headCtors rest
 headCtors (_::rest) = headCtors rest
 
--- TRANSITIONAL (leaf L1 only; leaf L2 deletes this mint): the nested-column key
--- has no identity available until `ctorType`'s VALUE carries one.  `TkBare`
--- cannot match a `TkIdent` row, so on the typed multi-module path every nested
--- column's lookup MISSES and its warning is SUPPRESSED.  This is why L1 must
--- never reach `main` alone (RUN-CTOR-019 S3).
+-- Leaf L2 deleted L1's transitional `TkBare` mint here: `ctorType`'s VALUE now
+-- carries the declaration identity, so the key `tryEachType` forwards is the
+-- one the type's own `data` decl minted and the round trip is
+-- identity-to-identity.
+--
+-- ⚠️ Still FIRST-WINS BY BARE CTOR NAME, and that is a separate defect: two
+-- same-named constructors from different types resolve to whichever row the
+-- table saw first, so the identity forwarded here may faithfully name the
+-- WRONG type.  L2 makes the round trip identity-PRESERVING, not
+-- identity-CORRECT; picking the right occurrence is occurrence-scope work
+-- (`S-ctor-overlay-retire`).
 inferCol0Type : Oracle -> List (List Pat) -> Option TabKey
-inferCol0Type oracle pmat = map
-  (t => tabKeyOf NsType OriginUnresolved t)
-  (tryEachType oracle (headCtors pmat))
+inferCol0Type oracle pmat = tryEachType oracle (headCtors pmat)
 
-tryEachType : Oracle -> List String -> Option String
+tryEachType : Oracle -> List String -> Option TabKey
 tryEachType _ [] = None
 tryEachType oracle (c::cs) = match oGetCtorType oracle c
   Some t => Some t
@@ -979,7 +1001,7 @@ exhaustToLines prog = exhaustToLinesWith prog prog
 (DFunDef false "isDigitC" ((PVar "c")) (EBinOp "&&" (EBinOp ">=" (EVar "c") (ELit (LChar "0"))) (EBinOp "<=" (EVar "c") (ELit (LChar "9")))))
 (DTypeSig false "digitVal" (TyFun (TyCon "Char") (TyCon "Int")))
 (DFunDef false "digitVal" ((PVar "c")) (EBinOp "-" (EApp (EVar "charCode") (EVar "c")) (EApp (EVar "charCode") (ELit (LChar "0")))))
-(DData Public "Oracle" () ((variant "Oracle" (ConNamed (field "typeCtors" (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "String"))))) (field "ctorArity" (TyApp (TyCon "OrdMap") (TyCon "Int"))) (field "ctorType" (TyApp (TyCon "OrdMap") (TyCon "String"))) (field "ctorFields" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))))))) ())
+(DData Public "Oracle" () ((variant "Oracle" (ConNamed (field "typeCtors" (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "String"))))) (field "ctorArity" (TyApp (TyCon "OrdMap") (TyCon "Int"))) (field "ctorType" (TyApp (TyCon "OrdMap") (TyCon "TabKey"))) (field "ctorFields" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))))))) ())
 (DTypeSig true "buildOracle" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Oracle")))
 (DFunDef false "buildOracle" ((PVar "prog")) (ERecordCreate "Oracle" ((fa "typeCtors" (EBinOp "++" (EApp (EApp (EVar "flatMap") (EVar "dataTypeCtors")) (EVar "prog")) (EVar "builtinTypeCtors"))) (fa "ctorArity" (EApp (EVar "oracleMap") (EBinOp "++" (EApp (EApp (EVar "flatMap") (EVar "dataArity")) (EVar "prog")) (EVar "builtinArity")))) (fa "ctorType" (EApp (EVar "oracleMap") (EBinOp "++" (EApp (EApp (EVar "flatMap") (EVar "dataCtorType")) (EVar "prog")) (EVar "builtinCtorType")))) (fa "ctorFields" (EApp (EVar "oracleMap") (EApp (EApp (EVar "flatMap") (EVar "dataCtorFields")) (EVar "prog")))))))
 (DTypeSig false "oracleMap" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "a"))) (TyApp (TyCon "OrdMap") (TyVar "a"))))
@@ -988,24 +1010,24 @@ exhaustToLines prog = exhaustToLinesWith prog prog
 (DFunDef false "builtinTypeCtors" () (EListLit (ETuple (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsType")) (EVar "OriginBuiltin")) (ELit (LString "Bool"))) (EListLit (ELit (LString "True")) (ELit (LString "False")))) (ETuple (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsType")) (EVar "OriginBuiltin")) (ELit (LString "List"))) (EListLit (ELit (LString "Cons")) (ELit (LString "Nil")))) (ETuple (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsType")) (EVar "OriginBuiltin")) (ELit (LString "Unit"))) (EListLit (ELit (LString "Unit"))))))
 (DTypeSig false "builtinArity" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))))
 (DFunDef false "builtinArity" () (EListLit (ETuple (ELit (LString "True")) (ELit (LInt 0))) (ETuple (ELit (LString "False")) (ELit (LInt 0))) (ETuple (ELit (LString "Cons")) (ELit (LInt 2))) (ETuple (ELit (LString "Nil")) (ELit (LInt 0))) (ETuple (ELit (LString "Unit")) (ELit (LInt 0)))))
-(DTypeSig false "builtinCtorType" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))
-(DFunDef false "builtinCtorType" () (EListLit (ETuple (ELit (LString "True")) (ELit (LString "Bool"))) (ETuple (ELit (LString "False")) (ELit (LString "Bool"))) (ETuple (ELit (LString "Cons")) (ELit (LString "List"))) (ETuple (ELit (LString "Nil")) (ELit (LString "List"))) (ETuple (ELit (LString "Unit")) (ELit (LString "Unit")))))
+(DTypeSig false "builtinCtorType" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TabKey"))))
+(DFunDef false "builtinCtorType" () (EListLit (ETuple (ELit (LString "True")) (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsType")) (EVar "OriginBuiltin")) (ELit (LString "Bool")))) (ETuple (ELit (LString "False")) (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsType")) (EVar "OriginBuiltin")) (ELit (LString "Bool")))) (ETuple (ELit (LString "Cons")) (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsType")) (EVar "OriginBuiltin")) (ELit (LString "List")))) (ETuple (ELit (LString "Nil")) (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsType")) (EVar "OriginBuiltin")) (ELit (LString "List")))) (ETuple (ELit (LString "Unit")) (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsType")) (EVar "OriginBuiltin")) (ELit (LString "Unit"))))))
 (DTypeSig false "dataTypeCtors" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "dataTypeCtors" ((PRec "DData" ((rf "dataName" (PVar "tyname")) (rf "dataOrigin" (PVar "origin")) (rf "dataCtors" (PVar "variants"))) false)) (EListLit (ETuple (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsType")) (EVar "origin")) (EVar "tyname")) (EApp (EApp (EVar "map") (EVar "variantName")) (EVar "variants")))))
 (DFunDef false "dataTypeCtors" (PWild) (EListLit))
 (DTypeSig false "dataArity" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))))
 (DFunDef false "dataArity" ((PRec "DData" ((rf "dataCtors" (PVar "variants"))) false)) (EApp (EApp (EVar "map") (EVar "variantArity")) (EVar "variants")))
 (DFunDef false "dataArity" (PWild) (EListLit))
-(DTypeSig false "dataCtorType" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
-(DFunDef false "dataCtorType" ((PRec "DData" ((rf "dataName" (PVar "tyname")) (rf "dataCtors" (PVar "variants"))) false)) (EApp (EApp (EVar "map") (EApp (EVar "variantCtorType") (EVar "tyname"))) (EVar "variants")))
+(DTypeSig false "dataCtorType" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TabKey")))))
+(DFunDef false "dataCtorType" ((PRec "DData" ((rf "dataName" (PVar "tyname")) (rf "dataOrigin" (PVar "origin")) (rf "dataCtors" (PVar "variants"))) false)) (EApp (EApp (EVar "map") (EApp (EVar "variantCtorType") (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsType")) (EVar "origin")) (EVar "tyname")))) (EVar "variants")))
 (DFunDef false "dataCtorType" (PWild) (EListLit))
 (DTypeSig false "variantName" (TyFun (TyCon "Variant") (TyCon "String")))
 (DFunDef false "variantName" ((PCon "Variant" (PVar "n") PWild)) (EVar "n"))
 (DTypeSig false "variantArity" (TyFun (TyCon "Variant") (TyTuple (TyCon "String") (TyCon "Int"))))
 (DFunDef false "variantArity" ((PCon "Variant" (PVar "n") (PCon "ConPos" (PVar "tys")))) (ETuple (EVar "n") (EApp (EVar "listLen") (EVar "tys"))))
 (DFunDef false "variantArity" ((PCon "Variant" (PVar "n") (PCon "ConNamed" (PVar "fs") PWild))) (ETuple (EVar "n") (EApp (EVar "listLen") (EVar "fs"))))
-(DTypeSig false "variantCtorType" (TyFun (TyCon "String") (TyFun (TyCon "Variant") (TyTuple (TyCon "String") (TyCon "String")))))
-(DFunDef false "variantCtorType" ((PVar "tyname") (PCon "Variant" (PVar "n") PWild)) (ETuple (EVar "n") (EVar "tyname")))
+(DTypeSig false "variantCtorType" (TyFun (TyCon "TabKey") (TyFun (TyCon "Variant") (TyTuple (TyCon "String") (TyCon "TabKey")))))
+(DFunDef false "variantCtorType" ((PVar "tykey") (PCon "Variant" (PVar "n") PWild)) (ETuple (EVar "n") (EVar "tykey")))
 (DTypeSig false "dataCtorFields" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "dataCtorFields" ((PRec "DData" ((rf "dataCtors" (PVar "variants"))) false)) (EApp (EApp (EVar "flatMap") (EVar "variantCtorFields")) (EVar "variants")))
 (DFunDef false "dataCtorFields" (PWild) (EListLit))
@@ -1018,8 +1040,8 @@ exhaustToLines prog = exhaustToLinesWith prog prog
 (DFunDef false "oGetCtorFields" ((PVar "oracle") (PVar "c")) (EApp (EApp (EVar "omLookup") (EVar "c")) (EFieldAccess (EVar "oracle") "ctorFields")))
 (DTypeSig true "oGetCtors" (TyFun (TyCon "Oracle") (TyFun (TyCon "TabKey") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "oGetCtors" ((PVar "oracle") (PVar "t")) (EMatch (EApp (EVar "tupleArityOfName") (EApp (EVar "tabKeyName") (EVar "t"))) (arm (PCon "Some" PWild) () (EApp (EVar "Some") (EListLit (EApp (EVar "tabKeyName") (EVar "t"))))) (arm PWild () (EIf (EVar "otherwise") (EApp (EApp (EVar "lookupTab") (EVar "t")) (EFieldAccess (EVar "oracle") "typeCtors")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
-(DTypeSig true "oGetCtorType" (TyFun (TyCon "Oracle") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))
-(DFunDef false "oGetCtorType" ((PVar "oracle") (PVar "c")) (EMatch (EApp (EVar "tupleArityOfName") (EVar "c")) (arm (PCon "Some" PWild) () (EApp (EVar "Some") (EVar "c"))) (arm PWild () (EIf (EVar "otherwise") (EApp (EApp (EVar "omLookup") (EVar "c")) (EFieldAccess (EVar "oracle") "ctorType")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig true "oGetCtorType" (TyFun (TyCon "Oracle") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "TabKey")))))
+(DFunDef false "oGetCtorType" ((PVar "oracle") (PVar "c")) (EMatch (EApp (EVar "tupleArityOfName") (EVar "c")) (arm (PCon "Some" PWild) () (EApp (EVar "Some") (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsType")) (EVar "OriginBuiltin")) (EVar "c")))) (arm PWild () (EIf (EVar "otherwise") (EApp (EApp (EVar "omLookup") (EVar "c")) (EFieldAccess (EVar "oracle") "ctorType")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "oGetArity" (TyFun (TyCon "Oracle") (TyFun (TyCon "String") (TyCon "Int"))))
 (DFunDef false "oGetArity" ((PVar "oracle") (PVar "c")) (EMatch (EApp (EVar "tupleArityOfName") (EVar "c")) (arm (PCon "Some" (PVar "a")) () (EVar "a")) (arm PWild () (EIf (EVar "otherwise") (EApp (EApp (EVar "fromOption") (ELit (LInt 0))) (EApp (EApp (EVar "omLookup") (EVar "c")) (EFieldAccess (EVar "oracle") "ctorArity"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig true "desugarPat" (TyFun (TyCon "Oracle") (TyFun (TyCon "Pat") (TyCon "Pat"))))
@@ -1078,8 +1100,8 @@ exhaustToLines prog = exhaustToLinesWith prog prog
 (DFunDef false "headCtors" ((PCons (PCons (PCon "PCon" (PVar "c") PWild) PWild) (PVar "rest"))) (EBinOp "::" (EVar "c") (EApp (EVar "headCtors") (EVar "rest"))))
 (DFunDef false "headCtors" ((PCons PWild (PVar "rest"))) (EApp (EVar "headCtors") (EVar "rest")))
 (DTypeSig false "inferCol0Type" (TyFun (TyCon "Oracle") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Pat"))) (TyApp (TyCon "Option") (TyCon "TabKey")))))
-(DFunDef false "inferCol0Type" ((PVar "oracle") (PVar "pmat")) (EApp (EApp (EVar "map") (ELam ((PVar "t")) (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsType")) (EVar "OriginUnresolved")) (EVar "t")))) (EApp (EApp (EVar "tryEachType") (EVar "oracle")) (EApp (EVar "headCtors") (EVar "pmat")))))
-(DTypeSig false "tryEachType" (TyFun (TyCon "Oracle") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "String")))))
+(DFunDef false "inferCol0Type" ((PVar "oracle") (PVar "pmat")) (EApp (EApp (EVar "tryEachType") (EVar "oracle")) (EApp (EVar "headCtors") (EVar "pmat"))))
+(DTypeSig false "tryEachType" (TyFun (TyCon "Oracle") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "TabKey")))))
 (DFunDef false "tryEachType" (PWild (PList)) (EVar "None"))
 (DFunDef false "tryEachType" ((PVar "oracle") (PCons (PVar "c") (PVar "cs"))) (EMatch (EApp (EApp (EVar "oGetCtorType") (EVar "oracle")) (EVar "c")) (arm (PCon "Some" (PVar "t")) () (EApp (EVar "Some") (EVar "t"))) (arm (PCon "None") () (EApp (EApp (EVar "tryEachType") (EVar "oracle")) (EVar "cs")))))
 (DTypeSig true "useful" (TyFun (TyCon "Oracle") (TyFun (TyApp (TyCon "Option") (TyCon "TabKey")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Pat"))) (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Bool"))))))
@@ -1361,7 +1383,7 @@ exhaustToLines prog = exhaustToLinesWith prog prog
 (DFunDef false "isDigitC" ((PVar "c")) (EBinOp "&&" (EBinOp ">=" (EVar "c") (ELit (LChar "0"))) (EBinOp "<=" (EVar "c") (ELit (LChar "9")))))
 (DTypeSig false "digitVal" (TyFun (TyCon "Char") (TyCon "Int")))
 (DFunDef false "digitVal" ((PVar "c")) (EBinOp "-" (EApp (EVar "charCode") (EVar "c")) (EApp (EVar "charCode") (ELit (LChar "0")))))
-(DData Public "Oracle" () ((variant "Oracle" (ConNamed (field "typeCtors" (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "String"))))) (field "ctorArity" (TyApp (TyCon "OrdMap") (TyCon "Int"))) (field "ctorType" (TyApp (TyCon "OrdMap") (TyCon "String"))) (field "ctorFields" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))))))) ())
+(DData Public "Oracle" () ((variant "Oracle" (ConNamed (field "typeCtors" (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "String"))))) (field "ctorArity" (TyApp (TyCon "OrdMap") (TyCon "Int"))) (field "ctorType" (TyApp (TyCon "OrdMap") (TyCon "TabKey"))) (field "ctorFields" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))))))) ())
 (DTypeSig true "buildOracle" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Oracle")))
 (DFunDef false "buildOracle" ((PVar "prog")) (ERecordCreate "Oracle" ((fa "typeCtors" (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EVar "dataTypeCtors")) (EVar "prog")) (EVar "builtinTypeCtors"))) (fa "ctorArity" (EApp (EVar "oracleMap") (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EVar "dataArity")) (EVar "prog")) (EVar "builtinArity")))) (fa "ctorType" (EApp (EVar "oracleMap") (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EVar "dataCtorType")) (EVar "prog")) (EVar "builtinCtorType")))) (fa "ctorFields" (EApp (EVar "oracleMap") (EApp (EApp (EDictApp "flatMap") (EVar "dataCtorFields")) (EVar "prog")))))))
 (DTypeSig false "oracleMap" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "a"))) (TyApp (TyCon "OrdMap") (TyVar "a"))))
@@ -1370,24 +1392,24 @@ exhaustToLines prog = exhaustToLinesWith prog prog
 (DFunDef false "builtinTypeCtors" () (EListLit (ETuple (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsType")) (EVar "OriginBuiltin")) (ELit (LString "Bool"))) (EListLit (ELit (LString "True")) (ELit (LString "False")))) (ETuple (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsType")) (EVar "OriginBuiltin")) (ELit (LString "List"))) (EListLit (ELit (LString "Cons")) (ELit (LString "Nil")))) (ETuple (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsType")) (EVar "OriginBuiltin")) (ELit (LString "Unit"))) (EListLit (ELit (LString "Unit"))))))
 (DTypeSig false "builtinArity" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))))
 (DFunDef false "builtinArity" () (EListLit (ETuple (ELit (LString "True")) (ELit (LInt 0))) (ETuple (ELit (LString "False")) (ELit (LInt 0))) (ETuple (ELit (LString "Cons")) (ELit (LInt 2))) (ETuple (ELit (LString "Nil")) (ELit (LInt 0))) (ETuple (ELit (LString "Unit")) (ELit (LInt 0)))))
-(DTypeSig false "builtinCtorType" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))
-(DFunDef false "builtinCtorType" () (EListLit (ETuple (ELit (LString "True")) (ELit (LString "Bool"))) (ETuple (ELit (LString "False")) (ELit (LString "Bool"))) (ETuple (ELit (LString "Cons")) (ELit (LString "List"))) (ETuple (ELit (LString "Nil")) (ELit (LString "List"))) (ETuple (ELit (LString "Unit")) (ELit (LString "Unit")))))
+(DTypeSig false "builtinCtorType" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TabKey"))))
+(DFunDef false "builtinCtorType" () (EListLit (ETuple (ELit (LString "True")) (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsType")) (EVar "OriginBuiltin")) (ELit (LString "Bool")))) (ETuple (ELit (LString "False")) (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsType")) (EVar "OriginBuiltin")) (ELit (LString "Bool")))) (ETuple (ELit (LString "Cons")) (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsType")) (EVar "OriginBuiltin")) (ELit (LString "List")))) (ETuple (ELit (LString "Nil")) (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsType")) (EVar "OriginBuiltin")) (ELit (LString "List")))) (ETuple (ELit (LString "Unit")) (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsType")) (EVar "OriginBuiltin")) (ELit (LString "Unit"))))))
 (DTypeSig false "dataTypeCtors" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "dataTypeCtors" ((PRec "DData" ((rf "dataName" (PVar "tyname")) (rf "dataOrigin" (PVar "origin")) (rf "dataCtors" (PVar "variants"))) false)) (EListLit (ETuple (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsType")) (EVar "origin")) (EVar "tyname")) (EApp (EApp (EMethodRef "map") (EVar "variantName")) (EVar "variants")))))
 (DFunDef false "dataTypeCtors" (PWild) (EListLit))
 (DTypeSig false "dataArity" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))))
 (DFunDef false "dataArity" ((PRec "DData" ((rf "dataCtors" (PVar "variants"))) false)) (EApp (EApp (EMethodRef "map") (EVar "variantArity")) (EVar "variants")))
 (DFunDef false "dataArity" (PWild) (EListLit))
-(DTypeSig false "dataCtorType" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
-(DFunDef false "dataCtorType" ((PRec "DData" ((rf "dataName" (PVar "tyname")) (rf "dataCtors" (PVar "variants"))) false)) (EApp (EApp (EMethodRef "map") (EApp (EVar "variantCtorType") (EVar "tyname"))) (EVar "variants")))
+(DTypeSig false "dataCtorType" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TabKey")))))
+(DFunDef false "dataCtorType" ((PRec "DData" ((rf "dataName" (PVar "tyname")) (rf "dataOrigin" (PVar "origin")) (rf "dataCtors" (PVar "variants"))) false)) (EApp (EApp (EMethodRef "map") (EApp (EVar "variantCtorType") (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsType")) (EVar "origin")) (EVar "tyname")))) (EVar "variants")))
 (DFunDef false "dataCtorType" (PWild) (EListLit))
 (DTypeSig false "variantName" (TyFun (TyCon "Variant") (TyCon "String")))
 (DFunDef false "variantName" ((PCon "Variant" (PVar "n") PWild)) (EVar "n"))
 (DTypeSig false "variantArity" (TyFun (TyCon "Variant") (TyTuple (TyCon "String") (TyCon "Int"))))
 (DFunDef false "variantArity" ((PCon "Variant" (PVar "n") (PCon "ConPos" (PVar "tys")))) (ETuple (EVar "n") (EApp (EVar "listLen") (EVar "tys"))))
 (DFunDef false "variantArity" ((PCon "Variant" (PVar "n") (PCon "ConNamed" (PVar "fs") PWild))) (ETuple (EVar "n") (EApp (EVar "listLen") (EVar "fs"))))
-(DTypeSig false "variantCtorType" (TyFun (TyCon "String") (TyFun (TyCon "Variant") (TyTuple (TyCon "String") (TyCon "String")))))
-(DFunDef false "variantCtorType" ((PVar "tyname") (PCon "Variant" (PVar "n") PWild)) (ETuple (EVar "n") (EVar "tyname")))
+(DTypeSig false "variantCtorType" (TyFun (TyCon "TabKey") (TyFun (TyCon "Variant") (TyTuple (TyCon "String") (TyCon "TabKey")))))
+(DFunDef false "variantCtorType" ((PVar "tykey") (PCon "Variant" (PVar "n") PWild)) (ETuple (EVar "n") (EVar "tykey")))
 (DTypeSig false "dataCtorFields" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "dataCtorFields" ((PRec "DData" ((rf "dataCtors" (PVar "variants"))) false)) (EApp (EApp (EDictApp "flatMap") (EVar "variantCtorFields")) (EVar "variants")))
 (DFunDef false "dataCtorFields" (PWild) (EListLit))
@@ -1400,8 +1422,8 @@ exhaustToLines prog = exhaustToLinesWith prog prog
 (DFunDef false "oGetCtorFields" ((PVar "oracle") (PVar "c")) (EApp (EApp (EVar "omLookup") (EVar "c")) (EFieldAccess (EVar "oracle") "ctorFields")))
 (DTypeSig true "oGetCtors" (TyFun (TyCon "Oracle") (TyFun (TyCon "TabKey") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "oGetCtors" ((PVar "oracle") (PVar "t")) (EMatch (EApp (EVar "tupleArityOfName") (EApp (EVar "tabKeyName") (EVar "t"))) (arm (PCon "Some" PWild) () (EApp (EVar "Some") (EListLit (EApp (EVar "tabKeyName") (EVar "t"))))) (arm PWild () (EIf (EVar "otherwise") (EApp (EApp (EVar "lookupTab") (EVar "t")) (EFieldAccess (EVar "oracle") "typeCtors")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
-(DTypeSig true "oGetCtorType" (TyFun (TyCon "Oracle") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))
-(DFunDef false "oGetCtorType" ((PVar "oracle") (PVar "c")) (EMatch (EApp (EVar "tupleArityOfName") (EVar "c")) (arm (PCon "Some" PWild) () (EApp (EVar "Some") (EVar "c"))) (arm PWild () (EIf (EVar "otherwise") (EApp (EApp (EVar "omLookup") (EVar "c")) (EFieldAccess (EVar "oracle") "ctorType")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig true "oGetCtorType" (TyFun (TyCon "Oracle") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "TabKey")))))
+(DFunDef false "oGetCtorType" ((PVar "oracle") (PVar "c")) (EMatch (EApp (EVar "tupleArityOfName") (EVar "c")) (arm (PCon "Some" PWild) () (EApp (EVar "Some") (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsType")) (EVar "OriginBuiltin")) (EVar "c")))) (arm PWild () (EIf (EVar "otherwise") (EApp (EApp (EVar "omLookup") (EVar "c")) (EFieldAccess (EVar "oracle") "ctorType")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "oGetArity" (TyFun (TyCon "Oracle") (TyFun (TyCon "String") (TyCon "Int"))))
 (DFunDef false "oGetArity" ((PVar "oracle") (PVar "c")) (EMatch (EApp (EVar "tupleArityOfName") (EVar "c")) (arm (PCon "Some" (PVar "a")) () (EVar "a")) (arm PWild () (EIf (EVar "otherwise") (EApp (EApp (EVar "fromOption") (ELit (LInt 0))) (EApp (EApp (EVar "omLookup") (EVar "c")) (EFieldAccess (EVar "oracle") "ctorArity"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig true "desugarPat" (TyFun (TyCon "Oracle") (TyFun (TyCon "Pat") (TyCon "Pat"))))
@@ -1460,8 +1482,8 @@ exhaustToLines prog = exhaustToLinesWith prog prog
 (DFunDef false "headCtors" ((PCons (PCons (PCon "PCon" (PVar "c") PWild) PWild) (PVar "rest"))) (EBinOp "::" (EVar "c") (EApp (EVar "headCtors") (EVar "rest"))))
 (DFunDef false "headCtors" ((PCons PWild (PVar "rest"))) (EApp (EVar "headCtors") (EVar "rest")))
 (DTypeSig false "inferCol0Type" (TyFun (TyCon "Oracle") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Pat"))) (TyApp (TyCon "Option") (TyCon "TabKey")))))
-(DFunDef false "inferCol0Type" ((PVar "oracle") (PVar "pmat")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "t")) (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsType")) (EVar "OriginUnresolved")) (EVar "t")))) (EApp (EApp (EVar "tryEachType") (EVar "oracle")) (EApp (EVar "headCtors") (EVar "pmat")))))
-(DTypeSig false "tryEachType" (TyFun (TyCon "Oracle") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "String")))))
+(DFunDef false "inferCol0Type" ((PVar "oracle") (PVar "pmat")) (EApp (EApp (EVar "tryEachType") (EVar "oracle")) (EApp (EVar "headCtors") (EVar "pmat"))))
+(DTypeSig false "tryEachType" (TyFun (TyCon "Oracle") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "TabKey")))))
 (DFunDef false "tryEachType" (PWild (PList)) (EVar "None"))
 (DFunDef false "tryEachType" ((PVar "oracle") (PCons (PVar "c") (PVar "cs"))) (EMatch (EApp (EApp (EVar "oGetCtorType") (EVar "oracle")) (EVar "c")) (arm (PCon "Some" (PVar "t")) () (EApp (EVar "Some") (EVar "t"))) (arm (PCon "None") () (EApp (EApp (EVar "tryEachType") (EVar "oracle")) (EVar "cs")))))
 (DTypeSig true "useful" (TyFun (TyCon "Oracle") (TyFun (TyApp (TyCon "Option") (TyCon "TabKey")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Pat"))) (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Bool"))))))
