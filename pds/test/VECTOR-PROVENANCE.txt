@@ -50,6 +50,13 @@
 #       pds/test/vectors/foo.sh reds test/diff_compiler_ci_shard_coverage.sh
 #       (it enumerates every tracked *.sh and no shard pattern selects that
 #       path), not this one.
+#     - that an [impl] stanza's commit: is actually a COMMIT. A well-formed
+#       40-lowercase-hex value that is a TAG OBJECT rather than a commit passes
+#       every well-formedness and pin-agreement check here. The pin is checked
+#       to be single-valued; it is NOT proven to be a commit. Derive it with
+#       `git rev-parse '<tag>^{commit}'` — never a bare `rev-parse` or an
+#       `ls-remote` on an annotated tag ref, both of which can hand back the
+#       tag object's sha (RUN-PDS0-016).
 #
 # VECTOR CORPORA MUST LIVE UNDER pds/test/. That is not merely descriptive —
 # it is the instruction to every consumer slice (S-sha256, S-encodings,
@@ -276,3 +283,22 @@ extraction:    hand-transcribed from the "Examples:" fenced block (6 rows) and t
 retrieved:     2026-08-17
 consumer:      S-encodings (#1701 encodings base58btc + multiformats)
 notes:         pinned commit dd184f1ce89c81808503bb719b5fcb13844d08f3; current spec, no status caveat; 16383 is not in this block (no reachable in-family source publishes it — covered structurally by pds/test/encodings_test.mdk instead, per packet §3 deviation 2)
+
+[impl]
+id:            libsecp256k1
+repo:          https://github.com/bitcoin-core/secp256k1
+version:       v0.8.0
+commit:        6e2c8bc4ecdc6e71dbe7a368f360d8d453ce435d
+retrieved:     2026-08-17
+notes:         the 10x2^26 field layout this project mirrors (design P10, #1699 field 10x2^26 limbs); corpora are generated with -DUSE_FORCE_WIDEMUL_INT64=1 so the oracle runs the SAME limb layout. The commit above is the PEELED commit of the ANNOTATED tag v0.8.0 (git rev-parse 'v0.8.0^{commit}'); the tag OBJECT is 18f07c42218765cd46148d74d9fe575795f56dce and is NOT what this key records.
+
+[vector]
+file:          pds/test/vectors/field_reference_corpus.txt
+local-sha256:  d181772ed58f7c8289c75f45061eaa7d34e0db72c008149f4c8d718fbb6fe560
+kind:          reference-impl
+impl:          libsecp256k1
+source-url:    https://github.com/bitcoin-core/secp256k1/tree/v0.8.0/src/field_10x26_impl.h
+extraction:    pds/tools/gen_field_corpus.sh — clones libsecp256k1 at the pinned tag, verifies the PEELED commit (git rev-parse 'v0.8.0^{commit}') against the pinned literal and exits nonzero on a mismatch, then compiles pds/tools/field_corpus_driver.c against the clone with cc -O2 -DUSE_FORCE_WIDEMUL_INT64=1 -I<clone> (no autotools/cmake — the field code is header-only), and runs it. The driver drives secp256k1_fe_{set_b32_mod,normalize,mul,sqr,add,negate,inv,get_b32} over a fixed input list EMBEDDED IN THE DRIVER (28 hand-specified edge values + 16 SplitMix64 draws from a literal seed; nothing is passed at run time except the output path) and prints hex rows. `sub` is negate-then-add: libsecp256k1 has no secp256k1_fe_sub. Re-running MUST reproduce this file byte-for-byte.
+retrieved:     2026-08-17
+consumer:      S-field (#1699 field 10x2^26 limbs)
+notes:         944 rows (955 lines incl. 11 header comments): red/sqr/neg/inv over all 44 inputs, and mul/add/sub over 256 pairs. Operands are RAW 32-byte big-endian values that may be >= p; results are canonical. `inv 0` is 0 in this reference and that convention is pinned here executably (RUN-PDS0-016 Q1).
