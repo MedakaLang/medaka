@@ -103,6 +103,12 @@ pds/tools/gen_field_corpus     regenerates pds/test/vectors/field_reference_corp
                                10x2^26 limbs). Needs network + a C compiler; asserts nothing
                                about the compiler. The corpus it produces IS graded — by
                                pds/test/field_vectors.sh and pds/test/vector_provenance.sh.
+pds/tools/gen_scalar_corpus    regenerates pds/test/vectors/scalar_reference_corpus.txt from
+                               libsecp256k1 at the pinned commit (S-scalar, #1700 secp256k1
+                               group ops + RFC 6979 + low-S). Needs network + a C compiler;
+                               asserts nothing about the compiler. The corpus it produces IS
+                               graded — by pds/test/scalar_vectors.sh and
+                               pds/test/vector_provenance.sh.
 
 # ── pds oracle (S-oracle-standup, #1707 — a local manual procedure, not a gate) ──
 pds/oracle/run                regenerates a local Bluesky PDS service install

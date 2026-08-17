@@ -302,3 +302,14 @@ extraction:    pds/tools/gen_field_corpus.sh — clones libsecp256k1 at the pinn
 retrieved:     2026-08-17
 consumer:      S-field (#1699 field 10x2^26 limbs)
 notes:         944 rows (955 lines incl. 11 header comments): red/sqr/neg/inv over all 44 inputs, and mul/add/sub over 256 pairs. Operands are RAW 32-byte big-endian values that may be >= p; results are canonical. `inv 0` is 0 in this reference and that convention is pinned here executably (RUN-PDS0-016 Q1).
+
+[vector]
+file:          pds/test/vectors/scalar_reference_corpus.txt
+local-sha256:  dc92d84355a96e4f432154cf123844b33d59711f0423578e8961bcaa846e5cb6
+kind:          reference-impl
+impl:          libsecp256k1
+source-url:    https://github.com/bitcoin-core/secp256k1/tree/v0.8.0/src/scalar_8x32_impl.h
+extraction:    pds/tools/gen_scalar_corpus.sh — clones libsecp256k1 at the pinned tag, verifies the PEELED commit (git rev-parse 'v0.8.0^{commit}') against the pinned literal and exits nonzero on a mismatch, then compiles pds/tools/scalar_corpus_driver.c against the clone with cc -O2 -DUSE_FORCE_WIDEMUL_INT64=1 -I<clone> (no autotools/cmake — the scalar code is header-only, reached through src/scalar_impl.h), and runs it. The driver drives secp256k1_scalar_{set_b32,get_b32,add,mul,negate,inverse,is_high} over a fixed input list EMBEDDED IN THE DRIVER (36 hand-specified edge values incl. n-2/n-1/n/n+1/n_h/n_h+1/2^255/2^256-1, plus 16 SplitMix64 draws from a literal seed; nothing is passed at run time except the output path) and prints hex rows. `sub` is negate-then-add: libsecp256k1 has no secp256k1_scalar_sub. Unlike the field corpus, -DUSE_FORCE_WIDEMUL_INT64=1 does NOT affect this answer key (a scalar's canonical 32 bytes are layout-independent); it is passed to keep the recipe identical to the field one. Re-running MUST reproduce this file byte-for-byte.
+retrieved:     2026-08-17
+consumer:      S-scalar (#1700 secp256k1 group ops + RFC 6979 + low-S)
+notes:         1028 rows (1042 lines incl. 14 header comments): red/neg/inv/high/ovf over all 52 inputs, and mul/add/sub over 256 pairs. Operands are RAW 32-byte big-endian values that may be >= n; results are canonical. `inv 0` is 0 in this reference and that convention is pinned here executably (RUN-PDS0-016 Q1). `ovf` rows record secp256k1_scalar_set_b32's overflow flag, i.e. the >= n boundary that scFromBytes rejects on. `high` rows are the STRICT low-S predicate s > floor(n/2), so high(n_h) is 0 and high(n_h+1) is 1.
