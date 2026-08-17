@@ -62,6 +62,16 @@ import frontend.ast.{
   useMemberLocal,
   useMemberAlias,
   qualifiedLocal,
+  -- RE-HOMED here from `types/registry.mdk` (oracle-identity family leaf L1):
+  -- `frontend/exhaust.mdk`'s constructor oracle keys on `TabKey`, and
+  -- `frontend` may not import `types`.  Same six symbols, same bodies; only
+  -- the module they are imported from changed.  The RENDERER stays in
+  -- `types/registry.mdk` and is still imported from there.
+  TabKey(..),
+  tabKeyOf,
+  tabKeyName,
+  lookupTab,
+  tabHasName,
 }
 -- #1111 Stage A-2 unit A-2.3: the TYPE-namespace re-key.  `aliasTableRef` /
 -- `dataParamKindsRef` (and their `universe*` cross-run halves) are keyed by
@@ -74,11 +84,6 @@ import frontend.ast.{
 -- through `ifaceTabKey` below.  `universeRegisteredIfacesRef` is deliberately
 -- NOT re-keyed — see `ifaceRegistered`.
 import types.registry.{
-  TabKey(..),
-  tabKeyOf,
-  tabKeyName,
-  lookupTab,
-  tabHasName,
   RegKey,
   Registry,
   regKeyOfTab,
@@ -13334,7 +13339,7 @@ checkMatchRedundant scrutTy arms =
 -- is `None`, i.e. when the scrutinee type has no concrete head, in which case no
 -- arm carries a constructor pattern and there is no head constructor to find in
 -- either order.
-checkRedundantGo : Option String -> List (List Pat) -> OrdMap Unit -> Bool -> List Arm -> Unit
+checkRedundantGo : Option TabKey -> List (List Pat) -> OrdMap Unit -> Bool -> List Arm -> Unit
 checkRedundantGo _ _ _ _ [] = ()
 checkRedundantGo col0 prec heads offCol ((Arm pat gs body)::rest) =
   let dp = desugarPat driverState.value.matchOracle.value pat
@@ -13364,7 +13369,7 @@ checkRedundantGo col0 prec heads offCol ((Arm pat gs body)::rest) =
 -- deliberate over-approximation of "has a wildcard head" (it also trips on a literal
 -- head, which `specializeCon` would in fact discard): erring towards `True` only ever
 -- costs us the fast path and falls back to the exact check, never an answer.
-armUnreachable : Option String -> List (List Pat) -> OrdMap Unit -> Bool -> Pat -> Bool
+armUnreachable : Option TabKey -> List (List Pat) -> OrdMap Unit -> Bool -> Pat -> Bool
 armUnreachable col0 prec heads offCol (PCon c args)
   | not offCol && not (omHasKey c heads) = False
   | otherwise =
@@ -13406,9 +13411,14 @@ nonExhaustiveMsg scrutTy rows = match usefulWitness driverState.value.matchOracl
 
 -- Name the scrutinee type (skip the synthetic tuple type names, which aren't
 -- user-facing — the witness pattern already reads as a tuple).
-tyOfMsg : Option String -> String
+-- ⚠️ Reads the bare NAME out of the key (`tabKeyName`) on purpose: this is
+-- witness PROSE, not a lookup, and its text must not change for any program
+-- whose diagnostic does not change.
+tyOfMsg : Option TabKey -> String
 tyOfMsg None = ""
-tyOfMsg (Some t) = if isTupleTyName t then "" else " of '\{t}'"
+tyOfMsg (Some k) =
+  let t = tabKeyName k
+  if isTupleTyName t then "" else " of '\{t}'"
 
 isTupleTyName : String -> Bool
 isTupleTyName t = stringLength t >= 7 && stringSlice 0 7 t == "__tuple"
@@ -13423,8 +13433,25 @@ nonGuardedRows ((Arm _ _ _)::rest) = nonGuardedRows rest
 -- the head type name of the scrutinee, for the matrix's column-0 oracle: a
 -- TCon/TApp head gives the type name; a tuple has no TCon head, so it maps to a
 -- synthetic per-arity tuple type (mirrors the reference's col0_type).
-matchCol0Type : Mono -> Option String
-matchCol0Type ty = map (n => n) (headTyconNameMono ty)
+--
+-- ⚠️ ANSWER-PRESERVING CLASSIFICATION, and it is a REQUIRED property rather
+-- than a style choice.  `headTyconNameMono` is the gate — it decides `Some` vs
+-- `None` on exactly the `Mono` head nodes it decided them on before, so `TFun`
+-- stays `None` (#1617, deliberate) and falls through to `inferCol0Type`, and a
+-- rigid head still produces a key that MISSES the table exactly as today's
+-- bare `Some n` missed it.  `headTyconMono` is consulted only to UPGRADE a key
+-- that is already going to be `Some`, never to change whether it is `Some`.
+--
+-- Composing the two existing projections is deliberate: they already owe each
+-- other an arm for every new `Mono` head node, and a third independent
+-- `match headMonoNode` arm set here is one more the next person would forget.
+matchCol0Type : Mono -> Option TabKey
+matchCol0Type ty = match headTyconNameMono ty
+  None => None
+  Some n => match headTyconMono ty
+    Some (HkDecl k) => Some k
+    Some (HkRigid _) => Some (TkBare NsType n)
+    None => Some (TkBare NsType n)
 
 inferArms : TcEnv -> Mono -> Mono -> List Arm -> Unit
 inferArms _ _ _ [] = ()
@@ -27215,7 +27242,35 @@ seedCheckRun oracleDecls =
 seedAndCheckSplit : List Decl -> List Decl -> List Decl -> List (String, Scheme)
 seedAndCheckSplit runtimeDecls coreProg userProg =
   let prog = coreProg ++ userProg
-  let _ = seedCheckRun prog
+  -- ⚠️ THE ORACLE'S PRELUDE HALF IS STAMPED HERE AND `prog`'s IS NOT, AND THE
+  -- ASYMMETRY IS THE POINT.  `matchOracle`'s `typeCtors` is the one table keyed
+  -- by DECLARATION IDENTITY (`frontend/exhaust.mdk`), so its rows have to be
+  -- minted from the SAME origin the READER's key is minted from.  The reader's
+  -- key comes from `matchCol0Type` → `headTyconMono` → the scrutinee `Mono`'s
+  -- `TCon` origin, and on THIS path that origin is written by the
+  -- `stampDeclOrigins "core" coreProgTy` call inside `checkProgramSeededSplit`
+  -- (`frontend/resolve.mdk`'s #1227 note) — on the very next line, over this
+  -- same `coreProg`.  Feeding `buildOracle` the UNstamped copy therefore made
+  -- the writer mint `TkBare NsType "Option"` for a type whose reader mints
+  -- `TkIdent (Ident NsType (IdentModule "core") "Option")`; `tabKeyEq` never
+  -- equates those, so under the ONE ABSENCE RULE every prelude-typed column-0
+  -- lookup MISSED — and a `bindCtors` miss is LOUD, not silent (`defaultMatrix`
+  -- keeps only wildcard-headed rows, so an all-ctor-headed matrix goes empty and
+  -- `useful _ _ [] _ = True`), which is why the unstamped form put a spurious
+  -- `non-exhaustive match of 'Ordering'` on `main = println 1`.
+  --
+  -- ⚠️ Same id, same decls, same call — NOT an invented module id, so the
+  -- "over-supplying is not correctable" bound in `stampDeclOrigins`' comment is
+  -- not being widened.  `fillDeclOrigin` fills only a still-`OriginUnresolved`
+  -- origin, so this is idempotent and cannot re-stamp an identity-bearing decl.
+  --
+  -- ⚠️ `prog` itself is deliberately left alone: its readers here
+  -- (`runFinalChecks`' cycle walk, `flatClassEnvOf`, `flatImplEnvOf`) are the
+  -- ones that work today, and widening the stamp to them is a separate question
+  -- with its own blast radius.  `buildOracle` reads `DData` only, and of its four
+  -- tables only `typeCtors` reads an origin — the other three stay name-keyed —
+  -- so the blast radius of this line is exactly that one table's keys.
+  let _ = seedCheckRun (stampDeclOrigins "core" coreProg ++ userProg)
   -- #1280: prelude boundary in hand — see `checkProgramSchemesWithRuntime`.
   let schemes = checkProgramSeededSplit (externSchemes (externTyOriginScope coreProg) runtimeDecls) coreProg userProg
   -- #1557 A-3.5c: TWO envs, because the two decl lists differ here and always have —

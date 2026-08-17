@@ -41,6 +41,12 @@ import frontend.ast.{
   ConPayload(..),
   Variant(..),
   Decl(..),
+  Ns(..),
+  TyConOrigin(..),
+  TabKey(..),
+  tabKeyOf,
+  tabKeyName,
+  lookupTab,
 }
 import list.{replicate, take, drop}
 import support.ordmap.{
@@ -116,8 +122,22 @@ digitVal c = charCode c - charCode '0'
 -- it overrides the builtins (mirrors Hashtbl.replace's last-wins for find).
 -- (exported, with `buildOracle`, so typecheck.mdk's `check_match` can reuse the
 -- same oracle + matrix machinery — see the note at the top of this file.)
+-- ⚠️ `typeCtors` is the ONE table keyed by DECLARATION IDENTITY, not by a bare
+-- type name (oracle-identity family leaf L1).  Its representation is an assoc
+-- LIST read with `lookupTab` (FIRST match wins) rather than an `OrdMap`,
+-- because `OrdMap` is String-keyed and rendering a `TabKey` to a String would
+-- drag `types/registry.mdk`'s renderer — and through it `support/ordmap` — into
+-- `frontend/ast.mdk`, which has zero imports.  The scan is over the TYPE count
+-- (one entry per `data` decl in the graph), once per wildcard-headed column —
+-- NOT over the constructor count, which is what the Maranget inner loop reads,
+-- and which stays an `OrdMap` in the other three tables.
+--
+-- Its VALUE stays `List String` deliberately: its consumers (`headBuckets`,
+-- `allCovered`, `specializeCon`) compare against pattern-derived bare ctor
+-- names, so an identity-granularity value filtered by a name-granularity
+-- bucket table would be a granularity mismatch.
 public export data Oracle = Oracle {
-    typeCtors : OrdMap (List String),
+    typeCtors : List (TabKey, List String),
     ctorArity : OrdMap Int,
     ctorType : OrdMap String,
     ctorFields : OrdMap (List String),  -- ctor → declared field names in order (DData ConNamed variants)
@@ -125,7 +145,11 @@ public export data Oracle = Oracle {
 
 export buildOracle : List Decl -> Oracle
 buildOracle prog = Oracle {
-  typeCtors = oracleMap (flatMap dataTypeCtors prog ++ builtinTypeCtors),
+  -- No `reverseL`/`oracleMap` here: `lookupTab` is FIRST-match-wins, so the
+  -- natural order (user data ahead of the builtins, an earlier `data` decl
+  -- ahead of a later one) IS the shadowing convention directly, rather than
+  -- emulated through a reversed last-write-wins fold.
+  typeCtors = flatMap dataTypeCtors prog ++ builtinTypeCtors,
   ctorArity = oracleMap (flatMap dataArity prog ++ builtinArity),
   ctorType = oracleMap (flatMap dataCtorType prog ++ builtinCtorType),
   ctorFields = oracleMap (flatMap dataCtorFields prog),
@@ -144,9 +168,17 @@ buildOracle prog = Oracle {
 oracleMap : List (String, a) -> OrdMap a
 oracleMap pairs = omFromPairs (reverseL pairs) omEmpty
 
-builtinTypeCtors : List (String, List String)
-builtinTypeCtors =
-  [("Bool", ["True", "False"]), ("List", ["Cons", "Nil"]), ("Unit", ["Unit"])]
+-- ⚠️ `OriginBuiltin`, not `OriginUnresolved`, and it is REQUIRED rather than
+-- cosmetic: `headTyconMono` already mints `TkIdent (Ident NsType IdentBuiltin
+-- …)` for `Bool`/`List`/`Unit`, and `tabKeyEq` never equates a `TkBare` row
+-- with a `TkIdent` lookup — so a bare builtin row would MISS on every
+-- builtin-typed match and silently suppress its warning.
+builtinTypeCtors : List (TabKey, List String)
+builtinTypeCtors = [
+  (tabKeyOf NsType OriginBuiltin "Bool", ["True", "False"]),
+  (tabKeyOf NsType OriginBuiltin "List", ["Cons", "Nil"]),
+  (tabKeyOf NsType OriginBuiltin "Unit", ["Unit"]),
+]
 
 builtinArity : List (String, Int)
 builtinArity = [("True", 0), ("False", 0), ("Cons", 2), ("Nil", 0), ("Unit", 0)]
@@ -160,9 +192,8 @@ builtinCtorType = [
   ("Unit", "Unit"),
 ]
 
-dataTypeCtors : Decl -> List (String, List String)
-dataTypeCtors (DData { dataName = tyname, dataCtors = variants }) =
-  [(tyname, map variantName variants)]
+dataTypeCtors : Decl -> List (TabKey, List String)
+dataTypeCtors (DData { dataName = tyname, dataOrigin = origin, dataCtors = variants }) = [(tabKeyOf NsType origin tyname, map variantName variants)]
 dataTypeCtors _ = []
 
 dataArity : Decl -> List (String, Int)
@@ -199,10 +230,10 @@ fieldName (Field n _) = n
 oGetCtorFields : Oracle -> String -> Option (List String)
 oGetCtorFields oracle c = omLookup c oracle.ctorFields
 
-export oGetCtors : Oracle -> String -> Option (List String)
+export oGetCtors : Oracle -> TabKey -> Option (List String)
 oGetCtors oracle t
-  | (Some _) <- tupleArityOfName t = Some [t]
-  | otherwise = omLookup t oracle.typeCtors
+  | (Some _) <- tupleArityOfName (tabKeyName t) = Some [tabKeyName t]
+  | otherwise = lookupTab t oracle.typeCtors
 
 export oGetCtorType : Oracle -> String -> Option String
 oGetCtorType oracle c
@@ -322,8 +353,15 @@ headCtors [] = []
 headCtors (((PCon c _)::_)::rest) = c :: headCtors rest
 headCtors (_::rest) = headCtors rest
 
-inferCol0Type : Oracle -> List (List Pat) -> Option String
-inferCol0Type oracle pmat = tryEachType oracle (headCtors pmat)
+-- TRANSITIONAL (leaf L1 only; leaf L2 deletes this mint): the nested-column key
+-- has no identity available until `ctorType`'s VALUE carries one.  `TkBare`
+-- cannot match a `TkIdent` row, so on the typed multi-module path every nested
+-- column's lookup MISSES and its warning is SUPPRESSED.  This is why L1 must
+-- never reach `main` alone (RUN-CTOR-019 S3).
+inferCol0Type : Oracle -> List (List Pat) -> Option TabKey
+inferCol0Type oracle pmat = map
+  (t => tabKeyOf NsType OriginUnresolved t)
+  (tryEachType oracle (headCtors pmat))
 
 tryEachType : Oracle -> List String -> Option String
 tryEachType _ [] = None
@@ -332,24 +370,24 @@ tryEachType oracle (c::cs) = match oGetCtorType oracle c
   None => tryEachType oracle cs
 
 -- ── usefulness (the Maranget recursion) ───────────────────────────────────
-export useful : Oracle -> Option String -> List (List Pat) -> List Pat -> Bool
+export useful : Oracle -> Option TabKey -> List (List Pat) -> List Pat -> Bool
 useful _ _ [] _ = True
 useful _ _ (_::_) [] = False
 useful oracle col0 pmat (h::restQ) = usefulHead oracle col0 pmat h restQ
 
-usefulHead : Oracle -> Option String -> List (List Pat) -> Pat -> List Pat -> Bool
+usefulHead : Oracle -> Option TabKey -> List (List Pat) -> Pat -> List Pat -> Bool
 usefulHead oracle _ pmat (PCon c args) restQ =
   useful oracle None (specializeCon c (listLen args) pmat) (args ++ restQ)
 usefulHead oracle _ pmat (PLit l) restQ = useful oracle None (specializeLit l pmat) restQ
   || useful oracle None (defaultMatrix pmat) restQ
 usefulHead oracle col0 pmat _ restQ = usefulWild oracle col0 pmat restQ
 
-usefulWild : Oracle -> Option String -> List (List Pat) -> List Pat -> Bool
+usefulWild : Oracle -> Option TabKey -> List (List Pat) -> List Pat -> Bool
 usefulWild oracle col0 pmat restQ =
   let col0t = orElseOpt col0 (inferCol0Type oracle pmat)
   usefulWildCtors oracle (bindCtors oracle col0t) pmat restQ
 
-bindCtors : Oracle -> Option String -> Option (List String)
+bindCtors : Oracle -> Option TabKey -> Option (List String)
 bindCtors _ None = None
 bindCtors oracle (Some t) = oGetCtors oracle t
 
@@ -437,7 +475,7 @@ usefulBranchIn oracle buckets restQ c =
 -- `precMatrix` (a guarded arm may fail its guard at runtime, so it can't render a
 -- later same-shape arm dead) — which is exactly what keeps this conservative: we
 -- flag an arm only when it is provably dead via unconditional predecessors.
-export patUnreachable : Oracle -> Option String -> List (List Pat) -> Pat -> Bool
+export patUnreachable : Oracle -> Option TabKey -> List (List Pat) -> Pat -> Bool
 patUnreachable oracle col0 precMatrix qpat =
   not (useful oracle col0 precMatrix [qpat])
 
@@ -475,7 +513,7 @@ recFieldHasRange (RecPatField _ _ (Some p)) = patHasRange p
 -- columns recurse into each branch; an incomplete column NAMES a missing
 -- constructor and recurses on the default matrix — so the two never disagree
 -- on whether the warning fires.
-export usefulWitness : Oracle -> Option String -> List (List Pat) -> Int -> Option (List Pat)
+export usefulWitness : Oracle -> Option TabKey -> List (List Pat) -> Int -> Option (List Pat)
 usefulWitness _ _ [] ncols = Some (replicate ncols PWild)
 usefulWitness _ _ (_::_) 0 = None
 usefulWitness oracle col0 pmat ncols =
@@ -638,7 +676,7 @@ checkGroupCovered oracle clauses =
   let arity = groupArity clauses
   let rows = totalClauseRows oracle clauses
   let query = [desugarPat oracle (PTuple (replicate arity PWild))]
-  if useful oracle (Some (tupleCtorName arity)) rows query then
+  if useful oracle (Some (tabKeyOf NsType OriginBuiltin (tupleCtorName arity))) rows query then
     [(guardWarning, groupLoc clauses)]
   else
     []
@@ -652,7 +690,7 @@ checkGroupClauses oracle name clauses =
   let arity = groupArity clauses
   let rows = totalClauseRows oracle clauses
   let query = [desugarPat oracle (PTuple (replicate arity PWild))]
-  if useful oracle (Some (tupleCtorName arity)) rows query then
+  if useful oracle (Some (tabKeyOf NsType OriginBuiltin (tupleCtorName arity))) rows query then
     [(nonExhaustiveClausesMsg oracle name arity rows, groupLoc clauses)]
   else
     []
@@ -662,7 +700,7 @@ checkGroupClauses oracle name clauses =
 -- unwrap it so the case reads `Blue`, not `(Blue)` (parity with `match`).  Falls
 -- back to a generic wording when no witness is recoverable.
 nonExhaustiveClausesMsg : Oracle -> String -> Int -> List (List Pat) -> String
-nonExhaustiveClausesMsg oracle name arity rows = match usefulWitness oracle (Some (tupleCtorName arity)) rows 1
+nonExhaustiveClausesMsg oracle name arity rows = match usefulWitness oracle (Some (tabKeyOf NsType OriginBuiltin (tupleCtorName arity))) rows 1
   Some (w::_) =>
     let witnessStr = renderClauseWitness arity w
     let hint = "add a '\{witnessStr}' clause, or a '_' catch-all clause."
