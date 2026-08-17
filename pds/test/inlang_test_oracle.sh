@@ -36,6 +36,22 @@ SUITES="skeleton_test:4"
 
 rc=0
 total_ran=0
+
+# THE ROSTER IS SELF-DRAINING (RUN-PDS0-012). This gate's header promises it runs
+# the suites under pds/test/*_test.mdk, but SUITES above is hand-maintained: a new
+# *_test.mdk with no row would never be counted while this gate printed PASS —
+# "this didn't run" indistinguishable from "this passed", inside the anti-rot gate.
+for f in "$ROOT"/pds/test/*_test.mdk; do
+  [ -e "$f" ] || continue          # unmatched glob stays LITERAL in sh; do not fail on an empty corpus
+  base="$(basename "$f" .mdk)"
+  case " $SUITES " in
+    *" $base:"*) ;;                # PREFIX match on the `name:` half, space-anchored:
+                                   # a row for subfield_test must not satisfy field_test.mdk
+    *) echo "FAIL: pds/test/$base.mdk has no SUITES row — add '$base:<floor>' to SUITES in $0 (floor = the assertion count it commits today)"
+       rc=1 ;;
+  esac
+done
+
 for spec in $SUITES; do
   name="${spec%%:*}"
   floor="${spec##*:}"
