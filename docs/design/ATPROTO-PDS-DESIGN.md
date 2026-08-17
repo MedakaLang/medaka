@@ -16,18 +16,19 @@ a real social identity, so the correctness bar is higher than the compiler's.
 
 | # | Decision | Rationale |
 |---|---|---|
-| **P1** | **Own top-level project `pds/`**, with its own `medaka.toml`, mirroring `sqlite/` and `gzip/`. Not stdlib. | Those two are the precedent for a substantial Medaka subproject that consumes stdlib without joining it. Keeps the prelude blast radius at zero (a `stdlib/` change forces seed re-mint + fixpoint re-validation; a `pds/` change forces nothing). Graduation of individual modules to `stdlib/` is a later question — see §7 Q1. |
-| **P2** | **`did:web` first; `did:plc` migration deferred to Phase 6.** | `did:web` is a static JSON document at `/.well-known/did.json` — no PLC directory, no genesis operation, no rotation-key management. It cuts an entire crypto+protocol subsystem out of the critical path. The existing `did:plc:…` profile is **not** migratable to `did:web`, so Phase 6 remains genuinely necessary to reach the real handle; it is deferred, not cancelled. |
+| **P1** | **Own top-level project `pds/`**, with its own `medaka.toml`, mirroring `sqlite/` and `gzip/`. Not stdlib. | Those two are the precedent for a substantial Medaka subproject that consumes stdlib without joining it. Keeps the prelude blast radius at zero: a change to a stdlib module **that the compiler imports** and **that perturbs emitted IR** forces a seed re-mint plus fixpoint re-validation — both conditions required — while a `pds/` change forces neither. Graduation of individual modules to `stdlib/` is a later question — see P11. |
+| **P2** | **`did:web` first; `did:plc` migration deferred to Phase 6.** | `did:web` is a static JSON document at `/.well-known/did.json` — no PLC directory, no genesis operation, no rotation-key management. It cuts an entire crypto+protocol subsystem out of the critical path. A DID is immutable, so the existing `did:plc:…` identifier can never *become* a `did:web` one: standing up a did:web account and moving the handle across is possible, but it abandons the original DID and with it the social graph. Phase 6 therefore remains genuinely necessary to reach the real handle *with its history intact*; it is deferred, not cancelled. |
 | **P3** | **Standalone repo first; firehose (`com.atproto.sync.subscribeRepos`) deferred to Phase 5.** | Full network participation is a strict superset of a correct repo, and it is additive: WebSocket framing and event emission bolt onto a repo layer that already produces correct CIDs. Sequencing it second means the highest-risk work (MST, DAG-CBOR determinism) gets validated against an oracle before anything depends on it being right. |
 | **P4** | **Crypto is pure Medaka — SHA-256 and secp256k1 both.** Field arithmetic on 10 × 26-bit limbs (P10). | Chosen for the dogfooding, not merely accepted despite the cost: this is the most numerically demanding code anyone would have written in Medaka, and it arrives with an external oracle that says immediately when the *compiler* is wrong (§4.1). Made tractable by one property: **atproto requires deterministic signing behaviour and low-S normalization, and RFC 6979 makes ECDSA output byte-reproducible** — so signing is gradeable by *golden diff against published vectors*, not by a probabilistic property test. That converts the scariest part of this project into precisely the kind of differential gate this repo is built around. See §4. |
 | **P5** | **TLS is never implemented in Medaka. Caddy terminates.** | Caddy obtains and renews the Let's Encrypt certificate automatically and reverse-proxies plaintext HTTP to the Medaka process on localhost — which is what the official self-hosting guidance recommends regardless of implementation language. Cost to us: approximately zero. Writing TLS would be a larger and far more dangerous project than the entire rest of this document. |
 | **P6** | **Do NOT build a bespoke event loop. The PDS is a *consumer* of the #500 arc, not a fork of it.** | `docs/design/ASYNC-RUNTIME-DESIGN.md` already specifies the reactor, and its A2 extern set (`ioPoll` over `poll(2)`, `netSetNonblock`, `netTry{Accept,Recv,Send}`) is exactly and only what a server needs. Duplicating it inside `pds/` would produce a second scheduler with none of the guarantees G1–G9 that design carries, and would make the PDS the reason the real one can never land. |
 | **P7** | **Block store is flat sharded files on disk**, CID → bytes, not `sqlite/`. | A block store is a pure key/value map with content-addressed immutable keys — the one workload where a filesystem is already the right database. Pressing the in-tree SQLite engine into service would add a large dependency, a write-path risk, and a schema, in exchange for nothing. |
 | **P8** | **The official `bluesky-social/pds` runs alongside as an ORACLE.** Every CID, every CAR byte, every signature is diffed against it. | This is the repo's own differential-gate methodology applied to a protocol instead of a compiler. It is also the only defence that works against the failure mode that actually matters here (§5). |
-| **P9** | **Native-only.** The server does not run under `medaka run` or wasm. | The interpreter implements zero net externs (the T7 family in `test/CAPABILITY-EXCEPTIONS.txt`) and wasm rejects net as PERMANENT. This costs less than it sounds: see the §3 split — the entire correctness-critical core is engine-portable and doctestable, and only the socket shell is native-bound. |
-| **P10** | **Field arithmetic uses 10 limbs of 26 bits — `libsecp256k1`'s 32-bit field layout.** | Resolved from §7 Q2. Decided on *reviewability against a published reference*, not on speed: it is the layout a widely-audited implementation uses, so the reduction modulo `p = 2^256 - 2^32 - 977` and its magnitude analysis can be followed rather than derived from scratch — which is the part of this project where inventing something is least defensible. It also happens to need ~2.5× fewer partial products than a 16-bit layout, with ~6 bits of headroom under the 63-bit fixnum ceiling. See §4. |
-| **P11** | **The crypto modules graduate to `stdlib/` once proven, not before.** | Val's call. SHA-256 and base58 are plainly general-purpose. But anything the compiler imports forces a seed re-mint and fixpoint re-validation on every change, and these modules will churn heavily while being written. Graduation criteria, so "proven" is not a vibe: the full vector suites of G1 pass, the API has been stable across a release, and a deliberate decision has been taken about which of `field`/`scalar` stay private to `pds/`. |
-| **P12** | **Firehose events are persisted to a bounded append-only log with a ~72-hour retention window** (Phase 5). | Resolved from §7 Q3 by looking at what the ecosystem actually does rather than deciding a priori: the relay backfill window has always been ~72 hours, and `getRepo` covers full resynchronization independently of it. For a single-user PDS, 72 hours is a few hundred events — small enough that the interesting question is durability, not size. On-disk rather than in-memory specifically so a process restart does not invalidate a connected relay's cursor and force a full resync. |
+| **P9** | **The running server is native-only**; the pure core stays all-engine **by design, not by luck**. | The interpreter implements zero net externs (the T7 family in `test/CAPABILITY-EXCEPTIONS.txt`) and wasm rejects net as PERMANENT. ⚠️ **The same is true of every file extern** — `stdlib/fs.mdk` says so in its own header: *"Scope: NATIVE/LLVM … not the tree-walking interpreter."* So effectful storage code is native-bound exactly like sockets, and a core that *performed* its own I/O would not be portable or doctestable at all. P14 is the structural response; without it, this row's "costs less than it sounds" would be unsupported. |
+| **P14** | **The pure core performs NO I/O. Storage is injected, never called.** `handle` takes a `Store` of plain functions and returns a response; `blockstore` is a pure `CID -> Bytes` map. | This is what makes P9's claim true rather than aspirational. Both file and net externs are native-only, so any module that touches storage directly is native-bound and undoctestable. Threading storage in as values keeps every byte of protocol logic — DAG-CBOR, MST, CAR, commits, HTTP parsing, routing — genuinely effect-free, all-engine, and gradeable without a filesystem. The shell above supplies the real reader/writer; a test supplies an in-memory map. The seam is `handle : Store -> Request -> Response`, with **no effect row at all**. |
+| **P10** | **Field arithmetic uses `libsecp256k1`'s 32-bit field layout: 10 limbs in base 2^26, limbs 0–8 holding 26 bits and limb 9 holding 22.** | Resolved from §7 Q2. Decided on *cross-checkability against an audited implementation of the same representation*, not on speed. ⚠️ Note the limit of that: the reference's **overflow proof does not transfer** — `fe_mul_inner` assumes magnitude ≤ 8 and its accumulator reaches a full 64 bits, which does not fit Medaka's 62-bit non-negative range. Eager normalization (§4) is what makes it fit, and the magnitude-1 bounds must be derived by us. What the reference buys is a diffable oracle for element-level outputs and the shape of the reduction — not a transplantable safety argument. ~2.5× fewer partial products than a 16-bit layout, ~6 bits of headroom under 2^62. |
+| **P11** | **The crypto modules graduate to `stdlib/` once proven, not before.** | Val's call. SHA-256 and base58 are plainly general-purpose. The reason to wait is **API churn against a compatibility promise**, not seed re-mints: placing a module in `stdlib/` does not by itself make the compiler import it, and only a change to a module the compiler *does* import, *and* which perturbs emitted IR, forces a re-mint (see P1). Graduation criteria, so "proven" is not a vibe: the full G1 vector suites pass, the API has been stable across a release, and a deliberate decision has been taken about which of `field`/`scalar` stay private to `pds/`. |
+| **P12** | **Firehose events are persisted to a bounded append-only log, initially sized to the ~72-hour window relays currently default to** (Phase 5). | Resolved from §7 Q3 by looking at what the ecosystem does rather than deciding a priori — but the number is softer than it looks: 72 hours is the **configurable default of the relay generation introduced in January 2026**, not a spec requirement and not a historical invariant (`atproto.com/specs/sync` states no retention window at all). Operators tune it down. The design is deliberately robust to it moving: the log is bounded and `getRepo` covers full resynchronization independently. On-disk rather than in-memory specifically so a process restart does not invalidate a connected relay's cursor. Re-derive the number at Phase 5. |
 | **P13** | **Phase 4.5 ships a read-only web view of the repo**, served from the same process. | Val's call. Cheap on top of Phase 2 (the router and the repo reader already exist; it adds templates and no new protocol), and it makes the system inspectable in a browser during the long stretch when Phase 5 is unbuilt and no Bluesky client can see it. Also the natural place to surface health and the block-store state. |
 
 ---
@@ -38,9 +39,9 @@ Better than a from-scratch estimate would suggest. Nothing below needs to be wri
 
 | Need | Have |
 |---|---|
-| TCP sockets — listen/accept/send/recv/timeouts | `stdlib/net.mdk` over 9 externs in `stdlib/runtime.mdk` |
+| TCP sockets — listen/accept/send/recv/timeouts | `stdlib/net.mdk` over 10 externs in `stdlib/runtime.mdk` |
 | Binary decode / encode combinators | `stdlib/byteparser.mdk` + `stdlib/bytebuilder.mdk` — a symmetric pair, exactly the shape DAG-CBOR and CAR want |
-| Multi-precision arithmetic *pattern* | `stdlib/bits64.mdk` — limbs over the wrapping 63-bit fixnum, with the overflow-headroom argument worked out explicitly and proven in `compiler/eval/eval.mdk`. The **method** carries over; the 256-bit field uses its own limb width (P10), not this module |
+| Multi-precision arithmetic *pattern* | `stdlib/bits64.mdk` — limbs over the wrapping 63-bit fixnum, with the overflow-headroom argument stated explicitly in its own header. `compiler/eval/eval.mdk` hand-rolled this representation first and now imports the module instead (#223), which is what makes it battle-tested. The **method** carries over; the 256-bit field uses its own layout (P10), not this module, and its bound must be re-derived — `bits64`'s is computed for a 4-limb column |
 | JSON | `stdlib/json.mdk` |
 | base64, hex, deflate | `stdlib/base64.mdk`, `stdlib/hex.mdk`, `gzip/lib/deflate.mdk` |
 | Time, ISO-8601, epoch, monotonic | `stdlib/time.mdk` |
@@ -85,9 +86,9 @@ The organising principle, and the reason P9 costs little:
    native-only,     │  socket shell — accept, read, write     │  Phase 3
    thin, ~400 loc   │  over #500's async net surface          │  GATED
                     └──────────────────┬──────────────────────┘
-                                       │  Array Int  ⇄  Array Int
+                     Array Int ⇄ Array Int │ Store (injected)
                     ┌──────────────────┴──────────────────────┐
-                    │  handle : Request -> <Fs> Response      │
+                    │  handle : Store -> Request -> Response  │
    pure, portable,  │  XRPC routing · repo · MST · DAG-CBOR   │  Phases 0-2
    all-engine,      │  CID · CAR · SHA-256 · secp256k1        │  UNBLOCKED
    doctestable      │  HTTP/1.1 parse + serialize             │
@@ -96,13 +97,31 @@ The organising principle, and the reason P9 costs little:
 
 The HTTP layer is a **function from bytes to bytes**, not a server. `parseRequest :
 Array Int -> Result String Request` and `serializeResponse : Response -> Array Int`
-are pure; so is the router beneath them. Only storage effects (`<FileRead>`/`<FileWrite>`)
-and, eventually, clock reach into the handler.
+are pure; so is the router beneath them.
 
-This buys three things at once: the correctness-critical code is gradeable by golden
-diff with no sockets involved; it runs under `medaka run` and wasm so doctests and the
-engine differential cover it; and Phase 3 shrinks to wiring — an accept loop and a
-request lifecycle, with no protocol logic in it.
+**Storage is injected, not performed** (P14). `Store` is a record of plain functions —
+`getBlock : CID -> Option Bytes`, `putBlock : CID -> Bytes -> Store`, and the blob
+equivalents — so `handle` carries **no effect row at all**. The shell supplies a `Store`
+backed by `readFileBytes`/`writeFileBytes`; a test supplies one backed by an in-memory
+map. Requests needing a clock take the timestamp as an argument for the same reason.
+
+This is not stylistic. **Every file extern is native-only, exactly like every net
+extern** (`stdlib/fs.mdk`: *"Scope: NATIVE/LLVM … not the tree-walking interpreter"*),
+so a handler that called storage directly would be as unportable as the socket shell,
+and the phrase "pure core" would be decoration. Injection is what makes the box above
+true.
+
+What it buys: the correctness-critical code is gradeable by golden diff with no sockets
+and no filesystem; it runs under `medaka run` and wasm, so doctests reach it; and Phase
+3 shrinks to wiring — an accept loop, a request lifecycle, and the one `Store` that
+closes over the real externs.
+
+⚠️ Doctests reach this code because it is pure, but **`test/diff_compiler_engines.sh`
+does not** — its corpora are all under `test/` (`llvm_fixtures*`, `wasm/fixtures*`,
+`engine_fixtures`), so nothing in `pds/` is enrolled. Getting three-engine coverage
+means adding fixtures to those shared corpora, which is unscoped work and carries
+AGENTS.md's shared-corpus trap (enumerate every consumer first). Portability here is a
+property we can *test*, not one an existing gate already checks.
 
 ---
 
@@ -111,26 +130,47 @@ request lifecycle, with no protocol logic in it.
 The schedule and correctness risk of the whole project, so it goes first, fully
 gated, before anything depends on it.
 
-**Substrate.** `Int` is a 63-bit fixnum that wraps, so every intermediate must be kept
-provably under the ceiling by construction. `stdlib/bits64.mdk` establishes the pattern
-and the style of argument for 64 bits — four 16-bit limbs, least-significant first,
-with the headroom stated explicitly in its header: a limb < 2^16, a 16×16 partial
-product < 2^32, a column sum of four such plus carry < 2^35.
+**Substrate.** `Int` is a signed 63-bit fixnum that wraps, so the usable non-negative
+ceiling is **2^62**, and every intermediate must be kept provably under it by
+construction. `stdlib/bits64.mdk` establishes the pattern and the style of argument
+for 64 bits — four 16-bit limbs, least-significant first, with the headroom stated
+explicitly in its header: a limb < 2^16, a 16×16 partial product < 2^32, a column sum
+of *four* such plus carry < 2^35. The style transfers; that particular bound does not,
+because it is computed for a 4-limb column.
 
-**Field representation: 10 limbs of 26 bits** (see §7 Q2 for the decision and the
-alternatives weighed). This is deliberately *the same layout `libsecp256k1` uses for
-its 32-bit field implementation*, which is the point: the reduction algorithm modulo
-`p = 2^256 - 2^32 - 977` and its magnitude bookkeeping can be followed from a
-battle-tested reference rather than invented. Headroom: a 26×26 partial product is
-52 bits, a ten-way column sum is ~55.4 bits, and carries bring the worst case to ~56
-— roughly 6 bits under the ceiling.
+**Field representation: 10 limbs in base 2^26 — limbs 0–8 hold 26 bits and limb 9
+holds 22** (9×26 + 22 = 256, non-redundant). This is the layout `libsecp256k1` uses in
+its 32-bit field implementation, and the asymmetric top limb is part of it: normalized,
+`n[0..8] <= 2^26 - 1` and `n[9] <= 2^22 - 1`. **A uniform 10 × 26 would be a 260-bit
+redundant representation with a different reduction** — a distinct design, not a
+rounding of this one. See §7 Q2 for the alternatives weighed.
 
-One simplification against the reference: `libsecp256k1` permits field elements to
-carry a *magnitude* above 1 and defers normalization, which is where most of its
-subtlety lives. We **normalize eagerly** instead — a real constant-factor cost, in
-exchange for an invariant that is one sentence long and locally checkable at every
-call. That is the right trade for a first implementation, and it is reversible later
-against a vector suite that will already be in place.
+**What the reference does and does not buy us.** It gives the layout, the structure of
+the reduction modulo `p = 2^256 - 2^32 - 977`, and — most valuably — an audited
+implementation of the *same* representation whose element-level outputs we can diff
+against. It does **not** give us a transplantable overflow proof, and assuming it does
+is the trap this paragraph exists to prevent:
+
+`secp256k1_fe_mul_inner` is written for inputs of **magnitude up to 8**, and under that
+precondition its own accumulator genuinely reaches a full 64 bits — several of its
+`VERIFY_BITS(c, 64)` assertions are commented out precisely because at 64 bits the
+check is vacuous. **Medaka has 62 bits of non-negative range, so that chain does not
+fit, and a literal transcription of it wraps silently.** That is S0 crypto wrongness of
+exactly the kind §5 says neither self-consistency nor engine agreement can see.
+
+**Therefore eager normalization is load-bearing, not a simplification.** Holding every
+field element at magnitude 1 is what makes the arithmetic fit at all. The bounds that
+follow are ours to derive and to state, and they are not in the reference:
+
+- a limb < 2^26, so a partial product < 2^52;
+- the largest column of a 10×10 schoolbook multiply takes exactly 10 partial products,
+  so the column sum < 2^55.32;
+- the reduction terms are small at magnitude 1 (`u_i * R0` with `R0 = 0x3D10 ≈ 2^13.9`,
+  so ≈ 2^40) and do not disturb that bound;
+- with carry propagation the worst case is ≈ 2^56, leaving **~6 bits under 2^62**.
+
+**State this argument in the module header**, in `stdlib/bits64.mdk`'s style, and derive
+it against the implementation rather than copying it from here.
 
 **Modules.**
 
@@ -144,7 +184,12 @@ against a vector suite that will already be in place.
   in this document and the one with the best-published vectors.
 - `pds/lib/secp256k1.mdk` — field arithmetic, point add/double in Jacobian
   coordinates, scalar multiplication, **RFC 6979 deterministic `k`**, low-S
-  normalization, and compressed point encoding.
+  normalization, 33-byte compressed *public-key* point encoding, and — stated because
+  the spec pages do not have a signature-encoding section and its absence is an easy
+  gap to fall into — the **64-byte compact `r || s` signature encoding, not DER**, which
+  is what atproto's `sig` field carries. Confirm against the reference implementation's
+  output before building on it; this is the one wire-format detail here whose primary
+  source is weakest.
 - `pds/lib/base58.mdk` — base58btc, needed only for `did:key`.
 - `pds/lib/multiformats.mdk` — unsigned LEB128 varints and the multicodec prefixes.
   Note this is *not* `sqlite/lib/varint.mdk`'s encoding, which is SQLite's own
@@ -154,15 +199,26 @@ against a vector suite that will already be in place.
 different signature every run and can only be property-tested. **RFC 6979 derives the
 nonce deterministically from the key and message**, so a correct implementation emits
 *specific bytes* for a given input — and atproto requires low-S normalization, which
-removes the last degree of freedom. Signing therefore becomes a golden-diff gate against
-published vectors, with no oracle of our own construction anywhere in the loop.
+removes the last degree of freedom. Signing therefore becomes a golden-diff gate rather
+than a probabilistic one.
 
-**Volume context.** A signature costs on the order of 2,000 field multiplications —
-about 200k partial products at 10×26. A personal PDS signs once per record write, tens
-of times a day. Even a slow implementation is irrelevant to this workload, which is why
-§7 Q2 resolves on *reviewability against a reference*, not on speed. Do not tune
-further without measuring, and note that `diff_compiler_perf_scaling` grades a growth
-*ratio* and is structurally blind to a constant factor of this kind.
+⚠️ **But RFC 6979 publishes no secp256k1 vectors.** Its Appendix A.2 covers DSA-1024/2048
+and the NIST curves (P-192 through P-521, K-*, B-*) — **not k256**, which is the curve
+Phase 0 targets. The *algorithm* is curve-generic, so the determinism property holds
+and the golden-diff approach is sound; what does not exist is the specific answer key
+the phrase "RFC 6979's own worked examples" implies. Choosing and justifying a
+cross-implementation-agreed k256 corpus is therefore real, unwritten work, and it is
+the weakest provenance link in the whole crypto phase. G1 names what is required.
+
+**Volume context.** Generic double-and-add over 256 bits in Jacobian coordinates is
+roughly 256 doublings plus ~128 additions, so a signature costs on the order of
+**4,000–4,500 field multiplications** — call it 400k partial products at this layout.
+(An earlier draft said 2,000; that was an estimate presented as if measured, and it was
+low by about 2×.) A personal PDS signs once per record write, tens of times a day, so
+even a slow implementation is irrelevant here — which is why §7 Q2 resolves on
+cross-checkability rather than speed. Do not tune without measuring, and note that **no
+existing gate would observe it**: `diff_compiler_perf_scaling` grades a growth ratio,
+is structurally blind to constant factors, and does not run over `pds/` in any case.
 
 **The seam.** Every consumer depends on `pds/lib/sign.mdk`'s interface, never on
 `secp256k1.mdk` directly. Ordinary layering, kept because a stable API boundary is
@@ -210,11 +266,22 @@ agreeing proves only that they are inverse, and eval/native/wasm agreeing proves
 that they are the same code. Both are exactly the "all three engines equally wrong"
 shape AGENTS.md warns about.
 
-So the gates for Phases 0–1 are, without exception, **external**:
+So the checks for Phases 0–1 are, without exception, against **external** answer keys.
+G1–G5 below are **disciplines, not mechanisms** — see the note after G5, which matters
+more than any single item in the list.
 
-- **G1** — No module is depended upon before it passes published vectors. SHA-256
-  against FIPS 180-4 and the standard corpus; ECDSA against RFC 6979's own worked
-  examples and the Wycheproof suite, including its edge and malleability cases.
+- **G1** — No module is depended upon before it passes published vectors.
+  - *SHA-256*: FIPS 180-4 worked examples plus a NIST length corpus.
+  - *ECDSA signing*: ⚠️ **RFC 6979 publishes no secp256k1 vectors** (§4) — its Appendix
+    A.2 is DSA and the NIST curves. The k256 corpus must be chosen and justified:
+    require agreement across at least two independent implementations, and record each
+    vector file's provenance URL beside it.
+  - *ECDSA verification*: Project Wycheproof's `ecdsa_secp256k1_sha256` suite. ⚠️ Two
+    constraints the obvious reading misses — it is a **verification** suite, so it
+    cannot grade signing, `k` derivation, or low-S normalization at all; and the default
+    file is **DER/ASN.1** while atproto's `sig` is raw. Use the **`_p1363_` variant**,
+    which is `r || s`, or a DER parser becomes a dependency this project otherwise
+    never needs.
 - **G2** — DAG-CBOR gated on the official atproto interop test files, plus a
   round-trip property over generated values. Determinism is the property under test,
   not merely correctness: canonical ordering, shortest-form integers, no indefinite-length
@@ -230,6 +297,22 @@ So the gates for Phases 0–1 are, without exception, **external**:
   golden is not weak evidence but *anti*-evidence, since it converts a bug into the
   defended expected output.
 
+> 🚨 **G1–G5 are disciplines with no mechanical enforcement, and G5 has none at all.**
+> This document elsewhere insists on the distinction between a property that is *gated*
+> and one that is merely *asserted*; honesty requires applying it here. A self-captured
+> golden is byte-identical in form to an externally-derived one, and this repo has no
+> provenance channel for goldens — nothing can look at a `.golden` and tell where its
+> expected value came from. G3 and G4 additionally require the official
+> `bluesky-social/pds` running as an oracle (P8), which is a Docker/Node dependency no
+> CI job provisions, so as specified they are **local manual procedures, not gates**.
+>
+> The cheapest real mechanism, and the one to build alongside Phase 0 rather than after
+> it: require every vector file to carry a committed **provenance URL and digest**, and
+> add a gate that fails on any vector file lacking one. That converts G5 from an
+> instruction an implementer can forget into a ledger that self-drains, in the style of
+> `test/EXTERN-DOMAIN-LEDGER.txt`. Until that exists, G5 is a promise, and it should be
+> read as one.
+
 ---
 
 ## 6. Phases
@@ -240,14 +323,18 @@ So the gates for Phases 0–1 are, without exception, **external**:
 **Phase 1 — data model.** `dagcbor` (deterministic encode/decode over
 `byteparser`/`bytebuilder`), `cid` (CIDv1: multibase, multicodec, SHA-256 multihash),
 `mst` (depth from leading zero bits of the key hash ÷ 2, fanout 4; nodes serialized as
-`l` plus entries of `p`/`k`/`v`/`t`), `car` (v1 read/write), `blockstore` (flat sharded
-files), `repo` (commit objects — `did`, `version: 3`, `data`, `rev` as TID, `prev`,
-`sig`; TID generation and monotonicity). Gated by G2–G5. *Unblocked today. All-engine.
-The highest-risk phase in the project.*
+`l` plus an `e` array of entries of `p`/`k`/`v`/`t`), `car` (v1 read/write),
+`blockstore` (a **pure `CID -> Bytes` map** under P14 — the flat sharded-file adapter
+that backs it lives in the Phase 3 shell, not here), `repo` (commit objects — `did`,
+`version: 3`, `data`, `rev` as TID, `prev`, `sig`; TID generation and monotonicity;
+note `prev` is required-but-virtually-always-null in version 3, present in the CBOR
+rather than omitted). Gated by G2–G5. *Unblocked today. All-engine. The highest-risk
+phase in the project.*
 
 **Phase 2 — protocol logic, still pure.** HTTP/1.1 request parse and response
 serialize (request line, headers, chunked transfer, keep-alive semantics as data,
-multipart bodies for `uploadBlob`); the XRPC router; `handle : Request -> <Fs> Response`.
+multipart bodies for `uploadBlob`); the XRPC router; `handle : Store -> Request -> Response`
+with storage injected and no effect row (P14).
 *Unblocked today. All-engine, doctestable, golden-diffable with no sockets.*
 
 **Phase 3 — the socket shell.** ⛔ **GATED on #500 (A1 #496 + A2 #497)** for real I/O
@@ -268,7 +355,14 @@ system inspectable in a browser during the stretch before any client can see it.
 
 **Phase 5 — network participation.** RFC 6455 WebSocket framing,
 `com.atproto.sync.subscribeRepos` over the bounded on-disk event log (P12), and
-outbound HTTP for appview proxying (the app sends
+outbound HTTP for appview proxying. ⚠️ **Scope this phase against `atproto.com/specs/sync`,
+not against Phase 1's commit object.** The firehose `#commit` event carries fields the
+repo commit does not — notably **`prevData`**, the previous MST root, marked optional
+but effectively required for the MST inversion relays perform. Phase 1's field list is
+correct for the *commit*; it is not the event schema, and treating them as the same
+thing is how this phase fails to interoperate. (Note also that `prev` on the commit is
+required-but-virtually-always-null in version 3 — present in the CBOR, not omitted.)
+The outbound half is appview proxying (the app sends
 reads through the PDS via the `atproto-proxy` header, which is an outbound HTTPS call —
 so either `runCommand` to `curl` or a local egress proxy, since P5 means no TLS of our
 own). At the end of this phase relays index the repo and posts reach the network.
@@ -293,21 +387,32 @@ gated on the criteria in that row rather than on a feeling that it looks finishe
 **Q2 — What limb width? RESOLVED → P10: 10 × 26 bits.** Val delegated this one, so
 the reasoning is recorded in full.
 
-Three layouts were live. **16 × 16-bit** inherits `stdlib/bits64.mdk`'s exact headroom
-argument and leaves ~25 bits spare, but needs 256 partial products per multiply.
-**10 × 28-bit** is the fewest limbs that fit and needs 100, but its worst-case column
-sum lands near 2^60 — roughly two bits under the ceiling, which is too thin to reason
-about comfortably once reduction adds terms. **10 × 26-bit** needs the same 100 partial
-products as 28 while keeping ~6 bits of headroom.
+Against a non-negative ceiling of 2^62, where the largest column of an N-limb
+schoolbook multiply takes exactly N partial products and the whole multiply takes N²:
 
-The tiebreaker is not arithmetic, though. 10 × 26 is precisely the representation
-`libsecp256k1` uses on 32-bit platforms, where products land in a 64-bit accumulator —
-almost exactly our constraint. Adopting it means the modular reduction and its
-magnitude analysis, the subtlest code in the project, can be checked against a
-widely-audited reference implementing the identical layout, instead of being derived
-independently and hoped at. On a project whose whole risk profile is *silent* numerical
-wrongness, "there is a reference to check this against" outranks both provenance with
-`bits64.mdk` and a 2.5× constant factor that §4 shows this workload does not notice.
+| Layout | Partial products | Largest column | Headroom |
+|---|---|---|---|
+| 16 limbs × 16 bits | 256 | 2^36 | 26 bits |
+| 10 limbs × 26 bits | 100 | 2^55.32 | **~6.7 bits** |
+| 10 limbs × 28 bits | 100 | 2^59.32 | ~2.7 bits — too thin once reduction adds terms |
+| 9 limbs × 29 bits | 81 | 2^61.2 | under 1 bit — excluded |
+
+So 26 and 28 use the *same* number of limbs and the same 100 products; 26 simply keeps
+usable headroom. (An earlier draft called 28 "the fewest limbs that fit," which is
+false — 9 × 29 fits in fewer, and is excluded on headroom, not on limb count.)
+
+The tiebreaker is not arithmetic, though. This is the representation `libsecp256k1`
+uses on 32-bit platforms, so the subtlest code in the project can be **cross-checked
+element-by-element against a widely-audited implementation of the identical layout**
+instead of being written and hoped at. On a project whose whole risk profile is silent
+numerical wrongness, having something to diff against outranks both provenance with
+`bits64.mdk` and a 2.5× constant factor §4 shows this workload never notices.
+
+⚠️ **What that does *not* buy is the reference's overflow proof** — it assumes magnitude
+≤ 8 and a full 64-bit accumulator we do not have. §4 sets out why eager normalization is
+therefore load-bearing and why the magnitude-1 bounds are ours to derive. An earlier
+draft of this section claimed the magnitude analysis could simply be followed; that was
+wrong, and it was the most dangerous sentence in the document.
 
 The instinct toward fewer partial products was right; it just isn't what settles it.
 
@@ -343,5 +448,14 @@ under load, and a few thousand lines of `do`-over-`Async` is the largest test th
 graded `do` routing (#824) will get. If sequencing allows, Phase 3 starting shortly
 after #500 lands would surface runtime gaps while that context is still warm.
 
-Beyond the async arcs it touches nothing: `pds/` imports stdlib, exports nothing back,
-and moves no goldens.
+Beyond the async arcs it moves no compiler source and no goldens: `pds/` imports stdlib
+and exports nothing back.
+
+⚠️ **It is not, however, free of repo infrastructure.** `test/diff_compiler_ci_shard_coverage.sh`
+enumerates **every tracked `.sh` in the repo**, so the first `pds/test/*.sh` gate reds
+`gates (tools)` unless `.github/workflows/ci.yml` gains a matching shard pattern — which
+is exactly how the P1 precedents are wired (`ci.yml` carries
+`pattern: "'sqlite/test/*oracle' 'gzip/test/*oracle'"`). Since G1–G5 are all oracle-diff
+gates, **Phase 0's first PR needs that `ci.yml` edit**, or a
+`test/CI-COVERAGE-EXCEPTIONS.txt` row with a reason. Budget it into the first slice
+rather than discovering it in the merge queue.
