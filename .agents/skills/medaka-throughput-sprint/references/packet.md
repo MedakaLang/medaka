@@ -5,7 +5,9 @@ Dispatch only when every required field is concrete.
 ## Identity
 
 - Slice ID and stage acceptance criterion.
-- Exact base/head, branch, absolute isolated worktree.
+- Exact base/head, branch, dispatch mode, and conductor tree. Absolute writer tree appears only in `FRONT-SEAT` packets; harness chooses a fresh path per dispatch.
+- `HARNESS`: writer derives tree first with `git rev-parse --show-toplevel` and proves it differs from conductor tree. `FRONT-SEAT`: conductor creates named tree; every agent tool call sets its absolute `workdir`, then writer validates toplevel equals brief path. `HARNESS+REBASE`: same as HARNESS plus exact licensed SHA-pinned rebase. All modes prove dispatch head descends from named sprint head.
+- Classification: `parity` → `sprint-implementer`; `behavior-changing`, spike, or unstable DAG → `sprint-heavy-implementer`.
 - Authorized files and named regions/symbols.
 - Active-writer collision matrix and abort condition.
 - Git-index boundary: assume isolated writer index writes may fail. Writer owes a
@@ -15,6 +17,7 @@ Dispatch only when every required field is concrete.
 ## Contract
 
 - Objective and explicit non-goals.
+- Separate binding `property` from advisory `mechanism`; pair code-changing directives with fail-capable `acceptance`.
 - Established semantic/architecture authority.
 - Transformation over named sites.
 - Callers, producers, consumers, fallbacks, and executable mirrors.
@@ -34,6 +37,20 @@ Dispatch only when every required field is concrete.
 - `could move`: plausible acceptance/diagnostic/output changes.
 - Overlap-review gate: shared carrier/harness/artifact regions whose prior slice
   must receive lightweight review before this packet becomes dispatchable.
+- Expected generated/golden moves. Unlisted moves are findings, never blessing authority.
+
+## Operational contract
+
+- Packet is immutable after dispatch. Only `fact:` advisory evidence and `stop:` abort messages are valid mid-flight. Decline and record amendments.
+- Push by explicit ref when authorized: `git push origin HEAD:refs/heads/<branch>`; never switch a branch held by another worktree.
+- Stop on missed same-question site, changed owned region, invalid premise, semantic choice, or overlap. Do not silently widen scope.
+- Return six sections: `Verdict`, `Evidence`, `Decisions surfaced`, `Deviations from packet`, `Not covered`, `Friction`. `NONE` is valid; missing section invalid.
+- Evidence opens with externally observed time and includes derived worktree, exact head/base proof, commands, outputs, and artifact paths.
+- Dispatch names report path. Agent returns literal `time:` plus all six sections; conductor persists response verbatim and validates it.
+
+## Spike form
+
+Spike produces knowledge, never landing code: attempt → observe → revert every tracked/untracked change it created → prove byte-identical named files and clean status. Return leaf DAG, discovered sites/premises/checks, and `SPIKE-DONE (stability: STABLE|UNSTABLE)`. Stable DAG may become parity family only when behavior remains provably unchanged; unstable DAG routes whole coupled slice to heavy implementer.
 
 After implementation and harness freeze, use one exact-row packet per applicable
 semantic-field/mutation-class pair:

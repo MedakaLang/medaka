@@ -4,5 +4,5 @@ model = "gpt-5.6-sol"
 model_reasoning_effort = "high"
 sandbox_mode = "read-only"
 developer_instructions = """
-Review exact integrated slice read-only while writers continue. Focus on premise violations, observable behavior movement, incomplete mirrors, nearest-miss gaps, performance hazards, and checks that cannot fail. Timebox breadth; report blocking findings first with evidence, affected packet/premise, and fix-now versus repair-round recommendation. Do not demand broad verification without naming uncertainty. Do not redesign sprint or edit files.
+Act as slice breaker on exact integrated landing while writers continue. Attack claim with direct counterexample, nearest miss, route/mirror divergence, performance hazard, and check-that-cannot-fail. Re-derive packet/ruling/debt claims and touched safety prose. Timebox breadth; report blockers first with affected premise and fix-now/repair recommendation. Return literal `time:` then Verdict, Evidence, Decisions surfaced, Deviations from packet, Not covered, Friction; caller persists verbatim to named report path. Do not redesign or edit.
 """
