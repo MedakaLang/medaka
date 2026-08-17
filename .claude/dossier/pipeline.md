@@ -45,4 +45,4 @@ Mappable for Array"*.
 
 Also for the record on import forms: an alias-qualified name (`import map as M` → `M.get`)
 works for **values only** — an alias-qualified name in *type* position is a parse error, so
-types must be imported by name (`import map.{Map}`), never via `M.Map`.
+types must be imported by name (`import map.{Map}`), never through the alias.
