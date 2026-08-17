@@ -53,7 +53,27 @@ sprint = re.search(r"\bsprint\b", prompt, re.IGNORECASE) or (
                   prompt, re.IGNORECASE)
 )
 
-if not roadmap and not stdlib and not mcp and not sprint:
+# Gate-shaped task: a gate/shard went red, or a fixture/golden/gate is being
+# authored. AGENTS.md keeps only the loop and the silent-failure traps; the
+# per-gate table and the authoring procedure moved into the `gates` skill
+# (2026-08-17), so nothing routes there unless this fires.
+gate_red = re.search(r"\b(gate|shard|preflight|fixpoint|CI)\b.{0,40}\b(red|fail\w*|break\w*|broke)\b",
+                     prompt, re.IGNORECASE) or re.search(
+                     r"\b(red|fail\w*|broke)\b.{0,40}\b(gate|shard|preflight)\b", prompt, re.IGNORECASE)
+gate_author = re.search(r"\b(add|write|author|capture|bless|re-?cut|update)\b.{0,30}\b(gate|fixture|golden|snapshot)s?\b",
+                        prompt, re.IGNORECASE) or re.search(r"diff_compiler_\w*", prompt)
+gates = gate_red or gate_author
+
+# Debug-shaped task: a .mdk program misbehaves, or a two-arm differential is
+# being set up. The probe/flag catalogue and the two-arm recipe moved out of
+# AGENTS.md into `debug-pipeline` (2026-08-17).
+debug = re.search(r"\b(why does\w*|why is|why won'?t|debug|diagnos\w+|repro\w*)\b.{0,60}"
+                  r"\b(parse|compile|typecheck|type-check|eval|fail|error|crash|wrong)\b",
+                  prompt, re.IGNORECASE) or re.search(
+                  r"\btwo-?arm\b|\bwrong (value|answer|output)\b|--keep-ir\b|\bCore IR\b",
+                  prompt, re.IGNORECASE)
+
+if not roadmap and not stdlib and not mcp and not sprint and not gates and not debug:
     sys.exit(0)
 
 if roadmap:
@@ -130,6 +150,32 @@ if sprint:
         "adjustment sweep, or orthogonal placed PLANNED-vs-GAP; every row "
         "terminal before exit).\n"
         "- Parallel-writer disjointness evidence -> scripts/sprint-disjoint.sh."
+    )
+
+if gates:
+    print(
+        "Skill triage (gate-shaped task detected): AGENTS.md keeps only the "
+        "preflight loop and the traps whose failure is SILENT -- the per-gate "
+        "table and the authoring procedure live in the `gates` skill.\n"
+        "- A gate/shard went red -> run `gh issue list --label known-red` "
+        "FIRST (it is usually not your break), then load gates for what that "
+        "gate proves.\n"
+        "- Adding a fixture, capturing/blessing a golden, or writing a new "
+        "gate -> load gates (shared-corpus consumers, CI shard registration, "
+        "and the dash-not-bash shell half).\n"
+        "Triage reminder, not a directive."
+    )
+
+if debug:
+    print(
+        "Skill triage (debug-shaped task detected): load debug-pipeline "
+        "before reasoning from source -- it carries the stage-isolation "
+        "method, the entry probes, the [D-*] flag catalogue (--json codes, "
+        "--types, the TYPED Core IR dump, --keep-ir), and the two-arm "
+        "differential recipe. AGENTS.md keeps only the three traps that turn "
+        "a wrong answer into a right-looking one ([D-JSON-HOLE], "
+        "[D-BUILD-PIPE], [D-TWO-ARM-STDLIB]).\n"
+        "Triage reminder, not a directive."
     )
 
 sys.exit(0)

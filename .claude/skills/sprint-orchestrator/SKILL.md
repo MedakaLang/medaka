@@ -198,7 +198,17 @@ through you):
 | A lane request failing disjointness (exit 1 against a freshly-derived live lane list), a source merge conflict, or any lane conflict | Sequencing ruling |
 | A brain ruling whose Escalate line reads VAL | Surface it to Val now; the finding's own fix HOLDS until she answers, the writer lane continues on independent work |
 | Anything that would write a new RULING to DECISIONS.md | Definitionally a decision. (Mechanical appends — the BASE pin, dispatch-log lines, lane grants with evidence, recorded idle reasons, self-audit lines, `declined-out-of-band:` lines, OBLIGATIONS.md rows, `VAL-<stage>-NNN` blocks, and the concatenation of the brain's own ruling FILES into DECISIONS.md — are yours and need no consult) |
+| **A landed slice significantly diverges from the planned architecture** | Val standing directive (2026-07-31): divergence is a signal to re-decide together, and it has no other channel — gates test behavior, adversarial review tests soundness and craft, **nothing tests conformance to the plan**. Escalate to VAL, not just the brain |
 | **Catch-all: either seat is about to do something not written in its loop** | Unrecognized judgment moments are how every recorded seat error happened |
+
+On that architecture row: divergence is **not** presumptively wrong — the agent
+touching the code is often right and the plan often is not. The bar for accepting
+one is **not** "is the fix correct" but **"is the END STATE still more coherent"**:
+a locally correct, green, well-reviewed change can relocate fragility instead of
+removing it (PR #1058 shipped a new S0 doing exactly that). A divergence that
+trades one special case for another is a net loss even with every gate green. So
+the response is neither "force the plan" nor "accept the diff" — it is stop and
+re-decide with Val.
 
 Escalating is free; improvising is not. When in doubt, there is no doubt —
 consult. When the brain's Escalate line reads FABLE, you execute it: dispatch
@@ -503,9 +513,25 @@ interventions, three different formats, none citable.
    **COPY, never symlink** — a symlinked `stdlib`/`runtime` points into a
    worktree later agents are forbidden to read, which is how one sprint spent
    two extra rebuilds on attribution; `runtime/` is required as well as
-   `stdlib/`, or the first `build` dies at the link step (AGENTS.md
-   [D-TWO-ARM-RUNTIME]). Record path + SHA in DECISIONS.md and name the depot
+   `stdlib/`, or the first `build` dies at the link step ([D-TWO-ARM-RUNTIME],
+   `debug-pipeline` skill). Record path + SHA in DECISIONS.md and name the depot
    in every packet §2 (not in fix briefs — see the consumer note above).
+
+   🚨 **Never tell a writer to borrow an emitter to warm its build.** This is
+   the single most-attempted "optimization" in a sprint and it does not work:
+
+   - **[B-BORROW-EMITTER]** `cp <other-tree>/medaka_emitter .` then `make medaka`
+     is SAFE but **not a warm start** — `cp` skips the
+     `.medaka_emitter.srcstamp` provenance stamp, so the build rebuilds the
+     emitter from current source anyway (stages A+B run as if cold). It saves
+     only the ~31s seed-bootstrap step. Re-derive, don't trust a cached number:
+     `time sh test/bootstrap_from_seed.sh` → `real 0m31.003s`.
+   - **[B-NO-BORROW-ISOLATED]** For a **worktree-isolated** agent it is worse
+     than useless: reading a tree that isn't its own can trip the auto-mode
+     isolation classifier, and that denial **carries forward and blocks every
+     later `make`**, including a clean cold-bootstrap in its own worktree.
+     Don't gamble a writer's session to save ~31s. Every writer brief says
+     `make -C <its-absolute-worktree-path> medaka` and nothing else.
 7. **Arm the heartbeat:** `/loop` (self-paced, ~600 s) with the tick list
    below. The writer lane is now occupied and must stay so.
 
@@ -665,6 +691,40 @@ in a tree is valid while any agent holds uncommitted edits or a build IN THAT
 TREE. Measurements run in a tree no writer occupies; confirm quiescent
 (`git -C <tree> status --short` empty, no build process) and run twice — two
 runs disagreeing means the tree is moving, not the suite.
+
+**PARALLELIZE READERS, SERIALIZE WRITERS.** Deferring verification and running
+agents concurrently are separable, and only one of them is cheap. Val's Stage A
+experiment measured deferral at no detectable cost, and concurrency at a cost
+every time: four contaminated measurements from agents holding uncommitted
+edits — including a must-fail run reporting **5 phantom DRAINS** where a
+quiescent tree reported zero. The natural next action on a drain is to CLOSE the
+issue, so trusting that run would have wrongly closed five live bugs. Five
+adversarial reviewers, by contrast, ran concurrently with zero interference
+**because they do not edit**. Brief every read-only agent with "do NOT rebuild
+the binary" — a rebuild is the one action that breaks quiescence for everyone.
+
+⚠️ **State concurrency HONESTLY in every brief.** Describe the situation as it
+WILL be, not as it is at the moment you type. A brief that opened "you are the
+ONLY agent live" and was followed by two more dispatches into the same worktree
+survived only because that agent checked instead of trusting the sentence; one
+that believed it would have reported contaminated baselines as clean.
+
+## Unticketed work is invisible to every other session
+
+Two orchestrator sessions once dispatched agents for the same three-part
+follow-up because it had been sent by message rather than filed. None of the
+usual coordination surfaces catches this: `gh issue list` cannot show work that
+was never filed, `git worktree list` shows `agent-<id>` names that do not
+attribute to a session, and an open green PR looks identical from both sides.
+
+- **File an issue for follow-up work you dispatch**, even when a message would
+  do. One line is enough — the issue number is the claim.
+- **When two sessions share the repo, partition by SUBSYSTEM out loud** ("gzip
+  is mine this session"), by directory rather than by task, because tasks spawn
+  follow-ups nobody named.
+- **Before dispatching onto a branch that already has a PR, check for recent
+  pushes** (`git log --oneline -3 origin/<branch>`) — a branch that moved since
+  your agent started is the tell.
 
 ## End of sprint — the heavy round is a PHASE
 

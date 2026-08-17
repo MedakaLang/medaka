@@ -1,6 +1,6 @@
 ---
 name: debug-pipeline
-description: Diagnose a Medaka parse, resolve, typecheck, or eval failure — isolate which pipeline stage is at fault using the entry probes and the diagnostics accumulator. Use when a .mdk program errors unexpectedly, a test fails opaquely, or you need to narrow down a compiler bug.
+description: Diagnose a Medaka parse, resolve, typecheck, or eval failure — isolate which pipeline stage is at fault using the entry probes, the diagnostics accumulator, and the Core IR / --keep-ir dumps. Use when a .mdk program errors unexpectedly or returns a wrong value, a test fails opaquely, you need to narrow down a compiler bug, or you are setting up a two-arm (old-binary vs new-binary) differential.
 ---
 
 # Debug a pipeline failure
@@ -151,8 +151,8 @@ both probes behaved identically. **"No divergence" does NOT exonerate
 dict-passing.** The printer also renders `EDictApp`/`EMethodRef` transparently as
 the bare name, so a dict-passed dump *looks* clean. When the comparison comes back
 clean and the bug is still there, instrument eval's `EVar`/`EMethodRef`/`EDictApp`
-arms and see how the name *actually* resolves. (See AGENTS.md Gotchas for the full
-counterexample.)
+arms and see how the name *actually* resolves. (Full counterexample:
+`.claude/dossier/traps.md`, [T-DISPATCH-LOADER].)
 
 Because single-file masks these, **the regression test must exercise the
 multi-module path** (`test/diff_compiler_eval_modules.sh`), not a single-file
@@ -177,11 +177,86 @@ e.g. `test/eval_modules_fixtures/` feeds **both** `diff_compiler_eval_modules.sh
 **and** `diff_compiler_core_ir_modules.sh`; `test/wasm/fixtures/` feeds **four**
 consumers. Capture the golden with `CAPTURE=1` on the specific gate.
 
+## Probe and flag catalogue
+
+Moved here from `AGENTS.md` — none of it is reachable until you are already
+debugging. `AGENTS.md` keeps only the three whose failure mode is a right-looking
+wrong answer ([D-JSON-HOLE], [D-BUILD-PIPE], [D-TWO-ARM-STDLIB]).
+
+**[D-CHECK-JSON]** `medaka check --json <file>` emits `Diag` JSON: `code`
+(`T-*`/`R-*`/`P-*`/`L-*`/`W-*`), `kind`, `range`, `severity`, `message`, `help`/`fix`. **Key off
+`code`.** `run --json`/`lint --json` share it.
+
+**[D-TYPES-FLAG]** `--types` restores the full prelude scheme dump (bare `check` shows only
+your own bindings).
+
+**[D-CORE-IR-TYPED]** `compiler/entries/core_ir_typed_modules_dump_main.mdk` — the TYPED,
+DICT-PASSED Core IR (`$dict` params, routes). **The probe for any dispatch/dict-routing/
+`requires` bug — reach for it BEFORE reasoning from source.**
+⚠️ **[D-CORE-IR-TRAP] NOT `core_ir_dump_main.mdk`** — prelude-free, typecheck-free, hides
+`$dict`/`CDict`/`CMethod`.
+
+**[D-KEEP-IR]** `medaka build --keep-ir <file>` (or `MEDAKA_KEEP_IR=1`) → IR at `<output>.ll`;
+prints only the path. **`cat` the `.ll`.** On write failure prints `warning: could not keep IR
+at <path>: <err>` and the build still SUCCEEDS — the note is best-effort.
+⚠️ `MEDAKA_KEEP_IR=""` correctly reads as **unset** (`envOr` maps `Some ""` to the default) —
+the one documented exception to the empty-env-var-reads-as-SET trap.
+⚠️ **[D-EMITTER-CLI]** `./medaka_emitter <file>` is NOT how to get IR (CLI:
+`<runtime.mdk> <core.mdk> <entry.mdk> [root...]`). Use `medaka build --keep-ir`.
+
+**[D-RUN-VS-BUILD]** `run`/`build` share the typechecker; differ only in engine. **NOT** two
+independent observations of resolve/typecheck behavior.
+
+## Two-arm differentials (old binary vs new binary)
+
+⭐ **[D-TWO-ARM] A `medaka` binary resolves emitter + stdlib from `exeDir`**, never cwd, never
+the target file's project root. `MEDAKA_EMITTER`/`MEDAKA_ROOT` exported in your shell CROSS the
+arms — check first.
+```sh
+mkdir -p /tmp/alt && cp ./medaka /tmp/alt/
+printf 'main = println 12345\n' > /tmp/hello.mdk
+/tmp/alt/medaka run /tmp/hello.mdk                    # exit 1: looks in /tmp/alt/stdlib
+MEDAKA_ROOT="$PWD" /tmp/alt/medaka run /tmp/hello.mdk # exit 0: 12345
+```
+⚠️ A cwd containing `stdlib/` does **not** rescue it.
+
+🚨 **[D-TWO-ARM-STDLIB] The differential is UNSOUND when the target is a `stdlib/*` file** —
+it manufactures false FINDINGS. ⇒ **Give each arm its own tree or set `MEDAKA_ROOT` per arm.**
+
+🚨 **[D-TWO-ARM-RUNTIME] `medaka build` also needs `runtime/` beside the binary** (only the
+FIRST `build` exposes the gap). Derive the mechanism, don't trust this paragraph:
+`grep -n 'medaka_rt.c' compiler/driver/build_cmd.mdk` (the `joinPath root` site + the
+`clangLink cc rtC …` call). Continuing [D-TWO-ARM]:
+```sh
+cp ./medaka_emitter /tmp/alt/ && ln -s "$PWD/stdlib" /tmp/alt/stdlib
+/tmp/alt/medaka run   /tmp/hello.mdk                   # exit 0: 12345 — looks complete
+/tmp/alt/medaka build /tmp/hello.mdk -o /tmp/alt/hello > /tmp/alt/b.log 2>&1; echo "build: $?"
+cat /tmp/alt/b.log   # exit 1 — no such file: '/tmp/alt/runtime/medaka_rt.c'
+ln -s "$PWD/runtime" /tmp/alt/runtime
+/tmp/alt/medaka build /tmp/hello.mdk -o /tmp/alt/hello > /tmp/alt/b.log 2>&1; echo "build: $?"   # 0
+```
+⚠️ [D-BUILD-PIPE] applies here too — `medaka build`'s exit code does not survive a pipe, so
+don't shorten to `| tail`. Redirect to a file, read `$?`, then read the file.
+
+🚨 **[B-STRICT-TWO-ARM]** `MEDAKA_STRICT=1` on BOTH ARMS breaks the differential — a shared
+compiler tree means the older arm's fingerprint can never match, reporting "everything
+differs." Assert freshness ONCE, on the arm where it can be true.
+
+⚠️ **[D-GATE-OVERRIDE] Not every gate takes a second binary.** **Derive, don't trust a count:**
+```sh
+grep -rln 'MEDAKA="${MEDAKA:-' test/*.sh
+```
+⚠️ Run from a script file, not inline (this harness mangles a `${…}` in a quoted inline arg
+and returns zero matches). Hardcoded: `test/diff_compiler_shadow_semantics.sh` (**#1431**).
+🚨 This paragraph carried a wrong COUNT for months *while citing the command that refutes it* —
+a claim shipping its own derivation is only honest if someone ran it.
+
 ## Tips
 
 - For LSP-surfaced errors, run `bash test/diff_compiler_lsp.sh` and
   `test/lsp_harness.sh`.
 - For multi-module bugs, run `bash test/diff_compiler_check_modules.sh` and
   `bash test/diff_compiler_eval_modules.sh` to isolate the loader path.
-- Before blaming the compiler, check `.claude/HANDOFF.md` — it lists known-red
-  gates. A red gate is often already known and not your bug.
+- Before blaming the compiler, run `gh issue list --label known-red` — one issue
+  per expected-red gate, closed when it goes green again. A red gate is often
+  already known and not your bug.

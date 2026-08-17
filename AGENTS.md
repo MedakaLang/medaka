@@ -135,17 +135,11 @@ gh api repos/MedakaLang/medaka/rulesets --jq '.[]|select(.enforcement=="active")
     --jq '.rules[]|select(.type=="required_status_checks")|.parameters.required_status_checks[].context'
 done
 ```
-⚠️ A gate matching `test/diff_compiler_*.sh` but no shard pattern in `ci.yml` SILENTLY NEVER
-RUNS — `diff_compiler_ci_shard_coverage.sh` catches it. 🚨 **That check's input is the TREE,
-not `test/`, so a `.sh` you add ANYWHERE trips it** (a repro harness under `.claude/` has
-reddened a shard). If a script isn't a gate, add a `test/CI-COVERAGE-EXCEPTIONS.txt` row with a
-reason, not a rename.
-
-**[W-SHARD-COST] Shards are scheduled by cost, not theme — put a new gate where there is
-room.** 🚨 Never trust a shard-cost ranking in this file — derive it, every time:
-```sh
-gh run view <id> --json jobs --jq '.jobs[]|select(.name|startswith("gates"))|{name,s:((.completedAt|fromdate)-(.startedAt|fromdate))}'
-```
+🚨 **Adding ANY `.sh` anywhere in the tree — not just under `test/` — can redden a shard**
+(`diff_compiler_ci_shard_coverage.sh`; a repro harness under `.claude/` has done it). A gate
+with no shard pattern in `ci.yml` SILENTLY NEVER RUNS. Registration rules, the
+`test/CI-COVERAGE-EXCEPTIONS.txt` escape hatch, and `[W-SHARD-COST]` (shards are scheduled by
+cost, not theme): the `gates` skill.
 
 **Zero approvals required** — the checks are the gate; an agent can self-merge on green.
 `--auto` enqueues into the merge queue ([W-MERGE-QUEUE]).
@@ -233,19 +227,12 @@ differs." ⇒ **Assert freshness ONCE, on the arm where it can be true**, or giv
 fingerprint is baked at STAGE A START. A `.mdk` edit after `make medaka` begins (a comment is
 enough) silently produces a binary lacking it. Finish the edit, then build.
 
-**[B-BORROW-EMITTER] Borrowing an emitter (`cp <other-tree>/medaka_emitter .` then `make medaka`)
-is SAFE but NOT a warm start** — `cp` skips the `.medaka_emitter.srcstamp` provenance stamp, so
-the build always rebuilds the emitter from current source anyway (stages A+B run as if cold). It
-only skips the ~31s seed-bootstrap step — re-derive, don't trust a cached number:
-`time sh test/bootstrap_from_seed.sh` → `real 0m31.003s`.
-
-> ### 🚨 [B-NO-BORROW-ISOLATED] WORKTREE-ISOLATED SUBAGENT: do NOT borrow it. Cold-bootstrap.
-> `cp <other-tree>/medaka_emitter .` reads a tree that isn't yours and can trip the auto-mode
-> isolation classifier — a denial that **carries forward and blocks every later `make`**,
-> including a clean cold-bootstrap in your own worktree. Don't gamble the session to save ~31s.
-> **Just run `make -C <your-absolute-worktree-path> medaka`** — a fresh worktree has no
-> `./medaka_emitter` and that's FINE, it cold-bootstraps at the same ~31s cost. Never read from
-> another tree.
+🚨 **[B-NO-BORROW-ISOLATED] In a worktree, never `cp` an emitter from another tree — just
+`make -C <your-absolute-worktree-path> medaka`.** A fresh worktree has no `./medaka_emitter`
+and that is FINE; it cold-bootstraps for ~31s, and borrowing does not even save the rebuild
+(only the seed step). Reading another tree can trip the isolation classifier into a denial
+that blocks every later `make`. Rationale + the `[B-BORROW-EMITTER]` measurement: the
+`sprint-orchestrator` skill.
 
 **[B-ENV] Environment.** opam/dune NOT needed. Native build: **clang + Boehm GC** (Debian:
 `clang` + `libgc-dev`, `-lgc`; macOS: Apple clang + `brew install bdw-gc`). `node` ≥24 only for
@@ -355,30 +342,14 @@ make agent-doc-symbols                 # doc-symbol rot: every backticked symbol
 make docs-index                        # regenerate docs/README.md (GENERATED — never hand-edit)
 ```
 
-**[G-LIST]**
+🛠️ **[G-SKILL] A gate went red, or you're adding one? Load the `gates` skill** — it carries
+the per-gate `[G-LIST]` table (what each one proves), the must-fail pin lifecycle
+(`[G-PIN-DRAIN]`, `[G-DRAIN-INVISIBLE]`), the fan-out knobs (`[G-PARALLELISM]`,
+`[G-BUILD-RACE]`), fixture/golden authoring, and the dash-not-bash shell half.
+**Check `gh issue list --label known-red` first — it is usually not your break.**
 
-| Gate | What it proves |
-|------|----------------|
-| `test/diff_compiler_*.sh` | Differential: native stage output vs captured goldens |
-| `test/selfcompile_fixpoint.sh` | Self-compile fixpoint (C3a/C3b) — decisive gate for compiler-source changes |
-| `test/typecheck_compiler_source.sh` | Strict-typechecks WHOLE source. Build oracle first: `FORCE=1 JOBS=1 sh test/build_oracles.sh --build-one <name>`; rebuild each edit. ⚠️ A missing/stale oracle exits 2 — reads like a skip, not a failure. Fast alt: `make check-self` |
-| `test/diff_compiler_engines.sh` | eval == native == wasm. Ledger: `test/engine_divergence.txt` |
-| `test/diff_compiler_perf_scaling.sh` | O(n²) detector: allocation growth N vs 2N (linear ≈2.0×, quadratic ≈4.0×) |
-| `test/diff_compiler_capability_matrix.sh` | Externs vs engine coverage. Ledger: `test/CAPABILITY-EXCEPTIONS.txt`; pure externs need a verdict in `test/EXTERN-DOMAIN-LEDGER.txt` or self-drain (#476). Would have caught the `floatToInt` 3-way edge divergence (#346) structurally |
-| `test/diff_compiler_tmc_parity.sh` | Both backends TMC same functions (`sh test/wasm/build_wasm_oracle.sh`) |
-| `test/bootstrap_*.sh` | Each native stage == interpreter output |
-| `test/diff_compiler_must_fail.sh` | **[G-MUST-FAIL]** Each `test/must_fail_fixtures/*/` pins an OPEN issue; a fix flips it green and FAILS the gate. RED here is usually GOOD. Runs in `soundness` |
-| `test/check_removed_constructs.sh` | Scan for removed constructs (`JOBS=` knob) |
-
-⚠️ **[G-PIN-DRAIN]** DRAINED must-fail pin: prefer RE-POINTING at a regression gate over
-deleting. Derive the destination — a gate already owning siblings of that bug class.
-
-🚨 **[G-DRAIN-INVISIBLE]** Invisible locally — `test/preflight.sh` never maps `soundness`. A
-failed must-fail step skips later steps in that job (`typecheck_compiler_source.sh`, C3b) — read
-the step list:
-```sh
-gh api repos/MedakaLang/medaka/actions/jobs/<job-id> --jq '[.steps[] | "\(.conclusion) :: \(.name)"]'
-```
+The two that must reach you *before* you think to load anything, because their failure mode
+is silent rather than red:
 
 **[G-STALE-ORACLE]** `run_gates.sh` refuses on a stale oracle rather than false-pass, printing
 the rebuild command. Override only with `NO_STALE_CHECK=1`. Force-rebuild before trusting
@@ -386,16 +357,9 @@ the rebuild command. Override only with `NO_STALE_CHECK=1`. Force-rebuild before
 
 🚨 **[G-GOLDEN-CAPTURE-UNGUARDED]** Golden capture has NO staleness guard — a stale oracle can
 BLESS A WRONG GOLDEN, permanently. **After ANY merge/rebase, rebuild oracles BEFORE capturing**,
-then route through `run_gates.sh`.
-
-**[G-PARALLELISM]** Cap fan-out: `JOBS=n` (oracle build/gates/wasm), `INNER_JOBS=n` (per-gate).
-Opt-level knobs (`EMITTER_OPT` -O2, `ORACLE_OPT` -O0, `CLI_OPT` -O2, `WASM_ORACLE_OPT` -O2,
-`GC_INITIAL_HEAP_SIZE`) preserve byte-identical IR (text IR is produced before `clang` runs) —
-⚠️ `ORACLE_OPT -O0` overflows deep-TCO fixtures. `compiler/PERF-RESULTS.md`.
-
-**[G-BUILD-RACE]** Concurrent `medaka build` is scratch-path safe (per-process `mktemp -d`).
-⚠️ NOT two `make medaka` runs in the SAME worktree (#1141) — outputs write to `*.new.$$` beside
-their final path, promoted via same-filesystem `mv`.
+then route through `run_gates.sh`. Same for `--bless`: **[WT-GOLDEN-ENSHRINES]** a golden
+records what the engine DID, not what's CORRECT — `eval` is a known-wrong oracle in several
+open S0s, so decide the right answer from semantics *before* you capture.
 
 ### Pre-commit hook (ACTIVE) — fmt + lint + snapshot + lextok
 
@@ -431,33 +395,18 @@ Bypass: `git commit --no-verify`. Unbuilt `medaka`: hook warns and allows.
 
 ### Debugging a `.mdk` program
 
-**[D-CHECK-JSON]** `medaka check --json <file>` emits `Diag` JSON: `code`
-(`T-*`/`R-*`/`P-*`/`L-*`/`W-*`), `kind`, `range`, `severity`, `message`, `help`/`fix`. **Key off
-`code`.** `run --json`/`lint --json` share it.
+🛠️ **[D-SKILL] Load the `debug-pipeline` skill** — it carries the probe catalogue
+(`[D-CHECK-JSON]`, `[D-TYPES-FLAG]`, `[D-CORE-IR-TYPED]` + its `[D-CORE-IR-TRAP]`,
+`[D-KEEP-IR]`, `[D-EMITTER-CLI]`, `[D-RUN-VS-BUILD]`) and the full two-arm differential
+recipe (`[D-TWO-ARM]`, `[D-TWO-ARM-RUNTIME]`, `[D-GATE-OVERRIDE]`).
+
+Three that must reach you *before* you think to load anything, because each turns a wrong
+answer into a right-looking one:
 
 🚨 **[D-JSON-HOLE] `check --json` SILENT-ACCEPTS ON MULTI-MODULE PROJECTS (#1362, OPEN S0);
 `medaka_check` (MCP) inherits it.** Internal-extern violation → exit 0, empty diagnostics.
 **Corroborate an important `--json`/MCP green with human `check`.** Pinned
 `test/must_fail_fixtures/1362-*` — **drains → delete this paragraph.** → dossier
-
-**[D-TYPES-FLAG]** `--types` restores the full prelude scheme dump (bare `check` shows only
-your own bindings).
-
-Writing a diagnostic: `compiler/ERROR-QUALITY.md` + `compiler/DIAGNOSTIC-CODES-DESIGN.md`.
-
-**[D-CORE-IR-TYPED]** `compiler/entries/core_ir_typed_modules_dump_main.mdk` — the TYPED,
-DICT-PASSED Core IR (`$dict` params, routes). **The probe for any dispatch/dict-routing/
-`requires` bug — reach for it BEFORE reasoning from source.** → dossier
-⚠️ **[D-CORE-IR-TRAP] NOT `core_ir_dump_main.mdk`** — prelude-free, typecheck-free, hides
-`$dict`/`CDict`/`CMethod`.
-
-**[D-KEEP-IR]** `medaka build --keep-ir <file>` (or `MEDAKA_KEEP_IR=1`) → IR at `<output>.ll`;
-prints only the path. **`cat` the `.ll`.** On write failure prints `warning: could not keep IR
-at <path>: <err>` and the build still SUCCEEDS — the note is best-effort.
-⚠️ `MEDAKA_KEEP_IR=""` correctly reads as **unset** (`envOr` maps `Some ""` to the default) —
-the one documented exception to the empty-env-var-reads-as-SET trap.
-⚠️ **[D-EMITTER-CLI]** `./medaka_emitter <file>` is NOT how to get IR (CLI:
-`<runtime.mdk> <core.mdk> <entry.mdk> [root...]`). Use `medaka build --keep-ir`.
 
 🚨 **[D-BUILD-PIPE] `medaka build`'s exit code does NOT survive a pipe.** **Redirect to a file,
 read `$?`, then read the file.**
@@ -466,46 +415,12 @@ read `$?`, then read the file.**
 ./medaka build broken.mdk -o /tmp/x 2>&1 | tail -1;    echo "piped:  $?"   # 0
 ```
 
-**[D-RUN-VS-BUILD]** `run`/`build` share the typechecker; differ only in engine. **NOT** two
-independent observations of resolve/typecheck behavior.
-
-⭐ **[D-TWO-ARM] A `medaka` binary resolves emitter + stdlib from `exeDir`**, never cwd, never
-the target file's project root. `MEDAKA_EMITTER`/`MEDAKA_ROOT` exported in your shell CROSS the
-arms — check first.
-```sh
-mkdir -p /tmp/alt && cp ./medaka /tmp/alt/
-printf 'main = println 12345\n' > /tmp/hello.mdk
-/tmp/alt/medaka run /tmp/hello.mdk                    # exit 1: looks in /tmp/alt/stdlib
-MEDAKA_ROOT="$PWD" /tmp/alt/medaka run /tmp/hello.mdk # exit 0: 12345
-```
-⚠️ A cwd containing `stdlib/` does **not** rescue it.
-
 🚨 **[D-TWO-ARM-STDLIB] Two-arm differential is UNSOUND when the target is a `stdlib/*` file**
-— manufactures false FINDINGS. ⇒ **Give each arm its own tree or set `MEDAKA_ROOT` per arm.**
-→ dossier
+— manufactures false FINDINGS, because a `medaka` binary resolves emitter + stdlib from
+`exeDir` ([D-TWO-ARM]), never cwd. ⇒ **Give each arm its own tree or set `MEDAKA_ROOT` per
+arm.** → dossier
 
-🚨 **[D-TWO-ARM-RUNTIME] `medaka build` also needs `runtime/` beside the binary** (only the
-FIRST `build` exposes the gap). Derive the mechanism, don't trust this paragraph:
-`grep -n 'medaka_rt.c' compiler/driver/build_cmd.mdk` (the `joinPath root` site + the
-`clangLink cc rtC …` call). Continuing [D-TWO-ARM]:
-```sh
-cp ./medaka_emitter /tmp/alt/ && ln -s "$PWD/stdlib" /tmp/alt/stdlib
-/tmp/alt/medaka run   /tmp/hello.mdk                   # exit 0: 12345 — looks complete
-/tmp/alt/medaka build /tmp/hello.mdk -o /tmp/alt/hello > /tmp/alt/b.log 2>&1; echo "build: $?"
-cat /tmp/alt/b.log   # exit 1 — no such file: '/tmp/alt/runtime/medaka_rt.c'
-ln -s "$PWD/runtime" /tmp/alt/runtime
-/tmp/alt/medaka build /tmp/hello.mdk -o /tmp/alt/hello > /tmp/alt/b.log 2>&1; echo "build: $?"   # 0
-```
-⚠️ [D-BUILD-PIPE] applies here too — don't shorten to `| tail`.
-
-⚠️ **[D-GATE-OVERRIDE] Not every gate takes a second binary.** **Derive, don't trust a count:**
-```sh
-grep -rln 'MEDAKA="${MEDAKA:-' test/*.sh
-```
-⚠️ Run from a script file, not inline (this harness mangles a `${…}` in a quoted inline arg
-and returns zero matches). Hardcoded: `test/diff_compiler_shadow_semantics.sh` (**#1431**).
-🚨 This paragraph carried a wrong COUNT for months *while citing the command that refutes it* —
-a claim shipping its own derivation is only honest if someone ran it.
+Writing a diagnostic: `compiler/ERROR-QUALITY.md` + `compiler/DIAGNOSTIC-CODES-DESIGN.md`.
 
 **Playground e2e:** `cd playground/e2e && ./run.sh`. Needs node v24+,
 `playground/dist/playground.wasm` pre-built. See `playground/e2e/README.md`.
@@ -601,60 +516,27 @@ Each of these was paid for in an incident — pointers, not post-mortems.
 the binary (`medaka test <file>`). Under-used: operator sections `(==)`, `(+ 1)`, `(2 * _)`
 (left needs `_`); `|>`; `>> <<`; `[lo..=hi]`; `{ r | f = v }`; unary `!`.
 
-⚠️ **[DG-REMOVED]** REMOVED — hard parse errors (`compiler/frontend/parser.mdk` diagnostics,
-gated by `test/check_removed_constructs.sh`):
-
-| Removed | Use instead |
-|---|---|
-| `function` keyword | `x => match x` with indented arms, or a multi-clause definition |
-| `let mut` | a `Ref`: `let x = Ref 0`, `x := v`, read `x.value` |
-| backtick infix `` `f` `` | prefix application |
-| `record` keyword | — |
-| `let-else` | — |
-| named impls | — |
-| `default impl` | — |
-
-`docs/spec/SYNTAX.md` is the accepted-construct list (⚠️ still lists backtick infix — a lie).
+⚠️ **[DG-REMOVED]** Eight constructs were REMOVED and are now hard parse errors
+(`function`, `let mut`, backtick infix, `record`, let-else, named impls, `default impl`, and
+the `@Name` impl-hint) — each with a located parser diagnostic naming its replacement, gated by
+`test/check_removed_constructs.sh`. **The table with the replacements is
+`docs/spec/SYNTAX.md` § "Removed — do not use"**, which is also the accepted-construct list.
 `test/parse_fixtures/rare_constructs.mdk` has examples. Check PLAN.md "Known parser gaps" first.
 
 ## Writing tests
 
-**[WT-STEPS]** Each `test/diff_compiler_*.sh` runs a stage against `test/*_fixtures/` or
-`*_goldens/`.
-1. Add a fixture (first read [T-SHARED-CORPUS]).
-2. Capture: `bash test/capture_goldens.sh`, or a gate with `CAPTURE=1`.
-   `sh test/capture_goldens.sh <tag>` narrows; `--check` dry-runs.
-3. Verify: `bash test/diff_compiler_<name>.sh` passes.
+🛠️ **[WT-SKILL] Adding a fixture or a gate? Load the `gates` skill** — fixture/golden steps
+(`[WT-STEPS]`), the CI shard registration rule, and the dash-not-bash shell half
+(`[WT-DASH-PRINTF]`, `[WT-TIMEOUT]`). Add cases to the gate matching the stage changed
+(parser → `diff_compiler_parse*.sh`).
 
-🚨 **[WT-GOLDEN-ENSHRINES]** A captured golden records what the engine DID, not what's CORRECT —
-`eval` is a known-wrong oracle in several open S0s. Before `CAPTURE=1`:
-- Work out the right answer independently, from semantics, first.
-- Cross-check engines — all three agreeing does NOT prove correctness.
-- Near a known-wrong area (interface defaults, dict routing, method-less impls, head-tycon
-  collisions, dict-forwarding locals)? Record in the fixture how you established the value.
-- Untrustworthy? Don't capture — use a correct neighbouring shape, or pin in
-  `test/must_fail_fixtures/` (see `test/MUST-FAIL-NOT-PINNABLE.txt`).
+The two that must reach you before you load it — both silent:
 
-⚠️ Same for **snapshot**/**selfproc LEG A** — don't `--bless` without independently deciding
-correctness.
-
-Add cases to the gate matching the stage changed (parser → `diff_compiler_parse*.sh`).
-
-### ⚠️ Writing the SHELL half of a gate
-
-`/bin/sh` here is **dash**, not bash (`readlink -f /bin/sh`), and gates run as `sh test/…`.
-
-- 🚨 **[WT-DASH-PRINTF]** `printf '\xNN'` does NOT work in dash. Use octal:
-  `printf '\336\255\276\357'`. Rewriting a fixed-width field? Assert the file LENGTH is
-  unchanged.
-- ⚠️ **[WT-TIMEOUT]** `timeout` (coreutils) doesn't exist on macOS. Use the shim from
-  `test/diff_compiler_engines.sh`:
-  ```sh
-  run_t() { perl -e 'alarm shift; exec @ARGV' "$@"; }
-  ```
-  Not a drop-in — reports **142**, `timeout` reports **124**. Verify: `run_t 1 sleep 5; echo $?`.
-
-Check in review: `grep -n "printf '\\\\x\|[^a-z]timeout " <gate>`.
+- **[T-SHARED-CORPUS]** (below) — a fixture directory is a SHARED CORPUS; adding one enrols
+  you in gates you never named.
+- 🚨 **[WT-GOLDEN-ENSHRINES]** — a captured golden records what the engine DID, not what's
+  CORRECT. Decide the right answer from semantics BEFORE `CAPTURE=1` or `--bless`, snapshot
+  and selfproc LEG A included.
 
 ## Task playbooks (skills)
 
@@ -666,7 +548,8 @@ Check in review: `grep -n "printf '\\\\x\|[^a-z]timeout " <gate>`.
 | **add-language-feature** | New construct, whole pipeline; also typechecking-looking cross-cutting work — see [SK-HARDEN-NARROW]. |
 | **add-primitive** | Add/modify a stdlib `extern` (`compiler/eval/eval.mdk`). |
 | **extend-stdlib** | Pure-Medaka stdlib fn/impl/doctest/prop, not externs. User-reserved. |
-| **debug-pipeline** | Parse/typecheck/eval failure; first choice for [T-DISPATCH-LOADER]. |
+| **debug-pipeline** | Parse/typecheck/eval failure or a wrong value; first choice for [T-DISPATCH-LOADER]. Also carries the probe/flag catalogue and the two-arm differential recipe. |
+| **gates** | A gate or CI shard went red and you need to know what it proved; or you're adding a fixture, a golden, or a gate. |
 | **harden-typechecker** | Typechecker-*internal*: `type_error`, constraint/coherence/unification. |
 | **perf-hunt** | Stage slow, or `diff_compiler_perf_scaling.sh` red. |
 | **benchmark-emitter** | `compiler/backend/*` change to measure, or a suspicious fixpoint failure. |
