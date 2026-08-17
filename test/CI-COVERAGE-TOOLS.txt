@@ -97,6 +97,13 @@ scripts/sprint-disjoint        sprint-orchestration evidence tool: mechanical di
 test/fixtures/pr_mock_gh       mock `gh` used ONLY by test/pr_helper_test.sh (which is in the
                                `tools` shard); running it directly proves nothing.
 
+# ── pds corpus extraction (the GATES are pds/test/*.sh — those are in the `sqlite` shard) ──
+pds/tools/gen_field_corpus     regenerates pds/test/vectors/field_reference_corpus.txt from
+                               libsecp256k1 at the pinned commit (S-field, #1699 field
+                               10x2^26 limbs). Needs network + a C compiler; asserts nothing
+                               about the compiler. The corpus it produces IS graded — by
+                               pds/test/field_vectors.sh and pds/test/vector_provenance.sh.
+
 # ── sourced libraries (never executed; `sh <file>` is a no-op) ──
 test/lib_scratch               shell library, not a script: sourced by run_gates / build_oracles /
                                preflight to point TMPDIR off the RAM-backed /tmp tmpfs (and to warn
