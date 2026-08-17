@@ -34,11 +34,31 @@
 #     - anything about expected values that are not in a vector file — inline
 #       literals in a pds/**/*_test.mdk, or a .mdk data module, are invisible here
 #       BY CONSTRUCTION. Put expected values in a vector file under pds/test/.
+#     - a vector file placed ANYWHERE ELSE in the project (e.g. under
+#       pds/lib/vectors/) — the gate PASSES, silently (MEASURED). This is
+#       DELIBERATELY NOT MECHANIZED: widening enumeration to all of pds/ would
+#       demand a row for pds/README.md, pds/medaka.toml, and every pds/lib/*.mdk,
+#       trading a documented hole for a false-positive generator
+#       (RUN-PDS0-009 F6). This is why the corpus-location rule below is an
+#       IMPERATIVE, not just a description of what gets checked.
+#     - a SYMLINKED corpus file's bytes: a symlink is enumerated and REJECTED
+#       outright (never resolved), so the ledger makes no claim whatsoever about
+#       bytes that live outside this repository.
+#     - a corpus file named *.sh: it is excluded from THIS gate's enumeration by
+#       name, same as any *.mdk. That is a compensating control in a DIFFERENT
+#       gate, not this gate's own coverage — committing e.g.
+#       pds/test/vectors/foo.sh reds test/diff_compiler_ci_shard_coverage.sh
+#       (it enumerates every tracked *.sh and no shard pattern selects that
+#       path), not this one.
 #
-# WHAT COUNTS AS A VECTOR FILE (the gate's enumeration — no allowlist, no names):
-#   every regular file under pds/test/ at ANY depth, EXCEPT *.sh, *.mdk, and this
-#   file. A .md under pds/test/ therefore needs a row too: put prose in
-#   pds/README.md instead.
+# VECTOR CORPORA MUST LIVE UNDER pds/test/. That is not merely descriptive —
+# it is the instruction to every consumer slice (S-sha256, S-encodings,
+# S-field, S-scalar, …): a file placed elsewhere is invisible to this gate
+# (see DOES NOT PROVE, above). The gate's actual enumeration (mechanism, not
+# policy): every regular file AND every symlink under pds/test/ at any depth,
+# EXCEPT *.sh, *.mdk, and this file. A .md under pds/test/ therefore needs a
+# row too: put prose in pds/README.md instead. A symlink is enumerated and
+# then REJECTED with a named failure — never silently dropped, never followed.
 #
 # FORMAT
 #   Stanzas. A stanza opens with [impl] or [vector] alone on a line and runs to
@@ -72,8 +92,12 @@
 #     source-sha256  64 hex of the fetched artifact's bytes, or the literal
 #                    token UNAVAILABLE
 #                                      REQUIRED iff kind=published-artifact
-#     source-note    why the artifact is not byte-digestible
+#     source-note    why the artifact is not byte-digestible, OR why a withdrawn
+#                    edition is still the right answer key
 #                                      REQUIRED iff source-sha256=UNAVAILABLE
+#                                      OR the row cites a withdrawn/superseded
+#                                      edition (RUN-PDS0-008 D1: disclosure is
+#                                      the price of the widened in-class set)
 #     impl           an [impl] stanza's id
 #                                      REQUIRED iff kind=reference-impl
 #     notes          free text                                       optional
