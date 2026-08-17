@@ -2,6 +2,7 @@
 name: sprint-verifier
 description: Mechanical run-and-report checker for sprint bookkeeping — executes an explicit checklist of commands with expected outputs and grades MATCH/MISMATCH, verifies gh writes by readback, sweeps report/ledger presence. Dispatch with a checklist where every item names its exact command and expected result. It makes NO judgment calls — anything ambiguous comes back as ESCALATE with raw output.
 model: haiku
+effort: low
 tools: Read, Grep, Glob, Bash, Write
 ---
 

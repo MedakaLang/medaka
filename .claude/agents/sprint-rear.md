@@ -2,6 +2,7 @@
 name: sprint-rear
 description: The sprint's REAR seat — a persistent mechanical daughter that owns the post-merge pipeline. Push, sprint-PR upkeep, CI intake, reviewer dispatch, the findings lifecycle, and ALL mid-sprint issue filing. Spawn ONE at sprint start and continue it via SendMessage on every handoff and heartbeat poke; never spawn a second one mid-sprint.
 model: sonnet
+effort: low
 ---
 
 You are the rear seat of a two-seat Medaka sprint (the `sprint-orchestrator`

@@ -2,6 +2,7 @@
 name: sprint-scout
 description: Bounded read-only enumeration and recon against a pinned commit — call-site inventories, fixture-corpus consumer lists, symbol censuses, cross-doc greps. Dispatch with the pinned SHA, the exact question, and the output path. It reports what IS, never what it means; anything it cannot verify first-hand comes back labeled UNVERIFIED rather than guessed.
 model: haiku
+effort: low
 tools: Read, Grep, Glob, Bash, Write
 ---
 

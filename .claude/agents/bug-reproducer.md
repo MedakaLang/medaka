@@ -2,6 +2,7 @@
 name: bug-reproducer
 description: Mechanical repro-and-pin agent for a sprint finding — reproduces it first-hand in its own worktree, minimizes the repro, fills the base-vs-slice attribution cells, authors the must-fail pin fixture and PROVES it reproduces, and drafts the ready-to-file issue body. Dispatch with the FINDINGS row, the source report path, the pinned base SHA and slice head SHA. It decides NOTHING about what the bug means — no severity, no routing, no scope; that is the brain's ruling, which consumes this agent's bundle.
 model: sonnet
+effort: medium
 tools: Read, Grep, Glob, Bash, Write
 ---
 
