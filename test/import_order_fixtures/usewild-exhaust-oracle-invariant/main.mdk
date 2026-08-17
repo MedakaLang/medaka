@@ -1,0 +1,14 @@
+-- `Col` here can only mean `zzcol.Col` — the wildcard is the only import that binds a
+-- type spelled `Col`.  It has TWO constructors, so the single-arm match is
+-- NON-EXHAUSTIVE and `W-NONEXHAUSTIVE` is owed under EVERY ordering of these two
+-- import clauses.  `main` applies `f` only to `Red`, so the runtime never reaches the
+-- missing arm: exit 0, prints `6`.  The WARNING is the whole observable.
+import aacol.{aval}
+import zzcol.*
+
+f : Col -> Int
+f x = match x
+  Red => 1
+
+main : <IO> Unit
+main = println (f Red + aval)

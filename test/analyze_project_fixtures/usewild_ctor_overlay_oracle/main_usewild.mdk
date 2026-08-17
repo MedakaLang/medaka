@@ -1,0 +1,49 @@
+-- The WILDCARD sibling of `1554_ctor_overlay_oracle_control/` — same three-file graph,
+-- same adverse load order, one token different: `import zzcfg.*` where the control
+-- writes `import zzcfg.{Cfg, CZ}`.  The control pins the spelling the import-scoped
+-- constructor overlay ALREADY covered (`UseGroup`); this file pins the spelling it did
+-- NOT.
+--
+-- 🚨 WHY THIS FIXTURE EXISTS, since an all-clean oracle looks like a fixture that tests
+-- nothing.  `importOverlayDecls` (compiler/types/typecheck.mdk) matched `UseGroup`
+-- alone and let `UseWild` fall through its `_ _ _ = []` fallback, so `import m.*`
+-- contributed NO import-scoped overlay for `m`'s constructors.  Which declaration a
+-- constructor occurrence meant was then decided by bare-name first-match over the flat,
+-- LOAD-ORDERED data universe — i.e. by import-clause order.  The three conditions
+-- `1554_…`'s header enumerates all hold here too (the observable is a DIAGNOSTIC not a
+-- value; the load order is ADVERSE, `aacfg` first and `zzcfg` second; and the `match`
+-- reaches the ORACLE, which has no `applyCtorScopeOverrides` fifth layer above it).
+--
+-- EXPECTED RESULT, DERIVED BY HAND BEFORE ANY RUN (this corpus has NO regeneration
+-- script — `sh test/capture_goldens.sh analyze_project` is a no-op for it — and its
+-- `oracle.json` is hand-written and reviewed, precisely so a wrong engine answer cannot
+-- become the permanent expected output):
+--
+--   `Cfg` in this file can only mean `zzcfg.Cfg`.  It is the sole `Cfg` this file
+--   imports: the `aacfg` clause is a member list naming only the VALUE `aaf`, which
+--   binds no type and no constructor, while `import zzcfg.*` brings every name `zzcfg`
+--   exports into scope.  `zzcfg.Cfg`'s sole constructor is `CZ`, so the single-arm
+--   `match` is EXHAUSTIVE.  `f v` is `7`, `aaf 1` is `1`, and every file in the graph
+--   publishes ZERO diagnostics.
+--
+-- MEASURED, on a binary cold-built from sprint/ctor-identity @ c7c879b7 (i.e. before
+-- the `UseWild` arm existed): this exact graph instead reported
+-- `non-exhaustive match of 'Cfg'. Missing case: 'CA'` — a `W-NONEXHAUSTIVE` naming a
+-- constructor this file cannot name, read out of `aacfg.Cfg` purely because `aacfg`
+-- loads first.  Swapping the two import lines flipped the answer to clean, which is the
+-- order-dependence `test/import_order_fixtures/usewild-exhaust-oracle-invariant/` pins
+-- on the other axis.  This fixture pins the ABSOLUTE answer that gate cannot supply.
+import aacfg.{aaf}
+import zzcfg.*
+
+v : Cfg
+v = CZ
+
+f : Cfg -> Int
+f x = match x
+  CZ => 7
+
+main : <IO> Unit
+main =
+  let _ = println (f v)
+  println (aaf 1)
