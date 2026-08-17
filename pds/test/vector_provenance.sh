@@ -9,7 +9,7 @@
 # NO NETWORK. This gate never fetches source-url and never verifies
 # source-sha256 — see the ledger's own DOES-NOT-PROVE block.
 #
-# This gate runs its own SELF-TEST first, on six synthetic fixtures built in a
+# This gate runs its own SELF-TEST first, on seven synthetic fixtures built in a
 # mktemp -d outside the tree, before it ever looks at the real tree: the real
 # corpus is empty at the time this slice lands (no consumer slice has landed
 # yet), so without the self-test every CI run of this gate would be vacuously
@@ -24,6 +24,14 @@
 set -u
 
 ROOT="${MEDAKA_ROOT:?set MEDAKA_ROOT to the repo root}"
+
+# One parent scratch dir for every mktemp -d this gate creates (the check_corpus
+# call plus the seven self-test scenarios), reaped by ONE EXIT/HUP/INT/TERM
+# handler below — there was no such handler at all before this (RUN-PDS0-009
+# F5 rider (a)). Per-site `rm -rf` on the normal path stays, to bound peak
+# disk; the handler below is only the crash path.
+VP_WORK="$(mktemp -d "${TMPDIR:-/tmp}/pds-vp.XXXXXX")"
+trap 'rm -rf "$VP_WORK"' EXIT HUP INT TERM
 
 # ── sha256_of_file ────────────────────────────────────────────────────────────
 sha256_of_file() {
@@ -47,7 +55,7 @@ check_corpus() {
   cr_root="$1"
   cr_testdir="$cr_root/pds/test"
   cr_ledger="$cr_testdir/VECTOR-PROVENANCE.txt"
-  cr_scratch="$(mktemp -d "${TMPDIR:-/tmp}/pds-vp-check.XXXXXX")"
+  cr_scratch="$(mktemp -d "$VP_WORK/check.XXXXXX")"
 
   if [ ! -d "$cr_testdir" ] || [ ! -f "$cr_ledger" ]; then
     echo "check_corpus: pds/test/ or its ledger missing under $cr_root"
@@ -55,11 +63,28 @@ check_corpus() {
     return 1
   fi
 
-  find "$cr_testdir" -type f \
+  find "$cr_testdir" \( -type f -o -type l \) \
     ! -name '*.sh' \
     ! -name '*.mdk' \
     ! -path "$cr_ledger" \
     | LC_ALL=C sort > "$cr_scratch/files.lst"
+
+  # A symlink is REJECTED, never followed: the provenance of a target outside
+  # this tree cannot be verified, and `find -L` would additionally invite
+  # traversal loops (RUN-PDS0-009 F5). Enumerating them — rather than letting
+  # `-type f` drop them — is also what stops a CORRECT [vector] row for a
+  # symlink from being reported as an ORPHAN ROW (F7, resolved by this change).
+  cr_symlink=0
+  while IFS= read -r f; do
+    [ -z "$f" ] && continue
+    [ -L "$f" ] || continue
+    echo "FAIL: SYMLINK REJECTED: \"${f#"$cr_root"/}\" is a symlink; the provenance of a symlink target cannot be verified — commit the real file"
+    cr_symlink=1
+  done < "$cr_scratch/files.lst"
+  if [ "$cr_symlink" -eq 1 ]; then
+    rm -rf "$cr_scratch"
+    return 1
+  fi
 
   : > "$cr_scratch/hashes.lst"
   while IFS= read -r f; do
@@ -71,6 +96,11 @@ check_corpus() {
 
   cr_out="$(awk -v ROOT="$cr_root" -v HASHES="$cr_scratch/hashes.lst" '
     function trim(s) { gsub(/^[ \t]+|[ \t]+$/, "", s); return s }
+    # ishex(s, n): s is exactly n lowercase-hex characters. Replaces awk interval
+    # expressions ({n}) — this tree has zero of them elsewhere (51 awk gates,
+    # RUN-PDS0-013/RUN-PDS0-007 item 2) and their behavior across non-gawk awks
+    # is UNCHARACTERIZED (no direction proven; removed for that reason alone).
+    function ishex(s, n) { return (length(s) == n && s ~ /^[0-9a-f]*$/) }
 
     BEGIN {
       fail = 0
@@ -166,12 +196,12 @@ check_corpus() {
           }
         }
         c = impl_val[i, "commit"]
-        if (c != "" && c !~ /^[0-9a-f]{40}$/) {
+        if (c != "" && !ishex(c, 40)) {
           print "FAIL: [impl] stanza at line " impl_line[i] ": commit is not 40 lowercase hex: \"" c "\""
           fail = 1
         }
         r = impl_val[i, "retrieved"]
-        if (r != "" && r !~ /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/) {
+        if (r != "" && r !~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]$/) {
           print "FAIL: [impl] stanza at line " impl_line[i] ": retrieved is not YYYY-MM-DD: \"" r "\""
           fail = 1
         }
@@ -218,7 +248,7 @@ check_corpus() {
               print "FAIL: [vector] stanza at line " vec_line[i] ": source-sha256=UNAVAILABLE requires \"source-note\""
               fail = 1
             }
-          } else if (vec_val[i, "source-sha256"] !~ /^[0-9a-f]{64}$/) {
+          } else if (!ishex(vec_val[i, "source-sha256"], 64)) {
             print "FAIL: [vector] stanza at line " vec_line[i] ": source-sha256 is not 64 lowercase hex and not UNAVAILABLE: \"" vec_val[i, "source-sha256"] "\""
             fail = 1
           }
@@ -235,12 +265,12 @@ check_corpus() {
         }
 
         ls = vec_val[i, "local-sha256"]
-        if (ls != "" && ls !~ /^[0-9a-f]{64}$/) {
+        if (ls != "" && !ishex(ls, 64)) {
           print "FAIL: [vector] stanza at line " vec_line[i] ": local-sha256 is not 64 lowercase hex: \"" ls "\""
           fail = 1
         }
         r = vec_val[i, "retrieved"]
-        if (r != "" && r !~ /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/) {
+        if (r != "" && r !~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]$/) {
           print "FAIL: [vector] stanza at line " vec_line[i] ": retrieved is not YYYY-MM-DD: \"" r "\""
           fail = 1
         }
@@ -302,7 +332,7 @@ self_test() {
   }
 
   # T1 — one vector file, no stanza
-  t1="$(mktemp -d "${TMPDIR:-/tmp}/pds-vp-t1.XXXXXX")"
+  t1="$(mktemp -d "$VP_WORK/t1.XXXXXX")"
   mkdir -p "$t1/pds/test"
   : > "$t1/pds/test/VECTOR-PROVENANCE.txt"
   mk_vector "$t1" "pds/test/lonely.txt" "hello t1"
@@ -317,7 +347,7 @@ self_test() {
   fi
 
   # T2 — stanza present, file's bytes changed after the row was written
-  t2="$(mktemp -d "${TMPDIR:-/tmp}/pds-vp-t2.XXXXXX")"
+  t2="$(mktemp -d "$VP_WORK/t2.XXXXXX")"
   mkdir -p "$t2/pds/test"
   mk_vector "$t2" "pds/test/drift.txt" "original bytes"
   orig_hash="$(sha256_of_file "$t2/pds/test/drift.txt")"
@@ -351,7 +381,7 @@ EOF
 
   # T3 — correct stanza (published-artifact), PLUS a reference-impl row whose
   # [impl] stanza IS present, in the SAME green fixture (both kinds exercised).
-  t3="$(mktemp -d "${TMPDIR:-/tmp}/pds-vp-t3.XXXXXX")"
+  t3="$(mktemp -d "$VP_WORK/t3.XXXXXX")"
   mkdir -p "$t3/pds/test"
   mk_vector "$t3" "pds/test/good_pub.txt" "published artifact content t3"
   mk_vector "$t3" "pds/test/good_ref.txt" "reference impl content t3"
@@ -399,7 +429,7 @@ EOF
   fi
 
   # T4 — stanza whose file: does not exist
-  t4="$(mktemp -d "${TMPDIR:-/tmp}/pds-vp-t4.XXXXXX")"
+  t4="$(mktemp -d "$VP_WORK/t4.XXXXXX")"
   mkdir -p "$t4/pds/test"
   cat > "$t4/pds/test/VECTOR-PROVENANCE.txt" << EOF
 [vector]
@@ -425,7 +455,7 @@ EOF
   fi
 
   # T5 — reference-impl row naming an impl: with no [impl] stanza
-  t5="$(mktemp -d "${TMPDIR:-/tmp}/pds-vp-t5.XXXXXX")"
+  t5="$(mktemp -d "$VP_WORK/t5.XXXXXX")"
   mkdir -p "$t5/pds/test"
   mk_vector "$t5" "pds/test/unpinned.txt" "unpinned impl content t5"
   up_hash="$(sha256_of_file "$t5/pds/test/unpinned.txt")"
@@ -451,7 +481,7 @@ EOF
   fi
 
   # T6 — two [impl] stanzas, same id, different commit
-  t6="$(mktemp -d "${TMPDIR:-/tmp}/pds-vp-t6.XXXXXX")"
+  t6="$(mktemp -d "$VP_WORK/t6.XXXXXX")"
   mkdir -p "$t6/pds/test"
   cat > "$t6/pds/test/VECTOR-PROVENANCE.txt" << EOF
 [impl]
@@ -478,6 +508,36 @@ EOF
     st_rc=1
   fi
 
+  # T7 — a SYMLINKED corpus file is rejected outright, and a CORRECT row for it
+  # is NOT reported as an orphan. Pre-fix (measured, RUN-PDS0-009 F5/F7): with no
+  # row the gate PASSED silently; with a correct row it printed "ORPHAN ROW ...
+  # does not exist" about a file that exists, so deleting the correct row was the
+  # only way to green the tree.
+  t7="$(mktemp -d "$VP_WORK/t7.XXXXXX")"
+  mkdir -p "$t7/pds/test"
+  printf 'symlink target bytes\n' > "$t7/target.txt"
+  ln -s "$t7/target.txt" "$t7/pds/test/linked_vector.txt"
+  cat > "$t7/pds/test/VECTOR-PROVENANCE.txt" << EOF
+[vector]
+id: linked
+file: pds/test/linked_vector.txt
+source-url: https://example.invalid/linked_vector.txt
+source-sha256: 0000000000000000000000000000000000000000000000000000000000000000
+local-sha256: 0000000000000000000000000000000000000000000000000000000000000000
+retrieved: 2026-08-17
+EOF
+  t7_out="$(check_corpus "$t7")"; t7_rc=$?
+  rm -rf "$t7"
+  if [ "$t7_rc" -ne 0 ] \
+     && printf '%s' "$t7_out" | grep -q "SYMLINK REJECTED" \
+     && ! printf '%s' "$t7_out" | grep -q "ORPHAN ROW"; then
+    echo "T7 symlinked corpus rejected: PASS"
+  else
+    echo "T7 symlinked corpus rejected: FAIL (rc=$t7_rc)"
+    printf '%s\n' "$t7_out"
+    st_rc=1
+  fi
+
   return "$st_rc"
 }
 
@@ -488,7 +548,7 @@ main() {
     echo "SELF-TEST FAILED"
     exit 1
   fi
-  echo "=== self-test: all six scenarios passed ==="
+  echo "=== self-test: all seven scenarios passed ==="
   echo "=== real tree: $ROOT ==="
   if ! check_corpus "$ROOT"; then
     echo "vector_provenance: REAL TREE CHECK FAILED"
