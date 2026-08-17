@@ -182,7 +182,8 @@ Rules for the planner writing it:
 
 - **Curate, don't re-derive (v4, H9).** §4 collects facts that already exist
   with proofs — brain rulings, spike reports, prior slices' reports (their
-  `Deviations` especially), scout inventories — cited with the producing
+  "Deviations from packet" sections especially), scout inventories — cited
+  with the producing
   command or path. Fresh planner derivation is bounded to the §5 site list and
   disjointness evidence; a fact that needs deep new recon to prove is not
   "already settled", it is the implementer's discovery (or grounds for a
